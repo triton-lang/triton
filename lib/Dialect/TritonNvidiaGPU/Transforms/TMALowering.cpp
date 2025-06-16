@@ -76,9 +76,7 @@ static Attribute getEncoding(Operation *op, RankedTensorType tensorType,
 
 namespace mlir::triton::nvidia_gpu {
 
-void createBarrierExpectOp(Location loc, OpBuilder &rewriter,
-                           SmallVector<Operation *> const &ops,
-                           Value barrierAlloc) {
+int getTxCount(Operation *descOp) {
   auto getTensorTypeAndDesc =
       [](Operation *op) -> std::pair<RankedTensorType, Value> {
     if (auto loadOp = dyn_cast<DescriptorLoadOp>(op)) {
@@ -89,14 +87,20 @@ void createBarrierExpectOp(Location loc, OpBuilder &rewriter,
       llvm_unreachable("Unsupported operation type");
     }
   };
+  auto [tensorType, desc] = getTensorTypeAndDesc(descOp);
+  auto encoding = getEncodingFromDescriptor(descOp, tensorType, desc);
+  auto shapePerCTA = getShapePerCTA(encoding, tensorType.getShape());
+  return product(shapePerCTA) *
+         tensorType.getElementType().getIntOrFloatBitWidth() / 8;
+}
+
+void createBarrierExpectOp(Location loc, OpBuilder &rewriter,
+                           SmallVector<Operation *> const &ops,
+                           Value barrierAlloc) {
   int sizeInBytes = 0;
   for (auto op : ops) {
     if (isa<DescriptorLoadOp, DescriptorGatherOp>(op)) {
-      auto [tensorType, desc] = getTensorTypeAndDesc(op);
-      auto encoding = getEncodingFromDescriptor(op, tensorType, desc);
-      auto shapePerCTA = getShapePerCTA(encoding, tensorType.getShape());
-      sizeInBytes += product(shapePerCTA) *
-                     tensorType.getElementType().getIntOrFloatBitWidth() / 8;
+      sizeInBytes += getTxCount(op);
     }
   }
   if (sizeInBytes > 0) {

@@ -40,7 +40,7 @@ cached_desc_m = None
 cached_args = None
 
 
-def get_fwd_tma_descriptors(*args):
+def get_fwd_tma_descriptors(*args, Osplit):
     global cached_desc_q, cached_desc_k, cached_desc_v, cached_desc_o, cached_desc_m, cached_args
     # FIXME: args != cached_args fails
     if True:  # or args != cached_args:
@@ -83,7 +83,7 @@ def get_fwd_tma_descriptors(*args):
                 v, [Z * H * N_CTX, HEAD_DIM], [HEAD_DIM, 1], [BLOCK_N, HEAD_DIM]
             )
         cached_desc_o = TensorDescriptor(
-            o, [Z * H * N_CTX, HEAD_DIM], [HEAD_DIM, 1], [BLOCK_M, HEAD_DIM]
+            o, [Z * H * N_CTX, HEAD_DIM], [HEAD_DIM, 1], [BLOCK_M, HEAD_DIM//Osplit]
         )
         cached_desc_m = TensorDescriptor(
             m,
@@ -224,6 +224,8 @@ def run_attention(
     WG_SPEC,
     MATH_WG_PIPE,
     FORCE_MEMBAR,
+    NUM_BLOCK_M=1,
+    Osplit=1,
 ):
     # shape constraints
     HEAD_DIM_Q, HEAD_DIM_K = q.shape[-1], k.shape[-1]
@@ -240,7 +242,7 @@ def run_attention(
 
     grid = lambda args: (
         triton.cdiv(q.shape[2], args["BLOCK_M"]),
-        q.shape[0] * q.shape[1],
+        q.shape[0] * q.shape[1] // NUM_BLOCK_M,
         1,
     )
     M = torch.empty(
@@ -270,6 +272,7 @@ def run_attention(
         q.element_size(),
         M.element_size(),
         v.dtype == torch.float8_e5m2,
+        Osplit=Osplit,
     )
     if WG_SPEC == "mma_first":
         WG_SPEC = (("tma_load", NUM_WARPS, 4), ("mma", 0, NUM_WARPS))

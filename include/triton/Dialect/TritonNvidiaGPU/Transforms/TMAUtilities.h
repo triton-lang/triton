@@ -142,6 +142,7 @@ mlir::LogicalResult createTMADesc(mlir::Value tmaPtr,
   return success();
 }
 
+int getTxCount(Operation *descOp);
 void createTMALoad(DescriptorLoadOp op, OpBuilder &rewriter, Value barrierAlloc,
                    Value alloc, Value pred);
 void createTMAGather(DescriptorGatherOp op, OpBuilder &rewriter, Value barrierAlloc,

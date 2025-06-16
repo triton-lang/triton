@@ -8,6 +8,7 @@
 #include "llvm/ADT/SmallVectorExtras.h"
 
 #define GET_OP_CLASSES
+#include "Dialect/NVWS/IR/NVWSOpInterfaces.cpp.inc"
 #include "Dialect/NVWS/IR/Ops.cpp.inc"
 #include "Dialect/NVWS/IR/OpsEnums.cpp.inc"
 

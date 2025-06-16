@@ -24,7 +24,6 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
-#include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/AttrTypeSubElements.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
@@ -175,36 +174,19 @@ struct ProducedValueInfo {
 };
 
 SmallVector<ProducedValueInfo> getProducedValues(Operation *op) {
-  // tmemAlloc handled specially, if there is src, tmem is immutable
-  // and we track result, otherwise tmem is mutable and we track token
-  if (auto tmemAlloc = dyn_cast<ttng::TMEMAllocOp>(op)) {
-    auto groups = getGroups(tmemAlloc);
-    if (tmemAlloc.getToken())
-      return {{groups, tmemAlloc.getToken()}};
-    else
-      return {{groups, tmemAlloc.getResult()}};
-  }
-
   // specially handle ForOp/IfOp, as they have group.<idx> annotation for
   // results
+  SmallVector<ProducedValueInfo> producedValues;
   if (isa<scf::ForOp, scf::IfOp>(op)) {
-    SmallVector<ProducedValueInfo> producedValues;
     for (auto result : op->getResults()) {
       auto groups = getGroups(result);
       producedValues.push_back({groups, result});
     }
-    return producedValues;
-  }
-
-  // Handle all other operations uniformly by collecting their results and
-  // groups
-  //  Note: tmem_load produce both a token and value would cause issues
-  //  with epilogue decoupling in flattened loops. This is not currently
-  //  supported but could be added in the future.
-  SmallVector<ProducedValueInfo> producedValues;
-  for (auto result : op->getResults()) {
-    auto groups = getGroups(op);
-    producedValues.push_back({groups, result});
+  } else {
+    // Handle remaining ops uniformly, all results produced by the same groups
+    for (auto result : op->getResults()) {
+      producedValues.push_back({getGroups(op), result});
+    }
   }
   return producedValues;
 };
@@ -214,14 +196,9 @@ ttng::ArefCreateOp createAref(OpBuilder &builder,
   MemDescType arefBufType;
 
   auto result = producedValue.result;
+  assert(!isa<AsyncTokenType>(result.getType()));
 
-  if (isa<AsyncTokenType>(result.getType())) {
-    // if result is async-token, op does something on mutable tmem
-    // locate tmem buffer associated witht this token
-    auto buffer = getTokenProducerOp(result).buffer;
-    auto memDescType = cast<MemDescType>(buffer.getType());
-    arefBufType = getArefbufMemDescType(memDescType, 1);
-  } else if (auto memDescType = dyn_cast<MemDescType>(result.getType())) {
+  if (auto memDescType = dyn_cast<MemDescType>(result.getType())) {
     arefBufType = getArefbufMemDescType(memDescType, 1);
   } else if (auto tensorType = dyn_cast<RankedTensorType>(result.getType())) {
     // if result is a value, create memdesctype for location where value will
@@ -271,8 +248,7 @@ ttng::ArefCreateOp createAref(OpBuilder &builder,
   auto arefTy = triton::nvidia_gpu::ArefType::get(
       builder.getContext(),
       ttg::TypeArrayAttr::get(builder.getContext(), arefBufType));
-  assert((isa<SharedMemorySpaceAttr, ttng::TensorMemorySpaceAttr>(
-      arefBufType.getMemorySpace())));
+  assert((isa<SharedMemorySpaceAttr>(arefBufType.getMemorySpace())));
   auto alloc = createAlloc(builder, loc, arefBufType, Value());
   alloc->setAttr("aref_buffer", builder.getUnitAttr());
   auto aref = builder.create<triton::nvidia_gpu::ArefCreateOp>(
@@ -280,20 +256,49 @@ ttng::ArefCreateOp createAref(OpBuilder &builder,
   return aref;
 };
 
-Value createArefPut(OpBuilder &builder, ttng::ArefCreateOp aref,
-                    std::string arefTag, ProducedValueInfo producedValue,
-                    GroupId producerGroup) {
+bool isDescLoadAndAlloc(Value result) {
+  auto alloc = result.getDefiningOp<LocalAllocOp>();
+  if (!alloc)
+    return false;
+  return alloc.getSrc().getDefiningOp<DescriptorOpInterface>() != nullptr;
+}
+
+bool isGlobalLoadAndAlloc(Value result) {
+  auto alloc = result.getDefiningOp<LocalAllocOp>();
+  if (!alloc)
+    return false;
+  return alloc.getSrc().getDefiningOp<tt::LoadOp>() != nullptr;
+}
+
+void createNVWSDescriptorLoadOp(OpBuilder &builder, Operation *ttDescLoadOp,
+                                Value dataBuf, GroupId producerGroup,
+                                Location loc) {
+  auto txCount = ttng::getTxCount(ttDescLoadOp);
+  if (auto descLoad = dyn_cast<tt::DescriptorLoadOp>(ttDescLoadOp)) {
+    auto newDescLoad = builder.create<triton::nvws::DescriptorLoadOp>(
+        loc, descLoad.getDesc(), descLoad.getIndices(), txCount, dataBuf,
+        descLoad.getCache(), descLoad.getEvict());
+    setGroups(newDescLoad, {producerGroup});
+  } else if (auto descGather = dyn_cast<tt::DescriptorGatherOp>(ttDescLoadOp)) {
+    auto newDescGather = builder.create<triton::nvws::DescriptorGatherOp>(
+        loc, descGather.getDesc(), descGather.getXOffsets(),
+        descGather.getYOffset(), txCount, dataBuf);
+    setGroups(newDescGather, {producerGroup});
+  } else {
+    llvm_unreachable("unknown descriptor op.");
+  }
+}
+
+SmallVector<Operation *>
+createArefPut(OpBuilder &builder, ttng::ArefCreateOp aref, std::string arefTag,
+              ProducedValueInfo producedValue, GroupId producerGroup) {
   auto loc = producedValue.result.getLoc();
   auto arefBufType = cast<MemDescType>(aref.getOperand(0).getType());
   Value result = producedValue.result;
   auto dataBufType = getDataMemDescType(arefBufType, true);
 
   SmallVector<Type> buffers{dataBufType};
-  SmallVector<Type> tokens;
-  if (isa<AsyncTokenType>(result.getType()))
-    tokens.push_back(builder.getType<AsyncTokenType>());
-  else
-    tokens.push_back(builder.getType<NoneType>());
+  SmallVector<Type> tokens{builder.getType<NoneType>()};
 
   auto putEnterOp = builder.create<ttng::ArefPutEnterOp>(
       loc, buffers, tokens, aref,
@@ -303,32 +308,43 @@ Value createArefPut(OpBuilder &builder, ttng::ArefCreateOp aref,
   auto dataBuf = putEnterOp.getBuffers()[0];
 
   auto producerKind = ttng::ArefProducer::NONE;
-  Value copyToken;
-  if (isa<AsyncTokenType>(result.getType())) {
-    // when result is token, find associated buffer were result will be copied
-    auto buffer = getTokenProducerOp(result).buffer;
-    auto putToken = putEnterOp.getTokens()[0];
-    assert(isa<AsyncTokenType>(putToken.getType()));
+  SmallVector<Operation *> staleOps;
 
-    auto copyOp =
-        builder.create<ttng::ArefCopyOp>(loc, builder.getType<AsyncTokenType>(),
-                                         buffer, dataBuf, result, putToken);
-    setGroups(copyOp, {producerGroup});
-    copyToken = copyOp.getToken();
-  } else if (auto memDescType = dyn_cast<MemDescType>(result.getType())) {
-    auto copyOp = builder.create<ttng::ArefCopyOp>(loc, Type{}, result, dataBuf,
-                                                   Value(), Value());
-    setGroups(copyOp, {producerGroup});
+  if (isDescLoadAndAlloc(result)) {
+    auto alloc = result.getDefiningOp<LocalAllocOp>();
+    auto descOp = alloc.getSrc().getDefiningOp();
+    createNVWSDescriptorLoadOp(builder, descOp, dataBuf, producerGroup, loc);
+    producerKind = ttng::ArefProducer::TMALDG;
+    staleOps.push_back(alloc);
+    staleOps.push_back(descOp);
+  } else if (isGlobalLoadAndAlloc(result)) {
+    auto alloc = result.getDefiningOp<LocalAllocOp>();
+    auto loadOp = alloc.getSrc().getDefiningOp<tt::LoadOp>();
+    assert(loadOp);
+    auto newLoad = builder.create<ttg::AsyncCopyGlobalToLocalOp>(
+        loc, loadOp.getPtr(), dataBuf, loadOp.getMask(), loadOp.getOther(),
+        loadOp.getCache(), loadOp.getEvict(), loadOp.getIsVolatile());
+    setGroups(newLoad, {producerGroup});
+    producerKind = ttng::ArefProducer::LDGSTS;
+    staleOps.push_back(alloc);
+    staleOps.push_back(loadOp);
   } else if (auto tensorType = dyn_cast<RankedTensorType>(result.getType())) {
-    auto storeOp = builder.create<ttg::LocalStoreOp>(loc, result, dataBuf);
-    setGroups(storeOp, {producerGroup});
     auto op = result.getDefiningOp();
-    if (op && isa<DescriptorOpInterface>(op))
+    if (op && isa<DescriptorOpInterface>(op)) {
+      createNVWSDescriptorLoadOp(builder, op, dataBuf, producerGroup, loc);
       producerKind = ttng::ArefProducer::TMALDG;
-    else if (op && isa<tt::LoadOp>(op))
+    } else if (op && isa<tt::LoadOp>(op)) {
+      auto loadOp = cast<tt::LoadOp>(op);
+      auto newLoad = builder.create<ttg::AsyncCopyGlobalToLocalOp>(
+          loc, loadOp.getPtr(), dataBuf, loadOp.getMask(), loadOp.getOther(),
+          loadOp.getCache(), loadOp.getEvict(), loadOp.getIsVolatile());
+      setGroups(newLoad, {producerGroup});
       producerKind = ttng::ArefProducer::LDGSTS;
-    else
+    } else {
+      auto storeOp = builder.create<ttg::LocalStoreOp>(loc, result, dataBuf);
+      setGroups(storeOp, {producerGroup});
       producerKind = ttng::ArefProducer::STS;
+    }
   } else {
     // Note: need to support scalar types
     llvm_unreachable("unsupported type");
@@ -339,29 +355,102 @@ Value createArefPut(OpBuilder &builder, ttng::ArefCreateOp aref,
           ttng::ArefProducerAttr::get(aref.getContext(), producerKind)}));
   putExitOp->setAttr("aref_tag", builder.getStringAttr(arefTag));
   setGroups(putExitOp, {producerGroup});
-  return copyToken;
+
+  return staleOps;
 };
+
+enum class BlockScope {
+  UNSUPPORTED,
+  SAME_BLOCK,
+  NESTED_INSIDE,
+};
+
+BlockScope getBlockScope(Block *from, Block *to) {
+  if (from == to)
+    return BlockScope::SAME_BLOCK;
+
+  auto block = to;
+  while (block && block != from)
+    block = block->getParentOp()->getBlock();
+  if (block == from)
+    return BlockScope::NESTED_INSIDE;
+
+  return BlockScope::UNSUPPORTED;
+}
+
+SetVector<Operation *> getTransitiveConsumers(Operation *op) {
+  SetVector<Operation *> opConsumers;
+  for (auto user : op->getUsers()) {
+    if (llvm::count_if(user->getResults(), [](auto res) {
+          return isa<MemDescType>(res.getType());
+        }) == 0) {
+      opConsumers.insert(user);
+    } else {
+      auto consumers = getTransitiveConsumers(user);
+      opConsumers.insert(consumers.begin(), consumers.end());
+    }
+  }
+  return opConsumers;
+}
+
+ttng::ArefConsumer getConsumerKind(const SetVector<Operation *> &consumers) {
+  assert(!consumers.empty());
+  auto consumer = consumers.front();
+  if (isa<ttg::LocalLoadOp>(consumer)) {
+    return ttng::ArefConsumer::LDS;
+  } else if (isa<ttng::WarpGroupDotOp>(consumer)) {
+    return ttng::ArefConsumer::WGMMA;
+  } else if (auto mmav5 = dyn_cast<ttng::MMAv5OpInterface>(consumer)) {
+    return ttng::ArefConsumer::UMMA;
+  }
+  return ttng::ArefConsumer::NONE;
+}
+
+Operation *getExitInsertPoint(Block *producerBlock,
+                              const SetVector<Operation *> &consumers) {
+  DenseMap<Operation *, int> opOrdering;
+  producerBlock->walk(
+      [&](Operation *op) { opOrdering[op] = opOrdering.size(); });
+
+  SetVector<Operation *> validConsumers;
+  for (auto consumer : consumers) {
+    if (getBlockScope(producerBlock, consumer->getBlock()) !=
+        BlockScope::UNSUPPORTED)
+      validConsumers.insert(consumer);
+  }
+  assert(!validConsumers.empty());
+
+  auto lastConsumer = *llvm::max_element(validConsumers, [&](auto a, auto b) {
+    return opOrdering.at(a) < opOrdering.at(b);
+  });
+
+  auto consumerScope = getBlockScope(producerBlock, lastConsumer->getBlock());
+  if (BlockScope::SAME_BLOCK == consumerScope) {
+    return lastConsumer;
+  } else if (BlockScope::NESTED_INSIDE == consumerScope) {
+    auto regionOp = lastConsumer->getParentOp();
+    while (regionOp->getBlock() != producerBlock) {
+      regionOp = regionOp->getParentOp();
+    }
+    return regionOp;
+  } else {
+    llvm_unreachable("unsupported consumer scope");
+  }
+  return nullptr;
+}
 
 void createArefGet(OpBuilder &builder, ttng::ArefCreateOp aref,
                    std::string arefTag, ProducedValueInfo producedValue,
                    SetVector<Operation *> users, GroupSet consumerGroups,
-                   Value copyToken, bool needArefPhi) {
+                   bool needArefPhi) {
   OpBuilder::InsertionGuard g(builder);
   auto loc = producedValue.result.getLoc();
   auto arefBufType = cast<MemDescType>(aref.getOperand(0).getType());
 
   Value result = producedValue.result;
 
-  SmallVector<Type> buffers, tokens;
-  if (isa<AsyncTokenType>(result.getType())) {
-    // if there is token, we assume it is mutable memory
-    buffers.push_back(getDataMemDescType(arefBufType, true));
-    tokens.push_back(builder.getType<AsyncTokenType>());
-  } else {
-    // otherwise it is immutable, which somes from local/tmem_allo with src
-    buffers.push_back(getDataMemDescType(arefBufType, false));
-    tokens.push_back(builder.getType<NoneType>());
-  }
+  SmallVector<Type> buffers{getDataMemDescType(arefBufType, false)};
+  SmallVector<Type> tokens{builder.getType<NoneType>()};
   auto getEnterOp = builder.create<ttng::ArefGetEnterOp>(
       loc, buffers, tokens, aref,
       mkConstant(builder, loc, 0, 32, consumerGroups));
@@ -369,47 +458,35 @@ void createArefGet(OpBuilder &builder, ttng::ArefCreateOp aref,
   setGroups(getEnterOp, consumerGroups);
   getEnterOp->setAttr("aref_tag", builder.getStringAttr(arefTag));
 
+  auto createExit = [&](ttng::ArefConsumer consumerKind) {
+    SmallVector<Attribute> consumerAttr{
+        ttng::ArefConsumerAttr::get(aref.getContext(), consumerKind)};
+    auto consumersAttr = builder.getArrayAttr(consumerAttr);
+    auto getExitOp = builder.create<ttng::ArefGetExitOp>(
+        loc, aref, mkConstant(builder, loc, 0, 32, consumerGroups),
+        consumersAttr);
+    getExitOp->setAttr("aref_tag", builder.getStringAttr(arefTag));
+    setGroups(getExitOp, consumerGroups);
+  };
+
   Value newOperand;
-  auto consumerKind = ttng::ArefConsumer::NONE;
-  if (isa<AsyncTokenType>(result.getType())) {
-    auto buffer = getTokenProducerOp(result).buffer;
-
-    // for now we assume mutable buffer comes from TMEMAllocOp
-    auto alloc = buffer.getDefiningOp<ttng::TMEMAllocOp>();
-    assert(alloc);
-    assert(!alloc.getSrc());
-    auto srcToken = getEnterOp.getTokens()[0];
-    assert(isa<AsyncTokenType>(srcToken.getType()));
-
-    auto copyOp =
-        builder.create<ttng::ArefCopyOp>(loc, builder.getType<AsyncTokenType>(),
-                                         dataBuf, buffer, srcToken, Value());
-    newOperand = copyOp.getToken();
-    setGroups(copyOp, consumerGroups);
-  } else if (auto memDescType = dyn_cast<MemDescType>(result.getType())) {
-    auto copyOp =
-        builder.create<ttng::ArefCloneOp>(loc, result.getType(), dataBuf);
-    newOperand = copyOp.getResult();
-    setGroups(copyOp, consumerGroups);
+  if (auto memDescType = dyn_cast<MemDescType>(result.getType())) {
+    newOperand = dataBuf;
+    auto consumers = getTransitiveConsumers(result.getDefiningOp());
+    auto insertPoint =
+        getExitInsertPoint(result.getDefiningOp()->getBlock(), consumers);
+    builder.setInsertionPointAfter(insertPoint);
+    createExit(getConsumerKind(consumers));
   } else if (auto tensorType = dyn_cast<RankedTensorType>(result.getType())) {
     auto localLoadOp =
         builder.create<ttg::LocalLoadOp>(loc, tensorType, dataBuf);
     newOperand = localLoadOp.getResult();
     setGroups(localLoadOp, consumerGroups);
-    consumerKind = ttng::ArefConsumer::LDS;
+    createExit(ttng::ArefConsumer::LDS);
   } else {
     // Note: need to support scalar types
     llvm_unreachable("unsupported type");
   }
-
-  SmallVector<Attribute> consumerAttr{
-      ttng::ArefConsumerAttr::get(aref.getContext(), consumerKind)};
-  auto consumersAttr = builder.getArrayAttr(consumerAttr);
-  auto getExitOp = builder.create<ttng::ArefGetExitOp>(
-      loc, aref, mkConstant(builder, loc, 0, 32, consumerGroups),
-      consumersAttr);
-  getExitOp->setAttr("aref_tag", builder.getStringAttr(arefTag));
-  setGroups(getExitOp, consumerGroups);
 
   /* see if we need to use aref_phi op
      we use are_phi if we have this situation
@@ -433,12 +510,8 @@ void createArefGet(OpBuilder &builder, ttng::ArefCreateOp aref,
   */
 
   if (needArefPhi) {
-    // If result is a token, the aref_copy in createArefPut will create a new
-    // token which must be used in aref_phi op to preserve memory
-    // dependencies if there are uses of the token in the producers group later.
-    auto localResult = copyToken ? copyToken : result;
-    newOperand = builder.create<ttng::ArefPhiOp>(loc, result.getType(),
-                                                 localResult, newOperand);
+    newOperand = builder.create<ttng::ArefPhiOp>(loc, result.getType(), result,
+                                                 newOperand);
   }
 
   // update result operand with newOperand
@@ -555,38 +628,16 @@ bool insertArefs(OpBuilder &builder, tt::FuncOp funcOp,
   // that can be important if we'd want to support epilogue decoupling
   // in flattened loops.
 
-  // in nested loop, the put/get will be placed after for-loop, because thi
-  // is where final tmem produce token will be, e.g.
-
-  // %tok0 = ..
-  // %tok1 = for  %tok0 = %tok  {
-  //           %tok1 = mma .. %tok0 ..  @gr1
-  //           yield %tok1
-  //          }
-  //  ..
-  //  tmem_load .. %tok1  @gr2
-
-  // so aref will be placed after %tok1 producer, which is for-loop
-
-  // %tok0 = ..
-  // %tok1 = for  %tok0 = %tok  {
-  //           %tok1 = mma .. %tok0 .. @gr1
-  //           yield %tok1
-  //          }
-  //  put %buf  @gr1
-  //  get %buf  @gr2
-  //  ..
-  //  tmem_load .. %tok1 @gr2
-  //
-  // That also help with perf in MOE kernel, where we want to have
-  // aref_get before bias-load, so that convert_layout + tmem_load could be
-  // intearleaved
-
   auto tag = std::string("aref_") + std::to_string(arefTag);
-  auto copyToken =
+  auto staleOps =
       createArefPut(builder, aref, tag, producedValue, *producerGroups.begin());
   createArefGet(builder, aref, tag, producedValue, users, consumerGroups,
-                copyToken, needArefPhi);
+                needArefPhi);
+
+  for (auto op : staleOps) {
+    op->erase();
+  }
+
   return true;
 }
 
@@ -596,7 +647,10 @@ void runArefInsertionOnFunc(triton::FuncOp funcOp) {
   // Gather all operations from the function body before inserting any arefs.
   SmallVector<Operation *> opsToArefy;
   funcOp.walk([&](Operation *op) {
-    if (isa<scf::YieldOp, triton::FuncOp, triton::ReturnOp>(op))
+    if (isa<ttng::ArefCreateOp, ttng::TMEMAllocOp, ttng::ArefPutEnterOp,
+            ttng::ArefGetEnterOp, ttng::TMEMLoadOp, ttng::TMEMStoreOp,
+            ttng::ArefPutExitOp, ttng::ArefGetExitOp, scf::YieldOp,
+            triton::FuncOp, triton::ReturnOp>(op))
       return;
 
     opsToArefy.push_back(op);
@@ -629,10 +683,10 @@ void runArefInsertionOnFunc(triton::FuncOp funcOp) {
   funcOp.walk([&](scf::ForOp forOp) {
     auto body = forOp.getBody();
     OpBuilder builder(forOp);
-    for (auto [idx, arg] : llvm::enumerate(body->getArguments())) {
-      if (idx > 0) {
+    for (auto arg : body->getArguments()) {
+      if (arg.getArgNumber() > 0 && !isa<AsyncTokenType>(arg.getType())) {
         // insert arefs only for loop-carried values
-        auto groups = getGroupsIdx(forOp, idx - 1);
+        auto groups = getGroupsIdx(forOp, arg.getArgNumber() - 1);
         auto producedValue = ProducedValueInfo{groups, arg};
         builder.setInsertionPointToStart(body);
         if (insertArefs(builder, funcOp, producedValue, arefTag))

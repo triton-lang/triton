@@ -322,25 +322,44 @@ SmallVector<Value> getSubViews(ArefValue arefVal, Value stage, Location loc,
   return views;
 }
 
-void lowerAsyncLoads(ttng::ArefPutEnterOp op, PatternRewriter &rewriter,
-                     ArefValue arefVal) {
+void createTMALoad(triton::nvws::DescriptorLoadOp op, OpBuilder &rewriter,
+                   Value barrierAlloc, Value pred) {
+  Value tmaPtr = rewriter.create<triton::nvidia_gpu::TensorDescToTMAPtrOp>(
+      op.getLoc(), op.getDesc());
+  auto indices = ttng::translateTMAIndices(
+      rewriter, op.getLoc(),
+      op.getDesc().getType().getBlockType().getEncoding(), op.getIndices());
+  rewriter.create<triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp>(
+      op.getLoc(), tmaPtr, indices, barrierAlloc, op.getResult(), pred);
+};
+
+void createTMAGather(triton::nvws::DescriptorGatherOp op, OpBuilder &rewriter,
+                     Value barrierAlloc, Value pred) {
+  Value tmaPtr = rewriter.create<triton::nvidia_gpu::TensorDescToTMAPtrOp>(
+      op.getLoc(), op.getDesc());
+  rewriter.create<triton::nvidia_gpu::AsyncTMAGatherOp>(
+      op.getLoc(), tmaPtr, op.getXOffsets(), op.getYOffset(), barrierAlloc,
+      op.getResult(), pred);
+}
+
+void lowerTMALoad(ttng::ArefPutEnterOp op, PatternRewriter &rewriter,
+                  ArefValue arefVal) {
   auto loc = op.getLoc();
   // for now handle TMA loads in PutEnterOp
   SmallVector<Operation *> loadOps;
-  SmallVector<ttg::LocalStoreOp> storeOps;
-  for (auto result : op.getResults())
+  int txCount = 0;
+  for (auto result : op.getResults()) {
     for (auto user : result.getUsers()) {
-      // idenfity users of buffer a LoadDescriptorOp + LocalStoreOp
-      if (auto localStore = dyn_cast<ttg::LocalStoreOp>(user)) {
-        auto maybeLoad = localStore.getSrc().getDefiningOp();
-        if (isa<tt::DescriptorLoadOp, tt::DescriptorGatherOp, tt::LoadOp>(
-                maybeLoad)) {
-          loadOps.push_back(maybeLoad);
-          storeOps.push_back(localStore);
-        }
+      if (auto loadOp =
+              dyn_cast<triton::nvws::DescriptorLoadOpInterface>(user)) {
+        loadOps.push_back(loadOp);
+        txCount += loadOp.getTxCount();
       }
     }
+  }
+
   assert(loadOps.size() <= op.getResults().size());
+
   if (loadOps.empty())
     return;
 
@@ -369,7 +388,9 @@ void lowerAsyncLoads(ttng::ArefPutEnterOp op, PatternRewriter &rewriter,
 
   Value fullBarrier = getFullBarrierAt(op.getContext(), loc, rewriter, arefVal,
                                        arefPutExitOp.getIndex());
-  ttng::createBarrierExpectOp(loc, rewriter, loadOps, fullBarrier);
+  Value pred = rewriter.create<arith::ConstantIntOp>(loc, 1, 1);
+  rewriter.create<triton::nvidia_gpu::BarrierExpectOp>(loc, fullBarrier,
+                                                       txCount, pred);
 
   // Note: it is essential to set the insertion point right before putExitOp
   // otherwise one of the MOE kernel fails to compile, and if it is set
@@ -380,21 +401,16 @@ void lowerAsyncLoads(ttng::ArefPutEnterOp op, PatternRewriter &rewriter,
   //
   OpBuilder::InsertionGuard g(rewriter);
   rewriter.setInsertionPoint(arefPutExitOp);
-  for (auto [loadOp, storeOp] : llvm::zip(loadOps, storeOps)) {
+  for (auto loadOp : loadOps) {
     Value pred = rewriter.create<arith::ConstantIntOp>(loc, 1, 1);
-    auto alloc = cast<TypedValue<ttg::MemDescType>>(storeOp.getDst());
-    if (auto descLoad = dyn_cast<tt::DescriptorLoadOp>(loadOp)) {
-      ttng::createTMALoad(descLoad, rewriter, fullBarrier, alloc, pred);
-    } else if (auto descGather = dyn_cast<tt::DescriptorGatherOp>(loadOp)) {
-      ttng::createTMAGather(descGather, rewriter, fullBarrier, alloc, pred);
-    } else if (auto load = dyn_cast<tt::LoadOp>(loadOp)) {
-      rewriter.create<ttg::AsyncCopyGlobalToLocalOp>(
-          loc, load.getPtr(), alloc, load.getMask(), load.getOther(),
-          load.getCache(), load.getEvict(), load.getIsVolatile());
+    if (auto descLoad = dyn_cast<triton::nvws::DescriptorLoadOp>(loadOp)) {
+      createTMALoad(descLoad, rewriter, fullBarrier, pred);
+    } else if (auto descGather =
+                   dyn_cast<triton::nvws::DescriptorGatherOp>(loadOp)) {
+      createTMAGather(descGather, rewriter, fullBarrier, pred);
     } else {
       llvm_unreachable("Unknown load op");
     }
-    tt::replaceUsesWithLocalLoad(rewriter, loadOp->getResult(0), alloc);
     loadOp->erase();
   }
 }
@@ -419,9 +435,11 @@ LogicalResult rewritePutEnterOp(ttng::ArefCreateOp arefOp,
       loc, phase->getResult(0),
       rewriter.create<arith::ConstantIntOp>(loc, 1, 32));
   phase->setAttr("put_phase", rewriter.getUnitAttr());
-  phase = rewriter.create<arith::XOrIOp>(
-      loc, phase->getResult(0),
-      rewriter.create<arith::ConstantIntOp>(loc, 1, 32));
+  if (!arefOp->hasAttr("first_get")) {
+    phase = rewriter.create<arith::XOrIOp>(
+        loc, phase->getResult(0),
+        rewriter.create<arith::ConstantIntOp>(loc, 1, 32));
+  }
   phase->setAttr("put_phase", rewriter.getUnitAttr());
   rewriter.create<ttng::WaitBarrierOp>(loc, emptyBarrier, phase->getResult(0));
 
@@ -436,9 +454,9 @@ LogicalResult rewritePutEnterOp(ttng::ArefCreateOp arefOp,
   auto views = getSubViews(arefVal, stage, loc, rewriter);
   assert(views.size() == op.getResults().size());
 
-  // TMA and cpasync load need special handling as it requires fullMbarrier that
+  // TMA needs special handling as it requires fullMbarrier that
   // we need to get from matching ArefPutExitOp
-  lowerAsyncLoads(op, rewriter, arefVal);
+  lowerTMALoad(op, rewriter, arefVal);
 
   // replaces uses with views
   for (int i = 0; i < arefVal.buffers.size(); ++i)
@@ -463,6 +481,11 @@ LogicalResult rewriteGetEnterOp(ttng::ArefCreateOp arefOp,
       loc, op.getIndex(),
       rewriter.create<arith::ConstantIntOp>(loc, arefVal.depth, 32));
   phase->setAttr("get_phase", rewriter.getUnitAttr());
+  if (arefOp->hasAttr("first_get")) {
+    phase = rewriter.create<arith::XOrIOp>(
+        loc, phase->getResult(0),
+        rewriter.create<arith::ConstantIntOp>(loc, 1, 32));
+  }
   phase = rewriter.create<arith::AndIOp>(
       loc, phase->getResult(0),
       rewriter.create<arith::ConstantIntOp>(loc, 1, 32));
@@ -756,7 +779,9 @@ public:
       // copy attributes from enterOp to newEnterOp
       if (enterOp->hasAttr("groups"))
         newEnterOp->setAttr("groups", enterOp->getAttr("groups"));
-      newEnterOp->setAttr("aref_tag", enterOp->getAttr("aref_tag"));
+
+      if (enterOp->hasAttr("aref_tag"))
+        newEnterOp->setAttr("aref_tag", enterOp->getAttr("aref_tag"));
 
       SmallVector<Value> replacements = newEnterOp->getResults();
       Value dummy = b.create<ub::PoisonOp>(funcOp.getLoc(),

@@ -35,7 +35,7 @@ module attributes {
     %aref = ttng.aref_create %arefBuf : <[!ttg.memdesc<3x128x64xf16, #shared, #smem, mutable>]>
 
 
-    ttng.warp_group start_warp(0) num_warps(1) : {{
+    ttng.warp_group start_warp(0) num_warps(1) reg_count(160) : {{
 
         // CHECK: %[[RET:.*]] = scf.for %[[LB:.*]] to %[[UB:.*]] step %[[STEP:.*]] iter_args(%[[AREF_IDX:.*]] = {{.*}})
         %idx = scf.for %i = %c0 to %K step %c4 iter_args(%arefIdx = %c0) -> i32 : i32 {
@@ -58,8 +58,7 @@ module attributes {
 
           // CHECK: ttng.barrier_expect %[[FULL_MBAR]], 16384
           // CHECK: ttng.async_tma_copy_global_to_local {{.*}} %[[SMEM_VIEW]], %[[FULL_MBAR]]
-          %a = tt.descriptor_load %desc0[%x, %y] : !tt.tensordesc<tensor<128x64xf16, #shared>> -> tensor<128x64xf16, #blocked>
-          ttg.local_store %a, %buf : tensor<128x64xf16, #blocked> -> !ttg.memdesc<128x64xf16, #shared, #smem, mutable>
+          nvws.descriptor_load %desc0[%x, %y] 16384 %buf : !tt.tensordesc<tensor<128x64xf16, #shared>>, i32, i32, !ttg.memdesc<128x64xf16, #shared, #smem, mutable>
           ttng.aref_put.exit %aref[%arefIdx] , producers = [#ttng.aref_producer<tmaldg>] {aref_tag = "0"}: <[!ttg.memdesc<3x128x64xf16, #shared, #smem, mutable>]>
 
           %arefIdx1 = arith.addi %arefIdx, %c1 : i32
@@ -70,7 +69,7 @@ module attributes {
     } {barId = 0 : i32}}
 
 
-    ttng.warp_group start_warp(4) num_warps(4) : {{
+    ttng.warp_group start_warp(4) num_warps(4) reg_count(0): {{
         %bar = ttg.local_alloc : () ->   !ttg.memdesc<1xi64, #mshared, #smem, mutable>
 
         // CHECK: %[[RET:.*]] = scf.for %[[LB:.*]] to %[[UB:.*]] step %[[STEP:.*]] iter_args(%[[AREF_IDX:.*]] = {{.*}})
@@ -107,7 +106,7 @@ module attributes {
       ttng.warp_group_return
     } {barId = 1 : i32}}
 
-    ttng.warp_group start_warp(8) num_warps(1) : {{
+    ttng.warp_group start_warp(8) num_warps(1) reg_count(0): {{
       %arefGatherBuf = ttg.local_alloc : () -> !ttg.memdesc<1x32x128xf16, #nvmma_128, #smem, mutable>
       %arefGather = ttng.aref_create %arefGatherBuf : <[!ttg.memdesc<1x32x128xf16, #nvmma_128, #smem, mutable>]>
 
@@ -118,8 +117,7 @@ module attributes {
       // CHECK: %[[PTR:.*]] = ttng.tensor_desc_to_tma_ptr {{.*}}
       // CHECK: ttng.async_tma_gather %[[PTR]][{{.*}}2, {{.*}}]
       // CHECK-NEXT: ttng.warp_group_return
-      %b = tt.descriptor_gather %arg0[%arg1, %arg2] : (!tt.tensordesc<tensor<1x128xf16, #nvmma_128>>, tensor<32xi32, #blockedA>, i32) -> tensor<32x128xf16, #blockedB>
-      ttg.local_store %b, %buf1 : tensor<32x128xf16, #blockedB> -> !ttg.memdesc<32x128xf16, #shared, #smem, mutable>
+      nvws.descriptor_gather %arg0[%arg1, %arg2] 8192 %buf1 : !tt.tensordesc<tensor<1x128xf16, #nvmma_128>>, tensor<32xi32, #blockedA>, i32, !ttg.memdesc<32x128xf16, #shared, #smem, mutable>
       ttng.aref_put.exit %arefGather[%c0], producers = [#ttng.aref_producer<tmaldg>] {aref_tag = "3"}: <[!ttg.memdesc<1x32x128xf16, #shared, #smem, mutable>]>
 
       ttng.warp_group_return
@@ -172,7 +170,7 @@ module attributes {
     // CHECK-DAG: %[[F_TMEM_MBAR_ALLOC:.*]] = ttg.local_alloc {aref_full_mbarriers} : () -> !ttg.memdesc<2xi64,
     %arefTmem = ttng.aref_create %arefTmemBuf : <[!ttg.memdesc<2x128x256xf32, #tmem, #ttng.tensor_memory, mutable>]>
 
-    ttng.warp_group start_warp(0) num_warps(4) : {{
+    ttng.warp_group start_warp(0) num_warps(4) reg_count(0): {{
         // CHECK: %[[RET:.*]] = scf.for %[[LB:.*]] to %[[UB:.*]] step %[[STEP:.*]] iter_args(%[[AREF_IDX:.*]] = {{.*}})
         %idx = scf.for %i = %c0 to %K step %c4 iter_args(%arefIdx = %c0) -> i32 : i32 {
           %y = arith.muli %i, %c16 : i32
@@ -235,7 +233,7 @@ module attributes {
       ttng.warp_group_return
     } {barId = 0 : i32}}
 
-    ttng.warp_group start_warp(4) num_warps(4) : {{
+    ttng.warp_group start_warp(4) num_warps(4) reg_count(0): {{
         // CHECK: %[[RET:.*]] = scf.for %[[LB:.*]] to %[[UB:.*]] step %[[STEP:.*]] iter_args(%[[AREF_IDX:.*]] = {{.*}})
         %idx = scf.for %i = %c0 to %K step %c4 iter_args(%arefIdx = %c0) -> i32 : i32 {
 

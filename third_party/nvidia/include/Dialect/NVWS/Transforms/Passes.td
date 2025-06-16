@@ -119,6 +119,24 @@ def NVWSArefCanonicalize : Pass<"nvws-aref-canonicalize", "mlir::ModuleOp"> {
   ];
 }
 
+def NVWSArefTMEMInsertion: Pass<"nvws-aref-tmem-insertion", "mlir::ModuleOp"> {
+  let summary = "insert tmem arefs into the code";
+
+  let description = [{
+    Insert tmem arefs into the code.
+  }];
+
+  let constructor = "mlir::createNVWSArefTMEMInsertionPass()";
+
+  let dependentDialects = [
+    "mlir::triton::nvws::NVWSDialect",
+    "mlir::triton::TritonDialect",
+    "mlir::triton::gpu::TritonGPUDialect",
+    "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
+  ];
+}
+
+
 def NVWSArefInsertion: Pass<"nvws-aref-insertion", "mlir::ModuleOp"> {
   let summary = "insert arefs into the code";
 
@@ -144,40 +162,6 @@ def NVWSArefCodeSplit : Pass<"nvws-aref-code-split", "mlir::ModuleOp"> {
   }];
 
   let constructor = "mlir::createNVWSArefCodeSplitPass()";
-
-  let dependentDialects = [
-    "mlir::triton::nvws::NVWSDialect",
-    "mlir::triton::TritonDialect",
-    "mlir::triton::gpu::TritonGPUDialect",
-    "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
-  ];
-}
-
-def NVWSArefCopyElimination : Pass<"nvws-aref-copy-elimination", "mlir::ModuleOp"> {
-  let summary = "elminate aref_copies";
-
-  let description = [{
-    Lower aref operations in TritonNvidiaGPUDialect.
-  }];
-
-  let constructor = "mlir::createNVWSArefCopyEliminationPass()";
-
-  let dependentDialects = [
-    "mlir::triton::nvws::NVWSDialect",
-    "mlir::triton::TritonDialect",
-    "mlir::triton::gpu::TritonGPUDialect",
-    "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
-  ];
-}
-
-def NVWSArefCopyLowering : Pass<"nvws-aref-copy-lowering", "mlir::ModuleOp"> {
-  let summary = "lower remaining aref copies";
-
-  let description = [{
-    Lower aref operations in TritonNvidiaGPUDialect.
-  }];
-
-  let constructor = "mlir::createNVWSArefCopyLoweringPass()";
 
   let dependentDialects = [
     "mlir::triton::nvws::NVWSDialect",

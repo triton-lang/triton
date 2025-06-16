@@ -136,13 +136,18 @@ TMemMessageTraits getTMemMessageFromAtom(const TMemAccessAtom &atom,
   return m;
 }
 
-// Only allows half of the thread registers to be used for tensor memory access
-// to avoid register pressure. This ensures the largest tmem message width is
-// used for the workload without inducing spills.
-int getTMemMessageNarrowingFactor(int workloadThreadRegs, int maxnreg) {
+// Narrow the TMEM message by reducing the number of registers per TMEM
+// instruction such that:
+// - No instruction uses more than half the available registers at a time.
+// - If the total number of registers required by the workload is more than half
+//   of the available registers, don't use the largest TMEM message.
+int getTMemMessageNarrowingFactor(const TMemAccessAtom &atom,
+                                  int workloadThreadRegs, int maxnreg) {
   const int allowedRegUsage = maxnreg / 2;
   int narrowingFactor = 1;
-  while (workloadThreadRegs > allowedRegUsage) {
+  while (getTMemMessageFromAtom(atom, narrowingFactor).numRegs >
+             allowedRegUsage ||
+         workloadThreadRegs > allowedRegUsage) {
     workloadThreadRegs /= 2;
     narrowingFactor *= 2;
   }
@@ -174,7 +179,9 @@ TMemMessageTraits constrainMessageFromWorkload(TMemMessageTraits m,
               (m.atom.colsPerThread * m.atom.rowsPerThread);
   // Half as many registers are needed for 16-bit packed elements,
   // so twice as many columns are accessed per message.
-  m.numCols *= info.numElementsPer32B;
+  if (info.unpackedb16)
+    m.numCols *= info.numElementsPer32B;
+  m.numRepeats = m.numCols / (m.atom.opBitWidth / 32);
   return m;
 }
 
@@ -268,7 +275,8 @@ TMemRuntimeInfo getTMemRuntimeInfo(Operation *op, RankedTensorType tensorType,
 void calculateAddressAndEmitTmemMessage(
     Location loc, Value baseAddress, const TMemRuntimeInfo &info,
     const TMemMessageTraits &message, ConversionPatternRewriter &rewriter,
-    const std::function<void(Value, int, bool, int, bool)> &createMemoryOp) {
+    const std::function<void(Value, int, int, bool, int, bool)>
+        &createMemoryOp) {
 
   TritonLLVMOpBuilder b(loc, rewriter);
   Value warpId = rewriter.create<nvgpu::WarpIdOp>(loc);
@@ -325,20 +333,20 @@ void calculateAddressAndEmitTmemMessage(
             b.add(address, b.shl(rowOffset, b.i32_val(16)));
         warpGroupAddress = b.add(warpGroupAddress, startColumnId);
 
-        Value msgAddress = b.add(warpGroupAddress, b.i32_val(colStart));
         int secondHalfColOffset = 0;
         if (info.useStridedMessage) {
           // Offset to half way through the set of columns for this warpgroup.
           secondHalfColOffset = numColumns;
         }
-        createMemoryOp(msgAddress, secondHalfColOffset, info.unpackedb16,
-                       message.numRegs, info.useStridedMessage);
+        createMemoryOp(warpGroupAddress, colStart, secondHalfColOffset,
+                       info.unpackedb16, message.numRegs,
+                       info.useStridedMessage);
       }
     }
   }
 }
 
-void createTensorMemoryStore(Location loc, Value address,
+void createTensorMemoryStore(Location loc, Value address, int colOffset,
                              SmallVector<Value> &srcs, int secondHalfOffset,
                              Value pred, bool unpacked,
                              const TMemAccessAtom &atom,
@@ -349,10 +357,11 @@ void createTensorMemoryStore(Location loc, Value address,
   std::string opcode = "@$0 tcgen05.st.sync.aligned." +
                        std::string(atom.opShape) + ".x" +
                        std::to_string(numRepeats) + packedStr;
+  opcode += ".b32 [$1 + " + std::to_string(colOffset) + "], ";
   if (secondHalfOffset)
-    opcode += ".b32 [$1], " + std::to_string(secondHalfOffset) + ", {";
+    opcode += std::to_string(secondHalfOffset) + ", {";
   else
-    opcode += ".b32 [$1], {";
+    opcode += "{";
 
   SmallVector<PTXInstr::Operand *> operands;
   operands.push_back(ptxBuilder.newOperand(pred, "b"));
@@ -386,7 +395,8 @@ TMemMessageTraits selectTMemMessage(const TMemRuntimeInfo &info, int maxnreg) {
   int totalRegsNeeded =
       getEffectiveRegs(info.unpackedb16, info.useStridedMessage,
                        info.numCols / info.numWarpGroups);
-  int narrowingFactor = getTMemMessageNarrowingFactor(totalRegsNeeded, maxnreg);
+  int narrowingFactor =
+      getTMemMessageNarrowingFactor(atom, totalRegsNeeded, maxnreg);
   auto narrowedMessage = getTMemMessageFromAtom(atom, narrowingFactor);
   narrowedMessage = constrainMessageFromWorkload(narrowedMessage, info,
                                                  narrowedMessage.numRegs);
@@ -405,20 +415,23 @@ static int getContextualMaxNReg(Operation *op) {
   if (auto mod = dyn_cast<ModuleOp>(op)) {
     // Check for a maxnreg attribute.
     if (auto attr = op->getAttrOfType<IntegerAttr>(AttrMaxRegistersName))
-      return std::max<int>(maxRegisters, attr.getInt());
+      return std::min<int>(maxRegisters, attr.getInt());
 
   } else if (auto partitions =
                  dyn_cast<WarpSpecializePartitionsOp>(op->getParentOp())) {
     // Check if the partition has reduced registers.
     unsigned idx = op->getParentRegion()->getRegionNumber();
     if (auto actRegisters = partitions.getParentOp().getActualRegisters())
-      return std::max<int>(maxRegisters, (*actRegisters)[1 + idx]);
+      return std::min<int>(maxRegisters, (*actRegisters)[1 + idx]);
     return getContextualMaxNReg(partitions.getParentOp());
 
   } else if (auto wsOp = dyn_cast<WarpSpecializeOp>(op->getParentOp())) {
     // Check the register usage of the default warpgroup.
     if (auto actRegisters = wsOp.getActualRegisters())
-      return std::max<int>(maxRegisters, actRegisters->front());
+      return std::min<int>(maxRegisters, actRegisters->front());
+  } else if (auto wgOp = dyn_cast<nvidia_gpu::WarpGroupOp>(op->getParentOp())) {
+    if (wgOp.getRegCount() > 0)
+      return std::min<int>(maxRegisters, wgOp.getRegCount());
   }
 
   if (Operation *parent = op->getParentOp())
@@ -441,13 +454,13 @@ static void lowerStoreToTensorMemory(Location loc, Operation *op, Value src,
   int regIdx = 0;
   calculateAddressAndEmitTmemMessage(
       loc, tmemBase, info, message, rewriter,
-      [&](Value startAddress, int secondHalfColOffset, bool unpackedb16,
-          int regsPerMsg, bool useStridedMessage) {
+      [&](Value startAddress, int colOffset, int secondHalfColOffset,
+          bool unpackedb16, int regsPerMsg, bool useStridedMessage) {
         SmallVector<Value> srcValuesSlice(srcValues.begin() + regIdx,
                                           srcValues.begin() + regIdx +
                                               regsPerMsg);
         regIdx += regsPerMsg;
-        createTensorMemoryStore(loc, startAddress, srcValuesSlice,
+        createTensorMemoryStore(loc, startAddress, colOffset, srcValuesSlice,
                                 secondHalfColOffset, pred, unpackedb16,
                                 message.atom, rewriter);
       });
@@ -496,8 +509,9 @@ struct TensorMemoryAllocOpConversion
 };
 
 Value createTensorMemoryLoad(Location loc, triton::nvidia_gpu::TMEMLoadOp op,
-                             Value address, int secondHalfOffset, bool unpacked,
-                             int numRegPerMessage, const TMemAccessAtom &atom,
+                             Value address, int colOffset, int secondHalfOffset,
+                             bool unpacked, int numRegPerMessage,
+                             const TMemAccessAtom &atom,
                              ConversionPatternRewriter &rewriter) {
   PTXBuilder ptxBuilder;
   // If the memory is unpacked we need to pack on the fly when loading.
@@ -515,7 +529,8 @@ Value createTensorMemoryLoad(Location loc, triton::nvidia_gpu::TMEMLoadOp op,
     if (i < numRegPerMessage - 1)
       opcode += ", ";
   }
-  opcode += "}, [$" + std::to_string(numRegPerMessage) + "]";
+  opcode += "}, [$" + std::to_string(numRegPerMessage) + " + " +
+            std::to_string(colOffset) + "]";
   if (secondHalfOffset)
     opcode += ", " + std::to_string(secondHalfOffset);
   opcode += ";";
@@ -580,11 +595,11 @@ struct TensorMemoryLoadOpConversion
     SmallVector<Value> resultVals;
     calculateAddressAndEmitTmemMessage(
         loc, tmemBase, info, message, rewriter,
-        [&](Value startAddress, int secondHalfColOffset, bool unpackedb16,
-            int regsPerMessage, bool useStridedMessage) {
+        [&](Value startAddress, int colOffset, int secondHalfColOffset,
+            bool unpackedb16, int regsPerMessage, bool useStridedMessage) {
           Value packedValues = createTensorMemoryLoad(
-              loc, op, startAddress, secondHalfColOffset, unpackedb16,
-              regsPerMessage, message.atom, rewriter);
+              loc, op, startAddress, colOffset, secondHalfColOffset,
+              unpackedb16, regsPerMessage, message.atom, rewriter);
           auto results =
               unpackResults(packedValues, op.getType().getElementType(),
                             regsPerMessage, loc, rewriter);
@@ -829,6 +844,13 @@ struct TMEMSubSliceOpConversion
       return failure();
     }
     offsetCol = op.getN();
+    if (!encoding.getUnpacked()) {
+      int numElementsPer32B = 32 / srcTy.getElementTypeBitWidth();
+      if (offsetCol % numElementsPer32B != 0) {
+        return failure();
+      }
+      offsetCol /= numElementsPer32B;
+    }
     Value tmemBase = adaptor.getSrc();
     Value offsetVal = b.i32_val(offsetCol | offsetRow << 16);
     Value newBase = b.add(b.ptrtoint(i32_ty, tmemBase), offsetVal);

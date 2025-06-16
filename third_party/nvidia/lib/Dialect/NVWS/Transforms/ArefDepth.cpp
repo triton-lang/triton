@@ -45,6 +45,7 @@
 #include "llvm/Support/Casting.h"
 
 #include <memory>
+#include <optional>
 
 // #define GEN_PASS_CLASSES
 // #include "nvidia/include/Dialect/NVWS/Transforms/Passes.h.inc"
@@ -73,7 +74,8 @@ class NVWSArefDepthPass
   using impl::NVWSArefDepthPassBase<NVWSArefDepthPass>::NVWSArefDepthPassBase;
 
 private:
-  LogicalResult arefAssignDepth(tt::FuncOp funcOp, int accDepth) {
+  LogicalResult arefAssignDepth(tt::FuncOp funcOp, int accDepth,
+                                int tmemLhsDepth) {
 
     auto getParentWgOp = [](ttng::ArefPutEnterOp op) -> ttng::WarpGroupOp {
       auto block = op->getBlock();
@@ -114,9 +116,13 @@ private:
           depth = numStages;
         } else if (group == ATTR_WS_MMA) {
           depth = accDepth;
+        } else if (group == ATTR_WS_SIMT) {
+          depth = tmemLhsDepth;
         } else if (group == ATTR_WS_EPILOGUE) {
           llvm_unreachable("ArefPut in epilogue is not supported");
         }
+        if (depth == 1)
+          continue;
 
         SmallVector<Value> allocOps;
         SmallVector<Type> arefTypes;
@@ -157,27 +163,57 @@ public:
     m.walk([&](tt::FuncOp funcOp) { funcOps.push_back(funcOp); });
 
     auto canDoubleBufferTMEM = [](ttg::MemDescType tmemDesc,
-                                  ttng::MMAv5OpInterface mmaOp) {
+                                  std::optional<ttng::MMAv5OpInterface> mmaOp,
+                                  int usedBlocks) {
       auto blockM = tmemDesc.getShape()[0];
       auto blockN = tmemDesc.getShape()[1];
       constexpr int numTMEMColumns = 512;
       constexpr int numTMEMRows = 128;
-      if (blockM * blockN > numTMEMRows * numTMEMColumns / 2)
+      if (usedBlocks + (blockM * blockN * 2) > numTMEMRows * numTMEMColumns) {
         return false;
-      if (isa<ttng::TCGen5MMAScaledOp>(mmaOp) && blockN == 256)
+      }
+      if (mmaOp && isa<ttng::TCGen5MMAScaledOp>(*mmaOp) && blockN == 256) {
         return false;
+      }
       return true;
     };
 
     for (auto funcOp : funcOps) {
-
       int accDepth = 1;
+      ttg::MemDescType accumMemdesc;
       funcOp.walk([&](ttng::MMAv5OpInterface mma) {
-        if (canDoubleBufferTMEM(mma.getAccumulator().getType(), mma))
+        accumMemdesc = mma.getAccumulator().getType();
+        if (canDoubleBufferTMEM(accumMemdesc, mma, 0))
           accDepth = 2;
       });
 
-      if (arefAssignDepth(funcOp, accDepth).failed())
+      int accUsedBlocks = accumMemdesc
+                              ? accumMemdesc.getShape()[0] *
+                                    accumMemdesc.getShape()[1] * accDepth
+                              : 0;
+
+      int tmemLhsDepth = 1;
+      funcOp.walk([&](ttng::MMAv5OpInterface mma) {
+        auto lhsMemDesc = cast<ttg::MemDescType>(mma.getA().getType());
+        if (isa<ttng::TensorMemorySpaceAttr>(lhsMemDesc.getMemorySpace())) {
+          bool tmemStoreBySIMTWG = false;
+          if (auto arefGet = mma.getA().getDefiningOp<ttng::ArefGetEnterOp>()) {
+            for (auto user : arefGet.getAref().getUsers()) {
+              if (isOpInGroup(user, ATTR_WS_SIMT) &&
+                  isa<ttng::ArefPutEnterOp>(user)) {
+                tmemStoreBySIMTWG = true;
+              }
+            }
+          }
+
+          if (tmemStoreBySIMTWG &&
+              canDoubleBufferTMEM(lhsMemDesc, std::nullopt, accUsedBlocks)) {
+            tmemLhsDepth = 2;
+          }
+        }
+      });
+
+      if (arefAssignDepth(funcOp, accDepth, tmemLhsDepth).failed())
         signalPassFailure();
     }
   }

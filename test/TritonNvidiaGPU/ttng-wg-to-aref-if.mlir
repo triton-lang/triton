@@ -6,26 +6,30 @@ module attributes {nvws.mma = {num_warps = 4 : i32, start_warp = 0 : i32}, nvws.
     // CHECK: %[[TID:.*]] = nvvm.read.ptx.sreg.tid.x
     // CHECK-DAG: %[[CNST32:.*]] = arith.constant  32
     // CHECK-DAG: %[[WID:.*]] = arith.divsi %[[TID]], %[[CNST32]]
-    // CHECK-DAG: %[[CNST4:.*]] = arith.constant 4
+    // CHECK-DAG: %[[CNST4:.*]] = arith.constant 0
     // CHECK-DAG: %[[P1:.*]] = arith.cmpi sge, %[[WID]], %[[CNST4]]
     // CHECK-DAG: %[[CNST8:.*]] = arith.constant 8
     // CHECK-DAG: %[[P2:.*]] = arith.cmpi slt, %[[WID]], %[[CNST8]]
     // CHECK-DAG: %[[P3:.*]] = arith.andi %[[P1]], %[[P2]]
     // CHECK-DAG: scf.if %[[P3]]
-    ttng.warp_group start_warp(4) num_warps(4) :  {{
+    ttng.warp_group start_warp(0) num_warps(8) reg_count(32):  {{
+      // CHECK: ttng.warp_group
+      // CHECK: nvvm.setmaxregister decrease 32
       ttng.warp_group_return
     } {barId = 1 : i32, groups = [@nvws.tma_load]}}
 
     // CHECK: %[[TID:.*]] = nvvm.read.ptx.sreg.tid.x
     // CHECK-DAG: %[[CNST32:.*]] = arith.constant  32
     // CHECK-DAG: %[[WID:.*]] = arith.divsi %[[TID]], %[[CNST32]]
-    // CHECK-DAG: %[[CNST0:.*]] = arith.constant 0
+    // CHECK-DAG: %[[CNST0:.*]] = arith.constant 8
     // CHECK-DAG: %[[P1:.*]] = arith.cmpi sge, %[[WID]], %[[CNST0]]
-    // CHECK-DAG: %[[CNST4:.*]] = arith.constant 4
+    // CHECK-DAG: %[[CNST4:.*]] = arith.constant 16
     // CHECK-DAG: %[[P2:.*]] = arith.cmpi slt, %[[WID]], %[[CNST4]]
     // CHECK-DAG: %[[P3:.*]] = arith.andi %[[P1]], %[[P2]]
     // CHECK-DAG: scf.if %[[P3]]
-    ttng.warp_group start_warp(0) num_warps(4) : {{
+    ttng.warp_group start_warp(8) num_warps(8) reg_count(160): {{
+      // CHECK: ttng.warp_group
+      // CHECK: nvvm.setmaxregister increase 160
       ttng.warp_group_return
     } {barId = 2 : i32, groups = [@nvws.mma]}}
     tt.return
@@ -46,7 +50,7 @@ module attributes {nvwm.epilogue = {num_warps = 4 : i32, start_warp = 0 : i32}, 
     // CHECK-DAG: %[[P2:.*]] = arith.cmpi slt, %[[WID]], %[[CNST6]]
     // CHECK-DAG: %[[P3:.*]] = arith.andi %[[P1]], %[[P2]]
     // CHECK-DAG: scf.if %[[P3]]
-    ttng.warp_group start_warp(5) num_warps(1) :  {{
+    ttng.warp_group start_warp(5) num_warps(1) reg_count(0):  {{
       ttng.warp_group_return
     } {barId = 1 : i32, groups = [@nvws.tma_load]}}
 
@@ -59,7 +63,7 @@ module attributes {nvwm.epilogue = {num_warps = 4 : i32, start_warp = 0 : i32}, 
     // CHECK-DAG: %[[P2:.*]] = arith.cmpi slt, %[[WID]], %[[CNST4]]
     // CHECK-DAG: %[[P3:.*]] = arith.andi %[[P1]], %[[P2]]
     // CHECK-DAG: scf.if %[[P3]]
-    ttng.warp_group start_warp(0) num_warps(4) : {{
+    ttng.warp_group start_warp(0) num_warps(4) reg_count(0): {{
       ttng.warp_group_return
     } {barId = 2 : i32, groups = [@nvws.epilogue]}}
 
@@ -72,7 +76,7 @@ module attributes {nvwm.epilogue = {num_warps = 4 : i32, start_warp = 0 : i32}, 
     // CHECK-DAG: %[[P2:.*]] = arith.cmpi slt, %[[WID]], %[[CNST5]]
     // CHECK-DAG: %[[P3:.*]] = arith.andi %[[P1]], %[[P2]]
     // CHECK-DAG: scf.if %[[P3]]
-    ttng.warp_group start_warp(4) num_warps(1) : {{
+    ttng.warp_group start_warp(4) num_warps(1) reg_count(0): {{
       ttng.warp_group_return
     } {barId = 3 : i32, groups = [@nvws.mma]}}
     tt.return

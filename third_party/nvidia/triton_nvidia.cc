@@ -63,12 +63,9 @@ void init_triton_nvidia_passes_nvws(py::module &&m) {
 
   ADD_PASS_WRAPPER_0("add_aref_canonicalize",
                      mlir::createNVWSArefCanonicalizePass);
+  ADD_PASS_WRAPPER_0("add_aref_tmem_insertion", mlir::createNVWSArefTMEMInsertionPass);
   ADD_PASS_WRAPPER_0("add_aref_insertion", mlir::createNVWSArefInsertionPass);
   ADD_PASS_WRAPPER_0("add_aref_code_split", mlir::createNVWSArefCodeSplitPass);
-  ADD_PASS_WRAPPER_0("add_aref_copy_elimination",
-                     mlir::createNVWSArefCopyEliminationPass);
-  ADD_PASS_WRAPPER_0("add_aref_copy_lowering",
-                     mlir::createNVWSArefCopyLoweringPass);
   ADD_PASS_WRAPPER_0("add_aref_optimize", mlir::createNVWSArefOptimizePass);
   ADD_PASS_WRAPPER_0("add_aref_async_ops", mlir::createNVWSArefAsyncOpsPass);
   ADD_PASS_WRAPPER_0("add_blackwell_fa", mlir::createNVWSBlackwellFAPass);

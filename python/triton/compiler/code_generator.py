@@ -1192,6 +1192,9 @@ class CodeGenerator(ast.NodeVisitor):
         args_val = [get_iterable_path(args, path) for path in args_path]
         # mangle
         fn_name = mangle_fn(fn.__name__, [arg.type for arg in args_val], args_cst)
+        groups = self.builder.get_groups()
+        if len(groups) > 0:
+            fn_name += "_groups_" + '_'.join(groups)
         # generate function def if necessary
         if not self.module.has_function(fn_name):
             gscope = fn.__globals__

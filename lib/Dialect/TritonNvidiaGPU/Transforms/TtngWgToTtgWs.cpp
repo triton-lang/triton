@@ -107,11 +107,10 @@ void populateBlock(OpBuilder &builder, mlir::Block *input_block,
   }
 }
 
-LogicalResult createTtgWSOp(Location loc, OpBuilder &builder,
-                            SmallVector<Block *> partitions,
-                            SmallVector<int> numWarps,
-                            SmallVector<int> warpGroupStartIds,
-                            SmallVector<int> barIds) {
+LogicalResult
+createTtgWSOp(Location loc, OpBuilder &builder, SmallVector<Block *> partitions,
+              SmallVector<int> numWarps, SmallVector<int> regCounts,
+              SmallVector<int> warpGroupStartIds, SmallVector<int> barIds) {
 
   // This methods assumes warp specialized partitions have already been added
   // to a block such as the then block of an if statement
@@ -143,6 +142,9 @@ LogicalResult createTtgWSOp(Location loc, OpBuilder &builder,
     return failure("ttg.num-warps attribute does not match the number of warps "
                    "in the first warp group");
   numWarps.erase(numWarps.begin());
+  if (!regCounts.empty()) {
+    regCounts.erase(regCounts.begin());
+  }
 
   DenseSet<Value> uniqueInputs;
   DenseSet<Value> uniqueConstants;
@@ -173,6 +175,9 @@ LogicalResult createTtgWSOp(Location loc, OpBuilder &builder,
 
   wsOp.setPartitionNumWarps(numWarps);
   wsOp.setWarpGroupStartIds(warpGroupStartIds);
+  if (!regCounts.empty()) {
+    wsOp.setRequestedRegisters(regCounts);
+  }
 
   // TODO: Handle returns from the default block
   auto &defaultBlock = wsOp.getDefaultRegion().emplaceBlock();
@@ -206,15 +211,16 @@ public:
 
     SmallVector<ttng::WarpGroupOp> wgOps = nvws::findWarpGroupOps(m);
 
-    DenseMap<int32_t, int32_t> warpGroups;
+    DenseMap<int32_t, std::pair<int32_t, int32_t>> warpGroups;
     DenseMap<int32_t, ttng::WarpGroupOp> wgOpsMap;
     uint32_t totalNumWarps = 0;
     for (auto wgOp : wgOps) {
       auto startWarp = wgOp.getStartWarp();
       auto numWarps = wgOp.getNumWarps();
+      auto regCount = wgOp.getRegCount();
       assert(warpGroups.count(startWarp) == 0 &&
              "multiple ttng.warp_group with same startWarp");
-      warpGroups[startWarp] = numWarps;
+      warpGroups[startWarp] = std::make_pair(numWarps, regCount);
       wgOpsMap[startWarp] = wgOp;
       totalNumWarps = std::max(totalNumWarps, startWarp + numWarps);
     }
@@ -222,21 +228,25 @@ public:
     // we can only convert to ttg.warp_specialized if there is a
     // ttng.warp_group with startWarp = 0 and numWarps = ttg.num-warps.
     assert(warpGroups.find(0) != warpGroups.end());
-    assert(warpGroups[0] ==
+    assert(warpGroups[0].first ==
                m->getAttrOfType<IntegerAttr>("ttg.num-warps").getInt() &&
            "ttng.warp_group with startWarp = 0 and numWarps != ttg.num-warps");
 
     SmallVector<int> warpGroupStartIds;
-    SmallVector<int> numWarps;
-    for (auto [startWarp, _numWarps] : warpGroups) {
+    SmallVector<int> numWarps, regCounts;
+    for (auto [startWarp, _numWarpsReg] : warpGroups) {
+      auto [_numWarps, regCount] = _numWarpsReg;
       warpGroupStartIds.push_back(startWarp);
       numWarps.push_back(_numWarps);
+      if (regCount > 0)
+        regCounts.push_back(regCount);
       // ttg.warp_specialize does not allow gaps between warp groups, so
       // we would need to fill any gaps with dummy partitions. For now, we
       // assert that there are no gaps.
       if (startWarp + _numWarps < totalNumWarps)
         assert(warpGroups.find(startWarp + _numWarps) != warpGroups.end());
     }
+    assert(regCounts.empty() || regCounts.size() == numWarps.size());
 
     SmallVector<Block *> partitions;
     SmallVector<int> barIds;
@@ -249,7 +259,7 @@ public:
     OpBuilder builder(wgOps.back());
     builder.setInsertionPointAfter(wgOps.back());
     auto result = createTtgWSOp(wgOps.back().getLoc(), builder, partitions,
-                                numWarps, warpGroupStartIds, barIds);
+                                numWarps, regCounts, warpGroupStartIds, barIds);
 
     if (failed(result)) {
       signalPassFailure();

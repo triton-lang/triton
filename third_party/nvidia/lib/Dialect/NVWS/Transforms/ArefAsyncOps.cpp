@@ -127,11 +127,9 @@ void fixUpArriveWaitMMAv5(tt::FuncOp funcOp) {
     // arefLower could later optimize away first put.enter and last
     // get.exit
 
-    OpBuilder builder(buffer.getDefiningOp());
-    builder.setInsertionPointToStart(&buffer.getDefiningOp()
-                                          ->getParentOfType<ttng::WarpGroupOp>()
-                                          ->getRegion(0)
-                                          .front());
+    OpBuilder builder(funcOp);
+    builder.setInsertionPointToStart(
+        &loadOp->getParentOfType<ttng::WarpGroupOp>()->getRegion(0).front());
 
     auto ctx = buffer.getContext();
     auto bufferType = cast<MemDescType>(buffer.getType());

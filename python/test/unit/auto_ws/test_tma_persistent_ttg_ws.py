@@ -110,7 +110,7 @@ def matmul_kernel_tma_persistent(
          (True, 4 if utils.is_sm10x() else 8, 2, 2, None)
     ],
 )
-def _test_experimental_matmul(
+def test_experimental_matmul(
     M,
     N,
     K,
@@ -135,9 +135,6 @@ def _test_experimental_matmul(
         and NUM_WARPS == 12
     ):
         pytest.skip("FIXME: test fails when #CTA <= NUM_SMS")
-
-    if torch.cuda.get_device_capability()[0] >= 10:
-        pytest.skip("Blackwell is not functional with ttg.ws")
 
     # also see skipping verification in benchmarking below
     if not bench and not ENABLE_WARP_SPECIALIZATION and (M >= 4096 or N >= 4096):

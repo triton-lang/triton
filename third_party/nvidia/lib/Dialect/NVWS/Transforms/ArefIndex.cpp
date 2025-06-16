@@ -66,56 +66,61 @@ namespace ttng = triton::nvidia_gpu;
 using namespace ttg;
 
 struct LastIndexValue {
-  Value put = {};
-  Value get = {};
+  Value putEnter = {};
+  Value getEnter = {};
+  Value putExit = {};
+  Value getExit = {};
 };
 using ArefLastIndexMap = llvm::MapVector<Value /*aref*/, LastIndexValue>;
 
 struct ArefFirstUse {
-  ttng::ArefPutEnterOp putOp = {};
-  ttng::ArefGetEnterOp getOp = {};
+  ttng::ArefPutEnterOp putEnterOp = {};
+  ttng::ArefGetEnterOp getEnterOp = {};
+  ttng::ArefPutExitOp putExitOp = {};
+  ttng::ArefGetExitOp getExitOp = {};
 };
 
 using ArefFirstUseMap = llvm::MapVector<Value /*arefs*/, ArefFirstUse>;
 Value getIndex(ttng::ArefEnterOpInterface enterOp) {
   return isConstant(enterOp.getIndex(), 0) ? Value{} : enterOp.getIndex();
 };
+Value getIndex(ttng::ArefExitOpInterface exitOp) {
+  return isConstant(exitOp.getIndex(), 0) ? Value{} : exitOp.getIndex();
+};
 
 void setIndex(ttng::ArefEnterOpInterface enterOp, Value index) {
   assert(isConstant(enterOp.getIndex(), 0));
   enterOp.setIndex(index);
-
-  auto aref = enterOp.getAref();
-  auto arefTag = enterOp->getAttrOfType<StringAttr>("aref_tag").str();
-  auto isPutEnter = isa<ttng::ArefPutEnterOp>(enterOp);
-
-  for (auto user : aref.getUsers()) {
-    if (auto exitOp = dyn_cast<ttng::ArefExitOpInterface>(user)) {
-      auto isPutExit = isa<ttng::ArefPutExitOp>(exitOp);
-      if (isPutEnter == isPutExit &&
-          exitOp->getAttrOfType<StringAttr>("aref_tag").str() == arefTag) {
-        assert(isConstant(exitOp.getIndex(), 0));
-        exitOp.setIndex(index);
-        return;
-      }
-    }
-  }
-  llvm_unreachable("matching exitOp not found");
+};
+void setIndex(ttng::ArefExitOpInterface exitOp, Value index) {
+  assert(isConstant(exitOp.getIndex(), 0));
+  exitOp.setIndex(index);
 };
 
 ArefFirstUseMap AnalyzeArefUseInBlock(Block *block, ArefFirstUseMap arefUse) {
   for (auto &op : *block) {
-    if (auto putEnterOp = dyn_cast<ttng::ArefPutEnterOp>(op)) {
-      if (!getIndex(putEnterOp)) {
-        auto aref = putEnterOp.getAref();
-        if (!arefUse[aref].putOp)
-          arefUse[aref].putOp = putEnterOp;
+    if (auto enterOp = dyn_cast<ttng::ArefEnterOpInterface>(op)) {
+      if (!getIndex(enterOp)) {
+        auto aref = enterOp.getAref();
+        if (isa<ttng::ArefPutEnterOp>(enterOp)) {
+          if (!arefUse[aref].putEnterOp)
+            arefUse[aref].putEnterOp = cast<ttng::ArefPutEnterOp>(enterOp);
+          ;
+        } else {
+          if (!arefUse[aref].getEnterOp)
+            arefUse[aref].getEnterOp = cast<ttng::ArefGetEnterOp>(enterOp);
+        }
       }
-    } else if (auto getEnterOp = dyn_cast<ttng::ArefGetEnterOp>(op)) {
-      auto aref = getEnterOp.getAref();
-      if (!getIndex(getEnterOp)) {
-        if (!arefUse[aref].getOp)
-          arefUse[aref].getOp = getEnterOp;
+    } else if (auto exitOp = dyn_cast<ttng::ArefExitOpInterface>(op)) {
+      if (!getIndex(exitOp)) {
+        auto aref = exitOp.getAref();
+        if (isa<ttng::ArefPutExitOp>(exitOp)) {
+          if (!arefUse[aref].putExitOp)
+            arefUse[aref].putExitOp = cast<ttng::ArefPutExitOp>(exitOp);
+        } else {
+          if (!arefUse[aref].getExitOp)
+            arefUse[aref].getExitOp = cast<ttng::ArefGetExitOp>(exitOp);
+        }
       }
     } else if (auto forOp = dyn_cast<scf::ForOp>(op)) {
       // recursive visit for-op body to gather nested uses of arefs in put/get
@@ -124,10 +129,14 @@ ArefFirstUseMap AnalyzeArefUseInBlock(Block *block, ArefFirstUseMap arefUse) {
 
       auto arefUseBlock = AnalyzeArefUseInBlock(block, ArefFirstUseMap{});
       for (auto [aref, useMap] : arefUseBlock) {
-        if (!arefUse[aref].putOp)
-          arefUse[aref].putOp = useMap.putOp;
-        if (!arefUse[aref].getOp)
-          arefUse[aref].getOp = useMap.getOp;
+        if (!arefUse[aref].putEnterOp)
+          arefUse[aref].putEnterOp = useMap.putEnterOp;
+        if (!arefUse[aref].getEnterOp)
+          arefUse[aref].getEnterOp = useMap.getEnterOp;
+        if (!arefUse[aref].putExitOp)
+          arefUse[aref].putExitOp = useMap.putExitOp;
+        if (!arefUse[aref].getExitOp)
+          arefUse[aref].getExitOp = useMap.getExitOp;
       }
     } else if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
       // recursive visit if-op then/else body to gather nested uses of arefs
@@ -135,21 +144,28 @@ ArefFirstUseMap AnalyzeArefUseInBlock(Block *block, ArefFirstUseMap arefUse) {
       auto thenBlock = &thenRegion.getBlocks().front();
       auto thenArefUse = AnalyzeArefUseInBlock(thenBlock, ArefFirstUseMap{});
       for (auto [aref, useMap] : thenArefUse) {
-        if (!arefUse[aref].putOp)
-          arefUse[aref].putOp = useMap.putOp;
-        if (!arefUse[aref].getOp)
-          arefUse[aref].getOp = useMap.getOp;
+        if (!arefUse[aref].putEnterOp)
+          arefUse[aref].putEnterOp = useMap.putEnterOp;
+        if (!arefUse[aref].getEnterOp)
+          arefUse[aref].getEnterOp = useMap.getEnterOp;
+        if (!arefUse[aref].putExitOp)
+          arefUse[aref].putExitOp = useMap.putExitOp;
+        if (!arefUse[aref].getExitOp)
+          arefUse[aref].getExitOp = useMap.getExitOp;
       }
-
       if (ifOp.elseBlock()) {
         auto &elseRegion = ifOp.getElseRegion();
         auto elseBlock = &elseRegion.getBlocks().front();
         auto elseArefUse = AnalyzeArefUseInBlock(elseBlock, ArefFirstUseMap{});
         for (auto [aref, useMap] : elseArefUse) {
-          if (!arefUse[aref].putOp)
-            arefUse[aref].putOp = useMap.putOp;
-          if (!arefUse[aref].getOp)
-            arefUse[aref].getOp = useMap.getOp;
+          if (!arefUse[aref].putEnterOp)
+            arefUse[aref].putEnterOp = useMap.putEnterOp;
+          if (!arefUse[aref].getEnterOp)
+            arefUse[aref].getEnterOp = useMap.getEnterOp;
+          if (!arefUse[aref].putExitOp)
+            arefUse[aref].putExitOp = useMap.putExitOp;
+          if (!arefUse[aref].getExitOp)
+            arefUse[aref].getExitOp = useMap.getExitOp;
         }
       }
     }
@@ -176,13 +192,21 @@ void assignInForOp(scf::ForOp forOp, ArefLastIndexMap &arefLastIndex,
   // add initial indexes to the loop
   SmallVector<Value *> arefLastIndexArgs;
   for (auto [aref, useMap] : arefUseInBlock) {
-    if (useMap.putOp) {
-      initArgs.push_back(arefLastIndex[aref].put);
-      arefLastIndexArgs.push_back(&arefLastIndex[aref].put);
+    if (useMap.putEnterOp) {
+      initArgs.push_back(arefLastIndex[aref].putEnter);
+      arefLastIndexArgs.push_back(&arefLastIndex[aref].putEnter);
     }
-    if (useMap.getOp) {
-      initArgs.push_back(arefLastIndex[aref].get);
-      arefLastIndexArgs.push_back(&arefLastIndex[aref].get);
+    if (useMap.getEnterOp) {
+      initArgs.push_back(arefLastIndex[aref].getEnter);
+      arefLastIndexArgs.push_back(&arefLastIndex[aref].getEnter);
+    }
+    if (useMap.putExitOp) {
+      initArgs.push_back(arefLastIndex[aref].putExit);
+      arefLastIndexArgs.push_back(&arefLastIndex[aref].putExit);
+    }
+    if (useMap.getExitOp) {
+      initArgs.push_back(arefLastIndex[aref].getExit);
+      arefLastIndexArgs.push_back(&arefLastIndex[aref].getExit);
     }
   }
 
@@ -221,10 +245,14 @@ void assignInForOp(scf::ForOp forOp, ArefLastIndexMap &arefLastIndex,
   SmallVector<Value> newYieldVals(yieldOp.getOperands().begin(),
                                   yieldOp.getOperands().end());
   for (auto [aref, useMap] : arefUseInBlock) {
-    if (useMap.putOp)
-      newYieldVals.push_back(arefLastIndexInBlock[aref].put);
-    if (useMap.getOp)
-      newYieldVals.push_back(arefLastIndexInBlock[aref].get);
+    if (useMap.putEnterOp)
+      newYieldVals.push_back(arefLastIndexInBlock[aref].putEnter);
+    if (useMap.getEnterOp)
+      newYieldVals.push_back(arefLastIndexInBlock[aref].getEnter);
+    if (useMap.putExitOp)
+      newYieldVals.push_back(arefLastIndexInBlock[aref].putExit);
+    if (useMap.getExitOp)
+      newYieldVals.push_back(arefLastIndexInBlock[aref].getExit);
   }
   builder.setInsertionPoint(yieldOp);
   builder.create<scf::YieldOp>(yieldOp.getLoc(), newYieldVals);
@@ -254,23 +282,35 @@ void assignInIfOp(scf::IfOp ifOp, ArefLastIndexMap &arefLastIndex,
   ArefFirstUseMap arefUseInIfOp = arefUseInThenBlock;
 
   for (auto [aref, useMap] : arefUseInElseBlock) {
-    if (!arefUseInIfOp[aref].putOp)
-      arefUseInIfOp[aref].putOp = useMap.putOp;
-    if (!arefUseInIfOp[aref].getOp)
-      arefUseInIfOp[aref].getOp = useMap.getOp;
+    if (!arefUseInIfOp[aref].putEnterOp)
+      arefUseInIfOp[aref].putEnterOp = useMap.putEnterOp;
+    if (!arefUseInIfOp[aref].getEnterOp)
+      arefUseInIfOp[aref].getEnterOp = useMap.getEnterOp;
+    if (!arefUseInIfOp[aref].putExitOp)
+      arefUseInIfOp[aref].putExitOp = useMap.putExitOp;
+    if (!arefUseInIfOp[aref].getExitOp)
+      arefUseInIfOp[aref].getExitOp = useMap.getExitOp;
   }
 
   SmallVector<Type, 4> newIfResultTypes(ifOp.getResultTypes().begin(),
                                         ifOp.getResultTypes().end());
   SmallVector<Value *> arefLastIndexArgs;
   for (auto [aref, useMap] : arefUseInIfOp) {
-    if (useMap.putOp) {
-      arefLastIndexArgs.push_back(&arefLastIndex[aref].put);
-      newIfResultTypes.push_back(arefLastIndex[aref].put.getType());
+    if (useMap.putEnterOp) {
+      arefLastIndexArgs.push_back(&arefLastIndex[aref].putEnter);
+      newIfResultTypes.push_back(arefLastIndex[aref].putEnter.getType());
     }
-    if (useMap.getOp) {
-      arefLastIndexArgs.push_back(&arefLastIndex[aref].get);
-      newIfResultTypes.push_back(arefLastIndex[aref].get.getType());
+    if (useMap.getEnterOp) {
+      arefLastIndexArgs.push_back(&arefLastIndex[aref].getEnter);
+      newIfResultTypes.push_back(arefLastIndex[aref].getEnter.getType());
+    }
+    if (useMap.putExitOp) {
+      arefLastIndexArgs.push_back(&arefLastIndex[aref].putExit);
+      newIfResultTypes.push_back(arefLastIndex[aref].putExit.getType());
+    }
+    if (useMap.getExitOp) {
+      arefLastIndexArgs.push_back(&arefLastIndex[aref].getExit);
+      newIfResultTypes.push_back(arefLastIndex[aref].getExit.getType());
     }
   }
 
@@ -306,10 +346,14 @@ void assignInIfOp(scf::IfOp ifOp, ArefLastIndexMap &arefLastIndex,
     SmallVector<Value> newThenYieldVals(thenYieldOp.getOperands().begin(),
                                         thenYieldOp.getOperands().end());
     for (auto [aref, useMap] : arefUseInIfOp) {
-      if (useMap.putOp)
-        newThenYieldVals.push_back(arefLastIndexInThenBlock[aref].put);
-      if (useMap.getOp)
-        newThenYieldVals.push_back(arefLastIndexInThenBlock[aref].get);
+      if (useMap.putEnterOp)
+        newThenYieldVals.push_back(arefLastIndexInThenBlock[aref].putEnter);
+      if (useMap.getEnterOp)
+        newThenYieldVals.push_back(arefLastIndexInThenBlock[aref].getEnter);
+      if (useMap.putExitOp)
+        newThenYieldVals.push_back(arefLastIndexInThenBlock[aref].putExit);
+      if (useMap.getExitOp)
+        newThenYieldVals.push_back(arefLastIndexInThenBlock[aref].getExit);
     }
     builder.setInsertionPoint(thenYieldOp);
     builder.create<scf::YieldOp>(thenYieldOp.getLoc(), newThenYieldVals);
@@ -321,11 +365,15 @@ void assignInIfOp(scf::IfOp ifOp, ArefLastIndexMap &arefLastIndex,
     SmallVector<Value> newElseYieldVals(elseYieldOp.getOperands().begin(),
                                         elseYieldOp.getOperands().end());
     for (auto [aref, useMap] : arefUseInIfOp) {
-      if (useMap.putOp) {
-        newElseYieldVals.push_back(arefLastIndexInElseBlock[aref].put);
+      if (useMap.putEnterOp) {
+        newElseYieldVals.push_back(arefLastIndexInElseBlock[aref].putEnter);
       }
-      if (useMap.getOp)
-        newElseYieldVals.push_back(arefLastIndexInElseBlock[aref].get);
+      if (useMap.getEnterOp)
+        newElseYieldVals.push_back(arefLastIndexInElseBlock[aref].getEnter);
+      if (useMap.putExitOp)
+        newElseYieldVals.push_back(arefLastIndexInElseBlock[aref].putExit);
+      if (useMap.getExitOp)
+        newElseYieldVals.push_back(arefLastIndexInElseBlock[aref].getExit);
     }
     builder.setInsertionPoint(elseYieldOp);
     builder.create<scf::YieldOp>(elseYieldOp.getLoc(), newElseYieldVals);
@@ -335,11 +383,15 @@ void assignInIfOp(scf::IfOp ifOp, ArefLastIndexMap &arefLastIndex,
     // because we return updated index values
     SmallVector<Value> newElseYieldVals;
     for (auto [aref, useMap] : arefUseInIfOp) {
-      if (useMap.putOp) {
-        newElseYieldVals.push_back(arefLastIndexInElseBlock[aref].put);
+      if (useMap.putEnterOp) {
+        newElseYieldVals.push_back(arefLastIndexInElseBlock[aref].putEnter);
       }
-      if (useMap.getOp)
-        newElseYieldVals.push_back(arefLastIndexInElseBlock[aref].get);
+      if (useMap.getEnterOp)
+        newElseYieldVals.push_back(arefLastIndexInElseBlock[aref].getEnter);
+      if (useMap.putExitOp)
+        newElseYieldVals.push_back(arefLastIndexInElseBlock[aref].putExit);
+      if (useMap.getExitOp)
+        newElseYieldVals.push_back(arefLastIndexInElseBlock[aref].getExit);
     }
     // sanity check, if we have nothing to return, we should rewrite
     // ifOp
@@ -372,12 +424,22 @@ ArefLastIndexMap arefIndexAssignmentInBlock(Block *inpBlock,
       if (!getIndex(enterOp)) {
         assert(arefLastIndex.contains(enterOp.getAref()));
         auto &index = isa<ttng::ArefPutEnterOp>(enterOp)
-                          ? arefLastIndex[enterOp.getAref()].put
-                          : arefLastIndex[enterOp.getAref()].get;
+                          ? arefLastIndex[enterOp.getAref()].putEnter
+                          : arefLastIndex[enterOp.getAref()].getEnter;
 
         setIndex(enterOp, index);
         builder.setInsertionPointAfter(enterOp);
         index = getNextIndex(enterOp, index);
+      }
+    } else if (auto exitOp = dyn_cast<ttng::ArefExitOpInterface>(op)) {
+      if (!getIndex(exitOp)) {
+        assert(arefLastIndex.contains(exitOp.getAref()));
+        auto &index = isa<ttng::ArefPutExitOp>(exitOp)
+                          ? arefLastIndex[exitOp.getAref()].putExit
+                          : arefLastIndex[exitOp.getAref()].getExit;
+        setIndex(exitOp, index);
+        builder.setInsertionPointAfter(exitOp);
+        index = getNextIndex(exitOp, index);
       }
     } else if (auto forOp = dyn_cast<scf::ForOp>(op)) {
       assignInForOp(forOp, arefLastIndex, builder, staleOps);
@@ -445,10 +507,14 @@ LogicalResult arefIndexAssignment(triton::FuncOp funcOp) {
     auto block = &wgOp.getRegions().front()->getBlocks().front();
     auto arefUseBlock = AnalyzeArefUseInBlock(block, ArefFirstUseMap{});
     for (auto [aref, useMap] : arefUseBlock) {
-      if (!arefUse[aref].putOp)
-        arefUse[aref].putOp = useMap.putOp;
-      if (!arefUse[aref].getOp)
-        arefUse[aref].getOp = useMap.getOp;
+      if (!arefUse[aref].putEnterOp)
+        arefUse[aref].putEnterOp = useMap.putEnterOp;
+      if (!arefUse[aref].getEnterOp)
+        arefUse[aref].getEnterOp = useMap.getEnterOp;
+      if (!arefUse[aref].putExitOp)
+        arefUse[aref].putExitOp = useMap.putExitOp;
+      if (!arefUse[aref].getExitOp)
+        arefUse[aref].getExitOp = useMap.getExitOp;
     }
   }
 
@@ -456,9 +522,13 @@ LogicalResult arefIndexAssignment(triton::FuncOp funcOp) {
   ArefLastIndexMap arefLastIndex;
   for (auto [aref, useMap] : arefUse) {
     builder.setInsertionPointAfter(aref.getDefiningOp());
-    arefLastIndex[aref].put =
+    arefLastIndex[aref].putEnter =
         builder.create<arith::ConstantIntOp>(aref.getLoc(), 0, 32);
-    arefLastIndex[aref].get =
+    arefLastIndex[aref].putExit =
+        builder.create<arith::ConstantIntOp>(aref.getLoc(), 0, 32);
+    arefLastIndex[aref].getEnter =
+        builder.create<arith::ConstantIntOp>(aref.getLoc(), 0, 32);
+    arefLastIndex[aref].getExit =
         builder.create<arith::ConstantIntOp>(aref.getLoc(), 0, 32);
   }
 

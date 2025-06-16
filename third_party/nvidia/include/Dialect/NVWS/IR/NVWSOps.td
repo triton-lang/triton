@@ -31,10 +31,12 @@ include "mlir/Interfaces/InferTypeOpInterface.td"  // SameOperandsAndResultType
 include "mlir/Interfaces/SideEffectInterfaces.td"  // Pure
 include "mlir/Interfaces/ViewLikeInterface.td"
 include "triton/Dialect/Triton/IR/TritonTypes.td"
+include "triton/Dialect/Triton/IR/TritonAttrDefs.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUTypes.td"
 include "NVWSDialect.td"
 include "NVWSTypes.td"
 include "NVWSAttrDefs.td"
+include "NVWSOpInterfaces.td"
 
 class NVWS_Op<string mnemonic, list<Trait> traits = []> :
     Op<NVWS_Dialect, mnemonic, traits>;
@@ -189,5 +191,54 @@ def NVWS_ArriveBarrierOp : NVWS_Op<"arrive_barrier", [DeclareOpInterfaceMethods<
     let assemblyFormat = [{ $alloc `,` `tracked_async_op` `=` $tracked_op attr-dict `:` type($alloc)
     }];
 }
+
+def GlobalMemory : Resource<"::mlir::triton::GlobalMemory">;
+def SharedMemory : Resource<"::mlir::triton::gpu::SharedMemory">;
+
+def NVWS_DescriptorLoadOp : NVWS_Op<"descriptor_load", [NVWS_DescriptorLoadOpInterface]> {
+  let summary = "Load from descriptor and store into shared memory";
+  let description = [{
+    Similar to the op with the same name in Triton Dialect, but the result of the load is stored into shared memory.
+  }];
+  let arguments = (ins
+    Arg<TT_TensorDescType, "", [MemRead<GlobalMemory>]>:$desc,
+    Variadic<I32>:$indices,
+    I32Attr:$txCount,
+    Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$result,
+    DefaultValuedAttr<TT_CacheModifierAttr, "::mlir::triton::CacheModifier::NONE">:$cache,
+    DefaultValuedAttr<TT_EvictionPolicyAttr, "::mlir::triton::EvictionPolicy::NORMAL">:$evict
+  );
+
+  let assemblyFormat = [{
+    $desc `[` $indices `]` $txCount $result
+    oilist(
+      `cacheModifier` `=` $cache |
+      `evictionPolicy` `=` $evict
+    )
+    attr-dict `:` type(operands)
+  }];
+}
+
+def NVWS_DescriptorGatherOp : NVWS_Op<"descriptor_gather", [NVWS_DescriptorLoadOpInterface]> {
+  let summary = "gather multiple rows from a descriptor into shared memory";
+  let description = [{
+    Similar to the op with the same name in Triton Dialect, but the result of the load is stored into shared memory.
+  }];
+
+  let arguments = (ins
+    Arg<TT_TensorDescType, "", [MemRead<GlobalMemory>]>:$desc,
+    RankedTensorOf<[I32]>:$x_offsets,
+    I32:$y_offset,
+    I32Attr:$txCount,
+    Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$result
+  );
+
+  let assemblyFormat = [{
+    $desc `[` $x_offsets `,` $y_offset `]` $txCount $result
+    attr-dict `:` type(operands)
+  }];
+}
+
+
 
 #endif

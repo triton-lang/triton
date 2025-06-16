@@ -701,11 +701,12 @@ def TTNG_WarpGroupOp : TTNG_Op<"warp_group", [
 
   let arguments = (ins
     I32Attr:$startWarp,
-    I32Attr:$numWarps);
+    I32Attr:$numWarps,
+    I32Attr:$regCount);
 
   let regions = (region VariadicRegion<MinSizedRegion<1>>:$partitionRegions);
   let assemblyFormat = [{
-    `start_warp` `(` $startWarp `)` `num_warps` `(` $numWarps `)` `:` `{` $partitionRegions attr-dict `}`
+    `start_warp` `(` $startWarp `)` `num_warps` `(` $numWarps `)` `reg_count` `(` $regCount `)` `:` `{` $partitionRegions attr-dict `}`
   }];
 }
 
@@ -798,82 +799,6 @@ def TTNG_ArefPutExitOp : TTNG_Op<"aref_put.exit", [
   let assemblyFormat = [{
     $aref `[` $index `]` `,` `producers` `=` $producers attr-dict `:` type($aref)
  }];
-}
-
-def TTNG_ArefCopyOp : TTNG_Op<"aref_copy", [AttrSizedOperandSegments]> {
-  let summary = "Aref sentinel copy";
-
-  let description = [{
-    ArefCopyOp performs memory copies between two buffers in one of two ways:
-      - From a producer group's private memory buffer to a shared aref buffer
-      - From a shared aref buffer to a consumer group's private mutable memory buffer
-
-    %bufTok = ... update/store %buf[%tok]
-
-    %dst, %dstTok = ttng.aref_put.enter %aref                        @producer_group
-    tng.aref_clone %buf[%bufTuk], %dst[%dstTok]                      @producer_group
-    ttng.aref_put.exit %aref, producer = [#ttng.aref_producer<none>] @producer_group
-
-    %src, %srcTok = ttng.aref_get.enter %aref                        @consumer_group
-    %tok = ttng.aref_clone %src[%srcTok], %buf[%bufTok]              @consumer_group
-    ttng.aref_get.exit %aref, producer = [#ttng.aref_consumer<none>] @consumer_group
-
-    ..
-    %bufTok1 =  .. use %buf[tok]
-
-
-    This operation enables data sharing between producer and consumer groups. When a producer
-    group generates data in its private memory that needs to be consumed by another group, it copies
-    that data to a shared aref buffer. The consumer group can then use this operation to make
-    a local mutable copy of that data from the shared buffer into its private memory space.
-
-    This operation makes the logic of aref insertion and subsequent code splitting localized,
-    allowing it to work on arbitrary control flow patterns.
-
-    Later optimization passes have two options:
-    1) Optimize away the copy by directly using the aref buffer for computations and repositioning
-       the aref_put/get.enter/exit operations as needed to avoide data races across group.
-    2) Lower aref_copy to simple load+store operations in cases where complex control flow prevents
-
-  }];
-  let arguments = (ins
-    TTG_MemDescType:$src,
-    TTG_MemDescType:$dst,
-    Optional<TTG_AsyncToken>:$src_dep,
-    Optional<TTG_AsyncToken>:$dst_dep
-  );
-  let results = (outs Optional<TTG_AsyncToken>:$token);
-  let assemblyFormat = [{
-    $src `` custom<Token>($src_dep, type($src_dep)) `,` $dst `` custom<Token>($dst_dep, type($dst_dep))
-    attr-dict `:` qualified(type($src)) `->` qualified(type($dst)) 
-    `:`  type($token)
-  }];
-}
-
-def TTNG_ArefCloneOp : TTNG_Op<"aref_clone", []> {
-  let summary = "Aref sentinel clone";
-
-  let description = [{
-    This operation clones data from a shared aref buffer to a private buffer of a consumer group,
-    similar to aref_copy. The difference is that aref_clone is used when the destination
-    private buffer is expected to be immutable in downstream code, while aref_copy is used when
-    the destination needs to be mutable.
-
-    %src = ttng.aref_get.enter %aref        @consumer_group
-    %buf = ttng.aref_clone %src             @consumer_group
-    ttng.aref_get.exit %aref, consumers = [#ttng.aref_consumer<none>] @consumer_group
-
-    .. = %buf
-
-
-  }];
-  let arguments = (ins
-    TTG_MemDescType:$src
-  );
-  let results = (outs TTG_MemDescType:$result);
-  let assemblyFormat = [{
-    $src attr-dict `:` qualified(type($src)) `->` type($result)
-  }];
 }
 
 def TTNG_ArefPhiOp : TTNG_Op<"aref_phi"> {

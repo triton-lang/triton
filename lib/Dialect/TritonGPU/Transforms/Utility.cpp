@@ -1591,7 +1591,7 @@ Operation *insertBarrier(OpBuilder &rewriter, Location loc) {
       if (auto partitions = dyn_cast<triton::gpu::WarpSpecializePartitionsOp>(
               block->getParentOp())) {
         // if we are inside WarpSpecializePartitionsOp, get partition index
-        unsigned groupIdx = block->getParent()->getRegionNumber() + 1;
+        groupIdx = block->getParent()->getRegionNumber() + 1;
         ws = partitions.getParentOp();
       }
       assert(ws);

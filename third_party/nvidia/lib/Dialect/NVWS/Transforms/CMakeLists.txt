@@ -3,10 +3,9 @@ add_triton_library(NVWSTransforms
   PropagateGroups.cpp
 
   ArefCanonicalize.cpp
+  ArefTMEMInsertion.cpp
   ArefInsertion.cpp
   ArefCodeSplit.cpp
-  ArefCopyElimination.cpp
-  ArefCopyLowering.cpp
   ArefOptimize.cpp
   ArefAsyncOps.cpp
   ArefDepth.cpp

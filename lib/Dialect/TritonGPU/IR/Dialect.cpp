@@ -3195,3 +3195,14 @@ bool triton::gpu::isInnermostContiguous(MemDescType type, unsigned numElems) {
 
   return actual.getNumConsecutiveInOut() >= numElems;
 }
+
+LinearLayout triton::gpu::inferReshapeLinearLayout(ArrayRef<int64_t> srcShape,
+                                                   Attribute srcEnc,
+                                                   ArrayRef<int64_t> dstShape) {
+  auto *ctx = srcEnc.getContext();
+  auto src = toLinearLayout(srcShape, srcEnc);
+  assert(product(srcShape) == product(dstShape));
+  auto dst = reshapeLayout(ctx, src, dstShape);
+  return dst;
+}
+

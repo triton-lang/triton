@@ -284,17 +284,15 @@ class CUDABackend(BaseBackend):
                 passes.ttgpuir.add_optimize_accumulator_init(pm)
                 passes.ttgpuir.add_hoist_tmem_alloc(pm)
                 nvidia.passes.ttnvgpuir.add_promote_lhs_to_tmem(pm)
+                passes.ttgpuir.add_remove_layout_conversions(pm)
                 passes.common.add_canonicalizer(pm)
                 nvidia.passes.nvws.add_assign_groups(pm)
                 nvidia.passes.nvws.add_propagate_groups(pm)
-
                 nvidia.passes.nvws.add_aref_canonicalize(pm)
+                nvidia.passes.nvws.add_aref_tmem_insertion(pm)
                 nvidia.passes.nvws.add_aref_insertion(pm)
                 nvidia.passes.nvws.add_aref_code_split(pm)
-                nvidia.passes.nvws.add_aref_copy_elimination(pm)
                 nvidia.passes.nvws.add_blackwell_fa(pm)
-                if os.environ.get("DISABLE_AREF_COPY_LOWERING", "0") != "1":
-                    nvidia.passes.nvws.add_aref_copy_lowering(pm)
                 nvidia.passes.nvws.add_aref_async_ops(pm)
                 nvidia.passes.nvws.add_aref_optimize(pm)
                 nvidia.passes.nvws.add_aref_index(pm)
@@ -307,14 +305,13 @@ class CUDABackend(BaseBackend):
                         nvidia.passes.nvws.add_fmha_math_loop_pipeline(pm)
                     else:
                         print("WARNING: fmha_math_loop_pipeline is not supported on this architecture")
+
+                nvidia.passes.nvws.add_aref_lowering(pm)
         if capability // 10 in [8, 9]:
             passes.ttgpuir.add_fuse_nested_loops(pm)
             passes.common.add_canonicalizer(pm)
-            # fix ArefLowering for causal attention before enabling LICM
-            if not opt.enable_warp_specialization:
-                passes.common.add_licm(pm)
-            if opt.enable_warp_specialization:
-                passes.ttgpuir.add_optimize_accumulator_init(pm)
+            passes.common.add_licm(pm)
+            passes.ttgpuir.add_optimize_accumulator_init(pm)
             passes.common.add_canonicalizer(pm)
             passes.ttgpuir.add_combine_tensor_select_and_if(pm)
             if not opt.enable_warp_specialization:
@@ -322,9 +319,8 @@ class CUDABackend(BaseBackend):
         elif capability // 10 >= 10:
             passes.ttgpuir.add_fuse_nested_loops(pm)
             passes.common.add_canonicalizer(pm)
-            # fix ArefLowering for causal attention before enabling LICM
+            passes.ttir.add_triton_licm(pm)
             if not opt.enable_warp_specialization:
-                passes.ttir.add_triton_licm(pm)
                 passes.ttgpuir.add_optimize_accumulator_init(pm)
                 passes.ttgpuir.add_hoist_tmem_alloc(pm)
                 passes.ttgpuir.add_warp_specialize(pm, opt.num_stages)
@@ -349,7 +345,6 @@ class CUDABackend(BaseBackend):
         if capability // 10 >= 9:
             nvidia.passes.ttnvgpuir.add_fence_insertion(pm)
             if opt.enable_warp_specialization:
-                nvidia.passes.nvws.add_aref_lowering(pm)
                 if opt.use_ttg_ws:
                     nvidia.passes.ttnvgpuir.add_ttng_wg_to_ttg_ws(pm)
                 else:

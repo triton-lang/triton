@@ -38,6 +38,7 @@ constexpr char ATTR_WS_PREFIX[] = "nvws.group.";
 constexpr char ATTR_WS_TMALOAD[] = "nvws.group.tma_load";
 constexpr char ATTR_WS_MMA[] = "nvws.group.mma";
 constexpr char ATTR_WS_EPILOGUE[] = "nvws.group.epilogue";
+constexpr char ATTR_WS_SIMT[] = "nvws.group.simt";
 
 constexpr char ATTR_WS_AREF_IF[] = "aref_if";
 constexpr char ATTR_WS_INIT_BARRIER_SYNC[] = "init_barrier_sync";
@@ -142,6 +143,8 @@ Operation *createAlloc(OpBuilder &builder, Location loc,
                        gpu::MemDescType memDescType, Value src);
 
 bool isMMAOperandLoadOp(Operation *op);
+
+bool isSIMTOp(Operation *op);
 
 } // namespace nvws
 } // namespace triton

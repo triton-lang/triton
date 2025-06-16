@@ -121,3 +121,41 @@ def test_reg_count(device):
 
     # load has group g1
     assert '%9 = tt.load %8, %6 {groups = [@nvws.group.g]}' in ttir
+
+def test_reduction_multiple_groups(device):
+
+    @triton.jit(noinline=True)
+    def kernel(x_ptr, y_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+        g1 = tl.group('g1', 0, 4)
+        g2 = tl.group('g2', 4, 4)
+
+        pid = tl.program_id(axis=0)
+        block_start = pid * BLOCK_SIZE
+        offsets = block_start + tl.arange(0, BLOCK_SIZE)
+        mask = offsets < n_elements
+
+        x = tl.load(x_ptr + offsets, mask=mask)
+        with g1:
+            a = tl.sum(x)
+            y = x * a
+        with g2:
+            b = tl.sum(y)
+            z = y * b
+        tl.store(y_ptr + offsets, z, mask=mask)
+
+    shape = 128
+    dtype_str = 'float32'
+    rs = RandomState(17)
+    x = to_triton(numpy_random(shape, dtype_str=dtype_str, rs=rs), device=device, dst_type=dtype_str)
+    y = to_triton(numpy_random(shape, dtype_str=dtype_str, rs=rs), device=device, dst_type=dtype_str)
+
+    compiled_kernel = kernel.warmup(x, y, shape, BLOCK_SIZE=1024, grid=(1,))
+    ttir = compiled_kernel.asm['ttir']
+    assert 'nvws.manual = true' in ttir
+    assert 'nvws.group.g1 = {num_warps = 4 : i32, start_warp = 0 : i32}' in ttir
+    assert 'nvws.group.g2 = {num_warps = 4 : i32, start_warp = 4 : i32}' in ttir
+
+    # first tl.sum add op has group g1
+    assert '%20 = arith.addf %arg3, %arg4 {groups = [@nvws.group.g1]} : f32' in ttir
+    # second tl.sum add op has group g2
+    assert '%20 = arith.addf %arg3, %arg4 {groups = [@nvws.group.g2]} : f32' in ttir

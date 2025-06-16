@@ -18,6 +18,7 @@ using namespace triton::gpu;
 using namespace triton::nvidia_gpu;
 
 namespace {
+namespace ttg = triton::gpu;
 
 // Granularity of row allocations.
 static constexpr int allocGranularity = 64;
@@ -119,7 +120,7 @@ static Interval<int> getLiveIntervals(Value value, Liveness &liveness,
   SmallVector<Operation *> users(value.getUsers());
   while (!users.empty()) {
     Operation *user = users.pop_back_val();
-    if (!isa<triton::gpu::MemDescSubviewOp>(user))
+    if (!isa<triton::gpu::MemDescSubviewOp, triton::gpu::MemDescReinterpretOp>(user))
       continue;
     auto usersLivness = liveness.resolveLiveness(user->getResult(0));
     liveOperations.insert(liveOperations.end(), usersLivness.begin(),
@@ -175,12 +176,25 @@ static TMemChunk allocFirstFit(MemoryBitMap &memoryMap,
 }
 
 static Operation *getAlloc(Value value) {
-  Operation *op = value.getDefiningOp();
-  while (isa<triton::gpu::MemDescSubviewOp>(op)) {
-    op = op->getResult(0).getDefiningOp();
+  while (true) {
+    if (auto allocOp = value.getDefiningOp<TMEMAllocOp>())
+      return allocOp;
+    if (auto subviewOp = value.getDefiningOp<ttg::MemDescSubviewOp>()) {
+      value = subviewOp.getSrc();
+      continue;
+    }
+    if (auto reinterpOp = value.getDefiningOp<ttg::MemDescReinterpretOp>()) {
+      value = reinterpOp.getSrc();
+      continue;
+    }
+    auto arg = dyn_cast<BlockArgument>(value);
+    if (!arg || !isa<triton::gpu::WarpSpecializePartitionsOp>(
+                    arg.getOwner()->getParentOp()))
+      llvm::report_fatal_error("expected to find a TMEM alloc op");
+    auto partitions = cast<triton::gpu::WarpSpecializePartitionsOp>(
+        arg.getOwner()->getParentOp());
+    value = partitions.getParentOp().getExplicitCaptures()[arg.getArgNumber()];
   }
-  assert(isa<triton::nvidia_gpu::TMEMAllocOp>(op) && "Expected a TMEMAllocOp");
-  return op;
 }
 
 class RowIdConstraints {

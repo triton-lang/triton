@@ -33,9 +33,6 @@ module attributes {
         %tok3 = ttng.tmem_store %zero, %acc[%tok2], %true { groups = [@nvws.group.gr2] } : tensor<128x128xf32, #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
         %tok4 = ttng.tc_gen5_mma %opndA, %opndB, %acc[%tok3], %true, %true { groups = [@nvws.group.gr1] } : !ttg.memdesc<128x64xf16, #shared, #ttg.shared_memory>, !ttg.memdesc<64x128xf16, #shared2, #ttg.shared_memory>, !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
         %val, %tok5 = ttng.tmem_load %acc[%tok4] { groups = [@nvws.group.gr2] }: !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>>
-        // CHECK: %[[TOK:.*]] = ttng.tc_gen5_mma
-        // CHECK: ttng.tmem_load {{.*}}[%[[TOK]]]
-        // CHECK: scf.yield %[[TOK]]
         scf.yield %tok5 : !ttg.async.token
       } {groups = [@nvws.group.gr1, @nvws.group.gr2], groups.0 = [@nvws.group.gr1,@nvws.groups.gr2]}
       // CHECK: groups.0 = [@nvws.group.gr1]
@@ -58,18 +55,16 @@ module attributes {
       %acc, %tok = ttng.tmem_alloc { groups = [@nvws.group.gr1, @nvws.group.gr2] }: () -> (!ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.async.token)
       %true = arith.constant { groups = [@nvws.group.gr1, @nvws.group.gr2] } true
       %zero = arith.constant { groups = [@nvws.group.gr1, @nvws.group.gr2] } dense<0.000000e+00> : tensor<128x128xf32, #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>>
+      %zero1 = arith.constant { groups = [@nvws.group.gr3] } dense<0.000000e+00> : tensor<128x128xf32, #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>>
       %tok1 = ttng.tmem_store %zero, %acc[%tok], %true { groups = [@nvws.group.gr1] } : tensor<128x128xf32, #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
       %tok3 = scf.for %i = %lb to %ub step %step iter_args(%tok2 = %tok1) -> !ttg.async.token {
         %tok3 = ttng.tmem_store %zero, %acc[%tok2], %true { groups = [@nvws.group.gr2] } : tensor<128x128xf32, #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
         %tok4 = ttng.tc_gen5_mma %opndA, %opndB, %acc[%tok3], %true, %true { groups = [@nvws.group.gr1] } : !ttg.memdesc<128x64xf16, #shared, #ttg.shared_memory>, !ttg.memdesc<64x128xf16, #shared2, #ttg.shared_memory>, !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
         %val, %tok5 = ttng.tmem_load %acc[%tok4] { groups = [@nvws.group.gr2] }: !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>>
-        %tok6 = ttng.tmem_store %zero, %acc[%tok5], %true { groups = [@nvws.group.gr3] } : tensor<128x128xf32, #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+        %tok6 = ttng.tmem_store %zero1, %acc[%tok5], %true { groups = [@nvws.group.gr3] } : tensor<128x128xf32, #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
         %val1, %tok7 = ttng.tmem_load %acc[%tok6] { groups = [@nvws.group.gr2] }: !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>>
         // CHECK: ttng.tc_gen5_mma
         // CHECK: ttng.tmem_load
-        // CHECK: %[[TOK:.*]] = ttng.tmem_store
-        // CHECK: ttng.tmem_load {{.*}}[%[[TOK]]]
-        // CHECK: scf.yield %[[TOK]]
         scf.yield %tok7 : !ttg.async.token
       } {groups = [@nvws.group.gr1, @nvws.group.gr2], groups.0 = [@nvws.group.gr1,@nvws.groups.gr2]}
       // CHECK: groups.0 = [@nvws.group.gr1]

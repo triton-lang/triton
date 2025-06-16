@@ -17,4 +17,8 @@ mlir_tablegen(NVWSAttrDefs.cpp.inc -gen-attrdef-defs)
 mlir_tablegen(OpsEnums.h.inc -gen-enum-decls)
 mlir_tablegen(OpsEnums.cpp.inc -gen-enum-defs)
 
+set(LLVM_TARGET_DEFINITIONS NVWSOpInterfaces.td)
+mlir_tablegen(NVWSOpInterfaces.h.inc -gen-op-interface-decls)
+mlir_tablegen(NVWSOpInterfaces.cpp.inc -gen-op-interface-defs)
+
 add_public_tablegen_target(NVWSAttrDefsIncGen)

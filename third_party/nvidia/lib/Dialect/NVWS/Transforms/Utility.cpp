@@ -309,12 +309,6 @@ TokenInfo getTokenProducerOp(Value result) {
     llvm_unreachable("ifOp is unsupported yet");
   } else if (auto arefPhiOp = dyn_cast<ttng::ArefPhiOp>(op)) {
     return getTokenProducerOp(arefPhiOp.getLocal());
-  } else if (auto copyOp = dyn_cast<ttng::ArefCopyOp>(op)) {
-    if (!isa<ttng::ArefEnterOpInterface>(copyOp.getSrc().getDefiningOp())) {
-      return {copyOp, copyOp.getSrc()};
-    } else {
-      return {copyOp, copyOp.getDst()};
-    }
   } else {
     return {};
   }
@@ -410,6 +404,16 @@ bool isMMAOperandLoadOp(Operation *op) {
 
   // At least 4 bytes needed for cpasync
   return copyVecBytes >= 4;
+}
+
+bool isSIMTOp(Operation *op) {
+  auto types = llvm::concat<Type>(op->getOperandTypes(), op->getResultTypes());
+  for (Type type : types) {
+    if (isa<RankedTensorType>(type)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 } // namespace nvws

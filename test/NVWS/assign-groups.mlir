@@ -832,10 +832,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-stages" = 4 : i32, "ttg.nu
       %96 = tt.addptr %95, %58 : tensor<128x64x!tt.ptr<i8>, #blocked>, tensor<128x64xi32, #blocked>
       // CHECK: tt.load {{.*}} {groups = [@nvws.group.tma_load]}
       %97 = tt.load %93 : tensor<128x128x!tt.ptr<bf16>, #blocked1>
-      // CHECK: tt.load {{.*}} {groups = [@nvws.group.tma_load]}
+      // CHECK: %[[INT4_TENSOR:.*]] = tt.load {{.*}} {groups = [@nvws.group.tma_load]}
       %98 = tt.load %96 : tensor<128x64x!tt.ptr<i8>, #blocked>
       %99 = arith.shli %98, %cst_2 : tensor<128x64xi8, #blocked>
       %100 = arith.shrsi %99, %cst_2 : tensor<128x64xi8, #blocked>
+      // CHECK: arith.shrsi %[[INT4_TENSOR]], {{.*}} {groups = [@nvws.group.simt]}
       %101 = arith.shrsi %98, %cst_2 : tensor<128x64xi8, #blocked>
       %102 = tt.join %100, %101 : tensor<128x64xi8, #blocked> -> tensor<128x64x2xi8, #blocked4>
       %103 = tt.reshape %102 : tensor<128x64x2xi8, #blocked4> -> tensor<128x128xi8, #blocked5>
@@ -853,6 +854,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-stages" = 4 : i32, "ttg.nu
       %114 = tt.broadcast %113 : tensor<128x1xbf16, #blocked5> -> tensor<128x128xbf16, #blocked5>
       %115 = arith.mulf %104, %114 : tensor<128x128xbf16, #blocked5>
       %116 = ttg.convert_layout %115 : tensor<128x128xbf16, #blocked5> -> tensor<128x128xbf16, #blocked3>
+      // CHECK: ttng.tmem_alloc {{.*}} {groups = [@nvws.group.simt]}
       %result_6 = ttng.tmem_alloc %116 : (tensor<128x128xbf16, #blocked3>) -> !ttg.memdesc<128x128xbf16, #tmem1, #ttng.tensor_memory>
       %117 = ttg.local_alloc %97 : (tensor<128x128xbf16, #blocked1>) -> !ttg.memdesc<128x128xbf16, #shared, #smem>
       %118 = ttg.memdesc_trans %117 {order = array<i32: 1, 0>} : !ttg.memdesc<128x128xbf16, #shared, #smem> -> !ttg.memdesc<128x128xbf16, #shared1, #smem>

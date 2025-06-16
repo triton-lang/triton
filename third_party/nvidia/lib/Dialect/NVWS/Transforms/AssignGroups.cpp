@@ -21,21 +21,18 @@
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
+#include "mlir/IR/Visitors.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Support/LLVM.h"
 #include "nvidia/include/Dialect/NVWS/IR/Dialect.h"
 #include "nvidia/include/Dialect/NVWS/Transforms/Passes.h"
 #include "nvidia/include/Dialect/NVWS/Transforms/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/OpInterfaces.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "llvm/Support/Debug.h"
-
-// #include <fstream>
-// #include <iostream>
-// #include <memory>
-// #include <stack>
 
 #define GEN_PASS_CLASSES
 #include "nvidia/include/Dialect/NVWS/Transforms/Passes.h.inc"
@@ -52,46 +49,38 @@ using namespace triton::gpu;
 using namespace triton::nvidia_gpu;
 using namespace triton::nvws;
 
-class InitialAssignment {
-public:
-  void runOnOperation(ModuleOp op) {
-    calculateNumWarps(op);
-    visitModule(op);
+struct NumWarpsSpec {
+  int load;
+  int MMA;
+  int epilogue;
+};
+
+triton::nvidia_gpu::MMAv5OpInterface
+getMMAv5Op(triton::nvidia_gpu::TMEMLoadOp tmemLoadOp) {
+  auto tmemAddr = tmemLoadOp->getOperand(0);
+  for (auto user : tmemAddr.getUsers()) {
+    if (auto mmaOp = dyn_cast<triton::nvidia_gpu::MMAv5OpInterface>(user)) {
+      return mmaOp;
+    }
   }
+  return nullptr;
+};
 
-private:
-  struct NumWarpsSpec {
-    int load;
-    int MMA;
-    int epilogue;
-  };
-  NumWarpsSpec numWarps;
+bool shouldCreateEpilogueGroup(ModuleOp m) {
+  SmallVector<triton::nvidia_gpu::TMEMLoadOp> tmemLoadOps;
 
-  void calculateNumWarps(ModuleOp m) {
-    auto numWarpsAttr =
-        mlir::cast<mlir::IntegerAttr>(m->getAttr(AttrNumWarpsName));
-    const int numLoadWarps = 4;
-    const int numMMAWarps = numWarpsAttr.getInt();
-    const int numEpiWarps =
-        shouldCreateEpilogueGroup(m) ? numWarpsAttr.getInt() : 0;
-    numWarps = {numLoadWarps, numMMAWarps, numEpiWarps};
-  }
+  m.walk([&](triton::nvidia_gpu::TMEMLoadOp op) { tmemLoadOps.push_back(op); });
 
-  bool shouldCreateEpilogueGroup(ModuleOp m) {
-    SmallVector<triton::nvidia_gpu::TMEMLoadOp> tmemLoadOps;
-
-    m.walk(
-        [&](triton::nvidia_gpu::TMEMLoadOp op) { tmemLoadOps.push_back(op); });
-
-    // create epilogue group if there exist a tmem_load op which is outside the
-    // loop enclosing the corresponding mmav5 op
+  auto nestedLoopEpilogue = [&]() {
+    // create epilogue group if there exist a tmem_load op which is outside
+    // the loop enclosing the corresponding mmav5 op
     for (auto tmemLoadOp : tmemLoadOps) {
       auto mmaOp = getMMAv5Op(tmemLoadOp);
       if (mmaOp) {
         auto mmaLoop = mmaOp->getParentOfType<scf::ForOp>();
         if (mmaLoop && mmaLoop->getBlock() == tmemLoadOp->getBlock()) {
-          // now check from this tmem_load op to the end of the enclosing block
-          // to see if there is any op uses the forOp result
+          // now check from this tmem_load op to the end of the enclosing
+          // block to see if there is any op uses the forOp result
           for (Operation &op : llvm::make_early_inc_range(llvm::make_range(
                    std::next(tmemLoadOp->getIterator()),
                    mmaLoop->getBlock()->getTerminator()->getIterator()))) {
@@ -107,18 +96,65 @@ private:
       }
     }
     return false;
-  }
+  };
 
-  triton::nvidia_gpu::MMAv5OpInterface
-  getMMAv5Op(triton::nvidia_gpu::TMEMLoadOp tmemLoadOp) {
-    auto tmemAddr = tmemLoadOp->getOperand(0);
-    for (auto user : tmemAddr.getUsers()) {
-      if (auto mmaOp = dyn_cast<triton::nvidia_gpu::MMAv5OpInterface>(user)) {
-        return mmaOp;
+  auto flattenedLoopEpilogue = [&]() {
+    auto numWarps = lookupNumWarps(m);
+    // if numWarps > 6, we don't use epilogue group
+    // otherwise we can't have 255 registers per thread
+    // because totalNumWarps > 8 and w/o peilogue decoupling
+    // we run out of registers
+    if (numWarps > 6) {
+      return false;
+    }
+    // create epilogue group if there exist a tmem_load op which is inside
+    // if region in the loop enclosing the corresponding mmav5 op
+    // %buf, %tok = alloc
+    // for .. %tok0 = %tok
+    //   %tok1 = mma  %buf[%tok0]
+    //   %tok2 = if  ..
+    //              %tok2 tmem_load %buf[%tok1]  @epilogue
+    //              yield %tok2
+    //           else
+    //              yield %tok1
+    //   yield %tok2
+    for (auto tmemLoadOp : tmemLoadOps) {
+      if (auto tok = tmemLoadOp.getDep()) {
+        if (auto op = tok.getDefiningOp()) {
+          if (auto mmaOp = dyn_cast<triton::nvidia_gpu::MMAv5OpInterface>(op)) {
+            auto mmaLoop = mmaOp->getParentOfType<scf::ForOp>();
+            auto loadIfOp = tmemLoadOp->getParentOfType<scf::IfOp>();
+            if (mmaLoop && loadIfOp &&
+                mmaLoop.getBody() == loadIfOp->getBlock()) {
+              return true;
+            }
+          }
+        }
       }
     }
-    return nullptr;
+    return false;
   };
+  return nestedLoopEpilogue() || flattenedLoopEpilogue();
+}
+
+NumWarpsSpec calculateNumWarps(ModuleOp m) {
+  auto numWarpsAttr =
+      mlir::cast<mlir::IntegerAttr>(m->getAttr(AttrNumWarpsName));
+  const int numLoadWarps = 4;
+  const int numMMAWarps = numWarpsAttr.getInt();
+  const int numEpiWarps =
+      shouldCreateEpilogueGroup(m) ? numWarpsAttr.getInt() : 0;
+  return {numLoadWarps, numMMAWarps, numEpiWarps};
+}
+
+class InitialAssignment {
+public:
+  InitialAssignment(NumWarpsSpec numWarps) : numWarps(numWarps) {}
+
+  void runOnOperation(ModuleOp op) { visitModule(op); }
+
+private:
+  NumWarpsSpec numWarps;
 
   void visit(Operation *op) {
     if (auto moduleOp = llvm::dyn_cast<ModuleOp>(op)) {
@@ -233,6 +269,66 @@ private:
   }
 };
 
+// Look for SIMT ops between TMA and MMA, and put them into a dedicated warp
+// group. Fow now, we create a SIMT group only when it communicates with the MMA
+// group via TMEM - the SIMT group does some transformations on the LHS operand,
+// stores the result into TMEM, and tcgen05_mma consumes the TMEM LHS. We can
+// broaden the scope of the SIMT group as we find new use cases.
+void decoupleSIMTGroup(ModuleOp mod, NumWarpsSpec numWarps) {
+  auto isMMAOperandAlloc = [](Operation *op) {
+    if (!isa<LocalAllocOp, TMEMAllocOp>(op)) {
+      return false;
+    }
+    return op->hasOneUse() &&
+           isa<MMAv5OpInterface, WarpGroupDotOp>(*op->user_begin());
+  };
+
+  mod.walk([&](Operation *op) {
+    if (!isa<DescriptorOpInterface, LoadOp>(op) ||
+        !isOpInGroup(op, ATTR_WS_TMALOAD)) {
+      return WalkResult::advance();
+    }
+    if (op->hasOneUse() && isMMAOperandAlloc(*op->user_begin())) {
+      return WalkResult::advance();
+    }
+
+    SmallVector<Operation *> SIMTOps;
+    std::function<void(Operation *)> collectSIMTOpsBeforeMMA =
+        [&](Operation *op) {
+          if (isSIMTOp(op)) {
+            SIMTOps.push_back(op);
+          }
+          if (isMMAOperandAlloc(op)) {
+            return;
+          }
+          for (auto user : op->getUsers()) {
+            collectSIMTOpsBeforeMMA(user);
+          }
+        };
+
+    collectSIMTOpsBeforeMMA(*op->user_begin());
+
+    if (isa<TMEMAllocOp>(SIMTOps.back())) {
+      int numSIMTWarps =
+          mlir::cast<mlir::IntegerAttr>(mod->getAttr(AttrNumWarpsName))
+              .getInt();
+      setGroupAttribute(mod, ATTR_WS_TMALOAD,
+                        WSGroup{numWarps.epilogue + numSIMTWarps + numWarps.MMA,
+                                numWarps.load});
+      setGroupAttribute(
+          mod, ATTR_WS_MMA,
+          WSGroup{numWarps.epilogue + numSIMTWarps, numWarps.MMA});
+      mkGroup(mod, ATTR_WS_SIMT, WSGroup{numWarps.epilogue, numSIMTWarps});
+
+      for (auto simtOp : SIMTOps) {
+        setGroups(simtOp, {ATTR_WS_SIMT});
+      };
+    }
+
+    return WalkResult::advance();
+  });
+}
+
 class NVWSAssignGroups : public NVWSAssignGroupsBase<NVWSAssignGroups> {
 public:
   void runOnOperation() override {
@@ -240,11 +336,13 @@ public:
 
     // initial group assignment
     if (!isManuallyGrouped(m)) {
-      InitialAssignment().runOnOperation(m);
+      auto numWarps = calculateNumWarps(m);
+      InitialAssignment(numWarps).runOnOperation(m);
       LLVM_DEBUG({
         DBGS() << "Module after initial group assignment:\n";
         m.dump();
       });
+      decoupleSIMTGroup(m, numWarps);
     } else {
       LLVM_DEBUG({
         DBGS() << "Using manual initial group assignments\n";

@@ -415,16 +415,17 @@ public:
   }
 };
 
-class ParallelizeDescriptorLoad : public OpRewritePattern<DescriptorLoadOp> {
+class ParallelizeDescriptorLoad
+    : public OpRewritePattern<triton::DescriptorLoadOp> {
   ArefUseGraph &graph;
 
 public:
   using OpRewritePattern::OpRewritePattern;
 
   ParallelizeDescriptorLoad(mlir::MLIRContext *context, ArefUseGraph &graph)
-      : OpRewritePattern<DescriptorLoadOp>(context), graph(graph) {}
+      : OpRewritePattern<triton::DescriptorLoadOp>(context), graph(graph) {}
 
-  LogicalResult matchAndRewrite(DescriptorLoadOp op,
+  LogicalResult matchAndRewrite(triton::DescriptorLoadOp op,
                                 PatternRewriter &rewriter) const override {
 
     auto ctx = op.getContext();

@@ -38,6 +38,7 @@
 #include "nvidia/include/Dialect/NVWS/Transforms/Passes.h"
 #include "nvidia/include/Dialect/NVWS/Transforms/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/OpInterfaces.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
@@ -328,7 +329,7 @@ void combineArefs(triton::FuncOp funcOp) {
 
 void reuseArefs(triton::FuncOp funcOp) {
   /* the ArefyCode pass will create a new aref per communication, which
-     creates an opportunityt to optimize arefs use, by reusing some, e.g. in
+     creates an opportunity to optimize arefs use, by reusing some, e.g. in
      case of causal FA, we have two loops
 
       %arefK1 = aref_create ..
@@ -390,7 +391,7 @@ void reuseArefs(triton::FuncOp funcOp) {
           auto src = localStore.getSrc().getDefiningOp();
           if (auto load = dyn_cast<tt::DescriptorLoadOp>(src))
             loadToArefMap[idx][load.getDesc()] = putEnterOp.getAref();
-        } else if (auto load = dyn_cast<tt::DescriptorLoadOp>(user)) {
+        } else if (auto load = dyn_cast<triton::nvws::DescriptorLoadOp>(user)) {
           loadToArefMap[idx][load.getDesc()] = putEnterOp.getAref();
         } else {
           llvm_unreachable("unsupported user");
@@ -436,11 +437,7 @@ void optimizeNumWarps(tt::FuncOp funcOp) {
     if (isOpInGroup(wgOp, ATTR_WS_TMALOAD)) {
       bool hasCpAsync = false;
       for (auto &block : wgOp.getRegion(0)) {
-        block.walk([&](tt::LoadOp op) {
-          if (isMMAOperandLoadOp(op)) {
-            hasCpAsync = true;
-          }
-        });
+        block.walk([&](AsyncCopyGlobalToLocalOp op) { hasCpAsync = true; });
       }
       if (hasCpAsync) {
         auto mod = wgOp->getParentOfType<ModuleOp>();
@@ -466,12 +463,12 @@ void optimizeNumWarps(tt::FuncOp funcOp) {
 
     for (auto &block : wgOp.getRegion(0)) {
       block.walk([&](Operation *op) {
-        if (isa<tt::DescriptorLoadOp, tt::DescriptorGatherOp>(op)) {
+        if (isa<DescriptorOpInterface>(op)) {
           return WalkResult::advance();
         }
         if (auto localStore = dyn_cast<LocalStoreOp>(op)) {
           auto src = localStore.getSrc().getDefiningOp();
-          if (isa<tt::DescriptorLoadOp, tt::DescriptorGatherOp>(src)) {
+          if (isa<DescriptorOpInterface>(src)) {
             return WalkResult::advance();
           }
         }
@@ -482,12 +479,8 @@ void optimizeNumWarps(tt::FuncOp funcOp) {
             }
           }
         }
-        auto types =
-            llvm::concat<Type>(op->getOperandTypes(), op->getResultTypes());
-        for (Type type : types) {
-          if (isa<RankedTensorType>(type)) {
-            hasSIMTOp = true;
-          }
+        if (isSIMTOp(op)) {
+          hasSIMTOp = true;
         }
         return WalkResult::advance();
       });
@@ -531,13 +524,9 @@ void allocateRegisters(triton::FuncOp funcOp) {
       auto groups = getGroups(wgOp);
       for (auto group : groups) {
         if (group == ATTR_WS_TMALOAD) {
-          builder.create<NVVM::SetMaxRegisterOp>(
-              wgOp.getLoc(), 40, NVVM::SetMaxRegisterAction::decrease);
-          insertBarrier(builder, wgOp.getLoc());
+          wgOp.setRegCount(40);
         } else if (group == ATTR_WS_MMA) {
-          builder.create<NVVM::SetMaxRegisterOp>(
-              wgOp.getLoc(), 232, NVVM::SetMaxRegisterAction::increase);
-          insertBarrier(builder, wgOp.getLoc());
+          wgOp.setRegCount(232);
         }
       }
     });

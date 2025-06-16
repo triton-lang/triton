@@ -78,9 +78,10 @@ using GroupMap = Map<GroupId, WSGroup>;
 using GroupSet = Set<GroupId>;
 
 ttng::WarpGroupOp createWgOp(ModuleOp mod, int barId, int startWarp,
-                             int numWarps, Location loc,
-                             OpBuilderWithGroup &builder) {
-  auto wgOp = builder.create<ttng::WarpGroupOp>(loc, startWarp, numWarps, 1);
+                                   int numWarps, int regCount, Location loc,
+                                   OpBuilderWithGroup &builder) {
+  auto wgOp =
+      builder.create<ttng::WarpGroupOp>(loc, startWarp, numWarps, regCount, 1);
 
   // set wgOp barId attribute
   wgOp->setAttr(ATTR_WS_BARID, builder.getI32IntegerAttr(barId));
@@ -93,12 +94,12 @@ ttng::WarpGroupOp createWgOp(ModuleOp mod, int barId, int startWarp,
 }
 
 ttng::WarpGroupOp createWgOpWithGroup(ModuleOp mod, int barId,
-                                      std::string group, Location loc,
-                                      OpBuilderWithGroup &builder) {
+                                            std::string group, Location loc,
+                                            OpBuilderWithGroup &builder) {
   auto wsGroup = getGroupFromSymbolRefAttr(
       mod, mlir::SymbolRefAttr::get(builder.getContext(), group));
   return createWgOp(mod, barId, wsGroup.getStartWarp(), wsGroup.getNumWarps(),
-                    loc, builder);
+                    wsGroup.getRegCount(), loc, builder);
 }
 
 Map<std::string, ttng::WarpGroupOp> createWarpGroupOps(triton::FuncOp funcOp,
@@ -489,6 +490,7 @@ void insertInitBarrier(tt::FuncOp funcOp) {
 class NVWSArefCodeSplit : public NVWSArefCodeSplitBase<NVWSArefCodeSplit> {
 public:
   void runOnFuncOp(triton::FuncOp funcOp, GroupMap groups) {
+
     splitFunc(funcOp, groups);
     LLVM_DEBUG({ DBGS() << "after::splitFunc:\n" << funcOp << "\n"; });
 

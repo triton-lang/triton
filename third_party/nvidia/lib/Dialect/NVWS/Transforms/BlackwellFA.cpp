@@ -66,15 +66,12 @@ void arefReuse(triton::FuncOp funcOp) {
   std::map<std::string, SmallVector<scf::ForOp>> forOps;
   funcOp.walk([&](ttng::WarpGroupOp wgOp) {
     auto group = getGroup(wgOp);
-    // llvm::errs() << "XXX1 group: " << group << "\n";
     if (group == "nvws.group.mma1") {
       wgOp.walk([&](scf::ForOp forOp) { forOps[group].push_back(forOp); });
     } else {
       return WalkResult::advance();
     }
     for (auto [group, forOps] : forOps) {
-      // llvm::errs() << "XXX group: " << group
-      //              << " forOps.size(): " << forOps.size() << "\n";
       if (forOps.size() != 2)
         return WalkResult::interrupt();
     }
@@ -92,6 +89,10 @@ void arefReuse(triton::FuncOp funcOp) {
       arefs_mma1[idx].push_back(enterOp.getAref());
     });
   }
+  if (arefs_mma1[0].size() != 1)
+    return;
+  if (arefs_mma1[1].size() != 1)
+    return;
   assert(arefs_mma1[0].size() == 1);
   assert(arefs_mma1[1].size() == 1);
 
@@ -99,133 +100,113 @@ void arefReuse(triton::FuncOp funcOp) {
   arefs_mma1[1][0].replaceAllUsesWith(arefs_mma1[0][0]);
 
   arefs_mma1[1][0].getDefiningOp()->erase();
-  // llvm::errs() << "ZZZ we are here\n";
+}
+void subsliceFACorrection(tt::FuncOp funcOp) {
+  SmallVector<SmallVector<Operation *>> tileList;
+  
+  // Find load-multiply-store patterns
+  funcOp.walk([&](ttng::TMEMLoadOp loadOp) {
+    // Skip if no token or token has multiple uses
+    if (!loadOp.getToken() || !loadOp.getToken().hasOneUse())
+      return;
+      
+    // Get store op from token user
+    auto storeOp = dyn_cast<ttng::TMEMStoreOp>(*loadOp.getToken().getUsers().begin());
+    if (!storeOp || !storeOp.getToken() || !storeOp.getToken().use_empty())
+      return;
+
+    // Get multiply op from load result user
+    auto val = loadOp.getResult();
+    if (!val.hasOneUse())
+      return;
+    auto mulf = dyn_cast<arith::MulFOp>(*val.getUsers().begin());
+    if (!mulf || !mulf.getResult().hasOneUse())
+      return;
+
+    // Check multiply result feeds into store
+    if (*mulf.getResult().getUsers().begin() == storeOp) {
+      tileList.push_back({loadOp, mulf, storeOp});
+    }
+  });
+
+  // Process each tile
+  for (auto tile : tileList) {
+    auto load = cast<ttng::TMEMLoadOp>(tile[0]);
+    auto mulf = cast<arith::MulFOp>(tile[1]); 
+    auto store = cast<ttng::TMEMStoreOp>(tile[2]);
+
+    auto inpShape = load.getSrc().getType().getShape();
+    assert(inpShape.size() == 2);
+
+    OpBuilder b(load);
+    const int splitNSize = 16;
+    Value tmem = load.getSrc();
+    assert(inpShape[1] % splitNSize == 0);
+
+    // Create new shapes
+    SmallVector<int64_t> shape1(inpShape);
+    shape1[1] = splitNSize;
+
+    int mDim = getShapePerCTA(load.getSrc().getType())[0];
+    if (mDim != 128)
+      return;
+
+    // Get types for load and broadcast
+    auto numWarps = ttg::lookupNumWarps(load);
+    int threadsPerWarp = ttg::lookupThreadsPerWarp(b);
+    RankedTensorType loadType, bcastType;
+    {
+      auto encoding = getDefaultBlockedEncoding(load.getContext(), inpShape,
+                                              numWarps, threadsPerWarp, 1);
+      RankedTensorType tensorType = RankedTensorType::get(
+          shape1, load.getType().getElementType(), encoding);
+      Attribute newDistributedEncoding =
+          ttng::getTmemCompatibleLayout(mDim, shape1[1], tensorType, numWarps);
+      loadType = RankedTensorType::get(shape1, load.getType().getElementType(),
+                                      newDistributedEncoding);
+      shape1[1] = 1;
+      bcastType = RankedTensorType::get(shape1, load.getType().getElementType(),
+                                       newDistributedEncoding);
+    }
+
+    // Get broadcast op
+    auto scaleOpnd = mulf.getLhs() == load.getResult() ? 1 : 0;
+    auto bcast = dyn_cast<tt::BroadcastOp>(mulf.getOperand(scaleOpnd).getDefiningOp());
+    if (!bcast)
+      return;
+
+    // Create new ops
+    auto cvt0 = b.create<ttg::ConvertLayoutOp>(bcast.getLoc(), bcastType,
+                                              bcast.getSrc());
+    auto bcast1 = b.create<tt::BroadcastOp>(bcast.getLoc(), loadType, cvt0.getResult());
+
+    // Process each slice
+    for (int i = 0; i < inpShape[1]; i += splitNSize) {
+      Value slice = b.create<ttng::TMEMSubSliceOp>(load.getLoc(), tmem, i, splitNSize);
+      auto load1 = b.create<ttng::TMEMLoadOp>(load.getLoc(), loadType, slice);
+      auto mulf1 = b.create<arith::MulFOp>(mulf.getLoc(), load1, bcast1);
+      b.create<ttng::TMEMStoreOp>(store.getLoc(), b.getType<AsyncTokenType>(),
+                                 slice, load1.getToken(), mulf1.getResult(),
+                                 store.getPred());
+    }
+
+    // Cleanup old ops
+    store->erase();
+    mulf->erase();
+    load->erase();
+    bcast->erase();
+  }
 }
 
-bool removeCopyOpInSameBlock(ttng::ArefCopyOp &copyOp) {
-  /*
-    use case:
-
-      %buf, %tok0 = alloc
-      // no uses of %buf here
-      %tok1 = for ..  %tok = %tok0 {
-          %tok1 = mma .. %buf[%tok0]
-          %dst, %dstTok = put.enter
-          %tok2 = copy %buf[%tok1], %dst[%dstTok]
-          put.exit
-          yield %tok2
-      }
-      // no uses of %buf here
-
-     becomes
-
-      for .. {
-          %dst, %dstTok = put.enter
-          %tok1 = mma .. %dst[%tokTok]
-          put.exit
-          yield %tok1
-      }
-  */
-  if (!copyOp.getToken())
-    return false;
-
-  // follow the uses of token, and ensure it only ends up in yieldOp
-  // that is no other uses of src buffer after copyOp
-  {
-    SmallVector<OpOperand *> tokens;
-    for (auto &use : copyOp.getToken().getUses())
-      tokens.push_back(&use);
-    while (!tokens.empty()) {
-      auto token = tokens.pop_back_val();
-      if (!isa<scf::YieldOp>(token->getOwner()))
-        return false;
-
-      auto yieldOp = cast<scf::YieldOp>(token->getOwner());
-      auto result =
-          yieldOp->getParentOp()->getResults()[token->getOperandNumber()];
-      for (auto &use : result.getUses())
-        tokens.push_back(&use);
-    }
-  }
-
-  // now find first write to buffer
-  auto buf = copyOp.getSrc();
-  auto bufDef = buf.getDefiningOp();
-
-  // ensure that buffer is result of tmem_alloc, and not some other put/get/etc
-  if (!isa<ttng::TMEMAllocOp>(bufDef))
-    return false;
-  if (!isa<ttng::ArefPutEnterOp>(copyOp.getDst().getDefiningOp()))
-    return false;
-
-  auto allocOp = cast<ttng::TMEMAllocOp>(bufDef);
-  Value allocTok = allocOp.getToken();
-
-  Operation *firstUse = {};
-  SmallVector<OpOperand *> uses;
-  for (auto &use : allocTok.getUses())
-    uses.push_back(&use);
-
-  while (!uses.empty()) {
-    auto use = uses.pop_back_val();
-    if (auto forOp = dyn_cast<scf::ForOp>(use->getOwner())) {
-      auto idx = use->getOperandNumber();
-      assert(idx >= 3); // for loop has first three operands, lb/ub/step
-      auto blockArgs = forOp.getBody()->getArguments();
-      // blockArgs first value is loop induction variable,
-      auto blockArg = blockArgs[idx - 3 + 1];
-      assert(!blockArg.use_empty());
-      for (auto &use : blockArg.getUses())
-        uses.push_back(&use);
-    } else if (auto fifOp = dyn_cast<scf::IfOp>(use->getOwner())) {
-      llvm_unreachable("unsupported use in ifOp");
-    } else if (isa<ttng::TMEMStoreOp, ttng::MMAv5OpInterface>(
-                   use->getOwner())) {
-      firstUse = use->getOwner();
-      break;
-    }
-  }
-  if (!firstUse)
-    return false;
-  assert(firstUse);
-
-  // check that all uses of buffer are in the same block as copyOp
-  for (auto users : allocOp.getResult().getUsers())
-    if (users->getBlock() != copyOp->getBlock())
-      return false;
-
-  assert(firstUse->isBeforeInBlock(copyOp));
-
-  // move put enter before first sue
-  auto putEnterOp = cast<ttng::ArefPutEnterOp>(copyOp.getDst().getDefiningOp());
-  putEnterOp->moveBefore(firstUse);
-  OpBuilder builder(putEnterOp);
-  putEnterOp.getIndexMutable().assign(
-      mkConstant(builder, putEnterOp.getLoc(), 0, 32, getGroups(putEnterOp)));
-
-  copyOp.getSrc().replaceUsesWithIf(
-      copyOp.getDst(), [&](OpOperand &use) -> bool {
-        return use.getOwner()->isBeforeInBlock(copyOp);
-      });
-  copyOp.getSrcDep().replaceAllUsesWith(copyOp.getDstDep());
-
-  // remove copyOp
-  copyOp->erase();
-
-  // erase allocOp and token from the loop iter_args
-
-  return true;
-}
 class NVWSBlackwellFA : public NVWSBlackwellFABase<NVWSBlackwellFA> {
 
 public:
   void runOnFunc(triton::FuncOp funcOp) {
-    SmallVector<ttng::ArefCopyOp> copyOps;
-    funcOp.walk([&](ttng::ArefCopyOp copyOp) { copyOps.push_back(copyOp); });
-
-    for (auto copyOp : copyOps)
-      removeCopyOpInSameBlock(copyOp);
     arefReuse(funcOp);
+    LLVM_DEBUG({ DBGS() << "after::arefReuse:\n" << funcOp << "\n"; });
+
+    subsliceFACorrection(funcOp);
+    LLVM_DEBUG({ DBGS() << "after::subsliceFACorrection:\n" << funcOp << "\n"; });
   }
 
   void runOnOperation() override {

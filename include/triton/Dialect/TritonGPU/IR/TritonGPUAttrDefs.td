@@ -15,6 +15,8 @@ def TritonGPU_AttrTrait : AttrInterface<"TritonGPU_AttrTrait"> {
   ];
 }
 
+def MemDescViewTrait : NativeOpTrait<"MemDescViewTrait">;
+
 class TritonGPU_Attr<string name, string attrMnemonic, list<Trait> traits = [],
                      Dialect dialect = TritonGPU_Dialect,
                      string baseCppClass = "::mlir::Attribute">

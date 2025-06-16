@@ -9,6 +9,7 @@
 #include "mlir/Transforms/Passes.h"
 #include "nvidia/include/Dialect/NVWS/Transforms/Utility.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 #include "llvm/ADT/STLExtras.h"
@@ -51,6 +52,13 @@ public:
     assert(wgOps.size() > 1);
     OpBuilder builder(wgOps[0]);
 
+    int maxNumWarps = 0;
+    for (auto wgOp : wgOps) {
+      int numWarps = wgOp.getNumWarps() + wgOp.getStartWarp();
+      maxNumWarps = std::max(numWarps, maxNumWarps);
+    }
+    int maxRegCount = std::min(256, 65536 / maxNumWarps / 32);
+
     for (auto wgOp : wgOps) {
       auto loc = wgOp.getLoc();
 
@@ -75,6 +83,16 @@ public:
 
       // move wgOp to thenRegion
       wgOp->moveBefore(arefIfOp.thenYield());
+      builder.setInsertionPoint(wgOp);
+      if (wgOp.getRegCount() > 0) {
+        builder.setInsertionPointToStart(&wgOp.getRegion(0).front());
+        auto regAction = wgOp.getRegCount() < maxRegCount
+                             ? NVVM::SetMaxRegisterAction::decrease
+                             : NVVM::SetMaxRegisterAction::increase;
+        builder.create<NVVM::SetMaxRegisterOp>(wgOp.getLoc(),
+                                               wgOp.getRegCount(), regAction);
+        insertBarrier(builder, wgOp.getLoc());
+      }
     }
   }
 };
