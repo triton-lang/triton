@@ -64,7 +64,43 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 // -----
 
+// CHECK: #[[DOT_OP_PARENT:.+]] = #ttg.blocked<{{.*}}>
+// CHECK: #[[WMMA_0:.+]] = #ttg.amd_wmma<{version = 1, isTranspose = false, warpsPerCTA = [1, 4]}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @wmma_dot_ab8_cf16(
+   // CHECK: %[[DOT2_ARG_A:.+]]: tensor<32x128xf8E5M2, #ttg.dot_op<{opIdx = 0, parent = #[[DOT_OP_PARENT]]}>>
+   %0: tensor<32x128xf8E5M2, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>,
+   // CHECK-SAME: %[[DOT2_ARG_B:.+]]: tensor<128x64xf8E5M2, #ttg.dot_op<{opIdx = 1, parent = #[[DOT_OP_PARENT]]}>>
+   %1: tensor<128x64xf8E5M2, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>,
+   %2: tensor<32x64x!tt.ptr<f16>, #blocked>) {
+    // CHECK: %[[DOT2_ARG_C:.+]] = arith.constant dense<0.000000e+00> : tensor<32x64xf16, #[[DOT_OP_PARENT]]>
+    // CHECK: %[[DOT2_OP_C:.+]] = ttg.convert_layout %[[DOT2_ARG_C]]
+    // CHECK-SAME: -> tensor<32x64xf16, #[[WMMA_0]]>
+    // CHECK: %[[DOT2_OP_C_EXT:.+]] = arith.extf %[[DOT2_OP_C]]
+    // CHECK-SAME: to tensor<32x64xf32, #[[WMMA_0]]>
+    %3 = arith.constant dense<0.000000e+00> : tensor<32x64xf16, #blocked>
+    // CHECK: %[[DOT2_OP_A_F8:.+]] = ttg.convert_layout %[[DOT2_ARG_A]]
+    // CHECK-SAME: -> tensor<32x128xf8E5M2, #ttg.dot_op<{opIdx = 0, parent = #[[WMMA_0]]
+    // CHECK: %[[DOT2_OP_A_F16:.+]] = tt.fp_to_fp %[[DOT2_OP_A_F8]]
+    // CHECK-SAME: -> tensor<32x128xf16, #ttg.dot_op<{opIdx = 0, parent = #[[WMMA_0]], kWidth = 16}>>
+    // CHECK: %[[DOT2_OP_B_F8:.+]] = ttg.convert_layout %[[DOT2_ARG_B]]
+    // CHECK-SAME: -> tensor<128x64xf8E5M2, #ttg.dot_op<{opIdx = 1, parent = #[[WMMA_0]]
+    // CHECK: %[[DOT2_OP_B_F16:.+]] = tt.fp_to_fp %[[DOT2_OP_B_F8]]
+    // CHECK-SAME: -> tensor<128x64xf16, #ttg.dot_op<{opIdx = 1, parent = #[[WMMA_0]], kWidth = 16}>>
+    // CHECK: %[[DOT2_WMMA_RES:.+]] = tt.dot %[[DOT2_OP_A_F16]], %[[DOT2_OP_B_F16]], %[[DOT2_OP_C_EXT]]
+    // CHECK-SAME: -> tensor<32x64xf32, #[[WMMA_0]]
+    %4 = tt.dot %0, %1, %3 : tensor<32x128xf8E5M2, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<128x64xf8E5M2, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<32x64xf16, #blocked>
+    // CHECK: %[[CONVERTED_RES:.+]] = ttg.convert_layout %[[DOT2_WMMA_RES]]
+    // CHECK-SAME: -> tensor<32x64xf32, #[[DOT_OP_PARENT]]>
+    // CHECK: arith.truncf %[[CONVERTED_RES]]
+    // CHECK-SAME: to tensor<32x64xf16, #[[DOT_OP_PARENT]]>
+    tt.store %2, %4 : tensor<32x64x!tt.ptr<f16>, #blocked>
+    tt.return
+  }
+}
 
+// -----
 
 // CHECK: #[[DOT_OP_PARENT:.+]] = #ttg.blocked<{{.*}}>
 // CHECK: #[[WMMA_1:.+]] = #ttg.amd_wmma<{version = 1, isTranspose = false, warpsPerCTA = [2, 2]}>
