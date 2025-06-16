@@ -191,14 +191,10 @@ applyLinearLayout(Location loc, RewriterBase &rewriter,
     // Concatenate input
     Value x = b.i32_val(0);
     int shift = 0;
-    for (auto orderedName : layout.getInDimNames()) {
-      for (auto [inDimName, idx] : nonConstantIns) {
-        if (orderedName == inDimName) {
-          inDimNames.push_back(inDimName);
-          x = b.or_(x, b.shl(idx, b.i32_val(shift)));
-          shift += layout.getInDimSizeLog2(inDimName);
-        }
-      }
+    for (auto [inDimName, idx] : nonConstantIns) {
+      inDimNames.push_back(inDimName);
+      x = b.or_(x, b.shl(idx, b.i32_val(shift)));
+      shift += layout.getInDimSizeLog2(inDimName);
     }
     // Flatten ins
     auto matrix = layout.sublayout(inDimNames, outIndices[0].first);
