@@ -566,7 +566,8 @@ class JITFunction(KernelInterface[T]):
         # parse options
         from ..compiler import make_backend
         device = driver.active.get_current_device()
-        stream = driver.active.get_current_stream(device)
+        if ('stream' not in kwargs.keys()):
+            stream = driver.active.get_current_stream(device)
         target = driver.active.get_current_target()
         backend = make_backend(target)
 
@@ -590,7 +591,7 @@ class JITFunction(KernelInterface[T]):
             # deprecated arguments
             assert "device_type" not in kwargs, "device_type option is deprecated; current target will be used"
             assert "device" not in kwargs, "device option is deprecated; current device will be used"
-            assert "stream" not in kwargs, "stream option is deprecated; current stream will be used"
+            # assert "stream" not in kwargs, "stream option is deprecated; current stream will be used"
             for k in excess_kwargs:
                 if k not in options.__dict__:
                     raise KeyError("Keyword argument %s was specified but unrecognised" % k)
@@ -648,8 +649,12 @@ class JITFunction(KernelInterface[T]):
             grid_1 = grid[1] if grid_size > 1 else 1
             grid_2 = grid[2] if grid_size > 2 else 1
 
+            if ('stream' in kwargs.keys()):
+                stream = kwargs["stream"]
             # launch kernel
             launch_metadata = kernel.launch_metadata(grid, stream, *non_constexpr_vals)
+            # explicitly define run method and load kernel binary
+            kernel._init_handles()
             kernel.run(grid_0, grid_1, grid_2, stream, kernel.function, kernel.packed_metadata, launch_metadata,
                        self.CompiledKernel.launch_enter_hook, self.CompiledKernel.launch_exit_hook, *non_constexpr_vals)
         return kernel

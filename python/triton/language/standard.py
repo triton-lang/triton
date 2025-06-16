@@ -410,8 +410,6 @@ def flip(x, dim=None):
     :param dim: the dimension to flip along (currently only final dimension supported)
     :type dim: int
     """
-    core.static_print("tl.flip is unsupported for now. Use libdevice.flip instead.")
-    core.static_assert(False)
     core.static_assert(_is_power_of_two(x.shape[_get_flip_dim(dim, x.shape)]))
     core.static_assert(_is_power_of_two(x.numel))
     # # reshape the tensor to have all dimensions be 2.

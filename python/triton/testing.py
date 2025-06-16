@@ -574,3 +574,92 @@ def get_max_simd_tflops(dtype, clock_rate, device=None):
             raise RuntimeError("dtype not supported")
     tflops = num_subcores * clock_rate * ops_per_sub_core * 1e-9
     return tflops
+
+# # Patch the triton language API here because triton's __init__.py
+# # import testing in the last stages.
+
+# from .triton_patch.language.core import dot, gather, insert, subview
+# from .triton_patch.language.standard import flip, sigmoid, softmax
+# from .triton_patch.language.math import (
+#     umulhi,
+#     exp,
+#     exp2,
+#     log,
+#     log2,
+#     cos,
+#     sin,
+#     sqrt,
+#     sqrt_rn,
+#     rsqrt,
+#     div_rn,
+#     erf,
+#     tanh,
+#     floor,
+#     ceil,
+# )
+# from .triton_patch.language.semantic import (
+#     arange,
+#     floordiv,
+#     atom_red_typechecking_impl,
+#     atomic_max,
+#     atomic_min,
+#     _load_legacy,
+#     maximum,
+#     minimum,
+# )
+# from . import language
+
+# language.dot = dot
+# language.flip = flip
+# language.sigmoid = sigmoid
+# language.softmax = softmax
+# language.gather = gather
+# language.insert = insert
+# language.subview = subview
+
+# # from .triton_patch.language.core import dtype, pointer_type, block_type, function_type
+# # language.core.dtype = dtype
+# # language.core.pointer_type = pointer_type
+# # language.core.block_type = block_type
+# # language.core.function_type = function_type
+# language.semantic.arange = arange
+# language.semantic.floordiv = floordiv
+# language.semantic.atom_red_typechecking_impl = atom_red_typechecking_impl
+# language.semantic.atomic_max = atomic_max
+# language.semantic.atomic_min = atomic_min
+# language.semantic._load_legacy = _load_legacy
+# language.semantic.maximum = maximum
+# language.semantic.minimum = minimum
+
+# language.umulhi = umulhi
+# language.exp = exp
+# language.exp2 = exp2
+# language.log = log
+# language.log2 = log2
+# language.cos = cos
+# language.sin = sin
+# language.sqrt = sqrt
+# language.sqrt_rn = sqrt_rn
+# language.rsqrt = rsqrt
+# language.div_rn = div_rn
+# language.erf = erf
+# language.tanh = tanh
+# language.floor = floor
+# language.ceil = ceil
+# language.math.umulhi = umulhi
+# language.math.exp = exp
+# language.math.exp2 = exp2
+# language.math.log = log
+# language.math.log2 = log2
+# language.math.cos = cos
+# language.math.sin = sin
+# language.math.sqrt = sqrt
+# language.math.sqrt_rn = sqrt_rn
+# language.math.rsqrt = rsqrt
+# language.math.div_rn = div_rn
+# language.math.erf = erf
+# language.math.tanh = tanh
+# language.math.floor = floor
+# language.math.ceil = ceil
+# language.math.isnan = language.extra.ascend.libdevice.isnan
+# language.math.isinf = language.extra.ascend.libdevice.isinf
