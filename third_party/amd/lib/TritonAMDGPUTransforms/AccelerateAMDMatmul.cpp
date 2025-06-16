@@ -1050,6 +1050,11 @@ public:
     auto aShape = oldAType.getShape();
     auto bShape = oldBType.getShape();
 
+    // get operand types
+    auto operandTypes = getOperandTypesForWmmaOp(rewriter, dotOp, wmmaVersion);
+    if (operandTypes.empty())
+      return failure();
+
     // check shape
     FailureOr<WmmaIntrinsic> wmmaInstr =
         chooseWmmaInstruction(dotOp, wmmaVersion, nonKDim);
@@ -1061,11 +1066,6 @@ public:
     auto nDim = wmmaInstr->nDim;
     auto kDim = wmmaInstr->kDim;
     auto kBase = wmmaInstr->kBase;
-
-    // get operand types
-    auto operandTypes = getOperandTypesForWmmaOp(rewriter, dotOp, wmmaVersion);
-    if (operandTypes.empty())
-      return failure();
 
     // get WMMA encoding for the given number of warps
     int numWarps = ttg::lookupNumWarps(dotOp);
