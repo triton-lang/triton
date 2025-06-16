@@ -80,9 +80,13 @@ jobs:
         run: |
           echo "PATH is '$PATH'"
           pip uninstall -y triton pytorch-triton-rocm
+          echo "${{ matrix.runner[0] }}"
+
           if [ "${{ matrix.runner[0] }}" != "amd-gfx950" ]; then
-            ccache --zero-stats
+            echo "not amd-gfx950"
+            #ccache --zero-stats
           fi
+
           make dev-install
       - name: CCache Stats
         if: ${{ matrix.runner[0] != 'amd-gfx950' }}
