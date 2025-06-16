@@ -103,6 +103,20 @@ def test_aggregate_initializers():
     anchor(value)
 
 
+@filecheck_test
+@triton.jit
+def test_aggregate_modification_in_loop():
+    # CHECK-LABEL: test_aggregate_modification_in_loop
+    value = TypeWithBuiltinInitializer()
+    # CHECK: [[RANGE:%.*]] = tt.make_range {end = 4 : i32, start = 0 : i32}
+    for i in range(0, 2):
+        # CHECK: for
+        # CHECK-SAME: iter_args([[ITER:%.*]] = [[RANGE]])
+        value.modify(tl.arange(4, 8))
+        # CHECK: [[RANGE:%.*]] = tt.make_range {end = 8 : i32, start = 4 : i32}
+        # CHECK: yield [[RANGE]]
+
+
 @triton.jit
 def forward(arg):
     return arg
