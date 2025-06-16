@@ -80,7 +80,7 @@ jobs:
         run: |
           echo "PATH is '$PATH'"
           pip uninstall -y triton pytorch-triton-rocm
-          if [ "${{ matrix.runner[0] }}" != "and-gfx950" ]; then
+          if [ "${{ matrix.runner[0] }}" != "amd-gfx950" ]; then
             ccache --zero-stats
           fi
           make dev-install
@@ -108,13 +108,12 @@ jobs:
           pytest --capture=tee-sys -rfs -vvv instrumentation/test_gpuhello.py
 
           # Run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
-          if [ "${{ matrix.runner[0] }}" == "and-gfx950" ]
-          then
+          if [ "${{ matrix.runner[0] }}" == "amd-gfx950" ]; then
             TRITON_DISABLE_LINE_INFO=0 python3 -m pytest -s -n 8 language/test_line_info.py -k "not test_line_info_ir_source"
           else
             TRITON_DISABLE_LINE_INFO=0 python3 -m pytest -s -n 8 language/test_line_info.py
           fi
-          
+
       - name: Run asan tests on AMD
         if: false
         run: |
@@ -134,8 +133,12 @@ jobs:
           cd python/test/regression
           python3 -m pytest -s -n 8 ./test_cast_matmul.py
       - name: Run Proton tests
-        if: ${{ matrix.runner[0] != 'nvidia-gb200' }}
-        run: make test-proton
+        run: |
+          if [ "${{ matrix.runner[0] }}" == "amd-gfx950" ]; then
+            python3 -s -n 8 third_party/proton/test -k "not test_instrument_exec"
+          else
+            make test-proton
+          fi
       - name: Run C++ unittests
         run: make test-cpp
       - name: Inspect cache directories
