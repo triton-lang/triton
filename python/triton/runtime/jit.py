@@ -394,9 +394,9 @@ class KernelInterface(Generic[T]):
         # return cast(T, functools.partial(cast(Callable, self.run), grid=grid))
 
 
-def serializer(obj):
+def serialize_to_json(obj):
     if type(obj).__name__ == "dtype":
-        return {"triton_dtype": str(obj)}
+        return {"triton_dtype": obj.name}
     raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
 
 
@@ -415,7 +415,7 @@ def serialize_specialization_data(name, signature, constants, attrs, options, ke
         list(constants.values()), 'attrs_keys': [list(x) for x in attrs.keys()], 'attrs_vals': list(attrs.values()),
         'options': options.__dict__, 'key': key
     }
-    serialized_obj = json.dumps(obj, default=serializer)
+    serialized_obj = json.dumps(obj, default=serialize_to_json)
     return serialized_obj
 
 

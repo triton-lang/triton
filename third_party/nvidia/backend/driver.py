@@ -2,12 +2,9 @@ from collections.abc import Callable, Iterator, Sequence
 import functools
 import inspect
 import operator
-import os
-import subprocess
 from typing import Any
 import triton
 import re
-from triton import knobs
 from triton.runtime import _allocation
 from triton.backends.compiler import GPUTarget
 from triton.backends.driver import GPUDriver
@@ -194,9 +191,9 @@ def make_launcher(signature_types: Sequence[Any], tensordesc_meta: Sequence[Any]
     signature_metadata = nvidia.cuda_utils.build_signature_metadata(flattened_signature)
 
     def wrapper(grid_dim_x: int, grid_dim_y: int, grid_dim_z: int, stream: int, kernel: int,
-                launch_cooperative_grid: bool, launch_pdl: bool, global_scratch: any,
-                packed_metadata: tuple[int, int, int, int, int, int], hook_args: any,
-                launch_enter_hook: Callable[..., None], launch_exit_hook: Callable[..., None], *args: any) -> None:
+                launch_cooperative_grid: bool, launch_pdl: bool, global_scratch: Any,
+                packed_metadata: tuple[int, int, int, int, int, int], hook_args: Any,
+                launch_enter_hook: Callable[..., None], launch_exit_hook: Callable[..., None], *args: Any) -> None:
         non_const_args = list(_flatten_and_apply_arg_mask(args, non_const_arg_mask))
 
         nvidia.cuda_utils.launch(grid_dim_x, grid_dim_y, grid_dim_z, stream, kernel, launch_cooperative_grid,
