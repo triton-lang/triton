@@ -16,6 +16,10 @@ namespace tt = mlir::triton;
 namespace ttg = tt::gpu;
 namespace tti = mlir::triton::instrument;
 
+////////////////////////////////////////////
+// Utility functions
+////////////////////////////////////////////
+
 BlockedEncodingAttr getBlockedEncoding(ModuleOp module, unsigned int size) {
   MLIRContext *ctx = module.getContext();
   unsigned int warps =
@@ -35,52 +39,6 @@ Value createConstIntTensor(OpBuilder &builder, Location loc, int val,
       APInt(tensorType.getElementType().getIntOrFloatBitWidth(), val));
   return builder.create<arith::ConstantOp>(loc, tensorType, denseAttr);
 }
-
-struct SharedBufferPointersOpConversion
-    : public ConvertOpToLLVMPattern<tti::ExperimentalSharedBufferPointersOp> {
-  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
-
-  LogicalResult matchAndRewrite(tti::ExperimentalSharedBufferPointersOp op,
-                                OpAdaptor adaptor,
-                                ConversionPatternRewriter &b) const override {
-    auto loc = op.getLoc();
-    auto *ctx = b.getContext();
-    auto module = op->getParentOfType<ModuleOp>();
-    auto values = adaptor.getOffsets();
-    auto shMemBufs = createInitializedIntTensor(b, loc, module, values);
-    auto base =
-        getSharedMemoryBase(b, op->getParentOfType<FunctionOpInterface>());
-    shMemBufs = b.create<arith::AddIOp>(
-        loc, shMemBufs,
-        b.create<triton::SplatOp>(loc, shMemBufs.getType(), base));
-    b.replaceOp(op, shMemBufs);
-    return success();
-  }
-
-  Value createInitializedIntTensor(OpBuilder &builder, Location loc,
-                                   ModuleOp module,
-                                   ArrayRef<int32_t> values) const {
-    int64_t size = values.size();
-    assert(llvm::isPowerOf2_64(size) && "Expected power of 2");
-    auto tensorType = RankedTensorType::get({size}, builder.getIntegerType(64),
-                                            getBlockedEncoding(module, size));
-    SmallVector<APInt> apInts = llvm::to_vector(
-        llvm::map_range(values, [](int32_t v) { return APInt(64, v); }));
-    auto denseAttr = DenseElementsAttr::get(tensorType, apInts);
-    return builder.create<arith::ConstantOp>(loc, tensorType, denseAttr);
-  }
-
-  Value getSharedMemoryBase(ConversionPatternRewriter &rewriter,
-                            FunctionOpInterface func) const {
-    Location loc = func.getLoc();
-    Value base = LLVM::getStackPointer(rewriter, func);
-    // Bitcast to i64
-    auto i64Ty = rewriter.getIntegerType(64);
-    TritonLLVMOpBuilder b(loc, rewriter);
-    base = b.ptrtoint(i64Ty, base);
-    return base;
-  }
-};
 
 Value createCmpIntTensorScalar(OpBuilder &builder, Location loc, Value tensor,
                                Value scalar) {
@@ -110,6 +68,56 @@ Value createMemDescToI64(ConversionPatternRewriter &rewriter, Location loc,
   return b.add(offset, b.ptrtoint(i64Ty, smemObj.getBase()));
 }
 
+////////////////////////////////////////////
+// Patterns
+////////////////////////////////////////////
+
+struct SharedBufferPointersOpConversion
+    : public ConvertOpToLLVMPattern<tti::ExperimentalSharedBufferPointersOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  LogicalResult matchAndRewrite(tti::ExperimentalSharedBufferPointersOp op,
+                                OpAdaptor adaptor,
+                                ConversionPatternRewriter &b) const override {
+    auto loc = op.getLoc();
+    auto *ctx = b.getContext();
+    auto module = op->getParentOfType<ModuleOp>();
+    auto values = adaptor.getOffsets();
+    auto shMemBufs = createInitializedIntArrayTensor(b, loc, module, values);
+    auto base =
+        getSharedMemoryBase(b, op->getParentOfType<FunctionOpInterface>());
+    shMemBufs = b.create<arith::AddIOp>(
+        loc, shMemBufs,
+        b.create<triton::SplatOp>(loc, shMemBufs.getType(), base));
+    b.replaceOp(op, shMemBufs);
+    return success();
+  }
+
+  Value createInitializedIntArrayTensor(OpBuilder &builder, Location loc,
+                                        ModuleOp module,
+                                        ArrayRef<int32_t> values) const {
+    int64_t size = values.size();
+    assert(llvm::isPowerOf2_64(size) && "Expected power of 2");
+    auto tensorType = RankedTensorType::get({size}, builder.getIntegerType(64),
+                                            getBlockedEncoding(module, size));
+    SmallVector<APInt> apInts = llvm::to_vector(
+        llvm::map_range(values, [](int32_t v) { return APInt(64, v); }));
+    auto denseAttr = DenseElementsAttr::get(tensorType, apInts);
+    return builder.create<arith::ConstantOp>(loc, tensorType, denseAttr);
+  }
+
+  Value getSharedMemoryBase(ConversionPatternRewriter &rewriter,
+                            FunctionOpInterface func) const {
+    Location loc = func.getLoc();
+    Value base = LLVM::getStackPointer(rewriter, func);
+    // Bitcast to i64
+    auto i64Ty = rewriter.getIntegerType(64);
+    TritonLLVMOpBuilder b(loc, rewriter);
+    base = b.ptrtoint(i64Ty, base);
+    return base;
+  }
+};
+
 struct CheckAsyncWriteWithMbarSharedOpConversion
     : public ConvertOpToLLVMPattern<
           tti::ExperimentalCheckAsyncWriteWithMbarSharedOp> {
@@ -133,7 +141,6 @@ struct CheckAsyncWriteWithMbarSharedOpConversion
     Value buffer =
         createMemDescToI64(b, loc, getTypeConverter(), op.getBuffer().getType(),
                            adaptor.getBuffer());
-    Value mbarSplat = b.create<triton::SplatOp>(loc, barriersTy, mbar);
     Value buffers = op.getBuffers();
     Value states = op.getStates();
     Value barriers = op.getBarriers();
@@ -142,7 +149,6 @@ struct CheckAsyncWriteWithMbarSharedOpConversion
     Value currBuf = createCmpIntTensorScalar(b, loc, buffers, buffer);
     Value rwSplat =
         createConstIntTensor(b, loc, WRITE_BIT | READ_BIT, statesTy);
-    Value writeSplat = createConstIntTensor(b, loc, WRITE_BIT, statesTy);
     Value isRW = b.create<arith::AndIOp>(loc, states, rwSplat);
     Value isCurrBufRW = b.create<arith::SelectOp>(loc, currBuf, isRW, zero_8b);
 
@@ -153,8 +159,10 @@ struct CheckAsyncWriteWithMbarSharedOpConversion
                            "TMA copy to buffer being read or written");
 
     // 2. Update the access state
+    Value writeSplat = createConstIntTensor(b, loc, WRITE_BIT, statesTy);
     Value outStates = b.create<arith::SelectOp>(
         loc, currBuf, b.create<arith::OrIOp>(loc, states, writeSplat), states);
+    Value mbarSplat = b.create<triton::SplatOp>(loc, barriersTy, mbar);
     Value outBarriers =
         b.create<arith::SelectOp>(loc, currBuf, mbarSplat, barriers);
     b.replaceOp(op, {outStates, outBarriers});
