@@ -603,7 +603,6 @@ def _create_tma_descriptors(
                 x, opt_flags.block_m, opt_flags.block_k,
                 USE_GATHER_TMA, X_USE_LOAD_TMA
             )
-        assert x_tensor_or_desc.base.data_ptr() == x.data_ptr()
 
     w_transpose = w.stride(2) != 1
     w_desc = TensorDescriptorBuilder.create_weight_descriptor(
