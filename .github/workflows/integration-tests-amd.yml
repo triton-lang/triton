@@ -109,14 +109,11 @@ jobs:
           TRITON_ALWAYS_COMPILE=1 TRITON_DISABLE_LINE_INFO=0 LLVM_PASS_PLUGIN_PATH=${INSTRUMENTATION_LIB_DIR}/libGPUInstrumentationTestLib.so \
           pytest --capture=tee-sys -rfs -vvv instrumentation/test_gpuhello.py
 
-          echo "${{ matrix.runner[0] }}"
           # Run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
-          if [ "${{ matrix.runner[0] }}" != "amd-gfx950" ]; then
-            echo "on gfx950"
-            TRITON_DISABLE_LINE_INFO=0 python3 -m pytest -s -n 8 language/test_line_info.py
-          else
-            echo "not gfx950"
+          if [ "${{ matrix.runner[0] }}" = "amd-gfx950" ]; then
             TRITON_DISABLE_LINE_INFO=0 python3 -m pytest -s -n 8 language/test_line_info.py -k "not test_line_info_ir_source"
+          else
+            TRITON_DISABLE_LINE_INFO=0 python3 -m pytest -s -n 8 language/test_line_info.py
           fi
 
       - name: Run asan tests on AMD
@@ -140,7 +137,7 @@ jobs:
       - name: Run Proton tests
         run: |
           if [ "${{ matrix.runner[0] }}" = "amd-gfx950" ]; then
-            python3 -s -n 8 third_party/proton/test -k "not test_instrument_exec"
+            python3 -m pytest -s -n 8 third_party/proton/test -k "not test_instrument_exec"
           else
             make test-proton
           fi
