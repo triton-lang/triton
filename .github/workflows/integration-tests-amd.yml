@@ -14,6 +14,10 @@ jobs:
     strategy:
       matrix:
         runner: ${{ fromJson(inputs.matrix) }}
+      include:
+        - image: rocm/pytorch:rocm6.2.2_ubuntu22.04_py3.10_pytorch_2.5.1_asan
+        - image: rocm/7.0-preview:rocm7.0_preview_ubuntu22.04_llama2_70b_training_mlperf_mi35X_prealpha
+          runner: amd-gfx950
     env:
       RUNNER_TYPE: ${{ matrix.runner[1] }}
       TRITON_BUILD_WITH_CCACHE: "true"
@@ -24,7 +28,7 @@ jobs:
       PYTHON: "python3"
       CCACHE_COMPRESS: "true"
     container:
-      image: rocm/7.0-preview:rocm7.0_preview_ubuntu22.04_llama2_70b_training_mlperf_mi35X_prealpha
+      image: ${{ matrix.image }}
       options: --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --user root
     steps:
       - name: Checkout
@@ -76,10 +80,12 @@ jobs:
         run: |
           echo "PATH is '$PATH'"
           pip uninstall -y triton pytorch-triton-rocm
-          #ccache --zero-stats
+          if [ "${{ matrix.runner[0] }}" != "gfx950" ]; then
+            ccache --zero-stats
+          fi
           make dev-install
       - name: CCache Stats
-        if: false
+        if: ${{ matrix.runner[0] != 'amd-gfx950' }}
         run: ccache --print-stats
       - name: Run lit tests
         run: make test-lit
