@@ -2,9 +2,12 @@ from collections.abc import Callable, Iterator, Sequence
 import functools
 import inspect
 import operator
+import os
+import subprocess
 from typing import Any
 import triton
 import re
+from triton import knobs
 from triton.runtime import _allocation
 from triton.backends.compiler import GPUTarget
 from triton.backends.driver import GPUDriver
@@ -62,6 +65,31 @@ class CudaUtils(object):
         self.cuOccupancyMaxActiveClusters = nvidia.cuda_utils.cuOccupancyMaxActiveClusters
         self.set_printf_fifo_size = nvidia.cuda_utils.set_printf_fifo_size
         self.fill_tma_descriptor = nvidia.cuda_utils.fill_tma_descriptor
+
+
+def ty_to_cpp(ty):
+    if ty[0] == '*':
+        return "CUdeviceptr"
+    if ty.startswith("tensordesc"):
+        return "CUtensorMap"
+    return {
+        "i1": "int32_t",
+        "i8": "int8_t",
+        "i16": "int16_t",
+        "i32": "int32_t",
+        "i64": "int64_t",
+        "u1": "uint32_t",
+        "u8": "uint8_t",
+        "u16": "uint16_t",
+        "u32": "uint32_t",
+        "u64": "uint64_t",
+        "fp16": "float",
+        "bf16": "float",
+        "fp32": "float",
+        "f32": "float",
+        "fp64": "double",
+        "nvTmaDesc": "CUtensorMap",
+    }[ty]
 
 
 # ------------------------
