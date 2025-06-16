@@ -2,13 +2,50 @@ from collections.abc import Callable, Iterator, Sequence
 import functools
 import inspect
 import operator
+import os
+import subprocess
 from typing import Any
 import triton
 import re
+from triton import knobs
 from triton.runtime import _allocation
 from triton.backends.compiler import GPUTarget
 from triton.backends.driver import GPUDriver
 from triton._C.libtriton import nvidia
+
+dirname = os.path.dirname(os.path.realpath(__file__))
+include_dirs = [os.path.join(dirname, "include")]
+libdevice_dir = os.path.join(dirname, "lib")
+
+
+@functools.lru_cache()
+def libcuda_dirs():
+    if env_libcuda_path := knobs.nvidia.libcuda_path:
+        return [env_libcuda_path]
+
+    libs = subprocess.check_output(["/sbin/ldconfig", "-p"]).decode()
+    # each line looks like the following:
+    # libcuda.so.1 (libc6,x86-64) => /lib/x86_64-linux-gnu/libcuda.so.1
+    locs = [line.split()[-1] for line in libs.splitlines() if "libcuda.so.1" in line]
+    dirs = [os.path.dirname(loc) for loc in locs]
+    env_ld_library_path = os.getenv("LD_LIBRARY_PATH")
+    if env_ld_library_path and not dirs:
+        dirs = [dir for dir in env_ld_library_path.split(":") if os.path.exists(os.path.join(dir, "libcuda.so.1"))]
+    msg = 'libcuda.so cannot found!\n'
+    if locs:
+        msg += 'Possible files are located at %s.' % str(locs)
+        msg += 'Please create a symlink of libcuda.so to any of the files.'
+    else:
+        msg += 'Please make sure GPU is set up and then run "/sbin/ldconfig"'
+        msg += ' (requires sudo) to refresh the linker cache.'
+    assert any(os.path.exists(os.path.join(path, 'libcuda.so.1')) for path in dirs), msg
+    return dirs
+
+
+@functools.lru_cache()
+def library_dirs():
+    return [libdevice_dir, *libcuda_dirs()]
+
 
 # ------------------------
 # Utils
@@ -28,6 +65,31 @@ class CudaUtils(object):
         self.cuOccupancyMaxActiveClusters = nvidia.cuda_utils.cuOccupancyMaxActiveClusters
         self.set_printf_fifo_size = nvidia.cuda_utils.set_printf_fifo_size
         self.fill_tma_descriptor = nvidia.cuda_utils.fill_tma_descriptor
+
+
+def ty_to_cpp(ty):
+    if ty[0] == '*':
+        return "CUdeviceptr"
+    if ty.startswith("tensordesc"):
+        return "CUtensorMap"
+    return {
+        "i1": "int32_t",
+        "i8": "int8_t",
+        "i16": "int16_t",
+        "i32": "int32_t",
+        "i64": "int64_t",
+        "u1": "uint32_t",
+        "u8": "uint8_t",
+        "u16": "uint16_t",
+        "u32": "uint32_t",
+        "u64": "uint64_t",
+        "fp16": "float",
+        "bf16": "float",
+        "fp32": "float",
+        "f32": "float",
+        "fp64": "double",
+        "nvTmaDesc": "CUtensorMap",
+    }[ty]
 
 
 # ------------------------

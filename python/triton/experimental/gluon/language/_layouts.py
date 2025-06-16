@@ -42,12 +42,6 @@ class AutoLayout(DistributedLayout):
         return "AL"
 
 
-def make_hash(items: Dict[str, Any]):
-    """Returns a hash for a dictionary that may have lists at the top level.
-    Change the lists and dictionary into tuples for hashability."""
-    return hash(tuple((k, tuple(v) if isinstance(v, List) else v) for k, v in items if v is not None))
-
-
 @dataclass(frozen=True)
 class BlockedLayout(DistributedLayout):
     """
@@ -89,7 +83,7 @@ class BlockedLayout(DistributedLayout):
         assert len(self.cta_order) == rank
 
     def __hash__(self):
-        return make_hash(self.__dict__.items())
+        return hash(self.mangle())
 
     def _to_ir(self, builder):
         return builder.get_blocked_layout(
@@ -141,6 +135,9 @@ class SliceLayout(DistributedLayout):
             self.parent._to_ir(builder),
         )
 
+    def __hash__(self):
+        return hash(self.mangle())
+
     def mangle(self) -> str:
         return f"SL{self.dim}_{self.parent.mangle()}SL"
 
@@ -187,7 +184,7 @@ class DistributedLinearLayout(DistributedLayout):
                                                      self.shape)
 
     def __hash__(self):
-        return make_hash(self.__dict__.items())
+        return hash(self.mangle())
 
     def mangle(self):
         return f"DLL{self.reg_bases}_{self.lane_bases}_{self.warp_bases}_{self.block_bases}_{self.shape}DLL"
@@ -226,6 +223,9 @@ class NVMMADistributedLayout(DistributedLayout):
         assert len(self.ctas_per_cga) == rank
         assert len(self.cta_split_num) == rank
         assert len(self.cta_order) == rank
+
+    def __hash__(self):
+        return hash(self.mangle())
 
     def _to_ir(self, builder):
         return builder.get_mma_layout(self.version, self.warps_per_cta, self.ctas_per_cga, self.cta_split_num,
@@ -299,7 +299,7 @@ class NVMMASharedLayout(SharedLayout):
         )
 
     def __hash__(self):
-        return make_hash(self.__dict__.items())
+        return hash(self.mangle())
 
     def mangle(self) -> str:
         return f"NVMMA_{self.swizzle_byte_width}_{self.element_bitwidth}_{self.transposed}_{self.fp4_padded}_NVMMA"
@@ -354,7 +354,7 @@ class SwizzledSharedLayout(SharedLayout):
         )
 
     def __hash__(self):
-        return make_hash(self.__dict__.items())
+        return hash(self.mangle())
 
     def mangle(self) -> str:
 
