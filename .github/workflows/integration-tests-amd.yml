@@ -116,6 +116,10 @@ jobs:
             TRITON_DISABLE_LINE_INFO=0 python3 -m pytest -s -n 8 language/test_line_info.py
           fi
 
+          # Run tests under triton/python/triton_kernels/tests/
+          cd ../../triton_kernels/
+          python3 -m pytest -s -n 12 tests/
+
       - name: Run asan tests on AMD
         if: false
         run: |

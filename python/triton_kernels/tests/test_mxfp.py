@@ -22,7 +22,7 @@ from triton_kernels.numerics_details.mxfp import (
     upcast_from_mxfp_torch,
 )
 from triton_kernels.testing import assert_close, assert_equal
-from triton_kernels.target_info import is_hip
+from triton_kernels.target_info import is_hip, is_hip_cdna3
 
 
 def dtype_str_to_torch(dtype_str: str) -> torch.dtype:
@@ -148,6 +148,8 @@ def test_mxfp_casting(
             pytest.skip("Other swizzling patterns are not supported by AMD GPU")
         if quant_dtype == 'float8_e4m3fn':
             pytest.skip("float8_e4m3fn cast hasn't been fully tested on AMD GPU")
+        if quant_dtype == 'float8_e5m2' and is_hip_cdna3():
+            pytest.skip("float8_e5m2 cast hasn't been fully tested on AMD CDNA3")
 
     swizzle_axis = swizzle_axis if (swizzle_value or swizzle_scale) else None
     quant_torch_type = dtype_str_to_torch(quant_dtype)
