@@ -8,17 +8,17 @@ from triton_kernels.datastruct import Tensor
 
 def topk_forward(x, k, apply_softmax=True, dim=1, return_bitmatrix=True, y_indx=None, n_rows=None):
     if not isinstance(x, Tensor):
-        x = Tensor(x, [n_rows, None])
+        x = Tensor(x, [x.shape[0] if n_rows is None else n_rows, x.shape[1]], [x.shape[0], None])
     cdiv = lambda a, b: (a + b - 1) // b
     BLOCK_M = 32
     BLOCK_N = 32
     BLOCK_S = 128
     assert x.ndim == 2
-    assert x.shape_pad[-1] < 32768
+    assert x.shape_max[-1] < 32768
     assert dim == 1
     assert return_bitmatrix
-    n_rows_pad, n_cols = x.shape_pad
-    n_rows_raw = x.shape_raw[0]
+    n_rows_pad, n_cols = x.shape_max
+    n_rows_raw = x.shape[0]
     dev = x.device
     n_cols_pad = cdiv(n_cols, BLOCK_N) * BLOCK_N
     n_cols_words = n_cols_pad // 32
@@ -41,7 +41,7 @@ def topk_forward(x, k, apply_softmax=True, dim=1, return_bitmatrix=True, y_indx=
         x, x.stride(0),  # inputs
         y_vals, y_indx, y_vals.stride(0), use_provided_indx,  # output [topk]
         bitmatrix, bitmatrix.stride(0), bitmatrix.stride(1),  # output [bitmatrix]
-        n_rows_pad, n_rows_raw, n_cols,  # shapes
+        x.shape[0], x.shape[1],  # shapes
         scratchpad, BLOCK_S, s_blocks,  # thing to memset to zero
         BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,  # tunable parameter
         APPLY_SOFTMAX=apply_softmax, N_EXPTS_PAD=n_cols_pad, N_EXPTS_ACT=k,  # constants

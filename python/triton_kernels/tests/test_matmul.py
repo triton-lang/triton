@@ -8,7 +8,7 @@ from triton_kernels.routing import routing
 # matmul utilities
 import triton_kernels.matmul_ogs_details.opt_flags as opt_flags
 from triton_kernels.matmul_ogs import FlexCtx, PrecisionConfig, MicroscalingCtx, FusedActivation, FnSpecs
-from triton_kernels.matmul_ogs import can_use_persistent_tma
+from triton_kernels.matmul_ogs import none_or_tma_compatible
 from triton_kernels.matmul_ogs import matmul_ogs, matmul_ogs_torch
 from triton_kernels.swiglu import swiglu, swiglu_fn, PrecisionConfig as SwiGLUPrecisionConfig
 # numerics utilities
@@ -313,7 +313,8 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
                                                swizzle_scale=swizzle_scale,
                                                actual_weight_scale_shape=weight_scale_shape)
 
-    if is_persistent and not can_use_persistent_tma(x_tri, w_tri):
+    can_use_tma = none_or_tma_compatible(x_tri) and none_or_tma_compatible(w_tri)
+    if is_persistent and not can_use_tma:
         pytest.skip("persistent TMAs not supported for this test")
 
     if w_tri.shape[0] == 1:
@@ -459,8 +460,9 @@ def test_fused_act(m, n, k, mode, split_k, do_gather, do_scatter, fused_scatter,
     x, w, bias, _, _ = init_compute_data(m, n, k, gindx, sindx, n_expts_tot, n_expts_act, n_expt_shards, mode,
                                          act_dtype, weight_dtype, False, requires_grad=False, device=device)
 
-    if is_persistent and not can_use_persistent_tma(x.view(1, x.shape[-2], x.shape[-1]),
-                                                    w.view(1, w.shape[-2], w.shape[-1]), gindx, precision_opt):
+    can_use_tma = none_or_tma_compatible(x.view(1, x.shape[-2], x.shape[-1])) and \
+                  none_or_tma_compatible(w.view(1, w.shape[-2], w.shape[-2]))
+    if is_persistent and not can_use_tma:
         pytest.skip("persistent TMAs not supported for this test")
 
     if mode == "batched":

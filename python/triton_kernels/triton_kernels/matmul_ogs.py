@@ -18,7 +18,7 @@ from .matmul_ogs_details.opt_flags import make_opt_flags, OptFlags
 from .matmul_ogs_details.fast_contiguous import fast_contiguous
 from .numerics_details.mxfp import SwizzlingType
 from .specialize import specialize
-from .datastruct import MxTensor
+from .datastruct import SwizzledTensor
 from typing import Tuple, Optional
 
 
@@ -243,35 +243,25 @@ class PrecisionConfig:
     out_dtype: torch.dtype = None
     enforce_bitwise_invariance: bool = False
 
-    def __post_init__(self):
-        assert self.flex_ctx.rhs_data.scale is None or self.mx_ctx.weight_scale is None, "flex and mx_ctx cannot be used together"
 
-def mx_can_use_tma(w: MxTensor):
-    assert w.swizzle_mode == SwizzlingType.BLACKWELL
-    return  w.scale_strides[0] * w.scale_element_size % 16 == 0 and \
-            w.scale_strides[1] * w.scale_element_size % 16 == 0 and \
-            w.scale_strides[2] * w.scale_element_size % 16 == 0
+def element_bitwidth(tensor):
+    return tensor.element_bitwidth if isinstance(tensor, SwizzledTensor) else tensor.element_size()*8
 
-def can_use_persistent_tma(x, w):
-    is_mxfp4 = isinstance(w, MxTensor) and w.dtype == torch.uint8
-    weight_stride_req = 32 if is_mxfp4 else 16
-    return (
-        # TMA requires CUDA 9.0, last dim contiguous, and multiple of 16-byte strides otherwise.
-        target_info.cuda_capability_geq(9, 0) and ( # Check strides of X.
-            x.stride(1) * x.element_size() % 16 == 0 and x.stride(2) == 1
-        ) and (
-            # Check W is either transposed or non-transposed, and with required stride.
-            (w.stride(1) * w.element_size() % weight_stride_req == 0 and w.stride(2) == 1) or
-            (w.stride(2) * w.element_size() % weight_stride_req == 0 and w.stride(1) == 1)
-        ) and (
-            not isinstance(w, MxTensor) or mx_can_use_tma(w)
-        )
-        # compiler crash ?
-        and (x.dtype.itemsize <= 1 or w.dtype != torch.uint8)
-    )
-
-def can_use_fused_scatter(scatter_indx, fused_activation):
-    return scatter_indx is not None and fused_activation.specs.fn is None
+def none_or_tma_compatible(x):
+    if x is None:
+        return True
+    if not target_info.cuda_capability_geq(9, 0):
+        return False
+    if x.ndim != 3:
+        return False
+    strides = list(x.stride())
+    stride_div = 128 // element_bitwidth(x)
+    try:
+        major_dim = strides.index(1)
+    except ValueError:
+        return False
+    compliant = [x.stride(i)*x.element_size() % stride_div == 0 for i in range(x.ndim) if i != major_dim]
+    return all(compliant)
 
 # ---------------------
 # Preprocessing
@@ -598,22 +588,20 @@ def matmul_ogs(x, w, bias,
     assert w.shape[0] == routing_data.n_expts_tot
     # unpack scales
     mx_ctx = precision_config.mx_ctx
-    from .datastruct import MxTensor
-    if mx_ctx.weight_scale is not None:
-        w = MxTensor(w, mx_ctx.weight_scale, swizzle_mode=mx_ctx.swizzle_scale)
+    has_mx = mx_ctx.weight_scale is not None
+    w_scale = None if mx_ctx.weight_scale is None else SwizzledTensor(mx_ctx.weight_scale, mx_ctx.swizzle_scale)
+    w = w if w_scale is None else SwizzledTensor(w, mx_ctx.swizzle_value)
     # determine shapes
     M = x.shape[1] if gather_indx is None else gather_indx.src_indx.shape[0]
     batch_size = w.shape[0] if routing_data.expt_hist is None else 1
     _, K, N = w.shape
-
-    mx_scale_stride_e, mx_scale_stride_k, mx_scale_stride_n = (0,0,0) if mx_ctx.weight_scale is None else w.scale_strides
+    mx_scale_stride_e, mx_scale_stride_k, mx_scale_stride_n = w_scale.strides if has_mx else (0,0,0)
     # compute optimization flags
     out_dtype = precision_config.out_dtype or x.dtype
+    can_use_tma = none_or_tma_compatible(x) and none_or_tma_compatible(w) and none_or_tma_compatible(w_scale)
+    can_use_fused_scatter = scatter_indx is not None and fused_activation.specs.fn is None
     opt_flags = make_opt_flags(out_dtype, x.dtype, w.dtype, precision_config,
-        M, N, K, routing_data,
-        can_use_persistent_tma(x, w),
-        can_use_fused_scatter(scatter_indx, fused_activation),
-        epilogue.effective_itemsize,
+        M, N, K, routing_data, can_use_tma, can_use_fused_scatter, epilogue.effective_itemsize,
     )
     # determine necessary pre/post processing
     preprocessing_features = init_preprocessing_features(w, precision_config, opt_flags)

@@ -50,19 +50,19 @@ def _sum_bitmatrix_memset(Ret, BLOCK: tl.constexpr):
 
 
 @triton.jit
-def _sum_bitmatrix_rows(B, shape_bm, NRowsRaw, stride_bm: tl.constexpr, stride_bn: tl.constexpr,  # input bitmatrix
+def _sum_bitmatrix_rows(B, shape_bm, stride_bm: tl.constexpr, stride_bn: tl.constexpr,  # input bitmatrix
                         Ret, Partials, stride_pm: tl.constexpr, stride_pn, shape_pn,  # outputs
                         BLOCK_MM: tl.constexpr, BLOCK_M: tl.constexpr):
 
     tl.static_assert(BLOCK_MM % BLOCK_M == 0)
     TILE_SIZE: tl.constexpr = BLOCK_MM // BLOCK_M
+    if shape_bm.dtype.is_ptr():
+        shape_bm = tl.load(shape_bm)
     pid_m = tl.program_id(0)
     pid_n = tl.program_id(1)
     offs_m = pid_m * BLOCK_MM + tl.arange(0, BLOCK_MM)
     offs_n = pid_n * 32 + tl.arange(0, 32)
     n_rows = shape_bm
-    if NRowsRaw is not None:
-        n_rows = tl.load(NRowsRaw)
     bits = tl.load(B + pid_n * stride_bn + offs_m * stride_bm, mask=offs_m < n_rows, other=0)
     bits = tl.reshape(bits, [TILE_SIZE, BLOCK_M])
     ret = vpopc(bits)  # [TILE_SIZE, 32]
@@ -85,7 +85,7 @@ def sum_bitmatrix_rows(x, out_ret, partials_block_size=None, n_rows_raw=None):
     assert partials_block_size is not None
     cdiv = triton.cdiv
     PARTIALS_BLOCK_M = partials_block_size
-    n_rows_pad, n_cols_raw = x.shape_pad[0], x.shape_raw[1]
+    n_rows_pad, n_cols_raw = x.shape_max[0], x.shape[1]
     assert out_ret.shape == (n_cols_raw, )
 
     TILE_SIZE = 2
@@ -98,7 +98,7 @@ def sum_bitmatrix_rows(x, out_ret, partials_block_size=None, n_rows_raw=None):
 
     # output tensors
     _sum_bitmatrix_rows[(pids_x, pids_y)](
-        x.handle, x.shape_pad[0], x.shape_raw[0], x.stride(0), x.stride(1),  # input
+        x.handle, x.shape[0], x.stride(0), x.stride(1),  # input
         out_ret,  # output [final reduction]
         out_partials, out_partials.stride(0), out_partials.stride(1),
         out_partials.shape[1],  # output [partial reductions]
