@@ -398,12 +398,10 @@ class CompiledKernel:
     def _init_handles(self):
         if self.module is not None:
             return
+        device = driver.active.get_current_device()
         # create launcher
         self.run = driver.active.launcher_cls(self.src, self.metadata)
         # not enough shared memory to run the kernel
-        # on NPU, get_device_properties in fact does not use the device param
-        # but we still need to preserve it because triton defines the API
-        device = 0
         max_shared = driver.active.utils.get_device_properties(device)["max_shared_mem"]
         if self.metadata.shared > max_shared:
             raise OutOfResources(self.metadata.shared, max_shared, "shared memory")
@@ -411,10 +409,8 @@ class CompiledKernel:
         self.module, self.function, self.n_regs, self.n_spills = driver.active.utils.load_binary(
             self.name, self.kernel, self.metadata.shared, device)
 
-    def __getattribute__(self, name):
-        if name == 'run':
-            self._init_handles()
-        return super().__getattribute__(name)
+    # This mechanism introduces heavy runtime overhead.
+    # Commenting __getattribute__ requires explicitly calling _init_handles()
 
     def launch_metadata(self, grid, stream, *args):
         if CompiledKernel.launch_enter_hook is None:
@@ -437,6 +433,8 @@ class CompiledKernel:
         self._init_handles()
 
         def runner(*args, stream=None):
+            if stream is None:
+                stream = self.metadata.stream
             if stream is None:
                 device = driver.active.get_current_device()
                 stream = driver.active.get_current_stream(device)
