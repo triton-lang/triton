@@ -99,7 +99,7 @@
 <dd><p>GDC wait is a blocking instruction that waits for all instructions in a prior kernel to complete before continuing.
 This ensures all memory operations happening before the wait is visible to instructions after it,
 e.g. if the prior kernel writes to address “x” the new values will be visible in this kernel after the wait.</p>
-<p>This instruction is also safe to execute when programatic dependent launch is disabled.</p>
+<p>This instruction is also safe to execute when programmatic dependent launch is disabled.</p>
 <p>See <a class="reference external" href="https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#parallel-synchronization-and-communication-instructions-griddepcontrol">https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#parallel-synchronization-and-communication-instructions-griddepcontrol</a> for more details.</p>
 </dd></dl>
 
