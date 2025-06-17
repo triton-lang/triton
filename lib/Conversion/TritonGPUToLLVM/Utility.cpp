@@ -150,9 +150,7 @@ applyLinearLayout(Location loc, RewriterBase &rewriter,
                   ArrayRef<std::pair<StringAttr, Value>> indices) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   assert(layout.getNumInDims() == indices.size());
-  for (auto [inDimName, idx] : indices) {
-    assert(layout.hasInDim(inDimName) && "Invalid inDimName");
-  }
+  assert(llvm::equal(layout.getInDimNames(), llvm::make_first_range(indices)));
 
   // This function can emit a lot of MLIR code, which ultimately makes
   // compilation slow.  (We think this shouldn't be the case -- it's not *that*

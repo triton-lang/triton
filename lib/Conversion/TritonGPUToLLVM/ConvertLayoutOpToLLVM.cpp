@@ -683,7 +683,7 @@ void ConvertLayoutOpUsingLinearLayoutsConversion::transferWithinWarp(
     // At the same time, for each register, P1 returns the source value index
     // to provide as the shuffle value.
     auto out = applyLinearLayout(loc, rewriter, P1,
-                                 {{kLane, laneId}, {kRegister, b.i32_val(i)}});
+                                 {{kRegister, b.i32_val(i)}, {kLane, laneId}});
     assert(out.size() == 1);
     Value srcRegIdx = out.front().second;
     // The size of the input lane dimension is the number of selects to emit.
@@ -698,7 +698,7 @@ void ConvertLayoutOpUsingLinearLayoutsConversion::transferWithinWarp(
     }
 
     out = applyLinearLayout(loc, rewriter, Cp,
-                            {{kLane, laneId}, {kRegister, b.i32_val(i)}});
+                            {{kRegister, b.i32_val(i)}, {kLane, laneId}});
     assert(out.size() == 1);
     Value shflIdx = out.front().second;
     shflOuts[i] = targetInfo.shuffleIdx(rewriter, loc, shflSrc, shflIdx);
@@ -712,7 +712,7 @@ void ConvertLayoutOpUsingLinearLayoutsConversion::transferWithinWarp(
     Value result = b.undef(srcValues.front().getType());
 
     auto out = applyLinearLayout(loc, rewriter, P2inv,
-                                 {{kLane, laneId}, {kRegister, b.i32_val(i)}});
+                                 {{kRegister, b.i32_val(i)}, {kLane, laneId}});
     Value resultIdx = out.front().second;
     for (int j : llvm::seq(reducedP2.getInDimSize(kLane))) {
       int32_t check =
