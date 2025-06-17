@@ -159,10 +159,9 @@ def sort_tokens(expt_scal, expt_indx, bitmatrix):
 class PruneRouting(torch.autograd.Function):
 
     @staticmethod
-    def forward(ctx, expt_scal, expt_indx, bitmatrix, simulated_ep):
+    def forward(ctx, expt_scal, expt_indx, bitmatrix, n_expts_tot, simulated_ep):
         from .compaction import compaction
         n_tokens_pad = expt_scal.shape[0]
-        n_expts_tot = bitmatrix.shape[-1]
         assert n_expts_tot % simulated_ep == 0
         _routing_clear_bitmatrix[(n_tokens_pad, )](
             bitmatrix.handle,
@@ -179,8 +178,8 @@ class PruneRouting(torch.autograd.Function):
         return expt_scal, expt_indx, bitmatrix
 
 
-def prune_routing(expt_scal, expt_indx, bitmatrix, simulated_ep):
-    return PruneRouting.apply(expt_scal, expt_indx, bitmatrix, simulated_ep)
+def prune_routing(expt_scal, expt_indx, bitmatrix, n_expts_tot, simulated_ep):
+    return PruneRouting.apply(expt_scal, expt_indx, bitmatrix, n_expts_tot, simulated_ep)
 
 
 # --------------------------
@@ -248,13 +247,8 @@ def routing(logits, n_expts_act, sm_first=False, expt_indx=None, simulated_ep=1,
                                            apply_softmax=not sm_first, y_indx=expt_indx, n_rows=n_rows)
     # mutate bitmatrix
     if simulated_ep > 1:
-        expt_scal, expt_indx, bitmatrix = prune_routing(expt_scal, expt_indx, bitmatrix, simulated_ep)
+        expt_scal, expt_indx, bitmatrix = prune_routing(expt_scal, expt_indx, bitmatrix, logits.shape[-1], simulated_ep)
     hist, topk_indx, gate_indx, gate_scal = sort_tokens(expt_scal, expt_indx, bitmatrix)
-    print(expt_scal)
-    print(expt_indx)
-    print(hist)
-    print(topk_indx)
-    print(gate_indx)
     # pack the matmul data structure
     n_expts_tot = logits.shape[-1] // simulated_ep
     hist = hist[:n_expts_tot]
