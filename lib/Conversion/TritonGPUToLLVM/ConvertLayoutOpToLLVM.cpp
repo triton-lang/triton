@@ -114,32 +114,6 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     return success();
   }
 
-  std::pair<int, ColumnAction> largestVectorisation(MLIRContext *ctx,
-                                                    const LinearLayout &cvt,
-                                                    int bitwidth) const {
-    // Find the largest vectorisation we can use:
-    StringAttr kReg = str_attr("register");
-    StringAttr kOffset = str_attr("offset");
-    LinearLayout quot;
-    LinearLayout tile;
-    ColumnAction permutation;
-    for (int v = 128 / bitwidth; v >= 1; v /= 2) {
-      tile = LinearLayout::identity1D(v, kReg, kOffset);
-      auto maybePerm = regPermForDivide(cvt, tile, /*left=*/true);
-      if (!maybePerm) {
-        continue;
-      }
-      permutation = *maybePerm;
-      auto newCvt = permutation.apply(cvt);
-      auto maybeQuot = divideLeft(newCvt, tile);
-      if (!maybeQuot) {
-        continue;
-      }
-      return {v, permutation};
-    }
-    llvm_unreachable("No vectorisation found");
-  }
-
   // Close cousin of lowerLdStMatrix in MemoryOpToLLVM.cpp
   // We might want to merge them at some point, but having to support
   // ldmatrix.trans makes the code in lowerLdStMatrix a bit specific
@@ -159,19 +133,19 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     auto kLane = str_attr("lane");
     auto kWarp = str_attr("warp");
     auto kOffset = str_attr("offset");
-    auto bitwidth = llvmElemTy.getIntOrFloatBitWidth();
 
-    auto [vec, permutation] = largestVectorisation(ctx, cvt, bitwidth);
-    assert(vec >= elemsPerVec);
-    elemsPerVec = vec;
-
+    // Form the map from value to offset
+    auto tile = LinearLayout::identity1D(elemsPerVec, kReg, kOffset);
+    // By construction, there is a register permutation that allows us to
+    // divideLeft
+    auto permutation = *regPermForDivide(cvt, tile, /*left=*/true);
     cvt = permutation.apply(cvt);
     if (isStore) {
       vals = permutation.apply(vals);
     }
 
-    auto tile = LinearLayout::identity1D(vec, kReg, kOffset);
-    auto quot = *divideLeft(cvt, tile);
+    // By construction of the smemLl, we can divideLeft
+    LinearLayout quot = *divideLeft(cvt, tile);
     LinearLayout reps = zerosLike(tile) * quot;
 
     auto [nAdditive, permStrides] = actionAdditiveStrides(reps);
@@ -184,6 +158,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     // If we don't perform the computations in i8, the compiler would
     // have to divide the computation by bitwdith / 8 and then lift this
     // shl, which often it's not able to do.
+    auto bitwidth = llvmElemTy.getIntOrFloatBitWidth();
     auto i8Tile =
         zerosLike(LinearLayout::identity1D(bitwidth / 8, kReg, kOffset));
     auto i8Reps = i8Tile * reps;
