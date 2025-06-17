@@ -4,7 +4,7 @@ from .reduction_details.reduce_bitmatrix import clear_sums, sum_bitmatrix_rows
 
 class Tensor:
 
-    def __init__(self, handle, shape, swizzle_mode=None, shape_max=None):
+    def __init__(self, handle, shape, shape_max=None, swizzle_mode=None):
         if shape_max is None:
             shape_max = [None] * len(shape)
         self.handle = handle

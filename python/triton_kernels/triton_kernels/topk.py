@@ -8,7 +8,7 @@ from triton_kernels.datastruct import Tensor
 
 def topk_forward(x, k, apply_softmax=True, dim=1, return_bitmatrix=True, y_indx=None, n_rows=None):
     if not isinstance(x, Tensor):
-        x = Tensor(x, [x.shape[0] if n_rows is None else n_rows, x.shape[1]], [x.shape[0], None])
+        x = Tensor(x, [x.shape[0] if n_rows is None else n_rows, x.shape[1]], [x.shape[0], x.shape[1]])
     cdiv = lambda a, b: (a + b - 1) // b
     BLOCK_M = 32
     BLOCK_N = 32
