@@ -21,6 +21,9 @@
 #NVMMA_SHARED_64 = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 16}>
 #NVMMA_SHARED_128 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
 #NVMMA_SHARED_FP4PADDED = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 8, fp4Padded = true}>
+#PADDED_SHARED_0 = #ttg.padded_shared<[256:+8] {order = [1, 0]}>
+#PADDED_SHARED_1 = #ttg.padded_shared<[128:+4, 256:+8] {order = [1, 0]}>
+#PADDED_SHARED_2 = #ttg.padded_shared<[64:+2, 128:+4, 256:+8] {order = [1, 0]}>
 
 #smem = #ttg.shared_memory
 
@@ -937,4 +940,64 @@ tt.func @nvmma_alignment(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f
   tt.return
 }
 
+
+// expected-remark @below {{padded_shared_layout_size}}
+// expected-remark @below {{size = 1058}}
+tt.func @padded_shared_layout_size() {
+  // expected-remark @+2 {{offset = 0, size = 510}}
+  // 255 * 2B = 510B
+  %alloc0 = ttg.local_alloc : () -> !ttg.memdesc<1x255xf16, #PADDED_SHARED_0, #ttg.shared_memory, mutable>
+  // expected-remark @+2 {{offset = 0, size = 528}}
+  // (256 + 8) * 2B = 528B
+  %alloc1 = ttg.local_alloc : () -> !ttg.memdesc<1x256xf16, #PADDED_SHARED_0, #ttg.shared_memory, mutable>
+  // expected-remark @+2 {{offset = 0, size = 530}}
+  // (257 + 8) * 2B = 530B
+  %alloc2 = ttg.local_alloc : () -> !ttg.memdesc<1x257xf16, #PADDED_SHARED_0, #ttg.shared_memory, mutable>
+  // expected-remark @+2 {{offset = 0, size = 1038}}
+  // (511 + 8) * 2B = 1038B
+  %alloc3 = ttg.local_alloc : () -> !ttg.memdesc<1x511xf16, #PADDED_SHARED_0, #ttg.shared_memory, mutable>
+  // expected-remark @+2 {{offset = 0, size = 1056}}
+  // (512 + 8 * 2) * 2B = 1056B
+  %alloc4 = ttg.local_alloc : () -> !ttg.memdesc<1x512xf16, #PADDED_SHARED_0, #ttg.shared_memory, mutable>
+  // expected-remark @+2 {{offset = 0, size = 1058}}
+  // (513 + 8 * 2) * 2B = 1058B
+  %alloc5 = ttg.local_alloc : () -> !ttg.memdesc<1x513xf16, #PADDED_SHARED_0, #ttg.shared_memory, mutable>
+  // expected-remark @+2 {{offset = 0, size = 528}}
+  // (16 * 16 + 8) * 2B = 528B
+  %alloc6 = ttg.local_alloc : () -> !ttg.memdesc<16x16xf16, #PADDED_SHARED_0, #ttg.shared_memory, mutable>
+  // expected-remark @+2 {{offset = 0, size = 1056}}
+  // (16 * 32 + 8 * 2) * 2B = 1056B
+  %alloc7 = ttg.local_alloc : () -> !ttg.memdesc<16x32xf16, #PADDED_SHARED_0, #ttg.shared_memory, mutable>
+  // expected-remark @+2 {{offset = 0, size = 1008}}
+  // (31 * 16 + 8) * 2B = 1008B
+  %alloc8 = ttg.local_alloc : () -> !ttg.memdesc<31x16xf16, #PADDED_SHARED_0, #ttg.shared_memory, mutable>
+  tt.return
+}
+
+// expected-remark @below {{padded_shared_layout_element_type}}
+// expected-remark @below {{size = 16896}}
+tt.func @padded_shared_layout_element_type() {
+  // expected-remark @+2 {{offset = 0, size = 4224}}
+  // (16 * 256 + 8 * 16) * 1B = 4224B
+  %alloc0 = ttg.local_alloc : () -> !ttg.memdesc<16x256xi8, #PADDED_SHARED_0, #ttg.shared_memory, mutable>
+  // expected-remark @+2 {{offset = 0, size = 8448}}
+  // (16 * 256 + 8 * 16) * 2B = 8448B
+  %alloc1 = ttg.local_alloc : () -> !ttg.memdesc<16x256xf16, #PADDED_SHARED_0, #ttg.shared_memory, mutable>
+  // expected-remark @+2 {{offset = 0, size = 16896}}
+  // (16 * 256 + 8 * 16) * 4B = 16896B
+  %alloc2 = ttg.local_alloc : () -> !ttg.memdesc<16x256xf32, #PADDED_SHARED_0, #ttg.shared_memory, mutable>
+  tt.return
+}
+
+// expected-remark @below {{padded_shared_layout_multi_tier}}
+// expected-remark @below {{size = 4480}}
+tt.func @padded_shared_layout_multi_tier() {
+  // expected-remark @+2 {{offset = 0, size = 4352}}
+  // (16 * 256 + 4 * 32 + 8 * 16) * 1B = 4352B
+  %alloc0 = ttg.local_alloc : () -> !ttg.memdesc<16x256xi8, #PADDED_SHARED_1, #ttg.shared_memory, mutable>
+  // expected-remark @+2 {{offset = 0, size = 4480}}
+  // (16 * 256 + 2 * 64 + 4 * 32 + 8 * 16) * 1B = 4480B
+  %alloc1 = ttg.local_alloc : () -> !ttg.memdesc<16x256xi8, #PADDED_SHARED_2, #ttg.shared_memory, mutable>
+  tt.return
+}
 }
