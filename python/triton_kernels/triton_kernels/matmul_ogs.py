@@ -577,12 +577,12 @@ def matmul_ogs(x, w, bias,
         fused_activation = FusedActivation(FnSpecs.default(), tuple(), 1)
     if epilogue is None:
         epilogue = Epilogue(FnSpecs.default(), tuple(), tuple(), False)
-    if routing_data is None:
-        routing_data = RoutingData(None, None, w.shape[0], 1)
     if w.ndim == 2:
         w = w.view(1, w.shape[-2], w.shape[-1])
     if x.ndim == 2:
         x = x.view(1, x.shape[-2], x.shape[-1])
+    if routing_data is None:
+        routing_data = RoutingData(None, None, w.shape[0], 1)
     assert w.ndim == 3
     assert x.ndim == 3
     assert w.shape[0] == routing_data.n_expts_tot

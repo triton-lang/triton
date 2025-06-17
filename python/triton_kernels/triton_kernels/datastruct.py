@@ -45,8 +45,7 @@ class Bitmatrix(Tensor):
     _scratchpad: torch.Tensor
 
     def __init__(self, handle, shape, shape_max, scratchpad=None):
-        # if handle.shape[-1]*32 != shape[-1], behaves as zero-padded
-        assert shape[-1] % 32 == 0
+        assert handle.shape[-1] * 32 == shape[-1]
         assert handle.ndim == 2
         super().__init__(handle, shape, shape_max)
         assert self.dtype == torch.uint32
@@ -59,7 +58,7 @@ class Bitmatrix(Tensor):
             self._scratchpad = clear_sums(n_cols, dev)
         out_ret = self._scratchpad[:n_cols]
         self._scratchpad = None  # throw error if we try to sum again
-        return sum_bitmatrix_rows(self, out_ret, partials_block_size, self.shape[0])
+        return sum_bitmatrix_rows(self, out_ret, partials_block_size)
 
 
 class SwizzledTensor:
@@ -101,6 +100,9 @@ class SwizzledTensor:
         self.shape = self._compute_shape(handle, swizzle_mode)
         self.strides = self._compute_stride(handle, swizzle_mode)
         self.swizzle_mode = swizzle_mode
+
+    def numel(self):
+        return self.handle.numel()
 
     def element_size(self):
         return self.handle.element_size()
