@@ -15,7 +15,6 @@ from .matmul_ogs_details._matmul_ogs import _matmul_ogs
 from .matmul_ogs_details._p_matmul_ogs import _p_matmul_ogs, get_per_device_per_stream_alloc_fn
 from .matmul_ogs_details._finalize_matmul import _finalize_matmul
 from .matmul_ogs_details.opt_flags import make_opt_flags, OptFlags
-from .matmul_ogs_details.fast_contiguous import fast_contiguous
 from .numerics_details.mxfp import SwizzlingType
 from .specialize import specialize
 from .datastruct import SwizzledTensor
@@ -272,16 +271,15 @@ def none_or_tma_compatible(x):
 
 @dataclass(frozen=True)
 class PreprocessingFeatures:
-    w_want_k_major: bool
+    swap_xw: bool
+
 
 def init_preprocessing_features(w, precision_config, opt_flags):
-    w_want_k_major = False
-    if not target_info.cuda_capability_geq(10, 0):
-        # Hopper transpose. Reduction dimension must be contiguous.
-        if w.stride(1) != 1 and w.dtype.itemsize == 1:
-            w_want_k_major = True
-    return PreprocessingFeatures(w_want_k_major)
-
+    mx_ctx = precision_config.mx_ctx
+    swap_xw = False  # Whether or not to swap X and W operands to the tl.dot
+    if target_info.cuda_capability_geq(10, 0):
+        swap_xw = mx_ctx.weight_scale is not None and opt_flags.block_m <= 64 and opt_flags.is_persistent
+    return PreprocessingFeatures(swap_xw)
 
 def apply_preprocessing_features(x, w, gather_indx, scatter_indx, routing_data, opt_flags, preprocessing_features):
     has_fused_scatter_scratchpad = opt_flags.fused_scatter and routing_data.n_expts_act > 1
@@ -307,8 +305,6 @@ def apply_preprocessing_features(x, w, gather_indx, scatter_indx, routing_data, 
         finalize_scatter_idxs = None
     else:
         writeback_idxs, writeback_size, finalize_scatter_idxs = None, None, None
-    if preprocessing_features.w_want_k_major:
-        w = fast_contiguous(w.transpose(-1, -2)).transpose(-1, -2)
     # preprocess routing information and ptr lookup table
     M = x.shape[1] if gather_indx is None else gather_indx.src_indx.shape[0]
     return x, w, writeback_idxs, writeback_size, finalize_scatter_idxs
@@ -592,6 +588,9 @@ def matmul_ogs(x, w, bias,
     # unpack scales
     mx_ctx = precision_config.mx_ctx
     has_mx = mx_ctx.weight_scale is not None
+    is_hopper_fp8 = not target_info.cuda_capability_geq(10, 0) and w.dtype.itemsize == 1
+    if has_mx: assert w.stride(1) == 1, "`w` must be column-major when it has data-type mxfp"
+    if is_hopper_fp8: assert w.stride(1) == 1, "`w` must be column-major when it has data-type FP8 on capability < 10"
     w_scale = None if mx_ctx.weight_scale is None else SwizzledTensor(mx_ctx.weight_scale, mx_ctx.swizzle_scale)
     w = w if w_scale is None else SwizzledTensor(w, mx_ctx.swizzle_value)
     # determine shapes
@@ -675,57 +674,6 @@ def matmul_ogs(x, w, bias,
     if isinstance(w_tensor, torch.Tensor):
         w_tensor = flex.rhs_data.reinterpret(w)
     kernels = get_kernels(epilogue.specs, fused_activation.specs)
-    # print(
-    #     flex.out_data.reinterpret(memory["output"]),
-    #     flex.out_data.reinterpret(out0), *out0.stride(),
-    #     *out0_flex,
-    #     x_tensor, x.stride(0), x.stride(1), x.stride(2),
-    #     flex.lhs_data.scale,
-    #     w_tensor, w.stride(0), w.stride(1), w.stride(2), w.stride(2) != 1,
-    #     flex.rhs_data.scale,
-    #     mx_tensor, mx_scale_stride_e, mx_scale_stride_k, mx_scale_stride_n, mx_scale_stride_n != 1,
-    #     bias, bias_stride,
-    #     x.shape[1],
-    #     x.shape[1] if routing_data.expt_hist is None else None,
-    #     N, K,
-    #     betas, gammas,
-    #     None if gather_indx is None else gather_indx.src_indx,
-    #     None if scatter_indx is None else scatter_indx.src_indx,
-    #     num_indx,
-    #     writeback_idxs, writeback_size,
-    #     expt_hist, expt_token_offs_raw, expt_hist_sum, expt_block_pid_map,
-    #     batch_size, grid_m, grid_n,
-    #     out_alpha,
-    #     *fused_activation.fn_args, fused_activation.reduction_n,
-    #     *epilogue.fn_arg_values_matmul,
-    #     routing_data.n_expts_tot, routing_data.n_expts_act,
-    #     precision_config.max_num_imprecise_acc,
-    #     precision_config.allow_tf32,
-    #     precision_config.flexpoint_saturate_inf,
-    #     flex.rhs_data.is_per_batch,
-    #     opt_flags.block_m,
-    #     opt_flags.block_n,
-    #     opt_flags.block_k,
-    #     opt_flags.group_m,
-    #     opt_flags.xcd_swizzle,
-    #     mx_ctx.swizzle_value.name if mx_ctx.swizzle_value else None,
-    #     mx_ctx.swizzle_scale.name if mx_ctx.swizzle_scale else None,
-    #     opt_flags.epilogue_subtile,
-    #     opt_flags.split_k,
-    #     K % opt_flags.block_k == 0,
-    #     opt_flags.w_cache_modifier,
-    #     routing_data.expected_tokens_per_expt,
-    #     opt_flags.num_warps,
-    #     opt_flags.num_stages,
-    #     opt_flags.arch,
-    #     should_upcast_indices(x, w, out0),
-    #     out0.stride(-2) * out0.dtype.itemsize % 16 != 0,
-    #     grid if opt_flags.is_persistent else 0,
-    #     opt_flags.target_kernel_kwargs
-    # )
-    print(x.stride(0), x.stride(1), x.stride(2))
-    print(w.stride(0), w.stride(1), w.stride(2), w.stride(2) != 1)
-    print(mx_scale_stride_e, mx_scale_stride_k, mx_scale_stride_n, mx_scale_stride_n != 1)
     (kernels._p_matmul_ogs if opt_flags.is_persistent else kernels._matmul_ogs)[(grid,)](
                    flex.out_data.reinterpret(memory["output"]),
                    flex.out_data.reinterpret(out0), *out0.stride(),
@@ -771,6 +719,7 @@ def matmul_ogs(x, w, bias,
                    arch=opt_flags.arch,
                    UPCAST_INDICES=should_upcast_indices(x, w, out0),
                    DISABLE_Y_TMA=out0.stride(-2) * out0.dtype.itemsize % 16 != 0,
+                   SWAP_XW=preprocessing_features.swap_xw,
                    NUM_SMS = grid if opt_flags.is_persistent else 0,
                    **opt_flags.target_kernel_kwargs)
     # post-processing
