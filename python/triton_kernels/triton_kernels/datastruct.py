@@ -32,7 +32,7 @@ class Tensor:
             return s0, s2, s1
         return strides
 
-    def __init__(self, handle, shape=None, shape_max=None, swizzle_mode=None):
+    def __init__(self, handle, shape=None, element_bitwidth=None, shape_max=None, swizzle_mode=None):
         if shape is None:
             shape = handle.shape
         if shape_max is None:
