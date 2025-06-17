@@ -970,8 +970,8 @@ static void decomposeMixedModeDotOp(ModuleOp mod) {
 
 FailureOr<WmmaIntrinsic> chooseWmmaInstruction(Location loc, int wmmaVersion,
                                                RankedTensorType cType,
-                                               Type aElemType, Type bElemType, Type cElemType,
-                                               int inputKSize,
+                                               Type aElemType, Type bElemType,
+                                               Type cElemType, int inputKSize,
                                                int enforcedNonKDim) {
   // number of matrix elements along k dim per one WMMA instruction
   unsigned kDim = 0;
@@ -1012,12 +1012,12 @@ FailureOr<WmmaIntrinsic> chooseWmmaInstruction(Location loc, int wmmaVersion,
   return maybeWmmaIntrinsic;
 }
 
-FailureOr<WmmaIntrinsic> chooseWmmaInstruction(tt::DotOp dot, OperandTypesVector operandTypes, int wmmaVersion,
-                                               int nonKDim) {
+FailureOr<WmmaIntrinsic> chooseWmmaInstruction(tt::DotOp dot,
+                                               OperandTypesVector operandTypes,
+                                               int wmmaVersion, int nonKDim) {
 
   return chooseWmmaInstruction(dot.getLoc(), wmmaVersion, dot.getC().getType(),
-                               operandTypes[0],
-                               operandTypes[1],
+                               operandTypes[0], operandTypes[1],
                                operandTypes[2],
                                dot.getA().getType().getShape().back(), nonKDim);
 }
