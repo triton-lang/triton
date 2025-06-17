@@ -149,30 +149,12 @@ class TensorDescriptorBuilder:
         return x.view(*new_shape)
 
     @staticmethod
-    def create_input_descriptor_gather(x_tensor: torch.Tensor, block_k: int) -> TensorDescriptor:
-        """Create a tensor descriptor for input matrix X via TMA gather"""
-        x = TensorDescriptorBuilder.squeeze_after_dim(x_tensor)
-        assert x.ndim == 2, "TMA gather descriptor requires 2D input"
-        return TensorDescriptor.from_tensor(x, block_shape=[1, block_k])
-
-    @staticmethod
     def create_descriptor(x_tensor: torch.Tensor, block_m: int, block_k: int) -> TensorDescriptor:
         """Create a tensor descriptor for matrix X via TMA"""
         x_tensor = TensorDescriptorBuilder.squeeze_after_dim(x_tensor)
         assert x_tensor.ndim in [2, 3], "TMA descriptor builder expects 2D or 3D input"
         block_shape = [1] * (x_tensor.ndim - 2) + [block_m, block_k]
         return TensorDescriptor.from_tensor(x_tensor, block_shape=block_shape)
-
-    @staticmethod
-    def create_input_descriptor(x_tensor: torch.Tensor, block_m: int, block_k: int, use_gather_tma: bool,
-                                use_load_tma: bool) -> TensorDescriptor:
-        """Create a tensor descriptor for input matrix X based on TMA usage"""
-        if use_gather_tma:
-            return TensorDescriptorBuilder.create_input_descriptor_gather(x_tensor, block_k)
-        elif use_load_tma:
-            return TensorDescriptorBuilder.create_descriptor(x_tensor, block_m, block_k)
-        else:
-            assert False, "Either gather or load must be enabled"
 
 
 # ---------------------
@@ -592,17 +574,10 @@ def _create_tma_descriptors(
 ) -> Tuple[bool, torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
     """Create and cache TMA descriptors for tensors."""
 
-    SUPPORTS_TMA_GS = target_info.cuda_capability_geq(10, 0)
-    USE_GATHER_TMA: bool = HAS_GATHER and SUPPORTS_TMA_GS
-    X_USE_LOAD_TMA: bool = not HAS_GATHER and not USE_GATHER_TMA
-
     x_tensor_or_desc, mx_desc_and_transpose = x, (None, False)
 
-    if USE_GATHER_TMA or X_USE_LOAD_TMA:
-        x_tensor_or_desc = TensorDescriptorBuilder.create_input_descriptor(
-                x, opt_flags.block_m, opt_flags.block_k,
-                USE_GATHER_TMA, X_USE_LOAD_TMA
-            )
+    if not HAS_GATHER:
+        x_tensor_or_desc = TensorDescriptorBuilder.create_descriptor(x, opt_flags.block_m, opt_flags.block_k)
 
     w_transpose = w.stride(2) != 1
     w_desc = TensorDescriptorBuilder.create_weight_descriptor(
@@ -768,7 +743,7 @@ def matmul_ogs(x, w, bias,
     (kernels._p_matmul_ogs if opt_flags.is_persistent else kernels._matmul_ogs)[(n_cta,)](
                    flex.out_data.reinterpret(memory["output"]),
                    flex.out_data.reinterpret(out0), *out0.stride(), *out0_flex,
-                   x_tensor, flex.lhs_data.reinterpret(x), x.stride(0), x.stride(1), x.stride(2),
+                   x_tensor, x.stride(0), x.stride(1), x.stride(2),
                    flex.lhs_data.scale,
                    w_tensor, w.stride(0), w.stride(1), w.stride(2), w_tma_transpose,
                    flex.rhs_data.scale,

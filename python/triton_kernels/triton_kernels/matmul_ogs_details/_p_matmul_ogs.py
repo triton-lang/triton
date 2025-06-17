@@ -108,7 +108,7 @@ _matmul_ogs_repr = make_matmul_repr("_p_matmul_ogs", [0, 1, 2])
 def _p_matmul_ogs(
              Y, Out, stride_y_k, stride_y_z, stride_y_m, stride_y_n,
              YExpectedScale, YActualScale, YChecksumScale,
-             X, XPtr, stride_x_z, stride_x_m, stride_x_k,
+             X, stride_x_z, stride_x_m, stride_x_k,
              XScale,
              W, stride_w_e, stride_w_k, stride_w_n, W_TRANSPOSE: tl.constexpr,
              WScale,
@@ -214,16 +214,19 @@ def _p_matmul_ogs(
 
     USE_FLEXPOINT_SCALE: tl.constexpr = YActualScale is not None or YChecksumScale is not None
 
-    USE_GATHER_TMA: tl.constexpr = GatherIndx is not None and isinstance(X, tl.tensor_descriptor)
+    USE_GATHER_TMA: tl.constexpr = GatherIndx is not None and cuda_capability_geq(10, 0)
     X_USE_LOAD_TMA: tl.constexpr = GatherIndx is None and isinstance(X, tl.tensor_descriptor)
     USE_SCATTER_TMA: tl.constexpr = (cuda_capability_geq(10, 0) and HAS_FUSED_SCATTER) and not DISABLE_Y_TMA
+    INT_MAX: tl.constexpr = 2147483647
 
     if USE_GATHER_TMA:
-        # TODO: Workaround because using the host side descriptor is oddly slower
-        X = _make_device_tma_desc_workaround(X, XPtr)
+        X = tl.make_tensor_descriptor(X,
+            shape=[INT_MAX, K],
+            strides=[stride_x_m, stride_x_k],
+            block_shape=[1, BLOCK_K]
+        )
 
     if USE_SCATTER_TMA:
-        INT_MAX: tl.constexpr = 2147483647
         y_desc = tl.make_tensor_descriptor(
             Y,
             # No masking on the M dimension because we manually mask by setting indices to INT_MAX
