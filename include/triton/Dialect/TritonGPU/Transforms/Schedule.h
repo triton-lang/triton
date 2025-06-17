@@ -45,7 +45,7 @@ public:
     const_iterator begin() const { return orderClusters.begin(); }
     iterator end() { return orderClusters.end(); }
     const_iterator end() const { return orderClusters.end(); }
-    size_t size() { return orderClusters.size(); }
+    size_t size() const { return orderClusters.size(); }
     iterator newAtBack() {
       orderClusters.push_back(orderClusters.size());
       return std::prev(orderClusters.end());
@@ -88,7 +88,7 @@ public:
   DenseMap<Operation *, std::pair<int, Cluster>> opToStageAndCluster;
 
   void setNumStages(int numStages) { this->numStages = numStages; }
-  int getNumStages() { return numStages; }
+  int getNumStages() const { return numStages; }
 
   void insert(Operation *op, int stage, Cluster cluster) {
     if (stage >= numStages) {
@@ -115,7 +115,7 @@ public:
 
   void erase(Operation *op) { opToStageAndCluster.erase(op); }
 
-  int count(Operation *op) { return opToStageAndCluster.count(op); }
+  int count(Operation *op) const { return opToStageAndCluster.count(op); }
 
   std::pair<int, Cluster> operator[](Operation *op) {
     return opToStageAndCluster[op];
@@ -129,25 +129,25 @@ public:
   Cluster splitClusterBefore(Operation *op, scf::ForOp forOp);
 
   // Check if op a will show up before op b in the final unrolled code.
-  bool isOpBefore(Operation *a, Operation *b);
+  bool isOpBefore(Operation *a, Operation *b) const;
 
   // Check if op a is in earlier cluster than op b.
-  bool isOpInEarlierCluster(Operation *a, Operation *b);
+  bool isOpInEarlierCluster(Operation *a, Operation *b) const;
 
   // Check if op a is in the same cluster as op b.
-  bool isOpInSameCluster(Operation *a, Operation *b);
+  bool isOpInSameCluster(Operation *a, Operation *b) const;
 
   SmallVector<std::tuple<Operation *, int, Cluster>>
-  getOpsInOrder(scf::ForOp forOp);
+  getOpsInOrder(scf::ForOp forOp) const;
   std::vector<std::pair<Operation *, unsigned>>
-  createFinalSchedule(scf::ForOp forOp);
+  createFinalSchedule(scf::ForOp forOp) const;
 
   bool empty() const { return opToStageAndCluster.size() == 0; }
   auto end() const { return opToStageAndCluster.end(); }
   auto begin() const { return opToStageAndCluster.begin(); }
 
   // Set <stage, cluster> based on CoarseSchedule.
-  void serialize(scf::ForOp &forOp);
+  void serialize(scf::ForOp &forOp) const;
   // Create a CoarseSchedule based on forOp's <stage, cluster>.
   LogicalResult deSerialize(scf::ForOp &forOp);
 
