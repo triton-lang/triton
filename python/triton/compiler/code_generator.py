@@ -338,6 +338,7 @@ class CodeGenerator(ast.NodeVisitor):
         # Are we currently visiting an ast.arg's default value?  These have some
         # special handling.
         self.visiting_arg_default_value = False
+        self.defined_name = None
 
     builtin_namespace: Dict[str, Any] = {
         _.__name__: _
@@ -603,9 +604,13 @@ class CodeGenerator(ast.NodeVisitor):
             return value
 
         targets = [node.target] if isinstance(node, ast.AnnAssign) else node.targets
-        self.builder.set_loc_def_name(node.targets[0].id)
 
+        # operations of right hand side of assignment will be built after walking through the following self.visit(node.value)
+        # we temporarily store the name of defined globally, and delete it after finishing the
+        self.defined_name = node.targets[0].id
         values = _sanitize_value(self.visit(node.value))
+        self.defined_name = None
+
         assert len(targets) == 1
         self.assignTarget(targets[0], values)
 
@@ -1406,7 +1411,15 @@ class CodeGenerator(ast.NodeVisitor):
             self.cur_node = node
             if hasattr(node, 'lineno') and hasattr(node, 'col_offset'):
                 self.builder.set_loc(self.file_name, self.begin_line + node.lineno, node.col_offset)
+                if hasattr(node, 'target'):
+                    self.builder.set_loc_def_name(node.target[0].id)
+                if hasattr(node, 'targets'):
+                    self.builder.set_loc_def_name(node.targets[0].id)
+                # this syntax defined some variable name
+                if self.defined_name is not None:
+                    self.builder.set_loc_def_name(self.defined_name)
                 last_loc = self.builder.get_loc()
+
             try:
                 ret = super().visit(node)
             except CompilationError:
