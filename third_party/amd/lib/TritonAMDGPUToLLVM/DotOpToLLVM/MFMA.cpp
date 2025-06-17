@@ -272,10 +272,11 @@ struct DotOpMFMAConversionHelper {
         op.getInputPrecision() == InputPrecision::TF32 && mfmaVersion == 3;
     StringRef intrinsicName;
     FailureOr<MfmaIntrinsic> maybeMfmaIntrinsic = MfmaIntrinsic::selectFor(
-        mfmaVersion, mDim, nDim, kDimOperandSize, elemTyA, elemTyB,
+        op.getLoc(), mfmaVersion, mDim, nDim, kDimOperandSize, elemTyA, elemTyB,
         /*withScale=*/false, allowXF32);
     if (failed(maybeMfmaIntrinsic))
-      llvm::report_fatal_error("No match found in MFMA database\n");
+      return op.emitError(
+          "no matching matrix core intrinsic due to unsupported element type");
 
     unsigned kBase = maybeMfmaIntrinsic->kBase;
 
@@ -583,14 +584,15 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
     auto ctx = op.getContext();
     constexpr bool allowXF32 = false;
     FailureOr<MfmaIntrinsic> maybeMfmaIntrinsic = MfmaIntrinsic::selectFor(
-        mfmaVersion, mDim, nDim,
+        op.getLoc(), mfmaVersion, mDim, nDim,
         aElemType == ScaleDotElemType::E2M1 ? kDimOperandSize * 2
                                             : kDimOperandSize,
         scaleDotElemTypeToMLIRType(ctx, aElemType),
         scaleDotElemTypeToMLIRType(ctx, bElemType),
         /*withScale=*/true, allowXF32);
     if (failed(maybeMfmaIntrinsic))
-      llvm::report_fatal_error("No match found in MFMA database\n");
+      return op.emitError(
+          "no matching matrix core intrinsic due to unsupported element type");
 
     StringRef intrinsicName = maybeMfmaIntrinsic->name;
     unsigned kBase = maybeMfmaIntrinsic->kBase;
