@@ -78,8 +78,8 @@ void emitSynclog(IRRewriter &rewriter, Operation *op,
   os << opName << " time=%lu thread=%u,%u,%u block=%u,%u,%u ";
 
   targetInfo.printf(rewriter, formatStr,
-                    {time64, blockIdx_x, threadIdx_x, blockIdx_y, threadIdx_y,
-                     blockIdx_z, threadIdx_z});
+                    {time64, threadIdx_x, threadIdx_y, threadIdx_z, blockIdx_x,
+                     blockIdx_y, blockIdx_z});
 }
 
 namespace {
