@@ -59,6 +59,7 @@ class Tensor:
         self.is_fp4 = self.dtype == torch.uint8
         self.element_bitwidth = 4 if self.is_fp4 else self.dtype.itemsize * 8
         self.ndim = handle.ndim
+        self.swizzle_mode = swizzle_mode
 
     def stride(self, i=None):
         return self.strides if i is None else self.strides[i]
