@@ -18,8 +18,7 @@ def topk_forward(x, k, apply_softmax=True, dim=1, return_bitmatrix=True, y_indx=
     assert dim == 1
     assert return_bitmatrix
     n_rows, n_cols = x.shape
-    n_rows_max, n_cols_max = x.shape_max
-    assert n_cols is n_cols_max
+    n_rows_max, _ = x.shape_max
     dev = x.device
     # scratchpad tensors
     # NOTE: these are not returned

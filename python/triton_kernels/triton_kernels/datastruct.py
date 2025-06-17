@@ -4,7 +4,37 @@ from .reduction_details.reduce_bitmatrix import clear_sums, sum_bitmatrix_rows
 
 class Tensor:
 
-    def __init__(self, handle, shape, shape_max=None, swizzle_mode=None):
+    def _compute_shape(self, shape, dtype, swizzle_mode):
+        from .numerics_details.mxfp import SwizzlingType
+        shape = list(shape)
+        if dtype == torch.uint8:
+            # Assume 2 fp4s packed into a byte
+            shape[1] *= 2
+        if swizzle_mode == SwizzlingType.HOPPER:
+            shape[1] //= 4
+            shape[2] *= 4
+        return shape
+
+    def _compute_stride(self, shape, strides, swizzle_mode):
+        from .numerics_details.mxfp import SwizzlingType
+        # Check expected properties of the weights.
+        if swizzle_mode == SwizzlingType.BLACKWELL:
+            mxE, mxK, mxN = shape
+
+            # Compute strides of the 5D swizzled tensor.
+            swizzled_shape = (mxE, mxN // 128, mxK // 4, 32, 4, 4)
+            s5 = 1
+            s4 = swizzled_shape[5] * s5  # 4 * 1 = 4
+            s3 = swizzled_shape[4] * s4  # 32 * 4 = 128
+            s2 = swizzled_shape[3] * s3  # 4 * 128 = 512
+            s1 = swizzled_shape[2] * s2  # (mxK//4) * 512
+            s0 = swizzled_shape[1] * s1  # (mxN//128) * ((mxK//4)*512)
+            return s0, s2, s1
+        return strides
+
+    def __init__(self, handle, shape=None, shape_max=None, swizzle_mode=None):
+        if shape is None:
+            shape = handle.shape
         if shape_max is None:
             shape_max = [None] * len(shape)
         self.handle = handle
@@ -14,7 +44,7 @@ class Tensor:
         # shape may contain a mix of `int` and `torch.Tensor`
         is_int = lambda s: isinstance(s, int)
         is_item = lambda s: hasattr(s, "numel") and s.numel() == 1
-        self.shape = shape
+        self.shape = self._compute_shape(shape, handle.dtype, swizzle_mode)
         assert all(map(lambda s: is_int(s) or is_item(s), self.shape))
         # shape_max is guarantee to be all `int`
         self.shape_max = shape_max
@@ -24,12 +54,29 @@ class Tensor:
             if smax is None:
                 self.shape_max[i] = s
         assert all(map(is_int, self.shape_max))
+        # TODO: clean all this up
+        self.strides = self._compute_stride(shape, handle.stride(), swizzle_mode)
+        self.is_fp4 = self.dtype == torch.uint8
+        self.element_bitwidth = 4 if self.is_fp4 else self.dtype.itemsize * 8
+        self.ndim = handle.ndim
 
-    def stride(self, *args):
-        return self.handle.stride(*args)
+    def stride(self, i=None):
+        return self.strides if i is None else self.strides[i]
 
     def data_ptr(self):
         return self.handle.data_ptr()
+
+    # TODO: clean up
+    def numel(self):
+        return self.handle.numel()
+
+    def element_size(self):
+        return self.handle.element_size()
+
+    def permute(self, *permutation):
+        assert self.swizzle_mode is None
+        h = self.handle.permute(*permutation)
+        return Tensor(h, swizzle_mode=self.swizzle_mode)
 
 
 class Bitmatrix(Tensor):
@@ -59,61 +106,3 @@ class Bitmatrix(Tensor):
         out_ret = self._scratchpad[:n_cols]
         self._scratchpad = None  # throw error if we try to sum again
         return sum_bitmatrix_rows(self, out_ret, partials_block_size)
-
-
-class SwizzledTensor:
-
-    def _compute_shape(self, handle, swizzle_mode):
-        from .numerics_details.mxfp import SwizzlingType
-        shape = list(handle.shape)
-        if handle.dtype == torch.uint8:
-            # Assume 2 fp4s packed into a byte
-            shape[1] *= 2
-        if swizzle_mode == SwizzlingType.HOPPER:
-            shape[1] //= 4
-            shape[2] *= 4
-        return tuple(shape)
-
-    def _compute_stride(self, handle, swizzle_mode):
-        from .numerics_details.mxfp import SwizzlingType
-        # Check expected properties of the weights.
-        if swizzle_mode == SwizzlingType.BLACKWELL:
-            mxE, mxK, mxN = handle.shape
-
-            # Compute strides of the 5D swizzled tensor.
-            swizzled_shape = (mxE, mxN // 128, mxK // 4, 32, 4, 4)
-            s5 = 1
-            s4 = swizzled_shape[5] * s5  # 4 * 1 = 4
-            s3 = swizzled_shape[4] * s4  # 32 * 4 = 128
-            s2 = swizzled_shape[3] * s3  # 4 * 128 = 512
-            s1 = swizzled_shape[2] * s2  # (mxK//4) * 512
-            s0 = swizzled_shape[1] * s1  # (mxN//128) * ((mxK//4)*512)
-            return s0, s2, s1
-        return handle.stride()
-
-    def __init__(self, handle, swizzle_mode=None):
-        self.handle = handle
-        self.dtype = handle.dtype
-        self.is_fp4 = self.dtype == torch.uint8
-        self.element_bitwidth = 4 if self.is_fp4 else self.dtype.itemsize * 8
-        self.ndim = handle.ndim
-        self.shape = self._compute_shape(handle, swizzle_mode)
-        self.strides = self._compute_stride(handle, swizzle_mode)
-        self.swizzle_mode = swizzle_mode
-
-    def permute(self, *permutation):
-        assert self.swizzle_mode is None
-        h = self.handle.permute(*permutation)
-        return SwizzledTensor(h, self.swizzle_mode)
-
-    def numel(self):
-        return self.handle.numel()
-
-    def element_size(self):
-        return self.handle.element_size()
-
-    def stride(self, i=None):
-        return self.strides if i is None else self.strides[i]
-
-    def data_ptr(self):
-        return self.handle.data_ptr()

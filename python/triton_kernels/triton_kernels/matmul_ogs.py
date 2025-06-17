@@ -17,7 +17,7 @@ from .matmul_ogs_details._finalize_matmul import _finalize_matmul
 from .matmul_ogs_details.opt_flags import make_opt_flags, OptFlags
 from .numerics_details.mxfp import SwizzlingType
 from .specialize import specialize
-from .datastruct import SwizzledTensor
+from .datastruct import Tensor
 from typing import Tuple, Optional
 
 
@@ -108,7 +108,7 @@ class TensorDescriptorBuilder:
         if transpose:
             block_shape = block_shape[:-2] + [block_shape[-1], block_shape[-2]]
             tensor = tensor.permute(0, 2, 1)
-        if isinstance(tensor, SwizzledTensor):
+        if isinstance(tensor, (Tensor)):
             tensor = tensor.handle
         return TensorDescriptor.from_tensor(tensor, block_shape=block_shape)
 
@@ -246,7 +246,7 @@ class PrecisionConfig:
 
 
 def element_bitwidth(tensor):
-    return tensor.element_bitwidth if isinstance(tensor, SwizzledTensor) else tensor.element_size()*8
+    return tensor.element_bitwidth if isinstance(tensor, Tensor) else tensor.element_size()*8
 
 def none_or_tma_compatible(x):
     if x is None:
@@ -591,8 +591,8 @@ def matmul_ogs(x, w, bias,
     is_hopper_fp8 = not target_info.cuda_capability_geq(10, 0) and w.dtype.itemsize == 1
     if has_mx: assert w.stride(1) == 1, "`w` must be column-major when it has data-type mxfp"
     if is_hopper_fp8: assert w.stride(1) == 1, "`w` must be column-major when it has data-type FP8 on capability < 10"
-    w_scale = None if mx_ctx.weight_scale is None else SwizzledTensor(mx_ctx.weight_scale, mx_ctx.swizzle_scale)
-    w = w if w_scale is None else SwizzledTensor(w, mx_ctx.swizzle_value)
+    w_scale = None if mx_ctx.weight_scale is None else Tensor(mx_ctx.weight_scale, swizzle_mode=mx_ctx.swizzle_scale)
+    w = w if w_scale is None else Tensor(w, swizzle_mode=mx_ctx.swizzle_value)
     # determine shapes
     M = x.shape[1] if gather_indx is None else gather_indx.src_indx.shape[0]
     batch_size = w.shape[0] if routing_data.expt_hist is None else 1
