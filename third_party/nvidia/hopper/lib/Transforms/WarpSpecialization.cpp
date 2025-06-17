@@ -34,7 +34,8 @@ public:
     });
     if (loops.empty())
       return;
-    // FIXME: skip warpspec if there is else block.
+    // FIXME: skip warpspec if there is else block. Need to improve
+    // CodePartitioning to correctly handle channels in else block.
     bool hasElse = false;
     funcOp->walk([&](scf::IfOp ifOp) {
       if (ifOp.elseBlock()) {

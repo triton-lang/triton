@@ -36,27 +36,6 @@ static Value createThreadIdOp(OpBuilder &builder, Location loc) {
 // In Hopper, each task is a warpgroup consisting of 4 warps.
 static const int WARPS_PER_TASK = 4;
 static const int THREADS_PER_TASK = 128;
-#if 0
-void lowerGetAsyncTaskIdOp(Operation *parentOp, int numConsumerGroups) {
-  DenseSet<Operation *> eraseOps;
-  parentOp->walk([&](ttng::GetAsyncTaskIdOp op) {
-    auto loc = op.getLoc();
-    OpBuilder builder(op);
-    Value _4 = builder.create<arith::ConstantIntOp>(loc, WARPS_PER_TASK, 32);
-    Value warpId = builder.create<ttng::GetCanonicalWarpIdOp>(loc);
-    Value asyncTaskId = builder.create<arith::DivUIOp>(loc, warpId, _4);
-    op.getResult().replaceAllUsesWith(asyncTaskId);
-
-    LLVM_DEBUG({
-      LDBG("erasing GetAsyncTask");
-      op->dump();
-    });
-    eraseOps.insert(op);
-  });
-  for (Operation *op : eraseOps)
-    op->erase();
-}
-#endif
 
 Value getMBarrierPhaseBit(OpBuilder &builder, Operation *op,
                           bool emptyBarrier) {
@@ -104,15 +83,7 @@ void processProducerCommitOp(OpBuilder &builder, ttnvws::ProducerCommitOp op,
     arriveOp =
         builder.create<ttng::ArriveBarrierOp>(loc, bufferFull, fullCnt, pred);
   } else {
-#if 0
-    // Each thread arrives.
-    Value pred = builder.create<arith::ConstantIntOp>(loc, 1, 1);
-    arriveOp = builder.create<ttng::MBarrierArriveOp>(
-        loc, bufferFull, pred, /*remoteCTAId*/ nullptr, /*trackAsyncOp*/ true,
-        txCnt);
-#else
     assert(false);
-#endif
   }
 
   assert(op.getOperation()->hasAttr("async_task_id"));
