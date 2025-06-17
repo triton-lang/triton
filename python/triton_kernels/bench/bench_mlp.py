@@ -138,7 +138,7 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP,
     x = x.to(x_dtype)
     # run layer
     proton.start(str(fpath.with_suffix('')), hook="triton")
-    for i in range(100):
+    for i in range(1):
         if n_expts_tot > 1:
             logits = matmul_ogs(xg, wg, bg, precision_config=pcg)
             rdata, gather_indx, scatter_indx = routing(logits, n_expts_act, simulated_ep=EP)
@@ -212,7 +212,7 @@ def roofline_mlp(batch_ranges, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_
 if __name__ == "__main__":
     has_native_mx4 = torch.cuda.get_device_capability(0)[0] >= 10 or get_cdna_version() == 4
     batch_ranges_dense = [(1024, 32768, 1024)]
-    batch_ranges_moe = [(128, 200, 32)]  #, (512, 32000, 128)]
+    batch_ranges_moe = [(128, 160, 32)]  #, (512, 32000, 128)]
     dense_dtypes = ["fp8", "fp8"]
     quantized_dtypes = ["fp8", "mx4"] if has_native_mx4 else ["bf16", "mx4"]
     # roofline_mlp(batch_ranges_dense, 8192, 8192, 1, 1, *dense_dtypes, TP=1, EP=1, name="dense")
