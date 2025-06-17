@@ -100,7 +100,7 @@ for v in list(type_canonicalisation_dict.values()):
 
 def canonicalize_dtype(dtype):
     dtype_str = str(dtype).split(".")[-1]
-    return type_canonicalisation_dict[dtype_str]
+    return type_canonicalisation_dict.get(dtype_str, dtype_str)
 
 
 BITWIDTH_DICT: Dict[str, int] = {
