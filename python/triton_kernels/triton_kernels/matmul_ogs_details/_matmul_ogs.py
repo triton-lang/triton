@@ -255,7 +255,7 @@ def _matmul_ogs(
                 tl.static_assert(tl.extra.cuda.num_warps() == 8, "Only 8 warps are supported for Hopper swizzling. Got %d" % tl.extra.cuda.num_warps())
                 w_scales = unswizzle_mxfp4_scale_hopper(tl.load(MxScalePtrs), num_warps=8)
             else:
-                w_scales = tl.load(MxScalePtrs, mask=mask_k_scale[None, :], other=127)
+                w_scales = tl.load(MxScalePtrs, mask=mask_k_scale[None, :], other=0.0)
 
             if SWIZZLE_MX_VALUE == "HOPPER":
                 # Handshake with the swizzling code
