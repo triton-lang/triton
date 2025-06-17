@@ -1418,6 +1418,10 @@ void init_triton_ir(py::module &&m) {
               Value y_index) -> void {
              self.create<DescriptorScatterOp>(desc, x_indices, y_index, value);
            })
+      .def("create_descriptor_prefetch_tensor_map",
+           [](TritonOpBuilder &self, Value desc) -> void {
+             self.create<DescriptorPrefetchTensorMapOp>(desc);
+           })
       .def("create_reshape",
            [](TritonOpBuilder &self, Value &arg, std::vector<int64_t> &shape,
               bool allowReorder) -> Value {

@@ -5,6 +5,7 @@
 #include "TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
 
 #include "mlir/IR/Value.h"
+#include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -218,6 +219,48 @@ struct TensormapFenceproxyAcquireOpConversion
   }
 };
 
+struct TensormapPrefetchOpConversion
+    : public ConvertOpToLLVMPattern<ttng::TensormapPrefetchOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(ttng::TensormapPrefetchOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    // auto loc = op.getLoc();
+    // auto b = TritonLLVMOpBuilder(loc, rewriter);
+    // constexpr int kWarpSize = 32;
+    // Value threadId = getThreadId(rewriter, loc);
+    // Value pred = b.icmp_slt(threadId, b.i32_val(kWarpSize));
+    // rewriter.create<NVVM::PrefetchTensorMapOp>(loc, adaptor.getDesc(), pred);
+    // rewriter.eraseOp(op);
+    // return success();
+
+    auto loc = op.getLoc();
+    PTXBuilder ptxBuilder;
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+
+    // prepare asm operands
+    auto *descAddrOpr = ptxBuilder.newAddrOperand(adaptor.getDesc(), "l");
+
+    // Define the instruction opcode
+    constexpr int kWarpSize = 32;
+    Value threadId = getThreadId(rewriter, loc);
+    Value pred = b.icmp_slt(threadId, b.i32_val(kWarpSize));
+    auto &prefetch = *ptxBuilder.create<>("prefetch.const.tensormap");
+    prefetch(descAddrOpr).predicate(pred);
+
+    ptxBuilder.launch(rewriter, loc, getVoidType());
+
+    // We run the fence on a single warp, then use a barrier to synchronize the
+    // rest. This ends up being faster than running the fence on each warp.
+    // TODO: Ideally we only emit one barrier after all fences are issued
+    // b.barrier();
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 void zero_fill_tma(Location loc, MLIRContext *ctx,
                    ConversionPatternRewriter &rewriter,
                    const NVIDIA::TargetInfo &targetInfo, Value descPtr) {
@@ -314,5 +357,6 @@ void mlir::triton::NVIDIA::populateTMAToLLVMPatterns(
     RewritePatternSet &patterns, PatternBenefit benefit) {
   patterns.add<TensormapCreateOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<TensormapFenceproxyAcquireOpConversion,
-               ReinterpretTensorDescOpConversion>(typeConverter, benefit);
+               ReinterpretTensorDescOpConversion,
+               TensormapPrefetchOpConversion>(typeConverter, benefit);
 }

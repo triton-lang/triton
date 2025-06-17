@@ -1462,6 +1462,9 @@ class tensor_descriptor_base(base_value):
         y_offset = args[1]
         return _semantic.descriptor_scatter(self, value, x_offsets, y_offset)
 
+    @builtin
+    def prefetch_tensormap(self, _semantic=None) -> tensor:
+        return _semantic.descriptor_prefetch_tensor_map(self)
 
 class tensor_descriptor_type(tensor_descriptor_base_type):
 

@@ -1374,5 +1374,17 @@ def TT_DescriptorScatterOp : TT_Op<"descriptor_scatter", [TT_DescriptorStoreLike
   let hasVerifier = 1;
 }
 
+def TT_DescriptorPrefetchTensorMapOp : TT_Op<"descriptor_prefetch_tensor_map"> {
+  let summary = "prefetch the descriptor tensor map";
+
+  let arguments = (ins
+    Arg<TT_TensorDescType, "", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$desc
+  );
+
+  let assemblyFormat = [{
+    $desc attr-dict `:` qualified(type($desc))
+  }];
+}
+
 
 #endif // Triton_OPS
