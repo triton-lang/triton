@@ -156,10 +156,13 @@ Value mlir::triton::NVIDIA::DotOpMmaV3SmemLoader::smemLoad(
   Value loadDesc = tb.add(descriptor, off_);
   // Add the base at the end to make it easier to do loop invariant code
   // motion.
-  loadDesc = tb.add(
+  // Workaround for a ptxas bug. Emit a Or instruction, as emiting a `add`
+  // triggers an incorrect optimization.
+  auto orOp = tb.or_(
       loadDesc, tb.lshr(tb.shl(tb.ptrtoint(i64_ty, base), tb.int_val(64, 46)),
                         tb.int_val(64, 50)));
-  return loadDesc;
+  orOp.setIsDisjoint(true);
+  return orOp->getResult(0);
 }
 
 DotOpMmaV3SmemLoader loadA(const LLVMTypeConverter *typeConverter,
