@@ -269,15 +269,6 @@ LinearLayout getCoreMatrixLinearLayout(NVMMASharedEncodingAttr shared,
 
 } // namespace
 
-PaddedLayout
-PaddedSharedEncodingAttr::toPaddedLayout(ArrayRef<int64_t> shape) const {
-  auto nonSwizzleAttr = SwizzledSharedEncodingAttr::get(
-      getContext(), /*vec=*/1, /*perPhase=*/1, /*maxPhase=*/1, getOrder(),
-      getCTALayout());
-  LinearLayout ll = swizzledSharedToLinearLayout(shape, nonSwizzleAttr);
-  return PaddedLayout(ll, getIntervals(), getPaddings());
-}
-
 LinearLayout nvmmaSharedToLinearLayout(ArrayRef<int64_t> shape,
                                        NVMMASharedEncodingAttr shared,
                                        bool disableSwizzle) {

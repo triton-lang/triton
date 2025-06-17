@@ -467,6 +467,10 @@ attributes too, for example,
 
     PaddedLayout toPaddedLayout(ArrayRef<int64_t> shape) const;
 
+    // Returns the total number of elements including padding given the input
+    // tensor shape.
+    int64_t getPaddedSize(ArrayRef<int64_t> shape) const;
+
     SmallVector<unsigned> getCTAsPerCGA() const;
     SmallVector<unsigned> getCTAOrder() const;
     SmallVector<unsigned> getCTASplitNum() const;

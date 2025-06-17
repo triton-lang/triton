@@ -316,7 +316,7 @@ SmallVector<int64_t> getShapePerCTA(Attribute layout, ArrayRef<int64_t> shape) {
 SmallVector<int64_t> getAllocationShapePerCTA(Attribute layout,
                                               ArrayRef<int64_t> shapeLogical) {
   SmallVector<int64_t> shape(shapeLogical);
-  if (auto sharedMMALayout = mlir::dyn_cast<NVMMASharedEncodingAttr>(layout)) {
+  if (auto sharedMMALayout = dyn_cast<NVMMASharedEncodingAttr>(layout)) {
     if (sharedMMALayout.getFp4Padded()) {
       auto packedAxis = getOrder(sharedMMALayout, shapeLogical)[0];
       shape[packedAxis] *= 2;
@@ -1698,6 +1698,26 @@ LogicalResult PaddedSharedEncodingAttr::verify(
                        << ") must match CTALayout rank (" << ctaLayout.getRank()
                        << ")";
   return verifyLayoutOrder(emitError, order);
+}
+
+PaddedLayout
+PaddedSharedEncodingAttr::toPaddedLayout(ArrayRef<int64_t> shape) const {
+  auto nonSwizzleAttr = SwizzledSharedEncodingAttr::get(
+      getContext(), /*vec=*/1, /*perPhase=*/1, /*maxPhase=*/1, getOrder(),
+      getCTALayout());
+  LinearLayout ll = toLinearLayout(shape, nonSwizzleAttr);
+  return PaddedLayout(ll, getIntervals(), getPaddings());
+}
+
+int64_t PaddedSharedEncodingAttr::getPaddedSize(ArrayRef<int64_t> shape) const {
+  int64_t unpaddedSize = product(shape);
+  int64_t paddingSize = 0;
+  for (auto [interval, padding] :
+       llvm::zip_equal(getIntervals(), getPaddings())) {
+    paddingSize += (unpaddedSize >> llvm::Log2_32(interval))
+                   << llvm::Log2_32(padding);
+  }
+  return unpaddedSize + paddingSize;
 }
 
 //===----------------------------------------------------------------------===//
