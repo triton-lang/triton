@@ -109,6 +109,8 @@ class TensorDescriptorBuilder:
         if transpose:
             block_shape = block_shape[:-2] + [block_shape[-1], block_shape[-2]]
             tensor = tensor.permute(0, 2, 1)
+        if isinstance(tensor, SwizzledTensor):
+            tensor = tensor.handle
         return TensorDescriptor.from_tensor(tensor, block_shape=block_shape)
 
     @staticmethod
@@ -673,10 +675,6 @@ def matmul_ogs(x, w, bias,
     if isinstance(w_tensor, torch.Tensor):
         w_tensor = flex.rhs_data.reinterpret(w)
     kernels = get_kernels(epilogue.specs, fused_activation.specs)
-    print(opt_flags)
-    print(x_tensor)
-    print(w_tensor)
-    print(mx_tensor)
     (kernels._p_matmul_ogs if opt_flags.is_persistent else kernels._matmul_ogs)[(grid,)](
                    flex.out_data.reinterpret(memory["output"]),
                    flex.out_data.reinterpret(out0), *out0.stride(),
