@@ -635,8 +635,8 @@ BATCH, N_HEADS = 4, 32
 # vary seq length for fixed head and batch=4
 configs = []
 for HEAD_DIM in [64, 128]:
-    for mode in ["fwd"]:
-        for causal in [True]:
+    for mode in ["fwd", "bwd"]:
+        for causal in [True, False]:
             for warp_specialize in [False, True] if is_blackwell() else [False]:
                 configs.append(
                     triton.testing.Benchmark(
