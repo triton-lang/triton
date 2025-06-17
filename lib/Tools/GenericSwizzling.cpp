@@ -343,10 +343,10 @@ LinearLayout optimalSwizzling(const LinearLayout &src, const LinearLayout &dst,
     SmallVector<int32_t> banksInRegSrc;
     SmallVector<int32_t> banksInRegDst;
     for (auto r : bbasis) {
-      if (llvm::any_of(regSrc, [r](int32_t b) { return b == r; })) {
+      if (llvm::is_contained(regSrc, r)) {
         banksInRegSrc.push_back(r);
       }
-      if (llvm::any_of(regDst, [r](int32_t b) { return b == r; })) {
+      if (llvm::is_contained(regDst, r)) {
         banksInRegDst.push_back(r);
       }
     }
@@ -357,7 +357,7 @@ LinearLayout optimalSwizzling(const LinearLayout &src, const LinearLayout &dst,
                          : std::move(banksInRegDst);
     SmallVector<int32_t> others;
     for (auto b : bbasis) {
-      if (!llvm::any_of(newBbasis, [b](int32_t b2) { return b2 == b; })) {
+      if (!llvm::is_contained(newBbasis, b)) {
         others.push_back(b);
       }
     }
