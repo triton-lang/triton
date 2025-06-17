@@ -35,14 +35,6 @@ def _tma_load_2d(desc, offs, transpose: tl.constexpr = False):
         res = tl.trans(res)
     return res
 
-@triton.jit
-def _make_device_tma_desc_workaround(desc, ptr):
-    return tl.make_tensor_descriptor(
-        ptr,
-        shape=desc.shape,
-        strides=desc.strides[:-1] + (1,),
-        block_shape=desc.block_shape
-    )
 
 # Helper function to recreate a TMA desc with the same fields, but with a new pointer and optional new shape.
 @triton.jit
