@@ -462,6 +462,10 @@ class CodeGenerator(ast.NodeVisitor):
                 init_tys.append(liveins[name].type)
                 init_handles.extend(live_val)
 
+        # reset local scope to not pick up local defs from the dry run.
+        self.lscope = liveins.copy()
+        self.local_defs = {}
+
         return names, init_handles, init_tys
 
     #
@@ -1117,9 +1121,6 @@ class CodeGenerator(ast.NodeVisitor):
             self.scf_stack.append(node)
             for_op_body = for_op.get_body(0)
             self.builder.set_insertion_point_to_start(for_op_body)
-            # reset local scope to not pick up local defs from the previous dry run.
-            self.lscope = liveins.copy()
-            self.local_defs = {}
             block_handles = [for_op_body.arg(i + 1) for i in range(len(init_handles))]
             block_args = unflatten_ir_values(block_handles, init_tys)
             for name, val in zip(names, block_args):
