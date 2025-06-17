@@ -250,6 +250,11 @@ def routing(logits, n_expts_act, sm_first=False, expt_indx=None, simulated_ep=1,
     if simulated_ep > 1:
         expt_scal, expt_indx, bitmatrix = prune_routing(expt_scal, expt_indx, bitmatrix, simulated_ep)
     hist, topk_indx, gate_indx, gate_scal = sort_tokens(expt_scal, expt_indx, bitmatrix)
+    print(expt_scal)
+    print(expt_indx)
+    print(hist)
+    print(topk_indx)
+    print(gate_indx)
     # pack the matmul data structure
     n_expts_tot = logits.shape[-1] // simulated_ep
     hist = hist[:n_expts_tot]
