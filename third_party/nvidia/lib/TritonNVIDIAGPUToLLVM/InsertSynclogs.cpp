@@ -82,12 +82,18 @@ void emitSynclog(IRRewriter &rewriter, Operation *op,
                                 threadIdx_z, blockIdx_x,  blockIdx_y,
                                 blockIdx_z};
 
-  // Cap to 5 operands for now. This is a temporary solution to avoid
-  // printing out tensor values.
-  for (size_t i = 0; i < 5 && i < op->getNumOperands(); i++) {
+  size_t numArgsPrinted = 0;
+  for (size_t i = 0; i < op->getNumOperands() && numArgsPrinted < 5; i++) {
+    // Cap to 5 operands for now. This is a temporary solution to avoid
+    // printing out tensor values.
     auto operand = op->getOperand(i);
+    auto formatSubstr = LLVM::NVIDIA::getFormatSubstr(operand);
+    if (formatSubstr.empty()) {
+      continue;
+    }
     args.push_back(operand);
-    os << LLVM::NVIDIA::getFormatSubstr(operand) << " ";
+    os << formatSubstr << " ";
+    numArgsPrinted++;
   }
 
   targetInfo.printf(rewriter, formatStr, args);

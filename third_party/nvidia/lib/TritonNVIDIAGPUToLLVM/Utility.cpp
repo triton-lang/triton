@@ -164,7 +164,6 @@ std::string getFormatSubstr(Value value, bool hex, std::optional<int> width,
     else
       return prefix + (isSigned ? "i" : "u");
   }
-  assert(false && "not supported type");
   return "";
 }
 
