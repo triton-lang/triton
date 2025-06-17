@@ -244,6 +244,9 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
             pytest.skip("float16 x mx not supported with cuda capability >= 10")
         if "float8" in act_dtype_str and "mx" in weight_dtype_str and torch.cuda.get_device_capability()[0] < 10:
             pytest.skip("float8 x mx not supported with cuda capability < 10")
+        if n == 2880 and k == 2880 and torch.cuda.get_device_capability()[0] < 9:
+            pytest.skip("Not enough memory on A100")
+
     elif is_hip():
         if "float8" in act_dtype_str and "mx" in weight_dtype_str and not is_hip_cdna4():
             pytest.skip("float8 x mx only supported on CDNA4")
