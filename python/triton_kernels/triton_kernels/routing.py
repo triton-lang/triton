@@ -252,6 +252,7 @@ def routing(logits, n_expts_act, sm_first=False, expt_indx=None, simulated_ep=1,
     hist, topk_indx, gate_indx, gate_scal = sort_tokens(expt_scal, expt_indx, bitmatrix)
     # pack the matmul data structure
     n_expts_tot = logits.shape[-1] // simulated_ep
+    hist = hist[:n_expts_tot]
     gather_indx = GatherIndx(src_indx=topk_indx, dst_indx=gate_indx)
     scatter_indx = ScatterIndx(src_indx=gate_indx, dst_indx=topk_indx)
     expt_data = compute_expt_data(hist, n_expts_tot, topk_indx.numel())

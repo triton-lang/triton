@@ -44,9 +44,10 @@ class Bitmatrix(Tensor):
 
     _scratchpad: torch.Tensor
 
-    def __init__(self, handle, shape, scratchpad=None):
+    def __init__(self, handle, shape, shape_max, scratchpad=None):
+        # if handle.shape[-1]*32 != shape[-1], behaves as zero-padded
+        assert shape[-1] % 32 == 0
         assert handle.ndim == 2
-        shape_max = [handle.shape[0], handle.shape[1] * 32]
         super().__init__(handle, shape, shape_max)
         assert self.dtype == torch.uint32
         self._scratchpad = scratchpad
