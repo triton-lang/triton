@@ -2,6 +2,7 @@
 #include "TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
+#include "third_party/nvidia/lib/TritonNVIDIAGPUToLLVM/Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/Passes.h"
 #include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
@@ -76,10 +77,19 @@ void emitSynclog(IRRewriter &rewriter, Operation *op,
   std::string formatStr;
   llvm::raw_string_ostream os(formatStr);
   os << opName << " time=%lu thread=%u,%u,%u block=%u,%u,%u ";
+  llvm::SmallVector<Value> args{time64,      threadIdx_x, threadIdx_y,
+                                threadIdx_z, blockIdx_x,  blockIdx_y,
+                                blockIdx_z};
 
-  targetInfo.printf(rewriter, formatStr,
-                    {time64, threadIdx_x, threadIdx_y, threadIdx_z, blockIdx_x,
-                     blockIdx_y, blockIdx_z});
+  // Cap to 5 operands for now. This is a temporary solution to avoid
+  // printing out tensor values.
+  for (size_t i = 0; i < 5 && i < op->getNumOperands(); i++) {
+    auto operand = op->getOperand(i);
+    args.push_back(operand);
+    os << LLVM::NVIDIA::getFormatSubstr(operand) << " ";
+  }
+
+  targetInfo.printf(rewriter, formatStr, args);
 }
 
 namespace {

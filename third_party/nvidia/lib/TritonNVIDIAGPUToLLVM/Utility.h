@@ -43,6 +43,11 @@ Value createElectPredicateWarp0(Location loc, RewriterBase &rewriter);
 // Create bar.warp.sync
 void createSyncWarp(Location loc, OpBuilder &builder);
 
+// Get the format string for a value
+std::string getFormatSubstr(Value value, bool hex = false,
+                            std::optional<int> width = std::nullopt,
+                            bool isSigned = false);
+
 } // namespace NVIDIA
 } // namespace LLVM
 
