@@ -1111,12 +1111,12 @@ def test_op(Z, H, N_CTX, HEAD_DIM, causal, impl, dtype):
 # Benchmarking
 # ===-----------------------------------------------------------------------===#
 
-BATCH = [2, 4, 8]
-N_HEADS = [4, 32]
+BATCH = [4]
+N_HEADS = [32]
 HEAD_DIM = [64, 128]
 causal = [False, True]
-providers = ["triton-fp16", "triton-fp8", "cudnn-fp16", "cudnn-fp8"]
-N_CTX = [2**i for i in range(10, 16)]
+providers = ["triton-fp16", "cudnn-fp16"]
+N_CTX = [2**i for i in range(10, 17)]
 
 bench_configs = []
 for Z, H, D, is_causal in itertools.product(BATCH, N_HEADS, HEAD_DIM, causal):
@@ -1151,24 +1151,25 @@ def bench(Z, H, N_CTX, HEAD_DIM, causal, provider):
     device = "cuda"
 
     torch.manual_seed(42)
-    q = (torch.empty((Z, H, N_CTX, HEAD_DIM), dtype=dtype, device=device).normal_(mean=0.0, std=0.5).requires_grad_())
-    k = (torch.empty((Z, H, N_CTX, HEAD_DIM), dtype=dtype, device=device).normal_(mean=0.0, std=0.5).requires_grad_())
-    v = (torch.empty((Z, H, N_CTX, HEAD_DIM), dtype=dtype, device=device).normal_(mean=0.0, std=0.5).requires_grad_())
+    q = (torch.empty((Z, H, N_CTX, HEAD_DIM), device=device).normal_(mean=0.0, std=0.5).requires_grad_()).to(dtype)
+    k = (torch.empty((Z, H, N_CTX, HEAD_DIM), device=device).normal_(mean=0.0, std=0.5).requires_grad_()).to(dtype)
+    v = (torch.empty((Z, H, N_CTX, HEAD_DIM), device=device).normal_(mean=0.0, std=0.5).requires_grad_()).to(dtype)
     sm_scale = 1.3
 
-    if provider == "triton":
-        fn = lambda: attention_forward(q, k, v, causal, sm_scale)
-    elif provider == "cudnn":
-        fn = lambda: torch.nn.functional.scaled_dot_product_attention(q, k, v, scale=sm_scale, is_causal=causal)
-    else:
-        raise ValueError(f"Unsupported provider: {provider}")
+    with torch.nn.attention.sdpa_kernel([torch.nn.attention.SDPBackend.CUDNN_ATTENTION]):
+        if provider == "triton":
+            fn = lambda: attention_forward(q, k, v, causal, sm_scale)
+        elif provider == "cudnn":
+            fn = lambda: torch.nn.functional.scaled_dot_product_attention(q, k, v, scale=sm_scale, is_causal=causal)
+        else:
+            raise ValueError(f"Unsupported provider: {provider}")
 
-    ms = triton.testing.do_bench(fn)
-    flops_per_matmul = 2.0 * Z * H * N_CTX * N_CTX * HEAD_DIM
-    total_flops = 2 * flops_per_matmul
-    if causal:
-        total_flops *= 0.5
-    return total_flops * 1e-12 / (ms * 1e-3)
+        ms = triton.testing.do_bench(fn)
+        flops_per_matmul = 2.0 * Z * H * N_CTX * N_CTX * HEAD_DIM
+        total_flops = 2 * flops_per_matmul
+        if causal:
+            total_flops *= 0.5
+        return total_flops * 1e-12 / (ms * 1e-3)
 
 
 if __name__ == "__main__":
