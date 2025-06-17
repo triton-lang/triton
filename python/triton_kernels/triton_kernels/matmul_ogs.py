@@ -716,6 +716,8 @@ def matmul_ogs(x, w, bias,
     expt_token_offs_raw = None if expt_data is None else expt_data.token_offs_raw
     expt_block_pid_map = None if expt_data is None else expt_data.block_pid_map[block_m]
 
+    x = flex.lhs_data.reinterpret(x)
+    w = flex.rhs_data.reinterpret(w)
     if opt_flags.is_persistent:
         x_tensor, w_tensor_and_transpose, mx_tensor_and_tranpose = _create_tma_descriptors(
             x=x, w=w, mx_tensor=mx_ctx.weight_scale,
@@ -736,10 +738,6 @@ def matmul_ogs(x, w, bias,
         x_tensor = x
         w_tensor, w_tma_transpose = w, False
         mx_tensor, mx_tma_transpose = mx_ctx.weight_scale, False
-    if isinstance(x_tensor, torch.Tensor):
-        x_tensor = flex.lhs_data.reinterpret(x)
-    if isinstance(w_tensor, torch.Tensor):
-        w_tensor = flex.rhs_data.reinterpret(w)
     (kernels._p_matmul_ogs if opt_flags.is_persistent else kernels._matmul_ogs)[(n_cta,)](
                    flex.out_data.reinterpret(memory["output"]),
                    flex.out_data.reinterpret(out0), *out0.stride(), *out0_flex,
