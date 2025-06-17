@@ -745,16 +745,4 @@ def TTNG_TensormapFenceproxyAcquireOp: TTNG_Op<
   }];
 }
 
-def TTNG_TensormapPrefetchOp : TTNG_Op<
-  "tensormap_prefetch",
-  [MemoryEffects<[MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>]
-> {
-  let summary = "prefetch the descriptor tensor map";
-
-  let arguments = (ins TT_TensorDescType:$desc);
-  let assemblyFormat = [{
-    $desc attr-dict `:` qualified(type($desc))
-  }];
-}
-
 #endif

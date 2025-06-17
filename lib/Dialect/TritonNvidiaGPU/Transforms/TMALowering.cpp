@@ -209,8 +209,8 @@ struct TMAScatterLowering : public OpRewritePattern<DescriptorScatterOp> {
 };
 
 class TMACreateDescLowering : public OpRewritePattern<MakeTensorDescOp> {
-  public:
-    using OpRewritePattern::OpRewritePattern;
+public:
+  using OpRewritePattern::OpRewritePattern;
 
   LogicalResult matchAndRewrite(MakeTensorDescOp op,
                                 PatternRewriter &rewriter) const override {
@@ -229,19 +229,6 @@ class TMACreateDescLowering : public OpRewritePattern<MakeTensorDescOp> {
   }
 };
 
-class TMAPrefetchTensorMapLowering : public OpRewritePattern<DescriptorPrefetchTensorMapOp> {
-  public:
-    using OpRewritePattern::OpRewritePattern;
-
-    LogicalResult matchAndRewrite(DescriptorPrefetchTensorMapOp op,
-                                  PatternRewriter &rewriter) const override {
-      MLIRContext *ctx = op.getContext();
-      rewriter.create<triton::nvidia_gpu::TensormapPrefetchOp>(op.getLoc(), op.getDesc());
-      rewriter.eraseOp(op);
-      return success();
-    }
-};
-
 } // anonymous namespace
 
 class TritonNvidiaGPUTMALoweringPass
@@ -254,8 +241,7 @@ public:
 
     mlir::RewritePatternSet patterns(context);
     patterns.add<TMALoadLowering, TMAGatherLowering, TMAStoreLowering,
-                 TMAScatterLowering, TMAReduceLowering, TMACreateDescLowering,
-                 TMAPrefetchTensorMapLowering>(
+                 TMAScatterLowering, TMAReduceLowering, TMACreateDescLowering>(
         context);
     if (applyPatternsGreedily(m, std::move(patterns)).failed())
       signalPassFailure();

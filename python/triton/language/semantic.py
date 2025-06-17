@@ -1203,11 +1203,6 @@ class TritonSemantic(Generic[TensorTy]):
         self.builder.create_descriptor_scatter(desc.handle, value.handle, x_offsets.handle, y_offset)
         return self.tensor(None, tl.void)
 
-    def descriptor_prefetch_tensor_map(self, desc) -> TensorTy:
-        assert isinstance(desc, tl.tensor_descriptor_base)
-        self.builder.create_descriptor_prefetch_tensor_map(desc.handle)
-        return self.tensor(None, tl.void)
-
     def _store_block_pointer(self, ptr, val, mask, boundary_check, cache, eviction):
         # Store by a block pointer: `pointer_type<block_type<>>`
         # Block pointers can not have the `mask` argument
