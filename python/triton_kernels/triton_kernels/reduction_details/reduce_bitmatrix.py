@@ -86,8 +86,7 @@ def sum_bitmatrix_rows(x, out_ret, partials_block_size=None):
     cdiv = triton.cdiv
     PARTIALS_BLOCK_M = partials_block_size
     n_rows, n_cols = x.shape
-    n_rows_max, n_cols_max = x.shape_max
-    assert n_cols is n_cols_max
+    n_rows_max = x.shape_max[0]
     assert out_ret.shape == (n_cols, )
 
     TILE_SIZE = 2
