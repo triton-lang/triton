@@ -184,8 +184,11 @@ CoarseSchedule getInitialSchedule(scf::ForOp forOp,
     // assigned to the same stage.
     DenseSet<int> latencyStages;
     auto ops = forOp.getBody()->without_terminator();
-    for (Operation &op : llvm::make_filter_range(ops, isLatencyOp))
-      latencyStages.insert(schedule[&op].first);
+    for (Operation &op : llvm::make_filter_range(ops, isLatencyOp)) {
+      // FIXME: This should assert all latency ops have an assigned stage.
+      if (schedule.count(&op))
+        latencyStages.insert(schedule[&op].first);
+    }
     if (latencyStages.size() <= 1) {
       CoarseSchedule normalized(/*numStages=*/1);
       auto cluster = normalized.clusters.newAtFront();
