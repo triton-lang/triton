@@ -95,6 +95,53 @@ LLVM::LLVMFuncOp appendOrGetExternFuncOp(RewriterBase &rewriter, Operation *op,
                               StringAttr::get(op->getContext(), libpath));
   return ret;
 }
+
+Value matrixVectorProd(TritonLLVMOpBuilder &b, const LinearLayout &A, Value x) {
+  assert(A.getNumInDims() == 1);
+  assert(A.getNumOutDims() == 1);
+  auto flatten = [](const std::vector<std::vector<int32_t>> &matrix) {
+    SmallVector<int32_t> ret;
+    for (const auto &row : matrix) {
+      ret.push_back(row[0]);
+    }
+    return ret;
+  };
+  auto nCol = A.getTotalInDimSizeLog2();
+  auto nRow = A.getTotalOutDimSizeLog2();
+  SmallVector<int32_t> matrix = flatten(A.getBases().begin()->second);
+  assert(matrix.size() == nCol);
+  // We iterate the matrix following the diagonals
+  // The idea here is that we want to generate code of the form:
+  // \xor_i (x & mask_i) << s_i
+  // where s_i may by positive or negative (left or right shift)
+  // The hope here (and we see it in codegen) is that LLVM can turn
+  // the xor into a sum and then the sum + LHS/RHS can be fused into a mad.lo
+  // Get the i-th diagonal
+  auto getMask = [&](int i) {
+    uint32_t mask = 0;
+    int row = i < 0 ? -i : 0;
+    int col = i < 0 ? 0 : i;
+    while (row < nRow && col < nCol) {
+      uint32_t bitValue = (matrix[col] >> row) & 1u;
+      mask |= bitValue << col;
+      ++row;
+      ++col;
+    }
+    return mask;
+  };
+
+  Value ret = b.i32_val(0);
+  for (int i = -nRow + 1; i < nCol; i++) {
+    auto mask = getMask(i);
+    if (mask == 0)
+      continue;
+    auto masked = b.and_(x, b.i32_val(mask));
+    ret = b.xor_(ret, i >= 0 ? Value(b.lshr(masked, b.i32_val(i)))
+                             : Value(b.shl(masked, b.i32_val(-i))));
+  }
+  return ret;
+}
+
 } // namespace triton::gpu
 
 SmallVector<std::pair<StringAttr, Value>>
@@ -103,9 +150,7 @@ applyLinearLayout(Location loc, RewriterBase &rewriter,
                   ArrayRef<std::pair<StringAttr, Value>> indices) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   assert(layout.getNumInDims() == indices.size());
-  for (auto [inDimName, idx] : indices) {
-    assert(layout.hasInDim(inDimName) && "Invalid inDimName");
-  }
+  assert(llvm::equal(layout.getInDimNames(), llvm::make_first_range(indices)));
 
   // This function can emit a lot of MLIR code, which ultimately makes
   // compilation slow.  (We think this shouldn't be the case -- it's not *that*
@@ -117,12 +162,14 @@ applyLinearLayout(Location loc, RewriterBase &rewriter,
 
   // Manually constant-fold the layout where possible.
   SmallVector<std::pair<StringAttr, int32_t>> constantIns;
+  SmallVector<std::pair<StringAttr, Value>> nonConstantIns;
   for (auto [inDimName, idx] : indices) {
     if (auto constant = idx.getDefiningOp<LLVM::ConstantOp>()) {
       constantIns.push_back(
           {inDimName, cast<IntegerAttr>(constant.getValue()).getInt()});
     } else {
       constantIns.push_back({inDimName, 0});
+      nonConstantIns.push_back({inDimName, idx});
     }
   }
   SmallVector<int32_t> constantComponent =
@@ -135,6 +182,24 @@ applyLinearLayout(Location loc, RewriterBase &rewriter,
       outIndices.push_back({outDimName, zero});
     else
       outIndices.push_back({outDimName, b.i32_val(constantComponent[i])});
+  }
+  // Happy path: Only one output.
+  if (outIndices.size() == 1) {
+    SmallVector<StringAttr> inDimNames;
+    // Concatenate input
+    Value x = b.i32_val(0);
+    int shift = 0;
+    for (auto [inDimName, idx] : nonConstantIns) {
+      inDimNames.push_back(inDimName);
+      x = b.or_(x, b.shl(idx, b.i32_val(shift)));
+      shift += layout.getInDimSizeLog2(inDimName);
+    }
+    // Flatten ins
+    auto matrix = layout.sublayout(inDimNames, outIndices[0].first);
+    matrix = matrix.flattenIns();
+    auto out = triton::gpu::matrixVectorProd(b, matrix, x);
+    outIndices[0].second = b.xor_(outIndices[0].second, out);
+    return outIndices;
   }
 
   for (auto [inDimName, idx] : indices) {

@@ -453,6 +453,11 @@ public:
   auto getOutDimNames() const { return llvm::make_first_range(outDims); }
   auto getOutDimSizes() const { return llvm::make_second_range(outDims); }
 
+  // Relevant for reshaping
+  SmallVector<std::pair<StringAttr, int32_t>> getOutDims() const {
+    return to_vector(outDims);
+  }
+
   // Gets the position that this outDim occupies in getOutDimNames().  Asserts
   // if the dim is not present.
   int32_t getOutDimIndex(StringAttr outDim) const;
@@ -620,6 +625,7 @@ public:
 
   // Compute a C such that A = B * C if it exists.
   // In other words, C = B^{-1} * A.
+  // For divideRight, we compute A = C * B, that is, C = A * B^{-1}.
   // Note that such a C exists iff (every pair of input/output dim of) A is
   // of the form
   // [[B, 0],
@@ -633,6 +639,8 @@ public:
   // same dimensions as A ensures that C is well-defined.
   friend std::optional<LinearLayout> divideLeft(const LinearLayout &A,
                                                 const LinearLayout &B);
+  friend std::optional<LinearLayout> divideRight(const LinearLayout &A,
+                                                 const LinearLayout &B);
 
   // Returns true if this layout acts trivially (as the identity) on the given
   // dimensions. This means that it's the identity on those dimensions, and it
@@ -798,9 +806,10 @@ private:
   SmallVector<size_t> action;
   StringAttr inDim;
   size_t inSizeLog2;
-  bool isIdentity;
+  bool isIdentity = true;
 
 public:
+  ColumnAction() = default;
   ColumnAction(ArrayRef<size_t> action, StringAttr inDim, size_t inSizeLog2)
       : action(action), inDim(inDim), inSizeLog2(inSizeLog2) {
     auto it = llvm::max_element(action);
