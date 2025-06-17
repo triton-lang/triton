@@ -101,6 +101,11 @@ class SwizzledTensor:
         self.strides = self._compute_stride(handle, swizzle_mode)
         self.swizzle_mode = swizzle_mode
 
+    def permute(self, *permutation):
+        assert self.swizzle_mode is None
+        h = self.handle.permute(*permutation)
+        return SwizzledTensor(h, self.swizzle_mode)
+
     def numel(self):
         return self.handle.numel()
 

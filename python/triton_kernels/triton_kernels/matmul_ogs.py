@@ -259,7 +259,8 @@ def none_or_tma_compatible(x):
     try:
         major_dim = strides.index(1)
     except ValueError:
-        return False
+        major_dim = -1
+        # return False
     compliant = [x.stride(i)*x.element_size() % stride_div == 0 for i in range(x.ndim) if i != major_dim]
     return all(compliant)
 
@@ -672,6 +673,10 @@ def matmul_ogs(x, w, bias,
     if isinstance(w_tensor, torch.Tensor):
         w_tensor = flex.rhs_data.reinterpret(w)
     kernels = get_kernels(epilogue.specs, fused_activation.specs)
+    print(opt_flags)
+    print(x_tensor)
+    print(w_tensor)
+    print(mx_tensor)
     (kernels._p_matmul_ogs if opt_flags.is_persistent else kernels._matmul_ogs)[(grid,)](
                    flex.out_data.reinterpret(memory["output"]),
                    flex.out_data.reinterpret(out0), *out0.stride(),
