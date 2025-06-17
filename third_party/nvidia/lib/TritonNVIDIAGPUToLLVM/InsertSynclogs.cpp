@@ -19,11 +19,12 @@ using namespace mlir::triton::gpu;
 
 // Array to map NVVM/PTX ops to unique header numbers.
 // This allows us to identify the operation in the synclog.
-std::array<const char *, 23> opNames{"barrier.sync",
+std::array<const char *, 24> opNames{"barrier.sync",
                                      "nvvm.barrier0",
                                      "cp.async.bulk.commit.group",
                                      "cp.async.commit.group",
                                      "cp.async.bulk.wait.group",
+                                     "nvvm.cp.async.bulk.wait_group",
                                      "cp.async.wait.group",
                                      "cp.async.bulk.tensor",
                                      "cp.reduce.async.bulk.tensor",

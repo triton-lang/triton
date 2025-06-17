@@ -1,6 +1,6 @@
 // RUN: triton-opt %s -split-input-file --insert-synclogs | FileCheck %s
 
-// Insert random delay after.
+// Insert synclog.
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.total-num-warps" = 11 : i32} {
   llvm.func @insert_synclog() attributes {allocation.offset = 32 : i32} {
     nvvm.barrier0
