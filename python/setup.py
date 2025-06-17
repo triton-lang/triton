@@ -792,7 +792,7 @@ def get_git_version_suffix():
 
 setup(
     name=os.environ.get("TRITON_WHEEL_NAME", "triton"),
-    version="3.0.0" + get_git_version_suffix() + os.environ.get("TRITON_WHEEL_VERSION_SUFFIX", ""),
+    version="3.2.0" + get_git_version_suffix() + os.environ.get("TRITON_WHEEL_VERSION_SUFFIX", ""),
     author="bytedance triton-x",
     author_email="wangmingfa@bytedance.com",
     description="A language and compiler for custom Deep Learning operations",
