@@ -9,10 +9,11 @@ from typing import List
 
 import triton
 import triton.backends
-
 '''
 Argument class to call compile_kernel() from python code.
 '''
+
+
 @dataclass
 class CompileArgs:
     path: str = ''
@@ -51,6 +52,7 @@ NOTE: when resolving the scope of /path/to/kernel.py, the file will be executed 
 used to run this `compile.py` script
 """
 
+
 def main():
     # command-line arguments
     parser = ArgumentParser(description=desc)
@@ -68,6 +70,7 @@ def main():
     cli_args = parser.parse_args()
     args = CompileArgs(**vars(cli_args))  # A sanity check to ensure class CompileArgs is updated as well.
     compile_kernel(args)
+
 
 def compile_kernel(args: CompileArgs):
     out_name = args.out_name if args.out_name else args.kernel_name
@@ -187,10 +190,10 @@ def compile_kernel(args: CompileArgs):
     template_dir = Path(__file__).parent / "extra" / backend_name
     for template_path in template_dir.glob('compile.*'):
         ext = template_path.suffix
-        output_file = out_path.with_suffix(f".{sig_hash}_{suffix}.{ext}")
+        output_file = out_path.with_suffix(f".{sig_hash}_{suffix}{ext}")
         with output_file.open("w") as fp:
             fp.write(template_path.read_text().format(**params))
-        output_file.append(output_file)
+        output_files.append(output_file)
 
     return func_name, output_files
 
