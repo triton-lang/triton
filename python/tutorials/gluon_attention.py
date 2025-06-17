@@ -2,6 +2,7 @@ import torch
 import triton
 import triton.language as tl
 import pytest
+import itertools
 
 from triton.language.core import _aggregate as aggregate
 
@@ -1104,3 +1105,71 @@ def test_op(Z, H, N_CTX, HEAD_DIM, causal, impl, dtype):
 
     tri_out, _ = attention_forward(q, k, v, causal, sm_scale, impl=impl)
     torch.testing.assert_close(ref_out, tri_out, atol=1e-2, rtol=0)
+
+
+# ===-----------------------------------------------------------------------===#
+# Benchmarking
+# ===-----------------------------------------------------------------------===#
+
+BATCH = [2, 4, 8]
+N_HEADS = [4, 32]
+HEAD_DIM = [64, 128]
+causal = [False, True]
+providers = ["triton-fp16", "triton-fp8", "cudnn-fp16", "cudnn-fp8"]
+N_CTX = [2**i for i in range(10, 16)]
+
+bench_configs = []
+for Z, H, D, is_causal in itertools.product(BATCH, N_HEADS, HEAD_DIM, causal):
+    config = triton.testing.Benchmark(
+        x_names=["N_CTX"],
+        x_vals=N_CTX,
+        line_arg="provider",
+        line_vals=providers,
+        line_names=providers,
+        styles=[("red", "-"), ("blue", "-"), ("green", "-"), ("yellow", "-")],
+        ylabel="TFLOPS",
+        plot_name=f"Attention Z={Z} H={H} D={D} causal={is_causal}",
+        args={
+            "Z": Z,
+            "H": H,
+            "HEAD_DIM": D,
+            "causal": is_causal,
+        },
+    )
+    bench_configs.append(config)
+
+
+@triton.testing.perf_report(bench_configs)
+def bench(Z, H, N_CTX, HEAD_DIM, causal, provider):
+    provider, dtype = provider.split("-")
+    if dtype == "fp16":
+        dtype = torch.float16
+    elif dtype == "fp8":
+        dtype = torch.float8_e5m2
+    else:
+        raise ValueError(f"Unsupported dtype: {dtype}")
+    device = "cuda"
+
+    torch.manual_seed(42)
+    q = (torch.empty((Z, H, N_CTX, HEAD_DIM), dtype=dtype, device=device).normal_(mean=0.0, std=0.5).requires_grad_())
+    k = (torch.empty((Z, H, N_CTX, HEAD_DIM), dtype=dtype, device=device).normal_(mean=0.0, std=0.5).requires_grad_())
+    v = (torch.empty((Z, H, N_CTX, HEAD_DIM), dtype=dtype, device=device).normal_(mean=0.0, std=0.5).requires_grad_())
+    sm_scale = 1.3
+
+    if provider == "triton":
+        fn = lambda: attention_forward(q, k, v, causal, sm_scale)
+    elif provider == "cudnn":
+        fn = lambda: torch.nn.functional.scaled_dot_product_attention(q, k, v, scale=sm_scale, is_causal=causal)
+    else:
+        raise ValueError(f"Unsupported provider: {provider}")
+
+    ms = triton.testing.do_bench(fn)
+    flops_per_matmul = 2.0 * Z * H * N_CTX * N_CTX * HEAD_DIM
+    total_flops = 2 * flops_per_matmul
+    if causal:
+        total_flops *= 0.5
+    return total_flops * 1e-12 / (ms * 1e-3)
+
+
+if __name__ == "__main__":
+    bench.run(save_path=".", print_data=True)
