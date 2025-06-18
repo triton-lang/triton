@@ -26,7 +26,7 @@ Future updates to this tutorial which support mixed precision block scaled matmu
 # Background
 # ----------
 #
-# CUDA devices that support PTX 8.7 and later can utlize block scaled matrix multiply
+# CUDA devices that support PTX 8.7 and later can utilize block scaled matrix multiply
 # instructions. In order for low latency access to these scale factors in the fast
 # inner loop over tensor core MMAs, it is important to ensure that the blocked
 # scale factors are stored in a contiguous memory layout according to their access
@@ -40,7 +40,7 @@ Future updates to this tutorial which support mixed precision block scaled matmu
 # Under block scaled matmul, each scale factor is broadcast and multiplied across a
 # vector of elements from the A and B matrices, usually along their respective K axes.
 # The number of elements of A and B over which each scale factor is broadcast is herein
-# refered to as the vector size (VEC_SIZE).
+# referred to as the vector size (VEC_SIZE).
 #
 # In a linear row-major layout, the scale factors would take the shape
 #
