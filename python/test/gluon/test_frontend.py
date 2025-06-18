@@ -8,11 +8,11 @@ from triton import knobs
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
 from triton.experimental.gluon.language.nvidia import blackwell
-from triton.experimental.gluon.language.nvidia.blackwell import mbarrier, tma, TensorMemoryLayout
+from triton.experimental.gluon.language.nvidia.blackwell import mbarrier, tma, TensorMemoryLayout, async_copy
 from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
 from triton._filecheck import filecheck_test, run_parser
 import triton.language as tl
-from triton._internal_testing import is_cuda
+from triton._internal_testing import is_ampere_or_newer, is_blackwell, is_hopper
 from triton.compiler.errors import CompilationError, CompileTimeAssertionFailure
 
 TARGET_PAT = re.compile('ttg.target = "[^"]*"')
@@ -117,8 +117,7 @@ def tensor_memory_kernel(layout: ttgl.constexpr, tmem_layout: ttgl.constexpr):
         buffers.index(i).load(layout)
 
 
-@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] != 10,
-                    reason="Requires blackwell tensor cores")
+@pytest.mark.skipif(not is_blackwell(), reason="Requires blackwell tensor cores")
 def test_tensor_memory(fresh_knobs):
     knobs.compilation.disable_line_info = True
 
@@ -379,7 +378,7 @@ def mbarrier_kernel():
     mbarrier.invalidate(bar)
 
 
-@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
+@pytest.mark.skipif(not is_hopper(), reason="Requires hopper or newer")
 def test_mbarrier(fresh_knobs):
     knobs.compilation.disable_line_info = True
 
@@ -415,8 +414,7 @@ def tcgen05_mma_kernel(nvmma_layout: ttgl.constexpr, acc_layout: ttgl.constexpr)
     blackwell.tcgen05_mma(a, b, acc)
 
 
-@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] != 10,
-                    reason="Requires blackwell tensor core")
+@pytest.mark.skipif(not is_blackwell(), reason="Requires blackwell tensor core")
 def test_tcgen05_mma(fresh_knobs):
     knobs.compilation.disable_line_info = True
 
@@ -460,7 +458,7 @@ def async_tma_kernel(input_desc, XBLOCK: ttgl.constexpr):
     tma.store_wait(0)
 
 
-@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="TMA requires at least Hopper")
+@pytest.mark.skipif(not is_hopper(), reason="TMA requires at least Hopper")
 def test_async_tma(fresh_knobs):
     knobs.compilation.disable_line_info = True
 
@@ -519,7 +517,7 @@ def async_tma_blackwell_kernel(input_desc, XBLOCK: ttgl.constexpr):
     tma.store_wait(0)
 
 
-@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] != 10, reason="Requires Blackwell")
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 def test_async_tma_blackwell(fresh_knobs):
     knobs.compilation.disable_line_info = True
 
@@ -955,3 +953,53 @@ def test_inline_asm_elementwise():
     x = ttgl.arange(0, 16, layout)
     # CHECK: elementwise_inline_asm {{.*}} : tensor<16xi32, [[BLOCKED:#.*]]> -> tensor<16xi32, [[BLOCKED]]>
     ttgl.inline_asm_elementwise("mov $0, $0;", "=r,r", [x], dtype=x.dtype, is_pure=True, pack=1)
+
+
+@gluon.jit
+def async_copy_kernel(inp, xnumel, XBLOCK: ttgl.constexpr):
+    smem = ttgl.allocate_shared_memory(inp.dtype.element_ty, [XBLOCK], ttgl.SwizzledSharedLayout(1, 1, 1, order=[0]))
+    block_layout: ttgl.constexpr = ttgl.BlockedLayout([2], [32], [4], [0])
+    xindex = ttgl.arange(0, XBLOCK, block_layout)
+    mask = tl.max_constancy(xindex < xnumel, 2)
+
+    async_copy.async_copy_global_to_shared(smem, inp + xindex, mask)
+    async_copy.async_copy_global_to_shared(smem, inp + xindex, mask, cache_modifier=".ca", eviction_policy="evict_last",
+                                           volatile=True)
+
+    mbar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
+    async_copy.mbarrier_arrive(mbar)
+    async_copy.mbarrier_arrive(mbar, increment_count=False)
+    async_copy.commit_group()
+    async_copy.wait_group(0)
+
+
+@pytest.mark.skipif(not is_ampere_or_newer(), reason="Requires ampere")
+def test_async_copy(fresh_knobs):
+    knobs.compilation.disable_line_info = True
+
+    h = async_copy_kernel.warmup(MockTensor(ttgl.float16), xnumel=100, XBLOCK=128, sanitize_overflow=False, grid=(1, ))
+    expecttest.assert_expected_inline(
+        anonymize_ir(h.asm["ttgir"]), """\
+#blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#loc = loc(unknown)
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @async_copy_kernel(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32} loc(unknown), %arg1: i32 loc(unknown)) attributes {noinline = false} {
+    %0 = ttg.local_alloc : () -> !ttg.memdesc<128xf16, #shared, #smem, mutable> loc(#loc)
+    %1 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #blocked> loc(#loc)
+    %2 = tt.splat %arg1 : i32 -> tensor<128xi32, #blocked> loc(#loc)
+    %3 = arith.cmpi slt, %1, %2 {tt.constancy = dense<2> : tensor<1xi32>} : tensor<128xi32, #blocked> loc(#loc)
+    %4 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<128x!tt.ptr<f16>, #blocked> loc(#loc)
+    %5 = tt.addptr %4, %1 : tensor<128x!tt.ptr<f16>, #blocked>, tensor<128xi32, #blocked> loc(#loc)
+    %6 = ttg.async_copy_global_to_local %5, %0 mask %3 : tensor<128x!tt.ptr<f16>, #blocked> -> <128xf16, #shared, #smem, mutable> loc(#loc)
+    %7 = ttg.async_copy_global_to_local %5, %0 mask %3 cacheModifier = ca evictionPolicy = evict_last {isVolatile = true} : tensor<128x!tt.ptr<f16>, #blocked> -> <128xf16, #shared, #smem, mutable> loc(#loc)
+    %8 = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared, #smem, mutable> loc(#loc)
+    ttng.async_copy_mbarrier_arrive %8 : !ttg.memdesc<1xi64, #shared, #smem, mutable> loc(#loc)
+    ttng.async_copy_mbarrier_arrive %8 {noIncrement} : !ttg.memdesc<1xi64, #shared, #smem, mutable> loc(#loc)
+    %9 = ttg.async_commit_group  loc(#loc)
+    %10 = ttg.async_wait  {num = 0 : i32} loc(#loc)
+    tt.return loc(#loc)
+  } loc(#loc)
+} loc(#loc)
+""")
