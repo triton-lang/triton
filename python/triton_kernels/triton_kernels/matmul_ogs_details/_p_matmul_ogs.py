@@ -384,7 +384,7 @@ def _p_matmul_ogs(
                 block_shape=[BLOCK_M, OUT_BLOCK_N],
             )
 
-         # bias + scale
+        # bias + scale
         offs_y_n = off_n1 + tl.arange(0, BLOCK_N)
         mask_n = offs_y_n < N
         if B is not None:
