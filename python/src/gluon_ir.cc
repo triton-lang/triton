@@ -130,7 +130,7 @@ py::object layoutToGluon(Attribute layout) {
     return layouts.DistributedLinearLayout(
         ll.getBases().lookup(kReg), ll.getBases().lookup(kLane),
         ll.getBases().lookup(kWarp), ll.getBases().lookup(kBlock),
-        ll.getOutDimSizes());
+        toStdVector(ArrayRef(llvm::to_vector(ll.getOutDimSizes()))));
   } else if (auto nvmma = dyn_cast<ttg::NVMMASharedEncodingAttr>(layout)) {
     auto ctaLayout = nvmma.getCTALayout();
     return layouts.NVMMASharedLayout(
@@ -424,7 +424,7 @@ void init_gluon_ir(py::module &&m) {
           "create_expand_dims",
           [](TritonOpBuilder &self, Value &arg, int axis, Type retTy) -> Value {
             return self.create<tt::ExpandDimsOp>(retTy, arg, axis);
-          })
+           })
       .def("create_warp_return",
            [](GluonOpBuilder &self) -> Operation * {
              return self.create<ttg::WarpReturnOp>();
