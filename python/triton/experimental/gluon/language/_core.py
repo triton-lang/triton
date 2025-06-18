@@ -44,7 +44,6 @@ from triton.language.core import (
 
 _IMPORT_FROM_TRITON: List[str] = [
     "expand_dims",
-    "join",
     "load",
     "maximum",
     "minimum",
@@ -96,6 +95,7 @@ __all__ = [
     "thread_barrier",
     "arange",
     "full",
+    "join",
     "convert_layout",
     "allocate_shared_memory",
     "shared_memory_descriptor",
@@ -264,6 +264,12 @@ class shared_memory_descriptor(base_value):
 for name in _IMPORT_FROM_TRITON:
     fn = getattr(tl_core, name)
     globals()[name] = builtin(fn)
+
+
+@builtin
+def join(a, b, layout=None, _semantic=None):
+    layout = _unwrap_if_constexpr(layout)
+    return _semantic.join(a, b, layout)
 
 
 @builtin

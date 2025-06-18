@@ -62,11 +62,15 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         handle = self.builder.create_expand_dims(input.handle, axis, ret_ty.to_ir(self.builder))
         return self.tensor(handle, ret_ty)
 
-    def join(self, a: TensorTy, b: TensorTy) -> TensorTy:
+    def join(self, a: TensorTy, b: TensorTy, layout=None) -> TensorTy:
         a, b = self.broadcast_impl_value(a, b)
         _check(a.shape != [], "Cannot join scalars in gluon")
-        value = super().join(a, b)
-        return self._wrap_tensor_infer_layout(value)
+        if layout is None:
+            value = super().join(a, b)
+            return self._wrap_tensor_infer_layout(value)
+        ret_ty = ttgl.distributed_type(a.type.scalar, a.shape + [2], layout)
+        handle = self.builder.create_join(a.handle, b.handle, ret_ty.to_ir(self.builder))
+        return self.tensor(handle, ret_ty)
 
     def split(self, a: TensorTy) -> Tuple[TensorTy, TensorTy]:
         lhs, rhs = super().split(a)

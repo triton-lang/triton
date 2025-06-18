@@ -615,10 +615,10 @@ def test_layout_mangling():
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @kernel() attributes {noinline = false} {
     %0 = ttg.local_alloc : () -> !ttg.memdesc<32x32xi32, #shared, #smem, mutable>
-    tt.call @"test_frontend.smem_and_layout_user__MDi32S32_32SLSSS_1_1_1_1_0____SSSLAS[32, 32]ASMD__(1,)cconstexpr_SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=(1 ,0), ctas_per_cga=None, cta_split_num=None, cta_order=None)_"(%0) : (!ttg.memdesc<32x32xi32, #shared, #smem, mutable>) -> ()
+    tt.call @"test_frontend.smem_and_layout_user__MDi32S32_32SLSSS_1_1_1_1_0_1_1_1_1_1_0_SSSLAS[32, 32]ASMD__(1,)cconstexpr_SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=(1 ,0), ctas_per_cga=_1, 1_, cta_split_num=_1, 1_, cta_order=_1, 0_)_"(%0) : (!ttg.memdesc<32x32xi32, #shared, #smem, mutable>) -> ()
     tt.return
   }
-  tt.func private @"test_frontend.smem_and_layout_user__MDi32S32_32SLSSS_1_1_1_1_0____SSSLAS[32, 32]ASMD__(1,)cconstexpr_SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=(1 ,0), ctas_per_cga=None, cta_split_num=None, cta_order=None)_"(%arg0: !ttg.memdesc<32x32xi32, #shared, #smem, mutable>) attributes {noinline = false} {
+  tt.func private @"test_frontend.smem_and_layout_user__MDi32S32_32SLSSS_1_1_1_1_0_1_1_1_1_1_0_SSSLAS[32, 32]ASMD__(1,)cconstexpr_SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=(1 ,0), ctas_per_cga=_1, 1_, cta_split_num=_1, 1_, cta_order=_1, 0_)_"(%arg0: !ttg.memdesc<32x32xi32, #shared, #smem, mutable>) attributes {noinline = false} {
     tt.return
   }
 }
@@ -878,6 +878,27 @@ def test_split_join():
     c, d = ttgl.split(res)
     ttgl.static_assert(c.type.layout == layout)
     ttgl.static_assert(d.type.layout == layout)
+
+
+@filecheck_test
+@gluon.jit
+def test_split_join_subtile():
+    # CHECK-DAG: [[LAYOUT:#.*]] = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+    # CHECK-DAG: [[JOIN_LAYOUT:#.*]] = #ttg.blocked<{sizePerThread = [1, 64, 2], threadsPerWarp = [32, 1, 1], warpsPerCTA = [4, 1, 1], order = [0, 1, 2]}>
+    # CHECK-DAG: [[LINEAR:#.*]] = #ttg.linear
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1, 128], [32, 1], [4, 1], [0, 1])
+    x = ttgl.full([128, 128], 1, ttgl.int32, layout=layout)
+
+    a, b = x.reshape([128, 2, 64]).permute([0, 2, 1]).split()
+    join_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 64, 2], [32, 1, 1], [4, 1, 1], [0, 1, 2])
+    # CHECK: tt.join {{.*}} : tensor<128x64xi32, #{{.*}}> -> tensor<128x64x2xi32, [[JOIN_LAYOUT]]>
+    y = ttgl.join(a, b, layout=join_layout).permute([0, 2, 1]).reshape([128, 128])
+
+    # CHECK: arith.addi {{.*}} : tensor<128x128xi32, [[LAYOUT]]>
+    _ = x + y
+
+    # CHECK: tt.reshape {{.*}} : tensor<128x2x64xi32, #{{.*}}> -> tensor<128x128xi32, [[LINEAR]]>
+    _ = ttgl.join(a, b).permute([0, 2, 1]).reshape([128, 128])
 
 
 @filecheck_test
