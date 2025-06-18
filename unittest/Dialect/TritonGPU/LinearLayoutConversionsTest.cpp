@@ -3,6 +3,7 @@
 #include "mlir/IR/MLIRContext.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Tools/LinearLayout.h"
 #include "triton/Tools/StrUtil.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/Support/Signals.h"
@@ -96,6 +97,15 @@ public:
                                     ArrayRef<unsigned> cOrd) {
     return SwizzledSharedEncodingAttr::get(
         &ctx, vec, perPhase, maxPhase, ord,
+        CTALayoutAttr::get(&ctx, cpg, cSplit, cOrd));
+  }
+
+  PaddedSharedEncodingAttr
+  paddedShared(ArrayRef<unsigned> intervals, ArrayRef<unsigned> paddings,
+               ArrayRef<unsigned> ord, ArrayRef<unsigned> cpg,
+               ArrayRef<unsigned> cSplit, ArrayRef<unsigned> cOrd) {
+    return PaddedSharedEncodingAttr::get(
+        &ctx, intervals, paddings, ord,
         CTALayoutAttr::get(&ctx, cpg, cSplit, cOrd));
   }
 
@@ -3000,6 +3010,21 @@ TEST_F(LinearLayoutConversionsTest, MMAv5Fp4Padded) {
                        {16, 0}}},
                      {S("block"), {}}},
                     {S("dim0"), S("dim1")}));
+}
+
+TEST_F(LinearLayoutConversionsTest, PaddedShared) {
+  PaddedLinearLayout pll =
+      toPaddedLinearLayout({32, 64}, paddedShared({128, 256}, {4, 8}, {1, 0},
+                                                  {1, 1}, {1, 1}, {1, 0}));
+  // The expected linear layout mapping part should just be an identity.
+  auto expectedLL = LinearLayout(
+      // clang-format off
+      {{S("offset"), {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 16}, {0, 32},
+                     {1, 0}, {2, 0}, {4, 0}, {8, 0}, {16, 0}}},
+       {S("block"), {}}},
+      {S("dim0"), S("dim1")});
+  // clang-format on
+  EXPECT_EQ(pll.getLinear(), expectedLL);
 }
 
 } // anonymous namespace

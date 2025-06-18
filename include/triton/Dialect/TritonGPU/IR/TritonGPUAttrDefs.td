@@ -433,10 +433,13 @@ attributes too, for example,
         CTAOrder = [0, 1]}>
   }];
 
-  let parameters = (ins ArrayRefParameter<"unsigned">:$intervals,
+  let parameters = (ins
+      ArrayRefParameter<"unsigned">:$intervals,
       ArrayRefParameter<"unsigned">:$paddings,
       // Order of logical tensor dimensions; fastest-varying first.
-      ArrayRefParameter<"unsigned">:$order, "CTALayoutAttr":$CTALayout);
+      ArrayRefParameter<"unsigned">:$order,
+      "CTALayoutAttr":$CTALayout
+  );
 
   let builders =
       [AttrBuilder<(ins "ArrayRef<std::pair<unsigned, unsigned>>":$intervalPads,
