@@ -447,7 +447,7 @@ void init_gluon_ir(py::module &&m) {
           "create_expand_dims",
           [](TritonOpBuilder &self, Value &arg, int axis, Type retTy) -> Value {
             return self.create<tt::ExpandDimsOp>(retTy, arg, axis);
-          })
+           })
       .def("create_warp_return",
            [](GluonOpBuilder &self) -> Operation * {
              return self.create<ttg::WarpReturnOp>();
