@@ -1,6 +1,7 @@
 #include "TritonAMDGPUToLLVM/TargetUtils.h"
 #include "TritonAMDGPUTransforms/MfmaGroup.h"
 #include "TritonAMDGPUTransforms/Passes.h"
+#include "TritonAMDGPUTransforms/WmmaGroup.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
@@ -127,9 +128,9 @@ warpsPerTileMFMA(Operation *dotOp, ArrayRef<int64_t> shape, int numWarps,
 }
 
 SmallVector<unsigned, 3>
-warpsPerTileWMMA(Operation *dotOp, ArrayRef<int64_t> shape, int numWarps) {
-  auto mnk = ttg::AMDWmmaEncodingAttr::getMNKDimPerInstr();
-  return warpsPerTile(dotOp, shape, numWarps, {mnk[0], mnk[1]});
+warpsPerTileWMMA(Operation *dotOp, ArrayRef<int64_t> shape, int numWarps,
+                 std::pair<int64_t, int64_t> shapePerWarp) {
+  return warpsPerTile(dotOp, shape, numWarps, shapePerWarp);
 }
 
 // Chooses a proper MFMA instruction that can used to compute the given dot op.
@@ -967,13 +968,69 @@ static void decomposeMixedModeDotOp(ModuleOp mod) {
   });
 }
 
+FailureOr<WmmaIntrinsic> chooseWmmaInstruction(Location loc, int wmmaVersion,
+                                               RankedTensorType cType,
+                                               Type aElemType, Type bElemType,
+                                               Type cElemType, int inputKSize,
+                                               int enforcedNonKDim) {
+  // number of matrix elements along k dim per one WMMA instruction
+  unsigned kDim = 0;
+
+  auto resShape = cType.getShape();
+  auto rank = resShape.size();
+  auto M = resShape[rank - 2];
+  auto N = resShape[rank - 1];
+
+  unsigned mDim = 0;
+  unsigned nDim = 0;
+  if (enforcedNonKDim != 0) {
+    mDim = nDim = enforcedNonKDim;
+  } else {
+    int minSize = std::min(M, N);
+    if (minSize >= 16) {
+      mDim = 16;
+      nDim = 16;
+    }
+  }
+  if (mDim == 0 || nDim == 0)
+
+    return failure();
+
+  FailureOr<WmmaIntrinsic> maybeWmmaIntrinsic = WmmaIntrinsic::selectFor(
+      wmmaVersion, mDim, nDim, inputKSize, aElemType, bElemType, cElemType);
+  if (failed(maybeWmmaIntrinsic))
+    return emitError(loc, "no matching matrix core intrinsic due to "
+                          "unsupported element type");
+
+  kDim = maybeWmmaIntrinsic->kDim;
+  assert(kDim != 0);
+  assert(enforcedNonKDim != 0 || (M % mDim == 0 && N % nDim == 0));
+  // if inputKSize % kDim != 0 this layout will introduce data duplication,
+  // consider FMA dot is preferred, except cases Wmma layout is enforced.
+  if (enforcedNonKDim == 0 && inputKSize % kDim != 0)
+    return failure();
+  return maybeWmmaIntrinsic;
+}
+
+FailureOr<WmmaIntrinsic> chooseWmmaInstruction(tt::DotOp dot,
+                                               OperandTypesVector operandTypes,
+                                               int wmmaVersion, int nonKDim) {
+
+  return chooseWmmaInstruction(dot.getLoc(), wmmaVersion, dot.getC().getType(),
+                               operandTypes[0], operandTypes[1],
+                               operandTypes[2],
+                               dot.getA().getType().getShape().back(), nonKDim);
+}
+
 class BlockedToWMMA : public OpRewritePattern<tt::DotOp> {
   int wmmaVersion;
+  int nonKDim;
 
 public:
-  BlockedToWMMA(MLIRContext *context, int wmmaVersion,
+  BlockedToWMMA(MLIRContext *context, int wmmaVersion, int nonKDim,
                 PatternBenefit benefit = 1)
-      : OpRewritePattern(context, benefit), wmmaVersion(wmmaVersion) {}
+      : OpRewritePattern(context, benefit), wmmaVersion(wmmaVersion),
+        nonKDim(nonKDim) {}
 
   LogicalResult matchAndRewrite(tt::DotOp dotOp,
                                 PatternRewriter &rewriter) const override {
@@ -993,25 +1050,30 @@ public:
     auto aShape = oldAType.getShape();
     auto bShape = oldBType.getShape();
 
-    // check shape
-    auto mnkDim = ttg::AMDWmmaEncodingAttr::getMNKDimPerInstr();
-    auto rank = aShape.size();
-    if (aShape[rank - 2] % mnkDim[0] != 0 || // m
-        bShape[rank - 1] % mnkDim[1] != 0 || // n
-        aShape[rank - 1] % mnkDim[2] != 0)   // k
-      return failure();
-
     // get operand types
     auto operandTypes = getOperandTypesForWmmaOp(rewriter, dotOp, wmmaVersion);
     if (operandTypes.empty())
       return failure();
+
+    // check shape
+    FailureOr<WmmaIntrinsic> wmmaInstr =
+        chooseWmmaInstruction(dotOp, operandTypes, wmmaVersion, nonKDim);
+    if (failed(wmmaInstr)) {
+      return failure();
+    }
+
+    auto mDim = wmmaInstr->mDim;
+    auto nDim = wmmaInstr->nDim;
+    auto kDim = wmmaInstr->kDim;
+    auto kBase = wmmaInstr->kBase;
 
     // get WMMA encoding for the given number of warps
     int numWarps = ttg::lookupNumWarps(dotOp);
 
     ttg::AMDWmmaEncodingAttr wmmaEnc;
 
-    auto warpsPerTile = warpsPerTileWMMA(dotOp, retShape, numWarps);
+    auto warpsPerTile =
+        warpsPerTileWMMA(dotOp, retShape, numWarps, {mDim, nDim});
 
     auto CTALayout = ttg::getCTALayout(oldRetEncoding);
 
@@ -1026,8 +1088,10 @@ public:
     auto oldAcc = dotOp.getC();
     auto newAcc =
         convertAndCastTensor(rewriter, oldAcc, wmmaEnc, operandTypes[2]);
-    auto kWidth = wmmaEnc.getKWidthForOperands();
 
+    // kBase, kWidth and kDim follow the same logic as in mfma
+    // for now kwidth = kbase always
+    auto kWidth = kBase;
     auto newAType = RankedTensorType::get(
         aShape, operandTypes[0],
         ttg::DotOperandEncodingAttr::get(ctx, 0, wmmaEnc, kWidth));
@@ -1254,6 +1318,7 @@ public:
       break;
     case ISAFamily::RDNA3:
       patterns.add<::BlockedToWMMA>(context, getWmmaVersion(archGenerationName),
+                                    matrixInstructionSize,
                                     /*benefit=*/2);
       break;
     default:

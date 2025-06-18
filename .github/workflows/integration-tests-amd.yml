@@ -116,6 +116,12 @@ jobs:
             TRITON_DISABLE_LINE_INFO=0 python3 -m pytest -s -n 8 language/test_line_info.py
           fi
 
+          # Run tests under triton/python/triton_kernels/tests/ on gfx950 and gfx942
+          if [ "${{ matrix.runner[0] }}" = "amd-gfx950" ] || [ "${{ matrix.runner[0] }}" = "amd-gfx942" ]; then
+            cd ../../triton_kernels/
+            python3 -m pytest -s -n 12 tests/
+          fi
+
       - name: Run asan tests on AMD
         if: false
         run: |
