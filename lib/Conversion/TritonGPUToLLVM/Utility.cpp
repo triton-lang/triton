@@ -218,7 +218,6 @@ applyLinearLayout(Location loc, RewriterBase &rewriter,
   } else {
     assert(llvm::equal(matrix.getOutDimNames(),
                        llvm::make_first_range(outIndices)));
-    // Unpack them
     int shift = 0;
     for (auto &[dimName, outIdx] : outIndices) {
       auto outDimSizeLog2 = layout.getOutDimSizeLog2(dimName);
