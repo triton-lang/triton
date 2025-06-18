@@ -384,6 +384,17 @@ def _p_matmul_ogs(
                 block_shape=[BLOCK_M, OUT_BLOCK_N],
             )
 
+        # bias + scale
+        offs_y_n = off_n1 + tl.arange(0, BLOCK_N)
+        mask_n = offs_y_n < N
+        if B is not None:
+            BPtrs = B + expt_id1 * stride_b_e + offs_y_n
+            if pid_k1 == 0:
+                bias = tl.load(BPtrs, mask=mask_n, other=0)
+            else:
+                bias = tl.full([BLOCK_N], 0, dtype=tl.float32)
+        else:
+            bias = tl.full([BLOCK_N], 0, dtype=tl.float32)
         if Betas is not None:
             betas = tl.load(Betas + start_m1 + offs_m, mask=mask_m, other=0.0)
         else:
@@ -399,15 +410,21 @@ def _p_matmul_ogs(
             w_scale = load_scale(WScale)
 
         accs = (acc,)
+        biases = (bias,)
 
         if SUBTILE_FACTOR >= 2:
             acc0, acc1 = acc.reshape(BLOCK_M, 2, BLOCK_N // 2).permute(0, 2, 1).split()
             accs = (acc0, acc1)
+            bias0, bias1 = bias.reshape(2, BLOCK_N // 2).permute(1, 0).split()
+            biases = (bias0, bias1)
 
         if SUBTILE_FACTOR >= 4:
             acc00, acc01 = acc0.reshape(BLOCK_M, 2, BLOCK_N // 4).permute(0, 2, 1).split()
             acc10, acc11 = acc1.reshape(BLOCK_M, 2, BLOCK_N // 4).permute(0, 2, 1).split()
             accs = (acc00, acc01, acc10, acc11)
+            bias00, bias01 = bias0.reshape(2, BLOCK_N // 4).permute(1, 0).split()
+            bias10, bias11 = bias1.reshape(2, BLOCK_N // 4).permute(1, 0).split()
+            biases = (bias00, bias01, bias10, bias11)
 
         tl.static_assert(EPILOGUE_BLOCK_N == BLOCK_N // SUBTILE_FACTOR)
         tl.static_assert(len(accs) == SUBTILE_FACTOR)
@@ -419,18 +436,7 @@ def _p_matmul_ogs(
             if SWAP_XW:
                 acc_tile = acc_tile.T
 
-            if B is not None:
-                offs_y_n = off_n1 + EPILOGUE_BLOCK_N * a_i + tl.arange(0, EPILOGUE_BLOCK_N)
-                mask_n = offs_y_n < N
-                BPtrs = B + expt_id1 * stride_b_e + offs_y_n
-                if pid_k1 == 0:
-                    bias = tl.load(BPtrs, mask=mask_n, other=0)
-                else:
-                    bias = tl.full([EPILOGUE_BLOCK_N], 0, dtype=tl.float32)
-            else:
-                bias = tl.full([EPILOGUE_BLOCK_N], 0, dtype=tl.float32)
-
-            acc_tile = acc_tile + bias[None, :] * betas[:, None]
+            acc_tile = acc_tile + biases[a_i][None, :] * betas[:, None]
             if out_alpha is not None:
                 acc_tile *= out_alpha
 
