@@ -13,7 +13,7 @@ from .matmul_ogs_details._matmul_ogs import _compute_writeback_idx
 from .matmul_ogs_details._matmul_ogs import _matmul_ogs
 from .matmul_ogs_details._p_matmul_ogs import _p_matmul_ogs, get_per_device_per_stream_alloc_fn
 from .matmul_ogs_details._finalize_matmul import _finalize_matmul
-from .matmul_ogs_details.opt_flags import make_opt_flags, OptFlags
+from .matmul_ogs_details.opt_flags import make_opt_flags, OptFlags, update_opt_flags_constraints
 from .matmul_ogs_details.fast_contiguous import fast_contiguous
 from .numerics_details.mxfp import SwizzlingType
 from .specialize import specialize
@@ -613,6 +613,8 @@ def _create_tma_descriptors(
 
     return x_tensor_or_desc, w_desc_and_transpose, mx_desc_and_transpose
 
+def matmul_ogs_set_idle_sms(num_idle_sms):
+    update_opt_flags_constraints({"is_persistent": True, "idle_sms": num_idle_sms})
 
 def matmul_ogs(x, w, bias,
                routing_data: RoutingData | None = None,

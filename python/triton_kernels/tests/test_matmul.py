@@ -9,7 +9,7 @@ from triton_kernels.routing import routing
 import triton_kernels.matmul_ogs_details.opt_flags as opt_flags
 from triton_kernels.matmul_ogs import FlexCtx, PrecisionConfig, MicroscalingCtx, FusedActivation, FnSpecs
 from triton_kernels.matmul_ogs import can_use_persistent_tma
-from triton_kernels.matmul_ogs import matmul_ogs, matmul_ogs_torch
+from triton_kernels.matmul_ogs import matmul_ogs_set_idle_sms, matmul_ogs, matmul_ogs_torch
 from triton_kernels.swiglu import swiglu, swiglu_fn, PrecisionConfig as SwiGLUPrecisionConfig
 # numerics utilities
 from triton_kernels.numerics import InFlexData, OutFlexData
@@ -442,6 +442,16 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
         ref_y_scale = compute_actual_scale(ref_y, tri_y.dtype)
         assert (ref_y_scale -
                 tri_y_scale).abs() < 1e-10, f"ref_y_scale: {ref_y_scale}, tri_y_scale: {tri_y_scale.item()}"
+
+
+def test_set_idle_sms():
+    from triton_kernels.matmul_ogs_details.opt_flags import make_opt_flags
+    num_idle_sms = 24
+    matmul_ogs_set_idle_sms(num_idle_sms)
+    flags = make_opt_flags(torch.float32, torch.float32, torch.float32, PrecisionConfig(), 0, 0, 0, None, False, False,
+                           1)
+    assert flags.is_persistent
+    assert flags.idle_sms == num_idle_sms
 
 
 @pytest.mark.parametrize("m, n, k, mode", [
