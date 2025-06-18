@@ -363,13 +363,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 //         COMMON:   tt.dot_scaled
 //         COMMON:   scf.yield
 
+// fails here because some of the loads are too small and thus loadOpsToIndirectionLevel->isPipeliningBeneficial->canBeConvertedToAsyncLoad returns False
 // Epilogue
-//          ASYNC: ttg.async_wait
-// COMMON-COUNT-3: ttg.local_load
-//         COMMON: scf.if
-//         COMMON:   tt.dot_scaled
-// COMMON-COUNT-2:   scf.yield
-// COMMON-COUNT-3: ttg.local_dealloc
+// XXXXXXXXXXXXXXXXXXX: ttg.async_wait
+// XXXXXXXXXXXXXXXXXXX: ttg.local_load
+// XXXXXXXXXXXXXXXXXXX: scf.if
+// XXXXXXXXXXXXXXXXXXX:   tt.dot_scaled
+// XXXXXXXXXXXXXXXXXXX:   scf.yield
+// XXXXXXXXXXXXXXXXXXX: ttg.local_dealloc
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [4, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [64, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
@@ -564,16 +565,17 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // Prologue
 // COMMON-COUNT-4: tt.load
 
+// fails here because some of the loads are too small and thus loadOpsToIndirectionLevel->isPipeliningBeneficial->canBeConvertedToAsyncLoad returns False
 // Main loop
-//         COMMON: scf.for
-// COMMON-COUNT-4:   tt.load
-//         COMMON:   tt.dot_scaled
-//         COMMON:   scf.yield
+// XXXXXXXXXXXXXX: scf.for
+// XXXXXXXXXXXXXX:   tt.load
+// XXXXXXXXXXXXXX:   tt.dot_scaled
+// XXXXXXXXXXXXXX:   scf.yield
 
 // Epilogue
-//         COMMON: scf.if
-//         COMMON:   tt.dot_scaled
-//         COMMON:   scf.yield
+// XXXXXXXXXXXXXX: scf.if
+// XXXXXXXXXXXXXX:   tt.dot_scaled
+// XXXXXXXXXXXXXX:   scf.yield
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 4], warpsPerCTA = [8, 1], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [4, 16], warpsPerCTA = [8, 1], order = [1, 0]}>

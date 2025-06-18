@@ -383,207 +383,11 @@ void createAndScheduleStreamCopy(
   loadOp.erase();
 }
 
-// Returns the given |inputValue|'s dot user result encoding and updates |opIdx|
-// with which dot operand |inputValue| is fed into if possible.
-static ttg::AMDMfmaEncodingAttr getDotEncoding(Value inputValue,
-                                               unsigned *opIdx) {
-  if (!llvm::hasSingleElement(inputValue.getUses()))
-    return nullptr;
-
-  Operation *user = *inputValue.getUsers().begin();
-  if (user->getNumResults() != 1 ||
-      user->getBlock() != inputValue.getParentBlock())
-    return nullptr;
-
-  if (auto dotOp = dyn_cast<tt::DotOpInterface>(user)) {
-    OpOperand &use = *inputValue.getUses().begin();
-    *opIdx = use.getOperandNumber();
-    auto dotType = cast<RankedTensorType>(dotOp->getResult(0).getType());
-    return dyn_cast<ttg::AMDMfmaEncodingAttr>(dotType.getEncoding());
-  }
-  return getDotEncoding(user->getResult(0), opIdx);
-}
-
-// If all the transitive uses of the given value have are used by a convert to
-// the same dot operand encoding, return true and get the shared encoding that
-// needs to be used to be compatible with users' layouts.
-static std::optional<ttg::SwizzledSharedEncodingAttr>
-getSharedEncIfAllUsersAreDotEnc(Value loadedValue) {
-  ttg::SwizzledSharedEncodingAttr attr;
-  for (Operation *user : loadedValue.getUsers()) {
-    LDBG(" getSharedEncIfAllUsersAreDotEnc current user: " << *user);
-    if (user->getNumResults() != 1)
-      return std::nullopt;
-
-    ttg::SwizzledSharedEncodingAttr tempAttr;
-    Value userResult = user->getResult(0);
-    Type userResType = userResult.getType();
-    if (auto memDesc = dyn_cast<ttg::MemDescType>(userResType)) {
-      // First time we find a shared encoding in the chain, save it and try to
-      // use it if it is compatible with the other users.
-      tempAttr = cast<ttg::SwizzledSharedEncodingAttr>(memDesc.getEncoding());
-      if (!getSharedEncIfAllUsersAreDotEnc(userResult).has_value())
-        return std::nullopt;
-    } else {
-      if (!isa<ttg::LocalLoadOp, ttg::ConvertLayoutOp>(user))
-        return std::nullopt;
-
-      auto srcTy = cast<ttg::TensorOrMemDesc>(loadedValue.getType());
-      auto ctaLayout = ttg::getCTALayout(srcTy.getEncoding());
-      auto order = getOrderForMemory(srcTy);
-      unsigned bitWidth = srcTy.getElementType().getIntOrFloatBitWidth();
-      SmallVector<unsigned> sharedOrder;
-      int rank = order.size();
-      // TODO rework this when shared -> dotOperand conversions support
-      // arbitrary shared memory ordering
-      if (rank == 3) {
-        // Move the batch dimension (dim #0) to be the last so that it will be
-        // the slowest varying dimension.
-        for (unsigned i = 0; i < rank; ++i)
-          if (order[i] != 0)
-            sharedOrder.emplace_back(order[i]);
-        sharedOrder.emplace_back(0);
-      } else {
-        sharedOrder = order;
-      }
-
-      auto userResEnc = cast<ttg::TensorOrMemDesc>(userResType).getEncoding();
-      if (auto dotOpEnc = dyn_cast<ttg::DotOperandEncodingAttr>(userResEnc)) {
-        tempAttr = ttg::SwizzledSharedEncodingAttr::get(
-            loadedValue.getContext(), dotOpEnc, srcTy.getShape(), sharedOrder,
-            ctaLayout, bitWidth, /*needTrans=*/false);
-      } else if (auto llEnc = dyn_cast<ttg::LinearEncodingAttr>(userResEnc)) {
-        // We use linear layout directly for scaled dot fp8 operands. For such
-        // cases, we need to look further down the def-use chain to find the dot
-        // op for the mfma layout to deduce operand index and other information.
-        unsigned opIdx;
-        if (auto dotEnc = getDotEncoding(userResult, &opIdx)) {
-          unsigned vecSize = llEnc.getLinearLayout().getNumConsecutiveInOut();
-          LDBG("deduced opIdx: " << opIdx << "; deduced vecSize: " << vecSize);
-          tempAttr = dotEnc.composeSharedLayoutForOperand(
-              ctaLayout, opIdx, srcTy.getShape(), order, vecSize, bitWidth,
-              /*needTrans=*/false);
-        }
-      }
-    }
-    // Check that the shared encodings needed by the users are compatible.
-    if (!tempAttr || (attr != nullptr && attr != tempAttr))
-      return std::nullopt;
-    attr = tempAttr;
-  }
-  return attr;
-}
-
-// Create a map from load ops to their distances and the final uses of the load
-// op (another load op, or a dot op).
-//
-// Distance is "0" for the load op directly used by the dot op,
-// "1" for the load op used by the load op used by the dot op, and so on.
-FailureOr<llvm::MapVector<Operation *, LoadInfo>>
-findPipelineableLoads(scf::ForOp forOp,
-                      tt::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
-  llvm::MapVector<Operation *, LoadInfo> loadToInfo;
-  DenseSet<Operation *> seen;
-  // Recursively visit the given op and its operands to discover all load ops
-  // and collect their distances and uses.
-
-  auto arch = getAMDArch(forOp->getParentOfType<ModuleOp>());
-  triton::AMD::ISAFamily isaFamily = triton::AMD::ISAFamily::Unknown;
-  if (arch)
-    isaFamily = triton::AMD::deduceISAFamily(*arch);
-  std::function<void(Operation * op, int distance, Operation *use)> dfs =
-      [&](Operation *op, int distance, Operation *use) {
-        // Skip previously visited load ops.
-        if (!seen.insert(op).second)
-          return;
-
-        if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
-          // TODO: What if there are multiple uses at different distances?
-          assert(!isLoadFromTensorPtr(loadOp) &&
-                 "Block ptr should have been lowered before this pass.");
-          auto ptr = loadOp.getPtr();
-          if (auto tensorTy = dyn_cast<RankedTensorType>(ptr.getType())) {
-            ttg::SwizzledSharedEncodingAttr sharedEncoding = nullptr;
-            // Store memory layouts if possible.
-            if (isa<tt::DotOpInterface>(use)) {
-              unsigned vecContiguity = axisInfoAnalysis.getContiguity(ptr);
-              if (auto mask = loadOp.getMask()) {
-                vecContiguity = std::min<unsigned>(
-                    vecContiguity, axisInfoAnalysis.getMaskAlignment(mask));
-              }
-              auto pointeeTy = cast<tt::PointerType>(tensorTy.getElementType())
-                                   .getPointeeType();
-              unsigned width =
-                  vecContiguity * pointeeTy.getIntOrFloatBitWidth();
-              // Limit shared memory sharing to width >= 32 elements.
-              LDBG("Load " << *loadOp << " has width " << width);
-              if (width >= 32) {
-                sharedEncoding =
-                    getSharedEncIfAllUsersAreDotEnc(op->getResult(0))
-                        .value_or(nullptr);
-              } else if (isaFamily != triton::AMD::ISAFamily::CDNA4) {
-                LDBG("Skip width<32 load " << loadOp << " for arch " << arch);
-                return;
-              }
-            } else if (auto useOp = dyn_cast<tt::LoadOp>(use)) {
-              // The use of this loadOp is another loadOp. If the use is not in
-              // the loadToInfo already, it means that the use is not valid for
-              // pipelining for some reason. We should skip this loadOp, too.
-              if (!loadToInfo.contains(useOp))
-                return;
-            }
-            loadToInfo[op] = {sharedEncoding, distance, use, false};
-            use = op;
-            ++distance;
-          } else {
-            LDBG("Skip non-tensor load " << loadOp);
-            return;
-          }
-        }
-
-        for (Value operand : op->getOperands()) {
-          Operation *defOp = operand.getDefiningOp();
-          if (defOp && defOp->getBlock() == op->getBlock())
-            dfs(defOp, distance, use);
-        }
-      };
-
-  for (Operation &op : forOp.getBody()->without_terminator()) {
-    if (!isa<tt::DotOpInterface>(op))
-      continue;
-    seen.clear();
-    dfs(&op, 0, &op);
-  }
-
-  // If the loop has numStages attribute, also consider pipelining other loads
-  // that are not directly used by dot ops.
-  if (forOp->hasAttr(tt::kNumStagesAttrName)) {
-    for (Operation &op : forOp.getBody()->without_terminator()) {
-      if (!isa<tt::LoadOp>(op))
-        dfs(&op, 0, &op);
-    }
-  }
-
-  LLVM_DEBUG({
-    LDBG("Found " << loadToInfo.size() << " loads to pipeline:");
-    for (const auto &[l, i] : loadToInfo) {
-      LDBG("  - load: " << *l);
-      LDBG("    at distance: " << i.distToUse);
-      LDBG("    used by op: " << *i.use);
-    }
-  });
-
-  if (loadToInfo.empty())
-    return failure();
-
-  return loadToInfo;
-}
-
-LogicalResult
-scheduleLoads(const llvm::MapVector<Operation *, LoadInfo> &loadToInfo,
-              int maxDist, int numStages, int stages[SCHED_SIZE],
-              std::array<tt::CoarseSchedule::Cluster, SCHED_SIZE> &clusters,
-              tt::CoarseSchedule &schedule) {
+LogicalResult scheduleLoads(
+    const llvm::MapVector<Operation *, LoadInfo> &loadToInfo, int maxDist,
+    int numStages, int stages[SCHED_SIZE],
+    const std::array<tt::CoarseSchedule::Cluster, SCHED_SIZE> &clusters,
+    tt::CoarseSchedule &schedule) {
   // The stage gap between chained loads--this allows us to "spread" loads
   // with a non-one step in case the number of stages given by the user is
   // large.
@@ -626,97 +430,6 @@ void scheduleDependencies(tt::CoarseSchedule &schedule, scf::ForOp forOp,
   }
 }
 
-// Find dependencies with distance of 1. They will go to the next stage,
-// but in the cluster before the current op.
-void scheduleDistanceOneDependencies(scf::ForOp forOp,
-                                     tt::CoarseSchedule &schedule,
-                                     int numStages) {
-  auto getNestedOperands = [](Operation *op) {
-    SmallVector<Value> operands;
-    op->walk([&](Operation *nestedOp) {
-      for (Value operand : nestedOp->getOperands()) {
-        if (operand.getParentBlock()->getParentOp()->isAncestor(nestedOp))
-          operands.push_back(operand);
-      }
-    });
-    return operands;
-  };
-
-  // Mapping from the cluster to the cluster before it.
-  DenseMap<tt::CoarseSchedule::Cluster *, tt::CoarseSchedule::Cluster>
-      dist1Cluster;
-  for (auto &op : forOp.getBody()->without_terminator()) {
-    if (schedule.count(&op) == 0)
-      continue;
-    auto [stage, cluster] = schedule[&op];
-    // Can't schedule past the last stage.
-    if (stage == numStages - 1)
-      continue;
-    for (Value operand : getNestedOperands(&op)) {
-      auto arg = dyn_cast<BlockArgument>(operand);
-      if (!arg || arg.getArgNumber() == 0 || arg.getOwner() != op.getBlock())
-        continue;
-      auto yieldOp = op.getBlock()->getTerminator();
-      Value v = yieldOp->getOperand(arg.getArgNumber() - 1);
-      Operation *defOp = v.getDefiningOp();
-      if (!defOp || schedule.count(defOp) != 0)
-        continue;
-      if (isa<tt::LoadOp>(defOp)) {
-        // Exception: schedule loads with a distance of 1 together with the
-        // current op.
-        schedule.insertIfAbsent(defOp, stage, cluster);
-        schedule.insertDepsOfOp(defOp, stage, cluster, true);
-      } else {
-        if (dist1Cluster.count(&cluster) == 0) {
-          dist1Cluster[&cluster] = schedule.clusters.newBefore(cluster);
-        }
-        schedule.insertIfAbsent(defOp, stage + 1, dist1Cluster[&cluster]);
-        schedule.insertDepsOfOp(defOp, stage + 1, dist1Cluster[&cluster], true);
-      }
-    }
-  }
-}
-
-void scheduleRemainingToLastStage(int numStages,
-                                  tt::CoarseSchedule::Cluster cluster,
-                                  scf::ForOp forOp,
-                                  tt::CoarseSchedule &schedule) {
-  int lastStage = numStages - 1;
-  // Assign the rest of the ops to the last stage.
-  // Take care of the ordering of the ops - uses cannot be scheduled to the
-  // cluster before the definition.
-  DenseMap<Operation *, tt::CoarseSchedule::Cluster> opToCluster;
-  for (auto &op : forOp.getBody()->without_terminator()) {
-    if (schedule.count(&op) == 0)
-      opToCluster[&op] = cluster;
-  }
-
-  SmallVector<Operation *> queue;
-  for (auto [op, stage, cluster] : schedule.getOpsInOrder(forOp)) {
-    // We really only care about the producers from the last stage.
-    // Others will be scheduled before these ops anyway.
-    if (stage == lastStage)
-      queue.push_back(op);
-  }
-
-  while (!queue.empty()) {
-    Operation *op = queue.pop_back_val();
-    for (auto user : op->getUsers()) {
-      if (opToCluster.count(user)) {
-        tt::CoarseSchedule::Cluster userCluster = opToCluster[user];
-        tt::CoarseSchedule::Cluster opCluster = schedule[op].second;
-        if (*userCluster < *opCluster) {
-          opToCluster[user] = opCluster;
-          queue.push_back(user);
-        }
-      }
-    }
-  }
-
-  for (auto [op, cluster] : opToCluster)
-    schedule.insert(op, lastStage, cluster);
-}
-
 namespace {
 bool canBeConvertedToAsyncLoad(unsigned numBuffers, tt::LoadOp loadOp,
                                Value alloc,
@@ -746,6 +459,7 @@ bool canBeConvertedToAsyncLoad(unsigned numBuffers, tt::LoadOp loadOp,
   return triton::canBeConvertedToAsyncLoad(loadOp, axisInfoAnalysis);
 }
 } // namespace
+
 
 // Convert load ops into shared memory allocation loads and apply
 // multi-buffering based on the required number of buffers.
@@ -830,15 +544,27 @@ LogicalResult preprocessLoopAndBuildSchedule(scf::ForOp &forOp, int numStages,
   std::array<tt::CoarseSchedule::Cluster, SCHED_SIZE> clusters;
   tt::CoarseSchedule schedule(numStages);
 
-  // Schedule the loads and root ops (dot ops) in the loop. This will give us
-  // a scaffold for the final schedule.
-  FailureOr<llvm::MapVector<Operation *, LoadInfo>> loadToInfo =
-      findPipelineableLoads(forOp, axisInfoAnalysis);
-  if (failed(loadToInfo))
+  bool pipelineWithoutDot = forOp->hasAttr(mlir::triton::kNumStagesAttrName);
+  llvm::MapVector<Operation *, std::pair<int, Operation *>> loadOpToIndLevel =
+      triton::gpu::loadOpsToIndirectionLevel(forOp, pipelineWithoutDot,
+                                             axisInfoAnalysis, numStages);
+  if (loadOpToIndLevel.empty())
     return failure();
 
+  llvm::MapVector<Operation *, LoadInfo> loadToInfo;
+  for (const auto &[load, info] : loadOpToIndLevel) {
+    auto [distance, use] = info;
+    bool incompatible = false;
+    auto sharedEncoding =
+        getSharedEncIfAllUsersAreDotEnc(load->getResult(0), incompatible)
+            .value_or(nullptr);
+    assert(!incompatible &&
+           "expected only compatible loads from loadOpsToIndirectionLevel");
+    loadToInfo[load] = {sharedEncoding, distance, use, false};
+  }
+
   int maxDist = -1;
-  for (auto &[_loadOp, info] : *loadToInfo)
+  for (auto &[_loadOp, info] : loadToInfo)
     maxDist = std::max(maxDist, info.distToUse);
   LDBG("maxDist = " << maxDist);
   if (maxDist >= numStages)
@@ -848,7 +574,7 @@ LogicalResult preprocessLoopAndBuildSchedule(scf::ForOp &forOp, int numStages,
                           clusters, schedule)))
     return failure();
 
-  if (failed(scheduleLoads(*loadToInfo, maxDist, numStages, stages, clusters,
+  if (failed(scheduleLoads(loadToInfo, maxDist, numStages, stages, clusters,
                            schedule)))
     return failure();
 
@@ -859,7 +585,7 @@ LogicalResult preprocessLoopAndBuildSchedule(scf::ForOp &forOp, int numStages,
 
   // Convert the loads into shared memory allocations and loads from them.
   SmallVector<std::pair<Operation *, Value>> sharedMemAllocs =
-      createAndScheduleStreamOps(*loadToInfo, forOp, numBuffers, useAsyncCopy,
+      createAndScheduleStreamOps(loadToInfo, forOp, numBuffers, useAsyncCopy,
                                  schedule, stages, clusters, axisInfoAnalysis);
 
   scheduleDependencies(schedule, forOp, numStages);
@@ -868,14 +594,14 @@ LogicalResult preprocessLoopAndBuildSchedule(scf::ForOp &forOp, int numStages,
     schedule.dump();
   });
 
-  scheduleDistanceOneDependencies(forOp, schedule, numStages);
+  triton::gpu::scheduleDistanceOneDependencies(forOp, schedule);
   LLVM_DEBUG({
     LDBG("Coarse schedule with dist 1:");
     schedule.dump();
   });
 
-  scheduleRemainingToLastStage(numStages, clusters[SCHED_COMPUTE], forOp,
-                               schedule);
+  tt::CoarseSchedule::Cluster computeCluster = clusters[SCHED_COMPUTE];
+  triton::gpu::scheduleRemainingToLastStage(forOp, schedule, computeCluster);
   LLVM_DEBUG({
     LDBG("Final coarse schedule:");
     schedule.dump();
@@ -939,26 +665,6 @@ LogicalResult pipelineLoop(scf::ForOp forOp, int numStages, int globalPrefetch,
   IRRewriter rewriter(forOp->getContext());
   rewriter.setInsertionPoint(forOp);
   return tt::pipelineForLoop(rewriter, forOp, options);
-}
-
-// Return true if the preconditions for pipelining the loop are met.
-static bool checkPrecondition(scf::ForOp forOp) {
-  // Skip loop with distance > 1 for now.
-  // TODO: relax the constraint in the expander.
-  if (llvm::any_of(forOp.getBody()->getTerminator()->getOperands(),
-                   [](Value operand) { return !operand.getDefiningOp(); }))
-    return false;
-
-  auto hasInvalidOp = [forOp](Operation *op) {
-    // Don't pipeline outer loops.
-    if (op != forOp && isa<scf::ForOp, scf::WhileOp>(op))
-      return WalkResult::interrupt();
-    // Don't pipeline loops with barriers or asserts/prints.
-    if (isa<gpu::BarrierOp, tt::AssertOp, tt::PrintOp>(op))
-      return WalkResult::interrupt();
-    return WalkResult::advance();
-  };
-  return !forOp->walk(hasInvalidOp).wasInterrupted();
 }
 
 namespace {
@@ -1027,7 +733,7 @@ struct PipelinePass : impl::TritonAMDGPUStreamPipelineBase<PipelinePass> {
     });
 
     for (scf::ForOp forOp : loops) {
-      if (!checkPrecondition(forOp))
+      if (!triton::gpu::isSafeToPipeline(forOp))
         continue;
       (void)pipelineLoop(forOp, tt::getNumStagesOrDefault(forOp, numStages),
                          globalPrefetch, localPrefetch, useAsyncCopy);
