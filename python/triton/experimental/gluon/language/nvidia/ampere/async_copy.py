@@ -13,9 +13,6 @@ __all__ = [
 @builtin
 def async_copy_global_to_shared(smem, pointer, mask=None, cache_modifier="", eviction_policy="", volatile=False,
                                 _semantic=None):
-    # TODO: Add validation that the copy can actually be performed by cp.async
-    # i.e. at least 4 bytes of contiguous data is transferred + mask is the same
-    # for those 4 bytes.
     mask = _unwrap_if_constexpr(mask)
     cache_modifier = _semantic._str_to_load_cache_modifier(cache_modifier)
     eviction_policy = _semantic._str_to_eviction_policy(eviction_policy)
