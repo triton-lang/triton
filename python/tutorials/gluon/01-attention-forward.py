@@ -241,14 +241,14 @@ def Channel(T, alloc_fn):
 
         @gluon.jit
         def acquire(self):
-            smem, ready_bar = self.channel.acquire_producer(self.index, self.phase)
+            mem, ready_bar = self.channel.acquire_producer(self.index, self.phase)
             self.index, self.phase = self.channel.increment(self.index, self.phase)
-            return smem, ready_bar, self
+            return mem, ready_bar, self
 
         @gluon.jit
         def emplace(self, value):
-            smem, ready_bar, self = self.acquire()
-            smem.store(value)
+            mem, ready_bar, self = self.acquire()
+            mem.store(value)
             mbarrier.arrive(ready_bar, count=1)
             return self
 
@@ -265,14 +265,14 @@ def Channel(T, alloc_fn):
 
         @gluon.jit
         def acquire(self):
-            smem, empty_bar = self.channel.acquire_consumer(self.index, self.phase)
+            mem, empty_bar = self.channel.acquire_consumer(self.index, self.phase)
             self.index, self.phase = self.channel.increment(self.index, self.phase)
-            return smem, empty_bar, self
+            return mem, empty_bar, self
 
         @gluon.jit
         def get(self, layout: gl.constexpr):
-            smem, empty_bar, self = self.acquire()
-            value = smem.load(layout)
+            mem, empty_bar, self = self.acquire()
+            value = mem.load(layout)
             mbarrier.arrive(empty_bar, count=1)
             return value, self
 
@@ -416,6 +416,7 @@ class AttentionConfig:
     qk_layout: gl.constexpr
     o_layout: gl.constexpr
     o_splitn_layout: gl.constexpr
+    mi_2d_layout: gl.constexpr
 
     def __init__(self, qk_scale, Z, H, N_CTX, BLOCK_M, BLOCK_N, HEAD_DIM, dtype, num_warps, SPLIT_N_FACTOR):
         self.qk_scale = qk_scale
@@ -449,6 +450,7 @@ class AttentionConfig:
         self.o_splitn_layout = gl.constexpr(
             get_tmem_32x32b_reg_layout((o_instr_shape[0], o_instr_shape[1] // self.SPLIT_N_FACTOR, o_instr_shape[2]),
                                        (self.o_shape[0], self.o_shape[1] // self.SPLIT_N_FACTOR), self.num_warps))
+        self.mi_2d_layout = gl.constexpr(gl.BlockedLayout([1, 1], [32, 1], [4, 1], [0, 1]))
 
     @gluon.jit
     def get_program(self):
@@ -539,7 +541,7 @@ class InnerLoopInfo:
     qk_mma_ctx: MMAContext
     o_mma_ctx: MMAContext
     p_chnl: TensorMemoryChannel
-    mi_chnl: SharedMemoryChannel
+    mi_chnl: TensorMemoryChannel
     li_smem: gl.shared_memory_descriptor
     q_smem: gl.shared_memory_descriptor
 
@@ -552,14 +554,19 @@ class InnerLoopInfo:
         o_mma_ctx.channel.initialize_for_consumer()
         o_mma_ctx.channel.mem.index(0).store(tile.acc)
 
-        p_chnl = TensorMemoryChannel._borrow(qk_mma_ctx.channel.mem, config.qk_shape, config.dtype,
-                                             config.p_tmem_layout, num_buffers=1, num_consumers=1)
+        # QK and PV MMAs are serialized, which enables borrowing QK's memory.
+        borrow_tmem = qk_mma_ctx.channel.mem.index(0)
+        p_tmem = borrow_tmem.slice(0, config.BLOCK_N // 2)
+        mi_tmem = borrow_tmem.slice(config.BLOCK_N // 2, 1)
+        mi_layout: gl.constexpr = TensorMemoryLayout([config.SPLIT_M, 1], unpacked=False)
+
+        p_chnl = TensorMemoryChannel._borrow(p_tmem, config.qk_shape, config.dtype, config.p_tmem_layout, num_buffers=1,
+                                             num_consumers=1)
         p_chnl.initialize_for_producer()
 
-        mi_chnl = SharedMemoryChannel.create([config.SPLIT_M], gl.float32, gl.constexpr(mbarrier.MBarrierLayout()),
-                                             num_buffers=1)
+        mi_chnl = TensorMemoryChannel._borrow(mi_tmem, [config.SPLIT_M, 1], gl.float32, mi_layout, num_buffers=1)
         mi_chnl.initialize_for_producer()
-        mi_chnl.mem.index(0).store(tile.m_i)
+        mi_chnl.mem.index(0).store(gl.convert_layout(tile.m_i.expand_dims(1), config.mi_2d_layout))
 
         li_smem = gl.allocate_shared_memory(gl.float32, [config.SPLIT_M], gl.constexpr(mbarrier.MBarrierLayout()))
         li_smem.store(tile.l_i)
@@ -664,7 +671,8 @@ def _attn_fwd_mma(config,  #
 
 @gluon.jit
 def _attn_fwd_correction_compute(config, mi_consumer, o_consumer, m_i):
-    m_ij, mi_consumer = mi_consumer.get(gl.constexpr(gl.SliceLayout(1, config.o_splitn_layout)))
+    m_ij, mi_consumer = mi_consumer.get(config.mi_2d_layout)
+    m_ij = gl.convert_layout(m_ij.reshape([config.SPLIT_M]), gl.constexpr(gl.SliceLayout(1, config.o_splitn_layout)))
     alpha = gl.exp2(m_i - m_ij)
 
     o_tmem, o_bar, o_consumer = o_consumer.acquire()
@@ -723,7 +731,8 @@ def _softmax_tile(tile_id: gl.constexpr, config, info, STAGE: gl.constexpr):
     p_producer = info.p_chnl.create_producer()
     mi_producer = info.mi_chnl.create_producer()
 
-    m_i = info.mi_chnl.mem.index(0).load(qk_slice_dim1)
+    m_i = info.mi_chnl.mem.index(0).load(config.mi_2d_layout)
+    m_i = gl.convert_layout(m_i.reshape([config.SPLIT_M]), qk_slice_dim1)
     l_i = info.li_smem.load(qk_slice_dim1)
 
     for start_n in range(lo, hi, config.BLOCK_N):
@@ -735,11 +744,11 @@ def _softmax_tile(tile_id: gl.constexpr, config, info, STAGE: gl.constexpr):
             mask = offs_m[:, None] >= (start_n + offs_n[None, :])
             qk = qk * config.qk_scale + gl.where(mask, 0, -1.0e6)
             m_ij = gl.maximum(m_i, gl.max(qk, 1))
-            mi_producer = mi_producer.emplace(m_ij)
+            mi_producer = mi_producer.emplace(gl.convert_layout(m_ij.expand_dims(1), config.mi_2d_layout))
             qk -= m_ij[:, None]
         else:
             m_ij = gl.maximum(m_i, gl.max(qk, 1) * config.qk_scale)
-            mi_producer = mi_producer.emplace(m_ij)
+            mi_producer = mi_producer.emplace(gl.convert_layout(m_ij.expand_dims(1), config.mi_2d_layout))
             qk = qk * config.qk_scale - m_ij[:, None]
 
         p = gl.exp2(qk)
@@ -998,4 +1007,5 @@ def bench(Z, H, N_CTX, HEAD_DIM, causal, provider):
 
 
 if __name__ == "__main__":
-    bench.run(save_path=".", print_data=True)
+    test_op(1, 32, 16 * 1024, 64, True, torch.float16)
+    # bench.run(save_path=".", print_data=True)
