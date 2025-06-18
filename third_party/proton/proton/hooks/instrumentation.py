@@ -168,7 +168,7 @@ class InstrumentationHook(Hook):
 
             triton_proton.add_allocate_proton_shared_memory(pm)
 
-            if backend_name == "amd":
+            if mode.Optimize.SCHED_BARRIERS in self.mode.optimizations and backend_name == "amd":
                 triton_proton.add_sched_barriers(pm)
 
         def to_llvm_passes(pm):
