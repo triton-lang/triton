@@ -111,7 +111,7 @@ tt.func public @result_dim_too_large(%arg0: !ttg.memdesc<8x16xf32, #shared, #sme
 
 // -----
 
-#mma0 = #ttg.nvidia_mma<{versionMajor=2, warpsPerCTA=[1,1]}>
+#mma0 = #ttg.nvidia_mma<{versionMajor=2, warpsPerCTA=[1,1], instrShape = [16, 8]}>
 #dot_operand_a = #ttg.dot_op<{opIdx=0, parent=#mma0, kWidth=2}>
 #dot_operand_b = #ttg.dot_op<{opIdx=1, parent=#mma0, kWidth=2}>
 module attributes {"ttg.num-warps" = 1 : i32} {
@@ -124,7 +124,7 @@ module attributes {"ttg.num-warps" = 1 : i32} {
 
 // -----
 
-#mma0 = #ttg.nvidia_mma<{versionMajor=2, warpsPerCTA=[1,1]}>
+#mma0 = #ttg.nvidia_mma<{versionMajor=2, warpsPerCTA=[1,1], instrShape = [16, 8]}>
 #dot_operand_a = #ttg.dot_op<{opIdx=0, parent=#mma0, kWidth=1}>
 #dot_operand_b = #ttg.dot_op<{opIdx=1, parent=#mma0, kWidth=2}>
 module attributes {"ttg.num-warps" = 1 : i32} {
@@ -137,7 +137,7 @@ module attributes {"ttg.num-warps" = 1 : i32} {
 
 // -----
 
-#mma0 = #ttg.nvidia_mma<{versionMajor=2, warpsPerCTA=[1,1]}>
+#mma0 = #ttg.nvidia_mma<{versionMajor=2, warpsPerCTA=[1,1], instrShape = [16, 8]}>
 #dot_operand_a = #ttg.dot_op<{opIdx=0, parent=#mma0, kWidth=2}>
 #dot_operand_b = #ttg.dot_op<{opIdx=1, parent=#mma0, kWidth=2}>
 module attributes {"ttg.num-warps" = 1 : i32} {
@@ -150,7 +150,7 @@ module attributes {"ttg.num-warps" = 1 : i32} {
 
 // -----
 
-#mma0 = #ttg.nvidia_mma<{versionMajor=2, warpsPerCTA=[1,1]}>
+#mma0 = #ttg.nvidia_mma<{versionMajor=2, warpsPerCTA=[1,1], instrShape = [16, 8]}>
 #dot_operand_a = #ttg.dot_op<{opIdx=0, parent=#mma0, kWidth=1}>
 #dot_operand_b = #ttg.dot_op<{opIdx=1, parent=#mma0, kWidth=2}>
 module attributes {"ttg.num-warps" = 1 : i32} {

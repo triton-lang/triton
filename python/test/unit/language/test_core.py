@@ -3080,6 +3080,8 @@ def test_reduce_layouts(M, N, src_layout, axis, epilogue_kind, dtype_str, add_ov
         pytest.skip("Skipping because tensor shape is smaller than M(f)maLayout instr_shape")
     if reduce_op == "sum" and dtype_str == "float16" and M * N > 1024:
         pytest.skip("Skipping sum reduction on float16 due to accuracy issues")
+    if isinstance(src_layout, LinearLayout) and THREADS_PER_WARP != (1 << len(src_layout.lane)):
+        pytest.skip(f"Skipping. This LinearLayout assumes {1 << len(src_layout.lane)} threads per warp")
 
     if isinstance(src_layout, MmaLayout) and src_layout.version == 3:
         src_layout.instr_shape[2] = 16 if dtype_str == "float16" else 8

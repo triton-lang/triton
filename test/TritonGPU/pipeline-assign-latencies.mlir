@@ -2,7 +2,7 @@
 
 #AL = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 #BL = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
-#C = #ttg.nvidia_mma<{versionMajor = 2, warpsPerCTA = [4, 1]}>
+#C = #ttg.nvidia_mma<{versionMajor = 2, warpsPerCTA = [4, 1], instrShape = [16, 8]}>
 #A = #ttg.dot_op<{opIdx = 0, parent = #C, kWidth=2}>
 #B = #ttg.dot_op<{opIdx = 1, parent = #C, kWidth=2}>
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 16}>
