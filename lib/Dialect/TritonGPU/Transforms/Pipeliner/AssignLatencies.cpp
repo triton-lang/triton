@@ -67,26 +67,16 @@ public:
     ModuleOp moduleOp = forOp->getParentOfType<ModuleOp>();
     tt::ModuleAxisInfoAnalysis axisInfoAnalysis(moduleOp);
 
-    llvm::MapVector<Operation *, int> loadOpToIndLevel =
-        loadOpsToIndirectionLevel(forOp, pipelineWithoutDot, axisInfoAnalysis);
+    llvm::MapVector<Operation *, std::pair<int, Operation *>> loadOpToIndLevel =
+        loadOpsToIndirectionLevel(forOp, pipelineWithoutDot, axisInfoAnalysis,
+                                  numStages);
     if (loadOpToIndLevel.empty())
       return;
 
-    // We assume loads with different dist are assigned to different stages.
-    // If numStages is 2, we will have no stage available for indirect loads
-    // with dist >= 1. In general, when dist is equal to numStages - 1, we
-    // should not pipeline it.
-    for (auto iter = loadOpToIndLevel.begin();
-         iter != loadOpToIndLevel.end();) {
-      if (iter->second >= numStages - 1)
-        iter = loadOpToIndLevel.erase(iter);
-      else
-        ++iter;
-    }
-
     // Calculate the stage distance between applicable loads.
-    auto vals = llvm::make_second_range(loadOpToIndLevel);
-    int maxIndirectionLevel = vals.empty() ? 0 : *llvm::max_element(vals);
+    int maxIndirectionLevel = 0;
+    for (auto &[loadOp, info] : loadOpToIndLevel)
+      maxIndirectionLevel = std::max(maxIndirectionLevel, info.first);
     unsigned loadLatency = (numStages - 1) / (maxIndirectionLevel + 1);
 
     for (auto [loadOp, dist] : loadOpToIndLevel) {
@@ -99,15 +89,17 @@ private:
   int numStages;
   DenseMap<Operation *, int> &opLatency;
 
-  bool canHaveSharedEncoding(tt::LoadOp op) {
+public:
+  static bool canHaveSharedEncoding(tt::LoadOp op) {
     // If used by an user with DotOp encoding, all the uses must be compatible.
     bool incompatible = false;
     getSharedEncIfAllUsersAreDotEnc(op.getResult(), incompatible);
     return !incompatible;
   }
 
-  bool isPipeliningBeneficial(Operation *op, Operation *finalUser,
-                              tt::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
+  static bool
+  isPipeliningBeneficial(Operation *op, Operation *finalUser,
+                         tt::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
     if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
       if (!canBeConvertedToAsyncLoad(loadOp, axisInfoAnalysis)) {
         LDBG("Load " << *loadOp << " is too small for pipelining");
@@ -153,15 +145,18 @@ private:
 
     return true;
   }
+};
+} // namespace
 
   // Create a map from load ops to their indirection level and the
   // final use of the load op (another load op, or a dot op).
   // Indirection level is "0" for the load op directly used by the dot op,
   // "1" for the load op used by the load op used by the dot op, and so on.
-  llvm::MapVector<Operation *, int>
+  llvm::MapVector<Operation *, std::pair<int, Operation *>>
   loadOpsToIndirectionLevel(scf::ForOp forOp, bool pipelineWithoutDot,
-                            tt::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
-    llvm::MapVector<Operation *, int> loadOpToIndLevel;
+                            tt::ModuleAxisInfoAnalysis &axisInfoAnalysis,
+                            int numStages) {
+    llvm::MapVector<Operation *, std::pair<int, Operation *>> loadOpToIndLevel;
     DenseSet<Operation *> seen;
     DenseSet<Operation *> excluded;
 
@@ -169,12 +164,12 @@ private:
         [&](Operation *op, Operation *finalUser, int distance) {
           if (!seen.insert(op).second || excluded.count(op))
             return;
-          if (isa<tt::LoadOp, tt::DescriptorLoadOp, tt::DescriptorGatherOp>(
-                  op)) {
-            if (!isPipeliningBeneficial(op, finalUser, axisInfoAnalysis))
+          if (isa<tt::LoadOp, tt::DescriptorLoadOp, tt::DescriptorGatherOp>(op)) {
+            if (!AssignLoadLatencies::isPipeliningBeneficial(op, finalUser,
+                                                             axisInfoAnalysis))
               return;
             if (loadOpToIndLevel.count(op)) {
-              int level = loadOpToIndLevel[op];
+              int level = loadOpToIndLevel[op].first;
               if (level != distance) {
                 // If we have multiple uses at different distances, we don't
                 // know which one to pick.
@@ -188,7 +183,7 @@ private:
             } else {
               LDBG("Load " << *op << " considered for pipelining with distance "
                            << distance);
-              loadOpToIndLevel[op] = distance;
+              loadOpToIndLevel[op] = {distance, finalUser};
             }
             finalUser = op;
             distance++;
@@ -227,10 +222,21 @@ private:
       }
     }
 
+    // We assume loads with different dist are assigned to different stages.
+    // If numStages is 2, we will have no stage available for indirect loads
+    // with dist >= 1. In general, when dist is equal to numStages - 1, we
+    // should not pipeline it.
+    for (auto iter = loadOpToIndLevel.begin(); iter != loadOpToIndLevel.end();) {
+      if (iter->second.first >= numStages - 1)
+        iter = loadOpToIndLevel.erase(iter);
+      else
+        ++iter;
+    }
+
     return loadOpToIndLevel;
   }
-};
 
+namespace {
 class AssignMMALatencies {
 public:
   AssignMMALatencies(scf::ForOp forOp, DenseMap<Operation *, int> &opLatency)
