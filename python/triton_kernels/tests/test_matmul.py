@@ -445,6 +445,8 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
 
 
 def test_set_idle_sms():
+    if not is_cuda():
+        pytest.skip("Only supported on CUDA")
     from triton_kernels.matmul_ogs_details.opt_flags import make_opt_flags
     num_idle_sms = 24
     matmul_ogs_set_idle_sms(num_idle_sms)

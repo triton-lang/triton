@@ -44,10 +44,14 @@ from triton.language.core import (
 
 _IMPORT_FROM_TRITON: List[str] = [
     "expand_dims",
+    "inline_asm_elementwise",
     "join",
     "load",
     "maximum",
+    "max_constancy",
+    "max_contiguous",
     "minimum",
+    "multiple_of",
     "permute",
     "program_id",
     "reduce",
@@ -58,7 +62,6 @@ _IMPORT_FROM_TRITON: List[str] = [
     "store",
     "to_tensor",
     "where",
-    "inline_asm_elementwise",
 ]
 
 __all__ = [
