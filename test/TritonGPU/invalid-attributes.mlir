@@ -84,8 +84,18 @@
 
 // -----
 
+// expected-error@+1 {{interval values must all be power of two}}
+#shared = #ttg.padded_shared<[0:+2]>
+
+// -----
+
 // expected-error@+1 {{padding values must all be power of two}}
 #shared = #ttg.padded_shared<[2:+3]>
+
+// -----
+
+// expected-error@+1 {{padding values must all be power of two}}
+#shared = #ttg.padded_shared<[2:+0]>
 
 // -----
 
