@@ -255,7 +255,7 @@ tt.func @bad_default_yields(%arg0: i32, %arg1: i64) {
 module attributes {"ttg.num-warps" = 4 : i32} {
 
 tt.func @function_scope() attributes {"ttg.num-warps" = 8 : i32} {
-  // expected-error @below {{Layout has a total of 4 warps per CTA, but the context requires 8 warps per CTA}}
+  // expected-error @below {{Layout has 4 warps per CTA, but the context requires 8 warps per CTA}}
   tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #blocked_4_warps>
   tt.return
 }
@@ -269,7 +269,7 @@ tt.func @function_scope() attributes {"ttg.num-warps" = 8 : i32} {
 module attributes {"ttg.num-warps" = 4 : i32} {
 
 tt.func @function_no_scope() {
-  // expected-error @below {{Layout has a total of 1 warps per CTA, but the context requires 4 warps per CTA}}
+  // expected-error @below {{Layout has 1 warps per CTA, but the context requires 4 warps per CTA}}
   tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #blocked_1_warps>
   tt.return
 }
@@ -288,7 +288,7 @@ tt.func @function_no_scope() {
     ttg.warp_yield
   }
   partition0() num_warps(2) {
-    // expected-error @below {{Layout has a total of 8 warps per CTA, but the context requires 2 warps per CTA}}
+    // expected-error @below {{Layout has 8 warps per CTA, but the context requires 2 warps per CTA}}
     tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #blocked_8_warps>
     ttg.warp_return
   } : () -> ()
@@ -312,7 +312,7 @@ tt.func @function_no_scope() {
     ttg.warp_return
   }
   partition1() num_warps(1) {
-    // expected-error @below {{Layout has a total of 2 warps per CTA, but the context requires 1 warps per CTA}}
+    // expected-error @below {{Layout has 2 warps per CTA, but the context requires 1 warps per CTA}}
     tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #blocked_2_warps>
     ttg.warp_return
   } : () -> ()
