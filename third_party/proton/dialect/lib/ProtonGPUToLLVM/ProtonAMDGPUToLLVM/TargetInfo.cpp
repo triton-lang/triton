@@ -23,6 +23,7 @@ Value TargetInfo::clock(ConversionPatternRewriter &rewriter, Location loc,
                        .getResult(0);
   if (!isClock64)
     clockVal = rewriter.create<LLVM::TruncOp>(loc, i32_ty, clockVal);
+
   return clockVal;
 }
 

@@ -210,7 +210,7 @@ void InstrumentationProfiler::exitInstrumentedOp(uint64_t streamId,
         "Only circular layout parser is supported for now");
   }
 
-  uint32_t timeShiftCost = 0;
+  int64_t timeShiftCost = 0;
   if (modeOptions.count("optimizations")) {
     auto optimizations = proton::split(modeOptions.at("optimizations"), ",");
     if (std::find(optimizations.begin(), optimizations.end(), "time_shift") !=

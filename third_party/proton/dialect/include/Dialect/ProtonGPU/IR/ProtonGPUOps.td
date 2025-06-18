@@ -45,7 +45,7 @@ def PTG_CircularStoreOp : PTG_Op<"circular_store", [
 
   let arguments = (ins
     PTG_SegmentType:$segment,
-    I32:$counter,
+    AnyTypeOf<[I32, I64]>:$counter,
     UnitAttr:$isStart,
     I32Attr:$scopeId
   );
@@ -71,7 +71,7 @@ def PTG_ReadCounterOp : PTG_Op<"read_counter", [
     DefaultValuedAttr<MetricTypeAttr, "MetricType::CYCLE">:$metric
   );
 
-  let results = (outs I32:$counter);
+  let results = (outs AnyTypeOf<[I32, I64]>:$counter);
 
   let assemblyFormat = [{
     attr-dict `:` type($counter)
