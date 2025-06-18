@@ -279,6 +279,29 @@ void init_gluon_ir(py::module &&m) {
                  blockTy.getShape(), blockTy.getElementType(), layout);
              return triton::TensorDescType::get(ctx, blockTyLayout, isSigned);
            })
+      .def("create_async_copy_global_to_local",
+           [](GluonOpBuilder &self, Value smem, Value pointer, Value mask,
+              tt::CacheModifier cacheModifier,
+              tt::EvictionPolicy evictionPolicy, bool isVolatile) {
+             self.create<ttg::AsyncCopyGlobalToLocalOp>(
+                 pointer, smem, mask, /*other*/ Value{}, cacheModifier,
+                 evictionPolicy, isVolatile);
+           })
+      .def("create_async_copy_mbarrier_arrive",
+           [](GluonOpBuilder &self, Value mbarrier, bool incrementCount) {
+             self.create<ttng::AsyncCopyMbarrierArriveOp>(mbarrier,
+                                                          !incrementCount);
+           })
+      .def("create_async_commit_group",
+           [](GluonOpBuilder &self) {
+             ValueRange tokens;
+             self.create<ttg::AsyncCommitGroupOp>(tokens);
+           })
+      .def("create_async_wait_group",
+           [](GluonOpBuilder &self, int num) {
+             ValueRange tokens;
+             self.create<ttg::AsyncWaitOp>(tokens, num);
+           })
       .def("create_convert_layout",
            [](GluonOpBuilder &self, Type resultTy, Value value) -> Value {
              return self.create<ttg::ConvertLayoutOp>(resultTy, value);
