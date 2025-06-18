@@ -299,6 +299,9 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     dstLayout = actionRemoveBroadcastedRegs(dstLayout).apply(dstLayout);
 
     auto smem = optimalSwizzling(srcLayout, dstLayout, bitwidth);
+    llvm::errs() << "srcLayout: " << srcLayout << "\n";
+    llvm::errs() << "dstLayout: " << dstLayout << "\n";
+    llvm::errs() << "smem: " << smem << "\n";
 
     // Extract reps from smem
     auto kReg = str_attr("register");
@@ -393,8 +396,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
 
     // Try to use swizzling to implement the conversion
     // HACK Remove once AMD tests pass for the swizzling path
-    if (targetInfo.isCuda() && succeeded(transferWithinBlockSwizzling(
-                                   op, adaptor.getSrc(), rewriter))) {
+    if (succeeded(
+            transferWithinBlockSwizzling(op, adaptor.getSrc(), rewriter))) {
       return success();
     }
 
