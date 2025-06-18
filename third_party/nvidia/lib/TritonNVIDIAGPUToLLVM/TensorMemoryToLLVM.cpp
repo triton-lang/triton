@@ -930,6 +930,13 @@ struct TMEMSubSliceOpConversion
       return failure();
     }
     offsetCol = op.getN();
+    if (!encoding.getUnpacked()) {
+      int numElementsPer32B = 32 / srcTy.getElementTypeBitWidth();
+      if (offsetCol % numElementsPer32B != 0) {
+        return failure();
+      }
+      offsetCol /= numElementsPer32B;
+    }
     Value tmemBase = adaptor.getSrc();
     Value offsetVal = b.i32_val(offsetCol | offsetRow << 16);
     Value newBase = b.add(b.ptrtoint(i32_ty, tmemBase), offsetVal);
