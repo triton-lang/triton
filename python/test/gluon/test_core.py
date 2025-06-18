@@ -1,7 +1,7 @@
 import torch
 import pytest
 
-from triton._internal_testing import is_ampere_or_newer, is_hopper
+from triton._internal_testing import is_ampere_or_newer, is_hopper_or_newer
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
 from triton.experimental.gluon.language.nvidia.ampere import async_copy, mbarrier
@@ -46,7 +46,7 @@ def tma_kernel(desc):
     alloc._keep_alive()
 
 
-@pytest.mark.skipif(not is_hopper(), reason="Requires Hopper")
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
 def test_tma():
     out = torch.ones((16, 16), dtype=torch.float16, device="cuda")
     layout = ttgl.NVMMASharedLayout(

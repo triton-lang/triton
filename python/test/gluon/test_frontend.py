@@ -12,7 +12,7 @@ from triton.experimental.gluon.language.nvidia.blackwell import mbarrier, tma, T
 from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
 from triton._filecheck import filecheck_test, run_parser
 import triton.language as tl
-from triton._internal_testing import is_ampere_or_newer, is_blackwell, is_hopper
+from triton._internal_testing import is_ampere_or_newer, is_blackwell, is_hopper_or_newer
 from triton.compiler.errors import CompilationError, CompileTimeAssertionFailure
 
 TARGET_PAT = re.compile('ttg.target = "[^"]*"')
@@ -377,7 +377,7 @@ def mbarrier_kernel():
     mbarrier.invalidate(bar)
 
 
-@pytest.mark.skipif(not is_hopper(), reason="Requires hopper or newer")
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires hopper or newer")
 def test_mbarrier(fresh_knobs):
     knobs.compilation.disable_line_info = True
 
@@ -457,7 +457,7 @@ def async_tma_kernel(input_desc, XBLOCK: ttgl.constexpr):
     tma.store_wait(0)
 
 
-@pytest.mark.skipif(not is_hopper(), reason="TMA requires at least Hopper")
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="TMA requires at least Hopper")
 def test_async_tma(fresh_knobs):
     knobs.compilation.disable_line_info = True
 
