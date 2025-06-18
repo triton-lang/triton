@@ -2,10 +2,10 @@
 #include "TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
-#include "third_party/nvidia/lib/TritonNVIDIAGPUToLLVM/Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/Passes.h"
 #include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/FormatVariadic.h"
 
@@ -74,25 +74,27 @@ void emitSynclog(IRRewriter &rewriter, Operation *op,
   auto threadIdx_y = rewriter.create<NVVM::ThreadIdYOp>(loc, i32Type);
   auto blockIdx_z = rewriter.create<NVVM::BlockIdZOp>(loc, i32Type);
   auto threadIdx_z = rewriter.create<NVVM::ThreadIdZOp>(loc, i32Type);
+  auto ctaRank = rewriter.create<NVVM::ClusterId>(loc, i32Type);
 
   std::string formatStr;
   llvm::raw_string_ostream os(formatStr);
-  os << opName << " time=%lu thread=%u,%u,%u block=%u,%u,%u ";
+  os << opName << " time=%lu thread=%u,%u,%u block=%u,%u,%u cta_rank=%u ";
   llvm::SmallVector<Value> args{time64,      threadIdx_x, threadIdx_y,
                                 threadIdx_z, blockIdx_x,  blockIdx_y,
-                                blockIdx_z};
+                                blockIdx_z,  ctaRank};
 
   size_t numArgsPrinted = 0;
   for (size_t i = 0; i < op->getNumOperands() && numArgsPrinted < 5; i++) {
     // Cap to 5 operands for now. This is a temporary solution to avoid
     // printing out tensor values.
     auto operand = op->getOperand(i);
-    auto formatSubstr = LLVM::NVIDIA::getFormatSubstr(operand);
-    if (formatSubstr.empty()) {
+    // By default, print integer operands as signed to avoid overflows.
+    auto formatSubstr = getFormatSubstr(operand, false, std::nullopt, true);
+    if (!formatSubstr.has_value()) {
       continue;
     }
     args.push_back(operand);
-    os << formatSubstr << " ";
+    os << *formatSubstr << " ";
     numArgsPrinted++;
   }
 
@@ -102,35 +104,32 @@ void emitSynclog(IRRewriter &rewriter, Operation *op,
 namespace {
 struct InsertSynclogs
     : public mlir::triton::impl::InsertSynclogsBase<InsertSynclogs> {
+
   void runOnOperation() override {
     ModuleOp mod = getOperation();
     IRRewriter rewriter(&getContext());
-    NVIDIA::TargetInfo targetInfo(/*computeCapability=*/100, /*ptxVersion=*/87);
+    // Using hardcoded compute capability and ptx version since the printing is
+    // independent of them.
+    NVIDIA::TargetInfo targetInfo(/*computeCapability=*/80, /*ptxVersion=*/80);
     auto shouldEmitSynclog = [&](std::string &opName) -> int {
       return llvm::any_of(opNames, [&](const auto &elem) {
         return opName.find(elem) != std::string::npos;
       });
     };
     mod.walk([&](Operation *op) {
+      std::string instrString("");
       llvm::TypeSwitch<Operation *>(op)
           .Case<LLVM::InlineAsmOp>([&](auto inlineAsmOp) {
-            auto asmString = inlineAsmOp.getAsmString().str();
-            if (shouldEmitSynclog(asmString)) {
-              emitSynclog(rewriter, op, targetInfo, asmString);
-            }
+            instrString = inlineAsmOp.getAsmString().str();
           })
           .Case<LLVM::CallIntrinsicOp>([&](auto callIntrinsicOp) {
-            auto asmString = callIntrinsicOp.getIntrin().str();
-            if (shouldEmitSynclog(asmString)) {
-              emitSynclog(rewriter, op, targetInfo, asmString);
-            }
+            instrString = callIntrinsicOp.getIntrin().str();
           })
-          .Default([&](auto) {
-            auto opName = op->getName().getStringRef().str();
-            if (shouldEmitSynclog(opName)) {
-              emitSynclog(rewriter, op, targetInfo, opName);
-            }
-          });
+          .Default(
+              [&](auto) { instrString = op->getName().getStringRef().str(); });
+      if (shouldEmitSynclog(instrString)) {
+        emitSynclog(rewriter, op, targetInfo, instrString);
+      }
     });
   }
 };

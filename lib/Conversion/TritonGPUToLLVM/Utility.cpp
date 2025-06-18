@@ -1298,4 +1298,40 @@ void makeAllWarpGroupsIsolatedFromAbove(Operation *op) {
   });
 }
 
+std::optional<std::string> getFormatSubstr(Value value, bool hex,
+                                           std::optional<int> width,
+                                           bool isSigned) {
+  Type type = value.getType();
+  // If the `value` is a pointer, just return %p.
+  if (isa<LLVM::LLVMPointerType>(type)) {
+    return "%p";
+  }
+  // Hex is "0x%0nx" or "0x%0nllx", where n is the number of hex digits in the
+  // type (so 4 for fp16, 8 for int32, 16 for int64).
+  if (hex) {
+    // Ignore `width` for `hex` values, pad to typeWidth.
+    std::string ret = "0x%0" + std::to_string(type.getIntOrFloatBitWidth() / 4);
+    if (type.getIntOrFloatBitWidth() > 32) {
+      ret += "ll";
+    }
+    ret += "x";
+    return ret;
+  }
+
+  std::string prefix = "%";
+  if (width.has_value()) {
+    prefix += std::to_string(*width);
+  }
+
+  if (type.isBF16() || type.isF16() || type.isF32() || type.isF64()) {
+    return prefix + "f";
+  } else if (type.isInteger()) {
+    if (type.getIntOrFloatBitWidth() == 64)
+      return prefix + (isSigned ? "lli" : "llu");
+    else
+      return prefix + (isSigned ? "i" : "u");
+  }
+  return {};
+}
+
 } // namespace mlir
