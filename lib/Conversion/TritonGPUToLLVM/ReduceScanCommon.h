@@ -97,12 +97,12 @@ inline SmallVector<Value> applyCombineOp(Location loc,
     thenBlockArgs.push_back(undef);
     thenBlock->addArgument(ty, loc);
   }
-  rewriter.create<cf::CondBranchOp>(loc, pred, &newCombine, combineArgs,
-                                    thenBlock, thenBlockArgs);
+  rewriter.create<LLVM::CondBrOp>(loc, pred, &newCombine, combineArgs,
+                                  thenBlock, thenBlockArgs);
 
   // Split a block after the call.
   rewriter.setInsertionPointToEnd(&newCombine);
-  rewriter.replaceOpWithNewOp<cf::BranchOp>(returnOp, thenBlock, results);
+  rewriter.replaceOpWithNewOp<LLVM::BrOp>(returnOp, results, thenBlock);
   rewriter.setInsertionPointToStart(thenBlock);
   return SmallVector<Value>(thenBlock->getArguments());
 }
