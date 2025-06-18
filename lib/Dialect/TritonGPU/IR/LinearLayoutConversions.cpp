@@ -1120,14 +1120,12 @@ LinearLayout toLinearLayout(ArrayRef<int64_t> shape, Attribute layout) {
                                                                    layout);
 }
 
-PaddedLayout toPaddedLayout(ArrayRef<int64_t> shape, Attribute layout) {
-  auto *ctx = layout.getContext();
-  if (auto paddedLayout = dyn_cast<PaddedSharedEncodingAttr>(layout)) {
-    return paddedLayout.toPaddedLayout(shape);
-  }
-  auto ll =
-      ctx->getLoadedDialect<TritonGPUDialect>()->toLinearLayout(shape, layout);
-  return PaddedLayout(ll, /*intervals=*/{}, /*paddings=*/{});
+PaddedLinearLayout toPaddedLinearLayout(ArrayRef<int64_t> shape,
+                                        Attribute layout) {
+  if (auto paddedLayout = dyn_cast<PaddedSharedEncodingAttr>(layout))
+    return paddedLayout.toPaddedLinearLayout(shape);
+  auto ll = toLinearLayout(shape, layout);
+  return PaddedLinearLayout(ll, /*intervals=*/{}, /*paddings=*/{});
 }
 
 LinearLayout getLayoutWithinBlock(const LinearLayout &layout) {

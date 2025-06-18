@@ -1337,25 +1337,21 @@ std::string ColumnAction::toString() const {
   return ret;
 }
 
-PaddedLayout::PaddedLayout(LinearLayout linearMapping,
-                           ArrayRef<unsigned> intervals,
-                           ArrayRef<unsigned> paddings)
-    : linearMapping(std::move(linearMapping)) {
+PaddedLinearLayout::PaddedLinearLayout(LinearLayout linear,
+                                       ArrayRef<unsigned> intervals,
+                                       ArrayRef<unsigned> paddings)
+    : linear(std::move(linear)) {
   intervalPads.reserve(intervals.size());
   for (auto [i, p] : llvm::zip_equal(intervals, paddings))
     intervalPads.emplace_back(i, p);
 }
 
-std::optional<int32_t> PaddedLayout::getMinInterval() const {
+std::optional<int32_t> PaddedLinearLayout::getMinInterval() const {
   if (intervalPads.empty())
     return std::nullopt;
   return *llvm::min_element(llvm::make_first_range(intervalPads));
 }
 
-bool PaddedLayout::hasNoPadding() const {
-  return intervalPads.empty() ||
-         llvm::all_of(llvm::make_second_range(intervalPads),
-                      [](unsigned v) { return v == 0; });
-}
+bool PaddedLinearLayout::hasPadding() const { return !intervalPads.empty(); }
 
 } // namespace mlir::triton

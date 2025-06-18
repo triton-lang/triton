@@ -1700,13 +1700,13 @@ LogicalResult PaddedSharedEncodingAttr::verify(
   return verifyLayoutOrder(emitError, order);
 }
 
-PaddedLayout
-PaddedSharedEncodingAttr::toPaddedLayout(ArrayRef<int64_t> shape) const {
+PaddedLinearLayout
+PaddedSharedEncodingAttr::toPaddedLinearLayout(ArrayRef<int64_t> shape) const {
   auto nonSwizzleAttr = SwizzledSharedEncodingAttr::get(
       getContext(), /*vec=*/1, /*perPhase=*/1, /*maxPhase=*/1, getOrder(),
       getCTALayout());
   LinearLayout ll = toLinearLayout(shape, nonSwizzleAttr);
-  return PaddedLayout(ll, getIntervals(), getPaddings());
+  return PaddedLinearLayout(ll, getIntervals(), getPaddings());
 }
 
 int64_t PaddedSharedEncodingAttr::getPaddedSize(ArrayRef<int64_t> shape) const {

@@ -261,17 +261,16 @@ private:
     if (!alloc || !alloc.isSharedMemoryAlloc())
       return;
     auto allocType = alloc.getType();
-    int64_t bytes = 0;
+    int64_t numElems = 0;
     if (auto paddedLayout =
             dyn_cast<gpu::PaddedSharedEncodingAttr>(allocType.getEncoding())) {
       SmallVector<int64_t> unpaddedShape = gpu::getShapePerCTA(allocType);
-      bytes = paddedLayout.getPaddedSize(unpaddedShape) *
-              allocType.getElementTypeBitWidth() / 8;
+      numElems = paddedLayout.getPaddedSize(unpaddedShape);
     } else {
       auto shapePerCTA = gpu::getAllocationShapePerCTA(allocType);
-      bytes = product<int64_t>(shapePerCTA) *
-              allocType.getElementTypeBitWidth() / 8;
+      numElems = product<int64_t>(shapePerCTA);
     }
+    int64_t bytes = numElems * allocType.getElementTypeBitWidth() / 8;
 
     auto alignment = alloc.getAlignmentOrDefault();
     allocation->addBuffer<BufferT::BufferKind::Explicit>(alloc, bytes,

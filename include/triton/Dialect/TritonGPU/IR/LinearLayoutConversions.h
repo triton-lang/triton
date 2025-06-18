@@ -49,8 +49,6 @@ class AMDMfmaEncodingAttr;
 // Returns std::nullopt if the given layout can't be converted to an LL.
 LinearLayout toLinearLayout(ArrayRef<int64_t> shape, Attribute layout);
 
-PaddedLayout toPaddedLayout(ArrayRef<int64_t> shape, Attribute layout);
-
 // Convert the shared encoding of a tensor with `nvmma_shared` layout to a
 // LinearLayout that maps from a linear shared memory offset to tensor index.
 //
@@ -299,6 +297,11 @@ LinearLayout nvidiaMmaTile(MLIRContext *ctx, ArrayRef<unsigned> tileShape,
 // store instructions. Since it closely resembles mfmaLayout, conversion between
 // the two can be done using transferWithinWarp, without involving LDS
 std::optional<LinearLayout> chooseMfmaLikeStoreLayout(RankedTensorType valType);
+
+// Convert the given layout to a linear layout with potential additional
+// physical memory paddings.
+PaddedLinearLayout toPaddedLinearLayout(ArrayRef<int64_t> shape,
+                                        Attribute layout);
 
 } // namespace mlir::triton::gpu
 #endif // TRITON_DIALECT_TRITONGPU_IR_LINEARLAYOUTCONVERSIONS_H

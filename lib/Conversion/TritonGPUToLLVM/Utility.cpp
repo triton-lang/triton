@@ -397,6 +397,10 @@ Value getSmemVecAddr(const LinearLayout &regLayout,
   // We propose case 2 (see comments below), which provides a more general
   // solution for all swizzled shared memory scenarios, including the edge case
   // mentioned above.
+  //
+  // Padded shared layout falls into case 1--we can rely on the logic for case 1
+  // to get the 1-D offset into shared memory. Then we just need to add the
+  // padding offset.
   if (isSimpleSharedMemoryAccess(shape, allocShape, sharedEnc)) { // Case 1
     smemOffset = applyLinearLayout(loc, rewriter, regToSharedLayout,
                                    {{kRegister, regId},
@@ -424,6 +428,18 @@ Value getSmemVecAddr(const LinearLayout &regLayout,
       // multi-dimensional offsets in regToSharedLayout.
       smemOffset = dot(rewriter, loc, smemOffsets,
                        applyPermutation(smemStrides, smemOrder));
+    }
+    if (auto paddedLayout =
+            dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(sharedEnc)) {
+      // Apply the offset needed for padding.
+      Value padOffset = b.i32_val(0);
+      for (auto [interval, padding] : llvm::zip_equal(
+               paddedLayout.getIntervals(), paddedLayout.getPaddings())) {
+        Value iVal = b.i32_val(llvm::Log2_32(interval));
+        Value pVal = b.i32_val(llvm::Log2_32(padding));
+        padOffset = b.add(padOffset, b.shl(b.ashr(smemOffset, iVal), pVal));
+      }
+      smemOffset = b.add(smemOffset, padOffset);
     }
   } else { // Case 2 -> rank-reduced swizzling
     assert(rank >= 2 && "Swizzling only applies to tensors with rank >= 2");
@@ -470,17 +486,6 @@ Value getSmemVecAddr(const LinearLayout &regLayout,
     Value baseToAllocBaseDist = dot(rewriter, loc, smemOffsets, smemStrides);
     smemOffset = b.sub(smemOffset, baseToAllocBaseDist);
   }
-  if (auto paddedLayout =
-          dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(sharedEnc)) {
-    Value padOffset = b.i32_val(0);
-    for (auto [interval, padding] : llvm::zip_equal(
-             paddedLayout.getIntervals(), paddedLayout.getPaddings())) {
-      Value iVal = b.i32_val(llvm::Log2_32(interval));
-      Value pVal = b.i32_val(llvm::Log2_32(padding));
-      padOffset = b.add(padOffset, b.shl(b.ashr(smemOffset, iVal), pVal));
-    }
-    smemOffset = b.add(smemOffset, padOffset);
-  }
   auto ptrTy = smemBase.getType();
   auto vecAddr = b.gep(ptrTy, elemLlvmTy, smemBase, smemOffset,
                        LLVM::GEPNoWrapFlags::inbounds);
@@ -504,10 +509,10 @@ bool emitTransferBetweenRegistersAndShared(
   StringAttr kWarp = str_attr("warp");
 
   auto shape = sharedTy.getShape();
-  PaddedLayout paddedLayout =
-      triton::gpu::toPaddedLayout(shape, sharedTy.getEncoding());
+  PaddedLinearLayout paddedLayout =
+      triton::gpu::toPaddedLinearLayout(shape, sharedTy.getEncoding());
   LinearLayout regToSharedLayout =
-      regLayout.invertAndCompose(paddedLayout.getLinearMapping());
+      regLayout.invertAndCompose(paddedLayout.getLinear());
 
   // TODO(jlebar): We don't currently support loading from shared memory in a
   // different CTA.  We'd need to emit `mapa.shared::cluster` instructions.
@@ -550,7 +555,8 @@ bool emitTransferBetweenRegistersAndShared(
   // Thus we use `pseudoinvert` instead of `invert` here for simplicity.
   auto allocShape = sharedTy.getAllocShape();
   auto invertAllocSharedLayout = LinearLayout::empty();
-  if (paddedLayout.hasNoPadding()) {
+  if (!paddedLayout.hasPadding()) {
+    // For now this is only needed for the cases where we have swizzling.
     invertAllocSharedLayout =
         triton::gpu::toLinearLayout(allocShape.take_back(sharedTy.getRank()),
                                     sharedTy.getEncoding())

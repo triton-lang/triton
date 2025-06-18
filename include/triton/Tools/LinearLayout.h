@@ -840,19 +840,33 @@ public:
   std::string toString() const;
 };
 
-class PaddedLayout {
+// A utility class to describe a particular padding schema with 1) a linear
+// layout to desribe the N-D logical element mapping and 2) a list of
+// interval-padding pairs to describe the 1-D physical shared memory padding
+// schedules. In a degenerated cases, we can have no interval-padding pairs so
+// it will just be a normal linear layout.
+//
+// In Triton we use linear layout basically throughout; so this class is useful
+// to leverage common linear layout facilities and code paths as much as
+// possible, while factoring in shared memory padding wherever necessary--only
+// at the very final steps when we allocating the physical shared memory or
+// creating pointers indexing into them. All steps before can still reason with
+// linear layout. Thus this utility class keeps these two parts separate.
+class PaddedLinearLayout {
 public:
-  PaddedLayout(LinearLayout linearMapping, ArrayRef<unsigned> intervals,
-               ArrayRef<unsigned> paddings);
+  PaddedLinearLayout(LinearLayout linear, ArrayRef<unsigned> intervals,
+                     ArrayRef<unsigned> paddings);
 
-  const LinearLayout &getLinearMapping() const { return linearMapping; }
+  const LinearLayout &getLinear() const { return linear; }
 
+  // Returns the minimal interval that would trigger padding.
   std::optional<int32_t> getMinInterval() const;
 
-  bool hasNoPadding() const;
+  // Returns true if this is not a degenerated case and indeed requires padding.
+  bool hasPadding() const;
 
 private:
-  LinearLayout linearMapping;
+  LinearLayout linear;
   SmallVector<std::pair<unsigned, unsigned>> intervalPads;
 };
 

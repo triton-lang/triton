@@ -373,7 +373,7 @@ When vec=2, elements are swizzled in pairs of 2.  In other words, the element at
     }]>,
   ];
 
-  let extraClassDeclaration = extraBaseClassDeclaration#[{
+  let extraClassDeclaration = extraBaseClassDeclaration # [{
     unsigned getRank() const { return getCTAOrder().size(); }
     int32_t getAlignment() const;
     SmallVector<unsigned> getCTAsPerCGA() const;
@@ -399,23 +399,23 @@ shared memory bank conflicts.
 Formally, given a layout:
     padded_shared<[<interval_0>:+<pad_0>, <interval_1>:+<pad_1>, ...]>
 We insert a padding of `<pad_i>` elements after every `<interval_i>` elements.
-Multi interval-pad pairs are supported for flexibility of multi tiered padding
-schemes; they compose in an additive manner. So for a 1-D tensor element at
-index i, the corresponding shared memory location index is
+Multi interval-padding pairs are supported for flexibility of multi tiered
+padding schemes; they compose in an additive manner. So for a 1-D tensor element
+at index i, the corresponding shared memory location index is
     i + \sum_{k} (i / interval_k) * pad_k = 1
 `<interval_i>` and `<pad_i>` all need to be power of two.
 
 Some concrete examples, using `eM` to mean tensor elements and `pN` to mean
 padding:
 
-1. Single interval-pad pair:
+1. Single interval-padding pair:
 
    #ttg.padded_shared<[2:+2]>
    [e0, e1, p0, p1,
     e2, e3, p2, p3,
     ...]
 
-2. Double interval-pad pairs:
+2. Double interval-padding pairs:
 
    #ttg.padded_shared<[2:+1, 4:+2]>
    [e0, e1, p0,
@@ -424,7 +424,7 @@ padding:
     e6, e7, p5, p6, p7,
     ...]
 
-In addition to interval-pad pairs, this encoding requires an `order` to
+In addition to interval-padding pairs, this encoding requires an `order` to
 specify the logical tensor dimenions from the fastest-to slowest-varying.
 It may optionally support CGA level organization like other encoding
 attributes too, for example,
@@ -461,11 +461,11 @@ attributes too, for example,
       }]>,
   ];
 
-  let extraClassDeclaration = extraBaseClassDeclaration#[{
+  let extraClassDeclaration = extraBaseClassDeclaration # [{
     unsigned getRank() const { return getOrder().size(); }
     int32_t getAlignment() const { return 16; }
 
-    PaddedLayout toPaddedLayout(ArrayRef<int64_t> shape) const;
+    PaddedLinearLayout toPaddedLinearLayout(ArrayRef<int64_t> shape) const;
 
     // Returns the total number of elements including padding given the input
     // tensor shape.
