@@ -122,9 +122,13 @@ struct ArithConstantArrayOpConversion
       llVals.push_back(ll);
     }
     size_t elemsPerThread = getTotalElemsPerThread(tensorTy);
-    assert(elemsPerThread == llVals.size() &&
-           "Right now we only support constant arrays with the same number of "
-           "elements as the number of threads per warp");
+
+    if (elemsPerThread != llVals.size()) {
+      op->emitError(
+          "Right now we only support constant arrays with the same number of "
+          "elements as the number of threads per warp");
+      return failure();
+    }
     auto llStruct =
         packLLElements(loc, getTypeConverter(), llVals, rewriter, op.getType());
     rewriter.replaceOp(op, {llStruct});

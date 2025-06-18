@@ -54,7 +54,8 @@ bool isMultiBuffered(triton::gpu::LocalAllocOp op) {
 uint64_t getAllocationOffset(triton::gpu::LocalAllocOp op) {
   auto offsetAttr = op->getAttr("allocation.offset");
   if (!offsetAttr) {
-    return 0;
+    llvm::report_fatal_error(
+        "ConcurrencySanitizer should run after AllocateSharedMemory pass.");
   }
   return cast<IntegerAttr>(offsetAttr).getInt();
 }

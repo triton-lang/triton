@@ -53,8 +53,8 @@ def run_in_process(client_fn, args):
 
 
 @gluon.jit
-def async_tma_kernel(input_desc, XBLOCK: ttgl.constexpr, smem_layout: ttgl.constexpr, FAILURE: ttgl.constexpr):
-    smem = ttgl.allocate_shared_memory(ttgl.float32, [XBLOCK, XBLOCK], smem_layout)
+def async_tma_kernel(input_desc, XBLOCK: ttgl.constexpr, FAILURE: ttgl.constexpr):
+    smem = ttgl.allocate_shared_memory(ttgl.float32, [XBLOCK, XBLOCK], input_desc.layout)
     bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
     mbarrier.init(bar, count=1)
 
@@ -83,7 +83,7 @@ def run_async_tma_kernel(FAILURE, device):
     shared_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=32, rank=2)
     input_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(input, [XBLOCK, XBLOCK], shared_layout)
 
-    async_tma_kernel[(1, )](input_desc, XBLOCK, shared_layout, FAILURE=FAILURE, num_warps=1)
+    async_tma_kernel[(1, )](input_desc, XBLOCK, FAILURE=FAILURE, num_warps=1)
     getattr(torch, device).synchronize()
 
 
