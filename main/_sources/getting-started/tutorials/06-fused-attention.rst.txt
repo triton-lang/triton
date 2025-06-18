@@ -30,7 +30,7 @@ Extra Credits:
 * Original flash attention paper (https://arxiv.org/abs/2205.14135)
 * Rabe and Staats (https://arxiv.org/pdf/2112.05682v2.pdf)
 
-.. GENERATED FROM PYTHON SOURCE LINES 15-697
+.. GENERATED FROM PYTHON SOURCE LINES 15-707
 
 
 
@@ -58,6 +58,41 @@ Extra Credits:
          :srcset: /getting-started/tutorials/images/sphx_glr_06-fused-attention_003.png
          :class: sphx-glr-multi-img
 
+    *
+
+      .. image-sg:: /getting-started/tutorials/images/sphx_glr_06-fused-attention_004.png
+         :alt: 06 fused attention
+         :srcset: /getting-started/tutorials/images/sphx_glr_06-fused-attention_004.png
+         :class: sphx-glr-multi-img
+
+    *
+
+      .. image-sg:: /getting-started/tutorials/images/sphx_glr_06-fused-attention_005.png
+         :alt: 06 fused attention
+         :srcset: /getting-started/tutorials/images/sphx_glr_06-fused-attention_005.png
+         :class: sphx-glr-multi-img
+
+    *
+
+      .. image-sg:: /getting-started/tutorials/images/sphx_glr_06-fused-attention_006.png
+         :alt: 06 fused attention
+         :srcset: /getting-started/tutorials/images/sphx_glr_06-fused-attention_006.png
+         :class: sphx-glr-multi-img
+
+    *
+
+      .. image-sg:: /getting-started/tutorials/images/sphx_glr_06-fused-attention_007.png
+         :alt: 06 fused attention
+         :srcset: /getting-started/tutorials/images/sphx_glr_06-fused-attention_007.png
+         :class: sphx-glr-multi-img
+
+    *
+
+      .. image-sg:: /getting-started/tutorials/images/sphx_glr_06-fused-attention_008.png
+         :alt: 06 fused attention
+         :srcset: /getting-started/tutorials/images/sphx_glr_06-fused-attention_008.png
+         :class: sphx-glr-multi-img
+
 
 .. rst-class:: sphx-glr-script-out
 
@@ -65,25 +100,60 @@ Extra Credits:
 
     fused-attention-batch4-head32-d64-fwd-causal=True-warp_specialize=False:
          N_CTX  Triton [FP16]  Triton [FP8]
-    0   1024.0     111.204530     69.031814
-    1   2048.0     139.389433     86.075204
-    2   4096.0     152.843834     96.283491
-    3   8192.0     161.088658    101.134202
-    4  16384.0     167.689185    103.495682
+    0   1024.0     111.934824     72.634830
+    1   2048.0     138.287066     93.282624
+    2   4096.0     152.904659    103.318363
+    3   8192.0     160.531518    108.051304
+    4  16384.0     166.445795    111.049937
     fused-attention-batch4-head32-d64-fwd-causal=False-warp_specialize=False:
          N_CTX  Triton [FP16]  Triton [FP8]
-    0   1024.0     153.385550     87.971884
-    1   2048.0     167.768274    112.533204
-    2   4096.0     167.883648    111.877888
-    3   8192.0     172.223839    114.151345
-    4  16384.0     172.367504    114.276484
+    0   1024.0     150.931112    102.522474
+    1   2048.0     169.210059    108.815827
+    2   4096.0     168.303037    111.150842
+    3   8192.0     172.192275    113.746250
+    4  16384.0     169.882423    113.674595
     fused-attention-batch4-head32-d64-bwd-causal=True-warp_specialize=False:
          N_CTX  Triton [FP16]  Triton [FP8]
-    0   1024.0      52.659525     52.341564
-    1   2048.0      66.605542     66.626929
-    2   4096.0      77.661675     77.475835
-    3   8192.0      82.928515     83.345640
-    4  16384.0      86.211083     86.258179
+    0   1024.0      55.597879     54.790019
+    1   2048.0      71.390851     71.093069
+    2   4096.0      83.162736     82.936084
+    3   8192.0      90.193015     90.373182
+    4  16384.0      94.575308     94.200272
+    fused-attention-batch4-head32-d64-bwd-causal=False-warp_specialize=False:
+         N_CTX  Triton [FP16]  Triton [FP8]
+    0   1024.0     110.422162    109.293166
+    1   2048.0     142.421187    142.350970
+    2   4096.0     166.525115    165.844220
+    3   8192.0     179.525467    180.630815
+    4  16384.0     189.288998    189.190607
+    fused-attention-batch4-head32-d128-fwd-causal=True-warp_specialize=False:
+         N_CTX  Triton [FP16]  Triton [FP8]
+    0   1024.0     109.613674     87.144309
+    1   2048.0     130.793184    100.625755
+    2   4096.0     147.560113    107.144106
+    3   8192.0     157.379163    114.486054
+    4  16384.0     159.982392    116.795176
+    fused-attention-batch4-head32-d128-fwd-causal=False-warp_specialize=False:
+         N_CTX  Triton [FP16]  Triton [FP8]
+    0   1024.0     142.200772    105.690129
+    1   2048.0     152.621049    110.364479
+    2   4096.0     161.680509    121.146317
+    3   8192.0     166.246073    122.688814
+    4  16384.0     166.390990    121.906157
+    fused-attention-batch4-head32-d128-bwd-causal=True-warp_specialize=False:
+         N_CTX  Triton [FP16]  Triton [FP8]
+    0   1024.0       2.276976      2.280009
+    1   2048.0       2.411784      2.413294
+    2   4096.0       2.485850      2.485178
+    3   8192.0       2.520594      2.521092
+    4  16384.0       2.541814      2.541868
+    fused-attention-batch4-head32-d128-bwd-causal=False-warp_specialize=False:
+         N_CTX  Triton [FP16]  Triton [FP8]
+    0   1024.0       4.553705      4.554200
+    1   2048.0       4.822321      4.826101
+    2   4096.0       4.972362      4.972353
+    3   8192.0       5.041692      5.043035
+    4  16384.0       5.084081      5.084248
 
 
 
@@ -158,7 +228,15 @@ Extra Credits:
             alpha = tl.math.exp2(m_i - m_ij)
             l_ij = tl.sum(p, 1)
             # -- update output accumulator --
-            acc = acc * alpha[:, None]
+            if warp_specialize and BLOCK_M == 128 and HEAD_DIM == 128:
+                BM: tl.constexpr = acc.shape[0]
+                BN: tl.constexpr = acc.shape[1]
+                acc0, acc1 = acc.reshape([BM, 2, BN // 2]).permute(0, 2, 1).split()
+                acc0 = acc0 * alpha[:, None]
+                acc1 = acc1 * alpha[:, None]
+                acc = tl.join(acc0, acc1).permute(0, 2, 1).reshape([BM, BN])
+            else:
+                acc = acc * alpha[:, None]
             # prepare p and v for the dot
             v = desc_v.load([offsetkv_y, 0])
             p = p.to(dtype)
@@ -201,7 +279,7 @@ Extra Credits:
     if "PYTEST_VERSION" in os.environ:
         # Use a single config in testing for reproducibility
         configs = [
-            triton.Config(dict(BLOCK_M=64, BLOCK_N=64), num_stages=2, num_warps=4, pre_hook=_host_descriptor_pre_hook),
+            triton.Config(dict(BLOCK_M=128, BLOCK_N=64), num_stages=2, num_warps=4, pre_hook=_host_descriptor_pre_hook),
         ]
 
 
@@ -587,7 +665,10 @@ Extra Credits:
 
             ctx.grid = grid
             if is_cuda() and warp_specialize:
-                extra_kern_args["maxnreg"] = 80
+                if HEAD_DIM_K == 128 and q.dtype == torch.float16:
+                    extra_kern_args["maxnreg"] = 168
+                else:
+                    extra_kern_args["maxnreg"] = 80
             _attn_fwd[grid](
                 sm_scale, M,  #
                 q.shape[0], q.shape[1],  #
@@ -702,36 +783,35 @@ Extra Credits:
         HAS_FLASH = False
 
     TORCH_HAS_FP8 = hasattr(torch, 'float8_e5m2')
-    BATCH, N_HEADS, HEAD_DIM = 4, 32, 64
+    BATCH, N_HEADS = 4, 32
     # vary seq length for fixed head and batch=4
     configs = []
-    for mode in ["fwd", "bwd"]:
-        for causal in [True, False]:
-            for warp_specialize in [False, True] if is_blackwell() else [False]:
-                if mode == "bwd" and not causal:
-                    continue
-                configs.append(
-                    triton.testing.Benchmark(
-                        x_names=["N_CTX"],
-                        x_vals=[2**i for i in range(10, 15)],
-                        line_arg="provider",
-                        line_vals=["triton-fp16"] + (["triton-fp8"] if TORCH_HAS_FP8 else []) +
-                        (["flash"] if HAS_FLASH else []),
-                        line_names=["Triton [FP16]"] + (["Triton [FP8]"] if TORCH_HAS_FP8 else []) +
-                        (["Flash-2"] if HAS_FLASH else []),
-                        styles=[("red", "-"), ("blue", "-"), ("green", "-")],
-                        ylabel="TFLOPS",
-                        plot_name=
-                        f"fused-attention-batch{BATCH}-head{N_HEADS}-d{HEAD_DIM}-{mode}-causal={causal}-warp_specialize={warp_specialize}",
-                        args={
-                            "H": N_HEADS,
-                            "BATCH": BATCH,
-                            "HEAD_DIM": HEAD_DIM,
-                            "mode": mode,
-                            "causal": causal,
-                            "warp_specialize": warp_specialize,
-                        },
-                    ))
+    for HEAD_DIM in [64, 128]:
+        for mode in ["fwd", "bwd"]:
+            for causal in [True, False]:
+                for warp_specialize in [False, True] if is_blackwell() else [False]:
+                    configs.append(
+                        triton.testing.Benchmark(
+                            x_names=["N_CTX"],
+                            x_vals=[2**i for i in range(10, 15)],
+                            line_arg="provider",
+                            line_vals=["triton-fp16"] + (["triton-fp8"] if TORCH_HAS_FP8 else []) +
+                            (["flash"] if HAS_FLASH else []),
+                            line_names=["Triton [FP16]"] + (["Triton [FP8]"] if TORCH_HAS_FP8 else []) +
+                            (["Flash-2"] if HAS_FLASH else []),
+                            styles=[("red", "-"), ("blue", "-"), ("green", "-")],
+                            ylabel="TFLOPS",
+                            plot_name=
+                            f"fused-attention-batch{BATCH}-head{N_HEADS}-d{HEAD_DIM}-{mode}-causal={causal}-warp_specialize={warp_specialize}",
+                            args={
+                                "H": N_HEADS,
+                                "BATCH": BATCH,
+                                "HEAD_DIM": HEAD_DIM,
+                                "mode": mode,
+                                "causal": causal,
+                                "warp_specialize": warp_specialize,
+                            },
+                        ))
 
 
     @triton.testing.perf_report(configs)
@@ -780,7 +860,7 @@ Extra Credits:
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (0 minutes 56.719 seconds)
+   **Total running time of the script:** (11 minutes 22.050 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_06-fused-attention.py:
