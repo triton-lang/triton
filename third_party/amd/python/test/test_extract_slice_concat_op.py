@@ -134,7 +134,7 @@ src_layout = [
                                                                                                              [32, 0]],
                  block=[]),
     LinearLayout(register=[[1, 0], [2, 0], [4, 0]], lane=[[0, 1], [0, 2], [0, 4], [0, 8], [8, 0], [16, 0]],
-                 warp=[[0, 16]], block=[]),
+                 warp=[[0, 16], [0, 32]], block=[]),
 ]
 
 dst_layout = [
