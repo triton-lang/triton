@@ -1906,8 +1906,6 @@ void mlir::triton::NVIDIA::populateLoadStoreOpToLLVMPatterns(
                                       axisInfoAnalysis, benefit);
   patterns.add<LoadOpConversion, StoreOpConversion>(
       typeConverter, targetInfo, computeCapability, axisInfoAnalysis, benefit);
-               AtomicRMWOpConversion, LoadOpConversion, StoreOpConversion>(
-      typeConverter, targetInfo, axisInfoAnalysis, benefit);
   patterns.add<AsyncCommitGroupOpConversion, AsyncWaitOpConversion,
                AsyncCopyMbarrierArriveOpConversion>(typeConverter, benefit);
   patterns.add<AsyncTMACopyGlobalToLocalOpConversion,

@@ -1,7 +1,7 @@
 from triton.experimental.gluon.language._layouts import SwizzledSharedLayout
 from triton.experimental.gluon.language._core import builtin, _unwrap_if_constexpr
 
-__all__ = ["MBarrierLayout", "init", "invalidate", "expect", "wait", "arrive"]
+__all__ = ["arrive", "init", "invalidate", "MBarrierLayout", "wait"]
 
 
 class MBarrierLayout(SwizzledSharedLayout):
@@ -30,13 +30,6 @@ def invalidate(mbarrier, _semantic=None):
 
 
 @builtin
-def expect(mbarrier, bytes, pred=True, _semantic=None):
-    bytes = _unwrap_if_constexpr(bytes)
-    pred = _semantic.to_tensor(pred)
-    _semantic.builder.create_mbarrier_expect(mbarrier.handle, bytes, pred.handle)
-
-
-@builtin
 def wait(mbarrier, phase, pred=True, deps=(), _semantic=None):
     phase = _semantic.to_tensor(phase)
     pred = _semantic.to_tensor(pred)
@@ -45,7 +38,7 @@ def wait(mbarrier, phase, pred=True, deps=(), _semantic=None):
 
 
 @builtin
-def arrive(mbarrier, count, pred=True, _semantic=None):
-    count = _unwrap_if_constexpr(count)
+def arrive(mbarrier, *, pred=True, _semantic=None):
+    count = 1
     pred = _semantic.to_tensor(pred)
     _semantic.builder.create_mbarrier_arrive(mbarrier.handle, count, pred.handle)

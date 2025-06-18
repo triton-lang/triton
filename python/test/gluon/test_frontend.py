@@ -372,7 +372,7 @@ def mbarrier_kernel():
     bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
     mbarrier.init(bar, count=1)
     mbarrier.expect(bar, 4)
-    mbarrier.arrive(bar, 1)
+    mbarrier.arrive(bar, count=1)
     phase = 0
     mbarrier.wait(bar, phase, deps=[bar])
     mbarrier.invalidate(bar)

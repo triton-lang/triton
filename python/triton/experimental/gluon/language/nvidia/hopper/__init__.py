@@ -1,5 +1,5 @@
-from ..ampere import mbarrier, async_copy
-from . import tma
+from ..ampere import async_copy
+from . import mbarrier, tma
 from ... import _core
 
 __all__ = ["async_copy", "fence_async_shared", "mbarrier", "tma"]

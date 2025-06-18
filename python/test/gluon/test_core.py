@@ -78,7 +78,7 @@ def async_copy_mbarrier_kernel(out, inp, xnumel, XBLOCK: ttgl.constexpr, YBLOCK:
     mbar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
     mbarrier.init(mbar, count=1)
     async_copy.mbarrier_arrive(mbar)
-    mbarrier.arrive(mbar, count=1)
+    mbarrier.arrive(mbar)
     mbarrier.wait(mbar, 0)
 
     val = smem.load(block_layout)

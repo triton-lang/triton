@@ -7,8 +7,8 @@ from triton.experimental.gluon.language._core import builtin, base_type, base_va
 from triton.experimental.gluon.language._semantic import _check
 
 from . import tma
-from ..hopper import fence_async_shared
-from ..ampere import async_copy, mbarrier
+from ..hopper import fence_async_shared, mbarrier
+from ..ampere import async_copy
 
 if TYPE_CHECKING:
     from triton._C.libtriton.gluon_ir import GluonOpBuilder
