@@ -151,6 +151,10 @@ applyLinearLayout(Location loc, RewriterBase &rewriter,
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   assert(layout.getNumInDims() == indices.size());
   assert(llvm::equal(layout.getInDimNames(), llvm::make_first_range(indices)));
+  // Trivial layout
+  if (layout.getNumOutDims() == 0) {
+    return {};
+  }
 
   // This function can emit a lot of MLIR code, which ultimately makes
   // compilation slow.  (We think this shouldn't be the case -- it's not *that*
