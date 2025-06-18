@@ -2690,11 +2690,6 @@ struct TritonGPUVerifyTensorLayoutInterface
     if (!distr)
       return makeErr()
              << "Non-distributed layout is not allowed in tensor type.";
-    layout.dump();
-    for (auto i : rankedTy.getShape()) {
-      llvm::errs() << i << " ";
-    }
-    llvm::errs() << "\n";
     auto rank = distr.getRepOrder().size();
     if (rank != rankedTy.getRank())
       return makeErr() << "Layout has rank " << rank
