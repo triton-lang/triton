@@ -18,6 +18,7 @@ buffer_types = {
 
 sampling_strategies = {
     "none": triton_proton.SAMPLING_STRATEGY.NONE,
+    "selective": triton_proton.SAMPLING_STRATEGY.SELECTIVE,
 }
 
 granularities = {
