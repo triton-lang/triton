@@ -32,6 +32,18 @@ class Pair:
     def unpack(self):
         return self.get_first(), self.get_second()
 
+    def __getitem__(self, ind: tl.constexpr, _semantic=None):
+        if ind == 0:
+            return self.first
+        assert ind == 1
+        return self.second
+
+    def __setitem__(self, ind: tl.constexpr, value, _semantic=None):
+        if ind == 0:
+            self.first = value
+        assert ind == 1
+        self.second = value
+
 
 @filecheck_test
 @triton.jit
@@ -58,6 +70,47 @@ def test_augassign_attribute():
     # CHECK: %c42_i32 = arith.constant 42 : i32
     # CHECK: [[VALUE:%.*]] = arith.addi %c11_i32, %c42_i32
     pair.second += 42
+    # CHECK-NEXT: call @{{.*}}anchor{{.*}}([[RANGE]], [[VALUE]])
+    anchor(pair)
+
+
+@filecheck_test
+@triton.jit
+def test_retrieve_item():
+    # CHECK-LABEL: test_retrieve_item
+    # CHECK: %c11_i32 = arith.constant 11 : i32
+    # CHECK: [[RANGE:%.*]] = tt.make_range {end = 4 : i32, start = 0 : i32}
+    scalar = 11
+    pair = Pair(tl.arange(0, 4), scalar)
+    # CHECK-NEXT: call @{{.*}}anchor{{.*}}(%c11_i32)
+    anchor(pair[1])
+
+
+@filecheck_test
+@triton.jit
+def test_assign_item():
+    # CHECK-LABEL: test_assign_item
+    # CHECK: %c11_i32 = arith.constant 11 : i32
+    # CHECK: [[RANGE:%.*]] = tt.make_range {end = 4 : i32, start = 0 : i32}
+    scalar = 11
+    pair = Pair(tl.arange(0, 4), scalar)
+    # CHECK: %c42_i32 = arith.constant 42 : i32
+    pair[1] = 42
+    # CHECK-NEXT: call @{{.*}}anchor{{.*}}([[RANGE]], %c42_i32)
+    anchor(pair)
+
+
+@filecheck_test
+@triton.jit
+def test_augassign_item():
+    # CHECK-LABEL: test_augassign_item
+    # CHECK: %c11_i32 = arith.constant 11 : i32
+    # CHECK: [[RANGE:%.*]] = tt.make_range {end = 4 : i32, start = 0 : i32}
+    scalar = 11
+    pair = Pair(tl.arange(0, 4), scalar)
+    # CHECK: %c42_i32 = arith.constant 42 : i32
+    # CHECK: [[VALUE:%.*]] = arith.addi %c11_i32, %c42_i32
+    pair[1] += 42
     # CHECK-NEXT: call @{{.*}}anchor{{.*}}([[RANGE]], [[VALUE]])
     anchor(pair)
 
