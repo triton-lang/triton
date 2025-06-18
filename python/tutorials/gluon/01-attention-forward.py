@@ -727,26 +727,25 @@ def _softmax_tile(tile_id: gl.constexpr, config, info, STAGE: gl.constexpr):
     l_i = info.li_smem.load(qk_slice_dim1)
 
     for start_n in range(lo, hi, config.BLOCK_N):
+        qk, qk_consumer = qk_consumer.get(config.qk_layout)
         if STAGE == 2:
             # Prevent LLVM from hoisting the partial sums, which triggers spilling.
             offs_n = gl.inline_asm_elementwise("mov.b32 $0, $0;", "=r,r", [offs_n], dtype=gl.int32, is_pure=True,
                                                pack=1)
             mask = offs_m[:, None] >= (start_n + offs_n[None, :])
-            qk, qk_consumer = qk_consumer.get(config.qk_layout)
             qk = qk * config.qk_scale + gl.where(mask, 0, -1.0e6)
             m_ij = gl.maximum(m_i, gl.max(qk, 1))
             mi_producer = mi_producer.emplace(m_ij)
             qk -= m_ij[:, None]
         else:
-            qk, qk_consumer = qk_consumer.get(config.qk_layout)
             m_ij = gl.maximum(m_i, gl.max(qk, 1) * config.qk_scale)
             mi_producer = mi_producer.emplace(m_ij)
             qk = qk * config.qk_scale - m_ij[:, None]
 
         p = gl.exp2(qk)
 
-        alpha = gl.exp2(m_i - m_ij)
         l_ij = gl.sum(p, 1)
+        alpha = gl.exp2(m_i - m_ij)
 
         p_producer = p_producer.emplace(p.to(config.dtype))
 
