@@ -27,6 +27,7 @@ void init_triton_proton(py::module &&m) {
   py::enum_<proton::SamplingStrategy>(m, "SAMPLING_STRATEGY",
                                       py::module_local())
       .value("NONE", proton::SamplingStrategy::NONE)
+      .value("SELECTIVE", proton::SamplingStrategy::SELECTIVE)
       .export_values();
 
   // ProtonGPU enums
