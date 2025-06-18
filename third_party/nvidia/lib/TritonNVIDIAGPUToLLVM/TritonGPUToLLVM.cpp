@@ -120,7 +120,8 @@ struct ConvertTritonGPUToLLVM
     populateClampFOpToLLVMPattern(typeConverter, patterns, axisInfoAnalysis,
                                   computeCapability,
                                   patternBenefitClampOptimizedPattern);
-    populateLoadStoreOpToLLVMPatterns(typeConverter, targetInfo, patterns,
+    populateLoadStoreOpToLLVMPatterns(typeConverter, targetInfo,
+                                      computeCapability, patterns,
                                       axisInfoAnalysis, benefit);
     mlir::triton::populateReduceOpToLLVMPatterns(typeConverter, patterns,
                                                  targetInfo, benefit);
