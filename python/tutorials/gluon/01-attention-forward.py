@@ -589,7 +589,7 @@ class InnerLoopInfo:
 
 @gluon.jit
 def _attn_fwd_load(config,  #
-                   m_is, infos, k_load_ctx, v_load_ctx,  #
+                   infos, k_load_ctx, v_load_ctx,  #
                    STAGE: gl.constexpr):
     prog = config.get_program()
     lo, hi = prog.get_loop_bounds(STAGE)
@@ -609,7 +609,7 @@ def _attn_fwd_load(config,  #
 
 @gluon.jit
 def _attn_fwd_mma(config,  #
-                  m_is, infos, k_load_ctx, v_load_ctx,  #
+                  infos, k_load_ctx, v_load_ctx,  #
                   STAGE: gl.constexpr):
     prog = config.get_program()
     lo, hi = prog.get_loop_bounds(STAGE)
@@ -684,7 +684,7 @@ def _attn_fwd_correction_compute(config, mi_consumer, o_consumer, m_i):
 
 @gluon.jit
 def _attn_fwd_correction(config,  #
-                         m_is, infos, k_load_ctx, v_load_ctx,  #
+                         m_is, infos,  #
                          STAGE: gl.constexpr):
     prog = config.get_program()
     lo, hi = prog.get_loop_bounds(STAGE)
@@ -757,14 +757,14 @@ def _softmax_tile(tile_id: gl.constexpr, config, info, STAGE: gl.constexpr):
 
 @gluon.jit
 def _attn_fwd_softmax0(config,  #
-                       m_is, infos, k_load_ctx, v_load_ctx,  #
+                       infos, k_load_ctx, v_load_ctx,  #
                        STAGE: gl.constexpr):
     _softmax_tile(0, config, infos[0], STAGE)
 
 
 @gluon.jit
 def _attn_fwd_softmax1(config,  #
-                       m_is, infos, k_load_ctx, v_load_ctx,  #
+                       infos, k_load_ctx, v_load_ctx,  #
                        STAGE: gl.constexpr):
     _softmax_tile(1, config, infos[1], STAGE)
 
@@ -781,10 +781,14 @@ def _attn_fwd_inner(config, info0, info1, m_i0, m_i1,  #
         config,
         (m_i0, m_i1),
         (info0, info1),
+        STAGE,
+    ), _attn_fwd_correction, (
+        config,
+        (info0, info1),
         k_load_ctx,
         v_load_ctx,
         STAGE,
-    ), _attn_fwd_correction, [
+    ), [
         _attn_fwd_softmax0,
         _attn_fwd_softmax1,
         _attn_fwd_mma,
