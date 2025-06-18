@@ -417,8 +417,7 @@ class AttentionConfig:
     o_layout: gl.constexpr
     o_splitn_layout: gl.constexpr
 
-    def __init__(self, qk_scale, Z, H, N_CTX, BLOCK_M, BLOCK_N, HEAD_DIM, dtype, num_warps, SPLIT_M_FACTOR,
-                 SPLIT_N_FACTOR):
+    def __init__(self, qk_scale, Z, H, N_CTX, BLOCK_M, BLOCK_N, HEAD_DIM, dtype, num_warps, SPLIT_N_FACTOR):
         self.qk_scale = qk_scale
         self.Z = Z
         self.H = H
@@ -430,7 +429,7 @@ class AttentionConfig:
         self.num_warps = gl.constexpr(num_warps)
 
         self.SPLIT_N_FACTOR = SPLIT_N_FACTOR
-        self.SPLIT_M = self.BLOCK_M // SPLIT_M_FACTOR
+        self.SPLIT_M = self.BLOCK_M // 2
         self.SPLIT_N = self.BLOCK_N // self.SPLIT_N_FACTOR
 
         self.q_shape = gl.constexpr([self.SPLIT_M, self.HEAD_DIM])
@@ -775,8 +774,9 @@ def _attn_fwd_softmax1(config,  #
 def _attn_fwd_inner(config, info0, info1, m_i0, m_i1,  #
                     desc_k, desc_v,  #
                     STAGE: gl.constexpr):
-    k_load_ctx = LoadContext.create(desc_k, num_buffers=2, num_consumers=2)
-    v_load_ctx = LoadContext.create(desc_v, num_buffers=2, num_consumers=2)
+    num_buffers: gl.constexpr = 2 if config.HEAD_DIM >= 128 else 3
+    k_load_ctx = LoadContext.create(desc_k, num_buffers=num_buffers, num_consumers=2)
+    v_load_ctx = LoadContext.create(desc_v, num_buffers=num_buffers, num_consumers=2)
 
     m_i0, m_i1 = gl.warp_specialize((
         config,
@@ -806,8 +806,8 @@ def _gluon_attn(sm_scale, M, Z, H, N_CTX,  #
                 num_warps: gl.constexpr):
     qk_scale = sm_scale
     qk_scale *= 1.44269504
-    config = AttentionConfig(qk_scale, Z, H, N_CTX, BLOCK_M, BLOCK_N, HEAD_DIM, dtype, num_warps, SPLIT_M_FACTOR=2,
-                             SPLIT_N_FACTOR=triton.cdiv(BLOCK_N, 64))
+    config = AttentionConfig(qk_scale, Z, H, N_CTX, BLOCK_M, BLOCK_N, HEAD_DIM, dtype, num_warps,
+                             SPLIT_N_FACTOR=triton.cdiv(HEAD_DIM, 64))
 
     prog = config.get_program()
 
