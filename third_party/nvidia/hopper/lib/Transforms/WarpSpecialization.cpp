@@ -34,6 +34,11 @@ public:
     });
     if (loops.empty())
       return;
+
+    int numWarps = mlir::triton::gpu::lookupNumWarps(funcOp);
+    if (numWarps != 4)
+      return;
+
     // FIXME: skip warpspec if there is else block. Need to improve
     // CodePartitioning to correctly handle channels in else block.
     bool hasElse = false;

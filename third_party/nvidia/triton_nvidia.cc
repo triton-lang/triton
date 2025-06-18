@@ -73,7 +73,7 @@ void init_triton_nvidia(py::module &&m) {
   init_triton_nvidia_passes_nvws(passes.def_submodule("nvws"));
   init_triton_nvidia_passes_ttgpuir(passes.def_submodule("ttgpuir"));
   init_triton_nvidia_passes_ttnvgpuir(passes.def_submodule("ttnvgpuir"));
-  init_triton_hopper_passes(passes.def_submodule("hopperws"));
+  init_triton_hopper_passes(passes.def_submodule("hopper"));
 
   // cluster info
   py::class_<mlir::triton::nvidia_gpu::ClusterInfo>(m, "ClusterInfo")
