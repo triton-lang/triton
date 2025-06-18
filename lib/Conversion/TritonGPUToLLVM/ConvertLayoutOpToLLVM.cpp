@@ -299,9 +299,6 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     dstLayout = actionRemoveBroadcastedRegs(dstLayout).apply(dstLayout);
 
     auto smem = optimalSwizzling(srcLayout, dstLayout, bitwidth);
-    llvm::errs() << "srcLayout: " << srcLayout << "\n";
-    llvm::errs() << "dstLayout: " << dstLayout << "\n";
-    llvm::errs() << "smem: " << smem << "\n";
 
     // Extract reps from smem
     auto kReg = str_attr("register");
@@ -311,8 +308,6 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
 
     auto totalStoreCvt = srcLayout.invertAndCompose(smem);
     auto totalLoadCvt = dstLayout.invertAndCompose(smem);
-
-    // FIXME(Lezcano): The legacy path also creates PRMT, so we should revisit
 
     // The permutation exists by construction of the reps dimension in
     // optimalSwizzling
