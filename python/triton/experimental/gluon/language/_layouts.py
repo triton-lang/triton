@@ -11,11 +11,13 @@ __all__ = [
 ]
 
 
-def _realize_cta_layout(rank, ctas_per_cga, cta_split_num, cta_order):
-    ctas_per_cga = ctas_per_cga or [1] * rank
-    cta_split_num = cta_split_num or [1] * rank
-    cta_order = cta_order or list(reversed(range(rank)))
-    return ctas_per_cga, cta_split_num, cta_order
+def _realize_cta_layout(layout, rank):
+    ctas_per_cga = layout.ctas_per_cga or [1] * rank
+    cta_split_num = layout.cta_split_num or [1] * rank
+    cta_order = layout.cta_order or list(reversed(range(rank)))
+    object.__setattr__(layout, "ctas_per_cga", ctas_per_cga)
+    object.__setattr__(layout, "cta_split_num", cta_split_num)
+    object.__setattr__(layout, "cta_order", cta_order)
 
 
 class DistributedLayout:
@@ -42,25 +44,23 @@ class BlockedLayout(DistributedLayout):
         super().__setattr__("cta_order", _unwrap_if_constexpr(self.cta_order))
 
         rank = len(self.size_per_thread)
+        _realize_cta_layout(self, rank)
         assert len(self.threads_per_warp) == rank
         assert len(self.warps_per_cta) == rank
         assert len(self.order) == rank
-        assert self.ctas_per_cga is None or len(self.ctas_per_cga) == rank
-        assert self.cta_split_num is None or len(self.cta_split_num) == rank
-        assert self.cta_order is None or len(self.cta_order) == rank
+        assert len(self.ctas_per_cga) == rank
+        assert len(self.cta_split_num) == rank
+        assert len(self.cta_order) == rank
 
     def _to_ir(self, builder):
-        rank = len(self.size_per_thread)
-        ctas_per_cga, cta_split_num, cta_order = _realize_cta_layout(rank, self.ctas_per_cga, self.cta_split_num,
-                                                                     self.cta_order)
         return builder.get_blocked_layout(
             self.size_per_thread,
             self.threads_per_warp,
             self.warps_per_cta,
             self.order,
-            ctas_per_cga,
-            cta_split_num,
-            cta_order,
+            self.ctas_per_cga,
+            self.cta_split_num,
+            self.cta_order,
         )
 
     def mangle(self) -> str:
@@ -161,21 +161,20 @@ class NVMMASharedLayout(SharedLayout):
         assert self.element_bitwidth in [8, 16, 32, 64]
         assert self.swizzle_byte_width in [0, 32, 64, 128]
         rank = self.rank
-        assert self.ctas_per_cga is None or len(self.ctas_per_cga) == rank
-        assert self.cta_split_num is None or len(self.cta_split_num) == rank
-        assert self.cta_order is None or len(self.cta_order) == rank
+        _realize_cta_layout(self, rank)
+        assert len(self.ctas_per_cga) == rank
+        assert len(self.cta_split_num) == rank
+        assert len(self.cta_order) == rank
 
     def _to_ir(self, builder):
-        ctas_per_cga, cta_split_num, cta_order = _realize_cta_layout(self.rank, self.ctas_per_cga, self.cta_split_num,
-                                                                     self.cta_order)
         return builder.get_nvmma_shared_layout(
             self.swizzle_byte_width,
             self.element_bitwidth,
             self.transposed,
             self.fp4_padded,
-            ctas_per_cga,
-            cta_split_num,
-            cta_order,
+            self.ctas_per_cga,
+            self.cta_split_num,
+            self.cta_order,
         )
 
     def mangle(self) -> str:
@@ -202,22 +201,20 @@ class SwizzledSharedLayout(SharedLayout):
         super().__setattr__("cta_order", _unwrap_if_constexpr(self.cta_order))
 
         rank = len(self.order)
-        assert self.ctas_per_cga is None or len(self.ctas_per_cga) == rank
-        assert self.cta_split_num is None or len(self.cta_split_num) == rank
-        assert self.cta_order is None or len(self.cta_order) == rank
+        _realize_cta_layout(self, rank)
+        assert len(self.ctas_per_cga) == rank
+        assert len(self.cta_split_num) == rank
+        assert len(self.cta_order) == rank
 
     def _to_ir(self, builder):
-        rank = len(self.order)
-        ctas_per_cga, cta_split_num, cta_order = _realize_cta_layout(rank, self.ctas_per_cga, self.cta_split_num,
-                                                                     self.cta_order)
         return builder.get_swizzled_shared_layout(
-            _unwrap_if_constexpr(self.vec),
-            _unwrap_if_constexpr(self.per_phase),
-            _unwrap_if_constexpr(self.max_phase),
+            self.vec,
+            self.per_phase,
+            self.max_phase,
             self.order,
-            ctas_per_cga,
-            cta_split_num,
-            cta_order,
+            self.ctas_per_cga,
+            self.cta_split_num,
+            self.cta_order,
         )
 
     def mangle(self) -> str:
