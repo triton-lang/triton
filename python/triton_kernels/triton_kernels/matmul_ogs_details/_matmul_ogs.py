@@ -39,7 +39,7 @@ def _matmul_ogs(
              WScale,
              MxScale, stride_mx_e, stride_mx_k, stride_mx_n, MX_TRANSPOSE: tl.constexpr,
              B, stride_b_e, # Bias
-             NRows, M, N, K, # shapes
+             M, N, K, # shapes
              # expt data
              Betas, Gammas,
              GatherIndx,
@@ -233,9 +233,9 @@ def _matmul_ogs(
                 mask_k_scale = tl.full([PACKED_MX_BLOCK], True, dtype=tl.int1)
         else:
             mask_k = offs_k < k
-            mask_k_w = offs_w_k < (tl.cdiv(k, W_K_DIVISOR) * W_K_MULTIPLIER)
+            mask_k_w = offs_w_k < ((k // W_K_DIVISOR) * W_K_MULTIPLIER)
             if is_microscaled_format and SWIZZLE_MX_SCALE is None:
-                mask_k_scale = offs_k_scale < tl.cdiv(k, MX_PACK_DIVISOR)
+                mask_k_scale = offs_k_scale * MX_PACK_DIVISOR < k
 
         x = tl.load(XPtrs, mask=mask_k[None, :], other=0.0)
         w = tl.load(WPtrs, mask=mask_k_w[:, None], other=0.0, cache_modifier=W_CACHE_MODIFIER)

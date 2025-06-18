@@ -1678,11 +1678,11 @@ static LogicalResult iterateGatherScatterIndices(
       Value msgIdVal = b.i32_val(msgId);
 
       auto result = applyLinearLayout(loc, rewriter, msgToShared,
-                                      {{kMsg, msgIdVal},
-                                       {kRegister, regIdVal},
+                                      {{kRegister, regIdVal},
                                        {kLane, laneId},
                                        {kWarp, warpId},
-                                       {kBlock, blockId}});
+                                       {kBlock, blockId},
+                                       {kMsg, msgIdVal}});
       assert(result.size() == 2 && result.front().first == "offset" &&
              result.back().first == "block");
       Value shMemOffset = result.front().second;

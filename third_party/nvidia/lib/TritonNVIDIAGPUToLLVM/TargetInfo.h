@@ -73,6 +73,8 @@ public:
 
   int getPtxVersion() const { return ptxVersion; }
 
+  bool isCuda() const override { return true; }
+
 private:
   int computeCapability;
   int ptxVersion;
