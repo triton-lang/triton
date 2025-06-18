@@ -356,14 +356,14 @@ def test_warp_specialize():
     c = ttgl.arange(0, 4, layout=layout)
     pair = Pair(a, b)
     e: ttgl.constexpr = 42
-    a, b = ttgl.warp_specialize((pair, c, e), warp_specialize_default,
+    a, b = ttgl.warp_specialize((pair, c, e), warp_specialize_default, (pair, c, e),
                                 [warp_specialize_worker0, warp_specialize_worker1], [4, 4], [24, 48])
     anchor(a)
     anchor(b)
 
     # CHECK: ttg.warp_specialize([[A]], [[B]], [[C]])
     # CHECK: (tensor<1xi32, [[BLOCKED]]>, tensor<2xi32, [[BLOCKED]]>, tensor<4xi32, [[BLOCKED]]>) -> ()
-    ttgl.warp_specialize((pair, c, e), warp_specialize_worker0, [warp_specialize_worker1], [4], [48])
+    ttgl.warp_specialize((pair, c, e), warp_specialize_worker0, (pair, c, e), [warp_specialize_worker1], [4], [48])
 
 
 @gluon.jit

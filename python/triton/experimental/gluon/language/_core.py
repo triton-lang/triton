@@ -302,11 +302,11 @@ def allocate_shared_memory(element_ty, shape, layout, value=None, _semantic=None
 
 
 @builtin
-def warp_specialize(args, default_partition, worker_partitions, worker_num_warps, worker_num_regs,  #
+def warp_specialize(default_args, default_partition, worker_args, worker_partitions, worker_num_warps, worker_num_regs,
                     _semantic=None, _generator=None):
     worker_num_warps = [_unwrap_if_constexpr(w) for w in worker_num_warps]
     worker_num_regs = [_unwrap_if_constexpr(r) for r in worker_num_regs]
-    return _semantic.warp_specialize(args, default_partition, worker_partitions, worker_num_warps,  #
+    return _semantic.warp_specialize(default_args, default_partition, worker_args, worker_partitions, worker_num_warps,
                                      worker_num_regs, _generator)
 
 
