@@ -95,7 +95,7 @@ class Bitmatrix(Tensor):
     def __init__(self, handle, shape, shape_max, scratchpad=None):
         assert handle.shape[-1] * 32 == shape[-1]
         assert handle.ndim == 2
-        super().__init__(handle, shape, shape_max)
+        super().__init__(handle, shape=shape, shape_max=shape_max)
         assert self.dtype == torch.uint32
         self._scratchpad = scratchpad
 

@@ -8,7 +8,9 @@ from triton_kernels.datastruct import Tensor
 
 def topk_forward(x, k, apply_softmax=True, dim=1, return_bitmatrix=True, y_indx=None, n_rows=None):
     if not isinstance(x, Tensor):
-        x = Tensor(x, [x.shape[0] if n_rows is None else n_rows, x.shape[1]], [x.shape[0], x.shape[1]])
+        x_shape = [x.shape[0] if n_rows is None else n_rows, x.shape[1]]
+        x_shape_max = [x.shape[0], x.shape[1]]
+        x = Tensor(x, shape=x_shape, shape_max=x_shape_max)
     cdiv = lambda a, b: (a + b - 1) // b
     BLOCK_M = 32
     BLOCK_N = 32
@@ -46,7 +48,10 @@ def topk_forward(x, k, apply_softmax=True, dim=1, return_bitmatrix=True, y_indx=
         BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,  # tunable parameter
         APPLY_SOFTMAX=apply_softmax, N_EXPTS_PAD=n_cols_pad, N_EXPTS_ACT=k,  # constants
     )
-    return y_vals, y_indx, Bitmatrix(bitmatrix, [n_rows, n_cols_words * 32], [n_rows_max, None], scratchpad)
+    bitmatrix_shape = [n_rows, n_cols_words * 32]
+    bitmatrix_shape_max = [n_rows_max, None]
+    bitmatrix = Bitmatrix(bitmatrix, shape=bitmatrix_shape, shape_max=bitmatrix_shape_max, scratchpad=scratchpad)
+    return y_vals, y_indx, bitmatrix
 
 
 def topk_backward(x, y_indx, dy_vals, k, n_rows, apply_softmax):
