@@ -614,7 +614,10 @@ def _create_tma_descriptors(
     return x_tensor_or_desc, w_desc_and_transpose, mx_desc_and_transpose
 
 def matmul_ogs_set_idle_sms(num_idle_sms):
-    update_opt_flags_constraints({"is_persistent": True, "idle_sms": num_idle_sms})
+    """
+    persistent kernels will leave `num_idle_sms` idle
+    """
+    update_opt_flags_constraints({"idle_sms": num_idle_sms})
 
 def matmul_ogs(x, w, bias,
                routing_data: RoutingData | None = None,
