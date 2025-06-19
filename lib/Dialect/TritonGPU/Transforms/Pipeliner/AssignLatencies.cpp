@@ -99,9 +99,10 @@ public:
 
   static bool
   isPipeliningBeneficial(Operation *op, Operation *finalUser,
-                         tt::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
+                         tt::ModuleAxisInfoAnalysis &axisInfoAnalysis,
+                         bool filterSmall) {
     if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
-      if (!canBeConvertedToAsyncLoad(loadOp, axisInfoAnalysis)) {
+      if (filterSmall && !canBeConvertedToAsyncLoad(loadOp, axisInfoAnalysis)) {
         LDBG("Load " << *loadOp << " is too small for pipelining");
         return false;
       }
@@ -137,7 +138,7 @@ public:
     if (localAllocEnc) {
       auto registerTy = cast<RankedTensorType>(op->getResultTypes()[0]);
       auto vecBytes = getCopyVecBytes(registerTy, localAllocEnc);
-      if (vecBytes < 4) {
+      if (filterSmall && vecBytes < 4) {
         // At least 4 bytes need to be consecutive for cp.async
         return false;
       }
@@ -155,7 +156,7 @@ public:
   llvm::MapVector<Operation *, std::pair<int, Operation *>>
   loadOpsToIndirectionLevel(scf::ForOp forOp, bool pipelineWithoutDot,
                             tt::ModuleAxisInfoAnalysis &axisInfoAnalysis,
-                            int numStages) {
+                            int numStages, bool filterSmall) {
     llvm::MapVector<Operation *, std::pair<int, Operation *>> loadOpToIndLevel;
     DenseSet<Operation *> seen;
     DenseSet<Operation *> excluded;
@@ -165,8 +166,8 @@ public:
           if (!seen.insert(op).second || excluded.count(op))
             return;
           if (isa<tt::LoadOp, tt::DescriptorLoadOp, tt::DescriptorGatherOp>(op)) {
-            if (!AssignLoadLatencies::isPipeliningBeneficial(op, finalUser,
-                                                             axisInfoAnalysis))
+            if (!AssignLoadLatencies::isPipeliningBeneficial(
+                    op, finalUser, axisInfoAnalysis, filterSmall))
               return;
             if (loadOpToIndLevel.count(op)) {
               int level = loadOpToIndLevel[op].first;
