@@ -84,9 +84,9 @@ struct AssertOpConversion : public ConvertOpToLLVMPattern<triton::AssertOp> {
     // Split a block after the call.
     Block *thenBlock = rewriter.splitBlock(ifBlock, op->getIterator());
     rewriter.setInsertionPointToEnd(ifBlock);
-    rewriter.create<cf::BranchOp>(loc, thenBlock);
+    rewriter.create<LLVM::BrOp>(loc, thenBlock);
     rewriter.setInsertionPointToEnd(prevBlock);
-    rewriter.create<cf::CondBranchOp>(loc, condition, ifBlock, thenBlock);
+    rewriter.create<LLVM::CondBrOp>(loc, condition, ifBlock, thenBlock);
     rewriter.setInsertionPointToStart(thenBlock);
   }
 
