@@ -211,9 +211,6 @@ def _p_matmul_ogs(
     USE_SCATTER_TMA: tl.constexpr = (cuda_capability_geq(10, 0) and HAS_FUSED_SCATTER) and not DISABLE_Y_TMA
     INT_MAX: tl.constexpr = 2147483647
 
-    if USE_GATHER_TMA:
-        X = tl.make_tensor_descriptor(XPtr, shape=X.shape, strides=X.strides[:-1] + (1,), block_shape=X.block_shape)
-
     if USE_SCATTER_TMA:
         y_desc = tl.make_tensor_descriptor(
             Y,

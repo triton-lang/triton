@@ -154,9 +154,8 @@ class TensorDescriptorBuilder:
         x_tensor = TensorDescriptorBuilder.squeeze_after_dim(x_tensor)
         assert x_tensor.ndim == 2, "TMA gather descriptor requires 2D input"
         INT_MAX = 2147483647
-        x_shape = [INT_MAX, x_tensor.shape[1]]
-        x_strides = [x_tensor.stride(0), x_tensor.stride(1)]
-        return TensorDescriptor(base=x_tensor, shape=x_shape, strides=x_strides, block_shape=[1, block_k])
+        assert x_tensor.shape[0] < INT_MAX
+        return TensorDescriptor.from_tensor(x_tensor, block_shape=[1, block_k])
 
     @staticmethod
     def create_descriptor(x_tensor: torch.Tensor, block_m: int, block_k: int) -> TensorDescriptor:
