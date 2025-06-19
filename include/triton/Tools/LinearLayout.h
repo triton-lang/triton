@@ -855,7 +855,8 @@ public:
 class PaddedLinearLayout {
 public:
   PaddedLinearLayout(LinearLayout linear, ArrayRef<unsigned> intervals,
-                     ArrayRef<unsigned> paddings);
+                     ArrayRef<unsigned> paddings)
+      : linear(std::move(linear)), intervals(intervals), paddings(paddings) {}
 
   const LinearLayout &getLinear() const { return linear; }
 
@@ -863,11 +864,12 @@ public:
   std::optional<int32_t> getMinInterval() const;
 
   // Returns true if this is not a degenerated case and indeed requires padding.
-  bool hasPadding() const;
+  bool hasPadding() const { return !intervals.empty(); }
 
 private:
   LinearLayout linear;
-  SmallVector<std::pair<unsigned, unsigned>> intervalPads;
+  SmallVector<unsigned, 2> intervals;
+  SmallVector<unsigned, 2> paddings;
 };
 
 } // namespace mlir::triton
