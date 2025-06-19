@@ -17,15 +17,18 @@ def copy_kernel(Out, In, numel, XBLOCK: ttgl.constexpr, layout: ttgl.constexpr):
     ttgl.store(Out + xoffset, data, xmask)
 
 
+copy_kernel_tpw = [32] if is_cuda() else [64]
+
+
 @pytest.mark.parametrize("layout", [
-    ttgl.BlockedLayout(size_per_thread=[1], threads_per_warp=[32], warps_per_cta=[4], order=[0]),
-    ttgl.BlockedLayout(size_per_thread=[2], threads_per_warp=[32], warps_per_cta=[4], order=[0]),
-    ttgl.BlockedLayout(size_per_thread=[4], threads_per_warp=[32], warps_per_cta=[4], order=[0]),
-    ttgl.BlockedLayout(size_per_thread=[8], threads_per_warp=[32], warps_per_cta=[4], order=[0]),
-    ttgl.BlockedLayout(size_per_thread=[1], threads_per_warp=[32], warps_per_cta=[8], order=[0]),
-    ttgl.BlockedLayout(size_per_thread=[2], threads_per_warp=[32], warps_per_cta=[8], order=[0]),
-    ttgl.BlockedLayout(size_per_thread=[4], threads_per_warp=[32], warps_per_cta=[8], order=[0]),
-    ttgl.BlockedLayout(size_per_thread=[8], threads_per_warp=[32], warps_per_cta=[8], order=[0]),
+    ttgl.BlockedLayout(size_per_thread=[1], threads_per_warp=copy_kernel_tpw, warps_per_cta=[4], order=[0]),
+    ttgl.BlockedLayout(size_per_thread=[2], threads_per_warp=copy_kernel_tpw, warps_per_cta=[4], order=[0]),
+    ttgl.BlockedLayout(size_per_thread=[4], threads_per_warp=copy_kernel_tpw, warps_per_cta=[4], order=[0]),
+    ttgl.BlockedLayout(size_per_thread=[8], threads_per_warp=copy_kernel_tpw, warps_per_cta=[4], order=[0]),
+    ttgl.BlockedLayout(size_per_thread=[1], threads_per_warp=copy_kernel_tpw, warps_per_cta=[8], order=[0]),
+    ttgl.BlockedLayout(size_per_thread=[2], threads_per_warp=copy_kernel_tpw, warps_per_cta=[8], order=[0]),
+    ttgl.BlockedLayout(size_per_thread=[4], threads_per_warp=copy_kernel_tpw, warps_per_cta=[8], order=[0]),
+    ttgl.BlockedLayout(size_per_thread=[8], threads_per_warp=copy_kernel_tpw, warps_per_cta=[8], order=[0]),
 ])
 @pytest.mark.parametrize("XBLOCK", [128, 256, 512, 1024, 2048])
 def test_copy_kernel(layout, XBLOCK):

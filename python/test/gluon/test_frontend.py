@@ -28,6 +28,7 @@ def convert_layout_kernel(XBLOCK: ttgl.constexpr, layout_a: ttgl.constexpr, layo
     res = ttgl.convert_layout(x, layout_b)  # noqa: F841
 
 
+@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
 def test_convert_layout(fresh_knobs):
     knobs.compilation.disable_line_info = True
 
@@ -70,6 +71,7 @@ def shared_memory_kernel(XBLOCK: ttgl.constexpr, YBLOCK: ttgl.constexpr, layout_
     unused._keep_alive()
 
 
+@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
 def test_shared_memory(fresh_knobs):
     knobs.compilation.disable_line_info = True
 
@@ -170,6 +172,7 @@ def shared_memory_subview_kernel(XBLOCK: ttgl.constexpr, layout: ttgl.constexpr,
     view.store(value.trans())
 
 
+@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
 def test_shared_memory_subview(fresh_knobs):
     knobs.compilation.disable_line_info = True
 
@@ -208,6 +211,7 @@ def shared_memory_index_kernel(XBLOCK: ttgl.constexpr, layout: ttgl.constexpr, s
         smem.index(i).load(layout)
 
 
+@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
 def test_shared_memory_index(fresh_knobs):
     knobs.compilation.disable_line_info = True
 
@@ -263,6 +267,7 @@ def shared_memory_cast_kernel():
     smem._reinterpret(ttgl.int8, [1024], ttgl.SwizzledSharedLayout(1, 1, 1, [0, 1]))
 
 
+@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
 def test_shared_memory_cast(fresh_knobs):
     expecttest.assert_expected_inline(
         anonymize_ir(run_parser(shared_memory_cast_kernel).str_nodebug()), """\
@@ -630,6 +635,7 @@ def broadcast_kernel():
     0 + a + b
 
 
+@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
 def test_broadcast(fresh_knobs):
     knobs.compilation.disable_line_info = True
 
@@ -684,6 +690,7 @@ def math_kernel():
     ttgl.fma(a, b, c)
 
 
+@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
 def test_math(fresh_knobs):
     knobs.compilation.disable_line_info = True
 
@@ -754,6 +761,7 @@ def reduce_kernel(out):
     tl.store(out + ttgl.arange(0, 16, s0.type.layout), result)
 
 
+@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
 def test_reduce(fresh_knobs):
     knobs.compilation.disable_line_info = True
 
@@ -802,6 +810,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 """)
 
 
+@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
 @filecheck_test
 @gluon.jit
 def test_elementwise_core():
@@ -829,6 +838,7 @@ def linear_layout_kernel():
     ttgl.arange(0, 256, layout=ll)
 
 
+@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
 def test_linear_layout(fresh_knobs):
     knobs.compilation.disable_line_info = True
     h = linear_layout_kernel.warmup(grid=(1, ))
