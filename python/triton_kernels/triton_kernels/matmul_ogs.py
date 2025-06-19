@@ -149,11 +149,11 @@ class TensorDescriptorBuilder:
         return x.view(*new_shape)
 
     @staticmethod
-    def create_descriptor_gather(x_tensor: torch.Tensor, block_k: int) -> TensorDescriptor:
+    def create_descriptor_gather(x_tensor: torch.Tensor, K, block_k: int) -> TensorDescriptor:
         """Create a tensor descriptor for input matrix X via TMA gather"""
         x_tensor = TensorDescriptorBuilder.squeeze_after_dim(x_tensor)
         assert x_tensor.ndim == 2, "TMA gather descriptor requires 2D input"
-        x_shape = [2147483647, x_tensor.shape[1]]
+        x_shape = [2147483647, K]
         x_strides = [x_tensor.stride(0), x_tensor.stride(1)]
         return TensorDescriptor(base=x_tensor, shape=x_shape, strides=x_strides, block_shape=[1, block_k])
 
@@ -588,7 +588,7 @@ def _create_tma_descriptors(
     if not HAS_GATHER:
         x_tensor_or_desc = TensorDescriptorBuilder.create_descriptor(x, opt_flags.block_m, opt_flags.block_k)
     elif target_info.has_tma_gather():
-        x_tensor_or_desc = TensorDescriptorBuilder.create_descriptor_gather(x, opt_flags.block_k)
+        x_tensor_or_desc = TensorDescriptorBuilder.create_descriptor_gather(x, K, opt_flags.block_k)
 
     w_transpose = w.stride(2) != 1
     w_desc = TensorDescriptorBuilder.create_weight_descriptor(
