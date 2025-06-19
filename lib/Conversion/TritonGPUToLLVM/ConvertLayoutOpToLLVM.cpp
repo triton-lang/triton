@@ -139,7 +139,6 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     }
 
     // Handle sub-byte elements like i1
-    llvmElemTy.dump();
     if (llvmElemTy.getIntOrFloatBitWidth() < 8) {
       // Upcast to i8
       auto i8ElemTy = i8_ty;
