@@ -7,7 +7,7 @@
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-#include "triton/Tools/LayoutUtils.h"
+#include "triton/Tools/LinearLayout.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/MathExtras.h"
 
@@ -508,19 +508,19 @@ bool emitTransferBetweenRegistersAndShared(
   StringAttr kRegister = str_attr("register");
   StringAttr kLane = str_attr("lane");
   StringAttr kWarp = str_attr("warp");
+  StringAttr kOffset = str_attr("offset");
 
   auto shape = sharedTy.getShape();
   auto paddedLayout =
       dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(sharedTy.getEncoding());
-  auto sharedLL = LinearLayout::empty();
+  LinearLayout regToSharedLayout = LinearLayout::empty();
   if (paddedLayout) {
-    SmallVector<unsigned> dims(shape);
-    sharedLL = identityStandardND(Builder(ctx).getStringAttr("offset"), dims,
-                                  paddedLayout.getOrder());
+    regToSharedLayout =
+        regLayout.reshapeOuts({{kOffset, regLayout.getTotalOutDimSize()}});
   } else {
-    sharedLL = triton::gpu::toLinearLayout(shape, sharedTy.getEncoding());
+    auto sharedLL = triton::gpu::toLinearLayout(shape, sharedTy.getEncoding());
+    regToSharedLayout = regLayout.invertAndCompose(sharedLL);
   }
-  LinearLayout regToSharedLayout = regLayout.invertAndCompose(sharedLL);
 
   // TODO(jlebar): We don't currently support loading from shared memory in a
   // different CTA.  We'd need to emit `mapa.shared::cluster` instructions.
