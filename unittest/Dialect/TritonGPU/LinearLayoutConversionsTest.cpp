@@ -3024,7 +3024,7 @@ TEST_F(LinearLayoutConversionsTest, PaddedShared) {
        {S("block"), {}}},
       {S("dim0"), S("dim1")});
   // clang-format on
-  EXPECT_EQ(pll.getLinear(), expectedLL);
+  EXPECT_EQ(pll.linear, expectedLL);
 }
 
 } // anonymous namespace
