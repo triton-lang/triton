@@ -309,8 +309,6 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     auto totalStoreCvt = srcLayout.invertAndCompose(smem);
     auto totalLoadCvt = dstLayout.invertAndCompose(smem);
 
-    // FIXME(Lezcano): The legacy path also creates PRMT, so we should revisit
-
     // The permutation exists by construction of the reps dimension in
     // optimalSwizzling
     auto permStore =
