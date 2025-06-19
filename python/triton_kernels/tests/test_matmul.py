@@ -9,7 +9,7 @@ from triton_kernels.routing import routing
 import triton_kernels.matmul_ogs_details.opt_flags as opt_flags
 from triton_kernels.matmul_ogs import FlexCtx, PrecisionConfig, MicroscalingCtx, FusedActivation, FnSpecs
 from triton_kernels.matmul_ogs import can_use_persistent_tma
-from triton_kernels.matmul_ogs import matmul_ogs, matmul_ogs_torch
+from triton_kernels.matmul_ogs import matmul_ogs_set_idle_sms, matmul_ogs, matmul_ogs_torch
 from triton_kernels.swiglu import swiglu, swiglu_fn, PrecisionConfig as SwiGLUPrecisionConfig
 # numerics utilities
 from triton_kernels.numerics import InFlexData, OutFlexData
@@ -193,6 +193,7 @@ class Case:
             Case(300, 400, 400, "ragged", "bfloat16", "mxfloat8_e4m3fn", 8, 4, hbm_swizzling=True),
             Case(300, 400, 400, "batched", "bfloat16", "mxfloat8_e5m2", 32, 4),
             Case(1000, 700, 2, "batched", "bfloat16", "mxfloat4_e2m1", 8, 2),
+            Case(1, 2880, 2880, "ragged", "bfloat16", "mxfloat4_e2m1", 128, 4),
             Case(16, 256, 256, "ragged", "float8_e5m2", "mxfloat4_e2m1", 128, 4, hbm_swizzling=True),
             Case(1000, 704, 832, "batched", "float8_e5m2", "mxfloat4_e2m1", 3, 1, hbm_swizzling=True),
             Case(1000, 704, 832, "batched", "float8_e5m2", "mxfloat4_e2m1", 3, 1, hbm_swizzling=True),
@@ -243,6 +244,9 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
             pytest.skip("float16 x mx not supported with cuda capability >= 10")
         if "float8" in act_dtype_str and "mx" in weight_dtype_str and torch.cuda.get_device_capability()[0] < 10:
             pytest.skip("float8 x mx not supported with cuda capability < 10")
+        if n == 2880 and k == 2880 and torch.cuda.get_device_capability()[0] < 9:
+            pytest.skip("Not enough memory on A100")
+
     elif is_hip():
         if "float8" in act_dtype_str and "mx" in weight_dtype_str and not is_hip_cdna4():
             pytest.skip("float8 x mx only supported on CDNA4")
@@ -252,6 +256,10 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
             pytest.skip("NYI: Persistent kernel not supported on AMD GPU")
         if split_k > 1:
             pytest.skip("splitK hasn't been fully tested on AMD GPU.")
+
+        if is_hip_cdna3() and ("float8_e4m3fn" in (weight_dtype_str, act_dtype_str)
+                               or "float8_e5m2" in (weight_dtype_str, act_dtype_str)):
+            pytest.skip("float8_e4m3fn and float8_e5m2 hasn't been fully tested on AMD CDNA3 platform.")
 
     if "float8_e4m3fnuz" in (weight_dtype_str, act_dtype_str) and not is_hip_cdna3():
         pytest.skip("float8_e4m3fnuz only tested on AMD CDNA3 Platform")
@@ -434,6 +442,17 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
         ref_y_scale = compute_actual_scale(ref_y, tri_y.dtype)
         assert (ref_y_scale -
                 tri_y_scale).abs() < 1e-10, f"ref_y_scale: {ref_y_scale}, tri_y_scale: {tri_y_scale.item()}"
+
+
+def test_set_idle_sms():
+    if not is_cuda():
+        pytest.skip("Only supported on CUDA")
+    from triton_kernels.matmul_ogs_details.opt_flags import make_opt_flags
+    num_idle_sms = 24
+    matmul_ogs_set_idle_sms(num_idle_sms)
+    flags = make_opt_flags(torch.float32, torch.float32, torch.float32, PrecisionConfig(), \
+                           1024, 1024, 1024, None, True, False, 1)
+    assert flags.idle_sms == num_idle_sms
 
 
 @pytest.mark.parametrize("m, n, k, mode", [

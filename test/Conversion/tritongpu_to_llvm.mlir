@@ -1215,30 +1215,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32} {
   // CHECK: llvm.mlir.global external @global_smem
   // CHECK-LABEL: convert_layout_mmav3_transpose
   tt.func @convert_layout_mmav3_transpose(%arg0: tensor<128x256xf8E5M2, #mma>) {
-    // CHECK-COUNT-16: llvm.store {{.*}} : vector<1xi8>
+    // CHECK-COUNT-8: llvm.store {{.*}} : vector<4xi32>
     // CHECK: nvvm.barrier0
-    // CHECK: llvm.load {{.*}} -> vector<4xi32>
-    // CHECK-COUNT-16: llvm.store {{.*}} : vector<1xi8>
-    // CHECK: nvvm.barrier0
-    // CHECK: llvm.load {{.*}} -> vector<4xi32>
-    // CHECK-COUNT-16: llvm.store {{.*}} : vector<1xi8>
-    // CHECK: nvvm.barrier0
-    // CHECK: llvm.load {{.*}} -> vector<4xi32>
-    // CHECK-COUNT-16: llvm.store {{.*}} : vector<1xi8>
-    // CHECK: nvvm.barrier0
-    // CHECK: llvm.load {{.*}} -> vector<4xi32>
-    // CHECK-COUNT-16: llvm.store {{.*}} : vector<1xi8>
-    // CHECK: nvvm.barrier0
-    // CHECK: llvm.load {{.*}} -> vector<4xi32>
-    // CHECK-COUNT-16: llvm.store {{.*}} : vector<1xi8>
-    // CHECK: nvvm.barrier0
-    // CHECK: llvm.load {{.*}} -> vector<4xi32>
-    // CHECK-COUNT-16: llvm.store {{.*}} : vector<1xi8>
-    // CHECK: nvvm.barrier0
-    // CHECK: llvm.load {{.*}} -> vector<4xi32>
-    // CHECK-COUNT-16: llvm.store {{.*}} : vector<1xi8>
-    // CHECK: nvvm.barrier0
-    // CHECK: llvm.load {{.*}} -> vector<4xi32>
     %0 = ttg.convert_layout %arg0 : tensor<128x256xf8E5M2, #mma> -> tensor<128x256xf8E5M2, #blocked>
     tt.return
   }
@@ -1268,7 +1246,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32} {
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
   // CHECK-LABEL: convert_blocked1d_to_slice0
   tt.func @convert_blocked1d_to_slice0(%src:tensor<32xi32, #blocked0>) {
-    // CHECK: llvm.load {{.*}} -> vector<4xi32>
+    // CHECK: llvm.store {{.*}} : vector<1xi32>
+    // CHECK: nvvm.barrier0
+    // CHECK-COUNT-1: llvm.load {{.*}} -> vector<4xi32>
     %cvt = ttg.convert_layout %src : tensor<32xi32, #blocked0> -> tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked1}>>
     tt.return
   }
@@ -1281,7 +1261,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
   // CHECK-LABEL: convert_blocked1d_to_slice1
   tt.func @convert_blocked1d_to_slice1(%src:tensor<32xi32, #blocked0>) {
-    // CHECK-COUNT-8: llvm.load {{.*}} -> i32
+    // CHECK-COUNT-2: llvm.load {{.*}} -> vector<4xi32>
     %cvt = ttg.convert_layout %src : tensor<32xi32, #blocked0> -> tensor<32xi32, #ttg.slice<{dim = 1, parent = #blocked1}>>
     tt.return
   }
@@ -1313,13 +1293,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32} {
   // CHECK-LABEL: linear_layout_with_multiple_iterations
   tt.func @linear_layout_with_multiple_iterations(%src: tensor<8x4xbf16, #linear>) {
     %cvt = ttg.convert_layout %src : tensor<8x4xbf16, #linear> -> tensor<8x4xbf16, #linear1>
-    // CHECK: llvm.store {{.*}} : vector<2xi16>
+    // CHECK-COUNT-2: llvm.store {{.*}} : vector<2xi16>
     // CHECK: nvvm.barrier0
-    // CHECK: llvm.load {{.*}} -> i16
-    // CHECK: nvvm.barrier0
-    // CHECK: llvm.store {{.*}} : vector<2xi16>
-    // CHECK: nvvm.barrier0
-    // CHECK: llvm.load {{.*}} -> i16
+    // CHECK-COUNT: llvm.load{{.*}}->vector<2xi16>
     tt.return
   }
 }
@@ -2420,4 +2396,19 @@ tt.func private @memdesc_reinterpret(%arg0: !ttg.memdesc<4x1024xi8, #shared0, #t
   tt.return
 }
 
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: load_br
+  tt.func @load_br(%arg0: tensor<16x4x!tt.ptr<i8>, #blocked>) {
+    // CHECK: llvm.br
+    cf.br ^bb1(%arg0 : tensor<16x4x!tt.ptr<i8>, #blocked>)
+    ^bb1(%arg1: tensor<16x4x!tt.ptr<i8>, #blocked>):
+    // CHECK: ld.global.b8
+      %0 = tt.load %arg1 : tensor<16x4x!tt.ptr<i8>, #blocked>
+      tt.return
+  }
 }
