@@ -680,6 +680,26 @@ def _attn_fwd_mma(config,  #
 
 
 @gluon.jit
+def _add_f32x2(a, b):
+    return gl.inline_asm_elementwise(
+        """
+        {
+            .reg .b64 ra, rb, rc;
+            mov.b64 ra, { $2, $3 };
+            mov.b64 rb, { $4, $5 };
+            add.f32x2 rc, ra, rb;
+            mov.b64 { $0, $1 }, rc;
+        }
+        """,
+        "=r,=r,r,r,r,r",
+        [a, b],
+        dtype=gl.float32,
+        is_pure=True,
+        pack=2,
+    )
+
+
+@gluon.jit
 def _mul_f32x2(a, b):
     return gl.inline_asm_elementwise(
         """
@@ -781,32 +801,40 @@ def _softmax_tile(tile_id: gl.constexpr, config, info, STAGE: gl.constexpr):
 
     for start_n in range(lo, hi, config.BLOCK_N):
         qk, qk_consumer = qk_consumer.get(config.qk_layout)
+        if config.HEAD_DIM == 128:
+            p_tmem, p_bar, p_producer = p_producer.acquire()
+
         if STAGE == 2:
             # Prevent LLVM from hoisting the partial sums, which triggers spilling.
             offs_n = gl.inline_asm_elementwise("mov.b32 $0, $0;", "=r,r", [offs_n], dtype=gl.int32, is_pure=True,
                                                pack=1)
             mask = offs_m[:, None] >= (start_n + offs_n[None, :])
-            qk = qk * config.qk_scale + gl.where(mask, 0, -1.0e6)
-            m_ij = gl.maximum(m_i, gl.max(qk, 1))
-            if config.mi_use_tmem:
-                mi_producer = mi_producer.emplace(gl.convert_layout(m_ij.expand_dims(1), config.mi_2d_layout))
-            else:
-                mi_producer = mi_producer.emplace(m_ij)
-            qk -= m_ij[:, None]
+            qk = gl.where(mask, qk, -1.0e8)
+        m_ij = gl.maximum(m_i, gl.max(qk, 1) * config.qk_scale)
+        if config.mi_use_tmem:
+            mi_producer = mi_producer.emplace(gl.convert_layout(m_ij.expand_dims(1), config.mi_2d_layout))
         else:
-            m_ij = gl.maximum(m_i, gl.max(qk, 1) * config.qk_scale)
-            if config.mi_use_tmem:
-                mi_producer = mi_producer.emplace(gl.convert_layout(m_ij.expand_dims(1), config.mi_2d_layout))
-            else:
-                mi_producer = mi_producer.emplace(m_ij)
-            qk = qk * config.qk_scale - m_ij[:, None]
+            mi_producer = mi_producer.emplace(m_ij)
+        # qk = _add_f32x2(_mul_f32x2(qk, config.qk_scale), -m_ij[:, None])
+        qk = qk * config.qk_scale - m_ij[:, None]
 
-        p = gl.exp2(qk)
+        if config.HEAD_DIM == 64:
+            p = gl.exp2(qk)
+            l_ij = gl.sum(p, 1)
+            alpha = gl.exp2(m_i - m_ij)
+            p_producer = p_producer.emplace(p.to(config.dtype))
+        else:
+            qk0, qk1, = qk.reshape([config.SPLIT_M, 2, config.BLOCK_N // 2]).permute(0, 2, 1).split()
+            p0 = gl.exp2(qk0)
+            p_tmem.slice(0, config.BLOCK_N // 2).store(p0.to(config.dtype))
+            p1 = gl.exp2(qk1)
+            p_tmem.slice(config.BLOCK_N // 2, config.BLOCK_N // 2).store(p1.to(config.dtype))
+            mbarrier.arrive(p_bar, count=1)
+            p = gl.join(p0, p1).permute(0, 2, 1).reshape([config.SPLIT_M, config.BLOCK_N])
+            p = gl.convert_layout(p, config.qk_layout)
 
-        l_ij = gl.sum(p, 1)
-        alpha = gl.exp2(m_i - m_ij)
-
-        p_producer = p_producer.emplace(p.to(config.dtype))
+            l_ij = gl.sum(p, 1)
+            alpha = gl.exp2(m_i - m_ij)
 
         l_i = l_i * alpha + l_ij
         m_i = m_ij
@@ -968,7 +996,7 @@ def is_blackwell():
 @pytest.mark.parametrize("H", [2, 48])
 @pytest.mark.parametrize("N_CTX", [256, 1024, 4 * 1024])
 @pytest.mark.parametrize("HEAD_DIM", [64, 128])
-@pytest.mark.parametrize("causal", [True])
+@pytest.mark.parametrize("causal", [False, True])
 @pytest.mark.parametrize("dtype", [torch.float16])
 @pytest.mark.skipif(not is_blackwell(), reason="Gluon attention is only supported on Blackwell GPUs")
 def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype):
@@ -987,7 +1015,10 @@ def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype):
     p = torch.softmax(p.float(), dim=-1).half()
     ref_out = torch.matmul(p, v)
 
+    # with torch.nn.attention.sdpa_kernel([torch.nn.attention.SDPBackend.CUDNN_ATTENTION]):
+    #     ref_out = torch.nn.functional.scaled_dot_product_attention(q, k, v, scale=sm_scale, is_causal=causal)
     tri_out, _ = attention_forward(q, k, v, causal, sm_scale)
+
     torch.testing.assert_close(ref_out, tri_out, atol=1e-2, rtol=0)
 
 
