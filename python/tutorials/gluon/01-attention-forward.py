@@ -732,20 +732,13 @@ def _attn_fwd_correction_compute(config, mi_consumer, o_consumer, m_i):
     o_tmem, o_bar, o_consumer = o_consumer.acquire()
     if config.SPLIT_D_FACTOR == 1:
         o = o_tmem.load(config.o_layout)
-        # FIXME: Investigate why FMUL2 is slower for D128.
-        if config.HEAD_DIM == 64:
-            o = _mul_f32x2(o, alpha[:, None])
-        else:
-            o = o * alpha[:, None]
+        o = _mul_f32x2(o, alpha[:, None])
         o_tmem.store(o)
     else:
         for i in tl.static_range(config.SPLIT_D_FACTOR):
             o_ref = o_tmem.slice(i * config.SPLIT_D, config.SPLIT_D)
             o = o_ref.load(config.o_splitn_layout)
-            if config.HEAD_DIM == 64:
-                o = _mul_f32x2(o, alpha[:, None])
-            else:
-                o = o * alpha[:, None]
+            o = _mul_f32x2(o, alpha[:, None])
             o_ref.store(o)
     mbarrier.arrive(o_bar, count=1)
     return mi_consumer, o_consumer, m_ij
@@ -864,7 +857,6 @@ def _attn_fwd_inner(config, info0, info1, m_i0, m_i1,  #
     k_load_ctx = LoadContext.create(desc_k, num_buffers=num_buffers, num_consumers=2)
     v_load_ctx = LoadContext.create(desc_v, num_buffers=num_buffers, num_consumers=2)
 
-    softmax_regs: gl.constexpr = 200 if config.HEAD_DIM == 64 else 192
     m_i0, m_i1 = gl.warp_specialize((
         config,
         (m_i0, m_i1),
@@ -881,7 +873,7 @@ def _attn_fwd_inner(config, info0, info1, m_i0, m_i1,  #
         _attn_fwd_softmax1,
         _attn_fwd_mma,
         _attn_fwd_load,
-    ], [4, 4, 1, 1], [softmax_regs, 200, 32, 32])
+    ], [4, 4, 1, 1], [192, 192, 32, 32])
 
     k_load_ctx.release()
     v_load_ctx.release()
