@@ -456,7 +456,9 @@ attributes too, for example,
     unsigned getRank() const { return getOrder().size(); }
     int32_t getAlignment() const { return 16; }
 
-    PaddedLinearLayout toPaddedLinearLayout(ArrayRef<int64_t> shape) const;
+    unsigned getMinInterval() const {
+      return *llvm::min_element(getIntervals());
+    }
 
     // Returns the total number of elements including padding given the input
     // tensor shape.

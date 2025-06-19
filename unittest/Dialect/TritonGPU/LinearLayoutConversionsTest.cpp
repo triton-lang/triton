@@ -3012,21 +3012,6 @@ TEST_F(LinearLayoutConversionsTest, MMAv5Fp4Padded) {
                     {S("dim0"), S("dim1")}));
 }
 
-TEST_F(LinearLayoutConversionsTest, PaddedShared) {
-  PaddedLinearLayout pll =
-      toPaddedLinearLayout({32, 64}, paddedShared({128, 256}, {4, 8}, {1, 0},
-                                                  {1, 1}, {1, 1}, {1, 0}));
-  // The expected linear layout mapping part should just be an identity.
-  auto expectedLL = LinearLayout(
-      // clang-format off
-      {{S("offset"), {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 16}, {0, 32},
-                     {1, 0}, {2, 0}, {4, 0}, {8, 0}, {16, 0}}},
-       {S("block"), {}}},
-      {S("dim0"), S("dim1")});
-  // clang-format on
-  EXPECT_EQ(pll.getLinear(), expectedLL);
-}
-
 } // anonymous namespace
 } // namespace mlir::triton::gpu
 

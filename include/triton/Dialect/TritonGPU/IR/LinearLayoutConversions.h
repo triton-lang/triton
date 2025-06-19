@@ -298,10 +298,5 @@ LinearLayout nvidiaMmaTile(MLIRContext *ctx, ArrayRef<unsigned> tileShape,
 // the two can be done using transferWithinWarp, without involving LDS
 std::optional<LinearLayout> chooseMfmaLikeStoreLayout(RankedTensorType valType);
 
-// Convert the given layout to a linear layout with potential additional
-// physical memory paddings.
-PaddedLinearLayout toPaddedLinearLayout(ArrayRef<int64_t> shape,
-                                        Attribute layout);
-
 } // namespace mlir::triton::gpu
 #endif // TRITON_DIALECT_TRITONGPU_IR_LINEARLAYOUTCONVERSIONS_H

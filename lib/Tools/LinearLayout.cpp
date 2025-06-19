@@ -1337,21 +1337,4 @@ std::string ColumnAction::toString() const {
   return ret;
 }
 
-PaddedLinearLayout::PaddedLinearLayout(LinearLayout linear,
-                                       ArrayRef<unsigned> intervals,
-                                       ArrayRef<unsigned> paddings)
-    : linear(std::move(linear)) {
-  intervalPads.reserve(intervals.size());
-  for (auto [i, p] : llvm::zip_equal(intervals, paddings))
-    intervalPads.emplace_back(i, p);
-}
-
-std::optional<int32_t> PaddedLinearLayout::getMinInterval() const {
-  if (intervalPads.empty())
-    return std::nullopt;
-  return *llvm::min_element(llvm::make_first_range(intervalPads));
-}
-
-bool PaddedLinearLayout::hasPadding() const { return !intervalPads.empty(); }
-
 } // namespace mlir::triton

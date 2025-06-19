@@ -1723,15 +1723,6 @@ PaddedSharedEncodingAttr::get(MLIRContext *context, ArrayRef<int64_t> shape,
   return get(context, {{innerD, threadNumBytes}}, order, ctaLayout);
 }
 
-PaddedLinearLayout
-PaddedSharedEncodingAttr::toPaddedLinearLayout(ArrayRef<int64_t> shape) const {
-  auto nonSwizzleAttr = SwizzledSharedEncodingAttr::get(
-      getContext(), /*vec=*/1, /*perPhase=*/1, /*maxPhase=*/1, getOrder(),
-      getCTALayout());
-  LinearLayout ll = toLinearLayout(shape, nonSwizzleAttr);
-  return PaddedLinearLayout(ll, getIntervals(), getPaddings());
-}
-
 int64_t PaddedSharedEncodingAttr::getPaddedSize(ArrayRef<int64_t> shape) const {
   int64_t unpaddedSize = product(shape);
   int64_t paddingSize = 0;

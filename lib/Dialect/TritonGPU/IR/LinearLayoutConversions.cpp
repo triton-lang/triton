@@ -1120,14 +1120,6 @@ LinearLayout toLinearLayout(ArrayRef<int64_t> shape, Attribute layout) {
                                                                    layout);
 }
 
-PaddedLinearLayout toPaddedLinearLayout(ArrayRef<int64_t> shape,
-                                        Attribute layout) {
-  if (auto paddedLayout = dyn_cast<PaddedSharedEncodingAttr>(layout))
-    return paddedLayout.toPaddedLinearLayout(shape);
-  auto ll = toLinearLayout(shape, layout);
-  return PaddedLinearLayout(ll, /*intervals=*/{}, /*paddings=*/{});
-}
-
 LinearLayout getLayoutWithinBlock(const LinearLayout &layout) {
   assert(!layout.getInDimNames().empty());
   MLIRContext *ctx = layout.getInDimNames().begin()->getContext();
