@@ -296,7 +296,7 @@ def is_layout_applicable(layout) -> bool:
             # RDNA 3
             return isinstance(layout, WmmaLayout)
         elif any(arch for arch in ["gfx8", "gfx9"] if arch in target_arch):
-            # CDNA 1, 2, 3
+            # CDNA 1, 2, 3, 4
             return isinstance(layout, MfmaLayout)
         else:
             return False
@@ -3080,6 +3080,8 @@ def test_reduce_layouts(M, N, src_layout, axis, epilogue_kind, dtype_str, add_ov
         pytest.skip("Skipping because tensor shape is smaller than M(f)maLayout instr_shape")
     if reduce_op == "sum" and dtype_str == "float16" and M * N > 1024:
         pytest.skip("Skipping sum reduction on float16 due to accuracy issues")
+    if isinstance(src_layout, LinearLayout) and THREADS_PER_WARP != (1 << len(src_layout.lane)):
+        pytest.skip(f"Skipping. This LinearLayout assumes {1 << len(src_layout.lane)} threads per warp")
 
     if isinstance(src_layout, MmaLayout) and src_layout.version == 3:
         src_layout.instr_shape[2] = 16 if dtype_str == "float16" else 8
@@ -3484,9 +3486,6 @@ def test_permute(dtype_str, shape, perm, num_ctas, device):
     check_type_supported(dtype_str, device)  # bfloat16 on cc < 80 will not be tested
     if dtype_str == "float8e4b15" and (is_hip() or (is_cuda() and torch.cuda.get_device_capability() >= (9, 0))):
         pytest.skip("float8e4b15 not supported on ROCm or CUDA >= 9.0")
-    if is_hip():
-        if shape == (128, 128) and dtype_str == 'float32':
-            pytest.skip("TODO Out of LDS for float32 with shape 128x128")
 
     # triton kernel
     @triton.jit
@@ -6376,10 +6375,6 @@ mma_pairs = [
 @pytest.mark.parametrize("dtype", ['float16'])
 @pytest.mark.parametrize("mma_pair", filter_layout_pairs(mma_pairs))
 def test_convert_mma2mma(M, N, mma_pair, dtype, device, tmp_path: pathlib.Path):
-    if is_hip():
-        if isinstance(mma_pair[1], MfmaLayout) and (mma_pair[1].instr_shape[1] > M or mma_pair[1].instr_shape[1] > N):
-            pytest.skip("HIP do not fully support skinny tensor store")
-
     src_layout, _ = mma_pair
     num_warps = np.prod(src_layout.warps_per_cta)
     warp_size = THREADS_PER_WARP
@@ -6676,11 +6671,6 @@ def test_dot_max_num_imprecise_acc(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, in_type_s
 @pytest.mark.parametrize("enable_fp_fusion", [False, True])
 @pytest.mark.parametrize("default_override", [False, True])
 def test_enable_fp_fusion(enable_fp_fusion, default_override, device):
-    if is_hip():
-        pytest.skip(
-            'test_enable_fp_fusion for HIP currently broken in https://github.com/triton-lang/triton. Use https://github.com/ROCmSoftwarePlatform/triton'
-        )
-
     # Sequential multiply add can be fused by backend
     @triton.jit
     def mul_add(data):
