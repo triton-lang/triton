@@ -680,6 +680,26 @@ def _attn_fwd_mma(config,  #
 
 
 @gluon.jit
+def _mul_f32x2(a, b):
+    return gl.inline_asm_elementwise(
+        """
+        {
+            .reg .b64 ra, rb, rc;
+            mov.b64 ra, { $2, $3 };
+            mov.b64 rb, { $4, $5 };
+            mul.f32x2 rc, ra, rb;
+            mov.b64 { $0, $1 }, rc;
+        }
+        """,
+        "=r,=r,r,r,r,r",
+        [a, b],
+        dtype=gl.float32,
+        is_pure=True,
+        pack=2,
+    )
+
+
+@gluon.jit
 def _attn_fwd_correction_compute(config, mi_consumer, o_consumer, m_i):
     mi_layout: gl.constexpr = gl.SliceLayout(1, config.o_splitn_layout)
     if config.mi_use_tmem:
@@ -692,13 +712,20 @@ def _attn_fwd_correction_compute(config, mi_consumer, o_consumer, m_i):
     o_tmem, o_bar, o_consumer = o_consumer.acquire()
     if config.SPLIT_D_FACTOR == 1:
         o = o_tmem.load(config.o_layout)
-        o = o * alpha[:, None]
+        # FIXME: Investigate why FMUL2 is slower for D128.
+        if config.HEAD_DIM == 64:
+            o = _mul_f32x2(o, alpha[:, None])
+        else:
+            o = o * alpha[:, None]
         o_tmem.store(o)
     else:
         for i in tl.static_range(config.SPLIT_D_FACTOR):
             o_ref = o_tmem.slice(i * config.SPLIT_D, config.SPLIT_D)
             o = o_ref.load(config.o_splitn_layout)
-            o = o * alpha[:, None]
+            if config.HEAD_DIM == 64:
+                o = _mul_f32x2(o, alpha[:, None])
+            else:
+                o = o * alpha[:, None]
             o_ref.store(o)
     mbarrier.arrive(o_bar, count=1)
     return mi_consumer, o_consumer, m_ij
