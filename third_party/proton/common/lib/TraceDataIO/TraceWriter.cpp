@@ -55,18 +55,19 @@ using BlockTraceVec =
     std::vector<const CircularLayoutParserResult::BlockTrace *>;
 
 void populateTraceInfo(std::shared_ptr<CircularLayoutParserResult> result,
-                       int64_t kernelTimeStart,
+                       uint64_t kernelTimeStart,
                        std::map<int, int64_t> &cycleAdjust,
                        std::map<int, BlockTraceVec> &procToBlockTraces) {
-  int64_t minStartTime;
+  uint64_t minStartTime;
   for (auto &bt : result->blockTraces) {
-    minStartTime = std::numeric_limits<int64_t>::max();
+    minStartTime = std::numeric_limits<uint64_t>::max();
     for (auto &trace : bt.traces)
       for (auto &event : trace.profileEvents)
         if (event.first->cycle < minStartTime)
           minStartTime = event.first->cycle;
 
-    cycleAdjust[bt.blockId] = kernelTimeStart - minStartTime;
+    cycleAdjust[bt.blockId] = static_cast<int64_t>(kernelTimeStart) -
+                              static_cast<int64_t>(minStartTime);
     int procId = bt.procId;
     if (!procToBlockTraces.count(procId)) {
       procToBlockTraces[procId] = {};
@@ -99,11 +100,11 @@ std::vector<int> assignLineIds(
             });
 
   // For each line, store all the intervals
-  std::vector<std::vector<std::pair<int64_t, int64_t>>> lines;
+  std::vector<std::vector<std::pair<uint64_t, uint64_t>>> lines;
 
   for (const auto &[originalIdx, event] : indexedEvents) {
-    int64_t startTime = event.first->cycle;
-    int64_t endTime = event.second->cycle;
+    uint64_t startTime = event.first->cycle;
+    uint64_t endTime = event.second->cycle;
 
     // Find the first line where this event can be placed
     int lineIdx = 0;
@@ -146,7 +147,7 @@ std::vector<int> assignLineIds(
 
 void StreamChromeTraceWriter::writeKernel(json &object,
                                           const KernelTrace &kernelTrace,
-                                          int64_t kernelTimeStart) {
+                                          uint64_t kernelTimeStart) {
   auto result = kernelTrace.first;
   auto metadata = kernelTrace.second;
 
@@ -190,8 +191,10 @@ void StreamChromeTraceWriter::writeKernel(json &object,
           else
             name = metadata->scopeName.at(scopeId);
 
-          int64_t ts = event.first->cycle + cycleAdjust[ctaId];
-          int64_t dur = event.second->cycle - event.first->cycle;
+          int64_t ts =
+              static_cast<int64_t>(event.first->cycle) + cycleAdjust[ctaId];
+          int64_t dur =
+              static_cast<int64_t>(event.second->cycle) - event.first->cycle;
 
           json element;
           element["cname"] = color;

@@ -85,9 +85,9 @@ struct ClockOverflowException : public ParserException {
 std::shared_ptr<CircularLayoutParserResult>
 readCircularLayoutTrace(ByteSpan &buffer, bool applyTimeShift = false);
 
-int64_t getTimeShiftCost(const CircularLayoutParserConfig &config);
+uint64_t getTimeShiftCost(const CircularLayoutParserConfig &config);
 
-void timeShift(const int64_t cost,
+void timeShift(const uint64_t cost,
                std::shared_ptr<CircularLayoutParserResult> result);
 
 } // namespace proton

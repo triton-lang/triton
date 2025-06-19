@@ -115,7 +115,7 @@ lowerCircularStoreOpHelper(CircularStoreOp op, Value segmentStruct,
     auto clkVec = b.bitcast(clock, clkVecTy);
     Value clkLower = b.extract_element(i32_ty, clkVec, b.i32_val(0));
     Value clkUpper = b.extract_element(i32_ty, clkVec, b.i32_val(1));
-    Value tagClkUpper = b.xor_(tag, b.and_(clkUpper, b.i32_val(0x7ff)));
+    Value tagClkUpper = b.or_(tag, b.and_(clkUpper, b.i32_val(0x7ff)));
     valsVec = packLLVector(loc, {tagClkUpper, clkLower}, rewriter);
   } else {
     valsVec = packLLVector(loc, {tag, clock}, rewriter);

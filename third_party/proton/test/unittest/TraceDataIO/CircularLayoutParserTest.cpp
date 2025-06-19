@@ -223,7 +223,7 @@ TEST_F(CircularLayoutParserTest, TimeShift) {
   EXPECT_EQ(event1.first->cycle, 54);
   EXPECT_EQ(event1.second->cycle, 100);
 
-  const int64_t cost = getTimeShiftCost(config);
+  const uint64_t cost = getTimeShiftCost(config);
   timeShift(cost, result);
 
   EXPECT_EQ(event0.first->cycle, 26);

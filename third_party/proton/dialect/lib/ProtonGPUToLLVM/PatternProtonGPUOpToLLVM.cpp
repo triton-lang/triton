@@ -63,9 +63,8 @@ struct ReadCounterOpConversion
                   OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     bool isClock64 = false;
-    if (auto intType = mlir::dyn_cast<IntegerType>(op.getResult().getType())) {
-      isClock64 = (intType.getWidth() == 64);
-    }
+    auto intType = mlir::cast<IntegerType>(op.getResult().getType());
+    isClock64 = intType.getWidth() == 64;
     Value clock = targetInfo.clock(rewriter, op.getLoc(), isClock64);
     rewriter.replaceOp(op, clock);
     return success();

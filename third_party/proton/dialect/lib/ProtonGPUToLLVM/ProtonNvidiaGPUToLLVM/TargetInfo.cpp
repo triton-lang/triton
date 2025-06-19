@@ -33,7 +33,7 @@ Value TargetInfo::clock(ConversionPatternRewriter &rewriter, Location loc,
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   Value clkLow64 = b.zext(i64_ty, clkLow32);
   Value clkHigh64 = b.zext(i64_ty, clkHigh32);
-  Value clock64 = b.xor_(b.shl(clkHigh64, b.i64_val(32)), clkLow64);
+  Value clock64 = b.or_(b.shl(clkHigh64, b.i64_val(32)), clkLow64);
   return clock64;
 }
 

@@ -160,8 +160,8 @@ Device decodeDevice(const uint32_t dev) {
   return device;
 }
 
-void shift(CircularLayoutParserResult::Trace &trace, const int64_t cost,
-           const int64_t timeBase) {
+void shift(CircularLayoutParserResult::Trace &trace, const uint64_t cost,
+           const uint64_t timeBase) {
   for (auto &event : trace.profileEvents) {
     if (event.first->cycle >= timeBase)
       event.first->cycle -= cost;
@@ -198,22 +198,22 @@ proton::readCircularLayoutTrace(ByteSpan &buffer, bool applyTimeShift) {
 
   // Shift the clocks to reduce the constant profiling overhead
   if (applyTimeShift) {
-    const int64_t cost = getTimeShiftCost(config);
+    const uint64_t cost = getTimeShiftCost(config);
     timeShift(cost, result);
   }
 
   return result;
 }
 
-void proton::timeShift(const int64_t cost,
+void proton::timeShift(const uint64_t cost,
                        std::shared_ptr<CircularLayoutParserResult> result) {
   for (auto &bt : result->blockTraces) {
     for (auto &trace : bt.traces) {
       for (auto &event : trace.profileEvents) {
-        const int64_t startTimeBase = event.first->cycle;
+        const uint64_t startTimeBase = event.first->cycle;
         shift(trace, cost, startTimeBase);
 
-        const int64_t endTimeBase = event.second->cycle;
+        const uint64_t endTimeBase = event.second->cycle;
         shift(trace, cost, endTimeBase);
 
         // Adjust the cycle for tiny events below the profiling precision
@@ -225,7 +225,7 @@ void proton::timeShift(const int64_t cost,
   }
 }
 
-int64_t proton::getTimeShiftCost(const CircularLayoutParserConfig &config) {
+uint64_t proton::getTimeShiftCost(const CircularLayoutParserConfig &config) {
   if (config.device.type == DeviceType::CUDA)
     return 7;
   else if (config.device.type == DeviceType::HIP)
