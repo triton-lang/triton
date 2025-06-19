@@ -512,7 +512,7 @@ bool emitTransferBetweenRegistersAndShared(
   PaddedLinearLayout paddedLayout =
       triton::gpu::toPaddedLinearLayout(shape, sharedTy.getEncoding());
   LinearLayout regToSharedLayout =
-      regLayout.invertAndCompose(paddedLayout.linear);
+      regLayout.invertAndCompose(paddedLayout.getLinear());
 
   // TODO(jlebar): We don't currently support loading from shared memory in a
   // different CTA.  We'd need to emit `mapa.shared::cluster` instructions.

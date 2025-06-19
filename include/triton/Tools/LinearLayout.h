@@ -840,12 +840,11 @@ public:
   std::string toString() const;
 };
 
-// A utility struct to describe either a swizzled or padded shared layout.
-//
-// For the former, we only use the linear layout field. For the latter, we use
-// both 1) a linear layout to desribe the identityStandardND logical element
-// mapping and 2) a list of interval-padding pairs to describe the 1-D physical
-// shared memory padding schedules.
+// A utility class to describe a particular padding schema with 1) a linear
+// layout to desribe the N-D logical element mapping and 2) a list of
+// interval-padding pairs to describe the 1-D physical shared memory padding
+// schedules. In a degenerated cases, we can have no interval-padding pairs so
+// it will just be a normal linear layout.
 //
 // In Triton we use linear layout basically throughout; so this class is useful
 // to leverage common linear layout facilities and code paths as much as
@@ -853,10 +852,13 @@ public:
 // at the very final steps when we allocating the physical shared memory or
 // creating pointers indexing into them. All steps before can still reason with
 // linear layout. Thus this utility class keeps these two parts separate.
-struct PaddedLinearLayout {
+class PaddedLinearLayout {
+public:
   PaddedLinearLayout(LinearLayout linear, ArrayRef<unsigned> intervals,
                      ArrayRef<unsigned> paddings)
       : linear(std::move(linear)), intervals(intervals), paddings(paddings) {}
+
+  const LinearLayout &getLinear() const { return linear; }
 
   // Returns the minimal interval that would trigger padding.
   std::optional<int32_t> getMinInterval() const;
@@ -864,6 +866,7 @@ struct PaddedLinearLayout {
   // Returns true if this is not a degenerated case and indeed requires padding.
   bool hasPadding() const { return !intervals.empty(); }
 
+private:
   LinearLayout linear;
   SmallVector<unsigned, 2> intervals;
   SmallVector<unsigned, 2> paddings;
