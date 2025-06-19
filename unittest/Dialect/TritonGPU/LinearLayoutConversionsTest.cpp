@@ -3013,9 +3013,9 @@ TEST_F(LinearLayoutConversionsTest, MMAv5Fp4Padded) {
 }
 
 TEST_F(LinearLayoutConversionsTest, PaddedShared) {
-  SwizzledOrPaddedLayout pll = toSwizzledOrPaddedLayout(
-      {32, 64},
-      paddedShared({128, 256}, {4, 8}, {1, 0}, {1, 1}, {1, 1}, {1, 0}));
+  PaddedLinearLayout pll =
+      toPaddedLinearLayout({32, 64}, paddedShared({128, 256}, {4, 8}, {1, 0},
+                                                  {1, 1}, {1, 1}, {1, 0}));
   // The expected linear layout mapping part should just be an identity.
   auto expectedLL = LinearLayout(
       // clang-format off

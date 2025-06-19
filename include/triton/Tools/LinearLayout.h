@@ -853,9 +853,9 @@ public:
 // at the very final steps when we allocating the physical shared memory or
 // creating pointers indexing into them. All steps before can still reason with
 // linear layout. Thus this utility class keeps these two parts separate.
-struct SwizzledOrPaddedLayout {
-  SwizzledOrPaddedLayout(LinearLayout linear, ArrayRef<unsigned> intervals,
-                         ArrayRef<unsigned> paddings)
+struct PaddedLinearLayout {
+  PaddedLinearLayout(LinearLayout linear, ArrayRef<unsigned> intervals,
+                     ArrayRef<unsigned> paddings)
       : linear(std::move(linear)), intervals(intervals), paddings(paddings) {}
 
   // Returns the minimal interval that would trigger padding.

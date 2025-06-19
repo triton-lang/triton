@@ -1120,12 +1120,12 @@ LinearLayout toLinearLayout(ArrayRef<int64_t> shape, Attribute layout) {
                                                                    layout);
 }
 
-SwizzledOrPaddedLayout toSwizzledOrPaddedLayout(ArrayRef<int64_t> shape,
-                                                Attribute layout) {
+PaddedLinearLayout toPaddedLinearLayout(ArrayRef<int64_t> shape,
+                                        Attribute layout) {
   if (auto paddedLayout = dyn_cast<PaddedSharedEncodingAttr>(layout))
-    return paddedLayout.toSwizzledOrPaddedLayout(shape);
+    return paddedLayout.toPaddedLinearLayout(shape);
   auto ll = toLinearLayout(shape, layout);
-  return SwizzledOrPaddedLayout(ll, /*intervals=*/{}, /*paddings=*/{});
+  return PaddedLinearLayout(ll, /*intervals=*/{}, /*paddings=*/{});
 }
 
 LinearLayout getLayoutWithinBlock(const LinearLayout &layout) {

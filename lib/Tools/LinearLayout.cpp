@@ -1337,7 +1337,7 @@ std::string ColumnAction::toString() const {
   return ret;
 }
 
-std::optional<int32_t> SwizzledOrPaddedLayout::getMinInterval() const {
+std::optional<int32_t> PaddedLinearLayout::getMinInterval() const {
   if (intervals.empty())
     return std::nullopt;
   return *llvm::min_element(intervals);

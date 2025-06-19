@@ -509,8 +509,8 @@ bool emitTransferBetweenRegistersAndShared(
   StringAttr kWarp = str_attr("warp");
 
   auto shape = sharedTy.getShape();
-  SwizzledOrPaddedLayout paddedLayout =
-      triton::gpu::toSwizzledOrPaddedLayout(shape, sharedTy.getEncoding());
+  PaddedLinearLayout paddedLayout =
+      triton::gpu::toPaddedLinearLayout(shape, sharedTy.getEncoding());
   LinearLayout regToSharedLayout =
       regLayout.invertAndCompose(paddedLayout.linear);
 

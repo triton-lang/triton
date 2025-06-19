@@ -456,7 +456,7 @@ attributes too, for example,
     unsigned getRank() const { return getOrder().size(); }
     int32_t getAlignment() const { return 16; }
 
-    SwizzledOrPaddedLayout toSwizzledOrPaddedLayout(ArrayRef<int64_t> shape) const;
+    PaddedLinearLayout toPaddedLinearLayout(ArrayRef<int64_t> shape) const;
 
     // Returns the total number of elements including padding given the input
     // tensor shape.
