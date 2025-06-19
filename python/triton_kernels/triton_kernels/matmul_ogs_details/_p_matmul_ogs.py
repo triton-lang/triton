@@ -100,7 +100,7 @@ _matmul_ogs_repr = make_matmul_repr("_p_matmul_ogs", [0, 1, 2])
 def _p_matmul_ogs(
              Y, Out, stride_y_k, stride_y_z, stride_y_m, stride_y_n,
              YExpectedScale, YActualScale, YChecksumScale,
-             X, stride_x_z, stride_x_m, stride_x_k,
+             X, XPtr, stride_x_z, stride_x_m, stride_x_k,
              XScale,
              W, stride_w_e, stride_w_k, stride_w_n, W_TRANSPOSE: tl.constexpr,
              WScale,
@@ -210,13 +210,6 @@ def _p_matmul_ogs(
     X_USE_LOAD_TMA: tl.constexpr = GatherIndx is None and isinstance(X, tl.tensor_descriptor)
     USE_SCATTER_TMA: tl.constexpr = (cuda_capability_geq(10, 0) and HAS_FUSED_SCATTER) and not DISABLE_Y_TMA
     INT_MAX: tl.constexpr = 2147483647
-
-    if USE_GATHER_TMA:
-        X = tl.make_tensor_descriptor(X,
-            shape=[INT_MAX, K],
-            strides=[stride_x_m, stride_x_k],
-            block_shape=[1, BLOCK_K]
-        )
 
     if USE_SCATTER_TMA:
         y_desc = tl.make_tensor_descriptor(

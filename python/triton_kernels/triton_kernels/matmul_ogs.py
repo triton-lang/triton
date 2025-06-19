@@ -149,6 +149,15 @@ class TensorDescriptorBuilder:
         return x.view(*new_shape)
 
     @staticmethod
+    def create_descriptor_gather(x_tensor: torch.Tensor, block_k: int) -> TensorDescriptor:
+        """Create a tensor descriptor for input matrix X via TMA gather"""
+        x_tensor = TensorDescriptorBuilder.squeeze_after_dim(x_tensor)
+        assert x_tensor.ndim == 2, "TMA gather descriptor requires 2D input"
+        INT_MAX = 2147483647
+        assert x_tensor.shape[0] < INT_MAX
+        return TensorDescriptor.from_tensor(x_tensor, block_shape=[1, block_k])
+
+    @staticmethod
     def create_descriptor(x_tensor: torch.Tensor, block_m: int, block_k: int) -> TensorDescriptor:
         """Create a tensor descriptor for matrix X via TMA"""
         x_tensor = TensorDescriptorBuilder.squeeze_after_dim(x_tensor)
@@ -578,6 +587,8 @@ def _create_tma_descriptors(
 
     if not HAS_GATHER:
         x_tensor_or_desc = TensorDescriptorBuilder.create_descriptor(x, opt_flags.block_m, opt_flags.block_k)
+    elif HAS_GATHER and target_info.has_tma_gather():
+        x_tensor_or_desc = TensorDescriptorBuilder.create_descriptor_gather(x, opt_flags.block_k)
 
     w_transpose = w.stride(2) != 1
     w_desc = TensorDescriptorBuilder.create_weight_descriptor(
@@ -746,7 +757,7 @@ def matmul_ogs(x, w, bias,
     (kernels._p_matmul_ogs if opt_flags.is_persistent else kernels._matmul_ogs)[(n_cta,)](
                    flex.out_data.reinterpret(memory["output"]),
                    flex.out_data.reinterpret(out0), *out0.stride(), *out0_flex,
-                   x_tensor, x.stride(0), x.stride(1), x.stride(2),
+                   x_tensor, x, x.stride(0), x.stride(1), x.stride(2),
                    flex.lhs_data.scale,
                    w_tensor, w.stride(0), w.stride(1), w.stride(2), w_tma_transpose,
                    flex.rhs_data.scale,
