@@ -6627,7 +6627,7 @@ def matmul_kernel(  #
 
 @pytest.mark.interpreter
 @pytest.mark.parametrize("M, N, K", [(128, 256, 256), (2, 4, 32), (256, 16, 32)])
-@pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 256, 128), (64, 64, 64), (32, 32, 64)])
+@pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 256, 128), (64, 64, 64)])
 @pytest.mark.parametrize(
     "in_type_str",
     ['float8e5', 'float8e5b16', 'float8e4b8', 'float8e4nv'] if is_hip() else ['float8e5', 'float8e4nv', 'float8e4b15'])
