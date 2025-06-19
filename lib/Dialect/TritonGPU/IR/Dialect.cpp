@@ -1700,6 +1700,29 @@ LogicalResult PaddedSharedEncodingAttr::verify(
   return verifyLayoutOrder(emitError, order);
 }
 
+PaddedSharedEncodingAttr PaddedSharedEncodingAttr::get(
+    MLIRContext *context, ArrayRef<std::pair<unsigned, unsigned>> intervalPads,
+    ArrayRef<unsigned> order, CTALayoutAttr ctaLayout) {
+  SmallVector<unsigned> intervals, paddings;
+  intervals.reserve(intervalPads.size());
+  paddings.reserve(intervalPads.size());
+  for (auto [interval, padding] : intervalPads) {
+    intervals.push_back(interval);
+    paddings.push_back(padding);
+  }
+  return get(context, intervals, paddings, order, ctaLayout);
+}
+
+PaddedSharedEncodingAttr
+PaddedSharedEncodingAttr::get(MLIRContext *context, ArrayRef<int64_t> shape,
+                              ArrayRef<unsigned> order, unsigned dotKWidth,
+                              unsigned elemBitWidth, CTALayoutAttr ctaLayout) {
+  unsigned innerD = getShapePerCTA(ctaLayout.getCTASplitNum(), shape)[order[0]];
+  unsigned threadNumBytes = std::max(dotKWidth * elemBitWidth / 8u, 1u);
+  threadNumBytes = llvm::alignTo(threadNumBytes, 4); // Assume 32-bit per bank
+  return get(context, {{innerD, threadNumBytes}}, order, ctaLayout);
+}
+
 PaddedLinearLayout
 PaddedSharedEncodingAttr::toPaddedLinearLayout(ArrayRef<int64_t> shape) const {
   auto nonSwizzleAttr = SwizzledSharedEncodingAttr::get(

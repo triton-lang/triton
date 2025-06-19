@@ -441,27 +441,15 @@ attributes too, for example,
       "CTALayoutAttr":$CTALayout
   );
 
-  let builders =
-      [AttrBuilder<(ins "ArrayRef<std::pair<unsigned, unsigned>>":$intervalPads,
-                       "ArrayRef<unsigned>":$order, "CTALayoutAttr":$ctaLayout),
-                   [{
-        SmallVector<unsigned> intervals, paddings;
-        intervals.reserve(intervalPads.size());
-        paddings.reserve(intervalPads.size());
-        for (auto [interval, padding] : intervalPads) {
-            intervals.push_back(interval);
-            paddings.push_back(padding);
-        }
-        return get(context, intervals, paddings, order, ctaLayout);
-      }]>,
-       AttrBuilder<(ins "ArrayRef<int64_t>":$shape, "ArrayRef<unsigned>":$order,
+  let builders = [
+      AttrBuilder<(ins "ArrayRef<std::pair<unsigned, unsigned>>":$intervalPads,
+                       "ArrayRef<unsigned>":$order, "CTALayoutAttr":$ctaLayout)>,
+      // Defines a padded shared layout that avoids bank conflicts for a block
+      // with given |shape| and |order| that is loaded by dot operand with
+      // kWidth |dotKWidth|.
+      AttrBuilder<(ins "ArrayRef<int64_t>":$shape, "ArrayRef<unsigned>":$order,
                        "unsigned":$dotKWidth, "unsigned":$elemBitWidth,
-                       "CTALayoutAttr":$ctaLayout),
-                   [{
-        unsigned inner = getShapePerCTA(ctaLayout.getCTASplitNum(), shape)[order[0]];
-        unsigned threadNumBytes = std::max(dotKWidth * elemBitWidth / 8u, 1u);
-        return get(context, {{inner, threadNumBytes}}, order, ctaLayout);
-      }]>,
+                       "CTALayoutAttr":$ctaLayout)>,
   ];
 
   let extraClassDeclaration = extraBaseClassDeclaration # [{
