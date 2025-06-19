@@ -806,7 +806,7 @@ private:
   SmallVector<size_t> action;
   StringAttr inDim;
   size_t inSizeLog2;
-  bool isIdentity = true;
+  bool m_isIdentity = true;
 
 public:
   ColumnAction() = default;
@@ -817,7 +817,8 @@ public:
     assert(it == action.end() || *it < inSizeLog2);
     // In many cases the action will be the identity, so we save that as an
     // early return
-    isIdentity = action.size() == inSizeLog2 && llvm::is_sorted(action);
+    m_isIdentity = action.size() == inSizeLog2 &&
+                   llvm::equal(action, llvm::seq<size_t>(action.size()));
   }
 
   // Act on the columns of a layout
@@ -836,6 +837,9 @@ public:
 
   // Inverse of the action
   ColumnAction inverse() const;
+
+  // Returns true if the action is the identity
+  bool isIdentity() const { return m_isIdentity; }
 
   std::string toString() const;
 };

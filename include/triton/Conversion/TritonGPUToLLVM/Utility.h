@@ -562,6 +562,18 @@ void storeDistributedToShared(
     RewriterBase &rewriter, const TargetInfoBase &target,
     std::pair<size_t, Type> *const llvmOpCount = nullptr);
 
+// Close cousin of lowerLdStMatrix in MemoryOpToLLVM.cpp
+// We might want to merge them at some point, but having to support
+// ldmatrix.trans makes the code in lowerLdStMatrix a bit specific
+// Lowers to st when valArrays is empty, and to ld when it is not,
+// and returns the output values.
+SmallVector<Value>
+lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout cvt,
+                ArrayRef<Value> valsArray, // Input for store, output for load
+                Type llvmElemTy, Value smemBase,
+                ConversionPatternRewriter &rewriter,
+                const TargetInfoBase &targetInfo);
+
 SmallVector<Value> unpackLLElements(Location loc, Value llvmStruct,
                                     RewriterBase &rewriter);
 
