@@ -311,8 +311,9 @@ LinearLayout optimalSwizzling(const LinearLayout &src, const LinearLayout &dst,
   // Bits in a bank segment: 32 banks x 32 bits
   constexpr int32_t bankBits = 32 * 32;
   // Bases needed to cover a whole bank segment
-  const int32_t lenBbasis =
-      llvm::Log2_32(bankBits / ((1 << vbasis.size()) * bitwidth));
+  const int32_t lenBbasis = std::min<int32_t>(
+      llvm::Log2_32(bankBits / ((1 << vbasis.size()) * bitwidth)),
+      dim - vbasis.size());
   // Bases to cover all the tensor
   const int32_t lenSbasis = dim - lenBbasis - vbasis.size();
 
