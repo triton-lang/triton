@@ -399,9 +399,9 @@ class AttentionConfig:
     dtype: gl.constexpr
     num_warps: gl.constexpr
 
-    SPLIT_N_FACTOR: gl.constexpr
+    SPLIT_D_FACTOR: gl.constexpr
     SPLIT_M: gl.constexpr
-    SPLIT_N: gl.constexpr
+    SPLIT_D: gl.constexpr
 
     q_shape: gl.constexpr
     k_shape: gl.constexpr
@@ -420,7 +420,7 @@ class AttentionConfig:
 
     mi_use_tmem: gl.constexpr
 
-    def __init__(self, qk_scale, Z, H, N_CTX, BLOCK_M, BLOCK_N, HEAD_DIM, dtype, num_warps, SPLIT_N_FACTOR):
+    def __init__(self, qk_scale, Z, H, N_CTX, BLOCK_M, BLOCK_N, HEAD_DIM, dtype, num_warps, SPLIT_D_FACTOR):
         self.qk_scale = qk_scale
         self.Z = Z
         self.H = H
@@ -431,9 +431,9 @@ class AttentionConfig:
         self.dtype = gl.constexpr(dtype)
         self.num_warps = gl.constexpr(num_warps)
 
-        self.SPLIT_N_FACTOR = SPLIT_N_FACTOR
+        self.SPLIT_D_FACTOR = SPLIT_D_FACTOR
         self.SPLIT_M = self.BLOCK_M // 2
-        self.SPLIT_N = self.BLOCK_N // self.SPLIT_N_FACTOR
+        self.SPLIT_D = self.HEAD_DIM // self.SPLIT_D_FACTOR
 
         self.q_shape = gl.constexpr([self.SPLIT_M, self.HEAD_DIM])
         self.k_shape = gl.constexpr([self.BLOCK_N, self.HEAD_DIM])
@@ -450,11 +450,11 @@ class AttentionConfig:
         self.qk_layout = gl.constexpr(get_tmem_32x32b_reg_layout(qk_instr_shape, self.qk_shape, self.num_warps))
         self.o_layout = gl.constexpr(get_tmem_32x32b_reg_layout(o_instr_shape, self.o_shape, self.num_warps))
         self.o_splitn_layout = gl.constexpr(
-            get_tmem_32x32b_reg_layout((o_instr_shape[0], o_instr_shape[1] // self.SPLIT_N_FACTOR, o_instr_shape[2]),
-                                       (self.o_shape[0], self.o_shape[1] // self.SPLIT_N_FACTOR), self.num_warps))
+            get_tmem_32x32b_reg_layout((o_instr_shape[0], o_instr_shape[1] // self.SPLIT_D_FACTOR, o_instr_shape[2]),
+                                       (self.o_shape[0], self.o_shape[1] // self.SPLIT_D_FACTOR), self.num_warps))
         self.mi_2d_layout = gl.constexpr(gl.BlockedLayout([1, 1], [32, 1], [4, 1], [0, 1]))
 
-        self.mi_use_tmem = gl.constexpr(False)
+        self.mi_use_tmem = gl.constexpr(True)
 
     @gluon.jit
     def get_program(self):
@@ -545,7 +545,7 @@ class InnerLoopInfo:
     qk_mma_ctx: MMAContext
     o_mma_ctx: MMAContext
     p_chnl: TensorMemoryChannel
-    mi_chnl: SharedMemoryChannel  # TensorMemoryChannel
+    mi_chnl: TensorMemoryChannel
     li_smem: gl.shared_memory_descriptor
     q_smem: gl.shared_memory_descriptor
 
@@ -690,13 +690,13 @@ def _attn_fwd_correction_compute(config, mi_consumer, o_consumer, m_i):
     alpha = gl.exp2(m_i - m_ij)
 
     o_tmem, o_bar, o_consumer = o_consumer.acquire()
-    if config.SPLIT_N_FACTOR == 1:
+    if config.SPLIT_D_FACTOR == 1:
         o = o_tmem.load(config.o_layout)
         o = o * alpha[:, None]
         o_tmem.store(o)
     else:
-        for i in tl.static_range(config.SPLIT_N_FACTOR):
-            o_ref = o_tmem.slice(i * config.SPLIT_N, config.SPLIT_N)
+        for i in tl.static_range(config.SPLIT_D_FACTOR):
+            o_ref = o_tmem.slice(i * config.SPLIT_D, config.SPLIT_D)
             o = o_ref.load(config.o_splitn_layout)
             o = o * alpha[:, None]
             o_ref.store(o)
@@ -805,10 +805,11 @@ def _attn_fwd_softmax1(config,  #
 def _attn_fwd_inner(config, info0, info1, m_i0, m_i1,  #
                     desc_k, desc_v,  #
                     STAGE: gl.constexpr):
-    num_buffers: gl.constexpr = 2 if config.HEAD_DIM >= 128 else 3
+    num_buffers: gl.constexpr = 2 if config.HEAD_DIM == 128 else 3
     k_load_ctx = LoadContext.create(desc_k, num_buffers=num_buffers, num_consumers=2)
     v_load_ctx = LoadContext.create(desc_v, num_buffers=num_buffers, num_consumers=2)
 
+    softmax_regs: gl.constexpr = 200 if config.HEAD_DIM == 64 else 192
     m_i0, m_i1 = gl.warp_specialize((
         config,
         (m_i0, m_i1),
@@ -825,7 +826,7 @@ def _attn_fwd_inner(config, info0, info1, m_i0, m_i1,  #
         _attn_fwd_softmax1,
         _attn_fwd_mma,
         _attn_fwd_load,
-    ], [4, 4, 1, 1], [192, 200, 32, 32])
+    ], [4, 4, 1, 1], [softmax_regs, 200, 32, 32])
 
     k_load_ctx.release()
     v_load_ctx.release()
@@ -841,8 +842,7 @@ def _gluon_attn(sm_scale, M, Z, H, N_CTX,  #
                 num_warps: gl.constexpr):
     qk_scale = sm_scale
     qk_scale *= 1.44269504
-    config = AttentionConfig(qk_scale, Z, H, N_CTX, BLOCK_M, BLOCK_N, HEAD_DIM, dtype, num_warps,
-                             SPLIT_N_FACTOR=triton.cdiv(HEAD_DIM, 64))
+    config = AttentionConfig(qk_scale, Z, H, N_CTX, BLOCK_M, BLOCK_N, HEAD_DIM, dtype, num_warps, SPLIT_D_FACTOR=2)
 
     prog = config.get_program()
 
@@ -968,12 +968,22 @@ def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype):
 # Benchmarking
 # ===-----------------------------------------------------------------------===#
 
-BATCH = [4]
-N_HEADS = [32]
-HEAD_DIM = [64, 128]
-causal = [False, True]
-providers = ["triton-fp16", "cudnn-fp16"]
-N_CTX = [2**i for i in range(10, 17)]
+profile = False
+
+if profile:
+    BATCH = [4]
+    N_HEADS = [32]
+    HEAD_DIM = [64]
+    causal = [True]
+    providers = ["triton-fp16"]
+    N_CTX = [16 * 1024]
+else:
+    BATCH = [4]
+    N_HEADS = [32]
+    HEAD_DIM = [64, 128]
+    causal = [False, True]
+    providers = ["triton-fp16", "cudnn-fp16"]
+    N_CTX = [2**i for i in range(10, 17)]
 
 bench_configs = []
 for Z, H, D, is_causal in itertools.product(BATCH, N_HEADS, HEAD_DIM, causal):
@@ -1021,7 +1031,10 @@ def bench(Z, H, N_CTX, HEAD_DIM, causal, provider):
         else:
             raise ValueError(f"Unsupported provider: {provider}")
 
-        ms = triton.testing.do_bench(fn)
+        if profile:
+            ms, _ = 1, fn()
+        else:
+            ms = triton.testing.do_bench(fn)
         flops_per_matmul = 2.0 * Z * H * N_CTX * N_CTX * HEAD_DIM
         total_flops = 2 * flops_per_matmul
         if causal:
