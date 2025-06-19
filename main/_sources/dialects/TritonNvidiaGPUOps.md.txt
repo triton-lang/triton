@@ -41,6 +41,32 @@ Traits: `VerifyTensorLayoutsTrait`
 | `pred` | 1-bit signless integer |
 
 
+### `ttng.async_copy_mbarrier_arrive` (triton::nvidia_gpu::AsyncCopyMbarrierArriveOp)
+
+_Arrive on mbarrier once all previously issued copies are completed_
+
+Syntax:
+
+```
+operation ::= `ttng.async_copy_mbarrier_arrive` $barrier attr-dict `:` qualified(type($barrier))
+```
+
+Traits: `VerifyTensorLayoutsTrait`
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>noIncrement</code></td><td>::mlir::UnitAttr</td><td>unit attribute</td></tr>
+</table>
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `barrier` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
+
+
 ### `ttng.async_tma_copy_global_to_local` (triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp)
 
 _Copy data based on descriptor from global memory to local memory asynchronously_
