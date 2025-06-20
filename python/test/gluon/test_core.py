@@ -1,7 +1,7 @@
 import torch
 import pytest
 
-from triton._internal_testing import is_ampere_or_newer, is_hopper_or_newer
+from triton._internal_testing import is_cuda, is_ampere_or_newer, is_hopper_or_newer
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
 from triton.experimental.gluon.language.nvidia.ampere import async_copy, mbarrier
