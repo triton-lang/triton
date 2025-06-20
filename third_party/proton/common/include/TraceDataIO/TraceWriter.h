@@ -14,7 +14,7 @@ namespace proton {
 
 // TODO(fywkevin): this time gap to offset multiple kernels is not needed after
 // we have the global time.
-const uint32_t kKernelTimeGap = 10000000;
+const uint64_t kKernelTimeGap = 10000000;
 
 struct KernelMetadata {
   std::map<int, std::string> scopeName;
@@ -54,7 +54,7 @@ public:
 
 private:
   void writeKernel(nlohmann::json &object, const KernelTrace &kernelTrace,
-                   uint32_t kernelTimeStart);
+                   uint64_t kernelTimeStart);
 
   const std::vector<std::string> kChromeColor = {"cq_build_passed",
                                                  "cq_build_failed",

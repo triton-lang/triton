@@ -11,19 +11,30 @@ namespace mlir::triton::proton::gpu::NVIDIA {
 
 Value TargetInfo::clock(ConversionPatternRewriter &rewriter, Location loc,
                         bool isClock64) const {
-  int width = isClock64 ? 64 : 32;
-  std::string dtype = isClock64 ? "u64" : "u32";
-  std::string reg = isClock64 ? "%clock64" : "%clock";
 
-  PTXBuilder builder;
-  auto &mov = builder.create("mov")->o(dtype);
-  auto *destOpr = builder.newOperand("=r");
-  auto *sRegOpr = builder.newConstantOperand(reg);
-  mov(destOpr, sRegOpr);
-  Value val =
-      builder.launch(rewriter, loc, rewriter.getIntegerType(width), true);
+  auto getClockReg = [&](const std::string &clkName) {
+    PTXBuilder builder;
+    auto &movLow = builder.create("mov")->o("u32");
+    auto *destLowOpr = builder.newOperand("=r");
+    auto *sRegLowOpr = builder.newConstantOperand(clkName);
+    movLow(destLowOpr, sRegLowOpr);
+    Value clkLow32 =
+        builder.launch(rewriter, loc, rewriter.getIntegerType(32), true);
+    return clkLow32;
+  };
 
-  return val;
+  Value clkLow32 = getClockReg("%clock");
+
+  if (!isClock64)
+    return clkLow32;
+
+  Value clkHigh32 = getClockReg("%clock_hi");
+
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Value clkLow64 = b.zext(i64_ty, clkLow32);
+  Value clkHigh64 = b.zext(i64_ty, clkHigh32);
+  Value clock64 = b.or_(b.shl(clkHigh64, b.i64_val(32)), clkLow64);
+  return clock64;
 }
 
 Value TargetInfo::processorId(ConversionPatternRewriter &rewriter,

@@ -40,6 +40,7 @@ LogicalResult StackAllocOp::verify() {
 
 // -- CircularRecordOp --
 LogicalResult CircularStoreOp::verify() {
+  auto scopeId = getScopeId();
   auto segmentType = getSegment().getType();
   auto granularity = segmentType.getGranularity();
   auto selectedIds = segmentType.getSelectIds();
@@ -49,6 +50,9 @@ LogicalResult CircularStoreOp::verify() {
                                        : selectedIds.size();
   if (!llvm::isPowerOf2_32(bufferSizeInBytes / segmentNum))
     return emitOpError("profiling buffer segment size must be power of 2");
+
+  if (scopeId < 0 || scopeId > 255)
+    return emitOpError("scope id must be in [0, 255]");
 
   return success();
 }
