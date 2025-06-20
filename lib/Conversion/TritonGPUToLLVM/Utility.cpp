@@ -264,10 +264,9 @@ Value getThreadId(OpBuilder &rewriter, Location loc) {
     tid = rewriter.create<arith::SubIOp>(loc, tid, b.i32_val(*startId));
   }
 
-  {
+  if (llvm::isPowerOf2_32(upperBound)) {
     // help LLVM's known bits analysis:
-    uint32_t mask = llvm::PowerOf2Ceil(upperBound) - 1;
-    tid = b.and_(tid, b.i32_val(mask));
+    tid = b.and_(tid, b.i32_val(upperBound - 1));
   }
 
   return tid;
