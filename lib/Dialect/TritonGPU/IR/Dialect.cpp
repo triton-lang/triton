@@ -441,7 +441,7 @@ getDefaultBlockedEncoding(MLIRContext *context, ArrayRef<int64_t> shape,
   return encoding;
 }
 
-bool isJoinCompatible(MLIRContext *ctx, const LinearLayout &ll) {
+bool isSplitCompatible(MLIRContext *ctx, const LinearLayout &ll) {
   auto lastDim = ll.getNumOutDims() - 1;
   auto kReg = StringAttr::get(ctx, "register");
   auto kLastDim = StringAttr::get(ctx, "dim" + std::to_string(lastDim));
@@ -2653,7 +2653,7 @@ struct TritonGPUInferLayoutInterface
       auto parent = enc.getParent();
       auto parentLL = toLinearLayout(joinedShape, parent);
 
-      if (isJoinCompatible(ctx, parentLL)) {
+      if (isSplitCompatible(ctx, parentLL)) {
         dstEnc = parent;
         return success();
       }
@@ -2705,7 +2705,7 @@ struct TritonGPUInferLayoutInterface
                        std::optional<Location> loc) const override {
     auto ctx = getContext();
     auto ll = toLinearLayout(shape, srcEnc);
-    if (!isJoinCompatible(ctx, ll))
+    if (!isSplitCompatible(ctx, ll))
       return failure();
 
     auto srcEncDist = cast<DistributedEncodingTrait>(srcEnc);
