@@ -150,10 +150,6 @@ def multibuffered_loop_tma_kernel(input_desc, output, XBLOCK: ttgl.constexpr, sm
     # phase = (phase + 1) % 2 if ext_id == num_buffers - 1 else phase
     # ext_id = inc_mod(ext_id, num_buffers) # ext_id = 3
 
-    # mbarrier.expect(bar.index(ins_id), XBLOCK * XBLOCK * ttgl.float32.primitive_bitwidth // 8)
-    # tma.async_copy_global_to_shared(input_desc, [0, 0], bar.index(ins_id), smem.index(ins_id))
-    # ins_id = inc_mod(ins_id, num_buffers) # ins_id = 2
-
     # # i = 3
     # mbarrier.wait(bar.index(ext_id), phase) # ext_id = 3, phase = 0
     # acc += smem.index(ext_id).load(bl_layout)
@@ -166,19 +162,13 @@ def multibuffered_loop_tma_kernel(input_desc, output, XBLOCK: ttgl.constexpr, sm
     # phase = (phase + 1) % 2 if ext_id == num_buffers - 1 else phase
     # ext_id = inc_mod(ext_id, num_buffers) # ext_id = 1
 
-    # # i = 5
-    # mbarrier.wait(bar.index(ext_id), phase) # ext_id = 1, phase = 1
-    # acc += smem.index(ext_id).load(bl_layout)
-    # phase = (phase + 1) % 2 if ext_id == num_buffers - 1 else phase
-    # ext_id = inc_mod(ext_id, num_buffers) # ext_id = 2
-
-    for i in range(6):
+    for i in range(5):
         mbarrier.wait(bar.index(ext_id), phase)
         acc += smem.index(ext_id).load(bl_layout)
         phase = (phase + 1) % 2 if ext_id == num_buffers - 1 else phase
         ext_id = inc_mod(ext_id, num_buffers)
 
-        if (i < 3):
+        if (i < 2):
             mbarrier.expect(bar.index(ins_id), XBLOCK * XBLOCK * ttgl.float32.primitive_bitwidth // 8)
             tma.async_copy_global_to_shared(input_desc, [0, 0], bar.index(ins_id), smem.index(ins_id))
             ins_id = inc_mod(ins_id, num_buffers)

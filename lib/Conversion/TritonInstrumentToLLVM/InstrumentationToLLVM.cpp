@@ -45,12 +45,14 @@ Value createMemDescToI64(ConversionPatternRewriter &rewriter, Location loc,
                          const LLVMTypeConverter *typeConverter,
                          ttg::MemDescType memDescTy, Value sharedMemStruct) {
   Type srcElemTy = typeConverter->convertType(memDescTy.getElementType());
+  int elemSize = srcElemTy.getIntOrFloatBitWidth() / 8;
   auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, sharedMemStruct,
                                                        srcElemTy, rewriter);
   auto offsets = smemObj.getOffsets();
   auto strides = smemObj.getStrides(memDescTy, loc, rewriter);
   Value offset = dot(rewriter, loc, offsets, strides);
   TritonLLVMOpBuilder b(loc, rewriter);
+  offset = b.mul(offset, b.i32_val(elemSize));
   auto i64Ty = rewriter.getIntegerType(64);
   offset = b.zext(i64Ty, offset);
   return b.add(offset, b.ptrtoint(i64Ty, smemObj.getBase()));

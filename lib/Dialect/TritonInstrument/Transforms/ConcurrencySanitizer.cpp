@@ -62,12 +62,12 @@ uint64_t getAllocationOffset(triton::gpu::LocalAllocOp op) {
 
 unsigned getNumBuffers(triton::gpu::LocalAllocOp op) {
   ttg::MemDescType ty = op.getType();
-  return ty.getShape().size();
+  return ty.getShape()[0];
 }
 
 unsigned getSubBufferSize(triton::gpu::LocalAllocOp op) {
   ttg::MemDescType ty = op.getType();
-  unsigned elSize = ty.getElementType().getIntOrFloatBitWidth();
+  unsigned elSize = ty.getElementType().getIntOrFloatBitWidth() / 8;
   return product(ty.getShape().drop_front()) * elSize;
 }
 
@@ -178,13 +178,15 @@ private:
                                    SmallVector<int32_t> values) {
     int64_t size = values.size();
     assert(llvm::isPowerOf2_64(size) && "Expected power of 2");
-    auto tensorType = RankedTensorType::get({size}, builder.getIntegerType(64),
-                                            getBlockedEncoding(size));
+    Type elType = builder.getI64Type();
+    auto tensorType =
+        RankedTensorType::get({size}, elType, getBlockedEncoding(size));
     SmallVector<APInt> apInts = llvm::to_vector(
         llvm::map_range(values, [](int64_t v) { return APInt(64, v); }));
     auto denseAttr = DenseElementsAttr::get(tensorType, apInts);
-    return builder.create<tti::ExperimentalSharedBufferPointersOp>(tensorType,
-                                                                   values);
+    auto op = builder.create<tti::ExperimentalSharedBufferPointersOp>(
+        tensorType, values);
+    return op;
   }
 
   Value createConstIntTensor(ImplicitLocOpBuilder &builder, int val,
@@ -195,6 +197,27 @@ private:
     auto denseAttr = DenseElementsAttr::get(
         tensorType, APInt(elType.getIntOrFloatBitWidth(), val));
     return builder.create<arith::ConstantOp>(tensorType, denseAttr);
+  }
+
+  Value createConstIntTensor(ImplicitLocOpBuilder &builder, int val,
+                             Type elType, ArrayRef<int64_t> shape) {
+    auto tensorType =
+        RankedTensorType::get(shape, elType, getBlockedEncoding(shape.size()));
+    auto denseAttr = DenseElementsAttr::get(
+        tensorType, APInt(elType.getIntOrFloatBitWidth(), val));
+    return builder.create<arith::ConstantOp>(tensorType, denseAttr);
+  }
+
+  Operation *
+  createInitializedScratchMemory(ImplicitLocOpBuilder &b,
+                                 TypedValue<RankedTensorType> tensor) {
+    int elSize = tensor.getType().getElementType().getIntOrFloatBitWidth() / 8;
+    int64_t size = product(tensor.getType().getShape()) * elSize;
+    auto alloc = b.create<tt::gpu::GlobalScratchAllocOp>(
+        b.getLoc(), triton::getPointerType(b.getI8Type()), size, elSize);
+    auto mask = createConstIntTensor(b, 1, b.getI1Type(), size);
+    b.create<tt::StoreOp>(b.getLoc(), alloc, tensor, mask);
+    return alloc;
   }
 
   ModuleOp module;
