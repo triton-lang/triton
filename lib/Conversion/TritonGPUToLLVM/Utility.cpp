@@ -264,11 +264,10 @@ Value getThreadId(OpBuilder &rewriter, Location loc) {
     tid = rewriter.create<arith::SubIOp>(loc, tid, b.i32_val(*startId));
   }
 
-  // Insert the llvm.assume intrinsic: tid < upperBound (unsigned comparison)
-  Value upperBoundVal = b.i32_val(upperBound);
-  Value cmp = rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::ult,
-                                             tid, upperBoundVal);
-  rewriter.create<LLVM::AssumeOp>(loc, cmp);
+  if (llvm::isPowerOf2_32(upperBound)) {
+    // help LLVM's known bits analysis:
+    tid = b.and_(tid, b.i32_val(upperBound - 1));
+  }
 
   return tid;
 }
