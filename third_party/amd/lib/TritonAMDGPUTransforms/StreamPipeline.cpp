@@ -728,12 +728,10 @@ bool canBeConvertedToAsyncLoad(unsigned numBuffers, tt::LoadOp loadOp,
   if (numBuffers <= 1)
     return false;
 
-  ttg::MemDescType dstTy = cast<ttg::MemDescType>(alloc.getType());
-
   // Compute the final vecSize we can use for the combination of sourceEncoding
   // and sharedEncoding. We can only use AsyncCopy if the width is > 32 bit
   auto srcTy = cast<RankedTensorType>(loadOp.getPtr().getType());
-  // auto blockedEnc = cast<ttg::BlockedEncodingAttr
+  ttg::MemDescType dstTy = cast<ttg::MemDescType>(alloc.getType());
   tt::LinearLayout regLayout =
       triton::gpu::toLinearLayout(srcTy.getShape(), srcTy.getEncoding());
   tt::LinearLayout sharedLayout =
@@ -806,18 +804,8 @@ SmallVector<std::pair<Operation *, Value>> createAndScheduleStreamOps(
   // Replace tt.loads with async copies or stream copies
   for (auto &[op, alloc] : loadToAllocs) {
     if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
-      // If we have a single buffer we would require another barrier after the
-      // local_reads so instead we fall back to pipeline with registers
-      // Removing this check will create incorrect IR, see
-      // MembarUtility.h:membarFilter
-      assert(loadToInfo.contains(op));
-      auto loadInfo = loadToInfo.find(op);
-      bool convertToAsyncCopy =
-          useAsyncCopy && loadInfo != loadToInfo.end() && loadInfo &&
-          canBeConvertedToAsyncLoad(numBuffers, loadOp, alloc,
-                                    axisInfoAnalysis);
-
-      if (convertToAsyncCopy) {
+      if (useAsyncCopy && canBeConvertedToAsyncLoad(numBuffers, loadOp, alloc,
+                                                    axisInfoAnalysis)) {
         createAndScheduleAsyncCopy(loadOp, alloc, extractIdx, forOp, schedule,
                                    stages, clusters);
       } else {
