@@ -152,8 +152,9 @@ static std::string getConstraintForBitwidth(unsigned bitwidth) {
 }
 
 static bool isConstantTruePred(Value pred) {
-  if (auto constOp = pred.getDefiningOp<LLVM::ConstantOp>()) {
-    return cast<IntegerAttr>(constOp.getValue()).getInt() == -1;
+  APInt constant;
+  if (matchPattern(pred, m_ConstantInt(&constant))) {
+    return constant.getZExtValue() != 0;
   }
   return false;
 }

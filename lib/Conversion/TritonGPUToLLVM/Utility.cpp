@@ -549,6 +549,13 @@ lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout cvt,
           loc, rewriter, i8Reps,
           {{kReg, b.i32_val(0)}, {kLane, laneId}, {kWarp, warpId}})[0]
           .second;
+  auto predStore = b.true_val();
+  auto freeVarMaskWarp = i8Reps.getFreeVariableMasks()[kWarp];
+  if (freeVarMaskWarp) {
+    predStore =
+        b.icmp_eq(b.and_(b.i32_val(freeVarMaskWarp), warpId), b.i32_val(0));
+  }
+
   SmallVector<Value> outVals;
   for (int i = 0; i < cvt.getInDimSize(kReg); i += nAdditive) {
     auto regIdx = reps.apply({{kReg, i}, {kLane, 0}, {kWarp, 0}})[0].second;
@@ -562,12 +569,11 @@ lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout cvt,
       Value innerOffset = b.add(offset, b.i32_val(regIdxAddI8));
       auto vecAddr = b.gep(smemPtrTy, i8_ty, smemBase, innerOffset,
                            LLVM::GEPNoWrapFlags::inbounds);
-      // Lezcano: Do we want to use getFreeVariableMasks for pred or nah?
       if (isStore) {
         Value valsVec = packLLVector(
             loc, ArrayRef<Value>(vals).slice(i + j, elemsPerVec), rewriter);
         targetInfo.storeDShared(rewriter, loc, vecAddr, std::nullopt, valsVec,
-                                /*pred=*/b.true_val());
+                                /*pred=*/predStore);
       } else {
         Value valsVec =
             targetInfo.loadDShared(rewriter, loc, vecAddr, std::nullopt,
