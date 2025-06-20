@@ -9,7 +9,7 @@ from triton_kernels.routing import routing
 import triton_kernels.matmul_ogs_details.opt_flags as opt_flags
 from triton_kernels.matmul_ogs import FlexCtx, PrecisionConfig, MicroscalingCtx, FusedActivation, FnSpecs
 from triton_kernels.matmul_ogs import none_or_tma_compatible
-from triton_kernels.matmul_ogs import matmul_ogs, matmul_ogs_torch
+from triton_kernels.matmul_ogs import matmul_ogs_set_idle_sms, matmul_ogs, matmul_ogs_torch
 from triton_kernels.swiglu import swiglu, swiglu_fn, PrecisionConfig as SwiGLUPrecisionConfig
 # numerics utilities
 from triton_kernels.numerics import InFlexData, OutFlexData
@@ -230,6 +230,9 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
             pytest.skip("float16 x mx not supported with cuda capability >= 10")
         if "float8" in act_dtype_str and "mx" in weight_dtype_str and torch.cuda.get_device_capability()[0] < 10:
             pytest.skip("float8 x mx not supported with cuda capability < 10")
+        if n == 2880 and k == 2880 and torch.cuda.get_device_capability()[0] < 9:
+            pytest.skip("Not enough memory on A100")
+
     elif is_hip():
         if "float8" in act_dtype_str and "mx" in weight_dtype_str and not is_hip_cdna4():
             pytest.skip("float8 x mx only supported on CDNA4")
@@ -415,6 +418,17 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
         ref_y_scale = compute_actual_scale(ref_y, tri_y.dtype)
         assert (ref_y_scale -
                 tri_y_scale).abs() < 1e-10, f"ref_y_scale: {ref_y_scale}, tri_y_scale: {tri_y_scale.item()}"
+
+
+def test_set_idle_sms():
+    if not is_cuda():
+        pytest.skip("Only supported on CUDA")
+    from triton_kernels.matmul_ogs_details.opt_flags import make_opt_flags
+    num_idle_sms = 24
+    matmul_ogs_set_idle_sms(num_idle_sms)
+    flags = make_opt_flags(torch.float32, torch.float32, torch.float32, PrecisionConfig(), \
+                           1024, 1024, 1024, None, True, False, 1)
+    assert flags.idle_sms == num_idle_sms
 
 
 @pytest.mark.parametrize("m, n, k, mode", [

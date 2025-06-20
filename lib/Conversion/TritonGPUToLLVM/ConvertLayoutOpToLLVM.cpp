@@ -114,122 +114,115 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     return success();
   }
 
-  std::pair<int, ColumnAction> largestVectorisation(MLIRContext *ctx,
-                                                    const LinearLayout &cvt,
-                                                    int bitwidth) const {
-    // Find the largest vectorisation we can use:
-    StringAttr kReg = str_attr("register");
-    StringAttr kOffset = str_attr("offset");
-    LinearLayout quot;
-    LinearLayout tile;
-    ColumnAction permutation;
-    for (int v = 128 / bitwidth; v >= 1; v /= 2) {
-      tile = LinearLayout::identity1D(v, kReg, kOffset);
-      auto maybePerm = regPermForDivide(cvt, tile, /*left=*/true);
-      if (!maybePerm) {
-        continue;
-      }
-      permutation = *maybePerm;
-      auto newCvt = permutation.apply(cvt);
-      auto maybeQuot = divideLeft(newCvt, tile);
-      if (!maybeQuot) {
-        continue;
-      }
-      return {v, permutation};
-    }
-    llvm_unreachable("No vectorisation found");
-  }
-
-  // Close cousin of lowerLdStMatrix in MemoryOpToLLVM.cpp
-  // We might want to merge them at some point, but having to support
-  // ldmatrix.trans makes the code in lowerLdStMatrix a bit specific
-  // Lowers to st when valArrays is empty, and to ld when it is not,
-  // and returns the output values.
-  SmallVector<Value>
-  lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout cvt,
-                  int elemsPerVec,
-                  ArrayRef<Value> valsArray, // Input for store, output for load
-                  Type llvmElemTy, Value smemBase,
-                  ConversionPatternRewriter &rewriter) const {
-    auto vals = to_vector(valsArray);
-    bool isStore = !vals.empty();
+  SmallVector<Value> transferWithinBlockSwizzlingImpl(
+      Location loc, ConversionPatternRewriter &rewriter,
+      const LinearLayout &srcLayout, const LinearLayout &dstLayout,
+      ArrayRef<Value> inVals, Type llvmElemTy, Value smemBase) const {
+    auto *ctx = rewriter.getContext();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    auto smemPtrTy = ptr_ty(ctx, 3);
-    auto kReg = str_attr("register");
-    auto kLane = str_attr("lane");
-    auto kWarp = str_attr("warp");
-    auto kOffset = str_attr("offset");
-    auto bitwidth = llvmElemTy.getIntOrFloatBitWidth();
+    // We handle transformations recursively as they all need a preprocessing
+    // and a postprocessing step.
 
-    auto [vec, permutation] = largestVectorisation(ctx, cvt, bitwidth);
-    assert(vec >= elemsPerVec);
-    elemsPerVec = vec;
-
-    cvt = permutation.apply(cvt);
-    if (isStore) {
-      vals = permutation.apply(vals);
-    }
-
-    auto tile = LinearLayout::identity1D(vec, kReg, kOffset);
-    auto quot = *divideLeft(cvt, tile);
-    LinearLayout reps = zerosLike(tile) * quot;
-
-    auto [nAdditive, permStrides] = actionAdditiveStrides(reps);
-    reps = permStrides.apply(reps);
-    if (isStore) {
-      vals = permStrides.apply(vals);
-    }
-
-    // PTX expects the address increments to be done in bytes
-    // If we don't perform the computations in i8, the compiler would
-    // have to divide the computation by bitwdith / 8 and then lift this
-    // shl, which often it's not able to do.
-    auto i8Tile =
-        zerosLike(LinearLayout::identity1D(bitwidth / 8, kReg, kOffset));
-    auto i8Reps = i8Tile * reps;
-
-    auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
-    auto regBaseI8 =
-        applyLinearLayout(
-            loc, rewriter, i8Reps,
-            {{kReg, b.i32_val(0)}, {kLane, laneId}, {kWarp, warpId}})[0]
-            .second;
-    SmallVector<Value> outVals;
-    for (int i = 0; i < cvt.getInDimSize(kReg); i += nAdditive) {
-      auto regIdx = reps.apply({{kReg, i}, {kLane, 0}, {kWarp, 0}})[0].second;
-      auto regIdxI8 = regIdx * (bitwidth / 8);
-      Value offset = b.xor_(regBaseI8, b.i32_val(regIdxI8));
-      for (int j = 0; j < nAdditive; j += elemsPerVec) {
-        // all these constants will go as immediate values to LDS/STS
-        auto regIdxAdd =
-            reps.apply({{kReg, j}, {kLane, 0}, {kWarp, 0}})[0].second;
-        auto regIdxAddI8 = regIdxAdd * (bitwidth / 8);
-        Value innerOffset = b.add(offset, b.i32_val(regIdxAddI8));
-        auto vecAddr = b.gep(smemPtrTy, i8_ty, smemBase, innerOffset,
-                             LLVM::GEPNoWrapFlags::inbounds);
-        // Lezcano: Do we want to use getFreeVariableMasks for pred or nah?
-        if (isStore) {
-          Value valsVec = packLLVector(
-              loc, ArrayRef<Value>(vals).slice(i + j, elemsPerVec), rewriter);
-          targetInfo.storeDShared(rewriter, loc, vecAddr, std::nullopt, valsVec,
-                                  /*pred=*/b.true_val());
-        } else {
-          Value valsVec =
-              targetInfo.loadDShared(rewriter, loc, vecAddr, std::nullopt,
-                                     vec_ty(llvmElemTy, elemsPerVec),
-                                     /*pred=*/b.true_val());
-          llvm::append_range(outVals, unpackLLVector(loc, valsVec, rewriter));
-        }
+    // Handle pointer types as 64-bit integers
+    if (isa<LLVM::LLVMPointerType>(llvmElemTy)) {
+      auto llvmElemTyPtr = i64_ty;
+      auto newInVals = llvm::to_vector(llvm::map_range(inVals, [&](Value v) {
+        return b.ptrtoint(llvmElemTyPtr, v).getResult();
+      }));
+      auto outVals =
+          transferWithinBlockSwizzlingImpl(loc, rewriter, srcLayout, dstLayout,
+                                           newInVals, llvmElemTyPtr, smemBase);
+      for (auto &v : outVals) {
+        v = b.inttoptr(llvmElemTy, v);
       }
+      return outVals;
     }
 
-    // Permute the values back if we are loading
-    if (!isStore) {
-      auto invPermStrides = permStrides.inverse();
-      outVals = invPermStrides.apply(outVals);
-      auto invPerm = permutation.inverse();
-      outVals = invPerm.apply(outVals);
+    // Handle sub-byte elements like i1
+    if (llvmElemTy.getIntOrFloatBitWidth() < 8) {
+      // Upcast to i8
+      auto i8ElemTy = i8_ty;
+      auto newInVals = llvm::to_vector(llvm::map_range(
+          inVals, [&](Value v) { return b.zext(i8ElemTy, v).getResult(); }));
+      auto outVals = transferWithinBlockSwizzlingImpl(
+          loc, rewriter, srcLayout, dstLayout, newInVals, i8ElemTy, smemBase);
+      for (auto &v : outVals) {
+        v = b.trunc(llvmElemTy, v);
+      }
+      return outVals;
     }
+
+    // Remove broadcasting in src
+    auto removeBroadcastSrc = actionRemoveBroadcastedRegs(srcLayout);
+    if (!removeBroadcastSrc.isIdentity()) {
+      auto prmtSrc = removeBroadcastSrc.apply(srcLayout);
+      auto newInVals = removeBroadcastSrc.apply(inVals);
+      return transferWithinBlockSwizzlingImpl(loc, rewriter, prmtSrc, dstLayout,
+                                              newInVals, llvmElemTy, smemBase);
+    }
+
+    // Remove broadcasting in dst
+    auto removeBroadcastDst = actionRemoveBroadcastedRegs(dstLayout);
+    if (!removeBroadcastDst.isIdentity()) {
+      auto prmtDst = removeBroadcastDst.apply(dstLayout);
+      auto outVals = transferWithinBlockSwizzlingImpl(
+          loc, rewriter, srcLayout, prmtDst, inVals, llvmElemTy, smemBase);
+      return broadcastAs(outVals, dstLayout);
+    }
+
+    // At this point we have a type that's at least 8-bit
+    // and we don't have broadcasting in the registers
+    auto bitwidth = llvmElemTy.getIntOrFloatBitWidth();
+    auto smem = optimalSwizzling(srcLayout, dstLayout, bitwidth);
+
+    // Extract reps from smem
+    auto kReg = str_attr("register");
+    auto kReps = str_attr("reps");
+    auto nReps = smem.getInDimSize(kReps);
+    auto reps = LinearLayout::identity1D(nReps, kReg, kReps);
+
+    auto totalStoreCvt = srcLayout.invertAndCompose(smem);
+    auto totalLoadCvt = dstLayout.invertAndCompose(smem);
+
+    // The permutation exists by construction of the reps dimension in
+    // optimalSwizzling
+    auto permStore =
+        regPermForDivide(totalStoreCvt, reps, /*left=*/false).value();
+    totalStoreCvt = permStore.apply(totalStoreCvt);
+    auto permutedInVals = permStore.apply(inVals);
+    auto permLoad =
+        regPermForDivide(totalLoadCvt, reps, /*left=*/false).value();
+    totalLoadCvt = permLoad.apply(totalLoadCvt);
+
+    // Remove the reps and flatten into offset
+    auto storeCvt = *divideRight(totalStoreCvt, reps);
+    auto loadCvt = *divideRight(totalLoadCvt, reps);
+    auto kOffset = str_attr("offset");
+    storeCvt = storeCvt.reshapeOuts({{kOffset, storeCvt.getTotalOutDimSize()}});
+    loadCvt = loadCvt.reshapeOuts({{kOffset, loadCvt.getTotalOutDimSize()}});
+
+    auto tileSize = storeCvt.getInDimSize(kReg);
+
+    assert(permutedInVals.size() == tileSize * nReps);
+    SmallVector<Value> outVals;
+    for (int i = 0; i < nReps; ++i) {
+      if (i > 0)
+        b.barrier();
+
+      auto tileInVals =
+          ArrayRef<Value>(permutedInVals).slice(i * tileSize, tileSize);
+      // Store
+      lowerLdStShared(loc, ctx, storeCvt, tileInVals, llvmElemTy, smemBase,
+                      rewriter, targetInfo);
+      b.barrier();
+      // Load
+      SmallVector<Value> tileOutVals = lowerLdStShared(
+          loc, ctx, loadCvt, {}, llvmElemTy, smemBase, rewriter, targetInfo);
+      llvm::append_range(outVals, tileOutVals);
+    }
+
+    // Undo the permLoad used to divideRight
+    outVals = permLoad.inverse().apply(outVals);
     return outVals;
   }
 
@@ -249,128 +242,27 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
 
     auto loc = op.getLoc();
     auto *ctx = op.getContext();
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto srcTy = op.getSrc().getType();
     auto dstTy = op.getType();
-    auto bitwidth = isa<PointerType>(srcTy.getElementType())
-                        ? kPtrBitWidth
-                        : srcTy.getElementTypeBitWidth();
 
+    // Remove the kBlock dimension from the layout as it's the identity in the
+    // cvt
     auto srcLayout = toLinearLayout(srcTy.getShape(), srcTy.getEncoding());
     auto dstLayout = toLinearLayout(dstTy.getShape(), dstTy.getEncoding());
-    auto origDstLayout = dstLayout;
-
-    // We remove the Block dimension from the layout as it's the identity in the
-    // cvt
-    auto kRegister = str_attr("register");
+    auto kReg = str_attr("register");
     auto kLane = str_attr("lane");
     auto kWarp = str_attr("warp");
-    srcLayout = srcLayout.sublayout({kRegister, kLane, kWarp},
+    srcLayout = srcLayout.sublayout({kReg, kLane, kWarp},
                                     to_vector(srcLayout.getOutDimNames()));
-    dstLayout = dstLayout.sublayout({kRegister, kLane, kWarp},
+    dstLayout = dstLayout.sublayout({kReg, kLane, kWarp},
                                     to_vector(dstLayout.getOutDimNames()));
 
-    // Handle sub-byte elements like i1
-    auto inVals = unpackLLElements(loc, src, rewriter);
-
-    bool isSubByte = bitwidth < 8;
     auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
-    if (isSubByte) {
-      // Upcast to i8
-      bitwidth = 8;
-      llvmElemTy = i8_ty;
-      for (auto &v : inVals) {
-        v = b.zext(llvmElemTy, v);
-      }
-    }
-    bool isPtr = isa<PointerType>(srcTy.getElementType());
-    if (isPtr) {
-      llvmElemTy =
-          getTypeConverter()->convertType(IntegerType::get(ctx, kPtrBitWidth));
-      for (auto &v : inVals) {
-        v = b.ptrtoint(llvmElemTy, v);
-      }
-    }
-
-    // Remove register broadcast from src and dst and input values
-    auto removeBroadcastSrc = actionRemoveBroadcastedRegs(srcLayout);
-    srcLayout = removeBroadcastSrc.apply(srcLayout);
-    inVals = removeBroadcastSrc.apply(inVals);
-    dstLayout = actionRemoveBroadcastedRegs(dstLayout).apply(dstLayout);
-
-    auto smem = optimalSwizzling(srcLayout, dstLayout, bitwidth);
-
-    // Extract reps from smem
-    auto kReg = str_attr("register");
-    auto kReps = str_attr("reps");
-    auto nReps = smem.getInDimSize(kReps);
-    auto reps = LinearLayout::identity1D(nReps, kReg, kReps);
-
-    auto totalStoreCvt = srcLayout.invertAndCompose(smem);
-    auto totalLoadCvt = dstLayout.invertAndCompose(smem);
-
-    // FIXME(Lezcano): The legacy path also creates PRMT, so we should revisit
-
-    // The permutation exists by construction of the reps dimension in
-    // optimalSwizzling
-    auto permStore =
-        regPermForDivide(totalStoreCvt, reps, /*left=*/false).value();
-    totalStoreCvt = permStore.apply(totalStoreCvt);
-    inVals = permStore.apply(inVals);
-    auto permLoad =
-        regPermForDivide(totalLoadCvt, reps, /*left=*/false).value();
-    totalLoadCvt = permLoad.apply(totalLoadCvt);
-
-    // Remove the reps and flatten into offset
-    auto storeCvt = *divideRight(totalStoreCvt, reps);
-    auto loadCvt = *divideRight(totalLoadCvt, reps);
-    auto kOffset = str_attr("offset");
-    storeCvt = storeCvt.reshapeOuts({{kOffset, storeCvt.getTotalOutDimSize()}});
-    loadCvt = loadCvt.reshapeOuts({{kOffset, loadCvt.getTotalOutDimSize()}});
-
-    Value smemBase =
+    auto smemBase =
         LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
-
-    auto tileSize = storeCvt.getInDimSize(kReg);
-
-    assert(inVals.size() == tileSize * nReps);
-    SmallVector<Value> outVals;
-    auto elemsPerVec = smem.getInDimSize(str_attr("vector"));
-    for (int i = 0; i < nReps; ++i) {
-      if (i > 0)
-        b.barrier();
-
-      auto tileInVals = ArrayRef<Value>(inVals).slice(i * tileSize, tileSize);
-      // Store
-      lowerLdStShared(loc, ctx, storeCvt, elemsPerVec, tileInVals, llvmElemTy,
-                      smemBase, rewriter);
-      b.barrier();
-      // Load
-      SmallVector<Value> tileOutVals = lowerLdStShared(
-          loc, ctx, loadCvt, elemsPerVec, {}, llvmElemTy, smemBase, rewriter);
-      llvm::append_range(outVals, tileOutVals);
-    }
-
-    // Undo the permLoad used to divideRight
-    outVals = permLoad.inverse().apply(outVals);
-
-    // Unwrap sub-byte elements if necessary
-    if (isSubByte) {
-      auto llvmElemTyOrig =
-          getTypeConverter()->convertType(srcTy.getElementType());
-      for (auto &v : outVals) {
-        v = b.trunc(llvmElemTyOrig, v);
-      }
-    } else if (isPtr) {
-      auto llvmElemTyOrig =
-          getTypeConverter()->convertType(srcTy.getElementType());
-      for (auto &v : outVals) {
-        v = b.inttoptr(llvmElemTyOrig, v);
-      }
-    }
-
-    // Undo the removeBroadcastSrc
-    outVals = broadcastAs(outVals, origDstLayout);
+    auto inVals = unpackLLElements(loc, src, rewriter);
+    auto outVals = transferWithinBlockSwizzlingImpl(
+        loc, rewriter, srcLayout, dstLayout, inVals, llvmElemTy, smemBase);
 
     Value result =
         packLLElements(loc, getTypeConverter(), outVals, rewriter, dstTy);

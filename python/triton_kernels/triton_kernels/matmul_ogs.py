@@ -13,7 +13,7 @@ from .matmul_ogs_details._matmul_ogs import _compute_writeback_idx
 from .matmul_ogs_details._matmul_ogs import _matmul_ogs
 from .matmul_ogs_details._p_matmul_ogs import _p_matmul_ogs, get_per_device_per_stream_alloc_fn
 from .matmul_ogs_details._finalize_matmul import _finalize_matmul
-from .matmul_ogs_details.opt_flags import make_opt_flags, OptFlags
+from .matmul_ogs_details.opt_flags import make_opt_flags, OptFlags, update_opt_flags_constraints
 from .numerics_details.mxfp import SwizzlingType
 from .specialize import specialize
 from .datastruct import Tensor
@@ -149,6 +149,15 @@ class TensorDescriptorBuilder:
         shape = list(x.shape)
         new_shape = [s for s in shape[:dim - 1] if s != 1] + shape[dim - 1:]
         return x.view(*new_shape)
+
+    @staticmethod
+    def create_descriptor_gather(x_tensor: torch.Tensor, block_k: int) -> TensorDescriptor:
+        """Create a tensor descriptor for input matrix X via TMA gather"""
+        x_tensor = TensorDescriptorBuilder.squeeze_after_dim(x_tensor)
+        assert x_tensor.ndim == 2, "TMA gather descriptor requires 2D input"
+        INT_MAX = 2147483647
+        assert x_tensor.shape[0] < INT_MAX
+        return TensorDescriptor.from_tensor(x_tensor, block_shape=[1, block_k])
 
     @staticmethod
     def create_descriptor(x_tensor: torch.Tensor, block_m: int, block_k: int) -> TensorDescriptor:
@@ -471,6 +480,8 @@ def _create_tma_descriptors(
 
     if not HAS_GATHER:
         x_tensor_or_desc = TensorDescriptorBuilder.create_descriptor(x, opt_flags.block_m, opt_flags.block_k)
+    elif HAS_GATHER and target_info.has_tma_gather():
+        x_tensor_or_desc = TensorDescriptorBuilder.create_descriptor_gather(x, opt_flags.block_k)
 
     w_transpose = w.stride(2) != 1
     w_desc = TensorDescriptorBuilder.create_weight_descriptor(
@@ -506,6 +517,11 @@ def _create_tma_descriptors(
 
     return x_tensor_or_desc, w_desc_and_transpose, mx_desc_and_transpose
 
+def matmul_ogs_set_idle_sms(num_idle_sms):
+    """
+    persistent kernels will leave `num_idle_sms` idle
+    """
+    update_opt_flags_constraints({"idle_sms": num_idle_sms})
 
 def matmul_ogs(x, w, bias,
                routing_data: RoutingData | None = None,
@@ -593,6 +609,8 @@ def matmul_ogs(x, w, bias,
         x, w, gather_indx, scatter_indx, routing_data, opt_flags, preprocessing_features
     )
     # matrix multiplication
+
+
     flex = precision_config.flex_ctx
     bias_stride = None if bias is None else bias.stride(0)
     num_indx = None if scatter_indx is None else scatter_indx.src_indx.shape[0]
@@ -609,7 +627,10 @@ def matmul_ogs(x, w, bias,
         grid_m = expt_block_pid_map.numel()
     grid_n = triton.cdiv(N, opt_flags.block_n)
     max_grid = batch_size * grid_m * grid_n * opt_flags.split_k
-    grid = min(target_info.num_sms(), max_grid) if opt_flags.is_persistent else max_grid
+    grid = min(target_info.num_sms() - opt_flags.idle_sms, max_grid) if opt_flags.is_persistent else max_grid
+
+    x = flex.lhs_data.reinterpret(x)
+    w = flex.rhs_data.reinterpret(w)
 
     if opt_flags.is_persistent:
         x_tensor, w_tensor_and_transpose, mx_tensor_and_tranpose = _create_tma_descriptors(
@@ -631,15 +652,17 @@ def matmul_ogs(x, w, bias,
         x_tensor = x
         w_tensor, w_tma_transpose = w, False
         mx_tensor, mx_tma_transpose = mx_ctx.weight_scale, False
+
     if isinstance(x_tensor, torch.Tensor):
         x_tensor = flex.lhs_data.reinterpret(x)
     if isinstance(w_tensor, torch.Tensor):
         w_tensor = flex.rhs_data.reinterpret(w)
     kernels = get_kernels(epilogue.specs, fused_activation.specs)
+
     (kernels._p_matmul_ogs if opt_flags.is_persistent else kernels._matmul_ogs)[(grid,)](
                    flex.out_data.reinterpret(memory["output"]),
                    flex.out_data.reinterpret(out0), *out0.stride(), *out0_flex,
-                   x_tensor, x.stride(0), x.stride(1), x.stride(2),
+                   x_tensor, x, x.stride(0), x.stride(1), x.stride(2),
                    flex.lhs_data.scale,
                    w_tensor, w.stride(0), w.stride(1), w.stride(2), w_tma_transpose,
                    flex.rhs_data.scale,

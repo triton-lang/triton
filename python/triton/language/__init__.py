@@ -287,8 +287,8 @@ def str_to_ty(name):
 
     if name.startswith("tensordesc"):
         inner = name.split("<")[1].rstrip(">")
-        dtype, rest = inner.split("[", maxsplit=2)
-        block_shape, rest = rest.split("]", maxsplit=2)
+        dtype, rest = inner.split("[", maxsplit=1)
+        block_shape, rest = rest.split("]", maxsplit=1)
         block_shape = [int(s.strip()) for s in block_shape.rstrip("]").split(",")]
         layout = rest.lstrip(",")
         is_gluon = len(layout)

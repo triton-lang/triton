@@ -1284,7 +1284,7 @@ LinearLayout ColumnAction::apply(const LinearLayout &layout) const {
   assert(layout.hasInDim(inDim));
   assert(layout.getInDimSizeLog2(inDim) == inSizeLog2 &&
          "Layout has a different size than the ColumnAction");
-  if (isIdentity) {
+  if (m_isIdentity) {
     return layout;
   }
 
@@ -1310,7 +1310,7 @@ SmallVector<Value> ColumnAction::apply(ValueRange values) const {
          "Values have a different size than the ColumnAction");
   assert(inDim.str() == "register" && "Values are in registers, so we can only "
                                       "apply ColumnAction to registers");
-  if (isIdentity) {
+  if (m_isIdentity) {
     return values;
   }
   auto permLL = apply(LinearLayout::identity1D(values.size(), inDim, inDim));
