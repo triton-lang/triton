@@ -724,6 +724,65 @@ bool emitTransferBetweenRegistersAndShared(
       target, perVectorCallback);
 }
 
+SmallVector<Value> loadSharedToDistributed(triton::gpu::LocalLoadOp localLoadOp,
+                                           Type elemLlvmTy,
+                                           const SharedMemoryObject &smemObj,
+                                           Location loc, RewriterBase &rewriter,
+                                           const TargetInfoBase &target) {
+  auto srcTy = localLoadOp.getSrc().getType();
+  auto dstTy = localLoadOp.getResult().getType();
+
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  SmallVector<Value> ret;
+  bool success = emitTransferBetweenRegistersAndShared(
+      dstTy, srcTy, elemLlvmTy, /*maxVecElems=*/std::nullopt, smemObj, loc,
+      rewriter, target, [&](VectorType vecTy, Value vecAddr) {
+        auto vecVal = b.load(vecTy, vecAddr);
+        target.localLoadOpAnnotation(localLoadOp, vecVal);
+        vecVal.setAlignment(vecTy.getNumElements() *
+                            elemLlvmTy.getIntOrFloatBitWidth() / 8);
+
+        for (int v = 0; v < vecTy.getNumElements(); v++) {
+          ret.push_back(b.extract_element(elemLlvmTy, vecVal, b.i32_val(v)));
+        }
+      });
+  if (!success)
+    llvm::report_fatal_error("Failed to emit transfer from shared to register");
+
+  return ret;
+}
+
+void storeDistributedToShared(triton::gpu::MemDescType dstTy,
+                              RankedTensorType srcTy, Type elemLlvmTy,
+                              ArrayRef<Value> srcVals,
+                              const SharedMemoryObject &smemObj, Location loc,
+                              RewriterBase &rewriter,
+                              const TargetInfoBase &target,
+                              std::pair<size_t, Type> *const llvmOpCount) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  bool success = emitTransferBetweenRegistersAndShared(
+      srcTy, dstTy, elemLlvmTy, /*maxVecElems=*/std::nullopt, smemObj, loc,
+      rewriter, target, [&](VectorType vecTy, Value vecAddr) {
+        ArrayRef<Value> vals = srcVals.take_front(vecTy.getNumElements());
+        srcVals = srcVals.drop_front(vecTy.getNumElements());
+
+        Value vec = b.undef(vecTy);
+        for (int i = 0; i < vals.size(); i++) {
+          vec = b.insert_element(vec, vals[i], b.i32_val(i));
+        }
+        b.store(vec, vecAddr)
+            .setAlignment(vecTy.getNumElements() *
+                          elemLlvmTy.getIntOrFloatBitWidth() / 8);
+        if (llvmOpCount) {
+          ++(llvmOpCount->first);
+          llvmOpCount->second = vecTy;
+        }
+      });
+
+  if (!success)
+    llvm::report_fatal_error("Failed to emit transfer from register to shared");
+}
+
 SmallVector<Value> unpackLLElements(Location loc, Value llvmStruct,
                                     RewriterBase &rewriter) {
   assert(bool(llvmStruct) && "can not unpack null values");
