@@ -1,6 +1,7 @@
 import os
 import torch
 import pytest
+import triton
 from triton import knobs
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
@@ -8,6 +9,7 @@ from triton.experimental.gluon.language.nvidia.blackwell import mbarrier, tma
 from triton._internal_testing import is_cuda
 import multiprocessing
 import tempfile
+from typing import Optional
 
 try:
     multiprocessing.set_start_method("spawn")
@@ -83,6 +85,12 @@ def run_async_tma_kernel(FAILURE, device):
     input = torch.randn((XBLOCK, XBLOCK), device=device, dtype=torch.float32)
     shared_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=32, rank=2)
     input_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(input, [XBLOCK, XBLOCK], shared_layout)
+
+    # ConSan requires a global memory allocation
+    def alloc_fn(size: int, alignment: int, stream: Optional[int]):
+        return torch.empty(size, device="cuda", dtype=torch.int8)
+
+    triton.set_allocator(alloc_fn)
 
     async_tma_kernel[(1, )](input_desc, XBLOCK, FAILURE=FAILURE, num_warps=1)
     getattr(torch, device).synchronize()
@@ -193,6 +201,13 @@ def run_multibuffered_loop_tma_kernel(FAILURE, device):
     blocked_layout = ttgl.BlockedLayout(size_per_thread=[32, 1], threads_per_warp=[1, 32], warps_per_cta=[4, 1],
                                         order=[1, 0])
     input_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(input, [XBLOCK, XBLOCK], shared_layout)
+
+    # ConSan requires a global memory allocation
+    def alloc_fn(size: int, alignment: int, stream: Optional[int]):
+        return torch.empty(size, device="cuda", dtype=torch.int8)
+
+    triton.set_allocator(alloc_fn)
+
     multibuffered_loop_tma_kernel[(1, )](input_desc, output, XBLOCK, shared_layout, blocked_layout, FAILURE=FAILURE,
                                          num_warps=4)
     getattr(torch, device).synchronize()

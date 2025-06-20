@@ -128,35 +128,49 @@ public:
     // 1. Barrier, tracking which barriers are tracking the buffer
     // 2. State, a bitfield tracking if the buffer is written (0x1) or read
     // (0x2)
-    Value barriers = createConstIntTensor(b, 0, b.getIntegerType(64),
-                                          shMemBufsValues.size());
-    Value state =
+    TypedValue<RankedTensorType> barriers = createConstIntTensor(
+        b, 0, b.getIntegerType(64), shMemBufsValues.size());
+    barriersType = barriers.getType();
+    Value barriersAlloc = createInitializedScratchMemory(b, barriers);
+    TypedValue<RankedTensorType> state =
         createConstIntTensor(b, 0, b.getIntegerType(8), shMemBufsValues.size());
+    stateType = state.getType();
+    Value stateAlloc = createInitializedScratchMemory(b, state);
 
-    instrumentMemoryOperations(b, shMemBufs, barriers, state);
+    instrumentMemoryOperations(b, shMemBufs, barriersAlloc, stateAlloc);
   }
 
 private:
   void instrumentMemoryOperations(ImplicitLocOpBuilder &b, Value buffers,
-                                  Value barriers, Value state) {
+                                  Value barriersAlloc, Value stateAlloc) {
     module.walk([&](Operation *op) {
       if (auto copyOp = dyn_cast<ttng::AsyncTMACopyGlobalToLocalOp>(op)) {
         b.setLoc(copyOp.getLoc());
         b.setInsertionPoint(copyOp);
+        Value barriers =
+            createLoadScratchMemory(b, barriersAlloc, barriersType);
+        Value state = createLoadScratchMemory(b, stateAlloc, stateType);
         auto checkOp =
             b.create<tti::ExperimentalCheckAsyncWriteWithMbarSharedOp>(
                 copyOp.getResult(), copyOp.getBarrier(), buffers, state,
                 barriers);
         state = checkOp.getOutStates();
         barriers = checkOp.getOutBarriers();
+        createStoreScratchMemory(b, barriersAlloc, barriers, barriersType);
+        createStoreScratchMemory(b, stateAlloc, state, stateType);
       }
       if (auto waitOp = dyn_cast<ttng::WaitBarrierOp>(op)) {
         b.setLoc(waitOp.getLoc());
         b.setInsertionPoint(waitOp);
+        Value barriers =
+            createLoadScratchMemory(b, barriersAlloc, barriersType);
+        Value state = createLoadScratchMemory(b, stateAlloc, stateType);
         auto checkOp = b.create<tti::ExperimentalCheckWaitMbarOp>(
             waitOp.getAlloc(), barriers, state);
         state = checkOp.getOutStates();
         barriers = checkOp.getOutBarriers();
+        createStoreScratchMemory(b, barriersAlloc, barriers, barriersType);
+        createStoreScratchMemory(b, stateAlloc, state, stateType);
       }
     });
   }
@@ -189,38 +203,83 @@ private:
     return op;
   }
 
-  Value createConstIntTensor(ImplicitLocOpBuilder &builder, int val,
-                             Type elType, int64_t size) {
+  TypedValue<RankedTensorType>
+  createConstIntTensor(ImplicitLocOpBuilder &builder, int val, Type elType,
+                       int64_t size) {
     assert(llvm::isPowerOf2_64(size) && "Expected power of 2");
     auto tensorType =
         RankedTensorType::get({size}, elType, getBlockedEncoding(size));
     auto denseAttr = DenseElementsAttr::get(
         tensorType, APInt(elType.getIntOrFloatBitWidth(), val));
-    return builder.create<arith::ConstantOp>(tensorType, denseAttr);
+    return cast<TypedValue<RankedTensorType>>(
+        builder.create<arith::ConstantOp>(tensorType, denseAttr).getResult());
   }
 
-  Value createConstIntTensor(ImplicitLocOpBuilder &builder, int val,
-                             Type elType, ArrayRef<int64_t> shape) {
+  TypedValue<RankedTensorType>
+  createConstIntTensor(ImplicitLocOpBuilder &builder, int val, Type elType,
+                       ArrayRef<int64_t> shape) {
     auto tensorType =
         RankedTensorType::get(shape, elType, getBlockedEncoding(shape.size()));
     auto denseAttr = DenseElementsAttr::get(
         tensorType, APInt(elType.getIntOrFloatBitWidth(), val));
-    return builder.create<arith::ConstantOp>(tensorType, denseAttr);
+    return cast<TypedValue<RankedTensorType>>(
+        builder.create<arith::ConstantOp>(tensorType, denseAttr).getResult());
   }
 
-  Operation *
-  createInitializedScratchMemory(ImplicitLocOpBuilder &b,
-                                 TypedValue<RankedTensorType> tensor) {
-    int elSize = tensor.getType().getElementType().getIntOrFloatBitWidth() / 8;
-    int64_t size = product(tensor.getType().getShape()) * elSize;
-    auto alloc = b.create<tt::gpu::GlobalScratchAllocOp>(
-        b.getLoc(), triton::getPointerType(b.getI8Type()), size, elSize);
-    auto mask = createConstIntTensor(b, 1, b.getI1Type(), size);
-    b.create<tt::StoreOp>(b.getLoc(), alloc, tensor, mask);
+  Operation *createStoreScratchMemory(ImplicitLocOpBuilder &b, Value alloc,
+                                      Value tensor,
+                                      RankedTensorType tensorType) {
+    assert(tensorType.getRank() == 1 && "Expected 1D tensor");
+
+    auto encoding = tensorType.getEncoding();
+    int numEls = tensorType.getShape()[0];
+    auto splatPtr = b.create<tt::SplatOp>(
+        RankedTensorType::get({numEls}, alloc.getType(), encoding), alloc);
+    Type offsetsType =
+        RankedTensorType::get(tensorType.getShape(), b.getI32Type(), encoding);
+    auto offsets = b.create<tt::MakeRangeOp>(offsetsType, 0, numEls);
+    auto pointers =
+        b.create<tt::AddPtrOp>(splatPtr.getType(), splatPtr, offsets);
+    return b.create<tt::StoreOp>(pointers, tensor, tt::CacheModifier::NONE,
+                                 tt::EvictionPolicy::NORMAL);
+  }
+
+  Value createLoadScratchMemory(ImplicitLocOpBuilder &b, Value alloc,
+                                RankedTensorType tensorType) {
+    auto encoding = tensorType.getEncoding();
+    auto elType = tensorType.getElementType();
+    auto numEls = tensorType.getShape()[0];
+    auto ptrType = triton::getPointerType(elType);
+    auto splatPtr = b.create<tt::SplatOp>(
+        RankedTensorType::get({numEls}, ptrType, encoding), alloc);
+    Type offsetsType =
+        RankedTensorType::get(tensorType.getShape(), b.getI32Type(), encoding);
+    auto offsets = b.create<tt::MakeRangeOp>(offsetsType, 0, numEls);
+    auto pointers =
+        b.create<tt::AddPtrOp>(splatPtr.getType(), splatPtr, offsets);
+    return b.create<tt::LoadOp>(pointers, tt::CacheModifier::NONE,
+                                tt::EvictionPolicy::NORMAL, false);
+  }
+
+  Value createInitializedScratchMemory(ImplicitLocOpBuilder &b,
+                                       TypedValue<RankedTensorType> tensor) {
+    assert(tensor.getType().getRank() == 1 && "Expected 1D tensor");
+
+    auto encoding = tensor.getType().getEncoding();
+    Type elType = tensor.getType().getElementType();
+    int elSize = elType.getIntOrFloatBitWidth() / 8;
+    int numEls = tensor.getType().getShape()[0];
+    int64_t sizeInBytes = numEls * elSize;
+    Type ptrType = triton::getPointerType(elType);
+    auto alloc =
+        b.create<tt::gpu::GlobalScratchAllocOp>(ptrType, sizeInBytes, elSize);
+    createStoreScratchMemory(b, alloc, tensor, tensor.getType());
     return alloc;
   }
 
   ModuleOp module;
+  RankedTensorType barriersType;
+  RankedTensorType stateType;
 };
 
 } // namespace instrument
