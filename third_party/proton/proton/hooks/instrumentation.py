@@ -157,11 +157,13 @@ class InstrumentationHook(Hook):
         backend_name = _get_backend_name()
 
         def to_llvmir_passes(pm):
+            is_long_clk = False if mode.Optimize.CLOCK32 in self.mode.optimizations else True
             triton_proton.add_convert_proton_to_protongpu(pm, self.mode.metric_type, self.mode.sampling_strategy,
                                                           self.mode.sampling_options, self.mode.granularity,
                                                           self.mode.buffer_strategy, self.mode.buffer_type,
                                                           self.mode.buffer_size, max_shared_mem,
-                                                          self.profile_buffer_size, self.profile_buffer_alignment)
+                                                          self.profile_buffer_size, self.profile_buffer_alignment,
+                                                          is_long_clk)
 
             if mode.Optimize.SCHED_STORES in self.mode.optimizations:
                 triton_proton.add_schedule_buffer_store(pm)

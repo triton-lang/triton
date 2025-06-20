@@ -18,6 +18,7 @@ buffer_types = {
 
 sampling_strategies = {
     "none": triton_proton.SAMPLING_STRATEGY.NONE,
+    "selective": triton_proton.SAMPLING_STRATEGY.SELECTIVE,
 }
 
 granularities = {
@@ -37,6 +38,7 @@ class Optimize(Enum):
     TIMESHIFT = "time_shift"
     SCHED_STORES = "sched_stores"
     SCHED_BARRIERS = "sched_barriers"
+    CLOCK32 = "clock32"
 
     def __str__(self):
         return self.value
@@ -46,6 +48,7 @@ optimizations = {
     "time_shift": Optimize.TIMESHIFT,
     "sched_stores": Optimize.SCHED_STORES,
     "sched_barriers": Optimize.SCHED_BARRIERS,
+    "clock32": Optimize.CLOCK32,
 }
 
 
