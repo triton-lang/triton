@@ -95,8 +95,6 @@ struct ConvertTritonGPUToLLVM
     RewritePatternSet funcPatterns(context);
     mlir::triton::populateFuncOpConversionPattern(
         typeConverter, funcPatterns, targetInfo, patternBenefitDefault);
-    mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
-                                                          funcPatterns);
     if (failed(
             applyPartialConversion(mod, funcTarget, std::move(funcPatterns))))
       return signalPassFailure();
@@ -122,7 +120,8 @@ struct ConvertTritonGPUToLLVM
     populateClampFOpToLLVMPattern(typeConverter, patterns, axisInfoAnalysis,
                                   computeCapability,
                                   patternBenefitClampOptimizedPattern);
-    populateLoadStoreOpToLLVMPatterns(typeConverter, targetInfo, patterns,
+    populateLoadStoreOpToLLVMPatterns(typeConverter, targetInfo,
+                                      computeCapability, patterns,
                                       axisInfoAnalysis, benefit);
     mlir::triton::populateReduceOpToLLVMPatterns(typeConverter, patterns,
                                                  targetInfo, benefit);
@@ -130,7 +129,8 @@ struct ConvertTritonGPUToLLVM
                                                targetInfo, benefit);
     mlir::triton::populateGatherOpToLLVMPatterns(typeConverter, patterns,
                                                  targetInfo, benefit);
-    populateBarrierOpToLLVMPatterns(typeConverter, patterns, benefit);
+    populateBarrierOpToLLVMPatterns(typeConverter, patterns, benefit,
+                                    targetInfo);
     populateTensorPtrOpsToLLVMPatterns(typeConverter, patterns, benefit);
     populateClusterOpsToLLVMPatterns(typeConverter, patterns, benefit);
     mlir::triton::populateHistogramOpToLLVMPatterns(typeConverter, patterns,
@@ -152,8 +152,6 @@ struct ConvertTritonGPUToLLVM
     mlir::arith::populateArithToLLVMConversionPatterns(typeConverter, patterns);
     mlir::populateMathToLLVMConversionPatterns(typeConverter, patterns);
     mlir::populateGpuToNVVMConversionPatterns(typeConverter, patterns);
-    mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
-                                                          patterns);
     mlir::ub::populateUBToLLVMConversionPatterns(typeConverter, patterns);
     mlir::triton::populateViewOpToLLVMPatterns(typeConverter, patterns,
                                                benefit);
@@ -171,6 +169,18 @@ struct ConvertTritonGPUToLLVM
                                                         benefit);
     TritonLLVMConversionTarget convTarget(*context);
     if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))
+      return signalPassFailure();
+
+    // Lower CF ops separately to avoid breaking analysis.
+    TritonLLVMFunctionConversionTarget cfTarget(*context);
+    cfTarget.markUnknownOpDynamicallyLegal([&](Operation *op) {
+      return op->getDialect() !=
+             context->getLoadedDialect<cf::ControlFlowDialect>();
+    });
+    RewritePatternSet cfPatterns(context);
+    mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
+                                                          cfPatterns);
+    if (failed(applyPartialConversion(mod, cfTarget, std::move(cfPatterns))))
       return signalPassFailure();
 
     // Fold CTAId when there is only 1 CTA.

@@ -21,6 +21,7 @@ class OptFlags:
     split_k: int
     fused_scatter: bool
     is_persistent: bool
+    idle_sms: int
     epilogue_subtile: int | None
     arch: str
     target_kernel_kwargs: dict
@@ -116,6 +117,7 @@ def make_default_opt_flags_amd(
         split_k=split_k,
         fused_scatter=constraints.get('fused_scatter', False),
         is_persistent=is_persistent,
+        idle_sms=0,
         epilogue_subtile=constraints.get('epilogue_subtile', None),
         arch=None,
         target_kernel_kwargs=target_kernel_kwargs,
@@ -140,7 +142,7 @@ def make_default_opt_flags_nvidia(
     epilogue_effective_itemsize,
     constraints,
 ):
-    constraints_supported = ["block_m", "block_k", "split_k", "fused_scatter", "is_persistent", "epilogue_subtile", "num_stages"]
+    constraints_supported = ["block_m", "block_k", "split_k", "fused_scatter", "is_persistent", "epilogue_subtile", "num_stages", "idle_sms"]
     assert not any([c not in constraints_supported for c in constraints]), constraints.keys()
     # tokens per expert
     if routing_data is None:
@@ -236,6 +238,7 @@ def make_default_opt_flags_nvidia(
         epilogue_subtile=epilogue_subtile,
         arch=arch,
         target_kernel_kwargs=dict(),
+        idle_sms=constraints.get("idle_sms", 0),
     )
     # check constraints
     assert all(getattr(ret, ck) == cv for ck, cv in constraints.items() if cv is not None), f"{ret} != {constraints}"
@@ -283,7 +286,8 @@ def make_opt_flags(
         return _opt_flags
     args = [out_dtype, lhs_dtype, rhs_dtype, precision_config, microscaling_ctx, m, n, k,
             routing_data, can_use_persistent_tma, can_use_fused_scatter,
-            enforce_bitwise_invariance, epilogue_effective_itemsize, _opt_flags_constraints]
+            enforce_bitwise_invariance, epilogue_effective_itemsize,
+            _opt_flags_constraints]
     backend = triton.runtime.driver.active.get_current_target().backend
     if backend == "hip":
         return make_default_opt_flags_amd(*args)

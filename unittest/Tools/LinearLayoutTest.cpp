@@ -917,20 +917,26 @@ TEST(SupremumTest, ErrorOnInconsistentOrder) {
 }
 #endif
 
-TEST_F(LinearLayoutTest, DivideLeft_Basic) {
+TEST_F(LinearLayoutTest, Divide_Basic) {
   // Test division when A = B * C.
   auto B = LinearLayout::identity1D(8, S("in"), S("out"));
   auto C = LinearLayout::zeros1D(16, S("in"), S("out"));
   auto isC = divideLeft(B * C, B);
   EXPECT_TRUE(isC.has_value());
   EXPECT_EQ(isC.value(), C);
-
-  auto isB = divideLeft(C * B, C);
+  auto isB = divideRight(B * C, C);
   EXPECT_TRUE(isB.has_value());
   EXPECT_EQ(isB.value(), B);
+
+  isB = divideLeft(C * B, C);
+  EXPECT_TRUE(isB.has_value());
+  EXPECT_EQ(isB.value(), B);
+  isC = divideRight(C * B, B);
+  EXPECT_TRUE(isC.has_value());
+  EXPECT_EQ(isC.value(), C);
 }
 
-TEST_F(LinearLayoutTest, DivideLeft_NonMatchingDims) {
+TEST_F(LinearLayoutTest, Divide_NonMatchingDims) {
   // If B contains an extra input dimension not present in A, division should
   // fail.
   LinearLayout A = LinearLayout::identity1D(32, S("in"), S("out"));
@@ -938,19 +944,24 @@ TEST_F(LinearLayoutTest, DivideLeft_NonMatchingDims) {
                  {S("out")});
   auto candidateOpt = divideLeft(A, B);
   EXPECT_FALSE(candidateOpt.has_value());
+  candidateOpt = divideRight(A, B);
+  EXPECT_FALSE(candidateOpt.has_value());
 }
 
-TEST_F(LinearLayoutTest, DivideLeft_Simple) {
-  EXPECT_EQ(divideLeft(LinearLayout::identity1D(8, S("in"), S("out")),
-                       LinearLayout::identity1D(4, S("in"), S("out"))),
-            LinearLayout::identity1D(2, S("in"), S("out")));
+TEST_F(LinearLayoutTest, Divide_Simple) {
+  auto A = LinearLayout::identity1D(8, S("in"), S("out"));
+  auto B = LinearLayout::identity1D(4, S("in"), S("out"));
+  auto C = LinearLayout::identity1D(2, S("in"), S("out"));
+  EXPECT_EQ(divideLeft(A, B), C);
+  EXPECT_EQ(divideRight(A, B), C);
 
-  EXPECT_EQ(divideLeft(LinearLayout::identity1D(8, S("in"), S("out")),
-                       LinearLayout::identity1D(8, S("in"), S("out"))),
-            LinearLayout::identity1D(1, S("in"), S("out")));
+  A = LinearLayout::identity1D(8, S("in"), S("out"));
+  C = LinearLayout::identity1D(1, S("in"), S("out"));
+  EXPECT_EQ(divideLeft(A, A), C);
+  EXPECT_EQ(divideRight(A, A), C);
 }
 
-TEST_F(LinearLayoutTest, DivideLeft_2D) {
+TEST_F(LinearLayoutTest, Divide_2D) {
   LinearLayout l1(
       {
           {S("in1"), {{1, 1}, {2, 2}, {0, 8}, {0, 4}}},
@@ -967,9 +978,10 @@ TEST_F(LinearLayoutTest, DivideLeft_2D) {
                   {S("out1"), S("out2")});
   ASSERT_EQ(l2 * l3, l1);
   ASSERT_EQ(divideLeft(l1, l2).value(), l3);
+  ASSERT_EQ(divideRight(l1, l3).value(), l2);
 }
 
-TEST_F(LinearLayoutTest, DivideLeft_EliminateInDim) {
+TEST_F(LinearLayoutTest, Divide_EliminateInDim) {
   LinearLayout l1(
       {
           {S("in2"), {{0, 1}, {1, 0}}},
@@ -982,12 +994,19 @@ TEST_F(LinearLayoutTest, DivideLeft_EliminateInDim) {
   ASSERT_EQ(l2 * l3, l1);
   EXPECT_EQ(divideLeft(l1, l2).value(), l3);
 
+  l2 = LinearLayout({{S("in2"), {{0, 1}, {1, 0}}}, {S("in1"), {}}},
+                    {S("out1"), S("out2")});
+  l3 = LinearLayout({{S("in1"), {{1, 0}, {0, 1}}}}, {S("out1"), S("out2")});
+  ASSERT_EQ(l2 * l3, l1);
+  EXPECT_EQ(divideRight(l1, l3).value(), l2);
+
   LinearLayout l4({{S("in1"), {{0, 1}, {0, 2}}}, {S("in2"), {}}},
                   {S("out1"), S("out2")});
   LinearLayout l5({{S("in1"), {{0, 1}, {0, 2}}}}, {S("out1"), S("out2")});
   LinearLayout l6({{S("in1"), {}}, {S("in2"), {}}}, {S("out1"), S("out2")});
   ASSERT_EQ(l5 * l6, l4);
   EXPECT_EQ(divideLeft(l4, l5).value(), l6);
+  EXPECT_EQ(divideRight(l4, l5).value(), l6);
 
   LinearLayout l7({{S("in1"), {}}, {S("in2"), {{0, 1}}}, {S("in3"), {}}},
                   {S("out1"), S("out2")});
@@ -996,20 +1015,33 @@ TEST_F(LinearLayoutTest, DivideLeft_EliminateInDim) {
                   {S("out1"), S("out2")});
   ASSERT_EQ(l8 * l9, l7);
   EXPECT_EQ(divideLeft(l7, l8).value(), l9);
+  EXPECT_EQ(divideRight(l7, l8).value(), l9);
 }
 
-TEST_F(LinearLayoutTest, DivideLeft_EliminateOutDim) {
+TEST_F(LinearLayoutTest, Divide_EliminateOutDim) {
   LinearLayout l1(
       {
           {S("in2"), {{1, 0}, {1, 0}}},
           {S("in1"), {{2, 0}, {0, 1}}},
       },
       {S("out1"), S("out2")});
-  LinearLayout l2({{S("in2"), {{1, 0}, {1, 0}}}}, {S("out1"), S("out2")});
+  LinearLayout l2({{S("in2"), {{1}, {1}}}}, {S("out1")});
   LinearLayout l3({{S("in2"), {}}, {S("in1"), {{1, 0}, {0, 1}}}},
                   {S("out1"), S("out2")});
   ASSERT_EQ(l2 * l3, l1);
   EXPECT_EQ(divideLeft(l1, l2).value(), l3);
+
+  l1 = LinearLayout(
+      {
+          {S("in2"), {{1, 0}, {0, 2}}},
+          {S("in1"), {{0, 1}, {0, 2}}},
+      },
+      {S("out1"), S("out2")});
+  l2 = LinearLayout({{S("in2"), {{1}}}, {S("in1"), {{1}}}}, {S("out2")});
+  l3 = LinearLayout({{S("in2"), {{1, 0}}}, {S("in1"), {{0, 1}}}},
+                    {S("out1"), S("out2")});
+  ASSERT_EQ(l3 * l2, l1);
+  EXPECT_EQ(divideRight(l1, l2).value(), l3);
 
   LinearLayout l4(
       {
@@ -1022,6 +1054,7 @@ TEST_F(LinearLayoutTest, DivideLeft_EliminateOutDim) {
   LinearLayout l6({{S("in1"), {{0, 1}, {0, 2}}}}, {S("out1"), S("out2")});
   ASSERT_EQ(l5 * l6, l4);
   EXPECT_EQ(divideLeft(l4, l5).value(), l6);
+  EXPECT_EQ(divideRight(l4, l5).value(), l6);
 }
 
 TEST_F(LinearLayoutTest, ColumnActionApplyLayout) {

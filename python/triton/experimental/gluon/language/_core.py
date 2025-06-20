@@ -44,10 +44,14 @@ from triton.language.core import (
 
 _IMPORT_FROM_TRITON: List[str] = [
     "expand_dims",
+    "inline_asm_elementwise",
     "join",
     "load",
     "maximum",
+    "max_constancy",
+    "max_contiguous",
     "minimum",
+    "multiple_of",
     "permute",
     "program_id",
     "reduce",
@@ -58,7 +62,6 @@ _IMPORT_FROM_TRITON: List[str] = [
     "store",
     "to_tensor",
     "where",
-    "inline_asm_elementwise",
 ]
 
 __all__ = [
@@ -173,7 +176,7 @@ class shared_memory_descriptor_type(base_type):
         out.append(self.to_ir(builder))
 
     def __str__(self) -> str:
-        return f"shared_memory_descriptor<{self.element_ty}, {self.shape}, {self.layout}>"
+        return f"shared_memory_descriptor<{self.element_ty}, {self.shape}, {self.layout}, {self.alloc_shape}>"
 
     def __eq__(self, other) -> bool:
         return (type(self) is type(other) and self.shape == other.shape and self.layout == other.layout
@@ -299,11 +302,11 @@ def allocate_shared_memory(element_ty, shape, layout, value=None, _semantic=None
 
 
 @builtin
-def warp_specialize(args, default_partition, worker_partitions, worker_num_warps, worker_num_regs,  #
+def warp_specialize(default_args, default_partition, worker_args, worker_partitions, worker_num_warps, worker_num_regs,
                     _semantic=None, _generator=None):
     worker_num_warps = [_unwrap_if_constexpr(w) for w in worker_num_warps]
     worker_num_regs = [_unwrap_if_constexpr(r) for r in worker_num_regs]
-    return _semantic.warp_specialize(args, default_partition, worker_partitions, worker_num_warps,  #
+    return _semantic.warp_specialize(default_args, default_partition, worker_args, worker_partitions, worker_num_warps,
                                      worker_num_regs, _generator)
 
 

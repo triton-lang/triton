@@ -46,6 +46,11 @@ sys.path.insert(0, os.path.dirname(__file__))
 from python.build_helpers import get_base_dir, get_cmake_dir
 
 
+def is_git_repo():
+    """Return True if this file resides in a git repository"""
+    return (Path(__file__).parent / ".git").is_dir()
+
+
 @dataclass
 class Backend:
     name: str
@@ -67,13 +72,14 @@ class BackendInstaller:
             assert backend_name in os.listdir(
                 root_dir), f"{backend_name} is requested for install but not present in {root_dir}"
 
-            try:
-                subprocess.run(["git", "submodule", "update", "--init", f"{backend_name}"], check=True,
-                               stdout=subprocess.DEVNULL, cwd=root_dir)
-            except subprocess.CalledProcessError:
-                pass
-            except FileNotFoundError:
-                pass
+            if is_git_repo():
+                try:
+                    subprocess.run(["git", "submodule", "update", "--init", f"{backend_name}"], check=True,
+                                   stdout=subprocess.DEVNULL, cwd=root_dir)
+                except subprocess.CalledProcessError:
+                    pass
+                except FileNotFoundError:
+                    pass
 
             backend_src_dir = os.path.join(root_dir, backend_name)
 
@@ -756,6 +762,8 @@ def get_git_branch():
 
 
 def get_git_version_suffix():
+    if not is_git_repo():
+        return ""  # Not a git checkout
     branch = get_git_branch()
     if branch.startswith("release"):
         return ""
