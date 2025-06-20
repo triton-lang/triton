@@ -1730,16 +1730,6 @@ PaddedSharedEncodingAttr PaddedSharedEncodingAttr::get(
   return get(context, intervals, paddings, order, ctaLayout);
 }
 
-PaddedSharedEncodingAttr
-PaddedSharedEncodingAttr::get(MLIRContext *context, ArrayRef<int64_t> shape,
-                              ArrayRef<unsigned> order, unsigned dotKWidth,
-                              unsigned elemBitWidth, CTALayoutAttr ctaLayout) {
-  unsigned innerD = getShapePerCTA(ctaLayout.getCTASplitNum(), shape)[order[0]];
-  unsigned threadNumBytes = std::max(dotKWidth * elemBitWidth / 8u, 1u);
-  threadNumBytes = llvm::alignTo(threadNumBytes, 4); // Assume 32-bit per bank
-  return get(context, {{innerD, threadNumBytes}}, order, ctaLayout);
-}
-
 int64_t PaddedSharedEncodingAttr::getPaddedSize(ArrayRef<int64_t> shape) const {
   int64_t unpaddedSize = product(shape);
   int64_t paddingSize = 0;

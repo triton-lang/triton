@@ -444,12 +444,6 @@ attributes too, for example,
   let builders = [
       AttrBuilder<(ins "ArrayRef<std::pair<unsigned, unsigned>>":$intervalPads,
                        "ArrayRef<unsigned>":$order, "CTALayoutAttr":$ctaLayout)>,
-      // Defines a padded shared layout that avoids bank conflicts for a block
-      // with given |shape| and |order| that is loaded by dot operand with
-      // kWidth |dotKWidth|.
-      AttrBuilder<(ins "ArrayRef<int64_t>":$shape, "ArrayRef<unsigned>":$order,
-                       "unsigned":$dotKWidth, "unsigned":$elemBitWidth,
-                       "CTALayoutAttr":$ctaLayout)>,
   ];
 
   let extraClassDeclaration = extraBaseClassDeclaration # [{
