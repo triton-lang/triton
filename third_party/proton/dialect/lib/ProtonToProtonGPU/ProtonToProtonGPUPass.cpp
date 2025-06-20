@@ -80,9 +80,11 @@ class RecordOpCircularRewrite : public OpRewritePattern<proton::RecordOp> {
 public:
   RecordOpCircularRewrite(MLIRContext *ctx, Value segment,
                           MetricType metricType,
-                          ModuleScopeIdAllocation &scopeInfo)
+                          ModuleScopeIdAllocation &scopeInfo,
+                          bool clockExtension)
       : OpRewritePattern::OpRewritePattern(ctx), segment(segment),
-        metricType(metricType), scopeInfo(scopeInfo) {}
+        metricType(metricType), scopeInfo(scopeInfo),
+        clockExtension(clockExtension) {}
 
   LogicalResult matchAndRewrite(proton::RecordOp op,
                                 PatternRewriter &rewriter) const override {
@@ -91,8 +93,12 @@ public:
 
     rewriter.setInsertionPoint(op);
 
-    Value counter = rewriter.create<gpu::ReadCounterOp>(
-        op.getLoc(), mlir::IntegerType::get(context, 32), metricType);
+    mlir::IntegerType clkType = clockExtension
+                                    ? mlir::IntegerType::get(context, 64)
+                                    : mlir::IntegerType::get(context, 32);
+
+    Value counter =
+        rewriter.create<gpu::ReadCounterOp>(op.getLoc(), clkType, metricType);
 
     int scopeId = scopeInfo.getOpScopeId(op);
     rewriter.replaceOpWithNewOp<gpu::CircularStoreOp>(op, segment, counter,
@@ -104,6 +110,7 @@ private:
   Value segment;
   MetricType metricType;
   ModuleScopeIdAllocation &scopeInfo;
+  bool clockExtension;
 };
 } // namespace
 
@@ -115,7 +122,7 @@ public:
       llvm::StringRef samplingOptions, gpu::Granularity granularity,
       gpu::BufferStrategy bufferStrategy, gpu::BufferType bufferType,
       int32_t bufferSize, int32_t maxSharedMemSize, int64_t profileScratchSize,
-      int32_t profileScratchAlignment)
+      int32_t profileScratchAlignment, bool clockExtension)
       : ConvertProtonToProtonGPUBase<ConvertProtonToProtonGPUPass>() {
     this->metricType = metricType;
     this->samplingStrategy = samplingStrategy;
@@ -127,6 +134,7 @@ public:
     this->maxSharedMemSize = maxSharedMemSize;
     this->profileScratchSize = profileScratchSize;
     this->profileScratchAlignment = profileScratchAlignment;
+    this->clockExtension = clockExtension;
   }
 
   LogicalResult circularRecordStrategyLowering(FuncOp func) {
@@ -247,7 +255,7 @@ public:
     mlir::RewritePatternSet patterns(context);
     ModuleScopeIdAllocation &scopeInfo = getAnalysis<ModuleScopeIdAllocation>();
     patterns.add<RecordOpCircularRewrite>(context, segment, metricType,
-                                          scopeInfo);
+                                          scopeInfo, clockExtension);
     if (applyPatternsGreedily(mod, std::move(patterns)).failed())
       return failure();
 
@@ -330,11 +338,11 @@ std::unique_ptr<OperationPass<ModuleOp>> createConvertProtonToProtonGPUPass(
     llvm::StringRef samplingOptions, gpu::Granularity granularity,
     gpu::BufferStrategy bufferStrategy, gpu::BufferType bufferType,
     int32_t bufferSize, int32_t maxSharedMemSize, int64_t profileScratchSize,
-    int32_t profileScratchAlignment) {
+    int32_t profileScratchAlignment, bool clkExt) {
   return std::make_unique<ConvertProtonToProtonGPUPass>(
       metricType, samplingStrategy, samplingOptions, granularity,
       bufferStrategy, bufferType, bufferSize, maxSharedMemSize,
-      profileScratchSize, profileScratchAlignment);
+      profileScratchSize, profileScratchAlignment, clkExt);
 }
 
 } // namespace proton

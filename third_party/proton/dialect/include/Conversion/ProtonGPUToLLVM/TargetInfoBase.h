@@ -4,6 +4,7 @@
 #include "mlir/IR/Attributes.h"
 #include "triton/Conversion/MLIRTypes.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
+#include "llvm/ADT/SmallVector.h"
 
 namespace mlir::triton::proton::gpu {
 
