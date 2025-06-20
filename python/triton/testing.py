@@ -146,6 +146,7 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_m
 
     di = runtime.driver.active.get_device_interface()
 
+    di.synchronize()
     fn()
     di.synchronize()
 
