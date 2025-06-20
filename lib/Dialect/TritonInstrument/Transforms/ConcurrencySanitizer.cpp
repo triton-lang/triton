@@ -294,6 +294,20 @@ private:
     return alloc;
   }
 
+  Value createInitializedScratchMemory(ImplicitLocOpBuilder &b,
+                                       TypedValue<RankedTensorType> tensor) {
+    auto encoding = tensor.getType().getEncoding();
+    Type elType = tensor.getType().getElementType();
+    int elSize = elType.getIntOrFloatBitWidth() / 8;
+    int numEls = product(tensor.getType().getShape());
+    int64_t sizeInBytes = numEls * elSize;
+    Type ptrType = triton::getPointerType(elType);
+    auto alloc =
+        b.create<tt::gpu::GlobalScratchAllocOp>(ptrType, sizeInBytes, elSize);
+    createStoreScratchMemory(b, b.getLoc(), alloc, tensor, tensor.getType());
+    return alloc;
+  }
+
   ModuleOp module;
 
   Value shBuffers;
