@@ -55,7 +55,7 @@ struct CycleEntry : public EntryBase {
 
   void print(std::ostream &os) const override;
 
-  uint32_t cycle = 0;
+  uint64_t cycle = 0;
   bool isStart = true;
   int32_t scopeId = 0;
 };

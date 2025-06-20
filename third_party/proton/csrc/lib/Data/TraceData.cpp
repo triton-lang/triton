@@ -317,7 +317,7 @@ convertToTimelineTrace(TraceData::Trace *trace,
     std::map<int, std::string> scopeIdToName;
     std::map<std::string, int> scopeNameToId;
     int curScopeId = 0;
-    uint32_t timeShiftCost =
+    int64_t timeShiftCost =
         getInt64Value(kernelEvent.cycleMetric, CycleMetric::TimeShiftCost);
 
     // Process all events for current kernel
