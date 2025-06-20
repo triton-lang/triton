@@ -142,8 +142,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32} {
     %7 = tt.splat %arg1 : !tt.ptr<f32> -> tensor<256x!tt.ptr<f32>, #blocked0>
     %8 = tt.addptr %7, %4 : tensor<256x!tt.ptr<f32>, #blocked0>, tensor<256xi32, #blocked0>
 
-    // CHECK: %[[CMP:.*]] = icmp ult i32 %{{.*}}, {{64}}
-    // CHECK: call void @llvm.assume(i1 %[[CMP]])
+    // CHECK: %[[CONST64:.*]] = llvm.mlir.constant(64 : i32) : i32
+    // CHECK: %[[CMP:.*]] = llvm.icmp "ult" %{{.*}}, %[[CONST64]] : i32
+    // CHECK: llvm.intr.assume %[[CMP]] : i1
 
     // Load 4 elements from vector0
     // CHECK: mov.u32 $0, 0x0

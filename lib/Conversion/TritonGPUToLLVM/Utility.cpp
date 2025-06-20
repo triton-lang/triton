@@ -266,7 +266,8 @@ Value getThreadId(OpBuilder &rewriter, Location loc) {
 
   // Insert the llvm.assume intrinsic: tid < upperBound (unsigned comparison)
   Value upperBoundVal = b.i32_val(upperBound);
-  Value cmp = rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::ult, tid, upperBoundVal);
+  Value cmp = rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::ult,
+                                             tid, upperBoundVal);
   rewriter.create<LLVM::AssumeOp>(loc, cmp);
 
   return tid;
