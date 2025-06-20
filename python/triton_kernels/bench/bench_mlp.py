@@ -70,7 +70,8 @@ class PerfData:
 
     @property
     def max_tbps(self):
-        return proton.specs.max_bps(self.device_info["bus_width"], self.device_info["memory_clock_rate"]) * 1e-12
+        return proton.specs.max_bps(self.device_type, self.device_info["arch"], self.device_info["bus_width"],
+                                    self.device_info["memory_clock_rate"]) * 1e-12
 
     @property
     def max_tflops(self):
