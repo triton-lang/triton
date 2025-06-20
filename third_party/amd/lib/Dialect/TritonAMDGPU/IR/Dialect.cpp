@@ -63,14 +63,15 @@ namespace mlir::triton::amdgpu {
 // This means that lane and warp bases of linear layout must match, and the
 // register basis must be the same up to a number of registers contained within
 // a CTA tile.
-bool matchingLayoutsOnCTATile(MLIRContext *ctx, RankedTensorType srcTy,
-                              RankedTensorType dstTy,
-                              std::function<void(const Twine &)> emitError) {
+bool hasMatchingCTATileLayoutForSliceConcat(
+    RankedTensorType srcTy, RankedTensorType dstTy,
+    std::function<void(const Twine &)> emitError) {
   auto srcShape = srcTy.getShape();
   auto dstShape = dstTy.getShape();
   auto srcLL = triton::gpu::toLinearLayout(srcShape, srcTy.getEncoding());
   auto dstLL = triton::gpu::toLinearLayout(dstShape, dstTy.getEncoding());
 
+  MLIRContext *ctx = srcTy.getContext();
   auto getBases = [&](StringRef name) {
     auto key = StringAttr::get(ctx, name);
     return std::pair{srcLL.getBases().lookup(key),
@@ -165,8 +166,8 @@ LogicalResult ExtractSliceOp::verify() {
   }
 
   // Verify that source and destination layout match on a CTA tile.
-  if (!matchingLayoutsOnCTATile(getContext(), srcTy, dstTy,
-                                [&](const Twine &msg) { emitError() << msg; }))
+  if (!hasMatchingCTATileLayoutForSliceConcat(
+          srcTy, dstTy, [&](const Twine &msg) { emitError() << msg; }))
     return failure();
 
   return success();
@@ -439,8 +440,8 @@ LogicalResult ConcatOp::verify() {
            << "Element types of sources and destination must match.";
 
   // 3) Check that all source and destination layouts match on a CTA tile.
-  if (!matchingLayoutsOnCTATile(getContext(), srcType, dstType,
-                                [&](const Twine &msg) { emitError() << msg; }))
+  if (!hasMatchingCTATileLayoutForSliceConcat(
+          srcType, dstType, [&](const Twine &msg) { emitError() << msg; }))
     return failure();
 
   return success();
