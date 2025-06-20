@@ -3,7 +3,6 @@
 #include "mlir/IR/MLIRContext.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "triton/Tools/LinearLayout.h"
 #include "triton/Tools/StrUtil.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/Support/Signals.h"
@@ -97,15 +96,6 @@ public:
                                     ArrayRef<unsigned> cOrd) {
     return SwizzledSharedEncodingAttr::get(
         &ctx, vec, perPhase, maxPhase, ord,
-        CTALayoutAttr::get(&ctx, cpg, cSplit, cOrd));
-  }
-
-  PaddedSharedEncodingAttr
-  paddedShared(ArrayRef<unsigned> intervals, ArrayRef<unsigned> paddings,
-               ArrayRef<unsigned> ord, ArrayRef<unsigned> cpg,
-               ArrayRef<unsigned> cSplit, ArrayRef<unsigned> cOrd) {
-    return PaddedSharedEncodingAttr::get(
-        &ctx, intervals, paddings, ord,
         CTALayoutAttr::get(&ctx, cpg, cSplit, cOrd));
   }
 
