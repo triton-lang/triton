@@ -98,6 +98,8 @@ public:
   // Return the mapped value in the given encoding. This will insert a convert
   // if the encoding is different than the encoding decided at resolve time.
   Value getValueAs(Value value, Attribute encoding);
+  // Return the original value mapped to the new desired encoding.
+  Value getRewrittenValue(Value value);
   // Dump the current stage of layout information.
   void dump();
 
@@ -440,22 +442,25 @@ void LayoutPropagation::map(Value old, Value newV) {
       newV;
 }
 
+Value LayoutPropagation::getRewrittenValue(Value value) {
+  auto tensorType = dyn_cast<RankedTensorType>(value.getType());
+  if (!tensorType)
+    return value;
+  auto layoutIt = layouts.find(value);
+  if (layoutIt == layouts.end()) {
+    return value;
+  }
+  assert(layoutIt->second.encodings.size() == 1 &&
+         "we should have resolved to a single encoding");
+  Attribute encodingPicked = *(layoutIt->second.encodings.begin());
+  if (encodingPicked == tensorType.getEncoding())
+    return value;
+  return rewriteMapping.at({value, encodingPicked});
+}
+
 Value LayoutPropagation::getValueAs(Value value, Attribute encoding) {
   if (auto tensorType = dyn_cast<RankedTensorType>(value.getType())) {
-    Value rewrittenValue;
-    auto layoutIt = layouts.find(value);
-    if (layoutIt == layouts.end()) {
-      rewrittenValue = value;
-    } else {
-      assert(layoutIt->second.encodings.size() == 1 &&
-             "we should have resolved to a single encoding");
-      Attribute encodingPicked = *(layoutIt->second.encodings.begin());
-      if (encodingPicked == tensorType.getEncoding())
-        rewrittenValue = value;
-      else
-        rewrittenValue = rewriteMapping[{value, encodingPicked}];
-    }
-    assert(rewrittenValue);
+    Value rewrittenValue = getRewrittenValue(value);
     if (cast<RankedTensorType>(rewrittenValue.getType()).getEncoding() ==
         encoding)
       return rewrittenValue;
@@ -478,7 +483,19 @@ Operation *LayoutPropagation::cloneElementwise(OpBuilder &rewriter,
 
   Attribute operandEnc;
   if (op->getNumOperands() > 0) {
-    operandEnc = inferSrcEncoding(op, encoding);
+    for (auto operand : op->getOperands()) {
+      auto ty =
+          dyn_cast<RankedTensorType>(getRewrittenValue(operand).getType());
+      if (!ty)
+        continue;
+      auto enc = ty.getEncoding();
+      if (inferDstEncoding(op, enc) == encoding) {
+        operandEnc = enc;
+        break;
+      }
+    }
+    if (!operandEnc)
+      operandEnc = inferSrcEncoding(op, encoding);
     assert(operandEnc);
   }
 
