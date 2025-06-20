@@ -729,19 +729,17 @@ bool canBeConvertedToAsyncLoad(unsigned numBuffers, tt::LoadOp loadOp,
     return false;
 
   // Compute the final vecSize we can use for the combination of sourceEncoding
-  // and sharedEncoding. We can only use AsyncCopy if the width is > 32 bit
+  // and sharedEncoding. We can only use AsyncCopy if the width is >= 32 bit
   auto srcTy = cast<RankedTensorType>(loadOp.getPtr().getType());
-  ttg::MemDescType dstTy = cast<ttg::MemDescType>(alloc.getType());
-  tt::LinearLayout regLayout =
-      triton::gpu::toLinearLayout(srcTy.getShape(), srcTy.getEncoding());
-  tt::LinearLayout sharedLayout =
-      triton::gpu::toLinearLayout(srcTy.getShape(), dstTy.getEncoding());
+  auto dstTy = cast<ttg::MemDescType>(alloc.getType());
+  auto shape = srcTy.getShape();
+  auto regLayout = triton::gpu::toLinearLayout(shape, srcTy.getEncoding());
+  auto sharedLayout = triton::gpu::toLinearLayout(shape, dstTy.getEncoding());
   auto regToSharedLayout = regLayout.invertAndCompose(sharedLayout);
   unsigned loadContig = regToSharedLayout.getNumConsecutiveInOut();
   unsigned width = loadContig * dstTy.getElementTypeBitWidth();
-  if (width < 32) {
+  if (width < 32)
     return false;
-  }
 
   return triton::canBeConvertedToAsyncLoad(loadOp, axisInfoAnalysis);
 }
