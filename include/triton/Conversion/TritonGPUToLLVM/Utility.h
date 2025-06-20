@@ -568,6 +568,15 @@ lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout cvt,
                 ConversionPatternRewriter &rewriter,
                 const TargetInfoBase &targetInfo);
 
+// Lower local_load/local_store via ld.shared/st.shared
+SmallVector<Value> lowerLocalLdSt(Location loc, MLIRContext *ctx,
+                                  // Map from registers to offset
+                                  LinearLayout cvt, ArrayRef<Value> valsArray,
+                                  // Input for store, output for load
+                                  Type llvmElemTy, Value smemBase,
+                                  ConversionPatternRewriter &rewriter,
+                                  const TargetInfoBase &targetInfo);
+
 SmallVector<Value> unpackLLElements(Location loc, Value llvmStruct,
                                     RewriterBase &rewriter);
 

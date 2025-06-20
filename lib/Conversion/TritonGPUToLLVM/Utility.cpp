@@ -252,22 +252,26 @@ Value getThreadId(OpBuilder &rewriter, Location loc) {
       rewriter.create<::mlir::gpu::ThreadIdOp>(loc, ::mlir::gpu::Dimension::x);
   tid = rewriter.create<arith::IndexCastOp>(loc, i32_ty, tid);
 
+  Operation *lookupPt = &rewriter.getInsertionBlock()->front();
+  int threadsPerWarp = triton::gpu::lookupThreadsPerWarp(rewriter);
+  int numWarps = triton::gpu::lookupNumWarps(lookupPt);
+  int upperBound = numWarps * threadsPerWarp;
+
+  TritonLLVMOpBuilder b(loc, rewriter);
+
   // If this is being created inside a warp specialize op, compute the relative
   // thread ID within the warp group.
   if (std::optional<int> startId =
           getWarpGroupStartThreadId(rewriter.getInsertionBlock())) {
-    TritonLLVMOpBuilder b(loc, rewriter);
     tid = rewriter.create<arith::SubIOp>(loc, tid, b.i32_val(*startId));
   }
 
-  return tid;
-}
+  if (llvm::isPowerOf2_32(upperBound)) {
+    // help LLVM's known bits analysis:
+    tid = b.and_(tid, b.i32_val(upperBound - 1));
+  }
 
-Value getLaneId(OpBuilder &rewriter, Location loc) {
-  TritonLLVMOpBuilder b(loc, rewriter);
-  Value tid = getThreadId(rewriter, loc);
-  int threadsPerWarp = triton::gpu::lookupThreadsPerWarp(rewriter);
-  return b.urem(tid, b.i32_val(threadsPerWarp));
+  return tid;
 }
 
 std::pair<Value, Value> getLaneAndWarpId(OpBuilder &rewriter, Location loc) {
@@ -275,17 +279,24 @@ std::pair<Value, Value> getLaneAndWarpId(OpBuilder &rewriter, Location loc) {
   Value tid = getThreadId(rewriter, loc);
   int threadsPerWarp = triton::gpu::lookupThreadsPerWarp(rewriter);
   Value warpSizeVal = b.i32_val(threadsPerWarp);
-  Value laneId = b.urem(tid, warpSizeVal);
 
   // If there is only one warp, the warp ID is always 0.
   Operation *lookupPt = &rewriter.getInsertionBlock()->front();
+  Value laneId;
   Value warpId;
-  if (triton::gpu::lookupNumWarps(lookupPt) == 1)
+  if (triton::gpu::lookupNumWarps(lookupPt) == 1) {
+    laneId = tid;
     warpId = b.i32_val(0);
-  else
+  } else {
+    laneId = b.urem(tid, warpSizeVal);
     warpId = b.udiv(tid, warpSizeVal);
+  }
 
   return {laneId, warpId};
+}
+
+Value getLaneId(OpBuilder &rewriter, Location loc) {
+  return getLaneAndWarpId(rewriter, loc).first;
 }
 
 SmallVector<SmallVector<Value>>
@@ -604,6 +615,35 @@ lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout cvt,
     outVals = invPerm.apply(outVals);
   }
   return outVals;
+}
+
+SmallVector<Value> lowerLocalLdSt(Location loc, MLIRContext *ctx,
+                                  LinearLayout cvt, ArrayRef<Value> valsArray,
+                                  // Input for store, output for load
+                                  Type llvmElemTy, Value smemBase,
+                                  ConversionPatternRewriter &rewriter,
+                                  const TargetInfoBase &targetInfo) {
+  assert(cvt.getNumOutDims() == 1);
+  assert(*cvt.getOutDimNames().begin() == str_attr("offset"));
+  auto isStore = !valsArray.empty();
+  // Remove broadcasting in the registers
+  auto removeBroadcastSrc = actionRemoveBroadcastedRegs(cvt);
+  if (!removeBroadcastSrc.isIdentity()) {
+    auto prmtCvt = removeBroadcastSrc.apply(cvt);
+    auto inVals = to_vector(valsArray);
+    if (isStore) {
+      inVals = removeBroadcastSrc.apply(inVals);
+    }
+    auto outVals = lowerLdStShared(loc, ctx, prmtCvt, inVals, llvmElemTy,
+                                   smemBase, rewriter, targetInfo);
+    if (!isStore) {
+      outVals = broadcastAs(outVals, cvt);
+    }
+    return outVals;
+  }
+
+  return lowerLdStShared(loc, ctx, cvt, valsArray, llvmElemTy, smemBase,
+                         rewriter, targetInfo);
 }
 
 bool emitTransferBetweenRegistersAndShared(
