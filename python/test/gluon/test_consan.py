@@ -5,6 +5,7 @@ from triton import knobs
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
 from triton.experimental.gluon.language.nvidia.blackwell import mbarrier, tma
+from triton._internal_testing import is_cuda
 import multiprocessing
 import tempfile
 
@@ -87,6 +88,7 @@ def run_async_tma_kernel(FAILURE, device):
     getattr(torch, device).synchronize()
 
 
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
 @pytest.mark.parametrize("FAILURE", [True, False])
 def test_async_tma_kernel(FAILURE, device):
     if FAILURE:
