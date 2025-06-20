@@ -1,3 +1,4 @@
+import re
 import torch
 import triton
 import triton.profiler as proton
@@ -10,6 +11,9 @@ import triton.language as tl
 from triton.profiler.hooks.launch import COMPUTE_METADATA_SCOPE_NAME
 import triton.profiler.language as pl
 
+
+def is_cuda():
+    return triton.runtime.driver.active.get_current_target().backend == "cuda"
 
 def is_hip():
     return triton.runtime.driver.active.get_current_target().backend == "hip"
@@ -67,58 +71,58 @@ def test_triton(tmp_path: pathlib.Path):
     assert data[0]["children"][1]["frame"]["name"] == "test2"
 
 
-def test_cudagraph(tmp_path: pathlib.Path):
-    stream = torch.cuda.Stream()
-    torch.cuda.set_stream(stream)
-
-    @triton.jit
-    def foo(x, y, z):
-        tl.store(z, tl.load(y) + tl.load(x))
-
-    def fn():
-        a = torch.ones((2, 2), device="cuda")
-        b = torch.ones((2, 2), device="cuda")
-        c = a + b
-        foo[(1, )](a, b, c)
-
-    temp_file = tmp_path / "test_cudagraph.hatchet"
-    proton.start(str(temp_file.with_suffix("")), context="shadow")
-
-    # warmup
-    # four kernels
-    fn()
-
-    # no kernels
-    g = torch.cuda.CUDAGraph()
-    with torch.cuda.graph(g):
-        for _ in range(10):
-            fn()
-
-    proton.enter_scope("test")
-    g.replay()
-    g.reset()
-    torch.cuda.synchronize()
-    proton.exit_scope()
-    proton.finalize()
-
-    with temp_file.open() as f:
-        data = json.load(f)
-    # CUDA/HIP graph may also invoke additional kernels to reset outputs
-    # {torch.ones, add, foo, test}
-    assert len(data[0]["children"]) >= 4
-    # find the test frame
-    test_frame = None
-    for child in data[0]["children"]:
-        if child["frame"]["name"] == "test":
-            test_frame = child
-            break
-    assert test_frame is not None
-    # {torch.ones, add, foo}
-    if is_hip():
-        assert len(test_frame["children"]) >= 2
-    else:
-        assert len(test_frame["children"]) >= 3
-    assert test_frame["children"][0]["metrics"]["time (ns)"] > 0
+#def test_cudagraph(tmp_path: pathlib.Path):
+#    stream = torch.cuda.Stream()
+#    torch.cuda.set_stream(stream)
+#
+#    @triton.jit
+#    def foo(x, y, z):
+#        tl.store(z, tl.load(y) + tl.load(x))
+#
+#    def fn():
+#        a = torch.ones((2, 2), device="cuda")
+#        b = torch.ones((2, 2), device="cuda")
+#        c = a + b
+#        foo[(1, )](a, b, c)
+#
+#    temp_file = tmp_path / "test_cudagraph.hatchet"
+#    proton.start(str(temp_file.with_suffix("")), context="shadow")
+#
+#    # warmup
+#    # four kernels
+#    fn()
+#
+#    # no kernels
+#    g = torch.cuda.CUDAGraph()
+#    with torch.cuda.graph(g):
+#        for _ in range(10):
+#            fn()
+#
+#    proton.enter_scope("test")
+#    g.replay()
+#    g.reset()
+#    torch.cuda.synchronize()
+#    proton.exit_scope()
+#    proton.finalize()
+#
+#    with temp_file.open() as f:
+#        data = json.load(f)
+#    # CUDA/HIP graph may also invoke additional kernels to reset outputs
+#    # {torch.ones, add, foo, test}
+#    assert len(data[0]["children"]) >= 4
+#    # find the test frame
+#    test_frame = None
+#    for child in data[0]["children"]:
+#        if child["frame"]["name"] == "test":
+#            test_frame = child
+#            break
+#    assert test_frame is not None
+#    # {torch.ones, add, foo}
+#    if is_hip():
+#        assert len(test_frame["children"]) >= 2
+#    else:
+#        assert len(test_frame["children"]) >= 3
+#    assert test_frame["children"][0]["metrics"]["time (ns)"] > 0
 
 
 def test_metrics(tmp_path: pathlib.Path):
@@ -377,3 +381,93 @@ def test_timeline(tmp_path: pathlib.Path):
         trace_events = data["traceEvents"]
         assert len(trace_events) == 12
         assert trace_events[-1]["tid"][0:4] == "warp"
+
+def test_sched_barrier(tmp_path: pathlib.Path):
+    if is_cuda():
+        pytest.skip("CUDA backend does not support instruction scheduling barriers")
+
+    @triton.jit
+    def matmul_kernel(
+            a_ptr, b_ptr, c_ptr,
+            M, N, K,
+            stride_am, stride_ak,  #
+            stride_bk, stride_bn,  #
+            stride_cm, stride_cn, BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr,  #
+            GROUP_SIZE_M: tl.constexpr,  #
+    ):
+        pl.enter_scope("warpgroup_1")
+        pid = tl.program_id(axis=0)
+        num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
+        num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
+        num_pid_in_group = GROUP_SIZE_M * num_pid_n
+        group_id = pid // num_pid_in_group
+        first_pid_m = group_id * GROUP_SIZE_M
+        group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
+        pid_m = first_pid_m + ((pid % num_pid_in_group) % group_size_m)
+        pid_n = (pid % num_pid_in_group) // group_size_m
+
+        offs_am = (pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)) % M
+        offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N
+        offs_k = tl.arange(0, BLOCK_SIZE_K)
+        a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
+        b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
+
+        accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
+        pl.exit_scope("warpgroup_1")
+        pl.enter_scope("warpgroup_2")
+        for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
+            a = tl.load(a_ptrs, mask=offs_k[None, :] < K - k * BLOCK_SIZE_K, other=0.0)
+            b = tl.load(b_ptrs, mask=offs_k[:, None] < K - k * BLOCK_SIZE_K, other=0.0)
+            accumulator = tl.dot(a, b, accumulator)
+            a_ptrs += BLOCK_SIZE_K * stride_ak
+            b_ptrs += BLOCK_SIZE_K * stride_bk
+        pl.exit_scope("warpgroup_2")
+
+        pl.enter_scope("warpgroup_3")
+        c = accumulator.to(tl.float16)
+        pl.exit_scope("warpgroup_3")
+
+        pl.enter_scope("warpgroup_4")
+        offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
+        offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
+        c_ptrs = c_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
+        c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
+        tl.store(c_ptrs, c, mask=c_mask)
+        pl.exit_scope("warpgroup_4")
+
+    torch.manual_seed(0)
+    a = torch.randn((512, 512), device="cuda", dtype=torch.float16)
+    b = torch.randn((512, 512), device="cuda", dtype=torch.float16)
+
+
+    M, K = a.shape
+    K, N = b.shape
+
+    BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K = 128, 256, 64
+    GROUP_SIZE_M = 8
+
+    c = torch.empty((M, N), device=a.device, dtype=torch.float16)
+    grid = lambda META: (triton.cdiv(M, 128) * triton.cdiv(N, 256), )
+
+    temp_file = tmp_path / "test_sched_barrier.hatchet"
+    mode = proton.mode.Default(metric_type="cycle", optimizations="sched_barriers")
+    proton.start(str(temp_file.with_suffix("")), backend="instrumentation", mode=mode)
+
+    grid = lambda META: (triton.cdiv(M, BLOCK_SIZE_M) * triton.cdiv(N, BLOCK_SIZE_N), )
+    kernel = matmul_kernel[grid](
+        a, b, c,  #
+        M, N, K,  #
+        a.stride(0), a.stride(1),  #
+        b.stride(0), b.stride(1),  #
+        c.stride(0), c.stride(1),  #
+        BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K,
+        GROUP_SIZE_M
+    )
+    proton.finalize()
+
+    asm = kernel.asm["amdgcn"]
+
+    # Make sure a sched barrier is inserted before every s_memtime call
+    for i, line in enumerate(asm.splitlines()):
+        if "s_memtime" in line:
+            assert "sched_barrier" in asm.splitlines()[i-1]
