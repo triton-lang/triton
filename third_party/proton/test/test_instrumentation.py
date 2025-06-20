@@ -110,10 +110,12 @@ def test_record(method, tmp_path: pathlib.Path):
         start_clock = host_buffer[metadata_size + 4:metadata_size + 8]
         end_tag = host_buffer[metadata_size + 8:metadata_size + 12]
         end_clock = host_buffer[metadata_size + 12:metadata_size + 16]
-        assert int.from_bytes(start_tag.numpy().tobytes(), 'little') == 0
-        assert int.from_bytes(end_tag.numpy().tobytes(), 'little') == 0x80000000
-        start_clock_val = int.from_bytes(start_clock.numpy().tobytes(), 'little')
-        end_clock_val = int.from_bytes(end_clock.numpy().tobytes(), 'little')
+        assert int.from_bytes(start_tag.numpy().tobytes(), 'little') & 0xfffff800 == 0
+        assert int.from_bytes(end_tag.numpy().tobytes(), 'little') & 0xfffff800 == 0x80000000
+        start_clock_val = int.from_bytes(start_tag.numpy().tobytes(), 'little') & 0x7ff << 32 | int.from_bytes(
+            start_clock.numpy().tobytes(), 'little')
+        end_clock_val = int.from_bytes(end_tag.numpy().tobytes(), 'little') & 0x7ff << 32 | int.from_bytes(
+            end_clock.numpy().tobytes(), 'little')
         assert end_clock_val > start_clock_val
 
     # instrumentation context has finalized, now validate assembly

@@ -16,6 +16,6 @@ TEST(DecoderTest, Decode) {
   EXPECT_EQ(entry1->value, 0x12345678);
   auto entry2 = decoder.decode<CycleEntry>();
   EXPECT_EQ(entry2->isStart, false);
-  EXPECT_EQ(entry2->scopeId, 1);
-  EXPECT_EQ(entry2->cycle, 4294967295);
+  EXPECT_EQ(entry2->scopeId, 0);
+  EXPECT_EQ(entry2->cycle, 8589934591);
 }
