@@ -272,29 +272,29 @@ Value getThreadId(OpBuilder &rewriter, Location loc) {
   return tid;
 }
 
-Value getLaneId(OpBuilder &rewriter, Location loc) {
-  TritonLLVMOpBuilder b(loc, rewriter);
-  Value tid = getThreadId(rewriter, loc);
-  int threadsPerWarp = triton::gpu::lookupThreadsPerWarp(rewriter);
-  return b.urem(tid, b.i32_val(threadsPerWarp));
-}
-
 std::pair<Value, Value> getLaneAndWarpId(OpBuilder &rewriter, Location loc) {
   TritonLLVMOpBuilder b(loc, rewriter);
   Value tid = getThreadId(rewriter, loc);
   int threadsPerWarp = triton::gpu::lookupThreadsPerWarp(rewriter);
   Value warpSizeVal = b.i32_val(threadsPerWarp);
-  Value laneId = b.urem(tid, warpSizeVal);
 
   // If there is only one warp, the warp ID is always 0.
   Operation *lookupPt = &rewriter.getInsertionBlock()->front();
+  Value laneId;
   Value warpId;
-  if (triton::gpu::lookupNumWarps(lookupPt) == 1)
+  if (triton::gpu::lookupNumWarps(lookupPt) == 1) {
+    laneId = tid;
     warpId = b.i32_val(0);
-  else
+  } else {
+    laneId = b.urem(tid, warpSizeVal);
     warpId = b.udiv(tid, warpSizeVal);
+  }
 
   return {laneId, warpId};
+}
+
+Value getLaneId(OpBuilder &rewriter, Location loc) {
+  return getLaneAndWarpId(rewriter, loc).first;
 }
 
 SmallVector<SmallVector<Value>>
