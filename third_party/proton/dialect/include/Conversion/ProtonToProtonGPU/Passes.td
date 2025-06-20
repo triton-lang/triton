@@ -72,6 +72,9 @@ def ConvertProtonToProtonGPU: Pass<"convert-proton-to-protongpu", "mlir::ModuleO
        Option<"profileScratchAlignment", "scratch-mem-alignment",
               "int32_t", /*default*/"128",
               "Profiler global scratch memory alignment">,
+       Option<"clockExtension", "clock-extension",
+              "bool", /*default*/"false",
+              "Use long clock if true, otherwise use 32-bit clock">,
   ];
 }
 

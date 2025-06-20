@@ -20,8 +20,9 @@ void CycleEntry::print(std::ostream &os) const {
 
 template <>
 void proton::decodeFn<CycleEntry>(ByteSpan &buffer, CycleEntry &entry) {
-  uint32_t tag = buffer.readUInt32();
-  entry.isStart = (tag & 0x80000000) == 0;
-  entry.scopeId = (tag & 0x7FFFFFFF);
-  entry.cycle = buffer.readUInt32();
+  uint32_t tagClkUpper = buffer.readUInt32();
+  entry.isStart = (tagClkUpper & 0x80000000) == 0;
+  entry.scopeId = (tagClkUpper & 0x7F800000) >> 23;
+  uint64_t clkLower = buffer.readUInt32();
+  entry.cycle = static_cast<uint64_t>(tagClkUpper & 0x7FF) << 32 | clkLower;
 }
