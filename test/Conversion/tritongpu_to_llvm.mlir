@@ -2493,6 +2493,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
       %0 = tt.load %arg1 : tensor<16x4x!tt.ptr<i8>, #blocked>
       tt.return
   }
+}
+
+// -----
+
+
 #blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
 // CHECK-LABEL: @arith_constant_array
