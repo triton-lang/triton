@@ -373,6 +373,12 @@ class LaunchHook(Protocol):
         ...
 
 
+class InitHandleHook(Protocol):
+
+    def __call__(self, function: Optional[Callable], module: Optional[object], metadata_group: dict[str, str]) -> None:
+        ...
+
+
 # This is of the form [attr_name, attr_val]
 # TODO: Use tuple instead of list for better typing.
 KernelAttr = list[Union[str, int]]
@@ -408,6 +414,7 @@ class runtime_knobs(base_knobs):
 
     launch_enter_hook: Optional[LaunchHook] = None
     launch_exit_hook: Optional[LaunchHook] = None
+    init_handle_hook: Optional[InitHandleHook] = None
 
     # Hook for inspecting compiled functions and modules
     jit_cache_hook: Optional[JITHook] = None

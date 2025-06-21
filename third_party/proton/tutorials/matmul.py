@@ -308,10 +308,10 @@ def benchmark(M, N, K, provider):
 if args.profile:
     if args.pcsampling:
         # proton-viewer -m num_samples/%,time/s ./matmul.hatchet
-        proton.start("matmul", hook="triton", backend="cupti_pcsampling")
+        proton.start("matmul", hook="launch", backend="cupti", mode="pcsampling")
     else:
         # proton-viewer -m tflop/s,time/s ./matmul.hatchet
-        proton.start("matmul", hook="triton")
+        proton.start("matmul", hook="launch")
     benchmark.run(show_plots=True, print_data=True)
     proton.finalize()
 else:

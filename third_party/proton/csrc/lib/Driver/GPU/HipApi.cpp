@@ -27,6 +27,24 @@ DEFINE_DISPATCH(ExternLibHip, getDeviceCount, hipGetDeviceCount, int *);
 DEFINE_DISPATCH(ExternLibHip, getDeviceProperties, hipGetDeviceProperties,
                 hipDeviceProp_t *, int);
 
+DEFINE_DISPATCH(ExternLibHip, memAllocHost, hipMemAllocHost, void **, size_t)
+
+DEFINE_DISPATCH(ExternLibHip, memFreeHost, hipFreeHost, void *)
+
+DEFINE_DISPATCH(ExternLibHip, ctxGetDevice, hipCtxGetDevice, hipDevice_t *)
+
+DEFINE_DISPATCH(ExternLibHip, ctxGetStreamPriorityRange,
+                hipDeviceGetStreamPriorityRange, int *, int *)
+
+DEFINE_DISPATCH(ExternLibHip, streamCreateWithPriority,
+                hipStreamCreateWithPriority, hipStream_t *, unsigned int, int)
+
+DEFINE_DISPATCH(ExternLibHip, streamSynchronize, hipStreamSynchronize,
+                hipStream_t)
+
+DEFINE_DISPATCH(ExternLibHip, memcpyDToHAsync, hipMemcpyDtoHAsync, void *,
+                hipDeviceptr_t, size_t, hipStream_t)
+
 Device getDevice(uint64_t index) {
   int clockRate;
   (void)hip::deviceGetAttribute<true>(&clockRate, hipDeviceAttributeClockRate,
