@@ -249,7 +249,7 @@ public:
       }
 
       Value loopArgFlagValue = loopArgIsZero ? vFalse : vTrue;
-      (void)addIterArgsToLoop(rewriter, forOp, {loopArgFlagValue});
+      forOp = addIterArgsToLoop(rewriter, forOp, {loopArgFlagValue});
       loopArgFlagValue =
           forOp.getRegionIterArg(forOp.getNumRegionIterArgs() - 1);
 

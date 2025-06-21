@@ -4,6 +4,7 @@ from functools import wraps
 
 if TYPE_CHECKING:
     from triton._C.libtriton.gluon_ir import GluonOpBuilder
+    from ._semantic import GluonSemantic
 
 from ._layouts import SharedLayout, DistributedLayout
 from triton._C.libtriton import ir
@@ -15,7 +16,6 @@ from triton.language.core import (
     dtype,
     block_type,  # TODO: block type with layout info
     pointer_type,
-    tuple_type,
     void,
     int1,
     int8,
@@ -38,14 +38,30 @@ from triton.language.core import (
     _unwrap_if_constexpr,
     _unwrap_shape,
     tensor,
+    tuple,
+    tuple_type,
 )
-from . import _semantic as semantic
 
 _IMPORT_FROM_TRITON: List[str] = [
-    "program_id",  # NOQA: F822
-    "load",  # NOQA: F822
-    "store",  # NOQA: F822
-    "to_tensor",  # NOQA: F822
+    "expand_dims",
+    "inline_asm_elementwise",
+    "join",
+    "load",
+    "maximum",
+    "max_constancy",
+    "max_contiguous",
+    "minimum",
+    "multiple_of",
+    "permute",
+    "program_id",
+    "reduce",
+    "reshape",
+    "split",
+    "static_assert",
+    "static_print",
+    "store",
+    "to_tensor",
+    "where",
 ]
 
 __all__ = [
@@ -78,6 +94,9 @@ __all__ = [
     "float64",
     "_unwrap_if_constexpr",
     "tensor",
+    "tuple",
+    "tuple_type",
+    "thread_barrier",
     "arange",
     "full",
     "convert_layout",
@@ -122,9 +141,9 @@ def builtin(fn: T) -> T:
 
     @wraps(fn)
     def wrapper(*args, **kwargs):
-        if "_builder" not in kwargs or kwargs["_builder"] is None:
+        if "_semantic" not in kwargs or kwargs["_semantic"] is None:
             raise ValueError("Did you forget to add @triton.gluon.jit ? "
-                             "(`_builder` argument must be provided outside of JIT functions.)")
+                             "(`_semantic` argument must be provided outside of JIT functions.)")
         return fn(*args, **kwargs)
 
     setattr(wrapper, GLUON_BUILTIN, True)
@@ -157,7 +176,7 @@ class shared_memory_descriptor_type(base_type):
         out.append(self.to_ir(builder))
 
     def __str__(self) -> str:
-        return f"shared_memory_descriptor<{self.element_ty}, {self.shape}, {self.layout}>"
+        return f"shared_memory_descriptor<{self.element_ty}, {self.shape}, {self.layout}, {self.alloc_shape}>"
 
     def __eq__(self, other) -> bool:
         return (type(self) is type(other) and self.shape == other.shape and self.layout == other.layout
@@ -167,7 +186,7 @@ class shared_memory_descriptor_type(base_type):
         return not (self == other)
 
     def mangle(self) -> str:
-        shape_str = "_".join(self.shape)
+        shape_str = "_".join([str(s) for s in self.shape])
         return f"MD{self.element_ty.mangle()}S{shape_str}SL{self.layout.mangle()}LAS{self.alloc_shape}ASMD"
 
 
@@ -188,21 +207,61 @@ class shared_memory_descriptor(base_value):
     def shape(self):
         return self.type.shape
 
+    @property
+    def rank(self):
+        return len(self.shape)
+
+    @property
+    def layout(self):
+        return self.type.layout
+
     def __str__(self) -> str:
         return str(self.type)
 
     @builtin
-    def load(self, layout, _builder: GluonOpBuilder) -> tensor:
+    def load(self, layout, _semantic: GluonSemantic) -> tensor:
         layout = _unwrap_if_constexpr(layout)
-        return semantic.shared_load(self, layout, _builder)
+        return _semantic.shared_load(self, layout)
 
     @builtin
-    def store(self, value, _builder: GluonOpBuilder) -> None:
-        return semantic.shared_store(self, value, _builder)
+    def store(self, value, _semantic: GluonSemantic) -> None:
+        return _semantic.shared_store(self, value)
 
     @builtin
-    def _keep_alive(self, _builder=None) -> None:
-        return semantic.shared_dealloc(self, _builder)
+    def slice(self, start, length, dim=0, _semantic: GluonSemantic = None) -> shared_memory_descriptor:
+        start = _unwrap_if_constexpr(start)
+        length = _unwrap_if_constexpr(length)
+        dim = _unwrap_if_constexpr(dim)
+        return _semantic.memdesc_slice(self, start, length, dim)
+
+    @builtin
+    def index(self, index, _semantic: GluonSemantic = None) -> shared_memory_descriptor:
+        index = _unwrap_if_constexpr(index)
+        return _semantic.memdesc_index(self, index)
+
+    @builtin
+    def permute(self, order, _semantic: GluonSemantic) -> shared_memory_descriptor:
+        order = [_unwrap_if_constexpr(o) for o in order]
+        return _semantic.memdesc_trans(self, order)
+
+    @builtin
+    def reshape(self, shape, layout, _semantic: GluonSemantic) -> shared_memory_descriptor:
+        shape = [_unwrap_if_constexpr(s) for s in shape]
+        layout = _unwrap_if_constexpr(layout)
+
+        return _semantic.memdesc_reshape(self, shape, layout)
+
+    @builtin
+    def _reinterpret(self, dtype, shape, layout, _semantic: GluonSemantic = None) -> shared_memory_descriptor:
+        dtype = _unwrap_if_constexpr(dtype)
+        shape = [_unwrap_if_constexpr(s) for s in shape]
+        layout = _unwrap_if_constexpr(layout)
+
+        return _semantic.memdesc_reinterpret(self, dtype, shape, layout)
+
+    @builtin
+    def _keep_alive(self, _semantic: GluonSemantic = None) -> None:
+        return _semantic.shared_dealloc(self)
 
 
 for name in _IMPORT_FROM_TRITON:
@@ -211,41 +270,46 @@ for name in _IMPORT_FROM_TRITON:
 
 
 @builtin
-def arange(start, end, layout, _builder=None):
+def arange(start, end, layout, _semantic=None):
     start = _unwrap_if_constexpr(start)
     end = _unwrap_if_constexpr(end)
     layout = _unwrap_if_constexpr(layout)
-    return semantic.arange(start, end, layout, _builder)
+    return _semantic.arange(start, end, layout)
 
 
 @builtin
-def convert_layout(value, layout, _builder=None):
+def convert_layout(value, layout, _semantic=None):
     layout = _unwrap_if_constexpr(layout)
-    return semantic.convert_layout(value, layout, _builder)
+    return _semantic.convert_layout(value, layout)
 
 
 @builtin
-def full(shape, value, dtype, layout, _builder=None):
+def full(shape, value, dtype, layout, _semantic=None):
     shape = _unwrap_shape(shape)
     value = _unwrap_if_constexpr(value)
     dtype = _unwrap_if_constexpr(dtype)
     layout = _unwrap_if_constexpr(layout)
-    return semantic.full(shape, value, dtype, layout, _builder)
+    return _semantic.full(shape, value, dtype, layout)
 
 
 @builtin
-def allocate_shared_memory(element_ty, shape, layout, value=None, _builder=None):
+def allocate_shared_memory(element_ty, shape, layout, value=None, _semantic=None):
     element_ty = _unwrap_if_constexpr(element_ty)
     shape = _unwrap_if_constexpr(shape)
+    shape = [_unwrap_if_constexpr(s) for s in shape]
     layout = _unwrap_if_constexpr(layout)
-    return semantic.allocate_shared(element_ty, shape, layout, value, _builder)
+    return _semantic.allocate_shared(element_ty, shape, layout, value)
 
 
 @builtin
-def warp_specialize(args, default_partition, worker_partitions, worker_num_warps, worker_num_regs,  #
-                    _builder=None, _generator=None):
+def warp_specialize(default_args, default_partition, worker_args, worker_partitions, worker_num_warps, worker_num_regs,
+                    _semantic=None, _generator=None):
     worker_num_warps = [_unwrap_if_constexpr(w) for w in worker_num_warps]
     worker_num_regs = [_unwrap_if_constexpr(r) for r in worker_num_regs]
-    args = [_unwrap_if_constexpr(arg) for arg in args]
-    return semantic.warp_specialize(args, default_partition, worker_partitions, worker_num_warps,  #
-                                    worker_num_regs, _builder, _generator)
+    return _semantic.warp_specialize(default_args, default_partition, worker_args, worker_partitions, worker_num_warps,
+                                     worker_num_regs, _generator)
+
+
+@builtin
+def thread_barrier(_semantic=None):
+    return _semantic.debug_barrier()

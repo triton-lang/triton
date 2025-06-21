@@ -4,6 +4,7 @@
 #include "mlir/IR/Operation.h"
 
 namespace mlir::triton::AMD {
+
 // Filter function used in the AMDGPU backend to filter unnecessary barriers
 // during Membar Analysis. Filters applied by this function:
 // 1) Do not create barriers between AsyncCopyGlobalToLocal and LocalLoad if the

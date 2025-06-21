@@ -98,17 +98,20 @@ def _matmul_launch_metadata(grid, kernel, args):
             elif args["VEC_SIZE"] == 32:
                 kernel_name += "_mxfp4"
     ret["name"] = f"{kernel_name} [M={M}, N={N}, K={K}]"
-    ret["flops"] = 2. * M * N * K
+    ret["flops"] = 2.0 * M * N * K
     return ret
 
 
 @triton.jit(launch_metadata=_matmul_launch_metadata)
 def block_scaled_matmul_kernel(  #
-        a_desc, a_scale,  #
-        b_desc, b_scale,  #
+        a_desc,  #
+        a_scale_desc,  #
+        b_desc,  #
+        b_scale_desc,  #
         c_desc,  #
-        M: tl.constexpr, N: tl.constexpr, K: tl.constexpr,  #
-        stride_sk: tl.constexpr, stride_sb: tl.constexpr, stride_sc: tl.constexpr, stride_sd: tl.constexpr,
+        M: tl.constexpr,  #
+        N: tl.constexpr,  #
+        K: tl.constexpr,  #
         output_type: tl.constexpr,  #
         ELEM_PER_BYTE_A: tl.constexpr,  #
         ELEM_PER_BYTE_B: tl.constexpr,  #
@@ -116,9 +119,11 @@ def block_scaled_matmul_kernel(  #
         BLOCK_M: tl.constexpr,  #
         BLOCK_N: tl.constexpr,  #
         BLOCK_K: tl.constexpr,  #
+        rep_m: tl.constexpr,  #
+        rep_n: tl.constexpr,  #
+        rep_k: tl.constexpr,  #
         NUM_STAGES: tl.constexpr,  #
-        USE_2D_SCALE_LOAD: tl.constexpr):  #
-
+):  #
     if output_type == 0:
         output_dtype = tl.float32
     elif output_type == 1:
@@ -134,45 +139,21 @@ def block_scaled_matmul_kernel(  #
     offs_bn = pid_n * BLOCK_N
     offs_k_a = 0
     offs_k_b = 0
-
-    ## block scale offsets
-    offs_sm = (pid_m * (BLOCK_M // 128) + tl.arange(0, BLOCK_M // 128)) % M
-    offs_sn = (pid_n * (BLOCK_N // 128) + tl.arange(0, BLOCK_N // 128)) % N
+    offs_scale_m = pid_m * rep_m
+    offs_scale_n = pid_n * rep_n
+    offs_scale_k = 0
 
     MIXED_PREC: tl.constexpr = ELEM_PER_BYTE_A == 1 and ELEM_PER_BYTE_B == 2
-
-    # For now it is recommended to use 2D scale loads for better performance.
-    # In the future we will bring additional optimizations to either allow 5D loads,
-    # the use of TMAs for scale factors, or both.
-    if USE_2D_SCALE_LOAD:
-        offs_inner = tl.arange(0, (BLOCK_K // VEC_SIZE // 4) * 32 * 4 * 4)
-        a_scale_ptr = a_scale + offs_sm[:, None] * stride_sk + offs_inner[None, :]
-        b_scale_ptr = b_scale + offs_sn[:, None] * stride_sk + offs_inner[None, :]
-    else:
-        offs_sk = tl.arange(0, (BLOCK_K // VEC_SIZE // 4))
-        # MN spatial offsets for 32 element blocking
-        offs_sc = tl.arange(0, 32)
-        # offsets for both scale factor column ID (along K)
-        # and spatial block column ID (along MN)
-        offs_sd = tl.arange(0, 4)
-        a_scale_ptr = a_scale + (offs_sm[:, None, None, None, None] * stride_sk + offs_sk[None, :, None, None, None] *
-                                 stride_sb + offs_sc[None, None, :, None, None] * stride_sc +
-                                 offs_sd[None, None, None, :, None] * stride_sd + offs_sd[None, None, None, None, :])
-        b_scale_ptr = b_scale + (offs_sn[:, None, None, None, None] * stride_sk + offs_sk[None, :, None, None, None] *
-                                 stride_sb + offs_sc[None, None, :, None, None] * stride_sc +
-                                 offs_sd[None, None, None, :, None] * stride_sd + offs_sd[None, None, None, None, :])
 
     accumulator = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
     for k in tl.range(0, tl.cdiv(K, BLOCK_K), num_stages=NUM_STAGES):
         a = a_desc.load([offs_am, offs_k_a])
         b = b_desc.load([offs_bn, offs_k_b])
-        scale_a = tl.load(a_scale_ptr)
-        scale_b = tl.load(b_scale_ptr)
-        if USE_2D_SCALE_LOAD:
-            scale_a = scale_a.reshape(BLOCK_M // 128, BLOCK_K // VEC_SIZE // 4, 32, 4, 4)
-            scale_b = scale_b.reshape(BLOCK_N // 128, BLOCK_K // VEC_SIZE // 4, 32, 4, 4)
-        scale_a = scale_a.trans(0, 3, 2, 1, 4).reshape(BLOCK_M, BLOCK_K // VEC_SIZE)
-        scale_b = scale_b.trans(0, 3, 2, 1, 4).reshape(BLOCK_N, BLOCK_K // VEC_SIZE)
+        scale_a = a_scale_desc.load([0, offs_scale_m, offs_scale_k, 0, 0])
+        scale_b = b_scale_desc.load([0, offs_scale_n, offs_scale_k, 0, 0])
+
+        scale_a = scale_a.reshape(rep_m, rep_k, 32, 4, 4).trans(0, 3, 2, 1, 4).reshape(BLOCK_M, BLOCK_K // VEC_SIZE)
+        scale_b = scale_b.reshape(rep_n, rep_k, 32, 4, 4).trans(0, 3, 2, 1, 4).reshape(BLOCK_N, BLOCK_K // VEC_SIZE)
 
         if MIXED_PREC:
             accumulator = tl.dot_scaled(a, scale_a, "e4m3", b.T, scale_b, "e2m1", accumulator)
@@ -183,13 +164,12 @@ def block_scaled_matmul_kernel(  #
 
         offs_k_a += BLOCK_K // ELEM_PER_BYTE_A
         offs_k_b += BLOCK_K // ELEM_PER_BYTE_B
-        a_scale_ptr += (BLOCK_K // VEC_SIZE // 4) * stride_sb
-        b_scale_ptr += (BLOCK_K // VEC_SIZE // 4) * stride_sb
+        offs_scale_k += rep_k
 
     c_desc.store([offs_am, offs_bn], accumulator.to(output_dtype))
 
 
-def block_scaled_matmul(a_desc, a_scale, b_desc, b_scale, dtype_dst, M, N, K, configs):
+def block_scaled_matmul(a_desc, a_scale_desc, b_desc, b_scale_desc, dtype_dst, M, N, K, rep_m, rep_n, rep_k, configs):
     output = torch.empty((M, N), dtype=dtype_dst, device="cuda")
     if dtype_dst == torch.float32:
         dtype_dst = 0
@@ -205,11 +185,27 @@ def block_scaled_matmul(a_desc, a_scale, b_desc, b_scale, dtype_dst, M, N, K, co
     c_desc = TensorDescriptor.from_tensor(output, [BLOCK_M, BLOCK_N])
 
     grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), 1)
-    block_scaled_matmul_kernel[grid](a_desc, a_scale, b_desc, b_scale, c_desc, M, N, K, a_scale.stride(0),
-                                     a_scale.stride(1), a_scale.stride(2), a_scale.stride(3), dtype_dst,
-                                     configs["ELEM_PER_BYTE_A"], configs["ELEM_PER_BYTE_B"], configs["VEC_SIZE"],
-                                     configs["BLOCK_SIZE_M"], configs["BLOCK_SIZE_N"], configs["BLOCK_SIZE_K"],
-                                     configs["num_stages"], USE_2D_SCALE_LOAD=True)
+    block_scaled_matmul_kernel[grid](
+        a_desc,
+        a_scale_desc,
+        b_desc,
+        b_scale_desc,
+        c_desc,
+        M,
+        N,
+        K,
+        dtype_dst,
+        configs["ELEM_PER_BYTE_A"],
+        configs["ELEM_PER_BYTE_B"],
+        configs["VEC_SIZE"],
+        configs["BLOCK_SIZE_M"],
+        configs["BLOCK_SIZE_N"],
+        configs["BLOCK_SIZE_K"],
+        rep_m,
+        rep_n,
+        rep_k,
+        configs["num_stages"],
+    )
     return output
 
 
@@ -251,20 +247,13 @@ def initialize_block_scaled(M, N, K, block_scale_type="nvfp4", compute_reference
     b_ref = b_ref.to(torch.float32).T
 
     a_desc = TensorDescriptor.from_tensor(a, [BLOCK_M, BLOCK_K // ELEM_PER_BYTE_A])
+    b_desc = TensorDescriptor.from_tensor(b, [BLOCK_N, BLOCK_K // ELEM_PER_BYTE_B])
 
-    if block_scale_type == "mixed":
-        b_desc = TensorDescriptor(
-            b,
-            shape=[N, K // ELEM_PER_BYTE_B],
-            strides=[K // ELEM_PER_BYTE_B, 1],
-            block_shape=[BLOCK_N, BLOCK_K // ELEM_PER_BYTE_B],
-        )
-    else:
-        b_desc = TensorDescriptor.from_tensor(b, [BLOCK_N, BLOCK_K // ELEM_PER_BYTE_B])
-
+    a_scale_shape = [M // 128, K // VEC_SIZE // 4, 32, 16]
+    b_scale_shape = [N // 128, K // VEC_SIZE // 4, 32, 16]
     epsilon = 1e-8
-    a_scale = torch.rand((M // 128, K // VEC_SIZE // 4, 32, 4, 4), device=device) + epsilon
-    b_scale = torch.rand((N // 128, K // VEC_SIZE // 4, 32, 4, 4), device=device) + epsilon
+    a_scale = torch.rand(a_scale_shape, device=device) + epsilon
+    b_scale = torch.rand(b_scale_shape, device=device) + epsilon
     if block_scale_type == "nvfp4":
         a_scale = a_scale.to(torch.float8_e4m3fn)
         b_scale = b_scale.to(torch.float8_e4m3fn)
@@ -276,12 +265,27 @@ def initialize_block_scaled(M, N, K, block_scale_type="nvfp4", compute_reference
         a_scale = a_scale_ref.data
         b_scale = b_scale_ref.data
 
+    rep_m = BLOCK_M // 128
+    rep_n = BLOCK_N // 128
+    rep_k = BLOCK_K // VEC_SIZE // 4
+
+    # Use 5D TMA descriptor [1, rep_m, rep_k, 2, 256] with uint8 elements.
+    # With 256 elements we better utilize the L2 and don't require the TMA
+    # engine to emit many small messages (16B) messages as with 32x16xu8.
+    a_scale_block_shape = [1, rep_m, rep_k, 2, 256]
+    b_scale_block_shape = [1, rep_n, rep_k, 2, 256]
+    a_scale = a_scale.reshape(1, a_scale_shape[0], a_scale.shape[1], 2, 256)
+    b_scale = b_scale.reshape(1, b_scale_shape[0], b_scale.shape[1], 2, 256)
+    a_scale_desc = TensorDescriptor.from_tensor(a_scale, block_shape=a_scale_block_shape)
+    b_scale_desc = TensorDescriptor.from_tensor(b_scale, block_shape=b_scale_block_shape)
+
     reference = None
     if compute_reference:
         a_scale_ref = a_scale_ref.to(torch.float32)
         b_scale_ref = b_scale_ref.to(torch.float32)
 
         def unpack_scale(packed):
+            packed = packed.reshape(*packed.shape[:-2], 32, 4, 4)
             num_chunk_m, num_chunk_k, _, _, _ = packed.shape
             return packed.permute(0, 3, 2, 1, 4).reshape(num_chunk_m * 128, num_chunk_k * 4).contiguous()
 
@@ -298,22 +302,13 @@ def initialize_block_scaled(M, N, K, block_scale_type="nvfp4", compute_reference
         "ELEM_PER_BYTE_B": ELEM_PER_BYTE_B,
         "VEC_SIZE": VEC_SIZE,
     }
-    return a_desc, a_scale, b_desc, b_scale, configs, reference
+    return a_desc, a_scale_desc, b_desc, b_scale_desc, rep_m, rep_n, rep_k, configs, reference
 
 
 def validate_block_scaled(M, N, K, block_scale_type="nvfp4"):
-
-    def alloc_fn(size: int, align: int, _):
-        return torch.empty(size, dtype=torch.int8, device="cuda")
-
-    if block_scale_type == "mixed":
-        # This is needed for TMA with the descriptor created on the device.
-        # TMA load for mixed-precision fp4 is supported only by device TMA.
-        triton.set_allocator(alloc_fn)
-
-    a_desc, a_scale, b_desc, b_scale, configs, reference = initialize_block_scaled(M, N, K, block_scale_type,
-                                                                                   compute_reference=True)
-    output = block_scaled_matmul(a_desc, a_scale, b_desc, b_scale, torch.float16, M, N, K, configs)
+    a_desc, a_scale, b_desc, b_scale, rep_m, rep_n, rep_k, configs, reference = initialize_block_scaled(
+        M, N, K, block_scale_type, compute_reference=True)
+    output = block_scaled_matmul(a_desc, a_scale, b_desc, b_scale, torch.float16, M, N, K, rep_m, rep_n, rep_k, configs)
     torch.testing.assert_close(reference, output.to(torch.float32), atol=1e-3, rtol=1e-3)
     print(f"✅ (pass {block_scale_type})")
 
@@ -324,19 +319,20 @@ def bench_block_scaled(K, block_scale_type="nvfp4", reps=10):
     N = 8192
     print(f"Problem Shape = {M}x{N}x{K}")
 
-    a_desc, a_scale, b_desc, b_scale, configs, _ = initialize_block_scaled(M, N, K, block_scale_type,
-                                                                           compute_reference=False)
-    _ = block_scaled_matmul(a_desc, a_scale, b_desc, b_scale, torch.float16, M, N, K, configs)
+    a_desc, a_scale, b_desc, b_scale, rep_m, rep_n, rep_k, configs, _ = initialize_block_scaled(
+        M, N, K, block_scale_type, compute_reference=False)
+    _ = block_scaled_matmul(a_desc, a_scale, b_desc, b_scale, torch.float16, M, N, K, rep_m, rep_n, rep_k, configs)
 
     proton.activate(0)
     for _ in range(reps):
-        _ = block_scaled_matmul(a_desc, a_scale, b_desc, b_scale, torch.float16, M, N, K, configs)
+        _ = block_scaled_matmul(a_desc, a_scale, b_desc, b_scale, torch.float16, M, N, K, rep_m, rep_n, rep_k, configs)
     proton.deactivate(0)
     print("Done benchmarking")
 
 
 def show_profile(profile_name):
     import triton.profiler.viewer as proton_viewer
+
     metric_names = ["time/ms"]
     metric_names = ["tflop/s"] + metric_names
     file_name = f"{profile_name}.hatchet"

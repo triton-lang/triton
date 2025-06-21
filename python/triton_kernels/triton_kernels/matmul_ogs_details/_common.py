@@ -2,6 +2,7 @@ import torch
 
 import triton
 import triton.language as tl
+from triton.tools.tensor_descriptor import TensorDescriptor
 
 # -----------------------------------------------------------------------------
 #                                  Utilities
@@ -48,8 +49,19 @@ def make_matmul_repr(base_name, order):
         constants = specialization.constants
         reorder = lambda L: [L[i] for i in order]
         layout = lambda stride: "N" if stride in constants else "T"
-        convert_dtype = lambda dtype: "mxfp4" if "u8" in dtype else dtype
-        dtypes = "x".join([convert_dtype(f"{signature[i][1:]}") for i in reorder(["Y", "X", "W"])])
+
+        def convert_dtype(dtype):
+            if "tensordesc" in dtype:
+                ret = convert_dtype(dtype.split("<")[1].split("[")[0])
+                return ret
+            elif "u8" in dtype:
+                return "mxfp4"
+            elif dtype[0] == "*":
+                return dtype[1:]
+            else:
+                return dtype
+
+        dtypes = "x".join([convert_dtype(f"{signature[i]}") for i in reorder(["Y", "X", "W"])])
         layouts = "".join([f"{layout(i)}" for i in reorder(["stride_y_n", "stride_x_k", "stride_w_n"])])
         blocks = "x".join([f"{constants[i]}" for i in ["BLOCK_M", "BLOCK_N", "BLOCK_K", "SPLIT_K"]])
         # mode = []
@@ -68,7 +80,7 @@ def make_matmul_repr(base_name, order):
 def matmul_launch_metadata(grid, kernel, args):
     ret = dict()
     M, N, K = args["M"], args["N"], args["K"]
-    Y, X, W = args["Y"], args["X"], args["W"]
+    Y, X, W = [t.base if isinstance(t, TensorDescriptor) else t for t in [args["Y"], args["X"], args["W"]]]
     hist = args["ExptHist"]
     if hist is not None:
         n_tokens = float(hist.sum())
@@ -85,7 +97,10 @@ def matmul_launch_metadata(grid, kernel, args):
     batch_repr = ""
     if "batch_size" in args and args["batch_size"] > 1:
         batch_repr = repr("B", args["batch_size"]) + ", "
-    ret["name"] = f"{kernel.name} [{batch_repr}{repr('M', M)}, {repr('N', N)}, {repr('K', K)}]"
+    ret["name"] = f"{kernel.name} [{batch_repr}{repr('M', M)}, {repr('N', N)}, {repr('K', K)}] stg{kernel.num_stages}"
+    ep_subtile = args["EPILOGUE_SUBTILE"]
+    if ep_subtile is not None and ep_subtile > 1:
+        ret["name"] += f" ep/{ep_subtile}"
     fM = M if M is not None else n_tokens
     fK = K if K is not None else n_tokens
     ret[f"flops{nbits}"] = 2.0 * fM * N * fK
@@ -95,7 +110,8 @@ def matmul_launch_metadata(grid, kernel, args):
     n_x_bytes = X.numel() * X.element_size()
     n_y_bytes = Y.numel() * Y.element_size()
     if hist is not None:
-        assert X.shape[0] == Y.shape[0] == 1, "batched mode not supported"
+        if not isinstance(args["X"], TensorDescriptor):
+            assert X.shape[0] == Y.shape[0] == 1, "batched mode not supported"
         assert n_tokens is not None
         n_expts_act = args["N_EXPTS_ACT"]
 

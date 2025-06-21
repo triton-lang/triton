@@ -2,25 +2,25 @@ from triton.language import core
 
 
 @core.extern
-def globaltimer(_builder=None):
+def globaltimer(_semantic=None):
     return core.inline_asm_elementwise("mov.u64 $0, %globaltimer;", "=l", [], dtype=core.int64, is_pure=False, pack=1,
-                                       _builder=_builder)
+                                       _semantic=_semantic)
 
 
 @core.extern
-def smid(_builder=None):
+def smid(_semantic=None):
     return core.inline_asm_elementwise("mov.u32 $0, %smid;", "=r", [], dtype=core.int32, is_pure=True, pack=1,
-                                       _builder=_builder)
+                                       _semantic=_semantic)
 
 
 @core.builtin
-def num_threads(_builder=None):
-    return core.constexpr(_builder.options.num_warps * 32)
+def num_threads(_semantic=None):
+    return core.constexpr(_semantic.builder.options.num_warps * 32)
 
 
 @core.builtin
-def num_warps(_builder=None):
-    return core.constexpr(_builder.options.num_warps)
+def num_warps(_semantic=None):
+    return core.constexpr(_semantic.builder.options.num_warps)
 
 
 # ----- FP8E4M3B15 ------
@@ -31,7 +31,7 @@ def num_warps(_builder=None):
 #   - the exponent bias is 15 instead of 7
 #   - 0xff and 0x7f are mapped to +-1.750 instead of +-nan
 @core.builtin
-def convert_fp8e4b15_to_float16(arg, _builder=None):
+def convert_fp8e4b15_to_float16(arg, _semantic=None):
     return core.inline_asm_elementwise(
         "{                                      \n"
         ".reg .b32 a<2>, b<2>;                  \n"
@@ -44,11 +44,11 @@ def convert_fp8e4b15_to_float16(arg, _builder=None):
         "lop3.b32 $0, b0, 0x80008000, a0, 0xf8; \n"
         "shl.b32 $1, b1, 7;                     \n"
         "}                                      \n", "=r,=r,r", [arg], dtype=core.float16, is_pure=True, pack=4,
-        _builder=_builder)
+        _semantic=_semantic)
 
 
 @core.builtin
-def convert_float16_to_fp8e4b15(arg, has_minx2, _builder=None):
+def convert_float16_to_fp8e4b15(arg, has_minx2, _semantic=None):
     asm = """{
             .reg .pred p<4>;
             .reg .b32 a<2>, b<2>;
@@ -80,30 +80,30 @@ def convert_float16_to_fp8e4b15(arg, has_minx2, _builder=None):
               prmt.b32 $0, b0, b1, 0x7531;
               }"""
     return core.inline_asm_elementwise(asm, "=r,r,r", [arg], dtype=core.float8e4b15, is_pure=True, pack=4,
-                                       _builder=_builder)
+                                       _semantic=_semantic)
 
 
 @core.builtin
-def convert_custom_float8(arg, dst_ty, fp_downcast_rounding, has_minx2, _builder=None):
+def convert_custom_float8(arg, dst_ty, fp_downcast_rounding, has_minx2, _semantic=None):
     if arg.type.scalar.is_fp8e4b15():
-        upcast_val = convert_fp8e4b15_to_float16(arg, _builder=_builder)
+        upcast_val = convert_fp8e4b15_to_float16(arg, _semantic=_semantic)
         if dst_ty.scalar.is_fp32():
-            upcast_val = upcast_val.to(core.float32, _builder=_builder)
+            upcast_val = upcast_val.to(core.float32, _semantic=_semantic)
         return upcast_val
 
     assert arg.type.scalar.is_fp16() or arg.type.scalar.is_fp32()
     downcast_val = arg
     if arg.type.scalar.is_fp32():
-        downcast_val = downcast_val.to(core.float16, fp_downcast_rounding="rtz", _builder=_builder)
-    downcast_val = convert_float16_to_fp8e4b15(downcast_val, has_minx2=has_minx2, _builder=_builder)
+        downcast_val = downcast_val.to(core.float16, fp_downcast_rounding="rtz", _semantic=_semantic)
+    downcast_val = convert_float16_to_fp8e4b15(downcast_val, has_minx2=has_minx2, _semantic=_semantic)
     return downcast_val
 
 
 @core.builtin
-def convert_custom_float8_sm80(arg, dst_ty, fp_downcast_rounding=None, _builder=None):
-    return convert_custom_float8(arg, dst_ty, fp_downcast_rounding, has_minx2=True, _builder=_builder)
+def convert_custom_float8_sm80(arg, dst_ty, fp_downcast_rounding=None, _semantic=None):
+    return convert_custom_float8(arg, dst_ty, fp_downcast_rounding, has_minx2=True, _semantic=_semantic)
 
 
 @core.builtin
-def convert_custom_float8_sm70(arg, dst_ty, fp_downcast_rounding=None, _builder=None):
-    return convert_custom_float8(arg, dst_ty, fp_downcast_rounding, has_minx2=False, _builder=_builder)
+def convert_custom_float8_sm70(arg, dst_ty, fp_downcast_rounding=None, _semantic=None):
+    return convert_custom_float8(arg, dst_ty, fp_downcast_rounding, has_minx2=False, _semantic=_semantic)

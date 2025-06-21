@@ -153,7 +153,7 @@ static std::string getConstraintForBitwidth(unsigned bitwidth) {
 
 static bool isConstantTruePred(Value pred) {
   if (auto constOp = pred.getDefiningOp<LLVM::ConstantOp>()) {
-    return cast<IntegerAttr>(constOp.getValue()).getInt() != 0;
+    return cast<IntegerAttr>(constOp.getValue()).getInt() == -1;
   }
   return false;
 }
@@ -258,19 +258,23 @@ void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
                 .b(elemBitwidth);
   auto *ptrOpr = builder.newAddrOperand(ptr, "r");
 
-  PTXBuilder::Operand *valOpr;
-  std::string constraint = getConstraintForBitwidth(elemBitwidth);
-  if (vec > 1) {
-    SmallVector<std::pair<Value, std::string>> vecVals;
-    for (int i = 0; i < vec; i++) {
-      vecVals.push_back({b.extract_element(val, b.i32_val(i)), constraint});
-    }
-    valOpr = builder.newListOperand(vecVals);
+  if (isConstantTruePred(pred)) {
+    b.store(val, ptr, /*align=*/vec * elemBitwidth / 8);
   } else {
-    valOpr = builder.newOperand(val, constraint);
+    PTXBuilder::Operand *valOpr;
+    std::string constraint = getConstraintForBitwidth(elemBitwidth);
+    if (vec > 1) {
+      SmallVector<std::pair<Value, std::string>> vecVals;
+      for (int i = 0; i < vec; i++) {
+        vecVals.push_back({b.extract_element(val, b.i32_val(i)), constraint});
+      }
+      valOpr = builder.newListOperand(vecVals);
+    } else {
+      valOpr = builder.newOperand(val, constraint);
+    }
+    st(ptrOpr, valOpr).predicate(pred, "b");
+    builder.launch(rewriter, loc, void_ty(ctx));
   }
-  st(ptrOpr, valOpr).predicate(pred, "b");
-  builder.launch(rewriter, loc, void_ty(ctx));
 }
 
 Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
@@ -375,7 +379,7 @@ Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
   if (isConstantTruePred(pred)) {
     Type resultTy = vec == 1 ? Type(int_ty(elemBitwidth))
                              : Type(vec_ty(int_ty(elemBitwidth), vec));
-    load = b.load(resultTy, ptr);
+    load = b.load(resultTy, ptr, /*align=*/vec * elemBitwidth / 8);
     if (vec > 1) {
       Type structTy = struct_ty(SmallVector<Type>(vec, int_ty(elemBitwidth)));
       Value structValue = b.undef(structTy);

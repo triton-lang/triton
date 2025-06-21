@@ -167,13 +167,14 @@ def SharedEncodingTrait : AttrInterface<"SharedEncodingTrait"> {
   ];
 }
 
-def SwizzledSharedEncodingAttr :
-  TritonGPU_Attr<"SwizzledSharedEncoding", "swizzled_shared_encoding", [SharedEncodingTrait, LayoutEncodingTrait]> {
+def SwizzledSharedEncodingAttr
+    : TritonGPU_Attr<"SwizzledSharedEncoding", "swizzled_shared_encoding",
+                     [SharedEncodingTrait, LayoutEncodingTrait]> {
   let mnemonic = "swizzled_shared";
 
   let description = [{
 An encoding for tensors whose elements may be simultaneously accessed by
-different cuda threads in the programs, via shared memory. In other words,
+different GPU threads in the programs, via shared memory. In other words,
 for all indices i \in Z^d, \mathcal{L}(i) = {0, 1, ..., 32*num_warps - 1}.
 
 In order to avoid shared memory bank conflicts, elements may be swizzled.
@@ -181,7 +182,7 @@ Here are some examples.  In all cases, the input tensor is [0, 1, ..., n-1].
 
 1. Basic swizzling
 
-  #shared<{vec=1, perPhase=1, maxPhase=4, order=[1,0]}>
+  #ttg.swizzled_shared<{vec=1, perPhase=1, maxPhase=4, order=[1,0]}>
   [ 0,  1,  2,  3],  // xor with 0
   [ 5,  4,  7,  6],  // xor with 1
   [10, 11,  8,  9],  // xor with 2
@@ -192,7 +193,7 @@ out[r][c^r]).
 
 2. Multiple rows per phase
 
-  #shared<{vec=1, perPhase=2, maxPhase=4, order=[1,0]}>
+  #ttg.swizzled_shared<{vec=1, perPhase=2, maxPhase=4, order=[1,0]}>
   [ 0,  1,  2,  3],  // phase 0 (xor with 0)
   [ 4,  5,  6,  7],
   [ 9,  8, 11, 10],  // phase 1 (xor with 1)
@@ -203,7 +204,7 @@ means that pairs of 2 rows get the same swizzling.
 
 3. Max-phase applied
 
-  $shared<{vec=1, perPhase=1, maxPhase=2, order=[1,0]}>
+  #ttg.swizzled_shared<{vec=1, perPhase=1, maxPhase=2, order=[1,0]}>
   [ 0,  1,  2,  3],  // phase 0 (xor with 0)
   [ 5,  4,  7,  6],  // phase 1 (xor with 1)
   [ 8,  9, 10, 11],  // phase 0
@@ -218,7 +219,7 @@ effect of limiting the maximum value of the xor to m-1.
 
 4. Max-phase and per-phase
 
-  #shared<{vec=1, perPhase=2, maxPhase=2, order=[1,0]}>
+  #ttg.swizzled_shared<{vec=1, perPhase=2, maxPhase=2, order=[1,0]}>
   [ 0,  1,  2,  3],  // phase 0 (xor with 0)
   [ 4,  5,  6,  7],  // phase 0
   [ 9,  8, 11, 10],  // phase 1 (xor with 1)
@@ -234,7 +235,7 @@ maximum value of maxPhase-1.  In other words, elements of row r are xor'ed with
 
 5. Adding vec
 
-  #shared<{vec=2, perPhase=1, maxPhase=4, order=[1,0]}>
+  #ttg.swizzled_shared<{vec=2, perPhase=1, maxPhase=4, order=[1,0]}>
   [ 0,  1,  2,  3,  4,  5,  6,  7],
   [10, 11,  8,  9, 14, 15, 12, 13],
   [20, 21, 22, 23, 16, 17, 18, 19],
@@ -312,52 +313,44 @@ When vec=2, elements are swizzled in pairs of 2.  In other words, the element at
         if(!mmaEnc)
           return get(context, 1, 1, 1, order, CTALayout);
 
-        int opIdx = dotOpEnc.getOpIdx();
-        auto shapePerCTA = getShapePerCTA(CTALayout.getCTASplitNum(), shape);
-
-        // number of rows per phase
-
-        // index of the inner dimension in `order`
-        unsigned inner = (opIdx == 0) ? 0 : 1;
-
         // ---- begin Ampere & Hopper ----
         if (mmaEnc.isAmpere() || mmaEnc.isHopper()) {
-          int perPhase = 128 / (std::max<int>(1, shapePerCTA[order[0]] * 4 / dotOpEnc.getKWidth()));
-          perPhase = std::max<int>(perPhase, 1);
-          std::vector<size_t> matShape = {8, 8, 4 * dotOpEnc.getKWidth()};
-          int vecWidth = 32 / typeWidthInBit;
-          if (vecWidth != dotOpEnc.getKWidth() && order[0] == inner) {
-              perPhase = std::max<int>(perPhase, 2 * vecWidth);
-          }
-          int rank = order.size();
-          // --- handle A operand ---
-          if (opIdx == 0) { // compute swizzling for A operand
-              int m = (needTrans) ? matShape[2] : matShape[0];
-              int k = (needTrans) ? matShape[0] : matShape[2];
-              int vec = (order[0] == rank-1) ? k : m;
-              int mmaStride = (order[0] == rank-1) ? m : k;
-              int maxPhase = std::max(mmaStride / perPhase, 1);
-              return get(context, vec, perPhase, maxPhase, order, CTALayout);
-          }
-
-          // --- handle B operand ---
-          if (opIdx == 1) {
-              // we compute vec and maxPhase m, n and k size of the mma
-              // instruction. when matmul operands is transposed, we should
-              // consider that to get m, n and k.
-              int n = needTrans ? matShape[2] : matShape[1];
-              int k = needTrans ? matShape[1] : matShape[2];
-              int vec = (order[0] == rank-1) ? n : k;
-              int mmaStride = (order[0] == rank-1) ? k : n;
-              int maxPhase = std::max(mmaStride / perPhase, 1);
-              return get(context, vec, perPhase, maxPhase, order, CTALayout);
-          }
-
-          llvm_unreachable("invalid operand index");
+          return get(context, dotOpEnc.getOpIdx(), dotOpEnc.getKWidth(), shape, order, CTALayout, typeWidthInBit, needTrans);
         }
 
         // ---- not implemented ----
         llvm_unreachable("unsupported swizzling for provided MMA version");
+    }]>,
+
+    // NVIDIA constructor!
+    // TODO(lezcano): We should totally get rid of all these constructors...
+    AttrBuilder<(ins "int":$opIdx,
+                     "unsigned":$kWidth,
+                     "ArrayRef<int64_t>":$shape,
+                     "ArrayRef<unsigned>":$order,
+                     "CTALayoutAttr":$CTALayout,
+                     "unsigned":$bitwidth,
+                     "bool":$needTrans), [{
+        int K =  getShapePerCTA(CTALayout.getCTASplitNum(), shape)[order[0]];
+        // Elems necessary to cover all the banks divided by the inner dimension
+        // This packs a few rows together for small K
+        int perPhase = std::max<int>(1024 / (bitwidth * K), 1);
+
+        int mmaStride = 8;
+        int vec = 4 * kWidth;
+        // needsTrans is equiv. to flipping the opIdx
+        if (needTrans)
+          std::swap(vec, mmaStride);
+        assert(opIdx == 0 || opIdx == 1);
+        int rank = order.size();
+        int kDim = opIdx == 0 ? rank-1 : rank-2;
+        if (order[0] != kDim)
+          std::swap(vec, mmaStride);
+        // Count how many vec elements are needed to cover all the banks
+        int maxPhase = std::max(std::min<int>(mmaStride, 1024 / (vec * bitwidth)), 1);
+        // Account for the row packing from perPhase: mmaStride / perPhase
+        maxPhase = std::max(maxPhase / perPhase, 1);
+        return get(context, vec, perPhase, maxPhase, order, CTALayout);
     }]>,
 
     AttrBuilder<(ins "DotOperandEncodingAttr":$dotOpEnc,
@@ -381,12 +374,96 @@ When vec=2, elements are swizzled in pairs of 2.  In other words, the element at
   ];
 
   let extraClassDeclaration = extraBaseClassDeclaration # [{
+    unsigned getRank() const { return getCTAOrder().size(); }
     int32_t getAlignment() const;
     SmallVector<unsigned> getCTAsPerCGA() const;
     SmallVector<unsigned> getCTAOrder() const;
     SmallVector<unsigned> getCTASplitNum() const;
   }];
   let hasCustomAssemblyFormat = 1;
+  let genVerifyDecl = 1;
+}
+
+def PaddeddSharedEncodingAttr
+    : TritonGPU_Attr<"PaddedSharedEncoding", "padded_shared_encoding",
+                     [SharedEncodingTrait, LayoutEncodingTrait]> {
+  let mnemonic = "padded_shared";
+
+  let description = [{
+An encoding for tensors whose elements may be simultaneously accessed by
+different GPU threads in the programs, via shared memory. In other words,
+for all indices i \in Z^d, \mathcal{L}(i) = {0, 1, ..., 32*num_warps - 1}.
+Compared to SwizzledSharedEncodingAttr, this encoding uses padding to avoid
+shared memory bank conflicts.
+
+Formally, given a layout:
+    padded_shared<[<interval_0>:+<pad_0>, <interval_1>:+<pad_1>, ...]>
+We insert a padding of `<pad_i>` elements after every `<interval_i>` elements.
+Multi interval-padding pairs are supported for flexibility of multi tiered
+padding schemes; they compose in an additive manner. So for a 1-D tensor element
+at index i, the corresponding shared memory location index is
+    i + \sum_{k} (i / interval_k) * pad_k = 1
+`<interval_i>` and `<pad_i>` all need to be power of two.
+
+Some concrete examples, using `eM` to mean tensor elements and `pN` to mean
+padding:
+
+1. Single interval-padding pair:
+
+   #ttg.padded_shared<[2:+2]>
+   [e0, e1, p0, p1,
+    e2, e3, p2, p3,
+    ...]
+
+2. Double interval-padding pairs:
+
+   #ttg.padded_shared<[2:+1, 4:+2]>
+   [e0, e1, p0,
+    e2, e3, p1, p2, p3,
+    e4, e5, p4,
+    e6, e7, p5, p6, p7,
+    ...]
+
+In addition to interval-padding pairs, this encoding requires an `order` to
+specify the logical tensor dimenions from the fastest-to slowest-varying.
+It may optionally support CGA level organization like other encoding
+attributes too, for example,
+    #ttg.padded_shared<[2:+1, 4:+2] {
+        order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1],
+        CTAOrder = [0, 1]}>
+  }];
+
+  let parameters = (ins
+      ArrayRefParameter<"unsigned">:$intervals,
+      ArrayRefParameter<"unsigned">:$paddings,
+      // Order of logical tensor dimensions; fastest-varying first.
+      ArrayRefParameter<"unsigned">:$order,
+      "CTALayoutAttr":$CTALayout
+  );
+
+  let builders = [
+      AttrBuilder<(ins "ArrayRef<std::pair<unsigned, unsigned>>":$intervalPads,
+                       "ArrayRef<unsigned>":$order, "CTALayoutAttr":$ctaLayout)>,
+  ];
+
+  let extraClassDeclaration = extraBaseClassDeclaration # [{
+    unsigned getRank() const { return getOrder().size(); }
+    int32_t getAlignment() const { return 16; }
+
+    unsigned getMinInterval() const {
+      return *llvm::min_element(getIntervals());
+    }
+
+    // Returns the total number of elements including padding given the input
+    // tensor shape.
+    int64_t getPaddedSize(ArrayRef<int64_t> shape) const;
+
+    SmallVector<unsigned> getCTAsPerCGA() const;
+    SmallVector<unsigned> getCTAOrder() const;
+    SmallVector<unsigned> getCTASplitNum() const;
+  }];
+  let hasCustomAssemblyFormat = 1;
+  let genVerifyDecl = 1;
 }
 
 def NVMMASharedEncodingAttr :
@@ -450,6 +527,7 @@ def NVMMASharedEncodingAttr :
   ];
 
   let extraClassDeclaration = extraBaseClassDeclaration # [{
+    unsigned getRank() const { return getCTAOrder().size(); }
     int32_t getAlignment() const;
     SmallVector<unsigned> getCTAsPerCGA() const;
     SmallVector<unsigned> getCTAOrder() const;
@@ -556,6 +634,7 @@ Swizzling examples (matrix is filled with numbers 0, 1, 2, .. columns*rows-1):
   );
 
   let extraClassDeclaration = extraBaseClassDeclaration # [{
+    unsigned getRank() const { return getCTAOrder().size(); }
     int32_t getAlignment() const;
     SmallVector<unsigned> getCTAsPerCGA() const;
     SmallVector<unsigned> getCTAOrder() const;
@@ -1147,11 +1226,10 @@ Row |
   let hasCustomAssemblyFormat = 1;
 
   let extraClassDeclaration = extraDistributedDeclaration # [{
-    SmallVector<int64_t> getElemsPerInstrForOperands() const;
+    SmallVector<int64_t> getElemsPerInstrForOperands(int kDim, int opIdx) const;
     SmallVector<int64_t> getRepForOperand(ArrayRef<int64_t> operandShape,
-                                          Type elemType, int kWidth, int opIdx) const;
+                                          Type elemType, int kWidth, int kDim, int opIdx) const;
     SmallVector<unsigned> getRepOrderForOperand(int opIdx) const;
-    unsigned getKWidthForOperands() const;
     static SmallVector<unsigned> getMNKDimPerInstr();
   }];
 }

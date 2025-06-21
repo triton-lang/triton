@@ -17,7 +17,7 @@ def test_filecheck_positive():
         # CHECK-LABEL: test_kernel
         scalar = 42
         # CHECK: %c42_i32 = arith.constant 42 : i32
-        # CHECK-NEXT: call @anchor{{.*}}(%c42_i32) : (i32) -> ()
+        # CHECK-NEXT: call @{{.*}}anchor{{.*}}(%c42_i32) : (i32) -> ()
         anchor(scalar)
 
     run_filecheck_test(test_kernel)
@@ -32,5 +32,5 @@ def test_filecheck_negative():
         # CHECK: %c42_i32
         anchor(scalar)
 
-    with pytest.raises(ValueError, match="Couldn't match \"%c42_i32\""):
+    with pytest.raises(ValueError, match="expected string not found in input\n # CHECK: %c42_i32"):
         run_filecheck_test(test_kernel)
