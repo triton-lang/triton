@@ -317,23 +317,6 @@ with proton.scope("test"):
 
 The call path of `foo1` will be `test->test1->state0`.
 
-### LLVM Instrumentation (deprecated)
-
-print-mem-spaces: this pass prints the load and store address spaces (e.g. global, flat, shared) chosen by the compiler and attributes back to Triton source information.
-
-Example usage with the Proton matmul tutorial:
-
-```bash
-$ proton --instrument=print-mem-spaces matmul.py
-0     matmul_kernel     matmul.py:180:20     SHARED     STORE
-1     matmul_kernel     matmul.py:181:20     SHARED     STORE
-2     matmul_kernel     matmul.py:180:20     SHARED     LOAD
-3     matmul_kernel     matmul.py:181:20     SHARED     LOAD
-```
-
-### Instruction sampling (experimental)
-
-
 ## Proton *vs* nsys
 
 - Runtime overhead (up to 1.5x)

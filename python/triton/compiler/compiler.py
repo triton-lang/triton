@@ -485,7 +485,7 @@ class CompiledKernel:
             if stream is None:
                 device = driver.active.get_current_device()
                 stream = driver.active.get_current_stream(device)
-            launch_metadata = self.launch_metadata(grid, stream, self.function, *args)
+            launch_metadata = self.launch_metadata(grid, stream, *args)
             self.run(grid[0], grid[1], grid[2], stream, self.function, self.packed_metadata, launch_metadata,
                      knobs.runtime.launch_enter_hook, knobs.runtime.launch_exit_hook, *args)
 

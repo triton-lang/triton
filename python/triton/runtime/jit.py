@@ -580,8 +580,6 @@ class JITFunction(KernelInterface[T]):
             assert "device" not in kwargs, "device option is deprecated; current device will be used"
             assert "stream" not in kwargs, "stream option is deprecated; current stream will be used"
             for k in kwargs:
-                # TODO(Keren): Remove this check
-                # Use instrumentation:mode to differentiate regular kernels with instrumented kernels
                 if k not in options.__dict__ and k not in sigkeys:
                     raise KeyError("Keyword argument %s was specified but unrecognised" % k)
             # constexprs
