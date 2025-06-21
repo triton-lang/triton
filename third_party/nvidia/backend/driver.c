@@ -1,8 +1,8 @@
+#define PY_SSIZE_T_CLEAN
 #include "cuda.h"
+#include <Python.h>
 #include <dlfcn.h>
 #include <stdbool.h>
-#define PY_SSIZE_T_CLEAN
-#include <Python.h>
 
 // Raises a Python exception and returns false if code is not CUDA_SUCCESS.
 static bool gpuAssert(CUresult code, const char *file, int line) {
