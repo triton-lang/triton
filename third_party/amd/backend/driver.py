@@ -565,6 +565,10 @@ class HIPDriver(GPUDriver):
         except ImportError:
             return False
 
+    def ty_to_cpp(self, ty: str) -> str:
+        from triton.backends.amd.driver import ty_to_cpp
+        return ty_to_cpp(ty)
+
     def get_current_target(self):
         device = self.get_current_device()
         device_properties = self.utils.get_device_properties(device)
