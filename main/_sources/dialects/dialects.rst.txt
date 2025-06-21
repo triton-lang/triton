@@ -12,12 +12,14 @@ Triton MLIR Dialects and Ops
    ./NVGPUDialect.md
    ./NVWSDialect.md
    ./TritonDialect.md
+   ./TritonInstrumentDialect.md
    ./TritonAMDGPUDialect.md
 
 .. toctree::
    :maxdepth: 1
    :caption: Dialect Ops
 
+   ./TritonInstrumentOps.md
    ./TritonAMDGPUOps.md
    ./TritonGPUOps.md
    ./ProtonOps.md
