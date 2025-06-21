@@ -329,7 +329,7 @@ class constexpr(base_value):
     def __call__(self, *args, **kwds):
         return self.value(*args, **kwds)
 
-    def __getitem__(self, *args):
+    def __getitem__(self, *args, _semantic=None):
         args = (_unwrap_if_constexpr(x) for x in _normalize_tuple(args))
         return self.value.__getitem__(*args)
 
@@ -1282,7 +1282,7 @@ class tuple(base_value):
 
         self.type = type or tuple_type([get_type(x) for x in self.values])
 
-    def __getitem__(self, idx: constexpr):
+    def __getitem__(self, idx: constexpr, _semantic=None):
         if isinstance(idx, int):
             idx = constexpr(idx)
         if isinstance(idx, constexpr):
@@ -1295,7 +1295,7 @@ class tuple(base_value):
         return self.values[self.type.fields.index(name)]
 
     # TODO: remove
-    def __setitem__(self, idx: constexpr, value):
+    def __setitem__(self, idx: constexpr, value, _semantic=None):
         if isinstance(idx, int):
             idx = constexpr(idx)
         assert isinstance(idx, constexpr)
