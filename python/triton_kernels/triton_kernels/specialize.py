@@ -78,7 +78,7 @@ def specialize(fn, module, constants, tuples, name=None, do_not_specialize=tuple
             non_specialized_args += new_args
     # add global symbols
     spec_fns = {v.__name__: v for k, v in constants.items() if isinstance(v, triton.runtime.jit.JITFunction)}
-    globals = spec_fns | fn.__globals__
+    globals = spec_fns | fn.get_capture_scope()
     # build new source code and define kernel dynamically
     new_signature = f"def {name}({', '.join(non_specialized_args)}):"
     constexpr_lines = [

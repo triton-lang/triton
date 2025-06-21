@@ -2,6 +2,7 @@
 #include "TritonAMDGPUTransforms/Passes.h"
 #include "amd/lib/TritonAMDGPUToLLVM/Utility.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "third_party/amd/include/Analysis/AxisInfoExt.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
@@ -171,7 +172,7 @@ public:
     // Precompute the contiguity of all AsyncCopy ops based on the src and
     // mask contiguity/alignment to avoid rebuilding ModuleAxisInfoAnalysis
     // after every IR change.
-    triton::ModuleAxisInfoAnalysis axisAnalysis(m);
+    AMD::ModuleAxisInfoAnalysis axisAnalysis(m);
     DenseMap<ttg::AsyncCopyGlobalToLocalOp, unsigned> asyncCopyContiguity;
     m->walk([&](ttg::AsyncCopyGlobalToLocalOp copyOp) {
       unsigned contiguity =

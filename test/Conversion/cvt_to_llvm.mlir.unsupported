@@ -127,7 +127,7 @@ tt.func private @convert_layout_blocked_blocked(%arg0: tensor<16x16xi32, #blocke
   // to this, we choose to fall back to the shared memory implementation.
 
   // CHECK-NOT: shfl.sync.idx
-  // CHECK: st.shared
+  // CHECK: store
 
   %0 = ttg.convert_layout %arg0 : tensor<16x16xi32, #blocked0> -> tensor<16x16xi32, #blocked1>
   tt.return %0 : tensor<16x16xi32, #blocked1>

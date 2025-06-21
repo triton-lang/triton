@@ -31,6 +31,7 @@
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonInstrument/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/Support/FileSystem.h"
@@ -157,7 +158,7 @@ py::list getTensorDescMetadata(ModuleOp &mod) {
   py::list result;
   triton::FuncOp kernelFunc;
   mod.walk([&](triton::FuncOp func) {
-    if (LLVM::isKernel(func)) {
+    if (triton::isKernel(func)) {
       kernelFunc = func;
       return WalkResult::interrupt();
     }
@@ -299,6 +300,7 @@ void init_triton_ir(py::module &&m) {
   m.def("load_dialects", [](MLIRContext &context) {
     DialectRegistry registry;
     registry.insert<TritonDialect, ::mlir::triton::gpu::TritonGPUDialect,
+                    ::mlir::triton::instrument::TritonInstrumentDialect,
                     math::MathDialect, arith::ArithDialect, scf::SCFDialect,
                     ::mlir::gpu::GPUDialect, cf::ControlFlowDialect,
                     ::mlir::triton::proton::ProtonDialect, LLVM::LLVMDialect,
@@ -585,7 +587,7 @@ void init_triton_ir(py::module &&m) {
            [](ModuleOp &self) -> std::string {
              for (auto &op : self.getOps()) {
                if (auto func = dyn_cast<FuncOp>(op)) {
-                 if (LLVM::isKernel(func))
+                 if (triton::isKernel(func))
                    return func.getName().str();
                }
              }
@@ -755,6 +757,10 @@ void init_triton_ir(py::module &&m) {
       .def("get_int32_attr",
            [](TritonOpBuilder &self, int32_t value) {
              return self.getBuilder().getI32IntegerAttr(value);
+           })
+      .def("get_string_attr",
+           [](TritonOpBuilder &self, std::string value) -> Attribute {
+             return self.getBuilder().getStringAttr(value);
            })
       // Use arith.ConstantOp to create constants
       // Constants
@@ -1417,19 +1423,11 @@ void init_triton_ir(py::module &&m) {
       .def("create_reshape",
            [](TritonOpBuilder &self, Value &arg, std::vector<int64_t> &shape,
               bool allowReorder) -> Value {
-             auto argType =
-                 cast<RankedTensorType>(arg.getType()).getElementType();
-             return self.create<ReshapeOp>(
-                 RankedTensorType::get(shape, argType), arg, allowReorder);
+             return self.create<ReshapeOp>(shape, arg, allowReorder);
            })
       .def("create_expand_dims",
            [](TritonOpBuilder &self, Value &arg, int axis) -> Value {
-             auto argType = dyn_cast<RankedTensorType>(arg.getType());
-             auto argEltType = argType.getElementType();
-             std::vector<int64_t> retShape = argType.getShape();
-             retShape.insert(retShape.begin() + axis, 1);
-             return self.create<ExpandDimsOp>(
-                 RankedTensorType::get(retShape, argEltType), arg, axis);
+             return self.create<ExpandDimsOp>(arg, axis);
            })
       .def("create_cat",
            [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
@@ -1456,14 +1454,8 @@ void init_triton_ir(py::module &&m) {
            })
       // Implements tl.trans and tl.permute.
       .def("create_trans",
-           [](TritonOpBuilder &self, Value &arg,
-              std::vector<int> &order) -> Value {
-             auto argType = dyn_cast<RankedTensorType>(arg.getType());
-             auto argEltType = argType.getElementType();
-             auto retShape = applyPermutation(argType.getShape(), order);
-             return self.create<TransOp>(
-                 RankedTensorType::get(retShape, argEltType), arg, order);
-           })
+           [](TritonOpBuilder &self, Value &arg, std::vector<int> &order)
+               -> Value { return self.create<TransOp>(arg, order); })
       .def("create_broadcast",
            [](TritonOpBuilder &self, Value &arg,
               std::vector<int64_t> &shape) -> Value {
@@ -1676,12 +1668,21 @@ void init_triton_ir(py::module &&m) {
              return self.create<ub::PoisonOp>(type);
            })
       .def("create_histogram",
-           [](TritonOpBuilder &self, Value operand, int numBins) -> Value {
-             return self.create<HistogramOp>(
-                 RankedTensorType::get(
-                     {static_cast<int64_t>(numBins)},
-                     IntegerType::get(operand.getContext(), 32)),
-                 operand);
+           [](TritonOpBuilder &self, Value operand, int numBins,
+              std::optional<Value> mask) -> Value {
+             if (!mask) {
+               return self.create<HistogramOp>(
+                   RankedTensorType::get(
+                       {static_cast<int64_t>(numBins)},
+                       IntegerType::get(operand.getContext(), 32)),
+                   operand);
+             } else {
+               return self.create<HistogramOp>(
+                   RankedTensorType::get(
+                       {static_cast<int64_t>(numBins)},
+                       IntegerType::get(operand.getContext(), 32)),
+                   operand, *mask);
+             }
            })
       .def("create_gather",
            [](TritonOpBuilder &self, Value src, Value indices, int axis)

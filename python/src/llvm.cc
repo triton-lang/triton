@@ -316,6 +316,14 @@ void init_triton_llvm(py::module &&m) {
         CGSCCAnalysisManager cgam;
         ModuleAnalysisManager mam;
 
+        if (arch.empty()) {
+          llvm::TargetLibraryInfoImpl TLII;
+          TLII.disableAllFunctions();
+          fam.registerPass([TLII = std::move(TLII)] {
+            return llvm::TargetLibraryAnalysis(TLII);
+          });
+        }
+
         PassInstrumentationCallbacks *instrCbPtr = nullptr;
         PassInstrumentationCallbacks passInstrCb;
         StandardInstrumentations standardInstr(mod->getContext(),

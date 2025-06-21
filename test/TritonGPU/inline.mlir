@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -allow-unregistered-dialect -inline | FileCheck %s
+// RUN: triton-opt %s -inline | FileCheck %s
 
 #smem = #ttg.shared_memory
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>

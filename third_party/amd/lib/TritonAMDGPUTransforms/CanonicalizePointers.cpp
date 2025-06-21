@@ -3,6 +3,7 @@
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/Func/Transforms/FuncConversions.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/Block.h"
 #include "mlir/IR/BuiltinAttributes.h"
@@ -16,6 +17,7 @@
 #include "mlir/Transforms/DialectConversion.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/DiscardableAttributes.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "llvm/ADT/STLExtras.h"
@@ -560,12 +562,28 @@ public:
     RewriterBase::InsertionGuard guard(rewriter);
     rewriter.setInsertionPoint(addPtrOp);
 
+    // Query all discardable attributes that we want to preserve
+    std::array<StringRef, 3> propagateList{"tt.divisibility", "tt.contiguity",
+                                           "tt.constancy"};
+    SmallVector<NamedAttribute> propagatedAttrs =
+        tt::filterDiscardableAttrs(addPtrOp.getOperation(), propagateList);
+    auto currPtrTy = llvm::dyn_cast<RankedTensorType>(addPtrOp.getType());
+    int currPtrRank = currPtrTy ? currPtrTy.getRank() : 1;
+    auto doSetDiscardableAttrs = [&](tt::AddPtrOp newAddPtrOp) {
+      auto newPtrTy = llvm::dyn_cast<RankedTensorType>(newAddPtrOp.getType());
+      int newPtrRank = newPtrTy ? newPtrTy.getRank() : 1;
+      if (newPtrRank == currPtrRank)
+        newAddPtrOp->setDiscardableAttrs(propagatedAttrs);
+    };
+
     // If it is a scalar pointer update, simply bump the base pointer
     if (llvm::isa<tt::PointerType>(addPtrOp.getPtr().getType())) {
       assert(llvm::isa<IntegerType>(origOffset.getType()) &&
              "expected offset to be integer type");
       auto newAddPtrOp = rewriter.create<tt::AddPtrOp>(
           curLoc, fatPtrBase.getType(), fatPtrBase, origOffset);
+      doSetDiscardableAttrs(newAddPtrOp);
+
       rewriter.replaceOpWithMultiple(addPtrOp, {{newAddPtrOp, fatPtrOffset}});
       fatPtrs[{newAddPtrOp, fatPtrOffset}] =
           fatPtrs.at({fatPtrBase, fatPtrOffset});
@@ -580,6 +598,8 @@ public:
             maybeGetOrCreateScalarConstant(rewriter, curLoc, origOffset)) {
       tt::AddPtrOp newAddPtrOp = rewriter.create<tt::AddPtrOp>(
           curLoc, fatPtrBase.getType(), fatPtrBase, *scalarConst);
+      doSetDiscardableAttrs(newAddPtrOp);
+
       rewriter.replaceOpWithMultiple(addPtrOp, {{newAddPtrOp, fatPtrOffset}});
       // If we are updating the tensor pointer with a constant value, we can
       // propagate the attributes of the tensor pointer to the fat pointer.
@@ -595,6 +615,7 @@ public:
 
     auto newAddPtrOp = rewriter.create<tt::AddPtrOp>(
         curLoc, fatPtrBase.getType(), fatPtrBase, uniformOffset);
+    doSetDiscardableAttrs(newAddPtrOp);
 
     // Vector offset update (if any): bump the tensor offset
     bool canNarrow = fatPtrs.at({fatPtrBase, fatPtrOffset}).canNarrow;
@@ -634,8 +655,49 @@ public:
   }
 };
 
-using ConversionCallbackFn =
-    std::function<std::optional<LogicalResult>(Type, SmallVectorImpl<Type> &)>;
+/// Slice only offset and keep base - i.e.,
+/// slice(fatPtrBase, fatPtrOffset) -> (fatPtrBase, slice(fatPtrOffset))
+class ConvertExtractSliceOp
+    : public PointerCanonicalizationPattern<tt::amdgpu::ExtractSliceOp> {
+public:
+  using PointerCanonicalizationPattern::PointerCanonicalizationPattern;
+
+  LogicalResult
+  matchAndRewrite_(tt::amdgpu::ExtractSliceOp extractSliceOp,
+                   OneToNOpAdaptor adaptor,
+                   ConversionPatternRewriter &rewriter) const override {
+    ValueRange remappedOperands = adaptor.getSource();
+    if (remappedOperands.size() != 2)
+      return success();
+
+    Value fatPtrBase = remappedOperands[0];
+    Value fatPtrOffset = remappedOperands[1];
+    if (!llvm::isa<tt::PointerType>(fatPtrBase.getType()))
+      return rewriter.notifyMatchFailure(extractSliceOp,
+                                         "non tt.ptr base unimplemented");
+
+    auto fatPtrOffsetTy = dyn_cast<RankedTensorType>(fatPtrOffset.getType());
+    if (!fatPtrOffsetTy)
+      return rewriter.notifyMatchFailure(
+          extractSliceOp, "non RankedTensorType offset unimplemented");
+
+    Location loc = extractSliceOp->getLoc();
+    RankedTensorType resultType = extractSliceOp.getResult().getType();
+    auto slicedOffsetsTy = RankedTensorType::get(
+        resultType.getShape(), fatPtrOffsetTy.getElementType(),
+        resultType.getEncoding());
+    Value slicedOffsets = rewriter.create<tt::amdgpu::ExtractSliceOp>(
+        loc, Type{slicedOffsetsTy}, Value{fatPtrOffset},
+        extractSliceOp.getStaticOffsetsAttr());
+
+    rewriter.replaceOpWithMultiple(extractSliceOp,
+                                   {{fatPtrBase, slicedOffsets}});
+    fatPtrs[{fatPtrBase, slicedOffsets}] =
+        fatPtrs.at({fatPtrBase, fatPtrOffset});
+
+    return success();
+  }
+};
 
 /// Rewrite init args and result type and bb args.
 class ConvertSCFForOp : public PointerCanonicalizationPattern<scf::ForOp> {
@@ -1464,6 +1526,12 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
   });
 
   auto func = getOperation();
+  auto walkResult = func->walk<WalkOrder::PreOrder>([](ub::PoisonOp op) {
+    op.emitRemark("skipping canonicalize-pointers due to ub.poison");
+    return WalkResult::interrupt();
+  });
+  if (walkResult.wasInterrupted())
+    return;
 
   FatPointers fatPrs;
   PatternRewriter rewriter(&getContext());
@@ -1506,6 +1574,8 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
   target.addDynamicallyLegalDialect<scf::SCFDialect>(isLegal);
   target.addDynamicallyLegalDialect<cf::ControlFlowDialect>(isLegal);
   target.addDynamicallyLegalDialect<arith::ArithDialect>(isLegal);
+  target.addDynamicallyLegalDialect<triton::amdgpu::TritonAMDGPUDialect>(
+      isLegal);
 
   // Rewrite the rest of the ops.
   // Note we *do not* declare unrealized_cast an illegal op here in order that
@@ -1517,7 +1587,7 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
   RewritePatternSet patterns(&getContext());
   patterns.add<
       ConvertFuncOpArgsUnrealizedCasts, ConvertBroadcastOp, ConvertSplatOp,
-      ConvertConvertLayoutOp, ConvertAddPtrOp,
+      ConvertConvertLayoutOp, ConvertAddPtrOp, ConvertExtractSliceOp,
       MaterializeFatPointer<tt::AtomicCASOp>,
       MaterializeFatPointer<tt::AtomicRMWOp>,
       MaterializeFatPointer<tt::BitcastOp>, MaterializeFatPointer<tt::LoadOp>,

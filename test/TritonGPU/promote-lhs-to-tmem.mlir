@@ -134,4 +134,20 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %res_f16 = arith.truncf %res : tensor<128x128xf32, #blocked1> to tensor<128x128xf16, #blocked1>
     tt.return %res_f16 : tensor<128x128xf16, #blocked1>
   }
+
+  // CHECK-LABEL: @promote_lhs_arith
+  tt.func public @promote_lhs_arith(%A_ptr: tensor<128x128x!tt.ptr<f32>, #blocked2>, %B_sh: !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory, mutable>, %arg3: i32) {
+    %true = arith.constant true
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked1>
+    // %[[A:.+]] = arith.truncf
+    // %[[C:.+]] = ttg.convert_layout %[[A]]
+    // %[[D:.+]] = ttng.tmem_alloc %[[C]]
+    // ttng.tc_gen5_mma %[[D]]
+    %A = tt.load %A_ptr : tensor<128x128x!tt.ptr<f32>, #blocked2>
+    %A_f16 = arith.truncf %A : tensor<128x128xf32, #blocked2> to tensor<128x128xf16, #blocked2>
+    %A_sh = ttg.local_alloc %A_f16 : (tensor<128x128xf16, #blocked2>) -> !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory, mutable>
+    %acc_tm = ttng.tmem_alloc %cst : (tensor<128x128xf32, #blocked1>) -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    ttng.tc_gen5_mma %A_sh, %B_sh, %acc_tm, %true, %true : !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory, mutable>, !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory, mutable>, !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    tt.return
+  }
 }

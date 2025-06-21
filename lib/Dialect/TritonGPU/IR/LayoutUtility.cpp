@@ -5,13 +5,10 @@
 
 namespace mlir::triton::gpu {
 
-FailureOr<CTALayoutAttr>
-permuteCTALayout(MLIRContext *ctx, CTALayoutAttr layout, ArrayRef<int> order) {
+CTALayoutAttr permuteCTALayout(MLIRContext *ctx, CTALayoutAttr layout,
+                               ArrayRef<int> order) {
   auto n = order.size();
-  if (layout.getCTAsPerCGA().size() != n ||
-      layout.getCTASplitNum().size() != n || layout.getCTAOrder().size() != n) {
-    return failure();
-  }
+  assert(n == layout.getRank() && "order and layout rank mismatch");
 
   auto invOrder = inversePermutation(order);
   llvm::SmallVector<unsigned> invOrderUnsigned(invOrder.begin(),

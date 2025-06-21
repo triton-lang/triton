@@ -263,19 +263,6 @@ def test_power_of_two_shapes_2():
     assert str(e.value.__cause__) == "Shape element 0 must be a power of 2"
 
 
-def test_captured_var_access():
-
-    CAPTURED = 42
-
-    @triton.jit
-    def kernel():
-        a = CAPTURED  # noqa
-
-    with pytest.raises(CompilationError) as e:
-        triton.compile(triton.compiler.ASTSource(fn=kernel, signature={}, constexprs={}))
-    assert "CAPTURED is not defined" in str(e.value)
-
-
 GLOBAL = 42
 
 

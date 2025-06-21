@@ -17,4 +17,4 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
 #-}
 
 // CHECK: Pass Manager with
-// CHECK-NEXT: convert-triton-gpu-to-llvm
+// CHECK: convert-triton-gpu-to-llvm
