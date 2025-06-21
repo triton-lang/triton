@@ -107,18 +107,20 @@ class TensorDescriptorBuilder:
         """Create a tensor descriptor for block scale factors"""
         MX_PACK_DIVISOR = 32
         MX_SCALE_BLOCK_K = block_k // MX_PACK_DIVISOR
-        PackedK = (K + MX_PACK_DIVISOR - 1) // MX_PACK_DIVISOR
+        PackedK = triton.cdiv(K, MX_PACK_DIVISOR)
 
         if swizzle_mx:
+            assert block_n >= 128
             assert transpose is None
             num_expt_x_ncol = B * triton.cdiv(N, 128)
-            return TensorDescriptor(
-                base=mx_tensor, shape=[1, num_expt_x_ncol, triton.cdiv(PackedK, 4), 2, 256],
-                strides=[num_expt_x_ncol * mx_scale_stride_n, mx_scale_stride_n, mx_scale_stride_k, 256,
-                         1], block_shape=[1, block_n // 128, MX_SCALE_BLOCK_K // 4, 2, 256])
+            shape = [1, num_expt_x_ncol, triton.cdiv(PackedK, 4), 2, 256]
+            strides = [num_expt_x_ncol * mx_scale_stride_n, mx_scale_stride_n, mx_scale_stride_k, 256, 1]
+            block_shape = [1, block_n // 128, MX_SCALE_BLOCK_K // 4, 2, 256]
+            return TensorDescriptor(base=mx_tensor, shape=shape, strides=strides, block_shape=block_shape)
         else:
             # Non-optimal SF layout, expect slow transfers
             # from global to shmem and from shmem to tmem
+            # TODO: remove?
             return TensorDescriptorBuilder.create_basic_descriptor(mx_tensor,
                                                                    block_shape=[1, MX_SCALE_BLOCK_K,
                                                                                 block_n], transpose=transpose)
