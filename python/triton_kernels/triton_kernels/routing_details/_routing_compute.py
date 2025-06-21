@@ -48,12 +48,11 @@ def _keyed_add(x, y):
 
 @triton.jit
 def _routing_compute_indx(GatherIndx, ScatterIndx, GateScal, ExptScal, ExptIndx, PartialOffs, stride_pm, stride_pn,
-                          n_tokens_pad, NTokensRaw, BLOCK_M: tl.constexpr, N_EXPTS_ACT: tl.constexpr):
+                          n_tokens, BLOCK_M: tl.constexpr, N_EXPTS_ACT: tl.constexpr):
 
     pid_m = tl.program_id(0)
-    n_tokens = n_tokens_pad
-    if NTokensRaw is not None:
-        n_tokens = tl.load(NTokensRaw)
+    if n_tokens.dtype.is_ptr():
+        n_tokens = tl.load(n_tokens)
     n_gates = n_tokens * N_EXPTS_ACT
 
     tl.static_assert(N_EXPTS_ACT * BLOCK_M <= 32768)
