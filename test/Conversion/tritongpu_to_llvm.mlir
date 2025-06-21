@@ -2525,7 +2525,7 @@ tt.func private @arith_constant_array() {
 
 module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
 // CHECK-LABEL: @experimental_check_async_write_with_mbar_shared
-// CHECK: (%[[BUF:.*]]: {{.*}}, %[[BAR:.*]]: {{.*}}, %[[BUFFERS:.*]]: {{.*}}, %[[STATE:.*]]: {{.*}}, %[[BARRIERS:.*]]: {{.*}}, %{{.*}}, %{{.*}})
+// CHECK: (%[[BUF:.*]]: {{.*}}, %[[BAR:.*]]: {{.*}}, %[[BUFFERS:.*]]: {{.*}}, %[[STATE:.*]]: {{.*}}, %[[BARRIERS:.*]]: {{.*}}, %{{.*}}, %{{.*}}, %{{.*}})
 
 // Check the buffer pointer calculation
 // CHECK: %[[BUF_BASE:.*]] = llvm.extractvalue %[[BUF]][0]
