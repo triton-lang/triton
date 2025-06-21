@@ -567,6 +567,14 @@ public:
                                            "tt.constancy"};
     SmallVector<NamedAttribute> propagatedAttrs =
         tt::filterDiscardableAttrs(addPtrOp.getOperation(), propagateList);
+    auto currPtrTy = llvm::dyn_cast<RankedTensorType>(addPtrOp.getType());
+    int currPtrRank = currPtrTy ? currPtrTy.getRank() : 1;
+    auto doSetDiscardableAttrs = [&](tt::AddPtrOp newAddPtrOp) {
+      auto newPtrTy = llvm::dyn_cast<RankedTensorType>(newAddPtrOp.getType());
+      int newPtrRank = newPtrTy ? newPtrTy.getRank() : 1;
+      if (newPtrRank == currPtrRank)
+        newAddPtrOp->setDiscardableAttrs(propagatedAttrs);
+    };
 
     // If it is a scalar pointer update, simply bump the base pointer
     if (llvm::isa<tt::PointerType>(addPtrOp.getPtr().getType())) {
@@ -574,7 +582,7 @@ public:
              "expected offset to be integer type");
       auto newAddPtrOp = rewriter.create<tt::AddPtrOp>(
           curLoc, fatPtrBase.getType(), fatPtrBase, origOffset);
-      newAddPtrOp->setDiscardableAttrs(propagatedAttrs);
+      doSetDiscardableAttrs(newAddPtrOp);
 
       rewriter.replaceOpWithMultiple(addPtrOp, {{newAddPtrOp, fatPtrOffset}});
       fatPtrs[{newAddPtrOp, fatPtrOffset}] =
@@ -590,7 +598,7 @@ public:
             maybeGetOrCreateScalarConstant(rewriter, curLoc, origOffset)) {
       tt::AddPtrOp newAddPtrOp = rewriter.create<tt::AddPtrOp>(
           curLoc, fatPtrBase.getType(), fatPtrBase, *scalarConst);
-      newAddPtrOp->setDiscardableAttrs(propagatedAttrs);
+      doSetDiscardableAttrs(newAddPtrOp);
 
       rewriter.replaceOpWithMultiple(addPtrOp, {{newAddPtrOp, fatPtrOffset}});
       // If we are updating the tensor pointer with a constant value, we can
@@ -607,7 +615,7 @@ public:
 
     auto newAddPtrOp = rewriter.create<tt::AddPtrOp>(
         curLoc, fatPtrBase.getType(), fatPtrBase, uniformOffset);
-    newAddPtrOp->setDiscardableAttrs(propagatedAttrs);
+    doSetDiscardableAttrs(newAddPtrOp);
 
     // Vector offset update (if any): bump the tensor offset
     bool canNarrow = fatPtrs.at({fatPtrBase, fatPtrOffset}).canNarrow;
