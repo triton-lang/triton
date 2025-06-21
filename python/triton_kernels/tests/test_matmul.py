@@ -67,6 +67,8 @@ def init_compute_data(m, n, k, gindx, sindx, n_expts_tot, n_expts_act, n_expt_sh
     if mode == 'batched' or (not has_y_gammas) or (has_y_gammas and (gindx is not None) and act_dtype.itemsize >= 2):
         gs0 = None
         gs1 = None
+    if "float8" in str(weight_dtype) and torch.cuda.get_device_capability()[0] < 10:
+        w = w.transpose(-1, -2).contiguous().transpose(-1, -2)
     return x, w, bias, gs0, gs1
 
 
