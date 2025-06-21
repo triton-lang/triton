@@ -2974,6 +2974,9 @@ scan_layouts = [
 
 def test_no_rematerilization_op():
 
+    if torch.version.hip:
+        pytest.skip("test not supported on AMD")
+
     @triton.jit
     def kernel(
         input_data,
