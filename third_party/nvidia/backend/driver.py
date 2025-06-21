@@ -664,7 +664,6 @@ class CudaLauncher(object):
                 return allocator(alloc_size, align, stream)
             return None
 
-        # TODO(Keren): Reduce launch overhead
         global_scratch = allocate_scratch(self.global_scratch_size, self.global_scratch_align, _allocation._allocator)
         profile_scratch = allocate_scratch(self.profile_scratch_size, self.profile_scratch_align,
                                            _allocation._profile_allocator)
