@@ -101,27 +101,6 @@ class TensorDescriptorBuilder:
     """Builder for creating different types of tensor descriptors"""
 
     @staticmethod
-    def create_basic_descriptor(tensor: torch.Tensor, block_shape: Tuple[int, ...],
-                                transpose: bool = False) -> TensorDescriptor:
-        """Create a basic tensor descriptor with optional transpose"""
-        if transpose:
-            block_shape = block_shape[:-2] + [block_shape[-1], block_shape[-2]]
-            tensor = tensor.permute(0, 2, 1)
-        if isinstance(tensor, (Tensor)):
-            tensor = tensor.handle
-        return TensorDescriptor.from_tensor(tensor, block_shape=block_shape)
-
-    @staticmethod
-    def create_weight_descriptor(w_tensor: torch.Tensor, block_k: int, block_n: int,
-                                 transpose: bool) -> TensorDescriptor:
-        """Create a tensor descriptor for weight matrix"""
-        # Two e2m1 packed in a uint8 or a single fp8
-        W_PACK_DIVISOR = 2 if w_tensor.dtype == torch.uint8 else 1
-        PACKED_BLOCK_K_W = block_k // W_PACK_DIVISOR
-        return TensorDescriptorBuilder.create_basic_descriptor(w_tensor, block_shape=[1, PACKED_BLOCK_K_W, block_n],
-                                                               transpose=transpose)
-
-    @staticmethod
     def create_block_scale_descriptor(mx_tensor: torch.Tensor, block_k: int, block_n: int, B: int, K: int, N: int,
                                       mx_scale_stride_k: int, mx_scale_stride_n: int, swizzle_mx: bool,
                                       transpose: Optional[bool]) -> TensorDescriptor:
@@ -145,27 +124,19 @@ class TensorDescriptorBuilder:
                                                                                 block_n], transpose=transpose)
 
     @staticmethod
-    def squeeze_after_dim(x, dim=2):
-        shape = list(x.shape)
-        new_shape = [s for s in shape[:dim - 1] if s != 1] + shape[dim - 1:]
-        return x.view(*new_shape)
-
-    @staticmethod
-    def create_descriptor_gather(x_tensor: torch.Tensor, block_k: int) -> TensorDescriptor:
-        """Create a tensor descriptor for input matrix X via TMA gather"""
-        x_tensor = TensorDescriptorBuilder.squeeze_after_dim(x_tensor)
-        assert x_tensor.ndim == 2, "TMA gather descriptor requires 2D input"
-        INT_MAX = 2147483647
-        assert x_tensor.shape[0] < INT_MAX
-        return TensorDescriptor.from_tensor(x_tensor, block_shape=[1, block_k])
-
-    @staticmethod
-    def create_descriptor(x_tensor: torch.Tensor, block_m: int, block_k: int) -> TensorDescriptor:
+    def create_descriptor(tensor: torch.Tensor, block_shape: list[int], transpose=False) -> TensorDescriptor:
         """Create a tensor descriptor for matrix X via TMA"""
-        x_tensor = TensorDescriptorBuilder.squeeze_after_dim(x_tensor)
-        assert x_tensor.ndim in [2, 3], "TMA descriptor builder expects 2D or 3D input"
-        block_shape = [1] * (x_tensor.ndim - 2) + [block_m, block_k]
-        return TensorDescriptor.from_tensor(x_tensor, block_shape=block_shape)
+        assert tensor.ndim in [2, 3], "TMA descriptor builder expects 2D or 3D input"
+        assert tensor.ndim == len(block_shape)
+        if transpose:
+            block_shape = block_shape[:-2] + [block_shape[-1], block_shape[-2]]
+            tensor = tensor.permute(0, 2, 1)
+        if isinstance(tensor, (Tensor)):
+            tensor = tensor.handle
+        # FIXME: incorrect in the general case
+        PACK_DIVISOR = 2 if tensor.dtype == torch.uint8 else 1
+        block_shape[-1] = block_shape[-1] // PACK_DIVISOR
+        return TensorDescriptor.from_tensor(tensor, block_shape=block_shape)
 
 
 # ---------------------
@@ -477,16 +448,15 @@ def _create_tma_descriptors(
     """Create and cache TMA descriptors for tensors."""
 
     x_tensor_or_desc, mx_desc_and_transpose = x, (None, False)
-
-    if not HAS_GATHER:
-        x_tensor_or_desc = TensorDescriptorBuilder.create_descriptor(x, opt_flags.block_m, opt_flags.block_k)
-    elif HAS_GATHER and target_info.has_tma_gather():
-        x_tensor_or_desc = TensorDescriptorBuilder.create_descriptor_gather(x, opt_flags.block_k)
+    x_has_tma = (not HAS_GATHER) or (HAS_GATHER and target_info.has_tma_gather())
+    if x_has_tma:
+        block_m = [1] if HAS_GATHER else [opt_flags.block_m]
+        x_block_shape = [1] * (x.ndim - 2) + block_m + [opt_flags.block_k]
+        x_tensor_or_desc = TensorDescriptorBuilder.create_descriptor(x, x_block_shape)
 
     w_transpose = w.stride(2) != 1
-    w_desc = TensorDescriptorBuilder.create_weight_descriptor(
-            w, opt_flags.block_k, opt_flags.block_n, w_transpose
-        )
+    w_block_shape = [1, opt_flags.block_k, opt_flags.block_n]
+    w_desc = TensorDescriptorBuilder.create_descriptor(w, w_block_shape, transpose=w_transpose)
     w_desc_and_transpose = (w_desc, w_transpose)
 
     is_microscaled_format = mx_ctx.weight_scale is not None and w.dtype == torch.uint8
