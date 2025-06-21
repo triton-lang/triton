@@ -618,13 +618,20 @@ def test_op(Z, H, N_CTX, HEAD_DIM, causal, warp_specialize, mode, provider, dtyp
     v = (torch.empty((Z, H, N_CTX, HEAD_DIM), dtype=dtype, device=DEVICE).normal_(mean=0.0, std=0.5).requires_grad_())
     sm_scale = 0.5
     # reference implementation
+    ref_dtype = dtype
+    if mode == "fwd" and "fp8" in provider:
+        ref_dtype = torch.float32
+    q = q.to(ref_dtype)
+    k = k.to(ref_dtype)
+    v = v.to(ref_dtype)
     M = torch.tril(torch.ones((N_CTX, N_CTX), device=DEVICE))
     p = torch.matmul(q, k.transpose(2, 3)) * sm_scale
     if causal:
         p[:, :, M == 0] = float("-inf")
-    p = torch.softmax(p.float(), dim=-1).half()
+    p = torch.softmax(p.float(), dim=-1)
+    p = p.to(ref_dtype)
     # p = torch.exp(p)
-    ref_out = torch.matmul(p, v)
+    ref_out = torch.matmul(p, v).half()
     if mode == "bwd":
         dout = torch.randn_like(q)
         ref_out.backward(dout)
@@ -640,7 +647,7 @@ def test_op(Z, H, N_CTX, HEAD_DIM, causal, warp_specialize, mode, provider, dtyp
         v = v.to(torch.float8_e5m2)
     tri_out = attention(q, k, v, causal, sm_scale, warp_specialize).half()
     if mode == "fwd":
-        torch.testing.assert_close(tri_out, ref_out, atol=13, rtol=1)
+        torch.testing.assert_close(tri_out, ref_out, atol=3, rtol=0)
         return
     tri_out.backward(dout)
     tri_dv, v.grad = v.grad.clone(), None
