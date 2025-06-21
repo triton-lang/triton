@@ -3,10 +3,66 @@
 #include <gtest/gtest.h>
 
 #include "mlir/AsmParser/AsmParser.h"
+#include "mlir/IR/DialectImplementation.h"
+#include "mlir/IR/OpImplementation.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/StrUtil.h"
+#include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Signals.h"
+
+using namespace mlir;
+using namespace llvm;
+
+// Create a test dialect for Triton GPU dialect testing.
+#include "TestDialect.h.inc"
+
+#include "TestDialect.cpp.inc"
+#define GET_ATTRDEF_CLASSES
+#include "TestGPUAttrDefs.h.inc"
+#define GET_ATTRDEF_CLASSES
+#include "TestGPUAttrDefs.cpp.inc"
+
+namespace {
+struct TestTensorLayoutInterface
+    : public triton::DialectVerifyTensorLayoutInterface {
+  using DialectVerifyTensorLayoutInterface::DialectVerifyTensorLayoutInterface;
+
+  LogicalResult verifyTensorLayout(
+      mlir::Attribute layout, RankedTensorType rankedTy, Operation *op,
+      llvm::function_ref<InFlightDiagnostic()> makeErr) const override {
+    return success();
+  }
+
+  LogicalResult verifyDotOpLayout(
+      mlir::Attribute parent, unsigned opIdx, unsigned kWidth,
+      llvm::function_ref<InFlightDiagnostic()> emitError) const override {
+    if (auto parentAttr = mlir::dyn_cast<tt_test::TestAttrAttr>(parent)) {
+      bool fail = parentAttr.getFail();
+      ;
+      if (fail)
+        return emitError() << "expected failure";
+      else
+        return success();
+    }
+
+    llvm_unreachable("unkown parent layout of TestDialect");
+  }
+};
+
+} // namespace
+
+void tt_test::TritonTestDialect::initialize() {
+
+  addAttributes<
+#define GET_ATTRDEF_LIST
+#include "TestGPUAttrDefs.cpp.inc"
+      >();
+
+  addInterfaces<TestTensorLayoutInterface>();
+}
 
 namespace {
 
@@ -562,6 +618,34 @@ TEST_F(LinearEncodingTest, DistributedEncodingToLinearEncoding) {
     }
   }
 }
+
+class TestDialectExtension : public ::testing::Test {
+public:
+  TestDialectExtension() {
+    ctx.getOrLoadDialect<TritonGPUDialect>();
+    ctx.getOrLoadDialect<tt_test::TritonTestDialect>();
+  }
+
+protected:
+  MLIRContext ctx;
+};
+
+class TestDotLayoutVerify : public TestDialectExtension {
+public:
+  Attribute createDotOpLayout(Attribute parent) {
+    return DotOperandEncodingAttr::get(&ctx, 0, parent, 0);
+  }
+};
+
+TEST_F(TestDotLayoutVerify, TestDotLayout) {
+
+  auto badMMA = tt_test::TestAttrAttr::get(&ctx, true /* Expected fail*/);
+  ASSERT_DEATH(createDotOpLayout(badMMA), "expected failure");
+
+  auto goodMMA = tt_test::TestAttrAttr::get(&ctx, false /* Expected fail*/);
+  createDotOpLayout(goodMMA);
+}
+
 } // namespace
 } // namespace mlir::triton::gpu
 
