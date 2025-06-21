@@ -480,9 +480,8 @@ def test_fused_act(m, n, k, mode, split_k, do_gather, do_scatter, fused_scatter,
     x, w, bias, _, _ = init_compute_data(m, n, k, gindx, sindx, n_expts_tot, n_expts_act, n_expt_shards, mode,
                                          act_dtype, weight_dtype, False, requires_grad=False, device=device)
 
-    if is_persistent and \
-       none_or_tma_compatible(x.view(1, x.shape[-2], x.shape[-1])) and \
-       none_or_tma_compatible(w.view(1, w.shape[-2], w.shape[-1])):
+    can_use_tma = none_or_tma_compatible(x) and none_or_tma_compatible(w)
+    if is_persistent and not can_use_tma:
         pytest.skip("persistent TMAs not supported for this test")
 
     if mode == "batched":

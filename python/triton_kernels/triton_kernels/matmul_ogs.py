@@ -204,6 +204,7 @@ def none_or_tma_compatible(x):
         return False
     if x.ndim != 3:
         return False
+    print("!")
     strides = list(x.stride())
     stride_div = 128 // element_bitwidth(x)
     try:
