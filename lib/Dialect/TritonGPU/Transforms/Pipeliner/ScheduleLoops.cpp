@@ -18,7 +18,6 @@ namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 namespace ttng = mlir::triton::nvidia_gpu;
 namespace mlir::triton::gpu {
-namespace {
 
 //===----------------------------------------------------------------------===//
 // scheduleLoops
@@ -31,8 +30,7 @@ bool hasGpuBarriers(scf::ForOp forOp) {
 }
 
 // Return true if the preconditions for pipelining the loop are met.
-bool isSafeToPipeline(scf::ForOp forOp,
-                      const DenseMap<Operation *, int> &opLatency) {
+bool isSafeToPipeline(scf::ForOp forOp) {
   // Skip loop with distance > 1.
   if (loopHasDistGreaterThanOne(forOp))
     return false;
@@ -45,6 +43,7 @@ bool isSafeToPipeline(scf::ForOp forOp,
   return true;
 }
 
+namespace {
 bool hasLatenciesAssigned(scf::ForOp forOp,
                           const DenseMap<Operation *, int> &opLatency) {
   for (auto &op : forOp.getBody()->without_terminator()) {
@@ -155,7 +154,7 @@ CoarseSchedule scheduleKeyOps(scf::ForOp forOp,
 // the rest of the pass will backward propagate dependencies.
 CoarseSchedule getInitialSchedule(scf::ForOp forOp,
                                   const DenseMap<Operation *, int> &opLatency) {
-  if (!isSafeToPipeline(forOp, opLatency))
+  if (!isSafeToPipeline(forOp))
     return CoarseSchedule(0);
 
   // If the loop has assigned latencies, use them to determine the initial
@@ -203,6 +202,7 @@ CoarseSchedule getInitialSchedule(scf::ForOp forOp,
 
   return CoarseSchedule(0);
 }
+} // namespace
 
 // Find dependencies with distance of 1. They will go to the next stage,
 // but in the cluster before the current op.
@@ -254,6 +254,7 @@ void scheduleDistanceOneDependencies(scf::ForOp forOp,
   }
 }
 
+namespace {
 // Schedule the prologue and epilogue `if` ops in the loop, pushing them as
 // close to the loop boundaries as possible. Return the cluster after the
 // prologue (or the beginning of the loop if there is no prologue).
@@ -302,6 +303,7 @@ CoarseSchedule::Cluster schedulePrologueAndEpilogue(scf::ForOp forOp,
   }
   return afterPrologue;
 }
+} // namespace
 
 void scheduleRemainingToLastStage(scf::ForOp forOp, CoarseSchedule &schedule,
                                   CoarseSchedule::Cluster afterPrologue) {
@@ -345,6 +347,7 @@ void scheduleRemainingToLastStage(scf::ForOp forOp, CoarseSchedule &schedule,
   }
 }
 
+namespace {
 void scheduleLoop(scf::ForOp forOp,
                   const DenseMap<Operation *, int> &opLatency) {
   // Based on the latencies, schedule the key ops to the stages.
