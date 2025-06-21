@@ -2972,7 +2972,7 @@ scan_layouts = [
 ]
 
 
-def test_no_rematerilization_op():
+def test_no_rematerialization_op():
 
     if torch.version.hip:
         pytest.skip("test not supported on AMD")
@@ -3013,7 +3013,7 @@ def test_no_rematerilization_op():
         num_warps=1,
         loop_stages=2,
     )
-    assert compiled_kernel.asm["ttgir"].count('"tt.reduce"') == 1, "we shouldn't rematerilization tt.reduce"
+    assert compiled_kernel.asm["ttgir"].count('"tt.reduce"') == 1, "we shouldn't rematerialize tt.reduce"
 
 
 @pytest.mark.parametrize("M, N", [[32, 16], [32, 32], [32, 64], [64, 32]])
