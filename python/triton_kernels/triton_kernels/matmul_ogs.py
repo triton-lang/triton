@@ -105,25 +105,17 @@ class TensorDescriptorBuilder:
                                       mx_scale_stride_k: int, mx_scale_stride_n: int, swizzle_mx: bool,
                                       transpose: Optional[bool]) -> TensorDescriptor:
         """Create a tensor descriptor for block scale factors"""
+        assert swizzle_mx, "only support swizzled block scales"
+        assert block_n >= 128
+        assert transpose is None
         MX_PACK_DIVISOR = 32
         MX_SCALE_BLOCK_K = block_k // MX_PACK_DIVISOR
         PackedK = triton.cdiv(K, MX_PACK_DIVISOR)
-
-        if swizzle_mx:
-            assert block_n >= 128
-            assert transpose is None
-            num_expt_x_ncol = B * triton.cdiv(N, 128)
-            shape = [1, num_expt_x_ncol, triton.cdiv(PackedK, 4), 2, 256]
-            strides = [num_expt_x_ncol * mx_scale_stride_n, mx_scale_stride_n, mx_scale_stride_k, 256, 1]
-            block_shape = [1, block_n // 128, MX_SCALE_BLOCK_K // 4, 2, 256]
-            return TensorDescriptor(base=mx_tensor, shape=shape, strides=strides, block_shape=block_shape)
-        else:
-            # Non-optimal SF layout, expect slow transfers
-            # from global to shmem and from shmem to tmem
-            # TODO: remove?
-            return TensorDescriptorBuilder.create_basic_descriptor(mx_tensor,
-                                                                   block_shape=[1, MX_SCALE_BLOCK_K,
-                                                                                block_n], transpose=transpose)
+        num_expt_x_ncol = B * triton.cdiv(N, 128)
+        shape = [1, num_expt_x_ncol, triton.cdiv(PackedK, 4), 2, 256]
+        strides = [num_expt_x_ncol * mx_scale_stride_n, mx_scale_stride_n, mx_scale_stride_k, 256, 1]
+        block_shape = [1, block_n // 128, MX_SCALE_BLOCK_K // 4, 2, 256]
+        return TensorDescriptor(base=mx_tensor, shape=shape, strides=strides, block_shape=block_shape)
 
     @staticmethod
     def create_descriptor(tensor: torch.Tensor, block_shape: list[int], transpose=False) -> TensorDescriptor:
