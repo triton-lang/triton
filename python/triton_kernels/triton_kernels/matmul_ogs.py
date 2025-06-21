@@ -195,7 +195,11 @@ class PrecisionConfig:
 
 
 def element_bitwidth(tensor):
-    return tensor.element_bitwidth if isinstance(tensor, Tensor) else tensor.element_size()*8
+    if isinstance(tensor, Tensor):
+        return tensor.element_bitwidth
+    # FIXME: sub-byte types aren't well represent in torch
+    # we should make `element_bitwidth(tensor)` only accept `datastruct.Tensor`
+    return 4 if tensor.dtype == torch.uint8 else tensor.element_size()*8
 
 def none_or_tma_compatible(x):
     if x is None:
@@ -204,14 +208,12 @@ def none_or_tma_compatible(x):
         return False
     if x.ndim != 3:
         return False
-    print("!")
     strides = list(x.stride())
     stride_div = 128 // element_bitwidth(x)
     try:
         major_dim = strides.index(1)
     except ValueError:
         major_dim = -1
-        # return False
     compliant = [x.stride(i)*x.element_size() % stride_div == 0 for i in range(x.ndim) if i != major_dim]
     return all(compliant)
 
@@ -445,8 +447,11 @@ def _create_tma_descriptors(
     x_tensor_or_desc, mx_desc_and_transpose = x, (None, False)
     x_has_tma = (not HAS_GATHER) or (HAS_GATHER and target_info.has_tma_gather())
     if x_has_tma:
+        # TODO: unit test ? x can be 3D (due to split-k) and the following seems hacky
+        x = x.view(x.shape[-2:]) if HAS_GATHER else x
         block_m = [1] if HAS_GATHER else [opt_flags.block_m]
-        x_block_shape = [1] * (x.ndim - 2) + block_m + [opt_flags.block_k]
+        block_z = [] if HAS_GATHER else [1] * (x.ndim - 2)
+        x_block_shape = block_z + block_m + [opt_flags.block_k]
         x_tensor_or_desc = TensorDescriptorBuilder.create_descriptor(x, x_block_shape)
 
     w_transpose = w.stride(2) != 1
