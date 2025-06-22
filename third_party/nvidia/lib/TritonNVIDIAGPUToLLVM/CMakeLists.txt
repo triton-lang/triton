@@ -19,6 +19,7 @@ add_triton_library(TritonNVIDIAGPUToLLVM
     Utility.cpp
     Fp4ToFpOpToLLVM.cpp
     TargetInfo.cpp
+    InsertSynclogs.cpp
 
     DEPENDS
     TritonNVIDIAGPUConversionPassIncGen
