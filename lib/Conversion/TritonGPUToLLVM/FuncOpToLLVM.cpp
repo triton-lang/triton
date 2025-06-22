@@ -1,14 +1,8 @@
+#include "mlir/Conversion/FuncToLLVM/ConvertFuncToLLVM.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
-
-namespace mlir {
-FailureOr<LLVM::LLVMFuncOp>
-convertFuncOpToLLVMFuncOp(FunctionOpInterface funcOp,
-                          ConversionPatternRewriter &rewriter,
-                          const LLVMTypeConverter &converter);
-}
 
 namespace {
 
@@ -151,8 +145,9 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
     auto amendedFuncOp = amendFuncOp(funcOp, rewriter, targetInfo);
 
     FailureOr<LLVM::LLVMFuncOp> maybeNewFuncOp =
-        mlir::convertFuncOpToLLVMFuncOp(amendedFuncOp, rewriter,
-                                        *getTypeConverter());
+        mlir::convertFuncOpToLLVMFuncOp(
+            cast<FunctionOpInterface>(amendedFuncOp.getOperation()), rewriter,
+            *getTypeConverter());
     if (failed(maybeNewFuncOp)) {
       return failure();
     }
