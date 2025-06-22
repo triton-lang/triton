@@ -291,7 +291,7 @@ class CUDABackend(BaseBackend):
         passes.common.add_symbol_dce(pm)
         if capability // 10 >= 9:
             nvidia.passes.ttnvgpuir.add_tma_lowering(pm)
-            nvidia.passes.ttnvgpuir.add_fence_insertion(pm)
+        nvidia.passes.ttnvgpuir.add_fence_insertion(pm, capability)
         passes.common.add_sccp(pm)
         passes.common.add_canonicalizer(pm)
         pm.run(mod)
@@ -330,6 +330,7 @@ class CUDABackend(BaseBackend):
         passes.ttgpuir.add_allocate_shared_memory(pm)
         nvidia.passes.ttnvgpuir.add_allocate_tensor_memory(pm)
         passes.ttgpuir.add_allocate_global_scratch_memory(pm)
+        nvidia.passes.ttnvgpuir.add_proxy_fence_insertion(pm, capability)
         nvidia.passes.ttgpuir.add_to_llvmir(pm, capability, ptx_version)
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)

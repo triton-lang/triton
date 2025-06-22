@@ -28,11 +28,27 @@ void init_triton_nvidia_passes_ttgpuir(py::module &&m) {
         });
 }
 
+static std::unique_ptr<mlir::Pass>
+createTritonGPUFenceInsertionWrapper(int32_t capability) {
+  ttng::TritonGPUFenceInsertionOptions options;
+  options.computeCapability = capability;
+  return ttng::createTritonGPUFenceInsertion(options);
+}
+
+static std::unique_ptr<mlir::Pass>
+createTritonGPUProxyFenceInsertionWrapper(int32_t capability) {
+  ttng::TritonGPUProxyFenceInsertionOptions options;
+  options.computeCapability = capability;
+  return ttng::createTritonGPUProxyFenceInsertion(options);
+}
+
 void init_triton_nvidia_passes_ttnvgpuir(py::module &&m) {
   ADD_PASS_WRAPPER_1("add_plan_cta", ttng::createTritonNvidiaGPUPlanCTAPass,
                      mlir::triton::nvidia_gpu::ClusterInfo *);
-  ADD_PASS_WRAPPER_0("add_fence_insertion",
-                     ttng::createTritonGPUFenceInsertion);
+  ADD_PASS_WRAPPER_1("add_fence_insertion",
+                     createTritonGPUFenceInsertionWrapper, int32_t);
+  ADD_PASS_WRAPPER_1("add_proxy_fence_insertion",
+                     createTritonGPUProxyFenceInsertionWrapper, int32_t);
   ADD_PASS_WRAPPER_0("add_tma_lowering",
                      ttng::createTritonNvidiaGPUTMALoweringPass);
   ADD_PASS_WRAPPER_0("add_promote_lhs_to_tmem",
