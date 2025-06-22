@@ -31,6 +31,7 @@
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonInstrument/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/Support/FileSystem.h"
@@ -157,7 +158,7 @@ py::list getTensorDescMetadata(ModuleOp &mod) {
   py::list result;
   triton::FuncOp kernelFunc;
   mod.walk([&](triton::FuncOp func) {
-    if (LLVM::isKernel(func)) {
+    if (triton::isKernel(func)) {
       kernelFunc = func;
       return WalkResult::interrupt();
     }
@@ -299,6 +300,7 @@ void init_triton_ir(py::module &&m) {
   m.def("load_dialects", [](MLIRContext &context) {
     DialectRegistry registry;
     registry.insert<TritonDialect, ::mlir::triton::gpu::TritonGPUDialect,
+                    ::mlir::triton::instrument::TritonInstrumentDialect,
                     math::MathDialect, arith::ArithDialect, scf::SCFDialect,
                     ::mlir::gpu::GPUDialect, cf::ControlFlowDialect,
                     ::mlir::triton::proton::ProtonDialect, LLVM::LLVMDialect,
@@ -585,7 +587,7 @@ void init_triton_ir(py::module &&m) {
            [](ModuleOp &self) -> std::string {
              for (auto &op : self.getOps()) {
                if (auto func = dyn_cast<FuncOp>(op)) {
-                 if (LLVM::isKernel(func))
+                 if (triton::isKernel(func))
                    return func.getName().str();
                }
              }

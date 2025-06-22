@@ -1,4 +1,6 @@
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Schedule.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
@@ -80,6 +82,12 @@ static void createTMAAsyncCopy(scf::ForOp forOp, const TMAStore &store,
   store.op->erase();
 }
 
+static void lowerTMADescriptorCreation(scf::ForOp forOp) {
+  // Use max_stage=3 to double buffer the descriptor.
+  triton::CoarseSchedule schedule(3);
+  triton::lowerTMADescriptors(forOp, schedule);
+}
+
 bool mlir::triton::pipelineTMAStores(scf::ForOp forOp) {
   SmallVector<TMAStore> tmaStores = getTMAStores(forOp);
   if (tmaStores.empty())
@@ -101,6 +109,9 @@ bool mlir::triton::pipelineTMAStores(scf::ForOp forOp) {
     storeToAlloc[store.op] = alloc;
   }
 
+  bool hasDeviceSideTMA = llvm::any_of(tmaStores, [](const TMAStore &store) {
+    return !triton::isHostSideDescriptor(store.desc);
+  });
   for (const TMAStore &store : tmaStores) {
     createTMAAsyncCopy(forOp, store, storeToAlloc[store.op]);
   }
@@ -111,6 +122,12 @@ bool mlir::triton::pipelineTMAStores(scf::ForOp forOp) {
   builder.create<ttng::TMAStoreWaitOp>(forOp->getLoc(), 0);
   for (auto it : storeToAlloc) {
     builder.create<ttg::LocalDeallocOp>(forOp->getLoc(), it.second);
+  }
+
+  if (hasDeviceSideTMA) {
+    // This is a bit coarse as it would multibuffer any descriptor in the loop
+    // but it likely to not have a big impact.
+    lowerTMADescriptorCreation(forOp);
   }
   return true;
 }

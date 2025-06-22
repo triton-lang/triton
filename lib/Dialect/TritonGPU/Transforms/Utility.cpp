@@ -92,9 +92,11 @@ bool isLoadFromTensorPtr(triton::LoadOp op) {
   return mlir::triton::isTensorPointerType(op.getPtr().getType());
 }
 
-SmallVector<unsigned, 4> argSort(const SmallVector<int64_t> &arr) {
+SmallVector<unsigned, 4>
+getOrderFromContiguity(const SmallVector<int64_t> &arr) {
   SmallVector<unsigned, 4> ret(arr.size());
   std::iota(ret.begin(), ret.end(), 0);
+  std::reverse(ret.begin(), ret.end());
   std::stable_sort(ret.begin(), ret.end(),
                    [&](unsigned x, unsigned y) { return arr[x] > arr[y]; });
   return ret;
@@ -1053,14 +1055,19 @@ int getNVIDIAComputeCapability(Operation *module) {
   return computeCapability;
 }
 
-StringRef getAMDArch(Operation *module) {
+std::optional<StringRef> getAMDArch(Operation *module) {
   StringAttr targetAttr =
       module->getAttrOfType<StringAttr>(triton::gpu::AttrTargetName);
-  assert(targetAttr && "Expected a target attribute on the module operation");
+  if (!targetAttr) {
+    LDBG("Expected a target attribute on the module operation");
+    return {};
+  }
 
   StringRef ref = targetAttr.strref();
-  assert(ref.starts_with("hip:") &&
-         "expected target attribute to be prefixed with \"hip:\"");
+  if (!ref.starts_with("hip:")) {
+    LDBG("expected target attribute to be prefixed with \"hip:\"");
+    return {};
+  }
 
   return ref.drop_front(4); // drop the "hip:"
 }

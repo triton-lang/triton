@@ -1,5 +1,7 @@
 #include "TritonAMDGPUTransforms/Passes.h"
+#include "amd/lib/TritonAMDGPUToLLVM/TargetInfo.h"
 #include "mlir/Support/LLVM.h"
+#include "third_party/amd/include/Analysis/AxisInfoExt.h"
 #include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "third_party/amd/lib/TritonAMDGPUToLLVM/SchedInstructions.h"
 #include "triton/Analysis/AxisInfo.h"
@@ -484,6 +486,11 @@ findPipelineableLoads(scf::ForOp forOp,
   DenseSet<Operation *> seen;
   // Recursively visit the given op and its operands to discover all load ops
   // and collect their distances and uses.
+
+  auto arch = getAMDArch(forOp->getParentOfType<ModuleOp>());
+  triton::AMD::ISAFamily isaFamily = triton::AMD::ISAFamily::Unknown;
+  if (arch)
+    isaFamily = triton::AMD::deduceISAFamily(*arch);
   std::function<void(Operation * op, int distance, Operation *use)> dfs =
       [&](Operation *op, int distance, Operation *use) {
         // Skip previously visited load ops.
@@ -506,12 +513,17 @@ findPipelineableLoads(scf::ForOp forOp,
               }
               auto pointeeTy = cast<tt::PointerType>(tensorTy.getElementType())
                                    .getPointeeType();
-              // If the max continugous bits we can read is < 32, buffer in
-              // registers.
-              if (vecContiguity * pointeeTy.getIntOrFloatBitWidth() >= 32) {
+              unsigned width =
+                  vecContiguity * pointeeTy.getIntOrFloatBitWidth();
+              // Limit shared memory sharing to width >= 32 elements.
+              LDBG("Load " << *loadOp << " has width " << width);
+              if (width >= 32) {
                 sharedEncoding =
                     getSharedEncIfAllUsersAreDotEnc(op->getResult(0))
                         .value_or(nullptr);
+              } else if (isaFamily != triton::AMD::ISAFamily::CDNA4) {
+                LDBG("Skip width<32 load " << loadOp << " for arch " << arch);
+                return;
               }
             } else if (auto useOp = dyn_cast<tt::LoadOp>(use)) {
               // The use of this loadOp is another loadOp. If the use is not in
@@ -784,11 +796,12 @@ LogicalResult preprocessLoopAndBuildSchedule(scf::ForOp &forOp, int numStages,
                                              int stages[SCHED_SIZE],
                                              bool useAsyncCopy,
                                              tt::PipeliningOption &options) {
-  tt::ModuleAxisInfoAnalysis axisInfoAnalysis(
+  triton::AMD::ModuleAxisInfoAnalysis axisInfoAnalysis(
       forOp->getParentOfType<ModuleOp>());
   int numBuffers = 1;
   std::array<tt::CoarseSchedule::Cluster, SCHED_SIZE> clusters;
   tt::CoarseSchedule schedule(numStages);
+
   // Schedule the loads and root ops (dot ops) in the loop. This will give us
   // a scaffold for the final schedule.
   FailureOr<llvm::MapVector<Operation *, LoadInfo>> loadToInfo =

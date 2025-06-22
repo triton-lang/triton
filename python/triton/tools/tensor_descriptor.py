@@ -1,6 +1,8 @@
 from dataclasses import dataclass
 from typing import List, Any
-from triton._utils import validate_block_shape, canonicalize_dtype, get_primitive_bitwidth
+from triton._utils import validate_block_shape
+from torch._subclasses.fake_tensor import FakeTensor
+from torch._subclasses.functional_tensor import FunctionalTensor
 
 
 @dataclass
@@ -16,10 +18,10 @@ class TensorDescriptor:
         assert len(self.block_shape) == rank, f"rank mismatch: {self}"
         assert rank > 0, "rank must not be zero"
         assert rank <= 5, "rank cannot be more than 5"
-        assert self.base.data_ptr() % 16 == 0, "base must be 16-byte aligned"
+        if not isinstance(self.base, (FakeTensor, FunctionalTensor)):
+            assert self.base.data_ptr() % 16 == 0, "base must be 16-byte aligned"
         validate_block_shape(self.block_shape)
-        dtype_str = canonicalize_dtype(self.base.dtype)
-        elem_bytes = get_primitive_bitwidth(dtype_str) // 8
+        elem_bytes = self.base.dtype.itemsize
         for stride in self.strides[:-1]:
             assert (stride * elem_bytes) % 16 == 0, "strides must be 16-byte aligned"
         assert self.strides[-1] == 1, "Last dimension must be contiguous"

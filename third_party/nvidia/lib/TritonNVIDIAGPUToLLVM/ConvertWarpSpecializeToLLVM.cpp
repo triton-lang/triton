@@ -1,10 +1,12 @@
 #include "TargetInfo.h"
 #include "TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
 #include "mlir/Analysis/TopologicalSortUtils.h"
+#include "mlir/Conversion/Passes.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/ImplicitLocOpBuilder.h"
+#include "mlir/Pass/PassManager.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Conversion/TritonGPUToLLVM/Passes.h"
 #include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
@@ -561,10 +563,9 @@ struct ConvertWarpSpecializeToLLVM
       if (isa<WarpSpecializeOp, WarpSpecializePartitionsOp, WarpYieldOp>(op))
         convertOpTypes(op, typeConverter);
     });
-    RewritePatternSet patterns(&getContext());
-    UnrealizedConversionCastOp::getCanonicalizationPatterns(patterns,
-                                                            &getContext());
-    if (failed(applyPatternsGreedily(mod, std::move(patterns))))
+    OpPassManager pm;
+    pm.addPass(createReconcileUnrealizedCastsPass());
+    if (failed(runPipeline(pm, mod)))
       return signalPassFailure();
 
     SmallVector<LLVM::LLVMFuncOp> kernels;

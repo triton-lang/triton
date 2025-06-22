@@ -765,7 +765,7 @@ static void lowerTensorMemoryAlloc(ModuleOp mod) {
   if (baseOps.empty())
     return;
   // TODO: Handle cases of matmul used in noinline functions.
-  assert(LLVM::isKernel(kernel));
+  assert(triton::isKernel(kernel));
   Value newBase = initTensorMemory(kernel);
   if (!newBase)
     return;
