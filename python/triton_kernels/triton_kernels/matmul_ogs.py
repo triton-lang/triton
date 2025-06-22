@@ -209,7 +209,7 @@ def none_or_tma_compatible(x):
     if x.ndim != 3:
         return False
     strides = list(x.stride())
-    stride_div = 128 // element_bitwidth(x)
+    stride_div = max(16, 128 // element_bitwidth(x))
     try:
         major_dim = strides.index(1)
     except ValueError:
