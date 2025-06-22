@@ -206,6 +206,9 @@ def none_or_tma_compatible(x):
         return True
     if not target_info.cuda_capability_geq(9, 0):
         return False
+    # none of our kernels support MXFP4 w/ TMA on H100
+    if torch.cuda.get_device_capability()[0] == 9 and element_bitwidth(x) == 4:
+        return False
     if x.ndim != 3:
         return False
     strides = list(x.stride())
@@ -579,8 +582,6 @@ def matmul_ogs(x, w, bias,
         x, w, gather_indx, scatter_indx, routing_data, opt_flags, preprocessing_features
     )
     # matrix multiplication
-
-
     flex = precision_config.flex_ctx
     bias_stride = None if bias is None else bias.stride(0)
     num_indx = None if scatter_indx is None else scatter_indx.src_indx.shape[0]
@@ -594,7 +595,7 @@ def matmul_ogs(x, w, bias,
 
     grid_m = triton.cdiv(M, opt_flags.block_m)
     if expt_block_pid_map is not None:
-        grid_m = expt_block_pid_map.numel()
+        grid_m = routing_data.n_blocks(M, opt_flags.block_m)
     grid_n = triton.cdiv(N, opt_flags.block_n)
     max_grid = batch_size * grid_m * grid_n * opt_flags.split_k
     grid = min(target_info.num_sms() - opt_flags.idle_sms, max_grid) if opt_flags.is_persistent else max_grid
@@ -623,10 +624,6 @@ def matmul_ogs(x, w, bias,
         w_tensor, w_tma_transpose = w, False
         mx_tensor, mx_tma_transpose = mx_ctx.weight_scale, False
 
-    if isinstance(x_tensor, torch.Tensor):
-        x_tensor = flex.lhs_data.reinterpret(x)
-    if isinstance(w_tensor, torch.Tensor):
-        w_tensor = flex.rhs_data.reinterpret(w)
     kernels = get_kernels(epilogue.specs, fused_activation.specs)
 
     (kernels._p_matmul_ogs if opt_flags.is_persistent else kernels._matmul_ogs)[(grid,)](

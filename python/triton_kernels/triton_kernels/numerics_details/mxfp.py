@@ -941,11 +941,19 @@ def swizzle_mxfp4_value_hopper(x: torch.Tensor, op_idx: int, mma_version: int):
 
     return x
 
-def swizzle_mxfp4_scale_hopper(x: torch.Tensor, num_warps: int):
+def swizzle_mxfp4_scale_hopper(x: torch.Tensor, num_warps: int, allow_pad: bool = True):
     """
     Make the 64x2 tile of scales of a 64x64 tile of mxfp4 values contiguous.
     """
     *batch, M, K = x.shape
+    SWIZZLE_ALIGN_M = 2 * num_warps * 2 * 8
+    SWIZZLE_ALIGN_K = 2
+    pad_m = (SWIZZLE_ALIGN_M - (M % SWIZZLE_ALIGN_M)) % SWIZZLE_ALIGN_M
+    pad_k = (SWIZZLE_ALIGN_K - (K % SWIZZLE_ALIGN_K)) % SWIZZLE_ALIGN_K
+    if pad_m or pad_k > 0:
+        assert allow_pad, "Padding is required for swizzling, but it was explicitly disabled."
+        x = torch.nn.functional.pad(x, (0, pad_k, 0, pad_m))
+        *batch, M, K = x.shape
     assert x.is_contiguous()
     assert num_warps & (num_warps - 1) == 0, "warps_n must be a power of 2"
     assert M % (2 * num_warps * 2 * 8) == 0 and K % 2 == 0, f"Input tensor must have a subtile of shape (..., {2 * num_warps * 2 * 8}, 2)"
