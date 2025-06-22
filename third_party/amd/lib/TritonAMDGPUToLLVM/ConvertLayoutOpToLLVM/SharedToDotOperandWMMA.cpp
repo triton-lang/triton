@@ -154,7 +154,10 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
 
   auto aTensorTy = cast<triton::gpu::MemDescType>(tensor.getType());
   ArrayRef<int64_t> shape = aTensorTy.getShape();
-  auto sharedLayout = cast<SwizzledSharedEncodingAttr>(aTensorTy.getEncoding());
+  auto sharedLayout =
+      dyn_cast<SwizzledSharedEncodingAttr>(aTensorTy.getEncoding());
+  if (!sharedLayout)
+    return Value();
   auto order = sharedLayout.getOrder();
 
   // Rely on the linear layout conversion logic in this case, since only slowest

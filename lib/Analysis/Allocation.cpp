@@ -260,12 +260,17 @@ private:
     auto alloc = dyn_cast<gpu::LocalAllocOp>(op);
     if (!alloc || !alloc.isSharedMemoryAlloc())
       return;
-    // Bytes could be a different value once we support padding or other
-    // allocation policies.
     auto allocType = alloc.getType();
-    auto shapePerCTA = gpu::getAllocationShapePerCTA(allocType);
-    auto bytes =
-        product<int64_t>(shapePerCTA) * allocType.getElementTypeBitWidth() / 8;
+    int64_t numElems = 0;
+    if (auto paddedLayout =
+            dyn_cast<gpu::PaddedSharedEncodingAttr>(allocType.getEncoding())) {
+      SmallVector<int64_t> unpaddedShape = gpu::getShapePerCTA(allocType);
+      numElems = paddedLayout.getPaddedSize(unpaddedShape);
+    } else {
+      auto shapePerCTA = gpu::getAllocationShapePerCTA(allocType);
+      numElems = product<int64_t>(shapePerCTA);
+    }
+    int64_t bytes = numElems * allocType.getElementTypeBitWidth() / 8;
 
     auto alignment = alloc.getAlignmentOrDefault();
     allocation->addBuffer<BufferT::BufferKind::Explicit>(alloc, bytes,
