@@ -241,7 +241,7 @@ class ASTFunction:
         val_paths = list(find_paths_if(self.arg_types, is_val))
         arg_types = [get_iterable_path(self.arg_types, path) for path in val_paths]
         arg_types_ir = self.flatten_ir_types(builder, arg_types)
-        ret_types_ir = self.return_types_ir(builder)
+        ret_types_ir = [ty for (name, ty) in self.args_mut] + self.return_types_ir(builder)
         return builder.get_function_ty(arg_types_ir, ret_types_ir)
 
     def deserialize(self, fn):
@@ -500,6 +500,13 @@ class CodeGenerator(ast.NodeVisitor):
         elts = language.tuple([self.visit(elt) for elt in node.elts])
         return elts
 
+    def emit_return(self, handles):
+        all_handles = []
+        for name, ty in self.prototype.args_mut:
+            self.dereference_name(name)._flatten_ir(all_handles)
+        all_handles.extend(handles)
+        self.builder.ret(all_handles)
+
     # By design, only non-kernel functions can return
     def visit_Return(self, node):
         ret_value = self.visit(node.value)
@@ -520,7 +527,7 @@ class CodeGenerator(ast.NodeVisitor):
             assert isinstance(ret_value, language.core.base_value)
             ret_value._flatten_ir(handles)
             ret_ty = ret_value.type
-        self.builder.ret(handles)
+        self.emit_return(handles)
         if self.ret_type is None:
             self.ret_type = ret_ty
         elif self.ret_type != ret_ty:
@@ -576,14 +583,14 @@ class CodeGenerator(ast.NodeVisitor):
         assert not self.builder.get_insertion_block().has_terminator()
         if self.ret_type is None or self.ret_type == language.void:
             self.ret_type = language.void
-            self.builder.ret([])
+            self.emit_return([])
         else:
             if isinstance(self.ret_type, language.tuple_type):
                 self.prototype.ret_types = self.ret_type.types
             else:
                 self.prototype.ret_types = [self.ret_type]
             self.fn.reset_type(self.prototype.serialize(self.builder))
-            self.builder.ret([self.builder.create_poison(ty) for ty in self.prototype.return_types_ir(self.builder)])
+            self.emit_return([self.builder.create_poison(ty) for ty in self.prototype.return_types_ir(self.builder)])
         self.fn.finalize()
 
         if insert_pt:
@@ -1186,7 +1193,9 @@ class CodeGenerator(ast.NodeVisitor):
         for i, arg in enumerate(args):
             if isinstance(arg, (language.dtype, float, int, bool, JITFunction)):
                 args[i] = language.core.constexpr(arg)
-        args_mut = [(name, arg.type) for (name, arg) in zip(fn.arg_names, args) if hasattr(arg.type, "__triton_mutable__")]
+        args_mut = [(name, arg.type)
+                    for (name, arg) in zip(fn.arg_names, args)
+                    if hasattr(arg.type, "__triton_mutable__")]
         args_cst = find_paths_if(args, lambda _, x: _is_constexpr(x))
         args_cst = {path: get_iterable_path(args, path) for path in args_cst}
         args_path = find_paths_if(args, lambda _, x: not _is_constexpr(x))
@@ -1223,10 +1232,18 @@ class CodeGenerator(ast.NodeVisitor):
         symbol = self.module.get_function(fn_name)
         args_val = flatten_values_to_ir(args_val)
         call_op = self.builder.call(symbol, args_val)
+        handles = [call_op.get_result(i) for i in range(call_op.get_num_results())]
+
+        all_ret_types = [ty for (name, ty) in args_mut]
+        if callee_ret_type != language.void:
+            all_ret_types.append(callee_ret_type)
+        all_ret_values = unflatten_ir_values(handles, all_ret_types)
+        # Unpack the reflected values of mutable arguments.
+        for name, ty in args_mut:
+            self.set_value(name, next(all_ret_values))
         if callee_ret_type == language.void:
             return None
-        handles = [call_op.get_result(i) for i in range(call_op.get_num_results())]
-        return next(unflatten_ir_values(handles, [callee_ret_type]))
+        return next(all_ret_types)
 
     def visit_Call(self, node):
         fn = _unwrap_if_constexpr(self.visit(node.func))

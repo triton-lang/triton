@@ -1,6 +1,6 @@
 import triton
 import triton.language as tl
-from triton._filecheck import filecheck_test, run_filecheck_test
+from triton._filecheck import filecheck_test, run_filecheck_test, run_parser
 
 # ===-----------------------------------------------------------------------===#
 # Unit Tests
@@ -401,3 +401,17 @@ def test_late_bound_class_reference():
         anchor(value)
 
     run_filecheck_test(kernel)
+
+
+def mutate_it(x):
+    x.first = tl.arange(0, 4)
+    x.second = tl.arange(4, 8)
+
+
+@triton.jit
+def test_mutability():
+    p = Pair(tl.arange(0, 1), tl.arange(0, 1))
+    anchor(p)
+
+
+print(run_parser(test_mutability))
