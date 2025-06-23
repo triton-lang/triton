@@ -447,69 +447,8 @@ LogicalResult ConcatOp::verify() {
   return success();
 }
 
-struct CanonicalizeConcatOpFromExtractSlice
-    : public mlir::OpRewritePattern<amdgpu::ExtractSliceOp> {
-  using OpRewritePattern::OpRewritePattern;
-
-  mlir::LogicalResult
-  matchAndRewrite(amdgpu::ExtractSliceOp op,
-                  PatternRewriter &rewriter) const override {
-    auto concatOp = op.getSource().getDefiningOp<amdgpu::ConcatOp>();
-    if (!concatOp)
-      return failure();
-
-    auto origTensorType = dyn_cast<RankedTensorType>(op.getOperand().getType());
-    auto concatTensorType =
-        dyn_cast<RankedTensorType>(op.getResult().getType());
-
-    if (!(origTensorType && concatTensorType)) {
-      return failure();
-    }
-    auto origTensorShape = origTensorType.getShape();
-    auto concatTensorShape = concatTensorType.getShape();
-    if (origTensorShape.equals(concatTensorShape)) {
-      return failure();
-    }
-
-    auto sliceResult = op.getResult();
-    auto sliceResultType = sliceResult.getType();
-    auto sliceResultShape = sliceResultType.getShape();
-
-    auto concatItem = concatOp.getSources().front();
-    auto concatItemType = dyn_cast<RankedTensorType>(concatItem.getType());
-    if (!concatItemType)
-      return failure();
-
-    if (sliceResultType != concatItemType)
-      return failure();
-
-    auto concatItemShape = concatItemType.getShape();
-    llvm::SmallVector<int64_t> coords(concatTensorShape.size());
-    for (size_t i = 0; i < coords.size(); ++i) {
-      coords[i] = concatTensorShape[i] / concatItemShape[i];
-    }
-
-    SmallVector<int64_t> dimScales(concatItemShape.size(), 1);
-    int64_t concatItemIndex = 0;
-    std::exclusive_scan(coords.rbegin(), coords.rend(), dimScales.rbegin(), 1,
-                        std::multiplies<>());
-    auto offset = op.getStaticOffsets();
-    for (auto [idx, itemDimSize] : llvm::enumerate(concatItemShape)) {
-      if ((offset[idx] % itemDimSize) != 0)
-        return failure();
-      const auto sliceCoords = offset[idx] / itemDimSize;
-      concatItemIndex += sliceCoords * dimScales[idx];
-    }
-    assert(concatItemIndex < concatOp->getNumOperands() &&
-           "concat index must be in bounds");
-    Value concreteConcatItem = concatOp->getOperand(concatItemIndex);
-    rewriter.replaceOp(op, concreteConcatItem);
-
-    return success();
-  }
-};
-
-struct CanonicalizeConcatOp : public mlir::OpRewritePattern<amdgpu::ConcatOp> {
+struct CanonicalizeSingletonConcatOp
+    : public mlir::OpRewritePattern<amdgpu::ConcatOp> {
   using OpRewritePattern::OpRewritePattern;
 
   mlir::LogicalResult
@@ -536,7 +475,6 @@ struct CanonicalizeConcatOp : public mlir::OpRewritePattern<amdgpu::ConcatOp> {
 
 void ConcatOp::getCanonicalizationPatterns(mlir::RewritePatternSet &patterns,
                                            mlir::MLIRContext *context) {
-  patterns.add<CanonicalizeConcatOpFromExtractSlice>(context);
-  patterns.add<CanonicalizeConcatOp>(context);
+  patterns.add<CanonicalizeSingletonConcatOp>(context);
 }
 } // namespace mlir::triton::amdgpu

@@ -616,6 +616,99 @@ struct LoadOpPattern : public RefineRewritePattern<triton::LoadOp> {
   }
 };
 
+struct AMDGCNBufferLoadOp
+    : public RefineRewritePattern<triton::amdgpu::BufferLoadOp> {
+  AMDGCNBufferLoadOp(MLIRContext *context, PatternBenefit benefit = 1)
+      : RefineRewritePattern(context, benefit) {}
+
+  LogicalResult apply(triton::amdgpu::BufferLoadOp op,
+                      PatternRewriter &rewriter) const override {
+    auto ctx = op->getContext();
+    auto loc = op.getLoc();
+
+    auto origBasePtr = op.getPtr();
+    auto origElementType =
+        cast<PointerType>(origBasePtr.getType()).getPointeeType();
+    auto origOffsets = op.getOffsets();
+    auto origEncoding =
+        cast<RankedTensorType>(origOffsets.getType()).getEncoding();
+    if (!origEncoding)
+      return failure();
+
+    auto origStride = op.getStride();
+    auto origCache = op.getCache();
+    auto origMask = op.getMask();
+    auto origOtherTensor = op.getOther();
+
+    rewriter.setInsertionPointAfter(op);
+
+    auto refineTensor = [&](mlir::Value tensor) {
+      auto tensorType = cast<RankedTensorType>(tensor.getType());
+      auto origShape = tensorType.getShape();
+      auto elemType = tensorType.getElementType();
+      auto encoding = dyn_cast<BlockedEncodingAttr>(tensorType.getEncoding());
+      assert(encoding != nullptr);
+
+      RefinedBlock refinedBlock(origShape, elemType, encoding);
+
+      AMD::CoordinateMapper coordsMapper(refinedBlock.numPerDims);
+      SmallVector<Value> slices;
+      for (size_t linearIdx = 0; linearIdx < refinedBlock.numSubTiles;
+           ++linearIdx) {
+        auto coords = coordsMapper.map(linearIdx);
+        SmallVector<int64_t> offset(refinedBlock.numDims, 0);
+        for (auto [dim, coord] : llvm::enumerate(coords)) {
+          offset[dim] = coord * refinedBlock.elementsPerWorkGroup[dim];
+        }
+
+        auto slice = rewriter.create<triton::amdgpu::ExtractSliceOp>(
+            loc, Type{refinedBlock.tensorType}, Value{tensor}, offset);
+
+        slices.push_back(slice);
+      }
+
+      return std::tuple(slices, refinedBlock.refinedShape,
+                        refinedBlock.numPerDims);
+    };
+
+    auto [slicedOffsets, refinedShape, numPerDims] = refineTensor(origOffsets);
+    std::optional<SmallVector<Value>> slicedMasks;
+    if (origMask) {
+      slicedMasks = std::get<0>(refineTensor(origMask));
+      assert(slicedMasks.value().size() == slicedOffsets.size());
+    }
+
+    std::optional<SmallVector<Value>> slicedOtherTensors;
+    if (origOtherTensor) {
+      slicedOtherTensors = std::get<0>(refineTensor(origOtherTensor));
+      assert(slicedOtherTensors.value().size() == slicedOffsets.size());
+    }
+
+    Type refinedTensorType =
+        RankedTensorType::get(refinedShape, origElementType, origEncoding);
+
+    SmallVector<Value> refinedOps;
+    for (size_t i = 0; i < slicedOffsets.size(); ++i) {
+      Value slicedOffset = slicedOffsets[i];
+      Value slicedMask = slicedMasks ? slicedMasks.value()[i] : nullptr;
+      Value slicedOtherTensor =
+          slicedOtherTensors ? slicedOtherTensors.value()[i] : nullptr;
+
+      auto refinedOp = rewriter.create<triton::amdgpu::BufferLoadOp>(
+          loc, refinedTensorType, origBasePtr, slicedOffset, origStride,
+          origCache, slicedMask, slicedOtherTensor);
+      refinedOps.push_back(refinedOp);
+    }
+
+    Value origResult = op.getResult();
+    auto joinedResult = rewriter.create<triton::amdgpu::ConcatOp>(
+        loc, origResult.getType(), refinedOps);
+
+    origResult.replaceAllUsesWith(joinedResult);
+    return success();
+  }
+};
+
 struct LocalStoreOpPattern
     : public RefineRewritePattern<triton::gpu::LocalStoreOp> {
   LocalStoreOpPattern(MLIRContext *context, PatternBenefit benefit = 1)
@@ -1212,6 +1305,7 @@ struct TritonAMDGPURefineOps
     patterns.add<LocalLoadOpPattern>(context, /*benefit=*/1);
     patterns.add<DotOpPattern>(context, /*benefit=*/1);
     patterns.add<LoadOpPattern>(context, /*benefit=*/1);
+    patterns.add<AMDGCNBufferLoadOp>(context, /*benefit=*/1);
     patterns.add<LocalStoreOpPattern>(context, /*benefit=*/1);
     patterns.add<ReduceOpPattern>(context, /*benefit=*/1);
     patterns.add<ExpandDimsOpPattern>(context, /*benefit=*/1);
