@@ -5983,7 +5983,6 @@ def test_memrealtime(device):
     out2 = to_triton(np.zeros((1, ), dtype=np.int64), device=device)
     h = kernel[(1, )](out1, out2)
     assert out2[0] > 0
-    print(out2[0])
     assert h.asm["amdgcn"].count("s_memrealtime") == 2
 
 
