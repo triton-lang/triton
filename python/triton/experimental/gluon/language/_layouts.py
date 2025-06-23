@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from triton.language.core import _unwrap_if_constexpr, _unwrap_shape
 
 __all__ = [
@@ -22,6 +22,12 @@ def _realize_cta_layout(layout, rank):
 
 class DistributedLayout:
     pass
+
+
+def make_hash(items: Dict[str, Any]):
+    """Returns a hash for a dictionary that may have lists at the top level.
+    Change the lists and dictionary into tuples for hashability."""
+    return hash(tuple((k, tuple(v) if isinstance(v, List) else v) for k, v in items if v is not None))
 
 
 @dataclass(frozen=True)
@@ -51,6 +57,9 @@ class BlockedLayout(DistributedLayout):
         assert len(self.ctas_per_cga) == rank
         assert len(self.cta_split_num) == rank
         assert len(self.cta_order) == rank
+
+    def __hash__(self):
+        return make_hash(self.__dict__.items())
 
     def _to_ir(self, builder):
         return builder.get_blocked_layout(
@@ -129,6 +138,9 @@ class DistributedLinearLayout(DistributedLayout):
         return builder.get_distributed_linear_layout(self.reg_bases, self.lane_bases, self.warp_bases, self.block_bases,
                                                      self.shape)
 
+    def __hash__(self):
+        return make_hash(self.__dict__.items())
+
     def mangle(self):
         return f"DLL{self.reg_bases}_{self.lane_bases}_{self.warp_bases}_{self.block_bases}_{self.shape}DLL"
 
@@ -177,6 +189,9 @@ class NVMMASharedLayout(SharedLayout):
             self.cta_order,
         )
 
+    def __hash__(self):
+        return make_hash(self.__dict__.items())
+
     def mangle(self) -> str:
         return f"NVMMA_{self.swizzle_byte_width}_{self.element_bitwidth}_{self.transposed}_{self.fp4_padded}_NVMMA"
 
@@ -216,6 +231,9 @@ class SwizzledSharedLayout(SharedLayout):
             self.cta_split_num,
             self.cta_order,
         )
+
+    def __hash__(self):
+        return make_hash(self.__dict__.items())
 
     def mangle(self) -> str:
 

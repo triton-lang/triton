@@ -9,7 +9,7 @@ import textwrap
 from collections import defaultdict
 from dataclasses import dataclass
 from functools import cached_property
-from typing import Callable, Generic, Iterable, Optional, TypeVar, Union, overload, Dict, Any, Tuple
+from typing import Callable, Generic, Iterable, Optional, TypeVar, Union, overload, Dict, Any, Tuple, List
 
 from triton.tools.tensor_descriptor import TensorDescriptor
 from types import ModuleType
@@ -391,6 +391,19 @@ class KernelInterface(Generic[T]):
         # return cast(T, functools.partial(cast(Callable, self.run), grid=grid))
 
 
+def serialize_to_json(obj):
+    if type(obj).__name__ == "dtype":
+        return {"triton_dtype": obj.name}
+    raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
+
+
+def deserializer(obj):
+    from ..language import dtype
+    if obj.get("triton_dtype"):
+        return dtype(obj["triton_dtype"])
+    return obj
+
+
 def serialize_specialization_data(name, signature, constants, attrs, options, key):
     constants = {key: str(value) if value.__class__.__name__ == "dtype" else value for key, value in constants.items()}
     import json
@@ -399,7 +412,7 @@ def serialize_specialization_data(name, signature, constants, attrs, options, ke
         list(constants.values()), 'attrs_keys': [list(x) for x in attrs.keys()], 'attrs_vals': list(attrs.values()),
         'options': options.__dict__, 'key': key
     }
-    serialized_obj = json.dumps(obj)
+    serialized_obj = json.dumps(obj, default=serialize_to_json)
     return serialized_obj
 
 
@@ -463,6 +476,12 @@ def dynamic_func({", ".join(list(map(arg, sig.parameters.items())) + ["**options
 
 def get_full_name(fn):
     return f"{fn.__module__}.{fn.__qualname__}"
+
+
+def tuplefy(obj):
+    if isinstance(obj, List):
+        return tuple(tuplefy(sub_obj) for sub_obj in obj)
+    return obj
 
 
 @dataclass
@@ -561,7 +580,7 @@ class JITFunction(KernelInterface[T]):
         bound_args, specialization, options = binder(*args, **kwargs)
 
         # compute cache key
-        key = str(specialization) + str(options)
+        key = (tuple(specialization), tuple(options.items()))
         kernel = kernel_cache.get(key, None)
 
         # Kernel is not cached; we have to compile.
@@ -711,7 +730,7 @@ class JITFunction(KernelInterface[T]):
         import json
         import triton.language as tl
         device = driver.active.get_current_device()
-        deserialized_obj = json.loads(specialization_data)
+        deserialized_obj = json.loads(specialization_data, object_hook=deserializer)
         if deserialized_obj['name'] != self._fn_name:
             raise RuntimeError(
                 f"Specialization data is for {deserialized_obj['name']} but trying to preload for {self._fn_name}")
@@ -730,7 +749,7 @@ class JITFunction(KernelInterface[T]):
             key: tuple(value) if isinstance(value, list) else value
             for key, value in deserialized_obj['options'].items()
         }
-        key = deserialized_obj['key']
+        key = tuplefy(deserialized_obj['key'])
         kernel = compile(src, None, options)
         self.device_caches[device][0][key] = kernel
         return kernel
