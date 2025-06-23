@@ -39,6 +39,17 @@ SmallVector<int64_t> getTMABlockShape(ArrayRef<int64_t> shapePerCTA,
 inline SmallVector<int64_t> getTMABlockShape(Attribute encoding,
                                              ArrayRef<int64_t> shapePerCTA,
                                              bool packedSize) {
+  auto swizzledEnc =
+      llvm::dyn_cast_or_null<gpu::SwizzledSharedEncodingAttr>(encoding);
+  if (swizzledEnc) {
+    SmallVector<int64_t> blockShape(shapePerCTA);
+    constexpr int64_t dimMax = 256;
+    for (auto &size : blockShape)
+      size = std::min(size, dimMax);
+
+    return blockShape;
+  }
+
   auto mmaEnc = cast<gpu::NVMMASharedEncodingAttr>(encoding);
   return getTMABlockShape(shapePerCTA, mmaEnc.getElementBitWidth(),
                           mmaEnc.getSwizzlingByteWidth(), mmaEnc.getFp4Padded(),

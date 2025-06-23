@@ -35,6 +35,7 @@ using ::mlir::LLVM::linearize;
 using ::mlir::triton::gpu::getCTALayout;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
 using ::mlir::triton::gpu::NVMMASharedEncodingAttr;
+using ::mlir::triton::gpu::SwizzledSharedEncodingAttr;
 
 // Toggle this to work around Cooperative Grid Launch ld.acquire optimized path
 static constexpr bool disableLDAcquireLowering = false;
@@ -1307,8 +1308,14 @@ static LinearLayout getMsgToPackedOffsetLayout(ttg::MemDescType ty) {
 static LinearLayout
 getMsgToUnpackedOffsetLayout(const LinearLayout &packedLayout,
                              ttg::MemDescType ty) {
-  auto isFp4Padded =
-      cast<NVMMASharedEncodingAttr>(ty.getEncoding()).getFp4Padded();
+  auto enc = ty.getEncoding();
+  auto swizzledEnc = llvm::dyn_cast_or_null<SwizzledSharedEncodingAttr>(enc);
+
+  if (swizzledEnc) {
+    return packedLayout;
+  }
+
+  auto isFp4Padded = cast<NVMMASharedEncodingAttr>(enc).getFp4Padded();
   if (!isFp4Padded) {
     return packedLayout;
   }
