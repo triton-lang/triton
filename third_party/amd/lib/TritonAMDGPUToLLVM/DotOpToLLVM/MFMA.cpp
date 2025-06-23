@@ -558,8 +558,12 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
     }
 
     bool existBothScales = aScale && bScale;
-    bool isAScaleConstant = aScale && (aScale.getDefiningOp<arith::ConstantOp>() || aScale.getDefiningOp<triton::SplatOp>());
-    bool isBScaleConstant = bScale && (bScale.getDefiningOp<arith::ConstantOp>() || bScale.getDefiningOp<triton::SplatOp>());
+    bool isAScaleConstant =
+        aScale && (aScale.getDefiningOp<arith::ConstantOp>() ||
+                   aScale.getDefiningOp<triton::SplatOp>());
+    bool isBScaleConstant =
+        bScale && (bScale.getDefiningOp<arith::ConstantOp>() ||
+                   bScale.getDefiningOp<triton::SplatOp>());
     Value d = op.getD();
     auto aTensorTy = cast<RankedTensorType>(a.getType());
     auto bTensorTy = cast<RankedTensorType>(b.getType());
