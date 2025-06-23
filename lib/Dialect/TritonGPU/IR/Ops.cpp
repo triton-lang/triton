@@ -660,6 +660,7 @@ LogicalResult MemDescSubviewOp::verify() {
   // There are two cases:
   // 1. The subview is rank-reducing
   //  - We split along the first dimension. It can be with non-constant offsets
+  //  (TODO: ajust)
   if (srcTy.getRank() != dstTy.getRank()) {
     if (srcTy.getRank() - dstTy.getRank() != 1) {
       return emitError(
@@ -671,10 +672,6 @@ LogicalResult MemDescSubviewOp::verify() {
         return emitError("only constant values are allowed outside the front "
                          "dimension in a rank-reducing subview");
       }
-      if (!value.isZero()) {
-        return emitError(
-            "only first offset can be non-zero for a rank-reducing subview");
-      }
     }
     return success();
   }
@@ -684,14 +681,13 @@ LogicalResult MemDescSubviewOp::verify() {
   //  - The values where the split happens must not be within the swizzling
   //  pattern
   // Check which dimension we are splitting along
-  int dim = -1;
+  // int dim = -1;
+
+  // TODO: discuss with upstream folks
+  SetVector<int> slicedDims{};
   for (int i = 0; i < srcTy.getRank(); i++) {
     if (srcTy.getDimSize(i) != dstTy.getDimSize(i)) {
-      if (dim != -1) {
-        return emitError(
-            "We don't allow subviews that split along multiple dimensions");
-      }
-      dim = i;
+      slicedDims.insert(i);
     }
   }
   SmallVector<int64_t> offsets;
@@ -702,12 +698,12 @@ LogicalResult MemDescSubviewOp::verify() {
     offsets.push_back(value.getSExtValue());
   }
   // Identity subview
-  if (dim == -1) {
+  if (slicedDims.empty()) {
     return success();
   }
 
-  for (auto [i, offset] : llvm::enumerate(offsets)) {
-    if (i != dim) {
+  for (auto [dim, offset] : llvm::enumerate(offsets)) {
+    if (!slicedDims.contains(dim)) {
       if (offset != 0) {
         return emitError("A non zero offset found in a dimension that is "
                          "not being split");
@@ -718,22 +714,26 @@ LogicalResult MemDescSubviewOp::verify() {
       }
     }
   }
+
   auto ctx = getContext();
   // The order gives us the honest-to-goodness layout rank
   auto srcAllocShape = srcTy.getAllocShape().take_back(getOrder(srcTy).size());
   auto llInv =
       triton::gpu::toLinearLayout(srcAllocShape, srcTy.getEncoding()).invert();
-  auto kDim = mlir::StringAttr::get(ctx, "dim" + llvm::Twine(dim));
-  llvm::SmallVector<std::pair<mlir::StringAttr, int32_t>> namedOffsets;
-  for (auto d : standardOutDimNames(ctx, srcTy.getRank())) {
-    namedOffsets.push_back({d, 0});
-  }
-  for (int dimSize = dstTy.getDimSize(dim); dimSize < srcTy.getDimSize(dim);
-       dimSize *= 2) {
-    namedOffsets[dim] = {kDim, dimSize};
-    if (!llvm::isPowerOf2_32(llInv.apply(namedOffsets)[0].second)) {
-      return emitError(
-          "We don't support splitting along the swizzling pattern");
+
+  for (auto dim : slicedDims) {
+    auto kDim = mlir::StringAttr::get(ctx, "dim" + llvm::Twine(dim));
+    llvm::SmallVector<std::pair<mlir::StringAttr, int32_t>> namedOffsets;
+    for (auto d : standardOutDimNames(ctx, srcTy.getRank())) {
+      namedOffsets.push_back({d, 0});
+    }
+    for (int dimSize = dstTy.getDimSize(dim); dimSize < srcTy.getDimSize(dim);
+         dimSize *= 2) {
+      namedOffsets[dim] = {kDim, dimSize};
+      if (!llvm::isPowerOf2_32(llInv.apply(namedOffsets)[0].second)) {
+        return emitError(
+            "We don't support splitting along the swizzling pattern");
+      }
     }
   }
   return success();
