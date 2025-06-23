@@ -11,9 +11,13 @@ flops_by_device = {
         lambda width, num_sms, clock_rate, **kwargs: (num_sms * 16384 * (clock_rate / 1e3) * 1e6) / (width / 8),
     },
     "HIP": {
-        "gfx90a": lambda width, **kwargs: 383e12 / (width / 8),
-        "gfx942": lambda width, **kwargs: 2614.9e12 / (width / 8),
-        "gfx950": lambda width, **kwargs: 4614e12 / (width / 8),
+        "gfx90a":
+        lambda width, **kwargs: 383e12 / (width / 8),
+        "gfx942":
+        lambda width, **kwargs: 2614.9e12 / (width / 8),
+        "gfx950":
+        lambda width, num_sms, clock_rate, model_name, **kwargs:
+        (amd_fp8_matrix_flops_per_cu[model_name] * num_sms * clock_rate * 1e3) / (width / 8),
     },
 }
 
@@ -22,6 +26,9 @@ amd_bps_by_arch = {
     'gfx942': 5.3 * 1e12,
     'gfx950': 8.0 * 1e12,
 }
+
+# FP8 Matrix FP8 Performance(FLOPS/clock/CU)
+amd_fp8_matrix_flops_per_cu = {'MI350X': 8192, 'MI355X': 8192}
 
 
 def max_flops(device_type, arch, width, num_sms, clock_rate):
@@ -38,6 +45,15 @@ def max_flops(device_type, arch, width, num_sms, clock_rate):
     Returns:
         float: The maximum FLOPS for the given device type and width.
     """
+    model_name = None
+    if device_type == 'HIP' and arch == "gfx950":
+        if clock_rate == 2200000:
+            model_name = "MI350X"
+        elif clock_rate == 2400000:
+            model_name = "MI355X"
+        else:
+            raise ValueError(f"Unrecognized clock rate for gfx950: {clock_rate}")
+
     if device_type not in flops_by_device:
         raise ValueError(f"Unsupported device type: {device_type}")
 
@@ -46,7 +62,7 @@ def max_flops(device_type, arch, width, num_sms, clock_rate):
 
     flops_func = flops_by_device[device_type][arch]
 
-    return flops_func(width, num_sms=num_sms, clock_rate=clock_rate)
+    return flops_func(width, num_sms=num_sms, clock_rate=clock_rate, model_name=model_name)
 
 
 def max_bps(device_type, arch, bus_width, memory_clock_rate):
