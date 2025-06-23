@@ -838,6 +838,11 @@ public:
   // Inverse of the action
   ColumnAction inverse() const;
 
+  static ColumnAction identity(StringAttr inDim, size_t inSizeLog2) {
+    return ColumnAction(llvm::to_vector(llvm::seq<size_t>(inSizeLog2)), inDim,
+                        inSizeLog2);
+  }
+
   // Returns true if the action is the identity
   bool isIdentity() const { return m_isIdentity; }
 
