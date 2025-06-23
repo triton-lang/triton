@@ -216,11 +216,12 @@ class ContainsReturnChecker(ast.NodeVisitor):
 
 class ASTFunction:
 
-    def __init__(self, ret_types, arg_types, constants, attrs):
+    def __init__(self, ret_types, arg_types, constants, attrs, args_mut):
         self.ret_types = ret_types
         self.arg_types = arg_types
         self.constants = constants
         self.attrs = attrs
+        self.args_mut = args_mut
 
     def flatten_ir_types(self, builder: ir.builder, types: List[base_type]) -> List[ir.type]:
         ir_types = []
@@ -1185,6 +1186,7 @@ class CodeGenerator(ast.NodeVisitor):
         for i, arg in enumerate(args):
             if isinstance(arg, (language.dtype, float, int, bool, JITFunction)):
                 args[i] = language.core.constexpr(arg)
+        args_mut = [(name, arg.type) for (name, arg) in zip(fn.arg_names, args) if hasattr(arg.type, "__triton_mutable__")]
         args_cst = find_paths_if(args, lambda _, x: _is_constexpr(x))
         args_cst = {path: get_iterable_path(args, path) for path in args_cst}
         args_path = find_paths_if(args, lambda _, x: not _is_constexpr(x))
@@ -1200,7 +1202,7 @@ class CodeGenerator(ast.NodeVisitor):
                                                                      (bool, int, language.core.dtype)) else arg.type
                 for arg in args
             ]
-            prototype = ASTFunction([], arg_types, args_cst, dict())
+            prototype = ASTFunction([], arg_types, args_cst, dict(), args_mut)
             generator = CodeGenerator(self.context, prototype, fn.get_capture_scope(), module=self.module, jit_fn=fn,
                                       function_name=fn_name, function_types=self.function_ret_types,
                                       noinline=fn.noinline, file_name=file_name, begin_line=begin_line,
@@ -1454,7 +1456,7 @@ def ast_to_ttir(fn, src, context, options, codegen_fns, module_map, module=None)
     for k, v in src.signature.items():
         idx = fn.arg_names.index(k)
         arg_types[idx] = str_to_ty(v)
-    prototype = ASTFunction([], arg_types, src.constants, src.attrs)
+    prototype = ASTFunction([], arg_types, src.constants, src.attrs, args_mut=[])
     file_name, begin_line = get_jit_fn_file_line(fn)
     # query function representation
     from collections import namedtuple

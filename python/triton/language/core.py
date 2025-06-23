@@ -1526,6 +1526,8 @@ class _aggregate_type(base_type):
     and a list of class fields with their Triton types.
     """
 
+    __triton_mutable__ = True
+
     base_cls: type
     fields: List[Tuple[str, base_type]]
 
