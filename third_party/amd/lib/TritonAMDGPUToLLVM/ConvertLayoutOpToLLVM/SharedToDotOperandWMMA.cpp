@@ -154,7 +154,10 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
 
   auto aTensorTy = cast<triton::gpu::MemDescType>(tensor.getType());
   ArrayRef<int64_t> shape = aTensorTy.getShape();
-  auto sharedLayout = cast<SwizzledSharedEncodingAttr>(aTensorTy.getEncoding());
+  auto sharedLayout =
+      dyn_cast<SwizzledSharedEncodingAttr>(aTensorTy.getEncoding());
+  if (!sharedLayout)
+    return Value();
   auto order = sharedLayout.getOrder();
 
   // Rely on the linear layout conversion logic in this case, since only slowest
@@ -164,12 +167,15 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
 
   auto elemTy = aTensorTy.getElementType();
   int kWidth = encoding.getKWidth();
-  auto elemsPerInstr = wmmaLayout.getElemsPerInstrForOperands();
+
+  int kDim = (wmmaLayout.getVersion() == 2 && kWidth == 16) ? 32 : 16;
+  auto elemsPerInstr = wmmaLayout.getElemsPerInstrForOperands(kDim, opIdx);
   auto wmmaInstrK = elemsPerInstr[opIdx == 0 ? 1 : 0];
   auto wmmaInstrNonK = elemsPerInstr[opIdx == 0 ? 0 : 1];
   assert(wmmaInstrNonK == 16);
 
-  auto numReps = wmmaLayout.getRepForOperand(shape, elemTy, kWidth, opIdx);
+  auto numReps =
+      wmmaLayout.getRepForOperand(shape, elemTy, kWidth, kDim, opIdx);
   auto numRepNonK = numReps[opIdx == 0 ? 1 : 2];
   auto numRepK = numReps[opIdx == 0 ? 2 : 1];
   auto repB = numReps[0];
@@ -179,7 +185,7 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   Value waveSize = tb.i32_val(iWaveSize);
   Value linearWaveId = tb.udiv(thread, waveSize);
 
-  unsigned numElemsPerThreadPerRep = wmmaLayout.getKWidthForOperands();
+  unsigned numElemsPerThreadPerRep = kWidth;
 
   Value lane = tb.urem(thread, waveSize);
   unsigned int maxNumWarps = shape[nonKDimIdx] / wmmaInstrNonK;

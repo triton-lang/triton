@@ -291,7 +291,7 @@ def _finalize_matmul(
                         if src_idx != -1:
                             As = A + src_idx.to(tl.int64) * stride_a_m + offs_n
                             for ki in tl.static_range(K):
-                                acc += tl.load(As, mask=(src_idxs != -1)[:, None] & n_mask[None, :], other=0.0)
+                                acc += tl.load(As, mask=n_mask, other=0.0)
                                 As += stride_a_k
                 else:
                     As = A + src_idxs.to(tl.int64)[:, None] * stride_a_m + offs_n[None, :]

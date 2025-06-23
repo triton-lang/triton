@@ -20,7 +20,7 @@ static const char *kLoopStageAttrName = "loop.stage";
 static const char *kLoopClusterAttrName = "loop.cluster";
 static const char *kScheduledMaxStageAttrName = "tt.scheduled_max_stage";
 class CoarseSchedule;
-
+class ModuleAxisInfoAnalysis;
 //===----------------------------------------------------------------------===//
 // Hoisting Utilities
 //===----------------------------------------------------------------------===//
@@ -86,6 +86,9 @@ std::pair<Operation *, int64_t> getDefiningOpAndDistance(scf::ForOp forOp,
 // memory for the given tensor type and shared encoding.
 int getCopyVecBytes(RankedTensorType registerTy,
                     gpu::SharedEncodingTrait sharedEnc);
+
+bool canBeConvertedToAsyncLoad(
+    triton::LoadOp loadOp, triton::ModuleAxisInfoAnalysis &axisInfoAnalysis);
 
 // Serialize the latencies of the operations in the loops into the latency
 // attribute.

@@ -262,6 +262,15 @@ def TTNG_ArriveBarrierOp : TTNG_Op<"arrive_barrier"> {
   let hasVerifier = 1;
 }
 
+def TTNG_AsyncCopyMbarrierArriveOp : TTNG_Op<"async_copy_mbarrier_arrive"> {
+  let summary = "arrive on mbarrier once all previously issued copies are completed";
+  let arguments = (ins
+    Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$barrier,
+    UnitAttr:$noIncrement
+  );
+  let assemblyFormat = "$barrier attr-dict `:` qualified(type($barrier))";
+}
+
 
 def TTNG_AsyncTMACopyGlobalToLocalOp : TTNG_Op<"async_tma_copy_global_to_local"> {
   let summary = "copy data based on descriptor from global memory to local memory asynchronously";

@@ -5,6 +5,7 @@
 
 #include "mlir/IR/DialectImplementation.h"
 #include "mlir/IR/OpImplementation.h"
+#include "mlir/IR/OperationSupport.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Interfaces.h"
@@ -20,7 +21,9 @@
 #include "triton/Tools/LinearLayout.h"
 #include "triton/Tools/StrUtil.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
+#include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/TypeSwitch.h"
+#include "llvm/Support/MathExtras.h"
 
 // Include TableGen'erated code
 #include "triton/Dialect/TritonGPU/IR/Dialect.cpp.inc"
@@ -140,8 +143,10 @@ SmallVector<unsigned> getMatrixOrder(unsigned rank, bool rowMajor) {
   // Return the order that represents that the batch is in row-major or
   // column-major order for a batch of matrices of shape [*, m, n] with
   // len(shape) == rank.
-  assert(rank >= 2);
   SmallVector<unsigned> order(rank);
+  if (rank < 2) {
+    return order;
+  }
   std::iota(order.rbegin(), order.rend(), 0);
   if (!rowMajor) {
     std::swap(order[0], order[1]);
@@ -173,18 +178,19 @@ SmallVector<unsigned> getRepOrder(RankedTensorType type) {
 // This one's not terribly bad as we don't broadcast ShareEncodings
 SmallVector<unsigned> getOrder(SharedEncodingTrait layout,
                                ArrayRef<int64_t> shape) {
-  if (auto swizzledLayout =
-          mlir::dyn_cast<SwizzledSharedEncodingAttr>(layout)) {
+  if (auto swizzledLayout = dyn_cast<SwizzledSharedEncodingAttr>(layout)) {
     return llvm::to_vector(swizzledLayout.getOrder());
   }
-  if (auto sharedLayout = mlir::dyn_cast<NVMMASharedEncodingAttr>(layout)) {
+  if (auto paddedLayout = dyn_cast<PaddedSharedEncodingAttr>(layout)) {
+    return llvm::to_vector(paddedLayout.getOrder());
+  }
+  if (auto sharedLayout = dyn_cast<NVMMASharedEncodingAttr>(layout)) {
     if (shape.size() == 1) {
       return {0};
     }
     return getMatrixOrder(shape.size(), !sharedLayout.getTransposed());
   }
-  if (auto sharedLayout =
-          mlir::dyn_cast<AMDRotatingSharedEncodingAttr>(layout)) {
+  if (auto sharedLayout = dyn_cast<AMDRotatingSharedEncodingAttr>(layout)) {
     return llvm::to_vector(sharedLayout.getOrder());
   }
   llvm::report_fatal_error("Unimplemented usage of getOrder for MemDescType");
@@ -312,7 +318,7 @@ SmallVector<int64_t> getShapePerCTA(Attribute layout, ArrayRef<int64_t> shape) {
 SmallVector<int64_t> getAllocationShapePerCTA(Attribute layout,
                                               ArrayRef<int64_t> shapeLogical) {
   SmallVector<int64_t> shape(shapeLogical);
-  if (auto sharedMMALayout = mlir::dyn_cast<NVMMASharedEncodingAttr>(layout)) {
+  if (auto sharedMMALayout = dyn_cast<NVMMASharedEncodingAttr>(layout)) {
     if (sharedMMALayout.getFp4Padded()) {
       auto packedAxis = getOrder(sharedMMALayout, shapeLogical)[0];
       shape[packedAxis] *= 2;
@@ -393,6 +399,21 @@ BlockedEncodingAttr::verify(function_ref<InFlightDiagnostic()> emitError,
                         warpsPerCTA.size(), order.size()})) {
     return emitError() << "sizePerThread, threadsPerWarp, warpsPerCTA, and "
                           "order must all have the same rank.";
+  }
+  if (llvm::any_of(sizePerThread,
+                   [](unsigned x) { return !llvm::isPowerOf2_64(x); })) {
+    return emitError()
+           << "Every element in sizePerThread must be a power of two.";
+  }
+  if (llvm::any_of(threadsPerWarp,
+                   [](unsigned x) { return !llvm::isPowerOf2_64(x); })) {
+    return emitError()
+           << "Every element in threadsPerWarp must be a power of two.";
+  }
+  if (llvm::any_of(warpsPerCTA,
+                   [](unsigned x) { return !llvm::isPowerOf2_64(x); })) {
+    return emitError()
+           << "Every element in warpsPerCTA must be a power of two.";
   }
 
   // Empty CTALayout is allowed, but if it's present its rank must match the
@@ -639,6 +660,16 @@ SmallVector<unsigned> SwizzledSharedEncodingAttr::getCTAOrder() const {
 }
 SmallVector<unsigned> SwizzledSharedEncodingAttr::getCTASplitNum() const {
   return SmallVector<unsigned>(getCTALayout().getCTASplitNum());
+}
+
+SmallVector<unsigned> PaddedSharedEncodingAttr::getCTAsPerCGA() const {
+  return llvm::to_vector(getCTALayout().getCTAsPerCGA());
+}
+SmallVector<unsigned> PaddedSharedEncodingAttr::getCTAOrder() const {
+  return llvm::to_vector(getCTALayout().getCTAOrder());
+}
+SmallVector<unsigned> PaddedSharedEncodingAttr::getCTASplitNum() const {
+  return llvm::to_vector(getCTALayout().getCTASplitNum());
 }
 
 int32_t AMDRotatingSharedEncodingAttr::getAlignment() const { return 16; }
@@ -1492,38 +1523,14 @@ void SliceEncodingAttr::print(mlir::AsmPrinter &printer) const {
 // Helper shared encoding functions
 //===----------------------------------------------------------------------===//
 
-template <typename SpecificEncoding>
-Attribute parseSwizzledEncoding(AsmParser &parser, Type type) {
-  if (parser.parseLess().failed())
-    return {};
-  // Parse the data as a dictionary
-  DictionaryAttr dict;
-  if (parser.parseAttribute(dict).failed())
-    return {};
-  if (parser.parseGreater().failed())
-    return {};
-
-  unsigned vec = 0;
-  unsigned perPhase = 0;
-  unsigned maxPhase = 0;
-  SmallVector<unsigned> order;
+std::optional<CTALayoutAttr>
+parseCTAAttrs(AsmParser &parser, NamedAttrList attrList, unsigned rank) {
   std::optional<SmallVector<unsigned>> CTAsPerCGA;
   std::optional<SmallVector<unsigned>> CTASplitNum;
   std::optional<SmallVector<unsigned>> CTAOrder;
-  for (const NamedAttribute &attr : dict) {
-    if (attr.getName() == "vec") {
-      if (parseUInt(parser, attr, vec, "vec").failed())
-        return {};
-    } else if (attr.getName() == "perPhase") {
-      if (parseUInt(parser, attr, perPhase, "perPhase").failed())
-        return {};
-    } else if (attr.getName() == "maxPhase") {
-      if (parseUInt(parser, attr, maxPhase, "maxPhase").failed())
-        return {};
-    } else if (attr.getName() == "order") {
-      if (parseIntArrayAttr(parser, attr, order, "order").failed())
-        return {};
-    } else if (attr.getName() == "CTAsPerCGA") {
+
+  for (const NamedAttribute &attr : attrList) {
+    if (attr.getName() == "CTAsPerCGA") {
       if (parseIntArrayAttr(parser, attr, CTAsPerCGA.emplace(), "CTAsPerCGA")
               .failed())
         return {};
@@ -1542,13 +1549,47 @@ Attribute parseSwizzledEncoding(AsmParser &parser, Type type) {
     }
   }
 
-  std::optional<CTALayoutAttr> CTALayout = getCTALayoutOrError(
-      parser, CTAsPerCGA, CTASplitNum, CTAOrder, /*rank=*/order.size());
-  if (!CTALayout.has_value())
+  return getCTALayoutOrError(parser, CTAsPerCGA, CTASplitNum, CTAOrder, rank);
+}
+
+template <typename SpecificEncoding>
+Attribute parseSwizzledEncoding(AsmParser &parser, Type type) {
+  if (parser.parseLess().failed())
+    return {};
+  // Parse the data as a dictionary
+  DictionaryAttr dict;
+  if (parser.parseAttribute(dict).failed())
+    return {};
+  if (parser.parseGreater().failed())
     return {};
 
-  return parser.getChecked<SpecificEncoding>(parser.getContext(), vec, perPhase,
-                                             maxPhase, order, *CTALayout);
+  unsigned vec = 0;
+  unsigned perPhase = 0;
+  unsigned maxPhase = 0;
+  SmallVector<unsigned> order;
+  NamedAttrList remainingAttrs;
+  for (const NamedAttribute &attr : dict) {
+    if (attr.getName() == "vec") {
+      if (parseUInt(parser, attr, vec, "vec").failed())
+        return {};
+    } else if (attr.getName() == "perPhase") {
+      if (parseUInt(parser, attr, perPhase, "perPhase").failed())
+        return {};
+    } else if (attr.getName() == "maxPhase") {
+      if (parseUInt(parser, attr, maxPhase, "maxPhase").failed())
+        return {};
+    } else if (attr.getName() == "order") {
+      if (parseIntArrayAttr(parser, attr, order, "order").failed())
+        return {};
+    } else {
+      remainingAttrs.push_back(attr);
+    }
+  }
+
+  if (auto CTALayout = parseCTAAttrs(parser, remainingAttrs, order.size()))
+    return parser.getChecked<SpecificEncoding>(
+        parser.getContext(), vec, perPhase, maxPhase, order, *CTALayout);
+  return {};
 }
 
 //===----------------------------------------------------------------------===//
@@ -1581,6 +1622,123 @@ void SwizzledSharedEncodingAttr::print(AsmPrinter &printer) const {
   maybePrintCTALayout(getContext(), printer, getCTALayout(),
                       /*rank=*/getOrder().size());
   printer << "}>";
+}
+
+//===----------------------------------------------------------------------===//
+// PaddedShared encoding
+//===----------------------------------------------------------------------===//
+
+Attribute PaddedSharedEncodingAttr::parse(AsmParser &parser, Type type) {
+  // <[
+  if (failed(parser.parseLess()) || failed(parser.parseLSquare()))
+    return {};
+
+  // <interval_i>:+<padding_i>
+  SmallVector<unsigned, 4> intervals, paddings;
+  auto parseIntervalPaddingPair = [&]() {
+    unsigned interval = 0, padding = 0;
+    if (failed(parser.parseInteger(interval)) || failed(parser.parseColon()) ||
+        failed(parser.parsePlus()) || failed(parser.parseInteger(padding)))
+      return failure();
+    intervals.push_back(interval);
+    paddings.push_back(padding);
+    return success();
+  };
+  // ]
+  if (failed(parser.parseCommaSeparatedList(parseIntervalPaddingPair)) ||
+      failed(parser.parseRSquare()))
+    return {};
+
+  // {<attr-dict>}>
+  NamedAttrList attrList;
+  if (failed(parser.parseOptionalAttrDict(attrList)) ||
+      failed(parser.parseGreater()))
+    return {};
+
+  // Decode order and CTA attributes
+  SmallVector<unsigned> order;
+  NamedAttrList remainingAttrs;
+  for (const NamedAttribute &attr : attrList) {
+    if (attr.getName() == "order") {
+      if (parseIntArrayAttr(parser, attr, order, "order").failed())
+        return {};
+    } else {
+      remainingAttrs.push_back(attr);
+    }
+  }
+  if (auto ctaLayout = parseCTAAttrs(parser, remainingAttrs, order.size()))
+    return parser.getChecked<PaddedSharedEncodingAttr>(
+        parser.getContext(), intervals, paddings, order, *ctaLayout);
+  return {};
+}
+
+void PaddedSharedEncodingAttr::print(AsmPrinter &printer) const {
+  printer << "<[";
+  llvm::interleaveComma(llvm::zip(getIntervals(), getPaddings()), printer,
+                        [&](std::tuple<unsigned, unsigned> intervalPad) {
+                          printer << std::get<0>(intervalPad) << ":+"
+                                  << std::get<1>(intervalPad);
+                        });
+  printer << "] {order = [" << getOrder() << "]";
+  maybePrintCTALayout(getContext(), printer, getCTALayout(),
+                      /*rank=*/getOrder().size());
+  printer << "}>";
+}
+
+LogicalResult PaddedSharedEncodingAttr::verify(
+    function_ref<InFlightDiagnostic()> emitError, ArrayRef<unsigned> intervals,
+    ArrayRef<unsigned> paddings, ArrayRef<unsigned> order,
+    CTALayoutAttr ctaLayout) {
+  if (intervals.size() != paddings.size())
+    return emitError() << "intervals size (" << intervals.size()
+                       << ") must match paddings size (" << paddings.size()
+                       << ")";
+
+  if (intervals.empty())
+    return emitError() << "must have at least one interval-padding pair";
+
+  if (!llvm::all_of(intervals, llvm::isPowerOf2_32))
+    return emitError() << "interval values must all be power of two";
+  if (!llvm::all_of(paddings, llvm::isPowerOf2_32))
+    return emitError() << "padding values must all be power of two";
+
+  llvm::SmallSet<unsigned, 4> intervalValues(intervals.begin(),
+                                             intervals.end());
+  if (intervalValues.size() != intervals.size())
+    return emitError() << "interval values cannot have duplicates";
+
+  if (order.empty())
+    return emitError() << "order cannot be empty";
+
+  if (order.size() != ctaLayout.getRank())
+    return emitError() << "order size (" << order.size()
+                       << ") must match CTALayout rank (" << ctaLayout.getRank()
+                       << ")";
+  return verifyLayoutOrder(emitError, order);
+}
+
+PaddedSharedEncodingAttr PaddedSharedEncodingAttr::get(
+    MLIRContext *context, ArrayRef<std::pair<unsigned, unsigned>> intervalPads,
+    ArrayRef<unsigned> order, CTALayoutAttr ctaLayout) {
+  SmallVector<unsigned> intervals, paddings;
+  intervals.reserve(intervalPads.size());
+  paddings.reserve(intervalPads.size());
+  for (auto [interval, padding] : intervalPads) {
+    intervals.push_back(interval);
+    paddings.push_back(padding);
+  }
+  return get(context, intervals, paddings, order, ctaLayout);
+}
+
+int64_t PaddedSharedEncodingAttr::getPaddedSize(ArrayRef<int64_t> shape) const {
+  int64_t unpaddedSize = product(shape);
+  int64_t paddingSize = 0;
+  for (auto [interval, padding] :
+       llvm::zip_equal(getIntervals(), getPaddings())) {
+    paddingSize += (unpaddedSize >> llvm::Log2_32(interval))
+                   << llvm::Log2_32(padding);
+  }
+  return unpaddedSize + paddingSize;
 }
 
 //===----------------------------------------------------------------------===//
@@ -1845,15 +2003,19 @@ SmallVector<unsigned> AMDWmmaEncodingAttr::getCTASplitNum() const {
   return SmallVector<unsigned>(getCTALayout().getCTASplitNum());
 }
 
-SmallVector<int64_t> AMDWmmaEncodingAttr::getElemsPerInstrForOperands() const {
-  return {16, 16};
+SmallVector<int64_t>
+AMDWmmaEncodingAttr::getElemsPerInstrForOperands(int kDim, int opIdx) const {
+  if (opIdx == 0)
+    return {16, kDim};
+  else
+    return {kDim, 16};
 }
 
 SmallVector<int64_t>
 AMDWmmaEncodingAttr::getRepForOperand(ArrayRef<int64_t> operandShape,
-                                      Type elemType, int kWidth,
+                                      Type elemType, int kWidth, int kDim,
                                       int opIdx) const {
-  auto operandTileShape = getElemsPerInstrForOperands();
+  auto operandTileShape = getElemsPerInstrForOperands(kDim, opIdx);
   assert(operandTileShape.size() == 2);
   auto warpsPerCTA = getWarpsPerCTA();
   auto rank = operandShape.size();
@@ -1879,14 +2041,6 @@ AMDWmmaEncodingAttr::getRepForOperand(ArrayRef<int64_t> operandShape,
 SmallVector<unsigned> AMDWmmaEncodingAttr::getMNKDimPerInstr() {
   // TODO: move magic numbers out of the code
   return {16, 16, 16};
-}
-
-unsigned AMDWmmaEncodingAttr::getKWidthForOperands() const {
-  SmallVector<unsigned> sizePerThread(getRank(), 1);
-  auto numReplicated = getVersion() == 1 ? 2 : 1;
-  auto elemsPerInstr =
-      numReplicated * product(getElemsPerInstrForOperands()) / 32;
-  return elemsPerInstr;
 }
 
 //===----------------------------------------------------------------------===//
@@ -1967,6 +2121,8 @@ NvidiaMmaEncodingAttr::getRepForOperand(ArrayRef<int64_t> shape, int bitwidth,
 SmallVector<unsigned> DotOperandEncodingAttr::getRepOrder() const {
   if (auto mma = mlir::dyn_cast<MmaEncodingTrait>(getParent())) {
     return mma.getRepOrderForOperand(getOpIdx());
+  } else if (auto blocked = mlir::dyn_cast<BlockedEncodingAttr>(getParent())) {
+    return to_vector(blocked.getOrder());
   }
   llvm::report_fatal_error(
       "getRepOrder not implemented for DotOperandEncodingAttr");
@@ -2243,13 +2399,6 @@ struct TritonGPUInferLayoutInterface
       dstEnc = getDefaultBlockedEncoding(context, dstShape, numWarps,
                                          threadsPerWarp, numCTAs);
       return success();
-    }
-
-    // Feature flag to disable this routine while it's relatively new.
-    // TODO(jlebar): Remove this once we're confident in the code.
-    if (triton::tools::getBoolEnv(
-            "TRITON_DISABLE_RESHAPE_ENCODING_INFERENCE")) {
-      return failure();
     }
 
     // Cowardly refuse to handle encodings with multiple CTAs.  CTAsPerCGA
@@ -2671,60 +2820,56 @@ struct TritonGPUVerifyTensorLayoutInterface
   LogicalResult verifyTensorLayout(
       Attribute layout, RankedTensorType rankedTy, Operation *op,
       function_ref<InFlightDiagnostic()> makeErr) const override {
-    if (isa<triton::gpu::SharedEncodingTrait>(layout))
-      return makeErr() << "Shared layout is not allowed on tensor type.";
-    // TODO(jlebar): Currently this only checks blocked layouts, but other
-    // layouts also have invariants!
+    auto distr = dyn_cast<triton::gpu::DistributedEncodingTrait>(layout);
+    if (!distr)
+      return makeErr()
+             << "Non-distributed layout is not allowed in tensor type.";
+    auto rank = distr.getRepOrder().size();
+    if (rank != rankedTy.getRank())
+      return makeErr() << "Layout has rank " << rank
+                       << ", but the tensor it's attached to has rank "
+                       << rankedTy.getRank() << ".";
+    if (llvm::any_of(rankedTy.getShape(),
+                     [](int64_t i) { return !llvm::isPowerOf2_64(i); })) {
+      return makeErr() << "Layout has shape " << rankedTy.getShape()
+                       << ", but the tensor it's attached to has shape "
+                       << rankedTy.getShape()
+                       << " which is not a power of two.";
+    }
+    auto ll = toLinearLayout(rankedTy.getShape(), layout);
+    ModuleOp module = op->getParentOfType<ModuleOp>();
 
-    // TODO(jlebar): Handle the case when the encoding is nested within tt.ptr.
-    if (auto blocked = dyn_cast<BlockedEncodingAttr>(layout)) {
-      ModuleOp module = op->getParentOfType<ModuleOp>();
-
-      // A different verifier should have checked that the layout itself is
-      // valid, including that threads-per-warp has the same rank as
-      // warps-per-block etc.
-      if (blocked.getRank() != rankedTy.getRank()) {
-        return makeErr() << layout << ".\nLayout has rank " << blocked.getRank()
-                         << ", but the tensor it's attached to has rank "
-                         << rankedTy.getRank() << ".";
-      }
-
-      int moduleThreadsPerWarp = TritonGPUDialect::getThreadsPerWarp(module);
-      int64_t layoutThreadsPerWarp = product(blocked.getThreadsPerWarp());
-      if (layoutThreadsPerWarp != moduleThreadsPerWarp) {
-        return makeErr() << layout << ".\nLayout has a total of "
-                         << layoutThreadsPerWarp
-                         << " threads per warp, but the module specifies "
-                         << moduleThreadsPerWarp << " threads per warp.";
-      }
-
-      std::optional<int> moduleWarpsPerCTA = maybeLookupNumWarps(op);
-      if (!moduleWarpsPerCTA) {
-        return makeErr()
-               << "Could not determine the number of warps per CTA. Operation "
-                  "is not in a context with `ttg.num-warps`.";
-      }
-      int64_t layoutWarpsPerCTA = product(blocked.getWarpsPerCTA());
-      if (layoutWarpsPerCTA != *moduleWarpsPerCTA) {
-        return makeErr() << layout << ".\nLayout has a total of "
-                         << layoutWarpsPerCTA
-                         << " warps per CTA, but the context requires "
-                         << *moduleWarpsPerCTA << " warps per CTA.";
-      }
-
-      if (blocked.getCTALayout().getCTAsPerCGA().size() > 0) {
-        int moduleCTAsPerCGA = TritonGPUDialect::getNumCTAs(module);
-        int64_t layoutCTAsPerCGA =
-            product(blocked.getCTALayout().getCTAsPerCGA());
-        if (layoutCTAsPerCGA != moduleCTAsPerCGA) {
-          return makeErr() << layout << ".\nLayout has a total of "
-                           << layoutCTAsPerCGA
-                           << " CTAs per CGA, but the module specifies "
-                           << moduleCTAsPerCGA << " CTAs per CGA.";
-        }
-      }
+    // Number of threads per warp.
+    auto kLane = StringAttr::get(module.getContext(), "lane");
+    int moduleThreadsPerWarp = TritonGPUDialect::getThreadsPerWarp(module);
+    if (ll.getInDimSize(kLane) != moduleThreadsPerWarp) {
+      return makeErr() << layout << ".\nLayout has " << ll.getInDimSize(kLane)
+                       << " threads per warp, but the module specifies "
+                       << moduleThreadsPerWarp << " threads per warp.";
     }
 
+    // Number of warps per CTA.
+    std::optional<int> moduleWarpsPerCTA = maybeLookupNumWarps(op);
+    if (!moduleWarpsPerCTA) {
+      return makeErr()
+             << "Could not determine the number of warps per CTA. Operation "
+                "is not in a context with `ttg.num-warps`.";
+    }
+    auto kWarp = StringAttr::get(module.getContext(), "warp");
+    if (ll.getInDimSize(kWarp) != *moduleWarpsPerCTA) {
+      return makeErr() << layout << ".\nLayout has " << ll.getInDimSize(kWarp)
+                       << " warps per CTA, but the context requires "
+                       << *moduleWarpsPerCTA << " warps per CTA.";
+    }
+
+    // Number of CTAs per CGA.
+    auto kBlock = StringAttr::get(module.getContext(), "block");
+    int moduleCTAsPerCGA = TritonGPUDialect::getNumCTAs(module);
+    if (ll.getInDimSize(kBlock) != moduleCTAsPerCGA) {
+      return makeErr() << layout << ".\nLayout has " << ll.getInDimSize(kBlock)
+                       << " CTAs per CGA, but the context requires "
+                       << moduleCTAsPerCGA << " CTAs per CGA.";
+    }
     return success();
   }
 };

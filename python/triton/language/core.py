@@ -364,6 +364,12 @@ CONSTEXPR_0 = constexpr(0)
 
 
 def _unwrap_if_constexpr(o):
+    if isinstance(o, list):
+        return [_unwrap_if_constexpr(x) for x in o]
+    if isinstance(o, builtins.tuple):
+        return builtins.tuple(_unwrap_if_constexpr(x) for x in o)
+    if isinstance(o, tuple):
+        return tuple(_unwrap_if_constexpr(x) for x in o)
     return o.value if isinstance(o, constexpr) else o
 
 

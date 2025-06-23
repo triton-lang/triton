@@ -41,6 +41,28 @@ def TritonGPUPlanCTAPass : Pass<"triton-nvidia-gpu-plan-cta", "mlir::ModuleOp"> 
 }
 
 def TritonGPUFenceInsertion : Pass<"triton-nvidia-gpu-fence-insertion", "mlir::ModuleOp"> {
+  let summary = "Insert fences across generic and async proxy.";
+
+  let description = [{
+    This pass is to insert memory fences to ensure that memory operations are
+    properly ordered across generic and async operations.
+    This pass inserts fences at optimized location.
+    There is a pass later to handle all the functional requirements
+  }];
+
+  let dependentDialects = [
+    "mlir::triton::gpu::TritonGPUDialect",
+    "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
+  ];
+
+  let options = [
+    Option<"computeCapability", "compute-capability",
+           "int32_t", /*default*/"90",
+           "device compute capability">
+  ];
+}
+
+def TritonGPUProxyFenceInsertion : Pass<"triton-nvidia-gpu-proxy-fence-insertion", "mlir::ModuleOp"> {
   let summary = "Insert fences across generic and async proxy";
 
   let description = [{
