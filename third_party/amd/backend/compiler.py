@@ -37,7 +37,9 @@ class HIPOptions:
     debug: bool = False
     sanitize_overflow: bool = True
     arch: str = None
-    supported_fp8_dtypes: Tuple[str] = ("fp8e5", )
+    # We have native support for OCP fp8 variants since CNDA4/RDNA4. For earlier generations,
+    # we software emulate the support for them.
+    supported_fp8_dtypes: Tuple[str] = ("fp8e4nv", "fp8e5")
     deprecated_fp8_dot_operand_dtypes: Tuple[str] = ()
     default_dot_input_precision: str = "ieee"
     allowed_dot_input_precisions: Tuple[str] = ("ieee", )
@@ -113,11 +115,8 @@ class HIPBackend(BaseBackend):
         if "supported_fp8_dtypes" not in opts:
             supported_fp8_dtypes = set(HIPOptions.supported_fp8_dtypes)
             if self.target.arch == 'gfx942':
-                supported_fp8_dtypes.update({'fp8e4nv', 'fp8e4b8', 'fp8e5b16'})
-            elif self.target.arch == 'gfx950':
-                supported_fp8_dtypes.update({'fp8e4nv', 'fp8e5'})
-            elif 'gfx12' in self.target.arch:
-                supported_fp8_dtypes.update({'fp8e4nv', 'fp8e5'})
+                # CDNA3/gfx942 has native support for AMD specific FP8 types.
+                supported_fp8_dtypes.update({'fp8e4b8', 'fp8e5b16'})
             args["supported_fp8_dtypes"] = tuple(sorted(supported_fp8_dtypes))
 
         if "enable_fp_fusion" not in opts:

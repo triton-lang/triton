@@ -435,6 +435,47 @@ class CodeGenerator(ast.NodeVisitor):
         self.builder.restore_insertion_point(ip)
         self.builder.set_loc(loc)
 
+    def _find_carries(self, node, liveins):
+        # We must extract the handles before the value is editted in the loop
+        livehandles = {name: flatten_values_to_ir([v]) for name, v in liveins.items() if _is_triton_value(v)}
+        # create loop body block
+        block = self.builder.create_block()
+        self.builder.set_insertion_point_to_start(block)
+        # dry visit loop body
+        self.scf_stack.append(node)
+        self.visit_compound_statement(node.body)
+        self.scf_stack.pop()
+        block.erase()
+
+        # If a variable (name) has changed value within the loop, then it's
+        # a loop-carried variable. (The new and old value must be of the
+        # same type)
+        init_tys = []
+        init_handles = []
+        names = []
+
+        for name, live_val in liveins.items():
+            if _is_triton_value(live_val):
+                loop_val = self.lscope[name]
+                assert type(live_val) is type(loop_val), f'Loop carried variable {name} changed type'
+
+                live_handles = livehandles[name]
+                loop_handles = flatten_values_to_ir([loop_val])
+                if live_handles != loop_handles:
+                    self._verify_loop_carried_variable(name, loop_val, live_val)
+
+                    names.append(name)
+                    init_tys.append(live_val.type)
+                    init_handles.extend(live_handles)
+            else:
+                assert name not in self.local_defs, f'Loop carried variable {name} is not a triton value'
+
+        # reset local scope to not pick up local defs from the dry run.
+        self.lscope = liveins.copy()
+        self.local_defs = {}
+
+        return names, init_handles, init_tys
+
     #
     # AST visitor
     #
@@ -918,8 +959,8 @@ class CodeGenerator(ast.NodeVisitor):
     }
 
     def _verify_loop_carried_variable(self, name, loop_val, live_val):
-        assert _is_triton_value(loop_val), f'cannot reassign constxpr {name} in the loop'
-        assert _is_triton_value(live_val), f'cannot reasign constexpr {name} in the loop'
+        assert _is_triton_value(loop_val), f'cannot reassign constexpr {name} in the loop'
+        assert _is_triton_value(live_val), f'cannot reassign constexpr {name} in the loop'
         assert type(loop_val) is type(live_val), f'Loop carried variable {name} changed type'
         assert not _is_triton_tensor(loop_val) or loop_val.type == live_val.type, \
             f'Loop-carried variable {name} has initial type {live_val.type} '\
@@ -931,33 +972,9 @@ class CodeGenerator(ast.NodeVisitor):
             liveins, insert_block = sr
             ip, last_loc = self._get_insertion_point_and_loc()
 
-            # loop body (the after region)
-            # loop_block = self.builder.create_block()
-            dummy = self.builder.create_block()
-            self.builder.set_insertion_point_to_start(dummy)
-            self.scf_stack.append(node)
-            self.visit_compound_statement(node.body)
-            self.scf_stack.pop()
-            loop_defs = self.local_defs
-            dummy.erase()
+            names, init_handles, init_fe_tys = self._find_carries(node, liveins)
 
-            # collect loop-carried values
-            names = []
-            init_args = []
-            for name in loop_defs:
-                if name in liveins:
-                    # We should not def new constexpr
-                    loop_val = loop_defs[name]
-                    live_val = liveins[name]
-                    self._verify_loop_carried_variable(name, loop_val, live_val)
-
-                    # these are loop-carried values
-                    names.append(name)
-                    init_args.append(live_val)
-
-            init_handles = flatten_values_to_ir(init_args)
             init_tys = [h.get_type() for h in init_handles]
-            init_fe_tys = [a.type for a in init_args]
             self._set_insertion_point_and_loc(ip, last_loc)
             while_op = self.builder.create_while_op(init_tys, init_handles)
             # merge the condition region
@@ -985,13 +1002,9 @@ class CodeGenerator(ast.NodeVisitor):
             self.scf_stack.append(node)
             self.visit_compound_statement(node.body)
             self.scf_stack.pop()
-            loop_defs = self.local_defs
-            yields = []
-            for name in loop_defs:
-                if name in liveins:
-                    loop_defs[name]._flatten_ir(yields)
 
-            self.builder.create_yield_op(yields)
+            yield_handles = flatten_values_to_ir(self.lscope[name] for name in names)
+            self.builder.create_yield_op(yield_handles)
 
         # WhileOp defines new values, update the symbol table (lscope, local_defs)
         result_handles = [while_op.get_result(i) for i in range(len(init_handles))]
@@ -1097,34 +1110,10 @@ class CodeGenerator(ast.NodeVisitor):
             liveins, insert_block = sr
             ip, last_loc = self._get_insertion_point_and_loc()
 
-            # create loop body block
-            block = self.builder.create_block()
-            self.builder.set_insertion_point_to_start(block)
-            # dry visit loop body
-            self.scf_stack.append(node)
-            self.visit_compound_statement(node.body)
-            self.scf_stack.pop()
-            block.erase()
-
-            # If a variable (name) is defined in both its parent & itself, then it's
-            # a loop-carried variable. (They must be of the same type)
-            init_args = []
-            yields = []
-            names = []
-            for name in self.local_defs:
-                if name in liveins:
-                    loop_val = self.local_defs[name]
-                    live_val = liveins[name]
-                    self._verify_loop_carried_variable(name, loop_val, live_val)
-
-                    names.append(name)
-                    init_args.append(live_val)
-                    yields.append(loop_val)
+            names, init_handles, init_tys = self._find_carries(node, liveins)
 
             # create ForOp
             self._set_insertion_point_and_loc(ip, last_loc)
-            init_handles = flatten_values_to_ir(init_args)
-            init_tys = [v.type for v in init_args]
             for_op = self.builder.create_for_op(lb, ub, step, init_handles)
             if _unwrap_if_constexpr(num_stages) is not None:
                 for_op.set_attr("tt.num_stages", self.builder.get_int32_attr(num_stages))
@@ -1140,26 +1129,16 @@ class CodeGenerator(ast.NodeVisitor):
             self.scf_stack.append(node)
             for_op_body = for_op.get_body(0)
             self.builder.set_insertion_point_to_start(for_op_body)
-            # reset local scope to not pick up local defs from the previous dry run.
-            self.lscope = liveins.copy()
-            self.local_defs = {}
             block_handles = [for_op_body.arg(i + 1) for i in range(len(init_handles))]
             block_args = unflatten_ir_values(block_handles, init_tys)
             for name, val in zip(names, block_args):
                 self.set_value(name, val)
             self.visit_compound_statement(node.body)
             self.scf_stack.pop()
-            yields = []
-            for name in self.local_defs:
-                if name in liveins:
-                    local = self.local_defs[name]
-                    if isinstance(local, constexpr):
-                        local = self.semantic.to_tensor(local)
-                    yields.append(local)
+            yield_handles = flatten_values_to_ir(self.lscope[name] for name in names)
 
             # create YieldOp
-            if len(yields) > 0:
-                yield_handles = flatten_values_to_ir(yields)
+            if len(yield_handles) > 0:
                 self.builder.create_yield_op(yield_handles)
             for_op_region = for_op_body.get_parent()
             assert for_op_region.size() == 1, "We use SCF, so the loop body should only have one block"
