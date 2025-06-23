@@ -42,9 +42,10 @@ unsigned getCyclesPerMfma(DotOp dotOp) {
   bool allowXF32 =
       dotOp.getInputPrecision() == InputPrecision::TF32 && mfmaVersion == 3;
 
-  FailureOr<MfmaIntrinsic> maybeMfmaInsn = MfmaIntrinsic::selectFor(
-      mfmaVersion, mDim, nDim, kDimOperandSize, elemTyA, elemTyB,
-      /*withScale=*/false, allowXF32);
+  FailureOr<MfmaIntrinsic> maybeMfmaInsn =
+      MfmaIntrinsic::selectFor(dotOp->getLoc(), mfmaVersion, mDim, nDim,
+                               kDimOperandSize, elemTyA, elemTyB,
+                               /*withScale=*/false, allowXF32);
 
   if (failed(maybeMfmaInsn))
     llvm::report_fatal_error("No match found in MFMA database\n");

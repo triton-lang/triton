@@ -458,10 +458,18 @@ struct CanonicalizeConcatOpFromExtractSlice
     if (!concatOp)
       return failure();
 
-    auto offset = op.getStaticOffsets();
-    auto coords = concatOp.getCoords();
-    if (coords.size() != offset.size())
+    auto origTensorType = dyn_cast<RankedTensorType>(op.getOperand().getType());
+    auto concatTensorType =
+        dyn_cast<RankedTensorType>(op.getResult().getType());
+
+    if (!(origTensorType && concatTensorType)) {
       return failure();
+    }
+    auto origTensorShape = origTensorType.getShape();
+    auto concatTensorShape = concatTensorType.getShape();
+    if (origTensorShape.equals(concatTensorShape)) {
+      return failure();
+    }
 
     auto sliceResult = op.getResult();
     auto sliceResultType = sliceResult.getType();
@@ -476,10 +484,16 @@ struct CanonicalizeConcatOpFromExtractSlice
       return failure();
 
     auto concatItemShape = concatItemType.getShape();
+    llvm::SmallVector<int64_t> coords(concatTensorShape.size());
+    for (size_t i = 0; i < coords.size(); ++i) {
+      coords[i] = concatTensorShape[i] / concatItemShape[i];
+    }
+
     SmallVector<int64_t> dimScales(concatItemShape.size(), 1);
     int64_t concatItemIndex = 0;
     std::exclusive_scan(coords.rbegin(), coords.rend(), dimScales.rbegin(), 1,
                         std::multiplies<>());
+    auto offset = op.getStaticOffsets();
     for (auto [idx, itemDimSize] : llvm::enumerate(concatItemShape)) {
       if ((offset[idx] % itemDimSize) != 0)
         return failure();
@@ -504,12 +518,16 @@ struct CanonicalizeConcatOp : public mlir::OpRewritePattern<amdgpu::ConcatOp> {
 
     auto result = op.getResult();
     auto sources = op.getSources();
-    auto offsets = op.getCoords();
     if (sources.size() == 1) {
-      assert(product(offsets) == 1);
-      auto source = sources.front();
-      result.replaceAllUsesWith(source);
-      return success();
+      auto resultShape =
+          cast<RankedTensorType>(op.getResult().getType()).getShape();
+      auto sourceShape =
+          cast<RankedTensorType>(sources.front().getType()).getShape();
+      if (resultShape.equals(sourceShape)) {
+        auto source = sources.front();
+        result.replaceAllUsesWith(source);
+        return success();
+      }
     }
 
     return failure();

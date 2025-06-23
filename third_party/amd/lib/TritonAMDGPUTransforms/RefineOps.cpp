@@ -218,9 +218,10 @@ struct DotOpMFMAConverter {
     bool allowXF32 =
         dotOp.getInputPrecision() == InputPrecision::TF32 && mfmaVersion == 3;
 
-    FailureOr<MfmaIntrinsic> maybeMfmaInsn = MfmaIntrinsic::selectFor(
-        mfmaVersion, mDim, nDim, kDimOperandSize, elemTyA, elemTyB,
-        /*withScale=*/false, allowXF32);
+    FailureOr<MfmaIntrinsic> maybeMfmaInsn =
+        MfmaIntrinsic::selectFor(dotOp->getLoc(), mfmaVersion, mDim, nDim,
+                                 kDimOperandSize, elemTyA, elemTyB,
+                                 /*withScale=*/false, allowXF32);
 
     SmallVector<unsigned> mfmaShape = {16, 16, 16};
     if (failed(maybeMfmaInsn)) {
@@ -265,15 +266,15 @@ struct DotOpMFMAConverter {
     auto extractSliceTypeA =
         RankedTensorType::get(refinedShapeA, elemTyA, encodeA);
     rewriter.setInsertionPointAfter(dotOp);
-    SmallVector<SmallVector<amdgpu::ExtractSliceOp>> subtilesA;
+    SmallVector<SmallVector<triton::amdgpu::ExtractSliceOp>> subtilesA;
     unsigned tileIdx = 0;
     for (int32_t k = 0; k < numRepK; ++k) {
-      SmallVector<amdgpu::ExtractSliceOp> subtilesK;
+      SmallVector<triton::amdgpu::ExtractSliceOp> subtilesK;
       for (int32_t i = 0; i < numRepM; ++i) {
         LDBG("local_load_a[" << i << "][" << k << "] extract_slice");
         int32_t shiftM = i * elementsPerSliceM;
         int32_t shiftK = k * elementsPerSliceK;
-        auto extract = rewriter.create<amdgpu::ExtractSliceOp>(
+        auto extract = rewriter.create<triton::amdgpu::ExtractSliceOp>(
             loc, Type{extractSliceTypeA}, Value{a},
             DenseI64ArrayAttr::get(ctx, {shiftM, shiftK}));
         // Add dot-tile info to local_load's slice;
@@ -304,15 +305,15 @@ struct DotOpMFMAConverter {
     // Extract slices for B operands.
     auto extractSliceTypeB =
         RankedTensorType::get(refinedShapeB, elemTyB, encodeB);
-    SmallVector<SmallVector<amdgpu::ExtractSliceOp>> subtilesB;
+    SmallVector<SmallVector<triton::amdgpu::ExtractSliceOp>> subtilesB;
     tileIdx = 0;
     for (int32_t k = 0; k < numRepK; ++k) {
-      SmallVector<amdgpu::ExtractSliceOp> subtilesK;
+      SmallVector<triton::amdgpu::ExtractSliceOp> subtilesK;
       for (int32_t j = 0; j < numRepN; ++j) {
         LDBG("local_load_b[" << k << "][" << j << "] extact_slice");
         int32_t shiftN = j * elementsPerSliceN;
         int32_t shiftK = k * elementsPerSliceK;
-        auto extract = rewriter.create<amdgpu::ExtractSliceOp>(
+        auto extract = rewriter.create<triton::amdgpu::ExtractSliceOp>(
             loc, Type{extractSliceTypeB}, Value{b},
             DenseI64ArrayAttr::get(ctx, {shiftK, shiftN}));
         // Add dot-tile info to local_load's slice;
@@ -404,9 +405,8 @@ struct DotOpMFMAConverter {
       }
     }
 
-    auto concatDims = DenseI64ArrayAttr::get(ctx, {numRepM, numRepN});
     auto joinedDotsResult = rewriter.create<triton::amdgpu::ConcatOp>(
-        loc, dTensorTy, refinedDotValues, concatDims);
+        loc, dTensorTy, refinedDotValues);
 
     d.replaceAllUsesWith(joinedDotsResult);
 
@@ -545,17 +545,8 @@ struct LocalLoadOpPattern
       }
     }
 
-    // concat dims is correct shape 8x1 vs 1x8, else gives wrong output shape.
-    std::vector<int64_t> loweringOrder(numReps2D.size());
-    int64_t counter = 0;
-    auto increment = [&counter](int64_t &val) { val = counter++; };
-    if (opIdx == 0)
-      std::for_each(loweringOrder.rbegin(), loweringOrder.rend(), increment);
-    else
-      std::for_each(loweringOrder.begin(), loweringOrder.end(), increment);
-
-    auto joinedResult = rewriter.create<triton::amdgpu::ConcatOp>(
-        loc, resultType, subtiles, numReps2D, loweringOrder);
+    auto joinedResult =
+        rewriter.create<triton::amdgpu::ConcatOp>(loc, resultType, subtiles);
     LDBG("ConcatOp: " << *joinedResult);
 
     rewriter.replaceOp(op, joinedResult);
@@ -617,9 +608,8 @@ struct LoadOpPattern : public RefineRewritePattern<triton::LoadOp> {
       refinedTensors.push_back(refinedTensor);
     }
 
-    auto concatDims = DenseI64ArrayAttr::get(ctx, refinedBlock.numPerDims);
     auto joinedResult = rewriter.create<triton::amdgpu::ConcatOp>(
-        loc, origResultType, refinedTensors, concatDims);
+        loc, origResultType, refinedTensors);
 
     origResult.replaceAllUsesWith(joinedResult);
     return success();
@@ -831,10 +821,8 @@ struct ReduceOpPattern : public RefineRewritePattern<triton::ReduceOp> {
 
     // Concat reduce slices.
     auto reduceResultType = op.getResultTypes()[0];
-    SmallVector<int64_t> concatDimShape = {numReps};
-    auto concatDims = DenseI64ArrayAttr::get(ctx, concatDimShape);
     auto concatOp = rewriter.create<triton::amdgpu::ConcatOp>(
-        loc, reduceResultType, refinedReduces, concatDims);
+        loc, reduceResultType, refinedReduces);
     auto origOpResult = op.getResult();
     origOpResult.replaceAllUsesWith(concatOp);
     rewriter.eraseOp(op);
@@ -952,9 +940,8 @@ struct ElementWiseOpPattern : public RefineRewritePattern<OpTy> {
 
     // Concat slices.
     auto resultType = op->getResultTypes()[0];
-    auto concatDims = DenseI64ArrayAttr::get(op->getContext(), numReps);
     auto concatOp = rewriter.create<triton::amdgpu::ConcatOp>(
-        op.getLoc(), resultType, refinedOps, concatDims);
+        op.getLoc(), resultType, refinedOps);
 
     auto origOpResult = op.getResult();
     origOpResult.replaceAllUsesWith(concatOp);
@@ -1076,11 +1063,8 @@ struct ExpandDimsOpPattern : public RefineRewritePattern<triton::ExpandDimsOp> {
 
     // Concat refined ops.
     auto reduceResultType = op->getResultTypes()[0];
-    // Expand dims of numReps also before concat.
-    numReps.insert(numReps.begin() + op.getAxis(), 1);
-    auto concatDims = DenseI64ArrayAttr::get(op->getContext(), numReps);
     auto concatOp = rewriter.create<triton::amdgpu::ConcatOp>(
-        op.getLoc(), reduceResultType, refinedReduces, concatDims);
+        op.getLoc(), reduceResultType, refinedReduces);
     auto origOpResult = op.getResult();
 
     auto checkLL = triton::gpu::toLinearEncoding(
@@ -1195,9 +1179,8 @@ struct BroadcastOpPattern : public RefineRewritePattern<BroadcastOp> {
 
     // Concat refined ops.
     auto reduceResultType = op->getResultTypes()[0];
-    auto concatDims = DenseI64ArrayAttr::get(op->getContext(), numReps);
     auto concatOp = rewriter.create<triton::amdgpu::ConcatOp>(
-        op.getLoc(), reduceResultType, refinedBroadcasts, concatDims);
+        op.getLoc(), reduceResultType, refinedBroadcasts);
 
     auto origOpResult = op.getResult();
     origOpResult.replaceAllUsesWith(concatOp);
