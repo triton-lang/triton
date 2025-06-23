@@ -858,7 +858,7 @@ def unswizzle_mx_scale_bw_torch(tensor: torch.Tensor):
     permute_order[-2], permute_order[-4] = permute_order[-4], permute_order[-2]
     return tensor.permute(permute_order).reshape(*leading_shape, N, K)
 
-def swizzle_mxfp4_value_hopper(x: torch.Tensor, op_idx: int, mma_version: int):
+def swizzle_mxfp4_value_hopper(x: torch.Tensor, op_idx: int, mma_version: int, allow_pad: bool = True):
     """
     Given a uint8 tensor of shape (*, M, K), returns a tensor of shape
     (*, M // 4, K * 4) such that:
@@ -900,14 +900,23 @@ def swizzle_mxfp4_value_hopper(x: torch.Tensor, op_idx: int, mma_version: int):
     k_tile = (1, 4 // u8_kwidth)
 
     sizes = list(x.shape[:-2])
+    pads = []
     # [rest, K, tile, threads] per dimension
     for i, (a, b, c, s, d) in enumerate(zip(k_tile, warp_tile, threads, scott_trick, contig)):
         pack = a * b * c * s * d
-        assert x.shape[batch + i] % pack == 0, (
-            f"Shape should be divisible by {pack}. Got {x.shape[batch + i]}"
+        size = x.shape[batch + i]
+        pad = (pack - size % pack) % pack
+        assert allow_pad or pad == 0, (
+            f"Shape should be divisible by {pack}. Got {size}"
         )
-        sizes.append(x.shape[batch + i] // pack)
+        pads += [(0, pad)]
+        sizes.append((size + pad) // pack)
         sizes += [a, b, c, s, d]
+
+    pads = tuple(x for t in pads[::-1] for x in t)
+    x = torch.nn.functional.pad(x, pads)
+    init_shape = x.shape
+
 
     # 0: rest[0]
     # 1: k_tile[0]
@@ -952,8 +961,8 @@ def swizzle_mxfp4_scale_hopper(x: torch.Tensor, num_warps: int, allow_pad: bool 
     pad_k = (SWIZZLE_ALIGN_K - (K % SWIZZLE_ALIGN_K)) % SWIZZLE_ALIGN_K
     if pad_m or pad_k > 0:
         assert allow_pad, "Padding is required for swizzling, but it was explicitly disabled."
-        x = torch.nn.functional.pad(x, (0, pad_k, 0, pad_m))
-        *batch, M, K = x.shape
+    x = torch.nn.functional.pad(x, (0, pad_k, 0, pad_m))
+    *batch, M, K = x.shape
     assert x.is_contiguous()
     assert num_warps & (num_warps - 1) == 0, "warps_n must be a power of 2"
     assert M % (2 * num_warps * 2 * 8) == 0 and K % 2 == 0, f"Input tensor must have a subtile of shape (..., {2 * num_warps * 2 * 8}, 2)"
