@@ -1206,7 +1206,7 @@ void AxisInfo::initPessimisticStateFromFunc(int argNumber, T funcOp,
   return AxisInfo(contiguity, divisibility, constancy, constantValue);
 }
 
-unsigned ModuleAxisInfoAnalysis::getContiguity(Value value) {
+unsigned ModuleAxisInfoAnalysis::getContiguity(Value value) const {
   auto tensorTy = dyn_cast<RankedTensorType>(value.getType());
   if (!tensorTy)
     return 1;
@@ -1219,7 +1219,7 @@ unsigned ModuleAxisInfoAnalysis::getContiguity(Value value) {
 }
 
 unsigned ModuleAxisInfoAnalysis::getContiguity(Value offsetsValue,
-                                               unsigned elementBitWidth) {
+                                               unsigned elementBitWidth) const {
   // FIXME: This is not as good as it could be, as we don't need to restrict
   // the analysis to one dimension. We should determine contiguity on the
   // flattenOuts() layout
@@ -1239,7 +1239,7 @@ unsigned ModuleAxisInfoAnalysis::getContiguity(Value offsetsValue,
   return contiguity;
 }
 
-unsigned ModuleAxisInfoAnalysis::getAlignment(Value value) {
+unsigned ModuleAxisInfoAnalysis::getAlignment(Value value) const {
   auto tensorTy = dyn_cast<RankedTensorType>(value.getType());
   if (!tensorTy)
     return 1;
@@ -1253,7 +1253,7 @@ unsigned ModuleAxisInfoAnalysis::getAlignment(Value value) {
 }
 
 unsigned ModuleAxisInfoAnalysis::getAlignment(Value offsetsValue,
-                                              unsigned elementBitWidth) {
+                                              unsigned elementBitWidth) const {
   auto tensorTy = cast<RankedTensorType>(offsetsValue.getType());
   auto *axisInfo = getAxisInfo(offsetsValue);
   if (!axisInfo)
@@ -1280,7 +1280,7 @@ unsigned ModuleAxisInfoAnalysis::getAlignment(Value offsetsValue,
   return alignment;
 }
 
-unsigned ModuleAxisInfoAnalysis::getMaskAlignment(Value mask) {
+unsigned ModuleAxisInfoAnalysis::getMaskAlignment(Value mask) const {
   auto tensorTy = dyn_cast<RankedTensorType>(mask.getType());
   if (!tensorTy)
     return 1;

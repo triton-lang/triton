@@ -320,7 +320,7 @@ int mlir::triton::getCopyVecBytes(RankedTensorType registerTy,
 }
 
 bool mlir::triton::canBeConvertedToAsyncLoad(
-    tt::LoadOp loadOp, tt::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
+    tt::LoadOp loadOp, const tt::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
   assert(!isLoadFromTensorPtr(loadOp) &&
          "Block ptr should have been lowered before this pass.");
   auto ptr = loadOp.getPtr();

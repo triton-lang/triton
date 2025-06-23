@@ -129,7 +129,7 @@ unsigned getNumElementsPerThread(Operation *op, SmallVector<unsigned> order,
   Value val = getMemAccessPtr(op);
   auto ty = cast<RankedTensorType>(val.getType());
   auto shapePerCTA = triton::gpu::getShapePerCTA(ty);
-  AxisInfo &valInfo = *axisInfoAnalysis.getAxisInfo(val);
+  const AxisInfo &valInfo = *axisInfoAnalysis.getAxisInfo(val);
   unsigned elemNumBits = getElementBitWidth(ty);
   unsigned elemNumBytes = std::max(elemNumBits / 8, 1u);
   unsigned maxMultipleBytes = valInfo.getDivisibility(order[0]);

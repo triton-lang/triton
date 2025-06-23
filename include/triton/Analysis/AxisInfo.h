@@ -228,7 +228,7 @@ public:
     }
   }
 
-  AxisInfo *getAxisInfo(Value value) {
+  const AxisInfo *getAxisInfo(Value value) const {
     auto funcOp =
         value.getParentRegion()->getParentOfType<FunctionOpInterface>();
     auto *axisInfoMap = getFuncData(funcOp);
@@ -242,8 +242,8 @@ public:
     return &(it->second);
   }
 
-  unsigned getContiguity(Value value);
-  unsigned getAlignment(Value value);
+  unsigned getContiguity(Value value) const;
+  unsigned getAlignment(Value value) const;
 
   // Overloads of the above methods but have separated elementBitWidth to
   // calculate the contiguity. These are useful for computing axis info when
@@ -255,10 +255,10 @@ public:
   // and tensor<128x64xi32> for the offset. For such cases, we want to compute
   // the contiguity on the offsets but use the pointee element type bit width
   // instead of the offset element type bit width for alignment
-  unsigned getContiguity(Value offsetsValue, unsigned elementBitWidth);
-  unsigned getAlignment(Value offsetsValue, unsigned elementBitWidth);
+  unsigned getContiguity(Value offsetsValue, unsigned elementBitWidth) const;
+  unsigned getAlignment(Value offsetsValue, unsigned elementBitWidth) const;
 
-  unsigned getMaskAlignment(Value mask);
+  unsigned getMaskAlignment(Value mask) const;
 
 private:
   void initialize(FunctionOpInterface funcOp,
