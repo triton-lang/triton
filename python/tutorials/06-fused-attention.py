@@ -612,6 +612,10 @@ TORCH_HAS_FP8 = hasattr(torch, 'float8_e5m2')
 @pytest.mark.parametrize("mode", ["fwd", "bwd"])
 @pytest.mark.parametrize("provider", ["triton-fp16"] + (["triton-fp8"] if TORCH_HAS_FP8 else []))
 def test_op(Z, H, N_CTX, HEAD_DIM, causal, warp_specialize, mode, provider, dtype=torch.float16):
+    if mode == "fwd" and "fp16" in provider:
+        pytest.skip("Avoid running the forward computation twice.")
+    if mode == "bwd" and "fp8" in provider:
+        pytest.skip("Backward pass with FP8 is not supported.")
     torch.manual_seed(20)
     q = (torch.empty((Z, H, N_CTX, HEAD_DIM), dtype=dtype, device=DEVICE).normal_(mean=0.0, std=0.5).requires_grad_())
     k = (torch.empty((Z, H, N_CTX, HEAD_DIM), dtype=dtype, device=DEVICE).normal_(mean=0.0, std=0.5).requires_grad_())
