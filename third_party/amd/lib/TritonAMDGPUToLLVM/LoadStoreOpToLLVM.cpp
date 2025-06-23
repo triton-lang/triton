@@ -334,7 +334,7 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
   bool isFastedLoadDimContiguous(Value srcPtrOrOffset,
                                  MemDescType sharedTy) const {
     auto fastestDim = triton::gpu::getOrder(sharedTy)[0];
-    const AxisInfo *axisInfo = axisAnalysisPass.getAxisInfo(srcPtrOrOffset);
+    AxisInfo *axisInfo = axisAnalysisPass.getAxisInfo(srcPtrOrOffset);
 
     // This can happen if axis analysis fails (e.g. lit tests).
     if (axisInfo->getRank() <= fastestDim)

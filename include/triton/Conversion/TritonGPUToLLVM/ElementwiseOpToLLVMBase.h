@@ -97,7 +97,7 @@ public:
     int rank = elemsPerThread.size();
     if (product<unsigned>(elemsPerThread) != resultVals.size())
       return resultVals;
-    const AxisInfo *axisInfo = axisAnalysisPass.getAxisInfo(result);
+    AxisInfo *axisInfo = axisAnalysisPass.getAxisInfo(result);
     if (!axisInfo)
       // axis info (e.g., constancy) not available
       return resultVals;

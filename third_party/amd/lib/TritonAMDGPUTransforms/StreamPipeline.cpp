@@ -718,9 +718,9 @@ void scheduleRemainingToLastStage(int numStages,
 }
 
 namespace {
-bool canBeConvertedToAsyncLoad(
-    unsigned numBuffers, tt::LoadOp loadOp, Value alloc,
-    const tt::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
+bool canBeConvertedToAsyncLoad(unsigned numBuffers, tt::LoadOp loadOp,
+                               Value alloc,
+                               tt::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
   // If we have a single buffer we would require another barrier after the
   // local_reads so instead we fall back to pipeline with registers
   // Removing this check will create incorrect IR, see

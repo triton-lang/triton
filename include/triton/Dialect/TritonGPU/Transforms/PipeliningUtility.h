@@ -88,8 +88,7 @@ int getCopyVecBytes(RankedTensorType registerTy,
                     gpu::SharedEncodingTrait sharedEnc);
 
 bool canBeConvertedToAsyncLoad(
-    triton::LoadOp loadOp,
-    const triton::ModuleAxisInfoAnalysis &axisInfoAnalysis);
+    triton::LoadOp loadOp, triton::ModuleAxisInfoAnalysis &axisInfoAnalysis);
 
 // Serialize the latencies of the operations in the loops into the latency
 // attribute.
