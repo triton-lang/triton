@@ -452,7 +452,3 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32,
         k = triton.compile(kernel_path, target=GPUTarget("hip", "gfx942", 64))
         hsaco = k.asm["hsaco"].decode('latin-1')
         assert "amdgcn-amd-amdhsa--gfx942" in hsaco
-
-
-if __name__ == "__main__":
-    test_ttgir_to_hasco()
