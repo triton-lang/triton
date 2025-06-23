@@ -322,7 +322,11 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
       // RDNA doesn't have broadcast dpp mode
       Type actualType = castToAndSExtInt(rewriter, loc, buf, valType, 32);
 
-      Value permlaneResult = rewriter.create<ROCDL::PermlaneX16Op>(loc, actualType, buf, buf, b.i32_val(-1), b.i32_val(-1), true, false).getRes();
+      Value permlaneResult = rewriter
+                                 .create<ROCDL::PermlaneX16Op>(
+                                     loc, actualType, buf, buf, b.i32_val(-1),
+                                     b.i32_val(-1), true, false)
+                                 .getRes();
       buf = truncAndCastFromInt(rewriter, loc, buf, valType, 32);
       permlaneResult =
           truncAndCastFromInt(rewriter, loc, permlaneResult, valType, 32);

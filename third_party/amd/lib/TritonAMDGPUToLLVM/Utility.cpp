@@ -141,7 +141,8 @@ static Value shuffleCommonImpl(Location loc, RewriterBase &rewriter,
       if (isRDNA(isaFamily)) {
         Value select_lo = b.i32_val(0x76543210);
         Value select_hi = b.i32_val(0xfedcba98);
-        return rewriter.create<ROCDL::PermlaneX16Op>(loc, valType, val, val, select_lo, select_hi, true, false);
+        return rewriter.create<ROCDL::PermlaneX16Op>(
+            loc, valType, val, val, select_lo, select_hi, true, false);
       } else {
         Value offset = b.i32_val(0x401F);
         return rewriter.create<ROCDL::DsSwizzleOp>(loc, valType, val, offset);
