@@ -9,13 +9,13 @@ from typing import List
 
 import triton
 import triton.backends
-'''
-Argument class to call compile_kernel() from python code.
-'''
 
 
 @dataclass
 class CompileArgs:
+    '''
+    Argument class to call compile_kernel() from python code.
+    '''
     path: str = ''
     kernel_name: str = ''
     signature: str = ''
@@ -165,7 +165,7 @@ def compile_kernel(args: CompileArgs):
 
     hex_ = str(binascii.hexlify(asm))[2:-1]
 
-    ty_to_cpp = triton.runtime.driver.active.ty_to_cpp
+    ty_to_cpp = triton.runtime.driver.active.map_python_to_cpp_type
 
     params = {
         "kernel_name": func_name,

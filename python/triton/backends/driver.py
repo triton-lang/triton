@@ -16,7 +16,16 @@ class DriverBase(metaclass=ABCMeta):
         pass
 
     @abstractmethod
-    def ty_to_cpp(self, ty: str) -> str:
+    def map_python_to_cpp_type(self, ty: str) -> str:
+        """
+        Converts a Triton type string to its corresponding C++ type string for the HIP backend.
+
+        Args:
+            ty (str): The Triton type string. e.g., 'i32', '*fp16', 'fp32'.
+
+        Returns:
+            str: The C++ type string.
+        """
         pass
 
     @abstractmethod
