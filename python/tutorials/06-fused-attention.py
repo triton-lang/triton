@@ -647,7 +647,8 @@ def test_op(Z, H, N_CTX, HEAD_DIM, causal, warp_specialize, mode, provider, dtyp
         v = v.to(torch.float8_e5m2)
     tri_out = attention(q, k, v, causal, sm_scale, warp_specialize).half()
     if mode == "fwd":
-        torch.testing.assert_close(tri_out, ref_out, atol=3, rtol=0)
+        atol = 3 if "fp8" in provider else 1e-2
+        torch.testing.assert_close(tri_out, ref_out, atol=atol, rtol=0)
         return
     tri_out.backward(dout)
     tri_dv, v.grad = v.grad.clone(), None
