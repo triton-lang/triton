@@ -55,8 +55,7 @@ downloads a prebuilt LLVM, but you can also build LLVM from source and use that.
 LLVM does not have a stable API, so the Triton build will not work at an
 arbitrary LLVM version.
 
-For convenience, you can use the following command to build LLVM at the correct
-version and installs Triton with the custom LLVM build:
+For convenience, use the following command to build LLVM and install Triton with the custom LLVM:
 
 ```shell
 make dev-install-llvm
