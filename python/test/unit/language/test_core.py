@@ -5965,6 +5965,28 @@ def test_smid(device):
     assert h.asm["ptx"].count("%smid") == 1
 
 
+def test_memrealtime(device):
+    if is_cuda():
+        pytest.skip("test_memrealtime is not supported in CUDA")
+    check_cuda_or_hip(device)
+
+    @triton.jit
+    def kernel(Out1, Out2):
+        start = tl.extra.hip.memrealtime()
+        off = tl.arange(0, 128)
+        for i in range(10000):
+            tl.store(Out1 + off, tl.load(Out1 + off) + 1)
+        end = tl.extra.hip.memrealtime()
+        tl.store(Out2, end - start)
+
+    out1 = to_triton(np.zeros((128, ), dtype=np.int64), device=device)
+    out2 = to_triton(np.zeros((1, ), dtype=np.int64), device=device)
+    h = kernel[(1, )](out1, out2)
+    assert out2[0] > 0
+    print(out2[0])
+    assert h.asm["amdgcn"].count("s_memrealtime") == 2
+
+
 # -----------------------
 # test layout conversions
 # -----------------------
