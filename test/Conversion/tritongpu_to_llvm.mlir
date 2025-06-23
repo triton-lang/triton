@@ -2559,9 +2559,11 @@ module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
 // CHECK: %[[BUF_PTR0:.*]] = llvm.add %[[ZERO]], %[[BUF_OFFxSTR0]]
 // CHECK: %[[BUF_OFFxSTR1:.*]] = llvm.mul %[[BUF_OFF1]], %[[BUF_STRIDE0]]
 // CHECK: %[[BUF_PTR1:.*]] = llvm.add %[[BUF_PTR0]], %[[BUF_OFFxSTR1]]
-// CHECK: %[[BUF_PTR2:.*]] = llvm.zext %[[BUF_PTR1]] : i32 to i64
+// CHECK: %[[BIT_SIZE:.*]] = llvm.mlir.constant(4 : i32) : i32
+// CHECK: %[[BUF_PTR2:.*]] = llvm.mul %[[BUF_PTR1]], %[[BIT_SIZE]] : i32
+// CHECK: %[[BUF_PTR3:.*]] = llvm.zext %[[BUF_PTR2]] : i32 to i64
 // CHECK: %[[BUF_BASE1:.*]] = llvm.ptrtoint %[[BUF_BASE]] : !llvm.ptr<3> to i64
-// CHECK: %[[BUF_PTR:.*]] = llvm.add %[[BUF_PTR2]], %[[BUF_BASE1]] : i64
+// CHECK: %[[BUF_PTR:.*]] = llvm.add %[[BUF_PTR3]], %[[BUF_BASE1]] : i64
 
 // CHECK: @__assertfail
 tt.func private @experimental_check_async_write_with_mbar_shared(
@@ -2591,6 +2593,56 @@ tt.func private @experimental_check_wait_mbar(
   %barriers: tensor<2xi64, #blocked>
 ) {
   tti.experimental_check_wait_mbar %bar{%state, %barriers} : !ttg.memdesc<1xi64, #shared1, #smem, mutable>, tensor<2xi8, #blocked>, tensor<2xi64, #blocked> -> tensor<2xi8, #blocked>, tensor<2xi64, #blocked>
+  tt.return
+}
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+
+module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
+// CHECK-LABEL: @experimental_assert_in_thread_any
+// CHECK: %[[E0:.+]] = llvm.extractvalue %arg0[0] : !llvm.struct<(i1, i1)>
+// CHECK: %[[E1:.+]] = llvm.extractvalue %arg0[1] : !llvm.struct<(i1, i1)>
+// CHECK: %[[INIT:.+]] = llvm.mlir.constant(false) : i1
+// CHECK: %[[FALSE:.+]] = llvm.mlir.constant(false) : i1
+// CHECK: %[[OR0:.+]] = llvm.or %[[INIT]], %[[E0]] : i1
+// CHECK: %[[OR1:.+]] = llvm.or %[[OR0]], %[[E1]] : i1
+// CHECK: %[[XOR:.+]] = llvm.xor %[[OR1]]
+
+// CHECK: @__assertfail
+// CHECK: nvvm.barrier0
+tt.func private @experimental_assert_in_thread_any(
+  %condition: tensor<2xi1, #blocked>,
+  %message: !llvm.ptr<8>
+) {
+  tti.experimental_assert_in_thread %condition, "test" {check_any = true} : tensor<2xi1, #blocked>
+  tt.return
+}
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+
+module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
+// CHECK-LABEL: @experimental_assert_in_thread_all
+// CHECK: %[[E0:.+]] = llvm.extractvalue %arg0[0] : !llvm.struct<(i1, i1)>
+// CHECK: %[[E1:.+]] = llvm.extractvalue %arg0[1] : !llvm.struct<(i1, i1)>
+// CHECK: %[[INIT:.+]] = llvm.mlir.constant(true) : i1
+// CHECK: %[[FALSE:.+]] = llvm.mlir.constant(false) : i1
+// CHECK: %[[AND0:.+]] = llvm.and %[[INIT]], %[[E0]] : i1
+// CHECK: %[[AND1:.+]] = llvm.and %[[AND0]], %[[E1]] : i1
+// CHECK: %[[XOR:.+]] = llvm.xor %[[AND1]]
+
+// CHECK: @__assertfail
+// CHECK: nvvm.barrier0
+tt.func private @experimental_assert_in_thread_all(
+  %condition: tensor<2xi1, #blocked>,
+  %message: !llvm.ptr<8>
+) {
+  tti.experimental_assert_in_thread %condition, "test" {check_any = false} : tensor<2xi1, #blocked>
   tt.return
 }
 }

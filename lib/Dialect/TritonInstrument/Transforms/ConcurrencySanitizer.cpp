@@ -159,6 +159,26 @@ private:
         createStoreScratchMemory(b, barriersAlloc, barriers, barriersType);
         createStoreScratchMemory(b, stateAlloc, state, stateType);
       }
+      if (auto mmav5Op = dyn_cast<ttng::TCGen5MMAOp>(op)) {
+        b.setLoc(mmav5Op.getLoc());
+        b.setInsertionPoint(mmav5Op);
+        Value barriers =
+            createLoadScratchMemory(b, barriersAlloc, barriersType);
+        Value state = createLoadScratchMemory(b, stateAlloc, stateType);
+        if (isa<ttg::NVMMASharedEncodingAttr>(
+                mmav5Op.getA().getType().getEncoding())) {
+          auto checkAOp = b.create<tti::ExperimentalCheckReadSharedOp>(
+              mmav5Op.getA(), buffers, state, barriers);
+          state = checkAOp.getOutStates();
+          barriers = checkAOp.getOutBarriers();
+        }
+        auto checkBOp = b.create<tti::ExperimentalCheckReadSharedOp>(
+            mmav5Op.getA(), buffers, state, barriers);
+        state = checkBOp.getOutStates();
+        barriers = checkBOp.getOutBarriers();
+        createStoreScratchMemory(b, barriersAlloc, barriers, barriersType);
+        createStoreScratchMemory(b, stateAlloc, state, stateType);
+      }
       if (auto waitOp = dyn_cast<ttng::WaitBarrierOp>(op)) {
         b.setLoc(waitOp.getLoc());
         b.setInsertionPoint(waitOp);

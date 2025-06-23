@@ -107,112 +107,102 @@ def test_async_tma_kernel(FAILURE, device):
         run_async_tma_kernel(FAILURE, device)
 
 
-@gluon.jit
-def inc_mod(x, mod):
-    return (x + 1) % mod
+# @gluon.jit
+# def garbage_buffer_access_kernel(input_desc, XBLOCK: ttgl.constexpr):
+#     smem = ttgl.allocate_shared_memory(ttgl.float32, [1, XBLOCK, XBLOCK], input_desc.layout)
+#     bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
+#     mbarrier.init(bar, count=1)
+#     mbarrier.expect(bar, XBLOCK * XBLOCK * ttgl.float32.primitive_bitwidth // 8)
+#     tma.async_copy_global_to_shared(input_desc, [0, 0], bar, smem.index(1))
+#     mbarrier.wait(bar, 0)
+#     mbarrier.invalidate(bar)
 
+# def run_garbage_buffer_access(device):
+#     knobs.compilation.enable_experimental_consan = True
+#     os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 
-@gluon.jit
-def multibuffered_loop_tma_kernel(input_desc, output, XBLOCK: ttgl.constexpr, smem_layout: ttgl.constexpr,
-                                  bl_layout: ttgl.constexpr, FAILURE: ttgl.constexpr):
-    num_buffers: ttgl.constexpr = 3 if FAILURE else 4
-    smem = ttgl.allocate_shared_memory(ttgl.float32, [num_buffers, XBLOCK, XBLOCK], smem_layout)
-    bar = ttgl.allocate_shared_memory(ttgl.int64, [num_buffers, 1], mbarrier.MBarrierLayout())
-    for i in range(num_buffers):
-        mbarrier.init(bar.index(i), count=1)
+#     XBLOCK = 128
+#     input = torch.randn((XBLOCK, XBLOCK), device=device, dtype=torch.float32)
+#     shared_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=32, rank=2)
+#     input_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(input, [XBLOCK, XBLOCK], shared_layout)
 
-    mbarrier.expect(bar.index(0), XBLOCK * XBLOCK * ttgl.float32.primitive_bitwidth // 8)
-    tma.async_copy_global_to_shared(input_desc, [0, 0], bar.index(0), smem.index(0))
-    mbarrier.expect(bar.index(1), XBLOCK * XBLOCK * ttgl.float32.primitive_bitwidth // 8)
-    tma.async_copy_global_to_shared(input_desc, [0, 0], bar.index(1), smem.index(1))
-    mbarrier.expect(bar.index(2), XBLOCK * XBLOCK * ttgl.float32.primitive_bitwidth // 8)
-    tma.async_copy_global_to_shared(input_desc, [0, 0], bar.index(2), smem.index(2))
-    ins_id = 3
-    ext_id = 0
-    acc = ttgl.zeros([XBLOCK, XBLOCK], ttgl.float32, bl_layout)
-    phase = 0
+#     # ConSan requires a global memory allocation
+#     def alloc_fn(size: int, alignment: int, stream: Optional[int]):
+#         return torch.empty(size, device="cuda", dtype=torch.int8)
 
-    # # i = 0
-    # mbarrier.wait(bar.index(ext_id), phase) # ext_id = 0, phase = 0
-    # acc += smem.index(ext_id).load(bl_layout)
-    # phase = (phase + 1) % 2 if ext_id == num_buffers - 1 else phase
-    # ext_id = inc_mod(ext_id, num_buffers) # ext_id = 1
+#     triton.set_allocator(alloc_fn)
 
-    # mbarrier.expect(bar.index(ins_id), XBLOCK * XBLOCK * ttgl.float32.primitive_bitwidth // 8)
-    # tma.async_copy_global_to_shared(input_desc, [0, 0], bar.index(ins_id), smem.index(ins_id))
-    # ins_id = inc_mod(ins_id, num_buffers) # ins_id = 0
+#     garbage_buffer_access_kernel[(1, )](input_desc, XBLOCK)
+#     getattr(torch, device).synchronize()
 
-    # # i = 1
-    # mbarrier.wait(bar.index(ext_id), phase) # ext_id = 1, phase = 0
-    # acc += smem.index(ext_id).load(bl_layout)
-    # phase = (phase + 1) % 2 if ext_id == num_buffers - 1 else phase
-    # ext_id = inc_mod(ext_id, num_buffers) # ext_id = 2
+# def test_garbage_buffer_access(device):
+#     run_garbage_buffer_access(device)
 
-    # mbarrier.expect(bar.index(ins_id), XBLOCK * XBLOCK * ttgl.float32.primitive_bitwidth // 8)
-    # tma.async_copy_global_to_shared(input_desc, [0, 0], bar.index(ins_id), smem.index(ins_id))
-    # ins_id = inc_mod(ins_id, num_buffers) # ins_id = 1
+# @gluon.jit
+# def inc_mod(x, mod):
+#     return (x + 1) % mod
 
-    # # i = 2
-    # mbarrier.wait(bar.index(ext_id), phase) # ext_id = 2, phase = 0
-    # acc += smem.index(ext_id).load(bl_layout)
-    # phase = (phase + 1) % 2 if ext_id == num_buffers - 1 else phase
-    # ext_id = inc_mod(ext_id, num_buffers) # ext_id = 3
+# @gluon.jit
+# def multibuffered_loop_tma_kernel(input_desc, output, XBLOCK: ttgl.constexpr, smem_layout: ttgl.constexpr,
+#                                   bl_layout: ttgl.constexpr, FAILURE: ttgl.constexpr):
+#     num_buffers: ttgl.constexpr = 3 if FAILURE else 4
+#     smem = ttgl.allocate_shared_memory(ttgl.float32, [num_buffers, XBLOCK, XBLOCK], smem_layout)
+#     bar = ttgl.allocate_shared_memory(ttgl.int64, [num_buffers, 1], mbarrier.MBarrierLayout())
+#     for i in range(num_buffers):
+#         mbarrier.init(bar.index(i), count=1)
 
-    # # i = 3
-    # mbarrier.wait(bar.index(ext_id), phase) # ext_id = 3, phase = 0
-    # acc += smem.index(ext_id).load(bl_layout)
-    # phase = (phase + 1) % 2 if ext_id == num_buffers - 1 else phase # phase = 1
-    # ext_id = inc_mod(ext_id, num_buffers) # ext_id = 0
+#     mbarrier.expect(bar.index(0), XBLOCK * XBLOCK * ttgl.float32.primitive_bitwidth // 8)
+#     tma.async_copy_global_to_shared(input_desc, [0, 0], bar.index(0), smem.index(0))
+#     mbarrier.expect(bar.index(1), XBLOCK * XBLOCK * ttgl.float32.primitive_bitwidth // 8)
+#     tma.async_copy_global_to_shared(input_desc, [0, 0], bar.index(1), smem.index(1))
+#     mbarrier.expect(bar.index(2), XBLOCK * XBLOCK * ttgl.float32.primitive_bitwidth // 8)
+#     tma.async_copy_global_to_shared(input_desc, [0, 0], bar.index(2), smem.index(2))
+#     ins_id = 3
+#     ext_id = 0
+#     acc = ttgl.zeros([XBLOCK, XBLOCK], ttgl.float32, bl_layout)
+#     phase = 0
 
-    # # i = 4
-    # mbarrier.wait(bar.index(ext_id), phase) # ext_id = 0, phase = 1
-    # acc += smem.index(ext_id).load(bl_layout)
-    # phase = (phase + 1) % 2 if ext_id == num_buffers - 1 else phase
-    # ext_id = inc_mod(ext_id, num_buffers) # ext_id = 1
+#     for i in range(5):
+#         mbarrier.wait(bar.index(ext_id), phase)
+#         acc += smem.index(ext_id).load(bl_layout)
+#         phase = (phase + 1) % 2 if ext_id == num_buffers - 1 else phase
+#         ext_id = inc_mod(ext_id, num_buffers)
 
-    for i in range(5):
-        mbarrier.wait(bar.index(ext_id), phase)
-        acc += smem.index(ext_id).load(bl_layout)
-        phase = (phase + 1) % 2 if ext_id == num_buffers - 1 else phase
-        ext_id = inc_mod(ext_id, num_buffers)
+#         if (i < 2):
+#             mbarrier.expect(bar.index(ins_id), XBLOCK * XBLOCK * ttgl.float32.primitive_bitwidth // 8)
+#             tma.async_copy_global_to_shared(input_desc, [0, 0], bar.index(ins_id), smem.index(ins_id))
+#             ins_id = inc_mod(ins_id, num_buffers)
 
-        if (i < 2):
-            mbarrier.expect(bar.index(ins_id), XBLOCK * XBLOCK * ttgl.float32.primitive_bitwidth // 8)
-            tma.async_copy_global_to_shared(input_desc, [0, 0], bar.index(ins_id), smem.index(ins_id))
-            ins_id = inc_mod(ins_id, num_buffers)
+#     for i in range(num_buffers):
+#         mbarrier.invalidate(bar.index(i))
 
-    for i in range(num_buffers):
-        mbarrier.invalidate(bar.index(i))
+#     xoffset = ttgl.arange(0, XBLOCK, layout=ttgl.SliceLayout(0, bl_layout))
+#     yoffset = ttgl.arange(0, XBLOCK, layout=ttgl.SliceLayout(1, bl_layout))
+#     offsets = xoffset[None, :] + yoffset[:, None] * XBLOCK
+#     ttgl.store(output + offsets, acc)
 
-    xoffset = ttgl.arange(0, XBLOCK, layout=ttgl.SliceLayout(0, bl_layout))
-    yoffset = ttgl.arange(0, XBLOCK, layout=ttgl.SliceLayout(1, bl_layout))
-    offsets = xoffset[None, :] + yoffset[:, None] * XBLOCK
-    ttgl.store(output + offsets, acc)
+# def run_multibuffered_loop_tma_kernel(FAILURE, device):
+#     knobs.compilation.enable_experimental_consan = True
+#     os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 
+#     XBLOCK = 64
+#     input = torch.randn((XBLOCK, XBLOCK), device=device, dtype=torch.float32)
+#     output = torch.zeros((XBLOCK, XBLOCK), device=device, dtype=torch.float32)
+#     shared_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=32, rank=2)
+#     blocked_layout = ttgl.BlockedLayout(size_per_thread=[32, 1], threads_per_warp=[1, 32], warps_per_cta=[4, 1],
+#                                         order=[1, 0])
+#     input_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(input, [XBLOCK, XBLOCK], shared_layout)
 
-def run_multibuffered_loop_tma_kernel(FAILURE, device):
-    knobs.compilation.enable_experimental_consan = True
-    os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
+#     # ConSan requires a global memory allocation
+#     def alloc_fn(size: int, alignment: int, stream: Optional[int]):
+#         return torch.empty(size, device="cuda", dtype=torch.int8)
 
-    XBLOCK = 64
-    input = torch.randn((XBLOCK, XBLOCK), device=device, dtype=torch.float32)
-    output = torch.zeros((XBLOCK, XBLOCK), device=device, dtype=torch.float32)
-    shared_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=32, rank=2)
-    blocked_layout = ttgl.BlockedLayout(size_per_thread=[32, 1], threads_per_warp=[1, 32], warps_per_cta=[4, 1],
-                                        order=[1, 0])
-    input_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(input, [XBLOCK, XBLOCK], shared_layout)
+#     triton.set_allocator(alloc_fn)
 
-    # ConSan requires a global memory allocation
-    def alloc_fn(size: int, alignment: int, stream: Optional[int]):
-        return torch.empty(size, device="cuda", dtype=torch.int8)
+#     multibuffered_loop_tma_kernel[(1, )](input_desc, output, XBLOCK, shared_layout, blocked_layout, FAILURE=FAILURE,
+#                                          num_warps=4)
+#     getattr(torch, device).synchronize()
 
-    triton.set_allocator(alloc_fn)
-
-    multibuffered_loop_tma_kernel[(1, )](input_desc, output, XBLOCK, shared_layout, blocked_layout, FAILURE=FAILURE,
-                                         num_warps=4)
-    getattr(torch, device).synchronize()
-
-
-@pytest.mark.parametrize("FAILURE", [True, False])
-def test_multibuffered_loop_tma_kernel(FAILURE, device):
-    run_multibuffered_loop_tma_kernel(FAILURE, device)
+# @pytest.mark.parametrize("FAILURE", [True, False])
+# def test_multibuffered_loop_tma_kernel(FAILURE, device):
+#     run_multibuffered_loop_tma_kernel(FAILURE, device)

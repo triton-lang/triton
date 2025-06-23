@@ -11,6 +11,18 @@ class TTI_Op<string mnemonic, list<Trait> traits = []> :
     Op<TritonInstrument_Dialect, mnemonic, traits> {
 }
 
+def TTI_ExperimentalAssertInThreadOp : TTI_Op<"experimental_assert_in_thread", [Pure]> {
+  let summary = "assert the condition within the current thread";
+  let description = [{
+    Assert that the condition is true given all the values are available in the current thread.
+    If the condition is false, the message is printed, and the program is aborted.
+    If check_any is true, any of the values in the condition must be true. Otherwise, all the
+    values in the condition must be true.
+  }];
+  let arguments = (ins I1Tensor:$condition, StrAttr:$message, BoolAttr:$check_any);
+  let assemblyFormat = "$condition `,` $message attr-dict `:` type($condition)";
+}
+
 // Define an array of pointers to shared memory buffers
 def TTI_ExperimentalSharedBufferPointersOp : TTI_Op<"experimental_shared_buffer_pointers", [Pure]> {
   let summary = "definte an array of pointers to shared memory buffers";
@@ -24,11 +36,11 @@ def TTI_ExperimentalSharedBufferPointersOp : TTI_Op<"experimental_shared_buffer_
   }];
 }
 
-// Check if writing to a buffer guarded by a mbar is valid
+
 def TTI_ExperimentalCheckAsyncWriteWithMbarSharedOp : TTI_Op<"experimental_check_async_write_with_mbar_shared", [Pure]> {
-  let summary = "check if writing to a buffer guarded by a mbar is valid";
+  let summary = "Check if writing to a buffer guarded is valid";
   let description = [{
-    Check if writing to a shared memory buffer guarded by a mbar is valid.
+    Check if writing to a shared memory buffer guarded is valid.
     Update the buffer state and assert if the buffer is being read or written.
   }];
   let arguments = (ins
@@ -51,6 +63,34 @@ def TTI_ExperimentalCheckAsyncWriteWithMbarSharedOp : TTI_Op<"experimental_check
     }]>
   ];
 }
+
+
+def TTI_ExperimentalCheckReadSharedOp : TTI_Op<"experimental_check_read_shared", [Pure]> {
+  let summary = "Check if reading from a shared memory buffer is valid";
+  let description = [{
+    Check if reading from a shared memory buffer is valid.
+  }];
+  let arguments = (ins
+    TTG_MemDescType:$buffer,
+    TT_Tensor:$buffers,
+    TT_Tensor:$states,
+    TT_Tensor:$barriers
+  );
+  let results = (outs
+    TT_Tensor:$outStates,
+    TT_Tensor:$outBarriers
+  );
+  let assemblyFormat = [{
+    $buffer `{` $buffers `,` $states `,` $barriers `}` attr-dict `:` type($buffer) `,` type($buffers) `,` type($states) `,` type($barriers) `->` type($outStates) `,` type($outBarriers)
+  }];
+  let builders = [
+    OpBuilder<(ins "Value":$buffer, "Value":$buffers, "Value":$states, "Value":$barriers),
+    [{
+      build($_builder, $_state, {states.getType(), barriers.getType()}, buffer, buffers, states, barriers);
+    }]>
+  ];
+}
+
 
 def TTI_ExperimentalCheckWaitMbarOp : TTI_Op<"experimental_check_wait_mbar", [Pure]> {
   let summary = "check if waiting on a mbar is valid and update the barrier state";

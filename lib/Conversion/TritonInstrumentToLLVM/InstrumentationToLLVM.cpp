@@ -62,6 +62,104 @@ Value createMemDescToI64(ConversionPatternRewriter &rewriter, Location loc,
 // Patterns
 ////////////////////////////////////////////
 
+struct AssertInThreadOpConversion
+    : public ConvertOpToLLVMPattern<tti::ExperimentalAssertInThreadOp> {
+  explicit AssertInThreadOpConversion(LLVMTypeConverter &typeConverter,
+                                      const TargetInfoBase &targetInfo,
+                                      PatternBenefit benefit)
+      : ConvertOpToLLVMPattern<tti::ExperimentalAssertInThreadOp>(typeConverter,
+                                                                  benefit),
+        targetInfo(targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(tti::ExperimentalAssertInThreadOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto tensorTy = cast<RankedTensorType>(op.getCondition().getType());
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    SmallVector<Value> condElems =
+        unpackLLElements(loc, adaptor.getCondition(), rewriter);
+    auto condTy = condElems[0].getType();
+    bool check_any = adaptor.getCheckAny();
+
+    // TODO: Check that all the values are available in the current thread
+
+    Value condition = check_any ? b.int_val(condTy.getIntOrFloatBitWidth(), 0)
+                                : b.int_val(condTy.getIntOrFloatBitWidth(), 1);
+
+    assert(condTy.isSignedInteger() ||
+           condTy.isSignlessInteger() &&
+               "Unsupported type for assert_in_thread");
+    Value zero = rewriter.create<LLVM::ConstantOp>(
+        loc, condTy, rewriter.getZeroAttr(condTy));
+    for (auto elem : condElems) {
+      if (check_any) {
+        condition = b.or_(condition, elem);
+      } else {
+        condition = b.and_(condition, elem);
+      }
+    }
+
+    // Invert the condition - assert will be hit if the condition is true
+    condition = b.xor_(condition, b.int_val(condTy.getIntOrFloatBitWidth(), 1));
+
+    llAssert(op, condition, adaptor.getMessage(), rewriter);
+    b.barrier();
+    rewriter.eraseOp(op);
+    return success();
+  }
+
+  void llAssert(Operation *op, Value condition, StringRef message,
+                ConversionPatternRewriter &rewriter) const {
+
+    auto loc = op->getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+
+    StringRef file = "unknown";
+    StringRef func = "unknown";
+    int line = 0;
+    int col = 0;
+
+    while (auto callLoc = dyn_cast<CallSiteLoc>(loc))
+      loc = callLoc.getCallee();
+
+    if (auto fileLineColLoc = dyn_cast<FileLineColLoc>(loc)) {
+      file = fileLineColLoc.getFilename();
+      line = fileLineColLoc.getLine();
+      col = fileLineColLoc.getColumn();
+    }
+
+    // Print the message only for the first thread
+    Value threadId = getThreadId(*b.builder, loc);
+    Value zero = b.int_val(threadId.getType().getIntOrFloatBitWidth(), 0);
+    Value threadIdIsZero = b.icmp_eq(threadId, zero);
+    condition = b.and_(condition, threadIdIsZero);
+
+    // #block1
+    // if (condition) {
+    //   #block2
+    //   __assertfail(message);
+    // }
+    // #block3
+    Block *prevBlock = op->getBlock();
+
+    Block *ifBlock = rewriter.splitBlock(prevBlock, op->getIterator());
+    rewriter.setInsertionPointToStart(ifBlock);
+    targetInfo.assertFail(rewriter, loc, message, file, func, line);
+
+    // Split a block after the call.
+    Block *thenBlock = rewriter.splitBlock(ifBlock, op->getIterator());
+    rewriter.setInsertionPointToEnd(ifBlock);
+    rewriter.create<LLVM::BrOp>(loc, thenBlock);
+    rewriter.setInsertionPointToEnd(prevBlock);
+    rewriter.create<LLVM::CondBrOp>(loc, condition, ifBlock, thenBlock);
+    rewriter.setInsertionPointToStart(thenBlock);
+  }
+
+protected:
+  const TargetInfoBase &targetInfo;
+};
+
 struct SharedBufferPointersOpConversion
     : public ConvertOpToLLVMPattern<tti::ExperimentalSharedBufferPointersOp> {
   using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
@@ -147,8 +245,9 @@ struct CheckAsyncWriteWithMbarSharedOpConversion
     // Assert that the buffer is not being read or written
     auto isCurrBufRW_i1 = b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq,
                                                   isCurrBufRW, zero_8b);
-    b.create<tt::AssertOp>(loc, isCurrBufRW_i1,
-                           "TMA copy to buffer being read or written");
+    b.create<tti::ExperimentalAssertInThreadOp>(
+        loc, isCurrBufRW_i1, "TMA copy to buffer being read or written",
+        /*check_any=*/false);
 
     // 2. Update the access state
     Value writeSplat = createConstIntTensor(b, loc, WRITE_BIT, statesTy);
@@ -193,6 +292,7 @@ struct CheckWaitMbarOpConversion
 void mlir::triton::populateInstrumentationToLLVMPatterns(
     LLVMTypeConverter &typeConverter, const TargetInfoBase &targetInfo,
     RewritePatternSet &patterns, PatternBenefit benefit) {
+  patterns.add<AssertInThreadOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<SharedBufferPointersOpConversion>(typeConverter);
   patterns.add<CheckAsyncWriteWithMbarSharedOpConversion>(typeConverter);
   patterns.add<CheckWaitMbarOpConversion>(typeConverter);
