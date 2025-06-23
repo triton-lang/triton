@@ -720,7 +720,7 @@ void scheduleRemainingToLastStage(int numStages,
 namespace {
 bool canBeConvertedToAsyncLoad(unsigned numBuffers, tt::LoadOp loadOp,
                                Value alloc,
-                               tt::ModuleAxisInfoAnalysis axisInfoAnalysis) {
+                               tt::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
   // If we have a single buffer we would require another barrier after the
   // local_reads so instead we fall back to pipeline with registers
   // Removing this check will create incorrect IR, see
@@ -741,6 +741,8 @@ bool canBeConvertedToAsyncLoad(unsigned numBuffers, tt::LoadOp loadOp,
   if (width < 32)
     return false;
 
+  // Checks whether the global pointer's contiguity and mask alignment allows
+  // for at least 32 bit wide loads
   return triton::canBeConvertedToAsyncLoad(loadOp, axisInfoAnalysis);
 }
 } // namespace
