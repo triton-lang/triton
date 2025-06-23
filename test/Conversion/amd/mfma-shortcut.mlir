@@ -47,7 +47,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // GFX942-DAG: [[c64:%.*]] = llvm.mlir.constant(64 : i32)
 
     // GFX942: [[threadId:%.*]] = rocdl.workitem.id.x
-    // GFX942: [[laneId:%.*]] = llvm.urem [[threadId]], [[c64]]
+    // GFX942: [[c255:%.*]] = llvm.mlir.constant(255 : i32)
+    // GFX942: [[RTID:%.*]] = llvm.and [[threadId]], [[c255]]
+    // GFX942: [[laneId:%.*]] = llvm.urem [[RTID]], [[c64]]
     // GFX942: [[mask0:%.*]] = llvm.icmp "slt" [[laneId]], [[c32]]
 
     // GFX942: [[shflLaneId:%.*]] = llvm.add [[laneId]], [[c32]]
@@ -128,7 +130,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // GFX942-DAG: [[c64:%.*]] = llvm.mlir.constant(64 : i32)
 
     // GFX942: [[threadId:%.*]] = rocdl.workitem.id.x
-    // GFX942: [[laneId:%.*]] = llvm.urem [[threadId]], [[c64]]
+    // GFX942: [[c255:%.*]] = llvm.mlir.constant(255 : i32)
+    // GFX942: [[RTID:%.*]] = llvm.and [[threadId]], [[c255]]
+    // GFX942: [[laneId:%.*]] = llvm.urem [[RTID]], [[c64]]
     // GFX942: [[mask0:%.*]] = llvm.icmp "slt" [[laneId]], [[c32]]
 
     // GFX942: [[laneIdRem:%.*]] = llvm.urem [[laneId]], [[c32]]

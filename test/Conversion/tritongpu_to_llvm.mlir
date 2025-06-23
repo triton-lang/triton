@@ -1918,7 +1918,7 @@ module attributes {"ttg.target" = "cuda:75", "ttg.num-ctas" = 1 : i32, "ttg.num-
 module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: @vectorize_shmem_load
   // CHECK: llvm.load
-  // CHECK-SAME: {alignment = 8 : i64} : !llvm.ptr<3> -> vector<8xi8>
+  // CHECK-SAME: {alignment = 8 : i64} : !llvm.ptr<3> -> vector<2xi32>
   // CHECK-NOT: llvm.load
   tt.func public @vectorize_shmem_load(%shmem : !ttg.memdesc<16x16xi8, #shared, #smem>) {
     %0 = ttg.local_load %shmem : !ttg.memdesc<16x16xi8, #shared, #smem> -> tensor<16x16xi8, #blocked>
@@ -1933,9 +1933,7 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
 #smem = #ttg.shared_memory
 module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: @vectorize_shmem_store
-  // CHECK: llvm.store
-  // CHECK-SAME: {alignment = 64 : i64} : vector<16xi32>, !llvm.ptr<3>
-  // CHECK-NOT: llvm.store
+  // CHECK-COUNT-4:  llvm.store {{.*}} {alignment = 16 : i64} : vector<4xi32>, !llvm.ptr<3>
   tt.func public @vectorize_shmem_store(%block : tensor<64x64xi32, #blocked>) {
     %0 = ttg.local_alloc %block : (tensor<64x64xi32, #blocked>) -> !ttg.memdesc<64x64xi32, #shared, #smem>
     tt.return
@@ -2411,4 +2409,83 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
       %0 = tt.load %arg1 : tensor<16x4x!tt.ptr<i8>, #blocked>
       tt.return
   }
+}
+
+// -----
+
+
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
+// CHECK-LABEL: @arith_constant_array
+tt.func private @arith_constant_array() {
+  // CHECK: %[[C0:.+]] = llvm.mlir.constant(0 : i32) : i32
+  // CHECK: %[[C1:.+]] = llvm.mlir.constant(1 : i32) : i32
+  // CHECK: %[[C2:.+]] = llvm.mlir.constant(2 : i32) : i32
+  // CHECK: %[[C3:.+]] = llvm.mlir.constant(3 : i32) : i32
+  // CHECK: %[[S0:.+]] = llvm.mlir.undef : !llvm.struct<(i32, i32, i32, i32)>
+  // CHECK: %[[S1:.+]] = llvm.insertvalue %[[C0]], %[[S0]][0] : !llvm.struct<(i32, i32, i32, i32)>
+  // CHECK: %[[S2:.+]] = llvm.insertvalue %[[C1]], %[[S1]][1] : !llvm.struct<(i32, i32, i32, i32)>
+  // CHECK: %[[S3:.+]] = llvm.insertvalue %[[C2]], %[[S2]][2] : !llvm.struct<(i32, i32, i32, i32)>
+  // CHECK: %[[S4:.+]] = llvm.insertvalue %[[C3]], %[[S3]][3] : !llvm.struct<(i32, i32, i32, i32)>
+  %0 = arith.constant dense<[0, 1, 2, 3]> : tensor<4xi32, #blocked>
+  tt.return
+}
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
+#shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
+// CHECK-LABEL: @experimental_check_async_write_with_mbar_shared
+// CHECK: (%[[BUF:.*]]: {{.*}}, %[[BAR:.*]]: {{.*}}, %[[BUFFERS:.*]]: {{.*}}, %[[STATE:.*]]: {{.*}}, %[[BARRIERS:.*]]: {{.*}}, %{{.*}}, %{{.*}})
+
+// Check the buffer pointer calculation
+// CHECK: %[[BUF_BASE:.*]] = llvm.extractvalue %[[BUF]][0]
+// CHECK: %[[BUF_OFF0:.*]] = llvm.extractvalue %[[BUF]][1]
+// CHECK: %[[BUF_OFF1:.*]] = llvm.extractvalue %[[BUF]][2]
+// CHECK: %[[BUF_STRIDE0:.*]] = llvm.mlir.constant(1 : i32)
+// CHECK: %[[BUF_STRIDE1:.*]] = llvm.mlir.constant(32 : i32)
+// CHECK: %[[ZERO:.*]] = llvm.mlir.constant(0 : i32)
+// CHECK: %[[BUF_OFFxSTR0:.*]] = llvm.mul %[[BUF_OFF0]], %[[BUF_STRIDE1]]
+// CHECK: %[[BUF_PTR0:.*]] = llvm.add %[[ZERO]], %[[BUF_OFFxSTR0]]
+// CHECK: %[[BUF_OFFxSTR1:.*]] = llvm.mul %[[BUF_OFF1]], %[[BUF_STRIDE0]]
+// CHECK: %[[BUF_PTR1:.*]] = llvm.add %[[BUF_PTR0]], %[[BUF_OFFxSTR1]]
+// CHECK: %[[BUF_PTR2:.*]] = llvm.zext %[[BUF_PTR1]] : i32 to i64
+// CHECK: %[[BUF_BASE1:.*]] = llvm.ptrtoint %[[BUF_BASE]] : !llvm.ptr<3> to i64
+// CHECK: %[[BUF_PTR:.*]] = llvm.add %[[BUF_PTR2]], %[[BUF_BASE1]] : i64
+
+// CHECK: @__assertfail
+tt.func private @experimental_check_async_write_with_mbar_shared(
+  %buf: !ttg.memdesc<32x32xf32, #shared, #smem, mutable>,
+  %bar: !ttg.memdesc<1xi64, #shared1, #smem, mutable>,
+  %buffers: tensor<2xi64, #blocked>,
+  %state: tensor<2xi8, #blocked>,
+  %barriers: tensor<2xi64, #blocked>
+) {
+  tti.experimental_check_async_write_with_mbar_shared %buf, %bar{%buffers, %state, %barriers} : !ttg.memdesc<32x32xf32, #shared, #smem, mutable>, !ttg.memdesc<1xi64, #shared1, #smem, mutable>, tensor<2xi64, #blocked>, tensor<2xi8, #blocked>, tensor<2xi64, #blocked> -> tensor<2xi8, #blocked>, tensor<2xi64, #blocked>
+  tt.return
+}
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
+#shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
+// CHECK-LABEL: @experimental_check_wait_mbar
+tt.func private @experimental_check_wait_mbar(
+  %bar: !ttg.memdesc<1xi64, #shared1, #smem, mutable>,
+  %state: tensor<2xi8, #blocked>,
+  %barriers: tensor<2xi64, #blocked>
+) {
+  tti.experimental_check_wait_mbar %bar{%state, %barriers} : !ttg.memdesc<1xi64, #shared1, #smem, mutable>, tensor<2xi8, #blocked>, tensor<2xi64, #blocked> -> tensor<2xi8, #blocked>, tensor<2xi64, #blocked>
+  tt.return
+}
 }
