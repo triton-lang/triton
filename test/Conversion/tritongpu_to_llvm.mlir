@@ -2541,3 +2541,53 @@ tt.func private @arith_constant_array() {
   tt.return
 }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+
+module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
+// CHECK-LABEL: @experimental_assert_in_thread_any
+// CHECK: %[[E0:.+]] = llvm.extractvalue %arg0[0] : !llvm.struct<(i1, i1)>
+// CHECK: %[[E1:.+]] = llvm.extractvalue %arg0[1] : !llvm.struct<(i1, i1)>
+// CHECK: %[[INIT:.+]] = llvm.mlir.constant(false) : i1
+// CHECK: %[[FALSE:.+]] = llvm.mlir.constant(false) : i1
+// CHECK: %[[OR0:.+]] = llvm.or %[[INIT]], %[[E0]] : i1
+// CHECK: %[[OR1:.+]] = llvm.or %[[OR0]], %[[E1]] : i1
+// CHECK: %[[XOR:.+]] = llvm.xor %[[OR1]]
+
+// CHECK: @__assertfail
+// CHECK: nvvm.barrier0
+tt.func private @experimental_assert_in_thread_any(
+  %condition: tensor<2xi1, #blocked>,
+  %message: !llvm.ptr<8>
+) {
+  tti.experimental_assert_in_thread %condition, "test" {check_any = true} : tensor<2xi1, #blocked>
+  tt.return
+}
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+
+module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
+// CHECK-LABEL: @experimental_assert_in_thread_all
+// CHECK: %[[E0:.+]] = llvm.extractvalue %arg0[0] : !llvm.struct<(i1, i1)>
+// CHECK: %[[E1:.+]] = llvm.extractvalue %arg0[1] : !llvm.struct<(i1, i1)>
+// CHECK: %[[INIT:.+]] = llvm.mlir.constant(true) : i1
+// CHECK: %[[FALSE:.+]] = llvm.mlir.constant(false) : i1
+// CHECK: %[[AND0:.+]] = llvm.and %[[INIT]], %[[E0]] : i1
+// CHECK: %[[AND1:.+]] = llvm.and %[[AND0]], %[[E1]] : i1
+// CHECK: %[[XOR:.+]] = llvm.xor %[[AND1]]
+
+// CHECK: @__assertfail
+// CHECK: nvvm.barrier0
+tt.func private @experimental_assert_in_thread_all(
+  %condition: tensor<2xi1, #blocked>,
+  %message: !llvm.ptr<8>
+) {
+  tti.experimental_assert_in_thread %condition, "test" {check_any = false} : tensor<2xi1, #blocked>
+  tt.return
+}
+}
