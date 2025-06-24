@@ -66,7 +66,6 @@ ValueTableV2 getValuesFromDotOperandLayoutStruct(
     ConversionPatternRewriter &rewriter, Value value, int batch, int repOuter,
     int repK, RankedTensorType type) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-
   auto elems = unpackLLElements(loc, value, rewriter);  // SmallVector<Value> elems
   auto eltTy = typeConverter->convertType(type.getElementType());
   int offset{};
@@ -497,13 +496,12 @@ static void callMmaAmpereFp64(PTXBuilder &builder, int b, int m, int n, int k,
   auto aArgs1 = builder.newListOperand({
       {ha[{b, m, k}], "d"},
   });
-  auto bArgs1 = builder.newListOperand({{hb[{b, n, k}], "d"}});
+  auto bArgs = builder.newListOperand({{hb[{b, n, k}], "d"}});
   auto aArgs2 = builder.newListOperand({
       {ha[{b, m + 1, k}], "d"},
   });
-  auto bArgs2 = builder.newListOperand({{hb[{b, n, k}], "d"}});
-  mma(retArgs1, aArgs1, bArgs1, cArgs1);
-  mma(retArgs2, aArgs2, bArgs2, cArgs2);
+  mma(retArgs1, aArgs1, bArgs, cArgs1);
+  mma(retArgs2, aArgs2, bArgs, cArgs2);
 }
 
 static void callMmaAmpere(PTXBuilder &builder, int b, int m, int n, int k,
