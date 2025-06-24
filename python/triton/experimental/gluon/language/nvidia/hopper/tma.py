@@ -1,6 +1,7 @@
 from __future__ import annotations
 from typing import List, Tuple, TYPE_CHECKING
 from dataclasses import dataclass
+from triton.language.core import base_type, base_value
 import triton.experimental.gluon.language._core as ttgl
 from triton.experimental.gluon.language._layouts import NVMMASharedLayout
 from triton.experimental.gluon.language._core import builtin, _unwrap_if_constexpr
@@ -12,7 +13,7 @@ __all__ = ["async_copy_global_to_shared", "async_copy_shared_to_global", "store_
 
 
 @dataclass(eq=True)
-class tensor_descriptor_type:
+class tensor_descriptor_type(base_type):
     block_type: ttgl.block_type
     shape_type: ttgl.tuple_type
     strides_type: ttgl.tuple_type
@@ -44,7 +45,7 @@ class tensor_descriptor_type:
         return f"TD{self.block_type.mangle}_{self.layout.mangle()}TD"
 
 
-class tensor_descriptor:
+class tensor_descriptor(base_value):
 
     def __init__(self, handle, shape: List[ttgl.tensor], strides: List[ttgl.tensor], block_type: ttgl.block_type,
                  layout: NVMMASharedLayout):

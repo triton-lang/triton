@@ -152,8 +152,8 @@ def Channel(T, alloc_fn):
         num_consumers: gl.constexpr
 
         @gluon.jit
-        def create(shape: gl.constexpr, dtype: gl.constexpr, layout: gl.constexpr, num_buffers: gl.constexpr,
-                   num_consumers: gl.constexpr = 1):
+        def alloc(shape: gl.constexpr, dtype: gl.constexpr, layout: gl.constexpr, num_buffers: gl.constexpr,
+                  num_consumers: gl.constexpr = 1):
             mem = alloc_fn(dtype, [num_buffers] + shape, layout)
             return ChannelType._borrow(mem, shape, dtype, layout, num_buffers, num_consumers)
 
@@ -161,12 +161,18 @@ def Channel(T, alloc_fn):
         def _borrow(mem, shape: gl.constexpr, dtype: gl.constexpr, layout: gl.constexpr, num_buffers: gl.constexpr,
                     num_consumers: gl.constexpr = 1):
             mem = mem._reinterpret(dtype, [num_buffers] + shape, layout)
-            ready_bars = gl.allocate_shared_memory(gl.int64, [num_buffers, 1], mbarrier.MBarrierLayout())
-            empty_bars = gl.allocate_shared_memory(gl.int64, [num_buffers, 1], mbarrier.MBarrierLayout())
+            return ChannelType(mem, num_buffers, num_consumers)
+
+        @gluon.jit
+        def __init__(self, mem, num_buffers, num_consumers):
+            self.mem = mem
+            self.ready_bars = gl.allocate_shared_memory(gl.int64, [num_buffers, 1], mbarrier.MBarrierLayout())
+            self.empty_bars = gl.allocate_shared_memory(gl.int64, [num_buffers, 1], mbarrier.MBarrierLayout())
             for i in tl.static_range(num_buffers):
-                mbarrier.init(ready_bars.index(i), count=1)
-                mbarrier.init(empty_bars.index(i), count=num_consumers)
-            return ChannelType(mem, ready_bars, empty_bars, num_buffers, num_consumers)
+                mbarrier.init(self.ready_bars.index(i), count=1)
+                mbarrier.init(self.empty_bars.index(i), count=num_consumers)
+            self.num_buffers: gl.constexpr = num_buffers
+            self.num_consumers: gl.constexpr = num_consumers
 
         @gluon.jit
         def increment(self, index, phase):
@@ -177,13 +183,6 @@ def Channel(T, alloc_fn):
             index = gl.where(rollover, 0, next_index)
             phase = gl.where(rollover, phase ^ 1, phase)
             return index, phase
-
-        def __init__(self, mem, ready_bars, empty_bars, num_buffers, num_consumers):
-            self.mem = mem
-            self.ready_bars = ready_bars
-            self.empty_bars = empty_bars
-            self.num_buffers = gl.constexpr(num_buffers)
-            self.num_consumers = gl.constexpr(num_consumers)
 
         @gluon.jit
         def initialize_for_consumer(self):
@@ -215,11 +214,11 @@ def Channel(T, alloc_fn):
 
         @gluon.jit
         def create_producer(self):
-            return Producer(self, gl.to_tensor(0), gl.to_tensor(0))
+            return Producer(self)
 
         @gluon.jit
         def create_consumer(self):
-            return Consumer(self, gl.to_tensor(0), gl.to_tensor(0))
+            return Consumer(self)
 
         @gluon.jit
         def release(self):
@@ -235,10 +234,11 @@ def Channel(T, alloc_fn):
         phase: gl.tensor
         index: gl.tensor
 
-        def __init__(self, channel, phase, index):
+        @gluon.jit
+        def __init__(self, channel):
             self.channel = channel
-            self.phase = phase
-            self.index = index
+            self.phase = 0
+            self.index = 0
 
         @gluon.jit
         def acquire(self):
@@ -258,10 +258,11 @@ def Channel(T, alloc_fn):
         phase: gl.tensor
         index: gl.tensor
 
-        def __init__(self, channel, phase, index):
+        @gluon.jit
+        def __init__(self, channel):
             self.channel = channel
-            self.phase = phase
-            self.index = index
+            self.phase = 0
+            self.index = 0
 
         @gluon.jit
         def acquire(self):
@@ -291,15 +292,12 @@ class LoadContext:
     channel: SharedMemoryChannel
 
     @gluon.jit
-    def create(desc, num_buffers: gl.constexpr, num_consumers: gl.constexpr = 1):
-        shape: gl.constexpr = desc.block_type.shape
-        channel = SharedMemoryChannel.create(shape, desc.dtype, gl.constexpr(desc.layout), num_buffers, num_consumers)
-        channel.initialize_for_producer()
-        return LoadContext(desc, channel)
-
-    def __init__(self, desc, channel):
+    def __init__(self, desc, num_buffers: gl.constexpr, num_consumers: gl.constexpr = 1):
         self.desc = desc
-        self.channel = channel
+        shape: gl.constexpr = desc.block_type.shape
+        self.channel = SharedMemoryChannel.alloc(shape, desc.dtype, gl.constexpr(desc.layout), num_buffers,
+                                                 num_consumers)
+        self.channel.initialize_for_producer()
 
     @gluon.jit
     def release(self):
@@ -314,14 +312,11 @@ class PipelinedLoadProducer:
     step: gl.constexpr
 
     @gluon.jit
-    def create(ctx, offset, step: gl.constexpr):
-        return PipelinedLoadProducer(ctx.desc, ctx.channel.create_producer(), offset, step)
-
-    def __init__(self, desc, impl, offset, step):
-        self.desc = desc
-        self.impl = impl
+    def __init__(self, ctx, offset, step: gl.constexpr):
+        self.desc = ctx.desc
+        self.impl = ctx.channel.create_producer()
         self.offset = offset
-        self.step = gl.constexpr(step)
+        self.step: gl.constexpr = step
 
     @gluon.jit
     def wait_and_issue_next(self):
@@ -346,7 +341,7 @@ class MMAContext:
         self.instr_shape: gl.constexpr = get_mma_instr_shape(shape, dtype)
         tmem_layout: gl.constexpr = TensorMemoryLayout((self.instr_shape[0], self.instr_shape[1]), unpacked=True)
 
-        self.channel = TensorMemoryChannel.create(shape, dtype, tmem_layout, num_buffers)
+        self.channel = TensorMemoryChannel.alloc(shape, dtype, tmem_layout, num_buffers)
 
     @gluon.jit
     def release(self):
@@ -556,8 +551,8 @@ class InnerLoopInfo:
                                                        num_buffers=1)
             m_i = gl.convert_layout(tile.m_i.expand_dims(1), config.mi_2d_layout)
         else:
-            self.mi_chnl = SharedMemoryChannel.create([config.SPLIT_M], gl.float32,
-                                                      gl.constexpr(mbarrier.MBarrierLayout()), num_buffers=1)
+            self.mi_chnl = SharedMemoryChannel.alloc([config.SPLIT_M], gl.float32,
+                                                     gl.constexpr(mbarrier.MBarrierLayout()), num_buffers=1)
             m_i = tile.m_i
         self.mi_chnl.mem.index(0).store(m_i)
         self.mi_chnl.initialize_for_producer()
@@ -588,8 +583,8 @@ def _attn_fwd_load(config,  #
     lo, hi = prog.get_loop_bounds(STAGE)
 
     offsetkv_y = prog.offset_y + lo
-    load_k = PipelinedLoadProducer.create(k_load_ctx, offsetkv_y, config.BLOCK_N)
-    load_v = PipelinedLoadProducer.create(v_load_ctx, offsetkv_y, config.BLOCK_N)
+    load_k = PipelinedLoadProducer(k_load_ctx, offsetkv_y, config.BLOCK_N)
+    load_v = PipelinedLoadProducer(v_load_ctx, offsetkv_y, config.BLOCK_N)
 
     num_loads = (hi - lo) // config.BLOCK_N
     if num_loads > 0:
@@ -827,8 +822,8 @@ def _attn_fwd_inner(config, info0, info1, m_i0, m_i1,  #
                     desc_k, desc_v,  #
                     STAGE: gl.constexpr):
     num_buffers: gl.constexpr = 2 if config.HEAD_DIM == 128 else 3
-    k_load_ctx = LoadContext.create(desc_k, num_buffers=num_buffers, num_consumers=2)
-    v_load_ctx = LoadContext.create(desc_v, num_buffers=num_buffers, num_consumers=2)
+    k_load_ctx = LoadContext(desc_k, num_buffers=num_buffers, num_consumers=2)
+    v_load_ctx = LoadContext(desc_v, num_buffers=num_buffers, num_consumers=2)
 
     m_i0, m_i1 = gl.warp_specialize((
         config,
