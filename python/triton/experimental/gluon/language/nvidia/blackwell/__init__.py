@@ -130,6 +130,8 @@ class tensor_memory_descriptor(base_value):
     def store(self, value, pred=True, _semantic: GluonSemantic = None) -> None:
         pred = _unwrap_if_constexpr(pred)
         pred = _semantic.to_tensor(pred)
+        assert value.shape == self.shape, f"source shape {value.shape} does not match destination shape {self.shape}"
+        assert value.dtype == self.dtype, f"source dtype {value.dtype} does not match destination dtype {self.dtype}"
         _semantic.builder.create_tmem_store(self.handle, value.handle, pred.handle)
 
     @builtin
