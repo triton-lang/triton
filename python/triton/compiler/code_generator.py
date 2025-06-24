@@ -1223,6 +1223,7 @@ class CodeGenerator(ast.NodeVisitor):
         for i, arg in enumerate(args):
             if isinstance(arg, (language.dtype, float, int, bool, JITFunction)):
                 args[i] = language.core.constexpr(arg)
+        print(args)
         args_mut = [[name, None]
                     for (name, arg) in zip(fn.arg_names, args)
                     if arg is not None and getattr(arg.type, "__triton_mutable__", False)]
@@ -1277,6 +1278,8 @@ class CodeGenerator(ast.NodeVisitor):
                 continue
             if isinstance(target, ast.keyword):
                 target = target.value
+            if not isinstance(target, ValueDest):
+                target = copy.deepcopy(target)
             target.ctx = ast.Store()
             self.assignTarget(target, value)
         return normal_ret
