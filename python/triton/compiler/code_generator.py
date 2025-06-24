@@ -280,14 +280,10 @@ class BoundJITMethod:
     __func__: JITFunction
 
 
-@dataclass(frozen=True)
-class MutableArgument:
-    value: base_value
-    node: Any
-
-    @staticmethod
-    def unwrap(arg):
-        return arg.value if isinstance(arg, MutableArgument) else arg
+def _wrap_mutable_argument(arg, node):
+    if isinstance(arg, base_value) and getattr(arg.type, "__triton_mutable__", False):
+        setattr(arg, "__ast__", node)
+    return arg
 
 
 class CodeGenerator(ast.NodeVisitor):
@@ -1204,7 +1200,7 @@ class CodeGenerator(ast.NodeVisitor):
 
     def call_JitFunction(self, fn: JITFunction, args, kwargs):
         call_args = inspect.getcallargs(fn.fn, *args, **kwargs)
-        args = [MutableArgument.unwrap(call_args[name]) for name in fn.arg_names]
+        args = [call_args[name] for name in fn.arg_names]
         for i, arg in enumerate(args):
             if isinstance(arg, (language.dtype, float, int, bool, JITFunction)):
                 args[i] = language.core.constexpr(arg)
@@ -1256,13 +1252,13 @@ class CodeGenerator(ast.NodeVisitor):
         all_ret_values = unflatten_ir_values(handles, all_ret_types)
         # Unpack and emit the writeback for mutable arguments.
         for name, ty in args_mut:
-            target, value = call_args[name], next(all_ret_values)
-            if not isinstance(target, MutableArgument):
+            target, value = getattr(call_args[name], "__ast__", None), next(all_ret_values)
+            if target is None:
                 raise CompilationError(self.jit_fn.src, self.cur_node,
                                        f"Cannot pass non-mutable reference to mutable argument '{name}'")
-            target = copy.deepcopy(target.node)
             if isinstance(target, ast.keyword):
                 target = target.value
+            target = copy.deepcopy(target)
             target.ctx = ast.Store()
             self.assignTarget(target, value)
         if callee_ret_type == language.void:
@@ -1284,17 +1280,15 @@ class CodeGenerator(ast.NodeVisitor):
             raise CompilationError(self.jit_fn.src, node, " ".join(error_message))
 
         kws = ((self.visit(kw), kw) for kw in node.keywords)
-        kws = {name: MutableArgument(value, node) for (name, value), node in kws}
-        args = (MutableArgument(self.visit(arg), arg) for arg in node.args)
-        args = list(itertools.chain.from_iterable(x.value if isinstance(x.value, list) else [x] for x in args))
+        kws = {name: _wrap_mutable_argument(value, node) for (name, value), node in kws}
+        args = (_wrap_mutable_argument(self.visit(arg), arg) for arg in node.args)
+        args = list(itertools.chain.from_iterable(x if isinstance(x, list) else [x] for x in args))
         if isinstance(fn, BoundJITMethod):
             args.insert(0, fn.__self__)
             fn = fn.__func__
         if isinstance(fn, JITFunction):
             _check_fn_args(node, fn, args)
             return self.call_JitFunction(fn, args, kws)
-        kws = {name: MutableArgument.unwrap(value) for name, value in kws.items()}
-        args = [MutableArgument.unwrap(arg) for arg in args]
         if (hasattr(fn, '__self__') and _is_triton_value(fn.__self__)) or language.core.is_builtin(fn):
             extra_kwargs = {"_semantic": self.semantic}
             sig = inspect.signature(fn)
@@ -1388,7 +1382,7 @@ class CodeGenerator(ast.NodeVisitor):
             lhs = lhs.value
         attr = getattr(lhs, node.attr)
         if _is_triton_value(lhs) and isinstance(attr, JITFunction):
-            return BoundJITMethod(MutableArgument(lhs, node.value), attr)
+            return BoundJITMethod(_wrap_mutable_argument(lhs, node.value), attr)
         return attr
 
     def visit_Expr(self, node):

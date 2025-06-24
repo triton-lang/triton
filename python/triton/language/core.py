@@ -1579,6 +1579,9 @@ def _aggregate_impl(cls, frozen):
 
         # Only allow setting attributes defined in the class annotations.
         def __setattr__(self, name, value):
+            if name == "__ast__":
+                super().__setattr__(name, value)
+                return
             if name not in cls.__annotations__:
                 raise AttributeError(f"{cls.__name__} has no attribute '{name}'")
             if not isinstance(value, cls.__annotations__[name]):
