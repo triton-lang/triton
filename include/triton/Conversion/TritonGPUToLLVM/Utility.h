@@ -248,25 +248,133 @@ struct TritonLLVMOpBuilder {
     return builder->create<LLVM::CallOp>(loc, std::forward<Args>(args)...);
   }
   // Constants
-  Value int_val(short bitwidth, int64_t val) {
-    Type ty = builder->getIntegerType(bitwidth);
-    return builder->create<LLVM::ConstantOp>(loc, ty,
-                                             builder->getIntegerAttr(ty, val));
+  Value constant(Type type, Attribute attr) {
+    Block *block = builder->getInsertionBlock();
+    // Try to find the entry block of a top-level isolated operation.
+    for (auto op = block->getParentOp(); op; op = op->getParentOp()) {
+      if (op->hasTrait<OpTrait::IsIsolatedFromAbove>()) {
+        if (op->hasTrait<OpTrait::OneRegion>()) {
+          block = &op->getRegion(0).front();
+        }
+        break;
+      }
+    }
+
+    auto &cache = get_cache()[block][type][attr];
+    auto value = cache.get();
+    if (value) {
+      assert(block == value.getDefiningOp()->getBlock());
+      value.getDefiningOp()->moveBefore(block, block->begin());
+      assert(DominanceInfo().properlyDominates(
+          value.getDefiningOp()->getBlock(),
+          Block::iterator(value.getDefiningOp()), builder->getInsertionBlock(),
+          builder->getInsertionPoint()));
+    } else {
+      OpBuilder::InsertionGuard guard(*builder);
+      builder->setInsertionPointToStart(block);
+      value = builder->create<LLVM::ConstantOp>(loc, type, attr);
+      cache.set(value);
+    }
+    return value;
+  }
+  Value int_val(unsigned bitwidth, int64_t val) {
+    Type type = builder->getIntegerType(bitwidth);
+    Attribute attr = builder->getIntegerAttr(type, val);
+    return constant(type, attr);
   }
   Value i1_val(int64_t val) { return int_val(1, val); }
   Value true_val() { return int_val(1, true); }
   Value false_val() { return int_val(1, false); }
-  Value f16_val(float v) { return LLVM::createConstantF16(loc, *builder, v); }
-  Value bf16_val(float v) { return LLVM::createConstantBF16(loc, *builder, v); }
-  Value f32_val(float v) { return LLVM::createConstantF32(loc, *builder, v); }
-  Value f64_val(double v) { return LLVM::createConstantF64(loc, *builder, v); }
+  Value f16_val(float v) {
+    return constant(type::f16Ty(builder->getContext()),
+                    builder->getF16FloatAttr(v));
+  }
+  Value bf16_val(float v) {
+    APFloat apf(v);
+    bool ignored;
+    apf.convert(APFloat::BFloat(), APFloat::rmNearestTiesToEven, &ignored);
+    auto type = type::bf16Ty(builder->getContext());
+    auto attr = FloatAttr::get(type, apf);
+    return constant(type, attr);
+  }
+  Value f32_val(float v) {
+    return constant(type::f32Ty(builder->getContext()),
+                    builder->getF32FloatAttr(v));
+  }
+  Value f64_val(double v) {
+    return constant(type::f64Ty(builder->getContext()),
+                    builder->getF64FloatAttr(v));
+  }
   Value i8_val(int64_t val) { return int_val(8, val); }
   Value i16_val(int64_t val) { return int_val(16, val); }
   Value i32_val(int64_t val) { return int_val(32, val); }
   Value i64_val(int64_t val) { return int_val(64, val); }
+  Value dense_val(ShapedType type, ArrayRef<Attribute> values) {
+    auto attr = DenseElementsAttr::get(type, values);
+    return constant(type, attr);
+  }
+
+  struct CacheGuard {
+    CacheGuard() { ++counter(); }
+    ~CacheGuard() {
+      if (--counter() == 0) {
+        get_cache().shrink_and_clear();
+      }
+    }
+
+  private:
+    friend TritonLLVMOpBuilder;
+    static unsigned &counter() {
+      static unsigned counter = 0;
+      return counter;
+    }
+  };
 
   Location loc;
   OpBuilder *builder;
+
+private:
+  friend CacheGuard;
+  CacheGuard guard;
+
+  struct ValueHolder {
+    explicit ValueHolder() = default;
+    ValueHolder(const ValueHolder &h) : ValueHolder() {
+      if (auto v = const_cast<ValueHolder &>(h).get()) {
+        set(v);
+      }
+    }
+    ~ValueHolder() {
+      if (!block.empty()) {
+        block.front().erase();
+      }
+    }
+    Value get() { return block.empty() ? nullptr : operand->get(); }
+    void set(const Value v) {
+      assert(!get());
+      if (block.empty()) {
+        OpBuilder b(v.getContext());
+        b.setInsertionPointToStart(&block);
+        operand = &b.create<LLVM::ReturnOp>(v.getLoc(), v)
+                       .getOperation()
+                       ->getOpOperand(0);
+      } else {
+        operand->set(v);
+      }
+    }
+
+  private:
+    Block block;
+    OpOperand *operand;
+  };
+
+  static inline DenseMap<Block *,
+                         DenseMap<Type, DenseMap<Attribute, ValueHolder>>> &
+  get_cache() {
+    static DenseMap<Block *, DenseMap<Type, DenseMap<Attribute, ValueHolder>>>
+        cache;
+    return cache;
+  }
 };
 
 // This builder combines an IRRewriter and a TritonLLVMOpBuilder into one,

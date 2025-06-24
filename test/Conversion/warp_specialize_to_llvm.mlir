@@ -46,23 +46,26 @@ llvm.mlir.global external @global_smem() {addr_space = 3 : i32, alignment = 16 :
 
 // CHECK-LABEL: @generate_switch_loop
 llvm.func @generate_switch_loop() attributes {allocation.offset = 32 : i32} {
-  // CHECK-NEXT: [[TIDX:%.*]] = nvvm.read.ptx.sreg.tid.x
-  // CHECK-NEXT: [[C32:%.*]] = llvm.mlir.constant(32 : i32)
+  // CHECK-DAG: [[C0:%.*]] = llvm.mlir.constant(0 : i32)
+  // CHECK-DAG: [[C4:%.*]] = llvm.mlir.constant(4 : i32)
+  // CHECK-DAG: [[C31:%.*]] = llvm.mlir.constant(31 : i32)
+  // CHECK-DAG: [[C32:%.*]] = llvm.mlir.constant(32 : i32)
+  // CHECK-DAG: [[CNEG1:%.*]] = llvm.mlir.constant(-1 : i32)
+  // CHECK-DAG: [[B0:%.*]] = llvm.mlir.constant(0 : i8)
+  // CHECK-DAG: [[B1:%.*]] = llvm.mlir.constant(1 : i8)
+  // CHECK-DAG: [[B2:%.*]] = llvm.mlir.constant(2 : i8)
+  // CHECK-DAG: [[B3:%.*]] = llvm.mlir.constant(3 : i8)
+
+  //      CHECK: [[TIDX:%.*]] = nvvm.read.ptx.sreg.tid.x
   // CHECK-NEXT: [[WID:%.*]] = llvm.udiv [[TIDX]], [[C32]]
-  // CHECK-NEXT: [[C0:%.*]] = llvm.mlir.constant(0 : i32)
-  // CHECK-NEXT: [[C31:%.*]] = llvm.mlir.constant(31 : i32)
-  // CHECK-NEXT: [[CNEG1:%.*]] = llvm.mlir.constant(-1 : i32)
   // CHECK-NEXT: [[WARP_ID:%.*]] = nvvm.shfl.sync idx [[CNEG1]], [[WID]], [[C0]], [[C31]]
-  // CHECK-NEXT: [[C4:%.*]] = llvm.mlir.constant(4 : i32)
   // CHECK-NEXT: [[IS_DEFAULT:%.*]] = llvm.icmp "ult" [[WARP_ID]], [[C4]]
   // CHECK-NEXT: llvm.cond_br [[IS_DEFAULT]], [[BODY:\^.*]], [[SWITCH_LOOP:\^.*]]
 
   // CHECK: [[SWITCH_LOOP]]:
   // CHECK-NEXT: "barrier.sync 1 ;"
-  // CHECK-NEXT: [[C32:%.*]] = llvm.mlir.constant(32 : i32)
   // CHECK-NEXT: [[SMEM_ADDR:%.*]] = llvm.mlir.addressof @global_smem
   // CHECK-NEXT: [[SMEM_BASE:%.*]] = llvm.getelementptr [[SMEM_ADDR]][[[C32]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i8
-  // CHECK-NEXT: [[C4:%.*]] = llvm.mlir.constant(4 : i32)
   // CHECK-NEXT: [[REL_WID:%.*]] = llvm.sub [[WARP_ID]], [[C4]]
 
   // CHECK-NEXT: [[STATE_PTR:%.*]] = llvm.getelementptr [[SMEM_BASE]][[[REL_WID]]]
@@ -101,33 +104,25 @@ llvm.func @generate_switch_loop() attributes {allocation.offset = 32 : i32} {
 
   // CHECK: [[BODY]]:
   // CHECK-NEXT: "before"
-  // CHECK-NEXT: [[C32:%.*]] = llvm.mlir.constant(32 : i32)
   // CHECK-NEXT: [[SMEM_ADDR:%.*]] = llvm.mlir.addressof @global_smem
   // CHECK-NEXT: [[SMEM_BASE:%.*]] = llvm.getelementptr [[SMEM_ADDR]][[[C32]]]
 
-  // CHECK-NEXT: [[CX:%.*]] = llvm.mlir.constant(0 : i8)
   // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr [[SMEM_BASE]][0]
-  // CHECK-NEXT: llvm.store [[CX]], [[PTR]]
-  // CHECK-NEXT: [[CX:%.*]] = llvm.mlir.constant(0 : i8)
+  // CHECK-NEXT: llvm.store [[B0]], [[PTR]]
   // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr [[SMEM_BASE]][1]
-  // CHECK-NEXT: llvm.store [[CX]], [[PTR]]
-  // CHECK-NEXT: [[CX:%.*]] = llvm.mlir.constant(0 : i8)
+  // CHECK-NEXT: llvm.store [[B0]], [[PTR]]
   // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr [[SMEM_BASE]][2]
-  // CHECK-NEXT: llvm.store [[CX]], [[PTR]]
-  // CHECK-NEXT: [[CX:%.*]] = llvm.mlir.constant(0 : i8)
+  // CHECK-NEXT: llvm.store [[B0]], [[PTR]]
   // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr [[SMEM_BASE]][3]
-  // CHECK-NEXT: llvm.store [[CX]], [[PTR]]
+  // CHECK-NEXT: llvm.store [[B0]], [[PTR]]
 
-  // CHECK-NEXT: [[CX:%.*]] = llvm.mlir.constant(1 : i8)
   // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr [[SMEM_BASE]][4]
-  // CHECK-NEXT: llvm.store [[CX]], [[PTR]]
-  // CHECK-NEXT: [[CX:%.*]] = llvm.mlir.constant(1 : i8)
+  // CHECK-NEXT: llvm.store [[B1]], [[PTR]]
   // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr [[SMEM_BASE]][5]
-  // CHECK-NEXT: llvm.store [[CX]], [[PTR]]
+  // CHECK-NEXT: llvm.store [[B1]], [[PTR]]
 
-  // CHECK-NEXT: [[CX:%.*]] = llvm.mlir.constant(2 : i8)
   // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr [[SMEM_BASE]][6]
-  // CHECK-NEXT: llvm.store [[CX]], [[PTR]]
+  // CHECK-NEXT: llvm.store [[B2]], [[PTR]]
 
   // CHECK: barrier.sync 1 ;
   // CHECK-NEXT: barrier.sync 1 ;
@@ -157,25 +152,23 @@ llvm.func @generate_switch_loop() attributes {allocation.offset = 32 : i32} {
   // CHECK: [[AFTER]]:
   // CHECK-NEXT: "after"
 
-  // CHECK-NEXT: [[C32:%.*]] = llvm.mlir.constant(32 : i32)
   // CHECK-NEXT: [[SMEM_ADDR:%.*]] = llvm.mlir.addressof @global_smem
   // CHECK-NEXT: [[SMEM_BASE:%.*]] = llvm.getelementptr [[SMEM_ADDR]][[[C32]]]
 
-  // CHECK-NEXT: [[CX:%.*]] = llvm.mlir.constant(3 : i8)
   // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr [[SMEM_BASE]][0]
-  // CHECK-NEXT: llvm.store [[CX]], [[PTR]]
+  // CHECK-NEXT: llvm.store [[B3]], [[PTR]]
   // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr [[SMEM_BASE]][1]
-  // CHECK-NEXT: llvm.store [[CX]], [[PTR]]
+  // CHECK-NEXT: llvm.store [[B3]], [[PTR]]
   // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr [[SMEM_BASE]][2]
-  // CHECK-NEXT: llvm.store [[CX]], [[PTR]]
+  // CHECK-NEXT: llvm.store [[B3]], [[PTR]]
   // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr [[SMEM_BASE]][3]
-  // CHECK-NEXT: llvm.store [[CX]], [[PTR]]
+  // CHECK-NEXT: llvm.store [[B3]], [[PTR]]
   // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr [[SMEM_BASE]][4]
-  // CHECK-NEXT: llvm.store [[CX]], [[PTR]]
+  // CHECK-NEXT: llvm.store [[B3]], [[PTR]]
   // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr [[SMEM_BASE]][5]
-  // CHECK-NEXT: llvm.store [[CX]], [[PTR]]
+  // CHECK-NEXT: llvm.store [[B3]], [[PTR]]
   // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr [[SMEM_BASE]][6]
-  // CHECK-NEXT: llvm.store [[CX]], [[PTR]]
+  // CHECK-NEXT: llvm.store [[B3]], [[PTR]]
   // CHECK-NEXT: barrier.sync 1 ;
   // CHECK-NEXT: llvm.return
   "after"() : () -> ()
@@ -192,6 +185,7 @@ llvm.mlir.global external @global_smem() {addr_space = 3 : i32, alignment = 16 :
 
 // CHECK-LABEL: @pass_captures
 llvm.func @pass_captures() attributes {allocation.offset = 32 : i32} {
+  // CHECK: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32)
   // CHECK: ^bb4:
   // CHECK-NEXT: [[C0:%.*]] = llvm.mlir.constant(0 : i32)
   // CHECK-NEXT: [[SMEM_ADDR:%.*]] = llvm.mlir.addressof @global_smem
@@ -208,9 +202,8 @@ llvm.func @pass_captures() attributes {allocation.offset = 32 : i32} {
   // CHECK: ^bb5:
   // CHECK: [[INS:%.*]]:2 = "produce"()
   // CHECK: llvm.mlir.addressof @global_smem
-  // CHECK: [[C0:%.*]] = llvm.mlir.constant(0 : i32)
-  // CHECK-NEXT: [[SMEM_ADDR:%.*]] = llvm.mlir.addressof @global_smem
-  // CHECK-NEXT: [[SMEM_BASE:%.*]] = llvm.getelementptr [[SMEM_ADDR]][[[C0]]]
+  // CHECK: [[SMEM_ADDR:%.*]] = llvm.mlir.addressof @global_smem
+  // CHECK-NEXT: [[SMEM_BASE:%.*]] = llvm.getelementptr [[SMEM_ADDR]][[[ZERO]]]
   // CHECK-NEXT: [[ARG0_PTR:%.*]] = llvm.getelementptr [[SMEM_BASE]][0, 0] : (!llvm.ptr<3>) -> !llvm.ptr<3>, !llvm.struct<packed (i32, i64)>
   // CHECK-NEXT: llvm.store [[INS]]#0, [[ARG0_PTR]] {alignment = 1 : i64}
   // CHECK-NEXT: [[ARG1_PTR:%.*]] = llvm.getelementptr [[SMEM_BASE]][0, 1] : (!llvm.ptr<3>) -> !llvm.ptr<3>, !llvm.struct<packed (i32, i64)>
@@ -239,6 +232,9 @@ llvm.mlir.global external @global_smem() {addr_space = 3 : i32, alignment = 16 :
 
 // CHECK-LABEL: @partition_warpid_order
 llvm.func @partition_warpid_order() attributes {allocation.offset = 32 : i32} {
+  // CHECK-DAG: [[C0:%.*]] = llvm.mlir.constant(0 : i8)
+  // CHECK-DAG: [[C1:%.*]] = llvm.mlir.constant(1 : i8)
+  // CHECK-DAG: [[C2:%.*]] = llvm.mlir.constant(2 : i8)
   // CHECK: llvm.switch
   // CHECK-NEXT: 0: [[PARTITION0:\^.*]],
   // CHECK-NEXT: 1: [[PARTITION1:\^.*]],
@@ -255,50 +251,36 @@ llvm.func @partition_warpid_order() attributes {allocation.offset = 32 : i32} {
   // CHECK: llvm.mlir.addressof @global_smem
   // CHECK-NEXT: getelementptr
 
-  // CHECK-NEXT: [[CX:%.*]] = llvm.mlir.constant(1 : i8)
   // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[0]
-  // CHECK-NEXT: llvm.store [[CX]], [[PTR]]
-  // CHECK-NEXT: [[CX:%.*]] = llvm.mlir.constant(1 : i8)
+  // CHECK-NEXT: llvm.store [[C1]], [[PTR]]
   // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[1]
-  // CHECK-NEXT: llvm.store [[CX]], [[PTR]]
+  // CHECK-NEXT: llvm.store [[C1]], [[PTR]]
 
-  // CHECK-NEXT: [[CX:%.*]] = llvm.mlir.constant(0 : i8)
   // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[2]
-  // CHECK-NEXT: llvm.store [[CX]], [[PTR]]
-  // CHECK-NEXT: [[CX:%.*]] = llvm.mlir.constant(0 : i8)
+  // CHECK-NEXT: llvm.store [[C0]], [[PTR]]
   // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[3]
-  // CHECK-NEXT: llvm.store [[CX]], [[PTR]]
-  // CHECK-NEXT: [[CX:%.*]] = llvm.mlir.constant(0 : i8)
+  // CHECK-NEXT: llvm.store [[C0]], [[PTR]]
   // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[4]
-  // CHECK-NEXT: llvm.store [[CX]], [[PTR]]
-  // CHECK-NEXT: [[CX:%.*]] = llvm.mlir.constant(0 : i8)
+  // CHECK-NEXT: llvm.store [[C0]], [[PTR]]
   // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[5]
-  // CHECK-NEXT: llvm.store [[CX]], [[PTR]]
+  // CHECK-NEXT: llvm.store [[C0]], [[PTR]]
 
-  // CHECK-NEXT: [[CX:%.*]] = llvm.mlir.constant(2 : i8)
   // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[6]
-  // CHECK-NEXT: llvm.store [[CX]], [[PTR]]
-  // CHECK-NEXT: [[CX:%.*]] = llvm.mlir.constant(2 : i8)
+  // CHECK-NEXT: llvm.store [[C2]], [[PTR]]
   // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[7]
-  // CHECK-NEXT: llvm.store [[CX]], [[PTR]]
-  // CHECK-NEXT: [[CX:%.*]] = llvm.mlir.constant(2 : i8)
+  // CHECK-NEXT: llvm.store [[C2]], [[PTR]]
   // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[8]
-  // CHECK-NEXT: llvm.store [[CX]], [[PTR]]
-  // CHECK-NEXT: [[CX:%.*]] = llvm.mlir.constant(2 : i8)
+  // CHECK-NEXT: llvm.store [[C2]], [[PTR]]
   // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[9]
-  // CHECK-NEXT: llvm.store [[CX]], [[PTR]]
-  // CHECK-NEXT: [[CX:%.*]] = llvm.mlir.constant(2 : i8)
+  // CHECK-NEXT: llvm.store [[C2]], [[PTR]]
   // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[10]
-  // CHECK-NEXT: llvm.store [[CX]], [[PTR]]
-  // CHECK-NEXT: [[CX:%.*]] = llvm.mlir.constant(2 : i8)
+  // CHECK-NEXT: llvm.store [[C2]], [[PTR]]
   // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[11]
-  // CHECK-NEXT: llvm.store [[CX]], [[PTR]]
-  // CHECK-NEXT: [[CX:%.*]] = llvm.mlir.constant(2 : i8)
+  // CHECK-NEXT: llvm.store [[C2]], [[PTR]]
   // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[12]
-  // CHECK-NEXT: llvm.store [[CX]], [[PTR]]
-  // CHECK-NEXT: [[CX:%.*]] = llvm.mlir.constant(2 : i8)
+  // CHECK-NEXT: llvm.store [[C2]], [[PTR]]
   // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[13]
-  // CHECK-NEXT: llvm.store [[CX]], [[PTR]]
+  // CHECK-NEXT: llvm.store [[C2]], [[PTR]]
   ttg.warp_specialize() attributes {allocation.offset = 0 : i32, warpGroupStartIds = array<i32: 6, 4, 10>}
   default {
     "ws0_default"() : () -> ()
@@ -329,6 +311,13 @@ llvm.mlir.global external @global_smem() {addr_space = 3 : i32, alignment = 16 :
 
 // CHECK-LABEL: @multiple_specialize
 llvm.func @multiple_specialize() attributes {allocation.offset = 32 : i32} {
+  // CHECK-DAG: [[C0:%.*]] = llvm.mlir.constant(0 : i8)
+  // CHECK-DAG: [[C1:%.*]] = llvm.mlir.constant(1 : i8)
+  // CHECK-DAG: [[C2:%.*]] = llvm.mlir.constant(2 : i8)
+  // CHECK-DAG: [[C3:%.*]] = llvm.mlir.constant(3 : i8)
+  // CHECK-DAG: [[C4:%.*]] = llvm.mlir.constant(4 : i8)
+  // CHECK-DAG: [[C5:%.*]] = llvm.mlir.constant(5 : i8)
+  // CHECK-DAG: [[CNEG1:%.*]] = llvm.mlir.constant(-1 : i8)
   // CHECK: llvm.switch
   // CHECK-NEXT: 0: [[WS0_PARTITION0:\^.*]],
   // CHECK-NEXT: 1: [[WS0_PARTITION1:\^.*]],
@@ -353,30 +342,22 @@ llvm.func @multiple_specialize() attributes {allocation.offset = 32 : i32} {
 
   // CHECK: llvm.mlir.addressof @global_smem
   // CHECK-NEXT: getelementptr
-  // CHECK-NEXT: [[CX:%.*]] = llvm.mlir.constant(0 : i8)
   // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[0]
-  // CHECK-NEXT: llvm.store [[CX]], [[PTR]]
-  // CHECK-NEXT: [[CX:%.*]] = llvm.mlir.constant(0 : i8)
+  // CHECK-NEXT: llvm.store [[C0]], [[PTR]]
   // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[1]
-  // CHECK-NEXT: llvm.store [[CX]], [[PTR]]
-  // CHECK-NEXT: [[CX:%.*]] = llvm.mlir.constant(0 : i8)
+  // CHECK-NEXT: llvm.store [[C0]], [[PTR]]
   // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[2]
-  // CHECK-NEXT: llvm.store [[CX]], [[PTR]]
-  // CHECK-NEXT: [[CX:%.*]] = llvm.mlir.constant(0 : i8)
+  // CHECK-NEXT: llvm.store [[C0]], [[PTR]]
   // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[3]
-  // CHECK-NEXT: llvm.store [[CX]], [[PTR]]
-  // CHECK-NEXT: [[CX:%.*]] = llvm.mlir.constant(1 : i8)
+  // CHECK-NEXT: llvm.store [[C0]], [[PTR]]
   // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[4]
-  // CHECK-NEXT: llvm.store [[CX]], [[PTR]]
-  // CHECK-NEXT: [[CX:%.*]] = llvm.mlir.constant(1 : i8)
+  // CHECK-NEXT: llvm.store [[C1]], [[PTR]]
   // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[5]
-  // CHECK-NEXT: llvm.store [[CX]], [[PTR]]
-  // CHECK-NEXT: [[CX:%.*]] = llvm.mlir.constant(2 : i8)
+  // CHECK-NEXT: llvm.store [[C1]], [[PTR]]
   // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[6]
-  // CHECK-NEXT: llvm.store [[CX]], [[PTR]]
-  // CHECK-NEXT: [[CX:%.*]] = llvm.mlir.constant(-1 : i8)
+  // CHECK-NEXT: llvm.store [[C2]], [[PTR]]
   // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[7]
-  // CHECK-NEXT: llvm.store [[CX]], [[PTR]]
+  // CHECK-NEXT: llvm.store [[CNEG1]], [[PTR]]
   // CHECK: barrier.sync 1 ;
   // CHECK: "ws0_default"
   ttg.warp_specialize() attributes {allocation.offset = 0 : i32, warpGroupStartIds = array<i32: 4, 8, 10>}
@@ -399,30 +380,22 @@ llvm.func @multiple_specialize() attributes {allocation.offset = 32 : i32} {
 
   // CHECK: llvm.mlir.addressof @global_smem
   // CHECK-NEXT: getelementptr
-  // CHECK-NEXT: [[CX:%.*]] = llvm.mlir.constant(4 : i8)
   // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[0]
-  // CHECK-NEXT: llvm.store [[CX]], [[PTR]]
-  // CHECK-NEXT: [[CX:%.*]] = llvm.mlir.constant(4 : i8)
+  // CHECK-NEXT: llvm.store [[C4]], [[PTR]]
   // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[1]
-  // CHECK-NEXT: llvm.store [[CX]], [[PTR]]
-  // CHECK-NEXT: [[CX:%.*]] = llvm.mlir.constant(4 : i8)
+  // CHECK-NEXT: llvm.store [[C4]], [[PTR]]
   // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[2]
-  // CHECK-NEXT: llvm.store [[CX]], [[PTR]]
-  // CHECK-NEXT: [[CX:%.*]] = llvm.mlir.constant(4 : i8)
+  // CHECK-NEXT: llvm.store [[C4]], [[PTR]]
   // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[3]
-  // CHECK-NEXT: llvm.store [[CX]], [[PTR]]
-  // CHECK-NEXT: [[CX:%.*]] = llvm.mlir.constant(3 : i8)
+  // CHECK-NEXT: llvm.store [[C4]], [[PTR]]
   // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[4]
-  // CHECK-NEXT: llvm.store [[CX]], [[PTR]]
-  // CHECK-NEXT: [[CX:%.*]] = llvm.mlir.constant(3 : i8)
+  // CHECK-NEXT: llvm.store [[C3]], [[PTR]]
   // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[5]
-  // CHECK-NEXT: llvm.store [[CX]], [[PTR]]
-  // CHECK-NEXT: [[CX:%.*]] = llvm.mlir.constant(3 : i8)
+  // CHECK-NEXT: llvm.store [[C3]], [[PTR]]
   // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[6]
-  // CHECK-NEXT: llvm.store [[CX]], [[PTR]]
-  // CHECK-NEXT: [[CX:%.*]] = llvm.mlir.constant(3 : i8)
+  // CHECK-NEXT: llvm.store [[C3]], [[PTR]]
   // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[7]
-  // CHECK-NEXT: llvm.store [[CX]], [[PTR]]
+  // CHECK-NEXT: llvm.store [[C3]], [[PTR]]
   // CHECK: barrier.sync 1 ;
   // CHECK: "ws1_default"
   ttg.warp_specialize() attributes {allocation.offset = 0 : i32, warpGroupStartIds = array<i32: 8, 4>}
@@ -441,30 +414,22 @@ llvm.func @multiple_specialize() attributes {allocation.offset = 32 : i32} {
 
   // CHECK: llvm.mlir.addressof @global_smem
   // CHECK-NEXT: getelementptr
-  // CHECK-NEXT: [[CX:%.*]] = llvm.mlir.constant(-1 : i8)
   // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[0]
-  // CHECK-NEXT: llvm.store [[CX]], [[PTR]]
-  // CHECK-NEXT: [[CX:%.*]] = llvm.mlir.constant(-1 : i8)
+  // CHECK-NEXT: llvm.store [[CNEG1]], [[PTR]]
   // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[1]
-  // CHECK-NEXT: llvm.store [[CX]], [[PTR]]
-  // CHECK-NEXT: [[CX:%.*]] = llvm.mlir.constant(-1 : i8)
+  // CHECK-NEXT: llvm.store [[CNEG1]], [[PTR]]
   // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[2]
-  // CHECK-NEXT: llvm.store [[CX]], [[PTR]]
-  // CHECK-NEXT: [[CX:%.*]] = llvm.mlir.constant(-1 : i8)
+  // CHECK-NEXT: llvm.store [[CNEG1]], [[PTR]]
   // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[3]
-  // CHECK-NEXT: llvm.store [[CX]], [[PTR]]
-  // CHECK-NEXT: [[CX:%.*]] = llvm.mlir.constant(-1 : i8)
+  // CHECK-NEXT: llvm.store [[CNEG1]], [[PTR]]
   // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[4]
-  // CHECK-NEXT: llvm.store [[CX]], [[PTR]]
-  // CHECK-NEXT: [[CX:%.*]] = llvm.mlir.constant(-1 : i8)
+  // CHECK-NEXT: llvm.store [[CNEG1]], [[PTR]]
   // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[5]
-  // CHECK-NEXT: llvm.store [[CX]], [[PTR]]
-  // CHECK-NEXT: [[CX:%.*]] = llvm.mlir.constant(-1 : i8)
+  // CHECK-NEXT: llvm.store [[CNEG1]], [[PTR]]
   // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[6]
-  // CHECK-NEXT: llvm.store [[CX]], [[PTR]]
-  // CHECK-NEXT: [[CX:%.*]] = llvm.mlir.constant(-1 : i8)
+  // CHECK-NEXT: llvm.store [[CNEG1]], [[PTR]]
   // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[7]
-  // CHECK-NEXT: llvm.store [[CX]], [[PTR]]
+  // CHECK-NEXT: llvm.store [[CNEG1]], [[PTR]]
   // CHECK: barrier.sync 1 ;
   // CHECK: "ws2_default"
   ttg.warp_specialize() attributes {allocation.offset = 0 : i32, warpGroupStartIds = array<i32>}
@@ -475,30 +440,22 @@ llvm.func @multiple_specialize() attributes {allocation.offset = 32 : i32} {
 
   // CHECK: llvm.mlir.addressof @global_smem
   // CHECK-NEXT: getelementptr
-  // CHECK-NEXT: [[CX:%.*]] = llvm.mlir.constant(5 : i8)
   // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[0]
-  // CHECK-NEXT: llvm.store [[CX]], [[PTR]]
-  // CHECK-NEXT: [[CX:%.*]] = llvm.mlir.constant(5 : i8)
+  // CHECK-NEXT: llvm.store [[C5]], [[PTR]]
   // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[1]
-  // CHECK-NEXT: llvm.store [[CX]], [[PTR]]
-  // CHECK-NEXT: [[CX:%.*]] = llvm.mlir.constant(5 : i8)
+  // CHECK-NEXT: llvm.store [[C5]], [[PTR]]
   // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[2]
-  // CHECK-NEXT: llvm.store [[CX]], [[PTR]]
-  // CHECK-NEXT: [[CX:%.*]] = llvm.mlir.constant(5 : i8)
+  // CHECK-NEXT: llvm.store [[C5]], [[PTR]]
   // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[3]
-  // CHECK-NEXT: llvm.store [[CX]], [[PTR]]
-  // CHECK-NEXT: [[CX:%.*]] = llvm.mlir.constant(5 : i8)
+  // CHECK-NEXT: llvm.store [[C5]], [[PTR]]
   // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[4]
-  // CHECK-NEXT: llvm.store [[CX]], [[PTR]]
-  // CHECK-NEXT: [[CX:%.*]] = llvm.mlir.constant(5 : i8)
+  // CHECK-NEXT: llvm.store [[C5]], [[PTR]]
   // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[5]
-  // CHECK-NEXT: llvm.store [[CX]], [[PTR]]
-  // CHECK-NEXT: [[CX:%.*]] = llvm.mlir.constant(5 : i8)
+  // CHECK-NEXT: llvm.store [[C5]], [[PTR]]
   // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[6]
-  // CHECK-NEXT: llvm.store [[CX]], [[PTR]]
-  // CHECK-NEXT: [[CX:%.*]] = llvm.mlir.constant(5 : i8)
+  // CHECK-NEXT: llvm.store [[C5]], [[PTR]]
   // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[7]
-  // CHECK-NEXT: llvm.store [[CX]], [[PTR]]
+  // CHECK-NEXT: llvm.store [[C5]], [[PTR]]
   // CHECK: barrier.sync 1 ;
   // CHECK: "ws3_default"
   ttg.warp_specialize() attributes {allocation.offset = 0 : i32, warpGroupStartIds = array<i32: 4>}

@@ -535,9 +535,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK: llvm.mlir.global external @global_smem
   // CHECK-LABEL: basic_alloc_tensor
   tt.func @basic_alloc_tensor() {
-    // CHECK: llvm.mlir.addressof @global_smem
-    // CHECK-NEXT: llvm.getelementptr
-    // CHECK-NEXT: llvm.mlir.constant
+    // CHECK: %[[c0:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK: %[[a:.*]] = llvm.mlir.addressof @global_smem
+    // CHECK: llvm.getelementptr %[[a]][%[[c0]]]
     %0 = ttg.local_alloc : () -> !ttg.memdesc<16x16xf16, #shared0, #smem, mutable>
     tt.return
   }
@@ -551,17 +551,17 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK: llvm.mlir.global external @global_smem
   // CHECK-LABEL: rank_reducing_subview
   tt.func @rank_reducing_subview() {
+    // CHECK-DAG: llvm.mlir.constant(0 : i32) : i32
+    // CHECK-DAG: llvm.mlir.constant(1 : i32) : i32
+    // CHECK-DAG: llvm.mlir.constant(32 : i32) : i32
+    // CHECK-DAG: llvm.mlir.constant(512 : i32) : i32
     // CHECK: llvm.mlir.addressof @global_smem
     // CHECK: llvm.extractvalue
     // CHECK-NEXT: llvm.extractvalue
     // CHECK-NEXT: llvm.extractvalue
     // CHECK-NEXT: llvm.extractvalue
-    // CHECK-NEXT: llvm.mlir.constant(1 : i32) : i32
-    // CHECK-NEXT: llvm.mlir.constant(32 : i32) : i32
-    // CHECK-NEXT: llvm.mlir.constant(512 : i32) : i32
     // CHECK-NEXT: llvm.add
     // CHECK-NEXT: llvm.add
-    // CHECK-NEXT: llvm.mlir.constant(0 : i32) : i32
     // CHECK-NEXT: llvm.mul
     // CHECK-NEXT: llvm.add
     // CHECK-NEXT: llvm.mul
@@ -1644,12 +1644,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   // CHECK-LABEL: matmul_f16_cst_operands
   tt.func public @matmul_f16_cst_operands(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
     %cst = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #mma>
-  // CHECK: %[[U:.+]] = llvm.mlir.undef : vector<2xf16>
-  // CHECK: %[[C0:.+]] = llvm.mlir.constant(0 : i32) : i32
-  // CHECK: %[[V0:.+]] = llvm.insertelement %{{.*}}, %[[U]][%[[C0]] : i32] : vector<2xf16>
-  // CHECK: %[[C1:.+]] = llvm.mlir.constant(1 : i32) : i32
-  // CHECK: %[[V1:.+]] = llvm.insertelement %{{.*}}, %[[V0]][%[[C1]] : i32] : vector<2xf16>
-  // CHECK: %[[BC:.+]] = llvm.bitcast %[[V1]] : vector<2xf16> to i32
+  // CHECK-DAG: %[[C0:.+]] = llvm.mlir.constant(0 : i32) : i32
+  // CHECK-DAG: %[[C1:.+]] = llvm.mlir.constant(1 : i32) : i32
+  //     CHECK: %[[U:.+]] = llvm.mlir.undef : vector<2xf16>
+  //     CHECK: %[[V0:.+]] = llvm.insertelement %{{.*}}, %[[U]][%[[C0]] : i32] : vector<2xf16>
+  //     CHECK: %[[V1:.+]] = llvm.insertelement %{{.*}}, %[[V0]][%[[C1]] : i32] : vector<2xf16>
+  //     CHECK: %[[BC:.+]] = llvm.bitcast %[[V1]] : vector<2xf16> to i32
     %cst_0 = arith.constant dense<1.000000e+00> : tensor<32x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
     %cst_1 = arith.constant dense<1.000000e+00> : tensor<32x32xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
     %cst_2 = arith.constant dense<32> : tensor<32x1xi32, #blocked>
@@ -2408,8 +2408,8 @@ module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
 
 // CHECK-LABEL: @memdesc_reinterpret
 tt.func private @memdesc_reinterpret(%arg0: !ttg.memdesc<4x1024xi8, #shared0, #ttg.shared_memory, mutable>) {
-  // CHECK: [[BASE_PTR:%.*]] = llvm.extractvalue %arg0[0]
   // CHECK: [[C0:%.*]] = llvm.mlir.constant(0 : i32)
+  // CHECK: [[BASE_PTR:%.*]] = llvm.extractvalue %arg0[0]
   ttg.memdesc_reinterpret %arg0 : !ttg.memdesc<4x1024xi8, #shared0, #ttg.shared_memory, mutable> -> !ttg.memdesc<4x4x4xi32, #shared1, #ttg.shared_memory, mutable>
   // CHECK: [[S0:%.*]] = llvm.mlir.undef
   // CHECK: [[S1:%.*]] = llvm.insertvalue [[BASE_PTR]], [[S0]][0]
@@ -2443,15 +2443,15 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
 // CHECK-LABEL: @arith_constant_array
 tt.func private @arith_constant_array() {
-  // CHECK: %[[C0:.+]] = llvm.mlir.constant(0 : i32) : i32
-  // CHECK: %[[C1:.+]] = llvm.mlir.constant(1 : i32) : i32
-  // CHECK: %[[C2:.+]] = llvm.mlir.constant(2 : i32) : i32
-  // CHECK: %[[C3:.+]] = llvm.mlir.constant(3 : i32) : i32
-  // CHECK: %[[S0:.+]] = llvm.mlir.undef : !llvm.struct<(i32, i32, i32, i32)>
-  // CHECK: %[[S1:.+]] = llvm.insertvalue %[[C0]], %[[S0]][0] : !llvm.struct<(i32, i32, i32, i32)>
-  // CHECK: %[[S2:.+]] = llvm.insertvalue %[[C1]], %[[S1]][1] : !llvm.struct<(i32, i32, i32, i32)>
-  // CHECK: %[[S3:.+]] = llvm.insertvalue %[[C2]], %[[S2]][2] : !llvm.struct<(i32, i32, i32, i32)>
-  // CHECK: %[[S4:.+]] = llvm.insertvalue %[[C3]], %[[S3]][3] : !llvm.struct<(i32, i32, i32, i32)>
+  // CHECK-DAG: %[[C0:.+]] = llvm.mlir.constant(0 : i32) : i32
+  // CHECK-DAG: %[[C1:.+]] = llvm.mlir.constant(1 : i32) : i32
+  // CHECK-DAG: %[[C2:.+]] = llvm.mlir.constant(2 : i32) : i32
+  // CHECK-DAG: %[[C3:.+]] = llvm.mlir.constant(3 : i32) : i32
+  //     CHECK: %[[S0:.+]] = llvm.mlir.undef : !llvm.struct<(i32, i32, i32, i32)>
+  //     CHECK: %[[S1:.+]] = llvm.insertvalue %[[C0]], %[[S0]][0] : !llvm.struct<(i32, i32, i32, i32)>
+  //     CHECK: %[[S2:.+]] = llvm.insertvalue %[[C1]], %[[S1]][1] : !llvm.struct<(i32, i32, i32, i32)>
+  //     CHECK: %[[S3:.+]] = llvm.insertvalue %[[C2]], %[[S2]][2] : !llvm.struct<(i32, i32, i32, i32)>
+  //     CHECK: %[[S4:.+]] = llvm.insertvalue %[[C3]], %[[S3]][3] : !llvm.struct<(i32, i32, i32, i32)>
   %0 = arith.constant dense<[0, 1, 2, 3]> : tensor<4xi32, #blocked>
   tt.return
 }
@@ -2468,13 +2468,13 @@ module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
 // CHECK-LABEL: @experimental_check_async_write_with_mbar_shared
 // CHECK: (%[[BUF:.*]]: {{.*}}, %[[BAR:.*]]: {{.*}}, %[[BUFFERS:.*]]: {{.*}}, %[[STATE:.*]]: {{.*}}, %[[BARRIERS:.*]]: {{.*}}, %{{.*}}, %{{.*}})
 
+// CHECK-DAG: %[[BUF_STRIDE0:.*]] = llvm.mlir.constant(1 : i32)
+// CHECK-DAG: %[[BUF_STRIDE1:.*]] = llvm.mlir.constant(32 : i32)
+// CHECK-DAG: %[[ZERO:.*]] = llvm.mlir.constant(0 : i32)
 // Check the buffer pointer calculation
 // CHECK: %[[BUF_BASE:.*]] = llvm.extractvalue %[[BUF]][0]
 // CHECK: %[[BUF_OFF0:.*]] = llvm.extractvalue %[[BUF]][1]
 // CHECK: %[[BUF_OFF1:.*]] = llvm.extractvalue %[[BUF]][2]
-// CHECK: %[[BUF_STRIDE0:.*]] = llvm.mlir.constant(1 : i32)
-// CHECK: %[[BUF_STRIDE1:.*]] = llvm.mlir.constant(32 : i32)
-// CHECK: %[[ZERO:.*]] = llvm.mlir.constant(0 : i32)
 // CHECK: %[[BUF_OFFxSTR0:.*]] = llvm.mul %[[BUF_OFF0]], %[[BUF_STRIDE1]]
 // CHECK: %[[BUF_PTR0:.*]] = llvm.add %[[ZERO]], %[[BUF_OFFxSTR0]]
 // CHECK: %[[BUF_OFFxSTR1:.*]] = llvm.mul %[[BUF_OFF1]], %[[BUF_STRIDE0]]

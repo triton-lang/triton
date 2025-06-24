@@ -108,8 +108,8 @@ llvm.func @wgmma(%desc: i64, %in: !struct_64xf32) {
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:100", ttg.tensor_memory_size = 128 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: @tensor_memory_base_lowering
-  //      CHECK:    %[[TID:.+]] = nvvm.read.ptx.sreg.tid.x : i32
   //      CHECK:    %[[C32:.+]] = llvm.mlir.constant(32 : i32) : i32
+  //      CHECK:    %[[TID:.+]] = nvvm.read.ptx.sreg.tid.x : i32
   //      CHECK:    %[[PRED:.+]] = llvm.icmp "ult" %[[TID]], %[[C32]] : i32
   //      CHECK:    %[[SHMEM:.+]] = llvm.mlir.addressof @global_smem : !llvm.ptr<3>
   //      CHECK:    %[[A:.+]] = llvm.inline_asm has_side_effects
@@ -182,12 +182,12 @@ llvm.func @warpid_warp_specialize() {
   partition0() num_warps(4) {
     // 6*32 = 196
 
-    // CHECK: [[C32:%.*]] = llvm.mlir.constant(32 : i32)
-    // CHECK: [[C192:%.*]] = llvm.mlir.constant(192 : i32)
-    // CHECK: [[TIDX:%.*]] = nvvm.read.ptx.sreg.tid.x
-    // CHECK: [[REL_TIDX:%.*]] = llvm.sub [[TIDX]], [[C192]]
-    // CHECK: [[ID:%.*]] = llvm.udiv [[REL_TIDX]], [[C32]]
-    // CHECK: [[UNIFORM:%.*]] = nvvm.shfl.sync idx {{%[0-9]+}}, [[ID]]
+    // CHECK-DAG: [[C32:%.*]] = llvm.mlir.constant(32 : i32)
+    // CHECK-DAG: [[C192:%.*]] = llvm.mlir.constant(192 : i32)
+    //     CHECK: [[TIDX:%.*]] = nvvm.read.ptx.sreg.tid.x
+    //     CHECK: [[REL_TIDX:%.*]] = llvm.sub [[TIDX]], [[C192]]
+    //     CHECK: [[ID:%.*]] = llvm.udiv [[REL_TIDX]], [[C32]]
+    //     CHECK: [[UNIFORM:%.*]] = nvvm.shfl.sync idx {{%[0-9]+}}, [[ID]]
     %1 = nvgpu.warp_id
     // CHECK: "use"([[UNIFORM]])
     "use"(%1) : (i32) -> ()
@@ -196,12 +196,12 @@ llvm.func @warpid_warp_specialize() {
   partition1() num_warps(2) {
     // 4*32 = 128
 
-    // CHECK: [[C32:%.*]] = llvm.mlir.constant(32 : i32)
-    // CHECK: [[C128:%.*]] = llvm.mlir.constant(128 : i32)
-    // CHECK: [[TIDX:%.*]] = nvvm.read.ptx.sreg.tid.x
-    // CHECK: [[REL_TIDX:%.*]] = llvm.sub [[TIDX]], [[C128]]
-    // CHECK: [[ID:%.*]] = llvm.udiv [[REL_TIDX]], [[C32]]
-    // CHECK: [[UNIFORM:%.*]] = nvvm.shfl.sync idx {{%[0-9]+}}, [[ID]]
+    // CHECK-DAG: [[C32:%.*]] = llvm.mlir.constant(32 : i32)
+    // CHECK-DAG: [[C128:%.*]] = llvm.mlir.constant(128 : i32)
+    //     CHECK: [[TIDX:%.*]] = nvvm.read.ptx.sreg.tid.x
+    //     CHECK: [[REL_TIDX:%.*]] = llvm.sub [[TIDX]], [[C128]]
+    //     CHECK: [[ID:%.*]] = llvm.udiv [[REL_TIDX]], [[C32]]
+    //     CHECK: [[UNIFORM:%.*]] = nvvm.shfl.sync idx {{%[0-9]+}}, [[ID]]
     %1 = nvgpu.warp_id
     // CHECK: "use"([[UNIFORM]])
     "use"(%1) : (i32) -> ()

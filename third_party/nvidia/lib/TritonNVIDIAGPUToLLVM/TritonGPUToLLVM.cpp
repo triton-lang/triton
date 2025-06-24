@@ -80,6 +80,7 @@ struct ConvertTritonGPUToLLVM
     MLIRContext *context = &getContext();
     ModuleOp mod = getOperation();
     TargetInfo targetInfo(computeCapability, ptxVersion);
+    TritonLLVMOpBuilder::CacheGuard bcGuard;
 
     // Allocate shared memory and set barrier
     ModuleAllocation allocation(mod);

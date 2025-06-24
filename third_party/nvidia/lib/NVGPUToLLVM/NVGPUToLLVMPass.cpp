@@ -787,6 +787,7 @@ public:
     MLIRContext *context = &getContext();
     ModuleOp mod = getOperation();
     RewritePatternSet patterns(context);
+    TritonLLVMOpBuilder::CacheGuard bcGuard;
 
 #define POPULATE_NVGPU_OP(SRC_OP, ASM)                                         \
   patterns.add<NVGPUOpGenericPattern<SRC_OP>>(context, ASM, Constraints(),     \

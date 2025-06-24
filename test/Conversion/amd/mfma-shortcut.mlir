@@ -37,17 +37,19 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
   // GFX942-LABEL: mfma_dot_cvt_f8_mfma32
   tt.func public @mfma_dot_cvt_f8_mfma32(%arg0: tensor<128x32xf8E4M3FNUZ, #mfma>) {
+    // GFX942-DAG: [[c2:%.*]] = llvm.mlir.constant(2 : i32)
+    // GFX942-DAG: [[c3:%.*]] = llvm.mlir.constant(3 : i32)
+    // GFX942-DAG: [[c32:%.*]] = llvm.mlir.constant(32 : i32)
+    // GFX942-DAG: [[c64:%.*]] = llvm.mlir.constant(64 : i32)
+    // GFX942-DAG: [[c255:%.*]] = llvm.mlir.constant(255 : i32)
+
     // GFX942-NOT: store
     // GFX942-NOT: load
 
     // GFX942: [[val3:%.*]] = llvm.extractvalue %arg0[3]
     // GFX942: [[val7:%.*]] = llvm.extractvalue %arg0[7]
 
-    // GFX942-DAG: [[c32:%.*]] = llvm.mlir.constant(32 : i32)
-    // GFX942-DAG: [[c64:%.*]] = llvm.mlir.constant(64 : i32)
-
     // GFX942: [[threadId:%.*]] = rocdl.workitem.id.x
-    // GFX942: [[c255:%.*]] = llvm.mlir.constant(255 : i32)
     // GFX942: [[RTID:%.*]] = llvm.and [[threadId]], [[c255]]
     // GFX942: [[laneId:%.*]] = llvm.urem [[RTID]], [[c64]]
     // GFX942: [[mask0:%.*]] = llvm.icmp "slt" [[laneId]], [[c32]]
@@ -59,13 +61,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // GFX942: [[vec1:%.*]] = llvm.insertelement [[val7]], {{.*}} : vector<4xi8>
 
     // GFX942: [[bvec0:%.*]] = llvm.bitcast [[vec0]]
-    // GFX942: [[c2:%.*]] = llvm.mlir.constant(2 : i32)
+
     // GFX942: [[addr:%.*]] = llvm.shl [[addr32]], [[c2]]
     // GFX942: [[bShflVec0:%.*]] = rocdl.ds_bpermute [[addr]], [[bvec0]]
     // GFX942: [[shflVec0:%.*]] = llvm.bitcast [[bShflVec0]]
 
     // GFX942: [[bvec1:%.*]] = llvm.bitcast [[vec1]]
-    // GFX942: [[c2:%.*]] = llvm.mlir.constant(2 : i32)
     // GFX942: [[addr:%.*]] = llvm.shl [[addr32]], [[c2]]
     // GFX942: [[bShflVec1:%.*]] = rocdl.ds_bpermute [[addr]], [[bvec1]]
     // GFX942: [[shflVec1:%.*]] = llvm.bitcast [[bShflVec1]]
@@ -79,9 +80,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // GFX942: [[resVec0:%.*]] = llvm.select [[mask0]], [[vec0]], [[shflVec1]]
     // GFX942: [[resVec1:%.*]] = llvm.select [[mask0]], [[shflVec0]], [[vec1]]
 
-    // GFX942: [[c3:%.*]] = llvm.mlir.constant(3 : i32)
     // GFX942: [[resVal3:%.*]] = llvm.extractelement [[resVec0]][[[c3]] : i32] : vector<4xi8>
-    // GFX942: [[c3:%.*]] = llvm.mlir.constant(3 : i32) : i32
     // GFX942: [[resVal7:%.*]] = llvm.extractelement [[resVec1]][[[c3]] : i32] : vector<4xi8>
 
     // GFX942: llvm.insertvalue [[resVal3]], {{.*}}[3]
@@ -118,19 +117,21 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
   // GFX942-LABEL: mfma_dot_cvt_f8_mfma16
   tt.func public @mfma_dot_cvt_f8_mfma16(%arg0: tensor<128x32xf8E4M3FNUZ, #mfma>) {
+    // GFX942-DAG: [[c2:%.*]] = llvm.mlir.constant(2 : i32)
+    // GFX942-DAG: [[c3:%.*]] = llvm.mlir.constant(3 : i32)
+    // GFX942-DAG: [[c16:%.*]] = llvm.mlir.constant(16 : i32)
+    // GFX942-DAG: [[c32:%.*]] = llvm.mlir.constant(32 : i32)
+    // GFX942-DAG: [[c48:%.*]] = llvm.mlir.constant(48 : i32)
+    // GFX942-DAG: [[c64:%.*]] = llvm.mlir.constant(64 : i32)
+    // GFX942-DAG: [[c255:%.*]] = llvm.mlir.constant(255 : i32)
+
     // GFX942-NOT: store
     // GFX942-NOT: load
 
     // GFX942: [[val3:%.*]] = llvm.extractvalue %arg0[3]
     // GFX942: [[val7:%.*]] = llvm.extractvalue %arg0[7]
 
-    // GFX942-DAG: [[c16:%.*]] = llvm.mlir.constant(16 : i32)
-    // GFX942-DAG: [[c32:%.*]] = llvm.mlir.constant(32 : i32)
-    // GFX942-DAG: [[c48:%.*]] = llvm.mlir.constant(48 : i32)
-    // GFX942-DAG: [[c64:%.*]] = llvm.mlir.constant(64 : i32)
-
     // GFX942: [[threadId:%.*]] = rocdl.workitem.id.x
-    // GFX942: [[c255:%.*]] = llvm.mlir.constant(255 : i32)
     // GFX942: [[RTID:%.*]] = llvm.and [[threadId]], [[c255]]
     // GFX942: [[laneId:%.*]] = llvm.urem [[RTID]], [[c64]]
     // GFX942: [[mask0:%.*]] = llvm.icmp "slt" [[laneId]], [[c32]]
@@ -151,25 +152,21 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // GFX942: [[vec1:%.*]] = llvm.insertelement [[val7]], {{.*}} : vector<4xi8>
 
     // GFX942: [[bvec0:%.*]] = llvm.bitcast [[vec0]]
-    // GFX942: [[c2:%.*]] = llvm.mlir.constant(2 : i32)
     // GFX942: [[addr:%.*]] = llvm.shl [[addr16]], [[c2]]
     // GFX942: [[bShflVec0_16:%.*]] = rocdl.ds_bpermute [[addr]], [[bvec0]]
     // GFX942: [[shflVec0_16:%.*]] = llvm.bitcast [[bShflVec0_16]]
 
     // GFX942: [[bvec0:%.*]] = llvm.bitcast [[vec0]]
-    // GFX942: [[c2:%.*]] = llvm.mlir.constant(2 : i32)
     // GFX942: [[addr:%.*]] = llvm.shl [[addr32]], [[c2]]
     // GFX942: [[bShflVec0_32:%.*]] = rocdl.ds_bpermute [[addr]], [[bvec0]]
     // GFX942: [[shflVec0_32:%.*]] = llvm.bitcast [[bShflVec0_32]]
 
     // GFX942: [[bvec1:%.*]] = llvm.bitcast [[vec1]]
-    // GFX942: [[c2:%.*]] = llvm.mlir.constant(2 : i32)
     // GFX942: [[addr:%.*]] = llvm.shl [[addr32]], [[c2]]
     // GFX942: [[bShflVec1_32:%.*]] = rocdl.ds_bpermute [[addr]], [[bvec1]]
     // GFX942: [[shflVec1_32:%.*]] = llvm.bitcast [[bShflVec1_32]]
 
     // GFX942: [[bvec1:%.*]] = llvm.bitcast [[vec1]]
-    // GFX942: [[c2:%.*]] = llvm.mlir.constant(2 : i32)
     // GFX942: [[addr:%.*]] = llvm.shl [[addr48]], [[c2]]
     // GFX942: [[bShflVec1_48:%.*]] = rocdl.ds_bpermute [[addr]], [[bvec1]]
     // GFX942: [[shflVec1_48:%.*]] = llvm.bitcast [[bShflVec1_48]]
@@ -190,9 +187,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // GFX942-DAG: [[mask0_false:%.*]] = llvm.select [[mask1]], [[shflVec1_48]], [[vec1]] : i1, vector<4xi8>
     // GFX942: [[resVec1:%.*]] = llvm.select [[mask0]], [[mask0_true]], [[mask0_false]] : i1, vector<4xi8>
 
-    // GFX942: [[c3:%.*]] = llvm.mlir.constant(3 : i32)
     // GFX942: [[resVal3:%.*]] = llvm.extractelement [[resVec0]][[[c3]] : i32] : vector<4xi8>
-    // GFX942: [[c3:%.*]] = llvm.mlir.constant(3 : i32) : i32
     // GFX942: [[resVal7:%.*]] = llvm.extractelement [[resVec1]][[[c3]] : i32] : vector<4xi8>
 
     // GFX942: llvm.insertvalue [[resVal3]], {{.*}}[3]
