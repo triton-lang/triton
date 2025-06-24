@@ -99,7 +99,9 @@ LLVM::LLVMFuncOp appendOrGetExternFuncOp(RewriterBase &rewriter, Operation *op,
   return ret;
 }
 
-Value matrixVectorProd(TritonLLVMOpBuilder &b, const LinearLayout &A, Value x) {
+Value matrixVectorProd(RewriterBase &rewriter, Location loc,
+                       const LinearLayout &A, Value x) {
+  TritonLLVMOpBuilder b(loc, rewriter);
   assert(A.getNumInDims() == 1);
   assert(A.getNumOutDims() == 1);
 
@@ -146,6 +148,25 @@ Value matrixVectorProd(TritonLLVMOpBuilder &b, const LinearLayout &A, Value x) {
     return {mask, allRowsUnique};
   };
 
+  // Computed x * y + z where b is a constant power of 2
+  // We do so by abusing fma. We encode x and z as (denormal)
+  // fp32s, and y as the exponent of the fp32.
+  // The point here is that fp32 ops have 2x the throughput of i32 ops
+  // both in Hopper and Blackwell
+  auto imad = [&](Value x, int y, Value z) -> Value {
+    assert(x.getType().isInteger(32));
+    assert(z.getType().isInteger(32));
+    assert(y >= -126 && y <= 127);
+    constexpr int fp32_bias = 127;
+    constexpr int fp32_mantissa = 23;
+    auto y_i32 = b.i32_val((y + fp32_bias) << fp32_mantissa);
+    auto x_fp32 = b.bitcast(x, f32_ty);
+    auto y_fp32 = b.bitcast(y_i32, f32_ty);
+    auto z_fp32 = b.bitcast(z, f32_ty);
+    auto result_fp32 = b.fma(x_fp32, y_fp32, z_fp32);
+    return b.bitcast(result_fp32, i32_ty);
+  };
+
   Value xor_ = b.i32_val(0);
   Value add = b.i32_val(0);
   for (int i = -nRow + 1; i < nCol; i++) {
@@ -153,15 +174,14 @@ Value matrixVectorProd(TritonLLVMOpBuilder &b, const LinearLayout &A, Value x) {
     if (mask == 0)
       continue;
     auto masked = b.and_(x, b.i32_val(mask));
-    auto shifted = i >= 0 ? Value(b.lshr(masked, b.i32_val(i)))
-                          : Value(b.shl(masked, b.i32_val(-i)));
-    auto canGenerateIMADLO = allRowsUnique && i <= 0;
-    if (canGenerateIMADLO)
-      add = b.add(add, shifted);
+    if (allRowsUnique && A.getTotalInDimSizeLog2() <= 24 &&
+        A.getTotalOutDimSizeLog2() <= 24)
+      add = imad(masked, -i, add);
     else
-      xor_ = b.xor_(xor_, shifted);
+      xor_ = b.xor_(xor_, i >= 0 ? Value(b.lshr(masked, b.i32_val(i)))
+                                 : Value(b.shl(masked, b.i32_val(-i))));
   }
-  return b.add(xor_, add);
+  return b.add(add, xor_);
 }
 
 } // namespace triton::gpu
@@ -219,7 +239,7 @@ applyLinearLayout(Location loc, RewriterBase &rewriter,
     // F
     auto matrix = layout.sublayout(inDimNames, outIndices[0].first);
     matrix = matrix.flattenIns();
-    auto out = triton::gpu::matrixVectorProd(b, matrix, x);
+    auto out = triton::gpu::matrixVectorProd(rewriter, loc, matrix, x);
     outIndices[0].second = b.xor_(outIndices[0].second, out);
     return outIndices;
   }
