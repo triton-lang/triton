@@ -142,7 +142,7 @@ def store_smem_to_tensor_desc(desc, coord, smem):
 
 def Channel(T, alloc_fn):
 
-    @aggregate(frozen=True)
+    @aggregate
     class ChannelType:
         mem: T
         ready_bars: gl.shared_memory_descriptor
@@ -228,7 +228,7 @@ def Channel(T, alloc_fn):
                 mbarrier.invalidate(self.ready_bars.index(i))
                 mbarrier.invalidate(self.empty_bars.index(i))
 
-    @aggregate(frozen=True)
+    @aggregate
     class Producer:
         channel: ChannelType
         phase: gl.tensor
@@ -243,16 +243,15 @@ def Channel(T, alloc_fn):
         def acquire(self):
             mem, ready_bar = self.channel.acquire_producer(self.index, self.phase)
             self.index, self.phase = self.channel.increment(self.index, self.phase)
-            return mem, ready_bar, self
+            return mem, ready_bar
 
         @gluon.jit
         def emplace(self, value):
-            mem, ready_bar, self = self.acquire()
+            mem, ready_bar = self.acquire()
             mem.store(value)
             mbarrier.arrive(ready_bar, count=1)
-            return self
 
-    @aggregate(frozen=True)
+    @aggregate
     class Consumer:
         channel: ChannelType
         phase: gl.tensor
@@ -267,14 +266,14 @@ def Channel(T, alloc_fn):
         def acquire(self):
             mem, empty_bar = self.channel.acquire_consumer(self.index, self.phase)
             self.index, self.phase = self.channel.increment(self.index, self.phase)
-            return mem, empty_bar, self
+            return mem, empty_bar
 
         @gluon.jit
         def get(self, layout: gl.constexpr):
-            mem, empty_bar, self = self.acquire()
+            mem, empty_bar = self.acquire()
             value = mem.load(layout)
             mbarrier.arrive(empty_bar, count=1)
-            return value, self
+            return value
 
     return ChannelType, Producer, Consumer
 
@@ -325,7 +324,7 @@ class PipelinedLoadProducer:
 
     @gluon.jit
     def wait_and_issue_next(self):
-        smem, ready_bar, self.impl = self.impl.acquire()
+        smem, ready_bar = self.impl.acquire()
 
         size: gl.constexpr = get_load_size_bytes(self.desc)
         mbarrier.expect(ready_bar, size)
@@ -375,7 +374,7 @@ class MMAProducer:
 
     @gluon.jit
     def wait_and_issue_next(self, a, b, release_bars, use_acc):
-        tmem, bar, self.producer = self.producer.acquire()
+        tmem, bar = self.producer.acquire()
         tcgen05_mma(a, b, tmem, use_acc=use_acc, mbarriers=[bar] + release_bars,
                     mbarrier_preds=[True] * (len(release_bars) + 1))
 
@@ -646,30 +645,30 @@ def _attn_fwd_mma(config,  #
 
     num_mmas = (hi - lo) // config.BLOCK_N
     if num_mmas > 0:
-        k_smem, k_bar, k_consumer = k_consumer.acquire()
+        k_smem, k_bar = k_consumer.acquire()
         qk0_producer.wait_and_issue_next(info0.q_smem, k_smem.permute((1, 0)), [k_bar], use_acc=False)
         qk1_producer.wait_and_issue_next(info1.q_smem, k_smem.permute((1, 0)), [k_bar], use_acc=False)
         for _ in range(num_mmas - 1):
-            v_smem, v_bar, v_consumer = v_consumer.acquire()
-            p0_tmem, p0_bar, p0_consumer = p0_consumer.acquire()
+            v_smem, v_bar = v_consumer.acquire()
+            p0_tmem, p0_bar = p0_consumer.acquire()
             o0_producer.wait_and_issue_next(p0_tmem, v_smem, [v_bar, p0_bar, qk_p_bar], use_acc=True)
 
-            k_smem, k_bar, k_consumer = k_consumer.acquire()
+            k_smem, k_bar = k_consumer.acquire()
             mbarrier.wait(qk_p_bar, qk_p_phase)
             qk_p_phase ^= 1
             qk0_producer.wait_and_issue_next(info0.q_smem, k_smem.permute((1, 0)), [k_bar], use_acc=False)
 
-            p1_tmem, p1_bar, p1_consumer = p1_consumer.acquire()
+            p1_tmem, p1_bar = p1_consumer.acquire()
             o1_producer.wait_and_issue_next(p1_tmem, v_smem, [v_bar, p1_bar, qk_p_bar], use_acc=True)
 
             mbarrier.wait(qk_p_bar, qk_p_phase)
             qk_p_phase ^= 1
             qk1_producer.wait_and_issue_next(info1.q_smem, k_smem.permute((1, 0)), [k_bar], use_acc=False)
-        v_smem, v_bar, v_consumer = v_consumer.acquire()
-        p0_tmem, p0_bar, p0_consumer = p0_consumer.acquire()
+        v_smem, v_bar = v_consumer.acquire()
+        p0_tmem, p0_bar = p0_consumer.acquire()
         o0_producer.wait_and_issue_next(p0_tmem, v_smem, [v_bar, p0_bar], use_acc=True)
 
-        p1_tmem, p1_bar, p1_consumer = p1_consumer.acquire()
+        p1_tmem, p1_bar = p1_consumer.acquire()
         o1_producer.wait_and_issue_next(p1_tmem, v_smem, [v_bar, p1_bar], use_acc=True)
 
     mbarrier.invalidate(qk_p_bar)
@@ -719,13 +718,13 @@ def _mul_f32x2(a, b):
 def _attn_fwd_correction_compute(config, mi_consumer, o_consumer, m_i):
     mi_layout: gl.constexpr = gl.SliceLayout(1, config.o_splitn_layout)
     if config.mi_use_tmem:
-        m_ij, mi_consumer = mi_consumer.get(config.mi_2d_layout)
+        m_ij = mi_consumer.get(config.mi_2d_layout)
         m_ij = gl.convert_layout(m_ij.reshape([config.SPLIT_M]), mi_layout)
     else:
-        m_ij, mi_consumer = mi_consumer.get(mi_layout)
+        m_ij = mi_consumer.get(mi_layout)
     alpha = gl.exp2(m_i - m_ij)
 
-    o_tmem, o_bar, o_consumer = o_consumer.acquire()
+    o_tmem, o_bar = o_consumer.acquire()
     if config.SPLIT_D_FACTOR == 1:
         o = o_tmem.load(config.o_layout)
         o = _mul_f32x2(o, alpha[:, None])
@@ -737,7 +736,7 @@ def _attn_fwd_correction_compute(config, mi_consumer, o_consumer, m_i):
             o = _mul_f32x2(o, alpha[:, None])
             o_ref.store(o)
     mbarrier.arrive(o_bar, count=1)
-    return mi_consumer, o_consumer, m_ij
+    return m_ij
 
 
 @gluon.jit
@@ -756,8 +755,8 @@ def _attn_fwd_correction(config,  #
     m_i0 = m_is[0]
     m_i1 = m_is[1]
     for start_n in range(lo, hi, config.BLOCK_N):
-        mi0_consumer, o0_consumer, m_i0 = _attn_fwd_correction_compute(config, mi0_consumer, o0_consumer, m_i0)
-        mi1_consumer, o1_consumer, m_i1 = _attn_fwd_correction_compute(config, mi1_consumer, o1_consumer, m_i1)
+        m_i0 = _attn_fwd_correction_compute(config, mi0_consumer, o0_consumer, m_i0)
+        m_i1 = _attn_fwd_correction_compute(config, mi1_consumer, o1_consumer, m_i1)
 
     o0_consumer.acquire()
     o1_consumer.acquire()
@@ -789,9 +788,9 @@ def _softmax_tile(tile_id: gl.constexpr, config, info, STAGE: gl.constexpr):
     l_i = info.li_smem.load(qk_slice_dim1)
 
     for start_n in range(lo, hi, config.BLOCK_N):
-        qk, qk_consumer = qk_consumer.get(config.qk_layout)
+        qk = qk_consumer.get(config.qk_layout)
         if config.HEAD_DIM == 128:
-            p_tmem, p_bar, p_producer = p_producer.acquire()
+            p_tmem, p_bar = p_producer.acquire()
 
         if STAGE == 2:
             # Prevent LLVM from hoisting the partial sums, which triggers spilling.
@@ -801,16 +800,16 @@ def _softmax_tile(tile_id: gl.constexpr, config, info, STAGE: gl.constexpr):
             qk = gl.where(mask, qk, -1.0e8)
         m_ij = gl.maximum(m_i, gl.max(qk, 1) * config.qk_scale)
         if config.mi_use_tmem:
-            mi_producer = mi_producer.emplace(gl.convert_layout(m_ij.expand_dims(1), config.mi_2d_layout))
+            mi_producer.emplace(gl.convert_layout(m_ij.expand_dims(1), config.mi_2d_layout))
         else:
-            mi_producer = mi_producer.emplace(m_ij)
+            mi_producer.emplace(m_ij)
         qk = qk * config.qk_scale - m_ij[:, None]
 
         if config.HEAD_DIM == 64:
             p = gl.exp2(qk)
             l_ij = gl.sum(p, 1)
             alpha = gl.exp2(m_i - m_ij)
-            p_producer = p_producer.emplace(p.to(config.dtype))
+            p_producer.emplace(p.to(config.dtype))
         else:
             qk0, qk1, = qk.reshape([config.SPLIT_M, 2, config.BLOCK_N // 2]).permute(0, 2, 1).split()
             p0 = gl.exp2(qk0)
