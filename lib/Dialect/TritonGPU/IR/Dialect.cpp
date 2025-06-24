@@ -2703,13 +2703,66 @@ struct TritonGPUInferLayoutInterface
   inferSplitOpEncoding(Attribute srcEnc, Attribute &dstEnc,
                        ArrayRef<int64_t> shape,
                        std::optional<Location> loc) const override {
-    auto ctx = getContext();
-    auto ll = toLinearLayout(shape, srcEnc);
-    if (!isSplitCompatible(ctx, ll))
-      return failure();
+    auto enc = mlir::dyn_cast<BlockedEncodingAttr>(srcEnc);
+    if (enc) {
+      // SplitOp takes a tensor of shape AxBxCx2 and generates two tensors of
+      // shape AxBxC.  The input must have 2 elements per thread in the last
+      // dimension, which must be the fastest running dimension. The result
+      // encoding is the same as the input, but with the last dimension removed.
+      if (enc.getSizePerThread().back() != 2) {
+        return emitOptionalError(
+            loc, "SplitOp requires 2 elements per thread in the "
+                 "last dimension of the input");
+      }
+      if (enc.getThreadsPerWarp().back() != 1 ||
+          enc.getWarpsPerCTA().back() != 1 || enc.getCTAsPerCGA().back() != 1) {
+        return emitOptionalError(
+            loc, "SplitOp requires threadsPerWarp, warpsPerCTA, "
+                 "and CTAsPerCGA = 1 for the last dimension of the input");
+      }
+      if (enc.getCTALayout().getCTAsPerCGA().back() != 1) {
+        return emitOptionalError(
+            loc,
+            "SplitOp requires the last dimension to be most-minor in CTAOrder");
+      }
+      SmallVector<unsigned> newOrder(enc.getOrder());
+      int splitDim = newOrder.size() - 1;
+      // Remove splitDim from order.
+      newOrder.erase(std::remove(newOrder.begin(), newOrder.end(), splitDim),
+                     newOrder.end());
+      dstEnc = BlockedEncodingAttr::get(
+          enc.getContext(), //
+          ArrayRef(enc.getSizePerThread()).drop_back(1),
+          ArrayRef(enc.getThreadsPerWarp()).drop_back(1),
+          ArrayRef(enc.getWarpsPerCTA()).drop_back(1), ArrayRef(newOrder),
+          CTALayoutAttr::get(enc.getContext(), //
+                             ArrayRef(enc.getCTAsPerCGA()).drop_back(1),
+                             ArrayRef(enc.getCTASplitNum()).drop_back(1),
+                             ArrayRef(enc.getCTAOrder()).drop_front(1)));
+      return success();
+    }
 
-    auto srcEncDist = cast<DistributedEncodingTrait>(srcEnc);
-    dstEnc = SliceEncodingAttr::get(ctx, shape.size() - 1, srcEncDist);
+    auto axis = shape.size() - 1;
+    if (shape[axis] != 2) {
+      return emitOptionalError(
+          loc, "SplitOp input shape should have 2 in the last dim");
+    }
+
+    auto ctx = getContext();
+
+    // Split on last dim
+    auto ll = toLinearLayout(shape, srcEnc);
+    auto newLl = LinearLayout::empty();
+    auto result =
+        tryJoinOnAxis(ctx, ll, newLl, /*fwdInference=*/false, axis, loc);
+    if (!result.succeeded()) {
+      return failure();
+    }
+    // Remove last dim from newLl (which should be 1)
+    SmallVector<int64_t> dstShape(shape.begin(), shape.end());
+    dstShape.pop_back();
+    newLl = newLl.reshapeOuts(standardOutDimPairs(ctx, dstShape));
+    dstEnc = LinearEncodingAttr::get(ctx, newLl);
     return success();
   }
 

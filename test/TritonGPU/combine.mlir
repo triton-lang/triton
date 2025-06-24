@@ -3853,8 +3853,7 @@ module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:80"} {
   // CHECK-LABEL: join_backward_blocked
   tt.func @join_backward_blocked(%arg0: tensor<128x32xf16, #blocked>, %arg1: tensor<128x32xf16, #blocked>) -> tensor<128x32x2xf16, #blocked1> {
     // CHECK: %[[JOIN:.*]] = tt.join %arg0, %arg1
-    // CHECK: %[[CVT:.*]] = ttg.convert_layout %[[JOIN]]
-    // CHECK: tt.return %[[CVT]]
+    // CHECK: tt.return %[[JOIN]]
     %0 = tt.join %arg0, %arg1 : tensor<128x32xf16, #blocked> -> tensor<128x32x2xf16, #blocked2>
     %1 = ttg.convert_layout %0 : tensor<128x32x2xf16, #blocked2> -> tensor<128x32x2xf16, #blocked1>
     tt.return %1 : tensor<128x32x2xf16, #blocked1>
