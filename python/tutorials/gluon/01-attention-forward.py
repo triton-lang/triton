@@ -548,23 +548,78 @@ class InnerLoopInfo:
 
 
 @gluon.jit
+def _load_inner_loop(config, prog, infos, load_k, load_v, STAGE: gl.constexpr):
+    lo, hi = prog.get_loop_bounds(STAGE)
+    num_loads = (hi - lo) // config.BLOCK_N
+    if num_loads == 0:
+        return
+
+    offsetkv_y = prog.offset_y + lo
+    load_k.offset = offsetkv_y
+    load_v.offset = offsetkv_y
+
+    load_k.wait_and_issue_next()
+    for _ in range(num_loads - 1):
+        load_k.wait_and_issue_next()
+        load_v.wait_and_issue_next()
+    load_v.wait_and_issue_next()
+
+
+@gluon.jit
 def _attn_fwd_load(config,  #
                    infos, k_load_ctx, v_load_ctx,  #
                    STAGE: gl.constexpr):
     prog = config.get_program()
+    load_k = PipelinedLoadProducer(k_load_ctx, 0, config.BLOCK_N)
+    load_v = PipelinedLoadProducer(v_load_ctx, 0, config.BLOCK_N)
+
+    if STAGE & 1:
+        _load_inner_loop(config, prog, infos, load_k, load_v, STAGE=4 - STAGE)
+    if STAGE & 2:
+        _load_inner_loop(config, prog, infos, load_k, load_v, STAGE=2)
+
+
+@gluon.jit
+def _mma_inner_loop(config, prog, q0_smem, q1_smem,  #
+                    k_consumer, v_consumer, p0_consumer, p1_consumer,  #
+                    qk0_producer, qk1_producer, o0_producer, o1_producer,  #
+                    STAGE: gl.constexpr):
     lo, hi = prog.get_loop_bounds(STAGE)
+    num_mmas = (hi - lo) // config.BLOCK_N
+    if num_mmas == 0:
+        return
 
-    offsetkv_y = prog.offset_y + lo
-    load_k = PipelinedLoadProducer(k_load_ctx, offsetkv_y, config.BLOCK_N)
-    load_v = PipelinedLoadProducer(v_load_ctx, offsetkv_y, config.BLOCK_N)
+    qk_p_bar = gl.allocate_shared_memory(gl.int64, [1], mbarrier.MBarrierLayout())
+    qk_p_phase = 0
+    mbarrier.init(qk_p_bar, count=1)
 
-    num_loads = (hi - lo) // config.BLOCK_N
-    if num_loads > 0:
-        load_k.wait_and_issue_next()
-        for _ in range(num_loads - 1):
-            load_k.wait_and_issue_next()
-            load_v.wait_and_issue_next()
-        load_v.wait_and_issue_next()
+    k_smem, k_bar = k_consumer.acquire()
+    qk0_producer.wait_and_issue_next(q0_smem, k_smem.permute((1, 0)), [k_bar], use_acc=False)
+    qk1_producer.wait_and_issue_next(q1_smem, k_smem.permute((1, 0)), [k_bar], use_acc=False)
+    for _ in range(num_mmas - 1):
+        v_smem, v_bar = v_consumer.acquire()
+        p0_tmem, p0_bar = p0_consumer.acquire()
+        o0_producer.wait_and_issue_next(p0_tmem, v_smem, [v_bar, p0_bar, qk_p_bar], use_acc=True)
+
+        k_smem, k_bar = k_consumer.acquire()
+        mbarrier.wait(qk_p_bar, qk_p_phase)
+        qk_p_phase ^= 1
+        qk0_producer.wait_and_issue_next(q0_smem, k_smem.permute((1, 0)), [k_bar], use_acc=False)
+
+        p1_tmem, p1_bar = p1_consumer.acquire()
+        o1_producer.wait_and_issue_next(p1_tmem, v_smem, [v_bar, p1_bar, qk_p_bar], use_acc=True)
+
+        mbarrier.wait(qk_p_bar, qk_p_phase)
+        qk_p_phase ^= 1
+        qk1_producer.wait_and_issue_next(q1_smem, k_smem.permute((1, 0)), [k_bar], use_acc=False)
+    v_smem, v_bar = v_consumer.acquire()
+    p0_tmem, p0_bar = p0_consumer.acquire()
+    o0_producer.wait_and_issue_next(p0_tmem, v_smem, [v_bar, p0_bar], use_acc=True)
+
+    p1_tmem, p1_bar = p1_consumer.acquire()
+    o1_producer.wait_and_issue_next(p1_tmem, v_smem, [v_bar, p1_bar], use_acc=True)
+
+    mbarrier.invalidate(qk_p_bar)
 
 
 @gluon.jit
@@ -572,52 +627,29 @@ def _attn_fwd_mma(config,  #
                   infos, k_load_ctx, v_load_ctx,  #
                   STAGE: gl.constexpr):
     prog = config.get_program()
-    lo, hi = prog.get_loop_bounds(STAGE)
     info0 = infos[0]
     info1 = infos[1]
 
     k_consumer = k_load_ctx.channel.create_consumer()
     v_consumer = v_load_ctx.channel.create_consumer()
+    p0_consumer = info0.p_chnl.create_consumer()
+    p1_consumer = info1.p_chnl.create_consumer()
+
     qk0_producer = MMAProducer(info0.qk_mma_ctx)
     qk1_producer = MMAProducer(info1.qk_mma_ctx)
     o0_producer = MMAProducer(info0.o_mma_ctx)
     o1_producer = MMAProducer(info1.o_mma_ctx)
-    p0_consumer = info0.p_chnl.create_consumer()
-    p1_consumer = info1.p_chnl.create_consumer()
 
-    qk_p_bar = gl.allocate_shared_memory(gl.int64, [1], mbarrier.MBarrierLayout())
-    qk_p_phase = 0
-    mbarrier.init(qk_p_bar, count=1)
-
-    num_mmas = (hi - lo) // config.BLOCK_N
-    if num_mmas > 0:
-        k_smem, k_bar = k_consumer.acquire()
-        qk0_producer.wait_and_issue_next(info0.q_smem, k_smem.permute((1, 0)), [k_bar], use_acc=False)
-        qk1_producer.wait_and_issue_next(info1.q_smem, k_smem.permute((1, 0)), [k_bar], use_acc=False)
-        for _ in range(num_mmas - 1):
-            v_smem, v_bar = v_consumer.acquire()
-            p0_tmem, p0_bar = p0_consumer.acquire()
-            o0_producer.wait_and_issue_next(p0_tmem, v_smem, [v_bar, p0_bar, qk_p_bar], use_acc=True)
-
-            k_smem, k_bar = k_consumer.acquire()
-            mbarrier.wait(qk_p_bar, qk_p_phase)
-            qk_p_phase ^= 1
-            qk0_producer.wait_and_issue_next(info0.q_smem, k_smem.permute((1, 0)), [k_bar], use_acc=False)
-
-            p1_tmem, p1_bar = p1_consumer.acquire()
-            o1_producer.wait_and_issue_next(p1_tmem, v_smem, [v_bar, p1_bar, qk_p_bar], use_acc=True)
-
-            mbarrier.wait(qk_p_bar, qk_p_phase)
-            qk_p_phase ^= 1
-            qk1_producer.wait_and_issue_next(info1.q_smem, k_smem.permute((1, 0)), [k_bar], use_acc=False)
-        v_smem, v_bar = v_consumer.acquire()
-        p0_tmem, p0_bar = p0_consumer.acquire()
-        o0_producer.wait_and_issue_next(p0_tmem, v_smem, [v_bar, p0_bar], use_acc=True)
-
-        p1_tmem, p1_bar = p1_consumer.acquire()
-        o1_producer.wait_and_issue_next(p1_tmem, v_smem, [v_bar, p1_bar], use_acc=True)
-
-    mbarrier.invalidate(qk_p_bar)
+    if STAGE & 1:
+        _mma_inner_loop(config, prog, info0.q_smem, info1.q_smem,  #
+                        k_consumer, v_consumer, p0_consumer, p1_consumer,  #
+                        qk0_producer, qk1_producer, o0_producer, o1_producer,  #
+                        STAGE=4 - STAGE)
+    if STAGE & 2:
+        _mma_inner_loop(config, prog, info0.q_smem, info1.q_smem,  #
+                        k_consumer, v_consumer, p0_consumer, p1_consumer,  #
+                        qk0_producer, qk1_producer, o0_producer, o1_producer,  #
+                        STAGE=2)
 
 
 @gluon.jit
@@ -686,52 +718,50 @@ def _attn_fwd_correction_compute(config, mi_consumer, o_consumer, m_i):
 
 
 @gluon.jit
+def _correction_inner_loop(config, prog, m_i0, m_i1,  #
+                           mi0_consumer, mi1_consumer, o0_consumer, o1_consumer,  #
+                           STAGE: gl.constexpr):
+    lo, hi = prog.get_loop_bounds(STAGE)
+    for start_n in range(lo, hi, config.BLOCK_N):
+        m_i0 = _attn_fwd_correction_compute(config, mi0_consumer, o0_consumer, m_i0)
+        m_i1 = _attn_fwd_correction_compute(config, mi1_consumer, o1_consumer, m_i1)
+    return m_i0, m_i1
+
+
+@gluon.jit
 def _attn_fwd_correction(config,  #
                          m_is, infos,  #
                          STAGE: gl.constexpr):
     prog = config.get_program()
-    lo, hi = prog.get_loop_bounds(STAGE)
-
-    o0_consumer = infos[0].o_mma_ctx.channel.create_consumer()
-    o1_consumer = infos[1].o_mma_ctx.channel.create_consumer()
-
-    mi0_consumer = infos[0].mi_chnl.create_consumer()
-    mi1_consumer = infos[1].mi_chnl.create_consumer()
 
     m_i0 = m_is[0]
     m_i1 = m_is[1]
-    for start_n in range(lo, hi, config.BLOCK_N):
-        m_i0 = _attn_fwd_correction_compute(config, mi0_consumer, o0_consumer, m_i0)
-        m_i1 = _attn_fwd_correction_compute(config, mi1_consumer, o1_consumer, m_i1)
+    o0_consumer = infos[0].o_mma_ctx.channel.create_consumer()
+    o1_consumer = infos[1].o_mma_ctx.channel.create_consumer()
+    mi0_consumer = infos[0].mi_chnl.create_consumer()
+    mi1_consumer = infos[1].mi_chnl.create_consumer()
 
+    if STAGE & 1:
+        m_i0, m_i1 = _correction_inner_loop(config, prog, m_i0, m_i1,  #
+                                            mi0_consumer, mi1_consumer, o0_consumer, o1_consumer,  #
+                                            STAGE=4 - STAGE)
+    if STAGE & 2:
+        m_i0, m_i1 = _correction_inner_loop(config, prog, m_i0, m_i1,  #
+                                            mi0_consumer, mi1_consumer, o0_consumer, o1_consumer,  #
+                                            STAGE=2)
+
+    # Acquire for the epilogue.
     o0_consumer.acquire()
     o1_consumer.acquire()
     return (m_i0, m_i1)
 
 
 @gluon.jit
-def _softmax_tile(tile_id: gl.constexpr, config, info, STAGE: gl.constexpr):
-    prog = config.get_program()
-
-    qk_slice_dim0: gl.constexpr = gl.SliceLayout(0, config.qk_layout)
-    qk_slice_dim1: gl.constexpr = gl.SliceLayout(1, config.qk_layout)
-
-    offs_m = prog.start_m * config.BLOCK_M
-    offs_m += gl.arange(tile_id * config.SPLIT_M, (1 + tile_id) * config.SPLIT_M, qk_slice_dim1)
-    offs_n = gl.arange(0, config.BLOCK_N, qk_slice_dim0)
-
+def _softmax_inner_loop(tile_id: gl.constexpr, config, prog,  #
+                        qk_consumer, p_producer, mi_producer,  #
+                        offs_m, offs_n, m_i, l_i,  #
+                        STAGE: gl.constexpr):
     lo, hi = prog.get_loop_bounds(STAGE)
-
-    qk_consumer = info.qk_mma_ctx.channel.create_consumer()
-    p_producer = info.p_chnl.create_producer()
-    mi_producer = info.mi_chnl.create_producer()
-
-    if config.mi_use_tmem:
-        m_i = info.mi_chnl.mem.index(0).load(config.mi_2d_layout)
-        m_i = gl.convert_layout(m_i.reshape([config.SPLIT_M]), qk_slice_dim1)
-    else:
-        m_i = info.mi_chnl.mem.index(0).load(qk_slice_dim1)
-    l_i = info.li_smem.load(qk_slice_dim1)
 
     for start_n in range(lo, hi, config.BLOCK_N):
         qk = qk_consumer.get(config.qk_layout)
@@ -771,6 +801,42 @@ def _softmax_tile(tile_id: gl.constexpr, config, info, STAGE: gl.constexpr):
 
         l_i = l_i * alpha + l_ij
         m_i = m_ij
+
+    return m_i, l_i
+
+
+@gluon.jit
+def _softmax_tile(tile_id: gl.constexpr, config, info, STAGE: gl.constexpr):
+    prog = config.get_program()
+
+    qk_slice_dim0: gl.constexpr = gl.SliceLayout(0, config.qk_layout)
+    qk_slice_dim1: gl.constexpr = gl.SliceLayout(1, config.qk_layout)
+
+    offs_m = prog.start_m * config.BLOCK_M
+    offs_m += gl.arange(tile_id * config.SPLIT_M, (1 + tile_id) * config.SPLIT_M, qk_slice_dim1)
+    offs_n = gl.arange(0, config.BLOCK_N, qk_slice_dim0)
+
+    qk_consumer = info.qk_mma_ctx.channel.create_consumer()
+    p_producer = info.p_chnl.create_producer()
+    mi_producer = info.mi_chnl.create_producer()
+
+    if config.mi_use_tmem:
+        m_i = info.mi_chnl.mem.index(0).load(config.mi_2d_layout)
+        m_i = gl.convert_layout(m_i.reshape([config.SPLIT_M]), qk_slice_dim1)
+    else:
+        m_i = info.mi_chnl.mem.index(0).load(qk_slice_dim1)
+    l_i = info.li_smem.load(qk_slice_dim1)
+
+    if STAGE & 1:
+        m_i, l_i = _softmax_inner_loop(tile_id, config, prog,  #
+                                       qk_consumer, p_producer, mi_producer,  #
+                                       offs_m, offs_n, m_i, l_i,  #
+                                       STAGE=4 - STAGE)
+    if STAGE & 2:
+        m_i, l_i = _softmax_inner_loop(tile_id, config, prog,  #
+                                       qk_consumer, p_producer, mi_producer,  #
+                                       offs_m, offs_n, m_i, l_i,  #
+                                       STAGE=2)
 
     info.li_smem.store(l_i)
 
@@ -841,14 +907,7 @@ def _gluon_attn(sm_scale, M, Z, H, N_CTX,  #
     info0 = InnerLoopInfo(config, tile0)
     info1 = InnerLoopInfo(config, tile1)
 
-    if STAGE & 1:
-        tile0.m_i, tile1.m_i = _attn_fwd_inner(config, info0, info1, tile0.m_i, tile1.m_i, desc_k, desc_v, 4 - STAGE)
-    if STAGE & 2:
-        tile0 = info0.consume_result(tile0)
-        info0 = InnerLoopInfo(config, tile0)
-        tile1 = info1.consume_result(tile1)
-        info1 = InnerLoopInfo(config, tile1)
-        tile0.m_i, tile1.m_i = _attn_fwd_inner(config, info0, info1, tile0.m_i, tile1.m_i, desc_k, desc_v, 2)
+    tile0.m_i, tile1.m_i = _attn_fwd_inner(config, info0, info1, tile0.m_i, tile1.m_i, desc_k, desc_v, STAGE)
 
     tile0.q_smem._keep_alive()
     tile1.q_smem._keep_alive()
@@ -959,7 +1018,7 @@ BATCH = [4]
 N_HEADS = [32]
 HEAD_DIM = [64, 128]
 causal = [False, True]
-providers = ["triton-fp16", "cudnn-fp16"]
+providers = ["triton-fp16", "triton-fp8"]
 N_CTX = [2**i for i in range(10, 17)]
 
 bench_configs = []
