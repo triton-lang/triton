@@ -95,12 +95,13 @@ def perm_tensor_from_contig(x: torch.Tensor, axis: int, swizzle_axis: int | None
     return x.permute(perm_from_contig(x.ndim, axis, swizzle_axis))
 
 
-def downcast_to_mxfp_impl(src_tensor: torch.Tensor, out_quant_type: torch.dtype,
+def downcast_to_mxfp_impl(src_tensor: torch.Tensor, out_quant_type: torch.dtype, axis: int,
                           DEQUANT_SCALE_ROUNDING_MODE: DequantScaleRoundingMode, BLOCK_OUT_DIM: int,
                           BLOCK_QUANT_DIM: int):
     """
     Downcast a contiguous tensor to mxfp along the last dimension.
     """
+    src_tensor = src_tensor.transpose(axis, src_tensor.ndim - 1)
     is_fp4 = out_quant_type == torch.uint8
     is_fp8 = out_quant_type in (torch.float8_e4m3fn, torch.float8_e5m2)
     assert is_fp4 or is_fp8
@@ -127,6 +128,8 @@ def downcast_to_mxfp_impl(src_tensor: torch.Tensor, out_quant_type: torch.dtype,
                                                           BLOCK_OUT_DIM, BLOCK_QUANT_DIM,
                                                           DEQUANT_SCALE_ROUNDING_MODE.value, num_warps=8)
 
+    out_quant_tensor = out_quant_tensor.transpose(axis, src_tensor.ndim - 1)
+    out_scale = out_scale.transpose(axis, src_tensor.ndim - 1)
     return out_quant_tensor, out_scale
 
 
@@ -134,6 +137,7 @@ def downcast_to_mxfp(src_tensor: torch.Tensor, out_quant_type: torch.dtype, axis
                      swizzle_value: SwizzlingType | None = None, swizzle_scale: SwizzlingType | None = None,
                      DEQUANT_SCALE_ROUNDING_MODE: DequantScaleRoundingMode = DequantScaleRoundingMode.ROUND_UP,
                      BLOCK_OUT_DIM: int = 128, BLOCK_QUANT_DIM: int = 32):
+    print("source", src_tensor.shape, axis)
     """
          Convert the src weights to mx format. The src weight is quantized along the axis dimension.
 
@@ -162,11 +166,17 @@ def downcast_to_mxfp(src_tensor: torch.Tensor, out_quant_type: torch.dtype, axis
         swizzle_axis = swizzle_axis if swizzle_axis >= 0 else swizzle_axis + ndim
         assert axis != swizzle_axis, f"Axis and swizzle axis cannot be the same {axis=} {swizzle_axis=}"
 
-    # Permute the tensor so that axis is the last dimension and swizzle_axis is the second to last dimension.
-    src_tensor = perm_tensor_to_contig(src_tensor, axis, swizzle_axis)
-    quant_tensor, scale = downcast_to_mxfp_impl(src_tensor, out_quant_type, DEQUANT_SCALE_ROUNDING_MODE, BLOCK_OUT_DIM,
-                                                BLOCK_QUANT_DIM)
+    quant_tensor, scale = downcast_to_mxfp_impl(src_tensor, out_quant_type, axis, DEQUANT_SCALE_ROUNDING_MODE,
+                                                BLOCK_OUT_DIM, BLOCK_QUANT_DIM)
+    print("quantized, pre-swizzling", quant_tensor.shape)
 
+    # Permute the tensor so that axis is the last dimension and swizzle_axis is the second to last dimension.
+    perm = list(range(src_tensor.ndim))
+    perm[src_tensor.ndim - 1], perm[axis] = axis, src_tensor.ndim - 1
+    if swizzle_axis is not None:
+        perm[src_tensor.ndim - 2], perm[swizzle_axis] = swizzle_axis, src_tensor.ndim - 2
+    quant_tensor = torch.permute(quant_tensor, perm).contiguous()
+    scale = torch.permute(scale, perm).contiguous()
     # Swizzling
     if swizzle_value == SwizzlingType.HOPPER_VALUE:
         quant_tensor = swizzle_mxfp4_value_hopper(quant_tensor, op_idx=0, mma_version=3)
@@ -244,6 +254,16 @@ def upcast_from_mxfp(tensor: torch.Tensor, scale: torch.Tensor, dtype: torch.dty
 
     assert tensor.is_contiguous()
 
+    ndim = scale.ndim
+    perm = list(range(ndim))
+    perm[ndim - 1], perm[axis] = axis, ndim - 1
+    if swizzle_axis is not None:
+        perm[ndim - 2], perm[swizzle_axis] = swizzle_axis, ndim - 2
+    tensor = torch.permute(tensor, perm).contiguous()
+    scale = torch.permute(scale, perm).contiguous()
+
+    tensor = tensor.transpose(axis, tensor.ndim - 1).contiguous()
+    scale = scale.transpose(axis, scale.ndim - 1).contiguous()
     out = torch.empty((*tensor.shape[:-1], logical_quant_dim), dtype=dtype, device=tensor.device)
 
     reshaped_out = out.view(-1, out.shape[-1])
@@ -258,7 +278,8 @@ def upcast_from_mxfp(tensor: torch.Tensor, scale: torch.Tensor, dtype: torch.dty
                                                           *reshaped_tensor.stride(), *reshaped_out.shape, BLOCK_OUT_DIM,
                                                           BLOCK_QUANT_DIM, num_warps=8)
 
-    return perm_tensor_from_contig(out, axis, swizzle_axis)
+    out = out.transpose(axis, scale.ndim - 1).contiguous()
+    return out
 
 
 def right_shift_unsigned(x, shift):
