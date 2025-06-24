@@ -139,7 +139,8 @@ static Value shuffleCommonImpl(Location loc, RewriterBase &rewriter,
       return bpermute(lineId);
     } else if (strideInt == 16) {
       if (isRDNA(isaFamily)) {
-        // Lane i in the upper 16 lanes reads the value from lane i in the lower 16 lanes and vice versa.
+        // Lane i in the upper 16 lanes reads the value from lane i in the lower
+        // 16 lanes and vice versa.
         Value select_lo = b.i32_val(0x76543210);
         Value select_hi = b.i32_val(0xfedcba98);
         return rewriter.create<ROCDL::PermlaneX16Op>(
