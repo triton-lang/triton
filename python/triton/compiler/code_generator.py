@@ -252,8 +252,8 @@ class ASTFunction:
         val_paths = list(find_paths_if(self.arg_types, is_val))
         arg_types = [get_iterable_path(self.arg_types, path) for path in val_paths]
         arg_types_ir = self.flatten_ir_types(builder, arg_types)
-        ret_types_ir = self.flatten_ir_types(builder, [ty for (name, ty) in self.args_mut])
-        ret_types_ir.extend(self.return_types_ir(builder))
+        ret_types_ir = self.return_types_ir(builder)
+        ret_types_ir.extend(self.flatten_ir_types(builder, [ty for (name, ty) in self.args_mut]))
         return builder.get_function_ty(arg_types_ir, ret_types_ir)
 
     def deserialize(self, fn):
@@ -521,15 +521,13 @@ class CodeGenerator(ast.NodeVisitor):
         return elts
 
     def emit_return(self, handles):
-        all_handles = []
         for i, (name, ty) in enumerate(self.prototype.args_mut):
             value = self.dereference_name(name)
             if ty is not None and ty != value.type:
                 raise TypeError(f"Inconsistent type for mutable argument '{name}': {ty} and {value.type}")
             self.prototype.args_mut[i][1] = value.type
-            value._flatten_ir(all_handles)
-        all_handles.extend(handles)
-        self.builder.ret(all_handles)
+            value._flatten_ir(handles)
+        self.builder.ret(handles)
 
     # By design, only non-kernel functions can return
     def visit_Return(self, node):
@@ -1267,10 +1265,10 @@ class CodeGenerator(ast.NodeVisitor):
         call_op = self.builder.call(symbol, args_val)
         handles = [call_op.get_result(i) for i in range(call_op.get_num_results())]
 
-        all_ret_types = [ty for (name, ty) in args_mut]
-        if callee_ret_type != language.void:
-            all_ret_types.append(callee_ret_type)
+        all_ret_types = ([callee_ret_type]
+                         if callee_ret_type != language.void else []) + [ty for (name, ty) in args_mut]
         all_ret_values = unflatten_ir_values(handles, all_ret_types)
+        normal_ret = next(all_ret_values) if callee_ret_type != language.void else None
         # Unpack and emit the writeback for mutable arguments.
         for name, ty in args_mut:
             target, value = getattr(call_args[name], "__ast__", None), next(all_ret_values)
@@ -1281,9 +1279,7 @@ class CodeGenerator(ast.NodeVisitor):
                 target = target.value
             target.ctx = ast.Store()
             self.assignTarget(target, value)
-        if callee_ret_type == language.void:
-            return None
-        return next(all_ret_values)
+        return normal_ret
 
     def visit_Call(self, node):
         fn = _unwrap_if_constexpr(self.visit(node.func))

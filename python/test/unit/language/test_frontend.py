@@ -80,9 +80,9 @@ def test_jit_method():
     # CHECK: [[V:%.*]]:4 = tt.call @{{.*}}unpack{{.*}}([[RANGE]], %c11_i32)
     pair = Pair(tl.arange(0, 4), scalar)
     a, b = pair.unpack()
-    # CHECK: call @{{.*}}anchor{{.*}}([[V]]#2)
+    # CHECK: call @{{.*}}anchor{{.*}}([[V]]#0)
     anchor(a)
-    # CHECK: call @{{.*}}anchor{{.*}}([[V]]#3)
+    # CHECK: call @{{.*}}anchor{{.*}}([[V]]#1)
     anchor(b)
 
 
@@ -447,11 +447,11 @@ def test_mutable_argument():
     anchor(box)
 
     # CHECK-NEXT:    [[P5:%.*]]:3 = tt.call @{{.*}}mutate_and_produce{{.*}}([[P1]]#0, [[P1]]#1)
-    # CHECK-NEXT:    [[P6:%.*]]:4 = tt.call @{{.*}}mutate_and_produce_tuple{{.*}}([[P5]]#0, [[P5]]#1)
-    # CHECK-NEXT:    call @{{.*}}anchor{{.*}}([[P5]]#2)
-    # CHECK-NEXT:    call @{{.*}}anchor{{.*}}([[P6]]#2)
-    # CHECK-NEXT:    call @{{.*}}anchor{{.*}}([[P6]]#3)
-    # CHECK-NEXT:    call @{{.*}}anchor{{.*}}([[P6]]#0, [[P6]]#1)
+    # CHECK-NEXT:    [[P6:%.*]]:4 = tt.call @{{.*}}mutate_and_produce_tuple{{.*}}([[P5]]#1, [[P5]]#2)
+    # CHECK-NEXT:    call @{{.*}}anchor{{.*}}([[P5]]#0)
+    # CHECK-NEXT:    call @{{.*}}anchor{{.*}}([[P6]]#0)
+    # CHECK-NEXT:    call @{{.*}}anchor{{.*}}([[P6]]#1)
+    # CHECK-NEXT:    call @{{.*}}anchor{{.*}}([[P6]]#2, [[P6]]#3)
     a = mutate_and_produce(p)
     b, c = mutate_and_produce_tuple(p)
     anchor(a)
@@ -472,12 +472,12 @@ def test_mutable_argument():
 
     # CHECK-LABEL: tt.func private @{{.*}}mutate_and_produce
     # CHECK-NEXT:    [[RANGE:%.*]] = tt.make_range {end = 16 : i32, start = 0 : i32}
-    # CHECK-NEXT:    return %arg0, %arg1, [[RANGE]]
+    # CHECK-NEXT:    return [[RANGE]], %arg0, %arg1
 
     # CHECK-LABEL: tt.func private @{{.*}}mutate_and_produce_tuple
     # CHECK-NEXT:    [[RANGE1:%.*]] = tt.make_range {end = 16 : i32, start = 0 : i32}
     # CHECK-NEXT:    [[RANGE2:%.*]] = tt.make_range {end = 32 : i32, start = 16 : i32}
-    # CHECK-NEXT:    return %arg0, %arg1, [[RANGE1]], [[RANGE2]]
+    # CHECK-NEXT:    return [[RANGE1]], [[RANGE2]], %arg0, %arg1
 
 
 @tl.core._aggregate
