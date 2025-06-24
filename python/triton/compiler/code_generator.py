@@ -515,6 +515,8 @@ class CodeGenerator(ast.NodeVisitor):
         all_handles = []
         for i, (name, ty) in enumerate(self.prototype.args_mut):
             value = self.dereference_name(name)
+            if ty is not None and ty != value.type:
+                raise TypeError(f"Inconsistent type for mutable argument '{name}': {ty} and {value.type}")
             self.prototype.args_mut[i][1] = value.type
             value._flatten_ir(all_handles)
         all_handles.extend(handles)
@@ -1206,7 +1208,7 @@ class CodeGenerator(ast.NodeVisitor):
         for i, arg in enumerate(args):
             if isinstance(arg, (language.dtype, float, int, bool, JITFunction)):
                 args[i] = language.core.constexpr(arg)
-        args_mut = [[name, arg.type]
+        args_mut = [[name, None]
                     for (name, arg) in zip(fn.arg_names, args)
                     if arg is not None and getattr(arg.type, "__triton_mutable__", False)]
         args_cst = find_paths_if(args, lambda _, x: _is_constexpr(x))
@@ -1239,9 +1241,10 @@ class CodeGenerator(ast.NodeVisitor):
                 raise CompilationError(self.jit_fn.src, self.cur_node, None) from e
 
             callee_ret_type = generator.ret_type
-            self.function_ret_types[fn_name] = callee_ret_type
+            args_mut = generator.prototype.args_mut
+            self.function_ret_types[fn_name] = (callee_ret_type, args_mut)
         else:
-            callee_ret_type = self.function_ret_types[fn_name]
+            callee_ret_type, args_mut = self.function_ret_types[fn_name]
         symbol = self.module.get_function(fn_name)
         args_val = flatten_values_to_ir(args_val)
         call_op = self.builder.call(symbol, args_val)
