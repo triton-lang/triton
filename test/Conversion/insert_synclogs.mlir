@@ -9,13 +9,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     %2 = nvvm.read.ptx.sreg.tid.x : i32
     %3 = llvm.mlir.constant(0 : i32) : i32
     %4 = llvm.icmp "eq" %2, %3 : i32
-    %5 = llvm.inline_asm has_side_effects asm_dialect = att operand_attrs = [] "@$0 mbarrier.init.shared::cta.b64 [$1], 1;", "b,r" %4, %0 : (i1, !llvm.ptr<3>) -> !llvm.void
+    %5 = llvm.inline_asm has_side_effects asm_dialect = att operand_attrs = [] "@$0 mbarrier.init.shared::cta.b64 [$1], 1; \09\0A", "b,r" %4, %0 : (i1, !llvm.ptr<3>) -> !llvm.void
     llvm.return
   }
 }
 
 // CHECK-LABEL:   llvm.func @vprintf(!llvm.ptr, !llvm.ptr) -> i32
-// CHECK:         llvm.mlir.global internal constant @printfFormat_0("@$0 mbarrier.init.shared::cta.b64 [$1], 1; time=%[[VAL_0:.*]] thread=%[[VAL_1:.*]],%[[VAL_1]],%[[VAL_1]] block=%[[VAL_1]],%[[VAL_1]],%[[VAL_1]] cta_rank=%[[VAL_1]] %[[VAL_2:.*]] %[[VAL_3:.*]] \0A\00") {addr_space = 0 : i32}
+// CHECK:         llvm.mlir.global internal constant @printfFormat_0("@$0 mbarrier.init.shared::cta.b64 [$1], 1;  time=%[[VAL_0:.*]] thread=%[[VAL_1:.*]],%[[VAL_1]],%[[VAL_1]] block=%[[VAL_1]],%[[VAL_1]],%[[VAL_1]] cta_rank=%[[VAL_1]] %[[VAL_2:.*]] %[[VAL_3:.*]] \00") {addr_space = 0 : i32}
 // CHECK:         llvm.mlir.global external @global_smem() {addr_space = 3 : i32, alignment = 16 : i64} : !llvm.array<0 x i8>
 
 // CHECK-LABEL:   llvm.func @init_barrier(
@@ -73,6 +73,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 // CHECK:           llvm.store %[[VAL_2]], %[[VAL_43]] : !llvm.ptr<3>, !llvm.ptr
 // CHECK:           %[[VAL_44:.*]] = llvm.bitcast %[[VAL_23]] : !llvm.ptr to !llvm.ptr
 // CHECK:           %[[VAL_45:.*]] = llvm.call @vprintf(%[[VAL_18]], %[[VAL_44]]) : (!llvm.ptr, !llvm.ptr) -> i32
-// CHECK:           %[[VAL_46:.*]] = llvm.inline_asm has_side_effects asm_dialect = att operand_attrs = [] "@$0 mbarrier.init.shared::cta.b64 [$1], 1;", "b,r" %[[VAL_6]], %[[VAL_2]] : (i1, !llvm.ptr<3>) -> !llvm.void
+// CHECK:           %[[VAL_46:.*]] = llvm.inline_asm has_side_effects asm_dialect = att operand_attrs = [] "@$0 mbarrier.init.shared::cta.b64 [$1], 1; \09\0A", "b,r" %[[VAL_6]], %[[VAL_2]] : (i1, !llvm.ptr<3>) -> !llvm.void
 // CHECK:           llvm.return
 // CHECK:         }

@@ -9,6 +9,8 @@
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/FormatVariadic.h"
 
+#include <algorithm>
+
 namespace mlir::triton {
 #define GEN_PASS_DEF_INSERTSYNCLOGS
 #include "TritonNVIDIAGPUToLLVM/Passes.h.inc"
@@ -79,6 +81,12 @@ void emitSynclog(IRRewriter &rewriter, Operation *op,
   std::string formatStr;
   llvm::raw_string_ostream os(formatStr);
   os << opName << " time=%lu thread=%u,%u,%u block=%u,%u,%u cta_rank=%u ";
+
+  // Remove invalid characters from the format string.
+  formatStr.erase(std::remove_if(formatStr.begin(), formatStr.end(),
+                                 [](char c) { return c == '\t' || c == '\n'; }),
+                  formatStr.end());
+
   llvm::SmallVector<Value> args{time64,      threadIdx_x, threadIdx_y,
                                 threadIdx_z, blockIdx_x,  blockIdx_y,
                                 blockIdx_z,  ctaRank};
@@ -98,7 +106,12 @@ void emitSynclog(IRRewriter &rewriter, Operation *op,
     numArgsPrinted++;
   }
 
-  targetInfo.printf(rewriter, formatStr, args);
+  llvm::SmallString<64> formatStrNullTerminator(formatStr);
+  formatStrNullTerminator.push_back('\0');
+  Value formatStrValue = LLVM::addStringToModule(loc, rewriter, "printfFormat_",
+                                                 formatStrNullTerminator);
+  targetInfo.printf(rewriter, formatStrValue, formatStrNullTerminator.size(),
+                    args);
 }
 
 namespace {
