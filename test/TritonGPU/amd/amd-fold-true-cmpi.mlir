@@ -156,3 +156,22 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 // CHECK-NEXT:      ttg.local_dealloc %[[VAL_24]] : !ttg.memdesc<1x32x128xf16, #[[$ATTR_4]], #[[$ATTR_5]], mutable>
 // CHECK-NEXT:      tt.return %[[VAL_58]] : tensor<128x128xf32, #[[$ATTR_2]]>
 // CHECK-NEXT:      }
+
+// -----
+
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func @dontfoldtensor() -> tensor<128xi1> {
+    %t0 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32>
+    %t1 = tt.make_range {end = 257 : i32, start = 129 : i32} : tensor<128xi32>
+    %cmp = arith.cmpi sgt, %t1, %t0 : tensor<128xi32>
+    tt.return %cmp: tensor<128xi1>
+  }
+}
+
+// CHECK-LABEL:   tt.func @dontfoldtensor
+// CHECK-NOT:       arith.constant dense<true>
+// CHECK:           %[[VAL_0:.*]] = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32>
+// CHECK:           %[[VAL_1:.*]] = tt.make_range {end = 257 : i32, start = 129 : i32} : tensor<128xi32>
+// CHECK:           %[[VAL_2:.*]] = arith.cmpi sgt, %[[VAL_1]], %[[VAL_0]] : tensor<128xi32>
+// CHECK:           tt.return %[[VAL_2]] : tensor<128xi1>
+// CHECK:         }
