@@ -36,7 +36,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
 // CHECK-LABEL: @reduce_linear_layout
 tt.func private @reduce_linear_layout(%arg0: tensor<32x2xi32, #linear>) -> tensor<32xi32, #ttg.slice<{dim = 1, parent = #linear}>> {
-  // This tensor has has 64 elements with the last dimension across the lower and upper 16 lanes.
+  // This tensor has 64 elements with the last dimension across the lower and upper 16 lanes.
   // Therefore, we can reduce it with a 16 element butterfly shuffle.
 
   // CHECK-DAG: [[result0:%.*]] = llvm.mlir.undef

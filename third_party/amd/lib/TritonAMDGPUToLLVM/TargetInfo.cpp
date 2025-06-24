@@ -322,6 +322,7 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
       // RDNA doesn't have broadcast dpp mode
       Type actualType = castToAndSExtInt(rewriter, loc, buf, valType, 32);
 
+      // Lanes 0-15 read from lane 31 and lanes 16-31 read from lane 15.
       Value permlaneResult = rewriter
                                  .create<ROCDL::PermlaneX16Op>(
                                      loc, actualType, buf, buf, b.i32_val(-1),
