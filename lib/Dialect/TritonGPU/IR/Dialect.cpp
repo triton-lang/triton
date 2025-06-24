@@ -1315,8 +1315,7 @@ Attribute AMDMfmaEncodingAttr::parse(AsmParser &parser, Type type) {
   if (parser.parseGreater().failed())
     return {};
 
-  unsigned versionMajor = 0;
-  unsigned versionMinor = 0;
+  unsigned version = 0;
   SmallVector<unsigned> warpsPerCTA;
   SmallVector<unsigned> instrShape;
   bool isTransposed;
@@ -1325,12 +1324,8 @@ Attribute AMDMfmaEncodingAttr::parse(AsmParser &parser, Type type) {
   std::optional<SmallVector<unsigned>> CTAOrder;
 
   for (const NamedAttribute &attr : dict) {
-    if (attr.getName() == "versionMajor") {
-      if (parseUInt(parser, attr, versionMajor, "versionMajor").failed())
-        return {};
-    }
-    if (attr.getName() == "versionMinor") {
-      if (parseUInt(parser, attr, versionMinor, "versionMinor").failed())
+    if (attr.getName() == "version") {
+      if (parseUInt(parser, attr, version, "verison").failed())
         return {};
     }
     if (attr.getName() == "warpsPerCTA") {
@@ -1369,14 +1364,13 @@ Attribute AMDMfmaEncodingAttr::parse(AsmParser &parser, Type type) {
     return {};
 
   return parser.getChecked<AMDMfmaEncodingAttr>(
-      parser.getContext(), versionMajor, versionMinor, warpsPerCTA,
-      instrShape[0], instrShape[1], isTransposed, *CTALayout);
+      parser.getContext(), version, warpsPerCTA, instrShape[0], instrShape[1],
+      isTransposed, *CTALayout);
 }
 
 void AMDMfmaEncodingAttr::print(AsmPrinter &printer) const {
   printer << "<{"
-          << "versionMajor = " << getVersionMajor()                      //
-          << ", versionMinor = " << getVersionMinor()                    //
+          << "version = " << getVersion()                                //
           << ", warpsPerCTA = [" << getWarpsPerCTA() << "]"              //
           << ", instrShape = [" << ArrayRef{getMDim(), getNDim()} << "]" //
           << ", isTransposed = " << getIsTransposed();
@@ -1385,17 +1379,12 @@ void AMDMfmaEncodingAttr::print(AsmPrinter &printer) const {
   printer << "}>";
 }
 
-LogicalResult
-AMDMfmaEncodingAttr::verify(function_ref<mlir::InFlightDiagnostic()> emitError,
-                            unsigned versionMajor, unsigned versionMinor,
-                            llvm::ArrayRef<unsigned int> warpsPerCTA,
-                            unsigned mDim, unsigned nDim, bool isTransposed,
-                            mlir::triton::gpu::CTALayoutAttr) {
-  if (!(versionMajor >= 0 && versionMajor <= 4)) {
-    return emitError() << "major version must be in the [0, 4] range";
-  }
-  if (versionMinor != 0) {
-    return emitError() << "minor version must be 0";
+LogicalResult AMDMfmaEncodingAttr::verify(
+    function_ref<mlir::InFlightDiagnostic()> emitError, unsigned version,
+    llvm::ArrayRef<unsigned int> warpsPerCTA, unsigned mDim, unsigned nDim,
+    bool isTransposed, mlir::triton::gpu::CTALayoutAttr) {
+  if (!(version >= 0 && version <= 4)) {
+    return emitError() << "version must be in the [0, 4] range";
   }
   if (!((mDim == 32 && nDim == 32) || (mDim == 16 && nDim == 16))) {
     return emitError()
@@ -1949,7 +1938,7 @@ SwizzledSharedEncodingAttr AMDMfmaEncodingAttr::composeSharedLayoutForOperand(
   bool isKContig = sharedOrder[0] == kDimIndex;
   // GFX950 supports LDS transpose load instructions, so we need swizzling even
   // when K dimension is not the contiguous dimension.
-  bool isGFX950 = getVersionMajor() == 4;
+  bool isGFX950 = getVersion() == 4;
   bool swizzleNonKContig =
       isGFX950 && (elemBitWidth == 8 || elemBitWidth == 16);
 
