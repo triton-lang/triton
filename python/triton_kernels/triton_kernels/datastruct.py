@@ -10,7 +10,7 @@ class Tensor:
         if dtype == torch.uint8:
             # Assume 2 fp4s packed into a byte
             shape[1] *= 2
-        if swizzle_mode == SwizzlingType.HOPPER:
+        if swizzle_mode in [SwizzlingType.HOPPER_VALUE, SwizzlingType.HOPPER_SCALE]:
             shape[1] //= 4
             shape[2] *= 4
         return shape
@@ -18,7 +18,7 @@ class Tensor:
     def _compute_stride(self, shape, strides, swizzle_mode):
         from .numerics_details.mxfp import SwizzlingType
         # Check expected properties of the weights.
-        if swizzle_mode == SwizzlingType.BLACKWELL:
+        if swizzle_mode == SwizzlingType.BLACKWELL_SCALE:
             mxE, mxK, mxN = shape
 
             # Compute strides of the 5D swizzled tensor.

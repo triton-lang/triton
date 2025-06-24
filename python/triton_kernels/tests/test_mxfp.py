@@ -112,10 +112,10 @@ def test_mxfp_swizzle(shape: tuple[int, ...]):
 # fmt: on
 @pytest.mark.parametrize("user_allocated_output", [False, True])
 @pytest.mark.parametrize("dequant_dtype", ["float16", "bfloat16"])
-@pytest.mark.parametrize("swizzle_value, swizzle_scale", [(None, None), (SwizzlingType.HOPPER, None),
-                                                          (None, SwizzlingType.HOPPER),
-                                                          (SwizzlingType.HOPPER, SwizzlingType.HOPPER),
-                                                          (None, SwizzlingType.BLACKWELL)])
+@pytest.mark.parametrize("swizzle_value, swizzle_scale", [(None, None), (SwizzlingType.HOPPER_VALUE, None),
+                                                          (None, SwizzlingType.HOPPER_SCALE),
+                                                          (SwizzlingType.HOPPER_VALUE, SwizzlingType.HOPPER_SCALE),
+                                                          (None, SwizzlingType.BLACKWELL_SCALE)])
 def test_mxfp_casting(
     shape: tuple[int, ...],
     axis: int,
@@ -131,13 +131,13 @@ def test_mxfp_casting(
 ):
     if "float8" in quant_dtype and torch.cuda.get_device_capability()[0] < 9:
         pytest.skip("Float8 not tested on A100")
-    if swizzle_value == SwizzlingType.HOPPER:
+    if swizzle_value == SwizzlingType.HOPPER_VALUE:
         if "float4" not in quant_dtype:
             pytest.skip("NYI. Hopper swizzle just implemented for mxfp4")
         if shape[axis] % 64 != 0 or shape[swizzle_axis] % 128 != 0:
             # Automatic padding not implemented for Hopper swizzle
             pytest.skip("Hopper swizzle not supported for tile not multiple of 64x128")
-    if swizzle_scale == SwizzlingType.HOPPER:
+    if swizzle_scale == SwizzlingType.HOPPER_SCALE:
         if shape[axis] % 64 != 0 or shape[swizzle_axis] % 128 != 0:
             # Automatic padding not implemented for Hopper swizzle
             pytest.skip("Hopper swizzle not supported for tile not multiple of 64x128")

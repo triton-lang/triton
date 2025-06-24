@@ -1,14 +1,13 @@
 import triton
 import triton.language as tl
 from triton_kernels.numerics_details.mxfp import (
-    get_scaled_dot_format_string,
     unswizzle_mx_scale_bw,
     unswizzle_mxfp4_scale_hopper,
     unswizzle_mxfp4_value_hopper,
 )
 
 from triton_kernels.numerics_details.flexpoint import float_to_flex, load_scale
-from ._common import make_matmul_repr, matmul_launch_metadata, swizzle2d, xcd_swizzle
+from ._common import make_matmul_repr, matmul_launch_metadata, swizzle2d, xcd_swizzle, get_scaled_dot_format_string
 
 # fmt: off
 

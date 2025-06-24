@@ -301,12 +301,12 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
             if k % 64 != 0 or n % 64 != 0:
                 pytest.skip("Hopper swizzling acts on a 64x64 tile (4x1 mma tiles).")
             swizzle_axis = 2
-            swizzle_value = SwizzlingType.HOPPER
-            swizzle_scale = SwizzlingType.HOPPER
+            swizzle_value = SwizzlingType.HOPPER_VALUE
+            swizzle_scale = SwizzlingType.HOPPER_SCALE
         elif torch.cuda.get_device_capability()[0] == 10:
             swizzle_axis = 2
             swizzle_value = None
-            swizzle_scale = SwizzlingType.BLACKWELL
+            swizzle_scale = SwizzlingType.BLACKWELL_SCALE
         else:
             swizzle_axis = None
             swizzle_value = None

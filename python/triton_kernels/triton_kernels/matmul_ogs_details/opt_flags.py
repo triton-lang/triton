@@ -221,7 +221,7 @@ def make_default_opt_flags_nvidia(
     else:
         fused_scatter = can_use_fused_scatter and split_k == 1
     # Handshake with the HBM swizzling
-    hopper_swizzling = microscaling_ctx.swizzle_scale == SwizzlingType.HOPPER
+    hopper_swizzling = microscaling_ctx.swizzle_scale == SwizzlingType.HOPPER_SCALE
     num_warps = 8 if hopper_swizzling else opt_flags_nvidia.compute_num_warps(block_m, block_n)
     ret = OptFlags(
         block_m=block_m,
