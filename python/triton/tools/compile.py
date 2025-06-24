@@ -14,7 +14,7 @@ import triton.backends
 @dataclass
 class CompileArgs:
     '''
-    Argument class to call compile_kernel() from python code.
+    A class to contain arguments from command-line parser.
     '''
     path: str = ''
     kernel_name: str = ''

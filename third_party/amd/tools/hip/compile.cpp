@@ -44,13 +44,6 @@ void load_{kernel_name}() {{
     int shared = {shared};
     HIP_CHECK(hipModuleLoadData(&{kernel_name}_mod, bin));
     HIP_CHECK(hipModuleGetFunction(&{kernel_name}_func, {kernel_name}_mod, "{triton_kernel_name}"));
-    // set dynamic shared memory if necessary
-    int shared_optin;
-    HIP_CHECK(hipDeviceGetAttribute(&shared_optin, hipDeviceAttributeSharedMemPerBlockOptin, dev));
-    if (shared > 49152 && shared_optin > 49152) {{
-      HIP_CHECK(hipFuncSetCacheConfig({kernel_name}_func, hipFuncCachePreferShared));
-      HIP_CHECK(hipFuncSetAttribute(reinterpret_cast<const void*>({kernel_name}_func), hipFuncAttributeMaxDynamicSharedMemorySize, shared_optin))
-    }}
 }}
 
 /*
