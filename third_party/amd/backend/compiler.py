@@ -26,6 +26,11 @@ def is_in_thread_transpose_enabled(arch):
     return (arch == "gfx942") if knobs.amd.use_in_thread_transpose is None else knobs.amd.use_in_thread_transpose
 
 
+@functools.lru_cache
+def all_possible_fp8_dtypes() -> set[str]:
+    return {"fp8e4nv", "fp8e4b8", "fp8e5", "fp8e5b16"}
+
+
 @dataclass(frozen=True)
 class HIPOptions:
     num_warps: int = 4
@@ -118,6 +123,10 @@ class HIPBackend(BaseBackend):
                 # CDNA3/gfx942 has native support for AMD specific FP8 types.
                 supported_fp8_dtypes.update({'fp8e4b8', 'fp8e5b16'})
             args["supported_fp8_dtypes"] = tuple(sorted(supported_fp8_dtypes))
+
+        for dtype in args["supported_fp8_dtypes"]:
+            if dtype not in all_possible_fp8_dtypes():
+                raise ValueError(f"Unknown fp8 dtype {dtype} for arch {self.target.arch}")
 
         if "enable_fp_fusion" not in opts:
             args["enable_fp_fusion"] = knobs.language.default_fp_fusion
