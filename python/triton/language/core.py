@@ -3307,3 +3307,18 @@ def binary_op_type_legalization(lhs, rhs, semantic):
 def extern(fn):
     """A decorator for external functions."""
     return builtin(fn)
+
+
+@builtin
+def debug_preserve(value, _semantic=None):
+    """Preserve a value from dead code elimination.
+
+    This function marks a value as live to prevent dead code elimination
+    from removing it or operations that produce it. This is useful for
+    debugging and performance analysis where you want to keep certain
+    operations alive even if they have no users.
+
+    Args:
+        value: The value to preserve
+    """
+    return _semantic.preserve(value)

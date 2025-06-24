@@ -4,6 +4,7 @@ add_triton_library(TritonGPUToLLVM
     AllocateSharedMemory.cpp
     AllocateWarpGroups.cpp
     AssertOpToLLVM.cpp
+    PreserveOpToLLVM.cpp
     ControlFlowOpToLLVM.cpp
     ConvertLayoutOpToLLVM.cpp
     ElementwiseOpToLLVM.cpp

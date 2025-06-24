@@ -40,6 +40,11 @@ void populateAssertOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                    const TargetInfoBase &targetInfo,
                                    PatternBenefit benefit);
 
+void populatePreserveOpToLLVMPattern(LLVMTypeConverter &typeConverter,
+                                     RewritePatternSet &patterns,
+                                     const TargetInfoBase &targetInfo,
+                                     PatternBenefit benefit);
+
 void populateMakeRangeOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                       const TargetInfoBase &targetInfo,
                                       RewritePatternSet &patterns,

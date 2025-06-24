@@ -1374,5 +1374,20 @@ def TT_DescriptorScatterOp : TT_Op<"descriptor_scatter", [TT_DescriptorStoreLike
   let hasVerifier = 1;
 }
 
+def TT_PreserveOp : TT_Op<"preserve", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+  let summary = "preserve value from dead code elimination";
+  let description = [{
+    The `tt.preserve` operation marks a value as live to prevent dead code
+    elimination from removing it or operations that produce it. This is useful
+    for debugging and performance analysis where you want to keep certain
+    operations alive even if they have no users.
+  }];
+
+  let arguments = (ins AnyType:$value);
+  let results = (outs);
+
+  let assemblyFormat = "$value attr-dict `:` type($value)";
+}
+
 
 #endif // Triton_OPS

@@ -1713,6 +1713,11 @@ void init_triton_ir(py::module &&m) {
              return self.create<MakeTensorDescOp>(base, shape, strides,
                                                   tensorShape, isSignedInteger);
            })
+      // Debug operations
+      .def("create_preserve",
+           [](TritonOpBuilder &self, Value &value) -> void {
+             self.create<PreserveOp>(value);
+           })
       // Proton Ops
       .def("create_proton_record",
            [](TritonOpBuilder &self, bool isStart, int32_t regionId) -> void {
