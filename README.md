@@ -55,6 +55,17 @@ downloads a prebuilt LLVM, but you can also build LLVM from source and use that.
 LLVM does not have a stable API, so the Triton build will not work at an
 arbitrary LLVM version.
 
+For convenience, use the following command to build LLVM and install Triton with the custom LLVM:
+
+```shell
+make dev-install-llvm
+```
+
+<details>
+<summary>
+Alternatively, follow these steps to build LLVM from source manually.
+</summary>
+
 1. Find the version of LLVM that Triton builds against.  Check
 `cmake/llvm-hash.txt` to see the current version. For example, if it says:
        49af6502c6dcb4a7f7520178bd14df396f78240c
@@ -85,6 +96,8 @@ arbitrary LLVM version.
          LLVM_LIBRARY_DIR=$LLVM_BUILD_DIR/lib \
          LLVM_SYSPATH=$LLVM_BUILD_DIR \
          pip install -e .
+
+</details>
 
 # Tips for building
 

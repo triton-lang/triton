@@ -717,13 +717,44 @@ void scheduleRemainingToLastStage(int numStages,
     schedule.insert(op, lastStage, cluster);
 }
 
+namespace {
+bool canBeConvertedToAsyncLoad(unsigned numBuffers, tt::LoadOp loadOp,
+                               Value alloc,
+                               tt::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
+  // If we have a single buffer we would require another barrier after the
+  // local_reads so instead we fall back to pipeline with registers
+  // Removing this check will create incorrect IR, see
+  // MembarUtility.h:membarFilter
+  if (numBuffers <= 1)
+    return false;
+
+  // Compute the final vecSize we can use for the combination of sourceEncoding
+  // and sharedEncoding. We can only use AsyncCopy if the width is >= 32 bit
+  auto srcTy = cast<RankedTensorType>(loadOp.getPtr().getType());
+  auto dstTy = cast<ttg::MemDescType>(alloc.getType());
+  auto shape = srcTy.getShape();
+  auto regLayout = triton::gpu::toLinearLayout(shape, srcTy.getEncoding());
+  auto sharedLayout = triton::gpu::toLinearLayout(shape, dstTy.getEncoding());
+  auto regToSharedLayout = regLayout.invertAndCompose(sharedLayout);
+  unsigned loadContig = regToSharedLayout.getNumConsecutiveInOut();
+  unsigned width = loadContig * dstTy.getElementTypeBitWidth();
+  if (width < 32)
+    return false;
+
+  // Checks whether the global pointer's contiguity and mask alignment allows
+  // for at least 32 bit wide loads
+  return triton::canBeConvertedToAsyncLoad(loadOp, axisInfoAnalysis);
+}
+} // namespace
+
 // Convert load ops into shared memory allocation loads and apply
 // multi-buffering based on the required number of buffers.
 SmallVector<std::pair<Operation *, Value>> createAndScheduleStreamOps(
     const llvm::MapVector<Operation *, LoadInfo> &loadToInfo, scf::ForOp &forOp,
     const int &numBuffers, bool useAsyncCopy, tt::CoarseSchedule &schedule,
     const int stages[SCHED_SIZE],
-    const std::array<tt::CoarseSchedule::Cluster, SCHED_SIZE> &clusters) {
+    const std::array<tt::CoarseSchedule::Cluster, SCHED_SIZE> &clusters,
+    tt::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
   IRRewriter builder(forOp.getContext());
   Attribute sharedMemorySpace =
       ttg::SharedMemorySpaceAttr::get(forOp.getContext());
@@ -773,11 +804,8 @@ SmallVector<std::pair<Operation *, Value>> createAndScheduleStreamOps(
   // Replace tt.loads with async copies or stream copies
   for (auto &[op, alloc] : loadToAllocs) {
     if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
-      // If we have a single buffer we would require another barrier after the
-      // local_reads so instead we fall back to pipeline with registers
-      // Removing this check will create incorrect IR, see
-      // MembarUtility.h:membarFilter
-      if (useAsyncCopy && numBuffers > 1) {
+      if (useAsyncCopy && canBeConvertedToAsyncLoad(numBuffers, loadOp, alloc,
+                                                    axisInfoAnalysis)) {
         createAndScheduleAsyncCopy(loadOp, alloc, extractIdx, forOp, schedule,
                                    stages, clusters);
       } else {
@@ -832,7 +860,7 @@ LogicalResult preprocessLoopAndBuildSchedule(scf::ForOp &forOp, int numStages,
   // Convert the loads into shared memory allocations and loads from them.
   SmallVector<std::pair<Operation *, Value>> sharedMemAllocs =
       createAndScheduleStreamOps(*loadToInfo, forOp, numBuffers, useAsyncCopy,
-                                 schedule, stages, clusters);
+                                 schedule, stages, clusters, axisInfoAnalysis);
 
   scheduleDependencies(schedule, forOp, numStages);
   LLVM_DEBUG({

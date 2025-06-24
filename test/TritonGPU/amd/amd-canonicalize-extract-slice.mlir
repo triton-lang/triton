@@ -22,3 +22,16 @@ module attributes {"ttg.compute-capability" = 0 : i32, "ttg.num-ctas" = 1 : i32,
     tt.return %2 : tensor<32x64xf32, #blocked>
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.compute-capability" = 0 : i32, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  tt.func @canonicalize_singleton_concat(%arg0: tensor<128x128xf32, #blocked>) -> tensor<128x128xf32, #blocked> {
+    // CHECK-LABEL: tt.func @canonicalize_singleton_concat
+
+    %1 = amdgpu.concat %arg0: tensor<128x128xf32, #blocked> -> tensor<128x128xf32, #blocked>
+    // CHECK: tt.return %arg0 : tensor<128x128xf32, #blocked>
+    tt.return %1 : tensor<128x128xf32, #blocked>
+  }
+}

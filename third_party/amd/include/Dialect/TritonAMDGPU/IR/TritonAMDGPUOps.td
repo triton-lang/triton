@@ -234,6 +234,7 @@ def ConcatOp : TT_AMDGPU_Op<"concat", [Pure]> {
   }];
 
   let hasVerifier = 1;
+  let hasCanonicalizer = 1;
 }
 
 //===----------------------------------------------------------------------===//

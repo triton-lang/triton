@@ -504,9 +504,13 @@ struct MemDescSubviewOpConversion
       // The order gives us the honest-to-goodness layout rank
       auto srcAllocShape =
           srcTy.getAllocShape().take_back(getOrder(srcTy).size());
-      auto llInv = toLinearLayout(srcAllocShape, srcTy.getEncoding()).invert();
-      offset =
-          applyLinearLayout(loc, rewriter, llInv, logicalOffsets)[0].second;
+      auto ll = toLinearLayout(srcAllocShape, srcTy.getEncoding());
+      // Checked in the verifier.
+      assert(ll.getInDimSize(str_attr("block")) == 1);
+      auto kOffset = str_attr("offset");
+      ll = ll.reshapeIns({{kOffset, ll.getTotalInDimSize()}});
+      offset = applyLinearLayout(loc, rewriter, ll.invert(), logicalOffsets)[0]
+                   .second;
     }
 
     auto base = smemObj.getBase();

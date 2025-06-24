@@ -20,7 +20,6 @@
 #include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/LinearLayout.h"
 #include "triton/Tools/StrUtil.h"
-#include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/MathExtras.h"
@@ -440,6 +439,15 @@ getDefaultBlockedEncoding(MLIRContext *context, ArrayRef<int64_t> shape,
                                             order, numWarps, threadsPerWarp,
                                             numCTAs);
   return encoding;
+}
+
+bool isSplitCompatible(MLIRContext *ctx, const LinearLayout &ll) {
+  auto lastDim = ll.getNumOutDims() - 1;
+  auto kReg = StringAttr::get(ctx, "register");
+  auto kLastDim = StringAttr::get(ctx, "dim" + std::to_string(lastDim));
+  auto sublayout =
+      ll.sublayout({kReg}, {kLastDim}).removeZeroBasesAlongDim(kReg);
+  return sublayout == LinearLayout::identity1D(2, kReg, kLastDim);
 }
 
 LogicalResult tryJoinOnAxis(MLIRContext *ctx, const LinearLayout &inLl,
@@ -1315,8 +1323,7 @@ Attribute AMDMfmaEncodingAttr::parse(AsmParser &parser, Type type) {
   if (parser.parseGreater().failed())
     return {};
 
-  unsigned versionMajor = 0;
-  unsigned versionMinor = 0;
+  unsigned version = 0;
   SmallVector<unsigned> warpsPerCTA;
   SmallVector<unsigned> instrShape;
   bool isTransposed;
@@ -1325,12 +1332,8 @@ Attribute AMDMfmaEncodingAttr::parse(AsmParser &parser, Type type) {
   std::optional<SmallVector<unsigned>> CTAOrder;
 
   for (const NamedAttribute &attr : dict) {
-    if (attr.getName() == "versionMajor") {
-      if (parseUInt(parser, attr, versionMajor, "versionMajor").failed())
-        return {};
-    }
-    if (attr.getName() == "versionMinor") {
-      if (parseUInt(parser, attr, versionMinor, "versionMinor").failed())
+    if (attr.getName() == "version") {
+      if (parseUInt(parser, attr, version, "verison").failed())
         return {};
     }
     if (attr.getName() == "warpsPerCTA") {
@@ -1369,14 +1372,13 @@ Attribute AMDMfmaEncodingAttr::parse(AsmParser &parser, Type type) {
     return {};
 
   return parser.getChecked<AMDMfmaEncodingAttr>(
-      parser.getContext(), versionMajor, versionMinor, warpsPerCTA,
-      instrShape[0], instrShape[1], isTransposed, *CTALayout);
+      parser.getContext(), version, warpsPerCTA, instrShape[0], instrShape[1],
+      isTransposed, *CTALayout);
 }
 
 void AMDMfmaEncodingAttr::print(AsmPrinter &printer) const {
   printer << "<{"
-          << "versionMajor = " << getVersionMajor()                      //
-          << ", versionMinor = " << getVersionMinor()                    //
+          << "version = " << getVersion()                                //
           << ", warpsPerCTA = [" << getWarpsPerCTA() << "]"              //
           << ", instrShape = [" << ArrayRef{getMDim(), getNDim()} << "]" //
           << ", isTransposed = " << getIsTransposed();
@@ -1385,17 +1387,12 @@ void AMDMfmaEncodingAttr::print(AsmPrinter &printer) const {
   printer << "}>";
 }
 
-LogicalResult
-AMDMfmaEncodingAttr::verify(function_ref<mlir::InFlightDiagnostic()> emitError,
-                            unsigned versionMajor, unsigned versionMinor,
-                            llvm::ArrayRef<unsigned int> warpsPerCTA,
-                            unsigned mDim, unsigned nDim, bool isTransposed,
-                            mlir::triton::gpu::CTALayoutAttr) {
-  if (!(versionMajor >= 0 && versionMajor <= 4)) {
-    return emitError() << "major version must be in the [0, 4] range";
-  }
-  if (versionMinor != 0) {
-    return emitError() << "minor version must be 0";
+LogicalResult AMDMfmaEncodingAttr::verify(
+    function_ref<mlir::InFlightDiagnostic()> emitError, unsigned version,
+    llvm::ArrayRef<unsigned int> warpsPerCTA, unsigned mDim, unsigned nDim,
+    bool isTransposed, mlir::triton::gpu::CTALayoutAttr) {
+  if (!(version >= 0 && version <= 4)) {
+    return emitError() << "version must be in the [0, 4] range";
   }
   if (!((mDim == 32 && nDim == 32) || (mDim == 16 && nDim == 16))) {
     return emitError()
@@ -1949,7 +1946,7 @@ SwizzledSharedEncodingAttr AMDMfmaEncodingAttr::composeSharedLayoutForOperand(
   bool isKContig = sharedOrder[0] == kDimIndex;
   // GFX950 supports LDS transpose load instructions, so we need swizzling even
   // when K dimension is not the contiguous dimension.
-  bool isGFX950 = getVersionMajor() == 4;
+  bool isGFX950 = getVersion() == 4;
   bool swizzleNonKContig =
       isGFX950 && (elemBitWidth == 8 || elemBitWidth == 16);
 
@@ -2637,7 +2634,19 @@ struct TritonGPUInferLayoutInterface
   inferDefaultJoinOpEncoding(Attribute srcEnc, Attribute &dstEnc,
                              ArrayRef<int64_t> shape,
                              std::optional<Location> loc) const override {
-    if (auto enc = mlir::dyn_cast<BlockedEncodingAttr>(srcEnc)) {
+    auto ctx = getContext();
+    if (auto enc = mlir::dyn_cast<SliceEncodingAttr>(srcEnc);
+        enc && enc.getDim() == shape.size()) {
+      SmallVector<int64_t> joinedShape(shape);
+      joinedShape.push_back(2);
+      auto parent = enc.getParent();
+      auto parentLL = toLinearLayout(joinedShape, parent);
+
+      if (isSplitCompatible(ctx, parentLL)) {
+        dstEnc = parent;
+        return success();
+      }
+    } else if (auto enc = mlir::dyn_cast<BlockedEncodingAttr>(srcEnc)) {
       // JoinOp takes two tensors of shape AxBxC and generates a tensor of shape
       // AxBxCx2. The encoding is the same as the input, but with 2 elems per
       // thread in the new dimension. The new dimension is the fastest running
@@ -2661,8 +2670,6 @@ struct TritonGPUInferLayoutInterface
                              appendMajorDim(enc.getCTAOrder())));
       return success();
     }
-
-    auto ctx = getContext();
 
     // Append dim to shape
     auto ll = toLinearLayout(shape, srcEnc);
@@ -2740,7 +2747,6 @@ struct TritonGPUInferLayoutInterface
     if (!result.succeeded()) {
       return failure();
     }
-
     // Remove last dim from newLl (which should be 1)
     SmallVector<int64_t> dstShape(shape.begin(), shape.end());
     dstShape.pop_back();

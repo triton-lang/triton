@@ -460,7 +460,7 @@ public:
         isChainDotHead(dotOp) || isChainDotTail(dotOp) || !isFP8;
     ttg::AMDMfmaEncodingAttr mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
         oldRetType.getContext(),
-        /*versionMajor*/ mfmaVersion, /*versionMinor*/ 0, warpsPerTile,
+        /*version*/ mfmaVersion, warpsPerTile,
         /*instrShape*/ mDim, nDim, isTransposed, CTALayout);
 
     Type mfmaAccType;
@@ -661,7 +661,7 @@ public:
     // Always use transposed mfma layout. This enables larger vectorization
     // for global store instructions.
     auto mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
-        ctx, /*versionMajor=*/mfmaVersion, /*versionMinor=*/0, mfmaWarpsPerCTA,
+        ctx, /*version=*/mfmaVersion, mfmaWarpsPerCTA,
         /*instrShape=*/mDim, nDim, /*isTransposed=*/true, ctaLayout);
 
     auto newRetType = RankedTensorType::get(
@@ -819,7 +819,7 @@ public:
     // Always use transposed mfma layout. This enables larger vectorization
     // for global store instructions.
     auto mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
-        ctx, /*versionMajor=*/mfmaVersion, /*versionMinor=*/0, warpsPerTile,
+        ctx, /*verison=*/mfmaVersion, warpsPerTile,
         /*instrShape=*/mDim, nDim, /*isTransposed=*/true, ctaLayout);
 
     auto newRetType =

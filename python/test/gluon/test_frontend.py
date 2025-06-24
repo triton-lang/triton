@@ -881,10 +881,10 @@ def test_split_join():
     expect_layout: ttgl.constexpr = ttgl.BlockedLayout([2, 2], [32, 1], [4, 1], [1, 0])
     ttgl.static_assert(res.type.layout == expect_layout)
 
-    # CHECK: tt.split {{.*}} : tensor<128x2xi32, [[BLOCKED1]]> -> tensor<128xi32, [[BLOCKED]]>
+    # CHECK: tt.split {{.*}} : tensor<128x2xi32, [[BLOCKED1]]> -> tensor<128xi32, #ttg.slice<{dim = 1, parent = [[BLOCKED1]]}>>
     c, d = ttgl.split(res)
-    ttgl.static_assert(c.type.layout == layout)
-    ttgl.static_assert(d.type.layout == layout)
+    ttgl.static_assert(c.type.layout == ttgl.SliceLayout(1, expect_layout))
+    ttgl.static_assert(d.type.layout == ttgl.SliceLayout(1, expect_layout))
 
 
 @filecheck_test
@@ -1021,4 +1021,40 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return loc(#loc)
   } loc(#loc)
 } loc(#loc)
+""")
+
+
+def test_split_join_subtile(fresh_knobs):
+
+    @gluon.jit
+    def kernel():
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1, 128], [32, 1], [4, 1], [0, 1])
+        x = ttgl.full([128, 128], 1, ttgl.int32, layout=layout)
+
+        a, b = x.reshape([128, 2, 64]).permute([0, 2, 1]).split()
+        y = ttgl.join(a, b).permute([0, 2, 1]).reshape([128, 128])
+        _ = x + y
+
+    knobs.compilation.disable_line_info = True
+    h = kernel.warmup(grid=(1, ), sanitize_overflow=False)
+    expecttest.assert_expected_inline(
+        anonymize_ir(h.asm["source"]), """\
+#blocked = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 2, 64], threadsPerWarp = [32, 1, 1], warpsPerCTA = [4, 1, 1], order = [0, 2, 1]}>
+#blocked2 = #ttg.blocked<{sizePerThread = [1, 64, 2], threadsPerWarp = [32, 1, 1], warpsPerCTA = [4, 1, 1], order = [0, 1, 2]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @kernel() attributes {noinline = false} {
+    %c1_i32 = arith.constant 1 : i32 loc(#loc)
+    %cst = arith.constant dense<1> : tensor<128x128xi32, #blocked> loc(#loc)
+    %0 = tt.reshape %cst : tensor<128x128xi32, #blocked> -> tensor<128x2x64xi32, #blocked1> loc(#loc)
+    %1 = tt.trans %0 {order = array<i32: 0, 2, 1>} : tensor<128x2x64xi32, #blocked1> -> tensor<128x64x2xi32, #blocked2> loc(#loc)
+    %outLHS, %outRHS = tt.split %1 : tensor<128x64x2xi32, #blocked2> -> tensor<128x64xi32, #ttg.slice<{dim = 2, parent = #blocked2}>> loc(#loc)
+    %2 = tt.join %outLHS, %outRHS : tensor<128x64xi32, #ttg.slice<{dim = 2, parent = #blocked2}>> -> tensor<128x64x2xi32, #blocked2> loc(#loc)
+    %3 = tt.trans %2 {order = array<i32: 0, 2, 1>} : tensor<128x64x2xi32, #blocked2> -> tensor<128x2x64xi32, #blocked1> loc(#loc)
+    %4 = tt.reshape %3 : tensor<128x2x64xi32, #blocked1> -> tensor<128x128xi32, #blocked> loc(#loc)
+    %5 = arith.addi %cst, %4 : tensor<128x128xi32, #blocked> loc(#loc)
+    tt.return loc(#loc)
+  } loc(#loc)
+} loc(#loc)
+#loc = loc(unknown)
 """)

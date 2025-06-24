@@ -446,4 +446,23 @@ LogicalResult ConcatOp::verify() {
 
   return success();
 }
+
+// This pattern removes a concatOp if it has a single input operand.
+// This scenario can potentially happen as a result of ops refinement.
+mlir::LogicalResult foldConcatOpFromSingleSource(amdgpu::ConcatOp op,
+                                                 PatternRewriter &rewriter) {
+  auto sources = op.getSources();
+  if (sources.size() == 1) {
+    auto source = sources.front();
+    auto result = op.getResult();
+    result.replaceAllUsesWith(source);
+    return success();
+  }
+  return failure();
+}
+
+void ConcatOp::getCanonicalizationPatterns(mlir::RewritePatternSet &patterns,
+                                           mlir::MLIRContext *context) {
+  patterns.add(foldConcatOpFromSingleSource);
+}
 } // namespace mlir::triton::amdgpu
