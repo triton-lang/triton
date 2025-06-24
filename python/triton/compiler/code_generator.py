@@ -646,7 +646,7 @@ class CodeGenerator(ast.NodeVisitor):
             base = self.visit(target.value)
             setattr(base, target.attr, value)
             return
-        assert isinstance(target, ast.Name)
+        assert isinstance(target, ast.Name), f"cannot assign to target: {ast.dump(target)}"
         self.set_value(self.visit(target), value)
 
     def visit_Assign(self, node):
@@ -1253,9 +1253,9 @@ class CodeGenerator(ast.NodeVisitor):
         # Unpack and emit the writeback for mutable arguments.
         for name, ty in args_mut:
             target, value = getattr(call_args[name], "__ast__", None), next(all_ret_values)
-            if target is None:
-                raise CompilationError(self.jit_fn.src, self.cur_node,
-                                       f"Cannot pass non-mutable reference to mutable argument '{name}'")
+            # Discard mutation on an RValue.
+            if target is None or isinstance(target, ast.Call):
+                continue
             if isinstance(target, ast.keyword):
                 target = target.value
             target = copy.deepcopy(target)

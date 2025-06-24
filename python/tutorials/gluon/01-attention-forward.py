@@ -285,7 +285,7 @@ TensorMemoryChannel, TensorMemoryProducer, TensorMemoryConsumer = Channel(tensor
                                                                           allocate_tensor_memory)
 
 
-@aggregate(frozen=True)
+@aggregate
 class LoadContext:
     desc: tensor_descriptor
     channel: SharedMemoryChannel
@@ -306,7 +306,7 @@ class LoadContext:
         self.channel.release()
 
 
-@aggregate(frozen=True)
+@aggregate
 class PipelinedLoadProducer:
     desc: tensor_descriptor
     impl: SharedMemoryProducer
@@ -332,10 +332,9 @@ class PipelinedLoadProducer:
         tma.async_copy_global_to_shared(self.desc, [self.offset, 0], ready_bar, smem)
 
         self.offset += self.step
-        return self
 
 
-@aggregate(frozen=True)
+@aggregate
 class MMAContext:
     channel: TensorMemoryChannel
     instr_shape: gl.constexpr
@@ -363,7 +362,7 @@ class MMAContext:
         return get_tmem_32x32b_reg_layout(self.instr_shape, self.shape, num_warps)
 
 
-@aggregate(frozen=True)
+@aggregate
 class MMAProducer:
     producer: TensorMemoryProducer
 
@@ -379,7 +378,6 @@ class MMAProducer:
         tmem, bar, self.producer = self.producer.acquire()
         tcgen05_mma(a, b, tmem, use_acc=use_acc, mbarriers=[bar] + release_bars,
                     mbarrier_preds=[True] * (len(release_bars) + 1))
-        return self
 
 
 # ===-----------------------------------------------------------------------===#
@@ -387,7 +385,7 @@ class MMAProducer:
 # ===-----------------------------------------------------------------------===#
 
 
-@aggregate(frozen=True)
+@aggregate
 class AttentionConfig:
     qk_scale: gl.tensor
     Z: gl.tensor
@@ -469,7 +467,7 @@ class AttentionConfig:
         return AttentionProgram(self, start_m, off_hz, offset_y, qo_offset_y)
 
 
-@aggregate(frozen=True)
+@aggregate
 class AttentionProgram:
     config: AttentionConfig
     start_m: gl.tensor
@@ -496,7 +494,7 @@ class AttentionProgram:
         return lo, hi
 
 
-@aggregate(frozen=True)
+@aggregate
 class AttentionTile:
     acc: gl.tensor
     m_i: gl.tensor
@@ -540,7 +538,7 @@ class AttentionTile:
 # ===-----------------------------------------------------------------------===#
 
 
-@aggregate(frozen=True)
+@aggregate
 class InnerLoopInfo:
     qk_mma_ctx: MMAContext
     o_mma_ctx: MMAContext
@@ -617,11 +615,11 @@ def _attn_fwd_load(config,  #
 
     num_loads = (hi - lo) // config.BLOCK_N
     if num_loads > 0:
-        load_k = load_k.wait_and_issue_next()
+        load_k.wait_and_issue_next()
         for _ in range(num_loads - 1):
-            load_k = load_k.wait_and_issue_next()
-            load_v = load_v.wait_and_issue_next()
-        load_v = load_v.wait_and_issue_next()
+            load_k.wait_and_issue_next()
+            load_v.wait_and_issue_next()
+        load_v.wait_and_issue_next()
 
 
 @gluon.jit
@@ -649,32 +647,30 @@ def _attn_fwd_mma(config,  #
     num_mmas = (hi - lo) // config.BLOCK_N
     if num_mmas > 0:
         k_smem, k_bar, k_consumer = k_consumer.acquire()
-        qk0_producer = qk0_producer.wait_and_issue_next(info0.q_smem, k_smem.permute((1, 0)), [k_bar], use_acc=False)
-        qk1_producer = qk1_producer.wait_and_issue_next(info1.q_smem, k_smem.permute((1, 0)), [k_bar], use_acc=False)
+        qk0_producer.wait_and_issue_next(info0.q_smem, k_smem.permute((1, 0)), [k_bar], use_acc=False)
+        qk1_producer.wait_and_issue_next(info1.q_smem, k_smem.permute((1, 0)), [k_bar], use_acc=False)
         for _ in range(num_mmas - 1):
             v_smem, v_bar, v_consumer = v_consumer.acquire()
             p0_tmem, p0_bar, p0_consumer = p0_consumer.acquire()
-            o0_producer = o0_producer.wait_and_issue_next(p0_tmem, v_smem, [v_bar, p0_bar, qk_p_bar], use_acc=True)
+            o0_producer.wait_and_issue_next(p0_tmem, v_smem, [v_bar, p0_bar, qk_p_bar], use_acc=True)
 
             k_smem, k_bar, k_consumer = k_consumer.acquire()
             mbarrier.wait(qk_p_bar, qk_p_phase)
             qk_p_phase ^= 1
-            qk0_producer = qk0_producer.wait_and_issue_next(info0.q_smem, k_smem.permute((1, 0)), [k_bar],
-                                                            use_acc=False)
+            qk0_producer.wait_and_issue_next(info0.q_smem, k_smem.permute((1, 0)), [k_bar], use_acc=False)
 
             p1_tmem, p1_bar, p1_consumer = p1_consumer.acquire()
-            o1_producer = o1_producer.wait_and_issue_next(p1_tmem, v_smem, [v_bar, p1_bar, qk_p_bar], use_acc=True)
+            o1_producer.wait_and_issue_next(p1_tmem, v_smem, [v_bar, p1_bar, qk_p_bar], use_acc=True)
 
             mbarrier.wait(qk_p_bar, qk_p_phase)
             qk_p_phase ^= 1
-            qk1_producer = qk1_producer.wait_and_issue_next(info1.q_smem, k_smem.permute((1, 0)), [k_bar],
-                                                            use_acc=False)
+            qk1_producer.wait_and_issue_next(info1.q_smem, k_smem.permute((1, 0)), [k_bar], use_acc=False)
         v_smem, v_bar, v_consumer = v_consumer.acquire()
         p0_tmem, p0_bar, p0_consumer = p0_consumer.acquire()
-        o0_producer = o0_producer.wait_and_issue_next(p0_tmem, v_smem, [v_bar, p0_bar], use_acc=True)
+        o0_producer.wait_and_issue_next(p0_tmem, v_smem, [v_bar, p0_bar], use_acc=True)
 
         p1_tmem, p1_bar, p1_consumer = p1_consumer.acquire()
-        o1_producer = o1_producer.wait_and_issue_next(p1_tmem, v_smem, [v_bar, p1_bar], use_acc=True)
+        o1_producer.wait_and_issue_next(p1_tmem, v_smem, [v_bar, p1_bar], use_acc=True)
 
     mbarrier.invalidate(qk_p_bar)
 

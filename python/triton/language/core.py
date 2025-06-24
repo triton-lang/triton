@@ -1553,6 +1553,7 @@ def _aggregate_impl(cls, frozen):
     class aggregate_value(base_value):
         __triton_builtin__ = True
         __triton_aggregate__ = True
+        __mutable__ = not frozen
 
         @classmethod
         def _get_instance(this_cls):
@@ -1579,7 +1580,7 @@ def _aggregate_impl(cls, frozen):
 
         # Only allow setting attributes defined in the class annotations.
         def __setattr__(self, name, value):
-            if name == "__ast__":
+            if name in ["__ast__", "__mutable__"]:
                 super().__setattr__(name, value)
                 return
             if name not in cls.__annotations__:
@@ -1595,7 +1596,7 @@ def _aggregate_impl(cls, frozen):
         @property
         def type(self):
             return _aggregate_type(aggregate_value, [(name, getattr(self, name).type)
-                                                     for name in cls.__annotations__.keys()], not frozen)
+                                                     for name in cls.__annotations__.keys()], self.__mutable__)
 
     for (name, member) in inspect.getmembers(cls):
         if inspect.isfunction(member) or inspect.ismethod(member) or isinstance(member, JITFunction):
