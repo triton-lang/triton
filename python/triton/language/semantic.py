@@ -1472,10 +1472,10 @@ class TritonSemantic(Generic[TensorTy]):
             # All combinations of supported fp8 x fp8 are permitted
             pass
         else:
-            assert lhs.dtype in (tl.int8, tl.uint8, tl.float16, tl.bfloat16,
-                                 tl.float32, tl.float64), f"Unsupported lhs dtype {lhs.dtype}"
-            assert rhs.dtype in (tl.int8, tl.uint8, tl.float16, tl.bfloat16,
-                                 tl.float32, tl.float64), f"Unsupported rhs dtype {rhs.dtype}"
+            assert lhs.dtype in (tl.int8, tl.uint8, tl.float16, tl.bfloat16, tl.float32,
+                                 tl.float64), f"Unsupported lhs dtype {lhs.dtype}"
+            assert rhs.dtype in (tl.int8, tl.uint8, tl.float16, tl.bfloat16, tl.float32,
+                                 tl.float64), f"Unsupported rhs dtype {rhs.dtype}"
             assert lhs.dtype == rhs.dtype, f"Both operands must be same dtype. Got {lhs.dtype} and {rhs.dtype}"
 
         if lhs.dtype.is_fp8e4b15() or rhs.dtype.is_fp8e4b15():

@@ -68,7 +68,8 @@ LogicalResult lowerLdStMatrix(
   std::optional<ColumnAction> maybePermutation;
   LinearLayout tile;
   if (!transpose) {
-    tile = LinearLayout::identity1D(bitwidth < 32 ? 32 / bitwidth : 1, kReg, kOffset) *
+    tile = LinearLayout::identity1D(bitwidth < 32 ? 32 / bitwidth : 1, kReg,
+                                    kOffset) *
            LinearLayout::identity1D(4, kLane, kOffset);
 
     // Find if there is a register permutation that allows us to divideLeft
@@ -129,15 +130,17 @@ LogicalResult lowerLdStMatrix(
   }
 
   // We must have at least 2 register elements to use stmatrix.trans
-  if (transpose && reps.getInDimSizeLog2(kReg) < llvm::Log2_32(bitwidth < 32 ? 32 / bitwidth : 1)) {
+  if (transpose && reps.getInDimSizeLog2(kReg) <
+                       llvm::Log2_32(bitwidth < 32 ? 32 / bitwidth : 1)) {
     return failure();
   }
 
   // Choose up to 4 packs of 32-bit elements indexed by the next (at most) two
   // bases as the vectorisation factor. We don't consider the basis of the tile
   // for vectorisation so we substract them
-  auto vec = std::min<int32_t>(2, reps.getInDimSizeLog2(kReg) -
-                                      llvm::Log2_32(bitwidth < 32 ? 32 / bitwidth : 1));
+  auto vec = std::min<int32_t>(
+      2, reps.getInDimSizeLog2(kReg) -
+             llvm::Log2_32(bitwidth < 32 ? 32 / bitwidth : 1));
 
   // Map from kReg, kLane, kWarp to beginning of each tile
   assert(reps.getOutDimSize(kOffset) == cvt.getOutDimSize(kOffset));

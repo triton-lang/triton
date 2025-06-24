@@ -66,7 +66,7 @@ ValueTableV2 getValuesFromDotOperandLayoutStruct(
     ConversionPatternRewriter &rewriter, Value value, int batch, int repOuter,
     int repK, RankedTensorType type) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  auto elems = unpackLLElements(loc, value, rewriter);  // SmallVector<Value> elems
+  auto elems = unpackLLElements(loc, value, rewriter);
   auto eltTy = typeConverter->convertType(type.getElementType());
   int offset{};
   ValueTableV2 vals;
@@ -92,7 +92,8 @@ ValueTableV2 getValuesFromDotOperandLayoutStruct(
   auto kWidth = dot.getKWidth();
   auto largeK = bitwidth * kWidth > (bitwidth < 32 ? 32 : bitwidth);
 
-  assert((bitwidth != 64 || largeK == false) && "Currently fp64 don't support largeK MMA");
+  assert((bitwidth != 64 || largeK == false) &&
+         "Currently fp64 don't support largeK MMA");
 
   if (largeK) {
     // For layouts with a large K dimension, the original register layout needs
@@ -616,8 +617,8 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
                           numCPackedElem, ha, hb, fc);
       } else {
         callMmaAmpere(builder, b, m, n, k, mma, numMmaRets, colsPerThread,
-                    numCPackedElem, batchOffset, ha, hb, fc, isAccF16,
-                    isIntMMA);
+                      numCPackedElem, batchOffset, ha, hb, fc, isAccF16,
+                      isIntMMA);
       }
     }
 

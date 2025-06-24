@@ -103,7 +103,7 @@ def test_simple_matmul(dtype_src_str, dtype_dst_str, BLOCK_M, BLOCK_N, BLOCK_K, 
     if is_hip() and ((BLOCK_K * BLOCK_M + BLOCK_K * BLOCK_N) * NUM_STAGES * get_src_element_ty_size(dtype_src_str)
                      > 65536):
         pytest.skip("HIP path requires less than 64KB of shared memory")
-    if (is_cuda() and torch.cuda.get_device_capability()[0] <= 9 and 
+    if (is_cuda() and torch.cuda.get_device_capability()[0] <= 9 and
         ((BLOCK_K * BLOCK_M + BLOCK_K * BLOCK_N) * NUM_STAGES * get_src_element_ty_size(dtype_src_str) > 65536)):
         pytest.skip("CUDA path without tensor memory requires less than 256KB of shared memory")
     if is_hip() and (not is_hip_cdna3()) and dtype_src_str == "tensorfloat32":
@@ -114,10 +114,8 @@ def test_simple_matmul(dtype_src_str, dtype_dst_str, BLOCK_M, BLOCK_N, BLOCK_K, 
         pytest.skip("Float8 requires compute capability >= 9")
     if (dtype_src_str == "float64") != (dtype_dst_str == "float64"):
         pytest.skip("Skipping unsupported case")
-    if dtype_src_str == "float64" and not (
-        is_cuda() and torch.cuda.get_device_capability()[0] in (8, 9, 10)
-        and torch.cuda.get_device_capability()[1] == 0
-    ):
+    if dtype_src_str == "float64" and not (is_cuda() and torch.cuda.get_device_capability()[0] in (8, 9, 10)
+                                           and torch.cuda.get_device_capability()[1] == 0):
         pytest.skip("Skipping unsupported case")
     if "float32" in dtype_src_str and dtype_dst_str == "float16":
         pytest.skip("Skipping unsupported case")
