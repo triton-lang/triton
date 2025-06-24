@@ -448,7 +448,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 
 @gluon.jit
-def warp_group_mma_kernel(nvmma_layout: ttgl.constexpr, acc_layout: ttgl.constexpr):
+def warpgroup_mma_kernel(nvmma_layout: ttgl.constexpr, acc_layout: ttgl.constexpr):
     a = ttgl.allocate_shared_memory(ttgl.float16, [128, 128], nvmma_layout)
     b = ttgl.allocate_shared_memory(ttgl.float16, [128, 128], nvmma_layout)
     acc = ttgl.zeros([128, 128], dtype=ttgl.float16, layout=acc_layout)
@@ -456,27 +456,27 @@ def warp_group_mma_kernel(nvmma_layout: ttgl.constexpr, acc_layout: ttgl.constex
 
 
 @pytest.mark.skipif(not is_hopper(), reason="Requires Hopper WGMMA")
-def test_warp_group_mma(fresh_knobs):
+def test_warpgroup_mma(fresh_knobs):
     knobs.compilation.disable_line_info = True
 
     nvmma_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2)
     mma_layout = ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1], instr_shape=[16, 32, 16])
-    h = warp_group_mma_kernel.warmup(nvmma_layout, mma_layout, grid=(1, ))
+    h = warpgroup_mma_kernel.warmup(nvmma_layout, mma_layout, grid=(1, ))
     expecttest.assert_expected_inline(
         anonymize_ir(h.asm["source"]), """\
 #mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 32, 16]}>
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
-  tt.func public @warp_group_mma_kernel() attributes {noinline = false} {
+  tt.func public @warpgroup_mma_kernel() attributes {noinline = false} {
     %0 = ttg.local_alloc : () -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable> loc(#loc)
     %1 = ttg.local_alloc : () -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable> loc(#loc)
-    %2 = tt.call @"triton.experimental.gluon.language._standard.zeros____(0, 0)cconstexpr_128__(0, 1)cconstexpr_128__(1,)cconstexpr_fp16__(2,)cconstexpr_MMALayout(version=_3, 0_, warps_per_cta=_4, 1_, instr_shape=_16, 32, 16_, ctas_per_cga=_1, 1_, cta_split_num=_1, 1_, cta_order=_1, 0_)_"() : () -> tensor<128x128xf16, #mma> loc(#loc)
+    %2 = tt.call @"triton.experimental.gluon.language._standard.zeros____(0, 0)cconstexpr_128__(0, 1)cconstexpr_128__(1,)cconstexpr_fp16__(2,)cconstexpr_NVMMADistributedLayout(version=_3, 0_, warps_per_cta=_4, 1_, instr_shape=_16, 32, 16_, ctas_per_cga=_1, 1_, cta_split_num=_1, 1_, cta_order=_1, 0_)_"() : () -> tensor<128x128xf16, #mma> loc(#loc)
     %true = arith.constant true loc(#loc)
     %3 = ttng.warp_group_dot %0, %1, %2, %true {inputPrecision = 0 : i32} : !ttg.memdesc<128x128xf16, #shared, #smem, mutable> * !ttg.memdesc<128x128xf16, #shared, #smem, mutable> -> tensor<128x128xf16, #mma> loc(#loc)
     tt.return loc(#loc)
   } loc(#loc)
-  tt.func private @"triton.experimental.gluon.language._standard.zeros____(0, 0)cconstexpr_128__(0, 1)cconstexpr_128__(1,)cconstexpr_fp16__(2,)cconstexpr_MMALayout(version=_3, 0_, warps_per_cta=_4, 1_, instr_shape=_16, 32, 16_, ctas_per_cga=_1, 1_, cta_split_num=_1, 1_, cta_order=_1, 0_)_"() -> tensor<128x128xf16, #mma> attributes {noinline = false} {
+  tt.func private @"triton.experimental.gluon.language._standard.zeros____(0, 0)cconstexpr_128__(0, 1)cconstexpr_128__(1,)cconstexpr_fp16__(2,)cconstexpr_NVMMADistributedLayout(version=_3, 0_, warps_per_cta=_4, 1_, instr_shape=_16, 32, 16_, ctas_per_cga=_1, 1_, cta_split_num=_1, 1_, cta_order=_1, 0_)_"() -> tensor<128x128xf16, #mma> attributes {noinline = false} {
     %cst = arith.constant 0.000000e+00 : f16 loc(#loc)
     %cst_0 = arith.constant dense<0.000000e+00> : tensor<128x128xf16, #mma> loc(#loc)
     tt.return %cst_0 : tensor<128x128xf16, #mma> loc(#loc)
