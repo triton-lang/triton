@@ -429,6 +429,18 @@ def inplace_swap(p):
     p.mutate_second(tmp)
 
 
+@triton.jit
+def mutate_and_produce(x):
+    x.mutate_first(tl.arange(0, 4))
+    return tl.arange(0, 16)
+
+
+@triton.jit
+def mutate_and_produce_tuple(x):
+    x.mutate_second(tl.arange(0, 4))
+    return tl.arange(0, 16), tl.arange(16, 32)
+
+
 @filecheck_test
 @triton.jit
 def test_mutable_argument():
@@ -449,8 +461,21 @@ def test_mutable_argument():
     box.value.mutate_second(tl.arange(12, 16))
     inplace_swap(box.value)
 
-    # CHECK-NEXT: call @{{.*}}anchor{{.*}}([[P4]]#0, [[P4]]#1)
+    # CHECK-NEXT:    call @{{.*}}anchor{{.*}}([[P4]]#0, [[P4]]#1)
     anchor(box)
+
+    # CHECK-NEXT:    [[P5:%.*]]:3 = tt.call @{{.*}}mutate_and_produce{{.*}}([[P1]]#0, [[P1]]#1)
+    # CHECK-NEXT:    [[P6:%.*]]:4 = tt.call @{{.*}}mutate_and_produce_tuple{{.*}}([[P5]]#0, [[P5]]#1)
+    # CHECK-NEXT:    call @{{.*}}anchor{{.*}}([[P5]]#2)
+    # CHECK-NEXT:    call @{{.*}}anchor{{.*}}([[P6]]#2)
+    # CHECK-NEXT:    call @{{.*}}anchor{{.*}}([[P6]]#3)
+    # CHECK-NEXT:    call @{{.*}}anchor{{.*}}([[P6]]#0, [[P6]]#1)
+    a = mutate_and_produce(p)
+    b, c = mutate_and_produce_tuple(p)
+    anchor(a)
+    anchor(b)
+    anchor(c)
+    anchor(p)
 
     # CHECK-LABEL: tt.func private @{{.*}}inplace_swap
     # CHECK-NEXT:    [[P1:%.*]]:2 = tt.call @{{.*}}mutate_first{{.*}}(%arg0, %arg1, %arg1)
