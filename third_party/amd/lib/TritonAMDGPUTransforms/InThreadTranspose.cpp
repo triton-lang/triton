@@ -513,6 +513,11 @@ findReachableSMemOps(ttg::LocalLoadOp root) {
         smemOperand = candidate->getOperand(0);
       } else if (isa<ttg::LocalLoadOp, ttg::LocalDeallocOp>(candidate)) {
         smemOperand = candidate->getOperand(0);
+      } else if (isa<ttg::AsyncCopyGlobalToLocalOp,
+                     tt::amdgpu::BufferLoadToLocalOp>(candidate)) {
+        // InTheadTranspose cannot be used with direct-to-lds loads
+        LDBG(" skip because of direct-to-lds load");
+        return failure();
       } else {
         // this operation is not part of shared memory def-use network,
         // algorithm should not reach this point

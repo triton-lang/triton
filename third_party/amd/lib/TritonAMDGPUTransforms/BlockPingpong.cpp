@@ -131,7 +131,7 @@ void Pingponger::moveOpAndPredecessorsUpSameBlock(Operation *op) {
       return op->getBlock() == checkedOp->getBlock() &&
              checkedOp->isBeforeInBlock(op);
     };
-    getBackwardSlice(op, &backwardSlice, opt);
+    (void)getBackwardSlice(op, &backwardSlice, opt);
     for (auto predOp : backwardSlice)
       appendOp(predOp);
     appendOp(op);

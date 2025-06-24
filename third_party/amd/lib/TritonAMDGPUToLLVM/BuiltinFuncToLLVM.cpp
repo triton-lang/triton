@@ -1,5 +1,6 @@
 #include "TritonAMDGPUToLLVM/Passes.h"
 
+#include "AsyncUtility.h"
 #include "Utility.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Pass/Pass.h"
@@ -80,7 +81,7 @@ private:
     bool addAsyncAliasScopes =
         callOp.getCallee().value().contains(mlir::LLVM::AMD::noAliasAsyncLoads);
     if (addAsyncAliasScopes) {
-      LLVM::AMD::addLocalLoadNoAliasScope(storeOp);
+      AMD::addLocalLoadNoAliasScope(storeOp);
     }
     rewriter.create<LLVM::BrOp>(loc, afterStore);
     rewriter.setInsertionPointToStart(afterStore);
@@ -120,7 +121,7 @@ private:
     bool addAsyncNoAliasInfo =
         callOp.getCallee().value().contains(mlir::LLVM::AMD::noAliasAsyncLoads);
     if (addAsyncNoAliasInfo) {
-      LLVM::AMD::addLocalLoadNoAliasScope(loadOp);
+      AMD::addLocalLoadNoAliasScope(loadOp);
     }
     rewriter.create<LLVM::BrOp>(loc, loadOp->getResult(0), afterLoad);
     rewriter.setInsertionPointToStart(falseBlock);

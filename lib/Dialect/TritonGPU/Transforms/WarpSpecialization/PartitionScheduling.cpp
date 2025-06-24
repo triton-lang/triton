@@ -226,11 +226,17 @@ static std::optional<WarpSchedule> getInitialSchedule(scf::ForOp loop) {
     return std::nullopt;
 
   // Propagate defs of exp.
-  for (auto expOp : loop.getOps<math::Exp2Op>()) {
-    auto tensorTy = dyn_cast<RankedTensorType>(expOp.getType());
-    if (tensorTy && tensorTy.getNumElements() > 256) {
-      schedule.trySchedule(defaultPartition, expOp);
-      scheduleDependencies(loop, schedule, defaultPartition, expOp);
+  for (Operation &op : loop.getOps()) {
+    if (!isa<math::Exp2Op, ElementwiseInlineAsmOp>(op))
+      continue;
+    int elementCount = 0;
+    for (Type type : op.getResultTypes()) {
+      if (auto tensorTy = dyn_cast<RankedTensorType>(type))
+        elementCount += tensorTy.getNumElements();
+    }
+    if (elementCount > 256) {
+      schedule.trySchedule(defaultPartition, &op);
+      scheduleDependencies(loop, schedule, defaultPartition, &op);
     }
   }
 
@@ -242,7 +248,8 @@ static std::optional<WarpSchedule> getInitialSchedule(scf::ForOp loop) {
   while (userPartitions.size() < mmas.size()) {
     userPartitions.push_back(schedule.addPartition(userPartitions.size()));
   }
-  for (auto [mmaOp, userPartition] : llvm::zip(mmas, userPartitions)) {
+  for (auto [mmaOp, userPartition] :
+       llvm::reverse(llvm::zip(mmas, userPartitions))) {
     scheduleUsers(loop, schedule, userPartition, mmaOp);
   }
 

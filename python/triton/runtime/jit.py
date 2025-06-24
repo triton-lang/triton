@@ -1,5 +1,6 @@
 from __future__ import annotations, division
 import ast
+import copy
 import hashlib
 import inspect
 import itertools
@@ -37,13 +38,14 @@ class DependenciesFinder(ast.NodeVisitor):
     otherwise we could recompile).
     """
 
-    def __init__(self, name, globals, src) -> None:
+    def __init__(self, name, globals, nonlocals, src) -> None:
         super().__init__()
         self.name = name
         self.hasher = hashlib.sha256(src.encode("utf-8"))
 
         # This function's __globals__ dict.
         self.globals = globals
+        self.nonlocals = nonlocals
 
         # Python builtins that can be accessed from Triton kernels.
         self.supported_python_builtins = {
@@ -109,7 +111,16 @@ class DependenciesFinder(ast.NodeVisitor):
             # The global name is hidden by the local name.
             return None
 
-        val = self.globals.get(node.id, None)
+        def name_lookup(name):
+            val = self.globals.get(name, None)
+            if val is not None:
+                return val, self.globals
+            val = self.nonlocals.get(name, None)
+            if val is not None:
+                return val, self.nonlocals
+            return None, None
+
+        val, var_dict = name_lookup(node.id)
 
         # Only keep track of "interesting" global variables, that non-evil users
         # might change.  Don't consider functions, modules, builtins, etc.  This
@@ -126,7 +137,7 @@ class DependenciesFinder(ast.NodeVisitor):
                 # `bar` and then someone did `foo = baz`.
                 and not isinstance(val, JITFunction) and not getattr(val, "__triton_builtin__", False)  #
                 and node.id not in self.supported_python_builtins):
-            self.used_global_vals[(node.id, id(self.globals))] = (val, self.globals)
+            self.used_global_vals[(node.id, id(var_dict))] = (copy.copy(val), var_dict)
 
         self._update_hash(val)
         return val
@@ -306,6 +317,7 @@ specialize_impl_cache = []
 def create_specialize_impl(specialize_extra):
 
     from ..language import constexpr
+    from triton.experimental.gluon.nvidia.hopper import TensorDescriptor as GluonTensorDescriptor
 
     def specialize_impl(arg, is_const=False, specialize_value=True, align=True):
         if arg is None:
@@ -349,6 +361,10 @@ def create_specialize_impl(specialize_extra):
             assert hasattr(arg.base, "data_ptr")
             inner = canonicalize_dtype(arg.base.dtype)
             return (f"tensordesc<{inner}{list(arg.block_shape)}>", None)
+        elif isinstance(arg, GluonTensorDescriptor):
+            assert hasattr(arg.base, "data_ptr")
+            inner = canonicalize_dtype(arg.base.dtype)
+            return (f"tensordesc<{inner}{list(arg.block_shape)},{arg.layout!r}>", None)
         else:
             raise TypeError("Unsupported type: %s" % type(arg))
 
@@ -475,12 +491,13 @@ class JITFunction(KernelInterface[T]):
         if not hook:
             return None
 
-        name = get_full_name(self.fn)
+        name = self.fn.__qualname__
         module = self.fn.__module__
         arg_reprs = ", ".join([f"{param.name}: {ty}" for param, ty in zip(self.params, key[1])])
         repr = f"{name}[num_warps={options.num_warps}, num_ctas={options.num_ctas}, num_stages={options.num_stages}, enable_fp_fusion={options.enable_fp_fusion}, launch_cooperative_grid={options.launch_cooperative_grid}]({arg_reprs})"
+        full_name = get_full_name(self.fn)
 
-        specialization_data = serialize_specialization_data(name, signature, constants, configs[0], options, key)
+        specialization_data = serialize_specialization_data(full_name, signature, constants, configs[0], options, key)
 
         kwargs = {
             'signature': signature,
@@ -666,11 +683,16 @@ class JITFunction(KernelInterface[T]):
         self.__globals__ = fn.__globals__
         self.__module__ = fn.__module__
 
+    def get_capture_scope(self):
+        return self.__globals__ | inspect.getclosurevars(self.fn).nonlocals
+
     @property
     def cache_key(self):
         # TODO : hash should be attribute of `self`
         if self.hash is None:
-            dependencies_finder = DependenciesFinder(name=self._fn_name, globals=self.__globals__, src=self.src)
+            nonlocals = inspect.getclosurevars(self.fn).nonlocals
+            dependencies_finder = DependenciesFinder(name=self._fn_name, globals=self.__globals__, nonlocals=nonlocals,
+                                                     src=self.src)
             dependencies_finder.visit(self.parse())
             self.hash = dependencies_finder.ret + str(self.starting_line_number)
             self.used_global_vals = dict(sorted(dependencies_finder.used_global_vals.items()))

@@ -66,7 +66,7 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
     // 1. Modify the function type to add the new arguments.
     auto funcTy = funcOp.getFunctionType();
     auto amendedInputTy = llvm::to_vector<4>(funcTy.getInputs());
-    bool isKernel = LLVM::isKernel(funcOp);
+    bool isKernel = triton::isKernel(funcOp);
     if (isKernel) {
       for (auto i : llvm::seq(amendedInputTy.size())) {
         if (isa<TensorDescType>(amendedInputTy[i])) {
@@ -159,7 +159,7 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
 
     auto ctx = funcOp->getContext();
 
-    if (LLVM::isKernel(funcOp)) {
+    if (triton::isKernel(funcOp)) {
       // Set an attribute to indicate this function is a kernel entry.
       newFuncOp->setAttr(NVVM::NVVMDialect::getKernelFuncAttrName(),
                          rewriter.getIntegerAttr(type::u1Ty(ctx), 1));
