@@ -20,7 +20,6 @@
 #include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/LinearLayout.h"
 #include "triton/Tools/StrUtil.h"
-#include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/MathExtras.h"
@@ -440,6 +439,15 @@ getDefaultBlockedEncoding(MLIRContext *context, ArrayRef<int64_t> shape,
                                             order, numWarps, threadsPerWarp,
                                             numCTAs);
   return encoding;
+}
+
+bool isSplitCompatible(MLIRContext *ctx, const LinearLayout &ll) {
+  auto lastDim = ll.getNumOutDims() - 1;
+  auto kReg = StringAttr::get(ctx, "register");
+  auto kLastDim = StringAttr::get(ctx, "dim" + std::to_string(lastDim));
+  auto sublayout =
+      ll.sublayout({kReg}, {kLastDim}).removeZeroBasesAlongDim(kReg);
+  return sublayout == LinearLayout::identity1D(2, kReg, kLastDim);
 }
 
 LogicalResult tryJoinOnAxis(MLIRContext *ctx, const LinearLayout &inLl,
@@ -2626,7 +2634,19 @@ struct TritonGPUInferLayoutInterface
   inferDefaultJoinOpEncoding(Attribute srcEnc, Attribute &dstEnc,
                              ArrayRef<int64_t> shape,
                              std::optional<Location> loc) const override {
-    if (auto enc = mlir::dyn_cast<BlockedEncodingAttr>(srcEnc)) {
+    auto ctx = getContext();
+    if (auto enc = mlir::dyn_cast<SliceEncodingAttr>(srcEnc);
+        enc && enc.getDim() == shape.size()) {
+      SmallVector<int64_t> joinedShape(shape);
+      joinedShape.push_back(2);
+      auto parent = enc.getParent();
+      auto parentLL = toLinearLayout(joinedShape, parent);
+
+      if (isSplitCompatible(ctx, parentLL)) {
+        dstEnc = parent;
+        return success();
+      }
+    } else if (auto enc = mlir::dyn_cast<BlockedEncodingAttr>(srcEnc)) {
       // JoinOp takes two tensors of shape AxBxC and generates a tensor of shape
       // AxBxCx2. The encoding is the same as the input, but with 2 elems per
       // thread in the new dimension. The new dimension is the fastest running
@@ -2650,8 +2670,6 @@ struct TritonGPUInferLayoutInterface
                              appendMajorDim(enc.getCTAOrder())));
       return success();
     }
-
-    auto ctx = getContext();
 
     // Append dim to shape
     auto ll = toLinearLayout(shape, srcEnc);
@@ -2729,7 +2747,6 @@ struct TritonGPUInferLayoutInterface
     if (!result.succeeded()) {
       return failure();
     }
-
     // Remove last dim from newLl (which should be 1)
     SmallVector<int64_t> dstShape(shape.begin(), shape.end());
     dstShape.pop_back();

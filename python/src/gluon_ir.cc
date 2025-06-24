@@ -346,7 +346,19 @@ void init_gluon_ir(py::module &&m) {
            [](GluonOpBuilder &self, Type resultType, Value src) -> Value {
              return self.create<ttg::MemDescReinterpretOp>(resultType, src);
            })
-
+      .def("create_split",
+           [](GluonOpBuilder &self, Value &a) -> py::tuple {
+             auto argTy = cast<RankedTensorType>(a.getType());
+             auto ctx = argTy.getContext();
+             auto enc = ttg::SliceEncodingAttr::get(
+                 ctx, argTy.getRank() - 1,
+                 cast<ttg::DistributedEncodingTrait>(argTy.getEncoding()));
+             auto resTy =
+                 RankedTensorType::get(ArrayRef(argTy.getShape()).drop_back(),
+                                       argTy.getElementType(), enc);
+             auto op = self.create<triton::SplitOp>(TypeRange{resTy, resTy}, a);
+             return py::make_tuple(op->getResult(0), op->getResult(1));
+           })
       .def("create_tmem_alloc",
            [](GluonOpBuilder &self, Type resultTy, Value value) -> Value {
              return self.create<ttng::TMEMAllocOp>(resultTy, value);
