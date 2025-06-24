@@ -1003,8 +1003,8 @@ available on AMD Instinct GPUs of CDNA architectures.
 
 It is characterized by the following parameters:
 - `version` indicates the GPU architecture:
-  - 1: gfx908, i.e. CDNA1
-  - 2: gfx90a: i.e. CDNA2
+  - 1: gfx908: CDNA1
+  - 2: gfx90a: CDNA2
   - 3: gfx942: CDNA3
   - 4: gfx950: CDNA4
 - `warpsPerCTA` indicates the warp layout in the block.
