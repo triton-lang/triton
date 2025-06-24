@@ -137,7 +137,6 @@ def downcast_to_mxfp(src_tensor: torch.Tensor, out_quant_type: torch.dtype, axis
                      swizzle_value: SwizzlingType | None = None, swizzle_scale: SwizzlingType | None = None,
                      DEQUANT_SCALE_ROUNDING_MODE: DequantScaleRoundingMode = DequantScaleRoundingMode.ROUND_UP,
                      BLOCK_OUT_DIM: int = 128, BLOCK_QUANT_DIM: int = 32):
-    print("source", src_tensor.shape, axis)
     """
          Convert the src weights to mx format. The src weight is quantized along the axis dimension.
 
@@ -168,7 +167,6 @@ def downcast_to_mxfp(src_tensor: torch.Tensor, out_quant_type: torch.dtype, axis
 
     quant_tensor, scale = downcast_to_mxfp_impl(src_tensor, out_quant_type, axis, DEQUANT_SCALE_ROUNDING_MODE,
                                                 BLOCK_OUT_DIM, BLOCK_QUANT_DIM)
-    print("quantized, pre-swizzling", quant_tensor.shape)
 
     # Permute the tensor so that axis is the last dimension and swizzle_axis is the second to last dimension.
     perm = list(range(src_tensor.ndim))
@@ -191,6 +189,22 @@ def downcast_to_mxfp(src_tensor: torch.Tensor, out_quant_type: torch.dtype, axis
     scale = perm_tensor_from_contig(scale, axis, swizzle_axis)
 
     return quant_tensor, scale
+
+
+def unswizzle(tensor, axis, swizzle_axis, swizzle_mode, unpadded_tensor_shape=None):
+    tensor = perm_tensor_to_contig(tensor, axis, swizzle_axis)
+    if swizzle_mode == SwizzlingType.HOPPER_VALUE:
+        return unswizzle_mxfp4_value_hopper_torch(tensor, op_idx=0, mma_version=3)
+    elif swizzle_mode == SwizzlingType.BLACKWELL_SCALE:
+        tensor = unswizzle_mx_scale_bw_torch(tensor)
+        # Peel off padding
+        assert triton.cdiv(unpadded_tensor_shape[-1], SWIZZLE_ALIGN_INNER) * SWIZZLE_ALIGN_INNER == tensor.shape[-1], \
+            f"tensor shape mismatch. Got {tensor.shape[axis]=} and {triton.cdiv(unpadded_tensor_shape[-1], SWIZZLE_ALIGN_INNER) * SWIZZLE_ALIGN_INNER=}"
+        slices = tuple(slice(0, size) for size in unpadded_tensor_shape)
+        return tensor[slices].contiguous()
+    elif swizzle_mode == SwizzlingType.HOPPER_SCALE:
+        return unswizzle_mxfp4_scale_hopper_torch(tensor, num_warps=8)
+    return tensor
 
 
 def upcast_from_mxfp(tensor: torch.Tensor, scale: torch.Tensor, dtype: torch.dtype, axis: int,
@@ -223,35 +237,11 @@ def upcast_from_mxfp(tensor: torch.Tensor, scale: torch.Tensor, dtype: torch.dty
     assert scale.dtype == torch.uint8, f"Invalid scale dtype {scale.dtype=}"
     assert dtype in (torch.float16, torch.bfloat16), f"Invalid output dtype {dtype=}"
 
-    # Bring the quantized axis to the end.
-    # For the scales, bring the swizzle axis second to last.
-    tensor = perm_tensor_to_contig(tensor, axis, swizzle_axis)
-    assert tensor.is_contiguous()
-    scale = perm_tensor_to_contig(scale, axis, swizzle_axis)
-    assert scale.is_contiguous()
-
-    # Unswizzle the value tensor
-    if swizzle_value == SwizzlingType.HOPPER_VALUE:
-        tensor = unswizzle_mxfp4_value_hopper_torch(tensor, op_idx=0, mma_version=3)
-
+    tensor = unswizzle(tensor, axis, swizzle_axis, swizzle_value)
     logical_quant_dim = tensor.shape[-1] * (2 if tensor.dtype == torch.uint8 else 1)
-
-    # Unswizzle the scale tensor
-    if swizzle_scale == SwizzlingType.BLACKWELL_SCALE:
-        scale = unswizzle_mx_scale_bw_torch(scale)
-
-        # Peel off padding
-        unpadded_scale_shape = (*tensor.shape[:-1], triton.cdiv(logical_quant_dim, 32))
-        assert triton.cdiv(unpadded_scale_shape[-1], SWIZZLE_ALIGN_INNER) * SWIZZLE_ALIGN_INNER == scale.shape[-1], \
-            f"Scale shape mismatch. Got {scale.shape[axis]=} and {triton.cdiv(unpadded_scale_shape[-1], SWIZZLE_ALIGN_INNER) * SWIZZLE_ALIGN_INNER=}"
-
-        slices = tuple(slice(0, size) for size in unpadded_scale_shape)
-        scale = scale[slices].contiguous()
-    elif swizzle_scale == SwizzlingType.HOPPER_SCALE:
-        scale = unswizzle_mxfp4_scale_hopper_torch(scale, num_warps=8)
-
+    unpadded_scale_shape = (*tensor.shape[:-1], triton.cdiv(logical_quant_dim, 32))
+    scale = unswizzle(scale, axis, swizzle_axis, swizzle_scale, unpadded_scale_shape)
     assert scale.is_contiguous()
-
     assert tensor.is_contiguous()
 
     ndim = scale.ndim
