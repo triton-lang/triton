@@ -23,6 +23,46 @@ namespace ttng = ::mlir::triton::nvidia_gpu;
 
 namespace mlir {
 
+int doTaskIdPropagate(triton::FuncOp &funcOp) {
+  SymbolTableCollection symbolTable;
+  Operation *op = funcOp.getOperation();
+  DataFlowSolver solver;
+
+  solver.load<DeadCodeAnalysis>();
+  solver.load<SparseConstantPropagation>();
+  solver.load<ttg::TaskIdBackwardPropagation>(symbolTable);
+  if (failed(solver.initializeAndRun(op)))
+    return -1;
+
+  funcOp.walk([&](mlir::Operation *op) {
+    auto taskIds = ttg::TaskId::getUninitialized();
+    // Get the union of the results
+    for (auto result : op->getResults()) {
+      auto *lattice = solver.lookupState<ttg::TaskIdLattice>(result);
+      if (!lattice)
+        llvm_unreachable("Lattice not found.");
+      taskIds = taskIds.meet(taskIds, lattice->getValue());
+    }
+    // Get the union of the operands
+    if (op->getNumResults() == 0) {
+      for (auto operand : op->getOperands()) {
+        auto *lattice = solver.lookupState<ttg::TaskIdLattice>(operand);
+        if (!lattice)
+          llvm_unreachable("Lattice not found.");
+        taskIds = taskIds.meet(taskIds, lattice->getValue());
+      }
+    }
+    // TODO(Arda): Ideally front-end should not allow constant ops to be
+    // annotated. Anchor constants cause problems.
+    if (!taskIds.isUninitialized() &&
+        (isa<arith::ConstantOp>(op) || !op->hasAttr("async_task_id"))) {
+      op->setAttr("async_task_id", taskIds.getTaskIds());
+      labelParentOps(op);
+    }
+  });
+  return 0;
+}
+
 #define GEN_PASS_DEF_NVGPUTESTWSTASKIDPROPAGATE
 #include "nvidia/hopper/include/Transforms/Passes.h.inc"
 
@@ -48,46 +88,9 @@ public:
     });
     if (numWarpGroups == 0 || anchorOps.empty())
       return;
-
-    SymbolTableCollection symbolTable;
-    Operation *op = getOperation();
-    DataFlowSolver solver;
-
-    solver.load<DeadCodeAnalysis>();
-    solver.load<SparseConstantPropagation>();
-    solver.load<ttg::TaskIdBackwardPropagation>(symbolTable);
-    if (failed(solver.initializeAndRun(op)))
-      return signalPassFailure();
-
-    // Annotate the ops with the results from the dataflow analysis.
-    getOperation()->walk([&](triton::FuncOp funcOp) {
-      funcOp.walk([&](mlir::Operation *op) {
-        auto taskIds = ttg::TaskId::getUninitialized();
-        // Get the union of the results
-        for (auto result : op->getResults()) {
-          auto *lattice = solver.lookupState<ttg::TaskIdLattice>(result);
-          if (!lattice)
-            llvm_unreachable("Lattice not found.");
-          taskIds = taskIds.meet(taskIds, lattice->getValue());
-        }
-        // Get the union of the operands
-        if (op->getNumResults() == 0) {
-          for (auto operand : op->getOperands()) {
-            auto *lattice = solver.lookupState<ttg::TaskIdLattice>(operand);
-            if (!lattice)
-              llvm_unreachable("Lattice not found.");
-            taskIds = taskIds.meet(taskIds, lattice->getValue());
-          }
-        }
-        // TODO(Arda): Ideally front-end should not allow constant ops to be
-        // annotated. Anchor constants cause problems.
-        if (!taskIds.isUninitialized() &&
-            (isa<arith::ConstantOp>(op) || !op->hasAttr("async_task_id"))) {
-          op->setAttr("async_task_id", taskIds.getTaskIds());
-          labelParentOps(op);
-        }
-      });
-    });
+    int retCode = doTaskIdPropagate(funcOp);
+    if (retCode != 0)
+      signalPassFailure();
   }
 
   void runOnOperation() override {
