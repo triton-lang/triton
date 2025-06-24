@@ -142,7 +142,7 @@ def store_smem_to_tensor_desc(desc, coord, smem):
 
 def Channel(T, alloc_fn):
 
-    @aggregate
+    @aggregate(frozen=True)
     class ChannelType:
         mem: T
         ready_bars: gl.shared_memory_descriptor
@@ -228,7 +228,7 @@ def Channel(T, alloc_fn):
                 mbarrier.invalidate(self.ready_bars.index(i))
                 mbarrier.invalidate(self.empty_bars.index(i))
 
-    @aggregate
+    @aggregate(frozen=True)
     class Producer:
         channel: ChannelType
         phase: gl.tensor
@@ -252,7 +252,7 @@ def Channel(T, alloc_fn):
             mbarrier.arrive(ready_bar, count=1)
             return self
 
-    @aggregate
+    @aggregate(frozen=True)
     class Consumer:
         channel: ChannelType
         phase: gl.tensor
@@ -285,7 +285,7 @@ TensorMemoryChannel, TensorMemoryProducer, TensorMemoryConsumer = Channel(tensor
                                                                           allocate_tensor_memory)
 
 
-@aggregate
+@aggregate(frozen=True)
 class LoadContext:
     desc: tensor_descriptor
     channel: SharedMemoryChannel
@@ -306,7 +306,7 @@ class LoadContext:
         self.channel.release()
 
 
-@aggregate
+@aggregate(frozen=True)
 class PipelinedLoadProducer:
     desc: tensor_descriptor
     impl: SharedMemoryProducer
@@ -335,7 +335,7 @@ class PipelinedLoadProducer:
         return self
 
 
-@aggregate
+@aggregate(frozen=True)
 class MMAContext:
     channel: TensorMemoryChannel
     instr_shape: gl.constexpr
@@ -363,7 +363,7 @@ class MMAContext:
         return get_tmem_32x32b_reg_layout(self.instr_shape, self.shape, num_warps)
 
 
-@aggregate
+@aggregate(frozen=True)
 class MMAProducer:
     producer: TensorMemoryProducer
 
@@ -387,7 +387,7 @@ class MMAProducer:
 # ===-----------------------------------------------------------------------===#
 
 
-@aggregate
+@aggregate(frozen=True)
 class AttentionConfig:
     qk_scale: gl.tensor
     Z: gl.tensor
@@ -463,7 +463,7 @@ class AttentionConfig:
         return AttentionProgram(self, start_m, off_hz, offset_y, qo_offset_y)
 
 
-@aggregate
+@aggregate(frozen=True)
 class AttentionProgram:
     config: AttentionConfig
     start_m: gl.tensor
@@ -490,7 +490,7 @@ class AttentionProgram:
         return lo, hi
 
 
-@aggregate
+@aggregate(frozen=True)
 class AttentionTile:
     acc: gl.tensor
     m_i: gl.tensor
@@ -534,7 +534,7 @@ class AttentionTile:
 # ===-----------------------------------------------------------------------===#
 
 
-@aggregate
+@aggregate(frozen=True)
 class InnerLoopInfo:
     qk_mma_ctx: MMAContext
     o_mma_ctx: MMAContext
