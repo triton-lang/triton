@@ -344,7 +344,7 @@ class CUDABackend(BaseBackend):
         # instrumentation point here so we can override IRs above (e.g., ttir and ttgir)
         if CUDABackend.instrumentation:
             CUDABackend.instrumentation.patch("ttgpuir_to_llvmir", pm, mod.context)
-        
+
         nvidia.passes.ttnvgpuir.add_proxy_fence_insertion(pm, capability)
 
         nvidia.passes.ttgpuir.add_to_llvmir(pm, capability, ptx_version)
