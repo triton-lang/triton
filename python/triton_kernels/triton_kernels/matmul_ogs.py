@@ -153,15 +153,11 @@ class MicroscalingCtx:
     swizzle_scale: SwizzlingType | None = (
         None  # Whether the weight scales are stored in swizzled layout
     )
-    actual_weight_scale_shape: tuple | None = None  # Actual weight scales shape, without padding
 
     def __post_init__(self):
         assert self.act_scale is None, "Activation scale not supported yet"
         if self.weight_scale is None:
             return
-
-        if self.actual_weight_scale_shape is None:
-            object.__setattr__(self, "actual_weight_scale_shape", self.weight_scale.shape)
 
         # Validate the scale tensor data type
         if self.weight_scale.dtype != torch.uint8:

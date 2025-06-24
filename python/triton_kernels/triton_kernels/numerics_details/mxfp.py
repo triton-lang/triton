@@ -81,22 +81,6 @@ def perm_from_contig(ndim: int, axis: int, swizzle_axis: int | None = None) -> t
     return tuple(inv)
 
 
-def perm_tuple_to_contig(shape: tuple[int, ...], axis: int, swizzle_axis: int | None = None) -> tuple[int, ...]:
-    """
-    Permute the shape so that axis is the last dimension and swizzle_axis is the second to last dimension.
-    """
-    perm = perm_to_contig(len(shape), axis, swizzle_axis)
-    return tuple(shape[i] for i in perm)
-
-
-def perm_tuple_from_contig(shape: tuple[int, ...], axis: int, swizzle_axis: int | None = None) -> tuple[int, ...]:
-    """
-    Permute the shape moving the last dimension to axis and the second to last dimension to swizzle_axis.
-    """
-    perm = perm_from_contig(len(shape), axis, swizzle_axis)
-    return tuple(shape[i] for i in perm)
-
-
 def perm_tensor_to_contig(x: torch.Tensor, axis: int, swizzle_axis: int | None = None) -> torch.Tensor:
     """
     Permute the tensor x moving axis to the last dimension and swizzle_axis to the second to last dimension.
@@ -113,8 +97,7 @@ def perm_tensor_from_contig(x: torch.Tensor, axis: int, swizzle_axis: int | None
 
 def downcast_to_mxfp_impl(src_tensor: torch.Tensor, out_quant_type: torch.dtype,
                           DEQUANT_SCALE_ROUNDING_MODE: DequantScaleRoundingMode, BLOCK_OUT_DIM: int,
-                          BLOCK_QUANT_DIM: int, *, out_quant_tensor: torch.Tensor | None = None,
-                          out_scale: torch.Tensor | None = None):
+                          BLOCK_QUANT_DIM: int):
     """
     Downcast a contiguous tensor to mxfp along the last dimension.
     """
@@ -128,14 +111,8 @@ def downcast_to_mxfp_impl(src_tensor: torch.Tensor, out_quant_type: torch.dtype,
     out_shape = src_tensor.shape[:-1] + (L // divisor, )
     out_scale_shape = src_tensor.shape[:-1] + (triton.cdiv(L, 32), )
 
-    if out_quant_tensor is None:
-        out_quant_tensor = src_tensor.new_empty(out_shape, dtype=out_quant_type)
-    else:
-        assert out_quant_tensor.shape == out_shape
-    if out_scale is None:
-        out_scale = src_tensor.new_empty(out_scale_shape, dtype=torch.uint8)
-    else:
-        assert out_scale.shape == out_scale_shape
+    out_quant_tensor = src_tensor.new_empty(out_shape, dtype=out_quant_type)
+    out_scale = src_tensor.new_empty(out_scale_shape, dtype=torch.uint8)
 
     kernel_src_tensor = src_tensor.reshape(-1, src_tensor.shape[-1])
     kernel_quant_tensor = out_quant_tensor.view(-1, out_quant_tensor.shape[-1])
@@ -155,7 +132,6 @@ def downcast_to_mxfp_impl(src_tensor: torch.Tensor, out_quant_type: torch.dtype,
 
 def downcast_to_mxfp(src_tensor: torch.Tensor, out_quant_type: torch.dtype, axis: int, swizzle_axis: int | None = None,
                      swizzle_value: SwizzlingType | None = None, swizzle_scale: SwizzlingType | None = None,
-                     out_quant_tensor: torch.Tensor | None = None, out_scale: torch.Tensor | None = None,
                      DEQUANT_SCALE_ROUNDING_MODE: DequantScaleRoundingMode = DequantScaleRoundingMode.ROUND_UP,
                      BLOCK_OUT_DIM: int = 128, BLOCK_QUANT_DIM: int = 32):
     """
@@ -186,18 +162,10 @@ def downcast_to_mxfp(src_tensor: torch.Tensor, out_quant_type: torch.dtype, axis
         swizzle_axis = swizzle_axis if swizzle_axis >= 0 else swizzle_axis + ndim
         assert axis != swizzle_axis, f"Axis and swizzle axis cannot be the same {axis=} {swizzle_axis=}"
 
-    if out_quant_tensor is not None or out_scale is not None:
-        assert swizzle_axis is None, "out= not supported together with swizzling"
-
     # Permute the tensor so that axis is the last dimension and swizzle_axis is the second to last dimension.
     src_tensor = perm_tensor_to_contig(src_tensor, axis, swizzle_axis)
-    if out_quant_tensor is not None:
-        out_quant_tensor = perm_tensor_to_contig(out_quant_tensor, axis, swizzle_axis)
-    if out_scale is not None:
-        out_scale = perm_tensor_to_contig(out_scale, axis, swizzle_axis)
-
     quant_tensor, scale = downcast_to_mxfp_impl(src_tensor, out_quant_type, DEQUANT_SCALE_ROUNDING_MODE, BLOCK_OUT_DIM,
-                                                BLOCK_QUANT_DIM, out_quant_tensor=out_quant_tensor, out_scale=out_scale)
+                                                BLOCK_QUANT_DIM)
 
     # Swizzling
     if swizzle_value == SwizzlingType.HOPPER_VALUE:
@@ -205,7 +173,6 @@ def downcast_to_mxfp(src_tensor: torch.Tensor, out_quant_type: torch.dtype, axis
     assert quant_tensor.is_contiguous()
     quant_tensor = perm_tensor_from_contig(quant_tensor, axis, swizzle_axis)
 
-    orig_scale_shape = scale.shape
     if swizzle_scale == SwizzlingType.BLACKWELL_SCALE:
         scale = swizzle_mx_scale_bw(scale, allow_pad=True)
     elif swizzle_scale == SwizzlingType.HOPPER_SCALE:
@@ -213,13 +180,7 @@ def downcast_to_mxfp(src_tensor: torch.Tensor, out_quant_type: torch.dtype, axis
     assert scale.is_contiguous()
     scale = perm_tensor_from_contig(scale, axis, swizzle_axis)
 
-    if out_scale is not None:
-        out_scale = perm_tensor_from_contig(out_scale, axis, swizzle_axis)
-        assert scale.data_ptr() == out_scale.data_ptr()
-    if out_quant_tensor is not None:
-        out_quant_tensor = perm_tensor_from_contig(out_quant_tensor, axis, swizzle_axis)
-        assert quant_tensor.data_ptr() == out_quant_tensor.data_ptr()
-    return quant_tensor, scale, perm_tuple_from_contig(orig_scale_shape, axis, swizzle_axis)
+    return quant_tensor, scale
 
 
 def upcast_from_mxfp(tensor: torch.Tensor, scale: torch.Tensor, dtype: torch.dtype, axis: int,
