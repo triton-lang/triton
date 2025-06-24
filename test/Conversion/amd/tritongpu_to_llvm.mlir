@@ -36,7 +36,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 // -----
 
 // Smoke test to check that mfma 32 and dot operand layouts can work with small tensors, for example with shape 16x16
-#mfma = #ttg.amd_mfma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [2, 2], instrShape = [32, 32], isTransposed = true}>
+#mfma = #ttg.amd_mfma<{version = 2, warpsPerCTA = [2, 2], instrShape = [32, 32], isTransposed = true}>
 #dotop0 = #ttg.dot_op<{opIdx = 0, parent = #mfma, kWidth=4}>
 #dotop1 = #ttg.dot_op<{opIdx = 1, parent = #mfma, kWidth=4}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
@@ -377,6 +377,35 @@ module attributes {"ttg.target" = "hip:gfx942", "ttg.num-ctas" = 1 : i32, "ttg.n
     %2 = ttg.local_load %1 : !ttg.memdesc<64x16xf16, #shared, #smem, mutable, 64x64> -> tensor<64x16xf16, #blocked>
     // CHECK-COUNT-4: llvm.store {{.*}} : vector<1xf16>, !llvm.ptr<3>
     ttg.local_store %2, %1 : tensor<64x16xf16, #blocked> -> !ttg.memdesc<64x16xf16, #shared, #smem, mutable, 64x64>
+    tt.return
+  }
+}
+
+// -----
+
+// CHECK-LABEL: padded_shared_layout
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 8], warpsPerCTA = [2, 2], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
+#shared = #ttg.padded_shared<[128:+4, 256:+8] {order = [1, 0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.target" = "hip:gfx942", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  tt.func @padded_shared_layout(%arg0: tensor<64x64xf16, #blocked>) {
+    // CHECK-DAG: %[[CST0:.+]] = llvm.mlir.constant(0 : i32)
+    // CHECK-DAG: %[[CST2:.+]] = llvm.mlir.constant(2 : i32)
+    // CHECK-DAG: %[[CST3:.+]] = llvm.mlir.constant(3 : i32)
+    // CHECK-DAG: %[[CST7:.+]] = llvm.mlir.constant(7 : i32)
+    // CHECK-DAG: %[[CST8:.+]] = llvm.mlir.constant(8 : i32)
+
+    //      CHECK: %[[SHR0:.+]] = llvm.ashr %[[XOR:.+]], %[[CST7]] : i32
+    // CHECK-NEXT: %[[SHL0:.+]] = llvm.shl %[[SHR0]], %[[CST2]] : i32
+    // CHECK-NEXT: %[[ADD0:.+]] = llvm.add %[[SHL0]], %[[CST0]] : i32
+    // CHECK-NEXT: %[[SHR1:.+]] = llvm.ashr %[[XOR]], %[[CST8]] : i32
+    // CHECK-NEXT: %[[SHL1:.+]] = llvm.shl %[[SHR1]], %[[CST3]] : i32
+    // CHECK-NEXT: %[[ADD1:.+]] = llvm.add %[[ADD0]], %[[SHL1]] : i32
+    // CHECK-NEXT: %[[ADD2:.+]] = llvm.add %[[XOR]], %[[ADD1]] : i32
+    // CHECK-NEXT: llvm.getelementptr inbounds %{{.+}}[%[[ADD2]]]
+
+    // CHECK-COUNT-16: llvm.store {{.*}} : vector<1xf16>, !llvm.ptr<3>
+    %0 = ttg.local_alloc %arg0 : (tensor<64x64xf16, #blocked>) -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
     tt.return
   }
 }

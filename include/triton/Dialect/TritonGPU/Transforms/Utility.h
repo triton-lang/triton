@@ -208,7 +208,7 @@ bool isPureUnaryInlineAsm(Operation *op);
 int getNVIDIAComputeCapability(Operation *module);
 
 // Read the amd target from the module attributes
-StringRef getAMDArch(Operation *module);
+std::optional<StringRef> getAMDArch(Operation *module);
 
 std::optional<mlir::triton::gpu::SwizzledSharedEncodingAttr>
 getSharedEncIfAllUsersAreDotEnc(Value val, bool &incompatible);
@@ -271,6 +271,10 @@ void replaceUsesWithLocalLoad(
 // This is a helper useful to know if value is likely to come from shared memory
 // after converting loads into async loads.
 bool comesFromLoadOrBlockArg(Value v);
+
+// For structured control flow ops, returns the values associated with the
+// `resultIdx`th result.
+SmallVector<Value> getTiedArgs(Operation *op, int resultIdx);
 
 } // namespace mlir::triton
 

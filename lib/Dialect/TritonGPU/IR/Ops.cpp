@@ -721,8 +721,14 @@ LogicalResult MemDescSubviewOp::verify() {
   auto ctx = getContext();
   // The order gives us the honest-to-goodness layout rank
   auto srcAllocShape = srcTy.getAllocShape().take_back(getOrder(srcTy).size());
-  auto llInv =
-      triton::gpu::toLinearLayout(srcAllocShape, srcTy.getEncoding()).invert();
+  auto ll = triton::gpu::toLinearLayout(srcAllocShape, srcTy.getEncoding());
+  // NYI: We don't support non-trivial block dimension for now.
+  auto kBlock = mlir::StringAttr::get(getContext(), "block");
+  if (ll.getInDimSize(kBlock) != 1) {
+    return emitError("non-trivial block dimension not supported");
+  }
+
+  auto llInv = ll.invert();
   auto kDim = mlir::StringAttr::get(ctx, "dim" + llvm::Twine(dim));
   llvm::SmallVector<std::pair<mlir::StringAttr, int32_t>> namedOffsets;
   for (auto d : standardOutDimNames(ctx, srcTy.getRank())) {

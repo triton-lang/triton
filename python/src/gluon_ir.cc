@@ -130,7 +130,7 @@ py::object layoutToGluon(Attribute layout) {
     return layouts.DistributedLinearLayout(
         ll.getBases().lookup(kReg), ll.getBases().lookup(kLane),
         ll.getBases().lookup(kWarp), ll.getBases().lookup(kBlock),
-        ll.getOutDimSizes());
+        toStdVector(ArrayRef(llvm::to_vector(ll.getOutDimSizes()))));
   } else if (auto nvmma = dyn_cast<ttg::NVMMASharedEncodingAttr>(layout)) {
     auto ctaLayout = nvmma.getCTALayout();
     return layouts.NVMMASharedLayout(
@@ -279,6 +279,29 @@ void init_gluon_ir(py::module &&m) {
                  blockTy.getShape(), blockTy.getElementType(), layout);
              return triton::TensorDescType::get(ctx, blockTyLayout, isSigned);
            })
+      .def("create_async_copy_global_to_local",
+           [](GluonOpBuilder &self, Value smem, Value pointer, Value mask,
+              tt::CacheModifier cacheModifier,
+              tt::EvictionPolicy evictionPolicy, bool isVolatile) {
+             self.create<ttg::AsyncCopyGlobalToLocalOp>(
+                 pointer, smem, mask, /*other*/ Value{}, cacheModifier,
+                 evictionPolicy, isVolatile);
+           })
+      .def("create_async_copy_mbarrier_arrive",
+           [](GluonOpBuilder &self, Value mbarrier, bool incrementCount) {
+             self.create<ttng::AsyncCopyMbarrierArriveOp>(mbarrier,
+                                                          !incrementCount);
+           })
+      .def("create_async_commit_group",
+           [](GluonOpBuilder &self) {
+             ValueRange tokens;
+             self.create<ttg::AsyncCommitGroupOp>(tokens);
+           })
+      .def("create_async_wait_group",
+           [](GluonOpBuilder &self, int num) {
+             ValueRange tokens;
+             self.create<ttg::AsyncWaitOp>(tokens, num);
+           })
       .def("create_convert_layout",
            [](GluonOpBuilder &self, Type resultTy, Value value) -> Value {
              return self.create<ttg::ConvertLayoutOp>(resultTy, value);
@@ -323,7 +346,19 @@ void init_gluon_ir(py::module &&m) {
            [](GluonOpBuilder &self, Type resultType, Value src) -> Value {
              return self.create<ttg::MemDescReinterpretOp>(resultType, src);
            })
-
+      .def("create_split",
+           [](GluonOpBuilder &self, Value &a) -> py::tuple {
+             auto argTy = cast<RankedTensorType>(a.getType());
+             auto ctx = argTy.getContext();
+             auto enc = ttg::SliceEncodingAttr::get(
+                 ctx, argTy.getRank() - 1,
+                 cast<ttg::DistributedEncodingTrait>(argTy.getEncoding()));
+             auto resTy =
+                 RankedTensorType::get(ArrayRef(argTy.getShape()).drop_back(),
+                                       argTy.getElementType(), enc);
+             auto op = self.create<triton::SplitOp>(TypeRange{resTy, resTy}, a);
+             return py::make_tuple(op->getResult(0), op->getResult(1));
+           })
       .def("create_tmem_alloc",
            [](GluonOpBuilder &self, Type resultTy, Value value) -> Value {
              return self.create<ttng::TMEMAllocOp>(resultTy, value);

@@ -56,12 +56,16 @@ def _attn_fwd_inner(acc, l_i, m_i, q,  #
     # causal = False
     else:
         lo, hi = 0, N_CTX
-    offsetkv_y = offset_y + lo
+    offsetk_y = offset_y + lo
+    if dtype == tl.float8e5:
+        offsetv_y = offset_y * HEAD_DIM + lo
+    else:
+        offsetv_y = offset_y + lo
     # loop over k, v and update accumulator
     for start_n in tl.range(lo, hi, BLOCK_N, warp_specialize=warp_specialize):
         start_n = tl.multiple_of(start_n, BLOCK_N)
         # -- compute qk ----
-        k = desc_k.load([offsetkv_y, 0]).T
+        k = desc_k.load([offsetk_y, 0]).T
         qk = tl.dot(q, k)
         if STAGE == 2:
             mask = offs_m[:, None] >= (start_n + offs_n[None, :])
@@ -76,9 +80,20 @@ def _attn_fwd_inner(acc, l_i, m_i, q,  #
         alpha = tl.math.exp2(m_i - m_ij)
         l_ij = tl.sum(p, 1)
         # -- update output accumulator --
-        acc = acc * alpha[:, None]
+        if warp_specialize and BLOCK_M == 128 and HEAD_DIM == 128:
+            BM: tl.constexpr = acc.shape[0]
+            BN: tl.constexpr = acc.shape[1]
+            acc0, acc1 = acc.reshape([BM, 2, BN // 2]).permute(0, 2, 1).split()
+            acc0 = acc0 * alpha[:, None]
+            acc1 = acc1 * alpha[:, None]
+            acc = tl.join(acc0, acc1).permute(0, 2, 1).reshape([BM, BN])
+        else:
+            acc = acc * alpha[:, None]
         # prepare p and v for the dot
-        v = desc_v.load([offsetkv_y, 0])
+        if dtype == tl.float8e5:
+            v = desc_v.load([0, offsetv_y]).T
+        else:
+            v = desc_v.load([offsetv_y, 0])
         p = p.to(dtype)
         # note that this non transposed v for FP8 is only supported on Blackwell
         acc = tl.dot(p, v, acc)
@@ -86,7 +101,8 @@ def _attn_fwd_inner(acc, l_i, m_i, q,  #
         # place this at the end of the loop to reduce register pressure
         l_i = l_i * alpha + l_ij
         m_i = m_ij
-        offsetkv_y += BLOCK_N
+        offsetk_y += BLOCK_N
+        offsetv_y += BLOCK_N
     return acc, l_i, m_i
 
 
@@ -97,7 +113,10 @@ def _host_descriptor_pre_hook(nargs):
     if not isinstance(nargs["desc_q"], TensorDescriptor):
         return
     nargs["desc_q"].block_shape = [BLOCK_M, HEAD_DIM]
-    nargs["desc_v"].block_shape = [BLOCK_N, HEAD_DIM]
+    if nargs["FP8_OUTPUT"]:
+        nargs["desc_v"].block_shape = [HEAD_DIM, BLOCK_N]
+    else:
+        nargs["desc_v"].block_shape = [BLOCK_N, HEAD_DIM]
     nargs["desc_k"].block_shape = [BLOCK_N, HEAD_DIM]
     nargs["desc_o"].block_shape = [BLOCK_M, HEAD_DIM]
 
@@ -112,21 +131,22 @@ else:
 configs = [
     triton.Config({'BLOCK_M': BM, 'BLOCK_N': BN}, num_stages=s, num_warps=w, pre_hook=_host_descriptor_pre_hook) \
     for BM in [64, 128]\
-    for BN in [64, 128]\
+    for BN in [32, 64, 128]\
     for s in NUM_STAGES_OPTIONS \
     for w in [4, 8]\
 ]
 if "PYTEST_VERSION" in os.environ:
     # Use a single config in testing for reproducibility
     configs = [
-        triton.Config(dict(BLOCK_M=64, BLOCK_N=64), num_stages=2, num_warps=4, pre_hook=_host_descriptor_pre_hook),
+        triton.Config(dict(BLOCK_M=128, BLOCK_N=64), num_stages=2, num_warps=4, pre_hook=_host_descriptor_pre_hook),
     ]
 
 
 def keep(conf):
     BLOCK_M = conf.kwargs["BLOCK_M"]
     BLOCK_N = conf.kwargs["BLOCK_N"]
-    return not (torch.cuda.get_device_capability()[0] == 9 and BLOCK_M * BLOCK_N < 128 * 128 and conf.num_warps == 8)
+    return not (is_cuda() and torch.cuda.get_device_capability()[0] == 9 and BLOCK_M * BLOCK_N < 128 * 128
+                and conf.num_warps == 8)
 
 
 def prune_invalid_configs(configs, named_args, **kwargs):
@@ -166,8 +186,12 @@ def _attn_fwd(sm_scale, M,  #
     y_dim = Z * H * N_CTX
     desc_q = _maybe_make_tensor_desc(desc_q, shape=[y_dim, HEAD_DIM], strides=[HEAD_DIM, 1],
                                      block_shape=[BLOCK_M, HEAD_DIM])
-    desc_v = _maybe_make_tensor_desc(desc_v, shape=[y_dim, HEAD_DIM], strides=[HEAD_DIM, 1],
-                                     block_shape=[BLOCK_N, HEAD_DIM])
+    if FP8_OUTPUT:
+        desc_v = _maybe_make_tensor_desc(desc_v, shape=[HEAD_DIM, y_dim], strides=[N_CTX, 1],
+                                         block_shape=[HEAD_DIM, BLOCK_N])
+    else:
+        desc_v = _maybe_make_tensor_desc(desc_v, shape=[y_dim, HEAD_DIM], strides=[HEAD_DIM, 1],
+                                         block_shape=[BLOCK_N, HEAD_DIM])
     desc_k = _maybe_make_tensor_desc(desc_k, shape=[y_dim, HEAD_DIM], strides=[HEAD_DIM, 1],
                                      block_shape=[BLOCK_N, HEAD_DIM])
     desc_o = _maybe_make_tensor_desc(desc_o, shape=[y_dim, HEAD_DIM], strides=[HEAD_DIM, 1],
@@ -486,7 +510,12 @@ class _attention(torch.autograd.Function):
 
             dummy_block = [1, 1]
             desc_q = TensorDescriptor(q, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM_K, 1], block_shape=dummy_block)
-            desc_v = TensorDescriptor(v, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM_K, 1], block_shape=dummy_block)
+            if q.dtype == torch.float8_e5m2:
+                desc_v = TensorDescriptor(v, shape=[HEAD_DIM_K, y_dim], strides=[q.shape[2], 1],
+                                          block_shape=dummy_block)
+            else:
+                desc_v = TensorDescriptor(v, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM_K, 1],
+                                          block_shape=dummy_block)
             desc_k = TensorDescriptor(k, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM_K, 1], block_shape=dummy_block)
             desc_o = TensorDescriptor(o, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM_K, 1], block_shape=dummy_block)
         else:
@@ -505,7 +534,10 @@ class _attention(torch.autograd.Function):
 
         ctx.grid = grid
         if is_cuda() and warp_specialize:
-            extra_kern_args["maxnreg"] = 80
+            if HEAD_DIM_K == 128 and q.dtype == torch.float16:
+                extra_kern_args["maxnreg"] = 168
+            else:
+                extra_kern_args["maxnreg"] = 80
         _attn_fwd[grid](
             sm_scale, M,  #
             q.shape[0], q.shape[1],  #
@@ -568,6 +600,8 @@ class _attention(torch.autograd.Function):
 
 attention = _attention.apply
 
+TORCH_HAS_FP8 = hasattr(torch, 'float8_e5m2')
+
 
 @pytest.mark.parametrize("Z", [1, 4])
 @pytest.mark.parametrize("H", [2, 48])
@@ -575,41 +609,65 @@ attention = _attention.apply
 @pytest.mark.parametrize("HEAD_DIM", [64, 128])
 @pytest.mark.parametrize("causal", [True])  # FIXME: Non-causal tests do not pass at the moment.
 @pytest.mark.parametrize("warp_specialize", [False, True] if is_blackwell() else [False])
-def test_op(Z, H, N_CTX, HEAD_DIM, causal, warp_specialize, dtype=torch.float16):
+@pytest.mark.parametrize("mode", ["fwd", "bwd"])
+@pytest.mark.parametrize("provider", ["triton-fp16"] + (["triton-fp8"] if TORCH_HAS_FP8 else []))
+def test_op(Z, H, N_CTX, HEAD_DIM, causal, warp_specialize, mode, provider, dtype=torch.float16):
+    if mode == "fwd" and "fp16" in provider:
+        pytest.skip("Avoid running the forward computation twice.")
+    if mode == "bwd" and "fp8" in provider:
+        pytest.skip("Backward pass with FP8 is not supported.")
     torch.manual_seed(20)
     q = (torch.empty((Z, H, N_CTX, HEAD_DIM), dtype=dtype, device=DEVICE).normal_(mean=0.0, std=0.5).requires_grad_())
     k = (torch.empty((Z, H, N_CTX, HEAD_DIM), dtype=dtype, device=DEVICE).normal_(mean=0.0, std=0.5).requires_grad_())
     v = (torch.empty((Z, H, N_CTX, HEAD_DIM), dtype=dtype, device=DEVICE).normal_(mean=0.0, std=0.5).requires_grad_())
     sm_scale = 0.5
-    dout = torch.randn_like(q)
     # reference implementation
+    ref_dtype = dtype
+    if mode == "fwd" and "fp8" in provider:
+        ref_dtype = torch.float32
+    q = q.to(ref_dtype)
+    k = k.to(ref_dtype)
+    v = v.to(ref_dtype)
     M = torch.tril(torch.ones((N_CTX, N_CTX), device=DEVICE))
     p = torch.matmul(q, k.transpose(2, 3)) * sm_scale
     if causal:
         p[:, :, M == 0] = float("-inf")
-    p = torch.softmax(p.float(), dim=-1).half()
+    p = torch.softmax(p.float(), dim=-1)
+    p = p.to(ref_dtype)
     # p = torch.exp(p)
-    ref_out = torch.matmul(p, v)
-    ref_out.backward(dout)
-    ref_dv, v.grad = v.grad.clone(), None
-    ref_dk, k.grad = k.grad.clone(), None
-    ref_dq, q.grad = q.grad.clone(), None
+    ref_out = torch.matmul(p, v).half()
+    if mode == "bwd":
+        dout = torch.randn_like(q)
+        ref_out.backward(dout)
+        ref_dv, v.grad = v.grad.clone(), None
+        ref_dk, k.grad = k.grad.clone(), None
+        ref_dq, q.grad = q.grad.clone(), None
     # triton implementation
+    if mode == "fwd" and "fp8" in provider:
+        q = q.to(torch.float8_e5m2)
+        k = k.to(torch.float8_e5m2)
+        v = v.permute(0, 1, 3, 2).contiguous()
+        v = v.permute(0, 1, 3, 2)
+        v = v.to(torch.float8_e5m2)
     tri_out = attention(q, k, v, causal, sm_scale, warp_specialize).half()
+    if mode == "fwd":
+        atol = 3 if "fp8" in provider else 1e-2
+        torch.testing.assert_close(tri_out, ref_out, atol=atol, rtol=0)
+        return
     tri_out.backward(dout)
     tri_dv, v.grad = v.grad.clone(), None
     tri_dk, k.grad = k.grad.clone(), None
     tri_dq, q.grad = q.grad.clone(), None
     # compare
-    torch.testing.assert_close(ref_out, tri_out, atol=1e-2, rtol=0)
+    torch.testing.assert_close(tri_out, ref_out, atol=1e-2, rtol=0)
     rtol = 0.0
     # Relative tolerance workaround for known hardware limitation of CDNA2 GPU.
     # For details see https://pytorch.org/docs/stable/notes/numerical_accuracy.html#reduced-precision-fp16-and-bf16-gemms-and-convolutions-on-amd-instinct-mi200-devices
     if torch.version.hip is not None and triton.runtime.driver.active.get_current_target().arch == "gfx90a":
         rtol = 1e-2
-    torch.testing.assert_close(ref_dv, tri_dv, atol=1e-2, rtol=rtol)
-    torch.testing.assert_close(ref_dk, tri_dk, atol=1e-2, rtol=rtol)
-    torch.testing.assert_close(ref_dq, tri_dq, atol=1e-2, rtol=rtol)
+    torch.testing.assert_close(tri_dv, ref_dv, atol=1e-2, rtol=rtol)
+    torch.testing.assert_close(tri_dk, ref_dk, atol=1e-2, rtol=rtol)
+    torch.testing.assert_close(tri_dq, ref_dq, atol=1e-2, rtol=rtol)
 
 
 try:
@@ -620,36 +678,35 @@ except BaseException:
     HAS_FLASH = False
 
 TORCH_HAS_FP8 = hasattr(torch, 'float8_e5m2')
-BATCH, N_HEADS, HEAD_DIM = 4, 32, 64
+BATCH, N_HEADS = 4, 32
 # vary seq length for fixed head and batch=4
 configs = []
-for mode in ["fwd", "bwd"]:
-    for causal in [True, False]:
-        for warp_specialize in [False, True] if is_blackwell() else [False]:
-            if mode == "bwd" and not causal:
-                continue
-            configs.append(
-                triton.testing.Benchmark(
-                    x_names=["N_CTX"],
-                    x_vals=[2**i for i in range(10, 15)],
-                    line_arg="provider",
-                    line_vals=["triton-fp16"] + (["triton-fp8"] if TORCH_HAS_FP8 else []) +
-                    (["flash"] if HAS_FLASH else []),
-                    line_names=["Triton [FP16]"] + (["Triton [FP8]"] if TORCH_HAS_FP8 else []) +
-                    (["Flash-2"] if HAS_FLASH else []),
-                    styles=[("red", "-"), ("blue", "-"), ("green", "-")],
-                    ylabel="TFLOPS",
-                    plot_name=
-                    f"fused-attention-batch{BATCH}-head{N_HEADS}-d{HEAD_DIM}-{mode}-causal={causal}-warp_specialize={warp_specialize}",
-                    args={
-                        "H": N_HEADS,
-                        "BATCH": BATCH,
-                        "HEAD_DIM": HEAD_DIM,
-                        "mode": mode,
-                        "causal": causal,
-                        "warp_specialize": warp_specialize,
-                    },
-                ))
+for HEAD_DIM in [64, 128]:
+    for mode in ["fwd", "bwd"]:
+        for causal in [True, False]:
+            for warp_specialize in [False, True] if is_blackwell() else [False]:
+                configs.append(
+                    triton.testing.Benchmark(
+                        x_names=["N_CTX"],
+                        x_vals=[2**i for i in range(10, 15)],
+                        line_arg="provider",
+                        line_vals=["triton-fp16"] + (["triton-fp8"] if TORCH_HAS_FP8 else []) +
+                        (["flash"] if HAS_FLASH else []),
+                        line_names=["Triton [FP16]"] + (["Triton [FP8]"] if TORCH_HAS_FP8 else []) +
+                        (["Flash-2"] if HAS_FLASH else []),
+                        styles=[("red", "-"), ("blue", "-"), ("green", "-")],
+                        ylabel="TFLOPS",
+                        plot_name=
+                        f"fused-attention-batch{BATCH}-head{N_HEADS}-d{HEAD_DIM}-{mode}-causal={causal}-warp_specialize={warp_specialize}",
+                        args={
+                            "H": N_HEADS,
+                            "BATCH": BATCH,
+                            "HEAD_DIM": HEAD_DIM,
+                            "mode": mode,
+                            "causal": causal,
+                            "warp_specialize": warp_specialize,
+                        },
+                    ))
 
 
 @triton.testing.perf_report(configs)
