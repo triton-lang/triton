@@ -84,7 +84,7 @@ void emitSynclog(IRRewriter &rewriter, Operation *op,
 
   // Remove invalid characters from the format string.
   formatStr.erase(std::remove_if(formatStr.begin(), formatStr.end(),
-                                 [](char c) { return c == '\t'; }),
+                                 [](char c) { return c == '\t' || c == '\n'; }),
                   formatStr.end());
 
   llvm::SmallVector<Value> args{time64,      threadIdx_x, threadIdx_y,
