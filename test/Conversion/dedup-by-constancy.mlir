@@ -2,13 +2,10 @@
 
 // CHECK-LABEL: dedup_by_constancy_full
 // CHECK-COUNT-2: llvm.add
-// CHECK-NOT: llvm.add
-// CHECK: llvm.icmp "slt"
-// CHECK-NOT: llvm.icmp "slt"
-// CHECK: llvm.sdiv
-// CHECK-NOT: llvm.sdiv
-// CHECK: llvm.getelementptr %arg0[[[REGISTER:%[0-9]+]]]
-// CHECK-COUNT-7: llvm.getelementptr %arg0[[[REGISTER]]]
+// CHECK-COUNT-2: llvm.add
+// CHECK-NEXT: llvm.icmp "slt"
+// CHECK-NEXT: llvm.sdiv
+// CHECK-COUNT-8: llvm.getelementptr %arg0[[[REGISTER:%[0-9]+]]]
 // CHECK-NOT: llvm.getelementptr %arg0[[[REGISTER]]]
 #blocked = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
 module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
@@ -36,18 +33,13 @@ module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-
 // -----
 
 // CHECK-LABEL: dedup_by_constancy_partial
+// CHECK-COUNT-2: llvm.add
 // CHECK-COUNT-4: llvm.add
-// CHECK-NOT: llvm.add
-// CHECK: llvm.icmp "slt"
-// CHECK-NOT: llvm.icmp "slt"
-// CHECK-COUNT-2: llvm.sdiv
-// CHECK-NOT: llvm.sdiv
-// CHECK: llvm.getelementptr %arg0[[[REGISTER1:%[0-9]+]]]
-// CHECK-COUNT-3: llvm.getelementptr %arg0[[[REGISTER1]]]
-// CHECK-NOT: llvm.getelementptr %arg0[[[REGISTER1]]]
-// CHECK: llvm.getelementptr %arg0[[[REGISTER2:%[0-9]+]]]
-// CHECK-COUNT-3: llvm.getelementptr %arg0[[[REGISTER2]]]
-// CHECK-NOT: llvm.getelementptr %arg0[[[REGISTER2]]]
+// CHECK-NEXT: llvm.icmp "slt"
+// CHECK-NEXT: llvm.sdiv
+// CHECK-NEXT: llvm.sdiv
+// CHECK-COUNT-8: llvm.getelementptr %arg0[[[REGISTER:%[0-9]+]]]
+// CHECK-NOT: llvm.getelementptr %arg0[[[REGISTER]]]
 #blocked = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
 module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @dedup_by_constancy_partial(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg2: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}) attributes {noinline = false} {
