@@ -162,13 +162,13 @@ Benchmarking naive: ...
 Benchmarking naive: done
 Benchmarking persistent: ...
 Benchmarking persistent: done
-168.249 16337.599 ROOT
-├─ 174.911 3928.826 cublas [M=8192, N=8192, K=512]
-│  └─ nan 3928.826 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
-├─ 165.223 4159.208 matmul_kernel [M=8192, N=8192, K=512]
-├─ 159.271 4314.622 matmul_kernel_persistent [M=8192, N=8192, K=512]
-└─ 174.639 3934.943 torch [M=8192, N=8192, K=512]
-   └─ nan 3934.943 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
+168.059 16355.994 ROOT
+├─ 174.717 3933.199 cublas [M=8192, N=8192, K=512]
+│  └─ nan 3933.199 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
+├─ 165.034 4163.967 matmul_kernel [M=8192, N=8192, K=512]
+├─ 159.134 4318.349 matmul_kernel_persistent [M=8192, N=8192, K=512]
+└─ 174.394 3940.480 torch [M=8192, N=8192, K=512]
+   └─ nan 3940.480 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
 </pre></div>
 </div>
 <div class="line-block">
@@ -202,8 +202,12 @@ Benchmarking persistent: done
     <span class="k">return</span> <span class="n">is_cuda</span><span class="p">()</span> <span class="ow">and</span> <span class="n">torch</span><span class="o">.</span><span class="n">cuda</span><span class="o">.</span><span class="n">get_device_capability</span><span class="p">()[</span><span class="mi">0</span><span class="p">]</span> <span class="o">&gt;=</span> <span class="mi">9</span>
 
 
+<span class="k">def</span><span class="w"> </span><span class="nf">is_hopper</span><span class="p">():</span>
+    <span class="k">return</span> <span class="n">torch</span><span class="o">.</span><span class="n">cuda</span><span class="o">.</span><span class="n">get_device_capability</span><span class="p">()[</span><span class="mi">0</span><span class="p">]</span> <span class="o">==</span> <span class="mi">9</span>
+
+
 <span class="k">def</span><span class="w"> </span><span class="nf">supports_ws</span><span class="p">():</span>
-    <span class="k">return</span> <span class="n">is_cuda</span><span class="p">()</span> <span class="ow">and</span> <span class="n">torch</span><span class="o">.</span><span class="n">cuda</span><span class="o">.</span><span class="n">get_device_capability</span><span class="p">()[</span><span class="mi">0</span><span class="p">]</span> <span class="o">&gt;=</span> <span class="mi">10</span>
+    <span class="k">return</span> <span class="n">is_cuda</span><span class="p">()</span> <span class="ow">and</span> <span class="n">torch</span><span class="o">.</span><span class="n">cuda</span><span class="o">.</span><span class="n">get_device_capability</span><span class="p">()[</span><span class="mi">0</span><span class="p">]</span> <span class="o">&gt;=</span> <span class="mi">9</span>
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">_matmul_launch_metadata</span><span class="p">(</span><span class="n">grid</span><span class="p">,</span> <span class="n">kernel</span><span class="p">,</span> <span class="n">args</span><span class="p">):</span>
@@ -620,21 +624,31 @@ Benchmarking persistent: done
     <span class="k">return</span> <span class="n">c</span>
 
 
-<span class="nd">@triton</span><span class="o">.</span><span class="n">autotune</span><span class="p">(</span>
-    <span class="n">configs</span><span class="o">=</span><span class="n">matmul_tma_persistent_get_configs</span><span class="p">(),</span>
-    <span class="n">key</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;M&quot;</span><span class="p">,</span> <span class="s2">&quot;N&quot;</span><span class="p">,</span> <span class="s2">&quot;K&quot;</span><span class="p">,</span> <span class="s2">&quot;WARP_SPECIALIZE&quot;</span><span class="p">],</span>
-<span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">prune_invalid_configs</span><span class="p">(</span><span class="n">configs</span><span class="p">,</span> <span class="n">named_args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+    <span class="n">FLATTEN</span> <span class="o">=</span> <span class="n">kwargs</span><span class="p">[</span><span class="s2">&quot;FLATTEN&quot;</span><span class="p">]</span>
+    <span class="c1"># Filter out configs where EPILOGUE_SUBTILE is true and HOPPER is true</span>
+    <span class="k">return</span> <span class="p">[</span><span class="n">conf</span> <span class="k">for</span> <span class="n">conf</span> <span class="ow">in</span> <span class="n">configs</span> <span class="k">if</span> <span class="ow">not</span> <span class="p">(</span><span class="n">conf</span><span class="o">.</span><span class="n">kwargs</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;EPILOGUE_SUBTILE&quot;</span><span class="p">,</span> <span class="kc">True</span><span class="p">)</span> <span class="ow">and</span> <span class="n">FLATTEN</span> <span class="ow">is</span> <span class="kc">False</span><span class="p">)]</span>
+
+
+<span class="nd">@triton</span><span class="o">.</span><span class="n">autotune</span><span class="p">(</span><span class="n">configs</span><span class="o">=</span><span class="n">matmul_tma_persistent_get_configs</span><span class="p">(),</span> <span class="n">key</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;M&quot;</span><span class="p">,</span> <span class="s2">&quot;N&quot;</span><span class="p">,</span> <span class="s2">&quot;K&quot;</span><span class="p">,</span> <span class="s2">&quot;WARP_SPECIALIZE&quot;</span><span class="p">,</span> <span class="s2">&quot;FLATTEN&quot;</span><span class="p">],</span>
+                 <span class="n">prune_configs_by</span><span class="o">=</span><span class="p">{</span><span class="s1">&#39;early_config_prune&#39;</span><span class="p">:</span> <span class="n">prune_invalid_configs</span><span class="p">})</span>
 <span class="nd">@triton</span><span class="o">.</span><span class="n">jit</span><span class="p">(</span><span class="n">launch_metadata</span><span class="o">=</span><span class="n">_matmul_launch_metadata</span><span class="p">)</span>
-<span class="k">def</span><span class="w"> </span><span class="nf">matmul_kernel_descriptor_persistent</span><span class="p">(</span><span class="n">a_ptr</span><span class="p">,</span> <span class="n">b_ptr</span><span class="p">,</span> <span class="n">c_ptr</span><span class="p">,</span>  <span class="c1">#</span>
-                                        <span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">K</span><span class="p">,</span>  <span class="c1">#</span>
-                                        <span class="n">BLOCK_SIZE_M</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>  <span class="c1">#</span>
-                                        <span class="n">BLOCK_SIZE_N</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>  <span class="c1">#</span>
-                                        <span class="n">BLOCK_SIZE_K</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>  <span class="c1">#</span>
-                                        <span class="n">GROUP_SIZE_M</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>  <span class="c1">#</span>
-                                        <span class="n">EPILOGUE_SUBTILE</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>  <span class="c1">#</span>
-                                        <span class="n">NUM_SMS</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>  <span class="c1">#</span>
-                                        <span class="n">WARP_SPECIALIZE</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>  <span class="c1">#</span>
-                                        <span class="p">):</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">matmul_kernel_descriptor_persistent</span><span class="p">(</span>
+    <span class="n">a_ptr</span><span class="p">,</span>
+    <span class="n">b_ptr</span><span class="p">,</span>
+    <span class="n">c_ptr</span><span class="p">,</span>  <span class="c1">#</span>
+    <span class="n">M</span><span class="p">,</span>
+    <span class="n">N</span><span class="p">,</span>
+    <span class="n">K</span><span class="p">,</span>  <span class="c1">#</span>
+    <span class="n">BLOCK_SIZE_M</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>  <span class="c1">#</span>
+    <span class="n">BLOCK_SIZE_N</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>  <span class="c1">#</span>
+    <span class="n">BLOCK_SIZE_K</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>  <span class="c1">#</span>
+    <span class="n">GROUP_SIZE_M</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>  <span class="c1">#</span>
+    <span class="n">EPILOGUE_SUBTILE</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>  <span class="c1">#</span>
+    <span class="n">NUM_SMS</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>  <span class="c1">#</span>
+    <span class="n">WARP_SPECIALIZE</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>  <span class="c1">#</span>
+    <span class="n">FLATTEN</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
+<span class="p">):</span>
     <span class="c1"># Matmul using TMA and device-side descriptor creation</span>
     <span class="n">dtype</span> <span class="o">=</span> <span class="n">c_ptr</span><span class="o">.</span><span class="n">dtype</span><span class="o">.</span><span class="n">element_ty</span>
     <span class="n">start_pid</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">program_id</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
@@ -667,7 +681,7 @@ Benchmarking persistent: done
     <span class="n">tile_id_c</span> <span class="o">=</span> <span class="n">start_pid</span> <span class="o">-</span> <span class="n">NUM_SMS</span>
     <span class="n">num_pid_in_group</span> <span class="o">=</span> <span class="n">GROUP_SIZE_M</span> <span class="o">*</span> <span class="n">num_pid_n</span>
 
-    <span class="k">for</span> <span class="n">tile_id</span> <span class="ow">in</span> <span class="n">tl</span><span class="o">.</span><span class="n">range</span><span class="p">(</span><span class="n">start_pid</span><span class="p">,</span> <span class="n">num_tiles</span><span class="p">,</span> <span class="n">NUM_SMS</span><span class="p">,</span> <span class="n">flatten</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">warp_specialize</span><span class="o">=</span><span class="n">WARP_SPECIALIZE</span><span class="p">):</span>
+    <span class="k">for</span> <span class="n">tile_id</span> <span class="ow">in</span> <span class="n">tl</span><span class="o">.</span><span class="n">range</span><span class="p">(</span><span class="n">start_pid</span><span class="p">,</span> <span class="n">num_tiles</span><span class="p">,</span> <span class="n">NUM_SMS</span><span class="p">,</span> <span class="n">flatten</span><span class="o">=</span><span class="n">FLATTEN</span><span class="p">,</span> <span class="n">warp_specialize</span><span class="o">=</span><span class="n">WARP_SPECIALIZE</span><span class="p">):</span>
         <span class="n">pid_m</span><span class="p">,</span> <span class="n">pid_n</span> <span class="o">=</span> <span class="n">_compute_pid</span><span class="p">(</span><span class="n">tile_id</span><span class="p">,</span> <span class="n">num_pid_in_group</span><span class="p">,</span> <span class="n">num_pid_m</span><span class="p">,</span> <span class="n">GROUP_SIZE_M</span><span class="p">,</span> <span class="n">NUM_SMS</span><span class="p">)</span>
         <span class="n">offs_am</span> <span class="o">=</span> <span class="n">pid_m</span> <span class="o">*</span> <span class="n">BLOCK_SIZE_M</span>
         <span class="n">offs_bn</span> <span class="o">=</span> <span class="n">pid_n</span> <span class="o">*</span> <span class="n">BLOCK_SIZE_N</span>
@@ -715,12 +729,19 @@ Benchmarking persistent: done
 
     <span class="n">triton</span><span class="o">.</span><span class="n">set_allocator</span><span class="p">(</span><span class="n">alloc_fn</span><span class="p">)</span>
 
+    <span class="c1"># Hopper warpspec doesn&#39;t work with flatten</span>
+    <span class="n">flatten</span> <span class="o">=</span> <span class="kc">False</span> <span class="k">if</span> <span class="p">(</span><span class="n">warp_specialize</span> <span class="ow">and</span> <span class="n">is_hopper</span><span class="p">())</span> <span class="k">else</span> <span class="kc">True</span>
     <span class="n">grid</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">META</span><span class="p">:</span> <span class="p">(</span><span class="nb">min</span><span class="p">(</span><span class="n">NUM_SMS</span><span class="p">,</span> <span class="n">triton</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">META</span><span class="p">[</span><span class="s2">&quot;BLOCK_SIZE_M&quot;</span><span class="p">])</span> <span class="o">*</span> <span class="n">triton</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="n">META</span><span class="p">[</span><span class="s2">&quot;BLOCK_SIZE_N&quot;</span><span class="p">])),</span> <span class="p">)</span>
     <span class="n">matmul_kernel_descriptor_persistent</span><span class="p">[</span><span class="n">grid</span><span class="p">](</span>
-        <span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="n">c</span><span class="p">,</span>  <span class="c1">#</span>
-        <span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">K</span><span class="p">,</span>  <span class="c1">#</span>
+        <span class="n">a</span><span class="p">,</span>
+        <span class="n">b</span><span class="p">,</span>
+        <span class="n">c</span><span class="p">,</span>  <span class="c1">#</span>
+        <span class="n">M</span><span class="p">,</span>
+        <span class="n">N</span><span class="p">,</span>
+        <span class="n">K</span><span class="p">,</span>  <span class="c1">#</span>
         <span class="n">NUM_SMS</span><span class="o">=</span><span class="n">NUM_SMS</span><span class="p">,</span>  <span class="c1">#</span>
         <span class="n">WARP_SPECIALIZE</span><span class="o">=</span><span class="n">warp_specialize</span><span class="p">,</span>  <span class="c1">#</span>
+        <span class="n">FLATTEN</span><span class="o">=</span><span class="n">flatten</span><span class="p">,</span>
     <span class="p">)</span>
     <span class="k">return</span> <span class="n">c</span>
 
@@ -787,7 +808,8 @@ Benchmarking persistent: done
     <span class="n">warp_specialize</span> <span class="o">=</span> <span class="p">[</span><span class="kc">False</span><span class="p">,</span> <span class="kc">True</span><span class="p">]</span> <span class="k">if</span> <span class="n">HAS_WARP_SPECIALIZE</span> <span class="k">else</span> <span class="p">[</span><span class="kc">False</span><span class="p">]</span>
     <span class="k">for</span> <span class="n">ws</span> <span class="ow">in</span> <span class="n">warp_specialize</span><span class="p">:</span>
         <span class="n">ws_str</span> <span class="o">=</span> <span class="s2">&quot;_ws&quot;</span> <span class="k">if</span> <span class="n">ws</span> <span class="k">else</span> <span class="s2">&quot;&quot;</span>
-        <span class="k">if</span> <span class="n">HAS_HOST_TENSOR_DESC</span><span class="p">:</span>
+        <span class="c1"># disable on-host warpspec on Hopper</span>
+        <span class="k">if</span> <span class="n">HAS_HOST_TENSOR_DESC</span> <span class="ow">and</span> <span class="ow">not</span> <span class="p">(</span><span class="n">is_hopper</span><span class="p">()</span> <span class="ow">and</span> <span class="n">ws</span><span class="p">):</span>
             <span class="n">bench_fn</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;tma_persistent</span><span class="si">{</span><span class="n">ws_str</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">reps</span><span class="p">,</span> <span class="n">warmup_reps</span><span class="p">,</span> <span class="k">lambda</span> <span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">:</span> <span class="n">matmul_tma_persistent</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="n">ws</span><span class="p">),</span> <span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">)</span>
             <span class="n">bench_fn</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;tma</span><span class="si">{</span><span class="n">ws_str</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">reps</span><span class="p">,</span> <span class="n">warmup_reps</span><span class="p">,</span> <span class="k">lambda</span> <span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">:</span> <span class="n">matmul_tma</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="n">ws</span><span class="p">),</span> <span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">)</span>
         <span class="k">if</span> <span class="n">HAS_TENSOR_DESC</span><span class="p">:</span>
@@ -826,7 +848,9 @@ Benchmarking persistent: done
 
     <span class="k">for</span> <span class="p">(</span><span class="n">kernel</span><span class="p">,</span> <span class="n">label</span><span class="p">,</span> <span class="n">enabled</span><span class="p">),</span> <span class="n">warp_specialize</span> <span class="ow">in</span> <span class="n">itertools</span><span class="o">.</span><span class="n">product</span><span class="p">(</span><span class="n">kernels</span><span class="p">,</span> <span class="n">warp_specialize</span><span class="p">):</span>
         <span class="n">label</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">label</span><span class="si">}</span><span class="s2"> (warp_specialize=</span><span class="si">{</span><span class="n">warp_specialize</span><span class="si">}</span><span class="s2">)&quot;</span>
-        <span class="n">enabled</span> <span class="o">=</span> <span class="n">enabled</span> <span class="ow">and</span> <span class="p">(</span><span class="ow">not</span> <span class="n">warp_specialize</span> <span class="ow">or</span> <span class="n">HAS_TENSOR_DESC</span><span class="p">)</span>
+        <span class="c1"># skip if hopper and warp_specialize and not on-device</span>
+        <span class="n">skipped</span> <span class="o">=</span> <span class="n">is_hopper</span><span class="p">()</span> <span class="ow">and</span> <span class="n">warp_specialize</span> <span class="ow">and</span> <span class="n">kernel</span> <span class="o">!=</span> <span class="n">matmul_descriptor_persistent</span>
+        <span class="n">enabled</span> <span class="o">=</span> <span class="n">enabled</span> <span class="ow">and</span> <span class="p">(</span><span class="ow">not</span> <span class="n">warp_specialize</span> <span class="ow">or</span> <span class="n">HAS_TENSOR_DESC</span><span class="p">)</span> <span class="ow">and</span> <span class="p">(</span><span class="ow">not</span> <span class="n">skipped</span><span class="p">)</span>
         <span class="n">run_test</span><span class="p">(</span><span class="n">naive_result</span><span class="p">,</span> <span class="k">lambda</span> <span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">:</span> <span class="n">kernel</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="n">warp_specialize</span><span class="p">),</span> <span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="n">label</span><span class="p">,</span> <span class="n">enabled</span><span class="p">)</span>
     <span class="nb">print</span><span class="p">()</span>
 
@@ -873,7 +897,7 @@ Benchmarking persistent: done
         <span class="n">show_profile</span><span class="p">(</span><span class="n">args</span><span class="o">.</span><span class="n">prec</span><span class="p">,</span> <span class="s2">&quot;matmul&quot;</span><span class="p">)</span>
 </pre></div>
 </div>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (1 minutes 8.993 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (1 minutes 9.137 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-09-persistent-matmul-py">
 <div class="sphx-glr-download sphx-glr-download-jupyter docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/b5537c431cd73b8ee3c32cdf90c58104/09-persistent-matmul.ipynb"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Jupyter</span> <span class="pre">notebook:</span> <span class="pre">09-persistent-matmul.ipynb</span></code></a></p>
