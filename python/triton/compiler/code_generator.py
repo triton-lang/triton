@@ -291,6 +291,12 @@ class BoundJITMethod:
     __func__: JITFunction
 
 
+@dataclass
+class ValueDest:
+    ctx: Union[ast.Store, ast.Load]
+    value: base_value
+
+
 def _wrap_mutable_argument(arg, node):
     if isinstance(arg, base_value) and getattr(arg.type, "__triton_mutable__", False):
         setattr(arg, "__ast__", node)
@@ -641,20 +647,28 @@ class CodeGenerator(ast.NodeVisitor):
         # default: call visit_Assign
         return self.visit_Assign(node)
 
+    @staticmethod
+    def create_writeback(value) -> ValueDest:
+        dest = ValueDest(ctx=ast.Store(), value=None)
+        _wrap_mutable_argument(value, dest)
+        return dest
+
     def assignTarget(self, target, value):
         assert isinstance(target.ctx, ast.Store)
         if isinstance(target, ast.Subscript):
             return self.visit_Subscript_Store(target, value)
-        if isinstance(target, ast.Tuple):
+        elif isinstance(target, ast.Tuple):
             for i, target in enumerate(target.elts):
                 self.assignTarget(target, value.values[i])
-            return
-        if isinstance(target, ast.Attribute):
+        elif isinstance(target, ast.Attribute):
             base = self.visit(target.value)
             setattr(base, target.attr, value)
-            return
-        assert isinstance(target, ast.Name), f"cannot assign to target: {ast.dump(target)}"
-        self.set_value(self.visit(target), value)
+        elif isinstance(target, ast.Name):
+            self.set_value(self.visit(target), value)
+        elif isinstance(target, ValueDest):
+            target.value = value
+        else:
+            raise ValueError(f"Cannot assign to target {ast.dump(target)}")
 
     def visit_Assign(self, node):
         # construct values to assign
@@ -1265,7 +1279,6 @@ class CodeGenerator(ast.NodeVisitor):
                 continue
             if isinstance(target, ast.keyword):
                 target = target.value
-            target = copy.deepcopy(target)
             target.ctx = ast.Store()
             self.assignTarget(target, value)
         if callee_ret_type == language.void:

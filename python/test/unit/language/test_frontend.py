@@ -1,6 +1,6 @@
 import triton
 import triton.language as tl
-from triton._filecheck import filecheck_test, run_filecheck_test
+from triton._filecheck import filecheck_test, run_filecheck_test, run_parser
 
 # ===-----------------------------------------------------------------------===#
 # Unit Tests
@@ -12,7 +12,7 @@ def anchor(v):
     pass
 
 
-@tl.core._aggregate(frozen=True)
+@tl.core._aggregate
 class Pair:
     first: tl.tensor
     second: tl.tensor
@@ -31,6 +31,14 @@ class Pair:
     @triton.jit
     def unpack(self):
         return self.get_first(), self.get_second()
+
+    @triton.jit
+    def mutate_first(self, value):
+        self.first = value
+
+    @triton.jit
+    def mutate_second(self, value):
+        self.second = value
 
 
 @filecheck_test
@@ -69,16 +77,16 @@ def test_jit_method():
     # CHECK: %c11_i32 = arith.constant 11 : i32
     # CHECK: [[RANGE:%.*]] = tt.make_range {end = 4 : i32, start = 0 : i32}
     scalar = 11
-    # CHECK: [[V:%.*]]:2 = tt.call @{{.*}}unpack{{.*}}([[RANGE]], %c11_i32)
+    # CHECK: [[V:%.*]]:4 = tt.call @{{.*}}unpack{{.*}}([[RANGE]], %c11_i32)
     pair = Pair(tl.arange(0, 4), scalar)
     a, b = pair.unpack()
-    # CHECK: call @{{.*}}anchor{{.*}}([[V]]#0)
+    # CHECK: call @{{.*}}anchor{{.*}}([[V]]#2)
     anchor(a)
-    # CHECK: call @{{.*}}anchor{{.*}}([[V]]#1)
+    # CHECK: call @{{.*}}anchor{{.*}}([[V]]#3)
     anchor(b)
 
 
-@tl.core._aggregate(frozen=True)
+@tl.core._aggregate
 class TypeWithBuiltinInitializer:
     value: tl.tensor
 
@@ -181,7 +189,7 @@ def test_call_in_loop():
         acc = accumulate(acc, i)
 
 
-@tl.core._aggregate(frozen=True)
+@tl.core._aggregate
 class FunctionParent:
 
     @triton.jit
@@ -204,7 +212,7 @@ def test_function_name_mangling():
     FunctionParent.function_with_name()
 
 
-@tl.core._aggregate(frozen=True)
+@tl.core._aggregate
 class AggregateWithConstexpr:
     a: tl.tensor
     b: tl.constexpr
@@ -220,7 +228,6 @@ class AggregateWithConstexpr:
     @triton.jit
     def modify(self, a):
         self.a = a
-        return self
 
 
 @triton.jit
@@ -260,8 +267,10 @@ def test_constexpr_function_from_python():
 
 
 @triton.jit
-def swap(pair):
-    return pair.second, pair.first
+def swap(p):
+    tmp = p.first
+    p.mutate_first(p.second)
+    p.mutate_second(tmp)
 
 
 @filecheck_test
@@ -270,7 +279,7 @@ def test_assign_tuple_attrs():
     # CHECK-LABEL: test_assign_tuple_attrs
     p = Pair(tl.arange(0, 4), tl.arange(4, 8))
     # CHECK: [[P:%.*]]:2 = tt.call @{{.*}}swap
-    p.first, p.second = swap(p)
+    swap(p)
     # CHECK: call @{{.*}}anchor{{.*}}([[P]]#0)
     # CHECK: call @{{.*}}anchor{{.*}}([[P]]#1)
     anchor(p.first)
@@ -290,9 +299,9 @@ def test_reassign_aggregate_with_constexpr():
     # CHECK:   [[VALUE:%.*]] = tt.call {{.*}}modify
     # CHECK:   yield [[VALUE]]
     if var == 0:
-        agg = agg.modify(tl.arange(4, 8))
+        agg.modify(tl.arange(4, 8))
     else:
-        agg = agg.modify(tl.arange(8, 12))
+        agg.modify(tl.arange(8, 12))
     # CHECK: call @{{.*}}anchor{{.*}}([[AGG]])
     anchor(agg)
 
@@ -404,31 +413,6 @@ def test_late_bound_class_reference():
     run_filecheck_test(kernel)
 
 
-@tl.core._aggregate
-class MutablePair:
-    first: tl.tensor
-    second: tl.tensor
-
-    def __init__(self, first, second):
-        self.first = first
-        self.second = second
-
-    @triton.jit
-    def mutate_first(self, value):
-        self.first = value
-
-    @triton.jit
-    def mutate_second(self, value):
-        self.second = value
-
-
-@triton.jit
-def inplace_swap(p):
-    tmp = p.first
-    p.mutate_first(p.second)
-    p.mutate_second(tmp)
-
-
 @triton.jit
 def mutate_and_produce(x):
     return tl.arange(0, 16)
@@ -445,19 +429,19 @@ def test_mutable_argument():
     # CHECK-LABEL: tt.func public @test_mutable_argument
     # CHECK-NEXT:    [[FIRST0:%.*]] = tt.make_range {end = 4 : i32, start = 0 : i32}
     # CHECK-NEXT:    [[SECOND0:%.*]] = tt.make_range {end = 8 : i32, start = 4 : i32}
-    # CHECK-NEXT:    [[P1:%.*]]:2 = tt.call @{{.*}}inplace_swap{{.*}}([[FIRST0]], [[SECOND0]])
+    # CHECK-NEXT:    [[P1:%.*]]:2 = tt.call @{{.*}}swap{{.*}}([[FIRST0]], [[SECOND0]])
     # CHECK-NEXT:    [[FIRST1:%.*]] = tt.make_range {end = 12 : i32, start = 8 : i32}
     # CHECK-NEXT:    [[P2:%.*]]:2 = tt.call @{{.*}}mutate_first{{.*}}([[P1]]#0, [[P1]]#1, [[FIRST1]])
     # CHECK-NEXT:    [[SECOND1:%.*]] = tt.make_range {end = 20 : i32, start = 12 : i32}
     # CHECK-NEXT:    [[P3:%.*]]:2 = tt.call @{{.*}}mutate_second{{.*}}([[P2]]#0, [[P2]]#1, [[SECOND1]])
-    # CHECK-NEXT:    [[P4:%.*]]:2 = tt.call @{{.*}}inplace_swap{{.*}}([[P3]]#0, [[P3]]#1)
-    p = MutablePair(tl.arange(0, 4), tl.arange(4, 8))
-    inplace_swap(p)
+    # CHECK-NEXT:    [[P4:%.*]]:2 = tt.call @{{.*}}swap{{.*}}([[P3]]#0, [[P3]]#1)
+    p = Pair(tl.arange(0, 4), tl.arange(4, 8))
+    swap(p)
 
-    box = Box(MutablePair)(p)
+    box = Box(Pair)(p)
     box.value.mutate_first(tl.arange(8, 12))
     box.value.mutate_second(tl.arange(12, 20))
-    inplace_swap(box.value)
+    swap(box.value)
 
     # CHECK-NEXT:    call @{{.*}}anchor{{.*}}([[P4]]#0, [[P4]]#1)
     anchor(box)
@@ -475,7 +459,7 @@ def test_mutable_argument():
     anchor(c)
     anchor(p)
 
-    # CHECK-LABEL: tt.func private @{{.*}}inplace_swap
+    # CHECK-LABEL: tt.func private @{{.*}}swap
     # CHECK-NEXT:    [[P1:%.*]]:2 = tt.call @{{.*}}mutate_first{{.*}}(%arg0, %arg1, %arg1)
     # CHECK-NEXT:    [[P2:%.*]]:2 = tt.call @{{.*}}mutate_second{{.*}}([[P1]]#0, [[P1]]#1, %arg0)
     # CHECK-NEXT:    return [[P2]]#0, [[P2]]#1
@@ -494,3 +478,29 @@ def test_mutable_argument():
     # CHECK-NEXT:    [[RANGE1:%.*]] = tt.make_range {end = 16 : i32, start = 0 : i32}
     # CHECK-NEXT:    [[RANGE2:%.*]] = tt.make_range {end = 32 : i32, start = 16 : i32}
     # CHECK-NEXT:    return %arg0, %arg1, [[RANGE1]], [[RANGE2]]
+
+
+@tl.core._aggregate
+class TestJitInit:
+    x: tl.tensor
+
+    @triton.jit
+    def __init__(self, a, b):
+        self.x = a + b
+
+    @triton.jit
+    def double(self):
+        self.x *= 2
+
+
+@triton.jit
+def test_jit_init():
+    p = TestJitInit(tl.arange(0, 4), tl.arange(4, 8))
+    p.double()
+    anchor(p)
+    p = TestJitInit(tl.arange(0, 8), tl.arange(8, 16))
+    p.double()
+    anchor(p)
+
+
+print(run_parser(test_jit_init))

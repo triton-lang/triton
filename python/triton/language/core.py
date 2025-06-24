@@ -1519,6 +1519,38 @@ class tensor_descriptor(tensor_descriptor_base):
 
 
 @dataclass(frozen=True)
+class _init_placeholder_type(base_type):
+    """A placeholder type for uninitialized fields in an aggregate type.
+
+    When invoking the initializer of an aggregate, the specific field types are
+    not known yet, so we use this placeholder type to represent them.
+    """
+    base_cls: type
+
+    def _unflatten_ir(self, handles: List[ir.value], cursor: int) -> Tuple[ir.value, int]:
+        return _init_placeholder_value(self), cursor
+
+    def _flatten_ir_types(self, builder: ir.builder, out: List[ir.type]) -> None:
+        pass
+
+    def mangle(self) -> str:
+        return "IP"
+
+
+@dataclass(frozen=True)
+class _init_placeholder_value(base_value):
+    """A placeholder value for uninitialized fields in an aggregate type.
+
+    When invoking the initializer of an aggregate, the specific field values
+    are not known yet, so we use this placeholder value to represent them.
+    """
+    type: _init_placeholder_type
+
+    def _flatten_ir(self, handles: List[ir.value]) -> None:
+        return
+
+
+@dataclass(frozen=True)
 class _aggregate_type(base_type):
     """A generic base type for all Triton aggregate types.
 
@@ -1526,9 +1558,10 @@ class _aggregate_type(base_type):
     and a list of class fields with their Triton types.
     """
 
+    __triton_mutable__ = True
+
     base_cls: type
     fields: List[Tuple[str, base_type]]
-    __triton_mutable__: bool
 
     def _unflatten_ir(self, handles: List[ir.value], cursor: int) -> Tuple[ir.value, int]:
         instance = self.base_cls._get_instance()
@@ -1547,13 +1580,12 @@ class _aggregate_type(base_type):
         return f"{name}<{', '.join(fields)}>"
 
 
-def _aggregate_impl(cls, frozen):
+def _aggregate(cls):
 
     # Define the wrapped Triton value type.
     class aggregate_value(base_value):
         __triton_builtin__ = True
         __triton_aggregate__ = True
-        __mutable__ = not frozen
 
         @classmethod
         def _get_instance(this_cls):
@@ -1563,7 +1595,13 @@ def _aggregate_impl(cls, frozen):
             # Call into the user-defined constructor.
             instance = this_cls._get_instance()
             if isinstance(cls.__init__, JITFunction):
-                raise ValueError(f"{cls.__name__}.__init__ cannot be a @triton.jit function")
+                for name, ty in cls.__annotations__.items():
+                    setattr(instance, name, _init_placeholder_value(_init_placeholder_type(ty)))
+                dest = _generator.create_writeback(instance)
+                _generator.call_JitFunction(cls.__init__, [instance, *args], kwargs)
+                instance = dest.value
+                return instance
+
             extra_kwargs = {}
             if "_semantic" in inspect.signature(cls.__init__).parameters:
                 extra_kwargs["_semantic"] = _semantic
@@ -1580,7 +1618,7 @@ def _aggregate_impl(cls, frozen):
 
         # Only allow setting attributes defined in the class annotations.
         def __setattr__(self, name, value):
-            if name in ["__ast__", "__mutable__"]:
+            if name in ["__ast__"] or isinstance(value, _init_placeholder_value):
                 super().__setattr__(name, value)
                 return
             if name not in cls.__annotations__:
@@ -1595,8 +1633,8 @@ def _aggregate_impl(cls, frozen):
 
         @property
         def type(self):
-            return _aggregate_type(aggregate_value, [(name, getattr(self, name).type)
-                                                     for name in cls.__annotations__.keys()], self.__mutable__)
+            return _aggregate_type(aggregate_value,
+                                   [(name, getattr(self, name).type) for name in cls.__annotations__.keys()])
 
     for (name, member) in inspect.getmembers(cls):
         if inspect.isfunction(member) or inspect.ismethod(member) or isinstance(member, JITFunction):
@@ -1609,17 +1647,6 @@ def _aggregate_impl(cls, frozen):
     aggregate_value.__doc__ = cls.__doc__
 
     return aggregate_value
-
-
-def _aggregate(cls=None, *, frozen=False):
-
-    def decorator(cls):
-        return _aggregate_impl(cls, frozen)
-
-    if cls is None:
-        return decorator
-    else:
-        return decorator(cls)
 
 
 # -----------------------
