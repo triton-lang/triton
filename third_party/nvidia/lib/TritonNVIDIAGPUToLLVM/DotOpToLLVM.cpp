@@ -41,7 +41,9 @@ struct DotOpConversion : public ConvertOpToLLVMPattern<triton::DotOp> {
 
     NvidiaMmaEncodingAttr mmaLayout = dyn_cast<NvidiaMmaEncodingAttr>(
         cast<RankedTensorType>(D.getType()).getEncoding());
-    if (!isOuter && mmaLayout && supportMMA(op, mmaLayout.getVersionMajor())) {
+    bool supportF64mma = mmaLayout.isAmpere();
+    if (!isOuter && mmaLayout &&
+        supportMMA(op, mmaLayout.getVersionMajor(), supportF64mma)) {
       if (mmaLayout.isTuring())
         return convertMMA1688(op, adaptor, getTypeConverter(), rewriter);
       if (mmaLayout.isAmpere())
@@ -80,7 +82,9 @@ struct WarpGroupDotOpConversion
     bool isOuter = K == 1;
 
     auto mmaLayout = cast<NvidiaMmaEncodingAttr>(D.getType().getEncoding());
-    if (!isOuter && supportMMA(op.getOperand(0), mmaLayout.getVersionMajor())) {
+    bool supportF64mma = false;
+    if (!isOuter && supportMMA(op.getOperand(0), mmaLayout.getVersionMajor(),
+                               supportF64mma)) {
       return convertWGMMA(op, adaptor, getTypeConverter(), rewriter,
                           getThreadId(rewriter, loc));
     }

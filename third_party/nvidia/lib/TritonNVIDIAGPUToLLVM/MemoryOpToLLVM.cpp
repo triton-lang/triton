@@ -68,7 +68,7 @@ LogicalResult lowerLdStMatrix(
   std::optional<ColumnAction> maybePermutation;
   LinearLayout tile;
   if (!transpose) {
-    tile = LinearLayout::identity1D(32 / bitwidth, kReg, kOffset) *
+    tile = LinearLayout::identity1D(bitwidth < 32 ? 32 / bitwidth : 1, kReg, kOffset) *
            LinearLayout::identity1D(4, kLane, kOffset);
 
     // Find if there is a register permutation that allows us to divideLeft
@@ -129,7 +129,7 @@ LogicalResult lowerLdStMatrix(
   }
 
   // We must have at least 2 register elements to use stmatrix.trans
-  if (transpose && reps.getInDimSizeLog2(kReg) < llvm::Log2_32(32 / bitwidth)) {
+  if (transpose && reps.getInDimSizeLog2(kReg) < llvm::Log2_32(bitwidth < 32 ? 32 / bitwidth : 1)) {
     return failure();
   }
 
@@ -137,7 +137,7 @@ LogicalResult lowerLdStMatrix(
   // bases as the vectorisation factor. We don't consider the basis of the tile
   // for vectorisation so we substract them
   auto vec = std::min<int32_t>(2, reps.getInDimSizeLog2(kReg) -
-                                      llvm::Log2_32(32 / bitwidth));
+                                      llvm::Log2_32(bitwidth < 32 ? 32 / bitwidth : 1));
 
   // Map from kReg, kLane, kWarp to beginning of each tile
   assert(reps.getOutDimSize(kOffset) == cvt.getOutDimSize(kOffset));
@@ -156,7 +156,7 @@ LogicalResult lowerLdStMatrix(
   //   by the first `vec` reg bases that are not part of the tile
   std::vector<std::vector<int32_t>> laneBases;
   if (!transpose) {
-    auto tileDimSizeReg = llvm::Log2_32(32 / bitwidth);
+    auto tileDimSizeReg = llvm::Log2_32(bitwidth < 32 ? 32 / bitwidth : 1);
     auto tileDimSizeLane = 2;
     for (int i = 0; i < 3; ++i) {
       laneBases.push_back(reps.getBasis(kLane, tileDimSizeLane + i));
@@ -184,14 +184,14 @@ LogicalResult lowerLdStMatrix(
 
   // Elements per op
   auto nVecs = 1 << vec;
-  auto elemsPerVec = 32 / bitwidth;
+  auto elemsPerVec = bitwidth < 32 ? 32 / bitwidth : 1;
   auto step = nVecs * elemsPerVec;
   for (int i = 0; i < cvt.getInDimSize(kReg); i += step) {
     auto regIdx = reps.apply({{kReg, i}, {kLane, 0}, {kWarp, 0}})[0].second;
     Value offset = b.xor_(regBase, b.i32_val(regIdx));
     auto vecAddr = b.gep(smemPtrTy, llvmElemTy, smemBase, offset,
                          LLVM::GEPNoWrapFlags::inbounds);
-    Type packedTy = vec_ty(llvmElemTy, 32 / bitwidth);
+    Type packedTy = vec_ty(llvmElemTy, bitwidth < 32 ? 32 / bitwidth : 1);
     if (isStore) {
       // Pack into vector of i32
       SmallVector<Value> inputs;
