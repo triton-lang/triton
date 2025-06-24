@@ -4,6 +4,7 @@ import triton.language as tl
 import pytest
 import itertools
 
+from typing import Union
 from triton.language.core import _aggregate as aggregate
 
 from triton.experimental import gluon
@@ -335,22 +336,17 @@ class PipelinedLoadProducer:
 
 @aggregate
 class MMAContext:
-    channel: TensorMemoryChannel
-    instr_shape: gl.constexpr
     shape: gl.constexpr
+    instr_shape: gl.constexpr
+    channel: TensorMemoryChannel
 
     @gluon.jit
-    def create(shape: gl.constexpr, num_buffers: gl.constexpr, dtype: gl.constexpr = gl.float32):
-        instr_shape: gl.constexpr = get_mma_instr_shape(shape, dtype)
-        tmem_layout: gl.constexpr = TensorMemoryLayout((instr_shape[0], instr_shape[1]), unpacked=True)
+    def __init__(self, shape: gl.constexpr, num_buffers: gl.constexpr, dtype: gl.constexpr = gl.float32):
+        self.shape: gl.constexpr = shape
+        self.instr_shape: gl.constexpr = get_mma_instr_shape(shape, dtype)
+        tmem_layout: gl.constexpr = TensorMemoryLayout((self.instr_shape[0], self.instr_shape[1]), unpacked=True)
 
-        channel = TensorMemoryChannel.create(shape, dtype, tmem_layout, num_buffers)
-        return MMAContext(channel, instr_shape, shape)
-
-    def __init__(self, channel, instr_shape, shape):
-        self.channel = channel
-        self.instr_shape = gl.constexpr(instr_shape)
-        self.shape = gl.constexpr(shape)
+        self.channel = TensorMemoryChannel.create(shape, dtype, tmem_layout, num_buffers)
 
     @gluon.jit
     def release(self):
@@ -366,11 +362,8 @@ class MMAProducer:
     producer: TensorMemoryProducer
 
     @gluon.jit
-    def create(ctx):
-        return MMAProducer(ctx.channel.create_producer())
-
-    def __init__(self, producer):
-        self.producer = producer
+    def __init__(self, ctx):
+        self.producer = ctx.channel.create_producer()
 
     @gluon.jit
     def wait_and_issue_next(self, a, b, release_bars, use_acc):
@@ -501,20 +494,13 @@ class AttentionTile:
     q_smem: gl.shared_memory_descriptor
 
     @gluon.jit
-    def create(config):
-        acc = gl.full([config.SPLIT_M, config.HEAD_DIM], 0, gl.float32, config.o_layout)
-        m_i = gl.full([config.SPLIT_M], -float("inf"), gl.float32, gl.SliceLayout(1, config.o_splitn_layout))
-        l_i = gl.full([config.SPLIT_M], 1.0, gl.float32, gl.SliceLayout(1, config.o_layout))
+    def __init__(self, config):
+        self.acc = gl.full([config.SPLIT_M, config.HEAD_DIM], 0, gl.float32, config.o_layout)
+        self.m_i = gl.full([config.SPLIT_M], -float("inf"), gl.float32, gl.SliceLayout(1, config.o_splitn_layout))
+        self.l_i = gl.full([config.SPLIT_M], 1.0, gl.float32, gl.SliceLayout(1, config.o_layout))
 
         smem_layout: gl.constexpr = get_nvmma_layout((config.SPLIT_M, config.HEAD_DIM), config.dtype)
-        q_smem = gl.allocate_shared_memory(config.dtype, (config.SPLIT_M, config.HEAD_DIM), smem_layout)
-        return AttentionTile(acc, m_i, l_i, q_smem)
-
-    def __init__(self, acc, m_i, l_i, q_smem):
-        self.acc = acc
-        self.m_i = m_i
-        self.l_i = l_i
-        self.q_smem = q_smem
+        self.q_smem = gl.allocate_shared_memory(config.dtype, (config.SPLIT_M, config.HEAD_DIM), smem_layout)
 
     @gluon.jit
     def do_epilogue(self, tile_id: gl.constexpr, M, o_smem, desc_o, prog, config):
@@ -542,51 +528,44 @@ class InnerLoopInfo:
     qk_mma_ctx: MMAContext
     o_mma_ctx: MMAContext
     p_chnl: TensorMemoryChannel
-    mi_chnl: TensorMemoryChannel
+    mi_chnl: Union[TensorMemoryChannel, SharedMemoryChannel]
     li_smem: gl.shared_memory_descriptor
     q_smem: gl.shared_memory_descriptor
 
     @gluon.jit
-    def create(config, tile):
-        qk_mma_ctx = MMAContext.create(config.qk_shape, num_buffers=1)
-        qk_mma_ctx.channel.initialize_for_producer()
+    def __init__(self, config, tile):
+        self.qk_mma_ctx = MMAContext(config.qk_shape, num_buffers=1)
+        self.qk_mma_ctx.channel.initialize_for_producer()
 
-        o_mma_ctx = MMAContext.create(config.o_shape, num_buffers=1)
-        o_mma_ctx.channel.initialize_for_consumer()
-        o_mma_ctx.channel.mem.index(0).store(tile.acc)
+        self.o_mma_ctx = MMAContext(config.o_shape, num_buffers=1)
+        self.o_mma_ctx.channel.initialize_for_consumer()
+        self.o_mma_ctx.channel.mem.index(0).store(tile.acc)
 
         # QK and PV MMAs are serialized, which enables borrowing QK's memory.
-        borrow_tmem = qk_mma_ctx.channel.mem.index(0)
+        borrow_tmem = self.qk_mma_ctx.channel.mem.index(0)
         p_tmem = borrow_tmem.slice(0, config.BLOCK_N // 2)
         mi_tmem = borrow_tmem.slice(config.BLOCK_N // 2, 1)
         mi_layout: gl.constexpr = TensorMemoryLayout([config.SPLIT_M, 1], unpacked=False)
 
-        p_chnl = TensorMemoryChannel._borrow(p_tmem, config.qk_shape, config.dtype, config.p_tmem_layout, num_buffers=1,
-                                             num_consumers=1)
-        p_chnl.initialize_for_producer()
+        self.p_chnl = TensorMemoryChannel._borrow(p_tmem, config.qk_shape, config.dtype, config.p_tmem_layout,
+                                                  num_buffers=1, num_consumers=1)
+        self.p_chnl.initialize_for_producer()
 
         if config.mi_use_tmem:
-            mi_chnl = TensorMemoryChannel._borrow(mi_tmem, [config.SPLIT_M, 1], gl.float32, mi_layout, num_buffers=1)
+            self.mi_chnl = TensorMemoryChannel._borrow(mi_tmem, [config.SPLIT_M, 1], gl.float32, mi_layout,
+                                                       num_buffers=1)
             m_i = gl.convert_layout(tile.m_i.expand_dims(1), config.mi_2d_layout)
         else:
-            mi_chnl = SharedMemoryChannel.create([config.SPLIT_M], gl.float32, gl.constexpr(mbarrier.MBarrierLayout()),
-                                                 num_buffers=1)
+            self.mi_chnl = SharedMemoryChannel.create([config.SPLIT_M], gl.float32,
+                                                      gl.constexpr(mbarrier.MBarrierLayout()), num_buffers=1)
             m_i = tile.m_i
-        mi_chnl.mem.index(0).store(m_i)
-        mi_chnl.initialize_for_producer()
+        self.mi_chnl.mem.index(0).store(m_i)
+        self.mi_chnl.initialize_for_producer()
 
-        li_smem = gl.allocate_shared_memory(gl.float32, [config.SPLIT_M], gl.constexpr(mbarrier.MBarrierLayout()))
-        li_smem.store(tile.l_i)
+        self.li_smem = gl.allocate_shared_memory(gl.float32, [config.SPLIT_M], gl.constexpr(mbarrier.MBarrierLayout()))
+        self.li_smem.store(tile.l_i)
 
-        return InnerLoopInfo(qk_mma_ctx, o_mma_ctx, p_chnl, mi_chnl, li_smem, tile.q_smem)
-
-    def __init__(self, qk_mma_ctx, o_mma_ctx, p_chnl, mi_chnl, li_smem, q_smem):
-        self.qk_mma_ctx = qk_mma_ctx
-        self.o_mma_ctx = o_mma_ctx
-        self.p_chnl = p_chnl
-        self.mi_chnl = mi_chnl
-        self.li_smem = li_smem
-        self.q_smem = q_smem
+        self.q_smem = tile.q_smem
 
     @gluon.jit
     def consume_result(self, tile):
@@ -632,10 +611,10 @@ def _attn_fwd_mma(config,  #
 
     k_consumer = k_load_ctx.channel.create_consumer()
     v_consumer = v_load_ctx.channel.create_consumer()
-    qk0_producer = MMAProducer.create(info0.qk_mma_ctx)
-    qk1_producer = MMAProducer.create(info1.qk_mma_ctx)
-    o0_producer = MMAProducer.create(info0.o_mma_ctx)
-    o1_producer = MMAProducer.create(info1.o_mma_ctx)
+    qk0_producer = MMAProducer(info0.qk_mma_ctx)
+    qk1_producer = MMAProducer(info1.qk_mma_ctx)
+    o0_producer = MMAProducer(info0.o_mma_ctx)
+    o1_producer = MMAProducer(info1.o_mma_ctx)
     p0_consumer = info0.p_chnl.create_consumer()
     p1_consumer = info1.p_chnl.create_consumer()
 
@@ -887,21 +866,21 @@ def _gluon_attn(sm_scale, M, Z, H, N_CTX,  #
 
     prog = config.get_program()
 
-    tile0 = AttentionTile.create(config)
-    tile1 = AttentionTile.create(config)
+    tile0 = AttentionTile(config)
+    tile1 = AttentionTile(config)
     load_tensor_desc_to_smem(desc_q, (prog.qo_offset_y + config.SPLIT_M * 0, 0), tile0.q_smem)
     load_tensor_desc_to_smem(desc_q, (prog.qo_offset_y + config.SPLIT_M * 1, 0), tile1.q_smem)
 
-    info0 = InnerLoopInfo.create(config, tile0)
-    info1 = InnerLoopInfo.create(config, tile1)
+    info0 = InnerLoopInfo(config, tile0)
+    info1 = InnerLoopInfo(config, tile1)
 
     if STAGE & 1:
         tile0.m_i, tile1.m_i = _attn_fwd_inner(config, info0, info1, tile0.m_i, tile1.m_i, desc_k, desc_v, 4 - STAGE)
     if STAGE & 2:
         tile0 = info0.consume_result(tile0)
-        info0 = InnerLoopInfo.create(config, tile0)
+        info0 = InnerLoopInfo(config, tile0)
         tile1 = info1.consume_result(tile1)
-        info1 = InnerLoopInfo.create(config, tile1)
+        info1 = InnerLoopInfo(config, tile1)
         tile0.m_i, tile1.m_i = _attn_fwd_inner(config, info0, info1, tile0.m_i, tile1.m_i, desc_k, desc_v, 2)
 
     tile0.q_smem._keep_alive()

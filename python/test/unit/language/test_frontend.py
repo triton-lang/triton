@@ -1,6 +1,6 @@
 import triton
 import triton.language as tl
-from triton._filecheck import filecheck_test, run_filecheck_test, run_parser
+from triton._filecheck import filecheck_test, run_filecheck_test
 
 # ===-----------------------------------------------------------------------===#
 # Unit Tests
@@ -493,14 +493,17 @@ class TestJitInit:
         self.x *= 2
 
 
+@filecheck_test
 @triton.jit
 def test_jit_init():
+    # CHECK-LABEL: tt.func public @test_jit_init
+    # CHECK-NEXT:    [[RANGE0:%.*]] = tt.make_range {end = 4 : i32, start = 0 : i32}
+    # CHECK-NEXT:    [[RANGE1:%.*]] = tt.make_range {end = 8 : i32, start = 4 : i32}
+    # CHECK-NEXT:    [[P:%.*]] = tt.call @{{.*}}TestJitInit.__init__{{.*}}([[RANGE0]], [[RANGE1]])
+    # CHECK-NEXT:    call @{{.*}}anchor{{.*}}([[P]])
     p = TestJitInit(tl.arange(0, 4), tl.arange(4, 8))
-    p.double()
-    anchor(p)
-    p = TestJitInit(tl.arange(0, 8), tl.arange(8, 16))
-    p.double()
     anchor(p)
 
-
-print(run_parser(test_jit_init))
+    # CHECK-LABEL: tt.func private @{{.*}}TestJitInit.__init__
+    # CHECK:         [[X:%.*]] = arith.addi %arg0, %arg1
+    # CHECK:         return [[X]]

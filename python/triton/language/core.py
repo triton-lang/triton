@@ -1520,15 +1520,9 @@ class tensor_descriptor(tensor_descriptor_base):
 
 @dataclass(frozen=True)
 class _init_placeholder_type(base_type):
-    """A placeholder type for uninitialized fields in an aggregate type.
-
-    When invoking the initializer of an aggregate, the specific field types are
-    not known yet, so we use this placeholder type to represent them.
-    """
-    base_cls: type
 
     def _unflatten_ir(self, handles: List[ir.value], cursor: int) -> Tuple[ir.value, int]:
-        return _init_placeholder_value(self), cursor
+        return _init_placeholder_value(), cursor
 
     def _flatten_ir_types(self, builder: ir.builder, out: List[ir.type]) -> None:
         pass
@@ -1544,7 +1538,7 @@ class _init_placeholder_value(base_value):
     When invoking the initializer of an aggregate, the specific field values
     are not known yet, so we use this placeholder value to represent them.
     """
-    type: _init_placeholder_type
+    type = _init_placeholder_type()
 
     def _flatten_ir(self, handles: List[ir.value]) -> None:
         return
@@ -1596,7 +1590,7 @@ def _aggregate(cls):
             instance = this_cls._get_instance()
             if isinstance(cls.__init__, JITFunction):
                 for name, ty in cls.__annotations__.items():
-                    setattr(instance, name, _init_placeholder_value(_init_placeholder_type(ty)))
+                    setattr(instance, name, _init_placeholder_value())
                 dest = _generator.create_writeback(instance)
                 _generator.call_JitFunction(cls.__init__, [instance, *args], kwargs)
                 instance = dest.value

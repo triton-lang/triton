@@ -636,6 +636,8 @@ class CodeGenerator(ast.NodeVisitor):
         value = self.visit(node.value)
         # constexpr
         if annotation == constexpr:
+            if not isinstance(target, str):
+                return self.assignTarget(node.target, value)
             if target in self.lscope:
                 raise ValueError(f'{target} is already defined.'
                                  f' constexpr cannot be reassigned.')
@@ -1223,7 +1225,6 @@ class CodeGenerator(ast.NodeVisitor):
         for i, arg in enumerate(args):
             if isinstance(arg, (language.dtype, float, int, bool, JITFunction)):
                 args[i] = language.core.constexpr(arg)
-        print(args)
         args_mut = [[name, None]
                     for (name, arg) in zip(fn.arg_names, args)
                     if arg is not None and getattr(arg.type, "__triton_mutable__", False)]
