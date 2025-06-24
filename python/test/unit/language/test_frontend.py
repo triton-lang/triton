@@ -483,10 +483,12 @@ def test_mutable_argument():
 @tl.core._aggregate
 class TestJitInit:
     x: tl.tensor
+    y: tl.constexpr
 
     @triton.jit
-    def __init__(self, a, b):
+    def __init__(self, a, b, y: tl.constexpr):
         self.x = a + b
+        self.y: tl.constexpr = y
 
     @triton.jit
     def double(self):
@@ -501,8 +503,10 @@ def test_jit_init():
     # CHECK-NEXT:    [[RANGE1:%.*]] = tt.make_range {end = 8 : i32, start = 4 : i32}
     # CHECK-NEXT:    [[P:%.*]] = tt.call @{{.*}}TestJitInit.__init__{{.*}}([[RANGE0]], [[RANGE1]])
     # CHECK-NEXT:    call @{{.*}}anchor{{.*}}([[P]])
-    p = TestJitInit(tl.arange(0, 4), tl.arange(4, 8))
+    # CHECK-NEXT:    tt.make_range {end = 64 : i32, start = 0 : i32}
+    p = TestJitInit(tl.arange(0, 4), tl.arange(4, 8), 64)
     anchor(p)
+    tl.arange(0, p.y)
 
     # CHECK-LABEL: tt.func private @{{.*}}TestJitInit.__init__
     # CHECK:         [[X:%.*]] = arith.addi %arg0, %arg1
