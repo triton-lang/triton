@@ -157,6 +157,16 @@ Value matrixVectorProd(RewriterBase &rewriter, Location loc,
     assert(x.getType().isInteger(32));
     assert(z.getType().isInteger(32));
     assert(y >= -126 && y <= 127);
+    if (y == 0)
+      return b.or_(x, z, /*disjoint=*/true);
+
+    APInt zConstant;
+    if (matchPattern(z, m_ConstantInt(&zConstant))) {
+      if (zConstant.isZero())
+        return y < 0 ? Value(b.lshr(x, b.i32_val(-y)))
+                     : Value(b.shl(x, b.i32_val(y)));
+    }
+
     constexpr int fp32_bias = 127;
     constexpr int fp32_mantissa = 23;
     auto y_i32 = b.i32_val((y + fp32_bias) << fp32_mantissa);
@@ -174,14 +184,21 @@ Value matrixVectorProd(RewriterBase &rewriter, Location loc,
     if (mask == 0)
       continue;
     auto masked = b.and_(x, b.i32_val(mask));
-    if (allRowsUnique && A.getTotalInDimSizeLog2() <= 24 &&
-        A.getTotalOutDimSizeLog2() <= 24)
-      add = imad(masked, -i, add);
-    else
+    if (!(allRowsUnique && A.getTotalInDimSizeLog2() <= 24 &&
+          A.getTotalOutDimSizeLog2() <= 24))
       xor_ = b.xor_(xor_, i >= 0 ? Value(b.lshr(masked, b.i32_val(i)))
                                  : Value(b.shl(masked, b.i32_val(-i))));
   }
-  return b.add(add, xor_);
+  for (int i = -nRow + 1; i < nCol; i++) {
+    auto [mask, allRowsUnique] = getMaskAndAllRowsUnique(i);
+    if (mask == 0)
+      continue;
+    auto masked = b.and_(x, b.i32_val(mask));
+    if (allRowsUnique && A.getTotalInDimSizeLog2() <= 24 &&
+        A.getTotalOutDimSizeLog2() <= 24)
+      xor_ = imad(masked, -i, xor_);
+  }
+  return xor_;
 }
 
 } // namespace triton::gpu
@@ -236,7 +253,7 @@ applyLinearLayout(Location loc, RewriterBase &rewriter,
       x = b.or_(x, b.shl(idx, b.i32_val(shift)));
       shift += layout.getInDimSizeLog2(inDimName);
     }
-    // F
+    // Flatten ins
     auto matrix = layout.sublayout(inDimNames, outIndices[0].first);
     matrix = matrix.flattenIns();
     auto out = triton::gpu::matrixVectorProd(rewriter, loc, matrix, x);
