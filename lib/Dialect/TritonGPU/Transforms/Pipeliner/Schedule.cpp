@@ -8,6 +8,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "llvm/ADT/SmallSet.h"
 #include "llvm/Support/Debug.h"
 
 using namespace mlir;
@@ -190,15 +191,50 @@ tt::CoarseSchedule::createFinalSchedule(scf::ForOp forOp) const {
 }
 
 void tt::CoarseSchedule::dump() {
-  assert(numStages > 0 && "Invalid number of stages");
-  for (int i = 0; i < numStages; i++) {
-    llvm::dbgs() << "\n---- Ops in stage " << i << "\n";
-    for (auto &[op, stageAndCluster] : opToStageAndCluster) {
-      if (i == stageAndCluster.first) {
-        llvm::dbgs() << "        cluster: " << *stageAndCluster.second
-                     << ":\n\t" << *op << "\n";
-      }
+  auto getOpSortIdent = [](Operation *op) {
+    std::string opStr;
+    llvm::raw_string_ostream os(opStr);
+    if (op->getNumResults()) {
+      op->getResult(0).printAsOperand(os, OpPrintingFlags().assumeVerified());
+    } else if (op->getNumOperands()) {
+      op->getOperand(0).printAsOperand(os, OpPrintingFlags().assumeVerified());
+    } else {
+      opStr = op->getName().getStringRef();
     }
+    return opStr;
+  };
+
+  SmallVector<std::pair<Operation *, std::pair<int, Cluster>>> ops(
+      opToStageAndCluster.begin(), opToStageAndCluster.end());
+  llvm::sort(ops, [&getOpSortIdent](
+                      std::pair<Operation *, std::pair<int, Cluster>> &one,
+                      std::pair<Operation *, std::pair<int, Cluster>> &two) {
+    auto &[op1, stageAndCluster1] = one;
+    auto &[op2, stageAndCluster2] = two;
+    if (stageAndCluster1.first != stageAndCluster2.first)
+      return stageAndCluster1.first < stageAndCluster2.first;
+
+    if (stageAndCluster1.second._M_node && stageAndCluster2.second._M_node &&
+        *stageAndCluster1.second != *stageAndCluster2.second)
+      return *stageAndCluster1.second < *stageAndCluster2.second;
+    std::string op1Ident = getOpSortIdent(op1);
+    std::string op2Ident = getOpSortIdent(op2);
+    return std::lexicographical_compare(op1Ident.begin(), op1Ident.end(),
+                                        op2Ident.begin(), op2Ident.end());
+  });
+
+  llvm::SmallSet<int, 3> seenStages, seenClusters;
+  for (auto &[op, stageAndCluster] : ops) {
+    if (!seenStages.contains(stageAndCluster.first)) {
+      seenStages.insert(stageAndCluster.first);
+      seenClusters.clear();
+      llvm::dbgs() << "stage: " << stageAndCluster.first << "\n";
+    }
+    if (!seenClusters.contains(*stageAndCluster.second)) {
+      seenClusters.insert(*stageAndCluster.second);
+      llvm::dbgs() << "cluster: " << *stageAndCluster.second << "\n";
+    }
+    llvm::dbgs() << "\t" << *op << "\n";
   }
 }
 
