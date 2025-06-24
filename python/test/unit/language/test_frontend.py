@@ -12,7 +12,7 @@ def anchor(v):
     pass
 
 
-@tl.core._aggregate
+@tl.core._aggregate(frozen=True)
 class Pair:
     first: tl.tensor
     second: tl.tensor
@@ -78,7 +78,7 @@ def test_jit_method():
     anchor(b)
 
 
-@tl.core._aggregate
+@tl.core._aggregate(frozen=True)
 class TypeWithBuiltinInitializer:
     value: tl.tensor
 
@@ -181,7 +181,7 @@ def test_call_in_loop():
         acc = accumulate(acc, i)
 
 
-@tl.core._aggregate
+@tl.core._aggregate(frozen=True)
 class FunctionParent:
 
     @triton.jit
@@ -204,7 +204,7 @@ def test_function_name_mangling():
     FunctionParent.function_with_name()
 
 
-@tl.core._aggregate
+@tl.core._aggregate(frozen=True)
 class AggregateWithConstexpr:
     a: tl.tensor
     b: tl.constexpr
@@ -376,7 +376,7 @@ def test_constexpr_generator():
 
 def Box(T):
 
-    @tl.core._aggregate
+    @tl.core._aggregate(frozen=True)
     class BoxImpl:
         value: T
 
@@ -403,15 +403,24 @@ def test_late_bound_class_reference():
     run_filecheck_test(kernel)
 
 
-def mutate_it(x):
-    x.first = tl.arange(0, 4)
-    x.second = tl.arange(4, 8)
+@triton.jit
+def mutate_it_2(a):
+    pass
+
+
+@triton.jit
+def mutate_it(b):
+    b.first = tl.arange(4, 5)
+    mutate_it_2(b)
+    b.second = tl.arange(13, 14)
 
 
 @triton.jit
 def test_mutability():
     p = Pair(tl.arange(0, 1), tl.arange(0, 1))
-    anchor(p)
+    anchor(v=p)
+    mutate_it([p] + [])
+    anchor((p, p))
 
 
 print(run_parser(test_mutability))

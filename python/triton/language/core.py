@@ -1526,10 +1526,9 @@ class _aggregate_type(base_type):
     and a list of class fields with their Triton types.
     """
 
-    __triton_mutable__ = True
-
     base_cls: type
     fields: List[Tuple[str, base_type]]
+    __triton_mutable__: bool
 
     def _unflatten_ir(self, handles: List[ir.value], cursor: int) -> Tuple[ir.value, int]:
         instance = self.base_cls._get_instance()
@@ -1548,7 +1547,7 @@ class _aggregate_type(base_type):
         return f"{name}<{', '.join(fields)}>"
 
 
-def _aggregate(cls):
+def _aggregate_impl(cls, frozen):
 
     # Define the wrapped Triton value type.
     class aggregate_value(base_value):
@@ -1592,8 +1591,8 @@ def _aggregate(cls):
 
         @property
         def type(self):
-            return _aggregate_type(aggregate_value,
-                                   [(name, getattr(self, name).type) for name in cls.__annotations__.keys()])
+            return _aggregate_type(aggregate_value, [(name, getattr(self, name).type)
+                                                     for name in cls.__annotations__.keys()], not frozen)
 
     for (name, member) in inspect.getmembers(cls):
         if inspect.isfunction(member) or inspect.ismethod(member) or isinstance(member, JITFunction):
@@ -1606,6 +1605,17 @@ def _aggregate(cls):
     aggregate_value.__doc__ = cls.__doc__
 
     return aggregate_value
+
+
+def _aggregate(cls=None, *, frozen=False):
+
+    def decorator(cls):
+        return _aggregate_impl(cls, frozen)
+
+    if cls is None:
+        return decorator
+    else:
+        return decorator(cls)
 
 
 # -----------------------

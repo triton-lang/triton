@@ -241,7 +241,8 @@ class ASTFunction:
         val_paths = list(find_paths_if(self.arg_types, is_val))
         arg_types = [get_iterable_path(self.arg_types, path) for path in val_paths]
         arg_types_ir = self.flatten_ir_types(builder, arg_types)
-        ret_types_ir = [ty for (name, ty) in self.args_mut] + self.return_types_ir(builder)
+        ret_types_ir = self.flatten_ir_types(builder, [ty for (name, ty) in self.args_mut])
+        ret_types_ir.extend(self.return_types_ir(builder))
         return builder.get_function_ty(arg_types_ir, ret_types_ir)
 
     def deserialize(self, fn):
@@ -277,6 +278,16 @@ class ASTFunction:
 class BoundJITMethod:
     __self__: base_value
     __func__: JITFunction
+
+
+@dataclass(frozen=True)
+class MutableArgument:
+    value: base_value
+    node: Any
+
+    @staticmethod
+    def unwrap(arg):
+        return arg.value if isinstance(arg, MutableArgument) else arg
 
 
 class CodeGenerator(ast.NodeVisitor):
@@ -1188,14 +1199,14 @@ class CodeGenerator(ast.NodeVisitor):
         return language.core.device_assert(test, msg, _semantic=self.semantic)
 
     def call_JitFunction(self, fn: JITFunction, args, kwargs):
-        args = inspect.getcallargs(fn.fn, *args, **kwargs)
-        args = [args[name] for name in fn.arg_names]
+        call_args = inspect.getcallargs(fn.fn, *args, **kwargs)
+        args = [MutableArgument.unwrap(call_args[name]) for name in fn.arg_names]
         for i, arg in enumerate(args):
             if isinstance(arg, (language.dtype, float, int, bool, JITFunction)):
                 args[i] = language.core.constexpr(arg)
         args_mut = [(name, arg.type)
                     for (name, arg) in zip(fn.arg_names, args)
-                    if hasattr(arg.type, "__triton_mutable__")]
+                    if arg is not None and getattr(arg.type, "__triton_mutable__", False)]
         args_cst = find_paths_if(args, lambda _, x: _is_constexpr(x))
         args_cst = {path: get_iterable_path(args, path) for path in args_cst}
         args_path = find_paths_if(args, lambda _, x: not _is_constexpr(x))
@@ -1238,12 +1249,20 @@ class CodeGenerator(ast.NodeVisitor):
         if callee_ret_type != language.void:
             all_ret_types.append(callee_ret_type)
         all_ret_values = unflatten_ir_values(handles, all_ret_types)
-        # Unpack the reflected values of mutable arguments.
+        # Unpack and emit the writeback for mutable arguments.
         for name, ty in args_mut:
-            self.set_value(name, next(all_ret_values))
+            target, value = call_args[name], next(all_ret_values)
+            if not isinstance(target, MutableArgument):
+                raise CompilationError(self.jit_fn.src, self.cur_node,
+                                       f"Cannot pass non-mutable reference to mutable argument '{name}'")
+            target = copy.deepcopy(target.node)
+            if isinstance(target, ast.keyword):
+                target = target.value
+            target.ctx = ast.Store()
+            self.assignTarget(target, value)
         if callee_ret_type == language.void:
             return None
-        return next(all_ret_types)
+        return next(all_ret_values)
 
     def visit_Call(self, node):
         fn = _unwrap_if_constexpr(self.visit(node.func))
@@ -1259,15 +1278,18 @@ class CodeGenerator(ast.NodeVisitor):
                 error_message.append(mur)
             raise CompilationError(self.jit_fn.src, node, " ".join(error_message))
 
-        kws = dict(self.visit(keyword) for keyword in node.keywords)
-        args = [self.visit(arg) for arg in node.args]
-        args = list(itertools.chain.from_iterable(x if isinstance(x, list) else [x] for x in args))
+        kws = ((self.visit(kw), kw) for kw in node.keywords)
+        kws = {name: MutableArgument(value, node) for (name, value), node in kws}
+        args = (MutableArgument(self.visit(arg), arg) for arg in node.args)
+        args = list(itertools.chain.from_iterable(x.value if isinstance(x.value, list) else [x] for x in args))
         if isinstance(fn, BoundJITMethod):
             args.insert(0, fn.__self__)
             fn = fn.__func__
         if isinstance(fn, JITFunction):
             _check_fn_args(node, fn, args)
             return self.call_JitFunction(fn, args, kws)
+        kws = {name: MutableArgument.unwrap(value) for name, value in kws.items()}
+        args = [MutableArgument.unwrap(arg) for arg in args]
         if (hasattr(fn, '__self__') and _is_triton_value(fn.__self__)) or language.core.is_builtin(fn):
             extra_kwargs = {"_semantic": self.semantic}
             sig = inspect.signature(fn)
@@ -1361,7 +1383,7 @@ class CodeGenerator(ast.NodeVisitor):
             lhs = lhs.value
         attr = getattr(lhs, node.attr)
         if _is_triton_value(lhs) and isinstance(attr, JITFunction):
-            return BoundJITMethod(lhs, attr)
+            return BoundJITMethod(MutableArgument(lhs, node.value), attr)
         return attr
 
     def visit_Expr(self, node):
