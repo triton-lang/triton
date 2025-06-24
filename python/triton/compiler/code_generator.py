@@ -106,6 +106,17 @@ def unflatten_ir_values(handles: List[ir.value], types: List[base_type]):
 _condition_types = {bool, int, type(None)}  # Python types accepted for conditionals inside kernels
 
 
+def _clone_triton_value(val):
+    handles = []
+    val._flatten_ir(handles)
+    clone, _ = val.type._unflatten_ir(handles, 0)
+    return clone
+
+
+def _clone_scope(scope):
+    return {name: _clone_triton_value(val) if _is_triton_value(val) else val for name, val in scope.items()}
+
+
 class enter_sub_region:
 
     def __init__(self, generator):
@@ -113,8 +124,8 @@ class enter_sub_region:
 
     def __enter__(self):
         # record lscope & local_defs in the parent scope
-        self.liveins = self.generator.lscope.copy()
-        self.prev_defs = self.generator.local_defs.copy()
+        self.liveins = _clone_scope(self.generator.lscope)
+        self.prev_defs = _clone_scope(self.generator.local_defs)
         self.generator.local_defs = {}
         self.insert_block = self.generator.builder.get_insertion_block()
         self.insert_point = self.generator.builder.get_insertion_point()
@@ -436,8 +447,6 @@ class CodeGenerator(ast.NodeVisitor):
         self.builder.set_loc(loc)
 
     def _find_carries(self, node, liveins):
-        # We must extract the handles before the value is editted in the loop
-        livehandles = {name: flatten_values_to_ir([v]) for name, v in liveins.items() if _is_triton_value(v)}
         # create loop body block
         block = self.builder.create_block()
         self.builder.set_insertion_point_to_start(block)
@@ -457,13 +466,11 @@ class CodeGenerator(ast.NodeVisitor):
         for name, live_val in liveins.items():
             if _is_triton_value(live_val):
                 loop_val = self.lscope[name]
-                assert type(live_val) is type(loop_val), f'Loop carried variable {name} changed type'
+                self._verify_loop_carried_variable(name, loop_val, live_val)
 
-                live_handles = livehandles[name]
+                live_handles = flatten_values_to_ir([live_val])
                 loop_handles = flatten_values_to_ir([loop_val])
                 if live_handles != loop_handles:
-                    self._verify_loop_carried_variable(name, loop_val, live_val)
-
                     names.append(name)
                     init_tys.append(live_val.type)
                     init_handles.extend(live_handles)
