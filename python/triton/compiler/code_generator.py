@@ -636,12 +636,13 @@ class CodeGenerator(ast.NodeVisitor):
         value = self.visit(node.value)
         # constexpr
         if annotation == constexpr:
+            if not isinstance(value, constexpr):
+                value = constexpr(value)
             if not isinstance(target, str):
                 return self.assignTarget(node.target, value)
             if target in self.lscope:
                 raise ValueError(f'{target} is already defined.'
                                  f' constexpr cannot be reassigned.')
-            value = constexpr(value)
             self.lscope[target] = value
             return self.lscope[target]
         # default: call visit_Assign

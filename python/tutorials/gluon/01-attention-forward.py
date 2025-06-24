@@ -352,6 +352,7 @@ class AttentionConfig:
     Z: gl.tensor
     H: gl.tensor
     N_CTX: gl.tensor
+
     BLOCK_M: gl.constexpr
     BLOCK_N: gl.constexpr
     HEAD_DIM: gl.constexpr
@@ -379,42 +380,44 @@ class AttentionConfig:
 
     mi_use_tmem: gl.constexpr
 
-    @tl.constexpr_function
     def __init__(self, qk_scale, Z, H, N_CTX, BLOCK_M, BLOCK_N, HEAD_DIM, dtype, num_warps, SPLIT_D_FACTOR):
         self.qk_scale = qk_scale
         self.Z = Z
         self.H = H
         self.N_CTX = N_CTX
-        self.BLOCK_M = gl.constexpr(BLOCK_M)
-        self.BLOCK_N = gl.constexpr(BLOCK_N)
-        self.HEAD_DIM = gl.constexpr(HEAD_DIM)
-        self.dtype = gl.constexpr(dtype)
-        self.num_warps = gl.constexpr(num_warps)
 
-        self.SPLIT_D_FACTOR = gl.constexpr(SPLIT_D_FACTOR)
-        self.SPLIT_M = self.BLOCK_M // 2
-        self.SPLIT_D = self.HEAD_DIM // self.SPLIT_D_FACTOR
+        self.BLOCK_M: gl.constexpr = BLOCK_M
+        self.BLOCK_N: gl.constexpr = BLOCK_N
+        self.HEAD_DIM: gl.constexpr = HEAD_DIM
+        self.dtype: gl.constexpr = dtype
+        self.num_warps: gl.constexpr = num_warps
 
-        self.q_shape = gl.constexpr([self.SPLIT_M, self.HEAD_DIM])
-        self.k_shape = gl.constexpr([self.BLOCK_N, self.HEAD_DIM])
-        self.qk_shape = gl.constexpr([self.SPLIT_M, self.BLOCK_N])
-        self.v_shape = gl.constexpr([self.BLOCK_N, self.HEAD_DIM])
-        self.o_shape = gl.constexpr([self.SPLIT_M, self.HEAD_DIM])
+        self.SPLIT_D_FACTOR: gl.constexpr = SPLIT_D_FACTOR
+        self.SPLIT_M: gl.constexpr = self.BLOCK_M // 2
+        self.SPLIT_D: gl.constexpr = self.HEAD_DIM // self.SPLIT_D_FACTOR
 
-        qk_instr_shape = get_mma_instr_shape(self.qk_shape, gl.float32)
-        o_instr_shape = get_mma_instr_shape(self.o_shape, gl.float32)
-        self.qk_tmem_layout = gl.constexpr(TensorMemoryLayout((qk_instr_shape[0], qk_instr_shape[1]), unpacked=True))
-        self.o_tmem_layout = gl.constexpr(TensorMemoryLayout((o_instr_shape[0], o_instr_shape[1]), unpacked=True))
-        self.p_tmem_layout = gl.constexpr(TensorMemoryLayout((qk_instr_shape[0], qk_instr_shape[1]), unpacked=False))
+        self.q_shape: gl.constexpr = [self.SPLIT_M, self.HEAD_DIM]
+        self.k_shape: gl.constexpr = [self.BLOCK_N, self.HEAD_DIM]
+        self.qk_shape: gl.constexpr = [self.SPLIT_M, self.BLOCK_N]
+        self.v_shape: gl.constexpr = [self.BLOCK_N, self.HEAD_DIM]
+        self.o_shape: gl.constexpr = [self.SPLIT_M, self.HEAD_DIM]
 
-        self.qk_layout = gl.constexpr(get_tmem_32x32b_reg_layout(qk_instr_shape, self.qk_shape, self.num_warps))
-        self.o_layout = gl.constexpr(get_tmem_32x32b_reg_layout(o_instr_shape, self.o_shape, self.num_warps))
-        self.o_splitn_layout = gl.constexpr(
-            get_tmem_32x32b_reg_layout((o_instr_shape[0], o_instr_shape[1] // self.SPLIT_D_FACTOR, o_instr_shape[2]),
-                                       (self.o_shape[0], self.o_shape[1] // self.SPLIT_D_FACTOR), self.num_warps))
-        self.mi_2d_layout = gl.constexpr(gl.BlockedLayout([1, 1], [32, 1], [4, 1], [0, 1]))
+        qk_instr_shape: gl.constexpr = get_mma_instr_shape(self.qk_shape, gl.float32)
+        o_instr_shape: gl.constexpr = get_mma_instr_shape(self.o_shape, gl.float32)
+        self.qk_tmem_layout: gl.constexpr = TensorMemoryLayout((qk_instr_shape[0], qk_instr_shape[1]), unpacked=True)
+        self.o_tmem_layout: gl.constexpr = TensorMemoryLayout((o_instr_shape[0], o_instr_shape[1]), unpacked=True)
+        self.p_tmem_layout: gl.constexpr = TensorMemoryLayout((qk_instr_shape[0], qk_instr_shape[1]), unpacked=False)
 
-        self.mi_use_tmem = gl.constexpr(True)
+        self.qk_layout: gl.constexpr = gl.constexpr(
+            get_tmem_32x32b_reg_layout(qk_instr_shape, self.qk_shape, self.num_warps))
+        self.o_layout: gl.constexpr = gl.constexpr(
+            get_tmem_32x32b_reg_layout(o_instr_shape, self.o_shape, self.num_warps))
+        self.o_splitn_layout: gl.constexpr = get_tmem_32x32b_reg_layout(
+            (o_instr_shape[0], o_instr_shape[1] // self.SPLIT_D_FACTOR, o_instr_shape[2]),
+            (self.o_shape[0], self.o_shape[1] // self.SPLIT_D_FACTOR), self.num_warps)
+        self.mi_2d_layout: gl.constexpr = gl.BlockedLayout([1, 1], [32, 1], [4, 1], [0, 1])
+
+        self.mi_use_tmem: gl.constexpr = True
 
     def get_program(self):
         start_m = gl.program_id(0)
