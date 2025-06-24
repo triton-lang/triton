@@ -431,13 +431,11 @@ def inplace_swap(p):
 
 @triton.jit
 def mutate_and_produce(x):
-    x.mutate_first(tl.arange(0, 4))
     return tl.arange(0, 16)
 
 
 @triton.jit
 def mutate_and_produce_tuple(x):
-    x.mutate_second(tl.arange(0, 4))
     return tl.arange(0, 16), tl.arange(16, 32)
 
 
@@ -487,3 +485,12 @@ def test_mutable_argument():
 
     # CHECK-LABEL: tt.func private @{{.*}}mutate_second
     # CHECK-NEXT:    return %arg0, %arg2
+
+    # CHECK-LABEL: tt.func private @{{.*}}mutate_and_produce
+    # CHECK-NEXT:    [[RANGE:%.*]] = tt.make_range {end = 16 : i32, start = 0 : i32}
+    # CHECK-NEXT:    return %arg0, %arg1, [[RANGE]]
+
+    # CHECK-LABEL: tt.func private @{{.*}}mutate_and_produce_tuple
+    # CHECK-NEXT:    [[RANGE1:%.*]] = tt.make_range {end = 16 : i32, start = 0 : i32}
+    # CHECK-NEXT:    [[RANGE2:%.*]] = tt.make_range {end = 32 : i32, start = 16 : i32}
+    # CHECK-NEXT:    return %arg0, %arg1, [[RANGE1]], [[RANGE2]]
