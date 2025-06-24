@@ -65,6 +65,7 @@ _IMPORT_FROM_TRITON: List[str] = [
 ]
 
 __all__ = [
+    "aggregate",
     "constexpr",
     "base_value",
     "base_type",
@@ -313,3 +314,8 @@ def warp_specialize(default_args, default_partition, worker_args, worker_partiti
 @builtin
 def thread_barrier(_semantic=None):
     return _semantic.debug_barrier()
+
+
+def aggregate(cls):
+    from .._runtime import jit
+    return tl_core._aggregate_impl(cls, jit)

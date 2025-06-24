@@ -312,12 +312,13 @@ def warp_specialize_worker1(a, b, e: ttgl.constexpr):
     pass
 
 
-@tl.core._aggregate
+@tl.aggregate
 class Pair:
     first: tl.tensor
     second: tl.tensor
 
-    def __init__(self, first, second):
+    @tl.core.builtin
+    def __init__(self, first, second, _semantic=None):
         self.first = first
         self.second = second
 

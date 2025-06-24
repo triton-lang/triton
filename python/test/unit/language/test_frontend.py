@@ -12,31 +12,29 @@ def anchor(v):
     pass
 
 
-@tl.core._aggregate
+@tl.aggregate
 class Pair:
     first: tl.tensor
     second: tl.tensor
 
-    def __init__(self, first, second):
+    @tl.core.builtin
+    def __init__(self, first, second, _semantic=None):
         self.first = first
         self.second = second
 
-    @triton.jit
     def get_first(self):
         return self.first
 
+    @tl.core.builtin
     def get_second(self, _semantic=None):
         return self.second
 
-    @triton.jit
     def unpack(self):
         return self.get_first(), self.get_second()
 
-    @triton.jit
     def mutate_first(self, value):
         self.first = value
 
-    @triton.jit
     def mutate_second(self, value):
         self.second = value
 
@@ -86,13 +84,15 @@ def test_jit_method():
     anchor(b)
 
 
-@tl.core._aggregate
+@tl.aggregate
 class TypeWithBuiltinInitializer:
     value: tl.tensor
 
+    @tl.core.builtin
     def __init__(self, _semantic=None):
         self.value = tl.arange(0, 4, _semantic=_semantic)
 
+    @tl.core.builtin
     def modify(self, value, _semantic=None):
         self.value = value
 
@@ -189,7 +189,7 @@ def test_call_in_loop():
         acc = accumulate(acc, i)
 
 
-@tl.core._aggregate
+@tl.aggregate
 class FunctionParent:
 
     @triton.jit
@@ -212,20 +212,20 @@ def test_function_name_mangling():
     FunctionParent.function_with_name()
 
 
-@tl.core._aggregate
+@tl.aggregate
 class AggregateWithConstexpr:
     a: tl.tensor
     b: tl.constexpr
 
-    def __init__(self, a, b):
+    @tl.core.builtin
+    def __init__(self, a, b, _semantic=None):
         self.a = a
         self.b = b
 
     @staticmethod
     def create(a):
-        return AggregateWithConstexpr(a, tl.constexpr(42))
+        return AggregateWithConstexpr(a, 42)
 
-    @triton.jit
     def modify(self, a):
         self.a = a
 
@@ -386,15 +386,15 @@ def test_constexpr_generator():
 @tl.constexpr_function
 def Box(T):
 
-    @tl.core._aggregate
+    @tl.aggregate
     class BoxImpl:
         value: T
 
-        @triton.jit
         def create(value):
             return BoxImpl(value)
 
-        def __init__(self, value):
+        @tl.core.builtin
+        def __init__(self, value, _semantic=None):
             self.value = value
 
     return BoxImpl
@@ -480,17 +480,15 @@ def test_mutable_argument():
     # CHECK-NEXT:    return [[RANGE1]], [[RANGE2]], %arg0, %arg1
 
 
-@tl.core._aggregate
-class TestJitInit:
+@tl.aggregate
+class JITInitializer:
     x: tl.tensor
     y: tl.constexpr
 
-    @triton.jit
     def __init__(self, a, b, y: tl.constexpr):
         self.y: tl.constexpr = y
         self.x = a + b + tl.arange(0, self.y)
 
-    @triton.jit
     def double(self):
         self.x *= 2
 
@@ -501,14 +499,14 @@ def test_jit_init():
     # CHECK-LABEL: tt.func public @test_jit_init
     # CHECK-NEXT:    [[RANGE0:%.*]] = tt.make_range {end = 8 : i32, start = 4 : i32}
     # CHECK-NEXT:    [[RANGE1:%.*]] = tt.make_range {end = 12 : i32, start = 8 : i32}
-    # CHECK-NEXT:    [[P:%.*]] = tt.call @{{.*}}TestJitInit.__init__{{.*}}([[RANGE0]], [[RANGE1]])
+    # CHECK-NEXT:    [[P:%.*]] = tt.call @{{.*}}JITInitializer.__init__{{.*}}([[RANGE0]], [[RANGE1]])
     # CHECK-NEXT:    call @{{.*}}anchor{{.*}}([[P]])
     # CHECK-NEXT:    tt.make_range {end = 4 : i32, start = 0 : i32}
-    p = TestJitInit(tl.arange(4, 8), tl.arange(8, 12), 4)
+    p = JITInitializer(tl.arange(4, 8), tl.arange(8, 12), 4)
     anchor(p)
     tl.arange(0, p.y)
 
-    # CHECK-LABEL: tt.func private @{{.*}}TestJitInit.__init__
+    # CHECK-LABEL: tt.func private @{{.*}}JITInitializer.__init__
     # CHECK:         [[X:%.*]] = arith.addi %arg0, %arg1
     # CHECK:         [[RANGE:%.*]] = tt.make_range {end = 4 : i32, start = 0 : i32}
     # CHECK:         [[Y:%.*]] = arith.addi [[X]], [[RANGE]]

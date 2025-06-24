@@ -1574,7 +1574,13 @@ class _aggregate_type(base_type):
         return f"{name}<{', '.join(fields)}>"
 
 
-def _aggregate(cls):
+def _aggregate_impl(cls, jit):
+
+    # Make all non-builtin member functions jit functions by default.
+    for (name, member) in inspect.getmembers(cls):
+        if inspect.isfunction(member) or inspect.ismethod(member):
+            if not getattr(member, "__triton_builtin__", False):
+                setattr(cls, name, jit(member))
 
     # Define the wrapped Triton value type.
     class aggregate_value(base_value):
@@ -1641,6 +1647,10 @@ def _aggregate(cls):
     aggregate_value.__doc__ = cls.__doc__
 
     return aggregate_value
+
+
+def aggregate(cls):
+    return _aggregate_impl(cls, jit=jit)
 
 
 # -----------------------

@@ -5,7 +5,6 @@ import pytest
 import itertools
 
 from typing import Union
-from triton.language.core import _aggregate as aggregate
 
 from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
@@ -143,7 +142,7 @@ def store_smem_to_tensor_desc(desc, coord, smem):
 
 def Channel(T, alloc_fn):
 
-    @aggregate
+    @gl.aggregate
     class ChannelType:
         mem: T
         ready_bars: gl.shared_memory_descriptor
@@ -151,19 +150,16 @@ def Channel(T, alloc_fn):
         num_buffers: gl.constexpr
         num_consumers: gl.constexpr
 
-        @gluon.jit
         def alloc(shape: gl.constexpr, dtype: gl.constexpr, layout: gl.constexpr, num_buffers: gl.constexpr,
                   num_consumers: gl.constexpr = 1):
             mem = alloc_fn(dtype, [num_buffers] + shape, layout)
             return ChannelType._borrow(mem, shape, dtype, layout, num_buffers, num_consumers)
 
-        @gluon.jit
         def _borrow(mem, shape: gl.constexpr, dtype: gl.constexpr, layout: gl.constexpr, num_buffers: gl.constexpr,
                     num_consumers: gl.constexpr = 1):
             mem = mem._reinterpret(dtype, [num_buffers] + shape, layout)
             return ChannelType(mem, num_buffers, num_consumers)
 
-        @gluon.jit
         def __init__(self, mem, num_buffers, num_consumers):
             self.mem = mem
             self.ready_bars = gl.allocate_shared_memory(gl.int64, [num_buffers, 1], mbarrier.MBarrierLayout())
@@ -174,7 +170,6 @@ def Channel(T, alloc_fn):
             self.num_buffers: gl.constexpr = num_buffers
             self.num_consumers: gl.constexpr = num_consumers
 
-        @gluon.jit
         def increment(self, index, phase):
             if self.num_buffers == 1:
                 return gl.to_tensor(0), phase ^ 1
@@ -184,17 +179,14 @@ def Channel(T, alloc_fn):
             phase = gl.where(rollover, phase ^ 1, phase)
             return index, phase
 
-        @gluon.jit
         def initialize_for_consumer(self):
             for i in tl.static_range(self.num_buffers):
                 mbarrier.arrive(self.ready_bars.index(i), count=1)
 
-        @gluon.jit
         def initialize_for_producer(self):
             for i in tl.static_range(self.num_buffers):
                 mbarrier.arrive(self.empty_bars.index(i), count=self.num_consumers)
 
-        @gluon.jit
         def acquire_producer(self, index, phase):
             mem = self.mem.index(index)
             ready_bar = self.ready_bars.index(index)
@@ -203,7 +195,6 @@ def Channel(T, alloc_fn):
             mbarrier.wait(empty_bar, phase)
             return mem, ready_bar
 
-        @gluon.jit
         def acquire_consumer(self, index, phase):
             mem = self.mem.index(index)
             ready_bar = self.ready_bars.index(index)
@@ -212,15 +203,12 @@ def Channel(T, alloc_fn):
             mbarrier.wait(ready_bar, phase)
             return mem, empty_bar
 
-        @gluon.jit
         def create_producer(self):
             return Producer(self)
 
-        @gluon.jit
         def create_consumer(self):
             return Consumer(self)
 
-        @gluon.jit
         def release(self):
             if isinstance(self.mem, gl.shared_memory_descriptor):
                 self.mem._keep_alive()
@@ -228,49 +216,43 @@ def Channel(T, alloc_fn):
                 mbarrier.invalidate(self.ready_bars.index(i))
                 mbarrier.invalidate(self.empty_bars.index(i))
 
-    @aggregate
+    @gl.aggregate
     class Producer:
         channel: ChannelType
         phase: gl.tensor
         index: gl.tensor
 
-        @gluon.jit
         def __init__(self, channel):
             self.channel = channel
             self.phase = 0
             self.index = 0
 
-        @gluon.jit
         def acquire(self):
             mem, ready_bar = self.channel.acquire_producer(self.index, self.phase)
             self.index, self.phase = self.channel.increment(self.index, self.phase)
             return mem, ready_bar
 
-        @gluon.jit
         def emplace(self, value):
             mem, ready_bar = self.acquire()
             mem.store(value)
             mbarrier.arrive(ready_bar, count=1)
 
-    @aggregate
+    @gl.aggregate
     class Consumer:
         channel: ChannelType
         phase: gl.tensor
         index: gl.tensor
 
-        @gluon.jit
         def __init__(self, channel):
             self.channel = channel
             self.phase = 0
             self.index = 0
 
-        @gluon.jit
         def acquire(self):
             mem, empty_bar = self.channel.acquire_consumer(self.index, self.phase)
             self.index, self.phase = self.channel.increment(self.index, self.phase)
             return mem, empty_bar
 
-        @gluon.jit
         def get(self, layout: gl.constexpr):
             mem, empty_bar = self.acquire()
             value = mem.load(layout)
@@ -286,12 +268,11 @@ TensorMemoryChannel, TensorMemoryProducer, TensorMemoryConsumer = Channel(tensor
                                                                           allocate_tensor_memory)
 
 
-@aggregate
+@gl.aggregate
 class LoadContext:
     desc: tensor_descriptor
     channel: SharedMemoryChannel
 
-    @gluon.jit
     def __init__(self, desc, num_buffers: gl.constexpr, num_consumers: gl.constexpr = 1):
         self.desc = desc
         shape: gl.constexpr = desc.block_type.shape
@@ -299,26 +280,23 @@ class LoadContext:
                                                  num_consumers)
         self.channel.initialize_for_producer()
 
-    @gluon.jit
     def release(self):
         self.channel.release()
 
 
-@aggregate
+@gl.aggregate
 class PipelinedLoadProducer:
     desc: tensor_descriptor
     impl: SharedMemoryProducer
     offset: gl.tensor
     step: gl.constexpr
 
-    @gluon.jit
     def __init__(self, ctx, offset, step: gl.constexpr):
         self.desc = ctx.desc
         self.impl = ctx.channel.create_producer()
         self.offset = offset
         self.step: gl.constexpr = step
 
-    @gluon.jit
     def wait_and_issue_next(self):
         smem, ready_bar = self.impl.acquire()
 
@@ -329,13 +307,12 @@ class PipelinedLoadProducer:
         self.offset += self.step
 
 
-@aggregate
+@gl.aggregate
 class MMAContext:
     shape: gl.constexpr
     instr_shape: gl.constexpr
     channel: TensorMemoryChannel
 
-    @gluon.jit
     def __init__(self, shape: gl.constexpr, num_buffers: gl.constexpr, dtype: gl.constexpr = gl.float32):
         self.shape: gl.constexpr = shape
         self.instr_shape: gl.constexpr = get_mma_instr_shape(shape, dtype)
@@ -343,7 +320,6 @@ class MMAContext:
 
         self.channel = TensorMemoryChannel.alloc(shape, dtype, tmem_layout, num_buffers)
 
-    @gluon.jit
     def release(self):
         self.channel.release()
 
@@ -352,15 +328,13 @@ class MMAContext:
         return get_tmem_32x32b_reg_layout(self.instr_shape, self.shape, num_warps)
 
 
-@aggregate
+@gl.aggregate
 class MMAProducer:
     producer: TensorMemoryProducer
 
-    @gluon.jit
     def __init__(self, ctx):
         self.producer = ctx.channel.create_producer()
 
-    @gluon.jit
     def wait_and_issue_next(self, a, b, release_bars, use_acc):
         tmem, bar = self.producer.acquire()
         tcgen05_mma(a, b, tmem, use_acc=use_acc, mbarriers=[bar] + release_bars,
@@ -372,7 +346,7 @@ class MMAProducer:
 # ===-----------------------------------------------------------------------===#
 
 
-@aggregate
+@gl.aggregate
 class AttentionConfig:
     qk_scale: gl.tensor
     Z: gl.tensor
@@ -405,6 +379,7 @@ class AttentionConfig:
 
     mi_use_tmem: gl.constexpr
 
+    @tl.constexpr_function
     def __init__(self, qk_scale, Z, H, N_CTX, BLOCK_M, BLOCK_N, HEAD_DIM, dtype, num_warps, SPLIT_D_FACTOR):
         self.qk_scale = qk_scale
         self.Z = Z
@@ -416,7 +391,7 @@ class AttentionConfig:
         self.dtype = gl.constexpr(dtype)
         self.num_warps = gl.constexpr(num_warps)
 
-        self.SPLIT_D_FACTOR = SPLIT_D_FACTOR
+        self.SPLIT_D_FACTOR = gl.constexpr(SPLIT_D_FACTOR)
         self.SPLIT_M = self.BLOCK_M // 2
         self.SPLIT_D = self.HEAD_DIM // self.SPLIT_D_FACTOR
 
@@ -441,7 +416,6 @@ class AttentionConfig:
 
         self.mi_use_tmem = gl.constexpr(True)
 
-    @gluon.jit
     def get_program(self):
         start_m = gl.program_id(0)
         off_hz = gl.program_id(1)
@@ -454,7 +428,7 @@ class AttentionConfig:
         return AttentionProgram(self, start_m, off_hz, offset_y, qo_offset_y)
 
 
-@aggregate
+@gl.aggregate
 class AttentionProgram:
     config: AttentionConfig
     start_m: gl.tensor
@@ -469,7 +443,6 @@ class AttentionProgram:
         self.offset_y = offset_y
         self.qo_offset_y = qo_offset_y
 
-    @gluon.jit
     def get_loop_bounds(self, STAGE: gl.constexpr):
         BLOCK_M: gl.constexpr = self.config.BLOCK_M
         if STAGE == 1:
@@ -481,14 +454,13 @@ class AttentionProgram:
         return lo, hi
 
 
-@aggregate
+@gl.aggregate
 class AttentionTile:
     acc: gl.tensor
     m_i: gl.tensor
     l_i: gl.tensor
     q_smem: gl.shared_memory_descriptor
 
-    @gluon.jit
     def __init__(self, config):
         self.acc = gl.full([config.SPLIT_M, config.HEAD_DIM], 0, gl.float32, config.o_layout)
         self.m_i = gl.full([config.SPLIT_M], -float("inf"), gl.float32, gl.SliceLayout(1, config.o_splitn_layout))
@@ -497,7 +469,6 @@ class AttentionTile:
         smem_layout: gl.constexpr = get_nvmma_layout((config.SPLIT_M, config.HEAD_DIM), config.dtype)
         self.q_smem = gl.allocate_shared_memory(config.dtype, (config.SPLIT_M, config.HEAD_DIM), smem_layout)
 
-    @gluon.jit
     def do_epilogue(self, tile_id: gl.constexpr, M, o_smem, desc_o, prog, config):
         self.m_i += gl.convert_layout(gl.log2(self.l_i), self.m_i.type.layout)
         o = self.acc / self.l_i[:, None]
@@ -518,7 +489,7 @@ class AttentionTile:
 # ===-----------------------------------------------------------------------===#
 
 
-@aggregate
+@gl.aggregate
 class InnerLoopInfo:
     qk_mma_ctx: MMAContext
     o_mma_ctx: MMAContext
@@ -527,7 +498,6 @@ class InnerLoopInfo:
     li_smem: gl.shared_memory_descriptor
     q_smem: gl.shared_memory_descriptor
 
-    @gluon.jit
     def __init__(self, config, tile):
         self.qk_mma_ctx = MMAContext(config.qk_shape, num_buffers=1)
         self.qk_mma_ctx.channel.initialize_for_producer()
@@ -562,7 +532,6 @@ class InnerLoopInfo:
 
         self.q_smem = tile.q_smem
 
-    @gluon.jit
     def consume_result(self, tile):
         tile.acc = self.o_mma_ctx.channel.mem.index(0).load(tile.acc.type.layout)
         tile.l_i = self.li_smem.load(tile.l_i.type.layout)
