@@ -8,16 +8,16 @@
 
 namespace mlir {
 
-void MembarAnalysis::run(FuncBlockInfoMapT &funcBlockInfoMap) {
+void MembarOrFenceAnalysis::run(FuncBlockInfoMapT &funcBlockInfoMap) {
   FunctionOpInterface funcOp =
       dyn_cast<FunctionOpInterface>(allocation->getOperation());
   OpBuilder builder(funcOp.getContext());
   resolve(funcOp, &funcBlockInfoMap, &builder);
 }
 
-void MembarAnalysis::resolve(FunctionOpInterface funcOp,
-                             FuncBlockInfoMapT *funcBlockInfoMap,
-                             OpBuilder *builder) {
+void MembarOrFenceAnalysis::resolve(FunctionOpInterface funcOp,
+                                    FuncBlockInfoMapT *funcBlockInfoMap,
+                                    OpBuilder *builder) {
   // Initialize the blockList. Operations are organized into "virtual blocks",
   // which represent segments of straight-line code analyzed by each iteration
   // of the dataflow analysis. Virtual blocks abstract over both control flow
@@ -103,8 +103,8 @@ void MembarAnalysis::resolve(FunctionOpInterface funcOp,
   });
 }
 
-void MembarAnalysis::visitTerminator(Operation *op,
-                                     SmallVector<VirtualBlock> &successors) {
+void MembarOrFenceAnalysis::visitTerminator(
+    Operation *op, SmallVector<VirtualBlock> &successors) {
   if (isa<BranchOpInterface>(op)) {
     // Collect the block successors of the branch.
     for (Block *successor : op->getSuccessors())

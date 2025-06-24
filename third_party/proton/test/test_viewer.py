@@ -101,10 +101,13 @@ def test_min_time_flops():
     ret = get_min_time_flops(gf.dataframe, device_info)
     device0_idx = gf.dataframe["device_id"] == "0"
     device1_idx = gf.dataframe["device_id"] == "1"
+    device2_idx = gf.dataframe["device_id"] == "2"
     # CDNA2
-    np.testing.assert_allclose(ret[device0_idx].to_numpy(), [[0.000026]], atol=1e-5)
+    np.testing.assert_allclose(ret[device0_idx].to_numpy(), [[0.000055]], atol=1e-5)
     # CDNA3
     np.testing.assert_allclose(ret[device1_idx].to_numpy(), [[0.000038]], atol=1e-5)
+    # CDNA4
+    np.testing.assert_allclose(ret[device2_idx].to_numpy(), [[0.000217]], atol=1e-5)
 
 
 def test_min_time_bytes():
@@ -120,10 +123,13 @@ def test_min_time_bytes():
     ret = get_min_time_bytes(gf.dataframe, device_info)
     device0_idx = gf.dataframe["device_id"] == "0"
     device1_idx = gf.dataframe["device_id"] == "1"
+    device2_idx = gf.dataframe["device_id"] == "2"
     # CDNA2
-    np.testing.assert_allclose(ret[device0_idx].to_numpy(), [[6.10351e-06]], atol=1e-6)
+    np.testing.assert_allclose(ret[device0_idx].to_numpy(), [[3.125e-06]], atol=1e-6)
     # CDNA3
     np.testing.assert_allclose(ret[device1_idx].to_numpy(), [[1.93378e-05]], atol=1e-6)
+    # CDNA4
+    np.testing.assert_allclose(ret[device2_idx].to_numpy(), [[0.000125]], atol=1e-6)
 
 
 def test_percentage():
