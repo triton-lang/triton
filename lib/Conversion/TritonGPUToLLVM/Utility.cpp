@@ -102,6 +102,7 @@ LLVM::LLVMFuncOp appendOrGetExternFuncOp(RewriterBase &rewriter, Operation *op,
 Value matrixVectorProd(TritonLLVMOpBuilder &b, const LinearLayout &A, Value x) {
   assert(A.getNumInDims() == 1);
   assert(A.getNumOutDims() == 1);
+
   auto flatten = [](const std::vector<std::vector<int32_t>> &matrix) {
     SmallVector<int32_t> ret;
     for (const auto &row : matrix) {
@@ -109,40 +110,58 @@ Value matrixVectorProd(TritonLLVMOpBuilder &b, const LinearLayout &A, Value x) {
     }
     return ret;
   };
+
   auto nCol = A.getTotalInDimSizeLog2();
   auto nRow = A.getTotalOutDimSizeLog2();
+
   SmallVector<int32_t> matrix = flatten(A.getBases().begin()->second);
   assert(matrix.size() == nCol);
+
+  // rowwise pop-count
+  SmallVector<int> rowPopCnt(nRow, 0);
+  for (int c = 0; c < nCol; ++c) {
+    uint32_t colBits = matrix[c];
+    for (int r = 0; r < nRow; ++r)
+      if (colBits & (1u << r))
+        ++rowPopCnt[r];
+  }
+
   // We iterate the matrix following the diagonals
-  // The idea here is that we want to generate code of the form:
-  // \xor_i (x & mask_i) << s_i
-  // where s_i may by positive or negative (left or right shift)
-  // The hope here (and we see it in codegen) is that LLVM can turn
-  // the xor into a sum and then the sum + LHS/RHS can be fused into a mad.lo
-  // Get the i-th diagonal
-  auto getMask = [&](int i) {
+  // The idea here is that each row or column of a swizzled conversion
+  // will have at most 2 bits but often diagonals have many more.
+  // It's not uncommon to have all the ones of a swizzled conversion in 2-3
+  // diagonals
+  auto getMaskAndAllRowsUnique = [&](int i) -> std::pair<uint32_t, bool> {
     uint32_t mask = 0;
     int row = i < 0 ? -i : 0;
     int col = i < 0 ? 0 : i;
+    bool allRowsUnique = true;
     while (row < nRow && col < nCol) {
       uint32_t bitValue = (matrix[col] >> row) & 1u;
       mask |= bitValue << col;
+      allRowsUnique &= (rowPopCnt[row] == 1);
       ++row;
       ++col;
     }
-    return mask;
+    return {mask, allRowsUnique};
   };
 
-  Value ret = b.i32_val(0);
+  Value xor_ = b.i32_val(0);
+  Value add = b.i32_val(0);
   for (int i = -nRow + 1; i < nCol; i++) {
-    auto mask = getMask(i);
+    auto [mask, allRowsUnique] = getMaskAndAllRowsUnique(i);
     if (mask == 0)
       continue;
     auto masked = b.and_(x, b.i32_val(mask));
-    ret = b.xor_(ret, i >= 0 ? Value(b.lshr(masked, b.i32_val(i)))
-                             : Value(b.shl(masked, b.i32_val(-i))));
+    auto shifted = i >= 0 ? Value(b.lshr(masked, b.i32_val(i)))
+                          : Value(b.shl(masked, b.i32_val(-i)));
+    auto canGenerateIMADLO = allRowsUnique && i <= 0;
+    if (canGenerateIMADLO)
+      add = b.add(add, shifted);
+    else
+      xor_ = b.xor_(xor_, shifted);
   }
-  return ret;
+  return b.add(xor_, add);
 }
 
 } // namespace triton::gpu
@@ -197,7 +216,7 @@ applyLinearLayout(Location loc, RewriterBase &rewriter,
       x = b.or_(x, b.shl(idx, b.i32_val(shift)));
       shift += layout.getInDimSizeLog2(inDimName);
     }
-    // Flatten ins
+    // F
     auto matrix = layout.sublayout(inDimNames, outIndices[0].first);
     matrix = matrix.flattenIns();
     auto out = triton::gpu::matrixVectorProd(b, matrix, x);
