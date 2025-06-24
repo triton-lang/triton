@@ -808,7 +808,6 @@ def _softmax_tile(tile_id: gl.constexpr, config, info, STAGE: gl.constexpr):
             mi_producer = mi_producer.emplace(gl.convert_layout(m_ij.expand_dims(1), config.mi_2d_layout))
         else:
             mi_producer = mi_producer.emplace(m_ij)
-        # qk = _add_f32x2(_mul_f32x2(qk, config.qk_scale), -m_ij[:, None])
         qk = qk * config.qk_scale - m_ij[:, None]
 
         if config.HEAD_DIM == 64:
@@ -1007,10 +1006,7 @@ def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype):
     p = torch.softmax(p.float(), dim=-1).half()
     ref_out = torch.matmul(p, v)
 
-    # with torch.nn.attention.sdpa_kernel([torch.nn.attention.SDPBackend.CUDNN_ATTENTION]):
-    #     ref_out = torch.nn.functional.scaled_dot_product_attention(q, k, v, scale=sm_scale, is_causal=causal)
     tri_out, _ = attention_forward(q, k, v, causal, sm_scale)
-
     torch.testing.assert_close(ref_out, tri_out, atol=1e-2, rtol=0)
 
 
@@ -1018,22 +1014,12 @@ def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype):
 # Benchmarking
 # ===-----------------------------------------------------------------------===#
 
-profile = False
-
-if profile:
-    BATCH = [4]
-    N_HEADS = [32]
-    HEAD_DIM = [64]
-    causal = [True]
-    providers = ["triton-fp16"]
-    N_CTX = [16 * 1024]
-else:
-    BATCH = [4]
-    N_HEADS = [32]
-    HEAD_DIM = [64, 128]
-    causal = [False, True]
-    providers = ["triton-fp16", "cudnn-fp16"]
-    N_CTX = [2**i for i in range(10, 17)]
+BATCH = [4]
+N_HEADS = [32]
+HEAD_DIM = [64, 128]
+causal = [False, True]
+providers = ["triton-fp16", "cudnn-fp16"]
+N_CTX = [2**i for i in range(10, 17)]
 
 bench_configs = []
 for Z, H, D, is_causal in itertools.product(BATCH, N_HEADS, HEAD_DIM, causal):
@@ -1081,10 +1067,7 @@ def bench(Z, H, N_CTX, HEAD_DIM, causal, provider):
         else:
             raise ValueError(f"Unsupported provider: {provider}")
 
-        if profile:
-            ms, _ = 1, fn()
-        else:
-            ms = triton.testing.do_bench(fn)
+        ms = triton.testing.do_bench(fn)
         flops_per_matmul = 2.0 * Z * H * N_CTX * N_CTX * HEAD_DIM
         total_flops = 2 * flops_per_matmul
         if causal:
