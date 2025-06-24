@@ -448,7 +448,7 @@ def test_mutable_argument():
     # CHECK-NEXT:    [[P1:%.*]]:2 = tt.call @{{.*}}inplace_swap{{.*}}([[FIRST0]], [[SECOND0]])
     # CHECK-NEXT:    [[FIRST1:%.*]] = tt.make_range {end = 12 : i32, start = 8 : i32}
     # CHECK-NEXT:    [[P2:%.*]]:2 = tt.call @{{.*}}mutate_first{{.*}}([[P1]]#0, [[P1]]#1, [[FIRST1]])
-    # CHECK-NEXT:    [[SECOND1:%.*]] = tt.make_range {end = 16 : i32, start = 12 : i32}
+    # CHECK-NEXT:    [[SECOND1:%.*]] = tt.make_range {end = 20 : i32, start = 12 : i32}
     # CHECK-NEXT:    [[P3:%.*]]:2 = tt.call @{{.*}}mutate_second{{.*}}([[P2]]#0, [[P2]]#1, [[SECOND1]])
     # CHECK-NEXT:    [[P4:%.*]]:2 = tt.call @{{.*}}inplace_swap{{.*}}([[P3]]#0, [[P3]]#1)
     p = MutablePair(tl.arange(0, 4), tl.arange(4, 8))
@@ -456,7 +456,7 @@ def test_mutable_argument():
 
     box = Box(MutablePair)(p)
     box.value.mutate_first(tl.arange(8, 12))
-    box.value.mutate_second(tl.arange(12, 16))
+    box.value.mutate_second(tl.arange(12, 20))
     inplace_swap(box.value)
 
     # CHECK-NEXT:    call @{{.*}}anchor{{.*}}([[P4]]#0, [[P4]]#1)

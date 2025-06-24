@@ -513,8 +513,10 @@ class CodeGenerator(ast.NodeVisitor):
 
     def emit_return(self, handles):
         all_handles = []
-        for name, ty in self.prototype.args_mut:
-            self.dereference_name(name)._flatten_ir(all_handles)
+        for i, (name, ty) in enumerate(self.prototype.args_mut):
+            value = self.dereference_name(name)
+            self.prototype.args_mut[i][1] = value.type
+            value._flatten_ir(all_handles)
         all_handles.extend(handles)
         self.builder.ret(all_handles)
 
@@ -600,8 +602,8 @@ class CodeGenerator(ast.NodeVisitor):
                 self.prototype.ret_types = self.ret_type.types
             else:
                 self.prototype.ret_types = [self.ret_type]
-            self.fn.reset_type(self.prototype.serialize(self.builder))
             self.emit_return([self.builder.create_poison(ty) for ty in self.prototype.return_types_ir(self.builder)])
+        self.fn.reset_type(self.prototype.serialize(self.builder))
         self.fn.finalize()
 
         if insert_pt:
@@ -1204,7 +1206,7 @@ class CodeGenerator(ast.NodeVisitor):
         for i, arg in enumerate(args):
             if isinstance(arg, (language.dtype, float, int, bool, JITFunction)):
                 args[i] = language.core.constexpr(arg)
-        args_mut = [(name, arg.type)
+        args_mut = [[name, arg.type]
                     for (name, arg) in zip(fn.arg_names, args)
                     if arg is not None and getattr(arg.type, "__triton_mutable__", False)]
         args_cst = find_paths_if(args, lambda _, x: _is_constexpr(x))
