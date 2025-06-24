@@ -84,7 +84,7 @@ void emitSynclog(IRRewriter &rewriter, Operation *op,
 
   // Remove invalid characters from the format string.
   formatStr.erase(std::remove_if(formatStr.begin(), formatStr.end(),
-                                 [](char c) { return c == '\t' || c == '\n'; }),
+                                 [](char c) { return c == '\t'; }),
                   formatStr.end());
 
   llvm::SmallVector<Value> args{time64,      threadIdx_x, threadIdx_y,
@@ -105,13 +105,7 @@ void emitSynclog(IRRewriter &rewriter, Operation *op,
     os << *formatSubstr << " ";
     numArgsPrinted++;
   }
-
-  llvm::SmallString<64> formatStrNullTerminator(formatStr);
-  formatStrNullTerminator.push_back('\0');
-  Value formatStrValue = LLVM::addStringToModule(loc, rewriter, "printfFormat_",
-                                                 formatStrNullTerminator);
-  targetInfo.printf(rewriter, formatStrValue, formatStrNullTerminator.size(),
-                    args);
+  targetInfo.printf(rewriter, formatStr, args);
 }
 
 namespace {
