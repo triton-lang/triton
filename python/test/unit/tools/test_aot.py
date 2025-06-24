@@ -10,6 +10,11 @@ import triton
 from triton.backends.compiler import GPUTarget
 from triton.backends.nvidia.driver import include_dirs, library_dirs
 
+
+def is_hip():
+    return triton.runtime.driver.active.get_current_target().backend == "hip"
+
+
 kernel_utils_src = """
 import triton
 
@@ -438,17 +443,18 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32,
 
 
 def test_ttgir_to_hasco():
-    src = """
-module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32, "ttg.num-ctas" = 1 : i32} {
-  tt.func public @sum_kernel_0d1d(%arg0: !tt.ptr<i32>, %arg1: !tt.ptr<i32>) {
-    tt.return
-  }
-}
-"""
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        kernel_path = os.path.join(tmp_dir, "empty_kernel.ttgir")
-        with open(kernel_path, "w") as fp:
-            fp.write(src)
-        k = triton.compile(kernel_path, target=GPUTarget("hip", "gfx942", 64))
-        hsaco = k.asm["hsaco"].decode('latin-1')
-        assert "amdgcn-amd-amdhsa--gfx942" in hsaco
+    if is_hip():
+        src = """
+    module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32, "ttg.num-ctas" = 1 : i32} {
+    tt.func public @sum_kernel_0d1d(%arg0: !tt.ptr<i32>, %arg1: !tt.ptr<i32>) {
+        tt.return
+    }
+    }
+    """
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            kernel_path = os.path.join(tmp_dir, "empty_kernel.ttgir")
+            with open(kernel_path, "w") as fp:
+                fp.write(src)
+            k = triton.compile(kernel_path, target=GPUTarget("hip", "gfx942", 64))
+            hsaco = k.asm["hsaco"].decode('latin-1')
+            assert "amdgcn-amd-amdhsa--gfx942" in hsaco
