@@ -338,6 +338,7 @@ class CodeGenerator(ast.NodeVisitor):
         # Are we currently visiting an ast.arg's default value?  These have some
         # special handling.
         self.visiting_arg_default_value = False
+        # A global varibale to indicate whether current node defined a name (otherwise None)
         self.defined_name = None
 
     builtin_namespace: Dict[str, Any] = {
@@ -603,6 +604,10 @@ class CodeGenerator(ast.NodeVisitor):
                 value = self.semantic.to_tensor(value)
             return value
 
+        # temporarily store the defined name globally,
+        # and delete it after finishing the visit of child nodes
+        self.defined_name = node.targets[0].id
+        values = _sanitize_value(self.visit(node.value))
         targets = [node.target] if isinstance(node, ast.AnnAssign) else node.targets
 
         # operations of right hand side of assignment will be built after walking through the following self.visit(node.value)
@@ -1410,21 +1415,13 @@ class CodeGenerator(ast.NodeVisitor):
             self.cur_node = node
             if hasattr(node, 'lineno') and hasattr(node, 'col_offset'):
                 self.builder.set_loc(self.file_name, self.begin_line + node.lineno, node.col_offset)
-                if hasattr(node, 'target'):
-                    self.builder.set_loc_def_name(node.target[0].id)
-                if hasattr(node, 'targets'):
-                    self.builder.set_loc_def_name(node.targets[0].id)
-                # this syntax defined some variable name
-                if self.defined_name is not None:
-                    self.builder.set_loc_def_name(self.defined_name)
-                last_loc = self.builder.get_loc()
 
-            defined_name = self.defined_name
-
-            # if the value of this syntax will be assigned to a name
+            # if this node is used to define a name, temporarily store it
+            # and store it into the parent's loc after visiting the child node
             if self.defined_name is not None:
                 self.builder.set_loc_def_name(self.defined_name)
-                self.defined_name = None    # sub-syntax didn't define this value
+                # child nodes didn't define this name, so don't carry a name to them
+                self.defined_name = None
             try:
                 ret = super().visit(node)
             except CompilationError:
