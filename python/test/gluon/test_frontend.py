@@ -312,7 +312,7 @@ def warp_specialize_worker1(a, b, e: ttgl.constexpr):
     pass
 
 
-@tl.core._aggregate(frozen=True)
+@tl.core._aggregate
 class Pair:
     first: tl.tensor
     second: tl.tensor
@@ -342,8 +342,8 @@ def test_warp_specialize():
     # CHECK-NEXT:    [[C:%.*]] = tt.make_range {end = 4 : i32, start = 0 : i32}
     # CHECK-NEXT:    [[OUTS:%.*]]:3 = ttg.warp_specialize([[A]], [[B]], [[C]]) {{.*}}requestedRegisters = array<i32: 24, 48>
     # CHECK-NEXT:    default {
-    # CHECK-NEXT:      [[RESULTS:%.*]]:3 = tt.call @{{.*}}warp_specialize_default{{.*}}cconstexpr_42{{.*}}([[A]], [[B]], [[C]])
-    # CHECK-NEXT:      warp_yield [[RESULTS]]#0, [[RESULTS]]#1, [[RESULTS]]#2
+    # CHECK-NEXT:      [[RESULTS:%.*]]:5 = tt.call @{{.*}}warp_specialize_default{{.*}}cconstexpr_42{{.*}}([[A]], [[B]], [[C]])
+    # CHECK-NEXT:      warp_yield [[RESULTS]]#2, [[RESULTS]]#3, [[RESULTS]]#4
     # CHECK-NEXT:    }
     # CHECK-NEXT:    partition0(%arg0: tensor<1xi32, [[BLOCKED]]>, %arg1: tensor<2xi32, [[BLOCKED]]>, %arg2: tensor<4xi32, [[BLOCKED]]>) num_warps(4) {
     # CHECK-NEXT:      call @{{.*}}warp_specialize_worker0{{.*}}cconstexpr_42{{.*}}(%arg0, %arg1, %arg2)
