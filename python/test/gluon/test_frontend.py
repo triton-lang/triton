@@ -485,13 +485,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 @gluon.jit
 def warpgroup_mma_wait_kernel():
     layout: ttgl.constexpr = ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1], instr_shape=[16, 32, 16])
-<<<<<<< HEAD
     acc = ttgl.full([128, 128], 0, dtype=ttgl.float16, layout=layout)
     hopper.warpgroup_mma_wait(num_outstanding=1, deps=[acc])
-=======
-    acc = ttgl.zeros([128, 128], dtype=ttgl.float16, layout=layout)
-    hopper.warpgroup_mma_wait([acc], 1)
->>>>>>> 31f072cbd (Added wgmma wait, working on tests)
 
 
 @pytest.mark.skipif(not is_hopper(), reason="Requires Hopper WGMMA")
@@ -499,7 +494,6 @@ def test_warpgroup_mma_wait(fresh_knobs):
     knobs.compilation.disable_line_info = True
 
     h = warpgroup_mma_wait_kernel.warmup(grid=(1, ))
-<<<<<<< HEAD
     expecttest.assert_expected_inline(
         anonymize_ir(h.asm["source"]), """\
 #mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 32, 16]}>
@@ -513,9 +507,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 } loc(#loc)
 #loc = loc(unknown)
 """)
-=======
-    print(h.asm["source"])
->>>>>>> 31f072cbd (Added wgmma wait, working on tests)
 
 
 @gluon.jit
