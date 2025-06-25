@@ -1,6 +1,6 @@
 import triton
 import triton.language as tl
-from triton._filecheck import filecheck_test, run_filecheck_test
+from triton._filecheck import filecheck_test, run_filecheck_test, run_parser
 
 # ===-----------------------------------------------------------------------===#
 # Unit Tests
@@ -511,3 +511,20 @@ def test_jit_init():
     # CHECK:         [[RANGE:%.*]] = tt.make_range {end = 4 : i32, start = 0 : i32}
     # CHECK:         [[Y:%.*]] = arith.addi [[X]], [[RANGE]]
     # CHECK:         return [[Y]]
+
+
+@triton.jit
+def modify(ref):
+    if ref.value:
+        ref.value = False
+
+
+@triton.jit
+def test_it():
+    t = True
+    box = Box(tl.tensor)(t)
+    for i in range(10):
+        modify(box)
+
+
+print(run_parser(test_it))
