@@ -451,17 +451,12 @@ public:
         warpsPerTileMFMA(dotOp, retShape, numWarps, {mDim, nDim});
 
     // Use transposed mfma layout to enable larger vectorization for global
-    // store instructions, except for fp8 matmul kernels due to regression
-    // TODO (lixun): investigate the regression and enable this feature again
+    // store instructions.
     auto aElemTy = mfmaInstr->aElementType;
-    bool isFP8 = llvm::isa<Float8E5M2FNUZType, Float8E4M3FNUZType,
-                           Float8E4M3FNType, Float8E5M2Type>(aElemTy);
-    bool isTransposed =
-        isChainDotHead(dotOp) || isChainDotTail(dotOp) || !isFP8;
     ttg::AMDMfmaEncodingAttr mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
         oldRetType.getContext(),
         /*version*/ mfmaVersion, warpsPerTile,
-        /*instrShape*/ mDim, nDim, isTransposed, CTALayout);
+        /*instrShape*/ mDim, nDim, /*isTransposed=*/true, CTALayout);
 
     Type mfmaAccType;
     if (oldRetType.getElementType().isIntOrIndex())
