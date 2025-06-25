@@ -552,12 +552,16 @@ public:
                  ConvertTritonLoadToBufferLoad<ttg::AsyncCopyGlobalToLocalOp>,
                  ConvertTritonStoreToBufferStore>(context, assumptions, solver);
 
+    char *buffer_atomics_env = std::getenv("AMDGCN_DISABLE_BUFFER_ATOMICS");
+    bool allow_buffer_atomics =
+        buffer_atomics_env == nullptr || std::strcmp(envValue, "1") != 0;
+
     // Gate buffer atomics behind CDNA3 for now
     // GFX942-specific assumptions regarding cache coherence are made when
     // lowering to LLVM
     triton::AMD::ISAFamily isaFamily =
         triton::AMD::deduceISAFamily(archGenerationName);
-    if (ISAFamily::CDNA3 == isaFamily)
+    if (allow_buffer_atomics && ISAFamily::CDNA3 == isaFamily)
       patterns.add<ConvertTritonAtomicRMWOpToBufferAtomicRMW>(
           context, assumptions, axisInfoAnalysis, solver, isaFamily);
 
