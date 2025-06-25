@@ -513,18 +513,20 @@ def test_jit_init():
     # CHECK:         return [[Y]]
 
 
+@filecheck_test
 @triton.jit
-def modify(ref):
-    if ref.value:
-        ref.value = False
+def test_modify_if_livein():
+    # CHECK-LABEL: test_modify_if_livein
 
-
-@triton.jit
-def test_it():
-    t = True
-    box = Box(tl.tensor)(t)
+    # CHECK: [[LOOP_OUT:%.*]] = scf.for {{.*}} iter_args([[BOX:%.*]] = %true)
+    # CHECK:   [[LIVEOUT:%.*]] = scf.if [[BOX]]
+    # CHECK:     yield %false
+    # CHECK:   else
+    # CHECK:     yield [[BOX]]
+    # CHECK:   yield [[LIVEOUT]]
+    # CHECK: call @{{.*}}anchor{{.*}}([[LOOP_OUT]])
+    box = Box(tl.tensor)(tl.core.to_tensor(True))
     for i in range(10):
-        modify(box)
-
-
-print(run_parser(test_it))
+        if box.value:
+            box.value = False
+    anchor(box.value)
