@@ -1,10 +1,12 @@
 from enum import Enum
 import triton
-import triton.language as tl
 import torch
 import torch.nn.functional as F
 from .mxfp_details._upcast_from_mxfp import _upcast_from_mxfp
 from .mxfp_details._downcast_to_mxfp import _downcast_to_mxfp
+from ..swizzle import SwizzlingType, swizzle, unswizzle, perm_tensor_to_contig, perm_tensor_from_contig
+from ..swizzle import unswizzle_mxfp4_value_hopper_torch, unswizzle_mx_scale_bw_torch, unswizzle_mxfp4_scale_hopper_torch
+from ..swizzle import swizzle_mxfp4_value_hopper, swizzle_mx_scale_bw, swizzle_mxfp4_scale_hopper
 
 # -----------------------------------------------------------------------------
 #                      Dequantization / Quantization Utilities
@@ -17,82 +19,9 @@ def get_max_quant_val(dtype: torch.dtype):
     return d[dtype]
 
 
-class SwizzlingType(Enum):
-    HOPPER_VALUE = 0
-    HOPPER_SCALE = 1
-    BLACKWELL_SCALE = 2
-
-
 class DequantScaleRoundingMode(Enum):
     ROUND_UP = 0
     ROUND_DOWN = 1
-
-
-SWIZZLE_ALIGN_INNER = 8
-SWIZZLE_SIZE_INNER = 4
-SWIZZLE_SIZE_OUTER = 128
-
-
-@triton.jit
-def unswizzle_mx_scale_bw(x, SIZE_OUTER: tl.constexpr = SWIZZLE_SIZE_OUTER,
-                          SIZE_INNER: tl.constexpr = SWIZZLE_SIZE_INNER,
-                          ALIGN_INNER: tl.constexpr = SWIZZLE_ALIGN_INNER):
-    shape_0: tl.constexpr = x.shape[0]
-    shape_1: tl.constexpr = x.shape[1]
-    tl.static_assert(shape_1 % SIZE_OUTER == 0)
-    tl.static_assert(shape_1 // SIZE_OUTER <= ALIGN_INNER)
-    x = x.reshape(shape_0, (shape_1 // SIZE_OUTER) // SIZE_INNER, 32, SIZE_OUTER // 32, SIZE_INNER)
-    x = x.trans(0, 3, 2, 1, 4).reshape(shape_0 * SIZE_OUTER, shape_1 // SIZE_OUTER)
-    return x
-
-
-def perm_to_contig(ndim: int, axis: int, swizzle_axis: int | None = None) -> tuple[int, ...]:
-    """
-    Permute the shape so that axis is the last dimension and swizzle_axis is the second to last dimension.
-    """
-    # FIXME(Lezcano): This API is not very good as it's too generic.
-    # Chances are we just care about the cases
-    # - axis=-2 and swizzle_axis=-1
-    # - axis=-1 and swizzle_axis=-2
-    # - axis=anything and swizzle_axis=None
-    # We could probably just implement
-    # perm_to_contig(ndim, transpose: bool)
-    # where we transpose the last two dimensions if transpose is True and otherwise we leave them as is.
-    axis = axis if axis >= 0 else axis + ndim
-    if swizzle_axis is not None:
-        swizzle_axis = swizzle_axis if swizzle_axis >= 0 else swizzle_axis + ndim
-
-    assert axis != swizzle_axis
-    shape = list(range(ndim))
-    shape[axis], shape[-1] = shape[-1], shape[axis]
-    if swizzle_axis is not None:
-        if swizzle_axis == len(shape) - 1:
-            swizzle_axis = axis
-        shape[swizzle_axis], shape[-2] = shape[-2], shape[swizzle_axis]
-    return tuple(shape)
-
-
-def perm_from_contig(ndim: int, axis: int, swizzle_axis: int | None = None) -> tuple[int, ...]:
-    # Invert the permutation via argsort
-    perm = perm_to_contig(ndim, axis, swizzle_axis)
-    inv = [0] * ndim
-    for i, v in enumerate(perm):
-        inv[v] = i
-    return tuple(inv)
-
-
-def perm_tensor_to_contig(x: torch.Tensor, axis: int, swizzle_axis: int | None = None) -> torch.Tensor:
-    """
-    Permute the tensor x moving axis to the last dimension and swizzle_axis to the second to last dimension.
-    """
-    return x.permute(perm_to_contig(x.ndim, axis, swizzle_axis))
-
-
-def perm_tensor_from_contig(x: torch.Tensor, axis: int, swizzle_axis: int | None = None) -> torch.Tensor:
-    """
-    Permute the tensor x moving the last dimension to axis and the second to last dimension to swizzle_axis.
-    """
-    return x.permute(perm_from_contig(x.ndim, axis, swizzle_axis))
 
 
 def downcast_to_mxfp(src_tensor: torch.Tensor, out_quant_type: torch.dtype, axis: int, swizzle_axis: int | None = None,
@@ -112,11 +41,8 @@ def downcast_to_mxfp(src_tensor: torch.Tensor, out_quant_type: torch.dtype, axis
          with the swizzle_axis. See the relevant swizzle_* functions for more details.
     """
     ndim = src_tensor.ndim
-    axis = axis if axis >= 0 else axis + ndim
-    swizzle_axis = swizzle_axis if swizzle_axis is None or swizzle_axis >= 0 else swizzle_axis + ndim
     assert -ndim <= axis < ndim, f"Invalid axis {axis=}"
-    assert swizzle_axis is None or -ndim <= swizzle_axis < ndim, f"Invalid swizzle axis {swizzle_axis=}"
-    assert swizzle_axis is None or axis != swizzle_axis, f"Axis and swizzle axis cannot be the same {axis=} {swizzle_axis=}"
+    axis = axis if axis >= 0 else axis + ndim
     # downcast
     src_tensor = src_tensor.transpose(axis, src_tensor.ndim - 1)
     is_fp4 = out_quant_type == torch.uint8
@@ -136,55 +62,23 @@ def downcast_to_mxfp(src_tensor: torch.Tensor, out_quant_type: torch.dtype, axis
     kernel_quant_tensor = out_quant_tensor.view(-1, out_quant_tensor.shape[-1])
     kernel_scale = out_scale.view(-1, out_scale.shape[-1])
 
-    blocks_out_dim = triton.cdiv(kernel_src_tensor.shape[0], BLOCK_OUT_DIM)
-    blocks_quant_dim = triton.cdiv(kernel_src_tensor.shape[1], BLOCK_QUANT_DIM)
+    grid_out = triton.cdiv(kernel_src_tensor.shape[0], BLOCK_OUT_DIM)
+    grid_quant = triton.cdiv(kernel_src_tensor.shape[1], BLOCK_QUANT_DIM)
 
-    _downcast_to_mxfp[(blocks_out_dim, blocks_quant_dim)](kernel_quant_tensor, *kernel_quant_tensor.stride(),
-                                                          kernel_scale, *kernel_scale.stride(), kernel_src_tensor,
-                                                          *kernel_src_tensor.stride(), *kernel_src_tensor.shape,
-                                                          BLOCK_OUT_DIM, BLOCK_QUANT_DIM,
-                                                          DEQUANT_SCALE_ROUNDING_MODE.value, num_warps=8)
+    _downcast_to_mxfp[(grid_out, grid_quant)](kernel_quant_tensor, *kernel_quant_tensor.stride(), kernel_scale,
+                                              *kernel_scale.stride(), kernel_src_tensor, *kernel_src_tensor.stride(),
+                                              *kernel_src_tensor.shape, BLOCK_OUT_DIM, BLOCK_QUANT_DIM,
+                                              DEQUANT_SCALE_ROUNDING_MODE.value, num_warps=8)
 
     out_quant_tensor = out_quant_tensor.transpose(axis, src_tensor.ndim - 1)
     out_scale = out_scale.transpose(axis, src_tensor.ndim - 1)
     # Swizzling
+    swizzle_axis = swizzle_axis if swizzle_axis is None or swizzle_axis >= 0 else swizzle_axis + ndim
+    assert swizzle_axis is None or -ndim <= swizzle_axis < ndim, f"Invalid swizzle axis {swizzle_axis=}"
+    assert swizzle_axis is None or axis != swizzle_axis, f"Axis and swizzle axis cannot be the same {axis=} {swizzle_axis=}"
     out_quant_tensor = swizzle(out_quant_tensor, axis, swizzle_axis, swizzle_value)
     out_scale = swizzle(out_scale, axis, swizzle_axis, swizzle_scale)
     return out_quant_tensor, out_scale
-
-
-def swizzle(tensor, axis, swizzle_axis, swizzle_mode):
-    # Permute the tensor so that axis is the last dimension and swizzle_axis is the second to last dimension.
-    perm = list(range(tensor.ndim))
-    perm[tensor.ndim - 1], perm[axis] = axis, tensor.ndim - 1
-    if swizzle_axis is not None:
-        perm[tensor.ndim - 2], perm[swizzle_axis] = swizzle_axis, tensor.ndim - 2
-    tensor = torch.permute(tensor, perm).contiguous()
-    if swizzle_mode == SwizzlingType.HOPPER_VALUE:
-        tensor = swizzle_mxfp4_value_hopper(tensor, op_idx=0, mma_version=3)
-    elif swizzle_mode == SwizzlingType.BLACKWELL_SCALE:
-        tensor = swizzle_mx_scale_bw(tensor, allow_pad=True)
-    elif swizzle_mode == SwizzlingType.HOPPER_SCALE:
-        tensor = swizzle_mxfp4_scale_hopper(tensor, num_warps=8)
-    tensor = perm_tensor_from_contig(tensor, axis, swizzle_axis)
-    return tensor
-
-
-def unswizzle(tensor, axis, swizzle_axis, swizzle_mode):
-    tensor = perm_tensor_to_contig(tensor, axis, swizzle_axis)
-    if swizzle_mode == SwizzlingType.HOPPER_VALUE:
-        tensor = unswizzle_mxfp4_value_hopper_torch(tensor, op_idx=0, mma_version=3)
-    elif swizzle_mode == SwizzlingType.BLACKWELL_SCALE:
-        tensor = unswizzle_mx_scale_bw_torch(tensor)
-    elif swizzle_mode == SwizzlingType.HOPPER_SCALE:
-        tensor = unswizzle_mxfp4_scale_hopper_torch(tensor, num_warps=8)
-    # permute
-    ndim = tensor.ndim
-    perm = list(range(ndim))
-    perm[ndim - 1], perm[axis] = axis, ndim - 1
-    if swizzle_axis is not None:
-        perm[ndim - 2], perm[swizzle_axis] = swizzle_axis, ndim - 2
-    return torch.permute(tensor, perm).contiguous()
 
 
 def upcast_from_mxfp(tensor: torch.Tensor, scale: torch.Tensor, dtype: torch.dtype, axis: int,
@@ -488,250 +382,3 @@ def upcast_from_mxfp_torch(tensor: torch.Tensor, scale: torch.Tensor, target_dty
     out_tensor = perm_tensor_from_contig(out_tensor, axis, swizzle_axis)
 
     return out_tensor
-
-
-#------
-
-
-def swizzle_mx_scale_bw(tensor: torch.Tensor, allow_pad=True):
-    """
-    Swizzle the input tensor of shape (A, B, ... N, K) to (A, B, ... N // 128, K // 4, 32, 4, 4).
-    Padding is applied if N and K are not multiples of 128 and 4 respectively.
-    Returns the swizzled tensor repacked as (A, B, ... N, K), with padding.
-    """
-    *leading_shape, N, K, = tensor.shape
-    pad_k = (SWIZZLE_ALIGN_INNER - (K % SWIZZLE_ALIGN_INNER)) % SWIZZLE_ALIGN_INNER
-    pad_n = (SWIZZLE_SIZE_OUTER - (N % SWIZZLE_SIZE_OUTER)) % SWIZZLE_SIZE_OUTER
-    if pad_k or pad_n > 0:
-        assert allow_pad, "Padding is required for swizzling, but it was explicitly disabled."
-        tensor = torch.nn.functional.pad(tensor, (0, pad_k, 0, pad_n))
-    padded_shape = tensor.shape
-    tensor = tensor.reshape(*leading_shape, padded_shape[-2] // SWIZZLE_SIZE_OUTER, SWIZZLE_SIZE_OUTER // 32, 32,
-                            padded_shape[-1] // SWIZZLE_SIZE_INNER, SWIZZLE_SIZE_INNER)
-    permute_order = list(range(len(tensor.shape)))
-    permute_order[-2], permute_order[-4] = permute_order[-4], permute_order[-2]
-    return tensor.permute(permute_order).reshape(*padded_shape)
-
-
-def unswizzle_mx_scale_bw_torch(tensor: torch.Tensor):
-    """
-    Unswizzle the input tensor of shape (A, B, ... N // 128, K // 4, 32, 4, 4) packed as (A, B, ... N, K). (Testing only)
-    """
-    assert tensor.shape[-1] % SWIZZLE_SIZE_INNER == 0, f"{tensor.shape[-1]=} must be a multiple of {SWIZZLE_SIZE_INNER}"
-    assert tensor.shape[-2] % SWIZZLE_SIZE_OUTER == 0, f"{tensor.shape[-2]=} must be a multiple of {SWIZZLE_SIZE_OUTER}"
-    *leading_shape, N, K, = tensor.shape
-    tensor = tensor.reshape(*leading_shape, N // SWIZZLE_SIZE_OUTER, K // SWIZZLE_SIZE_INNER, 32,
-                            SWIZZLE_SIZE_OUTER // 32, SWIZZLE_SIZE_INNER)
-    permute_order = list(range(len(tensor.shape)))
-    permute_order[-2], permute_order[-4] = permute_order[-4], permute_order[-2]
-    return tensor.permute(permute_order).reshape(*leading_shape, N, K)
-
-
-# --------
-
-
-def swizzle_mxfp4_value_hopper(x: torch.Tensor, op_idx: int, mma_version: int, allow_pad: bool = True):
-    """
-    Given a uint8 tensor of shape (*, M, K), returns a tensor of shape
-    (*, M // 4, K * 4) such that:
-
-    1) Groups contiguously all the elements owned by the same thread of 4
-    mma tiles along the K axis. The following animation shows a similar
-    grouping for 2 tiles along M and 2 tiles along K rather than 4 along K
-    as done here:
-    https://neuralmagic.com/wp-content/uploads/2024/10/animation_4.gif
-
-    2) Moves the elements belonging to thread 4-7 to be contiguous with those
-    from thread 0-3. This is done to get a full cache line when loading them
-    from HBM.
-
-    op_idx selects the lhs or rhs of the matmul.
-
-    WARNING: Assumes that the matmul will be done in bf16 or fp16!
-    Implementing it for fp8 is as easy as making the tile size (8, 8)
-    """
-    assert x.dtype == torch.uint8
-    assert op_idx in (0, 1)
-    batch = x.ndim - 2
-    assert batch >= 0
-    assert mma_version in (2, 3)
-
-    if op_idx == 1:
-        x = x.mT
-    init_shape = x.shape
-
-    # We are loading 8 bf16 elements per thread to use ld.global.v4
-    # Every u8 represents 2 mxfp4 elements
-    u8_kwidth = 8 // 2 if mma_version == 2 else 1
-
-    # Pack the 4 // u8_kwidth subtiles of an mma into a u4x8
-    contig = (1, u8_kwidth)
-    scott_trick = (2, 1)
-    threads = (4, 4)
-    warp_tile = (2, 2)
-    k_tile = (1, 4 // u8_kwidth)
-
-    sizes = list(x.shape[:-2])
-    pads = []
-    # [rest, K, tile, threads] per dimension
-    for i, (a, b, c, s, d) in enumerate(zip(k_tile, warp_tile, threads, scott_trick, contig)):
-        pack = a * b * c * s * d
-        size = x.shape[batch + i]
-        pad = (pack - size % pack) % pack
-        assert allow_pad or pad == 0, (f"Shape should be divisible by {pack}. Got {size}")
-        pads += [(0, pad)]
-        sizes.append((size + pad) // pack)
-        sizes += [a, b, c, s, d]
-
-    pads = tuple(x for t in pads[::-1] for x in t)
-    x = torch.nn.functional.pad(x, pads)
-    init_shape = x.shape
-
-    # 0: rest[0]
-    # 1: k_tile[0]
-    # 2: warp_tile[0]
-    # 3: threads[0]
-    # 4: scott_trick[0]
-    # 5: contig[0]
-    # 6: rest[1]
-    # 7: k_tile[1]
-    # 8: warp_tile[1]
-    # 9: threads[1]
-    # 10: scott_trick[1]
-    # 11: contig[1]
-
-    x = x.view(*sizes)
-    # Want [rest[0], threads[0], rest[1], scott_trick[0], scott_trick[0], threads[1], contig[1], contig[0], k_tile[1], k_tile[0], warp_tile[1], warp_tile[0]]
-    perm = [0, 3, 6, 10, 4, 9, 7, 1, 8, 2, 5, 11]
-    perm = list(range(batch)) + [batch + p for p in perm]
-    x = x.permute(*perm)
-    x = x.contiguous()
-    # These are views
-    x = x.flatten(-10, -1)
-    x = x.flatten(-3, -2)
-    assert x.is_contiguous()
-    assert x.shape[-2] == init_shape[-2] // 4
-    assert x.shape[-1] == init_shape[-1] * 4
-
-    if op_idx == 1:
-        x = x.mT
-
-    return x
-
-
-def swizzle_mxfp4_scale_hopper(x: torch.Tensor, num_warps: int, allow_pad: bool = True):
-    """
-    Make the 64x2 tile of scales of a 64x64 tile of mxfp4 values contiguous.
-    """
-    *batch, M, K = x.shape
-    SWIZZLE_ALIGN_M = 2 * num_warps * 2 * 8
-    SWIZZLE_ALIGN_K = 2
-    pad_m = (SWIZZLE_ALIGN_M - (M % SWIZZLE_ALIGN_M)) % SWIZZLE_ALIGN_M
-    pad_k = (SWIZZLE_ALIGN_K - (K % SWIZZLE_ALIGN_K)) % SWIZZLE_ALIGN_K
-    if pad_m or pad_k > 0:
-        assert allow_pad, "Padding is required for swizzling, but it was explicitly disabled."
-    x = torch.nn.functional.pad(x, (0, pad_k, 0, pad_m))
-    *batch, M, K = x.shape
-    assert x.is_contiguous()
-    assert num_warps & (num_warps - 1) == 0, "warps_n must be a power of 2"
-    assert M % (2 * num_warps * 2 *
-                8) == 0 and K % 2 == 0, f"Input tensor must have a subtile of shape (..., {2 * num_warps * 2 * 8}, 2)"
-    b = len(batch)
-    x = x.reshape(*batch, M // (2 * num_warps * 2 * 8), 2, num_warps, 2, 8, K // 2, 2)
-    perm = [0, 2, 5, 1, 4, 6, 3]
-    perm = list(range(b)) + [b + p for p in perm]
-    x = x.permute(*perm)
-    x = x.flatten(-5, -1)
-    x = x.flatten(-3, -2)
-    assert x.shape[-2] == M // 32
-    assert x.shape[-1] == K * 32
-    return x
-
-
-@triton.jit
-def unswizzle_mxfp4_scale_hopper(x, num_warps: tl.constexpr):
-    """
-    Triton inverse of swizzle_mxfp4_scale_hopper
-    """
-    tl.static_assert(len(x.shape) == 2, "NYI")
-    M: tl.constexpr = x.shape[0]
-    K: tl.constexpr = x.shape[1]
-    tl.static_assert(M % num_warps == 0, f"M must be divisible by {num_warps}. Got {M}")
-    tl.static_assert(K % 64 == 0, f"K must be divisible by 64. Got {K}")
-    x = x.reshape(M // num_warps, num_warps, K // 64, 2, 8, 2, 2)
-    x = x.trans(0, 3, 1, 6, 4, 2, 5)
-    x = x.reshape(M * 32, K // 32)
-    return x
-
-
-def unswizzle_mxfp4_scale_hopper_torch(x: torch.Tensor, num_warps: int):
-    """
-    PyTorch inverse of unswizzle_mxfp4_scale_hopper
-    """
-    assert num_warps & (num_warps - 1) == 0, "num_warps must be a power of 2"
-    *batch, M, K = x.shape
-    b = len(batch)
-    x = x.reshape(*batch, M // num_warps, num_warps, K // 64, 2, 8, 2, 2)
-    perm = [0, 3, 1, 6, 4, 2, 5]
-    perm = list(range(b)) + [b + p for p in perm]
-    x = x.permute(*perm)
-    x = x.reshape(*batch, M * 32, K // 32)
-    return x
-
-
-@triton.jit
-def unswizzle_mxfp4_value_hopper(x, op_idx: tl.constexpr, mma_version: tl.constexpr):
-    """
-    Triton inverse of swizzle_mxfp4_value_hopper
-    """
-    tl.static_assert(op_idx == 0 or op_idx == 1, "op_idx must be 0 or 1")
-    tl.static_assert(len(x.shape) == 2, "NYI")
-    tl.static_assert(mma_version == 2 or mma_version == 3, "mma_version must be 2 or 3")
-    if op_idx == 1:
-        x = x.trans()
-
-    # We have two times the elements if we already upcasted to bfloat16
-    mult: tl.constexpr = 2 if x.dtype == tl.bfloat16 else 1
-    M: tl.constexpr = x.shape[0]
-    K: tl.constexpr = x.shape[1]
-    tl.static_assert(M % 4 == 0, "M must be divisible by 4")
-    tl.static_assert(K % (4 * 8 * 2 * 2 * mult) == 0, f"K must be divisible by {4 * 8 * 2 * 2 * mult}")
-
-    # We are loading 8 bf16 elements per thread to use ld.global.v4
-    # Every u8 represents 2 mxfp4 elements
-    u8_kwidth: tl.constexpr = 8 // 2 if mma_version == 2 else 1
-    x = x.reshape(M // 4, 4, K // (4 * 8 * 2 * 2 * mult), 2, 4, 8 // u8_kwidth, 2, u8_kwidth * mult)
-    x = x.trans(0, 6, 1, 3, 2, 5, 4, 7)
-    x = x.reshape(M * 4, K // 4)
-    if op_idx == 1:
-        x = x.trans()
-    return x
-
-
-def unswizzle_mxfp4_value_hopper_torch(x, op_idx: int, mma_version: int):
-    """
-    PyTorch inverse of swizzle_mxfp4_value_hopper. (Testing only)
-    """
-    assert op_idx in (0, 1), "op_idx must be 0 or 1"
-    assert mma_version in (2, 3), "mma_version must be 2 or 3"
-    if op_idx == 1:
-        x = x.transpose(-2, -1)
-
-    *batch, M, K = x.shape
-    # We have two times the elements if we already upcasted to bfloat16
-    mult = 2 if x.dtype == torch.bfloat16 else 1
-    assert M % 4 == 0, "M must be divisible by 4"
-    assert K % (4 * 8 * 2 * 2 * mult) == 0, f"K must be divisible by {4 * 8 * 2 * 2 * mult}"
-
-    # We are loading 8 bf16 elements per thread to use ld.global.v4
-    # Every u8 represents 2 mxfp4 elements
-    u8_kwidth = 8 // 2 if mma_version == 2 else 1
-    x = x.reshape(*batch, M // 4, 4, K // (4 * 8 * 2 * 2 * mult), 2, 4, 8 // u8_kwidth, 2, u8_kwidth * mult)
-    b = len(batch)
-    perm = [0, 6, 1, 3, 2, 5, 4, 7]
-    perm = list(range(b)) + [b + p for p in perm]
-    x = x.permute(*perm)
-    x = x.reshape(*batch, M * 4, K // 4)
-    if op_idx == 1:
-        x = x.transpose(-2, -1)
-    return x
