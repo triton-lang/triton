@@ -174,9 +174,6 @@ def test_mxfp_casting(
         DEQUANT_SCALE_ROUNDING_MODE=rounding_mode,
     )
 
-    print(x.shape)
-    print(quant_torch.shape)
-    print(quant.shape)
     assert_equal(quant_torch, quant)
     assert_equal(scale_torch, scale)
     assert_equal(1, quant.stride(axis))

@@ -149,6 +149,7 @@ def downcast_to_mxfp(src_tensor: torch.Tensor, out_quant_type: torch.dtype, axis
          When swizzle_axis is provided, the downcast will quantize along the quantization axis and swizzle the scales
          with the swizzle_axis. See the relevant swizzle_* functions for more details.
     """
+    print("downcast initial shape", src_tensor.shape, "axis", axis, "swizzle_axis", swizzle_axis)
     # This should probably be packed into its own tiny class
     if swizzle_axis is None:
         assert swizzle_scale is None, "Swizzle scale must be None if swizzle axis is None"
@@ -168,43 +169,44 @@ def downcast_to_mxfp(src_tensor: torch.Tensor, out_quant_type: torch.dtype, axis
     quant_tensor, scale = downcast_to_mxfp_impl(src_tensor, out_quant_type, axis, DEQUANT_SCALE_ROUNDING_MODE,
                                                 BLOCK_OUT_DIM, BLOCK_QUANT_DIM)
 
-    # Permute the tensor so that axis is the last dimension and swizzle_axis is the second to last dimension.
-    perm = list(range(src_tensor.ndim))
-    perm[src_tensor.ndim - 1], perm[axis] = axis, src_tensor.ndim - 1
-    if swizzle_axis is not None:
-        perm[src_tensor.ndim - 2], perm[swizzle_axis] = swizzle_axis, src_tensor.ndim - 2
-    quant_tensor = torch.permute(quant_tensor, perm).contiguous()
-    scale = torch.permute(scale, perm).contiguous()
     # Swizzling
-    if swizzle_value == SwizzlingType.HOPPER_VALUE:
-        quant_tensor = swizzle_mxfp4_value_hopper(quant_tensor, op_idx=0, mma_version=3)
-    assert quant_tensor.is_contiguous()
-    quant_tensor = perm_tensor_from_contig(quant_tensor, axis, swizzle_axis)
-
-    if swizzle_scale == SwizzlingType.BLACKWELL_SCALE:
-        scale = swizzle_mx_scale_bw(scale, allow_pad=True)
-    elif swizzle_scale == SwizzlingType.HOPPER_SCALE:
-        scale = swizzle_mxfp4_scale_hopper(scale, num_warps=8)
-    assert scale.is_contiguous()
-    scale = perm_tensor_from_contig(scale, axis, swizzle_axis)
-
+    quant_tensor = swizzle(quant_tensor, axis, swizzle_axis, swizzle_value)
+    scale = swizzle(scale, axis, swizzle_axis, swizzle_scale)
     return quant_tensor, scale
 
 
-def unswizzle(tensor, axis, swizzle_axis, swizzle_mode, unpadded_tensor_shape=None):
+def swizzle(tensor, axis, swizzle_axis, swizzle_mode):
+    # Permute the tensor so that axis is the last dimension and swizzle_axis is the second to last dimension.
+    perm = list(range(tensor.ndim))
+    perm[tensor.ndim - 1], perm[axis] = axis, tensor.ndim - 1
+    if swizzle_axis is not None:
+        perm[tensor.ndim - 2], perm[swizzle_axis] = swizzle_axis, tensor.ndim - 2
+    tensor = torch.permute(tensor, perm).contiguous()
+    if swizzle_mode == SwizzlingType.HOPPER_VALUE:
+        tensor = swizzle_mxfp4_value_hopper(tensor, op_idx=0, mma_version=3)
+    elif swizzle_mode == SwizzlingType.BLACKWELL_SCALE:
+        tensor = swizzle_mx_scale_bw(tensor, allow_pad=True)
+    elif swizzle_mode == SwizzlingType.HOPPER_SCALE:
+        tensor = swizzle_mxfp4_scale_hopper(tensor, num_warps=8)
+    tensor = perm_tensor_from_contig(tensor, axis, swizzle_axis)
+    return tensor
+
+
+def unswizzle(tensor, axis, swizzle_axis, swizzle_mode):
     tensor = perm_tensor_to_contig(tensor, axis, swizzle_axis)
     if swizzle_mode == SwizzlingType.HOPPER_VALUE:
-        return unswizzle_mxfp4_value_hopper_torch(tensor, op_idx=0, mma_version=3)
+        tensor = unswizzle_mxfp4_value_hopper_torch(tensor, op_idx=0, mma_version=3)
     elif swizzle_mode == SwizzlingType.BLACKWELL_SCALE:
         tensor = unswizzle_mx_scale_bw_torch(tensor)
-        # Peel off padding
-        assert triton.cdiv(unpadded_tensor_shape[-1], SWIZZLE_ALIGN_INNER) * SWIZZLE_ALIGN_INNER == tensor.shape[-1], \
-            f"tensor shape mismatch. Got {tensor.shape[axis]=} and {triton.cdiv(unpadded_tensor_shape[-1], SWIZZLE_ALIGN_INNER) * SWIZZLE_ALIGN_INNER=}"
-        slices = tuple(slice(0, size) for size in unpadded_tensor_shape)
-        return tensor[slices].contiguous()
     elif swizzle_mode == SwizzlingType.HOPPER_SCALE:
-        return unswizzle_mxfp4_scale_hopper_torch(tensor, num_warps=8)
-    return tensor
+        tensor = unswizzle_mxfp4_scale_hopper_torch(tensor, num_warps=8)
+    # permute
+    ndim = tensor.ndim
+    perm = list(range(ndim))
+    perm[ndim - 1], perm[axis] = axis, ndim - 1
+    if swizzle_axis is not None:
+        perm[ndim - 2], perm[swizzle_axis] = swizzle_axis, ndim - 2
+    return torch.permute(tensor, perm).contiguous()
 
 
 def upcast_from_mxfp(tensor: torch.Tensor, scale: torch.Tensor, dtype: torch.dtype, axis: int,
@@ -236,38 +238,26 @@ def upcast_from_mxfp(tensor: torch.Tensor, scale: torch.Tensor, dtype: torch.dty
         f"Invalid tensor dtype {tensor.dtype=}"
     assert scale.dtype == torch.uint8, f"Invalid scale dtype {scale.dtype=}"
     assert dtype in (torch.float16, torch.bfloat16), f"Invalid output dtype {dtype=}"
-
     tensor = unswizzle(tensor, axis, swizzle_axis, swizzle_value)
-    logical_quant_dim = tensor.shape[-1] * (2 if tensor.dtype == torch.uint8 else 1)
-    unpadded_scale_shape = (*tensor.shape[:-1], triton.cdiv(logical_quant_dim, 32))
-    scale = unswizzle(scale, axis, swizzle_axis, swizzle_scale, unpadded_scale_shape)
-    assert scale.is_contiguous()
-    assert tensor.is_contiguous()
-
-    ndim = scale.ndim
-    perm = list(range(ndim))
-    perm[ndim - 1], perm[axis] = axis, ndim - 1
-    if swizzle_axis is not None:
-        perm[ndim - 2], perm[swizzle_axis] = swizzle_axis, ndim - 2
-    tensor = torch.permute(tensor, perm).contiguous()
-    scale = torch.permute(scale, perm).contiguous()
-
+    scale = unswizzle(scale, axis, swizzle_axis, swizzle_scale)
+    # unpad
+    logical_quant_dim = tensor.shape[axis] * (2 if tensor.dtype == torch.uint8 else 1)
+    unpadded_scale_shape = (*tensor.shape[:axis], triton.cdiv(logical_quant_dim, 32), *tensor.shape[axis + 1:])
+    slices = tuple(slice(0, size) for size in unpadded_scale_shape)
+    scale = scale[slices].contiguous()
+    # upcast
     tensor = tensor.transpose(axis, tensor.ndim - 1).contiguous()
     scale = scale.transpose(axis, scale.ndim - 1).contiguous()
     out = torch.empty((*tensor.shape[:-1], logical_quant_dim), dtype=dtype, device=tensor.device)
-
     reshaped_out = out.view(-1, out.shape[-1])
     reshaped_tensor = tensor.view(-1, tensor.shape[-1])
     reshaped_scale = scale.view(-1, scale.shape[-1])
-
     blocks_out_dim = triton.cdiv(reshaped_out.shape[0], BLOCK_OUT_DIM)
     blocks_quant_dim = triton.cdiv(reshaped_out.shape[1], BLOCK_QUANT_DIM)
-
     _upcast_from_mxfp[(blocks_out_dim, blocks_quant_dim)](reshaped_out, *reshaped_out.stride(), reshaped_scale,
                                                           *reshaped_scale.stride(), reshaped_tensor,
                                                           *reshaped_tensor.stride(), *reshaped_out.shape, BLOCK_OUT_DIM,
                                                           BLOCK_QUANT_DIM, num_warps=8)
-
     out = out.transpose(axis, scale.ndim - 1).contiguous()
     return out
 
