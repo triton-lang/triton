@@ -515,6 +515,9 @@ largestVectorisation(MLIRContext *ctx, const LinearLayout &cvt, int bitwidth,
   LinearLayout quot;
   LinearLayout tile;
   ColumnAction permutation;
+  // If there are restrictions on the vectorisation, we don't allow
+  // permutations.
+  auto allowPerm = !maybeMaxVecElems.has_value();
   auto maxVecElems = maybeMaxVecElems.value_or(128 / bitwidth);
   for (int v = maxVecElems; v >= 1; v /= 2) {
     tile = LinearLayout::identity1D(v, kReg, kOffset);
@@ -523,6 +526,9 @@ largestVectorisation(MLIRContext *ctx, const LinearLayout &cvt, int bitwidth,
       continue;
     }
     permutation = *maybePerm;
+    if (!allowPerm && !permutation.isIdentity()) {
+      continue;
+    }
     auto newCvt = permutation.apply(cvt);
     auto maybeQuot = divideLeft(newCvt, tile);
     if (!maybeQuot) {
