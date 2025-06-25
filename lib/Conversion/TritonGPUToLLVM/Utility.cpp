@@ -12,6 +12,8 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/MathExtras.h"
 
+#include <functional>
+
 #if defined(_MSC_VER) && !defined(__clang__)
 // from https://gist.github.com/pps83/3210a2f980fd02bb2ba2e5a1fc4a2ef0
 #include <intrin.h>
@@ -154,6 +156,10 @@ applyLinearLayout(Location loc, RewriterBase &rewriter,
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   assert(layout.getNumInDims() == indices.size());
   assert(llvm::equal(layout.getInDimNames(), llvm::make_first_range(indices)));
+  // Trivial layout
+  if (layout.getNumOutDims() == 0) {
+    return {};
+  }
 
   // This function can emit a lot of MLIR code, which ultimately makes
   // compilation slow.  (We think this shouldn't be the case -- it's not *that*
@@ -167,25 +173,29 @@ applyLinearLayout(Location loc, RewriterBase &rewriter,
   SmallVector<std::pair<StringAttr, int32_t>> constantIns;
   SmallVector<std::pair<StringAttr, Value>> nonConstantIns;
   for (auto [inDimName, idx] : indices) {
-    if (auto constant = idx.getDefiningOp<LLVM::ConstantOp>()) {
-      constantIns.push_back(
-          {inDimName, cast<IntegerAttr>(constant.getValue()).getInt()});
+    APInt constant;
+    if (matchPattern(idx, m_ConstantInt(&constant))) {
+      constantIns.push_back({inDimName, constant.getSExtValue()});
     } else {
       constantIns.push_back({inDimName, 0});
       nonConstantIns.push_back({inDimName, idx});
     }
   }
-  SmallVector<int32_t> constantComponent =
-      llvm::to_vector(llvm::make_second_range(layout.apply(constantIns)));
 
+  // Compute constant part of the output and wrap it as values
   Value zero = b.i32_val(0);
   SmallVector<std::pair<StringAttr, Value>> outIndices;
-  for (auto [i, outDimName] : llvm::enumerate(layout.getOutDimNames())) {
-    if (constantComponent[i] == 0)
+  for (auto [outDimName, constant] : layout.apply(constantIns)) {
+    if (constant == 0)
       outIndices.push_back({outDimName, zero});
     else
-      outIndices.push_back({outDimName, b.i32_val(constantComponent[i])});
+      outIndices.push_back({outDimName, b.i32_val(constant)});
   }
+
+  if (nonConstantIns.size() == 0) {
+    return outIndices;
+  }
+
   // Happy path: Only one output.
   if (outIndices.size() == 1) {
     SmallVector<StringAttr> inDimNames;
@@ -505,20 +515,28 @@ Value getSmemVecAddr(const LinearLayout &regLayout,
 }
 
 std::pair<int, ColumnAction>
-largestVectorisation(MLIRContext *ctx, const LinearLayout &cvt, int bitwidth) {
+largestVectorisation(MLIRContext *ctx, const LinearLayout &cvt, int bitwidth,
+                     std::optional<int> maybeMaxVecElems = std::nullopt) {
   // Find the largest vectorisation we can use:
   StringAttr kReg = str_attr("register");
   StringAttr kOffset = str_attr("offset");
   LinearLayout quot;
   LinearLayout tile;
   ColumnAction permutation;
-  for (int v = 128 / bitwidth; v >= 1; v /= 2) {
+  // If there are restrictions on the vectorisation, we don't allow
+  // permutations.
+  auto allowPerm = !maybeMaxVecElems.has_value();
+  auto maxVecElems = maybeMaxVecElems.value_or(128 / bitwidth);
+  for (int v = maxVecElems; v >= 1; v /= 2) {
     tile = LinearLayout::identity1D(v, kReg, kOffset);
     auto maybePerm = regPermForDivide(cvt, tile, /*left=*/true);
     if (!maybePerm) {
       continue;
     }
     permutation = *maybePerm;
+    if (!allowPerm && !permutation.isIdentity()) {
+      continue;
+    }
     auto newCvt = permutation.apply(cvt);
     auto maybeQuot = divideLeft(newCvt, tile);
     if (!maybeQuot) {
@@ -536,6 +554,39 @@ lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout cvt,
                 Type llvmElemTy, Value smemBase,
                 ConversionPatternRewriter &rewriter,
                 const TargetInfoBase &targetInfo) {
+
+  bool isStore = !valsArray.empty();
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+
+  auto emitCpAsync = [&](ConversionPatternRewriter &rewriter, Location loc,
+                         ArrayRef<Value> vals, Value shmemAddr, int idx,
+                         VectorType vecTy) -> SmallVector<Value> {
+    auto length = vecTy.getNumElements();
+    if (isStore) {
+      Value valsVec =
+          packLLVector(loc, ArrayRef<Value>(vals).slice(idx, length), rewriter);
+      targetInfo.storeDShared(rewriter, loc, shmemAddr, std::nullopt, valsVec,
+                              /*pred=*/b.true_val());
+      return {};
+    } else {
+      assert(vals.empty());
+      Value valsVec = targetInfo.loadDShared(
+          rewriter, loc, shmemAddr, std::nullopt, vecTy, /*pred=*/b.true_val());
+      return unpackLLVector(loc, valsVec, rewriter);
+    }
+  };
+  return lowerLdSt(loc, ctx, cvt, valsArray, llvmElemTy, smemBase, rewriter,
+                   targetInfo, {}, emitCpAsync);
+}
+
+SmallVector<Value> lowerLdSt(
+    Location loc, MLIRContext *ctx, LinearLayout cvt,
+    ArrayRef<Value> valsArray, // Input for store, output for load
+    Type llvmElemTy, Value smemBase, ConversionPatternRewriter &rewriter,
+    const TargetInfoBase &targetInfo, std::optional<int> maybeMaxVecElems,
+    std::function<SmallVector<Value>(ConversionPatternRewriter &, Location,
+                                     ArrayRef<Value>, Value, int, VectorType)>
+        lowerInst) {
   auto vals = to_vector(valsArray);
   bool isStore = !vals.empty();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -546,7 +597,8 @@ lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout cvt,
   auto kOffset = str_attr("offset");
   auto bitwidth = llvmElemTy.getIntOrFloatBitWidth();
 
-  auto [elemsPerVec, permutation] = largestVectorisation(ctx, cvt, bitwidth);
+  auto [elemsPerVec, permutation] =
+      largestVectorisation(ctx, cvt, bitwidth, maybeMaxVecElems);
 
   cvt = permutation.apply(cvt);
   if (isStore) {
@@ -578,6 +630,7 @@ lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout cvt,
           {{kReg, b.i32_val(0)}, {kLane, laneId}, {kWarp, warpId}})[0]
           .second;
   SmallVector<Value> outVals;
+  auto vecTy = vec_ty(llvmElemTy, elemsPerVec);
   for (int i = 0; i < cvt.getInDimSize(kReg); i += nAdditive) {
     auto regIdx = reps.apply({{kReg, i}, {kLane, 0}, {kWarp, 0}})[0].second;
     auto regIdxI8 = regIdx * (bitwidth / 8);
@@ -590,19 +643,8 @@ lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout cvt,
       Value innerOffset = b.add(offset, b.i32_val(regIdxAddI8));
       auto vecAddr = b.gep(smemPtrTy, i8_ty, smemBase, innerOffset,
                            LLVM::GEPNoWrapFlags::inbounds);
-      // Lezcano: Do we want to use getFreeVariableMasks for pred or nah?
-      if (isStore) {
-        Value valsVec = packLLVector(
-            loc, ArrayRef<Value>(vals).slice(i + j, elemsPerVec), rewriter);
-        targetInfo.storeDShared(rewriter, loc, vecAddr, std::nullopt, valsVec,
-                                /*pred=*/b.true_val());
-      } else {
-        Value valsVec =
-            targetInfo.loadDShared(rewriter, loc, vecAddr, std::nullopt,
-                                   vec_ty(llvmElemTy, elemsPerVec),
-                                   /*pred=*/b.true_val());
-        llvm::append_range(outVals, unpackLLVector(loc, valsVec, rewriter));
-      }
+      llvm::append_range(outVals,
+                         lowerInst(rewriter, loc, vals, vecAddr, i + j, vecTy));
     }
   }
 
