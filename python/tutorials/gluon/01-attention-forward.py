@@ -276,46 +276,11 @@ def get_desc_channel(desc, num_buffers: gl.constexpr, num_consumers: gl.constexp
     return SharedMemoryChannel.alloc(shape, desc.dtype, layout, num_buffers, num_consumers)
 
 
-@gl.aggregate
-class LoadContext:
-    desc: tensor_descriptor
-    channel: SharedMemoryChannel
-
-    def __init__(self, desc, num_buffers: gl.constexpr, num_consumers: gl.constexpr = 1):
-        self.desc = desc
-        shape: gl.constexpr = desc.block_type.shape
-        self.channel = SharedMemoryChannel.alloc(shape, desc.dtype, gl.constexpr(desc.layout), num_buffers,
-                                                 num_consumers)
-        self.channel.initialize_for_producer()
-
-    def release(self):
-        self.channel.release()
-
-
 @gluon.jit
 def issue_async_tma_load(smem, bar, desc, offset):
     size: gl.constexpr = get_load_size_bytes(desc)
     mbarrier.expect(bar, size)
     tma.async_copy_global_to_shared(desc, [offset, 0], bar, smem)
-
-
-@gl.aggregate
-class PipelinedLoadProducer:
-    desc: tensor_descriptor
-    impl: SharedMemoryProducer
-    offset: gl.tensor
-    step: gl.constexpr
-
-    def __init__(self, ctx, offset, step: gl.constexpr):
-        self.desc = ctx.desc
-        self.impl = ctx.channel.create_producer()
-        self.offset = offset
-        self.step: gl.constexpr = step
-
-    def wait_and_issue_next(self):
-        smem, ready_bar = self.impl.acquire()
-        issue_async_tma_load(smem, ready_bar, self.desc, self.offset)
-        self.offset += self.step
 
 
 @gl.aggregate
