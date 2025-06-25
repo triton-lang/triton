@@ -12,8 +12,6 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/MathExtras.h"
 
-#include <functional>
-
 #if defined(_MSC_VER) && !defined(__clang__)
 // from https://gist.github.com/pps83/3210a2f980fd02bb2ba2e5a1fc4a2ef0
 #include <intrin.h>
@@ -515,28 +513,20 @@ Value getSmemVecAddr(const LinearLayout &regLayout,
 }
 
 std::pair<int, ColumnAction>
-largestVectorisation(MLIRContext *ctx, const LinearLayout &cvt, int bitwidth,
-                     std::optional<int> maybeMaxVecElems = std::nullopt) {
+largestVectorisation(MLIRContext *ctx, const LinearLayout &cvt, int bitwidth) {
   // Find the largest vectorisation we can use:
   StringAttr kReg = str_attr("register");
   StringAttr kOffset = str_attr("offset");
   LinearLayout quot;
   LinearLayout tile;
   ColumnAction permutation;
-  // If there are restrictions on the vectorisation, we don't allow
-  // permutations.
-  auto allowPerm = !maybeMaxVecElems.has_value();
-  auto maxVecElems = maybeMaxVecElems.value_or(128 / bitwidth);
-  for (int v = maxVecElems; v >= 1; v /= 2) {
+  for (int v = 128 / bitwidth; v >= 1; v /= 2) {
     tile = LinearLayout::identity1D(v, kReg, kOffset);
     auto maybePerm = regPermForDivide(cvt, tile, /*left=*/true);
     if (!maybePerm) {
       continue;
     }
     permutation = *maybePerm;
-    if (!allowPerm && !permutation.isIdentity()) {
-      continue;
-    }
     auto newCvt = permutation.apply(cvt);
     auto maybeQuot = divideLeft(newCvt, tile);
     if (!maybeQuot) {
@@ -554,39 +544,6 @@ lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout cvt,
                 Type llvmElemTy, Value smemBase,
                 ConversionPatternRewriter &rewriter,
                 const TargetInfoBase &targetInfo) {
-
-  bool isStore = !valsArray.empty();
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-
-  auto emitCpAsync = [&](ConversionPatternRewriter &rewriter, Location loc,
-                         ArrayRef<Value> vals, Value shmemAddr, int idx,
-                         VectorType vecTy) -> SmallVector<Value> {
-    auto length = vecTy.getNumElements();
-    if (isStore) {
-      Value valsVec =
-          packLLVector(loc, ArrayRef<Value>(vals).slice(idx, length), rewriter);
-      targetInfo.storeDShared(rewriter, loc, shmemAddr, std::nullopt, valsVec,
-                              /*pred=*/b.true_val());
-      return {};
-    } else {
-      assert(vals.empty());
-      Value valsVec = targetInfo.loadDShared(
-          rewriter, loc, shmemAddr, std::nullopt, vecTy, /*pred=*/b.true_val());
-      return unpackLLVector(loc, valsVec, rewriter);
-    }
-  };
-  return lowerLdSt(loc, ctx, cvt, valsArray, llvmElemTy, smemBase, rewriter,
-                   targetInfo, {}, emitCpAsync);
-}
-
-SmallVector<Value> lowerLdSt(
-    Location loc, MLIRContext *ctx, LinearLayout cvt,
-    ArrayRef<Value> valsArray, // Input for store, output for load
-    Type llvmElemTy, Value smemBase, ConversionPatternRewriter &rewriter,
-    const TargetInfoBase &targetInfo, std::optional<int> maybeMaxVecElems,
-    std::function<SmallVector<Value>(ConversionPatternRewriter &, Location,
-                                     ArrayRef<Value>, Value, int, VectorType)>
-        lowerInst) {
   auto vals = to_vector(valsArray);
   bool isStore = !vals.empty();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -597,8 +554,7 @@ SmallVector<Value> lowerLdSt(
   auto kOffset = str_attr("offset");
   auto bitwidth = llvmElemTy.getIntOrFloatBitWidth();
 
-  auto [elemsPerVec, permutation] =
-      largestVectorisation(ctx, cvt, bitwidth, maybeMaxVecElems);
+  auto [elemsPerVec, permutation] = largestVectorisation(ctx, cvt, bitwidth);
 
   cvt = permutation.apply(cvt);
   if (isStore) {
@@ -630,7 +586,6 @@ SmallVector<Value> lowerLdSt(
           {{kReg, b.i32_val(0)}, {kLane, laneId}, {kWarp, warpId}})[0]
           .second;
   SmallVector<Value> outVals;
-  auto vecTy = vec_ty(llvmElemTy, elemsPerVec);
   for (int i = 0; i < cvt.getInDimSize(kReg); i += nAdditive) {
     auto regIdx = reps.apply({{kReg, i}, {kLane, 0}, {kWarp, 0}})[0].second;
     auto regIdxI8 = regIdx * (bitwidth / 8);
@@ -643,8 +598,19 @@ SmallVector<Value> lowerLdSt(
       Value innerOffset = b.add(offset, b.i32_val(regIdxAddI8));
       auto vecAddr = b.gep(smemPtrTy, i8_ty, smemBase, innerOffset,
                            LLVM::GEPNoWrapFlags::inbounds);
-      llvm::append_range(outVals,
-                         lowerInst(rewriter, loc, vals, vecAddr, i + j, vecTy));
+      // Lezcano: Do we want to use getFreeVariableMasks for pred or nah?
+      if (isStore) {
+        Value valsVec = packLLVector(
+            loc, ArrayRef<Value>(vals).slice(i + j, elemsPerVec), rewriter);
+        targetInfo.storeDShared(rewriter, loc, vecAddr, std::nullopt, valsVec,
+                                /*pred=*/b.true_val());
+      } else {
+        Value valsVec =
+            targetInfo.loadDShared(rewriter, loc, vecAddr, std::nullopt,
+                                   vec_ty(llvmElemTy, elemsPerVec),
+                                   /*pred=*/b.true_val());
+        llvm::append_range(outVals, unpackLLVector(loc, valsVec, rewriter));
+      }
     }
   }
 
