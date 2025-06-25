@@ -4,7 +4,7 @@ import torch
 import torch.nn.functional as F
 from .mxfp_details._upcast_from_mxfp import _upcast_from_mxfp
 from .mxfp_details._downcast_to_mxfp import _downcast_to_mxfp
-from ..swizzle import SwizzlingType, swizzle, unswizzle, perm_tensor_to_contig, perm_tensor_from_contig
+from ..swizzle import SwizzlingType, swizzle, unswizzle
 
 # -----------------------------------------------------------------------------
 #                      Dequantization / Quantization Utilities
@@ -338,10 +338,8 @@ def upcast_from_mxfp_torch(tensor: torch.Tensor, scale: torch.Tensor, target_dty
     scale = unswizzle(scale, axis, swizzle_axis, swizzle_scale)
     tensor = unswizzle(tensor, axis, swizzle_axis, swizzle_value)
 
-    # scale = scale.transpose(axis, scale.ndim - 1)
-    # tensor = tensor.transpose(axis, tensor.ndim - 1)
-    scale = perm_tensor_to_contig(scale, axis, swizzle_axis)
-    tensor = perm_tensor_to_contig(tensor, axis, swizzle_axis)
+    scale = scale.transpose(axis, scale.ndim - 1)
+    tensor = tensor.transpose(axis, tensor.ndim - 1)
 
     dq_scale = (scale.to(torch.int32) << 23).view(torch.float32)  # Shift to the exponent and bitcast to fp32
 
@@ -352,6 +350,10 @@ def upcast_from_mxfp_torch(tensor: torch.Tensor, scale: torch.Tensor, target_dty
 
     # Trim padding
     dq_scale = dq_scale[..., :fp32_tensor.shape[-2], :(fp32_tensor.shape[-1] + 31) // 32]
+    logical_quant_dim = tensor.shape[-1] * (2 if tensor.dtype == torch.uint8 else 1)
+    unpadded_scale_shape = (*tensor.shape[:-1], triton.cdiv(logical_quant_dim, 32))
+    slices = tuple(slice(0, size) for size in unpadded_scale_shape)
+    dq_scale = dq_scale[slices].contiguous()
 
     axis_shape = fp32_tensor.size(-1)
     padded_axis_shape = dq_scale.size(-1) * 32
@@ -369,7 +371,6 @@ def upcast_from_mxfp_torch(tensor: torch.Tensor, scale: torch.Tensor, target_dty
     out_tensor = out_padded[..., :axis_shape]
 
     out_tensor = out_tensor.to(target_dtype).contiguous()
-    out_tensor = perm_tensor_from_contig(out_tensor, axis, swizzle_axis)
-    # out_tensor = out_tensor.transpose(axis, tensor.ndim - 1)
+    out_tensor = out_tensor.transpose(axis, tensor.ndim - 1)
 
     return out_tensor
