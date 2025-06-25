@@ -41,7 +41,7 @@ struct DotOpConversion : public ConvertOpToLLVMPattern<triton::DotOp> {
 
     NvidiaMmaEncodingAttr mmaLayout = dyn_cast<NvidiaMmaEncodingAttr>(
         cast<RankedTensorType>(D.getType()).getEncoding());
-    bool supportF64mma = mmaLayout.isAmpere();
+    bool supportF64mma = mmaLayout && mmaLayout.isAmpere();
     if (!isOuter && mmaLayout &&
         supportMMA(op, mmaLayout.getVersionMajor(), supportF64mma)) {
       if (mmaLayout.isTuring())
