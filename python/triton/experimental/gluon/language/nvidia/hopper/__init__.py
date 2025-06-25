@@ -28,7 +28,7 @@ def warpgroup_mma(a, b, acc, *, use_acc=True, precision=None, max_num_imprecise_
 
 
 @_core.builtin
-def warpgroup_mma_wait(deps, pendings, _semantic=None):
-    deps = [x.handle for x in deps]
-    pendings = _core._unwrap_if_constexpr(pendings)
-    _semantic.builder.create_warpgroup_mma_wait(deps, pendings)
+def warpgroup_mma_wait(num_outstanding=0, deps=None, _semantic=None):
+    deps = [x.handle for x in deps] if deps is not None else []
+    num_outstanding = _core._unwrap_if_constexpr(num_outstanding)
+    _semantic.builder.create_warpgroup_mma_wait(deps, num_outstanding)
