@@ -589,33 +589,10 @@ class JITFunction(KernelInterface[T]):
             attrvals = [x[1] for x in specialization]
             attrs = find_paths_if(attrvals, lambda _, x: isinstance(x, str))
             attrs = {k: backend.parse_attr(get_iterable_path(attrvals, k)) for k in attrs}
-            if self._call_hook(knobs.runtime.jit_cache_hook, key, signature, device, constexprs, options, [attrs],
-                               warmup):
+
+            kernel = self._do_compile(key, signature, device, constexprs, options, attrs, warmup)
+            if kernel is None:
                 return None
-
-            # compile the kernel (potentially in parallel)
-            src = self.ASTSource(self, signature, constexprs, attrs)
-
-            async_mode = _async_compile.active_mode
-            if async_mode is not None:
-
-                env_vars = get_cache_invalidating_env_vars()
-                cache_key = get_cache_key(src, backend, options, env_vars)
-
-                def async_compile():
-                    return self.compile(src, target=target, options=options.__dict__, _env_vars=env_vars)
-
-                def finalize_compile(kernel):
-                    kernel_cache[key] = kernel
-                    self._call_hook(knobs.runtime.jit_post_compile_hook, key, signature, device, constexprs, options,
-                                    [attrs], warmup)
-
-                kernel = async_mode.submit(cache_key, async_compile, finalize_compile)
-            else:
-                kernel = self.compile(src, target=target, options=options.__dict__)
-                kernel_cache[key] = kernel
-                self._call_hook(knobs.runtime.jit_post_compile_hook, key, signature, device, constexprs, options,
-                                [attrs], warmup)
 
         # Check that used global values have not changed.
         not_present = object()
@@ -730,7 +707,6 @@ class JITFunction(KernelInterface[T]):
         return self.run(grid=grid, warmup=True, *map(MockTensor.wrap_dtype, args), **kwargs)
 
     def preload(self, specialization_data):
-        from ..compiler import compile, ASTSource
         import json
         import triton.language as tl
         device = driver.active.get_current_device()
@@ -740,7 +716,7 @@ class JITFunction(KernelInterface[T]):
                 f"Specialization data is for {deserialized_obj['name']} but trying to preload for {self._fn_name}")
         constant_keys = map(tuple, deserialized_obj['constant_keys'])
         constant_vals = deserialized_obj['constant_vals']
-        constants = {
+        constexprs = {
             key: tl.dtype(value) if tl.dtype.is_dtype(value) else value
             for key, value in zip(constant_keys, constant_vals)
         }
@@ -748,14 +724,50 @@ class JITFunction(KernelInterface[T]):
         attrs_vals = deserialized_obj['attrs_vals']
         attrs = dict(zip(attrs_keys, attrs_vals))
         signature = dict(deserialized_obj['signature'].items())
-        src = ASTSource(self, signature, constants, attrs)
         options = {
             key: tuple(value) if isinstance(value, list) else value
             for key, value in deserialized_obj['options'].items()
         }
         key = deserialized_obj['key']
-        kernel = compile(src, None, options)
-        self.device_caches[device][0][key] = kernel
+        _, _, backend, _ = self.device_caches[device]
+        options = backend.parse_options(options)
+        return self._do_compile(
+            key,
+            signature,
+            device,
+            constexprs,
+            options,
+            attrs,
+            warmup=True,
+        )
+
+    def _do_compile(self, key, signature, device, constexprs, options, attrs, warmup):
+        kernel_cache, target, backend, _ = self.device_caches[device]
+
+        if self._call_hook(knobs.runtime.jit_cache_hook, key, signature, device, constexprs, options, [attrs], warmup):
+            return None
+        src = self.ASTSource(self, signature, constexprs, attrs)
+
+        async_mode = _async_compile.active_mode
+        if async_mode is not None:
+
+            env_vars = get_cache_invalidating_env_vars()
+            cache_key = get_cache_key(src, backend, options, env_vars)
+
+            def async_compile():
+                return self.compile(src, target=target, options=options.__dict__, _env_vars=env_vars)
+
+            def finalize_compile(kernel):
+                kernel_cache[key] = kernel
+                self._call_hook(knobs.runtime.jit_post_compile_hook, key, signature, device, constexprs, options,
+                                [attrs], warmup)
+
+            kernel = async_mode.submit(cache_key, async_compile, finalize_compile)
+        else:
+            kernel = self.compile(src, target=target, options=options.__dict__)
+            kernel_cache[key] = kernel
+            self._call_hook(knobs.runtime.jit_post_compile_hook, key, signature, device, constexprs, options, [attrs],
+                            warmup)
         return kernel
 
     # we do not parse `src` in the constructor because
