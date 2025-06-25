@@ -758,9 +758,6 @@ def _correction_inner_loop(config, prog, m_i0, m_i1, zero_init0, zero_init1,  #
 
 @gluon.jit
 def _attn_fwd_correction(config, info0, info1, STAGE: gl.constexpr):
-    m_i0 = gl.full([config.SPLIT_M], -float("inf"), gl.float32, gl.SliceLayout(1, config.o_splitn_layout))
-    m_i1 = gl.full([config.SPLIT_M], -float("inf"), gl.float32, gl.SliceLayout(1, config.o_splitn_layout))
-
     o0_consumer = info0.o_mma_ctx.channel.create_consumer()
     o1_consumer = info1.o_mma_ctx.channel.create_consumer()
     mi0_consumer = info0.mi_chnl.create_consumer()
@@ -776,6 +773,8 @@ def _attn_fwd_correction(config, info0, info1, STAGE: gl.constexpr):
     for tile_id in range(scheduler.start_pid, scheduler.num_tiles, config.NUM_SMS):
         prog = config.get_program(*scheduler.get_tile_pid(tile_id))
 
+        m_i0 = gl.full([config.SPLIT_M], -float("inf"), gl.float32, gl.SliceLayout(1, config.o_splitn_layout))
+        m_i1 = gl.full([config.SPLIT_M], -float("inf"), gl.float32, gl.SliceLayout(1, config.o_splitn_layout))
         zero_init0 = Ref(gl.tensor)(gl.to_tensor(True))
         zero_init1 = Ref(gl.tensor)(gl.to_tensor(True))
 
@@ -922,7 +921,7 @@ def _attn_fwd_softmax1(config, info0, info1,  #
 def _attn_fwd_inner(config, info0, info1,  #
                     desc_q, desc_k, desc_v, desc_o, M,  #
                     STAGE: gl.constexpr):
-    num_buffers: gl.constexpr = 2 if config.HEAD_DIM == 128 else 3
+    num_buffers: gl.constexpr = 1 if config.HEAD_DIM == 128 else 2
     q0_load_ctx = LoadContext(desc_q, num_buffers=1)
     q1_load_ctx = LoadContext(desc_q, num_buffers=1)
     k_load_ctx = LoadContext(desc_k, num_buffers=num_buffers, num_consumers=2)
