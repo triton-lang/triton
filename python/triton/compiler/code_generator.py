@@ -1009,14 +1009,16 @@ class CodeGenerator(ast.NodeVisitor):
         lhs = self.visit(node.value)
         slices = self.visit(node.slice)
         if _is_triton_value(lhs):
-            return self.call_Function(node, lhs.__getitem__, [slices], {})
+            fn = BoundJITMethod(lhs, lhs.__getitem__) if isinstance(lhs.__getitem__, JITFunction) else lhs.__getitem__
+            return self.call_Function(node, fn, [slices], {})
         return lhs[slices]
 
     def visit_Subscript_Store(self, node, value):
         assert isinstance(node.ctx, ast.Store)
         lhs = self.visit(node.value)
         slices = self.visit(node.slice)
-        self.call_Function(node, lhs.__setitem__, [slices, value], {})
+        fn = BoundJITMethod(lhs, lhs.__setitem__) if isinstance(lhs.__setitem__, JITFunction) else lhs.__setitem__
+        self.call_Function(node, fn, [slices, value], {})
 
     def visit_Subscript(self, node):
         return self.visit_Subscript_Load(node)

@@ -132,6 +132,32 @@ def test_jit_method():
 
 
 @tl.core._aggregate
+class TypeWithJitGetItem:
+    value: tl.tensor
+
+    def __init__(self, value):
+        self.value = value
+
+    @triton.jit
+    def __getitem__(self, ind):
+        return self.value
+
+
+@filecheck_test
+@triton.jit
+def test_jit_getitem():
+    # CHECK-LABEL: test_jit_getitem
+    # CHECK: [[RANGE:%.*]] = tt.make_range {end = 4 : i32, start = 0 : i32}
+    v = TypeWithJitGetItem(tl.arange(0, 4))
+    # CHECK: [[V:%.*]] = tt.call [[METHOD:@.*__getitem__.*]]([[RANGE]])
+    a = v[0]
+    # CHECK: call @{{.*}}anchor{{.*}}([[V]])
+    anchor(a)
+    # CHECK: tt.func private [[METHOD]]([[ARG0:%.*]]:
+    # CHECK: tt.return [[ARG0]]
+
+
+@tl.core._aggregate
 class TypeWithBuiltinInitializer:
     value: tl.tensor
 
