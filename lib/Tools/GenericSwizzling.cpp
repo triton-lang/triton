@@ -283,6 +283,8 @@ LinearLayout optimalSwizzling(const LinearLayout &src, const LinearLayout &dst,
   // We work on the flattened tensors as the tensor dimensions are not relevant
   const LinearLayout srcFlat = src.flattenOuts();
   const LinearLayout dstFlat = dst.flattenOuts();
+
+#ifndef NDEBUG
   auto regsNotZero = [kReg](const LinearLayout &ll) {
     return llvm::all_of(
         ll.getBases().lookup(kReg),
@@ -294,6 +296,7 @@ LinearLayout optimalSwizzling(const LinearLayout &src, const LinearLayout &dst,
   assert(
       regsNotZero(dstFlat) &&
       "Remove register broadcasting from dst. See actionRemoveBroadcastedRegs");
+#endif
 
   auto regSrc = flatten(srcFlat, kReg);
   auto regDst = flatten(dstFlat, kReg);

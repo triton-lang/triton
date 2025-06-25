@@ -236,7 +236,6 @@ std::optional<ColumnAction> regPermForDivide(const LinearLayout &A,
   auto multiplyByTileSize =
       [&](ArrayRef<int32_t> bBasis) -> std::vector<int32_t> {
     std::vector<int32_t> result;
-    size_t idx = 0;
     assert(bBasis.size() == A.getNumOutDims());
     for (auto [dim, b] : llvm::zip(A.getOutDimNames(), bBasis)) {
       result.push_back(b << log2QuotSize.lookup(dim));

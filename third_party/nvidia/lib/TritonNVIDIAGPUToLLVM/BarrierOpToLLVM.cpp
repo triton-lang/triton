@@ -155,7 +155,6 @@ struct WaitBarrierOpConversion
         op.getLoc(), adaptor.getAlloc(),
         typeConverter->convertType(op.getAlloc().getType().getElementType()),
         rewriter);
-    auto loc = op.getLoc();
     bool predicated = adaptor.getPred() != nullptr;
     std::string ptx;
     if (targetInfo->getComputeCapability() < 90) {

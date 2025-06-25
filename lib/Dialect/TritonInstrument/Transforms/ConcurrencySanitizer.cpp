@@ -182,7 +182,6 @@ private:
                                             getBlockedEncoding(size));
     SmallVector<APInt> apInts = llvm::to_vector(
         llvm::map_range(values, [](int64_t v) { return APInt(64, v); }));
-    auto denseAttr = DenseElementsAttr::get(tensorType, apInts);
     return builder.create<tti::ExperimentalSharedBufferPointersOp>(tensorType,
                                                                    values);
   }

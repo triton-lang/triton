@@ -20,8 +20,6 @@ namespace {
 using namespace mlir;
 using namespace mlir::triton::gpu;
 
-constexpr int kPtrBitWidth = 64;
-
 struct ConvertLayoutOpUsingLinearLayoutsConversion
     : public ConvertOpToLLVMPattern<ConvertLayoutOp> {
   const TargetInfoBase &targetInfo;

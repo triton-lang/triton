@@ -267,7 +267,7 @@ private:
     SmallVector<Value> elemsI32;
     mlir::Type retTy = dstTy;
     auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
-    bool valid = emitTransferBetweenRegistersAndShared(
+    [[maybe_unused]] bool valid = emitTransferBetweenRegistersAndShared(
         ldsTransLayout, srcTy, llvmElemTy,
         /*maxVecElems=*/std::nullopt, smemObj, loc, rewriter, targetInfo,
         laneId, warpId, [&](VectorType vecTy, Value vecAddr) {

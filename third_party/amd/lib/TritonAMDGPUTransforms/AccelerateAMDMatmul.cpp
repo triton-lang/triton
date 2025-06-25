@@ -1062,7 +1062,6 @@ public:
 
     auto mDim = wmmaInstr->mDim;
     auto nDim = wmmaInstr->nDim;
-    auto kDim = wmmaInstr->kDim;
     auto kBase = wmmaInstr->kBase;
 
     // get WMMA encoding for the given number of warps

@@ -31,9 +31,7 @@ Value createConstIntTensor(OpBuilder &builder, Location loc, int val,
 Value createCmpIntTensorScalar(OpBuilder &builder, Location loc, Value tensor,
                                Value scalar) {
   auto tensorTy = cast<RankedTensorType>(tensor.getType());
-  auto scalarTy = scalar.getType();
-  auto elemTy = tensorTy.getElementType();
-  assert(scalarTy == elemTy &&
+  assert(scalar.getType() == tensorTy.getElementType() &&
          "Expected scalar to be of the same type as the tensor elements");
   auto splat = builder.create<triton::SplatOp>(loc, tensorTy, scalar);
   auto cmp = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq,
@@ -68,8 +66,6 @@ struct SharedBufferPointersOpConversion
                                 OpAdaptor adaptor,
                                 ConversionPatternRewriter &b) const override {
     auto loc = op.getLoc();
-    auto *ctx = b.getContext();
-    auto module = op->getParentOfType<ModuleOp>();
     auto values = adaptor.getOffsets();
     auto encoding =
         cast<ttg::BlockedEncodingAttr>(op.getResult().getType().getEncoding());
@@ -124,7 +120,6 @@ struct CheckAsyncWriteWithMbarSharedOpConversion
         cast<RankedTensorType>(op.getBarriers().getType());
     RankedTensorType statesTy =
         cast<RankedTensorType>(op.getStates().getType());
-    Value zero_64b = createConstIntTensor(b, loc, 0, barriersTy);
     Value zero_8b = createConstIntTensor(b, loc, 0, statesTy);
     Value mbar = createMemDescToI64(b, loc, getTypeConverter(),
                                     op.getMbar().getType(), adaptor.getMbar());

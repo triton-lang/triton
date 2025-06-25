@@ -235,7 +235,7 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
 
     VectorType vecTy;
     SmallVector<Value> warpStartAddrs;
-    bool ok = emitTransferBetweenRegistersAndShared(
+    [[maybe_unused]] bool ok = emitTransferBetweenRegistersAndShared(
         regLayout, dstTy, resElemTy, {}, smemObj, loc, rewriter, targetInfo,
         /*laneId=*/b.i32_val(0), warpId,
         [&](VectorType vecTy_, Value shmemAddr) {
@@ -749,7 +749,7 @@ struct AsyncCopyGlobalToLocalOpConversion
     int vecBytes =
         (vecTy.getNumElements() * vecTy.getElementTypeBitWidth()) / 8;
     assert(llvm::isPowerOf2_32(vecBytes));
-    Value vecBytesVal = b.i32_val(vecBytes);
+    [[maybe_unused]] Value vecBytesVal = b.i32_val(vecBytes);
     int32_t cacheModifiers =
         mlir::LLVM::AMD::getCtrlBitsForCacheModifierOnTarget(
             op.getCache(), /*isLoad=*/true, targetInfo);

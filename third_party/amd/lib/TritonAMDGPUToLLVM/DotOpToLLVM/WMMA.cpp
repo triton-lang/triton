@@ -229,7 +229,6 @@ Value generateWMMAIntrinsic(ConversionPatternRewriter &rewriter, Location loc,
                             std::optional<bool> tiedLower) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
-  LLVM::FastmathFlagsAttr defaultFlags{};
   SmallVector<Value> operands;
   if (aElType.isInteger())
     operands.push_back(b.int_val(1, !aElType.isUnsignedInteger()));
