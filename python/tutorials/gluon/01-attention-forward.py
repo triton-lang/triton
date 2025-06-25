@@ -141,19 +141,6 @@ def store_smem_to_tensor_desc(desc, coord, smem):
 # ===-----------------------------------------------------------------------===#
 
 
-@tl.constexpr_function
-def Ref(T):
-
-    @gl.aggregate
-    class RefType:
-        value: T
-
-        def __init__(self, value):
-            self.value = value
-
-    return RefType
-
-
 def Channel(T, alloc_fn):
 
     @gl.aggregate
@@ -599,7 +586,7 @@ def _attn_fwd_load(  #
 
 
 @gluon.jit
-def _mma_inner_loop(config, prog, q0_smem, q1_smem,  #
+def _mma_inner_loop(config, prog, o0_init, o1_init, q0_smem, q1_smem,  #
                     kv_consumer, p0_consumer, p1_consumer,  #
                     qk0_producer, qk1_producer, o0_producer, o1_producer,  #
                     STAGE: gl.constexpr):
@@ -616,7 +603,8 @@ def _mma_inner_loop(config, prog, q0_smem, q1_smem,  #
         for _ in range(num_mmas - 1):
             v_smem, v_bar = kv_consumer.acquire()
             p0_tmem, p0_bar = p0_consumer.acquire()
-            o0_producer.wait_and_issue_next(p0_tmem, v_smem, [v_bar, p0_bar, qk_p_bar], use_acc=True)
+            o0_producer.wait_and_issue_next(p0_tmem, v_smem, [v_bar, p0_bar, qk_p_bar], use_acc=o0_init)
+            o0_init = True
 
             k_smem, k_bar = kv_consumer.acquire()
             mbarrier.wait(qk_p_bar, qk_p_phase)
@@ -624,19 +612,24 @@ def _mma_inner_loop(config, prog, q0_smem, q1_smem,  #
             qk0_producer.wait_and_issue_next(q0_smem, k_smem.permute((1, 0)), [k_bar], use_acc=False)
 
             p1_tmem, p1_bar = p1_consumer.acquire()
-            o1_producer.wait_and_issue_next(p1_tmem, v_smem, [v_bar, p1_bar, qk_p_bar], use_acc=True)
+            o1_producer.wait_and_issue_next(p1_tmem, v_smem, [v_bar, p1_bar, qk_p_bar], use_acc=o1_init)
+            o1_init = True
 
             mbarrier.wait(qk_p_bar, qk_p_phase)
             qk_p_phase ^= 1
             qk1_producer.wait_and_issue_next(q1_smem, k_smem.permute((1, 0)), [k_bar], use_acc=False)
         v_smem, v_bar = kv_consumer.acquire()
         p0_tmem, p0_bar = p0_consumer.acquire()
-        o0_producer.wait_and_issue_next(p0_tmem, v_smem, [v_bar, p0_bar], use_acc=True)
+        o0_producer.wait_and_issue_next(p0_tmem, v_smem, [v_bar, p0_bar], use_acc=o0_init)
+        o0_init = True
 
         p1_tmem, p1_bar = p1_consumer.acquire()
-        o1_producer.wait_and_issue_next(p1_tmem, v_smem, [v_bar, p1_bar], use_acc=True)
+        o1_producer.wait_and_issue_next(p1_tmem, v_smem, [v_bar, p1_bar], use_acc=o1_init)
+        o1_init = True
 
         mbarrier.invalidate(qk_p_bar)
+
+    return o0_init, o1_init
 
 
 @gluon.jit
@@ -660,18 +653,21 @@ def _attn_fwd_mma(  #
     for pid in range(scheduler.start_pid, scheduler.num_tiles, config.NUM_SMS):
         prog = scheduler.get_program(pid)
 
+        o0_init, o1_init = False, False
         q0_smem, q0_bar = q_consumer.acquire()
         q1_smem, q1_bar = q_consumer.acquire()
         if STAGE & 1:
-            _mma_inner_loop(config, prog, q0_smem, q1_smem,  #
-                            kv_consumer, p0_consumer, p1_consumer,  #
-                            qk0_producer, qk1_producer, o0_producer, o1_producer,  #
-                            STAGE=4 - STAGE)
+            o0_init, o1_init = _mma_inner_loop(  #
+                config, prog, o0_init, o1_init, q0_smem, q1_smem,  #
+                kv_consumer, p0_consumer, p1_consumer,  #
+                qk0_producer, qk1_producer, o0_producer, o1_producer,  #
+                STAGE=4 - STAGE)
         if STAGE & 2:
-            _mma_inner_loop(config, prog, q0_smem, q1_smem,  #
-                            kv_consumer, p0_consumer, p1_consumer,  #
-                            qk0_producer, qk1_producer, o0_producer, o1_producer,  #
-                            STAGE=2)
+            o0_init, o1_init = _mma_inner_loop(  #
+                config, prog, o0_init, o1_init, q0_smem, q1_smem,  #
+                kv_consumer, p0_consumer, p1_consumer,  #
+                qk0_producer, qk1_producer, o0_producer, o1_producer,  #
+                STAGE=2)
         tcgen05_commit(q0_bar)
         tcgen05_commit(q1_bar)
 
@@ -722,7 +718,7 @@ def _mul_f32x2(a, b):
 
 
 @gluon.jit
-def _attn_fwd_correction_compute(config, mi_consumer, o_consumer, m_i, zero_init):
+def _attn_fwd_correction_compute(config, mi_consumer, o_consumer, m_i):
     mi_layout: gl.constexpr = gl.SliceLayout(1, config.o_splitn_layout)
     if config.mi_use_tmem:
         m_ij = mi_consumer.get(config.mi_2d_layout)
@@ -733,35 +729,27 @@ def _attn_fwd_correction_compute(config, mi_consumer, o_consumer, m_i, zero_init
 
     o_tmem, o_bar = o_consumer.acquire()
     if config.SPLIT_D_FACTOR == 1:
-        if zero_init.value:
-            zero_init.value = False
-            o = gl.full(config.o_shape, 0, gl.float32, config.o_layout)
-        else:
-            o = o_tmem.load(config.o_layout)
-            o = _mul_f32x2(o, alpha[:, None])
+        o = o_tmem.load(config.o_layout)
+        o = _mul_f32x2(o, alpha[:, None])
         o_tmem.store(o)
     else:
         for i in tl.static_range(config.SPLIT_D_FACTOR):
             o_ref = o_tmem.slice(i * config.SPLIT_D, config.SPLIT_D)
-            if zero_init.value:
-                zero_init.value = False
-                o = gl.full([config.SPLIT_M, config.SPLIT_D], 0, gl.float32, config.o_splitn_layout)
-            else:
-                o = o_ref.load(config.o_splitn_layout)
-                o = _mul_f32x2(o, alpha[:, None])
+            o = o_ref.load(config.o_splitn_layout)
+            o = _mul_f32x2(o, alpha[:, None])
             o_ref.store(o)
     mbarrier.arrive(o_bar, count=1)
     return m_ij
 
 
 @gluon.jit
-def _correction_inner_loop(config, prog, m_i0, m_i1, zero_init0, zero_init1,  #
+def _correction_inner_loop(config, prog, m_i0, m_i1,  #
                            mi0_consumer, mi1_consumer, o0_consumer, o1_consumer,  #
                            STAGE: gl.constexpr):
     lo, hi = prog.get_loop_bounds(STAGE)
     for start_n in range(lo, hi, config.BLOCK_N):
-        m_i0 = _attn_fwd_correction_compute(config, mi0_consumer, o0_consumer, m_i0, zero_init0)
-        m_i1 = _attn_fwd_correction_compute(config, mi1_consumer, o1_consumer, m_i1, zero_init1)
+        m_i0 = _attn_fwd_correction_compute(config, mi0_consumer, o0_consumer, m_i0)
+        m_i1 = _attn_fwd_correction_compute(config, mi1_consumer, o1_consumer, m_i1)
     return m_i0, m_i1
 
 
@@ -784,17 +772,15 @@ def _attn_fwd_correction(config, info0, info1, STAGE: gl.constexpr):
 
         m_i0 = gl.full([config.SPLIT_M], -float("inf"), gl.float32, gl.SliceLayout(1, config.o_splitn_layout))
         m_i1 = gl.full([config.SPLIT_M], -float("inf"), gl.float32, gl.SliceLayout(1, config.o_splitn_layout))
-        zero_init0 = Ref(gl.tensor)(gl.to_tensor(True))
-        zero_init1 = Ref(gl.tensor)(gl.to_tensor(True))
 
         if STAGE & 1:
             m_i0, m_i1 = _correction_inner_loop(  #
-                config, prog, m_i0, m_i1, zero_init0, zero_init1,  #
+                config, prog, m_i0, m_i1,  #
                 mi0_consumer, mi1_consumer, o0_consumer, o1_consumer,  #
                 STAGE=4 - STAGE)
         if STAGE & 2:
             m_i0, m_i1 = _correction_inner_loop(  #
-                config, prog, m_i0, m_i1, zero_init0, zero_init1,  #
+                config, prog, m_i0, m_i1,  #
                 mi0_consumer, mi1_consumer, o0_consumer, o1_consumer,  #
                 STAGE=2)
 
