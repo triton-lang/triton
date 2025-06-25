@@ -2,7 +2,7 @@ from ..ampere import async_copy
 from . import mbarrier, tma
 from ... import _core
 
-__all__ = ["async_copy", "fence_async_shared", "mbarrier", "tma", "warpgroup_mma"]
+__all__ = ["async_copy", "fence_async_shared", "mbarrier", "tma", "warpgroup_mma", "warpgroup_mma_wait"]
 
 
 @_core.builtin
@@ -25,3 +25,10 @@ def warpgroup_mma(a, b, acc, *, use_acc=True, precision=None, max_num_imprecise_
     handle = _semantic.builder.create_warpgroup_mma(a.handle, b.handle, acc.handle, use_acc.handle, precision,
                                                     max_num_imprecise_acc, is_async)
     return _core.tensor(handle, acc.type)
+
+
+@_core.builtin
+def warpgroup_mma_wait(num_outstanding=0, deps=None, _semantic=None):
+    deps = [x.handle for x in deps] if deps is not None else []
+    num_outstanding = _core._unwrap_if_constexpr(num_outstanding)
+    _semantic.builder.create_warpgroup_mma_wait(deps, num_outstanding)
