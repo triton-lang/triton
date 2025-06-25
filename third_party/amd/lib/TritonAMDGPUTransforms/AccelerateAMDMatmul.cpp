@@ -654,9 +654,12 @@ public:
     SmallVector<unsigned, 2> mfmaWarpsPerCTA(rank, 1);
     mfmaWarpsPerCTA[aScale ? 0 : 1] = numWarps;
 
+    // Heuristics for setting this parameter will be implemented in follow-up
+    // PRs.
+    SmallVector<unsigned> tilesPerWarp(mfmaWarpsPerCTA.size(), 1);
+
     // Always use transposed mfma layout. This enables larger vectorization
     // for global store instructions.
-    SmallVector<unsigned> tilesPerWarp(mfmaWarpsPerCTA.size(), 1);
     auto mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
         ctx, /*version=*/mfmaVersion, mfmaWarpsPerCTA, tilesPerWarp,
         /*instrShape=*/mDim, nDim, /*isTransposed=*/true, ctaLayout);
