@@ -344,10 +344,8 @@ def upcast_from_mxfp_torch(tensor: torch.Tensor, scale: torch.Tensor, target_dty
 
     tensor = perm_tensor_to_contig(tensor, axis, swizzle_axis)
     scale = perm_tensor_to_contig(scale, axis, swizzle_axis)
-
     if swizzle_value == SwizzlingType.HOPPER_VALUE:
         tensor = unswizzle_mxfp4_value_hopper_torch(tensor, op_idx=0, mma_version=3)
-
     if swizzle_scale == SwizzlingType.BLACKWELL_SCALE:
         scale = unswizzle_mx_scale_bw_torch(scale)
     elif swizzle_scale == SwizzlingType.HOPPER_SCALE:
