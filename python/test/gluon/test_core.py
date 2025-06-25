@@ -1,7 +1,7 @@
 import torch
 import pytest
 
-from triton._internal_testing import is_cuda, is_ampere_or_newer, is_hopper_or_newer
+from triton._internal_testing import is_cuda, is_ampere_or_newer, is_hopper_or_newer, is_hopper
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
 from triton.experimental.gluon.language.nvidia.ampere import async_copy, mbarrier
@@ -126,7 +126,7 @@ def warpgroup_mma_kernel(a, b, out, M: ttgl.constexpr, N: ttgl.constexpr, K: ttg
     ttgl.store(out + out_offs_m * N + out_offs_n, acc)
 
 
-@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
+@pytest.mark.skipif(not is_hopper(), reason="Requires Hopper")
 def test_warpgroup_mma():
     torch.manual_seed(0)
     M, N, K = 64, 32, 32
