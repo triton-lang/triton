@@ -17,6 +17,8 @@ from .. import knobs
 from .driver import driver
 from . import _async_compile
 from .._utils import find_paths_if, get_iterable_path, type_canonicalisation_dict, canonicalize_dtype
+from .cache import get_cache_key
+from triton._C.libtriton import get_cache_invalidating_env_vars
 
 TRITON_MODULE = __name__[:-len(".runtime.jit")]
 
@@ -536,14 +538,14 @@ class JITFunction(KernelInterface[T]):
         """
         Precompute as much as possible.
         """
-        from ..compiler import CompiledKernel, compile, ASTSource, make_backend, get_cache_key
+        from ..compiler import CompiledKernel, compile, ASTSource, make_backend
         target = driver.active.get_current_target()
         backend = make_backend(target)
         self.CompiledKernel = CompiledKernel
         self.compile = compile
         self.ASTSource = ASTSource
         binder = create_function_from_signature(self.signature, self.params, backend)
-        return {}, target, backend, binder, get_cache_key
+        return {}, target, backend, binder
 
     def run(self, *args, grid, warmup, **kwargs):
         kwargs["debug"] = kwargs.get("debug", self.debug) or knobs.runtime.debug
@@ -556,7 +558,7 @@ class JITFunction(KernelInterface[T]):
         for hook in self.pre_run_hooks:
             hook(*args, **kwargs)
 
-        kernel_cache, target, backend, binder, get_cache_key = self.device_caches[device]
+        kernel_cache, target, backend, binder = self.device_caches[device]
         # specialization is list[tuple[str, Any]], where first element of tuple is
         # the type and the second parameter is the 'specialization' value.
         bound_args, specialization, options = binder(*args, **kwargs)
@@ -597,15 +599,17 @@ class JITFunction(KernelInterface[T]):
             async_mode = _async_compile.active_mode
             if async_mode is not None:
 
+                env_vars = get_cache_invalidating_env_vars()
+                cache_key = get_cache_key(src, backend, options, env_vars)
+
                 def async_compile():
-                    return self.compile(src, target=target, options=options.__dict__)
+                    return self.compile(src, target=target, options=options.__dict__, _env_vars=env_vars)
 
                 def finalize_compile(kernel):
                     kernel_cache[key] = kernel
                     self._call_hook(knobs.runtime.jit_post_compile_hook, key, signature, device, constexprs, options,
                                     [attrs], warmup)
 
-                cache_key = get_cache_key(src, backend, options)
                 kernel = async_mode.submit(cache_key, async_compile, finalize_compile)
             else:
                 kernel = self.compile(src, target=target, options=options.__dict__)
