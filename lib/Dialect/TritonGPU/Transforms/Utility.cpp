@@ -1596,10 +1596,7 @@ SmallVector<Value> getTiedArgs(Operation *op, int resultIdx) {
   } else if (auto whileOp = dyn_cast<scf::WhileOp>(op)) {
     auto iterArg = whileOp.getBeforeArguments()[resultIdx];
     auto result = whileOp.getResults()[resultIdx];
-    auto offset =
-        isa<scf::ConditionOp>(whileOp.getBeforeBody()->getTerminator());
-    auto yieldVal = whileOp.getBeforeBody()->getTerminator()->getOperand(
-        resultIdx + offset);
+    auto yieldVal = whileOp.getConditionOp().getArgs()[resultIdx];
     auto initVal = whileOp.getOperands()[resultIdx];
     auto bodyArg = whileOp.getAfterArguments()[resultIdx];
     return {iterArg, result, yieldVal, initVal, bodyArg};
