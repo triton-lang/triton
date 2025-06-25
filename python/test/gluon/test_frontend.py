@@ -483,6 +483,21 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 
 @gluon.jit
+def warpgroup_mma_wait_kernel():
+    layout: ttgl.constexpr = ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1], instr_shape=[16, 32, 16])
+    acc = ttgl.zeros([128, 128], dtype=ttgl.float16, layout=layout)
+    hopper.warpgroup_mma_wait([acc], 1)
+
+
+@pytest.mark.skipif(not is_hopper(), reason="Requires Hopper WGMMA")
+def test_warpgroup_mma_wait(fresh_knobs):
+    knobs.compilation.disable_line_info = True
+
+    h = warpgroup_mma_wait_kernel.warmup(grid=(1, ))
+    print(h.asm["source"])
+
+
+@gluon.jit
 def async_tma_kernel(input_desc, XBLOCK: ttgl.constexpr):
     smem = ttgl.allocate_shared_memory(ttgl.float16, [XBLOCK, XBLOCK], input_desc.layout)
     bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
