@@ -44,8 +44,12 @@ static int getMMAVersionSafe(int computeCapability, DotOp op) {
   } else {
     assert(false && "computeCapability not supported");
   }
+  bool supportF64mma = false;
+  if (computeCapability == 80) {
+    supportF64mma = true; // TODO: support F64 MMA for SM90
+  }
   for (int baseVersion : versionsSupported) {
-    if (supportMMA(op, baseVersion))
+    if (supportMMA(op, baseVersion, supportF64mma))
       return baseVersion;
     if (baseVersion == 3) {
       auto remark = op.emitRemark()

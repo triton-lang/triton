@@ -2075,9 +2075,9 @@ NvidiaMmaEncodingAttr::getRepOrderForOperand(int opIdx) const {
 SmallVector<int64_t>
 NvidiaMmaEncodingAttr::getRepForOperand(ArrayRef<int64_t> shape, int bitwidth,
                                         int kWidth, int opIdx) const {
-  assert(
-      kWidth >= 32 / bitwidth &&
-      "kWidth must be >= 32 / bitwidth for this function to be well-defined");
+  assert(kWidth >= (bitwidth < 32 ? 32 / bitwidth : 1) &&
+         "kWidth must be >= max(32 / bitwidth, 1) for this function to be "
+         "well-defined");
   auto rank = shape.size();
   // Broadcast long K
   auto warpsPerCTA = to_vector(getWarpsPerCTA());

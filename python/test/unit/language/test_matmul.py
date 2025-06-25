@@ -82,11 +82,13 @@ def get_src_element_ty_size(dtype_str):
         return 2
     if dtype_str == "float32" or dtype_str == "tensorfloat32":
         return 4
+    if dtype_str == "float64":
+        return 8
     raise ValueError(f"Unknown dtype {dtype_str}")
 
 
-@pytest.mark.parametrize("dtype_src_str", ["float32", "tensorfloat32", "float16", "float8e5"])
-@pytest.mark.parametrize("dtype_dst_str", ["float32", "float16"])
+@pytest.mark.parametrize("dtype_src_str", ["float32", "tensorfloat32", "float16", "float8e5", "float64"])
+@pytest.mark.parametrize("dtype_dst_str", ["float32", "float16", "float64"])
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES", [(128, 128, 16, 4), (64, 128, 32, 4), (32, 32, 32, 4),
                                                                    (256, 128, 32, 4), (64, 512, 32, 2),
                                                                    (512, 64, 32, 2), (64, 16, 16, 4)])
@@ -101,12 +103,20 @@ def test_simple_matmul(dtype_src_str, dtype_dst_str, BLOCK_M, BLOCK_N, BLOCK_K, 
     if is_hip() and ((BLOCK_K * BLOCK_M + BLOCK_K * BLOCK_N) * NUM_STAGES * get_src_element_ty_size(dtype_src_str)
                      > 65536):
         pytest.skip("HIP path requires less than 64KB of shared memory")
+    if (is_cuda() and torch.cuda.get_device_capability()[0] <= 9 and
+        ((BLOCK_K * BLOCK_M + BLOCK_K * BLOCK_N) * NUM_STAGES * get_src_element_ty_size(dtype_src_str) > 65536)):
+        pytest.skip("CUDA path without tensor memory requires less than 256KB of shared memory")
     if is_hip() and (not is_hip_cdna3()) and dtype_src_str == "tensorfloat32":
         pytest.skip("tensorfloat32 is only supported on HIP CDNA3")
     if dtype_src_str == "float8e5" and BLOCK_K == 16:
         pytest.skip("Skipping cases small K for float8")
     if dtype_src_str == "float8e5" and device == "cuda" and torch.cuda.get_device_capability()[0] < 9:
         pytest.skip("Float8 requires compute capability >= 9")
+    if (dtype_src_str == "float64") != (dtype_dst_str == "float64"):
+        pytest.skip("Skipping unsupported case")
+    if dtype_src_str == "float64" and not (is_cuda() and torch.cuda.get_device_capability()[0] in (8, 9, 10)
+                                           and torch.cuda.get_device_capability()[1] == 0):
+        pytest.skip("Skipping unsupported case")
     if "float32" in dtype_src_str and dtype_dst_str == "float16":
         pytest.skip("Skipping unsupported case")
     if "float32" == dtype_src_str and NUM_CTAS > 1:

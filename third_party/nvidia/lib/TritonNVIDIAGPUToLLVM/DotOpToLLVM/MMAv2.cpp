@@ -4,6 +4,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/raw_ostream.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -32,8 +33,8 @@ Value loadC(Value tensor, Value llTensor,
          "mma layout.");
 
   auto numMmaRets = tensorTy.getElementType().getIntOrFloatBitWidth() / 8;
-  assert(numMmaRets == 4 || numMmaRets == 2);
-  if (numMmaRets == 4) {
+  assert(numMmaRets == 8 || numMmaRets == 4 || numMmaRets == 2);
+  if (numMmaRets == 8 || numMmaRets == 4) {
     return llTensor;
   } else if (numMmaRets == 2) {
     auto cPack = SmallVector<Value>();
@@ -70,7 +71,7 @@ ValueTableV2 getValuesFromDotOperandLayoutStruct(
   int offset{};
   ValueTableV2 vals;
   auto bitwidth = eltTy.getIntOrFloatBitWidth();
-  auto numElemsPerVec = 32 / bitwidth;
+  auto numElemsPerVec = bitwidth < 32 ? 32 / bitwidth : 1;
   auto vecTy = vec_ty(eltTy, numElemsPerVec);
 
   auto packVec = [&](std::array<int, 3> dstIdx) {
@@ -79,13 +80,21 @@ ValueTableV2 getValuesFromDotOperandLayoutStruct(
       vec = b.insert_element(vec, b.bitcast(elems[offset + i], eltTy),
                              b.i32_val(i));
     }
-    vals[dstIdx] = b.bitcast(vec, i32_ty);
+    if (bitwidth == 64) {
+      vals[dstIdx] = vec;
+    } else {
+      vals[dstIdx] = b.bitcast(vec, i32_ty);
+    }
     offset += numElemsPerVec;
   };
 
   auto dot = cast<DotOperandEncodingAttr>(type.getEncoding());
   auto kWidth = dot.getKWidth();
-  auto largeK = bitwidth * kWidth > 32;
+  auto largeK = bitwidth * kWidth > (bitwidth < 32 ? 32 : bitwidth);
+
+  assert((bitwidth != 64 || largeK == false) &&
+         "Currently fp64 don't support largeK MMA");
+
   if (largeK) {
     // For layouts with a large K dimension, the original register layout needs
     // to be divided into multiple MMAs, where each MMA has contiguous 32 bits
@@ -94,7 +103,7 @@ ValueTableV2 getValuesFromDotOperandLayoutStruct(
     // we split the MMA into 4 sub-MMAs, each with a stride 4 x 32-bit along the
     // K dimension.
     llvm::SmallVector<unsigned> si;
-    auto kIters = kWidth / (32 / bitwidth);
+    auto kIters = kWidth / (bitwidth < 32 ? 32 / bitwidth : 1);
 
     if (dot.getOpIdx() == 0) {
       // Original register layout:
@@ -225,17 +234,26 @@ ValueTableV2 getValuesFromDotOperandLayoutStruct(
     for (auto b = 0; b < batch; ++b)
       for (auto m = 0; m < repOuter; ++m)
         for (auto k = 0; k < repK; ++k) {
-          packVec({b, 2 * m, 2 * k});
-          packVec({b, 2 * m + 1, 2 * k});
-          packVec({b, 2 * m, 2 * k + 1});
-          packVec({b, 2 * m + 1, 2 * k + 1});
+          if (bitwidth == 64) {
+            packVec({b, 2 * m, k});
+            packVec({b, 2 * m + 1, k});
+          } else {
+            packVec({b, 2 * m, 2 * k});
+            packVec({b, 2 * m + 1, 2 * k});
+            packVec({b, 2 * m, 2 * k + 1});
+            packVec({b, 2 * m + 1, 2 * k + 1});
+          }
         }
   } else {
     for (auto b = 0; b < batch; ++b)
       for (auto n = 0; n < repOuter; ++n)
         for (auto k = 0; k < repK; ++k) {
-          packVec({b, n, 2 * k});
-          packVec({b, n, 2 * k + 1});
+          if (bitwidth == 64) {
+            packVec({b, n, k});
+          } else {
+            packVec({b, n, 2 * k});
+            packVec({b, n, 2 * k + 1});
+          }
         }
   }
   return vals;
@@ -255,14 +273,19 @@ enum class TensorCoreType : uint8_t {
   INT32_INT1_INT1_INT32, // Not implemented
   INT32_INT4_INT4_INT32, // Not implemented
   INT32_INT8_INT8_INT32, // Not implemented
+  // double precision tensor core instr
+  FP64_FP64_FP64_FP64,
   //
   NOT_APPLICABLE,
 };
 
 static Type getMmaRetType(TensorCoreType mmaType, MLIRContext *ctx) {
+  Type fp64Ty = type::f64Ty(ctx);
   Type fp32Ty = type::f32Ty(ctx);
   Type fp16Ty = type::f16Ty(ctx);
   Type i32Ty = type::i32Ty(ctx);
+  Type fp64x4Ty =
+      LLVM::LLVMStructType::getLiteral(ctx, SmallVector<Type>(4, fp64Ty));
   Type fp32x4Ty =
       LLVM::LLVMStructType::getLiteral(ctx, SmallVector<Type>(4, fp32Ty));
   Type i32x4Ty =
@@ -285,6 +308,8 @@ static Type getMmaRetType(TensorCoreType mmaType, MLIRContext *ctx) {
     return fp32x4Ty;
   case TensorCoreType::INT32_INT8_INT8_INT32:
     return i32x4Ty;
+  case TensorCoreType::FP64_FP64_FP64_FP64:
+    return fp64x4Ty;
   default:
     llvm::report_fatal_error("Unsupported mma type found");
   }
@@ -324,6 +349,9 @@ static TensorCoreType getMmaType(triton::DotOp op) {
   } else if (dTy.getElementType().isF16()) {
     if (aTy.getElementType().isF16() && bTy.getElementType().isF16())
       return TensorCoreType::FP16_FP16_FP16_FP16;
+  } else if (dTy.getElementType().isF64()) {
+    if (aTy.getElementType().isF64() && bTy.getElementType().isF64())
+      return TensorCoreType::FP64_FP64_FP64_FP64;
   }
 
   return TensorCoreType::NOT_APPLICABLE;
@@ -366,6 +394,9 @@ inline static const std::map<TensorCoreType, std::string> mmaInstrPtxAmpere = {
      "mma.sync.aligned.m16n8k32.row.col.f32.e4m3.e5m2.f32"},
     {TensorCoreType::FP32_FP8E4M3FN_FP8E4M3FN_FP32,
      "mma.sync.aligned.m16n8k32.row.col.f32.e4m3.e4m3.f32"},
+
+    {TensorCoreType::FP64_FP64_FP64_FP64,
+     "mma.sync.aligned.m8n8k4.row.col.f64.f64.f64.f64"},
 };
 
 static void callMmaTuringInt8(PTXBuilder &builder, int b, int m, int n, int k,
@@ -442,6 +473,38 @@ static void callMmaTuringFp16(PTXBuilder &builder, int b, int m, int n, int k,
   mma(retArgs, aArgs2, bArgs2, cArgs);
 }
 
+static void callMmaAmpereFp64(PTXBuilder &builder, int b, int m, int n, int k,
+                              mlir::triton::PTXInstr &mma, unsigned numMmaRets,
+                              unsigned colsPerThread, int numCPackedElem,
+                              ValueTableV2 &ha, ValueTableV2 &hb,
+                              const SmallVector<Value> &fc) {
+  auto retArgs1 = builder.newListOperand(numMmaRets / 2, "=d");
+  auto retArgs2 = builder.newListOperand(numMmaRets / 2, "=d");
+  auto cArgs1 = builder.newListOperand();
+  for (int i = 0; i < numMmaRets / 2; ++i) {
+    cArgs1->listAppend(
+        builder.newOperand(fc[(m * colsPerThread + 4 * n) / numCPackedElem + i],
+                           std::to_string(i)));
+    // reuse the output registers
+  }
+  auto cArgs2 = builder.newListOperand();
+  for (int i = numMmaRets / 2; i < numMmaRets; ++i) {
+    cArgs2->listAppend(
+        builder.newOperand(fc[(m * colsPerThread + 4 * n) / numCPackedElem + i],
+                           std::to_string(i)));
+    // reuse the output registers
+  }
+  auto aArgs1 = builder.newListOperand({
+      {ha[{b, m, k}], "d"},
+  });
+  auto bArgs = builder.newListOperand({{hb[{b, n, k}], "d"}});
+  auto aArgs2 = builder.newListOperand({
+      {ha[{b, m + 1, k}], "d"},
+  });
+  mma(retArgs1, aArgs1, bArgs, cArgs1);
+  mma(retArgs2, aArgs2, bArgs, cArgs2);
+}
+
 static void callMmaAmpere(PTXBuilder &builder, int b, int m, int n, int k,
                           mlir::triton::PTXInstr &mma, unsigned numMmaRets,
                           unsigned colsPerThread, int numCPackedElem,
@@ -514,7 +577,9 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
       typeConverter, loc, rewriter, loadedB, repBatch, repN, repK, bTensorTy);
 
   auto fc = unpackLLElements(loc, loadedC, rewriter);
-  auto numMmaRets = dTensorTy.getElementType().getIntOrFloatBitWidth() / 8;
+
+  int bitwidthRet = dTensorTy.getElementType().getIntOrFloatBitWidth();
+  auto numMmaRets = bitwidthRet == 64 ? 4 : bitwidthRet / 8;
   int numCPackedElem = 4 / numMmaRets;
 
   auto mmaType = getMmaType(op);
@@ -535,6 +600,7 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
     // using =r for float32 works but leads to less readable ptx.
     bool isIntMMA = dTensorTy.getElementType().isInteger(32);
     bool isAccF16 = dTensorTy.getElementType().isF16();
+    bool isFp64MMA = dTensorTy.getElementType().isF64();
 
     if (isTuring) {
       assert(b == 0 && "Turing only supports batch size 1");
@@ -545,9 +611,15 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
         callMmaTuringFp16(builder, b, m, n, k, mma, numMmaRets, colsPerThread,
                           numCPackedElem, ha, hb, fc, isAccF16);
     } else { // Ampere
-      callMmaAmpere(builder, b, m, n, k, mma, numMmaRets, colsPerThread,
-                    numCPackedElem, batchOffset, ha, hb, fc, isAccF16,
-                    isIntMMA);
+      if (isFp64MMA) {
+        assert(b == 0 && "MmaAmpereFp64 only supports batch size 1");
+        callMmaAmpereFp64(builder, b, m, n, k, mma, numMmaRets, colsPerThread,
+                          numCPackedElem, ha, hb, fc);
+      } else {
+        callMmaAmpere(builder, b, m, n, k, mma, numMmaRets, colsPerThread,
+                      numCPackedElem, batchOffset, ha, hb, fc, isAccF16,
+                      isIntMMA);
+      }
     }
 
     Value mmaOut =
@@ -563,8 +635,13 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
   for (int b = 0; b < repBatch; ++b)
     for (int k = 0; k < repK; ++k)
       for (int m = 0; m < repM; ++m)
-        for (int n = 0; n < repN; ++n)
-          callMma(b, 2 * m, n, 2 * k);
+        for (int n = 0; n < repN; ++n) {
+          if (bitwidth == 64) {
+            callMma(b, 2 * m, n, k);
+          } else {
+            callMma(b, 2 * m, n, 2 * k);
+          }
+        }
 
   Type resElemTy = dTensorTy.getElementType();
 
