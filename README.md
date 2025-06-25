@@ -119,9 +119,9 @@ Alternatively, follow these steps to build LLVM from source manually.
   Without this, every invocation of `pip install` uses a different symlink to
   cmake, and this forces ninja to rebuild most of the `.a` files.
 
-- The build system creates a `compile_commands.json` file under the Triton repo 
-  directory. This file is used by VSCode IntelliSense and clangd to provide 
-  code completion and other features for C++ code. 
+- The build system creates a `compile_commands.json` file under the Triton repo
+  directory. This file is used by VSCode IntelliSense and clangd to provide
+  code completion and other features for C++ code.
   <details>
   <summary>
   If IntelliSense does not work, you can try the following steps.

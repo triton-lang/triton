@@ -527,6 +527,7 @@ class CMakeBuild(build_ext):
 
         update_symlink(Path(self.base_dir) / "compile_commands.json", cmake_dir / "compile_commands.json")
 
+
 def download_and_copy_dependencies():
     nvidia_version_path = os.path.join(get_base_dir(), "cmake", "nvidia-toolchain-version.json")
     with open(nvidia_version_path, "r") as nvidia_version_file:
