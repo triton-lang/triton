@@ -374,6 +374,7 @@ def test_constexpr_generator():
     generator(lhs)
 
 
+@tl.constexpr_function
 def Box(T):
 
     @tl.core._aggregate
