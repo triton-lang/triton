@@ -35,6 +35,7 @@ protected:
 private:
   void doDump(std::ostream &os, OutputFormat outputFormat) const override;
   void dumpChromeTrace(std::ostream &os) const;
+  void dumpRawTrace(std::ostream &os) const;
 
   OutputFormat getDefaultOutputFormat() const override {
     return OutputFormat::ChromeTrace;

@@ -448,7 +448,7 @@ void dumpKernelMetricTrace(
 } // namespace
 
 void TraceData::dumpChromeTrace(std::ostream &os) const {
-  auto events = trace->getEvents();
+  auto &events = trace->getEvents();
   // stream id -> trace event
   std::map<size_t, std::vector<Trace::TraceEvent>> streamTraceEvents;
   uint64_t minTimeStamp = std::numeric_limits<uint64_t>::max();
@@ -493,9 +493,41 @@ void TraceData::dumpChromeTrace(std::ostream &os) const {
   }
 }
 
+void TraceData::dumpRawTrace(std::ostream &os) const {
+  auto &events = trace->getEvents();
+  // Emit one JSON per line for each event
+  for (const auto &event : events) {
+    json object = {{"id", event.id}};
+
+    // Fill in contexts
+    const auto &contexts = trace->getContexts(event.contextId);
+    json contextObj = json::array();
+    for (auto const &ctx : contexts) {
+      contextObj.emplace_back(ctx.name);
+    }
+    object["contexts"] = std::move(contextObj);
+
+    // Fill in metrics
+    for (const auto &[kind, metric] : event.metrics) {
+      json metricObj;
+      const auto &values = metric->getValues();
+      for (size_t i = 0; i < values.size(); i++) {
+        auto valueName = metric->getValueName(i);
+        auto visitor = [&](auto value) { metricObj[valueName] = value; };
+        std::visit(visitor, values[i]);
+      }
+      object[metric->getName()] = std::move(metricObj);
+    }
+
+    os << object.dump() << "\n";
+  }
+}
+
 void TraceData::doDump(std::ostream &os, OutputFormat outputFormat) const {
   if (outputFormat == OutputFormat::ChromeTrace) {
     dumpChromeTrace(os);
+  } else if (outputFormat == OutputFormat::RawTrace) {
+    dumpRawTrace(os);
   } else {
     std::logic_error("Output format not supported");
   }

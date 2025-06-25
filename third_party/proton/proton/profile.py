@@ -175,7 +175,7 @@ def finalize(session: Optional[int] = None, output_format: Optional[str] = "") -
     Args:
         session (int, optional): The session ID to finalize. If None, all sessions are finalized. Defaults to None.
         output_format (str, optional): The output format for the profiling results.
-                                       Available options are ["hatchet", "chrome_trace"].
+                                       Available options are ["hatchet", "chrome_trace", "raw_trace"].
 
     Returns:
         None

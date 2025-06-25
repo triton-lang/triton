@@ -33,6 +33,8 @@ OutputFormat parseOutputFormat(const std::string &outputFormat) {
     return OutputFormat::Hatchet;
   } else if (toLower(outputFormat) == "chrome_trace") {
     return OutputFormat::ChromeTrace;
+  } else if (toLower(outputFormat) == "raw_trace") {
+    return OutputFormat::RawTrace;
   } else {
     throw std::runtime_error("Unknown output format: " + outputFormat);
   }
@@ -43,6 +45,8 @@ const std::string outputFormatToString(OutputFormat outputFormat) {
     return "hatchet";
   } else if (outputFormat == OutputFormat::ChromeTrace) {
     return "chrome_trace";
+  } else if (outputFormat == OutputFormat::RawTrace) {
+    return "raw_trace";
   }
   throw std::runtime_error("Unknown output format: " +
                            std::to_string(static_cast<int>(outputFormat)));
