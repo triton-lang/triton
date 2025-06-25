@@ -451,7 +451,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 def warpgroup_mma_kernel(nvmma_layout: ttgl.constexpr, acc_layout: ttgl.constexpr):
     a = ttgl.allocate_shared_memory(ttgl.float16, [128, 128], nvmma_layout)
     b = ttgl.allocate_shared_memory(ttgl.float16, [128, 128], nvmma_layout)
-    acc = ttgl.zeros([128, 128], dtype=ttgl.float16, layout=acc_layout)
+    acc = ttgl.full([128, 128], 0, dtype=ttgl.float16, layout=acc_layout)
     hopper.warpgroup_mma(a, b, acc)
 
 
@@ -471,18 +471,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   tt.func public @warpgroup_mma_kernel() attributes {noinline = false} {
     %0 = ttg.local_alloc : () -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable> loc(#loc)
     %1 = ttg.local_alloc : () -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable> loc(#loc)
-    %2 = tt.call @"triton.experimental.gluon.language._standard.zeros____(0, 0)cconstexpr_128__(0, 1)cconstexpr_128__(1,)cconstexpr_fp16__(2,)cconstexpr_NVMMADistributedLayout(version=_3, 0_, warps_per_cta=_4, 1_, instr_shape=_16, 32, 16_, ctas_per_cga=_1, 1_, cta_split_num=_1, 1_, cta_order=_1, 0_)_"() : () -> tensor<128x128xf16, #mma> loc(#loc)
-    %true = arith.constant true loc(#loc)
-    %3 = ttng.warp_group_dot %0, %1, %2, %true {inputPrecision = 0 : i32} : !ttg.memdesc<128x128xf16, #shared, #smem, mutable> * !ttg.memdesc<128x128xf16, #shared, #smem, mutable> -> tensor<128x128xf16, #mma> loc(#loc)
-    tt.return loc(#loc)
-  } loc(#loc)
-  tt.func private @"triton.experimental.gluon.language._standard.zeros____(0, 0)cconstexpr_128__(0, 1)cconstexpr_128__(1,)cconstexpr_fp16__(2,)cconstexpr_NVMMADistributedLayout(version=_3, 0_, warps_per_cta=_4, 1_, instr_shape=_16, 32, 16_, ctas_per_cga=_1, 1_, cta_split_num=_1, 1_, cta_order=_1, 0_)_"() -> tensor<128x128xf16, #mma> attributes {noinline = false} {
     %cst = arith.constant 0.000000e+00 : f16 loc(#loc)
     %cst_0 = arith.constant dense<0.000000e+00> : tensor<128x128xf16, #mma> loc(#loc)
-    tt.return %cst_0 : tensor<128x128xf16, #mma> loc(#loc)
-  ^bb1:  // no predecessors
-    %0 = ub.poison : tensor<128x128xf16, #mma> loc(#loc)
-    tt.return %0 : tensor<128x128xf16, #mma> loc(#loc)
+    %true = arith.constant true loc(#loc)
+    %2 = ttng.warp_group_dot %0, %1, %cst_0, %true {inputPrecision = 0 : i32} : !ttg.memdesc<128x128xf16, #shared, #smem, mutable> * !ttg.memdesc<128x128xf16, #shared, #smem, mutable> -> tensor<128x128xf16, #mma> loc(#loc)
+    tt.return loc(#loc)
   } loc(#loc)
 } loc(#loc)
 #loc = loc(unknown)
