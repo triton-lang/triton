@@ -10,7 +10,7 @@
 
 namespace proton {
 
-enum class OutputFormat { Hatchet, ChromeTrace, Count };
+enum class OutputFormat { Hatchet, ChromeTrace, Count, RawTrace };
 
 class Data : public ScopeInterface {
 public:

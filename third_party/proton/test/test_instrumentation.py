@@ -246,6 +246,41 @@ def test_trace(tmp_path: pathlib.Path):
         assert events[3]["name"] == "load_ops"
         assert events[3]["cat"] == "sub_kernel"
 
+    temp_file = tmp_path / "test_trace.raw_trace"
+    proton.start(str(temp_file.with_suffix("")), backend="instrumentation", data="trace")
+    add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024, num_warps=1)
+    sub_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024, num_warps=1)
+    proton.finalize(output_format="raw_trace")
+    with open(temp_file, "rb") as f:
+        events = [json.loads(line) for line in f]
+
+    for i in range(len(events)):
+        assert events[i]["id"] == i
+
+    assert events[0]["contexts"] == ["ROOT", "add_kernel"]
+    assert events[1]["contexts"] == ["ROOT", "add_kernel", "kernel", "load_ops"]
+    assert events[2]["contexts"] == ["ROOT", "add_kernel", "kernel"]
+    assert events[3]["contexts"] == ["ROOT", "sub_kernel"]
+    assert events[4]["contexts"] == ["ROOT", "sub_kernel", "kernel", "load_ops"]
+    assert events[5]["contexts"] == ["ROOT", "sub_kernel", "kernel"]
+
+    # event[0] and event[3] have no CycleMetric
+    for i in [1, 2, 4, 5]:
+        assert {
+            "block_id",
+            "cycles",
+            "device_id",
+            "device_type",
+            "end_cycle",
+            "kernel_id",
+            "kernel_name",
+            "normalized_cycles",
+            "processor_id",
+            "start_cycle",
+            "time_shift_cost",
+            "unit_id",
+        } <= set(events[i]["CycleMetric"].keys())
+
 
 def test_multi_session(tmp_path: pathlib.Path):
 
