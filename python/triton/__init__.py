@@ -18,7 +18,7 @@ from .runtime import (
     MockTensor,
 )
 from .runtime.jit import jit
-from .runtime._async_compile import AsyncCompileMode
+from .runtime._async_compile import AsyncCompileMode, FutureKernel
 from .compiler import compile, CompilationError
 from .errors import TritonError
 from .runtime._allocation import set_allocator
@@ -36,6 +36,7 @@ __all__ = [
     "CompilationError",
     "compile",
     "Config",
+    "FutureKernel",
     "heuristics",
     "InterpreterError",
     "jit",
