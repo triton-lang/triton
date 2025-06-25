@@ -17,6 +17,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/ADT/TypeSwitch.h"
 
 #undef DEBUG_TYPE
@@ -552,9 +553,7 @@ public:
                  ConvertTritonLoadToBufferLoad<ttg::AsyncCopyGlobalToLocalOp>,
                  ConvertTritonStoreToBufferStore>(context, assumptions, solver);
 
-    char *buffer_atomics_env = std::getenv("AMDGCN_DISABLE_BUFFER_ATOMICS");
-    bool allow_buffer_atomics =
-        buffer_atomics_env == nullptr || std::strcmp(envValue, "1") != 0;
+    bool allow_buffer_atomics = getBoolEnv("AMDGCN_DISABLE_BUFFER_ATOMICS");
 
     // Gate buffer atomics behind CDNA3 for now
     // GFX942-specific assumptions regarding cache coherence are made when
