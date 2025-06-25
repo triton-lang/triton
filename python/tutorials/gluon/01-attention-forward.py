@@ -466,13 +466,13 @@ class ProgramScheduler:
         self.num_pid_in_group = num_pid_m * config.GROUP_SIZE_N
         self.num_tiles = num_pid_m * self.num_pid_n
 
-    def get_tile_pid(self, tile_id):
+    def get_program(self, tile_id):
         group_id = tile_id // self.num_pid_in_group
         first_pid_n = group_id * self.config.GROUP_SIZE_N
         group_size_n = min(self.num_pid_n - first_pid_n, self.config.GROUP_SIZE_N)
         pid_n = first_pid_n + (tile_id % group_size_n)
         pid_m = (tile_id % self.num_pid_in_group) // group_size_n
-        return pid_m, pid_n
+        return self.config.get_program(pid_m, pid_n)
 
 
 @gl.aggregate
@@ -576,8 +576,8 @@ def _attn_fwd_load(config, info0, info1,  #
     load_v = PipelinedLoadProducer(v_load_ctx, 0, config.BLOCK_N)
 
     scheduler = ProgramScheduler(config)
-    for tile_id in range(scheduler.start_pid, scheduler.num_tiles, config.NUM_SMS):
-        prog = config.get_program(*scheduler.get_tile_pid(tile_id))
+    for pid in range(scheduler.start_pid, scheduler.num_tiles, config.NUM_SMS):
+        prog = scheduler.get_program(pid)
 
         load_q0.offset = prog.qo_offset_y + config.SPLIT_M * 0
         load_q1.offset = prog.qo_offset_y + config.SPLIT_M * 1
@@ -648,8 +648,8 @@ def _attn_fwd_mma(config, info0, info1,  #
     o1_producer = MMAProducer(info1.o_mma_ctx)
 
     scheduler = ProgramScheduler(config)
-    for tile_id in range(scheduler.start_pid, scheduler.num_tiles, config.NUM_SMS):
-        prog = config.get_program(*scheduler.get_tile_pid(tile_id))
+    for pid in range(scheduler.start_pid, scheduler.num_tiles, config.NUM_SMS):
+        prog = scheduler.get_program(pid)
 
         q0_smem, q0_bar = q0_consumer.acquire()
         q1_smem, q1_bar = q1_consumer.acquire()
@@ -770,8 +770,8 @@ def _attn_fwd_correction(config, info0, info1, STAGE: gl.constexpr):
     _, e1_bar = epilogue1_producer.acquire()
 
     scheduler = ProgramScheduler(config)
-    for tile_id in range(scheduler.start_pid, scheduler.num_tiles, config.NUM_SMS):
-        prog = config.get_program(*scheduler.get_tile_pid(tile_id))
+    for pid in range(scheduler.start_pid, scheduler.num_tiles, config.NUM_SMS):
+        prog = scheduler.get_program(pid)
 
         m_i0 = gl.full([config.SPLIT_M], -float("inf"), gl.float32, gl.SliceLayout(1, config.o_splitn_layout))
         m_i1 = gl.full([config.SPLIT_M], -float("inf"), gl.float32, gl.SliceLayout(1, config.o_splitn_layout))
@@ -864,8 +864,8 @@ def _softmax_tile(tile_id: gl.constexpr, config, info, M, desc_o, STAGE: gl.cons
     o_smem = gl.allocate_shared_memory(config.dtype, config.o_shape, desc_o.layout)
 
     scheduler = ProgramScheduler(config)
-    for tid in range(scheduler.start_pid, scheduler.num_tiles, config.NUM_SMS):
-        prog = config.get_program(*scheduler.get_tile_pid(tid))
+    for pid in range(scheduler.start_pid, scheduler.num_tiles, config.NUM_SMS):
+        prog = scheduler.get_program(pid)
 
         offs_m = prog.start_m * config.BLOCK_M
         offs_m += gl.arange(tile_id * config.SPLIT_M, (1 + tile_id) * config.SPLIT_M, qk_slice_dim1)
