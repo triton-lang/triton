@@ -282,6 +282,13 @@ TensorMemoryChannel, TensorMemoryProducer, TensorMemoryConsumer = Channel(tensor
                                                                           allocate_tensor_memory)
 
 
+@gluon.jit
+def get_desc_channel(desc, num_buffers: gl.constexpr, num_consumers: gl.constexpr = 1):
+    shape: gl.constexpr = desc.block_type.shape
+    layout: gl.constexpr = desc.layout
+    return SharedMemoryChannel.alloc(shape, desc.dtype, layout, num_buffers, num_consumers)
+
+
 @gl.aggregate
 class LoadContext:
     desc: tensor_descriptor
@@ -296,6 +303,13 @@ class LoadContext:
 
     def release(self):
         self.channel.release()
+
+
+@gluon.jit
+def issue_async_tma_load(smem, bar, desc, offset):
+    size: gl.constexpr = get_load_size_bytes(desc)
+    mbarrier.expect(bar, size)
+    tma.async_copy_global_to_shared(desc, [offset, 0], bar, smem)
 
 
 @gl.aggregate
@@ -313,11 +327,7 @@ class PipelinedLoadProducer:
 
     def wait_and_issue_next(self):
         smem, ready_bar = self.impl.acquire()
-
-        size: gl.constexpr = get_load_size_bytes(self.desc)
-        mbarrier.expect(ready_bar, size)
-        tma.async_copy_global_to_shared(self.desc, [self.offset, 0], ready_bar, smem)
-
+        issue_async_tma_load(smem, ready_bar, self.desc, self.offset)
         self.offset += self.step
 
 
@@ -551,48 +561,46 @@ class InnerLoopInfo:
 
 
 @gluon.jit
-def _load_inner_loop(config, prog, load_k, load_v, STAGE: gl.constexpr):
+def _load_inner_loop(config, prog, kv_producer, desc_k, desc_v, STAGE: gl.constexpr):
     lo, hi = prog.get_loop_bounds(STAGE)
-    num_loads = (hi - lo) // config.BLOCK_N
-    if num_loads != 0:
-        offsetkv_y = prog.offset_y + lo
-        load_k.offset = offsetkv_y
-        load_v.offset = offsetkv_y
-
-        load_k.wait_and_issue_next()
-        for _ in range(num_loads - 1):
-            load_k.wait_and_issue_next()
-            load_v.wait_and_issue_next()
-        load_v.wait_and_issue_next()
+    for start_n in range(lo, hi, config.BLOCK_N):
+        offsetkv_y = prog.offset_y + start_n
+        k_smem, k_bar = kv_producer.acquire()
+        issue_async_tma_load(k_smem, k_bar, desc_k, offsetkv_y)
+        v_smem, v_bar = kv_producer.acquire()
+        issue_async_tma_load(v_smem, v_bar, desc_v, offsetkv_y)
 
 
 @gluon.jit
-def _attn_fwd_load(config, info0, info1,  #
-                   q0_load_ctx, q1_load_ctx, k_load_ctx, v_load_ctx, M, desc_o,  #
-                   STAGE: gl.constexpr):
-    load_q0 = PipelinedLoadProducer(q0_load_ctx, 0, 0)
-    load_q1 = PipelinedLoadProducer(q1_load_ctx, 0, 0)
-    load_k = PipelinedLoadProducer(k_load_ctx, 0, config.BLOCK_N)
-    load_v = PipelinedLoadProducer(v_load_ctx, 0, config.BLOCK_N)
+def _attn_fwd_load(  #
+        config, info0, info1,  #
+        q_chnl, kv_chnl,  #
+        M, desc_q, desc_k, desc_v, desc_o,  #
+        STAGE: gl.constexpr):
+    q_producer = q_chnl.create_producer()
+    kv_producer = kv_chnl.create_producer()
 
     scheduler = ProgramScheduler(config)
     for pid in range(scheduler.start_pid, scheduler.num_tiles, config.NUM_SMS):
         prog = scheduler.get_program(pid)
 
-        load_q0.offset = prog.qo_offset_y + config.SPLIT_M * 0
-        load_q1.offset = prog.qo_offset_y + config.SPLIT_M * 1
-        load_q0.wait_and_issue_next()
-        load_q1.wait_and_issue_next()
+        q0_offset = prog.qo_offset_y + config.SPLIT_M * 0
+        q0_smem, q0_bar = q_producer.acquire()
+        issue_async_tma_load(q0_smem, q0_bar, desc_q, q0_offset)
+
+        q1_offset = prog.qo_offset_y + config.SPLIT_M * 1
+        q1_smem, q1_bar = q_producer.acquire()
+        issue_async_tma_load(q1_smem, q1_bar, desc_q, q1_offset)
 
         if STAGE & 1:
-            _load_inner_loop(config, prog, load_k, load_v, STAGE=4 - STAGE)
+            _load_inner_loop(config, prog, kv_producer, desc_k, desc_v, STAGE=4 - STAGE)
         if STAGE & 2:
-            _load_inner_loop(config, prog, load_k, load_v, STAGE=2)
+            _load_inner_loop(config, prog, kv_producer, desc_k, desc_v, STAGE=2)
 
 
 @gluon.jit
 def _mma_inner_loop(config, prog, q0_smem, q1_smem,  #
-                    k_consumer, v_consumer, p0_consumer, p1_consumer,  #
+                    kv_consumer, p0_consumer, p1_consumer,  #
                     qk0_producer, qk1_producer, o0_producer, o1_producer,  #
                     STAGE: gl.constexpr):
     lo, hi = prog.get_loop_bounds(STAGE)
@@ -602,15 +610,15 @@ def _mma_inner_loop(config, prog, q0_smem, q1_smem,  #
         qk_p_phase = 0
         mbarrier.init(qk_p_bar, count=1)
 
-        k_smem, k_bar = k_consumer.acquire()
+        k_smem, k_bar = kv_consumer.acquire()
         qk0_producer.wait_and_issue_next(q0_smem, k_smem.permute((1, 0)), [k_bar], use_acc=False)
         qk1_producer.wait_and_issue_next(q1_smem, k_smem.permute((1, 0)), [k_bar], use_acc=False)
         for _ in range(num_mmas - 1):
-            v_smem, v_bar = v_consumer.acquire()
+            v_smem, v_bar = kv_consumer.acquire()
             p0_tmem, p0_bar = p0_consumer.acquire()
             o0_producer.wait_and_issue_next(p0_tmem, v_smem, [v_bar, p0_bar, qk_p_bar], use_acc=True)
 
-            k_smem, k_bar = k_consumer.acquire()
+            k_smem, k_bar = kv_consumer.acquire()
             mbarrier.wait(qk_p_bar, qk_p_phase)
             qk_p_phase ^= 1
             qk0_producer.wait_and_issue_next(q0_smem, k_smem.permute((1, 0)), [k_bar], use_acc=False)
@@ -621,7 +629,7 @@ def _mma_inner_loop(config, prog, q0_smem, q1_smem,  #
             mbarrier.wait(qk_p_bar, qk_p_phase)
             qk_p_phase ^= 1
             qk1_producer.wait_and_issue_next(q1_smem, k_smem.permute((1, 0)), [k_bar], use_acc=False)
-        v_smem, v_bar = v_consumer.acquire()
+        v_smem, v_bar = kv_consumer.acquire()
         p0_tmem, p0_bar = p0_consumer.acquire()
         o0_producer.wait_and_issue_next(p0_tmem, v_smem, [v_bar, p0_bar], use_acc=True)
 
@@ -632,13 +640,14 @@ def _mma_inner_loop(config, prog, q0_smem, q1_smem,  #
 
 
 @gluon.jit
-def _attn_fwd_mma(config, info0, info1,  #
-                  q0_load_ctx, q1_load_ctx, k_load_ctx, v_load_ctx, M, desc_o,  #
-                  STAGE: gl.constexpr):
-    q0_consumer = q0_load_ctx.channel.create_consumer()
-    q1_consumer = q1_load_ctx.channel.create_consumer()
-    k_consumer = k_load_ctx.channel.create_consumer()
-    v_consumer = v_load_ctx.channel.create_consumer()
+def _attn_fwd_mma(  #
+        config, info0, info1,  #
+        q_chnl, kv_chnl,  #
+        M, desc_q, desc_k, desc_v, desc_o,  #
+        STAGE: gl.constexpr):
+    q_consumer = q_chnl.create_consumer()
+    kv_consumer = kv_chnl.create_consumer()
+
     p0_consumer = info0.p_chnl.create_consumer()
     p1_consumer = info1.p_chnl.create_consumer()
 
@@ -651,16 +660,16 @@ def _attn_fwd_mma(config, info0, info1,  #
     for pid in range(scheduler.start_pid, scheduler.num_tiles, config.NUM_SMS):
         prog = scheduler.get_program(pid)
 
-        q0_smem, q0_bar = q0_consumer.acquire()
-        q1_smem, q1_bar = q1_consumer.acquire()
+        q0_smem, q0_bar = q_consumer.acquire()
+        q1_smem, q1_bar = q_consumer.acquire()
         if STAGE & 1:
             _mma_inner_loop(config, prog, q0_smem, q1_smem,  #
-                            k_consumer, v_consumer, p0_consumer, p1_consumer,  #
+                            kv_consumer, p0_consumer, p1_consumer,  #
                             qk0_producer, qk1_producer, o0_producer, o1_producer,  #
                             STAGE=4 - STAGE)
         if STAGE & 2:
             _mma_inner_loop(config, prog, q0_smem, q1_smem,  #
-                            k_consumer, v_consumer, p0_consumer, p1_consumer,  #
+                            kv_consumer, p0_consumer, p1_consumer,  #
                             qk0_producer, qk1_producer, o0_producer, o1_producer,  #
                             STAGE=2)
         tcgen05_commit(q0_bar)
@@ -904,16 +913,20 @@ def _softmax_tile(tile_id: gl.constexpr, config, info, M, desc_o, STAGE: gl.cons
 
 
 @gluon.jit
-def _attn_fwd_softmax0(config, info0, info1,  #
-                       q0_load_ctx, q1_load_ctx, k_load_ctx, v_load_ctx, M, desc_o,  #
-                       STAGE: gl.constexpr):
+def _attn_fwd_softmax0(  #
+        config, info0, info1,  #
+        q_chnl, kv_chnl,  #
+        M, desc_q, desc_k, desc_v, desc_o,  #
+        STAGE: gl.constexpr):
     _softmax_tile(0, config, info0, M, desc_o, STAGE)
 
 
 @gluon.jit
-def _attn_fwd_softmax1(config, info0, info1,  #
-                       q0_load_ctx, q1_load_ctx, k_load_ctx, v_load_ctx, M, desc_o,  #
-                       STAGE: gl.constexpr):
+def _attn_fwd_softmax1(  #
+        config, info0, info1,  #
+        q_chnl, kv_chnl,  #
+        M, desc_q, desc_k, desc_v, desc_o,  #
+        STAGE: gl.constexpr):
     _softmax_tile(1, config, info1, M, desc_o, STAGE)
 
 
@@ -921,11 +934,17 @@ def _attn_fwd_softmax1(config, info0, info1,  #
 def _attn_fwd_inner(config, info0, info1,  #
                     desc_q, desc_k, desc_v, desc_o, M,  #
                     STAGE: gl.constexpr):
-    num_buffers: gl.constexpr = 1 if config.HEAD_DIM == 128 else 2
-    q0_load_ctx = LoadContext(desc_q, num_buffers=1)
-    q1_load_ctx = LoadContext(desc_q, num_buffers=1)
-    k_load_ctx = LoadContext(desc_k, num_buffers=num_buffers, num_consumers=2)
-    v_load_ctx = LoadContext(desc_v, num_buffers=num_buffers, num_consumers=2)
+    gl.static_assert(desc_k.layout == desc_v.layout and desc_k.block_type == desc_v.block_type,
+                     "expected K and V to have the same type and shared memory layout")
+    if config.dtype == tl.float16:
+        num_kv_buffers: gl.constexpr = 3 if config.HEAD_DIM == 128 else 6
+    else:
+        num_kv_buffers: gl.constexpr = 4 if config.HEAD_DIM == 128 else 8
+    kv_chnl = get_desc_channel(desc_k, num_buffers=num_kv_buffers, num_consumers=2)
+    kv_chnl.initialize_for_producer()
+
+    q_chnl = get_desc_channel(desc_q, num_buffers=2)
+    q_chnl.initialize_for_producer()
 
     gl.warp_specialize((
         config,
@@ -936,11 +955,12 @@ def _attn_fwd_inner(config, info0, info1,  #
         config,
         info0,
         info1,
-        q0_load_ctx,
-        q1_load_ctx,
-        k_load_ctx,
-        v_load_ctx,
+        q_chnl,
+        kv_chnl,
         M,
+        desc_q,
+        desc_k,
+        desc_v,
         desc_o,
         STAGE,
     ), [
@@ -950,10 +970,8 @@ def _attn_fwd_inner(config, info0, info1,  #
         _attn_fwd_load,
     ], [4, 4, 1, 1], [192, 192, 32, 32])
 
-    q0_load_ctx.release()
-    q1_load_ctx.release()
-    k_load_ctx.release()
-    v_load_ctx.release()
+    q_chnl.release()
+    kv_chnl.release()
 
 
 @gluon.jit(do_not_specialize=["Z"])
