@@ -14,7 +14,8 @@ from typing import Callable, Generic, Iterable, Optional, TypeVar, Union, overlo
 from triton.tools.tensor_descriptor import TensorDescriptor
 from types import ModuleType
 from .. import knobs
-from ..runtime.driver import driver
+from .driver import driver
+from . import _async_compile
 from .._utils import find_paths_if, get_iterable_path, type_canonicalisation_dict, canonicalize_dtype
 
 TRITON_MODULE = __name__[:-len(".runtime.jit")]
@@ -535,14 +536,14 @@ class JITFunction(KernelInterface[T]):
         """
         Precompute as much as possible.
         """
-        from ..compiler import CompiledKernel, compile, ASTSource, make_backend
+        from ..compiler import CompiledKernel, compile, ASTSource, make_backend, get_cache_key
         target = driver.active.get_current_target()
         backend = make_backend(target)
         self.CompiledKernel = CompiledKernel
         self.compile = compile
         self.ASTSource = ASTSource
         binder = create_function_from_signature(self.signature, self.params, backend)
-        return {}, target, backend, binder
+        return {}, target, backend, binder, get_cache_key
 
     def run(self, *args, grid, warmup, **kwargs):
         kwargs["debug"] = kwargs.get("debug", self.debug) or knobs.runtime.debug
@@ -555,7 +556,7 @@ class JITFunction(KernelInterface[T]):
         for hook in self.pre_run_hooks:
             hook(*args, **kwargs)
 
-        kernel_cache, target, backend, binder = self.device_caches[device]
+        kernel_cache, target, backend, binder, get_cache_key = self.device_caches[device]
         # specialization is list[tuple[str, Any]], where first element of tuple is
         # the type and the second parameter is the 'specialization' value.
         bound_args, specialization, options = binder(*args, **kwargs)
@@ -589,12 +590,28 @@ class JITFunction(KernelInterface[T]):
             if self._call_hook(knobs.runtime.jit_cache_hook, key, signature, device, constexprs, options, [attrs],
                                warmup):
                 return None
-            # compile the kernel
+
+            # compile the kernel (potentially in parallel)
             src = self.ASTSource(self, signature, constexprs, attrs)
-            kernel = self.compile(src, target=target, options=options.__dict__)
-            kernel_cache[key] = kernel
-            self._call_hook(knobs.runtime.jit_post_compile_hook, key, signature, device, constexprs, options, [attrs],
-                            warmup)
+
+            async_mode = _async_compile.active_mode
+            if async_mode is not None:
+
+                def async_compile():
+                    return self.compile(src, target=target, options=options.__dict__)
+
+                def finalize_compile(kernel):
+                    kernel_cache[key] = kernel
+                    self._call_hook(knobs.runtime.jit_post_compile_hook, key, signature, device, constexprs, options,
+                                    [attrs], warmup)
+
+                cache_key = get_cache_key(src, backend, options.__dict__)
+                kernel = async_mode.submit(cache_key, async_compile, finalize_compile)
+            else:
+                kernel = self.compile(src, target=target, options=options.__dict__)
+                kernel_cache[key] = kernel
+                self._call_hook(knobs.runtime.jit_post_compile_hook, key, signature, device, constexprs, options,
+                                [attrs], warmup)
 
         # Check that used global values have not changed.
         not_present = object()
@@ -612,6 +629,8 @@ class JITFunction(KernelInterface[T]):
             grid_0 = grid[0]
             grid_1 = grid[1] if grid_size > 1 else 1
             grid_2 = grid[2] if grid_size > 2 else 1
+            if hasattr(kernel, "result"):
+                kernel = kernel.result()
             # launch kernel
             launch_metadata = kernel.launch_metadata(grid, stream, *bound_args.values())
             kernel.run(grid_0, grid_1, grid_2, stream, kernel.function, kernel.packed_metadata, launch_metadata,

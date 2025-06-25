@@ -18,6 +18,7 @@ from .runtime import (
     MockTensor,
 )
 from .runtime.jit import jit
+from .runtime._async_compile import AsyncCompileMode
 from .compiler import compile, CompilationError
 from .errors import TritonError
 from .runtime._allocation import set_allocator
@@ -29,6 +30,7 @@ from . import tools
 must_use_result = language.core.must_use_result
 
 __all__ = [
+    "AsyncCompileMode",
     "autotune",
     "cdiv",
     "CompilationError",

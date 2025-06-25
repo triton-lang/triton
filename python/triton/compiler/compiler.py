@@ -258,6 +258,18 @@ class CompileTimer:
         )
 
 
+def get_cache_key(src, backend, options=None):
+    extra_options = src.parse_options()
+    if options is not None:
+        options = options | extra_options
+    else:
+        options = extra_options
+    options = backend.parse_options(options)
+    env_vars = get_cache_invalidating_env_vars()
+    key = f"{triton_key()}-{src.hash()}-{backend.hash()}-{options.hash()}-{str(sorted(env_vars.items()))}"
+    return key
+
+
 def compile(src, target=None, options=None):
     compilation_listener = knobs.compilation.listener
     if compilation_listener:
