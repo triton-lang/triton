@@ -86,6 +86,7 @@ struct GluonLayouts {
   py::handle BlockedLayout;
   py::handle SliceLayout;
   py::handle DistributedLinearLayout;
+  py::handle NVMMADistributedLayout;
   py::handle NVMMASharedLayout;
   py::handle SwizzledSharedLayout;
 
@@ -96,6 +97,8 @@ struct GluonLayouts {
     SliceLayout = py::object(layouts.attr("SliceLayout")).release();
     DistributedLinearLayout =
         py::object(layouts.attr("DistributedLinearLayout")).release();
+    NVMMADistributedLayout =
+        py::object(layouts.attr("NVMMADistributedLayout")).release();
     NVMMASharedLayout = py::object(layouts.attr("NVMMASharedLayout")).release();
     SwizzledSharedLayout =
         py::object(layouts.attr("SwizzledSharedLayout")).release();
@@ -131,6 +134,14 @@ py::object layoutToGluon(Attribute layout) {
         ll.getBases().lookup(kReg), ll.getBases().lookup(kLane),
         ll.getBases().lookup(kWarp), ll.getBases().lookup(kBlock),
         toStdVector(ArrayRef(llvm::to_vector(ll.getOutDimSizes()))));
+  } else if (auto mma = dyn_cast<ttg::NvidiaMmaEncodingAttr>(layout)) {
+    auto ctaLayout = mma.getCTALayout();
+    return layouts.NVMMADistributedLayout(
+        std::vector<unsigned>{mma.getVersionMajor(), mma.getVersionMinor()},
+        toStdVector(mma.getWarpsPerCTA()),
+        toStdVector(ctaLayout.getCTAsPerCGA()),
+        toStdVector(ctaLayout.getCTASplitNum()),
+        toStdVector(ctaLayout.getCTAOrder()), toStdVector(mma.getInstrShape()));
   } else if (auto nvmma = dyn_cast<ttg::NVMMASharedEncodingAttr>(layout)) {
     auto ctaLayout = nvmma.getCTALayout();
     return layouts.NVMMASharedLayout(
@@ -223,6 +234,20 @@ void init_gluon_ir(py::module &&m) {
                                         outDims,
                                         /*requiresSurjective=*/true);
              return ttg::LinearEncodingAttr::get(ctx, ll);
+           })
+      .def("get_mma_layout",
+           [](GluonOpBuilder &self, std::vector<unsigned> &version,
+              std::vector<unsigned> &warpsPerCta,
+              std::vector<unsigned> &ctasPerCga,
+              std::vector<unsigned> &ctaSplitNum,
+              std::vector<unsigned> &ctaOrder,
+              std::vector<unsigned> &instrShape) -> Attribute {
+             auto ctx = self.getContext();
+             auto ctaLayout = self.getChecked<ttg::CTALayoutAttr>(
+                 ctx, ctasPerCga, ctaSplitNum, ctaOrder);
+             return self.getChecked<ttg::NvidiaMmaEncodingAttr>(
+                 ctx, version[0], version[1], warpsPerCta, ctaLayout,
+                 instrShape);
            })
       .def("get_nvmma_shared_layout",
            [](GluonOpBuilder &self, unsigned swizzleByteWidth,
@@ -359,6 +384,14 @@ void init_gluon_ir(py::module &&m) {
              auto op = self.create<triton::SplitOp>(TypeRange{resTy, resTy}, a);
              return py::make_tuple(op->getResult(0), op->getResult(1));
            })
+      .def("create_warpgroup_mma",
+           [](GluonOpBuilder &self, Value a, Value b, Value acc, Value useAcc,
+              triton::InputPrecision precision = triton::InputPrecision::IEEE,
+              int maxNumImpreciseAcc = 0, bool isAsync = false) -> Value {
+             return self.create<ttng::WarpGroupDotOp>(
+                 a, b, acc, useAcc, precision, maxNumImpreciseAcc, isAsync);
+           })
+
       .def("create_tmem_alloc",
            [](GluonOpBuilder &self, Type resultTy, Value value) -> Value {
              return self.create<ttng::TMEMAllocOp>(resultTy, value);

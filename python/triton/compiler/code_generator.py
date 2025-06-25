@@ -769,25 +769,25 @@ class CodeGenerator(ast.NodeVisitor):
         # update block arguments
         names = []
         # variables in livein whose value is updated in `if`
-        for name in liveins:
+        for name, value in liveins.items():
             # check type
             for defs, block_name in [(then_defs, 'then'), (else_defs, 'else')]:
                 if name in defs:
-                    type_equal = type(defs[name]) == type(liveins[name])  # noqa: E721
-                    assert type_equal and defs[name].type == liveins[name].type, \
-                        f'initial value for `{name}` is of type {liveins[name]}, '\
+                    type_equal = type(defs[name]) == type(value)  # noqa: E721
+                    assert type_equal and defs[name].type == value.type, \
+                        f'initial value for `{name}` is of type {value}, '\
                         f'but the {block_name} block redefines it as {defs[name]}'
             if name in then_defs or name in else_defs:
                 names.append(name)
             # variable defined in then but not in else
             if name in then_defs and name not in else_defs:
-                else_defs[name] = liveins[name]
+                else_defs[name] = value
             # variable defined in else but not in then
             if name in else_defs and name not in then_defs:
-                then_defs[name] = liveins[name]
+                then_defs[name] = value
 
             # variable changed value in either then or else
-            if name in names:
+            if name in names or not _is_triton_value(value):
                 continue
             then_handles = flatten_values_to_ir([then_vals[name]])
             else_handles = flatten_values_to_ir([else_vals[name]])

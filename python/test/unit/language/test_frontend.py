@@ -517,6 +517,7 @@ def test_jit_init():
 @triton.jit
 def test_modify_if_livein():
     # CHECK-LABEL: test_modify_if_livein
+    none_livein = None  # noqa: F841
 
     # CHECK: [[LOOP_OUT:%.*]] = scf.for {{.*}} iter_args([[BOX:%.*]] = %true)
     # CHECK:   [[LIVEOUT:%.*]] = scf.if [[BOX]]

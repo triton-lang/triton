@@ -182,6 +182,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @tensormap_fenceproxy_acquire(%arg0: !tt.ptr<i8> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
     // CHECK: fence.proxy.tensormap::generic.acquire.gpu [ $0 + 0 ], 0x80;
+    // ptxas missing fence workaround:
+    // CHECK: cp.async.bulk.commit_group
+    // CHECK: cp.async.bulk.wait_group.read 0
     ttng.tensormap_fenceproxy_acquire %arg0 : !tt.ptr<i8>
     tt.return
   }
