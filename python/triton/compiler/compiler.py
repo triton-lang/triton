@@ -258,15 +258,10 @@ class CompileTimer:
         )
 
 
-def get_cache_key(src, backend, options=None):
-    extra_options = src.parse_options()
-    if options is not None:
-        options = options | extra_options
-    else:
-        options = extra_options
-    options = backend.parse_options(options)
-    env_vars = get_cache_invalidating_env_vars()
-    key = f"{triton_key()}-{src.hash()}-{backend.hash()}-{options.hash()}-{str(sorted(env_vars.items()))}"
+def get_cache_key(src, backend, backend_options, env_vars=None):
+    if env_vars is None:
+        env_vars = get_cache_invalidating_env_vars()
+    key = f"{triton_key()}-{src.hash()}-{backend.hash()}-{backend_options.hash()}-{str(sorted(env_vars.items()))}"
     return key
 
 
@@ -290,7 +285,7 @@ def compile(src, target=None, options=None):
     options = backend.parse_options(dict(options or dict(), **extra_options))
     # create cache manager
     env_vars = get_cache_invalidating_env_vars()
-    key = f"{triton_key()}-{src.hash()}-{backend.hash()}-{options.hash()}-{str(sorted(env_vars.items()))}"
+    key = get_cache_key(src, backend, options, env_vars=env_vars)
     hash = hashlib.sha256(key.encode("utf-8")).hexdigest()
     fn_cache_manager = get_cache_manager(hash)
     # For dumping/overriding only hash the source as we want it to be independent of triton

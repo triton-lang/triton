@@ -605,7 +605,7 @@ class JITFunction(KernelInterface[T]):
                     self._call_hook(knobs.runtime.jit_post_compile_hook, key, signature, device, constexprs, options,
                                     [attrs], warmup)
 
-                cache_key = get_cache_key(src, backend, options.__dict__)
+                cache_key = get_cache_key(src, backend, options)
                 kernel = async_mode.submit(cache_key, async_compile, finalize_compile)
             else:
                 kernel = self.compile(src, target=target, options=options.__dict__)
