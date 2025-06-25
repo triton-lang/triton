@@ -442,6 +442,8 @@ LogicalResult PipelinedLoadGroup::lowerLoads(WarpSchedule &schedule,
       StageCluster userStageCluster = getStageCluster(loadBeforeOp);
       Value loaded = b.createInto<LocalLoadOp>(*partition, userStageCluster,
                                                load.type, view);
+      b.createInto<ttng::FenceAsyncSharedOp>(*partition, userStageCluster,
+                                             /*bCluster=*/false);
       for (OpOperand *use : uses)
         use->set(loaded);
     }

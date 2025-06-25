@@ -371,6 +371,9 @@ def compile(src, target=None, options=None):
             metadata_group[ir_filename] = fn_cache_manager.put(next_module, ir_filename)
         if fn_dump_manager is not None:
             fn_dump_manager.put(next_module, ir_filename)
+            if ext == "cubin":
+                sass = get_sass(next_module)
+                fn_dump_manager.put(sass, file_name + ".sass")
         # use an env variable to parse ir from file
         if use_ir_loc == ext:
             ir_full_name = fn_cache_manager.get_file(ir_filename)

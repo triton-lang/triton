@@ -126,8 +126,8 @@ tt::CoarseSchedule::splitClusterBefore(Operation *op, scf::ForOp forOp) {
 bool tt::CoarseSchedule::isOpBefore(Operation *a, Operation *b) const {
   assert(opToStageAndCluster.count(a) && opToStageAndCluster.count(b) &&
          "Operations must be in the schedule");
-  auto [aStage, aCluster] = opToStageAndCluster.at(a);
-  auto [bStage, bCluster] = opToStageAndCluster.at(b);
+  auto [aStage, aCluster] = opToStageAndCluster.lookup(a);
+  auto [bStage, bCluster] = opToStageAndCluster.lookup(b);
   if (aStage != bStage) {
     return aStage < bStage;
   }
@@ -141,14 +141,15 @@ bool tt::CoarseSchedule::isOpInEarlierCluster(Operation *a,
                                               Operation *b) const {
   assert(opToStageAndCluster.count(a) && opToStageAndCluster.count(b) &&
          "Operations must be in the schedule");
-  return clusters.isBefore(opToStageAndCluster.at(a).second,
-                           opToStageAndCluster.at(b).second);
+  return clusters.isBefore(opToStageAndCluster.lookup(a).second,
+                           opToStageAndCluster.lookup(b).second);
 }
 
 bool tt::CoarseSchedule::isOpInSameCluster(Operation *a, Operation *b) const {
   assert(opToStageAndCluster.count(a) && opToStageAndCluster.count(b) &&
          "Operations must be in the schedule");
-  return opToStageAndCluster.at(a).second == opToStageAndCluster.at(b).second;
+  return opToStageAndCluster.lookup(a).second ==
+         opToStageAndCluster.lookup(b).second;
 }
 
 SmallVector<std::tuple<Operation *, int, tt::CoarseSchedule::Cluster>>
