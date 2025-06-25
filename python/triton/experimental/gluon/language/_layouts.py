@@ -22,11 +22,26 @@ def _realize_cta_layout(layout, rank):
 
 
 class DistributedLayout:
+    """
+    Base class for distributed memory layouts in Gluon IR.
+    """
     pass
 
 
 @dataclass(frozen=True)
 class BlockedLayout(DistributedLayout):
+    """
+    Represents a blocked layout, partitioning a tensor across threads, warps, and CTAs.
+
+    Args:
+        size_per_thread (List[int]): Number of elements per thread per dimension.
+        threads_per_warp (List[int]): Number of threads per warp per dimension.
+        warps_per_cta (List[int]): Number of warps per CTA per dimension.
+        order (List[int]): The ordering of dimensions for partitioning.
+        ctas_per_cga (Optional[List[int]]): CTAs per CGA grouping.
+        cta_split_num (Optional[List[int]]): Split factors for CTAs.
+        cta_order (Optional[List[int]]): Ordering for CTAs.
+    """
     size_per_thread: List[int]
     threads_per_warp: List[int]
     warps_per_cta: List[int]
@@ -83,6 +98,13 @@ class BlockedLayout(DistributedLayout):
 
 @dataclass(frozen=True)
 class SliceLayout(DistributedLayout):
+    """
+    Represents a layout corresponding to slicing a distributed tensor along one dimension.
+
+    Args:
+        dim (int): The dimension index to slice.
+        parent (DistributedLayout): The parent layout before slicing.
+    """
     dim: int
     parent: DistributedLayout
 
@@ -102,6 +124,17 @@ class SliceLayout(DistributedLayout):
 
 @dataclass(frozen=True)
 class DistributedLinearLayout(DistributedLayout):
+    """
+    Represents a linear distributed layout with explicit bases at register, lane, warp, and block levels.
+    See: https://arxiv.org/abs/2505.23819 for reference.
+
+    Args:
+        reg_bases (List[List[int]]): Bases for register-level distribution.
+        lane_bases (List[List[int]]): Bases for lane-level distribution.
+        warp_bases (List[List[int]]): Bases for warp-level distribution.
+        block_bases (List[List[int]]): Bases for block-level distribution.
+        shape (List[int]): The tensor global shape.
+    """
     reg_bases: List[List[int]]
     lane_bases: List[List[int]]
     warp_bases: List[List[int]]
@@ -136,6 +169,17 @@ class DistributedLinearLayout(DistributedLayout):
 
 @dataclass(frozen=True)
 class NVMMADistributedLayout(DistributedLayout):
+    """
+    Represents a layout for NVIDIA MMA (tensor core) operations.
+
+    Args:
+        version (List[int]): Version identifier for the MMA instruction.
+        warps_per_cta (List[int]): Number of warps per CTA.
+        instr_shape (List[int]): Instruction shape for MMA.
+        ctas_per_cga (Optional[List[int]]): CTAs per CGA grouping.
+        cta_split_num (Optional[List[int]]): Split factors for CTAs.
+        cta_order (Optional[List[int]]): CTA ordering.
+    """
     version: List[int]
     warps_per_cta: List[int]
     instr_shape: List[int]
@@ -166,11 +210,27 @@ class NVMMADistributedLayout(DistributedLayout):
 
 
 class SharedLayout:
+    """
+    Base class for shared memory layouts in Gluon IR.
+    """
     pass
 
 
 @dataclass(frozen=True)
 class NVMMASharedLayout(SharedLayout):
+    """
+    Represents a layout for shared memory suitable for NVIDIA MMA operations.
+
+    Args:
+        swizzle_byte_width (int): Width in bytes for swizzling.
+        element_bitwidth (int): Bitwidth of element type.
+        rank (int): Rank of the tensor.
+        transposed (bool): Whether the layout is transposed.
+        fp4_padded (bool): Whether FP4 padding is used.
+        ctas_per_cga (Optional[List[int]]): CTAs per CGA grouping.
+        cta_split_num (Optional[List[int]]): Split factors for CTAs.
+        cta_order (Optional[List[int]]): CTA ordering.
+    """
     swizzle_byte_width: int
     element_bitwidth: int
     rank: int
@@ -215,6 +275,18 @@ class NVMMASharedLayout(SharedLayout):
 
 @dataclass(frozen=True, eq=True)
 class SwizzledSharedLayout(SharedLayout):
+    """
+    Represents a generic swizzled shared memory layout.
+
+    Args:
+        vec (int): Vector width for swizzling.
+        per_phase (int): Elements per swizzle phase.
+        max_phase (int): Maximum number of swizzle phases.
+        order (List[int]): Dimension ordering for swizzling.
+        ctas_per_cga (Optional[List[int]]): CTAs per CGA grouping.
+        cta_split_num (Optional[List[int]]): Split factors for CTAs.
+        cta_order (Optional[List[int]]): CTA ordering.
+    """
     vec: int
     per_phase: int
     max_phase: int
