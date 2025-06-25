@@ -47,6 +47,7 @@ void populateFp4ToFpToLLVMPatterns(LLVMTypeConverter &typeConverter,
 
 void populateLoadStoreOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                        const TargetInfo &targetInfo,
+                                       int computeCapability,
                                        RewritePatternSet &patterns,
                                        ModuleAxisInfoAnalysis &axisInfoAnalysis,
                                        PatternBenefit benefit);
