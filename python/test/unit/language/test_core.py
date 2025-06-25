@@ -135,7 +135,7 @@ class MfmaLayout:
     def __init__(self, version, warps_per_cta, tiles_per_warp, instr_shape, is_transposed):
         self.version = version
         self.warps_per_cta = warps_per_cta
-        self.tiles_per_warp = warps_per_cta
+        self.tiles_per_warp = tiles_per_warp
         self.instr_shape = instr_shape
         self.is_transposed = is_transposed
 
