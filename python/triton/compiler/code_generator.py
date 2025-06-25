@@ -719,8 +719,10 @@ class CodeGenerator(ast.NodeVisitor):
         self.visit_compound_statement(node.body)
         then_block = self.builder.get_insertion_block()
         then_defs = self.local_defs.copy()
+        then_vals = self.lscope.copy()
         # else block
         else_defs = {}
+        else_vals = liveins.copy()
         if node.orelse:
             self.builder.set_insertion_point_to_start(else_block)
             self.lscope = liveins.copy()
@@ -728,6 +730,7 @@ class CodeGenerator(ast.NodeVisitor):
             self.visit_compound_statement(node.orelse)
             else_defs = self.local_defs.copy()
             else_block = self.builder.get_insertion_block()
+            else_vals = self.lscope.copy()
 
         # update block arguments
         names = []
@@ -748,6 +751,17 @@ class CodeGenerator(ast.NodeVisitor):
             # variable defined in else but not in then
             if name in else_defs and name not in then_defs:
                 then_defs[name] = liveins[name]
+
+            # variable changed value in either then or else
+            if name in names:
+                continue
+            then_handles = flatten_values_to_ir([then_vals[name]])
+            else_handles = flatten_values_to_ir([else_vals[name]])
+            if then_handles != else_handles:
+                names.append(name)
+                then_defs[name] = then_vals[name]
+                else_defs[name] = else_vals[name]
+
         # variables that are both in then and else but not in liveins
         # TODO: could probably be cleaned up
         for name in sorted(then_defs.keys() & else_defs.keys()):
