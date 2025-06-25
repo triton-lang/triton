@@ -17,7 +17,6 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-#include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/ADT/TypeSwitch.h"
 
 #undef DEBUG_TYPE
@@ -553,14 +552,12 @@ public:
                  ConvertTritonLoadToBufferLoad<ttg::AsyncCopyGlobalToLocalOp>,
                  ConvertTritonStoreToBufferStore>(context, assumptions, solver);
 
-    bool allow_buffer_atomics = getBoolEnv("AMDGCN_DISABLE_BUFFER_ATOMICS");
-
     // Gate buffer atomics behind CDNA3 for now
     // GFX942-specific assumptions regarding cache coherence are made when
     // lowering to LLVM
     triton::AMD::ISAFamily isaFamily =
         triton::AMD::deduceISAFamily(archGenerationName);
-    if (allow_buffer_atomics && ISAFamily::CDNA3 == isaFamily)
+    if (this->allowBufferAtomics && ISAFamily::CDNA3 == isaFamily)
       patterns.add<ConvertTritonAtomicRMWOpToBufferAtomicRMW>(
           context, assumptions, axisInfoAnalysis, solver, isaFamily);
 
