@@ -5,8 +5,6 @@ import torch.nn.functional as F
 from .mxfp_details._upcast_from_mxfp import _upcast_from_mxfp
 from .mxfp_details._downcast_to_mxfp import _downcast_to_mxfp
 from ..swizzle import SwizzlingType, swizzle, unswizzle, perm_tensor_to_contig, perm_tensor_from_contig
-from ..swizzle import unswizzle_mxfp4_value_hopper_torch, unswizzle_mx_scale_bw_torch, unswizzle_mxfp4_scale_hopper_torch
-from ..swizzle import swizzle_mxfp4_value_hopper, swizzle_mx_scale_bw, swizzle_mxfp4_scale_hopper
 
 # -----------------------------------------------------------------------------
 #                      Dequantization / Quantization Utilities
@@ -267,16 +265,11 @@ def downcast_to_mxfp_torch(src_tensor: torch.Tensor, out_quant_type: torch.dtype
     dq_scale = (ds_int_rounded.view(*dequant_scale.shape) >> 23).to(torch.uint8)  # shape: (..., axis_shape//32, 1)
     dq_scale = dq_scale.squeeze(-1)
 
-    if swizzle_scale == SwizzlingType.BLACKWELL_SCALE:
-        dq_scale = swizzle_mx_scale_bw(dq_scale)
-    elif swizzle_scale == SwizzlingType.HOPPER_SCALE:
-        dq_scale = swizzle_mxfp4_scale_hopper(dq_scale, num_warps=8)
-    if swizzle_value == SwizzlingType.HOPPER_VALUE:
-        out_weight = swizzle_mxfp4_value_hopper(out_weight, op_idx=0, mma_version=3)
-
-    # Now, invert the permutation so that the contiguous axis returns to its original position.
     out_weight = perm_tensor_from_contig(out_weight, axis, swizzle_axis)
     dq_scale = perm_tensor_from_contig(dq_scale, axis, swizzle_axis)
+
+    dq_scale = swizzle(dq_scale, axis, swizzle_axis, swizzle_scale)
+    out_weight = swizzle(out_weight, axis, swizzle_axis, swizzle_value)
 
     if out_quant_tensor is not None:
         assert out_quant_tensor.shape == out_weight.shape, f"Invalid shape {out_quant_tensor.shape} != {out_weight.shape}"
@@ -342,14 +335,11 @@ def upcast_from_mxfp_torch(tensor: torch.Tensor, scale: torch.Tensor, target_dty
         assert swizzle_scale is None, "Swizzle scale must be None if swizzle axis is None"
         assert swizzle_value is None, "Swizzle value must be None if swizzle axis is None"
 
-    tensor = perm_tensor_to_contig(tensor, axis, swizzle_axis)
+    scale = unswizzle(scale, axis, swizzle_axis, swizzle_scale)
+    tensor = unswizzle(tensor, axis, swizzle_axis, swizzle_value)
+
     scale = perm_tensor_to_contig(scale, axis, swizzle_axis)
-    if swizzle_value == SwizzlingType.HOPPER_VALUE:
-        tensor = unswizzle_mxfp4_value_hopper_torch(tensor, op_idx=0, mma_version=3)
-    if swizzle_scale == SwizzlingType.BLACKWELL_SCALE:
-        scale = unswizzle_mx_scale_bw_torch(scale)
-    elif swizzle_scale == SwizzlingType.HOPPER_SCALE:
-        scale = unswizzle_mxfp4_scale_hopper_torch(scale, num_warps=8)
+    tensor = perm_tensor_to_contig(tensor, axis, swizzle_axis)
 
     dq_scale = (scale.to(torch.int32) << 23).view(torch.float32)  # Shift to the exponent and bitcast to fp32
 

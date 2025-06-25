@@ -9,14 +9,16 @@ from triton_kernels.numerics_details.mxfp import (
     downcast_to_mxfp,
     downcast_to_mxfp_torch,
     get_max_quant_val,
+    upcast_from_mxfp,
+    upcast_from_mxfp_torch,
+)
+from triton_kernels.swizzle import (
     swizzle_mx_scale_bw,
     swizzle_mxfp4_scale_hopper,
     swizzle_mxfp4_value_hopper,
     unswizzle_mx_scale_bw_torch,
     unswizzle_mxfp4_scale_hopper_torch,
     unswizzle_mxfp4_value_hopper_torch,
-    upcast_from_mxfp,
-    upcast_from_mxfp_torch,
 )
 from triton_kernels.testing import assert_close, assert_equal
 from triton_kernels.target_info import is_hip, is_hip_cdna3
