@@ -124,7 +124,7 @@ Alternatively, follow these steps to build LLVM from source manually.
   code completion and other features for C++ code. 
   <details>
   <summary>
-  If IntelliSense is not working, you can try the following steps.
+  If IntelliSense does not work, you can try the following steps.
   </summary>
 
     - Do a local build. Run command `pip install -e .`
