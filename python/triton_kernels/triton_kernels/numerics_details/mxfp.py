@@ -186,7 +186,7 @@ def downcast_to_mxfp_torch(src_tensor: torch.Tensor, out_quant_type: torch.dtype
 
     # Permute the tensor so that the contiguous axis becomes the last dimension.
     # For the scales, make the swizzle axis is second to last.
-    src = perm_tensor_to_contig(src_tensor, axis, swizzle_axis).to(torch.float32)  # now shape: (..., axis_shape)
+    src = src_tensor.transpose(axis, src_tensor.ndim - 1).to(torch.float32)
     axis_shape = src.shape[-1]
 
     # Pad the axis to be divisible by 32, in case it is not.
@@ -265,8 +265,8 @@ def downcast_to_mxfp_torch(src_tensor: torch.Tensor, out_quant_type: torch.dtype
     dq_scale = (ds_int_rounded.view(*dequant_scale.shape) >> 23).to(torch.uint8)  # shape: (..., axis_shape//32, 1)
     dq_scale = dq_scale.squeeze(-1)
 
-    out_weight = perm_tensor_from_contig(out_weight, axis, swizzle_axis)
-    dq_scale = perm_tensor_from_contig(dq_scale, axis, swizzle_axis)
+    out_weight = out_weight.transpose(axis, src_tensor.ndim - 1)
+    dq_scale = dq_scale.transpose(axis, src_tensor.ndim - 1)
 
     dq_scale = swizzle(dq_scale, axis, swizzle_axis, swizzle_scale)
     out_weight = swizzle(out_weight, axis, swizzle_axis, swizzle_value)
@@ -338,6 +338,8 @@ def upcast_from_mxfp_torch(tensor: torch.Tensor, scale: torch.Tensor, target_dty
     scale = unswizzle(scale, axis, swizzle_axis, swizzle_scale)
     tensor = unswizzle(tensor, axis, swizzle_axis, swizzle_value)
 
+    # scale = scale.transpose(axis, scale.ndim - 1)
+    # tensor = tensor.transpose(axis, tensor.ndim - 1)
     scale = perm_tensor_to_contig(scale, axis, swizzle_axis)
     tensor = perm_tensor_to_contig(tensor, axis, swizzle_axis)
 
@@ -368,5 +370,6 @@ def upcast_from_mxfp_torch(tensor: torch.Tensor, scale: torch.Tensor, target_dty
 
     out_tensor = out_tensor.to(target_dtype).contiguous()
     out_tensor = perm_tensor_from_contig(out_tensor, axis, swizzle_axis)
+    # out_tensor = out_tensor.transpose(axis, tensor.ndim - 1)
 
     return out_tensor
