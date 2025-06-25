@@ -216,10 +216,10 @@ applyLinearLayout(Location loc, RewriterBase &rewriter,
   }
 
   for (auto [inDimName, idx] : indices) {
-    if (idx.getDefiningOp<LLVM::ConstantOp>()) {
+    APInt constant;
+    if (matchPattern(idx, m_ConstantInt(&constant))) {
       continue;
     }
-
     int nBits = layout.getInDimSizeLog2(inDimName);
     for (int i = 0; i < nBits; i++) {
       Value bit = b.and_(idx, b.i32_val(1 << i));
