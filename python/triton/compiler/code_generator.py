@@ -338,7 +338,8 @@ class CodeGenerator(ast.NodeVisitor):
         # Are we currently visiting an ast.arg's default value?  These have some
         # special handling.
         self.visiting_arg_default_value = False
-        # A global varibale to indicate whether current node defined a name (otherwise None)
+        # A global varibale to indicate whether current node defined a name
+        # it can only be None, string, or a (fused-)tuple of them
         self.defined_name = None
 
     builtin_namespace: Dict[str, Any] = {
@@ -604,17 +605,40 @@ class CodeGenerator(ast.NodeVisitor):
                 value = self.semantic.to_tensor(value)
             return value
 
-        # temporarily store the defined name globally,
-        # and delete it after finishing the visit of child nodes
-        self.defined_name = node.targets[0].id
-        values = _sanitize_value(self.visit(node.value))
+        # Handling fused tuples:
+        # note we have to handle it separately with nodes who defined them, because target and values were handled separately
+        # returning value of visit(...) on nodes who defined this tuple should have the same shape of name tuple
+        def get_name_tuple(target):
+            assert isinstance(target, ast.Tuple), "can only use on handling Tuple syntax"
+            name_tuple = ()
+            for ele in target.elts:
+                if isinstance(ele, ast.Tuple):
+                    name_tuple = name_tuple + get_name_tuple(ele)
+                elif hasattr(ele, "id") and ele.id is not None:
+                    name_tuple = name_tuple + (ele.id,)
+                else:
+                    assert False, "all elements in input tuple must have a name"
+            assert isinstance(name_tuple, tuple)
+            return name_tuple
+
         targets = [node.target] if isinstance(node, ast.AnnAssign) else node.targets
 
-        # operations of right hand side of assignment will be built after walking through the following self.visit(node.value)
-        # we temporarily store the name of defined globally, and delete it after finishing the
-        self.defined_name = node.targets[0].id
-        values = _sanitize_value(self.visit(node.value))
+        # temporarily store the defined name globally,
+        # and delete it after finishing the visit of child nodes
 
+        if isinstance(targets[0], ast.Tuple):
+            # build a tuple of names, and carry it when visiting tuples that assign to it
+            self.defined_name = get_name_tuple(targets[0])
+        elif isinstance(targets[0], ast.Subscript):
+            # this
+            self.defined_name = None
+        elif isinstance(targets[0], ast.Attribute):
+            self.defined_name = node.targets[0].value.id + "." + node.targets[0].attr
+        else:
+            self.defined_name = node.targets[0].id
+
+        # self.defined_name will be handled by the next child visit
+        values = _sanitize_value(self.visit(node.value))
         assert len(targets) == 1
         self.assignTarget(targets[0], values)
 
@@ -638,7 +662,21 @@ class CodeGenerator(ast.NodeVisitor):
         ast.NodeVisitor.generic_visit(self, node)
 
     def visit_Tuple(self, node):
-        args = [self.visit(x) for x in node.elts]
+        if isinstance(self.defined_name, tuple):
+            # assign a tuple of a tuple of names
+            args = []
+            defined_name = self.defined_name
+            for i, x in enumerate(node.elts):
+                # carry the child tuple/name to child visit
+                self.defined_name = defined_name[i]
+                args.append(self.visit(x))
+            assert len(defined_name) == len(args)
+            # all names of tuple has been used, should reset to None
+            self.defined_name = None
+        # the case isinstance(self.defined_name, str) should be handled self.visit()
+        else:
+            args = [self.visit(x) for x in node.elts]
+
         return language.tuple(args)
 
     def _apply_binary_method(self, method_name, lhs, rhs):
@@ -1418,7 +1456,7 @@ class CodeGenerator(ast.NodeVisitor):
 
             # if this node is used to define a name, temporarily store it
             # and store it into the parent's loc after visiting the child node
-            if self.defined_name is not None:
+            if isinstance(self.defined_name, str):
                 self.builder.set_loc_def_name(self.defined_name)
                 # child nodes didn't define this name, so don't carry a name to them
                 self.defined_name = None
