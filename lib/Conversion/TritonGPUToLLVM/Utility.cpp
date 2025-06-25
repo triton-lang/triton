@@ -507,14 +507,16 @@ Value getSmemVecAddr(const LinearLayout &regLayout,
 }
 
 std::pair<int, ColumnAction>
-largestVectorisation(MLIRContext *ctx, const LinearLayout &cvt, int bitwidth) {
+largestVectorisation(MLIRContext *ctx, const LinearLayout &cvt, int bitwidth,
+                     std::optional<int> maybeMaxVecElems = std::nullopt) {
   // Find the largest vectorisation we can use:
   StringAttr kReg = str_attr("register");
   StringAttr kOffset = str_attr("offset");
   LinearLayout quot;
   LinearLayout tile;
   ColumnAction permutation;
-  for (int v = 128 / bitwidth; v >= 1; v /= 2) {
+  auto maxVecElems = maybeMaxVecElems.value_or(128 / bitwidth);
+  for (int v = maxVecElems; v >= 1; v /= 2) {
     tile = LinearLayout::identity1D(v, kReg, kOffset);
     auto maybePerm = regPermForDivide(cvt, tile, /*left=*/true);
     if (!maybePerm) {
@@ -581,11 +583,8 @@ SmallVector<Value> lowerLdSt(
   auto kOffset = str_attr("offset");
   auto bitwidth = llvmElemTy.getIntOrFloatBitWidth();
 
-  auto [elemsPerVec, permutation] = largestVectorisation(ctx, cvt, bitwidth);
-  if (maybeMaxVecElems) {
-    elemsPerVec = std::min(elemsPerVec, *maybeMaxVecElems);
-    permutation = ColumnAction::identity(kReg, cvt.getInDimSizeLog2(kReg));
-  }
+  auto [elemsPerVec, permutation] =
+      largestVectorisation(ctx, cvt, bitwidth, maybeMaxVecElems);
 
   cvt = permutation.apply(cvt);
   if (isStore) {
