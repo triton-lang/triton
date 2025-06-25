@@ -1229,15 +1229,7 @@ struct AsyncCopyGlobalToLocalOpConversion
     Value threadPred =
         emitRedundantThreadPredicate(freeVarMasks, rewriter, loc, targetInfo);
 
-    auto isConstantFalse = [](Value val) {
-      APInt apInt;
-      if (matchPattern(val, m_ConstantInt(&apInt))) {
-        return apInt.isZero();
-      }
-      return false;
-    };
-
-    auto emitCpAsync = [&b, threadPred, isConstantFalse, ptrTy](
+    auto emitCpAsync = [&b, threadPred, ptrTy, hasMask = bool(llMask)](
                            ConversionPatternRewriter &rewriter, Location loc,
                            ArrayRef<Value> vals, Value shmemAddr, int startIdx,
                            VectorType vecTy) -> SmallVector<Value> {
@@ -1261,7 +1253,7 @@ struct AsyncCopyGlobalToLocalOpConversion
       auto *srcOperand = ptxBuilder.newAddrOperand(srcElem, "l");
       auto *copySize = ptxBuilder.newConstantOperand(nBytes);
       auto *srcSize = copySize;
-      if (!isConstantFalse(maskElem)) {
+      if (hasMask) {
         // We don't use predicate in this case, setting src-size to 0
         // if there's any mask. cp.async will automatically fill the
         // remaining slots with 0 if cp-size > src-size.
