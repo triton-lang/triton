@@ -95,12 +95,29 @@ def perm_tensor_from_contig(x: torch.Tensor, axis: int, swizzle_axis: int | None
     return x.permute(perm_from_contig(x.ndim, axis, swizzle_axis))
 
 
-def downcast_to_mxfp_impl(src_tensor: torch.Tensor, out_quant_type: torch.dtype, axis: int,
-                          DEQUANT_SCALE_ROUNDING_MODE: DequantScaleRoundingMode, BLOCK_OUT_DIM: int,
-                          BLOCK_QUANT_DIM: int):
+def downcast_to_mxfp(src_tensor: torch.Tensor, out_quant_type: torch.dtype, axis: int, swizzle_axis: int | None = None,
+                     swizzle_value: SwizzlingType | None = None, swizzle_scale: SwizzlingType | None = None,
+                     DEQUANT_SCALE_ROUNDING_MODE: DequantScaleRoundingMode = DequantScaleRoundingMode.ROUND_UP,
+                     BLOCK_OUT_DIM: int = 128, BLOCK_QUANT_DIM: int = 32):
     """
-    Downcast a contiguous tensor to mxfp along the last dimension.
+         Convert the src weights to mx format. The src weight is quantized along the axis dimension.
+
+         If weight_quant_type is torch.uint8, we output mxfp4 where two e2m1 values are packed into a single byte.
+         Note that this means the k_dim of the tensor will be half of the logical k_dim.
+
+         If weight_quant_type is torch.float8_e4m3fn or torch.float8_e5m2, we output mxfp8 with the float8s are stored
+         in their respective formats.
+
+         When swizzle_axis is provided, the downcast will quantize along the quantization axis and swizzle the scales
+         with the swizzle_axis. See the relevant swizzle_* functions for more details.
     """
+    ndim = src_tensor.ndim
+    axis = axis if axis >= 0 else axis + ndim
+    swizzle_axis = swizzle_axis if swizzle_axis is None or swizzle_axis >= 0 else swizzle_axis + ndim
+    assert -ndim <= axis < ndim, f"Invalid axis {axis=}"
+    assert swizzle_axis is None or -ndim <= swizzle_axis < ndim, f"Invalid swizzle axis {swizzle_axis=}"
+    assert swizzle_axis is None or axis != swizzle_axis, f"Axis and swizzle axis cannot be the same {axis=} {swizzle_axis=}"
+    # downcast
     src_tensor = src_tensor.transpose(axis, src_tensor.ndim - 1)
     is_fp4 = out_quant_type == torch.uint8
     is_fp8 = out_quant_type in (torch.float8_e4m3fn, torch.float8_e5m2)
@@ -130,49 +147,10 @@ def downcast_to_mxfp_impl(src_tensor: torch.Tensor, out_quant_type: torch.dtype,
 
     out_quant_tensor = out_quant_tensor.transpose(axis, src_tensor.ndim - 1)
     out_scale = out_scale.transpose(axis, src_tensor.ndim - 1)
-    return out_quant_tensor, out_scale
-
-
-def downcast_to_mxfp(src_tensor: torch.Tensor, out_quant_type: torch.dtype, axis: int, swizzle_axis: int | None = None,
-                     swizzle_value: SwizzlingType | None = None, swizzle_scale: SwizzlingType | None = None,
-                     DEQUANT_SCALE_ROUNDING_MODE: DequantScaleRoundingMode = DequantScaleRoundingMode.ROUND_UP,
-                     BLOCK_OUT_DIM: int = 128, BLOCK_QUANT_DIM: int = 32):
-    """
-         Convert the src weights to mx format. The src weight is quantized along the axis dimension.
-
-         If weight_quant_type is torch.uint8, we output mxfp4 where two e2m1 values are packed into a single byte.
-         Note that this means the k_dim of the tensor will be half of the logical k_dim.
-
-         If weight_quant_type is torch.float8_e4m3fn or torch.float8_e5m2, we output mxfp8 with the float8s are stored
-         in their respective formats.
-
-         When swizzle_axis is provided, the downcast will quantize along the quantization axis and swizzle the scales
-         with the swizzle_axis. See the relevant swizzle_* functions for more details.
-    """
-    print("downcast initial shape", src_tensor.shape, "axis", axis, "swizzle_axis", swizzle_axis)
-    # This should probably be packed into its own tiny class
-    if swizzle_axis is None:
-        assert swizzle_scale is None, "Swizzle scale must be None if swizzle axis is None"
-        assert swizzle_value is None, "Swizzle value must be None if swizzle axis is None"
-    else:
-        assert swizzle_scale is not None or swizzle_value is not None, "At least one of swizzle_scale or swizzle_value must be provided"
-        assert swizzle_value is None or swizzle_value == SwizzlingType.HOPPER_VALUE, "Just implemented Hopper swizzle for now"
-
-    ndim = src_tensor.ndim
-    assert -ndim <= axis < ndim, f"Invalid axis {axis=}"
-    axis = axis if axis >= 0 else axis + ndim
-    if swizzle_axis is not None:
-        assert -ndim <= swizzle_axis < ndim, f"Invalid swizzle axis {swizzle_axis=}"
-        swizzle_axis = swizzle_axis if swizzle_axis >= 0 else swizzle_axis + ndim
-        assert axis != swizzle_axis, f"Axis and swizzle axis cannot be the same {axis=} {swizzle_axis=}"
-
-    quant_tensor, scale = downcast_to_mxfp_impl(src_tensor, out_quant_type, axis, DEQUANT_SCALE_ROUNDING_MODE,
-                                                BLOCK_OUT_DIM, BLOCK_QUANT_DIM)
-
     # Swizzling
-    quant_tensor = swizzle(quant_tensor, axis, swizzle_axis, swizzle_value)
-    scale = swizzle(scale, axis, swizzle_axis, swizzle_scale)
-    return quant_tensor, scale
+    out_quant_tensor = swizzle(out_quant_tensor, axis, swizzle_axis, swizzle_value)
+    out_scale = swizzle(out_scale, axis, swizzle_axis, swizzle_scale)
+    return out_quant_tensor, out_scale
 
 
 def swizzle(tensor, axis, swizzle_axis, swizzle_mode):
