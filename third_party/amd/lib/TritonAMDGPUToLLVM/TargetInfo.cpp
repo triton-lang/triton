@@ -285,7 +285,7 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
                             unsigned interleave) const {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
-  if (isCDNA() && getISAFamily() == ISAFamily::CDNA4 &&
+  if (getISAFamily() == ISAFamily::CDNA4 &&
       warpReduceSwap16or32(rewriter, loc, acc, op, numLaneToReduce, interleave))
     return true;
   if (numLaneToReduce != getWarpSize())
