@@ -65,6 +65,10 @@ static SmallVector<Value>
 cvtScalePkDowncastToFp8(Location loc, ConversionPatternRewriter &rewriter,
                         Value v0, Value v1) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
+
+  LLVM::createLLVMIntrinsicCallOp(rewriter, loc, "llvm.amdgcn.s.setreg", {},
+                                  {b.i32_val(1473), b.i32_val(1)});
+
   Type v2I16Ty = vec_ty(i16_ty, 2);
   Value v2I16Vec = b.undef(v2I16Ty);
   Value scale = b.f32_val(1);
@@ -84,6 +88,10 @@ cvtScalePkDowncastToFp8(Location loc, ConversionPatternRewriter &rewriter,
     result = rewriter.create<ConvertOp>(loc, v2I16Ty, v2I16Vec, srcVec, scale,
                                         /*dstLoHiSel=*/false);
   }
+
+  LLVM::createLLVMIntrinsicCallOp(rewriter, loc, "llvm.amdgcn.s.setreg", {},
+                                  {b.i32_val(1473), b.i32_val(0)});
+
   auto fp8x4VecTy = vec_ty(i8_ty, 4);
   auto fp8x4Vec = b.bitcast(result, fp8x4VecTy);
   SmallVector<Value> ret(2);
@@ -387,7 +395,8 @@ static SmallVector<Value>
 Fp32_to_Fp8E4M3FNUZ(Location loc, ConversionPatternRewriter &rewriter,
                     const SmallVector<Value> &v) {
   assert(v.size() == 2);
-  return cvtPkFp32ToF8<ROCDL::CvtPkFp8F32Op>(loc, rewriter, v[0], v[1]);
+  auto ret = cvtPkFp32ToF8<ROCDL::CvtPkFp8F32Op>(loc, rewriter, v[0], v[1]);
+  return ret;
 }
 
 // Nanoo Bf8 -> Fp32 on CDNA3
