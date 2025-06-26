@@ -593,6 +593,7 @@ class JITFunction(KernelInterface[T]):
         # the type and the second parameter is the 'specialization' value.
         bound_args, specialization, options = binder(*args, **kwargs)
 
+        # compute cache key
         key = str(specialization) + str(options)
         kernel = kernel_cache.get(key, None)
 
