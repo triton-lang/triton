@@ -13,6 +13,9 @@
 #define GEN_PASS_CLASSES
 #include "TritonAMDGPUTransforms/Passes.h"
 
+//#undef LLVM_DEBUG
+//#define LLVM_DEBUG(X) X
+
 #undef DEBUG_TYPE
 #define DEBUG_TYPE "tritonamdgpu-refine-ops"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
@@ -133,6 +136,25 @@ private:
     return false;
   }
 };
+
+// Track the id of refined ops for scheduling.
+struct RefinedOpOrderTracker {
+  int32_t idOriginalOp;
+  int32_t idRefinedOp;
+  MLIRContext *ctx;
+  RefinedOpOrderTracker() : idOriginalOp(0), idRefinedOp(0) {}
+  void nextOriginalOp(MLIRContext *context) {
+    ctx = context;
+    ++idOriginalOp;
+    idRefinedOp = 0;
+  }
+  triton::amdgpu::RefinedOpOrderAttr getRefinedOpOrderAttr() {
+    auto refinedOpOrderAttr = triton::amdgpu::RefinedOpOrderAttr::get(ctx, idOriginalOp, idRefinedOp);
+    ++idRefinedOp;
+    return refinedOpOrderAttr;
+  }
+};
+static RefinedOpOrderTracker refinedOpOrder;
 
 struct DotOpMFMAConverter {
   AMDMfmaEncodingAttr mfmaLayout;
@@ -530,6 +552,7 @@ struct LocalLoadOpPattern
 
     rewriter.setInsertionPointAfter(op);
     SmallVector<Value> subtiles;
+    refinedOpOrder.nextOriginalOp(ctx);
     for (int32_t i = 0; i < numReps2D[0]; ++i) {
       for (int32_t j = 0; j < numReps2D[1]; ++j) {
         int32_t offset0 = i * refinedShape[0];
@@ -541,6 +564,8 @@ struct LocalLoadOpPattern
 
         auto refinedLoad = rewriter.create<ttg::LocalLoadOp>(
             loc, refinedTensorType, refinedView);
+        refinedLoad->setAttr(triton::amdgpu::RefinedOpOrderAttr::getMnemonic(),
+            refinedOpOrder.getRefinedOpOrderAttr());
         subtiles.push_back(refinedLoad);
       }
     }
@@ -591,6 +616,7 @@ struct LoadOpPattern : public RefineRewritePattern<triton::LoadOp> {
     auto isVolatile = op.getIsVolatile();
 
     AMD::CoordinateMapper coordsMapper(refinedBlock.numPerDims);
+    refinedOpOrder.nextOriginalOp(ctx);
     for (size_t linearIdx = 0; linearIdx < refinedBlock.numSubTiles;
          ++linearIdx) {
       auto coords = coordsMapper.map(linearIdx);
@@ -602,10 +628,12 @@ struct LoadOpPattern : public RefineRewritePattern<triton::LoadOp> {
       auto slice = rewriter.create<triton::amdgpu::ExtractSliceOp>(
           loc, Type{refinedBlock.tensorType}, Value{origSrc}, offset);
 
-      auto refinedTensor = rewriter.create<triton::LoadOp>(
+      auto loadOp = rewriter.create<triton::LoadOp>(
           loc, slice, mask, other, boundaryCheck, padding, cache, evict,
           isVolatile);
-      refinedTensors.push_back(refinedTensor);
+      loadOp->setAttr(triton::amdgpu::RefinedOpOrderAttr::getMnemonic(),
+          refinedOpOrder.getRefinedOpOrderAttr());
+      refinedTensors.push_back(loadOp);
     }
 
     auto joinedResult = rewriter.create<triton::amdgpu::ConcatOp>(
@@ -688,6 +716,7 @@ struct AMDGCNBufferLoadOp
         RankedTensorType::get(refinedShape, origElementType, origEncoding);
 
     SmallVector<Value> refinedOps;
+    refinedOpOrder.nextOriginalOp(ctx);
     for (size_t i = 0; i < slicedOffsets.size(); ++i) {
       Value slicedOffset = slicedOffsets[i];
       Value slicedMask = slicedMasks ? slicedMasks.value()[i] : nullptr;
@@ -697,6 +726,8 @@ struct AMDGCNBufferLoadOp
       auto refinedOp = rewriter.create<triton::amdgpu::BufferLoadOp>(
           loc, refinedTensorType, origBasePtr, slicedOffset, origStride,
           origCache, slicedMask, slicedOtherTensor);
+      refinedOp->setAttr(triton::amdgpu::RefinedOpOrderAttr::getMnemonic(),
+          refinedOpOrder.getRefinedOpOrderAttr());
       refinedOps.push_back(refinedOp);
     }
 
@@ -753,6 +784,7 @@ struct LocalStoreOpPattern
 
     rewriter.setInsertionPointAfter(op);
     AMD::CoordinateMapper coordsMapper(refinedBlock.numPerDims);
+    refinedOpOrder.nextOriginalOp(ctx);
     for (size_t linearIdx = 0; linearIdx < refinedBlock.numSubTiles;
          ++linearIdx) {
       auto coords = coordsMapper.map(linearIdx);
@@ -767,7 +799,9 @@ struct LocalStoreOpPattern
       auto slice = rewriter.create<triton::amdgpu::ExtractSliceOp>(
           loc, Type{refinedBlock.tensorType}, Value{origSrc}, offset);
 
-      rewriter.create<ttg::LocalStoreOp>(loc, slice, slicedSharedMemView);
+      auto storeOp = rewriter.create<ttg::LocalStoreOp>(loc, slice, slicedSharedMemView);
+      storeOp->setAttr(triton::amdgpu::RefinedOpOrderAttr::getMnemonic(),
+          refinedOpOrder.getRefinedOpOrderAttr());
     }
 
     rewriter.eraseOp(op);
