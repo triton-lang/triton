@@ -1,5 +1,6 @@
 #include "TargetInfo.h"
 #include "TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
+#include "Utility.h"
 #include "mlir/Analysis/TopologicalSortUtils.h"
 #include "mlir/Conversion/Passes.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
@@ -86,6 +87,12 @@ enum BarrierIndex {
 static void createBarrier(TritonLLVMIRRewriter &b, unsigned barIdx,
                           std::optional<unsigned> numThreads, bool aligned) {
   assert(barIdx < 16 && "not enough barriers");
+
+  // If a partition has only 1 warp, use `bar.warp.sync`.
+  if (numThreads && *numThreads == 32) {
+    LLVM::NVIDIA::createSyncWarp(b.getLoc(), b);
+    return;
+  }
 
   PTXBuilder ptxBuilder;
   std::string ptxString;
