@@ -554,13 +554,12 @@ def _attn_fwd_mma(  #
     scheduler = ProgramScheduler(config)
     for pid in range(scheduler.start_pid, scheduler.num_tiles, config.NUM_SMS):
         prog = scheduler.get_program(pid)
+        lo, hi = prog.get_fused_loop_bounds(STAGE)
+        num_mmas = (hi - lo) // config.BLOCK_N
 
         o0_init, o1_init = False, False
         q0_smem, q0_bar = q_consumer.acquire()
         q1_smem, q1_bar = q_consumer.acquire()
-
-        lo, hi = prog.get_fused_loop_bounds(STAGE)
-        num_mmas = (hi - lo) // config.BLOCK_N
 
         k_smem, k_bar = kv_consumer.acquire()
         qk0_producer.wait_and_issue_next(q0_smem, k_smem.permute((1, 0)), [k_bar], use_acc=False)
@@ -669,17 +668,6 @@ def _attn_fwd_correction_compute(config, mi_consumer, o_consumer, m_i):
 
 
 @gluon.jit
-def _correction_inner_loop(config, prog, m_i0, m_i1,  #
-                           mi0_consumer, mi1_consumer, o0_consumer, o1_consumer,  #
-                           STAGE: gl.constexpr):
-    lo, hi = prog.get_loop_bounds(STAGE)
-    for start_n in range(lo, hi, config.BLOCK_N):
-        m_i0 = _attn_fwd_correction_compute(config, mi0_consumer, o0_consumer, m_i0)
-        m_i1 = _attn_fwd_correction_compute(config, mi1_consumer, o1_consumer, m_i1)
-    return m_i0, m_i1
-
-
-@gluon.jit
 def _attn_fwd_correction(config, info0, info1, STAGE: gl.constexpr):
     o0_consumer = info0.o_mma_ctx.channel.create_consumer()
     o1_consumer = info1.o_mma_ctx.channel.create_consumer()
@@ -695,20 +683,14 @@ def _attn_fwd_correction(config, info0, info1, STAGE: gl.constexpr):
     scheduler = ProgramScheduler(config)
     for pid in range(scheduler.start_pid, scheduler.num_tiles, config.NUM_SMS):
         prog = scheduler.get_program(pid)
+        lo, hi = prog.get_fused_loop_bounds(STAGE)
 
         m_i0 = gl.full([config.SPLIT_M], -float("inf"), gl.float32, gl.SliceLayout(1, config.o_splitn_layout))
         m_i1 = gl.full([config.SPLIT_M], -float("inf"), gl.float32, gl.SliceLayout(1, config.o_splitn_layout))
 
-        if STAGE & 1:
-            m_i0, m_i1 = _correction_inner_loop(  #
-                config, prog, m_i0, m_i1,  #
-                mi0_consumer, mi1_consumer, o0_consumer, o1_consumer,  #
-                STAGE=4 - STAGE)
-        if STAGE & 2:
-            m_i0, m_i1 = _correction_inner_loop(  #
-                config, prog, m_i0, m_i1,  #
-                mi0_consumer, mi1_consumer, o0_consumer, o1_consumer,  #
-                STAGE=2)
+        for start_n in range(lo, hi, config.BLOCK_N):
+            m_i0 = _attn_fwd_correction_compute(config, mi0_consumer, o0_consumer, m_i0)
+            m_i1 = _attn_fwd_correction_compute(config, mi1_consumer, o1_consumer, m_i1)
 
         o0_tmem, o0_bar = o0_consumer.acquire()
         mbarrier.arrive(e0_bar, count=1)
