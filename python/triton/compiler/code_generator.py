@@ -1009,16 +1009,14 @@ class CodeGenerator(ast.NodeVisitor):
         lhs = self.visit(node.value)
         slices = self.visit(node.slice)
         if _is_triton_value(lhs):
-            fn = BoundJITMethod(lhs, lhs.__getitem__) if isinstance(lhs.__getitem__, JITFunction) else lhs.__getitem__
-            return self.call_Function(node, fn, [slices], {})
+            return self.call_Method(node, lhs.__getitem__, lhs, [slices], {})
         return lhs[slices]
 
     def visit_Subscript_Store(self, node, value):
         assert isinstance(node.ctx, ast.Store)
         lhs = self.visit(node.value)
         slices = self.visit(node.slice)
-        fn = BoundJITMethod(lhs, lhs.__setitem__) if isinstance(lhs.__setitem__, JITFunction) else lhs.__setitem__
-        self.call_Function(node, fn, [slices, value], {})
+        self.call_Method(node, lhs.__setitem__, lhs, [slices, value], {})
 
     def visit_Subscript(self, node):
         return self.visit_Subscript_Load(node)
@@ -1281,6 +1279,11 @@ class CodeGenerator(ast.NodeVisitor):
             args = map(_unwrap_if_constexpr, args)
         ret = fn(*args, **kws)
         return _apply_to_tuple_values(ret, lambda x: x) if _is_namedtuple(type(ret)) else ret
+
+    def call_Method(self, node, fn, fn_self, args, kws):
+        if isinstance(fn, JITFunction):
+            self.call_Function(node, fn, [fn_self] + args, kws)
+        self.call_Function(node, fn, args, kws)
 
     def visit_Call(self, node):
         fn = _unwrap_if_constexpr(self.visit(node.func))
