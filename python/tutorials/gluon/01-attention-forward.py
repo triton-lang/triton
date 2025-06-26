@@ -636,6 +636,9 @@ def _attn_fwd_mma(  #
             mbarrier.wait(qk_p_bar, qk_p_phase)
             qk_p_phase ^= 1
             qk1_producer.wait_and_issue_next(q1_smem, k_smem.permute((1, 0)), [k_bar], use_acc=False)
+        tcgen05_commit(q0_bar)
+        tcgen05_commit(q1_bar)
+
         v_smem, v_bar = kv_consumer.acquire()
         p0_tmem, p0_bar = p0_consumer.acquire()
         o0_producer.wait_and_issue_next(p0_tmem, v_smem, [v_bar, p0_bar], use_acc=o0_init)
@@ -644,9 +647,6 @@ def _attn_fwd_mma(  #
         p1_tmem, p1_bar = p1_consumer.acquire()
         o1_producer.wait_and_issue_next(p1_tmem, v_smem, [v_bar, p1_bar], use_acc=o1_init)
         o1_init = True
-
-        tcgen05_commit(q0_bar)
-        tcgen05_commit(q1_bar)
 
     mbarrier.invalidate(qk_p_bar)
 
@@ -1010,7 +1010,7 @@ def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype):
 # Benchmarking
 # ===-----------------------------------------------------------------------===#
 
-profile = True
+profile = False
 
 if not profile:
     BATCH = [4]
