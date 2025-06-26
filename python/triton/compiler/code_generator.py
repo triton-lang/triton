@@ -719,8 +719,10 @@ class CodeGenerator(ast.NodeVisitor):
         self.visit_compound_statement(node.body)
         then_block = self.builder.get_insertion_block()
         then_defs = self.local_defs.copy()
+        then_vals = self.lscope.copy()
         # else block
         else_defs = {}
+        else_vals = liveins.copy()
         if node.orelse:
             self.builder.set_insertion_point_to_start(else_block)
             self.lscope = liveins.copy()
@@ -728,26 +730,29 @@ class CodeGenerator(ast.NodeVisitor):
             self.visit_compound_statement(node.orelse)
             else_defs = self.local_defs.copy()
             else_block = self.builder.get_insertion_block()
+            else_vals = self.lscope.copy()
 
         # update block arguments
         names = []
         # variables in livein whose value is updated in `if`
-        for name in liveins:
+        for name, value in liveins.items():
+            # livein variable changed value in either then or else
+            if not _is_triton_value(value):
+                continue
+            then_handles = flatten_values_to_ir([then_vals[name]])
+            else_handles = flatten_values_to_ir([else_vals[name]])
+            if then_handles == else_handles:
+                continue
+            names.append(name)
+            then_defs[name] = then_vals[name]
+            else_defs[name] = else_vals[name]
             # check type
             for defs, block_name in [(then_defs, 'then'), (else_defs, 'else')]:
-                if name in defs:
-                    type_equal = type(defs[name]) == type(liveins[name])  # noqa: E721
-                    assert type_equal and defs[name].type == liveins[name].type, \
-                        f'initial value for `{name}` is of type {liveins[name]}, '\
-                        f'but the {block_name} block redefines it as {defs[name]}'
-            if name in then_defs or name in else_defs:
-                names.append(name)
-            # variable defined in then but not in else
-            if name in then_defs and name not in else_defs:
-                else_defs[name] = liveins[name]
-            # variable defined in else but not in then
-            if name in else_defs and name not in then_defs:
-                then_defs[name] = liveins[name]
+                type_equal = type(defs[name]) == type(value)  # noqa: E721
+                assert type_equal and defs[name].type == value.type, \
+                    f'initial value for `{name}` is of type {value}, '\
+                    f'but the {block_name} block redefines it as {defs[name]}'
+
         # variables that are both in then and else but not in liveins
         # TODO: could probably be cleaned up
         for name in sorted(then_defs.keys() & else_defs.keys()):
