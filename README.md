@@ -122,10 +122,8 @@ Alternatively, follow these steps to build LLVM from source manually.
 - The build system creates a `compile_commands.json` file under the Triton repo
   directory. This file is used by VSCode IntelliSense and clangd to provide
   code completion and other features for C++ code.
-  <details>
-  <summary>
-  If IntelliSense does not work, you can try the following steps.
-  </summary>
+
+  If IntelliSense does not work, you can try the following steps:
 
     - Do a local build. Run command `pip install -e .`
     - Get the full path to the `compile_commands.json` file produced by the build:
@@ -138,8 +136,6 @@ Alternatively, follow these steps to build LLVM from source manually.
       Ctrl + P` on Windows/Linux) and open `C/C++: Edit Configurations (UI)`.
     - Open "Advanced Settings" and paste the full path to
       `compile_commands.json` into the "Compile Commands" textbox.
-
-  </details>
 
 # Running tests
 
