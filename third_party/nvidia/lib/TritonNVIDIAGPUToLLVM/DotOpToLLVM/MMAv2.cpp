@@ -90,7 +90,7 @@ ValueTableV2 getValuesFromDotOperandLayoutStruct(
 
   auto dot = cast<DotOperandEncodingAttr>(type.getEncoding());
   auto kWidth = dot.getKWidth();
-  auto largeK = bitwidth * kWidth > (bitwidth < 32 ? 32 : bitwidth);
+  auto largeK = bitwidth * kWidth > std::max(32u, bitwidth);
 
   assert((bitwidth != 64 || largeK == false) &&
          "Currently fp64 don't support largeK MMA");
