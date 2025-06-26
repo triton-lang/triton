@@ -16,8 +16,7 @@ class DequantScaleRoundingMode(Enum):
 
 
 def downcast_to_mxfp(src_tensor: torch.Tensor, out_quant_type: torch.dtype, axis: int,
-                     DEQUANT_SCALE_ROUNDING_MODE: DequantScaleRoundingMode = DequantScaleRoundingMode.ROUND_UP,
-                     BLOCK_OUT_DIM: int = 128, BLOCK_QUANT_DIM: int = 32):
+                     DEQUANT_SCALE_ROUNDING_MODE: DequantScaleRoundingMode = DequantScaleRoundingMode.ROUND_UP):
     """
          Convert the src weights to mx format. The src weight is quantized along the axis dimension.
 
@@ -49,6 +48,8 @@ def downcast_to_mxfp(src_tensor: torch.Tensor, out_quant_type: torch.dtype, axis
     kernel_quant_tensor = out_quant_tensor.view(-1, out_quant_tensor.shape[-1])
     kernel_scale = out_scale.view(-1, out_scale.shape[-1])
 
+    BLOCK_OUT_DIM = 128
+    BLOCK_QUANT_DIM = 32
     grid_out = triton.cdiv(kernel_src_tensor.shape[0], BLOCK_OUT_DIM)
     grid_quant = triton.cdiv(kernel_src_tensor.shape[1], BLOCK_QUANT_DIM)
 
@@ -62,8 +63,7 @@ def downcast_to_mxfp(src_tensor: torch.Tensor, out_quant_type: torch.dtype, axis
     return out_quant_tensor, out_scale
 
 
-def upcast_from_mxfp(tensor: torch.Tensor, scale: torch.Tensor, dtype: torch.dtype, axis: int, BLOCK_OUT_DIM: int = 128,
-                     BLOCK_QUANT_DIM: int = 32):
+def upcast_from_mxfp(tensor: torch.Tensor, scale: torch.Tensor, dtype: torch.dtype, axis: int):
     """
     Upcasts an mxfp (packed) weight tensor back to float16 or bfloat16.
 
@@ -89,6 +89,8 @@ def upcast_from_mxfp(tensor: torch.Tensor, scale: torch.Tensor, dtype: torch.dty
     reshaped_out = out.view(-1, out.shape[-1])
     reshaped_tensor = tensor.view(-1, tensor.shape[-1])
     reshaped_scale = scale.view(-1, scale.shape[-1])
+    BLOCK_OUT_DIM = 128
+    BLOCK_QUANT_DIM = 32
     blocks_out_dim = triton.cdiv(reshaped_out.shape[0], BLOCK_OUT_DIM)
     blocks_quant_dim = triton.cdiv(reshaped_out.shape[1], BLOCK_QUANT_DIM)
     _upcast_from_mxfp[(blocks_out_dim, blocks_quant_dim)](reshaped_out, *reshaped_out.stride(), reshaped_scale,

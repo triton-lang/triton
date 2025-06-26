@@ -71,12 +71,12 @@ def test_mxfp_quant_dequant(src_dtype, dst_dtype):
 
 # fmt: off
 @pytest.mark.parametrize(
-    "shape, axis, block_out_dim, block_quant_dim, quant_dtype, rounding_mode",
+    "shape, axis, quant_dtype, rounding_mode",
     [
-        ((3, 4096, 1024), 1, 128, 32, "float4_e2m1", DequantScaleRoundingMode.ROUND_UP),
-        ((10, 254, 60), 0, 128, 32, "float4_e2m1", DequantScaleRoundingMode.ROUND_DOWN),
-        ((1, 320, 160), 2, 128, 32, "float8_e5m2", DequantScaleRoundingMode.ROUND_UP),
-        ((2, 16, 512), -1, 128, 32, "float8_e4m3fn", DequantScaleRoundingMode.ROUND_DOWN),
+        ((3, 4096, 1024), 1, "float4_e2m1", DequantScaleRoundingMode.ROUND_UP),
+        ((10, 254, 60), 0, "float4_e2m1", DequantScaleRoundingMode.ROUND_DOWN),
+        ((1, 320, 160), 2, "float8_e5m2", DequantScaleRoundingMode.ROUND_UP),
+        ((2, 16, 512), -1, "float8_e4m3fn", DequantScaleRoundingMode.ROUND_DOWN),
     ],
 )
 # fmt: on
@@ -84,8 +84,6 @@ def test_mxfp_quant_dequant(src_dtype, dst_dtype):
 def test_mxfp_casting(
     shape: tuple[int, ...],
     axis: int,
-    block_out_dim,
-    block_quant_dim,
     quant_dtype: str,
     dequant_dtype: str,
     rounding_mode: DequantScaleRoundingMode,
@@ -103,21 +101,9 @@ def test_mxfp_casting(
     x = torch.randn(shape, device="cuda", dtype=dequant_torch_type)
 
     # Quantize and check equivalence
-    quant, scale = downcast_to_mxfp(
-        x,
-        quant_torch_type,
-        axis,
-        DEQUANT_SCALE_ROUNDING_MODE=rounding_mode,
-        BLOCK_OUT_DIM=block_out_dim,
-        BLOCK_QUANT_DIM=block_quant_dim,
-    )
-
-    quant_torch, scale_torch = downcast_to_mxfp_torch(
-        x,
-        quant_torch_type,
-        axis,
-        DEQUANT_SCALE_ROUNDING_MODE=rounding_mode,
-    )
+    quant, scale = downcast_to_mxfp(x, quant_torch_type, axis, DEQUANT_SCALE_ROUNDING_MODE=rounding_mode)
+    quant_torch, scale_torch = downcast_to_mxfp_torch(x, quant_torch_type, axis,
+                                                      DEQUANT_SCALE_ROUNDING_MODE=rounding_mode)
 
     assert_equal(quant_torch, quant)
     assert_equal(scale_torch, scale)
@@ -125,14 +111,7 @@ def test_mxfp_casting(
     assert_equal(1, quant_torch.stride(axis))
 
     # Dequantize and check equivalence
-    dequant = upcast_from_mxfp(
-        quant,
-        scale,
-        dequant_torch_type,
-        axis,
-        BLOCK_OUT_DIM=block_out_dim,
-        BLOCK_QUANT_DIM=block_quant_dim,
-    )
+    dequant = upcast_from_mxfp(quant, scale, dequant_torch_type, axis)
     dequant_torch = upcast_from_mxfp_torch(quant_torch, scale_torch, dequant_torch_type, axis)
     assert_equal(dequant, dequant_torch)
 
