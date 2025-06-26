@@ -238,10 +238,10 @@ def test_kernel_global_var_change(device):
     assert x == torch.ones_like(x)
 
     GLOBAL_VAR = 2
-    with pytest.raises(triton.compiler.errors.CompilationError) as e:
+    with pytest.raises(RuntimeError) as e:
         kernel[(1, )](x)
 
-    assert "Cannot access global variable" in str(e.value)
+    assert "global variable" in str(e.value).lower()
 
 
 GLOBAL = 42  # noqa
@@ -264,6 +264,29 @@ def test_local_shadows_global():
 
 
 CONSTEXPR_GLOBAL = tl.constexpr(42)
+
+
+def test_local_does_not_shadow_global():
+    global CONSTEXPR_GLOBAL
+
+    @triton.jit
+    def kernel():
+        a = CONSTEXPR_GLOBAL  # noqa
+        _, CONSTEXPR_GLOBAL = 0, 0  # noqa
+
+    CONSTEXPR_GLOBAL = tl.constexpr(42)
+    kernel[(1, )]()
+    CONSTEXPR_GLOBAL = tl.constexpr(43)
+
+    # Error because the `CONSTEXPR_GLOBAL` we're modifying is the same
+    # `CONSTEXPR_GLOBAL` that's read inside `kernel`.  (Alternatively, we could
+    # make this kernel an error altogether, as it is if it's a pure Python
+    # function -- the fact that we store to `CONSTEXPR_GLOBAL` inside the kernel
+    # makes the first read a read of the local variable, which doesn't exist
+    # yet.)
+    with pytest.raises(RuntimeError):
+        kernel[(1, )]()
+
 
 CONFLICTING_GLOBAL = tl.constexpr(0)
 
@@ -339,6 +362,27 @@ def test_cache_builtin_as_global():
     assert "global variable" in str(e.value).lower()
 
 
+def test_cache_closure():
+
+    def make_closure(cst):
+
+        @triton.jit
+        def closure():
+            tl.full((16, ), cst, dtype=tl.int32)
+
+        return closure
+
+    cst = tl.constexpr(42)
+    closure = make_closure(cst)
+
+    closure[(1, )]()
+    cst.value = 43
+    with pytest.raises(RuntimeError) as e:
+        closure[(1, )]()
+
+    assert "cst has changed since we compiled this kernel, from constexpr[42] to constexpr[43]" in str(e.value)
+
+
 @triton.jit
 def no_cache_callable_inner():
     pass
@@ -370,51 +414,6 @@ def test_constexpr_cache_invalidation_recreated(device):
 
     assert test_run(123) == 123
     assert test_run(1234) == 1234
-
-
-def test_constexpr_cache_invalidation_captured(device):
-    VAL = tl.constexpr(123)
-
-    @triton.jit
-    def kernel(out):
-        tl.store(out, VAL)
-
-    out = torch.zeros(1, device=device)
-    kernel[(1, )](out)
-    assert out == 123
-
-    VAL = tl.constexpr(1234)
-    out = torch.zeros(1, device=device)
-    kernel[(1, )](out)
-    assert out == 1234
-
-    VAL.value = 12345
-    out = torch.zeros(1, device=device)
-    kernel[(1, )](out)
-    assert out == 12345
-
-
-def test_constexpr_cache_invalidation_global(device):
-    global VAL
-    VAL = tl.constexpr(123)
-
-    @triton.jit
-    def kernel(out):
-        tl.store(out, VAL)
-
-    out = torch.zeros(1, device=device)
-    kernel[(1, )](out)
-    assert out == 123
-
-    VAL = tl.constexpr(1234)
-    out = torch.zeros(1, device=device)
-    kernel[(1, )](out)
-    assert out == 1234
-
-    VAL.value = 12345
-    out = torch.zeros(1, device=device)
-    kernel[(1, )](out)
-    assert out == 12345
 
 
 def test_jit_warmup_cache(device) -> None:

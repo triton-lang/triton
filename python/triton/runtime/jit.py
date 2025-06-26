@@ -593,9 +593,7 @@ class JITFunction(KernelInterface[T]):
         # the type and the second parameter is the 'specialization' value.
         bound_args, specialization, options = binder(*args, **kwargs)
 
-        # compute cache key including constexpr values
-        constexpr_key = _get_constexpr_cache_key(self.fn)
-        key = str(specialization) + str(options) + constexpr_key
+        key = str(specialization) + str(options)
         kernel = kernel_cache.get(key, None)
 
         # Kernel is not cached; we have to compile.
@@ -634,10 +632,6 @@ class JITFunction(KernelInterface[T]):
         not_present = object()
         for (name, _), (val, globals_dict) in self.used_global_vals.items():
             if (newVal := globals_dict.get(name, not_present)) != val:
-                # Don't error on constexpr changes - they're handled by cache invalidation
-                from ..language import constexpr
-                if isinstance(val, constexpr) and isinstance(newVal, constexpr):
-                    continue
                 raise RuntimeError(
                     f"Global variable {name} has changed since we compiled this kernel, from {val} to {newVal}")
 
