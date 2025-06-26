@@ -43,6 +43,98 @@ bool isSafeToPipeline(scf::ForOp forOp) {
   return true;
 }
 
+// Find dependencies with distance of 1. They will go to the next stage,
+// but in the cluster before the current op.
+void scheduleDistanceOneDependencies(scf::ForOp forOp,
+                                     CoarseSchedule &schedule) {
+  int numStages = schedule.getNumStages();
+
+  // Mapping from the cluster to the cluster before it.
+  DenseMap<CoarseSchedule::ClusterHash, CoarseSchedule::Cluster> dist1Cluster;
+  for (auto &op : forOp.getBody()->without_terminator()) {
+    if (schedule.count(&op) == 0)
+      continue;
+    auto [stage, cluster] = schedule[&op];
+    // Can't schedule past the last stage.
+    if (stage == numStages - 1)
+      continue;
+    for (Value operand : getNestedOperands(&op)) {
+      if (auto arg = dyn_cast<BlockArgument>(operand)) {
+        if (arg.getArgNumber() > 0 && arg.getOwner() == op.getBlock()) {
+          auto yieldOp = op.getBlock()->getTerminator();
+          Value v = yieldOp->getOperand(arg.getArgNumber() - 1);
+          Operation *defOp = v.getDefiningOp();
+          if (defOp && schedule.count(defOp) == 0) {
+            if (isa<tt::LoadOp>(defOp)) {
+              // Exception: Schedule loads with a distance of 1 together
+              // with the current op.
+              schedule.insertIfAbsent(defOp, stage, cluster);
+              schedule.insertDepsOfOp(defOp, stage, cluster,
+                                      /*includeArg=*/true,
+                                      /*insertIfEarlier=*/true);
+            } else {
+              CoarseSchedule::ClusterHash clusterHash =
+                  CoarseSchedule::hashCluster(cluster);
+              if (dist1Cluster.count(clusterHash) == 0) {
+                dist1Cluster[clusterHash] =
+                    schedule.clusters.newBefore(cluster);
+              }
+              schedule.insertIfAbsent(defOp, stage + 1,
+                                      dist1Cluster[clusterHash]);
+              schedule.insertDepsOfOp(defOp, stage + 1,
+                                      dist1Cluster[clusterHash],
+                                      /*includeArg=*/true,
+                                      /*includeIfEarlier=*/true);
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+void scheduleRemainingToLastStage(scf::ForOp forOp, CoarseSchedule &schedule,
+                                  CoarseSchedule::Cluster afterPrologue) {
+  int numStages = schedule.getNumStages();
+  // Assign the rest of the ops to the last stage.
+  // Take care of the ordering of the ops - uses cannot be scheduled to the
+  // cluster before the definition.
+  DenseMap<Operation *, CoarseSchedule::Cluster> opToCluster;
+  for (auto &op : forOp.getBody()->without_terminator()) {
+    if (schedule.count(&op) == 0) {
+      opToCluster[&op] = afterPrologue;
+    }
+  }
+  SmallVector<Operation *> queue;
+  for (auto [op, stage, cluster] : schedule.getOpsInOrder(forOp)) {
+    // We really only care about the producers from the last stage.
+    // Others will be scheduled before these ops anyway.
+    if (stage == numStages - 1) {
+      queue.push_back(op);
+    }
+  }
+  while (!queue.empty()) {
+    Operation *op = queue.pop_back_val();
+    for (auto user : op->getUsers()) {
+      if (opToCluster.count(user)) {
+        CoarseSchedule::Cluster userCluster = opToCluster[user];
+        CoarseSchedule::Cluster opCluster;
+        if (schedule.count(op))
+          opCluster = schedule[op].second;
+        else
+          opCluster = opToCluster[op];
+        if (*userCluster < *opCluster) {
+          opToCluster[user] = opCluster;
+          queue.push_back(user);
+        }
+      }
+    }
+  }
+  for (auto [op, cluster] : opToCluster) {
+    schedule.insert(op, numStages - 1, cluster);
+  }
+}
+
 namespace {
 bool hasLatenciesAssigned(scf::ForOp forOp,
                           const DenseMap<Operation *, int> &opLatency) {
@@ -202,59 +294,7 @@ CoarseSchedule getInitialSchedule(scf::ForOp forOp,
 
   return CoarseSchedule(0);
 }
-} // namespace
 
-// Find dependencies with distance of 1. They will go to the next stage,
-// but in the cluster before the current op.
-void scheduleDistanceOneDependencies(scf::ForOp forOp,
-                                     CoarseSchedule &schedule) {
-  int numStages = schedule.getNumStages();
-
-  // Mapping from the cluster to the cluster before it.
-  DenseMap<CoarseSchedule::ClusterHash, CoarseSchedule::Cluster> dist1Cluster;
-  for (auto &op : forOp.getBody()->without_terminator()) {
-    if (schedule.count(&op) == 0)
-      continue;
-    auto [stage, cluster] = schedule[&op];
-    // Can't schedule past the last stage.
-    if (stage == numStages - 1)
-      continue;
-    for (Value operand : getNestedOperands(&op)) {
-      if (auto arg = dyn_cast<BlockArgument>(operand)) {
-        if (arg.getArgNumber() > 0 && arg.getOwner() == op.getBlock()) {
-          auto yieldOp = op.getBlock()->getTerminator();
-          Value v = yieldOp->getOperand(arg.getArgNumber() - 1);
-          Operation *defOp = v.getDefiningOp();
-          if (defOp && schedule.count(defOp) == 0) {
-            if (isa<tt::LoadOp>(defOp)) {
-              // Exception: Schedule loads with a distance of 1 together
-              // with the current op.
-              schedule.insertIfAbsent(defOp, stage, cluster);
-              schedule.insertDepsOfOp(defOp, stage, cluster,
-                                      /*includeArg=*/true,
-                                      /*insertIfEarlier=*/true);
-            } else {
-              CoarseSchedule::ClusterHash clusterHash =
-                  CoarseSchedule::hashCluster(cluster);
-              if (dist1Cluster.count(clusterHash) == 0) {
-                dist1Cluster[clusterHash] =
-                    schedule.clusters.newBefore(cluster);
-              }
-              schedule.insertIfAbsent(defOp, stage + 1,
-                                      dist1Cluster[clusterHash]);
-              schedule.insertDepsOfOp(defOp, stage + 1,
-                                      dist1Cluster[clusterHash],
-                                      /*includeArg=*/true,
-                                      /*includeIfEarlier=*/true);
-            }
-          }
-        }
-      }
-    }
-  }
-}
-
-namespace {
 // Schedule the prologue and epilogue `if` ops in the loop, pushing them as
 // close to the loop boundaries as possible. Return the cluster after the
 // prologue (or the beginning of the loop if there is no prologue).
@@ -303,51 +343,7 @@ CoarseSchedule::Cluster schedulePrologueAndEpilogue(scf::ForOp forOp,
   }
   return afterPrologue;
 }
-} // namespace
 
-void scheduleRemainingToLastStage(scf::ForOp forOp, CoarseSchedule &schedule,
-                                  CoarseSchedule::Cluster afterPrologue) {
-  int numStages = schedule.getNumStages();
-  // Assign the rest of the ops to the last stage.
-  // Take care of the ordering of the ops - uses cannot be scheduled to the
-  // cluster before the definition.
-  DenseMap<Operation *, CoarseSchedule::Cluster> opToCluster;
-  for (auto &op : forOp.getBody()->without_terminator()) {
-    if (schedule.count(&op) == 0) {
-      opToCluster[&op] = afterPrologue;
-    }
-  }
-  SmallVector<Operation *> queue;
-  for (auto [op, stage, cluster] : schedule.getOpsInOrder(forOp)) {
-    // We really only care about the producers from the last stage.
-    // Others will be scheduled before these ops anyway.
-    if (stage == numStages - 1) {
-      queue.push_back(op);
-    }
-  }
-  while (!queue.empty()) {
-    Operation *op = queue.pop_back_val();
-    for (auto user : op->getUsers()) {
-      if (opToCluster.count(user)) {
-        CoarseSchedule::Cluster userCluster = opToCluster[user];
-        CoarseSchedule::Cluster opCluster;
-        if (schedule.count(op))
-          opCluster = schedule[op].second;
-        else
-          opCluster = opToCluster[op];
-        if (*userCluster < *opCluster) {
-          opToCluster[user] = opCluster;
-          queue.push_back(user);
-        }
-      }
-    }
-  }
-  for (auto [op, cluster] : opToCluster) {
-    schedule.insert(op, numStages - 1, cluster);
-  }
-}
-
-namespace {
 void scheduleLoop(scf::ForOp forOp,
                   const DenseMap<Operation *, int> &opLatency) {
   // Based on the latencies, schedule the key ops to the stages.
