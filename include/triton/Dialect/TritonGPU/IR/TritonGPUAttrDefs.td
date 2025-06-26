@@ -286,34 +286,10 @@ When vec=2, elements are swizzled in pairs of 2.  In other words, the element at
         }
 
         // ---- begin WMMA ----
-        if (mlir::isa<AMDWmmaEncodingAttr>(dotOpEnc.getParent())) {
-          int kDimIndex = dotOpEnc.getOpIdx() == 0 ? 1 : 0;
-          bool isKContig = order[0] == kDimIndex;
-
-          if (!isKContig) {
-            // Do not swizzle. In this case accesses will go in different banks even
-            // without swizzling.
-            return get(context, 1, 1, 1, order, CTALayout);
-          }
-
-          // kWidth: the number of elements each thread loads from shared memory in
-          // preparation for wmma instructions.
-          auto kWidth = dotOpEnc.getKWidth();
-          // max vectorization size for ds_load is 128 bits
-          int vectorSize = std::min(kWidth * typeWidthInBit, 128u) / typeWidthInBit;
-
-          const int numBanks = 32;
-          const int bankBitWidth = 32;
-          const int simdWidth = 16;
-
-          // Number of inner dimension rows per one pattern repeat
-          int innerDimLength = shape[order[0]];
-          int elemsPerOneBanksRow = (numBanks * bankBitWidth) / typeWidthInBit;
-
-          int perPhase = std::max(1, elemsPerOneBanksRow / innerDimLength);
-          int maxPhase = std::max(std::min(simdWidth / perPhase, innerDimLength / vectorSize), 1);
-
-          return get(context, vectorSize, perPhase, maxPhase, order, CTALayout);
+        if (auto wmmaEnc = mlir::dyn_cast<AMDWmmaEncodingAttr>(dotOpEnc.getParent())) {
+          return wmmaEnc.composeSharedLayoutForOperand(
+              CTALayout, dotOpEnc.getOpIdx(), shape, order, dotOpEnc.getKWidth(),
+              typeWidthInBit, needTrans);
         }
 
 
@@ -1239,6 +1215,13 @@ Row |
                                           Type elemType, int kWidth, int kDim, int opIdx) const;
     SmallVector<unsigned> getRepOrderForOperand(int opIdx) const;
     static SmallVector<unsigned> getMNKDimPerInstr();
+
+    // Returns a swizzled shared layout matching this WMMA layout for the
+    // dot operand at the given |operandIdx| with |operandShape|.
+    SwizzledSharedEncodingAttr composeSharedLayoutForOperand(
+        CTALayoutAttr ctaLayout, int operandIdx, ArrayRef<int64_t> operandShape,
+        ArrayRef<unsigned> sharedOrder, unsigned kWidth,
+        unsigned elemBitWidth, bool needTrans) const;
   }];
 }
 
