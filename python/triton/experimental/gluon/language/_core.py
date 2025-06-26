@@ -279,9 +279,9 @@ def arange(start, end, layout, _semantic=None):
 
 
 @builtin
-def convert_layout(value, layout, _semantic=None):
+def convert_layout(value, layout, assert_trivial=False, _semantic=None):
     layout = _unwrap_if_constexpr(layout)
-    return _semantic.convert_layout(value, layout)
+    return _semantic.convert_layout(value, layout, assert_trivial)
 
 
 @builtin

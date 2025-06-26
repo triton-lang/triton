@@ -633,7 +633,7 @@ def _mul_f32x2(a, b):
 def _attn_fwd_correction_compute(config, alpha_consumer, o_consumer):
     alpha_layout: gl.constexpr = gl.SliceLayout(1, config.o_splitn_layout)
     alpha = alpha_consumer.get(config.alpha_2d_layout)
-    alpha = gl.convert_layout(alpha.reshape([config.SPLIT_M]), alpha_layout)
+    alpha = gl.convert_layout(alpha.reshape([config.SPLIT_M]), alpha_layout, assert_trivial=True)
 
     o_tmem, o_bar = o_consumer.acquire()
     if config.SPLIT_D_FACTOR == 1:
@@ -689,6 +689,26 @@ def _attn_fwd_correction(config, info0, info1, STAGE: gl.constexpr):
 
 
 @gluon.jit
+def _reduce_fadd2(p0a, p1a, p0b, p1b):
+    return gl.inline_asm_elementwise(
+        """
+        {
+            .reg .b64 rc, ra, rb;
+            mov.b64 ra, { $2, $4 };
+            mov.b64 rb, { $3, $5 };
+            add.f32x2 rc, ra, rb;
+            mov.b64 { $0, $1 }, rc;
+        }
+        """,
+        "=r,=r,r,r,r,r",
+        [p0a, p0b, p1a, p1b],
+        dtype=[gl.float32, gl.float32],
+        is_pure=True,
+        pack=1,
+    )
+
+
+@gluon.jit
 def _softmax_inner_loop(tile_id: gl.constexpr, config, prog,  #
                         qk_consumer, p_producer, alpha_producer,  #
                         offs_m, offs_n, m_i, l_i,  #
@@ -696,8 +716,9 @@ def _softmax_inner_loop(tile_id: gl.constexpr, config, prog,  #
     lo, hi = prog.get_loop_bounds(STAGE)
 
     for start_n in range(lo, hi, config.BLOCK_N):
-        qk = qk_consumer.get(config.qk_layout)
         p_tmem, p_bar = p_producer.acquire()
+        alpha_tmem, alpha_bar = alpha_producer.acquire()
+        qk = qk_consumer.get(config.qk_layout)
 
         if STAGE == 2:
             # Prevent LLVM from hoisting the partial sums, which triggers spilling.
@@ -706,10 +727,13 @@ def _softmax_inner_loop(tile_id: gl.constexpr, config, prog,  #
             mask = offs_m[:, None] >= (start_n + offs_n[None, :])
             qk = gl.where(mask, qk, -1.0e8)
         m_ij = gl.maximum(m_i, gl.max(qk, 1) * config.qk_scale)
-        qk = qk * config.qk_scale - m_ij[:, None]
         alpha = gl.exp2(m_i - m_ij)
 
-        alpha_producer.emplace(gl.convert_layout(alpha.expand_dims(1), config.alpha_2d_layout))
+        alpha_tmem.store(gl.convert_layout(alpha.expand_dims(1), config.alpha_2d_layout, assert_trivial=True))
+        mbarrier.arrive(alpha_bar, count=1)
+
+        qk = _mul_f32x2(qk, gl.full(config.qk_shape, config.qk_scale, gl.float32, qk.type.layout))
+        qk = _add_f32x2(qk, -m_ij[:, None])
 
         qk0, qk1, = qk.reshape([config.SPLIT_M, 2, config.BLOCK_N // 2]).permute(0, 2, 1).split()
         p0 = gl.exp2(qk0)
@@ -717,11 +741,36 @@ def _softmax_inner_loop(tile_id: gl.constexpr, config, prog,  #
         p1 = gl.exp2(qk1)
         p_tmem.slice(config.BLOCK_N // 2, config.BLOCK_N // 2).store(p1.to(config.dtype))
         mbarrier.arrive(p_bar, count=1)
-        p = gl.join(p0, p1).permute(0, 2, 1).reshape([config.SPLIT_M, config.BLOCK_N])
-        p = gl.convert_layout(p, config.qk_layout)
 
-        l_ij = gl.sum(p, 1)
+        # l_ij = gl.sum(p, 1)
+        p = gl.join(p0, p1).permute(0, 2, 1).reshape([config.SPLIT_M, config.BLOCK_N])
+        p = gl.convert_layout(p, config.qk_layout, assert_trivial=True)
+        l_ij = gl.sum(p, axis=1)
+        # p0 = gl.convert_layout(p0, config.qk_layout, assert_trivial=True)
+        # p1 = gl.convert_layout(p1, config.qk_layout, assert_trivial=True)
+        # l_ij0, l_ij1 = gl.reduce((p0, p1), axis=1, combine_fn=_reduce_fadd2)
+        # l_ij = l_ij0 + l_ij1
+
+        # l_i = l_i * alpha + l_ij
         l_i = l_i * alpha + l_ij
+        # l_i0, l_i1 = gl.inline_asm_elementwise(
+        #     """
+        #     {
+        #         .reg .b64 rout, rli, rlij, ralpha;
+        #         mov.b64 rli, { $2, $4 };
+        #         mov.b64 rlij, { $3, $5 };
+        #         mov.b64 ralpha, { $6, $6 };
+        #         fma.rn.f32x2 rout, rli, ralpha, rlij;
+        #         mov.b64 { $0, $1 }, rout;
+        #     }
+        #     """,
+        #     "=r,=r,r,r,r,r,r",
+        #     [l_i0, l_ij0, l_i1, l_ij1, alpha],
+        #     dtype=[gl.float32, gl.float32],
+        #     is_pure=True,
+        #     pack=1,
+        # )
+
         m_i = m_ij
 
     return m_i, l_i
@@ -768,14 +817,14 @@ def _softmax_tile(tile_id: gl.constexpr, config, info, M, desc_o, STAGE: gl.cons
         mbarrier.arrive(e_bar, count=1)
 
         m_i += gl.log2(l_i)
-        o = o / gl.convert_layout(l_i, gl.SliceLayout(1, config.o_layout))[:, None]
+        o = o / gl.convert_layout(l_i, gl.SliceLayout(1, config.o_layout), assert_trivial=True)[:, None]
 
         coalesced: gl.constexpr = gl.BlockedLayout([1], [32], [4], [0])
         offs_m = prog.start_m * config.BLOCK_M
         offs_m += gl.arange(tile_id * config.SPLIT_M, (tile_id + 1) * config.SPLIT_M, coalesced)
 
         m_ptrs = M + prog.off_hz * config.N_CTX + offs_m
-        gl.store(m_ptrs, gl.convert_layout(m_i, coalesced))
+        gl.store(m_ptrs, gl.convert_layout(m_i, coalesced, assert_trivial=True))
         tma.store_wait(0)
         o_smem.store(o.to(config.dtype))
         fence_async_shared()
@@ -913,7 +962,7 @@ def attention_forward(q, k, v, causal, sm_scale):
         desc_q, desc_k, desc_v, desc_o,  #
         BLOCK_M, BLOCK_N, HEAD_DIM_K, GROUP_SIZE_N, NUM_SMS,  #
         stage, torch_dtype_to_triton(q.dtype),  #
-        num_warps=4)
+        num_warps=4, maxnreg=128)
 
     return o, M
 
@@ -962,7 +1011,7 @@ def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype):
 # Benchmarking
 # ===-----------------------------------------------------------------------===#
 
-profile = False
+profile = True
 
 if not profile:
     BATCH = [4]
@@ -973,9 +1022,10 @@ if not profile:
     N_CTX = [2**i for i in range(10, 17)]
 else:
     BATCH = [4]
+    N_HEADS = [32]
     HEAD_DIM = [64]
-    causal = [False]
-    providers = ["cudnn-fp16"]
+    causal = [True]
+    providers = ["triton-fp16"]
     N_CTX = [16 * 1024]
 
 bench_configs = []
