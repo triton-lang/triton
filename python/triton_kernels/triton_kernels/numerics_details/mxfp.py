@@ -81,12 +81,8 @@ def upcast_from_mxfp(tensor: torch.Tensor, scale: torch.Tensor, dtype: torch.dty
         f"Invalid tensor dtype {tensor.dtype=}"
     assert scale.dtype == torch.uint8, f"Invalid scale dtype {scale.dtype=}"
     assert dtype in (torch.float16, torch.bfloat16), f"Invalid output dtype {dtype=}"
-    # unpad
-    logical_quant_dim = tensor.shape[axis] * (2 if tensor.dtype == torch.uint8 else 1)
-    unpadded_scale_shape = (*tensor.shape[:axis], triton.cdiv(logical_quant_dim, 32), *tensor.shape[axis + 1:])
-    slices = tuple(slice(0, size) for size in unpadded_scale_shape)
-    scale = scale[slices].contiguous()
     # upcast
+    logical_quant_dim = tensor.shape[axis] * (2 if tensor.dtype == torch.uint8 else 1)
     tensor = tensor.transpose(axis, tensor.ndim - 1).contiguous()
     scale = scale.transpose(axis, scale.ndim - 1).contiguous()
     out = torch.empty((*tensor.shape[:-1], logical_quant_dim), dtype=dtype, device=tensor.device)
@@ -271,19 +267,13 @@ def upcast_from_mxfp_torch(tensor: torch.Tensor, scale: torch.Tensor, target_dty
     scale = scale.transpose(axis, scale.ndim - 1)
     tensor = tensor.transpose(axis, tensor.ndim - 1)
 
-    # Trim padding
-    logical_quant_dim = tensor.shape[-1] * (2 if tensor.dtype == torch.uint8 else 1)
-    unpadded_scale_shape = (*tensor.shape[:-1], triton.cdiv(logical_quant_dim, 32))
-    slices = tuple(slice(0, size) for size in unpadded_scale_shape)
-    scale = scale[slices].contiguous()
-
     dq_scale = (scale.to(torch.int32) << 23).view(torch.float32)  # Shift to the exponent and bitcast to fp32
-
     if tensor.dtype == torch.uint8:
         fp32_tensor = cvt_e2m1_to_fp32(tensor)
     else:
         fp32_tensor = tensor.to(torch.float32)
 
+    logical_quant_dim = tensor.shape[-1] * (2 if tensor.dtype == torch.uint8 else 1)
     axis_shape = fp32_tensor.size(-1)
     padded_axis_shape = triton.cdiv(logical_quant_dim, 32) * 32
     pad_size = padded_axis_shape - axis_shape
