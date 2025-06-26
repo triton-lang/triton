@@ -1,3 +1,26 @@
+set(LLVM_TARGET_DEFINITIONS TestDialect.td)
+mlir_tablegen(TestDialect.h.inc -gen-dialect-decls -dialect=tt_test)
+mlir_tablegen(TestDialect.cpp.inc -gen-dialect-defs -dialect=tt_test)
+mlir_tablegen(TestGPUAttrDefs.h.inc -gen-attrdef-decls --attrdefs-dialect=tt_test)
+mlir_tablegen(TestGPUAttrDefs.cpp.inc -gen-attrdef-defs --attrdefs-dialect=tt_test)
+add_public_tablegen_target(TritonTestGPUAttrDefsIncGen)
+
+include_directories(${CMAKE_CURRENT_BINARY_DIR}) # Tablegen'd files
+
+add_triton_library(TritonGPUTestIR
+
+    DEPENDS
+    TritonGPUTableGen
+    TritonGPUAttrDefsIncGen
+    TritonGPUTypeInterfacesIncGen
+    TritonTestGPUAttrDefsIncGen
+
+    LINK_LIBS PUBLIC
+    MLIRGPUDialect
+    TritonIR
+    TritonTools
+)
+
 add_triton_ut(
   NAME TestSwizzling
   SRCS SwizzleTest.cpp
@@ -12,6 +35,7 @@ add_triton_ut(
   LIBS
     MLIRParser
     TritonGPUIR
+    TritonGPUTestIR
     TritonGPUTransforms
     TritonNvidiaGPUTransforms
 )
