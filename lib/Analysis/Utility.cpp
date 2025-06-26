@@ -616,7 +616,7 @@ unsigned getNumScratchElements(ArrayRef<unsigned> shape) {
   return product<unsigned>(shape);
 }
 
-bool supportMMA(triton::DotOp op, int version, bool supportF64mma) {
+bool supportMMA(triton::DotOp op, int version) {
   // Refer to mma section for the data type supported by Volta and Hopper
   // Tensor Core in
   // https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#warp-level-matrix-fragment-mma-884-f16
@@ -675,11 +675,10 @@ bool supportMMA(triton::DotOp op, int version, bool supportF64mma) {
   if (aElemTy.isF32() && bElemTy.isF32()) {
     return op.getInputPrecision() == InputPrecision::TF32 && version >= 2;
   }
-  return supportMMA(op.getA(), version, supportF64mma) &&
-         supportMMA(op.getB(), version, supportF64mma);
+  return supportMMA(op.getA(), version) && supportMMA(op.getB(), version);
 }
 
-bool supportMMA(Value value, int version, bool supportF64mma) {
+bool supportMMA(Value value, int version) {
   // Tell whether a DotOp support MMA by the operand type(either $a or $b).
   // We cannot get both the operand types(in TypeConverter), here we assume the
   // types of both the operands are identical here.
@@ -692,8 +691,7 @@ bool supportMMA(Value value, int version, bool supportF64mma) {
   bool isFP8 = llvm::isa<Float8E5M2Type, Float8E4M3FNType, Float8E5M2FNUZType,
                          Float8E4M3FNUZType>(elemTy);
   return isFP8 || elemTy.isF16() || elemTy.isBF16() ||
-         (elemTy.isF32() && version >= 2) ||
-         (elemTy.isF64() && supportF64mma) ||
+         ((elemTy.isF32() || elemTy.isF64()) && version >= 2) ||
          (elemTy.isInteger(8) && version >= 2);
 }
 

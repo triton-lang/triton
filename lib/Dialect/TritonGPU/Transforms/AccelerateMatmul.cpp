@@ -44,12 +44,8 @@ static int getMMAVersionSafe(int computeCapability, DotOp op) {
   } else {
     assert(false && "computeCapability not supported");
   }
-  bool supportF64mma = false;
-  if (computeCapability == 80) {
-    supportF64mma = true; // TODO: support F64 MMA for SM90
-  }
   for (int baseVersion : versionsSupported) {
-    if (supportMMA(op, baseVersion, supportF64mma))
+    if (supportMMA(op, baseVersion))
       return baseVersion;
     if (baseVersion == 3) {
       auto remark = op.emitRemark()
@@ -336,6 +332,14 @@ public:
     auto oldAType = cast<RankedTensorType>(a.getType());
     auto oldBType = cast<RankedTensorType>(b.getType());
     auto oldRetType = cast<RankedTensorType>(dotOp.getType());
+
+    // Only SM80 support F64 MMA yet.
+    if ((oldAType.getElementType().isF64() ||
+         oldBType.getElementType().isF64() ||
+         oldRetType.getElementType().isF64()) &&
+        computeCapability != 80) {
+      return failure();
+    }
 
     // get MMA encoding for the given number of warps
     auto CTALayout = getCTALayout(oldRetType.getEncoding());

@@ -216,9 +216,9 @@ unsigned getNumScratchElements(ArrayRef<unsigned> shape);
 
 bool supportWMMA(triton::DotOp op);
 
-bool supportMMA(triton::DotOp op, int version, bool supportF64mma);
+bool supportMMA(triton::DotOp op, int version);
 
-bool supportMMA(Value value, int version, bool supportF64mma);
+bool supportMMA(Value value, int version);
 
 // Conversion from `srcTy` to `dstTy` involving the minimum amount of data
 // transfer provided that both types can be converted to LL (if it can't it'll
