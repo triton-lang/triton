@@ -511,3 +511,23 @@ def test_jit_init():
     # CHECK:         [[RANGE:%.*]] = tt.make_range {end = 4 : i32, start = 0 : i32}
     # CHECK:         [[Y:%.*]] = arith.addi [[X]], [[RANGE]]
     # CHECK:         return [[Y]]
+
+
+@filecheck_test
+@triton.jit
+def test_modify_if_livein():
+    # CHECK-LABEL: test_modify_if_livein
+    none_livein = None  # noqa: F841
+
+    # CHECK: [[LOOP_OUT:%.*]] = scf.for {{.*}} iter_args([[BOX:%.*]] = %true)
+    # CHECK:   [[LIVEOUT:%.*]] = scf.if [[BOX]]
+    # CHECK:     yield %false
+    # CHECK:   else
+    # CHECK:     yield [[BOX]]
+    # CHECK:   yield [[LIVEOUT]]
+    # CHECK: call @{{.*}}anchor{{.*}}([[LOOP_OUT]])
+    box = Box(tl.tensor)(tl.core.to_tensor(True))
+    for i in range(10):
+        if box.value:
+            box.value = False
+    anchor(box.value)
