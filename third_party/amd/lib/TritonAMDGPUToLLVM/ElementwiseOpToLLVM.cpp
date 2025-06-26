@@ -23,241 +23,6 @@ namespace {
 //===----------------------------------------------------------------------===//
 // Data type conversion utility functions
 //===----------------------------------------------------------------------===//
-
-template <typename FPType> struct FPTypeInfo {
-  FPTypeInfo(Location loc, ConversionPatternRewriter &rewriter,
-             TritonLLVMOpBuilder &builder)
-      : loc(loc), rewriter(rewriter), b(builder) {}
-  IntegerType getIntType() {
-    if constexpr (std::is_same_v<FPType, Float32Type>) {
-      return i32_ty;
-    }
-    if constexpr (std::is_same_v<FPType, Float16Type> ||
-                  std::is_same_v<FPType, BFloat16Type>) {
-      return i16_ty;
-    }
-    if constexpr (std::is_same_v<FPType, Float8E4M3FNType> ||
-                  std::is_same_v<FPType, Float8E5M2Type>) {
-      return i8_ty;
-    }
-    return nullptr;
-  }
-  Value getSignMask() {
-    if constexpr (std::is_same_v<FPType, Float32Type>) {
-      return b.i32_val(0x80000000);
-    }
-    if constexpr (std::is_same_v<FPType, Float16Type> ||
-                  std::is_same_v<FPType, BFloat16Type>) {
-      return b.i16_val(0x8000);
-    }
-    if constexpr (std::is_same_v<FPType, Float8E4M3FNType> ||
-                  std::is_same_v<FPType, Float8E5M2Type>) {
-      return b.i8_val(0x80);
-    }
-    return nullptr;
-  }
-  Value getExpMask() {
-    if constexpr (std::is_same_v<FPType, Float32Type>) {
-      return b.i32_val(0x7F800000);
-    }
-    if constexpr (std::is_same_v<FPType, Float16Type>) {
-      return b.i16_val(0x7C00);
-    }
-    if constexpr (std::is_same_v<FPType, BFloat16Type>) {
-      return b.i16_val(0x7F80);
-    }
-    if constexpr (std::is_same_v<FPType, Float8E4M3FNType>) {
-      return b.i8_val(0x78);
-    }
-    if constexpr (std::is_same_v<FPType, Float8E5M2Type>) {
-      return b.i8_val(0x7C);
-    }
-    return nullptr;
-  }
-  Value getMantissaMask() {
-    if constexpr (std::is_same_v<FPType, Float32Type>) {
-      return b.i32_val(0x007FFFFF);
-    }
-    if constexpr (std::is_same_v<FPType, Float16Type>) {
-      return b.i16_val(0x03FF);
-    }
-    if constexpr (std::is_same_v<FPType, BFloat16Type>) {
-      return b.i16_val(0x007F);
-    }
-    if constexpr (std::is_same_v<FPType, Float8E4M3FNType>) {
-      return b.i8_val(0x07);
-    }
-    if constexpr (std::is_same_v<FPType, Float8E5M2Type>) {
-      return b.i8_val(0x03);
-    }
-    return nullptr;
-  }
-  bool allowedNegativeZero() {
-    // Note: all `FPType` which are prefixed with UZ must return false;
-    return true;
-  }
-  float getMaxAsFloat() {
-    uint32_t value = 0;
-    if constexpr (std::is_same_v<FPType, Float32Type>) {
-      value = 0x7F7FFFFF;
-    }
-    if constexpr (std::is_same_v<FPType, Float16Type>) {
-      value = 0x477FE000;
-    }
-    if constexpr (std::is_same_v<FPType, BFloat16Type>) {
-      value = 0x7F7F0000;
-    }
-    if constexpr (std::is_same_v<FPType, Float8E4M3FNType>) {
-      value = 0x43E00000;
-    }
-    if constexpr (std::is_same_v<FPType, Float8E5M2Type>) {
-      value = 0x47600000;
-    }
-    return *(reinterpret_cast<float *>(&value));
-  }
-
-  float getMinAsFloat() {
-    uint32_t value = 0;
-    if constexpr (std::is_same_v<FPType, Float32Type>) {
-      value = 0xFF7FFFFF;
-    }
-    if constexpr (std::is_same_v<FPType, Float16Type>) {
-      value = 0xC77FE000;
-    }
-    if constexpr (std::is_same_v<FPType, BFloat16Type>) {
-      value = 0xFF7F0000;
-    }
-    if constexpr (std::is_same_v<FPType, Float8E4M3FNType>) {
-      value = 0xC3E00000;
-    }
-    if constexpr (std::is_same_v<FPType, Float8E5M2Type>) {
-      value = 0xC7600000;
-    }
-    return *(reinterpret_cast<float *>(&value));
-  }
-
-  Value getPositiveNan() {
-    if constexpr (std::is_same_v<FPType, Float32Type>) {
-      return toLLVMIntValue(0x7FFFFFFF);
-    }
-    if constexpr (std::is_same_v<FPType, Float16Type>) {
-      return toLLVMIntValue(0x7FFF);
-    }
-    if constexpr (std::is_same_v<FPType, BFloat16Type>) {
-      return toLLVMIntValue(0x7FFF);
-    }
-    if constexpr (std::is_same_v<FPType, Float8E4M3FNType> ||
-                  std::is_same_v<FPType, Float8E5M2Type>) {
-      return toLLVMIntValue(0x7F);
-    }
-    return nullptr;
-  }
-
-  Value getMaxPositive() {
-    if constexpr (std::is_same_v<FPType, Float32Type>) {
-      return toLLVMIntValue(0x7F7FFFFF);
-    }
-    if constexpr (std::is_same_v<FPType, Float16Type>) {
-      return toLLVMIntValue(0x7BFF);
-    }
-    if constexpr (std::is_same_v<FPType, BFloat16Type>) {
-      return toLLVMIntValue(0x7F7F);
-    }
-    if constexpr (std::is_same_v<FPType, Float8E4M3FNType>) {
-      return toLLVMIntValue(0x7E);
-    }
-    if constexpr (std::is_same_v<FPType, Float8E5M2Type>) {
-      return toLLVMIntValue(0x7B);
-    }
-    return nullptr;
-  }
-
-  Value toLLVMIntValue(int32_t val) {
-    if constexpr (std::is_same_v<FPType, Float32Type>) {
-      return b.i32_val(val);
-    }
-    if constexpr (std::is_same_v<FPType, Float16Type> ||
-                  std::is_same_v<FPType, BFloat16Type>) {
-      return b.i16_val(val);
-    }
-    if constexpr (std::is_same_v<FPType, Float8E4M3FNType> ||
-                  std::is_same_v<FPType, Float8E5M2Type>) {
-      return b.i8_val(val);
-    }
-    return nullptr;
-  }
-  Value toLLVMFloatValue(float val) {
-    if constexpr (std::is_same_v<FPType, Float32Type>) {
-      return b.f32_val(val);
-    }
-    if constexpr (std::is_same_v<FPType, Float16Type>) {
-      return b.f16_val(val);
-    }
-    if constexpr (std::is_same_v<FPType, BFloat16Type>) {
-      return b.bf16_val(val);
-    }
-    // skipped on purpose: Float8E4M3FNType, Float8E5M2Type
-    return nullptr;
-  }
-  Location loc;
-  ConversionPatternRewriter &rewriter;
-  TritonLLVMOpBuilder &b;
-};
-
-template <typename SrcFPType, typename DstFPType>
-Value clampOCP(Location loc, ConversionPatternRewriter &rewriter, Value orig,
-               Value converted) {
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  FPTypeInfo<SrcFPType> srcFpInfo(loc, rewriter, b);
-  FPTypeInfo<DstFPType> dstFpInfo(loc, rewriter, b);
-
-  Value srcTypeZero = srcFpInfo.toLLVMIntValue(0);
-  Value dstTypeZero = dstFpInfo.toLLVMIntValue(0);
-
-  auto srcIntType = srcFpInfo.getIntType();
-
-  auto srcIntValue = b.bitcast(orig, srcIntType);
-  Value isSrcNegative = b.icmp_eq(b.and_(srcIntValue, srcFpInfo.getSignMask()),
-                                  srcFpInfo.getSignMask());
-  Value dstSign = b.select(isSrcNegative, dstFpInfo.getSignMask(), dstTypeZero);
-  Value srcExp = b.and_(srcIntType, srcIntValue, srcFpInfo.getExpMask());
-  Value srcMantissa =
-      b.and_(srcIntType, srcIntValue, srcFpInfo.getMantissaMask());
-
-  Value isSrcExpZero = b.icmp_eq(srcExp, srcTypeZero);
-  Value isSrcExpFull = b.icmp_eq(srcExp, srcFpInfo.getExpMask());
-
-  Value isSrcMantissaZero = b.icmp_eq(srcMantissa, srcTypeZero);
-  Value isSrcMantissaNonZero = b.icmp_ne(srcMantissa, srcTypeZero);
-
-  Value isSrcNan = b.and_(isSrcExpFull, isSrcMantissaNonZero);
-  Value isSrcInf = b.and_(isSrcExpFull, isSrcMantissaZero);
-
-  Value isSrcOverflowMax =
-      b.fcmp_ogt(orig, srcFpInfo.toLLVMFloatValue(dstFpInfo.getMaxAsFloat()));
-  Value isSrcOverflowMin =
-      b.fcmp_olt(orig, srcFpInfo.toLLVMFloatValue(dstFpInfo.getMinAsFloat()));
-  Value isSrcOverflow = b.or_(isSrcOverflowMax, isSrcOverflowMin);
-
-  Value clamped =
-      b.select(isSrcNan, b.or_(dstSign, dstFpInfo.getPositiveNan()), converted);
-  if (dstFpInfo.allowedNegativeZero()) {
-    clamped = b.select(isSrcInf, b.or_(dstSign, dstFpInfo.getMaxPositive()),
-                       converted);
-  } else {
-    clamped = b.select(isSrcInf, dstFpInfo.getPositiveNan(), converted);
-  }
-  clamped = b.select(isSrcOverflow, b.or_(dstSign, dstFpInfo.getMaxPositive()),
-                     converted);
-  if (!dstFpInfo.allowedNegativeZero()) {
-    Value isSrcNegativieZero =
-        b.and_(b.and_(isSrcExpZero, isSrcMantissaZero), isSrcNegative);
-    clamped =
-        b.select(isSrcNegativieZero, dstFpInfo.toLLVMIntValue(0), converted);
-  }
-  return clamped;
-}
-
 // Convert Ocp Fp8/Bf8 to Fp16/Bf16/Fp32 on CDNA4
 template <typename ConvertOp>
 static SmallVector<Value>
@@ -379,13 +144,8 @@ static SmallVector<Value>
 Fp16_to_Fp8E5M2_RTNE_HW(Location loc, ConversionPatternRewriter &rewriter,
                         const SmallVector<Value> &v) {
   assert(v.size() == 2);
-  auto convertedValues = cvtScalePkDowncastToFp8<ROCDL::CvtScaleF32PkBf8F16Op>(
-      loc, rewriter, v[0], v[1]);
-  convertedValues[0] = clampOCP<Float16Type, Float8E5M2Type>(
-      loc, rewriter, v[0], convertedValues[0]);
-  convertedValues[1] = clampOCP<Float16Type, Float8E5M2Type>(
-      loc, rewriter, v[1], convertedValues[1]);
-  return convertedValues;
+  return cvtScalePkDowncastToFp8<ROCDL::CvtScaleF32PkBf8F16Op>(loc, rewriter,
+                                                               v[0], v[1]);
 }
 
 ConverterT Fp16_to_Fp8E5M2_RTNE(AMD::ISAFamily isaFamily) {
@@ -520,14 +280,8 @@ static SmallVector<Value>
 Fp16_to_Fp8E4M3FN_RTNE_HW(Location loc, ConversionPatternRewriter &rewriter,
                           const SmallVector<Value> &v) {
   assert(v.size() == 2);
-  auto convertedValues = cvtScalePkDowncastToFp8<ROCDL::CvtScaleF32PkFp8F16Op>(
-      loc, rewriter, v[0], v[1]);
-
-  convertedValues[0] = clampOCP<Float16Type, Float8E4M3FNType>(
-      loc, rewriter, v[0], convertedValues[0]);
-  convertedValues[1] = clampOCP<Float16Type, Float8E4M3FNType>(
-      loc, rewriter, v[1], convertedValues[1]);
-  return convertedValues;
+  return cvtScalePkDowncastToFp8<ROCDL::CvtScaleF32PkFp8F16Op>(loc, rewriter,
+                                                               v[0], v[1]);
 }
 
 ConverterT Fp16_to_Fp8E4M3FN_RTNE(AMD::ISAFamily isaFamily) {
@@ -615,14 +369,8 @@ static SmallVector<Value> Fp32_to_Fp8E4M3FN(Location loc,
                                             ConversionPatternRewriter &rewriter,
                                             const SmallVector<Value> &v) {
   assert(v.size() == 2);
-  auto convertedValues = cvtScalePkDowncastToFp8<ROCDL::CvtScaleF32PkFp8F32Op>(
-      loc, rewriter, v[0], v[1]);
-
-  convertedValues[0] = clampOCP<Float32Type, Float8E4M3FNType>(
-      loc, rewriter, v[0], convertedValues[0]);
-  convertedValues[1] = clampOCP<Float32Type, Float8E4M3FNType>(
-      loc, rewriter, v[1], convertedValues[1]);
-  return convertedValues;
+  return cvtScalePkDowncastToFp8<ROCDL::CvtScaleF32PkFp8F32Op>(loc, rewriter,
+                                                               v[0], v[1]);
 }
 
 // Convert Fp32 to OCP Bf8 on CDNA4
@@ -630,13 +378,8 @@ static SmallVector<Value>
 Fp32_to_Fp8E5M2_RTNE(Location loc, ConversionPatternRewriter &rewriter,
                      const SmallVector<Value> &v) {
   assert(v.size() == 2);
-  auto convertedValues = cvtScalePkDowncastToFp8<ROCDL::CvtScaleF32PkBf8F32Op>(
-      loc, rewriter, v[0], v[1]);
-  convertedValues[0] = clampOCP<Float32Type, Float8E5M2Type>(
-      loc, rewriter, v[0], convertedValues[0]);
-  convertedValues[1] = clampOCP<Float32Type, Float8E5M2Type>(
-      loc, rewriter, v[1], convertedValues[1]);
-  return convertedValues;
+  return cvtScalePkDowncastToFp8<ROCDL::CvtScaleF32PkBf8F32Op>(loc, rewriter,
+                                                               v[0], v[1]);
 }
 
 // Fp32 -> Nanoo Bf8 on CDNA3
@@ -652,8 +395,7 @@ static SmallVector<Value>
 Fp32_to_Fp8E4M3FNUZ(Location loc, ConversionPatternRewriter &rewriter,
                     const SmallVector<Value> &v) {
   assert(v.size() == 2);
-  auto ret = cvtPkFp32ToF8<ROCDL::CvtPkFp8F32Op>(loc, rewriter, v[0], v[1]);
-  return ret;
+  return cvtPkFp32ToF8<ROCDL::CvtPkFp8F32Op>(loc, rewriter, v[0], v[1]);
 }
 
 // Nanoo Bf8 -> Fp32 on CDNA3
@@ -1193,13 +935,8 @@ static SmallVector<Value>
 Bf16_to_Fp8E5M2_HW(Location loc, ConversionPatternRewriter &rewriter,
                    const SmallVector<Value> &v) {
   assert(v.size() == 2);
-  auto convertedValues = cvtScalePkDowncastToFp8<ROCDL::CvtScaleF32PkBf8Bf16Op>(
-      loc, rewriter, v[0], v[1]);
-  convertedValues[0] = clampOCP<BFloat16Type, Float8E5M2Type>(
-      loc, rewriter, v[0], convertedValues[0]);
-  convertedValues[1] = clampOCP<BFloat16Type, Float8E5M2Type>(
-      loc, rewriter, v[1], convertedValues[1]);
-  return convertedValues;
+  return cvtScalePkDowncastToFp8<ROCDL::CvtScaleF32PkBf8Bf16Op>(loc, rewriter,
+                                                                v[0], v[1]);
 }
 
 static ConverterT Bf16_to_Fp8E5M2(AMD::ISAFamily isaFamily) {
@@ -1211,14 +948,8 @@ static SmallVector<Value> Bf16_to_Fp8E4M3FN(Location loc,
                                             ConversionPatternRewriter &rewriter,
                                             const SmallVector<Value> &v) {
   assert(v.size() == 2);
-  auto convertedValues = cvtScalePkDowncastToFp8<ROCDL::CvtScaleF32PkFp8Bf16Op>(
-      loc, rewriter, v[0], v[1]);
-
-  convertedValues[0] = clampOCP<BFloat16Type, Float8E4M3FNType>(
-      loc, rewriter, v[0], convertedValues[0]);
-  convertedValues[1] = clampOCP<BFloat16Type, Float8E4M3FNType>(
-      loc, rewriter, v[1], convertedValues[1]);
-  return convertedValues;
+  return cvtScalePkDowncastToFp8<ROCDL::CvtScaleF32PkFp8Bf16Op>(loc, rewriter,
+                                                                v[0], v[1]);
 }
 
 // fp8e4m3fn to bf16
