@@ -42,7 +42,7 @@ def async_copy_global_to_shared(smem, pointer, mask=None, cache_modifier="", evi
 @builtin
 def mbarrier_arrive(mbarrier, increment_count=True, _semantic=None):
     """
-    Arrive on an mbarrier after completing outstanding async copies.
+    Arrive on the mbarrier once all outstanding async copies are complete.
 
     Args:
         mbarrier (shared_memory_descriptor): Barrier object to arrive on.
@@ -68,7 +68,7 @@ def wait_group(num_outstanding=0, _semantic=None):
     Wait for outstanding asynchronous copy group operations.
 
     Args:
-        num_outstanding (int): Number of outstanding copies to wait for. Defaults to 0.
+        num_outstanding (int): Wait until `num_outstanding` or less async copy groups in-flight. Defaults to 0.
     """
     num_outstanding = _unwrap_if_constexpr(num_outstanding)
     _semantic.builder.create_async_wait_group(num_outstanding)

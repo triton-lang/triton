@@ -25,8 +25,8 @@ def warpgroup_mma(a, b, acc, *, use_acc=True, precision=None, max_num_imprecise_
     acc = a * b + (acc if use_acc else 0)
 
     Args:
-        a (tensor): First input tensor.
-        b (tensor): Second input tensor.
+        a (tensor or shared_memory_descriptor): Left hand side operand.
+        b (tensor orshared_memory_descriptor): Right hand side operand.
         acc (tensor): Accumulator tensor.
         use_acc (bool): Whether to use the initial value of the accumulator. Defaults to True.
         precision (str, optional): Dot input precision. Defaults to builder default.
@@ -68,7 +68,7 @@ def warpgroup_mma_wait(num_outstanding=0, deps=None, _semantic=None):
 
     Args:
         num_outstanding (int): Number of outstanding warpgroup MMA operations to wait for. Defaults to 0.
-        deps (Sequence[tensor]): List of dependencies to wait on. Used to prevent the reordering of the operations.
+        deps (Sequence[tensor]): List of dependencies that need to be kept alive while the mma is unfinished.
     """
     deps = [x.handle for x in deps] if deps is not None else []
     num_outstanding = _core._unwrap_if_constexpr(num_outstanding)

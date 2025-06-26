@@ -193,17 +193,6 @@ class shared_memory_descriptor_type(base_type):
 class shared_memory_descriptor(base_value):
     """
     Represents a handle to a shared memory allocation in Gluon IR.
-
-    This value wraps an IR handle to shared memory along with its type
-    metadata and provides methods for loading, storing, and reshaping
-    the shared memory region.
-
-    Args:
-        handle (ir.Value): The IR value representing the allocation handle.
-        element_ty (dtype): The data type of each element.
-        shape (List[int]): The dimensions of the descriptor.
-        layout (SharedLayout): The layout of the shared memory.
-        alloc_shape (List[int]): The actual allocation shape.
     """
 
     def __init__(self, handle, element_ty, shape, layout, alloc_shape):
@@ -443,7 +432,7 @@ def warp_specialize(default_args, default_partition, worker_args, worker_partiti
         worker_num_regs (List[int]): Number of registers per partition.
 
     Returns:
-        Tuple[Any, ...]: Results from the warp-specialized regions.
+        Tuple[Any, ...]: Results from the default region.
     """
     worker_num_warps = [_unwrap_if_constexpr(w) for w in worker_num_warps]
     worker_num_regs = [_unwrap_if_constexpr(r) for r in worker_num_regs]

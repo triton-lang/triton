@@ -100,14 +100,7 @@ class tensor_memory_descriptor_type(base_type):
 
 class tensor_memory_descriptor(base_value):
     """
-    Represents a tensor memory descriptor handle for TMA operations.
-
-    Args:
-        handle (ir.Value): The IR handle of the descriptor.
-        element_ty (dtype): The data type of elements.
-        shape (List[int]): The shape of the descriptor.
-        layout (TensorMemoryLayout): The tensor memory layout.
-        alloc_shape (List[int]): The allocation shape.
+    Represents a tensor memory descriptor handle for Tensor Core Gen5 operations.
     """
 
     def __init__(self, handle, element_ty, shape, layout, alloc_shape):
@@ -171,7 +164,7 @@ class tensor_memory_descriptor(base_value):
     @builtin
     def slice(self, start, length, _semantic: GluonSemantic) -> None:
         """
-        Create a subslice of tensor memory descriptor.
+        Create a slice of the tensor memory descriptor along the last dimension.
 
         Args:
             start (int): The starting index for subslice.
@@ -264,14 +257,14 @@ def allocate_tensor_memory(element_ty, shape, layout, value=None, _semantic=None
 @builtin
 def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, mbarriers=None, mbarrier_preds=None, _semantic=None):
     """
-    Emit a GEN05 TensorCore MMA instruction.
+    Emit a 5th generation TensorCore MMA instruction.
     acc = a * b + (acc if use_acc else 0)
 
     Args:
-        a (tensor): First input operand tensor.
-        b (tensor): Second input operand tensor.
-        acc (tensor): Accumulator tensor.
-        use_acc (tensor or bool): Whether to use the initial value of the accumulator. Defaults to True.
+        a (shared_memory_descriptor): Left hand side operand in shared memory.
+        b (shared_memory_descriptor or tensor_memory_descriptor): Right hand side operand in shared or tensor memory.
+        acc (tensor_memory_descriptor): Accumulator value in tensor memory (mutated).
+        use_acc (bool): Whether to use the initial value of the accumulator. Defaults to True.
         pred (bool): Scalar predicate. Operation is skipped if predicate is False. Defaults to True.
         mbarriers (Sequence[shared_memory_descriptor], optional): Barriers to signal when the operation is complete. If None, mma is synchronous. Defaults to None.
         mbarrier_preds (Sequence[bool], optional): Predicates for barriers. Defaults to None.

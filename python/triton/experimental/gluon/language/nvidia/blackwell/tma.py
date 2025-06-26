@@ -24,11 +24,11 @@ def async_gather(tensor_desc, x_offsets, y_offset, barrier, result, pred=True, _
     Asynchronously gather elements from global memory to shared memory using TMA.
 
     Args:
-        tensor_desc (tensor_descriptor): The tensor memory descriptor.
-        x_offsets (tensor): X offsets tensor.
-        y_offset (tensor): Y offset tensor.
+        tensor_desc (tensor_descriptor): The tensor descriptor.
+        x_offsets (tensor): 1D tensor of X offsets.
+        y_offset (int): Scalar Y offset.
         barrier (shared_memory_descriptor): Barrier that will be signaled when the operation is complete.
-        result (tensor): Result tensor handle.
+        result (tensor_memory_descriptor): Result shared memory, must have NVMMASharedLayout.
         pred (bool): Scalar predicate. Operation is skipped if predicate is False. Defaults to True.
     """
     pred = _semantic.to_tensor(pred)
@@ -43,10 +43,10 @@ def async_scatter(tensor_desc, x_offsets, y_offset, src, _semantic=None):
     Asynchronously scatter elements from shared memory to global memory using TMA.
 
     Args:
-        tensor_desc (tensor_descriptor): The tensor memory descriptor.
-        x_offsets (tensor): X offsets tensor.
-        y_offset (tensor): Y offset tensor.
-        src (tensor): Source tensor.
+        tensor_desc (tensor_descriptor): The tensor descriptor.
+        x_offsets (tensor): 1D tensor of X offsets.
+        y_offset (int): Scalar Y offset.
+        src (tensor_memory_descriptor): The source data, must be in NVMMASharedLayout.
     """
     y_offset = _semantic.to_tensor(y_offset)
     _semantic.builder.create_async_tma_scatter(tensor_desc.handle, x_offsets.handle, y_offset.handle, src.handle)
