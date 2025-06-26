@@ -107,36 +107,6 @@ def get_mma_reg_layout(shape, num_warps, dtype=gl.float32):
 
 
 # ===-----------------------------------------------------------------------===#
-# Helpers
-# ===-----------------------------------------------------------------------===#
-
-
-@tl.constexpr_function
-def get_load_size_bytes(desc):
-    size = desc.dtype.primitive_bitwidth // 8
-    for dim in desc.block_type.shape:
-        size *= dim
-    return size
-
-
-@gluon.jit
-def load_tensor_desc_to_smem(desc, coord, smem):
-    size: gl.constexpr = get_load_size_bytes(desc)
-    barrier = gl.allocate_shared_memory(gl.int64, [1], mbarrier.MBarrierLayout())
-    mbarrier.init(barrier, count=1)
-    mbarrier.expect(barrier, size)
-    tma.async_copy_global_to_shared(desc, coord, barrier, smem)
-    mbarrier.wait(barrier, 0)
-    mbarrier.invalidate(barrier)
-
-
-@gluon.jit
-def store_smem_to_tensor_desc(desc, coord, smem):
-    tma.async_copy_shared_to_global(desc, coord, smem)
-    tma.store_wait(0)
-
-
-# ===-----------------------------------------------------------------------===#
 # Data Abstractions
 # ===-----------------------------------------------------------------------===#
 
@@ -274,6 +244,14 @@ def get_desc_channel(desc, num_buffers: gl.constexpr, num_consumers: gl.constexp
     shape: gl.constexpr = desc.block_type.shape
     layout: gl.constexpr = desc.layout
     return SharedMemoryChannel.alloc(shape, desc.dtype, layout, num_buffers, num_consumers)
+
+
+@tl.constexpr_function
+def get_load_size_bytes(desc):
+    size = desc.dtype.primitive_bitwidth // 8
+    for dim in desc.block_type.shape:
+        size *= dim
+    return size
 
 
 @gluon.jit
@@ -452,6 +430,17 @@ class AttentionProgram:
         self.offset_y = offset_y
         self.qo_offset_y = qo_offset_y
 
+    def get_fused_loop_bounds(self, STAGE: gl.constexpr):
+        BLOCK_M: gl.constexpr = self.config.BLOCK_M
+        if STAGE == 1:
+            return 0, self.config.N_CTX
+        elif STAGE == 2:
+            return self.start_m * BLOCK_M, (self.start_m + 1) * BLOCK_M
+        elif STAGE == 3:
+            return 0, (self.start_m + 1) * BLOCK_M
+        else:
+            return 0, 0
+
     def get_loop_bounds(self, STAGE: gl.constexpr):
         BLOCK_M: gl.constexpr = self.config.BLOCK_M
         if STAGE == 1:
@@ -461,11 +450,6 @@ class AttentionProgram:
         else:
             lo, hi = 0, self.config.N_CTX
         return lo, hi
-
-
-# ===-----------------------------------------------------------------------===#
-# _gluon_attn
-# ===-----------------------------------------------------------------------===#
 
 
 @gl.aggregate
@@ -512,15 +496,9 @@ class InnerLoopInfo:
         self.mi_chnl.release()
 
 
-@gluon.jit
-def _load_inner_loop(config, prog, kv_producer, desc_k, desc_v, STAGE: gl.constexpr):
-    lo, hi = prog.get_loop_bounds(STAGE)
-    for start_n in range(lo, hi, config.BLOCK_N):
-        offsetkv_y = prog.offset_y + start_n
-        k_smem, k_bar = kv_producer.acquire()
-        issue_async_tma_load(k_smem, k_bar, desc_k, offsetkv_y)
-        v_smem, v_bar = kv_producer.acquire()
-        issue_async_tma_load(v_smem, v_bar, desc_v, offsetkv_y)
+# ===-----------------------------------------------------------------------===#
+# _gluon_attn
+# ===-----------------------------------------------------------------------===#
 
 
 @gluon.jit
@@ -544,10 +522,13 @@ def _attn_fwd_load(  #
         q1_smem, q1_bar = q_producer.acquire()
         issue_async_tma_load(q1_smem, q1_bar, desc_q, q1_offset)
 
-        if STAGE & 1:
-            _load_inner_loop(config, prog, kv_producer, desc_k, desc_v, STAGE=4 - STAGE)
-        if STAGE & 2:
-            _load_inner_loop(config, prog, kv_producer, desc_k, desc_v, STAGE=2)
+        lo, hi = prog.get_fused_loop_bounds(STAGE)
+        for start_n in range(lo, hi, config.BLOCK_N):
+            offsetkv_y = prog.offset_y + start_n
+            k_smem, k_bar = kv_producer.acquire()
+            issue_async_tma_load(k_smem, k_bar, desc_k, offsetkv_y)
+            v_smem, v_bar = kv_producer.acquire()
+            issue_async_tma_load(v_smem, v_bar, desc_v, offsetkv_y)
 
 
 @gluon.jit
@@ -858,9 +839,11 @@ def _softmax_tile(tile_id: gl.constexpr, config, info, M, desc_o, STAGE: gl.cons
 
         m_ptrs = M + prog.off_hz * config.N_CTX + offs_m
         gl.store(m_ptrs, gl.convert_layout(m_i, coalesced))
+        tma.store_wait(0)
         o_smem.store(o.to(config.dtype))
         fence_async_shared()
-        store_smem_to_tensor_desc(desc_o, [prog.qo_offset_y + config.SPLIT_M * tile_id, 0], o_smem)
+        tma.async_copy_shared_to_global(desc_o, [prog.qo_offset_y + config.SPLIT_M * tile_id, 0], o_smem)
+    tma.store_wait(0)
 
 
 @gluon.jit
