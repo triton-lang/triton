@@ -344,7 +344,16 @@ void LayoutPropagation::resolveConflicts() {
       continue;
     // Hacky resolve, prefer block encoding.
     // TODO: add a proper heuristic.
-    Attribute encoding = *info.encodings.begin();
+    ArrayRef<int64_t> shape =
+        cast<RankedTensorType>(it.first.getType()).getShape();
+    // Pick a default encoding minimizing the number of registers.
+    Attribute encoding =
+        *std::min_element(info.encodings.begin(), info.encodings.end(),
+                          [&](Attribute a, Attribute b) {
+                            return getTotalElemsPerThread(a, shape) <
+                                   getTotalElemsPerThread(b, shape);
+                          });
+
     bool isLoadOrStore =
         op && isa<LoadOp, StoreOp, AtomicRMWOp, AtomicCASOp>(op);
     for (Attribute e : info.encodings) {
