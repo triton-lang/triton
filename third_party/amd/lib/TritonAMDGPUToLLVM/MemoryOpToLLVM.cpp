@@ -304,7 +304,7 @@ private:
 
     // unpack i32 vectors and cast to native type
     if (bitwidth != 16) {
-      auto numElemsPerVec = bitwidth < 32 ? 32 / bitwidth : 1;
+      auto numElemsPerVec = std::max(32 / bitwidth, 1u);
       auto vecTy = vec_ty(llvmElemTy, numElemsPerVec);
       for (int v = 0; v < static_cast<int>(elemsI32.size()); ++v) {
         auto vec = b.bitcast(elemsI32[v], vecTy);

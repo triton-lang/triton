@@ -71,7 +71,7 @@ ValueTableV2 getValuesFromDotOperandLayoutStruct(
   int offset{};
   ValueTableV2 vals;
   auto bitwidth = eltTy.getIntOrFloatBitWidth();
-  auto numElemsPerVec = bitwidth < 32 ? 32 / bitwidth : 1;
+  auto numElemsPerVec = std::max(32 / bitwidth, 1u);
   auto vecTy = vec_ty(eltTy, numElemsPerVec);
 
   auto packVec = [&](std::array<int, 3> dstIdx) {
@@ -103,7 +103,7 @@ ValueTableV2 getValuesFromDotOperandLayoutStruct(
     // we split the MMA into 4 sub-MMAs, each with a stride 4 x 32-bit along the
     // K dimension.
     llvm::SmallVector<unsigned> si;
-    auto kIters = kWidth / (bitwidth < 32 ? 32 / bitwidth : 1);
+    auto kIters = kWidth / (std::max(32 / bitwidth, 1u));
 
     if (dot.getOpIdx() == 0) {
       // Original register layout:
