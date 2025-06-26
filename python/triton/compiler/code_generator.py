@@ -1254,8 +1254,10 @@ class CodeGenerator(ast.NodeVisitor):
             _check_fn_args(node, fn, args)
             return self.call_JitFunction(fn, args, kws)
         if (hasattr(fn, '__self__') and _is_triton_value(fn.__self__)) or language.core.is_builtin(fn):
-            extra_kwargs = {"_semantic": self.semantic}
+            extra_kwargs = dict()
             sig = inspect.signature(fn)
+            if '_semantic' in sig.parameters:
+                extra_kwargs["_semantic"] = self.semantic
             if '_generator' in sig.parameters:
                 extra_kwargs['_generator'] = self
             try:
@@ -1282,8 +1284,8 @@ class CodeGenerator(ast.NodeVisitor):
 
     def call_Method(self, node, fn, fn_self, args, kws):
         if isinstance(fn, JITFunction):
-            self.call_Function(node, fn, [fn_self] + args, kws)
-        self.call_Function(node, fn, args, kws)
+            args.insert(0, fn_self)
+        return self.call_Function(node, fn, args, kws)
 
     def visit_Call(self, node):
         fn = _unwrap_if_constexpr(self.visit(node.func))
