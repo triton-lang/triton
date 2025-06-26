@@ -14,7 +14,7 @@ from .matmul_ogs_details._matmul_ogs import _matmul_ogs
 from .matmul_ogs_details._p_matmul_ogs import _p_matmul_ogs, get_per_device_per_stream_alloc_fn
 from .matmul_ogs_details._finalize_matmul import _finalize_matmul
 from .matmul_ogs_details.opt_flags import make_opt_flags, OptFlags, update_opt_flags_constraints
-from .numerics_details.mxfp import SwizzlingType
+from .swizzle import SwizzlingType
 from .specialize import specialize
 from .datastruct import Tensor
 from typing import Tuple, Optional

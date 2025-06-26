@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 import triton
-from triton_kernels.numerics_details.mxfp import SwizzlingType
+from triton_kernels.swizzle import SwizzlingType
 from triton_kernels.target_info import get_cdna_version
 import torch
 

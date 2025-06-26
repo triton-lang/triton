@@ -1,11 +1,11 @@
 import torch
 from .reduction_details.reduce_bitmatrix import clear_sums, sum_bitmatrix_rows
+from .swizzle import SwizzlingType
 
 
 class Tensor:
 
     def _compute_shape(self, shape, dtype, swizzle_mode):
-        from .numerics_details.mxfp import SwizzlingType
         shape = list(shape)
         if dtype == torch.uint8:
             # Assume 2 fp4s packed into a byte
@@ -16,7 +16,6 @@ class Tensor:
         return shape
 
     def _compute_stride(self, shape, strides, swizzle_mode):
-        from .numerics_details.mxfp import SwizzlingType
         # Check expected properties of the weights.
         if swizzle_mode == SwizzlingType.BLACKWELL_SCALE:
             mxE, mxK, mxN = shape
