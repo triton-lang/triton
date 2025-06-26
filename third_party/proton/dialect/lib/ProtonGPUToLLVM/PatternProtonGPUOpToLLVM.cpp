@@ -62,11 +62,18 @@ struct ReadCounterOpConversion
   matchAndRewrite(mlir::triton::proton::gpu::ReadCounterOp op,
                   OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    bool isClock64 = false;
-    auto intType = mlir::cast<IntegerType>(op.getResult().getType());
-    isClock64 = intType.getWidth() == 64;
-    Value clock = targetInfo.clock(rewriter, op.getLoc(), isClock64);
-    rewriter.replaceOp(op, clock);
+    auto metricType = op.getMetric();
+    if (metricType == proton::MetricType::CYCLE) {
+      auto intType = mlir::cast<IntegerType>(op.getResult().getType());
+      bool isClock64 = intType.getWidth() == 64;
+      Value clock = targetInfo.clock(rewriter, op.getLoc(), isClock64);
+      rewriter.replaceOp(op, clock);
+    } else if (metricType == proton::MetricType::REALTIME) {
+      Value realtime = targetInfo.realtime(rewriter, op.getLoc());
+      rewriter.replaceOp(op, realtime);
+    } else {
+      llvm::report_fatal_error("unsupported metric type");
+    }
     return success();
   }
 

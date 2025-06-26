@@ -37,6 +37,14 @@ Value TargetInfo::clock(ConversionPatternRewriter &rewriter, Location loc,
   return clock64;
 }
 
+Value TargetInfo::realtime(ConversionPatternRewriter &rewriter,
+                           Location loc) const {
+  // %globaltimer is a global counter in nanoseconds.
+  // Reference:
+  // https://docs.nvidia.com/cuda/parallel-thread-execution/#special-registers-globaltimer
+  return LLVM::NVIDIA::getSRegValue(rewriter, loc, "globaltimer");
+}
+
 Value TargetInfo::processorId(ConversionPatternRewriter &rewriter,
                               Location loc) const {
   return LLVM::NVIDIA::getSRegValue(rewriter, loc, "smid");

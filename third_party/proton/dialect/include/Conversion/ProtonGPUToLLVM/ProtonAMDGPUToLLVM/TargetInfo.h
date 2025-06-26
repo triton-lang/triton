@@ -20,6 +20,9 @@ public:
   Value clock(ConversionPatternRewriter &rewriter, Location loc,
               bool isClock64) const override;
 
+  Value realtime(ConversionPatternRewriter &rewriter,
+                 Location loc) const override;
+
   Value processorId(ConversionPatternRewriter &rewriter,
                     Location loc) const override;
 
