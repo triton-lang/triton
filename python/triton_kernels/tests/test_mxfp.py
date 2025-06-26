@@ -1,24 +1,13 @@
-import math
-
 import pytest
 import torch
 
 from triton_kernels.numerics_details.mxfp import (
     DequantScaleRoundingMode,
-    SwizzlingType,
     downcast_to_mxfp,
     downcast_to_mxfp_torch,
     get_max_quant_val,
     upcast_from_mxfp,
     upcast_from_mxfp_torch,
-)
-from triton_kernels.swizzle import (
-    swizzle_mx_scale_bw,
-    swizzle_mxfp4_scale_hopper,
-    swizzle_mxfp4_value_hopper,
-    unswizzle_mx_scale_bw_torch,
-    unswizzle_mxfp4_scale_hopper_torch,
-    unswizzle_mxfp4_value_hopper_torch,
 )
 from triton_kernels.testing import assert_close, assert_equal
 from triton_kernels.target_info import is_hip, is_hip_cdna3
@@ -80,46 +69,21 @@ def test_mxfp_quant_dequant(src_dtype, dst_dtype):
     assert_equal(weight, dequant)
 
 
-@pytest.mark.parametrize(
-    "shape",
-    [
-        (3, 4096, 1024),
-        (10, 254, 60),
-        (1, 320, 160),
-        (2, 16, 512),
-        (3, 2, 36),
-    ],
-)
-def test_mxfp_swizzle(shape: tuple[int, ...]):
-    """
-    Test that unswizzle is the inverse of swizzle, after removing padding.
-    """
-    x = torch.randn(shape, device="cuda")
-    assert_equal(x, unswizzle_mx_scale_bw_torch(swizzle_mx_scale_bw(x))[..., :shape[-2], :shape[-1]])
-
-
 # fmt: off
 @pytest.mark.parametrize(
-    "shape, axis, swizzle_axis, block_out_dim, block_quant_dim, quant_dtype, rounding_mode",
+    "shape, axis, block_out_dim, block_quant_dim, quant_dtype, rounding_mode",
     [
-        ((3, 4096, 1024), 1, -1, 128, 32, "float4_e2m1", DequantScaleRoundingMode.ROUND_UP),
-        ((10, 254, 60), 0, 1, 128, 32, "float4_e2m1", DequantScaleRoundingMode.ROUND_DOWN),
-        ((1, 320, 160), 2, 1, 128, 32, "float8_e5m2", DequantScaleRoundingMode.ROUND_UP),
-        ((2, 16, 512), -1, 0, 128, 32, "float8_e4m3fn", DequantScaleRoundingMode.ROUND_DOWN),
+        ((3, 4096, 1024), 1, 128, 32, "float4_e2m1", DequantScaleRoundingMode.ROUND_UP),
+        ((10, 254, 60), 0, 128, 32, "float4_e2m1", DequantScaleRoundingMode.ROUND_DOWN),
+        ((1, 320, 160), 2, 128, 32, "float8_e5m2", DequantScaleRoundingMode.ROUND_UP),
+        ((2, 16, 512), -1, 128, 32, "float8_e4m3fn", DequantScaleRoundingMode.ROUND_DOWN),
     ],
 )
 # fmt: on
 @pytest.mark.parametrize("dequant_dtype", ["float16", "bfloat16"])
-@pytest.mark.parametrize("swizzle_value, swizzle_scale", [(None, None), (SwizzlingType.HOPPER_VALUE, None),
-                                                          (None, SwizzlingType.HOPPER_SCALE),
-                                                          (SwizzlingType.HOPPER_VALUE, SwizzlingType.HOPPER_SCALE),
-                                                          (None, SwizzlingType.BLACKWELL_SCALE)])
 def test_mxfp_casting(
     shape: tuple[int, ...],
     axis: int,
-    swizzle_axis: int | None,
-    swizzle_value: SwizzlingType | None,
-    swizzle_scale: SwizzlingType | None,
     block_out_dim,
     block_quant_dim,
     quant_dtype: str,
@@ -128,29 +92,14 @@ def test_mxfp_casting(
 ):
     if "float8" in quant_dtype and torch.cuda.get_device_capability()[0] < 9:
         pytest.skip("Float8 not tested on A100")
-    if swizzle_value == SwizzlingType.HOPPER_VALUE:
-        if "float4" not in quant_dtype:
-            pytest.skip("NYI. Hopper swizzle just implemented for mxfp4")
-        if shape[axis] % 64 != 0 or shape[swizzle_axis] % 128 != 0:
-            # Automatic padding not implemented for Hopper swizzle
-            pytest.skip("Hopper swizzle not supported for tile not multiple of 64x128")
-    if swizzle_scale == SwizzlingType.HOPPER_SCALE:
-        if shape[axis] % 64 != 0 or shape[swizzle_axis] % 128 != 0:
-            # Automatic padding not implemented for Hopper swizzle
-            pytest.skip("Hopper swizzle not supported for tile not multiple of 64x128")
     if is_hip():
-        if swizzle_value is not None or swizzle_scale is not None:
-            pytest.skip("Other swizzling patterns are not supported by AMD GPU")
         if quant_dtype == 'float8_e4m3fn':
             pytest.skip("float8_e4m3fn cast hasn't been fully tested on AMD GPU")
         if quant_dtype == 'float8_e5m2' and is_hip_cdna3():
             pytest.skip("float8_e5m2 cast hasn't been fully tested on AMD CDNA3")
-
-    swizzle_axis = swizzle_axis if (swizzle_value or swizzle_scale) else None
     quant_torch_type = dtype_str_to_torch(quant_dtype)
     dequant_torch_type = dtype_str_to_torch(dequant_dtype)
     # Generate random input tensor that is contiguous once axis is the last dimension
-    # and swizzle_axis is the second to last dimension.
     x = torch.randn(shape, device="cuda", dtype=dequant_torch_type)
 
     # Quantize and check equivalence
@@ -158,9 +107,6 @@ def test_mxfp_casting(
         x,
         quant_torch_type,
         axis,
-        swizzle_axis,
-        swizzle_value=swizzle_value,
-        swizzle_scale=swizzle_scale,
         DEQUANT_SCALE_ROUNDING_MODE=rounding_mode,
         BLOCK_OUT_DIM=block_out_dim,
         BLOCK_QUANT_DIM=block_quant_dim,
@@ -170,9 +116,6 @@ def test_mxfp_casting(
         x,
         quant_torch_type,
         axis,
-        swizzle_axis,
-        swizzle_value=swizzle_value,
-        swizzle_scale=swizzle_scale,
         DEQUANT_SCALE_ROUNDING_MODE=rounding_mode,
     )
 
@@ -187,54 +130,11 @@ def test_mxfp_casting(
         scale,
         dequant_torch_type,
         axis,
-        swizzle_axis,
-        swizzle_value=swizzle_value,
-        swizzle_scale=swizzle_scale,
         BLOCK_OUT_DIM=block_out_dim,
         BLOCK_QUANT_DIM=block_quant_dim,
     )
-    dequant_torch = upcast_from_mxfp_torch(quant_torch, scale_torch, dequant_torch_type, axis, swizzle_axis,
-                                           swizzle_value, swizzle_scale)
+    dequant_torch = upcast_from_mxfp_torch(quant_torch, scale_torch, dequant_torch_type, axis)
     assert_equal(dequant, dequant_torch)
 
     # Dequantized result should be close to the original, though tolerance is large due to the precision loss.
     assert_close(x, dequant, maxtol=0.5, rmstol=0.15)
-
-
-def test_unswizzle_mxfp4_value_golden_value():
-    shape = (16, 32)
-    x = torch.arange(math.prod(shape)).view(shape).to(torch.uint8)
-    x = x.mT
-    res = swizzle_mxfp4_value_hopper(x, op_idx=1, mma_version=3)
-    # res = res.mT.view(torch.uint32).mT
-    # Thread 0
-    assert res[0:16, 0].tolist() == [0, 0, 4, 4, 8, 8, 12, 12, 16, 16, 20, 20, 24, 24, 28, 28]
-    # Thread 1
-    assert res[16:32, 0].tolist() == [1, 1, 5, 5, 9, 9, 13, 13, 17, 17, 21, 21, 25, 25, 29, 29]
-
-
-@pytest.mark.parametrize("shape", [(16, 32), (16, 64), (32, 32), (32, 64), (64, 128), (128, 128)])
-@pytest.mark.parametrize("trans", [False, True])
-@pytest.mark.parametrize("op_idx", [0, 1])
-@pytest.mark.parametrize("mma_version", [2, 3])
-def test_swizzle_mxfp4_value(shape, trans, op_idx, mma_version):
-    x = torch.randint(0, 256, shape, dtype=torch.uint8, device="cuda")
-    if trans:
-        x = x.mT
-    k_dim = 1 - op_idx
-    if x.shape[k_dim] < 32:
-        pytest.skip("Not enough elements along K")
-
-    # PyTorch implementation of unswizzle_mxfp4_value
-    res = swizzle_mxfp4_value_hopper(x, op_idx, mma_version)
-    res = unswizzle_mxfp4_value_hopper_torch(res, op_idx, mma_version)
-    assert (res == x).all()
-
-
-@pytest.mark.parametrize("num_warps", [4, 8])
-@pytest.mark.parametrize("shape", [(256, 64), (256, 128), (256, 256)])
-def test_swizzle_mxfp4_scale(shape, num_warps):
-    x = torch.randint(0, 256, shape, dtype=torch.uint8, device="cuda")
-    res = swizzle_mxfp4_scale_hopper(x, num_warps=num_warps)
-    res = unswizzle_mxfp4_scale_hopper_torch(res, num_warps=num_warps)
-    assert (res == x).all()

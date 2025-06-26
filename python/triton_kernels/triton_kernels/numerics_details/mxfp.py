@@ -4,7 +4,6 @@ import torch
 import torch.nn.functional as F
 from .mxfp_details._upcast_from_mxfp import _upcast_from_mxfp
 from .mxfp_details._downcast_to_mxfp import _downcast_to_mxfp
-from ..swizzle import SwizzlingType, swizzle, unswizzle
 
 # -----------------------------------------------------------------------------
 #                      Dequantization / Quantization Utilities
@@ -16,8 +15,7 @@ class DequantScaleRoundingMode(Enum):
     ROUND_DOWN = 1
 
 
-def downcast_to_mxfp(src_tensor: torch.Tensor, out_quant_type: torch.dtype, axis: int, swizzle_axis: int | None = None,
-                     swizzle_value: SwizzlingType | None = None, swizzle_scale: SwizzlingType | None = None,
+def downcast_to_mxfp(src_tensor: torch.Tensor, out_quant_type: torch.dtype, axis: int,
                      DEQUANT_SCALE_ROUNDING_MODE: DequantScaleRoundingMode = DequantScaleRoundingMode.ROUND_UP,
                      BLOCK_OUT_DIM: int = 128, BLOCK_QUANT_DIM: int = 32):
     """
@@ -28,9 +26,6 @@ def downcast_to_mxfp(src_tensor: torch.Tensor, out_quant_type: torch.dtype, axis
 
          If weight_quant_type is torch.float8_e4m3fn or torch.float8_e5m2, we output mxfp8 with the float8s are stored
          in their respective formats.
-
-         When swizzle_axis is provided, the downcast will quantize along the quantization axis and swizzle the scales
-         with the swizzle_axis. See the relevant swizzle_* functions for more details.
     """
     ndim = src_tensor.ndim
     assert -ndim <= axis < ndim, f"Invalid axis {axis=}"
@@ -64,18 +59,11 @@ def downcast_to_mxfp(src_tensor: torch.Tensor, out_quant_type: torch.dtype, axis
 
     out_quant_tensor = out_quant_tensor.transpose(axis, src_tensor.ndim - 1)
     out_scale = out_scale.transpose(axis, src_tensor.ndim - 1)
-    # Swizzling
-    swizzle_axis = swizzle_axis if swizzle_axis is None or swizzle_axis >= 0 else swizzle_axis + ndim
-    assert swizzle_axis is None or -ndim <= swizzle_axis < ndim, f"Invalid swizzle axis {swizzle_axis=}"
-    assert swizzle_axis is None or axis != swizzle_axis, f"Axis and swizzle axis cannot be the same {axis=} {swizzle_axis=}"
-    out_quant_tensor = swizzle(out_quant_tensor, axis, swizzle_axis, swizzle_value)
-    out_scale = swizzle(out_scale, axis, swizzle_axis, swizzle_scale)
     return out_quant_tensor, out_scale
 
 
-def upcast_from_mxfp(tensor: torch.Tensor, scale: torch.Tensor, dtype: torch.dtype, axis: int,
-                     swizzle_axis: int | None = None, swizzle_value: SwizzlingType | None = None,
-                     swizzle_scale: SwizzlingType | None = None, BLOCK_OUT_DIM: int = 128, BLOCK_QUANT_DIM: int = 32):
+def upcast_from_mxfp(tensor: torch.Tensor, scale: torch.Tensor, dtype: torch.dtype, axis: int, BLOCK_OUT_DIM: int = 128,
+                     BLOCK_QUANT_DIM: int = 32):
     """
     Upcasts an mxfp (packed) weight tensor back to float16 or bfloat16.
 
@@ -86,15 +74,6 @@ def upcast_from_mxfp(tensor: torch.Tensor, scale: torch.Tensor, dtype: torch.dty
     ndim = tensor.ndim
     assert -ndim <= axis < ndim, f"Invalid axis {axis=}"
     axis = axis if axis >= 0 else axis + ndim
-    if swizzle_axis is not None:
-        assert -ndim <= swizzle_axis < ndim, f"Invalid swizzle axis {swizzle_axis=}"
-        swizzle_axis = swizzle_axis if swizzle_axis >= 0 else swizzle_axis + ndim
-        assert axis != swizzle_axis, f"Axis and swizzle axis cannot be the same {axis=} {swizzle_axis=}"
-        assert swizzle_scale is not None or swizzle_value is not None, "At least one of swizzle_scale or swizzle_value must be provided"
-    else:
-        assert swizzle_scale is None, "Swizzle scale must be None if swizzle axis is None"
-        assert swizzle_value is None, "Swizzle value must be None if swizzle axis is None"
-
     assert tensor.ndim == scale.ndim, (f"Weight and scale must have the same number of dimensions. "
                                        f"Got {tensor.ndim=} and {scale.ndim=}")
     # dtype checks
@@ -102,8 +81,6 @@ def upcast_from_mxfp(tensor: torch.Tensor, scale: torch.Tensor, dtype: torch.dty
         f"Invalid tensor dtype {tensor.dtype=}"
     assert scale.dtype == torch.uint8, f"Invalid scale dtype {scale.dtype=}"
     assert dtype in (torch.float16, torch.bfloat16), f"Invalid output dtype {dtype=}"
-    tensor = unswizzle(tensor, axis, swizzle_axis, swizzle_value)
-    scale = unswizzle(scale, axis, swizzle_axis, swizzle_scale)
     # unpad
     logical_quant_dim = tensor.shape[axis] * (2 if tensor.dtype == torch.uint8 else 1)
     unpadded_scale_shape = (*tensor.shape[:axis], triton.cdiv(logical_quant_dim, 32), *tensor.shape[axis + 1:])
@@ -141,8 +118,6 @@ def get_max_quant_val(dtype: torch.dtype):
 
 
 def downcast_to_mxfp_torch(src_tensor: torch.Tensor, out_quant_type: torch.dtype, axis: int,
-                           swizzle_axis: int | None = None, swizzle_value: SwizzlingType | None = None,
-                           swizzle_scale: SwizzlingType | None = None,
                            DEQUANT_SCALE_ROUNDING_MODE: DequantScaleRoundingMode = DequantScaleRoundingMode.ROUND_UP):
     """
     Converts the src tensor to the output format specified by out_quant_type.
@@ -158,23 +133,12 @@ def downcast_to_mxfp_torch(src_tensor: torch.Tensor, out_quant_type: torch.dtype
              where L is the original length along that axis.
     """
     # This should probably be packed into its own tiny class
-    if swizzle_axis is None:
-        assert swizzle_scale is None, "Swizzle scale must be None if swizzle axis is None"
-        assert swizzle_value is None, "Swizzle value must be None if swizzle axis is None"
-    else:
-        assert swizzle_scale is not None or swizzle_value is not None, "At least one of swizzle_scale or swizzle_value must be provided"
-        assert swizzle_value is None or swizzle_value == SwizzlingType.HOPPER_VALUE, "Just implemented Hopper swizzle for now"
-
     ndim = src_tensor.ndim
     assert -ndim <= axis < ndim, f"Invalid axis {axis=}"
     assert src_tensor.dtype in {torch.float32, torch.bfloat16,
                                 torch.float16}, f"Invalid input tensor dtype {src_tensor.dtype}"
 
     axis = axis if axis >= 0 else axis + ndim
-    if swizzle_axis is not None:
-        assert -ndim <= swizzle_axis < ndim, f"Invalid swizzle axis {swizzle_axis=}"
-        swizzle_axis = swizzle_axis if swizzle_axis >= 0 else swizzle_axis + ndim
-        assert axis != swizzle_axis, f"Axis and swizzle axis cannot be the same {axis=} {swizzle_axis=}"
     is_fp4 = out_quant_type == torch.uint8
     is_fp8 = "float8" in str(out_quant_type)
     assert is_fp4 or is_fp8, f"Invalid input tensor dtype {out_quant_type}"
@@ -187,7 +151,6 @@ def downcast_to_mxfp_torch(src_tensor: torch.Tensor, out_quant_type: torch.dtype
         assert axis_shape % 2 == 0, "For mxfp4 conversion the contiguous axis length must be even."
 
     # Permute the tensor so that the contiguous axis becomes the last dimension.
-    # For the scales, make the swizzle axis is second to last.
     src = src_tensor.transpose(axis, src_tensor.ndim - 1).to(torch.float32)
     axis_shape = src.shape[-1]
 
@@ -268,10 +231,6 @@ def downcast_to_mxfp_torch(src_tensor: torch.Tensor, out_quant_type: torch.dtype
     dq_scale = dq_scale.squeeze(-1)
     out_weight = out_weight.transpose(axis, src_tensor.ndim - 1)
     dq_scale = dq_scale.transpose(axis, src_tensor.ndim - 1)
-
-    dq_scale = swizzle(dq_scale, axis, swizzle_axis, swizzle_scale)
-    out_weight = swizzle(out_weight, axis, swizzle_axis, swizzle_value)
-
     return out_weight, dq_scale
 
 
@@ -293,9 +252,7 @@ def cvt_e2m1_to_fp32(input_tensor):
     return output_tensor
 
 
-def upcast_from_mxfp_torch(tensor: torch.Tensor, scale: torch.Tensor, target_dtype: torch.dtype, axis: int,
-                           swizzle_axis: int | None = None, swizzle_value: SwizzlingType | None = None,
-                           swizzle_scale: SwizzlingType | None = None):
+def upcast_from_mxfp_torch(tensor: torch.Tensor, scale: torch.Tensor, target_dtype: torch.dtype, axis: int):
     """
     Converts the mxfp4/mxfp8 tensor to the target format specified by target_dtype.
       axis: The axis along which dequantization is applied.
@@ -310,23 +267,15 @@ def upcast_from_mxfp_torch(tensor: torch.Tensor, scale: torch.Tensor, target_dty
     assert is_fp8 or tensor.dtype == torch.uint8, f"Invalid input quantization type {tensor.dtype}"
 
     # Permute the tensor and scale so that the quantization axis becomes the last dimension
-    # For the scales, also permute so the swizzle axis is second to last.
     axis = axis if axis >= 0 else axis + ndim
-    if swizzle_axis is not None:
-        assert -ndim <= swizzle_axis < ndim, f"Invalid swizzle axis {swizzle_axis=}"
-        swizzle_axis = swizzle_axis if swizzle_axis >= 0 else swizzle_axis + ndim
-        assert axis != swizzle_axis, f"Axis and swizzle axis cannot be the same {axis=} {swizzle_axis=}"
-        assert swizzle_scale is not None or swizzle_value is not None, "At least one of swizzle_scale or swizzle_value must be provided"
-        assert swizzle_value is None or swizzle_value == SwizzlingType.HOPPER_VALUE, "Just implemented Hopper swizzle for now"
-    else:
-        assert swizzle_scale is None, "Swizzle scale must be None if swizzle axis is None"
-        assert swizzle_value is None, "Swizzle value must be None if swizzle axis is None"
-
-    scale = unswizzle(scale, axis, swizzle_axis, swizzle_scale)
-    tensor = unswizzle(tensor, axis, swizzle_axis, swizzle_value)
-
     scale = scale.transpose(axis, scale.ndim - 1)
     tensor = tensor.transpose(axis, tensor.ndim - 1)
+
+    # Trim padding
+    logical_quant_dim = tensor.shape[-1] * (2 if tensor.dtype == torch.uint8 else 1)
+    unpadded_scale_shape = (*tensor.shape[:-1], triton.cdiv(logical_quant_dim, 32))
+    slices = tuple(slice(0, size) for size in unpadded_scale_shape)
+    scale = scale[slices].contiguous()
 
     dq_scale = (scale.to(torch.int32) << 23).view(torch.float32)  # Shift to the exponent and bitcast to fp32
 
@@ -335,14 +284,8 @@ def upcast_from_mxfp_torch(tensor: torch.Tensor, scale: torch.Tensor, target_dty
     else:
         fp32_tensor = tensor.to(torch.float32)
 
-    # Trim padding
-    logical_quant_dim = tensor.shape[-1] * (2 if tensor.dtype == torch.uint8 else 1)
-    unpadded_scale_shape = (*tensor.shape[:-1], triton.cdiv(logical_quant_dim, 32))
-    slices = tuple(slice(0, size) for size in unpadded_scale_shape)
-    dq_scale = dq_scale[slices].contiguous()
-
     axis_shape = fp32_tensor.size(-1)
-    padded_axis_shape = dq_scale.size(-1) * 32
+    padded_axis_shape = triton.cdiv(logical_quant_dim, 32) * 32
     pad_size = padded_axis_shape - axis_shape
     padded_tensor = F.pad(fp32_tensor, (0, pad_size))
 
