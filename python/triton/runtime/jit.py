@@ -21,6 +21,39 @@ TRITON_MODULE = __name__[:-len(".runtime.jit")]
 
 T = TypeVar("T")
 
+
+def _get_constexpr_cache_key(fn):
+    """
+    Generate cache key component for constexpr variables.
+
+    Args:
+        fn: Function object to inspect for constexpr variables
+
+    Returns:
+        str: Cache key component including current constexpr values
+    """
+    from ..language import constexpr
+    constexpr_values = []
+
+    # Check global variables
+    if hasattr(fn, '__globals__'):
+        for name, val in fn.__globals__.items():
+            if isinstance(val, constexpr):
+                constexpr_values.append(f"global_{name}={val.value}")
+
+    # Check nonlocal/captured variables
+    if hasattr(fn, '__closure__') and fn.__closure__:
+        code = fn.__code__
+        if hasattr(code, 'co_freevars'):
+            for i, name in enumerate(code.co_freevars):
+                if i < len(fn.__closure__):
+                    val = fn.__closure__[i].cell_contents
+                    if isinstance(val, constexpr):
+                        constexpr_values.append(f"nonlocal_{name}={val.value}")
+
+    return str(hash("-".join(sorted(constexpr_values))))
+
+
 # -----------------------------------------------------------------------------
 # Dependencies Finder
 # -----------------------------------------------------------------------------
@@ -560,8 +593,9 @@ class JITFunction(KernelInterface[T]):
         # the type and the second parameter is the 'specialization' value.
         bound_args, specialization, options = binder(*args, **kwargs)
 
-        # compute cache key
-        key = str(specialization) + str(options)
+        # compute cache key including constexpr values
+        constexpr_key = _get_constexpr_cache_key(self.fn)
+        key = str(specialization) + str(options) + constexpr_key
         kernel = kernel_cache.get(key, None)
 
         # Kernel is not cached; we have to compile.
@@ -600,6 +634,10 @@ class JITFunction(KernelInterface[T]):
         not_present = object()
         for (name, _), (val, globals_dict) in self.used_global_vals.items():
             if (newVal := globals_dict.get(name, not_present)) != val:
+                # Don't error on constexpr changes - they're handled by cache invalidation
+                from ..language import constexpr
+                if isinstance(val, constexpr) and isinstance(newVal, constexpr):
+                    continue
                 raise RuntimeError(
                     f"Global variable {name} has changed since we compiled this kernel, from {val} to {newVal}")
 
@@ -696,7 +734,10 @@ class JITFunction(KernelInterface[T]):
             dependencies_finder.visit(self.parse())
             self.hash = dependencies_finder.ret + str(self.starting_line_number)
             self.used_global_vals = dict(sorted(dependencies_finder.used_global_vals.items()))
-        return self.hash
+
+        # Include current constexpr values in cache key for proper invalidation
+        constexpr_key = _get_constexpr_cache_key(self.fn)
+        return self.hash + constexpr_key
 
     @property
     def type(self):
