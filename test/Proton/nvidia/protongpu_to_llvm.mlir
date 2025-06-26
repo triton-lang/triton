@@ -135,6 +135,24 @@ module attributes {"ttg.num-warps" = 8 : i32, ttg.profile_scratch_memory_alignme
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-warps" = 8 : i32, ttg.profile_scratch_memory_alignment = 128 : i32, ttg.profile_scratch_memory_size = 384 : i32} {
+  // CHECK-LABEL: convert_smem_initialize
+  // CHECK-DAG: %[[TS:.*]] = llvm.call_intrinsic "llvm.nvvm.read.ptx.sreg.globaltimer"() : () -> i64
+  // CHECK-DAG: %[[OFFSET:.*]] = llvm.mlir.constant(4 : i32) : i32
+  // CHECK-DAG: %[[PTR:.*]] = llvm.getelementptr %{{.*}}[%[[OFFSET]]] : (!llvm.ptr<1>, i32) -> !llvm.ptr<1>, i32
+  // CHECK-DAG: llvm.store %[[TS]], %[[PTR]] : i64, !llvm.ptr<1>
+  // CHECK-DAG: llvm.return
+  llvm.func @convert_smem_initialize(%arg: !llvm.ptr<1>) attributes {noinline = false, nvvm.kernel = 1 : ui1} {
+    %0 = proton_gpu.global_scratch_alloc {alignment = 128 : i32, nbytes = 384 : i32, offset = 0 : i32} : !tt.ptr<i32>
+    proton_gpu.initialize %0 : !tt.ptr<i32>
+    llvm.return
+  }
+}
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-warps" = 8 : i32, ttg.profile_scratch_memory_alignment = 128 : i32, ttg.profile_scratch_memory_size = 384 : i32} {
   // CHECK-LABEL: convert_smem_finalize
   // CHECK-DAG: llvm.nvvm.read.ptx.sreg.smid
   // CHECK-DAG: llvm.extractvalue %{{.*}}[0] : !llvm.struct<(ptr<3>, i32)>

@@ -68,6 +68,37 @@ protected:
   const proton::gpu::TargetInfoBase &targetInfo;
 };
 
+struct InitializeOpConversion
+    : public ConvertOpToLLVMPattern<mlir::triton::proton::gpu::InitializeOp> {
+  explicit InitializeOpConversion(LLVMTypeConverter &typeConverter,
+                                  const proton::gpu::TargetInfoBase &targetInfo,
+                                  PatternBenefit benefit)
+      : mlir::ConvertOpToLLVMPattern<mlir::triton::proton::gpu::InitializeOp>(
+            typeConverter, benefit),
+        targetInfo(targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(mlir::triton::proton::gpu::InitializeOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+
+    Value timestamp = targetInfo.timestamp(rewriter, loc);
+    Value scratchPtr = adaptor.getScratchPtr();
+    auto scratchPtrTy = mlir::cast<LLVM::LLVMPointerType>(scratchPtr.getType());
+    Value gmemTimestampOffset = b.i32_val(4);
+    Value gmemTimestampPtr =
+        b.gep(scratchPtrTy, i32_ty, scratchPtr, gmemTimestampOffset);
+    b.store(timestamp, gmemTimestampPtr);
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+
+protected:
+  const proton::gpu::TargetInfoBase &targetInfo;
+};
+
 struct FinalizeOpConversion
     : public ConvertOpToLLVMPattern<mlir::triton::proton::gpu::FinalizeOp> {
   explicit FinalizeOpConversion(LLVMTypeConverter &typeConverter,
@@ -100,8 +131,11 @@ struct FinalizeOpConversion
     const int bufferSizeInWords = op.getSegment().getType().getNBytes() / 4;
     const int circularHeaderWordSize = proton::gpu::getCircularHeaderSize() / 4;
 
-    // Header: preamble (1 word), threadblock id (1 word), SM id (1 word),
-    // buffer size (1 word)
+    // Header layout (total: circularHeaderSize bytes)
+    // +------------+------------+------------+------------+------------------+
+    // |  preamble  | program id |   hw id    |  buf size  |    timestamp     |
+    // |  (1 word)  |  (1 word)  |  (1 word)  |  (1 word)  |    (2 words)     |
+    // +------------+------------+------------+------------+------------------+
 
     // Circular strategy memory layout (total: allocprofileScratchSize bytes)
     //  +-----------------------------------------------+
@@ -566,6 +600,7 @@ void populateProtonGPUOpPatterns(LLVMTypeConverter &typeConverter,
                                  const TargetInfoBase &targetInfo,
                                  PatternBenefit benefit) {
   patterns.add<ReadCounterOpConversion>(typeConverter, targetInfo, benefit);
+  patterns.add<InitializeOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<FinalizeOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<SegmentAllocOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<GlobalScratchAllocOpConversion>(typeConverter, targetInfo,
