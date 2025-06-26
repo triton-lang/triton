@@ -331,9 +331,7 @@ class AttentionConfig:
     qk_layout: gl.constexpr
     o_layout: gl.constexpr
     o_splitn_layout: gl.constexpr
-    mi_2d_layout: gl.constexpr
-
-    mi_use_tmem: gl.constexpr
+    alpha_2d_layout: gl.constexpr
 
     def __init__(self, qk_scale, Z, H, N_CTX, BLOCK_M, BLOCK_N, HEAD_DIM, GROUP_SIZE_N, NUM_SMS, dtype, num_warps,
                  SPLIT_D_FACTOR):
@@ -373,9 +371,7 @@ class AttentionConfig:
         self.o_splitn_layout: gl.constexpr = get_tmem_32x32b_reg_layout(
             (o_instr_shape[0], o_instr_shape[1] // self.SPLIT_D_FACTOR, o_instr_shape[2]),
             (self.o_shape[0], self.o_shape[1] // self.SPLIT_D_FACTOR), self.num_warps)
-        self.mi_2d_layout: gl.constexpr = gl.BlockedLayout([1, 1], [32, 1], [4, 1], [0, 1])
-
-        self.mi_use_tmem: gl.constexpr = True
+        self.alpha_2d_layout: gl.constexpr = gl.BlockedLayout([1, 1], [32, 1], [4, 1], [0, 1])
 
     def get_program(self, pid_m, pid_n):
         start_m = pid_m
@@ -456,7 +452,7 @@ class InnerLoopInfo:
     qk_mma_ctx: MMAContext
     o_mma_ctx: MMAContext
     p_chnl: TensorMemoryChannel
-    mi_chnl: Union[TensorMemoryChannel, SharedMemoryChannel]
+    alpha_chnl: TensorMemoryChannel
     epilogue_chnl: SharedMemoryChannel
 
     def __init__(self, config):
@@ -464,7 +460,7 @@ class InnerLoopInfo:
         self.qk_mma_ctx.channel.initialize_for_producer()
 
         self.o_mma_ctx = MMAContext(config.o_shape, num_buffers=1)
-        self.o_mma_ctx.channel.initialize_for_consumer()
+        self.o_mma_ctx.channel.initialize_for_producer()
 
         # QK and PV MMAs are serialized, which enables borrowing QK's memory.
         borrow_tmem = self.qk_mma_ctx.channel.mem.index(0)
@@ -476,13 +472,9 @@ class InnerLoopInfo:
                                                   num_buffers=1, num_consumers=1)
         self.p_chnl.initialize_for_producer()
 
-        if config.mi_use_tmem:
-            self.mi_chnl = TensorMemoryChannel._borrow(mi_tmem, [config.SPLIT_M, 1], gl.float32, mi_layout,
-                                                       num_buffers=1)
-        else:
-            self.mi_chnl = SharedMemoryChannel.alloc([config.SPLIT_M], gl.float32,
-                                                     gl.constexpr(mbarrier.MBarrierLayout()), num_buffers=1)
-        self.mi_chnl.initialize_for_producer()
+        self.alpha_chnl = TensorMemoryChannel._borrow(mi_tmem, [config.SPLIT_M, 1], gl.float32, mi_layout,
+                                                      num_buffers=1)
+        self.alpha_chnl.initialize_for_producer()
 
         self.epilogue_chnl = SharedMemoryChannel.alloc([1], gl.int8, gl.constexpr(mbarrier.MBarrierLayout()),
                                                        num_buffers=1)
@@ -492,7 +484,7 @@ class InnerLoopInfo:
         self.qk_mma_ctx.release()
         self.o_mma_ctx.release()
         self.p_chnl.release()
-        self.mi_chnl.release()
+        self.alpha_chnl.release()
 
 
 # ===-----------------------------------------------------------------------===#
@@ -594,11 +586,6 @@ def _attn_fwd_mma(  #
         tcgen05_commit(q0_bar)
         tcgen05_commit(q1_bar)
 
-        _, o0_bar = o0_producer.producer.acquire()
-        mbarrier.arrive(o0_bar, count=1)
-        _, o1_bar = o1_producer.producer.acquire()
-        mbarrier.arrive(o1_bar, count=1)
-
     mbarrier.invalidate(qk_p_bar)
 
 
@@ -643,14 +630,10 @@ def _mul_f32x2(a, b):
 
 
 @gluon.jit
-def _attn_fwd_correction_compute(config, mi_consumer, o_consumer, m_i):
-    mi_layout: gl.constexpr = gl.SliceLayout(1, config.o_splitn_layout)
-    if config.mi_use_tmem:
-        m_ij = mi_consumer.get(config.mi_2d_layout)
-        m_ij = gl.convert_layout(m_ij.reshape([config.SPLIT_M]), mi_layout)
-    else:
-        m_ij = mi_consumer.get(mi_layout)
-    alpha = gl.exp2(m_i - m_ij)
+def _attn_fwd_correction_compute(config, alpha_consumer, o_consumer):
+    alpha_layout: gl.constexpr = gl.SliceLayout(1, config.o_splitn_layout)
+    alpha = alpha_consumer.get(config.alpha_2d_layout)
+    alpha = gl.convert_layout(alpha.reshape([config.SPLIT_M]), alpha_layout)
 
     o_tmem, o_bar = o_consumer.acquire()
     if config.SPLIT_D_FACTOR == 1:
@@ -664,15 +647,14 @@ def _attn_fwd_correction_compute(config, mi_consumer, o_consumer, m_i):
             o = _mul_f32x2(o, alpha[:, None])
             o_ref.store(o)
     mbarrier.arrive(o_bar, count=1)
-    return m_ij
 
 
 @gluon.jit
 def _attn_fwd_correction(config, info0, info1, STAGE: gl.constexpr):
     o0_consumer = info0.o_mma_ctx.channel.create_consumer()
     o1_consumer = info1.o_mma_ctx.channel.create_consumer()
-    mi0_consumer = info0.mi_chnl.create_consumer()
-    mi1_consumer = info1.mi_chnl.create_consumer()
+    alpha0_consumer = info0.alpha_chnl.create_consumer()
+    alpha1_consumer = info1.alpha_chnl.create_consumer()
 
     epilogue0_producer = info0.epilogue_chnl.create_producer()
     epilogue1_producer = info1.epilogue_chnl.create_producer()
@@ -684,13 +666,16 @@ def _attn_fwd_correction(config, info0, info1, STAGE: gl.constexpr):
     for pid in range(scheduler.start_pid, scheduler.num_tiles, config.NUM_SMS):
         prog = scheduler.get_program(pid)
         lo, hi = prog.get_fused_loop_bounds(STAGE)
+        num_corrections = (hi - lo) // config.BLOCK_N
 
-        m_i0 = gl.full([config.SPLIT_M], -float("inf"), gl.float32, gl.SliceLayout(1, config.o_splitn_layout))
-        m_i1 = gl.full([config.SPLIT_M], -float("inf"), gl.float32, gl.SliceLayout(1, config.o_splitn_layout))
+        _, alpha0_bar = alpha0_consumer.acquire()
+        mbarrier.arrive(alpha0_bar, count=1)
+        _, alpha1_bar = alpha1_consumer.acquire()
+        mbarrier.arrive(alpha1_bar, count=1)
 
-        for start_n in range(lo, hi, config.BLOCK_N):
-            m_i0 = _attn_fwd_correction_compute(config, mi0_consumer, o0_consumer, m_i0)
-            m_i1 = _attn_fwd_correction_compute(config, mi1_consumer, o1_consumer, m_i1)
+        for _ in range(num_corrections - 1):
+            _attn_fwd_correction_compute(config, alpha0_consumer, o0_consumer)
+            _attn_fwd_correction_compute(config, alpha1_consumer, o1_consumer)
 
         o0_tmem, o0_bar = o0_consumer.acquire()
         mbarrier.arrive(e0_bar, count=1)
@@ -705,15 +690,14 @@ def _attn_fwd_correction(config, info0, info1, STAGE: gl.constexpr):
 
 @gluon.jit
 def _softmax_inner_loop(tile_id: gl.constexpr, config, prog,  #
-                        qk_consumer, p_producer, mi_producer,  #
+                        qk_consumer, p_producer, alpha_producer,  #
                         offs_m, offs_n, m_i, l_i,  #
                         STAGE: gl.constexpr):
     lo, hi = prog.get_loop_bounds(STAGE)
 
     for start_n in range(lo, hi, config.BLOCK_N):
         qk = qk_consumer.get(config.qk_layout)
-        if config.HEAD_DIM == 128:
-            p_tmem, p_bar = p_producer.acquire()
+        p_tmem, p_bar = p_producer.acquire()
 
         if STAGE == 2:
             # Prevent LLVM from hoisting the partial sums, which triggers spilling.
@@ -722,30 +706,21 @@ def _softmax_inner_loop(tile_id: gl.constexpr, config, prog,  #
             mask = offs_m[:, None] >= (start_n + offs_n[None, :])
             qk = gl.where(mask, qk, -1.0e8)
         m_ij = gl.maximum(m_i, gl.max(qk, 1) * config.qk_scale)
-        if config.mi_use_tmem:
-            mi_producer.emplace(gl.convert_layout(m_ij.expand_dims(1), config.mi_2d_layout))
-        else:
-            mi_producer.emplace(m_ij)
         qk = qk * config.qk_scale - m_ij[:, None]
+        alpha = gl.exp2(m_i - m_ij)
 
-        if config.HEAD_DIM == 64:
-            p = gl.exp2(qk)
-            l_ij = gl.sum(p, 1)
-            alpha = gl.exp2(m_i - m_ij)
-            p_producer.emplace(p.to(config.dtype))
-        else:
-            qk0, qk1, = qk.reshape([config.SPLIT_M, 2, config.BLOCK_N // 2]).permute(0, 2, 1).split()
-            p0 = gl.exp2(qk0)
-            p_tmem.slice(0, config.BLOCK_N // 2).store(p0.to(config.dtype))
-            p1 = gl.exp2(qk1)
-            p_tmem.slice(config.BLOCK_N // 2, config.BLOCK_N // 2).store(p1.to(config.dtype))
-            mbarrier.arrive(p_bar, count=1)
-            p = gl.join(p0, p1).permute(0, 2, 1).reshape([config.SPLIT_M, config.BLOCK_N])
-            p = gl.convert_layout(p, config.qk_layout)
+        alpha_producer.emplace(gl.convert_layout(alpha.expand_dims(1), config.alpha_2d_layout))
 
-            l_ij = gl.sum(p, 1)
-            alpha = gl.exp2(m_i - m_ij)
+        qk0, qk1, = qk.reshape([config.SPLIT_M, 2, config.BLOCK_N // 2]).permute(0, 2, 1).split()
+        p0 = gl.exp2(qk0)
+        p_tmem.slice(0, config.BLOCK_N // 2).store(p0.to(config.dtype))
+        p1 = gl.exp2(qk1)
+        p_tmem.slice(config.BLOCK_N // 2, config.BLOCK_N // 2).store(p1.to(config.dtype))
+        mbarrier.arrive(p_bar, count=1)
+        p = gl.join(p0, p1).permute(0, 2, 1).reshape([config.SPLIT_M, config.BLOCK_N])
+        p = gl.convert_layout(p, config.qk_layout)
 
+        l_ij = gl.sum(p, 1)
         l_i = l_i * alpha + l_ij
         m_i = m_ij
 
@@ -759,7 +734,7 @@ def _softmax_tile(tile_id: gl.constexpr, config, info, M, desc_o, STAGE: gl.cons
 
     qk_consumer = info.qk_mma_ctx.channel.create_consumer()
     p_producer = info.p_chnl.create_producer()
-    mi_producer = info.mi_chnl.create_producer()
+    alpha_producer = info.alpha_chnl.create_producer()
     epilogue_consumer = info.epilogue_chnl.create_consumer()
 
     offs_n = gl.arange(0, config.BLOCK_N, qk_slice_dim0)
@@ -778,12 +753,12 @@ def _softmax_tile(tile_id: gl.constexpr, config, info, M, desc_o, STAGE: gl.cons
 
         if STAGE & 1:
             m_i, l_i = _softmax_inner_loop(tile_id, config, prog,  #
-                                           qk_consumer, p_producer, mi_producer,  #
+                                           qk_consumer, p_producer, alpha_producer,  #
                                            offs_m, offs_n, m_i, l_i,  #
                                            STAGE=4 - STAGE)
         if STAGE & 2:
             m_i, l_i = _softmax_inner_loop(tile_id, config, prog,  #
-                                           qk_consumer, p_producer, mi_producer,  #
+                                           qk_consumer, p_producer, alpha_producer,  #
                                            offs_m, offs_n, m_i, l_i,  #
                                            STAGE=2)
 
@@ -987,12 +962,21 @@ def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype):
 # Benchmarking
 # ===-----------------------------------------------------------------------===#
 
-BATCH = [4]
-N_HEADS = [32]
-HEAD_DIM = [64, 128]
-causal = [False, True]
-providers = ["triton-fp16", "triton-fp8"]
-N_CTX = [2**i for i in range(10, 17)]
+profile = False
+
+if not profile:
+    BATCH = [4]
+    N_HEADS = [32]
+    HEAD_DIM = [64, 128]
+    causal = [False, True]
+    providers = ["triton-fp16", "triton-fp8"]
+    N_CTX = [2**i for i in range(10, 17)]
+else:
+    BATCH = [4]
+    HEAD_DIM = [64]
+    causal = [False]
+    providers = ["cudnn-fp16"]
+    N_CTX = [16 * 1024]
 
 bench_configs = []
 for Z, H, D, is_causal in itertools.product(BATCH, N_HEADS, HEAD_DIM, causal):
@@ -1040,7 +1024,10 @@ def bench(Z, H, N_CTX, HEAD_DIM, causal, provider):
         else:
             raise ValueError(f"Unsupported provider: {provider}")
 
-        ms = triton.testing.do_bench(fn)
+        if not profile:
+            ms = triton.testing.do_bench(fn)
+        else:
+            ms, _ = 1, fn()
         flops_per_matmul = 2.0 * Z * H * N_CTX * N_CTX * HEAD_DIM
         total_flops = 2 * flops_per_matmul
         if causal:
