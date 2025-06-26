@@ -68,8 +68,9 @@ LogicalResult lowerLdStMatrix(
   std::optional<ColumnAction> maybePermutation;
   LinearLayout tile;
   if (!transpose) {
-    tile = LinearLayout::identity1D(std::max(32 / bitwidth, 1u), kReg, kOffset) *
-           LinearLayout::identity1D(4, kLane, kOffset);
+    tile =
+        LinearLayout::identity1D(std::max(32 / bitwidth, 1u), kReg, kOffset) *
+        LinearLayout::identity1D(4, kLane, kOffset);
 
     // Find if there is a register permutation that allows us to divideLeft
     // We need to pass the map from regs to offsets, as is cvt
@@ -129,8 +130,8 @@ LogicalResult lowerLdStMatrix(
   }
 
   // We must have at least 2 register elements to use stmatrix.trans
-  if (transpose &&
-      reps.getInDimSizeLog2(kReg) < llvm::Log2_32(std::max(32 / bitwidth, 1u))) {
+  if (transpose && reps.getInDimSizeLog2(kReg) <
+                       llvm::Log2_32(std::max(32 / bitwidth, 1u))) {
     return failure();
   }
 
