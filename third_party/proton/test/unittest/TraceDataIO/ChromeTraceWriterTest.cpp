@@ -77,6 +77,7 @@ TEST_F(ChromeTraceWriterTest, SingleBlock) {
   auto result = createDefaultResult(1, 1, metadata->scopeName.size());
   result->blockTraces[0].blockId = 1;
   result->blockTraces[0].procId = 120;
+  result->blockTraces[0].initialTime = 0;
   result->blockTraces[0].traces[0].uid = 2;
   result->blockTraces[0].traces[0].profileEvents[0].first->cycle = 122;
   result->blockTraces[0].traces[0].profileEvents[0].second->cycle = 162;
@@ -168,6 +169,7 @@ TEST_F(ChromeTraceWriterTest, MultiKernel) {
     for (int j = 0; j < 1; j++) {
       result1->blockTraces[j].blockId = j;
       result1->blockTraces[j].procId = j;
+      result1->blockTraces[j].initialTime = 0;
       result1->blockTraces[j].traces[i].uid = i;
       result1->blockTraces[j].traces[i].profileEvents[0].first->cycle = 1220000;
       result1->blockTraces[j].traces[i].profileEvents[0].second->cycle =
@@ -186,11 +188,11 @@ TEST_F(ChromeTraceWriterTest, MultiKernel) {
     for (int j = 0; j < 2; j++) {
       result2->blockTraces[j].blockId = j;
       result2->blockTraces[j].procId = j;
+      result2->blockTraces[j].initialTime = 10000000;
       result2->blockTraces[j].traces[i].uid = i;
-      result2->blockTraces[j].traces[i].profileEvents[0].first->cycle =
-          2 * kKernelTimeGap + 1220000;
+      result2->blockTraces[j].traces[i].profileEvents[0].first->cycle = 1220000;
       result2->blockTraces[j].traces[i].profileEvents[0].second->cycle =
-          2 * kKernelTimeGap + 1620000;
+          1620000;
       result2->blockTraces[j].traces[i].profileEvents[0].first->scopeId = 1;
       result2->blockTraces[j].traces[i].profileEvents[0].second->scopeId = 1;
     }
