@@ -10,8 +10,6 @@ from ..runtime.autotuner import OutOfResources
 from ..runtime.cache import get_cache_manager, get_dump_manager, get_override_manager
 from ..runtime.driver import driver
 from ..tools.disasm import get_sass
-# TODO: this shouldn't be here
-from .code_generator import ast_to_ttir
 from pathlib import Path
 import re
 import functools
@@ -81,6 +79,7 @@ class ASTSource:
         return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
     def make_ir(self, options, codegen_fns, module_map, context):
+        from .code_generator import ast_to_ttir
         return ast_to_ttir(self.fn, self, context=context, options=options, codegen_fns=codegen_fns,
                            module_map=module_map)
 
@@ -372,6 +371,9 @@ def compile(src, target=None, options=None):
             metadata_group[ir_filename] = fn_cache_manager.put(next_module, ir_filename)
         if fn_dump_manager is not None:
             fn_dump_manager.put(next_module, ir_filename)
+            if ext == "cubin":
+                sass = get_sass(next_module)
+                fn_dump_manager.put(sass, file_name + ".sass")
         # use an env variable to parse ir from file
         if use_ir_loc == ext:
             ir_full_name = fn_cache_manager.get_file(ir_filename)

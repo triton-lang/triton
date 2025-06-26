@@ -4,9 +4,11 @@ from typing import Optional, Tuple, List, TYPE_CHECKING
 from dataclasses import dataclass
 from triton.experimental.gluon.language import _core as ttgl
 from triton.experimental.gluon.language._core import builtin, base_type, base_value, _unwrap_if_constexpr
+from triton.experimental.gluon.language._semantic import _check
 
 from . import tma
-from ..hopper import mbarrier
+from ..hopper import fence_async_shared, mbarrier
+from ..ampere import async_copy
 
 if TYPE_CHECKING:
     from triton._C.libtriton.gluon_ir import GluonOpBuilder
@@ -14,10 +16,12 @@ if TYPE_CHECKING:
     from ..._semantic import GluonSemantic
 
 __all__ = [
-    "TensorMemoryLayout",
-    "tensor_memory_descriptor",
     "allocate_tensor_memory",
+    "async_copy",
+    "fence_async_shared",
     "mbarrier",
+    "tensor_memory_descriptor",
+    "TensorMemoryLayout",
     "tma",
 ]
 
@@ -107,6 +111,10 @@ class tensor_memory_descriptor(base_value):
     def rank(self):
         return len(self.shape)
 
+    @property
+    def layout(self):
+        return self.type.layout
+
     def __str__(self) -> str:
         return str(self.type)
 
@@ -122,15 +130,17 @@ class tensor_memory_descriptor(base_value):
     def store(self, value, pred=True, _semantic: GluonSemantic = None) -> None:
         pred = _unwrap_if_constexpr(pred)
         pred = _semantic.to_tensor(pred)
+        assert value.shape == self.shape, f"source shape {value.shape} does not match destination shape {self.shape}"
+        assert value.dtype == self.dtype, f"source dtype {value.dtype} does not match destination dtype {self.dtype}"
         _semantic.builder.create_tmem_store(self.handle, value.handle, pred.handle)
 
     @builtin
-    def split(self, start, length, _semantic: GluonSemantic) -> None:
+    def slice(self, start, length, _semantic: GluonSemantic) -> None:
         start = _unwrap_if_constexpr(start)
         length = _unwrap_if_constexpr(length)
-        assert isinstance(start, int)
-        assert isinstance(length, int)
-        shape = [self.shape[0], length]
+        _check(isinstance(start, int), lambda: "start must be a constant int")
+        _check(isinstance(length, int), lambda: "length must be a constant int")
+        shape = self.shape[:-1] + [length]
         layout = self.type.layout
         layout = TensorMemoryLayout((layout.block[0], min(layout.block[1], length)), layout.unpacked,
                                     layout.cta_split_num)
@@ -140,22 +150,26 @@ class tensor_memory_descriptor(base_value):
         return ret
 
     @builtin
-    def subslice(self, index, shape=None, layout=None, _semantic: GluonSemantic = None) -> tensor_memory_descriptor:
-        if layout is None:
-            layout = self.type.layout
-        if shape is None:
-            shape = self.shape[1:]
-
-        index = _semantic._convert_elem_to_ir_value(index, require_i64=False)
-        shape = [_unwrap_if_constexpr(s) for s in shape]
-        layout = _unwrap_if_constexpr(layout)
-
+    def index(self, index, _semantic: GluonSemantic = None) -> tensor_memory_descriptor:
+        index = _semantic.to_tensor(index)
         builder = _semantic.builder
         offsets = [builder.get_int32(0)] * self.rank
-        offsets[0] = index
+        offsets[0] = index.handle
+        shape = self.shape[1:]
+        layout = self.layout
         ret = tensor_memory_descriptor(None, self.dtype, shape, layout, self.type.alloc_shape)
         ret.handle = builder.create_memdesc_subview(ret.type.to_ir(builder), self.handle, offsets)
         return ret
+
+    @builtin
+    def _reinterpret(self, dtype, shape, layout, _semantic: GluonSemantic = None) -> tensor_memory_descriptor:
+        dtype = _unwrap_if_constexpr(dtype)
+        shape = [_unwrap_if_constexpr(s) for s in shape]
+        layout = _unwrap_if_constexpr(layout)
+
+        ty = tensor_memory_descriptor_type(dtype, shape, layout, shape)
+        handle = _semantic.builder.create_memdesc_reinterpret(ty.to_ir(_semantic.builder), self.handle)
+        return tensor_memory_descriptor(handle, **ty.__dict__)
 
 
 @builtin

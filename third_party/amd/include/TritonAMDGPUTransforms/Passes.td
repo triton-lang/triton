@@ -137,6 +137,9 @@ def TritonAMDGPUConvertToBufferOps : Pass<"tritonamdgpu-convert-buffer-ops", "ml
     Option<"archGenerationName", "arch-generation-name",
            "std::string", /*default=*/"std::string{}",
            "GFX generation name of target device.">,
+    Option<"allowBufferAtomics", "allow-buffer-atomics",
+           "bool", /*default*/"true",
+           "Allow buffer atomic operations when the hardware supports it.">,
   ];
 }
 
