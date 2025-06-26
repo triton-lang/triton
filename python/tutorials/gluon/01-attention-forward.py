@@ -276,10 +276,6 @@ class MMAContext:
     def release(self):
         self.channel.release()
 
-    @tl.constexpr_function
-    def get_reg_layout(self, num_warps):
-        return get_tmem_32x32b_reg_layout(self.instr_shape, self.shape, num_warps)
-
 
 @gl.aggregate
 class MMAProducer:
@@ -465,14 +461,14 @@ class InnerLoopInfo:
         # QK and PV MMAs are serialized, which enables borrowing QK's memory.
         borrow_tmem = self.qk_mma_ctx.channel.mem.index(0)
         p_tmem = borrow_tmem.slice(0, config.BLOCK_N // 2)
-        mi_tmem = borrow_tmem.slice(config.BLOCK_N // 2, 1)
-        mi_layout: gl.constexpr = TensorMemoryLayout([config.SPLIT_M, 1], unpacked=False)
+        alpha_tmem = borrow_tmem.slice(config.BLOCK_N // 2, 1)
+        alpha_layout: gl.constexpr = TensorMemoryLayout([config.SPLIT_M, 1], unpacked=False)
 
         self.p_chnl = TensorMemoryChannel._borrow(p_tmem, config.qk_shape, config.dtype, config.p_tmem_layout,
                                                   num_buffers=1, num_consumers=1)
         self.p_chnl.initialize_for_producer()
 
-        self.alpha_chnl = TensorMemoryChannel._borrow(mi_tmem, [config.SPLIT_M, 1], gl.float32, mi_layout,
+        self.alpha_chnl = TensorMemoryChannel._borrow(alpha_tmem, [config.SPLIT_M, 1], gl.float32, alpha_layout,
                                                       num_buffers=1)
         self.alpha_chnl.initialize_for_producer()
 
@@ -485,6 +481,72 @@ class InnerLoopInfo:
         self.o_mma_ctx.release()
         self.p_chnl.release()
         self.alpha_chnl.release()
+        self.epilogue_chnl.release()
+
+
+# ===-----------------------------------------------------------------------===#
+# float2
+# ===-----------------------------------------------------------------------===#
+
+
+@gluon.jit
+def _add_f32x2(a, b):
+    return gl.inline_asm_elementwise(
+        """
+        {
+            .reg .b64 ra, rb, rc;
+            mov.b64 ra, { $2, $3 };
+            mov.b64 rb, { $4, $5 };
+            add.f32x2 rc, ra, rb;
+            mov.b64 { $0, $1 }, rc;
+        }
+        """,
+        "=r,=r,r,r,r,r",
+        [a, b],
+        dtype=gl.float32,
+        is_pure=True,
+        pack=2,
+    )
+
+
+@gluon.jit
+def _mul_f32x2(a, b):
+    return gl.inline_asm_elementwise(
+        """
+        {
+            .reg .b64 ra, rb, rc;
+            mov.b64 ra, { $2, $3 };
+            mov.b64 rb, { $4, $5 };
+            mul.f32x2 rc, ra, rb;
+            mov.b64 { $0, $1 }, rc;
+        }
+        """,
+        "=r,=r,r,r,r,r",
+        [a, b],
+        dtype=gl.float32,
+        is_pure=True,
+        pack=2,
+    )
+
+
+@gluon.jit
+def _reduce_fadd2(p0a, p1a, p0b, p1b):
+    return gl.inline_asm_elementwise(
+        """
+        {
+            .reg .b64 rc, ra, rb;
+            mov.b64 ra, { $2, $4 };
+            mov.b64 rb, { $3, $5 };
+            add.f32x2 rc, ra, rb;
+            mov.b64 { $0, $1 }, rc;
+        }
+        """,
+        "=r,=r,r,r,r,r",
+        [p0a, p0b, p1a, p1b],
+        dtype=[gl.float32, gl.float32],
+        is_pure=True,
+        pack=1,
+    )
 
 
 # ===-----------------------------------------------------------------------===#
@@ -590,46 +652,6 @@ def _attn_fwd_mma(  #
 
 
 @gluon.jit
-def _add_f32x2(a, b):
-    return gl.inline_asm_elementwise(
-        """
-        {
-            .reg .b64 ra, rb, rc;
-            mov.b64 ra, { $2, $3 };
-            mov.b64 rb, { $4, $5 };
-            add.f32x2 rc, ra, rb;
-            mov.b64 { $0, $1 }, rc;
-        }
-        """,
-        "=r,=r,r,r,r,r",
-        [a, b],
-        dtype=gl.float32,
-        is_pure=True,
-        pack=2,
-    )
-
-
-@gluon.jit
-def _mul_f32x2(a, b):
-    return gl.inline_asm_elementwise(
-        """
-        {
-            .reg .b64 ra, rb, rc;
-            mov.b64 ra, { $2, $3 };
-            mov.b64 rb, { $4, $5 };
-            mul.f32x2 rc, ra, rb;
-            mov.b64 { $0, $1 }, rc;
-        }
-        """,
-        "=r,=r,r,r,r,r",
-        [a, b],
-        dtype=gl.float32,
-        is_pure=True,
-        pack=2,
-    )
-
-
-@gluon.jit
 def _attn_fwd_correction_compute(config, alpha_consumer, o_consumer):
     alpha_layout: gl.constexpr = gl.SliceLayout(1, config.o_splitn_layout)
     alpha = alpha_consumer.get(config.alpha_2d_layout)
@@ -689,26 +711,6 @@ def _attn_fwd_correction(config, info0, info1, STAGE: gl.constexpr):
 
 
 @gluon.jit
-def _reduce_fadd2(p0a, p1a, p0b, p1b):
-    return gl.inline_asm_elementwise(
-        """
-        {
-            .reg .b64 rc, ra, rb;
-            mov.b64 ra, { $2, $4 };
-            mov.b64 rb, { $3, $5 };
-            add.f32x2 rc, ra, rb;
-            mov.b64 { $0, $1 }, rc;
-        }
-        """,
-        "=r,=r,r,r,r,r",
-        [p0a, p0b, p1a, p1b],
-        dtype=[gl.float32, gl.float32],
-        is_pure=True,
-        pack=1,
-    )
-
-
-@gluon.jit
 def _softmax_inner_loop(tile_id: gl.constexpr, config, prog,  #
                         qk_consumer, p_producer, alpha_producer,  #
                         offs_m, offs_n, m_i, l_i,  #
@@ -742,17 +744,10 @@ def _softmax_inner_loop(tile_id: gl.constexpr, config, prog,  #
         p_tmem.slice(config.BLOCK_N // 2, config.BLOCK_N // 2).store(p1.to(config.dtype))
         mbarrier.arrive(p_bar, count=1)
 
-        # l_ij = gl.sum(p, 1)
-        p = gl.join(p0, p1).permute(0, 2, 1).reshape([config.SPLIT_M, config.BLOCK_N])
-        p = gl.convert_layout(p, config.qk_layout, assert_trivial=True)
-        l_ij = gl.sum(p, axis=1)
+        # FIXME: This code makes ptxas misbehave and spill :(
         # p0 = gl.convert_layout(p0, config.qk_layout, assert_trivial=True)
         # p1 = gl.convert_layout(p1, config.qk_layout, assert_trivial=True)
         # l_ij0, l_ij1 = gl.reduce((p0, p1), axis=1, combine_fn=_reduce_fadd2)
-        # l_ij = l_ij0 + l_ij1
-
-        # l_i = l_i * alpha + l_ij
-        l_i = l_i * alpha + l_ij
         # l_i0, l_i1 = gl.inline_asm_elementwise(
         #     """
         #     {
@@ -771,6 +766,10 @@ def _softmax_inner_loop(tile_id: gl.constexpr, config, prog,  #
         #     pack=1,
         # )
 
+        p = gl.join(p0, p1).permute(0, 2, 1).reshape([config.SPLIT_M, config.BLOCK_N])
+        p = gl.convert_layout(p, config.qk_layout, assert_trivial=True)
+        l_ij = gl.sum(p, axis=1)
+        l_i = l_i * alpha + l_ij
         m_i = m_ij
 
     return m_i, l_i
