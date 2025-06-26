@@ -11,12 +11,6 @@ from ..swizzle import SwizzlingType, swizzle, unswizzle
 # -----------------------------------------------------------------------------
 
 
-def get_max_quant_val(dtype: torch.dtype):
-    d = {torch.uint8: 6.0, torch.float8_e5m2: 57344.0, torch.float8_e4m3fn: 448.0}
-    assert dtype in d
-    return d[dtype]
-
-
 class DequantScaleRoundingMode(Enum):
     ROUND_UP = 0
     ROUND_DOWN = 1
@@ -132,15 +126,23 @@ def upcast_from_mxfp(tensor: torch.Tensor, scale: torch.Tensor, dtype: torch.dty
     return out
 
 
+# ------------
+
+
 def right_shift_unsigned(x, shift):
     # CUDA torch does not support bit ops on uint32, so we need to mask to get unsigned right shift
     return (x >> shift) & ((1 << (32 - shift)) - 1)
 
 
+def get_max_quant_val(dtype: torch.dtype):
+    d = {torch.uint8: 6.0, torch.float8_e5m2: 57344.0, torch.float8_e4m3fn: 448.0}
+    assert dtype in d
+    return d[dtype]
+
+
 def downcast_to_mxfp_torch(src_tensor: torch.Tensor, out_quant_type: torch.dtype, axis: int,
                            swizzle_axis: int | None = None, swizzle_value: SwizzlingType | None = None,
-                           swizzle_scale: SwizzlingType | None = None, out_quant_tensor: torch.Tensor | None = None,
-                           out_scale: torch.Tensor | None = None,
+                           swizzle_scale: SwizzlingType | None = None,
                            DEQUANT_SCALE_ROUNDING_MODE: DequantScaleRoundingMode = DequantScaleRoundingMode.ROUND_UP):
     """
     Converts the src tensor to the output format specified by out_quant_type.
@@ -264,28 +266,13 @@ def downcast_to_mxfp_torch(src_tensor: torch.Tensor, out_quant_type: torch.dtype
     # --- Process and output the scale ---
     dq_scale = (ds_int_rounded.view(*dequant_scale.shape) >> 23).to(torch.uint8)  # shape: (..., axis_shape//32, 1)
     dq_scale = dq_scale.squeeze(-1)
-
     out_weight = out_weight.transpose(axis, src_tensor.ndim - 1)
     dq_scale = dq_scale.transpose(axis, src_tensor.ndim - 1)
 
     dq_scale = swizzle(dq_scale, axis, swizzle_axis, swizzle_scale)
     out_weight = swizzle(out_weight, axis, swizzle_axis, swizzle_value)
 
-    if out_quant_tensor is not None:
-        assert out_quant_tensor.shape == out_weight.shape, f"Invalid shape {out_quant_tensor.shape} != {out_weight.shape}"
-        assert out_quant_tensor.dtype == out_weight.dtype, f"Invalid dtype {out_quant_tensor.dtype} != {out_weight.dtype}"
-        out_quant_tensor.copy_(out_weight)
-    else:
-        out_quant_tensor = out_weight
-
-    if out_scale is not None:
-        assert out_scale.shape == dq_scale.shape, f"Invalid shape {out_scale.shape} != {dq_scale.shape}"
-        assert out_scale.dtype == dq_scale.dtype, f"Invalid dtype {out_scale.dtype} != {dq_scale.dtype}"
-        out_scale.copy_(dq_scale)
-    else:
-        out_scale = dq_scale
-
-    return out_quant_tensor, out_scale
+    return out_weight, dq_scale
 
 
 def cvt_e2m1_to_fp32(input_tensor):
@@ -349,7 +336,6 @@ def upcast_from_mxfp_torch(tensor: torch.Tensor, scale: torch.Tensor, target_dty
         fp32_tensor = tensor.to(torch.float32)
 
     # Trim padding
-    dq_scale = dq_scale[..., :fp32_tensor.shape[-2], :(fp32_tensor.shape[-1] + 31) // 32]
     logical_quant_dim = tensor.shape[-1] * (2 if tensor.dtype == torch.uint8 else 1)
     unpadded_scale_shape = (*tensor.shape[:-1], triton.cdiv(logical_quant_dim, 32))
     slices = tuple(slice(0, size) for size in unpadded_scale_shape)
