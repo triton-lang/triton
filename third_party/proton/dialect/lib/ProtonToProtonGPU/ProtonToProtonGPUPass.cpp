@@ -278,8 +278,9 @@ public:
     Location loc = m->getLoc();
 
     // Validate metric type at runtime instead of using assert
-    if (metricType != MetricType::CYCLE) {
-      mlir::emitError(loc, "only CYCLE metric type is supported currently");
+    if (metricType != MetricType::CYCLE && metricType != MetricType::REALTIME) {
+      mlir::emitError(
+          loc, "only CYCLE and REALTIME metric types are supported currently");
       signalPassFailure();
       return;
     }

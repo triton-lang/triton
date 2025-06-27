@@ -7,12 +7,14 @@ def MetricTypeAttr : I32EnumAttr<
   "MetricType", "The type of metric to be profiled",
   [
     I32EnumAttrCase<"CYCLE", 0, "cycle">,
+    I32EnumAttrCase<"REALTIME", 1, "realtime">,
   ]> {
   let cppNamespace = "::mlir::triton::proton";
   let description = [{
     Attribute to indicate the metric to be profiled.
     The following metrics are supported:
     - CYCLE: Cycle count metric.
+    - REALTIME: Wallclock time metric.
   }];
 }
 
