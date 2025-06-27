@@ -383,12 +383,12 @@ def test_typeconvert_downcast_clamping(src_dtype, dst_dtype, mode, rounding="rtn
         if is_hip_cdna2():
             pytest.skip(f"{dst_dtype} downcast to {dst_dtype} with clamping is not fully tested on AMDGPU CDNA2")
 
-        if is_hip_cdna3() and src_dtype == 'bfloat16':
-            pytest.skip(f"{dst_dtype} downcast to {dst_dtype} with clamping is not fully tested on AMDGPU CDNA3")
-
-        if is_hip_cdna3() and src_dtype in ('float32', 'float16') and mode in ('inf', '-inf'):
-            pytest.skip(f"{src_dtype} downcast to {dst_dtype} with clamping for `inf` or `-inf` "
-                        "is not fully tested on AMDGPU CDNA3")
+        if is_hip_cdna3():
+            if src_dtype == 'bfloat16' and dst_dtype == 'float8e4nv':
+                pytest.skip(f"{src_dtype} downcast to {dst_dtype} with clamping is not fully tested on AMDGPU CDNA3")
+            if dst_dtype == 'float8e5' and mode in ('inf', '-inf'):
+                pytest.skip(f"Downcast to {dst_dtype} with clamping for `inf` or `-inf` "
+                             "is not fully tested on AMDGPU CDNA3")
 
     converter = {
         tl.float8e4nv: torch.float8_e4m3fn,
