@@ -143,38 +143,6 @@ public:
 private:
   const TargetInfoBase &targetInfo;
 };
-
-class ConvertLayoutForcedSwizzling
-    : public ConvertOpToLLVMPattern<ConvertLayoutOp> {
-public:
-  ConvertLayoutForcedSwizzling(LLVMTypeConverter &typeConverter,
-                               const TargetInfoBase &targetInfo,
-                               PatternBenefit benefit)
-      : ConvertOpToLLVMPattern(typeConverter, benefit), targetInfo(targetInfo) {
-  }
-
-  LogicalResult
-  matchAndRewrite(ConvertLayoutOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    if (op->hasAttr(mlir::triton::AMD::AttrSharedMemPadded))
-      return failure();
-
-    auto srcType = op.getSrc().getType();
-    auto dstType = op.getType();
-    if (!cvtNeedsSharedMemory(srcType, dstType))
-      return failure();
-
-    if (failed(transferWithinBlockSwizzling(op, adaptor.getSrc(), targetInfo,
-                                            getTypeConverter(), rewriter)))
-      return failure();
-
-    return success();
-  }
-
-private:
-  const TargetInfoBase &targetInfo;
-};
-
 } // namespace
 
 void mlir::triton::AMD::populateConvertLayoutOpToLLVMPatterns(
@@ -183,6 +151,6 @@ void mlir::triton::AMD::populateConvertLayoutOpToLLVMPatterns(
   patterns.add<ConvertLayoutOpMFMAToLinearConversion>(typeConverter, targetInfo,
                                                       benefit);
   patterns.add<ConvertLayoutForcedPadding>(typeConverter, targetInfo, benefit);
-  patterns.add<ConvertLayoutForcedSwizzling>(typeConverter, targetInfo,
-                                             benefit);
+  // No need to convert when ForcedSwizzling as it's already the default
+  // lowering
 }
