@@ -4,8 +4,6 @@ import triton.language as tl
 import pytest
 import itertools
 
-from typing import Union
-
 from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
 from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
@@ -16,7 +14,7 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
     tensor_memory_descriptor,
     tma,
     mbarrier,
-    tcgen05_mma,
+    tcgen05_mma as _tcgen05_mma_impl,
     tcgen05_commit,
 )
 
@@ -277,6 +275,11 @@ class MMAContext:
         self.channel.release()
 
 
+@gluon.jit
+def tcgen05_mma(a, b, d, use_acc, mbarriers):
+    _tcgen05_mma_impl(a, b, d, use_acc=use_acc, mbarriers=mbarriers, mbarrier_preds=[True] * len(mbarriers))
+
+
 @gl.aggregate
 class MMAProducer:
     producer: TensorMemoryProducer
@@ -286,8 +289,7 @@ class MMAProducer:
 
     def wait_and_issue_next(self, a, b, release_bars, use_acc):
         tmem, bar = self.producer.acquire()
-        tcgen05_mma(a, b, tmem, use_acc=use_acc, mbarriers=[bar] + release_bars,
-                    mbarrier_preds=[True] * (len(release_bars) + 1))
+        tcgen05_mma(a, b, tmem, use_acc=use_acc, mbarriers=[bar] + release_bars)
 
 
 # ===-----------------------------------------------------------------------===#
@@ -566,17 +568,24 @@ def _attn_fwd_load(  #
     scheduler = ProgramScheduler(config)
     for pid in range(scheduler.start_pid, scheduler.num_tiles, config.NUM_SMS):
         prog = scheduler.get_program(pid)
+        lo, hi = prog.get_fused_loop_bounds(STAGE)
 
         q0_offset = prog.qo_offset_y + config.SPLIT_M * 0
         q0_smem, q0_bar = q_producer.acquire()
         issue_async_tma_load(q0_smem, q0_bar, desc_q, q0_offset)
 
+        offsetkv_y = prog.offset_y + lo
+        k_smem, k_bar = kv_producer.acquire()
+        issue_async_tma_load(k_smem, k_bar, desc_k, offsetkv_y)
+
         q1_offset = prog.qo_offset_y + config.SPLIT_M * 1
         q1_smem, q1_bar = q_producer.acquire()
         issue_async_tma_load(q1_smem, q1_bar, desc_q, q1_offset)
 
-        lo, hi = prog.get_fused_loop_bounds(STAGE)
-        for start_n in range(lo, hi, config.BLOCK_N):
+        v_smem, v_bar = kv_producer.acquire()
+        issue_async_tma_load(v_smem, v_bar, desc_v, offsetkv_y)
+
+        for start_n in range(lo + config.BLOCK_N, hi, config.BLOCK_N):
             offsetkv_y = prog.offset_y + start_n
             k_smem, k_bar = kv_producer.acquire()
             issue_async_tma_load(k_smem, k_bar, desc_k, offsetkv_y)
@@ -601,10 +610,6 @@ def _attn_fwd_mma(  #
     o0_producer = MMAProducer(info0.o_mma_ctx)
     o1_producer = MMAProducer(info1.o_mma_ctx)
 
-    qk_p_bar = gl.allocate_shared_memory(gl.int64, [1], mbarrier.MBarrierLayout())
-    qk_p_phase = 0
-    mbarrier.init(qk_p_bar, count=1)
-
     scheduler = ProgramScheduler(config)
     for pid in range(scheduler.start_pid, scheduler.num_tiles, config.NUM_SMS):
         prog = scheduler.get_program(pid)
@@ -621,20 +626,16 @@ def _attn_fwd_mma(  #
         for _ in range(num_mmas - 1):
             v_smem, v_bar = kv_consumer.acquire()
             p0_tmem, p0_bar = p0_consumer.acquire()
-            o0_producer.wait_and_issue_next(p0_tmem, v_smem, [v_bar, p0_bar, qk_p_bar], use_acc=o0_init)
+            o0_producer.wait_and_issue_next(p0_tmem, v_smem, [v_bar, p0_bar], use_acc=o0_init)
             o0_init = True
 
             k_smem, k_bar = kv_consumer.acquire()
-            mbarrier.wait(qk_p_bar, qk_p_phase)
-            qk_p_phase ^= 1
             qk0_producer.wait_and_issue_next(q0_smem, k_smem.permute((1, 0)), [k_bar], use_acc=False)
 
             p1_tmem, p1_bar = p1_consumer.acquire()
-            o1_producer.wait_and_issue_next(p1_tmem, v_smem, [v_bar, p1_bar, qk_p_bar], use_acc=o1_init)
+            o1_producer.wait_and_issue_next(p1_tmem, v_smem, [v_bar, p1_bar], use_acc=o1_init)
             o1_init = True
 
-            mbarrier.wait(qk_p_bar, qk_p_phase)
-            qk_p_phase ^= 1
             qk1_producer.wait_and_issue_next(q1_smem, k_smem.permute((1, 0)), [k_bar], use_acc=False)
         tcgen05_commit(q0_bar)
         tcgen05_commit(q1_bar)
@@ -647,8 +648,6 @@ def _attn_fwd_mma(  #
         p1_tmem, p1_bar = p1_consumer.acquire()
         o1_producer.wait_and_issue_next(p1_tmem, v_smem, [v_bar, p1_bar], use_acc=o1_init)
         o1_init = True
-
-    mbarrier.invalidate(qk_p_bar)
 
 
 @gluon.jit
