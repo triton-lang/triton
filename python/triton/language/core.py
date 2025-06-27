@@ -1597,9 +1597,7 @@ def _aggregate_impl(cls, jit):
             if isinstance(cls.__init__, JITFunction):
                 for name, ty in cls.__annotations__.items():
                     setattr(instance, name, _init_placeholder_value())
-                dest = _generator.create_writeback(instance)
                 _generator.call_JitFunction(cls.__init__, [instance, *args], kwargs)
-                instance = dest.value
                 return instance
 
             extra_kwargs = {}
@@ -1618,7 +1616,7 @@ def _aggregate_impl(cls, jit):
 
         # Only allow setting attributes defined in the class annotations.
         def __setattr__(self, name, value):
-            if name in ["__ast__"] or isinstance(value, _init_placeholder_value):
+            if isinstance(value, _init_placeholder_value):
                 super().__setattr__(name, value)
                 return
             if name not in cls.__annotations__:

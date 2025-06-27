@@ -531,3 +531,67 @@ def test_modify_if_livein():
         if box.value:
             box.value = False
     anchor(box.value)
+
+
+@triton.jit
+def test_mutate_object_scf_if():
+    TBox: tl.constexpr = Box(tl.tensor)
+    box = TBox(tl.core.to_tensor(0))
+    a = box
+    b = box
+    box.value = tl.core.to_tensor(100)
+
+    if tl.core.to_tensor(True):
+        anchor((box, a, b))
+        b.value = tl.core.to_tensor(1)
+        a = TBox(tl.core.to_tensor(10))
+        anchor((box, a, b))
+    else:
+        anchor((box, a, b))
+        b.value = tl.core.to_tensor(2)
+        a = TBox(tl.core.to_tensor(20))
+        anchor((box, a, b))
+    anchor((box, a, b))
+
+
+@triton.jit
+def test_mutate_object_if_toplevel():
+    TBox: tl.constexpr = Box(tl.tensor)
+    box = TBox(tl.core.to_tensor(0))
+    a = box
+    b = box
+    box.value = tl.core.to_tensor(100)
+
+    if tl.core.to_tensor(True):
+        anchor((box, a, b))
+        b.value = tl.core.to_tensor(1)
+        a = TBox(tl.core.to_tensor(10))
+        anchor((box, a, b))
+    else:
+        anchor((box, a, b))
+        b.value = tl.core.to_tensor(2)
+        a = TBox(tl.core.to_tensor(20))
+        anchor((box, a, b))
+        return
+    anchor((box, a, b))
+
+
+@triton.jit
+def test_mutate_object_for():
+    TBox: tl.constexpr = Box(tl.tensor)
+    box = TBox(tl.core.to_tensor(0))
+    a = box
+    b = box
+    box.value = tl.core.to_tensor(100)
+
+    for i in range(0):
+        anchor((box, a, b))
+        b.value = tl.core.to_tensor(1)
+        a = TBox(tl.core.to_tensor(10))
+
+
+from triton._filecheck import run_parser
+from triton import knobs
+
+knobs.compilation.disable_line_info = True
+print(run_parser(test_mutate_object_for).str_nodebug())

@@ -106,15 +106,47 @@ def unflatten_ir_values(handles: List[ir.value], types: List[base_type]):
 _condition_types = {bool, int, type(None)}  # Python types accepted for conditionals inside kernels
 
 
-def _clone_triton_value(val):
-    handles = []
-    val._flatten_ir(handles)
-    clone, _ = val.type._unflatten_ir(handles, 0)
-    return clone
+def _is_reference_semantic(value):
+    return getattr(value.type, "__triton_mutable__", False)
 
 
-def _clone_scope(scope):
-    return {name: _clone_triton_value(val) if _is_triton_value(val) else val for name, val in scope.items()}
+def _contains_reference(value):
+
+    def walk(value, visited):
+        if id(value) in visited:
+            return False
+        visited.add(id(value))
+        if isinstance(value, (list, set, tuple)):
+            for item in value:
+                if walk(item, visited):
+                    return True
+        elif isinstance(value, base_value):
+            if _is_reference_semantic(value):
+                return True
+            for item in getattr(value, "__dict__", {}).values():
+                if walk(item, visited):
+                    return True
+
+    return walk(value, set())
+
+
+def _capture_references(scope):
+    refs = {}
+    for value in scope.values():
+        if _is_reference_semantic(value):
+            refs[id(value)] = (flatten_values_to_ir([value]), value)
+    return refs
+
+
+def _restore_reference(value, clone):
+    for attr in vars(value):
+        setattr(value, attr, getattr(clone, attr))
+
+
+def _restore_references(refs):
+    for obj_id, (ir_values, value) in refs.items():
+        clone = next(unflatten_ir_values(ir_values, [value.type]))
+        _restore_reference(value, clone)
 
 
 class enter_sub_region:
@@ -124,12 +156,12 @@ class enter_sub_region:
 
     def __enter__(self):
         # record lscope & local_defs in the parent scope
-        self.liveins = _clone_scope(self.generator.lscope)
-        self.prev_defs = _clone_scope(self.generator.local_defs)
+        self.liveins = self.generator.lscope.copy()
+        self.prev_defs = self.generator.local_defs.copy()
         self.generator.local_defs = {}
         self.insert_block = self.generator.builder.get_insertion_block()
         self.insert_point = self.generator.builder.get_insertion_point()
-        return self.liveins, self.insert_block
+        return self.liveins, _capture_references(self.liveins), self.insert_block
 
     def __exit__(self, *args, **kwargs):
         self.generator.builder.restore_insertion_point(self.insert_point)
@@ -227,12 +259,11 @@ class ContainsReturnChecker(ast.NodeVisitor):
 
 class ASTFunction:
 
-    def __init__(self, ret_types, arg_types, constants, attrs, args_mut):
+    def __init__(self, ret_types, arg_types, constants, attrs):
         self.ret_types = ret_types
         self.arg_types = arg_types
         self.constants = constants
         self.attrs = attrs
-        self.args_mut = args_mut
 
     def flatten_ir_types(self, builder: ir.builder, types: List[base_type]) -> List[ir.type]:
         ir_types = []
@@ -253,7 +284,6 @@ class ASTFunction:
         arg_types = [get_iterable_path(self.arg_types, path) for path in val_paths]
         arg_types_ir = self.flatten_ir_types(builder, arg_types)
         ret_types_ir = self.return_types_ir(builder)
-        ret_types_ir.extend(self.flatten_ir_types(builder, [ty for (name, ty) in self.args_mut]))
         return builder.get_function_ty(arg_types_ir, ret_types_ir)
 
     def deserialize(self, fn):
@@ -289,18 +319,6 @@ class ASTFunction:
 class BoundJITMethod:
     __self__: base_value
     __func__: JITFunction
-
-
-@dataclass
-class ValueDest:
-    ctx: Union[ast.Store, ast.Load]
-    value: base_value
-
-
-def _wrap_mutable_argument(arg, node):
-    if isinstance(arg, base_value) and getattr(arg.type, "__triton_mutable__", False):
-        setattr(arg, "__ast__", node)
-    return arg
 
 
 class CodeGenerator(ast.NodeVisitor):
@@ -460,7 +478,7 @@ class CodeGenerator(ast.NodeVisitor):
         self.builder.restore_insertion_point(ip)
         self.builder.set_loc(loc)
 
-    def _find_carries(self, node, liveins):
+    def _find_carries(self, node, liveins, liverefs):
         # create loop body block
         block = self.builder.create_block()
         self.builder.set_insertion_point_to_start(block)
@@ -469,6 +487,7 @@ class CodeGenerator(ast.NodeVisitor):
         self.visit_compound_statement(node.body)
         self.scf_stack.pop()
         block.erase()
+        refs = _capture_references(self.lscope)
 
         # If a variable (name) has changed value within the loop, then it's
         # a loop-carried variable. (The new and old value must be of the
@@ -477,19 +496,18 @@ class CodeGenerator(ast.NodeVisitor):
         init_handles = []
         names = []
 
-        for name, live_val in liveins.items():
-            if _is_triton_value(live_val):
-                loop_val = self.lscope[name]
+        for name, loop_val in self.local_defs.items():
+            if name in liveins:
+                # We should not def new constexpr
+                live_val = liveins[name]
                 self._verify_loop_carried_variable(name, loop_val, live_val)
 
-                live_handles = flatten_values_to_ir([live_val])
-                loop_handles = flatten_values_to_ir([loop_val])
-                if live_handles != loop_handles:
-                    names.append(name)
-                    init_tys.append(live_val.type)
-                    init_handles.extend(live_handles)
-            else:
-                assert name not in self.local_defs, f'Loop carried variable {name} is not a triton value'
+                # these are loop-carried values
+                names.append(name)
+                init_tys.append(live_val.type)
+                init_handles.extend(flatten_values_to_ir([live_val]))
+        # look for reference-semantic objects whose values have changed
+        modrefs = []
 
         # reset local scope to not pick up local defs from the dry run.
         self.lscope = liveins.copy()
@@ -520,15 +538,6 @@ class CodeGenerator(ast.NodeVisitor):
         elts = language.tuple([self.visit(elt) for elt in node.elts])
         return elts
 
-    def emit_return(self, handles):
-        for i, (name, ty) in enumerate(self.prototype.args_mut):
-            value = self.dereference_name(name)
-            if ty is not None and ty != value.type:
-                raise TypeError(f"Inconsistent type for mutable argument '{name}': {ty} and {value.type}")
-            self.prototype.args_mut[i][1] = value.type
-            value._flatten_ir(handles)
-        self.builder.ret(handles)
-
     # By design, only non-kernel functions can return
     def visit_Return(self, node):
         ret_value = self.visit(node.value)
@@ -549,7 +558,7 @@ class CodeGenerator(ast.NodeVisitor):
             assert isinstance(ret_value, language.core.base_value)
             ret_value._flatten_ir(handles)
             ret_ty = ret_value.type
-        self.emit_return(handles)
+        self.builder.ret(handles)
         if self.ret_type is None:
             self.ret_type = ret_ty
         elif self.ret_type != ret_ty:
@@ -565,7 +574,7 @@ class CodeGenerator(ast.NodeVisitor):
         assert isinstance(args, language.core.tuple)
         return args.values
 
-    def visit_FunctionDef(self, node):
+    def visit_function_declaration(self, node):
         arg_names, kwarg_names = self.visit(node.args)
         if self.fn:
             raise self._unsupported(node, "nested function definition is not supported.")
@@ -585,7 +594,10 @@ class CodeGenerator(ast.NodeVisitor):
                 self.visit(init_node)
             finally:
                 self.visiting_arg_default_value = False
+        return arg_names, kwarg_names
 
+    def visit_FunctionDef(self, node):
+        arg_names, kwarg_names = self.visit_function_declaration(node)
         # initialize function
         visibility = "public" if self.is_kernel else "private"
         fn_ty = self.prototype.serialize(self.builder)
@@ -605,14 +617,14 @@ class CodeGenerator(ast.NodeVisitor):
         assert not self.builder.get_insertion_block().has_terminator()
         if self.ret_type is None or self.ret_type == language.void:
             self.ret_type = language.void
-            self.emit_return([])
+            self.builder.ret([])
         else:
             if isinstance(self.ret_type, language.tuple_type):
                 self.prototype.ret_types = self.ret_type.types
             else:
                 self.prototype.ret_types = [self.ret_type]
-            self.emit_return([self.builder.create_poison(ty) for ty in self.prototype.return_types_ir(self.builder)])
-        self.fn.reset_type(self.prototype.serialize(self.builder))
+            self.fn.reset_type(self.prototype.serialize(self.builder))
+            self.builder.ret([self.builder.create_poison(ty) for ty in self.prototype.return_types_ir(self.builder)])
         self.fn.finalize()
 
         if insert_pt:
@@ -648,28 +660,20 @@ class CodeGenerator(ast.NodeVisitor):
         # default: call visit_Assign
         return self.visit_Assign(node)
 
-    @staticmethod
-    def create_writeback(value) -> ValueDest:
-        dest = ValueDest(ctx=ast.Store(), value=None)
-        _wrap_mutable_argument(value, dest)
-        return dest
-
     def assignTarget(self, target, value):
         assert isinstance(target.ctx, ast.Store)
         if isinstance(target, ast.Subscript):
             return self.visit_Subscript_Store(target, value)
-        elif isinstance(target, ast.Tuple):
+        if isinstance(target, ast.Tuple):
             for i, target in enumerate(target.elts):
                 self.assignTarget(target, value.values[i])
-        elif isinstance(target, ast.Attribute):
+            return
+        if isinstance(target, ast.Attribute):
             base = self.visit(target.value)
             setattr(base, target.attr, value)
-        elif isinstance(target, ast.Name):
-            self.set_value(self.visit(target), value)
-        elif isinstance(target, ValueDest):
-            target.value = value
-        else:
-            raise ValueError(f"Cannot assign to target {ast.dump(target)}")
+            return
+        assert isinstance(target, ast.Name)
+        self.set_value(self.visit(target), value)
 
     def visit_Assign(self, node):
         # construct values to assign
@@ -747,45 +751,53 @@ class CodeGenerator(ast.NodeVisitor):
         ast.BitXor: '__xor__',
     }
 
-    def visit_then_else_blocks(self, node, liveins, then_block, else_block):
+    def visit_then_else_blocks(self, node, liveins, liverefs, then_block, else_block):
         # then block
         self.builder.set_insertion_point_to_start(then_block)
+        self.lscope = liveins.copy()
+        self.local_defs = {}
         self.visit_compound_statement(node.body)
         then_block = self.builder.get_insertion_block()
         then_defs = self.local_defs.copy()
-        then_vals = self.lscope.copy()
+        then_refs = _capture_references(self.lscope)
         # else block
         else_defs = {}
-        else_vals = liveins.copy()
+        else_refs = liverefs
         if node.orelse:
+            _restore_references(liverefs)
             self.builder.set_insertion_point_to_start(else_block)
             self.lscope = liveins.copy()
             self.local_defs = {}
             self.visit_compound_statement(node.orelse)
-            else_defs = self.local_defs.copy()
             else_block = self.builder.get_insertion_block()
-            else_vals = self.lscope.copy()
+            else_defs = self.local_defs.copy()
+            else_refs = _capture_references(self.lscope)
 
         # update block arguments
         names = []
         # variables in livein whose value is updated in `if`
-        for name, value in liveins.items():
-            # livein variable changed value in either then or else
-            if not _is_triton_value(value):
-                continue
-            then_handles = flatten_values_to_ir([then_vals[name]])
-            else_handles = flatten_values_to_ir([else_vals[name]])
-            if then_handles == else_handles:
-                continue
-            names.append(name)
-            then_defs[name] = then_vals[name]
-            else_defs[name] = else_vals[name]
-            # check type
+        for name in liveins:
             for defs, block_name in [(then_defs, 'then'), (else_defs, 'else')]:
-                type_equal = type(defs[name]) == type(value)  # noqa: E721
-                assert type_equal and defs[name].type == value.type, \
-                    f'initial value for `{name}` is of type {value}, '\
-                    f'but the {block_name} block redefines it as {defs[name]}'
+                if name in defs:
+                    type_equal = type(defs[name]) is type(liveins[name])  # noqa: E721
+                    assert type_equal and defs[name].type == liveins[name].type, \
+                        f'initial value for `{name}` is of type {liveins[name].type}, '\
+                        f'but the {block_name} block redefines it as {defs[name].type}'
+            if name in then_defs or name in else_defs:
+                names.append(name)
+            # variable defined in then but not in else
+            if name in then_defs and name not in else_defs:
+                else_defs[name] = liveins[name]
+            # variable defined in else but not in then
+            if name in else_defs and name not in then_defs:
+                then_defs[name] = liveins[name]
+        # look for reference-semantic objects whose values have changed
+        modrefs = []
+        for obj_id, (ir_values, value) in liverefs.items():
+            then_values = then_refs[obj_id][0]
+            else_values = else_refs[obj_id][0]
+            if ir_values != then_values or ir_values != else_values:
+                modrefs.append((value, then_values, else_values))
 
         # variables that are both in then and else but not in liveins
         # TODO: could probably be cleaned up
@@ -802,30 +814,34 @@ class CodeGenerator(ast.NodeVisitor):
                 f'and else block ({else_ty})'
             names.append(name)
 
-        return then_defs, else_defs, then_block, else_block, names
+        return then_defs, else_defs, then_block, else_block, names, modrefs
 
     def visit_if_top_level(self, cond, node):
         with enter_sub_region(self) as sr:
-            liveins, ip_block = sr
+            liveins, liverefs, ip_block = sr
             then_block = self.builder.create_block()
             else_block = self.builder.create_block()
             # create branch
             self.builder.set_insertion_point_to_end(ip_block)
             self.builder.create_cond_branch(cond.handle, then_block, else_block)
             # visit then and else blocks
-            then_defs, else_defs, then_block, else_block, names = \
-                self.visit_then_else_blocks(node, liveins, then_block, else_block)
+            then_defs, else_defs, then_block, else_block, names, modrefs = \
+                self.visit_then_else_blocks(node, liveins, liverefs, then_block, else_block)
             # create basic-block after conditional
             endif_block = self.builder.create_block()
             # then terminator
             self.builder.set_insertion_point_to_end(then_block)
             assert not then_block.has_terminator(), f"{then_block}"
             then_handles = flatten_values_to_ir(then_defs[name] for name in names)
+            for ref in modrefs:
+                then_handles.extend(ref[1])
             self.builder.create_branch(endif_block, then_handles)
             # else terminator
             self.builder.set_insertion_point_to_end(else_block)
             assert not else_block.has_terminator(), f"{else_block}"
             else_handles = flatten_values_to_ir(else_defs[name] for name in names)
+            for ref in modrefs:
+                else_handles.extend(ref[2])
             self.builder.create_branch(endif_block, else_handles)
             assert len(then_handles) == len(else_handles)
             for then_h, else_h in zip(then_handles, else_handles):
@@ -838,41 +854,51 @@ class CodeGenerator(ast.NodeVisitor):
         # update value
         res_handles = [endif_block.arg(i) for i in range(len(then_handles))]
         types = [then_defs[name].type for name in names]
+        types.extend([ref[0].type for ref in modrefs])
         new_values = unflatten_ir_values(res_handles, types)
-        for name, new_value in zip(names, new_values):
-            self.set_value(name, new_value)
+        for name in names:
+            self.set_value(name, next(new_values))
+        for obj, _, _, in modrefs:
+            _restore_reference(obj, next(new_values))
 
     # TODO: refactor
     def visit_if_scf(self, cond, node):
         with enter_sub_region(self) as sr:
-            liveins, _ = sr
+            liveins, liverefs, _ = sr
             ip, last_loc = self._get_insertion_point_and_loc()
             then_block = self.builder.create_block()
             else_block = self.builder.create_block() if node.orelse else None
-            then_defs, else_defs, then_block, else_block, names = \
-                self.visit_then_else_blocks(node, liveins, then_block, else_block)
+            then_defs, else_defs, then_block, else_block, names, modrefs = \
+                self.visit_then_else_blocks(node, liveins, liverefs, then_block, else_block)
             # create if op
             then_handles = flatten_values_to_ir(then_defs[name] for name in names)
+            for ref in modrefs:
+                then_handles.extend(ref[1])
             self._set_insertion_point_and_loc(ip, last_loc)
             if_op = self.builder.create_if_op([h.get_type() for h in then_handles], cond.handle, True)
             then_block.merge_block_before(if_op.get_then_block())
             self.builder.set_insertion_point_to_end(if_op.get_then_block())
-            if len(names) > 0:
+            if len(then_handles) > 0:
                 self.builder.create_yield_op(then_handles)
             if not node.orelse:
                 else_block = if_op.get_else_block()
             else:
                 else_block.merge_block_before(if_op.get_else_block())
             self.builder.set_insertion_point_to_end(if_op.get_else_block())
-            if len(names) > 0:
-                else_handles = flatten_values_to_ir(else_defs[name] for name in names)
+            else_handles = flatten_values_to_ir(else_defs[name] for name in names)
+            for ref in modrefs:
+                else_handles.extend(ref[2])
+            if len(else_handles) > 0:
                 self.builder.create_yield_op(else_handles)
         # update values
         res_handles = [if_op.get_result(i) for i in range(len(then_handles))]
         types = [then_defs[name].type for name in names]
+        types.extend([ref[0].type for ref in modrefs])
         new_values = unflatten_ir_values(res_handles, types)
-        for name, new_value in zip(names, new_values):
-            self.set_value(name, new_value)
+        for name in names:
+            self.set_value(name, next(new_values))
+        for obj, _, _, in modrefs:
+            _restore_reference(obj, next(new_values))
 
     def visit_If(self, node):
         cond = self.visit(node.test)
@@ -1015,10 +1041,10 @@ class CodeGenerator(ast.NodeVisitor):
 
     def visit_While(self, node):
         with enter_sub_region(self) as sr:
-            liveins, insert_block = sr
+            liveins, liverefs, insert_block = sr
             ip, last_loc = self._get_insertion_point_and_loc()
 
-            names, init_handles, init_fe_tys = self._find_carries(node, liveins)
+            names, init_handles, init_fe_tys = self._find_carries(node, liveins, liverefs)
 
             init_tys = [h.get_type() for h in init_handles]
             self._set_insertion_point_and_loc(ip, last_loc)
@@ -1153,10 +1179,10 @@ class CodeGenerator(ast.NodeVisitor):
         self.set_value(node.target.id, language.core.tensor(iv, iv_type))
 
         with enter_sub_region(self) as sr:
-            liveins, insert_block = sr
+            liveins, liverefs, insert_block = sr
             ip, last_loc = self._get_insertion_point_and_loc()
 
-            names, init_handles, init_tys = self._find_carries(node, liveins)
+            names, init_handles, init_tys = self._find_carries(node, liveins, liverefs)
 
             # create ForOp
             self._set_insertion_point_and_loc(ip, last_loc)
@@ -1225,15 +1251,21 @@ class CodeGenerator(ast.NodeVisitor):
         msg = self.visit(node.msg) if node.msg is not None else ""
         return language.core.device_assert(test, msg, _semantic=self.semantic)
 
+    def call_InlineJitFunction(self, fn: JITFunction, args):
+        fn_def = fn.parse()
+        arg_names, kwarg_names = self.visit(fn_def.args)
+
     def call_JitFunction(self, fn: JITFunction, args, kwargs):
-        call_args = inspect.getcallargs(fn.fn, *args, **kwargs)
-        args = [call_args[name] for name in fn.arg_names]
+        args = inspect.getcallargs(fn.fn, *args, **kwargs)
+        args = [args[name] for name in fn.arg_names]
         for i, arg in enumerate(args):
             if isinstance(arg, (language.dtype, float, int, bool, JITFunction)):
                 args[i] = language.core.constexpr(arg)
-        args_mut = [[name, None]
-                    for (name, arg) in zip(fn.arg_names, args)
-                    if arg is not None and getattr(arg.type, "__triton_mutable__", False)]
+        # If any of the function arguments are mutable or contain a mutable
+        # value, parse the function inline to respect object references.
+        # if _contains_reference(args):
+        #     return self.call_InlineJitFunction(fn, args)
+
         args_cst = find_paths_if(args, lambda _, x: _is_constexpr(x))
         args_cst = {path: get_iterable_path(args, path) for path in args_cst}
         args_path = find_paths_if(args, lambda _, x: not _is_constexpr(x))
@@ -1249,7 +1281,7 @@ class CodeGenerator(ast.NodeVisitor):
                                                                      (bool, int, language.core.dtype)) else arg.type
                 for arg in args
             ]
-            prototype = ASTFunction([], arg_types, args_cst, dict(), args_mut)
+            prototype = ASTFunction([], arg_types, args_cst, dict())
             generator = CodeGenerator(self.context, prototype, fn.get_capture_scope(), module=self.module, jit_fn=fn,
                                       function_name=fn_name, function_types=self.function_ret_types,
                                       noinline=fn.noinline, file_name=file_name, begin_line=begin_line,
@@ -1264,32 +1296,16 @@ class CodeGenerator(ast.NodeVisitor):
                 raise CompilationError(self.jit_fn.src, self.cur_node, None) from e
 
             callee_ret_type = generator.ret_type
-            args_mut = generator.prototype.args_mut
-            self.function_ret_types[fn_name] = (callee_ret_type, args_mut)
+            self.function_ret_types[fn_name] = callee_ret_type
         else:
-            callee_ret_type, args_mut = self.function_ret_types[fn_name]
+            callee_ret_type = self.function_ret_types[fn_name]
         symbol = self.module.get_function(fn_name)
         args_val = flatten_values_to_ir(args_val)
         call_op = self.builder.call(symbol, args_val)
+        if callee_ret_type == language.void:
+            return None
         handles = [call_op.get_result(i) for i in range(call_op.get_num_results())]
-
-        all_ret_types = ([callee_ret_type]
-                         if callee_ret_type != language.void else []) + [ty for (name, ty) in args_mut]
-        all_ret_values = unflatten_ir_values(handles, all_ret_types)
-        normal_ret = next(all_ret_values) if callee_ret_type != language.void else None
-        # Unpack and emit the writeback for mutable arguments.
-        for name, ty in args_mut:
-            target, value = getattr(call_args[name], "__ast__", None), next(all_ret_values)
-            # Discard mutation on an RValue.
-            if target is None or isinstance(target, ast.Call):
-                continue
-            if isinstance(target, ast.keyword):
-                target = target.value
-            if not isinstance(target, ValueDest):
-                target = copy.deepcopy(target)
-            target.ctx = ast.Store()
-            self.assignTarget(target, value)
-        return normal_ret
+        return next(unflatten_ir_values(handles, [callee_ret_type]))
 
     def visit_Call(self, node):
         fn = _unwrap_if_constexpr(self.visit(node.func))
@@ -1305,9 +1321,8 @@ class CodeGenerator(ast.NodeVisitor):
                 error_message.append(mur)
             raise CompilationError(self.jit_fn.src, node, " ".join(error_message))
 
-        kws = ((self.visit(kw), kw) for kw in node.keywords)
-        kws = {name: _wrap_mutable_argument(value, node) for (name, value), node in kws}
-        args = (_wrap_mutable_argument(self.visit(arg), arg) for arg in node.args)
+        kws = dict(self.visit(keyword) for keyword in node.keywords)
+        args = [self.visit(arg) for arg in node.args]
         args = list(itertools.chain.from_iterable(x if isinstance(x, list) else [x] for x in args))
         if isinstance(fn, BoundJITMethod):
             args.insert(0, fn.__self__)
@@ -1408,7 +1423,7 @@ class CodeGenerator(ast.NodeVisitor):
             lhs = lhs.value
         attr = getattr(lhs, node.attr)
         if _is_triton_value(lhs) and isinstance(attr, JITFunction):
-            return BoundJITMethod(_wrap_mutable_argument(lhs, node.value), attr)
+            return BoundJITMethod(lhs, attr)
         return attr
 
     def visit_Expr(self, node):
@@ -1520,7 +1535,7 @@ def ast_to_ttir(fn, src, context, options, codegen_fns, module_map, module=None)
     for k, v in src.signature.items():
         idx = fn.arg_names.index(k)
         arg_types[idx] = str_to_ty(v)
-    prototype = ASTFunction([], arg_types, src.constants, src.attrs, args_mut=[])
+    prototype = ASTFunction([], arg_types, src.constants, src.attrs)
     file_name, begin_line = get_jit_fn_file_line(fn)
     # query function representation
     from collections import namedtuple
