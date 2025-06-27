@@ -525,6 +525,8 @@ class CMakeBuild(build_ext):
         subprocess.check_call(["cmake", "--build", "."] + build_args, cwd=cmake_dir)
         subprocess.check_call(["cmake", "--build", ".", "--target", "mlir-doc"], cwd=cmake_dir)
 
+        update_symlink(Path(self.base_dir) / "compile_commands.json", cmake_dir / "compile_commands.json")
+
 
 def download_and_copy_dependencies():
     nvidia_version_path = os.path.join(get_base_dir(), "cmake", "nvidia-toolchain-version.json")
