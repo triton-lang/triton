@@ -587,11 +587,29 @@ def test_mutate_object_for():
     for i in range(0):
         anchor((box, a, b))
         b.value = tl.core.to_tensor(1)
-        a = TBox(tl.core.to_tensor(10))
+        a = TBox(tl.core.to_tensor(20))
+        anchor((box, a, b))
+    anchor((box, a, b))
+
+
+@triton.jit
+def test_mutate_object_while():
+    TBox: tl.constexpr = Box(tl.tensor)
+    box = TBox(tl.core.to_tensor(0))
+    a = box
+    b = box
+    box.value = tl.core.to_tensor(100)
+
+    while box.value != 10:
+        anchor((box, a, b))
+        b.value = tl.core.to_tensor(1)
+        a = TBox(tl.core.to_tensor(20))
+        anchor((box, a, b))
+    anchor((box, a, b))
 
 
 from triton._filecheck import run_parser
 from triton import knobs
 
 knobs.compilation.disable_line_info = True
-print(run_parser(test_mutate_object_for).str_nodebug())
+print(run_parser(test_mutate_object_while).str_nodebug())

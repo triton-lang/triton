@@ -486,8 +486,9 @@ class CodeGenerator(ast.NodeVisitor):
         self.scf_stack.append(node)
         self.visit_compound_statement(node.body)
         self.scf_stack.pop()
-        block.erase()
         refs = _capture_references(self.lscope)
+        _restore_references(liverefs)
+        block.erase()
 
         # If a variable (name) has changed value within the loop, then it's
         # a loop-carried variable. (The new and old value must be of the
@@ -508,12 +509,18 @@ class CodeGenerator(ast.NodeVisitor):
                 init_handles.extend(flatten_values_to_ir([live_val]))
         # look for reference-semantic objects whose values have changed
         modrefs = []
+        for obj_id, (ir_values, value) in liverefs.items():
+            values = refs[obj_id][0]
+            if values != ir_values:
+                modrefs.append(value)
+                init_tys.append(value.type)
+                init_handles.extend(flatten_values_to_ir([value]))
 
         # reset local scope to not pick up local defs from the dry run.
         self.lscope = liveins.copy()
         self.local_defs = {}
 
-        return names, init_handles, init_tys
+        return names, init_handles, init_tys, modrefs
 
     #
     # AST visitor
@@ -1044,7 +1051,7 @@ class CodeGenerator(ast.NodeVisitor):
             liveins, liverefs, insert_block = sr
             ip, last_loc = self._get_insertion_point_and_loc()
 
-            names, init_handles, init_fe_tys = self._find_carries(node, liveins, liverefs)
+            names, init_handles, init_fe_tys, modrefs = self._find_carries(node, liveins, liverefs)
 
             init_tys = [h.get_type() for h in init_handles]
             self._set_insertion_point_and_loc(ip, last_loc)
@@ -1054,9 +1061,10 @@ class CodeGenerator(ast.NodeVisitor):
             self.builder.set_insertion_point_to_start(before_block)
             block_args = [before_block.arg(i) for i in range(len(init_handles))]
             condition_args = unflatten_ir_values(block_args, init_fe_tys)
-            for name, val in zip(names, condition_args):
-                self.lscope[name] = val
-                self.local_defs[name] = val
+            for name in names:
+                self.set_value(name, next(condition_args))
+            for value in modrefs:
+                _restore_reference(value, next(condition_args))
             cond = self.visit(node.test)
             self.builder.set_insertion_point_to_end(before_block)
             # create ConditionOp: e.g., scf.condition(%cond) %arg0, %arg1, ...
@@ -1068,22 +1076,24 @@ class CodeGenerator(ast.NodeVisitor):
             self.builder.set_insertion_point_to_start(after_block)
             body_handles = [after_block.arg(i) for i in range(len(init_handles))]
             body_args = unflatten_ir_values(body_handles, init_fe_tys)
-            for name, val in zip(names, body_args):
-                self.lscope[name] = val
-                self.local_defs[name] = val
+            for name in names:
+                self.set_value(name, next(body_args))
+            for value in modrefs:
+                _restore_reference(value, next(body_args))
             self.scf_stack.append(node)
             self.visit_compound_statement(node.body)
             self.scf_stack.pop()
 
-            yield_handles = flatten_values_to_ir(self.lscope[name] for name in names)
+            yield_handles = flatten_values_to_ir([self.lscope[name] for name in names] + modrefs)
             self.builder.create_yield_op(yield_handles)
 
         # WhileOp defines new values, update the symbol table (lscope, local_defs)
         result_handles = [while_op.get_result(i) for i in range(len(init_handles))]
         result_vals = unflatten_ir_values(result_handles, init_fe_tys)
-        for name, new_def in zip(names, result_vals):
-            self.lscope[name] = new_def
-            self.local_defs[name] = new_def
+        for name in names:
+            self.set_value(name, next(result_vals))
+        for value in modrefs:
+            _restore_reference(value, next(result_vals))
 
         for stmt in node.orelse:
             assert False, "Not implemented"
@@ -1182,7 +1192,7 @@ class CodeGenerator(ast.NodeVisitor):
             liveins, liverefs, insert_block = sr
             ip, last_loc = self._get_insertion_point_and_loc()
 
-            names, init_handles, init_tys = self._find_carries(node, liveins, liverefs)
+            names, init_handles, init_tys, modrefs = self._find_carries(node, liveins, liverefs)
 
             # create ForOp
             self._set_insertion_point_and_loc(ip, last_loc)
@@ -1203,11 +1213,13 @@ class CodeGenerator(ast.NodeVisitor):
             self.builder.set_insertion_point_to_start(for_op_body)
             block_handles = [for_op_body.arg(i + 1) for i in range(len(init_handles))]
             block_args = unflatten_ir_values(block_handles, init_tys)
-            for name, val in zip(names, block_args):
-                self.set_value(name, val)
+            for name in names:
+                self.set_value(name, next(block_args))
+            for value in modrefs:
+                _restore_reference(value, next(block_args))
             self.visit_compound_statement(node.body)
             self.scf_stack.pop()
-            yield_handles = flatten_values_to_ir(self.lscope[name] for name in names)
+            yield_handles = flatten_values_to_ir([self.lscope[name] for name in names] + modrefs)
 
             # create YieldOp
             if len(yield_handles) > 0:
@@ -1227,8 +1239,10 @@ class CodeGenerator(ast.NodeVisitor):
         # update lscope & local_defs (ForOp defines new values)
         result_handles = [for_op.get_result(i) for i in range(len(init_handles))]
         result_values = unflatten_ir_values(result_handles, init_tys)
-        for name, val in zip(names, result_values):
-            self.set_value(name, val)
+        for name in names:
+            self.set_value(name, next(result_values))
+        for value in modrefs:
+            _restore_reference(value, next(result_values))
 
         for stmt in node.orelse:
             assert False, "Don't know what to do with else after for"
