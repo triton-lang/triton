@@ -1573,6 +1573,10 @@ bool comesFromLoadOrBlockArg(Value v) {
       v = cvtOp.getSrc();
       continue;
     }
+    if (auto transOp = dyn_cast<tt::TransOp>(def)) {
+      v = transOp.getSrc();
+      continue;
+    }
     if (def->hasTrait<OpTrait::MemDescViewTrait>()) {
       v = def->getOperand(0);
       continue;
