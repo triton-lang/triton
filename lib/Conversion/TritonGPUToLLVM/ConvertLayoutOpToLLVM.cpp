@@ -56,7 +56,19 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
 
     assert(to_vector(conversion.getInDimNames()) ==
            to_vector(conversion.getOutDimNames()));
-    auto dims = conversion.getInDimNames();
+    auto dims = llvm::to_vector(conversion.getInDimNames());
+
+    if (op->hasAttr("ttg.assert_trivial")) {
+      if (dims.empty() || (dims.size() == 1 && dims.front() == kRegister)) {
+      } else {
+        auto diag = op->emitError("layout conversion is not trivial: ");
+        for (auto dim : dims) {
+          diag << dim << " ";
+        }
+        return diag;
+      }
+    }
+
     if (llvm::is_contained(dims, kBlock)) {
       // Case 1: Transfer between values in different CTAs.
       //          This requires moving values through distributed shared memory.

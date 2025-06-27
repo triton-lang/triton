@@ -328,8 +328,14 @@ void init_gluon_ir(py::module &&m) {
              self.create<ttg::AsyncWaitOp>(tokens, num);
            })
       .def("create_convert_layout",
-           [](GluonOpBuilder &self, Type resultTy, Value value) -> Value {
-             return self.create<ttg::ConvertLayoutOp>(resultTy, value);
+           [](GluonOpBuilder &self, Type resultTy, Value value,
+              bool assertTrivial) -> Value {
+             auto cvt = self.create<ttg::ConvertLayoutOp>(resultTy, value);
+             if (assertTrivial) {
+               cvt->setAttr("ttg.assert_trivial",
+                            self.getBuilder().getUnitAttr());
+             }
+             return cvt;
            })
       .def("create_local_alloc",
            [](GluonOpBuilder &self, Type resultTy) -> Value {
@@ -447,6 +453,10 @@ void init_gluon_ir(py::module &&m) {
              self.create<ttng::TCGen5MMAOp>(tokType, a, b, acc, accDep, useAcc,
                                             pred, two_ctas, mbarriers,
                                             mbarrier_preds);
+           })
+      .def("create_tcgen05_commit",
+           [](GluonOpBuilder &self, Value &barrier) {
+             self.create<ttng::TCGen5CommitOp>(barrier);
            })
 
       .def("create_async_tma_copy_global_to_local",

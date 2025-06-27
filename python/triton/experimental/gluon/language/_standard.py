@@ -6,6 +6,7 @@ from triton import knobs
 from . import _core as ttgl
 
 _IMPORT_FROM_TRITON = [
+    "cdiv",
     "sum",
     "max",
     "min",
