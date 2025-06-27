@@ -180,6 +180,9 @@ def swizzle(tensor, swizzle_mode):
         tensor = swizzle_mxfp4_scale_hopper(tensor, num_warps=8)
         tensor = perm_tensor_from_contig(tensor, axis, swizzle_axis)
         strides = tensor.stride()
+    else:
+        tensor = perm_tensor_from_contig(tensor, axis, swizzle_axis)
+        strides = tensor.stride()
     return Tensor(tensor, strides=strides, shape=ret_shape, swizzle_mode=swizzle_mode)
 
 
