@@ -19,12 +19,14 @@ add_triton_library(TritonNVIDIAGPUToLLVM
     Utility.cpp
     Fp4ToFpOpToLLVM.cpp
     TargetInfo.cpp
+    Allocation.cpp
 
     DEPENDS
     TritonNVIDIAGPUConversionPassIncGen
     NVGPUAttrDefsIncGen
 
     LINK_LIBS PUBLIC
+    TritonAnalysis
     TritonGPUToLLVM
     TritonProtonToLLVM
     TritonInstrumentToLLVM
