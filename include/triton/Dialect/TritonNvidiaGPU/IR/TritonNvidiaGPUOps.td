@@ -523,6 +523,52 @@ def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [
   }];
 }
 
+def TTNG_TCGen5CommitOp : TTNG_Op<"tc_gen5_commit"> {
+  let summary = "make an mbarrier track completion of all prior async tcgen5 ops";
+
+  let description = [{
+    The `ttng.tc_gen5_commit` is an asynchronous operation that makes the
+    mbarrier object track the completion of all prior asynchronous tcgen5
+    operations. Upon completion of all asynchronous operations, the mbarrier
+    arrive operation is performed on the mbarrier with a count of 1.
+
+    If `two_ctas` is set, then the mbarrier tracks all prior operations
+    initiated with `two_ctas` set as well. Otherwise, it tracks all prior
+    operations initiated without `two_ctas`.
+
+    Note that the completion mechanisms are guaranteed to occur sequentially in
+    the order the commit operations were issued. This means, for example:
+
+    ```mlir
+    ttng.tmem_copy
+    ttng.tc_gen5_mma
+    ttng.tc_gen5_commit %barrierA
+    ttng.tc_gen5_commit %barrierB
+    ```
+
+    `%barrierA` tracks the completion of the previous TMEM copy and MMA
+    operations, but since the commit groups are sequential, the arrive-on
+    operation on `%barrierA` is guaranteed to be performed before the arrive-on
+    operation on `%barrierB`, even though its commit group is empty.
+  }];
+
+  let arguments = (ins
+    Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$barrier,
+    Optional<I1>:$pred,
+    UnitAttr:$two_ctas
+  );
+
+  let assemblyFormat = [{
+    $barrier (`,` $pred^)? attr-dict `:` qualified(type($barrier))
+  }];
+
+  let builders = [
+    OpBuilder<(ins "Value":$barrier, CArg<"bool", "false">:$two_ctas), [{
+      build($_builder, $_state, barrier, /*pred=*/Value(), two_ctas);
+    }]>,
+  ];
+}
+
 def TTNG_TMEMLoadOp : TTNG_Op<"tmem_load"> {
   let summary = "Load a buffer from tensor memory into a distributed tensor";
 
