@@ -1489,7 +1489,6 @@ struct AtomicRMWOpConversion
     // TODO: support data types less than 32 bits
     enableIntraWaveReduce &= valueElemTy.getIntOrFloatBitWidth() >= 32;
 
-    bool checkPairs = true;
     if (tensorTy) {
       bool isF16Ty = valueElemTy.isF16() || valueElemTy.isBF16();
       unsigned availableVecSize = isF16Ty ? 2 : 1;
@@ -1505,7 +1504,6 @@ struct AtomicRMWOpConversion
       auto threadOrder = getThreadOrder(tensorTy);
       unsigned contigWithinLanes =
           axisAnalysisPass.getAxisInfo(ptr)->getContiguity(threadOrder.front());
-      checkPairs = !(contigWithinLanes > 1 && contigWithinLanes % 2 == 0);
       enableIntraWaveReduce &= contigWithinLanes == 1;
     }
 
@@ -1530,7 +1528,7 @@ struct AtomicRMWOpConversion
       Value rmwMask = llMask ? b.and_(mask, maskElements[i]) : mask;
       if (applyPackingF16) {
         resultVals[i] = emitter.emitPairedAtomicForEvenTID(
-            rewriter, ptrElements[i], valElements[i], rmwMask, checkPairs);
+            rewriter, ptrElements[i], valElements[i], rmwMask);
       } else {
         Value valElement;
         if (vec == 1) {
