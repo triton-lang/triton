@@ -25,38 +25,6 @@ TRITON_MODULE = __name__[:-len(".runtime.jit")]
 T = TypeVar("T")
 
 
-def _get_constexpr_cache_key(fn):
-    """
-    Generate cache key component for constexpr variables.
-
-    Args:
-        fn: Function object to inspect for constexpr variables
-
-    Returns:
-        str: Cache key component including current constexpr values
-    """
-    from ..language import constexpr
-    constexpr_values = []
-
-    # Check global variables
-    if hasattr(fn, '__globals__'):
-        for name, val in fn.__globals__.items():
-            if isinstance(val, constexpr):
-                constexpr_values.append(f"global_{name}={val.value}")
-
-    # Check nonlocal/captured variables
-    if hasattr(fn, '__closure__') and fn.__closure__:
-        code = fn.__code__
-        if hasattr(code, 'co_freevars'):
-            for i, name in enumerate(code.co_freevars):
-                if i < len(fn.__closure__):
-                    val = fn.__closure__[i].cell_contents
-                    if isinstance(val, constexpr):
-                        constexpr_values.append(f"nonlocal_{name}={val.value}")
-
-    return str(hash("-".join(sorted(constexpr_values))))
-
-
 # -----------------------------------------------------------------------------
 # Dependencies Finder
 # -----------------------------------------------------------------------------
@@ -729,10 +697,10 @@ class JITFunction(KernelInterface[T]):
             dependencies_finder.visit(self.parse())
             self.hash = dependencies_finder.ret + str(self.starting_line_number)
             self.used_global_vals = dict(sorted(dependencies_finder.used_global_vals.items()))
-
-        # Include current constexpr values in cache key for proper invalidation
-        constexpr_key = _get_constexpr_cache_key(self.fn)
-        return self.hash + constexpr_key
+            # Include current constexpr values in cache key for proper invalidation
+            self.hash += str(self.used_global_vals)
+            self.hash = hashlib.sha256(self.hash.encode("utf-8")).hexdigest()
+        return self.hash
 
     @property
     def type(self):
