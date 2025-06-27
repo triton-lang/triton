@@ -8,7 +8,7 @@ llvm.mlir.global external @global_smem() {addr_space = 3 : i32, alignment = 16 :
 llvm.func @rewrite_barriers() attributes {allocation.offset = 32 : i32} {
   // CHECK: barrier.sync.aligned 2, 128
   // CHECK: barrier.sync.aligned 3, 64
-  // CHECK: barrier.sync.aligned 4, 32
+  // CHECK: bar.warp.sync
 
   // CHECK: bb{{[0-9]+}}:
   // CHECK-NEXT: barrier.sync.aligned 0, 128
