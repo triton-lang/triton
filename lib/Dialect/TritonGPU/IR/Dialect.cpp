@@ -441,15 +441,6 @@ getDefaultBlockedEncoding(MLIRContext *context, ArrayRef<int64_t> shape,
   return encoding;
 }
 
-bool isSplitCompatible(MLIRContext *ctx, const LinearLayout &ll) {
-  auto lastDim = ll.getNumOutDims() - 1;
-  auto kReg = StringAttr::get(ctx, "register");
-  auto kLastDim = StringAttr::get(ctx, "dim" + std::to_string(lastDim));
-  auto sublayout =
-      ll.sublayout({kReg}, {kLastDim}).removeZeroBasesAlongDim(kReg);
-  return sublayout == LinearLayout::identity1D(2, kReg, kLastDim);
-}
-
 LogicalResult tryJoinOnAxis(MLIRContext *ctx, const LinearLayout &inLl,
                             LinearLayout &outLl, bool fwdInference, int axis,
                             std::optional<Location> loc) {
@@ -2642,7 +2633,9 @@ struct TritonGPUInferLayoutInterface
       auto parent = enc.getParent();
       auto parentLL = toLinearLayout(joinedShape, parent);
 
-      if (isSplitCompatible(ctx, parentLL)) {
+      Attribute splitEnc;
+      auto result = inferSplitOpEncoding(parent, splitEnc, joinedShape, loc);
+      if (succeeded(result) && areLayoutsEquivalent(shape, splitEnc, srcEnc)) {
         dstEnc = parent;
         return success();
       }
@@ -2692,28 +2685,16 @@ struct TritonGPUInferLayoutInterface
   inferSplitOpEncoding(Attribute srcEnc, Attribute &dstEnc,
                        ArrayRef<int64_t> shape,
                        std::optional<Location> loc) const override {
+    // SplitOp takes a tensor of shape AxBxCx2 and generates two tensors of
+    // shape AxBxC.  The input must have 2 elements per thread in the last
+    // dimension, which must be the fastest running dimension. The result
+    // encoding is the same as the input, but with the last dimension removed.
     auto enc = mlir::dyn_cast<BlockedEncodingAttr>(srcEnc);
-    if (enc) {
-      // SplitOp takes a tensor of shape AxBxCx2 and generates two tensors of
-      // shape AxBxC.  The input must have 2 elements per thread in the last
-      // dimension, which must be the fastest running dimension. The result
-      // encoding is the same as the input, but with the last dimension removed.
-      if (enc.getSizePerThread().back() != 2) {
-        return emitOptionalError(
-            loc, "SplitOp requires 2 elements per thread in the "
-                 "last dimension of the input");
-      }
-      if (enc.getThreadsPerWarp().back() != 1 ||
-          enc.getWarpsPerCTA().back() != 1 || enc.getCTAsPerCGA().back() != 1) {
-        return emitOptionalError(
-            loc, "SplitOp requires threadsPerWarp, warpsPerCTA, "
-                 "and CTAsPerCGA = 1 for the last dimension of the input");
-      }
-      if (enc.getCTALayout().getCTAsPerCGA().back() != 1) {
-        return emitOptionalError(
-            loc,
-            "SplitOp requires the last dimension to be most-minor in CTAOrder");
-      }
+    bool isSimpleSplit = (enc && (enc.getSizePerThread().back() == 2) &&
+                          (enc.getThreadsPerWarp().back() == 1) &&
+                          (enc.getWarpsPerCTA().back() == 1) &&
+                          (enc.getCTAsPerCGA().back() == 1));
+    if (isSimpleSplit) {
       SmallVector<unsigned> newOrder(enc.getOrder());
       int splitDim = newOrder.size() - 1;
       // Remove splitDim from order.
