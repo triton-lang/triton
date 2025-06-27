@@ -22,6 +22,8 @@ unsigned getConvertLayoutScratchInBytes(RankedTensorType srcTy,
     auto scratchConfig = getScratchConfigForCvt(srcTy, dstTy);
     elems = getNumScratchElements(scratchConfig.paddedRepShape);
   } else {
+    assert(false && "General swizzling for convert layout is not suported in "
+                    "AMD backend yet");
     // TODO use swizzling
   }
   return elems * getBitwidth(srcTy) / 8;
