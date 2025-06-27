@@ -28,11 +28,17 @@ public:
 
   // record var name that was defined
   void setLastLocDefName(std::string defName){
-    lastLoc -> setDefName(defName);
+    mlir::StringAttr nameAttr = mlir::StringAttr::get(builder->getContext(), defName);
+    mlir::NameLoc nameLoc = mlir::NameLoc::get(nameAttr, *lastLoc);
+    lastLoc = std::make_unique<mlir::Location>(nameLoc);
   }
 
   std::string getLastLocDefName() const {
-    return lastLoc->getDefName().c_str();
+    if (auto nameLoc = llvm::dyn_cast<mlir::NameLoc>(*lastLoc)){
+      return nameLoc.getName().getValue().str();
+    } else {
+      return "";
+    }
   }
 
   mlir::Location getLastLoc() {
