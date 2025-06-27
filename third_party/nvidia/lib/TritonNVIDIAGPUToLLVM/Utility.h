@@ -25,7 +25,8 @@ namespace LLVM {
 
 namespace NVIDIA {
 
-Value getSRegValue(OpBuilder &b, Location loc, StringRef sRegStr);
+Value getSRegValue(OpBuilder &b, Location loc, StringRef sRegStr,
+                   TypeRange types);
 Value shuffleXor(Location loc, RewriterBase &rewriter, Value val, int i);
 Value shuffleUp(Location loc, RewriterBase &rewriter, Value val, int i);
 Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, int i);

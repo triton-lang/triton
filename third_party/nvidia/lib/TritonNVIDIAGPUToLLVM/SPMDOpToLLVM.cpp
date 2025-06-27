@@ -27,7 +27,7 @@ struct GetNumProgramsOpConversion
     std::string sreg = numCTAs == 1 ? "nctaid." : "nclusterid.";
     sreg.append(1, 'x' + op.getAxisAsInt()); // 0 -> 'x', 1 -> 'y', 2 -> 'z'
 
-    Value numPrograms = LLVM::NVIDIA::getSRegValue(rewriter, loc, sreg);
+    Value numPrograms = LLVM::NVIDIA::getSRegValue(rewriter, loc, sreg, i32_ty);
     rewriter.replaceOp(op, numPrograms);
     return success();
   }
