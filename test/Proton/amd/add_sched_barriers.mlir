@@ -6,7 +6,7 @@ module attributes {"ttg.num-warps" = 8 : i32} {
   // CHECK-LABEL: convert_read_counter
   llvm.func @convert_read_counter() -> i32 {
     // CHECK: rocdl.sched.barrier 0
-    %1 = proton_gpu.read_counter : i32
+    %1 = proton_gpu.read_counter {metric = 0 : i32} : i32
     llvm.return %1 : i32
   }
 }
@@ -54,21 +54,21 @@ module attributes {"ttg.num-warps" = 8 : i32, ttg.profile_scratch_memory_alignme
     %0 = ttg.local_alloc : () -> !ttg.memdesc<512xi32, #shared, #smem, mutable>
     %1 = proton_gpu.global_scratch_alloc {alignment = 128 : i32, nbytes = 384 : i32, offset = 0 : i32} : !tt.ptr<i32>
     %2 = proton_gpu.segment_alloc %0 : !ttg.memdesc<512xi32, #shared, #smem, mutable> -> !proton_gpu.segment<2048, #smem, warp>
-    %3 = proton_gpu.read_counter : i32
+    %3 = proton_gpu.read_counter {metric = 0 : i32 } : i32
     proton_gpu.circular_store start %2, %3 {scopeId = 0 : i32} : !proton_gpu.segment<2048, #smem, warp>, i32
     scf.for %arg0 = %c0 to %c4 step %c1 {
-      %7 = proton_gpu.read_counter : i32
+      %7 = proton_gpu.read_counter {metric = 0 : i32} : i32
       proton_gpu.circular_store start %2, %7 {scopeId = 0 : i32} : !proton_gpu.segment<2048, #smem, warp>, i32
       scf.for %arg1 = %c0 to %c4 step %c1 {
-        %9 = proton_gpu.read_counter : i32
+        %9 = proton_gpu.read_counter {metric = 0 : i32} : i32
         proton_gpu.circular_store start %2, %9 {scopeId = 0 : i32} : !proton_gpu.segment<2048, #smem, warp>, i32
       }
-      %8 = proton_gpu.read_counter : i32
+      %8 = proton_gpu.read_counter {metric = 0 : i32} : i32
       proton_gpu.circular_store start %2, %8 {scopeId = 0 : i32} : !proton_gpu.segment<2048, #smem, warp>, i32
     }
-    %5 = proton_gpu.read_counter : i32
+    %5 = proton_gpu.read_counter {metric = 0 : i32} : i32
     proton_gpu.circular_store start %2, %5 {scopeId = 0 : i32} : !proton_gpu.segment<2048, #smem, warp>, i32
-    %6 = proton_gpu.read_counter : i32
+    %6 = proton_gpu.read_counter {metric = 0 : i32} : i32
     proton_gpu.circular_store start %2, %6 {scopeId = 0 : i32} : !proton_gpu.segment<2048, #smem, warp>, i32
     gpu.barrier
     proton_gpu.finalize %2, %1 : !proton_gpu.segment<2048, #smem, warp>, !tt.ptr<i32>
