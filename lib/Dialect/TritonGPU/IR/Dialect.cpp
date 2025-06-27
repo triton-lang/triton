@@ -2059,15 +2059,18 @@ SwizzledSharedEncodingAttr AMDWmmaEncodingAttr::composeSharedLayoutForOperand(
 
   const int numBanks = 32;
   const int bankBitWidth = 32;
-  const int simdWidth = 16;
 
   // Number of inner dimension rows per one pattern repeat
   int innerDimLength = operandShape[sharedOrder[0]];
   int elemsPerOneBanksRow = (numBanks * bankBitWidth) / elemBitWidth;
 
   int perPhase = std::max(1, elemsPerOneBanksRow / innerDimLength);
+  // for both RDNA3 and RDNA4, the M/N dimension of wmma is 16
+  // This represents the max number of rows that can be accessed
+  // at the same time
+  int mDim = getMNKDimPerInstr()[0];
   int maxPhase =
-      std::max(std::min(simdWidth / perPhase, innerDimLength / vectorSize), 1);
+      std::max(std::min(mDim / perPhase, innerDimLength / vectorSize), 1);
 
   return SwizzledSharedEncodingAttr::get(getContext(), vectorSize, perPhase,
                                          maxPhase, sharedOrder, ctaLayout);
