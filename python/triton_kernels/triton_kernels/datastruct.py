@@ -14,25 +14,11 @@ class SwizzlingType(Enum):
 
 class Tensor:
 
-    def _compute_stride(self, shape, strides, swizzle_mode):
-        # Check expected properties of the weights.
-        if swizzle_mode == SwizzlingType.BLACKWELL_SCALE:
-            mxE, mxK, mxN = shape
-
-            # Compute strides of the 5D swizzled tensor.
-            swizzled_shape = (mxE, mxN // 128, mxK // 4, 32, 4, 4)
-            s5 = 1
-            s4 = swizzled_shape[5] * s5  # 4 * 1 = 4
-            s3 = swizzled_shape[4] * s4  # 32 * 4 = 128
-            s2 = swizzled_shape[3] * s3  # 4 * 128 = 512
-            s1 = swizzled_shape[2] * s2  # (mxK//4) * 512
-            s0 = swizzled_shape[1] * s1  # (mxN//128) * ((mxK//4)*512)
-            return s0, s2, s1
-        return strides
-
-    def __init__(self, handle, shape=None, shape_max=None, swizzle_mode=None):
+    def __init__(self, handle, shape=None, strides=None, shape_max=None, swizzle_mode=None):
         if shape is None:
             shape = handle.shape
+        if strides is None:
+            strides = handle.stride()
         if shape_max is None:
             shape_max = [None] * len(shape)
         self.handle = handle
@@ -53,7 +39,7 @@ class Tensor:
                 self.shape_max[i] = s
         assert all(map(is_int, self.shape_max))
         # TODO: clean all this up
-        self.strides = self._compute_stride(shape, handle.stride(), swizzle_mode)
+        self.strides = strides
         self.is_fp4 = self.dtype == torch.uint8
         self.element_bitwidth = 4 if self.is_fp4 else self.dtype.itemsize * 8
         self.ndim = handle.ndim
@@ -176,12 +162,25 @@ def swizzle(tensor, swizzle_mode):
     tensor = torch.permute(tensor, perm).contiguous()
     if swizzle_mode == SwizzlingType.HOPPER_VALUE:
         tensor = swizzle_mxfp4_value_hopper(tensor, op_idx=0, mma_version=3)
+        tensor = perm_tensor_from_contig(tensor, axis, swizzle_axis)
+        strides = tensor.stride()
     elif swizzle_mode == SwizzlingType.BLACKWELL_SCALE:
         tensor = swizzle_mx_scale_bw(tensor, allow_pad=True)
+        mxE, mxK, mxN = ret_shape
+        # Compute strides of the 5D swizzled tensor.
+        swizzled_shape = (mxE, mxN // 128, mxK // 4, 32, 4, 4)
+        s5 = 1
+        s4 = swizzled_shape[5] * s5  # 4 * 1 = 4
+        s3 = swizzled_shape[4] * s4  # 32 * 4 = 128
+        s2 = swizzled_shape[3] * s3  # 4 * 128 = 512
+        s1 = swizzled_shape[2] * s2  # (mxK//4) * 512
+        s0 = swizzled_shape[1] * s1  # (mxN//128) * ((mxK//4)*512)
+        strides = [s0, s2, s1]
     elif swizzle_mode == SwizzlingType.HOPPER_SCALE:
         tensor = swizzle_mxfp4_scale_hopper(tensor, num_warps=8)
-    tensor = perm_tensor_from_contig(tensor, axis, swizzle_axis)
-    return Tensor(tensor, shape=ret_shape, swizzle_mode=swizzle_mode)
+        tensor = perm_tensor_from_contig(tensor, axis, swizzle_axis)
+        strides = tensor.stride()
+    return Tensor(tensor, strides=strides, shape=ret_shape, swizzle_mode=swizzle_mode)
 
 
 def unswizzle(tensor, swizzle_mode):
