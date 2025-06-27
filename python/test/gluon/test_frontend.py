@@ -447,6 +447,16 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 """)
 
 
+@filecheck_test
+@gluon.jit
+def test_tcgen05_commit():
+    # CHECK-LABEL: test_tcgen05_commit
+    barrier = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
+    # CHECK: [[BARRIER:%.*]] = ttg.local_alloc
+    # CHECK: ttng.tc_gen5_commit [[BARRIER]]
+    blackwell.tcgen05_commit(barrier)
+
+
 @gluon.jit
 def warpgroup_mma_kernel(nvmma_layout: ttgl.constexpr, acc_layout: ttgl.constexpr):
     a = ttgl.allocate_shared_memory(ttgl.float16, [128, 128], nvmma_layout)
