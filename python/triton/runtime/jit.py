@@ -696,6 +696,9 @@ class JITFunction(KernelInterface[T]):
             dependencies_finder.visit(self.parse())
             self.hash = dependencies_finder.ret + str(self.starting_line_number)
             self.used_global_vals = dict(sorted(dependencies_finder.used_global_vals.items()))
+            # Include current constexpr values in cache key for proper invalidation
+            self.hash += str(self.used_global_vals)
+            self.hash = hashlib.sha256(self.hash.encode("utf-8")).hexdigest()
         return self.hash
 
     @property
