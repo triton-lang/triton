@@ -11,8 +11,16 @@ import triton.profiler as proton
 from typing import NamedTuple
 
 
-@pytest.mark.parametrize("mode",
-                         ["default", "default:metric_type=cycle", "default:metric_type=cycle:buffer_size=4096", "mma"])
+@pytest.mark.parametrize(
+    "mode",
+    [
+        "default",
+        "default:metric_type=cycle",
+        "default:metric_type=realtime",
+        "default:metric_type=cycle:buffer_size=4096",
+        "mma",
+    ],
+)
 def test_mode_str(mode, tmp_path: pathlib.Path):
     temp_file = tmp_path / "test_mode_str.hatchet"
     proton.start(str(temp_file.with_suffix("")), backend="instrumentation", mode=mode)
@@ -22,6 +30,7 @@ def test_mode_str(mode, tmp_path: pathlib.Path):
 @pytest.mark.parametrize("mode", [
     proton.mode.Default(),
     proton.mode.Default(metric_type="cycle"),
+    proton.mode.Default(metric_type="realtime"),
     proton.mode.Default(metric_type="cycle", buffer_size=4096),
     proton.mode.MMA()
 ])
