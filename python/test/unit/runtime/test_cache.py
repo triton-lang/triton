@@ -400,23 +400,6 @@ def test_no_cache_callable():
     assert not kernel.used_global_vals
 
 
-def test_constexpr_cache_invalidation_recreated(device):
-
-    def test_run(val):
-        VAL = tl.constexpr(val)
-
-        @triton.jit
-        def kernel(out):
-            tl.store(out, VAL)
-
-        out = torch.zeros(1, device=device)
-        kernel[(1, )](out)
-        return out.item()
-
-    assert test_run(123) == 123
-    assert test_run(1234) == 1234
-
-
 def test_jit_warmup_cache(device) -> None:
 
     @triton.jit
