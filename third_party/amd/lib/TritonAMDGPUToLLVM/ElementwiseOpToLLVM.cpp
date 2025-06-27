@@ -65,6 +65,17 @@ static SmallVector<Value>
 cvtScalePkDowncastToFp8(Location loc, ConversionPatternRewriter &rewriter,
                         Value v0, Value v1) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
+
+  // This is the location of the fp16_ovfl flag in the Mode register. It's
+  // calculated following this formula:
+  //     (mode register ID = 1) | (Offset << 6) | ((Width - 1) << 11)
+  // In this case, Offset = 23 and Width = 1.
+  // When the bit is 0/1, the conversion from fp32/fp16/bf16 to fp8/bf8 is in
+  // non-saturation/saturation mode.
+  Value fp16OVFLModeRegLoc = b.i32_val(1473);
+  LLVM::createLLVMIntrinsicCallOp(rewriter, loc, "llvm.amdgcn.s.setreg", {},
+                                  {fp16OVFLModeRegLoc, b.i32_val(1)});
+
   Type v2I16Ty = vec_ty(i16_ty, 2);
   Value v2I16Vec = b.undef(v2I16Ty);
   Value scale = b.f32_val(1);
@@ -84,6 +95,7 @@ cvtScalePkDowncastToFp8(Location loc, ConversionPatternRewriter &rewriter,
     result = rewriter.create<ConvertOp>(loc, v2I16Ty, v2I16Vec, srcVec, scale,
                                         /*dstLoHiSel=*/false);
   }
+
   auto fp8x4VecTy = vec_ty(i8_ty, 4);
   auto fp8x4Vec = b.bitcast(result, fp8x4VecTy);
   SmallVector<Value> ret(2);
