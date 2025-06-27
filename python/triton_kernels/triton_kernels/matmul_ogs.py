@@ -14,9 +14,8 @@ from .matmul_ogs_details._matmul_ogs import _matmul_ogs
 from .matmul_ogs_details._p_matmul_ogs import _p_matmul_ogs, get_per_device_per_stream_alloc_fn
 from .matmul_ogs_details._finalize_matmul import _finalize_matmul
 from .matmul_ogs_details.opt_flags import make_opt_flags, OptFlags, update_opt_flags_constraints
-from .swizzle import SwizzlingType
 from .specialize import specialize
-from .datastruct import Tensor
+from .datastruct import Tensor, SwizzlingType
 from typing import Tuple, Optional
 
 
@@ -538,8 +537,7 @@ def matmul_ogs(x, w, bias,
     is_hopper_fp8 = not target_info.cuda_capability_geq(10, 0) and w.dtype.itemsize == 1
     if has_mx: assert w.stride(1) == 1, "`w` must be column-major when it has data-type mxfp"
     if is_hopper_fp8: assert w.stride(1) == 1, "`w` must be column-major when it has data-type FP8 on capability < 10"
-    w_scale = None if mx_ctx.weight_scale is None else Tensor(mx_ctx.weight_scale, swizzle_mode=mx_ctx.swizzle_scale)
-    w = w if w_scale is None else Tensor(w, swizzle_mode=mx_ctx.swizzle_value)
+    w_scale = mx_ctx.weight_scale
     # determine shapes
     M = x.shape[1] if gather_indx is None else gather_indx.src_indx.shape[0]
     batch_size = w.shape[0] if routing_data.expt_hist is None else 1

@@ -11,7 +11,7 @@ from triton_kernels.matmul_ogs import FlexCtx, PrecisionConfig, MicroscalingCtx,
 from triton_kernels.matmul_ogs import none_or_tma_compatible
 from triton_kernels.matmul_ogs import matmul_ogs_set_idle_sms, matmul_ogs, matmul_ogs_torch
 from triton_kernels.swiglu import swiglu, swiglu_fn, PrecisionConfig as SwiGLUPrecisionConfig
-from triton_kernels.swizzle import swizzle, SwizzlingType
+from triton_kernels.datastruct import SwizzlingType, swizzle
 # numerics utilities
 from triton_kernels.numerics import InFlexData, OutFlexData
 from triton_kernels.numerics_details.mxfp import downcast_to_mxfp, upcast_from_mxfp
@@ -301,21 +301,18 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
         if torch.cuda.get_device_capability()[0] == 9:
             if k % 64 != 0 or n % 64 != 0:
                 pytest.skip("Hopper swizzling acts on a 64x64 tile (4x1 mma tiles).")
-            swizzle_axis = 2
             swizzle_value = SwizzlingType.HOPPER_VALUE
             swizzle_scale = SwizzlingType.HOPPER_SCALE
         elif torch.cuda.get_device_capability()[0] == 10:
-            swizzle_axis = 2
             swizzle_value = None
             swizzle_scale = SwizzlingType.BLACKWELL_SCALE
         else:
-            swizzle_axis = None
             swizzle_value = None
             swizzle_scale = None
         w_tri, mx_scales_tri = downcast_to_mxfp(w_tri, weight_dtype, axis=1)
         w_ref = upcast_from_mxfp(w_tri, mx_scales_tri, torch.bfloat16, axis=1)
-        w_tri = swizzle(w_tri, swizzle_axis=swizzle_axis, axis=1, swizzle_mode=swizzle_value)
-        mx_scales_tri = swizzle(mx_scales_tri, swizzle_axis=swizzle_axis, axis=1, swizzle_mode=swizzle_scale)
+        w_tri = swizzle(w_tri, swizzle_mode=swizzle_value)
+        mx_scales_tri = swizzle(mx_scales_tri, swizzle_mode=swizzle_scale)
 
         precision_opt.mx_ctx = MicroscalingCtx(weight_scale=mx_scales_tri, swizzle_value=swizzle_value,
                                                swizzle_scale=swizzle_scale)

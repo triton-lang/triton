@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 import triton
-from triton_kernels.swizzle import SwizzlingType
+from triton_kernels.datastruct import SwizzlingType
 from triton_kernels.target_info import get_cdna_version
 import torch
 
@@ -164,6 +164,8 @@ def make_default_opt_flags_nvidia(
     # block n
     arch = None
     block_n = opt_flags_nvidia.compute_block_n(n, arch, precision_config)
+    if microscaling_ctx.swizzle_scale == SwizzlingType.HOPPER_SCALE:
+        block_n = 256
     # is_persistent
     grid_size = opt_flags_nvidia.compute_grid_size(routing_data, m, n, block_m, block_n)
     n_sms = torch.cuda.get_device_properties(0).multi_processor_count
