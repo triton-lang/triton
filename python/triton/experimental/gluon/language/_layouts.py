@@ -6,6 +6,7 @@ __all__ = [
     "BlockedLayout",
     "SliceLayout",
     "DistributedLinearLayout",
+    "NVMMADistributedLayout",
     "NVMMASharedLayout",
     "SwizzledSharedLayout",
 ]
@@ -131,6 +132,37 @@ class DistributedLinearLayout(DistributedLayout):
 
     def mangle(self):
         return f"DLL{self.reg_bases}_{self.lane_bases}_{self.warp_bases}_{self.block_bases}_{self.shape}DLL"
+
+
+@dataclass(frozen=True)
+class NVMMADistributedLayout(DistributedLayout):
+    version: List[int]
+    warps_per_cta: List[int]
+    instr_shape: List[int]
+    ctas_per_cga: Optional[List[int]] = None
+    cta_split_num: Optional[List[int]] = None
+    cta_order: Optional[List[int]] = None
+
+    def __post_init__(self):
+        super().__setattr__("version", _unwrap_if_constexpr(self.version))
+        super().__setattr__("warps_per_cta", _unwrap_if_constexpr(self.warps_per_cta))
+        super().__setattr__("instr_shape", _unwrap_if_constexpr(self.instr_shape))
+        super().__setattr__("ctas_per_cga", _unwrap_if_constexpr(self.ctas_per_cga))
+        super().__setattr__("cta_split_num", _unwrap_if_constexpr(self.cta_split_num))
+        super().__setattr__("cta_order", _unwrap_if_constexpr(self.cta_order))
+
+        rank = 2
+        _realize_cta_layout(self, rank)
+        assert len(self.ctas_per_cga) == rank
+        assert len(self.cta_split_num) == rank
+        assert len(self.cta_order) == rank
+
+    def _to_ir(self, builder):
+        return builder.get_mma_layout(self.version, self.warps_per_cta, self.ctas_per_cga, self.cta_split_num,
+                                      self.cta_order, self.instr_shape)
+
+    def mangle(self) -> str:
+        return f"MMA_{self.version}_{self.warps_per_cta}_{self.instr_shape}_{self.ctas_per_cga}_{self.cta_split_num}_{self.cta_order}_MMA"
 
 
 class SharedLayout:

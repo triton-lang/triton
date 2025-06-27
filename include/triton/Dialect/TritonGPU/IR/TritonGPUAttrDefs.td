@@ -1002,11 +1002,11 @@ An encoding for tensors that have been produced by MFMA matrix core instructions
 available on AMD Instinct GPUs of CDNA architectures.
 
 It is characterized by the following parameters:
-- `versionMajor` and `versionMinor` indicates the GPU architecture:
-  - 1.0: gfx908, i.e. CDNA1
-  - 2.0: gfx90a: i.e. CDNA2
-  - 3.0: gfx942: CDNA3
-  - 4.0: gfx950: CDNA4
+- `version` indicates the GPU architecture:
+  - 1: gfx908: CDNA1
+  - 2: gfx90a: CDNA2
+  - 3: gfx942: CDNA3
+  - 4: gfx950: CDNA4
 - `warpsPerCTA` indicates the warp layout in the block.
 - `MDim` and `NDim` indicate the dimension of the output of the mfma instruction.
 - `isTransposed` indicates the result tensor is transposed so that it can be converted to dotOperand layout
@@ -1096,8 +1096,7 @@ V [ 0,4,8...60   1,5...61     2,6...62     3,7...63    ]   [ 128,132...188  129,
 
   let parameters = (
     ins
-    "unsigned": $versionMajor,
-    "unsigned": $versionMinor,
+    "unsigned": $version,
     ArrayRefParameter<"unsigned">:$warpsPerCTA,
     "unsigned":$MDim,
     "unsigned":$NDim,

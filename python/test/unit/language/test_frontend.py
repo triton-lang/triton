@@ -374,6 +374,7 @@ def test_constexpr_generator():
     generator(lhs)
 
 
+@tl.constexpr_function
 def Box(T):
 
     @tl.core._aggregate
@@ -401,3 +402,23 @@ def test_late_bound_class_reference():
         anchor(value)
 
     run_filecheck_test(kernel)
+
+
+@filecheck_test
+@triton.jit
+def test_modify_if_livein():
+    # CHECK-LABEL: test_modify_if_livein
+    none_livein = None  # noqa: F841
+
+    # CHECK: [[LOOP_OUT:%.*]] = scf.for {{.*}} iter_args([[BOX:%.*]] = %true)
+    # CHECK:   [[LIVEOUT:%.*]] = scf.if [[BOX]]
+    # CHECK:     yield %false
+    # CHECK:   else
+    # CHECK:     yield [[BOX]]
+    # CHECK:   yield [[LIVEOUT]]
+    # CHECK: call @{{.*}}anchor{{.*}}([[LOOP_OUT]])
+    box = Box(tl.tensor)(tl.core.to_tensor(True))
+    for i in range(10):
+        if box.value:
+            box.value = False
+    anchor(box.value)

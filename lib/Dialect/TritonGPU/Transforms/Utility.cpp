@@ -1586,4 +1586,36 @@ bool comesFromLoadOrBlockArg(Value v) {
           isa<LoadOp, DescriptorLoadOp, DescriptorGatherOp>(v.getDefiningOp()));
 }
 
+SmallVector<Value> getTiedArgs(Operation *op, int resultIdx) {
+  if (auto forOp = dyn_cast<scf::ForOp>(op)) {
+    auto iterArg = forOp.getRegionIterArg(resultIdx);
+    auto result = forOp.getResult(resultIdx);
+    auto yieldVal = forOp.getBody()->getTerminator()->getOperand(resultIdx);
+    auto initVal = forOp.getInitArgs()[resultIdx];
+    return {iterArg, result, yieldVal, initVal};
+  } else if (auto whileOp = dyn_cast<scf::WhileOp>(op)) {
+    auto iterArg = whileOp.getBeforeArguments()[resultIdx];
+    auto result = whileOp.getResults()[resultIdx];
+    auto yieldVal = whileOp.getConditionOp().getArgs()[resultIdx];
+    auto initVal = whileOp.getOperands()[resultIdx];
+    auto bodyArg = whileOp.getAfterArguments()[resultIdx];
+    return {iterArg, result, yieldVal, initVal, bodyArg};
+  } else if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
+    SmallVector<Value> values;
+    for (auto &block : ifOp.getThenRegion().getBlocks()) {
+      auto terminator = block.getTerminator();
+      if (isa<scf::YieldOp>(terminator))
+        values.push_back(terminator->getOperands()[resultIdx]);
+    }
+    for (auto &block : ifOp.getElseRegion().getBlocks()) {
+      auto terminator = block.getTerminator();
+      if (isa<scf::YieldOp>(terminator))
+        values.push_back(terminator->getOperands()[resultIdx]);
+    }
+    values.push_back(ifOp->getResults()[resultIdx]);
+    return values;
+  }
+  return {};
+}
+
 } // namespace mlir::triton

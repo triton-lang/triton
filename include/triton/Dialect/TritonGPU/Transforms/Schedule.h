@@ -85,7 +85,7 @@ public:
   using Cluster = ClusterList::iterator;
   using ClusterHash = size_t;
 
-  DenseMap<Operation *, std::pair<int, Cluster>> opToStageAndCluster;
+  llvm::MapVector<Operation *, std::pair<int, Cluster>> opToStageAndCluster;
 
   void setNumStages(int numStages) { this->numStages = numStages; }
   int getNumStages() const { return numStages; }

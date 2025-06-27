@@ -272,6 +272,10 @@ void replaceUsesWithLocalLoad(
 // after converting loads into async loads.
 bool comesFromLoadOrBlockArg(Value v);
 
+// For structured control flow ops, returns the values associated with the
+// `resultIdx`th result.
+SmallVector<Value> getTiedArgs(Operation *op, int resultIdx);
+
 } // namespace mlir::triton
 
 #endif // TRITON_DIALECT_TRITONGPU_TRANSFORMS_UTILITY_H_
