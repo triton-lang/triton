@@ -4,6 +4,8 @@ from .swizzle_details.hopper_scale import swizzle_mxfp4_scale_hopper, unswizzle_
 from .swizzle_details.blackwell_scale import swizzle_mx_scale_bw, unswizzle_mx_scale_bw_torch
 from .reduction_details.reduce_bitmatrix import clear_sums, sum_bitmatrix_rows
 from enum import Enum
+from dataclasses import dataclass
+from triton.tools.tensor_descriptor import TensorDescriptor
 
 
 class SwizzlingType(Enum):
@@ -12,38 +14,69 @@ class SwizzlingType(Enum):
     BLACKWELL_SCALE = 2
 
 
+@dataclass
+class StridedLayout:
+    shape: list[int]
+    strides: list[int]
+
+
+def make_strided_layout(shape, order=None):
+    n = len(shape)
+    if order is None:
+        order = list(reversed(range(n)))
+    if sorted(order) != list(range(n)):
+        raise ValueError("`order` must be a permutation of range(len(shape))")
+    strides = [0] * n
+    stride = 1
+    for dim in order:
+        strides[dim] = stride
+        stride *= shape[dim]
+    return StridedLayout(shape=list(shape), strides=strides)
+
+
+@dataclass
 class Tensor:
 
-    def __init__(self, handle, shape=None, strides=None, shape_max=None, swizzle_mode=None):
-        if shape is None:
-            shape = handle.shape
-        if strides is None:
-            strides = handle.stride()
-        if shape_max is None:
-            shape_max = [None] * len(shape)
-        self.handle = handle
-        self.ndim = handle.ndim
-        self.dtype = handle.dtype
-        self.device = handle.device
-        # shape may contain a mix of `int` and `torch.Tensor`
+    handle: torch.Tensor
+    shape: list[int] | None = None
+    shape_max: list[int] | None = None
+    strides: list[int] | None = None
+    swizzle_mode: SwizzlingType | None = None
+    layout: StridedLayout | None = None
+
+    def __post_init__(self):
+        # initialize shape
+        if self.shape is None:
+            self.shape = self.handle.shape
+        # validate shape: all elements must be `int` or numel-1 `torch.Tensor`
         is_int = lambda s: isinstance(s, int)
         is_item = lambda s: hasattr(s, "numel") and s.numel() == 1
-        self.shape = shape
         assert all(map(lambda s: is_int(s) or is_item(s), self.shape))
-        # shape_max is guarantee to be all `int`
-        self.shape_max = shape_max
+        # initialize shape_max
+        if self.shape_max is None:
+            self.shape_max = [None] * len(self.shape)
         for i, (s, smax) in enumerate(zip(self.shape, self.shape_max)):
             if smax is not None and not is_int(smax):
                 raise ValueError(f"shape_max[{i}] must be `int` or `None`; got {type(smax)}")
             if smax is None:
                 self.shape_max[i] = s
+        # validate shape_max: all elements must be `int`
         assert all(map(is_int, self.shape_max))
-        # TODO: clean all this up
-        self.strides = strides
+        # initialize strides
+        if self.strides is None:
+            self.strides = self.handle.stride()
+        # initialize layouts
+        if self.layout is None:
+            self.layout = StridedLayout(self.shape, self.strides)
+        # TODO: should be @properties ?
+        self.ndim = self.handle.ndim
+        self.dtype = self.handle.dtype
+        self.device = self.handle.device
+        # TODO: i don't think this should be part of this dataclass
         self.is_fp4 = self.dtype == torch.uint8
         self.element_bitwidth = 4 if self.is_fp4 else self.dtype.itemsize * 8
-        self.ndim = handle.ndim
-        self.swizzle_mode = swizzle_mode
+
+    # torch compatibility layer
 
     def stride(self, i=None):
         return self.strides if i is None else self.strides[i]
@@ -51,7 +84,6 @@ class Tensor:
     def data_ptr(self):
         return self.handle.data_ptr()
 
-    # TODO: clean up
     def numel(self):
         return self.handle.numel()
 
@@ -69,6 +101,7 @@ class Tensor:
         return Tensor(h, swizzle_mode=self.swizzle_mode)
 
 
+@dataclass
 class Bitmatrix(Tensor):
     """
     Represents a boolean matrix in a packed format where each element occupies
@@ -79,22 +112,21 @@ class Bitmatrix(Tensor):
     kernel when we call Bitmatrix::sum().
     """
 
-    _scratchpad: torch.Tensor
+    scratchpad: torch.Tensor = None
 
-    def __init__(self, handle, shape, shape_max, scratchpad=None):
-        assert handle.shape[-1] * 32 == shape[-1]
-        assert handle.ndim == 2
-        super().__init__(handle, shape=shape, shape_max=shape_max)
+    def __post_init__(self):
+        super().__post_init__()
+        assert self.handle.shape[-1] * 32 == self.shape[-1]
+        assert self.handle.ndim == 2
         assert self.dtype == torch.uint32
-        self._scratchpad = scratchpad
 
     def sum(self, partials_block_size):
         _, n_cols = self.shape
         dev = self.device
-        if self._scratchpad is None:
-            self._scratchpad = clear_sums(n_cols, dev)
-        out_ret = self._scratchpad[:n_cols]
-        self._scratchpad = None  # throw error if we try to sum again
+        if self.scratchpad is None:
+            self.scratchpad = clear_sums(n_cols, dev)
+        out_ret = self.scratchpad[:n_cols]
+        self.scratchpad = None  # throw error if we try to sum again
         return sum_bitmatrix_rows(self, out_ret, partials_block_size)
 
 
@@ -164,26 +196,50 @@ def swizzle(tensor, swizzle_mode):
         tensor = swizzle_mxfp4_value_hopper(tensor, op_idx=0, mma_version=3)
         tensor = perm_tensor_from_contig(tensor, axis, swizzle_axis)
         strides = tensor.stride()
+        layout = None
     elif swizzle_mode == SwizzlingType.BLACKWELL_SCALE:
         tensor = swizzle_mx_scale_bw(tensor, allow_pad=True)
-        mxE, mxK, mxN = ret_shape
+        tensor = perm_tensor_from_contig(tensor, axis, swizzle_axis)
+        mxE, mxK, mxN = tensor.shape
         # Compute strides of the 5D swizzled tensor.
-        swizzled_shape = (mxE, mxN // 128, mxK // 4, 32, 4, 4)
+        swizzled_shape = (1, mxE * mxN // 128, mxK // 4, 2, 256)
+        # layout = make_strided_layout(swizzled_shape)
+        layout = None
         s5 = 1
-        s4 = swizzled_shape[5] * s5  # 4 * 1 = 4
-        s3 = swizzled_shape[4] * s4  # 32 * 4 = 128
-        s2 = swizzled_shape[3] * s3  # 4 * 128 = 512
-        s1 = swizzled_shape[2] * s2  # (mxK//4) * 512
-        s0 = swizzled_shape[1] * s1  # (mxN//128) * ((mxK//4)*512)
-        strides = [s0, s2, s1]
+        s4 = swizzled_shape[4] * s5  # 4 * 1 = 4
+        s3 = swizzled_shape[3] * s4  # 32 * 4 = 128
+        s2 = swizzled_shape[2] * s3  # 4 * 128 = 512
+        s1 = swizzled_shape[1] * s2  # (mxK//4) * 512
+        s0 = swizzled_shape[0] * s1  # (mxN//128) * ((mxK//4)*512)
+        strides = [s0, s3, s2]
     elif swizzle_mode == SwizzlingType.HOPPER_SCALE:
         tensor = swizzle_mxfp4_scale_hopper(tensor, num_warps=8)
         tensor = perm_tensor_from_contig(tensor, axis, swizzle_axis)
         strides = tensor.stride()
+        layout = None
     else:
         tensor = perm_tensor_from_contig(tensor, axis, swizzle_axis)
         strides = tensor.stride()
-    return Tensor(tensor, strides=strides, shape=ret_shape, swizzle_mode=swizzle_mode)
+        layout = None
+    return Tensor(tensor, strides=strides, shape=ret_shape, layout=layout, swizzle_mode=swizzle_mode)
+
+
+def make_tma(tensor, block_shape):
+    return TensorDescriptor(base=tensor, shape=tensor.layout.shape, strides=tensor.layout.strides,
+                            block_shape=block_shape)
+    # return TensorDescriptor(base=tensor.handle, shape=tensor.shape_swizzled, strides=)
+    # """Create a tensor descriptor for block scale factors"""
+    # assert swizzle_mx, "only support swizzled block scales"
+    # assert block_n >= 128
+    # assert transpose is None
+    # MX_PACK_DIVISOR = 32
+    # MX_SCALE_BLOCK_K = block_k // MX_PACK_DIVISOR
+    # PackedK = triton.cdiv(K, MX_PACK_DIVISOR)
+    # num_expt_x_ncol = B * triton.cdiv(N, 128)
+    # shape = [1, num_expt_x_ncol, triton.cdiv(PackedK, 4), 2, 256]
+    # strides = [num_expt_x_ncol * mx_scale_stride_n, mx_scale_stride_n, mx_scale_stride_k, 256, 1]
+    # block_shape = [1, block_n // 128, MX_SCALE_BLOCK_K // 4, 2, 256]
+    # return TensorDescriptor(base=mx_tensor, shape=shape, strides=strides, block_shape=block_shape)
 
 
 def unswizzle(tensor, swizzle_mode):

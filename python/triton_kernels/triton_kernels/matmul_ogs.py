@@ -114,6 +114,7 @@ class TensorDescriptorBuilder:
         shape = [1, num_expt_x_ncol, triton.cdiv(PackedK, 4), 2, 256]
         strides = [num_expt_x_ncol * mx_scale_stride_n, mx_scale_stride_n, mx_scale_stride_k, 256, 1]
         block_shape = [1, block_n // 128, MX_SCALE_BLOCK_K // 4, 2, 256]
+        # return make_tma(mx_tensor, block_shape)
         return TensorDescriptor(base=mx_tensor, shape=shape, strides=strides, block_shape=block_shape)
 
     @staticmethod
