@@ -1015,7 +1015,8 @@ def TT_MakeTensorDescOp : TT_Op<"make_tensor_descriptor", [
   let arguments = (ins
     TT_Ptr:$base,
     Variadic<I32>:$shape,
-    Variadic<I64>:$strides
+    Variadic<I64>:$strides,
+    OptionalAttr<TT_PaddingOptionAttr>:$padding
   );
 
   let results = (outs TT_TensorDescType:$result);
@@ -1023,7 +1024,8 @@ def TT_MakeTensorDescOp : TT_Op<"make_tensor_descriptor", [
   let assemblyFormat = "$base `,` `[` $shape `]` `,` `[` $strides `]` attr-dict `:` type($base) `,` type($result)";
 
   let builders = [
-    OpBuilder<(ins "Value":$base, "ValueRange":$shape, "ValueRange":$strides, "ArrayRef<int32_t>":$blockShape, "bool":$isSignedInteger)>
+    OpBuilder<(ins "Value":$base, "ValueRange":$shape, "ValueRange":$strides, "ArrayRef<int32_t>":$blockShape, "bool":$isSignedInteger,
+    "std::optional<triton::PaddingOption>":$padding)>
   ];
 
   let extraClassDeclaration = [{
