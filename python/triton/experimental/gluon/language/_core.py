@@ -65,6 +65,7 @@ _IMPORT_FROM_TRITON: List[str] = [
 ]
 
 __all__ = [
+    "aggregate",
     "constexpr",
     "base_value",
     "base_type",
@@ -446,3 +447,8 @@ def thread_barrier(_semantic=None):
     Insert a barrier to synchronize threads within a CTA.
     """
     return _semantic.debug_barrier()
+
+
+def aggregate(cls):
+    from .._runtime import jit
+    return tl_core._aggregate_impl(cls, jit)
