@@ -398,6 +398,57 @@ Effects: `MemoryEffects::Effect{}`
 | `result` | Tensor descriptor type (`::mlir::triton::TensorDescType`) in Triton IR type system |
 
 
+### `ttng.tc_gen5_commit` (triton::nvidia_gpu::TCGen5CommitOp)
+
+_Make an mbarrier track completion of all prior async tcgen5 ops_
+
+Syntax:
+
+```
+operation ::= `ttng.tc_gen5_commit` $barrier (`,` $pred^)? attr-dict `:` qualified(type($barrier))
+```
+
+The `ttng.tc_gen5_commit` is an asynchronous operation that makes the
+mbarrier object track the completion of all prior asynchronous tcgen5
+operations. Upon completion of all asynchronous operations, the mbarrier
+arrive operation is performed on the mbarrier with a count of 1.
+
+If `two_ctas` is set, then the mbarrier tracks all prior operations
+initiated with `two_ctas` set as well. Otherwise, it tracks all prior
+operations initiated without `two_ctas`.
+
+Note that the completion mechanisms are guaranteed to occur sequentially in
+the order the commit operations were issued. This means, for example:
+
+```mlir
+ttng.tmem_copy
+ttng.tc_gen5_mma
+ttng.tc_gen5_commit %barrierA
+ttng.tc_gen5_commit %barrierB
+```
+
+`%barrierA` tracks the completion of the previous TMEM copy and MMA
+operations, but since the commit groups are sequential, the arrive-on
+operation on `%barrierA` is guaranteed to be performed before the arrive-on
+operation on `%barrierB`, even though its commit group is empty.
+
+Traits: `VerifyTensorLayoutsTrait`
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>two_ctas</code></td><td>::mlir::UnitAttr</td><td>unit attribute</td></tr>
+</table>
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `barrier` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
+| `pred` | 1-bit signless integer |
+
+
 ### `ttng.tc_gen5_mma` (triton::nvidia_gpu::TCGen5MMAOp)
 
 _Block level op mapping to tensorcore gen5 mma_
