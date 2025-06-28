@@ -29,7 +29,6 @@ class StridedLayout:
         PACK_DIVISOR = 2 if tensor.dtype == torch.uint8 else 1
         indx = strides.index(1)
         block_shape[indx] = block_shape[indx] // PACK_DIVISOR
-
         # TODO: is this needed?
         # is_microscaled_format = mx_ctx.weight_scale is not None and w.dtype == torch.uint8
         # if is_microscaled_format:

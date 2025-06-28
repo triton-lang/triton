@@ -33,7 +33,7 @@ def _matmul_ogs(
              XScale,
              W, stride_w_e, stride_w_k, stride_w_n, W_TRANSPOSE: tl.constexpr,
              WScale,
-             MxScale, stride_mx_e, stride_mx_k, stride_mx_n, MX_TRANSPOSE: tl.constexpr,
+             MxScale, stride_mx_e, stride_mx_k, stride_mx_n,
              B, stride_b_e, # Bias
              M, N, K, # shapes
              # expt data

@@ -511,14 +511,14 @@ def matmul_ogs(x, w, bias,
             x_tensor = make_tma(x_tensor, x_block_shape)
         w_tma_transpose = w.stride(2) != 1
         w_tensor = make_tma(w, [1, opt_flags.block_k, opt_flags.block_n], transpose=w_tma_transpose)
-        mx_tma_transpose = False
         mx_tensor = mx_ctx.weight_scale
         if mx_tensor is not None:
             mx_tensor = make_tma(mx_tensor, [opt_flags.block_n, opt_flags.block_k])
     else:
         x_tensor = x
-        w_tensor, w_tma_transpose = w, False
-        mx_tensor, mx_tma_transpose = mx_ctx.weight_scale, False
+        w_tensor = w
+        w_tma_transpose = False
+        mx_tensor = mx_ctx.weight_scale
 
     kernels = get_kernels(epilogue.specs, fused_activation.specs)
     (kernels._p_matmul_ogs if opt_flags.is_persistent else kernels._matmul_ogs)[(grid,)](
@@ -528,7 +528,7 @@ def matmul_ogs(x, w, bias,
                    flex.lhs_data.scale,
                    w_tensor, w.stride(0), w.stride(1), w.stride(2), w_tma_transpose,
                    flex.rhs_data.scale,
-                   mx_tensor, mx_scale_stride_e, mx_scale_stride_k, mx_scale_stride_n, mx_tma_transpose,
+                   mx_tensor, mx_scale_stride_e, mx_scale_stride_k, mx_scale_stride_n,
                    bias, bias_stride,
                    x.shape[1] if routing_data.expt_hist is None else None,
                    N, K,

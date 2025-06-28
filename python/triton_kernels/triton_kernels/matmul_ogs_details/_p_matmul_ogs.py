@@ -104,7 +104,7 @@ def _p_matmul_ogs(
              XScale,
              W, stride_w_e, stride_w_k, stride_w_n, W_TRANSPOSE: tl.constexpr,
              WScale,
-             MxScale, stride_mx_e, stride_mx_k, stride_mx_n, MX_TRANSPOSE: tl.constexpr,
+             MxScale, stride_mx_e, stride_mx_k, stride_mx_n,
              B, stride_b_e, # Bias
              M, N, K, # shapes
              # expt data
@@ -312,7 +312,7 @@ def _p_matmul_ogs(
                     w_scales = w_scales.reshape((w_scales.shape[1], w_scales.shape[2] * w_scales.shape[-2] * w_scales.shape[-1]))
                     w_scales = unswizzle_mx_scale_bw(w_scales)
                 else:
-                    w_scales = _tma_load_2d(MxScale, [expt_id, off_k_mx, off_n], transpose=MX_TRANSPOSE).T
+                    w_scales = _tma_load_2d(MxScale, [expt_id, off_k_mx, off_n]).T
                 if SWAP_XW:
                     acc = tl.dot_scaled(w.T, w_scales, mx_format, x.T, x_scales, x_format, acc=acc, fast_math=True)
                 else:
