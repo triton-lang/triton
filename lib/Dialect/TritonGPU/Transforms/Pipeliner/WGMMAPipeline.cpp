@@ -112,7 +112,7 @@ static int minNumInterleavedCommitOps(Operation *waitOp) {
   };
 
   if (waitOp->getNumOperands() != 1)
-    return 0;
+    return cast<ttg::AsyncWaitOp>(waitOp).getNum();
   Value val = waitOp->getOperand(0);
   // If the value resides in a region other than the region of the wait op, then
   // the wait op must be in some nested region. Measure the number of commits
