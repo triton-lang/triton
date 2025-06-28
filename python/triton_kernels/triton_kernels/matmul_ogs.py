@@ -6,17 +6,15 @@ import triton
 # utilities
 from triton_kernels import target_info
 from triton_kernels.numerics import InFlexData, OutFlexData
-from triton_kernels.routing import ExptData, GatherIndx, RoutingData, ScatterIndx
-from triton.tools.tensor_descriptor import TensorDescriptor
+from triton_kernels.routing import GatherIndx, RoutingData, ScatterIndx
 # details
 from .matmul_ogs_details._matmul_ogs import _compute_writeback_idx
 from .matmul_ogs_details._matmul_ogs import _matmul_ogs
 from .matmul_ogs_details._p_matmul_ogs import _p_matmul_ogs, get_per_device_per_stream_alloc_fn
 from .matmul_ogs_details._finalize_matmul import _finalize_matmul
-from .matmul_ogs_details.opt_flags import make_opt_flags, OptFlags, update_opt_flags_constraints
+from .matmul_ogs_details.opt_flags import make_opt_flags, update_opt_flags_constraints
 from .specialize import specialize
-from .datastruct import Tensor, SwizzlingType
-from typing import Tuple, Optional
+from .datastruct import Tensor, SwizzlingType, make_tma
 
 
 @dataclass
@@ -94,43 +92,6 @@ def can_overflow_int32(tensor: torch.Tensor):
 
 def should_upcast_indices(*args):
     return any(tensor is not None and can_overflow_int32(tensor) for tensor in args)
-
-
-class TensorDescriptorBuilder:
-    """Builder for creating different types of tensor descriptors"""
-
-    @staticmethod
-    def create_block_scale_descriptor(mx_tensor: torch.Tensor, block_k: int, block_n: int, B: int, K: int, N: int,
-                                      mx_scale_stride_k: int, mx_scale_stride_n: int, swizzle_mx: bool,
-                                      transpose: Optional[bool]) -> TensorDescriptor:
-        """Create a tensor descriptor for block scale factors"""
-        assert swizzle_mx, "only support swizzled block scales"
-        assert block_n >= 128
-        assert transpose is None
-        MX_PACK_DIVISOR = 32
-        MX_SCALE_BLOCK_K = block_k // MX_PACK_DIVISOR
-        PackedK = triton.cdiv(K, MX_PACK_DIVISOR)
-        num_expt_x_ncol = B * triton.cdiv(N, 128)
-        shape = [1, num_expt_x_ncol, triton.cdiv(PackedK, 4), 2, 256]
-        strides = [num_expt_x_ncol * mx_scale_stride_n, mx_scale_stride_n, mx_scale_stride_k, 256, 1]
-        block_shape = [1, block_n // 128, MX_SCALE_BLOCK_K // 4, 2, 256]
-        # return make_tma(mx_tensor, block_shape)
-        return TensorDescriptor(base=mx_tensor, shape=shape, strides=strides, block_shape=block_shape)
-
-    @staticmethod
-    def create_descriptor(tensor: torch.Tensor, block_shape: list[int], transpose=False) -> TensorDescriptor:
-        """Create a tensor descriptor for matrix X via TMA"""
-        assert tensor.ndim in [2, 3], "TMA descriptor builder expects 2D or 3D input"
-        assert tensor.ndim == len(block_shape)
-        if transpose:
-            block_shape = block_shape[:-2] + [block_shape[-1], block_shape[-2]]
-            tensor = tensor.permute(0, 2, 1)
-        if isinstance(tensor, (Tensor)):
-            tensor = tensor.handle
-        # FIXME: incorrect in the general case
-        PACK_DIVISOR = 2 if tensor.dtype == torch.uint8 else 1
-        block_shape[-1] = block_shape[-1] // PACK_DIVISOR
-        return TensorDescriptor.from_tensor(tensor, block_shape=block_shape)
 
 
 # ---------------------
@@ -426,66 +387,6 @@ def apply_allocation(allocation: MatmulAllocation, output):
 # Triton Implementation
 # -----------------------------------------------------------------------------
 
-def _create_tma_descriptors(
-    x: torch.Tensor,
-    w: torch.Tensor,
-    mx_tensor: Optional[torch.Tensor],
-    routing_data: RoutingData,
-    mx_ctx: MicroscalingCtx,
-    expt_data: ExptData,
-    opt_flags: OptFlags,
-    B: int,
-    K: int,
-    N: int,
-    mx_scale_stride_k: int,
-    mx_scale_stride_n: int,
-    HAS_GATHER: bool,
-) -> Tuple[bool, torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
-    """Create and cache TMA descriptors for tensors."""
-
-    x_tensor_or_desc, mx_desc_and_transpose = x, (None, False)
-    x_has_tma = (not HAS_GATHER) or (HAS_GATHER and target_info.has_tma_gather())
-    if x_has_tma:
-        # TODO: unit test ? x can be 3D (due to split-k) and the following seems hacky
-        x = x.view(x.shape[-2:]) if HAS_GATHER else x
-        block_m = [1] if HAS_GATHER else [opt_flags.block_m]
-        block_z = [] if HAS_GATHER else [1] * (x.ndim - 2)
-        x_block_shape = block_z + block_m + [opt_flags.block_k]
-        x_tensor_or_desc = TensorDescriptorBuilder.create_descriptor(x, x_block_shape)
-
-    w_transpose = w.stride(2) != 1
-    w_block_shape = [1, opt_flags.block_k, opt_flags.block_n]
-    w_desc = TensorDescriptorBuilder.create_descriptor(w, w_block_shape, transpose=w_transpose)
-    w_desc_and_transpose = (w_desc, w_transpose)
-
-    is_microscaled_format = mx_ctx.weight_scale is not None and w.dtype == torch.uint8
-    if is_microscaled_format:
-        # Pad the inner shape to 128 for mxfp4 weights; TMA requires this when the compiler uses
-        # CU_TENSOR_MAP_DATA_TYPE_16U4_ALIGN16B.
-        # This technically makes the shape masking incorrect, but it's fine because:
-        #  - When the N dim is padded, the scales will be masked to 0.
-        #  - When the K dim is padded, the activations we perform tl.dot with will be masked to 0.
-        #    Note: the scales can't be relied on for zeroing in this case, because they apply to groups
-        #    of 32 elements in the K dimension.
-        pad = 128
-        dim_to_pad = -1
-        old_size = w_desc.shape[dim_to_pad]
-        padded_size = triton.cdiv(old_size, pad) * pad
-        if padded_size != old_size:
-            w_desc.shape = list(w_desc.shape)
-            w_desc.shape[dim_to_pad] = padded_size
-
-    if mx_tensor is not None:
-        mx_transpose = mx_scale_stride_n != 1 if mx_ctx.swizzle_scale is None else None
-        mx_desc = TensorDescriptorBuilder.create_block_scale_descriptor(
-                mx_tensor, opt_flags.block_k, opt_flags.block_n,
-                routing_data.n_expts_tot if expt_data is not None and len(expt_data.block_pid_map) > 0 else B, K, N,
-                mx_scale_stride_k, mx_scale_stride_n, mx_ctx.swizzle_scale, mx_transpose
-            )
-        mx_desc_and_transpose = (mx_desc, mx_transpose)
-
-    return x_tensor_or_desc, w_desc_and_transpose, mx_desc_and_transpose
-
 def matmul_ogs_set_idle_sms(num_idle_sms):
     """
     persistent kernels will leave `num_idle_sms` idle
@@ -599,28 +500,27 @@ def matmul_ogs(x, w, bias,
     w = flex.rhs_data.reinterpret(w)
 
     if opt_flags.is_persistent:
-        x_tensor, w_tensor_and_transpose, mx_tensor_and_tranpose = _create_tma_descriptors(
-            x=x, w=w, mx_tensor=mx_ctx.weight_scale,
-            routing_data=routing_data,
-            mx_ctx=mx_ctx,
-            expt_data=expt_data,
-            opt_flags=opt_flags,
-            B=batch_size,
-            K=K,
-            N=N,
-            mx_scale_stride_k=mx_scale_stride_k,
-            mx_scale_stride_n=mx_scale_stride_n,
-            HAS_GATHER=gather_indx is not None,
-        )
-        w_tensor, w_tma_transpose = w_tensor_and_transpose
-        mx_tensor, mx_tma_transpose = mx_tensor_and_tranpose
+        has_gather = gather_indx is not None
+        x_tensor = x
+        x_has_tma = (not has_gather) or (has_gather and target_info.has_tma_gather())
+        if x_has_tma:
+            x_tensor = torch.squeeze(x) if has_gather else x
+            block_m = [1] if has_gather else [opt_flags.block_m]
+            block_z = [] if has_gather else [1] * (x_tensor.ndim - 2)
+            x_block_shape = block_z + block_m + [opt_flags.block_k]
+            x_tensor = make_tma(x_tensor, x_block_shape)
+        w_tma_transpose = w.stride(2) != 1
+        w_tensor = make_tma(w, [1, opt_flags.block_k, opt_flags.block_n], transpose=w_tma_transpose)
+        mx_tma_transpose = False
+        mx_tensor = mx_ctx.weight_scale
+        if mx_tensor is not None:
+            mx_tensor = make_tma(mx_tensor, [opt_flags.block_n, opt_flags.block_k])
     else:
         x_tensor = x
         w_tensor, w_tma_transpose = w, False
         mx_tensor, mx_tma_transpose = mx_ctx.weight_scale, False
 
     kernels = get_kernels(epilogue.specs, fused_activation.specs)
-
     (kernels._p_matmul_ogs if opt_flags.is_persistent else kernels._matmul_ogs)[(grid,)](
                    flex.out_data.reinterpret(memory["output"]),
                    flex.out_data.reinterpret(out0), *out0.stride(), *out0_flex,

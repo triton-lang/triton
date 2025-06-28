@@ -19,8 +19,51 @@ class StridedLayout:
     shape: list[int]
     strides: list[int]
 
+    def make_tma(self, tensor, block_shape, transpose):
+        shape = list(self.shape)
+        strides = list(self.strides)
+        if transpose:
+            block_shape = block_shape[:-2] + [block_shape[-1], block_shape[-2]]
+            shape = self.shape[:-2] + [shape[-1], shape[-2]]
+            strides = strides[:-2] + [strides[-1], strides[-2]]
+        PACK_DIVISOR = 2 if tensor.dtype == torch.uint8 else 1
+        indx = strides.index(1)
+        block_shape[indx] = block_shape[indx] // PACK_DIVISOR
 
-def make_strided_layout(shape, order=None):
+        # TODO: is this needed?
+        # is_microscaled_format = mx_ctx.weight_scale is not None and w.dtype == torch.uint8
+        # if is_microscaled_format:
+        #     # Pad the inner shape to 128 for mxfp4 weights; TMA requires this when the compiler uses
+        #     # CU_TENSOR_MAP_DATA_TYPE_16U4_ALIGN16B.
+        #     # This technically makes the shape masking incorrect, but it's fine because:
+        #     #  - When the N dim is padded, the scales will be masked to 0.
+        #     #  - When the K dim is padded, the activations we perform tl.dot with will be masked to 0.
+        #     #    Note: the scales can't be relied on for zeroing in this case, because they apply to groups
+        #     #    of 32 elements in the K dimension.
+        #     pad = 128
+        #     dim_to_pad = -1
+        #     old_size = w_desc.shape[dim_to_pad]
+        #     padded_size = triton.cdiv(old_size, pad) * pad
+        #     if padded_size != old_size:
+        #         w_desc.shape = list(w_desc.shape)
+        #         w_desc.shape[dim_to_pad] = padded_size
+
+        return TensorDescriptor(base=tensor, shape=shape, strides=strides, block_shape=block_shape)
+
+
+@dataclass
+class BlackwellScaleBlockLayout(StridedLayout):
+
+    def make_tma(self, tensor, block_shape, transpose):
+        assert not transpose
+        assert len(block_shape) == 2
+        MX_PACK_DIVISOR = 32
+        MX_SCALE_BLOCK_K = block_shape[1] // MX_PACK_DIVISOR
+        block_shape = [1, block_shape[0] // 128, MX_SCALE_BLOCK_K // 4, 2, 256]
+        return TensorDescriptor(base=tensor, shape=self.shape, strides=self.strides, block_shape=block_shape)
+
+
+def make_layout(shape, type=StridedLayout, order=None):
     n = len(shape)
     if order is None:
         order = list(reversed(range(n)))
@@ -31,7 +74,7 @@ def make_strided_layout(shape, order=None):
     for dim in order:
         strides[dim] = stride
         stride *= shape[dim]
-    return StridedLayout(shape=list(shape), strides=strides)
+    return type(shape=list(shape), strides=strides)
 
 
 @dataclass
@@ -202,16 +245,15 @@ def swizzle(tensor, swizzle_mode):
         tensor = perm_tensor_from_contig(tensor, axis, swizzle_axis)
         mxE, mxK, mxN = tensor.shape
         # Compute strides of the 5D swizzled tensor.
-        swizzled_shape = (1, mxE * mxN // 128, mxK // 4, 2, 256)
-        # layout = make_strided_layout(swizzled_shape)
-        layout = None
+        swizzled_shape = (mxE, mxN // 128, mxK // 4, 32, 4, 4)
+        layout = make_layout((1, mxE * mxN // 128, mxK // 4, 2, 256), BlackwellScaleBlockLayout)
         s5 = 1
-        s4 = swizzled_shape[4] * s5  # 4 * 1 = 4
-        s3 = swizzled_shape[3] * s4  # 32 * 4 = 128
-        s2 = swizzled_shape[2] * s3  # 4 * 128 = 512
-        s1 = swizzled_shape[1] * s2  # (mxK//4) * 512
-        s0 = swizzled_shape[0] * s1  # (mxN//128) * ((mxK//4)*512)
-        strides = [s0, s3, s2]
+        s4 = swizzled_shape[5] * s5  # 4 * 1 = 4
+        s3 = swizzled_shape[4] * s4  # 32 * 4 = 128
+        s2 = swizzled_shape[3] * s3  # 4 * 128 = 512
+        s1 = swizzled_shape[2] * s2  # (mxK//4) * 512
+        s0 = swizzled_shape[1] * s1  # (mxN//128) * ((mxK//4)*512)
+        strides = [s0, s2, s1]
     elif swizzle_mode == SwizzlingType.HOPPER_SCALE:
         tensor = swizzle_mxfp4_scale_hopper(tensor, num_warps=8)
         tensor = perm_tensor_from_contig(tensor, axis, swizzle_axis)
@@ -224,22 +266,10 @@ def swizzle(tensor, swizzle_mode):
     return Tensor(tensor, strides=strides, shape=ret_shape, layout=layout, swizzle_mode=swizzle_mode)
 
 
-def make_tma(tensor, block_shape):
-    return TensorDescriptor(base=tensor, shape=tensor.layout.shape, strides=tensor.layout.strides,
-                            block_shape=block_shape)
-    # return TensorDescriptor(base=tensor.handle, shape=tensor.shape_swizzled, strides=)
-    # """Create a tensor descriptor for block scale factors"""
-    # assert swizzle_mx, "only support swizzled block scales"
-    # assert block_n >= 128
-    # assert transpose is None
-    # MX_PACK_DIVISOR = 32
-    # MX_SCALE_BLOCK_K = block_k // MX_PACK_DIVISOR
-    # PackedK = triton.cdiv(K, MX_PACK_DIVISOR)
-    # num_expt_x_ncol = B * triton.cdiv(N, 128)
-    # shape = [1, num_expt_x_ncol, triton.cdiv(PackedK, 4), 2, 256]
-    # strides = [num_expt_x_ncol * mx_scale_stride_n, mx_scale_stride_n, mx_scale_stride_k, 256, 1]
-    # block_shape = [1, block_n // 128, MX_SCALE_BLOCK_K // 4, 2, 256]
-    # return TensorDescriptor(base=mx_tensor, shape=shape, strides=strides, block_shape=block_shape)
+def make_tma(tensor, block_shape, transpose=False):
+    if not isinstance(tensor, Tensor):
+        tensor = Tensor(tensor)
+    return tensor.layout.make_tma(tensor, block_shape, transpose=transpose)
 
 
 def unswizzle(tensor, swizzle_mode):
