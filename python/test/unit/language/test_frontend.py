@@ -536,10 +536,9 @@ def test_modify_if_livein():
 @triton.jit
 def test_mutate_object_scf_if():
     TBox: tl.constexpr = Box(tl.tensor)
-    box = TBox(tl.core.to_tensor(0))
+    box = TBox(tl.core.to_tensor(100))
     a = box
     b = box
-    box.value = tl.core.to_tensor(100)
 
     if tl.core.to_tensor(True):
         anchor((box, a, b))
@@ -557,10 +556,9 @@ def test_mutate_object_scf_if():
 @triton.jit
 def test_mutate_object_if_toplevel():
     TBox: tl.constexpr = Box(tl.tensor)
-    box = TBox(tl.core.to_tensor(0))
+    box = TBox(tl.core.to_tensor(100))
     a = box
     b = box
-    box.value = tl.core.to_tensor(100)
 
     if tl.core.to_tensor(True):
         anchor((box, a, b))
@@ -579,10 +577,9 @@ def test_mutate_object_if_toplevel():
 @triton.jit
 def test_mutate_object_for():
     TBox: tl.constexpr = Box(tl.tensor)
-    box = TBox(tl.core.to_tensor(0))
+    box = TBox(tl.core.to_tensor(100))
     a = box
     b = box
-    box.value = tl.core.to_tensor(100)
 
     for i in range(0):
         anchor((box, a, b))
@@ -595,10 +592,9 @@ def test_mutate_object_for():
 @triton.jit
 def test_mutate_object_while():
     TBox: tl.constexpr = Box(tl.tensor)
-    box = TBox(tl.core.to_tensor(0))
+    box = TBox(tl.core.to_tensor(100))
     a = box
     b = box
-    box.value = tl.core.to_tensor(100)
 
     while box.value != 10:
         anchor((box, a, b))
@@ -608,8 +604,45 @@ def test_mutate_object_while():
     anchor((box, a, b))
 
 
+@triton.jit
+def two_mutable_args(x, a, y, b, z):
+    a.value *= 2
+    b.value *= 2
+    a.value += b.value
+    return a.value + b.value
+
+
+@triton.jit
+def mutable_tuple(t):
+    a, b = t
+    a.value *= b.value
+    b.value *= a.value
+
+
+@triton.jit
+def test_mutable_ref_through_function():
+    TBox: tl.constexpr = Box(tl.tensor)
+    box = TBox(tl.core.to_tensor(100))
+    # t = True
+    # if t:
+    #     a = box
+    # else:
+    #     a = box
+    # a.value = 200
+    # anchor(box)
+
+    a = box
+    b = box
+    two_mutable_args(tl.core.to_tensor(1), a, tl.core.to_tensor(2), b, tl.core.to_tensor(3))
+    mutable_tuple((a, b))
+
+    b = TBox(tl.core.to_tensor(200))
+    two_mutable_args(tl.core.to_tensor(1), a, tl.core.to_tensor(2), b, tl.core.to_tensor(3))
+    mutable_tuple((a, b))
+
+
 from triton._filecheck import run_parser
 from triton import knobs
 
 knobs.compilation.disable_line_info = True
-print(run_parser(test_mutate_object_while).str_nodebug())
+print(run_parser(test_mutable_ref_through_function).str_nodebug())

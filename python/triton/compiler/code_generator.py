@@ -28,7 +28,7 @@ def check_identifier_legality(name, type):
     return name
 
 
-def mangle_fn(name, arg_tys, constants):
+def mangle_fn(name, arg_tys, constants, args_ref):
     # doesn't mangle ret type, which must be a function of arg tys
     mangled_arg_names = '_'.join([ty.mangle() for ty in arg_tys])
     mangled_constants = '_'.join([f'{i}c{repr(constants[i])}' for i in sorted(constants)])
@@ -36,7 +36,10 @@ def mangle_fn(name, arg_tys, constants):
     mangled_constants = mangled_constants.replace("'", '_sq_')
     # [ and ] are not allowed in LLVM identifiers
     mangled_constants = mangled_constants.replace('[', '_').replace(']', '_')
+    mangled_refs = '_'.join(f"{i}R{j}" for (i, (j, _)) in args_ref.items())
     ret = f'{name}__{mangled_arg_names}__{mangled_constants}'
+    if len(args_ref) > 0 and len(args_ref) != len(set(j for (j, _) in args_ref.values())):
+        ret += f'__{mangled_refs}'
     return ret
 
 
@@ -108,26 +111,6 @@ _condition_types = {bool, int, type(None)}  # Python types accepted for conditio
 
 def _is_reference_semantic(value):
     return getattr(value.type, "__triton_mutable__", False)
-
-
-def _contains_reference(value):
-
-    def walk(value, visited):
-        if id(value) in visited:
-            return False
-        visited.add(id(value))
-        if isinstance(value, (list, set, tuple)):
-            for item in value:
-                if walk(item, visited):
-                    return True
-        elif isinstance(value, base_value):
-            if _is_reference_semantic(value):
-                return True
-            for item in getattr(value, "__dict__", {}).values():
-                if walk(item, visited):
-                    return True
-
-    return walk(value, set())
 
 
 def _capture_references(scope):
@@ -259,11 +242,12 @@ class ContainsReturnChecker(ast.NodeVisitor):
 
 class ASTFunction:
 
-    def __init__(self, ret_types, arg_types, constants, attrs):
+    def __init__(self, ret_types, arg_types, constants, attrs, args_ref):
         self.ret_types = ret_types
         self.arg_types = arg_types
         self.constants = constants
         self.attrs = attrs
+        self.args_ref = args_ref
 
     def flatten_ir_types(self, builder: ir.builder, types: List[base_type]) -> List[ir.type]:
         ir_types = []
@@ -281,9 +265,19 @@ class ASTFunction:
         # > build function
         is_val = lambda path, _: path not in self.constants and _ is not None
         val_paths = list(find_paths_if(self.arg_types, is_val))
-        arg_types = [get_iterable_path(self.arg_types, path) for path in val_paths]
+        arg_types = []
+        unique_refs = {}
+        for i, ty in enumerate(get_iterable_path(self.arg_types, path) for path in val_paths):
+            if i not in self.args_ref:
+                arg_types.append(ty)
+                continue
+            ref_id = self.args_ref[i][0]
+            if ref_id not in unique_refs:
+                unique_refs[ref_id] = ty
+                arg_types.append(ty)
         arg_types_ir = self.flatten_ir_types(builder, arg_types)
         ret_types_ir = self.return_types_ir(builder)
+        ret_types_ir.extend(self.flatten_ir_types(builder, [ty for ty in unique_refs.values()]))
         return builder.get_function_ty(arg_types_ir, ret_types_ir)
 
     def deserialize(self, fn):
@@ -299,15 +293,22 @@ class ASTFunction:
         # > add IR values to the template
         cursor = 0
         handles = [fn.args(i) for i in range(fn.get_num_args())]
-        for path in val_paths:
+        self.unique_refs = {}
+        for i, path in enumerate(val_paths):
             ty = get_iterable_path(self.arg_types, path)
             # > set attributes
             attr_specs = self.attrs.get(path, [])
             for attr_name, attr_val in attr_specs:
                 fn.set_arg_attr(cursor, attr_name, attr_val)
             # > build frontend value
-            val, cursor = ty._unflatten_ir(handles, cursor)
-            set_iterable_path(vals, path, val)
+            if i not in self.args_ref:
+                val, cursor = ty._unflatten_ir(handles, cursor)
+                set_iterable_path(vals, path, val)
+                continue
+            ref_id, value = self.args_ref[i]
+            if ref_id not in self.unique_refs:
+                self.unique_refs[ref_id], cursor = ty._unflatten_ir(handles, cursor)
+            set_iterable_path(vals, path, self.unique_refs[ref_id])
         # > add constexpr values to the template
         constants = self.constants
         for path, val in constants.items():
@@ -545,6 +546,11 @@ class CodeGenerator(ast.NodeVisitor):
         elts = language.tuple([self.visit(elt) for elt in node.elts])
         return elts
 
+    def emit_return(self, handles):
+        for ref_value in self.prototype.unique_refs.values():
+            ref_value._flatten_ir(handles)
+        self.builder.ret(handles)
+
     # By design, only non-kernel functions can return
     def visit_Return(self, node):
         ret_value = self.visit(node.value)
@@ -565,7 +571,7 @@ class CodeGenerator(ast.NodeVisitor):
             assert isinstance(ret_value, language.core.base_value)
             ret_value._flatten_ir(handles)
             ret_ty = ret_value.type
-        self.builder.ret(handles)
+        self.emit_return(handles)
         if self.ret_type is None:
             self.ret_type = ret_ty
         elif self.ret_type != ret_ty:
@@ -624,14 +630,14 @@ class CodeGenerator(ast.NodeVisitor):
         assert not self.builder.get_insertion_block().has_terminator()
         if self.ret_type is None or self.ret_type == language.void:
             self.ret_type = language.void
-            self.builder.ret([])
+            self.emit_return([])
         else:
             if isinstance(self.ret_type, language.tuple_type):
                 self.prototype.ret_types = self.ret_type.types
             else:
                 self.prototype.ret_types = [self.ret_type]
-            self.fn.reset_type(self.prototype.serialize(self.builder))
-            self.builder.ret([self.builder.create_poison(ty) for ty in self.prototype.return_types_ir(self.builder)])
+            self.emit_return([self.builder.create_poison(ty) for ty in self.prototype.return_types_ir(self.builder)])
+        self.fn.reset_type(self.prototype.serialize(self.builder))
         self.fn.finalize()
 
         if insert_pt:
@@ -1265,37 +1271,35 @@ class CodeGenerator(ast.NodeVisitor):
         msg = self.visit(node.msg) if node.msg is not None else ""
         return language.core.device_assert(test, msg, _semantic=self.semantic)
 
-    def call_InlineJitFunction(self, fn: JITFunction, args):
-        fn_def = fn.parse()
-        arg_names, kwarg_names = self.visit(fn_def.args)
-
     def call_JitFunction(self, fn: JITFunction, args, kwargs):
         args = inspect.getcallargs(fn.fn, *args, **kwargs)
         args = [args[name] for name in fn.arg_names]
         for i, arg in enumerate(args):
-            if isinstance(arg, (language.dtype, float, int, bool, JITFunction)):
+            if isinstance(arg, (language.dtype, float, int, bool, JITFunction, type(None))):
                 args[i] = language.core.constexpr(arg)
-        # If any of the function arguments are mutable or contain a mutable
-        # value, parse the function inline to respect object references.
-        # if _contains_reference(args):
-        #     return self.call_InlineJitFunction(fn, args)
-
         args_cst = find_paths_if(args, lambda _, x: _is_constexpr(x))
         args_cst = {path: get_iterable_path(args, path) for path in args_cst}
         args_path = find_paths_if(args, lambda _, x: not _is_constexpr(x))
-        args_val = [get_iterable_path(args, path) for path in args_path]
+
+        args_val = []
+        args_ref = {}
+        ref_ids = {}
+        for i, arg in enumerate(get_iterable_path(args, path) for path in args_path):
+            if not _is_reference_semantic(arg):
+                args_val.append(arg)
+                continue
+            if id(arg) not in ref_ids:
+                ref_ids[id(arg)] = (len(args_val), arg)
+                args_val.append(arg)
+            args_ref[i] = (ref_ids[id(arg)][0], arg)
+
         # mangle
-        fn_name = mangle_fn(get_full_name(fn), [arg.type for arg in args_val], args_cst)
+        fn_name = mangle_fn(get_full_name(fn), [arg.type for arg in args_val], args_cst, args_ref)
         # generate function def if necessary
         if not self.module.has_function(fn_name):
             # If the callee is not set, we use the same debug setting as the caller
             file_name, begin_line = get_jit_fn_file_line(fn)
-            arg_types = [
-                language.core.constexpr if arg is None or isinstance(arg,
-                                                                     (bool, int, language.core.dtype)) else arg.type
-                for arg in args
-            ]
-            prototype = ASTFunction([], arg_types, args_cst, dict())
+            prototype = ASTFunction([], [arg.type for arg in args], args_cst, dict(), args_ref)
             generator = CodeGenerator(self.context, prototype, fn.get_capture_scope(), module=self.module, jit_fn=fn,
                                       function_name=fn_name, function_types=self.function_ret_types,
                                       noinline=fn.noinline, file_name=file_name, begin_line=begin_line,
@@ -1316,10 +1320,15 @@ class CodeGenerator(ast.NodeVisitor):
         symbol = self.module.get_function(fn_name)
         args_val = flatten_values_to_ir(args_val)
         call_op = self.builder.call(symbol, args_val)
-        if callee_ret_type == language.void:
-            return None
         handles = [call_op.get_result(i) for i in range(call_op.get_num_results())]
-        return next(unflatten_ir_values(handles, [callee_ret_type]))
+
+        all_ret_types = ([callee_ret_type]
+                         if callee_ret_type != language.void else []) + [arg.type for (_, arg) in ref_ids.values()]
+        all_ret_values = unflatten_ir_values(handles, all_ret_types)
+        normal_ret = next(all_ret_values) if callee_ret_type != language.void else None
+        for _, arg in ref_ids.values():
+            _restore_reference(arg, next(all_ret_values))
+        return normal_ret
 
     def visit_Call(self, node):
         fn = _unwrap_if_constexpr(self.visit(node.func))
@@ -1549,7 +1558,7 @@ def ast_to_ttir(fn, src, context, options, codegen_fns, module_map, module=None)
     for k, v in src.signature.items():
         idx = fn.arg_names.index(k)
         arg_types[idx] = str_to_ty(v)
-    prototype = ASTFunction([], arg_types, src.constants, src.attrs)
+    prototype = ASTFunction([], arg_types, src.constants, src.attrs, {})
     file_name, begin_line = get_jit_fn_file_line(fn)
     # query function representation
     from collections import namedtuple
