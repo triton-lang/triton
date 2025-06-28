@@ -14,7 +14,7 @@ from .matmul_ogs_details._p_matmul_ogs import _p_matmul_ogs, get_per_device_per_
 from .matmul_ogs_details._finalize_matmul import _finalize_matmul
 from .matmul_ogs_details.opt_flags import make_opt_flags, update_opt_flags_constraints
 from .specialize import specialize
-from .datastruct import Tensor, SwizzlingType, make_tma
+from .tensor import Tensor, SwizzlingType, make_tma
 
 
 @dataclass
@@ -155,7 +155,7 @@ def element_bitwidth(tensor):
     if isinstance(tensor, Tensor):
         return tensor.element_bitwidth
     # FIXME: sub-byte types aren't well represent in torch
-    # we should make `element_bitwidth(tensor)` only accept `datastruct.Tensor`
+    # we should make `element_bitwidth(tensor)` only accept `tensor.Tensor`
     return 4 if tensor.dtype == torch.uint8 else tensor.element_size()*8
 
 def none_or_tma_compatible(x):
@@ -481,14 +481,14 @@ def matmul_ogs(x, w, bias,
     flex = precision_config.flex_ctx
     bias_stride = None if bias is None else bias.stride(0)
     num_indx = None if scatter_indx is None else scatter_indx.src_indx.shape[0]
-
+    # moe metadata
     expt_data = routing_data.expt_data
     block_m = opt_flags.block_m
     expt_hist = None if expt_data is None else expt_data.hist
     expt_hist_sum = None if expt_data is None else expt_data.token_offs_pad[block_m][-1]
     expt_token_offs_raw = None if expt_data is None else expt_data.token_offs_raw
     expt_block_pid_map = None if expt_data is None else expt_data.block_pid_map[block_m]
-
+    # spmd grid
     grid_m = triton.cdiv(M, opt_flags.block_m)
     if expt_block_pid_map is not None:
         grid_m = routing_data.n_blocks(M, opt_flags.block_m)

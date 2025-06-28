@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 import triton
-from triton_kernels.datastruct import SwizzlingType
+from triton_kernels.tensor import SwizzlingType
 from triton_kernels.target_info import get_cdna_version
 import torch
 

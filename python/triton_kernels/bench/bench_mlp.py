@@ -7,7 +7,7 @@ import torch
 import triton_kernels
 import triton_kernels.swiglu
 from triton_kernels.numerics_details.mxfp import downcast_to_mxfp
-from triton_kernels.datastruct import SwizzlingType, swizzle
+from triton_kernels.tensor import SwizzlingType, swizzle
 from triton_kernels.matmul_ogs import MicroscalingCtx, matmul_ogs, PrecisionConfig, FlexCtx, FnSpecs, FusedActivation
 from triton_kernels.numerics import InFlexData
 from triton_kernels.routing import routing

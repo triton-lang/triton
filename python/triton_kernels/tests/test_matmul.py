@@ -11,7 +11,7 @@ from triton_kernels.matmul_ogs import FlexCtx, PrecisionConfig, MicroscalingCtx,
 from triton_kernels.matmul_ogs import none_or_tma_compatible
 from triton_kernels.matmul_ogs import matmul_ogs_set_idle_sms, matmul_ogs, matmul_ogs_torch
 from triton_kernels.swiglu import swiglu, swiglu_fn, PrecisionConfig as SwiGLUPrecisionConfig
-from triton_kernels.datastruct import SwizzlingType, swizzle
+from triton_kernels.tensor import SwizzlingType, swizzle
 # numerics utilities
 from triton_kernels.numerics import InFlexData, OutFlexData
 from triton_kernels.numerics_details.mxfp import downcast_to_mxfp, upcast_from_mxfp
