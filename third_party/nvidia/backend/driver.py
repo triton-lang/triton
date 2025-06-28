@@ -631,6 +631,7 @@ def make_tensordesc_arg(arg, metadata):
     shape = arg.shape
     strides = arg.strides
     assert strides[-1] == 1
+    padding = 1 if arg.padding == "nan" else 0
 
     desc = TmaDescKernelParam()
     result = [desc, *shape, *strides]
@@ -647,6 +648,7 @@ def make_tensordesc_arg(arg, metadata):
         block_size,
         shape,
         strides,
+        padding,
     )
     return result
 

@@ -1383,8 +1383,7 @@ void init_triton_ir(py::module &&m) {
            })
       .def("create_tensor_pointer_load",
            [](TritonOpBuilder &self, Value &ptr,
-              std::vector<int32_t> &boundaryCheck,
-              std::optional<PaddingOption> paddingOption,
+              std::vector<int32_t> &boundaryCheck, PaddingOption paddingOption,
               CacheModifier cacheModifier, EvictionPolicy evictionPolicy,
               bool isVolatile) -> Value {
              return self.create<LoadOp>(ptr, boundaryCheck, paddingOption,
@@ -1746,9 +1745,10 @@ void init_triton_ir(py::module &&m) {
       .def("create_make_tensor_descriptor",
            [](TritonOpBuilder &self, Value &base, std::vector<Value> &shape,
               std::vector<Value> &strides, std::vector<int32_t> &tensorShape,
-              bool isSignedInteger) -> Value {
+              bool isSignedInteger, PaddingOption paddingOption) -> Value {
              return self.create<MakeTensorDescOp>(base, shape, strides,
-                                                  tensorShape, isSignedInteger);
+                                                  tensorShape, isSignedInteger,
+                                                  paddingOption);
            })
       // Proton Ops
       .def("create_proton_record",

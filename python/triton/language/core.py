@@ -2249,6 +2249,7 @@ def make_tensor_descriptor(
     shape: List[tensor],
     strides: List[tensor],
     block_shape: List[constexpr],
+    padding_option="zero",
     _semantic=None,
 ) -> tensor_descriptor:
     """Make a tensor descriptor object
@@ -2298,7 +2299,9 @@ def make_tensor_descriptor(
         inplace_abs[grid](x, M, N, M_BLOCK, N_BLOCK)
 
     """
-    return _semantic.make_tensor_descriptor(base, shape, strides, block_shape)
+
+    padding_option = _unwrap_if_constexpr(padding_option)
+    return _semantic.make_tensor_descriptor(base, shape, strides, block_shape, padding_option)
 
 
 # -----------------------
