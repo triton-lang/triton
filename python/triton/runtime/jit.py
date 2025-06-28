@@ -696,6 +696,12 @@ class JITFunction(KernelInterface[T]):
             dependencies_finder.visit(self.parse())
             self.hash = dependencies_finder.ret + str(self.starting_line_number)
             self.used_global_vals = dict(sorted(dependencies_finder.used_global_vals.items()))
+
+            from triton.language.core import constexpr
+            self.hash += str([(name, val)
+                              for (name, _), (val, _) in self.used_global_vals.items()
+                              if isinstance(val, constexpr)])
+            self.hash = hashlib.sha256(self.hash.encode("utf-8")).hexdigest()
         return self.hash
 
     @property
