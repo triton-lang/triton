@@ -265,6 +265,7 @@ def make_launcher(constants, signature, warp_size):
     src = f"""
 #define __HIP_PLATFORM_AMD__
 #include <hip/hip_runtime.h>
+#include <hip/hip_runtime_api.h>
 #include <Python.h>
 #include <dlfcn.h>
 #include <stdbool.h>
@@ -329,17 +330,36 @@ bool initSymbolTable() {{
     return false;
   }}
 
-  // Resolve all symbols we are interested in.
+  typedef hipError_t (*hipGetProcAddress_fn)(
+      const char *symbol, void **pfn, int hipVersion, uint64_t hipFlags,
+      hipDriverProcAddressQueryResult *symbolStatus);
+  hipGetProcAddress_fn hipGetProcAddress;
   dlerror(); // Clear existing errors
   const char *error = NULL;
-#define QUERY_EACH_FN(hipSymbolName, ...)                                     \\
-  *(void **)&hipSymbolTable.hipSymbolName = dlsym(lib, #hipSymbolName);       \\
-  error = dlerror();                                                          \\
-  if (error) {{                                                               \\
-    PyErr_SetString(PyExc_RuntimeError,                                       \\
-                    "cannot query " #hipSymbolName " from libamdhip64.so");   \\
-    dlclose(lib);                                                             \\
-    return false;                                                             \\
+  *(void **)&hipGetProcAddress = dlsym(lib, "hipGetProcAddress");
+  error = dlerror();
+  if (error) {{
+    PyErr_SetString(PyExc_RuntimeError,
+                    "cannot query 'hipGetProcAddress' from libamdhip64.so");
+    dlclose(lib);
+    return false;
+  }}
+
+  // Resolve all symbols we are interested in.
+  int hipVersion = HIP_VERSION;
+  uint64_t hipFlags = 0;
+  hipDriverProcAddressQueryResult symbolStatus;
+  hipError_t status = hipSuccess;
+#define QUERY_EACH_FN(hipSymbolName, ...)                                      \
+  status = hipGetProcAddress(#hipSymbolName,                                   \
+                             (void **)&hipSymbolTable.hipSymbolName,           \
+                             hipVersion, hipFlags, &symbolStatus);             \
+  if (status != hipSuccess) {{                                                 \
+    PyErr_SetString(PyExc_RuntimeError,                                        \
+                    "cannot get address for '" #hipSymbolName                  \
+                    "' from libamdhip64.so");                                  \
+    dlclose(lib);                                                              \
+    return false;                                                              \
   }}
 
   HIP_SYMBOL_LIST(QUERY_EACH_FN, QUERY_EACH_FN)
