@@ -1,7 +1,7 @@
 import torch
-from .swizzle_details.hopper_value import swizzle_mxfp4_value_hopper, unswizzle_mxfp4_value_hopper_torch
-from .swizzle_details.hopper_scale import swizzle_mxfp4_scale_hopper, unswizzle_mxfp4_scale_hopper_torch
-from .swizzle_details.blackwell_scale import swizzle_mx_scale_bw, unswizzle_mx_scale_bw_torch
+from .tensor_details.memory_layout.hopper_value import swizzle_mxfp4_value_hopper, unswizzle_mxfp4_value_hopper_torch
+from .tensor_details.memory_layout.hopper_scale import swizzle_mxfp4_scale_hopper, unswizzle_mxfp4_scale_hopper_torch
+from .tensor_details.memory_layout.blackwell_scale import swizzle_mx_scale_bw, unswizzle_mx_scale_bw_torch
 from .reduction_details.reduce_bitmatrix import clear_sums, sum_bitmatrix_rows
 from enum import Enum
 from dataclasses import dataclass

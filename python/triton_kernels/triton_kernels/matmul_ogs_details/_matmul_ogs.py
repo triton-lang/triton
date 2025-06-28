@@ -1,8 +1,8 @@
 import triton
 import triton.language as tl
-from triton_kernels.swizzle_details.blackwell_scale import unswizzle_mx_scale_bw
-from triton_kernels.swizzle_details.hopper_scale import unswizzle_mxfp4_scale_hopper
-from triton_kernels.swizzle_details.hopper_value import unswizzle_mxfp4_value_hopper
+from triton_kernels.tensor_details.memory_layout.blackwell_scale import unswizzle_mx_scale_bw
+from triton_kernels.tensor_details.memory_layout.hopper_scale import unswizzle_mxfp4_scale_hopper
+from triton_kernels.tensor_details.memory_layout.hopper_value import unswizzle_mxfp4_value_hopper
 from triton_kernels.numerics_details.flexpoint import float_to_flex, load_scale
 from ._common import make_matmul_repr, matmul_launch_metadata, swizzle2d, xcd_swizzle, get_scaled_dot_format_string
 

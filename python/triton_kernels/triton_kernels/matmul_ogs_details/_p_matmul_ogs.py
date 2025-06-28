@@ -2,7 +2,7 @@ import torch
 import triton
 import triton.language as tl
 from triton_kernels import target_info
-from triton_kernels.swizzle_details.blackwell_scale import unswizzle_mx_scale_bw
+from triton_kernels.tensor_details.memory_layout.blackwell_scale import unswizzle_mx_scale_bw
 from triton_kernels.numerics_details.flexpoint import float_to_flex, load_scale, nan_propagating_absmax_reduce, compute_scale
 from ._common import make_matmul_repr, matmul_launch_metadata, swizzle2d, xcd_swizzle, get_scaled_dot_format_string
 
