@@ -2054,6 +2054,10 @@ bool NvidiaMmaEncodingAttr::isAmpere() const { return getVersionMajor() == 2; }
 
 bool NvidiaMmaEncodingAttr::isHopper() const { return getVersionMajor() == 3; }
 
+bool NvidiaMmaEncodingAttr::isHopperF64() const {
+  return getVersionMajor() == 2 && getVersionMinor() == 2;
+}
+
 SmallVector<unsigned> NvidiaMmaEncodingAttr::getRepOrder() const {
   return getMatrixOrder(getRank(), /*rowMajor*/ true);
 }
@@ -2088,16 +2092,18 @@ NvidiaMmaEncodingAttr::getRepForOperand(ArrayRef<int64_t> shape, int bitwidth,
   if (rank == 3) {
     tileSize.push_back(1);
   }
+  // warpSizeK * (warpRepK * VecBitWidth)
+  auto tileBitWidthK = isHopperF64() ? (4 * 256) : (4 * 64);
   if (opIdx == 0) {
     // m x k
     tileSize.push_back(16);
-    tileSize.push_back(4 * 64 / bitwidth);
+    tileSize.push_back(tileBitWidthK / bitwidth);
   } else {
     // k x n
     // Hopper path never uses the n value, since this method is only invoked
     // for in-RF (dotOpEnc) operands, but WGMMA only supports in A to be in RF
     // so it's fine if the n is incorrect here
-    tileSize.push_back(4 * 64 / bitwidth);
+    tileSize.push_back(tileBitWidthK / bitwidth);
     tileSize.push_back(8);
   }
 

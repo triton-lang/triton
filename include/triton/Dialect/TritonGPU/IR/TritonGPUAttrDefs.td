@@ -1332,6 +1332,7 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
     bool isTuring() const;
     bool isAmpere() const;
     bool isHopper() const;
+    bool isHopperF64() const;
 
     SmallVector<int64_t> getRepForOperand(ArrayRef<int64_t> shape,
                                           int bitwidth, int kWidth,

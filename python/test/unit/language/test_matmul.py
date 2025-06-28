@@ -101,11 +101,9 @@ def test_simple_matmul(dtype_src_str, dtype_dst_str, BLOCK_M, BLOCK_N, BLOCK_K, 
     if NUM_CTAS > 1 and (not is_cuda() or torch.cuda.get_device_capability()[0] < 9):
         pytest.skip("Clusters requires nvidia compute capability >= 9")
     shared_mem_accum = (BLOCK_K * BLOCK_M + BLOCK_K * BLOCK_N) * NUM_STAGES * get_src_element_ty_size(dtype_src_str)
-    if is_hip() and shared_mem_accum > 65536:
-        pytest.skip("HIP path requires less than 64KB of shared memory")
-    cuda_shared_mem_avail = torch.cuda.get_device_properties(0).shared_memory_per_block_optin
-    if is_cuda() and shared_mem_accum > cuda_shared_mem_avail:
-        pytest.skip(f"CUDA path requires less than {cuda_shared_mem_avail} of shared memory on current device 0")
+    shared_mem_avail = triton.runtime.driver.active.utils.get_device_properties(0)["max_shared_mem"]
+    if shared_mem_accum > shared_mem_avail:
+        pytest.skip("Skipped due to insufficient shared memory on this GPU.")
     if is_hip() and (not is_hip_cdna3()) and dtype_src_str == "tensorfloat32":
         pytest.skip("tensorfloat32 is only supported on HIP CDNA3")
     if dtype_src_str == "float8e5" and BLOCK_K == 16:

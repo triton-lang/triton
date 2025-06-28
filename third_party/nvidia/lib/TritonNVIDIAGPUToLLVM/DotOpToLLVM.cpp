@@ -9,13 +9,9 @@ using namespace mlir::triton;
 using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
 
-LogicalResult convertMMA1688(triton::DotOp op, triton::DotOp::Adaptor adaptor,
-                             const LLVMTypeConverter *typeConverter,
-                             ConversionPatternRewriter &rewriter);
-
-LogicalResult convertMMA16816(triton::DotOp op, triton::DotOp::Adaptor adaptor,
+LogicalResult convertMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                               const LLVMTypeConverter *typeConverter,
-                              ConversionPatternRewriter &rewriter);
+                              ConversionPatternRewriter &rewriter, bool isTuring, bool isHopperF64);
 
 LogicalResult convertWGMMA(triton::nvidia_gpu::WarpGroupDotOp op,
                            triton::nvidia_gpu::WarpGroupDotOp::Adaptor adaptor,
@@ -42,10 +38,9 @@ struct DotOpConversion : public ConvertOpToLLVMPattern<triton::DotOp> {
     NvidiaMmaEncodingAttr mmaLayout = dyn_cast<NvidiaMmaEncodingAttr>(
         cast<RankedTensorType>(D.getType()).getEncoding());
     if (!isOuter && mmaLayout && supportMMA(op, mmaLayout.getVersionMajor())) {
-      if (mmaLayout.isTuring())
-        return convertMMA1688(op, adaptor, getTypeConverter(), rewriter);
-      if (mmaLayout.isAmpere())
-        return convertMMA16816(op, adaptor, getTypeConverter(), rewriter);
+      if (mmaLayout.getVersionMajor() == 2)
+        return convertMMA(op, adaptor, getTypeConverter(), rewriter,
+                          mmaLayout.isTuring(), mmaLayout.isHopperF64());
 
       llvm::report_fatal_error(
           "Unsupported MMA kind found when converting DotOp to LLVM.");
