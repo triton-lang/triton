@@ -71,6 +71,14 @@ endforeach()
 
 add_library(proton SHARED ${_proton_obj_sources})
 
+install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/dialect
+  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/triton/third_party/proton
+  FILES_MATCHING
+    PATTERN "*.h"
+    PATTERN "*.td"
+    PATTERN "*.h.inc"
+)
+
 target_link_libraries(proton PRIVATE Python3::Module)
 # Apply any macOS linker flags or extra link options
 if(PROTON_PYTHON_LDFLAGS)
