@@ -14,7 +14,7 @@ from .matmul_ogs_details._p_matmul_ogs import _p_matmul_ogs, get_per_device_per_
 from .matmul_ogs_details._finalize_matmul import _finalize_matmul
 from .matmul_ogs_details.opt_flags import make_opt_flags, update_opt_flags_constraints
 from .specialize import specialize
-from .tensor import Tensor, make_tma
+from .tensor import Tensor, make_tma, bitwidth
 
 
 @dataclass
@@ -149,26 +149,18 @@ class PrecisionConfig:
     out_dtype: torch.dtype = None
     enforce_bitwise_invariance: bool = False
 
-
-def element_bitwidth(tensor):
-    if isinstance(tensor, Tensor):
-        return tensor.element_bitwidth
-    # FIXME: sub-byte types aren't well represent in torch
-    # we should make `element_bitwidth(tensor)` only accept `tensor.Tensor`
-    return 4 if tensor.dtype == torch.uint8 else tensor.element_size()*8
-
 def none_or_tma_compatible(x):
     if x is None:
         return True
     if not target_info.cuda_capability_geq(9, 0):
         return False
     # none of our kernels support MXFP4 w/ TMA on H100
-    if torch.cuda.get_device_capability()[0] == 9 and element_bitwidth(x) == 4:
+    if torch.cuda.get_device_capability()[0] == 9 and bitwidth(x.dtype) == 4:
         return False
     if x.ndim != 3:
         return False
     strides = list(x.stride())
-    stride_div = max(16, 128 // element_bitwidth(x))
+    stride_div = max(16, 128 // bitwidth(x.dtype))
     try:
         major_dim = strides.index(1)
     except ValueError:

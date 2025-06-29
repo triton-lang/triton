@@ -20,6 +20,10 @@ class StridedLayout:
     shape: list[int]
     strides: list[int]
 
+    @property
+    def name(self):
+        return None
+
     def __init__(self, tensor, shape=None):
         self.data = tensor
         if shape is None:
@@ -29,10 +33,6 @@ class StridedLayout:
         PACK_DIVISOR = 2 if tensor.dtype == torch.uint8 else 1
         indx = self.strides.index(1)
         self.shape[indx] *= PACK_DIVISOR
-
-    @property
-    def name(self):
-        return None
 
     def make_tma(self, block_shape, transpose):
         PACK_DIVISOR = 2 if self.data.dtype == torch.uint8 else 1
@@ -49,6 +49,10 @@ class StridedLayout:
 
 class BlackwellScaleBlockLayout(StridedLayout):
 
+    @property
+    def name(self):
+        return "BLACKWELL_SCALE"
+
     def __init__(self, tensor):
         swizzle_axis = 2
         axis = tensor.stride().index(1)
@@ -63,10 +67,6 @@ class BlackwellScaleBlockLayout(StridedLayout):
         self.data = tensor
         self.shape = layout_shape
         self.strides = make_strides(layout_shape)
-
-    @property
-    def name(self):
-        return "BLACKWELL_SCALE"
 
     def make_tma(self, block_shape, transpose):
         assert not transpose
@@ -92,28 +92,55 @@ def make_strides(shape, order=None):
 
 
 @dataclass
+class IntegerType:
+    bitwidth: int
+
+
+@dataclass
+class FloatType:
+    bitwidth_exponent: int
+    bitwidth_mantissa: int
+    is_signed: bool
+
+    def __post_init__(self):
+        self.bitwidth = int(self.is_signed) + self.bitwidth_exponent + self.bitwidth_mantissa
+
+
+BIT = IntegerType(1)
+FP4 = FloatType(bitwidth_exponent=2, bitwidth_mantissa=1, is_signed=True)
+
+
+def bitwidth(type: IntegerType | FloatType | torch.dtype):
+    if isinstance(type, torch.dtype):
+        return type.itemsize * 8
+    return type.bitwidth
+
+
+@dataclass
 class Tensor:
 
     handle: torch.Tensor
+    dtype: IntegerType | FloatType | torch.dtype = None
     shape: list[int] | None = None
     shape_max: list[int] | None = None
     swizzle_mode: SwizzlingType | None = None
     storage: StridedLayout | None = None
-    element_bitwidth: int | None = None
     packed_axis: int | None = None
 
     def __post_init__(self):
+        # initialize dtype
+        if self.dtype is None:
+            self.dtype = self.handle.dtype
         # initialize bitwidth
         if self.packed_axis is None:
             self.packed_axis = self.handle.stride().index(1)
-        if self.element_bitwidth is None:
-            self.element_bitwidth = self.handle.dtype.itemsize * 8
         # initialize shape
         if self.shape is None:
-            handle_bitwidth = self.handle.dtype.itemsize * 8
-            assert handle_bitwidth % self.element_bitwidth == 0
+            handle_bitwidth = bitwidth(self.handle.dtype)
+            true_bitwidth = bitwidth(self.dtype)
+            assert handle_bitwidth % true_bitwidth == 0
             self.shape = list(self.handle.shape)
-            self.shape[self.packed_axis] *= handle_bitwidth // self.element_bitwidth
+            self.shape[self.packed_axis] *= handle_bitwidth // true_bitwidth
         # validate shape: all elements must be `int` or numel-1 `torch.Tensor`
         is_int = lambda s: isinstance(s, int)
         is_item = lambda s: hasattr(s, "numel") and s.numel() == 1
@@ -133,7 +160,6 @@ class Tensor:
             self.storage = StridedLayout(self.handle)
         # TODO: should be @properties ?
         self.ndim = self.handle.ndim
-        self.dtype = self.handle.dtype
         self.device = self.handle.device
 
     # torch compatibility layer
@@ -178,7 +204,7 @@ class Bitmatrix(Tensor):
         super().__post_init__()
         assert self.handle.shape[-1] * 32 == self.shape[-1]
         assert self.handle.ndim == 2
-        assert self.dtype == torch.uint32
+        assert self.dtype == BIT
 
     def sum(self, partials_block_size):
         _, n_cols = self.shape
@@ -242,10 +268,10 @@ def perm_tensor_from_contig(x: torch.Tensor, axis: int, swizzle_axis: int | None
 def swizzle(tensor, swizzle_mode):
     if swizzle_mode == SwizzlingType.BLACKWELL_SCALE:
         storage = BlackwellScaleBlockLayout(tensor)
-        return Tensor(tensor, element_bitwidth=4, storage=storage, swizzle_mode=swizzle_mode)
+        return Tensor(tensor, dtype=FP4, storage=storage, swizzle_mode=swizzle_mode)
     else:
         storage = StridedLayout(tensor)
-        return Tensor(tensor, element_bitwidth=4, storage=storage, swizzle_mode=swizzle_mode)
+        return Tensor(tensor, dtype=FP4, storage=storage, swizzle_mode=swizzle_mode)
 
 
 def make_tma(tensor, block_shape, transpose=False):
