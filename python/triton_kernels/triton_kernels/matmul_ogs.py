@@ -444,7 +444,6 @@ def matmul_ogs(x, w, bias,
     M = x.shape[1] if gather_indx is None else gather_indx.src_indx.shape[0]
     batch_size = w.shape[0] if routing_data.expt_hist is None else 1
     _, K, N = w.shape
-    mx_scale_stride_e, mx_scale_stride_k, mx_scale_stride_n = w_scale.strides if has_mx else (0,0,0)
     # compute optimization flags
     out_dtype = precision_config.out_dtype or x.dtype
     can_use_tma = none_or_tma_compatible(x) and none_or_tma_compatible(w) and none_or_tma_compatible(w_scale)
@@ -513,10 +512,13 @@ def matmul_ogs(x, w, bias,
         w_tma_transpose = w.stride(2) != 1
         w_tensor = make_tma(w_tensor, [1, opt_flags.block_k, opt_flags.block_n], transpose=w_tma_transpose)
     # initialize w_scale
+    assert w_scale is None or opt_flags.is_persistent
     w_scale_has_tma = opt_flags.is_persistent and w_scale is not None
     mx_tensor = mx_ctx.weight_scale
+    mx_tensor_strides = mx_tensor.stride() if has_mx else (None, None, None)
     if w_scale_has_tma:
         mx_tensor = make_tma(mx_tensor, [opt_flags.block_n, opt_flags.block_k])
+        mx_tensor_strides = (None, None, None)
     kernels = get_kernels(epilogue.specs, fused_activation.specs)
     (kernels._p_matmul_ogs if opt_flags.is_persistent else kernels._matmul_ogs)[(grid,)](
                    flex.out_data.reinterpret(memory["output"]),
@@ -525,7 +527,7 @@ def matmul_ogs(x, w, bias,
                    flex.lhs_data.scale,
                    w_tensor, w.stride(0), w.stride(1), w.stride(2), w_tma_transpose,
                    flex.rhs_data.scale,
-                   mx_tensor, mx_scale_stride_e, mx_scale_stride_k, mx_scale_stride_n,
+                   mx_tensor, *mx_tensor_strides,
                    bias, bias_stride,
                    x.shape[1] if routing_data.expt_hist is None else None,
                    N, K,

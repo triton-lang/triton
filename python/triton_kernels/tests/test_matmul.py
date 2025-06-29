@@ -318,6 +318,9 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
                                                swizzle_scale=swizzle_scale)
 
     can_use_tma = none_or_tma_compatible(x_tri.view(1, *x_tri.shape)) and none_or_tma_compatible(w_tri)
+    # TODO: should be cleaner
+    if not is_persistent and precision_opt.mx_ctx.weight_scale is not None:
+        pytest.skip("non-persistent not supported with mxfp")
     if is_persistent and not can_use_tma:
         pytest.skip("persistent TMAs not supported for this test")
 

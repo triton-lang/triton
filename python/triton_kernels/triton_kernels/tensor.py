@@ -104,12 +104,9 @@ class Tensor:
                 self.shape_max[i] = s
         # validate shape_max: all elements must be `int`
         assert all(map(is_int, self.shape_max))
-        # initialize strides
-        if self.strides is None:
-            self.strides = self.handle.stride()
         # initialize layouts
         if self.layout is None:
-            self.layout = StridedLayout(self.shape, self.strides)
+            self.layout = StridedLayout(self.shape, self.handle.stride())
         # TODO: should be @properties ?
         self.ndim = self.handle.ndim
         self.dtype = self.handle.dtype
@@ -121,7 +118,7 @@ class Tensor:
     # torch compatibility layer
 
     def stride(self, i=None):
-        return self.strides if i is None else self.strides[i]
+        return self.layout.strides if i is None else self.layout.strides[i]
 
     def data_ptr(self):
         return self.handle.data_ptr()
@@ -237,32 +234,20 @@ def swizzle(tensor, swizzle_mode):
     if swizzle_mode == SwizzlingType.HOPPER_VALUE:
         tensor = swizzle_mxfp4_value_hopper(tensor, op_idx=0, mma_version=3)
         tensor = perm_tensor_from_contig(tensor, axis, swizzle_axis)
-        strides = tensor.stride()
         layout = None
     elif swizzle_mode == SwizzlingType.BLACKWELL_SCALE:
         tensor = swizzle_mx_scale_bw(tensor, allow_pad=True)
         tensor = perm_tensor_from_contig(tensor, axis, swizzle_axis)
         mxE, mxK, mxN = tensor.shape
-        # Compute strides of the 5D swizzled tensor.
-        swizzled_shape = (mxE, mxN // 128, mxK // 4, 32, 4, 4)
         layout = make_layout((1, mxE * mxN // 128, mxK // 4, 2, 256), BlackwellScaleBlockLayout)
-        s5 = 1
-        s4 = swizzled_shape[5] * s5  # 4 * 1 = 4
-        s3 = swizzled_shape[4] * s4  # 32 * 4 = 128
-        s2 = swizzled_shape[3] * s3  # 4 * 128 = 512
-        s1 = swizzled_shape[2] * s2  # (mxK//4) * 512
-        s0 = swizzled_shape[1] * s1  # (mxN//128) * ((mxK//4)*512)
-        strides = [s0, s2, s1]
     elif swizzle_mode == SwizzlingType.HOPPER_SCALE:
         tensor = swizzle_mxfp4_scale_hopper(tensor, num_warps=8)
         tensor = perm_tensor_from_contig(tensor, axis, swizzle_axis)
-        strides = tensor.stride()
         layout = None
     else:
         tensor = perm_tensor_from_contig(tensor, axis, swizzle_axis)
-        strides = tensor.stride()
         layout = None
-    return Tensor(tensor, strides=strides, shape=ret_shape, layout=layout, swizzle_mode=swizzle_mode)
+    return Tensor(tensor, shape=ret_shape, layout=layout, swizzle_mode=swizzle_mode)
 
 
 def make_tma(tensor, block_shape, transpose=False):
