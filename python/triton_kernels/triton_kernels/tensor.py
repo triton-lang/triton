@@ -1,6 +1,6 @@
 import torch
-from .tensor_details.memory_layout.hopper_value import swizzle_mxfp4_value_hopper, unswizzle_mxfp4_value_hopper_torch
-from .tensor_details.memory_layout.hopper_scale import swizzle_mxfp4_scale_hopper, unswizzle_mxfp4_scale_hopper_torch
+from .tensor_details.memory_layout.hopper_value import unswizzle_mxfp4_value_hopper_torch
+from .tensor_details.memory_layout.hopper_scale import unswizzle_mxfp4_scale_hopper_torch
 from .tensor_details.memory_layout.blackwell_scale import swizzle_mx_scale_bw, unswizzle_mx_scale_bw_torch
 from .reduction_details.reduce_bitmatrix import clear_sums, sum_bitmatrix_rows
 from enum import Enum
@@ -14,10 +14,15 @@ class SwizzlingType(Enum):
     BLACKWELL_SCALE = 2
 
 
-@dataclass
 class StridedLayout:
+    data: torch.Tensor
     shape: list[int]
     strides: list[int]
+
+    def __init__(self, tensor) -> None:
+        self.data = tensor
+        self.shape = list(tensor.shape)
+        self.strides = list(tensor.stride())
 
     def make_tma(self, tensor, block_shape, transpose):
         shape = list(self.shape)
@@ -50,8 +55,22 @@ class StridedLayout:
         return TensorDescriptor(base=tensor, shape=shape, strides=strides, block_shape=block_shape)
 
 
-@dataclass
 class BlackwellScaleBlockLayout(StridedLayout):
+
+    def __init__(self, tensor):
+        swizzle_axis = 2
+        axis = tensor.stride().index(1)
+        perm = list(range(tensor.ndim))
+        perm[tensor.ndim - 1], perm[axis] = axis, tensor.ndim - 1
+        if swizzle_axis is not None:
+            perm[tensor.ndim - 2], perm[swizzle_axis] = swizzle_axis, tensor.ndim - 2
+        tensor = torch.permute(tensor, perm).contiguous()
+        tensor = swizzle_mx_scale_bw(tensor, allow_pad=True)
+        tensor = perm_tensor_from_contig(tensor, axis, swizzle_axis)
+        layout_shape = (1, tensor.shape[0] * tensor.shape[2] // 128, tensor.shape[1] // 4, 2, 256)
+        self.data = tensor
+        self.shape = list(layout_shape)
+        self.strides = list(make_strides(layout_shape))
 
     def make_tma(self, tensor, block_shape, transpose):
         assert not transpose
@@ -62,7 +81,7 @@ class BlackwellScaleBlockLayout(StridedLayout):
         return TensorDescriptor(base=tensor, shape=self.shape, strides=self.strides, block_shape=block_shape)
 
 
-def make_layout(shape, type=StridedLayout, order=None):
+def make_strides(shape, order=None):
     n = len(shape)
     if order is None:
         order = list(reversed(range(n)))
@@ -73,7 +92,11 @@ def make_layout(shape, type=StridedLayout, order=None):
     for dim in order:
         strides[dim] = stride
         stride *= shape[dim]
-    return type(shape=list(shape), strides=strides)
+    return strides
+
+
+def make_layout(shape, type=StridedLayout, order=None):
+    return type(shape=list(shape), strides=make_strides(shape, order))
 
 
 @dataclass
@@ -82,7 +105,6 @@ class Tensor:
     handle: torch.Tensor
     shape: list[int] | None = None
     shape_max: list[int] | None = None
-    strides: list[int] | None = None
     swizzle_mode: SwizzlingType | None = None
     layout: StridedLayout | None = None
 
@@ -106,7 +128,7 @@ class Tensor:
         assert all(map(is_int, self.shape_max))
         # initialize layouts
         if self.layout is None:
-            self.layout = StridedLayout(self.shape, self.handle.stride())
+            self.layout = StridedLayout(self.handle)
         # TODO: should be @properties ?
         self.ndim = self.handle.ndim
         self.dtype = self.handle.dtype
@@ -121,7 +143,7 @@ class Tensor:
         return self.layout.strides if i is None else self.layout.strides[i]
 
     def data_ptr(self):
-        return self.handle.data_ptr()
+        return self.layout.data.data_ptr()
 
     def numel(self):
         return self.handle.numel()
@@ -219,35 +241,15 @@ def perm_tensor_from_contig(x: torch.Tensor, axis: int, swizzle_axis: int | None
 
 
 def swizzle(tensor, swizzle_mode):
+    LayoutCls = {
+        SwizzlingType.BLACKWELL_SCALE: BlackwellScaleBlockLayout,
+        None: StridedLayout,
+    }[swizzle_mode]
     # Permute the tensor so that axis is the last dimension and swizzle_axis is the second to last dimension.
     ret_shape = list(tensor.shape)
     if tensor.dtype == torch.uint8:
         ret_shape[1] *= 2
-    # ret_shape = None
-    swizzle_axis = 2
-    axis = tensor.stride().index(1)
-    perm = list(range(tensor.ndim))
-    perm[tensor.ndim - 1], perm[axis] = axis, tensor.ndim - 1
-    if swizzle_axis is not None:
-        perm[tensor.ndim - 2], perm[swizzle_axis] = swizzle_axis, tensor.ndim - 2
-    tensor = torch.permute(tensor, perm).contiguous()
-    if swizzle_mode == SwizzlingType.HOPPER_VALUE:
-        tensor = swizzle_mxfp4_value_hopper(tensor, op_idx=0, mma_version=3)
-        tensor = perm_tensor_from_contig(tensor, axis, swizzle_axis)
-        layout = None
-    elif swizzle_mode == SwizzlingType.BLACKWELL_SCALE:
-        tensor = swizzle_mx_scale_bw(tensor, allow_pad=True)
-        tensor = perm_tensor_from_contig(tensor, axis, swizzle_axis)
-        mxE, mxK, mxN = tensor.shape
-        layout = make_layout((1, mxE * mxN // 128, mxK // 4, 2, 256), BlackwellScaleBlockLayout)
-    elif swizzle_mode == SwizzlingType.HOPPER_SCALE:
-        tensor = swizzle_mxfp4_scale_hopper(tensor, num_warps=8)
-        tensor = perm_tensor_from_contig(tensor, axis, swizzle_axis)
-        layout = None
-    else:
-        tensor = perm_tensor_from_contig(tensor, axis, swizzle_axis)
-        layout = None
-    return Tensor(tensor, shape=ret_shape, layout=layout, swizzle_mode=swizzle_mode)
+    return Tensor(tensor, shape=ret_shape, layout=LayoutCls(tensor))
 
 
 def make_tma(tensor, block_shape, transpose=False):
