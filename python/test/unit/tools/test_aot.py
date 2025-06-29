@@ -1,5 +1,6 @@
 import glob
 import os
+import pytest
 import subprocess
 import sys
 import tempfile
@@ -9,10 +10,7 @@ import numpy as np
 import triton
 from triton.backends.compiler import GPUTarget
 from triton.backends.nvidia.driver import include_dirs, library_dirs
-
-
-def is_hip():
-    return triton.runtime.driver.active.get_current_target().backend == "hip"
+from triton._internal_testing import is_cuda, is_hip
 
 
 kernel_utils_src = """
@@ -279,6 +277,7 @@ def generate_matmul_test_data(dir, M, N, K):
 
 
 # Test edge case where the provided kernel signature has no specializations
+@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
 def test_compile_link_matmul_no_specialization():
     np.random.seed(3)
 
@@ -310,6 +309,7 @@ def test_compile_link_matmul_no_specialization():
         np.testing.assert_allclose(c_tri, c_ref * c_ref, atol=1e-4, rtol=0.0)
 
 
+@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
 def test_compile_link_matmul():
     np.random.seed(3)
 
@@ -341,6 +341,7 @@ def test_compile_link_matmul():
         np.testing.assert_allclose(c_tri, c_ref * c_ref, atol=1e-4, rtol=0.0)
 
 
+@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
 def test_launcher_has_no_available_kernel():
     np.random.seed(3)
 
@@ -376,6 +377,7 @@ def test_launcher_has_no_available_kernel():
         assert "kernel launch failed" in result.stderr
 
 
+@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
 def test_compile_link_autotune_matmul():
     np.random.seed(3)
 
@@ -424,37 +426,24 @@ def test_compile_link_autotune_matmul():
             np.testing.assert_allclose(c_tri, c_ref * c_ref, atol=1e-4, rtol=1e-4)
 
 
-def test_ttgir_to_ptx():
+def test_ttgir_to_asm():
     src = """
-module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.num-ctas" = 1 : i32} {
-  tt.func public @sum_kernel_0d1d(%arg0: !tt.ptr<i32>, %arg1: !tt.ptr<i32>) {
+module attributes {{"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = {warp_size} : i32, "ttg.num-ctas" = 1 : i32}} {{
+  tt.func public @sum_kernel_0d1d(%arg0: !tt.ptr<i32>, %arg1: !tt.ptr<i32>) {{
     tt.return
-  }
-}
+  }}
+}}
 """
+    target = GPUTarget("hip", "gfx942", 64) if is_hip() else GPUTarget("cuda", 80, 32)
     with tempfile.TemporaryDirectory() as tmp_dir:
         kernel_path = os.path.join(tmp_dir, "empty_kernel.ttgir")
         with open(kernel_path, "w") as fp:
-            fp.write(src)
-        k = triton.compile(kernel_path, target=GPUTarget("cuda", 80, 32))
-        ptx = k.asm["ptx"]
-        assert ".target sm_80" in ptx
-        assert ".address_size 64" in ptx
-
-
-def test_ttgir_to_hasco():
-    if is_hip():
-        src = """
-    module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32, "ttg.num-ctas" = 1 : i32} {
-    tt.func public @sum_kernel_0d1d(%arg0: !tt.ptr<i32>, %arg1: !tt.ptr<i32>) {
-        tt.return
-    }
-    }
-    """
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            kernel_path = os.path.join(tmp_dir, "empty_kernel.ttgir")
-            with open(kernel_path, "w") as fp:
-                fp.write(src)
-            k = triton.compile(kernel_path, target=GPUTarget("hip", "gfx942", 64))
-            hsaco = k.asm["hsaco"].decode('latin-1')
-            assert "amdgcn-amd-amdhsa--gfx942" in hsaco
+            fp.write(src.format(warp_size=target.warp_size))
+        k = triton.compile(kernel_path, target=target)
+        if is_cuda():
+            ptx = k.asm["ptx"]
+            assert ".target sm_80" in ptx
+            assert ".address_size 64" in ptx
+        elif is_hip():
+            amdgcn = k.asm["amdgcn"]
+            assert '.amdgcn_target "amdgcn-amd-amdhsa--gfx942"' in amdgcn
