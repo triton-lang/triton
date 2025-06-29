@@ -287,7 +287,6 @@ def check_hasco_binary_str(tmp_dir: str, dtype: str):
         content = cpp_file.read()
         matches = pattern.findall(content)
         assert len(matches) == 1, "Expected one HSACO_NAME definition"
-        print("size = ", int(matches[0]))
         assert int(matches[0]) > 16, "Expected valid HSACO object binary string"
 
 
@@ -470,3 +469,4 @@ module attributes {{"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = {warp_si
         elif is_hip():
             amdgcn = k.asm["amdgcn"]
             assert '.amdgcn_target "amdgcn-amd-amdhsa--gfx942"' in amdgcn
+            assert '.wavefront_size: 64' in amdgcn
