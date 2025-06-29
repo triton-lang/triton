@@ -132,14 +132,15 @@ def check_type_supported(dtype, device):
 
 class MfmaLayout:
 
-    def __init__(self, version, warps_per_cta, instr_shape, is_transposed):
+    def __init__(self, version, warps_per_cta, tiles_per_warp, instr_shape, is_transposed):
         self.version = version
         self.warps_per_cta = warps_per_cta
+        self.tiles_per_warp = tiles_per_warp
         self.instr_shape = instr_shape
         self.is_transposed = is_transposed
 
     def __str__(self):
-        return f"#{GPU_DIALECT}.amd_mfma<{{versionMajor={self.version[0]}, versionMinor={self.version[1]}, warpsPerCTA = {self.warps_per_cta}, instrShape={self.instr_shape}, isTransposed = {str(self.is_transposed).lower()}}}>"
+        return f"#{GPU_DIALECT}.amd_mfma<{{versionMajor={self.version[0]}, versionMinor={self.version[1]}, warpsPerCTA = {self.warps_per_cta}, tilesPerWarp = {self.tiles_per_warp}, instrShape={self.instr_shape}, isTransposed = {str(self.is_transposed).lower()}}}>"
 
 
 class WmmaLayout:
@@ -3120,10 +3121,10 @@ layouts = [
               instr_shape=[16, 8]),
     MmaLayout(version=(3, 0), warps_per_cta=[4, 1], ctas_per_cga=[1, 1], cta_split_num=[1, 1], cta_order=[1, 0],
               instr_shape=[16, 16, 16]),
-    MfmaLayout(version=(2, 0), warps_per_cta=[4, 1], instr_shape=[32, 32], is_transposed=False),
-    MfmaLayout(version=(2, 0), warps_per_cta=[1, 4], instr_shape=[32, 32], is_transposed=False),
-    MfmaLayout(version=(2, 0), warps_per_cta=[4, 1], instr_shape=[32, 32], is_transposed=True),
-    MfmaLayout(version=(2, 0), warps_per_cta=[1, 4], instr_shape=[32, 32], is_transposed=True),
+    MfmaLayout(version=(2, 0), warps_per_cta=[4, 1], tiles_per_warp=[1, 1], instr_shape=[32, 32], is_transposed=False),
+    MfmaLayout(version=(2, 0), warps_per_cta=[1, 4], tiles_per_warp=[1, 1], instr_shape=[32, 32], is_transposed=False),
+    MfmaLayout(version=(2, 0), warps_per_cta=[4, 1], tiles_per_warp=[1, 1], instr_shape=[32, 32], is_transposed=True),
+    MfmaLayout(version=(2, 0), warps_per_cta=[1, 4], tiles_per_warp=[1, 1], instr_shape=[32, 32], is_transposed=True),
     WmmaLayout(version=1, warps_per_cta=[4, 1]),
     WmmaLayout(version=1, warps_per_cta=[1, 4]),
     DotOperandLayout(parent=MmaLayout([2, 0], [2, 4], [1, 1], [1, 1], [1, 0], [16, 8]), op_idx=1, k_width=8),
@@ -3685,7 +3686,7 @@ def convert_fp8_to_fp32(x, device, dtype_str):
 # M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, kpack, mma_nonk_size
 def get_test_dot_base_cases():
     return [(*shape, 4, False, False, epilogue, input_precision, in_dtype, out_dtype, 1, None)
-            for shape in [(64, 64, 64), (32, 32, 32), (16, 16, 16)]
+            for shape in [(64, 64, 64), (64, 64, 64), (32, 32, 32), (16, 16, 16)]
             for epilogue in ['none', 'trans', 'add-matrix', 'add-rows', 'add-cols', 'softmax', 'chain-dot']
             for input_precision in ['tf32', 'tf32x3', 'ieee']
             for in_dtype, out_dtype in [('float16', 'float16'), ('float16', 'float32'), ('float32', 'float32')]
@@ -6417,36 +6418,36 @@ mma_pairs = [
         WmmaLayout(2, [4, 4]),
     ],
     [
-        MfmaLayout([2, 0], [2, 2], [32, 32], False),
-        MfmaLayout([2, 0], [4, 1], [32, 32], False),
+        MfmaLayout([2, 0], [2, 2], [1, 1], [32, 32], False),
+        MfmaLayout([2, 0], [4, 1], [1, 1], [32, 32], False),
     ],
     [
-        MfmaLayout([2, 0], [4, 1], [32, 32], False),
-        MfmaLayout([2, 0], [2, 2], [32, 32], False),
+        MfmaLayout([2, 0], [4, 1], [1, 1], [32, 32], False),
+        MfmaLayout([2, 0], [2, 2], [1, 1], [32, 32], False),
     ],
     [
-        MfmaLayout([2, 0], [2, 2], [32, 32], False),
-        MfmaLayout([2, 0], [4, 1], [32, 32], True),
+        MfmaLayout([2, 0], [2, 2], [1, 1], [32, 32], False),
+        MfmaLayout([2, 0], [4, 1], [1, 1], [32, 32], True),
     ],
     [
-        MfmaLayout([2, 0], [4, 1], [32, 32], False),
-        MfmaLayout([2, 0], [2, 2], [32, 32], True),
+        MfmaLayout([2, 0], [4, 1], [1, 1], [32, 32], False),
+        MfmaLayout([2, 0], [2, 2], [1, 1], [32, 32], True),
     ],
     [
-        MfmaLayout([2, 0], [4, 4], [16, 16], False),
-        MfmaLayout([2, 0], [16, 1], [16, 16], False),
+        MfmaLayout([2, 0], [4, 4], [1, 1], [16, 16], False),
+        MfmaLayout([2, 0], [16, 1], [1, 1], [16, 16], False),
     ],
     [
-        MfmaLayout([2, 0], [16, 1], [16, 16], False),
-        MfmaLayout([2, 0], [4, 4], [16, 16], False),
+        MfmaLayout([2, 0], [16, 1], [1, 1], [16, 16], False),
+        MfmaLayout([2, 0], [4, 4], [1, 1], [16, 16], False),
     ],
     [
-        MfmaLayout([2, 0], [4, 4], [16, 16], False),
-        MfmaLayout([2, 0], [16, 1], [16, 16], True),
+        MfmaLayout([2, 0], [4, 4], [1, 1], [16, 16], False),
+        MfmaLayout([2, 0], [16, 1], [1, 1], [16, 16], True),
     ],
     [
-        MfmaLayout([2, 0], [16, 1], [16, 16], False),
-        MfmaLayout([2, 0], [4, 4], [16, 16], True),
+        MfmaLayout([2, 0], [16, 1], [1, 1], [16, 16], False),
+        MfmaLayout([2, 0], [4, 4], [1, 1], [16, 16], True),
     ],
 ]
 

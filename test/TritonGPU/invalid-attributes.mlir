@@ -37,7 +37,7 @@
 // -----
 
 // expected-error@+2 {{ttg.dot_op kWidth parameter is mandatory for MFMA parent}}
-#mfma = #ttg.amd_mfma<{version = 2, warpsPerCTA = [1, 1, 1], instrShape = [32, 32], isTransposed = false}>
+#mfma = #ttg.amd_mfma<{version = 2, warpsPerCTA = [1, 1, 1], tilesPerWarp = [1, 1, 1], instrShape = [32, 32], isTransposed = false}>
 #dot_op = #ttg.dot_op<{opIdx = 1, parent = #mfma}>
 
 // -----
@@ -65,12 +65,12 @@
 // -----
 
 // expected-error@+1 {{version must be in the [0, 4] range}}
-#mfma = #ttg.amd_mfma<{version = 10, warpsPerCTA = [1, 1, 1], instrShape = [32, 32], isTransposed = false}>
+#mfma = #ttg.amd_mfma<{version = 10, warpsPerCTA = [1, 1, 1], tilesPerWarp = [1, 1, 1], instrShape = [32, 32], isTransposed = false}>
 
 // -----
 
 // expected-error@+1 {{(M, N) cases other than (32, 32) or (16, 16) unimplemented}}
-#mfma = #ttg.amd_mfma<{version = 2, warpsPerCTA = [1, 1, 1], instrShape = [16, 8], isTransposed = false}>
+#mfma = #ttg.amd_mfma<{version = 2, warpsPerCTA = [1, 1, 1], tilesPerWarp = [1, 1, 1], instrShape = [16, 8], isTransposed = false}>
 
 // -----
 
