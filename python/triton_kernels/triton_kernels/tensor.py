@@ -116,6 +116,12 @@ def bitwidth(type: IntegerType | FloatType | torch.dtype):
     return type.bitwidth
 
 
+def expand_shape(packed_shape, packed_dim, pack_width):
+    ret = list(packed_shape)
+    ret[packed_dim] *= pack_width
+    return ret
+
+
 @dataclass
 class Tensor:
 
@@ -123,24 +129,17 @@ class Tensor:
     dtype: IntegerType | FloatType | torch.dtype = None
     shape: list[int] | None = None
     shape_max: list[int] | None = None
-    swizzle_mode: SwizzlingType | None = None
     storage: StridedLayout | None = None
-    packed_axis: int | None = None
 
     def __post_init__(self):
         # initialize dtype
         if self.dtype is None:
             self.dtype = self.handle.dtype
-        # initialize bitwidth
-        if self.packed_axis is None:
-            self.packed_axis = self.handle.stride().index(1)
+        if bitwidth(self.dtype) < 8 and self.shape is None:
+            raise ValueError("shape must be provided for sub-byte types")
         # initialize shape
         if self.shape is None:
-            handle_bitwidth = bitwidth(self.handle.dtype)
-            true_bitwidth = bitwidth(self.dtype)
-            assert handle_bitwidth % true_bitwidth == 0
             self.shape = list(self.handle.shape)
-            self.shape[self.packed_axis] *= handle_bitwidth // true_bitwidth
         # validate shape: all elements must be `int` or numel-1 `torch.Tensor`
         is_int = lambda s: isinstance(s, int)
         is_item = lambda s: hasattr(s, "numel") and s.numel() == 1
@@ -177,14 +176,14 @@ class Tensor:
         return self.handle.element_size()
 
     def permute(self, *permutation):
-        assert self.swizzle_mode is None
+        assert self.storage.name is None
         h = self.handle.permute(*permutation)
-        return Tensor(h, swizzle_mode=self.swizzle_mode)
+        return Tensor(h)
 
     def view(self, *args):
-        assert self.swizzle_mode is None
+        assert self.storage.name is None
         h = self.handle.view(*args)
-        return Tensor(h, swizzle_mode=self.swizzle_mode)
+        return Tensor(h)
 
 
 @dataclass
@@ -266,12 +265,13 @@ def perm_tensor_from_contig(x: torch.Tensor, axis: int, swizzle_axis: int | None
 
 
 def swizzle(tensor, swizzle_mode):
+    shape = expand_shape(tensor.shape, tensor.stride().index(1), 2)
     if swizzle_mode == SwizzlingType.BLACKWELL_SCALE:
         storage = BlackwellScaleBlockLayout(tensor)
-        return Tensor(tensor, dtype=FP4, storage=storage, swizzle_mode=swizzle_mode)
+        return Tensor(tensor, shape=shape, dtype=FP4, storage=storage)
     else:
         storage = StridedLayout(tensor)
-        return Tensor(tensor, dtype=FP4, storage=storage, swizzle_mode=swizzle_mode)
+        return Tensor(tensor, shape=shape, dtype=FP4, storage=storage)
 
 
 def make_tma(tensor, block_shape, transpose=False):
