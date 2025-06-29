@@ -11,6 +11,10 @@
 // code should substitute the search path placeholder.
 static const char *hipLibSearchPaths[] = {"/*py_libhip_search_path*/"};
 
+// The list of HIP dynamic library symbols and their signature we are interested
+// in this file.
+// |FOR_EACH_ERR_FN| is a macro to process APIs that return hipError_t;
+// |FOR_EACH_STR_FN| is a macro to process APIs that return const char *.
 #define HIP_SYMBOL_LIST(FOR_EACH_ERR_FN, FOR_EACH_STR_FN)                      \
   FOR_EACH_STR_FN(hipGetErrorString, hipError_t hipError)                      \
   FOR_EACH_ERR_FN(hipGetDeviceProperties, hipDeviceProp_t *prop, int deviceId) \
