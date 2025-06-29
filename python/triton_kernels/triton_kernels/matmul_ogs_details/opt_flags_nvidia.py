@@ -21,8 +21,8 @@ def compute_block_n(n: int, arch, precision_config):
     return block_n
 
 
-def compute_block_k(k: int | None, is_persistent: bool, lhs_dtype, rhs_dtype, mx_ctx):
-    has_mx_weight_scale = mx_ctx and mx_ctx.weight_scale is not None
+def compute_block_k(k: int | None, is_persistent: bool, lhs_dtype, rhs_dtype, precision_config):
+    has_mx_weight_scale = precision_config.weight_scale is not None
     lhs_width = lhs_dtype.itemsize
     rhs_width = rhs_dtype.itemsize
     if has_mx_weight_scale:
@@ -60,7 +60,6 @@ def compute_num_warps(block_m, block_n):
 
 def compute_num_stages(
     precision_config,
-    microscaling_ctx,
     is_persistent,
     block_m,
     block_n,
@@ -78,12 +77,11 @@ def compute_num_stages(
     device_props = torch.cuda.get_device_properties(0)
     smem_capacity = device_props.shared_memory_per_block_optin
     has_native_mxfp = target_info.cuda_capability_geq(10, 0)
-    if has_native_mxfp and microscaling_ctx is not None:
-        if microscaling_ctx.weight_scale is not None:
-            if rhs_dtype == torch.uint8:
-                # 4-bit e2m1 weights are padded 2x
-                # https://docs.nvidia.com/cuda/parallel-thread-execution/#packing-format-used-for-matrix-a-and-b-by-kind-mxf8f6f4-in-shared-memory
-                stage_size += block_k * block_n * weight_size
+    if has_native_mxfp and precision_config.weight_scale is not None:
+        if rhs_dtype == torch.uint8:
+            # 4-bit e2m1 weights are padded 2x
+            # https://docs.nvidia.com/cuda/parallel-thread-execution/#packing-format-used-for-matrix-a-and-b-by-kind-mxf8f6f4-in-shared-memory
+            stage_size += block_k * block_n * weight_size
 
     if is_persistent:
         # Per-stage wait barrier
@@ -100,7 +98,7 @@ def compute_num_stages(
         # pipelined layout conversion before store of the accumulator
         # note: layout conversion has some padding
         smem_capacity -= int((block_m + 4) * acc_block_n * acc_size)
-        if microscaling_ctx.weight_scale is not None:
+        if precision_config.weight_scale is not None:
             # mx scales
             stage_size += block_n * (block_k // 32)
     elif has_native_mxfp:

@@ -49,7 +49,8 @@ def topk_forward(x, k, apply_softmax=True, dim=1, return_bitmatrix=True, y_indx=
     )
     bitmatrix_shape = [n_rows, n_cols_words * 32]
     bitmatrix_shape_max = [n_rows_max, None]
-    bitmatrix = Bitmatrix(bitmatrix, shape=bitmatrix_shape, shape_max=bitmatrix_shape_max, scratchpad=scratchpad)
+    bitmatrix = Bitmatrix(bitmatrix, packed_axis=1, element_bitwidth=1, shape=bitmatrix_shape,
+                          shape_max=bitmatrix_shape_max, scratchpad=scratchpad)
     return y_vals, y_indx, bitmatrix
 
 

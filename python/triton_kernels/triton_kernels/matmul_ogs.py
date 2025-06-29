@@ -14,7 +14,7 @@ from .matmul_ogs_details._p_matmul_ogs import _p_matmul_ogs, get_per_device_per_
 from .matmul_ogs_details._finalize_matmul import _finalize_matmul
 from .matmul_ogs_details.opt_flags import make_opt_flags, update_opt_flags_constraints
 from .specialize import specialize
-from .tensor import Tensor, SwizzlingType, make_tma
+from .tensor import Tensor, make_tma
 
 
 @dataclass
@@ -100,35 +100,35 @@ def should_upcast_indices(*args):
 
 # fmt: off
 
-@dataclass(frozen=True)
-class MicroscalingCtx:
-    # This interprets the scales as E8M0 tensors
-    # Packed fp4s (e2m1) are stored as torch.uint8 tensors.
-    # Not used for now, inserted here to make space in the APIs.
-    act_scale: torch.Tensor | None = None
-    weight_scale: torch.Tensor | None = None
+# @dataclass(frozen=True)
+# class MicroscalingCtx:
+#     # This interprets the scales as E8M0 tensors
+#     # Packed fp4s (e2m1) are stored as torch.uint8 tensors.
+#     # Not used for now, inserted here to make space in the APIs.
+#     act_scale: torch.Tensor | None = None
+#     weight_scale: torch.Tensor | None = None
 
-    swizzle_value: SwizzlingType | None = (
-        None  # Whether the weight values are stored in swizzled layout
-    )
-    swizzle_scale: SwizzlingType | None = (
-        None  # Whether the weight scales are stored in swizzled layout
-    )
+#     swizzle_value: SwizzlingType | None = (
+#         None  # Whether the weight values are stored in swizzled layout
+#     )
+#     swizzle_scale: SwizzlingType | None = (
+#         None  # Whether the weight scales are stored in swizzled layout
+#     )
 
-    def __post_init__(self):
-        assert self.act_scale is None, "Activation scale not supported yet"
-        if self.weight_scale is None:
-            return
+#     def __post_init__(self):
+#         assert self.act_scale is None, "Activation scale not supported yet"
+#         if self.weight_scale is None:
+#             return
 
-        # Validate the scale tensor data type
-        if self.weight_scale.dtype != torch.uint8:
-            raise TypeError(f"Weight scale must be uint8. Got {self.weight_scale.dtype}")
+#         # Validate the scale tensor data type
+#         if self.weight_scale.dtype != torch.uint8:
+#             raise TypeError(f"Weight scale must be uint8. Got {self.weight_scale.dtype}")
 
-        # Validate scale tensor dimensions
-        if self.weight_scale.ndim != 3:
-            raise ValueError(
-                f"Weight scale must be 3D (experts, in_dim // BLOCK_SIZE, out_dim). Got {self.weight_scale.shape}"
-            )
+#         # Validate scale tensor dimensions
+#         if self.weight_scale.ndim != 3:
+#             raise ValueError(
+#                 f"Weight scale must be 3D (experts, in_dim // BLOCK_SIZE, out_dim). Got {self.weight_scale.shape}"
+#             )
 
 
 @dataclass(frozen=True)
@@ -145,8 +145,7 @@ class PrecisionConfig:
     acc_scale: int = 1.0
     flexpoint_saturate_inf: bool = False
     report_quantization_err_fn: callable = None
-
-    mx_ctx: MicroscalingCtx = MicroscalingCtx()
+    weight_scale: Tensor| None = None
     out_dtype: torch.dtype = None
     enforce_bitwise_invariance: bool = False
 
@@ -187,10 +186,9 @@ class PreprocessingFeatures:
 
 
 def init_preprocessing_features(w, precision_config, opt_flags):
-    mx_ctx = precision_config.mx_ctx
     swap_xw = False  # Whether or not to swap X and W operands to the tl.dot
     if target_info.cuda_capability_geq(10, 0):
-        swap_xw = mx_ctx.weight_scale is not None and opt_flags.block_m <= 64 and opt_flags.is_persistent
+        swap_xw = precision_config.weight_scale is not None and opt_flags.block_m <= 64 and opt_flags.is_persistent
     return PreprocessingFeatures(swap_xw)
 
 def apply_preprocessing_features(x, w, gather_indx, scatter_indx, routing_data, opt_flags, preprocessing_features):
@@ -434,12 +432,13 @@ def matmul_ogs(x, w, bias,
     assert x.ndim == 3
     assert w.shape[0] == routing_data.n_expts_tot
     # unpack scales
-    mx_ctx = precision_config.mx_ctx
-    has_mx = mx_ctx.weight_scale is not None
+    w_scale = precision_config.weight_scale
+    has_mx = w_scale is not None
     is_hopper_fp8 = not target_info.cuda_capability_geq(10, 0) and w.dtype.itemsize == 1
     if has_mx: assert w.stride(1) == 1, "`w` must be column-major when it has data-type mxfp"
     if is_hopper_fp8: assert w.stride(1) == 1, "`w` must be column-major when it has data-type FP8 on capability < 10"
-    w_scale = mx_ctx.weight_scale
+    if not isinstance(w, Tensor):
+        w = Tensor(w)
     # determine shapes
     M = x.shape[1] if gather_indx is None else gather_indx.src_indx.shape[0]
     batch_size = w.shape[0] if routing_data.expt_hist is None else 1
@@ -514,7 +513,7 @@ def matmul_ogs(x, w, bias,
     # initialize w_scale
     assert w_scale is None or opt_flags.is_persistent
     w_scale_has_tma = opt_flags.is_persistent and w_scale is not None
-    mx_tensor = mx_ctx.weight_scale
+    mx_tensor = w_scale
     mx_tensor_strides = mx_tensor.stride() if has_mx else (None, None, None)
     if w_scale_has_tma:
         mx_tensor = make_tma(mx_tensor, [opt_flags.block_n, opt_flags.block_k])
@@ -551,8 +550,8 @@ def matmul_ogs(x, w, bias,
                    opt_flags.block_k,
                    opt_flags.group_m,
                    XCD_SWIZZLE=opt_flags.xcd_swizzle,
-                   SWIZZLE_MX_VALUE=mx_ctx.swizzle_value.name if mx_ctx.swizzle_value else None,
-                   SWIZZLE_MX_SCALE=mx_ctx.swizzle_scale.name if mx_ctx.swizzle_scale else None,
+                   SWIZZLE_MX_VALUE=w.storage.name,
+                   SWIZZLE_MX_SCALE=None if w_scale is None else w_scale.storage.name,
                    EPILOGUE_SUBTILE=opt_flags.epilogue_subtile,
                    SPLIT_K=opt_flags.split_k,
                    EVEN_K=K % opt_flags.block_k == 0,

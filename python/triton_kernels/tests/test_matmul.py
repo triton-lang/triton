@@ -7,7 +7,7 @@ import triton
 from triton_kernels.routing import routing
 # matmul utilities
 import triton_kernels.matmul_ogs_details.opt_flags as opt_flags
-from triton_kernels.matmul_ogs import FlexCtx, PrecisionConfig, MicroscalingCtx, FusedActivation, FnSpecs
+from triton_kernels.matmul_ogs import FlexCtx, PrecisionConfig, FusedActivation, FnSpecs
 from triton_kernels.matmul_ogs import none_or_tma_compatible
 from triton_kernels.matmul_ogs import matmul_ogs_set_idle_sms, matmul_ogs, matmul_ogs_torch
 from triton_kernels.swiglu import swiglu, swiglu_fn, PrecisionConfig as SwiGLUPrecisionConfig
@@ -78,7 +78,7 @@ def init_compute_data(m, n, k, gindx, sindx, n_expts_tot, n_expts_act, n_expt_sh
 # ---------------
 
 
-def init_precision(out_dtype, weight_dtype, is_mixed_input, n_expts_tot=1, mx_ctx=MicroscalingCtx(), device="cuda"):
+def init_precision(out_dtype, weight_dtype, is_mixed_input, n_expts_tot=1, device="cuda"):
     act_use_flexpoint = out_dtype.itemsize == 1
     weight_use_flexpoint = weight_dtype.itemsize == 1 and not is_mixed_input
     # flexpoint
@@ -98,7 +98,7 @@ def init_precision(out_dtype, weight_dtype, is_mixed_input, n_expts_tot=1, mx_ct
         out_data=out_flex_data(4.00, act_use_flexpoint),
     )
     return PrecisionConfig(flex_ctx=flex_ctx, acc_scale=2.0 if act_use_flexpoint or weight_use_flexpoint else 1.0,
-                           mx_ctx=mx_ctx, out_dtype=out_dtype)
+                           out_dtype=out_dtype)
 
 
 def apply_precision(x_tri, w_tri, bias_tri, gs0_tri, gs1_tri, precision_config):
@@ -313,13 +313,11 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
         w_ref = upcast_from_mxfp(w_tri, mx_scales_tri, torch.bfloat16, axis=1)
         w_tri = swizzle(w_tri, swizzle_mode=swizzle_value)
         mx_scales_tri = swizzle(mx_scales_tri, swizzle_mode=swizzle_scale)
-
-        precision_opt.mx_ctx = MicroscalingCtx(weight_scale=mx_scales_tri, swizzle_value=swizzle_value,
-                                               swizzle_scale=swizzle_scale)
+        precision_opt.weight_scale = mx_scales_tri
 
     can_use_tma = none_or_tma_compatible(x_tri.view(1, *x_tri.shape)) and none_or_tma_compatible(w_tri)
     # TODO: should be cleaner
-    if not is_persistent and precision_opt.mx_ctx.weight_scale is not None:
+    if not is_persistent and precision_opt.weight_scale is not None:
         pytest.skip("non-persistent not supported with mxfp")
     if is_persistent and not can_use_tma:
         pytest.skip("persistent TMAs not supported for this test")
