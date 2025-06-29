@@ -585,6 +585,9 @@ class HIPDriver(GPUDriver):
         except ImportError:
             return False
 
+    def map_python_to_cpp_type(self, ty: str) -> str:
+        return ty_to_cpp(ty)
+
     def get_current_target(self):
         device = self.get_current_device()
         device_properties = self.utils.get_device_properties(device)
