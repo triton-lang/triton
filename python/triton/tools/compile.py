@@ -20,10 +20,11 @@ class CompileArgs:
     kernel_name: str = ''
     signature: str = ''
     grid: str = ''
+    target: str | None = None
     num_warps: int = 1
     num_stages: int = 3
-    out_name: str = None
-    out_path: Path = None
+    out_name: str | None = None
+    out_path: Path | None = None
 
 
 desc = """
@@ -60,6 +61,10 @@ def main():
                         help="Path to Python source containing desired kernel in its scope. File will be executed.")
     parser.add_argument("--kernel-name", "-n", type=str, default="", help="Name of the kernel to compile",
                         required=True)
+    parser.add_argument(
+        "--target", "-t", type=str, default=None,
+        help="The target to compile towards, in format of '<backend>:<arch>:<warp-size>'; "
+        "e.g., 'cuda:80:32', 'hip:gfx942:64'. Default to None, which means using current machine's GPU target")
     parser.add_argument("--num-warps", "-w", type=int, default=1, help="Number of warps to launch the kernel")
     parser.add_argument("--num-stages", "-ns", type=int, default=3,
                         help="Number of stages (meta-parameter of the kernel)")
@@ -129,11 +134,12 @@ def compile_kernel(args: CompileArgs):
     attrs = {k: [["tt.divisibility", 16]] for k, v in hints.items() if v == 16}
     src = triton.compiler.ASTSource(fn=kernel, constexprs=constants, signature=signature, attrs=attrs)
 
-    target = triton.runtime.driver.active.get_current_target()
+    target = triton.backends.compiler.GPUTarget(*args.target.split(":")) \
+        if args.target else triton.runtime.driver.active.get_current_target()
     backend = triton.compiler.make_backend(target)
     kwargs = {"num_warps": args.num_warps, "num_stages": args.num_stages}
-    opts = backend.parse_options(kwargs)
-    ccinfo = triton.compile(src, target=target, options=opts.__dict__)
+    options = backend.parse_options(kwargs)
+    ccinfo = triton.compile(src, target=target, options=options.__dict__)
 
     if getattr(ccinfo.metadata, "global_scratch_size", 0) > 0:
         raise RuntimeError("AOT compiling kernels with global scratch requirements is not yet implemented")

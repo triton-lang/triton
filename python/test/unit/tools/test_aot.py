@@ -1,6 +1,7 @@
 import glob
 import os
 import pytest
+import re
 import subprocess
 import sys
 import tempfile
@@ -11,7 +12,6 @@ import triton
 from triton.backends.compiler import GPUTarget
 from triton.backends.nvidia.driver import include_dirs, library_dirs
 from triton._internal_testing import is_cuda, is_hip
-
 
 kernel_utils_src = """
 import triton
@@ -276,8 +276,22 @@ def generate_matmul_test_data(dir, M, N, K):
     return a, b, a_path, b_path, c_path
 
 
+def check_hasco_binary_str(tmp_dir: str, dtype: str):
+    # Linking is not yet enabled on HIP backend so just check compilation for now.
+    h_files = glob.glob(f"matmul_{dtype}.*.h", root_dir=tmp_dir)
+    cpp_files = glob.glob(f"matmul_{dtype}.*.cpp", root_dir=tmp_dir)
+    assert len(h_files) == 1, "Expected one .h file"
+    assert len(cpp_files) == 1, "Expected one .cpp file"
+    pattern = re.compile(r'HSACO_NAME\[(\d+)\]')
+    with open(os.path.join(tmp_dir, cpp_files[0]), "r") as cpp_file:
+        content = cpp_file.read()
+        matches = pattern.findall(content)
+        assert len(matches) == 1, "Expected one HSACO_NAME definition"
+        print("size = ", int(matches[0]))
+        assert int(matches[0]) > 16, "Expected valid HSACO object binary string"
+
+
 # Test edge case where the provided kernel signature has no specializations
-@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
 def test_compile_link_matmul_no_specialization():
     np.random.seed(3)
 
@@ -287,6 +301,10 @@ def test_compile_link_matmul_no_specialization():
 
         kernel_path = write_triton_kernels(tmp_dir, kernel_src, kernel_utils_src)
         compile_aot_kernel_no_specialization(tmp_dir, kernel_path, dtype, BM, BN, BK)
+        if is_hip():
+            check_hasco_binary_str(tmp_dir, dtype)
+            return
+
         link_aot_kernels(tmp_dir)
 
         # compile test case
@@ -309,7 +327,6 @@ def test_compile_link_matmul_no_specialization():
         np.testing.assert_allclose(c_tri, c_ref * c_ref, atol=1e-4, rtol=0.0)
 
 
-@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
 def test_compile_link_matmul():
     np.random.seed(3)
 
@@ -319,6 +336,9 @@ def test_compile_link_matmul():
 
         kernel_path = write_triton_kernels(tmp_dir, kernel_src, kernel_utils_src)
         compile_aot_kernels(tmp_dir, kernel_path, dtype, BM, BN, BK, ha_hb_hints=[(":16", ":16")])
+        if is_hip():
+            check_hasco_binary_str(tmp_dir, dtype)
+            return
         link_aot_kernels(tmp_dir)
 
         # compile test case
@@ -341,7 +361,6 @@ def test_compile_link_matmul():
         np.testing.assert_allclose(c_tri, c_ref * c_ref, atol=1e-4, rtol=0.0)
 
 
-@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
 def test_launcher_has_no_available_kernel():
     np.random.seed(3)
 
@@ -351,6 +370,10 @@ def test_launcher_has_no_available_kernel():
 
         kernel_path = write_triton_kernels(tmp_dir, kernel_src, kernel_utils_src)
         compile_aot_kernels(tmp_dir, kernel_path, dtype, BM, BN, BK, ha_hb_hints=[(":1", ":1")])
+        if is_hip():
+            check_hasco_binary_str(tmp_dir, dtype)
+            return
+
         link_aot_kernels(tmp_dir)
 
         # compile test case
