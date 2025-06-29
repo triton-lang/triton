@@ -927,6 +927,26 @@ class CodeGenerator(ast.NodeVisitor):
             else:
                 return self.visit(node.orelse)
 
+    def visit_With(self, node):
+        # Lower `with` statements by constructing context managers and calling their enter/exit hooks
+        # Instantiate each context manager with builder injection
+        cm_list = []
+        for item in node.items:
+            call = item.context_expr
+            fn = self.visit(call.func)
+            args = [self.visit(arg) for arg in call.args]
+            kws = dict(self.visit(kw) for kw in call.keywords)
+            cm = fn(*args, _semantic=self.semantic, **kws)
+            cm_list.append(cm)
+        for cm, item in zip(cm_list, node.items):
+            res = cm.__enter__()
+            if item.optional_vars is not None:
+                var_name = self.visit(item.optional_vars)
+                self.set_value(var_name, res)
+        self.visit_compound_statement(node.body)
+        for cm in reversed(cm_list):
+            cm.__exit__(None, None, None)
+
     def visit_Pass(self, node):
         pass
 

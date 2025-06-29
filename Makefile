@@ -61,7 +61,8 @@ test-interpret: all
 
 .PHONY: test-proton
 test-proton: all
-	$(PYTEST) -s -n 8 third_party/proton/test
+	$(PYTEST) -s -n 8 third_party/proton/test --ignore=third_party/proton/test/test_override.py
+	$(PYTEST) -s third_party/proton/test/test_override.py
 
 .PHONY: test-python
 test-python: test-unit test-regression test-interpret test-proton

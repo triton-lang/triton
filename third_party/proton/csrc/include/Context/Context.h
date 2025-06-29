@@ -100,6 +100,7 @@ class OpInterface {
 public:
   OpInterface() = default;
   virtual ~OpInterface() = default;
+
   void enterOp(const Scope &scope) {
     if (isOpInProgress()) {
       return;
@@ -107,6 +108,7 @@ public:
     startOp(scope);
     setOpInProgress(true);
   }
+
   void exitOp(const Scope &scope) {
     if (!isOpInProgress()) {
       return;
@@ -116,27 +118,34 @@ public:
   }
 
 protected:
-  virtual void startOp(const Scope &scope) = 0;
-  virtual void stopOp(const Scope &scope) = 0;
-  virtual bool isOpInProgress() = 0;
-  virtual void setOpInProgress(bool value) = 0;
-};
-
-class ThreadLocalOpInterface : public OpInterface {
-public:
-  using OpInterface::OpInterface;
-
-protected:
-  bool isOpInProgress() override final { return opInProgress[this]; }
-  void setOpInProgress(bool value) override final {
+  bool isOpInProgress() { return opInProgress[this]; }
+  void setOpInProgress(bool value) {
     opInProgress[this] = value;
     if (opInProgress.size() > MAX_CACHE_OBJECTS && !value)
       opInProgress.erase(this);
   }
+  virtual void startOp(const Scope &scope) = 0;
+  virtual void stopOp(const Scope &scope) = 0;
 
 private:
   inline static const int MAX_CACHE_OBJECTS = 10;
-  static thread_local std::map<ThreadLocalOpInterface *, bool> opInProgress;
+  static thread_local std::map<OpInterface *, bool> opInProgress;
+};
+
+class InstrumentationInterface {
+public:
+  InstrumentationInterface() = default;
+  virtual ~InstrumentationInterface() = default;
+
+  virtual void initFunctionMetadata(
+      uint64_t functionId, const std::string &functionName,
+      const std::vector<std::pair<size_t, std::string>> &scopeIdNames,
+      const std::vector<std::pair<size_t, size_t>> &scopeIdParents,
+      const std::string &metadataPath) = 0;
+  virtual void enterInstrumentedOp(uint64_t streamId, uint64_t functionId,
+                                   uint8_t *buffer, size_t size) = 0;
+  virtual void exitInstrumentedOp(uint64_t streamId, uint64_t functionId,
+                                  uint8_t *buffer, size_t size) = 0;
 };
 
 } // namespace proton

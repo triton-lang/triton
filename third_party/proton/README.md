@@ -85,14 +85,89 @@ with proton.scope("test2", {"bytes": 3000}):
     foo[1,](x, y)
 ```
 
+### Backend and mode
+
+Proton supports three profiling backends: `cupti`, `roctracer`, and `instrumentation`.
+
+- **`cupti`**: Used for NVIDIA GPUs. It supports both the default profiling mode and `pcsampling` (instruction sampling).
+- **`roctracer`**: Used for AMD GPUs. It supports only the default profiling mode.
+- **`instrumentation`**: Available on both NVIDIA and AMD GPUs, this backend enables collection of custom metrics and advanced instrumentation.
+
+By default, Proton automatically selects either `cupti` or `roctracer` as the backend based on your GPU driver. The `instrumentation` backend offers a wide range of mode options for fine-grained profiling, as detailed in the `mode.py` file.
+
+#### Instruction Sampling
+
+Proton supports instruction sampling on NVIDIA GPUs.
+You may experience ~20x end-to-end overhead when using instruction sampling, although the overhead for each individual GPU kernel is negligible.
+The overhead is mostly caused by data transfer and processing on the CPU.
+Additionally, the proton-viewer options `-i <regex> -d <depth> -t <threshold>` can be helpful for filtering out GPU kernels that are not of interest.
+The following example demonstrates how to use instruction sampling:
+
+```python
+import triton.profiler as proton
+
+proton.start(name="profile_name", context="shadow", backend="cupti_pcsampling")
+```
+
+#### Instrumentation
+
+The instrumentation backend allows for detailed, fine-grained profiling of intra-kernel behavior, generating trace or tree views similar to those produced by coarse-grained profiling.
+By default, if no `mode` is specified, Proton profiles kernel cycles, which may require shared memory. If there is insufficient shared memory, profiling will abort and a warning will be displayed. Future releases will introduce additional instrumentation modes.
+
+**Host-side usage:**
+
+```python
+import triton.profiler as proton
+
+proton.start(
+    name="profile_name",
+    backend="instrumentation",
+    mode="<mode0>=<option0>:<mode1>=<option1>:..."
+)
+```
+
+**Kernel-side usage:**
+
+```python
+import triton.profiler.language as pl
+
+@triton.jit
+def kernel(...):
+    pl.enter_scope("scope0")
+    for i in range(iters):
+        tl.load(...)
+    pl.exit_scope("scope0")
+    with pl.scope("scope1"):
+        for i in range(iters):
+            tl.load(...)
+```
+
+Advanced users can instrument either the `ttir` or `ttgir` intermediate representations for even finer-grained measurement. The relevant IR instructions are `proton.record start` and `proton.record end`. This can be combined with the environment variable `TRITON_KERNEL_OVERRIDE=1` for custom kernel overrides. For detailed steps, refer to the Triton [documentation](https://github.com/triton-lang/triton?tab=readme-ov-file#tips-for-hacking) under the **Kernel Override Steps** section.
+
+#### Merging profiles for postmortem analysis
+
+We could use concurrent sessions to profile the same code region using different backends, and then merge the profiles using hatchet for postmortem analysis. In the following example, the `cupti` backend obtains different metrics than the `instrumentation` backend, and thus it makes sense to merge them using `GraphFrame.add` directly. Otherwise, if there are duplicate metrics, we could customize the `merge` logic or manipulate the dataframes.
+
+```python
+
+import triton.profiler as proton
+
+proton.start(name="profile_name0", context="shadow", backend="cupti")
+proton.start(name="profile_name1", context="shadow", backend="instrumentation")
+
+...
+
+proton.finalize()
+```
+
 ### Hook
 
 ```python
 import triton.profiler as proton
 from typing import NamedTuple
 
-# hook: When hook="triton", it enables proton to invoke launch_metadata function before launching the GPU kernel
-proton.start("profile_name", hook="triton")
+# hook: When hook="launch", it enables proton to invoke launch_metadata function before launching the GPU kernel
+proton.start("profile_name", hook="launch")
 
 def metadata_fn(
     grid: tuple,
@@ -108,7 +183,7 @@ def foo(x, y):
 
 The `metadata_fn` function is called before launching the GPU kernel to provide metadata for the GPU kernel, which returns a dictionary that maps from a string (metadata name) to a value (int or float).
 
-Currently, **only the triton hook is supported**. In the dictionary returned by the `metadata_fn` function, we can supply the following keys:
+Currently, **only the launch hook is supported**. In the dictionary returned by the `metadata_fn` function, we can supply the following keys:
 
 ```python
 name: str  # The name of the kernel
@@ -143,6 +218,16 @@ proton-viewer -m time/s <profile.hatchet>
 ```
 
 NOTE: `pip install hatchet` does not work because the API is slightly different.
+
+If you want to dump the entire trace but not just the aggregated data, you should set the data option to `trace` when starting the profiler.
+
+```python
+import triton.profiler as proton
+
+proton.start(name="profile_name", data="trace")
+```
+
+The dumped trace will be in the chrome trace format and can be visualized using the `chrome://tracing` tool in Chrome or the [perfetto](https://perfetto.dev) tool.
 
 ### Visualizing sorted profile data
 
@@ -231,42 +316,6 @@ with proton.scope("test"):
 ```
 
 The call path of `foo1` will be `test->test1->state0`.
-
-### Instrumentation (experimental)
-
-In addition to profiling, Proton also incorporates MLIR/LLVM based compiler instrumentation passes to get Triton level analysis
-and optimization information. This feature is under active development and the list of available passes is expected to grow.
-
-#### Available passes
-
-print-mem-spaces: this pass prints the load and store address spaces (e.g. global, flat, shared) chosen by the compiler and attributes back to Triton source information.
-
-Example usage with the Proton matmul tutorial:
-
-```bash
-$ proton --instrument=print-mem-spaces matmul.py
-0     matmul_kernel     matmul.py:180:20     SHARED     STORE
-1     matmul_kernel     matmul.py:181:20     SHARED     STORE
-2     matmul_kernel     matmul.py:180:20     SHARED     LOAD
-3     matmul_kernel     matmul.py:181:20     SHARED     LOAD
-```
-
-Notes: The instrument functionality is currently only available from the command line. Additionally the instrument and profile command line arguments can not be use simulantously.
-
-### Instruction sampling (experimental)
-
-Proton supports instruction sampling on NVIDIA GPUs.
-Please note that this is an experimental feature and may not work on all GPUs.
-You may experience ~20x end-to-end overhead when using instruction sampling, although the overhead for each individual GPU kernel is negligible.
-The overhead is mostly caused by data transfer and processing on the CPU.
-Additionally, the proton-viewer options `-i <regex> -d <depth> -t <threshold>` can be helpful for filtering out GPU kernels that are not of interest.
-The following example demonstrates how to use instruction sampling:
-
-```python
-import triton.profiler as proton
-
-proton.start(name="profile_name", context="shadow", backend="cupti_pcsampling")
-```
 
 ## Proton *vs* nsys
 

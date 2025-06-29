@@ -628,6 +628,7 @@ def get_package_dirs():
 
     if check_env_flag("TRITON_BUILD_PROTON", "ON"):  # Default ON
         yield ("triton.profiler", "third_party/proton/proton")
+        yield ("triton.profiler.hooks", "third_party/proton/proton/hooks")
 
 
 def get_packages():

@@ -91,13 +91,17 @@ def test_scope(tmp_path: pathlib.Path):
 
     proton.enter_scope("test")
     proton.exit_scope()
+
+    proton.enter_scope("test0")
+    proton.exit_scope("test0")
+
     proton.finalize()
     assert temp_file.exists()
 
 
 def test_hook(tmp_path: pathlib.Path):
     temp_file = tmp_path / "test_hook.hatchet"
-    session_id0 = proton.start(str(temp_file.with_suffix("")), hook="triton")
+    session_id0 = proton.start(str(temp_file.with_suffix("")), hook="launch")
     proton.activate(session_id0)
     proton.deactivate(session_id0)
     proton.finalize(None)

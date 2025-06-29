@@ -734,7 +734,7 @@ if __name__ == "__main__":
         validate(32, 32, 32, dtype)
         validate(8192, 8192, args.K_range[0], dtype)
 
-        proton.start("matmul", hook="triton")
+        proton.start("matmul", hook="launch")
         proton.deactivate()
         for K in range(args.K_range[0], args.K_range[1] + 1, args.K_step):
             bench(K, dtype)

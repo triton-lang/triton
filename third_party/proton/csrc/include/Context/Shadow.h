@@ -41,4 +41,4 @@ private:
 
 } // namespace proton
 
-#endif // PROTON_CONTEXT_CONTEXT_H_
+#endif // PROTON_CONTEXT_SHADOW_H_
