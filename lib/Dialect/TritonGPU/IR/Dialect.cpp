@@ -1335,12 +1335,6 @@ AMDWmmaEncodingAttr::verify(function_ref<mlir::InFlightDiagnostic()> emitError,
   if (version != 1 && version != 2) {
     return emitError() << "WMMA version must be in the [1, 2] range";
   }
-  // Transposed layout is needed for bypassing LDS between multiple dots.
-  // Version 1 tt.dot results and tt.dot operand layouts are different,
-  // therefore we test and support transposed only for version 2.
-  if (version != 2 && isTransposed) {
-    return emitError() << "Transposed WMMA is supported only for version 2";
-  }
   return success();
 }
 

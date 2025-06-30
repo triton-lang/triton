@@ -564,11 +564,69 @@ private:
 };
 } // namespace
 
+struct ConvertLayoutOpWMMAToDotOpConversion
+    : public ConvertOpToLLVMPattern<triton::gpu::ConvertLayoutOp> {
+public:
+  explicit ConvertLayoutOpWMMAToDotOpConversion(
+      LLVMTypeConverter &typeConverter, const TargetInfoBase &targetInfo,
+      PatternBenefit benefit)
+      : ConvertOpToLLVMPattern<triton::gpu::ConvertLayoutOp>(typeConverter,
+                                                             benefit),
+        targetInfo(targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto srcType = cast<RankedTensorType>(op.getSrc().getType());
+    auto dstType = cast<RankedTensorType>(op.getType());
+
+    if (!matchWMMAAndDotOperandShuffleCase(srcType, dstType))
+      return failure();
+
+    auto loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+
+    SmallVector<Value> inVals =
+        unpackLLElements(loc, adaptor.getSrc(), rewriter);
+    if (inVals.empty())
+      return failure();
+
+    assert(triton::gpu::lookupThreadsPerWarp(rewriter) == 32 &&
+           "Expected warp size 32 for WMMA");
+
+    auto valType = srcType.getElementType();
+
+    Value c32 = b.i32_val(32);
+    Value c16 = b.i32_val(16);
+    Value threadId = getThreadId(rewriter, loc);
+    Value laneId = b.urem(threadId, c32);
+    Value isLower = b.icmp_slt(laneId, c16);
+
+    SmallVector<Value> outVals;
+    for (Value val : inVals) {
+      // Exchange data between the bottom and upper 16 lanes and construct the
+      // data duplication
+      // See https://gpuopen.com/learn/wmma_on_rdna3/ for an overview of WMMA v1
+      Value valSwapped = targetInfo.shuffleXor(rewriter, loc, val, 16);
+      outVals.push_back(b.select(isLower, val, valSwapped));
+      outVals.push_back(b.select(isLower, valSwapped, val));
+    }
+
+    Value result = packLLElements(loc, getTypeConverter(), outVals, rewriter,
+                                  op.getType());
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+
+protected:
+  const TargetInfoBase &targetInfo;
+};
+
 void mlir::triton::AMD::populateConvertLayoutOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, const TargetInfo &targetInfo,
     RewritePatternSet &patterns, PatternBenefit benefit) {
   patterns.add<ConvertLayoutOpPermlaneSwap>(typeConverter, targetInfo, benefit);
   patterns.add<ConvertLayoutForcedPadding>(typeConverter, targetInfo, benefit);
-  // No need to convert when ForcedSwizzling as it's already the default
-  // lowering
+  patterns.add<ConvertLayoutOpWMMAToDotOpConversion>(typeConverter, targetInfo,
+                                                     benefit);
 }
