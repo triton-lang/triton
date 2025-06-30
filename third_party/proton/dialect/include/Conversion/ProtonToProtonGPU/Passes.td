@@ -22,7 +22,7 @@ def ConvertProtonToProtonGPU: Pass<"convert-proton-to-protongpu", "mlir::ModuleO
               "The performance counter metric type we are profiling",
               /*parser*/[{::llvm::cl::values(
                     clEnumValN(MetricType::CYCLE, "cycle", "Cycle"),
-                    clEnumValN(MetricType::REALTIME, "realtime", "Realtime")
+                    clEnumValN(MetricType::TIMESTAMP, "timestamp", "Timestamp")
               )}]>,
        Option<"granularity", "granularity",
               "gpu::Granularity", /*default*/"gpu::Granularity::WARP",

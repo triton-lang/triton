@@ -37,8 +37,8 @@ Value TargetInfo::clock(ConversionPatternRewriter &rewriter, Location loc,
   return clock64;
 }
 
-Value TargetInfo::realtime(ConversionPatternRewriter &rewriter,
-                           Location loc) const {
+Value TargetInfo::timestamp(ConversionPatternRewriter &rewriter,
+                            Location loc) const {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   // globaltimer is a 64-bit global clock counter in nanoseconds.
   // Reference:

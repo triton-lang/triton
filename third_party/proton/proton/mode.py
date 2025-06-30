@@ -6,7 +6,7 @@ from triton._C.libtriton import proton as triton_proton
 
 metric_types = {
     "cycle": triton_proton.METRIC_TYPE.CYCLE,
-    "realtime": triton_proton.METRIC_TYPE.REALTIME,
+    "timestamp": triton_proton.METRIC_TYPE.TIMESTAMP,
 }
 
 buffer_strategies = {

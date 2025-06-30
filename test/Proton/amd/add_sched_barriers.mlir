@@ -54,7 +54,7 @@ module attributes {"ttg.num-warps" = 8 : i32, ttg.profile_scratch_memory_alignme
     %0 = ttg.local_alloc : () -> !ttg.memdesc<512xi32, #shared, #smem, mutable>
     %1 = proton_gpu.global_scratch_alloc {alignment = 128 : i32, nbytes = 384 : i32, offset = 0 : i32} : !tt.ptr<i32>
     %2 = proton_gpu.segment_alloc %0 : !ttg.memdesc<512xi32, #shared, #smem, mutable> -> !proton_gpu.segment<2048, #smem, warp>
-    %3 = proton_gpu.read_counter {metric = 0 : i32 } : i32
+    %3 = proton_gpu.read_counter : i32
     proton_gpu.circular_store start %2, %3 {scopeId = 0 : i32} : !proton_gpu.segment<2048, #smem, warp>, i32
     scf.for %arg0 = %c0 to %c4 step %c1 {
       %7 = proton_gpu.read_counter : i32

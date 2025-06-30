@@ -68,9 +68,9 @@ struct ReadCounterOpConversion
       bool isClock64 = intType.getWidth() == 64;
       Value clock = targetInfo.clock(rewriter, op.getLoc(), isClock64);
       rewriter.replaceOp(op, clock);
-    } else if (metricType == proton::MetricType::REALTIME) {
-      Value realtime = targetInfo.realtime(rewriter, op.getLoc());
-      rewriter.replaceOp(op, realtime);
+    } else if (metricType == proton::MetricType::TIMESTAMP) {
+      Value timestamp = targetInfo.timestamp(rewriter, op.getLoc());
+      rewriter.replaceOp(op, timestamp);
     } else {
       llvm::report_fatal_error("unsupported metric type");
     }
@@ -96,13 +96,13 @@ struct InitializeOpConversion
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
-    Value realtime = targetInfo.realtime(rewriter, loc);
+    Value timestamp = targetInfo.timestamp(rewriter, loc);
     Value scratchPtr = adaptor.getScratchPtr();
     auto scratchPtrTy = mlir::cast<LLVM::LLVMPointerType>(scratchPtr.getType());
-    Value gmemRealtimeOffset = b.i32_val(4);
-    Value gmemRealtimePtr =
-        b.gep(scratchPtrTy, i64_ty, scratchPtr, gmemRealtimeOffset);
-    b.store(realtime, gmemRealtimePtr);
+    Value gmemTimestampOffset = b.i32_val(4);
+    Value gmemTimestampPtr =
+        b.gep(scratchPtrTy, i64_ty, scratchPtr, gmemTimestampOffset);
+    b.store(timestamp, gmemTimestampPtr);
 
     rewriter.eraseOp(op);
     return success();

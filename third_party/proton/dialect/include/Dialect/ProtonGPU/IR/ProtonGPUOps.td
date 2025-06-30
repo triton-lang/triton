@@ -68,7 +68,7 @@ def PTG_ReadCounterOp : PTG_Op<"read_counter", [
   }];
 
   let arguments = (ins
-    MetricTypeAttr:$metric
+    DefaultValuedAttr<MetricTypeAttr, "MetricType::CYCLE">:$metric
   );
 
   let results = (outs AnyTypeOf<[I32, I64]>:$counter);

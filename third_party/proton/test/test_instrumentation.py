@@ -16,7 +16,7 @@ from typing import NamedTuple
     [
         "default",
         "default:metric_type=cycle",
-        "default:metric_type=realtime",
+        "default:metric_type=timestamp",
         "default:metric_type=cycle:buffer_size=4096",
         "mma",
     ],
@@ -30,7 +30,7 @@ def test_mode_str(mode, tmp_path: pathlib.Path):
 @pytest.mark.parametrize("mode", [
     proton.mode.Default(),
     proton.mode.Default(metric_type="cycle"),
-    proton.mode.Default(metric_type="realtime"),
+    proton.mode.Default(metric_type="timestamp"),
     proton.mode.Default(metric_type="cycle", buffer_size=4096),
     proton.mode.MMA()
 ])
