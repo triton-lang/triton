@@ -161,7 +161,7 @@ def make_default_opt_flags_nvidia(
     # block n
     arch = None
     block_n = opt_flags_nvidia.compute_block_n(n, arch, precision_config)
-    if precision_config.weight_scale is not None and precision_config.weight_scale.storage.name == "HOPPER_SCALE":
+    if precision_config.weight_scale is not None and precision_config.weight_scale.storage.layout.name == "HOPPER_SCALE":
         block_n = 256
     # is_persistent
     grid_size = opt_flags_nvidia.compute_grid_size(routing_data, m, n, block_m, block_n)
@@ -219,7 +219,7 @@ def make_default_opt_flags_nvidia(
     else:
         fused_scatter = can_use_fused_scatter and split_k == 1
     # Handshake with the HBM swizzling
-    hopper_swizzling = precision_config.weight_scale is not None and precision_config.weight_scale.storage.name == "HOPPER_SCALE"
+    hopper_swizzling = precision_config.weight_scale is not None and precision_config.weight_scale.storage.layout.name == "HOPPER_SCALE"
     num_warps = 8 if hopper_swizzling else opt_flags_nvidia.compute_num_warps(block_m, block_n)
     ret = OptFlags(
         block_m=block_m,
