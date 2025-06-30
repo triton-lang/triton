@@ -1130,6 +1130,10 @@ void PartitionAnalysis::runOnOperation() {
 
   auto initValues = initialDataValues(graph.get());
   propagateDataValues(initValues);
+  if (dump) {
+    visualize(std::string("graph-input-") + func.getSymName().str() + ".dot",
+              graph.get());
+  }
   initialGroupAssignment(graph.get());
   if (dump) {
     visualize(std::string("graph-initial-") + func.getSymName().str() + ".dot",
