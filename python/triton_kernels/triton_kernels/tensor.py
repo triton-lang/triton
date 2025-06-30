@@ -1,6 +1,6 @@
 import torch
-from .tensor_details.memory_layout.hopper_value import unswizzle_mxfp4_value_hopper_torch
-from .tensor_details.memory_layout.hopper_scale import unswizzle_mxfp4_scale_hopper_torch
+from .tensor_details.memory_layout.hopper_value import swizzle_mxfp4_value_hopper, unswizzle_mxfp4_value_hopper_torch
+from .tensor_details.memory_layout.hopper_scale import swizzle_mxfp4_scale_hopper, unswizzle_mxfp4_scale_hopper_torch
 from .tensor_details.memory_layout.blackwell_scale import swizzle_mx_scale_bw, unswizzle_mx_scale_bw_torch
 from .reduction_details.reduce_bitmatrix import clear_sums, sum_bitmatrix_rows
 from enum import Enum
@@ -74,6 +74,66 @@ class BlackwellMXScaleLayout(Layout):
         MX_PACK_DIVISOR = 32
         MX_SCALE_BLOCK_K = block_shape[1] // MX_PACK_DIVISOR
         return [1, block_shape[0] // 128, MX_SCALE_BLOCK_K // 4, 2, 256]
+
+
+class HopperMXScaleLayout(Layout):
+    name: str = "HOPPER_SCALE"
+
+    def swizzle_data(self, data):
+        swizzle_axis = 2
+        axis = data.stride().index(1)
+        perm = list(range(data.ndim))
+        perm[data.ndim - 1], perm[axis] = axis, data.ndim - 1
+        if swizzle_axis is not None:
+            perm[data.ndim - 2], perm[swizzle_axis] = swizzle_axis, data.ndim - 2
+        data = torch.permute(data, perm).contiguous()
+        data = swizzle_mxfp4_scale_hopper(data, num_warps=8)
+        return perm_tensor_from_contig(data, axis, swizzle_axis)
+
+    def unswizzle_data(self, data):
+        swizzle_axis = 2
+        axis = data.stride().index(1)
+        data = perm_tensor_to_contig(data, axis, swizzle_axis)
+        data = unswizzle_mxfp4_scale_hopper_torch(data, num_warps=8)
+        ndim = data.ndim
+        perm = list(range(ndim))
+        perm[ndim - 1], perm[axis] = axis, ndim - 1
+        if swizzle_axis is not None:
+            perm[ndim - 2], perm[swizzle_axis] = swizzle_axis, ndim - 2
+        return torch.permute(data, perm).contiguous()
+
+    def swizzle_block_shape(self, block_shape):
+        return block_shape
+
+
+class HopperMXValueLayout(Layout):
+    name: str = "HOPPER_VALUE"
+
+    def swizzle_data(self, data):
+        swizzle_axis = 2
+        axis = data.stride().index(1)
+        perm = list(range(data.ndim))
+        perm[data.ndim - 1], perm[axis] = axis, data.ndim - 1
+        if swizzle_axis is not None:
+            perm[data.ndim - 2], perm[swizzle_axis] = swizzle_axis, data.ndim - 2
+        data = torch.permute(data, perm).contiguous()
+        data = swizzle_mxfp4_value_hopper(data, num_warps=8)
+        return perm_tensor_from_contig(data, axis, swizzle_axis)
+
+    def unswizzle_data(self, data):
+        swizzle_axis = 2
+        axis = data.stride().index(1)
+        data = perm_tensor_to_contig(data, axis, swizzle_axis)
+        data = unswizzle_mxfp4_value_hopper_torch(data, num_warps=8)
+        ndim = data.ndim
+        perm = list(range(ndim))
+        perm[ndim - 1], perm[axis] = axis, ndim - 1
+        if swizzle_axis is not None:
+            perm[ndim - 2], perm[swizzle_axis] = swizzle_axis, ndim - 2
+        return torch.permute(data, perm).contiguous()
+
+    def swizzle_block_shape(self, block_shape):
+        return block_shape
 
 
 @dataclass
@@ -289,50 +349,3 @@ def make_tma(tensor, block_shape, transpose=False):
     if not isinstance(tensor, Tensor):
         tensor = Tensor(tensor)
     return tensor.storage.make_tma(block_shape, transpose=transpose)
-
-
-def unswizzle(tensor, swizzle_mode):
-    if isinstance(tensor, Tensor):
-        tensor = tensor.handle
-    swizzle_axis = 2
-    axis = tensor.stride().index(1)
-    tensor = perm_tensor_to_contig(tensor, axis, swizzle_axis)
-    if swizzle_mode == SwizzlingType.HOPPER_VALUE:
-        tensor = unswizzle_mxfp4_value_hopper_torch(tensor, op_idx=0, mma_version=3)
-    elif swizzle_mode == SwizzlingType.BLACKWELL_SCALE:
-        tensor = unswizzle_mx_scale_bw_torch(tensor)
-    elif swizzle_mode == SwizzlingType.HOPPER_SCALE:
-        tensor = unswizzle_mxfp4_scale_hopper_torch(tensor, num_warps=8)
-    # permute
-    ndim = tensor.ndim
-    perm = list(range(ndim))
-    perm[ndim - 1], perm[axis] = axis, ndim - 1
-    if swizzle_axis is not None:
-        perm[ndim - 2], perm[swizzle_axis] = swizzle_axis, ndim - 2
-    return torch.permute(tensor, perm).contiguous()
-
-
-# elif swizzle_mode == SwizzlingType.HOPPER_SCALE:
-#     swizzle_axis = 2
-#     axis = tensor.stride().index(1)
-#     perm = list(range(tensor.ndim))
-#     perm[tensor.ndim - 1], perm[axis] = axis, tensor.ndim - 1
-#     if swizzle_axis is not None:
-#         perm[tensor.ndim - 2], perm[swizzle_axis] = swizzle_axis, tensor.ndim - 2
-#     tensor = torch.permute(tensor, perm).contiguous()
-#     tensor = swizzle_mxfp4_scale_hopper(tensor, num_warps=8)
-#     tensor = perm_tensor_from_contig(tensor, axis, swizzle_axis)
-#     layout = None
-#     return Tensor(tensor, shape=ret_shape, layout=layout, swizzle_mode=swizzle_mode)
-# if swizzle_mode == SwizzlingType.HOPPER_VALUE:
-#     swizzle_axis = 2
-#     axis = tensor.stride().index(1)
-#     perm = list(range(tensor.ndim))
-#     perm[tensor.ndim - 1], perm[axis] = axis, tensor.ndim - 1
-#     if swizzle_axis is not None:
-#         perm[tensor.ndim - 2], perm[swizzle_axis] = swizzle_axis, tensor.ndim - 2
-#     tensor = torch.permute(tensor, perm).contiguous()
-#     tensor = swizzle_mxfp4_value_hopper(tensor, op_idx=0, mma_version=3)
-#     tensor = perm_tensor_from_contig(tensor, axis, swizzle_axis)
-#     layout = None
-#     return Tensor(tensor, shape=ret_shape, layout=layout, swizzle_mode=swizzle_mode)
