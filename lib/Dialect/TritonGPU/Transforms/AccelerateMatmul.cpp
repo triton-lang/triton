@@ -333,6 +333,14 @@ public:
     auto oldBType = cast<RankedTensorType>(b.getType());
     auto oldRetType = cast<RankedTensorType>(dotOp.getType());
 
+    // Only SM80/SM90 support F64 mma.sync.
+    if ((oldAType.getElementType().isF64() ||
+         oldBType.getElementType().isF64() ||
+         oldRetType.getElementType().isF64()) &&
+        !(computeCapability == 80 || computeCapability == 90)) {
+      return failure();
+    }
+
     // get MMA encoding for the given number of warps
     auto CTALayout = getCTALayout(oldRetType.getEncoding());
     auto retShapePerCTA = getShapePerCTA(oldRetType);
@@ -340,7 +348,10 @@ public:
         versionMajor, retShapePerCTA, oldAType.getElementType(), numWarps);
 
     assert(versionMajor == 2 || versionMajor == 3);
-    int versionMinor = computeCapability == 75 ? 1 : 0;
+    int versionMinor =
+        computeCapability == 75                                          ? 1
+        : (oldAType.getElementType().isF64() && computeCapability == 90) ? 2
+                                                                         : 0;
     auto warpsPerTile = getWarpsPerTile(dotOp, retShapePerCTA, versionMajor,
                                         numWarps, instrShape);
     auto mmaEnc = NvidiaMmaEncodingAttr::get(

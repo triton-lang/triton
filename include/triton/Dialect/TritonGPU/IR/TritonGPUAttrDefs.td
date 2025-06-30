@@ -1324,6 +1324,7 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
     bool isTuring() const;
     bool isAmpere() const;
     bool isHopper() const;
+    bool isHopperF64() const;
 
     SmallVector<int64_t> getRepForOperand(ArrayRef<int64_t> shape,
                                           int bitwidth, int kWidth,
@@ -1434,7 +1435,7 @@ vecIdx (index of the element in the quad; this is always along the k-dim)
         return $_get(context, opIdx, parent, 0);
       // For MMAV2 and V3
       unsigned bitwidth = eltTy.getIntOrFloatBitWidth();
-      unsigned kWidth = 32 / bitwidth;
+      unsigned kWidth = std::max(32 / bitwidth, 1u);
       return $_get(context, opIdx, parent, kWidth);
     }]>
   ];
