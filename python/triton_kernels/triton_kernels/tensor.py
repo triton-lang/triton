@@ -14,33 +14,50 @@ class SwizzlingType(Enum):
     BLACKWELL_SCALE = 2
 
 
+# class Layout:
+
+#     @abstractmethod
+#     def swizzle(self, data):
+#         pass
+
+#     @abstractmethod
+#     def unswizzle(self, data):
+#         pass
+
+# class StridedLayout(Layout):
+
+#     def swizzle(self, data):
+#         return data
+
+#     def unswizzle(self, data):
+#         return data
+
+# @dataclass
+# class Storage:
+#     data: torch.Tensor
+#     layout: Layout
+
+
 @dataclass
 class StridedLayout:
     data: torch.Tensor
-    shape: list[int]
-    strides: list[int]
 
     @property
     def name(self):
         return None
 
-    def __init__(self, tensor, shape=None):
+    def __init__(self, tensor):
         self.data = tensor
-        if shape is None:
-            shape = tensor.shape
-        self.shape = list(shape)
-        self.strides = tensor.stride()
-        PACK_DIVISOR = 2 if tensor.dtype == torch.uint8 else 1
-        indx = self.strides.index(1)
-        self.shape[indx] *= PACK_DIVISOR
 
     def make_tma(self, block_shape, transpose):
+        strides = list(self.data.stride())
         PACK_DIVISOR = 2 if self.data.dtype == torch.uint8 else 1
-        shape = list(self.shape)
-        strides = list(self.strides)
+        shape = list(self.data.shape)
+        shape[strides.index(1)] *= PACK_DIVISOR
+        indx = strides.index(1)
         if transpose:
             block_shape = block_shape[:-2] + [block_shape[-1], block_shape[-2]]
-            shape = self.shape[:-2] + [shape[-1], shape[-2]]
+            shape = shape[:-2] + [shape[-1], shape[-2]]
             strides = strides[:-2] + [strides[-1], strides[-2]]
         indx = strides.index(1)
         block_shape[indx] = block_shape[indx] // PACK_DIVISOR
@@ -62,11 +79,8 @@ class BlackwellScaleBlockLayout(StridedLayout):
             perm[tensor.ndim - 2], perm[swizzle_axis] = swizzle_axis, tensor.ndim - 2
         tensor = torch.permute(tensor, perm).contiguous()
         tensor = swizzle_mx_scale_bw(tensor, allow_pad=True)
-        tensor = perm_tensor_from_contig(tensor, axis, swizzle_axis)
-        layout_shape = (1, tensor.shape[0] * tensor.shape[2] // 128, tensor.shape[1] // 4, 2, 256)
-        self.data = tensor
-        self.shape = layout_shape
-        self.strides = make_strides(layout_shape)
+        layout_shape = (1, tensor.shape[0] * tensor.shape[1] // 128, tensor.shape[2] // 4, 2, 256)
+        self.data = tensor.view(layout_shape)
 
     def make_tma(self, block_shape, transpose):
         assert not transpose
@@ -74,7 +88,9 @@ class BlackwellScaleBlockLayout(StridedLayout):
         MX_PACK_DIVISOR = 32
         MX_SCALE_BLOCK_K = block_shape[1] // MX_PACK_DIVISOR
         block_shape = [1, block_shape[0] // 128, MX_SCALE_BLOCK_K // 4, 2, 256]
-        return TensorDescriptor(base=self.data, shape=self.shape, strides=self.strides, block_shape=block_shape)
+        shape = self.data.shape
+        strides = self.data.stride()
+        return TensorDescriptor(base=self.data, shape=shape, strides=strides, block_shape=block_shape)
 
 
 def make_strides(shape, order=None):
@@ -135,7 +151,7 @@ class Tensor:
         # initialize dtype
         if self.dtype is None:
             self.dtype = self.handle.dtype
-        if bitwidth(self.dtype) < 8 and self.shape is None:
+        if bitwidth(self.dtype) < 8 and self.shape is None and not isinstance(self.handle, Tensor):
             raise ValueError("shape must be provided for sub-byte types")
         # initialize shape
         if self.shape is None:
@@ -156,15 +172,16 @@ class Tensor:
         assert all(map(is_int, self.shape_max))
         # initialize layouts
         if self.storage is None:
-            self.storage = StridedLayout(self.handle)
-        # TODO: should be @properties ?
+            handle = self.handle.handle if isinstance(self.handle, Tensor) else self.handle
+            self.storage = StridedLayout(handle)
+        #
         self.ndim = self.handle.ndim
         self.device = self.handle.device
 
     # torch compatibility layer
 
     def stride(self, i=None):
-        return self.storage.strides if i is None else self.storage.strides[i]
+        return self.storage.data.stride() if i is None else self.storage.data.stride(i)
 
     def data_ptr(self):
         return self.storage.data.data_ptr()
@@ -266,12 +283,9 @@ def perm_tensor_from_contig(x: torch.Tensor, axis: int, swizzle_axis: int | None
 
 def swizzle(tensor, swizzle_mode):
     shape = expand_shape(tensor.shape, tensor.stride().index(1), 2)
-    if swizzle_mode == SwizzlingType.BLACKWELL_SCALE:
-        storage = BlackwellScaleBlockLayout(tensor)
-        return Tensor(tensor, shape=shape, dtype=FP4, storage=storage)
-    else:
-        storage = StridedLayout(tensor)
-        return Tensor(tensor, shape=shape, dtype=FP4, storage=storage)
+    tmp = Tensor(tensor, shape=shape, dtype=FP4)
+    cls = {SwizzlingType.BLACKWELL_SCALE: BlackwellScaleBlockLayout, None: StridedLayout}[swizzle_mode]
+    return Tensor(tmp, storage=cls(tensor))
 
 
 def make_tma(tensor, block_shape, transpose=False):
