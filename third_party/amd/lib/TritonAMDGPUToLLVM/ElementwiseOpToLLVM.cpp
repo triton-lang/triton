@@ -119,8 +119,7 @@ Fp16_to_Fp8E5M2_RTNE_SW(Location loc, ConversionPatternRewriter &rewriter,
     Value fp16 = v[i];
     Value i16 = b.bitcast(fp16, i16_ty);
 
-    Value s =
-        b.and_(i16_ty, b.lshr(i16_ty, i16, b.i16_val(8)), b.i16_val(0x80));
+    Value s = b.and_(i16_ty, i16, b.i16_val(0x8000));
     Value exp =
         b.and_(i16_ty, b.lshr(i16_ty, i16, b.i16_val(10)), b.i16_val(0x1F));
     Value man = b.and_(i16_ty, i16, b.i16_val(0x03FF));
@@ -131,14 +130,23 @@ Fp16_to_Fp8E5M2_RTNE_SW(Location loc, ConversionPatternRewriter &rewriter,
         i16_ty,
         b.lshr(i16_ty, b.and_(i16_ty, sig, b.i16_val(0x0100)), b.i16_val(8)),
         b.i16_val(0x007F));
-    i16 = b.lshr(i16_ty, b.add(i16_ty, sig, bias), b.i16_val(8));
+    i16 = b.add(i16_ty, sig, bias);
 
-    // Handle overflow
-    i16 = b.select(b.icmp_uge(sig, b.i16_val(0x7B80)), b.i16_val(0x7B), i16);
+    // Handle overflow using saturation mode, by setting sig to be the max.
+    // Any number equal or larger than 0x7B80 after rounding (including
+    // infinite 0x7C00) will cause overflow
+    i16 = b.select(b.icmp_uge(sig, b.i16_val(0x7B80)), b.i16_val(0x7B00), i16);
+
+    // Handle NaN value by keeping it Nan
+    i16 = b.select(
+        b.and_(b.icmp_eq(exp, b.i16_val(0x1F)), b.icmp_ne(man, b.i16_val(0x0))),
+        b.i16_val(0x7E00), i16);
 
     // Add sign bit
-    i16 = b.or_(i16_ty, s, b.and_(i16_ty, i16, b.i16_val(0x7F)));
-    result[i] = b.trunc(i8_ty, i16);
+    i16 = b.or_(i16_ty, s, i16);
+
+    // Truncate to 8-bit
+    result[i] = b.trunc(i8_ty, b.lshr(i16_ty, i16, b.i16_val(8)));
   }
 
   return result;
@@ -390,8 +398,7 @@ Fp32_to_Fp8E5M2_RTNE_SW(Location loc, ConversionPatternRewriter &rewriter,
     Value fp32 = v[i];
     Value i32 = b.bitcast(fp32, i32_ty);
 
-    Value s =
-        b.and_(i32_ty, b.lshr(i32_ty, i32, b.i32_val(24)), b.i32_val(0x80));
+    Value s = b.and_(i32_ty, i32, b.i32_val(0x80000000));
     Value exp =
         b.and_(i32_ty, b.lshr(i32_ty, i32, b.i32_val(23)), b.i32_val(0xFF));
     Value man = b.and_(i32_ty, i32, b.i32_val(0x007FFFFF));
@@ -402,9 +409,12 @@ Fp32_to_Fp8E5M2_RTNE_SW(Location loc, ConversionPatternRewriter &rewriter,
 
     // Handle subnormal values (exp5 = 0)
     // - exp <  0x6e: mantissa = 0x00000000 (0)
-    // - exp == 0x6e: mantissa = 0x00000000 (0),   0x00200000 (1/4)
-    // - exp == 0x6f: mantissa = 0x00200000 (1/4), 0x00400000 (1/2)
-    // - exp == 0x70: mantissa = 0x00400000 (1/2), 0x00600000 (3/4),
+    // - exp == 0x6e: mantissa = 0x00000000 (0),
+    //                           0x00200000 (1/4)
+    // - exp == 0x6f: mantissa = 0x00200000 (1/4),
+    //                           0x00400000 (1/2)
+    // - exp == 0x70: mantissa = 0x00400000 (1/2),
+    //                           0x00600000 (3/4),
     //                           0x00800000 (1)
     man = b.select(b.icmp_ult(exp, b.i32_val(0x6e)), b.i32_val(0), man);
     man = b.select(b.icmp_eq(exp, b.i32_val(0x6e)),
@@ -430,16 +440,26 @@ Fp32_to_Fp8E5M2_RTNE_SW(Location loc, ConversionPatternRewriter &rewriter,
               b.lshr(i32_ty, b.and_(i32_ty, sig, b.i32_val(0x00200000)),
                      b.i32_val(21)),
               b.i32_val(0x000FFFFF));
-    i32 = b.lshr(i32_ty, b.add(i32_ty, sig, bias), b.i32_val(21));
+    i32 = b.add(i32_ty, sig, bias);
 
-    // Handle overflow
-    Value is_overflow = b.or_(b.icmp_ugt(exp, b.i32_val(0x8E)),
-                              b.icmp_uge(sig, b.i32_val(0x7F700000)));
-    i32 = b.select(is_overflow, b.i32_val(0x7B), i32);
+    // Handle overflow using saturation mode, by setting sig to be the max.
+    // Overflow will happe for the following cases:
+    // - Any number equal or larger than 0x0F700000 after rounding
+    // - Exponent larged than 0x8E (including infinite 0xFF)
+    i32 = b.select(b.or_(b.icmp_ugt(exp, b.i32_val(0x8E)),
+                         b.icmp_uge(sig, b.i32_val(0x0F700000))),
+                   b.i32_val(0x0F7FFFFF), i32);
+
+    // Handle NaN value by keeping it Nan
+    i32 = b.select(
+        b.and_(b.icmp_eq(exp, b.i32_val(0xFF)), b.icmp_ne(man, b.i32_val(0x0))),
+        b.i32_val(0x0FC00000), i32);
 
     // Add sign bit
-    i32 = b.or_(i32_ty, s, b.and_(i32_ty, i32, b.i32_val(0x7F)));
-    result[i] = b.trunc(i8_ty, i32);
+    i32 = b.or_(i32_ty, b.lshr(i32_ty, s, b.i32_val(3)), i32);
+
+    // Truncate to 8-bit
+    result[i] = b.trunc(i8_ty, b.lshr(i32_ty, i32, b.i32_val(21)));
   }
   return result;
 }
@@ -932,8 +952,7 @@ Bf16_to_Fp8E5M2_SW(Location loc, ConversionPatternRewriter &rewriter,
     Value fp16 = v[i];
     Value i16 = b.bitcast(fp16, i16_ty);
 
-    Value s =
-        b.and_(i16_ty, b.lshr(i16_ty, i16, b.i16_val(8)), b.i16_val(0x80));
+    Value s = b.and_(i16_ty, i16, b.i16_val(0x8000));
     Value exp =
         b.and_(i16_ty, b.lshr(i16_ty, i16, b.i16_val(7)), b.i16_val(0xFF));
     Value man = b.and_(i16_ty, i16, b.i16_val(0x7F));
@@ -944,9 +963,13 @@ Bf16_to_Fp8E5M2_SW(Location loc, ConversionPatternRewriter &rewriter,
 
     // Handle subnormal values (exp5 = 0)
     // - exp <  0x6e: mantissa = 0x0000 (0)
-    // - exp == 0x6e: mantissa = 0x0000 (0),   0x0020 (1/4)
-    // - exp == 0x6f: mantissa = 0x0020 (1/4), 0x0040 (1/2)
-    // - exp == 0x70: mantissa = 0x0040 (1/2), 0x0060 (3/4), 0x0080 (1)
+    // - exp == 0x6e: mantissa = 0x0000 (0),
+    //                           0x0020 (1/4)
+    // - exp == 0x6f: mantissa = 0x0020 (1/4),
+    //                           0x0040 (1/2)
+    // - exp == 0x70: mantissa = 0x0040 (1/2),
+    //                           0x0060 (3/4),
+    //                           0x0080 (1)
     man = b.select(b.icmp_ult(exp, b.i16_val(0x6e)), b.i16_val(0), man);
     man = b.select(
         b.icmp_eq(exp, b.i16_val(0x6e)),
@@ -969,16 +992,26 @@ Bf16_to_Fp8E5M2_SW(Location loc, ConversionPatternRewriter &rewriter,
         i16_ty,
         b.lshr(i16_ty, b.and_(i16_ty, sig, b.i16_val(0x0020)), b.i16_val(5)),
         b.i16_val(0x000F));
-    i16 = b.lshr(i16_ty, b.add(i16_ty, sig, bias), b.i16_val(5));
+    i16 = b.add(i16_ty, sig, bias);
 
-    // Handle overflow
-    Value is_overflow = b.or_(b.icmp_ugt(exp, b.i16_val(0x8E)),
-                              b.icmp_uge(sig, b.i16_val(0x7F70)));
-    i16 = b.select(is_overflow, b.i16_val(0x7B), i16);
+    // Handle overflow using saturation mode, by setting sig to be the max.
+    // Overflow will happe for the following cases:
+    // - Any number equal or larger than 0x0F70 after rounding
+    // - Exponent larged than 0x8E (including infinite 0xFF)
+    i16 = b.select(b.or_(b.icmp_ugt(exp, b.i16_val(0x8E)),
+                         b.icmp_uge(sig, b.i16_val(0x0F70))),
+                   b.i16_val(0x0F7F), i16);
+
+    // Handle NaN value by keeping it Nan
+    i16 = b.select(
+        b.and_(b.icmp_eq(exp, b.i16_val(0xFF)), b.icmp_ne(man, b.i16_val(0x0))),
+        b.i16_val(0x0FC0), i16);
 
     // Add sign bit
-    i16 = b.or_(i16_ty, s, b.and_(i16_ty, i16, b.i16_val(0x7F)));
-    result[i] = b.trunc(i8_ty, i16);
+    i16 = b.or_(i16_ty, b.lshr(i16_ty, s, b.i16_val(3)), i16);
+
+    // Truncate to 8-bit
+    result[i] = b.trunc(i8_ty, b.lshr(i16_ty, i16, b.i16_val(5)));
   }
 
   return result;
