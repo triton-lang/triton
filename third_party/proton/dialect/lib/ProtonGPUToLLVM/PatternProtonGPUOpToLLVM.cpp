@@ -143,11 +143,11 @@ struct FinalizeOpConversion
     const int bufferSizeInWords = op.getSegment().getType().getNBytes() / 4;
     const int circularHeaderWordSize = proton::gpu::getCircularHeaderSize() / 4;
 
-    // Header layout:
-    // +------------+------------+------------+--------------+------------------+
-    // |  preamble  | program id |   hw id    | buffer size  |    timestamp | |
-    // | (1 word)  |  (1 word)  |  (1 word)  |   (1 word)   |    (2 words)     |
-    // +------------+------------+------------+--------------+------------------+
+    // Header layout (total: circularHeaderSize bytes)
+    // +------------+------------+------------+------------+------------------+
+    // |  preamble  | program id |   hw id    |  buf size  |    timestamp     |
+    // |  (1 word)  |  (1 word)  |  (1 word)  |  (1 word)  |    (2 words)     |
+    // +------------+------------+------------+------------+------------------+
 
     // Circular strategy memory layout (total: allocprofileScratchSize bytes)
     //  +-----------------------------------------------+
