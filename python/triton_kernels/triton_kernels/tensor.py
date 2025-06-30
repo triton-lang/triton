@@ -6,6 +6,7 @@ from .reduction_details.reduce_bitmatrix import clear_sums, sum_bitmatrix_rows
 from enum import Enum
 from dataclasses import dataclass
 from triton.tools.tensor_descriptor import TensorDescriptor
+from abc import ABC, abstractmethod
 
 
 class SwizzlingType(Enum):
@@ -14,28 +15,34 @@ class SwizzlingType(Enum):
     BLACKWELL_SCALE = 2
 
 
-# class Layout:
+class Layout(ABC):
 
-#     @abstractmethod
-#     def swizzle(self, data):
-#         pass
+    @abstractmethod
+    def swizzle(self, data):
+        pass
 
-#     @abstractmethod
-#     def unswizzle(self, data):
-#         pass
+    @abstractmethod
+    def unswizzle(self, data):
+        pass
 
-# class StridedLayout(Layout):
+class StridedLayout(Layout):
 
-#     def swizzle(self, data):
-#         return data
+    def swizzle(self, data):
+        return data
 
-#     def unswizzle(self, data):
-#         return data
+    def unswizzle(self, data):
+        return data
 
-# @dataclass
-# class Storage:
-#     data: torch.Tensor
-#     layout: Layout
+class BlackwellMXScaleLayout(Layout):
+    
+    def swizzle(self, data):
+        pass
+
+
+@dataclass
+class Storage:
+    data: torch.Tensor
+    layout: Layout
 
 
 @dataclass
