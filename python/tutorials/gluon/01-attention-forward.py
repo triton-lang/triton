@@ -447,42 +447,23 @@ class AttentionProgram:
 
 @gl.aggregate
 class InnerLoopInfo:
-    qk_mma_ctx: MMAContext
     o_mma_ctx: MMAContext
-    p_chnl: TensorMemoryChannel
-    alpha_chnl: TensorMemoryChannel
+    corr_chnl: SharedMemoryChannel
     epilogue_chnl: SharedMemoryChannel
 
     def __init__(self, config):
-        self.qk_mma_ctx = MMAContext(config.qk_shape, num_buffers=1)
-        self.qk_mma_ctx.channel.initialize_for_producer()
-
         self.o_mma_ctx = MMAContext(config.o_shape, num_buffers=1)
         self.o_mma_ctx.channel.initialize_for_producer()
 
-        # QK and PV MMAs are serialized, which enables borrowing QK's memory.
-        borrow_tmem = self.qk_mma_ctx.channel.mem.index(0)
-        p_tmem = borrow_tmem.slice(0, config.BLOCK_N // 2)
-        alpha_tmem = borrow_tmem.slice(config.BLOCK_N // 2, 1)
-        alpha_layout: gl.constexpr = TensorMemoryLayout([config.SPLIT_M, 1], unpacked=False)
-
-        self.p_chnl = TensorMemoryChannel._borrow(p_tmem, config.qk_shape, config.dtype, config.p_tmem_layout,
-                                                  num_buffers=1, num_consumers=1)
-        self.p_chnl.initialize_for_producer()
-
-        self.alpha_chnl = TensorMemoryChannel._borrow(alpha_tmem, [config.SPLIT_M, 1], gl.float32, alpha_layout,
-                                                      num_buffers=1)
-        self.alpha_chnl.initialize_for_producer()
-
+        self.corr_chnl = SharedMemoryChannel.alloc([1], gl.int8, gl.constexpr(mbarrier.MBarrierLayout()), num_buffers=1)
+        self.corr_chnl.initialize_for_producer()
         self.epilogue_chnl = SharedMemoryChannel.alloc([1], gl.int8, gl.constexpr(mbarrier.MBarrierLayout()),
                                                        num_buffers=1)
         self.epilogue_chnl.initialize_for_producer()
 
     def release(self):
-        self.qk_mma_ctx.release()
         self.o_mma_ctx.release()
-        self.p_chnl.release()
-        self.alpha_chnl.release()
+        self.corr_chnl.release()
         self.epilogue_chnl.release()
 
 
@@ -559,7 +540,7 @@ def _reduce_fadd2(p0a, p1a, p0b, p1b):
 @gluon.jit
 def _attn_fwd_load(  #
         config, info0, info1,  #
-        q_chnl, kv_chnl,  #
+        q_chnl, kv_chnl, s0_chnl, s1_chnl,  #
         M, desc_q, desc_k, desc_v, desc_o,  #
         STAGE: gl.constexpr):
     q_producer = q_chnl.create_producer()
@@ -594,21 +575,32 @@ def _attn_fwd_load(  #
 
 
 @gluon.jit
+def _borrow_s_as_p(config, s_tmem):
+    p_tmem = s_tmem.slice(0, config.BLOCK_N // 2)
+    return p_tmem._reinterpret(config.dtype, config.qk_shape, config.p_tmem_layout)
+
+
+@gluon.jit
+def _borrow_s_as_alpha(config, s_tmem):
+    alpha_tmem = s_tmem.slice(config.BLOCK_N // 2, 1)
+    alpha_layout: gl.constexpr = TensorMemoryLayout([config.SPLIT_M, 1], unpacked=False)
+    return alpha_tmem._reinterpret(gl.float32, [config.SPLIT_M, 1], alpha_layout)
+
+
+@gluon.jit
 def _attn_fwd_mma(  #
         config, info0, info1,  #
-        q_chnl, kv_chnl,  #
+        q_chnl, kv_chnl, s0_chnl, s1_chnl,  #
         M, desc_q, desc_k, desc_v, desc_o,  #
         STAGE: gl.constexpr):
     q_consumer = q_chnl.create_consumer()
     kv_consumer = kv_chnl.create_consumer()
 
-    p0_consumer = info0.p_chnl.create_consumer()
-    p1_consumer = info1.p_chnl.create_consumer()
+    s0_producer = s0_chnl.create_producer()
+    s1_producer = s1_chnl.create_producer()
 
-    qk0_producer = MMAProducer(info0.qk_mma_ctx)
-    qk1_producer = MMAProducer(info1.qk_mma_ctx)
-    o0_producer = MMAProducer(info0.o_mma_ctx)
-    o1_producer = MMAProducer(info1.o_mma_ctx)
+    o0_producer = info0.o_mma_ctx.channel.create_producer()
+    o1_producer = info1.o_mma_ctx.channel.create_producer()
 
     scheduler = ProgramScheduler(config)
     for pid in range(scheduler.start_pid, scheduler.num_tiles, config.NUM_SMS):
@@ -616,38 +608,48 @@ def _attn_fwd_mma(  #
         lo, hi = prog.get_fused_loop_bounds(STAGE)
         num_mmas = (hi - lo) // config.BLOCK_N
 
-        o0_init, o1_init = False, False
         q0_smem, q0_bar = q_consumer.acquire()
-        q1_smem, q1_bar = q_consumer.acquire()
-
         k_smem, k_bar = kv_consumer.acquire()
-        qk0_producer.wait_and_issue_next(q0_smem, k_smem.permute((1, 0)), [k_bar], use_acc=False)
-        qk1_producer.wait_and_issue_next(q1_smem, k_smem.permute((1, 0)), [k_bar], use_acc=False)
+        s0_tmem, s0_bar = s0_producer.acquire()
+        tcgen05_mma(q0_smem, k_smem.permute((1, 0)), s0_tmem, use_acc=False, mbarriers=[s0_bar])
+
+        q1_smem, q1_bar = q_consumer.acquire()
+        s1_tmem, s1_bar = s1_producer.acquire()
+        tcgen05_mma(q1_smem, k_smem.permute((1, 0)), s1_tmem, use_acc=False, mbarriers=[s1_bar, k_bar])
+
+        v_smem, v_bar = kv_consumer.acquire()
+        o0_tmem, o0_bar = o0_producer.acquire()
+        s0_tmem, s0_bar = s0_producer.acquire()
+        p0_tmem = _borrow_s_as_p(config, s0_tmem)
+        tcgen05_mma(p0_tmem, v_smem, o0_tmem, use_acc=False, mbarriers=[o0_bar])
+        o_init = False
+
         for _ in range(num_mmas - 1):
-            v_smem, v_bar = kv_consumer.acquire()
-            p0_tmem, p0_bar = p0_consumer.acquire()
-            o0_producer.wait_and_issue_next(p0_tmem, v_smem, [v_bar, p0_bar], use_acc=o0_init)
-            o0_init = True
-
             k_smem, k_bar = kv_consumer.acquire()
-            qk0_producer.wait_and_issue_next(q0_smem, k_smem.permute((1, 0)), [k_bar], use_acc=False)
+            tcgen05_mma(q0_smem, k_smem.permute((1, 0)), s0_tmem, use_acc=False, mbarriers=[s0_bar])
 
-            p1_tmem, p1_bar = p1_consumer.acquire()
-            o1_producer.wait_and_issue_next(p1_tmem, v_smem, [v_bar, p1_bar], use_acc=o1_init)
-            o1_init = True
+            o1_tmem, o1_bar = o1_producer.acquire()
+            s1_tmem, s1_bar = s1_producer.acquire()
+            p1_tmem = _borrow_s_as_p(config, s1_tmem)
+            tcgen05_mma(p1_tmem, v_smem, o1_tmem, use_acc=o_init, mbarriers=[o1_bar, v_bar])
+            o_init = True
 
-            qk1_producer.wait_and_issue_next(q1_smem, k_smem.permute((1, 0)), [k_bar], use_acc=False)
+            tcgen05_mma(q1_smem, k_smem.permute((1, 0)), s1_tmem, use_acc=False, mbarriers=[s1_bar, k_bar])
+
+            v_smem, v_bar = kv_consumer.acquire()
+            o0_tmem, o0_bar = o0_producer.acquire()
+            s0_tmem, s0_bar = s0_producer.acquire()
+            p0_tmem = _borrow_s_as_p(config, s0_tmem)
+            tcgen05_mma(p0_tmem, v_smem, o0_tmem, use_acc=o_init, mbarriers=[o0_bar])
+            o_init = True
+
         tcgen05_commit(q0_bar)
         tcgen05_commit(q1_bar)
 
-        v_smem, v_bar = kv_consumer.acquire()
-        p0_tmem, p0_bar = p0_consumer.acquire()
-        o0_producer.wait_and_issue_next(p0_tmem, v_smem, [v_bar, p0_bar], use_acc=o0_init)
-        o0_init = True
-
-        p1_tmem, p1_bar = p1_consumer.acquire()
-        o1_producer.wait_and_issue_next(p1_tmem, v_smem, [v_bar, p1_bar], use_acc=o1_init)
-        o1_init = True
+        o1_tmem, o1_bar = o1_producer.acquire()
+        s1_tmem, s1_bar = s1_producer.acquire()
+        p1_tmem = _borrow_s_as_p(config, s1_tmem)
+        tcgen05_mma(p1_tmem, v_smem, o1_tmem, use_acc=o_init, mbarriers=[o1_bar, v_bar, s0_bar, s1_bar])
 
 
 @gluon.jit
@@ -711,15 +713,14 @@ def _attn_fwd_correction(config, info0, info1, STAGE: gl.constexpr):
 
 @gluon.jit
 def _softmax_inner_loop(tile_id: gl.constexpr, config, prog,  #
-                        qk_consumer, p_producer, alpha_producer,  #
+                        s_consumer, corr_producer, corr_bar,  #
                         offs_m, offs_n, m_i, l_i,  #
                         STAGE: gl.constexpr):
     lo, hi = prog.get_loop_bounds(STAGE)
 
     for start_n in range(lo, hi, config.BLOCK_N):
-        p_tmem, p_bar = p_producer.acquire()
-        alpha_tmem, alpha_bar = alpha_producer.acquire()
-        qk = qk_consumer.get(config.qk_layout)
+        s_tmem, s_bar = s_consumer.acquire()
+        qk = s_tmem.load(config.qk_tmem_layout)
 
         if STAGE == 2:
             # Prevent LLVM from hoisting the partial sums, which triggers spilling.
@@ -730,18 +731,22 @@ def _softmax_inner_loop(tile_id: gl.constexpr, config, prog,  #
         m_ij = gl.maximum(m_i, gl.max(qk, 1) * config.qk_scale)
         alpha = gl.exp2(m_i - m_ij)
 
+        alpha_tmem = _borrow_s_as_alpha(config, s_tmem)
         alpha_tmem.store(gl.convert_layout(alpha.expand_dims(1), config.alpha_2d_layout, assert_trivial=True))
-        mbarrier.arrive(alpha_bar, count=1)
+        mbarrier.arrive(corr_bar, count=1)
 
         qk = _mul_f32x2(qk, gl.full(config.qk_shape, config.qk_scale, gl.float32, qk.type.layout))
         qk = _add_f32x2(qk, -m_ij[:, None])
 
+        p_tmem = _borrow_s_as_p(config, s_tmem)
         qk0, qk1, = qk.reshape([config.SPLIT_M, 2, config.BLOCK_N // 2]).permute(0, 2, 1).split()
         p0 = gl.exp2(qk0)
         p_tmem.slice(0, config.BLOCK_N // 2).store(p0.to(config.dtype))
         p1 = gl.exp2(qk1)
         p_tmem.slice(config.BLOCK_N // 2, config.BLOCK_N // 2).store(p1.to(config.dtype))
-        mbarrier.arrive(p_bar, count=1)
+        mbarrier.arrive(s_bar, count=1)
+
+        _, corr_bar = corr_producer.acquire()
 
         # FIXME: This code makes ptxas misbehave and spill :(
         # p0 = gl.convert_layout(p0, config.qk_layout, assert_trivial=True)
@@ -771,22 +776,24 @@ def _softmax_inner_loop(tile_id: gl.constexpr, config, prog,  #
         l_i = l_i * alpha + l_ij
         m_i = m_ij
 
-    return m_i, l_i
+    return m_i, l_i, corr_bar
 
 
 @gluon.jit
-def _softmax_tile(tile_id: gl.constexpr, config, info, M, desc_o, STAGE: gl.constexpr):
+def _softmax_tile(  #
+        tile_id: gl.constexpr, config, info, M, desc_o, STAGE: gl.constexpr,  #
+        s_chnl, corr_chnl,  #
+):
     qk_slice_dim0: gl.constexpr = gl.SliceLayout(0, config.qk_layout)
     qk_slice_dim1: gl.constexpr = gl.SliceLayout(1, config.qk_layout)
 
-    qk_consumer = info.qk_mma_ctx.channel.create_consumer()
-    p_producer = info.p_chnl.create_producer()
-    alpha_producer = info.alpha_chnl.create_producer()
-    epilogue_consumer = info.epilogue_chnl.create_consumer()
-
     offs_n = gl.arange(0, config.BLOCK_N, qk_slice_dim0)
 
-    o_smem = gl.allocate_shared_memory(config.dtype, config.o_shape, desc_o.layout)
+    # o_smem = gl.allocate_shared_memory(config.dtype, config.o_shape, desc_o.layout)
+
+    s_consumer = s_chnl.create_consumer()
+    corr_producer = corr_chnl.create_producer()
+    _, corr_bar = corr_producer.acquire()
 
     scheduler = ProgramScheduler(config)
     for pid in range(scheduler.start_pid, scheduler.num_tiles, config.NUM_SMS):
@@ -799,53 +806,60 @@ def _softmax_tile(tile_id: gl.constexpr, config, info, M, desc_o, STAGE: gl.cons
         l_i = gl.full([config.SPLIT_M], 1.0, gl.float32, qk_slice_dim1)
 
         if STAGE & 1:
-            m_i, l_i = _softmax_inner_loop(tile_id, config, prog,  #
-                                           qk_consumer, p_producer, alpha_producer,  #
-                                           offs_m, offs_n, m_i, l_i,  #
-                                           STAGE=4 - STAGE)
+            m_i, l_i, corr_bar = _softmax_inner_loop(tile_id, config, prog,  #
+                                                     s_consumer, corr_producer, corr_bar,  #
+                                                     offs_m, offs_n, m_i, l_i,  #
+                                                     STAGE=4 - STAGE)
         if STAGE & 2:
-            m_i, l_i = _softmax_inner_loop(tile_id, config, prog,  #
-                                           qk_consumer, p_producer, alpha_producer,  #
-                                           offs_m, offs_n, m_i, l_i,  #
-                                           STAGE=2)
+            m_i, l_i, corr_bar = _softmax_inner_loop(tile_id, config, prog,  #
+                                                     s_consumer, corr_producer, corr_bar,  #
+                                                     offs_m, offs_n, m_i, l_i,  #
+                                                     STAGE=2)
 
-        _, e_bar = epilogue_consumer.acquire()
-        o_tmem = info.o_mma_ctx.channel.mem.index(0)
-        o = o_tmem.load(config.o_layout)
-        mbarrier.arrive(e_bar, count=1)
+        _, s_bar = s_consumer.acquire()
+        # store l_i, m_i
+        mbarrier.arrive(corr_bar, count=1)
+        _, corr_bar = corr_producer.acquire()
 
-        m_i += gl.log2(l_i)
-        o = o / gl.convert_layout(l_i, gl.SliceLayout(1, config.o_layout), assert_trivial=True)[:, None]
+        mbarrier.arrive(s_bar, count=1)
 
-        coalesced: gl.constexpr = gl.BlockedLayout([1], [32], [4], [0])
-        offs_m = prog.start_m * config.BLOCK_M
-        offs_m += gl.arange(tile_id * config.SPLIT_M, (tile_id + 1) * config.SPLIT_M, coalesced)
+        # _, e_bar = epilogue_consumer.acquire()
+        # o_tmem = info.o_mma_ctx.channel.mem.index(0)
+        # o = o_tmem.load(config.o_layout)
+        # mbarrier.arrive(e_bar, count=1)
 
-        m_ptrs = M + prog.off_hz * config.N_CTX + offs_m
-        gl.store(m_ptrs, gl.convert_layout(m_i, coalesced, assert_trivial=True))
-        tma.store_wait(0)
-        o_smem.store(o.to(config.dtype))
-        fence_async_shared()
-        tma.async_copy_shared_to_global(desc_o, [prog.qo_offset_y + config.SPLIT_M * tile_id, 0], o_smem)
+        # m_i += gl.log2(l_i)
+        # o = o / gl.convert_layout(l_i, gl.SliceLayout(1, config.o_layout), assert_trivial=True)[:, None]
+
+        # coalesced: gl.constexpr = gl.BlockedLayout([1], [32], [4], [0])
+        # offs_m = prog.start_m * config.BLOCK_M
+        # offs_m += gl.arange(tile_id * config.SPLIT_M, (tile_id + 1) * config.SPLIT_M, coalesced)
+
+        # m_ptrs = M + prog.off_hz * config.N_CTX + offs_m
+        # gl.store(m_ptrs, gl.convert_layout(m_i, coalesced, assert_trivial=True))
+        # tma.store_wait(0)
+        # o_smem.store(o.to(config.dtype))
+        # fence_async_shared()
+        # tma.async_copy_shared_to_global(desc_o, [prog.qo_offset_y + config.SPLIT_M * tile_id, 0], o_smem)
     tma.store_wait(0)
 
 
 @gluon.jit
 def _attn_fwd_softmax0(  #
         config, info0, info1,  #
-        q_chnl, kv_chnl,  #
+        q_chnl, kv_chnl, s0_chnl, s1_chnl,  #
         M, desc_q, desc_k, desc_v, desc_o,  #
         STAGE: gl.constexpr):
-    _softmax_tile(0, config, info0, M, desc_o, STAGE)
+    _softmax_tile(0, config, info0, M, desc_o, STAGE, s0_chnl, info0.corr_chnl)
 
 
 @gluon.jit
 def _attn_fwd_softmax1(  #
         config, info0, info1,  #
-        q_chnl, kv_chnl,  #
+        q_chnl, kv_chnl, s0_chnl, s1_chnl,  #
         M, desc_q, desc_k, desc_v, desc_o,  #
         STAGE: gl.constexpr):
-    _softmax_tile(1, config, info1, M, desc_o, STAGE)
+    _softmax_tile(1, config, info1, M, desc_o, STAGE, s1_chnl, info1.corr_chnl)
 
 
 @gluon.jit
