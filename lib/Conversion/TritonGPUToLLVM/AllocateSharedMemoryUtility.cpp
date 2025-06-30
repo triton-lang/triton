@@ -2,7 +2,8 @@
 
 namespace mlir::triton::gpu {
 
-void fillAllocationInfo(ModuleOp mod, ModuleAllocation &allocation) {
+void attachAllocationSizeAndOffsetAttr(ModuleOp mod,
+                                       ModuleAllocation &allocation) {
   MLIRContext *ctx = mod.getContext();
 
   mod.walk<mlir::WalkOrder::PreOrder>([&](FunctionOpInterface funcOp) {

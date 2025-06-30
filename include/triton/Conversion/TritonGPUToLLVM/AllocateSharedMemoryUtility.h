@@ -6,7 +6,8 @@
 
 namespace mlir::triton::gpu {
 
-void fillAllocationInfo(ModuleOp mod, ModuleAllocation &allocation);
+void attachAllocationSizeAndOffsetAttr(ModuleOp mod,
+                                       ModuleAllocation &allocation);
 
 } // namespace mlir::triton::gpu
 

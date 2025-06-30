@@ -21,7 +21,7 @@ struct AllocateSharedMemory
     ModuleOp mod = getOperation();
     ModuleAllocation allocation(mod);
 
-    mlir::triton::gpu::fillAllocationInfo(mod, allocation);
+    mlir::triton::gpu::attachAllocationSizeAndOffsetAttr(mod, allocation);
   }
 };
 } // namespace
