@@ -100,37 +100,6 @@ def should_upcast_indices(*args):
 
 # fmt: off
 
-# @dataclass(frozen=True)
-# class MicroscalingCtx:
-#     # This interprets the scales as E8M0 tensors
-#     # Packed fp4s (e2m1) are stored as torch.uint8 tensors.
-#     # Not used for now, inserted here to make space in the APIs.
-#     act_scale: torch.Tensor | None = None
-#     weight_scale: torch.Tensor | None = None
-
-#     swizzle_value: SwizzlingType | None = (
-#         None  # Whether the weight values are stored in swizzled layout
-#     )
-#     swizzle_scale: SwizzlingType | None = (
-#         None  # Whether the weight scales are stored in swizzled layout
-#     )
-
-#     def __post_init__(self):
-#         assert self.act_scale is None, "Activation scale not supported yet"
-#         if self.weight_scale is None:
-#             return
-
-#         # Validate the scale tensor data type
-#         if self.weight_scale.dtype != torch.uint8:
-#             raise TypeError(f"Weight scale must be uint8. Got {self.weight_scale.dtype}")
-
-#         # Validate scale tensor dimensions
-#         if self.weight_scale.ndim != 3:
-#             raise ValueError(
-#                 f"Weight scale must be 3D (experts, in_dim // BLOCK_SIZE, out_dim). Got {self.weight_scale.shape}"
-#             )
-
-
 @dataclass(frozen=True)
 class FlexCtx:
     lhs_data: InFlexData = InFlexData()

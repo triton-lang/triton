@@ -3,16 +3,9 @@ from .tensor_details.memory_layout.hopper_value import swizzle_mxfp4_value_hoppe
 from .tensor_details.memory_layout.hopper_scale import swizzle_mxfp4_scale_hopper, unswizzle_mxfp4_scale_hopper_torch
 from .tensor_details.memory_layout.blackwell_scale import swizzle_mx_scale_bw, unswizzle_mx_scale_bw_torch
 from .reduction_details.reduce_bitmatrix import clear_sums, sum_bitmatrix_rows
-from enum import Enum
 from dataclasses import dataclass
 from triton.tools.tensor_descriptor import TensorDescriptor
 from abc import ABC, abstractmethod
-
-
-class SwizzlingType(Enum):
-    HOPPER_VALUE = 0
-    HOPPER_SCALE = 1
-    BLACKWELL_SCALE = 2
 
 
 class Layout(ABC):
@@ -30,7 +23,7 @@ class Layout(ABC):
         pass
 
 
-class StridedLayout(Layout):
+class DefaultLayout(Layout):
     name: str = None
 
     def swizzle_data(self, data):
@@ -195,7 +188,7 @@ class Tensor:
     dtype: IntegerType | FloatType | torch.dtype = None
     shape: list[int] | None = None
     shape_max: list[int] | None = None
-    storage: StridedLayout | None = None
+    storage: Storage = None
 
     def __post_init__(self):
         # initialize dtype
@@ -223,7 +216,7 @@ class Tensor:
         # initialize layouts
         if self.storage is None:
             handle = self.handle.handle if isinstance(self.handle, Tensor) else self.handle
-            self.storage = Storage(handle, StridedLayout())
+            self.storage = Storage(handle, DefaultLayout())
         #
         self.ndim = self.handle.ndim
         self.device = self.handle.device
@@ -337,11 +330,10 @@ def expand_shape(packed_shape, packed_dim, pack_width):
     return ret
 
 
-def swizzle(tensor, swizzle_mode):
+def swizzle(tensor, layout):
     shape = expand_shape(tensor.shape, tensor.stride().index(1), 2)
     tmp = Tensor(tensor, shape=shape, dtype=FP4)
-    cls = {SwizzlingType.BLACKWELL_SCALE: BlackwellMXScaleLayout, None: StridedLayout}[swizzle_mode]
-    storage = Storage(data=tensor, layout=cls())
+    storage = Storage(data=tensor, layout=layout)
     return Tensor(tmp, storage=storage)
 
 
