@@ -122,18 +122,12 @@ struct LocalAllocOpConversion
       // - The legacy path calls llvm.load/llvm.store unconditionally, while
       //   the AMD lowering of storeDShared does not, even when the predicate
       //   is constant true.
-      if (targetInfo.isCuda()) {
-        auto *ctx = op.getContext();
-        auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
-        if (failed(lowerLocalStore(loc, ctx, op.getSrc(), memDescTy, smemObj,
-                                   inVals, typeConverter, rewriter,
-                                   targetInfo))) {
-          return failure();
-        }
-      } else {
-        lowerDistributedToShared(loc, op.getSrc(), op.getResult(),
-                                 adaptor.getSrc(), smemObj, typeConverter,
-                                 rewriter, targetInfo);
+      auto *ctx = op.getContext();
+      auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
+      if (failed(lowerLocalStore(loc, ctx, op.getSrc(), memDescTy, smemObj,
+                                 inVals, typeConverter, rewriter,
+                                 targetInfo))) {
+        return failure();
       }
     }
     auto retVal = getStructFromSharedMemoryObject(loc, smemObj, rewriter);
@@ -246,15 +240,9 @@ public:
                                                          llvmElemTy, rewriter);
     auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
     std::pair<size_t, Type> llvmOpCount;
-    if (targetInfo.isCuda()) {
-      if (failed(lowerLocalStore(loc, ctx, regVal, memDescTy, smemObj, inVals,
-                                 typeConverter, rewriter, targetInfo))) {
-        return failure();
-      }
-    } else {
-      lowerDistributedToShared(loc, regVal, memDescVal, adaptor.getSrc(),
-                               smemObj, typeConverter, rewriter, targetInfo,
-                               &llvmOpCount);
+    if (failed(lowerLocalStore(loc, ctx, regVal, memDescTy, smemObj, inVals,
+                               typeConverter, rewriter, targetInfo))) {
+      return failure();
     }
 
     targetInfo.localStoreOpAnnotation(op, llvmOpCount.first,
