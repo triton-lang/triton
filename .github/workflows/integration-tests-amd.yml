@@ -4,7 +4,7 @@ on:
   workflow_call:
     inputs:
       matrix:
-        required: true
+        required: 
         type: string
 
 jobs:
@@ -123,7 +123,7 @@ jobs:
           fi
 
       - name: Run asan tests on AMD
-        if: false
+        if: 
         run: |
           cd third_party/amd/python/test/
           ulimit -s 1024
