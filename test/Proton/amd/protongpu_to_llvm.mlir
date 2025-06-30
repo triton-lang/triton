@@ -22,7 +22,7 @@ module attributes {"ttg.num-warps" = 8 : i32} {
   llvm.func @convert_read_counter_cycle() -> i32 {
     //CHECK: llvm.call_intrinsic "llvm.amdgcn.s.memtime"() : () -> i64
     //CHECK: llvm.trunc %{{.*}} : i64 to i32
-    %1 = proton_gpu.read_counter {metric = 0 : i32} : i32
+    %1 = proton_gpu.read_counter : i32
     llvm.return %1 : i32
   }
 }
@@ -76,7 +76,7 @@ module attributes {"ttg.num-warps" = 8 : i32} {
   	// CHECK-DAG: %[[CYCLE1:.*]] = llvm.call_intrinsic "llvm.amdgcn.s.memtime"()
     %0 = ttg.local_alloc : () -> !ttg.memdesc<512xi32, #shared, #smem, mutable>
     %3 = proton_gpu.segment_alloc %0 : !ttg.memdesc<512xi32, #shared, #smem, mutable> -> !proton_gpu.segment<2048, #smem, warp, [0, 1]>
-    %8 = proton_gpu.read_counter {metric = 0 : i32} : i32
+    %8 = proton_gpu.read_counter : i32
     proton_gpu.circular_store start %3, %8 {scopeId = 1 : i32} : !proton_gpu.segment<2048, #smem, warp, [0, 1]>, i32
     llvm.return
   }
@@ -159,7 +159,7 @@ module attributes {"ttg.num-warps" = 8 : i32} {
     // CHECK-DAG: llvm.extractelement %[[CYCLE64]]
     %0 = ttg.local_alloc : () -> !ttg.memdesc<512xi32, #shared, #smem, mutable>
     %3 = proton_gpu.segment_alloc %0 : !ttg.memdesc<512xi32, #shared, #smem, mutable> -> !proton_gpu.segment<2048, #smem, warp, [0, 1]>
-    %8 = proton_gpu.read_counter {metric = 0 : i32} : i64
+    %8 = proton_gpu.read_counter : i64
     proton_gpu.circular_store start %3, %8 {scopeId = 1 : i32} : !proton_gpu.segment<2048, #smem, warp, [0, 1]>, i64
     llvm.return
   }

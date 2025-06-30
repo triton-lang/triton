@@ -20,7 +20,7 @@ module attributes {"ttg.num-warps" = 8 : i32} {
   // CHECK-LABEL: convert_read_counter_cycle
   llvm.func @convert_read_counter_cycle() {
     // CHECK: llvm.inline_asm has_side_effects asm_dialect = att operand_attrs = [] "mov.u32 $0, %clock;", "=r"  : () -> i32
-    %1 = proton_gpu.read_counter {metric = 0 : i32} : i32
+    %1 = proton_gpu.read_counter : i32
     llvm.return
   }
 }
@@ -101,7 +101,7 @@ module attributes {"ttg.num-warps" = 8 : i32} {
     %3 = proton_gpu.segment_alloc %0 : !ttg.memdesc<512xi32, #shared, #smem, mutable> -> !proton_gpu.segment<2048, #smem, warp, [0, 1]>
     scf.for %arg0 = %c0 to %c4 step %c1 {
       scf.for %arg1 = %c0 to %c4 step %c1 {
-        %8 = proton_gpu.read_counter {metric = 0 : i32} : i32
+        %8 = proton_gpu.read_counter : i32
         proton_gpu.circular_store start %3, %8 {scopeId = 1 : i32} : !proton_gpu.segment<2048, #smem, warp, [0, 1]>, i32
       }
     }
@@ -129,7 +129,7 @@ module attributes {"ttg.num-warps" = 8 : i32} {
     // CHECK-DAG: llvm.inline_asm has_side_effects{{.*}}st.shared.v2.b32{{.*}}%[[SMEM_PTR]], %{{.*}}, %{{.*}}, %{{.*}}
     %0 = ttg.local_alloc : () -> !ttg.memdesc<512xi32, #shared, #smem, mutable>
     %3 = proton_gpu.segment_alloc %0 : !ttg.memdesc<512xi32, #shared, #smem, mutable> -> !proton_gpu.segment<2048, #smem, warp, [0, 1]>
-    %8 = proton_gpu.read_counter {metric = 0 : i32} : i32
+    %8 = proton_gpu.read_counter : i32
     proton_gpu.circular_store start %3, %8 {scopeId = 1 : i32} : !proton_gpu.segment<2048, #smem, warp, [0, 1]>, i32
     llvm.return
   }
@@ -223,7 +223,7 @@ module attributes {"ttg.num-warps" = 8 : i32} {
   llvm.func @use_clock64() {
     %0 = ttg.local_alloc : () -> !ttg.memdesc<512xi32, #shared, #smem, mutable>
     %3 = proton_gpu.segment_alloc %0 : !ttg.memdesc<512xi32, #shared, #smem, mutable> -> !proton_gpu.segment<2048, #smem, warp, [0, 1]>
-    %8 = proton_gpu.read_counter {metric = 0 : i32} : i64
+    %8 = proton_gpu.read_counter : i64
     proton_gpu.circular_store start %3, %8 {scopeId = 1 : i32} : !proton_gpu.segment<2048, #smem, warp, [0, 1]>, i64
     llvm.return
   }

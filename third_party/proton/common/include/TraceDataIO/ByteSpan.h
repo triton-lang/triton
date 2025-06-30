@@ -24,6 +24,8 @@ public:
   int16_t readInt16();
   uint32_t readUInt32();
   int32_t readInt32();
+  uint64_t readUInt64();
+  int64_t readInt64();
 
   // Buffer navigation
   void skip(size_t count);

@@ -5,8 +5,8 @@ module attributes {"ttg.num-warps" = 8 : i32} {
   // CHECK: %[[SCRATCH:.*]] = proton_gpu.global_scratch_alloc {alignment = 128 : i32, nbytes = 1152 : i32} : !tt.ptr<i32>
   // CHECK-NEXT: %[[BUF:.*]] = ttg.local_alloc  : () -> !ttg.memdesc<256xi32, #shared, #smem, mutable>
   // CHECK-NEXT: %[[SEGMENT:.*]] = proton_gpu.segment_alloc %[[BUF]]
-  // CHECK-NEXT: %[[START:.*]] = proton_gpu.read_counter {metric = 0 : i32} : i32
-  // CHECK-NEXT: %[[END:.*]] = proton_gpu.read_counter {metric = 0 : i32} : i32
+  // CHECK-NEXT: %[[START:.*]] = proton_gpu.read_counter : i32
+  // CHECK-NEXT: %[[END:.*]] = proton_gpu.read_counter : i32
   // CHECK-NEXT: proton_gpu.circular_store start %[[SEGMENT]], %[[START]] {scopeId = 0 : i32} : !proton_gpu.segment<1024, #smem, warp>, i32
   // CHECK-NEXT: proton_gpu.circular_store end %[[SEGMENT]], %[[END]] {scopeId = 0 : i32} : !proton_gpu.segment<1024, #smem, warp>, i32
   // CHECK-NEXT: gpu.barrier
@@ -26,12 +26,12 @@ module attributes {"ttg.num-warps" = 8 : i32} {
   // CHECK: %[[SCRATCH:.*]] = proton_gpu.global_scratch_alloc {alignment = 128 : i32, nbytes = 1152 : i32} : !tt.ptr<i32>
   // CHECK-NEXT: %[[BUF:.*]] = ttg.local_alloc  : () -> !ttg.memdesc<256xi32, #shared, #smem, mutable>
   // CHECK-NEXT: %[[SEGMENT:.*]] = proton_gpu.segment_alloc %[[BUF]]
-  // CHECK-NEXT: %[[START1:.*]] = proton_gpu.read_counter {metric = 0 : i32} : i32
-  // CHECK-NEXT: %[[START2:.*]] = proton_gpu.read_counter {metric = 0 : i32} : i32
-  // CHECK-NEXT: %[[END2:.*]] = proton_gpu.read_counter {metric = 0 : i32} : i32
+  // CHECK-NEXT: %[[START1:.*]] = proton_gpu.read_counter : i32
+  // CHECK-NEXT: %[[START2:.*]] = proton_gpu.read_counter : i32
+  // CHECK-NEXT: %[[END2:.*]] = proton_gpu.read_counter : i32
   // CHECK-NEXT: proton_gpu.circular_store start %[[SEGMENT]], %[[START2]] {scopeId = 1 : i32} : !proton_gpu.segment<1024, #smem, warp>, i32
   // CHECK-NEXT: proton_gpu.circular_store end %[[SEGMENT]], %[[END2]] {scopeId = 1 : i32} : !proton_gpu.segment<1024, #smem, warp>, i32
-  // CHECK-NEXT: %[[END1:.*]] = proton_gpu.read_counter {metric = 0 : i32} : i32
+  // CHECK-NEXT: %[[END1:.*]] = proton_gpu.read_counter : i32
   // CHECK-NEXT: proton_gpu.circular_store start %[[SEGMENT]], %[[START1]] {scopeId = 0 : i32} : !proton_gpu.segment<1024, #smem, warp>, i32
   // CHECK-NEXT: proton_gpu.circular_store end %[[SEGMENT]], %[[END1]] {scopeId = 0 : i32} : !proton_gpu.segment<1024, #smem, warp>, i32
   // CHECK-NEXT: gpu.barrier

@@ -264,6 +264,7 @@ public:
     Value profileMem = builder.create<gpu::GlobalScratchAllocOp>(
         loc, triton::getPointerType(builder.getI32Type()),
         allocProfileScratchSize, profileScratchAlignment);
+    builder.create<gpu::InitializeOp>(loc, profileMem);
     func.walk([&](triton::ReturnOp ret) {
       builder.setInsertionPoint(ret);
       builder.create<mlir::gpu::BarrierOp>(loc);

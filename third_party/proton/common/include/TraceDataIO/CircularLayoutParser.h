@@ -43,6 +43,7 @@ struct CircularLayoutParserResult {
     uint32_t blockId = 0;
     uint32_t procId = 0;
     uint32_t bufSize = 0;
+    uint64_t timeStamp = 0;
     std::vector<Trace> traces;
   };
 
