@@ -599,7 +599,7 @@ SmallVector<OutputPort> initialDataValues(Graph *graph) {
   graph->walk([&](Node *node) {
     if (node->isOp()) {
       auto op = node->getOp();
-      if (isa<tt::DescriptorLoadOp>(op)) {
+      if (isa<tt::LoadOp, tt::DescriptorLoadOp>(op)) {
         node->setDataValue(0);
         values.push_back({node, 0});
       }
