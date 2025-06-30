@@ -5,8 +5,8 @@
 // CHECK-LABEL: alloc_convert_load
 // CHECK-32KLIMIT-LABEL: alloc_convert_load
 // CHECK: %0 = ttg.local_alloc %arg0 : {{.*}}#blocked{{.*}}#shared
-// CHECK: %1 = ttg.convert_layout %arg1 : {{.*}}#blocked{{.*}}#blocked1
-// CHECK: %2 = ttg.convert_layout %1 : {{.*}}#blocked1{{.*}}#mma
+// CHECK: %1 = ttg.convert_layout %arg1 {{.*}}: {{.*}}#blocked{{.*}}#blocked1
+// CHECK: %2 = ttg.convert_layout %1 {{.*}}: {{.*}}#blocked1{{.*}}#mma
 // CHECK: %3 = ttg.local_load %0 : {{.*}}#shared{{.*}}#ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>>
 #blocked = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [16, 4], warpsPerCTA = [1, 8], order = [0, 1]}>
 #mma = #ttg.amd_mfma<{version = 2, warpsPerCTA = [1, 8], instrShape = [32, 32], isTransposed = false}>
@@ -28,8 +28,8 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 64 : i32}
 // CHECK-LABEL: alloc_convert_small_load
 // CHECK-32KLIMIT-LABEL: alloc_convert_small_load
 // CHECK: %0 = ttg.local_alloc %arg0 : {{.*}}#blocked{{.*}}#shared
-// CHECK: %1 = ttg.convert_layout %arg1 : {{.*}}#blocked{{.*}}#blocked1
-// CHECK: %2 = ttg.convert_layout %1 : {{.*}}#blocked1{{.*}}#mma
+// CHECK: %1 = ttg.convert_layout %arg1 {{.*}}: {{.*}}#blocked{{.*}}#blocked1
+// CHECK: %2 = ttg.convert_layout %1 {{.*}}: {{.*}}#blocked1{{.*}}#mma
 // CHECK: %3 = ttg.local_load %0 : {{.*}}#shared{{.*}}#ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>>
 #blocked = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [16, 4], warpsPerCTA = [1, 8], order = [0, 1]}>
 #mma = #ttg.amd_mfma<{version = 2, warpsPerCTA = [1, 8], instrShape = [32, 32], isTransposed = false}>
@@ -55,7 +55,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 64 : i32}
 // CHECK-32KLIMIT-LABEL: alloc_convert_3d_load
 // CHECK: [[V0:%.*]] = ttg.local_alloc {{.*}}[[$BLOCKED1]]{{.*}}
 // CHECK: [[V1:%.*]] = ttg.convert_layout {{.*}}[[$BLOCKED1]]{{.*}}[[$BLOCKED2]]
-// CHECK: [[V2:%.*]] = ttg.convert_layout [[V1]] : {{.*}}[[$BLOCKED2]]{{.*}}[[$MMA]]
+// CHECK: [[V2:%.*]] = ttg.convert_layout [[V1]] {{.*}}: {{.*}}[[$BLOCKED2]]{{.*}}[[$MMA]]
 // CHECK: [[V3:%.*]] = ttg.local_load [[V0]] : {{.*}}#ttg.dot_op<{opIdx = 0, parent = [[$MMA]], kWidth = 4}>>
 #blocked = #ttg.blocked<{sizePerThread = [1, 8, 1], threadsPerWarp = [1, 16, 4], warpsPerCTA = [1, 1, 8], order = [0, 1, 2]}>
 #mma = #ttg.amd_mfma<{version = 2, warpsPerCTA = [1, 1, 8], instrShape = [32, 32], isTransposed = false}>
@@ -75,12 +75,12 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 64 : i32}
 // Check that optimization triggers with custom LDS limit and do not triggers with default one
 // CHECK-LABEL: alloc_convert_32k_limit
 // CHECK: %0 = ttg.local_alloc %arg0 : {{.*}}#blocked{{.*}}#shared
-// CHECK: %1 = ttg.convert_layout %arg1 : {{.*}}#blocked{{.*}}#mma
+// CHECK: %1 = ttg.convert_layout %arg1 {{.*}}: {{.*}}#blocked{{.*}}#mma
 // CHECK: %2 = ttg.local_load %0 : {{.*}}#shared{{.*}}#ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>>
 // CHECK-32KLIMIT-LABEL: alloc_convert_32k_limit
 // CHECK-32KLIMIT: %0 = ttg.local_alloc %arg0 : {{.*}}#blocked{{.*}}#shared
-// CHECK-32KLIMIT: %1 = ttg.convert_layout %arg1 : {{.*}}#blocked{{.*}}#blocked1
-// CHECK-32KLIMIT: %2 = ttg.convert_layout %1 : {{.*}}#blocked1{{.*}}#mma
+// CHECK-32KLIMIT: %1 = ttg.convert_layout %arg1 {{.*}}: {{.*}}#blocked{{.*}}#blocked1
+// CHECK-32KLIMIT: %2 = ttg.convert_layout %1 {{.*}}: {{.*}}#blocked1{{.*}}#mma
 // CHECK-32KLIMIT: %3 = ttg.local_load %0 : {{.*}}#shared{{.*}}#ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>>
 #blocked = #ttg.blocked<{sizePerThread = [4, 1], threadsPerWarp = [16, 4], warpsPerCTA = [1, 8], order = [0, 1]}>
 #mma = #ttg.amd_mfma<{version = 2, warpsPerCTA = [1, 8], instrShape = [32, 32], isTransposed = false}>
@@ -106,9 +106,9 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 64 : i32}
 
 // CHECK: tt.func public @mfma_dot_shortcut([[ARG_0:%[a-z0-9]*]]: {{.*}}, [[ARG_1:%[a-z0-9]*]]: {{.*}}, [[ARG_2:%[a-z0-9]*]]: {{.*}})
 // CHECK: [[ALLOC:%[0-9]+]] = ttg.local_alloc [[ARG_0]] : (tensor<128x128xf16, [[BLOCKED_1]]>) -> !ttg.memdesc<128x128xf16, [[SHARED]], #smem>
-// CHECK: [[INTERMEDIATE_CONV:%[0-9]+]] = ttg.convert_layout [[ARG_1]] : tensor<128x128xf32, [[BLOCKED_1]]> -> tensor<128x128xf32, [[BLOCKED_2]]>
-// CHECK: [[CONVERT_1:%[0-9]+]] = ttg.convert_layout [[INTERMEDIATE_CONV]] : tensor<128x128xf32, [[BLOCKED_2]]> -> tensor<128x128xf32, [[MMA_2]]>
-// CHECK: [[CONVERT_2:%[0-9]+]] = ttg.convert_layout [[ARG_2]] : tensor<256x128xf16, [[MMA_1]]> -> tensor<256x128xf16, #ttg.dot_op<{opIdx = 0, parent = [[MMA_1]], kWidth = 4}>>
+// CHECK: [[INTERMEDIATE_CONV:%[0-9]+]] = ttg.convert_layout [[ARG_1]] {{.*}}: tensor<128x128xf32, [[BLOCKED_1]]> -> tensor<128x128xf32, [[BLOCKED_2]]>
+// CHECK: [[CONVERT_1:%[0-9]+]] = ttg.convert_layout [[INTERMEDIATE_CONV]] {{.*}}: tensor<128x128xf32, [[BLOCKED_2]]> -> tensor<128x128xf32, [[MMA_2]]>
+// CHECK: [[CONVERT_2:%[0-9]+]] = ttg.convert_layout [[ARG_2]] {{.*}}: tensor<256x128xf16, [[MMA_1]]> -> tensor<256x128xf16, #ttg.dot_op<{opIdx = 0, parent = [[MMA_1]], kWidth = 4}>>
 // CHECK: [[LOAD:%[0-9]+]] = ttg.local_load [[ALLOC]] : !ttg.memdesc<128x128xf16, [[SHARED]], #smem> -> tensor<128x128xf16, #ttg.dot_op<{opIdx = 0, parent = [[MMA_2]], kWidth = 4}>>
 #blocked = #ttg.blocked<{sizePerThread = [4, 1], threadsPerWarp = [16, 4], warpsPerCTA = [1, 8], order = [0, 1]}>
 #mma1 = #ttg.amd_mfma<{version = 2, warpsPerCTA = [1, 8], instrShape = [32, 32], isTransposed = false}>

@@ -2,6 +2,7 @@ add_triton_library(TritonGPUToLLVM
     DotOpToLLVM/FMA.cpp
     DotOpToLLVM/FMADotUtility.cpp
     AllocateSharedMemory.cpp
+    AllocateSharedMemoryUtility.cpp
     AllocateWarpGroups.cpp
     AssertOpToLLVM.cpp
     ControlFlowOpToLLVM.cpp
