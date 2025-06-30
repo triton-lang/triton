@@ -2420,6 +2420,45 @@ def test_max_returns_zero(device):
     kernel[(1, )](x, z, BLOCK=BLOCK)
     assert z[0] == 0
 
+@pytest.mark.interpreter
+def test_max_min_with_nan(device):
+    # In triton, we implement a "nan ignore" style, which means if there is NaN
+    # in the reduce dimesion, we should ignore it and return the max/min number,
+    # it's different with torch.max/min.
+    @triton.jit
+    def max_kernel(x_ptr, y_ptr, BLOCK_SIZE: tl.constexpr):
+        offsets = tl.arange(0, BLOCK_SIZE)
+        x = tl.load(x_ptr + offsets)
+
+        max_val = tl.max(x, axis=0)
+
+        if tl.program_id(0) == 0:
+            tl.store(y_ptr, max_val)
+
+    @triton.jit
+    def min_kernel(x_ptr, y_ptr, BLOCK_SIZE: tl.constexpr):
+        offsets = tl.arange(0, BLOCK_SIZE)
+        x = tl.load(x_ptr + offsets)
+
+        min_val = tl.min(x, axis=0)
+
+        if tl.program_id(0) == 0:
+            tl.store(y_ptr, min_val)
+
+    BLOCK_SIZE = 64
+    x = torch.rand((1, BLOCK_SIZE), dtype=torch.float32, device=device)
+    # Not the expected output for tl.max
+    x[0, 1] = float('nan')
+    # Expected output for tl.min
+    x[0, 0] = float('-inf')
+
+    y = torch.ones(1, device=device)
+
+    max_kernel[(1, )](x, y, BLOCK_SIZE=BLOCK_SIZE)
+    assert y[0] != float('nan')
+
+    min_kernel[(1, )](x, y, BLOCK_SIZE=BLOCK_SIZE)
+    assert y[0] == float('-inf')
 
 def get_reduced_dtype(dtype_str, op):
     if op in ('argmin', 'argmax'):

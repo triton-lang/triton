@@ -164,10 +164,7 @@ def _argmax_combine_tie_break_fast(value1, index1, value2, index2):
 
 @jit
 def _elementwise_max(a, b):
-    # For float point, we'd like generate an arith.maximumf to keep align with
-    # torch, which means if one of the arguments is NaN, then the result is
-    # also NaN.
-    return core.maximum(a, b, core.PropagateNan.ALL)
+    return core.maximum(a, b)
 
 
 @core._tensor_member_fn
