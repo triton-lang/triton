@@ -59,7 +59,16 @@ class BlackwellMXScaleLayout(Layout):
         return data.view(layout_shape)
 
     def unswizzle_data(self, data):
-        assert False
+        swizzle_axis = 2
+        axis = data.stride().index(1)
+        data = perm_tensor_to_contig(data, axis, swizzle_axis)
+        data = unswizzle_mx_scale_bw_torch(data)
+        ndim = data.ndim
+        perm = list(range(ndim))
+        perm[ndim - 1], perm[axis] = axis, ndim - 1
+        if swizzle_axis is not None:
+            perm[ndim - 2], perm[swizzle_axis] = swizzle_axis, ndim - 2
+        return torch.permute(data, perm).contiguous()
 
     def swizzle_block_shape(self, block_shape):
         MX_PACK_DIVISOR = 32
@@ -94,20 +103,6 @@ class Storage:
         return TensorDescriptor(base=self.data, shape=shape, strides=strides, block_shape=block_shape)
 
 
-def make_strides(shape, order=None):
-    n = len(shape)
-    if order is None:
-        order = list(reversed(range(n)))
-    if sorted(order) != list(range(n)):
-        raise ValueError("`order` must be a permutation of range(len(shape))")
-    strides = [0] * n
-    stride = 1
-    for dim in order:
-        strides[dim] = stride
-        stride *= shape[dim]
-    return strides
-
-
 @dataclass
 class IntegerType:
     bitwidth: int
@@ -131,12 +126,6 @@ def bitwidth(type: IntegerType | FloatType | torch.dtype):
     if isinstance(type, torch.dtype):
         return type.itemsize * 8
     return type.bitwidth
-
-
-def expand_shape(packed_shape, packed_dim, pack_width):
-    ret = list(packed_shape)
-    ret[packed_dim] *= pack_width
-    return ret
 
 
 @dataclass
@@ -280,6 +269,12 @@ def perm_tensor_from_contig(x: torch.Tensor, axis: int, swizzle_axis: int | None
     Permute the tensor x moving the last dimension to axis and the second to last dimension to swizzle_axis.
     """
     return x.permute(perm_from_contig(x.ndim, axis, swizzle_axis))
+
+
+def expand_shape(packed_shape, packed_dim, pack_width):
+    ret = list(packed_shape)
+    ret[packed_dim] *= pack_width
+    return ret
 
 
 def swizzle(tensor, swizzle_mode):
