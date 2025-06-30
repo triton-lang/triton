@@ -24,19 +24,37 @@ namespace ttng = triton::nvidia_gpu;
 
 class Node;
 
-enum class HwUnit { DEFAULT, TMA, TC };
+enum Flags : uint8_t {
+  NONE = 0,
+  LOAD = 1 << 0,
+  MMA = 1 << 1,
+  SIMT = 1 << 2,
+};
 
-std::ostream &operator<<(std::ostream &stream, HwUnit hw) {
-  switch (hw) {
-  case HwUnit::DEFAULT:
-    stream << "DEFAULT";
-    break;
-  case HwUnit::TC:
-    stream << "TC";
-    break;
-  case HwUnit::TMA:
-    stream << "TMA";
-    break;
+Flags &operator|=(Flags &lhs, Flags rhs) {
+  return lhs = static_cast<Flags>(lhs | rhs);
+}
+
+std::ostream &operator<<(std::ostream &stream, Flags flags) {
+  std::vector<std::string> strs;
+  if (flags == Flags::NONE) {
+    strs = "NONE";
+  } else {
+    if (flags & Flags::LOAD) {
+      strs.push_back("LOAD");
+    }
+    if (flags & Flags::MMA) {
+      strs.push_back("MMA");
+    }
+    if (flags & Flags::SIMT) {
+      strs.push_back("SIMT");
+    }
+  }
+  for (size_t i = 0; i < strs.size(); i++) {
+    if (i != 0) {
+      stream << "|";
+    }
+    stream << str;
   }
   return stream;
 }
@@ -45,13 +63,13 @@ class Group {
 public:
   void add(Node *node);
   void remove(Node *node) { nodes.remove(node); }
-  HwUnit getHw() const { return hw; }
+  Flags getFlags() const { return flags; }
   const SetVector<Node *> &getNodes() const { return nodes; }
 
   static void merge(Group *lhs, Group *rhs);
 
 private:
-  HwUnit hw = HwUnit::DEFAULT;
+  Flags flags = Flags::NONE;
   SetVector<Node *> nodes;
 };
 
@@ -344,25 +362,35 @@ private:
   SmallVector<std::unique_ptr<Group>> groups;
 };
 
-HwUnit getHwUnit(Node *node) {
-  if (node->isOp()) {
-    auto op = node->getOp();
-    if (isa<tt::DescriptorLoadOp, tt::DescriptorStoreOp>(op)) {
-      return HwUnit::TMA;
-    }
-    if (isa<ttng::MMAv5OpInterface>(op)) {
-      return HwUnit::TC;
+bool isSIMTOp(Operation *op) {
+  auto types = llvm::concat<Type>(op->getOperandTypes(), op->getResultTypes());
+  for (Type type : types) {
+    if (isa<RankedTensorType>(type)) {
+      return true;
     }
   }
-  return HwUnit::DEFAULT;
+  return false;
+}
+
+Flags getNodeFlags(Node *node) {
+  if (node->isOp()) {
+    auto op = node->getOp();
+    if (isa<tt::LoadOp, tt::DescriptorLoadOp, tt::DescriptorStoreOp>(op)) {
+      return Flags::LOAD;
+    }
+    if (isa<ttng::MMAv5OpInterface>(op)) {
+      return Flags::MMA;
+    }
+    if (isSIMTOp(op)) {
+      return Flags::SIMT;
+    }
+  }
+  return Flags::NONE;
 }
 
 void Group::add(Node *node) {
   nodes.insert(node);
-  auto nodeHw = getHwUnit(node);
-  if (nodeHw != HwUnit::DEFAULT) {
-    hw = nodeHw;
-  }
+  flags |= getNodeFlags(node);
 }
 
 void Group::merge(Group *lhs, Group *rhs) {
@@ -682,9 +710,9 @@ SmallVector<std::pair<std::string, std::function<bool(Edge)>>> heuristics = {
        if (isa<ttg::AsyncTokenType>(edge.getType())) {
          return false;
        }
-       return from->getGroup()->getHw() == HwUnit::DEFAULT ||
-              to->getGroup()->getHw() == HwUnit::DEFAULT ||
-              from->getGroup()->getHw() == to->getGroup()->getHw();
+       return from->getGroup()->getFlags() == Flags::NONE ||
+              to->getGroup()->getFlags() == Flags::NONE ||
+              from->getGroup()->getFlags() == to->getGroup()->getFlags();
      }},
 
     // groups using same hw unit where from node has a single output
@@ -695,9 +723,9 @@ SmallVector<std::pair<std::string, std::function<bool(Edge)>>> heuristics = {
        if (from->getNumOutDataEdges() > 1) {
          return false;
        }
-       return from->getGroup()->getHw() == HwUnit::DEFAULT ||
-              to->getGroup()->getHw() == HwUnit::DEFAULT ||
-              from->getGroup()->getHw() == to->getGroup()->getHw();
+       return from->getGroup()->getFlags() == Flags::NONE ||
+              to->getGroup()->getFlags() == Flags::NONE ||
+              from->getGroup()->getFlags() == to->getGroup()->getFlags();
      }},
 
 };
