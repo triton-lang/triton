@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file --allocate-amdgpu-shared-memory --convert-triton-gpu-to-llvm=compute-capability=90 | FileCheck %s
+// RUN: triton-opt %s -split-input-file --allocate-amdgpu-shared-memory | FileCheck %s
 
 #blocked1 = #ttg.blocked<{sizePerThread = [8, 4], threadsPerWarp = [8, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 #blocked2 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
