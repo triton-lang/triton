@@ -1275,7 +1275,7 @@ class CodeGenerator(ast.NodeVisitor):
                 # itself).  But when calling a function, we raise as `from e` to
                 # preserve the traceback of the original error, which may e.g.
                 # be in core.py.
-                raise CompilationError(self.jit_fn.src, node, None) from e
+                raise CompilationError(self.jit_fn.src, node, str(e)) from e
 
         if fn in self.builtin_namespace.values():
             args = map(_unwrap_if_constexpr, args)
