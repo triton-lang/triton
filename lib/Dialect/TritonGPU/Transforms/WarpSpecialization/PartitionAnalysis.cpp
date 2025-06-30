@@ -411,7 +411,8 @@ bool Edge::isDataValue() const {
 }
 
 bool Edge::crossesGroups() const {
-  return isDataValue() &&
+  return isDataValue() && from.getNode()->hasGroup() &&
+         to.getNode()->hasGroup() &&
          from.getNode()->getGroup() != to.getNode()->getGroup();
 }
 
