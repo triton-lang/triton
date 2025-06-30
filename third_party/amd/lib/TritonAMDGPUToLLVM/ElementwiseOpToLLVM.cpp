@@ -1406,8 +1406,8 @@ struct FpToFpOpConversion
     // - fp16 -> fp8 with rtne
     // with the following exceptions:
     // 1. fp32 -> ocp fp8/bf8 on CDNA4: has hardware support
-    // 2. fp32 -> nanoo fp8/bf8 on CDNA3: has hardware support
-    // 3. fp32 -> ocp bf8 on CDNA3: has software support
+    // 2. fp32 -> nanoo fp8/bf8 on non-CDNA4: has hardware support
+    // 3. fp32 -> ocp bf8 on non-CDNA4: has software support
     bool useFP16IntermediateSrc =
         srcElementType.isF32() && !dstElementType.isF16() &&
         roundingMode == RoundingMode::RTNE &&
@@ -1416,7 +1416,7 @@ struct FpToFpOpConversion
         !(isaFamily == AMD::ISAFamily::CDNA3 &&
           (llvm::isa<Float8E4M3FNUZType, Float8E5M2FNUZType>(
               dstElementType))) &&
-        !(isaFamily == AMD::ISAFamily::CDNA3 &&
+        !(isaFamily != AMD::ISAFamily::CDNA4 &&
           (llvm::isa<Float8E5M2Type>(dstElementType)));
 
     // fp8/bf8->f32, if neither nanoo fp8/bf8 on CDNA3 nor ocp fp8/bf8 on CDNA4,
