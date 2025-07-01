@@ -142,6 +142,11 @@ private:
       return false;
     }
 
+    auto tilesPerWarp = mfmaEnc.getTilesPerWarp();
+    if (llvm::any_of(tilesPerWarp, [](int x) { return x != 1; })) {
+      return false;
+    }
+
     auto sharedEnc =
         dyn_cast<triton::gpu::SwizzledSharedEncodingAttr>(srcTy.getEncoding());
     if (!sharedEnc)

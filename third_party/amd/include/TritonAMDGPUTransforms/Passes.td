@@ -48,7 +48,7 @@ def TritonAMDGPUAccelerateMatmul : Pass<"tritonamdgpu-accelerate-matmul", "mlir:
            "enforce matrix instruction MN size">,
     Option<"kPack", "kPack",
            "int32_t", /*default*/"1",
-           "KWidth / kBase">
+           "KWidth / kBase">,
   ];
 }
 
