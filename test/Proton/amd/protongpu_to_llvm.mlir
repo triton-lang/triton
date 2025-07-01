@@ -18,24 +18,12 @@ module attributes {"ttg.num-warps" = 8 : i32} {
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-warps" = 8 : i32} {
-  // CHECK-LABEL: convert_read_counter_cycle
-  llvm.func @convert_read_counter_cycle() -> i32 {
+  // CHECK-LABEL: convert_read_counter
+  llvm.func @convert_read_counter() -> i32 {
     //CHECK: llvm.call_intrinsic "llvm.amdgcn.s.memtime"() : () -> i64
     //CHECK: llvm.trunc %{{.*}} : i64 to i32
     %1 = proton_gpu.read_counter : i32
     llvm.return %1 : i32
-  }
-}
-
-// -----
-#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
-#smem = #ttg.shared_memory
-module attributes {"ttg.num-warps" = 8 : i32} {
-  // CHECK-LABEL: convert_read_counter_timestamp
-  llvm.func @convert_read_counter_timestamp() -> i64 {
-    //CHECK: llvm.call_intrinsic "llvm.amdgcn.s.memrealtime"() : () -> i64
-    %1 = proton_gpu.read_counter {metric = 1 : i32} : i64
-    llvm.return %1 : i64
   }
 }
 
