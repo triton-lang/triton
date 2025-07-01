@@ -98,12 +98,15 @@ def _routing_clear_bitmatrix(Bitmatrix, stride_bm, stride_bn, shape_bn, cutoff, 
 
 @triton.jit
 def _routing_memset_indx(Indx, size, sentinel, BLOCK: tl.constexpr, ExpertHist, FinalExpertOffs, hist_size,
-                         BLOCK_N: tl.constexpr):
+                         n_expts_tot, PartialHist, shape_pm, stride_pm, stride_pn,  #
+                         BLOCK_N: tl.constexpr, BLOCK_M: tl.constexpr):
     pid = tl.program_id(0)
 
-    if pid == 0:
+    if pid == n_expts_tot:
         _routing_compute_expt_offs(ExpertHist, FinalExpertOffs, hist_size, BLOCK_N)
+    elif pid < n_expts_tot:
+        _routing_compute_indx_offs(PartialHist, shape_pm, stride_pm, stride_pn, BLOCK_M)
     else:
-        offs = (pid - 1) * BLOCK + tl.arange(0, BLOCK)
+        offs = (pid - n_expts_tot - 1) * BLOCK + tl.arange(0, BLOCK)
         mask = offs < size
         tl.store(Indx + offs, sentinel, mask=mask)

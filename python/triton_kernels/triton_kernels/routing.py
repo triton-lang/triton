@@ -2,7 +2,6 @@ import torch
 import triton
 from dataclasses import dataclass, field
 from .routing_details._routing_compute import _routing_memset_indx
-from .routing_details._routing_compute import _routing_compute_indx_offs
 from .routing_details._routing_compute import _routing_compute_indx
 from .routing_details._routing_compute import _routing_clear_bitmatrix
 from .routing_details._expt_data import _expt_data_memset
@@ -115,14 +114,11 @@ class SortTokens(torch.autograd.Function):
         topk_indx = combined_indx[:n_gates_pad]
         gate_indx = combined_indx[n_gates_pad:]
         gate_scal = torch.empty(n_gates_pad, dtype=dtype, device=device)
-        _routing_memset_indx[(cdiv(n_gates_pad * 2, MEMSET_BLOCK) + 1, )](
+        _routing_memset_indx[(cdiv(n_gates_pad * 2, MEMSET_BLOCK) + n_expts_tot + 1, )](
             combined_indx, n_gates_pad * 2, -1, MEMSET_BLOCK, hist,  #
-            expt_offs, hist.shape[0], BLOCK_N=512  #
-        )
-        _routing_compute_indx_offs[(n_expts_tot, )](
-            partial_hist,  # inputs
+            expt_offs, hist.shape[0], n_expts_tot, partial_hist,  # inputs
             partial_hist.shape[0], partial_hist.stride(0), partial_hist.stride(1),  # outputs
-            BLOCK_M=INDX_OFFS_BLOCK_M,  # tunable parameters
+            BLOCK_N=512, BLOCK_M=INDX_OFFS_BLOCK_M,  # tunable parameters
         )
         indx_offs = partial_hist
         _routing_compute_indx[(cdiv(n_tokens_pad, HIST_BLOCK_M), )](
