@@ -114,6 +114,23 @@ def _routing_clear_bitmatrix(Bitmatrix, stride_bm, stride_bn, shape_bn, cutoff, 
 def _combined_routing_memset(Indx, size, sentinel, BLOCK: tl.constexpr, ExpertHist, FinalExpertOffs, hist_size, n_expts_tot,
                          PartialHist, shape_pm, stride_pm, stride_pn, MDStarts, tile_starts_stridem, blocks1a,
                          MDTileInfo, first_tile_dim_log2, SIZES: tl.constexpr, BLOCK_A: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_M: tl.constexpr):
+    """
+    This kernel essentially combines 6 different pieces of functionality,
+    statically branching on the value of tl.program_id(0) to decide which
+    codepath to take.
+
+        pid == 0:                                  create the token cumsum
+        1 <= pid <= SIZES:                         create a tile cumsum
+        SIZES < pid < blocks1a:                    initialise MDTileInfo to 0xffffffff
+        blocks1a <= pid < blocks1a + n_expts_tot:  compute_indx_offs
+        pid == blocks1a + n_expts_tot:             compute_expt_offs
+        pid > blocks1a + n_expts_tot:              initialise Indx to sentinel
+
+    As each of these is a relatively trivial workload, launching them from
+    this single trampoline is beneficial as they can execute on different
+    streaming multiprocesses in parallel.
+    """
+
     pid = tl.program_id(0)
 
     if pid < blocks1a:
