@@ -55,7 +55,7 @@ struct I64Entry : public EntryBase {
 
   void print(std::ostream &os) const override;
 
-  int32_t value = 0;
+  int64_t value = 0;
 };
 
 template <> void decodeFn<I64Entry>(ByteSpan &buffer, I64Entry &entry);

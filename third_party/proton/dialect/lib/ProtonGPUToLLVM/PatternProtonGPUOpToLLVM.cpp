@@ -101,7 +101,7 @@ struct InitializeOpConversion
     auto scratchPtrTy = mlir::cast<LLVM::LLVMPointerType>(scratchPtr.getType());
     Value gmemTimestampOffset = b.i32_val(4);
     Value gmemTimestampPtr =
-        b.gep(scratchPtrTy, i64_ty, scratchPtr, gmemTimestampOffset);
+        b.gep(scratchPtrTy, i32_ty, scratchPtr, gmemTimestampOffset);
     b.store(timestamp, gmemTimestampPtr);
 
     rewriter.eraseOp(op);
