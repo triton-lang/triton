@@ -150,6 +150,13 @@ ReproducerStreamFactory makeConsoleReproducer() {
 OpPrintingFlags getOpPrintingFlags() {
   auto printingFlags = OpPrintingFlags();
   printingFlags.enableDebugInfo();
+  // flag to setup whether printing with
+  // e.g. if there's some codes of assignment "foo = some_operation"
+  // then in ttir and ttgir, printer get us %foo = some_operation_in_mlir if this flag is set as true
+  // otherwise we get some realtime printed id %123 = some_operation_in_mlir
+  if(::triton::tools::getBoolEnv("USE_NAMELOC_AS_PREFIX")){
+    printingFlags.printNameLocAsPrefix(true);
+  }
   return printingFlags;
 }
 
