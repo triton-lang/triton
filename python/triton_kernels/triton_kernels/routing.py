@@ -115,7 +115,8 @@ class SortTokens(torch.autograd.Function):
         gate_indx = combined_indx[n_gates_pad:]
         gate_scal = torch.empty(n_gates_pad, dtype=dtype, device=device)
 
-        token_offs_combined, token_offs_raw, token_offs_pad, block_pid_map, blocks1a, blocks2a, MEMSET_BLOCK_A, HIST2_BLOCK_M, block_m_log2_start, block_m_num = _compute_expt_data_internal(hist, n_expts_tot, n_gates_pad)
+        token_offs_combined, token_offs_raw, token_offs_pad, block_pid_map, blocks1a, blocks2a, MEMSET_BLOCK_A, HIST2_BLOCK_M, block_m_log2_start, block_m_num = _compute_expt_data_internal(
+            hist, n_expts_tot, n_gates_pad)
 
         blocks1b = cdiv(n_gates_pad * 2, MEMSET_BLOCK) + n_expts_tot + 1
         blocks2b = cdiv(n_tokens_pad, HIST_BLOCK_M)
@@ -252,7 +253,8 @@ def compute_expt_data(expt_hist, n_expts_tot, n_gates):
         return ExptData(None, None, None, None)
 
     # this just computes the kernel arguments:
-    token_offs_combined, token_offs_raw, token_offs_pad, block_pid_map, blocks1, blocks2, MEMSET_BLOCK, HIST2_BLOCK_M, block_m_log2_start, block_m_num = _compute_expt_data_internal(expt_hist, n_expts_tot, n_gates)
+    token_offs_combined, token_offs_raw, token_offs_pad, block_pid_map, blocks1, blocks2, MEMSET_BLOCK, HIST2_BLOCK_M, block_m_log2_start, block_m_num = _compute_expt_data_internal(
+        expt_hist, n_expts_tot, n_gates)
 
     _expt_data_memset[(blocks1, )](
         expt_hist, n_expts_tot,  #
@@ -284,7 +286,8 @@ def routing(logits, n_expts_act, sm_first=False, expt_indx=None, simulated_ep=1,
     # mutate bitmatrix
     if simulated_ep > 1:
         expt_scal, expt_indx, bitmatrix = prune_routing(expt_scal, expt_indx, bitmatrix, simulated_ep)
-    hist, topk_indx, gate_indx, gate_scal, token_offs_raw, token_offs_pad, block_pid_map = sort_tokens(expt_scal, expt_indx, bitmatrix)
+    hist, topk_indx, gate_indx, gate_scal, token_offs_raw, token_offs_pad, block_pid_map = sort_tokens(
+        expt_scal, expt_indx, bitmatrix)
 
     token_offs_pad = _unpack_into_dict(token_offs_pad)
     block_pid_map = _unpack_into_dict(block_pid_map)

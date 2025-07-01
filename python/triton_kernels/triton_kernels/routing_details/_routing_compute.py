@@ -46,8 +46,9 @@ def _keyed_add(x, y):
 
 
 @triton.jit
-def _routing_compute_indx(pid_m, GatherIndx, ScatterIndx, GateScal, ExptScal, ExptIndx, PartialOffs, stride_pm, stride_pn,
-                          TokensStart, n_tokens_pad, NTokensRaw, BLOCK_M: tl.constexpr, N_EXPTS_ACT: tl.constexpr):
+def _routing_compute_indx(pid_m, GatherIndx, ScatterIndx, GateScal, ExptScal, ExptIndx, PartialOffs, stride_pm,
+                          stride_pn, TokensStart, n_tokens_pad, NTokensRaw, BLOCK_M: tl.constexpr,
+                          N_EXPTS_ACT: tl.constexpr):
 
     n_tokens = n_tokens_pad
     if NTokensRaw is not None:
@@ -84,16 +85,18 @@ def _routing_compute_indx(pid_m, GatherIndx, ScatterIndx, GateScal, ExptScal, Ex
 
 @triton.jit
 def _combined_routing_compute(GatherIndx, ScatterIndx, GateScal, ExptScal, ExptIndx, PartialOffs, stride_pm, stride_pn,
-                          TokensStart, n_tokens_pad, NTokensRaw, BLOCK_M: tl.constexpr, N_EXPTS_ACT: tl.constexpr,
-                            Hist, MDTileStarts, tile_starts_stridem, MDTileInfo, tile_info_stridem,
-                            first_tile_dim_log2, SIZES: tl.constexpr, BLOCK: tl.constexpr, blocks2a):
+                              TokensStart, n_tokens_pad, NTokensRaw, BLOCK_M: tl.constexpr, N_EXPTS_ACT: tl.constexpr,
+                              Hist, MDTileStarts, tile_starts_stridem, MDTileInfo, tile_info_stridem,
+                              first_tile_dim_log2, SIZES: tl.constexpr, BLOCK: tl.constexpr, blocks2a):
 
     pid = tl.program_id(0)
     if pid < blocks2a:
-        _expt_data_compute(Hist, MDTileStarts, tile_starts_stridem, MDTileInfo, tile_info_stridem, first_tile_dim_log2, SIZES, BLOCK)
+        _expt_data_compute(Hist, MDTileStarts, tile_starts_stridem, MDTileInfo, tile_info_stridem, first_tile_dim_log2,
+                           SIZES, BLOCK)
     else:
         pid -= blocks2a
-        _routing_compute_indx(pid, GatherIndx, ScatterIndx, GateScal, ExptScal, ExptIndx, PartialOffs, stride_pm, stride_pn, TokensStart, n_tokens_pad, NTokensRaw, BLOCK_M, N_EXPTS_ACT)
+        _routing_compute_indx(pid, GatherIndx, ScatterIndx, GateScal, ExptScal, ExptIndx, PartialOffs, stride_pm,
+                              stride_pn, TokensStart, n_tokens_pad, NTokensRaw, BLOCK_M, N_EXPTS_ACT)
 
 
 @triton.jit
@@ -111,9 +114,10 @@ def _routing_clear_bitmatrix(Bitmatrix, stride_bm, stride_bn, shape_bn, cutoff, 
 
 
 @triton.jit
-def _combined_routing_memset(Indx, size, sentinel, BLOCK: tl.constexpr, ExpertHist, FinalExpertOffs, hist_size, n_expts_tot,
-                         PartialHist, shape_pm, stride_pm, stride_pn, MDStarts, tile_starts_stridem, blocks1a,
-                         MDTileInfo, first_tile_dim_log2, SIZES: tl.constexpr, BLOCK_A: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_M: tl.constexpr):
+def _combined_routing_memset(Indx, size, sentinel, BLOCK: tl.constexpr, ExpertHist, FinalExpertOffs, hist_size,
+                             n_expts_tot, PartialHist, shape_pm, stride_pm, stride_pn, MDStarts, tile_starts_stridem,
+                             blocks1a, MDTileInfo, first_tile_dim_log2, SIZES: tl.constexpr, BLOCK_A: tl.constexpr,
+                             BLOCK_N: tl.constexpr, BLOCK_M: tl.constexpr):
     """
     This kernel essentially combines 6 different pieces of functionality,
     statically branching on the value of tl.program_id(0) to decide which
@@ -134,7 +138,8 @@ def _combined_routing_memset(Indx, size, sentinel, BLOCK: tl.constexpr, ExpertHi
     pid = tl.program_id(0)
 
     if pid < blocks1a:
-        _expt_data_memset(ExpertHist, n_expts_tot, MDStarts, tile_starts_stridem, MDTileInfo, first_tile_dim_log2, SIZES, BLOCK_A)
+        _expt_data_memset(ExpertHist, n_expts_tot, MDStarts, tile_starts_stridem, MDTileInfo, first_tile_dim_log2,
+                          SIZES, BLOCK_A)
     elif pid == n_expts_tot + blocks1a:
         _routing_compute_expt_offs(ExpertHist, FinalExpertOffs, hist_size, BLOCK_N)
     elif pid < n_expts_tot + blocks1a:
