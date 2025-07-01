@@ -542,18 +542,6 @@ emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
     Value laneId, Value warpId,
     std::function<void(VectorType, Value /*shmemAddr*/)> perVectorCallback);
 
-SmallVector<Value> loadSharedToDistributed(triton::gpu::LocalLoadOp localLoadOp,
-                                           Type elemLlvmTy,
-                                           const SharedMemoryObject &smemObj,
-                                           Location loc, RewriterBase &rewriter,
-                                           const TargetInfoBase &target);
-
-void storeDistributedToShared(
-    triton::gpu::MemDescType dstTy, RankedTensorType srcTy, Type elemLlvmTy,
-    ArrayRef<Value> srcVals, const SharedMemoryObject &smemObj, Location loc,
-    RewriterBase &rewriter, const TargetInfoBase &target,
-    std::pair<size_t, Type> *const llvmOpCount = nullptr);
-
 // Close cousin of lowerLdStMatrix in MemoryOpToLLVM.cpp
 // We might want to merge them at some point, but having to support
 // ldmatrix.trans makes the code in lowerLdStMatrix a bit specific
