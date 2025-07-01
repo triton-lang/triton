@@ -189,16 +189,17 @@ def log2_power_of_two(x):
     return x.bit_length() - 1
 
 
-def compute_expt_data(expt_hist, n_expts_tot, n_gates):
-    if expt_hist is None:
-        return ExptData(None, None, None, None)
+block_m_log2_start = 4
+
+
+def _compute_expt_data_internal(expt_hist, n_expts_tot, n_gates):
+
     MEMSET_BLOCK = 128
     HIST2_BLOCK_M = 512
     device = expt_hist.device
     n_expts_tot = n_expts_tot
     cdiv = triton.cdiv
     # block_ms are all powers-of-two between 16 and 128 (inclusive)
-    block_m_log2_start = 4
     block_m_log2_end = 9 if is_hip() else 8
     block_m_num = block_m_log2_end - block_m_log2_start
     if n_gates <= n_expts_tot:
@@ -230,9 +231,25 @@ def compute_expt_data(expt_hist, n_expts_tot, n_gates):
         expt_hist, token_offs_pad, token_offs_pad.stride(0), block_pid_map, block_pid_map.stride(0),  # outputs
         block_m_log2_start, BLOCK=HIST2_BLOCK_M,  # optimization parameters
         num_warps=4)
-    # unpack into datastructure
-    token_offs_pad = {2**j: token_offs_pad[i, :] for i, j in enumerate(range(block_m_log2_start, block_m_log2_end))}
-    block_pid_map = {2**j: block_pid_map[i, :] for i, j in enumerate(range(block_m_log2_start, block_m_log2_end))}
+
+    return token_offs_raw, token_offs_pad, block_pid_map
+
+
+def _unpack_into_dict(x):
+
+    block_m_log2_end = block_m_log2_start + x.shape[0]
+    x = {2**j: x[i, :] for i, j in enumerate(range(block_m_log2_start, block_m_log2_end))}
+    return x
+
+
+def compute_expt_data(expt_hist, n_expts_tot, n_gates):
+
+    if expt_hist is None:
+        return ExptData(None, None, None, None)
+
+    token_offs_raw, token_offs_pad, block_pid_map = _compute_expt_data_internal(expt_hist, n_expts_tot, n_gates)
+    token_offs_pad = _unpack_into_dict(token_offs_pad)
+    block_pid_map = _unpack_into_dict(block_pid_map)
     return ExptData(expt_hist, token_offs_raw, token_offs_pad, block_pid_map)
 
 
