@@ -1010,11 +1010,14 @@ void visualize(std::string path, Graph *graph) {
       if (node->hasGroup()) {
         for (auto group : node->getGroups()) {
           dot << "<TD BGCOLOR=\"" << getGroupColor(group) << "\">"
-              << getGroupId(group) << "</TD>";
+              << getGroupId(group) << " [" << group->getFlags() << "]</TD>";
         }
       }
-      dot << "<TD>" << node->getLabel() << "</TD></TR></TABLE>";
-
+      dot << "<TD>" << node->getLabel();
+      if (node->isData()) {
+        dot << " [" << getNodeFlags(node) << "]";
+      }
+      dot << "</TD></TR></TABLE>";
       dot << "</TD></TR>";
       if (node->getNumOutputs() > 1) {
         dot << "<TR>";
