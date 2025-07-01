@@ -219,14 +219,15 @@ def compute_expt_data(expt_hist, n_expts_tot, n_gates):
     token_offs_pad = token_offs_combined[1:]
 
     block_pid_map = torch.empty((block_m_num, pad(max_n_tiles)), dtype=dtype, device=device)
+    memset_grid = torch.numel(block_pid_map) // MEMSET_BLOCK  # exact division
     # compute outputs
     token_offs_pad = token_offs_pad[:, :n_expts_tot + 1]
     block_pid_map = block_pid_map[:, :max_n_tiles]
-    memset_grid = cdiv(block_pid_map.shape[1], MEMSET_BLOCK) + 1
-    _expt_data_memset[(memset_grid * block_m_num + 1,)](
+
+    _expt_data_memset[(memset_grid + block_m_num + 1,)](
         expt_hist, n_expts_tot,  #
         token_offs_combined, token_offs_combined.stride(0),  #
-        block_pid_map, block_pid_map.stride(0),  #
+        block_pid_map,  #
         block_m_log2_start, SIZES=block_m_num, BLOCK=MEMSET_BLOCK,  # optimization parameters
         num_warps=1)
     _expt_data_compute[(n_expts_tot, block_m_num)](
