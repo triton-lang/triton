@@ -97,9 +97,8 @@ def _routing_clear_bitmatrix(Bitmatrix, stride_bm, stride_bn, shape_bn, cutoff, 
 
 
 @triton.jit
-def _routing_memset_indx(Indx, size, sentinel, BLOCK: tl.constexpr, ExpertHist, FinalExpertOffs, hist_size,
-                         n_expts_tot, PartialHist, shape_pm, stride_pm, stride_pn,  #
-                         BLOCK_N: tl.constexpr, BLOCK_M: tl.constexpr):
+def _routing_memset_indx(Indx, size, sentinel, BLOCK: tl.constexpr, ExpertHist, FinalExpertOffs, hist_size, n_expts_tot,
+                         PartialHist, shape_pm, stride_pm, stride_pn, BLOCK_N: tl.constexpr, BLOCK_M: tl.constexpr):
     pid = tl.program_id(0)
 
     if pid == n_expts_tot:

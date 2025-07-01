@@ -221,7 +221,7 @@ def _compute_expt_data_internal(expt_hist, n_expts_tot, n_gates):
     token_offs_pad = token_offs_pad[:, :n_expts_tot + 1]
     block_pid_map = block_pid_map[:, :max_n_tiles]
 
-    _expt_data_memset[(memset_grid + block_m_num + 1,)](
+    _expt_data_memset[(memset_grid + block_m_num + 1, )](
         expt_hist, n_expts_tot,  #
         token_offs_combined, token_offs_combined.stride(0),  #
         block_pid_map,  #

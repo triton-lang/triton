@@ -8,8 +8,8 @@ def _cdiv_pow2(n, log2_k):
 
 
 @triton.jit
-def _expt_data_memset(Hist, n_expts_tot, MDStarts, tile_starts_stridem, MDTileInfo,
-                      first_tile_dim_log2, SIZES: tl.constexpr, BLOCK: tl.constexpr):
+def _expt_data_memset(Hist, n_expts_tot, MDStarts, tile_starts_stridem, MDTileInfo, first_tile_dim_log2,
+                      SIZES: tl.constexpr, BLOCK: tl.constexpr):
 
     pid = tl.program_id(0)
 
@@ -54,7 +54,7 @@ def _expt_data_compute(Hist, MDTileStarts, tile_starts_stridem, MDTileInfo, tile
 
     tile_off = tl.load(MDTileStarts + expt_id)
     MDTileInfo += tile_off
-    # MDTileInfo += tl.load(MDTilesStart + expt_id)
+
     for block_off in range(0, n_blocks, BLOCK):
         block_offs = block_off + tl.arange(0, BLOCK)
         data = (block_offs << 16) + expt_id
