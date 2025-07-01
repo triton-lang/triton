@@ -127,7 +127,7 @@ class SortTokens(torch.autograd.Function):
             expt_offs, n_tokens_pad, n_tokens_raw,  # input shape
             BLOCK_M=HIST_BLOCK_M,  # tunable parameters
             N_EXPTS_ACT=n_expts_act,  # constants
-            num_warps=1 if HIST_BLOCK_M * n_expts_act // 32 < 4 else 4  #
+            num_warps=4  #
         )
         ctx.n_tokens_raw = n_tokens_raw
         ctx.n_tokens_pad = n_tokens_pad
@@ -194,7 +194,7 @@ block_m_log2_start = 4
 
 def _compute_expt_data_internal(expt_hist, n_expts_tot, n_gates):
 
-    MEMSET_BLOCK = 128
+    MEMSET_BLOCK = 512
     HIST2_BLOCK_M = 512
     device = expt_hist.device
     n_expts_tot = n_expts_tot
@@ -221,13 +221,16 @@ def _compute_expt_data_internal(expt_hist, n_expts_tot, n_gates):
     token_offs_pad = token_offs_pad[:, :n_expts_tot + 1]
     block_pid_map = block_pid_map[:, :max_n_tiles]
 
-    _expt_data_memset[(memset_grid + block_m_num + 1, )](
+    blocks1 = memset_grid + block_m_num + 1
+    blocks2 = n_expts_tot * block_m_num
+
+    _expt_data_memset[(blocks1, )](
         expt_hist, n_expts_tot,  #
         token_offs_combined, token_offs_combined.stride(0),  #
         block_pid_map,  #
         block_m_log2_start, SIZES=block_m_num, BLOCK=MEMSET_BLOCK,  # optimization parameters
-        num_warps=1)
-    _expt_data_compute[(n_expts_tot * block_m_num, )](
+        num_warps=4)
+    _expt_data_compute[(blocks2, )](
         expt_hist, token_offs_pad, token_offs_pad.stride(0), block_pid_map, block_pid_map.stride(0),  # outputs
         block_m_log2_start, SIZES=block_m_num, BLOCK=HIST2_BLOCK_M,  # optimization parameters
         num_warps=4)
