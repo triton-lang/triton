@@ -367,6 +367,9 @@ private:
 };
 
 bool isSIMTOp(Operation *op) {
+  if (!op->getDialect() || !llvm::isa<arith::ArithDialect>(op->getDialect())) {
+    return false;
+  }
   auto types = llvm::concat<Type>(op->getOperandTypes(), op->getResultTypes());
   for (Type type : types) {
     if (isa<RankedTensorType>(type)) {
@@ -696,57 +699,99 @@ SmallVector<std::pair<std::string, std::function<bool(Edge)>>> heuristics = {
               isa<ttng::MMAv5OpInterface>(to->getOp());
      }},
 
-    // tmem load followed by a consuming op (ignoring the token)
-    {"tmem_load",
-     [](Edge edge) {
-       auto from = edge.getFromNode();
-       auto to = edge.getToNode();
-       if (!from->isOp() || !to->isOp()) {
-         return false;
-       }
-       return isa<ttng::TMEMLoadOp>(from->getOp()) && edge.getFromIdx() == 0;
-     }},
-
-    // groups using same hw unit in sequential code (ignoring token values)
-    {"same_hw_sequential",
+    // straight sequence of SIMT/NONE ops merges together
+    {"simt_sequence",
      [](Edge edge) {
        auto from = edge.getFromNode();
        auto to = edge.getToNode();
        if (from->getNumOutDataEdges() > 1 || to->getNumInDataEdges() > 1) {
          return false;
        }
-       if (isa<ttg::AsyncTokenType>(edge.getType())) {
-         return false;
-       }
-       return from->getGroup()->getFlags() == Flags::NONE ||
-              to->getGroup()->getFlags() == Flags::NONE ||
-              from->getGroup()->getFlags() == to->getGroup()->getFlags();
+       return (from->getGroup()->getFlags() == Flags::NONE ||
+               from->getGroup()->getFlags() == Flags::SIMT) &&
+              (to->getGroup()->getFlags() == Flags::NONE ||
+               to->getGroup()->getFlags() == Flags::SIMT);
      }},
 
-    // groups using same hw unit where from node has a single output
-    {"same_hw_single_output",
+    // straight sequence of NONE ops merges together
+    {"none_sequence",
      [](Edge edge) {
        auto from = edge.getFromNode();
        auto to = edge.getToNode();
-       if (from->getNumOutDataEdges() > 1) {
+       if (from->getNumOutDataEdges() > 1 || to->getNumInDataEdges() > 1) {
          return false;
        }
-       return from->getGroup()->getFlags() == Flags::NONE ||
-              to->getGroup()->getFlags() == Flags::NONE ||
-              from->getGroup()->getFlags() == to->getGroup()->getFlags();
+       return from->getGroup()->getFlags() == Flags::NONE &&
+              to->getGroup()->getFlags() == Flags::NONE;
      }},
 
+    // NONE ops preceeding MMA merged together
+    {"mma_none",
+     [](Edge edge) {
+       auto from = edge.getFromNode();
+       auto to = edge.getToNode();
+       return from->getGroup()->getFlags() == Flags::NONE &&
+              to->getGroup()->getFlags() == Flags::MMA;
+     }},
+
+    // NONE ops following LOAD merge together
+    {"load_none",
+     [](Edge edge) {
+       auto from = edge.getFromNode();
+       auto to = edge.getToNode();
+       return from->getGroup()->getFlags() == Flags::LOAD &&
+              to->getGroup()->getFlags() == Flags::NONE;
+     }},
+
+    // NONE ops preceeding STORE merge together
+    {"store_none",
+     [](Edge edge) {
+       auto from = edge.getFromNode();
+       auto to = edge.getToNode();
+       return from->getGroup()->getFlags() == Flags::NONE &&
+              to->getGroup()->getFlags() == Flags::STORE;
+     }},
+
+    // NONE ops preceeding SIMT merge together
+    {"simt_none",
+     [](Edge edge) {
+       auto from = edge.getFromNode();
+       auto to = edge.getToNode();
+       return from->getGroup()->getFlags() == Flags::NONE &&
+              to->getGroup()->getFlags() & Flags::SIMT;
+     }},
+
+    // SIMT ops preceeding STORE merge together
+    {"store_simt",
+     [](Edge edge) {
+       auto from = edge.getFromNode();
+       auto to = edge.getToNode();
+       return from->getGroup()->getFlags() == Flags::SIMT &&
+              to->getGroup()->getFlags() & Flags::STORE;
+     }},
 };
 
 SmallVector<std::pair<std::string, std::function<bool(Edge)>>> constraints = {
-    // don't merge ops crossing regions
-    // (i.e. with different parent nodes)
-    // {"crossing region",
-    //  [](Edge edge) {
-    //    auto from = edge.getFromNode();
-    //    auto to = edge.getToNode();
-    //    return from->getParent() == to->getParent();
-    //  }},
+    // don't merge tmem load into mma group
+    {"tmem_load",
+     [](Edge edge) {
+       auto from = edge.getFromNode();
+       auto to = edge.getToNode();
+       return !((from->getGroup()->getFlags() == Flags::MMA && to->isOp() &&
+                 isa<ttng::TMEMLoadOp>(to->getOp())) ||
+                (to->getGroup()->getFlags() == Flags::MMA && from->isOp() &&
+                 isa<ttng::TMEMLoadOp>(from->getOp())));
+     }},
+    // don't merge tmem store into mma group
+    {"tmem_store",
+     [](Edge edge) {
+       auto from = edge.getFromNode();
+       auto to = edge.getToNode();
+       return !((to->getGroup()->getFlags() == Flags::MMA && from->isOp() &&
+                 isa<ttng::TMEMStoreOp>(from->getOp())) ||
+                (from->getGroup()->getFlags() == Flags::MMA && to->isOp() &&
+                 isa<ttng::TMEMStoreOp>(to->getOp())));
+     }},
 };
 
 void mergeGroups(Graph *graph) {
@@ -796,6 +841,23 @@ void mergeGroups(Graph *graph) {
     iter++;
   } while (changed && iter < 10000);
   // std::cout << "iter = " << iter << "\n";
+
+  // merge all load groups
+  {
+    llvm::SmallVector<Group *> load_groups;
+    for (auto &group : graph->getGroups()) {
+      if (group->getFlags() & Flags::LOAD) {
+        load_groups.push_back(group.get());
+      }
+    }
+    std::cout << "load group count = " << load_groups.size() << "\n";
+    if (load_groups.size() > 1) {
+      auto load_group = load_groups.front();
+      for (auto it = load_groups.begin() + 1; it != load_groups.end(); it++) {
+        Group::merge(*it, load_group);
+      }
+    }
+  }
 }
 
 void propagateGroups(Graph *graph) {
