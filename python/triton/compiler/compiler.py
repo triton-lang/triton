@@ -408,6 +408,9 @@ class AsmDict(dict):
 
 class CompiledKernel:
 
+    launch_enter_hook = knobs.runtime.launch_enter_hook
+    launch_exit_hook = knobs.runtime.launch_exit_hook
+
     def __init__(self, src, metadata_group, hash):
         from collections import namedtuple
         metadata_path = next((Path(p) for c, p in metadata_group.items() if c.endswith(".json")))
