@@ -5982,7 +5982,11 @@ def test_globaltimer(device):
     if is_cuda():
         assert h.asm["ptx"].count("%globaltimer") == 2
     else:
-        assert h.asm["amdgcn"].count("s_memrealtime") == 2
+        target_arch = triton.runtime.driver.active.get_current_target().arch
+        if "gfx11" in target_arch or "gfx12" in target_arch:
+            assert h.asm["amdgcn"].count("s_sendmsg_rtn_b64") == 2
+        else:
+            assert h.asm["amdgcn"].count("s_memrealtime") == 2
 
 
 def test_smid(device):
