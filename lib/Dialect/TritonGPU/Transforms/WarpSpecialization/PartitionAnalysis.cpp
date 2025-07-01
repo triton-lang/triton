@@ -27,8 +27,9 @@ class Node;
 enum Flags : uint8_t {
   NONE = 0,
   LOAD = 1 << 0,
-  MMA = 1 << 1,
-  SIMT = 1 << 2,
+  STORE = 1 << 1,
+  MMA = 1 << 2,
+  SIMT = 1 << 3,
 };
 
 Flags &operator|=(Flags &lhs, Flags rhs) {
@@ -38,10 +39,13 @@ Flags &operator|=(Flags &lhs, Flags rhs) {
 std::ostream &operator<<(std::ostream &stream, Flags flags) {
   std::vector<std::string> strs;
   if (flags == Flags::NONE) {
-    strs = "NONE";
+    strs.push_back("NONE");
   } else {
     if (flags & Flags::LOAD) {
       strs.push_back("LOAD");
+    }
+    if (flags & Flags::STORE) {
+      strs.push_back("STORE");
     }
     if (flags & Flags::MMA) {
       strs.push_back("MMA");
@@ -54,7 +58,7 @@ std::ostream &operator<<(std::ostream &stream, Flags flags) {
     if (i != 0) {
       stream << "|";
     }
-    stream << str;
+    stream << strs[i];
   }
   return stream;
 }
@@ -375,8 +379,11 @@ bool isSIMTOp(Operation *op) {
 Flags getNodeFlags(Node *node) {
   if (node->isOp()) {
     auto op = node->getOp();
-    if (isa<tt::LoadOp, tt::DescriptorLoadOp, tt::DescriptorStoreOp>(op)) {
+    if (isa<tt::LoadOp, tt::DescriptorLoadOp>(op)) {
       return Flags::LOAD;
+    }
+    if (isa<tt::StoreOp, tt::DescriptorStoreOp>(op)) {
+      return Flags::STORE;
     }
     if (isa<ttng::MMAv5OpInterface>(op)) {
       return Flags::MMA;
