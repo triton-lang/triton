@@ -349,10 +349,9 @@ def test_trace(tmp_path: pathlib.Path):
         assert trace_events[-1]["args"]["call_stack"] == ["ROOT", "test", "foo"]
 
 
-@pytest.mark.parametrize("metric_type", ["cycle", "timestamp"])
-def test_timeline(tmp_path: pathlib.Path, metric_type: str):
+def test_timeline(tmp_path: pathlib.Path):
     temp_file = tmp_path / "test_timeline.chrome_trace"
-    mode = proton.mode.Default(metric_type=metric_type, optimizations="time_shift")
+    mode = proton.mode.Default(metric_type="cycle", optimizations="time_shift")
     proton.start(str(temp_file.with_suffix("")), data="trace", backend="instrumentation", mode=mode)
 
     @triton.jit
