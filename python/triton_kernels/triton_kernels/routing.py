@@ -224,18 +224,7 @@ def _compute_expt_data_internal(expt_hist, n_expts_tot, n_gates):
     blocks1 = memset_grid + block_m_num + 1
     blocks2 = n_expts_tot * block_m_num
 
-    _expt_data_memset[(blocks1, )](
-        expt_hist, n_expts_tot,  #
-        token_offs_combined, token_offs_combined.stride(0),  #
-        block_pid_map,  #
-        block_m_log2_start, SIZES=block_m_num, BLOCK=MEMSET_BLOCK,  # optimization parameters
-        num_warps=4)
-    _expt_data_compute[(blocks2, )](
-        expt_hist, token_offs_pad, token_offs_pad.stride(0), block_pid_map, block_pid_map.stride(0),  # outputs
-        block_m_log2_start, SIZES=block_m_num, BLOCK=HIST2_BLOCK_M,  # optimization parameters
-        num_warps=4)
-
-    return token_offs_raw, token_offs_pad, block_pid_map
+    return token_offs_combined, token_offs_raw, token_offs_pad, block_pid_map, blocks1, blocks2, MEMSET_BLOCK, HIST2_BLOCK_M, block_m_log2_start, block_m_num
 
 
 def _unpack_into_dict(x):
@@ -250,7 +239,20 @@ def compute_expt_data(expt_hist, n_expts_tot, n_gates):
     if expt_hist is None:
         return ExptData(None, None, None, None)
 
-    token_offs_raw, token_offs_pad, block_pid_map = _compute_expt_data_internal(expt_hist, n_expts_tot, n_gates)
+    # this just computes the kernel arguments:
+    token_offs_combined, token_offs_raw, token_offs_pad, block_pid_map, blocks1, blocks2, MEMSET_BLOCK, HIST2_BLOCK_M, block_m_log2_start, block_m_num = _compute_expt_data_internal(expt_hist, n_expts_tot, n_gates)
+
+    _expt_data_memset[(blocks1, )](
+        expt_hist, n_expts_tot,  #
+        token_offs_combined, token_offs_combined.stride(0),  #
+        block_pid_map,  #
+        block_m_log2_start, SIZES=block_m_num, BLOCK=MEMSET_BLOCK,  # optimization parameters
+        num_warps=4)
+    _expt_data_compute[(blocks2, )](
+        expt_hist, token_offs_pad, token_offs_pad.stride(0), block_pid_map, block_pid_map.stride(0),  # outputs
+        block_m_log2_start, SIZES=block_m_num, BLOCK=HIST2_BLOCK_M,  # optimization parameters
+        num_warps=4)
+
     token_offs_pad = _unpack_into_dict(token_offs_pad)
     block_pid_map = _unpack_into_dict(block_pid_map)
     return ExptData(expt_hist, token_offs_raw, token_offs_pad, block_pid_map)
