@@ -18,13 +18,11 @@ def _routing_compute_expt_offs(ExpertHist, FinalExpertOffs, hist_size,  # histog
 
 
 @triton.jit
-def _routing_compute_indx_offs(TokensStart, PartialHist, shape_pm, stride_pm, stride_pn, BLOCK_M: tl.constexpr):
+def _routing_compute_indx_offs(PartialHist, shape_pm, stride_pm, stride_pn, BLOCK_M: tl.constexpr):
     expt_id = tl.program_id(0)
     offs_m = tl.arange(0, BLOCK_M)
-    # initialize first row of the output
-    start = tl.load(TokensStart + expt_id)
     # iterate over input data
-    curr_sum = start
+    curr_sum = 0
     for _ in range(0, shape_pm, BLOCK_M):
         offs = offs_m * stride_pm + expt_id * stride_pn
         curr = tl.load(PartialHist + offs, mask=offs_m < shape_pm)
@@ -48,7 +46,7 @@ def _keyed_add(x, y):
 
 @triton.jit
 def _routing_compute_indx(GatherIndx, ScatterIndx, GateScal, ExptScal, ExptIndx, PartialOffs, stride_pm, stride_pn,
-                          n_tokens_pad, NTokensRaw, BLOCK_M: tl.constexpr, N_EXPTS_ACT: tl.constexpr):
+                          TokensStart, n_tokens_pad, NTokensRaw, BLOCK_M: tl.constexpr, N_EXPTS_ACT: tl.constexpr):
 
     pid_m = tl.program_id(0)
     n_tokens = n_tokens_pad
@@ -75,7 +73,8 @@ def _routing_compute_indx(GatherIndx, ScatterIndx, GateScal, ExptScal, ExptIndx,
     expts_and_inclusive_run_lengths = tl.associative_scan(x, 0, _keyed_add)
     exclusive_run_lengths = (expts_and_inclusive_run_lengths - 1) & 0xffff
 
-    gates = tl.load(PartialOffs + pid_m * stride_pm + expert * stride_pn, mask=(expert != 0xffff))
+    gates = tl.load(PartialOffs + pid_m * stride_pm + expert * stride_pn, mask=mask)
+    gates += tl.load(TokensStart + expert, mask=mask)
     gates += exclusive_run_lengths
 
     tl.store(ScatterIndx + offs, gates, mask=mask)
