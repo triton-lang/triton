@@ -5,7 +5,7 @@ from triton_kernels.testing import assert_close
 from triton_kernels.testing import assert_equal
 
 
-def init_data(n_tokens, n_expts_tot, dtype=torch.float32, device="cuda"):
+def init_data(n_tokens, n_expts_tot, dtype=torch.float16, device="cuda"):
     logits = torch.randn((n_tokens, n_expts_tot), dtype=dtype, device=device, requires_grad=True)
     return logits
 
