@@ -588,8 +588,12 @@ class CodeGenerator(ast.NodeVisitor):
         if isinstance(target, ast.Attribute):
             base = self.visit(target.value)
             setattr(base, target.attr, value)
+            if knobs.compilation.dump_source_var_name:
+                print(f'Triton Source Value Name with attribute: {target.value.id + "." + target.attr}')
             return
         assert isinstance(target, ast.Name)
+        if knobs.compilation.dump_source_var_name:
+            print(f'Triton Source Value Name: {target.id}')
         self.set_value(self.visit(target), value)
 
     def visit_Assign(self, node):
