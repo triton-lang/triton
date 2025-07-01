@@ -926,6 +926,20 @@ class CodeGenerator(ast.NodeVisitor):
             f'but is re-assigned to {loop_val.type} in loop! '\
             f'Please make sure that the type stays consistent.'
 
+    def visit_withitem(self, node):
+        return self.visit(node.context_expr)
+
+    def visit_With(self, node):
+        assert len(node.items) == 1
+        context = node.items[0].context_expr
+        withitemClass = self.visit(context.func)
+        if withitemClass == language.async_task:
+            args = [self.visit(arg) for arg in context.args]
+            with withitemClass(*args, _builder=self.builder):
+                self.visit_compound_statement(node.body)
+        else:
+            self.visit_compound_statement(node.body)
+
     def visit_While(self, node):
         with enter_sub_region(self) as sr:
             liveins, insert_block = sr
