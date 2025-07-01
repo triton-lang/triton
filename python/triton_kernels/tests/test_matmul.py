@@ -11,7 +11,8 @@ from triton_kernels.matmul_ogs import FlexCtx, PrecisionConfig, FusedActivation,
 from triton_kernels.matmul_ogs import none_or_tma_compatible
 from triton_kernels.matmul_ogs import matmul_ogs_set_idle_sms, matmul_ogs, matmul_ogs_torch
 from triton_kernels.swiglu import swiglu, swiglu_fn, PrecisionConfig as SwiGLUPrecisionConfig
-from triton_kernels import tensor as tensor_utils
+from triton_kernels.tensor import swizzle
+from triton_kernels.tensor_details import layout
 # numerics utilities
 from triton_kernels.numerics import InFlexData, OutFlexData
 from triton_kernels.numerics_details.mxfp import downcast_to_mxfp, upcast_from_mxfp
@@ -301,18 +302,18 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
         if torch.cuda.get_device_capability()[0] == 9:
             if k % 64 != 0 or n % 64 != 0:
                 pytest.skip("Hopper swizzling acts on a 64x64 tile (4x1 mma tiles).")
-            swizzle_value = tensor_utils.HopperMXValueLayout()
-            swizzle_scale = tensor_utils.HopperMXScaleLayout()
+            swizzle_value = layout.HopperMXValueLayout()
+            swizzle_scale = layout.HopperMXScaleLayout()
         elif torch.cuda.get_device_capability()[0] == 10:
-            swizzle_value = tensor_utils.DefaultLayout()
-            swizzle_scale = tensor_utils.BlackwellMXScaleLayout()
+            swizzle_value = layout.DefaultLayout()
+            swizzle_scale = layout.BlackwellMXScaleLayout()
         else:
-            swizzle_value = tensor_utils.DefaultLayout()
-            swizzle_scale = tensor_utils.DefaultLayout()
+            swizzle_value = layout.DefaultLayout()
+            swizzle_scale = layout.DefaultLayout()
         w_tri, mx_scales_tri = downcast_to_mxfp(w_tri, weight_dtype, axis=1)
         w_ref = upcast_from_mxfp(w_tri, mx_scales_tri, torch.bfloat16, axis=1)
-        w_tri = tensor_utils.swizzle(w_tri, layout=swizzle_value)
-        mx_scales_tri = tensor_utils.swizzle(mx_scales_tri, layout=swizzle_scale)
+        w_tri = swizzle(w_tri, layout=swizzle_value)
+        mx_scales_tri = swizzle(mx_scales_tri, layout=swizzle_scale)
         precision_opt.weight_scale = mx_scales_tri
 
     can_use_tma = none_or_tma_compatible(x_tri.view(1, *x_tri.shape)) and none_or_tma_compatible(w_tri)
