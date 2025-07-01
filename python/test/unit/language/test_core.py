@@ -2420,6 +2420,7 @@ def test_max_returns_zero(device):
     kernel[(1, )](x, z, BLOCK=BLOCK)
     assert z[0] == 0
 
+
 @pytest.mark.interpreter
 def test_max_min_with_nan(device):
     # In triton, we implement a "nan ignore" style, which means if there is NaN
@@ -2461,6 +2462,7 @@ def test_max_min_with_nan(device):
 
     min_kernel[(1, )](x, y, BLOCK_SIZE=BLOCK_SIZE)
     assert y[0] == float('-inf')
+
 
 def get_reduced_dtype(dtype_str, op):
     if op in ('argmin', 'argmax'):
