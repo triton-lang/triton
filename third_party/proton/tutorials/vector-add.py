@@ -57,8 +57,8 @@ torch.manual_seed(0)
 size = 98432
 x = torch.rand(size, device=DEVICE)
 y = torch.rand(size, device=DEVICE)
-triton_output = x + y
-torch_output = add(x, y)
+torch_output = x + y
+triton_output = add(x, y)
 if torch.allclose(triton_output, torch_output, atol=1e-2, rtol=0.0):
     print("✅ Triton and Torch match")
 else:
