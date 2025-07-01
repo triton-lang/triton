@@ -12,23 +12,6 @@ using namespace mlir;
 using namespace mlir::triton;
 using namespace mlir::triton::gpu;
 
-// blocked -> shared.
-// Swizzling in shared memory to avoid bank conflict. Normally used for
-// A/B operands of dots.
-void lowerDistributedToShared(
-    Location loc, Value src, Value dst, Value adaptorSrc,
-    const SharedMemoryObject &smemObj, const LLVMTypeConverter *typeConverter,
-    ConversionPatternRewriter &rewriter, const TargetInfoBase &targetInfo,
-    std::pair<size_t, Type> *const llvmOpCount = nullptr) {
-  auto srcTy = cast<RankedTensorType>(src.getType());
-  auto dstTy = cast<MemDescType>(dst.getType());
-  auto elemTy = typeConverter->convertType(srcTy.getElementType());
-
-  auto inVals = unpackLLElements(loc, adaptorSrc, rewriter);
-  storeDistributedToShared(dstTy, srcTy, elemTy, inVals, smemObj, loc, rewriter,
-                           targetInfo, llvmOpCount);
-}
-
 LogicalResult lowerLocalStore(Location loc, MLIRContext *ctx, Value regVal,
                               MemDescType memDescTy, SharedMemoryObject smemObj,
                               ArrayRef<Value> inVals,
@@ -175,16 +158,6 @@ public:
         loc, adaptor.getSrc(),
         typeConverter->convertType(memDescTy.getElementType()), rewriter);
     auto llvmElemTy = typeConverter->convertType(regTy.getElementType());
-
-    // See [Legacy local_load/local_store]
-    if (!targetInfo.isCuda()) {
-      SmallVector<Value> outVals = loadSharedToDistributed(
-          op, llvmElemTy, smemObj, loc, rewriter, targetInfo);
-      Value result =
-          packLLElements(loc, typeConverter, outVals, rewriter, regTy);
-      rewriter.replaceOp(op, result);
-      return success();
-    }
 
     auto regLayout = toLinearLayout(regTy.getShape(), regTy.getEncoding());
     auto sharedLayout =
