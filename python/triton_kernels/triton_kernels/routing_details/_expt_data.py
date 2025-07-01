@@ -41,9 +41,12 @@ def _expt_data_memset(Hist, n_expts_tot, MDStarts, tile_starts_stridem, MDTileIn
 
 @triton.jit
 def _expt_data_compute(Hist, MDTileStarts, tile_starts_stridem, MDTileInfo, tile_info_stridem, first_tile_dim_log2,
-                       BLOCK: tl.constexpr):
-    expt_id = tl.program_id(0)
-    buff_id = tl.program_id(1)
+                       SIZES: tl.constexpr, BLOCK: tl.constexpr):
+
+    pid = tl.program_id(0)
+
+    expt_id = pid // SIZES
+    buff_id = pid % SIZES
 
     MDTileStarts += buff_id * tile_starts_stridem
     MDTileInfo += buff_id * tile_info_stridem

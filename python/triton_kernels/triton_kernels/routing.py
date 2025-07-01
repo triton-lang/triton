@@ -227,9 +227,9 @@ def _compute_expt_data_internal(expt_hist, n_expts_tot, n_gates):
         block_pid_map,  #
         block_m_log2_start, SIZES=block_m_num, BLOCK=MEMSET_BLOCK,  # optimization parameters
         num_warps=1)
-    _expt_data_compute[(n_expts_tot, block_m_num)](
+    _expt_data_compute[(n_expts_tot * block_m_num, )](
         expt_hist, token_offs_pad, token_offs_pad.stride(0), block_pid_map, block_pid_map.stride(0),  # outputs
-        block_m_log2_start, BLOCK=HIST2_BLOCK_M,  # optimization parameters
+        block_m_log2_start, SIZES=block_m_num, BLOCK=HIST2_BLOCK_M,  # optimization parameters
         num_warps=4)
 
     return token_offs_raw, token_offs_pad, block_pid_map
