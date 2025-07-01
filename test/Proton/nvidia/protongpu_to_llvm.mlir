@@ -26,6 +26,7 @@ module attributes {"ttg.num-warps" = 8 : i32} {
   }
 }
 
+
 // -----
 
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
