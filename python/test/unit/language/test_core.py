@@ -2448,14 +2448,16 @@ def test_max_min_with_nan(device):
     BLOCK_SIZE = 64
     x = torch.rand((1, BLOCK_SIZE), dtype=torch.float32, device=device)
     # Not the expected output for tl.max
-    x[0, 1] = float('nan')
+    x[0, 0] = float('nan')
     # Expected output for tl.min
-    x[0, 0] = float('-inf')
+    x[0, 1] = float('-inf')
+    # Expected output for tl.max
+    x[0, 2] = float('inf')
 
     y = torch.ones(1, device=device)
 
     max_kernel[(1, )](x, y, BLOCK_SIZE=BLOCK_SIZE)
-    assert y[0] != float('nan')
+    assert y[0] == float('inf')
 
     min_kernel[(1, )](x, y, BLOCK_SIZE=BLOCK_SIZE)
     assert y[0] == float('-inf')
