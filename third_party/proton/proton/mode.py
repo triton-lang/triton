@@ -1,13 +1,9 @@
 from dataclasses import dataclass, field
-from enum import Enum
-from typing import List
-
 from triton._C.libtriton import proton as triton_proton
+from typing import List
+from enum import Enum
 
-metric_types = {
-    "cycle": triton_proton.METRIC_TYPE.CYCLE,
-    "timestamp": triton_proton.METRIC_TYPE.TIMESTAMP,
-}
+metric_types = {"cycle": triton_proton.METRIC_TYPE.CYCLE}
 
 buffer_strategies = {
     "circular": triton_proton.BUFFER_STRATEGY.CIRCULAR,
