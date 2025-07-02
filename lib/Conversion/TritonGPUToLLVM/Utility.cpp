@@ -544,6 +544,7 @@ lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout cvt,
                 Type llvmElemTy, Value smemBase,
                 ConversionPatternRewriter &rewriter,
                 const TargetInfoBase &targetInfo) {
+  llvm::outs() << "Inside lowerLdStShared\n";
   auto vals = to_vector(valsArray);
   bool isStore = !vals.empty();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -555,18 +556,24 @@ lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout cvt,
   auto bitwidth = llvmElemTy.getIntOrFloatBitWidth();
 
   auto [elemsPerVec, permutation] = largestVectorisation(ctx, cvt, bitwidth);
+  llvm::outs() << "elemsPerVec = " << elemsPerVec << "\n";
 
   cvt = permutation.apply(cvt);
+  llvm::outs() << "permuted cvt: " << cvt << "\n";
   if (isStore) {
     vals = permutation.apply(vals);
   }
 
   auto tile = LinearLayout::identity1D(elemsPerVec, kReg, kOffset);
+  llvm::outs() << "tile: " << tile << "\n";
   auto quot = *divideLeft(cvt, tile);
   LinearLayout reps = zerosLike(tile) * quot;
+  llvm ::outs() << "reps: " << reps << "\n";
 
   auto [nAdditive, permStrides] = actionAdditiveStrides(reps);
+  llvm::outs() << "nAdditive = " << nAdditive << "\n";
   reps = permStrides.apply(reps);
+  llvm ::outs() << "permuted reps: " << reps << "\n";
   if (isStore) {
     vals = permStrides.apply(vals);
   }
@@ -632,10 +639,12 @@ SmallVector<Value> lowerLocalLdSt(Location loc, MLIRContext *ctx,
                                   const TargetInfoBase &targetInfo) {
   assert(cvt.getNumOutDims() == 1);
   assert(*cvt.getOutDimNames().begin() == str_attr("offset"));
+  llvm::outs() << "Inside lowerLocalLdSt\n";
   auto isStore = !valsArray.empty();
   // Remove broadcasting in the registers
   auto removeBroadcastSrc = actionRemoveBroadcastedRegs(cvt);
   if (!removeBroadcastSrc.isIdentity()) {
+    llvm::outs() << "removeBroadcastSrc is NOT identity()\n";
     auto prmtCvt = removeBroadcastSrc.apply(cvt);
     auto inVals = to_vector(valsArray);
     if (isStore) {

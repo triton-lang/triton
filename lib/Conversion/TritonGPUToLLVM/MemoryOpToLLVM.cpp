@@ -26,6 +26,12 @@ LogicalResult lowerLocalStore(Location loc, MLIRContext *ctx, Value regVal,
       toLinearLayout(memDescTy.getShape(), memDescTy.getEncoding());
   auto cvt = regLayout.invertAndCompose(sharedLayout);
 
+  auto shape = memDescTy.getShape();
+  llvm::outs() << "lowering local_store for shape: " << shape[0] << ", " << shape[1] <<"\n";
+  llvm::outs() << "regLayout: " << regLayout << "\n";
+  llvm::outs() << "sharedLayout: " << sharedLayout << "\n";
+  llvm::outs() << "cvt: " << cvt << "\n";
+
   auto kBlock = str_attr("block");
   // NYI. We would need to emit a map.shared::cluster instruction.
   if (!cvt.isTrivialOver({kBlock})) {
@@ -36,6 +42,7 @@ LogicalResult lowerLocalStore(Location loc, MLIRContext *ctx, Value regVal,
   auto kWarp = str_attr("warp");
   auto kOffset = str_attr("offset");
   cvt = cvt.sublayout({kReg, kLane, kWarp}, {kOffset});
+  llvm::outs() << "cvt: sublayout " << cvt << "\n";
   lowerLocalLdSt(loc, ctx, cvt, inVals, llvmElemTy, smemObj.getBase(), rewriter,
                  targetInfo);
 
