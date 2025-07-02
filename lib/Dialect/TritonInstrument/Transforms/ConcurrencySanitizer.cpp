@@ -1,3 +1,4 @@
+#include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/IR/ImplicitLocOpBuilder.h"
 #include "mlir/Transforms/Passes.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
@@ -51,6 +52,22 @@ bool isMultiBuffered(triton::gpu::LocalAllocOp op) {
   });
 }
 
+bool isBarrier(triton::gpu::LocalAllocOp op) {
+  // Is there InitBarrierOp in the forward slice of the op?
+  bool foundInitBarrier = false;
+  SetVector<Operation *> forwardSlice;
+  ForwardSliceOptions options;
+  options.filter = [&](Operation *op) {
+    if (isa<ttng::InitBarrierOp>(op)) {
+      foundInitBarrier = true;
+      return false;
+    }
+    return true;
+  };
+  getForwardSlice(op.getOperation(), &forwardSlice, options);
+  return foundInitBarrier;
+}
+
 uint64_t getAllocationOffset(triton::gpu::LocalAllocOp op) {
   auto offsetAttr = op->getAttr("allocation.offset");
   if (!offsetAttr) {
@@ -91,18 +108,20 @@ public:
     // TODO: We should actually map the region in IR + the offset in the buffer
     // to the local_alloc to give user a better error message
     llvm::SetVector<int32_t> shMemBufsSet;
+    llvm::SetVector<int32_t> barrierSet;
     module.walk([&](triton::gpu::LocalAllocOp op) {
       if (!canAllocBeInstrumented(op)) {
         return WalkResult::advance();
       }
       int32_t baseOffset = getAllocationOffset(op);
-      shMemBufsSet.insert(baseOffset);
+      auto &setToAdd = isBarrier(op) ? barrierSet : shMemBufsSet;
+      setToAdd.insert(baseOffset);
       if (isMultiBuffered(op)) {
         unsigned numBuffers = getNumBuffers(op);
         assert(numBuffers > 0 && "Expected at least one buffer");
         unsigned subBufferSize = getSubBufferSize(op);
         for (unsigned i = 1; i < numBuffers; ++i) {
-          shMemBufsSet.insert(baseOffset + i * subBufferSize);
+          setToAdd.insert(baseOffset + i * subBufferSize);
         }
       }
       return WalkResult::advance();
@@ -116,81 +135,67 @@ public:
     }
 
     SmallVector<int32_t> shMemBufsValues = llvm::to_vector(shMemBufsSet);
+    SmallVector<int32_t> barrierValues = llvm::to_vector(barrierSet);
     // Pad to the next power of 2 with zeros
-    uint64_t nextPowerOf2 = llvm::NextPowerOf2(shMemBufsValues.size() - 1);
-    shMemBufsValues.resize(nextPowerOf2, 0);
+    shMemBufsValues.resize(llvm::NextPowerOf2(shMemBufsValues.size() - 1), 0);
+    if (!barrierValues.empty()) {
+      barrierValues.resize(llvm::NextPowerOf2(barrierValues.size() - 1), 0);
+    }
 
     ImplicitLocOpBuilder b(entryPoint.getLoc(), entryPoint);
     b.setInsertionPointToStart(&entryPoint.getBody().front());
-    Value shMemBufs = createSharedBufferPointers(b, shMemBufsValues);
+    shBuffers = createSharedBufferPointers(b, shMemBufsValues);
+    if (!barrierValues.empty()) {
+      barriers = createSharedBufferPointers(b, barrierValues);
+    }
 
     // Create state tensors:
-    // 1. Barrier, tracking which barriers are tracking the buffer
-    // 2. State, a bitfield tracking if the buffer is written (0x1) or read
-    // (0x2)
-    TypedValue<RankedTensorType> barriers = createConstIntTensor(
+    TypedValue<RankedTensorType> writeBarriers = createConstIntTensor(
         b, 0, b.getIntegerType(64), shMemBufsValues.size());
-    barriersType = barriers.getType();
-    Value barriersAlloc = createInitializedScratchMemory(b, barriers);
-    TypedValue<RankedTensorType> state =
-        createConstIntTensor(b, 0, b.getIntegerType(8), shMemBufsValues.size());
-    stateType = state.getType();
-    Value stateAlloc = createInitializedScratchMemory(b, state);
+    writeBarriersType = writeBarriers.getType();
+    writeBarriersAlloc = createInitializedScratchMemory(b, writeBarriers);
 
-    instrumentMemoryOperations(b, shMemBufs, barriersAlloc, stateAlloc);
+    instrumentMemoryOperations(b);
   }
 
 private:
-  void instrumentMemoryOperations(ImplicitLocOpBuilder &b, Value buffers,
-                                  Value barriersAlloc, Value stateAlloc) {
+  void instrumentMemoryOperations(ImplicitLocOpBuilder &b) {
     module.walk([&](Operation *op) {
       if (auto copyOp = dyn_cast<ttng::AsyncTMACopyGlobalToLocalOp>(op)) {
         b.setLoc(copyOp.getLoc());
         b.setInsertionPoint(copyOp);
-        Value barriers =
-            createLoadScratchMemory(b, barriersAlloc, barriersType);
-        Value state = createLoadScratchMemory(b, stateAlloc, stateType);
-        auto checkOp =
-            b.create<tti::ExperimentalCheckAsyncWriteWithMbarSharedOp>(
-                copyOp.getResult(), copyOp.getBarrier(), buffers, state,
-                barriers);
-        state = checkOp.getOutStates();
-        barriers = checkOp.getOutBarriers();
-        createStoreScratchMemory(b, barriersAlloc, barriers, barriersType);
-        createStoreScratchMemory(b, stateAlloc, state, stateType);
+        b.create<tti::ExperimentalCheckOutstandingWritesOp>(
+            copyOp.getResult(), shBuffers, writeBarriersAlloc,
+            writeBarriersType);
+        b.create<tti::ExperimentalMarkAsWriteOp>(
+            copyOp.getResult(), copyOp.getBarrier(), shBuffers,
+            writeBarriersAlloc, writeBarriersType);
       }
-      if (auto mmav5Op = dyn_cast<ttng::TCGen5MMAOp>(op)) {
-        b.setLoc(mmav5Op.getLoc());
-        b.setInsertionPoint(mmav5Op);
-        Value barriers =
-            createLoadScratchMemory(b, barriersAlloc, barriersType);
-        Value state = createLoadScratchMemory(b, stateAlloc, stateType);
-        if (isa<ttg::NVMMASharedEncodingAttr>(
-                mmav5Op.getA().getType().getEncoding())) {
-          auto checkAOp = b.create<tti::ExperimentalCheckReadSharedOp>(
-              mmav5Op.getA(), buffers, state, barriers);
-          state = checkAOp.getOutStates();
-          barriers = checkAOp.getOutBarriers();
-        }
-        auto checkBOp = b.create<tti::ExperimentalCheckReadSharedOp>(
-            mmav5Op.getA(), buffers, state, barriers);
-        state = checkBOp.getOutStates();
-        barriers = checkBOp.getOutBarriers();
-        createStoreScratchMemory(b, barriersAlloc, barriers, barriersType);
-        createStoreScratchMemory(b, stateAlloc, state, stateType);
-      }
+      // if (auto mmav5Op = dyn_cast<ttng::TCGen5MMAOp>(op)) {
+      //   b.setLoc(mmav5Op.getLoc());
+      //   b.setInsertionPoint(mmav5Op);
+      //   Value barriers =
+      //       createLoadScratchMemory(b, barriersAlloc, barriersType);
+      //   Value state = createLoadScratchMemory(b, stateAlloc, stateType);
+      //   if (isa<ttg::NVMMASharedEncodingAttr>(
+      //           mmav5Op.getA().getType().getEncoding())) {
+      //     auto checkAOp = b.create<tti::ExperimentalCheckReadSharedOp>(
+      //         mmav5Op.getA(), buffers, state, barriers);
+      //     state = checkAOp.getOutStates();
+      //     barriers = checkAOp.getOutBarriers();
+      //   }
+      //   auto checkBOp = b.create<tti::ExperimentalCheckReadSharedOp>(
+      //       mmav5Op.getA(), buffers, state, barriers);
+      //   state = checkBOp.getOutStates();
+      //   barriers = checkBOp.getOutBarriers();
+      //   createStoreScratchMemory(b, barriersAlloc, barriers, barriersType);
+      //   createStoreScratchMemory(b, stateAlloc, state, stateType);
+      // }
       if (auto waitOp = dyn_cast<ttng::WaitBarrierOp>(op)) {
         b.setLoc(waitOp.getLoc());
         b.setInsertionPoint(waitOp);
-        Value barriers =
-            createLoadScratchMemory(b, barriersAlloc, barriersType);
-        Value state = createLoadScratchMemory(b, stateAlloc, stateType);
-        auto checkOp = b.create<tti::ExperimentalCheckWaitMbarOp>(
-            waitOp.getAlloc(), barriers, state);
-        state = checkOp.getOutStates();
-        barriers = checkOp.getOutBarriers();
-        createStoreScratchMemory(b, barriersAlloc, barriers, barriersType);
-        createStoreScratchMemory(b, stateAlloc, state, stateType);
+        b.create<tti::ExperimentalClearWriteBarrierOp>(
+            waitOp.getAlloc(), writeBarriersAlloc, writeBarriersType);
       }
     });
   }
@@ -264,23 +269,6 @@ private:
                                  tt::EvictionPolicy::NORMAL);
   }
 
-  Value createLoadScratchMemory(ImplicitLocOpBuilder &b, Value alloc,
-                                RankedTensorType tensorType) {
-    auto encoding = tensorType.getEncoding();
-    auto elType = tensorType.getElementType();
-    auto numEls = tensorType.getShape()[0];
-    auto ptrType = triton::getPointerType(elType);
-    auto splatPtr = b.create<tt::SplatOp>(
-        RankedTensorType::get({numEls}, ptrType, encoding), alloc);
-    Type offsetsType =
-        RankedTensorType::get(tensorType.getShape(), b.getI32Type(), encoding);
-    auto offsets = b.create<tt::MakeRangeOp>(offsetsType, 0, numEls);
-    auto pointers =
-        b.create<tt::AddPtrOp>(splatPtr.getType(), splatPtr, offsets);
-    return b.create<tt::LoadOp>(pointers, tt::CacheModifier::NONE,
-                                tt::EvictionPolicy::NORMAL, false);
-  }
-
   Value createInitializedScratchMemory(ImplicitLocOpBuilder &b,
                                        TypedValue<RankedTensorType> tensor) {
     assert(tensor.getType().getRank() == 1 && "Expected 1D tensor");
@@ -298,8 +286,13 @@ private:
   }
 
   ModuleOp module;
-  RankedTensorType barriersType;
-  RankedTensorType stateType;
+
+  Value shBuffers;
+  Value barriers;
+  RankedTensorType writeBarriersType;
+  Value writeBarriersAlloc;
+  RankedTensorType readBarriersType;
+  Value readBarriersAlloc;
 };
 
 } // namespace instrument

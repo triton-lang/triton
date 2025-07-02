@@ -23,7 +23,7 @@ def TTI_ExperimentalAssertInThreadOp : TTI_Op<"experimental_assert_in_thread", [
   let assemblyFormat = "$condition `,` $message attr-dict `:` type($condition)";
 }
 
-// Define an array of pointers to shared memory buffers
+
 def TTI_ExperimentalSharedBufferPointersOp : TTI_Op<"experimental_shared_buffer_pointers", [Pure]> {
   let summary = "definte an array of pointers to shared memory buffers";
   let description = [{
@@ -36,6 +36,73 @@ def TTI_ExperimentalSharedBufferPointersOp : TTI_Op<"experimental_shared_buffer_
   }];
 }
 
+
+def TTI_ExperimentalCheckOutstandingWritesOp : TTI_Op<"experimental_check_outstanding_writes", [Pure]> {
+  let summary = "check if there are outstanding writes to a buffer guarded by a mbar";
+  let description = [{
+    Check if there are outstanding writes to a buffer guarded by a mbar.
+  }];
+  let arguments = (ins
+    TTG_MemDescType:$buf,
+    TT_Tensor:$buffers,
+    TT_PtrLike:$writeBars,
+    TypeAttr:$writeBarsType
+  );
+  let assemblyFormat = [{
+    $buf `{` $buffers `,` $writeBars `(` $writeBarsType `)` `}` attr-dict `:` type($buf) `,` type($buffers) `,` type($writeBars)
+  }];
+}
+
+
+// TODO: This should not be pure I guess
+def TTI_ExperimentalMarkAsWriteOp : TTI_Op<"experimental_mark_as_write", [Pure]> {
+  let summary = "mark a buffer as being written to using mbar as a guard";
+  let description = [{
+    Mark a buffer as being written to using mbar as a guard.
+  }];
+  let arguments = (ins
+    TTG_MemDescType:$buf,
+    TTG_MemDescType:$mbar,
+    TT_Tensor:$buffers,
+    TT_PtrLike:$writeBars,
+    TypeAttr:$writeBarsType
+  );
+  let assemblyFormat = [{
+    $buf `,` $mbar `{` $buffers `,` $writeBars `(` $writeBarsType `)` `}` attr-dict `:` type($buf) `,` type($mbar) `,` type($buffers) `,` type($writeBars)
+  }];
+}
+
+
+def TTI_ExperimentalClearWriteBarrierOp : TTI_Op<"experimental_clear_write_barrier", [Pure]> {
+  let summary = "clear the write state for buffers being guarded by an mbar";
+  let description = [{
+    Clear the write state for buffers being guarded by an mbar.
+  }];
+  let arguments = (ins
+    TTG_MemDescType:$mbar,
+    TT_PtrLike:$writeBars,
+    TypeAttr:$writeBarsType
+  );
+  let assemblyFormat = [{
+    $mbar `{` $writeBars `(` $writeBarsType `)` `}` attr-dict `:` type($mbar) `,` type($writeBars)
+  }];
+}
+
+
+def TTI_ExperimentalClearReadBarrierOp : TTI_Op<"experimental_clear_read_barrier", [Pure]> {
+  let summary = "clear the read state for buffers being guarded by an mbar";
+  let description = [{
+    Clear the read state for buffers being guarded by an mbar.
+  }];
+  let arguments = (ins
+    TTG_MemDescType:$mbar,
+    TT_PtrLike:$readBars,
+    TypeAttr:$readBarsType
+  );
+  let assemblyFormat = [{
+    $mbar `{` $readBars `(` $readBarsType `)` `}` attr-dict `:` type($mbar) `,` type($readBars)
+  }];
+}
 
 def TTI_ExperimentalCheckAsyncWriteWithMbarSharedOp : TTI_Op<"experimental_check_async_write_with_mbar_shared", [Pure]> {
   let summary = "Check if writing to a buffer guarded is valid";

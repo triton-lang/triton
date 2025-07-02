@@ -55,6 +55,37 @@ def run_in_process(client_fn, args):
     return result
 
 
+def run_kernel_expect_assert(kernel_name: str, expect_failure: bool, device: str):
+    knobs.compilation.enable_experimental_consan = True
+    os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
+
+    kernel = globals()[kernel_name]
+
+    XBLOCK = 128
+    input = torch.randn((XBLOCK, XBLOCK), device=device, dtype=torch.float32)
+    shared_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=32, rank=2)
+    input_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(input, [XBLOCK, XBLOCK], shared_layout)
+
+    # ConSan requires a global memory allocation
+    def alloc_fn(size: int, alignment: int, stream: Optional[int]):
+        return torch.empty(size, device="cuda", dtype=torch.int8)
+
+    triton.set_allocator(alloc_fn)
+
+    kernel[(1, )](input_desc, XBLOCK, FAILURE=expect_failure, num_warps=1)
+    getattr(torch, device).synchronize()
+
+
+def run_kernel_in_process(kernel_name: str, expect_failure: bool, device: str, check_stderr):
+    result = run_in_process(run_kernel_expect_assert, (kernel_name, expect_failure, device))
+    if expect_failure:
+        assert "device-side assert" in str(result.exc)
+        check_stderr(result.driver_stderr_output)
+    else:
+        assert result.exc is None
+        assert result.driver_stderr_output == ""
+
+
 @gluon.jit
 def async_tma_kernel(input_desc, XBLOCK: ttgl.constexpr, FAILURE: ttgl.constexpr):
     smem = ttgl.allocate_shared_memory(ttgl.float32, [XBLOCK, XBLOCK], input_desc.layout)
@@ -77,34 +108,43 @@ def async_tma_kernel(input_desc, XBLOCK: ttgl.constexpr, FAILURE: ttgl.constexpr
     tma.store_wait(0)
 
 
-def run_async_tma_kernel(FAILURE, device):
-    knobs.compilation.enable_experimental_consan = True
-    os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
-
-    XBLOCK = 128
-    input = torch.randn((XBLOCK, XBLOCK), device=device, dtype=torch.float32)
-    shared_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=32, rank=2)
-    input_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(input, [XBLOCK, XBLOCK], shared_layout)
-
-    # ConSan requires a global memory allocation
-    def alloc_fn(size: int, alignment: int, stream: Optional[int]):
-        return torch.empty(size, device="cuda", dtype=torch.int8)
-
-    triton.set_allocator(alloc_fn)
-
-    async_tma_kernel[(1, )](input_desc, XBLOCK, FAILURE=FAILURE, num_warps=1)
-    getattr(torch, device).synchronize()
-
-
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
 @pytest.mark.parametrize("FAILURE", [True, False])
 def test_async_tma_kernel(FAILURE, device):
-    if FAILURE:
-        result = run_in_process(run_async_tma_kernel, (FAILURE, device))
-        assert "device-side assert" in str(result.exc)
-        assert "TMA copy to buffer being read or written" in result.driver_stderr_output
-    else:
-        run_async_tma_kernel(FAILURE, device)
+
+    def check_stderr(stderr):
+        assert "Buffer being accessed has outstanding writes" in stderr
+
+    run_kernel_in_process("async_tma_kernel", FAILURE, device, check_stderr)
+
+
+@gluon.jit
+def tma_interleave_kernel(input_desc, XBLOCK: ttgl.constexpr, FAILURE: ttgl.constexpr):
+    smem = ttgl.allocate_shared_memory(ttgl.float32, [2, XBLOCK, XBLOCK], input_desc.layout)
+    bar = ttgl.allocate_shared_memory(ttgl.int64, [2, 1], mbarrier.MBarrierLayout())
+    mbarrier.init(bar.index(0), count=1)
+    mbarrier.init(bar.index(1), count=1)
+
+    mbarrier.expect(bar.index(0), XBLOCK * XBLOCK * ttgl.float32.primitive_bitwidth // 8)
+    mbarrier.expect(bar.index(1), XBLOCK * XBLOCK * ttgl.float32.primitive_bitwidth // 8)
+    tma.async_copy_global_to_shared(input_desc, [0, 0], bar.index(0), smem.index(0))
+    tma.async_copy_global_to_shared(input_desc, [0, 0], bar.index(1), smem.index(1))
+    if not FAILURE:
+        mbarrier.wait(bar.index(0), 0)
+    mbarrier.wait(bar.index(1), 0)
+
+    mbarrier.expect(bar.index(0), XBLOCK * XBLOCK * ttgl.float32.primitive_bitwidth // 8)
+    mbarrier.expect(bar.index(1), XBLOCK * XBLOCK * ttgl.float32.primitive_bitwidth // 8)
+    tma.async_copy_global_to_shared(input_desc, [0, 0], bar.index(0), smem.index(0))
+    mbarrier.wait(bar.index(0), 0)
+    tma.async_copy_global_to_shared(input_desc, [0, 0], bar.index(1), smem.index(1))
+    mbarrier.wait(bar.index(1), 0)
+
+    mbarrier.invalidate(bar.index(0))
+    mbarrier.invalidate(bar.index(1))
+
+    tma.async_copy_shared_to_global(input_desc, [0, 0], smem.index(0))
+    tma.store_wait(0)
 
 
 # @gluon.jit
