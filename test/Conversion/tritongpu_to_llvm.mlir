@@ -2545,35 +2545,14 @@ tt.func private @arith_constant_array() {
 #smem = #ttg.shared_memory
 
 module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
-// CHECK-LABEL: @experimental_check_async_write_with_mbar_shared
-// CHECK: (%[[BUF:.*]]: {{.*}}, %[[BAR:.*]]: {{.*}}, %[[BUFFERS:.*]]: {{.*}}, %[[STATE:.*]]: {{.*}}, %[[BARRIERS:.*]]: {{.*}}, %{{.*}}, %{{.*}})
-
-// Check the buffer pointer calculation
-// CHECK: %[[BUF_BASE:.*]] = llvm.extractvalue %[[BUF]][0]
-// CHECK: %[[BUF_OFF0:.*]] = llvm.extractvalue %[[BUF]][1]
-// CHECK: %[[BUF_OFF1:.*]] = llvm.extractvalue %[[BUF]][2]
-// CHECK: %[[BUF_STRIDE0:.*]] = llvm.mlir.constant(1 : i32)
-// CHECK: %[[BUF_STRIDE1:.*]] = llvm.mlir.constant(32 : i32)
-// CHECK: %[[ZERO:.*]] = llvm.mlir.constant(0 : i32)
-// CHECK: %[[BUF_OFFxSTR0:.*]] = llvm.mul %[[BUF_OFF0]], %[[BUF_STRIDE1]]
-// CHECK: %[[BUF_PTR0:.*]] = llvm.add %[[ZERO]], %[[BUF_OFFxSTR0]]
-// CHECK: %[[BUF_OFFxSTR1:.*]] = llvm.mul %[[BUF_OFF1]], %[[BUF_STRIDE0]]
-// CHECK: %[[BUF_PTR1:.*]] = llvm.add %[[BUF_PTR0]], %[[BUF_OFFxSTR1]]
-// CHECK: %[[BIT_SIZE:.*]] = llvm.mlir.constant(4 : i32) : i32
-// CHECK: %[[BUF_PTR2:.*]] = llvm.mul %[[BUF_PTR1]], %[[BIT_SIZE]] : i32
-// CHECK: %[[BUF_PTR3:.*]] = llvm.zext %[[BUF_PTR2]] : i32 to i64
-// CHECK: %[[BUF_BASE1:.*]] = llvm.ptrtoint %[[BUF_BASE]] : !llvm.ptr<3> to i64
-// CHECK: %[[BUF_PTR:.*]] = llvm.add %[[BUF_PTR3]], %[[BUF_BASE1]] : i64
-
+// CHECK-LABEL: @experimental_check_outstanding_writes
 // CHECK: @__assertfail
-tt.func private @experimental_check_async_write_with_mbar_shared(
+tt.func private @experimental_check_outstanding_writes(
   %buf: !ttg.memdesc<32x32xf32, #shared, #smem, mutable>,
-  %bar: !ttg.memdesc<1xi64, #shared1, #smem, mutable>,
   %buffers: tensor<2xi64, #blocked>,
-  %state: tensor<2xi8, #blocked>,
-  %barriers: tensor<2xi64, #blocked>
+  %writeBars: !tt.ptr<i64>
 ) {
-  tti.experimental_check_async_write_with_mbar_shared %buf, %bar{%buffers, %state, %barriers} : !ttg.memdesc<32x32xf32, #shared, #smem, mutable>, !ttg.memdesc<1xi64, #shared1, #smem, mutable>, tensor<2xi64, #blocked>, tensor<2xi8, #blocked>, tensor<2xi64, #blocked> -> tensor<2xi8, #blocked>, tensor<2xi64, #blocked>
+  tti.experimental_check_outstanding_writes %buf {%buffers, %writeBars(tensor<2xi64, #blocked>)} : !ttg.memdesc<32x32xf32, #shared, #smem, mutable>, tensor<2xi64, #blocked>, !tt.ptr<i64>
   tt.return
 }
 }
@@ -2586,13 +2565,34 @@ tt.func private @experimental_check_async_write_with_mbar_shared(
 #smem = #ttg.shared_memory
 
 module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
-// CHECK-LABEL: @experimental_check_wait_mbar
-tt.func private @experimental_check_wait_mbar(
-  %bar: !ttg.memdesc<1xi64, #shared1, #smem, mutable>,
-  %state: tensor<2xi8, #blocked>,
-  %barriers: tensor<2xi64, #blocked>
+// CHECK-LABEL: @experimental_mark_as_write
+// CHECK: st.global
+tt.func private @experimental_mark_as_write(
+  %buf: !ttg.memdesc<32x32xf32, #shared, #smem, mutable>,
+  %mbar: !ttg.memdesc<1xi64, #shared1, #smem, mutable>,
+  %buffers: tensor<2xi64, #blocked>,
+  %writeBars: !tt.ptr<i64>
 ) {
-  tti.experimental_check_wait_mbar %bar{%state, %barriers} : !ttg.memdesc<1xi64, #shared1, #smem, mutable>, tensor<2xi8, #blocked>, tensor<2xi64, #blocked> -> tensor<2xi8, #blocked>, tensor<2xi64, #blocked>
+  tti.experimental_mark_as_write %buf, %mbar {%buffers, %writeBars(tensor<2xi64, #blocked>)} : !ttg.memdesc<32x32xf32, #shared, #smem, mutable>, !ttg.memdesc<1xi64, #shared1, #smem, mutable>, tensor<2xi64, #blocked>, !tt.ptr<i64>
+  tt.return
+}
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
+#shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
+// CHECK-LABEL: @experimental_clear_write_barrier
+// CHECK: st.global
+tt.func private @experimental_clear_write_barrier(
+  %mbar: !ttg.memdesc<1xi64, #shared1, #smem, mutable>,
+  %writeBars: !tt.ptr<i64>
+) {
+  tti.experimental_clear_write_barrier %mbar {%writeBars(tensor<2xi64, #blocked>)} : !ttg.memdesc<1xi64, #shared1, #smem, mutable>, !tt.ptr<i64>
   tt.return
 }
 }

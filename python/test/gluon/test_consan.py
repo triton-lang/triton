@@ -5,6 +5,7 @@ import triton
 from triton import knobs
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
+from triton.experimental.gluon.language.nvidia import blackwell
 from triton.experimental.gluon.language.nvidia.blackwell import mbarrier, tma
 from triton._internal_testing import is_cuda
 import multiprocessing
@@ -157,8 +158,39 @@ def test_tma_interleave_kernel(FAILURE, device):
     run_kernel_in_process("tma_interleave_kernel", FAILURE, device, check_stderr)
 
 
-# @gluon.jit
-# def tcgen5_mma_kernel(input_desc, XBLOCK: ttgl.constexpr, FAILURE: ttgl.constexpr):
+@gluon.jit
+def tcgen5_mma_kernel(input_desc, XBLOCK: ttgl.constexpr, acc_layout: ttgl.constexpr):
+    smemA = ttgl.allocate_shared_memory(ttgl.float32, [XBLOCK, XBLOCK], input_desc.layout)
+    smemB = ttgl.allocate_shared_memory(ttgl.float32, [XBLOCK, XBLOCK], input_desc.layout)
+    bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
+    acc = blackwell.allocate_tensor_memory(ttgl.float32, [XBLOCK, XBLOCK], acc_layout)
+    mbarrier.init(bar, count=1)
+
+    blackwell.tcgen05_mma(smemA, smemB.permute([1, 0]), acc, mbarriers=[bar])
+
+    mbarrier.invalidate(bar)
+
+
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer")
+def test_tcgen5_mma_kernel(device):
+    knobs.compilation.enable_experimental_consan = True
+    os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
+
+    XBLOCK = 128
+    input = torch.randn((XBLOCK, XBLOCK), device=device, dtype=torch.float32)
+    shared_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=32, rank=2)
+    input_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(input, [XBLOCK, XBLOCK], shared_layout)
+    acc_layout = blackwell.TensorMemoryLayout([XBLOCK, XBLOCK], unpacked=True)
+
+    # ConSan requires a global memory allocation
+    def alloc_fn(size: int, alignment: int, stream: Optional[int]):
+        return torch.empty(size, device="cuda", dtype=torch.int8)
+
+    triton.set_allocator(alloc_fn)
+
+    tcgen5_mma_kernel[(1, )](input_desc, XBLOCK, acc_layout, num_warps=1)
+    getattr(torch, device).synchronize()
+
 
 # @gluon.jit
 # def garbage_buffer_access_kernel(input_desc, XBLOCK: ttgl.constexpr):

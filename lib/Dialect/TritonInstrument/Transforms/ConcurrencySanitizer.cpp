@@ -164,6 +164,7 @@ public:
   }
 
 private:
+  // TODO: Missing support for predication
   void instrumentMemoryOperations(ImplicitLocOpBuilder &b) {
     module.walk([&](Operation *op) {
       if (auto copyOp = dyn_cast<ttng::AsyncTMACopyGlobalToLocalOp>(op)) {
@@ -172,6 +173,8 @@ private:
         b.create<tti::ExperimentalCheckOutstandingWritesOp>(
             copyOp.getResult(), shBuffers, writeBarriersAlloc,
             writeBarriersType);
+        b.create<tti::ExperimentalCheckOutstandingReadsOp>(
+            copyOp.getResult(), shBuffers, readBarriersAlloc, readBarriersType);
         b.create<tti::ExperimentalMarkAsWriteOp>(
             copyOp.getResult(), copyOp.getBarrier(), shBuffers,
             writeBarriersAlloc, writeBarriersType);
@@ -181,13 +184,23 @@ private:
         b.setInsertionPoint(mmav5Op);
         if (isa<ttg::NVMMASharedEncodingAttr>(
                 mmav5Op.getA().getType().getEncoding())) {
-          b.create<tti::ExperimentalCheckOutstandingReadsOp>(
-              mmav5Op.getA(), shBuffers, readBarriersAlloc, readBarriersType);
+          b.create<tti::ExperimentalCheckOutstandingWritesOp>(
+              mmav5Op.getA(), shBuffers, writeBarriersAlloc, writeBarriersType);
+          for (auto barrier : mmav5Op.getBarriers()) {
+            b.create<tti::ExperimentalMarkAsReadOp>(
+                mmav5Op.getA(), barrier, shBuffers, readBarriersAlloc,
+                readBarriersType);
+          }
         }
         if (isa<ttg::NVMMASharedEncodingAttr>(
                 mmav5Op.getB().getType().getEncoding())) {
-          b.create<tti::ExperimentalCheckOutstandingReadsOp>(
-              mmav5Op.getB(), shBuffers, readBarriersAlloc, readBarriersType);
+          b.create<tti::ExperimentalCheckOutstandingWritesOp>(
+              mmav5Op.getB(), shBuffers, writeBarriersAlloc, writeBarriersType);
+          for (auto barrier : mmav5Op.getBarriers()) {
+            b.create<tti::ExperimentalMarkAsReadOp>(
+                mmav5Op.getB(), barrier, shBuffers, readBarriersAlloc,
+                readBarriersType);
+          }
         }
       }
       if (auto waitOp = dyn_cast<ttng::WaitBarrierOp>(op)) {
@@ -195,6 +208,8 @@ private:
         b.setInsertionPoint(waitOp);
         b.create<tti::ExperimentalClearWriteBarrierOp>(
             waitOp.getAlloc(), writeBarriersAlloc, writeBarriersType);
+        b.create<tti::ExperimentalClearReadBarrierOp>(
+            waitOp.getAlloc(), readBarriersAlloc, readBarriersType);
       }
     });
   }

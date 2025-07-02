@@ -90,6 +90,24 @@ def TTI_ExperimentalMarkAsWriteOp : TTI_Op<"experimental_mark_as_write", [Pure]>
 }
 
 
+def TTI_ExperimentalMarkAsReadOp : TTI_Op<"experimental_mark_as_read", [Pure]> {
+  let summary = "mark a buffer as being read from using mbar as a guard";
+  let description = [{
+    Mark a buffer as being read from using mbar as a guard.
+  }];
+  let arguments = (ins
+    TTG_MemDescType:$buf,
+    TTG_MemDescType:$mbar,
+    TT_Tensor:$buffers,
+    TT_PtrLike:$readBars,
+    TypeAttr:$readBarsType
+  );
+  let assemblyFormat = [{
+    $buf `,` $mbar `{` $buffers `,` $readBars `(` $readBarsType `)` `}` attr-dict `:` type($buf) `,` type($mbar) `,` type($buffers) `,` type($readBars)
+  }];
+}
+
+
 def TTI_ExperimentalClearWriteBarrierOp : TTI_Op<"experimental_clear_write_barrier", [Pure]> {
   let summary = "clear the write state for buffers being guarded by an mbar";
   let description = [{
