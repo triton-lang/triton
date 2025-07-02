@@ -255,6 +255,123 @@ LogicalResult triton::gpu::partitionLoop(scf::ForOp loop) {
   return success();
 }
 
+void cloneOpsInBlock(Block *block, OpBuilder& builder);
+
+void cloneForOp(scf::ForOp forOp, OpBuilder& builder) {
+  //   auto lb = b.mapping.lookup(forOp.getLowerBound());
+  //   auto ub = b.mapping.lookup(forOp.getUpperBound());
+  //   auto step = b.mapping.lookup(forOp.getStep());
+  //   SmallVector<Value> initArgs;
+  //   for (auto [idx, arg] : llvm::enumerate(forOp.getInitArgs())) {
+  //     auto groups = getGroupsIdx(forOp, idx);
+  //     if (groups.count(group) > 0)
+  //       initArgs.push_back(b.mapping.lookup(arg));
+  //   }
+  //   auto newForOp =
+  //       b.builder.create<scf::ForOp>(forOp.getLoc(), lb, ub, step, initArgs);
+  //   newForOps[group] = newForOp;
+  //   setGroups(newForOp, {group});
+  //   b.mapping.map(forOp.getInductionVar(), newForOp.getInductionVar());
+
+  //   // map the results of the forOp to the newForOp
+  //   auto oldIterArgs = forOp.getRegionIterArgs();
+  //   auto newIterArgs = newForOp.getRegionIterArgs();
+  //   for (int oldIdx = 0, newIdx = 0; oldIdx < oldIterArgs.size(); ++oldIdx) {
+  //     auto groups = getGroupsIdx(forOp, oldIdx);
+  //     if (groups.count(group) > 0) {
+  //       auto oldArg = oldIterArgs[oldIdx];
+  //       auto newArg = newIterArgs[newIdx++];
+  //       b.mapping.map(oldArg, newArg);
+  //     }
+  //   }
+
+  //   for (int oldIdx = 0, newIdx = 0; oldIdx < forOp.getResults().size();
+  //        ++oldIdx) {
+  //     auto groups = getGroupsIdx(forOp, oldIdx);
+  //     if (groups.count(group) > 0) {
+  //       auto oldArg = forOp.getResult(oldIdx);
+  //       auto newArg = newForOp.getResult(newIdx++);
+  //       b.mapping.map(oldArg, newArg);
+  //     }
+  //   }
+  //   // set builder insertion point to the start of the newForOp body
+  //   b.builder.setInsertionPointToStart(newForOp.getBody());
+  // }
+  // // resursive clone ops in the forOp body
+  cloneOpsInBlock(forOp.getBody(), builder);
+}
+
+void cloneOpsInBlock(Block *block, OpBuilder& builder) {
+  // OpBuilder topBuilder(wsFunc);
+  // topBuilder.setInsertionPointToStart(&wsFunc.getBody().front());
+  IRMapping topMapping;
+  for (auto &op_ : *block) {
+    auto op = &op_;
+
+    if (isa<triton::ReturnOp>(op))
+      continue;
+
+    // auto producerGroups = getGroups(op);
+
+    // if (isa<LocalAllocOp, ttng::TMEMAllocOp, ttng::ArefCreateOp>(op) &&
+    //     producerGroups.empty()) {
+    //   // allocs w/o group annotation are reserved for aref_creation
+    //   // and cloned to the top -evel
+    //   auto clonedOp = topBuilder.clone(*op, topMapping);
+    //   for (auto [oldResult, newResult] :
+    //        llvm::zip(op->getResults(), clonedOp->getResults()))
+    //     for (auto &[_, b] : opBuilders) {
+    //       b.mapping.map(oldResult, newResult);
+    //       topMapping.map(oldResult, newResult);
+    //     }
+    //   continue;
+    // }
+
+    if (!isa<scf::YieldOp>(op)) {
+      // only Yield doesn't have annotation
+      // assert(!producerGroups.empty());
+    }
+
+    if (auto forOp = dyn_cast<scf::ForOp>(op)) {
+      cloneForOp(forOp, builder);
+    // } else if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
+    //   cloneIfOp(ifOp, wsFunc, opBuilders);
+    // } else if (auto reduceOp = dyn_cast<triton::ReduceOp>(op)) {
+    //   cloneReduceOp(reduceOp, wsFunc, opBuilders);
+    } else if (auto yieldOp = dyn_cast<scf::YieldOp>(op)) {
+      // yield %a0, %a1, .. , %an
+      // each group yields its own operand
+      // Map<GroupId, SmallVector<Value>> yieldOperands;
+      // for (auto [idx, operand] : llvm::enumerate(yieldOp.getOperands())) {
+      //   auto parentOp = yieldOp->getParentOp();
+      //   for (auto groupName : getGroupsIdx(parentOp, idx))
+      //     yieldOperands[groupName].push_back(
+      //         opBuilders.at(groupName).mapping.lookup(operand));
+      // }
+
+      // for (auto &[groupName, operands] : yieldOperands) {
+      //   auto &b = opBuilders.at(groupName);
+      //   b.builder.create<scf::YieldOp>(op->getLoc(), operands);
+      // }
+    } else {
+
+      // all remaining ops are expected to be regionless
+      assert(op->getNumRegions() == 0);
+
+      // // clone op into each producer group
+      // for (auto producerGroup : producerGroups) {
+      //   auto &b = opBuilders.at(producerGroup);
+      //   auto newOp = b.builder.clone(*op, b.mapping);
+      //   setGroups(newOp, {producerGroup});
+      //   for (auto [oldResult, newResult] :
+      //        llvm::zip(op->getResults(), newOp->getResults()))
+      //     b.mapping.map(oldResult, newResult);
+      // }
+    }
+  }
+}
+
+
 //===----------------------------------------------------------------------===//
 // Pass Definition
 //===----------------------------------------------------------------------===//
@@ -283,7 +400,9 @@ void PartitionLoops::runOnOperation() {
   });
 
   for (scf::ForOp loop : loops) {
-    if (failed(partitionLoop(loop)))
-      return signalPassFailure();
+    // if (failed(partitionLoop(loop)))
+    //   return signalPassFailure();
+    OpBuilder builder(loop);
+    cloneForOp(loop,  builder);
   }
 }
