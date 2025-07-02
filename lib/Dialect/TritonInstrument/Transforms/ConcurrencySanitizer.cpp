@@ -300,6 +300,37 @@ private:
     return sliceEncoding;
   }
 
+  ttg::DistributedEncodingTrait
+  getSingleDimSliceEncoding(ttg::BlockedEncodingAttr encoding, int dim) {
+    int rank = encoding.getOrder().size();
+    MLIRContext *ctx = encoding.getContext();
+    assert(dim < rank && "Expected dim to be less than rank");
+    ttg::DistributedEncodingTrait sliceEncoding = encoding;
+    for (int i = 0; i < rank; ++i) {
+      if (i != dim) {
+        sliceEncoding = ttg::SliceEncodingAttr::get(ctx, i, encoding);
+      }
+    }
+    return sliceEncoding;
+  }
+
+  Value expandAllSlicedDims(ImplicitLocOpBuilder &b, Value tensor) {
+    auto type = cast<RankedTensorType>(tensor.getType());
+    auto sliceEncoding = dyn_cast<ttg::SliceEncodingAttr>(type.getEncoding());
+    while (sliceEncoding) {
+      int dim = sliceEncoding.getDim();
+      auto shape = type.getShape();
+      auto newShape = SmallVector<int64_t>(shape);
+      newShape.insert(newShape.begin() + dim, 1);
+      auto newType = RankedTensorType::get(newShape, type.getElementType(),
+                                           sliceEncoding.getParent());
+      tensor = b.create<tt::ExpandDimsOp>(newType, tensor, dim);
+      type = newType;
+      sliceEncoding = dyn_cast<ttg::SliceEncodingAttr>(type.getEncoding());
+    }
+    return tensor;
+  }
+
   Value createInitializedScratchMemory(ImplicitLocOpBuilder &b,
                                        TypedValue<RankedTensorType> tensor) {
     auto encoding = tensor.getType().getEncoding();
