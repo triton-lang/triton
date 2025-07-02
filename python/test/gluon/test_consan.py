@@ -63,6 +63,37 @@ def run_kernel_expect_assert(kernel_name: str, expect_failure: bool, device: str
     kernel = globals()[kernel_name]
 
     XBLOCK = 128
+    input = torch.randn((XBLOCK, XBLOCK), device=device, dtype=torch.float32)
+    shared_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=32, rank=2)
+    input_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(input, [XBLOCK, XBLOCK], shared_layout)
+
+    # ConSan requires a global memory allocation
+    def alloc_fn(size: int, alignment: int, stream: Optional[int]):
+        return torch.empty(size, device="cuda", dtype=torch.int8)
+
+    triton.set_allocator(alloc_fn)
+
+    kernel[(1, )](input_desc, XBLOCK, FAILURE=expect_failure, num_warps=1)
+    getattr(torch, device).synchronize()
+
+
+def run_kernel_in_process(kernel_name: str, expect_failure: bool, device: str, check_stderr):
+    result = run_in_process(run_kernel_expect_assert, (kernel_name, expect_failure, device))
+    if expect_failure:
+        assert "device-side assert" in str(result.exc)
+        check_stderr(result.driver_stderr_output)
+    else:
+        assert result.exc is None
+        assert result.driver_stderr_output == ""
+
+
+def run_kernel_expect_assert(kernel_name: str, expect_failure: bool, device: str):
+    knobs.compilation.enable_experimental_consan = True
+    os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
+
+    kernel = globals()[kernel_name]
+
+    XBLOCK = 128
     input = torch.randn((XBLOCK, XBLOCK), device=device, dtype=torch.float16)
     shared_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2)
     input_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(input, [XBLOCK, XBLOCK], shared_layout)
