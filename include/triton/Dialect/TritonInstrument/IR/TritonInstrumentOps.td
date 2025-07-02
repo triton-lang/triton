@@ -128,9 +128,10 @@ def TTI_ExperimentalMarkAsReadOp : TTI_Op<"experimental_mark_as_read", [MemoryEf
 def TTI_ExperimentalClearWriteBarrierOp : TTI_Op<"experimental_clear_write_barrier", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
   let summary = "clear the write state for buffers being guarded by an mbar";
   let description = [{
-    Clear the write state for buffers being guarded by an mbar.
+    Mark a buffer as being read from using mbar as a guard.
   }];
   let arguments = (ins
+    TTG_MemDescType:$buf,
     TTG_MemDescType:$mbar,
     TT_PtrLike:$writeBars,
     TypeAttr:$writeBarsType,

@@ -168,6 +168,7 @@ public:
   }
 
 private:
+  // TODO: Missing support for predication
   void instrumentMemoryOperations(ImplicitLocOpBuilder &b) {
     module.walk([&](Operation *op) {
       if (auto copyOp = dyn_cast<ttng::AsyncTMACopyGlobalToLocalOp>(op)) {
