@@ -358,6 +358,9 @@ class CUDABackend(BaseBackend):
             passes.llvmir.add_di_scope(pm)
         if CUDABackend.instrumentation:
             CUDABackend.instrumentation.patch("llvmir_to_llvm", pm, mod.context)
+            #TODO(fywkevin): put this into instrumentation pass lambda
+            passes.common.add_canonicalizer(pm)
+            passes.common.add_cse(pm)
         pm.run(mod)
         # LLVM-IR (MLIR) -> LLVM-IR (LLVM)
         llvm.init_targets()

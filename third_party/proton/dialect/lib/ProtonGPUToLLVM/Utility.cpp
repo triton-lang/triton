@@ -78,6 +78,10 @@ lowerCircularStoreOpHelper(CircularStoreOp op, Value segmentStruct,
 
   // Compute the segment size in word (4 bytes).
   int selectedWarpNum = mlir::triton::gpu::lookupNumWarps(mod);
+  if (auto totalNumWarps =
+          mod->getAttrOfType<IntegerAttr>("ttg.total-num-warps"))
+    selectedWarpNum = totalNumWarps.getInt();
+
   auto segmentType = op.getSegment().getType();
   auto selectedIds = segmentType.getSelectIds();
   if (!selectedIds.empty())

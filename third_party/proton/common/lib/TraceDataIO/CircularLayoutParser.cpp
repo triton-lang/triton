@@ -185,10 +185,12 @@ proton::readCircularLayoutTrace(ByteSpan &buffer, bool applyTimeShift) {
   config.numBlocks = decoder.decode<I32Entry>()->value;
   config.totalUnits = decoder.decode<I32Entry>()->value;
   config.scratchMemSize = decoder.decode<I32Entry>()->value;
+  uint32_t uidNum = decoder.decode<I32Entry>()->value;
 
   config.uidVec.clear();
-  for (int i = 0; i < config.totalUnits; i++) {
-    config.uidVec.push_back(i);
+  for (int i = 0; i < uidNum; i++) {
+    uint32_t uid = decoder.decode<I32Entry>()->value;
+    config.uidVec.push_back(uid);
   }
 
   buffer.seek(payloadOffset);

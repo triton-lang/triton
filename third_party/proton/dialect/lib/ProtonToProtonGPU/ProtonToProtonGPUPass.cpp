@@ -48,6 +48,85 @@ void parseSelectIds(llvm::StringRef selectIds,
   selectIdVec.erase(llvm::unique(selectIdVec), selectIdVec.end());
 }
 
+template <typename T> bool hasProtonRecord(T *op) {
+  bool hasProtonRecord = false;
+  op->walk([&](proton::RecordOp record) {
+    hasProtonRecord = true;
+    return WalkResult::interrupt();
+  });
+  return hasProtonRecord;
+}
+
+void instrumentWarpSpecializeOps(FuncOp func, Value buffer, Value profileMem) {
+  for (auto wsOp : func.getOps<triton::gpu::WarpSpecializeOp>()) {
+    auto loc = wsOp.getLoc();
+    if (hasProtonRecord(wsOp.getOperation())) {
+      wsOp->insertOperands(wsOp->getNumOperands(), {buffer, profileMem});
+      for (Region *region : wsOp.getPartitionRegions()) {
+        region->addArgument(buffer.getType(), loc);
+        region->addArgument(profileMem.getType(), loc);
+      }
+    }
+  }
+}
+
+// TODO(fywkevin): add a CSE pass
+LogicalResult replaceProtonRecordOp(OpBuilder &builder, FuncOp func,
+                                    Value segment, MetricType metricType,
+                                    ModuleScopeIdAllocation &scopeInfo,
+                                    bool clockExtension) {
+  mlir::IntegerType clkType =
+      clockExtension ? mlir::IntegerType::get(builder.getContext(), 64)
+                     : mlir::IntegerType::get(builder.getContext(), 32);
+
+  // Replace all proton::RecordOp in WS regions.
+  func->walk([&](triton::gpu::WarpSpecializePartitionsOp partitions) {
+    auto loc = partitions.getLoc();
+    for (auto &partition : partitions.getPartitionRegions()) {
+      if (hasProtonRecord(&partition)) {
+        Block &block = partition.front();
+        builder.setInsertionPointToStart(&block);
+        int argNum = block.getNumArguments();
+        auto bufferArg = block.getArgument(argNum - 2);
+        auto profileMemArg = block.getArgument(argNum - 1);
+        Value newSegment = builder.create<gpu::SegmentAllocOp>(
+            loc, segment.getType(), bufferArg);
+        builder.create<gpu::RestoreCtxOp>(loc, newSegment, profileMemArg);
+
+        partition.walk([&](proton::RecordOp record) {
+          builder.setInsertionPoint(record);
+
+          Value counter =
+              builder.create<gpu::ReadCounterOp>(loc, clkType, metricType);
+          int scopeId = scopeInfo.getOpScopeId(record);
+          builder.create<gpu::CircularStoreOp>(loc, newSegment, counter,
+                                               record.getIsStart(), scopeId);
+          record.erase();
+        });
+
+        partition.walk([&](triton::gpu::WarpReturnOp ret) {
+          builder.setInsertionPoint(ret);
+          builder.create<gpu::SaveCtxOp>(loc, newSegment, profileMemArg);
+        });
+      }
+    }
+  });
+
+  // Replace all proton::RecordOp in the master warps.
+  auto loc = func.getLoc();
+  func->walk([&](proton::RecordOp record) {
+    builder.setInsertionPoint(record);
+    Value counter =
+        builder.create<gpu::ReadCounterOp>(loc, clkType, metricType);
+    int scopeId = scopeInfo.getOpScopeId(record);
+    builder.create<gpu::CircularStoreOp>(loc, segment, counter,
+                                         record.getIsStart(), scopeId);
+    record.erase();
+  });
+
+  return success();
+}
+
 int getAllocSharedMemSize(int maxSharedMemSize, int sharedMemUsed,
                           int segmentNum) {
   const int bytesPerEntry = gpu::getBytesPerClockEntry();
@@ -75,43 +154,6 @@ int getAllocSharedMemSize(int maxSharedMemSize, int sharedMemUsed,
 
   return allocSharedMemSize;
 }
-
-class RecordOpCircularRewrite : public OpRewritePattern<proton::RecordOp> {
-public:
-  RecordOpCircularRewrite(MLIRContext *ctx, Value segment,
-                          MetricType metricType,
-                          ModuleScopeIdAllocation &scopeInfo,
-                          bool clockExtension)
-      : OpRewritePattern::OpRewritePattern(ctx), segment(segment),
-        metricType(metricType), scopeInfo(scopeInfo),
-        clockExtension(clockExtension) {}
-
-  LogicalResult matchAndRewrite(proton::RecordOp op,
-                                PatternRewriter &rewriter) const override {
-    Location loc = op->getLoc();
-    MLIRContext *context = op.getContext();
-
-    rewriter.setInsertionPoint(op);
-
-    mlir::IntegerType clkType = clockExtension
-                                    ? mlir::IntegerType::get(context, 64)
-                                    : mlir::IntegerType::get(context, 32);
-
-    Value counter =
-        rewriter.create<gpu::ReadCounterOp>(op.getLoc(), clkType, metricType);
-
-    int scopeId = scopeInfo.getOpScopeId(op);
-    rewriter.replaceOpWithNewOp<gpu::CircularStoreOp>(op, segment, counter,
-                                                      op.getIsStart(), scopeId);
-    return success();
-  }
-
-private:
-  Value segment;
-  MetricType metricType;
-  ModuleScopeIdAllocation &scopeInfo;
-  bool clockExtension;
-};
 } // namespace
 
 class ConvertProtonToProtonGPUPass
@@ -144,6 +186,9 @@ public:
     OpBuilder builder(context);
     builder.setInsertionPointToStart(&func.getBody().front());
     int numWarps = mlir::triton::gpu::lookupNumWarps(mod);
+    if (auto totalNumWarps =
+            mod->getAttrOfType<IntegerAttr>("ttg.total-num-warps"))
+      numWarps = totalNumWarps.getInt();
 
     llvm::SmallVector<int32_t, 8> selectIdVec;
     int segmentNum = numWarps;
@@ -200,7 +245,7 @@ public:
     //  +-----------------------------------------------+
     //  | header (circularHeaderSize bytes)             |
     //  +-----------------------------------------------+
-    //  | number of events per warp (4 bytes x numWarps)|
+    //  | contexts for all warps (4 bytes x numWarps)   |
     //  +-----------------------------------------------+
     //  | profiled data (allocBufferSize bytes)         |
     //  +-----------------------------------------------+
@@ -252,21 +297,24 @@ public:
     Value segment =
         builder.create<gpu::SegmentAllocOp>(loc, segmentType, buffer);
 
-    mlir::RewritePatternSet patterns(context);
     ModuleScopeIdAllocation &scopeInfo = getAnalysis<ModuleScopeIdAllocation>();
-    patterns.add<RecordOpCircularRewrite>(context, segment, metricType,
-                                          scopeInfo, clockExtension);
-    if (applyPatternsGreedily(mod, std::move(patterns)).failed())
-      return failure();
 
     // Set insertion point to the start of the function
     builder.setInsertionPointToStart(&func.getBody().front());
     Value profileMem = builder.create<gpu::GlobalScratchAllocOp>(
         loc, triton::getPointerType(builder.getI32Type()),
         allocProfileScratchSize, profileScratchAlignment);
+    builder.create<gpu::InitCtxOp>(loc, profileMem);
+    instrumentWarpSpecializeOps(func, buffer, profileMem);
+
+    if (failed(replaceProtonRecordOp(builder, func, segment, metricType,
+                                     scopeInfo, clockExtension)))
+      return failure();
+
     func.walk([&](triton::ReturnOp ret) {
       builder.setInsertionPoint(ret);
       builder.create<mlir::gpu::BarrierOp>(loc);
+      builder.create<gpu::SaveCtxOp>(loc, segment, profileMem);
       builder.create<gpu::FinalizeOp>(loc, segment, profileMem);
     });
 
@@ -298,13 +346,7 @@ public:
     FuncOp func = *m.getOps<triton::FuncOp>().begin();
 
     // Check if there are any proton records to process
-    bool hasProtonRecord = false;
-    func.walk([&](proton::RecordOp op) {
-      hasProtonRecord = true;
-      return WalkResult::interrupt(); // Early exit once we find one record
-    });
-
-    if (!hasProtonRecord) {
+    if (!hasProtonRecord(func.getOperation())) {
       return; // No proton records to process, silently return
     }
 

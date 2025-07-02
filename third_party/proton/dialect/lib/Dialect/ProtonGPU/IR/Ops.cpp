@@ -46,8 +46,13 @@ LogicalResult CircularStoreOp::verify() {
   auto selectedIds = segmentType.getSelectIds();
   auto bufferSizeInBytes = segmentType.getNBytes();
   auto mod = getOperation()->getParentOfType<ModuleOp>();
-  int segmentNum = selectedIds.empty() ? mlir::triton::gpu::lookupNumWarps(mod)
-                                       : selectedIds.size();
+
+  int numWarps = mlir::triton::gpu::lookupNumWarps(mod);
+  if (auto totalNumWarps =
+          mod->getAttrOfType<IntegerAttr>("ttg.total-num-warps"))
+    numWarps = totalNumWarps.getInt();
+
+  int segmentNum = selectedIds.empty() ? numWarps : selectedIds.size();
   if (!llvm::isPowerOf2_32(bufferSizeInBytes / segmentNum))
     return emitOpError("profiling buffer segment size must be power of 2");
 
