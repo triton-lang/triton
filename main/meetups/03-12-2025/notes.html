@@ -1,0 +1,319 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../../">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Agenda: &mdash; Triton  documentation</title>
+      <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=03e43079" />
+      <link rel="stylesheet" type="text/css" href="../../_static/css/theme.css?v=e59714d7" />
+      <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery.css?v=d2d258e8" />
+      <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-binder.css?v=f4aeca0c" />
+      <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-dataframe.css?v=2082cf3c" />
+      <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-rendered-html.css?v=1277b6f3" />
+      <link rel="stylesheet" type="text/css" href="../../_static/css/custom.css" />
+
+  
+      <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
+      <script src="../../_static/doctools.js?v=9bcbadda"></script>
+      <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../../index.html" class="icon icon-home">
+            Triton
+              <img src="https://cdn.openai.com/triton/assets/triton-logo.png" class="logo" alt="Logo"/>
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Getting Started</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../getting-started/installation.html">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../getting-started/tutorials/index.html">Tutorials</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Python API</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../python-api/triton.html">triton</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../python-api/triton.language.html">triton.language</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../python-api/triton.testing.html">triton.testing</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../python-api/triton-semantics.html">Triton Semantics</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Triton MLIR Dialects</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../dialects/dialects.html">Triton MLIR Dialects and Ops</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Programming Guide</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../programming-guide/chapter-1/introduction.html">Introduction</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../programming-guide/chapter-2/related-work.html">Related Work</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../programming-guide/chapter-3/debugging.html">Debugging Triton</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../index.html">Triton</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+      <li class="breadcrumb-item active">Agenda:</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../../_sources/meetups/03-12-2025/notes.md.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="agenda">
+<h1>Agenda:<a class="headerlink" href="#agenda" title="Link to this heading">¶</a></h1>
+<ol class="arabic simple">
+<li><p>Improving ILP (Instruction Level Parallelism) with Warp Specialization</p></li>
+<li><p>Triton-shared (Progress and updates)</p></li>
+<li><p>Question about generic tensor descriptors</p></li>
+</ol>
+</section>
+<section id="meeting-notes">
+<h1>Meeting notes:<a class="headerlink" href="#meeting-notes" title="Link to this heading">¶</a></h1>
+<section id="improving-ilp-instruction-level-parallelism-with-warp-specialization">
+<h2>Improving ILP (Instruction Level Parallelism) with Warp Specialization<a class="headerlink" href="#improving-ilp-instruction-level-parallelism-with-warp-specialization" title="Link to this heading">¶</a></h2>
+<p>Speakers: Hongtao Yu (Meta), Yuanwei (Kevin) Fang (Meta), Manman Ren (Meta)</p>
+<p>Notes:</p>
+<ul class="simple">
+<li><p>Pytorch 2.6 with Triton release branch 3.2</p></li>
+<li><p>Targeting: Nvidia Hopper arch, Blackwell coming soon.</p></li>
+<li><p>Performance</p>
+<ul>
+<li><p>Meta’s FP8Rowwise GEMM (3-5% improvement, 1D persistent loop)</p></li>
+<li><p>FlashAttention (10-15% improvement, could be faster with pipelining and pingpong scheduling).</p></li>
+</ul>
+</li>
+<li><p>What is warp specialization?</p>
+<ul>
+<li><p>Improves hardware instruction scheduling. GPUs don’t have good dynamic instruction scheduling.</p></li>
+<li><p>Use multi-way warp scheduler. Allows warps on a single core targeting different function units (e.g. memory, ALU, tensor core, etc.)  All run in parallel.</p></li>
+</ul>
+</li>
+<li><p>Comparison using GEMM * *</p>
+<ul>
+<li><p>Uniform warps: 8 warps, each loading/processing 1/8th of data.  Divided into two groups, each doing ½ the data. Good for GEMM but not for more complicated kernels.</p></li>
+<li><p>Warp specialized: 12 warps, 4 warps for producing data-only do load, 8 for wgmma-only do wmma.  Frees up more capacity for more complex kernels like flash attention.</p></li>
+</ul>
+</li>
+<li><p>Compiler implementation</p>
+<ul>
+<li><p>How to enable warp specialization</p>
+<ul>
+<li><p>Automaticlly enabled by adding two switches to autotune config.</p>
+<ul>
+<li><p>Num_consumer_groups - non-load warp groups</p></li>
+<li><p>Num_buffer_warp_spec - # of buffers between producer and consumer</p></li>
+</ul>
+</li>
+</ul>
+</li>
+<li><p>Concept</p>
+<ul>
+<li><p>Async tasks run in parallel with other async tasks.</p></li>
+<li><p>Tasks should use different memory and GPU resources.</p></li>
+<li><p>Coordination through shared memory and barriers for synchronization.</p></li>
+</ul>
+</li>
+<li><p>Compiler Implementation</p>
+<ul>
+<li><p>Automatic task partitioning.</p></li>
+<li><p>Dataflow Multi-buffering</p></li>
+</ul>
+</li>
+<li><p>Task partitioning</p>
+<ul>
+<li><p>Automatic task partitioning identifies tasks like loads, alu ops, stores, etc.</p></li>
+<li><p>Identifies dependency chains. Links producers to consumers.</p></li>
+<li><p>Continue partitioning and inserting synchronization primitives in both producer and consumer warps.</p></li>
+</ul>
+</li>
+<li><p>Multi-buffering</p>
+<ul>
+<li><p>Producer continues to load/populate buffers in round-robin while consumers processes individual buffer.</p></li>
+<li><p>Producer blocks when no free buffers available.</p></li>
+</ul>
+</li>
+<li><p>In the future</p>
+<ul>
+<li><p>Multi-buffering multi-dimensional loops</p></li>
+<li><p>Buffer reuse in over multiple regions in a single group</p></li>
+<li><p>Complex control flows, partition schemes (ping-pong, support for Blackwell)</p></li>
+</ul>
+</li>
+</ul>
+</li>
+<li><p>Case Study: Flash Attention - Kevin and Manman</p>
+<ul>
+<li><p>Without WS</p>
+<ul>
+<li><p>Compute Througput: 45%</p></li>
+<li><p>Memory Throughput: 35%</p></li>
+<li><p>SM Busy: 46%</p></li>
+<li><p>No interleaving: CUDA core idle when tensor cores running</p></li>
+</ul>
+</li>
+<li><p>With WS</p>
+<ul>
+<li><p>Compute Throughput: 69%</p></li>
+<li><p>Memory Throughput: 35%</p></li>
+<li><p>SM Busy: 71%</p></li>
+<li><p>Interleaving (speed up due to):</p>
+<ul>
+<li><p>Overlapping TMA with CUDA core op</p></li>
+<li><p>Overlapping cuda core and tensor core</p></li>
+<li><p>Overlapping tensor core and instruction issuing.</p></li>
+</ul>
+</li>
+<li><p>Data partitioning</p></li>
+<li><p>Communication pipelining and ping-pong scheduling</p></li>
+<li><p>Ping-pong is named barrier pair. Only one consumer can be in region.</p></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</section>
+<section id="questions">
+<h2>Questions<a class="headerlink" href="#questions" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Q&gt; Is there an equivalent warp group for AMD? Does this apply to AMD GPUs?</p></li>
+<li><p>A&gt; Meta is doing this for AMD. No named barrier in AMD. Simulating this using shared-memory atomics on AMD to get the same effect.</p></li>
+<li><p>Q&gt; Would it make sense to promote these to a higher level inside Triton for complex cases where it would be difficult for the compiler to detect?</p></li>
+<li><p>A&gt; Yes. We allow users to annotate programs with their partitions in <a class="reference external" href="https://github.com/facebookexperimental/triton">facebookexperimental/triton</a>.  We want to see if more automation is possible.</p></li>
+<li><p>Q&gt; What should we target first? Warp specialization or software pipelining as an initial optimization? From your experience, which lowering is preferred?  Are you going to bring it to main?</p></li>
+<li><p>A&gt; Not mutually exclusive.  You need to figure out what makes sense for yourself.  WS benefit: outerloop support for pipelining. WS benefit: overlapping of cuda core and tensor core.</p></li>
+<li><p>Q&gt; What improvements are you seeing?</p></li>
+<li><p>A&gt; Flash attention: 20%  + computational pipelining and ping-pong scheduling approaches flash attention v3 performance.</p></li>
+</ul>
+</section>
+<section id="triton-shared-progress-and-updates">
+<h2>Triton-shared (Progress and updates)<a class="headerlink" href="#triton-shared-progress-and-updates" title="Link to this heading">¶</a></h2>
+<p>Presenter: Nhat Nguyen (Microsoft), Haishan Zhu (Meta)</p>
+<p>Notes:</p>
+<section id="goal">
+<h3>Goal:<a class="headerlink" href="#goal" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Lower Triton IR to mlir core dialects (linalg, memref, …)  Easier path to running on CPUs.</p></li>
+<li><p>Focus on supporting strided memory access for accelerators</p></li>
+<li><p>Open-sourced at https://github.com/microsoft/triton-shared</p>
+<ul>
+<li><p>Trying to keep it in sync with OSS triton (albeit a little delayed)</p></li>
+</ul>
+</li>
+</ul>
+</section>
+<section id="progress">
+<h3>Progress<a class="headerlink" href="#progress" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Modularizing compiler passes. Decoupled data extraction from lowering. Allowed for customized lowering flows. Predictable behavior for analysis failures.</p>
+<ul>
+<li><p>Triton-to-structured</p></li>
+<li><p>triton-arith-to-linalg</p></li>
+<li><p>Structured-to-memref</p></li>
+</ul>
+</li>
+<li><p>Improvements to pointer analysis</p>
+<ul>
+<li><p>Supports nested loops</p></li>
+<li><p>Non-contiguous memory access.</p></li>
+</ul>
+</li>
+<li><p>Support for lowering unstructured access with single base pointer</p></li>
+<li><p>Support lowering triton ops to linalg/mlir (split, join, cat, etc.)</p></li>
+</ul>
+</section>
+<section id="roadmap">
+<h3>Roadmap<a class="headerlink" href="#roadmap" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Complete support for non-contiguous pointers</p></li>
+<li><p>Detect other memory access patterns (e.g. row-gather/scatter pointer sequences)</p></li>
+<li><p>Extend to control flow ops</p></li>
+</ul>
+</section>
+<section id="thanks">
+<h3>Thanks!<a class="headerlink" href="#thanks" title="Link to this heading">¶</a></h3>
+<p>Meta, Qualcomm and community</p>
+</section>
+<section id="id1">
+<h3>Questions<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Q&gt; Future plans, what are the higher priority items you want to work on?</p></li>
+<li><p>A&gt; Many Triton kernel have memory access patterns  that can’t be detected. We don’t have fall back solutions (e.g. gather-scatter support). Need to wait for the mlir pointer dialect to land so we can use it.  MxN loads pointer analysis fails if loads are contiguous. But rows may be contiguous so we can split analysis into multiple chunks (row scatter, row gather).</p></li>
+<li><p>A&gt; In places where pointer analysis can’t extract information, we leave the IR intact so existing passes that can deal with them. We can handle loop iteration over tensors of pointers (common patterns). More complicated operations like if/else look like low hanging fruit.</p></li>
+</ul>
+</section>
+</section>
+<section id="questions-about-generic-tensor-descriptor">
+<h2>Questions about Generic Tensor Descriptor<a class="headerlink" href="#questions-about-generic-tensor-descriptor" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Q&gt; What is the progress on generic tensor descriptor programming?  Not Nvidia specific. (from last month).</p></li>
+<li><p>A&gt; TMA accelerator will probably become more general across GPUs.</p></li>
+<li><p>A&gt; TMA (tensor descriptors) support should be landing over next few weeks.  Will add compatibility mode for GPUs without TMA (but will probably be slower).  And will be adding block pointer support.  We will deprecate host side tensor descriptors (only provided minor performance benefit for persistent kernels).  Allow user to autotune.</p></li>
+</ul>
+</section>
+<section id="minutes">
+<h2>Minutes:<a class="headerlink" href="#minutes" title="Link to this heading">¶</a></h2>
+<p>Recording link <a class="reference external" href="https://www.youtube.com/watch?v=cIW6ZL_LmGc">here</a></p>
+</section>
+</section>
+
+
+           </div>
+          </div>
+          <footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2020, Philippe Tillet.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

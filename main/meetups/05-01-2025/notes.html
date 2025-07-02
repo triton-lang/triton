@@ -1,0 +1,238 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../../">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Agenda: &mdash; Triton  documentation</title>
+      <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=03e43079" />
+      <link rel="stylesheet" type="text/css" href="../../_static/css/theme.css?v=e59714d7" />
+      <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery.css?v=d2d258e8" />
+      <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-binder.css?v=f4aeca0c" />
+      <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-dataframe.css?v=2082cf3c" />
+      <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-rendered-html.css?v=1277b6f3" />
+      <link rel="stylesheet" type="text/css" href="../../_static/css/custom.css" />
+
+  
+      <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
+      <script src="../../_static/doctools.js?v=9bcbadda"></script>
+      <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../../index.html" class="icon icon-home">
+            Triton
+              <img src="https://cdn.openai.com/triton/assets/triton-logo.png" class="logo" alt="Logo"/>
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Getting Started</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../getting-started/installation.html">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../getting-started/tutorials/index.html">Tutorials</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Python API</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../python-api/triton.html">triton</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../python-api/triton.language.html">triton.language</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../python-api/triton.testing.html">triton.testing</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../python-api/triton-semantics.html">Triton Semantics</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Triton MLIR Dialects</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../dialects/dialects.html">Triton MLIR Dialects and Ops</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Programming Guide</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../programming-guide/chapter-1/introduction.html">Introduction</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../programming-guide/chapter-2/related-work.html">Related Work</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../programming-guide/chapter-3/debugging.html">Debugging Triton</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../index.html">Triton</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+      <li class="breadcrumb-item active">Agenda:</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../../_sources/meetups/05-01-2025/notes.md.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="agenda">
+<h1>Agenda:<a class="headerlink" href="#agenda" title="Link to this heading">¶</a></h1>
+<ol class="arabic simple">
+<li><p>What are the plans for existing block pointer programming model? (Context: Intel GPU backend relies heavily on it an will need time to fully move to tensor descriptor programming model) - Jianhui Li (Intel)</p></li>
+<li><p>Infrastructure for Triton performance tests - Sayce Falk (Google)</p></li>
+<li><p>What talks/tutorials/open discussions would you like to see at the 2025 Triton Developers’ Summit? How can we help? Adnan Aziz (Meta)</p></li>
+</ol>
+</section>
+<section id="notes">
+<h1>Notes:<a class="headerlink" href="#notes" title="Link to this heading">¶</a></h1>
+<section id="what-are-the-plans-for-existing-block-pointer-programming-model-context-intel-gpu-backend-relies-heavily-on-it-an-will-need-time-to-fully-move-to-tensor-descriptor-programming-model">
+<h2>What are the plans for existing block pointer programming model? (Context: Intel GPU backend relies heavily on it an will need time to fully move to tensor descriptor programming model)<a class="headerlink" href="#what-are-the-plans-for-existing-block-pointer-programming-model-context-intel-gpu-backend-relies-heavily-on-it-an-will-need-time-to-fully-move-to-tensor-descriptor-programming-model" title="Link to this heading">¶</a></h2>
+<p>Speakers: Jianhui Li (Intel), Keren Zhou (George Mason Univ)</p>
+<ul class="simple">
+<li><p>Glad to see Triton moving toward generic tensor descriptor vs vendor-specific TMA.</p></li>
+<li><p>Intel is still relying on older block pointer programming model. Will take some time to migrate to new tensor descriptor model</p></li>
+</ul>
+<section id="questions">
+<h3>Questions<a class="headerlink" href="#questions" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Q&gt; What is timeline for deprecation of block pointer?</p></li>
+<li><p>Q&gt; Looked at code examples. Two flavors of tensor descriptor. We’d prefer keeping one: <strong>CreateTensorDescriptorFromHost</strong> Why are there two flavors?  WHy not just keep the device side one?</p></li>
+<li><p>A&gt; You want to know why we have one device side and one host side.</p></li>
+<li><p>Q&gt; Ok to have tensor descriptors in global memory. We want tensor descriptors to reside on the device.</p></li>
+<li><p>A&gt; We have descriptor API on device because when you update the descriptor from the kernel and not from the device.</p></li>
+<li><p>Q&gt; Performance. Would like to limit choices to programmer. Don’t need to enable other programming models. Makes it easier to support triton on other platforms.</p></li>
+<li><p>A&gt; Is it a problem if you only support device side descriptor and update?</p></li>
+<li><p>Q&gt; No.</p></li>
+<li><p>A&gt; Probably still need to keep 2 APIs.</p></li>
+<li><p>Q&gt; What do other vendors think?</p></li>
+<li><p>A&gt; Try the tutorial 0.9. Exercises differ tensor descriptor APIs demostrating different performance characteristics.</p></li>
+<li><p>Q&gt; OpenAI support both APIs? on the device and the off-site?</p></li>
+<li><p>A&gt; Yes</p></li>
+<li><p>Q&gt; Removing support for block pointers</p></li>
+<li><p>A&gt; Yes, I’m proposing removing block pointers from triton. Tensor descriptor support all use-cases covered by block pointers.</p></li>
+<li><p>Q&gt; I’ve got a GEMM kernel written with block pointers, rewrote using on-device tensor descriptors and it works. Tensor descriptor doesn’t have the offset information on the load, we need to look at the load &amp; tensor descriptor to materialize the block pointer. Works interprocedurally because we can reconstruct the block pointer in the same function. Intra procedurally, problematic, tensor descriptor is only in caller, not the callee (info not available to do reconstruction in callee)</p></li>
+<li><p>A&gt; Calling convention is a bit confusing if using non-inline functions.</p></li>
+<li><p>Q&gt; Concerning because we’re using a lot of block pointers.</p></li>
+<li><p>Q&gt; We’re also heavy users of block pointers and have wrappers on both APIs (creates either a block pointer or a tensor descriptor.)  Block pointer is superset of tensor descriptor. Just carry load params in a tuple. Limitation though. Least significant stride must be 1. All other strides must be a multiple of 16. No performance sensitive stuff using this. We use block pointers for some small writes and these aren’t supported by TMA.</p></li>
+<li><p>A&gt; Block pointers can’t just be lowered to TMA. We want intermediate passes that translate it into something similar to block pointers.</p></li>
+<li><p>Q&gt; If CMA incompatible, would be lowered to TMA.</p></li>
+<li><p>A&gt; Talked to Peter, no time to work on this.</p></li>
+<li><p>Q&gt; We don’t mind what API. What is the transition plan for block pointer API? Timeline?</p></li>
+<li><p>A&gt; No timeline yet.</p></li>
+<li><p>Q&gt; Need a grace period.</p></li>
+</ul>
+</section>
+</section>
+<section id="infrastructure-for-triton-performance-tests">
+<h2>Infrastructure for Triton performance tests<a class="headerlink" href="#infrastructure-for-triton-performance-tests" title="Link to this heading">¶</a></h2>
+<p>Speaker: Sayce Falk (Google), Cicie Wang (Meta), Jason Knight (Nvidia), Keren Zhou (George Mason University), Areg Melik-Adamyan (Intel)</p>
+<ul class="simple">
+<li><p>Q&gt; Any near term plans for setting up public benchmarks for Nvidia’s newest hardware? Maybe through PyTorch or TorchBench.</p></li>
+<li><p>A&gt; Cicie Wang (Meta): Meta discussed with Nvidia about running TritonBench on B200. Nvidia suggested working with OpenAI (OpenAI has hardware). We now have hardware. Jason from Nvidia working on setting up CI. First steps: get TritonBench running on this hardware.</p></li>
+<li><p>Q&gt; Need devops/infra side to setup devrunners (complexity/security of setting up these machines is high). Possible to use existing GB200 triton runner in triton CI.</p></li>
+<li><p>Q&gt; You want to run torchbench? Is this on the triton main project?</p></li>
+<li><p>A&gt; Possibly using the facebookexperimental/triton repo. Maybe a second repo. Maybe the PyTorch repo?</p></li>
+<li><p>A&gt; Also looking at the AMD MI300x and AMD MI350x.</p></li>
+<li><p>Q&gt; Xu Zhao (Meta) is currently running triton bench.</p></li>
+<li><p>A&gt; Yes. But only for internal Meta consumption. Goal is to expose this externally.</p></li>
+<li><p>Q&gt; Maybe we can leverage Intel’s backend? (to Jason Knight).</p></li>
+<li><p>A&gt; We currently have OpenAI’s hosted triton CI, PyTorch’s CI &amp; performance.</p></li>
+<li><p>Q&gt; Intel has its on repo. Interested in contributing data to a shared dashboard.</p></li>
+<li><p>A&gt; Maybe talk to the PyTorch folks</p></li>
+<li><p>A&gt; DevOps support not up and running (months out) for B200.</p></li>
+<li><p>Q&gt; Where are the B200s hosted?</p></li>
+<li><p>A&gt; Pytorch foundation: all cloud instances funded by credits (Top N cloud providers). CI for Triton.</p></li>
+<li><p>A&gt; Blackwell is in house for Triton.  We’d like have better sources (only one node per type for testing.)</p></li>
+<li><p>Q&gt; Jason do you have local hosted cloud?</p></li>
+<li><p>A&gt; Yea, but security is hard.</p></li>
+<li><p>Q&gt; Progress on PyTorch foundation to get DevOps (Meta needs to look into this).</p></li>
+<li><p>Q&gt; More interested in regression testing.  Are you finding regressions?</p></li>
+<li><p>A&gt; Intel is usually not seeing regressions from OpenAI (because they only have a 1 week lag).</p></li>
+<li><p>Q&gt; Google XLA experience - could you set this up?</p></li>
+<li><p>A&gt; Yes, we could talk through personnel/resourcing but need to know what community goals are.</p></li>
+<li><p>Q&gt; Some performance tests, some regression tests to start. (Including Llama 4 and MoE operators).</p></li>
+<li><p>Q&gt; What kernels and operators should block releases?</p></li>
+<li><p>Q&gt; Intel would be interested in developing common benchmarking infrastructure.</p></li>
+<li><p>Q&gt; Intel would be interested regression testing infrastructure.</p></li>
+<li><p>Q&gt; Interested in collaborating on developing tests that don’t just look at lit-like tests but how do changes in passes affect generated code.</p></li>
+<li><p>Q&gt; Anyone interested in this?</p></li>
+<li><p>A&gt; Maybe first step, identify how much generated code is affected by a pull request (give a signal to say something about the blast radius of a change).</p></li>
+<li><p>Q&gt; Intel had an intern looking at this.</p></li>
+<li><p>Q&gt; Intel<Alexander> - if you’re interested reach out over slack.</p></li>
+</ul>
+</section>
+<section id="what-talks-tutorials-open-discussions-would-you-like-to-see-at-the-2025-triton-developers-summit-how-can-we-help">
+<h2>What talks/tutorials/open discussions would you like to see at the 2025 Triton Developers’ Summit? How can we help?<a class="headerlink" href="#what-talks-tutorials-open-discussions-would-you-like-to-see-at-the-2025-triton-developers-summit-how-can-we-help" title="Link to this heading">¶</a></h2>
+<p>Speaker: Adnan Aziz (Meta)</p>
+<ul class="simple">
+<li><p>Phil, Elena Mithra &amp; Adnan Aziz pulled together last year’s Triton Developers’ Summit.</p></li>
+<li><p>Mlir tutorials, keynotes, closed-end backends, OSS projects, Intel triton efforts.</p></li>
+<li><p>Heterogeneous hardware.</p></li>
+<li><p>Over 500 people attended!</p></li>
+<li><p>Microsoft running it in 2025.</p></li>
+<li><p>Ideas:</p>
+<ul>
+<li><p>Tutorials for users: writing triton code, kernel profilers</p></li>
+<li><p>Panel of triton users: power users and new users.</p></li>
+<li><p>Keren: academic/scientific domains. Physicists are using triton for simulations. Broader HPC.</p></li>
+<li><p>Jason: EVO and mosaic talks (embracing sharing). Cutlass dsl, we should be learning form them.</p></li>
+<li><p>Cicie: do we have proposal submission process? No. We had a compressed timeframe-10 weeks. Some proposals didn’t make it due to time.</p></li>
+</ul>
+</li>
+<li><p>Please give us feedback.</p></li>
+<li><p>We promised to give Microsoft feedback to the process.</p></li>
+<li><p>Triton summit will try to colocate with PyTorch conference.  Probably at the Mosconi Center in SF (but still needs to be verified from Microsoft).</p></li>
+<li><p>What is Microsoft’s timeline/plans?</p></li>
+</ul>
+<section id="minutes">
+<h3>Minutes:<a class="headerlink" href="#minutes" title="Link to this heading">¶</a></h3>
+<p>Recording link <a class="reference external" href="https://youtu.be/W16BrXc5BYE">here</a></p>
+</section>
+</section>
+</section>
+
+
+           </div>
+          </div>
+          <footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2020, Philippe Tillet.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>
