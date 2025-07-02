@@ -1383,7 +1383,7 @@ void AMDMfmaEncodingAttr::print(AsmPrinter &printer) const {
           << ", warpsPerCTA = [" << getWarpsPerCTA() << "]";
 
   auto tilesPerWarp = getTilesPerWarp();
-  if (llvm::any_of(tilesPerWarp, [](int x) { return x != 1; })) {
+  if (!hasUnitTilesPerWarp()) {
     printer << ", tilesPerWarp = [" << getTilesPerWarp() << "]";
   }
 
@@ -1888,6 +1888,10 @@ SmallVector<unsigned> AMDMfmaEncodingAttr::getCTAOrder() const {
 }
 SmallVector<unsigned> AMDMfmaEncodingAttr::getCTASplitNum() const {
   return SmallVector<unsigned>(getCTALayout().getCTASplitNum());
+}
+
+bool AMDMfmaEncodingAttr::hasUnitTilesPerWarp() const {
+  return !llvm::any_of(getTilesPerWarp(), [](int x) { return x != 1; });
 }
 
 SmallVector<int64_t>

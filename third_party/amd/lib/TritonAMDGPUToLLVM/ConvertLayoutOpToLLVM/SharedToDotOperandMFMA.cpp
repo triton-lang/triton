@@ -223,7 +223,7 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
 
   // tilesPerWarp parameter is only implemented trough LL path.
   auto tilesPerWarp = mfmaLayout.getTilesPerWarp();
-  if (llvm::any_of(tilesPerWarp, [](int x) { return x != 1; })) {
+  if (!mfmaLayout.hasUnitTilesPerWarp()) {
     return Value();
   }
 

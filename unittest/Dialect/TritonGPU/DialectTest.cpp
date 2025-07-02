@@ -471,19 +471,15 @@ public:
 
   triton::gpu::AMDMfmaEncodingAttr createMFMA(int mDim, int nDim,
                                               ArrayRef<unsigned> warpsPerCTA) {
-
-    SmallVector<unsigned> tilesPerWarp(warpsPerCTA.size(), 1);
     return triton::gpu::AMDMfmaEncodingAttr::get(
-        &ctx, /*version=*/2, warpsPerCTA, tilesPerWarp, mDim, nDim,
+        &ctx, /*version=*/2, warpsPerCTA, mDim, nDim,
         /*isTransposed=*/false, ctaLayout);
   }
 
   triton::gpu::AMDMfmaEncodingAttr
   createTransposedMFMA(int mDim, int nDim, ArrayRef<unsigned> warpsPerCTA) {
-    SmallVector<unsigned> tilesPerWarp(warpsPerCTA.size(), 1);
-
     return triton::gpu::AMDMfmaEncodingAttr::get(
-        &ctx, /*version=*/2, warpsPerCTA, tilesPerWarp, mDim, nDim,
+        &ctx, /*version=*/2, warpsPerCTA, mDim, nDim,
         /*isTransposed=*/true, ctaLayout);
   }
 };

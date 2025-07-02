@@ -453,10 +453,9 @@ public:
     // Use transposed mfma layout to enable larger vectorization for global
     // store instructions.
     auto aElemTy = mfmaInstr->aElementType;
-    SmallVector<unsigned> tilesPerWarp(warpsPerTile.size(), 1);
     ttg::AMDMfmaEncodingAttr mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
         oldRetType.getContext(),
-        /*version*/ mfmaVersion, warpsPerTile, tilesPerWarp,
+        /*version*/ mfmaVersion, warpsPerTile,
         /*instrShape*/ mDim, nDim, /*isTransposed=*/true, CTALayout);
 
     Type mfmaAccType;
@@ -654,15 +653,11 @@ public:
     SmallVector<unsigned, 2> mfmaWarpsPerCTA(rank, 1);
     mfmaWarpsPerCTA[aScale ? 0 : 1] = numWarps;
 
-    // Heuristics for setting this parameter will be implemented in follow-up
-    // PRs.
-    SmallVector<unsigned> tilesPerWarp(mfmaWarpsPerCTA.size(), 1);
-
     // Always use transposed mfma layout. This enables larger vectorization
     // for global store instructions.
     auto mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
-        ctx, /*version=*/mfmaVersion, mfmaWarpsPerCTA, tilesPerWarp,
-        /*instrShape=*/mDim, nDim, /*isTransposed=*/true, ctaLayout);
+        ctx, /*version=*/mfmaVersion, mfmaWarpsPerCTA, /*instrShape=*/mDim,
+        nDim, /*isTransposed=*/true, ctaLayout);
 
     auto newRetType = RankedTensorType::get(
         oldRetType.getShape(), oldRetType.getElementType(), mfmaEnc);
@@ -818,9 +813,8 @@ public:
 
     // Always use transposed mfma layout. This enables larger vectorization
     // for global store instructions.
-    SmallVector<unsigned> tilesPerWarp(warpsPerTile.size(), 1);
     auto mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
-        ctx, /*verison=*/mfmaVersion, warpsPerTile, tilesPerWarp,
+        ctx, /*verison=*/mfmaVersion, warpsPerTile,
         /*instrShape=*/mDim, nDim, /*isTransposed=*/true, ctaLayout);
 
     auto newRetType =
@@ -878,6 +872,7 @@ public:
         shape = llvm::to_vector(scale.getType().getShape());
       }
 
+      SmallVector<unsigned> tilesPerWarp(warpsPerTile.size(), 1);
       LinearLayout newLL = chooseScaledMfmaScaleLayout(
           ctx, idx, shape, mDim, tilesPerWarp, warpsPerTile);
 

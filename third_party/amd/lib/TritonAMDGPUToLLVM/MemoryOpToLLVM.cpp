@@ -143,7 +143,7 @@ private:
     }
 
     auto tilesPerWarp = mfmaEnc.getTilesPerWarp();
-    if (llvm::any_of(tilesPerWarp, [](int x) { return x != 1; })) {
+    if (!mfmaEnc.hasUnitTilesPerWarp()) {
       return false;
     }
 

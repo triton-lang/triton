@@ -476,10 +476,10 @@ AMDMfmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   auto tilesPerWarp = getTilesPerWarp();
   auto warpsPerCTA = getWarpsPerCTA();
 
-  const unsigned tilesPerWarpM = tilesPerWarp[rank - 2];
-  const unsigned tilesPerWarpN = tilesPerWarp[rank - 1];
-  const unsigned warpsPerCTAM = warpsPerCTA[rank - 2];
-  const unsigned warpsPerCTAN = warpsPerCTA[rank - 1];
+  const unsigned tilesPerWarpM = tilesPerWarp[mIndex];
+  const unsigned tilesPerWarpN = tilesPerWarp[nIndex];
+  const unsigned warpsPerCTAM = warpsPerCTA[mIndex];
+  const unsigned warpsPerCTAN = warpsPerCTA[nIndex];
   const auto &dimN = outDimNames[order[0]];
   const auto &dimM = outDimNames[order[1]];
 
@@ -493,8 +493,11 @@ AMDMfmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   // tile. Instead of switching to the M dimension now, we continue extending
   // the layout along the remaining N dimension, and only then proceed along M,
   // following the tilesPerWarp configuration.
+  // If the N dimension is not large enough to span multiple CTA tiles (i.e.,
+  // the first argument is 0), an empty layout is created, so this identity
+  // layout will not introduce any new registers.
   tileLayout *= LinearLayout::identity1D(
-      shape[rank - 1] / (getMDim() * warpsPerCTAN * tilesPerWarpN), kRegister,
+      shape[nIndex] / (getNDim() * warpsPerCTAN * tilesPerWarpN), kRegister,
       dimN);
   tileLayout *= LinearLayout::identity1D(tilesPerWarpM, kRegister, dimM);
 
@@ -1479,8 +1482,11 @@ LinearLayout chooseScaledMfmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,
   StringAttr kLane = StringAttr::get(ctx, "lane");
   StringAttr kWarp = StringAttr::get(ctx, "warp");
   StringAttr kBlock = StringAttr::get(ctx, "block");
-  auto kDim = dotOperandIdx == 0 ? rank - 1 : rank - 2;
-  auto tilePerWarpNonK = tilesPerWarp[kDim];
+
+  // Fetch the tilesPerWarp value in the M dimension for operand A, or in the N
+  // dimension for operand B.
+  unsigned mnDim = dotOperandIdx == 0 ? rank - 2 : rank - 1;
+  unsigned tilePerWarpMN = tilesPerWarp[mnDim];
 
   // In scaled dot, the shapes of operands(without batch dimension) are,
   // respectively:
@@ -1503,12 +1509,11 @@ LinearLayout chooseScaledMfmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,
   std::vector<std::vector<int32_t>> registerBase;
   std::vector<std::vector<int32_t>> laneBase;
 
-  auto kTileSize = mfmaMDim == 32 ? 2 : 4;
-
-  for (int32_t elem = kTileSize; elem < kSize; elem *= 2)
+  auto threadsInKDim = mfmaMDim == 32 ? 2 : 4;
+  for (int32_t elem = threadsInKDim; elem < kSize; elem *= 2)
     registerBase.emplace_back(std::vector<int32_t>{elem, 0});
 
-  for (int32_t elem = mfmaMDim; elem < tilePerWarpNonK * mfmaMDim; elem *= 2)
+  for (int32_t elem = mfmaMDim; elem < tilePerWarpMN * mfmaMDim; elem *= 2)
     registerBase.emplace_back(std::vector<int32_t>{0, elem});
 
   if (mfmaMDim == 32) {

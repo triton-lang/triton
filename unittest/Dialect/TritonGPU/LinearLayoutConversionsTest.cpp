@@ -53,17 +53,24 @@ public:
     return DotOperandEncodingAttr::get(&ctx, idx, parent, /*kWidth=*/kWidth);
   }
 
-  AMDMfmaEncodingAttr mfma(ArrayRef<unsigned> warps,
-                           ArrayRef<unsigned> tilesPerWarp, unsigned mDim,
-                           unsigned nDim, bool isTransposed) {
+  AMDMfmaEncodingAttr
+  mfma(ArrayRef<unsigned> warps, unsigned mDim, unsigned nDim,
+       bool isTransposed,
+       std::optional<ArrayRef<unsigned>> maybeTilesPerWarp = std::nullopt) {
     SmallVector<unsigned> cpg(warps.size(), 1u);
     SmallVector<unsigned> cSplit(warps.size(), 1u);
     SmallVector<unsigned> cOrd(warps.size());
     std::iota(cOrd.begin(), cOrd.end(), 0);
 
-    return AMDMfmaEncodingAttr::get(
-        &ctx, /*version=*/2, warps, tilesPerWarp, mDim, nDim, isTransposed,
-        CTALayoutAttr::get(&ctx, cpg, cSplit, cOrd));
+    auto ctaLayout = CTALayoutAttr::get(&ctx, cpg, cSplit, cOrd);
+
+    if (maybeTilesPerWarp.has_value()) {
+      return AMDMfmaEncodingAttr::get(&ctx, 2, warps, maybeTilesPerWarp.value(),
+                                      mDim, nDim, isTransposed, ctaLayout);
+    } else {
+      return AMDMfmaEncodingAttr::get(&ctx, 2, warps, mDim, nDim, isTransposed,
+                                      ctaLayout);
+    }
   }
 
   DotOperandEncodingAttr mfmaDotOp(AMDMfmaEncodingAttr mfma, unsigned opIdx,
@@ -864,8 +871,8 @@ TEST_F(LinearLayoutConversionsTest, SliceDot) {
 TEST_F(LinearLayoutConversionsTest, MFMA32_tpw_2_2) {
 
   auto mfmaNT =
-      mfma(/*warps=*/{2, 4}, /*tilesPerWarp*/ {2, 2}, /*mDim=*/32, /*nDim=*/32,
-           /*isTransposed=*/false);
+      mfma(/*warps=*/{2, 4}, /*mDim=*/32, /*nDim=*/32,
+           /*isTransposed=*/false, /*tilesPerWarp*/ ArrayRef<unsigned>({2, 2}));
 
   EXPECT_EQ(
       toLinearLayout({32, 32}, mfmaNT),
@@ -895,9 +902,10 @@ TEST_F(LinearLayoutConversionsTest, MFMA32_tpw_2_2) {
            {S("block"), {}}},
           {S("dim0"), S("dim1")}));
 
-  auto mfmaT = mfma(/*warps=*/{2, 4}, /*tilesPerWarp*/ {2, 2}, /*mDim=*/32,
-                    /*nDim=*/32,
-                    /*isTransposed=*/true);
+  auto mfmaT =
+      mfma(/*warps=*/{2, 4}, /*mDim=*/32,
+           /*nDim=*/32,
+           /*isTransposed=*/true, /*tilesPerWarp*/ ArrayRef<unsigned>({2, 2}));
 
   EXPECT_EQ(
       toLinearLayout({32, 32}, mfmaT),
@@ -931,8 +939,8 @@ TEST_F(LinearLayoutConversionsTest, MFMA32_tpw_2_2) {
 TEST_F(LinearLayoutConversionsTest, MFMA16_tpw_2_2) {
 
   auto mfmaNT =
-      mfma(/*warps=*/{2, 4}, /*tilesPerWarp*/ {2, 2}, /*mDim=*/16, /*nDim=*/16,
-           /*isTransposed=*/false);
+      mfma(/*warps=*/{2, 4}, /*mDim=*/16, /*nDim=*/16,
+           /*isTransposed=*/false, /*tilesPerWarp*/ ArrayRef<unsigned>({2, 2}));
 
   EXPECT_EQ(toLinearLayout({32, 32}, mfmaNT),
             LinearLayout(
@@ -961,8 +969,8 @@ TEST_F(LinearLayoutConversionsTest, MFMA16_tpw_2_2) {
           {S("dim0"), S("dim1")}));
 
   auto mfmaT =
-      mfma(/*warps=*/{2, 4}, /*tilesPerWarp*/ {2, 2}, /*mDim=*/16, /*nDim=*/16,
-           /*isTransposed=*/true);
+      mfma(/*warps=*/{2, 4}, /*mDim=*/16, /*nDim=*/16,
+           /*isTransposed=*/true, /*tilesPerWarp*/ ArrayRef<unsigned>({2, 2}));
   EXPECT_EQ(toLinearLayout({32, 32}, mfmaT),
             LinearLayout(
                 {{S("register"), {{0, 1}, {0, 2}, {0, 16}, {16, 0}}},
@@ -991,9 +999,8 @@ TEST_F(LinearLayoutConversionsTest, MFMA16_tpw_2_2) {
 }
 
 TEST_F(LinearLayoutConversionsTest, MFMA32_2x4Warps) {
-  auto mfmaNT =
-      mfma(/*warps=*/{2, 4}, /*tilesPerWarp*/ {1, 1}, /*mDim=*/32, /*nDim=*/32,
-           /*isTransposed=*/false);
+  auto mfmaNT = mfma(/*warps=*/{2, 4}, /*mDim=*/32, /*nDim=*/32,
+                     /*isTransposed=*/false);
 
   EXPECT_EQ(toLinearLayout({32, 32}, mfmaNT),
             LinearLayout(
@@ -1017,9 +1024,8 @@ TEST_F(LinearLayoutConversionsTest, MFMA32_2x4Warps) {
                  {S("block"), {}}},
                 {S("dim0"), S("dim1")}));
 
-  auto mfmaT =
-      mfma(/*warps=*/{2, 4}, /*tilesPerWarp*/ {1, 1}, /*mDim=*/32, /*nDim=*/32,
-           /*isTransposed=*/true);
+  auto mfmaT = mfma(/*warps=*/{2, 4}, /*mDim=*/32, /*nDim=*/32,
+                    /*isTransposed=*/true);
 
   EXPECT_EQ(toLinearLayout({32, 32}, mfmaT),
             LinearLayout(
@@ -1045,9 +1051,8 @@ TEST_F(LinearLayoutConversionsTest, MFMA32_2x4Warps) {
 }
 
 TEST_F(LinearLayoutConversionsTest, MFMA16_2x4Warps) {
-  auto mfmaNT =
-      mfma(/*warps=*/{2, 4}, /*tilesPerWarp*/ {1, 1}, /*mDim=*/16, /*nDim=*/16,
-           /*isTransposed=*/false);
+  auto mfmaNT = mfma(/*warps=*/{2, 4}, /*mDim=*/16, /*nDim=*/16,
+                     /*isTransposed=*/false);
   EXPECT_EQ(toLinearLayout({16, 16}, mfmaNT),
             LinearLayout(
                 {{S("register"), {{1, 0}, {2, 0}}},
@@ -1058,8 +1063,7 @@ TEST_F(LinearLayoutConversionsTest, MFMA16_2x4Warps) {
 }
 
 TEST_F(LinearLayoutConversionsTest, MFMA32_2x4x1Warps) {
-  auto mfmaNT = mfma(/*warps=*/{2, 4, 1},
-                     /*tilesPerWarp*/ {1, 1, 1}, /*mDim=*/32, /*nDim=*/32,
+  auto mfmaNT = mfma(/*warps=*/{2, 4, 1}, /*mDim=*/32, /*nDim=*/32,
                      /*isTransposed=*/false);
 
   EXPECT_EQ(toLinearLayout({1, 128, 128}, mfmaNT),
@@ -1107,10 +1111,9 @@ TEST_F(LinearLayoutConversionsTest, MFMA32_2x4x1Warps) {
                  {S("block"), {}}},
                 {S("dim0"), S("dim1"), S("dim2")}));
 
-  auto mfmaT =
-      mfma(/*warps=*/{2, 4, 1}, /*tilesPerWarp*/ {1, 1, 1}, /*mDim=*/32,
-           /*nDim=*/32,
-           /*isTransposed=*/true);
+  auto mfmaT = mfma(/*warps=*/{2, 4, 1}, /*mDim=*/32,
+                    /*nDim=*/32,
+                    /*isTransposed=*/true);
 
   EXPECT_EQ(toLinearLayout({1, 128, 128}, mfmaT),
             LinearLayout({{S("register"),
@@ -1159,9 +1162,8 @@ TEST_F(LinearLayoutConversionsTest, MFMA32_2x4x1Warps) {
 }
 
 TEST_F(LinearLayoutConversionsTest, warp1onK_mfma32_lhs_kwidth8) {
-  auto parentMfma_1_8 =
-      mfma(/*warps=*/{1, 8}, /*tilesPerWarp*/ {1, 1}, /*mDim=*/32, /*nDim=*/32,
-           /*isTransposed=*/false);
+  auto parentMfma_1_8 = mfma(/*warps=*/{1, 8}, /*mDim=*/32, /*nDim=*/32,
+                             /*isTransposed=*/false);
   auto mfmaDot_1_8 = mfmaDotOp(parentMfma_1_8, /*opIdx=*/0, /*kWidth=*/8);
   EXPECT_EQ(toLinearLayout({128, 128}, mfmaDot_1_8),
             LinearLayout(
@@ -1232,9 +1234,8 @@ TEST_F(LinearLayoutConversionsTest, warp1onK_mfma32_lhs_kwidth8) {
 }
 
 TEST_F(LinearLayoutConversionsTest, warp1onK_mfma32_rhs_kwidth8) {
-  auto parentMfma_1_8 =
-      mfma(/*warps=*/{1, 8}, /*tilesPerWarp*/ {1, 1}, /*mDim=*/32, /*nDim=*/32,
-           /*isTransposed=*/false);
+  auto parentMfma_1_8 = mfma(/*warps=*/{1, 8}, /*mDim=*/32, /*nDim=*/32,
+                             /*isTransposed=*/false);
   auto mfmaDot_1_8 = mfmaDotOp(parentMfma_1_8, /*opIdx=*/1, /*kWidth=*/8);
   EXPECT_EQ(
       toLinearLayout({128, 128}, mfmaDot_1_8),
@@ -1280,9 +1281,8 @@ TEST_F(LinearLayoutConversionsTest, warp1onK_mfma32_rhs_kwidth8) {
                  {S("block"), {}}},
                 {S("dim0"), S("dim1")}));
 
-  auto parentMfma_1_4 =
-      mfma(/*warps=*/{1, 4}, /*tilesPerWarp*/ {1, 1}, /*mDim=*/32, /*nDim=*/32,
-           /*isTransposed=*/false);
+  auto parentMfma_1_4 = mfma(/*warps=*/{1, 4}, /*mDim=*/32, /*nDim=*/32,
+                             /*isTransposed=*/false);
   auto mfmaDot_1_4 = mfmaDotOp(parentMfma_1_4, /*opIdx=*/1, /*kWidth=*/8);
   EXPECT_EQ(toLinearLayout({256, 256}, mfmaDot_1_4),
             LinearLayout(
@@ -1302,9 +1302,8 @@ TEST_F(LinearLayoutConversionsTest, warp1onK_mfma32_rhs_kwidth8) {
 }
 
 TEST_F(LinearLayoutConversionsTest, warp1onK_mfma16_lhs_kwidth8) {
-  auto parentMfma_1_4 =
-      mfma(/*warps=*/{1, 4}, /*tilesPerWarp*/ {1, 1}, /*mDim=*/16, /*nDim=*/16,
-           /*isTransposed=*/false);
+  auto parentMfma_1_4 = mfma(/*warps=*/{1, 4}, /*mDim=*/16, /*nDim=*/16,
+                             /*isTransposed=*/false);
   auto mfmaDot_1_4 = mfmaDotOp(parentMfma_1_4, /*opIdx=*/0, /*kWidth=*/8);
   EXPECT_EQ(toLinearLayout({128, 128}, mfmaDot_1_4),
             LinearLayout(
@@ -1372,9 +1371,8 @@ TEST_F(LinearLayoutConversionsTest, warp1onK_mfma16_lhs_kwidth8) {
                  {S("block"), {}}},
                 {S("dim0"), S("dim1")}));
 
-  auto parentMfma_1_8 =
-      mfma(/*warps=*/{1, 8}, /*tilesPerWarp*/ {1, 1}, /*mDim=*/16, /*nDim=*/16,
-           /*isTransposed=*/false);
+  auto parentMfma_1_8 = mfma(/*warps=*/{1, 8}, /*mDim=*/16, /*nDim=*/16,
+                             /*isTransposed=*/false);
   auto mfmaDot_1_8 = mfmaDotOp(parentMfma_1_8, /*opIdx=*/0, /*kWidth=*/8);
   EXPECT_EQ(toLinearLayout({256, 256}, mfmaDot_1_8),
             LinearLayout(
@@ -1395,7 +1393,7 @@ TEST_F(LinearLayoutConversionsTest, warp1onK_mfma16_lhs_kwidth8) {
                 {S("dim0"), S("dim1")}));
 
   auto parentMfma_1_8_1 = mfma(
-      /*warps=*/{1, 1, 8}, /*tilesPerWarp*/ {1, 1, 1}, /*mDim=*/16, /*nDim=*/16,
+      /*warps=*/{1, 1, 8}, /*mDim=*/16, /*nDim=*/16,
       /*isTransposed=*/false);
   auto mfmaDot_1_8_1 = mfmaDotOp(parentMfma_1_8_1, /*opIdx=*/0, /*kWidth=*/8);
 
@@ -1424,9 +1422,8 @@ TEST_F(LinearLayoutConversionsTest, warp1onK_mfma16_lhs_kwidth8) {
 }
 
 TEST_F(LinearLayoutConversionsTest, warp1onK_mfma16_rhs_kwidth8) {
-  auto parentMfma_1_4 =
-      mfma(/*warps=*/{1, 4}, /*tilesPerWarp*/ {1, 1}, /*mDim=*/16, /*nDim=*/16,
-           /*isTransposed=*/false);
+  auto parentMfma_1_4 = mfma(/*warps=*/{1, 4}, /*mDim=*/16, /*nDim=*/16,
+                             /*isTransposed=*/false);
   auto mfmaDot_1_4 = mfmaDotOp(parentMfma_1_4, /*opIdx=*/1, /*kWidth=*/8);
   EXPECT_EQ(
       toLinearLayout({128, 128}, mfmaDot_1_4),
@@ -1477,9 +1474,8 @@ TEST_F(LinearLayoutConversionsTest, warp1onK_mfma16_rhs_kwidth8) {
                  {S("block"), {}}},
                 {S("dim0"), S("dim1")}));
 
-  auto parentMfma_1_8 =
-      mfma(/*warps=*/{1, 8}, /*tilesPerWarp*/ {1, 1}, /*mDim=*/16, /*nDim=*/16,
-           /*isTransposed=*/false);
+  auto parentMfma_1_8 = mfma(/*warps=*/{1, 8}, /*mDim=*/16, /*nDim=*/16,
+                             /*isTransposed=*/false);
   auto mfmaDot_1_8 = mfmaDotOp(parentMfma_1_8, /*opIdx=*/1, /*kWidth=*/8);
   EXPECT_EQ(
       toLinearLayout({256, 256}, mfmaDot_1_8),
@@ -1491,7 +1487,7 @@ TEST_F(LinearLayoutConversionsTest, warp1onK_mfma16_rhs_kwidth8) {
            {S("block"), {}}},
           {S("dim0"), S("dim1")}));
 
-  auto parentMfma_1_8_1 = mfma(/*warps=*/{1, 1, 8}, /*tilesPerWarp*/ {1, 1, 1},
+  auto parentMfma_1_8_1 = mfma(/*warps=*/{1, 1, 8},
                                /*mDim=*/16, /*nDim=*/16,
                                /*isTransposed=*/false);
   auto mfmaDot_1_8_1 = mfmaDotOp(parentMfma_1_8_1, /*opIdx=*/1, /*kWidth=*/8);
@@ -1519,8 +1515,8 @@ TEST_F(LinearLayoutConversionsTest, warp1onK_mfma16_rhs_kwidth8) {
 
 TEST_F(LinearLayoutConversionsTest, mfma32_dot_op_lhs_tpw_2_2) {
   auto parentMfma32 =
-      mfma(/*warps=*/{2, 4}, /*tilesPerWarp*/ {2, 2}, /*mDim=*/32, /*nDim=*/32,
-           /*isTransposed=*/false);
+      mfma(/*warps=*/{2, 4}, /*mDim=*/32, /*nDim=*/32,
+           /*isTransposed=*/false, /*tilesPerWarp*/ ArrayRef<unsigned>({2, 2}));
   auto mfmaDotOp0_32 = mfmaDotOp(parentMfma32, /*opIdx=*/0, /*kWidth=*/4);
 
   EXPECT_EQ(toLinearLayout({64, 32}, mfmaDotOp0_32),
@@ -1559,8 +1555,8 @@ TEST_F(LinearLayoutConversionsTest, mfma32_dot_op_lhs_tpw_2_2) {
 
   // Dot operand based on transposed mfma layout has same layout as ordinary
   auto parentTMfma32 =
-      mfma(/*warps=*/{2, 4}, /*tilesPerWarp*/ {2, 2}, /*mDim=*/32, /*nDim=*/32,
-           /*isTransposed=*/true);
+      mfma(/*warps=*/{2, 4}, /*mDim=*/32, /*nDim=*/32,
+           /*isTransposed=*/true, /*tilesPerWarp*/ ArrayRef<unsigned>({2, 2}));
   auto tmfmaDotOp0_32 = mfmaDotOp(parentTMfma32, /*opIdx=*/0, /*kWidth=*/4);
 
   EXPECT_EQ(toLinearLayout({64, 32}, tmfmaDotOp0_32),
@@ -1573,8 +1569,8 @@ TEST_F(LinearLayoutConversionsTest, mfma32_dot_op_lhs_tpw_2_2) {
 
 TEST_F(LinearLayoutConversionsTest, mfma16_dot_op_lhs_tpw_2_2) {
   auto parentMfma16 =
-      mfma(/*warps=*/{2, 4}, /*tilesPerWarp*/ {2, 2}, /*mDim=*/16, /*nDim=*/16,
-           /*isTransposed=*/false);
+      mfma(/*warps=*/{2, 4}, /*mDim=*/16, /*nDim=*/16,
+           /*isTransposed=*/false, /*tilesPerWarp*/ ArrayRef<unsigned>({2, 2}));
   auto mfmaDotOp0_16 = mfmaDotOp(parentMfma16, /*opIdx=*/0, /*kWidth=*/4);
   EXPECT_EQ(toLinearLayout({64, 32}, mfmaDotOp0_16),
             LinearLayout(
@@ -1611,8 +1607,8 @@ TEST_F(LinearLayoutConversionsTest, mfma16_dot_op_lhs_tpw_2_2) {
 
   // Dot operand based on transposed mfma layout has same layout as ordinary
   auto parentTMfma16 =
-      mfma(/*warps=*/{2, 4}, /*tilesPerWarp*/ {2, 2}, /*mDim=*/16, /*nDim=*/16,
-           /*isTransposed=*/true);
+      mfma(/*warps=*/{2, 4}, /*mDim=*/16, /*nDim=*/16,
+           /*isTransposed=*/true, /*tilesPerWarp*/ ArrayRef<unsigned>({2, 2}));
   auto tmfmaDotOp0_16 = mfmaDotOp(parentTMfma16, /*opIdx=*/0, /*kWidth=*/4);
 
   EXPECT_EQ(toLinearLayout({64, 32}, tmfmaDotOp0_16),
@@ -1624,9 +1620,8 @@ TEST_F(LinearLayoutConversionsTest, mfma16_dot_op_lhs_tpw_2_2) {
 }
 
 TEST_F(LinearLayoutConversionsTest, mfma32_dot_op_lhs_kwidth4) {
-  auto parentMfma32 =
-      mfma(/*warps=*/{2, 4}, /*tilesPerWarp*/ {1, 1}, /*mDim=*/32, /*nDim=*/32,
-           /*isTransposed=*/false);
+  auto parentMfma32 = mfma(/*warps=*/{2, 4}, /*mDim=*/32, /*nDim=*/32,
+                           /*isTransposed=*/false);
   auto mfmaDotOp0_32 = mfmaDotOp(parentMfma32, /*opIdx=*/0, /*kWidth=*/4);
   EXPECT_EQ(toLinearLayout({128, 128}, mfmaDotOp0_32),
             LinearLayout(
@@ -1652,9 +1647,8 @@ TEST_F(LinearLayoutConversionsTest, mfma32_dot_op_lhs_kwidth4) {
                 {S("dim0"), S("dim1")}));
 
   // Dot operand based on transposed mfma layout has same layout as ordinary
-  auto parentTMfma32 =
-      mfma(/*warps=*/{2, 4}, /*tilesPerWarp*/ {1, 1}, /*mDim=*/32, /*nDim=*/32,
-           /*isTransposed=*/true);
+  auto parentTMfma32 = mfma(/*warps=*/{2, 4}, /*mDim=*/32, /*nDim=*/32,
+                            /*isTransposed=*/true);
   auto tmfmaDotOp0_32 = mfmaDotOp(parentTMfma32, /*opIdx=*/0, /*kWidth=*/4);
 
   EXPECT_EQ(toLinearLayout({128, 128}, tmfmaDotOp0_32),
@@ -1666,9 +1660,8 @@ TEST_F(LinearLayoutConversionsTest, mfma32_dot_op_lhs_kwidth4) {
 }
 
 TEST_F(LinearLayoutConversionsTest, mfma16_dot_op_lhs_kwidth4) {
-  auto parentMfma16 =
-      mfma(/*warps=*/{2, 4}, /*tilesPerWarp*/ {1, 1}, /*mDim=*/16, /*nDim=*/16,
-           /*isTransposed=*/false);
+  auto parentMfma16 = mfma(/*warps=*/{2, 4}, /*mDim=*/16, /*nDim=*/16,
+                           /*isTransposed=*/false);
   auto mfmaDotOp0_16 = mfmaDotOp(parentMfma16, /*opIdx=*/0, /*kWidth=*/4);
   EXPECT_EQ(
       toLinearLayout({128, 128}, mfmaDotOp0_16),
@@ -1695,9 +1688,8 @@ TEST_F(LinearLayoutConversionsTest, mfma16_dot_op_lhs_kwidth4) {
                 {S("dim0"), S("dim1")}));
 
   // Dot operand based on transposed mfma layout has same layout as ordinary
-  auto parentTMfma16 =
-      mfma(/*warps=*/{2, 4}, /*tilesPerWarp*/ {1, 1}, /*mDim=*/16, /*nDim=*/16,
-           /*isTransposed=*/true);
+  auto parentTMfma16 = mfma(/*warps=*/{2, 4}, /*mDim=*/16, /*nDim=*/16,
+                            /*isTransposed=*/true);
   auto tmfmaDotOp0_16 = mfmaDotOp(parentTMfma16, /*opIdx=*/0, /*kWidth=*/4);
 
   EXPECT_EQ(toLinearLayout({128, 128}, tmfmaDotOp0_16),
@@ -1710,8 +1702,8 @@ TEST_F(LinearLayoutConversionsTest, mfma16_dot_op_lhs_kwidth4) {
 
 TEST_F(LinearLayoutConversionsTest, mfma32_dot_op_rhs_tpw_2_2) {
   auto parentMfma32 =
-      mfma(/*warps=*/{2, 4}, /*tilesPerWarp*/ {2, 2}, /*mDim=*/32, /*nDim=*/32,
-           /*isTransposed=*/false);
+      mfma(/*warps=*/{2, 4}, /*mDim=*/32, /*nDim=*/32,
+           /*isTransposed=*/false, /*tilesPerWarp*/ ArrayRef<unsigned>({2, 2}));
   auto mfmaDotOp1_32 = mfmaDotOp(parentMfma32, /*opIdx=*/1, /*kWidth=*/4);
   EXPECT_EQ(toLinearLayout({32, 64}, mfmaDotOp1_32),
             LinearLayout(
@@ -1746,8 +1738,8 @@ TEST_F(LinearLayoutConversionsTest, mfma32_dot_op_rhs_tpw_2_2) {
 
   // Dot operand based on transposed mfma layout has same layout as ordinary
   auto parentTMfma32 =
-      mfma(/*warps=*/{2, 4}, /*tilesPerWarp*/ {2, 2}, /*mDim=*/32, /*nDim=*/32,
-           /*isTransposed=*/true);
+      mfma(/*warps=*/{2, 4}, /*mDim=*/32, /*nDim=*/32,
+           /*isTransposed=*/true, /*tilesPerWarp*/ ArrayRef<unsigned>({2, 2}));
   auto tmfmaDotOp1_32 = mfmaDotOp(parentTMfma32, /*opIdx=*/1, /*kWidth=*/4);
 
   EXPECT_EQ(toLinearLayout({128, 128}, tmfmaDotOp1_32),
@@ -1760,8 +1752,8 @@ TEST_F(LinearLayoutConversionsTest, mfma32_dot_op_rhs_tpw_2_2) {
 
 TEST_F(LinearLayoutConversionsTest, mfma16_dot_op_rhs_tpw_2_2) {
   auto parentMfma16 =
-      mfma(/*warps=*/{2, 4}, /*tilesPerWarp*/ {2, 2}, /*mDim=*/16, /*nDim=*/16,
-           /*isTransposed=*/false);
+      mfma(/*warps=*/{2, 4}, /*mDim=*/16, /*nDim=*/16,
+           /*isTransposed=*/false, /*tilesPerWarp*/ ArrayRef<unsigned>({2, 2}));
   auto mfmaDotOp1_16 = mfmaDotOp(parentMfma16, /*opIdx=*/1, /*kWidth=*/4);
   EXPECT_EQ(toLinearLayout({32, 64}, mfmaDotOp1_16),
             LinearLayout(
@@ -1796,9 +1788,9 @@ TEST_F(LinearLayoutConversionsTest, mfma16_dot_op_rhs_tpw_2_2) {
 
   // Dot operand based on transposed mfma layout has same layout as ordinary
   auto parentTMfma16 =
-      mfma(/*warps=*/{2, 4}, /*tilesPerWarp*/ {2, 2}, /*mDim=*/16,
+      mfma(/*warps=*/{2, 4}, /*mDim=*/16,
            /*nDim=*/16,
-           /*isTransposed=*/true);
+           /*isTransposed=*/true, /*tilesPerWarp*/ ArrayRef<unsigned>({2, 2}));
   auto tmfmaDotOp1_16 = mfmaDotOp(parentTMfma16, /*opIdx=*/1, /*kWidth=*/4);
 
   EXPECT_EQ(toLinearLayout({32, 64}, tmfmaDotOp1_16),
@@ -1810,9 +1802,8 @@ TEST_F(LinearLayoutConversionsTest, mfma16_dot_op_rhs_tpw_2_2) {
 }
 
 TEST_F(LinearLayoutConversionsTest, mfma16_dot_op_rhs_kwidth4) {
-  auto parentMfma16 =
-      mfma(/*warps=*/{2, 4}, /*tilesPerWarp*/ {1, 1}, /*mDim=*/16, /*nDim=*/16,
-           /*isTransposed=*/false);
+  auto parentMfma16 = mfma(/*warps=*/{2, 4}, /*mDim=*/16, /*nDim=*/16,
+                           /*isTransposed=*/false);
   auto mfmaDotOp1_16 = mfmaDotOp(parentMfma16, /*opIdx=*/1, /*kWidth=*/4);
   EXPECT_EQ(toLinearLayout({128, 128}, mfmaDotOp1_16),
             LinearLayout(
@@ -1838,9 +1829,8 @@ TEST_F(LinearLayoutConversionsTest, mfma16_dot_op_rhs_kwidth4) {
                 {S("dim0"), S("dim1")}));
 
   // Dot operand based on transposed mfma layout has same layout as ordinary
-  auto parentTMfma16 =
-      mfma(/*warps=*/{2, 4}, /*tilesPerWarp*/ {1, 1}, /*mDim=*/16, /*nDim=*/16,
-           /*isTransposed=*/true);
+  auto parentTMfma16 = mfma(/*warps=*/{2, 4}, /*mDim=*/16, /*nDim=*/16,
+                            /*isTransposed=*/true);
   auto tmfmaDotOp1_16 = mfmaDotOp(parentTMfma16, /*opIdx=*/1, /*kWidth=*/4);
 
   EXPECT_EQ(toLinearLayout({128, 128}, tmfmaDotOp1_16),
@@ -1852,9 +1842,8 @@ TEST_F(LinearLayoutConversionsTest, mfma16_dot_op_rhs_kwidth4) {
 }
 
 TEST_F(LinearLayoutConversionsTest, mfma16_dot_op_lhs_trans) {
-  auto parentMfma16 =
-      mfma(/*warps=*/{2, 4}, /*tilesPerWarp*/ {1, 1}, /*mDim=*/16, /*nDim=*/16,
-           /*isTransposed=*/false);
+  auto parentMfma16 = mfma(/*warps=*/{2, 4}, /*mDim=*/16, /*nDim=*/16,
+                           /*isTransposed=*/false);
   // double rated mfma with large enough shape
   auto mfmaDotOp0_kwidth_8 = mfmaDotOp(parentMfma16, /*opIdx=*/0, /*kWidth=*/8);
   EXPECT_EQ(chooseDsReadB64TrLayout(mfmaDotOp0_kwidth_8, {128, 128},
@@ -1930,9 +1919,8 @@ TEST_F(LinearLayoutConversionsTest, mfma16_dot_op_lhs_trans) {
 
   // Dot operand for LDS transpose load on transposed mfma layout has same
   // layout as ordinary
-  auto parentTMfma16 =
-      mfma(/*warps=*/{2, 4}, /*tilesPerWarp*/ {1, 1}, /*mDim=*/16, /*nDim=*/16,
-           /*isTransposed=*/true);
+  auto parentTMfma16 = mfma(/*warps=*/{2, 4}, /*mDim=*/16, /*nDim=*/16,
+                            /*isTransposed=*/true);
   auto tmfmaDotOp0_kwidth_16 =
       mfmaDotOp(parentTMfma16, /*opIdx=*/0, /*kWidth=*/16);
   auto tmfmaDotOp0_kwidth_8 =
@@ -1963,9 +1951,8 @@ TEST_F(LinearLayoutConversionsTest, mfma16_dot_op_lhs_trans) {
 }
 
 TEST_F(LinearLayoutConversionsTest, mfma16_dot_op_rhs_trans) {
-  auto parentMfma16 =
-      mfma(/*warps=*/{2, 4}, /*tilesPerWarp*/ {1, 1}, /*mDim=*/16, /*nDim=*/16,
-           /*isTransposed=*/false);
+  auto parentMfma16 = mfma(/*warps=*/{2, 4}, /*mDim=*/16, /*nDim=*/16,
+                           /*isTransposed=*/false);
 
   // double rated mfma with large enough shape
   auto mfmaDotOp1_kwidth_8 = mfmaDotOp(parentMfma16, /*opIdx=*/1, /*kWidth=*/8);
@@ -2041,9 +2028,8 @@ TEST_F(LinearLayoutConversionsTest, mfma16_dot_op_rhs_trans) {
 
   // Dot operand for LDS transpose load based on transposed mfma layout has
   // same  layout as ordinary.
-  auto parentTMfma16 =
-      mfma(/*warps=*/{2, 4}, /*tilesPerWarp*/ {1, 1}, /*mDim=*/16, /*nDim=*/16,
-           /*isTransposed=*/true);
+  auto parentTMfma16 = mfma(/*warps=*/{2, 4}, /*mDim=*/16, /*nDim=*/16,
+                            /*isTransposed=*/true);
 
   auto tmfmaDotOp1_kwidth_16 =
       mfmaDotOp(parentTMfma16, /*opIdx=*/1, /*kWidth=*/8);
@@ -2075,9 +2061,8 @@ TEST_F(LinearLayoutConversionsTest, mfma16_dot_op_rhs_trans) {
 }
 
 TEST_F(LinearLayoutConversionsTest, mfma32_dot_op_lhs_trans) {
-  auto parentMfma32 =
-      mfma(/*warps=*/{2, 4}, /*tilesPerWarp*/ {1, 1}, /*mDim=*/32, /*nDim=*/32,
-           /*isTransposed=*/false);
+  auto parentMfma32 = mfma(/*warps=*/{2, 4}, /*mDim=*/32, /*nDim=*/32,
+                           /*isTransposed=*/false);
   auto mfmaDotOp0_kwidth_8 = mfmaDotOp(parentMfma32, /*opIdx=*/0, /*kWidth=*/8);
   auto mfmaDotOp0_kwidth_16 =
       mfmaDotOp(parentMfma32, /*opIdx=*/0, /*kWidth=*/16);
@@ -2130,9 +2115,8 @@ TEST_F(LinearLayoutConversionsTest, mfma32_dot_op_lhs_trans) {
 
   // Dot operand for LDS transpose load based on transposed mfma layout has
   // same  layout as ordinary.
-  auto parentTMfma32 =
-      mfma(/*warps=*/{2, 4}, /*tilesPerWarp*/ {1, 1}, /*mDim=*/32, /*nDim=*/32,
-           /*isTransposed=*/true);
+  auto parentTMfma32 = mfma(/*warps=*/{2, 4}, /*mDim=*/32, /*nDim=*/32,
+                            /*isTransposed=*/true);
   auto tmfmaDotOp0_kwidth_16 =
       mfmaDotOp(parentTMfma32, /*opIdx=*/0, /*kWidth=*/16);
   auto tmfmaDotOp0_kwidth_8 =
@@ -2163,9 +2147,8 @@ TEST_F(LinearLayoutConversionsTest, mfma32_dot_op_lhs_trans) {
 }
 
 TEST_F(LinearLayoutConversionsTest, mfma32_dot_op_rhs_trans) {
-  auto parentMfma16 =
-      mfma(/*warps=*/{2, 4}, /*tilesPerWarp*/ {1, 1}, /*mDim=*/32, /*nDim=*/32,
-           /*isTransposed=*/false);
+  auto parentMfma16 = mfma(/*warps=*/{2, 4}, /*mDim=*/32, /*nDim=*/32,
+                           /*isTransposed=*/false);
   auto mfmaDotOp1_kwidth_8 = mfmaDotOp(parentMfma16, /*opIdx=*/1, /*kWidth=*/8);
   auto mfmaDotOp1_kwidth_16 =
       mfmaDotOp(parentMfma16, /*opIdx=*/1, /*kWidth=*/16);
@@ -2218,9 +2201,8 @@ TEST_F(LinearLayoutConversionsTest, mfma32_dot_op_rhs_trans) {
 
   // Dot operand for LDS transpose load based on transposed mfma layout has
   // same  layout as ordinary.
-  auto parentTMfma16 =
-      mfma(/*warps=*/{2, 4}, /*tilesPerWarp*/ {1, 1}, /*mDim=*/32, /*nDim=*/32,
-           /*isTransposed=*/true);
+  auto parentTMfma16 = mfma(/*warps=*/{2, 4}, /*mDim=*/32, /*nDim=*/32,
+                            /*isTransposed=*/true);
   auto tmfmaDotOp1_kwidth_16 =
       mfmaDotOp(parentTMfma16, /*opIdx=*/1, /*kWidth=*/16);
   auto tmfmaDotOp1_kwidth_8 =
