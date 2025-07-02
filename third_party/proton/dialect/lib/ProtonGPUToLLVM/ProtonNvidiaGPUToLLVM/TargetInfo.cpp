@@ -37,9 +37,18 @@ Value TargetInfo::clock(ConversionPatternRewriter &rewriter, Location loc,
   return clock64;
 }
 
+Value TargetInfo::timestamp(ConversionPatternRewriter &rewriter,
+                            Location loc) const {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  // globaltimer is a 64-bit global clock counter in nanoseconds.
+  // Reference:
+  // https://docs.nvidia.com/cuda/parallel-thread-execution/#special-registers-globaltimer
+  return LLVM::NVIDIA::getSRegValue(rewriter, loc, "globaltimer", i64_ty);
+}
+
 Value TargetInfo::processorId(ConversionPatternRewriter &rewriter,
                               Location loc) const {
-  return LLVM::NVIDIA::getSRegValue(rewriter, loc, "smid");
+  return LLVM::NVIDIA::getSRegValue(rewriter, loc, "smid", i32_ty);
 }
 
 int TargetInfo::getAddressSpace(Attribute addressSpace) const {

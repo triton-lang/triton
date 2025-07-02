@@ -93,14 +93,15 @@ Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
 
   std::string sreg = numCTAs == 1 ? "ctaid." : "clusterid.";
   sreg.append(1, 'x' + axis); // 0 -> 'x', 1 -> 'y', 2 -> 'z'
-  return getSRegValue(rewriter, loc, sreg);
+  return getSRegValue(rewriter, loc, sreg, i32_ty);
 }
 
-Value getSRegValue(OpBuilder &rewriter, Location loc, StringRef sRegStr) {
+Value getSRegValue(OpBuilder &rewriter, Location loc, StringRef sRegStr,
+                   TypeRange types) {
   ValueRange args;
   auto intrName = Twine("llvm.nvvm.read.ptx.sreg.") + sRegStr;
   auto callOp =
-      createLLVMIntrinsicCallOp(rewriter, loc, intrName.str(), i32_ty, args);
+      createLLVMIntrinsicCallOp(rewriter, loc, intrName.str(), types, args);
   return callOp.getResult(0);
 }
 

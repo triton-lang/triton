@@ -259,6 +259,7 @@ public:
     DeviceId,
     DeviceType,
     TimeShiftCost,
+    Timestamp,
     Count,
   };
 
@@ -268,7 +269,7 @@ public:
               double normalizedDuration, uint64_t kernelId,
               const std::string &kernelName, uint64_t blockId,
               uint64_t processorId, uint64_t unitId, uint64_t deviceId,
-              uint64_t deviceType, uint64_t timeShiftCost)
+              uint64_t deviceType, uint64_t timeShiftCost, uint64_t timestamp)
       : CycleMetric() {
     this->values[StartCycle] = startCycle;
     this->values[EndCycle] = endCycle;
@@ -282,6 +283,7 @@ public:
     this->values[DeviceId] = deviceId;
     this->values[DeviceType] = deviceType;
     this->values[TimeShiftCost] = timeShiftCost;
+    this->values[Timestamp] = timestamp;
   }
 
   virtual const std::string getName() const { return "CycleMetric"; }
@@ -303,7 +305,8 @@ private:
   const static inline std::string VALUE_NAMES[CycleMetricKind::Count] = {
       "start_cycle", "end_cycle",   "cycles",      "normalized_cycles",
       "kernel_id",   "kernel_name", "block_id",    "processor_id",
-      "unit_id",     "device_id",   "device_type", "time_shift_cost"};
+      "unit_id",     "device_id",   "device_type", "time_shift_cost",
+      "timestamp"};
 };
 
 } // namespace proton
