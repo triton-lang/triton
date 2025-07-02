@@ -192,8 +192,8 @@ def compile_kernel(args: CompileArgs):
         "_placeholder": "",
     }
     output_files = []
-    backend_name = target.backend
-    template_dir = Path(__file__).parent / "extra" / backend_name
+    # backend_name = target.backend
+    template_dir = Path(__file__).parent
     for template_path in template_dir.glob('compile.*'):
         ext = template_path.suffix
         output_file = out_path.with_suffix(f".{sig_hash}_{suffix}{ext}")
