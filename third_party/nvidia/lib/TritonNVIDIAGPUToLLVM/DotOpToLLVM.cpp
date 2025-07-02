@@ -22,6 +22,11 @@ namespace {
 struct DotOpConversion : public ConvertOpToLLVMPattern<triton::DotOp> {
   using ConvertOpToLLVMPattern<triton::DotOp>::ConvertOpToLLVMPattern;
 
+  DotOpConversion(LLVMTypeConverter &converter, int computeCapability,
+                  PatternBenefit benefit)
+      : ConvertOpToLLVMPattern<triton::DotOp>(converter, benefit),
+        computeCapability(computeCapability) {}
+
   LogicalResult
   matchAndRewrite(triton::DotOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
@@ -39,9 +44,13 @@ struct DotOpConversion : public ConvertOpToLLVMPattern<triton::DotOp> {
     NvidiaMmaEncodingAttr mmaLayout = dyn_cast<NvidiaMmaEncodingAttr>(
         cast<RankedTensorType>(D.getType()).getEncoding());
     if (!isOuter && mmaLayout && supportMMA(op, mmaLayout.getVersionMajor())) {
-      if (mmaLayout.getVersionMajor() == 2)
+      if (mmaLayout.getVersionMajor() == 2) {
+        bool isHopperF64 =
+            computeCapability == 90 &&
+            cast<RankedTensorType>(A.getType()).getElementType().isF64();
         return convertMMA(op, adaptor, getTypeConverter(), rewriter,
-                          mmaLayout.isTuring(), mmaLayout.isHopperF64());
+                          mmaLayout.isTuring(), isHopperF64);
+      }
 
       llvm::report_fatal_error(
           "Unsupported MMA kind found when converting DotOp to LLVM.");
@@ -54,6 +63,9 @@ struct DotOpConversion : public ConvertOpToLLVMPattern<triton::DotOp> {
     llvm::report_fatal_error(
         "Unsupported DotOp found when converting TritonGPU to LLVM.");
   }
+
+private:
+  int computeCapability;
 };
 
 struct WarpGroupDotOpConversion
@@ -151,8 +163,8 @@ struct WarpGroupDotWaitOpConversion
 
 void mlir::triton::NVIDIA::populateDotOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    PatternBenefit benefit) {
-  patterns.add<DotOpConversion>(typeConverter, benefit);
+    int computeCapability, PatternBenefit benefit) {
+  patterns.add<DotOpConversion>(typeConverter, computeCapability, benefit);
   patterns.add<WarpGroupDotOpConversion>(typeConverter, benefit);
   patterns.add<WarpGroupDotWaitOpConversion>(typeConverter, benefit);
 }

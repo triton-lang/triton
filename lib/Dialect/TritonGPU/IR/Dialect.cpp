@@ -2054,10 +2054,6 @@ bool NvidiaMmaEncodingAttr::isAmpere() const { return getVersionMajor() == 2; }
 
 bool NvidiaMmaEncodingAttr::isHopper() const { return getVersionMajor() == 3; }
 
-bool NvidiaMmaEncodingAttr::isHopperF64() const {
-  return getVersionMajor() == 2 && getVersionMinor() == 2;
-}
-
 SmallVector<unsigned> NvidiaMmaEncodingAttr::getRepOrder() const {
   return getMatrixOrder(getRank(), /*rowMajor*/ true);
 }
@@ -2093,7 +2089,7 @@ NvidiaMmaEncodingAttr::getRepForOperand(ArrayRef<int64_t> shape, int bitwidth,
     tileSize.push_back(1);
   }
   // warpSizeK * (warpRepK * VecBitWidth)
-  auto tileBitWidthK = isHopperF64() ? (4 * 256) : (4 * 64);
+  auto tileBitWidthK = (bitwidth == 64) ? (4 * 256) : (4 * 64);
   if (opIdx == 0) {
     // m x k
     tileSize.push_back(16);

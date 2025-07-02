@@ -231,7 +231,7 @@ ValueTableV2 getValuesFromDotOperandLayoutStruct(
 
   auto numVecM = 2;
   auto numVecN = 1;
-  auto numVecK = bitwidth == 64 ? (isHopperF64 ? 4 : 1) : 2;
+  auto numVecK = bitwidth == 64 ? 4 : 2;
 
   if (dot.getOpIdx() == 0) {
     for (auto b = 0; b < batch; ++b)
@@ -470,6 +470,7 @@ static void callMmaTuringFp16(PTXBuilder &builder, int b, int m, int n, int k,
   mma(retArgs, aArgs2, bArgs2, cArgs);
 }
 
+// Repeat m8n8k4 (2, 1, 4) times, as m16n8k16 on hopper.
 static void callMmaAmpereFp64(PTXBuilder &builder, int b, int m, int n, int k,
                               mlir::triton::PTXInstr &mma, unsigned numMmaRets,
                               unsigned colsPerThread, int numCPackedElem,
@@ -491,15 +492,18 @@ static void callMmaAmpereFp64(PTXBuilder &builder, int b, int m, int n, int k,
         std::to_string(i)));
     // reuse the output registers
   }
-  auto aArgs1 = builder.newListOperand({
-      {ha[{b, m, k}], "d"},
-  });
-  auto bArgs = builder.newListOperand({{hb[{b, n, k}], "d"}});
-  auto aArgs2 = builder.newListOperand({
-      {ha[{b, m + 1, k}], "d"},
-  });
-  mma(retArgs1, aArgs1, bArgs, cArgs1);
-  mma(retArgs2, aArgs2, bArgs, cArgs2);
+
+  for (int vk = 0; vk < 4; ++vk) {
+    auto aArgs1 = builder.newListOperand({
+        {ha[{b, m, k + vk}], "d"},
+    });
+    auto bArgs = builder.newListOperand({{hb[{b, n, k + vk}], "d"}});
+    auto aArgs2 = builder.newListOperand({
+        {ha[{b, m + 1, k + vk}], "d"},
+    });
+    mma(retArgs1, aArgs1, bArgs, cArgs1);
+    mma(retArgs2, aArgs2, bArgs, cArgs2);
+  }
 }
 
 // Unified MMAV2 function for Ampere and HopperF64 architectures
@@ -646,7 +650,7 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
     for (int k = 0; k < repK; ++k)
       for (int m = 0; m < repM; ++m)
         for (int n = 0; n < repN; ++n) {
-          auto numVecK = bitwidth == 64 ? (isHopperF64 ? 4 : 1) : 2;
+          auto numVecK = bitwidth == 64 ? 4 : 2;
           callMma(b, 2 * m, n, k * numVecK);
         }
 
