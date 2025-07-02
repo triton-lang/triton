@@ -277,8 +277,11 @@ def test_multi_session(tmp_path: pathlib.Path):
     output = torch.empty_like(x)
     n_elements = output.numel()
     grid = (1, 1, 1)
-    proton.start(str(temp_file_inst.with_suffix("")), backend="instrumentation")
-    proton.start(str(temp_file_driver.with_suffix("")))
+    session_id0 = proton.start(str(temp_file_inst.with_suffix("")), backend="instrumentation")
+    session_id1 = proton.start(str(temp_file_driver.with_suffix("")))
+    proton.deactivate(session_id0)
+    proton.deactivate(session_id1)
+    proton.activate()
     add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024, num_warps=1)
     proton.finalize()
 
