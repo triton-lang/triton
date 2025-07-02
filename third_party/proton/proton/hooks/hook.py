@@ -53,19 +53,35 @@ class HookManager:
 
     @staticmethod
     def activate(session: Optional[int] = None) -> None:
-        for hook in HookManager.session_hooks[session]:
-            if hook not in HookManager.active_hooks:
-                hook.activate()
-                HookManager.active_hooks.append(hook)
-            # Sort active_hooks by priority
-            HookManager.active_hooks.sort(key=lambda x: x.priority, reverse=True)
-            HookManager.session_hooks[session][hook] = True
+        if session is None:
+            sessions = HookManager.session_hooks.keys()
+        else:
+            sessions = [session]
+
+        for session in sessions:
+            for hook in HookManager.session_hooks[session]:
+                if hook not in HookManager.active_hooks:
+                    hook.activate()
+                    HookManager.active_hooks.append(hook)
+                HookManager.session_hooks[session][hook] = True
+        # Sort active_hooks by priority
+        HookManager.active_hooks.sort(key=lambda x: x.priority, reverse=True)
 
     @staticmethod
     def deactivate(session: Optional[int] = None) -> None:
-        for hook in HookManager.session_hooks[session]:
-            HookManager.session_hooks[session][hook] = False
-            # Check if any other sessions rely on this hook
+        if session is None:
+            sessions = HookManager.session_hooks.keys()
+        else:
+            sessions = [session]
+
+        deactivated_hooks = set()
+        for session in sessions:
+            for hook in HookManager.session_hooks[session]:
+                HookManager.session_hooks[session][hook] = False
+                deactivated_hooks.add(hook)
+
+        # Check if any other sessions rely on this hook
+        for hook in deactivated_hooks:
             if not any(session_hooks[hook] for session_hooks in HookManager.session_hooks.values()):
                 hook.deactivate()
                 HookManager.active_hooks.remove(hook)
