@@ -147,6 +147,19 @@ def tma_interleave_kernel(input_desc, XBLOCK: ttgl.constexpr, FAILURE: ttgl.cons
     tma.store_wait(0)
 
 
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
+@pytest.mark.parametrize("FAILURE", [True, False])
+def test_tma_interleave_kernel(FAILURE, device):
+
+    def check_stderr(stderr):
+        assert "Buffer being accessed has outstanding writes" in stderr
+
+    run_kernel_in_process("tma_interleave_kernel", FAILURE, device, check_stderr)
+
+
+# @gluon.jit
+# def tcgen5_mma_kernel(input_desc, XBLOCK: ttgl.constexpr, FAILURE: ttgl.constexpr):
+
 # @gluon.jit
 # def garbage_buffer_access_kernel(input_desc, XBLOCK: ttgl.constexpr):
 #     smem = ttgl.allocate_shared_memory(ttgl.float32, [1, XBLOCK, XBLOCK], input_desc.layout)

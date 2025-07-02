@@ -130,7 +130,7 @@ public:
     tt::FuncOp entryPoint = getEntryPoint(module);
     assert(entryPoint);
 
-    if (shMemBufsSet.empty()) {
+    if (shMemBufsSet.empty() || barrierSet.empty()) {
       return;
     }
 
@@ -145,15 +145,20 @@ public:
     ImplicitLocOpBuilder b(entryPoint.getLoc(), entryPoint);
     b.setInsertionPointToStart(&entryPoint.getBody().front());
     shBuffers = createSharedBufferPointers(b, shMemBufsValues);
-    if (!barrierValues.empty()) {
-      barriers = createSharedBufferPointers(b, barrierValues);
-    }
+    barriers = createSharedBufferPointers(b, barrierValues);
 
     // Create state tensors:
     TypedValue<RankedTensorType> writeBarriers = createConstIntTensor(
         b, 0, b.getIntegerType(64), shMemBufsValues.size());
     writeBarriersType = writeBarriers.getType();
     writeBarriersAlloc = createInitializedScratchMemory(b, writeBarriers);
+
+    TypedValue<RankedTensorType> readBarriers = createConstIntTensor(
+        b, 0, b.getIntegerType(8),
+        {(unsigned)shMemBufsValues.size(), (unsigned)barrierValues.size()},
+        getReadBarriersEncoding(shMemBufsValues.size(), barrierValues.size()));
+    readBarriersType = readBarriers.getType();
+    readBarriersAlloc = createInitializedScratchMemory(b, readBarriers);
 
     instrumentMemoryOperations(b);
   }
@@ -171,26 +176,20 @@ private:
             copyOp.getResult(), copyOp.getBarrier(), shBuffers,
             writeBarriersAlloc, writeBarriersType);
       }
-      // if (auto mmav5Op = dyn_cast<ttng::TCGen5MMAOp>(op)) {
-      //   b.setLoc(mmav5Op.getLoc());
-      //   b.setInsertionPoint(mmav5Op);
-      //   Value barriers =
-      //       createLoadScratchMemory(b, barriersAlloc, barriersType);
-      //   Value state = createLoadScratchMemory(b, stateAlloc, stateType);
-      //   if (isa<ttg::NVMMASharedEncodingAttr>(
-      //           mmav5Op.getA().getType().getEncoding())) {
-      //     auto checkAOp = b.create<tti::ExperimentalCheckReadSharedOp>(
-      //         mmav5Op.getA(), buffers, state, barriers);
-      //     state = checkAOp.getOutStates();
-      //     barriers = checkAOp.getOutBarriers();
-      //   }
-      //   auto checkBOp = b.create<tti::ExperimentalCheckReadSharedOp>(
-      //       mmav5Op.getA(), buffers, state, barriers);
-      //   state = checkBOp.getOutStates();
-      //   barriers = checkBOp.getOutBarriers();
-      //   createStoreScratchMemory(b, barriersAlloc, barriers, barriersType);
-      //   createStoreScratchMemory(b, stateAlloc, state, stateType);
-      // }
+      if (auto mmav5Op = dyn_cast<ttng::TCGen5MMAOp>(op)) {
+        b.setLoc(mmav5Op.getLoc());
+        b.setInsertionPoint(mmav5Op);
+        if (isa<ttg::NVMMASharedEncodingAttr>(
+                mmav5Op.getA().getType().getEncoding())) {
+          b.create<tti::ExperimentalCheckOutstandingReadsOp>(
+              mmav5Op.getA(), shBuffers, readBarriersAlloc, readBarriersType);
+        }
+        if (isa<ttg::NVMMASharedEncodingAttr>(
+                mmav5Op.getB().getType().getEncoding())) {
+          b.create<tti::ExperimentalCheckOutstandingReadsOp>(
+              mmav5Op.getB(), shBuffers, readBarriersAlloc, readBarriersType);
+        }
+      }
       if (auto waitOp = dyn_cast<ttng::WaitBarrierOp>(op)) {
         b.setLoc(waitOp.getLoc());
         b.setInsertionPoint(waitOp);
@@ -200,7 +199,7 @@ private:
     });
   }
 
-  ttg::BlockedEncodingAttr getBlockedEncoding(unsigned int size) {
+  ttg::BlockedEncodingAttr getThreadLocalBlockedEncoding(unsigned int size) {
     MLIRContext *ctx = module.getContext();
     unsigned int warps =
         mlir::cast<mlir::IntegerAttr>(module->getAttr("ttg.num-warps"))
@@ -213,13 +212,28 @@ private:
                                          /*order=*/{0}, ctaLayout);
   }
 
+  // TODO: Come up with sensible layout
+  ttg::BlockedEncodingAttr getReadBarriersEncoding(unsigned int buffers,
+                                                   unsigned int barriers) {
+    MLIRContext *ctx = module.getContext();
+    unsigned int warps =
+        mlir::cast<mlir::IntegerAttr>(module->getAttr("ttg.num-warps"))
+            .getInt();
+    auto ctaLayout = ttg::CTALayoutAttr::getDefault(ctx, /*rank=*/2);
+    return ttg::BlockedEncodingAttr::get(ctx,
+                                         /*sizePerThread=*/{1, 1},
+                                         /*threadsPerWarp=*/{1, 32},
+                                         /*warpsPerCTA=*/{1, 1},
+                                         /*order=*/{0, 1}, ctaLayout);
+  }
+
   Value createSharedBufferPointers(ImplicitLocOpBuilder &builder,
                                    SmallVector<int32_t> values) {
     int64_t size = values.size();
     assert(llvm::isPowerOf2_64(size) && "Expected power of 2");
     Type elType = builder.getI64Type();
-    auto tensorType =
-        RankedTensorType::get({size}, elType, getBlockedEncoding(size));
+    auto tensorType = RankedTensorType::get(
+        {size}, elType, getThreadLocalBlockedEncoding(size));
     SmallVector<APInt> apInts = llvm::to_vector(
         llvm::map_range(values, [](int64_t v) { return APInt(64, v); }));
     auto denseAttr = DenseElementsAttr::get(tensorType, apInts);
@@ -228,12 +242,13 @@ private:
     return op;
   }
 
+  // TODO: Unify the two createConstIntTensor functions
   TypedValue<RankedTensorType>
   createConstIntTensor(ImplicitLocOpBuilder &builder, int val, Type elType,
                        int64_t size) {
     assert(llvm::isPowerOf2_64(size) && "Expected power of 2");
-    auto tensorType =
-        RankedTensorType::get({size}, elType, getBlockedEncoding(size));
+    auto tensorType = RankedTensorType::get(
+        {size}, elType, getThreadLocalBlockedEncoding(size));
     auto denseAttr = DenseElementsAttr::get(
         tensorType, APInt(elType.getIntOrFloatBitWidth(), val));
     return cast<TypedValue<RankedTensorType>>(
@@ -242,41 +257,89 @@ private:
 
   TypedValue<RankedTensorType>
   createConstIntTensor(ImplicitLocOpBuilder &builder, int val, Type elType,
-                       ArrayRef<int64_t> shape) {
-    auto tensorType =
-        RankedTensorType::get(shape, elType, getBlockedEncoding(shape.size()));
+                       ArrayRef<int64_t> shape,
+                       ttg::DistributedEncodingTrait encoding) {
+    auto tensorType = RankedTensorType::get(shape, elType, encoding);
     auto denseAttr = DenseElementsAttr::get(
         tensorType, APInt(elType.getIntOrFloatBitWidth(), val));
     return cast<TypedValue<RankedTensorType>>(
         builder.create<arith::ConstantOp>(tensorType, denseAttr).getResult());
+  }
+
+  ttg::DistributedEncodingTrait
+  getSingleDimSliceEncoding(ttg::BlockedEncodingAttr encoding, int dim) {
+    int rank = encoding.getOrder().size();
+    MLIRContext *ctx = encoding.getContext();
+    assert(dim < rank && "Expected dim to be less than rank");
+    ttg::DistributedEncodingTrait sliceEncoding = encoding;
+    for (int i = 0; i < rank; ++i) {
+      if (i != dim) {
+        sliceEncoding = ttg::SliceEncodingAttr::get(ctx, i, encoding);
+      }
+    }
+    return sliceEncoding;
+  }
+
+  Value expandAllSlicedDims(ImplicitLocOpBuilder &b, Value tensor) {
+    auto type = cast<RankedTensorType>(tensor.getType());
+    auto sliceEncoding = dyn_cast<ttg::SliceEncodingAttr>(type.getEncoding());
+    while (sliceEncoding) {
+      int dim = sliceEncoding.getDim();
+      auto shape = type.getShape();
+      auto newShape = SmallVector<int64_t>(shape);
+      newShape.insert(newShape.begin() + dim, 1);
+      auto newType = RankedTensorType::get(newShape, type.getElementType(),
+                                           sliceEncoding.getParent());
+      tensor = b.create<tt::ExpandDimsOp>(newType, tensor, dim);
+      type = newType;
+      sliceEncoding = dyn_cast<ttg::SliceEncodingAttr>(type.getEncoding());
+    }
+    return tensor;
   }
 
   Operation *createStoreScratchMemory(ImplicitLocOpBuilder &b, Value alloc,
                                       Value tensor,
                                       RankedTensorType tensorType) {
-    assert(tensorType.getRank() == 1 && "Expected 1D tensor");
-
-    auto encoding = tensorType.getEncoding();
-    int numEls = tensorType.getShape()[0];
-    auto splatPtr = b.create<tt::SplatOp>(
-        RankedTensorType::get({numEls}, alloc.getType(), encoding), alloc);
-    Type offsetsType =
+    auto encoding = cast<ttg::BlockedEncodingAttr>(tensorType.getEncoding());
+    Value ptrTensor = b.create<tt::SplatOp>(
+        RankedTensorType::get(tensorType.getShape(), alloc.getType(), encoding),
+        alloc);
+    auto offsetsType =
         RankedTensorType::get(tensorType.getShape(), b.getI32Type(), encoding);
-    auto offsets = b.create<tt::MakeRangeOp>(offsetsType, 0, numEls);
-    auto pointers =
-        b.create<tt::AddPtrOp>(splatPtr.getType(), splatPtr, offsets);
-    return b.create<tt::StoreOp>(pointers, tensor, tt::CacheModifier::NONE,
+    SmallVector<int> strides(tensorType.getRank());
+    strides[0] = 1;
+    for (int i = 1; i < tensorType.getRank(); ++i) {
+      strides[i] = strides[i - 1] * tensorType.getShape()[i - 1];
+    }
+    for (int i = 0; i < tensorType.getRank(); ++i) {
+      auto partialEncoding = getSingleDimSliceEncoding(encoding, i);
+      auto arangeType = RankedTensorType::get({tensorType.getShape()[i]},
+                                              b.getI32Type(), partialEncoding);
+      auto arange =
+          b.create<tt::MakeRangeOp>(arangeType, 0, tensorType.getShape()[i]);
+      auto cstStride =
+          createConstIntTensor(b, strides[i], arangeType.getElementType(),
+                               arangeType.getShape(), partialEncoding);
+      auto arangeTimesStride =
+          b.create<arith::MulIOp>(arangeType, arange, cstStride);
+      auto expandDims = expandAllSlicedDims(b, arangeTimesStride);
+      if (cast<RankedTensorType>(expandDims.getType()).getShape() !=
+          tensorType.getShape()) {
+        expandDims = b.create<tt::BroadcastOp>(offsetsType, expandDims);
+      }
+      ptrTensor =
+          b.create<tt::AddPtrOp>(ptrTensor.getType(), ptrTensor, expandDims);
+    }
+    return b.create<tt::StoreOp>(ptrTensor, tensor, tt::CacheModifier::NONE,
                                  tt::EvictionPolicy::NORMAL);
   }
 
   Value createInitializedScratchMemory(ImplicitLocOpBuilder &b,
                                        TypedValue<RankedTensorType> tensor) {
-    assert(tensor.getType().getRank() == 1 && "Expected 1D tensor");
-
     auto encoding = tensor.getType().getEncoding();
     Type elType = tensor.getType().getElementType();
     int elSize = elType.getIntOrFloatBitWidth() / 8;
-    int numEls = tensor.getType().getShape()[0];
+    int numEls = product(tensor.getType().getShape());
     int64_t sizeInBytes = numEls * elSize;
     Type ptrType = triton::getPointerType(elType);
     auto alloc =

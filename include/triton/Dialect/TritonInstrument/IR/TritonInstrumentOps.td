@@ -54,6 +54,23 @@ def TTI_ExperimentalCheckOutstandingWritesOp : TTI_Op<"experimental_check_outsta
 }
 
 
+def TTI_ExperimentalCheckOutstandingReadsOp : TTI_Op<"experimental_check_outstanding_reads", [Pure]> {
+  let summary = "check if there are outstanding reads from a buffer guarded by a mbar";
+  let description = [{
+    Check if there are outstanding reads from a buffer guarded by a mbar.
+  }];
+  let arguments = (ins
+    TTG_MemDescType:$buf,
+    TT_Tensor:$buffers,
+    TT_PtrLike:$readBars,
+    TypeAttr:$readBarsType
+  );
+  let assemblyFormat = [{
+    $buf `{` $buffers `,` $readBars `(` $readBarsType `)` `}` attr-dict `:` type($buf) `,` type($buffers) `,` type($readBars)
+  }];
+}
+
+
 // TODO: This should not be pure I guess
 def TTI_ExperimentalMarkAsWriteOp : TTI_Op<"experimental_mark_as_write", [Pure]> {
   let summary = "mark a buffer as being written to using mbar as a guard";

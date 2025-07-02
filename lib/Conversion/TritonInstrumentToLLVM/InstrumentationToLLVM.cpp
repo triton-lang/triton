@@ -268,6 +268,7 @@ struct SharedBufferPointersOpConversion
   }
 };
 
+// TODO: Missing lit tests
 struct CheckOutstandingWritesOpConversion
     : public ConvertOpToLLVMPattern<tti::ExperimentalCheckOutstandingWritesOp> {
   using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
