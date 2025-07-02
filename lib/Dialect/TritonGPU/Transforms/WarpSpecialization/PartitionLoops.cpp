@@ -10,6 +10,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonGPU/Transforms/WarpSpecialization.h"
+#include "nvidia/include/Dialect/NVWS/IR/Dialect.h"
 #include "llvm/ADT/SCCIterator.h"
 
 using namespace mlir;
@@ -255,9 +256,14 @@ LogicalResult triton::gpu::partitionLoop(scf::ForOp loop) {
   return success();
 }
 
-void cloneOpsInBlock(Block *block, OpBuilder& builder);
+struct WgBuilder {
+  OpBuilder builder;
+  IRMapping mapping;
+};
 
-void cloneForOp(scf::ForOp forOp, OpBuilder& builder) {
+void cloneOpsInBlock(Block *block, OpBuilder& builder, const WarpSchedule& schedule);
+
+void cloneForOp(scf::ForOp forOp, OpBuilder& builder, const WarpSchedule& schedule) {
   //   auto lb = b.mapping.lookup(forOp.getLowerBound());
   //   auto ub = b.mapping.lookup(forOp.getUpperBound());
   //   auto step = b.mapping.lookup(forOp.getStep());
@@ -298,10 +304,10 @@ void cloneForOp(scf::ForOp forOp, OpBuilder& builder) {
   //   b.builder.setInsertionPointToStart(newForOp.getBody());
   // }
   // // resursive clone ops in the forOp body
-  cloneOpsInBlock(forOp.getBody(), builder);
+  cloneOpsInBlock(forOp.getBody(), builder, schedule);
 }
 
-void cloneOpsInBlock(Block *block, OpBuilder& builder) {
+void cloneOpsInBlock(Block *block, OpBuilder& builder, const WarpSchedule& schedule) {
   // OpBuilder topBuilder(wsFunc);
   // topBuilder.setInsertionPointToStart(&wsFunc.getBody().front());
   IRMapping topMapping;
@@ -333,7 +339,7 @@ void cloneOpsInBlock(Block *block, OpBuilder& builder) {
     }
 
     if (auto forOp = dyn_cast<scf::ForOp>(op)) {
-      cloneForOp(forOp, builder);
+      cloneForOp(forOp, builder, schedule);
     // } else if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
     //   cloneIfOp(ifOp, wsFunc, opBuilders);
     // } else if (auto reduceOp = dyn_cast<triton::ReduceOp>(op)) {
@@ -371,6 +377,29 @@ void cloneOpsInBlock(Block *block, OpBuilder& builder) {
   }
 }
 
+LogicalResult partitionLoopV2(scf::ForOp loop) {
+  FailureOr<WarpSchedule> scheduleOr = WarpSchedule::deserialize(loop);
+  if (failed(scheduleOr))
+    return failure();
+  WarpSchedule schedule = std::move(*scheduleOr);
+  if (failed(schedule.verify(loop)))
+    return failure();
+
+  auto numPartitions = schedule.getNumPartitions();
+  SmallVector<int32_t> numWarps(numPartitions, lookupNumWarps(loop));
+  ImplicitLocOpBuilder b(loop.getLoc(), loop);
+  auto wgOp = b.create<nvws::WarpGroupOp>(numWarps, numPartitions);
+
+  for (Region &region : wgOp.getPartitionRegions()) {
+    OpBuilder wgBuilder = OpBuilder::atBlockBegin(&region.emplaceBlock());
+    auto wgRetOp = wgBuilder.create<nvws::WarpGroupReturnOp>(wgOp.getLoc());
+  }
+
+  // cloneForOp(loop, b, schedule);
+  //  loop->erase();
+
+  return success();
+}
 
 //===----------------------------------------------------------------------===//
 // Pass Definition
@@ -400,9 +429,7 @@ void PartitionLoops::runOnOperation() {
   });
 
   for (scf::ForOp loop : loops) {
-    // if (failed(partitionLoop(loop)))
-    //   return signalPassFailure();
-    OpBuilder builder(loop);
-    cloneForOp(loop,  builder);
+    if (failed(partitionLoopV2(loop)))
+      return signalPassFailure();
   }
 }
