@@ -59,7 +59,7 @@ class BaseMode:
 
 @dataclass(frozen=True)
 class PCSampling(BaseMode):
-    name: str = field(default="pc_sampling", init=False)
+    name: str = field(default="pcsampling", init=False)
     interval: int = 1000
 
     def __post_init__(self):
