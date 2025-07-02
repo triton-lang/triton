@@ -18,7 +18,7 @@ def parse_arguments():
     parser.add_argument("-c", "--context", type=str, help="Profiling context", default="shadow",
                         choices=["shadow", "python"])
     parser.add_argument("-m", "--mode", type=str, help="Profiling mode", default=None)
-    parser.add_argument("-d", "--data", type=str, help="Profiling data", default="tree", choices=["tree"])
+    parser.add_argument("-d", "--data", type=str, help="Profiling data", default="tree", choices=["tree", "trace"])
     parser.add_argument("-k", "--hook", type=str, help="Profiling hook", default=None, choices=[None, "launch"])
     parser.add_argument('target_args', nargs=argparse.REMAINDER, help='Subcommand and its arguments')
     args = parser.parse_args()
@@ -51,6 +51,7 @@ def execute_as_main(script, args):
         exec(code, clean_globals)
     except Exception as e:
         print(f"An error occurred while executing the script: {e}")
+        sys.exit(1)
     finally:
         sys.argv = original_argv
 
