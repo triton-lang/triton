@@ -182,6 +182,10 @@ Value getLastInductionValue(OpBuilder &b, scf::ForOp loop);
 
 MakeTensorPtrOp getMakeTensorPtrOp(Value v);
 
+bool isHostSideDescriptor(Value v);
+
+bool isKernel(FunctionOpInterface funcOp);
+
 } // namespace triton
 } // namespace mlir
 

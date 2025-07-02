@@ -103,7 +103,8 @@ std::string getRegisterSizeCode(int size, bool is_float) {
 }
 
 Value createCachePolicy(triton::EvictionPolicy opEvict,
-                        ConversionPatternRewriter &rewriter, Location loc) {
+                        ConversionPatternRewriter &rewriter, Location loc,
+                        int computeCapability) {
   // Emit createpolicy.fractional.L2::policy.b64 xx 1.0
   PTXBuilder ptxBuilder;
   const bool hasL2EvictPolicy =
@@ -111,7 +112,9 @@ Value createCachePolicy(triton::EvictionPolicy opEvict,
       opEvict == triton::EvictionPolicy::EVICT_LAST;
   Value policyRet;
 
-  if (hasL2EvictPolicy) {
+  const bool hardwareSupport = computeCapability >= 80;
+
+  if (hasL2EvictPolicy && hardwareSupport) {
     auto &policy =
         ptxBuilder.create<>("createpolicy.fractional")
             ->o("L2::evict_first",
@@ -170,10 +173,11 @@ protected:
 struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
                           public LoadStoreConversionBase {
   LoadOpConversion(LLVMTypeConverter &converter,
-                   const NVIDIA::TargetInfo &targetInfo,
+                   const NVIDIA::TargetInfo &targetInfo, int computeCapability,
                    ModuleAxisInfoAnalysis &axisAnalysisPass,
                    PatternBenefit benefit)
       : ConvertOpToLLVMPattern<triton::LoadOp>(converter, benefit),
+        computeCapability(computeCapability),
         LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
 
   LogicalResult
@@ -336,7 +340,8 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
           ptxBuilder.newAddrOperand(ptrElems[vecStart], "l", in_off);
 
       // Create L2 cache policy register if needed
-      Value l2PolicyReg = createCachePolicy(op.getEvict(), rewriter, loc);
+      Value l2PolicyReg =
+          createCachePolicy(op.getEvict(), rewriter, loc, computeCapability);
 
       // Define the instruction opcode
       auto &ld = ptxBuilder.create<>("ld")
@@ -397,15 +402,18 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
     rewriter.replaceOp(op, {resultStruct});
     return success();
   }
+
+  int computeCapability;
 };
 
 struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
                            public LoadStoreConversionBase {
   StoreOpConversion(LLVMTypeConverter &converter,
-                    const NVIDIA::TargetInfo &targetInfo,
+                    const NVIDIA::TargetInfo &targetInfo, int computeCapability,
                     ModuleAxisInfoAnalysis &axisAnalysisPass,
                     PatternBenefit benefit)
       : ConvertOpToLLVMPattern<triton::StoreOp>(converter, benefit),
+        computeCapability(computeCapability),
         LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
 
   LogicalResult
@@ -519,7 +527,8 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
           ptxBuilder.newAddrOperand(ptrElems[vecStart], "l", in_off);
 
       // Create L2 cache policy register if needed
-      Value l2PolicyReg = createCachePolicy(op.getEvict(), rewriter, loc);
+      Value l2PolicyReg =
+          createCachePolicy(op.getEvict(), rewriter, loc, computeCapability);
 
       auto &ptxStoreInstr =
           ptxBuilder.create<>("st")
@@ -551,6 +560,8 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
     rewriter.eraseOp(op);
     return success();
   }
+
+  int computeCapability;
 };
 
 void createBarrier(ConversionPatternRewriter &rewriter, Location loc,
@@ -1393,7 +1404,7 @@ struct AsyncTMACopyGlobalToLocalOpConversion
       SmallVector<PTXBuilder::Operand *> operands = {
           ptxBuilderTMA.newOperand(boxPred, "b"),
           ptxBuilderTMA.newOperand(shMemPtr, "r"),
-          ptxBuilderTMA.newOperand(adaptor.getDescPtr(), "l")};
+          ptxBuilderTMA.newOperand(adaptor.getDesc(), "l")};
       std::string tmaInst =
           "@$0 cp.async.bulk.tensor." + std::to_string(rank) +
           "d.shared::cluster.global.mbarrier::complete_tx::bytes [$1], [$2, {";
@@ -1525,10 +1536,9 @@ struct AsyncTMACopyLocalToGlobalOpConversion
         tmaInst << ", ";
     }
     tmaInst << "}], [$" << (operandIdx++) << "];";
-    return convertTMAStoreLikeOp(op, typeConverter, rewriter,
-                                 adaptor.getDescPtr(), op.getSrc().getType(),
-                                 adaptor.getSrc(), adaptor.getCoord(),
-                                 tmaInst.str());
+    return convertTMAStoreLikeOp(op, typeConverter, rewriter, adaptor.getDesc(),
+                                 op.getSrc().getType(), adaptor.getSrc(),
+                                 adaptor.getCoord(), tmaInst.str());
   }
 };
 
@@ -1551,10 +1561,9 @@ struct AsyncTMAReduceOpConversion
         tmaInst << ", ";
     }
     tmaInst << "}], [$" << (operandIdx++) << "];";
-    return convertTMAStoreLikeOp(op, typeConverter, rewriter,
-                                 adaptor.getDescPtr(), op.getSrc().getType(),
-                                 adaptor.getSrc(), adaptor.getCoord(),
-                                 tmaInst.str());
+    return convertTMAStoreLikeOp(op, typeConverter, rewriter, adaptor.getDesc(),
+                                 op.getSrc().getType(), adaptor.getSrc(),
+                                 adaptor.getCoord(), tmaInst.str());
   }
 };
 
@@ -1680,11 +1689,11 @@ static LogicalResult iterateGatherScatterIndices(
       Value msgIdVal = b.i32_val(msgId);
 
       auto result = applyLinearLayout(loc, rewriter, msgToShared,
-                                      {{kMsg, msgIdVal},
-                                       {kRegister, regIdVal},
+                                      {{kRegister, regIdVal},
                                        {kLane, laneId},
                                        {kWarp, warpId},
-                                       {kBlock, blockId}});
+                                       {kBlock, blockId},
+                                       {kMsg, msgIdVal}});
       assert(result.size() == 2 && result.front().first == "offset" &&
              result.back().first == "block");
       Value shMemOffset = result.front().second;
@@ -1734,7 +1743,7 @@ LogicalResult AsyncTMAGatherOpConversion::matchAndRewrite(
         // clang-format off
         ptxBuilder.newOperand(pred, "b"),
         ptxBuilder.newOperand(shMemPtr, "r"),
-        ptxBuilder.newOperand(adaptor.getDescPtr(), "l"),
+        ptxBuilder.newOperand(adaptor.getDesc(), "l"),
         ptxBuilder.newOperand(yOffset, "r")
         // clang-format on
     };
@@ -1785,7 +1794,7 @@ LogicalResult AsyncTMAScatterOpConversion::matchAndRewrite(
     SmallVector<PTXBuilder::Operand *, 8> operands{
         // clang-format off
         ptxBuilder.newOperand(pred, "b"),
-        ptxBuilder.newOperand(adaptor.getDescPtr(), "l"),
+        ptxBuilder.newOperand(adaptor.getDesc(), "l"),
         ptxBuilder.newOperand(yOffset, "r")
         // clang-format on
     };
@@ -1811,6 +1820,28 @@ LogicalResult AsyncTMAScatterOpConversion::matchAndRewrite(
   rewriter.eraseOp(op);
   return success();
 }
+
+struct AsyncCopyMbarrierArriveOpConversion
+    : public ConvertOpToLLVMPattern<ttng::AsyncCopyMbarrierArriveOp> {
+  using ConvertOpToLLVMPattern<
+      ttng::AsyncCopyMbarrierArriveOp>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(ttng::AsyncCopyMbarrierArriveOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto noinc = op.getNoIncrement();
+    auto barrierMemObj = LLVM::getSharedMemoryObjectFromStruct(
+        loc, adaptor.getBarrier(),
+        typeConverter->convertType(op.getBarrier().getType().getElementType()),
+        rewriter);
+    TritonLLVMOpBuilder b(loc, rewriter);
+    rewriter.create<NVVM::CpAsyncMBarrierArriveSharedOp>(
+        loc, barrierMemObj.getBase(), noinc);
+    op->erase();
+    return success();
+  }
+};
 
 struct AsyncWaitOpConversion
     : public ConvertOpToLLVMPattern<triton::gpu::AsyncWaitOp> {
@@ -1868,13 +1899,15 @@ struct TMAStoreWaitOpConversion
 
 void mlir::triton::NVIDIA::populateLoadStoreOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, const TargetInfo &targetInfo,
-    RewritePatternSet &patterns, ModuleAxisInfoAnalysis &axisInfoAnalysis,
-    PatternBenefit benefit) {
+    int computeCapability, RewritePatternSet &patterns,
+    ModuleAxisInfoAnalysis &axisInfoAnalysis, PatternBenefit benefit) {
   patterns.add<AsyncCopyGlobalToLocalOpConversion, AtomicCASOpConversion,
-               AtomicRMWOpConversion, LoadOpConversion, StoreOpConversion>(
-      typeConverter, targetInfo, axisInfoAnalysis, benefit);
-  patterns.add<AsyncCommitGroupOpConversion>(typeConverter, benefit);
-  patterns.add<AsyncWaitOpConversion>(typeConverter, benefit);
+               AtomicRMWOpConversion>(typeConverter, targetInfo,
+                                      axisInfoAnalysis, benefit);
+  patterns.add<LoadOpConversion, StoreOpConversion>(
+      typeConverter, targetInfo, computeCapability, axisInfoAnalysis, benefit);
+  patterns.add<AsyncCommitGroupOpConversion, AsyncWaitOpConversion,
+               AsyncCopyMbarrierArriveOpConversion>(typeConverter, benefit);
   patterns.add<AsyncTMACopyGlobalToLocalOpConversion,
                AsyncTMACopyLocalToGlobalOpConversion,
                AsyncTMAReduceOpConversion, AsyncTMAGatherOpConversion,

@@ -1,5 +1,6 @@
 from __future__ import annotations, division
 import ast
+import copy
 import hashlib
 import inspect
 import itertools
@@ -13,8 +14,11 @@ from typing import Callable, Generic, Iterable, Optional, TypeVar, Union, overlo
 from triton.tools.tensor_descriptor import TensorDescriptor
 from types import ModuleType
 from .. import knobs
-from ..runtime.driver import driver
-from .._utils import find_paths_if, get_iterable_path
+from .driver import driver
+from . import _async_compile
+from .._utils import find_paths_if, get_iterable_path, type_canonicalisation_dict, canonicalize_dtype
+from .cache import get_cache_key
+from triton._C.libtriton import get_cache_invalidating_env_vars
 
 TRITON_MODULE = __name__[:-len(".runtime.jit")]
 
@@ -37,13 +41,14 @@ class DependenciesFinder(ast.NodeVisitor):
     otherwise we could recompile).
     """
 
-    def __init__(self, name, globals, src) -> None:
+    def __init__(self, name, globals, nonlocals, src) -> None:
         super().__init__()
         self.name = name
         self.hasher = hashlib.sha256(src.encode("utf-8"))
 
         # This function's __globals__ dict.
         self.globals = globals
+        self.nonlocals = nonlocals
 
         # Python builtins that can be accessed from Triton kernels.
         self.supported_python_builtins = {
@@ -109,7 +114,16 @@ class DependenciesFinder(ast.NodeVisitor):
             # The global name is hidden by the local name.
             return None
 
-        val = self.globals.get(node.id, None)
+        def name_lookup(name):
+            val = self.globals.get(name, None)
+            if val is not None:
+                return val, self.globals
+            val = self.nonlocals.get(name, None)
+            if val is not None:
+                return val, self.nonlocals
+            return None, None
+
+        val, var_dict = name_lookup(node.id)
 
         # Only keep track of "interesting" global variables, that non-evil users
         # might change.  Don't consider functions, modules, builtins, etc.  This
@@ -126,7 +140,7 @@ class DependenciesFinder(ast.NodeVisitor):
                 # `bar` and then someone did `foo = baz`.
                 and not isinstance(val, JITFunction) and not getattr(val, "__triton_builtin__", False)  #
                 and node.id not in self.supported_python_builtins):
-            self.used_global_vals[(node.id, id(self.globals))] = (val, self.globals)
+            self.used_global_vals[(node.id, id(var_dict))] = (copy.copy(val), var_dict)
 
         self._update_hash(val)
         return val
@@ -306,6 +320,7 @@ specialize_impl_cache = []
 def create_specialize_impl(specialize_extra):
 
     from ..language import constexpr
+    from triton.experimental.gluon.nvidia.hopper import TensorDescriptor as GluonTensorDescriptor
 
     def specialize_impl(arg, is_const=False, specialize_value=True, align=True):
         if arg is None:
@@ -329,7 +344,7 @@ def create_specialize_impl(specialize_extra):
             dsk = (arg.dtype, is_const)
             res = dtype2str.get(dsk, None)
             if res is None:
-                res = ("*k" if dsk[1] else "*") + type_canonicalisation_dict[str(dsk[0]).split('.')[-1]]
+                res = ("*k" if dsk[1] else "*") + canonicalize_dtype(dsk[0])
                 dtype2str[dsk] = res
             key = specialize_extra(arg, "tensor", align=align) if specialize_value else None
             return (res, key)
@@ -347,8 +362,12 @@ def create_specialize_impl(specialize_extra):
             return (tys, keys)
         elif isinstance(arg, TensorDescriptor):
             assert hasattr(arg.base, "data_ptr")
-            inner = type_canonicalisation_dict[str(arg.base.dtype).split('.')[-1]]
+            inner = canonicalize_dtype(arg.base.dtype)
             return (f"tensordesc<{inner}{list(arg.block_shape)}>", None)
+        elif isinstance(arg, GluonTensorDescriptor):
+            assert hasattr(arg.base, "data_ptr")
+            inner = canonicalize_dtype(arg.base.dtype)
+            return (f"tensordesc<{inner}{list(arg.block_shape)},{arg.layout!r}>", None)
         else:
             raise TypeError("Unsupported type: %s" % type(arg))
 
@@ -445,44 +464,8 @@ def dynamic_func({", ".join(list(map(arg, sig.parameters.items())) + ["**options
     return func_namespace['dynamic_func']
 
 
-type_canonicalisation_dict = {
-    # we canonicalise all bools to be unsigned:
-    "bool": "u1",
-    "int1": "u1",
-    "uint1": "u1",
-    "i1": "u1",
-    # floating-point dtypes:
-    "float8e4nv": "fp8e4nv",
-    "float8e5": "fp8e5",
-    "float8e4b15": "fp8e4b15",
-    "float8_e4m3fn": "fp8e4nv",
-    "float8e4b8": "fp8e4b8",
-    "float8_e4m3fnuz": "fp8e4b8",
-    "float8_e5m2": "fp8e5",
-    "float8e5b16": "fp8e5b16",
-    "float8_e5m2fnuz": "fp8e5b16",
-    "half": "fp16",
-    "float16": "fp16",
-    "bfloat16": "bf16",
-    "float": "fp32",
-    "float32": "fp32",
-    "double": "fp64",
-    "float64": "fp64",
-    # signed integers:
-    "int8": "i8",
-    "int16": "i16",
-    "int": "i32",
-    "int32": "i32",
-    "int64": "i64",
-    # unsigned integers:
-    "uint8": "u8",
-    "uint16": "u16",
-    "uint32": "u32",
-    "uint64": "u64",
-}
-
-for v in list(type_canonicalisation_dict.values()):
-    type_canonicalisation_dict[v] = v
+def get_full_name(fn):
+    return f"{fn.__module__}.{fn.__qualname__}"
 
 
 @dataclass
@@ -493,6 +476,9 @@ class JitFunctionInfo:
 
 
 class JITFunction(KernelInterface[T]):
+
+    def is_gluon(self):
+        return False
 
     def _call_hook(
         self,
@@ -508,12 +494,13 @@ class JITFunction(KernelInterface[T]):
         if not hook:
             return None
 
-        name = self.fn.__name__
+        name = self.fn.__qualname__
         module = self.fn.__module__
         arg_reprs = ", ".join([f"{param.name}: {ty}" for param, ty in zip(self.params, key[1])])
         repr = f"{name}[num_warps={options.num_warps}, num_ctas={options.num_ctas}, num_stages={options.num_stages}, enable_fp_fusion={options.enable_fp_fusion}, launch_cooperative_grid={options.launch_cooperative_grid}]({arg_reprs})"
+        full_name = get_full_name(self.fn)
 
-        specialization_data = serialize_specialization_data(name, signature, constants, configs[0], options, key)
+        specialization_data = serialize_specialization_data(full_name, signature, constants, configs[0], options, key)
 
         kwargs = {
             'signature': signature,
@@ -602,15 +589,10 @@ class JITFunction(KernelInterface[T]):
             attrvals = [x[1] for x in specialization]
             attrs = find_paths_if(attrvals, lambda _, x: isinstance(x, str))
             attrs = {k: backend.parse_attr(get_iterable_path(attrvals, k)) for k in attrs}
-            if self._call_hook(knobs.runtime.jit_cache_hook, key, signature, device, constexprs, options, [attrs],
-                               warmup):
+
+            kernel = self._do_compile(key, signature, device, constexprs, options, attrs, warmup)
+            if kernel is None:
                 return None
-            # compile the kernel
-            src = self.ASTSource(self, signature, constexprs, attrs)
-            kernel = self.compile(src, target=target, options=options.__dict__)
-            kernel_cache[key] = kernel
-            self._call_hook(knobs.runtime.jit_post_compile_hook, key, signature, device, constexprs, options, [attrs],
-                            warmup)
 
         # Check that used global values have not changed.
         not_present = object()
@@ -628,6 +610,8 @@ class JITFunction(KernelInterface[T]):
             grid_0 = grid[0]
             grid_1 = grid[1] if grid_size > 1 else 1
             grid_2 = grid[2] if grid_size > 2 else 1
+            if hasattr(kernel, "result"):
+                kernel = kernel.result()
             # launch kernel
             launch_metadata = kernel.launch_metadata(grid, stream, *bound_args.values())
             kernel.run(grid_0, grid_1, grid_2, stream, kernel.function, kernel.packed_metadata, launch_metadata,
@@ -650,7 +634,7 @@ class JITFunction(KernelInterface[T]):
         self.do_not_specialize_on_alignment = do_not_specialize_on_alignment
         self.starting_line_number = inspect.getsourcelines(fn)[1]
         self._repr = repr
-        self._fn_name = fn.__name__
+        self._fn_name = get_full_name(fn)
         self.launch_metadata = launch_metadata
 
         self.params = []
@@ -695,34 +679,50 @@ class JITFunction(KernelInterface[T]):
         # reuse docs of wrapped function
         self.__doc__ = fn.__doc__
         self.__name__ = fn.__name__
+        self.__qualname__ = fn.__qualname__
         self.__globals__ = fn.__globals__
         self.__module__ = fn.__module__
+
+    def get_capture_scope(self):
+        return self.__globals__ | inspect.getclosurevars(self.fn).nonlocals
 
     @property
     def cache_key(self):
         # TODO : hash should be attribute of `self`
         if self.hash is None:
-            dependencies_finder = DependenciesFinder(name=self.__name__, globals=self.__globals__, src=self.src)
+            nonlocals = inspect.getclosurevars(self.fn).nonlocals
+            dependencies_finder = DependenciesFinder(name=self._fn_name, globals=self.__globals__, nonlocals=nonlocals,
+                                                     src=self.src)
             dependencies_finder.visit(self.parse())
             self.hash = dependencies_finder.ret + str(self.starting_line_number)
             self.used_global_vals = dict(sorted(dependencies_finder.used_global_vals.items()))
+
+            from triton.language.core import constexpr
+            self.hash += str([(name, val)
+                              for (name, _), (val, _) in self.used_global_vals.items()
+                              if isinstance(val, constexpr)])
+            self.hash = hashlib.sha256(self.hash.encode("utf-8")).hexdigest()
         return self.hash
+
+    @property
+    def type(self):
+        from triton.language.core import constexpr
+        return constexpr
 
     def warmup(self, *args, grid, **kwargs):
         return self.run(grid=grid, warmup=True, *map(MockTensor.wrap_dtype, args), **kwargs)
 
     def preload(self, specialization_data):
-        from ..compiler import compile, ASTSource
         import json
         import triton.language as tl
         device = driver.active.get_current_device()
         deserialized_obj = json.loads(specialization_data)
-        if deserialized_obj['name'] != self.fn.__name__:
+        if deserialized_obj['name'] != self._fn_name:
             raise RuntimeError(
-                f"Specialization data is for {deserialized_obj['name']} but trying to preload for {self.fn.__name__}")
+                f"Specialization data is for {deserialized_obj['name']} but trying to preload for {self._fn_name}")
         constant_keys = map(tuple, deserialized_obj['constant_keys'])
         constant_vals = deserialized_obj['constant_vals']
-        constants = {
+        constexprs = {
             key: tl.dtype(value) if tl.dtype.is_dtype(value) else value
             for key, value in zip(constant_keys, constant_vals)
         }
@@ -730,14 +730,50 @@ class JITFunction(KernelInterface[T]):
         attrs_vals = deserialized_obj['attrs_vals']
         attrs = dict(zip(attrs_keys, attrs_vals))
         signature = dict(deserialized_obj['signature'].items())
-        src = ASTSource(self, signature, constants, attrs)
         options = {
             key: tuple(value) if isinstance(value, list) else value
             for key, value in deserialized_obj['options'].items()
         }
         key = deserialized_obj['key']
-        kernel = compile(src, None, options)
-        self.device_caches[device][0][key] = kernel
+        _, _, backend, _ = self.device_caches[device]
+        options = backend.parse_options(options)
+        return self._do_compile(
+            key,
+            signature,
+            device,
+            constexprs,
+            options,
+            attrs,
+            warmup=True,
+        )
+
+    def _do_compile(self, key, signature, device, constexprs, options, attrs, warmup):
+        kernel_cache, target, backend, _ = self.device_caches[device]
+
+        if self._call_hook(knobs.runtime.jit_cache_hook, key, signature, device, constexprs, options, [attrs], warmup):
+            return None
+        src = self.ASTSource(self, signature, constexprs, attrs)
+
+        async_mode = _async_compile.active_mode
+        if async_mode is not None:
+
+            env_vars = get_cache_invalidating_env_vars()
+            cache_key = get_cache_key(src, backend, options, env_vars)
+
+            def async_compile():
+                return self.compile(src, target=target, options=options.__dict__, _env_vars=env_vars)
+
+            def finalize_compile(kernel):
+                kernel_cache[key] = kernel
+                self._call_hook(knobs.runtime.jit_post_compile_hook, key, signature, device, constexprs, options,
+                                [attrs], warmup)
+
+            kernel = async_mode.submit(cache_key, async_compile, finalize_compile)
+        else:
+            kernel = self.compile(src, target=target, options=options.__dict__)
+            kernel_cache[key] = kernel
+            self._call_hook(knobs.runtime.jit_post_compile_hook, key, signature, device, constexprs, options, [attrs],
+                            warmup)
         return kernel
 
     # we do not parse `src` in the constructor because
@@ -770,7 +806,7 @@ class JITFunction(KernelInterface[T]):
         super().__setattr__('src', new_src)
 
     def __repr__(self):
-        return f"JITFunction({self.module}:{self.fn.__name__})"
+        return f"JITFunction({self.module}:{self.fn.__qualname__})"
 
 
 # -----------------------------------------------------------------------------

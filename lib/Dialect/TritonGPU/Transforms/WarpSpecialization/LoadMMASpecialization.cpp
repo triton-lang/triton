@@ -47,7 +47,7 @@ struct PipelinedLoad {
 
   SmallVector<Operation *, 1> allocOps;
   SmallVector<Operation *, 1> liveBeforeOps;
-  SmallVector<Operation *, 0> liveUntilOps;
+  SmallVector<std::pair<Operation *, bool>, 0> liveUntilOps;
   SmallVector<Operation *, 1> asyncUsers;
 };
 
@@ -118,8 +118,8 @@ addIndexAndPhase(PartitionBuilder &b, scf::ForOp &loop, unsigned numStages,
   b.setInsertionPoint(loop);
 
   // Index and phase both start at 0.
-  unsigned curArgIdx = loop.getNumRegionIterArgs();
-  auto newArgs = addIterArgsToLoop(b, loop, {b.intCst(0), b.intCst(0)});
+  loop = addIterArgsToLoop(b, loop, {b.intCst(0), b.intCst(0)});
+  auto newArgs = loop.getRegionIterArgs().take_back(2);
   BlockArgument index = newArgs[0];
   BlockArgument phase = newArgs[1];
 
@@ -252,8 +252,6 @@ LogicalResult PipelinedLoad::determineLiveRange(Block &container,
     // memory must be live until after this operation.
     Operation *lastShmemSink =
         findNearestCommonPostDominator(shmemTerminals, postDomInfo);
-    if (lastShmemSink)
-      lastShmemSink = lastShmemSink->getNextNode();
 
     // The memory only needs to be live until before the first register user.
     Operation *liveUntilReg = findNearestCommonDominator(regSink, domInfo);
@@ -262,14 +260,16 @@ LogicalResult PipelinedLoad::determineLiveRange(Block &container,
 
     // The memory is live until before the first register user or after the last
     // shmem terminal, whichever is later.
-    Operation *liveUntilOp;
+    std::pair<Operation *, bool> liveUntilOp{nullptr, false};
     if (lastShmemSink && liveUntilReg) {
-      liveUntilOp = liveUntilReg->isBeforeInBlock(lastShmemSink) ? lastShmemSink
-                                                                 : liveUntilReg;
+      if (liveUntilReg->isBeforeInBlock(lastShmemSink))
+        liveUntilOp = {lastShmemSink, /*after=*/true};
+      else
+        liveUntilOp = {liveUntilReg, /*after=*/false};
     } else if (liveUntilReg) {
-      liveUntilOp = liveUntilReg;
+      liveUntilOp = {liveUntilReg, /*after=*/false};
     } else {
-      liveUntilOp = lastShmemSink;
+      liveUntilOp = {lastShmemSink, /*after=*/true};
     }
     liveUntilOps.push_back(liveUntilOp);
   }
@@ -316,7 +316,7 @@ void PipelinedLoadGroup::allocateAref(scf::ForOp &loop, int numStages) {
   for (PipelinedLoad &load : loads) {
     distinctAsyncUsers.insert(load.asyncUsers.begin(), load.asyncUsers.end());
     int numLiveUntil =
-        llvm::count_if(load.liveUntilOps, [](Operation *op) { return !!op; });
+        llvm::count_if(load.liveUntilOps, [](auto p) { return !!p.first; });
     maxLiveUntil = std::max(maxLiveUntil, numLiveUntil);
   }
   int arriveCount = distinctAsyncUsers.size() + maxLiveUntil;
@@ -339,19 +339,16 @@ static void lowerTMACopy(PartitionBuilder &b, Partition &loadPartition,
                          Value barrier, Value view) {
   Value truePred = b.boolCst(true);
   if (auto load = dyn_cast<DescriptorLoadOp>(op)) {
-    Value tmaPtr = b.createInto<ttng::TensorDescToTMAPtrOp>(
-        loadPartition, stageCluster, load.getDesc());
     auto indices = ttng::translateTMAIndices(
         b, load.getLoc(), load.getDesc().getType().getBlockType().getEncoding(),
         load.getIndices());
-    b.createInto<ttng::AsyncTMACopyGlobalToLocalOp>(
-        loadPartition, stageCluster, tmaPtr, indices, barrier, view, truePred);
+    b.createInto<ttng::AsyncTMACopyGlobalToLocalOp>(loadPartition, stageCluster,
+                                                    load.getDesc(), indices,
+                                                    barrier, view, truePred);
   } else {
     auto gather = cast<DescriptorGatherOp>(op);
-    Value tmaPtr = b.createInto<ttng::TensorDescToTMAPtrOp>(
-        loadPartition, stageCluster, gather.getDesc());
     b.createInto<ttng::AsyncTMAGatherOp>(
-        loadPartition, stageCluster, tmaPtr, gather.getXOffsets(),
+        loadPartition, stageCluster, gather.getDesc(), gather.getXOffsets(),
         gather.getYOffset(), barrier, view, truePred);
   }
 }
@@ -393,8 +390,11 @@ LogicalResult PipelinedLoadGroup::lowerLoads(WarpSchedule &schedule,
 
     SmallVector<Operation *> liveUntilOps;
     for (PipelinedLoad &load : loads) {
-      if (Operation *liveUntilOp = load.liveUntilOps[i])
-        liveUntilOps.push_back(liveUntilOp);
+      auto [liveUntilOp, after] = load.liveUntilOps[i];
+      if (liveUntilOp) {
+        liveUntilOps.push_back(after ? liveUntilOp->getNextNode()
+                                     : liveUntilOp);
+      }
     }
     if (!liveUntilOps.empty()) {
       Operation *liveUntilOp =
@@ -442,6 +442,8 @@ LogicalResult PipelinedLoadGroup::lowerLoads(WarpSchedule &schedule,
       StageCluster userStageCluster = getStageCluster(loadBeforeOp);
       Value loaded = b.createInto<LocalLoadOp>(*partition, userStageCluster,
                                                load.type, view);
+      b.createInto<ttng::FenceAsyncSharedOp>(*partition, userStageCluster,
+                                             /*bCluster=*/false);
       for (OpOperand *use : uses)
         use->set(loaded);
     }
@@ -488,7 +490,8 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
       createTMemAlloc(b, oldAllocOp, /*multiBuffered=*/true, numMmaStages);
 
   // Use placeholder values for the indices in the loop.
-  auto indexPhase = addIterArgsToLoop(b, loop, {b.intCst(0), b.intCst(0)});
+  loop = addIterArgsToLoop(b, loop, {b.intCst(0), b.intCst(0)});
+  auto indexPhase = loop.getRegionIterArgs().take_back(2);
   BlockArgument index = indexPhase[0];
   BlockArgument phase = indexPhase[1];
 

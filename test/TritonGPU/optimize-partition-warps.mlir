@@ -148,9 +148,9 @@ tt.func @tmem_min_4_warps(%tensor_desc: !ttg.memdesc<64x64xf32, #tmem, #ttng.ten
   }
   // CHECK: partition1{{.*}} num_warps(4)
   partition1(%desc: !ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable>) num_warps(8) {
-    %cst = arith.constant dense<0> : tensor<64x64xi32, #blocked2d_8>
+    %cst = arith.constant dense<0.0> : tensor<64x64xf32, #blocked2d_8>
     %true = arith.constant true
-    ttng.tmem_store %cst, %desc, %true : tensor<64x64xi32, #blocked2d_8> -> !ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable>
+    ttng.tmem_store %cst, %desc, %true : tensor<64x64xf32, #blocked2d_8> -> !ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable>
     ttg.warp_return
   }
   // CHECK: partition2{{.*}} num_warps(4)

@@ -47,6 +47,9 @@ static void fixTaskId(triton::FuncOp &funcOp) {
         auto defTaskIds = getAsyncTaskIds(defOp);
         // Backward propagation: ensure def covers op's task IDs.
         if (!containsAll(defTaskIds, asyncTaskIds)) {
+          // Skip control flow ops.
+          if (isa<scf::YieldOp, scf::ForOp, scf::IfOp>(op))
+            continue;
           // Only propagate backward to arithmetic ops (e.g. constants).
           // Const ops with same value but different task ids can be folded.
           if (defOp->getDialect()->getNamespace() == "arith") {
@@ -219,7 +222,7 @@ static bool rematerializeOp(Operation *op, DataPartitionScheme &partitionScheme,
     SetVector<Operation *> slice;
     BackwardSliceOptions opt;
     opt.omitBlockArguments = true;
-    getBackwardSlice(op, &slice);
+    (void)getBackwardSlice(op, &slice);
     for (auto depOp : slice)
       partitionScheme.undoPartition(depOp);
     return true;
@@ -293,7 +296,7 @@ static bool getBackwardSliceToPartition(Value v,
                                        currentDim))
         return false;
       partitionScheme.dotPartitionOperand[dotOp] = currentDim == 0 ? 0 : 1;
-    } else if (isa<ReinterpretTensorDescOp, MakeTensorDescOp>(op)) {
+    } else if (isa<ttng::ReinterpretTensorDescOp, MakeTensorDescOp>(op)) {
       return true;
     } else if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
       // track yield value
@@ -351,7 +354,9 @@ static bool getForwardSliceToPartition(Value v,
     return true;
 
   // Recusively process operands forwards.
+  unsigned originalDim = currentDim;
   for (Operation *depOp : v.getUsers()) {
+    currentDim = originalDim;
     // Flip dim when op is trans
     if (isa<TransOp, MemDescTransOp>(depOp))
       currentDim = partitionScheme.flipPartitionDim(currentDim);
@@ -377,9 +382,10 @@ static bool getForwardSliceToPartition(Value v,
     auto onlyUsedByAtomicStore = [](Value v) {
       SetVector<Operation *> forwardSlice;
       getForwardSlice(v, &forwardSlice);
-      AtomicRMWOp atomicStore;
+      Operation *atomicStore;
       for (auto op : forwardSlice) {
-        if ((atomicStore = dyn_cast<AtomicRMWOp>(op))) {
+        if (isa<AtomicRMWOp, DescriptorReduceOp>(op)) {
+          atomicStore = op;
           break;
         }
       }
@@ -1009,20 +1015,27 @@ static Operation *sliceOp(Operation *op, int offset, IRMapping &mappings,
     }
   } else if (auto tensorDescOp = dyn_cast<MakeTensorDescOp>(op)) {
     newOp = cloneAndSetResultType(op);
-  } else if (auto tensorDescOp = dyn_cast<ReinterpretTensorDescOp>(op)) {
+  } else if (auto tensorDescOp = dyn_cast<ttng::ReinterpretTensorDescOp>(op)) {
     newOp = cloneAndSetResultType(op);
   } else if (isa<TransOp, MemDescTransOp>(op)) {
     sliceOp(op->getOperand(0), offset, mappings, reverseMappings,
             partitionScheme);
     builder.setInsertionPoint(op);
     auto v = op->getResult(0);
-    auto type = dyn_cast<MemDescType>(v.getType());
-    SmallVector<int64_t> shape{type.getShape().begin(), type.getShape().end()};
+    SmallVector<int64_t> shape = getShape(v.getType());
     int sliceSize = shape[dim] / numOfPartitions;
     shape[dim] = sliceSize;
-    auto newType =
-        MemDescType::get(shape, type.getElementType(), type.getEncoding(),
-                         type.getMemorySpace(), type.getMutableMemory());
+    Type newType;
+    if (auto descType = dyn_cast<MemDescType>(v.getType())) {
+      newType = MemDescType::get(
+          shape, descType.getElementType(), descType.getEncoding(),
+          descType.getMemorySpace(), descType.getMutableMemory());
+    } else if (auto tensorType = dyn_cast<RankedTensorType>(v.getType())) {
+      newType = RankedTensorType::get(shape, tensorType.getElementType(),
+                                      tensorType.getEncoding());
+    } else {
+      llvm_unreachable("unsupported type");
+    }
     builder.setInsertionPoint(op);
     newOp = builder.clone(*op, mappings);
     setAsyncTaskIds(newOp, sliceTaskIds);

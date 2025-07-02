@@ -7,7 +7,7 @@ import triton
 import triton.language as tl
 from triton.compiler.errors import CompilationError, CompileTimeAssertionFailure
 import traceback
-from triton._internal_testing import is_cuda, is_hip, is_hip_cdna3, is_hip_cdna4
+from triton._internal_testing import is_cuda, is_hip, is_hip_cdna3
 
 
 def format_exception(type, value, tb):
@@ -263,19 +263,6 @@ def test_power_of_two_shapes_2():
     assert str(e.value.__cause__) == "Shape element 0 must be a power of 2"
 
 
-def test_captured_var_access():
-
-    CAPTURED = 42
-
-    @triton.jit
-    def kernel():
-        a = CAPTURED  # noqa
-
-    with pytest.raises(CompilationError) as e:
-        triton.compile(triton.compiler.ASTSource(fn=kernel, signature={}, constexprs={}))
-    assert "CAPTURED is not defined" in str(e.value)
-
-
 GLOBAL = 42
 
 
@@ -377,17 +364,17 @@ def test_fp8_support(fresh_triton_cache, dtype):
         if cc >= (8, 9):
             supported_dtypes.append(tl.float8e4nv)
     elif is_hip():
+        supported_dtypes.append(tl.float8e4nv)
         if is_hip_cdna3():
-            supported_dtypes += [tl.float8e4nv, tl.float8e4b8, tl.float8e5b16]
-        if is_hip_cdna4():
-            supported_dtypes += [tl.float8e4nv]
+            supported_dtypes += [tl.float8e4b8, tl.float8e5b16]
 
     @triton.jit
     def dtype_kernel(dtype: tl.constexpr):
-        _ = tl.full((256, ), 0.0, dtype)
+        a = tl.full((64, 64), 0.0, dtype)
+        tl.dot(a, a)
 
     if dtype in warning_dtypes:
-        ctx = pytest.warns(UserWarning, match=r"fp8e4b15 is deprecated in this architecture")
+        ctx = pytest.warns(UserWarning, match=r"the use of fp8e4b15 is deprecated on Hopper and later architectures")
     elif dtype in supported_dtypes:
         ctx = contextlib.nullcontext()
     else:

@@ -11,8 +11,6 @@ from triton.runtime import _allocation
 from triton.backends.compiler import GPUTarget
 from triton.backends.driver import GPUDriver
 
-from triton.tools.tensor_descriptor import TensorDescriptor
-
 dirname = os.path.dirname(os.path.realpath(__file__))
 include_dirs = [os.path.join(dirname, "include")]
 libdevice_dir = os.path.join(dirname, "lib")
@@ -121,8 +119,10 @@ def make_launcher(constants, signature, tensordesc_meta):
                 meta = tensordesc_meta[tensordesc_idx] if tensordesc_meta else None
                 tensordesc_idx += 1
 
-                ndim = sig.count(",") + 1
-                dtype = re.match("tensordesc<([^[>]*)", sig).group()
+                match = re.match("tensordesc<([^[>]*)\\[([^]]*)\\]", sig)
+                dtype = match.group(1)
+                shape = match.group(2)
+                ndim = shape.count(",") + 1
 
                 if meta is None:
                     output.append("*" + dtype)
@@ -275,7 +275,7 @@ static cuLaunchKernelEx_t getLaunchKernelExHandle() {{
 static void _launch(int gridX, int gridY, int gridZ, int num_warps, int num_ctas, int launch_cooperative_grid, int launch_pdl, int clusterDimX, int clusterDimY, int clusterDimZ, int shared_memory, CUstream stream, CUfunction function, CUdeviceptr global_scratch{', ' + arg_decls if len(arg_decls) > 0 else ''}) {{
   void *params[] = {{ {', '.join(params)} }};
   if (gridX*gridY*gridZ > 0) {{
-    // 4 attributes that we can currently pass maxmimum
+    // 4 attributes that we can currently pass maximum
     CUlaunchAttribute launchAttr[4];
     static cuLaunchKernelEx_t cuLaunchKernelExHandle = NULL;
     if (cuLaunchKernelExHandle == NULL) {{
@@ -556,7 +556,6 @@ TMA_DTYPE_DEVICE_TO_HOST[10] = 9
 
 
 def make_tensordesc_arg(arg, metadata):
-    assert isinstance(arg, TensorDescriptor)
     if metadata is None:
         # Currently the host side tensor descriptors get decomposed in
         # the frontend to tensor desc, shape, and strides. We have no
@@ -597,6 +596,8 @@ def make_tensordesc_arg(arg, metadata):
 
 
 def wrap_handle_tensordesc(launcher, tensordesc_meta):
+    from triton.tools.tensor_descriptor import TensorDescriptor
+    from triton.experimental.gluon.nvidia.hopper import TensorDescriptor as GluonTensorDescriptor
 
     def inner(*args):
         meta_args = args[:len(_BASE_ARGS_FORMAT)]
@@ -604,7 +605,7 @@ def wrap_handle_tensordesc(launcher, tensordesc_meta):
         tensordesc_idx = 0
         final_args = []
         for i, arg in enumerate(raw_kernel_args):
-            if isinstance(arg, TensorDescriptor):
+            if isinstance(arg, (TensorDescriptor, GluonTensorDescriptor)):
                 meta = tensordesc_meta[tensordesc_idx] if tensordesc_meta else None
                 tensordesc_idx += 1
                 final_args.extend(make_tensordesc_arg(arg, meta))
@@ -681,6 +682,9 @@ class CudaDriver(GPUDriver):
             return torch.cuda.is_available() and (torch.version.hip is None)
         except ImportError:
             return False
+
+    def map_python_to_cpp_type(self, ty: str) -> str:
+        return ty_to_cpp(ty)
 
     def get_benchmarker(self):
         from triton.testing import do_bench

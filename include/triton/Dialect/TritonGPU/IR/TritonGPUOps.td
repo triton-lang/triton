@@ -88,7 +88,7 @@ def TTG_AsyncCopyGlobalToLocalOp : TTG_Op<"async_copy_global_to_local", [
   let description = [{
     This operation copies data from global memory to local memory asynchronously.
     This is analogue to tt.load except the data are copied to local memory pointed
-    by by the memory descriptor instead of a distributed tensor. The rest of the
+    to by the memory descriptor instead of a distributed tensor. The rest of the
     operands are the same as tt.load.
   }];
 
@@ -163,8 +163,6 @@ def TTG_LocalAllocOp : TTG_Op<"local_alloc", [DeclareOpInterfaceMethods<MemoryEf
   ];
 
   let extraClassDeclaration = [{
-    static LogicalResult verifyAllocOp(Operation *op, Value src,
-                                       MemDescType dstTy);
     bool isSharedMemoryAlloc() {
       return isa_and_nonnull<SharedMemorySpaceAttr>(getType().getMemorySpace());
     }
@@ -252,8 +250,6 @@ def TTG_MemDescTransOp : TTG_Op<"memdesc_trans", [Pure,
     representing a transposed view of the buffer.
   }];
 
-  let arguments = (ins TTG_MemDescType:$src, Variadic<I32>:$order);
-
   let arguments = (
     ins TTG_MemDescType:$src,
     DenseI32ArrayAttr:$order
@@ -284,6 +280,27 @@ def TTG_MemDescReshapeOp : TTG_Op<"memdesc_reshape", [Pure,
   let hasVerifier = 1;
 }
 
+def TTG_MemDescReinterpretOp : TTG_Op<"memdesc_reinterpret", [Pure, MemDescViewTrait]> {
+  let summary = "reinterpret a memory descriptor as a different type and shape";
+
+  let description = [{
+    The `ttg.memdesc_reinterpret` operation reinterprets a memory descriptor
+    as one with a different shape and element type. Because memory descriptors
+    lack strides, this operation is only valid if the original memory descriptor
+    is contiguous.
+  }];
+
+  let arguments = (ins TTG_MemDescType:$src);
+  let results = (outs TTG_MemDescType:$result);
+
+  let assemblyFormat = [{
+    $src attr-dict `:` qualified(type($src)) `->` qualified(type($result))
+  }];
+
+  let hasVerifier = 1;
+  let hasFolder = 1;
+}
+
 def TTG_LocalLoadOp : TTG_Op<"local_load"> {
   let summary = "Load a buffer from local memory into a distributed tensor";
 
@@ -294,6 +311,7 @@ def TTG_LocalLoadOp : TTG_Op<"local_load"> {
     Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$src,
     Optional<TTG_AsyncToken>:$token
   );
+  let results = (outs TT_Tensor:$result);
 
   let builders = [
       OpBuilder<(ins "Type":$retType, "Value":$src),
@@ -303,8 +321,7 @@ def TTG_LocalLoadOp : TTG_Op<"local_load"> {
 
   // Use qualified() otherwise "!ttg.memdesc<X>" is printed as "<X>".
   let assemblyFormat = [{$src (`token` $token^)? attr-dict `:` qualified(type($src)) `->` type($result)}];
-
-  let results = (outs TT_Tensor:$result);
+  let hasVerifier = 1;
 }
 
 def TTG_LocalStoreOp : TTG_Op<"local_store"> {
@@ -468,7 +485,9 @@ def TTG_WarpSpecializeOp : TTG_Op<"warp_specialize", [
   let builders = [
     OpBuilder<(ins "TypeRange":$resultTypes,
                    "ArrayRef<int32_t>":$partitionNumWarps,
-                   "unsigned":$numPartitionRegions)>
+                   "unsigned":$numPartitionRegions)>,
+    OpBuilder<(ins "TypeRange":$resultTypes, "ValueRange":$explicitCaptures,
+                   "ArrayRef<int32_t>":$partitionNumWarps)>,
   ];
 
   let hasVerifier = 1;

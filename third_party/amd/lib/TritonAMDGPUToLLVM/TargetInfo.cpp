@@ -3,6 +3,7 @@
 #include "TritonAMDGPUToLLVM/GCNAsmFormat.h"
 #include "TritonAMDGPUToLLVM/TargetUtils.h"
 #include "Utility.h"
+#include "amd/lib/TritonAMDGPUToLLVM/AsyncUtility.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
@@ -65,34 +66,7 @@ llvm::AMDGPU::GPUKind TargetInfo::getGPUKind() const {
   return llvm::AMDGPU::parseArchAMDGCN(arch);
 }
 
-bool TargetInfo::isCDNA() const {
-  switch (getISAFamily()) {
-  case ISAFamily::CDNA1:
-  case ISAFamily::CDNA2:
-  case ISAFamily::CDNA3:
-  case ISAFamily::CDNA4:
-    return true;
-  default:
-    break;
-  }
-
-  return false;
-}
-
-bool TargetInfo::isRDNA() const {
-  switch (getISAFamily()) {
-  case ISAFamily::RDNA1:
-  case ISAFamily::RDNA2:
-  case ISAFamily::RDNA3:
-    return true;
-  default:
-    break;
-  }
-
-  return false;
-}
-
-int TargetInfo::getWarpSize() const { return isCDNA() ? 64 : 32; }
+int TargetInfo::getWarpSize() const { return isCDNA(getISAFamily()) ? 64 : 32; }
 
 int TargetInfo::getSharedMemorySize() const {
   int kbytes = getISAFamily() == ISAFamily::CDNA4 ? 160 : 64;
@@ -311,14 +285,14 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
                             unsigned interleave) const {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
-  if (isCDNA() && getISAFamily() == ISAFamily::CDNA4 &&
+  if (getISAFamily() == ISAFamily::CDNA4 &&
       warpReduceSwap16or32(rewriter, loc, acc, op, numLaneToReduce, interleave))
     return true;
   if (numLaneToReduce != getWarpSize())
     return false;
-  if (isCDNA() && getISAFamily() == ISAFamily::CDNA1)
+  if (isCDNA(getISAFamily()) && getISAFamily() == ISAFamily::CDNA1)
     return false;
-  if (isRDNA() && getISAFamily() != ISAFamily::RDNA3)
+  if (isRDNA(getISAFamily()) && getISAFamily() != ISAFamily::RDNA3)
     return false;
 
   Operation *reduxOp = op.getSingleCombiner();
@@ -419,7 +393,7 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
     buf = createDppReduxOpWithBoundCtrl(valType, buf, 1 + dppCtrlRowShr,
                                         allRows, allBanks);
 
-    if (isCDNA()) {
+    if (isCDNA(getISAFamily())) {
       // row_bcast:15 row_mask:0xa
       buf = createDppReduxOpWithBoundCtrl(
           valType, buf, static_cast<uint32_t>(DppCtrl::BCAST15), 0xa, allBanks);
@@ -432,12 +406,12 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
       // RDNA doesn't have broadcast dpp mode
       Type actualType = castToAndSExtInt(rewriter, loc, buf, valType, 32);
 
-      Value permlaneResult =
-          LLVM::createLLVMIntrinsicCallOp(
-              rewriter, loc, "llvm.amdgcn.permlanex16", actualType,
-              ValueRange{buf, buf, b.i32_val(-1), b.i32_val(-1), b.true_val(),
-                         b.false_val()})
-              ->getResult(0);
+      // Lanes 0-15 read from lane 31 and lanes 16-31 read from lane 15.
+      Value permlaneResult = rewriter
+                                 .create<ROCDL::PermlaneX16Op>(
+                                     loc, actualType, buf, buf, b.i32_val(-1),
+                                     b.i32_val(-1), true, false)
+                                 .getRes();
       buf = truncAndCastFromInt(rewriter, loc, buf, valType, 32);
       permlaneResult =
           truncAndCastFromInt(rewriter, loc, permlaneResult, valType, 32);
@@ -621,8 +595,7 @@ bool TargetInfo::supportsDirectToLdsLoadBitWidth(int bitWidth) const {
 
 void TargetInfo::localLoadOpAnnotation(triton::gpu::LocalLoadOp localLoadOp,
                                        Operation *llLoadOp) const {
-  LLVM::AMD::addLocalLoadNoAliasScope(localLoadOp,
-                                      cast<LLVM::LoadOp>(llLoadOp));
+  AMD::addLocalLoadNoAliasScope(localLoadOp, cast<LLVM::LoadOp>(llLoadOp));
 }
 
 } // namespace mlir::triton::AMD

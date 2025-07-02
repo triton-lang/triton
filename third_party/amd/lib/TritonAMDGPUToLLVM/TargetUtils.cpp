@@ -49,4 +49,31 @@ bool supportsVDot(llvm::StringRef arch) {
   return false;
 }
 
+bool isCDNA(ISAFamily isaFamily) {
+  switch (isaFamily) {
+  case ISAFamily::CDNA1:
+  case ISAFamily::CDNA2:
+  case ISAFamily::CDNA3:
+  case ISAFamily::CDNA4:
+    return true;
+  default:
+    break;
+  }
+
+  return false;
+}
+
+bool isRDNA(ISAFamily isaFamily) {
+  switch (isaFamily) {
+  case ISAFamily::RDNA1:
+  case ISAFamily::RDNA2:
+  case ISAFamily::RDNA3:
+    return true;
+  default:
+    break;
+  }
+
+  return false;
+}
+
 } // namespace mlir::triton::AMD

@@ -29,17 +29,18 @@ def _zero_masked_rows(
 
 
 _matmul_ogs_repr = make_matmul_repr("_matmul_ogs", [0, 1, 2])
-@triton.jit(repr=_matmul_ogs_repr, launch_metadata=matmul_launch_metadata)
+@triton.jit(do_not_specialize=["TOKENS_PER_EXPT_FOR_ANNOTATION"],
+            repr=_matmul_ogs_repr, launch_metadata=matmul_launch_metadata)
 def _matmul_ogs(
              Y, Out, stride_y_k, stride_y_z, stride_y_m, stride_y_n,
              YExpectedScale, YActualScale, YChecksumScale,
-             X, stride_x_z, stride_x_m, stride_x_k,
+             X, XPtr, stride_x_z, stride_x_m, stride_x_k,
              XScale,
              W, stride_w_e, stride_w_k, stride_w_n, W_TRANSPOSE: tl.constexpr,
              WScale,
              MxScale, stride_mx_e, stride_mx_k, stride_mx_n, MX_TRANSPOSE: tl.constexpr,
              B, stride_b_e, # Bias
-             NRows, M, N, K, # shapes
+             M, N, K, # shapes
              # expt data
              Betas, Gammas,
              GatherIndx,
@@ -233,9 +234,9 @@ def _matmul_ogs(
                 mask_k_scale = tl.full([PACKED_MX_BLOCK], True, dtype=tl.int1)
         else:
             mask_k = offs_k < k
-            mask_k_w = offs_w_k < (tl.cdiv(k, W_K_DIVISOR) * W_K_MULTIPLIER)
+            mask_k_w = offs_w_k < ((k // W_K_DIVISOR) * W_K_MULTIPLIER)
             if is_microscaled_format and SWIZZLE_MX_SCALE is None:
-                mask_k_scale = offs_k_scale < tl.cdiv(k, MX_PACK_DIVISOR)
+                mask_k_scale = offs_k_scale * MX_PACK_DIVISOR < k
 
         x = tl.load(XPtrs, mask=mask_k[None, :], other=0.0)
         w = tl.load(WPtrs, mask=mask_k_w[:, None], other=0.0, cache_modifier=W_CACHE_MODIFIER)
@@ -301,7 +302,6 @@ def _matmul_ogs(
         w_scale = load_scale(WScale)
     acc *= x_scale * w_scale
     acc = acc + bias[None, :] * betas[:, None]
-    acc *= gammas[:, None]
     if out_alpha is not None:
         acc *= out_alpha
     if ACTIVATION_FN is not None:
@@ -312,6 +312,7 @@ def _matmul_ogs(
     else:
         tl.static_assert(ACTIVATION_REDUCTION_N == 1, "Activation reduction must be 1 if no activation fn is provided")
         out = acc
+    out *= gammas[:, None]
     # write-back
     Y += start_z.to(index_type) * stride_y_z
     if WriteBackIndx is not None:
@@ -385,9 +386,9 @@ def _compute_writeback_idx(
     src_offs = offs_m[:, None] * N_EXPTS_ACT + tl.arange(0, N_EXPTS_ACT)[None, :]
     src_idxs = tl.load(ScatterSrcIndx + src_offs, mask=mask_m[:, None], other=-1)
     is_src_active = (src_idxs != -1).to(tl.int32)
-    has_one_active = tl.sum(is_src_active, axis=1) == 1
+    num_src_active = tl.sum(is_src_active, axis=1)
 
-    need_finalize_scatter = mask_m & (~has_one_active)
+    need_finalize_scatter = mask_m & (num_src_active != 1)
     finalize_scatter_count = tl.sum(need_finalize_scatter.to(tl.int32))
     if finalize_scatter_count == 0:
         return

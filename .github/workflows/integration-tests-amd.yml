@@ -14,6 +14,10 @@ jobs:
     strategy:
       matrix:
         runner: ${{ fromJson(inputs.matrix) }}
+        include:
+          - image: rocm/pytorch:rocm6.2.2_ubuntu22.04_py3.10_pytorch_2.5.1_asan
+          - image: rocm/7.0-preview:rocm7.0_preview_ubuntu22.04_llama2_70b_training_mlperf_mi35X_prealpha
+            runner: ["amd-gfx950"]
     env:
       RUNNER_TYPE: ${{ matrix.runner[1] }}
       TRITON_BUILD_WITH_CCACHE: "true"
@@ -24,7 +28,7 @@ jobs:
       PYTHON: "python3"
       CCACHE_COMPRESS: "true"
     container:
-      image: rocm/pytorch:rocm6.2.2_ubuntu22.04_py3.10_pytorch_2.5.1_asan
+      image: ${{ matrix.image }}
       options: --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --user root
     steps:
       - name: Checkout
@@ -60,26 +64,6 @@ jobs:
             ~/.triton/nvidia
             ~/.triton/json
           key: ${{ runner.os }}-${{ runner.arch }}-llvm-${{ steps.cache-key.outputs.llvm }}-nvidia-${{ steps.cache-key.outputs.nvidia }}-json-${{ steps.cache-key.outputs.json }}
-      - # Cache ~/.cache/ccache to speed up compilation.
-        #
-        # On branch `main` we always start from an empty cache, i.e. we skip the
-        # "restore" step.  This is to prevent the caches from accumulating stale
-        # files over time.
-        name: Restore cache of ccache and Triton compilation artifacts
-        id: restore-build-cache
-        if: github.ref != 'refs/heads/main'
-        uses: actions/cache/restore@v4
-        with:
-          path: |
-            ~/.ccache
-          # Restore the most recent cache entry.
-          restore-keys: |
-            triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ env.RUNNER_TYPE }}-llvm-${{ steps.cache-key.outputs.llvm }}-
-            triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ env.RUNNER_TYPE }}-
-          # We expect this cache key never to hit and for us to fall back
-          # unconditionally to the restore-key, so it doesn't actually matter
-          # what we put here (so long as it doesn't hit an existing key).
-          key: triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ env.RUNNER_TYPE }}-llvm-${{ steps.cache-key.outputs.llvm }}-${{ steps.cache-key.outputs.datetime }}
       - name: Inspect cache directories
         run: |
           mkdir -p ~/.triton
@@ -96,9 +80,14 @@ jobs:
         run: |
           echo "PATH is '$PATH'"
           pip uninstall -y triton pytorch-triton-rocm
-          ccache --zero-stats
+
+          if [ "${{ matrix.runner[0] }}" != "amd-gfx950" ]; then
+            ccache --zero-stats
+          fi
+
           make dev-install
       - name: CCache Stats
+        if: ${{ matrix.runner[0] != 'amd-gfx950' }}
         run: ccache --print-stats
       - name: Run lit tests
         run: make test-lit
@@ -112,7 +101,7 @@ jobs:
           pytest --capture=tee-sys -rfs third_party/amd/python/test/test_extract_slice_concat_op.py
           TRITON_ALWAYS_COMPILE=1 pytest --capture=tee-sys -rfs third_party/amd/python/test/test_scalarize_packed_fops.py
           cd python/test/unit
-          pytest --capture=tee-sys -rfs -n 12 language runtime \
+          pytest --capture=tee-sys -rfs -n 12 language runtime tools \
                  --ignore=language/test_line_info.py \
                  --ignore=test_debug.py
           # TODO: uncomment
@@ -121,7 +110,18 @@ jobs:
           pytest --capture=tee-sys -rfs -vvv instrumentation/test_gpuhello.py
 
           # Run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
-          TRITON_DISABLE_LINE_INFO=0 python3 -m pytest -s -n 8 language/test_line_info.py
+          if [ "${{ matrix.runner[0] }}" = "amd-gfx950" ]; then
+            TRITON_DISABLE_LINE_INFO=0 python3 -m pytest -s -n 8 language/test_line_info.py -k "not test_line_info_ir_source"
+          else
+            TRITON_DISABLE_LINE_INFO=0 python3 -m pytest -s -n 8 language/test_line_info.py
+          fi
+
+          # Run tests under triton/python/triton_kernels/tests/ on gfx950 and gfx942
+          if [ "${{ matrix.runner[0] }}" = "amd-gfx950" ] || [ "${{ matrix.runner[0] }}" = "amd-gfx942" ]; then
+            cd ../../triton_kernels/
+            python3 -m pytest -s -n 12 tests/
+          fi
+
       - name: Run asan tests on AMD
         if: false
         run: |
@@ -141,8 +141,12 @@ jobs:
           cd python/test/regression
           python3 -m pytest -s -n 8 ./test_cast_matmul.py
       - name: Run Proton tests
-        if: ${{ matrix.runner[0] != 'nvidia-gb200' }}
-        run: make test-proton
+        run: |
+          if [ "${{ matrix.runner[0] }}" = "amd-gfx950" ]; then
+            python3 -m pytest -s -n 8 third_party/proton/test -k "not test_instrument_exec"
+          else
+            make test-proton
+          fi
       - name: Run C++ unittests
         run: make test-cpp
       - name: Inspect cache directories
@@ -152,18 +156,6 @@ jobs:
 
           mkdir -p ~/.ccache
           du -h -d 1 ~/.ccache
-      - # If we're on branch `main`, save the ccache Triton compilation artifacts
-        # to the cache so they can be used by other (non-main) CI runs.
-        #
-        # (It wouldn't be a problem to save the cache on every run, because github
-        # evicts cache entries LRU, but maybe this saves a bit of time in CI.)
-        name: Save ccache and Triton compilation artifacts to cache
-        if: github.ref == 'refs/heads/main'
-        uses: actions/cache/save@v4
-        with:
-          path: |
-            ~/.ccache
-          key: triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ env.RUNNER_TYPE }}-llvm-${{ steps.cache-key.outputs.llvm }}-${{ steps.cache-key.outputs.datetime }}
       - name: Clean up caches
         # Always cleanup the worker, even if builds or tests failed
         if: always()

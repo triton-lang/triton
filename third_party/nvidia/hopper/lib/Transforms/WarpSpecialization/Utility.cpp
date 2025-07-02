@@ -1,4 +1,5 @@
 #include "Utility.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "llvm/ADT/SetVector.h"
 
 namespace mlir {
@@ -9,8 +10,15 @@ namespace mlir {
 
 SmallVector<AsyncTaskId> getAsyncTaskIds(Operation *op) {
   SmallVector<AsyncTaskId> asyncTaskIds;
-  if (auto attr = op->getAttrOfType<DenseI32ArrayAttr>("async_task_id"))
-    llvm::append_range(asyncTaskIds, attr.asArrayRef());
+  if (auto attr = op->getAttrOfType<DenseI32ArrayAttr>("async_task_id")) {
+    for (AsyncTaskId asyncTaskId : attr.asArrayRef()) {
+      // TODO(Arda): Remove this check once we figure out why we have duplicate
+      // async task ids
+      if (asyncTaskIds.empty() ||
+          asyncTaskIds[asyncTaskIds.size() - 1] != asyncTaskId)
+        asyncTaskIds.push_back(asyncTaskId);
+    }
+  }
   return asyncTaskIds;
 }
 
@@ -27,6 +35,15 @@ void setAsyncTaskIds(Operation *op, ArrayRef<AsyncTaskId> asyncTaskIds) {
   auto vecTy = VectorType::get(size, i32Ty);
   op->setAttr("async_task_id",
               DenseI32ArrayAttr::get(op->getContext(), sortedAsyncTaskIds));
+}
+
+void labelParentOps(Operation *op) {
+  auto asyncTaskIds = mlir::getAsyncTaskIds(op);
+  auto parent = op->getParentOp();
+  while (parent && !isa<triton::FuncOp>(parent)) {
+    addAsyncTaskIds(parent, asyncTaskIds);
+    parent = parent->getParentOp();
+  }
 }
 
 SmallVector<AsyncTaskId> getNestedAsyncTaskIds(Operation *op) {

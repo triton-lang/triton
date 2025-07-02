@@ -262,24 +262,13 @@ def TTNG_ArriveBarrierOp : TTNG_Op<"arrive_barrier"> {
   let hasVerifier = 1;
 }
 
-def TTNG_TensorDescToTMAPtrOp : TTNG_Op<"tensor_desc_to_tma_ptr", [Pure]> {
-  let summary = "Convert tensor descriptor to pointer to tma descriptor";
-
-  let arguments = (ins TT_TensorDescType:$desc);
-  let results = (outs TT_Ptr:$ptr);
-
-  let assemblyFormat = [{
-    $desc attr-dict `:` qualified(type($desc)) `to` qualified(type($ptr))
-  }];
-
-  let builders = [
-    OpBuilder<(ins "Value":$desc), [{
-      auto ptrTy = triton::PointerType::get($_builder.getI8Type(), 1);
-      build($_builder, $_state, ptrTy, desc);
-    }]>
-  ];
-
-  let hasCanonicalizeMethod = 1;
+def TTNG_AsyncCopyMbarrierArriveOp : TTNG_Op<"async_copy_mbarrier_arrive"> {
+  let summary = "arrive on mbarrier once all previously issued copies are completed";
+  let arguments = (ins
+    Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$barrier,
+    UnitAttr:$noIncrement
+  );
+  let assemblyFormat = "$barrier attr-dict `:` qualified(type($barrier))";
 }
 
 
@@ -291,12 +280,12 @@ def TTNG_AsyncTMACopyGlobalToLocalOp : TTNG_Op<"async_tma_copy_global_to_local">
     asynchronously.  This is analogue to tt.load except the data are copied to
     local memory pointed by the memory descriptor instead of a distributed
     tensor. The data copied depends on the global memory descriptor pointed to
-    by `desc_ptr`.
+    by `desc`.
   }];
 
   let hasVerifier = 1;
   let arguments = (ins
-    Arg<TT_PtrType, "", [MemRead<GlobalMemory>]>:$desc_ptr,
+    Arg<TT_TensorDescType, "", [MemRead<GlobalMemory>]>:$desc,
     Variadic<I32>:$coord,
     Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$barrier,
     Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$result,
@@ -307,9 +296,9 @@ def TTNG_AsyncTMACopyGlobalToLocalOp : TTNG_Op<"async_tma_copy_global_to_local">
   );
 
   let assemblyFormat = [{
-    $desc_ptr `[` $coord `]` $result `,` $barrier `,` $pred
+    $desc `[` $coord `]` $result `,` $barrier `,` $pred
     oilist(`cacheModifier` `=` $cache | `evictionPolicy` `=` $evict)
-    attr-dict `:` qualified(type($desc_ptr)) `,` qualified(type($barrier)) `->` qualified(type($result))
+    attr-dict `:` qualified(type($desc)) `,` qualified(type($barrier)) `->` qualified(type($result))
   }];
 }
 
@@ -321,18 +310,18 @@ def TTNG_AsyncTMACopyLocalToGlobalOp : TTNG_Op<"async_tma_copy_local_to_global">
     asynchronously.  This is analogue to tt.store except the data are copied from
     local memory pointed by the memory descriptor instead of a distributed
     tensor. The data copied depends on the global memory descriptor pointed to
-    by `desc_ptr`.
+    by `desc`.
   }];
 
   let arguments = (ins
-    Arg<TT_PtrType, "", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$desc_ptr,
+    Arg<TT_TensorDescType, "", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$desc,
     Variadic<I32>:$coord,
     Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$src
   );
 
   let assemblyFormat = [{
-    $desc_ptr `[` $coord `]` $src
-    attr-dict `:` qualified(type($desc_ptr)) `,` qualified(type($src))
+    $desc `[` $coord `]` $src
+    attr-dict `:` qualified(type($desc)) `,` qualified(type($src))
   }];
 }
 
@@ -348,14 +337,14 @@ def TTNG_AsyncTMAReduceOp : TTNG_Op<"async_tma_reduce", [MemoryEffects<[MemRead<
 
   let arguments = (ins
     TT_DescriptorReduceKindAttr:$kind,
-    Arg<TT_PtrType, "", [MemRead<GlobalMemory>]>:$desc_ptr,
+    Arg<TT_TensorDescType, "", [MemRead<GlobalMemory>]>:$desc,
     Variadic<I32>:$coord,
     Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$src
   );
 
   let assemblyFormat = [{
-    $kind `,` $desc_ptr `[` $coord `]` $src
-    attr-dict `:` qualified(type($desc_ptr)) `,` qualified(type($src))
+    $kind `,` $desc `[` $coord `]` $src
+    attr-dict `:` qualified(type($desc)) `,` qualified(type($src))
   }];
 }
 
@@ -369,7 +358,7 @@ def TTNG_AsyncTMAGatherOp : TTNG_Op<"async_tma_gather"> {
   }];
 
   let arguments = (ins
-    Arg<TT_PtrType, "", [MemRead<GlobalMemory>]>:$desc_ptr,
+    Arg<TT_TensorDescType, "", [MemRead<GlobalMemory>]>:$desc,
     RankedTensorOf<[I32]>:$x_offsets,
     I32:$y_offset,
     Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$barrier,
@@ -378,7 +367,7 @@ def TTNG_AsyncTMAGatherOp : TTNG_Op<"async_tma_gather"> {
   );
 
   let assemblyFormat = [{
-    $desc_ptr `[` $x_offsets `,` $y_offset `]` $result `,` $barrier `,` $pred
+    $desc `[` $x_offsets `,` $y_offset `]` $result `,` $barrier `,` $pred
     attr-dict `:` type(operands)
   }];
 
@@ -397,14 +386,14 @@ def TTNG_AsyncTMAScatterOp : TTNG_Op<"async_tma_scatter"> {
   }];
 
   let arguments = (ins
-    Arg<TT_PtrType, "", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$desc_ptr,
+    Arg<TT_TensorDescType, "", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$desc,
     RankedTensorOf<[I32]>:$x_offsets,
     I32:$y_offset,
     Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$src
   );
 
   let assemblyFormat = [{
-    $desc_ptr `[` $x_offsets `,` $y_offset `]` $src
+    $desc `[` $x_offsets `,` $y_offset `]` $src
     attr-dict `:` type(operands)
   }];
 
@@ -532,6 +521,52 @@ def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [
     qualified(type($d)) `,` qualified(type($a_scale)) `,`
     qualified(type($b_scale)) (`,` qualified(type($barriers))^)?
   }];
+}
+
+def TTNG_TCGen5CommitOp : TTNG_Op<"tc_gen5_commit"> {
+  let summary = "make an mbarrier track completion of all prior async tcgen5 ops";
+
+  let description = [{
+    The `ttng.tc_gen5_commit` is an asynchronous operation that makes the
+    mbarrier object track the completion of all prior asynchronous tcgen5
+    operations. Upon completion of all asynchronous operations, the mbarrier
+    arrive operation is performed on the mbarrier with a count of 1.
+
+    If `two_ctas` is set, then the mbarrier tracks all prior operations
+    initiated with `two_ctas` set as well. Otherwise, it tracks all prior
+    operations initiated without `two_ctas`.
+
+    Note that the completion mechanisms are guaranteed to occur sequentially in
+    the order the commit operations were issued. This means, for example:
+
+    ```mlir
+    ttng.tmem_copy
+    ttng.tc_gen5_mma
+    ttng.tc_gen5_commit %barrierA
+    ttng.tc_gen5_commit %barrierB
+    ```
+
+    `%barrierA` tracks the completion of the previous TMEM copy and MMA
+    operations, but since the commit groups are sequential, the arrive-on
+    operation on `%barrierA` is guaranteed to be performed before the arrive-on
+    operation on `%barrierB`, even though its commit group is empty.
+  }];
+
+  let arguments = (ins
+    Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$barrier,
+    Optional<I1>:$pred,
+    UnitAttr:$two_ctas
+  );
+
+  let assemblyFormat = [{
+    $barrier (`,` $pred^)? attr-dict `:` qualified(type($barrier))
+  }];
+
+  let builders = [
+    OpBuilder<(ins "Value":$barrier, CArg<"bool", "false">:$two_ctas), [{
+      build($_builder, $_state, barrier, /*pred=*/Value(), two_ctas);
+    }]>,
+  ];
 }
 
 def TTNG_TMEMLoadOp : TTNG_Op<"tmem_load"> {
@@ -698,6 +733,71 @@ def TTNG_TMEMCopyOp : TTNG_Op<"tmem_copy"> {
 
   let assemblyFormat = [{$src `,` $dst `,` $barrier attr-dict `:` functional-type(operands, results)}];
   let hasVerifier = 1;
+}
+
+def TTNG_ReinterpretTensorDescOp : TTNG_Op<"reinterpret_tensor_descriptor", [Pure]> {
+  let summary = "Reinterpret a pointer as a tensor descriptor";
+
+  let description = [{
+     This Op exists to help the transition from untyped raw TMA objects to typed Tensor descriptor objects.
+     Ideally, we can remove this once the APIs are fully fleshed out.
+  }];
+
+  let arguments = (ins TT_Ptr:$rawDesc);
+  let results = (outs TT_TensorDescType:$result);
+
+  let assemblyFormat = [{
+    $rawDesc attr-dict `:` qualified(type($rawDesc))  `to` qualified(type($result))
+  }];
+}
+
+def TTNG_TensormapCreateOp: TTNG_Op<
+  "tensormap_create",
+  [
+    MemoryEffects<[MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>,
+    AttrSizedOperandSegments,
+  ]
+> {
+  let summary = "Create a new TMA descriptor on device";
+  let arguments = (
+      ins
+      TT_PtrType:$desc_ptr,
+      TT_PtrType:$global_address,
+      Variadic<I32>:$box_dim,
+      Variadic<I32>:$global_dim,
+      Variadic<I64>:$global_stride,
+      Variadic<I32>:$element_stride,
+      ConfinedAttr<I32Attr, [IntNonNegative, IntMaxValue<15>]>:$elem_type,
+      ConfinedAttr<I32Attr, [IntNonNegative, IntMaxValue<2>]>:$interleave_layout,
+      ConfinedAttr<I32Attr, [IntNonNegative, IntMaxValue<3>]>:$swizzle_mode,
+      ConfinedAttr<I32Attr, [IntNonNegative, IntMaxValue<1>]>:$fill_mode
+  );
+  let extraClassDeclaration = [{
+      int32_t getRank() {
+          return getBoxDim().size();
+      }
+  }];
+  let assemblyFormat = [{
+    $desc_ptr `,` $global_address `,`
+    `[` $box_dim `]` `,`
+    `[` $global_dim `]` `,`
+    `[` $global_stride `]` `,`
+    `[` $element_stride `]`
+    attr-dict `:` functional-type(operands, results)
+  }];
+
+  let hasVerifier = 1;
+}
+
+def TTNG_TensormapFenceproxyAcquireOp: TTNG_Op<
+  "tensormap_fenceproxy_acquire",
+  [MemoryEffects<[MemWrite<GlobalMemory>]>]
+> {
+  let summary = "Acquire fence on a tensormap object";
+  let arguments = (ins TT_PtrType:$desc_ptr);
+  let assemblyFormat = [{
+    $desc_ptr attr-dict `:` qualified(type($desc_ptr))
+  }];
 }
 
 #endif

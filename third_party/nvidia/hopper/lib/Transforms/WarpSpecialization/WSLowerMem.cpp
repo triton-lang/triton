@@ -57,8 +57,8 @@ createAsyncCopy(const DenseMap<Channel *, Value> &bufferMap, Channel *c,
 
   // Get shape, layout and type of a slice
   auto sliceShape = tensorType.getShape();
-  auto sharedLayout = ttg::NVMMASharedEncodingAttr::get(
-      context, sliceShape, order, CTALayout, elemType, /*fp4Padded*/ false);
+  auto sharedLayout =
+      dyn_cast<triton::gpu::MemDescType>(buffer.getType()).getEncoding();
   auto sliceType = RankedTensorType::get(sliceShape, elemType, sharedLayout);
 
   Attribute sharedMemorySpace =
@@ -118,8 +118,8 @@ createLocalCopy(const DenseMap<Channel *, Value> &bufferMap, Channel *channel,
 
   // Get shape, layout and type of a slice
   auto sliceShape = tensorType.getShape();
-  auto sharedLayout = ttg::NVMMASharedEncodingAttr::get(
-      context, sliceShape, order, CTALayout, elemType, /*fp4Padded*/ false);
+  auto sharedLayout =
+      dyn_cast<triton::gpu::MemDescType>(buffer.getType()).getEncoding();
   auto sliceType = RankedTensorType::get(sliceShape, elemType, sharedLayout);
 
   Attribute sharedMemorySpace =
@@ -205,8 +205,8 @@ Value getBufferForPipelineStage(OpBuilderWithAsyncTaskIds &builder,
 
   // Get shape, layout and type of a slice
   auto sliceShape = tensorType.getShape();
-  auto sharedLayout = ttg::NVMMASharedEncodingAttr::get(
-      context, sliceShape, order, CTALayout, elemType, /*fp4Padded*/ false);
+  auto sharedLayout =
+      dyn_cast<triton::gpu::MemDescType>(buffer.getType()).getEncoding();
   auto sliceType = RankedTensorType::get(sliceShape, elemType, sharedLayout);
 
   Attribute sharedMemorySpace =
@@ -258,12 +258,10 @@ Operation *optimizeTMALoads(OpBuilderWithAsyncTaskIds &builder,
     builder.setInsertionPoint(tmaLoad);
     auto pipelineBuffer = getBufferForPipelineStage(builder, tmaLoad.getType(),
                                                     buffer, bufferIdx, true);
-    Value tmaPtr =
-        builder
-            .createWithAsyncTaskIds<triton::nvidia_gpu::TensorDescToTMAPtrOp>(
-                loc, tmaLoad.getDesc());
+    // FIXME: translateTMAIndices
     copy = builder.createWithAsyncTaskIds<ttng::AsyncTMACopyGlobalToLocalOp>(
-        loc, tmaPtr, tmaLoad.getIndices(), prodBarrier, pipelineBuffer, pred);
+        loc, tmaLoad.getDesc(), tmaLoad.getIndices(), prodBarrier,
+        pipelineBuffer, pred);
   }
 
   // Create a wait_barrier before the first consumer.

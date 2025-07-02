@@ -57,26 +57,6 @@ jobs:
             ~/.triton/nvidia
             ~/.triton/json
           key: ${{ runner.os }}-${{ runner.arch }}-llvm-${{ steps.cache-key.outputs.llvm }}-nvidia-${{ steps.cache-key.outputs.nvidia }}-json-${{ steps.cache-key.outputs.json }}
-      - # Cache ~/.cache/ccache to speed up compilation.
-        #
-        # On branch `main` we always start from an empty cache, i.e. we skip the
-        # "restore" step.  This is to prevent the caches from accumulating stale
-        # files over time.
-        name: Restore cache of ccache and Triton compilation artifacts
-        id: restore-build-cache
-        if: github.ref != 'refs/heads/main'
-        uses: actions/cache/restore@v4
-        with:
-          path: |
-            ~/.ccache
-          # Restore the most recent cache entry.
-          restore-keys: |
-            triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ env.RUNNER_TYPE }}-llvm-${{ steps.cache-key.outputs.llvm }}-
-            triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ env.RUNNER_TYPE }}-
-          # We expect this cache key never to hit and for us to fall back
-          # unconditionally to the restore-key, so it doesn't actually matter
-          # what we put here (so long as it doesn't hit an existing key).
-          key: triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ env.RUNNER_TYPE }}-llvm-${{ steps.cache-key.outputs.llvm }}-${{ steps.cache-key.outputs.datetime }}
       - name: Inspect cache directories
         run: |
           mkdir -p ~/.triton
@@ -108,7 +88,7 @@ jobs:
           if [ "${{ matrix.runner[0] }}" == "nvidia-gb200" ]; then
             source /venv/bin/activate
           fi
-          make test-unit
+          make NUM_PROCS=24 test-unit
       - name: Run interpreter tests
         if: ${{ matrix.runner[0] == 'nvidia-h100' }}
         run: make test-interpret
@@ -130,15 +110,3 @@ jobs:
 
           mkdir -p ~/.ccache
           du -h -d 1 ~/.ccache
-      - # If we're on branch `main`, save the ccache Triton compilation artifacts
-        # to the cache so they can be used by other (non-main) CI runs.
-        #
-        # (It wouldn't be a problem to save the cache on every run, because github
-        # evicts cache entries LRU, but maybe this saves a bit of time in CI.)
-        name: Save ccache and Triton compilation artifacts to cache
-        if: github.ref == 'refs/heads/main'
-        uses: actions/cache/save@v4
-        with:
-          path: |
-            ~/.ccache
-          key: triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ env.RUNNER_TYPE }}-llvm-${{ steps.cache-key.outputs.llvm }}-${{ steps.cache-key.outputs.datetime }}

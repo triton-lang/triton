@@ -64,6 +64,8 @@ public:
 
   bool isReduceWithinCTA();
 
+  bool isAssociative();
+
 private:
   triton::ReduceOp op;
   ArrayRef<int64_t> srcShape;

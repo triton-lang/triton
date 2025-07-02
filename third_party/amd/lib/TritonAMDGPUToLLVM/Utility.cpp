@@ -1,6 +1,7 @@
 #include "Utility.h"
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "TritonAMDGPUToLLVM/GCNAsmFormat.h"
+#include "TritonAMDGPUToLLVM/TargetUtils.h"
 #include "mlir/Dialect/LLVMIR/LLVMTypes.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/IR/PatternMatch.h"
@@ -137,8 +138,17 @@ static Value shuffleCommonImpl(Location loc, RewriterBase &rewriter,
       Value lineId = b.xor_(threadId, stride);
       return bpermute(lineId);
     } else if (strideInt == 16) {
-      Value offset = b.i32_val(0x401F);
-      return rewriter.create<ROCDL::DsSwizzleOp>(loc, valType, val, offset);
+      if (isRDNA(isaFamily)) {
+        // Lane i in the upper 16 lanes reads the value from lane i in the lower
+        // 16 lanes and vice versa.
+        Value select_lo = b.i32_val(0x76543210);
+        Value select_hi = b.i32_val(0xfedcba98);
+        return rewriter.create<ROCDL::PermlaneX16Op>(
+            loc, valType, val, val, select_lo, select_hi, true, false);
+      } else {
+        Value offset = b.i32_val(0x401F);
+        return rewriter.create<ROCDL::DsSwizzleOp>(loc, valType, val, offset);
+      }
     } else {
       if (!llvm::is_contained({ISAFamily::CDNA2, ISAFamily::CDNA3,
                                ISAFamily::CDNA4, ISAFamily::RDNA3},
@@ -691,65 +701,11 @@ bool isChainDotTail(tt::DotOpInterface dotOp) {
   Operation *opA = dotOp.getA().getDefiningOp();
   if (!opA)
     return false;
-  getBackwardSlice(opA, &bwdSlices, bwdOpt);
+  (void)getBackwardSlice(opA, &bwdSlices, bwdOpt);
   if (llvm::find_if(bwdSlices, [](Operation *op) {
         return isa<tt::DotOpInterface>(op);
       }) != bwdSlices.end())
     return true;
   return false;
 }
-
-namespace {
-AliasScopeDomainAttr getLoadScopeDomain(MLIRContext *ctx) {
-  Builder b(ctx);
-  return b.getAttr<AliasScopeDomainAttr>(
-      b.getStringAttr("amdgpu.AsyncOps"),
-      b.getStringAttr(
-          "Domain to hold alias scopes to specify aliasing information between "
-          "AsyncCopyGlobalToLocal, BufferLoadToLocal and LocalLoad ops"));
-}
-
-AliasScopeAttr getAsyncCopyScope(MLIRContext *ctx) {
-  Builder b(ctx);
-  auto name = b.getStringAttr("amdgpu.AsyncCopies");
-  auto desc = b.getStringAttr(
-      "Scope containing all AsyncCopyGlobalToLocal and BufferLoadToLocal ops");
-  return b.getAttr<LLVM::AliasScopeAttr>(name, getLoadScopeDomain(ctx), desc);
-}
-
-AliasScopeAttr getLoadCopyScope(MLIRContext *ctx) {
-  Builder b(ctx);
-  auto name = b.getStringAttr("amdgpu.LocalLoads");
-  auto desc = b.getStringAttr("Scope containing all LocalLoad ops");
-  return b.getAttr<LLVM::AliasScopeAttr>(name, getLoadScopeDomain(ctx), desc);
-}
-} // namespace
-
-void addAsyncCopyAliasScope(AliasAnalysisOpInterface directToLdsOp) {
-  auto ctx = directToLdsOp->getContext();
-  Builder b(ctx);
-  directToLdsOp.setAliasScopes(b.getArrayAttr(getAsyncCopyScope(ctx)));
-}
-
-void addLocalLoadNoAliasScope(triton::gpu::LocalLoadOp localLoadOp,
-                              AliasAnalysisOpInterface llLoadOp) {
-  auto token = localLoadOp.getToken();
-  if (!token || !token.getDefiningOp<tt::gpu::AsyncWaitOp>())
-    return;
-
-  return addLocalLoadNoAliasScope(llLoadOp);
-}
-
-void addLocalLoadNoAliasScope(AliasAnalysisOpInterface llLoadOp) {
-  auto ctx = llLoadOp->getContext();
-
-  // Do not alias with AsyncCopies
-  auto noAliasScopes = ArrayAttr::get(ctx, getAsyncCopyScope(ctx));
-  llLoadOp.setNoAliasScopes(noAliasScopes);
-
-  // Add to different scope as ops without any scope alias with everything
-  auto aliasScopes = ArrayAttr::get(ctx, getLoadCopyScope(ctx));
-  llLoadOp.setAliasScopes(aliasScopes);
-}
-
 } // namespace mlir::LLVM::AMD
