@@ -112,7 +112,8 @@ struct ConvertTritonAMDGPUToLLVM
       TritonLLVMFunctionConversionTarget funcTarget(*context);
       RewritePatternSet funcPatterns(context);
       mlir::triton::populateFuncOpConversionPattern(
-          typeConverter, funcPatterns, targetInfo, patternBenefitDefault);
+          typeConverter, funcPatterns, targetInfo, patternBenefitDefault,
+          /*symTable=*/nullptr);
       mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
                                                             funcPatterns);
       if (failed(
