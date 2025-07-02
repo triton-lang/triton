@@ -26,8 +26,10 @@ using namespace mlir::triton;
 
 struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
   FuncOpConversion(LLVMTypeConverter &converter,
-                   const TargetInfoBase &targetInfo, PatternBenefit benefit)
-      : ConvertOpToLLVMPattern(converter, benefit), targetInfo(targetInfo) {}
+                   const TargetInfoBase &targetInfo, PatternBenefit benefit,
+                   SymbolTableCollection *symbolTables)
+      : ConvertOpToLLVMPattern(converter, benefit), targetInfo(targetInfo),
+        symbolTables(symbolTables) {}
 
   /// Only retain those attributes that are not constructed by
   /// `LLVMFuncOp::build`. If `filterArgAttrs` is set, also filter out argument
@@ -148,7 +150,7 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
 
     FailureOr<LLVM::LLVMFuncOp> maybeNewFuncOp =
         mlir::convertFuncOpToLLVMFuncOp(amendedFuncOp, rewriter,
-                                        *getTypeConverter());
+                                        *getTypeConverter(), symbolTables);
     if (failed(maybeNewFuncOp)) {
       return failure();
     }
@@ -198,12 +200,16 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
 
 private:
   const TargetInfoBase &targetInfo;
+  // Store a pointer to the single, pass-wide symbol table
+  SymbolTableCollection *symbolTables;
 };
 
 } // namespace
 
 void mlir::triton::populateFuncOpConversionPattern(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    const TargetInfoBase &targetInfo, PatternBenefit benefit) {
-  patterns.add<FuncOpConversion>(typeConverter, targetInfo, benefit);
+    const TargetInfoBase &targetInfo, PatternBenefit benefit,
+    SymbolTableCollection *symbolTables) {
+  patterns.add<FuncOpConversion>(typeConverter, targetInfo, benefit,
+                                 symbolTables);
 }

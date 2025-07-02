@@ -95,7 +95,8 @@ void populateSPMDOpToLLVMPattern(LLVMTypeConverter &typeConverter,
 void populateFuncOpConversionPattern(LLVMTypeConverter &typeConverter,
                                      RewritePatternSet &patterns,
                                      const TargetInfoBase &targetInfo,
-                                     PatternBenefit benefit);
+                                     PatternBenefit benefit,
+                                     SymbolTableCollection *symbolTables);
 
 void populatePrintOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                   RewritePatternSet &patterns,
