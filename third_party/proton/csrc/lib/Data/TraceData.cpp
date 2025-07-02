@@ -448,7 +448,7 @@ void dumpKernelMetricTrace(
 } // namespace
 
 void TraceData::dumpChromeTrace(std::ostream &os) const {
-  auto events = trace->getEvents();
+  auto &events = trace->getEvents();
   // stream id -> trace event
   std::map<size_t, std::vector<Trace::TraceEvent>> streamTraceEvents;
   uint64_t minTimeStamp = std::numeric_limits<uint64_t>::max();
