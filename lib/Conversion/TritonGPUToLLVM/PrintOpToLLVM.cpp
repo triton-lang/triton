@@ -177,12 +177,39 @@ struct PrintOpConversion : public ConvertOpToLLVMPattern<triton::PrintOp> {
   std::string getFormatSubstr(Value value, bool hex = false,
                               std::optional<int> width = std::nullopt,
                               bool isSigned = false) const {
-    auto formatSubstr = mlir::getFormatSubstr(value, hex, width, isSigned);
-    if (!formatSubstr.has_value()) {
-      assert(false && "not supported type");
-      return "";
+    Type type = value.getType();
+    // If the `value` is a pointer, just return %p.
+    if (isa<LLVM::LLVMPointerType>(type)) {
+      return "%p";
     }
-    return *formatSubstr;
+    // Hex is "0x%0nx" or "0x%0nllx", where n is the number of hex digits in the
+    // type (so 4 for fp16, 8 for int32, 16 for int64).
+    if (hex) {
+      // Ignore `width` for `hex` values, pad to typeWidth.
+      std::string ret =
+          "0x%0" + std::to_string(type.getIntOrFloatBitWidth() / 4);
+      if (type.getIntOrFloatBitWidth() > 32) {
+        ret += "ll";
+      }
+      ret += "x";
+      return ret;
+    }
+
+    std::string prefix = "%";
+    if (width.has_value()) {
+      prefix += std::to_string(*width);
+    }
+
+    if (type.isBF16() || type.isF16() || type.isF32() || type.isF64()) {
+      return prefix + "f";
+    } else if (type.isInteger()) {
+      if (type.getIntOrFloatBitWidth() == 64)
+        return prefix + (isSigned ? "lli" : "llu");
+      else
+        return prefix + (isSigned ? "i" : "u");
+    }
+    assert(false && "not supported type");
+    return "";
   }
 
   // Returns a Value for the format string, which you can reuse. Writes the byte

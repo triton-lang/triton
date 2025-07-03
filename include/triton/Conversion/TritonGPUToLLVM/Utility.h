@@ -593,11 +593,6 @@ inline bool isCanonicalIndex(unsigned index, unsigned freeVarMask) {
 // group code isolated from above by invoking this function.
 void makeAllWarpGroupsIsolatedFromAbove(Operation *op);
 
-// Get the format string for a value
-std::optional<std::string>
-getFormatSubstr(Value value, bool hex = false,
-                std::optional<int> width = std::nullopt, bool isSigned = false);
-
 } // namespace mlir
 
 #endif
