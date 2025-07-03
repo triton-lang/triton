@@ -261,85 +261,54 @@ struct WgBuilder {
   IRMapping mapping;
 };
 
-void cloneOpsInBlock(Block *block, const SmallVector<WgBuilder> &builders,
+void cloneOpsInBlock(Block *block, SmallVector<WgBuilder> &builders,
                      const WarpSchedule &schedule);
 
-void cloneForOp(scf::ForOp forOp, const SmallVector<WgBuilder> &builders,
+void cloneForOp(scf::ForOp forOp, SmallVector<WgBuilder> &builders,
                 const WarpSchedule &schedule) {
-  //   auto lb = b.mapping.lookup(forOp.getLowerBound());
-  //   auto ub = b.mapping.lookup(forOp.getUpperBound());
-  //   auto step = b.mapping.lookup(forOp.getStep());
-  //   SmallVector<Value> initArgs;
-  //   for (auto [idx, arg] : llvm::enumerate(forOp.getInitArgs())) {
-  //     auto groups = getGroupsIdx(forOp, idx);
-  //     if (groups.count(group) > 0)
-  //       initArgs.push_back(b.mapping.lookup(arg));
-  //   }
-  //   auto newForOp =
-  //       b.builder.create<scf::ForOp>(forOp.getLoc(), lb, ub, step, initArgs);
-  //   newForOps[group] = newForOp;
-  //   setGroups(newForOp, {group});
-  //   b.mapping.map(forOp.getInductionVar(), newForOp.getInductionVar());
+  for (auto &b : builders) {
+    // TODO: Mapping?
+    auto lb = forOp.getLowerBound();
+    auto ub = forOp.getUpperBound();
+    auto step = forOp.getStep();
+    SmallVector<Value> initArgs;
+    for (auto [idx, arg] : llvm::enumerate(forOp.getInitArgs())) {
+      initArgs.push_back(arg);
+    }
+    auto newForOp =
+        b.builder.create<scf::ForOp>(forOp.getLoc(), lb, ub, step, initArgs);
 
-  //   // map the results of the forOp to the newForOp
-  //   auto oldIterArgs = forOp.getRegionIterArgs();
-  //   auto newIterArgs = newForOp.getRegionIterArgs();
-  //   for (int oldIdx = 0, newIdx = 0; oldIdx < oldIterArgs.size(); ++oldIdx) {
-  //     auto groups = getGroupsIdx(forOp, oldIdx);
-  //     if (groups.count(group) > 0) {
-  //       auto oldArg = oldIterArgs[oldIdx];
-  //       auto newArg = newIterArgs[newIdx++];
-  //       b.mapping.map(oldArg, newArg);
-  //     }
-  //   }
+    b.mapping.map(forOp.getInductionVar(), newForOp.getInductionVar());
+    // map the results of the forOp to the newForOp
+    auto oldIterArgs = forOp.getRegionIterArgs();
+    auto newIterArgs = newForOp.getRegionIterArgs();
+    for (int oldIdx = 0, newIdx = 0; oldIdx < oldIterArgs.size(); ++oldIdx) {
+      auto oldArg = oldIterArgs[oldIdx];
+      auto newArg = newIterArgs[newIdx++];
+      b.mapping.map(oldArg, newArg);
+    }
 
-  //   for (int oldIdx = 0, newIdx = 0; oldIdx < forOp.getResults().size();
-  //        ++oldIdx) {
-  //     auto groups = getGroupsIdx(forOp, oldIdx);
-  //     if (groups.count(group) > 0) {
-  //       auto oldArg = forOp.getResult(oldIdx);
-  //       auto newArg = newForOp.getResult(newIdx++);
-  //       b.mapping.map(oldArg, newArg);
-  //     }
-  //   }
-  //   // set builder insertion point to the start of the newForOp body
-  //   b.builder.setInsertionPointToStart(newForOp.getBody());
-  // }
-  // // resursive clone ops in the forOp body
+    for (int oldIdx = 0, newIdx = 0; oldIdx < forOp.getResults().size();
+         ++oldIdx) {
+      auto oldArg = forOp.getResult(oldIdx);
+      auto newArg = newForOp.getResult(newIdx++);
+      b.mapping.map(oldArg, newArg);
+    }
+    // set builder insertion point to the start of the newForOp body
+    b.builder.setInsertionPointToStart(newForOp.getBody());
+  }
+
+  // resursive clone ops in the forOp body
   cloneOpsInBlock(forOp.getBody(), builders, schedule);
 }
 
-void cloneOpsInBlock(Block *block, const SmallVector<WgBuilder> &builders,
+void cloneOpsInBlock(Block *block, SmallVector<WgBuilder> &builders,
                      const WarpSchedule &schedule) {
   // OpBuilder topBuilder(wsFunc);
   // topBuilder.setInsertionPointToStart(&wsFunc.getBody().front());
   IRMapping topMapping;
   for (auto &op_ : *block) {
     auto op = &op_;
-
-    if (isa<triton::ReturnOp>(op))
-      continue;
-
-    // auto producerGroups = getGroups(op);
-
-    // if (isa<LocalAllocOp, ttng::TMEMAllocOp, ttng::ArefCreateOp>(op) &&
-    //     producerGroups.empty()) {
-    //   // allocs w/o group annotation are reserved for aref_creation
-    //   // and cloned to the top -evel
-    //   auto clonedOp = topBuilder.clone(*op, topMapping);
-    //   for (auto [oldResult, newResult] :
-    //        llvm::zip(op->getResults(), clonedOp->getResults()))
-    //     for (auto &[_, b] : opBuilders) {
-    //       b.mapping.map(oldResult, newResult);
-    //       topMapping.map(oldResult, newResult);
-    //     }
-    //   continue;
-    // }
-
-    if (!isa<scf::YieldOp>(op)) {
-      // only Yield doesn't have annotation
-      // assert(!producerGroups.empty());
-    }
 
     if (auto forOp = dyn_cast<scf::ForOp>(op)) {
       cloneForOp(forOp, builders, schedule);
@@ -348,34 +317,39 @@ void cloneOpsInBlock(Block *block, const SmallVector<WgBuilder> &builders,
       // } else if (auto reduceOp = dyn_cast<triton::ReduceOp>(op)) {
       //   cloneReduceOp(reduceOp, wsFunc, opBuilders);
     } else if (auto yieldOp = dyn_cast<scf::YieldOp>(op)) {
-      // yield %a0, %a1, .. , %an
-      // each group yields its own operand
-      // Map<GroupId, SmallVector<Value>> yieldOperands;
-      // for (auto [idx, operand] : llvm::enumerate(yieldOp.getOperands())) {
-      //   auto parentOp = yieldOp->getParentOp();
-      //   for (auto groupName : getGroupsIdx(parentOp, idx))
-      //     yieldOperands[groupName].push_back(
-      //         opBuilders.at(groupName).mapping.lookup(operand));
-      // }
-
-      // for (auto &[groupName, operands] : yieldOperands) {
-      //   auto &b = opBuilders.at(groupName);
-      //   b.builder.create<scf::YieldOp>(op->getLoc(), operands);
-      // }
+      for (auto &builder : builders) {
+        SmallVector<Value> newYieldOperands;
+        for (auto operand : yieldOp.getOperands()) {
+          newYieldOperands.push_back(builder.mapping.lookupOrDefault(operand));
+        }
+        builder.builder.create<scf::YieldOp>(op->getLoc(), newYieldOperands);
+      }
     } else {
-
       // all remaining ops are expected to be regionless
       assert(op->getNumRegions() == 0);
 
-      // // clone op into each producer group
-      // for (auto producerGroup : producerGroups) {
-      //   auto &b = opBuilders.at(producerGroup);
-      //   auto newOp = b.builder.clone(*op, b.mapping);
-      //   setGroups(newOp, {producerGroup});
-      //   for (auto [oldResult, newResult] :
-      //        llvm::zip(op->getResults(), newOp->getResults()))
-      //     b.mapping.map(oldResult, newResult);
-      // }
+      auto partition = schedule.getPartition(op);
+
+      if (!partition) {
+        continue;
+      }
+
+      auto doClone = [&](WgBuilder &builder, Operation *op) {
+        auto newOp = builder.builder.clone(*op, builder.mapping);
+        for (auto [oldResult, newResult] :
+             llvm::zip(op->getResults(), newOp->getResults())) {
+          builder.mapping.map(oldResult, newResult);
+        }
+      };
+
+      if (partition == schedule.getRootPartition()) {
+        for (auto &builder : builders) {
+          doClone(builder, op);
+        }
+      } else {
+        auto &builder = builders[partition->getIndex()];
+        doClone(builder, op);
+      }
     }
   }
 }
@@ -395,12 +369,11 @@ LogicalResult partitionLoopV2(scf::ForOp loop) {
                                           numPartitions);
 
   SmallVector<WgBuilder> builders;
-
   for (Region &region : wgOp.getPartitionRegions()) {
     OpBuilder wgBuilder = OpBuilder::atBlockBegin(&region.emplaceBlock());
-    wgBuilder.create<nvws::WarpGroupReturnOp>(wgOp.getLoc());
+    auto wgRt = wgBuilder.create<nvws::WarpGroupReturnOp>(wgOp.getLoc());
+    wgBuilder.setInsertionPoint(wgRt);
     builders.push_back({wgBuilder, IRMapping()});
-    ;
   }
 
   cloneForOp(loop, builders, schedule);
