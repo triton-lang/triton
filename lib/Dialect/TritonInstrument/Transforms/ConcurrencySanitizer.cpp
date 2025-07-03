@@ -188,7 +188,7 @@ private:
               mmav5Op.getA(), shBuffers, writeBarriersAlloc, writeBarriersType);
           for (auto barrier : mmav5Op.getBarriers()) {
             b.create<tti::ExperimentalMarkAsReadOp>(
-                mmav5Op.getA(), barrier, shBuffers, readBarriersAlloc,
+                mmav5Op.getA(), barrier, shBuffers, barriers, readBarriersAlloc,
                 readBarriersType);
           }
         }
@@ -198,7 +198,7 @@ private:
               mmav5Op.getB(), shBuffers, writeBarriersAlloc, writeBarriersType);
           for (auto barrier : mmav5Op.getBarriers()) {
             b.create<tti::ExperimentalMarkAsReadOp>(
-                mmav5Op.getB(), barrier, shBuffers, readBarriersAlloc,
+                mmav5Op.getB(), barrier, shBuffers, barriers, readBarriersAlloc,
                 readBarriersType);
           }
         }
@@ -209,7 +209,7 @@ private:
         b.create<tti::ExperimentalClearWriteBarrierOp>(
             waitOp.getAlloc(), writeBarriersAlloc, writeBarriersType);
         b.create<tti::ExperimentalClearReadBarrierOp>(
-            waitOp.getAlloc(), readBarriersAlloc, readBarriersType);
+            waitOp.getAlloc(), barriers, readBarriersAlloc, readBarriersType);
       }
     });
   }
@@ -236,7 +236,7 @@ private:
             .getInt();
     auto ctaLayout = ttg::CTALayoutAttr::getDefault(ctx, /*rank=*/2);
     return ttg::BlockedEncodingAttr::get(ctx,
-                                         /*sizePerThread=*/{1, 1},
+                                         /*sizePerThread=*/{buffers, barriers},
                                          /*threadsPerWarp=*/{1, 32},
                                          /*warpsPerCTA=*/{1, 1},
                                          /*order=*/{0, 1}, ctaLayout);
@@ -312,43 +312,6 @@ private:
     return tensor;
   }
 
-  Operation *createStoreScratchMemory(ImplicitLocOpBuilder &b, Value alloc,
-                                      Value tensor,
-                                      RankedTensorType tensorType) {
-    auto encoding = cast<ttg::BlockedEncodingAttr>(tensorType.getEncoding());
-    Value ptrTensor = b.create<tt::SplatOp>(
-        RankedTensorType::get(tensorType.getShape(), alloc.getType(), encoding),
-        alloc);
-    auto offsetsType =
-        RankedTensorType::get(tensorType.getShape(), b.getI32Type(), encoding);
-    SmallVector<int> strides(tensorType.getRank());
-    strides[0] = 1;
-    for (int i = 1; i < tensorType.getRank(); ++i) {
-      strides[i] = strides[i - 1] * tensorType.getShape()[i - 1];
-    }
-    for (int i = 0; i < tensorType.getRank(); ++i) {
-      auto partialEncoding = getSingleDimSliceEncoding(encoding, i);
-      auto arangeType = RankedTensorType::get({tensorType.getShape()[i]},
-                                              b.getI32Type(), partialEncoding);
-      auto arange =
-          b.create<tt::MakeRangeOp>(arangeType, 0, tensorType.getShape()[i]);
-      auto cstStride =
-          createConstIntTensor(b, strides[i], arangeType.getElementType(),
-                               arangeType.getShape(), partialEncoding);
-      auto arangeTimesStride =
-          b.create<arith::MulIOp>(arangeType, arange, cstStride);
-      auto expandDims = expandAllSlicedDims(b, arangeTimesStride);
-      if (cast<RankedTensorType>(expandDims.getType()).getShape() !=
-          tensorType.getShape()) {
-        expandDims = b.create<tt::BroadcastOp>(offsetsType, expandDims);
-      }
-      ptrTensor =
-          b.create<tt::AddPtrOp>(ptrTensor.getType(), ptrTensor, expandDims);
-    }
-    return b.create<tt::StoreOp>(ptrTensor, tensor, tt::CacheModifier::NONE,
-                                 tt::EvictionPolicy::NORMAL);
-  }
-
   Value createInitializedScratchMemory(ImplicitLocOpBuilder &b,
                                        TypedValue<RankedTensorType> tensor) {
     auto encoding = tensor.getType().getEncoding();
@@ -359,7 +322,7 @@ private:
     Type ptrType = triton::getPointerType(elType);
     auto alloc =
         b.create<tt::gpu::GlobalScratchAllocOp>(ptrType, sizeInBytes, elSize);
-    createStoreScratchMemory(b, alloc, tensor, tensor.getType());
+    createStoreScratchMemory(b, b.getLoc(), alloc, tensor, tensor.getType());
     return alloc;
   }
 

@@ -72,6 +72,7 @@ def TTI_ExperimentalCheckOutstandingReadsOp : TTI_Op<"experimental_check_outstan
 
 
 // TODO: This should not be pure I guess
+// TODO: Add verifiers for the type of the scratch buffers be consistent with the dimensions of buffers/barriers
 def TTI_ExperimentalMarkAsWriteOp : TTI_Op<"experimental_mark_as_write", [Pure]> {
   let summary = "mark a buffer as being written to using mbar as a guard";
   let description = [{
@@ -99,11 +100,12 @@ def TTI_ExperimentalMarkAsReadOp : TTI_Op<"experimental_mark_as_read", [Pure]> {
     TTG_MemDescType:$buf,
     TTG_MemDescType:$mbar,
     TT_Tensor:$buffers,
+    TT_Tensor:$barriers,
     TT_PtrLike:$readBars,
     TypeAttr:$readBarsType
   );
   let assemblyFormat = [{
-    $buf `,` $mbar `{` $buffers `,` $readBars `(` $readBarsType `)` `}` attr-dict `:` type($buf) `,` type($mbar) `,` type($buffers) `,` type($readBars)
+    $buf `,` $mbar `{` $buffers `,` $barriers `,` $readBars `(` $readBarsType `)` `}` attr-dict `:` type($buf) `,` type($mbar) `,` type($buffers) `,` type($barriers) `,` type($readBars)
   }];
 }
 
@@ -131,11 +133,12 @@ def TTI_ExperimentalClearReadBarrierOp : TTI_Op<"experimental_clear_read_barrier
   }];
   let arguments = (ins
     TTG_MemDescType:$mbar,
+    TT_Tensor:$barriers,
     TT_PtrLike:$readBars,
     TypeAttr:$readBarsType
   );
   let assemblyFormat = [{
-    $mbar `{` $readBars `(` $readBarsType `)` `}` attr-dict `:` type($mbar) `,` type($readBars)
+    $mbar `{` $barriers `,` $readBars `(` $readBarsType `)` `}` attr-dict `:` type($mbar) `,` type($barriers) `,` type($readBars)
   }];
 }
 

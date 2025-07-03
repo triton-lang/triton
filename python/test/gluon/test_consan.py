@@ -159,69 +159,35 @@ def test_tma_interleave_kernel(FAILURE, device):
 
 
 @gluon.jit
-def tcgen5_mma_kernel(input_desc, XBLOCK: ttgl.constexpr, acc_layout: ttgl.constexpr):
+def tcgen5_mma_kernel(input_desc, XBLOCK: ttgl.constexpr, FAILURE: ttgl.constexpr):
+    acc_layout: ttgl.constexpr = blackwell.TensorMemoryLayout([XBLOCK, XBLOCK], unpacked=True, cta_split_num=[1, 1])
     smemA = ttgl.allocate_shared_memory(ttgl.float32, [XBLOCK, XBLOCK], input_desc.layout)
     smemB = ttgl.allocate_shared_memory(ttgl.float32, [XBLOCK, XBLOCK], input_desc.layout)
-    bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
+    bar = ttgl.allocate_shared_memory(ttgl.int64, [2, 1], mbarrier.MBarrierLayout())
     acc = blackwell.allocate_tensor_memory(ttgl.float32, [XBLOCK, XBLOCK], acc_layout)
-    mbarrier.init(bar, count=1)
+    mbarrier.init(bar.index(0), count=1)
+    mbarrier.init(bar.index(1), count=1)
 
-    blackwell.tcgen05_mma(smemA, smemB.permute([1, 0]), acc, mbarriers=[bar])
+    blackwell.tcgen05_mma(smemA, smemB.permute([1, 0]), acc, mbarriers=[bar.index(0)])
 
-    mbarrier.invalidate(bar)
+    if not FAILURE:
+        mbarrier.wait(bar.index(0), 0)
+
+    tma.async_copy_global_to_shared(input_desc, [0, 0], bar.index(1), smemA)
+
+    mbarrier.invalidate(bar.index(0))
+    mbarrier.invalidate(bar.index(1))
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer")
-def test_tcgen5_mma_kernel(device):
-    knobs.compilation.enable_experimental_consan = True
-    os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
+@pytest.mark.parametrize("FAILURE", [True, False])
+def test_tcgen5_mma(FAILURE, device):
 
-    XBLOCK = 128
-    input = torch.randn((XBLOCK, XBLOCK), device=device, dtype=torch.float32)
-    shared_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=32, rank=2)
-    input_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(input, [XBLOCK, XBLOCK], shared_layout)
-    acc_layout = blackwell.TensorMemoryLayout([XBLOCK, XBLOCK], unpacked=True)
+    def check_stderr(stderr):
+        assert "Buffer being accessed has outstanding reads" in stderr
 
-    # ConSan requires a global memory allocation
-    def alloc_fn(size: int, alignment: int, stream: Optional[int]):
-        return torch.empty(size, device="cuda", dtype=torch.int8)
+    run_kernel_in_process("tcgen5_mma_kernel", FAILURE, device, check_stderr)
 
-    triton.set_allocator(alloc_fn)
-
-    tcgen5_mma_kernel[(1, )](input_desc, XBLOCK, acc_layout, num_warps=1)
-    getattr(torch, device).synchronize()
-
-
-# @gluon.jit
-# def garbage_buffer_access_kernel(input_desc, XBLOCK: ttgl.constexpr):
-#     smem = ttgl.allocate_shared_memory(ttgl.float32, [1, XBLOCK, XBLOCK], input_desc.layout)
-#     bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
-#     mbarrier.init(bar, count=1)
-#     mbarrier.expect(bar, XBLOCK * XBLOCK * ttgl.float32.primitive_bitwidth // 8)
-#     tma.async_copy_global_to_shared(input_desc, [0, 0], bar, smem.index(1))
-#     mbarrier.wait(bar, 0)
-#     mbarrier.invalidate(bar)
-
-# def run_garbage_buffer_access(device):
-#     knobs.compilation.enable_experimental_consan = True
-#     os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
-
-#     XBLOCK = 128
-#     input = torch.randn((XBLOCK, XBLOCK), device=device, dtype=torch.float32)
-#     shared_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=32, rank=2)
-#     input_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(input, [XBLOCK, XBLOCK], shared_layout)
-
-#     # ConSan requires a global memory allocation
-#     def alloc_fn(size: int, alignment: int, stream: Optional[int]):
-#         return torch.empty(size, device="cuda", dtype=torch.int8)
-
-#     triton.set_allocator(alloc_fn)
-
-#     garbage_buffer_access_kernel[(1, )](input_desc, XBLOCK)
-#     getattr(torch, device).synchronize()
-
-# def test_garbage_buffer_access(device):
-#     run_garbage_buffer_access(device)
 
 # @gluon.jit
 # def inc_mod(x, mod):
