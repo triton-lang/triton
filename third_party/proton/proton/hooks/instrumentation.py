@@ -6,6 +6,7 @@ from triton._C.libtriton import ir as triton_ir
 from triton._C.libtriton import proton as triton_proton
 from triton._C.libtriton import amd as triton_amd
 from triton._C.libtriton import nvidia as triton_nvidia
+from triton._C.libtriton import passes as triton_passes
 from triton._C.libproton import proton as libproton
 from triton.compiler import LazyDict
 from triton.runtime.jit import JITFunction
@@ -164,6 +165,7 @@ class InstrumentationHook(Hook):
                                                           self.mode.buffer_size, max_shared_mem,
                                                           self.profile_buffer_size, self.profile_buffer_alignment,
                                                           is_long_clk)
+            triton_passes.common.add_cse(pm)
 
             if mode.Optimize.SCHED_STORES in self.mode.optimizations:
                 triton_proton.add_schedule_buffer_store(pm)
@@ -180,6 +182,8 @@ class InstrumentationHook(Hook):
             elif backend_name == "amd":
                 arch = triton.runtime.driver.active.utils.get_device_properties(device)["arch"].split(":")[0]
                 triton_proton.add_convert_proton_amd_gpu_to_llvm(pm, arch)
+            triton_passes.common.add_canonicalizer(pm)
+            triton_passes.common.add_cse(pm)
 
         backends[backend_name].compiler.instrumentation = Instrumentation({
             "ttgpuir_to_llvmir":

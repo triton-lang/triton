@@ -96,10 +96,7 @@ struct FinalizeOpConversion
     const int bytesPerEntry = proton::gpu::getBytesPerClockEntry();
     const int wordsPerEntry = bytesPerEntry / 4; // 1 word = 4 bytes
 
-    int numWarps = mlir::triton::gpu::lookupNumWarps(mod);
-    if (auto totalNumWarps =
-            mod->getAttrOfType<IntegerAttr>("ttg.total-num-warps"))
-      numWarps = totalNumWarps.getInt();
+    int numWarps = getTotalNumWarps(mod);
 
     Value threadId = getThreadId(rewriter, loc);
     Value warpId = b.udiv(
@@ -290,10 +287,7 @@ struct SegmentAllocOpConversion
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
-    int numWarps = mlir::triton::gpu::lookupNumWarps(mod);
-    if (auto totalNumWarps =
-            mod->getAttrOfType<IntegerAttr>("ttg.total-num-warps"))
-      numWarps = totalNumWarps.getInt();
+    int numWarps = getTotalNumWarps(mod);
 
     auto segmentType = op.getResult().getType();
     auto granularity = segmentType.getGranularity();
@@ -452,12 +446,10 @@ struct InitCtxOpConversion
     auto mod = op.getOperation()->getParentOfType<ModuleOp>();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
-    int numWarps = mlir::triton::gpu::lookupNumWarps(mod);
-    if (auto totalNumWarps =
-            mod->getAttrOfType<IntegerAttr>("ttg.total-num-warps"))
-      numWarps = totalNumWarps.getInt();
+    int numWarps = getTotalNumWarps(mod);
 
-    // TODO(fywkevin): make a verifier that this OP can't be in WS regions
+    // InitCtxOp can only be called in the master warps, so using `getThreadId`
+    // is fine.
     Value threadId = getThreadId(rewriter, loc);
     Value isFirstThread = b.icmp_eq(threadId, b.i32_val(0));
     const int circularHeaderWordSize = proton::gpu::getCircularHeaderSize() / 4;
@@ -510,16 +502,13 @@ struct RestoreCtxOpConversion
 
     auto mod = op.getOperation()->getParentOfType<ModuleOp>();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
+    int numWarps = getTotalNumWarps(mod);
 
-    // TODO (fywkevin): put this in a helper function or utility
-    int numWarps = mlir::triton::gpu::lookupNumWarps(mod);
-    if (auto totalNumWarps =
-            mod->getAttrOfType<IntegerAttr>("ttg.total-num-warps"))
-      numWarps = totalNumWarps.getInt();
-
+    // We need to use the absolute warp id in case warp specialization is used.
     Value tid = rewriter.create<::mlir::gpu::ThreadIdOp>(
         loc, ::mlir::gpu::Dimension::x);
     Value threadId = rewriter.create<arith::IndexCastOp>(loc, i32_ty, tid);
+
     Value warpId = b.udiv(
         threadId,
         b.i32_val(triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod)));
@@ -563,16 +552,16 @@ struct SaveCtxOpConversion
     auto mod = op.getOperation()->getParentOfType<ModuleOp>();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
-    int numWarps = mlir::triton::gpu::lookupNumWarps(mod);
-    if (auto totalNumWarps =
-            mod->getAttrOfType<IntegerAttr>("ttg.total-num-warps"))
-      numWarps = totalNumWarps.getInt();
+    int numWarps = getTotalNumWarps(mod);
 
     int numLanes = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
     Value warpSize = b.i32_val(numLanes);
+
+    // We need to use the absolute warp id in case warp specialization is used.
     Value tid = rewriter.create<::mlir::gpu::ThreadIdOp>(
         loc, ::mlir::gpu::Dimension::x);
     Value threadId = rewriter.create<arith::IndexCastOp>(loc, i32_ty, tid);
+
     Value warpId = b.udiv(threadId, warpSize);
     Value laneId = b.urem(threadId, warpSize);
     Value isWarpMaster = b.icmp_eq(laneId, b.i32_val(0));

@@ -23,3 +23,11 @@ void mlir::triton::proton::gpu::ProtonGPUDialect::initialize() {
 #include "Dialect/ProtonGPU/IR/Ops.cpp.inc"
       >();
 }
+
+const int mlir::triton::proton::gpu::getTotalNumWarps(ModuleOp mod) {
+  int numWarps = mlir::triton::gpu::lookupNumWarps(mod);
+  if (auto totalNumWarps =
+          mod->getAttrOfType<IntegerAttr>("ttg.total-num-warps"))
+    numWarps = totalNumWarps.getInt();
+  return numWarps;
+}

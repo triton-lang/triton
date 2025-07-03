@@ -48,9 +48,9 @@ void parseSelectIds(llvm::StringRef selectIds,
   selectIdVec.erase(llvm::unique(selectIdVec), selectIdVec.end());
 }
 
-template <typename T> bool hasProtonRecord(T *op) {
+template <typename T> bool hasProtonRecord(T *o) {
   bool hasProtonRecord = false;
-  op->walk([&](proton::RecordOp record) {
+  o->walk([&](proton::RecordOp record) {
     hasProtonRecord = true;
     return WalkResult::interrupt();
   });
@@ -70,7 +70,6 @@ void instrumentWarpSpecializeOps(FuncOp func, Value buffer, Value profileMem) {
   }
 }
 
-// TODO(fywkevin): add a CSE pass
 LogicalResult replaceProtonRecordOp(OpBuilder &builder, FuncOp func,
                                     Value segment, MetricType metricType,
                                     ModuleScopeIdAllocation &scopeInfo,
@@ -79,7 +78,7 @@ LogicalResult replaceProtonRecordOp(OpBuilder &builder, FuncOp func,
       clockExtension ? mlir::IntegerType::get(builder.getContext(), 64)
                      : mlir::IntegerType::get(builder.getContext(), 32);
 
-  // Replace all proton::RecordOp in WS regions.
+  // Replace all proton::RecordOp in the worker warps.
   func->walk([&](triton::gpu::WarpSpecializePartitionsOp partitions) {
     auto loc = partitions.getLoc();
     for (auto &partition : partitions.getPartitionRegions()) {
@@ -89,10 +88,15 @@ LogicalResult replaceProtonRecordOp(OpBuilder &builder, FuncOp func,
         int argNum = block.getNumArguments();
         auto bufferArg = block.getArgument(argNum - 2);
         auto profileMemArg = block.getArgument(argNum - 1);
+
+        // Create a new segment for the worker warp.
         Value newSegment = builder.create<gpu::SegmentAllocOp>(
             loc, segment.getType(), bufferArg);
+
+        // Restore warp-level context before profiling.
         builder.create<gpu::RestoreCtxOp>(loc, newSegment, profileMemArg);
 
+        // Replace all proton::RecordOp.
         partition.walk([&](proton::RecordOp record) {
           builder.setInsertionPoint(record);
 
@@ -104,6 +108,7 @@ LogicalResult replaceProtonRecordOp(OpBuilder &builder, FuncOp func,
           record.erase();
         });
 
+        // Save warp-level context after profiling.
         partition.walk([&](triton::gpu::WarpReturnOp ret) {
           builder.setInsertionPoint(ret);
           builder.create<gpu::SaveCtxOp>(loc, newSegment, profileMemArg);
@@ -112,7 +117,9 @@ LogicalResult replaceProtonRecordOp(OpBuilder &builder, FuncOp func,
     }
   });
 
-  // Replace all proton::RecordOp in the master warps.
+  // Replace all proton::RecordOp in the master warps. For the master warps, we
+  // don't need to restore warp-level context and we save the context in the end
+  // of kernel (right before FinalizeOp).
   auto loc = func.getLoc();
   func->walk([&](proton::RecordOp record) {
     builder.setInsertionPoint(record);
@@ -183,12 +190,11 @@ public:
     MLIRContext *context = func.getContext();
     Location loc = func->getLoc();
     ModuleOp mod = llvm::cast<ModuleOp>(func->getParentOp());
+
     OpBuilder builder(context);
     builder.setInsertionPointToStart(&func.getBody().front());
-    int numWarps = mlir::triton::gpu::lookupNumWarps(mod);
-    if (auto totalNumWarps =
-            mod->getAttrOfType<IntegerAttr>("ttg.total-num-warps"))
-      numWarps = totalNumWarps.getInt();
+
+    int numWarps = gpu::getTotalNumWarps(mod);
 
     llvm::SmallVector<int32_t, 8> selectIdVec;
     int segmentNum = numWarps;
@@ -301,10 +307,13 @@ public:
 
     // Set insertion point to the start of the function
     builder.setInsertionPointToStart(&func.getBody().front());
+
     Value profileMem = builder.create<gpu::GlobalScratchAllocOp>(
         loc, triton::getPointerType(builder.getI32Type()),
         allocProfileScratchSize, profileScratchAlignment);
+
     builder.create<gpu::InitCtxOp>(loc, profileMem);
+
     instrumentWarpSpecializeOps(func, buffer, profileMem);
 
     if (failed(replaceProtonRecordOp(builder, func, segment, metricType,

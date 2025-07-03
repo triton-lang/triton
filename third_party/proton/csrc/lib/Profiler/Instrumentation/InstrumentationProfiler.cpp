@@ -113,7 +113,7 @@ InstrumentationProfiler::getParserConfig(uint64_t functionId,
   config->device.type = runtime->getDeviceType();
   bool enableDebug = mlir::triton::tools::getBoolEnv("PROTON_ENABLE_DEBUG");
   if (enableDebug) {
-    config->exceptionPrintLevel = ParserConfig::ExceptionPrinting::ALL;
+    config->printLevel = ParserConfig::PrintMode::ALL;
     std::cout << "Total units: " << config->totalUnits << std::endl;
     std::cout << "Num blocks: " << config->numBlocks << std::endl;
     std::cout << "Scratch memory size: " << config->scratchMemSize << std::endl;

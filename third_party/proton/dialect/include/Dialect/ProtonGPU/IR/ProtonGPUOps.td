@@ -171,13 +171,15 @@ def PTG_InitCtxOp : PTG_Op<"init_ctx", [
 
   let description = [{
     Initialize the intra kernel profiler warp-level contexts for all warps in
-    `scratchPtr` (base address of the profiling scratch buffer). It can only be called
-    from the master warps if warp specialization is enabled.
+    `scratchPtr` (base address of the profiling scratch buffer). It can't be
+    called inside `ttg.warp_specialize`.
   }];
 
   let arguments = (ins
     TT_Ptr:$scratchPtr
   );
+
+  let hasVerifier = 1;
 
   let assemblyFormat = [{
     $scratchPtr attr-dict `:` qualified(type($scratchPtr))

@@ -49,8 +49,19 @@ void CircularLayoutParser::parseMetadata() {
     countVec.push_back(decoder.decode<I32Entry>()->value);
   }
 
+  // Each event is 8 bytes
+  int maxCountPerUnit = bt.bufSize / getConfig().uidVec.size() / 8;
+
   for (auto uid : getConfig().uidVec) {
     auto count = countVec[uid];
+
+    if (count > maxCountPerUnit) {
+      std::cerr << "Warning (cta" << bt.blockId << ", warp" << uid
+                << "): first " << count - maxCountPerUnit
+                << " events are dropped due to insufficient buffer size ("
+                << maxCountPerUnit << "/" << count << ")" << std::endl;
+    }
+
     auto &trace = bt.traces.emplace_back();
     trace.uid = uid;
     trace.count = count;
