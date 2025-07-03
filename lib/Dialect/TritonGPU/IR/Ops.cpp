@@ -495,6 +495,12 @@ LogicalResult MemDescReinterpretOp::verify() {
   return success();
 }
 
+OpFoldResult MemDescReinterpretOp::fold(FoldAdaptor adaptor) {
+  if (getType() == getSrc().getType())
+    return getSrc();
+  return {};
+}
+
 // LocalAllocOp
 void LocalAllocOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
@@ -529,8 +535,22 @@ OpFoldResult LocalAllocOp::fold(FoldAdaptor adaptor) {
   return loadSrc;
 }
 
-LogicalResult LocalAllocOp::verifyAllocOp(Operation *op, Value src,
-                                          MemDescType dstTy) {
+LogicalResult verifyMemoryOpTypes(Operation *op, ShapedType srcTy,
+                                  ShapedType dstTy) {
+  if (srcTy.getElementType() != dstTy.getElementType()) {
+    return op->emitOpError("source element type ")
+           << srcTy << " must match "
+           << "destination element type " << dstTy.getElementType();
+  }
+  if (srcTy.getShape() != dstTy.getShape()) {
+    return op->emitOpError("source shape [")
+           << srcTy.getShape() << "] must match ["
+           << "destination shape " << dstTy.getShape() << "]";
+  }
+  return success();
+}
+
+LogicalResult verifyAllocOp(Operation *op, Value src, MemDescType dstTy) {
   if (dstTy.getShape() != dstTy.getAllocShape())
     return op->emitOpError("result shape and its alloc shape must match");
 
@@ -542,12 +562,7 @@ LogicalResult LocalAllocOp::verifyAllocOp(Operation *op, Value src,
     return success();
   }
 
-  auto srcTy = cast<RankedTensorType>(src.getType());
-  if (srcTy.getElementType() != dstTy.getElementType())
-    return op->emitOpError("result element type must source element type");
-  if (srcTy.getShape() != dstTy.getShape())
-    return op->emitOpError("result shape must match source shape");
-  return success();
+  return verifyMemoryOpTypes(op, cast<RankedTensorType>(src.getType()), dstTy);
 }
 
 LogicalResult LocalAllocOp::verify() {
@@ -561,7 +576,12 @@ LogicalResult LocalAllocOp::verify() {
 LogicalResult LocalStoreOp::verify() {
   if (!getDst().getType().getMutableMemory())
     return emitOpError("Cannot store into immutable memory");
-  return success();
+  return verifyMemoryOpTypes(*this, getSrc().getType(), getDst().getType());
+}
+
+// LocalLoadOp
+LogicalResult LocalLoadOp::verify() {
+  return verifyMemoryOpTypes(*this, getSrc().getType(), getType());
 }
 
 // AsyncCopyGlobalToLocalOp
@@ -701,8 +721,14 @@ LogicalResult MemDescSubviewOp::verify() {
   auto ctx = getContext();
   // The order gives us the honest-to-goodness layout rank
   auto srcAllocShape = srcTy.getAllocShape().take_back(getOrder(srcTy).size());
-  auto llInv =
-      triton::gpu::toLinearLayout(srcAllocShape, srcTy.getEncoding()).invert();
+  auto ll = triton::gpu::toLinearLayout(srcAllocShape, srcTy.getEncoding());
+  // NYI: We don't support non-trivial block dimension for now.
+  auto kBlock = mlir::StringAttr::get(getContext(), "block");
+  if (ll.getInDimSize(kBlock) != 1) {
+    return emitError("non-trivial block dimension not supported");
+  }
+
+  auto llInv = ll.invert();
   auto kDim = mlir::StringAttr::get(ctx, "dim" + llvm::Twine(dim));
   llvm::SmallVector<std::pair<mlir::StringAttr, int32_t>> namedOffsets;
   for (auto d : standardOutDimNames(ctx, srcTy.getRank())) {

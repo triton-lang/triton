@@ -358,6 +358,7 @@ class compilation_knobs(base_knobs):
     disable_line_info: env_bool = env_bool("TRITON_DISABLE_LINE_INFO")
     front_end_debugging: env_bool = env_bool("TRITON_FRONT_END_DEBUGGING")
     allow_non_constexpr_globals: env_bool = env_bool("TRITON_ALLOW_NON_CONSTEXPR_GLOBALS")
+    enable_experimental_consan: env_bool = env_bool("TRITON_ENABLE_EXPERIMENTAL_CONSAN")
     listener: Union[CompilationListener, None] = None
 
 
@@ -435,6 +436,8 @@ class nvidia_knobs(base_knobs):
 
 class amd_knobs(base_knobs):
     use_buffer_ops: env_bool = env_bool("AMDGCN_USE_BUFFER_OPS", True)
+    # Note: This requires use_buffer_ops be true to have any effect
+    use_buffer_atomics: env_bool = env_bool("AMDGCN_USE_BUFFER_ATOMICS", True)
     dump_amdgcn: env_bool = env_bool("AMDGCN_ENABLE_DUMP")
     libhip_path: env_opt_str = env_opt_str("TRITON_LIBHIP_PATH")
     lld_path: env_opt_str = env_opt_str("TRITON_HIP_LLD_PATH")
@@ -450,7 +453,7 @@ class amd_knobs(base_knobs):
 
 
 class proton_knobs(base_knobs):
-    cupti_path: env_opt_str = env_opt_str("TRITON_CUPTI_LIB_PATH")
+    cupti_dir: env_opt_str = env_opt_str("TRITON_CUPTI_LIB_PATH")
 
 
 build = build_knobs()

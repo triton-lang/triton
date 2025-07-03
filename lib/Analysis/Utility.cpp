@@ -136,6 +136,26 @@ bool ReduceOpHelper::isReduceWithinCTA() {
   return getCTASplitNum(srcEncoding)[axis] == 1;
 }
 
+bool ReduceOpHelper::isAssociative() {
+  auto dtype = srcElementTypes[0];
+  if (!type::isFloat(dtype))
+    return true;
+  size_t reduce_size = srcShape[axis];
+  if (reduce_size <= 2)
+    return true;
+  bool hasNoAssociativeOp = false;
+  op.walk([&](Operation *nestedOp) -> WalkResult {
+    if (isa<arith::AddFOp, arith::MulFOp>(nestedOp)) {
+      // Only when the data type is float point and reduce size greater than 2,
+      // and has addf or mulf op, we though it's a non-associative reduce.
+      hasNoAssociativeOp = true;
+      return WalkResult::interrupt();
+    }
+    return WalkResult::advance();
+  });
+  return !hasNoAssociativeOp;
+}
+
 unsigned ScanLoweringHelper::getAxisNumElementsPerThread() {
   return getEncoding().getContigPerThread()[getAxis()];
 }
@@ -953,7 +973,7 @@ SetVector<Operation *> multiRootGetSlice(Operation *op,
     BackwardSliceOptions opt;
     opt.omitBlockArguments = true;
     opt.filter = backwardFilter;
-    getBackwardSlice(currentOp, &backwardSlice, opt);
+    (void)getBackwardSlice(currentOp, &backwardSlice, opt);
     slice.insert(backwardSlice.begin(), backwardSlice.end());
 
     // Compute and insert the forwardSlice starting from currentOp.

@@ -128,38 +128,6 @@ namespace nvidia_gpu {
 
 namespace {
 
-SmallVector<Value> getTiedArgs(Operation *op, int resultIdx) {
-  if (auto forOp = dyn_cast<scf::ForOp>(op)) {
-    auto iterArg = forOp.getRegionIterArg(resultIdx);
-    auto result = forOp.getResult(resultIdx);
-    auto yieldVal = forOp.getBody()->getTerminator()->getOperand(resultIdx);
-    auto initVal = forOp.getInitArgs()[resultIdx];
-    return {iterArg, result, yieldVal, initVal};
-  } else if (auto whileOp = dyn_cast<scf::WhileOp>(op)) {
-    auto iterArg = whileOp.getBeforeArguments()[resultIdx];
-    auto result = whileOp.getResults()[resultIdx];
-    auto yieldVal =
-        whileOp.getBeforeBody()->getTerminator()->getOperand(resultIdx);
-    auto initVal = whileOp.getOperands()[resultIdx];
-    return {iterArg, result, iterArg, initVal};
-  } else if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
-    SmallVector<Value> values;
-    for (auto &block : ifOp.getThenRegion().getBlocks()) {
-      auto terminator = block.getTerminator();
-      if (isa<scf::YieldOp>(terminator))
-        values.push_back(terminator->getOperands()[resultIdx]);
-    }
-    for (auto &block : ifOp.getElseRegion().getBlocks()) {
-      auto terminator = block.getTerminator();
-      if (isa<scf::YieldOp>(terminator))
-        values.push_back(terminator->getOperands()[resultIdx]);
-    }
-    values.push_back(ifOp->getResults()[resultIdx]);
-    return values;
-  }
-  return {};
-}
-
 const EncodingInfo *internEncoding(std::unordered_set<EncodingInfo> &encodings,
                                    EncodingInfo info) {
   return &*encodings.insert(info).first;
@@ -285,7 +253,7 @@ void assignMemoryLayouts(FuncOp &func) {
 
   // 1. Set seed values from either TMA ops, or device function boundaries for
   // which we fallback to default encoding
-  auto isKernel = LLVM::isKernel(func);
+  auto isKernel = triton::isKernel(func);
   for (auto blockArg : func.getBlocks().front().getArguments())
     if (auto desc = dyn_cast<TypedValue<TensorDescType>>(blockArg))
       updateEncoding({desc},
