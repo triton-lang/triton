@@ -68,6 +68,9 @@ class BlockedLayout(DistributedLayout):
         assert len(self.cta_split_num) == rank
         assert len(self.cta_order) == rank
 
+    def __hash__(self):
+        return hash(self.mangle())
+
     def _to_ir(self, builder):
         return builder.get_blocked_layout(
             self.size_per_thread,
@@ -118,6 +121,9 @@ class SliceLayout(DistributedLayout):
             self.parent._to_ir(builder),
         )
 
+    def __hash__(self):
+        return hash(self.mangle())
+
     def mangle(self) -> str:
         return f"SL{self.dim}_{self.parent.mangle()}SL"
 
@@ -163,6 +169,9 @@ class DistributedLinearLayout(DistributedLayout):
         return builder.get_distributed_linear_layout(self.reg_bases, self.lane_bases, self.warp_bases, self.block_bases,
                                                      self.shape)
 
+    def __hash__(self):
+        return hash(self.mangle())
+
     def mangle(self):
         return f"DLL{self.reg_bases}_{self.lane_bases}_{self.warp_bases}_{self.block_bases}_{self.shape}DLL"
 
@@ -200,6 +209,9 @@ class NVMMADistributedLayout(DistributedLayout):
         assert len(self.ctas_per_cga) == rank
         assert len(self.cta_split_num) == rank
         assert len(self.cta_order) == rank
+
+    def __hash__(self):
+        return hash(self.mangle())
 
     def _to_ir(self, builder):
         return builder.get_mma_layout(self.version, self.warps_per_cta, self.ctas_per_cga, self.cta_split_num,
@@ -269,6 +281,9 @@ class NVMMASharedLayout(SharedLayout):
             self.cta_order,
         )
 
+    def __hash__(self):
+        return hash(self.mangle())
+
     def mangle(self) -> str:
         return f"NVMMA_{self.swizzle_byte_width}_{self.element_bitwidth}_{self.transposed}_{self.fp4_padded}_NVMMA"
 
@@ -320,6 +335,9 @@ class SwizzledSharedLayout(SharedLayout):
             self.cta_split_num,
             self.cta_order,
         )
+
+    def __hash__(self):
+        return hash(self.mangle())
 
     def mangle(self) -> str:
 
