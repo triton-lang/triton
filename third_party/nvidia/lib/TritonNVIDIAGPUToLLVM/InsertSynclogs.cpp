@@ -20,37 +20,94 @@ using namespace mlir;
 using namespace mlir::triton;
 using namespace mlir::triton::gpu;
 
-// Array of NVVM/PTX op prefixes.
-const llvm::SmallVector<const char *, 25> opNames{
-    "barrier.sync",
-    "nvvm.barrier0",
-    "cp.async.bulk.commit.group",
-    "cp.async.commit.group",
-    "cp.async.bulk.wait.group",
-    "nvvm.cp.async.bulk.wait_group",
-    "cp.async.wait.group",
-    "cp.async.bulk.tensor",
-    "cp.reduce.async.bulk.tensor",
-    "fence.proxy",
-    "tensormap.cp_fenceproxy",
-    "fence.mbarrier_init",
-    "wgmma.fence",
-    "wgmma.commit_group",
-    "wgmma.wait_group",
-    "mbarrier.init",
-    "mbarrier.wait",
-    "mbarrier.arrive",
-    "mbarrier.inval",
-    "mbarrier.expect_tx",
-    "mbarrier.test_wait",
-    "mbarrier.try_wait",
-    "tcgen05.wait",
-    "tcgen05.commit",
-    "cp.async.mbarrier.arrive"};
+// Array of NVVM/PTX op prefixes and their corresponding header numbers.
+// NVVM prefixes are only included if they are different from the PTX prefixes.
+const llvm::SmallVector<std::pair<const char *, int>, 25> opNames{
+    std::make_pair("barrier.sync", 0),
+    std::make_pair("nvvm.barrier0", 0),
+    std::make_pair("cp.async.bulk.commit_group", 1),
+    std::make_pair("nvvm.cp.async.bulk.commit.group", 1),
+    std::make_pair("cp.async.commit_group", 2),
+    std::make_pair("nvvm.cp.async.commit.group", 2),
+    std::make_pair("cp.async.bulk.wait_group", 3),
+    std::make_pair("cp.async.wait_group", 4),
+    std::make_pair("nvvm.cp.async.wait.group", 4),
+    std::make_pair("cp.async.bulk.tensor", 5),
+    std::make_pair("cp.reduce.async.bulk.tensor", 6),
+    std::make_pair("fence.proxy", 7),
+    std::make_pair("tensormap.cp_fenceproxy", 8),
+    std::make_pair("fence.mbarrier_init", 9),
+    std::make_pair("wgmma.fence", 10),
+    std::make_pair("wgmma.commit_group", 11),
+    std::make_pair("wgmma.wait_group", 12),
+    std::make_pair("mbarrier.init", 13),
+    std::make_pair("mbarrier.wait", 14),
+    std::make_pair("mbarrier.arrive", 15),
+    std::make_pair("mbarrier.inval", 16),
+    std::make_pair("mbarrier.expect_tx", 17),
+    std::make_pair("mbarrier.test_wait", 18),
+    std::make_pair("mbarrier.try_wait", 19),
+    std::make_pair("tcgen05.wait", 20),
+    std::make_pair("tcgen05.commit", 21),
+    std::make_pair("cp.async.mbarrier.arrive", 22)};
+
+constexpr int synclogCap = 1 << 26;
+
+// Add synclog ptr argument to kernel function and return new, updated kernel.
+LLVM::LLVMFuncOp addSynclogPtr(IRRewriter &rewriter, ModuleOp mod,
+                               LLVM::LLVMFuncOp kernelFunc) {
+  auto loc = kernelFunc.getLoc();
+  auto ctx = rewriter.getContext();
+  auto synclogPtrTy = LLVM::LLVMPointerType::get(ctx, 1);
+
+  // Add the pointer type to the function type.
+  // The synclog pointer will be the second last argument to the kernel (last
+  // argument is the global scratch memory pointer).
+  auto funcTy = kernelFunc.getFunctionType();
+  llvm::SmallVector<mlir::Type, 4> argTypes(funcTy.getParams().begin(),
+                                            funcTy.getParams().end());
+  auto insertionPoint = argTypes.end() - 1;
+  argTypes.insert(insertionPoint, synclogPtrTy);
+
+  // Create the new function.
+  auto newKernelFuncTy =
+      LLVM::LLVMFunctionType::get(funcTy.getReturnType(), argTypes);
+  rewriter.setInsertionPoint(kernelFunc);
+  auto newKernelFunc = rewriter.create<LLVM::LLVMFuncOp>(
+      mod.getLoc(), kernelFunc.getName(), newKernelFuncTy);
+
+  // Modify attributes to add the new argument.
+  SmallVector<NamedAttribute> amendedAttrs;
+  for (const auto &attr : kernelFunc->getAttrs()) {
+    if (attr.getName() == "function_type") {
+      continue;
+    }
+    amendedAttrs.push_back(attr);
+  }
+  if (auto argAttrs = kernelFunc.getAllArgAttrs()) {
+    llvm::SmallVector<mlir::Attribute> amendedArgAttrs(argAttrs.begin(),
+                                                       argAttrs.end());
+    amendedArgAttrs.emplace_back(DictionaryAttr::get(ctx));
+    amendedAttrs.push_back(
+        rewriter.getNamedAttr(kernelFunc.getArgAttrsAttrName(),
+                              rewriter.getArrayAttr(amendedArgAttrs)));
+  }
+  newKernelFunc->setAttrs(amendedAttrs);
+
+  // Add the new argument to the function body and inline.
+  auto &region = kernelFunc.getBody();
+  auto numArgs = region.getNumArguments();
+  region.insertArgument(numArgs - 1, synclogPtrTy, loc);
+  rewriter.inlineRegionBefore(region, newKernelFunc.getBody(),
+                              newKernelFunc.end());
+  rewriter.eraseOp(kernelFunc);
+
+  return newKernelFunc;
+}
 
 void writeLogToBuffer(IRRewriter &rewriter, ModuleOp mod,
                       LLVM::LLVMFuncOp kernelFunc, Operation *op,
-                      Value synclogBuffer) {
+                      Value synclogBuffer, int headerNumber) {
   auto ctx = rewriter.getContext();
   auto loc = kernelFunc->getLoc();
   TritonLLVMOpBuilder llvmBuilder(loc, rewriter);
@@ -65,7 +122,7 @@ void writeLogToBuffer(IRRewriter &rewriter, ModuleOp mod,
     rewriter.setInsertionPoint(kernelFunc);
     writeSynclogFn = rewriter.create<LLVM::LLVMFuncOp>(
         mod.getLoc(), writeSynclogFnName,
-        LLVM::LLVMFunctionType::get(void_ty(ctx), {globalPtrTy}));
+        LLVM::LLVMFunctionType::get(void_ty(ctx), {globalPtrTy, i32Type}));
     writeSynclogFn.setPrivate();
 
     auto *funcBlock = writeSynclogFn.addEntryBlock(rewriter);
@@ -74,6 +131,7 @@ void writeLogToBuffer(IRRewriter &rewriter, ModuleOp mod,
     rewriter.setInsertionPointToStart(funcBlock);
 
     auto synclogBufferPtr = funcBlock->getArgument(0);
+    auto headerNumber = funcBlock->getArgument(1);
 
     // Split global timer into 32-bit low and high parts.
     auto time64 = rewriter
@@ -133,10 +191,26 @@ void writeLogToBuffer(IRRewriter &rewriter, ModuleOp mod,
     rewriter.setInsertionPointToStart(ifBlock);
 
     // Atomically allocate space in synclog buffer.
-    auto const9 = llvmBuilder.i32_val(9);
+    auto constLength = llvmBuilder.i32_val(15);
     auto last = rewriter.create<LLVM::AtomicRMWOp>(
-        loc, LLVM::AtomicBinOp::add, synclogBufferPtr, const9,
+        loc, LLVM::AtomicBinOp::add, synclogBufferPtr, constLength,
         LLVM::AtomicOrdering::monotonic);
+    auto lastPlusConstLength = llvmBuilder.add(last, constLength);
+    auto synclogCapValue = llvmBuilder.i32_val(synclogCap);
+    auto lastPlusConstLengthLessThanCap =
+        llvmBuilder.icmp_ult(lastPlusConstLength, synclogCapValue);
+
+    auto *writeBufferBlock =
+        rewriter.splitBlock(ifBlock, rewriter.getInsertionPoint());
+    auto *bufferFullBlock =
+        rewriter.splitBlock(writeBufferBlock, rewriter.getInsertionPoint());
+    rewriter.setInsertionPointToEnd(ifBlock);
+    rewriter.create<LLVM::CondBrOp>(loc, lastPlusConstLengthLessThanCap,
+                                    writeBufferBlock, bufferFullBlock);
+    rewriter.setInsertionPointToEnd(writeBufferBlock);
+    rewriter.create<LLVM::BrOp>(loc, thenBlock);
+
+    rewriter.setInsertionPointToStart(writeBufferBlock);
     auto const1 = llvmBuilder.i32_val(1);
     auto offset = llvmBuilder.add(const1, last);
     auto synclogPtr = llvmBuilder.gep(globalPtrTy, i32Type, synclogBufferPtr,
@@ -148,117 +222,42 @@ void writeLogToBuffer(IRRewriter &rewriter, ModuleOp mod,
                                  llvmBuilder.i32_val(index));
       llvmBuilder.store(valToStore, ptr);
     };
-    storeInBuffer(time_lo, 0);
-    storeInBuffer(time_hi, 1);
-    storeInBuffer(threadIdx_x, 2);
-    storeInBuffer(threadIdx_y, 3);
-    storeInBuffer(threadIdx_z, 4);
-    storeInBuffer(blockIdx_x, 5);
-    storeInBuffer(blockIdx_y, 6);
-    storeInBuffer(blockIdx_z, 7);
-    storeInBuffer(ctaRank, 8);
+    storeInBuffer(headerNumber, 0);
+    for (size_t i = 0; i < op->getNumOperands() && i < 5; i++) {
+      auto arg = op->getOperand(i);
+      if (isa<LLVM::LLVMPointerType>(arg.getType())) {
+        storeInBuffer(llvmBuilder.ptrtoint(i32Type, arg), i + 1);
+      } else {
+        storeInBuffer(arg, i + 1);
+      }
+    }
+    storeInBuffer(time_lo, 6);
+    storeInBuffer(time_hi, 7);
+    storeInBuffer(threadIdx_x, 8);
+    storeInBuffer(threadIdx_y, 9);
+    storeInBuffer(threadIdx_z, 10);
+    storeInBuffer(blockIdx_x, 11);
+    storeInBuffer(blockIdx_y, 12);
+    storeInBuffer(blockIdx_z, 13);
+    storeInBuffer(ctaRank, 14);
+
+    rewriter.setInsertionPointToStart(bufferFullBlock);
+    rewriter.create<LLVM::AtomicRMWOp>(loc, LLVM::AtomicBinOp::sub,
+                                       synclogBufferPtr, constLength,
+                                       LLVM::AtomicOrdering::monotonic);
   }
   rewriter.setInsertionPoint(op);
-  rewriter.create<LLVM::CallOp>(loc, writeSynclogFn, ValueRange{synclogBuffer});
-}
-
-void printSynclog(IRRewriter &rewriter, NVIDIA::TargetInfo &targetInfo,
-                  LLVM::LLVMFuncOp kernelFunc, Value synclogBuffer) {
-  auto returnOp = *kernelFunc.getOps<LLVM::ReturnOp>().begin();
-  rewriter.setInsertionPoint(returnOp);
-  auto ctx = rewriter.getContext();
-  auto loc = returnOp->getLoc();
-  TritonLLVMOpBuilder llvmBuilder(loc, rewriter);
-  auto i32Type = type::i32Ty(ctx);
-  auto i64Type = type::i64Ty(ctx);
-  auto globalPtrTy = LLVM::LLVMPointerType::get(ctx, 1);
-
-  // Get block/thread indices and cta rank.
-  auto currentBlockIdx_x = rewriter.create<NVVM::BlockIdXOp>(loc, i32Type);
-  auto currentThreadIdx_x = rewriter.create<NVVM::ThreadIdXOp>(loc, i32Type);
-  auto currentBlockIdx_y = rewriter.create<NVVM::BlockIdYOp>(loc, i32Type);
-  auto currentThreadIdx_y = rewriter.create<NVVM::ThreadIdYOp>(loc, i32Type);
-  auto currentBlockIdx_z = rewriter.create<NVVM::BlockIdZOp>(loc, i32Type);
-  auto currentThreadIdx_z = rewriter.create<NVVM::ThreadIdZOp>(loc, i32Type);
-
-  // Only one thread will dump the synclog buffer (threadIdx_x, threadIdx_y,
-  // threadIdx_z, blockIdx_x, blockIdx_y, blockIdx_z = 0).
-  auto const0 = llvmBuilder.i32_val(0);
-  auto cond1 = llvmBuilder.icmp_eq(currentThreadIdx_x, const0);
-  auto cond2 = llvmBuilder.icmp_eq(currentThreadIdx_y, const0);
-  auto cond3 = llvmBuilder.icmp_eq(currentThreadIdx_z, const0);
-  auto cond4 = llvmBuilder.icmp_eq(currentBlockIdx_x, const0);
-  auto cond5 = llvmBuilder.icmp_eq(currentBlockIdx_y, const0);
-  auto cond6 = llvmBuilder.icmp_eq(currentBlockIdx_z, const0);
-  auto and1 = llvmBuilder.and_(cond1, cond2);
-  auto and2 = llvmBuilder.and_(cond3, cond4);
-  auto and3 = llvmBuilder.and_(cond5, cond6);
-  auto and4 = llvmBuilder.and_(and1, and2);
-  auto and5 = llvmBuilder.and_(and3, and4);
-
-  auto *prevBlock = rewriter.getInsertionBlock();
-  auto *ifBlock = rewriter.splitBlock(prevBlock, rewriter.getInsertionPoint());
-  auto *thenBlock = rewriter.splitBlock(ifBlock, returnOp->getIterator());
-  rewriter.setInsertionPointToEnd(prevBlock);
-  rewriter.create<LLVM::CondBrOp>(loc, and5, ifBlock, thenBlock);
-  rewriter.setInsertionPointToStart(ifBlock);
-
-  // Load from buffer.
-  auto loadFromBuffer = [&](Value baseIndex, int offset) {
-    auto index = llvmBuilder.add(baseIndex, llvmBuilder.i32_val(offset));
-    auto ptr =
-        llvmBuilder.gep(globalPtrTy, i32Type, synclogBuffer, index.getResult());
-    return llvmBuilder.load(i32Type, ptr);
-  };
-
-  // Initialize loop variables. synclog_buffer[0] is the length of the buffer.
-  auto synclogLength = llvmBuilder.load(i32Type, synclogBuffer);
-  auto const1 = llvmBuilder.i32_val(1);
-  auto indexPtr =
-      rewriter.create<LLVM::AllocaOp>(loc, globalPtrTy, i32Type, const1);
-  llvmBuilder.store(const1, indexPtr);
-  auto *loopConditionBlock =
-      rewriter.splitBlock(ifBlock, rewriter.getInsertionPoint());
-  rewriter.setInsertionPointToEnd(ifBlock);
-  rewriter.create<LLVM::BrOp>(loc, loopConditionBlock);
-
-  // Loop condition. Loop until index >= synclogLength.
-  rewriter.setInsertionPointToStart(loopConditionBlock);
-  auto index = llvmBuilder.load(i32Type, indexPtr);
-  auto cond = llvmBuilder.icmp_slt(index, synclogLength);
-  auto *loopBodyBlock =
-      rewriter.splitBlock(loopConditionBlock, rewriter.getInsertionPoint());
-  rewriter.setInsertionPointToEnd(loopConditionBlock);
-  rewriter.create<LLVM::CondBrOp>(loc, cond, loopBodyBlock, thenBlock);
-
-  // Loop body. Iterate through buffer 9 elements at a time.
-  rewriter.setInsertionPointToStart(loopBodyBlock);
-  auto time_lo = loadFromBuffer(index, 0);
-  auto time_hi = loadFromBuffer(index, 1);
-  auto const32 = llvmBuilder.i64_val(32);
-  auto time_lo_ext = llvmBuilder.zext(i64Type, time_lo);
-  auto time_hi_ext = llvmBuilder.zext(i64Type, time_hi);
-  auto time_hi_shl = llvmBuilder.shl(time_hi_ext, const32);
-  auto time = llvmBuilder.or_(time_lo_ext, time_hi_shl);
-  auto threadIdx_x = loadFromBuffer(index, 2);
-  auto threadIdx_y = loadFromBuffer(index, 3);
-  auto threadIdx_z = loadFromBuffer(index, 4);
-  auto blockIdx_x = loadFromBuffer(index, 5);
-  auto blockIdx_y = loadFromBuffer(index, 6);
-  auto blockIdx_z = loadFromBuffer(index, 7);
-  auto ctaRank = loadFromBuffer(index, 8);
-  auto const9 = llvmBuilder.i32_val(9);
-  auto nextIndex = llvmBuilder.add(index, const9);
-  llvmBuilder.store(nextIndex, indexPtr);
-
-  std::string formatStr;
-  llvm::raw_string_ostream os(formatStr);
-  os << "time=%lu thread=%u,%u,%u block=%u,%u,%u cta_rank=%u ";
-  llvm::SmallVector<Value> args{time,        threadIdx_x, threadIdx_y,
-                                threadIdx_z, blockIdx_x,  blockIdx_y,
-                                blockIdx_z,  ctaRank};
-  targetInfo.printf(rewriter, formatStr, args);
-  rewriter.create<LLVM::BrOp>(loc, loopConditionBlock);
+  auto headerNumberValue = llvmBuilder.i32_val(headerNumber);
+  SmallVector<Value> args{synclogBuffer, headerNumberValue};
+  for (auto arg : op->getOperands()) {
+    if (isa<LLVM::LLVMPointerType>(arg.getType())) {
+      args.push_back(llvmBuilder.ptrtoint(i32Type, arg));
+    } else {
+      args.push_back(arg);
+    }
+  }
+  rewriter.create<LLVM::CallOp>(loc, writeSynclogFn,
+                                ValueRange{synclogBuffer, headerNumberValue});
 }
 
 namespace {
@@ -278,33 +277,20 @@ struct InsertSynclogs
       signalPassFailure();
     }
     LLVM::LLVMFuncOp kernelFunc = *it;
+    kernelFunc = addSynclogPtr(rewriter, mod, kernelFunc);
+    auto synclogBuffer = *(kernelFunc.getArguments().end() - 2);
 
-    // Get pointer to synclog buffer. This is assumed to be the second last
-    // argument of the kernel.
-    std::optional<Value> prevPtr;
-    std::optional<Value> currPtr;
-    for (auto operand : kernelFunc.getArguments()) {
-      if (isa<LLVM::LLVMPointerType>(operand.getType())) {
-        prevPtr = currPtr;
-        currPtr = operand;
-      }
-    }
-    if (!prevPtr.has_value()) {
-      if (!currPtr.has_value()) {
-        assert(false && "synclog buffer not found");
-        signalPassFailure();
-      }
-      prevPtr = currPtr;
-    }
-    auto synclogBuffer = *prevPtr;
-
-    auto shouldEmitSynclog = [&](std::string &opName) -> int {
-      return llvm::any_of(opNames, [&](const auto &elem) {
-        return opName.find(elem) != std::string::npos;
+    auto synclogHeader = [&](std::string &opName) -> int {
+      auto it = llvm::find_if(opNames, [&](const auto &elem) {
+        return opName.find(elem.first) != std::string::npos;
       });
+      if (it == opNames.end()) {
+        return -1;
+      }
+      return it->second;
     };
 
-    llvm::SmallVector<Operation *> asyncOps;
+    llvm::SmallVector<std::pair<Operation *, int>> asyncOps;
     mod.walk([&](Operation *op) {
       std::string instrString("");
       llvm::TypeSwitch<Operation *>(op)
@@ -316,20 +302,15 @@ struct InsertSynclogs
           })
           .Default(
               [&](auto) { instrString = op->getName().getStringRef().str(); });
-      if (shouldEmitSynclog(instrString)) {
-        asyncOps.push_back(op);
+      auto header = synclogHeader(instrString);
+      if (header != -1) {
+        asyncOps.push_back(std::make_pair(op, header));
       }
     });
 
-    for (auto op : asyncOps) {
-      writeLogToBuffer(rewriter, mod, kernelFunc, op, synclogBuffer);
+    for (const auto &[op, header] : asyncOps) {
+      writeLogToBuffer(rewriter, mod, kernelFunc, op, synclogBuffer, header);
     }
-
-    // Using hardcoded compute capability and ptx version since the printing is
-    // independent of them.
-    NVIDIA::TargetInfo targetInfo(/*computeCapability=*/80, /*ptxVersion=*/80);
-    // Print synclog buffer at the end of the kernel.
-    printSynclog(rewriter, targetInfo, kernelFunc, synclogBuffer);
   }
 };
 } // namespace
