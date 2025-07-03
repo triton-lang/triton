@@ -302,18 +302,65 @@ void cloneForOp(scf::ForOp forOp, SmallVector<WgBuilder> &builders,
   cloneOpsInBlock(forOp.getBody(), builders, schedule);
 }
 
+void cloneIfOp(scf::IfOp ifOp, SmallVector<WgBuilder> &builders,
+               const WarpSchedule &schedule) {
+  SmallVector<scf::IfOp> newIfOps;
+  for (auto &b : builders) {
+    SmallVector<Type> newIfResultTypes;
+    for (auto [idx, result] : llvm::enumerate(ifOp.getResults())) {
+      newIfResultTypes.push_back(result.getType());
+    }
+    auto cond = b.mapping.lookupOrDefault(ifOp.getCondition());
+    auto newIfOp = b.builder.create<scf::IfOp>(
+        ifOp.getLoc(), newIfResultTypes, cond, ifOp.elseBlock() ? true : false);
+    newIfOps.push_back(newIfOp);
+
+    // map results
+    for (int oldIdx = 0, newIdx = 0; oldIdx < ifOp.getResults().size();
+         ++oldIdx) {
+      auto oldArg = ifOp.getResult(oldIdx);
+      auto newArg = newIfOp.getResult(newIdx++);
+      b.mapping.map(oldArg, newArg);
+    }
+    // map block args
+    for (auto [oldArg, newArg] :
+         llvm::zip(ifOp.thenBlock()->getArguments(),
+                   newIfOp.thenBlock()->getArguments())) {
+      b.mapping.map(oldArg, newArg);
+    }
+    if (ifOp.elseBlock()) {
+      for (auto [oldArg, newArg] :
+           llvm::zip(ifOp.elseBlock()->getArguments(),
+                     newIfOp.elseBlock()->getArguments())) {
+        b.mapping.map(oldArg, newArg);
+      }
+    }
+    b.builder.setInsertionPointToStart(newIfOp.thenBlock());
+  }
+
+  cloneOpsInBlock(ifOp.thenBlock(), builders, schedule);
+
+  if (auto elseBlock = ifOp.elseBlock()) {
+    for (auto [builder, newIfOp] : llvm::zip(builders, newIfOps)) {
+      builder.builder.setInsertionPointToStart(newIfOp.elseBlock());
+    }
+    cloneOpsInBlock(elseBlock, builders, schedule);
+  }
+
+  for (auto [builder, newIfOp] : llvm::zip(builders, newIfOps)) {
+    builder.builder.setInsertionPointAfter(newIfOp);
+  }
+}
+
 void cloneOpsInBlock(Block *block, SmallVector<WgBuilder> &builders,
                      const WarpSchedule &schedule) {
-  // OpBuilder topBuilder(wsFunc);
-  // topBuilder.setInsertionPointToStart(&wsFunc.getBody().front());
-  IRMapping topMapping;
   for (auto &op_ : *block) {
     auto op = &op_;
 
     if (auto forOp = dyn_cast<scf::ForOp>(op)) {
       cloneForOp(forOp, builders, schedule);
-      // } else if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
-      //   cloneIfOp(ifOp, wsFunc, opBuilders);
+    } else if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
+      cloneIfOp(ifOp, builders, schedule);
       // } else if (auto reduceOp = dyn_cast<triton::ReduceOp>(op)) {
       //   cloneReduceOp(reduceOp, wsFunc, opBuilders);
     } else if (auto yieldOp = dyn_cast<scf::YieldOp>(op)) {
@@ -328,12 +375,6 @@ void cloneOpsInBlock(Block *block, SmallVector<WgBuilder> &builders,
       // all remaining ops are expected to be regionless
       assert(op->getNumRegions() == 0);
 
-      auto partition = schedule.getPartition(op);
-
-      if (!partition) {
-        continue;
-      }
-
       auto doClone = [&](WgBuilder &builder, Operation *op) {
         auto newOp = builder.builder.clone(*op, builder.mapping);
         for (auto [oldResult, newResult] :
@@ -342,7 +383,9 @@ void cloneOpsInBlock(Block *block, SmallVector<WgBuilder> &builders,
         }
       };
 
-      if (partition == schedule.getRootPartition()) {
+      auto partition = schedule.getPartition(op);
+
+      if (!partition || partition == schedule.getRootPartition()) {
         for (auto &builder : builders) {
           doClone(builder, op);
         }
@@ -350,6 +393,27 @@ void cloneOpsInBlock(Block *block, SmallVector<WgBuilder> &builders,
         auto &builder = builders[partition->getIndex()];
         doClone(builder, op);
       }
+    }
+  }
+}
+
+void assignPartitionToBlock(mlir::Block *block, Partition *part,
+                            WarpSchedule &schedule);
+
+void assignPartitionToIfOp(scf::IfOp ifOp, Partition *part,
+                           WarpSchedule &schedule) {
+  assignPartitionToBlock(ifOp.thenBlock(), part, schedule);
+  if (ifOp.elseBlock()) {
+    assignPartitionToBlock(ifOp.elseBlock(), part, schedule);
+  }
+}
+
+void assignPartitionToBlock(mlir::Block *block, Partition *part,
+                            WarpSchedule &schedule) {
+  for (auto &op : block->getOperations()) {
+    schedule.insert(part, &op);
+    if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
+      assignPartitionToIfOp(ifOp, part, schedule);
     }
   }
 }
@@ -375,6 +439,13 @@ LogicalResult partitionLoopV2(scf::ForOp loop) {
     wgBuilder.setInsertionPoint(wgRt);
     builders.push_back({wgBuilder, IRMapping()});
   }
+
+  loop->getBlock()->walk([&](scf::IfOp ifOp) {
+    auto partition = schedule.getPartition(ifOp);
+    if (partition && partition != schedule.getRootPartition()) {
+      assignPartitionToIfOp(ifOp, partition, schedule);
+    }
+  });
 
   cloneForOp(loop, builders, schedule);
 
