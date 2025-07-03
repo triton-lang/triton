@@ -369,7 +369,7 @@ def test_typeconvert_downcast(src_dtype, dst_dtype, rounding, max_repr, device):
 ])
 @pytest.mark.parametrize("dst_dtype", ["float8e4nv", "float8e5"])
 @pytest.mark.parametrize("src_dtype", ["float32", "float16", "bfloat16"])
-def test_typeconvert_downcast_clamping(src_dtype, dst_dtype, mode, rounding="rtne", device="cuda"):
+def test_typeconvert_downcast_clamping(src_dtype, dst_dtype, mode, device, rounding="rtne"):
     if is_cuda():
         if src_dtype != 'float32' and torch.cuda.get_device_capability(0) < (9, 0):
             pytest.skip("non-float32 downcast tests only supported on NVGPU with compute capability 9.0+")
