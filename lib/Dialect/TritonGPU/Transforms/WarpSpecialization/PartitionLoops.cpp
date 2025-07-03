@@ -5,12 +5,12 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/RegionUtils.h"
+#include "nvidia/include/Dialect/NVWS/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Partition.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonGPU/Transforms/WarpSpecialization.h"
-#include "nvidia/include/Dialect/NVWS/IR/Dialect.h"
 #include "llvm/ADT/SCCIterator.h"
 
 using namespace mlir;
@@ -261,9 +261,11 @@ struct WgBuilder {
   IRMapping mapping;
 };
 
-void cloneOpsInBlock(Block *block, OpBuilder& builder, const WarpSchedule& schedule);
+void cloneOpsInBlock(Block *block, const SmallVector<WgBuilder> &builders,
+                     const WarpSchedule &schedule);
 
-void cloneForOp(scf::ForOp forOp, OpBuilder& builder, const WarpSchedule& schedule) {
+void cloneForOp(scf::ForOp forOp, const SmallVector<WgBuilder> &builders,
+                const WarpSchedule &schedule) {
   //   auto lb = b.mapping.lookup(forOp.getLowerBound());
   //   auto ub = b.mapping.lookup(forOp.getUpperBound());
   //   auto step = b.mapping.lookup(forOp.getStep());
@@ -304,10 +306,11 @@ void cloneForOp(scf::ForOp forOp, OpBuilder& builder, const WarpSchedule& schedu
   //   b.builder.setInsertionPointToStart(newForOp.getBody());
   // }
   // // resursive clone ops in the forOp body
-  cloneOpsInBlock(forOp.getBody(), builder, schedule);
+  cloneOpsInBlock(forOp.getBody(), builders, schedule);
 }
 
-void cloneOpsInBlock(Block *block, OpBuilder& builder, const WarpSchedule& schedule) {
+void cloneOpsInBlock(Block *block, const SmallVector<WgBuilder> &builders,
+                     const WarpSchedule &schedule) {
   // OpBuilder topBuilder(wsFunc);
   // topBuilder.setInsertionPointToStart(&wsFunc.getBody().front());
   IRMapping topMapping;
@@ -339,11 +342,11 @@ void cloneOpsInBlock(Block *block, OpBuilder& builder, const WarpSchedule& sched
     }
 
     if (auto forOp = dyn_cast<scf::ForOp>(op)) {
-      cloneForOp(forOp, builder, schedule);
-    // } else if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
-    //   cloneIfOp(ifOp, wsFunc, opBuilders);
-    // } else if (auto reduceOp = dyn_cast<triton::ReduceOp>(op)) {
-    //   cloneReduceOp(reduceOp, wsFunc, opBuilders);
+      cloneForOp(forOp, builders, schedule);
+      // } else if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
+      //   cloneIfOp(ifOp, wsFunc, opBuilders);
+      // } else if (auto reduceOp = dyn_cast<triton::ReduceOp>(op)) {
+      //   cloneReduceOp(reduceOp, wsFunc, opBuilders);
     } else if (auto yieldOp = dyn_cast<scf::YieldOp>(op)) {
       // yield %a0, %a1, .. , %an
       // each group yields its own operand
@@ -388,16 +391,21 @@ LogicalResult partitionLoopV2(scf::ForOp loop) {
   auto numPartitions = schedule.getNumPartitions();
   SmallVector<int32_t> numWarps(numPartitions, lookupNumWarps(loop));
   ImplicitLocOpBuilder b(loop.getLoc(), loop);
-  auto wgOp = b.create<nvws::WarpGroupOp>(loop.getResultTypes(), numWarps, numPartitions);
+  auto wgOp = b.create<nvws::WarpGroupOp>(loop.getResultTypes(), numWarps,
+                                          numPartitions);
+
+  SmallVector<WgBuilder> builders;
 
   for (Region &region : wgOp.getPartitionRegions()) {
     OpBuilder wgBuilder = OpBuilder::atBlockBegin(&region.emplaceBlock());
-    auto wgRetOp = wgBuilder.create<nvws::WarpGroupReturnOp>(wgOp.getLoc());
+    wgBuilder.create<nvws::WarpGroupReturnOp>(wgOp.getLoc());
+    builders.push_back({wgBuilder, IRMapping()});
+    ;
   }
 
-  loop.getResults().replaceAllUsesWith(wgOp.getResults());
+  cloneForOp(loop, builders, schedule);
 
-  // cloneForOp(loop, b, schedule);
+  loop.getResults().replaceAllUsesWith(wgOp.getResults());
   loop->erase();
 
   return success();
