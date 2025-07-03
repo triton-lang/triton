@@ -49,6 +49,7 @@ struct ConvertProtonNvidiaGPUToLLVM
     MLIRContext *context = &getContext();
     RewritePatternSet patterns(context);
     ModuleOp mod = getOperation();
+
     auto tritonTargetInfo =
         mlir::triton::NVIDIA::TargetInfo(computeCapability, ptxVersion);
     auto protonTargetInfo =

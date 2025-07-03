@@ -10,13 +10,13 @@
 namespace proton {
 
 struct ParserConfig {
-  enum class ExceptionPrinting {
+  enum class PrintMode {
     SILENT, // Don't print anything
     ALL     // Print all messages
   };
 
   // Configure exception message visibility
-  ExceptionPrinting exceptionPrintLevel = ExceptionPrinting::SILENT;
+  PrintMode printLevel = PrintMode::SILENT;
 
   // Device type that generated the trace
   Device device;

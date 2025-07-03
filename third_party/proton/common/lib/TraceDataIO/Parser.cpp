@@ -11,7 +11,7 @@ ParserBase::ParserBase(ByteSpan &buffer, const ParserConfig &config)
 void ParserBase::reportException(const ParserException &e, size_t pos) {
 
   if (e.severity == ExceptionSeverity::ERROR ||
-      config.exceptionPrintLevel == ParserConfig::ExceptionPrinting::ALL) {
+      config.printLevel == ParserConfig::PrintMode::ALL) {
     std::cerr << "ParserException [offset=" << pos << "]: " << e.what()
               << std::endl;
   }
