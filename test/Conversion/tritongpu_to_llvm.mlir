@@ -2545,6 +2545,27 @@ tt.func private @arith_constant_array() {
 // -----
 
 #blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#blocked2 = #ttg.blocked<{sizePerThread = [2, 2], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [0, 1]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
+#shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
+// CHECK-LABEL: @experimental_clear_read_barrier
+// CHECK: st.global
+tt.func private @experimental_clear_read_barrier(
+  %mbar: !ttg.memdesc<1xi64, #shared1, #smem, mutable>,
+  %barriers: tensor<2xi64, #blocked>,
+  %readBars: !tt.ptr<i8>
+) {
+  tti.experimental_clear_read_barrier %mbar {%barriers, %readBars(tensor<2x2xi8, #blocked2>)} : !ttg.memdesc<1xi64, #shared1, #smem, mutable>, tensor<2xi64, #blocked>, !tt.ptr<i8>
+  tt.return
+}
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 
 module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
 // CHECK-LABEL: @experimental_assert_in_thread_any
