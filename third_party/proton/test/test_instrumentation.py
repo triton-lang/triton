@@ -461,9 +461,13 @@ def test_sched_barrier(tmp_path: pathlib.Path):
     asm = kernel.asm["amdgcn"]
 
     # Make sure a sched barrier is inserted before every s_memtime call
-    for i, line in enumerate(asm.splitlines()):
+    lines = asm.splitlines()
+    for i, line in enumerate(lines):
         if "s_memtime" in line:
-            assert "sched_barrier" in asm.splitlines()[i - 1]
+            if ".loc" in lines[i - 1]:
+                assert "sched_barrier" in lines[i - 2]
+            else:
+                assert "sched_barrier" in lines[i - 1]
 
 
 def test_warp_spec(tmp_path: pathlib.Path):

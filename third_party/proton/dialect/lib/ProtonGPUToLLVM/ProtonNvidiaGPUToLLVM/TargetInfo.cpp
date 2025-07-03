@@ -57,4 +57,11 @@ int TargetInfo::getAddressSpace(Attribute addressSpace) const {
   return spaceId;
 }
 
+int TargetInfo::getIndexPtrAddrSpace() const {
+  // Internal buffer index is private to each thread, we use generic address
+  // space for NV GPUs. See detail discussion:
+  // https://llvm.org/docs/NVPTXUsage.html#address-spaces
+  return 0;
+}
+
 } // namespace mlir::triton::proton::gpu::NVIDIA

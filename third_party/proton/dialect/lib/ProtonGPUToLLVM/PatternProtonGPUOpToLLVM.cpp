@@ -12,12 +12,6 @@
 namespace mlir::triton {
 namespace proton::gpu {
 
-// Internal buffer index is private to each thread, we use generic address
-// space. See detail discussion:
-// https://llvm.org/docs/NVPTXUsage.html#address-spaces
-// https://llvm.org/docs/AMDGPUUsage.html#address-spaces
-constexpr int IndexPtrAddrSpace = 0;
-
 namespace {
 
 Value getLinearId(Location loc, ConversionPatternRewriter &rewriter) {
@@ -327,7 +321,8 @@ struct SegmentAllocOpConversion
     auto bufferBaseTy =
         mlir::cast<LLVM::LLVMStructType>(buffer.getType()).getBody()[0];
     Value bufferBase = b.extract_val(bufferBaseTy, buffer, 0);
-    auto indexPtrTy = ptr_ty(rewriter.getContext(), IndexPtrAddrSpace);
+    auto indexPtrTy =
+        ptr_ty(rewriter.getContext(), targetInfo.getIndexPtrAddrSpace());
     auto indexPtr = rewriter.create<LLVM::AllocaOp>(
         loc, indexPtrTy, i32_ty, b.i32_val(1), /*alignment=*/0);
     b.store(b.i32_val(0), indexPtr);
@@ -617,7 +612,7 @@ Type convertProtonGPUSegmentType(SegmentType type,
                                  const TargetInfoBase &targetInfo) {
   auto memorySpace = targetInfo.getAddressSpace(type.getMemorySpace());
   return LLVM::SegmentObject::getStructType(type.getContext(), memorySpace,
-                                            IndexPtrAddrSpace);
+                                            targetInfo.getIndexPtrAddrSpace());
 }
 
 } // namespace
