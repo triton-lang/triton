@@ -326,6 +326,7 @@ class HIPBackend(BaseBackend):
             amd.passes.ttgpuir.lower_instruction_sched_hints(pm, options.arch, options.num_stages)
         if not knobs.compilation.disable_line_info:
             passes.llvmir.add_di_scope(pm)
+        passes.llvmir.add_di_local_variable(pm) # TODO: consider use a flag to make it optional
         amd.passes.ttgpuir.add_builtin_func_to_llvmir(pm, __HIP_FTZ)
         pm.run(mod)
 
