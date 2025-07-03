@@ -304,7 +304,8 @@ class InstrumentationHook(Hook):
             device_type = encode_target(data["target"])
             scratch_mem_size = data["profile_scratch_size"]
             total_unit = data["num_warps"]
-            uid_num = total_unit if self.mode.sampling_strategy == triton_proton.SAMPLING_STRATEGY.NONE else len(sampled_warps)
+            uid_num = total_unit if self.mode.sampling_strategy == triton_proton.SAMPLING_STRATEGY.NONE else len(
+                sampled_warps)
             block_num = int(alloc_size / scratch_mem_size)
 
             # Binary trace layout:
