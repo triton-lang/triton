@@ -349,10 +349,7 @@ public:
         versionMajor, retShapePerCTA, oldAType.getElementType(), numWarps);
 
     assert(versionMajor == 2 || versionMajor == 3);
-    int versionMinor =
-        computeCapability == 75                                          ? 1
-        : (oldAType.getElementType().isF64() && computeCapability == 90) ? 2
-                                                                         : 0;
+    int versionMinor = computeCapability == 75 ? 1 : 0;
     auto warpsPerTile = getWarpsPerTile(dotOp, retShapePerCTA, versionMajor,
                                         numWarps, instrShape);
     auto mmaEnc = NvidiaMmaEncodingAttr::get(
