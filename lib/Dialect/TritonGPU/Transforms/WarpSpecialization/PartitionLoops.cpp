@@ -388,15 +388,17 @@ LogicalResult partitionLoopV2(scf::ForOp loop) {
   auto numPartitions = schedule.getNumPartitions();
   SmallVector<int32_t> numWarps(numPartitions, lookupNumWarps(loop));
   ImplicitLocOpBuilder b(loop.getLoc(), loop);
-  auto wgOp = b.create<nvws::WarpGroupOp>(numWarps, numPartitions);
+  auto wgOp = b.create<nvws::WarpGroupOp>(loop.getResultTypes(), numWarps, numPartitions);
 
   for (Region &region : wgOp.getPartitionRegions()) {
     OpBuilder wgBuilder = OpBuilder::atBlockBegin(&region.emplaceBlock());
     auto wgRetOp = wgBuilder.create<nvws::WarpGroupReturnOp>(wgOp.getLoc());
   }
 
+  loop.getResults().replaceAllUsesWith(wgOp.getResults());
+
   // cloneForOp(loop, b, schedule);
-  //  loop->erase();
+  loop->erase();
 
   return success();
 }

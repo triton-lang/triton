@@ -135,7 +135,7 @@ def NVWS_WarpGroupOp : NVWS_Op<"warp_group", [
   }];
 
   let arguments = (ins DenseI32ArrayAttr:$numWarps);
-
+  let results = (outs Variadic<AnyType>:$results);
   let regions = (region VariadicRegion<MinSizedRegion<1>>:$partitionRegions);
   let hasVerifier=1;
   let hasCustomAssemblyFormat = 1;
