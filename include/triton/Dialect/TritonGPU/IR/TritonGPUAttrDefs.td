@@ -1077,22 +1077,60 @@ V [ 0,4,8...60   1,5...61     2,6...62     3,7...63    ]   [ 128,132...188  129,
   [ 64,68...124  65,69...125  66,70...126  67,71...127 ]   [ 192,196...252  193,197...253  194,198...254  195,199...255 ]
   [ 64,68...124  65,69...125  66,70...126  67,71...127 ]   [ 192,196...252  193,197...253  194,198...254  195,199...255 ]
   [ 64,68...124  65,69...125  66,70...126  67,71...127 ]   [ 192,196...252  193,197...253  194,198...254  195,199...255 ]
+
+Example 4:
+This example demonstrates semantics of tilesPerWarp parameter. The MFMA layout (with tilesPerWarp=[1,1])
+assumes that each warp within a CTA tile computes a single MFMA tile. When the tensor is larger than
+a single CTA tile, these tiles are repeated across the tensor. In this setup, the output tiles computed
+by each wave were strided by the number of warps per CTA tile in both row and column dimensions.
+
+For instance, with 16 MFMA tiles and warpsPerCTA = [2, 2], the distribution of warps across the MFMA
+tiles looked like:
+
+w0 w1 w0 w1
+w2 w3 w2 w3
+w0 w1 w0 w1
+w2 w3 w2 w3
+
+tilesPerWarp parameter allows each warp to compute contiguous MFMA tiles in the row and/or column dimensions.
+Using the same example with tilesPerWarp = [2, 2], the layout becomes:
+
+w0 w0 w1 w1
+w0 w0 w1 w1
+w2 w2 w3 w3
+w2 w2 w3 w3
 }];
 
   let parameters = (
     ins
     "unsigned": $version,
     ArrayRefParameter<"unsigned">:$warpsPerCTA,
+    ArrayRefParameter<"unsigned">:$tilesPerWarp,
     "unsigned":$MDim,
     "unsigned":$NDim,
     "bool":$isTransposed,
     "CTALayoutAttr":$CTALayout
   );
 
+  let builders = [
+    AttrBuilder<(ins "unsigned":$version,
+                     "ArrayRef<unsigned>":$warpsPerCTA,
+                     "unsigned":$MDim,
+                     "unsigned":$NDim,
+                     "bool":$isTransposed,
+                     "CTALayoutAttr":$CTALayout), [{
+      SmallVector<unsigned> tilesPerWarp(warpsPerCTA.size(), 1);
+      return $_get(context, version, warpsPerCTA, tilesPerWarp, MDim, NDim, isTransposed, CTALayout);
+    }]>
+  ];
+
   let extraClassDeclaration = extraDistributedDeclaration # [{
     SmallVector<int64_t> getInstrShapeForOperand(int kWidth, int opIdx) const;
     SmallVector<int64_t> getRepForOperand(ArrayRef<int64_t> operandShape, int kWidth, int opIdx) const;
     SmallVector<unsigned> getRepOrderForOperand(int opIdx) const;
+
+    // Check if tilesPerWarp is 1 in every dimension.
+    bool hasUnitTilesPerWarp() const;
 
     // Returns a swizzled shared layout matching this MFMA layout for the
     // dot operand at the given |operandIdx| with |operandShape|.
