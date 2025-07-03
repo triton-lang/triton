@@ -39,7 +39,7 @@ class HIPOptions:
     arch: str = None
     # We have native support for OCP fp8 variants since CNDA4/RDNA4. For earlier generations,
     # we software emulate the support for them.
-    supported_fp8_dtypes: Tuple[str] = ("fp8e4nv", "fp8e5")
+    supported_fp8_dtypes: Tuple[str] = ("fp8e4nv", "fp8e5", "fp8e5b16")
     deprecated_fp8_dot_operand_dtypes: Tuple[str] = ()
     default_dot_input_precision: str = "ieee"
     allowed_dot_input_precisions: Tuple[str] = ("ieee", )

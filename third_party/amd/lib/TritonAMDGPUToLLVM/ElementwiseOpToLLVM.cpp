@@ -1260,12 +1260,103 @@ Fp8E5M2FNUZ_to_Bf16(Location loc, ConversionPatternRewriter &rewriter,
 
 // bf16 to fp8e5m2fnuz
 static SmallVector<Value>
-Bf16_to_Fp8E5M2FNUZ(Location loc, ConversionPatternRewriter &rewriter,
-                    const SmallVector<Value> &v) {
+Bf16_to_Fp8E5M2FNUZ_HW(Location loc, ConversionPatternRewriter &rewriter,
+                       const SmallVector<Value> &v) {
   assert(v.size() == 2);
   auto v0 = convertBf16ToFp32(loc, rewriter, v[0]);
   auto v1 = convertBf16ToFp32(loc, rewriter, v[1]);
   return cvtPkFp32ToF8<ROCDL::CvtPkBf8F32Op>(loc, rewriter, v0, v1);
+}
+
+static SmallVector<Value>
+Bf16_to_Fp8E5M2FNUZ_SW(Location loc, ConversionPatternRewriter &rewriter,
+                       const SmallVector<Value> &v) {
+  assert(v.size() == 2);
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+
+  SmallVector<Value> result(2);
+  for (size_t i = 0; i < 2; ++i) {
+    Value fp16 = v[i];
+    Value i16 = b.bitcast(fp16, i16_ty);
+
+    Value s = b.and_(i16_ty, i16, b.i16_val(0x8000));
+    Value exp =
+        b.and_(i16_ty, b.lshr(i16_ty, i16, b.i16_val(7)), b.i16_val(0xFF));
+    Value man = b.and_(i16_ty, i16, b.i16_val(0x7F));
+
+    // Convert 8-bit exponent to 5-bit exponent
+    // Exponent bias is 16
+    Value exp5 = b.select(b.icmp_ult(exp, b.i16_val(0x70)), b.i16_val(0),
+                          b.sub(i16_ty, exp, b.i16_val(0x6F)));
+
+    // Handle subnormal values (exp5 = 0)
+    // - exp <  0x6d: mantissa = 0x0000 (0)
+    // - exp == 0x6d: mantissa = 0x0000 (0),
+    //                           0x0020 (1/4)
+    // - exp == 0x6e: mantissa = 0x0020 (1/4),
+    //                           0x0040 (1/2)
+    // - exp == 0x6f: mantissa = 0x0040 (1/2),
+    //                           0x0060 (3/4),
+    //                           0x0080 (1)
+    man = b.select(b.icmp_ult(exp, b.i16_val(0x6d)), b.i16_val(0), man);
+    man = b.select(
+        b.icmp_eq(exp, b.i16_val(0x6d)),
+        b.select(b.icmp_ne(man, b.i16_val(0)), b.i16_val(0x0020), b.i16_val(0)),
+        man);
+    man = b.select(b.icmp_eq(exp, b.i16_val(0x6e)),
+                   b.select(b.icmp_uge(man, b.i16_val(0x0040)),
+                            b.i16_val(0x0040), b.i16_val(0x0020)),
+                   man);
+    man = b.select(b.icmp_eq(exp, b.i16_val(0x6f)),
+                   b.select(b.icmp_ugt(man, b.i16_val(0x0020)),
+                            b.select(b.icmp_uge(man, b.i16_val(0x0060)),
+                                     b.i16_val(0x0080), b.i16_val(0x0060)),
+                            b.i16_val(0x0040)),
+                   man);
+
+    // Round 7-bit mantissa to 2-bit
+    Value sig = b.or_(i16_ty, b.shl(i16_ty, exp5, b.i16_val(7)), man);
+    Value bias = b.add(
+        i16_ty,
+        b.lshr(i16_ty, b.and_(i16_ty, sig, b.i16_val(0x0020)), b.i16_val(5)),
+        b.i16_val(0x000F));
+    i16 = b.add(i16_ty, sig, bias);
+
+    // Handle overflow using saturation mode, by setting sig to be the max.
+    // Overflow will happen for the following cases:
+    // - Any number equal or larger than 0x0FF0 after rounding
+    // - Exponent larger than 0x8F (including infinite 0xFF)
+    i16 = b.select(b.and_(b.icmp_ugt(exp, b.i16_val(0x8F)),
+                          b.icmp_uge(sig, b.i16_val(0x0FF0))),
+                   b.i16_val(0x0FFF), i16);
+
+    // Add sign bit
+    i16 = b.or_(i16_ty, b.lshr(i16_ty, s, b.i16_val(3)), i16);
+
+    Value isNaN = b.and_(i1_ty, b.icmp_eq(exp, b.i16_val(0xFF)),
+                         b.icmp_ne(man, b.i16_val(0x0)));
+    Value isInf = b.and_(i1_ty, b.icmp_eq(exp, b.i16_val(0xFF)),
+                         b.icmp_eq(man, b.i16_val(0x0)));
+    Value isNaNOrInf = b.or_(i1_ty, isNaN, isInf);
+    // Convert NaN / Inf value to NaN
+    i16 = b.select(isNaNOrInf, b.i16_val(0x1000), i16);
+
+    Value res = b.lshr(i16_ty, i16, b.i16_val(5));
+    // In UZ formats there is only 1 zero (positive zero)
+    // Correct negative zero to 0
+    Value isNegativeZero = b.and_(i1_ty, b.icmp_eq(res, b.i16_val(0x0080)),
+                                  b.icmp_eq(isNaNOrInf, b.i1_val(0)));
+    res = b.select(isNegativeZero, b.i16_val(0), res);
+    // Truncate to 8-bit
+    result[i] = b.trunc(i8_ty, res);
+  }
+
+  return result;
+}
+
+static ConverterT Bf16_to_Fp8E5M2FNUZ(AMD::ISAFamily isaFamily) {
+  return isaFamily == AMD::ISAFamily::CDNA4 ? Bf16_to_Fp8E5M2FNUZ_SW
+                                            : Bf16_to_Fp8E5M2FNUZ_HW;
 }
 
 static Value Fp8E4M3FNUZ_to_Fp16_oneValue(Location loc,
@@ -1474,7 +1565,7 @@ struct FpToFpOpConversion
              Bf16_to_Fp8E5M2(isaFamily)},
             {{BF16TyID, F8E4M3FNTyID, RoundingMode::RTNE}, Bf16_to_Fp8E4M3FN},
             {{BF16TyID, F8E5M2FNUZTyID, RoundingMode::RTNE},
-             Bf16_to_Fp8E5M2FNUZ},
+             Bf16_to_Fp8E5M2FNUZ(isaFamily)},
             {{BF16TyID, F8E4M3FNUZTyID, RoundingMode::RTNE},
              Bf16_to_Fp8E4M3FNUZ},
             // F32 <-> F8
