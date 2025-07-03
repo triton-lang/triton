@@ -105,159 +105,160 @@ LLVM::LLVMFuncOp addSynclogPtr(IRRewriter &rewriter, ModuleOp mod,
   return newKernelFunc;
 }
 
-void writeLogToBuffer(IRRewriter &rewriter, ModuleOp mod,
-                      LLVM::LLVMFuncOp kernelFunc, Operation *op,
-                      Value synclogBuffer, int headerNumber) {
+void writeLogToBuffer(IRRewriter &rewriter, Operation *op, Value synclogBuffer,
+                      int headerNumber) {
   auto ctx = rewriter.getContext();
-  auto loc = kernelFunc->getLoc();
+  auto loc = op->getLoc();
   TritonLLVMOpBuilder llvmBuilder(loc, rewriter);
   auto i32Type = type::i32Ty(ctx);
   auto i64Type = type::i64Ty(ctx);
   auto globalPtrTy = LLVM::LLVMPointerType::get(ctx, 1);
 
-  StringRef writeSynclogFnName = "write_synclog";
-  LLVM::LLVMFuncOp writeSynclogFn =
-      mod.lookupSymbol<LLVM::LLVMFuncOp>(writeSynclogFnName);
-  if (!writeSynclogFn) {
-    rewriter.setInsertionPoint(kernelFunc);
-    writeSynclogFn = rewriter.create<LLVM::LLVMFuncOp>(
-        mod.getLoc(), writeSynclogFnName,
-        LLVM::LLVMFunctionType::get(void_ty(ctx), {globalPtrTy, i32Type}));
-    writeSynclogFn.setPrivate();
-
-    auto *funcBlock = writeSynclogFn.addEntryBlock(rewriter);
-    rewriter.setInsertionPointToEnd(funcBlock);
-    auto returnOp = rewriter.create<LLVM::ReturnOp>(loc, ValueRange{});
-    rewriter.setInsertionPointToStart(funcBlock);
-
-    auto synclogBufferPtr = funcBlock->getArgument(0);
-    auto headerNumber = funcBlock->getArgument(1);
-
-    // Split global timer into 32-bit low and high parts.
-    auto time64 = rewriter
-                      .create<LLVM::InlineAsmOp>(
-                          loc, i64Type, ValueRange{},       // operands
-                          "mov.u64 $0, %globaltimer;",      // asm_string
-                          llvm::formatv("=l").str().data(), // constraints
-                          true,                             // has_side_effects
-                          false,                            // is_align_stack
-                          LLVM::TailCallKind::None,         // tail_call_kind
-                          LLVM::AsmDialectAttr::get(
-                              ctx,
-                              LLVM::AsmDialect::AD_ATT), // asm_dialect
-                          ArrayAttr()                    // operand_attrs
-                          )
-                      .getRes();
-    auto time_lo = llvmBuilder.trunc(i32Type, time64);
-    auto const32 = llvmBuilder.i64_val(32);
-    auto time_hi_untrunc = llvmBuilder.lshr(time64, const32);
-    auto time_hi = llvmBuilder.trunc(i32Type, time_hi_untrunc);
-
-    // Get block/thread indices and cta rank.
-    auto blockIdx_x = rewriter.create<NVVM::BlockIdXOp>(loc, i32Type);
-    auto threadIdx_x = rewriter.create<NVVM::ThreadIdXOp>(loc, i32Type);
-    auto blockIdx_y = rewriter.create<NVVM::BlockIdYOp>(loc, i32Type);
-    auto threadIdx_y = rewriter.create<NVVM::ThreadIdYOp>(loc, i32Type);
-    auto blockIdx_z = rewriter.create<NVVM::BlockIdZOp>(loc, i32Type);
-    auto threadIdx_z = rewriter.create<NVVM::ThreadIdZOp>(loc, i32Type);
-    auto ctaRank = rewriter.create<NVVM::ClusterId>(loc, i32Type);
-
-    // Only emit synclog if threadIdx_x % 32 == 0, and threadIdx_y, threadIdx_z,
-    // blockIdx_x, blockIdx_y, blockIdx_z are all 0. This is to keep output
-    // smaller for parsing.
-    auto const32_i32 = llvmBuilder.i32_val(32);
-    auto tidXMod32 = llvmBuilder.urem(threadIdx_x, const32_i32);
-    auto const0 = llvmBuilder.i32_val(0);
-    auto cond1 = llvmBuilder.icmp_eq(tidXMod32, const0);
-    auto cond2 = llvmBuilder.icmp_eq(threadIdx_y, const0);
-    auto cond3 = llvmBuilder.icmp_eq(threadIdx_z, const0);
-    auto cond4 = llvmBuilder.icmp_eq(blockIdx_x, const0);
-    auto cond5 = llvmBuilder.icmp_eq(blockIdx_y, const0);
-    auto cond6 = llvmBuilder.icmp_eq(blockIdx_z, const0);
-    auto and1 = llvmBuilder.and_(cond1, cond2);
-    auto and2 = llvmBuilder.and_(cond3, cond4);
-    auto and3 = llvmBuilder.and_(cond5, cond6);
-    auto and4 = llvmBuilder.and_(and1, and2);
-    auto and5 = llvmBuilder.and_(and3, and4);
-
-    auto *prevBlock = rewriter.getInsertionBlock();
-    auto *ifBlock =
-        rewriter.splitBlock(prevBlock, rewriter.getInsertionPoint());
-    auto *thenBlock = rewriter.splitBlock(ifBlock, returnOp->getIterator());
-    rewriter.setInsertionPointToEnd(prevBlock);
-    rewriter.create<LLVM::CondBrOp>(loc, and5, ifBlock, thenBlock);
-    rewriter.setInsertionPointToEnd(ifBlock);
-    rewriter.create<LLVM::BrOp>(loc, thenBlock);
-    rewriter.setInsertionPointToStart(ifBlock);
-
-    // Atomically allocate space in synclog buffer.
-    auto constLength = llvmBuilder.i32_val(15);
-    auto last = rewriter.create<LLVM::AtomicRMWOp>(
-        loc, LLVM::AtomicBinOp::add, synclogBufferPtr, constLength,
-        LLVM::AtomicOrdering::monotonic);
-    auto lastPlusConstLength = llvmBuilder.add(last, constLength);
-    auto synclogCapValue = llvmBuilder.i32_val(synclogCap);
-    auto lastPlusConstLengthLessThanCap =
-        llvmBuilder.icmp_ult(lastPlusConstLength, synclogCapValue);
-
-    auto *writeBufferBlock =
-        rewriter.splitBlock(ifBlock, rewriter.getInsertionPoint());
-    auto *bufferFullBlock =
-        rewriter.splitBlock(writeBufferBlock, rewriter.getInsertionPoint());
-    rewriter.setInsertionPointToEnd(ifBlock);
-    rewriter.create<LLVM::CondBrOp>(loc, lastPlusConstLengthLessThanCap,
-                                    writeBufferBlock, bufferFullBlock);
-    rewriter.setInsertionPointToEnd(writeBufferBlock);
-    rewriter.create<LLVM::BrOp>(loc, thenBlock);
-
-    rewriter.setInsertionPointToStart(writeBufferBlock);
-    auto const1 = llvmBuilder.i32_val(1);
-    auto offset = llvmBuilder.add(const1, last);
-    auto synclogPtr = llvmBuilder.gep(globalPtrTy, i32Type, synclogBufferPtr,
-                                      offset.getResult());
-
-    // Write to buffer.
-    auto storeInBuffer = [&](Value valToStore, int index) {
-      auto ptr = llvmBuilder.gep(globalPtrTy, i32Type, synclogPtr,
-                                 llvmBuilder.i32_val(index));
-      llvmBuilder.store(valToStore, ptr);
-    };
-    storeInBuffer(headerNumber, 0);
-    for (size_t i = 0; i < op->getNumOperands() && i < 5; i++) {
-      auto arg = op->getOperand(i);
-      if (isa<LLVM::LLVMPointerType>(arg.getType())) {
-        storeInBuffer(llvmBuilder.ptrtoint(i32Type, arg), i + 1);
-      } else {
-        storeInBuffer(arg, i + 1);
-      }
-    }
-    storeInBuffer(time_lo, 6);
-    storeInBuffer(time_hi, 7);
-    storeInBuffer(threadIdx_x, 8);
-    storeInBuffer(threadIdx_y, 9);
-    storeInBuffer(threadIdx_z, 10);
-    storeInBuffer(blockIdx_x, 11);
-    storeInBuffer(blockIdx_y, 12);
-    storeInBuffer(blockIdx_z, 13);
-    storeInBuffer(ctaRank, 14);
-
-    rewriter.setInsertionPointToStart(bufferFullBlock);
-    rewriter.create<LLVM::AtomicRMWOp>(loc, LLVM::AtomicBinOp::sub,
-                                       synclogBufferPtr, constLength,
-                                       LLVM::AtomicOrdering::monotonic);
-  }
   rewriter.setInsertionPoint(op);
+  // Split global timer into 32-bit low and high parts.
+  auto time64 = rewriter
+                    .create<LLVM::InlineAsmOp>(
+                        loc, i64Type, ValueRange{},       // operands
+                        "mov.u64 $0, %globaltimer;",      // asm_string
+                        llvm::formatv("=l").str().data(), // constraints
+                        true,                             // has_side_effects
+                        false,                            // is_align_stack
+                        LLVM::TailCallKind::None,         // tail_call_kind
+                        LLVM::AsmDialectAttr::get(
+                            ctx,
+                            LLVM::AsmDialect::AD_ATT), // asm_dialect
+                        ArrayAttr()                    // operand_attrs
+                        )
+                    .getRes();
+  auto time_lo = llvmBuilder.trunc(i32Type, time64);
+  auto const32 = llvmBuilder.i64_val(32);
+  auto time_hi_untrunc = llvmBuilder.lshr(time64, const32);
+  auto time_hi = llvmBuilder.trunc(i32Type, time_hi_untrunc);
+
+  // Get block/thread indices and cta rank.
+  auto blockIdx_x = rewriter.create<NVVM::BlockIdXOp>(loc, i32Type);
+  auto threadIdx_x = rewriter.create<NVVM::ThreadIdXOp>(loc, i32Type);
+  auto blockIdx_y = rewriter.create<NVVM::BlockIdYOp>(loc, i32Type);
+  auto threadIdx_y = rewriter.create<NVVM::ThreadIdYOp>(loc, i32Type);
+  auto blockIdx_z = rewriter.create<NVVM::BlockIdZOp>(loc, i32Type);
+  auto threadIdx_z = rewriter.create<NVVM::ThreadIdZOp>(loc, i32Type);
+  auto ctaRank = rewriter.create<NVVM::ClusterId>(loc, i32Type);
+
+  // Only emit synclog if threadIdx_x % 32 == 0, and threadIdx_y, threadIdx_z,
+  // blockIdx_x, blockIdx_y, blockIdx_z are all 0. This is to keep output
+  // smaller for parsing.
+  auto const32_i32 = llvmBuilder.i32_val(32);
+  auto tidXMod32 = llvmBuilder.urem(threadIdx_x, const32_i32);
+  auto const0 = llvmBuilder.i32_val(0);
+  auto cond1 = llvmBuilder.icmp_eq(tidXMod32, const0);
+  auto cond2 = llvmBuilder.icmp_eq(threadIdx_y, const0);
+  auto cond3 = llvmBuilder.icmp_eq(threadIdx_z, const0);
+  auto cond4 = llvmBuilder.icmp_eq(blockIdx_x, const0);
+  auto cond5 = llvmBuilder.icmp_eq(blockIdx_y, const0);
+  auto cond6 = llvmBuilder.icmp_eq(blockIdx_z, const0);
+  auto and1 = llvmBuilder.and_(cond1, cond2);
+  auto and2 = llvmBuilder.and_(cond3, cond4);
+  auto and3 = llvmBuilder.and_(cond5, cond6);
+  auto and4 = llvmBuilder.and_(and1, and2);
+  auto and5 = llvmBuilder.and_(and3, and4);
+
+  auto *prevBlock = rewriter.getInsertionBlock();
+  auto *ifBlock = rewriter.splitBlock(prevBlock, rewriter.getInsertionPoint());
+  auto *thenBlock = rewriter.splitBlock(ifBlock, op->getIterator());
+  rewriter.setInsertionPointToEnd(prevBlock);
+  rewriter.create<LLVM::CondBrOp>(loc, and5, ifBlock, thenBlock);
+  rewriter.setInsertionPointToEnd(ifBlock);
+  rewriter.create<LLVM::BrOp>(loc, thenBlock);
+  rewriter.setInsertionPointToStart(ifBlock);
+
+  // Atomically allocate space in synclog buffer.
+  auto numArgs = std::min(
+      5, static_cast<int>(llvm::count_if(op->getOperands(), [](auto arg) {
+        return isa<LLVM::LLVMPointerType>(arg.getType()) ||
+               arg.getType().isInteger();
+      })));
+  auto constLength = llvmBuilder.i32_val(11 + numArgs);
+  auto last = rewriter.create<LLVM::AtomicRMWOp>(
+      loc, LLVM::AtomicBinOp::add, synclogBuffer, constLength,
+      LLVM::AtomicOrdering::monotonic);
+  auto lastPlusConstLength = llvmBuilder.add(last, constLength);
+  auto synclogCapValue = llvmBuilder.i32_val(synclogCap);
+  auto lastPlusConstLengthLessThanCap =
+      llvmBuilder.icmp_ult(lastPlusConstLength, synclogCapValue);
+
+  auto *writeBufferBlock =
+      rewriter.splitBlock(ifBlock, rewriter.getInsertionPoint());
+  auto *bufferFullBlock =
+      rewriter.splitBlock(writeBufferBlock, rewriter.getInsertionPoint());
+  rewriter.setInsertionPointToEnd(ifBlock);
+  rewriter.create<LLVM::CondBrOp>(loc, lastPlusConstLengthLessThanCap,
+                                  writeBufferBlock, bufferFullBlock);
+  rewriter.setInsertionPointToEnd(writeBufferBlock);
+  rewriter.create<LLVM::BrOp>(loc, thenBlock);
+
+  rewriter.setInsertionPointToStart(writeBufferBlock);
+  auto const1 = llvmBuilder.i32_val(1);
+  auto offset = llvmBuilder.add(const1, last);
+  auto synclogPtr =
+      llvmBuilder.gep(globalPtrTy, i32Type, synclogBuffer, offset.getResult());
+
+  // Write to buffer. Information is stored in the following order:
+  // 0: header number
+  // 1: number of arguments stored
+  // 2: argument 0
+  // 3: ...
+  // 2 + numArgsStored: time_lo
+  // 3 + numArgsStored: time_hi
+  // 4 + numArgsStored: threadIdx_x
+  // 5 + numArgsStored: threadIdx_y
+  // 6 + numArgsStored: threadIdx_z
+  // 7 + numArgsStored: blockIdx_x
+  // 8 + numArgsStored: blockIdx_y
+  // 9 + numArgsStored: blockIdx_z
+  // 10 + numArgsStored: ctaRank
+  auto storeInBuffer = [&](Value valToStore, int index) {
+    auto ptr = llvmBuilder.gep(globalPtrTy, i32Type, synclogPtr,
+                               llvmBuilder.i32_val(index));
+    llvmBuilder.store(valToStore, ptr);
+  };
   auto headerNumberValue = llvmBuilder.i32_val(headerNumber);
-  SmallVector<Value> args{synclogBuffer, headerNumberValue};
-  for (auto arg : op->getOperands()) {
-    if (isa<LLVM::LLVMPointerType>(arg.getType())) {
-      args.push_back(llvmBuilder.ptrtoint(i32Type, arg));
-    } else {
-      args.push_back(arg);
+  storeInBuffer(headerNumberValue, 0);
+  storeInBuffer(llvmBuilder.i32_val(numArgs), 1);
+  size_t argIndex = 2;
+  for (const auto &arg : op->getOperands()) {
+    auto argType = arg.getType();
+    // Store only pointers and integers.
+    if (isa<LLVM::LLVMPointerType>(argType)) {
+      storeInBuffer(llvmBuilder.ptrtoint(i32Type, arg), argIndex);
+      argIndex++;
+    } else if (argType.isInteger()) {
+      storeInBuffer(arg, argIndex);
+      argIndex++;
+    }
+    // Store at most 5 arguments.
+    if (argIndex >= 7) {
+      break;
     }
   }
-  rewriter.create<LLVM::CallOp>(loc, writeSynclogFn,
-                                ValueRange{synclogBuffer, headerNumberValue});
+
+  auto afterArgsOffset = llvmBuilder.i32_val(2 + numArgs);
+  synclogPtr =
+      llvmBuilder.gep(globalPtrTy, i32Type, synclogPtr, afterArgsOffset);
+  storeInBuffer(time_lo, 0);
+  storeInBuffer(time_hi, 1);
+  storeInBuffer(threadIdx_x, 2);
+  storeInBuffer(threadIdx_y, 3);
+  storeInBuffer(threadIdx_z, 4);
+  storeInBuffer(blockIdx_x, 5);
+  storeInBuffer(blockIdx_y, 6);
+  storeInBuffer(blockIdx_z, 7);
+  storeInBuffer(ctaRank, 8);
+
+  // If the buffer is full, move the pointer back n places.
+  rewriter.setInsertionPointToStart(bufferFullBlock);
+  rewriter.create<LLVM::AtomicRMWOp>(loc, LLVM::AtomicBinOp::sub, synclogBuffer,
+                                     constLength,
+                                     LLVM::AtomicOrdering::monotonic);
 }
 
 namespace {
@@ -309,7 +310,7 @@ struct InsertSynclogs
     });
 
     for (const auto &[op, header] : asyncOps) {
-      writeLogToBuffer(rewriter, mod, kernelFunc, op, synclogBuffer, header);
+      writeLogToBuffer(rewriter, op, synclogBuffer, header);
     }
   }
 };
