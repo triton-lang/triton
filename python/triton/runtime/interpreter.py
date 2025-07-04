@@ -934,9 +934,9 @@ class ReduceOps(ReduceScanOpInterface):
         elif self.combine_fn == tl.standard._argmax_combine_tie_break_left:
             return self.min_max(input[0], val_reduce_op=np.max, idx_reduce_op=np.argmax)
         elif self.combine_fn == tl.standard._elementwise_max:
-            return self.min_max(input[0], val_reduce_op=np.max, idx_reduce_op=None)
+            return self.min_max(input[0], val_reduce_op=np.nanmax, idx_reduce_op=None)
         elif self.combine_fn == tl.standard._elementwise_min:
-            return self.min_max(input[0], val_reduce_op=np.min, idx_reduce_op=None)
+            return self.min_max(input[0], val_reduce_op=np.nanmin, idx_reduce_op=None)
         elif self.combine_fn == tl.standard._sum_combine:
             return self.sum(input[0])
         else:
