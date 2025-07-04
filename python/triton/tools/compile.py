@@ -154,9 +154,6 @@ def compile_kernel(args: CompileArgs):
             arg_types.append(signature[arg_name])
             arg_names_not_1.append(arg_name)
             arg_types_not_1.append(signature[arg_name])
-        elif hints.get((i, ), None) == 1:
-            arg_names.append(arg_name)
-            arg_types.append("i32")
 
     # dump C stub code
     suffix = ''
