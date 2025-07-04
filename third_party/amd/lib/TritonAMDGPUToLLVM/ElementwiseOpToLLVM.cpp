@@ -43,7 +43,9 @@ template <typename FPType> struct FPTypeInfo {
     if constexpr (std::is_same_v<FPType, Float8E5M2Type>) {
       return std::make_tuple(5, 2, 15);
     }
+    return {};
   }
+
   IntegerType getIntType() {
     if constexpr (std::is_same_v<FPType, Float32Type>) {
       return i32_ty;
@@ -55,73 +57,6 @@ template <typename FPType> struct FPTypeInfo {
     if constexpr (std::is_same_v<FPType, Float8E4M3FNType> ||
                   std::is_same_v<FPType, Float8E5M2Type>) {
       return i8_ty;
-    }
-    return nullptr;
-  }
-  Value getSignMask() {
-    if constexpr (std::is_same_v<FPType, Float32Type>) {
-      return b.i32_val(0x80000000);
-    }
-    if constexpr (std::is_same_v<FPType, Float16Type> ||
-                  std::is_same_v<FPType, BFloat16Type>) {
-      return b.i16_val(0x8000);
-    }
-    if constexpr (std::is_same_v<FPType, Float8E4M3FNType> ||
-                  std::is_same_v<FPType, Float8E5M2Type>) {
-      return b.i8_val(0x80);
-    }
-    return nullptr;
-  }
-  Value getExpMask() {
-    if constexpr (std::is_same_v<FPType, Float32Type>) {
-      return b.i32_val(0x7F800000);
-    }
-    if constexpr (std::is_same_v<FPType, Float16Type>) {
-      return b.i16_val(0x7C00);
-    }
-    if constexpr (std::is_same_v<FPType, BFloat16Type>) {
-      return b.i16_val(0x7F80);
-    }
-    if constexpr (std::is_same_v<FPType, Float8E4M3FNType>) {
-      return b.i8_val(0x78);
-    }
-    if constexpr (std::is_same_v<FPType, Float8E5M2Type>) {
-      return b.i8_val(0x7C);
-    }
-    return nullptr;
-  }
-  Value getMantissaMask() {
-    if constexpr (std::is_same_v<FPType, Float32Type>) {
-      return b.i32_val(0x007FFFFF);
-    }
-    if constexpr (std::is_same_v<FPType, Float16Type>) {
-      return b.i16_val(0x03FF);
-    }
-    if constexpr (std::is_same_v<FPType, BFloat16Type>) {
-      return b.i16_val(0x007F);
-    }
-    if constexpr (std::is_same_v<FPType, Float8E4M3FNType>) {
-      return b.i8_val(0x07);
-    }
-    if constexpr (std::is_same_v<FPType, Float8E5M2Type>) {
-      return b.i8_val(0x03);
-    }
-    return nullptr;
-  }
-
-  Value getPositiveNan() {
-    if constexpr (std::is_same_v<FPType, Float32Type>) {
-      return toLLVMIntValue(0x7FFFFFFF);
-    }
-    if constexpr (std::is_same_v<FPType, Float16Type>) {
-      return toLLVMIntValue(0x7FFF);
-    }
-    if constexpr (std::is_same_v<FPType, BFloat16Type>) {
-      return toLLVMIntValue(0x7FFF);
-    }
-    if constexpr (std::is_same_v<FPType, Float8E4M3FNType> ||
-                  std::is_same_v<FPType, Float8E5M2Type>) {
-      return toLLVMIntValue(0x7F);
     }
     return nullptr;
   }
@@ -455,10 +390,13 @@ static Value Fp_to_Fp8E4M3FN_RTNE_oneValue(Location loc,
 
   // Get sign and absolute value
   Value intVal = b.bitcast(v, srcIntType);
-  Value sign = b.trunc(i8_ty, b.lshr(b.and_(intVal, srcFpInfo.getSignMask()),
-                                     srcFpInfo.toLLVMIntValue(srcWidth - 8)));
+  int32_t signMask = 1 << (srcWidth - 1);
+  Value sign =
+      b.trunc(i8_ty, b.lshr(b.and_(intVal, srcFpInfo.toLLVMIntValue(signMask)),
+                            srcFpInfo.toLLVMIntValue(srcWidth - 8)));
 
-  intVal = b.and_(intVal, srcFpInfo.getPositiveNan());
+  int32_t absoluteMask = signMask - 1;
+  intVal = b.and_(intVal, srcFpInfo.toLLVMIntValue(absoluteMask));
 
   // Rounding to nearest even
   uint32_t baseRoundingBias = (1 << (reducedMantissaBits - 1)) - 1;
@@ -516,7 +454,8 @@ static Value Fp_to_Fp8E4M3FN_RTNE_oneValue(Location loc,
   }
 
   // NaN remains NaN after conversion
-  vFp8 = b.select(isNaN, dstFpInfo.getPositiveNan(), vFp8);
+  int32_t positiveNan = (1 << (dstExponentBits + dstMantissaBits)) - 1;
+  vFp8 = b.select(isNaN, dstFpInfo.toLLVMIntValue(positiveNan), vFp8);
 
   // Set sign bit
   vFp8 = b.or_(vFp8, sign);
