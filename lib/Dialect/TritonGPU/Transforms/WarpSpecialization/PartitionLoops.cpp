@@ -494,9 +494,7 @@ LogicalResult partitionLoopV2(scf::ForOp loop) {
 
   SmallVector<WgBuilder> builders;
   for (Region &region : wgOp.getPartitionRegions()) {
-    OpBuilder wgBuilder = OpBuilder::atBlockBegin(&region.emplaceBlock());
-    auto wgRt = wgBuilder.create<nvws::WarpGroupReturnOp>(wgOp.getLoc());
-    wgBuilder.setInsertionPoint(wgRt);
+    OpBuilder wgBuilder = OpBuilder::atBlockEnd(&region.emplaceBlock());
     builders.push_back({wgBuilder, IRMapping()});
   }
 
@@ -508,6 +506,23 @@ LogicalResult partitionLoopV2(scf::ForOp loop) {
   });
 
   cloneForOp(loop, builders, schedule);
+
+  for (size_t i = 0; i < numPartitions; ++i) {
+    auto builder = builders[i].builder;
+    auto &region = wgOp.getPartitionRegions()[i];
+    auto newForOp = cast<scf::ForOp>(region.front().front());
+    builder.setInsertionPointAfter(newForOp);
+
+    if (i == 0) {
+      auto outputs = newForOp.getResults();
+      builder.create<WarpYieldOp>(wgOp.getLoc(), outputs);
+    } else {
+      auto wgRt = builder.create<nvws::WarpGroupReturnOp>(wgOp.getLoc());
+      //      builder.setInsertionPoint(wgRt);
+    }
+  }
+
+  loop->getParentOfType<ModuleOp>().dump();
 
   for (auto [i, res]: llvm::enumerate(loop.getResults())) {
     if (!res.use_empty()) {
