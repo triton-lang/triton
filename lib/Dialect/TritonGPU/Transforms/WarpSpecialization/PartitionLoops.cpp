@@ -471,10 +471,25 @@ LogicalResult partitionLoopV2(scf::ForOp loop) {
   if (failed(schedule.verify(loop)))
     return failure();
 
+  SmallVector<Type> resultTypes;
+  auto defaultPartition = schedule.getPartition((int)0);
+  llvm::BitVector toErase(loop.getNumRegionIterArgs(), true);
+  SmallVector<int> newResultIdx(loop.getNumRegionIterArgs(), -1);
+  for (auto [i, iterArg, result, resultTy] :
+       llvm::enumerate(loop.getRegionIterArgs(), loop.getResults(),
+                 loop.getResultTypes())) {
+    if (isUsedBy(iterArg, defaultPartition, loop, schedule) ||
+        !result.use_empty()) {
+      newResultIdx[i] = resultTypes.size();
+      resultTypes.push_back(resultTy);
+      toErase.reset(i);
+    }
+  }
+
   auto numPartitions = schedule.getNumPartitions();
   SmallVector<int32_t> numWarps(numPartitions, lookupNumWarps(loop));
   ImplicitLocOpBuilder b(loop.getLoc(), loop);
-  auto wgOp = b.create<nvws::WarpGroupOp>(loop.getResultTypes(), numWarps,
+  auto wgOp = b.create<nvws::WarpGroupOp>(resultTypes, numWarps,
                                           numPartitions);
 
   SmallVector<WgBuilder> builders;
@@ -494,7 +509,12 @@ LogicalResult partitionLoopV2(scf::ForOp loop) {
 
   cloneForOp(loop, builders, schedule);
 
-  loop.getResults().replaceAllUsesWith(wgOp.getResults());
+  for (auto [i, res]: llvm::enumerate(loop.getResults())) {
+    if (!res.use_empty()) {
+      res.replaceAllUsesWith(wgOp.getResult(newResultIdx[i]));
+    }
+  }
+
   loop->erase();
 
   return success();
