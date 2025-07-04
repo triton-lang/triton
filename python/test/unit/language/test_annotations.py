@@ -49,3 +49,14 @@ def test_unknown_annotation(device):
         _kernel[(1, )](x.shape[0], x.shape[0], 32)
     except AttributeError:
         pass
+
+
+# Test that float annotations are ignored
+def test_float_annotation(device):
+
+    @triton.jit
+    def _kernel(X: tl.float16):
+        tl.device_assert(X.dtype == tl.float32)
+
+    x = 1.1
+    _kernel[(1, )](x)

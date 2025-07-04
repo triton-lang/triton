@@ -291,7 +291,9 @@ class KernelParam:
         elif a.startswith("*"):
             a = a[1:]
         if a in set(type_canonicalisation_dict.values()):
-            return self.annotation
+            # only support annotations for int and uint.
+            if a[:1] in ["i", "u"]:
+                return self.annotation
         return ""
 
     @cached_property
