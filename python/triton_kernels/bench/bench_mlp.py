@@ -4,14 +4,16 @@ import matplotlib.pyplot as plt
 import triton.profiler as proton
 from triton.profiler import viewer
 import torch
+import argparse
 import triton_kernels
 import triton_kernels.swiglu
 from triton_kernels.numerics_details.mxfp import downcast_to_mxfp, SwizzlingType
 from triton_kernels.matmul_ogs import MicroscalingCtx, matmul_ogs, PrecisionConfig, FlexCtx, FnSpecs, FusedActivation
 from triton_kernels.numerics import InFlexData
-from triton_kernels.routing import routing
 from triton_kernels.target_info import is_hip, get_cdna_version
 from dataclasses import dataclass
+
+import triton_kernels.distributed as triton_dist
 
 if torch.cuda.is_available() and not is_hip():
     from triton._C.libtriton import nvidia
@@ -21,7 +23,7 @@ else:
     cublas = None
 
 
-def quantize(w, dtype, dev, **opt):
+def quantize(w, dtype, **opt):
     if dtype == "bf16":
         wq = w.to(torch.bfloat16).transpose(-1, -2).contiguous().transpose(-1, -2)
         return wq, InFlexData(), MicroscalingCtx()
@@ -89,17 +91,26 @@ class PerfData:
 def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP, EP, name):
     assert n_expts_tot % EP == 0
     assert dim2 % TP == 0
-    dev = "cuda"
+    rank, world_size = triton_dist.setup()
+    dev = f"cuda:{rank}"
+    DP = world_size
+
+    assert n_expts_tot % EP == 0, f"{n_expts_tot=}, {EP=}, n_expts_tot must be divisible by EP"
+    assert dim2 % TP == 0, f"{dim2=}, {TP=}, dim2 must be divisible by TP"
 
     # input
     # weights
-    wg = torch.randn((dim1, n_expts_tot), device=dev)
+    wg = triton_dist.broadcast(torch.randn((dim1, n_expts_tot), device=dev))
     w1 = torch.randn((n_expts_tot // EP, dim1, dim2 // TP), device=dev)
     w2 = torch.randn((n_expts_tot // EP, dim2 // TP // 2, dim1), device=dev)
+
     # biases
-    bg = torch.randn((n_expts_tot, ), device=dev)
+    bg = triton_dist.broadcast(torch.randn((n_expts_tot, ), device=dev))
     b1 = torch.randn((n_expts_tot // EP, dim2 // TP), device=dev)
     b2 = torch.randn((n_expts_tot // EP, dim1), device=dev)
+    ep_indx = (rank // TP) % EP
+    groups = [list(range(ep * TP, (ep + 1) * TP)) for ep in range(EP)]
+    b2 = triton_dist.broadcast(b2, src=ep_indx * TP, groups=groups, group_idx=ep_indx)
 
     # -- numerics --
     optg = dict()
@@ -118,36 +129,43 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP,
             swizzle_mx_scale = SwizzlingType.BLACKWELL
         opt1 = {"swizzle_mx_value": swizzle_mx_value, "swizzle_mx_scale": swizzle_mx_scale}
         opt2 = deepcopy(opt1)
-    wg, wg_flex, wg_mx = quantize(wg, "bf16", dev, **optg)
-    w1, w1_flex, w1_mx = quantize(w1, w_dtype, dev, **opt1)
-    w2, w2_flex, w2_mx = quantize(w2, w_dtype, dev, **opt2)
+    wg, wg_flex, wg_mx = quantize(wg, "bf16", **optg)
+    w1, w1_flex, w1_mx = quantize(w1, w_dtype, **opt1)
+    w2, w2_flex, w2_mx = quantize(w2, w_dtype, **opt2)
     pcg = PrecisionConfig(mx_ctx=wg_mx, flex_ctx=FlexCtx(rhs_data=wg_flex))
     act = FusedActivation(FnSpecs("swiglu", triton_kernels.swiglu.swiglu_fn, ("alpha", "limit")), (1.0, 1.0), 2)
     pc1 = PrecisionConfig(mx_ctx=w1_mx, flex_ctx=FlexCtx(rhs_data=w1_flex))
     pc2 = PrecisionConfig(mx_ctx=w2_mx, flex_ctx=FlexCtx(rhs_data=w2_flex))
 
     # -- benchmark --
-    fpath = Path(f"logs/{name}/{x_dtype}-{w_dtype}-TP{TP}-EP{EP}/profiles/batch-{batch}.hatchet")
+    fpath = Path(f"logs/{name}/{rank}/{x_dtype}-{w_dtype}-TP{TP}-EP{EP}/profiles/batch-{batch}.hatchet")
     fpath.parent.mkdir(parents=True, exist_ok=True)
     x_dtype = {"fp16": torch.float16, "bf16": torch.bfloat16, "fp8": torch.float8_e4m3fn}[x_dtype]
     # special treatment of fp8_e4m3 on AMD CDNA3 because it uses fp8_e4m3fnuz
     if x_dtype == torch.float8_e4m3fn and get_cdna_version() == 3:
         x_dtype = torch.float8_e4m3fnuz
 
-    x = torch.randn((batch, dim1), device=dev)
-    xg = x.to(wg.dtype if n_expts_tot > 1 else x_dtype)
-    x = x.to(x_dtype)
+    input_x = torch.randn((batch // DP, dim1), device=dev)
     # run layer
     proton.start(str(fpath.with_suffix('')), hook="triton")
+    input_x = input_x.to(x_dtype)
     for i in range(100):
+        xg = input_x.to(wg.dtype if n_expts_tot > 1 else input_x.dtype)
         if n_expts_tot > 1:
             logits = matmul_ogs(xg, wg, bg, precision_config=pcg)
-            rdata, gather_indx, scatter_indx = routing(logits, n_expts_act, simulated_ep=EP)
+            x, rdata, gather_indx, scatter_indx, metadata = triton_dist.routing(input_x, logits, n_expts_act, EP=EP,
+                                                                                TP=TP)
         else:
-            rdata, gather_indx, scatter_indx = None, None, None
-        x = matmul_ogs(x, w1, b1, rdata, gather_indx=gather_indx, precision_config=pc1, fused_activation=act)
-        x = matmul_ogs(x, w2, b2, rdata, scatter_indx=scatter_indx, precision_config=pc2)
+            rdata, gather_indx, scatter_indx, metadata = None, None, None, None
+        if x.nelement() > 0:
+            x = matmul_ogs(x, w1, b1, rdata, gather_indx=gather_indx, precision_config=pc1, fused_activation=act)
+            x = matmul_ogs(x, w2, b2 if rank % TP == 0 else None, rdata, scatter_indx=scatter_indx,
+                           precision_config=pc2)
+        x = triton_dist.reduce_scatter(x, metadata=metadata, dim=0)
     proton.finalize()
+
+    # -- cleanup --
+    torch.cuda.empty_cache()
 
     # -- analyze --
     gf, _, _, info = viewer.read(fpath)
@@ -206,7 +224,8 @@ def roofline_mlp(batch_ranges, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_
     ax.legend(frameon=False, loc="lower right")
     ax.grid(True, which="both", ls=":", lw=0.5)
     fig.tight_layout()
-    fpath = Path(f"logs/{name}/{x_dtype}-{w_dtype}-TP{TP}-EP{EP}/roofline.png")
+    rank, _ = triton_dist.setup()
+    fpath = Path(f"logs/{name}/{rank}/{x_dtype}-{w_dtype}-TP{TP}-EP{EP}/roofline.png")
     plt.savefig(fpath)
 
 
@@ -216,7 +235,30 @@ if __name__ == "__main__":
     batch_ranges_moe = [(128, 512, 32), (512, 32000, 128)]
     dense_dtypes = ["fp8", "fp8"]
     quantized_dtypes = ["fp8", "mx4"] if has_native_mx4 else ["bf16", "mx4"]
-    roofline_mlp(batch_ranges_dense, 8192, 8192, 1, 1, *dense_dtypes, TP=1, EP=1, name="dense")
-    roofline_mlp(batch_ranges_dense, 8192, 8192, 1, 1, *quantized_dtypes, TP=1, EP=1, name="dense")
-    roofline_mlp(batch_ranges_moe, 5120, 8192, 128, 4, *dense_dtypes, TP=1, EP=1, name="llama4-maverick")
-    roofline_mlp(batch_ranges_moe, 5120, 8192, 128, 4, *quantized_dtypes, TP=1, EP=1, name="llama4-maverick")
+    _, world_size = triton_dist.setup()
+    if world_size > 1:
+        # Running all workloads at once may cause OOM on some GPUs such as H100 80GB.
+        # Thus we request users to run each workload separately.
+        # For example, to run the dense workload with 4 TP and 2 EP, use:
+        # e.g., torchrun --nproc-per-node=4 ./bench_mlp.py --tp 2 --ep 2 --name llama4-maverick
+        argparse = argparse.ArgumentParser()
+        argparse.add_argument("--tp", type=int, default=1)
+        argparse.add_argument("--ep", type=int, default=1)
+        argparse.add_argument("--name", type=str, choices=["dense", "llama4-maverick"])
+        argparse.add_argument("--quantized", type=bool, default=False)
+        args = argparse.parse_args()
+        dtypes = dense_dtypes if args.quantized else quantized_dtypes
+        if args.name == "dense":
+            assert args.ep == 1, "EP must be 1 for dense"
+            roofline_mlp(batch_ranges_dense, 8192, 8192, 1, 1, *dense_dtypes, TP=args.tp, EP=args.ep, name="dense")
+        else:
+            roofline_mlp(batch_ranges_moe, 5120, 8192, 128, 4, *dense_dtypes, TP=args.tp, EP=args.ep,
+                         name="llama4-maverick")
+        triton_dist.cleanup()
+    else:
+        batch_ranges_dense = [(1024, 32768, 1024)]
+        batch_ranges_moe = [(128, 512, 32), (512, 32000, 128)]
+        roofline_mlp(batch_ranges_dense, 8192, 8192, 1, 1, *dense_dtypes, TP=1, EP=1, name="dense")
+        roofline_mlp(batch_ranges_dense, 8192, 8192, 1, 1, *quantized_dtypes, TP=1, EP=1, name="dense")
+        roofline_mlp(batch_ranges_moe, 5120, 8192, 128, 4, *dense_dtypes, TP=1, EP=1, name="llama4-maverick")
+        roofline_mlp(batch_ranges_moe, 5120, 8192, 128, 4, *quantized_dtypes, TP=1, EP=1, name="llama4-maverick")
