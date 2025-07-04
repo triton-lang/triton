@@ -301,7 +301,6 @@ void cloneForOp(scf::ForOp forOp, SmallVector<WgBuilder> &builders,
     auto oldIterArgs = forOp.getRegionIterArgs();
     auto newIterArgs = newForOp.getRegionIterArgs();
     for (int oldIdx = 0, newIdx = 0; oldIdx < oldIterArgs.size(); ++oldIdx) {
-      auto oldArg = oldIterArgs[oldIdx];
       if (isUsedBy(oldIterArgs[oldIdx], partition, forOp, schedule) ||
           !forOp.getResult(oldIdx).use_empty()) {
         auto oldArg = oldIterArgs[oldIdx];
@@ -312,10 +311,10 @@ void cloneForOp(scf::ForOp forOp, SmallVector<WgBuilder> &builders,
 
     for (int oldIdx = 0, newIdx = 0; oldIdx < forOp.getResults().size();
          ++oldIdx) {
-      auto oldArg = forOp.getResult(oldIdx++);
       if (isUsedBy(forOp.getRegionIterArgs()[oldIdx], partition, forOp,
                    schedule) ||
           !forOp.getResult(oldIdx).use_empty()) {
+	auto oldArg = forOp.getResult(oldIdx);
         auto newArg = newForOp.getResult(newIdx++);
         b.mapping.map(oldArg, newArg);
       }
@@ -477,7 +476,7 @@ LogicalResult partitionLoopV2(scf::ForOp loop) {
   SmallVector<int> newResultIdx(loop.getNumRegionIterArgs(), -1);
   for (auto [i, iterArg, result, resultTy] :
        llvm::enumerate(loop.getRegionIterArgs(), loop.getResults(),
-                 loop.getResultTypes())) {
+                       loop.getResultTypes())) {
     if (isUsedBy(iterArg, defaultPartition, loop, schedule) ||
         !result.use_empty()) {
       newResultIdx[i] = resultTypes.size();
@@ -489,8 +488,7 @@ LogicalResult partitionLoopV2(scf::ForOp loop) {
   auto numPartitions = schedule.getNumPartitions();
   SmallVector<int32_t> numWarps(numPartitions, lookupNumWarps(loop));
   ImplicitLocOpBuilder b(loop.getLoc(), loop);
-  auto wgOp = b.create<nvws::WarpGroupOp>(resultTypes, numWarps,
-                                          numPartitions);
+  auto wgOp = b.create<nvws::WarpGroupOp>(resultTypes, numWarps, numPartitions);
 
   SmallVector<WgBuilder> builders;
   for (Region &region : wgOp.getPartitionRegions()) {
@@ -517,14 +515,11 @@ LogicalResult partitionLoopV2(scf::ForOp loop) {
       auto outputs = newForOp.getResults();
       builder.create<WarpYieldOp>(wgOp.getLoc(), outputs);
     } else {
-      auto wgRt = builder.create<nvws::WarpGroupReturnOp>(wgOp.getLoc());
-      //      builder.setInsertionPoint(wgRt);
+      builder.create<nvws::WarpGroupReturnOp>(wgOp.getLoc());
     }
   }
 
-  loop->getParentOfType<ModuleOp>().dump();
-
-  for (auto [i, res]: llvm::enumerate(loop.getResults())) {
+  for (auto [i, res] : llvm::enumerate(loop.getResults())) {
     if (!res.use_empty()) {
       res.replaceAllUsesWith(wgOp.getResult(newResultIdx[i]));
     }

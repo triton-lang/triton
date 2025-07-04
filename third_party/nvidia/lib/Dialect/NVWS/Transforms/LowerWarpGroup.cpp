@@ -86,7 +86,8 @@ class LowerWarpGroup : public OpRewritePattern<WarpGroupOp> {
       replaceAllUsesInRegionWith(pair.first, pair.second, *outputRegion);
   }
 
-  LogicalResult createTtgWSOp(Location loc, PatternRewriter &rewriter,
+  LogicalResult createTtgWSOp(Location loc, WarpGroupOp warpGroupOp,
+                              PatternRewriter &rewriter,
                               Region *defaultPartition, RegionRange &partitions,
                               ArrayRef<int> numWarps,
                               ArrayRef<int> warpGroupStartIds) const {
@@ -96,6 +97,8 @@ class LowerWarpGroup : public OpRewritePattern<WarpGroupOp> {
     if (partitions.size() != warpGroupStartIds.size())
       return failure(
           "mismatched number of warp groups and number of warp start ids");
+
+    assert(defaultPartition);
 
     SetVector<Value> captures;
     for (auto partition : partitions)
@@ -112,21 +115,21 @@ class LowerWarpGroup : public OpRewritePattern<WarpGroupOp> {
       }
     }
 
-    auto wsOp = rewriter.create<WarpSpecializeOp>(loc, TypeRange(), inputs);
+    auto wsOp = rewriter.create<WarpSpecializeOp>(
+        loc, warpGroupOp.getResultTypes(), inputs);
 
     wsOp.setPartitionNumWarps(numWarps);
     wsOp.setWarpGroupStartIds(warpGroupStartIds);
 
     auto &defaultBlock = wsOp.getDefaultRegion().emplaceBlock();
     rewriter.setInsertionPointToEnd(&defaultBlock);
-    auto yieldOp =
-        rewriter.create<WarpYieldOp>(loc, TypeRange(), ArrayRef<Value>());
+    auto yieldOp = defaultPartition->front().getTerminator();
+    auto newYieldOp = rewriter.create<WarpYieldOp>(
+        loc, yieldOp->getResultTypes(), yieldOp->getOperands());
 
-    if (defaultPartition) {
-      for (auto &op : llvm::make_early_inc_range(
-               defaultPartition->getBlocks().front().without_terminator())) {
-        op.moveBefore(yieldOp);
-      }
+    for (auto &op : llvm::make_early_inc_range(
+             defaultPartition->getBlocks().front().without_terminator())) {
+      op.moveBefore(newYieldOp);
     }
 
     auto &block = wsOp.getPartitionOpHolder().emplaceBlock();
@@ -137,6 +140,8 @@ class LowerWarpGroup : public OpRewritePattern<WarpGroupOp> {
 
     for (auto [in, out] : zip(partitions, regions))
       populateRegion(rewriter, in, &out, inputs, constants);
+
+    warpGroupOp.replaceAllUsesWith(wsOp);
 
     return success();
   }
@@ -164,13 +169,14 @@ public:
       numWarps = numWarps.drop_front();
     }
 
-    auto result =
-        createTtgWSOp(loc, rewriter, defaultRegion, regions, numWarps,
-                      llvm::map_to_vector(numWarps, [&](int numWarps) {
-                        int result = startWarp;
-                        startWarp += numWarps;
-                        return result;
-                      }));
+    auto result = createTtgWSOp(
+        loc, warpGroupOp, rewriter, defaultRegion, regions, numWarps,
+        llvm::map_to_vector(numWarps, [&](int numWarps) {
+          int result = startWarp;
+          startWarp += numWarps;
+          return result;
+        }));
+
     if (result.succeeded())
       rewriter.eraseOp(warpGroupOp);
 
