@@ -39,6 +39,7 @@ void registerAMDTestAlignmentPass();
 void registerTestAllocationPass();
 void registerTestMembarPass();
 void registerTestAMDGPUMembarPass();
+void registerTestAMDCommonUtils();
 void registerTestTritonAMDGPURangeAnalysis();
 void registerTestLoopPeelingPass();
 } // namespace test
@@ -57,6 +58,7 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::test::registerTestMembarPass();
   mlir::test::registerTestLoopPeelingPass();
   mlir::test::registerTestAMDGPUMembarPass();
+  mlir::test::registerTestAMDCommonUtils();
   mlir::test::registerTestTritonAMDGPURangeAnalysis();
   mlir::triton::registerConvertTritonToTritonGPUPass();
   mlir::triton::registerRelayoutTritonGPUPass();
