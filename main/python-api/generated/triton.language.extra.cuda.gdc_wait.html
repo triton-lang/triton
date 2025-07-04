@@ -95,7 +95,7 @@
 <h1>triton.language.extra.cuda.gdc_wait<a class="headerlink" href="#triton-language-extra-cuda-gdc-wait" title="Link to this heading">¶</a></h1>
 <dl class="py function">
 <dt class="sig sig-object py" id="triton.language.extra.cuda.gdc_wait">
-<span class="sig-prename descclassname"><span class="pre">triton.language.extra.cuda.</span></span><span class="sig-name descname"><span class="pre">gdc_wait</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#triton.language.extra.cuda.gdc_wait" title="Link to this definition">¶</a></dt>
+<span class="sig-prename descclassname"><span class="pre">triton.language.extra.cuda.</span></span><span class="sig-name descname"><span class="pre">gdc_wait</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">_semantic</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.language.extra.cuda.gdc_wait" title="Link to this definition">¶</a></dt>
 <dd><p>GDC wait is a blocking instruction that waits for all instructions in a prior kernel to complete before continuing.
 This ensures all memory operations happening before the wait is visible to instructions after it,
 e.g. if the prior kernel writes to address “x” the new values will be visible in this kernel after the wait.</p>
