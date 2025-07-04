@@ -170,6 +170,7 @@ LogicalResult triton::gpu::partitionLoop(scf::ForOp loop) {
   int32_t functionNumWarps = lookupNumWarps(loop);
   SmallVector<int32_t> partitionNumWarps(partitionBlocks.size(),
                                          functionNumWarps);
+
   auto wsOp = b.create<WarpSpecializeOp>(
       loop.getResultTypes(), partitionNumWarps, partitionBlocks.size());
   loop.replaceAllUsesWith(wsOp);
@@ -261,19 +262,36 @@ struct WgBuilder {
   IRMapping mapping;
 };
 
+bool isUsedBy(Value arg, const Partition *partition, scf::ForOp loop,
+              const WarpSchedule &schedule) {
+  auto inPartition = [&](Operation *op) {
+    const Partition *opPartition =
+        schedule.getPartition(loop.getBody()->findAncestorOpInBlock(*op));
+    return llvm::is_contained({partition, schedule.getRootPartition()},
+                              opPartition);
+  };
+  return llvm::any_of(arg.getUsers(), inPartition);
+}
+
 void cloneOpsInBlock(Block *block, SmallVector<WgBuilder> &builders,
                      const WarpSchedule &schedule);
 
 void cloneForOp(scf::ForOp forOp, SmallVector<WgBuilder> &builders,
                 const WarpSchedule &schedule) {
-  for (auto &b : builders) {
+  for (size_t i = 0; i < builders.size(); ++i) {
+    auto &b = builders[i];
+    auto partition = schedule.getPartition(i);
     // TODO: Mapping?
     auto lb = forOp.getLowerBound();
     auto ub = forOp.getUpperBound();
     auto step = forOp.getStep();
     SmallVector<Value> initArgs;
     for (auto [idx, arg] : llvm::enumerate(forOp.getInitArgs())) {
-      initArgs.push_back(arg);
+      if (isUsedBy(forOp.getRegionIterArgs()[idx], partition, forOp,
+                   schedule) ||
+          !forOp.getResult(idx).use_empty()) {
+        initArgs.push_back(arg);
+      }
     }
     auto newForOp =
         b.builder.create<scf::ForOp>(forOp.getLoc(), lb, ub, step, initArgs);
@@ -284,15 +302,23 @@ void cloneForOp(scf::ForOp forOp, SmallVector<WgBuilder> &builders,
     auto newIterArgs = newForOp.getRegionIterArgs();
     for (int oldIdx = 0, newIdx = 0; oldIdx < oldIterArgs.size(); ++oldIdx) {
       auto oldArg = oldIterArgs[oldIdx];
-      auto newArg = newIterArgs[newIdx++];
-      b.mapping.map(oldArg, newArg);
+      if (isUsedBy(oldIterArgs[oldIdx], partition, forOp, schedule) ||
+          !forOp.getResult(oldIdx).use_empty()) {
+        auto oldArg = oldIterArgs[oldIdx];
+        auto newArg = newIterArgs[newIdx++];
+        b.mapping.map(oldArg, newArg);
+      }
     }
 
     for (int oldIdx = 0, newIdx = 0; oldIdx < forOp.getResults().size();
          ++oldIdx) {
-      auto oldArg = forOp.getResult(oldIdx);
-      auto newArg = newForOp.getResult(newIdx++);
-      b.mapping.map(oldArg, newArg);
+      auto oldArg = forOp.getResult(oldIdx++);
+      if (isUsedBy(forOp.getRegionIterArgs()[oldIdx], partition, forOp,
+                   schedule) ||
+          !forOp.getResult(oldIdx).use_empty()) {
+        auto newArg = newForOp.getResult(newIdx++);
+        b.mapping.map(oldArg, newArg);
+      }
     }
     // set builder insertion point to the start of the newForOp body
     b.builder.setInsertionPointToStart(newForOp.getBody());
@@ -364,10 +390,29 @@ void cloneOpsInBlock(Block *block, SmallVector<WgBuilder> &builders,
       // } else if (auto reduceOp = dyn_cast<triton::ReduceOp>(op)) {
       //   cloneReduceOp(reduceOp, wsFunc, opBuilders);
     } else if (auto yieldOp = dyn_cast<scf::YieldOp>(op)) {
-      for (auto &builder : builders) {
+      for (size_t i = 0; i < builders.size(); ++i) {
+        auto &builder = builders[i];
+        auto partition = schedule.getPartition(i);
         SmallVector<Value> newYieldOperands;
-        for (auto operand : yieldOp.getOperands()) {
-          newYieldOperands.push_back(builder.mapping.lookupOrDefault(operand));
+        for (size_t i = 0; i < yieldOp.getOperands().size(); ++i) {
+          auto operand = yieldOp.getOperands()[i];
+          auto yieldParent = yieldOp->getParentOp();
+
+          bool keep = false;
+          if (auto forOp = dyn_cast<scf::ForOp>(yieldParent)) {
+            keep = isUsedBy(forOp.getRegionIterArgs()[i], partition, forOp,
+                            schedule) ||
+                   !forOp.getResult(i).use_empty();
+          } else if (auto ifOp = dyn_cast<scf::IfOp>(yieldParent)) {
+            keep = true; // TODO
+          } else {
+            llvm_unreachable("NYI");
+          }
+
+          if (keep) {
+            newYieldOperands.push_back(
+                builder.mapping.lookupOrDefault(operand));
+          }
         }
         builder.builder.create<scf::YieldOp>(op->getLoc(), newYieldOperands);
       }
