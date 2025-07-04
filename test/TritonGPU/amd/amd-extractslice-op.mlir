@@ -55,3 +55,33 @@ module attributes {"ttg.compute-capability" = 0 : i32, "ttg.num-ctas" = 1 : i32,
     tt.return
   }
 }
+
+// -----
+
+// Test that converter process slice extraction from layout with broadcasted registers
+#blocked1 = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [8, 8], warpsPerCTA = [4, 2], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
+#blocked2 = #ttg.blocked<{sizePerThread = [4, 1], threadsPerWarp = [8, 8], warpsPerCTA = [4, 2], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
+module attributes {"ttg.compute-capability" = 0 : i32, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  tt.func @extract_from_broadcasted_tensor(%arg0: tensor<256x1xi32, #blocked1> {tt.divisibility = 16 : i32}) {
+    // CHECK-LABEL: llvm.func @extract_from_broadcasted_tensor
+    // CHECK-COUNT-32: %{{.*}} = llvm.extractvalue  %{{.*}} : !llvm.struct
+    // CHECK-COUNT-4:  %{{.*}} = llvm.insertvalue %{{.*}} : !llvm.struct
+    %0 = amdgpu.extract_slice %arg0 [0,0] : tensor<256x1xi32, #blocked1> to tensor<128x1xi32, #blocked2>
+    tt.return
+  }
+}
+
+// -----
+
+// Test that converter process slice extraction to layout with broadcasted registers
+#blocked1 = #ttg.blocked<{sizePerThread = [4, 1], threadsPerWarp = [8, 8], warpsPerCTA = [4, 2], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
+#blocked2 = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [8, 8], warpsPerCTA = [4, 2], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
+module attributes {"ttg.compute-capability" = 0 : i32, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  tt.func @extract_to_broadcasted_tensor(%arg0: tensor<256x1xi32, #blocked1> {tt.divisibility = 16 : i32}) {
+    // CHECK-LABEL: llvm.func @extract_to_broadcasted_tensor
+    // CHECK-COUNT-8: %{{.*}} = llvm.extractvalue  %{{.*}} : !llvm.struct
+    // CHECK-COUNT-16:  %{{.*}} = llvm.insertvalue %{{.*}} : !llvm.struct
+    %72 = amdgpu.extract_slice %arg0 [0,0] : tensor<256x1xi32, #blocked1> to tensor<128x1xi32, #blocked2>
+    tt.return
+  }
+}

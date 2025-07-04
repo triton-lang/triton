@@ -103,3 +103,35 @@ module attributes {"ttg.compute-capability" = 0 : i32, "ttg.num-ctas" = 1 : i32,
     tt.return
   }
 }
+
+// -----
+
+// Test that converter process concant extraction from layout with broadcasted registers
+#src_layout = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [8, 8], warpsPerCTA = [4, 2], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
+#dst_layout = #ttg.blocked<{sizePerThread = [4, 1], threadsPerWarp = [8, 8], warpsPerCTA = [4, 2], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
+module attributes {"ttg.compute-capability" = 0 : i32, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  tt.func @concat_from_broadcasted_tensor(%arg0: tensor<128x1xi32, #src_layout>, %arg1: tensor<128x1xi32, #src_layout> {tt.divisibility = 16 : i32}) {
+    // CHECK-LABEL: llvm.func @concat_from_broadcasted_tensor
+    // CHECK-COUNT-16: %{{.*}} = llvm.extractvalue %arg0[{{.*}}] : !llvm.struct
+    // CHECK-COUNT-16: %{{.*}} = llvm.extractvalue %arg1[{{.*}}] : !llvm.struct
+    // CHECK-COUNT-8: %{{.*}} = llvm.insertvalue %{{.*}} : !llvm.struct
+    %1 = amdgpu.concat %arg0, %arg1: tensor<128x1xi32, #src_layout>, tensor<128x1xi32, #src_layout> -> tensor<256x1xi32, #dst_layout>
+    tt.return
+  }
+}
+
+// -----
+
+// Test that converter process concant to layout with broadcasted registers
+#src_layout = #ttg.blocked<{sizePerThread = [4, 1], threadsPerWarp = [8, 8], warpsPerCTA = [4, 2], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
+#dst_layout = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [8, 8], warpsPerCTA = [4, 2], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
+module attributes {"ttg.compute-capability" = 0 : i32, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  tt.func @concat_to_broadcasted_tensor(%arg0: tensor<128x1xi32, #src_layout>, %arg1: tensor<128x1xi32, #src_layout> {tt.divisibility = 16 : i32}) {
+    // CHECK-LABEL: llvm.func @concat_to_broadcasted_tensor
+    // CHECK-COUNT-4: %{{.*}} = llvm.extractvalue %arg0[{{.*}}] : !llvm.struct
+    // CHECK-COUNT-4: %{{.*}} = llvm.extractvalue %arg1[{{.*}}] : !llvm.struct
+    // CHECK-COUNT-32: %{{.*}} = llvm.insertvalue %{{.*}} : !llvm.struct
+    %1 = amdgpu.concat %arg0, %arg1: tensor<128x1xi32, #src_layout>, tensor<128x1xi32, #src_layout> -> tensor<256x1xi32, #dst_layout>
+    tt.return
+  }
+}
