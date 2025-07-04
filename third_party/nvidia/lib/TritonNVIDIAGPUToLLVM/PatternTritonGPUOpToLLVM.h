@@ -35,7 +35,7 @@ void populateConvertLayoutOpToLLVMOptimizedPatterns(
 
 void populateDotOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                  RewritePatternSet &patterns,
-                                 PatternBenefit benefit);
+                                 int computeCapability, PatternBenefit benefit);
 
 void populateElementwiseOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,

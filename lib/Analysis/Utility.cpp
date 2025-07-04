@@ -711,7 +711,7 @@ bool supportMMA(Value value, int version) {
   bool isFP8 = llvm::isa<Float8E5M2Type, Float8E4M3FNType, Float8E5M2FNUZType,
                          Float8E4M3FNUZType>(elemTy);
   return isFP8 || elemTy.isF16() || elemTy.isBF16() ||
-         (elemTy.isF32() && version >= 2) ||
+         ((elemTy.isF32() || elemTy.isF64()) && version >= 2) ||
          (elemTy.isInteger(8) && version >= 2);
 }
 

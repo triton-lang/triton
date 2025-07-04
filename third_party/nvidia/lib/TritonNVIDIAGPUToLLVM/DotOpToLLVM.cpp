@@ -9,13 +9,10 @@ using namespace mlir::triton;
 using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
 
-LogicalResult convertMMA1688(triton::DotOp op, triton::DotOp::Adaptor adaptor,
-                             const LLVMTypeConverter *typeConverter,
-                             ConversionPatternRewriter &rewriter);
-
-LogicalResult convertMMA16816(triton::DotOp op, triton::DotOp::Adaptor adaptor,
-                              const LLVMTypeConverter *typeConverter,
-                              ConversionPatternRewriter &rewriter);
+LogicalResult convertMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
+                         const LLVMTypeConverter *typeConverter,
+                         ConversionPatternRewriter &rewriter, bool isTuring,
+                         bool isHopperF64);
 
 LogicalResult convertWGMMA(triton::nvidia_gpu::WarpGroupDotOp op,
                            triton::nvidia_gpu::WarpGroupDotOp::Adaptor adaptor,
@@ -24,6 +21,11 @@ LogicalResult convertWGMMA(triton::nvidia_gpu::WarpGroupDotOp op,
 namespace {
 struct DotOpConversion : public ConvertOpToLLVMPattern<triton::DotOp> {
   using ConvertOpToLLVMPattern<triton::DotOp>::ConvertOpToLLVMPattern;
+
+  DotOpConversion(LLVMTypeConverter &converter, int computeCapability,
+                  PatternBenefit benefit)
+      : ConvertOpToLLVMPattern<triton::DotOp>(converter, benefit),
+        computeCapability(computeCapability) {}
 
   LogicalResult
   matchAndRewrite(triton::DotOp op, OpAdaptor adaptor,
@@ -42,10 +44,13 @@ struct DotOpConversion : public ConvertOpToLLVMPattern<triton::DotOp> {
     NvidiaMmaEncodingAttr mmaLayout = dyn_cast<NvidiaMmaEncodingAttr>(
         cast<RankedTensorType>(D.getType()).getEncoding());
     if (!isOuter && mmaLayout && supportMMA(op, mmaLayout.getVersionMajor())) {
-      if (mmaLayout.isTuring())
-        return convertMMA1688(op, adaptor, getTypeConverter(), rewriter);
-      if (mmaLayout.isAmpere())
-        return convertMMA16816(op, adaptor, getTypeConverter(), rewriter);
+      if (mmaLayout.getVersionMajor() == 2) {
+        bool isHopperF64 =
+            computeCapability == 90 &&
+            cast<RankedTensorType>(A.getType()).getElementType().isF64();
+        return convertMMA(op, adaptor, getTypeConverter(), rewriter,
+                          mmaLayout.isTuring(), isHopperF64);
+      }
 
       llvm::report_fatal_error(
           "Unsupported MMA kind found when converting DotOp to LLVM.");
@@ -58,6 +63,9 @@ struct DotOpConversion : public ConvertOpToLLVMPattern<triton::DotOp> {
     llvm::report_fatal_error(
         "Unsupported DotOp found when converting TritonGPU to LLVM.");
   }
+
+private:
+  int computeCapability;
 };
 
 struct WarpGroupDotOpConversion
@@ -155,8 +163,8 @@ struct WarpGroupDotWaitOpConversion
 
 void mlir::triton::NVIDIA::populateDotOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    PatternBenefit benefit) {
-  patterns.add<DotOpConversion>(typeConverter, benefit);
+    int computeCapability, PatternBenefit benefit) {
+  patterns.add<DotOpConversion>(typeConverter, computeCapability, benefit);
   patterns.add<WarpGroupDotOpConversion>(typeConverter, benefit);
   patterns.add<WarpGroupDotWaitOpConversion>(typeConverter, benefit);
 }
