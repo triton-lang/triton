@@ -3,6 +3,7 @@ from .reduction_details.reduce_bitmatrix import clear_sums, sum_bitmatrix_rows
 from dataclasses import dataclass
 from triton.tools.tensor_descriptor import TensorDescriptor
 from .tensor_details.layout import Layout, DefaultLayout
+from .target_info import cuda_capability_geq
 
 
 @dataclass
@@ -16,6 +17,22 @@ class Storage:
     @property
     def device(self):
         return self.data.device
+
+    def is_tma_compliant(self):
+        if not cuda_capability_geq(9, 0):
+            return False
+        # none of our kernels support MXFP4 w/ TMA on H100
+        if len(self.data.shape) not in [2, 3, 5]:
+            return False
+        strides = list(self.data.stride())
+        # stride_div = max(16, 128 // bitwidth(self.data.dtype))
+        try:
+            major_dim = strides.index(1)
+        except ValueError:
+            major_dim = -1
+        ndim = self.data.ndim
+        compliant = [strides[i] * self.data.element_size() % 16 == 0 for i in range(ndim) if i != major_dim]
+        return all(compliant)
 
     def make_tma(self, block_shape, transpose=False):
         strides = list(self.data.stride())

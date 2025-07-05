@@ -263,6 +263,8 @@ def set_opt_flags(opt_flags: OptFlags):
     assert not _opt_flags, "opt_flags already set; please reset to None first"
     _opt_flags = opt_flags
 
+class InapplicableConstraint(Exception):
+    pass
 
 def make_opt_flags(
     out_dtype,
@@ -277,6 +279,8 @@ def make_opt_flags(
     can_use_fused_scatter,
     epilogue_effective_itemsize,
 ):
+    if _opt_flags_constraints.get("is_persistent", False) and not can_use_persistent_tma:
+        raise InapplicableConstraint("cannot enforce `is_persistent=True` constraint")
     enforce_bitwise_invariance = precision_config.enforce_bitwise_invariance
     if _opt_flags is not None:
         assert not _opt_flags_constraints

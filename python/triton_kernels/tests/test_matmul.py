@@ -8,7 +8,6 @@ from triton_kernels.routing import routing
 # matmul utilities
 import triton_kernels.matmul_ogs_details.opt_flags as opt_flags
 from triton_kernels.matmul_ogs import FlexCtx, PrecisionConfig, FusedActivation, FnSpecs
-from triton_kernels.matmul_ogs import none_or_tma_compatible
 from triton_kernels.matmul_ogs import matmul_ogs_set_idle_sms, matmul_ogs, matmul_ogs_torch
 from triton_kernels.swiglu import swiglu, swiglu_fn, PrecisionConfig as SwiGLUPrecisionConfig
 from triton_kernels.tensor import swizzle
@@ -316,12 +315,8 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
         mx_scales_tri = swizzle(mx_scales_tri, layout=swizzle_scale)
         precision_opt.weight_scale = mx_scales_tri
 
-    can_use_tma = none_or_tma_compatible(x_tri.view(1, *x_tri.shape)) and none_or_tma_compatible(w_tri)
-    # TODO: should be cleaner
     if not is_persistent and precision_opt.weight_scale is not None:
         pytest.skip("non-persistent not supported with mxfp")
-    if is_persistent and not can_use_tma:
-        pytest.skip("persistent TMAs not supported for this test")
 
     if w_tri.shape[0] == 1:
         # Test the case when weight has dim 2, i.e., shape (K, N).
@@ -373,7 +368,10 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
     flex = precision_opt.flex_ctx
 
     # triton
-    tri_y = matmul_ogs(x_tri, w_tri, bias_tri, rdata, gindx, sindx, precision_opt, gammas=gs1_ref)
+    try:
+        tri_y = matmul_ogs(x_tri, w_tri, bias_tri, rdata, gindx, sindx, precision_opt, gammas=gs1_ref)
+    except opt_flags.InapplicableConstraint:
+        pytest.skip("inapplicable opt_flags constraint")
     # If split_k > 1, then the intermediate tensor is fp32.
     sep_gather = mode == "ragged" and do_gather and n_expts_act > 1 and split_k == 1
     sep_scatter = mode == "ragged" and do_scatter and n_expts_act > 1 and split_k == 1
@@ -477,16 +475,16 @@ def test_fused_act(m, n, k, mode, split_k, do_gather, do_scatter, fused_scatter,
     x, w, bias, _, _ = init_compute_data(m, n, k, gindx, sindx, n_expts_tot, n_expts_act, n_expt_shards, mode,
                                          act_dtype, weight_dtype, False, requires_grad=False, device=device)
 
-    can_use_tma = none_or_tma_compatible(x) and none_or_tma_compatible(w)
-    if is_persistent and not can_use_tma:
-        pytest.skip("persistent TMAs not supported for this test")
-
     if mode == "batched":
         rdata, gindx, sindx = None, None, None
-    a = swiglu(matmul_ogs(x, w, bias, rdata, gindx, sindx, precision_opt), swiglu_alpha,
-               precision_config=SwiGLUPrecisionConfig(swiglu_limit))
-    b = matmul_ogs(
-        x, w, bias, rdata, gindx, sindx, precision_opt,
-        fused_activation=FusedActivation(FnSpecs("swiglu", swiglu_fn, ("alpha", "limit")), (swiglu_alpha, swiglu_limit),
-                                         2))
+
+    try:
+        a = swiglu(matmul_ogs(x, w, bias, rdata, gindx, sindx, precision_opt), swiglu_alpha,
+                   precision_config=SwiGLUPrecisionConfig(swiglu_limit))
+        b = matmul_ogs(
+            x, w, bias, rdata, gindx, sindx, precision_opt,
+            fused_activation=FusedActivation(FnSpecs("swiglu", swiglu_fn, ("alpha", "limit")),
+                                             (swiglu_alpha, swiglu_limit), 2))
+    except opt_flags.InapplicableConstraint:
+        pytest.skip("inapplicable constraint")
     assert_close(a, b)

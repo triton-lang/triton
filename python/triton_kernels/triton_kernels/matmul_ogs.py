@@ -118,25 +118,6 @@ class PrecisionConfig:
     out_dtype: torch.dtype = None
     enforce_bitwise_invariance: bool = False
 
-def none_or_tma_compatible(x):
-    if x is None:
-        return True
-    if not target_info.cuda_capability_geq(9, 0):
-        return False
-    # none of our kernels support MXFP4 w/ TMA on H100
-    if torch.cuda.get_device_capability()[0] == 9 and bitwidth(x.dtype) == 4:
-        return False
-    if x.ndim != 3:
-        return False
-    strides = list(x.stride())
-    stride_div = max(16, 128 // bitwidth(x.dtype))
-    try:
-        major_dim = strides.index(1)
-    except ValueError:
-        major_dim = -1
-    compliant = [x.stride(i)*x.element_size() % stride_div == 0 for i in range(x.ndim) if i != major_dim]
-    return all(compliant)
-
 # ---------------------
 # Preprocessing
 # ---------------------
@@ -416,7 +397,11 @@ def matmul_ogs(x, w, bias,
     K, N = w.shape[-2:]
     # compute optimization flags
     out_dtype = precision_config.out_dtype or x.dtype
-    can_use_tma = none_or_tma_compatible(x) and none_or_tma_compatible(w) and none_or_tma_compatible(w_scale)
+    can_use_tma = x.storage.is_tma_compliant() and \
+                  w.storage.is_tma_compliant() and \
+                 (w_scale is None or w_scale.storage.is_tma_compliant)
+    # hopper w/ mxfp4 doesn't support TMA
+    can_use_tma = can_use_tma and (torch.cuda.get_device_capability()[0] > 9 or bitwidth(w.dtype) != 4)
     can_use_fused_scatter = scatter_indx is not None and fused_activation.specs.fn is None
     opt_flags = make_opt_flags(out_dtype, x.dtype, w.dtype, precision_config,
         M, N, K, routing_data, can_use_tma, can_use_fused_scatter, epilogue.effective_itemsize,
