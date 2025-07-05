@@ -396,9 +396,13 @@ void cloneOpsInBlock(Block *block, SmallVector<WgBuilder> &builders,
       cloneForOp(forOp, builders, schedule);
     } else if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
       cloneIfOp(ifOp, builders, schedule);
-      // } else if (auto reduceOp = dyn_cast<triton::ReduceOp>(op)) {
-      //   cloneReduceOp(reduceOp, wsFunc, opBuilders);
+    } else if (auto reduceOp = dyn_cast<triton::ReduceOp>(op)) {
+      llvm_unreachable("NYT");
     } else if (auto yieldOp = dyn_cast<scf::YieldOp>(op)) {
+      if (yieldOp.getOperands().empty()) {
+	continue;
+      }
+
       for (size_t i = 0; i < builders.size(); ++i) {
         auto &builder = builders[i];
         auto partition = schedule.getPartition(i);
@@ -479,6 +483,32 @@ LogicalResult partitionLoopV2(scf::ForOp loop) {
   WarpSchedule schedule = std::move(*scheduleOr);
   if (failed(schedule.verify(loop)))
     return failure();
+
+  // Only the root node should have consumers at this point.
+  for (const Partition &partition : schedule.getPartitions()) {
+    bool failed = false;
+    auto callback = [&](OpResult output, OpOperand &use, unsigned distance) {
+      Operation *owner = loop.getBody()->findAncestorOpInBlock(*use.getOwner());
+      const Partition *usePartition = schedule.getPartition(owner);
+      if (usePartition == schedule.getRootPartition() ||
+          usePartition == &partition)
+        return;
+      failed = true;
+      InFlightDiagnostic diag =
+          mlir::emitWarning(output.getLoc(), "non-root partition #")
+          << partition.getIndex() << " has direct SSA consumer";
+      diag.attachNote(use.getOwner()->getLoc())
+          << "use at distance " << distance << " in partition #"
+          << usePartition->getIndex() << " here";
+    };
+    schedule.iterateUses(loop, &partition, callback);
+    if (failed)
+      return failure();
+  }
+
+  // There is nothing to do if the loop has 1 or fewer partitions.
+  if (llvm::size(schedule.getPartitions()) <= 1)
+    return success();
 
   SmallVector<Type> resultTypes;
   auto defaultPartition = schedule.getPartition((int)0);
@@ -571,6 +601,8 @@ void PartitionLoops::runOnOperation() {
     if (failed(partitionLoopV2(loop)))
       return signalPassFailure();
   }
+
+  //  getOperation()->dump();
 
   OpPassManager pm;
   pm.addPass(mlir::triton::createNVWSLowerWarpGroup());
