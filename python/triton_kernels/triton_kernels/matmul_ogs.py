@@ -426,8 +426,10 @@ def matmul_ogs(x, w, bias,
     preprocessing_features = init_preprocessing_features(w, precision_config, opt_flags)
     postprocessing_features = init_postprocessing_features(routing_data, scatter_indx, opt_flags)
     # allocate output/scratchpad memory
-    allocation = init_allocation(x, w, precision_config, fused_activation, routing_data, gather_indx, scatter_indx, opt_flags,
-                                 preprocessing_features, postprocessing_features)
+    allocation = init_allocation(x, w, precision_config, fused_activation,
+        routing_data, gather_indx, scatter_indx,
+        opt_flags, preprocessing_features, postprocessing_features
+    )
     memory = apply_allocation(allocation, y)
     # TMA descriptors require a global memory allocation
     if opt_flags.is_persistent:
@@ -465,30 +467,30 @@ def matmul_ogs(x, w, bias,
     grid_n = triton.cdiv(N, opt_flags.block_n)
     max_grid = batch_size * grid_m * grid_n * opt_flags.split_k
     grid = min(target_info.num_sms() - opt_flags.idle_sms, max_grid) if opt_flags.is_persistent else max_grid
-    # canonicalize x storage
+    # canonicalize storage
     has_gather = gather_indx is not None
     x_storage = _canonicalize_storage(x.storage, 2 if has_gather else 3, flex.lhs_data)
-    # canonicalize w storage
     w_storage = _canonicalize_storage(w.storage, 3, flex.rhs_data)
     # create tma descriptor for x
     x_has_tma = ((not has_gather) or (has_gather and target_info.has_tma_gather())) and opt_flags.is_persistent
     x_block_tma = ([1] if has_gather else [1, opt_flags.block_m]) + [opt_flags.block_k]
     x_tensor_or_tma = x_storage.make_tma(x_block_tma) if x_has_tma else x.storage.data
-    # x_strides = (0 if x.ndim == 2 else x.stride(0),) + x.stride()[-2:]
     # create tma descriptor for w
     w_has_tma = opt_flags.is_persistent
     w_tensor_or_tma = w_storage.make_tma([1, opt_flags.block_k, opt_flags.block_n]) if w_has_tma else w_storage.data
     # create tma descriptor for w_scale
     w_scale_tensor_or_tma = w_scale
     w_scale_has_tma = opt_flags.is_persistent and w_scale is not None
-    w_scale_strides = w_scale.stride() if has_mx and not w_scale_has_tma else (None, None, None)
     w_scale_tensor_or_tma =  w_scale.storage.make_tma([opt_flags.block_n, opt_flags.block_k]) if w_scale_has_tma else w_scale
+    # canonicalize strides
+    x_strides = [0]*(3 - x_storage.data.ndim) + list(x_storage.data.stride())
+    w_scale_strides = w_scale.stride() if has_mx and not w_scale_has_tma else (None, None, None)
     # launch kernel
     kernels = get_kernels(epilogue.specs, fused_activation.specs)
     (kernels._p_matmul_ogs if opt_flags.is_persistent else kernels._matmul_ogs)[(grid,)](
                    flex.out_data.reinterpret(memory["output"]),
                    flex.out_data.reinterpret(out0), *out0.stride(), *out0_flex,
-                   x_tensor_or_tma, x, [1]*(3 - len(x.stride())) + list(x.stride()),
+                   x_tensor_or_tma, x, *x_strides,
                    flex.lhs_data.scale,
                    w_tensor_or_tma, *w_storage.data.stride(), w_storage.data.stride()[-1] != 1,
                    flex.rhs_data.scale,
