@@ -12,23 +12,6 @@ using namespace mlir;
 using namespace mlir::triton;
 using namespace mlir::triton::gpu;
 
-// blocked -> shared.
-// Swizzling in shared memory to avoid bank conflict. Normally used for
-// A/B operands of dots.
-void lowerDistributedToShared(
-    Location loc, Value src, Value dst, Value adaptorSrc,
-    const SharedMemoryObject &smemObj, const LLVMTypeConverter *typeConverter,
-    ConversionPatternRewriter &rewriter, const TargetInfoBase &targetInfo,
-    std::pair<size_t, Type> *const llvmOpCount = nullptr) {
-  auto srcTy = cast<RankedTensorType>(src.getType());
-  auto dstTy = cast<MemDescType>(dst.getType());
-  auto elemTy = typeConverter->convertType(srcTy.getElementType());
-
-  auto inVals = unpackLLElements(loc, adaptorSrc, rewriter);
-  storeDistributedToShared(dstTy, srcTy, elemTy, inVals, smemObj, loc, rewriter,
-                           targetInfo, llvmOpCount);
-}
-
 LogicalResult lowerLocalStore(Location loc, MLIRContext *ctx, Value regVal,
                               MemDescType memDescTy, SharedMemoryObject smemObj,
                               ArrayRef<Value> inVals,
@@ -122,18 +105,12 @@ struct LocalAllocOpConversion
       // - The legacy path calls llvm.load/llvm.store unconditionally, while
       //   the AMD lowering of storeDShared does not, even when the predicate
       //   is constant true.
-      if (targetInfo.isCuda()) {
-        auto *ctx = op.getContext();
-        auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
-        if (failed(lowerLocalStore(loc, ctx, op.getSrc(), memDescTy, smemObj,
-                                   inVals, typeConverter, rewriter,
-                                   targetInfo))) {
-          return failure();
-        }
-      } else {
-        lowerDistributedToShared(loc, op.getSrc(), op.getResult(),
-                                 adaptor.getSrc(), smemObj, typeConverter,
-                                 rewriter, targetInfo);
+      auto *ctx = op.getContext();
+      auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
+      if (failed(lowerLocalStore(loc, ctx, op.getSrc(), memDescTy, smemObj,
+                                 inVals, typeConverter, rewriter,
+                                 targetInfo))) {
+        return failure();
       }
     }
     auto retVal = getStructFromSharedMemoryObject(loc, smemObj, rewriter);
@@ -181,16 +158,6 @@ public:
         loc, adaptor.getSrc(),
         typeConverter->convertType(memDescTy.getElementType()), rewriter);
     auto llvmElemTy = typeConverter->convertType(regTy.getElementType());
-
-    // See [Legacy local_load/local_store]
-    if (!targetInfo.isCuda()) {
-      SmallVector<Value> outVals = loadSharedToDistributed(
-          op, llvmElemTy, smemObj, loc, rewriter, targetInfo);
-      Value result =
-          packLLElements(loc, typeConverter, outVals, rewriter, regTy);
-      rewriter.replaceOp(op, result);
-      return success();
-    }
 
     auto regLayout = toLinearLayout(regTy.getShape(), regTy.getEncoding());
     auto sharedLayout =
@@ -246,15 +213,9 @@ public:
                                                          llvmElemTy, rewriter);
     auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
     std::pair<size_t, Type> llvmOpCount;
-    if (targetInfo.isCuda()) {
-      if (failed(lowerLocalStore(loc, ctx, regVal, memDescTy, smemObj, inVals,
-                                 typeConverter, rewriter, targetInfo))) {
-        return failure();
-      }
-    } else {
-      lowerDistributedToShared(loc, regVal, memDescVal, adaptor.getSrc(),
-                               smemObj, typeConverter, rewriter, targetInfo,
-                               &llvmOpCount);
+    if (failed(lowerLocalStore(loc, ctx, regVal, memDescTy, smemObj, inVals,
+                               typeConverter, rewriter, targetInfo))) {
+      return failure();
     }
 
     targetInfo.localStoreOpAnnotation(op, llvmOpCount.first,
