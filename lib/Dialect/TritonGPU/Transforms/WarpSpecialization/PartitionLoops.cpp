@@ -280,6 +280,7 @@ void cloneOpsInBlock(Block *block, SmallVector<WgBuilder> &builders,
 
 void cloneForOp(scf::ForOp forOp, SmallVector<WgBuilder> &builders,
                 const WarpSchedule &schedule) {
+  SmallVector<scf::ForOp> newForOps;
   for (size_t i = 0; i < builders.size(); ++i) {
     auto &b = builders[i];
     auto partition = schedule.getPartition(i);
@@ -297,6 +298,8 @@ void cloneForOp(scf::ForOp forOp, SmallVector<WgBuilder> &builders,
     }
     auto newForOp =
         b.builder.create<scf::ForOp>(forOp.getLoc(), lb, ub, step, initArgs);
+    newForOp->setAttrs(forOp->getAttrs());
+    newForOps.push_back(newForOp);
 
     b.mapping.map(forOp.getInductionVar(), newForOp.getInductionVar());
     // map the results of the forOp to the newForOp
@@ -327,6 +330,10 @@ void cloneForOp(scf::ForOp forOp, SmallVector<WgBuilder> &builders,
 
   // resursive clone ops in the forOp body
   cloneOpsInBlock(forOp.getBody(), builders, schedule);
+
+  for (auto newForOp: newForOps) {
+    WarpSchedule::eraseFrom(newForOp);
+  }
 }
 
 void cloneIfOp(scf::IfOp ifOp, SmallVector<WgBuilder> &builders,
@@ -340,6 +347,7 @@ void cloneIfOp(scf::IfOp ifOp, SmallVector<WgBuilder> &builders,
     auto cond = b.mapping.lookupOrDefault(ifOp.getCondition());
     auto newIfOp = b.builder.create<scf::IfOp>(
         ifOp.getLoc(), newIfResultTypes, cond, ifOp.elseBlock() ? true : false);
+    newIfOp->setAttrs(ifOp->getAttrs());
     newIfOps.push_back(newIfOp);
 
     // map results
