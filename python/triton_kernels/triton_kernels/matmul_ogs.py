@@ -346,7 +346,7 @@ def apply_allocation(allocation: MatmulAllocation, output):
 # Canonicalize
 # -----------------------------------------------------------------------------
 
-def _canonicalize_storage(storage, out_ndim, flex_data=None):
+def _canonicalize_storage(storage, out_ndim, flex_data):
     assert out_ndim >= storage.data.ndim
     new_storage_shape = [1] * (out_ndim - storage.data.ndim) + list(storage.data.shape)
     new_storage_data = storage.data.view(new_storage_shape)
@@ -468,15 +468,17 @@ def matmul_ogs(x, w, bias,
     # canonicalize x storage
     has_gather = gather_indx is not None
     x_storage = _canonicalize_storage(x.storage, 2 if has_gather else 3, flex.lhs_data)
+    # canonicalize w storage
+    w_storage = _canonicalize_storage(w.storage, 3, flex.rhs_data)
+    # create tma descriptor for x
     x_has_tma = ((not has_gather) or (has_gather and target_info.has_tma_gather())) and opt_flags.is_persistent
     x_block_tma = ([1] if has_gather else [1, opt_flags.block_m]) + [opt_flags.block_k]
     x_tensor_or_tma = x_storage.make_tma(x_block_tma) if x_has_tma else x.storage.data
-    x_strides = (0 if x.ndim == 2 else x.stride(0),) + x.stride()[-2:]
-    # canonicalize w storage
+    # x_strides = (0 if x.ndim == 2 else x.stride(0),) + x.stride()[-2:]
+    # create tma descriptor for w
     w_has_tma = opt_flags.is_persistent
-    w_storage = _canonicalize_storage(w.storage, 3, flex.rhs_data)
     w_tensor_or_tma = w_storage.make_tma([1, opt_flags.block_k, opt_flags.block_n]) if w_has_tma else w_storage.data
-    # canonicalize w_scale storage
+    # create tma descriptor for w_scale
     w_scale_tensor_or_tma = w_scale
     w_scale_has_tma = opt_flags.is_persistent and w_scale is not None
     w_scale_strides = w_scale.stride() if has_mx and not w_scale_has_tma else (None, None, None)
@@ -486,7 +488,7 @@ def matmul_ogs(x, w, bias,
     (kernels._p_matmul_ogs if opt_flags.is_persistent else kernels._matmul_ogs)[(grid,)](
                    flex.out_data.reinterpret(memory["output"]),
                    flex.out_data.reinterpret(out0), *out0.stride(), *out0_flex,
-                   x_tensor_or_tma, x, *x_strides,
+                   x_tensor_or_tma, x, [1]*(3 - len(x.stride())) + list(x.stride()),
                    flex.lhs_data.scale,
                    w_tensor_or_tma, *w_storage.data.stride(), w_storage.data.stride()[-1] != 1,
                    flex.rhs_data.scale,
