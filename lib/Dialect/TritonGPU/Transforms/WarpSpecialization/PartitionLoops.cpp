@@ -3,9 +3,11 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/ImplicitLocOpBuilder.h"
 #include "mlir/Pass/Pass.h"
+#include "mlir/Pass/PassManager.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/RegionUtils.h"
 #include "nvidia/include/Dialect/NVWS/IR/Dialect.h"
+#include "nvidia/include/Dialect/NVWS/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Partition.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
@@ -561,4 +563,10 @@ void PartitionLoops::runOnOperation() {
     if (failed(partitionLoopV2(loop)))
       return signalPassFailure();
   }
+
+  OpPassManager pm;
+  pm.addPass(mlir::triton::createNVWSLowerWarpGroup());
+
+  if (failed(runPipeline(pm, getOperation())))
+    return signalPassFailure();
 }
