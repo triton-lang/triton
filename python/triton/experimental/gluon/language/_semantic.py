@@ -155,6 +155,8 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         return ttgl.tensor(handle, ret_ty)
 
     def shared_store(self, mem_desc, value):
+        assert value.shape == mem_desc.shape, f"source shape {value.shape} and destination shape {mem_desc.shape} must match"
+        assert value.dtype == mem_desc.dtype, f"source dtype {value.dtype} and destination dtype {mem_desc.dtype} must match"
         self.builder.create_local_store(mem_desc.handle, value.handle)
 
     def shared_dealloc(self, mem_desc):

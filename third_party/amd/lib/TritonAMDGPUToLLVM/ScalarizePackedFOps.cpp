@@ -1,4 +1,5 @@
 #include "TritonAMDGPUToLLVM/Passes.h"
+#include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/PatternMatch.h"
 #include "llvm/IR/Verifier.h"
@@ -79,7 +80,7 @@ struct ScalarizePackedFOps : FunctionPass {
   ScalarizePackedFOps() : FunctionPass(ID) {}
 
   bool runOnFunction(Function &F) override {
-    IRBuilder builder(F.getContext());
+    IRBuilder<> builder(F.getContext());
     bool changed = false;
     SmallVector<Instruction *> instsToErase;
     for (BasicBlock &BB : F) {

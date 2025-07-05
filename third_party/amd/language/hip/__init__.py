@@ -1,3 +1,5 @@
 from . import libdevice
 
-__all__ = ["libdevice"]
+from .utils import memrealtime
+
+__all__ = ["libdevice", "memrealtime"]

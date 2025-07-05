@@ -31,14 +31,9 @@ class GluonASTSource(ASTSource):
         module.set_attr("ttg.target", builder.get_string_attr(target))
         module.set_attr("ttg.num-warps", builder.get_int32_attr(options.num_warps))
         module.set_attr("ttg.num-ctas", builder.get_int32_attr(options.num_ctas))
+        module.set_attr("ttg.threads-per-warp", builder.get_int32_attr(options.warp_size))
 
         is_cuda = options.backend_name == "cuda"
-
-        if is_cuda:
-            module.set_attr("ttg.threads-per-warp", builder.get_int32_attr(32))
-        else:
-            module.set_attr("ttg.threads-per-warp", builder.get_int32_attr(64))
-
         if is_cuda and options.maxnreg is not None:
             module.set_attr("ttg.maxnreg", builder.get_int32_attr(options.maxnreg))
 

@@ -1,6 +1,7 @@
 #include "Utility.h"
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "TritonAMDGPUToLLVM/GCNAsmFormat.h"
+#include "TritonAMDGPUToLLVM/TargetUtils.h"
 #include "mlir/Dialect/LLVMIR/LLVMTypes.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/IR/PatternMatch.h"
@@ -137,8 +138,17 @@ static Value shuffleCommonImpl(Location loc, RewriterBase &rewriter,
       Value lineId = b.xor_(threadId, stride);
       return bpermute(lineId);
     } else if (strideInt == 16) {
-      Value offset = b.i32_val(0x401F);
-      return rewriter.create<ROCDL::DsSwizzleOp>(loc, valType, val, offset);
+      if (isRDNA(isaFamily)) {
+        // Lane i in the upper 16 lanes reads the value from lane i in the lower
+        // 16 lanes and vice versa.
+        Value select_lo = b.i32_val(0x76543210);
+        Value select_hi = b.i32_val(0xfedcba98);
+        return rewriter.create<ROCDL::PermlaneX16Op>(
+            loc, valType, val, val, select_lo, select_hi, true, false);
+      } else {
+        Value offset = b.i32_val(0x401F);
+        return rewriter.create<ROCDL::DsSwizzleOp>(loc, valType, val, offset);
+      }
     } else {
       if (!llvm::is_contained({ISAFamily::CDNA2, ISAFamily::CDNA3,
                                ISAFamily::CDNA4, ISAFamily::RDNA3},
@@ -698,5 +708,4 @@ bool isChainDotTail(tt::DotOpInterface dotOp) {
     return true;
   return false;
 }
-
 } // namespace mlir::LLVM::AMD

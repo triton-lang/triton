@@ -326,6 +326,8 @@ def apply_allocation(allocation: MatmulAllocation, output):
 # -----------------------------------------------------------------------------
 # Canonicalize
 # -----------------------------------------------------------------------------
+# the `matmul_ogs` kernel can operate on 2D or 3D inputs depending on the mode being used
+# we can canonicalize storages to make the implementation more uniform
 
 def _canonicalize_storage(storage, out_ndim, flex_data):
     assert out_ndim >= storage.data.ndim

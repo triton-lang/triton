@@ -55,6 +55,17 @@ downloads a prebuilt LLVM, but you can also build LLVM from source and use that.
 LLVM does not have a stable API, so the Triton build will not work at an
 arbitrary LLVM version.
 
+For convenience, use the following command to build LLVM and install Triton with the custom LLVM:
+
+```shell
+make dev-install-llvm
+```
+
+<details>
+<summary>
+Alternatively, follow these steps to build LLVM from source manually.
+</summary>
+
 1. Find the version of LLVM that Triton builds against.  Check
 `cmake/llvm-hash.txt` to see the current version. For example, if it says:
        49af6502c6dcb4a7f7520178bd14df396f78240c
@@ -86,6 +97,8 @@ arbitrary LLVM version.
          LLVM_SYSPATH=$LLVM_BUILD_DIR \
          pip install -e .
 
+</details>
+
 # Tips for building
 
 - Set `TRITON_BUILD_WITH_CLANG_LLD=true` as an environment variable to use clang
@@ -106,15 +119,17 @@ arbitrary LLVM version.
   Without this, every invocation of `pip install` uses a different symlink to
   cmake, and this forces ninja to rebuild most of the `.a` files.
 
-- vscode intellisense has some difficulty figuring out how to build Triton's C++
-  (probably because, in our build, users don't invoke cmake directly, but
-  instead use setup.py).  Teach vscode how to compile Triton as follows.
+- The build system creates a `compile_commands.json` file under the Triton repo
+  directory. This file is used by VSCode IntelliSense and clangd to provide
+  code completion and other features for C++ code.
+
+  If IntelliSense does not work, you can try the following steps:
 
     - Do a local build. Run command `pip install -e .`
     - Get the full path to the `compile_commands.json` file produced by the build:
       `find ./build -name 'compile_commands.json' | xargs readlink -f`.
       You might get a full path similar to `/Users/{username}/triton/build/cmake.macosx-11.1-arm64-cpython-3.12/compile_commands.json`
-    - In vscode, install the
+    - In VSCode, install the
       [C/C++
       extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode.cpptools),
       then open the command palette (`Shift + Command + P` on Mac, or `Shift +

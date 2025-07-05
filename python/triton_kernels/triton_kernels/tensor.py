@@ -19,13 +19,15 @@ class Storage:
         return self.data.device
 
     def is_tma_compliant(self):
+        # TMAs didn't exist until Hopper
         if not cuda_capability_geq(9, 0):
             return False
-        # none of our kernels support MXFP4 w/ TMA on H100
+        # TMAs only exist for 2D, 3D, 5D inputs
         if len(self.data.shape) not in [2, 3, 5]:
             return False
+        # TMAs need at most one stride equal to 1
+        # and all other strides divisble by 16
         strides = list(self.data.stride())
-        # stride_div = max(16, 128 // bitwidth(self.data.dtype))
         try:
             major_dim = strides.index(1)
         except ValueError:

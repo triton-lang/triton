@@ -2,8 +2,7 @@ from dataclasses import dataclass
 import triton
 from triton_kernels.target_info import get_cdna_version
 import torch
-
-from . import opt_flags_amd, opt_flags_nvidia
+from .opt_flags_details import opt_flags_amd, opt_flags_nvidia
 
 # fmt: off
 

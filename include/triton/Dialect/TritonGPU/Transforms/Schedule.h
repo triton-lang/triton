@@ -4,6 +4,7 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/ImplicitLocOpBuilder.h"
 #include "mlir/Support/LLVM.h"
+#include "triton/Analysis/AxisInfo.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipelineExpander.h"
 #include "llvm/ADT/ArrayRef.h"
 #include <list>
@@ -16,6 +17,13 @@ namespace gpu {
 
 /// Lower the loops to prepare them for pipeline expansion.
 void lowerLoops(ModuleOp moduleOp);
+
+bool hasGpuBarriers(scf::ForOp forOp);
+bool isSafeToPipeline(scf::ForOp forOp);
+llvm::MapVector<Operation *, std::pair<int, Operation *>>
+loadOpsToIndirectionLevel(scf::ForOp forOp, bool pipelineWithoutDot,
+                          triton::ModuleAxisInfoAnalysis &axisInfoAnalysis,
+                          int numStages, bool filterSmall = true);
 
 }; // namespace gpu
 
@@ -85,7 +93,7 @@ public:
   using Cluster = ClusterList::iterator;
   using ClusterHash = size_t;
 
-  DenseMap<Operation *, std::pair<int, Cluster>> opToStageAndCluster;
+  llvm::MapVector<Operation *, std::pair<int, Cluster>> opToStageAndCluster;
 
   void setNumStages(int numStages) { this->numStages = numStages; }
   int getNumStages() const { return numStages; }
@@ -190,6 +198,13 @@ private:
   std::optional<CoarseSchedule::Cluster> cluster;
   CoarseSchedule &schedule;
 };
+
+namespace gpu {
+void scheduleDistanceOneDependencies(scf::ForOp forOp,
+                                     CoarseSchedule &schedule);
+void scheduleRemainingToLastStage(scf::ForOp forOp, CoarseSchedule &schedule,
+                                  CoarseSchedule::Cluster afterPrologue);
+} // namespace gpu
 
 } // namespace triton
 } // namespace mlir

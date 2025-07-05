@@ -451,17 +451,12 @@ public:
         warpsPerTileMFMA(dotOp, retShape, numWarps, {mDim, nDim});
 
     // Use transposed mfma layout to enable larger vectorization for global
-    // store instructions, except for fp8 matmul kernels due to regression
-    // TODO (lixun): investigate the regression and enable this feature again
+    // store instructions.
     auto aElemTy = mfmaInstr->aElementType;
-    bool isFP8 = llvm::isa<Float8E5M2FNUZType, Float8E4M3FNUZType,
-                           Float8E4M3FNType, Float8E5M2Type>(aElemTy);
-    bool isTransposed =
-        isChainDotHead(dotOp) || isChainDotTail(dotOp) || !isFP8;
     ttg::AMDMfmaEncodingAttr mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
         oldRetType.getContext(),
-        /*versionMajor*/ mfmaVersion, /*versionMinor*/ 0, warpsPerTile,
-        /*instrShape*/ mDim, nDim, isTransposed, CTALayout);
+        /*version*/ mfmaVersion, warpsPerTile,
+        /*instrShape*/ mDim, nDim, /*isTransposed=*/true, CTALayout);
 
     Type mfmaAccType;
     if (oldRetType.getElementType().isIntOrIndex())
@@ -661,7 +656,7 @@ public:
     // Always use transposed mfma layout. This enables larger vectorization
     // for global store instructions.
     auto mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
-        ctx, /*versionMajor=*/mfmaVersion, /*versionMinor=*/0, mfmaWarpsPerCTA,
+        ctx, /*version=*/mfmaVersion, mfmaWarpsPerCTA,
         /*instrShape=*/mDim, nDim, /*isTransposed=*/true, ctaLayout);
 
     auto newRetType = RankedTensorType::get(
@@ -819,7 +814,7 @@ public:
     // Always use transposed mfma layout. This enables larger vectorization
     // for global store instructions.
     auto mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
-        ctx, /*versionMajor=*/mfmaVersion, /*versionMinor=*/0, warpsPerTile,
+        ctx, /*verison=*/mfmaVersion, warpsPerTile,
         /*instrShape=*/mDim, nDim, /*isTransposed=*/true, ctaLayout);
 
     auto newRetType =
