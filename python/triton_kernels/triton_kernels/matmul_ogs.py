@@ -456,19 +456,19 @@ def matmul_ogs(x, w, bias,
     # initialize x
     has_gather = gather_indx is not None
     x_has_tma = ((not has_gather) or (has_gather and target_info.has_tma_gather())) and opt_flags.is_persistent
-    x_storage = Storage(flex.lhs_data.reinterpret(x.storage.data), x.storage.layout)
-    x_storage_data_new = torch.squeeze(x.storage.data) if has_gather else x.storage.data
-    x_storage = Storage(x_storage_data_new, x.storage.layout)
+    x_storage_shape = ([] if has_gather else [1]*(x.storage.data.ndim - 2)) + list(x.storage.data.shape)
+    x_storage_data = flex.lhs_data.reinterpret(x.storage.data).view(x_storage_shape)
+    x_storage = Storage(x_storage_data, x.storage.layout)
     x_tensor_or_tma = x_storage.data
     if x_has_tma:
         block_m = [1] if has_gather else [opt_flags.block_m]
-        block_z = [] if has_gather else [1] * (x.ndim - 2)
+        block_z = [] if has_gather else [1]*(x.storage.data.ndim - 2)
         x_tensor_or_tma = x_storage.make_tma(block_z + block_m + [opt_flags.block_k])
     x_strides = (0 if x.ndim == 2 else x.stride(0),) + x.stride()[-2:]
     # initialize w
-    w_storage = Storage(flex.rhs_data.reinterpret(w.storage.data), w.storage.layout)
-    w_storage_data_new = torch.unsqueeze(w.storage.data, 0) if w.ndim == 2 else w.storage.data
-    w_storage = Storage(w_storage_data_new, w.storage.layout)
+    w_storage_shape = ([] if w.storage.data.ndim == 3 else [1]) + list(w.storage.data.shape)
+    w_storage_data = flex.rhs_data.reinterpret(w.storage.data).view(w_storage_shape)
+    w_storage = Storage(w_storage_data, w.storage.layout)
     w_tensor_or_tma = w_storage.data
     if opt_flags.is_persistent: # can use tma
         w_tensor_or_tma = w_storage.make_tma([1, opt_flags.block_k, opt_flags.block_n])
