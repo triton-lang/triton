@@ -122,8 +122,6 @@ def matmul_launch_metadata(grid, kernel, args):
     n_x_bytes = X.numel() * X.element_size()
     n_y_bytes = Y.numel() * Y.element_size()
     if hist is not None:
-        if not isinstance(args["X"], TensorDescriptor):
-            assert X.shape[0] == Y.shape[0] == 1, "batched mode not supported"
         assert n_tokens is not None
         n_expts_act = args["N_EXPTS_ACT"]
 

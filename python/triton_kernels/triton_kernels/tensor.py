@@ -20,6 +20,9 @@ class Storage:
     def make_tma(self, block_shape, transpose=False):
         strides = list(self.data.stride())
         shape = list(self.data.shape)
+        # TODO
+        # there is an issue w/ column-major TMA; we transpose instead
+        transpose = self.data.stride()[-1] != 1
         if transpose:
             block_shape = block_shape[:-2] + [block_shape[-1], block_shape[-2]]
             shape = shape[:-2] + [shape[-1], shape[-2]]
