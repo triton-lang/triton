@@ -13,7 +13,11 @@ class Storage:
     def __post_init__(self):
         self.data = self.layout.swizzle_data(self.data)
 
-    def make_tma(self, block_shape, transpose):
+    @property
+    def device(self):
+        return self.data.device
+
+    def make_tma(self, block_shape, transpose=False):
         strides = list(self.data.stride())
         shape = list(self.data.shape)
         if transpose:
@@ -60,21 +64,23 @@ def bitwidth(type: IntegerType | FloatType | torch.dtype):
 @dataclass
 class Tensor:
 
-    handle: torch.Tensor
+    storage: Storage | torch.Tensor
     dtype: IntegerType | FloatType | torch.dtype = None
     shape: list[int] | None = None
     shape_max: list[int] | None = None
-    storage: Storage = None
 
     def __post_init__(self):
+        # set storage
+        if isinstance(self.storage, torch.Tensor):
+            self.storage = Storage(self.storage, DefaultLayout())
         # initialize dtype
         if self.dtype is None:
-            self.dtype = self.handle.dtype
-        if bitwidth(self.dtype) < 8 and self.shape is None and not isinstance(self.handle, Tensor):
+            self.dtype = self.storage.data.dtype
+        if bitwidth(self.dtype) < 8 and self.shape is None:
             raise ValueError("shape must be provided for sub-byte types")
         # initialize shape
         if self.shape is None:
-            self.shape = list(self.handle.shape)
+            self.shape = list(self.storage.data.shape)
         # validate shape: all elements must be `int` or numel-1 `torch.Tensor`
         is_int = lambda s: isinstance(s, int)
         is_item = lambda s: hasattr(s, "numel") and s.numel() == 1
@@ -89,15 +95,15 @@ class Tensor:
                 self.shape_max[i] = s
         # validate shape_max: all elements must be `int`
         assert all(map(is_int, self.shape_max))
-        # initialize layouts
-        if self.storage is None:
-            handle = self.handle.handle if isinstance(self.handle, Tensor) else self.handle
-            self.storage = Storage(handle, DefaultLayout())
-        #
-        self.ndim = self.handle.ndim
-        self.device = self.handle.device
 
     # torch compatibility layer
+    @property
+    def ndim(self):
+        return len(self.shape)
+
+    @property
+    def device(self):
+        return self.storage.device
 
     def stride(self, i=None):
         return self.storage.data.stride() if i is None else self.storage.data.stride(i)
@@ -106,20 +112,10 @@ class Tensor:
         return self.storage.data.data_ptr()
 
     def numel(self):
-        return self.handle.numel()
+        return self.storage.data.numel()
 
     def element_size(self):
-        return self.handle.element_size()
-
-    def permute(self, *permutation):
-        assert self.storage.layout.name is None
-        h = self.handle.permute(*permutation)
-        return Tensor(h)
-
-    def view(self, *args):
-        assert self.storage.layout.name is None
-        h = self.handle.view(*args)
-        return Tensor(h)
+        return bitwidth(self.dtype) // 8
 
 
 @dataclass
@@ -137,8 +133,6 @@ class Bitmatrix(Tensor):
 
     def __post_init__(self):
         super().__post_init__()
-        assert self.handle.shape[-1] * 32 == self.shape[-1]
-        assert self.handle.ndim == 2
         assert self.dtype == BIT
 
     def sum(self, partials_block_size):
@@ -154,12 +148,5 @@ class Bitmatrix(Tensor):
 def swizzle(tensor, layout):
     shape = list(tensor.shape)
     shape[tensor.stride().index(1)] *= 2
-    tmp = Tensor(tensor, shape=shape, dtype=FP4)
     storage = Storage(data=tensor, layout=layout)
-    return Tensor(tmp, storage=storage)
-
-
-def make_tma(tensor, block_shape, transpose=False):
-    if not isinstance(tensor, Tensor):
-        tensor = Tensor(tensor)
-    return tensor.storage.make_tma(block_shape, transpose=transpose)
+    return Tensor(storage, shape=shape, dtype=FP4)

@@ -14,7 +14,7 @@ from .matmul_ogs_details._p_matmul_ogs import _p_matmul_ogs, get_per_device_per_
 from .matmul_ogs_details._finalize_matmul import _finalize_matmul
 from .matmul_ogs_details.opt_flags import make_opt_flags, update_opt_flags_constraints
 from .specialize import specialize
-from .tensor import Tensor, make_tma, bitwidth
+from .tensor import Storage, Tensor, bitwidth
 
 
 @dataclass
@@ -400,6 +400,10 @@ def matmul_ogs(x, w, bias,
     if is_hopper_fp8: assert w.stride(1) == 1, "`w` must be column-major when it has data-type FP8 on capability < 10"
     if not isinstance(w, Tensor):
         w = Tensor(w)
+    if w_scale is not None and not isinstance(w_scale, Tensor):
+        w_scale = Tensor(w_scale)
+    if not isinstance(x, Tensor):
+        x = Tensor(x, dtype=x.dtype)
     # determine shapes
     M = x.shape[1] if gather_indx is None else gather_indx.src_indx.shape[0]
     batch_size = w.shape[0] if routing_data.expt_hist is None else 1
@@ -456,38 +460,37 @@ def matmul_ogs(x, w, bias,
     grid = min(target_info.num_sms() - opt_flags.idle_sms, max_grid) if opt_flags.is_persistent else max_grid
     # initialize x
     has_gather = gather_indx is not None
-    x = flex.lhs_data.reinterpret(x)
+    x_storage = Storage(flex.lhs_data.reinterpret(x.storage.data), x.storage.layout)
+    x_tensor_or_tma = x_storage.data
     x_has_tma = ((not has_gather) or (has_gather and target_info.has_tma_gather())) and opt_flags.is_persistent
-    x_tensor = x
     if x_has_tma:
-        x_tensor = torch.squeeze(x) if has_gather else x
+        x_storage_data_new = torch.squeeze(x.storage.data) if has_gather else x.storage.data
+        x_storage = Storage(x_storage_data_new, x.storage.layout)
         block_m = [1] if has_gather else [opt_flags.block_m]
         block_z = [] if has_gather else [1] * (x.ndim - 2)
-        x_tensor = make_tma(x_tensor, block_z + block_m + [opt_flags.block_k])
+        x_tensor_or_tma = x_storage.make_tma(block_z + block_m + [opt_flags.block_k])
     # initialize w
-    w_tensor = flex.rhs_data.reinterpret(w)
-    w_tma_transpose = False
-    w_has_tma = opt_flags.is_persistent
-    if w_has_tma:
-        w_tma_transpose = w.stride(2) != 1
-        w_tensor = make_tma(w_tensor, [1, opt_flags.block_k, opt_flags.block_n], transpose=w_tma_transpose)
+    w_storage = Storage(flex.rhs_data.reinterpret(w.storage.data), w.storage.layout)
+    w_tensor_or_tma, w_tma_transpose = w_storage.data, False
+    if opt_flags.is_persistent: # can use tma
+        w_tma_transpose = w_storage.data.stride(2) != 1
+        w_tensor_or_tma = w_storage.make_tma([1, opt_flags.block_k, opt_flags.block_n], transpose=w_tma_transpose)
     # initialize w_scale
     assert w_scale is None or opt_flags.is_persistent
-    w_scale_has_tma = opt_flags.is_persistent and w_scale is not None
-    mx_tensor = w_scale
-    mx_tensor_strides = mx_tensor.stride() if has_mx else (None, None, None)
-    if w_scale_has_tma:
-        mx_tensor = make_tma(mx_tensor, [opt_flags.block_n, opt_flags.block_k])
-        mx_tensor_strides = (None, None, None)
+    w_scale_tensor_or_tma = w_scale
+    w_scale_strides = w_scale.stride() if has_mx else (None, None, None)
+    if opt_flags.is_persistent and w_scale is not None: # can use tma
+        w_scale_tensor_or_tma = w_scale.storage.make_tma([opt_flags.block_n, opt_flags.block_k])
+        w_scale_strides = (None, None, None)
     kernels = get_kernels(epilogue.specs, fused_activation.specs)
     (kernels._p_matmul_ogs if opt_flags.is_persistent else kernels._matmul_ogs)[(grid,)](
                    flex.out_data.reinterpret(memory["output"]),
                    flex.out_data.reinterpret(out0), *out0.stride(), *out0_flex,
-                   x_tensor, x, x.stride(0), x.stride(1), x.stride(2),
+                   x_tensor_or_tma, x, x.stride(0), x.stride(1), x.stride(2),
                    flex.lhs_data.scale,
-                   w_tensor, w.stride(0), w.stride(1), w.stride(2), w_tma_transpose,
+                   w_tensor_or_tma, w.stride(0), w.stride(1), w.stride(2), w_tma_transpose,
                    flex.rhs_data.scale,
-                   mx_tensor, *mx_tensor_strides,
+                   w_scale_tensor_or_tma, *w_scale_strides,
                    bias, bias_stride,
                    x.shape[1] if routing_data.expt_hist is None else None,
                    N, K,

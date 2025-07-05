@@ -164,10 +164,10 @@ class PruneRouting(torch.autograd.Function):
         n_tokens_pad = expt_scal.shape[0]
         assert n_expts_tot % simulated_ep == 0
         _routing_clear_bitmatrix[(n_tokens_pad, )](
-            bitmatrix.handle,
-            bitmatrix.handle.stride(0),
-            bitmatrix.handle.stride(1),
-            bitmatrix.handle.shape[1],
+            bitmatrix.storage.data,
+            bitmatrix.storage.data.stride(0),
+            bitmatrix.storage.data.stride(1),
+            bitmatrix.storage.data.shape[1],
             n_expts_tot // simulated_ep,
             BLOCK_N=512,
         )

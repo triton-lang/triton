@@ -14,7 +14,7 @@ def topk_forward(x, k, apply_softmax=True, dim=1, return_bitmatrix=True, y_indx=
     BLOCK_M = 32
     BLOCK_N = 32
     BLOCK_S = 128
-    assert x.ndim == 2
+    assert len(x.shape) == 2
     assert x.shape_max[-1] < 32768
     assert dim == 1
     assert return_bitmatrix

@@ -99,7 +99,7 @@ def sum_bitmatrix_rows(x, out_ret, partials_block_size=None):
 
     # output tensors
     _sum_bitmatrix_rows[(pids_x, pids_y)](
-        x.handle, n_rows, x.stride(0), x.stride(1),  # input
+        x.storage.data, n_rows, x.stride(0), x.stride(1),  # input
         out_ret,  # output [final reduction]
         out_partials, out_partials.stride(0), out_partials.stride(1),
         out_partials.shape[1],  # output [partial reductions]
