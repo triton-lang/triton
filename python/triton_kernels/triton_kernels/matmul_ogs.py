@@ -17,7 +17,7 @@ from .specialize import specialize
 from .tensor import Storage, Tensor, bitwidth
 
 
-@dataclass
+@dataclass(frozen=True)
 class FnSpecs:
     name: str
     fn: "triton.runtime.jit.JITFunction"
@@ -29,19 +29,19 @@ class FnSpecs:
         return FnSpecs("dflt", None, tuple())
 
 
-@dataclass
+@dataclass(frozen=True)
 class FusedActivation:
-    specs: FnSpecs
-    fn_args: tuple[object]
-    reduction_n: int
+    specs: FnSpecs = FnSpecs.default()
+    fn_args: tuple[object] = tuple()
+    reduction_n: int = 1
 
 
-@dataclass
+@dataclass(frozen=True)
 class Epilogue:
-    specs: FnSpecs
-    fn_arg_values_matmul: tuple[object]
-    fn_arg_values_finalize: tuple[object]
-    effective_itemsize: float | None = None
+    specs: FnSpecs = FnSpecs.default()
+    fn_arg_values_matmul: tuple[object] = tuple()
+    fn_arg_values_finalize: tuple[object] = tuple()
+    effective_itemsize: float = None
 
 
 EpilogueSpecs = FnSpecs  # TODO: remove this alias when callers are updated
