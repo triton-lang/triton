@@ -30,6 +30,21 @@
           "flops8": 1e10,
           "bytes": 1e7
         }
+      },
+      {
+        "children": [],
+        "frame": {
+          "name": "foo2",
+          "type": "function"
+        },
+        "metrics": {
+          "count": 1,
+          "device_id": "2",
+          "device_type": "HIP",
+          "time (ns)": 204800,
+          "flops8": 1e12,
+          "bytes": 1e9
+        }
       }
     ],
     "frame": {
@@ -55,9 +70,16 @@
       "1": {
         "arch": "gfx942",
         "bus_width": 8192,
-        "clock_rate": 5200000,
-        "memory_clock_rate": 2525000,
+        "clock_rate": 2100000,
+        "memory_clock_rate": 1200000,
         "num_sms": 304
+      },
+      "2": {
+        "arch": "gfx950",
+        "bus_width": 8192,
+        "clock_rate": 2200000,
+        "memory_clock_rate": 1900000,
+        "num_sms": 256
       }
     }
   }

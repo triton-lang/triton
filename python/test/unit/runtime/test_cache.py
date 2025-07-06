@@ -3,6 +3,7 @@ import itertools
 import os
 import shutil
 import pathlib
+from concurrent.futures import Executor, Future, ThreadPoolExecutor
 
 import pytest
 import torch
@@ -362,6 +363,27 @@ def test_cache_builtin_as_global():
     assert "global variable" in str(e.value).lower()
 
 
+def test_cache_closure():
+
+    def make_closure(cst):
+
+        @triton.jit
+        def closure():
+            tl.full((16, ), cst, dtype=tl.int32)
+
+        return closure
+
+    cst = tl.constexpr(42)
+    closure = make_closure(cst)
+
+    closure[(1, )]()
+    cst.value = 43
+    with pytest.raises(RuntimeError) as e:
+        closure[(1, )]()
+
+    assert "cst has changed since we compiled this kernel, from constexpr[42] to constexpr[43]" in str(e.value)
+
+
 @triton.jit
 def no_cache_callable_inner():
     pass
@@ -376,6 +398,25 @@ def test_no_cache_callable():
     kernel[(1, )]()
     # `no_cache_callable_inner` should not be entered into used_global_vals.
     assert not kernel.used_global_vals
+
+
+def test_constexpr_cache_invalidation_recreated(device):
+
+    def test_run(val):
+        VAL = tl.constexpr(val)
+
+        @triton.jit
+        def kernel(out):
+            tl.store(out, VAL)
+
+        out = torch.zeros(1, device=device)
+        kernel[(1, )](out)
+        return out.item()
+
+    assert test_run(123) == 123
+    assert test_run(123) == 123
+    assert test_run(1234) == 1234
+    assert test_run(1234) == 1234
 
 
 def test_jit_warmup_cache(device) -> None:
@@ -528,6 +569,7 @@ def test_hooks(device, fresh_triton_cache) -> None:
     specialization_data = None
     is_warmup = False
     key = 0
+    name = None
 
     def cache_hook(*args, **kwargs):
         nonlocal specialization_data
@@ -536,6 +578,8 @@ def test_hooks(device, fresh_triton_cache) -> None:
         is_warmup = kwargs["compile"]["is_warmup"]
         nonlocal key
         key = kwargs["compile"]["key"]
+        nonlocal name
+        name = kwargs["fn"].name
 
     specialization_data_compiled = None
 
@@ -549,6 +593,7 @@ def test_hooks(device, fresh_triton_cache) -> None:
     assert specialization_data is not None and specialization_data_compiled == specialization_data
     assert is_warmup is True
     assert key in kernel_add.device_caches[getattr(torch, device).current_device()][0]
+    assert name == "test_hooks.<locals>.kernel_add"
 
 
 @pytest.mark.skipif(reason="within_2g is a HIP specific optimization", condition=not is_hip())
@@ -621,3 +666,102 @@ def test_function_arguments(device):
     kernel[(1, )](y[4], func1, tuple())
     assert len(kernel.device_caches[0][0]) == 4
     assert y.tolist() == [1, 2, 3, 7, 1]
+
+
+class MockThreadPool(Executor):
+
+    def __init__(self):
+        self.work_queue = []
+
+    def submit(self, fn, *args, **kwargs):
+        future = Future()
+
+        def task():
+            if not future.set_running_or_notify_cancel():
+                return
+
+            try:
+                result = fn(*args, **kwargs)
+                future.set_result(result)
+            except Exception as e:
+                future.set_exception(e)
+
+        self.work_queue.append(task)
+        return future
+
+    def run_one(self):
+        task = self.work_queue.pop(0)
+        task()
+
+    def run_all(self):
+        while self.work_queue:
+            self.run_one()
+
+    def shutdown(self, wait=True, *, cancel_futures=False):
+        self.run_all()
+
+
+def test_async_compile_mock(device, fresh_triton_cache):
+
+    @triton.jit
+    def kernel(Y, a: tl.constexpr):
+        tl.store(Y, a)
+
+    with (
+            MockThreadPool() as pool,
+            triton.AsyncCompileMode(pool),
+    ):
+        a = torch.empty((16, 16), device=device)
+        b = torch.empty((16, 16), dtype=torch.int32, device=device)
+        kernel.warmup(a, 0, grid=(1, ))
+        kernel.warmup(a, 1, grid=(1, ))
+        kernel.warmup(b, 0, grid=(1, ))
+        kernel.warmup(b, 1, grid=(1, ))
+
+        # Nothing has actually compiled yet
+        assert len(kernel.device_caches[0][0]) == 0
+        assert len(pool.work_queue) == 4
+
+        # Duplicates are only submitted once
+        kernel.warmup(a, 0, grid=(1, ))
+        kernel.warmup(a, 1, grid=(1, ))
+        assert len(kernel.device_caches[0][0]) == 0
+        assert len(pool.work_queue) == 4
+
+        pool.run_one()
+        kernel[(1, )](a, 0)
+        assert len(kernel.device_caches[0][0]) == 1
+        assert a[0, 0] == 0.0
+
+        pool.run_all()
+
+
+def test_async_compile(device, fresh_triton_cache):
+
+    @triton.jit
+    def kernel(Y, a: tl.constexpr):
+        tl.store(Y, a)
+
+    with (
+            ThreadPoolExecutor(2) as pool,
+            triton.AsyncCompileMode(pool),
+    ):
+        a = torch.empty((16, 16), device=device)
+        b = torch.empty((16, 16), dtype=torch.int32, device=device)
+        kernel.warmup(a, 0, grid=(1, ))
+        kernel.warmup(a, 1, grid=(1, ))
+        kernel.warmup(b, 0, grid=(1, ))
+        kernel.warmup(b, 1, grid=(1, ))
+
+        assert len(kernel.device_caches[0][0]) == 0
+
+        kernel[(1, )](b, 1)
+        assert b[0, 0] == 1
+        kernel[(1, )](b, 0)
+        assert b[0, 0] == 0
+        kernel[(1, )](a, 0)
+        assert a[0, 0] == 0
+        kernel[(1, )](a, 1)
+        assert a[0, 0] == 1
+        kernel[(1, )](a, 2)
+        assert a[0, 0] == 2

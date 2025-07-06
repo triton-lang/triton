@@ -153,7 +153,7 @@ static std::string getConstraintForBitwidth(unsigned bitwidth) {
 
 static bool isConstantTruePred(Value pred) {
   if (auto constOp = pred.getDefiningOp<LLVM::ConstantOp>()) {
-    return cast<IntegerAttr>(constOp.getValue()).getInt() != 0;
+    return cast<IntegerAttr>(constOp.getValue()).getInt() == -1;
   }
   return false;
 }
@@ -259,7 +259,7 @@ void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
   auto *ptrOpr = builder.newAddrOperand(ptr, "r");
 
   if (isConstantTruePred(pred)) {
-    b.store(val, ptr);
+    b.store(val, ptr, /*align=*/vec * elemBitwidth / 8);
   } else {
     PTXBuilder::Operand *valOpr;
     std::string constraint = getConstraintForBitwidth(elemBitwidth);
@@ -379,7 +379,7 @@ Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
   if (isConstantTruePred(pred)) {
     Type resultTy = vec == 1 ? Type(int_ty(elemBitwidth))
                              : Type(vec_ty(int_ty(elemBitwidth), vec));
-    load = b.load(resultTy, ptr);
+    load = b.load(resultTy, ptr, /*align=*/vec * elemBitwidth / 8);
     if (vec > 1) {
       Type structTy = struct_ty(SmallVector<Type>(vec, int_ty(elemBitwidth)));
       Value structValue = b.undef(structTy);

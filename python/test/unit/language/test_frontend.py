@@ -1,6 +1,6 @@
 import triton
 import triton.language as tl
-from triton._filecheck import filecheck_test
+from triton._filecheck import filecheck_test, run_filecheck_test
 
 # ===-----------------------------------------------------------------------===#
 # Unit Tests
@@ -101,6 +101,44 @@ def test_aggregate_initializers():
     # CHECK: call @{{.*}}anchor{{.*}}([[RANGE]])
     value.modify(tl.arange(4, 8))
     anchor(value)
+
+
+@filecheck_test
+@triton.jit
+def test_aggregate_modification_in_for_loop():
+    # CHECK-LABEL: test_aggregate_modification_in_for_loop
+    value = TypeWithBuiltinInitializer()
+    # CHECK: [[RANGE:%.*]] = tt.make_range {end = 4 : i32, start = 0 : i32}
+    for i in range(0, 2):
+        # CHECK: [[RET:%.*]] = scf.for
+        # CHECK-SAME: iter_args([[ITER:%.*]] = [[RANGE]])
+        value.modify(tl.arange(4, 8))
+        # CHECK: [[RANGE:%.*]] = tt.make_range {end = 8 : i32, start = 4 : i32}
+        # CHECK: yield [[RANGE]]
+
+    anchor(value)
+    # CHECK: call @{{.*}}anchor{{.*}}([[RET]])
+
+
+@filecheck_test
+@triton.jit
+def test_aggregate_modification_in_while_loop():
+    # CHECK-LABEL: test_aggregate_modification_in_while_loop
+    value = TypeWithBuiltinInitializer()
+    # CHECK: [[RANGE:%.*]] = tt.make_range {end = 4 : i32, start = 0 : i32}
+    i = 0
+    # CHECK: [[C0:%.*]] = arith.constant 0 :
+    while i < 1:
+        # CHECK: [[RET:%.*]]:2 = scf.while ([[ITER:%.*]] = [[RANGE]], [[IV:%.*]] = [[C0]])
+        # CHECK: do
+        i = 1
+        # CHECK: [[C1:%.*]] = arith.constant 1 :
+        value.modify(tl.arange(4, 8))
+        # CHECK: [[RANGE:%.*]] = tt.make_range {end = 8 : i32, start = 4 : i32}
+        # CHECK: yield [[RANGE]], [[C1]]
+
+    anchor(value)
+    # CHECK: call @{{.*}}anchor{{.*}}([[RET]]#0)
 
 
 @triton.jit
@@ -277,3 +315,110 @@ def test_constexpr_getitem():
     shape: tl.constexpr = make_shape(4, 8)
     sum: tl.constexpr = add_shape_dims(shape[0], shape[1])
     tl.arange(4, sum)
+
+
+@tl.constexpr_function
+def make_constexpr_closure(x):
+    x = tl.constexpr(x)
+
+    @triton.jit
+    def inner(shape: tl.constexpr):
+        return tl.full(shape, x, dtype=tl.int32)
+
+    return inner
+
+
+@filecheck_test
+@triton.jit
+def test_constexpr_closure():
+    # CHECK-LABEL: test_constexpr_closure
+    closure: tl.constexpr = make_constexpr_closure(42)
+
+    # CHECK: arith.constant dense<42> : tensor<128x128xi32>
+    closure((128, 128))
+
+
+@tl.constexpr_function
+def make_constexpr_generator(f):
+    f = tl.constexpr(f)
+
+    @triton.jit
+    def inner(lhs):
+        return lhs + f(lhs.shape, lhs.dtype)
+
+    return inner
+
+
+@triton.jit
+def inner_function(shape: tl.constexpr, dtype: tl.constexpr):
+    return tl.full(shape, 42, dtype)
+
+
+@filecheck_test
+@triton.jit
+def test_constexpr_generator():
+    # CHECK: func public @test_constexpr_generator
+    # CHECK:   [[RANGE:%.*]] = tt.make_range {end = 128 : i32, start = 0 : i32}
+    # CHECK:   call @{{.*}}make_constexpr_generator.<locals>.inner{{.*}}([[RANGE]])
+
+    # CHECK: func private @{{.*}}make_constexpr_generator.<locals>.inner
+    # CHECK:   [[RHS:%.*]] = tt.call @{{.*}}inner_function
+    # CHECK:   [[RESULT:%.*]] = arith.addi %arg0, [[RHS]]
+    # CHECK:   return [[RESULT]]
+
+    # CHECK: func private @{{.*}}inner_function
+    # CHECK:   %cst = arith.constant dense<42> : tensor<128xi32>
+    # CHECK:   return %cst
+    generator: tl.constexpr = make_constexpr_generator(inner_function)
+    lhs = tl.arange(0, 128)
+    generator(lhs)
+
+
+@tl.constexpr_function
+def Box(T):
+
+    @tl.core._aggregate
+    class BoxImpl:
+        value: T
+
+        @triton.jit
+        def create(value):
+            return BoxImpl(value)
+
+        def __init__(self, value):
+            self.value = value
+
+    return BoxImpl
+
+
+def test_late_bound_class_reference():
+    TensorBox = Box(tl.tensor)
+
+    @triton.jit
+    def kernel():
+        # CHECK: [[RANGE:%.*]] = tt.make_range {end = 4 : i32, start = 0 : i32}
+        # CHECK: call @{{.*}}anchor{{.*}}([[RANGE]])
+        value = TensorBox(tl.arange(0, 4))
+        anchor(value)
+
+    run_filecheck_test(kernel)
+
+
+@filecheck_test
+@triton.jit
+def test_modify_if_livein():
+    # CHECK-LABEL: test_modify_if_livein
+    none_livein = None  # noqa: F841
+
+    # CHECK: [[LOOP_OUT:%.*]] = scf.for {{.*}} iter_args([[BOX:%.*]] = %true)
+    # CHECK:   [[LIVEOUT:%.*]] = scf.if [[BOX]]
+    # CHECK:     yield %false
+    # CHECK:   else
+    # CHECK:     yield [[BOX]]
+    # CHECK:   yield [[LIVEOUT]]
+    # CHECK: call @{{.*}}anchor{{.*}}([[LOOP_OUT]])
+    box = Box(tl.tensor)(tl.core.to_tensor(True))
+    for i in range(10):
+        if box.value:
+            box.value = False
+    anchor(box.value)

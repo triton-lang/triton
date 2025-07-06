@@ -22,6 +22,11 @@ class GluonSemantic(TritonSemantic[TensorTy]):
     def __init__(self, builder: GluonOpBuilder):
         self.builder = builder
 
+    def _wrap_tensor_infer_layout(self, tensor):
+        ty = ttgl.distributed_type(tensor.type.scalar, tensor.shape,
+                                   self.builder.get_gluon_layout_from_tensor(tensor.handle))
+        return self.tensor(tensor.handle, ty)
+
     def _broadcast_shapes(self, lhs_shape: List[int], rhs_shape: List[int]):
         if len(lhs_shape) != len(rhs_shape):
             raise ValueError(f"Cannot broadcast, rank mismatch: {lhs_shape}, {rhs_shape}")
@@ -56,6 +61,20 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         ret_ty = ttgl.distributed_type(input.type.scalar, dst_shape, layout.parent)
         handle = self.builder.create_expand_dims(input.handle, axis, ret_ty.to_ir(self.builder))
         return self.tensor(handle, ret_ty)
+
+    def join(self, a: TensorTy, b: TensorTy) -> TensorTy:
+        a, b = self.broadcast_impl_value(a, b)
+        _check(a.shape != [], "Cannot join scalars in gluon")
+        value = super().join(a, b)
+        return self._wrap_tensor_infer_layout(value)
+
+    def split(self, a: TensorTy) -> Tuple[TensorTy, TensorTy]:
+        lhs, rhs = super().split(a)
+        return self._wrap_tensor_infer_layout(lhs), self._wrap_tensor_infer_layout(rhs)
+
+    def permute(self, input: TensorTy, dims: Tuple[int]) -> TensorTy:
+        value = super().permute(input, dims)
+        return self._wrap_tensor_infer_layout(value)
 
     def broadcast_impl_shape(self, input: TensorTy, shape: Tuple[int]) -> TensorTy:
         _check(isinstance(input.type, ttgl.distributed_type),
@@ -100,6 +119,11 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         ret_ty = ttgl.distributed_type(ttgl.int32, shape, layout)
         return super().arange(start, end, ret_ty=ret_ty)
 
+    def reshape(self, input: TensorTy, dst_shape: List[int], can_reorder: bool):
+        _check(not can_reorder, "can_reorder is not supported in gluon")
+        value = super().reshape(input, dst_shape, can_reorder)
+        return self._wrap_tensor_infer_layout(value)
+
     def splat(self, value, shape, layout):
         ret_ty = ttgl.distributed_type(value.dtype, shape, layout)
         handle = self.builder.create_splat(ret_ty.to_ir(self.builder), value.handle)
@@ -131,33 +155,34 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         return ttgl.tensor(handle, ret_ty)
 
     def shared_store(self, mem_desc, value):
+        assert value.shape == mem_desc.shape, f"source shape {value.shape} and destination shape {mem_desc.shape} must match"
+        assert value.dtype == mem_desc.dtype, f"source dtype {value.dtype} and destination dtype {mem_desc.dtype} must match"
         self.builder.create_local_store(mem_desc.handle, value.handle)
 
     def shared_dealloc(self, mem_desc):
         self.builder.create_local_dealloc(mem_desc.handle)
 
-    def _memdesc_subview(self, mem_desc, offsets, shape, layout):
+    def _memdesc_subview(self, mem_desc, offsets, shape):
+        layout = mem_desc.layout
         ty = ttgl.shared_memory_descriptor_type(mem_desc.dtype, shape, layout, mem_desc.type.alloc_shape)
         builder = self.builder
         handle = builder.create_memdesc_subview(ty.to_ir(builder), mem_desc.handle, offsets)
         return ttgl.shared_memory_descriptor(handle, **ty.__dict__)
 
-    def memdesc_split(self, mem_desc, offset, size, dim, layout):
+    def memdesc_slice(self, mem_desc, start, length, dim):
         offsets = [self.builder.get_int32(0)] * mem_desc.rank
-        offsets[dim] = self.builder.get_int32(offset)
+        offsets[dim] = self.to_tensor(start).handle
         shape = list(mem_desc.shape)
-        shape[dim] = size
-        return self._memdesc_subview(mem_desc, offsets, shape, layout)
+        shape[dim] = length
+        return self._memdesc_subview(mem_desc, offsets, shape)
 
-    def memdesc_slice(self, mem_desc, index, shape, layout):
-        assert mem_desc.rank > len(
-            shape), f"source rank ({mem_desc.rank}) must be greater than result rank ({len(shape)})"
-
+    def memdesc_index(self, mem_desc, index):
+        shape = mem_desc.shape[1:]
         offsets = [self.builder.get_int32(0)] * mem_desc.rank
-        offsets[0] = self._convert_elem_to_ir_value(index, require_i64=False)
-        return self._memdesc_subview(mem_desc, offsets, shape, layout)
+        offsets[0] = self.to_tensor(index).handle
+        return self._memdesc_subview(mem_desc, offsets, shape)
 
-    def memdesc_trans(self, mem_desc, order, layout):
+    def memdesc_trans(self, mem_desc, order):
         assert len(order) == len(
             mem_desc.shape), f"source rank ({mem_desc.rank}) and order length ({len(order)}) must match"
 
@@ -166,9 +191,10 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         new_alloc_shape = alloc_shape[:len(alloc_shape) - mem_desc.rank]
         new_alloc_shape += [alloc_shape[len(alloc_shape) - mem_desc.rank:][i] for i in order]
 
-        ty = ttgl.shared_memory_descriptor_type(mem_desc.dtype, shape, layout, new_alloc_shape)
-        handle = self.builder.create_memdesc_trans(ty.to_ir(self.builder), mem_desc.handle, order)
-        return ttgl.shared_memory_descriptor(handle, **ty.__dict__)
+        handle = self.builder.create_memdesc_trans(mem_desc.handle, order)
+        layout = self.builder.get_gluon_layout_from_memdesc(handle)
+        return ttgl.shared_memory_descriptor(handle, element_ty=mem_desc.dtype, shape=shape,
+                                             alloc_shape=new_alloc_shape, layout=layout)
 
     def memdesc_reshape(self, mem_desc, shape, layout):
         ty = ttgl.shared_memory_descriptor_type(mem_desc.dtype, shape, layout, mem_desc.type.alloc_shape)
@@ -215,8 +241,8 @@ class GluonSemantic(TritonSemantic[TensorTy]):
             self.wrap_tensor(reduce_op.get_result(i), inputs[i].type.scalar, ret_shape, ret_layout)
             for i in range(len(inputs)))
 
-    def warp_specialize(self, args, default_partition, worker_partitions, worker_num_warps: Sequence[int],
-                        worker_num_regs: Sequence[int], generator):
+    def warp_specialize(self, default_args, default_partition, worker_args, worker_partitions,
+                        worker_num_warps: Sequence[int], worker_num_regs: Sequence[int], generator):
         num_partitions = len(worker_partitions)
         assert num_partitions == len(
             worker_num_warps
@@ -231,14 +257,16 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         # Emit the default partition to get the result types.
         default_block = builder.new_block()
         builder.set_insertion_point_to_start(default_block)
-        default_results = generator.call_JitFunction(default_partition, args, kwargs={})
-        mlir_results = flatten_values_to_ir(default_results)
+        default_results = generator.call_JitFunction(default_partition, default_args, kwargs={})
+        mlir_results = []
+        if default_results is not None:
+            mlir_results = flatten_values_to_ir(default_results)
         builder.create_warp_yield(mlir_results)
         result_types = [r.get_type() for r in mlir_results]
 
         # Create the warp specialize op.
         builder.restore_insertion_point(insert_pt)
-        mlir_args = flatten_values_to_ir(args)
+        mlir_args = flatten_values_to_ir(worker_args)
         ws_op = builder.create_warp_specialize(result_types, mlir_args, worker_num_warps)
         ws_op.get_default_region().push_back(default_block)
         ws_op.set_requested_registers(worker_num_regs)
@@ -250,10 +278,12 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         for i in range(num_partitions):
             block = builder.create_block_with_parent(partitions_op.get_region(i), arg_types)
             block_args = [block.get_argument(j) for j in range(len(mlir_args))]
-            block_args = unflatten_ir_values(block_args, [arg.type for arg in args])
+            block_args = unflatten_ir_values(block_args, [arg.type for arg in worker_args])
             generator.call_JitFunction(worker_partitions[i], block_args, kwargs={})
             builder.create_warp_return()
 
         builder.set_insertion_point_after(ws_op.get_operation())
         mlir_results = [ws_op.get_result(i) for i in range(len(result_types))]
+        if default_results is None:
+            return
         return tuple(unflatten_ir_values(mlir_results, [r.type for r in default_results]))
