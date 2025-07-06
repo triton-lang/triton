@@ -1111,6 +1111,31 @@ swizzleDotOperandLike(RankedTensorType type, ttg::CTALayoutAttr ctaLayout) {
       type.getElementTypeBitWidth(), false);
 }
 
+RankedTensorType getPotentialDotType(Operation* op) {
+  if (op->getNumResults() != 1) {
+    return nullptr;
+  }
+  if(isa<ttg::LocalLoadOp, ttg::ConvertLayoutOp, tt::TransOp, ReshapeOp>(*op)) {
+    auto dstTy = cast<RankedTensorType>(op->getResult(0).getType());
+    int res_user_cnt = std::distance(op->getResult(0).user_begin(), op->getResult(0).user_end());
+    if(isa<ttg::DotOperandEncodingAttr>(dstTy.getEncoding()) || res_user_cnt != 1) {
+      return dstTy;
+    } else {
+      // If there is only one user, we could go further to check whether the user is a dot or not.
+      mlir::Operation* userOp = *op->getUsers().begin();
+      if (userOp) {
+        auto child_dstType = getPotentialDotType(userOp);
+        if (child_dstType) {
+          return child_dstType;
+        }
+      }
+      return dstTy;
+    }
+  } else {
+    return nullptr;
+  }
+}
+
 // If all the transitive uses of the given value have are used by a convert to
 // the same dot operand encoding, return the shared encoding that needs to be
 // used to be compatible with users' layouts. If there are incompatible shared
@@ -1138,11 +1163,11 @@ getSharedEncIfAllUsersAreDotEnc(Value val, bool &incompatible) {
       if (!isa<ttg::LocalLoadOp, ttg::ConvertLayoutOp>(user))
         return std::nullopt;
       auto srcTy = cast<triton::gpu::TensorOrMemDesc>(val.getType());
-      auto dstTy = cast<RankedTensorType>(user->getResult(0).getType());
+      auto dstTy = getPotentialDotType(user);
 
       // FIXME This may not be correct for multiple CTA, but getCTALayout is NYI
       // for LinearEncodingAttr
-      auto CTALayout = isa<ttg::LinearEncodingAttr>(dstTy.getEncoding())
+      auto CTALayout = isa<ttg::LinearEncodingAttr, ttg::DotOperandEncodingAttr>(dstTy.getEncoding())
                            ? ttg::getCTALayout(srcTy.getEncoding())
                            : ttg::getCTALayout(dstTy.getEncoding());
 
