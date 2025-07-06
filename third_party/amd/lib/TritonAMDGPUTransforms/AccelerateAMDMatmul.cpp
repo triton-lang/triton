@@ -535,9 +535,11 @@ public:
                                mfmaInstr->aElementType);
       b = convertAndCastTensor(rewriter, b, newBEncoding,
                                mfmaInstr->bElementType);
-      newDot = rewriter.create<triton::DotScaledOp>(
+      auto newDotOp = rewriter.create<triton::DotScaledOp>(
           dotOp.getLoc(), newAcc.getType(), a, b, newAcc, Value(), Value(),
           aScaledElemTy.value(), bScaledElemTy.value(), /*fastMath=*/false);
+      newDotOp->setAttr("ttg.no_decompose", rewriter.getUnitAttr());
+      newDot = newDotOp;
     } else {
       auto newAEncoding =
           ttg::DotOperandEncodingAttr::get(ctx, 0, mfmaEnc, kWidth);
@@ -721,6 +723,7 @@ public:
     auto newDot = rewriter.create<triton::DotScaledOp>(
         dotOp.getLoc(), newRetType, a, b, newAcc, newAScale, newBScale,
         aElemType, bElemType, dotOp.getFastMath());
+    newDot->setAttr("ttg.no_decompose", rewriter.getUnitAttr());
 
     rewriter.replaceOpWithNewOp<ttg::ConvertLayoutOp>(dotOp, oldRetType,
                                                       newDot);
@@ -1122,11 +1125,8 @@ public:
     case ISAFamily::CDNA4:
       patterns.add<::ScaledBlockedToScaledMFMAF8F6F4>(
           context, getMfmaVersion(isaFamily), matrixInstructionSize,
-          /*benefit=*/3);
-      patterns.add<::BlockedToMFMA>(context, getMfmaVersion(isaFamily),
-                                    matrixInstructionSize, kPack,
-                                    /*benefit=*/2);
-      break;
+          /*benefit=*/4);
+      [[fallthrough]];
     case ISAFamily::CDNA3:
     case ISAFamily::CDNA2:
     case ISAFamily::CDNA1:
