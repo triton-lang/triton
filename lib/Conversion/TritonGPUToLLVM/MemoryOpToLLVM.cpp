@@ -15,18 +15,19 @@ using namespace mlir::triton::gpu;
 // blocked -> shared.
 // Swizzling in shared memory to avoid bank conflict. Normally used for
 // A/B operands of dots.
-void lowerDistributedToShared(
-    Location loc, Value src, Value dst, Value adaptorSrc,
-    const SharedMemoryObject &smemObj, const LLVMTypeConverter *typeConverter,
-    ConversionPatternRewriter &rewriter, const TargetInfoBase &targetInfo,
-    std::pair<size_t, Type> *const llvmOpCount = nullptr) {
+void lowerDistributedToShared(Location loc, Value src, Value dst,
+                              Value adaptorSrc,
+                              const SharedMemoryObject &smemObj,
+                              const LLVMTypeConverter *typeConverter,
+                              ConversionPatternRewriter &rewriter,
+                              const TargetInfoBase &targetInfo) {
   auto srcTy = cast<RankedTensorType>(src.getType());
   auto dstTy = cast<MemDescType>(dst.getType());
   auto elemTy = typeConverter->convertType(srcTy.getElementType());
 
   auto inVals = unpackLLElements(loc, adaptorSrc, rewriter);
   storeDistributedToShared(dstTy, srcTy, elemTy, inVals, smemObj, loc, rewriter,
-                           targetInfo, llvmOpCount);
+                           targetInfo);
 }
 
 LogicalResult lowerLocalStore(Location loc, MLIRContext *ctx, Value regVal,
@@ -245,7 +246,6 @@ public:
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, adaptor.getDst(),
                                                          llvmElemTy, rewriter);
     auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
-    std::pair<size_t, Type> llvmOpCount;
     if (targetInfo.isCuda()) {
       if (failed(lowerLocalStore(loc, ctx, regVal, memDescTy, smemObj, inVals,
                                  typeConverter, rewriter, targetInfo))) {
@@ -253,12 +253,9 @@ public:
       }
     } else {
       lowerDistributedToShared(loc, regVal, memDescVal, adaptor.getSrc(),
-                               smemObj, typeConverter, rewriter, targetInfo,
-                               &llvmOpCount);
+                               smemObj, typeConverter, rewriter, targetInfo);
     }
 
-    targetInfo.localStoreOpAnnotation(op, llvmOpCount.first,
-                                      llvmOpCount.second);
     rewriter.eraseOp(op);
     return success();
   }

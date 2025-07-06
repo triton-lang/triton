@@ -791,8 +791,7 @@ void storeDistributedToShared(triton::gpu::MemDescType dstTy,
                               ArrayRef<Value> srcVals,
                               const SharedMemoryObject &smemObj, Location loc,
                               RewriterBase &rewriter,
-                              const TargetInfoBase &target,
-                              std::pair<size_t, Type> *const llvmOpCount) {
+                              const TargetInfoBase &target) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   bool success = emitTransferBetweenRegistersAndShared(
       srcTy, dstTy, elemLlvmTy, /*maxVecElems=*/std::nullopt, smemObj, loc,
@@ -807,10 +806,6 @@ void storeDistributedToShared(triton::gpu::MemDescType dstTy,
         b.store(vec, vecAddr)
             .setAlignment(vecTy.getNumElements() *
                           elemLlvmTy.getIntOrFloatBitWidth() / 8);
-        if (llvmOpCount) {
-          ++(llvmOpCount->first);
-          llvmOpCount->second = vecTy;
-        }
       });
 
   if (!success)
