@@ -476,14 +476,11 @@ void cloneOpsInBlock(Block *block, SmallVector<WgBuilder> &builders,
 
       auto partition = schedule.getPartition(op);
 
-      if (auto reduceOp = op->getParentOfType<ReduceOp>()) {
-	// TODO
-	auto reducePartition = schedule.getPartition(reduceOp);
-        auto &builder = builders[reducePartition->getIndex()];
-        doClone(builder, op);
-      } else if (partition == schedule.getRootPartition()) {
-	// llvm::errs() << !partition << ", " << (partition == schedule.getRootPartition()) << "\n";
-	// op->dump();
+      if (!partition) {
+	continue;
+      }
+
+      if (partition == schedule.getRootPartition()) {
         for (auto &builder : builders) {
           doClone(builder, op);
         }
@@ -506,12 +503,19 @@ void assignPartitionToIfOp(scf::IfOp ifOp, Partition *part,
   }
 }
 
+void assignPartitionToReduceOp(ReduceOp reduceOp, Partition *part,
+			       WarpSchedule &schedule) {
+  assignPartitionToBlock(reduceOp.getBody(), part, schedule);
+}
+
 void assignPartitionToBlock(mlir::Block *block, Partition *part,
                             WarpSchedule &schedule) {
   for (auto &op : block->getOperations()) {
     schedule.insert(part, &op);
     if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
       assignPartitionToIfOp(ifOp, part, schedule);
+    } else if (auto reduceOp = dyn_cast<ReduceOp>(op)) {
+      assignPartitionToReduceOp(reduceOp, part, schedule);
     }
   }
 }
@@ -580,6 +584,13 @@ LogicalResult partitionLoopV2(scf::ForOp loop) {
     auto partition = schedule.getPartition(ifOp);
     if (partition && partition != schedule.getRootPartition()) {
       assignPartitionToIfOp(ifOp, partition, schedule);
+    }
+  });
+
+  loop->getBlock()->walk([&](ReduceOp reduceOp) {
+    auto partition = schedule.getPartition(reduceOp);
+    if (partition && partition != schedule.getRootPartition()) {
+      assignPartitionToReduceOp(reduceOp, partition, schedule);
     }
   });
 
