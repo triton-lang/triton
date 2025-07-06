@@ -47,7 +47,7 @@ class BlackwellMXScaleLayout(Layout):
         N_pad = (N + ALIGN_N - 1) // ALIGN_N * ALIGN_N
         data = torch.nn.functional.pad(data, (0, N_pad - N, 0, K_pad - K))
         data = data.transpose(-1, -2).contiguous()
-        data = data.reshape(B, K_pad // SWIZZLE_K, ALIGN_N // 32, 32, N_pad // ALIGN_N, SWIZZLE_K)
+        data = data.reshape(B, N_pad // ALIGN_N, ALIGN_N // 32, 32, K_pad // SWIZZLE_K, SWIZZLE_K)
         data = data.transpose(-2, -4).contiguous()
         return data.view(1, B * N_pad // 128, K_pad // 4, 2, 256)
 
