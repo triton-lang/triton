@@ -475,32 +475,6 @@ def test_warp_spec(tmp_path: pathlib.Path):
     if not HAS_WARP_SPECIALIZE:
         pytest.skip("target backend does not support warp specialization")
 
-    def matmul_get_configs(pre_hook=None):
-        return [
-            triton.Config({'BLOCK_SIZE_M': BM, 'BLOCK_SIZE_N': BN, "BLOCK_SIZE_K" : BK, "GROUP_SIZE_M" : 8}, num_stages=s, num_warps=w, pre_hook=pre_hook) \
-            for BM in [128] \
-            for BN in [256] \
-            for BK in [128] \
-            for s in ([2]) \
-            for w in [8] \
-        ]
-
-    def matmul_tma_set_block_size_hook(nargs):
-        EPILOGUE_SUBTILE = nargs.get("EPILOGUE_SUBTILE", False)
-        BLOCK_M = nargs["BLOCK_SIZE_M"]
-        BLOCK_N = nargs["BLOCK_SIZE_N"]
-        BLOCK_K = nargs["BLOCK_SIZE_K"]
-        nargs["a_desc"].block_shape = [BLOCK_M, BLOCK_K]
-        nargs["b_desc"].block_shape = [BLOCK_N, BLOCK_K]
-        if EPILOGUE_SUBTILE:
-            nargs["c_desc"].block_shape = [BLOCK_M, BLOCK_N // 2]
-        else:
-            nargs["c_desc"].block_shape = [BLOCK_M, BLOCK_N]
-
-    @triton.autotune(
-        configs=matmul_get_configs(pre_hook=matmul_tma_set_block_size_hook),
-        key=["M", "N", "K", "WARP_SPECIALIZE"],
-    )
     @triton.jit
     def matmul_kernel_tma(a_desc, b_desc, c_desc,  #
                           M, N, K,  #
@@ -556,22 +530,26 @@ def test_warp_spec(tmp_path: pathlib.Path):
 
         c = torch.empty((M, N), device=a.device, dtype=dtype)
 
-        # A dummy block value that will be overwritten when we have the real block size
-        dummy_block = [1, 1]
-        a_desc = TensorDescriptor(a, a.shape, a.stride(), dummy_block)
-        b_desc = TensorDescriptor(b, b.shape, b.stride(), dummy_block)
-        c_desc = TensorDescriptor(c, c.shape, c.stride(), dummy_block)
+        a_desc = TensorDescriptor(a, a.shape, a.stride(), [128, 128])
+        b_desc = TensorDescriptor(b, b.shape, b.stride(), [256, 128])
+        c_desc = TensorDescriptor(c, c.shape, c.stride(), [128, 256])
 
         def grid(META):
-            BLOCK_M = META["BLOCK_SIZE_M"]
-            BLOCK_N = META["BLOCK_SIZE_N"]
+            BLOCK_M = 128
+            BLOCK_N = 256
             return (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), )
 
         matmul_kernel_tma[grid](
             a_desc, b_desc, c_desc,  #
             M, N, K,  #
+            BLOCK_SIZE_M=128,  #
+            BLOCK_SIZE_N=256,  #
+            BLOCK_SIZE_K=128,  #
+            GROUP_SIZE_M=8,  #
             FP8_OUTPUT=dtype == torch.float8_e4m3fn,  #
             WARP_SPECIALIZE=warp_specialize,  #
+            num_stages=2,  #
+            num_warps=8
         )
         return c
 
