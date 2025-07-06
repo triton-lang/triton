@@ -30,8 +30,10 @@ public:
 
   LogicalResult matchAndRewrite(DotScaledOp scaledDotOp,
                                 PatternRewriter &rewriter) const override {
-    if (scaledDotOp->getAttrOfType<UnitAttr>("ttg.no_decompose"))
+    if (isa_and_nonnull<MmaEncodingTrait>(
+            scaledDotOp.getResult().getType().getEncoding()))
       return failure();
+
     // TODO: add support for m/n packed formats.
     if (!scaledDotOp.getLhsKPack() || !scaledDotOp.getRhsKPack())
       return failure();
