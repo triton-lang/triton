@@ -534,7 +534,7 @@ Value getSmemVecAddr(const LinearLayout &regLayout,
                                            {kBlock, blockId}}));
     for (auto i = 0; i < rank; i++) {
       multiDimTensorOffsets[i].second =
-          b.add(multiDimTensorOffsets[i].second, smemOffsets[i]);
+          b.xor_(multiDimTensorOffsets[i].second, smemOffsets[i]);
     }
     smemOffset = applyLinearLayout(loc, rewriter, invertAllocSharedLayout,
                                    multiDimTensorOffsets)[0]
