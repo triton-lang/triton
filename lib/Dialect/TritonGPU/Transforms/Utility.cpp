@@ -1111,18 +1111,22 @@ swizzleDotOperandLike(RankedTensorType type, ttg::CTALayoutAttr ctaLayout) {
       type.getElementTypeBitWidth(), false);
 }
 
-RankedTensorType getPotentialDotType(Operation* op) {
+RankedTensorType getPotentialDotType(Operation *op) {
   if (op->getNumResults() != 1) {
     return nullptr;
   }
-  if(isa<ttg::LocalLoadOp, ttg::ConvertLayoutOp, tt::TransOp, ReshapeOp>(*op)) {
+  if (isa<ttg::LocalLoadOp, ttg::ConvertLayoutOp, tt::TransOp, ReshapeOp>(
+          *op)) {
     auto dstTy = cast<RankedTensorType>(op->getResult(0).getType());
-    int res_user_cnt = std::distance(op->getResult(0).user_begin(), op->getResult(0).user_end());
-    if(isa<ttg::DotOperandEncodingAttr>(dstTy.getEncoding()) || res_user_cnt != 1) {
+    int res_user_cnt = std::distance(op->getResult(0).user_begin(),
+                                     op->getResult(0).user_end());
+    if (isa<ttg::DotOperandEncodingAttr>(dstTy.getEncoding()) ||
+        res_user_cnt != 1) {
       return dstTy;
     } else {
-      // If there is only one user, we could go further to check whether the user is a dot or not.
-      mlir::Operation* userOp = *op->getUsers().begin();
+      // If there is only one user, we could go further to check whether the
+      // user is a dot or not.
+      mlir::Operation *userOp = *op->getUsers().begin();
       if (userOp) {
         auto child_dstType = getPotentialDotType(userOp);
         if (child_dstType) {
@@ -1167,9 +1171,11 @@ getSharedEncIfAllUsersAreDotEnc(Value val, bool &incompatible) {
 
       // FIXME This may not be correct for multiple CTA, but getCTALayout is NYI
       // for LinearEncodingAttr
-      auto CTALayout = isa<ttg::LinearEncodingAttr, ttg::DotOperandEncodingAttr>(dstTy.getEncoding())
-                           ? ttg::getCTALayout(srcTy.getEncoding())
-                           : ttg::getCTALayout(dstTy.getEncoding());
+      auto CTALayout =
+          isa<ttg::LinearEncodingAttr, ttg::DotOperandEncodingAttr>(
+              dstTy.getEncoding())
+              ? ttg::getCTALayout(srcTy.getEncoding())
+              : ttg::getCTALayout(dstTy.getEncoding());
 
       if (auto dot =
               dyn_cast<ttg::DotOperandEncodingAttr>(dstTy.getEncoding())) {
