@@ -308,7 +308,8 @@ Value getLaneId(OpBuilder &rewriter, Location loc) {
 
 // Helper function: applies linear layout vectorized over register indices
 SmallVector<SmallVector<std::pair<StringAttr, Value>>>
-applyLinearLayoutVec(Location loc, RewriterBase &rewriter, const LinearLayout &layout,
+applyLinearLayoutVec(Location loc, RewriterBase &rewriter,
+                     const LinearLayout &layout,
                      ArrayRef<std::pair<StringAttr, Value>> indices,
                      ArrayRef<uint32_t> registers) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
