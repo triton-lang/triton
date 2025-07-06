@@ -12,7 +12,6 @@ using namespace mlir;
 using namespace mlir::triton;
 using namespace mlir::triton::gpu;
 
-
 LogicalResult lowerLocalStore(Location loc, MLIRContext *ctx, Value regVal,
                               MemDescType memDescTy, SharedMemoryObject smemObj,
                               ArrayRef<Value> inVals,
