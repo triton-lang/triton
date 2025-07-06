@@ -377,6 +377,11 @@ class HIPBackend(BaseBackend):
 
         llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3, options.arch, '', [], options.enable_fp_fusion)
 
+        if amd.has_architected_sgprs(options.arch):
+            fns[0].remove_fn_attr("amdgpu-no-workgroup-id-x")
+            fns[0].remove_fn_attr("amdgpu-no-workgroup-id-y")
+            fns[0].remove_fn_attr("amdgpu-no-workgroup-id-z")
+
         if knobs.amd.scalarize_packed_fops:
             amd.add_scalarize_packed_fops_llvm_pass(fns[0])
 
