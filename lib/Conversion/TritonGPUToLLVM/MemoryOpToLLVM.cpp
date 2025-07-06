@@ -166,9 +166,23 @@ public:
         typeConverter->convertType(memDescTy.getElementType()), rewriter);
     auto llvmElemTy = typeConverter->convertType(regTy.getElementType());
 
+    auto shape = memDescTy.getShape();
+    auto allocShape = memDescTy.getAllocShape();
+    auto sharedEnc = cast<triton::gpu::SharedEncodingTrait>(memDescTy.getEncoding());
+    if (!isSimpleSharedMemoryAccess(shape, allocShape, sharedEnc)) {
+        SmallVector<Value> outVals = loadSharedToDistributed(
+            op, llvmElemTy, smemObj, loc, rewriter, targetInfo);
+        Value result =
+            packLLElements(loc, typeConverter, outVals, rewriter, regTy);
+        rewriter.replaceOp(op, result);
+        return success();
+    }
+
+    llvm::outs() << "Lowering local_load op with reg encoding: \n";
+    llvm::outs() << regTy.getEncoding() << "\n";
     auto regLayout = toLinearLayout(regTy.getShape(), regTy.getEncoding());
     auto sharedLayout =
-        toLinearLayout(memDescTy.getShape(), memDescTy.getEncoding());
+        toLinearLayout(shape, sharedEnc);
     auto cvt = regLayout.invertAndCompose(sharedLayout);
     auto kBlock = str_attr("block");
     // NYI. We would need to emit a map.shared::cluster instruction.
