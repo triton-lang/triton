@@ -48,19 +48,19 @@ void parseSelectIds(llvm::StringRef selectIds,
   selectIdVec.erase(llvm::unique(selectIdVec), selectIdVec.end());
 }
 
-template <typename T> bool hasProtonRecord(T *o) {
-  bool hasProtonRecord = false;
-  o->walk([&](proton::RecordOp record) {
-    hasProtonRecord = true;
+template <typename T, typename OP> bool hasOperator(T *o) {
+  bool exist = false;
+  o->walk([&](OP op) {
+    exist = true;
     return WalkResult::interrupt();
   });
-  return hasProtonRecord;
+  return exist;
 }
 
 void instrumentWarpSpecializeOps(FuncOp func, Value buffer, Value profileMem) {
   for (auto wsOp : func.getOps<triton::gpu::WarpSpecializeOp>()) {
     auto loc = wsOp.getLoc();
-    if (hasProtonRecord(wsOp.getOperation())) {
+    if (hasOperator<Operation, proton::RecordOp>(wsOp.getOperation())) {
       wsOp->insertOperands(wsOp->getNumOperands(), {buffer, profileMem});
       for (Region *region : wsOp.getPartitionRegions()) {
         region->addArgument(buffer.getType(), loc);
@@ -82,7 +82,7 @@ LogicalResult replaceProtonRecordOp(OpBuilder &builder, FuncOp func,
   func->walk([&](triton::gpu::WarpSpecializePartitionsOp partitions) {
     auto loc = partitions.getLoc();
     for (auto &partition : partitions.getPartitionRegions()) {
-      if (hasProtonRecord(&partition)) {
+      if (hasOperator<Region, proton::RecordOp>(&partition)) {
         Block &block = partition.front();
         builder.setInsertionPointToStart(&block);
         int argNum = block.getNumArguments();
@@ -312,7 +312,9 @@ public:
         loc, triton::getPointerType(builder.getI32Type()),
         allocProfileScratchSize, profileScratchAlignment);
 
-    builder.create<gpu::InitCtxOp>(loc, profileMem);
+    if (hasOperator<Operation, triton::gpu::WarpSpecializeOp>(
+            func.getOperation()))
+      builder.create<gpu::InitCtxOp>(loc, profileMem);
 
     instrumentWarpSpecializeOps(func, buffer, profileMem);
 
@@ -323,7 +325,6 @@ public:
     func.walk([&](triton::ReturnOp ret) {
       builder.setInsertionPoint(ret);
       builder.create<mlir::gpu::BarrierOp>(loc);
-      builder.create<gpu::SaveCtxOp>(loc, segment, profileMem);
       builder.create<gpu::FinalizeOp>(loc, segment, profileMem);
     });
 
@@ -355,7 +356,7 @@ public:
     FuncOp func = *m.getOps<triton::FuncOp>().begin();
 
     // Check if there are any proton records to process
-    if (!hasProtonRecord(func.getOperation())) {
+    if (!hasOperator<Operation, proton::RecordOp>(func.getOperation())) {
       return; // No proton records to process, silently return
     }
 

@@ -120,6 +120,13 @@ struct FinalizeOpConversion
 
     auto scratchPtrTy = mlir::cast<LLVM::LLVMPointerType>(scratchPtr.getType());
 
+    // Add the `warp_index` section.
+    Value warpIndexOffset = b.add(warpId, b.i32_val(circularHeaderWordSize));
+    Value gmemWarpIndexPtr =
+        b.gep(scratchPtrTy, i32_ty, scratchPtr, warpIndexOffset);
+    Value index = b.load(i32_ty, segmentObj.indexPtr);
+    b.store(index, gmemWarpIndexPtr);
+
     Block *prevBlock = op->getBlock();
     // Add the 'if' block.
     Block *ifBlock = rewriter.splitBlock(prevBlock, op->getIterator());
