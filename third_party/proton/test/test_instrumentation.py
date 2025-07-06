@@ -549,8 +549,7 @@ def test_warp_spec(tmp_path: pathlib.Path):
             FP8_OUTPUT=dtype == torch.float8_e4m3fn,  #
             WARP_SPECIALIZE=warp_specialize,  #
             num_stages=2,  #
-            num_warps=8
-        )
+            num_warps=8)
         return c
 
     mode = proton.mode.Default(metric_type="cycle", optimizations="clock32")
