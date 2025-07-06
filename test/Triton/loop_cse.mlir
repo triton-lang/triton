@@ -70,3 +70,17 @@ tt.func public @invalid_cache_test(%arg0: i32, %arg1: i32) -> (i32, i32) {
   }
   tt.return %0#1, %0#3 : i32, i32
 }
+
+// CHECK-LABEL: @multiple_op_results
+tt.func @multiple_op_results(%arg0: i32) -> (i32, i32) {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i32 = arith.constant 1 : i32
+  // CHECK: %0:2 = scf.for
+  %0:2 = scf.for %i = %c0_i32 to %arg0 step %c1_i32 iter_args(%a = %c0_i32, %b = %c0_i32) -> (i32, i32) : i32 {
+    // CHECK-NEXT: %1:2 = {{.*}} %arg2, %arg3
+    %1:2 = tt.elementwise_inline_asm "asm" {constraints = "=r,=r,r,r", pure = true, packed_element = 1 : i32} %a, %b : i32, i32 -> i32, i32
+    // CHECK-NEXT: yield %1#0, %1#1 : i32, i32
+    scf.yield %1#0, %1#1 : i32, i32
+  }
+  tt.return %0#0, %0#1 : i32, i32
+}

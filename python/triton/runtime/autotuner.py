@@ -9,9 +9,11 @@ from functools import cached_property
 from typing import Dict, Tuple, List, Optional
 
 from .. import knobs
-from .jit import KernelInterface
+from .jit import KernelInterface, JITFunction
 from .errors import OutOfResources, PTXASError
 from .driver import driver
+from .cache import get_cache_manager, triton_key
+from triton._C.libtriton import get_cache_invalidating_env_vars
 
 
 class Autotuner(KernelInterface):
@@ -169,10 +171,7 @@ class Autotuner(KernelInterface):
             bench_fn()
             return False
 
-        from triton._C.libtriton import get_cache_invalidating_env_vars
-        from triton.compiler.compiler import make_backend, triton_key
-        from triton.runtime.cache import get_cache_manager
-        from triton.runtime.jit import JITFunction
+        from triton.compiler.compiler import make_backend
 
         fn = self.fn
         while not isinstance(fn, JITFunction):

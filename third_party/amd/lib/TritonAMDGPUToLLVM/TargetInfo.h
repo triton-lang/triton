@@ -15,10 +15,6 @@ public:
 
   llvm::AMDGPU::GPUKind getGPUKind() const;
 
-  bool isCDNA() const;
-
-  bool isRDNA() const;
-
   int getWarpSize() const;
 
   int getSharedMemorySize() const;
@@ -78,10 +74,6 @@ public:
   int getAddressSpace(Attribute addressSpace) const override;
 
   bool supportVectorizedAtomics() const override;
-
-  void localStoreOpAnnotation(triton::gpu::LocalStoreOp op,
-                              size_t localStoreOpCount,
-                              Type type) const override;
 
   bool supportsDirectToLdsLoadBitWidth(int bitWidth) const;
 

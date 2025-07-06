@@ -206,6 +206,13 @@ struct TensormapFenceproxyAcquireOpConversion
         *ptxBuilder.create<>("fence.proxy.tensormap::generic.acquire.gpu");
     fence(descAddrOpr, sizeOpr).predicate(pred);
 
+    // Workaround for a ptxas bug missing a fence after generic.acquire.gpu.
+    // TODO: remove the workaround once ptxas is fixed.
+    auto &commit = *ptxBuilder.create<>("cp.async.bulk.commit_group");
+    commit().predicate(pred);
+    auto &wait = *ptxBuilder.create<>("cp.async.bulk.wait_group.read 0");
+    wait().predicate(pred);
+
     ptxBuilder.launch(rewriter, loc, getVoidType());
 
     // We run the fence on a single warp, then use a barrier to synchronize the

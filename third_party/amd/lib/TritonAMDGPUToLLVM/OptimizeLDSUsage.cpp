@@ -20,6 +20,7 @@
  * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
+#include "Analysis/AMDGPUAllocation.h"
 #include "OptimizeLDSUtility.h"
 #include "TargetInfo.h"
 #include "TritonAMDGPUToLLVM/Passes.h"
@@ -243,7 +244,15 @@ public:
       LDSLimit = targetInfo.getSharedMemorySize();
     }
 
-    ModuleAllocation allocAnalysis(mod);
+    auto context = mod.getContext();
+    auto emptyAttribute = UnitAttr::get(context);
+    // TODO choose between padded and swizzled memory patterns
+    mod.walk([emptyAttribute](triton::gpu::ConvertLayoutOp op) -> void {
+      op->setAttr(mlir::triton::AMD::AttrSharedMemPadded, emptyAttribute);
+    });
+
+    ModuleAllocation allocAnalysis(
+        mod, mlir::triton::AMD::AMDAllocationAnalysisScratchSizeFn);
     if (allocAnalysis.getSharedMemorySize() <= LDSLimit)
       return;
 

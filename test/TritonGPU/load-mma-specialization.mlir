@@ -1024,6 +1024,7 @@ tt.func @specialize_load_only(%desc: !tt.tensordesc<tensor<128x64xf16, #shared>>
   scf.for %i = %c0_i32 to %ub step %c1_i32 : i32 {
     // CHECK: wait_barrier {{.*}} {ttg.partition = 0 : i32}
     // CHECK-NEXT: local_load {{.*}} {ttg.partition = 0 : i32}
+    // CHECK-NEXT: fence_async_shared {{.*}}partition = 0
     // CHECK-NEXT: arrive_barrier {{.*}} {ttg.partition = 0 : i32}
     %val = tt.descriptor_load %desc[%i, %i] : !tt.tensordesc<tensor<128x64xf16, #shared>> -> tensor<128x64xf16, #oper_layout>
     "use"(%val) : (tensor<128x64xf16, #oper_layout>) -> ()
@@ -1078,6 +1079,7 @@ tt.func @specialize_mma_only(%rhs_desc: !tt.tensordesc<tensor<64x128xf16, #share
     // CHECK-NEXT: [[LOADED:%.*]], %{{.*}} = ttng.tmem_load [[ACC_TMEM:%.*]][]
     // CHECK: wait_barrier
     // CHECK-NEXT: local_load
+    // CHECK-NEXT: fence_async_shared {{.*}}partition = 0
     // CHECK-NEXT: arrive_barrier
     // CHECK-NEXT: [[RESULTS:%.*]]:2 = "some_producer"
     %rhs_reg, %next_acc = "some_producer"(%loaded, %acc) : (tensor<64x128xf16, #oper_layout>, tensor<128x128xf32, #acc_layout>) -> (tensor<64x128xf16, #oper_layout>, tensor<128x128xf32, #acc_layout>)
@@ -1187,6 +1189,7 @@ tt.func @store_mma_load(
 
     // CHECK-NEXT: wait_barrier [[LOAD_READY_BAR]], {{.*}}partition = 0
     // CHECK-NEXT: [[LHS:%.*]] = ttg.local_load [[LOAD_BUF]] {ttg.partition = 0 : i32}
+    // CHECK-NEXT: fence_async_shared {{.*}}partition = 0
     // CHECK-NEXT: arrive_barrier [[LOAD_EMPTY_BAR]], {{.*}}partition = 0
     // CHECK-NEXT: [[LHS_OP:%.*]] = arith.addf [[LHS]], [[LHS]] {ttg.partition = 0 : i32}
     // CHECK-NEXT: local_store [[LHS_OP]], [[LHS_SHARED]] {ttg.partition = 0 : i32}
@@ -1234,6 +1237,7 @@ tt.func @local_alloc_into_mma(
 
     // CHECK: wait_barrier [[LOAD_READY_BAR]], {{.*}}partition = 0
     // CHECK-NEXT: [[RHS_REG:%.*]] = ttg.local_load {{.*}}partition = 0
+    // CHECK-NEXT: fence_async_shared {{.*}}partition = 0
     // CHECK-NEXT: arrive_barrier
     // CHECK-NEXT: [[RHS_REG_MOD:%.*]] = arith.addf [[RHS_REG]], [[RHS_REG]] {ttg.partition = 0 : i32}
     // CHECK-NEXT: wait_barrier [[MMA_OPER_BAR:%.*]], %arg{{.*}}partition = 0
