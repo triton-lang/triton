@@ -338,9 +338,20 @@ void cloneForOp(scf::ForOp forOp, SmallVector<WgBuilder> &builders,
 
 void cloneIfOp(scf::IfOp ifOp, SmallVector<WgBuilder> &builders,
                const WarpSchedule &schedule) {
+  auto partition = schedule.getPartition(ifOp);
+  SmallVector<size_t> builderIndices;
+
+  if (partition == schedule.getRootPartition()) {
+    for (size_t i = 0; i < builders.size(); ++i) {
+      builderIndices.push_back(i);
+    }
+  } else {
+    builderIndices.push_back(partition->getIndex());
+  }
+
   SmallVector<scf::IfOp> newIfOps;
-  // TODO: Do not clone in all group
-  for (auto &b : builders) {
+  for (size_t idx : builderIndices) {
+    auto& b = builders[idx];
     SmallVector<Type> newIfResultTypes;
     for (auto [idx, result] : llvm::enumerate(ifOp.getResults())) {
       newIfResultTypes.push_back(result.getType());
@@ -383,8 +394,8 @@ void cloneIfOp(scf::IfOp ifOp, SmallVector<WgBuilder> &builders,
     cloneOpsInBlock(elseBlock, builders, schedule);
   }
 
-  for (auto [builder, newIfOp] : llvm::zip(builders, newIfOps)) {
-    builder.builder.setInsertionPointAfter(newIfOp);
+  for (auto [idx, newIfOp] : llvm::zip(builderIndices, newIfOps)) {
+    builders[idx].builder.setInsertionPointAfter(newIfOp);
   }
 }
 
@@ -436,19 +447,31 @@ void cloneOpsInBlock(Block *block, SmallVector<WgBuilder> &builders,
 	continue;
       }
 
-      for (size_t i = 0; i < builders.size(); ++i) {
-        auto &builder = builders[i];
-        auto partition = schedule.getPartition(i);
+      auto yieldParent = yieldOp->getParentOp();
+      auto parentPartition = schedule.getPartition(yieldParent);
+
+      SmallVector<size_t> builderIndices;
+
+      if (parentPartition && parentPartition->getIndex() >= 0) {
+        builderIndices.push_back(parentPartition->getIndex());
+      } else {
+        for (size_t i = 0; i < builders.size(); ++i) {
+          builderIndices.push_back(i);
+        }
+      }
+
+      for (size_t idx: builderIndices) {
+        auto &builder = builders[idx];
+        auto partition = schedule.getPartition(idx);
         SmallVector<Value> newYieldOperands;
         for (size_t j = 0; j < yieldOp.getOperands().size(); ++j) {
           auto operand = yieldOp.getOperands()[j];
-          auto yieldParent = yieldOp->getParentOp();
 
           bool keep = false;
           if (auto forOp = dyn_cast<scf::ForOp>(yieldParent)) {
             keep = isUsedBy(forOp.getRegionIterArgs()[j], partition, forOp,
                             schedule) ||
-	      (i == 0 && !forOp.getResult(j).use_empty());
+	      (idx == 0 && !forOp.getResult(j).use_empty());
           } else if (auto ifOp = dyn_cast<scf::IfOp>(yieldParent)) {
             keep = true; // TODO
           } else {
@@ -477,7 +500,7 @@ void cloneOpsInBlock(Block *block, SmallVector<WgBuilder> &builders,
       auto partition = schedule.getPartition(op);
 
       if (!partition) {
-	continue;
+	assert(false);
       }
 
       if (partition == schedule.getRootPartition()) {
@@ -582,14 +605,14 @@ LogicalResult partitionLoopV2(scf::ForOp loop) {
 
   loop->getBlock()->walk([&](scf::IfOp ifOp) {
     auto partition = schedule.getPartition(ifOp);
-    if (partition && partition != schedule.getRootPartition()) {
+    if (partition) {
       assignPartitionToIfOp(ifOp, partition, schedule);
     }
   });
 
   loop->getBlock()->walk([&](ReduceOp reduceOp) {
     auto partition = schedule.getPartition(reduceOp);
-    if (partition && partition != schedule.getRootPartition()) {
+    if (partition) {
       assignPartitionToReduceOp(reduceOp, partition, schedule);
     }
   });
