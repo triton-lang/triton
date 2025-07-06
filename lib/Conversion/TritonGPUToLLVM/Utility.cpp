@@ -307,10 +307,10 @@ Value getLaneId(OpBuilder &rewriter, Location loc) {
 }
 
 // Helper function: applies linear layout vectorized over register indices
-SmallVector<SmallVector<std::pair<StringAttr, Value>>> applyLinearLayoutVec(
-    Location loc, RewriterBase &rewriter, const LinearLayout &layout,
-    ArrayRef<std::pair<StringAttr, Value>> indices,
-    ArrayRef<uint32_t> registers) {
+SmallVector<SmallVector<std::pair<StringAttr, Value>>>
+applyLinearLayoutVec(Location loc, RewriterBase &rewriter, const LinearLayout &layout,
+                     ArrayRef<std::pair<StringAttr, Value>> indices,
+                     ArrayRef<uint32_t> registers) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   MLIRContext *ctx = rewriter.getContext();
 
@@ -325,7 +325,8 @@ SmallVector<SmallVector<std::pair<StringAttr, Value>>> applyLinearLayoutVec(
       indicesWithZeroReg.emplace_back(attr, val);
   }
 
-  auto baseIndices = applyLinearLayout(loc, rewriter, layout, indicesWithZeroReg);
+  auto baseIndices =
+      applyLinearLayout(loc, rewriter, layout, indicesWithZeroReg);
 
   SmallVector<SmallVector<std::pair<StringAttr, Value>>> ret;
 
@@ -351,9 +352,9 @@ SmallVector<SmallVector<std::pair<StringAttr, Value>>> applyLinearLayoutVec(
 }
 
 // Refactored emitIndices function using applyLinearLayoutVec
-SmallVector<SmallVector<Value>> emitIndices(
-    Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
-    Attribute layout, RankedTensorType type, bool withCTAOffset) {
+SmallVector<SmallVector<Value>>
+emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
+            Attribute layout, RankedTensorType type, bool withCTAOffset) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   MLIRContext *ctx = rewriter.getContext();
   auto shape = type.getShape();
@@ -366,7 +367,8 @@ SmallVector<SmallVector<Value>> emitIndices(
   StringAttr kBlock = str_attr("block");
 
   auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
-  Value blockId = withCTAOffset ? target.getClusterCTAId(rewriter, loc) : b.i32_val(0);
+  Value blockId =
+      withCTAOffset ? target.getClusterCTAId(rewriter, loc) : b.i32_val(0);
 
   SmallVector<std::pair<StringAttr, Value>> commonIndices = {
       {kRegister, b.i32_val(0)},
@@ -379,7 +381,8 @@ SmallVector<SmallVector<Value>> emitIndices(
   for (unsigned reg = 0; reg < ll.getInDimSize(kRegister); ++reg)
     registerIndices.push_back(reg);
 
-  auto vecIndices = applyLinearLayoutVec(loc, rewriter, ll, commonIndices, registerIndices);
+  auto vecIndices =
+      applyLinearLayoutVec(loc, rewriter, ll, commonIndices, registerIndices);
 
   unsigned rank = shape.size();
   SmallVector<SmallVector<Value>> ret;
