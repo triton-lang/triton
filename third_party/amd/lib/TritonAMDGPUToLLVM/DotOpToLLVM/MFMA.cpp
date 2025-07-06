@@ -237,10 +237,6 @@ struct DotOpMFMAConversionHelper {
         ctx, SmallVector<Type>(fc.size(), dstElemTy));
     Value res = packLLElements(loc, typeConverter, fc, rewriter, structTy);
 
-    setNumGeneratedMMAs(op, mmaCount, maybeMfmaIntrinsic->mDim,
-                        maybeMfmaIntrinsic->nDim, maybeMfmaIntrinsic->kDim,
-                        elemtTy);
-
     rewriter.replaceOp(op, res);
   }
 

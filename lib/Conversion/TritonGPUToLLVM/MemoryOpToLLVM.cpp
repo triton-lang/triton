@@ -12,6 +12,7 @@ using namespace mlir;
 using namespace mlir::triton;
 using namespace mlir::triton::gpu;
 
+
 LogicalResult lowerLocalStore(Location loc, MLIRContext *ctx, Value regVal,
                               MemDescType memDescTy, SharedMemoryObject smemObj,
                               ArrayRef<Value> inVals,
@@ -224,14 +225,11 @@ public:
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, adaptor.getDst(),
                                                          llvmElemTy, rewriter);
     auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
-    std::pair<size_t, Type> llvmOpCount;
     if (failed(lowerLocalStore(loc, ctx, regVal, memDescTy, smemObj, inVals,
                                typeConverter, rewriter, targetInfo))) {
       return failure();
     }
 
-    targetInfo.localStoreOpAnnotation(op, llvmOpCount.first,
-                                      llvmOpCount.second);
     rewriter.eraseOp(op);
     return success();
   }
