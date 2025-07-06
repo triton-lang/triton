@@ -292,7 +292,7 @@ void cloneForOp(scf::ForOp forOp, SmallVector<WgBuilder> &builders,
     for (auto [idx, arg] : llvm::enumerate(forOp.getInitArgs())) {
       if (isUsedBy(forOp.getRegionIterArgs()[idx], partition, forOp,
                    schedule) ||
-          !forOp.getResult(idx).use_empty()) {
+          (i == 0 && !forOp.getResult(idx).use_empty())) {
         initArgs.push_back(arg);
       }
     }
@@ -306,9 +306,9 @@ void cloneForOp(scf::ForOp forOp, SmallVector<WgBuilder> &builders,
     auto oldIterArgs = forOp.getRegionIterArgs();
     auto newIterArgs = newForOp.getRegionIterArgs();
     for (int oldIdx = 0, newIdx = 0; oldIdx < oldIterArgs.size(); ++oldIdx) {
-      if (isUsedBy(oldIterArgs[oldIdx], partition, forOp, schedule) ||
-          !forOp.getResult(oldIdx).use_empty()) {
-        auto oldArg = oldIterArgs[oldIdx];
+      auto oldArg = oldIterArgs[oldIdx];
+      if (isUsedBy(oldArg, partition, forOp, schedule) ||
+          (i == 0 && !forOp.getResult(oldIdx).use_empty())) {
         auto newArg = newIterArgs[newIdx++];
         b.mapping.map(oldArg, newArg);
       }
@@ -318,7 +318,7 @@ void cloneForOp(scf::ForOp forOp, SmallVector<WgBuilder> &builders,
          ++oldIdx) {
       if (isUsedBy(forOp.getRegionIterArgs()[oldIdx], partition, forOp,
                    schedule) ||
-          !forOp.getResult(oldIdx).use_empty()) {
+          (i == 0 && !forOp.getResult(oldIdx).use_empty())) {
 	auto oldArg = forOp.getResult(oldIdx);
         auto newArg = newForOp.getResult(newIdx++);
         b.mapping.map(oldArg, newArg);
@@ -339,6 +339,7 @@ void cloneForOp(scf::ForOp forOp, SmallVector<WgBuilder> &builders,
 void cloneIfOp(scf::IfOp ifOp, SmallVector<WgBuilder> &builders,
                const WarpSchedule &schedule) {
   SmallVector<scf::IfOp> newIfOps;
+  // TODO: Do not clone in all group
   for (auto &b : builders) {
     SmallVector<Type> newIfResultTypes;
     for (auto [idx, result] : llvm::enumerate(ifOp.getResults())) {
@@ -387,6 +388,38 @@ void cloneIfOp(scf::IfOp ifOp, SmallVector<WgBuilder> &builders,
   }
 }
 
+void cloneReduceOp(triton::ReduceOp reduceOp, SmallVector<WgBuilder> &builders,
+                   const WarpSchedule &schedule) {
+  auto partition = schedule.getPartition(reduceOp);
+  assert(partition);
+  auto& b = builders[partition->getIndex()];
+
+  SmallVector<Value> srcs;
+  for (auto src : reduceOp.getSrcs())
+    srcs.push_back(b.mapping.lookupOrDefault(src));
+  auto axis = reduceOp.getAxis();
+  auto newReduceOp =
+      b.builder.create<triton::ReduceOp>(reduceOp.getLoc(), srcs, axis);
+
+  for (auto [oldResult, newResult] :
+       llvm::zip(reduceOp.getResults(), newReduceOp.getResults())) {
+    b.mapping.map(oldResult, newResult);
+  }
+
+  auto &region = newReduceOp.getRegion();
+  Block *block = &region.emplaceBlock();
+  for (auto args : reduceOp.getRegion().getBlocks().front().getArguments()) {
+    auto newArg = block->addArgument(args.getType(), args.getLoc());
+    b.mapping.map(args, newArg);
+  }
+
+  b.builder.setInsertionPointToStart(block);
+
+  cloneOpsInBlock(reduceOp.getBody(), builders, schedule);
+
+  b.builder.setInsertionPointAfter(newReduceOp);
+}
+
 void cloneOpsInBlock(Block *block, SmallVector<WgBuilder> &builders,
                      const WarpSchedule &schedule) {
   for (auto &op_ : *block) {
@@ -397,7 +430,7 @@ void cloneOpsInBlock(Block *block, SmallVector<WgBuilder> &builders,
     } else if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
       cloneIfOp(ifOp, builders, schedule);
     } else if (auto reduceOp = dyn_cast<triton::ReduceOp>(op)) {
-      llvm_unreachable("NYT");
+      cloneReduceOp(reduceOp, builders, schedule);
     } else if (auto yieldOp = dyn_cast<scf::YieldOp>(op)) {
       if (yieldOp.getOperands().empty()) {
 	continue;
@@ -407,15 +440,15 @@ void cloneOpsInBlock(Block *block, SmallVector<WgBuilder> &builders,
         auto &builder = builders[i];
         auto partition = schedule.getPartition(i);
         SmallVector<Value> newYieldOperands;
-        for (size_t i = 0; i < yieldOp.getOperands().size(); ++i) {
-          auto operand = yieldOp.getOperands()[i];
+        for (size_t j = 0; j < yieldOp.getOperands().size(); ++j) {
+          auto operand = yieldOp.getOperands()[j];
           auto yieldParent = yieldOp->getParentOp();
 
           bool keep = false;
           if (auto forOp = dyn_cast<scf::ForOp>(yieldParent)) {
-            keep = isUsedBy(forOp.getRegionIterArgs()[i], partition, forOp,
+            keep = isUsedBy(forOp.getRegionIterArgs()[j], partition, forOp,
                             schedule) ||
-                   !forOp.getResult(i).use_empty();
+	      (i == 0 && !forOp.getResult(j).use_empty());
           } else if (auto ifOp = dyn_cast<scf::IfOp>(yieldParent)) {
             keep = true; // TODO
           } else {
@@ -443,7 +476,14 @@ void cloneOpsInBlock(Block *block, SmallVector<WgBuilder> &builders,
 
       auto partition = schedule.getPartition(op);
 
-      if (!partition || partition == schedule.getRootPartition()) {
+      if (auto reduceOp = op->getParentOfType<ReduceOp>()) {
+	// TODO
+	auto reducePartition = schedule.getPartition(reduceOp);
+        auto &builder = builders[reducePartition->getIndex()];
+        doClone(builder, op);
+      } else if (partition == schedule.getRootPartition()) {
+	// llvm::errs() << !partition << ", " << (partition == schedule.getRootPartition()) << "\n";
+	// op->dump();
         for (auto &builder : builders) {
           doClone(builder, op);
         }
@@ -601,8 +641,6 @@ void PartitionLoops::runOnOperation() {
     if (failed(partitionLoopV2(loop)))
       return signalPassFailure();
   }
-
-  //  getOperation()->dump();
 
   OpPassManager pm;
   pm.addPass(mlir::triton::createNVWSLowerWarpGroup());
