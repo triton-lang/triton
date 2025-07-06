@@ -1,8 +1,9 @@
+import math
 import torch
 from abc import ABC, abstractmethod
 from .layout_details.hopper_value import swizzle_mxfp4_value_hopper, unswizzle_mxfp4_value_hopper_torch
 from .layout_details.hopper_scale import swizzle_mxfp4_scale_hopper, unswizzle_mxfp4_scale_hopper_torch
-from .layout_details.blackwell_scale import swizzle_mx_scale_bw, unswizzle_mx_scale_bw_torch
+from .layout_details.blackwell_scale import unswizzle_mx_scale_bw_torch
 
 
 class Layout(ABC):
@@ -37,16 +38,18 @@ class BlackwellMXScaleLayout(Layout):
     name: str = "BLACKWELL_SCALE"
 
     def swizzle_data(self, data):
-        swizzle_axis = 2
-        axis = data.stride().index(1)
-        perm = list(range(data.ndim))
-        perm[data.ndim - 1], perm[axis] = axis, data.ndim - 1
-        if swizzle_axis is not None:
-            perm[data.ndim - 2], perm[swizzle_axis] = swizzle_axis, data.ndim - 2
-        data = torch.permute(data, perm).contiguous()
-        data = swizzle_mx_scale_bw(data, allow_pad=True)
-        layout_shape = (1, data.shape[0] * data.shape[1] // 128, data.shape[2] // 4, 2, 256)
-        return data.view(layout_shape)
+        ALIGN_K = 8
+        ALIGN_N = 128
+        SWIZZLE_K = 4
+        *leading_shape, K, N, = data.shape
+        B = math.prod(leading_shape)
+        K_pad = (K + ALIGN_K - 1) // ALIGN_K * ALIGN_K
+        N_pad = (N + ALIGN_N - 1) // ALIGN_N * ALIGN_N
+        data = torch.nn.functional.pad(data, (0, N_pad - N, 0, K_pad - K))
+        data = data.transpose(-1, -2).contiguous()
+        data = data.reshape(B, K_pad // SWIZZLE_K, ALIGN_N // 32, 32, N_pad // ALIGN_N, SWIZZLE_K)
+        data = data.transpose(-2, -4).contiguous()
+        return data.view(1, B * N_pad // 128, K_pad // 4, 2, 256)
 
     def unswizzle_data(self, data):
         swizzle_axis = 2

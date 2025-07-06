@@ -14,6 +14,9 @@ class Storage:
     def __post_init__(self):
         self.data = self.layout.swizzle_data(self.data)
 
+    def to(self, layout: Layout):
+        pass
+
     @property
     def device(self):
         return self.data.device
