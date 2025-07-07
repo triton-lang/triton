@@ -1,4 +1,5 @@
 #include "Dialect/Proton/IR/Dialect.h"
+#include "Dialect/Proton/IR/Interfaces.h"
 
 #include "mlir/IR/DialectImplementation.h"
 #include "mlir/IR/OpImplementation.h"
@@ -10,4 +11,5 @@ void mlir::triton::proton::ProtonDialect::initialize() {
 #define GET_OP_LIST
 #include "Dialect/Proton/IR/Ops.cpp.inc"
       >();
+  addInterfaces<ProtonInlinerInterface>();
 }

@@ -25,6 +25,8 @@ const int getBytesPerClockEntry();
 
 const int getCircularHeaderSize();
 
+const int getTotalNumWarps(ModuleOp mod);
+
 } // namespace gpu
 } // namespace proton
 } // namespace triton

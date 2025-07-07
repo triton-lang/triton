@@ -6,6 +6,7 @@ from triton._C.libtriton import ir as triton_ir
 from triton._C.libtriton import proton as triton_proton
 from triton._C.libtriton import amd as triton_amd
 from triton._C.libtriton import nvidia as triton_nvidia
+from triton._C.libtriton import passes as triton_passes
 from triton._C.libproton import proton as libproton
 from triton.compiler import LazyDict
 from triton.runtime.jit import JITFunction
@@ -164,6 +165,7 @@ class InstrumentationHook(Hook):
                                                           self.mode.buffer_size, max_shared_mem,
                                                           self.profile_buffer_size, self.profile_buffer_alignment,
                                                           is_long_clk)
+            triton_passes.common.add_cse(pm)
 
             if mode.Optimize.SCHED_STORES in self.mode.optimizations:
                 triton_proton.add_schedule_buffer_store(pm)
@@ -292,6 +294,7 @@ class InstrumentationHook(Hook):
                 return 0
 
             alloc_size = 0 if self.buffer is None else self.buffer.element_size() * self.buffer.numel()
+            sampled_warps = self.mode.sampling_options.strip().split(",")
             data = {}
             with open(self.metadata_path[function], 'r') as file:
                 data = json.load(file)
@@ -299,6 +302,8 @@ class InstrumentationHook(Hook):
             device_type = encode_target(data["target"])
             scratch_mem_size = data["profile_scratch_size"]
             total_unit = data["num_warps"]
+            uid_num = total_unit if self.mode.sampling_strategy == triton_proton.SAMPLING_STRATEGY.NONE else len(
+                sampled_warps)
             block_num = int(alloc_size / scratch_mem_size)
 
             # Binary trace layout:
@@ -321,8 +326,10 @@ class InstrumentationHook(Hook):
             # +------------------+
             # | scratch_mem_size |  4 bytes
             # +------------------+
+            # |     uid_num      |  4 bytes
+            # +------------------+
             # |                  |
-            # |     uid_vec      |  total_unit * 4 bytes
+            # |     uid_vec      |  uid_num * 4 bytes
             # |                  |
             # +------------------+
             # |                  |
@@ -334,15 +341,15 @@ class InstrumentationHook(Hook):
             if is_all_warps:
                 uid_vec = [i for i in range(total_unit)]
             else:
-                uid_vec = [int(i) for i in self.mode.sampling_options.strip().split(",")]
+                uid_vec = [int(i) for i in sampled_warps]
 
-            header_size = 36 + total_unit * 4
+            header_size = 40 + uid_num * 4
             header_offset = 4
             payload_offset = header_size
             payload_size = alloc_size
             header_values = [
                 VERSION, header_offset, header_size, payload_offset, payload_size, device_type, block_num, total_unit,
-                scratch_mem_size, *uid_vec
+                scratch_mem_size, uid_num, *uid_vec
             ]
             header_bytes = struct.pack("I" * len(header_values), *header_values)
 

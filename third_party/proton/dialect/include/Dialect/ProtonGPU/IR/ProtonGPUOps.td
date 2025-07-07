@@ -164,4 +164,67 @@ def PTG_StackAllocOp : PTG_Op<"stack_alloc", [
   let assemblyFormat = "attr-dict `:` qualified(type($buffer))";
 }
 
+def PTG_InitCtxOp : PTG_Op<"init_ctx", [
+    MemoryEffects<[MemWrite<GlobalMemory>]>
+]> {
+  let summary = "Initialize the intra kernel profiler warp-level contexts";
+
+  let description = [{
+    Initialize the intra kernel profiler warp-level contexts for all warps in
+    `scratchPtr` (base address of the profiling scratch buffer). It can't be
+    called inside `ttg.warp_specialize`.
+  }];
+
+  let arguments = (ins
+    TT_Ptr:$scratchPtr
+  );
+
+  let hasVerifier = 1;
+
+  let assemblyFormat = [{
+    $scratchPtr attr-dict `:` qualified(type($scratchPtr))
+  }];
+}
+
+def PTG_RestoreCtxOp : PTG_Op<"restore_ctx", [
+    MemoryEffects<[MemRead<GlobalMemory>]>,
+    MemoryEffects<[MemWrite<GlobalMemory>]>
+]> {
+  let summary = "Restore the current warp-level context";
+
+  let description = [{
+    Restore the current warp context in `$segment` from
+    `scratchPtr` (base address of the profiling scratch buffer).
+  }];
+
+  let arguments = (ins
+    PTG_SegmentType:$segment,
+    TT_Ptr:$scratchPtr
+  );
+
+  let assemblyFormat = [{
+    $segment `,` $scratchPtr attr-dict `:` qualified(type($segment)) `,` qualified(type($scratchPtr))
+  }];
+}
+
+def PTG_SaveCtxOp : PTG_Op<"save_ctx", [
+    MemoryEffects<[MemWrite<GlobalMemory>]>
+]> {
+  let summary = "Save the current warp-level context";
+
+  let description = [{
+    Save the current warp context from `$segment` to
+    `scratchPtr` (base address of the profiling scratch buffer).
+  }];
+
+  let arguments = (ins
+    PTG_SegmentType:$segment,
+    TT_Ptr:$scratchPtr
+  );
+
+  let assemblyFormat = [{
+    $segment `,` $scratchPtr attr-dict `:` qualified(type($segment)) `,` qualified(type($scratchPtr))
+  }];
+}
+
 #endif  // PROTONGPU_OPS
