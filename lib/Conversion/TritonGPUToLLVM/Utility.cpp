@@ -113,6 +113,7 @@ Value matrixVectorProd(TritonLLVMOpBuilder &b, const LinearLayout &A, Value x) {
   auto nRow = A.getTotalOutDimSizeLog2();
   SmallVector<int32_t> matrix = flatten(A.getBases().begin()->second);
   assert(matrix.size() == nCol);
+
   // We iterate the matrix following the diagonals
   // The idea here is that we want to generate code of the form:
   // \xor_i (x & mask_i) << s_i
@@ -133,14 +134,49 @@ Value matrixVectorProd(TritonLLVMOpBuilder &b, const LinearLayout &A, Value x) {
     return mask;
   };
 
+  uint32_t explicitCols = 0;
+
+  {
+    SmallVector<uint32_t> masks;
+    for (int i = -nRow + 1; i < nCol; i++) {
+      masks.push_back(getMask(i));
+    }
+    bool reachedFixedPoint = false;
+    while (!reachedFixedPoint) {
+      reachedFixedPoint = true;
+      for (uint32_t m : masks) {
+        uint32_t c = m &~ explicitCols;
+        if ((c != 0) && ((c & (c - 1)) == 0)) {
+          // found a single-element diagonal
+          explicitCols |= c;
+          reachedFixedPoint = false;
+        }
+      }
+    }
+  }
+
+  // handle any diagonals that have survived
   Value ret = b.i32_val(0);
   for (int i = -nRow + 1; i < nCol; i++) {
-    auto mask = getMask(i);
+    auto mask = getMask(i) &~ explicitCols;
     if (mask == 0)
       continue;
     auto masked = b.and_(x, b.i32_val(mask));
     ret = b.xor_(ret, i >= 0 ? Value(b.lshr(masked, b.i32_val(i)))
                              : Value(b.shl(masked, b.i32_val(-i))));
+  }
+
+  // handle any explicit columns:
+  Value zero = b.i32_val(0);
+  for (int i = 0; i < nCol; i++) {
+    if ((explicitCols >> i) & 1) {
+      Value bit = b.and_(x, b.i32_val(1 << i));
+      Value bit_is_zero = b.icmp_eq(bit, zero);
+      int32_t basis = matrix[i];
+      if (basis == 0)
+        continue;
+      ret = b.xor_(ret, b.select(bit_is_zero, zero, b.i32_val(basis)));
+    }
   }
   return ret;
 }
