@@ -1,8 +1,6 @@
 import math
 import torch
 from abc import ABC, abstractmethod
-from .layout_details.hopper_value import swizzle_mxfp4_value_hopper, unswizzle_mxfp4_value_hopper_torch
-from .layout_details.hopper_scale import swizzle_mxfp4_scale_hopper, unswizzle_mxfp4_scale_hopper_torch
 
 
 class Layout(ABC):
@@ -78,28 +76,47 @@ class BlackwellMXScaleLayout(Layout):
 class HopperMXScaleLayout(Layout):
     name: str = "HOPPER_SCALE"
 
+    def __init__(self, shape, num_warps=8) -> None:
+        assert num_warps & (num_warps - 1) == 0, "warps_n must be a power of 2"
+        super().__init__(shape)
+        self.num_warps = num_warps
+
     def swizzle_data(self, data):
-        swizzle_axis = 2
-        axis = data.stride().index(1)
-        perm = list(range(data.ndim))
-        perm[data.ndim - 1], perm[axis] = axis, data.ndim - 1
-        if swizzle_axis is not None:
-            perm[data.ndim - 2], perm[swizzle_axis] = swizzle_axis, data.ndim - 2
-        data = torch.permute(data, perm).contiguous()
-        data = swizzle_mxfp4_scale_hopper(data, num_warps=8)
-        return perm_tensor_from_contig(data, axis, swizzle_axis)
+        data = data.transpose(-1, -2).contiguous()
+        *batch, M, K = data.shape
+        SWIZZLE_ALIGN_M = 2 * self.num_warps * 2 * 8
+        SWIZZLE_ALIGN_K = 2
+        pad_m = (SWIZZLE_ALIGN_M - (M % SWIZZLE_ALIGN_M)) % SWIZZLE_ALIGN_M
+        pad_k = (SWIZZLE_ALIGN_K - (K % SWIZZLE_ALIGN_K)) % SWIZZLE_ALIGN_K
+        data = torch.nn.functional.pad(data, (0, pad_k, 0, pad_m))
+        *batch, M, K = data.shape
+        assert data.is_contiguous()
+        assert M % (
+            2 * self.num_warps * 2 *
+            8) == 0 and K % 2 == 0, f"Input tensor must have a subtile of shape (..., {2 * self.num_warps * 2 * 8}, 2)"
+        b = len(batch)
+        data = data.reshape(*batch, M // (2 * self.num_warps * 2 * 8), 2, self.num_warps, 2, 8, K // 2, 2)
+        perm = [0, 2, 5, 1, 4, 6, 3]
+        perm = list(range(b)) + [b + p for p in perm]
+        data = data.permute(*perm)
+        data = data.flatten(-5, -1)
+        data = data.flatten(-3, -2)
+        assert data.shape[-2] == M // 32
+        assert data.shape[-1] == K * 32
+        data = data.transpose(-1, -2).contiguous()
+        return data
 
     def unswizzle_data(self, data):
-        swizzle_axis = 2
-        axis = data.stride().index(1)
-        data = perm_tensor_to_contig(data, axis, swizzle_axis)
-        data = unswizzle_mxfp4_scale_hopper_torch(data, num_warps=8)
-        ndim = data.ndim
-        perm = list(range(ndim))
-        perm[ndim - 1], perm[axis] = axis, ndim - 1
-        if swizzle_axis is not None:
-            perm[ndim - 2], perm[swizzle_axis] = swizzle_axis, ndim - 2
-        return torch.permute(data, perm).contiguous()
+        data = data.transpose(-1, -2).contiguous()
+        *batch, M, K = data.shape
+        b = len(batch)
+        data = data.reshape(*batch, M // self.num_warps, self.num_warps, K // 64, 2, 8, 2, 2)
+        perm = [0, 3, 1, 6, 4, 2, 5]
+        perm = list(range(b)) + [b + p for p in perm]
+        data = data.permute(*perm)
+        data = data.reshape(*batch, M * 32, K // 32)
+        data = data.transpose(-1, -2).contiguous()
+        return data
 
     def swizzle_block_shape(self, block_shape):
         return block_shape
@@ -108,77 +125,120 @@ class HopperMXScaleLayout(Layout):
 class HopperMXValueLayout(Layout):
     name: str = "HOPPER_VALUE"
 
+    def __init__(self, shape, op_idx=0, mma_version=3):
+        super().__init__(shape)
+        self.op_idx = op_idx
+        self.mma_version = mma_version
+        *self.leading_shape, self.K, self.N, = shape
+
     def swizzle_data(self, data):
-        swizzle_axis = 2
-        axis = data.stride().index(1)
-        perm = list(range(data.ndim))
-        perm[data.ndim - 1], perm[axis] = axis, data.ndim - 1
-        if swizzle_axis is not None:
-            perm[data.ndim - 2], perm[swizzle_axis] = swizzle_axis, data.ndim - 2
-        data = torch.permute(data, perm).contiguous()
-        data = swizzle_mxfp4_value_hopper(data, op_idx=0, mma_version=3)
-        return perm_tensor_from_contig(data, axis, swizzle_axis)
+        """
+        Given a uint8 tensor of shape (*, M, K), returns a tensor of shape
+        (*, M // 4, K * 4) such that:
+
+        1) Groups contiguously all the elements owned by the same thread of 4
+        mma tiles along the K axis. The following animation shows a similar
+        grouping for 2 tiles along M and 2 tiles along K rather than 4 along K
+        as done here:
+        https://neuralmagic.com/wp-content/uploads/2024/10/animation_4.gif
+
+        2) Moves the elements belonging to thread 4-7 to be contiguous with those
+        from thread 0-3. This is done to get a full cache line when loading them
+        from HBM.
+
+        op_idx selects the lhs or rhs of the matmul.
+
+        WARNING: Assumes that the matmul will be done in bf16 or fp16!
+        Implementing it for fp8 is as easy as making the tile size (8, 8)
+        """
+        data = data.transpose(-1, -2)
+
+        assert data.dtype == torch.uint8
+        assert self.op_idx in (0, 1)
+        batch = data.ndim - 2
+        assert batch >= 0
+        assert self.mma_version in (2, 3)
+
+        if self.op_idx == 1:
+            data = data.mT
+        init_shape = data.shape
+
+        # We are loading 8 bf16 elements per thread to use ld.global.v4
+        # Every u8 represents 2 mxfp4 elements
+        u8_kwidth = 8 // 2 if self.mma_version == 2 else 1
+
+        # Pack the 4 // u8_kwidth subtiles of an mma into a u4x8
+        contig = (1, u8_kwidth)
+        scott_trick = (2, 1)
+        threads = (4, 4)
+        warp_tile = (2, 2)
+        k_tile = (1, 4 // u8_kwidth)
+
+        sizes = list(data.shape[:-2])
+        pads = []
+        # [rest, K, tile, threads] per dimension
+        for i, (a, b, c, s, d) in enumerate(zip(k_tile, warp_tile, threads, scott_trick, contig)):
+            pack = a * b * c * s * d
+            size = data.shape[batch + i]
+            pad = (pack - size % pack) % pack
+            pads += [(0, pad)]
+            sizes.append((size + pad) // pack)
+            sizes += [a, b, c, s, d]
+
+        pads = tuple(x for t in pads[::-1] for x in t)
+        data = torch.nn.functional.pad(data, pads)
+        init_shape = data.shape
+        # 0: rest[0]
+        # 1: k_tile[0]
+        # 2: warp_tile[0]
+        # 3: threads[0]
+        # 4: scott_trick[0]
+        # 5: contig[0]
+        # 6: rest[1]
+        # 7: k_tile[1]
+        # 8: warp_tile[1]
+        # 9: threads[1]
+        # 10: scott_trick[1]
+        # 11: contig[1]
+        data = data.view(*sizes)
+        # Want [rest[0], threads[0], rest[1], scott_trick[0], scott_trick[0], threads[1], contig[1], contig[0], k_tile[1], k_tile[0], warp_tile[1], warp_tile[0]]
+        perm = [0, 3, 6, 10, 4, 9, 7, 1, 8, 2, 5, 11]
+        perm = list(range(batch)) + [batch + p for p in perm]
+        data = data.permute(*perm)
+        data = data.contiguous()
+        # These are views
+        data = data.flatten(-10, -1)
+        data = data.flatten(-3, -2)
+        assert data.is_contiguous()
+        assert data.shape[-2] == init_shape[-2] // 4
+        assert data.shape[-1] == init_shape[-1] * 4
+        if self.op_idx == 1:
+            data = data.mT
+        data = data.transpose(-1, -2)
+        return data
 
     def unswizzle_data(self, data):
-        swizzle_axis = 2
-        axis = data.stride().index(1)
-        data = perm_tensor_to_contig(data, axis, swizzle_axis)
-        data = unswizzle_mxfp4_value_hopper_torch(data, op_idx=0, mma_version=3)
-        ndim = data.ndim
-        perm = list(range(ndim))
-        perm[ndim - 1], perm[axis] = axis, ndim - 1
-        if swizzle_axis is not None:
-            perm[ndim - 2], perm[swizzle_axis] = swizzle_axis, ndim - 2
-        return torch.permute(data, perm).contiguous()
+        data = data.transpose(-1, -2).contiguous()
+        if self.op_idx == 1:
+            data = data.transpose(-2, -1)
+        *batch, M, K = data.shape
+        # We have two times the elements if we already upcasted to bfloat16
+        mult = 2 if data.dtype == torch.bfloat16 else 1
+        assert M % 4 == 0, "M must be divisible by 4"
+        assert K % (4 * 8 * 2 * 2 * mult) == 0, f"K must be divisible by {4 * 8 * 2 * 2 * mult}"
+        # We are loading 8 bf16 elements per thread to use ld.global.v4
+        # Every u8 represents 2 mxfp4 elements
+        u8_kwidth = 8 // 2 if self.mma_version == 2 else 1
+        data = data.reshape(*batch, M // 4, 4, K // (4 * 8 * 2 * 2 * mult), 2, 4, 8 // u8_kwidth, 2, u8_kwidth * mult)
+        b = len(batch)
+        perm = [0, 6, 1, 3, 2, 5, 4, 7]
+        perm = list(range(b)) + [b + p for p in perm]
+        data = data.permute(*perm)
+        data = data.reshape(*batch, M * 4, K // 4)
+        if self.op_idx == 1:
+            data = data.transpose(-2, -1)
+        data = data.transpose(-1, -2).contiguous()
+        return data[..., :self.K, :self.N]
 
     def swizzle_block_shape(self, block_shape):
         return block_shape
-
-
-def perm_to_contig(ndim: int, axis: int, swizzle_axis: int | None = None) -> tuple[int, ...]:
-    """
-    Permute the shape so that axis is the last dimension and swizzle_axis is the second to last dimension.
-    """
-    # FIXME(Lezcano): This API is not very good as it's too generic.
-    # Chances are we just care about the cases
-    # - axis=-2 and swizzle_axis=-1
-    # - axis=-1 and swizzle_axis=-2
-    # - axis=anything and swizzle_axis=None
-    # We could probably just implement
-    # perm_to_contig(ndim, transpose: bool)
-    # where we transpose the last two dimensions if transpose is True and otherwise we leave them as is.
-    axis = axis if axis >= 0 else axis + ndim
-    if swizzle_axis is not None:
-        swizzle_axis = swizzle_axis if swizzle_axis >= 0 else swizzle_axis + ndim
-
-    assert axis != swizzle_axis
-    shape = list(range(ndim))
-    shape[axis], shape[-1] = shape[-1], shape[axis]
-    if swizzle_axis is not None:
-        if swizzle_axis == len(shape) - 1:
-            swizzle_axis = axis
-        shape[swizzle_axis], shape[-2] = shape[-2], shape[swizzle_axis]
-    return tuple(shape)
-
-
-def perm_from_contig(ndim: int, axis: int, swizzle_axis: int | None = None) -> tuple[int, ...]:
-    # Invert the permutation via argsort
-    perm = perm_to_contig(ndim, axis, swizzle_axis)
-    inv = [0] * ndim
-    for i, v in enumerate(perm):
-        inv[v] = i
-    return tuple(inv)
-
-
-def perm_tensor_to_contig(x: torch.Tensor, axis: int, swizzle_axis: int | None = None) -> torch.Tensor:
-    """
-    Permute the tensor x moving axis to the last dimension and swizzle_axis to the second to last dimension.
-    """
-    return x.permute(perm_to_contig(x.ndim, axis, swizzle_axis))
-
-
-def perm_tensor_from_contig(x: torch.Tensor, axis: int, swizzle_axis: int | None = None) -> torch.Tensor:
-    """
-    Permute the tensor x moving the last dimension to axis and the second to last dimension to swizzle_axis.
-    """
-    return x.permute(perm_from_contig(x.ndim, axis, swizzle_axis))

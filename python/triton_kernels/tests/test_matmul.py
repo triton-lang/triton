@@ -186,7 +186,7 @@ class Case:
             Case(1000, 700, 700, "ragged", "float16", "float16", 8, 2, split_k=9),
             # mx types:
             Case(16, 256, 256, "ragged", "bfloat16", "mxfloat4_e2m1", 128, 4),
-            Case(1000, 700, 700, "batched", "bfloat16", "mxfloat4_e2m1", 8, 2),
+            Case(1024, 768, 768, "batched", "bfloat16", "mxfloat4_e2m1", 8, 2),
             Case(1000, 700, 700, "ragged", "bfloat16", "mxfloat4_e2m1", 8, 2, split_k=9),
             Case(300, 400, 400, "ragged", "bfloat16", "mxfloat8_e4m3fn", 8, 4),
             Case(300, 400, 400, "batched", "bfloat16", "mxfloat8_e5m2", 32, 4),
@@ -298,8 +298,8 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
     x_ref, w_ref, bias_ref, gs0_ref, gs1_ref = apply_precision(x_tri, w_tri, bias_tri, gs0_tri, gs1_tri, precision_opt)
     if is_mixed_input:
         if torch.cuda.get_device_capability()[0] == 9:
-            if k % 64 != 0 or n % 64 != 0:
-                pytest.skip("Hopper swizzling acts on a 64x64 tile (4x1 mma tiles).")
+            # if k % 64 != 0 or n % 64 != 0:
+            #     pytest.skip("Hopper swizzling acts on a 64x64 tile (4x1 mma tiles).")
             w_layout = layout.HopperMXValueLayout
             w_scales_layout = layout.HopperMXScaleLayout
         elif torch.cuda.get_device_capability()[0] == 10:
@@ -314,8 +314,8 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
         mx_scales_tri = convert_layout(wrap_torch_tensor(mx_scales_tri), w_scales_layout)
         precision_opt.weight_scale = mx_scales_tri
 
-    if not is_persistent and precision_opt.weight_scale is not None:
-        pytest.skip("non-persistent not supported with mxfp")
+    # if not is_persistent and precision_opt.weight_scale is not None:
+    #     pytest.skip("non-persistent not supported with mxfp")
 
     if w_tri.shape[0] == 1:
         # Test the case when weight has dim 2, i.e., shape (K, N).

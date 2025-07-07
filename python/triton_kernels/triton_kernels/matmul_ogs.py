@@ -365,7 +365,6 @@ def matmul_ogs(x, w, bias,
     for e in num_experts:
         Y[idxs_y_m(e), :] += matmul(X[idxs_x_m(e), :], W[e, :, :])
     """
-
     is_input_batched = x.ndim == 3
     if is_input_batched:
         assert gather_indx is None, "gather not supported in batched mode"
@@ -408,7 +407,7 @@ def matmul_ogs(x, w, bias,
     opt_flags = make_opt_flags(out_dtype, x.dtype, w.dtype, precision_config,
         M, N, K, routing_data, can_use_tma, can_use_fused_scatter, epilogue.effective_itemsize,
     )
-    assert w_scale is None or opt_flags.is_persistent
+    # assert w_scale is None or opt_flags.is_persistent
     # determine necessary pre/post processing
     preprocessing_features = init_preprocessing_features(w, precision_config, opt_flags)
     postprocessing_features = init_postprocessing_features(routing_data, scatter_indx, opt_flags)
