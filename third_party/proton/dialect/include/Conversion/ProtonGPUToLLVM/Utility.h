@@ -6,7 +6,11 @@
 #include "mlir/IR/Value.h"
 #include "mlir/Transforms/DialectConversion.h"
 
-namespace mlir::LLVM {
+namespace mlir {
+
+Value getRawThreadId(OpBuilder &rewriter, Location loc);
+
+namespace LLVM {
 
 struct SegmentObject {
   Value base;
@@ -25,9 +29,9 @@ struct SegmentObject {
                                   ConversionPatternRewriter &rewriter);
 };
 
-} // namespace mlir::LLVM
+} // namespace LLVM
 
-namespace mlir::triton {
+namespace triton {
 namespace proton::gpu {
 
 struct CircularStoreDataPack {
@@ -42,6 +46,8 @@ lowerCircularStoreOpHelper(CircularStoreOp op, Value segmentStruct,
                            ConversionPatternRewriter &rewriter);
 
 } // namespace proton::gpu
-} // namespace mlir::triton
+} // namespace triton
+
+} // namespace mlir
 
 #endif // PROTONGPU_TO_LLVM_UTILITY_H

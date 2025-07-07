@@ -12,12 +12,6 @@
 namespace mlir::triton {
 namespace proton::gpu {
 
-// Internal buffer index is private to each thread, address space is 5.
-// See detail discussion:
-// https://llvm.org/docs/NVPTXUsage.html#address-spaces
-// https://llvm.org/docs/AMDGPUUsage.html#address-spaces
-constexpr int IndexPtrAddrSpace = 5;
-
 namespace {
 
 Value getLinearId(Location loc, ConversionPatternRewriter &rewriter) {
@@ -96,7 +90,8 @@ struct FinalizeOpConversion
     const int bytesPerEntry = proton::gpu::getBytesPerClockEntry();
     const int wordsPerEntry = bytesPerEntry / 4; // 1 word = 4 bytes
 
-    int numWarps = mlir::triton::gpu::lookupNumWarps(mod);
+    int numWarps = getTotalNumWarps(mod);
+
     Value threadId = getThreadId(rewriter, loc);
     Value warpId = b.udiv(
         threadId,
@@ -112,7 +107,7 @@ struct FinalizeOpConversion
     //  +-----------------------------------------------+
     //  | header (circularHeaderSize bytes)             |
     //  +-----------------------------------------------+
-    //  | number of events per warp (4 bytes x numWarps)|
+    //  | contexts for all warps (4 bytes x numWarps)   |
     //  +-----------------------------------------------+
     //  | profiled data (allocBufferSize bytes)         |
     //  +-----------------------------------------------+
@@ -292,7 +287,9 @@ struct SegmentAllocOpConversion
     auto mod = op.getOperation()->getParentOfType<ModuleOp>();
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    int numWarps = mlir::triton::gpu::lookupNumWarps(mod);
+
+    int numWarps = getTotalNumWarps(mod);
+
     auto segmentType = op.getResult().getType();
     auto granularity = segmentType.getGranularity();
     auto selectIds = segmentType.getSelectIds();
@@ -303,7 +300,8 @@ struct SegmentAllocOpConversion
       return failure();
     }
 
-    Value curThreadId = getThreadId(rewriter, loc);
+    Value curThreadId = getRawThreadId(rewriter, loc);
+
     Value threadsPerWarp =
         b.i32_val(triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod));
     Value curWarpId = b.udiv(curThreadId, threadsPerWarp);
@@ -328,7 +326,8 @@ struct SegmentAllocOpConversion
     auto bufferBaseTy =
         mlir::cast<LLVM::LLVMStructType>(buffer.getType()).getBody()[0];
     Value bufferBase = b.extract_val(bufferBaseTy, buffer, 0);
-    auto indexPtrTy = ptr_ty(rewriter.getContext(), IndexPtrAddrSpace);
+    auto indexPtrTy =
+        ptr_ty(rewriter.getContext(), targetInfo.getIndexPtrAddrSpace());
     auto indexPtr = rewriter.create<LLVM::AllocaOp>(
         loc, indexPtrTy, i32_ty, b.i32_val(1), /*alignment=*/0);
     b.store(b.i32_val(0), indexPtr);
@@ -428,6 +427,170 @@ protected:
   const proton::gpu::TargetInfoBase &targetInfo;
 };
 
+struct InitCtxOpConversion
+    : public ConvertOpToLLVMPattern<mlir::triton::proton::gpu::InitCtxOp> {
+  explicit InitCtxOpConversion(LLVMTypeConverter &typeConverter,
+                               const proton::gpu::TargetInfoBase &targetInfo,
+                               PatternBenefit benefit)
+      : mlir::ConvertOpToLLVMPattern<mlir::triton::proton::gpu::InitCtxOp>(
+            typeConverter, benefit),
+        targetInfo(targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(mlir::triton::proton::gpu::InitCtxOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    Value scratchPtr = adaptor.getScratchPtr();
+    auto scratchPtrTy = mlir::cast<LLVM::LLVMPointerType>(scratchPtr.getType());
+
+    auto mod = op.getOperation()->getParentOfType<ModuleOp>();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+
+    int numWarps = getTotalNumWarps(mod);
+
+    // InitCtxOp can only be called in the master warps, so using `getThreadId`
+    // is fine.
+    Value threadId = getThreadId(rewriter, loc);
+    Value isFirstThread = b.icmp_eq(threadId, b.i32_val(0));
+    const int circularHeaderWordSize = proton::gpu::getCircularHeaderSize() / 4;
+
+    Block *prevBlock = op->getBlock();
+
+    // Add the 'if' block.
+    Block *ifBlock = rewriter.splitBlock(prevBlock, op->getIterator());
+    rewriter.setInsertionPointToStart(ifBlock);
+
+    // Initialize the `warp_index` section.
+    for (int warpId = 0; warpId < numWarps; warpId++) {
+      Value warpIndexOffset = b.i32_val(warpId + circularHeaderWordSize);
+      Value gmemWarpIndexPtr =
+          b.gep(scratchPtrTy, i32_ty, scratchPtr, warpIndexOffset);
+      b.store(b.i32_val(0), gmemWarpIndexPtr);
+    }
+
+    // Add the 'else' block and the condition.
+    Block *thenBlock = rewriter.splitBlock(ifBlock, op->getIterator());
+    rewriter.setInsertionPointToEnd(prevBlock);
+    rewriter.create<cf::CondBranchOp>(loc, isFirstThread, ifBlock, thenBlock);
+    rewriter.setInsertionPointToEnd(ifBlock);
+    rewriter.create<cf::BranchOp>(loc, thenBlock);
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+
+protected:
+  const proton::gpu::TargetInfoBase &targetInfo;
+};
+
+struct RestoreCtxOpConversion
+    : public ConvertOpToLLVMPattern<mlir::triton::proton::gpu::RestoreCtxOp> {
+  explicit RestoreCtxOpConversion(LLVMTypeConverter &typeConverter,
+                                  const proton::gpu::TargetInfoBase &targetInfo,
+                                  PatternBenefit benefit)
+      : mlir::ConvertOpToLLVMPattern<mlir::triton::proton::gpu::RestoreCtxOp>(
+            typeConverter, benefit),
+        targetInfo(targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(mlir::triton::proton::gpu::RestoreCtxOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto segmentObj =
+        LLVM::SegmentObject::fromStruct(loc, adaptor.getSegment(), rewriter);
+    Value scratchPtr = adaptor.getScratchPtr();
+
+    auto mod = op.getOperation()->getParentOfType<ModuleOp>();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    int numWarps = getTotalNumWarps(mod);
+
+    // We need to use the absolute warp id in case warp specialization is used.
+    Value threadId = getRawThreadId(rewriter, loc);
+
+    Value warpId = b.udiv(
+        threadId,
+        b.i32_val(triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod)));
+    const int circularHeaderWordSize = proton::gpu::getCircularHeaderSize() / 4;
+
+    auto scratchPtrTy = mlir::cast<LLVM::LLVMPointerType>(scratchPtr.getType());
+
+    // Get the `warp_index` and store it into indexPtr.
+    Value warpIndexOffset = b.add(warpId, b.i32_val(circularHeaderWordSize));
+    Value gmemWarpIndexPtr =
+        b.gep(scratchPtrTy, i32_ty, scratchPtr, warpIndexOffset);
+    Value index = b.load(i32_ty, gmemWarpIndexPtr);
+    b.store(index, segmentObj.indexPtr);
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+
+protected:
+  const proton::gpu::TargetInfoBase &targetInfo;
+};
+
+struct SaveCtxOpConversion
+    : public ConvertOpToLLVMPattern<mlir::triton::proton::gpu::SaveCtxOp> {
+  explicit SaveCtxOpConversion(LLVMTypeConverter &typeConverter,
+                               const proton::gpu::TargetInfoBase &targetInfo,
+                               PatternBenefit benefit)
+      : mlir::ConvertOpToLLVMPattern<mlir::triton::proton::gpu::SaveCtxOp>(
+            typeConverter, benefit),
+        targetInfo(targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(mlir::triton::proton::gpu::SaveCtxOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    Value scratchPtr = adaptor.getScratchPtr();
+    auto scratchPtrTy = mlir::cast<LLVM::LLVMPointerType>(scratchPtr.getType());
+    auto segmentObj =
+        LLVM::SegmentObject::fromStruct(loc, adaptor.getSegment(), rewriter);
+
+    auto mod = op.getOperation()->getParentOfType<ModuleOp>();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+
+    int numWarps = getTotalNumWarps(mod);
+
+    int numLanes = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+    Value warpSize = b.i32_val(numLanes);
+
+    // We need to use the absolute warp id in case warp specialization is used.
+    Value threadId = getRawThreadId(rewriter, loc);
+
+    Value warpId = b.udiv(threadId, warpSize);
+    Value laneId = b.urem(threadId, warpSize);
+    Value isWarpMaster = b.icmp_eq(laneId, b.i32_val(0));
+    const int circularHeaderWordSize = proton::gpu::getCircularHeaderSize() / 4;
+
+    Block *prevBlock = op->getBlock();
+
+    // Add the 'if' block.
+    Block *ifBlock = rewriter.splitBlock(prevBlock, op->getIterator());
+    rewriter.setInsertionPointToStart(ifBlock);
+
+    // Update the `warp_index` section.
+    Value warpIndexOffset = b.add(warpId, b.i32_val(circularHeaderWordSize));
+    Value gmemWarpIndexPtr =
+        b.gep(scratchPtrTy, i32_ty, scratchPtr, warpIndexOffset);
+    Value index = b.load(i32_ty, segmentObj.indexPtr);
+    b.store(index, gmemWarpIndexPtr);
+
+    // Add the 'else' block and the condition.
+    Block *thenBlock = rewriter.splitBlock(ifBlock, op->getIterator());
+    rewriter.setInsertionPointToEnd(prevBlock);
+    rewriter.create<cf::CondBranchOp>(loc, isWarpMaster, ifBlock, thenBlock);
+    rewriter.setInsertionPointToEnd(ifBlock);
+    rewriter.create<cf::BranchOp>(loc, thenBlock);
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+
+protected:
+  const proton::gpu::TargetInfoBase &targetInfo;
+};
+
 Type convertProtonGPUMemDescType(triton::gpu::MemDescType type,
                                  const TargetInfoBase &targetInfo) {
   auto ctx = type.getContext();
@@ -450,7 +613,7 @@ Type convertProtonGPUSegmentType(SegmentType type,
                                  const TargetInfoBase &targetInfo) {
   auto memorySpace = targetInfo.getAddressSpace(type.getMemorySpace());
   return LLVM::SegmentObject::getStructType(type.getContext(), memorySpace,
-                                            IndexPtrAddrSpace);
+                                            targetInfo.getIndexPtrAddrSpace());
 }
 
 } // namespace
@@ -465,6 +628,9 @@ void populateProtonGPUOpPatterns(LLVMTypeConverter &typeConverter,
   patterns.add<StackAllocOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<GlobalScratchAllocOpConversion>(typeConverter, targetInfo,
                                                benefit);
+  patterns.add<InitCtxOpConversion>(typeConverter, targetInfo, benefit);
+  patterns.add<RestoreCtxOpConversion>(typeConverter, targetInfo, benefit);
+  patterns.add<SaveCtxOpConversion>(typeConverter, targetInfo, benefit);
 }
 
 void populateTypeConversions(LLVMTypeConverter &typeConverter,

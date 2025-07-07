@@ -49,8 +49,19 @@ void CircularLayoutParser::parseMetadata() {
     countVec.push_back(decoder.decode<I32Entry>()->value);
   }
 
+  // Each event is 8 bytes
+  int maxCountPerUnit = bt.bufSize / getConfig().uidVec.size() / 8;
+
   for (auto uid : getConfig().uidVec) {
     auto count = countVec[uid];
+
+    if (count > maxCountPerUnit) {
+      std::cerr << "Warning (cta" << bt.blockId << ", warp" << uid
+                << "): first " << count - maxCountPerUnit
+                << " events are dropped due to insufficient buffer size ("
+                << maxCountPerUnit << "/" << count << ")" << std::endl;
+    }
+
     auto &trace = bt.traces.emplace_back();
     trace.uid = uid;
     trace.count = count;
@@ -185,10 +196,12 @@ proton::readCircularLayoutTrace(ByteSpan &buffer, bool applyTimeShift) {
   config.numBlocks = decoder.decode<I32Entry>()->value;
   config.totalUnits = decoder.decode<I32Entry>()->value;
   config.scratchMemSize = decoder.decode<I32Entry>()->value;
+  uint32_t uidNum = decoder.decode<I32Entry>()->value;
 
   config.uidVec.clear();
-  for (int i = 0; i < config.totalUnits; i++) {
-    config.uidVec.push_back(i);
+  for (int i = 0; i < uidNum; i++) {
+    uint32_t uid = decoder.decode<I32Entry>()->value;
+    config.uidVec.push_back(uid);
   }
 
   buffer.seek(payloadOffset);
