@@ -513,6 +513,12 @@ struct MemDescSubviewOpConversion
                    .second;
     }
 
+    if (auto paddedLayout = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(
+            srcTy.getEncoding())) {
+      Value padOffset = emitPadding(loc, rewriter, paddedLayout, offset);
+      offset = b.add(offset, padOffset);
+    }
+
     auto base = smemObj.getBase();
     auto elemPtrTy = base.getType();
     smemObj = SharedMemoryObject(b.gep(elemPtrTy, llvmElemTy, base, offset),

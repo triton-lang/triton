@@ -398,6 +398,21 @@ emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
   return ret;
 }
 
+Value emitPadding(Location loc, RewriterBase &rewriter,
+                  triton::gpu::PaddedSharedEncodingAttr layout,
+                  Value smemOffset) {
+  TritonLLVMOpBuilder b(loc, rewriter);
+
+  Value padOffset = b.i32_val(0);
+  for (auto [interval, padding] :
+       llvm::zip_equal(layout.getIntervals(), layout.getPaddings())) {
+    Value iVal = b.i32_val(llvm::Log2_32(interval));
+    Value pVal = b.i32_val(llvm::Log2_32(padding));
+    padOffset = b.add(padOffset, b.shl(b.ashr(smemOffset, iVal), pVal));
+  }
+  return padOffset;
+}
+
 namespace {
 
 Value getSmemVecAddr(const LinearLayout &regLayout,
@@ -488,13 +503,7 @@ Value getSmemVecAddr(const LinearLayout &regLayout,
     if (auto paddedLayout =
             dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(sharedEnc)) {
       // Apply the offset needed for padding.
-      Value padOffset = b.i32_val(0);
-      for (auto [interval, padding] : llvm::zip_equal(
-               paddedLayout.getIntervals(), paddedLayout.getPaddings())) {
-        Value iVal = b.i32_val(llvm::Log2_32(interval));
-        Value pVal = b.i32_val(llvm::Log2_32(padding));
-        padOffset = b.add(padOffset, b.shl(b.ashr(smemOffset, iVal), pVal));
-      }
+      Value padOffset = emitPadding(loc, rewriter, paddedLayout, smemOffset);
       smemOffset = b.add(smemOffset, padOffset);
     }
   } else { // Case 2 -> rank-reduced swizzling

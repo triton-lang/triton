@@ -516,6 +516,10 @@ SmallVector<SmallVector<Value>>
 emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
             Attribute layout, RankedTensorType type, bool withCTAOffset);
 
+Value emitPadding(Location loc, RewriterBase &rewriter,
+                  triton::gpu::PaddedSharedEncodingAttr layout,
+                  Value smemOffset);
+
 // Emits IR to load data from shared memory into registers, or to store data
 // from registers into shared memory.
 //
