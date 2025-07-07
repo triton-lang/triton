@@ -172,7 +172,6 @@ LogicalResult triton::gpu::partitionLoop(scf::ForOp loop) {
   int32_t functionNumWarps = lookupNumWarps(loop);
   SmallVector<int32_t> partitionNumWarps(partitionBlocks.size(),
                                          functionNumWarps);
-
   auto wsOp = b.create<WarpSpecializeOp>(
       loop.getResultTypes(), partitionNumWarps, partitionBlocks.size());
   loop.replaceAllUsesWith(wsOp);
@@ -263,6 +262,7 @@ struct WgBuilder {
   OpBuilder builder;
   IRMapping mapping;
   size_t partitionId;
+
 };
 
 SmallVector<size_t> getLoopVarIndicesToKeep(scf::ForOp loop,
@@ -292,16 +292,11 @@ void cloneOpsInBlock(Block *block, SmallVector<WgBuilder> &builders,
 void cloneForOp(scf::ForOp forOp, SmallVector<WgBuilder> &builders,
                 const WarpSchedule &schedule) {
   SmallVector<scf::ForOp> newForOps;
-  for (size_t i = 0; i < builders.size(); ++i) {
-    auto &b = builders[i];
-    auto partition = schedule.getPartition(i);
-
-    auto newLoopIndices = getLoopVarIndicesToKeep(forOp, partition, schedule);
-
-    // TODO: Mapping?
-    auto lb = forOp.getLowerBound();
-    auto ub = forOp.getUpperBound();
-    auto step = forOp.getStep();
+  for (auto [b, partition]: llvm::zip(builders, schedule.getPartitions())) {
+    auto newLoopIndices = getLoopVarIndicesToKeep(forOp, &partition, schedule);
+    auto lb = b.mapping.lookupOrDefault(forOp.getLowerBound());
+    auto ub = b.mapping.lookupOrDefault(forOp.getUpperBound());
+    auto step = b.mapping.lookupOrDefault(forOp.getStep());
     SmallVector<Value> initArgs;
     for (auto idx : newLoopIndices) {
       initArgs.push_back(forOp.getInitArgs()[idx]);
@@ -358,19 +353,17 @@ void cloneIfOp(scf::IfOp ifOp, SmallVector<WgBuilder> &builders,
     newIfOp->setAttrs(ifOp->getAttrs());
     newIfOps.push_back(newIfOp);
 
-    // map results
-    for (int oldIdx = 0, newIdx = 0; oldIdx < ifOp.getResults().size();
-         ++oldIdx) {
-      auto oldArg = ifOp.getResult(oldIdx);
-      auto newArg = newIfOp.getResult(newIdx++);
-      b.mapping.map(oldArg, newArg);
+    // map arguments and results
+    for (auto [oldRes, newRes] :
+         llvm::zip(ifOp.getResults(), newIfOp.getResults())) {
+      b.mapping.map(oldRes, newRes);
     }
-    // map block args
     for (auto [oldArg, newArg] :
          llvm::zip(ifOp.thenBlock()->getArguments(),
                    newIfOp.thenBlock()->getArguments())) {
       b.mapping.map(oldArg, newArg);
     }
+
     if (ifOp.elseBlock()) {
       for (auto [oldArg, newArg] :
            llvm::zip(ifOp.elseBlock()->getArguments(),
@@ -378,6 +371,7 @@ void cloneIfOp(scf::IfOp ifOp, SmallVector<WgBuilder> &builders,
         b.mapping.map(oldArg, newArg);
       }
     }
+
     b.builder.setInsertionPointToStart(newIfOp.thenBlock());
   }
 
