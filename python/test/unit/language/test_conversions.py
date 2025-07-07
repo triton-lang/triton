@@ -285,8 +285,9 @@ def test_typeconvert_upcast(src_dtype, dst_dtype, device):
     elif is_hip():
         if  (src_dtype == 'float8e4nv' and not (is_hip_cdna3() or is_hip_cdna4())):
             pytest.skip(f"upcasting {src_dtype} to {dst_dtype} not supported in this architecture")
-        if  (src_dtype in ('float8e4b15',) or
-            (src_dtype in ('float8e5b16',) and not is_hip_cdna3())):
+        if (src_dtype in ('float8e4b8', 'float8e5b16') and dst_dtype !=  'bfloat16' and not is_hip_cdna3()):
+            pytest.skip(f"upcasting {src_dtype} to {dst_dtype} not supported in this architecture")
+        if  (src_dtype in ('float8e4b15',) and not is_hip_cdna3()):
             # If the dtype should error out in the given device, we assert that and return
             with pytest.raises(triton.CompilationError, match="not supported in this architecture"):
                 launch_exhaustive_populate(getattr(tl, src_dtype), 0, 65536, False, 8, 0x7f, device=device)
@@ -347,6 +348,8 @@ def test_typeconvert_downcast(src_dtype, dst_dtype, rounding, max_repr, device):
                 pytest.skip("float8e4nv downcast tests only supported with RTNE rounding on AMDGPU")
             if not is_hip_cdna4() and src_dtype == 'bfloat16':
                 pytest.skip("float8e4nv downcast tests from bfloat16 only supported on AMDGPU CDNA4")
+        if src_dtype != 'bfloat16' and dst_dtype in ('float8e5b16', 'float8e4b8') and rounding == 'rtne' and not is_hip_cdna3():
+            pytest.skip(f"{src_dtype} to {dst_dtype} downcast with RTNE rounding tests only supported on AMDGPU CDNA3")
 
     # dtype : (exponent_bits, mantissa_bits, exponent_bias)
     stuff = {
