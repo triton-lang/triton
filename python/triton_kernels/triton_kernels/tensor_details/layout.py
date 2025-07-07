@@ -21,7 +21,7 @@ class Layout(ABC):
         pass
 
 
-class DefaultLayout(Layout):
+class StridedLayout(Layout):
     name: str = None
 
     def __init__(self, shape) -> None:

@@ -3,7 +3,7 @@ from typing import Type
 from .reduction_details.reduce_bitmatrix import clear_sums, sum_bitmatrix_rows
 from dataclasses import dataclass, fields
 from triton.tools.tensor_descriptor import TensorDescriptor
-from .tensor_details.layout import Layout, DefaultLayout
+from .tensor_details.layout import Layout, StridedLayout
 from .target_info import cuda_capability_geq
 
 
@@ -15,7 +15,7 @@ class Storage:
 
     def __post_init__(self):
         if self.layout is None:
-            self.layout = DefaultLayout(self.data.shape)
+            self.layout = StridedLayout(self.data.shape)
 
     @property
     def device(self):

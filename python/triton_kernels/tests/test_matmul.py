@@ -297,19 +297,17 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
                                                                  has_y_gammas, requires_grad=test_bwd, device=device)
     x_ref, w_ref, bias_ref, gs0_ref, gs1_ref = apply_precision(x_tri, w_tri, bias_tri, gs0_tri, gs1_tri, precision_opt)
     if is_mixed_input:
-        if torch.cuda.get_device_capability()[0] == 9:
-            w_layout = layout.HopperMXValueLayout
-            w_scales_layout = layout.HopperMXScaleLayout
-        elif torch.cuda.get_device_capability()[0] == 10:
-            w_layout = layout.DefaultLayout
-            w_scales_layout = layout.BlackwellMXScaleLayout
-        else:
-            w_layout = layout.DefaultLayout
-            w_scales_layout = layout.DefaultLayout
+        capability_major = torch.cuda.get_device_capability()[0]
+        # weight layout
+        w_layouts = {9: layout.HopperMXValueLayout}
+        w_layout = w_layouts.get(capability_major, layout.StridedLayout)
+        # weight scale layout
+        w_scales_layouts = {9: layout.HopperMXScaleLayout, 10: layout.BlackwellMXScaleLayout}
+        w_scale_layout = w_scales_layouts.get(capability_major, layout.StridedLayout)
         w_tri, mx_scales_tri = downcast_to_mxfp(w_tri, weight_dtype, axis=1)
         w_ref = upcast_from_mxfp(w_tri, mx_scales_tri, torch.bfloat16, axis=1)
         w_tri = convert_layout(wrap_torch_tensor(w_tri, FP4), w_layout)
-        mx_scales_tri = convert_layout(wrap_torch_tensor(mx_scales_tri), w_scales_layout)
+        mx_scales_tri = convert_layout(wrap_torch_tensor(mx_scales_tri), w_scale_layout)
         precision_opt.weight_scale = mx_scales_tri
 
     # if not is_persistent and precision_opt.weight_scale is not None:
