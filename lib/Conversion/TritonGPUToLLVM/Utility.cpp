@@ -526,19 +526,24 @@ Value getSmemVecAddr(const LinearLayout &regLayout,
     // This approach ensures that "absolute" tensor offsets can be
     // mapped to the correct shared memory addresses using
     // `invertAllocSharedLayout`.
-    auto multiDimTensorOffsets =
-        llvm::to_vector(applyLinearLayout(loc, rewriter, regLayout,
+
+    auto composedLayout = regLayout.compose(invertAllocSharedLayout);
+
+    smemOffset = applyLinearLayout(loc, rewriter, composedLayout,
                                           {{kRegister, regId},
                                            {kLane, laneId},
                                            {kWarp, warpId},
-                                           {kBlock, blockId}}));
-    for (auto i = 0; i < rank; i++) {
-      multiDimTensorOffsets[i].second =
-          b.xor_(multiDimTensorOffsets[i].second, smemOffsets[i]);
+                                           {kBlock, blockId}})[0].second;
+
+    {
+      // apply smemOffsets:
+      SmallVector<std::pair<StringAttr, Value>> pairs;
+      for (auto [attr, val] : llvm::zip(invertAllocSharedLayout.getInDimNames(), smemOffsets)) {
+        pairs.emplace_back(attr, val);
+      }
+      smemOffset = b.xor_(smemOffset, applyLinearLayout(loc, rewriter, invertAllocSharedLayout, pairs)[0].second);
     }
-    smemOffset = applyLinearLayout(loc, rewriter, invertAllocSharedLayout,
-                                   multiDimTensorOffsets)[0]
-                     .second;
+
     Value baseToAllocBaseDist = dot(rewriter, loc, smemOffsets, smemStrides);
     smemOffset = b.sub(smemOffset, baseToAllocBaseDist);
   }
