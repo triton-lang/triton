@@ -141,6 +141,19 @@ def NVWS_WarpGroupOp : NVWS_Op<"warp_group", [
   let hasCustomAssemblyFormat = 1;
 }
 
+def NVWS_WarpGroupYieldOp : NVWS_Op<"warp_group.yield", [
+  Pure, Terminator, ReturnLike, HasParent<"WarpGroupOp">,
+  DeclareOpInterfaceMethods<RegionBranchTerminatorOpInterface>
+]> {
+  let summary = "yield from the default region of `ttg.warp_specialize`";
+  let description = [{
+  }];
+
+  let arguments = (ins Variadic<AnyType>:$values);
+
+  let assemblyFormat = "($values^)? attr-dict (`:` type($values)^)?";
+}
+
 def NVWS_WarpGroupReturnOp : NVWS_Op<"warp_group.return", [
   Pure, Terminator, HasParent<"WarpGroupOp">
 ]> {

@@ -627,7 +627,7 @@ LogicalResult partitionLoopV2(scf::ForOp loop) {
 
     if (i == 0) {
       auto outputs = newForOp.getResults();
-      builder.create<WarpYieldOp>(wgOp.getLoc(), outputs);
+      builder.create<nvws::WarpGroupYieldOp>(wgOp.getLoc(), outputs);
     } else {
       builder.create<nvws::WarpGroupReturnOp>(wgOp.getLoc());
     }

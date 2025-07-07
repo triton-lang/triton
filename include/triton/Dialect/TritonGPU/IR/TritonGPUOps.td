@@ -509,7 +509,7 @@ def TTG_WarpSpecializePartitionsOp : TTG_Op<"warp_specialize.partitions", [
 }
 
 def TTG_WarpYieldOp : TTG_Op<"warp_yield", [
-  Pure, Terminator, ReturnLike,
+  Pure, Terminator, ReturnLike, HasParent<"WarpSpecializeOp">,
   DeclareOpInterfaceMethods<RegionBranchTerminatorOpInterface>
 ]> {
   let summary = "yield from the default region of `ttg.warp_specialize`";
