@@ -817,14 +817,20 @@ def _attn_fwd_correction_rescale(config, alpha, o_tmem):
 
 @gluon.jit
 def _attn_fwd_correction_epilogue(config, scale, o_tmem, o_smem):
-    #for i in tl.static_range(config.SPLIT_D_FACTOR):
-    #    o_ref = o_tmem.slice(i * config.SPLIT_D, config.SPLIT_D)
-    #    o = o_ref.load(config.o_splitn_layout)
-    #    o = _mul_f32x2(o, scale[:, None])
-    #    o_smem.slice(i * config.SPLIT_D, config.SPLIT_D, dim=1).store(o.to(config.dtype))
-    o = o_tmem.load(config.o_layout)
-    o = _mul_f32x2(o, gl.convert_layout(scale, gl.SliceLayout(1, config.o_layout), assert_trivial=True)[:, None])
-    o_smem.store(o.to(config.dtype))
+    contigDimSize: gl.constexpr = o_smem.type.layout.swizzle_byte_width * 8 / o_smem.type.element_ty.primitive_bitwidth
+    if o_smem.type.shape[1] // config.SPLIT_D_FACTOR >= contigDimSize:
+        SPLIT_N_FACTOR: gl.constexpr = config.SPLIT_D_FACTOR
+    else:
+        SPLIT_N_FACTOR: gl.constexpr = 1
+    gl.static_assert(o_smem.type.shape[1] // SPLIT_N_FACTOR >= contigDimSize,
+                     "Block shape is too small for the swizzle byte size in NVMMA Shared Layout")
+    SPLIT_N: gl.constexpr = o_smem.type.shape[1] // SPLIT_N_FACTOR
+
+    for i in tl.static_range(SPLIT_N_FACTOR):
+        o_ref = o_tmem.slice(i * SPLIT_N, SPLIT_N)
+        o = o_ref.load(config.o_splitn_layout)
+        o = _mul_f32x2(o, scale[:, None])
+        o_smem.slice(i * SPLIT_N, SPLIT_N, dim=1).store(o.to(config.dtype))
 
 
 @gluon.jit
@@ -1084,7 +1090,7 @@ def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype):
 # Benchmarking
 # ===-----------------------------------------------------------------------===#
 
-profile = False
+profile = True
 
 if not profile:
     BATCH = [4]
@@ -1096,7 +1102,7 @@ if not profile:
 else:
     BATCH = [4]
     N_HEADS = [32]
-    HEAD_DIM = [64]
+    HEAD_DIM = [128]
     causal = [True]
     providers = ["triton-fp16"]
     N_CTX = [16 * 1024]
