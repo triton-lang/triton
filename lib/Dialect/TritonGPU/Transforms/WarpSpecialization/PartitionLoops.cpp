@@ -262,6 +262,7 @@ LogicalResult triton::gpu::partitionLoop(scf::ForOp loop) {
 struct WgBuilder {
   OpBuilder builder;
   IRMapping mapping;
+  size_t partitionId;
 };
 
 bool isUsedBy(Value arg, const Partition *partition, scf::ForOp loop,
@@ -431,10 +432,21 @@ void cloneReduceOp(triton::ReduceOp reduceOp, SmallVector<WgBuilder> &builders,
   b.builder.setInsertionPointAfter(newReduceOp);
 }
 
+const Partition *getPartition(Operation *op, const WarpSchedule &schedule) {
+  while (op && !schedule.getPartition(op)) {
+    op = op->getParentOp();
+  }
+  if (op) {
+    return schedule.getPartition(op);
+  }
+  return nullptr;
+}
+
 void cloneOpsInBlock(Block *block, SmallVector<WgBuilder> &builders,
                      const WarpSchedule &schedule) {
   for (auto &op_ : *block) {
     auto op = &op_;
+    auto partition = getPartition(op, schedule);
 
     if (auto forOp = dyn_cast<scf::ForOp>(op)) {
       cloneForOp(forOp, builders, schedule);
@@ -448,30 +460,17 @@ void cloneOpsInBlock(Block *block, SmallVector<WgBuilder> &builders,
       }
 
       auto yieldParent = yieldOp->getParentOp();
-      auto parentPartition = schedule.getPartition(yieldParent);
 
-      SmallVector<size_t> builderIndices;
-
-      if (parentPartition && parentPartition->getIndex() >= 0) {
-        builderIndices.push_back(parentPartition->getIndex());
-      } else {
-        for (size_t i = 0; i < builders.size(); ++i) {
-          builderIndices.push_back(i);
-        }
-      }
-
-      for (size_t idx: builderIndices) {
-        auto &builder = builders[idx];
-        auto partition = schedule.getPartition(idx);
+      auto doClone = [&](WgBuilder &builder) {
         SmallVector<Value> newYieldOperands;
-        for (size_t j = 0; j < yieldOp.getOperands().size(); ++j) {
-          auto operand = yieldOp.getOperands()[j];
-
+        for (auto [i, operand] : llvm::enumerate(yieldOp.getOperands())) {
           bool keep = false;
           if (auto forOp = dyn_cast<scf::ForOp>(yieldParent)) {
-            keep = isUsedBy(forOp.getRegionIterArgs()[j], partition, forOp,
-                            schedule) ||
-	      (idx == 0 && !forOp.getResult(j).use_empty());
+            keep =
+                isUsedBy(forOp.getRegionIterArgs()[i],
+                         schedule.getPartition(builder.partitionId), forOp,
+                         schedule) ||
+                (builder.partitionId == 0 && !forOp.getResult(i).use_empty());
           } else if (auto ifOp = dyn_cast<scf::IfOp>(yieldParent)) {
             keep = true; // TODO
           } else {
@@ -484,10 +483,24 @@ void cloneOpsInBlock(Block *block, SmallVector<WgBuilder> &builders,
           }
         }
         builder.builder.create<scf::YieldOp>(op->getLoc(), newYieldOperands);
+      };
+
+      if (!partition || partition == schedule.getRootPartition()) {
+        for (auto &builder : builders) {
+          doClone(builder);
+        }
+      } else {
+        auto &builder = builders[partition->getIndex()];
+        doClone(builder);
       }
     } else {
       // all remaining ops are expected to be regionless
       assert(op->getNumRegions() == 0);
+
+      if (!partition) {
+	// TODO: Is this possible?
+	llvm_unreachable("No partition");
+      }
 
       auto doClone = [&](WgBuilder &builder, Operation *op) {
         auto newOp = builder.builder.clone(*op, builder.mapping);
@@ -497,12 +510,6 @@ void cloneOpsInBlock(Block *block, SmallVector<WgBuilder> &builders,
         }
       };
 
-      auto partition = schedule.getPartition(op);
-
-      if (!partition) {
-	assert(false);
-      }
-
       if (partition == schedule.getRootPartition()) {
         for (auto &builder : builders) {
           doClone(builder, op);
@@ -511,34 +518,6 @@ void cloneOpsInBlock(Block *block, SmallVector<WgBuilder> &builders,
         auto &builder = builders[partition->getIndex()];
         doClone(builder, op);
       }
-    }
-  }
-}
-
-void assignPartitionToBlock(mlir::Block *block, Partition *part,
-                            WarpSchedule &schedule);
-
-void assignPartitionToIfOp(scf::IfOp ifOp, Partition *part,
-                           WarpSchedule &schedule) {
-  assignPartitionToBlock(ifOp.thenBlock(), part, schedule);
-  if (ifOp.elseBlock()) {
-    assignPartitionToBlock(ifOp.elseBlock(), part, schedule);
-  }
-}
-
-void assignPartitionToReduceOp(ReduceOp reduceOp, Partition *part,
-			       WarpSchedule &schedule) {
-  assignPartitionToBlock(reduceOp.getBody(), part, schedule);
-}
-
-void assignPartitionToBlock(mlir::Block *block, Partition *part,
-                            WarpSchedule &schedule) {
-  for (auto &op : block->getOperations()) {
-    schedule.insert(part, &op);
-    if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
-      assignPartitionToIfOp(ifOp, part, schedule);
-    } else if (auto reduceOp = dyn_cast<ReduceOp>(op)) {
-      assignPartitionToReduceOp(reduceOp, part, schedule);
     }
   }
 }
@@ -579,7 +558,6 @@ LogicalResult partitionLoopV2(scf::ForOp loop) {
 
   SmallVector<Type> resultTypes;
   auto defaultPartition = schedule.getPartition((int)0);
-  llvm::BitVector toErase(loop.getNumRegionIterArgs(), true);
   SmallVector<int> newResultIdx(loop.getNumRegionIterArgs(), -1);
   for (auto [i, iterArg, result, resultTy] :
        llvm::enumerate(loop.getRegionIterArgs(), loop.getResults(),
@@ -588,7 +566,6 @@ LogicalResult partitionLoopV2(scf::ForOp loop) {
         !result.use_empty()) {
       newResultIdx[i] = resultTypes.size();
       resultTypes.push_back(resultTy);
-      toErase.reset(i);
     }
   }
 
@@ -599,23 +576,10 @@ LogicalResult partitionLoopV2(scf::ForOp loop) {
 
   SmallVector<WgBuilder> builders;
   for (Region &region : wgOp.getPartitionRegions()) {
-    OpBuilder wgBuilder = OpBuilder::atBlockEnd(&region.emplaceBlock());
-    builders.push_back({wgBuilder, IRMapping()});
+    OpBuilder builder = OpBuilder::atBlockEnd(&region.emplaceBlock());
+    auto partitionId = builders.size();
+    builders.push_back({builder, IRMapping(), partitionId});
   }
-
-  loop->getBlock()->walk([&](scf::IfOp ifOp) {
-    auto partition = schedule.getPartition(ifOp);
-    if (partition) {
-      assignPartitionToIfOp(ifOp, partition, schedule);
-    }
-  });
-
-  loop->getBlock()->walk([&](ReduceOp reduceOp) {
-    auto partition = schedule.getPartition(reduceOp);
-    if (partition) {
-      assignPartitionToReduceOp(reduceOp, partition, schedule);
-    }
-  });
 
   cloneForOp(loop, builders, schedule);
 
