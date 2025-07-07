@@ -133,4 +133,11 @@ int TargetInfo::getAddressSpace(Attribute addressSpace) const {
   return spaceId;
 }
 
+int TargetInfo::getIndexPtrAddrSpace() const {
+  // Internal buffer index is private to each thread, we use thread local
+  // address space for AMD GPUs. See detail discussion:
+  // https://llvm.org/docs/AMDGPUUsage.html#address-spaces
+  return 5;
+}
+
 } // namespace mlir::triton::proton::gpu::AMD

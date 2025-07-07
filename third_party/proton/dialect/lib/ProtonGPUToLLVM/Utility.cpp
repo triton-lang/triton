@@ -1,7 +1,16 @@
 #include "Conversion/ProtonGPUToLLVM/Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
-namespace mlir::LLVM {
+namespace mlir {
+
+Value getRawThreadId(OpBuilder &rewriter, Location loc) {
+  Value tid =
+      rewriter.create<::mlir::gpu::ThreadIdOp>(loc, ::mlir::gpu::Dimension::x);
+  Value threadId = rewriter.create<arith::IndexCastOp>(loc, i32_ty, tid);
+  return threadId;
+}
+
+namespace LLVM {
 
 LLVMStructType SegmentObject::getStructType(MLIRContext *ctx, int memorySpace,
                                             int indexPtrAddrSpace) {
@@ -51,9 +60,9 @@ SegmentObject SegmentObject::fromStruct(Location loc, Value segmentStruct,
   return SegmentObject(memoryDescriptorPtr, segmentBase, indexPtr);
 }
 
-} // namespace mlir::LLVM
+} // namespace LLVM
 
-namespace mlir::triton {
+namespace triton {
 namespace proton::gpu {
 
 CircularStoreDataPack
@@ -77,7 +86,7 @@ lowerCircularStoreOpHelper(CircularStoreOp op, Value segmentStruct,
   b.store(newIdx, indexPtr);
 
   // Compute the segment size in word (4 bytes).
-  int selectedWarpNum = mlir::triton::gpu::lookupNumWarps(mod);
+  int selectedWarpNum = getTotalNumWarps(mod);
   auto segmentType = op.getSegment().getType();
   auto selectedIds = segmentType.getSelectIds();
   if (!selectedIds.empty())
@@ -148,4 +157,6 @@ lowerCircularStoreOpHelper(CircularStoreOp op, Value segmentStruct,
 }
 
 } // namespace proton::gpu
-} // namespace mlir::triton
+} // namespace triton
+
+} // namespace mlir
