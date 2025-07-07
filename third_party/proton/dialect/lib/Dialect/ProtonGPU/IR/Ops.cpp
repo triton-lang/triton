@@ -46,8 +46,10 @@ LogicalResult CircularStoreOp::verify() {
   auto selectedIds = segmentType.getSelectIds();
   auto bufferSizeInBytes = segmentType.getNBytes();
   auto mod = getOperation()->getParentOfType<ModuleOp>();
-  int segmentNum = selectedIds.empty() ? mlir::triton::gpu::lookupNumWarps(mod)
-                                       : selectedIds.size();
+
+  int numWarps = getTotalNumWarps(mod);
+
+  int segmentNum = selectedIds.empty() ? numWarps : selectedIds.size();
   if (!llvm::isPowerOf2_32(bufferSizeInBytes / segmentNum))
     return emitOpError("profiling buffer segment size must be power of 2");
 
@@ -66,6 +68,14 @@ LogicalResult SegmentAllocOp::verify() {
     return emitOpError(
         "only warp granularity supports non-empty selectIds for now");
   }
+  return success();
+}
+
+// -- InitCtxOp --
+LogicalResult InitCtxOp::verify() {
+  if (getOperation()->getParentOfType<triton::gpu::WarpSpecializeOp>())
+    return emitOpError(
+        "can't initialize proton context in a warp specialized op");
   return success();
 }
 
