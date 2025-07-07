@@ -262,7 +262,6 @@ struct WgBuilder {
   OpBuilder builder;
   IRMapping mapping;
   size_t partitionId;
-
 };
 
 SmallVector<size_t> getLoopVarIndicesToKeep(scf::ForOp loop,
@@ -464,7 +463,10 @@ void cloneOpsInBlock(Block *block, SmallVector<WgBuilder> &builders,
           newYieldOperands.push_back(
               builder.mapping.lookupOrDefault(yieldOp.getOperand(i)));
         }
-        builder.builder.create<scf::YieldOp>(op->getLoc(), newYieldOperands);
+
+        if (!newYieldOperands.empty()) {
+          builder.builder.create<scf::YieldOp>(op->getLoc(), newYieldOperands);
+        }
       };
 
       if (!partition || partition == schedule.getRootPartition()) {
