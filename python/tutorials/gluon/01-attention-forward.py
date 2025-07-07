@@ -518,8 +518,8 @@ def _borrow_s_as_alpha(config, s_tmem):
 
 @gluon.jit
 def _borrow_s_for_epilogue(config, s_tmem):
-    m_i_tmem = s_tmem.slice(0, 1)
-    l_i_tmem = s_tmem.slice(1, 1)
+    m_i_tmem = s_tmem.slice(config.BLOCK_N // 2 + 1, 1)
+    l_i_tmem = s_tmem.slice(config.BLOCK_N // 2 + 2, 1)
     layout: gl.constexpr = TensorMemoryLayout([config.SPLIT_M, 1], unpacked=False)
     m_i_tmem = m_i_tmem._reinterpret(gl.float32, [config.SPLIT_M, 1], layout)
     l_i_tmem = l_i_tmem._reinterpret(gl.float32, [config.SPLIT_M, 1], layout)
@@ -659,9 +659,9 @@ def _softmax_inner_loop(tile_id: gl.constexpr, config, prog,  #
         p_tmem.slice(0, config.BLOCK_N // 2).store(p0.to(config.dtype))
         p1 = gl.exp2(qk1)
         p_tmem.slice(config.BLOCK_N // 2, config.BLOCK_N // 2).store(p1.to(config.dtype))
-        mbarrier.arrive(s_bar, count=1)
 
         _, corr_bar = corr_producer.acquire()
+        mbarrier.arrive(s_bar, count=1)
 
         # FIXME: This code makes ptxas misbehave and spill :(
         # p0 = gl.convert_layout(p0, config.qk_layout, assert_trivial=True)
@@ -832,25 +832,26 @@ def _attn_fwd_correction(config, info0, info1, M, o_chnl, epi_chnl, STAGE: gl.co
         mbarrier.arrive(corr0_bar, count=1)
 
         _, corr1_bar = corr1_consumer.acquire()
+        mbarrier.arrive(corr1_bar, count=1)
+
         for i in range(num_corrections - 1):
             _, corr0_bar = corr0_consumer.acquire()
             alpha0 = _borrow_s_as_alpha(config, s0_tmem).load(config.alpha_2d_layout)
+            mbarrier.arrive(corr0_bar, count=1)
             alpha0 = gl.convert_layout(alpha0.reshape([config.SPLIT_M]), alpha_layout, assert_trivial=True)
 
             o0_tmem, o0_bar = o_consumer.acquire()
             _attn_fwd_correction_rescale(config, alpha0, o0_tmem)
-            mbarrier.arrive(corr1_bar, count=1)
             mbarrier.arrive(o0_bar, count=1)
 
             _, corr1_bar = corr1_consumer.acquire()
             alpha1 = _borrow_s_as_alpha(config, s1_tmem).load(config.alpha_2d_layout)
+            mbarrier.arrive(corr1_bar, count=1)
             alpha1 = gl.convert_layout(alpha1.reshape([config.SPLIT_M]), alpha_layout, assert_trivial=True)
 
             o1_tmem, o1_bar = o_consumer.acquire()
             _attn_fwd_correction_rescale(config, alpha1, o1_tmem)
-            mbarrier.arrive(corr0_bar, count=1)
             mbarrier.arrive(o1_bar, count=1)
-        mbarrier.arrive(corr1_bar, count=1)
 
         _, corr0_bar = corr0_consumer.acquire()
         m_i0_tmem, l_i0_tmem = _borrow_s_for_epilogue(config, s0_tmem)
@@ -860,9 +861,12 @@ def _attn_fwd_correction(config, info0, info1, M, o_chnl, epi_chnl, STAGE: gl.co
         l_i0 = gl.convert_layout(l_i0, alpha_layout, assert_trivial=True)
         mbarrier.arrive(corr0_bar, count=1)
 
-        o0_tmem, o0_bar = o_consumer.acquire()
         o0_smem, epi_bar = epi_producer.acquire()
+        o0_tmem, o0_bar = o_consumer.acquire()
         _attn_fwd_correction_epilogue(config, 1 / l_i0, o0_tmem, o0_smem)
+        fence_async_shared()
+        mbarrier.arrive(epi_bar, count=1)
+        mbarrier.arrive(o0_bar, count=1)
 
         m_i0 += gl.log2(l_i0)
         coalesced: gl.constexpr = gl.BlockedLayout([1], [32], [4], [0])
@@ -870,9 +874,6 @@ def _attn_fwd_correction(config, info0, info1, M, o_chnl, epi_chnl, STAGE: gl.co
         offs_m += gl.arange(0 * config.SPLIT_M, 1 * config.SPLIT_M, coalesced)
         m_ptrs = M + prog.off_hz * config.N_CTX + offs_m
         gl.store(m_ptrs, gl.convert_layout(m_i0, coalesced, assert_trivial=True))
-
-        mbarrier.arrive(o0_bar, count=1)
-        mbarrier.arrive(epi_bar, count=1)
 
         _, corr1_bar = corr1_consumer.acquire()
         m_i1_tmem, l_i1_tmem = _borrow_s_for_epilogue(config, s1_tmem)
@@ -882,18 +883,18 @@ def _attn_fwd_correction(config, info0, info1, M, o_chnl, epi_chnl, STAGE: gl.co
         l_i1 = gl.convert_layout(l_i1, alpha_layout, assert_trivial=True)
         mbarrier.arrive(corr1_bar, count=1)
 
-        o1_tmem, o1_bar = o_consumer.acquire()
         o1_smem, epi_bar = epi_producer.acquire()
+        o1_tmem, o1_bar = o_consumer.acquire()
         _attn_fwd_correction_epilogue(config, 1 / l_i1, o1_tmem, o1_smem)
+        fence_async_shared()
+        mbarrier.arrive(epi_bar, count=1)
+        mbarrier.arrive(o1_bar, count=1)
 
         m_i1 += gl.log2(l_i1)
         offs_m = prog.start_m * config.BLOCK_M
         offs_m += gl.arange(1 * config.SPLIT_M, 2 * config.SPLIT_M, coalesced)
         m_ptrs = M + prog.off_hz * config.N_CTX + offs_m
         gl.store(m_ptrs, gl.convert_layout(m_i1, coalesced, assert_trivial=True))
-
-        mbarrier.arrive(o1_bar, count=1)
-        mbarrier.arrive(epi_bar, count=1)
 
 
 @gluon.jit
@@ -1071,7 +1072,7 @@ def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype):
 # Benchmarking
 # ===-----------------------------------------------------------------------===#
 
-profile = True
+profile = False
 
 if not profile:
     BATCH = [4]
