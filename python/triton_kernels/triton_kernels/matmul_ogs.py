@@ -396,6 +396,9 @@ def matmul_ogs(x, w, bias,
     M = x.shape[-2] if gather_indx is None else gather_indx.src_indx.shape[0]
     batch_size = w.shape[0] if routing_data.expt_hist is None else 1
     K, N = w.shape[-2:]
+    if not target_info.cuda_capability_geq(10, 0) and has_mx:
+        if not (K % 64 == 0 and N % 64 == 0):
+            raise NotImplementedError("weight matrix must be padded for bf16 x mxfp4 on hopper")
     # compute optimization flags
     out_dtype = precision_config.out_dtype or x.dtype
     can_use_tma = x.storage.is_tma_compliant() and \

@@ -151,15 +151,13 @@ class HopperMXValueLayout(Layout):
         WARNING: Assumes that the matmul will be done in bf16 or fp16!
         Implementing it for fp8 is as easy as making the tile size (8, 8)
         """
-        data = data.transpose(-1, -2)
 
-        assert data.dtype == torch.uint8
         assert self.op_idx in (0, 1)
         batch = data.ndim - 2
         assert batch >= 0
         assert self.mma_version in (2, 3)
-
-        if self.op_idx == 1:
+        # canonicalize dimensions
+        if self.op_idx == 0:
             data = data.mT
         init_shape = data.shape
 
@@ -204,23 +202,21 @@ class HopperMXValueLayout(Layout):
         # Want [rest[0], threads[0], rest[1], scott_trick[0], scott_trick[0], threads[1], contig[1], contig[0], k_tile[1], k_tile[0], warp_tile[1], warp_tile[0]]
         perm = [0, 3, 6, 10, 4, 9, 7, 1, 8, 2, 5, 11]
         perm = list(range(batch)) + [batch + p for p in perm]
-        data = data.permute(*perm)
-        data = data.contiguous()
+        data = data.permute(*perm).contiguous()
         # These are views
         data = data.flatten(-10, -1)
         data = data.flatten(-3, -2)
         assert data.is_contiguous()
         assert data.shape[-2] == init_shape[-2] // 4
         assert data.shape[-1] == init_shape[-1] * 4
-        if self.op_idx == 1:
+        # de-canonicalize
+        if self.op_idx == 0:
             data = data.mT
-        data = data.transpose(-1, -2)
         return data
 
     def unswizzle_data(self, data):
-        data = data.transpose(-1, -2).contiguous()
-        if self.op_idx == 1:
-            data = data.transpose(-2, -1)
+        if self.op_idx == 0:
+            data = data.mT
         *batch, M, K = data.shape
         # We have two times the elements if we already upcasted to bfloat16
         mult = 2 if data.dtype == torch.bfloat16 else 1
@@ -235,9 +231,8 @@ class HopperMXValueLayout(Layout):
         perm = list(range(b)) + [b + p for p in perm]
         data = data.permute(*perm)
         data = data.reshape(*batch, M * 4, K // 4)
-        if self.op_idx == 1:
-            data = data.transpose(-2, -1)
-        data = data.transpose(-1, -2).contiguous()
+        if self.op_idx == 0:
+            data = data.mT
         return data[..., :self.K, :self.N]
 
     def swizzle_block_shape(self, block_shape):

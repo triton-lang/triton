@@ -298,8 +298,6 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
     x_ref, w_ref, bias_ref, gs0_ref, gs1_ref = apply_precision(x_tri, w_tri, bias_tri, gs0_tri, gs1_tri, precision_opt)
     if is_mixed_input:
         if torch.cuda.get_device_capability()[0] == 9:
-            # if k % 64 != 0 or n % 64 != 0:
-            #     pytest.skip("Hopper swizzling acts on a 64x64 tile (4x1 mma tiles).")
             w_layout = layout.HopperMXValueLayout
             w_scales_layout = layout.HopperMXScaleLayout
         elif torch.cuda.get_device_capability()[0] == 10:
@@ -369,7 +367,7 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
     # triton
     try:
         tri_y = matmul_ogs(x_tri, w_tri, bias_tri, rdata, gindx, sindx, precision_opt, gammas=gs1_ref)
-    except opt_flags.InapplicableConstraint:
+    except (opt_flags.InapplicableConstraint, NotImplementedError):
         pytest.skip("inapplicable opt_flags constraint")
     # If split_k > 1, then the intermediate tensor is fp32.
     sep_gather = mode == "ragged" and do_gather and n_expts_act > 1 and split_k == 1
