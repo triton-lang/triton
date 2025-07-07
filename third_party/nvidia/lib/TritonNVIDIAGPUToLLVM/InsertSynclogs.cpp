@@ -105,6 +105,17 @@ LLVM::LLVMFuncOp addSynclogPtr(IRRewriter &rewriter, ModuleOp mod,
   return newKernelFunc;
 }
 
+// Helper template to recursively chain AND operations.
+template <typename First, typename... Rest>
+Value andChain(TritonLLVMOpBuilder &llvmBuilder, First first, Rest... rest) {
+  if constexpr (sizeof...(rest) == 0) {
+    return first.getResult();
+  } else {
+    return llvmBuilder.and_(first.getResult(), andChain(llvmBuilder, rest...));
+  }
+}
+
+// Helper to write synclog to buffer for a given async operation.
 void writeLogToBuffer(IRRewriter &rewriter, Operation *op, Value synclogBuffer,
                       int headerNumber) {
   auto ctx = rewriter.getContext();
@@ -156,17 +167,13 @@ void writeLogToBuffer(IRRewriter &rewriter, Operation *op, Value synclogBuffer,
   auto cond4 = llvmBuilder.icmp_eq(blockIdx_x, const0);
   auto cond5 = llvmBuilder.icmp_eq(blockIdx_y, const0);
   auto cond6 = llvmBuilder.icmp_eq(blockIdx_z, const0);
-  auto and1 = llvmBuilder.and_(cond1, cond2);
-  auto and2 = llvmBuilder.and_(cond3, cond4);
-  auto and3 = llvmBuilder.and_(cond5, cond6);
-  auto and4 = llvmBuilder.and_(and1, and2);
-  auto and5 = llvmBuilder.and_(and3, and4);
+  auto andAll = andChain(llvmBuilder, cond1, cond2, cond3, cond4, cond5, cond6);
 
   auto *prevBlock = rewriter.getInsertionBlock();
   auto *ifBlock = rewriter.splitBlock(prevBlock, rewriter.getInsertionPoint());
   auto *thenBlock = rewriter.splitBlock(ifBlock, op->getIterator());
   rewriter.setInsertionPointToEnd(prevBlock);
-  rewriter.create<LLVM::CondBrOp>(loc, and5, ifBlock, thenBlock);
+  rewriter.create<LLVM::CondBrOp>(loc, andAll, ifBlock, thenBlock);
   rewriter.setInsertionPointToEnd(ifBlock);
   rewriter.create<LLVM::BrOp>(loc, thenBlock);
   rewriter.setInsertionPointToStart(ifBlock);
