@@ -559,7 +559,7 @@ SmallVector<Value> getSmemVecAddrVec(
 
     SmallVector<std::pair<StringAttr, Value>> smemOffsetPairs;
     for (auto [attr, val] :
-        llvm::zip(invertAllocSharedLayout.getInDimNames(), smemOffsets)) {
+         llvm::zip(invertAllocSharedLayout.getInDimNames(), smemOffsets)) {
       smemOffsetPairs.emplace_back(attr, val);
     }
     Value smemOffsetsApplied =
