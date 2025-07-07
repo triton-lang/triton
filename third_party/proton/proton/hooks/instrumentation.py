@@ -182,8 +182,6 @@ class InstrumentationHook(Hook):
             elif backend_name == "amd":
                 arch = triton.runtime.driver.active.utils.get_device_properties(device)["arch"].split(":")[0]
                 triton_proton.add_convert_proton_amd_gpu_to_llvm(pm, arch)
-            triton_passes.common.add_canonicalizer(pm)
-            triton_passes.common.add_cse(pm)
 
         backends[backend_name].compiler.instrumentation = Instrumentation({
             "ttgpuir_to_llvmir":
