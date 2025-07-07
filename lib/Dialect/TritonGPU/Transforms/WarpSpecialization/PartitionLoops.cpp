@@ -265,15 +265,25 @@ struct WgBuilder {
   size_t partitionId;
 };
 
-bool isUsedBy(Value arg, const Partition *partition, scf::ForOp loop,
-              const WarpSchedule &schedule) {
+SmallVector<size_t> getLoopVarIndicesToKeep(scf::ForOp loop,
+                                            const Partition *partition,
+                                            const WarpSchedule &schedule) {
   auto inPartition = [&](Operation *op) {
     const Partition *opPartition =
         schedule.getPartition(loop.getBody()->findAncestorOpInBlock(*op));
     return llvm::is_contained({partition, schedule.getRootPartition()},
                               opPartition);
   };
-  return llvm::any_of(arg.getUsers(), inPartition);
+
+  SmallVector<size_t> indices;
+  for (auto [i, arg] : llvm::enumerate(loop.getRegionIterArgs())) {
+    if (llvm::any_of(arg.getUsers(), inPartition) ||
+        (partition->getIndex() == 0 && !loop.getResult(i).use_empty())) {
+      indices.push_back(i);
+    }
+  }
+
+  return indices;
 }
 
 void cloneOpsInBlock(Block *block, SmallVector<WgBuilder> &builders,
@@ -285,17 +295,16 @@ void cloneForOp(scf::ForOp forOp, SmallVector<WgBuilder> &builders,
   for (size_t i = 0; i < builders.size(); ++i) {
     auto &b = builders[i];
     auto partition = schedule.getPartition(i);
+
+    auto newLoopIndices = getLoopVarIndicesToKeep(forOp, partition, schedule);
+
     // TODO: Mapping?
     auto lb = forOp.getLowerBound();
     auto ub = forOp.getUpperBound();
     auto step = forOp.getStep();
     SmallVector<Value> initArgs;
-    for (auto [idx, arg] : llvm::enumerate(forOp.getInitArgs())) {
-      if (isUsedBy(forOp.getRegionIterArgs()[idx], partition, forOp,
-                   schedule) ||
-          (i == 0 && !forOp.getResult(idx).use_empty())) {
-        initArgs.push_back(arg);
-      }
+    for (auto idx : newLoopIndices) {
+      initArgs.push_back(forOp.getInitArgs()[idx]);
     }
     auto newForOp =
         b.builder.create<scf::ForOp>(forOp.getLoc(), lb, ub, step, initArgs);
@@ -303,28 +312,14 @@ void cloneForOp(scf::ForOp forOp, SmallVector<WgBuilder> &builders,
     newForOps.push_back(newForOp);
 
     b.mapping.map(forOp.getInductionVar(), newForOp.getInductionVar());
-    // map the results of the forOp to the newForOp
+
     auto oldIterArgs = forOp.getRegionIterArgs();
     auto newIterArgs = newForOp.getRegionIterArgs();
-    for (int oldIdx = 0, newIdx = 0; oldIdx < oldIterArgs.size(); ++oldIdx) {
-      auto oldArg = oldIterArgs[oldIdx];
-      if (isUsedBy(oldArg, partition, forOp, schedule) ||
-          (i == 0 && !forOp.getResult(oldIdx).use_empty())) {
-        auto newArg = newIterArgs[newIdx++];
-        b.mapping.map(oldArg, newArg);
-      }
+    for (auto [newIdx, oldIdx] : llvm::enumerate(newLoopIndices)) {
+      b.mapping.map(oldIterArgs[oldIdx], newIterArgs[newIdx]);
+      b.mapping.map(forOp.getResult(oldIdx), newForOp.getResult(newIdx));
     }
 
-    for (int oldIdx = 0, newIdx = 0; oldIdx < forOp.getResults().size();
-         ++oldIdx) {
-      if (isUsedBy(forOp.getRegionIterArgs()[oldIdx], partition, forOp,
-                   schedule) ||
-          (i == 0 && !forOp.getResult(oldIdx).use_empty())) {
-	auto oldArg = forOp.getResult(oldIdx);
-        auto newArg = newForOp.getResult(newIdx++);
-        b.mapping.map(oldArg, newArg);
-      }
-    }
     // set builder insertion point to the start of the newForOp body
     b.builder.setInsertionPointToStart(newForOp.getBody());
   }
@@ -332,7 +327,7 @@ void cloneForOp(scf::ForOp forOp, SmallVector<WgBuilder> &builders,
   // resursive clone ops in the forOp body
   cloneOpsInBlock(forOp.getBody(), builders, schedule);
 
-  for (auto newForOp: newForOps) {
+  for (auto newForOp : newForOps) {
     WarpSchedule::eraseFrom(newForOp);
   }
 }
@@ -340,19 +335,19 @@ void cloneForOp(scf::ForOp forOp, SmallVector<WgBuilder> &builders,
 void cloneIfOp(scf::IfOp ifOp, SmallVector<WgBuilder> &builders,
                const WarpSchedule &schedule) {
   auto partition = schedule.getPartition(ifOp);
-  SmallVector<size_t> builderIndices;
+  SmallVector<size_t> partitionIndices;
 
   if (partition == schedule.getRootPartition()) {
     for (size_t i = 0; i < builders.size(); ++i) {
-      builderIndices.push_back(i);
+      partitionIndices.push_back(i);
     }
   } else {
-    builderIndices.push_back(partition->getIndex());
+    partitionIndices.push_back(partition->getIndex());
   }
 
   SmallVector<scf::IfOp> newIfOps;
-  for (size_t idx : builderIndices) {
-    auto& b = builders[idx];
+  for (size_t idx : partitionIndices) {
+    auto &b = builders[idx];
     SmallVector<Type> newIfResultTypes;
     for (auto [idx, result] : llvm::enumerate(ifOp.getResults())) {
       newIfResultTypes.push_back(result.getType());
@@ -395,7 +390,7 @@ void cloneIfOp(scf::IfOp ifOp, SmallVector<WgBuilder> &builders,
     cloneOpsInBlock(elseBlock, builders, schedule);
   }
 
-  for (auto [idx, newIfOp] : llvm::zip(builderIndices, newIfOps)) {
+  for (auto [idx, newIfOp] : llvm::zip(partitionIndices, newIfOps)) {
     builders[idx].builder.setInsertionPointAfter(newIfOp);
   }
 }
@@ -404,7 +399,7 @@ void cloneReduceOp(triton::ReduceOp reduceOp, SmallVector<WgBuilder> &builders,
                    const WarpSchedule &schedule) {
   auto partition = schedule.getPartition(reduceOp);
   assert(partition);
-  auto& b = builders[partition->getIndex()];
+  auto &b = builders[partition->getIndex()];
 
   SmallVector<Value> srcs;
   for (auto src : reduceOp.getSrcs())
@@ -456,31 +451,24 @@ void cloneOpsInBlock(Block *block, SmallVector<WgBuilder> &builders,
       cloneReduceOp(reduceOp, builders, schedule);
     } else if (auto yieldOp = dyn_cast<scf::YieldOp>(op)) {
       if (yieldOp.getOperands().empty()) {
-	continue;
+        continue;
       }
 
-      auto yieldParent = yieldOp->getParentOp();
-
       auto doClone = [&](WgBuilder &builder) {
-        SmallVector<Value> newYieldOperands;
-        for (auto [i, operand] : llvm::enumerate(yieldOp.getOperands())) {
-          bool keep = false;
-          if (auto forOp = dyn_cast<scf::ForOp>(yieldParent)) {
-            keep =
-                isUsedBy(forOp.getRegionIterArgs()[i],
-                         schedule.getPartition(builder.partitionId), forOp,
-                         schedule) ||
-                (builder.partitionId == 0 && !forOp.getResult(i).use_empty());
-          } else if (auto ifOp = dyn_cast<scf::IfOp>(yieldParent)) {
-            keep = true; // TODO
-          } else {
-            llvm_unreachable("NYI");
+        SmallVector<size_t> newOperandIndices;
+        if (auto forOp = dyn_cast<scf::ForOp>(yieldOp->getParentOp())) {
+          newOperandIndices = getLoopVarIndicesToKeep(
+              forOp, schedule.getPartition(builder.partitionId), schedule);
+        } else {
+          for (size_t i = 0; i < yieldOp.getOperands().size(); ++i) {
+            newOperandIndices.push_back(i);
           }
+        }
 
-          if (keep) {
-            newYieldOperands.push_back(
-                builder.mapping.lookupOrDefault(operand));
-          }
+        SmallVector<Value> newYieldOperands;
+        for (size_t i : newOperandIndices) {
+          newYieldOperands.push_back(
+              builder.mapping.lookupOrDefault(yieldOp.getOperand(i)));
         }
         builder.builder.create<scf::YieldOp>(op->getLoc(), newYieldOperands);
       };
@@ -498,8 +486,8 @@ void cloneOpsInBlock(Block *block, SmallVector<WgBuilder> &builders,
       assert(op->getNumRegions() == 0);
 
       if (!partition) {
-	// TODO: Is this possible?
-	llvm_unreachable("No partition");
+        // TODO: Is this possible?
+        llvm_unreachable("No partition");
       }
 
       auto doClone = [&](WgBuilder &builder, Operation *op) {
@@ -559,14 +547,9 @@ LogicalResult partitionLoopV2(scf::ForOp loop) {
   SmallVector<Type> resultTypes;
   auto defaultPartition = schedule.getPartition((int)0);
   SmallVector<int> newResultIdx(loop.getNumRegionIterArgs(), -1);
-  for (auto [i, iterArg, result, resultTy] :
-       llvm::enumerate(loop.getRegionIterArgs(), loop.getResults(),
-                       loop.getResultTypes())) {
-    if (isUsedBy(iterArg, defaultPartition, loop, schedule) ||
-        !result.use_empty()) {
-      newResultIdx[i] = resultTypes.size();
-      resultTypes.push_back(resultTy);
-    }
+  for (auto i : getLoopVarIndicesToKeep(loop, defaultPartition, schedule)) {
+    newResultIdx[i] = resultTypes.size();
+    resultTypes.push_back(loop.getResultTypes()[i]);
   }
 
   auto numPartitions = schedule.getNumPartitions();
@@ -583,17 +566,16 @@ LogicalResult partitionLoopV2(scf::ForOp loop) {
 
   cloneForOp(loop, builders, schedule);
 
-  for (size_t i = 0; i < numPartitions; ++i) {
-    auto builder = builders[i].builder;
-    auto &region = wgOp.getPartitionRegions()[i];
+  for (auto [builder, region] :
+       llvm::zip(builders, wgOp.getPartitionRegions())) {
     auto newForOp = cast<scf::ForOp>(region.front().front());
-    builder.setInsertionPointAfter(newForOp);
+    builder.builder.setInsertionPointAfter(newForOp);
 
-    if (i == 0) {
+    if (builder.partitionId == 0) {
       auto outputs = newForOp.getResults();
-      builder.create<nvws::WarpGroupYieldOp>(wgOp.getLoc(), outputs);
+      builder.builder.create<nvws::WarpGroupYieldOp>(wgOp.getLoc(), outputs);
     } else {
-      builder.create<nvws::WarpGroupReturnOp>(wgOp.getLoc());
+      builder.builder.create<nvws::WarpGroupReturnOp>(wgOp.getLoc());
     }
   }
 
