@@ -26,6 +26,12 @@ def is_in_thread_transpose_enabled(arch):
     return (arch == "gfx942") if knobs.amd.use_in_thread_transpose is None else knobs.amd.use_in_thread_transpose
 
 
+def enable_debug(pm) -> None:
+    pm.enable_debug()
+    if (pass_listener := knobs.compilation.pass_listener) is not None:
+        pass_listener(pm)
+
+
 @dataclass(frozen=True)
 class HIPOptions:
     num_warps: int = 4
@@ -192,7 +198,7 @@ class HIPBackend(BaseBackend):
     @staticmethod
     def make_ttir(mod, metadata, options):
         pm = ir.pass_manager(mod.context)
-        pm.enable_debug()
+        enable_debug(pm)
         passes.common.add_inliner(pm)
         passes.ttir.add_rewrite_tensor_pointer(pm)
         passes.ttir.add_rewrite_tensor_descriptor_to_pointer(pm)
@@ -209,12 +215,12 @@ class HIPBackend(BaseBackend):
     @staticmethod
     def make_ttgir(mod, metadata, options):
         pm = ir.pass_manager(mod.context)
-        pm.enable_debug()
+        enable_debug(pm)
         passes.ttir.add_convert_to_ttgpuir(pm, f"hip:{options.arch}", options.num_warps, options.warp_size,
                                            options.num_ctas)
         pm.run(mod)
         pm = ir.pass_manager(mod.context)
-        pm.enable_debug()
+        enable_debug(pm)
         passes.ttgpuir.add_coalesce(pm)
         passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_optimize_thread_locality(pm)
@@ -268,7 +274,7 @@ class HIPBackend(BaseBackend):
     def ttgir_opt(src, metadata, options):
         mod = src
         pm = ir.pass_manager(mod.context)
-        pm.enable_debug()
+        enable_debug(pm)
 
         passes.ttgpuir.add_inliner(pm)
         passes.common.add_sccp(pm)
@@ -284,7 +290,7 @@ class HIPBackend(BaseBackend):
         mod = src
         # TritonGPU -> LLVM-IR (MLIR)
         pm = ir.pass_manager(mod.context)
-        pm.enable_debug()
+        enable_debug(pm)
         # custom_lds_size is an experimental parameter that defines amount of LDS available
         # for one thread block. Measured in bytes.
         #

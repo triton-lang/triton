@@ -258,6 +258,13 @@ class CompilationListener(Protocol):
         ...
 
 
+class PassListener(Protocol):
+
+    # mlir::PassManager
+    def __call__(self, *, manager) -> bool:
+        ...
+
+
 knobs_type = TypeVar("knobs_type", bound='base_knobs')
 
 
@@ -360,6 +367,7 @@ class compilation_knobs(base_knobs):
     allow_non_constexpr_globals: env_bool = env_bool("TRITON_ALLOW_NON_CONSTEXPR_GLOBALS")
     enable_experimental_consan: env_bool = env_bool("TRITON_ENABLE_EXPERIMENTAL_CONSAN")
     listener: Union[CompilationListener, None] = None
+    pass_listener: Union[PassListener, None] = None
 
 
 class autotuning_knobs(base_knobs):
