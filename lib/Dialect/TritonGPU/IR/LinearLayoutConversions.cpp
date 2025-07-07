@@ -629,6 +629,98 @@ LinearLayout chooseDotDsReadB64TrLayout(DotOperandEncodingAttr dotMfmaLayout,
   return combineCtaCgaWithShape(ctaLayout, mfmaLayout.getCTALayout(), shape);
 }
 
+LinearLayout chooseDotDsReadB64Tr4Layout(DotOperandEncodingAttr dotMfmaLayout,
+                                         ArrayRef<int64_t> shape) {
+  auto mfmaLayout = llvm::cast<AMDMfmaEncodingAttr>(dotMfmaLayout.getParent());
+  auto mDim = mfmaLayout.getMDim();
+  assert(mDim == 16 || mDim == 32);
+
+  // When doing ds_read_tr4 we actually write the LL as if it were on i8
+  // elements this is becasue LL needs to be described for the i8 tensor
+  // elements.
+  uint32_t elemBitWidth = 8;
+
+  auto rank = shape.size();
+  bool hasBatchDim = rank == 3;
+  const int elemByteWidth = elemBitWidth / 8;
+  auto kDim = dotMfmaLayout.getOpIdx() == 0 ? rank - 1 : rank - 2;
+
+  int32_t kSize = shape[kDim];
+  auto warpsPerCTA = mfmaLayout.getWarpsPerCTA();
+
+  MLIRContext *ctx = dotMfmaLayout.getContext();
+  SmallVector<StringAttr> outDimNames = standardOutDimNames(ctx, rank);
+
+  StringAttr kRegister = S("register");
+  StringAttr kLane = S("lane");
+  StringAttr kWarp = S("warp");
+
+  // register order
+  // operand A: [1, 0] / [2, 1, 0]
+  // operand B: [0, 1] / [1, 2, 0]
+  // Regular dot mfma order for both cases is [k, nonk]/[k, nonk, batch]
+  // For LDS transpose layout swap order to [nonk, k]/[nonk, k, batch]
+  SmallVector<unsigned> order =
+      getOrderForDotOperand(dotMfmaLayout.getOpIdx(), rank, /*kContig*/ false);
+
+  std::vector<std::vector<int32_t>> registerBase;
+  std::vector<std::vector<int32_t>> laneBase;
+
+  // ds_read_b64_tr4 operates on FP4 values swapping the packing of them. Look
+  // at i8 values for the ownership of register/lane since it's the data type of
+  // the tensor. Register dimension: what i8 in the tile are held by thread 0?
+  // Lane dimension: what i8 in the tile are held in register 0 of each thread?
+  registerBase.push_back({1, 0});
+  registerBase.push_back({2, 0});
+  registerBase.push_back({4, 0});
+  registerBase.push_back({0, 16});
+
+  // If more than one tile needs to be loaded, populate registerBase
+  // dimension for the other tiles
+  const bool isMfma32 = (mDim == 32);
+  const int kTileSize = isMfma32 ? 64 : 128;
+  for (int reg = kTileSize; reg < kSize; reg *= 2) {
+    registerBase.push_back({0, reg});
+  }
+
+  // When mDim == 16 we have 16x128 mfma, otherwise it's 16x64
+  // The LL for the two is different
+  laneBase.push_back({0, 1});
+  laneBase.push_back({0, 2});
+  laneBase.push_back({0, 4});
+  laneBase.push_back({0, 8});
+  if (mDim == 16) {
+    laneBase.push_back({0, 32});
+    laneBase.push_back({0, 64});
+  } else {
+    laneBase.push_back({8, 0});
+    laneBase.push_back({0, 32});
+  }
+
+  // Base vectors above are defined in a fixed order [non-k-dim, k-dim].
+  // To assign them to actual matrix dimensions we associate with register
+  // `order` which is also [nonk, k] given we set kContig to false.
+  LinearLayout tileLayout({{kRegister, registerBase}, {kLane, laneBase}},
+                          {outDimNames[order[0]], outDimNames[order[1]]});
+  if (hasBatchDim) {
+    assert(order[2] == 0);
+    // Extend the base vector with one value to accommodate for the batch
+    // dimension, which appears at the last.
+    tileLayout *= LinearLayout::identity1D(1, kRegister, outDimNames[order[2]]);
+    tileLayout *= LinearLayout::identity1D(1, kLane, outDimNames[order[2]]);
+  }
+
+  // warp order
+  // common for both operand A and B: [0, 1] / [0, 1, 2]
+  // in both cases it is [M dim, N dim]/[batch, M dim, N dim]
+  auto warpOrder = getDefaultMmaOrder(mfmaLayout);
+  LinearLayout warpLayout = identityStandardND(kWarp, warpsPerCTA, warpOrder);
+
+  LinearLayout ctaLayout = tileLayout.transposeOuts(outDimNames) *
+                           warpLayout.transposeOuts(outDimNames);
+  return combineCtaCgaWithShape(ctaLayout, mfmaLayout.getCTALayout(), shape);
+}
+
 LinearLayout mfmaDotToLinearLayout(DotOperandEncodingAttr dotMfmaLayout,
                                    ArrayRef<int64_t> shape) {
   auto mfmaLayout = llvm::cast<AMDMfmaEncodingAttr>(dotMfmaLayout.getParent());
@@ -1411,6 +1503,8 @@ LinearLayout chooseLdMatrixLayout(Attribute enc, ArrayRef<int64_t> shape,
 LinearLayout chooseDsReadB64TrLayout(Attribute enc, ArrayRef<int64_t> shape,
                                      int32_t elemBitWidth) {
   auto dot = cast<DotOperandEncodingAttr>(enc);
+  if (elemBitWidth == 4)
+    return chooseDotDsReadB64Tr4Layout(dot, shape);
   return chooseDotDsReadB64TrLayout(dot, shape, elemBitWidth);
 }
 

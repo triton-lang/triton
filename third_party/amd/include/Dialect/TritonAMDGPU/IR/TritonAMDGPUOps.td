@@ -32,6 +32,7 @@ include "triton/Dialect/Triton/IR/TritonAttrDefs.td"
 include "triton/Dialect/Triton/IR/TritonInterfaces.td"
 include "triton/Dialect/Triton/IR/TritonOpInterfaces.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUTypes.td"
+include "triton/Dialect/TritonGPU/IR/TritonGPUAttrDefs.td"
 
 include "mlir/IR/EnumAttr.td"
 include "mlir/Dialect/LLVMIR/LLVMOpBase.td"
@@ -541,6 +542,33 @@ def InThreadTransposeOp : TT_AMDGPU_Op<"in_thread_transpose", [Pure]> {
     static mlir::triton::LinearLayout deduceOutputLayout(mlir::ArrayRef<int64_t> shape,
                                  mlir::triton::gpu::BlockedEncodingAttr srcEncoding);
   }];
+}
+
+//===----------------------------------------------------------------------===//
+// LocalLoadPackedTransposedOp
+//===----------------------------------------------------------------------===//
+
+def LocalLoadPackedTransposedOp : TT_AMDGPU_Op<"local_load_packed_tranposed">{
+    let summary = "Load a transposed packed tensor from shared memory into a distributed tensor";
+    let description = [{
+      Load a transposed packed tensor from shared memory into a distributed tensor.
+      Requires a M/N packed and M/N contiguous tensor in shared memory and will yield a K packed K contiguous tensor in registers.
+    }];
+  let arguments = (ins
+    Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$src,
+    Optional<TTG_AsyncToken>:$token
+  );
+  let results = (outs TT_Tensor:$result);
+
+  let builders = [
+      OpBuilder<(ins "Type":$retType, "Value":$src),
+      [{
+      build($_builder, $_state, retType, src, /*token=*/static_cast<mlir::Value>(nullptr));
+      }]>];
+
+  // Use qualified() otherwise "!ttg.memdesc<X>" is printed as "<X>".
+  let assemblyFormat = [{$src (`token` $token^)? attr-dict `:` qualified(type($src)) `->` type($result)}];
+  let hasVerifier = 1;
 }
 
 #endif

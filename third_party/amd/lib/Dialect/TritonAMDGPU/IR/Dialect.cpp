@@ -447,6 +447,32 @@ LogicalResult ConcatOp::verify() {
   return success();
 }
 
+LogicalResult LocalLoadPackedTransposedOp::verify() {
+  auto srcTy = getSrc().getType();
+  auto dstTy = getType();
+  auto srcShape = srcTy.getShape();
+  auto dstShape = dstTy.getShape();
+
+  auto dotEnc = cast<DotOperandEncodingAttr>(dstTy.getEncoding());
+  auto sharedEnc =
+      cast<triton::gpu::SwizzledSharedEncodingAttr>(srcTy.getEncoding());
+  auto order = sharedEnc.getOrder();
+  bool isA = dotEnc.getOpIdx() == 0;
+
+  bool matchingOrderA = order.equals({0, 1});
+  bool matchingOrderB = order.equals({1, 0});
+  if ((isA && !matchingOrderA) || (!isA && !matchingOrderB))
+    return emitOpError("Order of dimensions don't match expected");
+
+  bool aDimMatch = srcShape.equals({dstShape[0] / 2, dstShape[1] * 2});
+  bool bDimMatch = srcShape.equals({dstShape[0] * 2, dstShape[1] / 2});
+  if ((isA && !aDimMatch) || (!isA && !bDimMatch))
+    return emitOpError(
+        "Input and output dimensions don't match after packing changes");
+
+  return success();
+}
+
 // This pattern removes a concatOp if it has a single input operand.
 // This scenario can potentially happen as a result of ops refinement.
 mlir::LogicalResult foldConcatOpFromSingleSource(amdgpu::ConcatOp op,
