@@ -1228,13 +1228,70 @@ ConverterT Fp8E4M3FN_to_Bf16(AMD::ISAFamily isaFamily) {
 
 // fp8e4m3fnuz to bf16
 static SmallVector<Value>
-Fp8E4M3FNUZ_to_Bf16(Location loc, ConversionPatternRewriter &rewriter,
-                    const SmallVector<Value> &v) {
+Fp8E4M3FNUZ_to_Bf16_HW(Location loc, ConversionPatternRewriter &rewriter,
+                       const SmallVector<Value> &v) {
   assert(v.size() == 2);
   auto ret = cvtPkF8ToFp32<ROCDL::CvtPkF32Fp8Op>(loc, rewriter, v[0], v[1]);
   ret[0] = convertFp32ToBf16(loc, rewriter, ret[0], RoundingMode::RTZ);
   ret[1] = convertFp32ToBf16(loc, rewriter, ret[1], RoundingMode::RTZ);
   return ret;
+}
+
+static SmallVector<Value>
+Fp8E4M3FNUZ_to_Bf16_SW(Location loc, ConversionPatternRewriter &rewriter,
+                       const SmallVector<Value> &v) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  auto fp8x4VecTy = vec_ty(i8_ty, 4);
+  // Create a packed representation of both fp8 values:
+  // Each i halfword (16bit) has the upper byte set to v[i] and the lower byte
+  // to 0 byte3             byte0 | v[1] | 0 | v[0] | 0 |
+  Value a0 = b.undef(fp8x4VecTy);
+  a0 = b.insert_element(fp8x4VecTy, a0, b.int_val(8, 0), b.i32_val(0));
+  a0 = b.insert_element(fp8x4VecTy, a0, v[0], b.i32_val(1));
+  a0 = b.insert_element(fp8x4VecTy, a0, b.int_val(8, 0), b.i32_val(2));
+  a0 = b.insert_element(fp8x4VecTy, a0, v[1], b.i32_val(3));
+  a0 = b.bitcast(a0, i32_ty);
+
+  // Clear sign bits and align the 3bit mantissa fields of each halfword with
+  // the mantissa position in bfloat16
+  constexpr uint32_t signMask = 1U << (16 - 1U);
+  constexpr uint32_t absMask = signMask - 1;
+  constexpr uint32_t absHalfwordMask = absMask | (absMask << 16U);
+  constexpr uint32_t dstMantBitWidth = 7;
+  constexpr uint32_t srcMantBitWidth = 3;
+
+  Value b0 = b.and_(i32_ty, a0, b.i32_val(absHalfwordMask));
+  b0 = b.lshr(i32_ty, b0, b.i32_val(dstMantBitWidth - srcMantBitWidth));
+
+  // Split the 2 halfwords into separate 32bit words in order to convert them
+  Value c0 = b.shl(i32_ty, b0, b.i32_val(16));
+  Value c1 = b.and_(i32_ty, b0, b.i32_val(0xFFFF0000));
+  c0 = b.bitcast(c0, f32_ty);
+  c1 = b.bitcast(c1, f32_ty);
+
+  // Adjust exponent bias (expBias = dstExpBias - srcExpBias = 127 - 8 = 119)
+  Value d0 = b.fmul(f32_ty, c0, b.f32_val(0x1p+119));
+  Value d1 = b.fmul(f32_ty, c1, b.f32_val(0x1p+119));
+  d0 = b.bitcast(d0, i32_ty);
+  d1 = b.bitcast(d1, i32_ty);
+
+  // Add the signs and place the halfwords in the proper place in order to pack
+  // them
+  constexpr uint32_t signHalfwordMask = signMask | (signMask << 16U);
+  Value out0 = b.or_(i32_ty, b.lshr(i32_ty, d0, b.i32_val(16)), d1);
+  Value sign0 = b.and_(i32_ty, a0, b.i32_val(signHalfwordMask));
+  out0 = b.or_(i32_ty, out0, sign0);
+
+  // Unpack the 2 bfloat16 values and return them
+  auto bf16x2VecTy = vec_ty(bf16_ty, 2);
+  out0 = b.bitcast(out0, bf16x2VecTy);
+  return {b.extract_element(bf16_ty, out0, b.i32_val(0)),
+          b.extract_element(bf16_ty, out0, b.i32_val(1))};
+}
+
+static ConverterT Fp8E4M3FNUZ_to_Bf16(AMD::ISAFamily isaFamily) {
+  return isaFamily == AMD::ISAFamily::CDNA4 ? Fp8E4M3FNUZ_to_Bf16_SW
+                                            : Fp8E4M3FNUZ_to_Bf16_HW;
 }
 
 // bf16 to fp8e4m3fnuz
@@ -1678,7 +1735,8 @@ struct FpToFpOpConversion
             {{F8E5M2FNUZTyID, BF16TyID, undefRounding}, Fp8E5M2FNUZ_to_Bf16},
             {{F8E4M3FNTyID, BF16TyID, undefRounding},
              Fp8E4M3FN_to_Bf16(isaFamily)},
-            {{F8E4M3FNUZTyID, BF16TyID, undefRounding}, Fp8E4M3FNUZ_to_Bf16},
+            {{F8E4M3FNUZTyID, BF16TyID, undefRounding},
+             Fp8E4M3FNUZ_to_Bf16(isaFamily)},
             // BF16 -> F8
             {{BF16TyID, F8E5M2TyID, RoundingMode::RTNE},
              Bf16_to_Fp8E5M2(isaFamily)},
