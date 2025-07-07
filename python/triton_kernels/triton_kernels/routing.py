@@ -94,7 +94,7 @@ class SortTokens(torch.autograd.Function):
 
     @staticmethod
     def forward(ctx, expt_scal, expt_indx, bitmatrix):
-        HIST_BLOCK_M = 64
+        HIST_BLOCK_M = 32
         INDX_OFFS_BLOCK_M = 512
         MEMSET_BLOCK = 1024
         cdiv = triton.cdiv

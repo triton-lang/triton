@@ -59,6 +59,11 @@ def ptx_get_version(cuda_version) -> int:
         return 70 + minor
     if major == 10:
         return 63 + minor
+
+    if major >= 13:
+        base_ptx = 90
+        return base_ptx + (major - 13) * 10 + minor
+
     raise RuntimeError("Triton only support CUDA 10.0 or higher, but got CUDA version: " + cuda_version)
 
 

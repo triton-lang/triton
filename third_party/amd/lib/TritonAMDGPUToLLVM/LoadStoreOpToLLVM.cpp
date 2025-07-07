@@ -435,8 +435,6 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
     Value resultStruct = packLLElements(loc, getTypeConverter(), loadedVals,
                                         rewriter, llvmResultStructTy);
 
-    setNumGeneratedGlobalLoads(op, numVecs, vecTy);
-
     rewriter.replaceOp(op, {resultStruct});
     return success();
   }
@@ -522,9 +520,6 @@ struct BufferLoadOpConversion
     Type llvmResultStructTy = getTypeConverter()->convertType(valueTy);
     Value resultStruct = packLLElements(loc, getTypeConverter(), loadedVals,
                                         rewriter, llvmResultStructTy);
-
-    const int numVecs = numElems / vec;
-    setNumGeneratedGlobalLoads(op, numVecs, vecTy);
 
     rewriter.replaceOp(op, {resultStruct});
     return success();

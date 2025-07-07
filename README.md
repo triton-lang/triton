@@ -50,7 +50,7 @@ pip install -e .
 # Building with a custom LLVM
 
 Triton uses LLVM to generate code for GPUs and CPUs.  Normally, the Triton build
-downloads a prebuilt LLVM, but you can also build LLVM from source and use that.
+downloads a prebuilt LLVM, but you can also build and use LLVM from source.
 
 LLVM does not have a stable API, so the Triton build will not work at an
 arbitrary LLVM version.
@@ -68,7 +68,7 @@ Alternatively, follow these steps to build LLVM from source manually.
 
 1. Find the version of LLVM that Triton builds against.  Check
 `cmake/llvm-hash.txt` to see the current version. For example, if it says:
-       49af6502c6dcb4a7f7520178bd14df396f78240c
+       49af6502c6dcb4a7f7520178bd14df396f78240c.
 
    This means that the version of Triton you have builds against
    [LLVM](https://github.com/llvm/llvm-project) 49af6502.
@@ -76,7 +76,7 @@ Alternatively, follow these steps to build LLVM from source manually.
 2. `git checkout` LLVM at this revision.  Optionally, make additional
    modifications to LLVM.
 
-3. [Build LLVM](https://llvm.org/docs/CMake.html).  For example, you might run
+3. [Build LLVM](https://llvm.org/docs/CMake.html).  For example, you might run:
 
        $ cd $HOME/llvm-project  # your clone of LLVM.
        $ mkdir build
@@ -86,7 +86,7 @@ Alternatively, follow these steps to build LLVM from source manually.
 
 4. Grab a snack, this will take a while.
 
-5. Build Triton as above, but set the following environment variables.
+5. Build Triton as above, but set the following environment variables:
 
        # Modify as appropriate to point to your LLVM build.
        $ export LLVM_BUILD_DIR=$HOME/llvm-project/build
@@ -125,10 +125,10 @@ Alternatively, follow these steps to build LLVM from source manually.
 
   If IntelliSense does not work, you can try the following steps:
 
-    - Do a local build. Run command `pip install -e .`
+    - Do a local build. Run command `pip install -e .`.
     - Get the full path to the `compile_commands.json` file produced by the build:
       `find ./build -name 'compile_commands.json' | xargs readlink -f`.
-      You might get a full path similar to `/Users/{username}/triton/build/cmake.macosx-11.1-arm64-cpython-3.12/compile_commands.json`
+      You might get a full path similar to `/Users/{username}/triton/build/cmake.macosx-11.1-arm64-cpython-3.12/compile_commands.json`.
     - In VSCode, install the
       [C/C++
       extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode.cpptools),
@@ -140,7 +140,7 @@ Alternatively, follow these steps to build LLVM from source manually.
 # Running tests
 
 There currently isn't a turnkey way to run all the Triton tests, but you can
-follow the following recipe.
+follow the following recipe:
 
 ```shell
 # One-time setup.  Note this will reinstall local Triton because torch
@@ -164,7 +164,7 @@ See [`python/triton/knobs.py`](python/triton/knobs.py) for the full list of conf
 
 - `MLIR_ENABLE_DUMP=1` dumps the IR before every MLIR pass Triton runs, for all
    kernels. Use `MLIR_ENABLE_DUMP=kernelName` to dump for a specific kernel only.
-  - Triton cache can interfere with the dump. In cases where `MLIR_ENABLE_DUMP=1` does not work, try cleaning your triton cache: `rm -r ~/.triton/cache/*`
+  - Triton cache can interfere with the dump. In cases where `MLIR_ENABLE_DUMP=1` does not work, try cleaning your triton cache: `rm -r ~/.triton/cache/*`.
 - `MLIR_DUMP_PATH` specifies where `MLIR_ENABLE_DUMP` will dump to. If unset will dump to stderr.
 - `LLVM_IR_ENABLE_DUMP=1` dumps the IR before every pass run over the LLVM IR.
 - `TRITON_REPRODUCER_PATH=<reproducer_path>` will generate an MLIR reproducer file
@@ -175,11 +175,11 @@ See [`python/triton/knobs.py`](python/triton/knobs.py) for the full list of conf
 - `TRITON_ENABLE_LLVM_DEBUG=1` passes `-debug` to LLVM, printing a lot of
   debugging information to stdout.  If this is too noisy, run with just
   `TRITON_LLVM_DEBUG_ONLY` instead to limit the output.
-
-  An alternative way to reduce output noisiness is running with
+  - An alternative way to reduce output noisiness is running with
   `LLVM_IR_ENABLE_DUMP=1`, extract the IR before the LLVM pass of interest, and
   then run LLVM's `opt` standalone, perhaps passing `-debug-only=foo` on the
   command line.
+
 - `TRITON_LLVM_DEBUG_ONLY=<comma-separated>` is the equivalent of LLVM's
   `-debug-only` command-line option. This limits the LLVM debug output to
   specific pass or component names (which are specified using `#define
@@ -191,8 +191,7 @@ See [`python/triton/knobs.py`](python/triton/knobs.py) for the full list of conf
 - `TRITON_ENABLE_ASAN=1` invokes the LLVM address sanitizer for
   memory leak and out of bounds access detection. Currently only supported on the AMD
   backend. This must be run using the ASAN libraries documented [here](https://rocm.docs.amd.com/projects/llvm-project/en/latest/conceptual/using-gpu-sanitizer.html).
-
-  When enabling the address sanitizer it is recommended to disable various memory caching strategies
+  - When enabling the address sanitizer it is recommended to disable various memory caching strategies
   both within the ROCm stack and PyTorch. This will give the address sanitizer the best chance at finding the
   memory fault where it originates. See this [test](https://github.com/triton-lang/triton/blob/main/third_party/amd/python/test/test_address_sanitizer.py) for more details.
 
@@ -227,9 +226,10 @@ See [`python/triton/knobs.py`](python/triton/knobs.py) for the full list of conf
 - `TRITON_OVERRIDE_DIR` specifies the directory from which to load the IR/ptx/amdgcn files when `TRITON_KERNEL_OVERRIDE` is set to 1.
 - `TRITON_F32_DEFAULT` sets the default input precision of `tl.dot` when using 32-bit floats, which can be either `ieee`, `tf32`, or `tf32x3`.
 - `TRITON_FRONT_END_DEBUGGING=1` disables exception wrapping when an error occurs in the compiler frontend, allowing the full stack trace to be seen.
-- `TRITON_DISABLE_LINE_INFO=1` removes all line information from the module
+- `TRITON_DISABLE_LINE_INFO=1` removes all line information from the module.
 
-N.B. Some of these environment variables don't have a knob in `knobs.py`-- those are only relevant to the C++ layer(s), hence they don't exist in the python layer.
+> [!NOTE]
+> Some of these environment variables don't have a knob in `knobs.py`-- those are only relevant to the C++ layer(s), hence they don't exist in the python layer.
 
 **Kernel Override Steps**
 
@@ -274,7 +274,7 @@ Supported Hardware:
 # Development Container (Dev Container)
 
 **Dev Containers** for the Triton project are available from
-the [triton-dev-containers repository](https://github.com/redhat-et/triton-dev-containers)
+the [triton-dev-containers repository](https://github.com/redhat-et/triton-dev-containers).
 
 ### Key Benefits:
 - **Consistency**: All developers can work with the same development
@@ -286,5 +286,5 @@ the [triton-dev-containers repository](https://github.com/redhat-et/triton-dev-c
 
 ### How to Use the Dev Container:
 
-For detailed instructions on how to use the dev containers please see
-the [dev container user guide](https://github.com/redhat-et/triton-dev-containers/blob/main/.devcontainer/devcontainer.md)
+For detailed instructions on how to use the dev containers, please see
+the [dev container user guide](https://github.com/redhat-et/triton-dev-containers/blob/main/.devcontainer/devcontainer.md).
