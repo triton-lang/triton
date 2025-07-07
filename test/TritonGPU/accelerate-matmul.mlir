@@ -566,3 +566,36 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [1, 32], warpsPerCTA = [8, 1], order = [1, 0]}>
+#blocked2 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 4], order = [1, 0]}>
+#blocked3 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 2], order = [0, 1]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: identify_load_then_trans
+  tt.func public @identify_load_then_trans(
+    %arg0: !tt.tensordesc<tensor<128x128xf16>>,
+    %arg1: !tt.tensordesc<tensor<128x128xf16>>,
+    %arg2: i32,
+    %arg3: i32,
+    %arg4: i32,
+    %arg5: tensor<128x128xf32, #blocked>
+  ) -> tensor<128x128xf32, #blocked> {
+    // CHECK:   %[[DESC0:.*]] = tt.descriptor_load %arg0
+    // CHECK:   %[[DESC1:.*]] = tt.descriptor_load %arg1
+    %13 = tt.descriptor_load %arg0[%arg4, %arg2] : !tt.tensordesc<tensor<128x128xf16>> -> tensor<128x128xf16, #blocked2>
+    %14 = tt.descriptor_load %arg1[%arg3, %arg4] : !tt.tensordesc<tensor<128x128xf16>> -> tensor<128x128xf16, #blocked2>
+    // CHECK:   %[[TRANS0:.*]] = tt.trans %[[DESC0]]
+    // CHECK:   %[[ALLOC0:.*]] = ttg.local_alloc %[[TRANS0]]
+    %15 = tt.trans %13 {order = array<i32: 1, 0>} : tensor<128x128xf16, #blocked2> -> tensor<128x128xf16, #blocked3>
+    // CHECK:   %[[TRANS1:.*]] = tt.trans %[[DESC1]]
+    // CHECK:   %[[ALLOC1:.*]] = ttg.local_alloc %[[TRANS1]]
+    %16 = tt.trans %14 {order = array<i32: 1, 0>} : tensor<128x128xf16, #blocked2> -> tensor<128x128xf16, #blocked3>
+    %17 = ttg.convert_layout %15 : tensor<128x128xf16, #blocked3> -> tensor<128x128xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>
+    %18 = ttg.convert_layout %16 : tensor<128x128xf16, #blocked3> -> tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>
+    // CHECK:   ttng.warp_group_dot %[[ALLOC0]], %[[ALLOC1]]
+    %19 = tt.dot %17, %18, %arg5, inputPrecision = tf32 : tensor<128x128xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<128x128xf32, #blocked>
+    tt.return %19 : tensor<128x128xf32, #blocked>
+  }
+}

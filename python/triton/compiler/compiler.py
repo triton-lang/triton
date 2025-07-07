@@ -7,14 +7,13 @@ from ..backends.compiler import Language
 from ..backends.compiler import BaseBackend, GPUTarget
 from .. import __version__, knobs
 from ..runtime.autotuner import OutOfResources
-from ..runtime.cache import get_cache_manager, get_dump_manager, get_override_manager
+from ..runtime.cache import get_cache_manager, get_dump_manager, get_override_manager, get_cache_key
 from ..runtime.driver import driver
 from ..tools.disasm import get_sass
 from pathlib import Path
 import re
 import functools
 import os
-import sysconfig
 import time
 
 # - ^\s*tt\.func\s+ : match the start of the string, any leading whitespace, the keyword func,
@@ -130,42 +129,6 @@ class IRSource:
 
 
 @functools.lru_cache()
-def triton_key():
-    import pkgutil
-    TRITON_PATH = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    contents = []
-    # frontend
-    with open(__file__, "rb") as f:
-        contents += [hashlib.sha256(f.read()).hexdigest()]
-    # compiler
-    path_prefixes = [
-        (os.path.join(TRITON_PATH, "compiler"), "triton.compiler."),
-        (os.path.join(TRITON_PATH, "backends"), "triton.backends."),
-    ]
-    for path, prefix in path_prefixes:
-        for lib in pkgutil.walk_packages([path], prefix=prefix):
-            with open(lib.module_finder.find_spec(lib.name).origin, "rb") as f:
-                contents += [hashlib.sha256(f.read()).hexdigest()]
-
-    # backend
-    libtriton_hash = hashlib.sha256()
-    ext = sysconfig.get_config_var("EXT_SUFFIX").split(".")[-1]
-    with open(os.path.join(TRITON_PATH, "_C", f"libtriton.{ext}"), "rb") as f:
-        while True:
-            chunk = f.read(1024**2)
-            if not chunk:
-                break
-            libtriton_hash.update(chunk)
-    contents.append(libtriton_hash.hexdigest())
-    # language
-    language_path = os.path.join(TRITON_PATH, 'language')
-    for lib in pkgutil.walk_packages([language_path], prefix="triton.language."):
-        with open(lib.module_finder.find_spec(lib.name).origin, "rb") as f:
-            contents += [hashlib.sha256(f.read()).hexdigest()]
-    return f'{__version__}' + '-'.join(contents)
-
-
-@functools.lru_cache()
 def max_shared_mem(device):
     return driver.active.utils.get_device_properties(device)["max_shared_mem"]
 
@@ -258,7 +221,7 @@ class CompileTimer:
         )
 
 
-def compile(src, target=None, options=None):
+def compile(src, target=None, options=None, _env_vars=None):
     compilation_listener = knobs.compilation.listener
     if compilation_listener:
         timer = CompileTimer()
@@ -277,8 +240,8 @@ def compile(src, target=None, options=None):
     extra_options = src.parse_options()
     options = backend.parse_options(dict(options or dict(), **extra_options))
     # create cache manager
-    env_vars = get_cache_invalidating_env_vars()
-    key = f"{triton_key()}-{src.hash()}-{backend.hash()}-{options.hash()}-{str(sorted(env_vars.items()))}"
+    env_vars = get_cache_invalidating_env_vars() if _env_vars is None else _env_vars
+    key = get_cache_key(src, backend, options, env_vars=env_vars)
     hash = hashlib.sha256(key.encode("utf-8")).hexdigest()
     fn_cache_manager = get_cache_manager(hash)
     # For dumping/overriding only hash the source as we want it to be independent of triton

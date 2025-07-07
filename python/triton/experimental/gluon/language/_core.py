@@ -191,6 +191,9 @@ class shared_memory_descriptor_type(base_type):
 
 
 class shared_memory_descriptor(base_value):
+    """
+    Represents a handle to a shared memory allocation in Gluon IR.
+    """
 
     def __init__(self, handle, element_ty, shape, layout, alloc_shape):
         self.handle = handle
@@ -220,15 +223,41 @@ class shared_memory_descriptor(base_value):
 
     @builtin
     def load(self, layout, _semantic: GluonSemantic) -> tensor:
+        """
+        Load a tensor from shared memory.
+
+        Args:
+            layout (DistributedLayout): The destination layout of the tensor.
+
+        Returns:
+            tensor: A Gluon tensor containing the loaded data.
+        """
         layout = _unwrap_if_constexpr(layout)
         return _semantic.shared_load(self, layout)
 
     @builtin
     def store(self, value, _semantic: GluonSemantic) -> None:
+        """
+        Store a tensor into shared memory.
+
+        Args:
+            value (tensor): The tensor whose contents to store.
+        """
         return _semantic.shared_store(self, value)
 
     @builtin
     def slice(self, start, length, dim=0, _semantic: GluonSemantic = None) -> shared_memory_descriptor:
+        """
+        Create a subview of shared memory by slicing along a given dimension.
+
+        Args:
+            start (int): The starting index of the slice.
+            length (int): The length of the slice.
+            dim (int): The dimension to slice (default: 0).
+
+        Returns:
+            shared_memory_descriptor: Descriptor for the sliced subview.
+        """
         start = _unwrap_if_constexpr(start)
         length = _unwrap_if_constexpr(length)
         dim = _unwrap_if_constexpr(dim)
@@ -236,16 +265,44 @@ class shared_memory_descriptor(base_value):
 
     @builtin
     def index(self, index, _semantic: GluonSemantic = None) -> shared_memory_descriptor:
+        """
+        Create a subview of shared memory by indexing along the first dimension.
+
+        Args:
+            index (int): The index at which to take the subview.
+
+        Returns:
+            shared_memory_descriptor: Descriptor for the indexed subview.
+        """
         index = _unwrap_if_constexpr(index)
         return _semantic.memdesc_index(self, index)
 
     @builtin
     def permute(self, order, _semantic: GluonSemantic) -> shared_memory_descriptor:
+        """
+        Permute the dimensions of the shared memory descriptor.
+
+        Args:
+            order (List[int]): The new ordering of dimensions.
+
+        Returns:
+            shared_memory_descriptor: Descriptor with permuted dimensions.
+        """
         order = [_unwrap_if_constexpr(o) for o in order]
         return _semantic.memdesc_trans(self, order)
 
     @builtin
     def reshape(self, shape, layout, _semantic: GluonSemantic) -> shared_memory_descriptor:
+        """
+        Reshape the shared memory descriptor to a new shape and layout.
+
+        Args:
+            shape (List[int]): The target shape.
+            layout (SharedLayout): The new layout for the descriptor.
+
+        Returns:
+            shared_memory_descriptor: Descriptor with the new shape and layout.
+        """
         shape = [_unwrap_if_constexpr(s) for s in shape]
         layout = _unwrap_if_constexpr(layout)
 
@@ -253,6 +310,17 @@ class shared_memory_descriptor(base_value):
 
     @builtin
     def _reinterpret(self, dtype, shape, layout, _semantic: GluonSemantic = None) -> shared_memory_descriptor:
+        """
+        Reinterpret the shared memory descriptor as a different dtype, shape, or layout.
+
+        Args:
+            dtype (dtype): The new data type.
+            shape (List[int]): The new shape.
+            layout (SharedLayout): The new layout.
+
+        Returns:
+            shared_memory_descriptor: Descriptor with updated type and layout.
+        """
         dtype = _unwrap_if_constexpr(dtype)
         shape = [_unwrap_if_constexpr(s) for s in shape]
         layout = _unwrap_if_constexpr(layout)
@@ -261,6 +329,9 @@ class shared_memory_descriptor(base_value):
 
     @builtin
     def _keep_alive(self, _semantic: GluonSemantic = None) -> None:
+        """
+        Dummy use to keep the shared memory descriptor alive.
+        """
         return _semantic.shared_dealloc(self)
 
 
@@ -271,6 +342,17 @@ for name in _IMPORT_FROM_TRITON:
 
 @builtin
 def arange(start, end, layout, _semantic=None):
+    """
+    Generate a sequence tensor with values in [start, end) using a specified layout.
+
+    Args:
+        start (int): Inclusive start of the sequence.
+        end (int): Exclusive end of the sequence.
+        layout (DistributedLayout): The layout of the output tensor.
+
+    Returns:
+        tensor: A 1D tensor containing sequential values.
+    """
     start = _unwrap_if_constexpr(start)
     end = _unwrap_if_constexpr(end)
     layout = _unwrap_if_constexpr(layout)
@@ -279,12 +361,34 @@ def arange(start, end, layout, _semantic=None):
 
 @builtin
 def convert_layout(value, layout, _semantic=None):
+    """
+    Convert a tensor to a different distributed layout.
+
+    Args:
+        value (tensor): The input tensor.
+        layout (DistributedLayout): The target layout.
+
+    Returns:
+        tensor: The tensor with the new layout.
+    """
     layout = _unwrap_if_constexpr(layout)
     return _semantic.convert_layout(value, layout)
 
 
 @builtin
 def full(shape, value, dtype, layout, _semantic=None):
+    """
+    Create a tensor filled with a scalar value, with specified shape, dtype, and layout.
+
+    Args:
+        shape (Sequence[int]): The shape of the tensor.
+        value (int or float): The fill value.
+        dtype (dtype): The data type for the tensor.
+        layout (DistributedLayout): The layout of the output tensor.
+
+    Returns:
+        tensor: A tensor where every element equals value.
+    """
     shape = _unwrap_shape(shape)
     value = _unwrap_if_constexpr(value)
     dtype = _unwrap_if_constexpr(dtype)
@@ -294,6 +398,18 @@ def full(shape, value, dtype, layout, _semantic=None):
 
 @builtin
 def allocate_shared_memory(element_ty, shape, layout, value=None, _semantic=None):
+    """
+    Allocate shared memory for a tensor with the given element type, shape, and layout.
+
+    Args:
+        element_ty (dtype): The element data type.
+        shape (Sequence[int]): The dimensions of the shared memory.
+        layout (SharedLayout): The shared memory layout.
+        value (tensor, optional): Initial value to copy into shared memory.
+
+    Returns:
+        shared_memory_descriptor: Descriptor for the allocated memory.
+    """
     element_ty = _unwrap_if_constexpr(element_ty)
     shape = _unwrap_if_constexpr(shape)
     shape = [_unwrap_if_constexpr(s) for s in shape]
@@ -304,6 +420,20 @@ def allocate_shared_memory(element_ty, shape, layout, value=None, _semantic=None
 @builtin
 def warp_specialize(default_args, default_partition, worker_args, worker_partitions, worker_num_warps, worker_num_regs,
                     _semantic=None, _generator=None):
+    """
+    Create a warp-specialized execution region, partitioning work across warps.
+
+    Args:
+        default_args (List[Any]): Arguments for the default region.
+        default_partition (callable): Function to build the default execution region.
+        worker_args (List[Any]): Arguments for each warp partition.
+        worker_partitions (List[callable]): Functions for each warp partition.
+        worker_num_warps (List[int]): Number of warps per partition.
+        worker_num_regs (List[int]): Number of registers per partition.
+
+    Returns:
+        Tuple[Any, ...]: Results from the default region.
+    """
     worker_num_warps = [_unwrap_if_constexpr(w) for w in worker_num_warps]
     worker_num_regs = [_unwrap_if_constexpr(r) for r in worker_num_regs]
     return _semantic.warp_specialize(default_args, default_partition, worker_args, worker_partitions, worker_num_warps,
@@ -312,4 +442,7 @@ def warp_specialize(default_args, default_partition, worker_args, worker_partiti
 
 @builtin
 def thread_barrier(_semantic=None):
+    """
+    Insert a barrier to synchronize threads within a CTA.
+    """
     return _semantic.debug_barrier()

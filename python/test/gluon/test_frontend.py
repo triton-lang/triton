@@ -447,6 +447,16 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 """)
 
 
+@filecheck_test
+@gluon.jit
+def test_tcgen05_commit():
+    # CHECK-LABEL: test_tcgen05_commit
+    barrier = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
+    # CHECK: [[BARRIER:%.*]] = ttg.local_alloc
+    # CHECK: ttng.tc_gen5_commit [[BARRIER]]
+    blackwell.tcgen05_commit(barrier)
+
+
 @gluon.jit
 def warpgroup_mma_kernel(nvmma_layout: ttgl.constexpr, acc_layout: ttgl.constexpr):
     a = ttgl.allocate_shared_memory(ttgl.float16, [128, 128], nvmma_layout)
@@ -475,6 +485,33 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %cst_0 = arith.constant dense<0.000000e+00> : tensor<128x128xf16, #mma> loc(#loc)
     %true = arith.constant true loc(#loc)
     %2 = ttng.warp_group_dot %0, %1, %cst_0, %true {inputPrecision = 0 : i32} : !ttg.memdesc<128x128xf16, #shared, #smem, mutable> * !ttg.memdesc<128x128xf16, #shared, #smem, mutable> -> tensor<128x128xf16, #mma> loc(#loc)
+    tt.return loc(#loc)
+  } loc(#loc)
+} loc(#loc)
+#loc = loc(unknown)
+""")
+
+
+@gluon.jit
+def warpgroup_mma_wait_kernel():
+    layout: ttgl.constexpr = ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1], instr_shape=[16, 32, 16])
+    acc = ttgl.full([128, 128], 0, dtype=ttgl.float16, layout=layout)
+    hopper.warpgroup_mma_wait(num_outstanding=1, deps=[acc])
+
+
+@pytest.mark.skipif(not is_hopper(), reason="Requires Hopper WGMMA")
+def test_warpgroup_mma_wait(fresh_knobs):
+    knobs.compilation.disable_line_info = True
+
+    h = warpgroup_mma_wait_kernel.warmup(grid=(1, ))
+    expecttest.assert_expected_inline(
+        anonymize_ir(h.asm["source"]), """\
+#mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 32, 16]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @warpgroup_mma_wait_kernel() attributes {noinline = false} {
+    %cst = arith.constant 0.000000e+00 : f16 loc(#loc)
+    %cst_0 = arith.constant dense<0.000000e+00> : tensor<128x128xf16, #mma> loc(#loc)
+    %0 = ttng.warp_group_dot_wait %cst_0 {pendings = 1 : i32} : tensor<128x128xf16, #mma> loc(#loc)
     tt.return loc(#loc)
   } loc(#loc)
 } loc(#loc)
