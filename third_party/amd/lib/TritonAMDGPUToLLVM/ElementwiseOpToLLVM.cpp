@@ -27,25 +27,6 @@ template <typename FPType> struct FPTypeInfo {
   FPTypeInfo(Location loc, ConversionPatternRewriter &rewriter,
              TritonLLVMOpBuilder &builder)
       : loc(loc), rewriter(rewriter), b(builder) {}
-  std::tuple<int, int, int> getFPTypeBasicInfo() {
-    if constexpr (std::is_same_v<FPType, Float32Type>) {
-      return std::make_tuple(8, 23, 127);
-    }
-    if constexpr (std::is_same_v<FPType, Float16Type>) {
-      return std::make_tuple(5, 10, 15);
-    }
-    if constexpr (std::is_same_v<FPType, BFloat16Type>) {
-      return std::make_tuple(8, 7, 127);
-    }
-    if constexpr (std::is_same_v<FPType, Float8E4M3FNType>) {
-      return std::make_tuple(4, 3, 7);
-    }
-    if constexpr (std::is_same_v<FPType, Float8E5M2Type>) {
-      return std::make_tuple(5, 2, 15);
-    }
-    return {};
-  }
-
   IntegerType getIntType() {
     if constexpr (std::is_same_v<FPType, Float32Type>) {
       return i32_ty;
@@ -57,69 +38,6 @@ template <typename FPType> struct FPTypeInfo {
     if constexpr (std::is_same_v<FPType, Float8E4M3FNType> ||
                   std::is_same_v<FPType, Float8E5M2Type>) {
       return i8_ty;
-    }
-    return nullptr;
-  }
-
-  Value getMaxPositive() {
-    if constexpr (std::is_same_v<FPType, Float32Type>) {
-      return toLLVMIntValue(0x7F7FFFFF);
-    }
-    if constexpr (std::is_same_v<FPType, Float16Type>) {
-      return toLLVMIntValue(0x7BFF);
-    }
-    if constexpr (std::is_same_v<FPType, BFloat16Type>) {
-      return toLLVMIntValue(0x7F7F);
-    }
-    if constexpr (std::is_same_v<FPType, Float8E4M3FNType>) {
-      return toLLVMIntValue(0x7E);
-    }
-    if constexpr (std::is_same_v<FPType, Float8E5M2Type>) {
-      return toLLVMIntValue(0x7B);
-    }
-    return nullptr;
-  }
-
-  Value getMinNormalNumForDstType(TypeID dstTyID) {
-    if constexpr (std::is_same_v<FPType, Float32Type>) {
-      // FP32 representation of 2^(-6)
-      if (dstTyID == TypeID::get<Float8E4M3FNType>())
-        return toLLVMIntValue(0x3c800000);
-      // FP32 representation of 2^(-14)
-      if (dstTyID == TypeID::get<Float8E5M2Type>())
-        return toLLVMIntValue(0x38800000);
-    }
-    if constexpr (std::is_same_v<FPType, Float16Type>) {
-      // FP16 representation of 2^(-6)
-      if (dstTyID == TypeID::get<Float8E4M3FNType>())
-        return toLLVMIntValue(0x2400);
-      if (dstTyID == TypeID::get<Float8E5M2Type>())
-        // FP16 representation of 2^(-14)
-        return toLLVMIntValue(0x0400);
-    }
-    return nullptr;
-  }
-
-  Value getMaxNormalNumForDstType(TypeID dstTyID) {
-    if constexpr (std::is_same_v<FPType, Float32Type>) {
-      // 0x43e7fffff is the largest possible normal
-      // number(including infinity) after rounding in FP8E4M3
-      if (dstTyID == TypeID::get<Float8E4M3FNType>())
-        return toLLVMIntValue(0x43e7ffff);
-      // 0x4767ffff is the largest possible normal
-      // number(including infinity) after rounding in FP8E5M2
-      if (dstTyID == TypeID::get<Float8E5M2Type>())
-        return toLLVMIntValue(0x4767ffff);
-    }
-    if constexpr (std::is_same_v<FPType, Float16Type>) {
-      // 0x5F7F == 0.10111.1101111111 is the largest possible normal
-      // number(including infinity) after rounding in FP8E4M3
-      if (dstTyID == TypeID::get<Float8E4M3FNType>())
-        return toLLVMIntValue(0x5F7F);
-      // 0x7B7F == 0.11110.1101111111 is the largest possible normal
-      // number(including infinity) after rounding in FP8E5M2
-      if (dstTyID == TypeID::get<Float8E5M2Type>())
-        return toLLVMIntValue(0x7B7F);
     }
     return nullptr;
   }
@@ -162,19 +80,6 @@ template <typename FPType> struct FPTypeInfo {
                   std::is_same_v<FPType, Float8E5M2Type>) {
       return b.i8_val(val);
     }
-    return nullptr;
-  }
-  Value toLLVMFloatValue(float val) {
-    if constexpr (std::is_same_v<FPType, Float32Type>) {
-      return b.f32_val(val);
-    }
-    if constexpr (std::is_same_v<FPType, Float16Type>) {
-      return b.f16_val(val);
-    }
-    if constexpr (std::is_same_v<FPType, BFloat16Type>) {
-      return b.bf16_val(val);
-    }
-    // skipped on purpose: Float8E4M3FNType, Float8E5M2Type
     return nullptr;
   }
   Location loc;
@@ -375,18 +280,29 @@ static Value Fp_to_Fp8E4M3FN_RTNE_oneValue(Location loc,
   static_assert((std::is_same_v<SrcFPType, Float32Type>) ||
                 (std::is_same_v<SrcFPType, Float16Type>));
   auto b = TritonLLVMOpBuilder(loc, rewriter);
+  const llvm::fltSemantics *srcSemantic = nullptr;
+  if constexpr (std::is_same_v<SrcFPType, Float32Type>)
+    srcSemantic = &llvm::APFloat::IEEEsingle();
+  else
+    srcSemantic = &llvm::APFloat::IEEEhalf();
+  auto srcWidth = llvm::APFloat::getSizeInBits(*srcSemantic);
+  auto srcMantissaBits = llvm::APFloat::semanticsPrecision(*srcSemantic) - 1;
+  auto srcExponentBits = srcWidth - srcMantissaBits - 1;
+  auto srcBias = (1 << (srcExponentBits - 1)) - 1;
+
+  const llvm::fltSemantics &dstSemantic = llvm::APFloat::Float8E4M3FN();
+  auto dstWidth = llvm::APFloat::getSizeInBits(dstSemantic);
+  auto dstMantissaBits = llvm::APFloat::semanticsPrecision(dstSemantic) - 1;
+  auto dstExponentBits = dstWidth - dstMantissaBits - 1;
+  auto dstBias = (1 << (dstExponentBits - 1)) - 1;
+
   FPTypeInfo<SrcFPType> srcFpInfo(loc, rewriter, b);
   FPTypeInfo<Float8E4M3FNType> dstFpInfo(loc, rewriter, b);
-  auto [srcExponentBits, srcMantissaBits, srcBias] =
-      srcFpInfo.getFPTypeBasicInfo();
-  auto [dstExponentBits, dstMantissaBits, dstBias] =
-      dstFpInfo.getFPTypeBasicInfo();
-  uint32_t srcWidth = 1 + srcExponentBits + srcMantissaBits;
-  uint32_t reducedMantissaBits = srcMantissaBits - dstMantissaBits;
-  Value reducedMantissaValue = srcFpInfo.toLLVMIntValue(reducedMantissaBits);
-
   auto srcIntType = srcFpInfo.getIntType();
   Value isNaN = checkIsNan(b, v);
+
+  uint32_t reducedMantissaBits = srcMantissaBits - dstMantissaBits;
+  Value reducedMantissaValue = srcFpInfo.toLLVMIntValue(reducedMantissaBits);
 
   // Get sign and absolute value
   Value intVal = b.bitcast(v, srcIntType);
@@ -420,8 +336,13 @@ static Value Fp_to_Fp8E4M3FN_RTNE_oneValue(Location loc,
 
   // We round numbers smaller than the minimal normal number in Fp8 to make
   // it easier to handle subnormals
-  auto dstTyID = TypeID::get<Float8E4M3FNType>();
-  vFp8 = b.umax(vFp8, srcFpInfo.getMinNormalNumForDstType(dstTyID));
+  auto dstSmallest = llvm::APFloat::getSmallestNormalized(dstSemantic);
+  // Get the srcFpType representation of the minimal normal number in Fp8
+  bool losesInfo;
+  dstSmallest.convert(*srcSemantic, APFloat::rmNearestTiesToEven, &losesInfo);
+  uint32_t dstMinimal =
+      static_cast<uint32_t>(dstSmallest.bitcastToAPInt().getZExtValue());
+  vFp8 = b.umax(vFp8, srcFpInfo.toLLVMIntValue(dstMinimal));
 
   // Adjust exponent bias
   uint32_t expBias = (srcBias - dstBias) << srcMantissaBits;
@@ -432,13 +353,29 @@ static Value Fp_to_Fp8E4M3FN_RTNE_oneValue(Location loc,
 
   // Any numbers larger than the max normal number(including infinity) in FP8
   // after rounding will cause overflow
+  auto dstLargest = llvm::APFloat::getLargest(dstSemantic);
+  uint32_t dstMaxPositive =
+      static_cast<uint32_t>(dstLargest.bitcastToAPInt().getZExtValue());
+  // Get the srcFpType representation of the maximal normal number in Fp8
+  dstLargest.convert(*srcSemantic, APFloat::rmNearestTiesToEven, &losesInfo);
+  uint32_t dstMaxOfSrcType =
+      static_cast<uint32_t>(dstLargest.bitcastToAPInt().getZExtValue());
+
+  // For Fp16, 0x5F7F == 0.10111.1101111111 is the largest possible normal
+  // number(including infinity) after rounding in FP8E4M3
+  if constexpr (std::is_same_v<SrcFPType, Float32Type>)
+    dstMaxOfSrcType |= 0x7ffff;
+  else
+    dstMaxOfSrcType |= 0x7f;
   Value isOverflowOrInf =
-      b.icmp_ugt(intVal, srcFpInfo.getMaxNormalNumForDstType(dstTyID));
-  vFp8 = b.select(isOverflowOrInf, dstFpInfo.getMaxPositive(), vFp8);
+      b.icmp_ugt(intVal, srcFpInfo.toLLVMIntValue(dstMaxOfSrcType));
+  vFp8 =
+      b.select(isOverflowOrInf, dstFpInfo.toLLVMIntValue(dstMaxPositive), vFp8);
 
   // Round subnormals to nearest even. Ref:
   // https://github.com/openxla/xla/blob/f20c6fe2/xla/service/elemental_ir_emitter.cc#L272
   constexpr size_t lutSize = 8;
+  auto dstTyID = TypeID::get<Float8E4M3FNType>();
   SmallVector<float> halfwayPointsLUT =
       srcFpInfo.getHalfwayPointsForDstType(dstTyID);
 
@@ -581,7 +518,7 @@ Fp32_to_Fp8E4M3FN_RTNE_HW(Location loc, ConversionPatternRewriter &rewriter,
                                                                v[0], v[1]);
 }
 
-// Cp32 -> OCP Fp8 (RTNE)
+// Fp32 -> OCP Fp8 (RTNE)
 ConverterT Fp32_to_Fp8E4M3FN_RTNE(AMD::ISAFamily isaFamily) {
   return isaFamily == AMD::ISAFamily::CDNA4 ? Fp32_to_Fp8E4M3FN_RTNE_HW
                                             : Fp32_to_Fp8E4M3FN_RTNE_SW;
