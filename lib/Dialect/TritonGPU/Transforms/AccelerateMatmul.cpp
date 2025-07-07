@@ -781,7 +781,7 @@ static void decomposeMixedModeDotOp(ModuleOp mod, int computeCapability) {
       // promote operands for sm < 89 since fp8 mma is not natively supported
       // promote operands for sm >= 90 when mma is not v3
       if (!isNativeFP8 ||
-          (isNativeFP8 && (computeCapability == 89 || mmaLayout.isHopper())))
+          (isNativeFP8 && (computeCapability >= 89 || mmaLayout.isHopper())))
         return;
       promoteType = builder.getF16Type();
     } else {
