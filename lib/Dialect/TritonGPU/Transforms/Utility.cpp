@@ -1514,6 +1514,7 @@ void replaceUsesAndPropagateType(OpBuilder &builder, Operation *oldUse,
   // Perform late replacement.
   for (OpOperand *operand : operandsToReplace) {
     if (auto wait = dyn_cast<ttng::WarpGroupDotWaitOp>(operand->getOwner())) {
+      OpBuilder::InsertionGuard guard(builder);
       // Need to update the return type on the wait op as well
       builder.setInsertionPointAfter(wait);
       auto operands = llvm::to_vector(wait.getOperands());
@@ -1542,7 +1543,6 @@ void replaceUsesWithLocalLoad(OpBuilder &builder, OpResult old,
   for (Operation *user : old.getUsers()) {
     if (auto userAlloc = dyn_cast<ttg::LocalAllocOp>(user)) {
       if (allocTy.getEncoding() == userAlloc.getType().getEncoding()) {
-        OpBuilder::InsertionGuard guard(builder);
         replaceUsesAndPropagateType(builder, userAlloc, alloc);
         allocsToErase.push_back(userAlloc);
       }
