@@ -306,6 +306,53 @@ Value getLaneId(OpBuilder &rewriter, Location loc) {
   return getLaneAndWarpId(rewriter, loc).first;
 }
 
+// Helper function: applies linear layout vectorized over register indices
+SmallVector<SmallVector<std::pair<StringAttr, Value>>>
+applyLinearLayoutVec(Location loc, RewriterBase &rewriter,
+                     const LinearLayout &layout,
+                     ArrayRef<std::pair<StringAttr, Value>> indices,
+                     ArrayRef<uint32_t> registers) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  MLIRContext *ctx = rewriter.getContext();
+
+  StringAttr kRegister = str_attr("register");
+
+  // Precompute the base (with register = 0)
+  SmallVector<std::pair<StringAttr, Value>> indicesWithZeroReg;
+  for (const auto &[attr, val] : indices) {
+    if (attr == kRegister)
+      indicesWithZeroReg.emplace_back(attr, b.i32_val(0));
+    else
+      indicesWithZeroReg.emplace_back(attr, val);
+  }
+
+  auto baseIndices =
+      applyLinearLayout(loc, rewriter, layout, indicesWithZeroReg);
+
+  SmallVector<SmallVector<std::pair<StringAttr, Value>>> ret;
+
+  // Iterate over registers, applying XOR trick
+  for (auto reg : registers) {
+    SmallVector<std::pair<StringAttr, int32_t>> constRegIndices;
+    for (const auto &[attr, val] : indices) {
+      constRegIndices.emplace_back(attr, attr == kRegister ? reg : 0);
+    }
+    auto regIndices = layout.apply(constRegIndices);
+
+    SmallVector<std::pair<StringAttr, Value>> combinedIndices;
+    for (auto [base, regIdx] : llvm::zip(baseIndices, regIndices)) {
+      assert(base.first == regIdx.first);
+      Value combined = b.xor_(base.second, b.i32_val(regIdx.second));
+      combinedIndices.emplace_back(base.first, combined);
+    }
+
+    ret.push_back(combinedIndices);
+  }
+
+  return ret;
+}
+
+// Refactored emitIndices function using applyLinearLayoutVec
 SmallVector<SmallVector<Value>>
 emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
             Attribute layout, RankedTensorType type, bool withCTAOffset) {
@@ -315,8 +362,6 @@ emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
 
   LinearLayout ll = triton::gpu::toLinearLayout(shape, layout);
 
-  // TODO(jlebar): We could add strong typing if we wanted; for now this is
-  // "stringly typed".
   StringAttr kRegister = str_attr("register");
   StringAttr kLane = str_attr("lane");
   StringAttr kWarp = str_attr("warp");
@@ -325,38 +370,29 @@ emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
   auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
   Value blockId =
       withCTAOffset ? target.getClusterCTAId(rewriter, loc) : b.i32_val(0);
+
+  SmallVector<std::pair<StringAttr, Value>> commonIndices = {
+      {kRegister, b.i32_val(0)},
+      {kLane, laneId},
+      {kWarp, warpId},
+      {kBlock, blockId}};
+
+  // Vectorize over registers
+  SmallVector<uint32_t> registerIndices;
+  for (unsigned reg = 0; reg < ll.getInDimSize(kRegister); ++reg)
+    registerIndices.push_back(reg);
+
+  auto vecIndices =
+      applyLinearLayoutVec(loc, rewriter, ll, commonIndices, registerIndices);
+
   unsigned rank = shape.size();
   SmallVector<SmallVector<Value>> ret;
-  // Linear layout function is split in two parts below:
-  // L(r, t, w, b) = L(0, t, w, b) xor L(r, 0, 0, 0)
-  //     idxs      =    idxsBase   xor    idxsReg
-  //
-  // L(0, t, w, b) part is the same for all registers,
-  // so we hoist it out of the main register loop in the below.
-  //
-  // This approach produces code with lower register pressure and
-  // less computations, compared to fused L(r,t,w,b) method.
-  auto idxsBase = applyLinearLayout(loc, rewriter, ll,
-                                    {{kRegister, b.i32_val(0)},
-                                     {kLane, laneId},
-                                     {kWarp, warpId},
-                                     {kBlock, blockId}});
-  for (unsigned reg = 0; reg < ll.getInDimSize(str_attr("register")); reg++) {
-    auto idxsReg =
-        ll.apply({{kRegister, reg}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}});
-    SmallVector<std::pair<StringAttr, Value>> idxs;
-    for (auto [idxBase, idxReg] : llvm::zip(idxsBase, idxsReg)) {
-      auto dimName = idxBase.first;
-      assert(dimName == idxReg.first &&
-             "dim names of block+warp+thread and register idx should be equal");
-      auto idx = b.xor_(idxBase.second, b.i32_val(idxReg.second));
-      idxs.emplace_back(dimName, idx);
-    }
-    assert(idxs.size() == rank);
-    for (unsigned k = 0; k < rank; ++k) {
-      assert(idxs[k].first == str_attr("dim" + std::to_string(k)));
-    }
-    ret.push_back(llvm::to_vector(llvm::make_second_range(idxs)));
+  for (auto &indices : vecIndices) {
+    SmallVector<Value> vals;
+    assert(indices.size() == rank);
+    for (auto &idx : indices)
+      vals.push_back(idx.second);
+    ret.push_back(vals);
   }
 
   return ret;
@@ -791,8 +827,7 @@ void storeDistributedToShared(triton::gpu::MemDescType dstTy,
                               ArrayRef<Value> srcVals,
                               const SharedMemoryObject &smemObj, Location loc,
                               RewriterBase &rewriter,
-                              const TargetInfoBase &target,
-                              std::pair<size_t, Type> *const llvmOpCount) {
+                              const TargetInfoBase &target) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   bool success = emitTransferBetweenRegistersAndShared(
       srcTy, dstTy, elemLlvmTy, /*maxVecElems=*/std::nullopt, smemObj, loc,
@@ -807,10 +842,6 @@ void storeDistributedToShared(triton::gpu::MemDescType dstTy,
         b.store(vec, vecAddr)
             .setAlignment(vecTy.getNumElements() *
                           elemLlvmTy.getIntOrFloatBitWidth() / 8);
-        if (llvmOpCount) {
-          ++(llvmOpCount->first);
-          llvmOpCount->second = vecTy;
-        }
       });
 
   if (!success)

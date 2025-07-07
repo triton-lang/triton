@@ -341,9 +341,6 @@ def test_typeconvert_downcast(src_dtype, dst_dtype, rounding, max_repr, device):
             pytest.skip(f"{dst_dtype} downcast with RTNE rounding tests only supported on AMDGPU CDNA3")
 
     if is_hip():
-        if dst_dtype == 'float8e5' and rounding == 'rtne' and not is_hip_cdna4():
-            pytest.skip(f"{dst_dtype} downcast with RTNE rounding tests only supported on CDNA4")
-
         if dst_dtype == 'float8e4nv':
             if not rounding == 'rtne':
                 pytest.skip("float8e4nv downcast tests only supported with RTNE rounding on AMDGPU")
@@ -372,23 +369,16 @@ def test_typeconvert_downcast(src_dtype, dst_dtype, rounding, max_repr, device):
 ])
 @pytest.mark.parametrize("dst_dtype", ["float8e4nv", "float8e5"])
 @pytest.mark.parametrize("src_dtype", ["float32", "float16", "bfloat16"])
-def test_typeconvert_downcast_clamping(src_dtype, dst_dtype, mode, rounding="rtne", device="cuda"):
+def test_typeconvert_downcast_clamping(src_dtype, dst_dtype, mode, device, rounding="rtne"):
     if is_cuda():
         if src_dtype != 'float32' and torch.cuda.get_device_capability(0) < (9, 0):
             pytest.skip("non-float32 downcast tests only supported on NVGPU with compute capability 9.0+")
 
         if dst_dtype in ('float8e5', 'float8e4nv') and rounding == 'rtne' and torch.cuda.get_device_capability(0) < (9, 0):
             pytest.skip(f"{dst_dtype} downcast with RTNE rounding tests only supported on NVGPU with compute capability 9.0+")
-    elif is_hip():
-        if is_hip_cdna2():
-            pytest.skip(f"{dst_dtype} downcast to {dst_dtype} with clamping is not fully tested on AMDGPU CDNA2")
-
-        if is_hip_cdna3():
-            if src_dtype == 'bfloat16' and dst_dtype == 'float8e4nv':
-                pytest.skip(f"{src_dtype} downcast to {dst_dtype} with clamping is not fully tested on AMDGPU CDNA3")
-            if dst_dtype == 'float8e5' and mode in ('inf', '-inf'):
-                pytest.skip(f"Downcast to {dst_dtype} with clamping for `inf` or `-inf` "
-                             "is not fully tested on AMDGPU CDNA3")
+    elif is_hip_cdna2() or is_hip_cdna3():
+        if src_dtype == 'bfloat16' and dst_dtype == 'float8e4nv':
+            pytest.skip(f"{src_dtype} downcast to {dst_dtype} with clamping is not fully tested on AMDGPU CDNA2/3")
 
     converter = {
         tl.float8e4nv: torch.float8_e4m3fn,
