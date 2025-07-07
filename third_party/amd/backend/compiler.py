@@ -255,7 +255,7 @@ class HIPBackend(BaseBackend):
             passes.ttgpuir.add_remove_layout_conversions(pm)
         amd.passes.ttgpuir.add_reorder_instructions(pm)
         use_block_pingpong = is_pingpong_schedule_enabled(options.arch)
-        if use_block_pingpong and options.num_stages == 2:
+        if use_block_pingpong and options.num_stages > 1:
             amd.passes.ttgpuir.add_block_pingpong(pm, options.num_stages)
 
         if knobs.amd.use_buffer_ops:

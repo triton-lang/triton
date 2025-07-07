@@ -11,6 +11,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Schedule.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/Debug.h"
 
@@ -138,11 +139,14 @@ struct LoadInfo {
 //            can cause invalid schedules to be produced.
 LogicalResult
 initSchedule(int maxDist, int stages[SCHED_SIZE], int numStages,
-             int &numBuffers, bool useAsyncCopy,
+             int &numBuffers, bool useAsyncCopy, bool useF16BlockPingpong,
              std::array<tt::CoarseSchedule::Cluster, SCHED_SIZE> &clusters,
              tt::CoarseSchedule &schedule) {
   bool pairedGlobalLoadLocalStore = stages[SCHED_LOCAL_STORE] == 0;
   stages[SCHED_LOCAL_STORE] += maxDist;
+  if (useAsyncCopy && useF16BlockPingpong) {
+    stages[SCHED_ASYNC_WAIT] = std::max(0, stages[SCHED_LOCAL_LOAD] - 1);
+  }
 
   LDBG(
       "Stage schedule:" << "  GLOBAL_LOAD stage = " << stages[SCHED_GLOBAL_LOAD]
@@ -171,9 +175,9 @@ initSchedule(int maxDist, int stages[SCHED_SIZE], int numStages,
   LDBG("deduced max shared memory buffer number = " << numBuffers);
 
   // We place async wait as the first cluster because we want to have it being
-  // the first in the main loop after pipelining.
-  int asyncWaitCluster = 0;
-
+  // the first in the main loop after pipelining. However if we intend on doing
+  // PP then we set it near the end of the loop for reasons state above.
+  int asyncWaitCluster = useF16BlockPingpong ? 4 : 0;
   // If tt.load and ttg.local_store are in the same stage
   //   spread them apart to allow overlap with compute
   // else
@@ -611,7 +615,7 @@ SmallVector<std::pair<Operation *, Value>> createAndScheduleStreamOps(
 
 LogicalResult preprocessLoopAndBuildSchedule(scf::ForOp &forOp, int numStages,
                                              int stages[SCHED_SIZE],
-                                             bool useAsyncCopy,
+                                             bool useAsyncCopy, bool useF16BlockPingpong,
                                              tt::PipeliningOption &options) {
   triton::AMD::ModuleAxisInfoAnalysis axisInfoAnalysis(
       forOp->getParentOfType<ModuleOp>());
@@ -656,7 +660,7 @@ LogicalResult preprocessLoopAndBuildSchedule(scf::ForOp &forOp, int numStages,
   }
 
   if (failed(initSchedule(maxDist, stages, numStages, numBuffers, useAsyncCopy,
-                          clusters, schedule)))
+                          useF16BlockPingpong, clusters, schedule)))
     return failure();
 
   if (failed(scheduleLoads(loadToInfo, maxDist, numStages, stages, clusters,
@@ -724,7 +728,7 @@ LogicalResult preprocessLoopAndBuildSchedule(scf::ForOp &forOp, int numStages,
 }
 
 LogicalResult pipelineLoop(scf::ForOp forOp, int numStages, int globalPrefetch,
-                           int localPrefetch, bool useAsyncCopy) {
+                           int localPrefetch, bool useAsyncCopy, bool useF16BlockPingpong) {
 
   int lastStage = numStages - 1;
   int stages[SCHED_SIZE];
@@ -753,7 +757,7 @@ LogicalResult pipelineLoop(scf::ForOp forOp, int numStages, int globalPrefetch,
   };
 
   if (failed(preprocessLoopAndBuildSchedule(forOp, numStages, stages,
-                                            useAsyncCopy, options)))
+                                            useAsyncCopy, useF16BlockPingpong, options)))
     return failure();
   LDBG("Loop before sending to expander:\n" << *forOp);
 
@@ -819,6 +823,19 @@ struct PipelinePass : impl::TritonAMDGPUStreamPipelineBase<PipelinePass> {
       return signalPassFailure();
     }
 
+
+    auto strVal = triton::tools::getStrEnv("TRITON_HIP_USE_BLOCK_PINGPONG");
+    bool pingpongDisabled = false;
+    if (!strVal.empty()) {
+      auto boolV = triton::tools::isEnvValueBool(strVal);
+      if (boolV.has_value())
+        if (!boolV.value())
+          pingpongDisabled = true;
+        //pingpongDisabled = boolV.value() ? "false" : "true";
+
+    }
+    bool useF16BlockPingpong = !pingpongDisabled & (numStages == 3);
+
     SmallVector<scf::ForOp> loops;
     getOperation()->walk([&](scf::ForOp forOp) {
       labelLoadOpsForTritonDot(forOp);
@@ -833,10 +850,10 @@ struct PipelinePass : impl::TritonAMDGPUStreamPipelineBase<PipelinePass> {
         continue;
       }
       (void)pipelineLoop(forOp, tt::getNumStagesOrDefault(forOp, numStages),
-                         globalPrefetch, localPrefetch, useAsyncCopy);
+                         globalPrefetch, localPrefetch, useAsyncCopy, useF16BlockPingpong);
     }
 
-    if (useAsyncCopy) {
+    if (useAsyncCopy && !useF16BlockPingpong) {
       llvm::SmallSetVector<ttg::AsyncWaitOp, 8> waitOps;
       moduleOp.walk([&](ttg::AsyncWaitOp waitOp) { waitOps.insert(waitOp); });
       tt::combineRedundantWaitOps(waitOps);

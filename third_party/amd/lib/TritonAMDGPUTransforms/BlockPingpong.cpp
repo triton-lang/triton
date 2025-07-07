@@ -39,7 +39,11 @@ class Pingponger {
   SmallVector<tt::LoadOp> gLoadOps;
   SmallVector<ttg::LocalLoadOp> lLoadOps;
   SmallVector<ttg::LocalStoreOp> lStoreOps;
+  SmallVector<ttg::AsyncCopyGlobalToLocalOp> asyncCopyOps;
+  SmallVector<ttg::AsyncWaitOp> asyncWaitOps;
+  SmallVector<ttg::AsyncCommitGroupOp> asyncCommitOps;
   SmallVector<tt::DotOp> dotOps;
+  SmallVector<tt::DotScaledOp> dotSOps;
   SmallVector<SmallVector<Operation *>> subViewOps;
   SmallVector<SmallVector<Operation *>> loadSliceOps;
   SmallVector<Operation *> dotSliceOps;
@@ -58,6 +62,7 @@ class Pingponger {
   int32_t kWidth;
   int32_t numWarps;
   int32_t numStages;
+  bool useAsyncCopy;
 
 public:
   Pingponger(scf::ForOp forOp, int32_t numWarps, int32_t numStages)
@@ -75,6 +80,7 @@ private:
   void transformOnePPClusters(OpBuilder &builder, Location loc);
   LogicalResult transformFourPPClusters(OpBuilder &builder, Location loc);
   LogicalResult transformTwoPPClusters(OpBuilder &builder, Location loc);
+  LogicalResult transformNS3(OpBuilder &builder, Location loc);
   void addAsymmetricSyncToLoop(OpBuilder &builder, Location loc);
   void updateOpInsertion(Operation *Op);
   void appendOp(Operation *Op);
@@ -627,6 +633,61 @@ LogicalResult Pingponger::transformTwoPPClusters(OpBuilder &builder,
   return success();
 }
 
+LogicalResult Pingponger::transformNS3(OpBuilder &builder, Location loc) {
+//forOp.dump();
+  Operation *gLoadRhs = useAsyncCopy ? asyncCopyOps[1] : gLoadOps[1];
+  builder.setInsertionPointAfter(gLoadRhs);
+  updateOpInsertion(gLoadRhs);
+ 
+  // Combine asyncWaitOps
+  auto newAsyncWaitOp = asyncWaitOps[0];
+  if (asyncWaitOps.size() > 1){
+  SmallVector<Value> tokens;
+  for (auto asyncWaitOp : asyncWaitOps) {
+    for (auto token : asyncWaitOp.getAsyncToken()) {
+      tokens.push_back(token);
+    }
+  }
+  newAsyncWaitOp = builder.create<ttg::AsyncWaitOp>(loc, tokens, 0);
+  for (auto asyncWaitOp : asyncWaitOps) {
+    asyncWaitOp.getResult().replaceAllUsesWith(newAsyncWaitOp.getResult());
+    asyncWaitOp->erase();
+  }
+}
+
+  // try to interleave address calculation better by inserting sched.barrier
+  // beween ds_reads. Helps reducing salu/valu stalls.
+  moveOpAndPredecessorsUpSameBlock(lLoadOps[0]);
+  moveOpAndPredecessorsUpSameBlock(lLoadOps[1]);
+  lLoadOps[0]->setAttr("split_dsread", builder.getUnitAttr());
+  lLoadOps[1]->setAttr("split_dsread", builder.getUnitAttr());
+  appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
+  
+  appendOp(asyncCopyOps[0]);
+  appendOp(asyncCommitOps[0]);
+
+  appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
+  appendOp(newAsyncWaitOp);
+  appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
+
+  //appendOp(builder.create<ROCDL::IglpOpt>(loc, 3));
+  appendOp(builder.create<ROCDL::SchedGroupBarrier>(loc, 8, 1, 0));
+  appendOp(builder.create<ROCDL::SchedGroupBarrier>(loc, 4, 3, 0));
+  appendOp(builder.create<ROCDL::SchedGroupBarrier>(loc, 8, 1, 0));
+  appendOp(builder.create<ROCDL::SchedGroupBarrier>(loc, 4, 3, 0));
+  appendOp(builder.create<ROCDL::SchedGroupBarrier>(loc, 8, 1, 0));
+
+  appendOp(asyncCopyOps[1]);
+  appendOp(asyncCommitOps[1]);  
+  appendOp(dotOps[0]);
+
+  appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
+  appendOp(builder.create<ROCDL::SBarrierOp>(loc));
+  appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
+
+  return success();
+}
+
 // This function wraps forOp with cond_barrier. First, hold half of the warps
 // (warpHigh) in a block before the loop so the barriers in the loop synchronize
 // warps at the different point per the warp groups. After the loop, hold
@@ -659,10 +720,9 @@ void Pingponger::addAsymmetricSyncToLoop(OpBuilder &builder, Location loc) {
 }
 
 void Pingponger::getDotPingponged() {
-  if (numStages != 2) {
+  if (numStages == 1) {
     std::stringstream message;
-    message << "All ping pong scheduling requires 2 stages. Found " << numStages
-            << " stages";
+    message << "All ping pong scheduling requires to be pipelined";
     LDBG(message.str());
     return;
   }
@@ -674,6 +734,8 @@ void Pingponger::getDotPingponged() {
   forOp->walk([&](Operation *op) {
     if (auto gLoad = dyn_cast<tt::LoadOp>(op))
       gLoadOps.push_back(gLoad);
+    if (auto asyncCopy = dyn_cast<ttg::AsyncCopyGlobalToLocalOp>(op))
+      asyncCopyOps.push_back(asyncCopy);
     else if (auto lLoad = dyn_cast<ttg::LocalLoadOp>(op)) {
       // This scheduling doesn't help hiding intra-warp latency. So, we only
       // collect local_load ops that are software pipelined, which means their
@@ -685,9 +747,18 @@ void Pingponger::getDotPingponged() {
             lLoadOps.push_back(lLoad);
     } else if (auto lStore = dyn_cast<ttg::LocalStoreOp>(op))
       lStoreOps.push_back(lStore);
-    else if (auto pingpongDot = dyn_cast<tt::DotOp>(op))
+    else if (auto pingpongDot = dyn_cast<tt::DotOp>(op)) {
       if (pingpongDot.getType().getRank() == 2)
         dotOps.push_back(pingpongDot);
+    } else if (auto pingpongDot = dyn_cast<tt::DotScaledOp>(op)) {
+      dotSOps.push_back(pingpongDot);
+    } else if (auto asyncOp = dyn_cast<ttg::AsyncCopyGlobalToLocalOp>(op)) {
+      asyncCopyOps.push_back(asyncOp);
+    } else if (auto asyncCommitGroupOp =
+                   dyn_cast<ttg::AsyncCommitGroupOp>(op)) {
+      asyncCommitOps.push_back(asyncCommitGroupOp);
+    } else if (auto asyncOp = dyn_cast<ttg::AsyncWaitOp>(op))
+      asyncWaitOps.push_back(asyncOp);
   });
 
   // Currently, pingpong scheduling is known as helpful under limited condition.
@@ -695,19 +766,92 @@ void Pingponger::getDotPingponged() {
   // software pipelining and dot rank=2. Also only accept the for-loop with
   // supported combination of operations because this transformation is very
   // tightly scheduling the latencies.
-  if (gLoadOps.size() < 2 || lLoadOps.size() < 2 || dotOps.size() != 1) {
+
+  // FIXME: get better condition to enable pingpong either for dot or for
+  // dot_scaled
+  int64_t numOfDotLikeOps = dotSOps.size() + dotOps.size();
+  if (numOfDotLikeOps != 1) {
+    LDBG("Only handle a single of either dot or dot_scaled op");
+    return;
+  }
+  useAsyncCopy = (asyncCopyOps.size() > 0) ? true : false;
+  int64_t gloadSize = useAsyncCopy ? asyncCopyOps.size() : gLoadOps.size();
+  int64_t dotSize = dotSOps.size() > 0 ? dotSOps.size() : dotOps.size();
+  if ((gloadSize < 2 || lLoadOps.size() < 2 || dotSize != 1)) {
     std::stringstream message;
     message << "Unable to match ping pong scheduling pattern. Details: "
-            << gLoadOps.size() << " global loads, " << lLoadOps.size()
-            << " local loads, " << dotOps.size() << " dot products";
+            << gloadSize << " global loads, " << lLoadOps.size()
+            << " local loads, " << dotSize << " dot products";
     LDBG(message.str());
     return;
   }
+
+  // FIXME: place tile size restriction here and obtain kWidth
+  if (dotSOps.size() == 1 && numWarps == 8 && numStages == 2 &&
+      asyncCopyOps.size() > 0) {
+    auto dotSType = dotSOps[0].getType();
+    auto dotSShape = dotSType.getShape();
+    auto aType = dotSOps[0].getA().getType();
+    auto aShape = aType.getShape();
+    auto elemWidth = aType.getElementTypeBitWidth();
+    int64_t tileSize = dotSShape[0] * dotSShape[1] * aShape[1];
+
+    // 256x256x256 (128xi8)
+    if (tileSize == 8388608 && aShape[0] == 256 && aShape[1] == 128 &&
+        elemWidth == 8) {
+      kWidth = 16;
+      if (transformNS3(builder, dotSOps[0]->getLoc()).failed()) {
+        LDBG("Encountered failure when trying to execute the two ping pong "
+             "cluster transformation");
+        return;
+      }
+    }
+    addAsymmetricSyncToLoop(builder, loc);
+    return;
+  } else if (dotSOps.size() == 1)
+    return;
 
   // Determine if we have a persistent GEMM. This will decide how we interpret
   // any memory operations that we find in conditionals.
   auto assumeNotTaken = isPersistentGemm(dotOps.size());
 
+  // Compute tile size, kWidth, and mfma type.
+  auto dotType = dotOps[0].getType();
+  auto dotShape = dotType.getShape();
+  auto aType = dotOps[0].getA().getType();
+  auto aShape = aType.getShape();
+  auto elemWidth = aType.getElementTypeBitWidth();
+  int64_t tileSize = dotShape[0] * dotShape[1] * aShape[1] * elemWidth;
+
+  const int64_t minTile = 262144;      // e.g. 32x128x64x16bit
+  const int64_t smallTile = 16777216;  // e.g. 128x128x64x16bit
+  const int64_t mediumTile = 33554432; // smallTile x 2
+  const int64_t largeTile = 67108864;  // e.g. 256x256x64x16bit
+
+  auto encoding = cast<RankedTensorType>(aType).getEncoding();
+  auto srcEncoding = cast<ttg::DotOperandEncodingAttr>(encoding);
+  kWidth = srcEncoding.getKWidth();
+  auto mfmaEncoding = cast<ttg::AMDMfmaEncodingAttr>(srcEncoding.getParent());
+  SmallVector<int64_t> intShape;
+  intShape.push_back(mfmaEncoding.getMDim());
+  intShape.push_back(mfmaEncoding.getNDim());
+
+  if (dotOps.size() == 1 && useAsyncCopy) {
+    if (numWarps != 8) {
+      LDBG("Currently only support num_warp=8 for async PP");
+      return;
+    }
+    if (numStages > 2 && dotOps.size() == 1 && tileSize == mediumTile && aShape[1] == 32 && elemWidth == 16) {
+      if (transformNS3(builder, loc).failed()) {
+        LDBG("Encountered failure when trying to execute the NS3 ping pong "
+            "cluster transformation");
+        return;
+      }
+      addAsymmetricSyncToLoop(builder, loc);
+      return;
+    }
+
+  }
   // The existing code depends on the loads being targeted being safe to move,
   // which will not hold if we do not properly have a GEMM. As a result, we
   // filter the associated load operations to only those that are associated
@@ -801,26 +945,6 @@ void Pingponger::getDotPingponged() {
   // N.B., Tile size smaller than 128x128x64_FP16 is likely not compute-bound
   // that pingpong scheduling doesn't help much.
 
-  auto dotType = dotOps[0].getType();
-  auto dotShape = dotType.getShape();
-  auto aType = dotOps[0].getA().getType();
-  auto aShape = aType.getShape();
-  auto elemWidth = aType.getElementTypeBitWidth();
-  int64_t tileSize = dotShape[0] * dotShape[1] * aShape[1] * elemWidth;
-
-  const int64_t minTile = 262144;      // e.g. 32x128x64x16bit
-  const int64_t smallTile = 16777216;  // e.g. 128x128x64x16bit
-  const int64_t mediumTile = 33554432; // smallTile x 2
-  const int64_t largeTile = 67108864;  // e.g. 256x256x64x16bit
-
-  auto encoding = cast<RankedTensorType>(aType).getEncoding();
-  auto srcEncoding = cast<ttg::DotOperandEncodingAttr>(encoding);
-  kWidth = srcEncoding.getKWidth();
-  auto mfmaEncoding = cast<ttg::AMDMfmaEncodingAttr>(srcEncoding.getParent());
-  SmallVector<int64_t> intShape;
-  intShape.push_back(mfmaEncoding.getMDim());
-  intShape.push_back(mfmaEncoding.getNDim());
-
   if (numWarps == 4) { // Pingpong between warps from different blocks
     // Transform a loop with small tile size.
     // We've observed that this small tile size spent almost equivalent cycle
@@ -831,7 +955,7 @@ void Pingponger::getDotPingponged() {
       transformOnePPClusters(builder, loc);
     // numWarps=4 doesn't need asymmetric sync, return.
     return;
-  } else if (numWarps == 8) { // Pingpong between warps from the same block
+  } else if (numWarps == 8 && numStages == 2) { // Pingpong between warps from the same block
     if (lStoreOps.size() != 2) {
       std::stringstream message;
       message << "Unable to match ping pong slicing pattern. Details: "
