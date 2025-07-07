@@ -300,9 +300,7 @@ struct SegmentAllocOpConversion
       return failure();
     }
 
-    Value tid = rewriter.create<::mlir::gpu::ThreadIdOp>(
-        loc, ::mlir::gpu::Dimension::x);
-    Value curThreadId = rewriter.create<arith::IndexCastOp>(loc, i32_ty, tid);
+    Value curThreadId = getRawThreadId(rewriter, loc);
 
     Value threadsPerWarp =
         b.i32_val(triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod));
@@ -507,9 +505,7 @@ struct RestoreCtxOpConversion
     int numWarps = getTotalNumWarps(mod);
 
     // We need to use the absolute warp id in case warp specialization is used.
-    Value tid = rewriter.create<::mlir::gpu::ThreadIdOp>(
-        loc, ::mlir::gpu::Dimension::x);
-    Value threadId = rewriter.create<arith::IndexCastOp>(loc, i32_ty, tid);
+    Value threadId = getRawThreadId(rewriter, loc);
 
     Value warpId = b.udiv(
         threadId,
@@ -560,9 +556,7 @@ struct SaveCtxOpConversion
     Value warpSize = b.i32_val(numLanes);
 
     // We need to use the absolute warp id in case warp specialization is used.
-    Value tid = rewriter.create<::mlir::gpu::ThreadIdOp>(
-        loc, ::mlir::gpu::Dimension::x);
-    Value threadId = rewriter.create<arith::IndexCastOp>(loc, i32_ty, tid);
+    Value threadId = getRawThreadId(rewriter, loc);
 
     Value warpId = b.udiv(threadId, warpSize);
     Value laneId = b.urem(threadId, warpSize);
