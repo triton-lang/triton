@@ -98,7 +98,6 @@ tt.func @invalid_lane_warp_basis(%arg0: tensor<256x256xi32, #src_layout> {tt.div
 #dst_layout = #ttg.linear<{register=[[1, 0]], lane=[[4, 0], [8, 0], [16, 0], [0, 1], [0, 2], [0, 4]], warp=[[2, 0], [0, 8]], block=[]}>
 module attributes {"ttg.compute-capability" = 0 : i32, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
   tt.func @invalid_concat(%arg0: tensor<64x32xi32, #src_layout>) {
-
     // expected-error @+1 {{Register basis must match on a CTA tile between source and destination.}}
     %1 = amdgpu.extract_slice %arg0 [0, 0] : tensor<64x32xi32, #src_layout> to tensor<32x16xi32, #dst_layout>
     tt.return

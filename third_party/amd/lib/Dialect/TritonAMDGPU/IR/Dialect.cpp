@@ -114,8 +114,10 @@ bool hasMatchingCTATileLayoutForSliceConcat(
                           int limit = -1) {
     int n = (limit < 0 ? srcBasis.size()
                        : std::min<unsigned>(srcBasis.size(), limit));
-    if (dstBasis.size() < n)
+    if (dstBasis.size() < n) {
+      emitError(message);
       return false;
+    }
     for (size_t i = 0; i < n; ++i) {
       if (srcBasis[i] != dstBasis[i]) {
         emitError(message);
