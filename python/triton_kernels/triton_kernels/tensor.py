@@ -1,6 +1,7 @@
 import torch
+from typing import Type
 from .reduction_details.reduce_bitmatrix import clear_sums, sum_bitmatrix_rows
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from triton.tools.tensor_descriptor import TensorDescriptor
 from .tensor_details.layout import Layout, DefaultLayout
 from .target_info import cuda_capability_geq
@@ -8,14 +9,13 @@ from .target_info import cuda_capability_geq
 
 @dataclass
 class Storage:
+
     data: torch.Tensor
-    layout: Layout
+    layout: Layout = None
 
     def __post_init__(self):
-        self.data = self.layout.swizzle_data(self.data)
-
-    def to(self, layout: Layout):
-        pass
+        if self.layout is None:
+            self.layout = DefaultLayout(self.data.shape)
 
     @property
     def device(self):
@@ -97,7 +97,7 @@ class Tensor:
     def __post_init__(self):
         # set storage
         if isinstance(self.storage, torch.Tensor):
-            self.storage = Storage(self.storage, DefaultLayout())
+            self.storage = Storage(self.storage)
         # initialize dtype
         if self.dtype is None:
             self.dtype = self.storage.data.dtype
@@ -170,8 +170,19 @@ class Bitmatrix(Tensor):
         return sum_bitmatrix_rows(self, out_ret, partials_block_size)
 
 
-def swizzle(tensor, layout):
-    shape = list(tensor.shape)
-    shape[tensor.stride().index(1)] *= 2
-    storage = Storage(data=tensor, layout=layout)
-    return Tensor(storage, shape=shape, dtype=FP4)
+def wrap_torch_tensor(torch_tensor, dtype=None):
+    if dtype is None:
+        dtype = torch_tensor.dtype
+    shape = list(torch_tensor.shape)
+    shape[torch_tensor.stride().index(1)] *= bitwidth(torch_tensor.dtype) // bitwidth(dtype)
+    return Tensor(Storage(torch_tensor), dtype=dtype, shape=shape)
+
+
+def convert_layout(tensor: Tensor, layout_cls: Type[Layout]):
+    assert isinstance(tensor, Tensor)
+    old_storage = tensor.storage
+    old_data = old_storage.layout.unswizzle_data(old_storage.data)
+    new_layout = layout_cls(old_data.shape)
+    new_data = new_layout.swizzle_data(old_data)
+    attrs = {k.name: getattr(tensor, k.name) for k in fields(tensor) if k.name != "storage"}
+    return Tensor(Storage(new_data, new_layout), **attrs)

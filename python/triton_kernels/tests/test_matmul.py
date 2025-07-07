@@ -10,7 +10,7 @@ import triton_kernels.matmul_ogs_details.opt_flags as opt_flags
 from triton_kernels.matmul_ogs import FlexCtx, PrecisionConfig, FusedActivation, FnSpecs
 from triton_kernels.matmul_ogs import matmul_ogs_set_idle_sms, matmul_ogs, matmul_ogs_torch
 from triton_kernels.swiglu import swiglu, swiglu_fn, PrecisionConfig as SwiGLUPrecisionConfig
-from triton_kernels.tensor import swizzle
+from triton_kernels.tensor import convert_layout, wrap_torch_tensor, FP4
 from triton_kernels.tensor_details import layout
 # numerics utilities
 from triton_kernels.numerics import InFlexData, OutFlexData
@@ -300,18 +300,18 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
         if torch.cuda.get_device_capability()[0] == 9:
             if k % 64 != 0 or n % 64 != 0:
                 pytest.skip("Hopper swizzling acts on a 64x64 tile (4x1 mma tiles).")
-            swizzle_value = layout.HopperMXValueLayout()
-            swizzle_scale = layout.HopperMXScaleLayout()
+            w_layout = layout.HopperMXValueLayout
+            w_scales_layout = layout.HopperMXScaleLayout
         elif torch.cuda.get_device_capability()[0] == 10:
-            swizzle_value = layout.DefaultLayout()
-            swizzle_scale = layout.BlackwellMXScaleLayout()
+            w_layout = layout.DefaultLayout
+            w_scales_layout = layout.BlackwellMXScaleLayout
         else:
-            swizzle_value = layout.DefaultLayout()
-            swizzle_scale = layout.DefaultLayout()
+            w_layout = layout.DefaultLayout
+            w_scales_layout = layout.DefaultLayout
         w_tri, mx_scales_tri = downcast_to_mxfp(w_tri, weight_dtype, axis=1)
         w_ref = upcast_from_mxfp(w_tri, mx_scales_tri, torch.bfloat16, axis=1)
-        w_tri = swizzle(w_tri, layout=swizzle_value)
-        mx_scales_tri = swizzle(mx_scales_tri, layout=swizzle_scale)
+        w_tri = convert_layout(wrap_torch_tensor(w_tri, FP4), w_layout)
+        mx_scales_tri = convert_layout(wrap_torch_tensor(mx_scales_tri), w_scales_layout)
         precision_opt.weight_scale = mx_scales_tri
 
     if not is_persistent and precision_opt.weight_scale is not None:

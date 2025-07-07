@@ -2,12 +2,13 @@ import torch
 import pytest
 import math
 from triton_kernels.testing import assert_equal
-from triton_kernels.swizzle import (
-    swizzle_mx_scale_bw,
+from triton_kernels.tensor_details.layout import BlackwellMXScaleLayout
+from triton_kernels.tensor_details.layout_details.hopper_scale import (
     swizzle_mxfp4_scale_hopper,
-    swizzle_mxfp4_value_hopper,
-    unswizzle_mx_scale_bw_torch,
     unswizzle_mxfp4_scale_hopper_torch,
+)
+from triton_kernels.tensor_details.layout_details.hopper_value import (
+    swizzle_mxfp4_value_hopper,
     unswizzle_mxfp4_value_hopper_torch,
 )
 
@@ -27,7 +28,8 @@ def test_mxfp_swizzle(shape: tuple[int, ...]):
     Test that unswizzle is the inverse of swizzle, after removing padding.
     """
     x = torch.randn(shape, device="cuda")
-    assert_equal(x, unswizzle_mx_scale_bw_torch(swizzle_mx_scale_bw(x))[..., :shape[-2], :shape[-1]])
+    layout = BlackwellMXScaleLayout()
+    assert_equal(x, layout.unswizzle_data(layout.swizzle_data(x), shape))
 
 
 @pytest.mark.parametrize("shape", [(16, 32), (16, 64), (32, 32), (32, 64), (64, 128), (128, 128)])

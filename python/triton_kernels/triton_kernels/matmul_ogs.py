@@ -384,9 +384,9 @@ def matmul_ogs(x, w, bias,
     # unpack scales
     w_scale = precision_config.weight_scale
     has_mx = w_scale is not None
-    is_hopper_fp8 = not target_info.cuda_capability_geq(10, 0) and w.dtype.itemsize == 1
-    if has_mx: assert w.stride(1) == 1, "`w` must be column-major when it has data-type mxfp"
-    if is_hopper_fp8: assert w.stride(1) == 1, "`w` must be column-major when it has data-type FP8 on capability < 10"
+    is_hopper_fp8 = not target_info.cuda_capability_geq(10, 0) and bitwidth(w.dtype) == 8
+    if has_mx: assert w.stride(-2) == 1, "`w` must be column-major when it has data-type mxfp"
+    if is_hopper_fp8: assert w.stride(-2) == 1, "`w` must be column-major when it has data-type FP8 on capability < 10"
     if not isinstance(w, Tensor):
         w = Tensor(w)
     if w_scale is not None and not isinstance(w_scale, Tensor):
