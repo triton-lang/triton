@@ -119,6 +119,8 @@ public:
   explicit MembarOrFenceAnalysis(Allocation *allocation, MembarFilterFn filter)
       : allocation(allocation), filter(filter) {}
 
+  virtual ~MembarOrFenceAnalysis() = default;
+
   /// Runs the membar analysis to the given operation, inserts a barrier if
   /// necessary.
   void run(FuncBlockInfoMapT &funcBlockInfoMap);
@@ -159,6 +161,8 @@ public:
   MembarAnalysis() = default;
   explicit MembarAnalysis(Allocation *allocation, MembarFilterFn filter)
       : MembarOrFenceAnalysis(allocation, filter) {}
+
+  ~MembarAnalysis() override = default;
 
 private:
   /// Updates the BlockInfo operation based on the operation.

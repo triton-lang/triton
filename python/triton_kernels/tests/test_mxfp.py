@@ -146,10 +146,8 @@ def test_mxfp_casting(
     if is_hip():
         if swizzle_value is not None or swizzle_scale is not None:
             pytest.skip("Other swizzling patterns are not supported by AMD GPU")
-        if quant_dtype == 'float8_e4m3fn':
-            pytest.skip("float8_e4m3fn cast hasn't been fully tested on AMD GPU")
-        if quant_dtype == 'float8_e5m2' and is_hip_cdna3():
-            pytest.skip("float8_e5m2 cast hasn't been fully tested on AMD CDNA3")
+        if quant_dtype == 'float8_e4m3fn' and is_hip_cdna3():
+            pytest.skip("float8_e4m3fn cast hasn't been fully tested on AMD CDNA3")
 
     swizzle_axis = swizzle_axis if (swizzle_value or swizzle_scale) else None
     quant_torch_type = dtype_str_to_torch(quant_dtype)
