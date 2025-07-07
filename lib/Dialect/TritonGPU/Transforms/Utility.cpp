@@ -1467,6 +1467,7 @@ void eraseLoopCarriedValues(scf::ForOp &loop, llvm::BitVector indices) {
 namespace mlir::triton {
 void replaceUsesAndPropagateType(OpBuilder &builder, Operation *oldUse,
                                  Value val) {
+  OpBuilder::InsertionGuard guard(builder);
   SmallVector<Operation *> opsToDelete;
   SmallVector<OpOperand *> operandsToReplace;
 
@@ -1487,7 +1488,6 @@ void replaceUsesAndPropagateType(OpBuilder &builder, Operation *oldUse,
 
     Operation *user = use.getOwner();
     // `subview(old_op)` is replaced by a new `subview(val)`.
-    OpBuilder::InsertionGuard g(builder);
     builder.setInsertionPoint(user);
     Value newVal;
     if (auto subview = dyn_cast<ttg::MemDescSubviewOp>(user)) {
@@ -1514,7 +1514,6 @@ void replaceUsesAndPropagateType(OpBuilder &builder, Operation *oldUse,
   // Perform late replacement.
   for (OpOperand *operand : operandsToReplace) {
     if (auto wait = dyn_cast<ttng::WarpGroupDotWaitOp>(operand->getOwner())) {
-      OpBuilder::InsertionGuard guard(builder);
       // Need to update the return type on the wait op as well
       builder.setInsertionPointAfter(wait);
       auto operands = llvm::to_vector(wait.getOperands());
