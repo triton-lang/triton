@@ -1542,6 +1542,8 @@ void replaceUsesWithLocalLoad(OpBuilder &builder, OpResult old,
   for (Operation *user : old.getUsers()) {
     if (auto userAlloc = dyn_cast<ttg::LocalAllocOp>(user)) {
       if (allocTy.getEncoding() == userAlloc.getType().getEncoding()) {
+        OpBuilder::InsertionGuard guard(builder);
+        replaceUsesAndPropagateType(builder, userAlloc, alloc);
         allocsToErase.push_back(userAlloc);
       }
     }
@@ -1556,9 +1558,8 @@ void replaceUsesWithLocalLoad(OpBuilder &builder, OpResult old,
         loc, old.getType(), alloc, token);
     old.replaceAllUsesWith(sharedLoad.getResult());
   }
-  for (auto userAlloc : allocsToErase) {
-    replaceUsesAndPropagateType(builder, userAlloc, alloc);
-    userAlloc.erase();
+  for (auto alloc : allocsToErase) {
+    alloc.erase();
   }
 }
 
