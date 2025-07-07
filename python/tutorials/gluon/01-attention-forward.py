@@ -280,18 +280,6 @@ def tcgen05_mma(a, b, d, use_acc, mbarriers):
     _tcgen05_mma_impl(a, b, d, use_acc=use_acc, mbarriers=mbarriers, mbarrier_preds=[True] * len(mbarriers))
 
 
-@gl.aggregate
-class MMAProducer:
-    producer: TensorMemoryProducer
-
-    def __init__(self, ctx):
-        self.producer = ctx.channel.create_producer()
-
-    def wait_and_issue_next(self, a, b, release_bars, use_acc):
-        tmem, bar = self.producer.acquire()
-        tcgen05_mma(a, b, tmem, use_acc=use_acc, mbarriers=[bar] + release_bars)
-
-
 # ===-----------------------------------------------------------------------===#
 # Gluon Attention
 # ===-----------------------------------------------------------------------===#
@@ -448,23 +436,23 @@ class AttentionProgram:
 @gl.aggregate
 class InnerLoopInfo:
     o_mma_ctx: MMAContext
+    s_chnl: TensorMemoryChannel
     corr_chnl: SharedMemoryChannel
-    epilogue_chnl: SharedMemoryChannel
 
     def __init__(self, config):
         self.o_mma_ctx = MMAContext(config.o_shape, num_buffers=1)
         self.o_mma_ctx.channel.initialize_for_producer()
 
+        self.s_chnl = TensorMemoryChannel.alloc(config.qk_shape, gl.float32, config.qk_tmem_layout, num_buffers=1)
+        self.s_chnl.initialize_for_producer()
+
         self.corr_chnl = SharedMemoryChannel.alloc([1], gl.int8, gl.constexpr(mbarrier.MBarrierLayout()), num_buffers=1)
         self.corr_chnl.initialize_for_producer()
-        self.epilogue_chnl = SharedMemoryChannel.alloc([1], gl.int8, gl.constexpr(mbarrier.MBarrierLayout()),
-                                                       num_buffers=1)
-        self.epilogue_chnl.initialize_for_producer()
 
     def release(self):
         self.o_mma_ctx.release()
+        self.s_chnl.release()
         self.corr_chnl.release()
-        self.epilogue_chnl.release()
 
 
 # ===-----------------------------------------------------------------------===#
@@ -538,9 +526,32 @@ def _reduce_fadd2(p0a, p1a, p0b, p1b):
 
 
 @gluon.jit
+def _borrow_s_as_p(config, s_tmem):
+    p_tmem = s_tmem.slice(0, config.BLOCK_N // 2)
+    return p_tmem._reinterpret(config.dtype, config.qk_shape, config.p_tmem_layout)
+
+
+@gluon.jit
+def _borrow_s_as_alpha(config, s_tmem):
+    alpha_tmem = s_tmem.slice(config.BLOCK_N // 2, 1)
+    alpha_layout: gl.constexpr = TensorMemoryLayout([config.SPLIT_M, 1], unpacked=False)
+    return alpha_tmem._reinterpret(gl.float32, [config.SPLIT_M, 1], alpha_layout)
+
+
+@gluon.jit
+def _borrow_s_for_epilogue(config, s_tmem):
+    m_i_tmem = s_tmem.slice(0, 1)
+    l_i_tmem = s_tmem.slice(1, 1)
+    layout: gl.constexpr = TensorMemoryLayout([config.SPLIT_M, 1], unpacked=False)
+    m_i_tmem = m_i_tmem._reinterpret(gl.float32, [config.SPLIT_M, 1], layout)
+    l_i_tmem = l_i_tmem._reinterpret(gl.float32, [config.SPLIT_M, 1], layout)
+    return m_i_tmem, l_i_tmem
+
+
+@gluon.jit
 def _attn_fwd_load(  #
         config, info0, info1,  #
-        q_chnl, kv_chnl, s0_chnl, s1_chnl,  #
+        q_chnl, kv_chnl, epi_chnl,  #
         M, desc_q, desc_k, desc_v, desc_o,  #
         STAGE: gl.constexpr):
     q_producer = q_chnl.create_producer()
@@ -575,29 +586,16 @@ def _attn_fwd_load(  #
 
 
 @gluon.jit
-def _borrow_s_as_p(config, s_tmem):
-    p_tmem = s_tmem.slice(0, config.BLOCK_N // 2)
-    return p_tmem._reinterpret(config.dtype, config.qk_shape, config.p_tmem_layout)
-
-
-@gluon.jit
-def _borrow_s_as_alpha(config, s_tmem):
-    alpha_tmem = s_tmem.slice(config.BLOCK_N // 2, 1)
-    alpha_layout: gl.constexpr = TensorMemoryLayout([config.SPLIT_M, 1], unpacked=False)
-    return alpha_tmem._reinterpret(gl.float32, [config.SPLIT_M, 1], alpha_layout)
-
-
-@gluon.jit
 def _attn_fwd_mma(  #
         config, info0, info1,  #
-        q_chnl, kv_chnl, s0_chnl, s1_chnl,  #
+        q_chnl, kv_chnl, epi_chnl,  #
         M, desc_q, desc_k, desc_v, desc_o,  #
         STAGE: gl.constexpr):
     q_consumer = q_chnl.create_consumer()
     kv_consumer = kv_chnl.create_consumer()
 
-    s0_producer = s0_chnl.create_producer()
-    s1_producer = s1_chnl.create_producer()
+    s0_producer = info0.s_chnl.create_producer()
+    s1_producer = info1.s_chnl.create_producer()
 
     o0_producer = info0.o_mma_ctx.channel.create_producer()
     o1_producer = info1.o_mma_ctx.channel.create_producer()
@@ -653,65 +651,6 @@ def _attn_fwd_mma(  #
 
 
 @gluon.jit
-def _attn_fwd_correction_compute(config, alpha_consumer, o_consumer):
-    alpha_layout: gl.constexpr = gl.SliceLayout(1, config.o_splitn_layout)
-    alpha = alpha_consumer.get(config.alpha_2d_layout)
-    alpha = gl.convert_layout(alpha.reshape([config.SPLIT_M]), alpha_layout, assert_trivial=True)
-
-    o_tmem, o_bar = o_consumer.acquire()
-    if config.SPLIT_D_FACTOR == 1:
-        o = o_tmem.load(config.o_layout)
-        o = _mul_f32x2(o, alpha[:, None])
-        o_tmem.store(o)
-    else:
-        for i in tl.static_range(config.SPLIT_D_FACTOR):
-            o_ref = o_tmem.slice(i * config.SPLIT_D, config.SPLIT_D)
-            o = o_ref.load(config.o_splitn_layout)
-            o = _mul_f32x2(o, alpha[:, None])
-            o_ref.store(o)
-    mbarrier.arrive(o_bar, count=1)
-
-
-@gluon.jit
-def _attn_fwd_correction(config, info0, info1, STAGE: gl.constexpr):
-    o0_consumer = info0.o_mma_ctx.channel.create_consumer()
-    o1_consumer = info1.o_mma_ctx.channel.create_consumer()
-    alpha0_consumer = info0.alpha_chnl.create_consumer()
-    alpha1_consumer = info1.alpha_chnl.create_consumer()
-
-    epilogue0_producer = info0.epilogue_chnl.create_producer()
-    epilogue1_producer = info1.epilogue_chnl.create_producer()
-
-    _, e0_bar = epilogue0_producer.acquire()
-    _, e1_bar = epilogue1_producer.acquire()
-
-    scheduler = ProgramScheduler(config)
-    for pid in range(scheduler.start_pid, scheduler.num_tiles, config.NUM_SMS):
-        prog = scheduler.get_program(pid)
-        lo, hi = prog.get_fused_loop_bounds(STAGE)
-        num_corrections = (hi - lo) // config.BLOCK_N
-
-        _, alpha0_bar = alpha0_consumer.acquire()
-        mbarrier.arrive(alpha0_bar, count=1)
-        _, alpha1_bar = alpha1_consumer.acquire()
-        mbarrier.arrive(alpha1_bar, count=1)
-
-        for _ in range(num_corrections - 1):
-            _attn_fwd_correction_compute(config, alpha0_consumer, o0_consumer)
-            _attn_fwd_correction_compute(config, alpha1_consumer, o1_consumer)
-
-        o0_tmem, o0_bar = o0_consumer.acquire()
-        mbarrier.arrive(e0_bar, count=1)
-        o1_tmem, o1_bar = o1_consumer.acquire()
-        mbarrier.arrive(e1_bar, count=1)
-
-        _, e0_bar = epilogue0_producer.acquire()
-        mbarrier.arrive(o0_bar, count=1)
-        _, e1_bar = epilogue1_producer.acquire()
-        mbarrier.arrive(o1_bar, count=1)
-
-
-@gluon.jit
 def _softmax_inner_loop(tile_id: gl.constexpr, config, prog,  #
                         s_consumer, corr_producer, corr_bar,  #
                         offs_m, offs_n, m_i, l_i,  #
@@ -720,7 +659,7 @@ def _softmax_inner_loop(tile_id: gl.constexpr, config, prog,  #
 
     for start_n in range(lo, hi, config.BLOCK_N):
         s_tmem, s_bar = s_consumer.acquire()
-        qk = s_tmem.load(config.qk_tmem_layout)
+        qk = s_tmem.load(config.qk_layout)
 
         if STAGE == 2:
             # Prevent LLVM from hoisting the partial sums, which triggers spilling.
@@ -789,8 +728,6 @@ def _softmax_tile(  #
 
     offs_n = gl.arange(0, config.BLOCK_N, qk_slice_dim0)
 
-    # o_smem = gl.allocate_shared_memory(config.dtype, config.o_shape, desc_o.layout)
-
     s_consumer = s_chnl.create_consumer()
     corr_producer = corr_chnl.create_producer()
     _, corr_bar = corr_producer.acquire()
@@ -816,50 +753,166 @@ def _softmax_tile(  #
                                                      offs_m, offs_n, m_i, l_i,  #
                                                      STAGE=2)
 
-        _, s_bar = s_consumer.acquire()
-        # store l_i, m_i
+        s_tmem, s_bar = s_consumer.acquire()
+        m_i_tmem, l_i_tmem = _borrow_s_for_epilogue(config, s_tmem)
+        m_i_tmem.store(gl.convert_layout(m_i.expand_dims(1), config.alpha_2d_layout, assert_trivial=True))
+        l_i_tmem.store(gl.convert_layout(l_i.expand_dims(1), config.alpha_2d_layout, assert_trivial=True))
+
         mbarrier.arrive(corr_bar, count=1)
         _, corr_bar = corr_producer.acquire()
 
         mbarrier.arrive(s_bar, count=1)
 
-        # _, e_bar = epilogue_consumer.acquire()
-        # o_tmem = info.o_mma_ctx.channel.mem.index(0)
-        # o = o_tmem.load(config.o_layout)
-        # mbarrier.arrive(e_bar, count=1)
-
-        # m_i += gl.log2(l_i)
-        # o = o / gl.convert_layout(l_i, gl.SliceLayout(1, config.o_layout), assert_trivial=True)[:, None]
-
-        # coalesced: gl.constexpr = gl.BlockedLayout([1], [32], [4], [0])
-        # offs_m = prog.start_m * config.BLOCK_M
-        # offs_m += gl.arange(tile_id * config.SPLIT_M, (tile_id + 1) * config.SPLIT_M, coalesced)
-
-        # m_ptrs = M + prog.off_hz * config.N_CTX + offs_m
-        # gl.store(m_ptrs, gl.convert_layout(m_i, coalesced, assert_trivial=True))
-        # tma.store_wait(0)
-        # o_smem.store(o.to(config.dtype))
-        # fence_async_shared()
-        # tma.async_copy_shared_to_global(desc_o, [prog.qo_offset_y + config.SPLIT_M * tile_id, 0], o_smem)
-    tma.store_wait(0)
-
 
 @gluon.jit
 def _attn_fwd_softmax0(  #
         config, info0, info1,  #
-        q_chnl, kv_chnl, s0_chnl, s1_chnl,  #
+        q_chnl, kv_chnl, epi_chnl,  #
         M, desc_q, desc_k, desc_v, desc_o,  #
         STAGE: gl.constexpr):
-    _softmax_tile(0, config, info0, M, desc_o, STAGE, s0_chnl, info0.corr_chnl)
+    _softmax_tile(0, config, info0, M, desc_o, STAGE, info0.s_chnl, info0.corr_chnl)
 
 
 @gluon.jit
 def _attn_fwd_softmax1(  #
         config, info0, info1,  #
-        q_chnl, kv_chnl, s0_chnl, s1_chnl,  #
+        q_chnl, kv_chnl, epi_chnl,  #
         M, desc_q, desc_k, desc_v, desc_o,  #
         STAGE: gl.constexpr):
-    _softmax_tile(1, config, info1, M, desc_o, STAGE, s1_chnl, info1.corr_chnl)
+    _softmax_tile(1, config, info1, M, desc_o, STAGE, info1.s_chnl, info1.corr_chnl)
+
+
+@gluon.jit
+def _attn_fwd_epilogue(  #
+        config, info0, info1,  #
+        q_chnl, kv_chnl, epi_chnl,  #
+        M, desc_q, desc_k, desc_v, desc_o,  #
+        STAGE: gl.constexpr):
+    epi_consumer = epi_chnl.create_consumer()
+
+    scheduler = ProgramScheduler(config)
+    for pid in range(scheduler.start_pid, scheduler.num_tiles, config.NUM_SMS):
+        prog = scheduler.get_program(pid)
+
+        o0_smem, o0_bar = epi_consumer.acquire()
+        tma.async_copy_shared_to_global(desc_o, [prog.qo_offset_y + config.SPLIT_M * 0, 0], o0_smem)
+
+        o1_smem, o1_bar = epi_consumer.acquire()
+        tma.async_copy_shared_to_global(desc_o, [prog.qo_offset_y + config.SPLIT_M * 1, 0], o1_smem)
+
+        tma.store_wait(1)
+        mbarrier.arrive(o0_bar, count=1)
+        tma.store_wait(0)
+        mbarrier.arrive(o1_bar, count=1)
+
+
+@gluon.jit
+def _attn_fwd_correction_rescale(config, alpha, o_tmem):
+    for i in tl.static_range(config.SPLIT_D_FACTOR):
+        o_ref = o_tmem.slice(i * config.SPLIT_D, config.SPLIT_D)
+        o = o_ref.load(config.o_splitn_layout)
+        o = _mul_f32x2(o, alpha[:, None])
+        o_ref.store(o)
+
+
+@gluon.jit
+def _attn_fwd_correction_epilogue(config, scale, o_tmem, o_smem):
+    #for i in tl.static_range(config.SPLIT_D_FACTOR):
+    #    o_ref = o_tmem.slice(i * config.SPLIT_D, config.SPLIT_D)
+    #    o = o_ref.load(config.o_splitn_layout)
+    #    o = _mul_f32x2(o, scale[:, None])
+    #    o_smem.slice(i * config.SPLIT_D, config.SPLIT_D, dim=1).store(o.to(config.dtype))
+    o = o_tmem.load(config.o_layout)
+    o = _mul_f32x2(o, gl.convert_layout(scale, gl.SliceLayout(1, config.o_layout), assert_trivial=True)[:, None])
+    o_smem.store(o.to(config.dtype))
+
+
+@gluon.jit
+def _attn_fwd_correction(config, info0, info1, M, epi_chnl, STAGE: gl.constexpr):
+    alpha_layout: gl.constexpr = gl.SliceLayout(1, config.o_splitn_layout)
+
+    s0_tmem = info0.s_chnl.mem.index(0)
+    s1_tmem = info1.s_chnl.mem.index(0)
+
+    o0_consumer = info0.o_mma_ctx.channel.create_consumer()
+    o1_consumer = info1.o_mma_ctx.channel.create_consumer()
+    corr0_consumer = info0.corr_chnl.create_consumer()
+    corr1_consumer = info1.corr_chnl.create_consumer()
+
+    epi_producer = epi_chnl.create_producer()
+
+    scheduler = ProgramScheduler(config)
+    for pid in range(scheduler.start_pid, scheduler.num_tiles, config.NUM_SMS):
+        prog = scheduler.get_program(pid)
+        lo, hi = prog.get_fused_loop_bounds(STAGE)
+        num_corrections = (hi - lo) // config.BLOCK_N
+
+        _, corr0_bar = corr0_consumer.acquire()
+        mbarrier.arrive(corr0_bar, count=1)
+
+        _, corr1_bar = corr1_consumer.acquire()
+        for i in range(num_corrections - 1):
+            _, corr0_bar = corr0_consumer.acquire()
+            alpha0 = _borrow_s_as_alpha(config, s0_tmem).load(config.alpha_2d_layout)
+            alpha0 = gl.convert_layout(alpha0.reshape([config.SPLIT_M]), alpha_layout, assert_trivial=True)
+
+            o0_tmem, o0_bar = o0_consumer.acquire()
+            _attn_fwd_correction_rescale(config, alpha0, o0_tmem)
+            mbarrier.arrive(corr1_bar, count=1)
+            mbarrier.arrive(o0_bar, count=1)
+
+            _, corr1_bar = corr1_consumer.acquire()
+            alpha1 = _borrow_s_as_alpha(config, s1_tmem).load(config.alpha_2d_layout)
+            alpha1 = gl.convert_layout(alpha1.reshape([config.SPLIT_M]), alpha_layout, assert_trivial=True)
+
+            o1_tmem, o1_bar = o1_consumer.acquire()
+            _attn_fwd_correction_rescale(config, alpha1, o1_tmem)
+            mbarrier.arrive(corr0_bar, count=1)
+            mbarrier.arrive(o1_bar, count=1)
+        mbarrier.arrive(corr1_bar, count=1)
+
+        _, corr0_bar = corr0_consumer.acquire()
+        m_i0_tmem, l_i0_tmem = _borrow_s_for_epilogue(config, s0_tmem)
+        m_i0 = m_i0_tmem.load(config.alpha_2d_layout).reshape([config.SPLIT_M])
+        m_i0 = gl.convert_layout(m_i0, alpha_layout, assert_trivial=True)
+        l_i0 = l_i0_tmem.load(config.alpha_2d_layout).reshape([config.SPLIT_M])
+        l_i0 = gl.convert_layout(l_i0, alpha_layout, assert_trivial=True)
+        mbarrier.arrive(corr0_bar, count=1)
+
+        o0_tmem, o0_bar = o0_consumer.acquire()
+        o0_smem, epi_bar = epi_producer.acquire()
+        _attn_fwd_correction_epilogue(config, 1 / l_i0, o0_tmem, o0_smem)
+
+        m_i0 += gl.log2(l_i0)
+        coalesced: gl.constexpr = gl.BlockedLayout([1], [32], [4], [0])
+        offs_m = prog.start_m * config.BLOCK_M
+        offs_m += gl.arange(0 * config.SPLIT_M, 1 * config.SPLIT_M, coalesced)
+        m_ptrs = M + prog.off_hz * config.N_CTX + offs_m
+        gl.store(m_ptrs, gl.convert_layout(m_i0, coalesced, assert_trivial=True))
+
+        mbarrier.arrive(o0_bar, count=1)
+        mbarrier.arrive(epi_bar, count=1)
+
+        _, corr1_bar = corr1_consumer.acquire()
+        m_i1_tmem, l_i1_tmem = _borrow_s_for_epilogue(config, s1_tmem)
+        m_i1 = m_i1_tmem.load(config.alpha_2d_layout).reshape([config.SPLIT_M])
+        m_i1 = gl.convert_layout(m_i1, alpha_layout, assert_trivial=True)
+        l_i1 = l_i1_tmem.load(config.alpha_2d_layout).reshape([config.SPLIT_M])
+        l_i1 = gl.convert_layout(l_i1, alpha_layout, assert_trivial=True)
+        mbarrier.arrive(corr1_bar, count=1)
+
+        o1_tmem, o1_bar = o1_consumer.acquire()
+        o1_smem, epi_bar = epi_producer.acquire()
+        _attn_fwd_correction_epilogue(config, 1 / l_i1, o1_tmem, o1_smem)
+
+        m_i1 += gl.log2(l_i1)
+        offs_m = prog.start_m * config.BLOCK_M
+        offs_m += gl.arange(1 * config.SPLIT_M, 2 * config.SPLIT_M, coalesced)
+        m_ptrs = M + prog.off_hz * config.N_CTX + offs_m
+        gl.store(m_ptrs, gl.convert_layout(m_i1, coalesced, assert_trivial=True))
+
+        mbarrier.arrive(o1_bar, count=1)
+        mbarrier.arrive(epi_bar, count=1)
 
 
 @gluon.jit
@@ -872,16 +925,21 @@ def _attn_fwd_inner(config, info0, info1,  #
         num_kv_buffers: gl.constexpr = 3 if config.HEAD_DIM == 128 else 6
     else:
         num_kv_buffers: gl.constexpr = 4 if config.HEAD_DIM == 128 else 8
-    kv_chnl = get_desc_channel(desc_k, num_buffers=num_kv_buffers, num_consumers=2)
+    kv_chnl = get_desc_channel(desc_k, num_buffers=num_kv_buffers, num_consumers=1)
     kv_chnl.initialize_for_producer()
 
     q_chnl = get_desc_channel(desc_q, num_buffers=2)
     q_chnl.initialize_for_producer()
 
+    epi_chnl = SharedMemoryChannel.alloc(config.o_shape, config.dtype, gl.constexpr(desc_o.layout), num_buffers=2)
+    epi_chnl.initialize_for_producer()
+
     gl.warp_specialize((
         config,
         info0,
         info1,
+        M,
+        epi_chnl,
         STAGE,
     ), _attn_fwd_correction, (
         config,
@@ -889,6 +947,7 @@ def _attn_fwd_inner(config, info0, info1,  #
         info1,
         q_chnl,
         kv_chnl,
+        epi_chnl,
         M,
         desc_q,
         desc_k,
@@ -900,10 +959,12 @@ def _attn_fwd_inner(config, info0, info1,  #
         _attn_fwd_softmax1,
         _attn_fwd_mma,
         _attn_fwd_load,
-    ], [4, 4, 1, 1], [192, 192, 32, 32])
+        _attn_fwd_epilogue,
+    ], [4, 4, 1, 1, 1], [192, 192, 32, 32, 32])
 
     q_chnl.release()
     kv_chnl.release()
+    epi_chnl.release()
 
 
 @gluon.jit(do_not_specialize=["Z"])
