@@ -145,7 +145,7 @@ Value matrixVectorProd(TritonLLVMOpBuilder &b, const LinearLayout &A, Value x) {
     while (!reachedFixedPoint) {
       reachedFixedPoint = true;
       for (uint32_t m : masks) {
-        uint32_t c = m &~ explicitCols;
+        uint32_t c = m & ~explicitCols;
         if ((c != 0) && ((c & (c - 1)) == 0)) {
           // found a single-element diagonal
           explicitCols |= c;
@@ -158,7 +158,7 @@ Value matrixVectorProd(TritonLLVMOpBuilder &b, const LinearLayout &A, Value x) {
   // handle any diagonals that have survived
   Value ret = b.i32_val(0);
   for (int i = -nRow + 1; i < nCol; i++) {
-    auto mask = getMask(i) &~ explicitCols;
+    auto mask = getMask(i) & ~explicitCols;
     if (mask == 0)
       continue;
     auto masked = b.and_(x, b.i32_val(mask));
