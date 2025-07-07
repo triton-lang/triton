@@ -127,7 +127,8 @@ Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
   }
   Value falseVal = rewriter.create<LLVM::ConstantOp>(
       loc, elemTy, rewriter.getZeroAttr(elemTy));
-  return mlir::LLVM::AMD::llLoad(rewriter, loc, ptr, elemTy, pred, falseVal);
+  return mlir::LLVM::AMD::llLoad(rewriter, loc, ptr, elemTy, pred, falseVal,
+                                 triton::CacheModifier::NONE, true);
 }
 
 Value TargetInfo::shuffleXor(RewriterBase &rewriter, Location loc, Value val,
