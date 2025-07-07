@@ -104,3 +104,59 @@ module attributes {"ttg.num-warps" = 8 : i32} {
     tt.return
   }
 }
+
+// -----
+
+// CHECK: #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+// CHECK: #smem = #ttg.shared_memory
+// CHECK: module attributes {"ttg.num-warps" = 4 : i32, "ttg.total-num-warps" = 8 : i32} {
+// CHECK:   tt.func @convert_warp_specialize() {
+// CHECK:     %[[SCRATCH:.*]] = proton_gpu.global_scratch_alloc {alignment = 128 : i32, nbytes = 1152 : i32} : !tt.ptr<i32>
+// CHECK:     proton_gpu.init_ctx %[[SCRATCH]] : !tt.ptr<i32>
+// CHECK:     %[[MEMDESC:.*]] = ttg.local_alloc : () -> !ttg.memdesc<256xi32, #shared, #smem, mutable>
+// CHECK:     %[[SEGMENT:.*]] = proton_gpu.segment_alloc %[[MEMDESC]] : !ttg.memdesc<256xi32, #shared, #smem, mutable> -> <1024, #smem, warp>
+// CHECK:     %[[COUNTER1:.*]] = proton_gpu.read_counter : i32
+// CHECK:     proton_gpu.circular_store start %[[SEGMENT]], %[[COUNTER1]] {scopeId = 0 : i32} : !proton_gpu.segment<1024, #smem, warp>, i32
+// CHECK:     ttg.warp_specialize(%[[MEMDESC]], %[[SCRATCH]])
+// CHECK:     default {
+// CHECK:       %[[COUNTER2:.*]] = proton_gpu.read_counter : i32
+// CHECK:       proton_gpu.circular_store start %[[SEGMENT]], %[[COUNTER2]] {scopeId = 1 : i32} : !proton_gpu.segment<1024, #smem, warp>, i32
+// CHECK:       %[[COUNTER3:.*]] = proton_gpu.read_counter : i32
+// CHECK:       proton_gpu.circular_store end %[[SEGMENT]], %[[COUNTER3]] {scopeId = 1 : i32} : !proton_gpu.segment<1024, #smem, warp>, i32
+// CHECK:       ttg.warp_yield
+// CHECK:     }
+// CHECK:     partition0(%[[ARG0:.*]]: !ttg.memdesc<256xi32, #shared, #smem, mutable>, %[[ARG1:.*]]: !tt.ptr<i32>) num_warps(1) {
+// CHECK:       %[[SEGMENT2:.*]] = proton_gpu.segment_alloc %[[ARG0]] : !ttg.memdesc<256xi32, #shared, #smem, mutable> -> <1024, #smem, warp>
+// CHECK:       proton_gpu.restore_ctx %[[SEGMENT2]], %[[ARG1]] : !proton_gpu.segment<1024, #smem, warp>, !tt.ptr<i32>
+// CHECK:       %[[COUNTER4:.*]] = proton_gpu.read_counter : i32
+// CHECK:       proton_gpu.circular_store start %[[SEGMENT2]], %[[COUNTER4]] {scopeId = 2 : i32} : !proton_gpu.segment<1024, #smem, warp>, i32
+// CHECK:       %[[COUNTER5:.*]] = proton_gpu.read_counter : i32
+// CHECK:       proton_gpu.circular_store end %[[SEGMENT2]], %[[COUNTER5]] {scopeId = 2 : i32} : !proton_gpu.segment<1024, #smem, warp>, i32
+// CHECK:       proton_gpu.save_ctx %[[SEGMENT2]], %[[ARG1]] : !proton_gpu.segment<1024, #smem, warp>, !tt.ptr<i32>
+// CHECK:       ttg.warp_return
+// CHECK:     } : (!ttg.memdesc<256xi32, #shared, #smem, mutable>, !tt.ptr<i32>) -> ()
+// CHECK:     %[[COUNTER6:.*]] = proton_gpu.read_counter : i32
+// CHECK:     proton_gpu.circular_store end %[[SEGMENT]], %[[COUNTER6]] {scopeId = 0 : i32} : !proton_gpu.segment<1024, #smem, warp>, i32
+// CHECK:     gpu.barrier
+// CHECK:     proton_gpu.finalize %[[SEGMENT]], %[[SCRATCH]] : !proton_gpu.segment<1024, #smem, warp>, !tt.ptr<i32>
+// CHECK:     tt.return
+// CHECK:   }
+// CHECK: }
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.total-num-warps" = 8 : i32} {
+  tt.func @convert_warp_specialize() {
+    proton.record start "kernel"
+    ttg.warp_specialize()
+    default {
+      proton.record start "default"
+      proton.record end "default"
+      ttg.warp_yield
+    }
+    partition0() num_warps(1) {
+      proton.record start "partition0"
+      proton.record end "partition0"
+      ttg.warp_return
+    } : () -> ()
+    proton.record end "kernel"
+    tt.return
+  }
+}

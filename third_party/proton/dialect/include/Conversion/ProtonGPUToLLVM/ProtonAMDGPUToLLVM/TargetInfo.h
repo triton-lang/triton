@@ -25,6 +25,8 @@ public:
 
   int getAddressSpace(Attribute addressSpace) const override;
 
+  int getIndexPtrAddrSpace() const override;
+
   ~TargetInfo() = default;
 
 private:
