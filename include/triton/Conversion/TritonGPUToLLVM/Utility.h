@@ -516,6 +516,7 @@ SmallVector<SmallVector<Value>>
 emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
             Attribute layout, RankedTensorType type, bool withCTAOffset);
 
+// Emits the required padding in elements for the given shared memory offset
 Value emitPadding(Location loc, RewriterBase &rewriter,
                   triton::gpu::PaddedSharedEncodingAttr layout,
                   Value smemOffset);

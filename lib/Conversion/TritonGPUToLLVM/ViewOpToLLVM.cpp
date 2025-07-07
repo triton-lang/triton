@@ -515,6 +515,7 @@ struct MemDescSubviewOpConversion
 
     if (auto paddedLayout = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(
             srcTy.getEncoding())) {
+      // Apply padding based on the computed offset
       Value padOffset = emitPadding(loc, rewriter, paddedLayout, offset);
       offset = b.add(offset, padOffset);
     }
