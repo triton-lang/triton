@@ -68,21 +68,11 @@ class LowerWarpGroup : public OpRewritePattern<WarpGroupOp> {
           output_block->addArgument(value.getType(), value.getLoc());
       valueMap[value] = new_value;
     }
-    for (auto &value : constants) {
-      if (isa<arith::ConstantOp>(*value.getDefiningOp())) {
-        auto cOp = cast<arith::ConstantOp>(*value.getDefiningOp());
-        auto newConst =
-            rewriter.create<arith::ConstantOp>(value.getLoc(), cOp.getValue());
 
-        valueMap[value] = newConst->getResult(0);
-      } else {
-	// TODO
-        auto makeRangeOp = cast<MakeRangeOp>(*value.getDefiningOp());
-        auto newMakeRangeOp = rewriter.create<MakeRangeOp>(
-            value.getLoc(), makeRangeOp.getType(), makeRangeOp.getStart(),
-            makeRangeOp.getEnd());
-        valueMap[value] = newMakeRangeOp->getResult(0);
-      }
+    IRMapping mapping;
+    for (auto &value : constants) {
+      valueMap[value] =
+          rewriter.clone(*value.getDefiningOp(), mapping)->getResult(0);
     }
     auto retOp = rewriter.create<triton::gpu::WarpReturnOp>(
         inputRegion->getLoc(), ArrayRef<Type>(), ArrayRef<Value>());
@@ -116,10 +106,13 @@ class LowerWarpGroup : public OpRewritePattern<WarpGroupOp> {
 
     SmallVector<Value> inputs;
     SmallVector<Value> constants;
-    for (Value capture : captures) {
-      // TODO
-      if (!isa<BlockArgument>(capture) &&
-          isa<arith::ConstantOp, MakeRangeOp>(capture.getDefiningOp())) {
+    for (unsigned i = 0; i < captures.size(); ++i) {
+      Value capture = captures[i];
+      Operation *defOp = capture.getDefiningOp();
+      if (!isa<BlockArgument>(capture) && defOp && isPure(defOp) &&
+          (defOp->hasTrait<OpTrait::ConstantLike>() ||
+           isa<RankedTensorType>(capture.getType()))) {
+        captures.insert(defOp->operand_begin(), defOp->operand_end());
         constants.push_back(capture);
       } else {
         inputs.push_back(capture);
