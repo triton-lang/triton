@@ -633,30 +633,33 @@ LogicalResult Pingponger::transformTwoPPClusters(OpBuilder &builder,
   return success();
 }
 
+// This pingpong variant tries to construct one memory cluster and one
+// dot cluster. Instead of slice the tile, it is supposed to use half 
+// sized tile_K and use num_stages=3 to prefetch and hide the buffer
+// loading cycles. Suitable for large LDS using async copy.
 LogicalResult Pingponger::transformNS3(OpBuilder &builder, Location loc) {
-//forOp.dump();
   Operation *gLoadRhs = useAsyncCopy ? asyncCopyOps[1] : gLoadOps[1];
   builder.setInsertionPointAfter(gLoadRhs);
   updateOpInsertion(gLoadRhs);
  
-  // Combine asyncWaitOps
+  // Combine asyncWaitOps.
+  // FIXME: This can be done in the streamPipeline pass but currently there's a know issue with combineRedundantWaitOps that produces incorrect IR. Can be removed once the issue is fixed.
   auto newAsyncWaitOp = asyncWaitOps[0];
   if (asyncWaitOps.size() > 1){
-  SmallVector<Value> tokens;
-  for (auto asyncWaitOp : asyncWaitOps) {
-    for (auto token : asyncWaitOp.getAsyncToken()) {
-      tokens.push_back(token);
+    SmallVector<Value> tokens;
+    for (auto asyncWaitOp : asyncWaitOps) {
+      for (auto token : asyncWaitOp.getAsyncToken()) {
+        tokens.push_back(token);
+      }
+    }
+    newAsyncWaitOp = builder.create<ttg::AsyncWaitOp>(loc, tokens, 0);
+    for (auto asyncWaitOp : asyncWaitOps) {
+      asyncWaitOp.getResult().replaceAllUsesWith(newAsyncWaitOp.getResult());
+      asyncWaitOp->erase();
     }
   }
-  newAsyncWaitOp = builder.create<ttg::AsyncWaitOp>(loc, tokens, 0);
-  for (auto asyncWaitOp : asyncWaitOps) {
-    asyncWaitOp.getResult().replaceAllUsesWith(newAsyncWaitOp.getResult());
-    asyncWaitOp->erase();
-  }
-}
 
-  // try to interleave address calculation better by inserting sched.barrier
-  // beween ds_reads. Helps reducing salu/valu stalls.
+  // Try to interleave address calculation with ds_read by seperating them with sched.barrier
   moveOpAndPredecessorsUpSameBlock(lLoadOps[0]);
   moveOpAndPredecessorsUpSameBlock(lLoadOps[1]);
   lLoadOps[0]->setAttr("split_dsread", builder.getUnitAttr());
@@ -666,11 +669,14 @@ LogicalResult Pingponger::transformNS3(OpBuilder &builder, Location loc) {
   appendOp(asyncCopyOps[0]);
   appendOp(asyncCommitOps[0]);
 
+  // The last point we need to guarantee async_copy has been completed.
+  // w0 : local_load 0 - Dot 0                 - local_load 1
+  // w1 :              - local_load 0 (*wait 1)- Dot 0
   appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
   appendOp(newAsyncWaitOp);
   appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
 
-  //appendOp(builder.create<ROCDL::IglpOpt>(loc, 3));
+  // Give hint to backend so it can interleave instructions better.
   appendOp(builder.create<ROCDL::SchedGroupBarrier>(loc, 8, 1, 0));
   appendOp(builder.create<ROCDL::SchedGroupBarrier>(loc, 4, 3, 0));
   appendOp(builder.create<ROCDL::SchedGroupBarrier>(loc, 8, 1, 0));
