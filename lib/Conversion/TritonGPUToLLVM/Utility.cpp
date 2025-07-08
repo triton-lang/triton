@@ -453,13 +453,13 @@ Value emitPadding(Location loc, RewriterBase &rewriter,
 
 namespace {
 
-Value getSmemVecAddr(const LinearLayout &regLayout,
-                     const LinearLayout &regToSharedLayout,
-                     const LinearLayout &invertAllocSharedLayout,
-                     const SharedMemoryObject &smemObj,
-                     triton::gpu::MemDescType sharedTy, Type elemLlvmTy,
-                     Value regId, Value laneId, Value warpId, Value blockId,
-                     Location loc, RewriterBase &rewriter) {
+SmallVector<Value> getSmemVecAddrVec(
+    const LinearLayout &regLayout, const LinearLayout &regToSharedLayout,
+    const LinearLayout &invertAllocSharedLayout,
+    const SharedMemoryObject &smemObj, triton::gpu::MemDescType sharedTy,
+    Type elemLlvmTy, ArrayRef<uint32_t> regIds, Value laneId, Value warpId,
+    Value blockId, Location loc, RewriterBase &rewriter) {
+
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   MLIRContext *ctx = rewriter.getContext();
   StringAttr kBlock = str_attr("block");
@@ -475,7 +475,10 @@ Value getSmemVecAddr(const LinearLayout &regLayout,
   auto smemBase = smemObj.getBase();
   auto smemOffsets = smemObj.getOffsets();
   auto smemStrides = smemObj.getStrides(sharedTy, loc, rewriter);
-  Value smemOffset;
+
+  SmallVector<Value> smemOffsetsComputed;
+  SmallVector<SmallVector<std::pair<StringAttr, Value>>> indicesVec;
+
   // When loading or storing to shared memory, we consider two cases for
   // performance reasons:
   //
@@ -511,38 +514,57 @@ Value getSmemVecAddr(const LinearLayout &regLayout,
   // to get the 1-D offset into shared memory. Then we just need to add the
   // padding offset.
   if (isSimpleSharedMemoryAccess(shape, allocShape, sharedEnc)) { // Case 1
-    smemOffset = applyLinearLayout(loc, rewriter, regToSharedLayout,
-                                   {{kRegister, regId},
-                                    {kLane, laneId},
-                                    {kWarp, warpId},
-                                    {kBlock, blockId}})[0]
-                     .second;
+
     // This reverts #5645, because it introduced increased register pressure in
     // AMD backend.
     // TODO: remove when new implementation performance reaches target level
     if (auto swizzledSharedEnc =
             mlir::dyn_cast<triton::gpu::SwizzledSharedEncodingAttr>(
                 sharedEnc)) {
-      auto regToSharedLayout =
+      auto regToSharedSwizzledLayout =
           getRegToSharedLayout(ctx, shape, regLayout, swizzledSharedEnc,
                                elemLlvmTy.getIntOrFloatBitWidth());
       auto smemOrder = swizzledSharedEnc.getOrder();
-      smemOffsets = llvm::to_vector(llvm::drop_end(llvm::make_second_range(
-          applyLinearLayout(loc, rewriter, regToSharedLayout,
-                            {{kRegister, regId},
-                             {kLane, laneId},
-                             {kWarp, warpId},
-                             {kBlock, b.i32_val(0)}}))));
-      // Reorder strides according to `order`.  This way they match the
-      // multi-dimensional offsets in regToSharedLayout.
-      smemOffset = dot(rewriter, loc, smemOffsets,
-                       applyPermutation(smemStrides, smemOrder));
-    }
-    if (auto paddedLayout =
-            dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(sharedEnc)) {
-      // Apply the offset needed for padding.
-      Value padOffset = emitPadding(loc, rewriter, paddedLayout, smemOffset);
-      smemOffset = b.add(smemOffset, padOffset);
+
+      auto swizzledIndicesVec =
+          applyLinearLayoutVec(loc, rewriter, regToSharedSwizzledLayout,
+                               {{kRegister, b.i32_val(0)},
+                                {kLane, laneId},
+                                {kWarp, warpId},
+                                {kBlock, b.i32_val(0)}},
+                               regIds);
+
+      auto reorderedStrides = applyPermutation(smemStrides, smemOrder);
+
+      for (auto &swizzledIndices : swizzledIndicesVec) {
+        SmallVector<Value> swizzledOffsets;
+        for (unsigned i = 0; i < swizzledIndices.size() - 1; ++i)
+          swizzledOffsets.push_back(swizzledIndices[i].second);
+
+        Value smemOffset =
+            dot(rewriter, loc, swizzledOffsets, reorderedStrides);
+        smemOffsetsComputed.push_back(smemOffset);
+      }
+    } else {
+      auto indicesVec = applyLinearLayoutVec(loc, rewriter, regToSharedLayout,
+                                             {{kRegister, b.i32_val(0)},
+                                              {kLane, laneId},
+                                              {kWarp, warpId},
+                                              {kBlock, blockId}},
+                                             regIds);
+
+      for (auto &indices : indicesVec) {
+        Value smemOffset = indices[0].second;
+
+        if (auto paddedLayout =
+                dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(sharedEnc)) {
+          // Apply the offset needed for padding.
+          Value padOffset =
+              emitPadding(loc, rewriter, paddedLayout, smemOffset);
+          smemOffset = b.add(smemOffset, padOffset);
+        }
+        smemOffsetsComputed.push_back(smemOffset);
+      }
     }
   } else { // Case 2 -> rank-reduced swizzling
     assert(rank >= 2 && "Swizzling only applies to tensors with rank >= 2");
@@ -573,26 +595,44 @@ Value getSmemVecAddr(const LinearLayout &regLayout,
     // This approach ensures that "absolute" tensor offsets can be
     // mapped to the correct shared memory addresses using
     // `invertAllocSharedLayout`.
-    auto multiDimTensorOffsets =
-        llvm::to_vector(applyLinearLayout(loc, rewriter, regLayout,
-                                          {{kRegister, regId},
-                                           {kLane, laneId},
-                                           {kWarp, warpId},
-                                           {kBlock, blockId}}));
-    for (auto i = 0; i < rank; i++) {
-      multiDimTensorOffsets[i].second =
-          b.add(multiDimTensorOffsets[i].second, smemOffsets[i]);
+
+    auto composedLayout = regLayout.compose(invertAllocSharedLayout);
+
+    auto indicesVec = applyLinearLayoutVec(loc, rewriter, composedLayout,
+                                           {{kRegister, b.i32_val(0)},
+                                            {kLane, laneId},
+                                            {kWarp, warpId},
+                                            {kBlock, blockId}},
+                                           regIds);
+
+    SmallVector<std::pair<StringAttr, Value>> smemOffsetPairs;
+    for (auto [attr, val] :
+         llvm::zip(invertAllocSharedLayout.getInDimNames(), smemOffsets)) {
+      smemOffsetPairs.emplace_back(attr, val);
     }
-    smemOffset = applyLinearLayout(loc, rewriter, invertAllocSharedLayout,
-                                   multiDimTensorOffsets)[0]
-                     .second;
+    Value smemOffsetsApplied =
+        applyLinearLayout(loc, rewriter, invertAllocSharedLayout,
+                          smemOffsetPairs)[0]
+            .second;
+
     Value baseToAllocBaseDist = dot(rewriter, loc, smemOffsets, smemStrides);
-    smemOffset = b.sub(smemOffset, baseToAllocBaseDist);
+
+    for (auto &indices : indicesVec) {
+      Value smemOffset = indices[0].second;
+      smemOffset = b.xor_(smemOffset, smemOffsetsApplied);
+      smemOffset = b.sub(smemOffset, baseToAllocBaseDist);
+      smemOffsetsComputed.push_back(smemOffset);
+    }
   }
-  auto ptrTy = smemBase.getType();
-  auto vecAddr = b.gep(ptrTy, elemLlvmTy, smemBase, smemOffset,
-                       LLVM::GEPNoWrapFlags::inbounds);
-  return vecAddr;
+
+  SmallVector<Value> smemVecAddrs;
+  for (auto smemOffset : smemOffsetsComputed) {
+    auto vecAddr = b.gep(smemBase.getType(), elemLlvmTy, smemBase, smemOffset,
+                         LLVM::GEPNoWrapFlags::inbounds);
+    smemVecAddrs.push_back(vecAddr);
+  }
+
+  return smemVecAddrs;
 }
 
 std::pair<int, ColumnAction>
@@ -848,12 +888,14 @@ bool emitTransferBetweenRegistersAndShared(
 
   int numElems = regToSharedLayout.getInDimSize(kRegister);
   auto vecTy = vec_ty(elemLlvmTy, vecElems);
-  SmallVector<Value> ret;
+  SmallVector<uint32_t> regIds;
   for (int i = 0; i < numElems / vecElems; i++) {
-    auto regId = b.i32_val(i * vecElems);
-    auto vecAddr = getSmemVecAddr(
-        regLayout, regToSharedLayout, invertAllocSharedLayout, smemObj,
-        sharedTy, elemLlvmTy, regId, laneId, warpId, blockId, loc, rewriter);
+    regIds.push_back(i * vecElems);
+  }
+  auto vecAddrVec = getSmemVecAddrVec(
+      regLayout, regToSharedLayout, invertAllocSharedLayout, smemObj, sharedTy,
+      elemLlvmTy, regIds, laneId, warpId, blockId, loc, rewriter);
+  for (Value &vecAddr : vecAddrVec) {
     perVectorCallback(vecTy, vecAddr);
   }
   return true;
