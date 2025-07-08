@@ -659,9 +659,9 @@ def _softmax_inner_loop(tile_id: gl.constexpr, config, prog,  #
         p_tmem.slice(0, config.BLOCK_N // 2).store(p0.to(config.dtype))
         p1 = gl.exp2(qk1)
         p_tmem.slice(config.BLOCK_N // 2, config.BLOCK_N // 2).store(p1.to(config.dtype))
+        mbarrier.arrive(s_bar, count=1)
 
         _, corr_bar = corr_producer.acquire()
-        mbarrier.arrive(s_bar, count=1)
 
         # FIXME: This code makes ptxas misbehave and spill :(
         # p0 = gl.convert_layout(p0, config.qk_layout, assert_trivial=True)
