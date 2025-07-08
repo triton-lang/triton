@@ -1616,49 +1616,118 @@ static ConverterT Fp8E4M3FNUZ_to_Fp16(AMD::ISAFamily isaFamily) {
                                             : Fp8E4M3FNUZ_to_Fp16_SW;
 }
 
-// Fp16 -> Fp8E4M3 (packed)
-static Value Fp16_to_Fp8E4M3FNUZ_oneValue(Location loc,
-                                          ConversionPatternRewriter &rewriter,
-                                          Value v) {
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  auto vi16 = b.bitcast(v, i16_ty);
-  auto e10 = b.and_(vi16, b.int_val(16, 0x7C00));
-  auto e = b.lshr(i16_ty, e10, b.int_val(16, 10));
-
-  auto s = b.and_(i16_ty, vi16, b.int_val(16, 0x8000));
-
-  auto m7 = b.and_(i16_ty, vi16, b.int_val(16, 0x0380));
-  auto m = b.shl(i16_ty, m7, b.int_val(16, 1));
-
-  // three cases:
-  //  1) e > 21 --> e = 1111,
-  //  2) e <= 7 ---> e = 0,
-  //  3) others, normal conversion
-  auto e1 = b.int_val(16, 0x7800);
-  auto e2 = b.int_val(16, 0x0);
-  auto e31 = b.sub(i16_ty, e10, b.int_val(16, 0x1C00));
-  auto e3 = b.shl(i16_ty, e31, b.int_val(16, 1));
-
-  auto c13 = b.icmp_sgt(e, b.int_val(16, 21));
-  auto e13 = b.select(c13, e1, e3);
-  auto c23 = b.icmp_sle(e, b.int_val(16, 7));
-  auto re = b.select(c23, e2, e13);
-
-  auto r = b.or_(i16_ty, s, b.or_(i16_ty, re, m));
-  auto fp8x2VecTy = vec_ty(i8_ty, 2);
-  auto res = b.bitcast(r, fp8x2VecTy);
-
-  return b.extract_element(i8_ty, res, b.i32_val(1));
-}
-
 static SmallVector<Value>
 Fp16_to_Fp8E4M3FNUZ_SW(Location loc, ConversionPatternRewriter &rewriter,
                        const SmallVector<Value> &v) {
-  SmallVector<Value> result(2);
-  result[0] = Fp16_to_Fp8E4M3FNUZ_oneValue(loc, rewriter, v[0]);
-  result[1] = Fp16_to_Fp8E4M3FNUZ_oneValue(loc, rewriter, v[1]);
+  assert(v.size() == 2);
+  auto convert = [&](Value v) {
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
 
-  return result;
+    constexpr uint16_t srcExpNumBits = 5U;
+    constexpr uint16_t srcMantNumBits = 10U;
+    constexpr uint16_t srcExpBias = 15U;
+
+    constexpr uint16_t dstExpNumBits = 4U;
+    constexpr uint16_t dstMantNumBits = 3U;
+    constexpr uint16_t dstExpBias = 8U;
+
+    constexpr uint16_t srcBitWidth = 1U + srcExpNumBits + srcMantNumBits;
+    constexpr uint16_t reducedMantNumBits = srcMantNumBits - dstMantNumBits;
+    Value reducedMantissa = b.i16_val(reducedMantNumBits);
+
+    // Get sign and absolute value
+    Value intVal = b.bitcast(v, i16_ty);
+    constexpr uint16_t signMask = 1U << (srcBitWidth - 1U);
+    Value sign = b.trunc(i8_ty, b.lshr(b.and_(intVal, b.i16_val(signMask)),
+                                       b.i16_val(srcBitWidth - 8U)));
+
+    constexpr uint16_t absMask = signMask - 1U;
+    intVal = b.and_(intVal, b.i16_val(absMask));
+
+    // Rounding to nearest even
+    // (1 << (reducedMantNumBits - 1)) indicates the position of the round bit.
+    // With -1 we get a mask with all bits below the round bit set to 1
+    constexpr uint16_t baseRoundingBias =
+        (1U << (reducedMantNumBits - 1U)) - 1U;
+
+    constexpr uint16_t mantissaLSB = (1U << reducedMantNumBits);
+    Value remainingMantissaLSB =
+        b.lshr(b.and_(intVal, b.i16_val(mantissaLSB)), reducedMantissa);
+    Value roundingBias =
+        b.add(remainingMantissaLSB, b.i16_val(baseRoundingBias));
+    Value vFp8 = b.add(intVal, roundingBias);
+
+    // Reduce mantissa to 3 bits
+    vFp8 = b.and_(vFp8, b.i16_val(0xFF80));
+
+    // We round numbers smaller than the minimal normal number in Fp8 to make it
+    // easier to handle subnormals E4M3FNUZ min normal is: 2^-7 = 0x2000 in Fp16
+    vFp8 = b.umax(vFp8, b.i16_val(0x2000));
+    // Adjust exponent bias
+    constexpr uint16_t expBias = (srcExpBias - dstExpBias) << srcMantNumBits;
+    vFp8 = b.sub(vFp8, b.i16_val(expBias));
+
+    // Shift right and truncate
+    vFp8 = b.trunc(i8_ty, b.lshr(vFp8, reducedMantissa));
+
+    // Any numbers larger than the max normal number in FP8
+    // after rounding will cause overflow
+    // E4M3FNUZ max normal is: S.1111.111 = 0x7F (absolute value) which in
+    // fp16 corresponds to 0x5B80 (absolute value)
+    Value isOverflow = b.icmp_ugt(intVal, b.i16_val(0x5B80));
+    vFp8 = b.select(isOverflow, b.i8_val(0x7F), vFp8);
+
+    // In case fp16's exponent is full then we have either a NaN or Inf
+    Value isNaNOrInf =
+        b.icmp_eq(b.and_(intVal, b.i16_val(0x7C00)), b.i16_val(0x7C00));
+
+    // Round subnormals to nearest even. Ref:
+    // https://github.com/openxla/xla/blob/f20c6fe2/xla/service/elemental_ir_emitter.cc#L272
+    constexpr size_t lutSize = 8;
+    // Minimum normal for E4M3FNUZ is 0x2000 (2^-7)
+    // We have 3 bits for mantissa therefore we divide the range of subnormals
+    // to 8 subranges. Each i entry in the LUT corresponds to the mid point of
+    // the ith subrange. For example, for subrange 0, [0 / 8 , 1 / 8 * 2^-7] we
+    // have 1/2 * (0 + 1) / 8 * 2^-7 = 2^-11 = 0.00048828125 which is 0x1000 in
+    // fp16
+
+    SmallVector<int16_t> halfwayPointsLUT = {
+        0x1000,  // Mid point between [0/8 * 2^-7, 1/8 * 2^-7]
+        0x1600,  // Mid point between [1/8 * 2^-7, 2/8 * 2^-7]
+        0x1900,  // Mid point between [2/8 * 2^-7, 3/8 * 2^-7]
+        0x1b00,  // Mid point between [3/8 * 2^-7, 4/8 * 2^-7]
+        0x1c80,  // Mid point between [4/8 * 2^-7, 5/8 * 2^-7]
+        0x1d80,  // Mid point between [5/8 * 2^-7, 6/8 * 2^-7]
+        0x1e80,  // Mid point between [6/8 * 2^-7, 7/8 * 2^-7]
+        0x1f80}; // Mid point between [7/8 * 2^-7, 8/8 * 2^-7]
+
+    for (int i = lutSize - 1; i >= 0; i--) {
+      Value cmp;
+      if (i % 2 == 0) {
+        cmp = b.icmp_ule(intVal, b.i16_val(halfwayPointsLUT[i]));
+      } else {
+        cmp = b.icmp_ult(intVal, b.i16_val(halfwayPointsLUT[i]));
+      }
+
+      vFp8 = b.select(cmp, b.i8_val(i), vFp8);
+    }
+
+    vFp8 = b.or_(vFp8, sign);
+
+    // When downcasting to E4M3FNUZ format, NaN and Inf are both converted to
+    // NaN
+    vFp8 = b.select(isNaNOrInf, b.i8_val(0x80), vFp8);
+    // In UZ formats there is only 1 zero (positive zero)
+    // Correct negative zero to 0
+    Value isNegativeZero = b.and_(b.icmp_eq(vFp8, b.i8_val(0x80)),
+                                  b.icmp_eq(isNaNOrInf, b.i1_val(0)));
+    vFp8 = b.select(isNegativeZero, b.i8_val(0), vFp8);
+
+    return vFp8;
+  };
+
+  SmallVector<Value> results{convert(v[0]), convert(v[1])};
+  return results;
 }
 
 static SmallVector<Value>
