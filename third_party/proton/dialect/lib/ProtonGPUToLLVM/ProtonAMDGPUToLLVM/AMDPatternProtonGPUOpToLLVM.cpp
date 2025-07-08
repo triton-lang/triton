@@ -35,7 +35,8 @@ struct CircularStoreOpConversion
     uint32_t addrSpace = dataPack.addrSpace;
     if (addrSpace == 1) {
       // TODO(crobeck): see what buffer ops performance looks like here for
-      // stack mem (address space 1) compared to predicated ops to shared memory
+      // global mem (address space 1) compared to predicated ops to shared
+      // memory
       llvm::report_fatal_error("unimplemented");
     } else if (addrSpace == 3) {
       // Setting predicate always true has bank conflicts but it is

@@ -146,23 +146,6 @@ def PTG_SegmentAllocOp : PTG_Op<"segment_alloc", [Pure]> {
   let assemblyFormat = "$buffer attr-dict `:` qualified(type($buffer)) `->` type($segment)";
 }
 
-def PTG_StackAllocOp : PTG_Op<"stack_alloc", [
-    MemoryEffects<[MemAlloc<GlobalMemory>]>
-]> {
-  let summary = "Allocate a proton buffer in stack memory";
-
-  let description = [{
-    This operation allocates a proton buffer in device stack memory.
-  }];
-
-  let arguments = (ins);
-
-  let hasVerifier = 1;
-
-  let results = (outs TTG_MemDescType:$buffer);
-
-  let assemblyFormat = "attr-dict `:` qualified(type($buffer))";
-}
 
 def PTG_InitCtxOp : PTG_Op<"init_ctx", [
     MemoryEffects<[MemWrite<GlobalMemory>]>

@@ -281,13 +281,6 @@ public:
           {allocBufferSize / 4}, builder.getI32Type(), encoding,
           sharedMemorySpace, /*mutable_memory=*/true);
       buffer = builder.create<triton::gpu::LocalAllocOp>(loc, sharedBufferType);
-    } else if (bufferType == gpu::BufferType::STACK) {
-      Attribute stackMemorySpace =
-          mlir::triton::proton::gpu::StackMemorySpaceAttr::get(context);
-      auto stackBufferType = triton::gpu::MemDescType::get(
-          {allocBufferSize / 4}, builder.getI32Type(), encoding,
-          stackMemorySpace, /*mutable_memory=*/true);
-      buffer = builder.create<gpu::StackAllocOp>(loc, stackBufferType);
     } else if (bufferType == gpu::BufferType::GLOBAL) {
       mlir::emitError(loc, "not implemented yet");
       return failure();
