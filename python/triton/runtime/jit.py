@@ -41,7 +41,7 @@ class DependenciesFinder(ast.NodeVisitor):
     otherwise we could recompile).
     """
 
-    def __init__(self, name, globals, nonlocals, src, seen_fns) -> None:
+    def __init__(self, name, globals, nonlocals, src) -> None:
         super().__init__()
         self.name = name
         self.hasher = hashlib.sha256(src.encode("utf-8"))
@@ -77,7 +77,6 @@ class DependenciesFinder(ast.NodeVisitor):
         self.used_global_vals: Dict[Tuple[str, int], Tuple[Any, Dict[str, Any]]] = {}
 
         self.visiting_arg_default_value = False
-        self.seen_fns = seen_fns
 
     @property
     def ret(self):
@@ -91,10 +90,6 @@ class DependenciesFinder(ast.NodeVisitor):
 
     def _update_hash(self, func):
         if isinstance(func, JITFunction):
-            if func in self.seen_fns:
-                return
-            self.seen_fns.add(func)
-
             # Merge our used_global_vals with those of the called function,
             # after checking that all overlapping values are consistent.
             for k in self.used_global_vals.keys() & func.used_global_vals.keys():
@@ -107,7 +102,7 @@ class DependenciesFinder(ast.NodeVisitor):
                     )
             self.used_global_vals.update(func.used_global_vals)
             # update hash
-            func_key = func.cache_key(self.seen_fns)
+            func_key = func.cache_key
             func_key += str(getattr(func, "noinline", False))
             self.hasher.update(func_key.encode("utf-8"))
 
@@ -354,7 +349,7 @@ def create_specialize_impl(specialize_extra):
             key = specialize_extra(arg, "tensor", align=align) if specialize_value else None
             return (res, key)
         elif isinstance(arg, JITFunction):
-            return ("constexpr", arg.cache_key())
+            return ("constexpr", arg.cache_key)
         elif isinstance(arg, constexpr):
             return ("constexpr", arg)
         elif hasattr(arg, "tma_desc_cpu_ptr"):
@@ -691,12 +686,13 @@ class JITFunction(KernelInterface[T]):
     def get_capture_scope(self):
         return self.__globals__ | inspect.getclosurevars(self.fn).nonlocals
 
-    def cache_key(self, seen_fns=set()):
+    @property
+    def cache_key(self):
         # TODO : hash should be attribute of `self`
         if self.hash is None:
             nonlocals = inspect.getclosurevars(self.fn).nonlocals
             dependencies_finder = DependenciesFinder(name=self._fn_name, globals=self.__globals__, nonlocals=nonlocals,
-                                                     src=self.src, seen_fns=set(seen_fns))
+                                                     src=self.src)
             dependencies_finder.visit(self.parse())
             self.hash = dependencies_finder.ret + str(self.starting_line_number)
             self.used_global_vals = dict(sorted(dependencies_finder.used_global_vals.items()))
