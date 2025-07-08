@@ -1,5 +1,6 @@
 #include "triton/Conversion/TritonGPUToLLVM/FMADotUtility.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "llvm/ADT/TypeSwitch.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -19,8 +20,26 @@ public:
     auto K = a.size();
     assert(b.size() == K);
     Value accum = c;
-    for (auto [aElem, bElem] : llvm::zip(a, b))
-      accum = builder.create<LLVM::FMulAddOp>(loc, aElem, bElem, accum);
+    Type tgtTy = accum.getType();
+    for (auto it = llvm::zip(a, b).begin(); it != llvm::zip(a, b).end(); ++it) {
+      const auto &aElem = std::get<0>(*it);
+      const auto &bElem = std::get<1>(*it);
+
+      assert(aElem.getType() == tgtTy);
+      assert(bElem.getType() == tgtTy);
+
+      // to avoid: 'llvm.intr.fmuladd' op operand #0 must be floating point LLVM
+      // type or LLVM dialect-compatible vector of floating point LLVM type, but
+      // got 'i32'
+      llvm::TypeSwitch<Type>(tgtTy)
+          .Case<FloatType>([&](auto) {
+            accum = builder.create<LLVM::FMulAddOp>(loc, aElem, bElem, accum);
+          })
+          .Case<IntegerType>([&](auto) {
+            accum = builder.create<LLVM::AddOp>(
+                loc, builder.create<LLVM::MulOp>(loc, aElem, bElem), accum);
+          });
+    }
     return accum;
   }
 };
