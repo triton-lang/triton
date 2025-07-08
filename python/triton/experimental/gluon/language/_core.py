@@ -361,7 +361,7 @@ def arange(start, end, layout, _semantic=None):
 
 
 @builtin
-def convert_layout(value, layout, assert_trivial=False, _semantic=None):
+def convert_layout(value, layout, _semantic=None):
     """
     Convert a tensor to a different distributed layout.
 
@@ -373,7 +373,7 @@ def convert_layout(value, layout, assert_trivial=False, _semantic=None):
         tensor: The tensor with the new layout.
     """
     layout = _unwrap_if_constexpr(layout)
-    return _semantic.convert_layout(value, layout, assert_trivial)
+    return _semantic.convert_layout(value, layout)
 
 
 @builtin

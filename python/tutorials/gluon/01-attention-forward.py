@@ -647,7 +647,7 @@ def _softmax_inner_loop(tile_id: gl.constexpr, config, prog,  #
         alpha = gl.exp2(m_i - m_ij)
 
         alpha_tmem = _borrow_s_as_alpha(config, s_tmem)
-        alpha_tmem.store(gl.convert_layout(alpha.expand_dims(1), config.alpha_2d_layout, assert_trivial=True))
+        alpha_tmem.store(gl.convert_layout(alpha.expand_dims(1), config.alpha_2d_layout))
         mbarrier.arrive(corr_bar, count=1)
 
         qk = _mul_f32x2(qk, gl.full(config.qk_shape, config.qk_scale, gl.float32, qk.type.layout))
@@ -664,7 +664,7 @@ def _softmax_inner_loop(tile_id: gl.constexpr, config, prog,  #
         _, corr_bar = corr_producer.acquire()
 
         p = gl.join(p0, p1).permute(0, 2, 1).reshape([config.SPLIT_M, config.BLOCK_N])
-        p = gl.convert_layout(p, config.qk_layout, assert_trivial=True)
+        p = gl.convert_layout(p, config.qk_layout)
         l_ij = gl.sum(p, axis=1)
         l_i = l_i * alpha + l_ij
         m_i = m_ij
@@ -709,8 +709,8 @@ def _softmax_tile(  #
 
         s_tmem, s_bar = s_consumer.acquire()
         m_i_tmem, l_i_tmem = _borrow_s_for_epilogue(config, s_tmem)
-        m_i_tmem.store(gl.convert_layout(m_i.expand_dims(1), config.alpha_2d_layout, assert_trivial=True))
-        l_i_tmem.store(gl.convert_layout(l_i.expand_dims(1), config.alpha_2d_layout, assert_trivial=True))
+        m_i_tmem.store(gl.convert_layout(m_i.expand_dims(1), config.alpha_2d_layout))
+        l_i_tmem.store(gl.convert_layout(l_i.expand_dims(1), config.alpha_2d_layout))
 
         mbarrier.arrive(corr_bar, count=1)
         _, corr_bar = corr_producer.acquire()
@@ -816,7 +816,7 @@ def _attn_fwd_correction(config, info0, info1, M, o_chnl, epi_chnl, STAGE: gl.co
             _, corr0_bar = corr0_consumer.acquire()
             alpha0 = _borrow_s_as_alpha(config, s0_tmem).load(config.alpha_2d_layout)
             mbarrier.arrive(corr0_bar, count=1)
-            alpha0 = gl.convert_layout(alpha0.reshape([config.SPLIT_M]), alpha_layout, assert_trivial=True)
+            alpha0 = gl.convert_layout(alpha0.reshape([config.SPLIT_M]), alpha_layout)
 
             o0_tmem, o0_bar = o_consumer.acquire()
             _attn_fwd_correction_rescale(config, alpha0, o0_tmem)
@@ -825,7 +825,7 @@ def _attn_fwd_correction(config, info0, info1, M, o_chnl, epi_chnl, STAGE: gl.co
             _, corr1_bar = corr1_consumer.acquire()
             alpha1 = _borrow_s_as_alpha(config, s1_tmem).load(config.alpha_2d_layout)
             mbarrier.arrive(corr1_bar, count=1)
-            alpha1 = gl.convert_layout(alpha1.reshape([config.SPLIT_M]), alpha_layout, assert_trivial=True)
+            alpha1 = gl.convert_layout(alpha1.reshape([config.SPLIT_M]), alpha_layout)
 
             o1_tmem, o1_bar = o_consumer.acquire()
             _attn_fwd_correction_rescale(config, alpha1, o1_tmem)
@@ -834,9 +834,9 @@ def _attn_fwd_correction(config, info0, info1, M, o_chnl, epi_chnl, STAGE: gl.co
         _, corr0_bar = corr0_consumer.acquire()
         m_i0_tmem, l_i0_tmem = _borrow_s_for_epilogue(config, s0_tmem)
         m_i0 = m_i0_tmem.load(config.alpha_2d_layout).reshape([config.SPLIT_M])
-        m_i0 = gl.convert_layout(m_i0, alpha_layout, assert_trivial=True)
+        m_i0 = gl.convert_layout(m_i0, alpha_layout)
         l_i0 = l_i0_tmem.load(config.alpha_2d_layout).reshape([config.SPLIT_M])
-        l_i0 = gl.convert_layout(l_i0, alpha_layout, assert_trivial=True)
+        l_i0 = gl.convert_layout(l_i0, alpha_layout)
         mbarrier.arrive(corr0_bar, count=1)
 
         o0_smem, epi_bar = epi_producer.acquire()
@@ -851,14 +851,14 @@ def _attn_fwd_correction(config, info0, info1, M, o_chnl, epi_chnl, STAGE: gl.co
         offs_m = prog.start_m * config.BLOCK_M
         offs_m += gl.arange(0 * config.SPLIT_M, 1 * config.SPLIT_M, coalesced)
         m_ptrs = M + prog.off_hz * config.N_CTX + offs_m
-        gl.store(m_ptrs, gl.convert_layout(m_i0, coalesced, assert_trivial=True))
+        gl.store(m_ptrs, gl.convert_layout(m_i0, coalesced))
 
         _, corr1_bar = corr1_consumer.acquire()
         m_i1_tmem, l_i1_tmem = _borrow_s_for_epilogue(config, s1_tmem)
         m_i1 = m_i1_tmem.load(config.alpha_2d_layout).reshape([config.SPLIT_M])
-        m_i1 = gl.convert_layout(m_i1, alpha_layout, assert_trivial=True)
+        m_i1 = gl.convert_layout(m_i1, alpha_layout)
         l_i1 = l_i1_tmem.load(config.alpha_2d_layout).reshape([config.SPLIT_M])
-        l_i1 = gl.convert_layout(l_i1, alpha_layout, assert_trivial=True)
+        l_i1 = gl.convert_layout(l_i1, alpha_layout)
         mbarrier.arrive(corr1_bar, count=1)
 
         o1_smem, epi_bar = epi_producer.acquire()
@@ -872,7 +872,7 @@ def _attn_fwd_correction(config, info0, info1, M, o_chnl, epi_chnl, STAGE: gl.co
         offs_m = prog.start_m * config.BLOCK_M
         offs_m += gl.arange(1 * config.SPLIT_M, 2 * config.SPLIT_M, coalesced)
         m_ptrs = M + prog.off_hz * config.N_CTX + offs_m
-        gl.store(m_ptrs, gl.convert_layout(m_i1, coalesced, assert_trivial=True))
+        gl.store(m_ptrs, gl.convert_layout(m_i1, coalesced))
 
 
 @gluon.jit
