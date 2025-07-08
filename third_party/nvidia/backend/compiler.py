@@ -23,9 +23,9 @@ def min_dot_size(target: GPUTarget):
         rhs_bitwidth = rhs_type.scalar.primitive_bitwidth
         assert lhs_bitwidth == rhs_bitwidth, "lhs and rhs bitwidth must be the same"
         if lhs_bitwidth == 8:
-            return (16, 16, 32)
+            return (16, 8, 32)
         else:
-            return (16, 16, 16)
+            return (16, 8, 16)
 
     return check_dot_compatibility
 
