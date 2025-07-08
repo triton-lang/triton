@@ -6,8 +6,10 @@
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
 #include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
 #include "mlir/Conversion/GPUToNVVM/GPUToNVVMPass.h"
+#include "mlir/Conversion/Passes.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Pass/Pass.h"
+#include "mlir/Pass/PassManager.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
@@ -49,6 +51,7 @@ struct ConvertProtonNvidiaGPUToLLVM
     MLIRContext *context = &getContext();
     RewritePatternSet patterns(context);
     ModuleOp mod = getOperation();
+
     auto tritonTargetInfo =
         mlir::triton::NVIDIA::TargetInfo(computeCapability, ptxVersion);
     auto protonTargetInfo =
@@ -67,6 +70,11 @@ struct ConvertProtonNvidiaGPUToLLVM
                                                           patterns);
     auto convTarget = ProtonLLVMConversionTarget(*context);
     if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))
+      return signalPassFailure();
+
+    OpPassManager pm;
+    pm.addPass(createReconcileUnrealizedCastsPass());
+    if (failed(runPipeline(pm, mod)))
       return signalPassFailure();
   }
 };

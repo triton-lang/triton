@@ -31,6 +31,8 @@ public:
 
   virtual int getAddressSpace(Attribute addressSpace) const = 0;
 
+  virtual int getIndexPtrAddrSpace() const = 0;
+
   virtual ~TargetInfoBase() = default;
 
 protected:
