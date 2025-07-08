@@ -1239,7 +1239,7 @@ def ReturnOp : TT_Op<"return", [Pure, HasParent<"FuncOp">, /*MemRefsNormalizable
   let arguments = (ins Variadic<AnyType>:$srcs);
 
   let builders = [OpBuilder<(ins), [{
-    build($_builder, $_state, std::nullopt);
+    build($_builder, $_state, {});
   }]>];
 
   let assemblyFormat = "attr-dict ($srcs^ `:` type($srcs))?";
