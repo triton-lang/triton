@@ -63,8 +63,8 @@ def run_kernel_expect_assert(kernel_name: str, expect_failure: bool, device: str
     kernel = globals()[kernel_name]
 
     XBLOCK = 128
-    input = torch.randn((XBLOCK, XBLOCK), device=device, dtype=torch.float32)
-    shared_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=32, rank=2)
+    input = torch.randn((XBLOCK, XBLOCK), device=device, dtype=torch.float16)
+    shared_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2)
     input_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(input, [XBLOCK, XBLOCK], shared_layout)
 
     # ConSan requires a global memory allocation
@@ -73,7 +73,7 @@ def run_kernel_expect_assert(kernel_name: str, expect_failure: bool, device: str
 
     triton.set_allocator(alloc_fn)
 
-    kernel[(1, )](input_desc, XBLOCK, FAILURE=expect_failure, num_warps=1)
+    kernel[(1, )](input_desc, XBLOCK, FAILURE=expect_failure, num_warps=4)
     getattr(torch, device).synchronize()
 
 
