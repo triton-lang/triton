@@ -23,10 +23,6 @@ namespace triton {
 
 namespace {
 
-const std::string kWgmmaFenceOp = "wgmma.fence.sync.aligned;";
-const std::string kWgmmaCommitGroupOp = "wgmma.commit_group.sync.aligned;";
-const std::string kClusterWaitOp = "barrier.cluster.wait.aligned;";
-const std::string kFenceMbarrierInitOp = "fence.mbarrier_init.release.cluster;";
 const std::string kClusterCtaIdOp = "{\n"
                                     ".reg .u32 a<5>;              \n"
                                     "mov.u32 a0, %cluster_ctaid.x;\n"  // x
@@ -447,6 +443,47 @@ public:
   }
 };
 
+class WGMMAFenceOpPattern : public OpRewritePattern<ttn::WGMMAFenceOp> {
+public:
+  using OpRewritePattern<ttn::WGMMAFenceOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(ttn::WGMMAFenceOp op,
+                                PatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    rewriter.create<NVVM::WgmmaFenceAlignedOp>(loc);
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+class WGMMACommitGroupOpPattern
+    : public OpRewritePattern<ttn::WGMMACommitGroupOp> {
+public:
+  using OpRewritePattern<ttn::WGMMACommitGroupOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(ttn::WGMMACommitGroupOp op,
+                                PatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    rewriter.create<NVVM::WgmmaGroupSyncAlignedOp>(loc);
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+class ClusterWaitOpPattern : public OpRewritePattern<ttn::ClusterWaitOp> {
+public:
+  using OpRewritePattern<ttn::ClusterWaitOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(ttn::ClusterWaitOp op,
+                                PatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto ctx = rewriter.getContext();
+    rewriter.create<NVVM::ClusterWaitOp>(loc, UnitAttr::get(ctx));
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 class WGMMAWaitGroupOpPattern : public OpRewritePattern<ttn::WGMMAWaitGroupOp> {
 public:
   using OpRewritePattern<ttn::WGMMAWaitGroupOp>::OpRewritePattern;
@@ -788,21 +825,14 @@ public:
     ModuleOp mod = getOperation();
     RewritePatternSet patterns(context);
 
-#define POPULATE_NVGPU_OP(SRC_OP, ASM)                                         \
-  patterns.add<NVGPUOpGenericPattern<SRC_OP>>(context, ASM, Constraints(),     \
-                                              Constraints());
-    POPULATE_NVGPU_OP(ttn::WGMMAFenceOp, kWgmmaFenceOp)
-    POPULATE_NVGPU_OP(ttn::WGMMACommitGroupOp, kWgmmaCommitGroupOp)
-    POPULATE_NVGPU_OP(ttn::ClusterWaitOp, kClusterWaitOp)
-#undef POPULATE_NVGPU_OP
     patterns.add<NVGPUOpGenericPattern<ttn::ClusterCTAIdOp>>(
         context, kClusterCtaIdOp, Constraints({"=r"}), Constraints());
 
-    patterns
-        .add<FenceAsyncSharedOpPattern, LoadMatrixOpPattern,
-             StoreMatrixOpPattern, ClusterArriveOpPattern, WGMMAOpPattern,
-             LoadAcquireOpPattern, WGMMAWaitGroupOpPattern, WarpIdOpPattern>(
-            context);
+    patterns.add<FenceAsyncSharedOpPattern, LoadMatrixOpPattern,
+                 StoreMatrixOpPattern, ClusterArriveOpPattern, WGMMAOpPattern,
+                 WGMMAFenceOpPattern, WGMMACommitGroupOpPattern,
+                 ClusterWaitOpPattern, LoadAcquireOpPattern,
+                 WGMMAWaitGroupOpPattern, WarpIdOpPattern>(context);
 
     if (applyPatternsGreedily(mod, std::move(patterns)).failed())
       signalPassFailure();
