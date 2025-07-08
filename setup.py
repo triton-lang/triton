@@ -200,7 +200,9 @@ def get_llvm_package_info():
         arch = {"x86_64": "x64", "arm64": "arm64", "aarch64": "arm64"}[platform.machine()]
     except KeyError:
         arch = platform.machine()
-    if system == "Darwin":
+    if (env_system_suffix := os.environ.get("TRITON_LLVM_SYSTEM_SUFFIX", None)):
+        system_suffix = env_system_suffix
+    elif system == "Darwin":
         system_suffix = f"macos-{arch}"
     elif system == "Linux":
         if arch == 'arm64' and is_linux_os('almalinux'):
