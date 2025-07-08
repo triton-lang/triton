@@ -4,6 +4,7 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
+#include "triton/Dialect/TritonInstrument/IR/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
 namespace mlir {
@@ -167,7 +168,6 @@ public:
   }
 
 private:
-  // TODO: Missing support for predication
   void instrumentMemoryOperations(ImplicitLocOpBuilder &b) {
     module.walk([&](Operation *op) {
       if (auto copyOp = dyn_cast<ttng::AsyncTMACopyGlobalToLocalOp>(op)) {
@@ -278,23 +278,6 @@ private:
       }
     }
     return sliceEncoding;
-  }
-
-  Value expandAllSlicedDims(ImplicitLocOpBuilder &b, Value tensor) {
-    auto type = cast<RankedTensorType>(tensor.getType());
-    auto sliceEncoding = dyn_cast<ttg::SliceEncodingAttr>(type.getEncoding());
-    while (sliceEncoding) {
-      int dim = sliceEncoding.getDim();
-      auto shape = type.getShape();
-      auto newShape = SmallVector<int64_t>(shape);
-      newShape.insert(newShape.begin() + dim, 1);
-      auto newType = RankedTensorType::get(newShape, type.getElementType(),
-                                           sliceEncoding.getParent());
-      tensor = b.create<tt::ExpandDimsOp>(newType, tensor, dim);
-      type = newType;
-      sliceEncoding = dyn_cast<ttg::SliceEncodingAttr>(type.getEncoding());
-    }
-    return tensor;
   }
 
   Value createInitializedScratchMemory(ImplicitLocOpBuilder &b,
