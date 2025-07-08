@@ -136,6 +136,26 @@ bool ReduceOpHelper::isReduceWithinCTA() {
   return getCTASplitNum(srcEncoding)[axis] == 1;
 }
 
+bool ReduceOpHelper::isAssociative() {
+  auto dtype = srcElementTypes[0];
+  if (!type::isFloat(dtype))
+    return true;
+  size_t reduce_size = srcShape[axis];
+  if (reduce_size <= 2)
+    return true;
+  bool hasNoAssociativeOp = false;
+  op.walk([&](Operation *nestedOp) -> WalkResult {
+    if (isa<arith::AddFOp, arith::MulFOp>(nestedOp)) {
+      // Only when the data type is float point and reduce size greater than 2,
+      // and has addf or mulf op, we though it's a non-associative reduce.
+      hasNoAssociativeOp = true;
+      return WalkResult::interrupt();
+    }
+    return WalkResult::advance();
+  });
+  return !hasNoAssociativeOp;
+}
+
 unsigned ScanLoweringHelper::getAxisNumElementsPerThread() {
   return getEncoding().getContigPerThread()[getAxis()];
 }
@@ -691,7 +711,7 @@ bool supportMMA(Value value, int version) {
   bool isFP8 = llvm::isa<Float8E5M2Type, Float8E4M3FNType, Float8E5M2FNUZType,
                          Float8E4M3FNUZType>(elemTy);
   return isFP8 || elemTy.isF16() || elemTy.isBF16() ||
-         (elemTy.isF32() && version >= 2) ||
+         ((elemTy.isF32() || elemTy.isF64()) && version >= 2) ||
          (elemTy.isInteger(8) && version >= 2);
 }
 

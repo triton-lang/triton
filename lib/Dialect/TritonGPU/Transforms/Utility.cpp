@@ -1467,6 +1467,7 @@ void eraseLoopCarriedValues(scf::ForOp &loop, llvm::BitVector indices) {
 namespace mlir::triton {
 void replaceUsesAndPropagateType(OpBuilder &builder, Operation *oldUse,
                                  Value val) {
+  OpBuilder::InsertionGuard guard(builder);
   SmallVector<Operation *> opsToDelete;
   SmallVector<OpOperand *> operandsToReplace;
 
@@ -1487,7 +1488,6 @@ void replaceUsesAndPropagateType(OpBuilder &builder, Operation *oldUse,
 
     Operation *user = use.getOwner();
     // `subview(old_op)` is replaced by a new `subview(val)`.
-    OpBuilder::InsertionGuard g(builder);
     builder.setInsertionPoint(user);
     Value newVal;
     if (auto subview = dyn_cast<ttg::MemDescSubviewOp>(user)) {
@@ -1571,6 +1571,10 @@ bool comesFromLoadOrBlockArg(Value v) {
       break;
     if (auto cvtOp = dyn_cast<ttg::ConvertLayoutOp>(def)) {
       v = cvtOp.getSrc();
+      continue;
+    }
+    if (auto transOp = dyn_cast<tt::TransOp>(def)) {
+      v = transOp.getSrc();
       continue;
     }
     if (def->hasTrait<OpTrait::MemDescViewTrait>()) {

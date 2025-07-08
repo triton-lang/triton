@@ -23,9 +23,9 @@ def min_dot_size(target: GPUTarget):
         rhs_bitwidth = rhs_type.scalar.primitive_bitwidth
         assert lhs_bitwidth == rhs_bitwidth, "lhs and rhs bitwidth must be the same"
         if lhs_bitwidth == 8:
-            return (16, 16, 32)
+            return (16, 8, 32)
         else:
-            return (16, 16, 16)
+            return (16, 8, 16)
 
     return check_dot_compatibility
 
@@ -59,6 +59,11 @@ def ptx_get_version(cuda_version) -> int:
         return 70 + minor
     if major == 10:
         return 63 + minor
+
+    if major >= 13:
+        base_ptx = 90
+        return base_ptx + (major - 13) * 10 + minor
+
     raise RuntimeError("Triton only support CUDA 10.0 or higher, but got CUDA version: " + cuda_version)
 
 
