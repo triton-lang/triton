@@ -559,7 +559,8 @@ SmallVector<Value> getSmemVecAddrVec(
         if (auto paddedLayout =
                 dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(sharedEnc)) {
           // Apply the offset needed for padding.
-          Value padOffset = emitPadding(loc, rewriter, paddedLayout, smemOffset);
+          Value padOffset =
+              emitPadding(loc, rewriter, paddedLayout, smemOffset);
           smemOffset = b.add(smemOffset, padOffset);
         }
         smemOffsetsComputed.push_back(smemOffset);
