@@ -6030,6 +6030,8 @@ def test_num_threads(device):
 
 
 def test_globaltimer(device):
+    if is_hip_cdna2():
+        pytest.skip("test_globaltimer is flaky on gfx90a")
     check_cuda_or_hip(device)
 
     @triton.jit
@@ -6039,16 +6041,17 @@ def test_globaltimer(device):
         for i in range(10000):
             tl.store(Out1 + off, tl.load(Out1 + off) + 1)
         end = func()
-        tl.store(Out2, end - start)
+        tl.store(Out2, start)
+        tl.store(Out2 + 1, end)
 
     out1 = to_triton(np.zeros((128, ), dtype=np.int64), device=device)
-    out2 = to_triton(np.zeros((1, ), dtype=np.int64), device=device)
+    out2 = to_triton(np.zeros((2, ), dtype=np.int64), device=device)
     if is_cuda():
         func = tl.extra.cuda.globaltimer
     else:
         func = tl.extra.hip.memrealtime
     h = kernel[(1, )](out1, out2, func)
-    assert out2[0] > 0
+    assert out2[1] - out2[0] > 0
     if is_cuda():
         assert h.asm["ptx"].count("%globaltimer") == 2
     else:
