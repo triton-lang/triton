@@ -8,10 +8,6 @@
 
 namespace {
 
-// TODO: unify with ConcurrencySanitizer.cpp
-constexpr static int8_t WRITE_BIT = 1 << 0;
-constexpr static int8_t READ_BIT = 1 << 1;
-
 namespace tt = mlir::triton;
 namespace ttg = tt::gpu;
 namespace tti = mlir::triton::instrument;
@@ -19,14 +15,6 @@ namespace tti = mlir::triton::instrument;
 ////////////////////////////////////////////
 // Utility functions
 ////////////////////////////////////////////
-
-Value createConstIntTensor(OpBuilder &builder, Location loc, int val,
-                           RankedTensorType tensorType) {
-  auto denseAttr = DenseElementsAttr::get(
-      tensorType,
-      APInt(tensorType.getElementType().getIntOrFloatBitWidth(), val));
-  return builder.create<arith::ConstantOp>(loc, tensorType, denseAttr);
-}
 
 Value createFullLike(OpBuilder &builder, Location loc, Value scalar,
                      RankedTensorType tensorTy) {
@@ -95,6 +83,27 @@ Value convertAndBroadcast(OpBuilder &b, Location loc, Value tensor, int dim,
   tensor = tti::expandOuterSlicedDim(b, loc, tensor);
   tensor = b.create<tt::BroadcastOp>(loc, resultType, tensor);
   return tensor;
+}
+
+std::tuple<Block *, Block *, Block *>
+createIfBlock(ConversionPatternRewriter &b, Location loc, Value cnd) {
+  // #prevBlock
+  // if (condition) {
+  //   #ifBlock
+  // }
+  // #thenBlock
+  Block *prevBlock = b.getInsertionBlock();
+  Block *ifBlock = b.splitBlock(prevBlock, b.getInsertionPoint());
+
+  // Split a block after the call.
+  Block *thenBlock = b.splitBlock(ifBlock, ifBlock->begin());
+  b.setInsertionPointToEnd(ifBlock);
+  b.create<LLVM::BrOp>(loc, thenBlock);
+  b.setInsertionPointToEnd(prevBlock);
+  b.create<LLVM::CondBrOp>(loc, cnd, ifBlock, thenBlock);
+  b.setInsertionPointToStart(thenBlock);
+
+  return {prevBlock, ifBlock, thenBlock};
 }
 
 ////////////////////////////////////////////
@@ -174,24 +183,12 @@ struct AssertInThreadOpConversion
     Value threadIdIsZero = b.icmp_eq(threadId, zero);
     condition = b.and_(condition, threadIdIsZero);
 
-    // #block1
-    // if (condition) {
-    //   #block2
-    //   __assertfail(message);
-    // }
-    // #block3
-    Block *prevBlock = op->getBlock();
+    auto [prevBlock, ifBlock, thenBlock] =
+        createIfBlock(rewriter, loc, condition);
 
-    Block *ifBlock = rewriter.splitBlock(prevBlock, op->getIterator());
     rewriter.setInsertionPointToStart(ifBlock);
     targetInfo.assertFail(rewriter, loc, message, file, func, line);
 
-    // Split a block after the call.
-    Block *thenBlock = rewriter.splitBlock(ifBlock, op->getIterator());
-    rewriter.setInsertionPointToEnd(ifBlock);
-    rewriter.create<LLVM::BrOp>(loc, thenBlock);
-    rewriter.setInsertionPointToEnd(prevBlock);
-    rewriter.create<LLVM::CondBrOp>(loc, condition, ifBlock, thenBlock);
     rewriter.setInsertionPointToStart(thenBlock);
   }
 
@@ -247,7 +244,6 @@ struct SharedBufferPointersOpConversion
   }
 };
 
-// TODO: Missing lit tests
 struct CheckOutstandingWritesOpConversion
     : public ConvertOpToLLVMPattern<tti::ExperimentalCheckOutstandingWritesOp> {
   using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
@@ -257,6 +253,11 @@ struct CheckOutstandingWritesOpConversion
                                 ConversionPatternRewriter &b) const override {
     Location loc = op.getLoc();
     b.setInsertionPoint(op);
+    if (op.getPred()) {
+      auto [prevBlock, ifBlock, thenBlock] =
+          createIfBlock(b, loc, op.getPred());
+      b.setInsertionPointToStart(ifBlock);
+    }
     TypedValue<RankedTensorType> buffers = op.getBuffers();
     RankedTensorType writeBarsType =
         cast<RankedTensorType>(op.getWriteBarsType());
@@ -271,7 +272,7 @@ struct CheckOutstandingWritesOpConversion
     // tl.device_assert(curr_buf_bar == ttgl.zeros_like(curr_buf_bar), "Buffer
     // being accessed has outstanding writes")
 
-    Value writeBarsZero = createConstIntTensor(b, loc, 0, writeBarsType);
+    Value writeBarsZero = tti::createConstIntTensor(b, loc, 0, writeBarsType);
     Value buffersEqBuf = createCmpIntTensorScalar(b, loc, buffers, buf);
     Value currBufBar =
         b.create<arith::SelectOp>(loc, buffersEqBuf, writeBars, writeBarsZero);
@@ -281,6 +282,7 @@ struct CheckOutstandingWritesOpConversion
         loc, currBufBarEqZero, "Buffer being accessed has outstanding writes",
         /*check_any=*/false);
     b.eraseOp(op);
+
     return success();
   }
 };
@@ -293,7 +295,13 @@ struct CheckOutstandingReadsOpConversion
                                 OpAdaptor adaptor,
                                 ConversionPatternRewriter &b) const override {
     Location loc = op.getLoc();
+    OpBuilder::InsertionGuard guard(b);
     b.setInsertionPoint(op);
+    if (op.getPred()) {
+      auto [prevBlock, ifBlock, thenBlock] =
+          createIfBlock(b, loc, op.getPred());
+      b.setInsertionPointToStart(ifBlock);
+    }
     TypedValue<RankedTensorType> buffers = op.getBuffers();
     RankedTensorType readBarsType =
         cast<RankedTensorType>(op.getReadBarsType());
@@ -314,7 +322,7 @@ struct CheckOutstandingReadsOpConversion
     buffersEqBuf = convertAndBroadcast(
         b, loc, buffersEqBuf, 1, readBarsType.getShape(),
         cast<ttg::BlockedEncodingAttr>(readBarsType.getEncoding()));
-    auto readBarsZero = createConstIntTensor(b, loc, 0, readBarsType);
+    auto readBarsZero = tti::createConstIntTensor(b, loc, 0, readBarsType);
     auto currBufBar =
         b.create<arith::SelectOp>(loc, buffersEqBuf, readBars, readBarsZero);
     auto currBufBarEqZero = b.create<arith::CmpIOp>(
@@ -335,7 +343,13 @@ struct MarkAsWriteOpConversion
                                 OpAdaptor adaptor,
                                 ConversionPatternRewriter &b) const override {
     Location loc = op.getLoc();
+    OpBuilder::InsertionGuard guard(b);
     b.setInsertionPoint(op);
+    if (op.getPred()) {
+      auto [prevBlock, ifBlock, thenBlock] =
+          createIfBlock(b, loc, op.getPred());
+      b.setInsertionPointToStart(ifBlock);
+    }
     TypedValue<RankedTensorType> buffers = op.getBuffers();
     RankedTensorType writeBarsType =
         cast<RankedTensorType>(op.getWriteBarsType());
@@ -369,7 +383,13 @@ struct MarkAsReadOpConversion
                                 OpAdaptor adaptor,
                                 ConversionPatternRewriter &b) const override {
     Location loc = op.getLoc();
+    OpBuilder::InsertionGuard guard(b);
     b.setInsertionPoint(op);
+    if (op.getPred()) {
+      auto [prevBlock, ifBlock, thenBlock] =
+          createIfBlock(b, loc, op.getPred());
+      b.setInsertionPointToStart(ifBlock);
+    }
     TypedValue<RankedTensorType> buffers = op.getBuffers();
     TypedValue<RankedTensorType> barriers = op.getBarriers();
     RankedTensorType readBarsType =
@@ -418,7 +438,13 @@ struct ClearWriteBarrierOpConversion
                                 OpAdaptor adaptor,
                                 ConversionPatternRewriter &b) const override {
     Location loc = op.getLoc();
+    OpBuilder::InsertionGuard guard(b);
     b.setInsertionPoint(op);
+    if (op.getPred()) {
+      auto [prevBlock, ifBlock, thenBlock] =
+          createIfBlock(b, loc, op.getPred());
+      b.setInsertionPointToStart(ifBlock);
+    }
     RankedTensorType writeBarsType =
         cast<RankedTensorType>(op.getWriteBarsType());
     Value writeBars =
@@ -430,7 +456,7 @@ struct ClearWriteBarrierOpConversion
     // Gluon pseudo-code:
     // write_bars = tl.where(write_bars == mbar, 0, write_bars)
 
-    auto writeBarsZero = createConstIntTensor(b, loc, 0, writeBarsType);
+    auto writeBarsZero = tti::createConstIntTensor(b, loc, 0, writeBarsType);
     auto writeBarsEqMbar = createCmpIntTensorScalar(b, loc, writeBars, mbar);
     writeBars = b.create<arith::SelectOp>(loc, writeBarsEqMbar, writeBarsZero,
                                           writeBars);
@@ -449,7 +475,13 @@ struct ClearReadBarrierOpConversion
                                 OpAdaptor adaptor,
                                 ConversionPatternRewriter &b) const override {
     Location loc = op.getLoc();
+    OpBuilder::InsertionGuard guard(b);
     b.setInsertionPoint(op);
+    if (op.getPred()) {
+      auto [prevBlock, ifBlock, thenBlock] =
+          createIfBlock(b, loc, op.getPred());
+      b.setInsertionPointToStart(ifBlock);
+    }
     TypedValue<RankedTensorType> barriers = op.getBarriers();
     RankedTensorType readBarsType =
         cast<RankedTensorType>(op.getReadBarsType());
@@ -465,7 +497,7 @@ struct ClearReadBarrierOpConversion
     // read_bars_layout))[None, :] read_bars = tl.where(barsEqMbar, 0,
     // read_bars)
 
-    auto readBarsZero = createConstIntTensor(b, loc, 0, readBarsType);
+    auto readBarsZero = tti::createConstIntTensor(b, loc, 0, readBarsType);
     auto readBarsEqMbar = createCmpIntTensorScalar(b, loc, barriers, mbar);
     readBarsEqMbar = convertAndBroadcast(
         b, loc, readBarsEqMbar, 0, readBarsType.getShape(),

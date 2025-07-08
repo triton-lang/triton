@@ -148,16 +148,19 @@ public:
     barriers = createSharedBufferPointers(b, barrierValues);
 
     // Create state tensors:
-    TypedValue<RankedTensorType> writeBarriers = createConstIntTensor(
-        b, 0, b.getIntegerType(64), shMemBufsValues.size());
-    writeBarriersType = writeBarriers.getType();
+    writeBarriersType = RankedTensorType::get(
+        {(long)shMemBufsValues.size()}, b.getIntegerType(64),
+        getThreadLocalBlockedEncoding(shMemBufsValues.size()));
+    TypedValue<RankedTensorType> writeBarriers =
+        tti::createConstIntTensor(b, b.getLoc(), 0, writeBarriersType);
     writeBarriersAlloc = createInitializedScratchMemory(b, writeBarriers);
 
-    TypedValue<RankedTensorType> readBarriers = createConstIntTensor(
-        b, 0, b.getIntegerType(8),
-        {(unsigned)shMemBufsValues.size(), (unsigned)barrierValues.size()},
+    readBarriersType = RankedTensorType::get(
+        {(long)shMemBufsValues.size(), (long)barrierValues.size()},
+        b.getIntegerType(8),
         getReadBarriersEncoding(shMemBufsValues.size(), barrierValues.size()));
-    readBarriersType = readBarriers.getType();
+    TypedValue<RankedTensorType> readBarriers =
+        tti::createConstIntTensor(b, b.getLoc(), 0, readBarriersType);
     readBarriersAlloc = createInitializedScratchMemory(b, readBarriers);
 
     instrumentMemoryOperations(b);
@@ -168,48 +171,55 @@ private:
   void instrumentMemoryOperations(ImplicitLocOpBuilder &b) {
     module.walk([&](Operation *op) {
       if (auto copyOp = dyn_cast<ttng::AsyncTMACopyGlobalToLocalOp>(op)) {
+        auto buf = copyOp.getResult();
+        auto pred = copyOp.getPred();
+        auto barrier = copyOp.getBarrier();
         b.setLoc(copyOp.getLoc());
         b.setInsertionPoint(copyOp);
         b.create<tti::ExperimentalCheckOutstandingWritesOp>(
-            copyOp.getResult(), shBuffers, writeBarriersAlloc,
-            writeBarriersType);
+            buf, shBuffers, writeBarriersAlloc, writeBarriersType, pred);
         b.create<tti::ExperimentalCheckOutstandingReadsOp>(
-            copyOp.getResult(), shBuffers, readBarriersAlloc, readBarriersType);
-        b.create<tti::ExperimentalMarkAsWriteOp>(
-            copyOp.getResult(), copyOp.getBarrier(), shBuffers,
-            writeBarriersAlloc, writeBarriersType);
+            buf, shBuffers, readBarriersAlloc, readBarriersType, pred);
+        b.create<tti::ExperimentalMarkAsWriteOp>(buf, barrier, shBuffers,
+                                                 writeBarriersAlloc,
+                                                 writeBarriersType, pred);
       }
       if (auto mmav5Op = dyn_cast<ttng::TCGen5MMAOp>(op)) {
+        auto pred = mmav5Op.getPred();
         b.setLoc(mmav5Op.getLoc());
         b.setInsertionPoint(mmav5Op);
         if (isa<ttg::NVMMASharedEncodingAttr>(
                 mmav5Op.getA().getType().getEncoding())) {
           b.create<tti::ExperimentalCheckOutstandingWritesOp>(
-              mmav5Op.getA(), shBuffers, writeBarriersAlloc, writeBarriersType);
+              mmav5Op.getA(), shBuffers, writeBarriersAlloc, writeBarriersType,
+              pred);
           for (auto barrier : mmav5Op.getBarriers()) {
             b.create<tti::ExperimentalMarkAsReadOp>(
                 mmav5Op.getA(), barrier, shBuffers, barriers, readBarriersAlloc,
-                readBarriersType);
+                readBarriersType, pred);
           }
         }
         if (isa<ttg::NVMMASharedEncodingAttr>(
                 mmav5Op.getB().getType().getEncoding())) {
           b.create<tti::ExperimentalCheckOutstandingWritesOp>(
-              mmav5Op.getB(), shBuffers, writeBarriersAlloc, writeBarriersType);
+              mmav5Op.getB(), shBuffers, writeBarriersAlloc, writeBarriersType,
+              pred);
           for (auto barrier : mmav5Op.getBarriers()) {
             b.create<tti::ExperimentalMarkAsReadOp>(
                 mmav5Op.getB(), barrier, shBuffers, barriers, readBarriersAlloc,
-                readBarriersType);
+                readBarriersType, pred);
           }
         }
       }
       if (auto waitOp = dyn_cast<ttng::WaitBarrierOp>(op)) {
+        auto pred = waitOp.getPred();
         b.setLoc(waitOp.getLoc());
         b.setInsertionPoint(waitOp);
         b.create<tti::ExperimentalClearWriteBarrierOp>(
-            waitOp.getAlloc(), writeBarriersAlloc, writeBarriersType);
+            waitOp.getAlloc(), writeBarriersAlloc, writeBarriersType, pred);
         b.create<tti::ExperimentalClearReadBarrierOp>(
-            waitOp.getAlloc(), barriers, readBarriersAlloc, readBarriersType);
+            waitOp.getAlloc(), barriers, readBarriersAlloc, readBarriersType,
+            pred);
       }
     });
   }
@@ -227,7 +237,6 @@ private:
                                          /*order=*/{0}, ctaLayout);
   }
 
-  // TODO: Come up with sensible layout
   ttg::BlockedEncodingAttr getReadBarriersEncoding(unsigned int buffers,
                                                    unsigned int barriers) {
     MLIRContext *ctx = module.getContext();
@@ -255,30 +264,6 @@ private:
     auto op = builder.create<tti::ExperimentalSharedBufferPointersOp>(
         tensorType, values);
     return op;
-  }
-
-  // TODO: Unify the two createConstIntTensor functions
-  TypedValue<RankedTensorType>
-  createConstIntTensor(ImplicitLocOpBuilder &builder, int val, Type elType,
-                       int64_t size) {
-    assert(llvm::isPowerOf2_64(size) && "Expected power of 2");
-    auto tensorType = RankedTensorType::get(
-        {size}, elType, getThreadLocalBlockedEncoding(size));
-    auto denseAttr = DenseElementsAttr::get(
-        tensorType, APInt(elType.getIntOrFloatBitWidth(), val));
-    return cast<TypedValue<RankedTensorType>>(
-        builder.create<arith::ConstantOp>(tensorType, denseAttr).getResult());
-  }
-
-  TypedValue<RankedTensorType>
-  createConstIntTensor(ImplicitLocOpBuilder &builder, int val, Type elType,
-                       ArrayRef<int64_t> shape,
-                       ttg::DistributedEncodingTrait encoding) {
-    auto tensorType = RankedTensorType::get(shape, elType, encoding);
-    auto denseAttr = DenseElementsAttr::get(
-        tensorType, APInt(elType.getIntOrFloatBitWidth(), val));
-    return cast<TypedValue<RankedTensorType>>(
-        builder.create<arith::ConstantOp>(tensorType, denseAttr).getResult());
   }
 
   ttg::DistributedEncodingTrait

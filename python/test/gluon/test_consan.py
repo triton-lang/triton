@@ -95,13 +95,11 @@ def async_tma_kernel(input_desc, XBLOCK: ttgl.constexpr, FAILURE: ttgl.constexpr
 
     mbarrier.expect(bar, XBLOCK * XBLOCK * ttgl.float16.primitive_bitwidth // 8)
     tma.async_copy_global_to_shared(input_desc, [0, 0], bar, smem)
-    if FAILURE:
-        tma.async_copy_global_to_shared(input_desc, [0, 0], bar, smem)
+    tma.async_copy_global_to_shared(input_desc, [0, 0], bar, smem, pred=FAILURE)
     mbarrier.wait(bar, 0)
 
-    if not FAILURE:
-        tma.async_copy_global_to_shared(input_desc, [0, 0], bar, smem)
-        mbarrier.wait(bar, 0)
+    tma.async_copy_global_to_shared(input_desc, [0, 0], bar, smem, pred=(not FAILURE))
+    mbarrier.wait(bar, 0, pred=(not FAILURE))
 
     mbarrier.invalidate(bar)
 
@@ -137,9 +135,9 @@ def tma_interleave_kernel(input_desc, XBLOCK: ttgl.constexpr, FAILURE: ttgl.cons
     mbarrier.expect(bar.index(0), XBLOCK * XBLOCK * ttgl.float16.primitive_bitwidth // 8)
     mbarrier.expect(bar.index(1), XBLOCK * XBLOCK * ttgl.float16.primitive_bitwidth // 8)
     tma.async_copy_global_to_shared(input_desc, [0, 0], bar.index(0), smem.index(0))
-    mbarrier.wait(bar.index(0), 0)
+    mbarrier.wait(bar.index(0), 1)
     tma.async_copy_global_to_shared(input_desc, [0, 0], bar.index(1), smem.index(1))
-    mbarrier.wait(bar.index(1), 0)
+    mbarrier.wait(bar.index(1), 1)
 
     mbarrier.invalidate(bar.index(0))
     mbarrier.invalidate(bar.index(1))

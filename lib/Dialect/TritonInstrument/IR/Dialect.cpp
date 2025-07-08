@@ -24,13 +24,12 @@ void TritonInstrumentDialect::initialize() {
 
 namespace mlir::triton::instrument {
 
-static TypedValue<RankedTensorType>
-createConstIntTensor(OpBuilder &builder, Location loc, int val, Type elType,
-                     ArrayRef<int64_t> shape,
-                     DistributedEncodingTrait encoding) {
-  auto tensorType = RankedTensorType::get(shape, elType, encoding);
+TypedValue<RankedTensorType> createConstIntTensor(OpBuilder &builder,
+                                                  Location loc, int val,
+                                                  RankedTensorType tensorType) {
   auto denseAttr = DenseElementsAttr::get(
-      tensorType, APInt(elType.getIntOrFloatBitWidth(), val));
+      tensorType,
+      APInt(tensorType.getElementType().getIntOrFloatBitWidth(), val));
   return cast<TypedValue<RankedTensorType>>(
       builder.create<arith::ConstantOp>(loc, tensorType, denseAttr)
           .getResult());
@@ -96,10 +95,8 @@ Value createPointerTensor(OpBuilder &b, Location loc, Value base,
     auto arangeType = RankedTensorType::get({tensorType.getShape()[i]},
                                             b.getI32Type(), partialEncoding);
     auto arange =
-        b.create<MakeRangeOp>(loc, arangeType, 0, tensorType.getShape()[i]);
-    auto cstStride =
-        createConstIntTensor(b, loc, strides[i], arangeType.getElementType(),
-                             arangeType.getShape(), partialEncoding);
+        b.create<MakeRangeOp>(loc, arangeType, 0, arangeType.getShape()[0]);
+    auto cstStride = createConstIntTensor(b, loc, strides[i], arangeType);
     auto arangeTimesStride =
         b.create<arith::MulIOp>(loc, arangeType, arange, cstStride);
     auto expandDims = expandAllSlicedDims(b, loc, arangeTimesStride);

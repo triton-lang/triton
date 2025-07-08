@@ -46,10 +46,11 @@ def TTI_ExperimentalCheckOutstandingWritesOp : TTI_Op<"experimental_check_outsta
     TTG_MemDescType:$buf,
     TT_Tensor:$buffers,
     TT_PtrLike:$writeBars,
-    TypeAttr:$writeBarsType
+    TypeAttr:$writeBarsType,
+    Optional<I1>:$pred
   );
   let assemblyFormat = [{
-    $buf `{` $buffers `,` $writeBars `(` $writeBarsType `)` `}` attr-dict `:` type($buf) `,` type($buffers) `,` type($writeBars)
+    $buf `{` $buffers `,` $writeBars `(` $writeBarsType `)` `}` (`,` $pred^)? attr-dict `:` type($buf) `,` type($buffers) `,` type($writeBars)
   }];
 }
 
@@ -63,10 +64,11 @@ def TTI_ExperimentalCheckOutstandingReadsOp : TTI_Op<"experimental_check_outstan
     TTG_MemDescType:$buf,
     TT_Tensor:$buffers,
     TT_PtrLike:$readBars,
-    TypeAttr:$readBarsType
+    TypeAttr:$readBarsType,
+    Optional<I1>:$pred
   );
   let assemblyFormat = [{
-    $buf `{` $buffers `,` $readBars `(` $readBarsType `)` `}` attr-dict `:` type($buf) `,` type($buffers) `,` type($readBars)
+    $buf `{` $buffers `,` $readBars `(` $readBarsType `)` `}` (`,` $pred^)? attr-dict `:` type($buf) `,` type($buffers) `,` type($readBars)
   }];
 }
 
@@ -83,10 +85,11 @@ def TTI_ExperimentalMarkAsWriteOp : TTI_Op<"experimental_mark_as_write", [Pure]>
     TTG_MemDescType:$mbar,
     TT_Tensor:$buffers,
     TT_PtrLike:$writeBars,
-    TypeAttr:$writeBarsType
+    TypeAttr:$writeBarsType,
+    Optional<I1>:$pred
   );
   let assemblyFormat = [{
-    $buf `,` $mbar `{` $buffers `,` $writeBars `(` $writeBarsType `)` `}` attr-dict `:` type($buf) `,` type($mbar) `,` type($buffers) `,` type($writeBars)
+    $buf `,` $mbar `{` $buffers `,` $writeBars `(` $writeBarsType `)` `}` (`,` $pred^)? attr-dict `:` type($buf) `,` type($mbar) `,` type($buffers) `,` type($writeBars)
   }];
 }
 
@@ -102,10 +105,11 @@ def TTI_ExperimentalMarkAsReadOp : TTI_Op<"experimental_mark_as_read", [Pure]> {
     TT_Tensor:$buffers,
     TT_Tensor:$barriers,
     TT_PtrLike:$readBars,
-    TypeAttr:$readBarsType
+    TypeAttr:$readBarsType,
+    Optional<I1>:$pred
   );
   let assemblyFormat = [{
-    $buf `,` $mbar `{` $buffers `,` $barriers `,` $readBars `(` $readBarsType `)` `}` attr-dict `:` type($buf) `,` type($mbar) `,` type($buffers) `,` type($barriers) `,` type($readBars)
+    $buf `,` $mbar `{` $buffers `,` $barriers `,` $readBars `(` $readBarsType `)` `}` (`,` $pred^)? attr-dict `:` type($buf) `,` type($mbar) `,` type($buffers) `,` type($barriers) `,` type($readBars)
   }];
 }
 
@@ -118,10 +122,11 @@ def TTI_ExperimentalClearWriteBarrierOp : TTI_Op<"experimental_clear_write_barri
   let arguments = (ins
     TTG_MemDescType:$mbar,
     TT_PtrLike:$writeBars,
-    TypeAttr:$writeBarsType
+    TypeAttr:$writeBarsType,
+    Optional<I1>:$pred
   );
   let assemblyFormat = [{
-    $mbar `{` $writeBars `(` $writeBarsType `)` `}` attr-dict `:` type($mbar) `,` type($writeBars)
+    $mbar `{` $writeBars `(` $writeBarsType `)` `}` (`,` $pred^)? attr-dict `:` type($mbar) `,` type($writeBars)
   }];
 }
 
@@ -135,10 +140,11 @@ def TTI_ExperimentalClearReadBarrierOp : TTI_Op<"experimental_clear_read_barrier
     TTG_MemDescType:$mbar,
     TT_Tensor:$barriers,
     TT_PtrLike:$readBars,
-    TypeAttr:$readBarsType
+    TypeAttr:$readBarsType,
+    Optional<I1>:$pred
   );
   let assemblyFormat = [{
-    $mbar `{` $barriers `,` $readBars `(` $readBarsType `)` `}` attr-dict `:` type($mbar) `,` type($barriers) `,` type($readBars)
+    $mbar `{` $barriers `,` $readBars `(` $readBarsType `)` `}` (`,` $pred^)? attr-dict `:` type($mbar) `,` type($barriers) `,` type($readBars)
   }];
 }
 
