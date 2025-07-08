@@ -332,6 +332,8 @@ convertToTimelineTrace(TraceData::Trace *trace,
       CircularLayoutParserResult::BlockTrace blockTrace;
       blockTrace.blockId = currentBlockId;
       blockTrace.procId = currentProcId;
+      blockTrace.timestamp =
+          getInt64Value(blockEvent.cycleMetric, CycleMetric::Timestamp);
       // Conservative estimation of the number of warps in a CTA.
       blockTrace.traces.reserve(16);
 
