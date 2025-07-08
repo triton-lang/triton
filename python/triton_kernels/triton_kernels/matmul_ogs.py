@@ -398,6 +398,8 @@ def matmul_ogs(x, w, bias,
     batch_size = w.shape[0] if routing_data.expt_hist is None else 1
     K, N = w.shape[-2:]
     assert K == x.shape[-1]
+    if x.ndim == 3 and w.ndim == 3:
+        assert x.shape[0] == w.shape[0]
     if isinstance(w.storage.layout, layout.HopperMXValueLayout):
         if not (K % 64 == 0 and N % 64 == 0):
             raise NotImplementedError("MXFP4 weight matrix dimensions must be divisible by 64 on hopper")
@@ -477,6 +479,8 @@ def matmul_ogs(x, w, bias,
     # canonicalize strides
     x_strides = [0]*(3 - x_storage.data.ndim) + list(x_storage.data.stride())
     w_scale_strides = w_scale.stride() if has_mx and not w_scale_has_tma else (None, None, None)
+    if len(w_scale_strides) == 2:
+        w_scale_strides = (1, ) + w_scale_strides
     # launch kernel
     kernels = get_kernels(epilogue.specs, fused_activation.specs)
     (kernels._p_matmul_ogs if opt_flags.is_persistent else kernels._matmul_ogs)[(grid,)](

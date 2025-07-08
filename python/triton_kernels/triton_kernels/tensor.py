@@ -14,6 +14,7 @@ class Storage:
     layout: Layout = None
 
     def __post_init__(self):
+        assert isinstance(self.data, torch.Tensor)
         if self.layout is None:
             self.layout = StridedLayout(self.data.shape)
 
