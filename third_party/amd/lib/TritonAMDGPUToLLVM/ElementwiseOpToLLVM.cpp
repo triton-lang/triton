@@ -1538,34 +1538,54 @@ static ConverterT Bf16_to_Fp8E5M2FNUZ(AMD::ISAFamily isaFamily) {
 static Value Fp8E4M3FNUZ_to_Fp16_oneValue(Location loc,
                                           ConversionPatternRewriter &rewriter,
                                           Value v) {
-  auto tb = TritonLLVMOpBuilder(loc, rewriter);
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto fp8x2VecTy = vec_ty(i8_ty, 2);
-  Value a = tb.undef(fp8x2VecTy);
-  a = tb.insert_element(fp8x2VecTy, a, tb.int_val(8, 0), tb.i32_val(0));
-  a = tb.insert_element(fp8x2VecTy, a, v, tb.i32_val(1));
-  a = tb.bitcast(a, i16_ty);
+  Value a = b.undef(fp8x2VecTy);
+  a = b.insert_element(fp8x2VecTy, a, b.i8_val(0), b.i32_val(0));
+  a = b.insert_element(fp8x2VecTy, a, v, b.i32_val(1));
+  a = b.bitcast(a, i16_ty);
 
-  auto e_mask = tb.int_val(16, 0x7A00);
-  auto e = tb.and_(i16_ty, a, e_mask);
+  // Get sign and absolute value
+  Value sign = b.and_(a, b.i16_val(0x8000));
+  a = b.and_(a, b.i16_val(0x7FFF));
 
-  auto m = tb.and_(i16_ty, a, tb.int_val(16, 0x0700));
-  auto sign = tb.and_(i16_ty, a, tb.int_val(16, 0x8000));
+  // Right shift 1 bit to adjust the positions of exponent and mantissa
+  a = b.lshr(a, b.i16_val(1));
 
-  // check whether all exponents are zeros
-  auto e_is_zero = tb.icmp_eq(e, tb.int_val(16, 0x0));
-  auto b = tb.and_(i16_ty, a, tb.int_val(16, 0x7FFF));
-  auto b1 = tb.lshr(i16_ty, b, tb.int_val(16, 1));
+  // Adjust exponent, (15 - 8) << 10 === 0x1C00
+  a = b.add(a, b.i16_val(0x1C00));
 
-  // case 1, e is nonzero, add exponent by 6
-  auto o0v = tb.add(i16_ty, b1, tb.int_val(16, 0x0C00));
-  auto o0 = tb.or_(i16_ty, o0v, sign);
+  Value v8 = b.bitcast(v, i8_ty);
+  Value vAbs = b.and_(v8, b.i8_val(0x7F));
+  // Check NaN (1.0000.000 in E4M3FNUZ)
+  // Pick an arbitrary number which represents NaN in fp16 (exp=11111 and mant
+  // != 0)
+  a = b.select(b.icmp_eq(v8, b.i8_val(0x80)), b.i16_val(0x7E00), a);
 
-  // case 2, e is nonzero, add exponent by 7
-  auto o1v = tb.add(i16_ty, b1, tb.int_val(16, 0x1C00));
-  auto o1 = tb.or_(i16_ty, o1v, sign);
+  // Check denorms and zero
+  // Here we use a LUT to map S.0000.000 ~ S.0000.111 to its corresponding fp16
+  // value
+  // Minimum subnormal value in E4M3FNUZ is 2^-10
+  constexpr size_t lutSize = 8;
+  static constexpr int denormsAndZeroLut[lutSize] = {0x0000,  // 0 * 2^-10
+                                                     0x1400,  // 1 * 2^-10
+                                                     0x1800,  // 2 * 2^-10
+                                                     0x1a00,  // 3 * 2^-10
+                                                     0x1c00,  // 4 * 2^-10
+                                                     0x1d00,  // 5 * 2^-10
+                                                     0x1e00,  // 6 * 2^-10
+                                                     0x1f00}; // 7 * 2^-10
 
-  auto io = tb.select(e_is_zero, o0, o1);
-  return tb.bitcast(io, f16_ty);
+  for (int i = 0; i < lutSize; i++) {
+    a = b.select(b.icmp_eq(vAbs, b.i8_val(i)), b.i16_val(denormsAndZeroLut[i]),
+                 a);
+  }
+
+  // Set sign
+  a = b.or_(a, sign);
+  a = b.bitcast(a, f16_ty);
+
+  return a;
 }
 
 static SmallVector<Value>

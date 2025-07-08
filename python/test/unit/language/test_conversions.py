@@ -285,7 +285,7 @@ def test_typeconvert_upcast(src_dtype, dst_dtype, device):
     elif is_hip():
         if  (src_dtype == 'float8e4nv' and not (is_hip_cdna3() or is_hip_cdna4())):
             pytest.skip(f"upcasting {src_dtype} to {dst_dtype} not supported in this architecture")
-        if (src_dtype in ('float8e4b8', 'float8e5b16') and dst_dtype !=  'bfloat16' and not is_hip_cdna3()):
+        if (src_dtype == 'float8e5b16' and dst_dtype !=  'bfloat16' and not is_hip_cdna3()):
             pytest.skip(f"upcasting {src_dtype} to {dst_dtype} not supported in this architecture")
         if  (src_dtype in ('float8e4b15',) and not is_hip_cdna3()):
             # If the dtype should error out in the given device, we assert that and return
