@@ -742,12 +742,14 @@ class ScaledBlockedToScaledMFMAF8F6F4 final
     : public OpRewritePattern<triton::DotScaledOp> {
   int mfmaVersion;
   int nonKDim;
+  bool preshuffleScales;
 
 public:
   ScaledBlockedToScaledMFMAF8F6F4(MLIRContext *context, int mfmaVersion,
-                                  int nonKDim, PatternBenefit benefit = 1)
+                                  int nonKDim, bool preshuffleScales,
+                                  PatternBenefit benefit = 1)
       : OpRewritePattern(context, benefit), mfmaVersion(mfmaVersion),
-        nonKDim(nonKDim) {}
+        nonKDim(nonKDim), preshuffleScales(preshuffleScales) {}
 
   LogicalResult matchAndRewrite(triton::DotScaledOp dotOp,
                                 PatternRewriter &rewriter) const override {
@@ -808,14 +810,23 @@ public:
     auto kBase = mfmaInstr->kBase;
     assert(mDim == nDim);
 
+    auto aShape = a.getType().getShape();
+    auto bShape = b.getType().getShape();
     auto warpsPerTile =
         warpsPerTileMFMA(dotOp, oldShape, numWarps, {mDim, nDim});
 
+    auto blockM = aShape[rank - 2];
+    auto blockN = bShape[rank - 1];
     // Always use transposed mfma layout. This enables larger vectorization
     // for global store instructions.
+    SmallVector<unsigned> tilesPerWarp(warpsPerTile.size(), 1);
+    if (preshuffleScales) {
+      tilesPerWarp[rank - 2] = 2;
+      tilesPerWarp[rank - 1] = 2;
+    }
     auto mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
-        ctx, /*verison=*/mfmaVersion, warpsPerTile,
-        /*instrShape=*/mDim, nDim, /*isTransposed=*/true, ctaLayout);
+        ctx, /*verison=*/mfmaVersion, warpsPerTile, tilesPerWarp,
+        /*instrShape=*/mDim, nDim, /*isTransposed=*/false, ctaLayout);
 
     auto newRetType =
         RankedTensorType::get(oldShape, oldRetType.getElementType(), mfmaEnc);
@@ -833,8 +844,6 @@ public:
     assert(kWidth == 32);
     using basisT = std::vector<std::vector<int32_t>>;
 
-    auto aShape = a.getType().getShape();
-    auto bShape = b.getType().getShape();
     auto aEncLL = LinearLayout::empty();
     auto bEncLL = LinearLayout::empty();
 
@@ -872,9 +881,8 @@ public:
         shape = llvm::to_vector(scale.getType().getShape());
       }
 
-      SmallVector<unsigned> tilesPerWarp(warpsPerTile.size(), 1);
       LinearLayout newLL = chooseScaledMfmaScaleLayout(
-          ctx, idx, shape, mDim, tilesPerWarp, warpsPerTile);
+          ctx, idx, shape, mDim, tilesPerWarp, warpsPerTile, preshuffleScales);
 
       Attribute newScaleEncoding = ttg::LinearEncodingAttr::get(ctx, newLL);
       // Scale's data type is always i8
@@ -1300,7 +1308,7 @@ public:
     case ISAFamily::CDNA4:
       patterns.add<::ScaledBlockedToScaledMFMAF8F6F4>(
           context, getMfmaVersion(isaFamily), matrixInstructionSize,
-          /*benefit=*/10);
+          preshuffleScales, /*benefit=*/10);
       [[fallthrough]];
     case ISAFamily::CDNA1:
     case ISAFamily::CDNA2:

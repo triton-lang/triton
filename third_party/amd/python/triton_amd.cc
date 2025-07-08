@@ -58,9 +58,9 @@ void init_triton_amd_passes_ttgpuir(py::module &&m) {
                      const std::string &, int32_t);
   ADD_PASS_WRAPPER_0("add_allocate_shared_memory",
                      mlir::triton::createAllocateAMDGPUSharedMemory);
-  ADD_PASS_OPTION_WRAPPER_3("add_accelerate_matmul",
+  ADD_PASS_OPTION_WRAPPER_4("add_accelerate_matmul",
                             mlir::createTritonAMDGPUAccelerateMatmul,
-                            const std::string, int, int);
+                            const std::string, int, int, bool);
   ADD_PASS_WRAPPER_0("add_optimize_epilogue",
                      mlir::createTritonAMDGPUOptimizeEpilogue);
   m.def("add_hoist_layout_conversions", [](mlir::PassManager &pm) {
