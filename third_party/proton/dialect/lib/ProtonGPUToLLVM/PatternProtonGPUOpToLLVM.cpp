@@ -137,9 +137,7 @@ struct FinalizeOpConversion
       // Load the value from buffer
       Value ptr = b.gep(bufferBaseType, i32_ty, segmentObj.base, bufOffset);
       Value load;
-      if (mlir::isa<triton::proton::gpu::StackMemorySpaceAttr>(memSpace)) {
-        llvm::report_fatal_error("unimplemented");
-      } else if (mlir::isa<triton::gpu::SharedMemorySpaceAttr>(memSpace)) {
+      if (mlir::isa<triton::gpu::SharedMemorySpaceAttr>(memSpace)) {
         load = tritonTargetInfo.loadShared(rewriter, loc, ptr, i32_ty,
                                            b.true_val());
       } else {
@@ -208,61 +206,6 @@ struct FinalizeOpConversion
     rewriter.create<cf::BranchOp>(loc, writeBackBlock, initIdx);
 
     rewriter.eraseOp(op);
-    return success();
-  }
-
-protected:
-  const proton::gpu::TargetInfoBase &targetInfo;
-};
-
-struct StackAllocOpConversion
-    : public ConvertOpToLLVMPattern<mlir::triton::proton::gpu::StackAllocOp> {
-  explicit StackAllocOpConversion(LLVMTypeConverter &typeConverter,
-                                  const proton::gpu::TargetInfoBase &targetInfo,
-                                  PatternBenefit benefit)
-      : mlir::ConvertOpToLLVMPattern<mlir::triton::proton::gpu::StackAllocOp>(
-            typeConverter, benefit),
-        targetInfo(targetInfo) {}
-
-  LogicalResult
-  matchAndRewrite(mlir::triton::proton::gpu::StackAllocOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    auto moduleOp =
-        rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
-    Location loc = op.getLoc();
-    auto ctx = moduleOp.getContext();
-
-    auto bufferTy =
-        mlir::cast<triton::gpu::MemDescType>(op.getBuffer().getType());
-
-    const int bufferSizeInBytes =
-        mlir::ShapedType::getNumElements(bufferTy.getShape()) *
-        bufferTy.getElementType().getIntOrFloatBitWidth() / 8;
-
-    auto bufferSizeVal = rewriter.create<LLVM::ConstantOp>(
-        loc, rewriter.getIntegerType(32),
-        IntegerAttr::get(rewriter.getIntegerType(32), bufferSizeInBytes / 4));
-
-    auto llvmPointerType = LLVM::LLVMPointerType::get(op->getContext());
-    Type llvmInt32Type = IntegerType::get(op->getContext(), 32);
-    Value arrayVal = rewriter.create<LLVM::AllocaOp>(
-        loc, llvmPointerType, llvmInt32Type, bufferSizeVal);
-
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
-
-    // TODO(crobeck): update if we ever support multi-rank stack alloc ops
-    SmallVector<Type, 4> types = {ptr_ty(ctx), llvmInt32Type};
-    SmallVector<Value, 4> elems = {arrayVal,
-                                   bufferSizeVal}; // i32 ptr, shape[0]
-
-    auto structTy =
-        LLVM::LLVMStructType::getLiteral(rewriter.getContext(), types);
-
-    Value llvmStruct = rewriter.create<LLVM::UndefOp>(loc, structTy);
-    for (const auto &v : llvm::enumerate(elems)) {
-      llvmStruct = b.insert_val(structTy, llvmStruct, v.value(), v.index());
-    }
-    rewriter.replaceOp(op, llvmStruct);
     return success();
   }
 
@@ -625,7 +568,6 @@ void populateProtonGPUOpPatterns(LLVMTypeConverter &typeConverter,
   patterns.add<ReadCounterOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<FinalizeOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<SegmentAllocOpConversion>(typeConverter, targetInfo, benefit);
-  patterns.add<StackAllocOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<GlobalScratchAllocOpConversion>(typeConverter, targetInfo,
                                                benefit);
   patterns.add<InitCtxOpConversion>(typeConverter, targetInfo, benefit);

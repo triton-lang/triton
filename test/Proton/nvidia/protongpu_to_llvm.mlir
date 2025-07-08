@@ -51,19 +51,6 @@ module attributes {"ttg.num-warps" = 8 : i32} {
 // -----
 
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
- module attributes {"ttg.num-warps" = 8 : i32} {
-   // CHECK-LABEL: convert_stack_segment_setup
-   tt.func @convert_stack_segment_setup() -> !proton_gpu.segment<384, #proton_gpu.stack_memory, warp> {
-     // CHECK-DAG: llvm.mlir.undef : !llvm.struct<(ptr, i32)>
-     %0 = proton_gpu.stack_alloc : !ttg.memdesc<96xi32, #shared, #proton_gpu.stack_memory, mutable>
-     %3 = proton_gpu.segment_alloc %0 : !ttg.memdesc<96xi32, #shared, #proton_gpu.stack_memory, mutable> -> !proton_gpu.segment<384, #proton_gpu.stack_memory, warp>
-     tt.return %3 : !proton_gpu.segment<384, #proton_gpu.stack_memory, warp>
-   }
- }
-
-// -----
-
-#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-warps" = 8 : i32} {
   // CHECK-LABEL: convert_circular_smem_store_nested
@@ -178,26 +165,6 @@ module attributes {"ttg.num-warps" = 8 : i32, ttg.profile_scratch_memory_alignme
     llvm.return
   }
 }
-
-// -----
-#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
-module attributes {"ttg.num-warps" = 8 : i32} {
-   tt.func @convert_stack_alloc_invalid(){
-     // expected-error @+1 {{'proton_gpu.stack_alloc' op proton stack size must be positive and non-zero}}
-     %1 = proton_gpu.stack_alloc : !ttg.memdesc<0xi32, #shared, #proton_gpu.stack_memory, mutable>
-     tt.return
-   }
- }
-
-// -----
-#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
-module attributes {"ttg.num-warps" = 8 : i32} {
-   tt.func @convert_stack_alloc_invalid2(){
-     // expected-error @+1 {{'proton_gpu.stack_alloc' op proton stack buffer element type must be int 32}}
-     %1 = proton_gpu.stack_alloc : !ttg.memdesc<96xi8, #shared, #proton_gpu.stack_memory, mutable>
-     tt.return
-   }
- }
 
 // -----
 

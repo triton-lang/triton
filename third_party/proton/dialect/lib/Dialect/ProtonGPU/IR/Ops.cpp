@@ -18,26 +18,6 @@ namespace triton {
 namespace proton {
 namespace gpu {
 
-// -- StackAllocOp --
-LogicalResult StackAllocOp::verify() {
-  auto bufferTy = mlir::cast<triton::gpu::MemDescType>(getBuffer().getType());
-  auto elemTy = bufferTy.getElementType();
-  auto rank = bufferTy.getRank();
-
-  if (!isa<IntegerType>(elemTy) || elemTy.getIntOrFloatBitWidth() != 32)
-    return emitOpError("proton stack buffer element type must be int 32");
-
-  if (rank > 1)
-    return emitOpError("proton stack currently only supports 1-D shapes");
-
-  int stackAllocationSize =
-      mlir::ShapedType::getNumElements(bufferTy.getShape());
-  if (stackAllocationSize <= 0)
-    return emitOpError("proton stack size must be positive and non-zero");
-
-  return success();
-}
-
 // -- CircularRecordOp --
 LogicalResult CircularStoreOp::verify() {
   auto scopeId = getScopeId();

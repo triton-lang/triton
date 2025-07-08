@@ -25,7 +25,7 @@ def PTG_SegmentType : PTG_TypeDef<"Segment", "segment", []> {
     - `segmentBase`: pointer to each segment's start in the internal buffer
     - `indexPtr`: pointer to the current index within the segment
 
-    The segment can reside in global memory, shared memory, or stack memory depending on the `memorySpace` attribute.
+    The segment can reside in global memory or shared memory depending on the `memorySpace` attribute.
   }];
 
   let parameters = (ins

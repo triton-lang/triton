@@ -55,9 +55,8 @@ def ConvertProtonToProtonGPU: Pass<"convert-proton-to-protongpu", "mlir::ModuleO
                     clEnumValN(gpu::BufferStrategy::FLUSH, "flush", "Flush Buffer")
               )}]>,
        Option<"bufferType", "buffer-type", "gpu::BufferType", /*default*/"gpu::BufferType::SHARED",
-              "Internal buffer type (STACK, SHARED, GLOBAL) that stores the profiling data",
+              "Internal buffer type (SHARED, GLOBAL) that stores the profiling data",
               /*parser*/[{::llvm::cl::values(
-                    clEnumValN(gpu::BufferType::STACK, "stack", "Stack Memory"),
                     clEnumValN(gpu::BufferType::SHARED, "shared", "Shared Memory"),
                     clEnumValN(gpu::BufferType::GLOBAL, "global", "Global Memory")
               )}]>,

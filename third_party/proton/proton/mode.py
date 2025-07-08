@@ -13,7 +13,6 @@ buffer_strategies = {
 buffer_types = {
     "shared": triton_proton.BUFFER_TYPE.SHARED,
     "global": triton_proton.BUFFER_TYPE.GLOBAL,
-    "stack": triton_proton.BUFFER_TYPE.STACK,
 }
 
 sampling_strategies = {

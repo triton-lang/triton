@@ -49,25 +49,14 @@ def BufferStrategyAttr : I32EnumAttr<
 def BufferTypeAttr : I32EnumAttr<
   "BufferType", "The type of internal buffer to be used",
   [
-    I32EnumAttrCase<"STACK", 0, "stack">,
     I32EnumAttrCase<"SHARED", 1, "shared">,
     I32EnumAttrCase<"GLOBAL", 2, "global">,
   ]> {
   let cppNamespace = "::mlir::triton::proton::gpu";
   let description = [{
     The following buffer types are supported:
-    - STACK: Thread-private stack buffer type.
     - SHARED: Shared memory buffer type.
     - GLOBAL: Profiling data get stored directly in global memory, but may be cached in L2/L1.
-  }];
-}
-
-
-def PTG_StackMemorySpace : AttrDef<ProtonGPU_Dialect, "StackMemorySpace"> {
-  let cppNamespace = "::mlir::triton::proton::gpu";
-  let mnemonic = "stack_memory";
-  let description = [{
-    Attribute to indicate that the memory descriptor points to stack memory.
   }];
 }
 
