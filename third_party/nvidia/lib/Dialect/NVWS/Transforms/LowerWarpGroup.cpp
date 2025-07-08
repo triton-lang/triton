@@ -21,6 +21,7 @@
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
+#include "mlir/Analysis/TopologicalSortUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/AttrTypeSubElements.h"
 #include "mlir/IR/Location.h"
@@ -59,7 +60,7 @@ class LowerWarpGroup : public OpRewritePattern<WarpGroupOp> {
 
   void populateRegion(PatternRewriter &rewriter, Region *inputRegion,
                       Region *outputRegion, SmallVector<Value> &inputs,
-                      SmallVector<Value> &constants) const {
+                      IRMapping &mapping) const {
     Block *output_block = &outputRegion->emplaceBlock();
     DenseMap<Value, Value> valueMap;
     rewriter.setInsertionPointToEnd(output_block);
@@ -68,12 +69,6 @@ class LowerWarpGroup : public OpRewritePattern<WarpGroupOp> {
       auto new_value =
           output_block->addArgument(value.getType(), value.getLoc());
       valueMap[value] = new_value;
-    }
-
-    IRMapping mapping;
-    for (auto &value : constants) {
-      valueMap[value] =
-          rewriter.clone(*value.getDefiningOp(), mapping)->getResult(0);
     }
     auto retOp = rewriter.create<triton::gpu::WarpReturnOp>(
         inputRegion->getLoc(), ArrayRef<Type>(), ArrayRef<Value>());
@@ -106,7 +101,13 @@ class LowerWarpGroup : public OpRewritePattern<WarpGroupOp> {
       mlir::getUsedValuesDefinedAbove(*partition, captures);
 
     SmallVector<Value> inputs;
-    SmallVector<Value> constants;
+    SmallVector<IRMapping> mappings(partitions.size());
+    SmallVector<OpBuilder> builders;
+    for (auto [i, region] : llvm::enumerate(partitions)) {
+      builders.push_back(OpBuilder::atBlockBegin(&region->front()));
+    }
+
+    SetVector<Operation *> opsToClone;
     for (unsigned i = 0; i < captures.size(); ++i) {
       Value capture = captures[i];
       Operation *defOp = capture.getDefiningOp();
@@ -114,7 +115,7 @@ class LowerWarpGroup : public OpRewritePattern<WarpGroupOp> {
           (defOp->hasTrait<OpTrait::ConstantLike>() ||
            isa<RankedTensorType>(capture.getType()))) {
         captures.insert(defOp->operand_begin(), defOp->operand_end());
-        constants.push_back(capture);
+        opsToClone.insert(defOp);
       } else if (auto tensorTy =
                      dyn_cast<RankedTensorType>(capture.getType())) {
         SharedEncodingTrait sharedEnc = getSharedEncoding(tensorTy);
@@ -123,14 +124,25 @@ class LowerWarpGroup : public OpRewritePattern<WarpGroupOp> {
             SharedMemorySpaceAttr::get(tensorTy.getContext()));
         auto alloc = rewriter.create<LocalAllocOp>(loc, memdescTy, capture);
         for (auto [i, region] : llvm::enumerate(partitions)) {
-          auto builder = OpBuilder::atBlockBegin(&region->front());
-          Value value =
-              builder.create<LocalLoadOp>(capture.getLoc(), tensorTy, alloc);
+          Value value = builders[i].create<LocalLoadOp>(capture.getLoc(),
+                                                        tensorTy, alloc);
           replaceAllUsesInRegionWith(capture, value, *region);
+          mappings[i].map(capture, value);
         }
         inputs.push_back(alloc);
       } else {
         inputs.push_back(capture);
+      }
+    }
+
+    opsToClone = topologicalSort(opsToClone);
+    for (auto [i, region] : llvm::enumerate(partitions)) {
+      OpBuilder &b = builders[i];
+      IRMapping &mapping = mappings[i];
+      for (Operation *op : opsToClone) {
+        auto copy = builders[i].clone(*op, mappings[i])->getResult(0);
+        mappings[i].map(op->getResult(0), copy);
+        replaceAllUsesInRegionWith(op->getResult(0), copy, *region);
       }
     }
 
@@ -157,8 +169,8 @@ class LowerWarpGroup : public OpRewritePattern<WarpGroupOp> {
         rewriter.create<WarpSpecializePartitionsOp>(loc, partitions.size());
     auto regions = wspOp.getPartitionRegions();
 
-    for (auto [in, out] : zip(partitions, regions))
-      populateRegion(rewriter, in, &out, inputs, constants);
+    for (auto [in, out, mapping] : zip(partitions, regions, mappings))
+      populateRegion(rewriter, in, &out, inputs, mapping);
 
     warpGroupOp.replaceAllUsesWith(wsOp);
 

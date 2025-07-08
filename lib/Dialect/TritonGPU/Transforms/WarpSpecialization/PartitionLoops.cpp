@@ -328,6 +328,9 @@ auto getLoopVarIndicesToKeep(
   SmallVector<size_t> indices;
   SmallVector<int> reverseIndices(loop.getNumRegionIterArgs(), -1);
   for (auto [i, arg] : llvm::enumerate(loop.getRegionIterArgs())) {
+    // For the default partition, keep non-tensor results used outside of the
+    // loop even if the corresponding loop variable is not used in that
+    // partition.
     if (loopVarCategories[i] == LoopVarCategory::Used ||
         (partition->getIndex() == 0 && !loop.getResult(i).use_empty() &&
          loopVarCategories[i] !=
@@ -375,11 +378,9 @@ void cloneForOp(scf::ForOp forOp, SmallVector<WgBuilder> &builders,
       b.mapping.map(forOp.getResult(oldIdx), newForOp.getResult(newIdx));
     }
 
-    // set builder insertion point to the start of the newForOp body
     b.builder.setInsertionPointToStart(newForOp.getBody());
   }
 
-  // resursive clone ops in the forOp body
   cloneOpsInBlock(forOp.getBody(), builders, schedule);
 
   for (auto newForOp : newForOps) {
