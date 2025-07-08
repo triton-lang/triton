@@ -50,15 +50,19 @@ createTmpLayout(triton::gpu::DistributedEncodingTrait layout,
         src.getOrder(), src.getCTALayout());
   if (auto src = dyn_cast<triton::gpu::DotOperandEncodingAttr>(layout)) {
     auto parent = cast<triton::gpu::DistributedEncodingTrait>(src.getParent());
-    return triton::gpu::DotOperandEncodingAttr::get(
-        ctx, src.getOpIdx(), createTmpLayout(parent, warpsPerCTA),
-        src.getKWidth());
+    parent = createTmpLayout(parent, warpsPerCTA);
+    if (!parent)
+      return {};
+    return triton::gpu::DotOperandEncodingAttr::get(ctx, src.getOpIdx(), parent,
+                                                    src.getKWidth());
   }
   if (auto src = dyn_cast<triton::gpu::SliceEncodingAttr>(layout)) {
     auto warps = to_vector(warpsPerCTA);
     warps.insert(warps.begin() + src.getDim(), 1);
-    return triton::gpu::SliceEncodingAttr::get(
-        ctx, src.getDim(), createTmpLayout(src.getParent(), warps));
+    auto parent = createTmpLayout(src.getParent(), warps);
+    if (!parent)
+      return {};
+    return triton::gpu::SliceEncodingAttr::get(ctx, src.getDim(), parent);
   }
   // TODO: support linear layout if needed.
   if (isa<triton::gpu::LinearEncodingAttr>(layout))
