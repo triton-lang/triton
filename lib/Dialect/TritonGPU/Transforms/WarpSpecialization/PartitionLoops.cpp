@@ -156,7 +156,7 @@ void cloneIfOp(scf::IfOp ifOp, SmallVector<WgBuilder> &builders,
   auto partition = schedule.getPartition(ifOp);
   SmallVector<size_t> partitionIndices;
 
-  if (partition == schedule.getRootPartition()) {
+  if (!partition || partition == schedule.getRootPartition()) {
     for (size_t i = 0; i < builders.size(); ++i) {
       partitionIndices.push_back(i);
     }
@@ -216,33 +216,55 @@ void cloneIfOp(scf::IfOp ifOp, SmallVector<WgBuilder> &builders,
 void cloneReduceOp(triton::ReduceOp reduceOp, SmallVector<WgBuilder> &builders,
                    const WarpSchedule &schedule) {
   auto partition = schedule.getPartition(reduceOp);
-  assert(partition);
-  auto &b = builders[partition->getIndex()];
-
-  SmallVector<Value> srcs;
-  for (auto src : reduceOp.getSrcs())
-    srcs.push_back(b.mapping.lookupOrDefault(src));
-  auto axis = reduceOp.getAxis();
-  auto newReduceOp =
-      b.builder.create<triton::ReduceOp>(reduceOp.getLoc(), srcs, axis);
-
-  for (auto [oldResult, newResult] :
-       llvm::zip(reduceOp.getResults(), newReduceOp.getResults())) {
-    b.mapping.map(oldResult, newResult);
+  SmallVector<size_t> partitionIndices;
+  if (!partition || partition == schedule.getRootPartition()) {
+    for (size_t i = 0; i < builders.size(); ++i) {
+      partitionIndices.push_back(i);
+    }
+  } else {
+    partitionIndices.push_back(partition->getIndex());
   }
 
-  auto &region = newReduceOp.getRegion();
-  Block *block = &region.emplaceBlock();
-  for (auto args : reduceOp.getRegion().getBlocks().front().getArguments()) {
-    auto newArg = block->addArgument(args.getType(), args.getLoc());
-    b.mapping.map(args, newArg);
-  }
+  SmallVector<ReduceOp> newReduceOps;
+  for (size_t idx : partitionIndices) {
+    auto &b = builders[idx];
 
-  b.builder.setInsertionPointToStart(block);
+    SmallVector<Value> srcs;
+    for (auto src : reduceOp.getSrcs()) {
+      if (b.mapping.contains(src))
+        srcs.push_back(b.mapping.lookup(src));
+    }
+    // TODO: A better way to decide which partitons to clone an unannotated
+    // reduce op. A similar fix should be applied to an unannotated if op
+    if (srcs.empty()) {
+      continue;
+    }
+    auto axis = reduceOp.getAxis();
+    auto newReduceOp =
+        b.builder.create<triton::ReduceOp>(reduceOp.getLoc(), srcs, axis);
+    newReduceOp->setAttrs(reduceOp->getAttrs());
+    newReduceOps.push_back(newReduceOp);
+
+    for (auto [oldResult, newResult] :
+         llvm::zip(reduceOp.getResults(), newReduceOp.getResults())) {
+      b.mapping.map(oldResult, newResult);
+    }
+
+    auto &region = newReduceOp.getRegion();
+    Block *block = &region.emplaceBlock();
+    for (auto args : reduceOp.getRegion().getBlocks().front().getArguments()) {
+      auto newArg = block->addArgument(args.getType(), args.getLoc());
+      b.mapping.map(args, newArg);
+    }
+
+    b.builder.setInsertionPointToStart(block);
+  }
 
   cloneOpsInBlock(reduceOp.getBody(), builders, schedule);
 
-  b.builder.setInsertionPointAfter(newReduceOp);
+  for (auto [idx, newReduceOp] : llvm::zip(partitionIndices, newReduceOps)) {
+    builders[idx].builder.setInsertionPointAfter(newReduceOp);
+  }
 }
 
 const Partition *getPartition(Operation *op, const WarpSchedule &schedule) {
