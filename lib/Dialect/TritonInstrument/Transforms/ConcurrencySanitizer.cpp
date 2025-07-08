@@ -238,7 +238,7 @@ private:
     return ttg::BlockedEncodingAttr::get(ctx,
                                          /*sizePerThread=*/{buffers, barriers},
                                          /*threadsPerWarp=*/{1, 32},
-                                         /*warpsPerCTA=*/{1, 1},
+                                         /*warpsPerCTA=*/{1, warps},
                                          /*order=*/{0, 1}, ctaLayout);
   }
 

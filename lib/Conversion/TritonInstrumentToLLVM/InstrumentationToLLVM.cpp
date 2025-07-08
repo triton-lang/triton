@@ -479,85 +479,6 @@ struct ClearReadBarrierOpConversion
   }
 };
 
-struct CheckAsyncWriteWithMbarSharedOpConversion
-    : public ConvertOpToLLVMPattern<
-          tti::ExperimentalCheckAsyncWriteWithMbarSharedOp> {
-  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
-
-  LogicalResult
-  matchAndRewrite(tti::ExperimentalCheckAsyncWriteWithMbarSharedOp op,
-                  OpAdaptor adaptor,
-                  ConversionPatternRewriter &b) const override {
-
-    Location loc = op.getLoc();
-    b.setInsertionPoint(op);
-    RankedTensorType barriersTy =
-        cast<RankedTensorType>(op.getBarriers().getType());
-    RankedTensorType statesTy =
-        cast<RankedTensorType>(op.getStates().getType());
-    Value zero_64b = createConstIntTensor(b, loc, 0, barriersTy);
-    Value zero_8b = createConstIntTensor(b, loc, 0, statesTy);
-    Value mbar = createMemDescToI64(b, loc, getTypeConverter(),
-                                    op.getMbar().getType(), adaptor.getMbar());
-    Value buffer =
-        createMemDescToI64(b, loc, getTypeConverter(), op.getBuffer().getType(),
-                           adaptor.getBuffer());
-    Value buffers = op.getBuffers();
-    Value states = op.getStates();
-    Value barriers = op.getBarriers();
-
-    // 1. Check if the buffer has outstanding accesses
-    Value currBuf = createCmpIntTensorScalar(b, loc, buffers, buffer);
-    Value rwSplat =
-        createConstIntTensor(b, loc, WRITE_BIT | READ_BIT, statesTy);
-    Value isRW = b.create<arith::AndIOp>(loc, states, rwSplat);
-    Value isCurrBufRW = b.create<arith::SelectOp>(loc, currBuf, isRW, zero_8b);
-
-    // Assert that the buffer is not being read or written
-    auto isCurrBufRW_i1 = b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq,
-                                                  isCurrBufRW, zero_8b);
-    b.create<tti::ExperimentalAssertInThreadOp>(
-        loc, isCurrBufRW_i1, "TMA copy to buffer being read or written",
-        /*check_any=*/false);
-
-    // 2. Update the access state
-    Value writeSplat = createConstIntTensor(b, loc, WRITE_BIT, statesTy);
-    Value outStates = b.create<arith::SelectOp>(
-        loc, currBuf, b.create<arith::OrIOp>(loc, states, writeSplat), states);
-    Value mbarSplat = b.create<triton::SplatOp>(loc, barriersTy, mbar);
-    Value outBarriers =
-        b.create<arith::SelectOp>(loc, currBuf, mbarSplat, barriers);
-    b.replaceOp(op, {outStates, outBarriers});
-    return success();
-  }
-};
-
-struct CheckWaitMbarOpConversion
-    : public ConvertOpToLLVMPattern<tti::ExperimentalCheckWaitMbarOp> {
-  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
-
-  LogicalResult matchAndRewrite(tti::ExperimentalCheckWaitMbarOp op,
-                                OpAdaptor adaptor,
-                                ConversionPatternRewriter &b) const override {
-    Location loc = op.getLoc();
-    b.setInsertionPoint(op);
-    RankedTensorType barriersTy =
-        cast<RankedTensorType>(op.getBarriers().getType());
-    RankedTensorType stateTy = cast<RankedTensorType>(op.getStates().getType());
-    Value zero_64b = createConstIntTensor(b, loc, 0, barriersTy);
-    Value zero_8b = createConstIntTensor(b, loc, 0, stateTy);
-    Value mbar = createMemDescToI64(b, loc, getTypeConverter(),
-                                    op.getMbar().getType(), adaptor.getMbar());
-    Value currBar = createCmpIntTensorScalar(b, loc, op.getBarriers(), mbar);
-
-    Value outStates =
-        b.create<arith::SelectOp>(loc, currBar, zero_8b, op.getStates());
-    Value outBarriers =
-        b.create<arith::SelectOp>(loc, currBar, zero_64b, op.getBarriers());
-    b.replaceOp(op, {outStates, outBarriers});
-    return success();
-  }
-};
 } // namespace
 
 void mlir::triton::populateInstrumentationToLLVMPatterns(
@@ -571,6 +492,4 @@ void mlir::triton::populateInstrumentationToLLVMPatterns(
   patterns.add<MarkAsReadOpConversion>(typeConverter);
   patterns.add<ClearWriteBarrierOpConversion>(typeConverter);
   patterns.add<ClearReadBarrierOpConversion>(typeConverter);
-  patterns.add<CheckAsyncWriteWithMbarSharedOpConversion>(typeConverter);
-  patterns.add<CheckWaitMbarOpConversion>(typeConverter);
 }
