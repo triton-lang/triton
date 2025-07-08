@@ -76,8 +76,15 @@ private:
     //               | 1         | 0/1     | (wt) global store sc0 sc1
     auto [volatileFlag, nonTmpFlag] =
         mlir::LLVM::AMD::getCacheModifierFlagsForPredicatedCall(callOp);
-    auto storeOp = rewriter.create<LLVM::StoreOp>(
-        loc, val, ptr, /*alignment=*/0, volatileFlag, nonTmpFlag);
+    int alignment = 0;
+    if (auto vecTy = dyn_cast<VectorType>(val.getType())) {
+      auto elemTy = vecTy.getElementType();
+      auto elemSizeInBytes = elemTy.getIntOrFloatBitWidth() / 8;
+      alignment = elemSizeInBytes * vecTy.getNumElements();
+    }
+
+    auto storeOp = rewriter.create<LLVM::StoreOp>(loc, val, ptr, alignment,
+                                                  volatileFlag, nonTmpFlag);
     bool addAsyncAliasScopes =
         callOp.getCallee().value().contains(mlir::LLVM::AMD::noAliasAsyncLoads);
     if (addAsyncAliasScopes) {
