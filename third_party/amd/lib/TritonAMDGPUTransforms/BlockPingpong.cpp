@@ -81,6 +81,7 @@ private:
   LogicalResult transformFourPPClusters(OpBuilder &builder, Location loc);
   LogicalResult transformTwoPPClusters(OpBuilder &builder, Location loc);
   LogicalResult transformNS3(OpBuilder &builder, Location loc);
+  LogicalResult transform2step(OpBuilder &builder, Location loc);
   void addAsymmetricSyncToLoop(OpBuilder &builder, Location loc);
   void updateOpInsertion(Operation *Op);
   void appendOp(Operation *Op);
@@ -633,6 +634,35 @@ LogicalResult Pingponger::transformTwoPPClusters(OpBuilder &builder,
   return success();
 }
 
+// This transform schedules instructions into two clusters, the first cluster with 
+// async copy only and the second cluster with all the other ops.
+// This requires additional second step in lowering mfma to llvm
+// that splits dot into two groups of mfmas, so ds_read instructions can be
+// only reside together with the first mfma group.
+LogicalResult Pingponger::transform2step(OpBuilder &builder, Location loc) {
+  if (asyncCopyOps.size() == 0)
+    return failure();
+  builder.setInsertionPointAfter(asyncCopyOps[0]);
+  updateOpInsertion(asyncCopyOps[0]);
+
+  // mem cluster contains async_copies and tt.load if LDS bypassed.
+  for (auto cop : asyncCommitOps)
+    moveOpAndPredecessorsUpSameBlock(cop);
+  for (auto glop : gLoadOps)
+    moveOpAndPredecessorsUpSameBlock(glop);
+
+  appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
+  appendOp(builder.create<ROCDL::SBarrierOp>(loc));
+  appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
+
+  // all other ops are placed in the second cluster
+  // set unit attr, so it can trigger the second step in the ttg to llvm
+  // lowering pass.
+  dotSOps[0]->setAttr("pingpong_2step", builder.getUnitAttr());
+
+  return success();
+}
+
 // This pingpong variant tries to construct one memory cluster and one
 // dot cluster. Instead of slice the tile, it is supposed to use half 
 // sized tile_K and use num_stages=3 to prefetch and hide the buffer
@@ -806,8 +836,8 @@ void Pingponger::getDotPingponged() {
     if (tileSize == 8388608 && aShape[0] == 256 && aShape[1] == 128 &&
         elemWidth == 8) {
       kWidth = 16;
-      if (transformNS3(builder, dotSOps[0]->getLoc()).failed()) {
-        LDBG("Encountered failure when trying to execute the two ping pong "
+      if (transform2step(builder, dotSOps[0]->getLoc()).failed()) {
+        LDBG("Encountered failure when trying to execute the two-step ping pong "
              "cluster transformation");
         return;
       }
