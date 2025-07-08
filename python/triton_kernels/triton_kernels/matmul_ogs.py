@@ -15,6 +15,7 @@ from .matmul_ogs_details._finalize_matmul import _finalize_matmul
 from .matmul_ogs_details.opt_flags import make_opt_flags, update_opt_flags_constraints
 from .specialize import specialize
 from .tensor import Storage, Tensor, bitwidth
+from .tensor_details import layout
 
 
 @dataclass(frozen=True)
@@ -396,7 +397,7 @@ def matmul_ogs(x, w, bias,
     M = x.shape[-2] if gather_indx is None else gather_indx.src_indx.shape[0]
     batch_size = w.shape[0] if routing_data.expt_hist is None else 1
     K, N = w.shape[-2:]
-    if not target_info.cuda_capability_geq(10, 0) and has_mx:
+    if isinstance(w.storage.layout, layout.HopperMXValueLayout):
         if not (K % 64 == 0 and N % 64 == 0):
             raise NotImplementedError("MXFP4 weight matrix dimensions must be divisible by 64 on hopper")
     # compute optimization flags
