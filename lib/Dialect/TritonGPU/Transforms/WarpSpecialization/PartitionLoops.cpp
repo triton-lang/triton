@@ -111,6 +111,16 @@ auto getLoopVarIndicesToKeep(scf::ForOp loop, const Partition *partition,
   return getLoopVarIndicesToKeep(loop, partition, loopVarCategories);
 }
 
+const Partition *getPartition(Operation *op, const WarpSchedule &schedule) {
+  while (op && !schedule.getPartition(op)) {
+    op = op->getParentOp();
+  }
+  if (op) {
+    return schedule.getPartition(op);
+  }
+  return nullptr;
+}
+
 void cloneOpsInBlock(Block *block, SmallVector<WgBuilder> &builders,
                      const WarpSchedule &schedule);
 
@@ -153,10 +163,11 @@ void cloneForOp(scf::ForOp forOp, SmallVector<WgBuilder> &builders,
 
 void cloneIfOp(scf::IfOp ifOp, SmallVector<WgBuilder> &builders,
                const WarpSchedule &schedule) {
-  auto partition = schedule.getPartition(ifOp);
+  auto partition = getPartition(ifOp, schedule);
+  assert(partition);
   SmallVector<size_t> partitionIndices;
 
-  if (!partition || partition == schedule.getRootPartition()) {
+  if (partition == schedule.getRootPartition()) {
     for (size_t i = 0; i < builders.size(); ++i) {
       partitionIndices.push_back(i);
     }
@@ -171,10 +182,7 @@ void cloneIfOp(scf::IfOp ifOp, SmallVector<WgBuilder> &builders,
     for (auto [idx, result] : llvm::enumerate(ifOp.getResults())) {
       newIfResultTypes.push_back(result.getType());
     }
-    if (!b.mapping.contains(ifOp.getCondition())) {
-      continue;
-    }
-    auto cond = b.mapping.lookup(ifOp.getCondition());
+    auto cond = b.mapping.lookupOrDefault(ifOp.getCondition());
     auto newIfOp = b.builder.create<scf::IfOp>(
         ifOp.getLoc(), newIfResultTypes, cond, ifOp.elseBlock() ? true : false);
     newIfOp->setAttrs(ifOp->getAttrs());
@@ -218,9 +226,11 @@ void cloneIfOp(scf::IfOp ifOp, SmallVector<WgBuilder> &builders,
 
 void cloneReduceOp(triton::ReduceOp reduceOp, SmallVector<WgBuilder> &builders,
                    const WarpSchedule &schedule) {
-  auto partition = schedule.getPartition(reduceOp);
+  auto partition = getPartition(reduceOp, schedule);
+  assert(partition);
+
   SmallVector<size_t> partitionIndices;
-  if (!partition || partition == schedule.getRootPartition()) {
+  if (partition == schedule.getRootPartition()) {
     for (size_t i = 0; i < builders.size(); ++i) {
       partitionIndices.push_back(i);
     }
@@ -234,15 +244,7 @@ void cloneReduceOp(triton::ReduceOp reduceOp, SmallVector<WgBuilder> &builders,
 
     SmallVector<Value> srcs;
     for (auto src : reduceOp.getSrcs()) {
-      if (b.mapping.contains(src))
-        srcs.push_back(b.mapping.lookup(src));
-    }
-    // TODO: A better way to decide which partitons to clone an unannotated
-    // reduce op into. A similar fix should be applied to an unannotated if op.
-    // Ideally, reduce / if ops that are supposed to be part of one or a
-    // subset of partitions should be annotated as such in the input.
-    if (srcs.empty()) {
-      continue;
+      srcs.push_back(b.mapping.lookupOrDefault(src));
     }
     auto axis = reduceOp.getAxis();
     auto newReduceOp =
@@ -270,16 +272,6 @@ void cloneReduceOp(triton::ReduceOp reduceOp, SmallVector<WgBuilder> &builders,
   for (auto [idx, newReduceOp] : llvm::zip(partitionIndices, newReduceOps)) {
     builders[idx].builder.setInsertionPointAfter(newReduceOp);
   }
-}
-
-const Partition *getPartition(Operation *op, const WarpSchedule &schedule) {
-  while (op && !schedule.getPartition(op)) {
-    op = op->getParentOp();
-  }
-  if (op) {
-    return schedule.getPartition(op);
-  }
-  return nullptr;
 }
 
 void cloneOpsInBlock(Block *block, SmallVector<WgBuilder> &builders,
