@@ -171,7 +171,10 @@ void cloneIfOp(scf::IfOp ifOp, SmallVector<WgBuilder> &builders,
     for (auto [idx, result] : llvm::enumerate(ifOp.getResults())) {
       newIfResultTypes.push_back(result.getType());
     }
-    auto cond = b.mapping.lookupOrDefault(ifOp.getCondition());
+    if (!b.mapping.contains(ifOp.getCondition())) {
+      continue;
+    }
+    auto cond = b.mapping.lookup(ifOp.getCondition());
     auto newIfOp = b.builder.create<scf::IfOp>(
         ifOp.getLoc(), newIfResultTypes, cond, ifOp.elseBlock() ? true : false);
     newIfOp->setAttrs(ifOp->getAttrs());
