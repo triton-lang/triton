@@ -88,7 +88,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 #shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
-  // CHECK: #[[READ_BARS_L:.*]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 1], order = [0, 1]}>
+  // CHECK: #[[READ_BARS_L:.*]] = #ttg.blocked<{sizePerThread = [2, 4], threadsPerWarp = [1, 32], warpsPerCTA = [1, 1], order = [0, 1]}>
   // CHECK: @read_bars_alloc
   tt.func public @read_bars_alloc() {
     // CHECK: %[[READ_BARS_G:.*]] = ttg.global_scratch_alloc {alignment = 1 : i32, nbytes = 8 : i32} : !tt.ptr<i8>
@@ -163,7 +163,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     %bar = ttg.local_alloc {allocation.offset = 65536 : i32} : () -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     // CHECK: tti.experimental_clear_write_barrier {{.*}}{%[[WRT_BARS_GLOB]](tensor<1xi64, #blocked>)}
-    // CHECK: tti.experimental_clear_read_barrier {{.*}}{%[[READ_BARS_GLOB]](tensor<1x1xi8, #blocked1>)}
+    // CHECK: tti.experimental_clear_read_barrier {{.*}}{%[[BARRIERS]], %[[READ_BARS_GLOB]](tensor<1x1xi8, #blocked1>)}
     ttng.wait_barrier %bar, %c0_i32, %true : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     tt.return
   }
@@ -186,9 +186,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // CHECK: %[[READ_BARS_GLOB:.*]] = ttg.global_scratch_alloc {alignment = 1 : i32, nbytes = 2 : i32} : !tt.ptr<i8>
 
     // CHECK: tti.experimental_check_outstanding_writes %[[A:.*]]{%[[BUFFERS]], %[[WRT_BARS_GLOB]](tensor<2xi64, #{{.*}}>)}
-    // CHECK: tti.experimental_mark_as_read %[[A]], %[[BAR:.*]]{%[[BUFFERS]], %[[READ_BARS_GLOB]](tensor<2x1xi8, #{{.*}}>)}
+    // CHECK: tti.experimental_mark_as_read %[[A]], %[[BAR:.*]]{%[[BUFFERS]], %[[BARRIERS]], %[[READ_BARS_GLOB]](tensor<2x1xi8, #{{.*}}>)}
     // CHECK: tti.experimental_check_outstanding_writes %[[B:.*]]{%[[BUFFERS]], %[[WRT_BARS_GLOB]](tensor<2xi64, #{{.*}}>)}
-    // CHECK: tti.experimental_mark_as_read %[[B]], %[[BAR:.*]]{%[[BUFFERS]], %[[READ_BARS_GLOB]](tensor<2x1xi8, #{{.*}}>)}
+    // CHECK: tti.experimental_mark_as_read %[[B]], %[[BAR:.*]]{%[[BUFFERS]], %[[BARRIERS]], %[[READ_BARS_GLOB]](tensor<2x1xi8, #{{.*}}>)}
     // CHECK: ttng.tc_gen5_mma %[[A]], %[[B]], {{.*}}, {{.*}}, {{.*}}, %[[BAR]]
     %c0_i32 = arith.constant 0 : i32
     %0 = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
