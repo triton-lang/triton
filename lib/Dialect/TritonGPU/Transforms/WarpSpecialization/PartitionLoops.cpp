@@ -235,7 +235,9 @@ void cloneReduceOp(triton::ReduceOp reduceOp, SmallVector<WgBuilder> &builders,
         srcs.push_back(b.mapping.lookup(src));
     }
     // TODO: A better way to decide which partitons to clone an unannotated
-    // reduce op. A similar fix should be applied to an unannotated if op
+    // reduce op into. A similar fix should be applied to an unannotated if op.
+    // Ideally, reduce / if ops that are supposed to be part of one or a
+    // subset of partitions should be annotated as such in the input.
     if (srcs.empty()) {
       continue;
     }
