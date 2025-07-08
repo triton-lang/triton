@@ -332,7 +332,8 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
             w_scale_layout = w_scales_layouts.get(capability_major, layout.StridedLayout)
         w_tri, mx_scales_tri = downcast_to_mxfp(w_tri, weight_dtype, axis=1)
         w_ref = upcast_from_mxfp(w_tri, mx_scales_tri, torch.bfloat16, axis=1)
-        w_tri = convert_layout(wrap_torch_tensor(w_tri, FP4), w_layout)
+        w_tri_dtype = FP4 if "float4" in weight_dtype_str else weight_dtype
+        w_tri = convert_layout(wrap_torch_tensor(w_tri, w_tri_dtype), w_layout)
         mx_scales_tri = convert_layout(wrap_torch_tensor(mx_scales_tri), w_scale_layout)
         precision_opt.weight_scale = mx_scales_tri
 

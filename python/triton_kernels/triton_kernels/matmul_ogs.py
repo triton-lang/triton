@@ -397,6 +397,7 @@ def matmul_ogs(x, w, bias,
     M = x.shape[-2] if gather_indx is None else gather_indx.src_indx.shape[0]
     batch_size = w.shape[0] if routing_data.expt_hist is None else 1
     K, N = w.shape[-2:]
+    assert K == x.shape[-1]
     if isinstance(w.storage.layout, layout.HopperMXValueLayout):
         if not (K % 64 == 0 and N % 64 == 0):
             raise NotImplementedError("MXFP4 weight matrix dimensions must be divisible by 64 on hopper")
@@ -411,7 +412,8 @@ def matmul_ogs(x, w, bias,
     opt_flags = make_opt_flags(out_dtype, x.dtype, w.dtype, precision_config,
         M, N, K, routing_data, can_use_tma, can_use_fused_scatter, epilogue.effective_itemsize,
     )
-    # assert w_scale is None or opt_flags.is_persistent
+    if w_scale is not None and opt_flags.is_persistent and not target_info.has_native_mxfp():
+        raise NotImplementedError("Must use non-persistent kernel for simulated MXFP")
     # determine necessary pre/post processing
     preprocessing_features = init_preprocessing_features(w, precision_config, opt_flags)
     postprocessing_features = init_postprocessing_features(routing_data, scatter_indx, opt_flags)

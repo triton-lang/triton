@@ -69,5 +69,9 @@ def has_tma_gather():
     return cuda_capability_geq(10, 0)
 
 
+def has_native_mxfp():
+    return cuda_capability_geq(10, 0)
+
+
 def num_sms():
     return torch.cuda.get_device_properties(0).multi_processor_count
