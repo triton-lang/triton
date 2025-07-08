@@ -227,12 +227,11 @@ class ContainsReturnChecker(ast.NodeVisitor):
 
 class ASTFunction:
 
-    def __init__(self, ret_types, arg_types, constants, attrs, args_mut):
+    def __init__(self, ret_types, arg_types, constants, attrs):
         self.ret_types = ret_types
         self.arg_types = arg_types
         self.constants = constants
         self.attrs = attrs
-        self.args_mut = args_mut
 
     def flatten_ir_types(self, builder: ir.builder, types: List[base_type]) -> List[ir.type]:
         ir_types = []
@@ -253,7 +252,6 @@ class ASTFunction:
         arg_types = [get_iterable_path(self.arg_types, path) for path in val_paths]
         arg_types_ir = self.flatten_ir_types(builder, arg_types)
         ret_types_ir = self.return_types_ir(builder)
-        ret_types_ir.extend(self.flatten_ir_types(builder, [ty for (name, ty) in self.args_mut]))
         return builder.get_function_ty(arg_types_ir, ret_types_ir)
 
     def deserialize(self, fn):
@@ -289,18 +287,6 @@ class ASTFunction:
 class BoundJITMethod:
     __self__: base_value
     __func__: JITFunction
-
-
-@dataclass
-class ValueDest:
-    ctx: Union[ast.Store, ast.Load]
-    value: base_value
-
-
-def _wrap_mutable_argument(arg, node):
-    if isinstance(arg, base_value) and getattr(arg.type, "__triton_mutable__", False):
-        setattr(arg, "__ast__", node)
-    return arg
 
 
 class CodeGenerator(ast.NodeVisitor):
@@ -520,15 +506,6 @@ class CodeGenerator(ast.NodeVisitor):
         elts = language.tuple([self.visit(elt) for elt in node.elts])
         return elts
 
-    def emit_return(self, handles):
-        for i, (name, ty) in enumerate(self.prototype.args_mut):
-            value = self.dereference_name(name)
-            if ty is not None and ty != value.type:
-                raise TypeError(f"Inconsistent type for mutable argument '{name}': {ty} and {value.type}")
-            self.prototype.args_mut[i][1] = value.type
-            value._flatten_ir(handles)
-        self.builder.ret(handles)
-
     # By design, only non-kernel functions can return
     def visit_Return(self, node):
         ret_value = self.visit(node.value)
@@ -549,7 +526,7 @@ class CodeGenerator(ast.NodeVisitor):
             assert isinstance(ret_value, language.core.base_value)
             ret_value._flatten_ir(handles)
             ret_ty = ret_value.type
-        self.emit_return(handles)
+        self.builder.ret(handles)
         if self.ret_type is None:
             self.ret_type = ret_ty
         elif self.ret_type != ret_ty:
@@ -605,14 +582,14 @@ class CodeGenerator(ast.NodeVisitor):
         assert not self.builder.get_insertion_block().has_terminator()
         if self.ret_type is None or self.ret_type == language.void:
             self.ret_type = language.void
-            self.emit_return([])
+            self.builder.ret([])
         else:
             if isinstance(self.ret_type, language.tuple_type):
                 self.prototype.ret_types = self.ret_type.types
             else:
                 self.prototype.ret_types = [self.ret_type]
-            self.emit_return([self.builder.create_poison(ty) for ty in self.prototype.return_types_ir(self.builder)])
-        self.fn.reset_type(self.prototype.serialize(self.builder))
+            self.fn.reset_type(self.prototype.serialize(self.builder))
+            self.builder.ret([self.builder.create_poison(ty) for ty in self.prototype.return_types_ir(self.builder)])
         self.fn.finalize()
 
         if insert_pt:
@@ -636,40 +613,29 @@ class CodeGenerator(ast.NodeVisitor):
         value = self.visit(node.value)
         # constexpr
         if annotation == constexpr:
-            if not isinstance(value, constexpr):
-                value = constexpr(value)
-            if not isinstance(target, str):
-                return self.assignTarget(node.target, value)
             if target in self.lscope:
                 raise ValueError(f'{target} is already defined.'
                                  f' constexpr cannot be reassigned.')
+            value = constexpr(value)
             self.lscope[target] = value
             return self.lscope[target]
         # default: call visit_Assign
         return self.visit_Assign(node)
 
-    @staticmethod
-    def create_writeback(value) -> ValueDest:
-        dest = ValueDest(ctx=ast.Store(), value=None)
-        _wrap_mutable_argument(value, dest)
-        return dest
-
     def assignTarget(self, target, value):
         assert isinstance(target.ctx, ast.Store)
         if isinstance(target, ast.Subscript):
             return self.visit_Subscript_Store(target, value)
-        elif isinstance(target, ast.Tuple):
+        if isinstance(target, ast.Tuple):
             for i, target in enumerate(target.elts):
                 self.assignTarget(target, value.values[i])
-        elif isinstance(target, ast.Attribute):
+            return
+        if isinstance(target, ast.Attribute):
             base = self.visit(target.value)
             setattr(base, target.attr, value)
-        elif isinstance(target, ast.Name):
-            self.set_value(self.visit(target), value)
-        elif isinstance(target, ValueDest):
-            target.value = value
-        else:
-            raise ValueError(f"Cannot assign to target {ast.dump(target)}")
+            return
+        assert isinstance(target, ast.Name)
+        self.set_value(self.visit(target), value)
 
     def visit_Assign(self, node):
         # construct values to assign
@@ -1226,14 +1192,11 @@ class CodeGenerator(ast.NodeVisitor):
         return language.core.device_assert(test, msg, _semantic=self.semantic)
 
     def call_JitFunction(self, fn: JITFunction, args, kwargs):
-        call_args = inspect.getcallargs(fn.fn, *args, **kwargs)
-        args = [call_args[name] for name in fn.arg_names]
+        args = inspect.getcallargs(fn.fn, *args, **kwargs)
+        args = [args[name] for name in fn.arg_names]
         for i, arg in enumerate(args):
             if isinstance(arg, (language.dtype, float, int, bool, JITFunction)):
                 args[i] = language.core.constexpr(arg)
-        args_mut = [[name, None]
-                    for (name, arg) in zip(fn.arg_names, args)
-                    if arg is not None and getattr(arg.type, "__triton_mutable__", False)]
         args_cst = find_paths_if(args, lambda _, x: _is_constexpr(x))
         args_cst = {path: get_iterable_path(args, path) for path in args_cst}
         args_path = find_paths_if(args, lambda _, x: not _is_constexpr(x))
@@ -1249,7 +1212,7 @@ class CodeGenerator(ast.NodeVisitor):
                                                                      (bool, int, language.core.dtype)) else arg.type
                 for arg in args
             ]
-            prototype = ASTFunction([], arg_types, args_cst, dict(), args_mut)
+            prototype = ASTFunction([], arg_types, args_cst, dict())
             generator = CodeGenerator(self.context, prototype, fn.get_capture_scope(), module=self.module, jit_fn=fn,
                                       function_name=fn_name, function_types=self.function_ret_types,
                                       noinline=fn.noinline, file_name=file_name, begin_line=begin_line,
@@ -1264,32 +1227,16 @@ class CodeGenerator(ast.NodeVisitor):
                 raise CompilationError(self.jit_fn.src, self.cur_node, None) from e
 
             callee_ret_type = generator.ret_type
-            args_mut = generator.prototype.args_mut
-            self.function_ret_types[fn_name] = (callee_ret_type, args_mut)
+            self.function_ret_types[fn_name] = callee_ret_type
         else:
-            callee_ret_type, args_mut = self.function_ret_types[fn_name]
+            callee_ret_type = self.function_ret_types[fn_name]
         symbol = self.module.get_function(fn_name)
         args_val = flatten_values_to_ir(args_val)
         call_op = self.builder.call(symbol, args_val)
+        if callee_ret_type == language.void:
+            return None
         handles = [call_op.get_result(i) for i in range(call_op.get_num_results())]
-
-        all_ret_types = ([callee_ret_type]
-                         if callee_ret_type != language.void else []) + [ty for (name, ty) in args_mut]
-        all_ret_values = unflatten_ir_values(handles, all_ret_types)
-        normal_ret = next(all_ret_values) if callee_ret_type != language.void else None
-        # Unpack and emit the writeback for mutable arguments.
-        for name, ty in args_mut:
-            target, value = getattr(call_args[name], "__ast__", None), next(all_ret_values)
-            # Discard mutation on an RValue.
-            if target is None or isinstance(target, ast.Call):
-                continue
-            if isinstance(target, ast.keyword):
-                target = target.value
-            if not isinstance(target, ValueDest):
-                target = copy.deepcopy(target)
-            target.ctx = ast.Store()
-            self.assignTarget(target, value)
-        return normal_ret
+        return next(unflatten_ir_values(handles, [callee_ret_type]))
 
     def visit_Call(self, node):
         fn = _unwrap_if_constexpr(self.visit(node.func))
@@ -1305,9 +1252,8 @@ class CodeGenerator(ast.NodeVisitor):
                 error_message.append(mur)
             raise CompilationError(self.jit_fn.src, node, " ".join(error_message))
 
-        kws = ((self.visit(kw), kw) for kw in node.keywords)
-        kws = {name: _wrap_mutable_argument(value, node) for (name, value), node in kws}
-        args = (_wrap_mutable_argument(self.visit(arg), arg) for arg in node.args)
+        kws = dict(self.visit(keyword) for keyword in node.keywords)
+        args = [self.visit(arg) for arg in node.args]
         args = list(itertools.chain.from_iterable(x if isinstance(x, list) else [x] for x in args))
         if isinstance(fn, BoundJITMethod):
             args.insert(0, fn.__self__)
@@ -1408,7 +1354,7 @@ class CodeGenerator(ast.NodeVisitor):
             lhs = lhs.value
         attr = getattr(lhs, node.attr)
         if _is_triton_value(lhs) and isinstance(attr, JITFunction):
-            return BoundJITMethod(_wrap_mutable_argument(lhs, node.value), attr)
+            return BoundJITMethod(lhs, attr)
         return attr
 
     def visit_Expr(self, node):
@@ -1520,7 +1466,7 @@ def ast_to_ttir(fn, src, context, options, codegen_fns, module_map, module=None)
     for k, v in src.signature.items():
         idx = fn.arg_names.index(k)
         arg_types[idx] = str_to_ty(v)
-    prototype = ASTFunction([], arg_types, src.constants, src.attrs, args_mut=[])
+    prototype = ASTFunction([], arg_types, src.constants, src.attrs)
     file_name, begin_line = get_jit_fn_file_line(fn)
     # query function representation
     from collections import namedtuple
