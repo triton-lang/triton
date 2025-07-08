@@ -1050,7 +1050,7 @@ def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype):
 # Benchmarking
 # ===-----------------------------------------------------------------------===#
 
-profile = True
+profile = False
 
 if not profile:
     BATCH = [4]
