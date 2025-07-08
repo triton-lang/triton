@@ -37,8 +37,8 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVectorExtras.h"
 #include "llvm/Support/LogicalResult.h"
-
 #include <optional>
+#include <queue>
 
 using namespace mlir::triton;
 using namespace mlir::triton::nvws;
@@ -108,13 +108,20 @@ class LowerWarpGroup : public OpRewritePattern<WarpGroupOp> {
     }
 
     SetVector<Operation *> opsToClone;
-    for (unsigned i = 0; i < captures.size(); ++i) {
-      Value capture = captures[i];
+    std::queue<Value> que;
+    for (auto capture : captures) {
+      que.push(capture);
+    }
+
+    while (!que.empty()) {
+      Value capture = que.front();
       Operation *defOp = capture.getDefiningOp();
       if (!isa<BlockArgument>(capture) && defOp && isPure(defOp) &&
           (defOp->hasTrait<OpTrait::ConstantLike>() ||
            isa<RankedTensorType>(capture.getType()))) {
-        captures.insert(defOp->operand_begin(), defOp->operand_end());
+        for (auto operand : defOp->getOperands()) {
+          que.push(operand);
+        }
         opsToClone.insert(defOp);
       } else if (auto tensorTy =
                      dyn_cast<RankedTensorType>(capture.getType())) {
@@ -133,6 +140,7 @@ class LowerWarpGroup : public OpRewritePattern<WarpGroupOp> {
       } else {
         inputs.push_back(capture);
       }
+      que.pop();
     }
 
     opsToClone = topologicalSort(opsToClone);
