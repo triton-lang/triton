@@ -947,7 +947,7 @@ def _attn_fwd_inner(config, info0, info1,  #
         _attn_fwd_mma,
         _attn_fwd_load,
         _attn_fwd_epilogue,
-    ], [4, 4, 1, 1, 1], [192, 192, 32, 32, 32])
+    ], [4, 4, 1, 1, 1], [192, 192, 24, 24, 24])
 
     q_chnl.release()
     kv_chnl.release()
