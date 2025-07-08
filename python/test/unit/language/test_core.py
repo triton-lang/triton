@@ -130,6 +130,18 @@ def check_type_supported(dtype, device):
             pytest.skip("bfloat16 is not supported in the interpreter")
 
 
+def get_src_element_ty_size(dtype_str):
+    if dtype_str in ["int8", "uint8", "float8e4b15"]:
+        return 1
+    if dtype_str == "float16":
+        return 2
+    if dtype_str == "float32" or dtype_str == "tensorfloat32":
+        return 4
+    if dtype_str == "float64":
+        return 8
+    raise ValueError(f"Unknown dtype {dtype_str}")
+
+
 class MfmaLayout:
 
     def __init__(self, version, warps_per_cta, tiles_per_warp, instr_shape, is_transposed):
@@ -3732,7 +3744,9 @@ def get_test_dot_base_cases():
             for shape in [(64, 64, 64), (32, 32, 32), (16, 16, 16)]
             for epilogue in ['none', 'trans', 'add-matrix', 'add-rows', 'add-cols', 'softmax', 'chain-dot']
             for input_precision in ['tf32', 'tf32x3', 'ieee']
-            for in_dtype, out_dtype in [('float16', 'float16'), ('float16', 'float32'), ('float32', 'float32')]
+            for in_dtype, out_dtype in [('float16', 'float16'), ('float16',
+                                                                 'float32'), ('float32',
+                                                                              'float32'), ('float64', 'float64')]
             if not (input_precision != 'ieee' and (in_dtype in ['float16']))]
 
 
@@ -3865,6 +3879,8 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
                     pytest.skip("Only test out_dtype=float16 on devices with sm >=80")
             if capability[0] < 9 and in_dtype == 'float8e4nv':
                 pytest.skip("float8e4nv not supported on sm <= 80")
+            if in_dtype == 'float64' and input_precision != 'ieee':
+                pytest.skip("Only IEEE precision is supported for float64 dot")
 
         if is_hip():
             if in_dtype in ("float8e5", "float8e4nv") and not (is_hip_cdna4() or is_hip_gfx12()):
@@ -3875,6 +3891,9 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
                 pytest.skip(f"{input_precision} not supported on HIP")
             if kpack == 2 and in_dtype == 'int8' and K < 64:
                 pytest.skip("kpack too large for K")
+            if in_dtype == 'float64':
+                pytest.skip("float64 not supported on HIP yet")
+
         if not is_hip() and kpack == 2:
             pytest.skip("Skip duplicated tests on nv path")
 
@@ -4036,11 +4055,17 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
 
     # make sure ld/st are vectorized
     ptx = pgm.asm['ptx']
+
     if (K > 16 or N > 16 or M > 16) and (M * N // (num_warps * 32) >= 4):
         # XXX: skip small sizes because they are not vectorized
-        assert 'ld.global.v4' in ptx
+        if 'float64' in in_dtype:
+            assert 'ld.global.v2.b64' in ptx
+        else:
+            assert 'ld.global.v4' in ptx
         if 'float8' in in_dtype:
             assert 'st.global.v2' in ptx
+        elif 'float64' in in_dtype:
+            assert 'st.global.v2.b64' in ptx
         else:
             assert 'st.global.v4' in ptx
 
@@ -4349,23 +4374,24 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
 
 
 @pytest.mark.interpreter
-@pytest.mark.parametrize("B, num_warps, M, N, K, BLOCK_M, BLOCK_N, in_dtype_str, out_dtype_str",
-                         [(B, num_warps, M, N, K, BLOCK_M, BLOCK_N, in_dtype_str, out_dtype_str)
-                          for B in [1, 2, 4, 8]
-                          for num_warps in [1, 2, 4, 8, 16]
-                          for BLOCK_M, BLOCK_N in [(32, 32)]
-                          for M, N, K in [(64, 64, 64), (32, 32, 32)]
-                          for in_dtype_str, out_dtype_str in [('int8', 'int8'), ('float16', 'float16'),
-                                                              ('float16', 'float32'), ('float32', 'float32')]] +
-                         # Large block sizes
-                         [(4, 4, 128, 128, 64, 64, 64, 'float16', 'float16')] +
-                         # Small block sizes
-                         [(B, num_warps, M, N, K, BLOCK_M, BLOCK_N, in_dtype_str, out_dtype_str)
-                          for B in [1, 2, 8]
-                          for num_warps in [1, 2, 4]
-                          for BLOCK_M, BLOCK_N in [(1, 32), (32, 2), (8, 8)]
-                          for M, N, K in [(32, 32, 32)]
-                          for in_dtype_str, out_dtype_str in [('float16', 'float16'), ('float32', 'float32')]])
+@pytest.mark.parametrize(
+    "B, num_warps, M, N, K, BLOCK_M, BLOCK_N, in_dtype_str, out_dtype_str",
+    [(B, num_warps, M, N, K, BLOCK_M, BLOCK_N, in_dtype_str, out_dtype_str)
+     for B in [1, 2, 4, 8]
+     for num_warps in [1, 2, 4, 8, 16]
+     for BLOCK_M, BLOCK_N in [(32, 32)]
+     for M, N, K in [(64, 64, 64), (32, 32, 32)]
+     for in_dtype_str, out_dtype_str in [('int8', 'int8'), ('float16', 'float16'), ('float16', 'float32'),
+                                         ('float32', 'float32'), ('float64', 'float64')]] +
+    # Large block sizes
+    [(4, 4, 128, 128, 64, 64, 64, 'float16', 'float16')] +
+    # Small block sizes
+    [(B, num_warps, M, N, K, BLOCK_M, BLOCK_N, in_dtype_str, out_dtype_str)
+     for B in [1, 2, 8]
+     for num_warps in [1, 2, 4]
+     for BLOCK_M, BLOCK_N in [(1, 32), (32, 2), (8, 8)]
+     for M, N, K in [(32, 32, 32)]
+     for in_dtype_str, out_dtype_str in [('float16', 'float16'), ('float32', 'float32')]])
 def test_dot3d(B, num_warps, M, N, K, BLOCK_M, BLOCK_N, in_dtype_str, out_dtype_str, device):
     if is_hip():
         # hip does not support tf32 precision, so use ieee for all tests
@@ -4376,17 +4402,17 @@ def test_dot3d(B, num_warps, M, N, K, BLOCK_M, BLOCK_N, in_dtype_str, out_dtype_
                 pytest.skip(f"{in_dtype_str} is not supported in WMMA dot, FMA does not support dot3d")
             if out_dtype_str == "float16":
                 pytest.skip(f"{out_dtype_str} has low precision in WMMA dot")
+        if in_dtype_str == "float64":
+            pytest.skip("float64 not supported on HIP yet")
     else:
         input_precision = "tf32" if is_cuda() and in_dtype_str == 'float32' else "ieee"
         if not is_interpreter() and (BLOCK_M < 16 or BLOCK_N < 16):
             pytest.skip("small dots are supported only on HIP at the moment")
 
-    if B == 8 and M == 64 and in_dtype_str == "float32" and out_dtype_str == "float32":
-        if not is_interpreter() and triton.runtime.driver.active.utils.get_device_properties(
-                triton.runtime.driver.active.get_current_device())["max_shared_mem"] < 131072:
-            pytest.skip(
-                "Skipping tests with B = 8, M = 64, in_type = float32, out_type = float32 due to insufficient shared memory (less than 128 KB per SM) on this GPU."
-            )
+    shared_mem_accum = B * (BLOCK_M * K + K * BLOCK_N) * get_src_element_ty_size(in_dtype_str)
+    if not is_interpreter() and triton.runtime.driver.active.utils.get_device_properties(
+            triton.runtime.driver.active.get_current_device())["max_shared_mem"] < shared_mem_accum:
+        pytest.skip("Skipped due to insufficient shared memory on this GPU.")
 
     @triton.jit
     def kernel(
