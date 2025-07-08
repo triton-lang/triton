@@ -563,7 +563,7 @@ lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout cvt,
                 ArrayRef<Value> valsArray, // Input for store, output for load
                 Type llvmElemTy, Value smemBase,
                 ConversionPatternRewriter &rewriter,
-                const TargetInfoBase &targetInfo);
+                const TargetInfoBase &targetInfo, Operation *op = nullptr);
 
 // Lower an ld/st-like operation given a layout and a callback that creates the
 // PTX instruction Lowers to st when valArrays is empty, and to ld when it is
@@ -584,7 +584,8 @@ SmallVector<Value> lowerLocalLdSt(Location loc, MLIRContext *ctx,
                                   // Input for store, output for load
                                   Type llvmElemTy, Value smemBase,
                                   ConversionPatternRewriter &rewriter,
-                                  const TargetInfoBase &targetInfo);
+                                  const TargetInfoBase &targetInfo,
+                                  Operation *op = nullptr);
 
 SmallVector<Value> unpackLLElements(Location loc, Value llvmStruct,
                                     RewriterBase &rewriter);

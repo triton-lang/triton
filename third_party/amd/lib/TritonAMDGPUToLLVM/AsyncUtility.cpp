@@ -63,12 +63,14 @@ void annotateLocalLoadsSyncedViaAsyncWait(ModuleOp mod) {
   }
 }
 
-bool isSyncedViaAsyncWait(triton::gpu::LocalLoadOp localLoadOp) {
-  auto attr = localLoadOp->getAttr(syncedViaAsyncWaitAttrName);
+bool isSyncedViaAsyncWait(Operation *op) {
+  assert(op);
+
+  auto attr = op->getAttr(syncedViaAsyncWaitAttrName);
   if (!attr) {
-    localLoadOp.emitRemark("has no async sync information attached to it which "
-                           "might negatively affect performance. Run "
-                           "annotateLocalLoadSyncedViaAsyncWait first");
+    op->emitRemark("has no async sync information attached to it which "
+                   "might negatively affect performance. Run "
+                   "annotateLocalLoadSyncedViaAsyncWait first");
     return false;
   }
   return cast<BoolAttr>(attr).getValue();

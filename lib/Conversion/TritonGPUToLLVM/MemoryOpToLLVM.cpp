@@ -187,7 +187,7 @@ public:
     cvt = cvt.sublayout({kReg, kLane, kWarp}, {kOffset});
 
     auto outVals = lowerLocalLdSt(op.getLoc(), ctx, cvt, {}, llvmElemTy,
-                                  smemObj.getBase(), rewriter, targetInfo);
+                                  smemObj.getBase(), rewriter, targetInfo, op);
 
     Value result = packLLElements(loc, typeConverter, outVals, rewriter, regTy);
     rewriter.replaceOp(op, result);
