@@ -6003,8 +6003,9 @@ def test_num_threads(device):
     assert torch.sum(out) == 256
 
 
-@pytest.mark.parametrize('repeat_id', range(100))
-def test_globaltimer(device, repeat_id):
+def test_globaltimer(device):
+    if is_hip_cdna2():
+        pytest.skip("test_globaltimer is flaky on gfx90a")
     check_cuda_or_hip(device)
 
     @triton.jit
