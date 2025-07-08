@@ -1066,7 +1066,7 @@ tt.func @specialize_mma_only(%rhs_desc: !tt.tensordesc<tensor<64x128xf16, #share
   // CHECK-NEXT: ttng.arrive_barrier [[READY_BAR0]], 1
   // CHECK-NEXT: ttng.arrive_barrier [[EMPTY_BAR0]], 1
 
-  // CHECK-NEXT: [[OPERAND:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<128x64xf16,
+  // CHECK-NEXT: [[OPERAND:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<128x64xf16, {{.*}}, mutable
 
   // CHECK-NEXT: scf.for
   %out = scf.for %i = %c0_i32 to %ub step %c1_i32 iter_args(%acc = %zero) -> tensor<128x128xf32, #acc_layout> : i32 {
@@ -1085,7 +1085,7 @@ tt.func @specialize_mma_only(%rhs_desc: !tt.tensordesc<tensor<64x128xf16, #share
     %rhs_reg, %next_acc = "some_producer"(%loaded, %acc) : (tensor<64x128xf16, #oper_layout>, tensor<128x128xf32, #acc_layout>) -> (tensor<128x64xf16, #oper_layout>, tensor<128x128xf32, #acc_layout>)
     // CHECK-NEXT: local_store [[RESULTS]]#0, [[OPERAND]]{{.*}}partition = 0
     // CHECK-NEXT: fence_async_shared {{.*}}partition = 0
-    // CHECK-NEXT: [[RHS_T:%.*]] = ttg.memdesc_trans [[OPERAND]]
+    // CHECK-NEXT: [[RHS_T:%.*]] = ttg.memdesc_trans [[OPERAND]] {{.*}}, mutable
     // CHECK-NEXT: tmem_store [[RESULTS]]#1, [[ACC_TMEM]]{{.*}}partition = 0
     // CHECK-NEXT: arrive_barrier [[EMPTY_BAR0]]{{.*}}partition = 0
     %rhs = ttg.local_alloc %rhs_reg : (tensor<128x64xf16, #oper_layout>) -> !ttg.memdesc<128x64xf16, #shared, #smem>
