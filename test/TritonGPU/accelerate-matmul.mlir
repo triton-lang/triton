@@ -121,6 +121,36 @@ module attributes {"ttg.target" = "cuda:89", "ttg.num-ctas" = 1 : i32, "ttg.num-
 
 // -----
 
+// CHECK: #mma = #ttg.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [2, 4], instrShape = [16, 8]}>
+#blocked = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [1, 32], warpsPerCTA = [8, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "cuda:80", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @fp64_dot(
+    %arg0: tensor<128x32xf64, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>,
+    %arg1: tensor<32x128xf64, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>) -> tensor<128x128xf64, #blocked> {
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf64, #blocked>
+    // CHECK: tt.dot {{.*}} : tensor<128x32xf64, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<32x128xf64, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>> -> tensor<128x128xf64, #mma>
+    %d = tt.dot %arg0, %arg1, %cst, inputPrecision = tf32 : tensor<128x32xf64, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<32x128xf64, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<128x128xf64, #blocked>
+    tt.return %d : tensor<128x128xf64, #blocked>
+  }
+}
+
+// -----
+
+// CHECK: #mma = #ttg.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [2, 4], instrShape = [16, 8]}>
+#blocked = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [1, 32], warpsPerCTA = [8, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @fp64_dot_hopper(
+    %arg0: tensor<128x32xf64, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>,
+    %arg1: tensor<32x128xf64, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>) -> tensor<128x128xf64, #blocked> {
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf64, #blocked>
+    // CHECK: tt.dot {{.*}} : tensor<128x32xf64, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<32x128xf64, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>> -> tensor<128x128xf64, #mma>
+    %d = tt.dot %arg0, %arg1, %cst, inputPrecision = tf32 : tensor<128x32xf64, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<32x128xf64, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<128x128xf64, #blocked>
+    tt.return %d : tensor<128x128xf64, #blocked>
+  }
+}
+
+// -----
+
 // CHECK-DAG: #[[MMA:.+]] = #ttg.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [2, 2], instrShape = [16, 8]}>
 // CHECK-DAG: #[[MMA1:.+]] = #ttg.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [4, 1, 1], instrShape = [1, 16, 8]}>
 

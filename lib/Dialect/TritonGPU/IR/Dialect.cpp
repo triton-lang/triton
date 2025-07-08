@@ -2129,9 +2129,9 @@ NvidiaMmaEncodingAttr::getRepOrderForOperand(int opIdx) const {
 SmallVector<int64_t>
 NvidiaMmaEncodingAttr::getRepForOperand(ArrayRef<int64_t> shape, int bitwidth,
                                         int kWidth, int opIdx) const {
-  assert(
-      kWidth >= 32 / bitwidth &&
-      "kWidth must be >= 32 / bitwidth for this function to be well-defined");
+  assert(kWidth >= std::max(32 / bitwidth, 1) &&
+         "kWidth must be >= max(32 / bitwidth, 1) for this function to be "
+         "well-defined");
   auto rank = shape.size();
   // Broadcast long K
   auto warpsPerCTA = to_vector(getWarpsPerCTA());
@@ -2142,16 +2142,18 @@ NvidiaMmaEncodingAttr::getRepForOperand(ArrayRef<int64_t> shape, int bitwidth,
   if (rank == 3) {
     tileSize.push_back(1);
   }
+  // warpSizeK * (warpRepK * VecBitWidth)
+  auto tileBitWidthK = (isAmpere() && bitwidth == 64) ? (4 * 256) : (4 * 64);
   if (opIdx == 0) {
     // m x k
     tileSize.push_back(16);
-    tileSize.push_back(4 * 64 / bitwidth);
+    tileSize.push_back(tileBitWidthK / bitwidth);
   } else {
     // k x n
     // Hopper path never uses the n value, since this method is only invoked
     // for in-RF (dotOpEnc) operands, but WGMMA only supports in A to be in RF
     // so it's fine if the n is incorrect here
-    tileSize.push_back(4 * 64 / bitwidth);
+    tileSize.push_back(tileBitWidthK / bitwidth);
     tileSize.push_back(8);
   }
 
