@@ -264,39 +264,56 @@ struct WgBuilder {
   size_t partitionId;
 };
 
+// This is computed per loop and partition
+// Each partition may maintain this information via map:
+// DenseMap<scf::ForOp, SmallVector<LoopVarCategory>>
 enum class LoopVarCategory {
   Unused,
   Used,
+  // This is only relevant for the default partition.
   TensorResultFromOtherPartition,
 };
+
+bool isLoopResultTensorComputedBy(scf::ForOp loop, size_t resultIdx,
+                                  const Partition *partition,
+                                  const WarpSchedule &schedule) {
+  bool ret = false;
+  schedule.iterateOutputs(loop, partition, [&](Operation *op, OpOperand &use) {
+    if (isa<scf::YieldOp>(op) && use.getOperandNumber() == resultIdx &&
+        isa<RankedTensorType>(loop.getResult(resultIdx).getType())) {
+      ret = true;
+    }
+  });
+  return ret;
+}
 
 SmallVector<LoopVarCategory> classifyLoopVars(scf::ForOp loop,
                                               const Partition *partition,
                                               const WarpSchedule &schedule) {
-  SmallVector<LoopVarCategory> categories(loop.getNumRegionIterArgs());
   auto inPartition = [&](Operation *op) {
     const Partition *opPartition =
         schedule.getPartition(loop.getBody()->findAncestorOpInBlock(*op));
     return llvm::is_contained({partition, schedule.getRootPartition()},
                               opPartition);
   };
-  // auto isTensorResultFromNonDefaultPartition = [&](int i) {
-  //   for (auto partition : llvm::drop_begin(schedule.getPartitions())) {
-  //     schedule.iterateOutputs(
-  //         loop, &partition, [&](Operation *op, OpOperand &use) {
-  //           unsigned idx = use.getOperandNumber();
-  //           if (isa<scf::YieldOp>(op) &&
-  //               isa<RankedTensorType>(loop.getResult(idx).getType())) {
-  //           }
-  //         });
-  //   }
+  auto isTensorResultFromOtherPartition = [&](int i) {
+    for (auto otherPartition : schedule.getPartitions()) {
+      if (otherPartition.getIndex() == partition->getIndex()) {
+        continue;
+      }
+      if (isLoopResultTensorComputedBy(loop, i, &otherPartition, schedule)) {
+        return true;
+      }
+    }
+    return false;
+  };
 
-  //   return false;
-  // };
-
+  SmallVector<LoopVarCategory> categories(loop.getNumRegionIterArgs());
   for (auto [i, arg] : llvm::enumerate(loop.getRegionIterArgs())) {
     if (llvm::any_of(arg.getUsers(), inPartition)) {
       categories[i] = LoopVarCategory::Used;
+    } else if (isTensorResultFromOtherPartition(i)) {
+      categories[i] = LoopVarCategory::TensorResultFromOtherPartition;
     } else {
       categories[i] = LoopVarCategory::Unused;
     }
@@ -305,19 +322,27 @@ SmallVector<LoopVarCategory> classifyLoopVars(scf::ForOp loop,
   return categories;
 }
 
-SmallVector<size_t> getLoopVarIndicesToKeep(scf::ForOp loop,
-                                            const Partition *partition,
-                                            const WarpSchedule &schedule) {
-  auto loopVarCategories = classifyLoopVars(loop, partition, schedule);
+auto getLoopVarIndicesToKeep(
+    scf::ForOp loop, const Partition *partition,
+    const SmallVector<LoopVarCategory> loopVarCategories) {
   SmallVector<size_t> indices;
+  SmallVector<int> reverseIndices(loop.getNumRegionIterArgs(), -1);
   for (auto [i, arg] : llvm::enumerate(loop.getRegionIterArgs())) {
     if (loopVarCategories[i] == LoopVarCategory::Used ||
-        (partition->getIndex() == 0 && !loop.getResult(i).use_empty())) {
+        (partition->getIndex() == 0 && !loop.getResult(i).use_empty() &&
+         loopVarCategories[i] !=
+             LoopVarCategory::TensorResultFromOtherPartition)) {
+      reverseIndices[i] = indices.size();
       indices.push_back(i);
     }
   }
+  return std::make_pair(indices, reverseIndices);
+}
 
-  return indices;
+auto getLoopVarIndicesToKeep(scf::ForOp loop, const Partition *partition,
+                             const WarpSchedule &schedule) {
+  auto loopVarCategories = classifyLoopVars(loop, partition, schedule);
+  return getLoopVarIndicesToKeep(loop, partition, loopVarCategories);
 }
 
 void cloneOpsInBlock(Block *block, SmallVector<WgBuilder> &builders,
@@ -326,8 +351,9 @@ void cloneOpsInBlock(Block *block, SmallVector<WgBuilder> &builders,
 void cloneForOp(scf::ForOp forOp, SmallVector<WgBuilder> &builders,
                 const WarpSchedule &schedule) {
   SmallVector<scf::ForOp> newForOps;
-  for (auto [b, partition]: llvm::zip(builders, schedule.getPartitions())) {
-    auto newLoopIndices = getLoopVarIndicesToKeep(forOp, &partition, schedule);
+  for (auto [b, partition] : llvm::zip(builders, schedule.getPartitions())) {
+    auto [newLoopIndices, _] =
+        getLoopVarIndicesToKeep(forOp, &partition, schedule);
     auto lb = b.mapping.lookupOrDefault(forOp.getLowerBound());
     auto ub = b.mapping.lookupOrDefault(forOp.getUpperBound());
     auto step = b.mapping.lookupOrDefault(forOp.getStep());
@@ -485,8 +511,10 @@ void cloneOpsInBlock(Block *block, SmallVector<WgBuilder> &builders,
       auto doClone = [&](WgBuilder &builder) {
         SmallVector<size_t> newOperandIndices;
         if (auto forOp = dyn_cast<scf::ForOp>(yieldOp->getParentOp())) {
-          newOperandIndices = getLoopVarIndicesToKeep(
-              forOp, schedule.getPartition(builder.partitionId), schedule);
+          newOperandIndices =
+              getLoopVarIndicesToKeep(
+                  forOp, schedule.getPartition(builder.partitionId), schedule)
+                  .first;
         } else {
           for (size_t i = 0; i < yieldOp.getOperands().size(); ++i) {
             newOperandIndices.push_back(i);
@@ -576,44 +604,32 @@ LogicalResult partitionLoopV2(scf::ForOp loop) {
     return success();
 
   auto numPartitions = schedule.getNumPartitions();
-  SmallVector<SmallVector<unsigned>> tensorResultIndices(numPartitions - 1);
-
-  // for (auto partition : llvm::drop_begin(schedule.getPartitions())) {
-  // }
-
-  // for (auto partition : llvm::drop_begin(schedule.getPartitions())) {
-  //   schedule.iterateOutputs(
-  //       loop, &partition, [&](Operation *op, OpOperand &use) {
-  //         unsigned idx = use.getOperandNumber();
-  //         if (isa<scf::YieldOp>(op) && !loop.getResult(idx).use_empty() &&
-  //             isa<RankedTensorType>(loop.getResult(idx).getType())) {
-  //           tensorResultIndices[partition.getIndex() - 1].push_back(idx);
-  //         }
-  //       });
-  // }
-  // assert(false);
-
-  SmallVector<Type> resultTypes;
   auto defaultPartition = schedule.getPartition((int)0);
-  SmallVector<int> newResultIdx(loop.getNumRegionIterArgs(), -1);
-  for (auto i : getLoopVarIndicesToKeep(loop, defaultPartition, schedule)) {
-    bool isTensorResultFromOtherPartition = false;
-    for (auto indices : tensorResultIndices) {
-      for (auto idx : indices) {
-        if (i == idx) {
-          isTensorResultFromOtherPartition = true;
-        }
-      }
-    }
-    if (!isTensorResultFromOtherPartition) {
-      newResultIdx[i] = resultTypes.size();
-      resultTypes.push_back(loop.getResultTypes()[i]);
+  auto loopVarCategories = classifyLoopVars(loop, defaultPartition, schedule);
+  auto [loopVarIndices, newResultIndices] =
+      getLoopVarIndicesToKeep(loop, defaultPartition, loopVarCategories);
+
+  ImplicitLocOpBuilder topBuilder(loop.getLoc(), loop);
+  SmallVector<Value> tensorResultAllocs(loop.getNumRegionIterArgs());
+  for (auto [i, res] : llvm::enumerate(loop.getResults())) {
+    if (loopVarCategories[i] ==
+        LoopVarCategory::TensorResultFromOtherPartition) {
+      auto ty = cast<RankedTensorType>(res.getType());
+      auto memdesc = MemDescType::get(
+          ty.getShape(), ty.getElementType(), getSharedEncoding(ty),
+          SharedMemorySpaceAttr::get(ty.getContext()), /*mutable=*/true);
+      tensorResultAllocs[i] = topBuilder.create<LocalAllocOp>(memdesc);
     }
   }
 
+  SmallVector<Type> resultTypes;
+  for (auto i : loopVarIndices) {
+    resultTypes.push_back(loop.getResultTypes()[i]);
+  }
+
   SmallVector<int32_t> numWarps(numPartitions, lookupNumWarps(loop));
-  ImplicitLocOpBuilder b(loop.getLoc(), loop);
-  auto wgOp = b.create<nvws::WarpGroupOp>(resultTypes, numWarps, numPartitions);
+  auto wgOp = topBuilder.create<nvws::WarpGroupOp>(resultTypes, numWarps,
+                                                   numPartitions);
 
   SmallVector<WgBuilder> builders;
   for (Region &region : wgOp.getPartitionRegions()) {
@@ -624,22 +640,51 @@ LogicalResult partitionLoopV2(scf::ForOp loop) {
 
   cloneForOp(loop, builders, schedule);
 
-  for (auto [builder, region] :
-       llvm::zip(builders, wgOp.getPartitionRegions())) {
+  for (auto [b, region, partition] : llvm::zip(
+           builders, wgOp.getPartitionRegions(), schedule.getPartitions())) {
     auto newForOp = cast<scf::ForOp>(region.front().front());
-    builder.builder.setInsertionPointAfter(newForOp);
+    auto outputs = newForOp.getResults();
+    b.builder.setInsertionPointAfter(newForOp);
 
-    if (builder.partitionId == 0) {
-      auto outputs = newForOp.getResults();
-      builder.builder.create<nvws::WarpGroupYieldOp>(wgOp.getLoc(), outputs);
+    if (b.partitionId == 0) {
+      b.builder.create<nvws::WarpGroupYieldOp>(wgOp.getLoc(), outputs);
     } else {
-      builder.builder.create<nvws::WarpGroupReturnOp>(wgOp.getLoc());
+      // Tensor results computed by non-default partitions are communicated back
+      // via SMEM.
+      // The calls to getLoopVarIndicesToKeep and isLoopResultTensorComputedBy
+      // below are unnecessary if we can encode the partition index and the
+      // corresponding result tensor index of newForOp in
+      // LoopVarCategory::TensorResultFromOtherPartition. In the absence of such
+      // language support, we end up computing the same information multiple
+      // times.
+      auto [_, reverseIndices] =
+          getLoopVarIndicesToKeep(loop, &partition, schedule);
+      for (size_t i = 0; i < loop.getNumRegionIterArgs(); ++i) {
+        if (loopVarCategories[i] ==
+                LoopVarCategory::TensorResultFromOtherPartition &&
+            isLoopResultTensorComputedBy(loop, i, &partition, schedule)) {
+          auto result = newForOp.getResult(reverseIndices[i]);
+          b.builder.create<LocalStoreOp>(wgOp.getLoc(), result,
+                                         tensorResultAllocs[i]);
+        }
+      }
+      b.builder.create<nvws::WarpGroupReturnOp>(wgOp.getLoc());
     }
   }
 
+  topBuilder.setInsertionPointAfter(wgOp);
+
   for (auto [i, res] : llvm::enumerate(loop.getResults())) {
     if (!res.use_empty()) {
-      res.replaceAllUsesWith(wgOp.getResult(newResultIdx[i]));
+      if (loopVarCategories[i] ==
+          LoopVarCategory::TensorResultFromOtherPartition) {
+        auto ty = cast<RankedTensorType>(loop.getResult(i).getType());
+        auto output = topBuilder.create<LocalLoadOp>(ty, tensorResultAllocs[i]);
+        topBuilder.create<LocalDeallocOp>(tensorResultAllocs[i]);
+        res.replaceAllUsesWith(output);
+      } else {
+        res.replaceAllUsesWith(wgOp.getResult(newResultIndices[i]));
+      }
     }
   }
 

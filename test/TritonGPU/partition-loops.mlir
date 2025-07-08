@@ -167,10 +167,10 @@ tt.func @partition_outputs(%lb: i32, %ub: i32, %step: i32) -> (!ty, !ty, !ty) {
     scf.yield %0, %1, %2 : !ty, !ty, !ty
   } {ttg.partition.stages = [0, 0, 0]}
 
-  // CHECK:      [[C_OUT:%.*]] = ttg.local_load [[C_BUF]]
-  // CHECK-NEXT: local_dealloc [[C_BUF]]
-  // CHECK-NEXT: [[B_OUT:%.*]] = ttg.local_load [[B_BUF]]
+  // CHECK: [[B_OUT:%.*]] = ttg.local_load [[B_BUF]]
   // CHECK-NEXT: local_dealloc [[B_BUF]]
+  // CHECK-NEXT: [[C_OUT:%.*]] = ttg.local_load [[C_BUF]]
+  // CHECK-NEXT: local_dealloc [[C_BUF]]
 
   // CHECK-NEXT: tt.return [[A_OUT]], [[B_OUT]], [[C_OUT]]
   tt.return %outs#0, %outs#1, %outs#2 : !ty, !ty, !ty
