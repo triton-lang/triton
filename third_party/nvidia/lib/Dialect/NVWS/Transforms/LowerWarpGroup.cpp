@@ -32,6 +32,7 @@
 #include "nvidia/include/Dialect/NVWS/IR/Dialect.h"
 #include "nvidia/include/Dialect/NVWS/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVectorExtras.h"
 #include "llvm/Support/LogicalResult.h"
@@ -114,6 +115,20 @@ class LowerWarpGroup : public OpRewritePattern<WarpGroupOp> {
            isa<RankedTensorType>(capture.getType()))) {
         captures.insert(defOp->operand_begin(), defOp->operand_end());
         constants.push_back(capture);
+      } else if (auto tensorTy =
+                     dyn_cast<RankedTensorType>(capture.getType())) {
+        SharedEncodingTrait sharedEnc = getSharedEncoding(tensorTy);
+        auto memdescTy = MemDescType::get(
+            tensorTy.getShape(), tensorTy.getElementType(), sharedEnc,
+            SharedMemorySpaceAttr::get(tensorTy.getContext()));
+        auto alloc = rewriter.create<LocalAllocOp>(loc, memdescTy, capture);
+        for (auto [i, region] : llvm::enumerate(partitions)) {
+          auto builder = OpBuilder::atBlockBegin(&region->front());
+          Value value =
+              builder.create<LocalLoadOp>(capture.getLoc(), tensorTy, alloc);
+          replaceAllUsesInRegionWith(capture, value, *region);
+        }
+        inputs.push_back(alloc);
       } else {
         inputs.push_back(capture);
       }
