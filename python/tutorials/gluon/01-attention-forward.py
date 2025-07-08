@@ -627,6 +627,49 @@ def _attn_fwd_mma(  #
 
 
 @gluon.jit
+def _split_2_n(x):
+    gl.static_assert(x.shape[1] % 2 == 0, "x.shape[1] must be even for _split_2_n")
+    layout: gl.constexpr = gl.BlockedLayout([1, x.shape[1] // 2], [32, 1], [4, 1], [0, 1])
+    x0, x1 = x.reshape([x.shape[0], 2, x.shape[1] // 2]).permute(0, 2, 1).split()
+    x0 = gl.convert_layout(x0, layout, assert_trivial=True)
+    x1 = gl.convert_layout(x1, layout, assert_trivial=True)
+    return x0, x1
+
+
+@gluon.jit
+def _join_2_n(x0, x1):
+    layout: gl.constexpr = gl.BlockedLayout([1, x0.shape[1] * 2], [32, 1], [4, 1], [0, 1])
+    y = gl.join(x0, x1).permute(0, 2, 1).reshape([x0.shape[0], x1.shape[1] * 2])
+    return gl.convert_layout(y, layout, assert_trivial=True)
+
+
+@gluon.jit
+def _elementwise_3_along_N(config, a, b, c, f: gl.constexpr, pack: gl.constexpr = 1):
+    if a.shape[1] == pack:
+        return f(config, a, b, c)
+    else:
+        a0, a1 = _split_2_n(a)
+        b0, b1 = _split_2_n(b)
+        c0, c1 = _split_2_n(c)
+        y0 = _elementwise_3_along_N(config, a0, b0, c0, f, pack=pack)
+        y1 = _elementwise_3_along_N(config, a1, b1, c1, f, pack=pack)
+        return _join_2_n(y0, y1)
+
+
+@gluon.jit
+def _mask_func(config, qk, lhs, rhs):
+    mask = lhs < rhs
+    return gl.where(mask, -1.0e8, qk)
+
+
+@gluon.jit
+def _softmax_func(config, qk, qk_scale, m_ij):
+    qk = _mul_f32x2(qk, qk_scale)
+    qk = _add_f32x2(qk, m_ij)
+    return gl.exp2(qk).to(config.dtype)
+
+
+@gluon.jit
 def _softmax_inner_loop(tile_id: gl.constexpr, config, prog,  #
                         s_consumer, corr_producer, corr_bar,  #
                         offs_m, offs_n, m_i, l_i,  #
@@ -641,24 +684,42 @@ def _softmax_inner_loop(tile_id: gl.constexpr, config, prog,  #
             # Prevent LLVM from hoisting the partial sums, which triggers spilling.
             offs_n = gl.inline_asm_elementwise("mov.b32 $0, $0;", "=r,r", [offs_n], dtype=gl.int32, is_pure=True,
                                                pack=1)
-            mask = offs_m[:, None] >= (start_n + offs_n[None, :])
-            qk = gl.where(mask, qk, -1.0e8)
+            offs_mx = offs_m[:, None].broadcast_to(config.qk_shape)
+            offs_nx = (start_n + offs_n[None, :]).broadcast_to(config.qk_shape)
+            layout: gl.constexpr = qk.type.layout
+            qk = _elementwise_3_along_N(config, qk, offs_mx, offs_nx, _mask_func)
+            qk = gl.convert_layout(qk, layout, assert_trivial=True)
+
+            # mask = offs_m[:, None] < (start_n + offs_n[None, :])
+            # qk = gl.where(mask, -1.0e8, qk)
         m_ij = gl.maximum(m_i, gl.max(qk, 1) * config.qk_scale)
         alpha = gl.exp2(m_i - m_ij)
 
         alpha_tmem = _borrow_s_as_alpha(config, s_tmem)
+        gl.inline_asm_elementwise("tcgen05.fence::after_thread_sync; // dummy $0", "=r", [], dtype=gl.int32,
+                                  is_pure=False, pack=1)
         alpha_tmem.store(gl.convert_layout(alpha.expand_dims(1), config.alpha_2d_layout, assert_trivial=True))
         mbarrier.arrive(corr_bar, count=1)
+        gl.inline_asm_elementwise("tcgen05.fence::before_thread_sync; // dummy $0", "=r", [], dtype=gl.int32,
+                                  is_pure=False, pack=1)
 
-        qk = _mul_f32x2(qk, gl.full(config.qk_shape, config.qk_scale, gl.float32, qk.type.layout))
-        qk = _add_f32x2(qk, -m_ij[:, None])
+        qk0, qk1 = _split_2_n(qk)
+        m_ij0, m_ij1 = _split_2_n((-m_ij)[:, None].broadcast_to(config.qk_shape))
+        qk_scale_t = gl.full(qk0.shape, config.qk_scale, gl.float32, qk0.type.layout)
+        gl.static_assert(qk0.shape == m_ij0.shape, "qk0 and m_ij0 must have the same shape")
+        gl.static_assert(qk0.shape == qk_scale_t.shape, "qk0 and qk_scale_t must have the same shape")
+
+        # qk = _mul_f32x2(qk, gl.full(config.qk_shape, config.qk_scale, gl.float32, qk.type.layout))
+        # qk = _add_f32x2(qk, -m_ij[:, None])
 
         p_tmem = _borrow_s_as_p(config, s_tmem)
-        qk0, qk1, = qk.reshape([config.SPLIT_M, 2, config.BLOCK_N // 2]).permute(0, 2, 1).split()
-        p0 = gl.exp2(qk0)
-        p_tmem.slice(0, config.BLOCK_N // 2).store(p0.to(config.dtype))
-        p1 = gl.exp2(qk1)
-        p_tmem.slice(config.BLOCK_N // 2, config.BLOCK_N // 2).store(p1.to(config.dtype))
+        # qk0, qk1, = qk.reshape([config.SPLIT_M, 2, config.BLOCK_N // 2]).permute(0, 2, 1).split()
+        # p0 = gl.exp2(qk0)
+        p0 = _elementwise_3_along_N(config, qk0, qk_scale_t, m_ij0, _softmax_func, pack=2)
+        p_tmem.slice(0, config.BLOCK_N // 2).store(p0)
+        # p1 = gl.exp2(qk1)
+        p1 = _elementwise_3_along_N(config, qk1, qk_scale_t, m_ij1, _softmax_func, pack=2)
+        p_tmem.slice(config.BLOCK_N // 2, config.BLOCK_N // 2).store(p1)
         mbarrier.arrive(s_bar, count=1)
 
         _, corr_bar = corr_producer.acquire()
@@ -956,12 +1017,12 @@ def _attn_fwd_inner(config, info0, info1,  #
 
 
 @gluon.jit(do_not_specialize=["Z"])
-def _gluon_attn(sm_scale, M, Z, H, N_CTX,  #
-                desc_q, desc_k, desc_v, desc_o,  #
-                BLOCK_M: gl.constexpr, BLOCK_N: gl.constexpr, HEAD_DIM: gl.constexpr,  #
-                GROUP_SIZE_N: gl.constexpr, NUM_SMS: gl.constexpr,  #
-                STAGE: gl.constexpr, dtype: gl.constexpr,  #
-                num_warps: gl.constexpr):
+def cutlass_attn(sm_scale, M, Z, H, N_CTX,  #
+                 desc_q, desc_k, desc_v, desc_o,  #
+                 BLOCK_M: gl.constexpr, BLOCK_N: gl.constexpr, HEAD_DIM: gl.constexpr,  #
+                 GROUP_SIZE_N: gl.constexpr, NUM_SMS: gl.constexpr,  #
+                 STAGE: gl.constexpr, dtype: gl.constexpr,  #
+                 num_warps: gl.constexpr):
     qk_scale = sm_scale
     qk_scale *= 1.44269504
     config = AttentionConfig(qk_scale, Z, H, N_CTX, BLOCK_M, BLOCK_N, HEAD_DIM, GROUP_SIZE_N, NUM_SMS,  # i
@@ -1018,7 +1079,7 @@ def attention_forward(q, k, v, causal, sm_scale):
     num_pid_n = q.shape[0] * q.shape[1]
     grid = min(NUM_SMS, num_pid_m * num_pid_n)
 
-    _gluon_attn[(grid, )](
+    cutlass_attn[(grid, )](
         sm_scale, M, q.shape[0], q.shape[1], q.shape[2],  #
         desc_q, desc_k, desc_v, desc_o,  #
         BLOCK_M, BLOCK_N, HEAD_DIM_K, GROUP_SIZE_N, NUM_SMS,  #
@@ -1072,7 +1133,7 @@ def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype):
 # Benchmarking
 # ===-----------------------------------------------------------------------===#
 
-profile = False
+profile = True
 
 if not profile:
     BATCH = [4]

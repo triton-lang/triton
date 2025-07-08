@@ -182,7 +182,7 @@ class Autotuner(KernelInterface):
         cache_key = [
             triton_key(),
             make_backend(driver.active.get_current_target()).hash(),
-            fn.cache_key,
+            fn.cache_key(),
             str(sorted(env_vars.items())),
             str(tuning_key),
         ] + [str(c) for c in configs]
