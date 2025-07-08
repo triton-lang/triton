@@ -12,31 +12,25 @@ def anchor(v):
     pass
 
 
-@tl.aggregate
+@tl.core._aggregate
 class Pair:
     first: tl.tensor
     second: tl.tensor
 
-    @tl.core.builtin
-    def __init__(self, first, second, _semantic=None):
+    def __init__(self, first, second):
         self.first = first
         self.second = second
 
+    @triton.jit
     def get_first(self):
         return self.first
 
-    @tl.core.builtin
     def get_second(self, _semantic=None):
         return self.second
 
+    @triton.jit
     def unpack(self):
         return self.get_first(), self.get_second()
-
-    def mutate_first(self, value):
-        self.first = value
-
-    def mutate_second(self, value):
-        self.second = value
 
 
 @filecheck_test
@@ -75,7 +69,7 @@ def test_jit_method():
     # CHECK: %c11_i32 = arith.constant 11 : i32
     # CHECK: [[RANGE:%.*]] = tt.make_range {end = 4 : i32, start = 0 : i32}
     scalar = 11
-    # CHECK: [[V:%.*]]:4 = tt.call @{{.*}}unpack{{.*}}([[RANGE]], %c11_i32)
+    # CHECK: [[V:%.*]]:2 = tt.call @{{.*}}unpack{{.*}}([[RANGE]], %c11_i32)
     pair = Pair(tl.arange(0, 4), scalar)
     a, b = pair.unpack()
     # CHECK: call @{{.*}}anchor{{.*}}([[V]]#0)
@@ -84,15 +78,13 @@ def test_jit_method():
     anchor(b)
 
 
-@tl.aggregate
+@tl.core._aggregate
 class TypeWithBuiltinInitializer:
     value: tl.tensor
 
-    @tl.core.builtin
     def __init__(self, _semantic=None):
         self.value = tl.arange(0, 4, _semantic=_semantic)
 
-    @tl.core.builtin
     def modify(self, value, _semantic=None):
         self.value = value
 
@@ -189,7 +181,7 @@ def test_call_in_loop():
         acc = accumulate(acc, i)
 
 
-@tl.aggregate
+@tl.core._aggregate
 class FunctionParent:
 
     @triton.jit
@@ -212,22 +204,23 @@ def test_function_name_mangling():
     FunctionParent.function_with_name()
 
 
-@tl.aggregate
+@tl.core._aggregate
 class AggregateWithConstexpr:
     a: tl.tensor
     b: tl.constexpr
 
-    @tl.core.builtin
-    def __init__(self, a, b, _semantic=None):
+    def __init__(self, a, b):
         self.a = a
         self.b = b
 
     @staticmethod
     def create(a):
-        return AggregateWithConstexpr(a, 42)
+        return AggregateWithConstexpr(a, tl.constexpr(42))
 
+    @triton.jit
     def modify(self, a):
         self.a = a
+        return self
 
 
 @triton.jit
@@ -267,10 +260,8 @@ def test_constexpr_function_from_python():
 
 
 @triton.jit
-def swap(p):
-    tmp = p.first
-    p.mutate_first(p.second)
-    p.mutate_second(tmp)
+def swap(pair):
+    return pair.second, pair.first
 
 
 @filecheck_test
@@ -279,7 +270,7 @@ def test_assign_tuple_attrs():
     # CHECK-LABEL: test_assign_tuple_attrs
     p = Pair(tl.arange(0, 4), tl.arange(4, 8))
     # CHECK: [[P:%.*]]:2 = tt.call @{{.*}}swap
-    swap(p)
+    p.first, p.second = swap(p)
     # CHECK: call @{{.*}}anchor{{.*}}([[P]]#0)
     # CHECK: call @{{.*}}anchor{{.*}}([[P]]#1)
     anchor(p.first)
@@ -299,9 +290,9 @@ def test_reassign_aggregate_with_constexpr():
     # CHECK:   [[VALUE:%.*]] = tt.call {{.*}}modify
     # CHECK:   yield [[VALUE]]
     if var == 0:
-        agg.modify(tl.arange(4, 8))
+        agg = agg.modify(tl.arange(4, 8))
     else:
-        agg.modify(tl.arange(8, 12))
+        agg = agg.modify(tl.arange(8, 12))
     # CHECK: call @{{.*}}anchor{{.*}}([[AGG]])
     anchor(agg)
 
@@ -386,15 +377,15 @@ def test_constexpr_generator():
 @tl.constexpr_function
 def Box(T):
 
-    @tl.aggregate
+    @tl.core._aggregate
     class BoxImpl:
         value: T
 
+        @triton.jit
         def create(value):
             return BoxImpl(value)
 
-        @tl.core.builtin
-        def __init__(self, value, _semantic=None):
+        def __init__(self, value):
             self.value = value
 
     return BoxImpl
@@ -411,106 +402,6 @@ def test_late_bound_class_reference():
         anchor(value)
 
     run_filecheck_test(kernel)
-
-
-@triton.jit
-def mutate_and_produce(x):
-    return tl.arange(0, 16)
-
-
-@triton.jit
-def mutate_and_produce_tuple(x):
-    return tl.arange(0, 16), tl.arange(16, 32)
-
-
-@filecheck_test
-@triton.jit
-def test_mutable_argument():
-    # CHECK-LABEL: tt.func public @test_mutable_argument
-    # CHECK-NEXT:    [[FIRST0:%.*]] = tt.make_range {end = 4 : i32, start = 0 : i32}
-    # CHECK-NEXT:    [[SECOND0:%.*]] = tt.make_range {end = 8 : i32, start = 4 : i32}
-    # CHECK-NEXT:    [[P1:%.*]]:2 = tt.call @{{.*}}swap{{.*}}([[FIRST0]], [[SECOND0]])
-    # CHECK-NEXT:    [[FIRST1:%.*]] = tt.make_range {end = 12 : i32, start = 8 : i32}
-    # CHECK-NEXT:    [[P2:%.*]]:2 = tt.call @{{.*}}mutate_first{{.*}}([[P1]]#0, [[P1]]#1, [[FIRST1]])
-    # CHECK-NEXT:    [[SECOND1:%.*]] = tt.make_range {end = 20 : i32, start = 12 : i32}
-    # CHECK-NEXT:    [[P3:%.*]]:2 = tt.call @{{.*}}mutate_second{{.*}}([[P2]]#0, [[P2]]#1, [[SECOND1]])
-    # CHECK-NEXT:    [[P4:%.*]]:2 = tt.call @{{.*}}swap{{.*}}([[P3]]#0, [[P3]]#1)
-    p = Pair(tl.arange(0, 4), tl.arange(4, 8))
-    swap(p)
-
-    box = Box(Pair)(p)
-    box.value.mutate_first(tl.arange(8, 12))
-    box.value.mutate_second(tl.arange(12, 20))
-    swap(box.value)
-
-    # CHECK-NEXT:    call @{{.*}}anchor{{.*}}([[P4]]#0, [[P4]]#1)
-    anchor(box)
-
-    # CHECK-NEXT:    [[P5:%.*]]:3 = tt.call @{{.*}}mutate_and_produce{{.*}}([[P1]]#0, [[P1]]#1)
-    # CHECK-NEXT:    [[P6:%.*]]:4 = tt.call @{{.*}}mutate_and_produce_tuple{{.*}}([[P5]]#1, [[P5]]#2)
-    # CHECK-NEXT:    call @{{.*}}anchor{{.*}}([[P5]]#0)
-    # CHECK-NEXT:    call @{{.*}}anchor{{.*}}([[P6]]#0)
-    # CHECK-NEXT:    call @{{.*}}anchor{{.*}}([[P6]]#1)
-    # CHECK-NEXT:    call @{{.*}}anchor{{.*}}([[P6]]#2, [[P6]]#3)
-    a = mutate_and_produce(p)
-    b, c = mutate_and_produce_tuple(p)
-    anchor(a)
-    anchor(b)
-    anchor(c)
-    anchor(p)
-
-    # CHECK-LABEL: tt.func private @{{.*}}swap
-    # CHECK-NEXT:    [[P1:%.*]]:2 = tt.call @{{.*}}mutate_first{{.*}}(%arg0, %arg1, %arg1)
-    # CHECK-NEXT:    [[P2:%.*]]:2 = tt.call @{{.*}}mutate_second{{.*}}([[P1]]#0, [[P1]]#1, %arg0)
-    # CHECK-NEXT:    return [[P2]]#0, [[P2]]#1
-
-    # CHECK-LABEL: tt.func private @{{.*}}mutate_first
-    # CHECK-NEXT:    return %arg2, %arg1
-
-    # CHECK-LABEL: tt.func private @{{.*}}mutate_second
-    # CHECK-NEXT:    return %arg0, %arg2
-
-    # CHECK-LABEL: tt.func private @{{.*}}mutate_and_produce
-    # CHECK-NEXT:    [[RANGE:%.*]] = tt.make_range {end = 16 : i32, start = 0 : i32}
-    # CHECK-NEXT:    return [[RANGE]], %arg0, %arg1
-
-    # CHECK-LABEL: tt.func private @{{.*}}mutate_and_produce_tuple
-    # CHECK-NEXT:    [[RANGE1:%.*]] = tt.make_range {end = 16 : i32, start = 0 : i32}
-    # CHECK-NEXT:    [[RANGE2:%.*]] = tt.make_range {end = 32 : i32, start = 16 : i32}
-    # CHECK-NEXT:    return [[RANGE1]], [[RANGE2]], %arg0, %arg1
-
-
-@tl.aggregate
-class JITInitializer:
-    x: tl.tensor
-    y: tl.constexpr
-
-    def __init__(self, a, b, y: tl.constexpr):
-        self.y: tl.constexpr = y
-        self.x = a + b + tl.arange(0, self.y)
-
-    def double(self):
-        self.x *= 2
-
-
-@filecheck_test
-@triton.jit
-def test_jit_init():
-    # CHECK-LABEL: tt.func public @test_jit_init
-    # CHECK-NEXT:    [[RANGE0:%.*]] = tt.make_range {end = 8 : i32, start = 4 : i32}
-    # CHECK-NEXT:    [[RANGE1:%.*]] = tt.make_range {end = 12 : i32, start = 8 : i32}
-    # CHECK-NEXT:    [[P:%.*]] = tt.call @{{.*}}JITInitializer.__init__{{.*}}([[RANGE0]], [[RANGE1]])
-    # CHECK-NEXT:    call @{{.*}}anchor{{.*}}([[P]])
-    # CHECK-NEXT:    tt.make_range {end = 4 : i32, start = 0 : i32}
-    p = JITInitializer(tl.arange(4, 8), tl.arange(8, 12), 4)
-    anchor(p)
-    tl.arange(0, p.y)
-
-    # CHECK-LABEL: tt.func private @{{.*}}JITInitializer.__init__
-    # CHECK:         [[X:%.*]] = arith.addi %arg0, %arg1
-    # CHECK:         [[RANGE:%.*]] = tt.make_range {end = 4 : i32, start = 0 : i32}
-    # CHECK:         [[Y:%.*]] = arith.addi [[X]], [[RANGE]]
-    # CHECK:         return [[Y]]
 
 
 @filecheck_test

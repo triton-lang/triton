@@ -55,7 +55,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
 
     assert(to_vector(conversion.getInDimNames()) ==
            to_vector(conversion.getOutDimNames()));
-    auto dims = llvm::to_vector(conversion.getInDimNames());
+    auto dims = conversion.getInDimNames();
     if (llvm::is_contained(dims, kBlock)) {
       // Case 1: Transfer between values in different CTAs.
       //          This requires moving values through distributed shared memory.
