@@ -1519,40 +1519,12 @@ class tensor_descriptor(tensor_descriptor_base):
 
 
 @dataclass(frozen=True)
-class _init_placeholder_type(base_type):
-
-    def _unflatten_ir(self, handles: List[ir.value], cursor: int) -> Tuple[ir.value, int]:
-        return _init_placeholder_value(), cursor
-
-    def _flatten_ir_types(self, builder: ir.builder, out: List[ir.type]) -> None:
-        pass
-
-    def mangle(self) -> str:
-        return "IP"
-
-
-@dataclass(frozen=True)
-class _init_placeholder_value(base_value):
-    """A placeholder value for uninitialized fields in an aggregate type.
-
-    When invoking the initializer of an aggregate, the specific field values
-    are not known yet, so we use this placeholder value to represent them.
-    """
-    type = _init_placeholder_type()
-
-    def _flatten_ir(self, handles: List[ir.value]) -> None:
-        return
-
-
-@dataclass(frozen=True)
 class _aggregate_type(base_type):
     """A generic base type for all Triton aggregate types.
 
     This class contains a reference to the original user-defined Python class
     and a list of class fields with their Triton types.
     """
-
-    __triton_mutable__ = True
 
     base_cls: type
     fields: List[Tuple[str, base_type]]
@@ -1574,13 +1546,7 @@ class _aggregate_type(base_type):
         return f"{name}<{', '.join(fields)}>"
 
 
-def _aggregate_impl(cls, jit):
-
-    # Make all non-builtin member functions jit functions by default.
-    for (name, member) in inspect.getmembers(cls):
-        if inspect.isfunction(member) or inspect.ismethod(member):
-            if not getattr(member, "__triton_builtin__", False):
-                setattr(cls, name, jit(member))
+def _aggregate(cls):
 
     # Define the wrapped Triton value type.
     class aggregate_value(base_value):
@@ -1595,13 +1561,7 @@ def _aggregate_impl(cls, jit):
             # Call into the user-defined constructor.
             instance = this_cls._get_instance()
             if isinstance(cls.__init__, JITFunction):
-                for name, ty in cls.__annotations__.items():
-                    setattr(instance, name, _init_placeholder_value())
-                dest = _generator.create_writeback(instance)
-                _generator.call_JitFunction(cls.__init__, [instance, *args], kwargs)
-                instance = dest.value
-                return instance
-
+                raise ValueError(f"{cls.__name__}.__init__ cannot be a @triton.jit function")
             extra_kwargs = {}
             if "_semantic" in inspect.signature(cls.__init__).parameters:
                 extra_kwargs["_semantic"] = _semantic
@@ -1618,9 +1578,6 @@ def _aggregate_impl(cls, jit):
 
         # Only allow setting attributes defined in the class annotations.
         def __setattr__(self, name, value):
-            if name in ["__ast__"] or isinstance(value, _init_placeholder_value):
-                super().__setattr__(name, value)
-                return
             if name not in cls.__annotations__:
                 raise AttributeError(f"{cls.__name__} has no attribute '{name}'")
             if not isinstance(value, cls.__annotations__[name]):
@@ -1647,10 +1604,6 @@ def _aggregate_impl(cls, jit):
     aggregate_value.__doc__ = cls.__doc__
 
     return aggregate_value
-
-
-def aggregate(cls):
-    return _aggregate_impl(cls, jit=jit)
 
 
 # -----------------------
