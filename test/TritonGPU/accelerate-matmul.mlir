@@ -563,7 +563,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
    %operand1: tensor<128x256xf8E5M2, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>,
    %out_ptrs: tensor<128x256x!tt.ptr<f32>, #blocked>) {
     %cst = arith.constant dense<0.000000e+00> : tensor<128x256xf32, #blocked>
-    // CHECK: ttng.warp_group_dot
+    // CHECK: ttng.warp_group_do
     // expected-warning @below {{Forcing a different order}}
     %64 = tt.dot %operand0, %operand1, %cst, inputPrecision = tf32 {maxNumImpreciseAcc = 1073741824 : i32} : tensor<128x128xf8E5M2, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<128x256xf8E5M2, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<128x256xf32, #blocked>
     tt.store %out_ptrs, %64 : tensor<128x256x!tt.ptr<f32>, #blocked>
