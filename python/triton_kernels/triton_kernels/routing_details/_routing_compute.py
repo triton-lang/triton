@@ -49,7 +49,7 @@ def _keyed_add(x, y):
 def _routing_compute_indx(pid_m, GatherIndx, ScatterIndx, GateScal, ExptScal, ExptIndx, PartialOffs, stride_pm,
                           stride_pn, TokensStart, n_tokens, BLOCK_M: tl.constexpr, N_EXPTS_ACT: tl.constexpr):
 
-    if n_tokens.dtype.is_ptr():
+    if isinstance(n_tokens, tl.tensor) and n_tokens.dtype.is_ptr():
         n_tokens = tl.load(n_tokens)
     n_gates = n_tokens * N_EXPTS_ACT
 

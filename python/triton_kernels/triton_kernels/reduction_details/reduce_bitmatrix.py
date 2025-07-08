@@ -56,7 +56,7 @@ def _sum_bitmatrix_rows(B, shape_bm, stride_bm: tl.constexpr, stride_bn: tl.cons
 
     tl.static_assert(BLOCK_MM % BLOCK_M == 0)
     TILE_SIZE: tl.constexpr = BLOCK_MM // BLOCK_M
-    if shape_bm.dtype.is_ptr():
+    if isinstance(shape_bm, tl.tensor) and shape_bm.dtype.is_ptr():
         shape_bm = tl.load(shape_bm)
     pid_m = tl.program_id(0)
     pid_n = tl.program_id(1)

@@ -1,5 +1,56 @@
+import torch
 import triton
 import triton.language as tl
+from .base import Layout
+
+
+class HopperMXScaleLayout(Layout):
+    name: str = "HOPPER_SCALE"
+
+    def __init__(self, shape, num_warps=8) -> None:
+        assert num_warps & (num_warps - 1) == 0, "warps_n must be a power of 2"
+        super().__init__(shape)
+        self.num_warps = num_warps
+
+    def swizzle_data(self, data):
+        data = data.transpose(-1, -2).contiguous()
+        *batch, M, K = data.shape
+        SWIZZLE_ALIGN_M = 2 * self.num_warps * 2 * 8
+        SWIZZLE_ALIGN_K = 2
+        pad_m = (SWIZZLE_ALIGN_M - (M % SWIZZLE_ALIGN_M)) % SWIZZLE_ALIGN_M
+        pad_k = (SWIZZLE_ALIGN_K - (K % SWIZZLE_ALIGN_K)) % SWIZZLE_ALIGN_K
+        data = torch.nn.functional.pad(data, (0, pad_k, 0, pad_m))
+        *batch, M, K = data.shape
+        assert data.is_contiguous()
+        assert M % (
+            2 * self.num_warps * 2 *
+            8) == 0 and K % 2 == 0, f"Input tensor must have a subtile of shape (..., {2 * self.num_warps * 2 * 8}, 2)"
+        b = len(batch)
+        data = data.reshape(*batch, M // (2 * self.num_warps * 2 * 8), 2, self.num_warps, 2, 8, K // 2, 2)
+        perm = [0, 2, 5, 1, 4, 6, 3]
+        perm = list(range(b)) + [b + p for p in perm]
+        data = data.permute(*perm)
+        data = data.flatten(-5, -1)
+        data = data.flatten(-3, -2)
+        assert data.shape[-2] == M // 32
+        assert data.shape[-1] == K * 32
+        data = data.transpose(-1, -2).contiguous()
+        return data
+
+    def unswizzle_data(self, data):
+        data = data.transpose(-1, -2).contiguous()
+        *batch, M, K = data.shape
+        b = len(batch)
+        data = data.reshape(*batch, M // self.num_warps, self.num_warps, K // 64, 2, 8, 2, 2)
+        perm = [0, 3, 1, 6, 4, 2, 5]
+        perm = list(range(b)) + [b + p for p in perm]
+        data = data.permute(*perm)
+        data = data.reshape(*batch, M * 32, K // 32)
+        data = data.transpose(-1, -2).contiguous()
+        return data
+
+    def swizzle_block_shape(self, block_shape):
+        return block_shape
 
 
 @triton.jit
