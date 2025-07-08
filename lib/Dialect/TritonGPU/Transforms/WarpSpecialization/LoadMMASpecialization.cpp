@@ -277,6 +277,16 @@ LogicalResult PipelinedLoad::determineLiveRange(Block &container,
   return success();
 }
 
+static void propagateMutability(Value value) {
+  for (Operation *user : value.getUsers()) {
+    if (user->hasTrait<OpTrait::MemDescViewTrait>()) {
+      user->getResult(0).setType(
+          getAsMutable(cast<MemDescType>(user->getResult(0).getType())));
+      propagateMutability(user->getResult(0));
+    }
+  }
+}
+
 namespace {
 
 struct PipelinedLoadGroup {
@@ -684,6 +694,7 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
       allocOp->removeAttr(kPartitionAttrName);
       allocOp.getSrcMutable().clear();
       allocOp.getResult().setType(getAsMutable(allocOp.getType()));
+      propagateMutability(allocOp.getResult());
     } else if (auto tmemAllocOp = operand.getDefiningOp<ttng::TMEMAllocOp>()) {
       PartitionBuilder b(tmemAllocOp.getLoc(), tmemAllocOp);
       StageCluster stageCluster = getStageCluster(tmemAllocOp);
