@@ -553,6 +553,8 @@ def LocalLoadPackedTransposedOp : TT_AMDGPU_Op<"local_load_packed_tranposed">{
     let description = [{
       Load a transposed packed tensor from shared memory into a distributed tensor.
       Requires a M/N packed and M/N contiguous tensor in shared memory and will yield a K packed K contiguous tensor in registers.
+      The packing change will change the shape of the tensor by doubling the M/N dimension and halving the K dimension.
+      For example if A is 16x64 in shared memory, the result of this operation will be 32x32.
     }];
   let arguments = (ins
     Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$src,
