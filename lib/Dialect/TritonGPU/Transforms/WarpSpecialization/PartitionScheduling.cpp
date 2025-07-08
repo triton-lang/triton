@@ -207,6 +207,8 @@ static std::optional<WarpSchedule> getInitialSchedule(scf::ForOp loop) {
       if (!op->hasTrait<OpTrait::MemDescViewTrait>())
         continue;
 
+      // Duplicate the op if necessary to ensure that the MMA partition is the
+      // only user.
       if (!llvm::all_of(op->getUsers(), [&](Operation *user) {
             return schedule.getPartition(user) == mmaPartition;
           })) {
