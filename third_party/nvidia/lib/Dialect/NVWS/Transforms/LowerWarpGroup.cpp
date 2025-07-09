@@ -144,12 +144,12 @@ class LowerWarpGroup : public OpRewritePattern<WarpGroupOp> {
     }
 
     opsToClone = topologicalSort(opsToClone);
-    for (auto [i, region] : llvm::enumerate(partitions)) {
-      OpBuilder &b = builders[i];
-      IRMapping &mapping = mappings[i];
+
+    for (auto [region, b, mapping] :
+         llvm::zip(partitions, builders, mappings)) {
       for (Operation *op : opsToClone) {
-        auto copy = builders[i].clone(*op, mappings[i])->getResult(0);
-        mappings[i].map(op->getResult(0), copy);
+        auto copy = b.clone(*op, mapping)->getResult(0);
+        mapping.map(op->getResult(0), copy);
         replaceAllUsesInRegionWith(op->getResult(0), copy, *region);
       }
     }

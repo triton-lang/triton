@@ -28,8 +28,6 @@ struct WgBuilder {
 };
 
 // This is computed per loop and partition
-// Each partition may maintain this information via map:
-// DenseMap<scf::ForOp, SmallVector<LoopVarCategory>>
 enum class LoopVarCategory {
   Unused,
   Used,
@@ -37,9 +35,9 @@ enum class LoopVarCategory {
   TensorResultFromOtherPartition,
 };
 
-bool isLoopResultTensorComputedBy(scf::ForOp loop, size_t resultIdx,
-                                  const Partition *partition,
-                                  const WarpSchedule &schedule) {
+bool isTensorResultComputedBy(scf::ForOp loop, size_t resultIdx,
+                              const Partition *partition,
+                              const WarpSchedule &schedule) {
   bool ret = false;
   schedule.iterateOutputs(loop, partition, [&](Operation *op, OpOperand &use) {
     if (isa<scf::YieldOp>(op) && use.getOperandNumber() == resultIdx &&
@@ -64,7 +62,7 @@ SmallVector<LoopVarCategory> classifyLoopVars(scf::ForOp loop,
       if (otherPartition.getIndex() == partition->getIndex()) {
         continue;
       }
-      if (isLoopResultTensorComputedBy(loop, i, &otherPartition, schedule)) {
+      if (isTensorResultComputedBy(loop, i, &otherPartition, schedule)) {
         return true;
       }
     }
@@ -435,7 +433,7 @@ LogicalResult triton::gpu::partitionLoop(scf::ForOp loop) {
     } else {
       // Tensor results computed by non-default partitions are communicated back
       // via SMEM.
-      // The calls to getLoopVarIndicesToKeep and isLoopResultTensorComputedBy
+      // The calls to getLoopVarIndicesToKeep and isTensorResultComputedBy
       // below are unnecessary if we can encode the partition index and the
       // corresponding result tensor index of newForOp in
       // LoopVarCategory::TensorResultFromOtherPartition. In the absence of such
@@ -446,7 +444,7 @@ LogicalResult triton::gpu::partitionLoop(scf::ForOp loop) {
       for (size_t i = 0; i < loop.getNumRegionIterArgs(); ++i) {
         if (loopVarCategories[i] ==
                 LoopVarCategory::TensorResultFromOtherPartition &&
-            isLoopResultTensorComputedBy(loop, i, &partition, schedule)) {
+            isTensorResultComputedBy(loop, i, &partition, schedule)) {
           auto result = newForOp.getResult(reverseIndices[i]);
           b.builder.create<LocalStoreOp>(wgOp.getLoc(), result,
                                          tensorResultAllocs[i]);
