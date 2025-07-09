@@ -487,11 +487,6 @@ private:
       // lhs = gcd(d_lhs, d_rhs) * k'' = gcd(d_lhs, d_rhs) * d + r
       // r must be divisible by gcd(d_lhs, d_rhs)
       return gcd(lhs.getDivisibility(dim), rhs.getDivisibility(dim));
-    } else if (resTy &&
-               AxisInfoVisitor::isConstantDim(lhs, resTy.getShape(), dim) &&
-               lhs.getConstantValue().has_value() &&
-               lhs.getConstantValue().value() < rhs.getDivisibility(dim)) {
-      return lhs.getDivisibility(dim);
     }
     // Otherwise we shouldn't assume any divisibility.
     // For example:
