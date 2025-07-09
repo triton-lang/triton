@@ -1,12 +1,10 @@
 #define __HIP_PLATFORM_AMD__
-// clang-format off
-// hip_depreated.h needs definitions from hip_runtime.h.
 #include <hip/hip_runtime.h>
-#include <hip/hip_deprecated.h>
-// clang-format on
+#include <hip/hip_runtime_api.h>
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
 #include <dlfcn.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -18,24 +16,9 @@ static const char *hipLibSearchPaths[] = {"/*py_libhip_search_path*/"};
 // in this file.
 // |FOR_EACH_ERR_FN| is a macro to process APIs that return hipError_t;
 // |FOR_EACH_STR_FN| is a macro to process APIs that return const char *.
-//
-// HIP 6.0 introduced an updated hipGetDeviceProperties API under a new symbol,
-// hipGetDevicePropertiesR0600. However, the associated hipDeviceProp_t was
-// directly updated with breaking changes to match hipGetDevicePropertiesR0600
-// in the header file. We include the header file from HIP 6.0. So here if we
-// use hipGetDeviceProperties together with hipDeviceProp_t we will use the
-// old API with a new struct definition and mess up the interpretation.
-//
-// This is a known issue: https://github.com/ROCm/ROCm/issues/2728.
-//
-// For now explicitly defer to the old hipDeviceProp_t struct. This should work
-// for both 5.x and 6.x. In the long term we need to switch to use
-// hipGetProcAddress once available:
-// https://github.com/ROCm/clr/commit/0479cdb3dd30ef58718cad44e424bd793c394cc0
 #define HIP_SYMBOL_LIST(FOR_EACH_ERR_FN, FOR_EACH_STR_FN)                      \
   FOR_EACH_STR_FN(hipGetErrorString, hipError_t hipError)                      \
-  FOR_EACH_ERR_FN(hipGetDeviceProperties, hipDeviceProp_tR0000 *prop,          \
-                  int deviceId)                                                \
+  FOR_EACH_ERR_FN(hipGetDeviceProperties, hipDeviceProp_t *prop, int deviceId) \
   FOR_EACH_ERR_FN(hipModuleLoadDataEx, hipModule_t *module, const void *image, \
                   unsigned int numOptions, hipJitOption *options,              \
                   void **optionValues)                                         \
@@ -80,15 +63,34 @@ bool initSymbolTable() {
     return false;
   }
 
-  // Resolve all symbols we are interested in.
+  typedef hipError_t (*hipGetProcAddress_fn)(
+      const char *symbol, void **pfn, int hipVersion, uint64_t hipFlags,
+      hipDriverProcAddressQueryResult *symbolStatus);
+  hipGetProcAddress_fn hipGetProcAddress;
   dlerror(); // Clear existing errors
   const char *error = NULL;
+  *(void **)&hipGetProcAddress = dlsym(lib, "hipGetProcAddress");
+  error = dlerror();
+  if (error) {
+    PyErr_SetString(PyExc_RuntimeError,
+                    "cannot query 'hipGetProcAddress' from libamdhip64.so");
+    dlclose(lib);
+    return false;
+  }
+
+  // Resolve all symbols we are interested in.
+  int hipVersion = HIP_VERSION;
+  uint64_t hipFlags = 0;
+  hipDriverProcAddressQueryResult symbolStatus;
+  hipError_t status = hipSuccess;
 #define QUERY_EACH_FN(hipSymbolName, ...)                                      \
-  *(void **)&hipSymbolTable.hipSymbolName = dlsym(lib, #hipSymbolName);        \
-  error = dlerror();                                                           \
-  if (error) {                                                                 \
+  status = hipGetProcAddress(#hipSymbolName,                                   \
+                             (void **)&hipSymbolTable.hipSymbolName,           \
+                             hipVersion, hipFlags, &symbolStatus);             \
+  if (status != hipSuccess) {                                                  \
     PyErr_SetString(PyExc_RuntimeError,                                        \
-                    "cannot query " #hipSymbolName " from libamdhip64.so");    \
+                    "cannot get address for '" #hipSymbolName                  \
+                    "' from libamdhip64.so");                                  \
     dlclose(lib);                                                              \
     return false;                                                              \
   }
@@ -127,7 +129,7 @@ static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
   if (!PyArg_ParseTuple(args, "i", &device_id))
     return NULL;
 
-  hipDeviceProp_tR0000 props;
+  hipDeviceProp_t props;
   HIP_CHECK(hipSymbolTable.hipGetDeviceProperties(&props, device_id));
 
   // create a struct to hold device properties

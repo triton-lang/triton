@@ -88,7 +88,7 @@ def sum_bitmatrix_rows(x, out_ret, partials_block_size=None, n_rows_raw=None):
     n_rows_pad, n_cols_raw = x.shape_pad[0], x.shape_raw[1]
     assert out_ret.shape == (n_cols_raw, )
 
-    TILE_SIZE = 2
+    TILE_SIZE = max(1, 128 // PARTIALS_BLOCK_M)
     BLOCK_MM = PARTIALS_BLOCK_M * TILE_SIZE
 
     pids_x = cdiv(n_rows_pad, BLOCK_MM)

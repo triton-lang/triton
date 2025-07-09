@@ -32,8 +32,8 @@ Value loadC(Value tensor, Value llTensor,
          "mma layout.");
 
   auto numMmaRets = tensorTy.getElementType().getIntOrFloatBitWidth() / 8;
-  assert(numMmaRets == 4 || numMmaRets == 2);
-  if (numMmaRets == 4) {
+  assert(numMmaRets == 8 || numMmaRets == 4 || numMmaRets == 2);
+  if (numMmaRets == 8 || numMmaRets == 4) {
     return llTensor;
   } else if (numMmaRets == 2) {
     auto cPack = SmallVector<Value>();
@@ -63,14 +63,14 @@ Value loadC(Value tensor, Value llTensor,
 ValueTableV2 getValuesFromDotOperandLayoutStruct(
     const LLVMTypeConverter *typeConverter, Location loc,
     ConversionPatternRewriter &rewriter, Value value, int batch, int repOuter,
-    int repK, RankedTensorType type) {
+    int repK, RankedTensorType type, bool isHopperF64) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto elems = unpackLLElements(loc, value, rewriter);
   auto eltTy = typeConverter->convertType(type.getElementType());
   int offset{};
   ValueTableV2 vals;
   auto bitwidth = eltTy.getIntOrFloatBitWidth();
-  auto numElemsPerVec = 32 / bitwidth;
+  auto numElemsPerVec = std::max(32 / bitwidth, 1u);
   auto vecTy = vec_ty(eltTy, numElemsPerVec);
 
   auto packVec = [&](std::array<int, 3> dstIdx) {
@@ -79,13 +79,21 @@ ValueTableV2 getValuesFromDotOperandLayoutStruct(
       vec = b.insert_element(vec, b.bitcast(elems[offset + i], eltTy),
                              b.i32_val(i));
     }
-    vals[dstIdx] = b.bitcast(vec, i32_ty);
+    if (bitwidth == 64) {
+      vals[dstIdx] = vec;
+    } else {
+      vals[dstIdx] = b.bitcast(vec, i32_ty);
+    }
     offset += numElemsPerVec;
   };
 
   auto dot = cast<DotOperandEncodingAttr>(type.getEncoding());
   auto kWidth = dot.getKWidth();
-  auto largeK = bitwidth * kWidth > 32;
+  auto largeK = bitwidth * kWidth > std::max(32u, bitwidth);
+
+  assert((bitwidth != 64 || largeK == false) &&
+         "Currently fp64 don't support largeK MMA");
+
   if (largeK) {
     // For layouts with a large K dimension, the original register layout needs
     // to be divided into multiple MMAs, where each MMA has contiguous 32 bits
@@ -94,7 +102,7 @@ ValueTableV2 getValuesFromDotOperandLayoutStruct(
     // we split the MMA into 4 sub-MMAs, each with a stride 4 x 32-bit along the
     // K dimension.
     llvm::SmallVector<unsigned> si;
-    auto kIters = kWidth / (32 / bitwidth);
+    auto kIters = kWidth / (std::max(32 / bitwidth, 1u));
 
     if (dot.getOpIdx() == 0) {
       // Original register layout:
@@ -221,22 +229,24 @@ ValueTableV2 getValuesFromDotOperandLayoutStruct(
     }
   }
 
+  auto numVecM = 2;
+  auto numVecN = 1;
+  auto numVecK = bitwidth == 64 ? 4 : 2;
+
   if (dot.getOpIdx() == 0) {
     for (auto b = 0; b < batch; ++b)
       for (auto m = 0; m < repOuter; ++m)
-        for (auto k = 0; k < repK; ++k) {
-          packVec({b, 2 * m, 2 * k});
-          packVec({b, 2 * m + 1, 2 * k});
-          packVec({b, 2 * m, 2 * k + 1});
-          packVec({b, 2 * m + 1, 2 * k + 1});
-        }
+        for (auto k = 0; k < repK; ++k)
+          for (auto vk = 0; vk < numVecK; ++vk)
+            for (auto vm = 0; vm < numVecM; ++vm)
+              packVec({b, m * numVecM + vm, k * numVecK + vk});
   } else {
     for (auto b = 0; b < batch; ++b)
       for (auto n = 0; n < repOuter; ++n)
-        for (auto k = 0; k < repK; ++k) {
-          packVec({b, n, 2 * k});
-          packVec({b, n, 2 * k + 1});
-        }
+        for (auto k = 0; k < repK; ++k)
+          for (auto vk = 0; vk < numVecK; ++vk)
+            for (auto vn = 0; vn < numVecN; ++vn)
+              packVec({b, n * numVecN + vn, k * numVecK + vk});
   }
   return vals;
 }
@@ -247,22 +257,33 @@ enum class TensorCoreType : uint8_t {
   FP32_BF16_BF16_FP32,
   FP32_TF32_TF32_FP32,
   FP16_FP16_FP16_FP16,
+  // fp32 accumulator, fp8 operand
   FP32_FP8E5M2_FP8E5M2_FP32,
   FP32_FP8E5M2_FP8E4M3FN_FP32,
   FP32_FP8E4M3FN_FP8E5M2_FP32,
   FP32_FP8E4M3FN_FP8E4M3FN_FP32,
+  // fp16 accumulator, fp8 operand
+  FP16_FP8E5M2_FP8E5M2_FP16,
+  FP16_FP8E5M2_FP8E4M3FN_FP16,
+  FP16_FP8E4M3FN_FP8E5M2_FP16,
+  FP16_FP8E4M3FN_FP8E4M3FN_FP16,
   // integer tensor core instr
   INT32_INT1_INT1_INT32, // Not implemented
   INT32_INT4_INT4_INT32, // Not implemented
   INT32_INT8_INT8_INT32, // Not implemented
+  // double precision tensor core instr
+  FP64_FP64_FP64_FP64,
   //
   NOT_APPLICABLE,
 };
 
 static Type getMmaRetType(TensorCoreType mmaType, MLIRContext *ctx) {
+  Type fp64Ty = type::f64Ty(ctx);
   Type fp32Ty = type::f32Ty(ctx);
   Type fp16Ty = type::f16Ty(ctx);
   Type i32Ty = type::i32Ty(ctx);
+  Type fp64x4Ty =
+      LLVM::LLVMStructType::getLiteral(ctx, SmallVector<Type>(4, fp64Ty));
   Type fp32x4Ty =
       LLVM::LLVMStructType::getLiteral(ctx, SmallVector<Type>(4, fp32Ty));
   Type i32x4Ty =
@@ -283,8 +304,15 @@ static Type getMmaRetType(TensorCoreType mmaType, MLIRContext *ctx) {
   case TensorCoreType::FP32_FP8E4M3FN_FP8E5M2_FP32:
   case TensorCoreType::FP32_FP8E4M3FN_FP8E4M3FN_FP32:
     return fp32x4Ty;
+  case TensorCoreType::FP16_FP8E5M2_FP8E5M2_FP16:
+  case TensorCoreType::FP16_FP8E5M2_FP8E4M3FN_FP16:
+  case TensorCoreType::FP16_FP8E4M3FN_FP8E5M2_FP16:
+  case TensorCoreType::FP16_FP8E4M3FN_FP8E4M3FN_FP16:
+    return fp16x2Pack2Ty;
   case TensorCoreType::INT32_INT8_INT8_INT32:
     return i32x4Ty;
+  case TensorCoreType::FP64_FP64_FP64_FP64:
+    return fp64x4Ty;
   default:
     llvm::report_fatal_error("Unsupported mma type found");
   }
@@ -324,6 +352,21 @@ static TensorCoreType getMmaType(triton::DotOp op) {
   } else if (dTy.getElementType().isF16()) {
     if (aTy.getElementType().isF16() && bTy.getElementType().isF16())
       return TensorCoreType::FP16_FP16_FP16_FP16;
+    if (llvm::isa<Float8E5M2Type>(aTy.getElementType()) &&
+        llvm::isa<Float8E5M2Type>(bTy.getElementType()))
+      return TensorCoreType::FP16_FP8E5M2_FP8E5M2_FP16;
+    if (llvm::isa<Float8E5M2Type>(aTy.getElementType()) &&
+        llvm::isa<Float8E4M3FNType>(bTy.getElementType()))
+      return TensorCoreType::FP16_FP8E5M2_FP8E4M3FN_FP16;
+    if (llvm::isa<Float8E4M3FNType>(aTy.getElementType()) &&
+        llvm::isa<Float8E5M2Type>(bTy.getElementType()))
+      return TensorCoreType::FP16_FP8E4M3FN_FP8E5M2_FP16;
+    if (llvm::isa<Float8E4M3FNType>(aTy.getElementType()) &&
+        llvm::isa<Float8E4M3FNType>(bTy.getElementType()))
+      return TensorCoreType::FP16_FP8E4M3FN_FP8E4M3FN_FP16;
+  } else if (dTy.getElementType().isF64()) {
+    if (aTy.getElementType().isF64() && bTy.getElementType().isF64())
+      return TensorCoreType::FP64_FP64_FP64_FP64;
   }
 
   return TensorCoreType::NOT_APPLICABLE;
@@ -366,6 +409,23 @@ inline static const std::map<TensorCoreType, std::string> mmaInstrPtxAmpere = {
      "mma.sync.aligned.m16n8k32.row.col.f32.e4m3.e5m2.f32"},
     {TensorCoreType::FP32_FP8E4M3FN_FP8E4M3FN_FP32,
      "mma.sync.aligned.m16n8k32.row.col.f32.e4m3.e4m3.f32"},
+
+    {TensorCoreType::FP16_FP8E5M2_FP8E5M2_FP16,
+     "mma.sync.aligned.m16n8k32.row.col.f16.e5m2.e5m2.f16"},
+    {TensorCoreType::FP16_FP8E5M2_FP8E4M3FN_FP16,
+     "mma.sync.aligned.m16n8k32.row.col.f16.e5m2.e4m3.f16"},
+    {TensorCoreType::FP16_FP8E4M3FN_FP8E5M2_FP16,
+     "mma.sync.aligned.m16n8k32.row.col.f16.e4m3.e5m2.f16"},
+    {TensorCoreType::FP16_FP8E4M3FN_FP8E4M3FN_FP16,
+     "mma.sync.aligned.m16n8k32.row.col.f16.e4m3.e4m3.f16"},
+
+    {TensorCoreType::FP64_FP64_FP64_FP64,
+     "mma.sync.aligned.m8n8k4.row.col.f64.f64.f64.f64"},
+};
+
+inline static const std::map<TensorCoreType, std::string> mmaInstrPtxHopper = {
+    {TensorCoreType::FP64_FP64_FP64_FP64,
+     "mma.sync.aligned.m16n8k16.row.col.f64.f64.f64.f64"},
 };
 
 static void callMmaTuringInt8(PTXBuilder &builder, int b, int m, int n, int k,
@@ -442,14 +502,51 @@ static void callMmaTuringFp16(PTXBuilder &builder, int b, int m, int n, int k,
   mma(retArgs, aArgs2, bArgs2, cArgs);
 }
 
-static void callMmaAmpere(PTXBuilder &builder, int b, int m, int n, int k,
-                          mlir::triton::PTXInstr &mma, unsigned numMmaRets,
-                          unsigned colsPerThread, int numCPackedElem,
-                          unsigned batchOffset, ValueTableV2 &ha,
-                          ValueTableV2 &hb, const SmallVector<Value> &fc,
-                          bool isAccF16, bool isIntMMA) {
-  auto retArgs =
-      builder.newListOperand(numMmaRets, isIntMMA || isAccF16 ? "=r" : "=f");
+// Repeat m8n8k4 (2, 1, 4) times, as m16n8k16 on hopper.
+static void callMmaAmpereFp64(PTXBuilder &builder, int b, int m, int n, int k,
+                              mlir::triton::PTXInstr &mma, unsigned numMmaRets,
+                              unsigned colsPerThread, int numCPackedElem,
+                              unsigned batchOffset, ValueTableV2 &ha,
+                              ValueTableV2 &hb, const SmallVector<Value> &fc) {
+  auto retArgs1 = builder.newListOperand(numMmaRets / 2, "=d");
+  auto retArgs2 = builder.newListOperand(numMmaRets / 2, "=d");
+  auto cArgs1 = builder.newListOperand();
+  for (int i = 0; i < numMmaRets / 2; ++i) {
+    cArgs1->listAppend(builder.newOperand(
+        fc[(m * colsPerThread + 4 * n) / numCPackedElem + i + batchOffset * b],
+        std::to_string(i)));
+    // reuse the output registers
+  }
+  auto cArgs2 = builder.newListOperand();
+  for (int i = numMmaRets / 2; i < numMmaRets; ++i) {
+    cArgs2->listAppend(builder.newOperand(
+        fc[(m * colsPerThread + 4 * n) / numCPackedElem + i + batchOffset * b],
+        std::to_string(i)));
+    // reuse the output registers
+  }
+
+  for (int vk = 0; vk < 4; ++vk) {
+    auto aArgs1 = builder.newListOperand({
+        {ha[{b, m, k + vk}], "d"},
+    });
+    auto bArgs = builder.newListOperand({{hb[{b, n, k + vk}], "d"}});
+    auto aArgs2 = builder.newListOperand({
+        {ha[{b, m + 1, k + vk}], "d"},
+    });
+    mma(retArgs1, aArgs1, bArgs, cArgs1);
+    mma(retArgs2, aArgs2, bArgs, cArgs2);
+  }
+}
+
+// Unified MMAV2 function for Ampere and HopperF64 architectures
+static void callMmaV2(PTXBuilder &builder, int b, int m, int n, int k,
+                      mlir::triton::PTXInstr &mma, unsigned numMmaRets,
+                      unsigned colsPerThread, int numCPackedElem,
+                      unsigned batchOffset, ValueTableV2 &ha, ValueTableV2 &hb,
+                      const SmallVector<Value> &fc,
+                      const std::string &constraintRet,
+                      const std::string &constraintAB, int numVecK) {
+  auto retArgs = builder.newListOperand(numMmaRets, constraintRet);
   auto cArgs = builder.newListOperand();
   for (int i = 0; i < numMmaRets; ++i) {
     cArgs->listAppend(builder.newOperand(
@@ -457,14 +554,18 @@ static void callMmaAmpere(PTXBuilder &builder, int b, int m, int n, int k,
         std::to_string(i)));
     // reuse the output registers
   }
-  auto aArgs = builder.newListOperand({
-      {ha[{b, m, k}], "r"},
-      {ha[{b, m + 1, k}], "r"},
-      {ha[{b, m, k + 1}], "r"},
-      {ha[{b, m + 1, k + 1}], "r"},
-  });
-  auto bArgs =
-      builder.newListOperand({{hb[{b, n, k}], "r"}, {hb[{b, n, k + 1}], "r"}});
+
+  auto aArgs = builder.newListOperand();
+  for (int vk = 0; vk < numVecK; ++vk) {
+    aArgs->listAppend(builder.newOperand(ha[{b, m, k + vk}], constraintAB));
+    aArgs->listAppend(builder.newOperand(ha[{b, m + 1, k + vk}], constraintAB));
+  }
+
+  auto bArgs = builder.newListOperand();
+  for (int vk = 0; vk < numVecK; ++vk) {
+    bArgs->listAppend(builder.newOperand(hb[{b, n, k + vk}], constraintAB));
+  }
+
   mma(retArgs, aArgs, bArgs, cArgs);
 }
 
@@ -472,7 +573,8 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
                          ConversionPatternRewriter &rewriter, Location loc,
                          Value a, Value b, Value c, Value d, Value loadedA,
                          Value loadedB, Value loadedC, DotOp op,
-                         DotOpAdaptor adaptor, bool isTuring) {
+                         DotOpAdaptor adaptor, bool isTuring,
+                         bool isHopperF64) {
   auto tb = TritonLLVMOpBuilder(loc, rewriter);
   MLIRContext *ctx = c.getContext();
   auto aTensorTy = cast<RankedTensorType>(a.getType());
@@ -504,23 +606,28 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
   assert(dotOpA.getRepOrder() == getOrderForDotOperand(dotOpA.getOpIdx(),
                                                        aShapePerCTA.size(),
                                                        /*kContig=*/true));
-  auto ha = getValuesFromDotOperandLayoutStruct(
-      typeConverter, loc, rewriter, loadedA, repBatch, repM, repK, aTensorTy);
+  auto ha = getValuesFromDotOperandLayoutStruct(typeConverter, loc, rewriter,
+                                                loadedA, repBatch, repM, repK,
+                                                aTensorTy, isHopperF64);
 
   assert(dotOpB.getRepOrder() == getOrderForDotOperand(dotOpB.getOpIdx(),
                                                        bShapePerCTA.size(),
                                                        /*kContig=*/true));
-  auto hb = getValuesFromDotOperandLayoutStruct(
-      typeConverter, loc, rewriter, loadedB, repBatch, repN, repK, bTensorTy);
+  auto hb = getValuesFromDotOperandLayoutStruct(typeConverter, loc, rewriter,
+                                                loadedB, repBatch, repN, repK,
+                                                bTensorTy, isHopperF64);
 
   auto fc = unpackLLElements(loc, loadedC, rewriter);
-  auto numMmaRets = dTensorTy.getElementType().getIntOrFloatBitWidth() / 8;
+
+  int bitwidthRet = dTensorTy.getElementType().getIntOrFloatBitWidth();
+  auto numMmaRets = bitwidthRet == 64 ? 4 : bitwidthRet / 8;
   int numCPackedElem = 4 / numMmaRets;
 
   auto mmaType = getMmaType(op);
 
-  const auto &mmaInstructions =
-      isTuring ? mmaInstrPtxTuring : mmaInstrPtxAmpere;
+  const auto &mmaInstructions = isTuring      ? mmaInstrPtxTuring
+                                : isHopperF64 ? mmaInstrPtxHopper
+                                              : mmaInstrPtxAmpere;
   if (mmaInstructions.find(mmaType) == mmaInstructions.end()) {
     return emitError(loc, "Unsupported MMA instruction for the given mma type");
   }
@@ -535,6 +642,7 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
     // using =r for float32 works but leads to less readable ptx.
     bool isIntMMA = dTensorTy.getElementType().isInteger(32);
     bool isAccF16 = dTensorTy.getElementType().isF16();
+    bool isFp64MMA = dTensorTy.getElementType().isF64();
 
     if (isTuring) {
       assert(b == 0 && "Turing only supports batch size 1");
@@ -544,10 +652,20 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
       else // Turing fp16
         callMmaTuringFp16(builder, b, m, n, k, mma, numMmaRets, colsPerThread,
                           numCPackedElem, ha, hb, fc, isAccF16);
-    } else { // Ampere
-      callMmaAmpere(builder, b, m, n, k, mma, numMmaRets, colsPerThread,
-                    numCPackedElem, batchOffset, ha, hb, fc, isAccF16,
-                    isIntMMA);
+    } else { // Ampere and later
+      if (isFp64MMA) {
+        if (!isHopperF64) {
+          callMmaAmpereFp64(builder, b, m, n, k, mma, numMmaRets, colsPerThread,
+                            numCPackedElem, batchOffset, ha, hb, fc);
+        } else {
+          callMmaV2(builder, b, m, n, k, mma, numMmaRets, colsPerThread,
+                    numCPackedElem, batchOffset, ha, hb, fc, "=d", "d", 4);
+        }
+      } else {
+        callMmaV2(builder, b, m, n, k, mma, numMmaRets, colsPerThread,
+                  numCPackedElem, batchOffset, ha, hb, fc,
+                  isIntMMA || isAccF16 ? "=r" : "=f", "r", 2);
+      }
     }
 
     Value mmaOut =
@@ -563,8 +681,10 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
   for (int b = 0; b < repBatch; ++b)
     for (int k = 0; k < repK; ++k)
       for (int m = 0; m < repM; ++m)
-        for (int n = 0; n < repN; ++n)
-          callMma(b, 2 * m, n, 2 * k);
+        for (int n = 0; n < repN; ++n) {
+          auto numVecK = bitwidth == 64 ? 4 : 2;
+          callMma(b, 2 * m, n, k * numVecK);
+        }
 
   Type resElemTy = dTensorTy.getElementType();
 
@@ -587,9 +707,11 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
   return success();
 }
 
+// Convert to mma.m16n8k?
 LogicalResult convertMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                          const LLVMTypeConverter *typeConverter,
-                         ConversionPatternRewriter &rewriter, bool isTuring) {
+                         ConversionPatternRewriter &rewriter, bool isTuring,
+                         bool isHopperF64) {
   assert(mlir::isa<DotOperandEncodingAttr>(op.getA().getType().getEncoding()) &&
          mlir::isa<DotOperandEncodingAttr>(op.getB().getType().getEncoding()) &&
          "Both $a and %b should be DotOperand layout.");
@@ -598,19 +720,5 @@ LogicalResult convertMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
       loadC(op.getC(), adaptor.getC(), typeConverter, op.getLoc(), rewriter);
   return convertDot(typeConverter, rewriter, op.getLoc(), op.getA(), op.getB(),
                     op.getC(), op.getD(), adaptor.getA(), adaptor.getB(),
-                    loadedC, op, adaptor, isTuring);
-}
-
-// Convert to mma.m16n8k8
-LogicalResult convertMMA1688(triton::DotOp op, triton::DotOp::Adaptor adaptor,
-                             const LLVMTypeConverter *typeConverter,
-                             ConversionPatternRewriter &rewriter) {
-  return convertMMA(op, adaptor, typeConverter, rewriter, true /*isTuring*/);
-}
-
-// Convert to mma.m16n8k16
-LogicalResult convertMMA16816(triton::DotOp op, triton::DotOp::Adaptor adaptor,
-                              const LLVMTypeConverter *typeConverter,
-                              ConversionPatternRewriter &rewriter) {
-  return convertMMA(op, adaptor, typeConverter, rewriter, false /*isTuring*/);
+                    loadedC, op, adaptor, isTuring, isHopperF64);
 }

@@ -101,7 +101,7 @@ jobs:
           pytest --capture=tee-sys -rfs third_party/amd/python/test/test_extract_slice_concat_op.py
           TRITON_ALWAYS_COMPILE=1 pytest --capture=tee-sys -rfs third_party/amd/python/test/test_scalarize_packed_fops.py
           cd python/test/unit
-          pytest --capture=tee-sys -rfs -n 12 language runtime \
+          pytest --capture=tee-sys -rfs -n 12 language runtime tools \
                  --ignore=language/test_line_info.py \
                  --ignore=test_debug.py
           # TODO: uncomment

@@ -62,7 +62,7 @@ def streaming_topk(X, stride_xm, n_expts_tot, offs_m, mask_m, N_EXPTS_PAD: tl.co
     acc = tl.topk(x, N_EXPTS_ACT, dim=1)
 
     # subsequent iterations:
-    for _i in range(loop_iterations):
+    for _i in (tl.static_range if loop_iterations <= 4 else range)(loop_iterations):
         acc = tl.bitonic_merge(acc)  # ensure sorted ascending for the merge
         X_ptrs -= BLOCK_N
         offs_x_n -= BLOCK_N

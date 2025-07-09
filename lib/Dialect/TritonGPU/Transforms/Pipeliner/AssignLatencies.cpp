@@ -67,26 +67,16 @@ public:
     ModuleOp moduleOp = forOp->getParentOfType<ModuleOp>();
     tt::ModuleAxisInfoAnalysis axisInfoAnalysis(moduleOp);
 
-    llvm::MapVector<Operation *, int> loadOpToIndLevel =
-        loadOpsToIndirectionLevel(forOp, pipelineWithoutDot, axisInfoAnalysis);
+    llvm::MapVector<Operation *, std::pair<int, Operation *>> loadOpToIndLevel =
+        loadOpsToIndirectionLevel(forOp, pipelineWithoutDot, axisInfoAnalysis,
+                                  numStages);
     if (loadOpToIndLevel.empty())
       return;
 
-    // We assume loads with different dist are assigned to different stages.
-    // If numStages is 2, we will have no stage available for indirect loads
-    // with dist >= 1. In general, when dist is equal to numStages - 1, we
-    // should not pipeline it.
-    for (auto iter = loadOpToIndLevel.begin();
-         iter != loadOpToIndLevel.end();) {
-      if (iter->second >= numStages - 1)
-        iter = loadOpToIndLevel.erase(iter);
-      else
-        ++iter;
-    }
-
     // Calculate the stage distance between applicable loads.
-    auto vals = llvm::make_second_range(loadOpToIndLevel);
-    int maxIndirectionLevel = vals.empty() ? 0 : *llvm::max_element(vals);
+    int maxIndirectionLevel = 0;
+    for (auto &[loadOp, info] : loadOpToIndLevel)
+      maxIndirectionLevel = std::max(maxIndirectionLevel, info.first);
     unsigned loadLatency = (numStages - 1) / (maxIndirectionLevel + 1);
 
     for (auto [loadOp, dist] : loadOpToIndLevel) {
@@ -99,17 +89,20 @@ private:
   int numStages;
   DenseMap<Operation *, int> &opLatency;
 
-  bool canHaveSharedEncoding(tt::LoadOp op) {
+public:
+  static bool canHaveSharedEncoding(tt::LoadOp op) {
     // If used by an user with DotOp encoding, all the uses must be compatible.
     bool incompatible = false;
     getSharedEncIfAllUsersAreDotEnc(op.getResult(), incompatible);
     return !incompatible;
   }
 
-  bool isPipeliningBeneficial(Operation *op, Operation *finalUser,
-                              tt::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
+  static bool
+  isPipeliningBeneficial(Operation *op, Operation *finalUser,
+                         tt::ModuleAxisInfoAnalysis &axisInfoAnalysis,
+                         bool filterSmall) {
     if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
-      if (!canBeConvertedToAsyncLoad(loadOp, axisInfoAnalysis)) {
+      if (filterSmall && !canBeConvertedToAsyncLoad(loadOp, axisInfoAnalysis)) {
         LDBG("Load " << *loadOp << " is too small for pipelining");
         return false;
       }
@@ -145,89 +138,13 @@ private:
     if (localAllocEnc) {
       auto registerTy = cast<RankedTensorType>(op->getResultTypes()[0]);
       auto vecBytes = getCopyVecBytes(registerTy, localAllocEnc);
-      if (vecBytes < 4) {
+      if (filterSmall && vecBytes < 4) {
         // At least 4 bytes need to be consecutive for cp.async
         return false;
       }
     }
 
     return true;
-  }
-
-  // Create a map from load ops to their indirection level and the
-  // final use of the load op (another load op, or a dot op).
-  // Indirection level is "0" for the load op directly used by the dot op,
-  // "1" for the load op used by the load op used by the dot op, and so on.
-  llvm::MapVector<Operation *, int>
-  loadOpsToIndirectionLevel(scf::ForOp forOp, bool pipelineWithoutDot,
-                            tt::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
-    llvm::MapVector<Operation *, int> loadOpToIndLevel;
-    DenseSet<Operation *> seen;
-    DenseSet<Operation *> excluded;
-
-    std::function<void(Operation *, Operation *, int)> dfs =
-        [&](Operation *op, Operation *finalUser, int distance) {
-          if (!seen.insert(op).second || excluded.count(op))
-            return;
-          if (isa<tt::LoadOp, tt::DescriptorLoadOp, tt::DescriptorGatherOp>(
-                  op)) {
-            if (!isPipeliningBeneficial(op, finalUser, axisInfoAnalysis))
-              return;
-            if (loadOpToIndLevel.count(op)) {
-              int level = loadOpToIndLevel[op];
-              if (level != distance) {
-                // If we have multiple uses at different distances, we don't
-                // know which one to pick.
-                LDBG("Load " << *op
-                             << " has multiple uses at different distances:"
-                             << level << " and " << distance);
-                loadOpToIndLevel.erase(op);
-                excluded.insert(op);
-                return;
-              }
-            } else {
-              LDBG("Load " << *op << " considered for pipelining with distance "
-                           << distance);
-              loadOpToIndLevel[op] = distance;
-            }
-            finalUser = op;
-            distance++;
-          }
-          for (Value operand : getNestedOperands(op)) {
-            if (isa<mlir::triton::DotOpInterface>(op)) {
-              // Heuristic: only pipeline A and B operands of the dot op.
-              if (operand == op->getOperand(2))
-                continue;
-            }
-            Value v = operand;
-            Operation *defOp = v.getDefiningOp();
-            if (defOp && defOp->getBlock() == op->getBlock()) {
-              dfs(defOp, finalUser, distance);
-            }
-          }
-        };
-
-    bool seenDot = false;
-    for (Operation &op : forOp.getBody()->without_terminator()) {
-      // Arbitrary heuristic. TMEMStoreOp is included to keep logic consistent
-      // with legacy code when we weren't hoisting tmem allocas.
-      if (!isa<mlir::triton::DotOpInterface, ttng::TMEMStoreOp>(op))
-        continue;
-      seenDot = true;
-      seen.clear();
-      dfs(&op, &op, 0);
-    }
-
-    // If the loop has numStages attribute, also consider pipelining other loads
-    // that are not directly used by dot ops.
-    if (pipelineWithoutDot && !seenDot) {
-      for (Operation &op : forOp.getBody()->without_terminator()) {
-        if (!isa<tt::LoadOp, tt::DescriptorLoadOp, tt::DescriptorGatherOp>(op))
-          dfs(&op, &op, 0);
-      }
-    }
-
-    return loadOpToIndLevel;
   }
 };
 
@@ -334,6 +251,94 @@ void assignLatencies(ModuleOp moduleOp, int defaultNumStages) {
 }
 
 } // namespace
+
+// Create a map from load ops to their indirection level and the
+// final use of the load op (another load op, or a dot op).
+// Indirection level is "0" for the load op directly used by the dot op,
+// "1" for the load op used by the load op used by the dot op, and so on.
+llvm::MapVector<Operation *, std::pair<int, Operation *>>
+loadOpsToIndirectionLevel(scf::ForOp forOp, bool pipelineWithoutDot,
+                          tt::ModuleAxisInfoAnalysis &axisInfoAnalysis,
+                          int numStages, bool filterSmall) {
+  llvm::MapVector<Operation *, std::pair<int, Operation *>> loadOpToIndLevel;
+  DenseSet<Operation *> seen;
+  DenseSet<Operation *> excluded;
+
+  std::function<void(Operation *, Operation *, int)> dfs =
+      [&](Operation *op, Operation *finalUser, int distance) {
+        if (!seen.insert(op).second || excluded.count(op))
+          return;
+        if (isa<tt::LoadOp, tt::DescriptorLoadOp, tt::DescriptorGatherOp>(op)) {
+          if (!AssignLoadLatencies::isPipeliningBeneficial(
+                  op, finalUser, axisInfoAnalysis, filterSmall))
+            return;
+          if (loadOpToIndLevel.count(op)) {
+            int level = loadOpToIndLevel[op].first;
+            if (level != distance) {
+              // If we have multiple uses at different distances, we don't
+              // know which one to pick.
+              LDBG("Load " << *op
+                           << " has multiple uses at different distances:"
+                           << level << " and " << distance);
+              loadOpToIndLevel.erase(op);
+              excluded.insert(op);
+              return;
+            }
+          } else {
+            LDBG("Load " << *op << " considered for pipelining with distance "
+                         << distance);
+            loadOpToIndLevel[op] = {distance, finalUser};
+          }
+          finalUser = op;
+          distance++;
+        }
+        for (Value operand : getNestedOperands(op)) {
+          if (isa<mlir::triton::DotOpInterface>(op)) {
+            // Heuristic: only pipeline A and B operands of the dot op.
+            if (operand == op->getOperand(2))
+              continue;
+          }
+          Value v = operand;
+          Operation *defOp = v.getDefiningOp();
+          if (defOp && defOp->getBlock() == op->getBlock()) {
+            dfs(defOp, finalUser, distance);
+          }
+        }
+      };
+
+  bool seenDot = false;
+  for (Operation &op : forOp.getBody()->without_terminator()) {
+    // Arbitrary heuristic. TMEMStoreOp is included to keep logic consistent
+    // with legacy code when we weren't hoisting tmem allocas.
+    if (!isa<mlir::triton::DotOpInterface, ttng::TMEMStoreOp>(op))
+      continue;
+    seenDot = true;
+    seen.clear();
+    dfs(&op, &op, 0);
+  }
+
+  // If the loop has numStages attribute, also consider pipelining other loads
+  // that are not directly used by dot ops.
+  if (pipelineWithoutDot && !seenDot) {
+    for (Operation &op : forOp.getBody()->without_terminator()) {
+      if (!isa<tt::LoadOp, tt::DescriptorLoadOp, tt::DescriptorGatherOp>(op))
+        dfs(&op, &op, 0);
+    }
+  }
+
+  // We assume loads with different dist are assigned to different stages.
+  // If numStages is 2, we will have no stage available for indirect loads
+  // with dist >= 1. In general, when dist is equal to numStages - 1, we
+  // should not pipeline it.
+  for (auto iter = loadOpToIndLevel.begin(); iter != loadOpToIndLevel.end();) {
+    if (iter->second.first >= numStages - 1)
+      iter = loadOpToIndLevel.erase(iter);
+    else
+      ++iter;
+  }
+
+  return loadOpToIndLevel;
+}
 
 //===----------------------------------------------------------------------===//
 // Pass Definition

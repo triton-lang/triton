@@ -130,16 +130,29 @@ def check_type_supported(dtype, device):
             pytest.skip("bfloat16 is not supported in the interpreter")
 
 
+def get_src_element_ty_size(dtype_str):
+    if dtype_str in ["int8", "uint8", "float8e4b15"]:
+        return 1
+    if dtype_str == "float16":
+        return 2
+    if dtype_str == "float32" or dtype_str == "tensorfloat32":
+        return 4
+    if dtype_str == "float64":
+        return 8
+    raise ValueError(f"Unknown dtype {dtype_str}")
+
+
 class MfmaLayout:
 
-    def __init__(self, version, warps_per_cta, instr_shape, is_transposed):
+    def __init__(self, version, warps_per_cta, tiles_per_warp, instr_shape, is_transposed):
         self.version = version
         self.warps_per_cta = warps_per_cta
+        self.tiles_per_warp = tiles_per_warp
         self.instr_shape = instr_shape
         self.is_transposed = is_transposed
 
     def __str__(self):
-        return f"#{GPU_DIALECT}.amd_mfma<{{versionMajor={self.version[0]}, versionMinor={self.version[1]}, warpsPerCTA = {self.warps_per_cta}, instrShape={self.instr_shape}, isTransposed = {str(self.is_transposed).lower()}}}>"
+        return f"#{GPU_DIALECT}.amd_mfma<{{versionMajor={self.version[0]}, versionMinor={self.version[1]}, warpsPerCTA = {self.warps_per_cta}, tilesPerWarp = {self.tiles_per_warp}, instrShape={self.instr_shape}, isTransposed = {str(self.is_transposed).lower()}}}>"
 
 
 class WmmaLayout:
@@ -1732,6 +1745,36 @@ def test_tensor_atomic_add_non_exclusive_offset(size, num_ctas, dtype_x_str, dev
 
 
 @pytest.mark.interpreter
+@pytest.mark.parametrize("size, num_ctas, dtype_x_str", [(size, num_ctas, dtype_x_str)
+                                                         for size in [2, 4, 8, 32, 64, 128]
+                                                         for num_ctas in num_ctas_list
+                                                         for dtype_x_str in ['bfloat16', 'float16', 'float32']])
+def test_tensor_atomic_add_shift_1(size, num_ctas, dtype_x_str, device):
+    check_type_supported(dtype_x_str, device)
+
+    @triton.jit
+    def kernel(X, val, NUM: tl.constexpr):
+        off_x = tl.arange(0, 2)
+        off_y = tl.arange(0, NUM)
+        off_in = off_x[:, None] * NUM + off_y[None, :]
+        off_out = off_x[:, None] + off_y[None, :]
+
+        val = tl.load(val + off_in)
+        tl.atomic_add(X + off_out, val)
+
+    s = (2, size)
+    dtype = getattr(torch, dtype_x_str)
+    x = torch.zeros(s, dtype=dtype, device=device)
+    ref = torch.flatten(x)
+    val = torch.randn(s, dtype=dtype, device=device)
+    kernel[(1, )](x, val, size, num_warps=1, num_ctas=num_ctas)
+    val = torch.flatten(val)
+    ref[0:size] = val[0:size]
+    ref[1:size + 1] += val[size:2 * size]
+    torch.testing.assert_close(ref, torch.flatten(x))
+
+
+@pytest.mark.interpreter
 @pytest.mark.parametrize("shape, idx_order, mask_step, num_ctas, dtype_x_str",
                          [(shape, idx_order, mask_step, num_ctas, dtype_x_str)
                           for shape in [(2, 2), (4, 4), (5, 5), (6, 6), (8, 8)]
@@ -2389,6 +2432,49 @@ def test_max_returns_zero(device):
 
     kernel[(1, )](x, z, BLOCK=BLOCK)
     assert z[0] == 0
+
+
+@pytest.mark.interpreter
+def test_max_min_with_nan(device):
+    # In triton, we implement a "nan ignore" style, which means if there is NaN
+    # in the reduce dimesion, we should ignore it and return the max/min number,
+    # it's different with torch.max/min.
+    @triton.jit
+    def max_kernel(x_ptr, y_ptr, BLOCK_SIZE: tl.constexpr):
+        offsets = tl.arange(0, BLOCK_SIZE)
+        x = tl.load(x_ptr + offsets)
+
+        max_val = tl.max(x, axis=0)
+
+        if tl.program_id(0) == 0:
+            tl.store(y_ptr, max_val)
+
+    @triton.jit
+    def min_kernel(x_ptr, y_ptr, BLOCK_SIZE: tl.constexpr):
+        offsets = tl.arange(0, BLOCK_SIZE)
+        x = tl.load(x_ptr + offsets)
+
+        min_val = tl.min(x, axis=0)
+
+        if tl.program_id(0) == 0:
+            tl.store(y_ptr, min_val)
+
+    BLOCK_SIZE = 64
+    x = torch.rand((1, BLOCK_SIZE), dtype=torch.float32, device=device)
+    # Not the expected output for tl.max
+    x[0, 0] = float('nan')
+    # Expected output for tl.min
+    x[0, 1] = float('-inf')
+    # Expected output for tl.max
+    x[0, 2] = float('inf')
+
+    y = torch.ones(1, device=device)
+
+    max_kernel[(1, )](x, y, BLOCK_SIZE=BLOCK_SIZE)
+    assert y[0] == float('inf')
+
+    min_kernel[(1, )](x, y, BLOCK_SIZE=BLOCK_SIZE)
+    assert y[0] == float('-inf')
 
 
 def get_reduced_dtype(dtype_str, op):
@@ -3090,10 +3176,10 @@ layouts = [
               instr_shape=[16, 8]),
     MmaLayout(version=(3, 0), warps_per_cta=[4, 1], ctas_per_cga=[1, 1], cta_split_num=[1, 1], cta_order=[1, 0],
               instr_shape=[16, 16, 16]),
-    MfmaLayout(version=(2, 0), warps_per_cta=[4, 1], instr_shape=[32, 32], is_transposed=False),
-    MfmaLayout(version=(2, 0), warps_per_cta=[1, 4], instr_shape=[32, 32], is_transposed=False),
-    MfmaLayout(version=(2, 0), warps_per_cta=[4, 1], instr_shape=[32, 32], is_transposed=True),
-    MfmaLayout(version=(2, 0), warps_per_cta=[1, 4], instr_shape=[32, 32], is_transposed=True),
+    MfmaLayout(version=(2, 0), warps_per_cta=[4, 1], tiles_per_warp=[1, 1], instr_shape=[32, 32], is_transposed=False),
+    MfmaLayout(version=(2, 0), warps_per_cta=[1, 4], tiles_per_warp=[1, 1], instr_shape=[32, 32], is_transposed=False),
+    MfmaLayout(version=(2, 0), warps_per_cta=[4, 1], tiles_per_warp=[1, 1], instr_shape=[32, 32], is_transposed=True),
+    MfmaLayout(version=(2, 0), warps_per_cta=[1, 4], tiles_per_warp=[1, 1], instr_shape=[32, 32], is_transposed=True),
     WmmaLayout(version=1, warps_per_cta=[4, 1]),
     WmmaLayout(version=1, warps_per_cta=[1, 4]),
     DotOperandLayout(parent=MmaLayout([2, 0], [2, 4], [1, 1], [1, 1], [1, 0], [16, 8]), op_idx=1, k_width=8),
@@ -3658,7 +3744,9 @@ def get_test_dot_base_cases():
             for shape in [(64, 64, 64), (32, 32, 32), (16, 16, 16)]
             for epilogue in ['none', 'trans', 'add-matrix', 'add-rows', 'add-cols', 'softmax', 'chain-dot']
             for input_precision in ['tf32', 'tf32x3', 'ieee']
-            for in_dtype, out_dtype in [('float16', 'float16'), ('float16', 'float32'), ('float32', 'float32')]
+            for in_dtype, out_dtype in [('float16', 'float16'), ('float16',
+                                                                 'float32'), ('float32',
+                                                                              'float32'), ('float64', 'float64')]
             if not (input_precision != 'ieee' and (in_dtype in ['float16']))]
 
 
@@ -3791,6 +3879,8 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
                     pytest.skip("Only test out_dtype=float16 on devices with sm >=80")
             if capability[0] < 9 and in_dtype == 'float8e4nv':
                 pytest.skip("float8e4nv not supported on sm <= 80")
+            if in_dtype == 'float64' and input_precision != 'ieee':
+                pytest.skip("Only IEEE precision is supported for float64 dot")
 
         if is_hip():
             if in_dtype in ("float8e5", "float8e4nv") and not (is_hip_cdna4() or is_hip_gfx12()):
@@ -3801,6 +3891,9 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
                 pytest.skip(f"{input_precision} not supported on HIP")
             if kpack == 2 and in_dtype == 'int8' and K < 64:
                 pytest.skip("kpack too large for K")
+            if in_dtype == 'float64':
+                pytest.skip("float64 not supported on HIP yet")
+
         if not is_hip() and kpack == 2:
             pytest.skip("Skip duplicated tests on nv path")
 
@@ -3962,11 +4055,17 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
 
     # make sure ld/st are vectorized
     ptx = pgm.asm['ptx']
+
     if (K > 16 or N > 16 or M > 16) and (M * N // (num_warps * 32) >= 4):
         # XXX: skip small sizes because they are not vectorized
-        assert 'ld.global.v4' in ptx
+        if 'float64' in in_dtype:
+            assert 'ld.global.v2.b64' in ptx
+        else:
+            assert 'ld.global.v4' in ptx
         if 'float8' in in_dtype:
             assert 'st.global.v2' in ptx
+        elif 'float64' in in_dtype:
+            assert 'st.global.v2.b64' in ptx
         else:
             assert 'st.global.v4' in ptx
 
@@ -4275,23 +4374,24 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
 
 
 @pytest.mark.interpreter
-@pytest.mark.parametrize("B, num_warps, M, N, K, BLOCK_M, BLOCK_N, in_dtype_str, out_dtype_str",
-                         [(B, num_warps, M, N, K, BLOCK_M, BLOCK_N, in_dtype_str, out_dtype_str)
-                          for B in [1, 2, 4, 8]
-                          for num_warps in [1, 2, 4, 8, 16]
-                          for BLOCK_M, BLOCK_N in [(32, 32)]
-                          for M, N, K in [(64, 64, 64), (32, 32, 32)]
-                          for in_dtype_str, out_dtype_str in [('int8', 'int8'), ('float16', 'float16'),
-                                                              ('float16', 'float32'), ('float32', 'float32')]] +
-                         # Large block sizes
-                         [(4, 4, 128, 128, 64, 64, 64, 'float16', 'float16')] +
-                         # Small block sizes
-                         [(B, num_warps, M, N, K, BLOCK_M, BLOCK_N, in_dtype_str, out_dtype_str)
-                          for B in [1, 2, 8]
-                          for num_warps in [1, 2, 4]
-                          for BLOCK_M, BLOCK_N in [(1, 32), (32, 2), (8, 8)]
-                          for M, N, K in [(32, 32, 32)]
-                          for in_dtype_str, out_dtype_str in [('float16', 'float16'), ('float32', 'float32')]])
+@pytest.mark.parametrize(
+    "B, num_warps, M, N, K, BLOCK_M, BLOCK_N, in_dtype_str, out_dtype_str",
+    [(B, num_warps, M, N, K, BLOCK_M, BLOCK_N, in_dtype_str, out_dtype_str)
+     for B in [1, 2, 4, 8]
+     for num_warps in [1, 2, 4, 8, 16]
+     for BLOCK_M, BLOCK_N in [(32, 32)]
+     for M, N, K in [(64, 64, 64), (32, 32, 32)]
+     for in_dtype_str, out_dtype_str in [('int8', 'int8'), ('float16', 'float16'), ('float16', 'float32'),
+                                         ('float32', 'float32'), ('float64', 'float64')]] +
+    # Large block sizes
+    [(4, 4, 128, 128, 64, 64, 64, 'float16', 'float16')] +
+    # Small block sizes
+    [(B, num_warps, M, N, K, BLOCK_M, BLOCK_N, in_dtype_str, out_dtype_str)
+     for B in [1, 2, 8]
+     for num_warps in [1, 2, 4]
+     for BLOCK_M, BLOCK_N in [(1, 32), (32, 2), (8, 8)]
+     for M, N, K in [(32, 32, 32)]
+     for in_dtype_str, out_dtype_str in [('float16', 'float16'), ('float32', 'float32')]])
 def test_dot3d(B, num_warps, M, N, K, BLOCK_M, BLOCK_N, in_dtype_str, out_dtype_str, device):
     if is_hip():
         # hip does not support tf32 precision, so use ieee for all tests
@@ -4302,17 +4402,17 @@ def test_dot3d(B, num_warps, M, N, K, BLOCK_M, BLOCK_N, in_dtype_str, out_dtype_
                 pytest.skip(f"{in_dtype_str} is not supported in WMMA dot, FMA does not support dot3d")
             if out_dtype_str == "float16":
                 pytest.skip(f"{out_dtype_str} has low precision in WMMA dot")
+        if in_dtype_str == "float64":
+            pytest.skip("float64 not supported on HIP yet")
     else:
         input_precision = "tf32" if is_cuda() and in_dtype_str == 'float32' else "ieee"
         if not is_interpreter() and (BLOCK_M < 16 or BLOCK_N < 16):
             pytest.skip("small dots are supported only on HIP at the moment")
 
-    if B == 8 and M == 64 and in_dtype_str == "float32" and out_dtype_str == "float32":
-        if not is_interpreter() and triton.runtime.driver.active.utils.get_device_properties(
-                triton.runtime.driver.active.get_current_device())["max_shared_mem"] < 131072:
-            pytest.skip(
-                "Skipping tests with B = 8, M = 64, in_type = float32, out_type = float32 due to insufficient shared memory (less than 128 KB per SM) on this GPU."
-            )
+    shared_mem_accum = B * (BLOCK_M * K + K * BLOCK_N) * get_src_element_ty_size(in_dtype_str)
+    if not is_interpreter() and triton.runtime.driver.active.utils.get_device_properties(
+            triton.runtime.driver.active.get_current_device())["max_shared_mem"] < shared_mem_accum:
+        pytest.skip("Skipped due to insufficient shared memory on this GPU.")
 
     @triton.jit
     def kernel(
@@ -5930,6 +6030,8 @@ def test_num_threads(device):
 
 
 def test_globaltimer(device):
+    if is_hip_cdna2():
+        pytest.skip("test_globaltimer is flaky on gfx90a")
     check_cuda_or_hip(device)
 
     @triton.jit
@@ -5939,20 +6041,25 @@ def test_globaltimer(device):
         for i in range(10000):
             tl.store(Out1 + off, tl.load(Out1 + off) + 1)
         end = func()
-        tl.store(Out2, end - start)
+        tl.store(Out2, start)
+        tl.store(Out2 + 1, end)
 
     out1 = to_triton(np.zeros((128, ), dtype=np.int64), device=device)
-    out2 = to_triton(np.zeros((1, ), dtype=np.int64), device=device)
+    out2 = to_triton(np.zeros((2, ), dtype=np.int64), device=device)
     if is_cuda():
         func = tl.extra.cuda.globaltimer
     else:
         func = tl.extra.hip.memrealtime
     h = kernel[(1, )](out1, out2, func)
-    assert out2[0] > 0
+    assert out2[1] - out2[0] > 0
     if is_cuda():
         assert h.asm["ptx"].count("%globaltimer") == 2
     else:
-        assert h.asm["amdgcn"].count("s_memrealtime") == 2
+        target_arch = triton.runtime.driver.active.get_current_target().arch
+        if "gfx11" in target_arch or "gfx12" in target_arch:
+            assert h.asm["amdgcn"].count("s_sendmsg_rtn_b64") == 2
+        else:
+            assert h.asm["amdgcn"].count("s_memrealtime") == 2
 
 
 def test_smid(device):
@@ -6206,6 +6313,94 @@ shared_layouts = [
 ]
 
 
+@pytest.mark.parametrize("M, N, M_tile_size, N_tile_size",
+                         [[128, 128, 64, 64], [128, 128, 64, 32], [128, 64, 64, 32], [256, 128, 64, 64]])
+def test_split_subview(M, N, M_tile_size, N_tile_size, device='cuda'):
+    if not is_hip():
+        pytest.skip("the test is temporary disabled for the Nvidia backend.")
+
+    threads_per_warp = 64 if is_hip() else 32
+    num_raws_per_warp = 16 if is_hip() else 8
+    num_repeats_M = int(M / M_tile_size)
+    num_repeats_N = int(N / N_tile_size)
+
+    ir = f"""
+    #blocked = #ttg.blocked<{{sizePerThread=[1, 8], threadsPerWarp=[{num_raws_per_warp}, 4], warpsPerCTA=[4, 1], order=[1, 0], CTAsPerCGA=[1, 1], CTASplitNum=[1, 1], CTAOrder=[0, 1]}}>
+    #shared = #ttg.swizzled_shared<{{vec = 8, perPhase = 1, maxPhase = 8, order = [1, 0]}}>
+    #smem = #ttg.shared_memory
+
+    module attributes {{"ttg.num-ctas" = 1, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = {threads_per_warp} : i32}} {{
+    tt.func public @kernel(%arg0: !tt.ptr<f16> {{tt.divisibility = 16 : i32}}) {{
+        %cst = arith.constant dense<{N}> : tensor<{M}x1xi32, #blocked>
+        %cst_n = arith.constant dense<{N_tile_size}> : tensor<{M_tile_size}x1xi32, #blocked>
+        %0 = tt.make_range {{end = {M} : i32, start = 0 : i32}} : tensor<{M}xi32, #ttg.slice<{{dim = 1, parent = #blocked}}>>
+        %1 = tt.make_range {{end = {N} : i32, start = 0 : i32}} : tensor<{N}xi32, #ttg.slice<{{dim = 0, parent = #blocked}}>>
+        %2 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<{M}x{N}x!tt.ptr<f16>, #blocked>
+        %4 = tt.expand_dims %0 {{axis = 1 : i32}} : tensor<{M}xi32, #ttg.slice<{{dim = 1, parent = #blocked}}>> -> tensor<{M}x1xi32, #blocked>
+        %5 = arith.muli %4, %cst : tensor<{M}x1xi32, #blocked>
+        %6 = tt.expand_dims %1 {{axis = 0 : i32}} : tensor<{N}xi32, #ttg.slice<{{dim = 0, parent = #blocked}}>> -> tensor<1x{N}xi32, #blocked>
+        %7 = tt.broadcast %6 : tensor<1x{N}xi32, #blocked> -> tensor<{M}x{N}xi32, #blocked>
+        %8 = tt.broadcast %5 : tensor<{M}x1xi32, #blocked> -> tensor<{M}x{N}xi32, #blocked>
+        %9 = arith.addi %8, %7 : tensor<{M}x{N}xi32, #blocked>
+        %ptrs = tt.addptr %2, %9 : tensor<{M}x{N}x!tt.ptr<f16>, #blocked>, tensor<{M}x{N}xi32, #blocked>
+        %11 = tt.load %ptrs {{cache = 1 : i32, evict = 1 : i32, isVolatile = false}} : tensor<{M}x{N}x!tt.ptr<f16>, #blocked>
+
+        %c0_i32 = arith.constant 0 : i32
+
+        %12 = ttg.local_alloc : () -> !ttg.memdesc<1x{M}x{N}xf16, #shared, #smem, mutable>
+        %13 = ttg.memdesc_subview %12[%c0_i32, %c0_i32, %c0_i32] : !ttg.memdesc<1x{M}x{N}xf16, #shared, #smem, mutable> -> !ttg.memdesc<{M}x{N}xf16, #shared, #smem, mutable>
+        ttg.local_store %11, %13 : tensor<{M}x{N}xf16, #blocked> -> !ttg.memdesc<{M}x{N}xf16, #shared, #smem, mutable>
+
+    """
+
+    for m in range(num_repeats_M):
+        for n in range(num_repeats_N):
+            linear_idx = n + m * num_repeats_N
+            m_offset = m * M_tile_size
+            n_offset = n * N_tile_size
+            ir += f"""
+        %off0_{m}_{n} = arith.constant {m_offset} : i32
+        %off1_{m}_{n} = arith.constant {n_offset} : i32
+
+        %view{linear_idx} = ttg.memdesc_subview %13[%off0_{m}_{n}, %off1_{m}_{n}] : !ttg.memdesc<{M}x{N}xf16, #shared, #smem, mutable> -> !ttg.memdesc<{M_tile_size}x{N_tile_size}xf16, #shared, #smem, mutable, {M}x{N}>
+        %data{linear_idx} = ttg.local_load %view{linear_idx} : !ttg.memdesc<{M_tile_size}x{N_tile_size}xf16, #shared, #smem, mutable, {M}x{N}> -> tensor<{M_tile_size}x{N_tile_size}xf16, #blocked>
+        %inc{linear_idx} = arith.constant dense<{linear_idx}.0> : tensor<{M_tile_size}x{N_tile_size}xf16, #blocked>
+
+        %res{linear_idx} = arith.addf %data{linear_idx}, %inc{linear_idx} : tensor<{M_tile_size}x{N_tile_size}xf16, #blocked>
+        ttg.local_store %res{linear_idx}, %view{linear_idx} : tensor<{M_tile_size}x{N_tile_size}xf16, #blocked> -> !ttg.memdesc<{M_tile_size}x{N_tile_size}xf16, #shared, #smem, mutable, {M}x{N}>
+        """
+
+    ir += f"""
+        %res = ttg.local_load %13 : !ttg.memdesc<{M}x{N}xf16, #shared, #smem, mutable> -> tensor<{M}x{N}xf16, #blocked>
+        tt.store %ptrs, %res : tensor<{M}x{N}x!tt.ptr<f16>, #blocked>
+        tt.return
+    }}
+    }}
+    """
+
+    import tempfile
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
+        f.write(ir)
+        f.flush()
+        kernel = triton.compile(f.name)
+
+    triton_result = torch.zeros((M, N), device=device, dtype=torch.float16)
+    kernel[(1, 1, 1)](triton_result.data_ptr())
+
+    rows = []
+    for m in range(num_repeats_M):
+        columns = []
+        for n in range(num_repeats_N):
+            linear_idx = n + m * num_repeats_N
+            tile = float(linear_idx) * torch.ones((M_tile_size, N_tile_size), device=device, dtype=torch.float16)
+            columns.append(tile)
+        rows.append(torch.cat(columns, dim=1))
+    expected_result = torch.cat(rows, dim=0)
+
+    test_result = torch.equal(triton_result, expected_result)
+    assert test_result
+
+
 @pytest.mark.parametrize("M, N", [[16, 32]])
 @pytest.mark.parametrize("dtype", ['float16', 'float8e5', 'float32'])
 @pytest.mark.parametrize("shared_layout", shared_layouts)
@@ -6387,36 +6582,36 @@ mma_pairs = [
         WmmaLayout(2, [4, 4]),
     ],
     [
-        MfmaLayout([2, 0], [2, 2], [32, 32], False),
-        MfmaLayout([2, 0], [4, 1], [32, 32], False),
+        MfmaLayout([2, 0], [2, 2], [1, 1], [32, 32], False),
+        MfmaLayout([2, 0], [4, 1], [1, 1], [32, 32], False),
     ],
     [
-        MfmaLayout([2, 0], [4, 1], [32, 32], False),
-        MfmaLayout([2, 0], [2, 2], [32, 32], False),
+        MfmaLayout([2, 0], [4, 1], [1, 1], [32, 32], False),
+        MfmaLayout([2, 0], [2, 2], [1, 1], [32, 32], False),
     ],
     [
-        MfmaLayout([2, 0], [2, 2], [32, 32], False),
-        MfmaLayout([2, 0], [4, 1], [32, 32], True),
+        MfmaLayout([2, 0], [2, 2], [1, 1], [32, 32], False),
+        MfmaLayout([2, 0], [4, 1], [1, 1], [32, 32], True),
     ],
     [
-        MfmaLayout([2, 0], [4, 1], [32, 32], False),
-        MfmaLayout([2, 0], [2, 2], [32, 32], True),
+        MfmaLayout([2, 0], [4, 1], [1, 1], [32, 32], False),
+        MfmaLayout([2, 0], [2, 2], [1, 1], [32, 32], True),
     ],
     [
-        MfmaLayout([2, 0], [4, 4], [16, 16], False),
-        MfmaLayout([2, 0], [16, 1], [16, 16], False),
+        MfmaLayout([2, 0], [4, 4], [1, 1], [16, 16], False),
+        MfmaLayout([2, 0], [16, 1], [1, 1], [16, 16], False),
     ],
     [
-        MfmaLayout([2, 0], [16, 1], [16, 16], False),
-        MfmaLayout([2, 0], [4, 4], [16, 16], False),
+        MfmaLayout([2, 0], [16, 1], [1, 1], [16, 16], False),
+        MfmaLayout([2, 0], [4, 4], [1, 1], [16, 16], False),
     ],
     [
-        MfmaLayout([2, 0], [4, 4], [16, 16], False),
-        MfmaLayout([2, 0], [16, 1], [16, 16], True),
+        MfmaLayout([2, 0], [4, 4], [1, 1], [16, 16], False),
+        MfmaLayout([2, 0], [16, 1], [1, 1], [16, 16], True),
     ],
     [
-        MfmaLayout([2, 0], [16, 1], [16, 16], False),
-        MfmaLayout([2, 0], [4, 4], [16, 16], True),
+        MfmaLayout([2, 0], [16, 1], [1, 1], [16, 16], False),
+        MfmaLayout([2, 0], [4, 4], [1, 1], [16, 16], True),
     ],
 ]
 

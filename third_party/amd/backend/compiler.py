@@ -59,10 +59,6 @@ class HIPOptions:
     #
     # Current experimental scheduling variants:
     #
-    # local-prefetch: implements instruction scheduling similar to the one from the ROCm Composable
-    #                 Kernel library. Note, this variant requires the use of buffer load/store ops
-    #                 and a special software pipelining style - i.e., 1x LDS and 1x register
-    #                 prefetch buffers for each GEMM tile.
     # attention: enables a bunch of optimizations for attention kernels, including:
     #            - iglp 2 and sched.barrier around it
     #            - sink-insts-to-avoid-spills flag to avoid register spills
@@ -237,10 +233,6 @@ class HIPBackend(BaseBackend):
         local_prefetch = knobs.amd.local_prefetch
         use_async_copy = knobs.amd.use_async_copy
 
-        # The `local-prefetch` scheduling variant requires turning on buffer ops.
-        if options.schedule_hint == "local-prefetch":
-            global_prefetch = local_prefetch = 1
-
         amd.passes.ttgpuir.add_stream_pipeline(pm, options.num_stages, global_prefetch, local_prefetch, use_async_copy)
         if use_async_copy:
             amd.passes.ttgpuir.add_coalesce_async_copy(pm, options.arch)
@@ -303,7 +295,7 @@ class HIPBackend(BaseBackend):
         passes.convert.add_scf_to_cf(pm)
         passes.convert.add_index_to_llvmir(pm)
 
-        passes.ttgpuir.add_allocate_shared_memory(pm)
+        amd.passes.ttgpuir.add_allocate_shared_memory(pm)
         ## __HIP_FTZ is used to control the denorm flushing behavior of exp2 op as follows:
         ## 1. If __HIP_FTZ = 1, exp2 flushes denorms in input and output regardless
         ##    of the value of kernel arg `allow_flush_denorm`.

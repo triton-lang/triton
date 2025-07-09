@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file -allow-unregistered-dialect -tritongpu-remove-layout-conversions -cse 2>&1 | FileCheck %s
+// RUN: triton-opt %s -split-input-file -allow-unregistered-dialect -tritongpu-remove-layout-conversions -cse 2>&1 | FileCheck --dump-input-context=10 %s
 
 #layout0 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 #layout1 = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
@@ -2654,16 +2654,33 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 #blocked = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [32, 1], warpsPerCTA = [1, 1], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
 #linear = #ttg.linear<{register = [[1, 0], [4, 0], [0, 0], [0, 0], [8, 0], [0, 1], [2, 0]], lane = [[0, 0], [0, 0], [0, 0], [0, 0], [0, 0]], warp = [], block = []}>
-  module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: @split_propagation_linear
   // CHECK-SAME: (%[[ARG:.+]]: tensor<16x2xf32
   //      CHECK: %[[S:.+]], %{{.+}} = tt.split %[[ARG]]
   //      CHECK: %[[C:.+]] = ttg.convert_layout %[[S]]
   //      CHECK: tt.return %[[C]]
-    tt.func public @split_propagation_linear(%arg0: tensor<16x2xf32, #linear>) -> tensor<16xf32, #blocked1> {
+  tt.func public @split_propagation_linear(%arg0: tensor<16x2xf32, #linear>) -> tensor<16xf32, #blocked1> {
     %0 = ttg.convert_layout %arg0 : tensor<16x2xf32, #linear> -> tensor<16x2xf32, #blocked>
     %outLHS, %outRHS = tt.split %0 : tensor<16x2xf32, #blocked> -> tensor<16xf32, #blocked1>
-      tt.return %outLHS : tensor<16xf32, #blocked1>
+    tt.return %outLHS : tensor<16xf32, #blocked1>
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked2 = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-DAG: [[LINEAR:#.*]] = #ttg.linear
+  // CHECK-DAG: [[BLOCKED:#.*]] = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+  // CHECK: tt.split {{.*}} : tensor<32x2xf32, [[LINEAR]]> -> tensor<32xf32, #ttg.slice<{dim = 1, parent = [[BLOCKED]]}>>
+  tt.func public @split_slice_backward_propagation() -> tensor<32xf32, #ttg.slice<{dim=1, parent=#blocked2}>> {
+    %cst = arith.constant dense<0.0> : tensor<32x2xf32, #blocked1>
+    %outLHS, %outRHS = tt.split %cst : tensor<32x2xf32, #blocked1> -> tensor<32xf32, #blocked>
+    %62 = ttg.convert_layout %outLHS : tensor<32xf32, #blocked> -> tensor<32xf32, #ttg.slice<{dim=1, parent=#blocked2}>>
+    tt.return %62 : tensor<32xf32, #ttg.slice<{dim=1, parent=#blocked2}>>
   }
 }
 

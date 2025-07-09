@@ -127,8 +127,8 @@ void createSyncWarp(Location loc, OpBuilder &rewriter) {
 
 Value createElectPredicateWarp0(Location loc, RewriterBase &rewriter) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  Value threadId = getThreadId(rewriter, loc);
-  Value warp0 = b.icmp_ult(threadId, b.i32_val(32));
+  Value warpId = getLaneAndWarpId(rewriter, loc).second;
+  Value warp0 = b.icmp_eq(warpId, b.i32_val(0));
   return b.and_(warp0, createElectPredicate(loc, rewriter));
 }
 

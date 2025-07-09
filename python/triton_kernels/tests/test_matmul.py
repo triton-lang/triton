@@ -257,10 +257,6 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
         if split_k > 1:
             pytest.skip("splitK hasn't been fully tested on AMD GPU.")
 
-        if is_hip_cdna3() and ("float8_e4m3fn" in (weight_dtype_str, act_dtype_str)
-                               or "float8_e5m2" in (weight_dtype_str, act_dtype_str)):
-            pytest.skip("float8_e4m3fn and float8_e5m2 hasn't been fully tested on AMD CDNA3 platform.")
-
     if "float8_e4m3fnuz" in (weight_dtype_str, act_dtype_str) and not is_hip_cdna3():
         pytest.skip("float8_e4m3fnuz only tested on AMD CDNA3 Platform")
 

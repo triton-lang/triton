@@ -1766,89 +1766,94 @@ void init_triton_ir(py::module &&m) {
              self.printAsTextualPipeline(os);
              return str;
            })
-      .def("run", [](PassManager &self, ModuleOp &mod) {
-        // TODO: maybe dump module to file and print error for better
-        // diagnostics
+      .def(
+          "run",
+          [](PassManager &self, ModuleOp &mod) {
+            // TODO: maybe dump module to file and print error for better
+            // diagnostics
 
-        auto *context = mod.getContext();
-        if (::triton::tools::getBoolEnv("MLIR_DISABLE_MULTITHREADING"))
-          context->disableMultithreading();
+            auto *context = mod.getContext();
+            if (::triton::tools::getBoolEnv("MLIR_DISABLE_MULTITHREADING"))
+              context->disableMultithreading();
 
-        auto reproducerPath =
-            triton::tools::getStrEnv("TRITON_REPRODUCER_PATH");
-        if (!reproducerPath.empty()) {
-          auto anchorName = self.getOpAnchorName();
-          auto passes = self.getPasses();
-          Operation *op = mod.getOperation();
-          // Save a reproducer for the current pass manager invocation
-          // immediately.
-          makeReproducer(anchorName, passes, op, reproducerPath);
-          // But if the pass manager crashes, attempt to generate a local
-          // reproducer instead.
-          context->disableMultithreading();
-          self.enableCrashReproducerGeneration(reproducerPath,
-                                               /*genLocalReproducer=*/true);
-        } else {
-          self.enableCrashReproducerGeneration(makeConsoleReproducer());
-        }
-
-        if (triton::tools::getBoolEnv("TRITON_ENABLE_LLVM_DEBUG")) {
-          ::llvm::DebugFlag = true;
-        }
-
-        if (auto debugOnly = triton::tools::getStrEnv("TRITON_LLVM_DEBUG_ONLY");
-            !debugOnly.empty()) {
-          llvm::SmallVector<std::string, 3> storage;
-          llvm::SmallVector<const char *, 3> debugTypes =
-              parseCommaSeparatedValues(debugOnly, storage);
-          ::llvm::DebugFlag = true;
-          using namespace llvm;
-          setCurrentDebugTypes(debugTypes.data(), debugTypes.size());
-        }
-
-        bool haveTiming = ::triton::tools::getBoolEnv("MLIR_ENABLE_TIMING");
-        if (haveTiming) {
-          self.enableTiming();
-        }
-
-        // setting up diagnostics
-        bool showOperations = false, showStacktraces = false,
-             showRemarks = false, showWarnings = false;
-
-        if (auto enableDiagnostics =
-                triton::tools::getStrEnv("MLIR_ENABLE_DIAGNOSTICS");
-            !enableDiagnostics.empty()) {
-          llvm::SmallVector<std::string, 3> storage;
-          parseCommaSeparatedValues(enableDiagnostics, storage);
-          for (auto &str : storage) {
-            if (str == "warnings") {
-              showWarnings = true;
-            } else if (str == "remarks") {
-              showRemarks = true;
-            } else if (str == "stacktraces") {
-              showStacktraces = true;
-            } else if (str == "operations") {
-              showOperations = true;
+            auto reproducerPath =
+                triton::tools::getStrEnv("TRITON_REPRODUCER_PATH");
+            if (!reproducerPath.empty()) {
+              auto anchorName = self.getOpAnchorName();
+              auto passes = self.getPasses();
+              Operation *op = mod.getOperation();
+              // Save a reproducer for the current pass manager invocation
+              // immediately.
+              makeReproducer(anchorName, passes, op, reproducerPath);
+              // But if the pass manager crashes, attempt to generate a local
+              // reproducer instead.
+              context->disableMultithreading();
+              self.enableCrashReproducerGeneration(reproducerPath,
+                                                   /*genLocalReproducer=*/true);
+            } else {
+              self.enableCrashReproducerGeneration(makeConsoleReproducer());
             }
-            // we show errors by default, so no need to set it
-          }
-        }
 
-        DiagnosticSeverity minSeverity = showWarnings
-                                             ? DiagnosticSeverity::Warning
-                                             : DiagnosticSeverity::Error;
-        minSeverity = showRemarks ? DiagnosticSeverity::Remark : minSeverity;
+            if (triton::tools::getBoolEnv("TRITON_ENABLE_LLVM_DEBUG")) {
+              ::llvm::DebugFlag = true;
+            }
 
-        TritonSourceMgrDiagnosticHandler diagHandler(context, minSeverity);
+            if (auto debugOnly =
+                    triton::tools::getStrEnv("TRITON_LLVM_DEBUG_ONLY");
+                !debugOnly.empty()) {
+              llvm::SmallVector<std::string, 3> storage;
+              llvm::SmallVector<const char *, 3> debugTypes =
+                  parseCommaSeparatedValues(debugOnly, storage);
+              ::llvm::DebugFlag = true;
+              using namespace llvm;
+              setCurrentDebugTypes(debugTypes.data(), debugTypes.size());
+            }
 
-        context->printOpOnDiagnostic(showOperations);
-        context->printStackTraceOnDiagnostic(showStacktraces);
-        if (showStacktraces) {
-          context->disableMultithreading();
-        }
-        if (failed(self.run(mod.getOperation())))
-          throw std::runtime_error("PassManager::run failed");
-      });
+            bool haveTiming = ::triton::tools::getBoolEnv("MLIR_ENABLE_TIMING");
+            if (haveTiming) {
+              self.enableTiming();
+            }
+
+            // setting up diagnostics
+            bool showOperations = false, showStacktraces = false,
+                 showRemarks = false, showWarnings = false;
+
+            if (auto enableDiagnostics =
+                    triton::tools::getStrEnv("MLIR_ENABLE_DIAGNOSTICS");
+                !enableDiagnostics.empty()) {
+              llvm::SmallVector<std::string, 3> storage;
+              parseCommaSeparatedValues(enableDiagnostics, storage);
+              for (auto &str : storage) {
+                if (str == "warnings") {
+                  showWarnings = true;
+                } else if (str == "remarks") {
+                  showRemarks = true;
+                } else if (str == "stacktraces") {
+                  showStacktraces = true;
+                } else if (str == "operations") {
+                  showOperations = true;
+                }
+                // we show errors by default, so no need to set it
+              }
+            }
+
+            DiagnosticSeverity minSeverity = showWarnings
+                                                 ? DiagnosticSeverity::Warning
+                                                 : DiagnosticSeverity::Error;
+            minSeverity =
+                showRemarks ? DiagnosticSeverity::Remark : minSeverity;
+
+            TritonSourceMgrDiagnosticHandler diagHandler(context, minSeverity);
+
+            context->printOpOnDiagnostic(showOperations);
+            context->printStackTraceOnDiagnostic(showStacktraces);
+            if (showStacktraces) {
+              context->disableMultithreading();
+            }
+            if (failed(self.run(mod.getOperation())))
+              throw std::runtime_error("PassManager::run failed");
+          },
+          py::call_guard<py::gil_scoped_release>());
 }
 
 void init_triton_env_vars(py::module &m) {

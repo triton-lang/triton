@@ -382,4 +382,5 @@ LinearLayout optimalSwizzling(const LinearLayout &src, const LinearLayout &dst,
 
   return basis1D.reshapeOuts(src.getOutDims());
 }
+
 } // namespace mlir::triton::gpu
