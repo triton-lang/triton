@@ -344,8 +344,6 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
         w_tri = convert_layout(wrap_torch_tensor(w_tri, w_tri_dtype), w_layout)
         mx_scales_tri = convert_layout(wrap_torch_tensor(mx_scales_tri), w_scale_layout)
         precision_opt.weight_scale = mx_scales_tri
-        print(w_tri.shape, w_tri.stride())
-        print(mx_scales_tri.shape, mx_scales_tri.stride())
 
     # if not is_persistent and precision_opt.weight_scale is not None:
     #     pytest.skip("non-persistent not supported with mxfp")
