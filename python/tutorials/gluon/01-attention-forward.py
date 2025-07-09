@@ -947,12 +947,7 @@ def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype):
     v = (torch.empty((Z, H, N_CTX, HEAD_DIM), dtype=dtype, device=device).normal_(mean=0.0, std=0.5).requires_grad_())
     sm_scale = 0.5
 
-    M = torch.tril(torch.ones((N_CTX, N_CTX), device=device))
-    p = torch.matmul(q, k.transpose(2, 3)) * sm_scale
-    if causal:
-        p[:, :, M == 0] = float("-inf")
-    p = torch.softmax(p.float(), dim=-1).to(q.dtype)
-    ref_out = torch.matmul(p, v)
+    ref_out = torch.nn.functional.scaled_dot_product_attention(q, k, v, scale=sm_scale, is_causal=causal)
 
     tri_out, _ = attention_forward(q, k, v, causal, sm_scale)
     torch.testing.assert_close(ref_out, tri_out, atol=1e-2, rtol=0)
