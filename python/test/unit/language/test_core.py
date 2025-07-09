@@ -6030,6 +6030,8 @@ def test_num_threads(device):
 
 
 def test_globaltimer(device):
+    if is_hip_cdna2():
+        pytest.skip("test_globaltimer is flaky on gfx90a")
     check_cuda_or_hip(device)
 
     @triton.jit
@@ -6039,16 +6041,17 @@ def test_globaltimer(device):
         for i in range(10000):
             tl.store(Out1 + off, tl.load(Out1 + off) + 1)
         end = func()
-        tl.store(Out2, end - start)
+        tl.store(Out2, start)
+        tl.store(Out2 + 1, end)
 
     out1 = to_triton(np.zeros((128, ), dtype=np.int64), device=device)
-    out2 = to_triton(np.zeros((1, ), dtype=np.int64), device=device)
+    out2 = to_triton(np.zeros((2, ), dtype=np.int64), device=device)
     if is_cuda():
         func = tl.extra.cuda.globaltimer
     else:
         func = tl.extra.hip.memrealtime
     h = kernel[(1, )](out1, out2, func)
-    assert out2[0] > 0
+    assert out2[1] - out2[0] > 0
     if is_cuda():
         assert h.asm["ptx"].count("%globaltimer") == 2
     else:
@@ -6308,6 +6311,94 @@ shared_layouts = [
     SharedLayout(8, 1, 8, [1, 0], [1, 1], [1, 1], [0, 1]),
     SharedLayout(16, 1, 16, [1, 0], [1, 1], [1, 1], [0, 1]),
 ]
+
+
+@pytest.mark.parametrize("M, N, M_tile_size, N_tile_size",
+                         [[128, 128, 64, 64], [128, 128, 64, 32], [128, 64, 64, 32], [256, 128, 64, 64]])
+def test_split_subview(M, N, M_tile_size, N_tile_size, device='cuda'):
+    if not is_hip():
+        pytest.skip("the test is temporary disabled for the Nvidia backend.")
+
+    threads_per_warp = 64 if is_hip() else 32
+    num_raws_per_warp = 16 if is_hip() else 8
+    num_repeats_M = int(M / M_tile_size)
+    num_repeats_N = int(N / N_tile_size)
+
+    ir = f"""
+    #blocked = #ttg.blocked<{{sizePerThread=[1, 8], threadsPerWarp=[{num_raws_per_warp}, 4], warpsPerCTA=[4, 1], order=[1, 0], CTAsPerCGA=[1, 1], CTASplitNum=[1, 1], CTAOrder=[0, 1]}}>
+    #shared = #ttg.swizzled_shared<{{vec = 8, perPhase = 1, maxPhase = 8, order = [1, 0]}}>
+    #smem = #ttg.shared_memory
+
+    module attributes {{"ttg.num-ctas" = 1, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = {threads_per_warp} : i32}} {{
+    tt.func public @kernel(%arg0: !tt.ptr<f16> {{tt.divisibility = 16 : i32}}) {{
+        %cst = arith.constant dense<{N}> : tensor<{M}x1xi32, #blocked>
+        %cst_n = arith.constant dense<{N_tile_size}> : tensor<{M_tile_size}x1xi32, #blocked>
+        %0 = tt.make_range {{end = {M} : i32, start = 0 : i32}} : tensor<{M}xi32, #ttg.slice<{{dim = 1, parent = #blocked}}>>
+        %1 = tt.make_range {{end = {N} : i32, start = 0 : i32}} : tensor<{N}xi32, #ttg.slice<{{dim = 0, parent = #blocked}}>>
+        %2 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<{M}x{N}x!tt.ptr<f16>, #blocked>
+        %4 = tt.expand_dims %0 {{axis = 1 : i32}} : tensor<{M}xi32, #ttg.slice<{{dim = 1, parent = #blocked}}>> -> tensor<{M}x1xi32, #blocked>
+        %5 = arith.muli %4, %cst : tensor<{M}x1xi32, #blocked>
+        %6 = tt.expand_dims %1 {{axis = 0 : i32}} : tensor<{N}xi32, #ttg.slice<{{dim = 0, parent = #blocked}}>> -> tensor<1x{N}xi32, #blocked>
+        %7 = tt.broadcast %6 : tensor<1x{N}xi32, #blocked> -> tensor<{M}x{N}xi32, #blocked>
+        %8 = tt.broadcast %5 : tensor<{M}x1xi32, #blocked> -> tensor<{M}x{N}xi32, #blocked>
+        %9 = arith.addi %8, %7 : tensor<{M}x{N}xi32, #blocked>
+        %ptrs = tt.addptr %2, %9 : tensor<{M}x{N}x!tt.ptr<f16>, #blocked>, tensor<{M}x{N}xi32, #blocked>
+        %11 = tt.load %ptrs {{cache = 1 : i32, evict = 1 : i32, isVolatile = false}} : tensor<{M}x{N}x!tt.ptr<f16>, #blocked>
+
+        %c0_i32 = arith.constant 0 : i32
+
+        %12 = ttg.local_alloc : () -> !ttg.memdesc<1x{M}x{N}xf16, #shared, #smem, mutable>
+        %13 = ttg.memdesc_subview %12[%c0_i32, %c0_i32, %c0_i32] : !ttg.memdesc<1x{M}x{N}xf16, #shared, #smem, mutable> -> !ttg.memdesc<{M}x{N}xf16, #shared, #smem, mutable>
+        ttg.local_store %11, %13 : tensor<{M}x{N}xf16, #blocked> -> !ttg.memdesc<{M}x{N}xf16, #shared, #smem, mutable>
+
+    """
+
+    for m in range(num_repeats_M):
+        for n in range(num_repeats_N):
+            linear_idx = n + m * num_repeats_N
+            m_offset = m * M_tile_size
+            n_offset = n * N_tile_size
+            ir += f"""
+        %off0_{m}_{n} = arith.constant {m_offset} : i32
+        %off1_{m}_{n} = arith.constant {n_offset} : i32
+
+        %view{linear_idx} = ttg.memdesc_subview %13[%off0_{m}_{n}, %off1_{m}_{n}] : !ttg.memdesc<{M}x{N}xf16, #shared, #smem, mutable> -> !ttg.memdesc<{M_tile_size}x{N_tile_size}xf16, #shared, #smem, mutable, {M}x{N}>
+        %data{linear_idx} = ttg.local_load %view{linear_idx} : !ttg.memdesc<{M_tile_size}x{N_tile_size}xf16, #shared, #smem, mutable, {M}x{N}> -> tensor<{M_tile_size}x{N_tile_size}xf16, #blocked>
+        %inc{linear_idx} = arith.constant dense<{linear_idx}.0> : tensor<{M_tile_size}x{N_tile_size}xf16, #blocked>
+
+        %res{linear_idx} = arith.addf %data{linear_idx}, %inc{linear_idx} : tensor<{M_tile_size}x{N_tile_size}xf16, #blocked>
+        ttg.local_store %res{linear_idx}, %view{linear_idx} : tensor<{M_tile_size}x{N_tile_size}xf16, #blocked> -> !ttg.memdesc<{M_tile_size}x{N_tile_size}xf16, #shared, #smem, mutable, {M}x{N}>
+        """
+
+    ir += f"""
+        %res = ttg.local_load %13 : !ttg.memdesc<{M}x{N}xf16, #shared, #smem, mutable> -> tensor<{M}x{N}xf16, #blocked>
+        tt.store %ptrs, %res : tensor<{M}x{N}x!tt.ptr<f16>, #blocked>
+        tt.return
+    }}
+    }}
+    """
+
+    import tempfile
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
+        f.write(ir)
+        f.flush()
+        kernel = triton.compile(f.name)
+
+    triton_result = torch.zeros((M, N), device=device, dtype=torch.float16)
+    kernel[(1, 1, 1)](triton_result.data_ptr())
+
+    rows = []
+    for m in range(num_repeats_M):
+        columns = []
+        for n in range(num_repeats_N):
+            linear_idx = n + m * num_repeats_N
+            tile = float(linear_idx) * torch.ones((M_tile_size, N_tile_size), device=device, dtype=torch.float16)
+            columns.append(tile)
+        rows.append(torch.cat(columns, dim=1))
+    expected_result = torch.cat(rows, dim=0)
+
+    test_result = torch.equal(triton_result, expected_result)
+    assert test_result
 
 
 @pytest.mark.parametrize("M, N", [[16, 32]])
