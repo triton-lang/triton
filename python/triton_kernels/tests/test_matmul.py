@@ -331,7 +331,7 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
         capability_major = torch.cuda.get_device_capability()[0]
         w_layout = layout.StridedLayout
         w_scale_layout = layout.StridedLayout
-        if hbm_swizzling:
+        if hbm_swizzling and "float4" in weight_dtype_str:
             # weight layout
             w_layouts = {9: layout.HopperMXValueLayout}
             w_layout = w_layouts.get(capability_major, layout.StridedLayout)
