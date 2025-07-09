@@ -43,7 +43,9 @@ void CircularLayoutParser::parseMetadata() {
   bt.blockId = decoder.decode<I32Entry>()->value;
   bt.procId = decoder.decode<I32Entry>()->value;
   bt.bufSize = decoder.decode<I32Entry>()->value;
-  bt.timestamp = decoder.decode<I64Entry>()->value;
+  for (int i = 0; i < kNumGlobalTimes; i++) {
+    bt.globalTimes[i] = decoder.decode<I64Entry>()->value;
+  }
 
   std::vector<uint32_t> countVec;
   for (int i = 0; i < getConfig().totalUnits; i++) {

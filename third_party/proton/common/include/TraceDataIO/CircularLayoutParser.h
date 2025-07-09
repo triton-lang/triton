@@ -10,6 +10,7 @@ constexpr uint32_t kPreamble = 0xdeadbeef;
 constexpr uint32_t kHeaderSize = 16;
 constexpr uint32_t kWordSize = 4;
 constexpr uint32_t kWordsPerEntry = 2;
+constexpr uint32_t kNumGlobalTimes = 3;
 
 enum class ParseState { START, END, INIT };
 
@@ -43,7 +44,7 @@ struct CircularLayoutParserResult {
     uint32_t blockId = 0;
     uint32_t procId = 0;
     uint32_t bufSize = 0;
-    uint64_t timestamp = 0;
+    uint64_t globalTimes[kNumGlobalTimes] = {0};
     std::vector<Trace> traces;
   };
 

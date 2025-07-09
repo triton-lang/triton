@@ -23,8 +23,8 @@ public:
 
   // Return the global cycle counter value (i.e., synchonized across SMs) in
   // nanoseconds, regardless of the clock frequency.
-  virtual Value timestamp(ConversionPatternRewriter &rewriter,
-                          Location loc) const = 0;
+  virtual Value getGlobalTime(ConversionPatternRewriter &rewriter,
+                              Location loc) const = 0;
 
   virtual Value processorId(ConversionPatternRewriter &rewriter,
                             Location loc) const = 0;

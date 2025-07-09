@@ -95,7 +95,7 @@ module attributes {"ttg.num-warps" = 8 : i32, ttg.profile_scratch_memory_alignme
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-warps" = 8 : i32, ttg.profile_scratch_memory_alignment = 128 : i32, ttg.profile_scratch_memory_size = 384 : i32} {
-  // CHECK-LABEL: convert_smem_initialize
+  // CHECK-LABEL: convert_global_time
   // CHECK-DAG: %[[RAW_TS:.*]] = llvm.call_intrinsic "llvm.amdgcn.s.memrealtime"() : () -> i64
   // CHECK-DAG: %[[TEN:.*]] = llvm.mlir.constant(10 : i64) : i64
   // CHECK-DAG: %[[TS:.*]] = llvm.mul %[[RAW_TS]], %[[TEN]] : i64
@@ -103,9 +103,9 @@ module attributes {"ttg.num-warps" = 8 : i32, ttg.profile_scratch_memory_alignme
   // CHECK-DAG: %[[PTR:.*]] = llvm.getelementptr %{{.*}}[%[[OFFSET]]] : (!llvm.ptr<1>, i32) -> !llvm.ptr<1>, i32
   // CHECK-DAG: llvm.store %[[TS]], %[[PTR]] : i64, !llvm.ptr<1>
   // CHECK-DAG: llvm.return
-  llvm.func @convert_smem_initialize(%arg: !llvm.ptr<1>) attributes {noinline = false, nvvm.kernel = 1 : ui1} {
+  llvm.func @convert_global_time(%arg: !llvm.ptr<1>) attributes {noinline = false, nvvm.kernel = 1 : ui1} {
     %0 = proton_gpu.global_scratch_alloc {alignment = 128 : i32, nbytes = 384 : i32, offset = 0 : i32} : !tt.ptr<i32>
-    proton_gpu.initialize %0 : !tt.ptr<i32>
+    proton_gpu.global_time %0, 0 : !tt.ptr<i32>, i32
     llvm.return
   }
 }

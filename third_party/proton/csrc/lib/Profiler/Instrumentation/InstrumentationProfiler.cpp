@@ -241,7 +241,8 @@ void InstrumentationProfiler::exitInstrumentedOp(uint64_t streamId,
                         normalizedDuration, kernelId, functionName,
                         blockTrace.blockId, blockTrace.procId, trace.uid,
                         device, static_cast<uint64_t>(runtime->getDeviceType()),
-                        timeShiftCost, blockTrace.timestamp));
+                        timeShiftCost, blockTrace.globalTimes[0],
+                        blockTrace.globalTimes[1], blockTrace.globalTimes[2]));
               }
             }
           }

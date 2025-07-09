@@ -13,7 +13,7 @@ module {
 module attributes {"ttg.num-warps" = 8 : i32} {
   // CHECK-LABEL: simple_record
   // CHECK: %[[SCRATCH:.*]] = proton_gpu.global_scratch_alloc {alignment = 128 : i32, nbytes = 1152 : i32} : !tt.ptr<i32>
-  // CHECK: proton_gpu.initialize %[[SCRATCH]] : !tt.ptr<i32>
+  // CHECK: proton_gpu.global_time  %[[SCRATCH]], 0 : !tt.ptr<i32>, i32
   // CHECK: %[[BUF:.*]] = ttg.local_alloc  : () -> !ttg.memdesc<256xi32, #shared, #smem, mutable>
   // CHECK: %[[SEGMENT:.*]] = proton_gpu.segment_alloc %[[BUF]]
   // CHECK: %[[START:.*]] = proton_gpu.read_counter : i32
@@ -21,7 +21,9 @@ module attributes {"ttg.num-warps" = 8 : i32} {
   // CHECK: %[[END:.*]] = proton_gpu.read_counter : i32
   // CHECK: proton_gpu.circular_store end %[[SEGMENT]], %[[END]] {scopeId = 0 : i32} : !proton_gpu.segment<1024, #smem, warp>, i32
   // CHECK: gpu.barrier
+  // CHECK: proton_gpu.global_time  %[[SCRATCH]], 1 : !tt.ptr<i32>, i32
   // CHECK: proton_gpu.finalize %[[SEGMENT]], %[[SCRATCH]] : !proton_gpu.segment<1024, #smem, warp>, !tt.ptr<i32>
+  // CHECK: proton_gpu.global_time  %[[SCRATCH]], 2 : !tt.ptr<i32>, i32
   // CHECK: tt.return
   tt.func @simple_record() {
     proton.record start "name0"
@@ -39,7 +41,7 @@ module attributes {"ttg.num-warps" = 8 : i32} {
     %c1 = arith.constant 1 : index
     %c4 = arith.constant 4 : index
     // CHECK: %[[SCRATCH:.*]] = proton_gpu.global_scratch_alloc
-    // CHECK: proton_gpu.initialize %[[SCRATCH]] : !tt.ptr<i32>
+    // CHECK: proton_gpu.global_time %[[SCRATCH]], 0 : !tt.ptr<i32>, i32
     // CHECK: %[[BUF:.*]] = ttg.local_alloc
     // CHECK: %[[SEGMENT:.*]] = proton_gpu.segment_alloc %[[BUF]]
     // CHECK: %[[START0:.*]] = proton_gpu.read_counter : i32
@@ -53,7 +55,9 @@ module attributes {"ttg.num-warps" = 8 : i32} {
     // CHECK: %[[END0:.*]] = proton_gpu.read_counter : i32
     // CHECK: proton_gpu.circular_store end %[[SEGMENT]], %[[END0]] {scopeId = 0 : i32}
     // CHECK: gpu.barrier
+    // CHECK: proton_gpu.global_time %[[SCRATCH]], 1 : !tt.ptr<i32>, i32
     // CHECK: proton_gpu.finalize %[[SEGMENT]], %[[SCRATCH]]
+    // CHECK: proton_gpu.global_time %[[SCRATCH]], 2 : !tt.ptr<i32>, i32
     proton.record start "name1"
     scf.for %arg0 = %i to %c4 step %c1 {
       proton.record start "name0"
@@ -73,7 +77,7 @@ module attributes {"ttg.num-warps" = 8 : i32} {
     %c1 = arith.constant 1 : index
     %c4 = arith.constant 4 : index
     // CHECK: %[[SCRATCH:.*]] = proton_gpu.global_scratch_alloc
-    // CHECK: proton_gpu.initialize %[[SCRATCH]] : !tt.ptr<i32>
+    // CHECK: proton_gpu.global_time %[[SCRATCH]], 0 : !tt.ptr<i32>, i32
     // CHECK: %[[BUF:.*]] = ttg.local_alloc
     // CHECK: %[[SEGMENT:.*]] = proton_gpu.segment_alloc %[[BUF]]
     // CHECK: %[[START0:.*]] = proton_gpu.read_counter : i32
