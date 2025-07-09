@@ -82,11 +82,13 @@ def get_src_element_ty_size(dtype_str):
         return 2
     if dtype_str == "float32" or dtype_str == "tensorfloat32":
         return 4
+    if dtype_str == "float64":
+        return 8
     raise ValueError(f"Unknown dtype {dtype_str}")
 
 
-@pytest.mark.parametrize("dtype_src_str", ["float32", "tensorfloat32", "float16", "float8e5"])
-@pytest.mark.parametrize("dtype_dst_str", ["float32", "float16"])
+@pytest.mark.parametrize("dtype_src_str", ["float32", "tensorfloat32", "float16", "float8e5", "float64"])
+@pytest.mark.parametrize("dtype_dst_str", ["float32", "float16", "float64"])
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES", [(128, 128, 16, 4), (64, 128, 32, 4), (32, 32, 32, 4),
                                                                    (256, 128, 32, 4), (64, 512, 32, 2),
                                                                    (512, 64, 32, 2), (64, 16, 16, 4)])
@@ -98,15 +100,20 @@ def test_simple_matmul(dtype_src_str, dtype_dst_str, BLOCK_M, BLOCK_N, BLOCK_K, 
                        EPILOGUE_SUBTILE, LAYOUT_16x256, monkeypatch):
     if NUM_CTAS > 1 and (not is_cuda() or torch.cuda.get_device_capability()[0] < 9):
         pytest.skip("Clusters requires nvidia compute capability >= 9")
-    if is_hip() and ((BLOCK_K * BLOCK_M + BLOCK_K * BLOCK_N) * NUM_STAGES * get_src_element_ty_size(dtype_src_str)
-                     > 65536):
-        pytest.skip("HIP path requires less than 64KB of shared memory")
+    shared_mem_accum = (BLOCK_K * BLOCK_M + BLOCK_K * BLOCK_N) * NUM_STAGES * get_src_element_ty_size(dtype_src_str)
+    shared_mem_avail = triton.runtime.driver.active.utils.get_device_properties(0)["max_shared_mem"]
+    if shared_mem_accum > shared_mem_avail:
+        pytest.skip("Skipped due to insufficient shared memory on this GPU.")
     if is_hip() and (not is_hip_cdna3()) and dtype_src_str == "tensorfloat32":
         pytest.skip("tensorfloat32 is only supported on HIP CDNA3")
     if dtype_src_str == "float8e5" and BLOCK_K == 16:
         pytest.skip("Skipping cases small K for float8")
     if dtype_src_str == "float8e5" and device == "cuda" and torch.cuda.get_device_capability()[0] < 9:
         pytest.skip("Float8 requires compute capability >= 9")
+    if (dtype_src_str == "float64") != (dtype_dst_str == "float64"):
+        pytest.skip("Skipping unsupported case")
+    if dtype_src_str == "float64" and not is_cuda():
+        pytest.skip("Float64 not supported on HIP yet")
     if "float32" in dtype_src_str and dtype_dst_str == "float16":
         pytest.skip("Skipping unsupported case")
     if "float32" == dtype_src_str and NUM_CTAS > 1:
@@ -160,7 +167,8 @@ def test_simple_matmul(dtype_src_str, dtype_dst_str, BLOCK_M, BLOCK_N, BLOCK_K, 
     # This applies only if TCv5 MMA is used (M % 64 == 0 and N % 8 == 0) and
     # when MMA arguments loads are pipelined (N > 16)
     if (device == "cuda" and torch.cuda.get_device_capability()[0] == 10 and NUM_STAGES > 1 and BLOCK_M % 64 == 0
-            and BLOCK_N % 8 == 0 and BLOCK_N > 16 and not (precision == "ieee" and dtype_src_str == "float32")):
+            and BLOCK_N % 8 == 0 and BLOCK_N > 16
+            and not (precision == "ieee" and (dtype_src_str == "float32" or dtype_src_str == "float64"))):
         ttgir = k.asm["ttgir"]
         count = ttgir.count("ttng.tc_gen5_mma")
         assert count == 2, "The TTGIR does not match the expected pattern."
