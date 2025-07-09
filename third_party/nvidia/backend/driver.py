@@ -111,11 +111,11 @@ FLOAT_STORAGE_TYPE = {
     "fp64": "uint64_t",
 }
 FLOAT_PACK_FUNCTION = {
-    "fp16": "PyFloat_Pack2",
-    "bf16": "PyFloat_Pack_BF16",
-    "fp32": "PyFloat_Pack4",
-    "f32": "PyFloat_Pack4",
-    "fp64": "PyFloat_Pack8",
+    "fp16": "pack_fp16",
+    "bf16": "pack_bf16",
+    "fp32": "pack_fp32",
+    "f32": "pack_fp32",
+    "fp64": "pack_fp64",
 }
 
 _BASE_ARGS_FORMAT = "iiiKKppOOOOO"
@@ -249,8 +249,7 @@ def make_launcher(constants, signature, tensordesc_meta):
         if ty == "nvTmaDesc"
     ]
     float_storage_decls = [
-        f"{FLOAT_STORAGE_TYPE[ty]} _arg{i}_storage = 0;"
-        f"{FLOAT_PACK_FUNCTION[ty]}(_arg{i}, (void*)&_arg{i}_storage, 1);"
+        f"{FLOAT_STORAGE_TYPE[ty]} _arg{i}_storage = {FLOAT_PACK_FUNCTION[ty]}(_arg{i});"
         for i, ty in signature.items()
         if ty in FLOAT_STORAGE_TYPE
     ]
@@ -472,12 +471,30 @@ static void ensureCudaContext() {{
   }}
 }}
 
-static int PyFloat_Pack_BF16(double f, uint16_t *p, int) {{
+static uint16_t pack_fp16(double f) {{
+    uint16_t result;
+    // from https://github.com/python/pythoncapi-compat
+#if 0x030600B1 <= PY_VERSION_HEX && PY_VERSION_HEX <= 0x030B00A1 && !defined(PYPY_VERSION)
+    _PyFloat_Pack2(f, (void*)&result, 1);
+#else
+    PyFloat_Pack2(f, (void*)&result, 1);
+#endif
+    return result;
+}}
+
+static uint16_t pack_bf16(double f) {{
     float f32 = (float)f;
-    uint32_t u32 = *(uint32_t *)&f32;
-    uint16_t u16 = (uint16_t)(u32 >> 16);
-    *p = u16;
-    return 0;
+    uint32_t u32 = *(uint32_t*)&f32;
+    return (uint16_t)(u32 >> 16);
+}}
+
+static uint32_t pack_fp32(double f) {{
+    float f32 = (float)f;
+    return *(uint32_t*)&f32;
+}}
+
+static uint64_t pack_fp64(double f) {{
+    return *(uint64_t*)&f;
 }}
 
 static PyObject* launch(PyObject* self, PyObject* args) {{
