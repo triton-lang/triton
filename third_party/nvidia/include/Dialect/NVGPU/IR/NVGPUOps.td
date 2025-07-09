@@ -110,12 +110,6 @@ def NVGPU_FenceAsyncSharedOp : NVGPU_Op<"fence_async_shared", []> {
   let assemblyFormat = "attr-dict";
 }
 
-def NVGPU_ClusterArriveOp : NVGPU_Op<"cluster_arrive", []> {
-  let arguments = (ins I1Attr:$relaxed);
-
-  let assemblyFormat = "attr-dict";
-}
-
 def NVGPU_StoreMatrixOp : NVGPU_Op<"stmatrix", [MemoryEffects<[MemWrite]>]> {
   let arguments = (
     ins LLVM_PointerShared:$addr,

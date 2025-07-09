@@ -39,8 +39,13 @@ struct ClusterArriveOpConversion
   LogicalResult
   matchAndRewrite(triton::nvidia_gpu::ClusterArriveOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    rewriter.replaceOpWithNewOp<triton::nvgpu::ClusterArriveOp>(
-        op, op.getRelaxed());
+    auto ctx = rewriter.getContext();
+    auto unitAttr = UnitAttr::get(ctx);
+    if (op.getRelaxed()) {
+      rewriter.replaceOpWithNewOp<NVVM::ClusterArriveRelaxedOp>(op, unitAttr);
+    } else {
+      rewriter.replaceOpWithNewOp<NVVM::ClusterArriveOp>(op, unitAttr);
+    }
     return success();
   }
 };

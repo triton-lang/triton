@@ -251,19 +251,6 @@ public:
   }
 };
 
-class ClusterArriveOpPattern : public OpRewritePattern<ttn::ClusterArriveOp> {
-public:
-  using OpRewritePattern<ttn::ClusterArriveOp>::OpRewritePattern;
-
-  LogicalResult matchAndRewrite(ttn::ClusterArriveOp op,
-                                PatternRewriter &rewriter) const override {
-    std::string ptxAsm = op.getRelaxed()
-                             ? "barrier.cluster.arrive.relaxed.aligned;"
-                             : "barrier.cluster.arrive.aligned;";
-    return rewriteAsPtxAsm(op, rewriter, std::move(ptxAsm));
-  }
-};
-
 // Base class for Matrix Operation Patterns
 template <typename MatrixOpType, typename ConcreteMatrixOpPattern>
 class MatrixOpPattern : public OpRewritePattern<MatrixOpType> {
@@ -787,11 +774,9 @@ public:
     patterns.add<NVGPUOpGenericPattern<ttn::ClusterCTAIdOp>>(
         context, kClusterCtaIdOp, Constraints({"=r"}), Constraints());
 
-    patterns
-        .add<FenceAsyncSharedOpPattern, LoadMatrixOpPattern,
-             StoreMatrixOpPattern, ClusterArriveOpPattern, WGMMAOpPattern,
-             LoadAcquireOpPattern, WGMMAWaitGroupOpPattern, WarpIdOpPattern>(
-            context);
+    patterns.add<FenceAsyncSharedOpPattern, LoadMatrixOpPattern,
+                 StoreMatrixOpPattern, WGMMAOpPattern, LoadAcquireOpPattern,
+                 WGMMAWaitGroupOpPattern, WarpIdOpPattern>(context);
 
     if (applyPatternsGreedily(mod, std::move(patterns)).failed())
       signalPassFailure();
