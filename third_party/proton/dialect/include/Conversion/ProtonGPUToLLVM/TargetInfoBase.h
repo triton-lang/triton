@@ -21,7 +21,7 @@ public:
   virtual Value clock(ConversionPatternRewriter &rewriter, Location loc,
                       bool isClock64) const = 0;
 
-  // Return the global cycle counter value (i.e., synchonized across SMs) in
+  // Return the global cycle counter value (i.e., synchronized across SMs) in
   // nanoseconds, regardless of the clock frequency.
   virtual Value getGlobalTime(ConversionPatternRewriter &rewriter,
                               Location loc) const = 0;

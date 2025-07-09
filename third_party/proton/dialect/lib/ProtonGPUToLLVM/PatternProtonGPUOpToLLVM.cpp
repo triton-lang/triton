@@ -86,7 +86,11 @@ struct GlobalTimeOpConversion
     Value globalTime = targetInfo.getGlobalTime(rewriter, loc);
     Value scratchPtr = adaptor.getScratchPtr();
     auto scratchPtrTy = mlir::cast<LLVM::LLVMPointerType>(scratchPtr.getType());
-    Value gmemGlobalTimeOffset = b.i32_val(4 + 2 * adaptor.getIndex());
+    const int bytesPerEntry = proton::gpu::getBytesPerGlobalTimeEntry();
+    const int wordsPerEntry = bytesPerEntry / 4;
+    const int baseOffset = 4;
+    Value gmemGlobalTimeOffset =
+        b.i32_val(baseOffset + wordsPerEntry * adaptor.getIndex());
     Value gmemGlobalTimePtr =
         b.gep(scratchPtrTy, i32_ty, scratchPtr, gmemGlobalTimeOffset);
     b.store(globalTime, gmemGlobalTimePtr);

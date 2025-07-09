@@ -62,8 +62,10 @@ LogicalResult InitCtxOp::verify() {
 // -- GlobalTimeOp --
 LogicalResult GlobalTimeOp::verify() {
   auto index = getIndex();
-  if (index != 0 && index != 1 && index != 2)
-    return emitOpError("global time index must be in 0, 1, or 2");
+  if (index < 0)
+    return emitOpError("global time index must be non-negative");
+  if (index > getNumGlobalTimeEntries())
+    return emitOpError("global time index exceeds maximum");
   return success();
 }
 
