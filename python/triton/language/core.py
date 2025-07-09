@@ -764,13 +764,20 @@ class tuple_type(base_type):
     def __init__(self, types, fields=None):
         self.types = types
         self.fields = fields or [''] * len(types)
-        self.name = '[' + ','.join([f"{k}:{v}" for k, v in zip(self.fields, self.types)]) + ']'
+
+    @property
+    def name(self) -> str:
+        return '[' + ','.join([f"{k}:{v}" for k, v in zip(self.fields, self.types)]) + ']'
 
     def __str__(self):
         return self.name
 
     def __iter__(self):
         return iter(self.types)
+
+    def _update_type(self, idx, val):
+        if isinstance(val, constexpr):
+            self.types[idx] = val.type
 
     def _flatten_ir_types(self, builder: ir.builder, out: List[ir.type]):
         for ty in self.types:
@@ -1277,7 +1284,7 @@ class tuple(base_value):
             if isinstance(x, dtype):
                 return dtype
             if isinstance(x, (int, float)):
-                return constexpr
+                return constexpr_type(x)
             return x.type
 
         self.type = type or tuple_type([get_type(x) for x in self.values])
@@ -1300,6 +1307,8 @@ class tuple(base_value):
             idx = constexpr(idx)
         assert isinstance(idx, constexpr)
         self.values[idx] = value
+        if isinstance(self.type, tuple_type):
+            self.type._update_type(idx.value, value)
 
     def __add__(self, other):
         other = _normalize_tuple(other)
