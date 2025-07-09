@@ -198,6 +198,7 @@ def test_add(device):
     fn[(1, )](rets)
     torch.testing.assert_close(rets.cpu(), torch.arange(8, dtype=torch.int32))
 
+
 def test_passing_tuple_with_constexpr(device):
 
     @triton.jit
@@ -214,6 +215,7 @@ def test_passing_tuple_with_constexpr(device):
     expected_x = 8 * x.clone()
     m_to_the_n[(1, )](x, x.shape, x.stride(), (2, 3))
     torch.testing.assert_close(x, expected_x, rtol=0, atol=0)
+
 
 def test_passing_tuple_to_make_tensor_descriptor(device, with_allocator):
 
