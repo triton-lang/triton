@@ -180,7 +180,7 @@ FLOAT_STORAGE_TYPE = {
 }
 FLOAT_PACK_FUNCTION = {
     "fp16": "PyFloat_Pack2",
-    "bf16": "PyFloat_Pack2",
+    "bf16": "PyFloat_Pack_BF16",
     "fp32": "PyFloat_Pack4",
     "f32": "PyFloat_Pack4",
     "fp64": "PyFloat_Pack8",
@@ -464,6 +464,14 @@ static inline DevicePtrInfo getPointer(PyObject *obj, int idx) {{
   }}
   PyErr_SetString(PyExc_TypeError, "Pointer argument must be either uint64 or have data_ptr method");
   return ptr_info;
+}}
+
+static int PyFloat_Pack_BF16(double f, uint16_t *p, int) {{
+    float f32 = (float)f;
+    uint32_t u32 = *(uint32_t *)&f32;
+    uint16_t u16 = (uint16_t)(u32 >> 16);
+    *p = u16;
+    return 0;
 }}
 
 static PyObject* launch(PyObject* self, PyObject* args) {{
