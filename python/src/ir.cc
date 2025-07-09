@@ -349,6 +349,7 @@ void init_triton_ir(py::module &&m) {
       });
 
   py::class_<Value>(m, "value", py::module_local())
+      .def(py::init<>())
       .def("set_attr",
            [](Value &self, std::string &name, Attribute &attr) -> void {
              if (Operation *definingOp = self.getDefiningOp())
