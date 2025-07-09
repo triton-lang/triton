@@ -2,7 +2,7 @@ import torch
 import triton
 from triton_kernels.topk_details._topk_forward import _topk_forward
 from triton_kernels.topk_details._topk_backward import _topk_backward
-from triton_kernels.tensor import Tensor, Bitmatrix, BIT
+from triton_kernels.tensor import Tensor, Bitmatrix
 
 
 def topk_forward(x, k, apply_softmax=True, dim=1, return_bitmatrix=True, y_indx=None, n_rows=None):
@@ -49,8 +49,7 @@ def topk_forward(x, k, apply_softmax=True, dim=1, return_bitmatrix=True, y_indx=
     )
     bitmatrix_shape = [n_rows, n_cols_words * 32]
     bitmatrix_shape_max = [n_rows_max, None]
-    bitmatrix = Bitmatrix(bitmatrix, dtype=BIT, shape=bitmatrix_shape, shape_max=bitmatrix_shape_max,
-                          scratchpad=scratchpad)
+    bitmatrix = Bitmatrix(bitmatrix, shape=bitmatrix_shape, shape_max=bitmatrix_shape_max, scratchpad=scratchpad)
     return y_vals, y_indx, bitmatrix
 
 

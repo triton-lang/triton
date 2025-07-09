@@ -158,9 +158,9 @@ class Bitmatrix(Tensor):
 
     scratchpad: torch.Tensor = None
 
-    def __post_init__(self):
-        super().__post_init__()
-        assert self.dtype == BIT
+    def __init__(self, storage, shape, shape_max=None, scratchpad=None):
+        super().__init__(storage, dtype=BIT, shape=shape, shape_max=shape_max)
+        self.scratchpad = scratchpad
 
     def sum(self, partials_block_size):
         _, n_cols = self.shape
