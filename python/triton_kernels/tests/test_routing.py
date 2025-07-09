@@ -5,7 +5,7 @@ from triton_kernels.testing import assert_close
 from triton_kernels.testing import assert_equal
 
 
-def init_data(n_tokens, n_expts_tot, dtype=torch.float32, device="cuda"):
+def init_data(n_tokens, n_expts_tot, dtype=torch.float16, device="cuda"):
     logits = torch.randn((n_tokens, n_expts_tot), dtype=dtype, device=device, requires_grad=True)
     return logits
 
@@ -26,7 +26,7 @@ def test_op(n_tokens_pad, n_tokens_raw, n_expts_tot, n_expts_act, sm_first, use_
     else:
         n_routing_rows = torch.tensor([n_tokens_raw], dtype=torch.int32, device=device)
     n_gates_raw = n_tokens_raw * n_expts_act
-    tri_logits = init_data(n_tokens_pad, n_expts_tot, device=device).detach()
+    tri_logits = init_data(n_tokens_pad, n_expts_tot, device=device, dtype=torch.float32).detach()
     tri_logits[n_tokens_raw:, :] = float("inf")  # should not be used
     tri_logits = tri_logits.requires_grad_(True)
     ref_logits = tri_logits.clone().detach().requires_grad_(True)

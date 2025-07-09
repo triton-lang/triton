@@ -1317,6 +1317,7 @@ Attribute AMDMfmaEncodingAttr::parse(AsmParser &parser, Type type) {
 
   unsigned version = 0;
   SmallVector<unsigned> warpsPerCTA;
+  SmallVector<unsigned> tilesPerWarp;
   SmallVector<unsigned> instrShape;
   bool isTransposed;
   std::optional<SmallVector<unsigned>> CTAsPerCGA;
@@ -1330,6 +1331,11 @@ Attribute AMDMfmaEncodingAttr::parse(AsmParser &parser, Type type) {
     }
     if (attr.getName() == "warpsPerCTA") {
       if (parseIntArrayAttr(parser, attr, warpsPerCTA, "warpsPerCTA").failed())
+        return {};
+    }
+    if (attr.getName() == "tilesPerWarp") {
+      if (parseIntArrayAttr(parser, attr, tilesPerWarp, "tilesPerWarp")
+              .failed())
         return {};
     }
     if (attr.getName() == "instrShape") {
@@ -1358,21 +1364,31 @@ Attribute AMDMfmaEncodingAttr::parse(AsmParser &parser, Type type) {
     }
   }
 
+  if (tilesPerWarp.empty()) {
+    tilesPerWarp.resize(warpsPerCTA.size(), 1);
+  }
+
   std::optional<CTALayoutAttr> CTALayout = getCTALayoutOrError(
       parser, CTAsPerCGA, CTASplitNum, CTAOrder, /*rank=*/warpsPerCTA.size());
   if (!CTALayout.has_value())
     return {};
 
   return parser.getChecked<AMDMfmaEncodingAttr>(
-      parser.getContext(), version, warpsPerCTA, instrShape[0], instrShape[1],
-      isTransposed, *CTALayout);
+      parser.getContext(), version, warpsPerCTA, tilesPerWarp, instrShape[0],
+      instrShape[1], isTransposed, *CTALayout);
 }
 
 void AMDMfmaEncodingAttr::print(AsmPrinter &printer) const {
   printer << "<{"
-          << "version = " << getVersion()                                //
-          << ", warpsPerCTA = [" << getWarpsPerCTA() << "]"              //
-          << ", instrShape = [" << ArrayRef{getMDim(), getNDim()} << "]" //
+          << "version = " << getVersion() //
+          << ", warpsPerCTA = [" << getWarpsPerCTA() << "]";
+
+  auto tilesPerWarp = getTilesPerWarp();
+  if (!hasUnitTilesPerWarp()) {
+    printer << ", tilesPerWarp = [" << getTilesPerWarp() << "]";
+  }
+
+  printer << ", instrShape = [" << ArrayRef{getMDim(), getNDim()} << "]" //
           << ", isTransposed = " << getIsTransposed();
   maybePrintCTALayout(getContext(), printer, getCTALayout(),
                       /*rank=*/getRank());
@@ -1381,7 +1397,8 @@ void AMDMfmaEncodingAttr::print(AsmPrinter &printer) const {
 
 LogicalResult AMDMfmaEncodingAttr::verify(
     function_ref<mlir::InFlightDiagnostic()> emitError, unsigned version,
-    llvm::ArrayRef<unsigned int> warpsPerCTA, unsigned mDim, unsigned nDim,
+    llvm::ArrayRef<unsigned int> warpsPerCTA,
+    llvm::ArrayRef<unsigned int> tilesPerWarp, unsigned mDim, unsigned nDim,
     bool isTransposed, mlir::triton::gpu::CTALayoutAttr) {
   if (!(version >= 0 && version <= 4)) {
     return emitError() << "version must be in the [0, 4] range";
@@ -1874,6 +1891,10 @@ SmallVector<unsigned> AMDMfmaEncodingAttr::getCTASplitNum() const {
   return SmallVector<unsigned>(getCTALayout().getCTASplitNum());
 }
 
+bool AMDMfmaEncodingAttr::hasUnitTilesPerWarp() const {
+  return !llvm::any_of(getTilesPerWarp(), [](int x) { return x != 1; });
+}
+
 SmallVector<int64_t>
 AMDMfmaEncodingAttr::getInstrShapeForOperand(int kWidth, int opIdx) const {
   unsigned mDim = getMDim();
@@ -1909,21 +1930,27 @@ AMDMfmaEncodingAttr::getRepForOperand(ArrayRef<int64_t> operandShape,
   auto operandTileShape = getInstrShapeForOperand(kWidth, opIdx);
   auto rank = operandShape.size();
   auto warpsPerCTA = getWarpsPerCTA();
+  auto tilesPerWarp = getTilesPerWarp();
+
   int numRepBatch =
       rank == 3 ? std::max<int64_t>(1, operandShape[0] / warpsPerCTA[0]) : 1;
   if (opIdx == 0)
     return {
         numRepBatch,
         std::max<int64_t>(1, operandShape[rank - 2] /
-                                 (operandTileShape[0] * warpsPerCTA[rank - 2])),
+                                 (operandTileShape[0] * tilesPerWarp[rank - 2] *
+                                  warpsPerCTA[rank - 2])) *
+            tilesPerWarp[rank - 2],
         std::max<int64_t>(1, operandShape[rank - 1] / operandTileShape[1])};
   else {
     assert(opIdx == 1);
     return {
         numRepBatch,
         std::max<int64_t>(1, operandShape[rank - 2] / operandTileShape[0]),
-        std::max<int64_t>(1, operandShape[rank - 1] / (operandTileShape[1] *
-                                                       warpsPerCTA[rank - 1]))};
+        std::max<int64_t>(1, operandShape[rank - 1] /
+                                 (operandTileShape[1] * tilesPerWarp[rank - 1] *
+                                  warpsPerCTA[rank - 1])) *
+            tilesPerWarp[rank - 1]};
   }
 }
 
@@ -2103,9 +2130,9 @@ NvidiaMmaEncodingAttr::getRepOrderForOperand(int opIdx) const {
 SmallVector<int64_t>
 NvidiaMmaEncodingAttr::getRepForOperand(ArrayRef<int64_t> shape, int bitwidth,
                                         int kWidth, int opIdx) const {
-  assert(
-      kWidth >= 32 / bitwidth &&
-      "kWidth must be >= 32 / bitwidth for this function to be well-defined");
+  assert(kWidth >= std::max(32 / bitwidth, 1) &&
+         "kWidth must be >= max(32 / bitwidth, 1) for this function to be "
+         "well-defined");
   auto rank = shape.size();
   // Broadcast long K
   auto warpsPerCTA = to_vector(getWarpsPerCTA());
@@ -2116,16 +2143,18 @@ NvidiaMmaEncodingAttr::getRepForOperand(ArrayRef<int64_t> shape, int bitwidth,
   if (rank == 3) {
     tileSize.push_back(1);
   }
+  // warpSizeK * (warpRepK * VecBitWidth)
+  auto tileBitWidthK = (isAmpere() && bitwidth == 64) ? (4 * 256) : (4 * 64);
   if (opIdx == 0) {
     // m x k
     tileSize.push_back(16);
-    tileSize.push_back(4 * 64 / bitwidth);
+    tileSize.push_back(tileBitWidthK / bitwidth);
   } else {
     // k x n
     // Hopper path never uses the n value, since this method is only invoked
     // for in-RF (dotOpEnc) operands, but WGMMA only supports in A to be in RF
     // so it's fine if the n is incorrect here
-    tileSize.push_back(4 * 64 / bitwidth);
+    tileSize.push_back(tileBitWidthK / bitwidth);
     tileSize.push_back(8);
   }
 

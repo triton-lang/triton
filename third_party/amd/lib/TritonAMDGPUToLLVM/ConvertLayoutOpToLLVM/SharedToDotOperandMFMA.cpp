@@ -220,6 +220,13 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   int nonKDimIdx = opIdx == 0 ? rank - 2 : rank - 1;
 
   auto mfmaLayout = cast<AMDMfmaEncodingAttr>(encoding.getParent());
+
+  // tilesPerWarp parameter is only implemented trough LL path.
+  auto tilesPerWarp = mfmaLayout.getTilesPerWarp();
+  if (!mfmaLayout.hasUnitTilesPerWarp()) {
+    return Value();
+  }
+
   auto mDim = mfmaLayout.getMDim();
   auto nDim = mfmaLayout.getNDim();
   assert((mDim == nDim && (mDim == 32 || mDim == 16 || mDim == 4)) ||
@@ -393,10 +400,6 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
 
   for (auto op : tensor.getUsers()) {
     if (auto localLoadOp = llvm::dyn_cast<triton::gpu::LocalLoadOp>(op)) {
-      const size_t numDsReadsCount =
-          repB * numRepNonK * numRepK * loadsPerThread;
-      setNumGeneratedDsReads(localLoadOp, numDsReadsCount, loadVecTy);
-
       for (auto llLoad : llLoads) {
         AMD::addLocalLoadNoAliasScope(localLoadOp, llLoad);
       }
