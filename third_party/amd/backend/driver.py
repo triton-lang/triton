@@ -509,7 +509,7 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
     return NULL;
   }}
 
-  {'\n'.join(float_storage_decls)}
+  {' '.join(float_storage_decls)}
 
   // extract kernel metadata
   int num_warps, num_ctas, shared_memory, clusterDimX, clusterDimY, clusterDimZ;
