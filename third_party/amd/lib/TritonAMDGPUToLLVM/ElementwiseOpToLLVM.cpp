@@ -618,10 +618,125 @@ ConverterT Fp32_to_Fp8E5M2_RTNE(AMD::ISAFamily isaFamily) {
 
 // Fp32 -> Nanoo Bf8 on CDNA3
 static SmallVector<Value>
-Fp32_to_Fp8E5M2FNUZ(Location loc, ConversionPatternRewriter &rewriter,
-                    const SmallVector<Value> &v) {
+Fp32_to_Fp8E5M2FNUZ_HW(Location loc, ConversionPatternRewriter &rewriter,
+                       const SmallVector<Value> &v) {
   assert(v.size() == 2);
   return cvtPkFp32ToF8<ROCDL::CvtPkBf8F32Op>(loc, rewriter, v[0], v[1]);
+}
+
+static SmallVector<Value>
+Fp32_to_Fp8E5M2FNUZ_SW(Location loc, ConversionPatternRewriter &rewriter,
+                       const SmallVector<Value> &v) {
+  assert(v.size() == 2);
+  auto convert = [&](Value v) {
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+
+    constexpr uint32_t srcExpNumBits = 8U;
+    constexpr uint32_t srcMantNumBits = 23U;
+    constexpr uint32_t srcExpBias = 127U;
+
+    constexpr uint32_t dstExpNumBits = 5U;
+    constexpr uint32_t dstMantNumBits = 2U;
+    constexpr uint32_t dstExpBias = 16U;
+
+    constexpr uint32_t srcBitWidth = 1U + srcExpNumBits + srcMantNumBits;
+    constexpr uint32_t reducedMantNumBits = srcMantNumBits - dstMantNumBits;
+    Value reducedMantissa = b.i32_val(reducedMantNumBits);
+
+    // Get sign and absolute value
+    Value intVal = b.bitcast(v, i32_ty);
+    constexpr uint32_t signMask = 1U << (srcBitWidth - 1U);
+    Value sign = b.trunc(i8_ty, b.lshr(b.and_(intVal, b.i32_val(signMask)),
+                                       b.i32_val(srcBitWidth - 8U)));
+
+    constexpr uint32_t absMask = signMask - 1U;
+    intVal = b.and_(intVal, b.i32_val(absMask));
+
+    // Rounding to nearest even
+    // (1 << (reducedMantNumBits - 1)) indicates the position of the round bit.
+    // With -1 we get a mask with all bits below the round bit set to 1
+    constexpr uint32_t baseRoundingBias =
+        (1U << (reducedMantNumBits - 1U)) - 1U;
+
+    constexpr uint32_t mantissaLSB = (1U << reducedMantNumBits);
+    Value remainingMantissaLSB =
+        b.lshr(b.and_(intVal, b.i32_val(mantissaLSB)), reducedMantissa);
+    Value roundingBias =
+        b.add(remainingMantissaLSB, b.i32_val(baseRoundingBias));
+    Value vFp8 = b.add(intVal, roundingBias);
+
+    // Reduce mantissa to 2 bits
+    vFp8 = b.and_(vFp8, b.i32_val(0xFFE00000));
+
+    // We round numbers smaller than the minimal normal number in Fp8 to make it
+    // easier to handle subnormals E5M2FNUZ min normal is: 2^-15
+    vFp8 = b.umax(vFp8, b.i32_val(0x38000000));
+    // Adjust exponent bias
+    constexpr uint32_t expBias = (srcExpBias - dstExpBias) << srcMantNumBits;
+    vFp8 = b.sub(vFp8, b.i32_val(expBias));
+
+    // Shift right and truncate
+    vFp8 = b.trunc(i8_ty, b.lshr(vFp8, reducedMantissa));
+
+    // Any numbers larger than the max normal number in FP8
+    // after rounding will cause overflow
+    // E5M2FNUZ max normal is: S.11111.11 = 0x7F (absolute value) which in
+    // fp32 is 0x47600000 (absolute value)
+    Value isOverflow = b.icmp_ugt(intVal, b.i32_val(0x47600000));
+    vFp8 = b.select(isOverflow, b.i8_val(0x7F), vFp8);
+
+    // In case fp32's exponent is full then we have either a NaN or Inf
+    Value isNaNOrInf =
+        b.icmp_eq(b.and_(intVal, b.i32_val(0x7F800000)), b.i32_val(0x7F800000));
+
+    // Round subnormals to nearest even. Ref:
+    // https://github.com/openxla/xla/blob/f20c6fe2/xla/service/elemental_ir_emitter.cc#L272
+    constexpr size_t lutSize = 4;
+    // Minimum normal for E5M2FNUZ is 0x38000000 (2^-15)
+    // We have 2 bits for mantissa therefore we divide the range of subnormals
+    // to 4 subranges. Each i entry in the LUT corresponds to the mid point of
+    // the ith subrange. For example for subrange 0, [0 / 4 , 1 / 4 * 2^-15] we
+    // have 1/2 * (0 + 1) / 4 * 2^-15 = 2^-18 = 0.000003814697265625 which is
+    // 0x3a000000 in fp32
+
+    SmallVector<int32_t> halfwayPointsLUT = {
+        0x36800000,  // Mid point between [0/4 * 2^-15, 1/4 * 2^-15]
+        0x37400000,  // Mid point between [1/4 * 2^-15, 2/4 * 2^-15]
+        0x37a00000,  // Mid point between [2/4 * 2^-15, 3/4 * 2^-15]
+        0x37e00000}; // Mid point between [3/4 * 2^-15, 4/4 * 2^-15]
+
+    for (int i = lutSize - 1; i >= 0; i--) {
+      Value cmp;
+      if (i % 2 == 0) {
+        cmp = b.icmp_ule(intVal, b.i32_val(halfwayPointsLUT[i]));
+      } else {
+        cmp = b.icmp_ult(intVal, b.i32_val(halfwayPointsLUT[i]));
+      }
+
+      vFp8 = b.select(cmp, b.i8_val(i), vFp8);
+    }
+
+    vFp8 = b.or_(vFp8, sign);
+
+    // When downcasting to E5M2FNUZ format, NaN and Inf are both converted to
+    // NaN
+    vFp8 = b.select(isNaNOrInf, b.i8_val(0x80), vFp8);
+    // In UZ formats there is only 1 zero (positive zero)
+    // Correct negative zero to 0
+    Value isNegativeZero = b.and_(b.icmp_eq(vFp8, b.i8_val(0x80)),
+                                  b.icmp_eq(isNaNOrInf, b.i1_val(0)));
+    vFp8 = b.select(isNegativeZero, b.i8_val(0), vFp8);
+
+    return vFp8;
+  };
+
+  SmallVector<Value> results{convert(v[0]), convert(v[1])};
+  return results;
+}
+
+ConverterT Fp32_to_Fp8E5M2FNUZ(AMD::ISAFamily isaFamily) {
+  return isaFamily == AMD::ISAFamily::CDNA3 ? Fp32_to_Fp8E5M2FNUZ_HW
+                                            : Fp32_to_Fp8E5M2FNUZ_SW;
 }
 
 // Fp32 -> Nanoo Fp8 on CDNA3
@@ -767,44 +882,13 @@ Fp8E4M3FNUZ_to_Fp32(Location loc, ConversionPatternRewriter &rewriter,
   return cvtPkF8ToFp32<ROCDL::CvtPkF32Fp8Op>(loc, rewriter, v[0], v[1]);
 }
 
-// Depend on whether we focus more on performance, we may skip
-// the processing of submornal values
-static Value Fp16_to_Fp8E5M2FNUZ_oneValue(Location loc,
-                                          ConversionPatternRewriter &rewriter,
-                                          Value v) {
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  auto vi16 = b.bitcast(v, i16_ty);
-  auto e = b.and_(i16_ty, vi16, b.int_val(16, 0x7C00));
-  auto sign = b.and_(i16_ty, vi16, b.int_val(16, 0x8000));
-
-  // normal value
-  auto a = b.and_(i16_ty, vi16, b.int_val(16, 0x7FFFF));
-  auto a1 = b.add(i16_ty, a, b.int_val(16, 0x0400));
-  auto o1 = b.or_(i16_ty, a1, sign);
-
-  // subnormal value, e is 0
-  auto m = b.and_(i16_ty, vi16, b.int_val(16, 0x03FF));
-  auto m2 = b.shl(m, b.int_val(16, 1));
-  auto o2 = b.or_(i16_ty, sign, b.or_(i16_ty, b.int_val(16, 1), m2));
-
-  auto e_is_zero = b.icmp_eq(e, b.int_val(16, 0));
-  auto e_is_all1 = b.icmp_eq(e, b.int_val(16, 0x7C00));
-
-  auto ot = b.select(e_is_zero, o2, o1);
-  auto o = b.select(e_is_all1, vi16, ot);
-  auto fp8x2VecTy = vec_ty(i8_ty, 2);
-  auto res = b.bitcast(o, fp8x2VecTy);
-
-  return b.extract_element(i8_ty, res, b.i32_val(1));
-}
-
 static SmallVector<Value>
 Fp16_to_Fp8E5M2FNUZ_SW(Location loc, ConversionPatternRewriter &rewriter,
                        const SmallVector<Value> &v) {
-  SmallVector<Value> result(2);
-  result[0] = Fp16_to_Fp8E5M2FNUZ_oneValue(loc, rewriter, v[0]);
-  result[1] = Fp16_to_Fp8E5M2FNUZ_oneValue(loc, rewriter, v[1]);
-  return result;
+  assert(v.size() == 2);
+  SmallVector<Value> vFp32 = {cvtFp16ToFp32(loc, rewriter, v[0]),
+                              cvtFp16ToFp32(loc, rewriter, v[1])};
+  return Fp32_to_Fp8E5M2FNUZ_SW(loc, rewriter, vFp32);
 }
 
 static SmallVector<Value>
@@ -1957,7 +2041,7 @@ struct FpToFpOpConversion
             {{F32TyID, F8E4M3FNUZTyID, RoundingMode::RTNE},
              Fp32_to_Fp8E4M3FNUZ(isaFamily)},
             {{F32TyID, F8E5M2FNUZTyID, RoundingMode::RTNE},
-             Fp32_to_Fp8E5M2FNUZ},
+             Fp32_to_Fp8E5M2FNUZ(isaFamily)},
             {{F32TyID, F8E4M3FNTyID, RoundingMode::RTNE},
              Fp32_to_Fp8E4M3FN_RTNE(isaFamily)},
             {{F32TyID, F8E5M2TyID, RoundingMode::RTNE},
@@ -2028,8 +2112,8 @@ struct FpToFpOpConversion
         srcElementType.isF32() && !dstElementType.isF16() &&
         roundingMode == RoundingMode::RTNE &&
         !(isaFamily == AMD::ISAFamily::CDNA4 &&
-          (llvm::isa<Float8E4M3FNType, Float8E4M3FNUZType, Float8E5M2Type>(
-              dstElementType))) &&
+          (llvm::isa<Float8E4M3FNType, Float8E4M3FNUZType, Float8E5M2Type,
+                     Float8E5M2FNUZType>(dstElementType))) &&
         !(isaFamily == AMD::ISAFamily::CDNA3 &&
           (llvm::isa<Float8E4M3FNUZType, Float8E5M2FNUZType>(
               dstElementType))) &&
