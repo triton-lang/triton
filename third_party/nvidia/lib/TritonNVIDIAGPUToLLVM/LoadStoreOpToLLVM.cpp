@@ -1283,8 +1283,9 @@ struct AsyncCopyGlobalToLocalOpConversion
     cvt = cvt.sublayout(
         {str_attr("register"), str_attr("lane"), str_attr("warp")},
         {str_attr("offset")});
-    lowerLdSt(loc, ctx, cvt, vals, resElemTy, smemObj.getBase(), rewriter,
-              targetInfo, maxVec, emitCpAsync);
+    lowerLdSt(
+        loc, ctx, cvt, vals, resElemTy, smemObj.getBase(),
+        [](Value v) { return v; }, rewriter, targetInfo, maxVec, emitCpAsync);
 
     // Drop the result token.
     Value zero = rewriter.create<LLVM::ConstantOp>(

@@ -21,23 +21,29 @@ LogicalResult lowerLocalStore(Location loc, MLIRContext *ctx, Value regVal,
   auto regTy = cast<RankedTensorType>(regVal.getType());
   auto llvmElemTy = typeConverter->convertType(memDescTy.getElementType());
 
-  auto regLayout = toLinearLayout(regTy.getShape(), regTy.getEncoding());
-  auto sharedLayout =
-      toLinearLayout(memDescTy.getShape(), memDescTy.getEncoding());
-  auto cvt = regLayout.invertAndCompose(sharedLayout);
-
-  auto kBlock = str_attr("block");
-  // NYI. We would need to emit a map.shared::cluster instruction.
-  if (!cvt.isTrivialOver({kBlock})) {
-    return failure();
-  }
   auto kReg = str_attr("register");
   auto kLane = str_attr("lane");
   auto kWarp = str_attr("warp");
   auto kOffset = str_attr("offset");
+  auto regLayout = toLinearLayout(regTy.getShape(), regTy.getEncoding());
+  auto paddedLayout =
+      dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(memDescTy.getEncoding());
+  LinearLayout cvt = LinearLayout::empty();
+  if (paddedLayout) {
+    cvt = regLayout.reshapeOuts({{kOffset, regLayout.getTotalOutDimSize()}});
+  } else {
+    auto sharedLayout =
+        toLinearLayout(memDescTy.getShape(), memDescTy.getEncoding());
+    cvt = regLayout.invertAndCompose(sharedLayout);
+    auto kBlock = str_attr("block");
+    // NYI. We would need to emit a map.shared::cluster instruction.
+    if (!cvt.isTrivialOver({kBlock})) {
+      return failure();
+    }
+  }
   cvt = cvt.sublayout({kReg, kLane, kWarp}, {kOffset});
-  lowerLocalLdSt(loc, ctx, cvt, inVals, llvmElemTy, smemObj.getBase(), rewriter,
-                 targetInfo);
+  lowerLocalLdSt(loc, ctx, cvt, inVals, llvmElemTy, memDescTy,
+                 smemObj.getBase(), rewriter, targetInfo);
 
   return success();
 }
@@ -171,23 +177,29 @@ public:
       rewriter.replaceOp(op, result);
       return success();
     }
-
-    auto regLayout = toLinearLayout(regTy.getShape(), regTy.getEncoding());
-    auto sharedLayout = toLinearLayout(shape, sharedEnc);
-    auto cvt = regLayout.invertAndCompose(sharedLayout);
-    auto kBlock = str_attr("block");
-    // NYI. We would need to emit a map.shared::cluster instruction.
-    if (!cvt.isTrivialOver({kBlock})) {
-      return failure();
-    }
     auto kReg = str_attr("register");
     auto kLane = str_attr("lane");
     auto kWarp = str_attr("warp");
     auto kOffset = str_attr("offset");
+    auto regLayout = toLinearLayout(regTy.getShape(), regTy.getEncoding());
+    auto paddedLayout =
+        dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(sharedEnc);
+    LinearLayout cvt = LinearLayout::empty();
+    if (paddedLayout) {
+      cvt = regLayout.reshapeOuts({{kOffset, regLayout.getTotalOutDimSize()}});
+    } else {
+      auto sharedLayout = toLinearLayout(shape, sharedEnc);
+      cvt = regLayout.invertAndCompose(sharedLayout);
+      auto kBlock = str_attr("block");
+      // NYI. We would need to emit a map.shared::cluster instruction.
+      if (!cvt.isTrivialOver({kBlock})) {
+        return failure();
+      }
+    }
     cvt = cvt.sublayout({kReg, kLane, kWarp}, {kOffset});
-
-    auto outVals = lowerLocalLdSt(op.getLoc(), ctx, cvt, {}, llvmElemTy,
-                                  smemObj.getBase(), rewriter, targetInfo, op);
+    auto outVals =
+        lowerLocalLdSt(op.getLoc(), ctx, cvt, {}, llvmElemTy, memDescTy,
+                       smemObj.getBase(), rewriter, targetInfo, op);
 
     Value result = packLLElements(loc, typeConverter, outVals, rewriter, regTy);
     rewriter.replaceOp(op, result);

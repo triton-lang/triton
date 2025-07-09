@@ -562,6 +562,7 @@ SmallVector<Value>
 lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout cvt,
                 ArrayRef<Value> valsArray, // Input for store, output for load
                 Type llvmElemTy, Value smemBase,
+                std::function<Value(Value)> smemAddrAddon,
                 ConversionPatternRewriter &rewriter,
                 const TargetInfoBase &targetInfo, Operation *op = nullptr);
 
@@ -571,21 +572,22 @@ lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout cvt,
 SmallVector<Value> lowerLdSt(
     Location loc, MLIRContext *ctx, LinearLayout cvt,
     ArrayRef<Value> valsArray, // Input for store, output for load
-    Type llvmElemTy, Value smemBase, ConversionPatternRewriter &rewriter,
-    const TargetInfoBase &targetInfo, std::optional<int> maybeMaxVecElems,
+    Type llvmElemTy, Value smemBase, std::function<Value(Value)> smemAddrAddon,
+    ConversionPatternRewriter &rewriter, const TargetInfoBase &targetInfo,
+    std::optional<int> maybeMaxVecElems,
     std::function<SmallVector<Value>(ConversionPatternRewriter &, Location,
                                      ArrayRef<Value>, Value, int, VectorType)>
         lowerInst);
 
 // Lower local_load/local_store via ld.shared/st.shared
-SmallVector<Value> lowerLocalLdSt(Location loc, MLIRContext *ctx,
-                                  // Map from registers to offset
-                                  LinearLayout cvt, ArrayRef<Value> valsArray,
-                                  // Input for store, output for load
-                                  Type llvmElemTy, Value smemBase,
-                                  ConversionPatternRewriter &rewriter,
-                                  const TargetInfoBase &targetInfo,
-                                  Operation *op = nullptr);
+SmallVector<Value>
+lowerLocalLdSt(Location loc, MLIRContext *ctx,
+               // Map from registers to offset
+               LinearLayout cvt, ArrayRef<Value> valsArray,
+               // Input for store, output for load
+               Type llvmElemTy, triton::gpu::MemDescType memDescTy,
+               Value smemBase, ConversionPatternRewriter &rewriter,
+               const TargetInfoBase &targetInfo, Operation *op = nullptr);
 
 SmallVector<Value> unpackLLElements(Location loc, Value llvmStruct,
                                     RewriterBase &rewriter);
