@@ -480,11 +480,19 @@ private:
 
   int64_t getDivisibility(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
                           int dim) override {
-    // lhs: d_lhs * k = gcd(d_lhs, d_rhs) * k' * k = gcd(d_lhs, d_rhs) * k''
-    // rhs: d_rhs * p = gcd(d_lhs, d_rhs) * p' * p = gcd(d_lhs, d_rhs) * p''
-    // lhs = gcd(d_lhs, d_rhs) * k'' = gcd(d_lhs, d_rhs) * d + r
-    // r must be divisible by gcd(d_lhs, d_rhs)
-    return gcd(lhs.getDivisibility(dim), rhs.getDivisibility(dim));
+    auto resTy = dyn_cast<RankedTensorType>(op.getType());
+    if (rhs.getConstancy(dim) > 1) {
+      // lhs: d_lhs * k = gcd(d_lhs, d_rhs) * k' * k = gcd(d_lhs, d_rhs) * k''
+      // rhs: d_rhs * p = gcd(d_lhs, d_rhs) * p' * p = gcd(d_lhs, d_rhs) * p''
+      // lhs = gcd(d_lhs, d_rhs) * k'' = gcd(d_lhs, d_rhs) * d + r
+      // r must be divisible by gcd(d_lhs, d_rhs)
+      return gcd(lhs.getDivisibility(dim), rhs.getDivisibility(dim));
+    }
+    // Otherwise we shouldn't assume any divisibility.
+    // For example:
+    // lhs: [2, 2, 4, 4], rhs: [0, 1, 2, 3]
+    // lhs % rhs = [0, 0, 0, 1]
+    return 1;
   };
 
   int64_t getConstancy(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
