@@ -200,7 +200,7 @@ tt.func @rem() {
   %9 = arith.constant dense<192> : tensor<128xi32>
   // expected-remark @below {{contiguity = [64], divisibility = [64], constancy = [1], constant_value = <none>}}
   %10 = arith.remsi %0, %9 : tensor<128xi32>
-  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>}}
+  // expected-remark @below {{contiguity = [1], divisibility = [64], constancy = [1], constant_value = <none>}}
   %11 = arith.remsi %9, %0 : tensor<128xi32>
   // expected-remark @below {{contiguity = [1], divisibility = [32], constancy = [128], constant_value = 32}}
   %12 = tt.make_range {end = 160 : i32, start = 32 : i32} : tensor<128xi32>
