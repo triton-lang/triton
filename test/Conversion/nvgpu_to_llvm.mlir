@@ -2,24 +2,10 @@
 
 // CHECK-LABEL: @nvvm_syncs
 llvm.func @nvvm_syncs() {
-  // CHECK: wgmma.fence.sync.aligned;
-  nvgpu.wgmma_fence
-
-  // CHECK: wgmma.commit_group.sync.aligned;
-  nvgpu.wgmma_commit_group
-
-  // CHECK: barrier.cluster.wait.aligned;
-  nvgpu.cluster_wait
-
   // CHECK: fence.proxy.async.shared::cta;
   nvgpu.fence_async_shared {bCluster = false}
   // CHECK: fence.proxy.async.shared::cluster;
   nvgpu.fence_async_shared {bCluster = true}
-
-  // CHECK: barrier.cluster.arrive.aligned;
-  nvgpu.cluster_arrive {relaxed = false}
-  // CHECK: barrier.cluster.arrive.relaxed.aligned;
-  nvgpu.cluster_arrive {relaxed = true}
 
   llvm.return
 }
