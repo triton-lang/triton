@@ -74,7 +74,7 @@ def compute_num_stages(
     device_props = torch.cuda.get_device_properties(0)
     smem_capacity = device_props.shared_memory_per_block_optin
     has_native_mxfp = target_info.cuda_capability_geq(10, 0)
-    if has_native_mxfp and precision_config.weight_scale is not None:
+    if has_native_mxfp and getattr(precision_config, "weight_scale", None) is not None:
         if rhs_dtype == FP4:
             # 4-bit e2m1 weights are padded 2x
             # https://docs.nvidia.com/cuda/parallel-thread-execution/#packing-format-used-for-matrix-a-and-b-by-kind-mxf8f6f4-in-shared-memory
