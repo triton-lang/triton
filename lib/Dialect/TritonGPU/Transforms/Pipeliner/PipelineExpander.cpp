@@ -135,6 +135,20 @@ bool LoopPipelinerInternal::initializeLoopInfo(
   lb = forOp.getLowerBound();
   step = forOp.getStep();
 
+  std::vector<std::pair<Operation *, unsigned>> schedule;
+  options.getScheduleFn(forOp, schedule);
+  if (schedule.empty()) {
+    LDBG("--empty schedule -> BAIL");
+    return false;
+  }
+
+  opOrder.reserve(schedule.size());
+  for (auto &opSchedule : schedule) {
+    maxStage = std::max(maxStage, opSchedule.second);
+    stages[opSchedule.first] = opSchedule.second;
+    opOrder.push_back(opSchedule.first);
+  }
+
   dynamicLoop = true;
   auto upperBoundCst = ub.getDefiningOp<arith::ConstantIndexOp>();
   auto lowerBoundCst = lb.getDefiningOp<arith::ConstantIndexOp>();
@@ -149,7 +163,7 @@ bool LoopPipelinerInternal::initializeLoopInfo(
     int64_t lbImm = lowerBoundCst.value();
     int64_t stepImm = stepCst.value();
     int64_t numIteration = llvm::divideCeilSigned(ubImm - lbImm, stepImm);
-    if (numIteration > maxStage) {
+    if (numIteration >= maxStage) {
       dynamicLoop = false;
     } else if (!options.supportDynamicLoops) {
       LDBG("--fewer loop iterations than pipeline stages -> BAIL");
@@ -165,19 +179,6 @@ bool LoopPipelinerInternal::initializeLoopInfo(
   emitPredicateStageFn = options.emitPredicateStageFn;
   if (emitPredicateStageFn == nullptr) {
     emitPredicateStageFn = mlir::triton::emitPredicateForStage;
-  }
-  std::vector<std::pair<Operation *, unsigned>> schedule;
-  options.getScheduleFn(forOp, schedule);
-  if (schedule.empty()) {
-    LDBG("--empty schedule -> BAIL");
-    return false;
-  }
-
-  opOrder.reserve(schedule.size());
-  for (auto &opSchedule : schedule) {
-    maxStage = std::max(maxStage, opSchedule.second);
-    stages[opSchedule.first] = opSchedule.second;
-    opOrder.push_back(opSchedule.first);
   }
 
   // All operations need to have a stage.

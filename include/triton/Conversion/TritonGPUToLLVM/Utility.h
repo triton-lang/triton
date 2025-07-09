@@ -516,6 +516,11 @@ SmallVector<SmallVector<Value>>
 emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
             Attribute layout, RankedTensorType type, bool withCTAOffset);
 
+// Emits the required padding in elements for the given shared memory offset
+Value emitPadding(Location loc, RewriterBase &rewriter,
+                  triton::gpu::PaddedSharedEncodingAttr layout,
+                  Value smemOffset);
+
 // Emits IR to load data from shared memory into registers, or to store data
 // from registers into shared memory.
 //
@@ -566,6 +571,18 @@ lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout cvt,
                 Type llvmElemTy, Value smemBase,
                 ConversionPatternRewriter &rewriter,
                 const TargetInfoBase &targetInfo);
+
+// Lower an ld/st-like operation given a layout and a callback that creates the
+// PTX instruction Lowers to st when valArrays is empty, and to ld when it is
+// not, and returns the output values.
+SmallVector<Value> lowerLdSt(
+    Location loc, MLIRContext *ctx, LinearLayout cvt,
+    ArrayRef<Value> valsArray, // Input for store, output for load
+    Type llvmElemTy, Value smemBase, ConversionPatternRewriter &rewriter,
+    const TargetInfoBase &targetInfo, std::optional<int> maybeMaxVecElems,
+    std::function<SmallVector<Value>(ConversionPatternRewriter &, Location,
+                                     ArrayRef<Value>, Value, int, VectorType)>
+        lowerInst);
 
 // Lower local_load/local_store via ld.shared/st.shared
 SmallVector<Value> lowerLocalLdSt(Location loc, MLIRContext *ctx,
