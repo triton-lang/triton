@@ -307,13 +307,14 @@ def _p_matmul_ogs(
                     x_scales: tl.constexpr = None
                 else:
                     x_scales = tl.full((BLOCK_M, BLOCK_K // MX_PACK_DIVISOR), 127, dtype=tl.uint8)
-                if SWIZZLE_MX_SCALE == "BLACKWELL":
-                    flattened_expt_n_idx = expt_id * ((N + 127) // 128) + (off_n // 128)
-                    w_scales = MxScale.load([0, flattened_expt_n_idx, pid_k * MX_SCALE_BLOCK_K // 4 + ki * (MX_SCALE_BLOCK_K // 4 * SPLIT_K), 0, 0])
-                    w_scales = w_scales.reshape((w_scales.shape[1], w_scales.shape[2] * w_scales.shape[-2] * w_scales.shape[-1]))
-                    w_scales = unswizzle_mx_scale_bw(w_scales)
-                else:
-                    w_scales = _tma_load_2d(MxScale, [expt_id, off_k_mx, off_n], transpose=MX_TRANSPOSE).T
+                # if SWIZZLE_MX_SCALE == "BLACKWELL":
+                #     flattened_expt_n_idx = expt_id * ((N + 127) // 128) + (off_n // 128)
+                #     w_scales = MxScale.load([0, flattened_expt_n_idx, pid_k * MX_SCALE_BLOCK_K // 4 + ki * (MX_SCALE_BLOCK_K // 4 * SPLIT_K), 0, 0])
+                #     w_scales = w_scales.reshape((w_scales.shape[1], w_scales.shape[2] * w_scales.shape[-2] * w_scales.shape[-1]))
+                #     w_scales = unswizzle_mx_scale_bw(w_scales)
+                # else:
+                #     w_scales = _tma_load_2d(MxScale, [expt_id, off_k_mx, off_n], transpose=MX_TRANSPOSE).T
+                w_scales = tl.full((BLOCK_N, BLOCK_K // MX_PACK_DIVISOR), 127, dtype=tl.uint8)
                 if SWAP_XW:
                     acc = tl.dot_scaled(w.T, w_scales, mx_format, x.T, x_scales, x_format, acc=acc, fast_math=True)
                 else:
