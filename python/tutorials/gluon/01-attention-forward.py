@@ -334,6 +334,8 @@ class AttentionConfig:
 
         if dtype == gl.float16:
             self.num_kv_buffers = gl.constexpr(3 if HEAD_DIM == 128 else 6)
+        elif dtype == gl.bfloat16:
+            self.num_kv_buffers = gl.constexpr(3 if HEAD_DIM == 128 else 6)
         else:
             self.num_kv_buffers = gl.constexpr(4 if HEAD_DIM == 128 else 8)
 
@@ -934,7 +936,7 @@ def is_blackwell():
 @pytest.mark.parametrize("N_CTX", [256, 1024, 4 * 1024])
 @pytest.mark.parametrize("HEAD_DIM", [64, 128])
 @pytest.mark.parametrize("causal", [False, True])
-@pytest.mark.parametrize("dtype", [torch.float16])
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
 @pytest.mark.skipif(not is_blackwell(), reason="Gluon attention is only supported on Blackwell GPUs")
 def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype):
     device = "cuda"
@@ -949,7 +951,7 @@ def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype):
     p = torch.matmul(q, k.transpose(2, 3)) * sm_scale
     if causal:
         p[:, :, M == 0] = float("-inf")
-    p = torch.softmax(p.float(), dim=-1).half()
+    p = torch.softmax(p.float(), dim=-1).to(q.dtype)
     ref_out = torch.matmul(p, v)
 
     tri_out, _ = attention_forward(q, k, v, causal, sm_scale)
@@ -964,7 +966,7 @@ BATCH = [4]
 N_HEADS = [32]
 HEAD_DIM = [64, 128]
 causal = [False, True]
-providers = ["triton-fp16", "triton-fp8", "cudnn-fp16"]
+providers = ["triton-fp16", "triton-bf16", "triton-fp8", "cudnn-fp16", "cudnn-bf16"]
 N_CTX = [2**i for i in range(10, 17)]
 
 bench_configs = []
@@ -993,6 +995,8 @@ def bench(Z, H, N_CTX, HEAD_DIM, causal, provider):
     provider, dtype = provider.split("-")
     if dtype == "fp16":
         dtype = torch.float16
+    elif dtype == "bf16":
+        dtype = torch.bfloat16
     elif dtype == "fp8":
         dtype = torch.float8_e5m2
     else:
