@@ -47,7 +47,9 @@ module attributes {"ttg.num-warps" = 8 : i32, ttg.profile_scratch_memory_alignme
   // CHECK: proton_gpu.circular_store
   // CHECK: rocdl.sched.barrier 0
   // CHECK: gpu.barrier
+  // CHECK: proton_gpu.global_time
   // CHECK: proton_gpu.finalize
+  // CHECK: proton_gpu.global_time
   // CHECK: llvm.return
     %c4 = arith.constant 4 : index
     %c1 = arith.constant 1 : index
