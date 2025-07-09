@@ -960,22 +960,12 @@ def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype):
 # Benchmarking
 # ===-----------------------------------------------------------------------===#
 
-profile = False
-
-if not profile:
-    BATCH = [4]
-    N_HEADS = [32]
-    HEAD_DIM = [64, 128]
-    causal = [False, True]
-    providers = ["triton-fp16", "triton-fp8"]
-    N_CTX = [2**i for i in range(10, 17)]
-else:
-    BATCH = [4]
-    N_HEADS = [32]
-    HEAD_DIM = [128]
-    causal = [True]
-    providers = ["triton-fp16"]
-    N_CTX = [16 * 1024]
+BATCH = [4]
+N_HEADS = [32]
+HEAD_DIM = [64, 128]
+causal = [False, True]
+providers = ["triton-fp16", "triton-fp8", "cudnn-fp16"]
+N_CTX = [2**i for i in range(10, 17)]
 
 bench_configs = []
 for Z, H, D, is_causal in itertools.product(BATCH, N_HEADS, HEAD_DIM, causal):
@@ -1023,10 +1013,7 @@ def bench(Z, H, N_CTX, HEAD_DIM, causal, provider):
         else:
             raise ValueError(f"Unsupported provider: {provider}")
 
-        if not profile:
-            ms = triton.testing.do_bench(fn)
-        else:
-            ms, _ = 1, fn()
+        ms = triton.testing.do_bench(fn)
         flops_per_matmul = 2.0 * Z * H * N_CTX * N_CTX * HEAD_DIM
         total_flops = 2 * flops_per_matmul
         if causal:
