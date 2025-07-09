@@ -221,7 +221,7 @@ class Autotuner(KernelInterface):
             if key not in self.cache:
                 used_cached_result = False
                 pruned_configs = self.prune_configs(kwargs)
-                if knobs.compilation_knobs.disable_autotune:
+                if knobs.compilation.disable_autotune:
                     pruned_configs = [pruned_configs[0]]
 
                 def benchmark():
