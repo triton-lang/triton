@@ -834,13 +834,20 @@ def _attn_fwd_correction(config, chnls, descs, M, STAGE: gl.constexpr):
             config, prog, s1_tmem, M, corr1_consumer, epi_producer, o_consumer)
 
 
-@gluon.jit(do_not_specialize=["Z"])
-def gluon_attn(sm_scale, M, Z, H, N_CTX,  #
-               desc_q, desc_k, desc_v, desc_o,  #
-               BLOCK_M: gl.constexpr, BLOCK_N: gl.constexpr, HEAD_DIM: gl.constexpr,  #
-               GROUP_SIZE_N: gl.constexpr, NUM_SMS: gl.constexpr,  #
-               STAGE: gl.constexpr, dtype: gl.constexpr,  #
-               num_warps: gl.constexpr):
+def attention_repr(specialization):
+    name = "gluon_attention"
+    # Up to 150 TFLOPS faster for fp8!
+    if specialization.constants["dtype"] == gl.float8e5:
+        name = "cutlass_" + name
+    return name
+
+
+@gluon.jit(do_not_specialize=["Z"], repr=attention_repr)
+def attention_kernel(  #
+        sm_scale, M, Z, H, N_CTX, desc_q, desc_k, desc_v, desc_o,  #
+        BLOCK_M: gl.constexpr, BLOCK_N: gl.constexpr, HEAD_DIM: gl.constexpr,  #
+        GROUP_SIZE_N: gl.constexpr, NUM_SMS: gl.constexpr, STAGE: gl.constexpr, dtype: gl.constexpr,  #
+        num_warps: gl.constexpr):
     qk_scale = sm_scale * 1.44269504
     config = AttentionConfig(qk_scale, Z, H, N_CTX, BLOCK_M, BLOCK_N, HEAD_DIM, GROUP_SIZE_N, NUM_SMS,  # i
                              dtype, num_warps, SPLIT_D_FACTOR=2)
@@ -919,7 +926,7 @@ def attention_forward(q, k, v, causal, sm_scale):
     num_pid_n = q.shape[0] * q.shape[1]
     grid = min(NUM_SMS, num_pid_m * num_pid_n)
 
-    gluon_attn[(grid, )](
+    attention_kernel[(grid, )](
         sm_scale, M, q.shape[0], q.shape[1], q.shape[2],  #
         desc_q, desc_k, desc_v, desc_o,  #
         BLOCK_M, BLOCK_N, HEAD_DIM_K, GROUP_SIZE_N, NUM_SMS,  #
