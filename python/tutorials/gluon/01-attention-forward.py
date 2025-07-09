@@ -617,7 +617,7 @@ def _softmax_inner_loop(tile_id: gl.constexpr, config, prog,  #
         alpha_tmem.store(gl.convert_layout(alpha.expand_dims(1), config.alpha_2d_layout))
         mbarrier.arrive(corr_bar, count=1)
 
-        qk = _mul_f32x2(qk, gl.full(config.qk_shape, config.qk_scale, gl.float32, qk.type.layout))
+        qk = _mul_f32x2(qk, gl.full_like(qk, config.qk_scale))
         qk = _add_f32x2(qk, -m_ij[:, None])
         qk0, qk1, = qk.reshape([config.SPLIT_M, 2, config.BLOCK_N // 2]).permute(0, 2, 1).split()
 
