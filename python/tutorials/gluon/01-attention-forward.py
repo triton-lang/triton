@@ -423,25 +423,6 @@ class AttentionProgram:
         return lo, hi
 
 
-@aggregate
-class InnerLoopInfo:
-    s_chnl: TensorMemoryChannel
-    corr_chnl: SharedMemoryChannel
-
-    def __init__(self, s_chnl, corr_chnl):
-        self.s_chnl = s_chnl
-        self.corr_chnl = corr_chnl
-
-    @gluon.jit
-    def create(config):
-        return InnerLoopInfo(s_chnl, corr_chnl)
-
-    @gluon.jit
-    def release(self):
-        self.s_chnl.release()
-        self.corr_chnl.release()
-
-
 # ===-----------------------------------------------------------------------===#
 # float2
 # ===-----------------------------------------------------------------------===#
