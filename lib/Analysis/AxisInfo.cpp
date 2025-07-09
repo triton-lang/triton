@@ -469,26 +469,26 @@ private:
     // The minimal contiguity is gcd(d_lhs, d_rhs).
     // Since gcd(d_lhs, d_rhs) maybe > len(lhs),
     // we need to use another gcd to get the actual contiguity.
-    if (AxisInfoVisitor::isContiguousDim(lhs, shape, dim) &&
-        AxisInfoVisitor::isConstantDim(rhs, shape, dim)) {
-      contiguity = std::max(contiguity, gcd(lhs.getContiguity(dim),
-                                            gcd(lhs.getDivisibility(dim),
-                                                rhs.getDivisibility(dim))));
+    if (AxisInfoVisitor::isConstantDim(rhs, shape, dim)) {
+      contiguity = gcd(lhs.getContiguity(dim),
+                       gcd(lhs.getDivisibility(dim), rhs.getDivisibility(dim)));
     }
     return contiguity;
   }
 
   int64_t getDivisibility(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
                           int dim) override {
+    auto resTy = dyn_cast<RankedTensorType>(op.getType());
     if (rhs.getConstancy(dim) > 1) {
       // lhs: d_lhs * k = gcd(d_lhs, d_rhs) * k' * k = gcd(d_lhs, d_rhs) * k''
       // rhs: d_rhs * p = gcd(d_lhs, d_rhs) * p' * p = gcd(d_lhs, d_rhs) * p''
       // lhs = gcd(d_lhs, d_rhs) * k'' = gcd(d_lhs, d_rhs) * d + r
       // r must be divisible by gcd(d_lhs, d_rhs)
       return gcd(lhs.getDivisibility(dim), rhs.getDivisibility(dim));
-    } else if (AxisInfoVisitor::isConstantDim(rhs, lhs.getShape(), dim) &&
-               rhs.getConstantValue().has_value() &&
-               rhs.getConstantValue().value() < lhs.getDivisibility(dim)) {
+    } else if (resTy &&
+               AxisInfoVisitor::isConstantDim(lhs, resTy.getShape(), dim) &&
+               lhs.getConstantValue().has_value() &&
+               lhs.getConstantValue().value() < rhs.getDivisibility(dim)) {
       return lhs.getDivisibility(dim);
     }
     // Otherwise we shouldn't assume any divisibility.
