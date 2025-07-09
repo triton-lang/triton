@@ -2,15 +2,6 @@
 
 // CHECK-LABEL: @nvvm_syncs
 llvm.func @nvvm_syncs() {
-  // CHECK: nvvm.wgmma.fence.aligned
-  nvgpu.wgmma_fence
-
-  // CHECK: nvvm.wgmma.commit.group.sync.aligned
-  nvgpu.wgmma_commit_group
-
-  // CHECK: nvvm.cluster.wait
-  nvgpu.cluster_wait
-
   // CHECK: fence.proxy.async.shared::cta;
   nvgpu.fence_async_shared {bCluster = false}
   // CHECK: fence.proxy.async.shared::cluster;
