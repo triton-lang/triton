@@ -296,6 +296,15 @@ class HIPBackend(BaseBackend):
         passes.convert.add_index_to_llvmir(pm)
 
         amd.passes.ttgpuir.add_allocate_shared_memory(pm)
+
+        # Perform the membar analysis before the ops refinement (the refinement pass is coming later)
+        # to prevent redundant `gpu.barriers` from ops on sub-sliced `ttg.memdesc_subviews`.
+        # Note: Be careful to insert new passes between `membar_analysis` and `to_llvmir`
+        # which alter the instructions order because moving ops between `gpu.barriers`
+        # (added by `membar`) can violate RAW or WAR consistencies which was
+        # handled/resolved by the `membar_analysis`.
+        passes.ttgpuir.add_membar_analysis(pm)
+
         ## __HIP_FTZ is used to control the denorm flushing behavior of exp2 op as follows:
         ## 1. If __HIP_FTZ = 1, exp2 flushes denorms in input and output regardless
         ##    of the value of kernel arg `allow_flush_denorm`.

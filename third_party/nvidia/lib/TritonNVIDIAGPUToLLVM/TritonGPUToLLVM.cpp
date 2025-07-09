@@ -10,7 +10,6 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Pass/Pass.h"
-#include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Analysis/Membar.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
@@ -80,11 +79,6 @@ struct ConvertTritonGPUToLLVM
     MLIRContext *context = &getContext();
     ModuleOp mod = getOperation();
     TargetInfo targetInfo(computeCapability, ptxVersion);
-
-    // Allocate shared memory and set barrier
-    ModuleAllocation allocation(mod);
-    ModuleMembarAnalysis membarPass(&allocation);
-    membarPass.run();
 
     mlir::LowerToLLVMOptions option(context);
     option.overrideIndexBitwidth(32);

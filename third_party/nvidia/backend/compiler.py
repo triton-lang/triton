@@ -341,6 +341,12 @@ class CUDABackend(BaseBackend):
             passes.ttgpuir.add_concurrency_sanitizer(pm)
         passes.ttgpuir.add_allocate_global_scratch_memory(pm)
         nvidia.passes.ttnvgpuir.add_proxy_fence_insertion(pm, capability)
+
+        # Note: Be careful to insert new passes between `membar_analysis` and `to_llvmir`
+        # which alter the instructions order because moving ops between `gpu.barriers`
+        # (added by `membar`) can violate RAW or WAR consistencies which was
+        # handled/resolved by the `membar_analysis`.
+        passes.ttgpuir.add_membar_analysis(pm)
         nvidia.passes.ttgpuir.add_to_llvmir(pm, capability, ptx_version)
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
