@@ -1791,7 +1791,7 @@ class TritonSemantic(Generic[TensorTy]):
             if elem.dtype != tl.int64 and require_i64:
                 return self.builder.create_int_cast(elem.handle, self.builder.get_int64_ty(),
                                                     elem.dtype.is_int_signed())
-            elif elem.dtype == tl.int64 and not require_i64:
+            elif elem.dtype != tl.int32 and not require_i64:
                 assert False, "Block pointers only support 32 bit `offsets/block_shape`, " \
                     "add a `.to(tl.int32)` or use regular indexing for 64 bit support"
             return elem.handle
