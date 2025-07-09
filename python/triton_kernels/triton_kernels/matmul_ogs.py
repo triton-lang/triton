@@ -416,6 +416,8 @@ def matmul_ogs(x, w, bias,
     )
     if w_scale is not None and opt_flags.is_persistent and not target_info.has_native_mxfp():
         raise NotImplementedError("Must use non-persistent kernel for simulated MXFP")
+    if w_scale is not None and not opt_flags.is_persistent and target_info.has_native_mxfp():
+        raise NotImplementedError("Must use persistent kernel for native MXFP")
     # determine necessary pre/post processing
     preprocessing_features = init_preprocessing_features(w, precision_config, opt_flags)
     postprocessing_features = init_postprocessing_features(routing_data, scatter_indx, opt_flags)
@@ -475,12 +477,12 @@ def matmul_ogs(x, w, bias,
     # create tma descriptor for w_scale
     w_scale_tensor_or_tma = w_scale
     w_scale_has_tma = opt_flags.is_persistent and w_scale is not None
-    w_scale_tensor_or_tma =  w_scale.storage.make_tma([opt_flags.block_n, opt_flags.block_k]) if w_scale_has_tma else w_scale
+    w_scale_tensor_or_tma =  w_scale.storage.make_tma([1, opt_flags.block_n, opt_flags.block_k]) if w_scale_has_tma else w_scale
     # canonicalize strides
     x_strides = [0]*(3 - x_storage.data.ndim) + list(x_storage.data.stride())
     w_scale_strides = w_scale.stride() if has_mx and not w_scale_has_tma else (None, None, None)
     if len(w_scale_strides) == 2:
-        w_scale_strides = (w_scale_strides[0], ) + w_scale_strides
+        w_scale_strides = (0, ) + w_scale_strides
     # launch kernel
     kernels = get_kernels(epilogue.specs, fused_activation.specs)
     (kernels._p_matmul_ogs if opt_flags.is_persistent else kernels._matmul_ogs)[(grid,)](
