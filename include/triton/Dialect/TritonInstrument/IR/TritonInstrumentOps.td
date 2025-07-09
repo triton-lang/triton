@@ -7,11 +7,20 @@ include "triton/Dialect/Triton/IR/TritonTypes.td"
 include "mlir/IR/OpBase.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
 
+//
+// Interfaces
+//
+def GlobalMemory : Resource<"::mlir::triton::GlobalMemory">;
+
+//
+// Ops
+//
+
 class TTI_Op<string mnemonic, list<Trait> traits = []> :
     Op<TritonInstrument_Dialect, mnemonic, traits> {
 }
 
-def TTI_ExperimentalAssertInThreadOp : TTI_Op<"experimental_assert_in_thread", [Pure]> {
+def TTI_ExperimentalAssertInThreadOp : TTI_Op<"experimental_assert_in_thread", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
   let summary = "assert the condition within the current thread";
   let description = [{
     Assert that the condition is true given all the values are available in the current thread.
@@ -37,7 +46,7 @@ def TTI_ExperimentalSharedBufferPointersOp : TTI_Op<"experimental_shared_buffer_
 }
 
 
-def TTI_ExperimentalCheckOutstandingWritesOp : TTI_Op<"experimental_check_outstanding_writes", [Pure]> {
+def TTI_ExperimentalCheckOutstandingWritesOp : TTI_Op<"experimental_check_outstanding_writes", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
   let summary = "check if there are outstanding writes to a buffer guarded by a mbar";
   let description = [{
     Check if there are outstanding writes to a buffer guarded by a mbar.
@@ -52,10 +61,11 @@ def TTI_ExperimentalCheckOutstandingWritesOp : TTI_Op<"experimental_check_outsta
   let assemblyFormat = [{
     $buf `{` $buffers `,` $writeBars `(` $writeBarsType `)` `}` (`,` $pred^)? attr-dict `:` type($buf) `,` type($buffers) `,` type($writeBars)
   }];
+  let hasVerifier = 1;
 }
 
 
-def TTI_ExperimentalCheckOutstandingReadsOp : TTI_Op<"experimental_check_outstanding_reads", [Pure]> {
+def TTI_ExperimentalCheckOutstandingReadsOp : TTI_Op<"experimental_check_outstanding_reads", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
   let summary = "check if there are outstanding reads from a buffer guarded by a mbar";
   let description = [{
     Check if there are outstanding reads from a buffer guarded by a mbar.
@@ -70,12 +80,11 @@ def TTI_ExperimentalCheckOutstandingReadsOp : TTI_Op<"experimental_check_outstan
   let assemblyFormat = [{
     $buf `{` $buffers `,` $readBars `(` $readBarsType `)` `}` (`,` $pred^)? attr-dict `:` type($buf) `,` type($buffers) `,` type($readBars)
   }];
+  let hasVerifier = 1;
 }
 
 
-// TODO: This should not be pure I guess
-// TODO: Add verifiers for the type of the scratch buffers be consistent with the dimensions of buffers/barriers
-def TTI_ExperimentalMarkAsWriteOp : TTI_Op<"experimental_mark_as_write", [Pure]> {
+def TTI_ExperimentalMarkAsWriteOp : TTI_Op<"experimental_mark_as_write", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
   let summary = "mark a buffer as being written to using mbar as a guard";
   let description = [{
     Mark a buffer as being written to using mbar as a guard.
@@ -91,10 +100,11 @@ def TTI_ExperimentalMarkAsWriteOp : TTI_Op<"experimental_mark_as_write", [Pure]>
   let assemblyFormat = [{
     $buf `,` $mbar `{` $buffers `,` $writeBars `(` $writeBarsType `)` `}` (`,` $pred^)? attr-dict `:` type($buf) `,` type($mbar) `,` type($buffers) `,` type($writeBars)
   }];
+  let hasVerifier = 1;
 }
 
 
-def TTI_ExperimentalMarkAsReadOp : TTI_Op<"experimental_mark_as_read", [Pure]> {
+def TTI_ExperimentalMarkAsReadOp : TTI_Op<"experimental_mark_as_read", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
   let summary = "mark a buffer as being read from using mbar as a guard";
   let description = [{
     Mark a buffer as being read from using mbar as a guard.
@@ -111,10 +121,11 @@ def TTI_ExperimentalMarkAsReadOp : TTI_Op<"experimental_mark_as_read", [Pure]> {
   let assemblyFormat = [{
     $buf `,` $mbar `{` $buffers `,` $barriers `,` $readBars `(` $readBarsType `)` `}` (`,` $pred^)? attr-dict `:` type($buf) `,` type($mbar) `,` type($buffers) `,` type($barriers) `,` type($readBars)
   }];
+  let hasVerifier = 1;
 }
 
 
-def TTI_ExperimentalClearWriteBarrierOp : TTI_Op<"experimental_clear_write_barrier", [Pure]> {
+def TTI_ExperimentalClearWriteBarrierOp : TTI_Op<"experimental_clear_write_barrier", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
   let summary = "clear the write state for buffers being guarded by an mbar";
   let description = [{
     Clear the write state for buffers being guarded by an mbar.
@@ -131,7 +142,7 @@ def TTI_ExperimentalClearWriteBarrierOp : TTI_Op<"experimental_clear_write_barri
 }
 
 
-def TTI_ExperimentalClearReadBarrierOp : TTI_Op<"experimental_clear_read_barrier", [Pure]> {
+def TTI_ExperimentalClearReadBarrierOp : TTI_Op<"experimental_clear_read_barrier", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
   let summary = "clear the read state for buffers being guarded by an mbar";
   let description = [{
     Clear the read state for buffers being guarded by an mbar.
@@ -146,6 +157,7 @@ def TTI_ExperimentalClearReadBarrierOp : TTI_Op<"experimental_clear_read_barrier
   let assemblyFormat = [{
     $mbar `{` $barriers `,` $readBars `(` $readBarsType `)` `}` (`,` $pred^)? attr-dict `:` type($mbar) `,` type($barriers) `,` type($readBars)
   }];
+  let hasVerifier = 1;
 }
 
 #endif // TRITONINSTRUMENT_OPS
