@@ -811,7 +811,7 @@ bool emitTransferBetweenRegistersAndShared(
     regToSharedLayout =
         regLayout.reshapeOuts({{kOffset, regLayout.getTotalOutDimSize()}});
   } else {
-    auto sharedLL = triton::gpu::toLinearLayout(shape, sharedTy.getEncoding());
+    auto sharedLL = triton::gpu::toLinearLayout(sharedTy);
     regToSharedLayout = regLayout.invertAndCompose(sharedLL);
   }
 
@@ -887,8 +887,7 @@ bool emitTransferBetweenRegistersAndShared(
     const SharedMemoryObject &smemObj, Location loc, RewriterBase &rewriter,
     const TargetInfoBase &target,
     std::function<void(VectorType, Value /*shmemAddr*/)> perVectorCallback) {
-  auto regLayout = triton::gpu::toLinearLayout(registerTy.getShape(),
-                                               registerTy.getEncoding());
+  auto regLayout = triton::gpu::toLinearLayout(registerTy);
   auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
   return emitTransferBetweenRegistersAndShared(
       regLayout, sharedTy, elemLlvmTy, maxVecElems, smemObj, loc, rewriter,
@@ -1110,8 +1109,7 @@ llvm::MapVector<StringAttr, int32_t> getFreeVariableMasks(Type type) {
   if (!tensorTy) {
     return getAllFreeVarMasks(ctx);
   }
-  auto ll =
-      triton::gpu::toLinearLayout(tensorTy.getShape(), tensorTy.getEncoding());
+  auto ll = triton::gpu::toLinearLayout(tensorTy);
   return ll.getFreeVariableMasks();
 }
 
@@ -1121,7 +1119,7 @@ SmallVector<SmallVector<unsigned>> emitOffsetForLayout(Attribute layout,
   auto shape = type.getShape();
   unsigned rank = shape.size();
 
-  auto ll = triton::gpu::toLinearLayout(shape, layout);
+  auto ll = triton::gpu::toLinearLayout(type);
 
   StringAttr kRegister = str_attr("register");
   StringAttr kLane = str_attr("lane");

@@ -68,8 +68,8 @@ bool hasMatchingCTATileLayoutForSliceConcat(
     std::function<void(const Twine &)> emitError) {
   auto srcShape = srcTy.getShape();
   auto dstShape = dstTy.getShape();
-  auto srcLL = triton::gpu::toLinearLayout(srcShape, srcTy.getEncoding());
-  auto dstLL = triton::gpu::toLinearLayout(dstShape, dstTy.getEncoding());
+  auto srcLL = triton::gpu::toLinearLayout(srcTy);
+  auto dstLL = triton::gpu::toLinearLayout(dstTy);
 
   MLIRContext *ctx = srcTy.getContext();
   auto kReg = StringAttr::get(ctx, "register");
@@ -373,9 +373,8 @@ LogicalResult InThreadTransposeOp::verify() {
     return emitOpError("Expect input tensor in Blocked encoding");
   }
 
-  auto dstEncoding = dstTy.getEncoding();
   auto expectedLinearLayout = deduceOutputLayout(shape, srcEncoding);
-  auto dstLinearLayout = triton::gpu::toLinearLayout(shape, dstEncoding);
+  auto dstLinearLayout = triton::gpu::toLinearLayout(dstTy);
   if (dstLinearLayout != expectedLinearLayout) {
     return emitOpError("Expect output layout to be transposed per thread: " +
                        expectedLinearLayout.toString());

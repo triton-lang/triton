@@ -186,7 +186,7 @@ struct JoinOpConversion : public ConvertOpToLLVMPattern<JoinOp> {
     // two different chunks.
     Location loc = op->getLoc();
     RankedTensorType dstTy = op.getType();
-    auto ll = toLinearLayout(dstTy.getShape(), dstTy.getEncoding());
+    auto ll = toLinearLayout(dstTy);
     int splitDim = dstTy.getRank() - 1;
     auto kReg = mlir::StringAttr::get(dstTy.getContext(), "register");
     const auto &bases = ll.getBases();
@@ -237,7 +237,7 @@ struct SplitOpConversion : public ConvertOpToLLVMPattern<SplitOp> {
     // registers belong to the same chunk then we separate the registers between
     // two different chunks.
     auto srcTy = cast<RankedTensorType>(op.getSrc().getType());
-    auto ll = toLinearLayout(srcTy.getShape(), srcTy.getEncoding());
+    auto ll = toLinearLayout(srcTy);
     int splitDim = srcTy.getRank() - 1;
     auto kReg = mlir::StringAttr::get(srcTy.getContext(), "register");
     const auto &bases = ll.getBases();
@@ -501,10 +501,7 @@ struct MemDescSubviewOpConversion
       for (int i = rankReduced; i < opOffsetVals.size(); i++) {
         logicalOffsets.push_back({dimNames[i], offsetVals[i - rankReduced]});
       }
-      // The order gives us the honest-to-goodness layout rank
-      auto srcAllocShape =
-          srcTy.getAllocShape().take_back(getOrder(srcTy).size());
-      auto ll = toLinearLayout(srcAllocShape, srcTy.getEncoding());
+      auto ll = toLinearLayout(srcTy);
       // Checked in the verifier.
       assert(ll.getInDimSize(str_attr("block")) == 1);
       auto kOffset = str_attr("offset");

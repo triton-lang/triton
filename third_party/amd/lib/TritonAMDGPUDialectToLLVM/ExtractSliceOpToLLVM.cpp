@@ -48,14 +48,11 @@ struct ExtractSliceOpConversion
         LLVM::AMD::multiDimElementwise<int64_t, unsigned>(
             offsets, shapePerCTATile, std::divides<unsigned>());
 
-    Attribute srcEncoding = srcTy.getEncoding();
-    Attribute dstEncoding = dstTy.getEncoding();
-
-    auto linearLayoutSrc = triton::gpu::toLinearLayout(srcShape, srcEncoding);
+    auto linearLayoutSrc = triton::gpu::toLinearLayout(srcTy);
     auto outDimNames = llvm::to_vector(linearLayoutSrc.getOutDimNames());
     // Call transposeOuts, to ensure that order of input and output tensor
     // element coordinates are compatible on stage 7 in algorithm below.
-    auto linearLayoutDst = triton::gpu::toLinearLayout(dstShape, dstEncoding)
+    auto linearLayoutDst = triton::gpu::toLinearLayout(srcTy)
                                .transposeOuts(outDimNames);
 
     auto srcCTAOrder =
