@@ -407,7 +407,7 @@ def matmul_ogs(x, w, bias,
     out_dtype = precision_config.out_dtype or x.dtype
     can_use_tma = x.storage.is_tma_compliant() and \
                   w.storage.is_tma_compliant() and \
-                 (w_scale is None or w_scale.storage.is_tma_compliant)
+                 (w_scale is None or w_scale.storage.is_tma_compliant())
     # hopper w/ mxfp4 doesn't support TMA
     can_use_tma = can_use_tma and (torch.cuda.get_device_capability()[0] > 9 or bitwidth(w.dtype) != 4)
     can_use_fused_scatter = scatter_indx is not None and fused_activation.specs.fn is None
@@ -417,7 +417,7 @@ def matmul_ogs(x, w, bias,
     if w_scale is not None and opt_flags.is_persistent and not target_info.has_native_mxfp():
         raise NotImplementedError("Must use non-persistent kernel for simulated MXFP")
     if w_scale is not None and not opt_flags.is_persistent and target_info.has_native_mxfp():
-        raise NotImplementedError("Must use persistent kernel for native MXFP")
+        raise NotImplementedError("Must use persistent kernel and be TMA-compliant for native MXFP")
     # determine necessary pre/post processing
     preprocessing_features = init_preprocessing_features(w, precision_config, opt_flags)
     postprocessing_features = init_postprocessing_features(routing_data, scatter_indx, opt_flags)
