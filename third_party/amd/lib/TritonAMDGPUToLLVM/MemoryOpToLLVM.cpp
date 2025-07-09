@@ -28,7 +28,7 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
 } // namespace SharedToDotOperandWMMA
 
 namespace {
-struct LocalLoadOpConversion
+struct LocalLoadOpWMMAConversion
     : public ConvertOpToLLVMPattern<triton::gpu::LocalLoadOp> {
 public:
   using ConvertOpToLLVMPattern<
@@ -42,7 +42,7 @@ public:
     Attribute srcLayout = srcTy.getEncoding();
     Attribute dstLayout = dstTy.getEncoding();
     if (isa<DotOperandEncodingAttr>(dstLayout) &&
-        isa<AMDMfmaEncodingAttr, AMDWmmaEncodingAttr>(
+        isa<AMDWmmaEncodingAttr>(
             cast<DotOperandEncodingAttr>(dstLayout).getParent())) {
       return lowerSharedToDotOperand(op, adaptor, getTypeConverter(), rewriter);
     }
@@ -336,6 +336,7 @@ void mlir::triton::AMD::populateMemoryOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     const TargetInfo &targetInfo, PatternBenefit benefit) {
   PatternBenefit transBenefit = PatternBenefit(benefit.getBenefit() + 1);
+  patterns.add<LocalLoadOpWMMAConversion>(typeConverter, benefit);
   patterns.add<TransLocalLoadOpConversion>(typeConverter, targetInfo,
                                            transBenefit);
 }
