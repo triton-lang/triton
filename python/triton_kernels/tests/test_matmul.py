@@ -54,13 +54,13 @@ def init_routing_data(m, n_expts_tot, n_expts_act, n_expt_shards, do_gather, do_
 def init_compute_data(m, n, k, gindx, sindx, n_expts_tot, n_expts_act, n_expt_shards, mode, act_dtype, weight_dtype,
                       has_y_gammas, requires_grad=True, device="cuda"):
     torch.manual_seed(0)
-    assert mode in {'batched', 'ragged'}
+    assert mode in {'batched', "plain", 'ragged'}
     in_m = m * (n_expts_act if gindx is None else 1)
     shape_x = (n_expts_tot, in_m, k) if mode == 'batched' else (in_m, k)
+    shape_batch = tuple() if mode == "plain" else (n_expts_tot // n_expt_shards, )
     x = alloc_rand(shape_x, device=device, dtype=act_dtype, requires_grad=requires_grad)
-    w = alloc_rand((n_expts_tot // n_expt_shards, k, n), device=device, dtype=weight_dtype, requires_grad=requires_grad)
-    bias = alloc_rand((n_expts_tot // n_expt_shards, n), device=device, dtype=torch.float32,
-                      requires_grad=requires_grad)
+    w = alloc_rand(shape_batch + (k, n), device=device, dtype=weight_dtype, requires_grad=requires_grad)
+    bias = alloc_rand(shape_batch + (n, ), device=device, dtype=torch.float32, requires_grad=requires_grad)
     gs0 = 2**torch.randint(-5, 0, (m * n_expts_act, ), device=device, dtype=torch.float32, requires_grad=requires_grad)
     gs1 = 2**torch.randint(-5, 0, (m * n_expts_act, ), device=device, dtype=torch.float32, requires_grad=requires_grad)
     gs0 = gs0.detach().requires_grad_(requires_grad)
@@ -186,8 +186,10 @@ class Case:
             Case(1000, 700, 700, "ragged", "float16", "float16", 8, 2),
             Case(1000, 700, 700, "ragged", "float16", "float16", 8, 2, split_k=9),
             # mx types:
-            Case(16, 256, 256, "ragged", "bfloat16", "mxfloat4_e2m1", 128, 4),
-            Case(16, 256, 256, "ragged", "bfloat16", "mxfloat4_e2m1", 128, 4, hbm_swizzling=True),
+            Case(16, 256, 256, "plain", "bfloat16", "mxfloat4_e2m1", 1, 1),
+            Case(16, 256, 256, "plain", "bfloat16", "mxfloat4_e2m1", 1, 1, hbm_swizzling=True),
+            Case(16, 256, 256, "ragged", "bfloat16", "mxfloat4_e2m1", 1, 1),
+            Case(16, 256, 256, "ragged", "bfloat16", "mxfloat4_e2m1", 1, 1, hbm_swizzling=True),
             Case(1000, 700, 700, "batched", "bfloat16", "mxfloat4_e2m1", 8, 2),
             Case(1000, 700, 700, "batched", "bfloat16", "mxfloat4_e2m1", 8, 2, hbm_swizzling=True),
             Case(1000, 700, 700, "ragged", "bfloat16", "mxfloat4_e2m1", 8, 2, split_k=9),
@@ -319,6 +321,12 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
                                                                  torch.bfloat16 if is_mixed_input else weight_dtype,
                                                                  has_y_gammas, requires_grad=test_bwd, device=device)
     x_ref, w_ref, bias_ref, gs0_ref, gs1_ref = apply_precision(x_tri, w_tri, bias_tri, gs0_tri, gs1_tri, precision_opt)
+
+    if w_tri.shape[0] == 1:
+        # Test the case when weight has dim 2, i.e., shape (K, N).
+        w_tri = w_tri.squeeze(0).detach().requires_grad_(test_bwd)
+        w_ref = w_ref.squeeze(0).detach().requires_grad_(test_bwd)
+
     if is_mixed_input:
         capability_major = torch.cuda.get_device_capability()[0]
         w_layout = layout.StridedLayout
@@ -330,20 +338,17 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
             # weight scale layout
             w_scales_layouts = {9: layout.HopperMXScaleLayout, 10: layout.BlackwellMXScaleLayout}
             w_scale_layout = w_scales_layouts.get(capability_major, layout.StridedLayout)
-        w_tri, mx_scales_tri = downcast_to_mxfp(w_tri, weight_dtype, axis=1)
-        w_ref = upcast_from_mxfp(w_tri, mx_scales_tri, torch.bfloat16, axis=1)
+        w_tri, mx_scales_tri = downcast_to_mxfp(w_tri, weight_dtype, axis=-2)
+        w_ref = upcast_from_mxfp(w_tri, mx_scales_tri, torch.bfloat16, axis=-2)
         w_tri_dtype = FP4 if "float4" in weight_dtype_str else weight_dtype
         w_tri = convert_layout(wrap_torch_tensor(w_tri, w_tri_dtype), w_layout)
         mx_scales_tri = convert_layout(wrap_torch_tensor(mx_scales_tri), w_scale_layout)
         precision_opt.weight_scale = mx_scales_tri
+        print(w_tri.shape, w_tri.stride())
+        print(mx_scales_tri.shape, mx_scales_tri.stride())
 
     # if not is_persistent and precision_opt.weight_scale is not None:
     #     pytest.skip("non-persistent not supported with mxfp")
-
-    if w_tri.shape[0] == 1:
-        # Test the case when weight has dim 2, i.e., shape (K, N).
-        w_tri = w_tri.squeeze(0).detach().requires_grad_(test_bwd)
-        w_ref = w_ref.squeeze(0).detach().requires_grad_(test_bwd)
 
     if test_launch_metadata:
 

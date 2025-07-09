@@ -395,7 +395,7 @@ def matmul_ogs(x, w, bias,
         x = Tensor(x, dtype=x.dtype)
     # determine shapes
     M = x.shape[-2] if gather_indx is None else gather_indx.src_indx.shape[0]
-    batch_size = w.shape[0] if routing_data.expt_hist is None else 1
+    batch_size = w.shape[0] if routing_data.expt_hist is None and w.ndim == 3 else 1
     K, N = w.shape[-2:]
     assert K == x.shape[-1]
     if x.ndim == 3 and w.ndim == 3:
@@ -565,10 +565,12 @@ def matmul_ogs_torch(x, w, bias,
         round_x = lambda x: x
     if round_y is None:
         round_y = lambda x: x
+    if bias.ndim == 1:
+        bias = bias.view(1, *bias.shape)
     if w.ndim == 2:
-        w = w.view(1, w.shape[0], w.shape[1])
+        w = w.view(1, *w.shape)
     if x.ndim == 2:
-        x = x.view(1, x.shape[0], x.shape[1])
+        x = x.view(1, *x.shape)
     if routing_data is None:
         routing_data = RoutingData(None, None, w.shape[0], 1)
     n_expts_act = routing_data.n_expts_act
@@ -590,7 +592,7 @@ def matmul_ogs_torch(x, w, bias,
             idx = gather_indx.src_indx[lo:hi] // n_expts_act
         batch = i if is_input_batched else 0
         out = torch.matmul(round_x(x[batch, idx, :], torch.arange(lo, hi, device="cuda")).float(),
-                           w[i, :, :].float())
+                           w[i].float())
         if bias is not None:
             out += bias[i, :] if betas is None else bias[i, :] * betas[lo:hi, None]
         if gammas is not None:
