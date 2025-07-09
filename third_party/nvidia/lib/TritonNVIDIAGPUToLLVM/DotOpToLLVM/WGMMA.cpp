@@ -23,8 +23,8 @@
 
 #include "MMAHelpers.h"
 #include "Utility.h"
-#include "mlir/Support/LLVM.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
+#include "mlir/Support/LLVM.h"
 
 using namespace mlir;
 using namespace mlir::triton;
