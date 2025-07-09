@@ -207,15 +207,6 @@ def get_cuda_autotune_config():
 def get_hip_autotune_config():
     return [
         triton.Config(
-            {'BLOCK_SIZE_M': 16, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8, 'waves_per_eu': 0},
-            num_warps=8, num_stages=2),
-        triton.Config(
-            {'BLOCK_SIZE_M': 16, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 6, 'waves_per_eu': 0},
-            num_warps=8, num_stages=2),
-        triton.Config(
-            {'BLOCK_SIZE_M': 32, 'BLOCK_SIZE_N': 16, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 2, 'waves_per_eu': 0},
-            num_warps=8, num_stages=2),
-        triton.Config(
             {'BLOCK_SIZE_M': 32, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 6, 'waves_per_eu': 0},
             num_warps=8, num_stages=2),
         triton.Config(
@@ -291,9 +282,13 @@ def matmul_kernel(
     group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
     pid_m = first_pid_m + ((pid % num_pid_in_group) % group_size_m)
     pid_n = (pid % num_pid_in_group) // group_size_m
-    tl.assume(pid_m > 0)
-    tl.assume(pid_n > 0)
 
+    # -----------------------------------------------------------
+    # Add some integer bound assumptions. This helps to guide 
+    # integer analysis in the backend to optimize load/store 
+    # offset address calculation 
+    tl.assume(pid_m >= 0)
+    tl.assume(pid_n >= 0)
     tl.assume(stride_am > 0)
     tl.assume(stride_ak > 0)
     tl.assume(stride_bn > 0)
