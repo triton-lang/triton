@@ -300,9 +300,9 @@ def matmul_kernel(
     pid_n = (pid % num_pid_in_group) // group_size_m
 
     # -----------------------------------------------------------
-    # Add some integer bound assumptions. This helps to guide
-    # integer analysis in the backend to optimize load/store
-    # offset address calculation
+    # Add some integer bound assumptions.
+    # This helps to guide integer analysis in the backend to optimize
+    # load/store offset address calculation
     tl.assume(pid_m >= 0)
     tl.assume(pid_n >= 0)
     tl.assume(stride_am > 0)
