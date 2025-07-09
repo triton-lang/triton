@@ -468,26 +468,6 @@ def _mul_f32x2(a, b):
     )
 
 
-@gluon.jit
-def _reduce_fadd2(p0a, p1a, p0b, p1b):
-    return gl.inline_asm_elementwise(
-        """
-        {
-            .reg .b64 rc, ra, rb;
-            mov.b64 ra, { $2, $4 };
-            mov.b64 rb, { $3, $5 };
-            add.f32x2 rc, ra, rb;
-            mov.b64 { $0, $1 }, rc;
-        }
-        """,
-        "=r,=r,r,r,r,r",
-        [p0a, p0b, p1a, p1b],
-        dtype=[gl.float32, gl.float32],
-        is_pure=True,
-        pack=1,
-    )
-
-
 # ===-----------------------------------------------------------------------===#
 # _gluon_attn
 # ===-----------------------------------------------------------------------===#
