@@ -37,7 +37,8 @@ class Storage:
         except ValueError:
             major_dim = -1
         ndim = self.data.ndim
-        compliant = [strides[i] * self.data.element_size() % 16 == 0 for i in range(ndim) if i != major_dim]
+        bitwidth = 4 if self.data.dtype == torch.uint8 else self.data.element_size() * 8
+        compliant = [strides[i] * bitwidth % 128 == 0 for i in range(ndim) if i != major_dim]
         return all(compliant)
 
     def make_tma(self, block_shape, transpose=False):
