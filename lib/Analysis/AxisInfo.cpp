@@ -469,9 +469,11 @@ private:
     // The minimal contiguity is gcd(d_lhs, d_rhs).
     // Since gcd(d_lhs, d_rhs) maybe > len(lhs),
     // we need to use another gcd to get the actual contiguity.
-    if (AxisInfoVisitor::isConstantDim(rhs, shape, dim)) {
-      contiguity = gcd(lhs.getContiguity(dim),
-                       gcd(lhs.getDivisibility(dim), rhs.getDivisibility(dim)));
+    if (AxisInfoVisitor::isContiguousDim(lhs, shape, dim) &&
+        AxisInfoVisitor::isConstantDim(rhs, shape, dim)) {
+      contiguity = std::max(contiguity, gcd(lhs.getContiguity(dim),
+                                            gcd(lhs.getDivisibility(dim),
+                                                rhs.getDivisibility(dim))));
     }
     return contiguity;
   }
