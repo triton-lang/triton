@@ -380,7 +380,7 @@ def matmul_ogs(x, w, bias,
     if epilogue is None:
         epilogue = Epilogue(FnSpecs.default(), tuple(), tuple(), False)
     if routing_data is None:
-        routing_data = RoutingData(None, None, w.shape[0], 1)
+        routing_data = RoutingData(None, None, max(1, w.shape[0]), 1)
     # unpack scales
     w_scale = precision_config.weight_scale
     has_mx = w_scale is not None
