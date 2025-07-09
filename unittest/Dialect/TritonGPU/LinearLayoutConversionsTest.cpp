@@ -868,6 +868,105 @@ TEST_F(LinearLayoutConversionsTest, SliceDot) {
                 {S("dim0")}));
 }
 
+TEST_F(LinearLayoutConversionsTest, MFMAScalePreshuffle) {
+
+  auto scaleLayout_0_128_8_2_2 = chooseScaledMfmaScaleLayout(
+      &ctx, /*dotOperand*/ 0, /*shape*/ {128, 8}, /*mfmaDim*/ 16,
+      /*tilesPerWarp*/ {2, 2}, /*warpsPerCTA*/ {2, 2}, /*preshuffle*/ true);
+
+  auto scaleLayout_0_128_8_1_4 = chooseScaledMfmaScaleLayout(
+      &ctx, /*dotOperand*/ 0, /*shape*/ {128, 8}, /*mfmaDim*/ 16,
+      /*tilesPerWarp*/ {2, 2}, /*warpsPerCTA*/ {1, 4}, /*preshuffle*/ true);
+
+  auto scaleLayout_0_128_16_2_2 = chooseScaledMfmaScaleLayout(
+      &ctx, /*dotOperand*/ 0, /*shape*/ {128, 16}, /*mfmaDim*/ 16,
+      /*tilesPerWarp*/ {2, 2}, /*warpsPerCTA*/ {2, 2}, /*preshuffle*/ true);
+
+  auto scaleLayout_0_128_16_1_4 = chooseScaledMfmaScaleLayout(
+      &ctx, /*dotOperand*/ 0, /*shape*/ {128, 16}, /*mfmaDim*/ 16,
+      /*tilesPerWarp*/ {2, 2}, /*warpsPerCTA*/ {1, 4}, /*preshuffle*/ true);
+
+  auto scaleLayout_1_128_8_2_2 = chooseScaledMfmaScaleLayout(
+      &ctx, /*dotOperand*/ 1, /*shape*/ {128, 8}, /*mfmaDim*/ 16,
+      /*tilesPerWarp*/ {2, 2}, /*warpsPerCTA*/ {2, 2}, /*preshuffle*/ true);
+
+  auto scaleLayout_1_128_8_1_4 = chooseScaledMfmaScaleLayout(
+      &ctx, /*dotOperand*/ 1, /*shape*/ {128, 8}, /*mfmaDim*/ 16,
+      /*tilesPerWarp*/ {2, 2}, /*warpsPerCTA*/ {1, 4}, /*preshuffle*/ true);
+
+  auto scaleLayout_1_128_16_2_2 = chooseScaledMfmaScaleLayout(
+      &ctx, /*dotOperand*/ 1, /*shape*/ {128, 16}, /*mfmaDim*/ 16,
+      /*tilesPerWarp*/ {2, 2}, /*warpsPerCTA*/ {2, 2}, /*preshuffle*/ true);
+
+  auto scaleLayout_1_128_16_1_4 = chooseScaledMfmaScaleLayout(
+      &ctx, /*dotOperand*/ 1, /*shape*/ {128, 16}, /*mfmaDim*/ 16,
+      /*tilesPerWarp*/ {2, 2}, /*warpsPerCTA*/ {1, 4}, /*preshuffle*/ true);
+
+  EXPECT_EQ(scaleLayout_0_128_8_2_2,
+            LinearLayout(
+                {{S("register"), {{0, 1}, {0, 2}, {64, 0}}},
+                 {S("lane"), {{0, 4}, {1, 0}, {2, 0}, {4, 0}, {8, 0}, {16, 0}}},
+                 {S("warp"), {{0, 0}, {32, 0}}},
+                 {S("block"), {}}},
+                {S("dim0"), S("dim1")}));
+
+  EXPECT_EQ(scaleLayout_0_128_8_1_4,
+            LinearLayout(
+                {{S("register"), {{0, 1}, {0, 2}, {32, 0}, {64, 0}}},
+                 {S("lane"), {{0, 4}, {1, 0}, {2, 0}, {4, 0}, {8, 0}, {16, 0}}},
+                 {S("warp"), {{0, 0}, {0, 0}}},
+                 {S("block"), {}}},
+                {S("dim0"), S("dim1")}));
+
+  EXPECT_EQ(scaleLayout_0_128_16_2_2,
+            LinearLayout(
+                {{S("register"), {{0, 1}, {0, 2}, {16, 0}, {64, 0}}},
+                 {S("lane"), {{0, 4}, {0, 8}, {1, 0}, {2, 0}, {4, 0}, {8, 0}}},
+                 {S("warp"), {{0, 0}, {32, 0}}},
+                 {S("block"), {}}},
+                {S("dim0"), S("dim1")}));
+
+  EXPECT_EQ(scaleLayout_0_128_16_1_4,
+            LinearLayout(
+                {{S("register"), {{0, 1}, {0, 2}, {16, 0}, {32, 0}, {64, 0}}},
+                 {S("lane"), {{0, 4}, {0, 8}, {1, 0}, {2, 0}, {4, 0}, {8, 0}}},
+                 {S("warp"), {{0, 0}, {0, 0}}},
+                 {S("block"), {}}},
+                {S("dim0"), S("dim1")}));
+
+  EXPECT_EQ(scaleLayout_1_128_8_2_2,
+            LinearLayout(
+                {{S("register"), {{0, 1}, {0, 2}, {64, 0}}},
+                 {S("lane"), {{0, 4}, {1, 0}, {2, 0}, {4, 0}, {8, 0}, {16, 0}}},
+                 {S("warp"), {{32, 0}, {0, 0}}},
+                 {S("block"), {}}},
+                {S("dim0"), S("dim1")}));
+
+  EXPECT_EQ(scaleLayout_1_128_8_1_4,
+            LinearLayout(
+                {{S("register"), {{0, 1}, {0, 2}}},
+                 {S("lane"), {{0, 4}, {1, 0}, {2, 0}, {4, 0}, {8, 0}, {16, 0}}},
+                 {S("warp"), {{32, 0}, {64, 0}}},
+                 {S("block"), {}}},
+                {S("dim0"), S("dim1")}));
+
+  EXPECT_EQ(scaleLayout_1_128_16_2_2,
+            LinearLayout(
+                {{S("register"), {{0, 1}, {0, 2}, {16, 0}, {64, 0}}},
+                 {S("lane"), {{0, 4}, {0, 8}, {1, 0}, {2, 0}, {4, 0}, {8, 0}}},
+                 {S("warp"), {{32, 0}, {0, 0}}},
+                 {S("block"), {}}},
+                {S("dim0"), S("dim1")}));
+
+  EXPECT_EQ(scaleLayout_1_128_16_1_4,
+            LinearLayout(
+                {{S("register"), {{0, 1}, {0, 2}, {16, 0}}},
+                 {S("lane"), {{0, 4}, {0, 8}, {1, 0}, {2, 0}, {4, 0}, {8, 0}}},
+                 {S("warp"), {{32, 0}, {64, 0}}},
+                 {S("block"), {}}},
+                {S("dim0"), S("dim1")}));
+}
+
 TEST_F(LinearLayoutConversionsTest, MFMA32_tpw_2_2) {
 
   auto mfmaNT =
