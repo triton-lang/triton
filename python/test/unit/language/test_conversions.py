@@ -290,6 +290,8 @@ def test_typeconvert_upcast(src_dtype, dst_dtype, device):
             with pytest.raises(triton.CompilationError, match="not supported in this architecture"):
                 launch_exhaustive_populate(getattr(tl, src_dtype), 0, 65536, False, 8, 0x7f, device=device)
             return
+        if src_dtype in ('float8e4b8', 'float8e5b16') and is_hip_cdna2():
+            pytest.skip(f"{src_dtype} is not supported on AMDGPU CDNA2")
 
     # dtype : (exponent_bits, mantissa_bits, exponent_bias, max_repr)
     stuff = {
@@ -346,6 +348,8 @@ def test_typeconvert_downcast(src_dtype, dst_dtype, rounding, max_repr, device):
                 pytest.skip("float8e4nv downcast tests only supported with RTNE rounding on AMDGPU")
             if not is_hip_cdna4() and src_dtype == 'bfloat16':
                 pytest.skip("float8e4nv downcast tests from bfloat16 only supported on AMDGPU CDNA4")
+        if dst_dtype in ('float8e4b8', 'float8e5b16') and is_hip_cdna2():
+            pytest.skip(f"{dst_dtype} is not supported on AMDGPU CDNA2")
 
     # dtype : (exponent_bits, mantissa_bits, exponent_bias)
     stuff = {
