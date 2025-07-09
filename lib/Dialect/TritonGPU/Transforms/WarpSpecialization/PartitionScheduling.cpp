@@ -204,15 +204,19 @@ static std::optional<WarpSchedule> getInitialSchedule(scf::ForOp loop) {
     }
     while (!operandViews.empty()) {
       Operation *op = operandViews.pop_back_val();
-      if (!op->hasOneUse() || !op->hasTrait<OpTrait::MemDescViewTrait>())
+      if (!op->hasTrait<OpTrait::MemDescViewTrait>())
         continue;
 
-      // Duplicate the op if necessary to ensure the MMA op is the only user.
-      if (!llvm::all_of(op->getUsers(),
-                        [&](Operation *user) { return user == mmaOp; })) {
-        Operation *viewOp = OpBuilder(op).clone(*op);
-        mmaOp->replaceUsesOfWith(op->getResult(0), viewOp->getResult(0));
-        op = viewOp;
+      // Duplicate the op if necessary to ensure that the MMA partition is the
+      // only user.
+      if (!llvm::all_of(op->getUsers(), [&](Operation *user) {
+            return schedule.getPartition(user) == mmaPartition;
+          })) {
+        Operation *newOp = OpBuilder(op).clone(*op);
+        op->replaceUsesWithIf(newOp->getResults(), [&](OpOperand &use) {
+          return schedule.getPartition(use.getOwner()) == mmaPartition;
+        });
+        op = newOp;
       }
 
       schedule.trySchedule(mmaPartition, op);
