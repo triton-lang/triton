@@ -477,7 +477,7 @@ def matmul_ogs(x, w, bias,
     # create tma descriptor for w_scale
     w_scale_tensor_or_tma = w_scale
     w_scale_has_tma = opt_flags.is_persistent and w_scale is not None
-    w_scale_tensor_or_tma =  w_scale.storage.make_tma([1, opt_flags.block_n, opt_flags.block_k]) if w_scale_has_tma else w_scale
+    w_scale_tensor_or_tma =  w_scale.storage.make_tma([opt_flags.block_n, opt_flags.block_k]) if w_scale_has_tma else w_scale
     # canonicalize strides
     x_strides = [0]*(3 - x_storage.data.ndim) + list(x_storage.data.stride())
     w_scale_strides = w_scale.stride() if has_mx and not w_scale_has_tma else (None, None, None)
