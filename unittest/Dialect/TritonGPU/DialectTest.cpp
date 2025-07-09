@@ -356,7 +356,8 @@ TEST_F(Fp4ToFpOpTest, Fp4ToFpOpLayoutPropagation) {
           std::nullopt);
       EXPECT_TRUE(succeeded(result));
       // Structural equality.
-      EXPECT_EQ(toLinearLayout(shape, newSrcEnc), toLinearLayout(shape, enc));
+      EXPECT_EQ(toLinearLayout(shape, newSrcEnc, {}),
+                toLinearLayout(shape, enc, {}));
       // We'll have equality iff dstEnc is a legacy encoding.
       if (!isa<LinearEncodingAttr>(dstEnc)) {
         EXPECT_EQ(newSrcEnc, enc);
@@ -387,7 +388,8 @@ TEST_F(JoinOpTest, JoinOpLayoutPropagation) {
       }
       auto rank = shape.size();
       // Join only supports Linear or Blocked
-      auto linear = LinearEncodingAttr::get(&ctx, toLinearLayout(shape, enc));
+      auto linear =
+          LinearEncodingAttr::get(&ctx, toLinearLayout(shape, enc, {}));
       // Test that we can do a round trip from src to dst encoding and back.
       Attribute dstEnc;
       LogicalResult result = inferLayout->inferDefaultJoinOpEncoding(
@@ -400,7 +402,8 @@ TEST_F(JoinOpTest, JoinOpLayoutPropagation) {
                                                  std::nullopt);
       EXPECT_TRUE(succeeded(result));
       // Structural equality.
-      EXPECT_EQ(toLinearLayout(shape, newSrcEnc), toLinearLayout(shape, enc));
+      EXPECT_EQ(toLinearLayout(shape, newSrcEnc, {}),
+                toLinearLayout(shape, enc, {}));
       // We'll have equality iff dstEnc is a legacy encoding.
       if (!isa<LinearEncodingAttr>(dstEnc)) {
         EXPECT_EQ(newSrcEnc, enc);
@@ -436,8 +439,8 @@ TEST_F(JoinOpTest, JoinOpLayoutPropagation) {
       assert(succeeded(result));
       // The layouts should be structurally the same
       // but reshapeEnc will likely be a LinearEncodingAttr
-      EXPECT_EQ(toLinearLayout(newShape, reshapedEnc),
-                toLinearLayout(newShape, dstEnc));
+      EXPECT_EQ(toLinearLayout(newShape, reshapedEnc, {}),
+                toLinearLayout(newShape, dstEnc, {}));
     }
   }
 }
