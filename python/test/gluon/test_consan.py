@@ -6,6 +6,7 @@ from triton import knobs
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
 from triton.experimental.gluon.language.nvidia import blackwell
+from triton.experimental.gluon.language.nvidia import ampere
 from triton.experimental.gluon.language.nvidia.blackwell import mbarrier, tma
 from triton._internal_testing import is_cuda
 import multiprocessing
@@ -185,6 +186,35 @@ def test_tma_interleave_kernel(FAILURE, device):
         assert "Buffer being accessed has outstanding writes" in stderr
 
     run_kernel_in_process("tma_interleave_kernel", FAILURE, device, check_stderr)
+
+
+@gluon.jit
+def async_copy_kernel(input, XBLOCK: ttgl.constexpr, FAILURE: ttgl.constexpr):
+    smem_layout: ttgl.constexpr = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2)
+    smem = ttgl.allocate_shared_memory(ttgl.float16, [XBLOCK, XBLOCK], smem_layout)
+    blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, XBLOCK], threads_per_warp=[32, 1],
+                                                        warps_per_cta=[4, 1], order=[0, 1])
+    offs_m = ttgl.arange(0, XBLOCK, layout=ttgl.SliceLayout(dim=1, parent=blocked_layout))[:, None]
+    offs_n = ttgl.arange(0, XBLOCK, layout=ttgl.SliceLayout(dim=0, parent=blocked_layout))[None, :]
+    offs = offs_m * XBLOCK + offs_n
+    ampere.async_copy.async_copy_global_to_shared(smem, input + offs)
+
+
+def test_async_copy(device):
+    knobs.compilation.enable_experimental_consan = True
+    os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
+
+    XBLOCK = 128
+    input = torch.randn((XBLOCK, XBLOCK), device=device, dtype=torch.float16)
+
+    # ConSan requires a global memory allocation
+    def alloc_fn(size: int, alignment: int, stream: Optional[int]):
+        return torch.empty(size, device="cuda", dtype=torch.int8)
+
+    triton.set_allocator(alloc_fn)
+
+    async_copy_kernel[(1, )](input, XBLOCK, FAILURE=False, num_warps=4)
+    getattr(torch, device).synchronize()
 
 
 @gluon.jit
