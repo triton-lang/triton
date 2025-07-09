@@ -7,6 +7,8 @@
 #include "triton/Dialect/TritonInstrument/IR/Dialect.cpp.inc"
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
 
+#include "triton/Dialect/TritonInstrument/IR/Dialect.cpp.inc"
+
 using namespace mlir::triton::instrument;
 
 void TritonInstrumentDialect::initialize() {
