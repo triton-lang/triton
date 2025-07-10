@@ -1,7 +1,8 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Signals.h"
-#include <pybind11/pybind11.h>
+#include <nanobind/nanobind.h>
 
+namespace pybind11 = nanobind;
 namespace py = pybind11;
 
 #define FOR_EACH_1(MACRO, X) MACRO(X)

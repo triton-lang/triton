@@ -27,11 +27,12 @@
 #include "llvm/Transforms/Instrumentation/AddressSanitizerOptions.h"
 #include <csignal>
 #include <memory>
-#include <pybind11/gil.h>
-#include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
+#include <nanobind/gil.h>
+#include <nanobind/nanobind.h>
+#include <nanobind/stl.h>
 #include <stdexcept>
 
+namespace pybind11 = nanobind;
 namespace py = pybind11;
 
 namespace llvm {

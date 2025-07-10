@@ -3,11 +3,14 @@
 #include <map>
 #include <stdexcept>
 
-#include "pybind11/pybind11.h"
-#include "pybind11/stl.h"
-#include "pybind11/stl_bind.h"
+#include <nanobind/nanobind.h>
+#include <nanobind/stl.h>
+#include <nanobind/stl/bind_map.h>
+#include <nanobind/stl/bind_vector.h>
 
 using namespace proton;
+namespace pybind11 = nanobind;
+namespace py = pybind11;
 
 static void initProton(pybind11::module &&m) {
   using ret = pybind11::return_value_policy;

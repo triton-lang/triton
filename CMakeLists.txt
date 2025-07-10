@@ -140,7 +140,7 @@ function(add_triton_plugin name)
 endfunction()
 
 
-# Disable warnings that show up in external code (gtest;pybind11)
+# Disable warnings that show up in external code (gtest;nanobind)
 if(NOT MSVC)
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror -Wno-covered-switch-default -fvisibility=hidden")
 else()
@@ -177,7 +177,11 @@ if(TRITON_BUILD_PYTHON_MODULE)
 
   # Python Interpreter is used to run lit tests
   find_package(Python3 REQUIRED COMPONENTS Development.Module Interpreter)
-  find_package(pybind11 CONFIG REQUIRED HINTS "${Python3_SITELIB}")
+  find_package(nanobind CONFIG REQUIRED HINTS "${Python3_SITELIB}")
+  execute_process(COMMAND ${Python3_EXECUTABLE} -m nanobind --include_dir
+                  OUTPUT_VARIABLE NANOBIND_INCLUDE_DIR
+                  OUTPUT_STRIP_TRAILING_WHITESPACE)
+  include_directories(${NANOBIND_INCLUDE_DIR})
 
   if (DEFINED TRITON_PLUGIN_DIRS)
     foreach(PLUGIN_DIR ${TRITON_PLUGIN_DIRS})
@@ -244,7 +248,7 @@ if(TRITON_BUILD_PYTHON_MODULE)
     LLVMAMDGPUAsmParser
 
     Python3::Module
-    pybind11::headers
+    nanobind
 
   )
   if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64" OR # Linux arm64

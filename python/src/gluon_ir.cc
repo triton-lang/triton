@@ -1,6 +1,6 @@
 #include "ir.h"
-#include "pybind11/pybind11.h"
-#include <pybind11/stl.h>
+#include <nanobind/nanobind.h>
+#include <nanobind/stl.h>
 
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Types.h"
@@ -12,6 +12,7 @@
 #include "triton/Tools/LinearLayout.h"
 
 using namespace mlir;
+namespace pybind11 = nanobind;
 namespace py = pybind11;
 namespace tt = triton;
 namespace ttg = triton::gpu;

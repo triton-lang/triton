@@ -1,10 +1,10 @@
 #include "ir.h"
 
 #include <optional>
-#include <pybind11/cast.h>
-#include <pybind11/functional.h>
-#include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
+#include <nanobind/nanobind.h>
+#include <nanobind/nb_cast.h>
+#include <nanobind/stl.h>
+#include <nanobind/stl/function.h>
 
 #include "mlir/Bytecode/BytecodeWriter.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
@@ -41,6 +41,7 @@
 
 namespace {
 
+namespace pybind11 = nanobind;
 namespace py = pybind11;
 using namespace mlir;
 using namespace triton;

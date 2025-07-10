@@ -11,9 +11,10 @@
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonInstrument/Transforms/Passes.h"
 #include "triton/Target/LLVMIR/Passes.h"
-#include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
+#include <nanobind/nanobind.h>
+#include <nanobind/stl.h>
 
+namespace pybind11 = nanobind;
 namespace py = pybind11;
 
 void init_triton_analysis(py::module &&m) {

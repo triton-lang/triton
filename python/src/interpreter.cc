@@ -3,11 +3,12 @@
 #include <map>
 #include <memory>
 #include <mutex>
-#include <pybind11/numpy.h>
-#include <pybind11/pybind11.h>
+#include <nanobind/ndarray.h>
+#include <nanobind/nanobind.h>
 #include <stdexcept>
 #include <type_traits>
 
+namespace pybind11 = nanobind;
 namespace py = pybind11;
 
 namespace {

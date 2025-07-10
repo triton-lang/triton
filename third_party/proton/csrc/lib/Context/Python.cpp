@@ -1,5 +1,6 @@
 #include "Context/Python.h"
-#include "pybind11/pybind11.h"
+#include <nanobind/nanobind.h>
+namespace pybind11 = nanobind;
 #include <algorithm>
 #include <string>
 
