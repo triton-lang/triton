@@ -82,11 +82,12 @@ class LowerWarpGroup : public OpRewritePattern<WarpGroupOp> {
       replaceAllUsesInRegionWith(pair.first, pair.second, *outputRegion);
   }
 
-  LogicalResult createTtgWSOp(Location loc, WarpGroupOp warpGroupOp,
-                              PatternRewriter &rewriter,
-                              Region *defaultPartition, RegionRange &partitions,
-                              ArrayRef<int> numWarps,
-                              ArrayRef<int> warpGroupStartIds) const {
+  LogicalResult createWarpSpecializeOp(Location loc, WarpGroupOp warpGroupOp,
+                                       PatternRewriter &rewriter,
+                                       Region *defaultPartition,
+                                       RegionRange partitions,
+                                       ArrayRef<int> numWarps,
+                                       ArrayRef<int> warpGroupStartIds) const {
     if (partitions.size() != numWarps.size())
       return failure("mismatched number of warp groups and number of warps per "
                      "warp group");
@@ -94,7 +95,9 @@ class LowerWarpGroup : public OpRewritePattern<WarpGroupOp> {
       return failure(
           "mismatched number of warp groups and number of warp start ids");
 
-    assert(defaultPartition);
+    if (!defaultPartition) {
+      return failure("No default partition");
+    }
 
     SetVector<Value> captures;
     for (auto partition : partitions)
@@ -103,7 +106,7 @@ class LowerWarpGroup : public OpRewritePattern<WarpGroupOp> {
     SmallVector<Value> inputs;
     SmallVector<IRMapping> mappings(partitions.size());
     SmallVector<OpBuilder> builders;
-    for (auto [i, region] : llvm::enumerate(partitions)) {
+    for (auto region : partitions) {
       builders.push_back(OpBuilder::atBlockBegin(&region->front()));
     }
 
@@ -158,7 +161,6 @@ class LowerWarpGroup : public OpRewritePattern<WarpGroupOp> {
         loc, warpGroupOp.getResultTypes(), inputs);
 
     wsOp.setPartitionNumWarps(numWarps);
-    wsOp.setWarpGroupStartIds(warpGroupStartIds);
 
     auto &defaultBlock = wsOp.getDefaultRegion().emplaceBlock();
     rewriter.setInsertionPointToEnd(&defaultBlock);
@@ -206,9 +208,12 @@ public:
       regions = regions.drop_front();
       startWarp = globalNumWarps;
       numWarps = numWarps.drop_front();
+    } else {
+      return failure("The first warp group does not use the default number of "
+                     "warps. The default partition cannot be created.");
     }
 
-    auto result = createTtgWSOp(
+    auto result = createWarpSpecializeOp(
         loc, warpGroupOp, rewriter, defaultRegion, regions, numWarps,
         llvm::map_to_vector(numWarps, [&](int numWarps) {
           int result = startWarp;
