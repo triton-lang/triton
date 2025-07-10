@@ -73,6 +73,10 @@ def test_convert_layout_assert_trivial():
     # CHECK: ttg.convert_layout
     ttgl.convert_layout(value, equiv_layout, assert_trivial=True)
 
+    value = ttgl.arange(0, 128, layout=ttgl.AutoLayout())
+    # CHECK: ttg.convert_layout
+    ttgl.convert_layout(value, equiv_layout, assert_trivial=True)
+
 
 def test_convert_layout_not_trivial():
 
@@ -90,6 +94,20 @@ def test_convert_layout_not_trivial():
     assert "layout conversion from BlockedLayout(size_per_thread=(2)" in str(e.value.__cause__)
     assert "to BlockedLayout(size_per_thread=(1)" in str(e.value.__cause__)
     assert "is not trivial" in str(e.value.__cause__)
+
+    @gluon.jit
+    def kernel():
+        src_layout: ttgl.constexpr = ttgl.BlockedLayout([2], [32], [4], [0])
+        dst_layout: ttgl.constexpr = ttgl.AutoLayout()
+
+        value = ttgl.arange(0, 128, layout=src_layout)
+        ttgl.convert_layout(value, dst_layout, assert_trivial=True)
+
+    with pytest.raises(CompilationError) as e:
+        run_parser(kernel)
+
+    assert "layout conversion from BlockedLayout(size_per_thread=(2)" in str(e.value.__cause__)
+    assert "to AutoLayout() is not trivial" in str(e.value.__cause__)
 
 
 @gluon.jit
