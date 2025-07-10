@@ -190,12 +190,28 @@ tt.func @rem() {
   %4 = arith.constant dense<64> : tensor<128xi32>
   // expected-remark @below {{contiguity = [64], divisibility = [64], constancy = [1], constant_value = <none>}}
   %5 = arith.remsi %0, %4 : tensor<128xi32>
-  // expected-remark @below {{contiguity = [1], divisibility = [64], constancy = [1], constant_value = <none>}}
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>}}
   %6 = arith.remsi %4, %0 : tensor<128xi32>
   // expected-remark @below {{contiguity = [1], divisibility = [2], constancy = [128], constant_value = 66}}
   %7 = arith.constant dense<66> : tensor<128xi32>
   // expected-remark @below {{contiguity = [2], divisibility = [2], constancy = [1], constant_value = <none>}}
   %8 = arith.remui %0, %7 : tensor<128xi32>
+  // expected-remark @below {{contiguity = [1], divisibility = [64], constancy = [128], constant_value = 192}}
+  %9 = arith.constant dense<192> : tensor<128xi32>
+  // expected-remark @below {{contiguity = [64], divisibility = [64], constancy = [1], constant_value = <none>}}
+  %10 = arith.remsi %0, %9 : tensor<128xi32>
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>}}
+  %11 = arith.remsi %9, %0 : tensor<128xi32>
+  // expected-remark @below {{contiguity = [128], divisibility = [32], constancy = [1], constant_value = <none>}}
+  %12 = tt.make_range {end = 160 : i32, start = 32 : i32} : tensor<128xi32>
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>}}
+  %13 = arith.remsi %0, %12 : tensor<128xi32>
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>}}
+  %14 = arith.remsi %12, %0 : tensor<128xi32>
+  // expected-remark @below {{contiguity = [32], divisibility = [32], constancy = [1], constant_value = <none>}}
+  %15 = arith.remsi %12, %4 : tensor<128xi32>
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>}}
+  %16 = arith.remsi %4, %12 : tensor<128xi32>
   tt.return
 }
 

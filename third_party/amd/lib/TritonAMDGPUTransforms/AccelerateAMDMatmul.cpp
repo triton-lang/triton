@@ -656,8 +656,8 @@ public:
     // Always use transposed mfma layout. This enables larger vectorization
     // for global store instructions.
     auto mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
-        ctx, /*version=*/mfmaVersion, mfmaWarpsPerCTA,
-        /*instrShape=*/mDim, nDim, /*isTransposed=*/true, ctaLayout);
+        ctx, /*version=*/mfmaVersion, mfmaWarpsPerCTA, /*instrShape=*/mDim,
+        nDim, /*isTransposed=*/true, ctaLayout);
 
     auto newRetType = RankedTensorType::get(
         oldRetType.getShape(), oldRetType.getElementType(), mfmaEnc);
@@ -861,9 +861,6 @@ public:
       if (bothScalesAbsent)
         return Value();
 
-      LinearLayout::BasesT scaleBases = dotLL.getBases();
-      auto &warpBases = scaleBases[kWarp];
-
       SmallVector<int64_t> shape;
       if (!scale) {
         int64_t nonKDim = idx == 0 ? valShape[0] : valShape[1];
@@ -875,8 +872,9 @@ public:
         shape = llvm::to_vector(scale.getType().getShape());
       }
 
-      LinearLayout newLL =
-          chooseScaledMfmaScaleLayout(ctx, idx, warpBases, shape, mDim);
+      SmallVector<unsigned> tilesPerWarp(warpsPerTile.size(), 1);
+      LinearLayout newLL = chooseScaledMfmaScaleLayout(
+          ctx, idx, shape, mDim, tilesPerWarp, warpsPerTile);
 
       Attribute newScaleEncoding = ttg::LinearEncodingAttr::get(ctx, newLL);
       // Scale's data type is always i8

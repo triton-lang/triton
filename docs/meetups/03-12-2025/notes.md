@@ -9,7 +9,7 @@
 Speakers: Hongtao Yu (Meta), Yuanwei (Kevin) Fang (Meta), Manman Ren (Meta)
 
 Notes:
-* Pytorch 2.6 with Triton release branch 3.2 
+* Pytorch 2.6 with Triton release branch 3.2
 * Targeting: Nvidia Hopper arch, Blackwell coming soon.
 * Performance
   * Meta’s FP8Rowwise GEMM (3-5% improvement, 1D persistent loop)
@@ -17,7 +17,7 @@ Notes:
 * What is warp specialization?
   * Improves hardware instruction scheduling. GPUs don’t have good dynamic instruction scheduling.
   * Use multi-way warp scheduler. Allows warps on a single core targeting different function units (e.g. memory, ALU, tensor core, etc.)  All run in parallel.
-* Comparison using GEMM * * 
+* Comparison using GEMM * *
   * Uniform warps: 8 warps, each loading/processing 1/8th of data.  Divided into two groups, each doing ½ the data. Good for GEMM but not for more complicated kernels.
   * Warp specialized: 12 warps, 4 warps for producing data-only do load, 8 for wgmma-only do wmma.  Frees up more capacity for more complex kernels like flash attention.
 * Compiler implementation
@@ -60,7 +60,7 @@ Notes:
     * Data partitioning
     * Communication pipelining and ping-pong scheduling
     * Ping-pong is named barrier pair. Only one consumer can be in region.
-   
+
 ## Questions
 * Q> Is there an equivalent warp group for AMD? Does this apply to AMD GPUs?
 * A> Meta is doing this for AMD. No named barrier in AMD. Simulating this using shared-memory atomics on AMD to get the same effect.
@@ -87,7 +87,7 @@ Notes:
 
 ### Progress
 * Modularizing compiler passes. Decoupled data extraction from lowering. Allowed for customized lowering flows. Predictable behavior for analysis failures.
-  * Triton-to-structured 
+  * Triton-to-structured
   * triton-arith-to-linalg
   * Structured-to-memref
 * Improvements to pointer analysis

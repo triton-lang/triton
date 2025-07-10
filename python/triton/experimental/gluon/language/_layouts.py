@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from typing import List, Optional
-from triton.language.core import _unwrap_if_constexpr, _unwrap_shape
+from triton.language.core import _unwrap_if_constexpr, _unwrap_shape, constexpr_type
 
 __all__ = [
     "BlockedLayout",
@@ -25,7 +25,10 @@ class DistributedLayout:
     """
     Base class for distributed memory layouts in Gluon IR.
     """
-    pass
+
+    @property
+    def type(self):
+        return constexpr_type(self)
 
 
 @dataclass(frozen=True)
@@ -213,7 +216,10 @@ class SharedLayout:
     """
     Base class for shared memory layouts in Gluon IR.
     """
-    pass
+
+    @property
+    def type(self):
+        return constexpr_type(self)
 
 
 @dataclass(frozen=True)

@@ -72,7 +72,7 @@ Speaker: Sayce Falk (Google), Cicie Wang (Meta), Jason Knight (Nvidia), Keren Zh
 * Q> Anyone interested in this?
 * A> Maybe first step, identify how much generated code is affected by a pull request (give a signal to say something about the blast radius of a change).
 * Q> Intel had an intern looking at this.
-* Q> Intel<Alexander> - if you're interested reach out over slack. 
+* Q> Intel<Alexander> - if you're interested reach out over slack.
 
 ## What talks/tutorials/open discussions would you like to see at the 2025 Triton Developers' Summit? How can we help?
 Speaker: Adnan Aziz (Meta)

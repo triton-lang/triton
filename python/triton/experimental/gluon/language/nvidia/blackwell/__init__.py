@@ -280,7 +280,7 @@ def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, mbarriers=None, mbarrier_
         mbarriers = [bar.handle for bar in mbarriers]
         if mbarrier_preds is None:
             true = _semantic.to_tensor(True)
-            mbarrier_preds = [true] * len(mbarriers)
+            mbarrier_preds = [true.handle] * len(mbarriers)
         else:
             mbarrier_preds = _semantic._convert_to_ir_values(mbarrier_preds, require_i64=False)
 
