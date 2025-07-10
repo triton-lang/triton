@@ -156,6 +156,16 @@ def TritonGPUOptimizePartitionWarps : Pass<"tritongpu-optimize-partition-warps",
   }];
 }
 
+def TritonGPUPartitionAnalysis : Pass<"tritongpu-partition-analysis", "mlir::ModuleOp"> {
+  let summary = "warp specialization partitioning pass";
+
+  let description = [{
+    The `tritongpu-partition-analysis` analyzes the loads, MMAs, and other
+    operations in a function and determines
+    which partitions to assign to each operation.
+  }];
+}
+
 def TritonGPUPartitionScheduling : Pass<"tritongpu-partition-scheduling", "mlir::ModuleOp"> {
   let summary = "warp specialization partitioning pass";
 
