@@ -21,7 +21,7 @@ using namespace triton::gpu;
 
 namespace {
 
-struct WgBuilder {
+struct WarpGroupBuilder {
   OpBuilder builder;
   IRMapping mapping;
   size_t partitionId;
@@ -119,10 +119,10 @@ const Partition *getPartition(Operation *op, const WarpSchedule &schedule) {
   return nullptr;
 }
 
-void cloneOpsInBlock(Block *block, SmallVector<WgBuilder> &builders,
+void cloneOpsInBlock(Block *block, SmallVector<WarpGroupBuilder> &builders,
                      const WarpSchedule &schedule);
 
-void cloneForOp(scf::ForOp forOp, SmallVector<WgBuilder> &builders,
+void cloneForOp(scf::ForOp forOp, SmallVector<WarpGroupBuilder> &builders,
                 const WarpSchedule &schedule) {
   SmallVector<scf::ForOp> newForOps;
   for (auto [b, partition] : llvm::zip(builders, schedule.getPartitions())) {
@@ -181,7 +181,7 @@ getPartitionIndicesToCloneInto(const Partition *partition,
   return partitionIndices;
 }
 
-void cloneIfOp(scf::IfOp ifOp, SmallVector<WgBuilder> &builders,
+void cloneIfOp(scf::IfOp ifOp, SmallVector<WarpGroupBuilder> &builders,
                const WarpSchedule &schedule) {
   auto partition = getPartition(ifOp, schedule);
   assert(partition);
@@ -199,7 +199,8 @@ void cloneIfOp(scf::IfOp ifOp, SmallVector<WgBuilder> &builders,
 
     // map arguments and results
     mapRange(ifOp.getResults(), newIfOp.getResults(), b.mapping);
-    mapRange(ifOp.thenBlock()->getArguments(), newIfOp.thenBlock()->getArguments(), b.mapping);
+    mapRange(ifOp.thenBlock()->getArguments(),
+             newIfOp.thenBlock()->getArguments(), b.mapping);
 
     if (ifOp.elseBlock()) {
       mapRange(ifOp.elseBlock()->getArguments(),
@@ -223,7 +224,8 @@ void cloneIfOp(scf::IfOp ifOp, SmallVector<WgBuilder> &builders,
   }
 }
 
-void cloneReduceOp(triton::ReduceOp reduceOp, SmallVector<WgBuilder> &builders,
+void cloneReduceOp(triton::ReduceOp reduceOp,
+                   SmallVector<WarpGroupBuilder> &builders,
                    const WarpSchedule &schedule) {
   auto partition = getPartition(reduceOp, schedule);
   assert(partition);
@@ -265,7 +267,7 @@ void cloneReduceOp(triton::ReduceOp reduceOp, SmallVector<WgBuilder> &builders,
   }
 }
 
-void cloneOpsInBlock(Block *block, SmallVector<WgBuilder> &builders,
+void cloneOpsInBlock(Block *block, SmallVector<WarpGroupBuilder> &builders,
                      const WarpSchedule &schedule) {
   for (auto &op_ : *block) {
     auto op = &op_;
@@ -282,7 +284,7 @@ void cloneOpsInBlock(Block *block, SmallVector<WgBuilder> &builders,
         continue;
       }
 
-      auto doClone = [&](WgBuilder &builder) {
+      auto doClone = [&](WarpGroupBuilder &builder) {
         SmallVector<size_t> newOperandIndices;
         if (auto forOp = dyn_cast<scf::ForOp>(yieldOp->getParentOp())) {
           newOperandIndices =
@@ -322,7 +324,7 @@ void cloneOpsInBlock(Block *block, SmallVector<WgBuilder> &builders,
             "Ops are expected to be regionless at this point.");
       }
 
-      auto doClone = [&](WgBuilder &builder, Operation *op) {
+      auto doClone = [&](WarpGroupBuilder &builder, Operation *op) {
         auto newOp = builder.builder.clone(*op, builder.mapping);
         for (auto [oldResult, newResult] :
              llvm::zip(op->getResults(), newOp->getResults())) {
@@ -405,7 +407,7 @@ LogicalResult triton::gpu::partitionLoop(scf::ForOp loop) {
   auto wgOp = topBuilder.create<nvws::WarpGroupOp>(resultTypes, numWarps,
                                                    numPartitions);
 
-  SmallVector<WgBuilder> builders;
+  SmallVector<WarpGroupBuilder> builders;
   for (Region &region : wgOp.getPartitionRegions()) {
     OpBuilder builder = OpBuilder::atBlockEnd(&region.emplaceBlock());
     auto partitionId = builders.size();
