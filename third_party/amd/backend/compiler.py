@@ -289,7 +289,7 @@ class HIPBackend(BaseBackend):
         return mod
 
     @staticmethod
-    def make_llir(src, metadata, options):
+    def make_llvmir(src, metadata, options):
         mod = src
         # TritonGPU -> LLVM-IR (MLIR)
         pm = ir.pass_manager(mod.context)
@@ -324,12 +324,30 @@ class HIPBackend(BaseBackend):
         passes.common.add_symbol_dce(pm)
         if options.schedule_hint.lower() != "none":
             amd.passes.ttgpuir.lower_instruction_sched_hints(pm, options.arch, options.num_stages)
-        if not knobs.compilation.disable_line_info:
-            passes.llvmir.add_di_scope(pm)
-        passes.llvmir.add_di_local_variable(pm) # TODO: consider use a flag to make it optional
         amd.passes.ttgpuir.add_builtin_func_to_llvmir(pm, __HIP_FTZ)
         pm.run(mod)
+        # breakpoint()
+        return mod
 
+    @staticmethod
+    def make_llir(src, metadata, options):
+        mod = src
+        # Important dev note: several methods will step in unknown fault when dumping the IR with Dbg attribute here,
+        #       if add_di_scope is called and DISubprogramAttr was inserted into Location
+        # From the deep core dump message shows "signal SIGSEGV" when calling llvm::DenseMap::count is called when printing the IR's llvm's dbg attribute
+
+        # All those methods works fine when using triton-opt with a new cutomized pass, but failed when using python API
+        # Current example include mod.print(os, flags), mlir::translateModuleToLLVMIR(mod, ctx);
+
+        # The reason is unclear, but we must avoid using print(mod), str(mod) or mod.str() for now;
+        #       mod.dump() is fine since it does not print debug info
+        # Therefore, add_di_scope(pm) was moved after printing to avoid such issue
+
+        if not knobs.compilation.disable_line_info:
+            pm = ir.pass_manager(mod.context)
+            pm.enable_debug()
+            passes.llvmir.add_di_scope(pm)
+            pm.run(mod)
         # LLVM-IR (MLIR) -> LLVM-IR (LLVM)
         llvm.init_targets()
         context = llvm.context()
@@ -444,6 +462,7 @@ class HIPBackend(BaseBackend):
             stages["ttgir"] = lambda src, metadata: self.make_ttgir(src, metadata, options)
         elif language == Language.GLUON:
             stages["ttgir"] = lambda src, metadata: self.ttgir_opt(src, metadata, options)
+        stages["llvmir"] = lambda src, metadata: self.make_llvmir(src, metadata, options)
         stages["llir"] = lambda src, metadata: self.make_llir(src, metadata, options)
         stages["amdgcn"] = lambda src, metadata: self.make_amdgcn(src, metadata, options)
         stages["hsaco"] = lambda src, metadata: self.make_hsaco(src, metadata, options)
