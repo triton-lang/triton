@@ -26,7 +26,7 @@ from setuptools.command.sdist import sdist
 
 from dataclasses import dataclass
 
-import pybind11
+import nanobind
 
 try:
     from setuptools.command.bdist_wheel import bdist_wheel
@@ -415,17 +415,17 @@ class CMakeBuild(build_ext):
         for ext in self.extensions:
             self.build_extension(ext)
 
-    def get_pybind11_cmake_args(self):
-        pybind11_sys_path = get_env_with_keys(["PYBIND11_SYSPATH"])
-        if pybind11_sys_path:
-            pybind11_include_dir = os.path.join(pybind11_sys_path, "include")
+    def get_nanobind_cmake_args(self):
+        nanobind_sys_path = get_env_with_keys(["NANOBIND_SYSPATH"])
+        if nanobind_sys_path:
+            nanobind_include_dir = os.path.join(nanobind_sys_path, "include")
         else:
-            pybind11_include_dir = pybind11.get_include()
-        return [f"-Dpybind11_INCLUDE_DIR='{pybind11_include_dir}'", f"-Dpybind11_DIR='{pybind11.get_cmake_dir()}'"]
+            nanobind_include_dir = nanobind.include_dir()
+        return [f"-Dnanobind_INCLUDE_DIR='{nanobind_include_dir}'", f"-Dnanobind_DIR='{nanobind.cmake_dir()}'"]
 
     def get_proton_cmake_args(self):
         cmake_args = get_thirdparty_packages([get_json_package_info()])
-        cmake_args += self.get_pybind11_cmake_args()
+        cmake_args += self.get_nanobind_cmake_args()
         cupti_include_dir = get_env_with_keys(["TRITON_CUPTI_INCLUDE_PATH"])
         if cupti_include_dir == "":
             cupti_include_dir = os.path.join(get_base_dir(), "third_party", "nvidia", "backend", "include")
@@ -441,7 +441,7 @@ class CMakeBuild(build_ext):
         ninja_dir = shutil.which('ninja')
         # lit is used by the test suite
         thirdparty_cmake_args = get_thirdparty_packages([get_llvm_package_info()])
-        thirdparty_cmake_args += self.get_pybind11_cmake_args()
+        thirdparty_cmake_args += self.get_nanobind_cmake_args()
         extdir = os.path.abspath(os.path.dirname(self.get_ext_fullpath(ext.path)))
         wheeldir = os.path.dirname(extdir)
 

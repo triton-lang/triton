@@ -1,10 +1,11 @@
 #include "ir.h"
 
 #include <optional>
-#include <pybind11/cast.h>
-#include <pybind11/functional.h>
-#include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
+#include <nanobind/nanobind.h>
+#include <nanobind/ndarray.h>
+#include "nanobind_stl.h"
+#include <nanobind/stl/function.h>
+
 
 #include "mlir/Bytecode/BytecodeWriter.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
@@ -41,7 +42,7 @@
 
 namespace {
 
-namespace py = pybind11;
+namespace py = nanobind;
 using namespace mlir;
 using namespace triton;
 namespace tt = triton;
@@ -199,7 +200,7 @@ py::list getTensorDescMetadata(ModuleOp &mod) {
 
 void init_triton_ir(py::module &&m) {
   using ret = py::return_value_policy;
-  using namespace pybind11::literals;
+  using namespace nanobind::literals;
 
   py::enum_<PaddingOption>(m, "PADDING_OPTION", py::module_local())
       .value("PAD_ZERO", PaddingOption::PAD_ZERO)
@@ -395,7 +396,7 @@ void init_triton_ir(py::module &&m) {
       .def("arg",
            [](Block &self, int index) -> BlockArgument {
              if (index >= self.getNumArguments())
-               throw pybind11::index_error("Block argument index out of range");
+               throw nanobind::index_error("Block argument index out of range");
              return self.getArgument(index);
            })
       .def("add_argument",
@@ -471,14 +472,14 @@ void init_triton_ir(py::module &&m) {
       .def("get_result",
            [](OpState &self, unsigned idx) -> Value {
              if (idx >= self->getNumResults())
-               throw pybind11::index_error("Op result index out of range");
+               throw nanobind::index_error("Op result index out of range");
              return self->getResult(idx);
            })
       .def(
           "get_region",
           [](OpState &self, unsigned idx) -> Region & {
             if (idx >= self->getNumRegions())
-              throw pybind11::index_error("Op region index out of range");
+              throw nanobind::index_error("Op region index out of range");
             return self->getRegion(idx);
           },
           ret::reference)
@@ -486,7 +487,7 @@ void init_triton_ir(py::module &&m) {
           "get_body",
           [](scf::ForOp &self, unsigned idx) -> Block * {
             if (idx >= self->getNumRegions())
-              throw pybind11::index_error("Op region index out of range");
+              throw nanobind::index_error("Op region index out of range");
             return self.getBody(idx);
           },
           ret::reference)
@@ -685,7 +686,7 @@ void init_triton_ir(py::module &&m) {
       .def("args",
            [](FuncOp &self, unsigned idx) -> BlockArgument {
              if (idx >= self.getNumArguments())
-               throw pybind11::index_error(
+               throw nanobind::index_error(
                    "Function argument index out of range");
              return self.getArgument(idx);
            })
@@ -698,7 +699,7 @@ void init_triton_ir(py::module &&m) {
           "set_arg_attr",
           [](FuncOp &self, int arg_no, const std::string &name, int val) {
             if (arg_no >= self.getNumArguments())
-              throw pybind11::index_error(
+              throw nanobind::index_error(
                   "Function argument index out of range");
             // set arg attributes "name" to value "val"
             auto attrTy = IntegerType::get(self.getContext(), 32);
@@ -1519,13 +1520,13 @@ void init_triton_ir(py::module &&m) {
       .def("create_get_program_id",
            [](TritonOpBuilder &self, int axis) -> Value {
              if (axis < 0 || axis > 3)
-               throw pybind11::index_error("program_id must be in [0,3]");
+               throw nanobind::index_error("program_id must be in [0,3]");
              return self.create<GetProgramIdOp>(axis);
            })
       .def("create_get_num_programs",
            [](TritonOpBuilder &self, int axis) -> Value {
              if (axis < 0 || axis > 3)
-               throw pybind11::index_error("program_id must be in [0,3]");
+               throw nanobind::index_error("program_id must be in [0,3]");
              return self.create<GetNumProgramsOp>(axis);
            })
       .def("create_dot",

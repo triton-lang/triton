@@ -27,10 +27,10 @@
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/TargetParser/TargetParser.h"
-#include <pybind11/pybind11.h>
+#include <nanobind/nanobind.h>
 #include <stdexcept>
 
-namespace py = pybind11;
+namespace py = nanobind;
 
 namespace {
 const char *const amdTargetTriple = "amdgcn-amd-amdhsa";

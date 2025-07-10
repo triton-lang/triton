@@ -11,11 +11,10 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 #include "llvm/IR/Constants.h"
-#include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
-#include <pybind11/stl_bind.h>
+#include <nanobind/nanobind.h>
+#include "nanobind_stl.h"
 
-namespace py = pybind11;
+namespace py = nanobind;
 namespace ttng = mlir::triton::nvidia_gpu;
 
 void init_triton_nvidia_passes_ttgpuir(py::module &&m) {

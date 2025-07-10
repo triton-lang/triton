@@ -27,12 +27,12 @@
 #include "llvm/Transforms/Instrumentation/AddressSanitizerOptions.h"
 #include <csignal>
 #include <memory>
-#include <pybind11/gil.h>
-#include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
+#include <nanobind/nanobind.h>
+#include <nanobind/ndarray.h>
+#include "nanobind_stl.h"
 #include <stdexcept>
 
-namespace py = pybind11;
+namespace py = nanobind;
 
 namespace llvm {
 struct BreakStructPhiNodesPass : PassInfoMixin<BreakStructPhiNodesPass> {
@@ -505,7 +505,7 @@ void triton_stacktrace_signal_handler(void *) {
   raise(SIGABRT);
 }
 
-void init_triton_stacktrace_hook(pybind11::module &m) {
+void init_triton_stacktrace_hook(nanobind::module &m) {
   if (mlir::triton::tools::getBoolEnv("TRITON_ENABLE_PYTHON_STACKTRACE")) {
     llvm::sys::AddSignalHandler(triton_stacktrace_signal_handler, nullptr);
   }

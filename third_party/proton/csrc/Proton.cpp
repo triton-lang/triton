@@ -3,15 +3,14 @@
 #include <map>
 #include <stdexcept>
 
-#include "pybind11/pybind11.h"
-#include "pybind11/stl.h"
-#include "pybind11/stl_bind.h"
+#include <nanobind/nanobind.h>
+#include "nanobind_stl.h"
 
 using namespace proton;
 
-static void initProton(pybind11::module &&m) {
-  using ret = pybind11::return_value_policy;
-  using namespace pybind11::literals;
+static void initProton(nanobind::module &&m) {
+  using ret = nanobind::return_value_policy;
+  using namespace nanobind::literals;
 
   m.def("start",
         [](const std::string &path, const std::string &contextSourceName,
@@ -82,10 +81,10 @@ static void initProton(pybind11::module &&m) {
     return SessionManager::instance().getContextDepth(sessionId);
   });
 
-  pybind11::bind_map<std::map<std::string, MetricValueType>>(m, "MetricMap");
+  nanobind::bind_map<std::map<std::string, MetricValueType>>(m, "MetricMap");
 }
 
-PYBIND11_MODULE(libproton, m) {
+NB_MODULE(libproton, m) {
   m.doc() = "Python bindings to the Proton API";
   initProton(std::move(m.def_submodule("proton")));
 }

@@ -3,12 +3,13 @@
 #include <map>
 #include <memory>
 #include <mutex>
-#include <pybind11/numpy.h>
-#include <pybind11/pybind11.h>
+#include <nanobind/nanobind.h>
+#include <nanobind/ndarray.h>
+#include "nanobind_stl.h"
 #include <stdexcept>
 #include <type_traits>
 
-namespace py = pybind11;
+namespace py = nanobind;
 
 namespace {
 
@@ -563,7 +564,7 @@ private:
 //   }
 // };
 template <RMWOp Op> struct OpCreator {
-  pybind11::dtype dtype;
+  nanobind::dtype dtype;
   const uint64_t *ptr;
   const void *val;
   void *ret;
@@ -573,7 +574,7 @@ template <RMWOp Op> struct OpCreator {
   std::unique_ptr<AtomicOp> &atomic_op;
 
   template <typename T> void create() {
-    if (!atomic_op && dtype.is(pybind11::dtype::of<T>())) {
+    if (!atomic_op && dtype.is(nanobind::dtype::of<T>())) {
       atomic_op = std::make_unique<AtomicRMWOp<T, Op>>(ptr, val, ret, mask,
                                                        numel, order);
     }
@@ -591,7 +592,7 @@ template <> template <> void OpCreator<RMWOp::FADD>::create<npy_half>() {
 
 template <RMWOp Op, typename... SupportedDTypes>
 std::unique_ptr<AtomicOp>
-makeAtomicRMWOp(pybind11::dtype dtype, const uint64_t *ptr, const void *val,
+makeAtomicRMWOp(nanobind::dtype dtype, const uint64_t *ptr, const void *val,
                 void *ret, const bool *mask, size_t numel,
                 std::memory_order order) {
   // Iterate over all supported data types, make one that matches, and return

@@ -14,8 +14,9 @@ if(NOT JSON_INCLUDE_DIR)
 endif()
 
 # ============ Dependencies =============
+find_package(Python REQUIRED COMPONENTS Interpreter Development)
 find_package(Python3 REQUIRED Interpreter Development.Module)
-find_package(pybind11 CONFIG REQUIRED HINTS "${Python3_SITELIB}")
+find_package(nanobind CONFIG REQUIRED HINTS "${Python3_SITELIB}")
 
 # ============ Define a GLOBAL property to store object-libraries ============
 set_property(GLOBAL PROPERTY PROTON_LIBS "")
@@ -24,7 +25,7 @@ set_property(GLOBAL PROPERTY PROTON_LIBS "")
 function(add_proton_library name)
   add_library(${name} OBJECT ${ARGN})
 
-  target_link_libraries(${name} PRIVATE Python3::Module pybind11::headers)
+  target_link_libraries(${name} PRIVATE Python3::Module)
 
   # Use system to skip warnings caused by legacy clang compilers
   target_include_directories(${name}
