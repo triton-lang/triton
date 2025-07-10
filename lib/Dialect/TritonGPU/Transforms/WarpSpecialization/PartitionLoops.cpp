@@ -21,8 +21,16 @@ using namespace triton::gpu;
 
 namespace {
 
-struct WarpGroupBuilder {
-  OpBuilder builder;
+struct WarpGroupBuilder : public OpBuilder {
+  using OpBuilder::OpBuilder;
+
+  static WarpGroupBuilder atBlockEnd(Block *block, size_t partitionId) {
+    WarpGroupBuilder builder(block, block->end(), nullptr);
+    builder.mapping = IRMapping();
+    builder.partitionId = partitionId;
+    return builder;
+  }
+
   IRMapping mapping;
   size_t partitionId;
 };
@@ -136,7 +144,7 @@ void cloneForOp(scf::ForOp forOp, SmallVector<WarpGroupBuilder> &builders,
       initArgs.push_back(forOp.getInitArgs()[idx]);
     }
     auto newForOp =
-        b.builder.create<scf::ForOp>(forOp.getLoc(), lb, ub, step, initArgs);
+        b.create<scf::ForOp>(forOp.getLoc(), lb, ub, step, initArgs);
     newForOp->setAttrs(forOp->getAttrs());
     newForOps.push_back(newForOp);
 
@@ -149,7 +157,7 @@ void cloneForOp(scf::ForOp forOp, SmallVector<WarpGroupBuilder> &builders,
       b.mapping.map(forOp.getResult(oldIdx), newForOp.getResult(newIdx));
     }
 
-    b.builder.setInsertionPointToStart(newForOp.getBody());
+    b.setInsertionPointToStart(newForOp.getBody());
   }
 
   cloneOpsInBlock(forOp.getBody(), builders, schedule);
@@ -191,9 +199,8 @@ void cloneIfOp(scf::IfOp ifOp, SmallVector<WarpGroupBuilder> &builders,
   for (size_t idx : partitionIndices) {
     auto &b = builders[idx];
     auto cond = b.mapping.lookupOrDefault(ifOp.getCondition());
-    auto newIfOp =
-        b.builder.create<scf::IfOp>(ifOp.getLoc(), ifOp.getResultTypes(), cond,
-                                    ifOp.elseBlock() ? true : false);
+    auto newIfOp = b.create<scf::IfOp>(ifOp.getLoc(), ifOp.getResultTypes(),
+                                       cond, ifOp.elseBlock() ? true : false);
     newIfOp->setAttrs(ifOp->getAttrs());
     newIfOps.push_back(newIfOp);
 
@@ -207,20 +214,20 @@ void cloneIfOp(scf::IfOp ifOp, SmallVector<WarpGroupBuilder> &builders,
                newIfOp.elseBlock()->getArguments(), b.mapping);
     }
 
-    b.builder.setInsertionPointToStart(newIfOp.thenBlock());
+    b.setInsertionPointToStart(newIfOp.thenBlock());
   }
 
   cloneOpsInBlock(ifOp.thenBlock(), builders, schedule);
 
   if (auto elseBlock = ifOp.elseBlock()) {
     for (auto [builder, newIfOp] : llvm::zip(builders, newIfOps)) {
-      builder.builder.setInsertionPointToStart(newIfOp.elseBlock());
+      builder.setInsertionPointToStart(newIfOp.elseBlock());
     }
     cloneOpsInBlock(elseBlock, builders, schedule);
   }
 
   for (auto [idx, newIfOp] : llvm::zip(partitionIndices, newIfOps)) {
-    builders[idx].builder.setInsertionPointAfter(newIfOp);
+    builders[idx].setInsertionPointAfter(newIfOp);
   }
 }
 
@@ -241,7 +248,7 @@ void cloneReduceOp(triton::ReduceOp reduceOp,
     }
     auto axis = reduceOp.getAxis();
     auto newReduceOp =
-        b.builder.create<triton::ReduceOp>(reduceOp.getLoc(), srcs, axis);
+        b.create<triton::ReduceOp>(reduceOp.getLoc(), srcs, axis);
     newReduceOp->setAttrs(reduceOp->getAttrs());
     newReduceOps.push_back(newReduceOp);
 
@@ -257,13 +264,13 @@ void cloneReduceOp(triton::ReduceOp reduceOp,
       b.mapping.map(args, newArg);
     }
 
-    b.builder.setInsertionPointToStart(block);
+    b.setInsertionPointToStart(block);
   }
 
   cloneOpsInBlock(reduceOp.getBody(), builders, schedule);
 
   for (auto [idx, newReduceOp] : llvm::zip(partitionIndices, newReduceOps)) {
-    builders[idx].builder.setInsertionPointAfter(newReduceOp);
+    builders[idx].setInsertionPointAfter(newReduceOp);
   }
 }
 
@@ -304,7 +311,7 @@ void cloneOpsInBlock(Block *block, SmallVector<WarpGroupBuilder> &builders,
         }
 
         if (!newYieldOperands.empty()) {
-          builder.builder.create<scf::YieldOp>(op->getLoc(), newYieldOperands);
+          builder.create<scf::YieldOp>(op->getLoc(), newYieldOperands);
         }
       };
 
@@ -325,7 +332,7 @@ void cloneOpsInBlock(Block *block, SmallVector<WarpGroupBuilder> &builders,
       }
 
       auto doClone = [&](WarpGroupBuilder &builder, Operation *op) {
-        auto newOp = builder.builder.clone(*op, builder.mapping);
+        auto newOp = builder.clone(*op, builder.mapping);
         for (auto [oldResult, newResult] :
              llvm::zip(op->getResults(), newOp->getResults())) {
           builder.mapping.map(oldResult, newResult);
@@ -409,9 +416,9 @@ LogicalResult triton::gpu::partitionLoop(scf::ForOp loop) {
 
   SmallVector<WarpGroupBuilder> builders;
   for (Region &region : wgOp.getPartitionRegions()) {
-    OpBuilder builder = OpBuilder::atBlockEnd(&region.emplaceBlock());
     auto partitionId = builders.size();
-    builders.push_back({builder, IRMapping(), partitionId});
+    builders.push_back(
+        WarpGroupBuilder::atBlockEnd(&region.emplaceBlock(), partitionId));
   }
 
   cloneForOp(loop, builders, schedule);
@@ -420,10 +427,10 @@ LogicalResult triton::gpu::partitionLoop(scf::ForOp loop) {
            builders, wgOp.getPartitionRegions(), schedule.getPartitions())) {
     auto newForOp = cast<scf::ForOp>(region.front().front());
     auto outputs = newForOp.getResults();
-    b.builder.setInsertionPointAfter(newForOp);
+    b.setInsertionPointAfter(newForOp);
 
     if (b.partitionId == 0) {
-      b.builder.create<nvws::WarpGroupYieldOp>(wgOp.getLoc(), outputs);
+      b.create<nvws::WarpGroupYieldOp>(wgOp.getLoc(), outputs);
     } else {
       // Tensor results computed by non-default partitions are communicated back
       // via SMEM.
@@ -440,11 +447,10 @@ LogicalResult triton::gpu::partitionLoop(scf::ForOp loop) {
                 LoopVarCategory::TensorResultFromOtherPartition &&
             isTensorResultComputedBy(loop, i, &partition, schedule)) {
           auto result = newForOp.getResult(reverseIndices[i]);
-          b.builder.create<LocalStoreOp>(wgOp.getLoc(), result,
-                                         tensorResultAllocs[i]);
+          b.create<LocalStoreOp>(wgOp.getLoc(), result, tensorResultAllocs[i]);
         }
       }
-      b.builder.create<nvws::WarpGroupReturnOp>(wgOp.getLoc());
+      b.create<nvws::WarpGroupReturnOp>(wgOp.getLoc());
     }
   }
 
