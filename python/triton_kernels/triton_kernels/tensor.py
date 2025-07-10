@@ -7,6 +7,10 @@ from .tensor_details.layout import Layout, StridedLayout
 from .target_info import cuda_capability_geq
 
 
+def make_tensor_descriptor(tensor, shape, strides, block_shape):
+    return TensorDescriptor(tensor, shape, strides, block_shape)
+
+
 @dataclass
 class Storage:
 
@@ -60,7 +64,7 @@ class Storage:
             pad = 128
             shape[-1] = (shape[-1] + pad - 1) // pad * pad
         block_shape = self.layout.swizzle_block_shape(block_shape)
-        return TensorDescriptor(base=self.data, shape=shape, strides=strides, block_shape=block_shape)
+        return make_tensor_descriptor(self.data, shape, strides, block_shape)
 
 
 @dataclass
