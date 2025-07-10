@@ -894,7 +894,7 @@ def attention_forward(q, k, v, causal, sm_scale):
     BLOCK_M = 256
     BLOCK_N = 128
     SPLIT_M = BLOCK_M // 2
-    GROUP_SIZE_N = 8
+    GROUP_SIZE_N = 4 if causal else 1
     NUM_SMS = torch.cuda.get_device_properties("cuda").multi_processor_count
 
     desc_q = make_tensor_desc(q, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM_K, 1], block_shape=[SPLIT_M, HEAD_DIM_K])
