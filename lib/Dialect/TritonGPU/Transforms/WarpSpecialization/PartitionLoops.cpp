@@ -165,19 +165,27 @@ void mapRange(ValueRange fromRange, ValueRange toRange, IRMapping &mapping) {
   }
 }
 
-void cloneIfOp(scf::IfOp ifOp, SmallVector<WgBuilder> &builders,
-               const WarpSchedule &schedule) {
-  auto partition = getPartition(ifOp, schedule);
-  assert(partition);
+SmallVector<size_t>
+getPartitionIndicesToCloneInto(const Partition *partition,
+                               const WarpSchedule &schedule) {
   SmallVector<size_t> partitionIndices;
 
   if (partition == schedule.getRootPartition()) {
-    for (size_t i = 0; i < builders.size(); ++i) {
+    for (size_t i = 0; i < schedule.getNumPartitions(); ++i) {
       partitionIndices.push_back(i);
     }
   } else {
     partitionIndices.push_back(partition->getIndex());
   }
+
+  return partitionIndices;
+}
+
+void cloneIfOp(scf::IfOp ifOp, SmallVector<WgBuilder> &builders,
+               const WarpSchedule &schedule) {
+  auto partition = getPartition(ifOp, schedule);
+  assert(partition);
+  auto partitionIndices = getPartitionIndicesToCloneInto(partition, schedule);
 
   SmallVector<scf::IfOp> newIfOps;
   for (size_t idx : partitionIndices) {
@@ -219,15 +227,7 @@ void cloneReduceOp(triton::ReduceOp reduceOp, SmallVector<WgBuilder> &builders,
                    const WarpSchedule &schedule) {
   auto partition = getPartition(reduceOp, schedule);
   assert(partition);
-
-  SmallVector<size_t> partitionIndices;
-  if (partition == schedule.getRootPartition()) {
-    for (size_t i = 0; i < builders.size(); ++i) {
-      partitionIndices.push_back(i);
-    }
-  } else {
-    partitionIndices.push_back(partition->getIndex());
-  }
+  auto partitionIndices = getPartitionIndicesToCloneInto(partition, schedule);
 
   SmallVector<ReduceOp> newReduceOps;
   for (size_t idx : partitionIndices) {
