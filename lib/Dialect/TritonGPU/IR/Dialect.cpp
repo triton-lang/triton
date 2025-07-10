@@ -1374,7 +1374,7 @@ Attribute AMDMfmaEncodingAttr::parse(AsmParser &parser, Type type) {
 
   return parser.getChecked<AMDMfmaEncodingAttr>(
       parser.getContext(), version, warpsPerCTA, tilesPerWarp, instrShape[0],
-      instrShape[1], isTransposed, *CTALayout);
+      instrShape[1], isTransposed, *CTALayout, std::nullopt);
 }
 
 void AMDMfmaEncodingAttr::print(AsmPrinter &printer) const {
@@ -1398,7 +1398,7 @@ LogicalResult AMDMfmaEncodingAttr::verify(
     function_ref<mlir::InFlightDiagnostic()> emitError, unsigned version,
     llvm::ArrayRef<unsigned int> warpsPerCTA,
     llvm::ArrayRef<unsigned int> tilesPerWarp, unsigned mDim, unsigned nDim,
-    bool isTransposed, mlir::triton::gpu::CTALayoutAttr) {
+    bool isTransposed, mlir::triton::gpu::CTALayoutAttr, std::optional<Type> elementType) {
   if (!(version >= 0 && version <= 4)) {
     return emitError() << "version must be in the [0, 4] range";
   }

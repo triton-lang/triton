@@ -438,7 +438,8 @@ AMDMfmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
           {outDimNames[order[0]], outDimNames[order[1]]});
   } else {
     assert(getMDim() == 16);
-    if ( false /* TODO: dtype <= 32 bits */ ) {
+    auto elementType = getElementType(); 
+    if (elementType->getIntOrFloatBitWidth() <= 32) {
       // For mfma with 16x16 output (<= 32 bits), each of the 64 threads holds 4 elements.
       //
       // For the register (i.e., element) dimension, these 4 elements are along

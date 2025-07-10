@@ -462,7 +462,7 @@ public:
     ttg::AMDMfmaEncodingAttr mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
         oldRetType.getContext(),
         /*version*/ mfmaVersion, warpsPerTile,
-        /*instrShape*/ mDim, nDim, /*isTransposed=*/true, CTALayout);
+        /*instrShape*/ mDim, nDim, /*isTransposed=*/true, CTALayout, aElemType);
 
     Type mfmaAccType;
     if (oldRetType.getElementType().isIntOrIndex())
@@ -665,7 +665,7 @@ public:
     // for global store instructions.
     auto mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
         ctx, /*version=*/mfmaVersion, mfmaWarpsPerCTA, /*instrShape=*/mDim,
-        nDim, /*isTransposed=*/true, ctaLayout);
+        nDim, /*isTransposed=*/true, ctaLayout, oldRetType.getElementType());
 
     auto newRetType = RankedTensorType::get(
         oldRetType.getShape(), oldRetType.getElementType(), mfmaEnc);
@@ -823,7 +823,7 @@ public:
     // for global store instructions.
     auto mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
         ctx, /*verison=*/mfmaVersion, warpsPerTile,
-        /*instrShape=*/mDim, nDim, /*isTransposed=*/true, ctaLayout);
+        /*instrShape=*/mDim, nDim, /*isTransposed=*/true, ctaLayout, oldRetType.getElementType());
 
     auto newRetType =
         RankedTensorType::get(oldShape, oldRetType.getElementType(), mfmaEnc);
