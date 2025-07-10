@@ -1,7 +1,7 @@
 from typing import Sequence, List, TypeVar, Tuple, Callable
 from triton.language.semantic import TritonSemantic
 from . import _core as ttgl
-from ._layouts import SliceLayout
+from ._layouts import SliceLayout, AutoLayout
 from triton._C.libtriton.gluon_ir import GluonOpBuilder
 from triton.compiler.code_generator import flatten_values_to_ir, unflatten_ir_values
 
@@ -22,10 +22,15 @@ class GluonSemantic(TritonSemantic[TensorTy]):
     def __init__(self, builder: GluonOpBuilder):
         self.builder = builder
 
+    def _wrap_handle_infer_layout(self, handle, scalar_ty, shape):
+        if shape == []:
+            ty = scalar_ty
+        else:
+            ty = ttgl.distributed_type(scalar_ty, shape, self.builder.get_gluon_layout_from_tensor(handle))
+        return self.tensor(handle, ty)
+
     def _wrap_tensor_infer_layout(self, tensor):
-        ty = ttgl.distributed_type(tensor.type.scalar, tensor.shape,
-                                   self.builder.get_gluon_layout_from_tensor(tensor.handle))
-        return self.tensor(tensor.handle, ty)
+        return self._wrap_handle_infer_layout(tensor.handle, tensor.type.scalar, tensor.shape)
 
     def _broadcast_shapes(self, lhs_shape: List[int], rhs_shape: List[int]):
         if len(lhs_shape) != len(rhs_shape):
@@ -53,14 +58,14 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         _check(isinstance(input.type, ttgl.distributed_type),
                lambda: f"expected expand_dims input to be a distributed_type but got: {input.type!r}")
         layout = input.type.layout
-        _check(isinstance(layout, SliceLayout),
+        _check(isinstance(layout, (SliceLayout, AutoLayout)),
                lambda: f"expected expand_dims input to have a SliceLayout, but got: {layout}")
-        _check(layout.dim == axis,
-               lambda: f"expected expand_dims input layout to be sliced in axis {axis} but got {layout.dim}")
+        _check(
+            isinstance(layout, AutoLayout) or layout.dim == axis,
+            lambda: f"expected expand_dims input layout to be sliced in axis {axis} but got {layout.dim}")
 
-        ret_ty = ttgl.distributed_type(input.type.scalar, dst_shape, layout.parent)
-        handle = self.builder.create_expand_dims(input.handle, axis, ret_ty.to_ir(self.builder))
-        return self.tensor(handle, ret_ty)
+        handle = self.builder.create_expand_dims(input.handle, axis)
+        return self._wrap_handle_infer_layout(handle, input.type.scalar, dst_shape)
 
     def join(self, a: TensorTy, b: TensorTy) -> TensorTy:
         a, b = self.broadcast_impl_value(a, b)
@@ -230,7 +235,6 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         _check(0 <= axis < rank, lambda: f"expected reduction axis to be in the range [0, {rank}) but got {axis}")
         self._check_same_layout(inputs)
         ret_shape = [s for i, s in enumerate(shape) if i != axis]
-        ret_layout = SliceLayout(axis, inputs[0].type.layout)
         assert all(t.type.shape == shape for t in inputs), "all reduction inputs must have the same shape"
 
         reduce_op = self.builder.create_reduce([t.handle for t in inputs], axis)
@@ -238,7 +242,7 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         assert reduce_op.verify()
 
         return tuple(
-            self.wrap_tensor(reduce_op.get_result(i), inputs[i].type.scalar, ret_shape, ret_layout)
+            self._wrap_handle_infer_layout(reduce_op.get_result(i), inputs[i].type.scalar, ret_shape)
             for i in range(len(inputs)))
 
     def warp_specialize(self, default_args, default_partition, worker_args, worker_partitions,

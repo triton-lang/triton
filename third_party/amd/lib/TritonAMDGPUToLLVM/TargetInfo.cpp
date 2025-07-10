@@ -570,12 +570,6 @@ bool TargetInfo::supportVectorizedAtomics() const {
   return true;
 }
 
-void TargetInfo::localStoreOpAnnotation(triton::gpu::LocalStoreOp op,
-                                        size_t localStoreOpCount,
-                                        Type type) const {
-  storeOpSchedAnnotations(op, localStoreOpCount, type);
-}
-
 bool TargetInfo::supportsDirectToLdsLoadBitWidth(int bitWidth) const {
   switch (getISAFamily()) {
   case ISAFamily::CDNA1:

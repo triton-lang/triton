@@ -63,14 +63,6 @@ def NVGPU_MemSyncScopeAttr : I32EnumAttr<
 class NVGPU_Op<string mnemonic, list<Trait> traits = []> :
     LLVM_OpBase<NVGPU_Dialect, mnemonic, traits>;
 
-def NVGPU_WGMMAFenceOp : NVGPU_Op<"wgmma_fence", []> {
-  let assemblyFormat = "attr-dict";
-}
-
-def NVGPU_WGMMACommitGroupOp : NVGPU_Op<"wgmma_commit_group", []> {
-  let assemblyFormat = "attr-dict";
-}
-
 def NVGPU_WGMMAWaitGroupOp : NVGPU_Op<"wgmma_wait_group", [DeclareOpInterfaceMethods<InferTypeOpInterface>,
                                                            AllTypesMatch<["input", "output"]>]> {
   let arguments = (ins LLVM_AnyStruct:$input, I32Attr:$pendings);
@@ -115,16 +107,6 @@ def NVGPU_WGMMAOp : NVGPU_Op<"wgmma", []> {
 
 def NVGPU_FenceAsyncSharedOp : NVGPU_Op<"fence_async_shared", []> {
   let arguments = (ins BoolAttr:$bCluster);
-  let assemblyFormat = "attr-dict";
-}
-
-def NVGPU_ClusterArriveOp : NVGPU_Op<"cluster_arrive", []> {
-  let arguments = (ins I1Attr:$relaxed);
-
-  let assemblyFormat = "attr-dict";
-}
-
-def NVGPU_ClusterWaitOp : NVGPU_Op<"cluster_wait", []> {
   let assemblyFormat = "attr-dict";
 }
 

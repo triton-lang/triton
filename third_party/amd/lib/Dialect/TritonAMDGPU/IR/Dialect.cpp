@@ -72,6 +72,10 @@ bool hasMatchingCTATileLayoutForSliceConcat(
   auto dstLL = triton::gpu::toLinearLayout(dstShape, dstTy.getEncoding());
 
   MLIRContext *ctx = srcTy.getContext();
+  auto kReg = StringAttr::get(ctx, "register");
+  srcLL = srcLL.removeZeroBasesAlongDim(kReg);
+  dstLL = dstLL.removeZeroBasesAlongDim(kReg);
+
   auto getBases = [&](StringRef name) {
     auto key = StringAttr::get(ctx, name);
     return std::pair{srcLL.getBases().lookup(key),
@@ -98,14 +102,22 @@ bool hasMatchingCTATileLayoutForSliceConcat(
     numCTAs *= srcShape[d] / shapeCTASrc[d];
   }
 
-  unsigned elemsPerThreadPerCTA =
-      triton::gpu::getTotalElemsPerThread(srcTy) / numCTAs;
-  unsigned regCompareLen = std::log2(elemsPerThreadPerCTA);
+  assert(llvm::isPowerOf2_32(numCTAs) &&
+         "expect number of CTAs to be power of 2");
+
+  unsigned totalElemsPerThreadNoBroadcastLog = regSrc.size();
+  unsigned elemsPerThreadPerCTALog =
+      totalElemsPerThreadNoBroadcastLog - llvm::Log2_32(numCTAs);
+  unsigned regCompareLen = elemsPerThreadPerCTALog;
 
   auto compareBasis = [&](auto &srcBasis, auto &dstBasis, StringRef message,
                           int limit = -1) {
     int n = (limit < 0 ? srcBasis.size()
                        : std::min<unsigned>(srcBasis.size(), limit));
+    if (dstBasis.size() < n) {
+      emitError(message);
+      return false;
+    }
     for (size_t i = 0; i < n; ++i) {
       if (srcBasis[i] != dstBasis[i]) {
         emitError(message);
