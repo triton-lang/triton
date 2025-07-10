@@ -26,12 +26,12 @@ Value createFullLike(OpBuilder &builder, Location loc, Value scalar,
   return builder.create<triton::SplatOp>(loc, tensorTy, scalar);
 }
 
-Value createCmpIntTensorScalar(OpBuilder &builder, Location loc, Value tensor,
-                               Value scalar) {
+Value createCmpIntTensorScalar(
+    OpBuilder &builder, Location loc, Value tensor, Value scalar,
+    arith::CmpIPredicate predicate = arith::CmpIPredicate::eq) {
   auto tensorTy = cast<RankedTensorType>(tensor.getType());
   auto splat = createFullLike(builder, loc, scalar, tensorTy);
-  auto cmp = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq,
-                                           tensor, splat);
+  auto cmp = builder.create<arith::CmpIOp>(loc, predicate, tensor, splat);
   return cmp;
 }
 
@@ -512,6 +512,186 @@ struct ClearReadBarrierOpConversion
   }
 };
 
+struct StageWriteForCommitOpConversion
+    : public ConvertOpToLLVMPattern<tti::ExperimentalStageWriteForCommitOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  LogicalResult matchAndRewrite(tti::ExperimentalStageWriteForCommitOp op,
+                                OpAdaptor adaptor,
+                                ConversionPatternRewriter &b) const override {
+    Location loc = op.getLoc();
+    OpBuilder::InsertionGuard guard(b);
+    b.setInsertionPoint(op);
+    if (op.getPred()) {
+      auto [prevBlock, ifBlock, thenBlock] =
+          createIfBlock(b, loc, op.getPred());
+      b.setInsertionPointToStart(ifBlock);
+    }
+    TypedValue<RankedTensorType> buffers = op.getBuffers();
+    RankedTensorType writeCommitsType =
+        cast<RankedTensorType>(op.getWriteCommitsType());
+    Value writeCommits = tti::createLoadScratchMemory(
+                             b, loc, op.getWriteCommits(), writeCommitsType)
+                             ->getResult(0);
+    Value buf = createMemDescToI64(b, loc, getTypeConverter(),
+                                   op.getBuf().getType(), adaptor.getBuf());
+
+    // Gluon pseudo-code:
+    // write_commits = tl.where(bufs == buf, -1, write_commits)
+
+    auto buffersEqBuf = createCmpIntTensorScalar(b, loc, buffers, buf);
+    auto writeCommitsMinusOne =
+        tti::createConstIntTensor(b, loc, -1, writeCommitsType);
+    writeCommits = b.create<arith::SelectOp>(
+        loc, buffersEqBuf, writeCommitsMinusOne, writeCommits);
+    tti::createStoreScratchMemory(b, loc, op.getWriteCommits(), writeCommits,
+                                  writeCommitsType);
+    b.eraseOp(op);
+    return success();
+  }
+};
+
+struct CommitWritesOpConversion
+    : public ConvertOpToLLVMPattern<tti::ExperimentalCommitWritesOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  LogicalResult matchAndRewrite(tti::ExperimentalCommitWritesOp op,
+                                OpAdaptor adaptor,
+                                ConversionPatternRewriter &b) const override {
+    Location loc = op.getLoc();
+    OpBuilder::InsertionGuard guard(b);
+    b.setInsertionPoint(op);
+    if (op.getPred()) {
+      auto [prevBlock, ifBlock, thenBlock] =
+          createIfBlock(b, loc, op.getPred());
+      b.setInsertionPointToStart(ifBlock);
+    }
+    RankedTensorType writeCommitsType =
+        cast<RankedTensorType>(op.getWriteCommitsType());
+    Value writeCommits = tti::createLoadScratchMemory(
+                             b, loc, op.getWriteCommits(), writeCommitsType)
+                             ->getResult(0);
+
+    // Gluon pseudo-code:
+    // write_commits = tl.where(write_commits > 0, write_commits + 1,
+    // write_commits) write_commits = tl.where(write_commits == -1, 1,
+    // write_commits)
+
+    Type elementType = writeCommitsType.getElementType();
+    Value minusOne = b.create<arith::ConstantOp>(
+        loc, elementType, b.getIntegerAttr(elementType, -1));
+    Value zero = b.create<arith::ConstantOp>(loc, elementType,
+                                             b.getIntegerAttr(elementType, 0));
+    Value writeCommitsOne =
+        tti::createConstIntTensor(b, loc, 1, writeCommitsType);
+
+    auto writeCommitsGtZero = createCmpIntTensorScalar(
+        b, loc, writeCommits, zero, arith::CmpIPredicate::sgt);
+    auto writeCommitsPlusOne =
+        b.create<arith::AddIOp>(loc, writeCommits, writeCommitsOne);
+    writeCommits = b.create<arith::SelectOp>(loc, writeCommitsGtZero,
+                                             writeCommitsPlusOne, writeCommits);
+
+    auto writeCommitsEqMinusOne =
+        createCmpIntTensorScalar(b, loc, writeCommits, minusOne);
+    writeCommits = b.create<arith::SelectOp>(loc, writeCommitsEqMinusOne,
+                                             writeCommitsOne, writeCommits);
+    tti::createStoreScratchMemory(b, loc, op.getWriteCommits(), writeCommits,
+                                  writeCommitsType);
+    b.eraseOp(op);
+    return success();
+  }
+};
+
+struct ClearWriteCommitsOpConversion
+    : public ConvertOpToLLVMPattern<tti::ExperimentalClearWriteCommitsOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  LogicalResult matchAndRewrite(tti::ExperimentalClearWriteCommitsOp op,
+                                OpAdaptor adaptor,
+                                ConversionPatternRewriter &b) const override {
+    Location loc = op.getLoc();
+    OpBuilder::InsertionGuard guard(b);
+    b.setInsertionPoint(op);
+    if (op.getPred()) {
+      auto [prevBlock, ifBlock, thenBlock] =
+          createIfBlock(b, loc, op.getPred());
+      b.setInsertionPointToStart(ifBlock);
+    }
+    RankedTensorType writeCommitsType =
+        cast<RankedTensorType>(op.getWriteCommitsType());
+    Value writeCommits = tti::createLoadScratchMemory(
+                             b, loc, op.getWriteCommits(), writeCommitsType)
+                             ->getResult(0);
+
+    // Gluon pseudo-code:
+    // write_commits = tl.where(write_commits > outstanding_num, 0,
+    // write_commits)
+
+    Type elementType = writeCommitsType.getElementType();
+    Value outstandingNum = b.create<arith::ConstantOp>(
+        loc, elementType,
+        b.getIntegerAttr(elementType, op.getOutstandingNum()));
+    Value writeCommitsZero =
+        tti::createConstIntTensor(b, loc, 0, writeCommitsType);
+    auto writeCommitsGtOutstandingNum = createCmpIntTensorScalar(
+        b, loc, writeCommits, outstandingNum, arith::CmpIPredicate::sgt);
+    writeCommits = b.create<arith::SelectOp>(loc, writeCommitsGtOutstandingNum,
+                                             writeCommitsZero, writeCommits);
+    tti::createStoreScratchMemory(b, loc, op.getWriteCommits(), writeCommits,
+                                  writeCommitsType);
+    b.eraseOp(op);
+    return success();
+  }
+};
+
+struct CheckWriteCommitOpConversion
+    : public ConvertOpToLLVMPattern<tti::ExperimentalCheckWriteCommitOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  LogicalResult matchAndRewrite(tti::ExperimentalCheckWriteCommitOp op,
+                                OpAdaptor adaptor,
+                                ConversionPatternRewriter &b) const override {
+    Location loc = op.getLoc();
+    OpBuilder::InsertionGuard guard(b);
+    b.setInsertionPoint(op);
+    if (op.getPred()) {
+      auto [prevBlock, ifBlock, thenBlock] =
+          createIfBlock(b, loc, op.getPred());
+      b.setInsertionPointToStart(ifBlock);
+    }
+    TypedValue<RankedTensorType> buffers = op.getBuffers();
+    RankedTensorType writeCommitsType =
+        cast<RankedTensorType>(op.getWriteCommitsType());
+    Value writeCommits = tti::createLoadScratchMemory(
+                             b, loc, op.getWriteCommits(), writeCommitsType)
+                             ->getResult(0);
+    Value buf = createMemDescToI64(b, loc, getTypeConverter(),
+                                   op.getBuf().getType(), adaptor.getBuf());
+
+    // Gluon pseudo-code:
+    // curr_commits = tl.where(buf == buffers, write_commits, 0)
+    // tl.device_assert(curr_commits == 0, "Buffer being accessed has
+    // outstanding writes")
+
+    Type elementType = writeCommitsType.getElementType();
+    auto buffersEqBuf = createCmpIntTensorScalar(b, loc, buffers, buf);
+    auto zero = b.create<arith::ConstantOp>(loc, elementType,
+                                            b.getIntegerAttr(elementType, 0));
+    auto writeCommitsZero =
+        tti::createConstIntTensor(b, loc, 0, writeCommitsType);
+    auto currCommits = b.create<arith::SelectOp>(
+        loc, buffersEqBuf, writeCommits, writeCommitsZero);
+    auto currCommitsEqZero =
+        createCmpIntTensorScalar(b, loc, currCommits, zero);
+    b.create<tti::ExperimentalAssertInThreadOp>(
+        loc, currCommitsEqZero,
+        b.getStringAttr("Buffer being accessed has outstanding writes"), false);
+    b.eraseOp(op);
+    return success();
+  }
+};
+
 } // namespace
 
 void mlir::triton::populateInstrumentationToLLVMPatterns(
@@ -525,4 +705,8 @@ void mlir::triton::populateInstrumentationToLLVMPatterns(
   patterns.add<MarkAsReadOpConversion>(typeConverter);
   patterns.add<ClearWriteBarrierOpConversion>(typeConverter);
   patterns.add<ClearReadBarrierOpConversion>(typeConverter);
+  patterns.add<StageWriteForCommitOpConversion>(typeConverter);
+  patterns.add<CommitWritesOpConversion>(typeConverter);
+  patterns.add<ClearWriteCommitsOpConversion>(typeConverter);
+  patterns.add<CheckWriteCommitOpConversion>(typeConverter);
 }
