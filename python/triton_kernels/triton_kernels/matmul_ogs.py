@@ -470,7 +470,7 @@ def matmul_ogs(x, w, bias,
     # create tma descriptor for x
     x_has_tma = ((not has_gather) or (has_gather and target_info.has_tma_gather())) and opt_flags.is_persistent
     x_block_tma = ([1] if has_gather else [1, opt_flags.block_m]) + [opt_flags.block_k]
-    x_tensor_or_tma = x_storage.make_tma(x_block_tma) if x_has_tma else x.storage.data
+    x_tensor_or_tma = x_storage.make_tma(x_block_tma) if x_has_tma else x_storage.data
     # create tma descriptor for w
     w_has_tma = opt_flags.is_persistent
     w_tensor_or_tma = w_storage.make_tma([1, opt_flags.block_k, opt_flags.block_n]) if w_has_tma else w_storage.data
@@ -488,7 +488,7 @@ def matmul_ogs(x, w, bias,
     (kernels._p_matmul_ogs if opt_flags.is_persistent else kernels._matmul_ogs)[(grid,)](
                    flex.out_data.reinterpret(memory["output"]),
                    flex.out_data.reinterpret(out0), *out0.stride(), *out0_flex,
-                   x_tensor_or_tma, x, *x_strides,
+                   x_tensor_or_tma, x_storage.data, *x_strides,
                    flex.lhs_data.scale,
                    w_tensor_or_tma, *w_storage.data.stride(), w_storage.data.stride()[-1] != 1,
                    flex.rhs_data.scale,
