@@ -127,8 +127,8 @@ def NVWS_WarpGroupOp : NVWS_Op<"warp_group", [
     the number of warps in each group, plus a region to hold the
     computation for that warp group.
 
-    Regions are not Isolated from Above to aid in analysis,
-    and take inputs purely by reference.
+    The results of this op, if any, are those of the first region, as returned by
+    nvws.warp_group.yield op.
 
     nvws.warp_group should be lowered to ttg.warp_specialize
     before execution.
