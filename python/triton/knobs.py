@@ -434,7 +434,7 @@ class nvidia_knobs(base_knobs):
 
 
 class amd_knobs(base_knobs):
-    use_buffer_ops: env_bool = env_bool("AMDGCN_USE_BUFFER_OPS", True)
+    use_buffer_ops: env_bool = env_bool("AMDGCN_USE_BUFFER_OPS", False)
     dump_amdgcn: env_bool = env_bool("AMDGCN_ENABLE_DUMP")
     libhip_path: env_opt_str = env_opt_str("TRITON_LIBHIP_PATH")
     lld_path: env_opt_str = env_opt_str("TRITON_HIP_LLD_PATH")
