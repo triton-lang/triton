@@ -5,7 +5,7 @@ import torch
 import triton
 import triton.language as tl
 
-from triton._internal_testing import is_cuda, is_hopper, is_hip_cdna, is_hip_cdna2, is_hip
+from triton._internal_testing import is_cuda, is_hopper_or_newer, is_hip_cdna, is_hip_cdna2, is_hip
 
 
 def check_capabilities():
@@ -233,7 +233,7 @@ def test_pipeline_matmul(scale, device):
         scale_a = torch.randint(74, (M, K // 32), device=device, dtype=torch.uint8)
         # Use e5m2 for Ampere, as it does not support fp_to_fp conversions for fp8e4m3
         # Use bf16 for Hopper as the rhs must come from shmem
-        b_type = "bf16" if is_hopper() else "e5m2"
+        b_type = "bf16" if is_hopper_or_newer() else "e5m2"
         if b_type == "bf16":
             b = torch.randn((K, N), device=device, dtype=torch.bfloat16)
         else:
@@ -250,7 +250,7 @@ def test_pipeline_matmul(scale, device):
         a_type, b_type = None, None
         output = torch.empty((M, N), dtype=torch.float16, device=device)
     grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), 1)
-    use_tma = not scale and is_hopper()
+    use_tma = not scale and is_hopper_or_newer()
 
     if use_tma:
         from triton.tools.tensor_descriptor import TensorDescriptor

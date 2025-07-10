@@ -51,8 +51,8 @@ struct TensorMemory : public SideEffects::Resource::Base<TensorMemory> {
 struct TMemAllocation {
   TMemAllocation(int numCols, int numRows)
       : numCols(numCols), numRows(numRows) {}
-  int numRows;
   int numCols;
+  int numRows;
 };
 
 TMemAllocation getTmemAllocSizes(gpu::MemDescType memDescType);

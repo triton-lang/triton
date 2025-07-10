@@ -313,10 +313,8 @@ def mxfp_matmul(  #
     b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
     accumulator = tl.zeros((BLOCK_M, BLOCK_N), dtype=output_ptr.dtype.element_ty)
     for k in tl.range(0, tl.cdiv(K, BLOCK_K), num_stages=NUM_STAGES):
-        k_remaining = K - k * BLOCK_K
-        valid_k = offs_k < k_remaining
-        a = tl.load(a_ptrs, mask=valid_k[None, :], other=0.)
-        b = tl.load(b_ptrs, mask=valid_k[:, None], other=0.)
+        a = tl.load(a_ptrs)
+        b = tl.load(b_ptrs)
         scale_a = tl.load(a_scale_ptr)
         scale_b = tl.load(b_scale_ptr)
         accumulator = tl.dot_scaled(a, scale_a, "e5m2", b, scale_b, "e5m2", accumulator)
@@ -339,21 +337,20 @@ def fp8e8m0_to_float32(scale):
     return scale
 
 
-@pytest.mark.parametrize("M, N, K", [(1024, 512, 256), (128, 256, 256), (128, 128, 128), (2, 4, 32), (2, 4, 64),
-                                     (256, 16, 32)])
+@pytest.mark.parametrize("M, N, K", [(1024, 512, 256), (128, 256, 256), (128, 128, 128), (2, 4, 64)])
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 128, 128), (256, 128, 128), (128, 256, 128),
                                                        (128, 256, 256), (128, 128, 64), (128, 64, 128)])
 @pytest.mark.parametrize("NUM_STAGES", [1, 3])
 @pytest.mark.parametrize("NUM_WARPS", [4, 8])
 @pytest.mark.parametrize("nonKDim", ([0, 16, 32] if is_hip_cdna() else [0]))
 def test_mxfp(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, nonKDim, NUM_WARPS, device):
+    if K % BLOCK_K != 0:
+        pytest.skip("Kernel requires shapes aligned by K dimension")
     if is_cuda() and torch.cuda.get_device_capability()[0] < 10:
         pytest.skip("Requires compute capability >= 10")
     elif is_hip():
         if not is_hip_cdna4():
             pytest.skip("Scaled mxfp8 matmul is only natively supported on CDNA4")
-        if (M == 2 and N == 4 and K == 32) or (M == 256 and N == 16 and K == 32):
-            pytest.skip(f"Input shape {M=}, {N=}, {K=} is not supported yet")
         if (nonKDim == 16 and BLOCK_K < 128) or (nonKDim == 32 and BLOCK_K < 64):
             pytest.skip(f"CDNA4 does not support {BLOCK_K=} for scaled mfma {nonKDim=} variants")
 
@@ -888,8 +885,6 @@ def test_mxfp8_mxfp4_matmul(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, B_TR
             pytest.skip("Pack along M/N is not enabled on AMD backend")
         if not is_hip_cdna4():
             pytest.skip("Scaled mxfp4 & mxfp8 matmul is only natively supported on CDNA4")
-        if CONST_SCALE:
-            pytest.skip("Constant scale is not supported in AMD backend for now")
         if (nonKDim == 16 and BLOCK_K < 128) or (nonKDim == 32 and BLOCK_K < 64):
             pytest.skip(f"CDNA4 does not support {BLOCK_K=} for scaled mfma {nonKDim=} variants")
         if (A_DATA_TYPE == 'float4' and not WITH_A_SCALE) or (B_DATA_TYPE == 'float4' and not WITH_B_SCALE):

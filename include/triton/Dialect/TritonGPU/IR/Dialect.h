@@ -283,6 +283,12 @@ bool isInnermostContiguous(MemDescType type, unsigned numElems);
 LinearLayout inferReshapeLinearLayout(ArrayRef<int64_t> srcShape,
                                       Attribute srcEnc,
                                       ArrayRef<int64_t> dstShape);
+
+// Verify the types of operations that operate on memory.
+LogicalResult verifyMemoryOpTypes(Operation *op, ShapedType srcTy,
+                                  ShapedType dstTy);
+// Verify a memory allocation operation.
+LogicalResult verifyAllocOp(Operation *op, Value src, MemDescType dstTy);
 } // namespace mlir::triton::gpu
 
 #endif // TRITON_DIALECT_TRITONGPU_IR_DIALECT_H_

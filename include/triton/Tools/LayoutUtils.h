@@ -116,14 +116,17 @@ LinearLayout zerosLike(const LinearLayout &layout);
 // For a layout A with A.hasInDim(kReg), find a permutation of registers action
 // such that action.apply(A) may be divisible by B
 // It's not always true that the action returned by this function will
-// allow us to divideLeft, but it is true that if it if there exists one, it is
-// the one returned by this function.
-std::optional<ColumnAction> regPermForDivideLeft(const LinearLayout &A,
-                                                 const LinearLayout &B);
+// allow us to divideLeft (resp. divideRight), but it is true that if it if
+// there exists one, it is the one returned by this function.
+std::optional<ColumnAction> regPermForDivide(const LinearLayout &A,
+                                             const LinearLayout &B, bool left);
 
 // For a layout A with A.hasInDim(kReg), find a permutation of registers action
 // such that action.apply(A) has the broadcasted registers removed
 ColumnAction actionRemoveBroadcastedRegs(const LinearLayout &layout);
+
+std::pair<int64_t, ColumnAction>
+actionAdditiveStrides(const LinearLayout &layout);
 
 // For a layout A with A.hasInDim(kReg), repeat the values so that they have
 // the same broadcasting as layout

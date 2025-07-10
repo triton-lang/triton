@@ -2,7 +2,9 @@
 #define TRITON_TRITONGPU_TRANSFORM_PIPELINE_SCHEDULE_H_
 
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/IR/ImplicitLocOpBuilder.h"
 #include "mlir/Support/LLVM.h"
+#include "triton/Analysis/AxisInfo.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipelineExpander.h"
 #include "llvm/ADT/ArrayRef.h"
 #include <list>
@@ -15,6 +17,13 @@ namespace gpu {
 
 /// Lower the loops to prepare them for pipeline expansion.
 void lowerLoops(ModuleOp moduleOp);
+
+bool hasGpuBarriers(scf::ForOp forOp);
+bool isSafeToPipeline(scf::ForOp forOp);
+llvm::MapVector<Operation *, std::pair<int, Operation *>>
+loadOpsToIndirectionLevel(scf::ForOp forOp, bool pipelineWithoutDot,
+                          triton::ModuleAxisInfoAnalysis &axisInfoAnalysis,
+                          int numStages, bool filterSmall = true);
 
 }; // namespace gpu
 
@@ -44,7 +53,7 @@ public:
     const_iterator begin() const { return orderClusters.begin(); }
     iterator end() { return orderClusters.end(); }
     const_iterator end() const { return orderClusters.end(); }
-    size_t size() { return orderClusters.size(); }
+    size_t size() const { return orderClusters.size(); }
     iterator newAtBack() {
       orderClusters.push_back(orderClusters.size());
       return std::prev(orderClusters.end());
@@ -84,10 +93,10 @@ public:
   using Cluster = ClusterList::iterator;
   using ClusterHash = size_t;
 
-  DenseMap<Operation *, std::pair<int, Cluster>> opToStageAndCluster;
+  llvm::MapVector<Operation *, std::pair<int, Cluster>> opToStageAndCluster;
 
   void setNumStages(int numStages) { this->numStages = numStages; }
-  int getNumStages() { return numStages; }
+  int getNumStages() const { return numStages; }
 
   void insert(Operation *op, int stage, Cluster cluster) {
     if (stage >= numStages) {
@@ -114,7 +123,7 @@ public:
 
   void erase(Operation *op) { opToStageAndCluster.erase(op); }
 
-  int count(Operation *op) { return opToStageAndCluster.count(op); }
+  int count(Operation *op) const { return opToStageAndCluster.count(op); }
 
   std::pair<int, Cluster> operator[](Operation *op) {
     return opToStageAndCluster[op];
@@ -128,25 +137,25 @@ public:
   Cluster splitClusterBefore(Operation *op, scf::ForOp forOp);
 
   // Check if op a will show up before op b in the final unrolled code.
-  bool isOpBefore(Operation *a, Operation *b);
+  bool isOpBefore(Operation *a, Operation *b) const;
 
   // Check if op a is in earlier cluster than op b.
-  bool isOpInEarlierCluster(Operation *a, Operation *b);
+  bool isOpInEarlierCluster(Operation *a, Operation *b) const;
 
   // Check if op a is in the same cluster as op b.
-  bool isOpInSameCluster(Operation *a, Operation *b);
+  bool isOpInSameCluster(Operation *a, Operation *b) const;
 
   SmallVector<std::tuple<Operation *, int, Cluster>>
-  getOpsInOrder(scf::ForOp forOp);
+  getOpsInOrder(scf::ForOp forOp) const;
   std::vector<std::pair<Operation *, unsigned>>
-  createFinalSchedule(scf::ForOp forOp);
+  createFinalSchedule(scf::ForOp forOp) const;
 
   bool empty() const { return opToStageAndCluster.size() == 0; }
   auto end() const { return opToStageAndCluster.end(); }
   auto begin() const { return opToStageAndCluster.begin(); }
 
   // Set <stage, cluster> based on CoarseSchedule.
-  void serialize(scf::ForOp &forOp);
+  void serialize(scf::ForOp &forOp) const;
   // Create a CoarseSchedule based on forOp's <stage, cluster>.
   LogicalResult deSerialize(scf::ForOp &forOp);
 
@@ -163,6 +172,39 @@ private:
 // Add dependencies of anchor ops to the coarse schedule. Schedule them to
 // the same stage and ordering cluster as the anchor op.
 void scheduleDependencies(scf::ForOp forOp, CoarseSchedule &schedule);
+
+class OpBuilderForStage : public mlir::ImplicitLocOpBuilder,
+                          public OpBuilder::Listener {
+public:
+  explicit OpBuilderForStage(Location loc, Operation *op,
+                             CoarseSchedule &schedule)
+      : ImplicitLocOpBuilder(loc, op, this), schedule(schedule) {
+    if (auto it = schedule.find(op); it != schedule.end())
+      std::tie(stage, cluster) = it->second;
+  }
+
+  void setStageCluster(std::pair<int, CoarseSchedule::Cluster> stageCluster) {
+    stage = stageCluster.first;
+    cluster = stageCluster.second;
+  }
+
+  void notifyOperationInserted(Operation *op, InsertPoint previous) {
+    if (stage && cluster)
+      schedule.insert(op, *stage, *cluster);
+  }
+
+private:
+  std::optional<int> stage;
+  std::optional<CoarseSchedule::Cluster> cluster;
+  CoarseSchedule &schedule;
+};
+
+namespace gpu {
+void scheduleDistanceOneDependencies(scf::ForOp forOp,
+                                     CoarseSchedule &schedule);
+void scheduleRemainingToLastStage(scf::ForOp forOp, CoarseSchedule &schedule,
+                                  CoarseSchedule::Cluster afterPrologue);
+} // namespace gpu
 
 } // namespace triton
 } // namespace mlir

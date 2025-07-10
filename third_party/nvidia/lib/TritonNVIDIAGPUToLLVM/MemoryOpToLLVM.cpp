@@ -73,7 +73,7 @@ LogicalResult lowerLdStMatrix(
 
     // Find if there is a register permutation that allows us to divideLeft
     // We need to pass the map from regs to offsets, as is cvt
-    maybePermutation = regPermForDivideLeft(cvt, tile);
+    maybePermutation = regPermForDivide(cvt, tile, /*left=*/true);
     if (!maybePermutation.has_value()) {
       return failure();
     }

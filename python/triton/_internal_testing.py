@@ -38,8 +38,20 @@ def is_cuda():
     return False if target is None else target.backend == "cuda"
 
 
-def is_hopper():
+def is_ampere_or_newer():
+    return is_cuda() and torch.cuda.get_device_capability()[0] >= 8
+
+
+def is_blackwell():
+    return is_cuda() and torch.cuda.get_device_capability()[0] == 10
+
+
+def is_hopper_or_newer():
     return is_cuda() and torch.cuda.get_device_capability()[0] >= 9
+
+
+def is_hopper():
+    return is_cuda() and torch.cuda.get_device_capability()[0] == 9
 
 
 def is_hip():

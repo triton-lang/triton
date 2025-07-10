@@ -296,8 +296,6 @@ public:
 // Types
 #define ptr_ty(...) LLVM::LLVMPointerType::get(__VA_ARGS__)
 #define int_ty(width) rewriter.getIntegerType(width)
-#define i64_ty rewriter.getIntegerType(64)
-#define i32_ty rewriter.getIntegerType(32)
 #define i16_ty rewriter.getIntegerType(16)
 #define i32_ty rewriter.getIntegerType(32)
 #define i64_ty rewriter.getIntegerType(64)
@@ -423,10 +421,6 @@ size_t linearize(ArrayRef<unsigned> multiDim, ArrayRef<unsigned> shape,
 Value addStringToModule(Location loc, RewriterBase &rewriter, StringRef key,
                         StringRef content);
 
-inline bool isKernel(FunctionOpInterface funcOp) {
-  return funcOp.getVisibility() == SymbolTable::Visibility::Public;
-}
-
 Value getStackPointer(RewriterBase &rewriter, FunctionOpInterface funcOp);
 
 Value getGlobalScratchPtr(Location loc, RewriterBase &rewriter,
@@ -545,6 +539,7 @@ emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
     LinearLayout &regLayout, triton::gpu::MemDescType sharedTy, Type elemLlvmTy,
     std::optional<int32_t> maxVecElems, const SharedMemoryObject &smemObj,
     Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
+    Value laneId, Value warpId,
     std::function<void(VectorType, Value /*shmemAddr*/)> perVectorCallback);
 
 SmallVector<Value> loadSharedToDistributed(triton::gpu::LocalLoadOp localLoadOp,
@@ -558,6 +553,27 @@ void storeDistributedToShared(
     ArrayRef<Value> srcVals, const SharedMemoryObject &smemObj, Location loc,
     RewriterBase &rewriter, const TargetInfoBase &target,
     std::pair<size_t, Type> *const llvmOpCount = nullptr);
+
+// Close cousin of lowerLdStMatrix in MemoryOpToLLVM.cpp
+// We might want to merge them at some point, but having to support
+// ldmatrix.trans makes the code in lowerLdStMatrix a bit specific
+// Lowers to st when valArrays is empty, and to ld when it is not,
+// and returns the output values.
+SmallVector<Value>
+lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout cvt,
+                ArrayRef<Value> valsArray, // Input for store, output for load
+                Type llvmElemTy, Value smemBase,
+                ConversionPatternRewriter &rewriter,
+                const TargetInfoBase &targetInfo);
+
+// Lower local_load/local_store via ld.shared/st.shared
+SmallVector<Value> lowerLocalLdSt(Location loc, MLIRContext *ctx,
+                                  // Map from registers to offset
+                                  LinearLayout cvt, ArrayRef<Value> valsArray,
+                                  // Input for store, output for load
+                                  Type llvmElemTy, Value smemBase,
+                                  ConversionPatternRewriter &rewriter,
+                                  const TargetInfoBase &targetInfo);
 
 SmallVector<Value> unpackLLElements(Location loc, Value llvmStruct,
                                     RewriterBase &rewriter);

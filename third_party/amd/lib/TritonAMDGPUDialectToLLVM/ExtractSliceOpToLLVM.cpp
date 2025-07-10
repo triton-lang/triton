@@ -1,7 +1,9 @@
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "TritonAMDGPUToLLVM/GCNAsmFormat.h"
+#include "Utility.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
+#include "third_party/amd/include/Utils/Utility.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Conversion/MLIRTypes.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
@@ -10,45 +12,13 @@
 using namespace mlir;
 using namespace mlir::triton;
 
-// clang-format off
-//===--------------------------------------------------------------------------------===//
-//   # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
-//   # WO   #  W1 #                                     |                                #
-//   #      #     #                                     |                                #
-//   #  #   #  #  #                                     |                                #
-//   # W2   # W3  #   ....                              |                                #
-//   #      #     #                                     |  SkipElems                     #
-//   #  #   #  #  #                                     |                                #
-//   #                                                  |                                #
-//   #                                        Slice     |                                #
-//   #    .                                 /        \  |                                #
-//   #    .                                /          \ |                                #
-//   #    .                               /            \|                                #
-//   #                                    #   #  #  #  #                                 #
-//   #                                    #  W0  #  W1 #                                 #
-//   #                                    #      #     #                                 #
-//   #                                    #  #   #  #  #    tensorStride                 #
-//   #                                    #  W2  #  W3 # --------------------------------#
-//   #                                    #      #     #                                 #
-//   #                                    #  #   #  #  #                                 #
-//   #          tensorStride              #  W0  #  W1 #                                 #
-//   # ---------------------------------- #      #     #                                 #
-//   #                                    #  #   #  #  #                                 #
-//   #                                    #  W2  #  W3 #                                 #
-//   #                                    #      #     #                                 #
-//   #                                    #  #   #  #  # ---> lastIdx                    #
-//   #                                         .                                         #
-//   #                                         .                                         #
-//   #                                         .                                         #
-//   #                                                                                   #
-//   #                                                                                   #
-//   #                                                                                   #
-//   #                                                                                   #
-//   # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
-//===--------------------------------------------------------------------------------===//
-// clang-format on
+// In distributed layouts, tensors are divided into CTA tiles.
+// A CTA tile represents the smallest contiguous portion of a tensor that is
+// distributed across all threads and warps within a workgroup. The ExtractSlice
+// operation extracts a portion of the tensor that is a multiple of CTA tiles.
 
 namespace {
+
 struct ExtractSliceOpConversion
     : public ConvertOpToLLVMPattern<amdgpu::ExtractSliceOp> {
   explicit ExtractSliceOpConversion(LLVMTypeConverter &typeConverter,
@@ -60,61 +30,60 @@ struct ExtractSliceOpConversion
                               ConversionPatternRewriter &rewriter) const {
     Location loc = op->getLoc();
     auto srcTy = cast<RankedTensorType>(op.getSource().getType());
-    auto srcLayout = srcTy.getEncoding();
+    auto dstTy = cast<RankedTensorType>(op.getType());
     auto srcShape = srcTy.getShape();
-    auto resultTy = cast<RankedTensorType>(op.getType());
+    auto dstShape = dstTy.getShape();
+
     auto vals = unpackLLElements(loc, adaptor.getSource(), rewriter);
-    auto elemsPerThread = triton::gpu::getElemsPerThread(srcTy);
-    auto contigPerThread = triton::gpu::getContigPerThread(srcTy);
-    auto totalContigPerThread = product<unsigned>(contigPerThread);
-    auto order = triton::gpu::getOrder(srcTy);
-
-    // Calculate valid total number of workers in each dimension
     auto shapePerCTATile = triton::gpu::getShapePerCTATile(srcTy);
-    shapePerCTATile[0] =
-        std::min(static_cast<unsigned>(srcShape[0]), shapePerCTATile[0]);
-    shapePerCTATile[1] =
-        std::min(static_cast<unsigned>(srcShape[1]), shapePerCTATile[1]);
+    auto srcCTAShape = LLVM::AMD::multiDimElementwise<int64_t, unsigned>(
+        srcShape, shapePerCTATile, std::divides<unsigned>());
+    auto dstCTAShape = LLVM::AMD::multiDimElementwise<int64_t, unsigned>(
+        dstShape, shapePerCTATile, std::divides<unsigned>());
 
-    // Rank == 2 checked in the verifier
-    SmallVector<int64_t, 2> sizes;
-    for (auto i = 0; i < 2; ++i) {
-      sizes.push_back(resultTy.getDimSize(i));
-    }
-
+    auto numCTATiles = std::accumulate(dstCTAShape.begin(), dstCTAShape.end(),
+                                       1, std::multiplies<>());
     auto offsets = op.getStaticOffsets();
+    auto firstTileCoordinate =
+        LLVM::AMD::multiDimElementwise<int64_t, unsigned>(
+            offsets, shapePerCTATile, std::divides<unsigned>());
 
-    // Calculate offsets and sizes in terms of CTA units.
-    std::array<int64_t, 2> CTAOffsets{offsets[0] / shapePerCTATile[0],
-                                      offsets[1] / shapePerCTATile[1]};
-    std::array<int64_t, 2> CTASizes{sizes[0] / shapePerCTATile[0],
-                                    sizes[1] / shapePerCTATile[1]};
-    std::array<int64_t, 2> CTAPerShape{srcShape[0] / shapePerCTATile[0],
-                                       srcShape[1] / shapePerCTATile[1]};
+    Attribute srcEncoding = srcTy.getEncoding();
+    Attribute dstEncoding = dstTy.getEncoding();
+    auto linearLayoutSrc = triton::gpu::toLinearLayout(srcShape, srcEncoding);
+    auto linearLayoutDst = triton::gpu::toLinearLayout(dstShape, dstEncoding);
 
-    // The diagram above illustrates the graphical representation of the
-    // skipElems, tensorStride, and lastIdx variables.
-    auto skipElems = CTAOffsets[order[1]] * (elemsPerThread[order[0]] *
-                                             contigPerThread[order[1]]) +
-                     CTAOffsets[order[0]] * totalContigPerThread;
-    auto tensorStride =
-        (CTAPerShape[order[0]] - CTASizes[order[0]]) * totalContigPerThread;
-    auto lastIdx =
-        (CTAOffsets[order[1]] + CTASizes[order[1]] - 1) *
-            elemsPerThread[order[0]] * contigPerThread[order[1]] +
-        (CTAOffsets[order[0]] + CTASizes[order[0]]) * totalContigPerThread;
+    auto srcCTAOrder =
+        LLVM::AMD::getCTATileOrder(srcTy.getContext(), linearLayoutSrc);
+    auto dstCTAOrder =
+        LLVM::AMD::getCTATileOrder(srcTy.getContext(), linearLayoutDst);
 
-    assert(lastIdx <= vals.size());
+    unsigned elemsPerThreadPerCTA =
+        triton::gpu::getTotalElemsPerThread(srcTy) /
+        std::accumulate(srcCTAShape.begin(), srcCTAShape.end(), 1,
+                        std::multiplies<>());
 
+    // 1. Process CTA tiles in the destination tensor according to the
+    // destination's linear layout order of CTA tiles.
+    // 2. For each tile position in the destination tensor, compute its
+    // corresponding position in the source tensor.
+    // 3. Copy the values from the source tile to the destination slice.
     SmallVector<Value> resultVals;
-    for (int i = skipElems; i < lastIdx; i += tensorStride) {
-      for (int j = 0; j < totalContigPerThread * CTASizes[order[0]]; ++j, ++i) {
-        assert(i < lastIdx);
-        resultVals.push_back(vals[i]);
-      }
+    for (size_t i = 0; i < numCTATiles; i++) {
+      auto coordInDstTensor =
+          mlir::LLVM::delinearize(i, dstCTAShape, dstCTAOrder);
+      auto coordInSrcTensor =
+          LLVM::AMD::multiDimElementwise<unsigned, unsigned>(
+              coordInDstTensor, firstTileCoordinate, std::plus<unsigned>());
+      auto linearIdxInSrcTensor =
+          mlir::LLVM::linearize(coordInSrcTensor, srcCTAShape, srcCTAOrder);
+
+      size_t startIdx = linearIdxInSrcTensor * elemsPerThreadPerCTA;
+      llvm::append_range(resultVals, llvm::ArrayRef(vals).slice(
+                                         startIdx, elemsPerThreadPerCTA));
     }
     Value ret = packLLElements(loc, this->getTypeConverter(), resultVals,
-                               rewriter, resultTy);
+                               rewriter, dstTy);
 
     rewriter.replaceOp(op, ret);
     return success();
@@ -124,11 +93,7 @@ struct ExtractSliceOpConversion
   matchAndRewrite(amdgpu::ExtractSliceOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto srcTy = op.getSource().getType();
-    if (isa<BlockedEncodingAttr, AMDMfmaEncodingAttr>(
-            op.getSource().getType().getEncoding())) {
-      return processLayout(op, adaptor, rewriter);
-    }
-    return failure();
+    return processLayout(op, adaptor, rewriter);
   }
 };
 } // namespace

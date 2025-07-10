@@ -31,9 +31,10 @@ class AMDFMAVectorMultiplier : public FMAVectorMultiplier {
     auto dElemTy = dOpTy.getElementType();
     auto mod = op->getParentOfType<ModuleOp>();
     auto arch = getAMDArch(mod);
+    assert(arch.has_value() && "expected arch");
     DotIntrinsic chosenOp;
 
-    bool dotAvailable = AMD::supportsVDot(arch);
+    bool dotAvailable = AMD::supportsVDot(*arch);
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     if (dotAvailable) {
       if ((aElemTy.isF16() || aElemTy.isBF16()) && dElemTy.isF32()) {

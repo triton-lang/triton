@@ -5,6 +5,7 @@
 #include "cublas_instance.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Target/LLVMIR/Dialect/NVVM/NVVMToLLVMIRTranslation.h"
+#include "nvidia/hopper/include/Transforms/Passes.h"
 #include "nvidia/include/Dialect/NVWS/Transforms/Passes.h"
 #include "passes.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
@@ -28,11 +29,27 @@ void init_triton_nvidia_passes_ttgpuir(py::module &&m) {
         });
 }
 
+static std::unique_ptr<mlir::Pass>
+createTritonGPUFenceInsertionWrapper(int32_t capability) {
+  ttng::TritonGPUFenceInsertionOptions options;
+  options.computeCapability = capability;
+  return ttng::createTritonGPUFenceInsertion(options);
+}
+
+static std::unique_ptr<mlir::Pass>
+createTritonGPUProxyFenceInsertionWrapper(int32_t capability) {
+  ttng::TritonGPUProxyFenceInsertionOptions options;
+  options.computeCapability = capability;
+  return ttng::createTritonGPUProxyFenceInsertion(options);
+}
+
 void init_triton_nvidia_passes_ttnvgpuir(py::module &&m) {
   ADD_PASS_WRAPPER_1("add_plan_cta", ttng::createTritonNvidiaGPUPlanCTAPass,
                      mlir::triton::nvidia_gpu::ClusterInfo *);
-  ADD_PASS_WRAPPER_0("add_fence_insertion",
-                     ttng::createTritonGPUFenceInsertion);
+  ADD_PASS_WRAPPER_1("add_fence_insertion",
+                     createTritonGPUFenceInsertionWrapper, int32_t);
+  ADD_PASS_WRAPPER_1("add_proxy_fence_insertion",
+                     createTritonGPUProxyFenceInsertionWrapper, int32_t);
   ADD_PASS_WRAPPER_0("add_tma_lowering",
                      ttng::createTritonNvidiaGPUTMALoweringPass);
   ADD_PASS_WRAPPER_0("add_promote_lhs_to_tmem",
@@ -61,11 +78,18 @@ void init_triton_nvidia_passes_nvws(py::module &&m) {
   ADD_PASS_WRAPPER_0("add_lower_aref", mlir::triton::createNVWSLowerAref);
 }
 
+void init_triton_hopper_passes(py::module &&m) {
+  // Meta's autoWS
+  ADD_PASS_OPTION_WRAPPER_2("add_hopper_warpspec",
+                            mlir::createNVGPUWarpSpecialization, int, bool);
+}
+
 void init_triton_nvidia(py::module &&m) {
   auto passes = m.def_submodule("passes");
   init_triton_nvidia_passes_nvws(passes.def_submodule("nvws"));
   init_triton_nvidia_passes_ttgpuir(passes.def_submodule("ttgpuir"));
   init_triton_nvidia_passes_ttnvgpuir(passes.def_submodule("ttnvgpuir"));
+  init_triton_hopper_passes(passes.def_submodule("hopper"));
 
   // cluster info
   py::class_<mlir::triton::nvidia_gpu::ClusterInfo>(m, "ClusterInfo")

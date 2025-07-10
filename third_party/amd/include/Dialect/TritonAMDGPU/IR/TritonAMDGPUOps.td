@@ -65,6 +65,53 @@ def ExtractSliceOp : TT_AMDGPU_Op<"extract_slice", [Pure]> {
     * source: the base tensor on which to create a view tensor
     * offsets: offsets into the base tensor at which to create the view
 
+    In distributed layouts, tensors are divided into CTA tiles.
+    A CTA tile represents the smallest contiguous portion of a tensor that is
+    distributed across all threads and warps within a workgroup.
+    The ExtractSlice operation extracts a portion of the tensor that is a
+    multiple of CTA tiles.
+
+    The source and destination must have matching linear layouts at the CTA
+    tile level. This ensures that the extract_slice is a no-op, meaning no data
+    rearrangement between threads is required to extract the destination tensor
+    with the given shape and layout.
+
+      +-------+-------+
+      |  W0   |  W1   |
+      |       |       |
+      |   +   |   +   |
+      |  W2   |  W3   |  <-- Single CTA tile (distributed across warps W0-W3)
+      |       |       |
+      |   +   |   +   |
+      |       |       |
+      +-------+-------+
+      |          Source Tensor                    Extracted Slice
+      |             .                           +--------------+
+      |             .                           |  W0  |  W1   |
+      |             .                           |      |       |
+      |                                         |  +   |   +   |
+      |                                         |  W2  |  W3   |
+      |                                         |      |       |
+      |                                         |  +   |   +   |
+      |                                         |      |       |
+      |                                         +-------+------+
+      |                                         |  W0  |   W1  |
+      |                                         |      |       |
+      |                                         |  +   |   +   |
+      |                                         |  W2     W3   |
+      |                                         |      |       |
+      |                                         |  +   |   +   |
+      |                                         |      |       |
+      |                                         +--------------+
+
+
+    This op is designed to work on logical tensors directly, avoiding the need
+    for complex layout reinterpretation or reshaping. For example, the tt.split
+    operation only supports splitting along the innermost dimension,
+    and requires that the resulting innermost dimension provide 2 elements per thread,
+    distributed across registers. In contrast, extract_slice op imposes no constraints
+    on the extraction dimension or the size of dimensions.
+
     Example 1:
 
     ```mlir
@@ -80,11 +127,11 @@ def ExtractSliceOp : TT_AMDGPU_Op<"extract_slice", [Pure]> {
     ```
 
     Example 1 shows how "extract_slice" operation may be used. In this example a
-    new slice of 128x32 is created. "extract_slice" works on tensors with layout
-    where the desired slice has the same layout as the source tensor.
-    "%0" cannot be sliced directly as the resulting slice cannot have the same
-    layout as "%0". Therefore it needs to be converted to a layout suitable
-    for slicing. "#blocked1" layout is appropriate for this as it keeps the
+    new slice of 128x32 is created. "extract_slice" works on tensors
+    where the desired slice has the same layout on a CTA tile as the source tensor.
+    "%0" cannot be sliced directly as the resulting slice does not satisfy this condition.
+    Therefore it needs to be converted to a layout suitable for slicing.
+    "#blocked1" layout is appropriate for this as it keeps the
     sizePerThread the same thus keeping coalescing properties the same.
     In order to utilize all threads in a warp, "threadsPerWarp" is set to
     [16,4] for this new layout. This layout conversion carried out before
@@ -117,6 +164,7 @@ def ExtractSliceOp : TT_AMDGPU_Op<"extract_slice", [Pure]> {
   }];
 
   let hasVerifier = 1;
+  let hasCanonicalizer = 1;
 }
 
 def ConcatOp : TT_AMDGPU_Op<"concat", [Pure]> {
@@ -186,6 +234,7 @@ def ConcatOp : TT_AMDGPU_Op<"concat", [Pure]> {
   }];
 
   let hasVerifier = 1;
+  let hasCanonicalizer = 1;
 }
 
 //===----------------------------------------------------------------------===//

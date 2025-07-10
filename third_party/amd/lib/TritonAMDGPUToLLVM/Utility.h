@@ -111,7 +111,6 @@ bool isChainDotHead(mlir::triton::DotOpInterface dotOp);
 // Check if the opA of this tl.dot is the result of another tl.dot
 // in the same region
 bool isChainDotTail(mlir::triton::DotOpInterface dotOp);
-
 } // namespace mlir::LLVM::AMD
 
 #endif // TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_UTILITY_H_

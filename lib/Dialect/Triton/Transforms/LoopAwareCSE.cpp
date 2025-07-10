@@ -93,6 +93,9 @@ bool LoopCSEDriver::areEqualInLoop(Value a, Value b) {
 
   Operation *aDef = a.getDefiningOp();
   Operation *bDef = b.getDefiningOp();
+  if (cast<OpResult>(a).getResultNumber() !=
+      cast<OpResult>(b).getResultNumber())
+    return false;
   // For it to be known that the operation results have the same value, they
   // must be side effect free.
   if (!isMemoryEffectFree(aDef) || !isMemoryEffectFree(bDef))

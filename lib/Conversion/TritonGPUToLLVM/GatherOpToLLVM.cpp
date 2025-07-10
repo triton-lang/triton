@@ -250,9 +250,9 @@ void GatherOpConversion::emitWarpLocalGather(
 
   // Sanity check: the warp must be invariant to the index because otherwise the
   // gather would need to read across warps!
-  assert(invSrcLayout.sublayoutIsZero(kGatherDim, {kBlock, kWarp}) &&
+  assert(invSrcLayout.sublayoutIsZero(kGatherDim, {kWarp, kBlock}) &&
          "expected a warp-local gather");
-  invSrcLayout = invSrcLayout.sublayout(allDims, {kLane, kRegister});
+  invSrcLayout = invSrcLayout.sublayout(allDims, {kRegister, kLane});
 
   LinearLayout idxColLayout =
       idxLayout.sublayout({kBlock, kWarp, kLane, kRegister}, otherDims);
@@ -298,19 +298,20 @@ void GatherOpConversion::emitWarpLocalGather(
   for (auto [idxReg, idxVal] : llvm::enumerate(idxValues)) {
     SmallVector<std::pair<StringAttr, Value>> column =
         applyLinearLayout(loc, rewriter, idxColLayout,
-                          {{kBlock, blockId},
-                           {kWarp, warpId},
+                          {{kRegister, b.i32_val(idxReg)},
                            {kLane, laneId},
-                           {kRegister, b.i32_val(idxReg)}});
+                           {kWarp, warpId},
+                           {kBlock, blockId}});
     assert(column.size() == otherDims.size());
 
     // Combine the computed column with the data-dependent gather index.
-    column.emplace_back(kGatherDim, convertIndexToI32(loc, idxVal, rewriter));
+    column.insert(column.begin() + op.getAxis(),
+                  {kGatherDim, convertIndexToI32(loc, idxVal, rewriter)});
     SmallVector<std::pair<StringAttr, Value>> srcLaneAndReg =
         applyLinearLayout(loc, rewriter, invSrcLayout, column);
 
-    auto [srcLaneName, srcLane] = srcLaneAndReg.back();
     auto [srcRegName, srcReg] = srcLaneAndReg.front();
+    auto [srcLaneName, srcLane] = srcLaneAndReg.back();
     assert(srcLaneName == kLane && srcRegName == kRegister);
 
     assert(!srcValues.empty() && "can't gather from an empty tensor");

@@ -1,4 +1,5 @@
 #include "OptimizeLDSUtility.h"
+#include "Analysis/AMDGPUAllocation.h"
 #include "triton/Analysis/Allocation.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
@@ -6,23 +7,6 @@
 #include "llvm/Support/MathExtras.h"
 
 namespace mlir::triton::AMD {
-
-constexpr int kPtrBitWidth = 64;
-
-int getCvtOpLDSUsage(RankedTensorType srcTy, RankedTensorType dstTy) {
-  auto scratchConfig = getScratchConfigForCvt(srcTy, dstTy);
-  unsigned elems = getNumScratchElements(scratchConfig.paddedRepShape);
-  auto bytes =
-      isa<triton::PointerType>(srcTy.getElementType())
-          ? elems * kPtrBitWidth / 8
-          : elems * std::max<int>(8, srcTy.getElementTypeBitWidth()) / 8;
-
-  return bytes;
-}
-
-int getCvtOpLDSUsage(triton::gpu::ConvertLayoutOp op) {
-  return getCvtOpLDSUsage(op.getSrc().getType(), op.getType());
-}
 
 static void stepFactorizationPow2(std::vector<SmallVector<unsigned>> &factors,
                                   SmallVector<unsigned> &curFactor,
@@ -54,9 +38,8 @@ createTmpLayout(triton::gpu::DistributedEncodingTrait layout,
   auto ctx = layout.getContext();
   if (auto src = dyn_cast<triton::gpu::AMDMfmaEncodingAttr>(layout))
     return triton::gpu::AMDMfmaEncodingAttr::get(
-        ctx, src.getVersionMajor(), src.getVersionMinor(), warpsPerCTA,
-        src.getMDim(), src.getNDim(), src.getIsTransposed(),
-        src.getCTALayout());
+        ctx, src.getVersion(), warpsPerCTA, src.getMDim(), src.getNDim(),
+        src.getIsTransposed(), src.getCTALayout());
   if (auto src = dyn_cast<triton::gpu::AMDWmmaEncodingAttr>(layout))
     return triton::gpu::AMDWmmaEncodingAttr::get(
         ctx, src.getVersion(), src.getIsTransposed(), warpsPerCTA,
@@ -99,6 +82,8 @@ createNewConvertOps(OpBuilder &builder, triton::gpu::ConvertLayoutOp &cvtOp,
       cvtOp.getLoc(), newSrcType, cvtOp.getSrc());
   auto newEpilogueCvt = builder.create<triton::gpu::ConvertLayoutOp>(
       cvtOp.getLoc(), newDstType, tmpCvt);
+  tmpCvt->setAttrs(cvtOp->getAttrs());
+  newEpilogueCvt->setAttrs(cvtOp->getAttrs());
 
   return std::make_pair(tmpCvt, newEpilogueCvt);
 }
@@ -112,9 +97,12 @@ estimateResourcesForReplacement(OpBuilder builder,
   RankedTensorType dstTy = cvtOp.getType();
   RankedTensorType intermediateTy = RankedTensorType::get(
       srcTy.getShape(), srcTy.getElementType(), tmpLayout);
+  bool usePadding = cvtOp->hasAttr(AttrSharedMemPadded);
 
-  int tmpCvtLDS = mlir::triton::AMD::getCvtOpLDSUsage(srcTy, intermediateTy);
-  int newCvtLDS = mlir::triton::AMD::getCvtOpLDSUsage(intermediateTy, dstTy);
+  int tmpCvtLDS =
+      getConvertLayoutScratchInBytes(srcTy, intermediateTy, usePadding);
+  int newCvtLDS =
+      getConvertLayoutScratchInBytes(intermediateTy, dstTy, usePadding);
   res.LDS = std::max(tmpCvtLDS, newCvtLDS);
   return res;
 }

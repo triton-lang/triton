@@ -96,6 +96,7 @@ public:
 
   virtual bool supportLdMatrix() const { return false; }
   virtual bool supportStMatrix() const { return false; }
+  virtual bool isCuda() const { return false; }
 
   // Annotate target specific information to local store operations during
   // lowering to LLVM.

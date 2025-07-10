@@ -37,7 +37,7 @@
 // -----
 
 // expected-error@+2 {{ttg.dot_op kWidth parameter is mandatory for MFMA parent}}
-#mfma = #ttg.amd_mfma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [1, 1, 1], instrShape = [32, 32], isTransposed = false}>
+#mfma = #ttg.amd_mfma<{version = 2, warpsPerCTA = [1, 1, 1], instrShape = [32, 32], isTransposed = false}>
 #dot_op = #ttg.dot_op<{opIdx = 1, parent = #mfma}>
 
 // -----
@@ -64,15 +64,50 @@
 
 // -----
 
-// expected-error@+1 {{major version must be in the [0, 4] range}}
-#mfma = #ttg.amd_mfma<{versionMajor = 10, versionMinor = 0, warpsPerCTA = [1, 1, 1], instrShape = [32, 32], isTransposed = false}>
-
-// -----
-
-// expected-error@+1 {{minor version must be 0}}
-#mfma = #ttg.amd_mfma<{versionMajor = 2, versionMinor = 5, warpsPerCTA = [1, 1, 1], instrShape = [32, 32], isTransposed = false}>
+// expected-error@+1 {{version must be in the [0, 4] range}}
+#mfma = #ttg.amd_mfma<{version = 10, warpsPerCTA = [1, 1, 1], instrShape = [32, 32], isTransposed = false}>
 
 // -----
 
 // expected-error@+1 {{(M, N) cases other than (32, 32) or (16, 16) unimplemented}}
-#mfma = #ttg.amd_mfma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [1, 1, 1], instrShape = [16, 8], isTransposed = false}>
+#mfma = #ttg.amd_mfma<{version = 2, warpsPerCTA = [1, 1, 1], instrShape = [16, 8], isTransposed = false}>
+
+// -----
+
+// expected-error@+1 {{interval values must all be power of two}}
+#shared = #ttg.padded_shared<[3:+2]>
+
+// -----
+
+// expected-error@+1 {{interval values must all be power of two}}
+#shared = #ttg.padded_shared<[0:+2]>
+
+// -----
+
+// expected-error@+1 {{padding values must all be power of two}}
+#shared = #ttg.padded_shared<[2:+3]>
+
+// -----
+
+// expected-error@+1 {{padding values must all be power of two}}
+#shared = #ttg.padded_shared<[2:+0]>
+
+// -----
+
+// expected-error@+1 {{interval values cannot have duplicates}}
+#shared = #ttg.padded_shared<[2:+1, 2:+4]>
+
+// -----
+
+// expected-error@+1 {{order cannot be empty}}
+#shared = #ttg.padded_shared<[2:+1, 4:+2]>
+
+// -----
+
+// expected-error@+1 {{unexpected key: unknown}}
+#shared = #ttg.padded_shared<[2:+1, 4:+2] {order = [1, 0], unknown = 5}>
+
+// -----
+
+// expected-error@+1 {{order size (3) must match CTALayout rank (2)}}
+#shared = #ttg.padded_shared<[2:+1, 4:+2] {order = [2, 1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>

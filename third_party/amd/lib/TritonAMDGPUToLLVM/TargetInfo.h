@@ -15,10 +15,6 @@ public:
 
   llvm::AMDGPU::GPUKind getGPUKind() const;
 
-  bool isCDNA() const;
-
-  bool isRDNA() const;
-
   int getWarpSize() const;
 
   int getSharedMemorySize() const;

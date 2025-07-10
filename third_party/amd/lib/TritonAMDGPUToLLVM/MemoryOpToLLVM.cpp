@@ -142,6 +142,11 @@ private:
       return false;
     }
 
+    auto tilesPerWarp = mfmaEnc.getTilesPerWarp();
+    if (!mfmaEnc.hasUnitTilesPerWarp()) {
+      return false;
+    }
+
     auto sharedEnc =
         dyn_cast<triton::gpu::SwizzledSharedEncodingAttr>(srcTy.getEncoding());
     if (!sharedEnc)
@@ -271,10 +276,11 @@ private:
     SmallVector<Value> outVals;
     SmallVector<Value> elemsI32;
     mlir::Type retTy = dstTy;
+    auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
     bool valid = emitTransferBetweenRegistersAndShared(
         ldsTransLayout, srcTy, llvmElemTy,
         /*maxVecElems=*/std::nullopt, smemObj, loc, rewriter, targetInfo,
-        [&](VectorType vecTy, Value vecAddr) {
+        laneId, warpId, [&](VectorType vecTy, Value vecAddr) {
           if (bitwidth == 16) {
             auto dsReadOp =
                 rewriter.create<ROCDL::ds_read_tr16_b64>(loc, vecTy, vecAddr);

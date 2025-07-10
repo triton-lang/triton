@@ -6,6 +6,7 @@
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Analysis/Utility.h"
+#include "triton/Conversion/MLIRTypes.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
@@ -257,7 +258,7 @@ static int computeOrigBitWidth(Value x) {
   mlir::BackwardSliceOptions opt;
   opt.omitBlockArguments = true;
   opt.filter = bwdFilter;
-  getBackwardSlice(x, &slice, opt);
+  (void)getBackwardSlice(x, &slice, opt);
 
   // TODO: This heuristic may be a bit too coarse and may need improving
   // If the chain contains a fp4 to fp16/bf16 conversion, then the original
@@ -757,7 +758,12 @@ static Value promoteOperand(OpBuilder &builder, Location loc, Value operand,
                             Type promotedType) {
   Type tensorPromotedType = cast<RankedTensorType>(operand.getType())
                                 .cloneWith(std::nullopt, promotedType);
-  return builder.create<FpToFpOp>(loc, tensorPromotedType, operand);
+  Type operandElType =
+      cast<RankedTensorType>(operand.getType()).getElementType();
+  if (type::isFloat8(operandElType)) {
+    return builder.create<FpToFpOp>(loc, tensorPromotedType, operand);
+  }
+  return builder.create<arith::ExtFOp>(loc, tensorPromotedType, operand);
 }
 
 // promote operands of dot op if the existing combination is not natively

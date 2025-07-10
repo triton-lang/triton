@@ -10,6 +10,8 @@
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "triton/Tools/GenericSwizzling.h"
+#include "triton/Tools/LayoutUtils.h"
 
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 
@@ -18,6 +20,7 @@ namespace {
 using namespace mlir;
 using namespace mlir::triton::gpu;
 
+constexpr int kPtrBitWidth = 64;
 struct ConvertLayoutOpUsingLinearLayoutsConversion
     : public ConvertOpToLLVMPattern<ConvertLayoutOp> {
   const TargetInfoBase &targetInfo;
@@ -110,6 +113,162 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     return success();
   }
 
+  SmallVector<Value> transferWithinBlockSwizzlingImpl(
+      Location loc, ConversionPatternRewriter &rewriter,
+      const LinearLayout &srcLayout, const LinearLayout &dstLayout,
+      ArrayRef<Value> inVals, Type llvmElemTy, Value smemBase) const {
+    auto *ctx = rewriter.getContext();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    // We handle transformations recursively as they all need a preprocessing
+    // and a postprocessing step.
+
+    // Handle pointer types as 64-bit integers
+    if (isa<LLVM::LLVMPointerType>(llvmElemTy)) {
+      auto llvmElemTyPtr = i64_ty;
+      auto newInVals = llvm::to_vector(llvm::map_range(inVals, [&](Value v) {
+        return b.ptrtoint(llvmElemTyPtr, v).getResult();
+      }));
+      auto outVals =
+          transferWithinBlockSwizzlingImpl(loc, rewriter, srcLayout, dstLayout,
+                                           newInVals, llvmElemTyPtr, smemBase);
+      for (auto &v : outVals) {
+        v = b.inttoptr(llvmElemTy, v);
+      }
+      return outVals;
+    }
+
+    // Handle sub-byte elements like i1
+    if (llvmElemTy.getIntOrFloatBitWidth() < 8) {
+      // Upcast to i8
+      auto i8ElemTy = i8_ty;
+      auto newInVals = llvm::to_vector(llvm::map_range(
+          inVals, [&](Value v) { return b.zext(i8ElemTy, v).getResult(); }));
+      auto outVals = transferWithinBlockSwizzlingImpl(
+          loc, rewriter, srcLayout, dstLayout, newInVals, i8ElemTy, smemBase);
+      for (auto &v : outVals) {
+        v = b.trunc(llvmElemTy, v);
+      }
+      return outVals;
+    }
+
+    // Remove broadcasting in src
+    auto removeBroadcastSrc = actionRemoveBroadcastedRegs(srcLayout);
+    if (!removeBroadcastSrc.isIdentity()) {
+      auto prmtSrc = removeBroadcastSrc.apply(srcLayout);
+      auto newInVals = removeBroadcastSrc.apply(inVals);
+      return transferWithinBlockSwizzlingImpl(loc, rewriter, prmtSrc, dstLayout,
+                                              newInVals, llvmElemTy, smemBase);
+    }
+
+    // Remove broadcasting in dst
+    auto removeBroadcastDst = actionRemoveBroadcastedRegs(dstLayout);
+    if (!removeBroadcastDst.isIdentity()) {
+      auto prmtDst = removeBroadcastDst.apply(dstLayout);
+      auto outVals = transferWithinBlockSwizzlingImpl(
+          loc, rewriter, srcLayout, prmtDst, inVals, llvmElemTy, smemBase);
+      return broadcastAs(outVals, dstLayout);
+    }
+
+    // At this point we have a type that's at least 8-bit
+    // and we don't have broadcasting in the registers
+    auto bitwidth = llvmElemTy.getIntOrFloatBitWidth();
+    auto smem = optimalSwizzling(srcLayout, dstLayout, bitwidth);
+
+    // Extract reps from smem
+    auto kReg = str_attr("register");
+    auto kReps = str_attr("reps");
+    auto nReps = smem.getInDimSize(kReps);
+    auto reps = LinearLayout::identity1D(nReps, kReg, kReps);
+
+    auto totalStoreCvt = srcLayout.invertAndCompose(smem);
+    auto totalLoadCvt = dstLayout.invertAndCompose(smem);
+
+    // The permutation exists by construction of the reps dimension in
+    // optimalSwizzling
+    auto permStore =
+        regPermForDivide(totalStoreCvt, reps, /*left=*/false).value();
+    totalStoreCvt = permStore.apply(totalStoreCvt);
+    auto permutedInVals = permStore.apply(inVals);
+    auto permLoad =
+        regPermForDivide(totalLoadCvt, reps, /*left=*/false).value();
+    totalLoadCvt = permLoad.apply(totalLoadCvt);
+
+    // Remove the reps and flatten into offset
+    auto storeCvt = *divideRight(totalStoreCvt, reps);
+    auto loadCvt = *divideRight(totalLoadCvt, reps);
+    auto kOffset = str_attr("offset");
+    storeCvt = storeCvt.reshapeOuts({{kOffset, storeCvt.getTotalOutDimSize()}});
+    loadCvt = loadCvt.reshapeOuts({{kOffset, loadCvt.getTotalOutDimSize()}});
+
+    auto tileSize = storeCvt.getInDimSize(kReg);
+
+    assert(permutedInVals.size() == tileSize * nReps);
+    SmallVector<Value> outVals;
+    for (int i = 0; i < nReps; ++i) {
+      if (i > 0)
+        b.barrier();
+
+      auto tileInVals =
+          ArrayRef<Value>(permutedInVals).slice(i * tileSize, tileSize);
+      // Store
+      lowerLdStShared(loc, ctx, storeCvt, tileInVals, llvmElemTy, smemBase,
+                      rewriter, targetInfo);
+      b.barrier();
+      // Load
+      SmallVector<Value> tileOutVals = lowerLdStShared(
+          loc, ctx, loadCvt, {}, llvmElemTy, smemBase, rewriter, targetInfo);
+      llvm::append_range(outVals, tileOutVals);
+    }
+
+    // Undo the permLoad used to divideRight
+    outVals = permLoad.inverse().apply(outVals);
+    return outVals;
+  }
+
+  LogicalResult
+  transferWithinBlockSwizzling(ConvertLayoutOp op, Value src,
+                               ConversionPatternRewriter &rewriter) const {
+    // Fallback for now to standard lowering if it can use stmatrix
+    auto scratchConfig =
+        getScratchConfigForCvt(op.getSrc().getType(), op.getType());
+    bool isStMatrix = targetInfo.canUseStMatrix(
+        op.getSrc().getType(), scratchConfig.repShape,
+        scratchConfig.paddedRepShape, scratchConfig.order,
+        /*swizzleByteSize=*/0);
+    if (isStMatrix) {
+      return failure();
+    }
+
+    auto loc = op.getLoc();
+    auto *ctx = op.getContext();
+    auto srcTy = op.getSrc().getType();
+    auto dstTy = op.getType();
+
+    // Remove the kBlock dimension from the layout as it's the identity in the
+    // cvt
+    auto srcLayout = toLinearLayout(srcTy.getShape(), srcTy.getEncoding());
+    auto dstLayout = toLinearLayout(dstTy.getShape(), dstTy.getEncoding());
+    auto kReg = str_attr("register");
+    auto kLane = str_attr("lane");
+    auto kWarp = str_attr("warp");
+    srcLayout = srcLayout.sublayout({kReg, kLane, kWarp},
+                                    to_vector(srcLayout.getOutDimNames()));
+    dstLayout = dstLayout.sublayout({kReg, kLane, kWarp},
+                                    to_vector(dstLayout.getOutDimNames()));
+
+    auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
+    auto smemBase =
+        LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
+    auto inVals = unpackLLElements(loc, src, rewriter);
+    auto outVals = transferWithinBlockSwizzlingImpl(
+        loc, rewriter, srcLayout, dstLayout, inVals, llvmElemTy, smemBase);
+
+    Value result =
+        packLLElements(loc, getTypeConverter(), outVals, rewriter, dstTy);
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+
   LogicalResult transferWithinBlock(ConvertLayoutOp op,
                                     const LinearLayout &srcLayout,
                                     const LinearLayout &dstLayout,
@@ -122,6 +281,13 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     auto dstTy = op.getType();
 
     assert(cvtNeedsSharedMemory(srcTy, dstTy));
+
+    // Try to use swizzling to implement the conversion
+    // HACK Remove once AMD tests pass for the swizzling path
+    if (targetInfo.isCuda() && succeeded(transferWithinBlockSwizzling(
+                                   op, adaptor.getSrc(), rewriter))) {
+      return success();
+    }
 
     SmallVector<Value> inVals =
         unpackLLElements(loc, adaptor.getSrc(), rewriter);
@@ -155,9 +321,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     // remove kBlock from transferWithinBlockImpl
     auto srcLayoutWithinBlock = getLayoutWithinBlock(srcLayout);
     auto dstLayoutWithinBlock = getLayoutWithinBlock(dstLayout);
-    SmallVector<Value> outVals =
-        transferWithinBlockImpl(inVals, op, srcLayoutWithinBlock,
-                                dstLayoutWithinBlock, adaptor, rewriter);
+    SmallVector<Value> outVals = transferWithinBlockImpl(
+        inVals, op, srcLayoutWithinBlock, dstLayoutWithinBlock, rewriter);
 
     // Unmunge output values
     for (const auto &it : llvm::enumerate(outVals)) {
@@ -184,7 +349,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
   SmallVector<Value>
   transferWithinBlockImpl(ArrayRef<Value> inVals, ConvertLayoutOp op,
                           const LinearLayout &srcLayout,
-                          const LinearLayout &dstLayout, OpAdaptor adaptor,
+                          const LinearLayout &dstLayout,
                           ConversionPatternRewriter &rewriter) const {
     MLIRContext *ctx = op.getContext();
     auto loc = op.getLoc();
@@ -410,7 +575,7 @@ void ConvertLayoutOpUsingLinearLayoutsConversion::transferWithinWarp(
     // At the same time, for each register, P1 returns the source value index
     // to provide as the shuffle value.
     auto out = applyLinearLayout(loc, rewriter, P1,
-                                 {{kLane, laneId}, {kRegister, b.i32_val(i)}});
+                                 {{kRegister, b.i32_val(i)}, {kLane, laneId}});
     assert(out.size() == 1);
     Value srcRegIdx = out.front().second;
     // The size of the input lane dimension is the number of selects to emit.
@@ -425,7 +590,7 @@ void ConvertLayoutOpUsingLinearLayoutsConversion::transferWithinWarp(
     }
 
     out = applyLinearLayout(loc, rewriter, Cp,
-                            {{kLane, laneId}, {kRegister, b.i32_val(i)}});
+                            {{kRegister, b.i32_val(i)}, {kLane, laneId}});
     assert(out.size() == 1);
     Value shflIdx = out.front().second;
     shflOuts[i] = targetInfo.shuffleIdx(rewriter, loc, shflSrc, shflIdx);
@@ -439,7 +604,7 @@ void ConvertLayoutOpUsingLinearLayoutsConversion::transferWithinWarp(
     Value result = b.undef(srcValues.front().getType());
 
     auto out = applyLinearLayout(loc, rewriter, P2inv,
-                                 {{kLane, laneId}, {kRegister, b.i32_val(i)}});
+                                 {{kRegister, b.i32_val(i)}, {kLane, laneId}});
     Value resultIdx = out.front().second;
     for (int j : llvm::seq(reducedP2.getInDimSize(kLane))) {
       int32_t check =

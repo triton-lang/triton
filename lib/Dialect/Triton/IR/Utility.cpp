@@ -103,3 +103,17 @@ Value tt::getLastInductionValue(OpBuilder &b, scf::ForOp loop) {
       loc, b.create<arith::DivSIOp>(loc, diff, loop.getStep()), loop.getStep());
   return b.create<arith::AddIOp>(loc, ceilStep, loop.getLowerBound());
 }
+
+bool tt::isKernel(FunctionOpInterface funcOp) {
+  return funcOp.getVisibility() == SymbolTable::Visibility::Public;
+}
+
+bool tt::isHostSideDescriptor(Value v) {
+  auto arg = dyn_cast<BlockArgument>(v);
+  if (!arg)
+    return false;
+  auto funcOp = dyn_cast<FunctionOpInterface>(arg.getOwner()->getParentOp());
+  if (!funcOp)
+    return false;
+  return tt::isKernel(funcOp);
+}

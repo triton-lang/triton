@@ -16,104 +16,133 @@
 
 // CHECK-LABEL:   tt.func public @matmul_kernel_descriptor_persistent(
 // CHECK-SAME:  %[[VAL_0:.*]]: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %[[VAL_1:.*]]: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %[[VAL_2:.*]]: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %[[VAL_3:.*]]: i32 {tt.divisibility = 16 : i32}, %[[VAL_4:.*]]: i32 {tt.divisibility = 16 : i32}, %[[VAL_5:.*]]: i32 {tt.divisibility = 16 : i32}) attributes {noinline = false} {
-// CHECK:           %[[VAL_6:.*]] = arith.constant false
-// CHECK:           %[[VAL_7:.*]] = arith.constant 1 : i32
-// CHECK:           %[[VAL_8:.*]] = arith.constant 132 : i32
-// CHECK:           %[[VAL_9:.*]] = arith.constant -1 : i32
-// CHECK:           %[[VAL_10:.*]] = arith.constant 0 : i32
-// CHECK:           %[[VAL_11:.*]] = arith.constant 8 : i32
-// CHECK:           %[[VAL_12:.*]] = arith.constant 128 : i32
-// CHECK:           %[[VAL_13:.*]] = arith.constant 256 : i32
-// CHECK:           %[[VAL_14:.*]] = arith.constant 64 : i32
-// CHECK:           %[[VAL_15:.*]] = arith.constant 1 : i64
-// CHECK:           %[[VAL_16:.*]] = arith.constant 127 : i32
-// CHECK:           %[[VAL_17:.*]] = arith.constant 255 : i32
-// CHECK:           %[[VAL_18:.*]] = arith.constant 63 : i32
-// CHECK:           %[[VAL_19:.*]] = arith.constant dense<0.000000e+00> : tensor<128x256xf32, #[[$ATTR_1]]>
-// CHECK:           %[[VAL_20:.*]] = tt.get_program_id x : i32
-// CHECK:           %[[VAL_21:.*]] = arith.addi %[[VAL_3]], %[[VAL_16]] : i32
-// CHECK:           %[[VAL_22:.*]] = arith.divsi %[[VAL_21]], %[[VAL_12]] : i32
-// CHECK:           %[[VAL_23:.*]] = arith.addi %[[VAL_4]], %[[VAL_17]] : i32
-// CHECK:           %[[VAL_24:.*]] = arith.divsi %[[VAL_23]], %[[VAL_13]] : i32
-// CHECK:           %[[VAL_25:.*]] = arith.addi %[[VAL_5]], %[[VAL_18]] : i32
-// CHECK:           %[[VAL_26:.*]] = arith.divsi %[[VAL_25]], %[[VAL_14]] : i32
-// CHECK:           %[[VAL_27:.*]] = arith.muli %[[VAL_22]], %[[VAL_24]] : i32
-// CHECK:           %[[VAL_28:.*]] = arith.extsi %[[VAL_5]] : i32 to i64
-// CHECK:           %[[VAL_29:.*]] = tt.make_tensor_descriptor %[[VAL_0]], {{\[}}%[[VAL_3]], %[[VAL_5]]], {{\[}}%[[VAL_28]], %[[VAL_15]]] : <f16>, <tensor<128x64xf16, #[[$ATTR_2]]>>
-// CHECK:           %[[VAL_30:.*]] = tt.make_tensor_descriptor %[[VAL_1]], {{\[}}%[[VAL_4]], %[[VAL_5]]], {{\[}}%[[VAL_28]], %[[VAL_15]]] : <f16>, <tensor<256x64xf16, #[[$ATTR_2]]>>
-// CHECK:           %[[VAL_31:.*]] = arith.extsi %[[VAL_4]] : i32 to i64
-// CHECK:           %[[VAL_32:.*]] = tt.make_tensor_descriptor %[[VAL_2]], {{\[}}%[[VAL_3]], %[[VAL_4]]], {{\[}}%[[VAL_31]], %[[VAL_15]]] : <f16>, <tensor<128x256xf16, #[[$ATTR_2]]>>
-// CHECK:           %[[VAL_33:.*]] = arith.divsi %[[VAL_27]], %[[VAL_8]] : i32
-// CHECK:           %[[VAL_34:.*]] = arith.remsi %[[VAL_27]], %[[VAL_8]] : i32
-// CHECK:           %[[VAL_35:.*]] = arith.cmpi slt, %[[VAL_20]], %[[VAL_34]] : i32
-// CHECK:           %[[VAL_36:.*]] = scf.if %[[VAL_35]] -> (i32) {
-// CHECK:             %[[VAL_37:.*]] = arith.addi %[[VAL_33]], %[[VAL_7]] : i32
-// CHECK:             scf.yield %[[VAL_37]] : i32
+// CHECK:           %[[VAL_6:.*]] = arith.constant 2 : i64
+// CHECK:           %[[VAL_7:.*]] = arith.constant 3 : i32
+// CHECK:           %[[VAL_8:.*]] = arith.constant false
+// CHECK:           %[[VAL_9:.*]] = arith.constant 1 : i32
+// CHECK:           %[[VAL_10:.*]] = arith.constant 132 : i32
+// CHECK:           %[[VAL_11:.*]] = arith.constant -1 : i32
+// CHECK:           %[[VAL_12:.*]] = arith.constant 0 : i32
+// CHECK:           %[[VAL_13:.*]] = arith.constant 8 : i32
+// CHECK:           %[[VAL_14:.*]] = arith.constant 128 : i32
+// CHECK:           %[[VAL_15:.*]] = arith.constant 256 : i32
+// CHECK:           %[[VAL_16:.*]] = arith.constant 64 : i32
+// CHECK:           %[[VAL_17:.*]] = arith.constant 1 : i64
+// CHECK:           %[[VAL_18:.*]] = arith.constant 127 : i32
+// CHECK:           %[[VAL_19:.*]] = arith.constant 255 : i32
+// CHECK:           %[[VAL_20:.*]] = arith.constant 63 : i32
+// CHECK:           %[[VAL_21:.*]] = arith.constant dense<0.000000e+00> : tensor<128x256xf32, #[[$ATTR_1]]>
+// CHECK:           %[[VAL_22:.*]] = tt.get_program_id x : i32
+// CHECK:           %[[VAL_23:.*]] = arith.addi %[[VAL_3]], %[[VAL_18]] : i32
+// CHECK:           %[[VAL_24:.*]] = arith.divsi %[[VAL_23]], %[[VAL_14]] : i32
+// CHECK:           %[[VAL_25:.*]] = arith.addi %[[VAL_4]], %[[VAL_19]] : i32
+// CHECK:           %[[VAL_26:.*]] = arith.divsi %[[VAL_25]], %[[VAL_15]] : i32
+// CHECK:           %[[VAL_27:.*]] = arith.addi %[[VAL_5]], %[[VAL_20]] : i32
+// CHECK:           %[[VAL_28:.*]] = arith.divsi %[[VAL_27]], %[[VAL_16]] : i32
+// CHECK:           %[[VAL_29:.*]] = arith.muli %[[VAL_24]], %[[VAL_26]] : i32
+// CHECK:           %[[VAL_30:.*]] = arith.extsi %[[VAL_5]] : i32 to i64
+// CHECK:           %[[VAL_31:.*]] = tt.make_tensor_descriptor %[[VAL_0]], {{\[}}%[[VAL_3]], %[[VAL_5]]], {{\[}}%[[VAL_30]], %[[VAL_17]]] : <f16>, <tensor<128x64xf16, #[[$ATTR_2]]>>
+// CHECK:           %[[VAL_32:.*]] = tt.make_tensor_descriptor %[[VAL_1]], {{\[}}%[[VAL_4]], %[[VAL_5]]], {{\[}}%[[VAL_30]], %[[VAL_17]]] : <f16>, <tensor<256x64xf16, #[[$ATTR_2]]>>
+// CHECK:           %[[VAL_33:.*]] = arith.extsi %[[VAL_4]] : i32 to i64
+// CHECK:           %[[VAL_34:.*]] = tt.make_tensor_descriptor %[[VAL_2]], {{\[}}%[[VAL_3]], %[[VAL_4]]], {{\[}}%[[VAL_33]], %[[VAL_17]]] : <f16>, <tensor<128x256xf16, #[[$ATTR_2]]>>
+// CHECK:           %[[VAL_35:.*]] = arith.divsi %[[VAL_29]], %[[VAL_10]] : i32
+// CHECK:           %[[VAL_36:.*]] = arith.remsi %[[VAL_29]], %[[VAL_10]] : i32
+// CHECK:           %[[VAL_37:.*]] = arith.cmpi slt, %[[VAL_22]], %[[VAL_36]] : i32
+// CHECK:           %[[VAL_38:.*]] = scf.if %[[VAL_37]] -> (i32) {
+// CHECK:             %[[VAL_39:.*]] = arith.addi %[[VAL_35]], %[[VAL_9]] : i32
+// CHECK:             scf.yield %[[VAL_39]] : i32
 // CHECK:           } else {
-// CHECK:             scf.yield %[[VAL_33]] : i32
+// CHECK:             scf.yield %[[VAL_35]] : i32
 // CHECK:           }
-// CHECK:           %[[VAL_38:.*]] = arith.subi %[[VAL_20]], %[[VAL_8]] : i32
-// CHECK:           %[[VAL_39:.*]] = arith.muli %[[VAL_24]], %[[VAL_11]] : i32
-// CHECK:           %[[VAL_40:.*]] = tt.elementwise_inline_asm "mov.b32 $0, 0;" {constraints = "=r", packed_element = 1 : i32, pure = true} -> i32
-// CHECK:           %[[VAL_41:.*]] = arith.muli %[[VAL_26]], %[[VAL_36]] : i32
-// CHECK:           %[[VAL_42:.*]] = arith.subi %[[VAL_26]], %[[VAL_7]] : i32
-// CHECK:           %[[VAL_43:.*]] = ttg.local_alloc : () -> !ttg.memdesc<128x256xf16, #[[$ATTR_2]], #[[$ATTR_4]], mutable>
-// CHECK:           %[[VAL_44:.*]]:10 = scf.for %[[VAL_45:.*]] = %[[VAL_10]] to %[[VAL_41]] step %[[VAL_7]] iter_args(%[[VAL_46:.*]] = %[[VAL_9]], %[[VAL_47:.*]] = %[[VAL_29]], %[[VAL_48:.*]] = %[[VAL_30]], %[[VAL_49:.*]] = %[[VAL_32]], %[[VAL_50:.*]] = %[[VAL_38]], %[[VAL_51:.*]] = %[[VAL_9]], %[[VAL_52:.*]] = %[[VAL_10]], %[[VAL_53:.*]] = %[[VAL_10]], %[[VAL_54:.*]] = %[[VAL_19]], %[[VAL_55:.*]] = %[[VAL_6]]) -> (i32, !tt.tensordesc<tensor<128x64xf16, #[[$ATTR_2]]>>, !tt.tensordesc<tensor<256x64xf16, #[[$ATTR_2]]>>, !tt.tensordesc<tensor<128x256xf16, #[[$ATTR_2]]>>, i32, i32, i32, i32, tensor<128x256xf32, #[[$ATTR_1]]>, i1)  : i32 {
-// CHECK:             %[[VAL_56:.*]] = arith.cmpi eq, %[[VAL_46]], %[[VAL_42]] : i32
-// CHECK:             %[[VAL_57:.*]] = arith.addi %[[VAL_46]], %[[VAL_7]] : i32
-// CHECK:             %[[VAL_58:.*]] = arith.select %[[VAL_56]], %[[VAL_10]], %[[VAL_57]] : i32
-// CHECK:             %[[VAL_59:.*]] = arith.cmpi eq, %[[VAL_58]], %[[VAL_10]] : i32
-// CHECK:             %[[VAL_60:.*]]:7 = scf.if %[[VAL_59]] -> (!tt.tensordesc<tensor<128x64xf16, #[[$ATTR_2]]>>, !tt.tensordesc<tensor<256x64xf16, #[[$ATTR_2]]>>, !tt.tensordesc<tensor<128x256xf16, #[[$ATTR_2]]>>, i32, i32, i32, i32) {
-// CHECK:               %[[VAL_61:.*]] = arith.addi %[[VAL_51]], %[[VAL_7]] : i32
-// CHECK:               %[[VAL_62:.*]] = arith.cmpi eq, %[[VAL_61]], %[[VAL_7]] : i32
-// CHECK:               %[[VAL_63:.*]] = arith.select %[[VAL_62]], %[[VAL_10]], %[[VAL_61]] : i32
-// CHECK:               %[[VAL_64:.*]]:3 = scf.if %[[VAL_62]] -> (!tt.tensordesc<tensor<128x64xf16, #[[$ATTR_2]]>>, !tt.tensordesc<tensor<256x64xf16, #[[$ATTR_2]]>>, !tt.tensordesc<tensor<128x256xf16, #[[$ATTR_2]]>>) {
-// CHECK:                 %[[VAL_65:.*]] = tt.addptr %[[VAL_0]], %[[VAL_40]] : !tt.ptr<f16>, i32
-// CHECK:                 %[[VAL_66:.*]] = tt.make_tensor_descriptor %[[VAL_65]], {{\[}}%[[VAL_3]], %[[VAL_5]]], {{\[}}%[[VAL_28]], %[[VAL_15]]] : <f16>, <tensor<128x64xf16, #[[$ATTR_2]]>>
-// CHECK:                 %[[VAL_67:.*]] = tt.addptr %[[VAL_1]], %[[VAL_40]] : !tt.ptr<f16>, i32
-// CHECK:                 %[[VAL_68:.*]] = tt.make_tensor_descriptor %[[VAL_67]], {{\[}}%[[VAL_4]], %[[VAL_5]]], {{\[}}%[[VAL_28]], %[[VAL_15]]] : <f16>, <tensor<256x64xf16, #[[$ATTR_2]]>>
-// CHECK:                 %[[VAL_69:.*]] = tt.addptr %[[VAL_2]], %[[VAL_40]] : !tt.ptr<f16>, i32
-// CHECK:                 %[[VAL_70:.*]] = tt.make_tensor_descriptor %[[VAL_69]], {{\[}}%[[VAL_3]], %[[VAL_4]]], {{\[}}%[[VAL_31]], %[[VAL_15]]] : <f16>, <tensor<128x256xf16, #[[$ATTR_2]]>>
-// CHECK:                 scf.yield %[[VAL_66]], %[[VAL_68]], %[[VAL_70]] : !tt.tensordesc<tensor<128x64xf16, #[[$ATTR_2]]>>, !tt.tensordesc<tensor<256x64xf16, #[[$ATTR_2]]>>, !tt.tensordesc<tensor<128x256xf16, #[[$ATTR_2]]>>
+// CHECK:           %[[VAL_40:.*]] = arith.subi %[[VAL_22]], %[[VAL_10]] : i32
+// CHECK:           %[[VAL_41:.*]] = arith.muli %[[VAL_26]], %[[VAL_13]] : i32
+// CHECK:           %[[VAL_42:.*]] = tt.elementwise_inline_asm "mov.b32 $0, 0;" {constraints = "=r", packed_element = 1 : i32, pure = true} -> i32
+// CHECK:           %[[VAL_43:.*]] = arith.muli %[[VAL_28]], %[[VAL_38]] : i32
+// CHECK:           %[[VAL_44:.*]] = arith.subi %[[VAL_28]], %[[VAL_9]] : i32
+// CHECK:           %[[VAL_45:.*]] = ttg.local_alloc : () -> !ttg.memdesc<128x256xf16, #[[$ATTR_2]], #[[$ATTR_4]], mutable>
+// CHECK:           %[[VAL_46:.*]] = ttg.global_scratch_alloc {alignment = 128 : i32, nbytes = 384 : i32} : !tt.ptr<i8>
+// CHECK:           %[[VAL_47:.*]] = ttg.global_scratch_alloc {alignment = 128 : i32, nbytes = 384 : i32} : !tt.ptr<i8>
+// CHECK:           %[[VAL_48:.*]] = ttg.global_scratch_alloc {alignment = 128 : i32, nbytes = 384 : i32} : !tt.ptr<i8>
+// CHECK:           %[[VAL_49:.*]]:13 = scf.for %[[VAL_50:.*]] = %[[VAL_12]] to %[[VAL_43]] step %[[VAL_9]] iter_args(%[[VAL_51:.*]] = %[[VAL_11]], %[[VAL_52:.*]] = %[[VAL_31]], %[[VAL_53:.*]] = %[[VAL_32]], %[[VAL_54:.*]] = %[[VAL_34]], %[[VAL_55:.*]] = %[[VAL_40]], %[[VAL_56:.*]] = %[[VAL_11]], %[[VAL_57:.*]] = %[[VAL_12]], %[[VAL_58:.*]] = %[[VAL_12]], %[[VAL_59:.*]] = %[[VAL_21]], %[[VAL_60:.*]] = %[[VAL_8]], %[[VAL_61:.*]] = %[[VAL_12]], %[[VAL_62:.*]] = %[[VAL_12]], %[[VAL_63:.*]] = %[[VAL_12]]) -> (i32, !tt.tensordesc<tensor<128x64xf16, #[[$ATTR_2]]>>, !tt.tensordesc<tensor<256x64xf16, #[[$ATTR_2]]>>, !tt.tensordesc<tensor<128x256xf16, #[[$ATTR_2]]>>, i32, i32, i32, i32, tensor<128x256xf32, #[[$ATTR_1]]>, i1, i32, i32, i32)  : i32 {
+// CHECK:             %[[VAL_64:.*]] = arith.cmpi eq, %[[VAL_51]], %[[VAL_44]] : i32
+// CHECK:             %[[VAL_65:.*]] = arith.addi %[[VAL_51]], %[[VAL_9]] : i32
+// CHECK:             %[[VAL_66:.*]] = arith.select %[[VAL_64]], %[[VAL_12]], %[[VAL_65]] : i32
+// CHECK:             %[[VAL_67:.*]] = arith.cmpi eq, %[[VAL_66]], %[[VAL_12]] : i32
+// CHECK:             %[[VAL_68:.*]]:10 = scf.if %[[VAL_67]] -> (!tt.tensordesc<tensor<128x64xf16, #[[$ATTR_2]]>>, !tt.tensordesc<tensor<256x64xf16, #[[$ATTR_2]]>>, !tt.tensordesc<tensor<128x256xf16, #[[$ATTR_2]]>>, i32, i32, i32, i32, i32, i32, i32) {
+// CHECK:               %[[VAL_69:.*]] = arith.addi %[[VAL_56]], %[[VAL_9]] : i32
+// CHECK:               %[[VAL_70:.*]] = arith.cmpi eq, %[[VAL_69]], %[[VAL_9]] : i32
+// CHECK:               %[[VAL_71:.*]] = arith.select %[[VAL_70]], %[[VAL_12]], %[[VAL_69]] : i32
+// CHECK:               %[[VAL_72:.*]]:6 = scf.if %[[VAL_70]] -> (!tt.tensordesc<tensor<128x64xf16, #[[$ATTR_2]]>>, !tt.tensordesc<tensor<256x64xf16, #[[$ATTR_2]]>>, !tt.tensordesc<tensor<128x256xf16, #[[$ATTR_2]]>>, i32, i32, i32) {
+// CHECK:                 %[[VAL_73:.*]] = tt.addptr %[[VAL_0]], %[[VAL_42]] : !tt.ptr<f16>, i32
+// CHECK:                 %[[VAL_74:.*]] = arith.muli %[[VAL_61]], %[[VAL_14]] : i32
+// CHECK:                 %[[VAL_75:.*]] = tt.addptr %[[VAL_46]], %[[VAL_74]] : !tt.ptr<i8>, i32
+// CHECK:                 %[[VAL_76:.*]] = arith.muli %[[VAL_30]], %[[VAL_6]] : i64
+// CHECK:                 ttng.tensormap_create %[[VAL_75]], %[[VAL_73]], {{\[}}%[[VAL_16]], %[[VAL_14]]], {{\[}}%[[VAL_5]], %[[VAL_3]]], {{\[}}%[[VAL_76]]], {{\[}}%[[VAL_9]], %[[VAL_9]]] {elem_type = 6 : i32, fill_mode = 0 : i32, interleave_layout = 0 : i32, swizzle_mode = 3 : i32} : (!tt.ptr<i8>, !tt.ptr<f16>, i32, i32, i32, i32, i64, i32, i32) -> ()
+// CHECK:                 ttng.tensormap_fenceproxy_acquire %[[VAL_75]] : !tt.ptr<i8>
+// CHECK:                 %[[VAL_77:.*]] = ttng.reinterpret_tensor_descriptor %[[VAL_75]] : !tt.ptr<i8> to !tt.tensordesc<tensor<128x64xf16, #[[$ATTR_2]]>>
+// CHECK:                 %[[VAL_78:.*]] = arith.addi %[[VAL_61]], %[[VAL_9]] : i32
+// CHECK:                 %[[VAL_79:.*]] = arith.cmpi sge, %[[VAL_78]], %[[VAL_7]] : i32
+// CHECK:                 %[[VAL_80:.*]] = arith.select %[[VAL_79]], %[[VAL_12]], %[[VAL_78]] : i32
+// CHECK:                 %[[VAL_81:.*]] = tt.addptr %[[VAL_1]], %[[VAL_42]] : !tt.ptr<f16>, i32
+// CHECK:                 %[[VAL_82:.*]] = arith.muli %[[VAL_62]], %[[VAL_14]] : i32
+// CHECK:                 %[[VAL_83:.*]] = tt.addptr %[[VAL_47]], %[[VAL_82]] : !tt.ptr<i8>, i32
+// CHECK:                 %[[VAL_84:.*]] = arith.muli %[[VAL_30]], %[[VAL_6]] : i64
+// CHECK:                 ttng.tensormap_create %[[VAL_83]], %[[VAL_81]], {{\[}}%[[VAL_16]], %[[VAL_15]]], {{\[}}%[[VAL_5]], %[[VAL_4]]], {{\[}}%[[VAL_84]]], {{\[}}%[[VAL_9]], %[[VAL_9]]] {elem_type = 6 : i32, fill_mode = 0 : i32, interleave_layout = 0 : i32, swizzle_mode = 3 : i32} : (!tt.ptr<i8>, !tt.ptr<f16>, i32, i32, i32, i32, i64, i32, i32) -> ()
+// CHECK:                 ttng.tensormap_fenceproxy_acquire %[[VAL_83]] : !tt.ptr<i8>
+// CHECK:                 %[[VAL_85:.*]] = ttng.reinterpret_tensor_descriptor %[[VAL_83]] : !tt.ptr<i8> to !tt.tensordesc<tensor<256x64xf16, #[[$ATTR_2]]>>
+// CHECK:                 %[[VAL_86:.*]] = arith.addi %[[VAL_62]], %[[VAL_9]] : i32
+// CHECK:                 %[[VAL_87:.*]] = arith.cmpi sge, %[[VAL_86]], %[[VAL_7]] : i32
+// CHECK:                 %[[VAL_88:.*]] = arith.select %[[VAL_87]], %[[VAL_12]], %[[VAL_86]] : i32
+// CHECK:                 %[[VAL_89:.*]] = tt.addptr %[[VAL_2]], %[[VAL_42]] : !tt.ptr<f16>, i32
+// CHECK:                 %[[VAL_90:.*]] = arith.muli %[[VAL_63]], %[[VAL_14]] : i32
+// CHECK:                 %[[VAL_91:.*]] = tt.addptr %[[VAL_48]], %[[VAL_90]] : !tt.ptr<i8>, i32
+// CHECK:                 %[[VAL_92:.*]] = arith.muli %[[VAL_33]], %[[VAL_6]] : i64
+// CHECK:                 ttng.tensormap_create %[[VAL_91]], %[[VAL_89]], {{\[}}%[[VAL_16]], %[[VAL_14]]], {{\[}}%[[VAL_4]], %[[VAL_3]]], {{\[}}%[[VAL_92]]], {{\[}}%[[VAL_9]], %[[VAL_9]]] {elem_type = 6 : i32, fill_mode = 0 : i32, interleave_layout = 0 : i32, swizzle_mode = 3 : i32} : (!tt.ptr<i8>, !tt.ptr<f16>, i32, i32, i32, i32, i64, i32, i32) -> ()
+// CHECK:                 ttng.tensormap_fenceproxy_acquire %[[VAL_91]] : !tt.ptr<i8>
+// CHECK:                 %[[VAL_93:.*]] = ttng.reinterpret_tensor_descriptor %[[VAL_91]] : !tt.ptr<i8> to !tt.tensordesc<tensor<128x256xf16, #[[$ATTR_2]]>>
+// CHECK:                 %[[VAL_94:.*]] = arith.addi %[[VAL_63]], %[[VAL_9]] : i32
+// CHECK:                 %[[VAL_95:.*]] = arith.cmpi sge, %[[VAL_94]], %[[VAL_7]] : i32
+// CHECK:                 %[[VAL_96:.*]] = arith.select %[[VAL_95]], %[[VAL_12]], %[[VAL_94]] : i32
+// CHECK:                 scf.yield %[[VAL_77]], %[[VAL_85]], %[[VAL_93]], %[[VAL_80]], %[[VAL_88]], %[[VAL_96]] : !tt.tensordesc<tensor<128x64xf16, #[[$ATTR_2]]>>, !tt.tensordesc<tensor<256x64xf16, #[[$ATTR_2]]>>, !tt.tensordesc<tensor<128x256xf16, #[[$ATTR_2]]>>, i32, i32, i32
 // CHECK:               } else {
-// CHECK:                 scf.yield %[[VAL_47]], %[[VAL_48]], %[[VAL_49]] : !tt.tensordesc<tensor<128x64xf16, #[[$ATTR_2]]>>, !tt.tensordesc<tensor<256x64xf16, #[[$ATTR_2]]>>, !tt.tensordesc<tensor<128x256xf16, #[[$ATTR_2]]>>
+// CHECK:                 scf.yield %[[VAL_52]], %[[VAL_53]], %[[VAL_54]], %[[VAL_61]], %[[VAL_62]], %[[VAL_63]] : !tt.tensordesc<tensor<128x64xf16, #[[$ATTR_2]]>>, !tt.tensordesc<tensor<256x64xf16, #[[$ATTR_2]]>>, !tt.tensordesc<tensor<128x256xf16, #[[$ATTR_2]]>>, i32, i32, i32
 // CHECK:               }
-// CHECK:               %[[VAL_71:.*]] = arith.addi %[[VAL_50]], %[[VAL_8]] : i32
-// CHECK:               %[[VAL_72:.*]] = arith.divsi %[[VAL_71]], %[[VAL_39]] : i32
-// CHECK:               %[[VAL_73:.*]] = arith.muli %[[VAL_72]], %[[VAL_11]] : i32
-// CHECK:               %[[VAL_74:.*]] = arith.subi %[[VAL_22]], %[[VAL_73]] : i32
-// CHECK:               %[[VAL_75:.*]] = arith.minsi %[[VAL_74]], %[[VAL_11]] : i32
-// CHECK:               %[[VAL_76:.*]] = arith.remsi %[[VAL_71]], %[[VAL_75]] : i32
-// CHECK:               %[[VAL_77:.*]] = arith.addi %[[VAL_73]], %[[VAL_76]] : i32
-// CHECK:               %[[VAL_78:.*]] = arith.remsi %[[VAL_71]], %[[VAL_39]] : i32
-// CHECK:               %[[VAL_79:.*]] = arith.divsi %[[VAL_78]], %[[VAL_75]] : i32
-// CHECK:               %[[VAL_80:.*]] = arith.muli %[[VAL_77]], %[[VAL_12]] : i32
-// CHECK:               %[[VAL_81:.*]] = arith.muli %[[VAL_79]], %[[VAL_13]] : i32
-// CHECK:               scf.yield %[[VAL_82:.*]]#0, %[[VAL_82]]#1, %[[VAL_82]]#2, %[[VAL_71]], %[[VAL_63]], %[[VAL_80]], %[[VAL_81]] : !tt.tensordesc<tensor<128x64xf16, #[[$ATTR_2]]>>, !tt.tensordesc<tensor<256x64xf16, #[[$ATTR_2]]>>, !tt.tensordesc<tensor<128x256xf16, #[[$ATTR_2]]>>, i32, i32, i32, i32
+// CHECK:               %[[VAL_97:.*]] = arith.addi %[[VAL_55]], %[[VAL_10]] : i32
+// CHECK:               %[[VAL_98:.*]] = arith.divsi %[[VAL_97]], %[[VAL_41]] : i32
+// CHECK:               %[[VAL_99:.*]] = arith.muli %[[VAL_98]], %[[VAL_13]] : i32
+// CHECK:               %[[VAL_100:.*]] = arith.subi %[[VAL_24]], %[[VAL_99]] : i32
+// CHECK:               %[[VAL_101:.*]] = arith.minsi %[[VAL_100]], %[[VAL_13]] : i32
+// CHECK:               %[[VAL_102:.*]] = arith.remsi %[[VAL_97]], %[[VAL_101]] : i32
+// CHECK:               %[[VAL_103:.*]] = arith.addi %[[VAL_99]], %[[VAL_102]] : i32
+// CHECK:               %[[VAL_104:.*]] = arith.remsi %[[VAL_97]], %[[VAL_41]] : i32
+// CHECK:               %[[VAL_105:.*]] = arith.divsi %[[VAL_104]], %[[VAL_101]] : i32
+// CHECK:               %[[VAL_106:.*]] = arith.muli %[[VAL_103]], %[[VAL_14]] : i32
+// CHECK:               %[[VAL_107:.*]] = arith.muli %[[VAL_105]], %[[VAL_15]] : i32
+// CHECK:               scf.yield %[[VAL_108:.*]]#0, %[[VAL_108]]#1, %[[VAL_108]]#2, %[[VAL_97]], %[[VAL_71]], %[[VAL_106]], %[[VAL_107]], %[[VAL_108]]#3, %[[VAL_108]]#4, %[[VAL_108]]#5 : !tt.tensordesc<tensor<128x64xf16, #[[$ATTR_2]]>>, !tt.tensordesc<tensor<256x64xf16, #[[$ATTR_2]]>>, !tt.tensordesc<tensor<128x256xf16, #[[$ATTR_2]]>>, i32, i32, i32, i32, i32, i32, i32
 // CHECK:             } else {
-// CHECK:               scf.yield %[[VAL_47]], %[[VAL_48]], %[[VAL_49]], %[[VAL_50]], %[[VAL_51]], %[[VAL_52]], %[[VAL_53]] : !tt.tensordesc<tensor<128x64xf16, #[[$ATTR_2]]>>, !tt.tensordesc<tensor<256x64xf16, #[[$ATTR_2]]>>, !tt.tensordesc<tensor<128x256xf16, #[[$ATTR_2]]>>, i32, i32, i32, i32
+// CHECK:               scf.yield %[[VAL_52]], %[[VAL_53]], %[[VAL_54]], %[[VAL_55]], %[[VAL_56]], %[[VAL_57]], %[[VAL_58]], %[[VAL_61]], %[[VAL_62]], %[[VAL_63]] : !tt.tensordesc<tensor<128x64xf16, #[[$ATTR_2]]>>, !tt.tensordesc<tensor<256x64xf16, #[[$ATTR_2]]>>, !tt.tensordesc<tensor<128x256xf16, #[[$ATTR_2]]>>, i32, i32, i32, i32, i32, i32, i32
 // CHECK:             }
-// CHECK:             %[[VAL_83:.*]] = arith.muli %[[VAL_58]], %[[VAL_14]] : i32
-// CHECK:             %[[VAL_84:.*]] = tt.descriptor_load %[[VAL_85:.*]]#0{{\[}}%[[VAL_85]]#5, %[[VAL_83]]] : !tt.tensordesc<tensor<128x64xf16, #[[$ATTR_2]]>> -> tensor<128x64xf16, #[[$ATTR_0]]>
-// CHECK:             %[[VAL_86:.*]] = ttg.local_alloc %[[VAL_84]] : (tensor<128x64xf16, #[[$ATTR_0]]>) -> !ttg.memdesc<128x64xf16, #[[$ATTR_2]], #[[$ATTR_4]]>
-// CHECK:             %[[VAL_87:.*]] = tt.descriptor_load %[[VAL_85]]#1{{\[}}%[[VAL_85]]#6, %[[VAL_83]]] : !tt.tensordesc<tensor<256x64xf16, #[[$ATTR_2]]>> -> tensor<256x64xf16, #[[$ATTR_0]]>
-// CHECK:             %[[VAL_88:.*]] = ttg.local_alloc %[[VAL_87]] : (tensor<256x64xf16, #[[$ATTR_0]]>) -> !ttg.memdesc<256x64xf16, #[[$ATTR_2]], #[[$ATTR_4]]>
-// CHECK:             %[[VAL_89:.*]] = ttg.memdesc_trans %[[VAL_88]] {order = array<i32: 1, 0>} : !ttg.memdesc<256x64xf16, #[[$ATTR_2]], #[[$ATTR_4]]> -> !ttg.memdesc<64x256xf16, #[[$ATTR_3]], #[[$ATTR_4]]>
-// CHECK:             %[[VAL_90:.*]] = ttng.warp_group_dot %[[VAL_86]], %[[VAL_89]], %[[VAL_54]], %[[VAL_55]] {inputPrecision = 0 : i32, isAsync = true} : !ttg.memdesc<128x64xf16, #[[$ATTR_2]], #[[$ATTR_4]]> * !ttg.memdesc<64x256xf16, #[[$ATTR_3]], #[[$ATTR_4]]> -> tensor<128x256xf32, #[[$ATTR_1]]>
-// CHECK:             %[[VAL_91:.*]]:3 = ttng.warp_group_dot_wait %[[VAL_90]], %[[VAL_86]], %[[VAL_89]] {pendings = 0 : i32} : tensor<128x256xf32, #[[$ATTR_1]]>, !ttg.memdesc<128x64xf16, #[[$ATTR_2]], #[[$ATTR_4]]>, !ttg.memdesc<64x256xf16, #[[$ATTR_3]], #[[$ATTR_4]]>
-// CHECK:             %[[VAL_92:.*]] = arith.cmpi eq, %[[VAL_58]], %[[VAL_42]] : i32
-// CHECK:             %[[VAL_93:.*]] = arith.cmpi ne, %[[VAL_58]], %[[VAL_42]] : i32
-// CHECK:             scf.if %[[VAL_92]] {
-// CHECK:               %[[VAL_94:.*]] = arith.truncf %[[VAL_91]]#0 : tensor<128x256xf32, #[[$ATTR_1]]> to tensor<128x256xf16, #[[$ATTR_1]]>
+// CHECK:             %[[VAL_109:.*]] = arith.muli %[[VAL_66]], %[[VAL_16]] : i32
+// CHECK:             %[[VAL_110:.*]] = tt.descriptor_load %[[VAL_111:.*]]#0{{\[}}%[[VAL_111]]#5, %[[VAL_109]]] : !tt.tensordesc<tensor<128x64xf16, #[[$ATTR_2]]>> -> tensor<128x64xf16, #[[$ATTR_0]]>
+// CHECK:             %[[VAL_112:.*]] = ttg.local_alloc %[[VAL_110]] : (tensor<128x64xf16, #[[$ATTR_0]]>) -> !ttg.memdesc<128x64xf16, #[[$ATTR_2]], #[[$ATTR_4]]>
+// CHECK:             %[[VAL_113:.*]] = tt.descriptor_load %[[VAL_111]]#1{{\[}}%[[VAL_111]]#6, %[[VAL_109]]] : !tt.tensordesc<tensor<256x64xf16, #[[$ATTR_2]]>> -> tensor<256x64xf16, #[[$ATTR_0]]>
+// CHECK:             %[[VAL_114:.*]] = ttg.local_alloc %[[VAL_113]] : (tensor<256x64xf16, #[[$ATTR_0]]>) -> !ttg.memdesc<256x64xf16, #[[$ATTR_2]], #[[$ATTR_4]]>
+// CHECK:             %[[VAL_115:.*]] = ttg.memdesc_trans %[[VAL_114]] {order = array<i32: 1, 0>} : !ttg.memdesc<256x64xf16, #[[$ATTR_2]], #[[$ATTR_4]]> -> !ttg.memdesc<64x256xf16, #[[$ATTR_3]], #[[$ATTR_4]]>
+// CHECK:             %[[VAL_116:.*]] = ttng.warp_group_dot %[[VAL_112]], %[[VAL_115]], %[[VAL_59]], %[[VAL_60]] {inputPrecision = 0 : i32, isAsync = true} : !ttg.memdesc<128x64xf16, #[[$ATTR_2]], #[[$ATTR_4]]> * !ttg.memdesc<64x256xf16, #[[$ATTR_3]], #[[$ATTR_4]]> -> tensor<128x256xf32, #[[$ATTR_1]]>
+// CHECK:             %[[VAL_117:.*]]:3 = ttng.warp_group_dot_wait %[[VAL_116]], %[[VAL_112]], %[[VAL_115]] {pendings = 0 : i32} : tensor<128x256xf32, #[[$ATTR_1]]>, !ttg.memdesc<128x64xf16, #[[$ATTR_2]], #[[$ATTR_4]]>, !ttg.memdesc<64x256xf16, #[[$ATTR_3]], #[[$ATTR_4]]>
+// CHECK:             %[[VAL_118:.*]] = arith.cmpi eq, %[[VAL_66]], %[[VAL_44]] : i32
+// CHECK:             %[[VAL_119:.*]] = arith.cmpi ne, %[[VAL_66]], %[[VAL_44]] : i32
+// CHECK:             scf.if %[[VAL_118]] {
+// CHECK:               %[[VAL_120:.*]] = arith.truncf %[[VAL_117]]#0 : tensor<128x256xf32, #[[$ATTR_1]]> to tensor<128x256xf16, #[[$ATTR_1]]>
 // CHECK:               ttng.async_tma_store_wait {pendings = 0 : i32}
-// CHECK:               ttg.local_store %[[VAL_94]], %[[VAL_43]] : tensor<128x256xf16, #[[$ATTR_1]]> -> !ttg.memdesc<128x256xf16, #[[$ATTR_2]], #[[$ATTR_4]], mutable>
+// CHECK:               ttg.local_store %[[VAL_120]], %[[VAL_45]] : tensor<128x256xf16, #[[$ATTR_1]]> -> !ttg.memdesc<128x256xf16, #[[$ATTR_2]], #[[$ATTR_4]], mutable>
 // CHECK:               ttng.fence_async_shared {bCluster = false}
-// CHECK:               ttng.async_tma_copy_local_to_global %[[VAL_85]]#2{{\[}}%[[VAL_85]]#5, %[[VAL_85]]#6] %[[VAL_43]] : !tt.tensordesc<tensor<128x256xf16, #[[$ATTR_2]]>>, !ttg.memdesc<128x256xf16, #[[$ATTR_2]], #[[$ATTR_4]], mutable>
+// CHECK:               ttng.async_tma_copy_local_to_global %[[VAL_111]]#2{{\[}}%[[VAL_111]]#5, %[[VAL_111]]#6] %[[VAL_45]] : !tt.tensordesc<tensor<128x256xf16, #[[$ATTR_2]]>>, !ttg.memdesc<128x256xf16, #[[$ATTR_2]], #[[$ATTR_4]], mutable>
 // CHECK:             }
-// CHECK:             scf.yield %[[VAL_58]], %[[VAL_85]]#0, %[[VAL_85]]#1, %[[VAL_85]]#2, %[[VAL_85]]#3, %[[VAL_85]]#4, %[[VAL_85]]#5, %[[VAL_85]]#6, %[[VAL_91]]#0, %[[VAL_93]] : i32, !tt.tensordesc<tensor<128x64xf16, #[[$ATTR_2]]>>, !tt.tensordesc<tensor<256x64xf16, #[[$ATTR_2]]>>, !tt.tensordesc<tensor<128x256xf16, #[[$ATTR_2]]>>, i32, i32, i32, i32, tensor<128x256xf32, #[[$ATTR_1]]>, i1
+// CHECK:             scf.yield %[[VAL_66]], %[[VAL_111]]#0, %[[VAL_111]]#1, %[[VAL_111]]#2, %[[VAL_111]]#3, %[[VAL_111]]#4, %[[VAL_111]]#5, %[[VAL_111]]#6, %[[VAL_117]]#0, %[[VAL_119]], %[[VAL_111]]#7, %[[VAL_111]]#8, %[[VAL_111]]#9 : i32, !tt.tensordesc<tensor<128x64xf16, #[[$ATTR_2]]>>, !tt.tensordesc<tensor<256x64xf16, #[[$ATTR_2]]>>, !tt.tensordesc<tensor<128x256xf16, #[[$ATTR_2]]>>, i32, i32, i32, i32, tensor<128x256xf32, #[[$ATTR_1]]>, i1, i32, i32, i32
 // CHECK:           }
 // CHECK:           ttng.async_tma_store_wait {pendings = 0 : i32}
-// CHECK:           ttg.local_dealloc %[[VAL_43]] : !ttg.memdesc<128x256xf16, #[[$ATTR_2]], #[[$ATTR_4]], mutable>
+// CHECK:           ttg.local_dealloc %[[VAL_45]] : !ttg.memdesc<128x256xf16, #[[$ATTR_2]], #[[$ATTR_4]], mutable>
 // CHECK:           tt.return
 // CHECK:         }
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {

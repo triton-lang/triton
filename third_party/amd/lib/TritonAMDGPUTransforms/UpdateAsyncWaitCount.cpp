@@ -119,7 +119,7 @@ struct TritonAMDGPUUpdateAsyncWaitCountPass
 
   void runOnOperation() override {
     tt::AMD::TargetInfo targetInfo(archGenerationName);
-    if (!targetInfo.isCDNA()) {
+    if (!isCDNA(targetInfo.getISAFamily())) {
       return;
     }
 

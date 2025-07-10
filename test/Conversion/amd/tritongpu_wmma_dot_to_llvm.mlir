@@ -98,6 +98,21 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return
   }
 
+    //  CHECK-LABEL: wmma2_dot_int8_32
+  tt.func @wmma2_dot_int8_32(%arg0: tensor<16x32xi4, #ttg.dot_op<{opIdx = 0, parent = #mma2, kWidth = 16}>>, %arg1: tensor<32x16xi4, #ttg.dot_op<{opIdx = 1, parent = #mma2, kWidth = 16}>>, %arg2: tensor<16x16xi32, #mma2>) {
+    // CHECK-COUNT-16: llvm.extractvalue %{{.*}} : !llvm.struct<(i4, i4, i4, i4, i4, i4, i4, i4, i4, i4, i4, i4, i4, i4, i4, i4)>
+    // CHECK-COUNT-16: llvm.insertelement {{.*}} : vector<16xi4>
+    // CHECK: llvm.bitcast %{{.*}} : vector<16xi4> to vector<2xi32>
+    // CHECK-COUNT-16: llvm.extractvalue %{{.*}} : !llvm.struct<(i4, i4, i4, i4, i4, i4, i4, i4, i4, i4, i4, i4, i4, i4, i4, i4)>
+    // CHECK-COUNT-16: llvm.insertelement {{.*}} : vector<16xi4>
+    // CHECK: llvm.bitcast %{{.*}} : vector<16xi4> to vector<2xi32>
+    // CHECK-COUNT-8: llvm.extractvalue %{{.*}} : !llvm.struct<(i32, i32, i32, i32, i32, i32, i32, i32)>
+    // CHECK: wmma.i32.16x16x32.iu4{{.*}} : (i1, vector<2xi32>, i1, vector<2xi32>, vector<8xi32>, i1) -> vector<8xi32>
+    %0 = tt.dot %arg0, %arg1, %arg2 {inputPrecision = 2 : i32, maxNumImpreciseAcc = 0 : i32} : tensor<16x32xi4, #ttg.dot_op<{opIdx = 0, parent = #mma2, kWidth = 16}>> * tensor<32x16xi4, #ttg.dot_op<{opIdx = 1, parent = #mma2, kWidth = 16}>> -> tensor<16x16xi32, #mma2>
+    // CHECK-COUNT-8: llvm.insertvalue {{.*}} : !llvm.struct<(i32, i32, i32, i32, i32, i32, i32, i32)>
+    tt.return
+  }
+
   //  CHECK-LABEL: wmma1_dot_int4_32
   tt.func @wmma1_dot_int4_32(%arg0: tensor<16x16xi4, #ttg.dot_op<{opIdx = 0, parent = #mma1, kWidth = 16}>>, %arg1: tensor<16x16xi4, #ttg.dot_op<{opIdx = 1, parent = #mma1, kWidth = 16}>>, %arg2: tensor<16x16xi32, #mma1>) {
     // CHECK-COUNT-16: llvm.extractvalue %{{.*}} : !llvm.struct<(i4, i4, i4, i4, i4, i4, i4, i4, i4, i4, i4, i4, i4, i4, i4, i4)>
@@ -135,6 +150,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     %0 = tt.dot %arg0, %arg1, %arg2, inputPrecision = ieee : tensor<16x16xf16, #ttg.dot_op<{opIdx = 0, parent = #mma2_transposed, kWidth = 8}>> * tensor<16x16xf16, #ttg.dot_op<{opIdx = 1, parent = #mma2_transposed, kWidth = 8}>> -> tensor<16x16xf16, #mma2_transposed>
     tt.return
   }
+
 
   //  CHECK-LABEL: blocked_to_wmma1
   tt.func @blocked_to_wmma1(%arg0: tensor<128x16xi32, #blocked>) {

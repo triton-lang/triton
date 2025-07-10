@@ -495,6 +495,7 @@ tt.func public @tmem_message_maxnreg_80(%desc: !ttg.memdesc<128x64xf32, #tmem, #
   tt.return
 }
 
+// CHECK-LABEL: @module_constraint_supercedes_local
 tt.func public @module_constraint_supercedes_local(%desc: !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory>) {
   ttg.warp_specialize(%desc) attributes {actualRegisters = array<i32: 256, 256>}
   default {
@@ -590,4 +591,95 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32} {
       !ttg.memdesc<1xi64, #shared1, #smem>
     tt.return
   }
+}
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-warps" = 1 : i32} {
+// CHECK-LABEL: @tc_gen5_commit
+tt.func @tc_gen5_commit(%arg0: !ttg.memdesc<1xi64, #shared, #smem, mutable>, %pred: i1) {
+  // CHECK: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32)
+  // CHECK: [[IS_WARP_0:%.*]] = llvm.icmp "eq" [[ZERO]], [[ZERO]]
+  // CHECK: [[ELECT:%.*]] = nvvm.elect.sync
+  // CHECK: [[WARP_PRED:%.*]] = llvm.and [[IS_WARP_0]], [[ELECT]]
+  // CHECK: [[PRED:%.*]] = llvm.and %arg1, [[WARP_PRED]]
+  // CHECK: @$0 tcgen05.commit.cta_group::1.mbarrier::arrive::one.b64 [$1];", "b,l" [[PRED]]
+  ttng.tc_gen5_commit %arg0, %pred : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+  tt.return
+}
+}
+
+// -----
+
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, unpacked = true>
+
+module attributes {"ttg.num-warps" = 4 : i32} {
+
+// CHECK-LABEL: @reinterpret
+tt.func private @reinterpret(%arg0: !ttg.memdesc<128xf32, #tmem, #ttng.tensor_memory>) -> !ttg.memdesc<16x16xf16, #tmem, #ttng.tensor_memory> {
+  %0 = ttg.memdesc_reinterpret %arg0 : !ttg.memdesc<128xf32, #tmem, #ttng.tensor_memory> -> !ttg.memdesc<16x16xf16, #tmem, #ttng.tensor_memory>
+  // CHECK-NEXT: return %arg0
+  tt.return %0 : !ttg.memdesc<16x16xf16, #tmem, #ttng.tensor_memory>
+}
+
+}
+
+// -----
+
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, unpacked = false>
+#tmem_unpacked = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, unpacked = true>
+#tmem_x1 = #ttng.tensor_memory_encoding<blockM = 128, blockN = 1, unpacked = false>
+#tmem_x1_unpacked = #ttng.tensor_memory_encoding<blockM = 128, blockN = 2, unpacked = true>
+
+#blocked_x1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+
+module attributes {"ttg.num-warps" = 4 : i32} {
+
+// CHECK-LABEL: @subslice_unpacked
+tt.func private @subslice_unpacked(%arg0: !ttg.memdesc<128x128xf16, #tmem_unpacked, #ttng.tensor_memory>) -> !ttg.memdesc<128x64xf16, #tmem_unpacked, #ttng.tensor_memory> {
+  // CHECK: [[OFFSET:%.*]] = llvm.mlir.constant(64 : i32)
+  // CHECK: [[PTR:%.*]] = llvm.ptrtoint
+  // CHECK: llvm.add [[PTR]], [[OFFSET]]
+  %0 = ttng.tmem_subslice %arg0 {N = 64 : i32} : !ttg.memdesc<128x128xf16, #tmem_unpacked, #ttng.tensor_memory> -> !ttg.memdesc<128x64xf16, #tmem_unpacked, #ttng.tensor_memory>
+  tt.return %0 : !ttg.memdesc<128x64xf16, #tmem_unpacked, #ttng.tensor_memory>
+}
+
+
+// CHECK-LABEL: @subslice_packed
+tt.func private @subslice_packed(%arg0: !ttg.memdesc<128x128xf16, #tmem, #ttng.tensor_memory>) -> !ttg.memdesc<128x64xf16, #tmem, #ttng.tensor_memory> {
+  // CHECK: [[OFFSET:%.*]] = llvm.mlir.constant(32 : i32)
+  // CHECK: [[PTR:%.*]] = llvm.ptrtoint
+  // CHECK: llvm.add [[PTR]], [[OFFSET]]
+  %0 = ttng.tmem_subslice %arg0 {N = 64 : i32} : !ttg.memdesc<128x128xf16, #tmem, #ttng.tensor_memory> -> !ttg.memdesc<128x64xf16, #tmem, #ttng.tensor_memory>
+  tt.return %0 : !ttg.memdesc<128x64xf16, #tmem, #ttng.tensor_memory>
+}
+
+// CHECK-LABEL: @load_store_x1
+tt.func @load_store_x1(%arg0: !ttg.memdesc<128x1xf32, #tmem_x1, #ttng.tensor_memory, mutable>) {
+  %true = arith.constant true
+  // CHECK: [[V:%.*]] = llvm.inline_asm {{.*}}tcgen05.ld.sync{{.*}} (i32) -> i32
+  // CHECK: [[F:%.*]] = llvm.bitcast [[V]] : i32 to f32
+  // CHECK: insertvalue [[F]], {{.*}} : !llvm.struct<(f32)>
+  %0 = ttng.tmem_load %arg0 : !ttg.memdesc<128x1xf32, #tmem_x1, #ttng.tensor_memory, mutable> -> tensor<128x1xf32, #blocked_x1>
+  ttng.tmem_store %0, %arg0, %true : tensor<128x1xf32, #blocked_x1> -> !ttg.memdesc<128x1xf32, #tmem_x1, #ttng.tensor_memory, mutable>
+  tt.return
+}
+
+// CHECK-LABEL: @load_store_x1_unpacked
+tt.func @load_store_x1_unpacked(%arg0: !ttg.memdesc<128x2xf16, #tmem_x1_unpacked, #ttng.tensor_memory, mutable>) {
+  %true = arith.constant true
+  // CHECK: [[C0:%.*]] = llvm.mlir.constant(0 : i32)
+  // CHECK: [[C1:%.*]] = llvm.mlir.constant(1 : i32)
+  // CHECK: [[V:%.*]] = llvm.inline_asm {{.*}}tcgen05.ld.sync{{.*}} (i32) -> i32
+  // CHECK: [[F:%.*]] = llvm.bitcast [[V]] : i32 to vector<2xf16>
+  // CHECK: extractelement [[F]][[[C0]] : i32]
+  // CHECK: extractelement [[F]][[[C1]] : i32]
+  %0 = ttng.tmem_load %arg0 : !ttg.memdesc<128x2xf16, #tmem_x1_unpacked, #ttng.tensor_memory, mutable> -> tensor<128x2xf16, #blocked_x1>
+  ttng.tmem_store %0, %arg0, %true : tensor<128x2xf16, #blocked_x1> -> !ttg.memdesc<128x2xf16, #tmem_x1_unpacked, #ttng.tensor_memory, mutable>
+  tt.return
+}
+
 }

@@ -9,12 +9,18 @@ flops_by_device = {
         (width / 8),
         "100":
         lambda width, num_sms, clock_rate, **kwargs: (num_sms * 16384 * (clock_rate / 1e3) * 1e6) / (width / 8),
-    },
-    "HIP": {
-        "gfx90a": lambda width, **kwargs: 383e12 / (width / 8),
-        "gfx942": lambda width, **kwargs: 2614.9e12 / (width / 8),
-    },
+    }
 }
+
+amd_bps_by_arch = {
+    'gfx90a': 3.2 * 1e12,
+    'gfx942': 5.3 * 1e12,
+    'gfx950': 8.0 * 1e12,
+}
+
+# FP8 Matrix Performance(FLOPS/clock/CU)
+# For gfx90a we use the performance of INT8 since it doesn't support FP8 matrix operations.
+amd_fp8_flops_by_arch = {'gfx90a': 1024, 'gfx942': 4096, 'gfx950': 8192}
 
 
 def max_flops(device_type, arch, width, num_sms, clock_rate):
@@ -31,6 +37,9 @@ def max_flops(device_type, arch, width, num_sms, clock_rate):
     Returns:
         float: The maximum FLOPS for the given device type and width.
     """
+    if device_type == "HIP":
+        return amd_fp8_flops_by_arch[arch] * num_sms * clock_rate * 1e3 / (width / 8)
+
     if device_type not in flops_by_device:
         raise ValueError(f"Unsupported device type: {device_type}")
 
@@ -42,7 +51,7 @@ def max_flops(device_type, arch, width, num_sms, clock_rate):
     return flops_func(width, num_sms=num_sms, clock_rate=clock_rate)
 
 
-def max_bps(bus_width, memory_clock_rate):
+def max_bps(device_type, arch, bus_width, memory_clock_rate):
     """
     Calculate the maximum bytes per second for a given bus width and memory clock rate.
 
@@ -53,4 +62,8 @@ def max_bps(bus_width, memory_clock_rate):
     Returns:
         float: The maximum bytes per second.
     """
-    return 2 * bus_width * memory_clock_rate * 1e3 / 8
+    if device_type == "CUDA":
+        return 2 * bus_width * memory_clock_rate * 1e3 / 8
+    else:
+        assert device_type == "HIP"
+        return amd_bps_by_arch[arch]

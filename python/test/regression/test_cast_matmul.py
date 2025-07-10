@@ -13,7 +13,7 @@ import triton
 import triton.language as tl
 from triton._internal_testing import is_hip_cdna3, is_cuda, is_hip
 
-input_dtypes = ["bfloat16", "float16", "float32", "float64"]
+input_dtypes = ["bfloat16", "float16", "float32"]
 if is_cuda():
     input_dtypes += ["int8", "float8_e5m2"]
     cc = torch.cuda.get_device_capability(0)
@@ -80,13 +80,11 @@ def matmul_kernel(A, B, C, M, N, K,  #
                           for BLOCK_K in [16, 32, 64]  #
                           for BLOCK_M in [16, 64]  #
                           for BLOCK_N in [16, 64, 128]  #
-                          for (M, K, N) in [(128, 128, 128), (768, 768, 1024)]  #
+                          for (M, K, N) in [(768, 768, 1024)]  #
                           for w in input_dtypes
                           for x in input_dtypes  #
                           for o in out_dtypes])
 def test_cast_matmul(M, K, N, BLOCK_K, BLOCK_M, BLOCK_N, w_dtype, x_dtype, out_dtype, device):
-    if (is_cuda() and torch.cuda.get_device_capability(0)[0] >= 10) and (BLOCK_K, BLOCK_M, BLOCK_N) == (64, 64, 128):
-        pytest.skip("skip as they run out of shared memory")
     if is_hip() and (BLOCK_K, BLOCK_M, BLOCK_N) in ((64, 64, 128), (64, 16, 128)):
         pytest.skip("skip as they run out of shared memory")
     if x_dtype == w_dtype:

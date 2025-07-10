@@ -605,7 +605,7 @@ tt.func @convert_layout5(%A : !tt.ptr<f16>) {
   // CHECK: ttg.local_load
   // CHECK-NEXT: gpu.barrier
   // CHECK: ttg.local_load
-  %3 = ttg.local_load %0 : !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory, mutable> -> tensor<16x16xf16, #AL>
+  %3 = ttg.local_load %0 : !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory, mutable> -> tensor<32x16xf16, #AL>
   %4 = ttg.local_load %1 : !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory, mutable> -> tensor<16x16xf16, #AL>
   tt.return
 }
