@@ -187,25 +187,28 @@ public:
       return signalPassFailure();
 
     // Double check we didn't miss anything
-    auto res = m.walk([](Operation *op) {
-      for (auto operand : op->getOperands()) {
-        auto tensorTy = dyn_cast<RankedTensorType>(operand.getType());
-        if (tensorTy && isa<gluon::AutoEncodingAttr>(tensorTy.getEncoding())) {
-          op->emitOpError("Failed to infer source type");
-          return WalkResult::interrupt();
-        }
-      }
+    auto res = m.walk([](Operation *op) -> WalkResult {
       for (auto resTy : op->getResultTypes()) {
-        auto tensorTy = dyn_cast<RankedTensorType>(resTy);
-        if (tensorTy && isa<gluon::AutoEncodingAttr>(tensorTy.getEncoding())) {
-          op->emitOpError("Failed to infer return type");
-          return WalkResult::interrupt();
+        if (isAutoEncodingTensorType(resTy)) {
+          return op->emitOpError("Failed to infer return type");
         }
       }
-      return WalkResult::advance();
+      return success();
     });
     if (res.wasInterrupted())
-      signalPassFailure();
+      return signalPassFailure();
+
+    res = m.walk([](Block *block) -> WalkResult {
+      for (auto argTy : block->getArgumentTypes()) {
+        if (isAutoEncodingTensorType(argTy)) {
+          return block->getParentOp()->emitError(
+              "Failed to infer block argument type");
+        }
+      }
+      return success();
+    });
+    if (res.wasInterrupted())
+      return signalPassFailure();
   }
 };
 
