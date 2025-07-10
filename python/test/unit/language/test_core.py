@@ -6319,8 +6319,7 @@ def test_split_subview(M, N, M_tile_size, N_tile_size, device='cuda'):
     if not is_hip():
         pytest.skip("the test is temporary disabled for the Nvidia backend.")
 
-    threads_per_warp = 64 if is_hip() else 32
-    num_raws_per_warp = 16 if is_hip() else 8
+    num_raws_per_warp = THREADS_PER_WARP // 4
     num_repeats_M = int(M / M_tile_size)
     num_repeats_N = int(N / N_tile_size)
 
@@ -6329,7 +6328,7 @@ def test_split_subview(M, N, M_tile_size, N_tile_size, device='cuda'):
     #shared = #ttg.swizzled_shared<{{vec = 8, perPhase = 1, maxPhase = 8, order = [1, 0]}}>
     #smem = #ttg.shared_memory
 
-    module attributes {{"ttg.num-ctas" = 1, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = {threads_per_warp} : i32}} {{
+    module attributes {{"ttg.num-ctas" = 1, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = {THREADS_PER_WARP} : i32}} {{
     tt.func public @kernel(%arg0: !tt.ptr<f16> {{tt.divisibility = 16 : i32}}) {{
         %cst = arith.constant dense<{N}> : tensor<{M}x1xi32, #blocked>
         %cst_n = arith.constant dense<{N_tile_size}> : tensor<{M_tile_size}x1xi32, #blocked>
