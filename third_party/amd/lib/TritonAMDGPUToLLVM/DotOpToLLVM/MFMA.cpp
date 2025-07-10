@@ -464,8 +464,8 @@ struct DotOpMFMAConversionHelper {
           }
 
           // Step 2: process rawElems based on element type
-          // Note that for f32/fp64 input and XF32 is not allowed, nothing needs to
-          // be done and rawElems is inserted into the ValueTable directly
+          // Note that for f32/fp64 input and XF32 is not allowed, nothing needs
+          // to be done and rawElems is inserted into the ValueTable directly
           if ((type.isF32() || type.isF64()) && !allowXF32) {
             dotOpVals[{b, nonK, kBaseVec}] =
                 tb.extract_element(type, rawElems, tb.i32_val(0));

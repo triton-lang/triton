@@ -155,7 +155,8 @@ chooseMfmaInstruction(Location loc, int mfmaVersion, RankedTensorType cType,
   } else {
     int minSize = std::min(M, N);
     if (minSize >= 32) {
-      // On CNDA2-4, if the element type is f64, we use 16x16 intrinsic as there's no 32x32 intrinsic.
+      // On CNDA2-4, if the element type is f64, we use 16x16 intrinsic as
+      // there's no 32x32 intrinsic.
       if (aElemType.isF64() || bElemType.isF64()) {
         mDim = 16;
         nDim = 16;
@@ -823,7 +824,8 @@ public:
     // for global store instructions.
     auto mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
         ctx, /*verison=*/mfmaVersion, warpsPerTile,
-        /*instrShape=*/mDim, nDim, /*isTransposed=*/true, ctaLayout, oldRetType.getElementType());
+        /*instrShape=*/mDim, nDim, /*isTransposed=*/true, ctaLayout,
+        oldRetType.getElementType());
 
     auto newRetType =
         RankedTensorType::get(oldShape, oldRetType.getElementType(), mfmaEnc);

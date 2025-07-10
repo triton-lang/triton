@@ -1122,7 +1122,7 @@ w2 w2 w3 w3
                      "CTALayoutAttr":$CTALayout,
                      "std::optional<Type>":$elementType), [{
       SmallVector<unsigned> tilesPerWarp(warpsPerCTA.size(), 1);
-      
+
       return $_get(context, version, warpsPerCTA, tilesPerWarp, MDim, NDim, isTransposed, CTALayout, elementType);
     }]>
   ];

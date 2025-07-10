@@ -67,7 +67,8 @@ public:
 
     if (maybeTilesPerWarp.has_value()) {
       return AMDMfmaEncodingAttr::get(&ctx, 2, warps, maybeTilesPerWarp.value(),
-                                      mDim, nDim, isTransposed, ctaLayout, elementType);
+                                      mDim, nDim, isTransposed, ctaLayout,
+                                      elementType);
     } else {
       return AMDMfmaEncodingAttr::get(&ctx, 2, warps, mDim, nDim, isTransposed,
                                       ctaLayout, elementType);
