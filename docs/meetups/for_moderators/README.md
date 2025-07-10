@@ -35,7 +35,7 @@ before the meeting owner opens it up.
 
 During the meetup, take notes.
 
-Post the final notes on the Triton-lang website here: https://github.com/triton-lang/triton/tree/main/docs/meetups 
+Post the final notes on the Triton-lang website here: https://github.com/triton-lang/triton/tree/main/docs/meetups
 
 ## How to run a community meetup
 
@@ -87,7 +87,7 @@ Agenda:
    Topic #2 <who>
 </pre>
 
-7. Day of meeting, login a little early and verify everything is working as expected.  
+7. Day of meeting, login a little early and verify everything is working as expected.
 
 8. During the meeting, keep an eye on the comments section. Some folks might post questions for the speaker there and/or issues they're having with Teams.
 
@@ -103,7 +103,7 @@ If this is your first time using Microsoft Teams, work with the meeting creator 
   <img src="https://private-user-images.githubusercontent.com/85795580/459649516-4bea87d7-1c6b-4331-92c1-e480b2f3d295.png?jwt=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTUiLCJleHAiOjE3NTE1NTg1MzEsIm5iZiI6MTc1MTU1ODIzMSwicGF0aCI6Ii84NTc5NTU4MC80NTk2NDk1MTYtNGJlYTg3ZDctMWM2Yi00MzMxLTkyYzEtZTQ4MGIyZjNkMjk1LnBuZz9YLUFtei1BbGdvcml0aG09QVdTNC1ITUFDLVNIQTI1NiZYLUFtei1DcmVkZW50aWFsPUFLSUFWQ09EWUxTQTUzUFFLNFpBJTJGMjAyNTA3MDMlMkZ1cy1lYXN0LTElMkZzMyUyRmF3czRfcmVxdWVzdCZYLUFtei1EYXRlPTIwMjUwNzAzVDE1NTcxMVomWC1BbXotRXhwaXJlcz0zMDAmWC1BbXotU2lnbmF0dXJlPWVjNWUxMTIzNTA4MGQxMmRkMjQ1NWQzMzFhMTIwNmVhZDNhMmJlMWQwMDQwYmUyNmQ4YTkwNTUxMTI3ZWJjNjAmWC1BbXotU2lnbmVkSGVhZGVycz1ob3N0In0.RUIK1GbqVtC8sfu_2ntb8to9FFQv7MfHrYbvNCfLCh8" alt="Youtube Login">
 </div>
 
-2. Click on https://www.youtube.com/feed/you 
+2. Click on https://www.youtube.com/feed/you
 3. Click on “+ Create” on top next to search box.
 4. Select the video you want to upload
 5. For Title use something like “Triton Community Meetup May 2025”
@@ -115,7 +115,7 @@ If this is your first time using Microsoft Teams, work with the meeting creator 
 
 ## Past community meetups
 
- | Date | Meet setup | Agenda & who | Recording | 
+ | Date | Meet setup | Agenda & who | Recording |
  | ---- | ---------- | ------------ | --------- |
  | 2025-05-01 | [Link](https://tinyurl.com/mr397f6x) | Topic: what are plans for existing block pointer programming model? (Context: Intel GPU backend relies heavily on it and will need time to fully move to tensor descriptor programming model.) - Jianhui Li, Intel <br/> Topic: infrastructure for Triton performance tests - Sayce, Google<br/>Topic: what talks/tutorials/open discussions would you like to see at the 2025 Triton Developers’ Summit? How can we help? - Adnan Aziz, Meta <br/> Topic: what are plans for existing block pointer programming model? (Context: Intel GPU backend relies heavily on it and will need time to fully move to tensor descriptor programming model.) - Jianhui Li, Intel<br/>Topic: infrastructure for Triton performance tests - Sayce, Google<br/>Topic: what talks/tutorials/open discussions would you like to see at the 2025 Triton Developers’ Summit? How can we help? - Adnan Aziz, Meta </pre> | https://www.youtube.com/watch?v=W16BrXc5BYE |
 | 2025-07-09 |[Link](https://tinyurl.com/mus5wyax) | Topic: Gluon update - Jeff Niu, OpenAI <br/> Topic: Interest and requirements for a nightly performance regression suite - Simon Waters,  kernelize.ai<br/>Triton developer's summit update - Ofer Dekel, Microsoft | |
