@@ -4,6 +4,7 @@ import os
 import subprocess
 import triton
 import re
+import torch
 from pathlib import Path
 from triton import knobs
 from triton.runtime.build import compile_module_from_src
@@ -103,7 +104,7 @@ def ty_to_cpp(ty):
     }[ty]
 
 
-_BASE_ARGS_FORMAT = "iiiKKppOOOOO"
+_BASE_ARGS_FORMAT = "iiiKKpppOOOOOO"
 
 
 def make_launcher(constants, signature, tensordesc_meta):
@@ -225,9 +226,11 @@ def make_launcher(constants, signature, tensordesc_meta):
         if ty == "nvTmaDesc"
     ]
     params = [f"&arg{i}" for i, ty in signature.items() if ty != "constexpr"]
+    params.append("&synclog")
     params.append("&global_scratch")
     src = f"""
 #include \"cuda.h\"
+#include \"synclog.hpp\"
 #include <stdbool.h>
 #include <Python.h>
 #include <dlfcn.h>
@@ -272,7 +275,7 @@ static cuLaunchKernelEx_t getLaunchKernelExHandle() {{
   return cuLaunchKernelExHandle;
 }}
 
-static void _launch(int gridX, int gridY, int gridZ, int num_warps, int num_ctas, int launch_cooperative_grid, int launch_pdl, int clusterDimX, int clusterDimY, int clusterDimZ, int shared_memory, CUstream stream, CUfunction function, CUdeviceptr global_scratch{', ' + arg_decls if len(arg_decls) > 0 else ''}) {{
+static void _launch(int gridX, int gridY, int gridZ, int num_warps, int num_ctas, int launch_cooperative_grid, int launch_pdl, int emit_synclogs, int clusterDimX, int clusterDimY, int clusterDimZ, int shared_memory, CUstream stream, CUfunction function, CUdeviceptr synclog, CUdeviceptr global_scratch{', ' + arg_decls if len(arg_decls) > 0 else ''}) {{
   void *params[] = {{ {', '.join(params)} }};
   if (gridX*gridY*gridZ > 0) {{
     // 4 attributes that we can currently pass maximum
@@ -331,6 +334,16 @@ static void _launch(int gridX, int gridY, int gridZ, int num_warps, int num_ctas
     config.numAttrs = num_attrs;
 
     CUDA_CHECK(cuLaunchKernelExHandle(&config, function, params, 0));
+
+    if (emit_synclogs != 0) {{
+      CUDA_CHECK(cuStreamSynchronize(stream));
+      uint32_t *synclog_buffer = (uint32_t *)malloc((1 << 26) * sizeof(uint32_t));
+      if (synclog_buffer) {{
+        CUDA_CHECK(cuMemcpyDtoH((void *)synclog_buffer, synclog, (1 << 26) * sizeof(uint32_t)));
+        printSynclog(synclog_buffer);
+        free(synclog_buffer);
+      }}
+    }}
   }}
 }}
 
@@ -451,14 +464,16 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
   uint64_t _function;
   int launch_cooperative_grid;
   int launch_pdl;
+  int emit_synclogs;
   PyObject *launch_enter_hook = NULL;
   PyObject *launch_exit_hook = NULL;
   PyObject *kernel_metadata = NULL;
   PyObject *launch_metadata = NULL;
+  PyObject *synclog_obj = NULL;
   PyObject *global_scratch_obj = NULL;
   {newline.join([f"{_extracted_type(ty)} _arg{i};" for i, ty in signature.items()])}
   if(!PyArg_ParseTuple(args, \"{format}\", &gridX, &gridY, &gridZ,
-                                           &_stream, &_function, &launch_cooperative_grid, &launch_pdl, &global_scratch_obj,
+                                           &_stream, &_function, &launch_cooperative_grid, &launch_pdl, &emit_synclogs, &synclog_obj, &global_scratch_obj,
                                            &kernel_metadata, &launch_metadata,
                                            &launch_enter_hook, &launch_exit_hook{args_list})) {{
     return NULL;
@@ -489,11 +504,19 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
     global_scratch = global_scratch_info.dev_ptr;
   }}
 
+  CUdeviceptr synclog = 0;
+  if (synclog_obj != Py_None) {{
+    DevicePtrInfo synclog_info = getPointer(synclog_obj, -2);
+    if (!synclog_info.valid) {{
+      return NULL;
+    }}
+    synclog = synclog_info.dev_ptr;
+  }}
   // raise exception asap
   {newline.join(ptr_decls)}
   {newline.join(tma_decls)}
   Py_BEGIN_ALLOW_THREADS;
-  _launch(gridX, gridY, gridZ, num_warps, num_ctas, launch_cooperative_grid, launch_pdl, clusterDimX, clusterDimY, clusterDimZ, shared_memory, (CUstream)_stream, (CUfunction)_function, global_scratch{', ' + ', '.join(internal_args_list) if len(internal_args_list) > 0 else ''});
+  _launch(gridX, gridY, gridZ, num_warps, num_ctas, launch_cooperative_grid, launch_pdl, emit_synclogs, clusterDimX, clusterDimY, clusterDimZ, shared_memory, (CUstream)_stream, (CUfunction)_function, synclog,global_scratch{', ' + ', '.join(internal_args_list) if len(internal_args_list) > 0 else ''});
   Py_END_ALLOW_THREADS;
   if (PyErr_Occurred()) {{
     return NULL;
@@ -641,6 +664,7 @@ class CudaLauncher(object):
         self.global_scratch_align = metadata.global_scratch_align
         self.launch_cooperative_grid = metadata.launch_cooperative_grid
         self.launch_pdl = metadata.launch_pdl
+        self.emit_synclogs = metadata.emit_synclogs
 
     def __call__(self, gridX, gridY, gridZ, stream, function, *args):
         if self.global_scratch_size > 0:
@@ -649,8 +673,12 @@ class CudaLauncher(object):
             global_scratch = _allocation._allocator(alloc_size, self.global_scratch_align, stream)
         else:
             global_scratch = None
+        if self.emit_synclogs:
+            synclog = torch.zeros(1 << 26, dtype=torch.int32, device="cuda")
+        else:
+            synclog = None
         self.launch(gridX, gridY, gridZ, stream, function, self.launch_cooperative_grid, self.launch_pdl,
-                    global_scratch, *args)
+                    self.emit_synclogs, synclog, global_scratch, *args)
 
 
 class CudaDriver(GPUDriver):

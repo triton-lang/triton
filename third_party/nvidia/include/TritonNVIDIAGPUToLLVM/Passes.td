@@ -41,4 +41,14 @@ def ConvertWarpSpecializeToLLVM : Pass<"convert-warp-specialize-to-llvm", "mlir:
   let dependentDialects = ["mlir::LLVM::LLVMDialect", "mlir::NVVM::NVVMDialect"];
 }
 
+def InsertSynclogs : Pass<"insert-synclogs", "mlir::ModuleOp"> {
+  let summary = "Insert synclogs";
+  let description = [{
+    This pass is to insert synclogs before asynchronous operations to help debug
+    races and deadlocks. This logs debug information about the asynchronous
+    op that includes global time, threadIdx, blockIdx, ctaRank, and operands.
+  }];
+  let dependentDialects = ["mlir::LLVM::LLVMDialect", "mlir::NVVM::NVVMDialect"];
+}
+
 #endif // TRITONGPU_CONVERSION_PASSES

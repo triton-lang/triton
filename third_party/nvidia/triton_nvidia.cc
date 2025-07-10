@@ -70,6 +70,7 @@ void init_triton_nvidia_passes_ttnvgpuir(py::module &&m) {
                      ttng::createTritonNvidiaGPUOptimizeTMemLayoutsPass);
   ADD_PASS_WRAPPER_0("add_interleave_tmem",
                      ttng::createTritonNvidiaGPUInterleaveTMemPass);
+  ADD_PASS_WRAPPER_0("add_insert_synclogs", mlir::triton::createInsertSynclogs);
 }
 
 void init_triton_nvidia_passes_nvws(py::module &&m) {
