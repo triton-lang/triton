@@ -64,6 +64,28 @@ template <typename FPType> struct FPTypeInfo {
             0x37c00000,  // halfway between [1/4 * 2^(-14), 2/4 * 2^(-14)]
             0x38200000,  // halfway between [2/4 * 2^(-14), 3/4 * 2^(-14)]
             0x38600000}; // halfway between [3/4 * 2^(-14), 4/4 * 2^(-14)]
+      if (dstTyID == TypeID::get<Float8E4M3FNUZType>())
+        // We divide the range of subnormals in 2^3 subranges.
+        // Each i entry in the LUT corresponds to the midpoint of the ith
+        // subrange represented in the src format (here float32)
+        return VecType{0x3a000000,  // halfway between [0/8 * 2^-7, 1/8 * 2^-7]
+                       0x3ac00000,  // halfway between [1/8 * 2^-7, 2/8 * 2^-7]
+                       0x3b200000,  // halfway between [2/8 * 2^-7, 3/8 * 2^-7]
+                       0x3b600000,  // halfway between [3/8 * 2^-7, 4/8 * 2^-7]
+                       0x3b900000,  // halfway between [4/8 * 2^-7, 5/8 * 2^-7]
+                       0x3bb00000,  // halfway between [5/8 * 2^-7, 6/8 * 2^-7]
+                       0x3bd00000,  // halfway between [6/8 * 2^-7, 7/8 * 2^-7]
+                       0x3bf00000}; // halfway between [7/8 * 2^-7, 8/8 * 2^-7]
+      if (dstTyID == TypeID::get<Float8E5M2FNUZType>())
+        // Minimum normal for E5M2FNUZ is 0x38000000 (2^-15)
+        // We divide the range of subnormals in 2^2 subranges.
+        // Each i entry in the LUT corresponds to the midpoint of the ith
+        // subrange represented in the src format (here float32)
+        return VecType{
+            0x36800000,  // halfway between [0/4 * 2^-15, 1/4 * 2^-15]
+            0x37400000,  // halfway between [1/4 * 2^-15, 2/4 * 2^-15]
+            0x37a00000,  // halfway between [2/4 * 2^-15, 3/4 * 2^-15]
+            0x37e00000}; // halfway between [3/4 * 2^-15, 4/4 * 2^-15]
     }
     if constexpr (std::is_same_v<FPType, Float16Type>) {
       if (dstTyID == TypeID::get<Float8E4M3FNType>())
@@ -71,6 +93,19 @@ template <typename FPType> struct FPTypeInfo {
                        0x2080, 0x2180, 0x2280, 0x2380};
       if (dstTyID == TypeID::get<Float8E5M2Type>())
         return VecType{0x0080, 0x0180, 0x0200, 0x0380};
+      if (dstTyID == TypeID::get<Float8E4M3FNUZType>())
+        // Minimum normal for E4M3FNUZ is 0x2000 (2^-7)
+        // We divide the range of subnormals in 2^3 subranges.
+        // Each i entry in the LUT corresponds to the midpoint of the ith
+        // subrange represented in the src format (here float16)
+        return VecType{0x1000,  // halfway between [0/8 * 2^-7, 1/8 * 2^-7]
+                       0x1600,  // halfway between [1/8 * 2^-7, 2/8 * 2^-7]
+                       0x1900,  // halfway between [2/8 * 2^-7, 3/8 * 2^-7]
+                       0x1b00,  // halfway between [3/8 * 2^-7, 4/8 * 2^-7]
+                       0x1c80,  // halfway between [4/8 * 2^-7, 5/8 * 2^-7]
+                       0x1d80,  // halfway between [5/8 * 2^-7, 6/8 * 2^-7]
+                       0x1e80,  // halfway between [6/8 * 2^-7, 7/8 * 2^-7]
+                       0x1f80}; // halfway between [7/8 * 2^-7, 8/8 * 2^-7]
     }
     if constexpr (std::is_same_v<FPType, BFloat16Type>) {
       if (dstTyID == TypeID::get<Float8E4M3FNUZType>())
@@ -86,6 +121,17 @@ template <typename FPType> struct FPTypeInfo {
                        0x3bb0,  // halfway between [5/8 * 2^-7, 6/8 * 2^-7]
                        0x3bd0,  // halfway between [6/8 * 2^-7, 7/8 * 2^-7]
                        0x3bf0}; // halfway between [7/8 * 2^-7, 8/8 * 2^-7]
+      if (dstTyID == TypeID::get<Float8E5M2FNUZType>()) {
+        // Minimum normal for E5M2FNUZ is 0x3800 (2^-15)
+        // We divide the range of subnormals in 2^2 subranges.
+        // Each i entry in the LUT corresponds to the midpoint of the ith
+        // subrange represented in the src format (here bfloat16)
+        // 2^-18 =
+        return VecType{0x3680,  // halfway between [0/4 * 2^-15, 1/4 * 2^-15]
+                       0x3740,  // halfway between [1/4 * 2^-15, 2/4 * 2^-15]
+                       0x37a0,  // halfway between [2/4 * 2^-15, 3/4 * 2^-15]
+                       0x37e0}; // halfway between [3/4 * 2^-15, 4/4 * 2^-15]
+      }
     }
     return VecType{};
   }
@@ -712,110 +758,12 @@ static SmallVector<Value>
 Fp32_to_Fp8E5M2FNUZ_SW(Location loc, ConversionPatternRewriter &rewriter,
                        const SmallVector<Value> &v) {
   assert(v.size() == 2);
-  auto convert = [&](Value v) {
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
-
-    constexpr uint32_t srcExpNumBits = 8U;
-    constexpr uint32_t srcMantNumBits = 23U;
-    constexpr uint32_t srcExpBias = 127U;
-
-    constexpr uint32_t dstExpNumBits = 5U;
-    constexpr uint32_t dstMantNumBits = 2U;
-    constexpr uint32_t dstExpBias = 16U;
-
-    constexpr uint32_t srcBitWidth = 1U + srcExpNumBits + srcMantNumBits;
-    constexpr uint32_t reducedMantNumBits = srcMantNumBits - dstMantNumBits;
-    Value reducedMantissa = b.i32_val(reducedMantNumBits);
-
-    // Get sign and absolute value
-    Value intVal = b.bitcast(v, i32_ty);
-    constexpr uint32_t signMask = 1U << (srcBitWidth - 1U);
-    Value sign = b.trunc(i8_ty, b.lshr(b.and_(intVal, b.i32_val(signMask)),
-                                       b.i32_val(srcBitWidth - 8U)));
-
-    constexpr uint32_t absMask = signMask - 1U;
-    intVal = b.and_(intVal, b.i32_val(absMask));
-
-    // Rounding to nearest even
-    // (1 << (reducedMantNumBits - 1)) indicates the position of the round bit.
-    // With -1 we get a mask with all bits below the round bit set to 1
-    constexpr uint32_t baseRoundingBias =
-        (1U << (reducedMantNumBits - 1U)) - 1U;
-
-    constexpr uint32_t mantissaLSB = (1U << reducedMantNumBits);
-    Value remainingMantissaLSB =
-        b.lshr(b.and_(intVal, b.i32_val(mantissaLSB)), reducedMantissa);
-    Value roundingBias =
-        b.add(remainingMantissaLSB, b.i32_val(baseRoundingBias));
-    Value vFp8 = b.add(intVal, roundingBias);
-
-    // Reduce mantissa to 2 bits
-    vFp8 = b.and_(vFp8, b.i32_val(0xFFE00000));
-
-    // We round numbers smaller than the minimal normal number in Fp8 to make it
-    // easier to handle subnormals E5M2FNUZ min normal is: 2^-15
-    vFp8 = b.umax(vFp8, b.i32_val(0x38000000));
-    // Adjust exponent bias
-    constexpr uint32_t expBias = (srcExpBias - dstExpBias) << srcMantNumBits;
-    vFp8 = b.sub(vFp8, b.i32_val(expBias));
-
-    // Shift right and truncate
-    vFp8 = b.trunc(i8_ty, b.lshr(vFp8, reducedMantissa));
-
-    // Any numbers larger than the max normal number in FP8
-    // after rounding will cause overflow
-    // E5M2FNUZ max normal is: S.11111.11 = 0x7F (absolute value) which in
-    // fp32 is 0x47600000 (absolute value)
-    Value isOverflow = b.icmp_ugt(intVal, b.i32_val(0x47600000));
-    vFp8 = b.select(isOverflow, b.i8_val(0x7F), vFp8);
-
-    // In case fp32's exponent is full then we have either a NaN or Inf
-    Value isNaNOrInf =
-        b.icmp_eq(b.and_(intVal, b.i32_val(0x7F800000)), b.i32_val(0x7F800000));
-
-    // Round subnormals to nearest even. Ref:
-    // https://github.com/openxla/xla/blob/f20c6fe2/xla/service/elemental_ir_emitter.cc#L272
-    constexpr size_t lutSize = 4;
-    // Minimum normal for E5M2FNUZ is 0x38000000 (2^-15)
-    // We have 2 bits for mantissa therefore we divide the range of subnormals
-    // to 4 subranges. Each i entry in the LUT corresponds to the mid point of
-    // the ith subrange. For example for subrange 0, [0 / 4 , 1 / 4 * 2^-15] we
-    // have 1/2 * (0 + 1) / 4 * 2^-15 = 2^-18 = 0.000003814697265625 which is
-    // 0x3a000000 in fp32
-
-    SmallVector<int32_t> halfwayPointsLUT = {
-        0x36800000,  // Mid point between [0/4 * 2^-15, 1/4 * 2^-15]
-        0x37400000,  // Mid point between [1/4 * 2^-15, 2/4 * 2^-15]
-        0x37a00000,  // Mid point between [2/4 * 2^-15, 3/4 * 2^-15]
-        0x37e00000}; // Mid point between [3/4 * 2^-15, 4/4 * 2^-15]
-
-    for (int i = lutSize - 1; i >= 0; i--) {
-      Value cmp;
-      if (i % 2 == 0) {
-        cmp = b.icmp_ule(intVal, b.i32_val(halfwayPointsLUT[i]));
-      } else {
-        cmp = b.icmp_ult(intVal, b.i32_val(halfwayPointsLUT[i]));
-      }
-
-      vFp8 = b.select(cmp, b.i8_val(i), vFp8);
-    }
-
-    vFp8 = b.or_(vFp8, sign);
-
-    // When downcasting to E5M2FNUZ format, NaN and Inf are both converted to
-    // NaN
-    vFp8 = b.select(isNaNOrInf, b.i8_val(0x80), vFp8);
-    // In UZ formats there is only 1 zero (positive zero)
-    // Correct negative zero to 0
-    Value isNegativeZero = b.and_(b.icmp_eq(vFp8, b.i8_val(0x80)),
-                                  b.icmp_eq(isNaNOrInf, b.i1_val(0)));
-    vFp8 = b.select(isNegativeZero, b.i8_val(0), vFp8);
-
-    return vFp8;
-  };
-
-  SmallVector<Value> results{convert(v[0]), convert(v[1])};
-  return results;
+  SmallVector<Value> result(2);
+  result[0] = downcastToFp8_RTNE_oneValue<Float32Type, Float8E5M2FNUZType>(
+      loc, rewriter, v[0]);
+  result[1] = downcastToFp8_RTNE_oneValue<Float32Type, Float8E5M2FNUZType>(
+      loc, rewriter, v[1]);
+  return result;
 }
 
 ConverterT Fp32_to_Fp8E5M2FNUZ(AMD::ISAFamily isaFamily) {
@@ -835,114 +783,12 @@ static SmallVector<Value>
 Fp32_to_Fp8E4M3FNUZ_SW(Location loc, ConversionPatternRewriter &rewriter,
                        const SmallVector<Value> &v) {
   assert(v.size() == 2);
-  auto convert = [&](Value v) {
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
-
-    constexpr uint32_t srcExpNumBits = 8U;
-    constexpr uint32_t srcMantNumBits = 23U;
-    constexpr uint32_t srcExpBias = 127U;
-
-    constexpr uint32_t dstExpNumBits = 4U;
-    constexpr uint32_t dstMantNumBits = 3U;
-    constexpr uint32_t dstExpBias = 8U;
-
-    constexpr uint32_t srcBitWidth = 1U + srcExpNumBits + srcMantNumBits;
-    constexpr uint32_t reducedMantNumBits = srcMantNumBits - dstMantNumBits;
-    Value reducedMantissa = b.i32_val(reducedMantNumBits);
-
-    // Get sign and absolute value
-    Value intVal = b.bitcast(v, i32_ty);
-    constexpr uint32_t signMask = 1U << (srcBitWidth - 1U);
-    Value sign = b.trunc(i8_ty, b.lshr(b.and_(intVal, b.i32_val(signMask)),
-                                       b.i32_val(srcBitWidth - 8U)));
-
-    constexpr uint32_t absMask = signMask - 1U;
-    intVal = b.and_(intVal, b.i32_val(absMask));
-
-    // Rounding to nearest even
-    // (1 << (reducedMantNumBits - 1)) indicates the position of the round bit.
-    // With -1 we get a mask with all bits below the round bit set to 1
-    constexpr uint32_t baseRoundingBias =
-        (1U << (reducedMantNumBits - 1U)) - 1U;
-
-    constexpr uint32_t mantissaLSB = (1U << reducedMantNumBits);
-    Value remainingMantissaLSB =
-        b.lshr(b.and_(intVal, b.i32_val(mantissaLSB)), reducedMantissa);
-    Value roundingBias =
-        b.add(remainingMantissaLSB, b.i32_val(baseRoundingBias));
-    Value vFp8 = b.add(intVal, roundingBias);
-
-    // Reduce mantissa to 3 bits
-    vFp8 = b.and_(vFp8, b.i32_val(0xFFF00000));
-
-    // We round numbers smaller than the minimal normal number in Fp8 to make it
-    // easier to handle subnormals E4M3FNUZ min normal is: 2^-7
-    vFp8 = b.umax(vFp8, b.i32_val(0x3c000000));
-    // Adjust exponent bias
-    constexpr uint32_t expBias = (srcExpBias - dstExpBias) << srcMantNumBits;
-    vFp8 = b.sub(vFp8, b.i32_val(expBias));
-
-    // Shift right and truncate
-    vFp8 = b.trunc(i8_ty, b.lshr(vFp8, reducedMantissa));
-
-    // Any numbers larger than the max normal number in FP8
-    // after rounding will cause overflow
-    // E4M3FNUZ max normal is: S.1111.111 = 0x7F (absolute value) which in
-    // fp32 is 0x43700000 (absolute value)
-    Value isOverflow = b.icmp_ugt(intVal, b.i32_val(0x43700000));
-    vFp8 = b.select(isOverflow, b.i8_val(0x7F), vFp8);
-
-    // In case fp32's exponent is full then we have either a NaN or Inf
-    Value isNaNOrInf =
-        b.icmp_eq(b.and_(intVal, b.i32_val(0x7F800000)), b.i32_val(0x7F800000));
-
-    // Round subnormals to nearest even. Ref:
-    // https://github.com/openxla/xla/blob/f20c6fe2/xla/service/elemental_ir_emitter.cc#L272
-    constexpr size_t lutSize = 8;
-    // Minimum normal for E4M3FNUZ is 0x3c000000 (2^-7)
-    // We have 3 bits for mantissa therefore we divide the range of subnormals
-    // to 8 subranges Each i entry in the LUT corresponds to the mid point of
-    // the ith subrange For example for subrange 0, [0 / 8 , 1 / 8 * 2^-7] we
-    // have 1/2 * (0 + 1) / 8 * 2^-7 = 2^-11 = 0.00048828125 which is 0x3a000000
-    // in fp32
-
-    SmallVector<int32_t> halfwayPointsLUT = {
-        0x3a000000,  // Mid point between [0/8 * 2^-7, 1/8 * 2^-7]
-        0x3ac00000,  // Mid point between [1/8 * 2^-7, 2/8 * 2^-7]
-        0x3b200000,  // Mid point between [2/8 * 2^-7, 3/8 * 2^-7]
-        0x3b600000,  // Mid point between [3/8 * 2^-7, 4/8 * 2^-7]
-        0x3b900000,  // Mid point between [4/8 * 2^-7, 5/8 * 2^-7]
-        0x3bb00000,  // Mid point between [5/8 * 2^-7, 6/8 * 2^-7]
-        0x3bd00000,  // Mid point between [6/8 * 2^-7, 7/8 * 2^-7]
-        0x3bf00000}; // Mid point between [7/8 * 2^-7, 8/8 * 2^-7]
-
-    for (int i = lutSize - 1; i >= 0; i--) {
-      Value cmp;
-      if (i % 2 == 0) {
-        cmp = b.icmp_ule(intVal, b.i32_val(halfwayPointsLUT[i]));
-      } else {
-        cmp = b.icmp_ult(intVal, b.i32_val(halfwayPointsLUT[i]));
-      }
-
-      vFp8 = b.select(cmp, b.i8_val(i), vFp8);
-    }
-
-    vFp8 = b.or_(vFp8, sign);
-
-    // When downcasting to E4M3FNUZ format, NaN and Inf are both converted to
-    // NaN
-    vFp8 = b.select(isNaNOrInf, b.i8_val(0x80), vFp8);
-    // In UZ formats there is only 1 zero (positive zero)
-    // Correct negative zero to 0
-    Value isNegativeZero = b.and_(b.icmp_eq(vFp8, b.i8_val(0x80)),
-                                  b.icmp_eq(isNaNOrInf, b.i1_val(0)));
-    vFp8 = b.select(isNegativeZero, b.i8_val(0), vFp8);
-
-    return vFp8;
-  };
-
-  SmallVector<Value> results{convert(v[0]), convert(v[1])};
-  return results;
+  SmallVector<Value> result(2);
+  result[0] = downcastToFp8_RTNE_oneValue<Float32Type, Float8E4M3FNUZType>(
+      loc, rewriter, v[0]);
+  result[1] = downcastToFp8_RTNE_oneValue<Float32Type, Float8E4M3FNUZType>(
+      loc, rewriter, v[1]);
+  return result;
 }
 
 static ConverterT Fp32_to_Fp8E4M3FNUZ(AMD::ISAFamily isaFamily) {
@@ -1633,85 +1479,11 @@ static SmallVector<Value>
 Bf16_to_Fp8E5M2FNUZ_SW(Location loc, ConversionPatternRewriter &rewriter,
                        const SmallVector<Value> &v) {
   assert(v.size() == 2);
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-
   SmallVector<Value> result(2);
-  for (size_t i = 0; i < 2; ++i) {
-    Value fp16 = v[i];
-    Value i16 = b.bitcast(fp16, i16_ty);
-
-    Value s = b.and_(i16_ty, i16, b.i16_val(0x8000));
-    Value exp =
-        b.and_(i16_ty, b.lshr(i16_ty, i16, b.i16_val(7)), b.i16_val(0xFF));
-    Value man = b.and_(i16_ty, i16, b.i16_val(0x7F));
-
-    // Convert 8-bit exponent to 5-bit exponent
-    // Exponent bias is 16
-    Value exp5 = b.select(b.icmp_ult(exp, b.i16_val(0x70)), b.i16_val(0),
-                          b.sub(i16_ty, exp, b.i16_val(0x6F)));
-
-    // Handle subnormal values (exp5 = 0)
-    // - exp <  0x6d: mantissa = 0x0000 (0)
-    // - exp == 0x6d: mantissa = 0x0000 (0),
-    //                           0x0020 (1/4)
-    // - exp == 0x6e: mantissa = 0x0020 (1/4),
-    //                           0x0040 (1/2)
-    // - exp == 0x6f: mantissa = 0x0040 (1/2),
-    //                           0x0060 (3/4),
-    //                           0x0080 (1)
-    man = b.select(b.icmp_ult(exp, b.i16_val(0x6d)), b.i16_val(0), man);
-    man = b.select(
-        b.icmp_eq(exp, b.i16_val(0x6d)),
-        b.select(b.icmp_ne(man, b.i16_val(0)), b.i16_val(0x0020), b.i16_val(0)),
-        man);
-    man = b.select(b.icmp_eq(exp, b.i16_val(0x6e)),
-                   b.select(b.icmp_uge(man, b.i16_val(0x0040)),
-                            b.i16_val(0x0040), b.i16_val(0x0020)),
-                   man);
-    man = b.select(b.icmp_eq(exp, b.i16_val(0x6f)),
-                   b.select(b.icmp_ugt(man, b.i16_val(0x0020)),
-                            b.select(b.icmp_uge(man, b.i16_val(0x0060)),
-                                     b.i16_val(0x0080), b.i16_val(0x0060)),
-                            b.i16_val(0x0040)),
-                   man);
-
-    // Round 7-bit mantissa to 2-bit
-    Value sig = b.or_(i16_ty, b.shl(i16_ty, exp5, b.i16_val(7)), man);
-    Value bias = b.add(
-        i16_ty,
-        b.lshr(i16_ty, b.and_(i16_ty, sig, b.i16_val(0x0020)), b.i16_val(5)),
-        b.i16_val(0x000F));
-    i16 = b.add(i16_ty, sig, bias);
-
-    // Handle overflow using saturation mode, by setting sig to be the max.
-    // Overflow will happen for the following cases:
-    // - Any number equal or larger than 0x0FF0 after rounding
-    // - Exponent larger than 0x8F (including infinite 0xFF)
-    i16 = b.select(b.and_(b.icmp_ugt(exp, b.i16_val(0x8F)),
-                          b.icmp_uge(sig, b.i16_val(0x0FF0))),
-                   b.i16_val(0x0FFF), i16);
-
-    // Add sign bit
-    i16 = b.or_(i16_ty, b.lshr(i16_ty, s, b.i16_val(3)), i16);
-
-    Value isNaN = b.and_(i1_ty, b.icmp_eq(exp, b.i16_val(0xFF)),
-                         b.icmp_ne(man, b.i16_val(0x0)));
-    Value isInf = b.and_(i1_ty, b.icmp_eq(exp, b.i16_val(0xFF)),
-                         b.icmp_eq(man, b.i16_val(0x0)));
-    Value isNaNOrInf = b.or_(i1_ty, isNaN, isInf);
-    // Convert NaN / Inf value to NaN
-    i16 = b.select(isNaNOrInf, b.i16_val(0x1000), i16);
-
-    Value res = b.lshr(i16_ty, i16, b.i16_val(5));
-    // In UZ formats there is only 1 zero (positive zero)
-    // Correct negative zero to 0
-    Value isNegativeZero = b.and_(i1_ty, b.icmp_eq(res, b.i16_val(0x0080)),
-                                  b.icmp_eq(isNaNOrInf, b.i1_val(0)));
-    res = b.select(isNegativeZero, b.i16_val(0), res);
-    // Truncate to 8-bit
-    result[i] = b.trunc(i8_ty, res);
-  }
-
+  result[0] = downcastToFp8_RTNE_oneValue<BFloat16Type, Float8E5M2FNUZType>(
+      loc, rewriter, v[0]);
+  result[1] = downcastToFp8_RTNE_oneValue<BFloat16Type, Float8E5M2FNUZType>(
+      loc, rewriter, v[1]);
   return result;
 }
 
@@ -1805,114 +1577,12 @@ static SmallVector<Value>
 Fp16_to_Fp8E4M3FNUZ_SW(Location loc, ConversionPatternRewriter &rewriter,
                        const SmallVector<Value> &v) {
   assert(v.size() == 2);
-  auto convert = [&](Value v) {
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
-
-    constexpr uint16_t srcExpNumBits = 5U;
-    constexpr uint16_t srcMantNumBits = 10U;
-    constexpr uint16_t srcExpBias = 15U;
-
-    constexpr uint16_t dstExpNumBits = 4U;
-    constexpr uint16_t dstMantNumBits = 3U;
-    constexpr uint16_t dstExpBias = 8U;
-
-    constexpr uint16_t srcBitWidth = 1U + srcExpNumBits + srcMantNumBits;
-    constexpr uint16_t reducedMantNumBits = srcMantNumBits - dstMantNumBits;
-    Value reducedMantissa = b.i16_val(reducedMantNumBits);
-
-    // Get sign and absolute value
-    Value intVal = b.bitcast(v, i16_ty);
-    constexpr uint16_t signMask = 1U << (srcBitWidth - 1U);
-    Value sign = b.trunc(i8_ty, b.lshr(b.and_(intVal, b.i16_val(signMask)),
-                                       b.i16_val(srcBitWidth - 8U)));
-
-    constexpr uint16_t absMask = signMask - 1U;
-    intVal = b.and_(intVal, b.i16_val(absMask));
-
-    // Rounding to nearest even
-    // (1 << (reducedMantNumBits - 1)) indicates the position of the round bit.
-    // With -1 we get a mask with all bits below the round bit set to 1
-    constexpr uint16_t baseRoundingBias =
-        (1U << (reducedMantNumBits - 1U)) - 1U;
-
-    constexpr uint16_t mantissaLSB = (1U << reducedMantNumBits);
-    Value remainingMantissaLSB =
-        b.lshr(b.and_(intVal, b.i16_val(mantissaLSB)), reducedMantissa);
-    Value roundingBias =
-        b.add(remainingMantissaLSB, b.i16_val(baseRoundingBias));
-    Value vFp8 = b.add(intVal, roundingBias);
-
-    // Reduce mantissa to 3 bits
-    vFp8 = b.and_(vFp8, b.i16_val(0xFF80));
-
-    // We round numbers smaller than the minimal normal number in Fp8 to make it
-    // easier to handle subnormals E4M3FNUZ min normal is: 2^-7 = 0x2000 in Fp16
-    vFp8 = b.umax(vFp8, b.i16_val(0x2000));
-    // Adjust exponent bias
-    constexpr uint16_t expBias = (srcExpBias - dstExpBias) << srcMantNumBits;
-    vFp8 = b.sub(vFp8, b.i16_val(expBias));
-
-    // Shift right and truncate
-    vFp8 = b.trunc(i8_ty, b.lshr(vFp8, reducedMantissa));
-
-    // Any numbers larger than the max normal number in FP8
-    // after rounding will cause overflow
-    // E4M3FNUZ max normal is: S.1111.111 = 0x7F (absolute value) which in
-    // fp16 corresponds to 0x5B80 (absolute value)
-    Value isOverflow = b.icmp_ugt(intVal, b.i16_val(0x5B80));
-    vFp8 = b.select(isOverflow, b.i8_val(0x7F), vFp8);
-
-    // In case fp16's exponent is full then we have either a NaN or Inf
-    Value isNaNOrInf =
-        b.icmp_eq(b.and_(intVal, b.i16_val(0x7C00)), b.i16_val(0x7C00));
-
-    // Round subnormals to nearest even. Ref:
-    // https://github.com/openxla/xla/blob/f20c6fe2/xla/service/elemental_ir_emitter.cc#L272
-    constexpr size_t lutSize = 8;
-    // Minimum normal for E4M3FNUZ is 0x2000 (2^-7)
-    // We have 3 bits for mantissa therefore we divide the range of subnormals
-    // to 8 subranges. Each i entry in the LUT corresponds to the mid point of
-    // the ith subrange. For example, for subrange 0, [0 / 8 , 1 / 8 * 2^-7] we
-    // have 1/2 * (0 + 1) / 8 * 2^-7 = 2^-11 = 0.00048828125 which is 0x1000 in
-    // fp16
-
-    SmallVector<int16_t> halfwayPointsLUT = {
-        0x1000,  // Mid point between [0/8 * 2^-7, 1/8 * 2^-7]
-        0x1600,  // Mid point between [1/8 * 2^-7, 2/8 * 2^-7]
-        0x1900,  // Mid point between [2/8 * 2^-7, 3/8 * 2^-7]
-        0x1b00,  // Mid point between [3/8 * 2^-7, 4/8 * 2^-7]
-        0x1c80,  // Mid point between [4/8 * 2^-7, 5/8 * 2^-7]
-        0x1d80,  // Mid point between [5/8 * 2^-7, 6/8 * 2^-7]
-        0x1e80,  // Mid point between [6/8 * 2^-7, 7/8 * 2^-7]
-        0x1f80}; // Mid point between [7/8 * 2^-7, 8/8 * 2^-7]
-
-    for (int i = lutSize - 1; i >= 0; i--) {
-      Value cmp;
-      if (i % 2 == 0) {
-        cmp = b.icmp_ule(intVal, b.i16_val(halfwayPointsLUT[i]));
-      } else {
-        cmp = b.icmp_ult(intVal, b.i16_val(halfwayPointsLUT[i]));
-      }
-
-      vFp8 = b.select(cmp, b.i8_val(i), vFp8);
-    }
-
-    vFp8 = b.or_(vFp8, sign);
-
-    // When downcasting to E4M3FNUZ format, NaN and Inf are both converted to
-    // NaN
-    vFp8 = b.select(isNaNOrInf, b.i8_val(0x80), vFp8);
-    // In UZ formats there is only 1 zero (positive zero)
-    // Correct negative zero to 0
-    Value isNegativeZero = b.and_(b.icmp_eq(vFp8, b.i8_val(0x80)),
-                                  b.icmp_eq(isNaNOrInf, b.i1_val(0)));
-    vFp8 = b.select(isNegativeZero, b.i8_val(0), vFp8);
-
-    return vFp8;
-  };
-
-  SmallVector<Value> results{convert(v[0]), convert(v[1])};
-  return results;
+  SmallVector<Value> result(2);
+  result[0] = downcastToFp8_RTNE_oneValue<Float16Type, Float8E4M3FNUZType>(
+      loc, rewriter, v[0]);
+  result[1] = downcastToFp8_RTNE_oneValue<Float16Type, Float8E4M3FNUZType>(
+      loc, rewriter, v[1]);
+  return result;
 }
 
 static SmallVector<Value>
