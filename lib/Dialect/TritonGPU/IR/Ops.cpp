@@ -761,8 +761,7 @@ int32_t LocalAllocOp::getAlignmentOrDefault() {
 
 static Type removeEncodingIfTensor(Type type) {
   if (auto tensorType = dyn_cast<RankedTensorType>(type)) {
-    return RankedTensorType::get(tensorType.getShape(),
-                                 tensorType.getElementType());
+    return tensorType.cloneWithEncoding({});
   }
   return type;
 }
