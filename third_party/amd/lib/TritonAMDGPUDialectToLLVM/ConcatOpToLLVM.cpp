@@ -33,7 +33,11 @@ struct ConcatOpConversion : public ConvertOpToLLVMPattern<amdgpu::ConcatOp> {
 
     MLIRContext *context = resultType.getContext();
     auto linearLayoutSrc = triton::gpu::toLinearLayout(srcShape, srcEncoding);
-    auto linearLayoutDst = triton::gpu::toLinearLayout(dstShape, dstEncoding);
+    auto outDimNames = llvm::to_vector(linearLayoutSrc.getOutDimNames());
+    // Call transposeOuts, to ensure that order of input and output tensor
+    // element coordinates are compatible on stage 8 in algorithm below.
+    auto linearLayoutDst = triton::gpu::toLinearLayout(dstShape, dstEncoding)
+                               .transposeOuts(outDimNames);
     auto srcCTAOrder = LLVM::AMD::getCTATileOrder(context, linearLayoutSrc);
     auto dstCTAOrder = LLVM::AMD::getCTATileOrder(context, linearLayoutSrc);
 
@@ -77,7 +81,8 @@ struct ConcatOpConversion : public ConvertOpToLLVMPattern<amdgpu::ConcatOp> {
     // 5.   get dst value location in tensor
     // 6.   find, which input tile holds the dst value
     // 7.   subtract dst coordinates and start coordinates of the tile
-    // 8.   copy dst element from computed tile and register
+    // 8.   find source register number which holds dst value
+    // 9.   copy dst element from computed tile and register
     auto ctx = rewriter.getContext();
     StringAttr kReg = StringAttr::get(ctx, "register");
     auto srcRegBases = linearLayoutSrc.getBases().lookup(kReg);
@@ -107,7 +112,7 @@ struct ConcatOpConversion : public ConvertOpToLLVMPattern<amdgpu::ConcatOp> {
     for (int regId = 0; regId < dstRegNum; ++regId) {
       SmallVector<std::pair<StringAttr, int32_t>> hardwareLocation;
       // 5.   get dst value location in tensor
-      for (auto dimName : linearLayoutSrc.getInDimNames()) {
+      for (auto dimName : linearLayoutDst.getInDimNames()) {
         if (dimName == kReg)
           hardwareLocation.push_back({dimName, regId});
         else
@@ -134,9 +139,10 @@ struct ConcatOpConversion : public ConvertOpToLLVMPattern<amdgpu::ConcatOp> {
         elemCoords[dim].second -= multiDimOperandIdx[dim] * srcShape[dim];
 
       assert(srcElemToReg.contains(elemCoords));
+      // 8.   find source register number which holds dst value
       int srcRegIdx = srcElemToReg.lookup(elemCoords);
 
-      // 8.   copy dst element from found tile and register
+      // 9.   copy dst element from found tile and register
       resultVals.push_back(unpackedSources[linearOperandIdx][srcRegIdx]);
     }
 

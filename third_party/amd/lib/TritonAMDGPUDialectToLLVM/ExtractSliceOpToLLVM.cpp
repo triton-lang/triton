@@ -50,8 +50,13 @@ struct ExtractSliceOpConversion
 
     Attribute srcEncoding = srcTy.getEncoding();
     Attribute dstEncoding = dstTy.getEncoding();
+
     auto linearLayoutSrc = triton::gpu::toLinearLayout(srcShape, srcEncoding);
-    auto linearLayoutDst = triton::gpu::toLinearLayout(dstShape, dstEncoding);
+    auto outDimNames = llvm::to_vector(linearLayoutSrc.getOutDimNames());
+    // Call transposeOuts, to ensure that order of input and output tensor
+    // element coordinates are compatible on stage 7 in algorithm below.
+    auto linearLayoutDst = triton::gpu::toLinearLayout(dstShape, dstEncoding)
+                               .transposeOuts(outDimNames);
 
     auto srcCTAOrder =
         LLVM::AMD::getCTATileOrder(srcTy.getContext(), linearLayoutSrc);
@@ -70,7 +75,8 @@ struct ExtractSliceOpConversion
     // 4. for every dst register
     // 5.   get dst element coordinates relative to tile start
     // 6.   add coordinates of tile start relative to parent tensor
-    // 7.   copy from corresponding src register
+    // 7.   find source register number which holds dst value
+    // 8.   copy from corresponding src register
     auto ctx = rewriter.getContext();
     int rank = srcTy.getRank();
     StringAttr kReg = StringAttr::get(ctx, "register");
@@ -102,7 +108,7 @@ struct ExtractSliceOpConversion
     // 4. for every dst register
     for (int regId = 0; regId < dstRegNum; ++regId) {
       SmallVector<std::pair<StringAttr, int32_t>> hardwareLocation;
-      for (auto dimName : linearLayoutSrc.getInDimNames()) {
+      for (auto dimName : linearLayoutDst.getInDimNames()) {
         if (dimName == kReg)
           hardwareLocation.push_back({dimName, regId});
         else
@@ -114,8 +120,9 @@ struct ExtractSliceOpConversion
       for (int i = 0; i < rank; ++i)
         elemCoords[i].second += offsets[i];
       assert(srcElemToReg.contains(elemCoords));
+      // 7.   find source register number which holds dst value
       auto srcRegId = srcElemToReg.lookup(elemCoords);
-      // 7.   copy from corresponding src register
+      // 8.   copy from corresponding src register
       resultVals.push_back(vals[srcRegId]);
     }
 
