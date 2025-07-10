@@ -204,7 +204,6 @@ void cloneIfOp(scf::IfOp ifOp, SmallVector<WarpGroupBuilder> &builders,
     newIfOp->setAttrs(ifOp->getAttrs());
     newIfOps.push_back(newIfOp);
 
-    // map arguments and results
     mapRange(ifOp.getResults(), newIfOp.getResults(), b.mapping);
     mapRange(ifOp.thenBlock()->getArguments(),
              newIfOp.thenBlock()->getArguments(), b.mapping);
@@ -252,16 +251,13 @@ void cloneReduceOp(triton::ReduceOp reduceOp,
     newReduceOp->setAttrs(reduceOp->getAttrs());
     newReduceOps.push_back(newReduceOp);
 
-    for (auto [oldResult, newResult] :
-         llvm::zip(reduceOp.getResults(), newReduceOp.getResults())) {
-      b.mapping.map(oldResult, newResult);
-    }
+    mapRange(reduceOp.getResults(), newReduceOp.getResults(), b.mapping);
 
     auto &region = newReduceOp.getRegion();
     Block *block = &region.emplaceBlock();
-    for (auto args : reduceOp.getRegion().getBlocks().front().getArguments()) {
-      auto newArg = block->addArgument(args.getType(), args.getLoc());
-      b.mapping.map(args, newArg);
+    for (auto arg : reduceOp.getRegion().getBlocks().front().getArguments()) {
+      auto newArg = block->addArgument(arg.getType(), arg.getLoc());
+      b.mapping.map(arg, newArg);
     }
 
     b.setInsertionPointToStart(block);
@@ -333,10 +329,7 @@ void cloneOpsInBlock(Block *block, SmallVector<WarpGroupBuilder> &builders,
 
       auto doClone = [&](WarpGroupBuilder &builder, Operation *op) {
         auto newOp = builder.clone(*op, builder.mapping);
-        for (auto [oldResult, newResult] :
-             llvm::zip(op->getResults(), newOp->getResults())) {
-          builder.mapping.map(oldResult, newResult);
-        }
+        mapRange(op->getResults(), newOp->getResults(), builder.mapping);
       };
 
       if (partition == schedule.getRootPartition()) {
