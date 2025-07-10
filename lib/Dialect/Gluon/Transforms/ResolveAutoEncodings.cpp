@@ -23,13 +23,25 @@ namespace mlir::triton::gluon {
 
 namespace {
 
-RankedTensorType withEncoding(RankedTensorType prototype,
-                              Attribute newEncoding) {
-  return RankedTensorType::get(prototype.getShape(), prototype.getElementType(),
-                               newEncoding);
+bool isAutoEncodingTensorType(Type ty) {
+  auto tensorTy = dyn_cast<RankedTensorType>(ty);
+  return tensorTy && isa<gluon::AutoEncodingAttr>(tensorTy.getEncoding());
 }
 
-LogicalResult inferAutoLayouts(FuncOp &func) {
+LogicalResult inferAutoLayouts(FuncOp func) {
+  // Disallow auto encoding accross function call boundaries
+  for (auto argTy : func.getArgumentTypes()) {
+    if (isAutoEncodingTensorType(argTy)) {
+      return func->emitError(
+          "Functions taking auto encoding must be fully inlined");
+    }
+  }
+  for (auto resultTy : func.getResultTypes()) {
+    if (isAutoEncodingTensorType(resultTy))
+      return func->emitError(
+          "Functions returning auto encoding must be fully inlined");
+  }
+
   llvm::MapVector<Value, Attribute> valueToEncoding;
   llvm::PriorityWorklist<Value> worklist;
 
@@ -55,18 +67,17 @@ LogicalResult inferAutoLayouts(FuncOp &func) {
   };
 
   // 1. Set seed values from layout conversions
-  auto res = func.walk([&](ttg::ConvertLayoutOp cvtOp) {
+  auto res = func.walk([&](ttg::ConvertLayoutOp cvtOp) -> WalkResult {
     auto src = cvtOp.getSrc();
     auto res = cvtOp.getResult();
     auto srcEnc = src.getType().getEncoding();
     auto resEnc = res.getType().getEncoding();
     auto isAutoSrc = isa<gluon::AutoEncodingAttr>(srcEnc);
     auto isAutoRes = isa<gluon::AutoEncodingAttr>(resEnc);
-    auto lr = success();
     if (isAutoSrc && !isAutoRes) {
-      lr = updateEncoding({src}, resEnc);
+      return updateEncoding({src}, resEnc);
     }
-    return succeeded(lr) ? WalkResult::advance() : WalkResult::interrupt();
+    return WalkResult::advance();
   });
 
   if (res.wasInterrupted())
@@ -132,7 +143,7 @@ LogicalResult inferAutoLayouts(FuncOp &func) {
   for (auto &[val, enc] : valueToEncoding) {
     auto existingTy = cast<RankedTensorType>(val.getType());
     assert(isa<gluon::AutoEncodingAttr>(existingTy.getEncoding()));
-    auto ty = withEncoding(existingTy, enc);
+    auto ty = existingTy.cloneWithEncoding(enc);
     val.setType(ty);
 
     if (auto opResult = dyn_cast<OpResult>(val)) {
@@ -143,13 +154,6 @@ LogicalResult inferAutoLayouts(FuncOp &func) {
         constantOp.setValueAttr(newValue);
       }
     }
-  }
-
-  for (auto resultTy : func.getResultTypes()) {
-    auto tensorTy = dyn_cast<RankedTensorType>(resultTy);
-    if (tensorTy && isa<gluon::AutoEncodingAttr>(tensorTy.getEncoding()))
-      return func->emitOpError(
-          "Functions returning auto encoding must be fully inlined");
   }
   return success();
 }
@@ -180,7 +184,7 @@ public:
     ModuleOp m = getOperation();
     // Do layout inference
     if (failed(inferAutoLayouts(m)))
-      signalPassFailure();
+      return signalPassFailure();
 
     // Double check we didn't miss anything
     auto res = m.walk([](Operation *op) {

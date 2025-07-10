@@ -8,7 +8,7 @@ def Gluon_AutoEncodingAttr : AttrDef<Gluon_Dialect, "AutoEncoding"> {
   let mnemonic = "auto_encoding";
   let attrName = "gluon.auto_encoding";
   let description = [{
-    An encoding that is inferred from downstream ops in the graph.
+    An encoding that is inferred from neighboring ops in the graph.
   }];
 }
 
