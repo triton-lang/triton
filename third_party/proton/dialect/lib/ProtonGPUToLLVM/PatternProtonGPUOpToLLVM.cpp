@@ -278,13 +278,27 @@ struct FinalizeOpConversion
     rewriter.setInsertionPointToEnd(ifBlock);
     rewriter.create<cf::BranchOp>(loc, writeBackBlock, initIdx);
 
-    // // Write back 'post-final time'.
-    // rewriter.setInsertionPointToEnd(thenBlock);
-    // Value gmemPostFinalTimeOffset = b.i32_val(8);
-    // Value gmemPostFinalTimePtr =
-    //     b.gep(scratchPtrTy, i32_ty, scratchPtr, gmemPostFinalTimeOffset);
-    // Value postFinalTime = targetInfo.getGlobalTime(rewriter, loc);
-    // b.store(postFinalTime, gmemPostFinalTimePtr);
+    // Write back 'post-final time'.
+    {
+      Block *prevBlock = op->getBlock();
+
+      // Add the 'if' block.
+      Block *ifBlock = rewriter.splitBlock(prevBlock, op->getIterator());
+      rewriter.setInsertionPointToStart(ifBlock);
+
+      Value gmemPostFinalTimeOffset = b.i32_val(8);
+      Value gmemPostFinalTimePtr =
+          b.gep(scratchPtrTy, i32_ty, scratchPtr, gmemPostFinalTimeOffset);
+      Value postFinalTime = targetInfo.getGlobalTime(rewriter, loc);
+      b.store(postFinalTime, gmemPostFinalTimePtr);
+
+      // Add the 'else' block and the condition.
+      Block *thenBlock = rewriter.splitBlock(ifBlock, op->getIterator());
+      rewriter.setInsertionPointToEnd(prevBlock);
+      rewriter.create<cf::CondBranchOp>(loc, isFirstThread, ifBlock, thenBlock);
+      rewriter.setInsertionPointToEnd(ifBlock);
+      rewriter.create<cf::BranchOp>(loc, thenBlock);
+    }
 
     rewriter.eraseOp(op);
     return success();

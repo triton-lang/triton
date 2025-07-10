@@ -116,7 +116,6 @@ module attributes {"ttg.num-warps" = 8 : i32, ttg.profile_scratch_memory_alignme
   // CHECK-DAG: %[[SMID_PTR:.*]] = llvm.getelementptr %{{.*}}[%[[SMID_OFFSET]]] : (!llvm.ptr<1>, i32) -> !llvm.ptr<1>
   // CHECK-DAG: llvm.store %{{.*}}, %[[SMID_PTR]] : i32, !llvm.ptr<1>
 
-
   // CHECK-DAG: %[[INIT_TIME_RAW:.*]] = llvm.call_intrinsic "llvm.amdgcn.s.memrealtime"() : () -> i64
   // CHECK-DAG: %[[TEN:.*]] = llvm.mlir.constant(10 : i64) : i64
   // CHECK-DAG: %[[INIT_TIME:.*]] = llvm.mul %[[INIT_TIME_RAW]], %[[TEN]] : i64
@@ -142,6 +141,8 @@ module attributes {"ttg.num-warps" = 8 : i32, ttg.profile_scratch_memory_alignme
   // CONVERT-BUILTIN: llvm.cond_br %{{.*}}, ^bb1, ^bb9
   // CONVERT-BUILTIN: ^bb1:  // pred: ^bb0
   // CONVERT-BUILTIN: llvm.store %{{.*}}, %{{.*}} : i32, !llvm.ptr<1>
+  // CONVERT-BUILTIN: llvm.call_intrinsic "llvm.amdgcn.s.memrealtime"() : () -> i64
+  // CONVERT-BUILTIN: llvm.store %{{.*}}, %{{.*}} : i64, !llvm.ptr<1>
   // CONVERT-BUILTIN: llvm.br ^bb2(%{{.*}} : i32)
   // CONVERT-BUILTIN: ^bb2(%{{.*}}: i32):  // 2 preds: ^bb1, ^bb8
   // CONVERT-BUILTIN: llvm.cond_br %2, ^bb3, ^bb4
@@ -162,6 +163,12 @@ module attributes {"ttg.num-warps" = 8 : i32, ttg.profile_scratch_memory_alignme
   // CONVERT-BUILTIN: llvm.store %{{.*}}, %{{.*}} : i32, !llvm.ptr<1>
   // CONVERT-BUILTIN: llvm.cond_br %{{.*}}, ^bb2(%{{.*}} : i32), ^bb9
   // CONVERT-BUILTIN: ^bb9:  // 2 preds: ^bb0, ^bb8
+  // CONVERT-BUILTIN: llvm.cond_br %{{.*}}, ^bb10, ^bb11
+  // CONVERT-BUILTIN: ^bb10:  // pred: ^bb9
+  // CONVERT-BUILTIN: llvm.call_intrinsic "llvm.amdgcn.s.memrealtime"() : () -> i64
+  // CONVERT-BUILTIN: llvm.store %{{.*}}, %{{.*}} : i64, !llvm.ptr<1>
+  // CONVERT-BUILTIN: llvm.br ^bb11
+  // CONVERT-BUILTIN: ^bb11:  // 2 preds: ^bb9, ^bb10
   // CHECK: llvm.return
   llvm.func @convert_smem_finalize(%arg: !llvm.ptr<1>) attributes {noinline = false, nvvm.kernel = 1 : ui1} {
     %0 = ttg.local_alloc : () -> !ttg.memdesc<512xi32, #shared, #smem, mutable>
