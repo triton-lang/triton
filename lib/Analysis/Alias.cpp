@@ -1,8 +1,8 @@
 #include "triton/Analysis/Alias.h"
 
+#include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "mlir/Dialect/UB/IR/UBOps.h"
 
 namespace mlir {
 
