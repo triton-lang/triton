@@ -23,7 +23,7 @@ import torch
 import triton
 import triton.language as tl
 
-DEVICE = torch.device("cuda:0")
+DEVICE = torch.device(f"cuda:{torch.cuda.current_device()}")
 
 
 @triton.jit
