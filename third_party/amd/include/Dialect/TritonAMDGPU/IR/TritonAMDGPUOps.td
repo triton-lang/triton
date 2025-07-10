@@ -548,7 +548,7 @@ def InThreadTransposeOp : TT_AMDGPU_Op<"in_thread_transpose", [Pure]> {
 // LocalLoadPackedTransposedOp
 //===----------------------------------------------------------------------===//
 
-def LocalLoadPackedTransposedOp : TT_AMDGPU_Op<"local_load_packed_tranposed">{
+def LocalLoadPackedTransposedOp : TT_AMDGPU_Op<"local_load_packed_tranposed"> {
     let summary = "Load a transposed packed tensor from shared memory into a distributed tensor";
     let description = [{
       Load a transposed packed tensor from shared memory into a distributed tensor.
