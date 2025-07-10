@@ -195,6 +195,28 @@ static bool matchMFMAAndLinearLayoutCase(RankedTensorType srcTy,
          storeLL.value_or(LinearLayout::empty());
 };
 
+struct PaddedConvertLayout
+    : public ConvertOpToLLVMPattern<triton::gpu::ConvertLayoutOp> {
+
+  explicit PaddedConvertLayout(LLVMTypeConverter &typeConverter,
+                               const TargetInfoBase &targetInfo,
+                               PatternBenefit benefit)
+      : ConvertOpToLLVMPattern<triton::gpu::ConvertLayoutOp>(typeConverter,
+                                                             benefit),
+        targetInfo(targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto srcType = cast<RankedTensorType>(op.getSrc().getType());
+    auto dstType = cast<RankedTensorType>(op.getType());
+    return failure();
+  }
+
+protected:
+  const TargetInfoBase &targetInfo;
+};
+
 struct ConvertLayoutOpMFMAToLinearConversion
     : public ConvertOpToLLVMPattern<triton::gpu::ConvertLayoutOp> {
 public:
@@ -296,4 +318,5 @@ void mlir::triton::AMD::populateConvertLayoutOpToLLVMPatterns(
                                                      benefit);
   patterns.add<ConvertLayoutOpMFMAToLinearConversion>(typeConverter, targetInfo,
                                                       benefit);
+  patterns.add<PaddedConvertLayout>(typeConverter, targetInfo, benefit);
 }
