@@ -3,8 +3,6 @@
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Diagnostics.h"
 #include "llvm/ADT/DenseMap.h"
-#include <iostream>
-#include <string>
 #include <tuple>
 
 namespace mlir {
