@@ -556,6 +556,17 @@ static LogicalResult parseBool(AsmParser &parser, const NamedAttribute &attr,
   return parseBoolAttrValue(parser, attr.getValue(), value, desc);
 };
 
+static LogicalResult parseType(AsmParser &parser, const NamedAttribute &attr,
+                               std::optional<Type> &value, StringRef desc) {
+  auto typeAttr = mlir::dyn_cast<TypeAttr>(attr.getValue());
+  if (!typeAttr) {
+    parser.emitError(parser.getNameLoc(), "expected a Type in ") << desc;
+    return failure();
+  }
+  value = typeAttr.getValue();
+  return success();
+}
+
 // Print the CTALayout if it's not equal to the default.
 static void maybePrintCTALayout(mlir::MLIRContext *context,
                                 mlir::AsmPrinter &printer, CTALayoutAttr layout,
@@ -1322,6 +1333,7 @@ Attribute AMDMfmaEncodingAttr::parse(AsmParser &parser, Type type) {
   std::optional<SmallVector<unsigned>> CTAsPerCGA;
   std::optional<SmallVector<unsigned>> CTASplitNum;
   std::optional<SmallVector<unsigned>> CTAOrder;
+  std::optional<Type> elementType;
 
   for (const NamedAttribute &attr : dict) {
     if (attr.getName() == "version") {
@@ -1361,6 +1373,10 @@ Attribute AMDMfmaEncodingAttr::parse(AsmParser &parser, Type type) {
               .failed())
         return {};
     }
+    if (attr.getName() == "elementType") {
+      if (parseType(parser, attr, elementType, "elementType").failed())
+        return {};
+    }
   }
 
   if (tilesPerWarp.empty()) {
@@ -1391,6 +1407,12 @@ void AMDMfmaEncodingAttr::print(AsmPrinter &printer) const {
           << ", isTransposed = " << getIsTransposed();
   maybePrintCTALayout(getContext(), printer, getCTALayout(),
                       /*rank=*/getRank());
+  if (getElementType()) {
+    std::string typeStr;
+    llvm::raw_string_ostream rso(typeStr);
+    getElementType()->print(rso);
+    printer << ", elementType = " << rso.str();
+  }
   printer << "}>";
 }
 
@@ -1406,6 +1428,9 @@ LogicalResult AMDMfmaEncodingAttr::verify(
   if (!((mDim == 32 && nDim == 32) || (mDim == 16 && nDim == 16))) {
     return emitError()
            << "(M, N) cases other than (32, 32) or (16, 16) unimplemented";
+  }
+  if (!(!elementType.has_value() || (elementType->isF64() || elementType->isF32()))) {
+    return emitError() << "element type must be f64 or f32 or none";
   }
 
   return success();

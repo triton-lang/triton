@@ -457,14 +457,6 @@ public:
     auto warpsPerTile =
         warpsPerTileMFMA(dotOp, retShape, numWarps, {mDim, nDim});
 
-    // Use transposed mfma layout to enable larger vectorization for global
-    // store instructions.
-    auto aElemTy = mfmaInstr->aElementType;
-    ttg::AMDMfmaEncodingAttr mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
-        oldRetType.getContext(),
-        /*version*/ mfmaVersion, warpsPerTile,
-        /*instrShape*/ mDim, nDim, /*isTransposed=*/true, CTALayout, aElemType);
-
     Type mfmaAccType;
     if (oldRetType.getElementType().isIntOrIndex())
       mfmaAccType = rewriter.getIntegerType(32);
@@ -472,6 +464,14 @@ public:
       mfmaAccType = rewriter.getF64Type();
     else
       mfmaAccType = rewriter.getF32Type();
+
+    // Use transposed mfma layout to enable larger vectorization for global
+    // store instructions.
+    auto aElemTy = mfmaInstr->aElementType;
+    ttg::AMDMfmaEncodingAttr mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
+        oldRetType.getContext(),
+        /*version*/ mfmaVersion, warpsPerTile,
+        /*instrShape*/ mDim, nDim, /*isTransposed=*/true, CTALayout, mfmaAccType);
 
     // convert accumulator
     auto oldAcc = dotOp.getC();
