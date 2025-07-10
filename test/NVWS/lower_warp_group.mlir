@@ -6,6 +6,41 @@
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
+  // CHECK-LABEL: @warp_group
+  //       CHECK-NOT: nvws.warp_group
+  //       CHECK:   ttg.warp_specialize
+  //       CHECK-NEXT:   default
+  //       CHECK:   partition0
+  //       CHECK-NEXT:   arith.constant
+  //       CHECK-NEXT:   ttng.tc_gen5_mma
+  tt.func @warp_group(%a: !ttg.memdesc<128x128xf8E5M2, #shared, #ttg.shared_memory>,
+                  %b: !ttg.memdesc<128x256xf8E5M2, #shared1, #ttg.shared_memory>,
+                  %c: !ttg.memdesc<128x256xf8E5M2, #shared1, #ttng.tensor_memory, mutable>,
+                  %accUse: i1,
+                  %pred: i1,
+                  %barrier: !ttg.memdesc<1xi64, #shared2, #ttg.shared_memory, mutable>) {
+    %false = arith.constant false
+    nvws.warp_group
+    partition0  num_warps(8) {
+      ttng.tc_gen5_mma %a, %b, %c, %accUse, %pred, %barrier[%false]:
+        !ttg.memdesc<128x128xf8E5M2, #shared, #ttg.shared_memory>,
+         !ttg.memdesc<128x256xf8E5M2, #shared1, #ttg.shared_memory>,
+         !ttg.memdesc<128x256xf8E5M2, #shared1, #ttng.tensor_memory, mutable>,
+         !ttg.memdesc<1xi64, #shared2, #ttg.shared_memory, mutable>
+        nvws.warp_group.return
+      }
+    tt.return
+  }
+}
+
+// -----
+
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 8}>
+#shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = true, elementBitWidth = 8}>
+#shared2 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+
   // CHECK-LABEL: @warp_default
   //       CHECK-NOT: nvws.warp_group
   //       CHECK:   ttg.warp_specialize

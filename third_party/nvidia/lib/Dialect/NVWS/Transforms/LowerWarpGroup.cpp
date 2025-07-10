@@ -95,10 +95,6 @@ class LowerWarpGroup : public OpRewritePattern<WarpGroupOp> {
       return failure(
           "mismatched number of warp groups and number of warp start ids");
 
-    if (!defaultPartition) {
-      return failure("No default partition");
-    }
-
     SetVector<Value> captures;
     for (auto partition : partitions)
       mlir::getUsedValuesDefinedAbove(*partition, captures);
@@ -164,13 +160,18 @@ class LowerWarpGroup : public OpRewritePattern<WarpGroupOp> {
 
     auto &defaultBlock = wsOp.getDefaultRegion().emplaceBlock();
     rewriter.setInsertionPointToEnd(&defaultBlock);
-    auto yieldOp = defaultPartition->front().getTerminator();
-    auto newYieldOp = rewriter.create<WarpYieldOp>(
-        loc, yieldOp->getResultTypes(), yieldOp->getOperands());
 
-    for (auto &op : llvm::make_early_inc_range(
-             defaultPartition->getBlocks().front().without_terminator())) {
-      op.moveBefore(newYieldOp);
+    if (defaultPartition) {
+      auto yieldOp = defaultPartition->front().getTerminator();
+      auto newYieldOp = rewriter.create<WarpYieldOp>(
+          loc, yieldOp->getResultTypes(), yieldOp->getOperands());
+
+      for (auto &op : llvm::make_early_inc_range(
+               defaultPartition->getBlocks().front().without_terminator())) {
+        op.moveBefore(newYieldOp);
+      }
+    } else {
+      rewriter.create<WarpYieldOp>(loc, TypeRange(), ArrayRef<Value>());
     }
 
     auto &block = wsOp.getPartitionOpHolder().emplaceBlock();
@@ -208,9 +209,11 @@ public:
       regions = regions.drop_front();
       startWarp = globalNumWarps;
       numWarps = numWarps.drop_front();
-    } else {
+    } else if (warpGroupOp.getNumResults() > 0) {
       return failure("The first warp group does not use the default number of "
-                     "warps. The default partition cannot be created.");
+                     "warps. The default partition cannot be created. When "
+                     "nvws.warp_group op returns results, there must be a "
+                     "default region.");
     }
 
     auto result = createWarpSpecializeOp(
