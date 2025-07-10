@@ -315,12 +315,11 @@ void cloneOpsInBlock(Block *block, SmallVector<WgBuilder> &builders,
         doClone(builder);
       }
     } else {
-      // all remaining ops are expected to be regionless
-      assert(op->getNumRegions() == 0);
+      assert(partition);
 
-      if (!partition) {
-        // TODO: Is this possible?
-        llvm_unreachable("No partition");
+      if (op->getNumRegions() != 0) {
+        llvm::report_fatal_error(
+            "Ops are expected to be regionless at this point.");
       }
 
       auto doClone = [&](WgBuilder &builder, Operation *op) {
