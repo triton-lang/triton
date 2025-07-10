@@ -78,25 +78,21 @@ def PTG_ReadCounterOp : PTG_Op<"read_counter", [
   }];
 }
 
-def PTG_GlobalTimeOp : PTG_Op<"global_time", [
+def PTG_InitializeOp : PTG_Op<"initialize", [
     MemoryEffects<[MemWrite<GlobalMemory>]>
 ]> {
-  let summary = "Read the global time and store it into the global memory";
+  let summary = "Initialize the intra kernel profiler";
 
   let description = [{
-    Read the global time and store it into the global memory.
-    `scratchPtr` is the base address of the profiling scratch buffer where the global time will be stored.
-    `index` is the index of the global time in the profiling scratch buffer.
+    Initialize the intra kernel profiler by filling the auxiliary metadata to the header.
+    `scratchPtr` is the base address of the profiling scratch buffer where the header is stored.
   }];
 
   let arguments = (ins
-    TT_Ptr:$scratchPtr,
-    I32Attr:$index
+    TT_Ptr:$scratchPtr
   );
 
-  let hasVerifier = 1;
-
-  let assemblyFormat = "$scratchPtr `,` $index attr-dict `:` qualified(type($scratchPtr)) `,` `i32`";
+  let assemblyFormat = "$scratchPtr attr-dict `:` qualified(type($scratchPtr))";
 }
 
 

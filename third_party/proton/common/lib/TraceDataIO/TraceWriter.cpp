@@ -187,7 +187,7 @@ void StreamChromeTraceWriter::writeKernel(json &object,
           else
             name = metadata->scopeName.at(scopeId);
           int64_t ts = static_cast<int64_t>(event.first->cycle) -
-                       blockToStartCycle[ctaId] + bt->globalTimes[0];
+                       blockToStartCycle[ctaId] + bt->initialTime;
           int64_t dur =
               static_cast<int64_t>(event.second->cycle) - event.first->cycle;
 

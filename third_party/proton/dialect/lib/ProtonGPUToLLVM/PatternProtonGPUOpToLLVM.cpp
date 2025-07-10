@@ -68,32 +68,85 @@ protected:
   const proton::gpu::TargetInfoBase &targetInfo;
 };
 
-struct GlobalTimeOpConversion
-    : public ConvertOpToLLVMPattern<mlir::triton::proton::gpu::GlobalTimeOp> {
-  explicit GlobalTimeOpConversion(LLVMTypeConverter &typeConverter,
+struct InitializeOpConversion
+    : public ConvertOpToLLVMPattern<mlir::triton::proton::gpu::InitializeOp> {
+  explicit InitializeOpConversion(LLVMTypeConverter &typeConverter,
                                   const proton::gpu::TargetInfoBase &targetInfo,
                                   PatternBenefit benefit)
-      : mlir::ConvertOpToLLVMPattern<mlir::triton::proton::gpu::GlobalTimeOp>(
+      : mlir::ConvertOpToLLVMPattern<mlir::triton::proton::gpu::InitializeOp>(
             typeConverter, benefit),
         targetInfo(targetInfo) {}
 
   LogicalResult
-  matchAndRewrite(mlir::triton::proton::gpu::GlobalTimeOp op, OpAdaptor adaptor,
+  matchAndRewrite(mlir::triton::proton::gpu::InitializeOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
-    Value globalTime = targetInfo.getGlobalTime(rewriter, loc);
     Value scratchPtr = adaptor.getScratchPtr();
     auto scratchPtrTy = mlir::cast<LLVM::LLVMPointerType>(scratchPtr.getType());
-    const int bytesPerEntry = proton::gpu::getBytesPerGlobalTimeEntry();
-    const int wordsPerEntry = bytesPerEntry / 4;
-    const int baseOffset = 4;
-    Value gmemGlobalTimeOffset =
-        b.i32_val(baseOffset + wordsPerEntry * adaptor.getIndex());
-    Value gmemGlobalTimePtr =
-        b.gep(scratchPtrTy, i32_ty, scratchPtr, gmemGlobalTimeOffset);
-    b.store(globalTime, gmemGlobalTimePtr);
+
+    // Header layout (total: circularHeaderSize bytes)
+    //  +-------------------------------+ 0
+    //  | preamble (1 word)             |
+    //  +-------------------------------+ 1
+    //  | program id (1 word)           |
+    //  +-------------------------------+ 2
+    //  | hw id (1 word)                |
+    //  +-------------------------------+ 3
+    //  | buffer size (1 word)          |
+    //  +-------------------------------+ 4
+    //  | initial time                  |
+    //  | (2 words)                     |
+    //  +-------------------------------+ 6
+    //  | pre-final time                |
+    //  | (2 words)                     |
+    //  +-------------------------------+ 8
+    //  | post-final time               |
+    //  | (2 words)                     |
+    //  +-------------------------------+ 10
+
+    Value threadId = getThreadId(rewriter, loc);
+    Value isFirstThread = b.icmp_eq(threadId, b.i32_val(0));
+
+    Block *prevBlock = op->getBlock();
+
+    // Add the 'if' block.
+    Block *ifBlock = rewriter.splitBlock(prevBlock, op->getIterator());
+    rewriter.setInsertionPointToStart(ifBlock);
+
+    // Write back 'preamble'.
+    Value preamble = b.i32_val(0xdeadbeef);
+    Value gmemPreambleOffset = b.i32_val(0);
+    Value gmemPreamblePtr =
+        b.gep(scratchPtrTy, i32_ty, scratchPtr, gmemPreambleOffset);
+    b.store(preamble, gmemPreamblePtr);
+
+    // Write back 'program id'.
+    Value gmemPidOffset = b.i32_val(1);
+    Value gmemPidPtr = b.gep(scratchPtrTy, i32_ty, scratchPtr, gmemPidOffset);
+    Value pid = getLinearId(loc, rewriter);
+    b.store(pid, gmemPidPtr);
+
+    // Write back 'hw id'.
+    Value gmemHwidOffset = b.i32_val(2);
+    Value gmemHwidPtr = b.gep(scratchPtrTy, i32_ty, scratchPtr, gmemHwidOffset);
+    Value hwid = targetInfo.processorId(rewriter, loc);
+    b.store(hwid, gmemHwidPtr);
+
+    // Write back 'initial time'.
+    Value gmemInitialTimeOffset = b.i32_val(4);
+    Value gmemInitialTimePtr =
+        b.gep(scratchPtrTy, i32_ty, scratchPtr, gmemInitialTimeOffset);
+    Value initialTime = targetInfo.getGlobalTime(rewriter, loc);
+    b.store(initialTime, gmemInitialTimePtr);
+
+    // Add the 'else' block and the condition.
+    Block *thenBlock = rewriter.splitBlock(ifBlock, op->getIterator());
+    rewriter.setInsertionPointToEnd(prevBlock);
+    rewriter.create<cf::CondBranchOp>(loc, isFirstThread, ifBlock, thenBlock);
+    rewriter.setInsertionPointToEnd(ifBlock);
+    rewriter.create<cf::BranchOp>(loc, thenBlock);
 
     rewriter.eraseOp(op);
     return success();
@@ -135,12 +188,6 @@ struct FinalizeOpConversion
     const int bufferSizeInWords = op.getSegment().getType().getNBytes() / 4;
     const int circularHeaderWordSize = proton::gpu::getCircularHeaderSize() / 4;
 
-    // Header layout (total: circularHeaderSize bytes)
-    // +------------+------------+------------+------------+------------------+
-    // |  preamble  | program id |   hw id    |  buf size  |   global times   |
-    // |  (1 word)  |  (1 word)  |  (1 word)  |  (1 word)  |   (2 words x 3)  |
-    // +------------+------------+------------+------------+------------------+
-
     // Circular strategy memory layout (total: allocprofileScratchSize bytes)
     //  +-----------------------------------------------+
     //  | header (circularHeaderSize bytes)             |
@@ -153,8 +200,6 @@ struct FinalizeOpConversion
     const int scratchWordSize = metadataWordSize + bufferSizeInWords;
 
     auto &tritonTargetInfo = targetInfo.getTritonTargetInfo();
-
-    Value hwid = targetInfo.processorId(rewriter, loc);
 
     auto scratchPtrTy = mlir::cast<LLVM::LLVMPointerType>(scratchPtr.getType());
 
@@ -187,29 +232,19 @@ struct FinalizeOpConversion
       Value gmemPtr = b.gep(scratchPtrTy, i32_ty, scratchPtr, gmemOffset);
       b.store(load, gmemPtr);
     };
-    // Write back 'preamble'.
-    Value preamble = b.i32_val(0xdeadbeef);
-    Value gmemPreambleOffset = b.i32_val(0);
-    Value gmemPreamblePtr =
-        b.gep(scratchPtrTy, i32_ty, scratchPtr, gmemPreambleOffset);
-    b.store(preamble, gmemPreamblePtr);
-
-    // Write back 'program id'.
-    Value gmemPidOffset = b.i32_val(1);
-    Value gmemPidPtr = b.gep(scratchPtrTy, i32_ty, scratchPtr, gmemPidOffset);
-    Value pid = getLinearId(loc, rewriter);
-    b.store(pid, gmemPidPtr);
-
-    // Write back 'hw id'.
-    Value gmemHwidOffset = b.i32_val(2);
-    Value gmemHwidPtr = b.gep(scratchPtrTy, i32_ty, scratchPtr, gmemHwidOffset);
-    b.store(hwid, gmemHwidPtr);
 
     // Write back 'buffer size in byte'.
     Value gmemBufSizeOffset = b.i32_val(3);
     Value gmemBufSizePtr =
         b.gep(scratchPtrTy, i32_ty, scratchPtr, gmemBufSizeOffset);
     b.store(b.i32_val(bufferSizeInWords * 4), gmemBufSizePtr);
+
+    // Write back 'pre-final time'.
+    Value gmemPreFinalTimeOffset = b.i32_val(6);
+    Value gmemPreFinalTimePtr =
+        b.gep(scratchPtrTy, i32_ty, scratchPtr, gmemPreFinalTimeOffset);
+    Value preFinalTime = targetInfo.getGlobalTime(rewriter, loc);
+    b.store(preFinalTime, gmemPreFinalTimePtr);
 
     // Add the 'else' block and the condition.
     Block *thenBlock = rewriter.splitBlock(ifBlock, op->getIterator());
@@ -242,6 +277,14 @@ struct FinalizeOpConversion
 
     rewriter.setInsertionPointToEnd(ifBlock);
     rewriter.create<cf::BranchOp>(loc, writeBackBlock, initIdx);
+
+    // // Write back 'post-final time'.
+    // rewriter.setInsertionPointToEnd(thenBlock);
+    // Value gmemPostFinalTimeOffset = b.i32_val(8);
+    // Value gmemPostFinalTimePtr =
+    //     b.gep(scratchPtrTy, i32_ty, scratchPtr, gmemPostFinalTimeOffset);
+    // Value postFinalTime = targetInfo.getGlobalTime(rewriter, loc);
+    // b.store(postFinalTime, gmemPostFinalTimePtr);
 
     rewriter.eraseOp(op);
     return success();
@@ -604,7 +647,7 @@ void populateProtonGPUOpPatterns(LLVMTypeConverter &typeConverter,
                                  const TargetInfoBase &targetInfo,
                                  PatternBenefit benefit) {
   patterns.add<ReadCounterOpConversion>(typeConverter, targetInfo, benefit);
-  patterns.add<GlobalTimeOpConversion>(typeConverter, targetInfo, benefit);
+  patterns.add<InitializeOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<FinalizeOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<SegmentAllocOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<GlobalScratchAllocOpConversion>(typeConverter, targetInfo,

@@ -23,10 +23,6 @@ namespace gpu {
 
 const int getBytesPerClockEntry();
 
-const int getBytesPerGlobalTimeEntry();
-
-const int getNumGlobalTimeEntries();
-
 const int getCircularHeaderSize();
 
 const int getTotalNumWarps(ModuleOp mod);

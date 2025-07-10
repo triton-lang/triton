@@ -59,16 +59,6 @@ LogicalResult InitCtxOp::verify() {
   return success();
 }
 
-// -- GlobalTimeOp --
-LogicalResult GlobalTimeOp::verify() {
-  auto index = getIndex();
-  if (index < 0)
-    return emitOpError("global time index must be non-negative");
-  if (index > getNumGlobalTimeEntries())
-    return emitOpError("global time index exceeds maximum");
-  return success();
-}
-
 } // namespace gpu
 } // namespace proton
 } // namespace triton

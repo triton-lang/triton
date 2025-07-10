@@ -259,9 +259,9 @@ public:
     DeviceId,
     DeviceType,
     TimeShiftCost,
-    GlobalTime0,
-    GlobalTime1,
-    GlobalTime2,
+    InitialTime,
+    PreFinalTime,
+    PostFinalTime,
     Count,
   };
 
@@ -271,8 +271,8 @@ public:
               double normalizedDuration, uint64_t kernelId,
               const std::string &kernelName, uint64_t blockId,
               uint64_t processorId, uint64_t unitId, uint64_t deviceId,
-              uint64_t deviceType, uint64_t timeShiftCost, uint64_t globalTime0,
-              uint64_t globalTime1, uint64_t globalTime2)
+              uint64_t deviceType, uint64_t timeShiftCost, uint64_t initialTime,
+              uint64_t preFinalTime, uint64_t postFinalTime)
       : CycleMetric() {
     this->values[StartCycle] = startCycle;
     this->values[EndCycle] = endCycle;
@@ -286,9 +286,9 @@ public:
     this->values[DeviceId] = deviceId;
     this->values[DeviceType] = deviceType;
     this->values[TimeShiftCost] = timeShiftCost;
-    this->values[GlobalTime0] = globalTime0;
-    this->values[GlobalTime1] = globalTime1;
-    this->values[GlobalTime2] = globalTime2;
+    this->values[InitialTime] = initialTime;
+    this->values[preFinalTime] = preFinalTime;
+    this->values[postFinalTime] = postFinalTime;
   }
 
   virtual const std::string getName() const { return "CycleMetric"; }
@@ -303,15 +303,16 @@ public:
 
 private:
   const static inline bool PROPERTY[CycleMetricKind::Count] = {
-      false, false, false, false, true, true,
-      true,  true,  true,  true,  true, true};
+      false, false, false, false, true,  true,  true, true,
+      true,  true,  true,  true,  false, false, false};
   const static inline bool EXCLUSIVE[CycleMetricKind::Count] = {
-      false, false, true, true, true, true, true, true, true, true, true, true};
+      false, false, true, true, true,  true,  true, true,
+      true,  true,  true, true, false, false, false};
   const static inline std::string VALUE_NAMES[CycleMetricKind::Count] = {
-      "start_cycle",  "end_cycle",    "cycles",       "normalized_cycles",
-      "kernel_id",    "kernel_name",  "block_id",     "processor_id",
-      "unit_id",      "device_id",    "device_type",  "time_shift_cost",
-      "global_time0", "global_time1", "global_time2",
+      "start_cycle",  "end_cycle",      "cycles",          "normalized_cycles",
+      "kernel_id",    "kernel_name",    "block_id",        "processor_id",
+      "unit_id",      "device_id",      "device_type",     "time_shift_cost",
+      "initial_time", "pre_final_time", "post_final_time",
   };
 };
 
