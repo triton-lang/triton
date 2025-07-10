@@ -1080,6 +1080,7 @@ struct AtomicRMWOpConversion
       atom.o(semStr).o(rmwOp).v(vec).o(sTy);
       if (tensorTy) {
         atom(dstOpr, ptrOpr, valOpr).maybePredicate(pred);
+        // atom(dstOpr, ptrOpr, valOpr);
         Type retType;
         if (vec > 1) {
           SmallVector<Type> retTys(vec, valueElemTy);
@@ -1091,6 +1092,11 @@ struct AtomicRMWOpConversion
         }
 
         auto ret = ptxBuilderAtomicRMW.launch(rewriter, loc, retType);
+
+        // Just implement warp level broadcasting, if elements > 32, we should
+        // do block level broadcasting.
+        auto inline_asm = ptxBuilderAtomicRMW.launch(rewriter, loc, retType);
+        auto ret = targetInfo.shuffleIdx(rewriter, loc, inline_asm, 0);
 
         if (vec > 1) {
           for (unsigned ii = 0; ii < vec; ++ii) {
