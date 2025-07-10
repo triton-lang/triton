@@ -451,7 +451,6 @@ LogicalResult LocalLoadPackedTransposedOp::verify() {
   auto srcTy = getSrc().getType();
   auto dstTy = getType();
   auto srcShape = srcTy.getShape();
-  auto dstShape = dstTy.getShape();
 
   auto dotEnc = cast<DotOperandEncodingAttr>(dstTy.getEncoding());
   auto sharedEnc =
@@ -459,13 +458,27 @@ LogicalResult LocalLoadPackedTransposedOp::verify() {
   auto order = sharedEnc.getOrder();
   bool isA = dotEnc.getOpIdx() == 0;
 
-  bool matchingOrderA = order.equals({0, 1});
-  bool matchingOrderB = order.equals({1, 0});
+  // operand A: [0, 1] / [1, 2, 0]
+  // operand B: [1, 0] / [2, 1, 0]
+  bool hasBatchDim = srcShape.size() == 3;
+
+  bool matchingOrderA =
+      order.equals({0, 1}) || (hasBatchDim && order.equals({1, 2, 0}));
+  bool matchingOrderB =
+      order.equals({1, 0}) || (hasBatchDim && order.equals({2, 1, 0}));
   if ((isA && !matchingOrderA) || (!isA && !matchingOrderB))
     return emitOpError("Order of dimensions don't match expected");
 
-  bool aDimMatch = srcShape.equals({dstShape[0] / 2, dstShape[1] * 2});
-  bool bDimMatch = srcShape.equals({dstShape[0] * 2, dstShape[1] / 2});
+  SmallVector<int64_t> srcShapeBasedOnDstA(dstTy.getShape());
+  srcShapeBasedOnDstA[hasBatchDim ? 1 : 0] /= 2;
+  srcShapeBasedOnDstA[hasBatchDim ? 2 : 1] *= 2;
+
+  SmallVector<int64_t> srcShapeBasedOnDstB(dstTy.getShape());
+  srcShapeBasedOnDstB[hasBatchDim ? 1 : 0] *= 2;
+  srcShapeBasedOnDstB[hasBatchDim ? 2 : 1] /= 2;
+
+  bool aDimMatch = srcShape.equals(ArrayRef(srcShapeBasedOnDstA));
+  bool bDimMatch = srcShape.equals(ArrayRef(srcShapeBasedOnDstB));
   if ((isA && !aDimMatch) || (!isA && !bDimMatch))
     return emitOpError(
         "Input and output dimensions don't match after packing changes");
