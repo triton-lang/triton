@@ -159,6 +159,12 @@ void cloneForOp(scf::ForOp forOp, SmallVector<WgBuilder> &builders,
   }
 }
 
+void mapRange(ValueRange fromRange, ValueRange toRange, IRMapping &mapping) {
+  for (auto [from, to] : llvm::zip(fromRange, toRange)) {
+    mapping.map(from, to);
+  }
+}
+
 void cloneIfOp(scf::IfOp ifOp, SmallVector<WgBuilder> &builders,
                const WarpSchedule &schedule) {
   auto partition = getPartition(ifOp, schedule);
@@ -176,33 +182,20 @@ void cloneIfOp(scf::IfOp ifOp, SmallVector<WgBuilder> &builders,
   SmallVector<scf::IfOp> newIfOps;
   for (size_t idx : partitionIndices) {
     auto &b = builders[idx];
-    SmallVector<Type> newIfResultTypes;
-    for (auto [idx, result] : llvm::enumerate(ifOp.getResults())) {
-      newIfResultTypes.push_back(result.getType());
-    }
     auto cond = b.mapping.lookupOrDefault(ifOp.getCondition());
-    auto newIfOp = b.builder.create<scf::IfOp>(
-        ifOp.getLoc(), newIfResultTypes, cond, ifOp.elseBlock() ? true : false);
+    auto newIfOp =
+        b.builder.create<scf::IfOp>(ifOp.getLoc(), ifOp.getResultTypes(), cond,
+                                    ifOp.elseBlock() ? true : false);
     newIfOp->setAttrs(ifOp->getAttrs());
     newIfOps.push_back(newIfOp);
 
     // map arguments and results
-    for (auto [oldRes, newRes] :
-         llvm::zip(ifOp.getResults(), newIfOp.getResults())) {
-      b.mapping.map(oldRes, newRes);
-    }
-    for (auto [oldArg, newArg] :
-         llvm::zip(ifOp.thenBlock()->getArguments(),
-                   newIfOp.thenBlock()->getArguments())) {
-      b.mapping.map(oldArg, newArg);
-    }
+    mapRange(ifOp.getResults(), newIfOp.getResults(), b.mapping);
+    mapRange(ifOp.thenBlock()->getArguments(), newIfOp.thenBlock()->getArguments(), b.mapping);
 
     if (ifOp.elseBlock()) {
-      for (auto [oldArg, newArg] :
-           llvm::zip(ifOp.elseBlock()->getArguments(),
-                     newIfOp.elseBlock()->getArguments())) {
-        b.mapping.map(oldArg, newArg);
-      }
+      mapRange(ifOp.elseBlock()->getArguments(),
+               newIfOp.elseBlock()->getArguments(), b.mapping);
     }
 
     b.builder.setInsertionPointToStart(newIfOp.thenBlock());
