@@ -101,6 +101,10 @@ public:
   virtual LogicalResult
   verifyTensorLayout(Attribute layout, RankedTensorType type, Operation *op,
                      function_ref<InFlightDiagnostic()> emitError) const = 0;
+
+  virtual LogicalResult
+  verifyDotOpLayout(Attribute parent, unsigned opIdx, unsigned kWidth,
+                    function_ref<InFlightDiagnostic()> emitError) const = 0;
 };
 
 } // namespace triton
