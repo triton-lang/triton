@@ -7,7 +7,7 @@ ENV SCCACHE_DIR="/sccache"
 ENV SCCACHE_CACHE_SIZE="2G"
 
 RUN dnf install --assumeyes llvm-toolset
-RUN dnf install --assumeyes python38-pip python38-devel git
+RUN dnf install --assumeyes python39-pip python39-devel git
 
 RUN python3 -m pip install --upgrade pip
 RUN python3 -m pip install --upgrade cmake ninja sccache lit
