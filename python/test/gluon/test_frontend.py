@@ -1171,3 +1171,16 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 } loc(#loc)
 #loc = loc(unknown)
 """)
+
+
+@filecheck_test
+@gluon.jit
+def test_auto_layout():
+    # CHECK: [[X_1D:%.*]] = arith.constant dense<7> : tensor<16xi32, #gluon.auto_encoding>
+    # CHECK: [[Y_1D:%.*]] = arith.constant dense<2> : tensor<8xi32, #gluon.auto_encoding>
+    x = ttgl.full([16], 7, ttgl.int32, layout=ttgl.AutoLayout())[:, None]
+    y = ttgl.full([8], 2, ttgl.int32, layout=ttgl.AutoLayout())[None, :]
+    # CHECK: arith.addi {{.*}} : tensor<16x8xi32, #gluon.auto_encoding>
+    z = x + y
+    # CHECK: (tensor<16x8xi32, #gluon.auto_encoding>) -> tensor<16xi32, #gluon.auto_encoding
+    ttgl.sum(z, axis=1)

@@ -265,12 +265,13 @@ class HIPBackend(BaseBackend):
         return mod
 
     @staticmethod
-    def ttgir_opt(src, metadata, options):
+    def gluon_to_ttgir(src, metadata, options):
         mod = src
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
 
         passes.ttgpuir.add_inliner(pm)
+        passes.gluon.add_resolve_auto_encodings(pm)
         passes.common.add_sccp(pm)
         passes.ttir.add_loop_aware_cse(pm)
         passes.ttgpuir.add_canonicalizer(pm)
@@ -442,7 +443,7 @@ class HIPBackend(BaseBackend):
             stages["ttir"] = lambda src, metadata: self.make_ttir(src, metadata, options)
             stages["ttgir"] = lambda src, metadata: self.make_ttgir(src, metadata, options)
         elif language == Language.GLUON:
-            stages["ttgir"] = lambda src, metadata: self.ttgir_opt(src, metadata, options)
+            stages["ttgir"] = lambda src, metadata: self.gluon_to_ttgir(src, metadata, options)
         stages["llir"] = lambda src, metadata: self.make_llir(src, metadata, options)
         stages["amdgcn"] = lambda src, metadata: self.make_amdgcn(src, metadata, options)
         stages["hsaco"] = lambda src, metadata: self.make_hsaco(src, metadata, options)
