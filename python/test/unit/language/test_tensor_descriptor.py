@@ -383,6 +383,103 @@ def test_tensor_descriptor_store_nd(dtype_str, num_ctas, ndim, INNER_BLOCK, devi
     torch.testing.assert_close(expect, actual)
 
 
+@pytest.mark.interpreter
+@pytest.mark.parametrize("M_BLOCK", [16, 32])
+@pytest.mark.parametrize("N_BLOCK", [16, 32])
+@pytest.mark.parametrize("padding", ["zero", "nan"])
+def test_tensor_descriptor_padding(M_BLOCK, N_BLOCK, padding):
+
+    @triton.jit
+    def blk_load(in_ptr, out_ptr, IM, IN, OM, ON, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr, padding: tl.constexpr):
+
+        moffset = tl.program_id(0) * M_BLOCK
+        noffset = tl.program_id(1) * N_BLOCK
+
+        in_block = tl.make_block_ptr(
+            in_ptr,
+            shape=[IM, IN],
+            strides=[IN, 1],
+            block_shape=[M_BLOCK, N_BLOCK],
+            offsets=[moffset, noffset],
+            order=(0, 1),
+        )
+        out_block = tl.make_block_ptr(
+            out_ptr,
+            shape=[OM, ON],
+            strides=[ON, 1],
+            block_shape=[M_BLOCK, N_BLOCK],
+            offsets=[moffset, noffset],
+            order=(0, 1),
+        )
+
+        in_local = tl.load(in_block, boundary_check=(0, 1), padding_option=padding)
+        tl.store(out_block, in_local)
+
+    @triton.jit
+    def tma_load(in_ptr, out_ptr, IM, IN, YM, YN, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr, padding: tl.constexpr):
+        x_desc = tl.make_tensor_descriptor(in_ptr, shape=[IM, IN], strides=[IN, 1], block_shape=[M_BLOCK, N_BLOCK],
+                                           padding_option=padding)
+
+        moffset = tl.program_id(0) * M_BLOCK
+        noffset = tl.program_id(1) * N_BLOCK
+
+        value = x_desc.load([moffset, noffset])
+
+        out_block = tl.make_block_ptr(
+            out_ptr,
+            shape=[YM, YN],
+            strides=[YN, 1],
+            block_shape=[M_BLOCK, N_BLOCK],
+            offsets=[moffset, noffset],
+            order=(0, 1),
+        )
+        tl.store(out_block, value)
+
+    @triton.jit
+    def external_tma_load(in_desc, out_ptr, YM, YN, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr):
+
+        moffset = tl.program_id(0) * M_BLOCK
+        noffset = tl.program_id(1) * N_BLOCK
+
+        value = in_desc.load([moffset, noffset])
+
+        out_block = tl.make_block_ptr(
+            out_ptr,
+            shape=[YM, YN],
+            strides=[YN, 1],
+            block_shape=[M_BLOCK, N_BLOCK],
+            offsets=[moffset, noffset],
+            order=(0, 1),
+        )
+        tl.store(out_block, value)
+
+    # TMA descriptors require a global memory allocation
+    def alloc_fn(size: int, alignment: float, stream: float):
+        return torch.ones(size, device="cuda", dtype=torch.float32)
+
+    triton.set_allocator(alloc_fn)
+
+    IM, IN = 48, 48
+    OM, ON = 64, 64
+    input = torch.arange(IM * IN, device="cuda", dtype=torch.float32)
+    input = input.reshape(IM, IN)
+    outb = torch.zeros(OM * ON, device="cuda", dtype=torch.float32)
+    outb = outb.reshape(OM, ON)
+    outt = torch.zeros(OM * ON, device="cuda", dtype=torch.float32)
+    outt = outt.reshape(OM, ON)
+    outet = torch.zeros(OM * ON, device="cuda", dtype=torch.float32)
+    outet = outet.reshape(OM, ON)
+    dummy_block = [M_BLOCK, N_BLOCK]
+    in_desc = TensorDescriptor(input, input.shape, input.stride(), dummy_block, padding=padding)
+    grid = (triton.cdiv(OM, M_BLOCK), triton.cdiv(ON, N_BLOCK))
+    blk_load[grid](input, outb, IM, IN, OM, ON, M_BLOCK, N_BLOCK, padding)
+    tma_load[grid](input, outt, IM, IN, OM, ON, M_BLOCK, N_BLOCK, padding)
+    external_tma_load[grid](in_desc, outet, OM, ON, M_BLOCK, N_BLOCK)
+
+    torch.testing.assert_close(outb, outt, equal_nan=True)
+    torch.testing.assert_close(outb, outet, equal_nan=True)
+
+
 @triton.jit(noinline=True)
 def tensor_descriptor_in_function_helper(out_ptr, in_ptr, M, N, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr):
     in_desc = tl.make_tensor_descriptor(
