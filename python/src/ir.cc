@@ -27,6 +27,7 @@
 #include "mlir/Transforms/LocationSnapshot.h"
 
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Dialect/Gluon/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
@@ -304,7 +305,7 @@ void init_triton_ir(py::module &&m) {
                     math::MathDialect, arith::ArithDialect, scf::SCFDialect,
                     ::mlir::gpu::GPUDialect, cf::ControlFlowDialect,
                     ::mlir::triton::proton::ProtonDialect, LLVM::LLVMDialect,
-                    mlir::ub::UBDialect>();
+                    mlir::ub::UBDialect, mlir::triton::gluon::GluonDialect>();
     mlir::LLVM::registerInlinerInterface(registry);
     registerBuiltinDialectTranslation(registry);
     registerLLVMDialectTranslation(registry);

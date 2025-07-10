@@ -7,6 +7,7 @@
 #include "triton/Analysis/Membar.h"
 #include "triton/Conversion/TritonGPUToLLVM/Passes.h"
 #include "triton/Conversion/TritonToTritonGPU/Passes.h"
+#include "triton/Dialect/Gluon/Transforms/Passes.h"
 #include "triton/Dialect/Triton/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonInstrument/Transforms/Passes.h"
@@ -111,6 +112,13 @@ void init_triton_passes_llvmir(py::module &&m) {
   ADD_PASS_WRAPPER_0("add_di_scope", mlir::createLLVMDIScope);
 }
 
+void init_gluon_passes(py::module &&m) {
+  using namespace mlir;
+  namespace gluon = mlir::triton::gluon;
+  ADD_PASS_WRAPPER_0("add_resolve_auto_encodings",
+                     gluon::createGluonResolveAutoEncodingsPass);
+}
+
 void init_triton_passes(py::module &&m) {
   init_triton_analysis(m.def_submodule("analysis"));
   init_triton_passes_common(m.def_submodule("common"));
@@ -118,4 +126,5 @@ void init_triton_passes(py::module &&m) {
   init_triton_passes_ttir(m.def_submodule("ttir"));
   init_triton_passes_ttgpuir(m.def_submodule("ttgpuir"));
   init_triton_passes_llvmir(m.def_submodule("llvmir"));
+  init_gluon_passes(m.def_submodule("gluon"));
 }

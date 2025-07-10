@@ -3838,6 +3838,13 @@ def get_test_dot_vdot2_cases():
             (4, 32, 32, 4, False, False, 'None', 'ieee', 'bfloat16', 'float32', 1, None)]
 
 
+def get_test_small_dots_cases():
+    if not is_cuda():
+        return []
+    return [(2, 4, 32, 1, False, False, 'None', 'ieee', 'float16', 'float32', 1, None),
+            (1, 2, 32, 1, False, False, 'None', 'ieee', 'float8e5', 'float32', 1, None)]
+
+
 @pytest.mark.interpreter
 @pytest.mark.parametrize(
     "M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, kpack, mma_nonk_size",
@@ -3851,7 +3858,8 @@ def get_test_dot_vdot2_cases():
     get_test_dot_fp8_output_cases() + \
     get_test_dot_small_k_mfma_cases() + \
     get_test_dot_small_mn_fma_cases() + \
-    get_test_dot_softmax())
+    get_test_dot_softmax() + \
+    get_test_small_dots_cases())
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, kpack, mma_nonk_size,
              num_ctas, device):
@@ -3859,7 +3867,7 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
         if in_dtype == 'bfloat16':
             pytest.skip("bfloat16 is not supported in the interpreter")
     else:
-        if not is_hip() and (M < 16 or N < 16 or K < 16):
+        if not is_hip() and K < 16:
             pytest.skip("small dots are supported only on HIP at the moment")
         if is_cuda():
             capability = torch.cuda.get_device_capability()
@@ -4097,10 +4105,12 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
             assert 'wgmma.mma_async.sync.aligned' in ptx or\
                 'mma.sync.aligned.m16n8k32.row.col.satfinite.s32.s8.s8.s32' in ptx
     elif in_dtype == "float8e5" and out_dtype == tl.float32:
-        if capability[0] == 9:
+        if capability[0] == 9 and M >= 64 and N >= 8:
             assert 'wgmma.mma_async.sync.aligned.m64n128k32.f32.e5m2.e5m2' in ptx
+        elif capability[0] >= 8 and M < 64:
+            assert 'mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32' in ptx
     elif in_dtype == "float8e4nv" and out_dtype == tl.float32:
-        if capability[0] == 9:
+        if capability[0] == 9 and M >= 64 and N >= 8:
             assert 'wgmma.mma_async.sync.aligned.m64n128k32.f32.e4m3.e4m3' in ptx
     if is_tcgen5 and epilogue == 'softmax' and M >= 128:
         # check that there is no shared memory exchange in the softmax
@@ -6319,8 +6329,7 @@ def test_split_subview(M, N, M_tile_size, N_tile_size, device='cuda'):
     if not is_hip():
         pytest.skip("the test is temporary disabled for the Nvidia backend.")
 
-    threads_per_warp = 64 if is_hip() else 32
-    num_raws_per_warp = 16 if is_hip() else 8
+    num_raws_per_warp = THREADS_PER_WARP // 4
     num_repeats_M = int(M / M_tile_size)
     num_repeats_N = int(N / N_tile_size)
 
@@ -6329,7 +6338,7 @@ def test_split_subview(M, N, M_tile_size, N_tile_size, device='cuda'):
     #shared = #ttg.swizzled_shared<{{vec = 8, perPhase = 1, maxPhase = 8, order = [1, 0]}}>
     #smem = #ttg.shared_memory
 
-    module attributes {{"ttg.num-ctas" = 1, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = {threads_per_warp} : i32}} {{
+    module attributes {{"ttg.num-ctas" = 1, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = {THREADS_PER_WARP} : i32}} {{
     tt.func public @kernel(%arg0: !tt.ptr<f16> {{tt.divisibility = 16 : i32}}) {{
         %cst = arith.constant dense<{N}> : tensor<{M}x1xi32, #blocked>
         %cst_n = arith.constant dense<{N_tile_size}> : tensor<{M_tile_size}x1xi32, #blocked>

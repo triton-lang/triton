@@ -334,6 +334,8 @@ class AttentionConfig:
 
         if dtype == gl.float16:
             self.num_kv_buffers = gl.constexpr(3 if HEAD_DIM == 128 else 6)
+        elif dtype == gl.bfloat16:
+            self.num_kv_buffers = gl.constexpr(3 if HEAD_DIM == 128 else 6)
         else:
             self.num_kv_buffers = gl.constexpr(4 if HEAD_DIM == 128 else 8)
 
@@ -894,7 +896,7 @@ def attention_forward(q, k, v, causal, sm_scale):
     BLOCK_M = 256
     BLOCK_N = 128
     SPLIT_M = BLOCK_M // 2
-    GROUP_SIZE_N = 8
+    GROUP_SIZE_N = 4 if causal else 1
     NUM_SMS = torch.cuda.get_device_properties("cuda").multi_processor_count
 
     desc_q = make_tensor_desc(q, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM_K, 1], block_shape=[SPLIT_M, HEAD_DIM_K])
@@ -934,7 +936,7 @@ def is_blackwell():
 @pytest.mark.parametrize("N_CTX", [256, 1024, 4 * 1024])
 @pytest.mark.parametrize("HEAD_DIM", [64, 128])
 @pytest.mark.parametrize("causal", [False, True])
-@pytest.mark.parametrize("dtype", [torch.float16])
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
 @pytest.mark.skipif(not is_blackwell(), reason="Gluon attention is only supported on Blackwell GPUs")
 def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype):
     device = "cuda"
@@ -945,12 +947,7 @@ def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype):
     v = (torch.empty((Z, H, N_CTX, HEAD_DIM), dtype=dtype, device=device).normal_(mean=0.0, std=0.5).requires_grad_())
     sm_scale = 0.5
 
-    M = torch.tril(torch.ones((N_CTX, N_CTX), device=device))
-    p = torch.matmul(q, k.transpose(2, 3)) * sm_scale
-    if causal:
-        p[:, :, M == 0] = float("-inf")
-    p = torch.softmax(p.float(), dim=-1).half()
-    ref_out = torch.matmul(p, v)
+    ref_out = torch.nn.functional.scaled_dot_product_attention(q, k, v, scale=sm_scale, is_causal=causal)
 
     tri_out, _ = attention_forward(q, k, v, causal, sm_scale)
     torch.testing.assert_close(ref_out, tri_out, atol=1e-2, rtol=0)
@@ -964,7 +961,7 @@ BATCH = [4]
 N_HEADS = [32]
 HEAD_DIM = [64, 128]
 causal = [False, True]
-providers = ["triton-fp16", "triton-fp8", "cudnn-fp16"]
+providers = ["triton-fp16", "triton-bf16", "triton-fp8", "cudnn-fp16", "cudnn-bf16"]
 N_CTX = [2**i for i in range(10, 17)]
 
 bench_configs = []
@@ -993,6 +990,8 @@ def bench(Z, H, N_CTX, HEAD_DIM, causal, provider):
     provider, dtype = provider.split("-")
     if dtype == "fp16":
         dtype = torch.float16
+    elif dtype == "bf16":
+        dtype = torch.bfloat16
     elif dtype == "fp8":
         dtype = torch.float8_e5m2
     else:
