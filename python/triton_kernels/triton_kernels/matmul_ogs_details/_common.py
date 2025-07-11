@@ -9,6 +9,18 @@ from triton.tools.tensor_descriptor import TensorDescriptor
 # -----------------------------------------------------------------------------
 
 
+@tl.constexpr_function
+def get_scaled_dot_format_string(dtype: tl.dtype):
+    mapping = {
+        tl.float16: "fp16",
+        tl.bfloat16: "bf16",
+        tl.uint8: "e2m1",
+        tl.float8e4nv: "e4m3",
+        tl.float8e5: "e5m2",
+    }
+    return mapping[dtype]
+
+
 @triton.jit
 def xcd_swizzle(pid, domain_size, XCD_SWIZZLE: tl.constexpr):
     """
@@ -134,8 +146,6 @@ def matmul_launch_metadata(grid, kernel, args):
     n_x_bytes = X.numel() * X.element_size()
     n_y_bytes = Y.numel() * Y.element_size()
     if hist is not None:
-        if not isinstance(args["X"], TensorDescriptor):
-            assert X.shape[0] == Y.shape[0] == 1, "batched mode not supported"
         assert n_tokens is not None
         n_expts_act = args["N_EXPTS_ACT"]
 

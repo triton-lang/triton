@@ -93,7 +93,8 @@ struct SharedMemory : public SideEffects::Resource::Base<SharedMemory> {
 
 // Convert a distributed layout to a linear encoding
 LinearEncodingAttr toLinearEncoding(RankedTensorType type);
-LinearEncodingAttr toLinearEncoding(Attribute layout, ArrayRef<int64_t> shape);
+LinearEncodingAttr toLinearEncoding(DistributedEncodingTrait layout,
+                                    ArrayRef<int64_t> shape);
 
 unsigned getTotalElemsPerThread(Type type);
 
@@ -274,14 +275,13 @@ llvm::SmallVector<unsigned>
 expandMatrixOrderWithBatch(llvm::ArrayRef<unsigned> o);
 
 // Return true if the two layouts represent the exact same mapping.
-bool areLayoutsEquivalent(ArrayRef<int64_t> shape, Attribute lhs,
-                          Attribute rhs);
+bool areLayoutsEquivalent(ArrayRef<int64_t> shape, DistributedEncodingTrait lhs,
+                          DistributedEncodingTrait rhs);
 
 // Return true if the innermost numElems are contiguous.
 bool isInnermostContiguous(MemDescType type, unsigned numElems);
 
-LinearLayout inferReshapeLinearLayout(ArrayRef<int64_t> srcShape,
-                                      Attribute srcEnc,
+LinearLayout inferReshapeLinearLayout(TensorOrMemDesc srcTy,
                                       ArrayRef<int64_t> dstShape);
 
 // Verify the types of operations that operate on memory.

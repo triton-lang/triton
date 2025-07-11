@@ -61,6 +61,55 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 """)
 
 
+@filecheck_test
+@gluon.jit
+def test_convert_layout_assert_trivial():
+    # CHECK: test_convert_layout_assert_trivial
+    parent_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 128], [32, 1], [4, 1], [0, 1])
+    slice_layout: ttgl.constexpr = ttgl.SliceLayout(1, parent_layout)
+    equiv_layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+
+    value = ttgl.arange(0, 128, layout=slice_layout)
+    # CHECK: ttg.convert_layout
+    ttgl.convert_layout(value, equiv_layout, assert_trivial=True)
+
+    value = ttgl.arange(0, 128, layout=ttgl.AutoLayout())
+    # CHECK: ttg.convert_layout
+    ttgl.convert_layout(value, equiv_layout, assert_trivial=True)
+
+
+def test_convert_layout_not_trivial():
+
+    @gluon.jit
+    def kernel():
+        src_layout: ttgl.constexpr = ttgl.BlockedLayout([2], [32], [4], [0])
+        dst_layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+
+        value = ttgl.arange(0, 128, layout=src_layout)
+        ttgl.convert_layout(value, dst_layout, assert_trivial=True)
+
+    with pytest.raises(CompilationError) as e:
+        run_parser(kernel)
+
+    assert "layout conversion from BlockedLayout(size_per_thread=(2)" in str(e.value.__cause__)
+    assert "to BlockedLayout(size_per_thread=(1)" in str(e.value.__cause__)
+    assert "is not trivial" in str(e.value.__cause__)
+
+    @gluon.jit
+    def kernel():
+        src_layout: ttgl.constexpr = ttgl.BlockedLayout([2], [32], [4], [0])
+        dst_layout: ttgl.constexpr = ttgl.AutoLayout()
+
+        value = ttgl.arange(0, 128, layout=src_layout)
+        ttgl.convert_layout(value, dst_layout, assert_trivial=True)
+
+    with pytest.raises(CompilationError) as e:
+        run_parser(kernel)
+
+    assert "layout conversion from BlockedLayout(size_per_thread=(2)" in str(e.value.__cause__)
+    assert "to AutoLayout() is not trivial" in str(e.value.__cause__)
+
+
 @gluon.jit
 def shared_memory_kernel(XBLOCK: ttgl.constexpr, YBLOCK: ttgl.constexpr, layout_a: ttgl.constexpr,
                          layout_b: ttgl.constexpr, smem_layout: ttgl.constexpr):
