@@ -199,10 +199,9 @@ class constexpr(base_value):
     """
 
     def __init__(self, value):
-        if isinstance(value, constexpr):
-            self.value = value.value
-        else:
-            self.value = value
+        while isinstance(value, constexpr):
+            value = value.value
+        self.value = value
         self.type = constexpr_type(value)
 
     def __repr__(self) -> str:
