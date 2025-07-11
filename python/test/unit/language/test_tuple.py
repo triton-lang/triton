@@ -247,3 +247,56 @@ def test_passing_tuple_to_make_tensor_descriptor(device, with_allocator):
     expected_x = 8 * x.clone()
     m_to_the_n[(1, )](x, x.size(), x.stride(), (2, 3), x.size(0))
     torch.testing.assert_close(x, expected_x, rtol=0, atol=0)
+
+
+def test_modifying_tuples():
+
+    from triton.language.core import constexpr_type
+
+    @triton.jit
+    def set_tuple_value_at_idx(tuple_value, idx: tl.constexpr, new_value, expected_type: tl.constexpr):
+        before_type: tl.constexpr = tuple_value[idx].type
+        tl.static_print(before_type, expected_type)
+        # Just sanity checking the calling test cases
+        tl.static_assert(before_type != expected_type)
+
+        # Make sure the underlying tuple_type matches the tuple's value's types
+        tl.static_assert(before_type == tuple_value.type[idx])
+        # Update the value to have a different type
+        tuple_value[idx] = new_value
+        # Make sure the tuple's type and the tuple's value's type were updated
+        tl.static_print(new_value, tuple_value[idx].type, expected_type)
+        tl.static_assert(tuple_value[idx].type == expected_type)
+        tl.static_assert(tuple_value.type[idx] == expected_type)
+
+    # i32 > fp32
+    set_tuple_value_at_idx[(1, )](
+        (5, 6, 7),  # these should all be i32
+        0,
+        32.1,
+        tl.float32,
+    )
+
+    # i32 > constexpr
+    set_tuple_value_at_idx[(1, )](
+        (5, 6, 7),
+        2,
+        tl.constexpr(20),
+        constexpr_type(20),
+    )
+
+    # constexpr > fp32
+    set_tuple_value_at_idx[(1, )](
+        (5, tl.constexpr(6), 7),
+        1,
+        32.1,
+        tl.float32,
+    )
+
+    # constexpr > i32 but with auto specialization of 1
+    set_tuple_value_at_idx[(1, )](
+        (5, 1, 7),
+        1,
+        20,
+        tl.int32,
+    )
