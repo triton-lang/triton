@@ -463,6 +463,11 @@ def test_sched_barrier(tmp_path: pathlib.Path):
         BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, GROUP_SIZE_M)
     proton.finalize()
 
+    print("======= ttir =======")
+    print(kernel.asm["ttir"])
+    print("======= llir ========")
+    print(kernel.asm["llir"])
+    print("======= amdgcn ========")
     asm = kernel.asm["amdgcn"]
     print(asm)
 
@@ -474,6 +479,8 @@ def test_sched_barrier(tmp_path: pathlib.Path):
                 assert "sched_barrier" in lines[i - 2]
             else:
                 assert "sched_barrier" in lines[i - 1]
+
+    assert False  # make sure this test fails so we can see the output
 
 
 def test_warp_spec(tmp_path: pathlib.Path):
