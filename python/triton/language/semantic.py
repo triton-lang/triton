@@ -1487,6 +1487,20 @@ class TritonSemantic(Generic[TensorTy]):
             lhs = self.cast(lhs, tl.float16)
             rhs = self.cast(rhs, tl.float16)
 
+        if lhs.dtype.is_fp8e5b16() or rhs.dtype.is_fp8e5b16():
+            if "fp8e5b16" in self.builder.options.deprecated_fp8_dot_operand_dtypes:
+                target = driver.active.get_current_target()
+                warnings.warn(f"The use of fp8e5b16 is not supported on {target.arch}")
+                lhs = self.cast(lhs, tl.float16)
+                rhs = self.cast(rhs, tl.float16)
+
+        if lhs.dtype.is_fp8e4b8() or rhs.dtype.is_fp8e4b8():
+            if "fp8e4b8" in self.builder.options.deprecated_fp8_dot_operand_dtypes:
+                target = driver.active.get_current_target()
+                warnings.warn(f"The use of fp8e4b8 is not supported on {target.arch}")
+                lhs = self.cast(lhs, tl.float16)
+                rhs = self.cast(rhs, tl.float16)
+
         if input_precision is None:
             input_precision = self.builder.options.default_dot_input_precision
 

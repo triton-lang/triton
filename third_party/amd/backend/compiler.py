@@ -37,8 +37,10 @@ class HIPOptions:
     debug: bool = False
     sanitize_overflow: bool = True
     arch: str = None
-    # We have native support for OCP fp8 variants since CNDA4/RDNA4. For earlier generations,
+    # We have native support for OCP fp8 variants since CDNA4/RDNA4. For earlier generations,
     # we software emulate the support for them.
+    # UZ fp8 variants (fp8e4b8 and fp8e5b16) are natively supported for CDNA3. For other
+    # architectures they are software emulated.
     supported_fp8_dtypes: Tuple[str] = ("fp8e4nv", "fp8e5", "fp8e5b16", "fp8e4b8")
     deprecated_fp8_dot_operand_dtypes: Tuple[str] = ()
     default_dot_input_precision: str = "ieee"
@@ -107,6 +109,11 @@ class HIPBackend(BaseBackend):
             allowed_dot_input_precisions = set(HIPOptions.allowed_dot_input_precisions)
             allowed_dot_input_precisions.update({'tf32'})
             args["allowed_dot_input_precisions"] = tuple(sorted(allowed_dot_input_precisions))
+
+        if self.target.arch == 'gfx950':
+            deprecated_fp8_dot_operand_dtypes = set(HIPOptions.deprecated_fp8_dot_operand_dtypes)
+            deprecated_fp8_dot_operand_dtypes.update({"fp8e5b16", "fp8e4b8"})
+            args["deprecated_fp8_dot_operand_dtypes"] = tuple(sorted(deprecated_fp8_dot_operand_dtypes))
 
         if "supported_fp8_dtypes" not in opts:
             supported_fp8_dtypes = set(HIPOptions.supported_fp8_dtypes)
