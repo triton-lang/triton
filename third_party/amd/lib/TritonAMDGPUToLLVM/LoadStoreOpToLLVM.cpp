@@ -170,11 +170,8 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
       return failure();
     }
     // Compute the blocked -> shared linear layout to check preconditions
-    auto shape = srcTy.getShape();
-    LinearLayout srcLayout =
-        triton::gpu::toLinearLayout(shape, srcTy.getEncoding());
-    LinearLayout sharedLayout =
-        triton::gpu::toLinearLayout(shape, dstTy.getEncoding());
+    LinearLayout srcLayout = triton::gpu::toLinearLayout(srcTy);
+    LinearLayout sharedLayout = triton::gpu::toLinearLayout(dstTy);
     LinearLayout srcToSharedLayout = srcLayout.invertAndCompose(sharedLayout);
 
     unsigned threadsPerWarp = lookupThreadsPerWarp(rewriter);
@@ -220,8 +217,7 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
 
     auto smemObj = mlir::LLVM::getSharedMemoryObjectFromStruct(
         loc, llDst, resElemTy, rewriter);
-    auto regLayout =
-        triton::gpu::toLinearLayout(srcTy.getShape(), srcTy.getEncoding());
+    auto regLayout = triton::gpu::toLinearLayout(srcTy);
 
     // The warp ID is always a scalar so we use the ThreadId from the first lane
     // to compute the warp ID which improves codegen. shuffleIdx will be lowered
@@ -266,12 +262,10 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
                                    flatSharedEnc, dstTy.getMemorySpace());
 
     // Create regToShared layout for the swizzled and flat encoding
-    auto regLayout =
-        triton::gpu::toLinearLayout(srcTy.getShape(), srcTy.getEncoding());
-    auto shape = dstTy.getShape();
+    auto regLayout = triton::gpu::toLinearLayout(srcTy);
 
-    auto sharedSwizz = triton::gpu::toLinearLayout(shape, dstTy.getEncoding());
-    auto sharedFlat = triton::gpu::toLinearLayout(shape, flatTy.getEncoding());
+    auto sharedSwizz = triton::gpu::toLinearLayout(dstTy);
+    auto sharedFlat = triton::gpu::toLinearLayout(flatTy);
 
     auto regToSharedSwizzled = regLayout.invertAndCompose(sharedSwizz);
     auto regToSharedFlat = regLayout.invertAndCompose(sharedFlat);

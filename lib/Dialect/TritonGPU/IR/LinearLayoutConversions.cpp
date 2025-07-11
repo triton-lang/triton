@@ -1169,6 +1169,23 @@ LinearLayout TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape,
   return result;
 }
 
+LinearLayout toLinearLayout(RankedTensorType type) {
+  return toLinearLayout(type.getShape(), type.getEncoding());
+}
+
+LinearLayout toLinearLayout(MemDescType type) {
+  return toLinearLayout(type.getShape(), type.getEncoding());
+}
+
+LinearLayout toLinearLayout(TensorOrMemDesc type) {
+  if (auto ranked = dyn_cast<RankedTensorType>(type)) {
+    return toLinearLayout(ranked);
+  } else {
+    auto memDesc = cast<MemDescType>(type);
+    return toLinearLayout(memDesc);
+  }
+}
+
 LinearLayout toLinearLayout(ArrayRef<int64_t> shape, Attribute layout) {
   auto *ctx = layout.getContext();
   return ctx->getLoadedDialect<TritonGPUDialect>()->toLinearLayout(shape,

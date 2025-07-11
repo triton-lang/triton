@@ -50,23 +50,28 @@ LinearEncodingAttr TritonGPUDialect::toLinearEncoding(ArrayRef<int64_t> shape,
   return linearEncoding;
 }
 
-LinearEncodingAttr toLinearEncoding(RankedTensorType type) {
-  return toLinearEncoding(type.getEncoding(), type.getShape());
-}
-
-LinearEncodingAttr toLinearEncoding(Attribute layout, ArrayRef<int64_t> shape) {
+LinearEncodingAttr toLinearEncoding(DistributedEncodingTrait layout,
+                                    ArrayRef<int64_t> shape) {
   auto *ctx = layout.getContext();
   return ctx->getLoadedDialect<TritonGPUDialect>()->toLinearEncoding(shape,
                                                                      layout);
 }
 
+LinearEncodingAttr toLinearEncoding(RankedTensorType type) {
+  auto *ctx = type.getContext();
+  return ctx->getLoadedDialect<TritonGPUDialect>()->toLinearEncoding(
+      type.getShape(), type.getEncoding());
+}
+
 unsigned getTotalElemsPerThread(Attribute layout, ArrayRef<int64_t> shape) {
-  return toLinearEncoding(layout, shape).getTotalElemsPerThread(shape);
+  return toLinearEncoding(cast<DistributedEncodingTrait>(layout), shape)
+      .getTotalElemsPerThread(shape);
 }
 
 SmallVector<unsigned> getElemsPerThread(Attribute layout,
                                         ArrayRef<int64_t> shape) {
-  return toLinearEncoding(layout, shape).getElemsPerThread(shape);
+  return toLinearEncoding(cast<DistributedEncodingTrait>(layout), shape)
+      .getElemsPerThread(shape);
 }
 
 SmallVector<unsigned> getElemsPerThread(Type type) {
@@ -86,12 +91,14 @@ unsigned getTotalElemsPerThread(Type type) {
 
 SmallVector<unsigned> getThreadsPerWarp(Attribute layout,
                                         ArrayRef<int64_t> shape) {
-  return toLinearEncoding(layout, shape).getThreadsPerWarp();
+  return toLinearEncoding(cast<DistributedEncodingTrait>(layout), shape)
+      .getThreadsPerWarp();
 }
 
 SmallVector<unsigned> getWarpsPerCTA(Attribute layout,
                                      ArrayRef<int64_t> shape) {
-  return toLinearEncoding(layout, shape).getWarpsPerCTA();
+  return toLinearEncoding(cast<DistributedEncodingTrait>(layout), shape)
+      .getWarpsPerCTA();
 }
 
 SmallVector<unsigned> getContigPerThread(RankedTensorType type) {
@@ -105,10 +112,8 @@ SmallVector<unsigned> getShapePerCTATile(RankedTensorType type) {
 bool isExpensiveView(Type srcType, Type dstType) {
   auto tensorSrcType = cast<RankedTensorType>(srcType);
   auto tensorDstType = cast<RankedTensorType>(dstType);
-  auto llSrc =
-      toLinearLayout(tensorSrcType.getShape(), tensorSrcType.getEncoding());
-  auto llDst =
-      toLinearLayout(tensorDstType.getShape(), tensorDstType.getEncoding());
+  auto llSrc = toLinearLayout(tensorSrcType);
+  auto llDst = toLinearLayout(tensorDstType);
   // In case there are replicated value we need to make sure the new and old
   // layout have matching masks.
   for (auto [srcMask, dstMask] :
@@ -2657,7 +2662,8 @@ struct TritonGPUInferLayoutInterface
       return failure();
 
     // Check whether the encodings are structurally the same.
-    if (!areLayoutsEquivalent(shape, expected, got)) {
+    if (!areLayoutsEquivalent(shape, cast<DistributedEncodingTrait>(expected),
+                              cast<DistributedEncodingTrait>(got))) {
       return emitOptionalError(loc, "Expected result encoding ", expected,
                                " but was ", got);
     }
@@ -2680,7 +2686,13 @@ struct TritonGPUInferLayoutInterface
     // If the legacy encoding failed use LinearLayouts.
     // Once LinearLayouts are more widely used, we can remove
     // inferReshapeOpLegacyEncoding and simply use LLs.
-    LinearLayout ll = inferReshapeLinearLayout(srcShape, srcEnc, dstShape);
+
+    // HACK: We create a dummy tensor type to pass to inferReshapeLinearLayout.
+    auto ctx = srcEnc.getContext();
+    auto fp32Type = IntegerType::get(ctx, 32, IntegerType::Unsigned);
+    auto srcTy = RankedTensorType::get(srcShape, fp32Type, srcEnc);
+    LinearLayout ll =
+        inferReshapeLinearLayout(cast<TensorOrMemDesc>(srcTy), dstShape);
 
     dstEnc = LinearEncodingAttr::get(srcEnc.getContext(), ll);
     return success();
@@ -2700,7 +2712,9 @@ struct TritonGPUInferLayoutInterface
 
       Attribute splitEnc;
       auto result = inferSplitOpEncoding(parent, splitEnc, joinedShape, loc);
-      if (succeeded(result) && areLayoutsEquivalent(shape, splitEnc, srcEnc)) {
+      if (succeeded(result) &&
+          areLayoutsEquivalent(shape, cast<DistributedEncodingTrait>(splitEnc),
+                               cast<DistributedEncodingTrait>(srcEnc))) {
         dstEnc = parent;
         return success();
       }
@@ -2888,7 +2902,7 @@ struct TritonGPUVerifyTensorLayoutInterface
                        << rankedTy.getShape()
                        << " which is not a power of two.";
     }
-    auto ll = toLinearLayout(rankedTy.getShape(), layout);
+    auto ll = toLinearLayout(rankedTy);
     ModuleOp module = op->getParentOfType<ModuleOp>();
 
     // Number of threads per warp.
@@ -2957,19 +2971,20 @@ static std::string paddedString(int value, int max) {
   return str;
 }
 
-std::string getSharedLayoutStr(RankedTensorType tensorType,
-                               bool useHWPointOfView) {
-  auto layout = tensorType.getEncoding();
-  if (!layout)
+std::string getSharedLayoutStr(RankedTensorType type, bool useHWPointOfView) {
+  if (!type)
     return "";
 
-  LinearLayout ll = triton::gpu::toLinearLayout(tensorType.getShape(), layout);
+  // This RankedTensorType is a MemDescType (?!)
+  LinearLayout ll = triton::gpu::toLinearLayout(type);
 
-  StringAttr kOffset = StringAttr::get(tensorType.getContext(), "offset");
-  StringAttr kBlock = StringAttr::get(tensorType.getContext(), "block");
-  int64_t tensorSize = product(tensorType.getShape());
-  unsigned numBlocks = getNumCTAs(layout);
+  StringAttr kOffset = StringAttr::get(type.getContext(), "offset");
+  StringAttr kBlock = StringAttr::get(type.getContext(), "block");
+  int64_t tensorSize = product(type.getShape());
+  auto enc = type.getEncoding();
+  unsigned numBlocks = getNumCTAs(enc);
   int32_t blockSize = tensorSize / numBlocks;
+  auto shape = type.getShape();
 
   // elementMapping is for the non-hw layout, offsetMapping for hw-layout
   std::vector<std::string> elementMapping(tensorSize);
@@ -3006,7 +3021,7 @@ std::string getSharedLayoutStr(RankedTensorType tensorType,
           sharedInfo += ",";
           value += ":";
         }
-        auto index = paddedString(outputs[i].second, tensorType.getDimSize(i));
+        auto index = paddedString(outputs[i].second, shape[i]);
         sharedInfo += index;
         value += index;
       }
@@ -3022,13 +3037,13 @@ std::string getSharedLayoutStr(RankedTensorType tensorType,
   std::string layoutStr;
 
   if (!useHWPointOfView) {
-    int rank = tensorType.getRank();
+    int rank = type.getRank();
     bool newLine = true;
     for (int i = 0; i < tensorSize; i++) {
-      auto indices = delinearizeIndex(i, tensorType.getShape());
+      auto indices = delinearizeIndex(i, shape);
       int numOpenBracket = 0;
       for (int j = rank - 1; j >= 0; j--) {
-        if (indices[j] % tensorType.getDimSize(j) != 0)
+        if (indices[j] % shape[j] != 0)
           break;
         layoutStr += "[";
         numOpenBracket++;
@@ -3040,13 +3055,13 @@ std::string getSharedLayoutStr(RankedTensorType tensorType,
       }
 
       layoutStr += elementMapping[i];
-      auto nextIndices = delinearizeIndex(i + 1, tensorType.getShape());
+      auto nextIndices = delinearizeIndex(i + 1, shape);
       for (int j = rank - 1; j >= 0; j--) {
-        if (nextIndices[j] % tensorType.getDimSize(j) != 0)
+        if (nextIndices[j] % shape[j] != 0)
           break;
         layoutStr += "]";
       }
-      if (nextIndices.back() % tensorType.getShape().back() == 0) {
+      if (nextIndices.back() % shape.back() == 0) {
         layoutStr += "\n";
         newLine = true;
       } else {
@@ -3081,7 +3096,7 @@ std::string getDistributedLayoutStr(RankedTensorType tensorType,
   StringAttr kWarp = StringAttr::get(tensorType.getContext(), "warp");
   StringAttr kBlock = StringAttr::get(tensorType.getContext(), "block");
 
-  LinearLayout ll = triton::gpu::toLinearLayout(tensorType.getShape(), layout);
+  LinearLayout ll = toLinearLayout(tensorType);
   int64_t tensorSize = product(tensorType.getShape());
   std::vector<std::string> elementMapping(tensorSize);
   std::vector<std::string> threadMapping;
@@ -3229,10 +3244,11 @@ std::string mlir::triton::gpu::getLayoutStr(RankedTensorType tensorType,
 
   // tensorType is needed later on (e.g., getDimSize(j)), so we still have to
   // pass it as a param
+  // TODO: Pass TensorOrMemDesc instead of RankedTensorType in
+  // triton-tensor-layout.cpp
   if (mlir::isa<SharedEncodingTrait>(layout)) {
     return getSharedLayoutStr(tensorType, useHWPointOfView);
-  } else if (auto distributedLayout =
-                 mlir::dyn_cast<DistributedEncodingTrait>(layout)) {
+  } else if (mlir::isa<DistributedEncodingTrait>(layout)) {
     return getDistributedLayoutStr(tensorType, useHWPointOfView);
   }
 
@@ -3378,8 +3394,9 @@ int triton::gpu::lookupThreadsPerWarp(OpBuilder &rewriter) {
   return triton::gpu::TritonGPUDialect::getThreadsPerWarp(cast<ModuleOp>(op));
 }
 
-bool triton::gpu::areLayoutsEquivalent(ArrayRef<int64_t> shape, Attribute lhs,
-                                       Attribute rhs) {
+bool triton::gpu::areLayoutsEquivalent(ArrayRef<int64_t> shape,
+                                       DistributedEncodingTrait lhs,
+                                       DistributedEncodingTrait rhs) {
   auto lhsLL = triton::gpu::toLinearLayout(shape, lhs);
   auto rhsLL = triton::gpu::toLinearLayout(shape, rhs);
   return lhsLL == rhsLL;
@@ -3390,7 +3407,7 @@ bool triton::gpu::isInnermostContiguous(MemDescType type, unsigned numElems) {
   Attribute enc = type.getEncoding();
   MLIRContext *ctx = enc.getContext();
 
-  LinearLayout actual = toLinearLayout(shape, enc);
+  LinearLayout actual = toLinearLayout(type);
   StringAttr fastestIn = *actual.getInDimNames().begin();
 
   // Flatten actual outs in reverse order to produce a row-major flattening
@@ -3403,12 +3420,11 @@ bool triton::gpu::isInnermostContiguous(MemDescType type, unsigned numElems) {
   return actual.getNumConsecutiveInOut() >= numElems;
 }
 
-LinearLayout triton::gpu::inferReshapeLinearLayout(ArrayRef<int64_t> srcShape,
-                                                   Attribute srcEnc,
+LinearLayout triton::gpu::inferReshapeLinearLayout(TensorOrMemDesc srcTy,
                                                    ArrayRef<int64_t> dstShape) {
-  auto *ctx = srcEnc.getContext();
-  auto src = toLinearLayout(srcShape, srcEnc);
-  assert(product(srcShape) == product(dstShape));
+  auto *ctx = srcTy.getContext();
+  auto src = toLinearLayout(srcTy);
+  assert(product(srcTy.getShape()) == product(dstShape));
   auto dst = reshapeLayout(ctx, src, dstShape);
   return dst;
 }

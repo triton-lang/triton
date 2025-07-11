@@ -54,10 +54,8 @@ struct ClipAsyncCopySizePerThread
     // Note this can be further optimized, as copyContigSize can be even
     // smaller when lowering, depending on contiguity and mask alignment
     // (see AsyncCopyGlobalToLocalOpConversion)
-    LinearLayout regLayout =
-        triton::gpu::toLinearLayout(srcTy.getShape(), blockedEnc);
-    LinearLayout sharedLayout =
-        triton::gpu::toLinearLayout(srcTy.getShape(), sharedEnc);
+    LinearLayout regLayout = triton::gpu::toLinearLayout(srcTy);
+    LinearLayout sharedLayout = triton::gpu::toLinearLayout(dstTy);
     auto copyContigSize =
         regLayout.invertAndCompose(sharedLayout).getNumConsecutiveInOut();
 
