@@ -1233,3 +1233,28 @@ def test_auto_layout():
     z = x + y
     # CHECK: (tensor<16x8xi32, #gluon.auto_encoding>) -> tensor<16xi32, #gluon.auto_encoding
     ttgl.sum(z, axis=1)
+
+    # CHECK: tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #gluon.auto_encoding>
+    ttgl.arange(0, 32)
+
+
+@filecheck_test
+@gluon.jit
+def test_auto_layout_broadcast():
+    # CHECK: [[BLOCKED:#.*]] = #ttg.blocked
+    # CHECK: [[X:%.*]] = arith.constant dense<1> : tensor<16x1xi32, #gluon.auto_encoding>
+    # CHECK: [[Y:%.*]] = arith.constant dense<2> : tensor<1x16xi32, [[BLOCKED]]>
+    x = ttgl.full([16, 1], 1, ttgl.int32, layout=ttgl.AutoLayout())
+    y = ttgl.full([1, 16], 2, ttgl.int32, layout=ttgl.BlockedLayout([1, 1], [1, 32], [4, 1], [1, 0]))
+
+    # CHECK: [[XCVT:%.*]] = ttg.convert_layout [[X]] : tensor<16x1xi32, #gluon.auto_encoding> -> tensor<16x1xi32, [[BLOCKED]]>
+    # CHECK: [[XBCAST:%.*]] = tt.broadcast [[XCVT]]
+    # CHECK: [[YBCAST:%.*]] = tt.broadcast [[Y]]
+    # CHECK: arith.addi [[XBCAST]], [[YBCAST]] : tensor<16x16xi32, [[BLOCKED]]>
+    _ = x + y
+
+    # CHECK: [[XCVT2:%.*]] = ttg.convert_layout [[X]] : tensor<16x1xi32, #gluon.auto_encoding> -> tensor<16x1xi32, [[BLOCKED]]>
+    # CHECK: [[YBCAST2:%.*]] = tt.broadcast [[Y]]
+    # CHECK: [[XBCAST2:%.*]] = tt.broadcast [[XCVT2]]
+    # CHECK: arith.muli [[YBCAST2]], [[XBCAST2]] : tensor<16x16xi32, [[BLOCKED]]>
+    _ = y * x

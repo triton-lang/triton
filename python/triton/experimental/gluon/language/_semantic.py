@@ -112,7 +112,14 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         lhs_shape = lhs_ty.get_block_shapes()
         rhs_shape = rhs_ty.get_block_shapes()
         ret_shape = self._broadcast_shapes(lhs_shape, rhs_shape)
-        if lhs_ty.layout != rhs_ty.layout:
+
+        is_lhs_auto = isinstance(lhs_ty.layout, AutoLayout)
+        is_rhs_auto = isinstance(rhs_ty.layout, AutoLayout)
+        if is_lhs_auto and not is_rhs_auto:
+            lhs = self.convert_layout(lhs, rhs_ty.layout)
+        elif is_rhs_auto and not is_lhs_auto:
+            rhs = self.convert_layout(rhs, lhs_ty.layout)
+        elif lhs_ty.layout != rhs_ty.layout:
             raise ValueError(f"Layout mismatch in broadcast: {lhs_ty.layout} vs {rhs_ty.layout}")
 
         lhs = self.broadcast_impl_shape(lhs, ret_shape)
@@ -121,6 +128,8 @@ class GluonSemantic(TritonSemantic[TensorTy]):
 
     def arange(self, start, end, layout):
         shape = [end - start]
+        if layout is None:
+            layout = AutoLayout()
         ret_ty = ttgl.distributed_type(ttgl.int32, shape, layout)
         return super().arange(start, end, ret_ty=ret_ty)
 
@@ -138,7 +147,7 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         scalar = self.make_scalar(value, dtype)
         return self.splat(scalar, shape, layout)
 
-    def convert_layout(self, value, layout, assert_trivial):
+    def convert_layout(self, value, layout, assert_trivial=False):
         ty = value.type
         _check(isinstance(ty, ttgl.distributed_type),
                lambda: f"expected convert_layout input to be a distributed_type but got: {ty!r}")
