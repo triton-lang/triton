@@ -7,10 +7,6 @@ from .tensor_details.layout import Layout, StridedLayout
 from .target_info import cuda_capability_geq
 
 
-def make_tensor_descriptor(tensor, shape, strides, block_shape):
-    return TensorDescriptor(tensor, shape, strides, block_shape)
-
-
 @dataclass
 class Storage:
 
@@ -64,7 +60,7 @@ class Storage:
             pad = 128
             shape[-1] = (shape[-1] + pad - 1) // pad * pad
         block_shape = self.layout.swizzle_block_shape(block_shape)
-        return make_tensor_descriptor(self.data, shape, strides, block_shape)
+        return TensorDescriptor(self.data, shape, strides, block_shape)
 
 
 @dataclass
@@ -174,6 +170,12 @@ class Bitmatrix(Tensor):
         out_ret = self.scratchpad[:n_cols]
         self.scratchpad = None  # throw error if we try to sum again
         return sum_bitmatrix_rows(self, out_ret, partials_block_size)
+
+
+def get_layout(tensor: torch.Tensor | Tensor):
+    if isinstance(tensor, Tensor):
+        return tensor.storage.layout
+    return StridedLayout
 
 
 def wrap_torch_tensor(torch_tensor, dtype=None):
