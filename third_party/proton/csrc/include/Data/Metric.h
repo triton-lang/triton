@@ -287,8 +287,8 @@ public:
     this->values[DeviceType] = deviceType;
     this->values[TimeShiftCost] = timeShiftCost;
     this->values[InitialTime] = initialTime;
-    this->values[preFinalTime] = preFinalTime;
-    this->values[postFinalTime] = postFinalTime;
+    this->values[PreFinalTime] = preFinalTime;
+    this->values[PostFinalTime] = postFinalTime;
   }
 
   virtual const std::string getName() const { return "CycleMetric"; }
