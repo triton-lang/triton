@@ -83,9 +83,9 @@ tt.func @invalid_non_static_offset(%arg0: tensor<256x128xi32, #blocked1> {tt.div
 
 // Invalid layout 1
 #dst_layout = #ttg.linear<{register=[[0, 1], [0, 2], [0, 8], [0, 16], [0, 64], [64, 0]], lane=[[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [0, 4]], warp=[[0, 32], [32, 0]], block=[]}>
-#src_layout = #ttg.linear<{register=[[0, 0], [0, 1], [0, 2], [0, 8], [0, 16], [0, 64], [0, 128], [64, 0], [128, 0]], lane=[[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [0, 4]], warp=[[0, 32], [32, 0]], block=[]}>
-tt.func @invalid_register_base(%arg0: tensor<256x256xi32, #src_layout> {tt.divisibility = 16 : i32}) {
-  // expected-error @+1 {{Register basis must match on a CTA tile between source and destination}}
+#src_layout = #ttg.linear<{register=[[0, 1], [0, 2], [0, 8], [0, 16], [0, 64], [0, 128], [64, 0], [128, 0]], lane=[[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [0, 4], [0, 0]], warp=[[0, 32], [32, 0]], block=[]}>
+tt.func @invalid_lane_warp_basis(%arg0: tensor<256x256xi32, #src_layout> {tt.divisibility = 16 : i32}) {
+  // expected-error @+1 {{Lane and warp dim basis must match between source and destination layout}}
   %2 = amdgpu.extract_slice %arg0 [0, 0] : tensor<256x256xi32, #src_layout> to tensor<128x128xi32, #dst_layout>
   tt.return
 }
@@ -93,10 +93,13 @@ tt.func @invalid_register_base(%arg0: tensor<256x256xi32, #src_layout> {tt.divis
 // -----
 
 // Invalid layout 2
-#dst_layout = #ttg.linear<{register=[[0, 1], [0, 2], [0, 8], [0, 16], [0, 64], [64, 0]], lane=[[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [0, 4]], warp=[[0, 32], [32, 0]], block=[]}>
-#src_layout = #ttg.linear<{register=[[0, 1], [0, 2], [0, 8], [0, 16], [0, 64], [0, 128], [64, 0], [128, 0]], lane=[[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [0, 4], [0, 0]], warp=[[0, 32], [32, 0]], block=[]}>
-tt.func @invalid_lane_warp_basis(%arg0: tensor<256x256xi32, #src_layout> {tt.divisibility = 16 : i32}) {
-  // expected-error @+1 {{Lane and warp dim basis must match between source and destination layout}}
-  %2 = amdgpu.extract_slice %arg0 [0, 0] : tensor<256x256xi32, #src_layout> to tensor<128x128xi32, #dst_layout>
-  tt.return
+// Case when src and dst layouts have same CTA tile shape, but different number of registers
+#src_layout = #ttg.linear<{register=[[1, 0], [2, 0]], lane=[[4, 0], [8, 0], [16, 0], [0, 1], [0, 2], [0, 4]], warp=[[0, 0], [0, 8]], block=[]}>
+#dst_layout = #ttg.linear<{register=[[1, 0]], lane=[[4, 0], [8, 0], [16, 0], [0, 1], [0, 2], [0, 4]], warp=[[2, 0], [0, 8]], block=[]}>
+module attributes {"ttg.compute-capability" = 0 : i32, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  tt.func @invalid_concat(%arg0: tensor<64x32xi32, #src_layout>) {
+    // expected-error @+1 {{Register basis must match on a CTA tile between source and destination.}}
+    %1 = amdgpu.extract_slice %arg0 [0, 0] : tensor<64x32xi32, #src_layout> to tensor<32x16xi32, #dst_layout>
+    tt.return
+  }
 }
