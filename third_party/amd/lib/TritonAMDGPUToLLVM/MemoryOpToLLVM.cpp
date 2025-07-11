@@ -213,6 +213,8 @@ private:
     auto bitwidth = typeConverter->convertType(dstTy.getElementType())
                         .getIntOrFloatBitWidth();
 
+    // FP4 is represented as i8 and, when packed along K, can be
+    // transposed using ds_read_tr8 which doesn't change packing.
     if (bitwidth != 16 && bitwidth != 8) {
       return false;
     }
