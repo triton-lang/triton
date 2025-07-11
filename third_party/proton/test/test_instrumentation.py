@@ -450,7 +450,7 @@ def test_sched_barrier(tmp_path: pathlib.Path):
     grid = lambda META: (triton.cdiv(M, 128) * triton.cdiv(N, 256), )
 
     temp_file = tmp_path / "test_sched_barrier.hatchet"
-    mode = proton.mode.Default(metric_type="cycle", optimizations="sched_barriers")
+    mode = proton.mode.Default(metric_type="cycle")
     proton.start(str(temp_file.with_suffix("")), backend="instrumentation", mode=mode)
 
     grid = lambda META: (triton.cdiv(M, BLOCK_SIZE_M) * triton.cdiv(N, BLOCK_SIZE_N), )
