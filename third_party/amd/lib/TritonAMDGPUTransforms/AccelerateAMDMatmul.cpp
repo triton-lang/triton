@@ -471,7 +471,8 @@ public:
     ttg::AMDMfmaEncodingAttr mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
         oldRetType.getContext(),
         /*version*/ mfmaVersion, warpsPerTile,
-        /*instrShape*/ mDim, nDim, /*isTransposed=*/true, CTALayout, mfmaAccType);
+        /*instrShape*/ mDim, nDim, /*isTransposed=*/true, CTALayout,
+        mfmaAccType);
 
     // convert accumulator
     auto oldAcc = dotOp.getC();
