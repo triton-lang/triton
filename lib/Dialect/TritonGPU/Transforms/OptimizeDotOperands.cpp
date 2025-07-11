@@ -173,8 +173,9 @@ static Attribute inferSrcEncodingMemDescReshape(ArrayRef<int64_t> srcShape,
       mmaEncoding.getFp4Padded(), CTALayout);
   // Big guns, check linear layouts are equivalent
   auto allocShape = dstType.getAllocShape();
-  auto srcLL = toLinearLayout(srcShape, srcEncoding, allocShape);
-  auto dstLL = toLinearLayout(dstShape, dstEncoding, allocShape);
+  // We disallow reshaping memdesc_subviews in the verifier
+  auto srcLL = toLinearLayout(srcShape, srcEncoding, srcShape);
+  auto dstLL = toLinearLayout(dstShape, dstEncoding, dstShape);
   auto ctx = dstEncoding.getContext();
   if (reshapeLayout(ctx, srcLL, dstShape) != dstLL) {
     return {};

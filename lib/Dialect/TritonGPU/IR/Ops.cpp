@@ -473,6 +473,10 @@ LogicalResult MemDescReshapeOp::verify() {
   if (dstType.getElementType() != srcType.getElementType()) {
     return emitError("result element type must match src element type");
   }
+  auto srcShape = srcType.getShape();
+  if (srcType.getAllocShape().take_front(srcShape.size()) != srcShape) {
+    return emitError("NYI: memdesc_reshape of memdesc_subviews");
+  }
 
   // Infer the dst layout from the source and verify that it is equivalent.
   auto srcEncoding = srcType.getEncoding();
