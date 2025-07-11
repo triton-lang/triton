@@ -174,8 +174,8 @@ proton.finalize()
 import triton.profiler as proton
 from typing import NamedTuple
 
-# hook: When hook="launch", it enables proton to invoke launch_metadata function before launching the GPU kernel
-proton.start("profile_name", hook="launch")
+# hook: When hook="triton", it enables proton to invoke launch_metadata function before launching the GPU kernel
+proton.start("profile_name", hook="triton")
 
 def metadata_fn(
     grid: tuple,
