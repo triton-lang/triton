@@ -26,14 +26,10 @@ def _check_supported_semantic(semantic):
 
 
 def enable_semantic(semantic_name: str):
-    if semantic_name not in _ALL_SEMANTICS:
-        raise ValueError(f"Semantic '{semantic_name}' is not available. Available semantics: {_ALL_SEMANTICS.keys()}")
     _SEMANTICS.add(_ALL_SEMANTICS[semantic_name])
 
 
 def disable_semantic(semantic_name: str):
-    if semantic_name not in _ALL_SEMANTICS:
-        raise ValueError(f"Semantic '{semantic_name}' is not available. Available semantics: {_ALL_SEMANTICS.keys()}")
     _SEMANTICS.remove(_ALL_SEMANTICS[semantic_name])
 
 
