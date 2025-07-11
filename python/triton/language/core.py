@@ -1289,10 +1289,6 @@ class tuple(base_value):
 
         self.type = type or tuple_type([get_type(x) for x in self.values])
 
-    def copy(self) -> tuple:
-        # __init__ creates a new list
-        return tuple(self.values, type=self.type)
-
     def __getitem__(self, idx: constexpr):
         if isinstance(idx, int):
             idx = constexpr(idx)

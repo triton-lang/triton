@@ -1267,9 +1267,6 @@ class CodeGenerator(ast.NodeVisitor):
             if '_generator' in sig.parameters:
                 extra_kwargs['_generator'] = self
             try:
-                # Copy tuples to prevent builtins from modifying in place
-                args = [x.copy() if isinstance(x, language.tuple) else x for x in args]
-                kws = {k: v.copy() if isinstance(v, language.tuple) else v for k, v in kws.items()}
                 ret = fn(*args, **extra_kwargs, **kws)
                 # builtin functions return plain tuples for readability
                 if isinstance(ret, tuple):
