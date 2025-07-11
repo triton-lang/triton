@@ -120,9 +120,8 @@ public:
       Attribute distLayout = getTmemCompatibleLayout(
           mDim, splitNSize, splitOp.getOutLHS().getType(), numWarps);
 
-      RankedTensorType newLoadType = RankedTensorType::get(
-          splitOp.getOutLHS().getType().getShape(),
-          splitOp.getOutLHS().getType().getElementType(), distLayout);
+      RankedTensorType newLoadType =
+          splitOp.getOutLHS().getType().cloneWithEncoding(distLayout);
 
       // Generate the load and convert_layout back to the original layout.
       auto load =
@@ -183,9 +182,7 @@ public:
 
     Attribute distLayout = getTmemCompatibleLayout(
         mDim, splitNSize, joinOp.getLhs().getType(), numWarps);
-    auto newStoreType = RankedTensorType::get(
-        joinOp.getLhs().getType().getShape(),
-        joinOp.getLhs().getType().getElementType(), distLayout);
+    auto newStoreType = joinOp.getLhs().getType().cloneWithEncoding(distLayout);
 
     // First slice.
     auto subSlice0 = b.create<TMEMSubSliceOp>(loc, tmem, 0, splitNSize);
@@ -255,8 +252,7 @@ public:
     if (newLayout == oldType.getEncoding())
       return failure();
 
-    auto newType = RankedTensorType::get(oldType.getShape(),
-                                         oldType.getElementType(), newLayout);
+    auto newType = oldType.cloneWithEncoding(newLayout);
     tmemLoadOp.getResult().setType(newType);
     OpBuilder builder(tmemLoadOp);
     builder.setInsertionPointAfter(tmemLoadOp);

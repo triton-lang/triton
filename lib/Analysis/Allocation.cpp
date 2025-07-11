@@ -42,8 +42,8 @@ static unsigned getBitwidth(RankedTensorType ty) {
 static unsigned getNumScratchElemsSwizzledCvt(RankedTensorType srcTy,
                                               RankedTensorType dstTy) {
   auto *ctx = srcTy.getContext();
-  auto srcLayout = gpu::toLinearLayout(srcTy.getShape(), srcTy.getEncoding());
-  auto dstLayout = gpu::toLinearLayout(dstTy.getShape(), dstTy.getEncoding());
+  auto srcLayout = gpu::toLinearLayout(srcTy);
+  auto dstLayout = gpu::toLinearLayout(dstTy);
   srcLayout = actionRemoveBroadcastedRegs(srcLayout).apply(srcLayout);
   dstLayout = actionRemoveBroadcastedRegs(dstLayout).apply(dstLayout);
   auto bitwidth = getBitwidth(srcTy);
@@ -109,8 +109,8 @@ getScratchCvtInOutVecLengths(RankedTensorType srcTy, RankedTensorType dstTy) {
   Attribute srcLayout = srcTy.getEncoding();
   Attribute dstLayout = dstTy.getEncoding();
 
-  auto srcLinAttr = gpu::toLinearEncoding(srcLayout, srcTy.getShape());
-  auto dstLinAttr = gpu::toLinearEncoding(dstLayout, dstTy.getShape());
+  auto srcLinAttr = gpu::toLinearEncoding(srcTy);
+  auto dstLinAttr = gpu::toLinearEncoding(dstTy);
   auto inOrd = srcLinAttr.getOrder();
   auto outOrd = dstLinAttr.getOrder();
 

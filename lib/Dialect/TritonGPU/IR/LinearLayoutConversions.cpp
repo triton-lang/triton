@@ -438,25 +438,56 @@ AMDMfmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
           {outDimNames[order[0]], outDimNames[order[1]]});
   } else {
     assert(getMDim() == 16);
-    // For mfma with 16x16 output, each of the 64 threads holds 4 elements.
-    //
-    // For the register (i.e., element) dimension, these 4 elements are along
-    // the matrix C's M dimension, with 4 consecutive elements spanning 4 rows.
-    //
-    // For the lane (i.e., thread) dimension, these threads are along the
-    // matrix C's N dimension, with 16 consecutive threads covering a whole
-    // row and the next 16 threads start after a gap spanning 4 rows.
-    tileLayout = LinearLayout(
-        {{kRegister, {{0, 1}, {0, 2}}},
-         {kLane, {{1, 0}, {2, 0}, {4, 0}, {8, 0}, /*gap*/ {0, 4}, {0, 8}}}},
-        {outDimNames[order[0]], outDimNames[order[1]]});
-    // For mfma.transposed layout, the element ownership among threads are
-    // "transposed" within each warp.
-    if (getIsTransposed())
+    auto elementType = getElementType();
+    if (!(elementType && elementType->isF64())) {
+      // For mfma with 16x16 output (<= 32 bits), each of the 64 threads holds 4
+      // elements.
+      //
+      // For the register (i.e., element) dimension, these 4 elements are along
+      // the matrix C's M dimension, with 4 consecutive elements spanning 4
+      // rows.
+      //
+      // For the lane (i.e., thread) dimension, these threads are along the
+      // matrix C's N dimension, with 16 consecutive threads covering a whole
+      // row and the next 16 threads start after a gap spanning 4 rows.
       tileLayout = LinearLayout(
-          {{kRegister, {{1, 0}, {2, 0}}},
-           {kLane, {{0, 1}, {0, 2}, {0, 4}, {0, 8}, /*gap*/ {4, 0}, {8, 0}}}},
+          {{kRegister, {{0, 1}, {0, 2}}},
+           {kLane, {{1, 0}, {2, 0}, {4, 0}, {8, 0}, /*gap*/ {0, 4}, {0, 8}}}},
           {outDimNames[order[0]], outDimNames[order[1]]});
+      // For mfma.transposed layout, the element ownership among threads are
+      // "transposed" within each warp.
+      if (getIsTransposed())
+        tileLayout = LinearLayout(
+            {{kRegister, {{1, 0}, {2, 0}}},
+             {kLane, {{0, 1}, {0, 2}, {0, 4}, {0, 8}, /*gap*/ {4, 0}, {8, 0}}}},
+            {outDimNames[order[0]], outDimNames[order[1]]});
+
+    } else {
+      // For 64 bit mfma with 16x16 output, each of the 64 threads holds 4
+      // elements across 8 VGPRs. each 64 bit element is split across pairs of 2
+      // VGPRs each. The first VGPR holds the first 32 bits and second holding
+      // the last 32 bits.
+      //
+      // For the register (i.e., element) dimension, these 4 elements are along
+      // the matrix C's M dimension, with 4 consecutive elements spanning 4
+      // rows.
+      //
+      // For the lane (i.e., thread) dimension, these threads are along the
+      // matrix C's N dimension, with each group of 16 consecutive threads
+      // covering a whole adjacent row. Unlike the <=32 bit cases, there's no
+      // row gaps between the groups.
+      tileLayout = LinearLayout(
+          {{kRegister, {{0, 4}, {0, 8}}},
+           {kLane, {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {0, 1}, {0, 2}}}},
+          {outDimNames[order[0]], outDimNames[order[1]]});
+      // For mfma.transposed layout, the element ownership among threads are
+      // "transposed" within each warp.
+      if (getIsTransposed())
+        tileLayout = LinearLayout(
+            {{kRegister, {{4, 0}, {8, 0}}},
+             {kLane, {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {1, 0}, {2, 0}}}},
+            {outDimNames[order[0]], outDimNames[order[1]]});
+    }
   }
 
   // Instead of defining the layout on a CTA tile and using the
@@ -1167,6 +1198,23 @@ LinearLayout TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape,
 
   llCache.set(std::move(key), result);
   return result;
+}
+
+LinearLayout toLinearLayout(RankedTensorType type) {
+  return toLinearLayout(type.getShape(), type.getEncoding());
+}
+
+LinearLayout toLinearLayout(MemDescType type) {
+  return toLinearLayout(type.getShape(), type.getEncoding());
+}
+
+LinearLayout toLinearLayout(TensorOrMemDesc type) {
+  if (auto ranked = dyn_cast<RankedTensorType>(type)) {
+    return toLinearLayout(ranked);
+  } else {
+    auto memDesc = cast<MemDescType>(type);
+    return toLinearLayout(memDesc);
+  }
 }
 
 LinearLayout toLinearLayout(ArrayRef<int64_t> shape, Attribute layout) {

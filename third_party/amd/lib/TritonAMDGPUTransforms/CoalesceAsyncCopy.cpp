@@ -69,10 +69,8 @@ struct CoalesceAsyncCopyWrites
     // layout e.g. if the order of the blocked and shared encoding is different
     // we can only load one element at a time or if the shared encoding is
     // swizzled we cannot exceed the vector size of the swizzling pattern
-    LinearLayout regLayout =
-        triton::gpu::toLinearLayout(srcTy.getShape(), blockedEnc);
-    LinearLayout sharedLayout =
-        triton::gpu::toLinearLayout(srcTy.getShape(), sharedEnc);
+    LinearLayout regLayout = triton::gpu::toLinearLayout(srcTy);
+    LinearLayout sharedLayout = triton::gpu::toLinearLayout(dstTy);
     auto regToSharedLayout = regLayout.invertAndCompose(sharedLayout);
     loadContig = std::min<unsigned>(loadContig,
                                     regToSharedLayout.getNumConsecutiveInOut());
@@ -113,8 +111,7 @@ struct CoalesceAsyncCopyWrites
     // Convert layout of src, mask and other to new encoding
     auto convertLayout = [&rewriter](auto loc, Value old, auto newEnc) {
       auto oldTy = cast<RankedTensorType>(old.getType());
-      RankedTensorType newSrcTy = RankedTensorType::get(
-          oldTy.getShape(), oldTy.getElementType(), newEnc);
+      RankedTensorType newSrcTy = oldTy.cloneWithEncoding(newEnc);
       return rewriter.create<ttg::ConvertLayoutOp>(loc, newSrcTy, old);
     };
 

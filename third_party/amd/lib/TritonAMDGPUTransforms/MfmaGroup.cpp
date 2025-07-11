@@ -127,6 +127,7 @@ MfmaDatabase::MfmaDatabase(MLIRContext *context) {
       TRITON_MFMA_v2to4(m, n, aET, bET, symbol, k, kBase)
 
   Builder b(context);
+  auto f64T = b.getF64Type();
   auto f32T = b.getF32Type();
   auto tf32T = b.getTF32Type();
   auto f16T = b.getF16Type();
@@ -139,6 +140,13 @@ MfmaDatabase::MfmaDatabase(MLIRContext *context) {
   auto fp4T = b.getType<Float4E2M1FNType>();
 
   mfmaMap = {
+      // f64 inputs
+      // mfma_f64_16x16x4f64
+      TRITON_MFMA_v2to4(16, 16, f64T, f64T, mfma_f64_16x16x4f64, 4, 1),
+      // mfma_f64_4x4x4f64
+      TRITON_MFMA_v2to4(4, 4, f64T, f64T, mfma_f64_4x4x4f64, 16, 1),
+      TRITON_MFMA_v2to4(4, 16, f64T, f64T, mfma_f64_4x4x4f64, 4, 1),
+      TRITON_MFMA_v2to4(16, 4, f64T, f64T, mfma_f64_4x4x4f64, 4, 1),
       // f32 inputs
       // mfma_f32_32x32x2f32
       TRITON_MFMA_v1to4(32, 32, f32T, f32T, mfma_f32_32x32x2f32, 2, 1),

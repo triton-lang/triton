@@ -56,7 +56,8 @@ public:
   AMDMfmaEncodingAttr
   mfma(ArrayRef<unsigned> warps, unsigned mDim, unsigned nDim,
        bool isTransposed,
-       std::optional<ArrayRef<unsigned>> maybeTilesPerWarp = std::nullopt) {
+       std::optional<ArrayRef<unsigned>> maybeTilesPerWarp = std::nullopt,
+       std::optional<Type> elementType = std::nullopt) {
     SmallVector<unsigned> cpg(warps.size(), 1u);
     SmallVector<unsigned> cSplit(warps.size(), 1u);
     SmallVector<unsigned> cOrd(warps.size());
@@ -66,10 +67,11 @@ public:
 
     if (maybeTilesPerWarp.has_value()) {
       return AMDMfmaEncodingAttr::get(&ctx, 2, warps, maybeTilesPerWarp.value(),
-                                      mDim, nDim, isTransposed, ctaLayout);
+                                      mDim, nDim, isTransposed, ctaLayout,
+                                      elementType);
     } else {
       return AMDMfmaEncodingAttr::get(&ctx, 2, warps, mDim, nDim, isTransposed,
-                                      ctaLayout);
+                                      ctaLayout, elementType);
     }
   }
 

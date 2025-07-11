@@ -23,7 +23,7 @@ using namespace triton;
 using namespace triton::gpu;
 
 SmallVector<unsigned> ReduceOpHelper::getOrderWithAxisAtBeginning() {
-  auto order = toLinearEncoding(srcEncoding, srcShape).getOrder();
+  auto order = toLinearEncoding(srcTy).getOrder();
   auto it = std::find(order.begin(), order.end(), axis);
   // delete the axis from order
   order.erase(it);
@@ -36,7 +36,7 @@ SmallVector<unsigned> ReduceOpHelper::getOrderWithAxisAtBeginning() {
 // reduction axis within the warp.
 unsigned ReduceOpHelper::getThreadOffsetOnReductionAxis() {
   auto *ctx = srcEncoding.getContext();
-  auto linearLayout = toLinearLayout(srcShape, srcEncoding);
+  auto linearLayout = toLinearLayout(srcTy);
   auto kLane = mlir::StringAttr::get(ctx, "lane");
   const auto &bases = linearLayout.getBases();
   const auto &lanes = bases.find(kLane)->second;
@@ -570,10 +570,8 @@ bool GatherLoweringHelper::isWarpLocal() {
   // source and index tensors, all the elements are owned by the same warp.
   RankedTensorType srcType = gatherOp.getSrc().getType();
   RankedTensorType idxType = gatherOp.getIndices().getType();
-  LinearLayout srcLayout =
-      toLinearLayout(srcType.getShape(), srcType.getEncoding());
-  LinearLayout idxLayout =
-      toLinearLayout(idxType.getShape(), idxType.getEncoding());
+  LinearLayout srcLayout = toLinearLayout(srcType);
+  LinearLayout idxLayout = toLinearLayout(idxType);
 
   Builder b(gatherOp.getContext());
   StringAttr kBlock = b.getStringAttr("block");
@@ -711,7 +709,7 @@ bool supportMMA(Value value, int version) {
   bool isFP8 = llvm::isa<Float8E5M2Type, Float8E4M3FNType, Float8E5M2FNUZType,
                          Float8E4M3FNUZType>(elemTy);
   return isFP8 || elemTy.isF16() || elemTy.isBF16() ||
-         (elemTy.isF32() && version >= 2) ||
+         ((elemTy.isF32() || elemTy.isF64()) && version >= 2) ||
          (elemTy.isInteger(8) && version >= 2);
 }
 
@@ -724,8 +722,7 @@ bool matchMmaV3AndDotOperandLayout(RankedTensorType srcTy,
     return false;
   }
   int elementTypeSize = srcTy.getElementType().getIntOrFloatBitWidth();
-  auto parentTy = RankedTensorType::get(
-      srcTy.getShape(), srcTy.getElementType(), dotOperandLayout.getParent());
+  auto parentTy = srcTy.cloneWithEncoding(dotOperandLayout.getParent());
   auto ans = mmaLayout.getVersionMajor() == 3 &&
              dotOperandLayout.getOpIdx() == 0 &&
              mmaLayout.getWarpsPerCTA()[1] == 1 &&
@@ -761,10 +758,8 @@ bool matchMFMAAndDotOperandShuffleCase(RankedTensorType srcTy,
 LinearLayout minimalCvtLayout(Type srcTy_, Type dstTy_) {
   auto srcTy = cast<triton::gpu::TensorOrMemDesc>(srcTy_);
   auto dstTy = cast<triton::gpu::TensorOrMemDesc>(dstTy_);
-  LinearLayout srcLayout =
-      toLinearLayout(srcTy.getShape(), srcTy.getEncoding());
-  LinearLayout dstLayout =
-      toLinearLayout(dstTy.getShape(), dstTy.getEncoding());
+  LinearLayout srcLayout = toLinearLayout(srcTy);
+  LinearLayout dstLayout = toLinearLayout(dstTy);
   auto sDims = to_vector(srcLayout.getInDimNames());
   auto dDims = to_vector(dstLayout.getInDimNames());
   SmallVector<StringAttr> dims;

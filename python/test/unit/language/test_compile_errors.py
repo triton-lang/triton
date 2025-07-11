@@ -396,9 +396,9 @@ def test_min_dot_size(dtype):
     error_msg = "Input shapes should have "
     if is_cuda():
         if dtype.primitive_bitwidth == 8:
-            error_msg += "M >= 16, N >= 16 and K >= 32"
+            error_msg += "M >= 1, N >= 1 and K >= 32"
         else:
-            error_msg = "M >= 16, N >= 16 and K >= 16"
+            error_msg = "M >= 1, N >= 1 and K >= 16"
     elif is_hip():
         # hip supports arbitrary sizes
         error_msg = None
