@@ -11,6 +11,8 @@ from typing import NamedTuple
 
 DEVICE = triton.runtime.driver.active.get_active_torch_device()
 
+pl.enable_semantic("triton")
+
 
 def metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
     BLOCK_SIZE = args["BLOCK_SIZE"]
@@ -43,7 +45,7 @@ def add(x: torch.Tensor, y: torch.Tensor):
     output = torch.empty_like(x)
     assert x.device == DEVICE and y.device == DEVICE and output.device == DEVICE
     n_elements = output.numel()
-    grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']), )
+    grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]), )
     tmp_path = pathlib.Path(os.getcwd())
     temp_file = tmp_path / "vector-add.hatchet"
     proton.start(str(temp_file.with_suffix("")), backend="instrumentation")

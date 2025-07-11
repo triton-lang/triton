@@ -5,11 +5,14 @@ import json
 
 import triton
 import triton.language as tl
+import triton.language.semantic
 import triton.profiler.language as pl
 import triton.profiler as proton
 from triton.tools.tensor_descriptor import TensorDescriptor
 
 from typing import NamedTuple
+
+pl.enable_semantic("triton")
 
 
 def is_cuda():
@@ -41,12 +44,15 @@ def test_mode_str(mode, tmp_path: pathlib.Path):
     proton.finalize()
 
 
-@pytest.mark.parametrize("mode", [
-    proton.mode.Default(),
-    proton.mode.Default(metric_type="cycle"),
-    proton.mode.Default(metric_type="cycle", buffer_size=4096),
-    proton.mode.MMA()
-])
+@pytest.mark.parametrize(
+    "mode",
+    [
+        proton.mode.Default(),
+        proton.mode.Default(metric_type="cycle"),
+        proton.mode.Default(metric_type="cycle", buffer_size=4096),
+        proton.mode.MMA(),
+    ],
+)
 def test_mode_obj(mode, tmp_path: pathlib.Path):
     temp_file = tmp_path / "test_mode_simple.hatchet"
     proton.start(str(temp_file.with_suffix("")), backend="instrumentation", mode=mode)
@@ -74,7 +80,6 @@ def test_jit(tmp_path):
 
 @pytest.mark.parametrize("method", ["operator", "context_manager"])
 def test_record(method, tmp_path: pathlib.Path):
-
     from contextlib import contextmanager
 
     @contextmanager
@@ -113,35 +118,35 @@ def test_record(method, tmp_path: pathlib.Path):
 
     torch.manual_seed(0)
     size = 256
-    x = torch.rand(size, device='cuda')
-    y = torch.rand(size, device='cuda')
+    x = torch.rand(size, device="cuda")
+    y = torch.rand(size, device="cuda")
     temp_file = tmp_path / "test_record.hatchet"
     output = torch.empty_like(x)
     n_elements = output.numel()
     grid = (1, 1, 1)
     with instrumentation(temp_file):
         pgm = add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024, METHOD=method)
-        #FIXME(fywkevin): have a dedicated place to put those decoding related constants
-        payload_offset = int.from_bytes(proton.hooks.InstrumentationHook.host_buffer[12:16].numpy().tobytes(), 'little')
+        # FIXME(fywkevin): have a dedicated place to put those decoding related constants
+        payload_offset = int.from_bytes(proton.hooks.InstrumentationHook.host_buffer[12:16].numpy().tobytes(), "little")
         host_buffer = proton.hooks.InstrumentationHook.host_buffer[payload_offset:]
         preamble = host_buffer[0:4]
-        assert int.from_bytes(preamble.numpy().tobytes(), 'little') == 0xdeadbeef
+        assert int.from_bytes(preamble.numpy().tobytes(), "little") == 0xDEADBEEF
         header_size = 16
         metadata_size = header_size + pgm.metadata.num_warps * 4
         start_tag = host_buffer[metadata_size:metadata_size + 4]
         start_clock = host_buffer[metadata_size + 4:metadata_size + 8]
         end_tag = host_buffer[metadata_size + 8:metadata_size + 12]
         end_clock = host_buffer[metadata_size + 12:metadata_size + 16]
-        assert int.from_bytes(start_tag.numpy().tobytes(), 'little') & 0xfffff800 == 0
-        assert int.from_bytes(end_tag.numpy().tobytes(), 'little') & 0xfffff800 == 0x80000000
-        start_clock_val = int.from_bytes(start_tag.numpy().tobytes(), 'little') & 0x7ff << 32 | int.from_bytes(
-            start_clock.numpy().tobytes(), 'little')
-        end_clock_val = int.from_bytes(end_tag.numpy().tobytes(), 'little') & 0x7ff << 32 | int.from_bytes(
-            end_clock.numpy().tobytes(), 'little')
+        assert int.from_bytes(start_tag.numpy().tobytes(), "little") & 0xFFFFF800 == 0
+        assert int.from_bytes(end_tag.numpy().tobytes(), "little") & 0xFFFFF800 == 0x80000000
+        start_clock_val = int.from_bytes(start_tag.numpy().tobytes(), "little") & 0x7FF << 32 | int.from_bytes(
+            start_clock.numpy().tobytes(), "little")
+        end_clock_val = int.from_bytes(end_tag.numpy().tobytes(), "little") & 0x7FF << 32 | int.from_bytes(
+            end_clock.numpy().tobytes(), "little")
         assert end_clock_val > start_clock_val
 
     # instrumentation context has finalized, now validate assembly
-    ttir = pgm.asm['ttir']
+    ttir = pgm.asm["ttir"]
     assert "proton.record start" in ttir
     assert "proton.record end" in ttir
 
@@ -176,8 +181,8 @@ def test_tree(tmp_path: pathlib.Path, hook):
 
     torch.manual_seed(0)
     size = 256
-    x = torch.rand(size, device='cuda')
-    y = torch.rand(size, device='cuda')
+    x = torch.rand(size, device="cuda")
+    y = torch.rand(size, device="cuda")
     temp_file = tmp_path / "test_tree.hatchet"
     output = torch.empty_like(x)
     n_elements = output.numel()
@@ -245,8 +250,8 @@ def test_trace(tmp_path: pathlib.Path):
 
     torch.manual_seed(0)
     size = 256
-    x = torch.rand(size, device='cuda')
-    y = torch.rand(size, device='cuda')
+    x = torch.rand(size, device="cuda")
+    y = torch.rand(size, device="cuda")
     temp_file = tmp_path / "test_trace.chrome_trace"
     output = torch.empty_like(x)
     n_elements = output.numel()
@@ -292,8 +297,8 @@ def test_multi_session(tmp_path: pathlib.Path):
 
     torch.manual_seed(0)
     size = 256
-    x = torch.rand(size, device='cuda')
-    y = torch.rand(size, device='cuda')
+    x = torch.rand(size, device="cuda")
+    y = torch.rand(size, device="cuda")
     temp_file_inst = tmp_path / "test_tree_inst.hatchet"
     temp_file_driver = tmp_path / "test_tree_driver.hatchet"
     output = torch.empty_like(x)
@@ -361,13 +366,13 @@ def test_autotune(tmp_path: pathlib.Path):
 
     torch.manual_seed(0)
     size = 2048
-    x = torch.rand(size, device='cuda')
-    y = torch.rand(size, device='cuda')
+    x = torch.rand(size, device="cuda")
+    y = torch.rand(size, device="cuda")
     output = torch.empty_like(x)
     n_elements = output.numel()
     grid = (1, 1, 1)
     temp_file = tmp_path / "test_autotune.hatchet"
-    proton.start(str(temp_file.with_suffix("")), backend="instrumentation", hook="launch")
+    proton.start(str(temp_file.with_suffix("")), backend="instrumentation", hook="triton")
     add_kernel[grid](x, y, output, n_elements)
     proton.finalize()
 
@@ -450,12 +455,23 @@ def test_sched_barrier(tmp_path: pathlib.Path):
 
     grid = lambda META: (triton.cdiv(M, BLOCK_SIZE_M) * triton.cdiv(N, BLOCK_SIZE_N), )
     kernel = matmul_kernel[grid](
-        a, b, c,  #
-        M, N, K,  #
-        a.stride(0), a.stride(1),  #
-        b.stride(0), b.stride(1),  #
-        c.stride(0), c.stride(1),  #
-        BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, GROUP_SIZE_M)
+        a,
+        b,
+        c,  #
+        M,
+        N,
+        K,  #
+        a.stride(0),
+        a.stride(1),  #
+        b.stride(0),
+        b.stride(1),  #
+        c.stride(0),
+        c.stride(1),  #
+        BLOCK_SIZE_M,
+        BLOCK_SIZE_N,
+        BLOCK_SIZE_K,
+        GROUP_SIZE_M,
+    )
     proton.finalize()
 
     asm = kernel.asm["amdgcn"]
@@ -471,7 +487,6 @@ def test_sched_barrier(tmp_path: pathlib.Path):
 
 
 def test_warp_spec(tmp_path: pathlib.Path):
-
     if not HAS_WARP_SPECIALIZE:
         pytest.skip("target backend does not support warp specialization")
 
@@ -540,8 +555,12 @@ def test_warp_spec(tmp_path: pathlib.Path):
             return (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), )
 
         matmul_kernel_tma[grid](
-            a_desc, b_desc, c_desc,  #
-            M, N, K,  #
+            a_desc,
+            b_desc,
+            c_desc,  #
+            M,
+            N,
+            K,  #
             BLOCK_SIZE_M=128,  #
             BLOCK_SIZE_N=256,  #
             BLOCK_SIZE_K=128,  #
@@ -549,7 +568,8 @@ def test_warp_spec(tmp_path: pathlib.Path):
             FP8_OUTPUT=dtype == torch.float8_e4m3fn,  #
             WARP_SPECIALIZE=warp_specialize,  #
             num_stages=2,  #
-            num_warps=8)
+            num_warps=8,
+        )
         return c
 
     mode = proton.mode.Default(metric_type="cycle", optimizations="clock32")
@@ -567,7 +587,7 @@ def test_warp_spec(tmp_path: pathlib.Path):
     with open(temp_file, "rb") as f:
         data = json.load(f)
         kernel_level = data[0]["children"][0]["children"][0]
-        assert kernel_level["children"][0]["frame"]["name"] == 'loop'
-        assert kernel_level["children"][0]["metrics"]['cycles'] > 0
+        assert kernel_level["children"][0]["frame"]["name"] == "loop"
+        assert kernel_level["children"][0]["metrics"]["cycles"] > 0
         assert kernel_level["frame"]["name"] == "kernel"
         assert kernel_level["metrics"]["cycles"] > 0

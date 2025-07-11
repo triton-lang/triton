@@ -94,7 +94,7 @@ def start(
                                                Each mode has a set of control knobs following with the mode name.
                                                For example, "pcsampling" has an "interval" control knob, expressed as "pcsampling:interval=1000".
         hook (str, optional): The hook to use for profiling.
-                              Available options are [None, "launch"].
+                              Available options are [None, "triton"].
                               Defaults to None.
     Returns:
         session (int): The session ID of the profiling session.
@@ -115,7 +115,7 @@ def start(
     # Convert mode to its string representation for libproton's runtime
     session = libproton.start(name, context, data, backend, mode_str, backend_path)
 
-    if hook == "launch":
+    if hook == "triton":
         HookManager.register(LaunchHook(), session)
     if backend == "instrumentation":
         HookManager.register(InstrumentationHook(mode), session)

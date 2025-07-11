@@ -128,18 +128,26 @@ proton.start(
 
 **Kernel-side usage:**
 
+**Caution**: For DSL level instrumentation, **only Gluon** semantic is enabled by default.
+Instrumenting kernels written in Triton DSL is disable because Triton's higher-level IR undergoes
+aggressive compiler rewrites (loop pipelining, instruction re-ordering, IR duplication, etc.).
+These transformations can invalidate naïve instrumentation and lead to misleading results.
+
 ```python
+from triton.experimental import gluon
+from triton.experimental.gluon import language as gl
+
 import triton.profiler.language as pl
 
-@triton.jit
+@gluon.jit
 def kernel(...):
     pl.enter_scope("scope0")
     for i in range(iters):
-        tl.load(...)
+        gl.load(...)
     pl.exit_scope("scope0")
     with pl.scope("scope1"):
         for i in range(iters):
-            tl.load(...)
+            gl.load(...)
 ```
 
 Advanced users can instrument either the `ttir` or `ttgir` intermediate representations for even finer-grained measurement. The relevant IR instructions are `proton.record start` and `proton.record end`. This can be combined with the environment variable `TRITON_KERNEL_OVERRIDE=1` for custom kernel overrides. For detailed steps, refer to the Triton [documentation](https://github.com/triton-lang/triton?tab=readme-ov-file#tips-for-hacking) under the **Kernel Override Steps** section.
@@ -166,8 +174,8 @@ proton.finalize()
 import triton.profiler as proton
 from typing import NamedTuple
 
-# hook: When hook="launch", it enables proton to invoke launch_metadata function before launching the GPU kernel
-proton.start("profile_name", hook="launch")
+# hook: When hook="triton", it enables proton to invoke launch_metadata function before launching the GPU kernel
+proton.start("profile_name", hook="triton")
 
 def metadata_fn(
     grid: tuple,
