@@ -91,6 +91,9 @@ public:
 
   void propagateToYield(scf::YieldOp yieldOp, SmallVector<TaskId> &lattices);
 
+  void propagateToTerminator(Operation *op,
+                             ArrayRef<const TaskIdLattice *> &lattices);
+
   void propagateToParent(Operation *op, const TaskId &taskId);
 };
 

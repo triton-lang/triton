@@ -14,9 +14,12 @@ def NVGPUWarpSpecialization : Pass<"nvgpu-warp-specialization", "mlir::ModuleOp"
 
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect"];
   let options = [
-    Option<"numWarpGroups", "num-warp-groups",
+    Option<"numStages", "num-stages",
            "int32_t", /*default*/"0",
-           "number of warp groups for warp specialization">
+           "number of buffers for warp specialization">,
+    Option<"dumpIntermediateSteps", "dump-intermediate-steps",
+           "bool", /*default*/"false",
+           "Dump intermediate steps">
   ];
 }
 
