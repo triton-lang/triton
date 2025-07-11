@@ -643,7 +643,6 @@ class CodeGenerator(ast.NodeVisitor):
             if isinstance(value, language.tuple):
                 return _apply_to_tuple_values(value, _sanitize_value)
             native_nontensor_types = (language.dtype, language.tuple)
-            value = _unwrap_if_constexpr(value)
             if value is not None and \
                 not _is_triton_value(value) and \
                 not isinstance(value, native_nontensor_types):
