@@ -33,8 +33,8 @@ LogicalResult lowerLdStMatrix(
   assert(llvmOpCount == nullptr && "NYI");
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto *ctx = tensorTy.getContext();
-  auto regL = toLinearLayout(tensorTy.getShape(), tensorTy.getEncoding());
-  auto memL = toLinearLayout(memDescType.getShape(), memDescType.getEncoding());
+  auto regL = toLinearLayout(tensorTy);
+  auto memL = toLinearLayout(memDescType);
   auto cvt = minimalCvtLayout(memDescType, tensorTy);
 
   auto S = [ctx](StringRef v) { return StringAttr::get(ctx, v); };

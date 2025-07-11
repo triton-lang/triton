@@ -32,12 +32,12 @@ struct ConcatOpConversion : public ConvertOpToLLVMPattern<amdgpu::ConcatOp> {
     Attribute srcEncoding = srcType.getEncoding();
 
     MLIRContext *context = resultType.getContext();
-    auto linearLayoutSrc = triton::gpu::toLinearLayout(srcShape, srcEncoding);
+    auto linearLayoutSrc = triton::gpu::toLinearLayout(srcType);
     auto outDimNames = llvm::to_vector(linearLayoutSrc.getOutDimNames());
     // Call transposeOuts, to ensure that order of input and output tensor
     // element coordinates are compatible on stage 8 in algorithm below.
-    auto linearLayoutDst = triton::gpu::toLinearLayout(dstShape, dstEncoding)
-                               .transposeOuts(outDimNames);
+    auto linearLayoutDst =
+        triton::gpu::toLinearLayout(resultType).transposeOuts(outDimNames);
     auto srcCTAOrder = LLVM::AMD::getCTATileOrder(context, linearLayoutSrc);
     auto dstCTAOrder = LLVM::AMD::getCTATileOrder(context, linearLayoutSrc);
 
