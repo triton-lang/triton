@@ -20,7 +20,7 @@ _SEMANTICS = {_ALL_SEMANTICS["gluon"]}
 
 
 def _check_supported_semantic(semantic):
-    if not isinstance(semantic, _SEMANTICS):
+    if not isinstance(semantic, tuple(_SEMANTICS)):
         raise TypeError(f"Unsupported semantic type: {type(semantic)}. "
                         f"Supported semantics are: {_SEMANTICS}")
 
