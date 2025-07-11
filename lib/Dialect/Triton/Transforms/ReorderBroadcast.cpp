@@ -155,7 +155,6 @@ struct MoveBroadcastAfterElementwisePattern
 
     auto srcTy = broadcastOp.getSrc().getType();
     auto bcSrcShape = srcTy.getShape();
-    auto srcEncoding = srcTy.getEncoding();
 
     // Reshape operands to match srcShape
     llvm::SmallVector<Value, 4> newOperands;
@@ -167,7 +166,7 @@ struct MoveBroadcastAfterElementwisePattern
       }
       auto elemTy =
           dyn_cast<RankedTensorType>(operand.getType()).getElementType();
-      auto newTy = RankedTensorType::get(bcSrcShape, elemTy, srcEncoding);
+      auto newTy = srcTy.clone(bcSrcShape, elemTy);
       if (auto splatOp = llvm::dyn_cast<SplatOp>(definingOp)) {
         auto newSplat = rewriter.create<SplatOp>(loc, newTy, splatOp.getSrc());
         newOperands.push_back(newSplat);
@@ -191,8 +190,7 @@ struct MoveBroadcastAfterElementwisePattern
     auto resultTypes = op->getResultTypes();
     for (auto resultTy : resultTypes) {
       auto elemTy = dyn_cast<RankedTensorType>(resultTy).getElementType();
-      newResultTypes.push_back(
-          RankedTensorType::get(bcSrcShape, elemTy, srcEncoding));
+      newResultTypes.push_back(srcTy.clone(bcSrcShape, elemTy));
     }
 
     // Create new op and broadcast results

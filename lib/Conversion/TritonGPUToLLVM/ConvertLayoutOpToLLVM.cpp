@@ -43,10 +43,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     auto dstTy = op.getType();
 
     LinearLayout conversion = minimalCvtLayout(srcTy, dstTy);
-    LinearLayout srcLayout =
-        toLinearLayout(srcTy.getShape(), srcTy.getEncoding());
-    LinearLayout dstLayout =
-        toLinearLayout(dstTy.getShape(), dstTy.getEncoding());
+    LinearLayout srcLayout = toLinearLayout(srcTy);
+    LinearLayout dstLayout = toLinearLayout(dstTy);
 
     StringAttr kBlock = str_attr("block");
     StringAttr kWarp = str_attr("warp");
@@ -246,8 +244,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
 
     // Remove the kBlock dimension from the layout as it's the identity in the
     // cvt
-    auto srcLayout = toLinearLayout(srcTy.getShape(), srcTy.getEncoding());
-    auto dstLayout = toLinearLayout(dstTy.getShape(), dstTy.getEncoding());
+    auto srcLayout = toLinearLayout(srcTy);
+    auto dstLayout = toLinearLayout(dstTy);
     auto kReg = str_attr("register");
     auto kLane = str_attr("lane");
     auto kWarp = str_attr("warp");

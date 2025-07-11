@@ -2,6 +2,7 @@
 #include "Utility.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/IR/BuiltinTypes.h"
 #include "triton/Analysis/Allocation.h"
 #include "triton/Conversion/TritonGPUToLLVM/ElementwiseOpToLLVMBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
@@ -132,6 +133,11 @@ template <typename FPType> struct FPTypeInfo {
                        0x37a0,  // halfway between [2/4 * 2^-15, 3/4 * 2^-15]
                        0x37e0}; // halfway between [3/4 * 2^-15, 4/4 * 2^-15]
       }
+      if (dstTyID == TypeID::get<Float8E4M3FNType>())
+        return VecType{0x3a80, 0x3b40, 0x3ba0, 0x3be0,
+                       0x3c10, 0x3c30, 0x3c50, 0x3c70};
+      if (dstTyID == TypeID::get<Float8E5M2Type>())
+        return VecType{0x3700, 0x37c0, 0x3820, 0x3860};
     }
     return VecType{};
   }
@@ -470,8 +476,10 @@ static Value downcastToFp8_RTNE_oneValue(Location loc,
     // Include infinity
     if constexpr (std::is_same_v<SrcFPType, Float32Type>)
       dstMaxOfSrcType |= 0x7ffff;
-    else
+    else if constexpr (std::is_same_v<SrcFPType, Float16Type>)
       dstMaxOfSrcType |= 0x7f;
+    else
+      dstMaxOfSrcType |= 0x7;
   } else {
     uint32_t expFullMask = ((1U << srcExponentBits) - 1U) << srcMantissaBits;
     // In case the exponent is full (all ones), then we have either a NaN or Inf
@@ -1301,13 +1309,30 @@ static ConverterT Bf16_to_Fp8E5M2(AMD::ISAFamily isaFamily) {
   return isaFamily == AMD::ISAFamily::CDNA4 ? Bf16_to_Fp8E5M2_HW
                                             : Bf16_to_Fp8E5M2_SW;
 }
-// Bf16 -> OCP Fp8
-static SmallVector<Value> Bf16_to_Fp8E4M3FN(Location loc,
-                                            ConversionPatternRewriter &rewriter,
-                                            const SmallVector<Value> &v) {
+
+// Bf16 -> OCP Fp8 using RTNE
+static SmallVector<Value>
+Bf16_to_Fp8E4M3FN_RTNE_SW(Location loc, ConversionPatternRewriter &rewriter,
+                          const SmallVector<Value> &v) {
+  SmallVector<Value> result(2);
+  result[0] = downcastToFp8_RTNE_oneValue<BFloat16Type, Float8E4M3FNType>(
+      loc, rewriter, v[0]);
+  result[1] = downcastToFp8_RTNE_oneValue<BFloat16Type, Float8E4M3FNType>(
+      loc, rewriter, v[1]);
+  return result;
+}
+
+static SmallVector<Value>
+Bf16_to_Fp8E4M3FN_RTNE_HW(Location loc, ConversionPatternRewriter &rewriter,
+                          const SmallVector<Value> &v) {
   assert(v.size() == 2);
   return cvtScalePkDowncastToFp8<ROCDL::CvtScaleF32PkFp8Bf16Op>(loc, rewriter,
                                                                 v[0], v[1]);
+}
+
+ConverterT Bf16_to_Fp8E4M3FN(AMD::ISAFamily isaFamily) {
+  return isaFamily == AMD::ISAFamily::CDNA4 ? Bf16_to_Fp8E4M3FN_RTNE_HW
+                                            : Bf16_to_Fp8E4M3FN_RTNE_SW;
 }
 
 // fp8e4m3fn to bf16
@@ -1684,7 +1709,8 @@ struct FpToFpOpConversion
             // BF16 -> F8
             {{BF16TyID, F8E5M2TyID, RoundingMode::RTNE},
              Bf16_to_Fp8E5M2(isaFamily)},
-            {{BF16TyID, F8E4M3FNTyID, RoundingMode::RTNE}, Bf16_to_Fp8E4M3FN},
+            {{BF16TyID, F8E4M3FNTyID, RoundingMode::RTNE},
+             Bf16_to_Fp8E4M3FN(isaFamily)},
             {{BF16TyID, F8E5M2FNUZTyID, RoundingMode::RTNE},
              Bf16_to_Fp8E5M2FNUZ(isaFamily)},
             {{BF16TyID, F8E4M3FNUZTyID, RoundingMode::RTNE},

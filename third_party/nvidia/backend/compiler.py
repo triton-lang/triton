@@ -22,10 +22,11 @@ def min_dot_size(target: GPUTarget):
         lhs_bitwidth = lhs_type.scalar.primitive_bitwidth
         rhs_bitwidth = rhs_type.scalar.primitive_bitwidth
         assert lhs_bitwidth == rhs_bitwidth, "lhs and rhs bitwidth must be the same"
+        # For small M/N the input we can still use tensorcores with padding.
         if lhs_bitwidth == 8:
-            return (16, 8, 32)
+            return (1, 1, 32)
         else:
-            return (16, 8, 16)
+            return (1, 1, 16)
 
     return check_dot_compatibility
 
@@ -308,12 +309,13 @@ class CUDABackend(BaseBackend):
         metadata["tensordesc_meta"] = tensordesc_meta
         return mod
 
-    def ttgir_opt(self, src, metadata, options, capability):
+    def gluon_to_ttgir(self, src, metadata, options, capability):
         mod = src
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
 
         passes.ttgpuir.add_inliner(pm)
+        passes.gluon.add_resolve_auto_encodings(pm)
         passes.common.add_sccp(pm)
         passes.ttir.add_loop_aware_cse(pm)
         passes.ttgpuir.add_canonicalizer(pm)
@@ -465,7 +467,7 @@ class CUDABackend(BaseBackend):
             stages["ttir"] = lambda src, metadata: self.make_ttir(src, metadata, options, capability)
             stages["ttgir"] = lambda src, metadata: self.make_ttgir(src, metadata, options, capability)
         elif language == Language.GLUON:
-            stages["ttgir"] = lambda src, metadata: self.ttgir_opt(src, metadata, options, capability)
+            stages["ttgir"] = lambda src, metadata: self.gluon_to_ttgir(src, metadata, options, capability)
         stages["llir"] = lambda src, metadata: self.make_llir(src, metadata, options, capability)
         stages["ptx"] = lambda src, metadata: self.make_ptx(src, metadata, options, self.target.arch)
         stages["cubin"] = lambda src, metadata: self.make_cubin(src, metadata, options, self.target.arch)

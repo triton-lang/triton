@@ -1,5 +1,6 @@
 #include "triton/Analysis/Alias.h"
 
+#include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
@@ -37,6 +38,9 @@ LogicalResult SharedMemoryAliasAnalysis::visitOperation(
     pessimistic = false;
   } else if (op->hasTrait<OpTrait::MemDescViewTrait>()) {
     aliasInfo = AliasInfo(operands[0]->getValue());
+    pessimistic = false;
+  } else if (isa<ub::PoisonOp>(op)) {
+    aliasInfo = AliasInfo();
     pessimistic = false;
   } else {
     assert(!isa<triton::gpu::MemDescType>(result.getType()) &&
