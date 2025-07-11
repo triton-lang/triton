@@ -110,17 +110,13 @@ class HIPBackend(BaseBackend):
             allowed_dot_input_precisions.update({'tf32'})
             args["allowed_dot_input_precisions"] = tuple(sorted(allowed_dot_input_precisions))
 
+        if "supported_fp8_dtypes" not in opts:
+            args["supported_fp8_dtypes"] = tuple(sorted(HIPOptions.supported_fp8_dtypes))
+
         if self.target.arch == 'gfx950':
             deprecated_fp8_dot_operand_dtypes = set(HIPOptions.deprecated_fp8_dot_operand_dtypes)
             deprecated_fp8_dot_operand_dtypes.update({"fp8e5b16", "fp8e4b8"})
             args["deprecated_fp8_dot_operand_dtypes"] = tuple(sorted(deprecated_fp8_dot_operand_dtypes))
-
-        if "supported_fp8_dtypes" not in opts:
-            supported_fp8_dtypes = set(HIPOptions.supported_fp8_dtypes)
-            if self.target.arch == 'gfx942':
-                # CDNA3/gfx942 has native support for AMD specific FP8 types.
-                supported_fp8_dtypes.update({'fp8e4b8', 'fp8e5b16'})
-            args["supported_fp8_dtypes"] = tuple(sorted(supported_fp8_dtypes))
 
         if "enable_fp_fusion" not in opts:
             args["enable_fp_fusion"] = knobs.language.default_fp_fusion
