@@ -1270,23 +1270,20 @@ class tensor(base_value):
         ...
 
 
-def _type_for_tuple_values(values):
-
-    def get_type(x):
-        if isinstance(x, dtype):
-            return x
-        if isinstance(x, (int, float)):
-            return constexpr_type(x)
-        return x.type
-
-    return tuple_type([get_type(x) for x in values])
+def _type_for_tuple_values(values, fields=None):
+    return tuple_type([constexpr_type(x) if isinstance(x, (int, float, dtype)) else x.type for x in values], fields)
 
 
 class tuple(base_value):
 
     def __init__(self, args: Sequence, type: tuple_type = None):
         self.values = [i for i in args]
-        self.type = type or _type_for_tuple_values(self.values)
+        if isinstance(type, tuple_type):
+            self.type = type
+        elif type is not None:  # make_template in ASTFunction.deserialize may pass us a list/tuple
+            self.type = tuple_type(type)
+        else:
+            self.type = _type_for_tuple_values(self.values)
 
     def __getitem__(self, idx: constexpr):
         if isinstance(idx, int):
@@ -1306,7 +1303,7 @@ class tuple(base_value):
             idx = constexpr(idx)
         assert isinstance(idx, constexpr)
         self.values[idx] = value
-        self.type = _type_for_tuple_values(self.values)
+        self.type = _type_for_tuple_values(self.values, self.type.fields)
 
     def __add__(self, other):
         other = _normalize_tuple(other)
