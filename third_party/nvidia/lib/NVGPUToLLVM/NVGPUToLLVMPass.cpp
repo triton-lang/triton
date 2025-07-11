@@ -206,19 +206,6 @@ private:
   Constraints inputConstraints;
 };
 
-class FenceAsyncSharedOpPattern
-    : public OpRewritePattern<ttn::FenceAsyncSharedOp> {
-public:
-  using OpRewritePattern<ttn::FenceAsyncSharedOp>::OpRewritePattern;
-
-  LogicalResult matchAndRewrite(ttn::FenceAsyncSharedOp op,
-                                PatternRewriter &rewriter) const override {
-    std::string ptxAsm = op.getBCluster() ? "fence.proxy.async.shared::cluster;"
-                                          : "fence.proxy.async.shared::cta;";
-    return rewriteAsPtxAsm(op, rewriter, std::move(ptxAsm));
-  }
-};
-
 class WarpIdOpPattern : public OpRewritePattern<ttn::WarpIdOp> {
 public:
   using OpRewritePattern<ttn::WarpIdOp>::OpRewritePattern;
@@ -774,9 +761,10 @@ public:
     patterns.add<NVGPUOpGenericPattern<ttn::ClusterCTAIdOp>>(
         context, kClusterCtaIdOp, Constraints({"=r"}), Constraints());
 
-    patterns.add<FenceAsyncSharedOpPattern, LoadMatrixOpPattern,
-                 StoreMatrixOpPattern, WGMMAOpPattern, LoadAcquireOpPattern,
-                 WGMMAWaitGroupOpPattern, WarpIdOpPattern>(context);
+    patterns
+        .add<LoadMatrixOpPattern, StoreMatrixOpPattern, WGMMAOpPattern,
+             LoadAcquireOpPattern, WGMMAWaitGroupOpPattern, WarpIdOpPattern>(
+            context);
 
     if (applyPatternsGreedily(mod, std::move(patterns)).failed())
       signalPassFailure();

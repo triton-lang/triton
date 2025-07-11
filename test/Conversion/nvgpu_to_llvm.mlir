@@ -1,15 +1,5 @@
 // RUN: triton-opt %s --convert-nv-gpu-to-llvm -allow-unregistered-dialect -split-input-file | FileCheck %s
 
-// CHECK-LABEL: @nvvm_syncs
-llvm.func @nvvm_syncs() {
-  // CHECK: fence.proxy.async.shared::cta;
-  nvgpu.fence_async_shared {bCluster = false}
-  // CHECK: fence.proxy.async.shared::cluster;
-  nvgpu.fence_async_shared {bCluster = true}
-
-  llvm.return
-}
-
 // CHECK-LABEL: @cluster_id
 llvm.func @cluster_id() -> i32 {
   // CHECK:      %cluster_ctaid.x;

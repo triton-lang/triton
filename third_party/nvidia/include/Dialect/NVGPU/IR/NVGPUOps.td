@@ -105,11 +105,6 @@ def NVGPU_WGMMAOp : NVGPU_Op<"wgmma", []> {
   let assemblyFormat = "$opA `,` $opB `,` $useC (`,` $opC^)? attr-dict `:` functional-type(operands, $res)";
 }
 
-def NVGPU_FenceAsyncSharedOp : NVGPU_Op<"fence_async_shared", []> {
-  let arguments = (ins BoolAttr:$bCluster);
-  let assemblyFormat = "attr-dict";
-}
-
 def NVGPU_StoreMatrixOp : NVGPU_Op<"stmatrix", [MemoryEffects<[MemWrite]>]> {
   let arguments = (
     ins LLVM_PointerShared:$addr,
