@@ -14,7 +14,7 @@ from .matmul_ogs_details._p_matmul_ogs import _p_matmul_ogs, get_per_device_per_
 from .matmul_ogs_details._finalize_matmul import _finalize_matmul
 from .matmul_ogs_details.opt_flags import make_opt_flags, update_opt_flags_constraints
 from .specialize import specialize
-from .tensor import Storage, Tensor, bitwidth
+from .tensor import Storage, Tensor, FP4, bitwidth
 from .tensor_details import layout
 
 
@@ -388,7 +388,7 @@ def matmul_ogs(x, w, bias,
     if has_mx: assert w.stride(-2) == 1, "`w` must be column-major when it has data-type mxfp"
     if is_hopper_fp8: assert w.stride(-2) == 1, "`w` must be column-major when it has data-type FP8 on capability < 10"
     if not isinstance(w, Tensor):
-        w = Tensor(w)
+        w = Tensor(w, dtype=FP4 if w.dtype == torch.uint8 else w.dtype)
     if w_scale is not None and not isinstance(w_scale, Tensor):
         w_scale = Tensor(w_scale)
     if not isinstance(x, Tensor):
