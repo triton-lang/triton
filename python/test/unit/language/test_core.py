@@ -6002,6 +6002,11 @@ def test_constexpr_if_return(device):
     assert out.item() >= 0
 
 
+def test_constexpr_flattens():
+    assert tl.constexpr(tl.constexpr(5)) == tl.constexpr(5)
+    assert tl.constexpr(tl.constexpr(tl.constexpr(5))) == tl.constexpr(5)
+
+
 @triton.jit
 def return_poison(x):
     a = False
