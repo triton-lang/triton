@@ -10,7 +10,6 @@ from triton_kernels.numerics_details.mxfp import (
     upcast_from_mxfp_torch,
 )
 from triton_kernels.testing import assert_close, assert_equal
-from triton_kernels.target_info import is_hip, is_hip_cdna3
 
 
 def dtype_str_to_torch(dtype_str: str) -> torch.dtype:
@@ -90,9 +89,6 @@ def test_mxfp_casting(
 ):
     if "float8" in quant_dtype and torch.cuda.get_device_capability()[0] < 9:
         pytest.skip("Float8 not tested on A100")
-    if is_hip():
-        if quant_dtype == 'float8_e4m3fn' and is_hip_cdna3():
-            pytest.skip("float8_e4m3fn cast hasn't been fully tested on AMD CDNA3")
     quant_torch_type = dtype_str_to_torch(quant_dtype)
     dequant_torch_type = dtype_str_to_torch(dequant_dtype)
     # Generate random input tensor that is contiguous once axis is the last dimension
