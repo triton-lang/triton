@@ -181,7 +181,7 @@ class constexpr_type(base_type):
         return isinstance(other, constexpr_type) and self.value == other.value
 
     def __repr__(self) -> str:
-        return f"constexpr[{self.value}]"
+        return f"constexpr_type[{self.value}]"
 
     def mangle(self) -> str:
         return repr(self)
