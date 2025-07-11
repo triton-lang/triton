@@ -724,8 +724,7 @@ bool matchMmaV3AndDotOperandLayout(RankedTensorType srcTy,
     return false;
   }
   int elementTypeSize = srcTy.getElementType().getIntOrFloatBitWidth();
-  auto parentTy = RankedTensorType::get(
-      srcTy.getShape(), srcTy.getElementType(), dotOperandLayout.getParent());
+  auto parentTy = srcTy.cloneWithEncoding(dotOperandLayout.getParent());
   auto ans = mmaLayout.getVersionMajor() == 3 &&
              dotOperandLayout.getOpIdx() == 0 &&
              mmaLayout.getWarpsPerCTA()[1] == 1 &&

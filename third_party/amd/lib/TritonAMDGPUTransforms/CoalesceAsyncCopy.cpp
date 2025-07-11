@@ -113,8 +113,7 @@ struct CoalesceAsyncCopyWrites
     // Convert layout of src, mask and other to new encoding
     auto convertLayout = [&rewriter](auto loc, Value old, auto newEnc) {
       auto oldTy = cast<RankedTensorType>(old.getType());
-      RankedTensorType newSrcTy = RankedTensorType::get(
-          oldTy.getShape(), oldTy.getElementType(), newEnc);
+      RankedTensorType newSrcTy = oldTy.cloneWithEncoding(newEnc);
       return rewriter.create<ttg::ConvertLayoutOp>(loc, newSrcTy, old);
     };
 

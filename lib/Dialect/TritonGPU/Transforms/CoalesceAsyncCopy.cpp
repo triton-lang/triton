@@ -84,9 +84,8 @@ struct ClipAsyncCopySizePerThread
 
     // insert cvt's after src, mask, and other
     auto convertBlockLayout = [&](Value src, BlockedEncodingAttr enc) {
-      auto ty = cast<TensorType>(src.getType());
-      auto newTy =
-          RankedTensorType::get(ty.getShape(), ty.getElementType(), enc);
+      auto ty = cast<RankedTensorType>(src.getType());
+      auto newTy = ty.cloneWithEncoding(enc);
       auto cvt = rewriter.create<ConvertLayoutOp>(copyOp->getLoc(), newTy, src);
       return cvt.getResult();
     };

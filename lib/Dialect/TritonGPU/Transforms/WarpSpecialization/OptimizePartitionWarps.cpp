@@ -90,9 +90,8 @@ static LogicalResult relayoutWarps(ModuleAxisInfoAnalysis &axisInfo,
 
   // Start by removing all tensor encodings.
   mlir::AttrTypeReplacer replacer;
-  replacer.addReplacement([](RankedTensorType ty) {
-    return RankedTensorType::get(ty.getShape(), ty.getElementType());
-  });
+  replacer.addReplacement(
+      [](RankedTensorType ty) { return ty.cloneWithEncoding({}); });
   // But don't remove them from the tensors inside descriptors.
   replacer.addReplacement([](TensorDescType ty) -> std::pair<Type, WalkResult> {
     return {ty, WalkResult::skip()};

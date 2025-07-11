@@ -310,8 +310,7 @@ void init_gluon_ir(py::module &&m) {
               Attribute layout) -> Type {
              auto ctx = self.getContext();
              auto blockTy = cast<RankedTensorType>(blockType);
-             auto blockTyLayout = RankedTensorType::get(
-                 blockTy.getShape(), blockTy.getElementType(), layout);
+             auto blockTyLayout = blockTy.cloneWithEncoding(layout);
              return triton::TensorDescType::get(ctx, blockTyLayout, isSigned);
            })
       .def("create_async_copy_global_to_local",
