@@ -178,7 +178,7 @@ class constexpr_type(base_type):
         self.value = value
 
     def __eq__(self, other):
-        return self.value == other.value
+        return isinstance(other, constexpr_type) and self.value == other.value
 
     def __repr__(self) -> str:
         return f"constexpr[{self.value}]"
