@@ -2517,7 +2517,12 @@ def test_reduce1d(op, dtype_str, shape, num_ctas, device):
     # input
     rs = RandomState(17)
     # limit the range of integers so that the sum does not overflow
-    x = numpy_random((shape, ), dtype_str=dtype_str, rs=rs)
+    if dtype_str in integral_dtypes:
+        low = 0 if dtype_str in uint_dtypes else -100
+        high = 100
+        x = numpy_random((shape, ), dtype_str=dtype_str, rs=rs, low=low, high=high)
+    else:
+        x = numpy_random((shape, ), dtype_str=dtype_str, rs=rs)
     numpy_op = {
         'sum': np.sum,
         'max': np.max,

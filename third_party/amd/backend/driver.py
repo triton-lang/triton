@@ -163,13 +163,28 @@ def ty_to_cpp(ty):
         "u16": "uint16_t",
         "u32": "uint32_t",
         "u64": "uint64_t",
-        "fp16": "float",
-        "bf16": "float",
-        "fp32": "float",
-        "f32": "float",
+        "fp16": "double",
+        "bf16": "double",
+        "fp32": "double",
+        "f32": "double",
         "fp64": "double",
     }[ty]
 
+
+FLOAT_STORAGE_TYPE = {
+    "fp16": "uint16_t",
+    "bf16": "uint16_t",
+    "fp32": "uint32_t",
+    "f32": "uint32_t",
+    "fp64": "uint64_t",
+}
+FLOAT_PACK_FUNCTION = {
+    "fp16": "pack_fp16",
+    "bf16": "pack_bf16",
+    "fp32": "pack_fp32",
+    "f32": "pack_fp32",
+    "fp64": "pack_fp64",
+}
 
 _BASE_ARGS_FORMAT = "piiiKKOOOO"
 
@@ -226,7 +241,6 @@ def make_launcher(constants, signature, warp_size):
         if ty == "constexpr":
             return "O"
         return {
-            "float": "f",
             "double": "d",
             "long": "l",
             "int8_t": "b",
@@ -249,13 +263,30 @@ def make_launcher(constants, signature, warp_size):
     args_list = ', ' + ', '.join(f"&_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''
     # Record the end of regular arguments;
     # subsequent arguments are architecture-specific descriptors, such as tensor descriptors for CUDA.
-    arg_decls = ', '.join(f"{ty_to_cpp(ty)} arg{i}" for i, ty in signature.items() if ty != "constexpr")
+    arg_decl_list = []
+    for i, ty in signature.items():
+        if ty == "constexpr":
+            continue
+        if ty in FLOAT_STORAGE_TYPE:
+            arg_decl_list.append(f"{FLOAT_STORAGE_TYPE[ty]} arg{i}")
+        else:
+            arg_decl_list.append(f"{ty_to_cpp(ty)} arg{i}")
+    arg_decls = ', '.join(arg_decl_list)
     internal_args_list = []
     for i, ty in signature.items():
         if ty[0] == "*":
             internal_args_list.append(f"ptr_info{i}.dev_ptr")
+        elif ty in FLOAT_STORAGE_TYPE:
+            internal_args_list.append(f"_arg{i}_storage")
         elif ty != "constexpr":
             internal_args_list.append(f"_arg{i}")
+
+    float_storage_decls = [
+        f"{FLOAT_STORAGE_TYPE[ty]} _arg{i}_storage = {FLOAT_PACK_FUNCTION[ty]}(_arg{i});"
+        for i, ty in signature.items()
+        if ty in FLOAT_STORAGE_TYPE
+    ]
+
     libhip_path = _get_path_to_hip_runtime_dylib()
 
     # generate glue code
@@ -309,9 +340,6 @@ static struct HIPSymbolTable hipSymbolTable;
 bool initSymbolTable() {{
   // Use the HIP runtime library loaded into the existing process if it exits.
   void *lib = dlopen("libamdhip64.so", RTLD_NOLOAD);
-  if (lib) {{
-    // printf("[triton] chosen loaded libamdhip64.so in the process\\n");
-  }}
 
   // Otherwise, go through the list of search paths to dlopen the first HIP
   // driver library.
@@ -321,7 +349,6 @@ bool initSymbolTable() {{
       void *handle = dlopen(hipLibSearchPaths[i], RTLD_LAZY | RTLD_LOCAL);
       if (handle) {{
         lib = handle;
-        // printf("[triton] chosen %s\\n", hipLibSearchPaths[i]);
       }}
     }}
   }}
@@ -382,7 +409,6 @@ static inline void gpuAssert(hipError_t code, const char *file, int line)
 #define HIP_CHECK(ans) {{ gpuAssert((ans), __FILE__, __LINE__); }}
 
 static void _launch(int gridX, int gridY, int gridZ, int num_warps, int num_ctas, int launch_cooperative_grid, int clusterDimX, int clusterDimY, int clusterDimZ, int shared_memory, hipStream_t stream, hipFunction_t function{', ' + arg_decls if len(arg_decls) > 0 else ''}) {{
-  // printf("_launch hip kernel\\n");
   hipDeviceptr_t global_scratch = 0;
   void *params[] = {{ {', '.join(params)} }};
   if (gridX*gridY*gridZ > 0 && launch_cooperative_grid) {{
@@ -440,8 +466,33 @@ static inline DevicePtrInfo getPointer(PyObject *obj, int idx) {{
   return ptr_info;
 }}
 
+static uint16_t pack_fp16(double f) {{
+    uint16_t result;
+    // from https://github.com/python/pythoncapi-compat
+#if 0x030600B1 <= PY_VERSION_HEX && PY_VERSION_HEX <= 0x030B00A1 && !defined(PYPY_VERSION)
+    _PyFloat_Pack2(f, (void*)&result, 1);
+#else
+    PyFloat_Pack2(f, (void*)&result, 1);
+#endif
+    return result;
+}}
+
+static uint16_t pack_bf16(double f) {{
+    float f32 = (float)f;
+    uint32_t u32 = *(uint32_t*)&f32;
+    return (uint16_t)(u32 >> 16);
+}}
+
+static uint32_t pack_fp32(double f) {{
+    float f32 = (float)f;
+    return *(uint32_t*)&f32;
+}}
+
+static uint64_t pack_fp64(double f) {{
+    return *(uint64_t*)&f;
+}}
+
 static PyObject* launch(PyObject* self, PyObject* args) {{
-   // printf("launch\\n");
   int gridX, gridY, gridZ;
   uint64_t _stream;
   uint64_t _function;
@@ -457,6 +508,8 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
                                            &launch_enter_hook, &launch_exit_hook {args_list})) {{
     return NULL;
   }}
+
+  {' '.join(float_storage_decls)}
 
   // extract kernel metadata
   int num_warps, num_ctas, shared_memory, clusterDimX, clusterDimY, clusterDimZ;
