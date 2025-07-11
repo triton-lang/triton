@@ -6014,6 +6014,25 @@ def test_constexpr_type():
     assert tl.constexpr(tl.float32).type == constexpr_type(tl.float32)
 
 
+@pytest.mark.parametrize("literal", [10, 32.1, (5, 6, 7)])
+def test_constexpr_assignment(literal):
+    from triton.language.core import constexpr_type
+
+    @triton.jit
+    def kernel(input_literal: tl.constexpr):
+        patched_literal: tl.constexpr = GENERATE_TEST_HERE
+        # Sanity checks
+        tl.static_assert(patched_literal.type == constexpr_type)
+        tl.static_assert(input_literal.type == constexpr_type)
+
+        assigned_literal = input_literal
+        tl.static_assert(assigned_literal.type == constexpr_type)
+        tl.static_assert(assigned_literal == patched_literal)
+
+    kernel_patched = patch_kernel(kernel, {'GENERATE_TEST_HERE': f"{literal}"})
+    kernel_patched[(1, )](literal)
+
+
 @triton.jit
 def return_poison(x):
     a = False
