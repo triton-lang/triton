@@ -229,7 +229,7 @@ def test_hook_launch_context(tmp_path: pathlib.Path, context: str):
     x = torch.tensor([2], device="cuda", dtype=torch.float32)
     y = torch.zeros_like(x)
     temp_file = tmp_path / "test_hook.hatchet"
-    proton.start(str(temp_file.with_suffix("")), hook="launch", context=context)
+    proton.start(str(temp_file.with_suffix("")), hook="triton", context=context)
     with proton.scope("test0"):
         foo[(1, )](x, 1, y, num_warps=4)
     proton.finalize()
@@ -283,7 +283,7 @@ def test_pcsampling(tmp_path: pathlib.Path):
 
 def test_deactivate(tmp_path: pathlib.Path):
     temp_file = tmp_path / "test_deactivate.hatchet"
-    session_id = proton.start(str(temp_file.with_suffix("")), hook="launch")
+    session_id = proton.start(str(temp_file.with_suffix("")), hook="triton")
     proton.deactivate(session_id)
     torch.randn((10, 10), device="cuda")
     proton.activate(session_id)
