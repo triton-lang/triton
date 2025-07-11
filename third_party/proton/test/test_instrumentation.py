@@ -386,7 +386,6 @@ def test_autotune(tmp_path: pathlib.Path):
 
 
 def test_sched_barrier(tmp_path: pathlib.Path):
-    pytest.skip("flaky test")
     if is_cuda():
         pytest.skip("CUDA backend does not support instruction scheduling barriers")
 
