@@ -360,19 +360,20 @@ def arange(start, end, layout, _semantic=None):
 
 
 @builtin
-def convert_layout(value, layout, _semantic=None):
+def convert_layout(value, layout, assert_trivial=False, _semantic=None):
     """
     Convert a tensor to a different distributed layout.
 
     Args:
         value (tensor): The input tensor.
         layout (DistributedLayout): The target layout.
+        assert_trivial (bool): If True, asserts that the conversion is trivial (no data movement).
 
     Returns:
         tensor: The tensor with the new layout.
     """
     layout = _unwrap_if_constexpr(layout)
-    return _semantic.convert_layout(value, layout)
+    return _semantic.convert_layout(value, layout, assert_trivial)
 
 
 @builtin

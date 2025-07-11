@@ -206,19 +206,21 @@ bool isDistributedLayoutTMemCompatible(Operation *op,
 
   auto ll16x256 =
       getTmemLoadStoreLayout16x256(blockM, blockN, tensorType, numWarps);
+  auto enc =
+      cast<triton::gpu::DistributedEncodingTrait>(tensorType.getEncoding());
   if (ll16x256.has_value() &&
       areLayoutsEquivalent(
           tensorType.getShape(),
           LinearEncodingAttr::get(tensorType.getContext(), ll16x256.value()),
-          tensorType.getEncoding()))
+          enc))
     return true;
-  Attribute layout = nvidia_gpu::getTmemLoadStoreLayout32x32b(
-      blockM, blockN, tensorType, numWarps);
+  auto layout = cast<triton::gpu::DistributedEncodingTrait>(
+      nvidia_gpu::getTmemLoadStoreLayout32x32b(blockM, blockN, tensorType,
+                                               numWarps));
   // TODO: Add support for more layout compatible with tmem load/store. There
   // will only be a discret set of layout possible due to the limiations of
   // tmem_load/store.
-  return areLayoutsEquivalent(tensorType.getShape(), layout,
-                              tensorType.getEncoding());
+  return areLayoutsEquivalent(tensorType.getShape(), layout, enc);
 }
 
 } // namespace nvidia_gpu

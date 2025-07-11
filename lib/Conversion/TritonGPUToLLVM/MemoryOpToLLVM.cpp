@@ -25,15 +25,14 @@ LogicalResult lowerLocalStore(Location loc, MLIRContext *ctx, Value regVal,
   auto kLane = str_attr("lane");
   auto kWarp = str_attr("warp");
   auto kOffset = str_attr("offset");
-  auto regLayout = toLinearLayout(regTy.getShape(), regTy.getEncoding());
+  auto regLayout = toLinearLayout(regTy);
   auto paddedLayout =
       dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(memDescTy.getEncoding());
   LinearLayout cvt = LinearLayout::empty();
   if (paddedLayout) {
     cvt = regLayout.reshapeOuts({{kOffset, regLayout.getTotalOutDimSize()}});
   } else {
-    auto sharedLayout =
-        toLinearLayout(memDescTy.getShape(), memDescTy.getEncoding());
+    auto sharedLayout = toLinearLayout(memDescTy);
     cvt = regLayout.invertAndCompose(sharedLayout);
     auto kBlock = str_attr("block");
     // NYI. We would need to emit a map.shared::cluster instruction.
@@ -181,14 +180,14 @@ public:
     auto kLane = str_attr("lane");
     auto kWarp = str_attr("warp");
     auto kOffset = str_attr("offset");
-    auto regLayout = toLinearLayout(regTy.getShape(), regTy.getEncoding());
+    auto regLayout = toLinearLayout(regTy);
     auto paddedLayout =
         dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(sharedEnc);
     LinearLayout cvt = LinearLayout::empty();
     if (paddedLayout) {
       cvt = regLayout.reshapeOuts({{kOffset, regLayout.getTotalOutDimSize()}});
     } else {
-      auto sharedLayout = toLinearLayout(shape, sharedEnc);
+      auto sharedLayout = toLinearLayout(memDescTy);
       cvt = regLayout.invertAndCompose(sharedLayout);
       auto kBlock = str_attr("block");
       // NYI. We would need to emit a map.shared::cluster instruction.
