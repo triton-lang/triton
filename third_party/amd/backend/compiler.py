@@ -265,12 +265,13 @@ class HIPBackend(BaseBackend):
         return mod
 
     @staticmethod
-    def ttgir_opt(src, metadata, options):
+    def gluon_to_ttgir(src, metadata, options):
         mod = src
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
 
         passes.ttgpuir.add_inliner(pm)
+        passes.gluon.add_resolve_auto_encodings(pm)
         passes.common.add_sccp(pm)
         passes.ttir.add_loop_aware_cse(pm)
         passes.ttgpuir.add_canonicalizer(pm)
@@ -377,6 +378,15 @@ class HIPBackend(BaseBackend):
 
         llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3, options.arch, '', [], options.enable_fp_fusion)
 
+        # Architectures with architected SGPRs store the workgroup id in ttmp9 (X) and ttmp7 (Y[15:0], Z[31:16]).
+        # These attributes are used to determine if Z should be masked out when loading Y. They are inferred during
+        # optimize_module from calls to @llvm.amdgcn.workgroup.id.x/y/z(). We cannot rely on this because a
+        # dispatch dimensions might be used even if there is no program_id() call for it.
+        if amd.has_architected_sgprs(options.arch):
+            fns[0].remove_fn_attr("amdgpu-no-workgroup-id-x")
+            fns[0].remove_fn_attr("amdgpu-no-workgroup-id-y")
+            fns[0].remove_fn_attr("amdgpu-no-workgroup-id-z")
+
         if knobs.amd.scalarize_packed_fops:
             amd.add_scalarize_packed_fops_llvm_pass(fns[0])
 
@@ -433,7 +443,7 @@ class HIPBackend(BaseBackend):
             stages["ttir"] = lambda src, metadata: self.make_ttir(src, metadata, options)
             stages["ttgir"] = lambda src, metadata: self.make_ttgir(src, metadata, options)
         elif language == Language.GLUON:
-            stages["ttgir"] = lambda src, metadata: self.ttgir_opt(src, metadata, options)
+            stages["ttgir"] = lambda src, metadata: self.gluon_to_ttgir(src, metadata, options)
         stages["llir"] = lambda src, metadata: self.make_llir(src, metadata, options)
         stages["amdgcn"] = lambda src, metadata: self.make_amdgcn(src, metadata, options)
         stages["hsaco"] = lambda src, metadata: self.make_hsaco(src, metadata, options)

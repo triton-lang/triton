@@ -220,6 +220,8 @@ void init_triton_llvm(py::module &&m) {
       .def("set_calling_conv", &llvm::Function::setCallingConv)
       .def("add_fn_attr", [](llvm::Function *fn, std::string &name,
                              std::string &val) { fn->addFnAttr(name, val); })
+      .def("remove_fn_attr", [](llvm::Function *fn,
+                                std::string &name) { fn->removeFnAttr(name); })
       .def("add_fn_asan_attr",
            [](llvm::Function *fn) {
              fn->addFnAttr(llvm::Attribute::SanitizeAddress);

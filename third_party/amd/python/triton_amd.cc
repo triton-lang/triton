@@ -261,6 +261,18 @@ void init_triton_amd(py::module &&m) {
       },
       py::return_value_policy::take_ownership);
 
+  m.def("has_architected_sgprs", [](const std::string &arch) {
+    std::string error;
+    llvm::Triple triple(amdTargetTriple);
+    const llvm::Target *target =
+        llvm::TargetRegistry::lookupTarget(triple.normalize(), error);
+    if (!target)
+      throw std::runtime_error("target lookup error: " + error);
+    std::unique_ptr<llvm::MCSubtargetInfo> sti(
+        target->createMCSubtargetInfo(amdTargetTriple, arch, ""));
+    return sti->checkFeatures("+architected-sgprs");
+  });
+
   m.def("need_extern_lib", [](llvm::Module *module, const std::string &lib) {
     for (llvm::Function &f : module->functions()) {
       if (f.hasExternalLinkage() && f.hasName() && !f.hasExactDefinition()) {
