@@ -1211,15 +1211,7 @@ TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
   } else {
     assert(!allocationShape.empty() &&
            "allocationShape not supported for shared layout");
-    // We allow the first dimension to not be a power of 2 to model pipelining
-    if (!llvm::isPowerOf2_32(allocationShape.front()) ||
-        allocationShape.size() > shape.size()) {
-      allocationShape = allocationShape.drop_front();
-    }
-    // We just allow memdesc_views of at most one dimension larger than shape
-    assert(
-        allocationShape.size() == shape.size() &&
-        "allocationShape must be the same size or at most one larger as shape");
+    allocationShape = allocationShape.take_front(shape.size());
     assert(llvm::all_of(allocationShape,
                         [](int64_t dim) {
                           return llvm::isPowerOf2_32(dim) && dim >= 1;
