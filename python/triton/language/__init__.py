@@ -146,6 +146,7 @@ __all__ = [
     "argmin",
     "associative_scan",
     "assume",
+    "async_task",
     "atomic_add",
     "atomic_and",
     "atomic_cas",
