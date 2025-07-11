@@ -445,6 +445,7 @@ class amd_knobs(base_knobs):
     # We use strs so that we can have a default value based on other runtime info
     use_block_pingpong: env_opt_bool = env_opt_bool("TRITON_HIP_USE_BLOCK_PINGPONG")
     use_in_thread_transpose: env_opt_bool = env_opt_bool("TRITON_HIP_USE_IN_THREAD_TRANSPOSE")
+    preshuffle_scales: env_opt_bool = env_opt_bool("TRITON_HIP_PRESHUFFLE_SCALES")
 
     global_prefetch: env_int = env_int("TRITON_HIP_GLOBAL_PREFETCH")
     local_prefetch: env_int = env_int("TRITON_HIP_LOCAL_PREFETCH")
