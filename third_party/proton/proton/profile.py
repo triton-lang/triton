@@ -115,7 +115,7 @@ def start(
     # Convert mode to its string representation for libproton's runtime
     session = libproton.start(name, context, data, backend, mode_str, backend_path)
 
-    if hook == "launch":
+    if hook == "triton":
         HookManager.register(LaunchHook(), session)
     if backend == "instrumentation":
         HookManager.register(InstrumentationHook(mode), session)

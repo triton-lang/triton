@@ -200,7 +200,7 @@ def test_hook_launch(tmp_path: pathlib.Path):
     x = torch.tensor([2], device="cuda", dtype=torch.float32)
     y = torch.zeros_like(x)
     temp_file = tmp_path / "test_hook_triton.hatchet"
-    proton.start(str(temp_file.with_suffix("")), hook="launch")
+    proton.start(str(temp_file.with_suffix("")), hook="triton")
     with proton.scope("test0"):
         foo[(1, )](x, 1, y, num_warps=4)
     proton.finalize()
@@ -261,7 +261,7 @@ def test_pcsampling(tmp_path: pathlib.Path):
             tl.store(y + offs, tl.load(x + offs))
 
     temp_file = tmp_path / "test_pcsampling.hatchet"
-    proton.start(str(temp_file.with_suffix("")), hook="launch", backend="cupti", mode="pcsampling")
+    proton.start(str(temp_file.with_suffix("")), hook="triton", backend="cupti", mode="pcsampling")
     with proton.scope("init"):
         x = torch.ones((1024, ), device="cuda", dtype=torch.float32)
         y = torch.zeros_like(x)
