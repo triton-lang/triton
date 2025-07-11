@@ -1498,7 +1498,8 @@ struct FpToFpOpConversion
             // BF16 -> F8
             {{BF16TyID, F8E5M2TyID, RoundingMode::RTNE},
              Bf16_to_Fp8E5M2(isaFamily)},
-            {{BF16TyID, F8E4M3FNTyID, RoundingMode::RTNE}, Bf16_to_Fp8E4M3FN(isaFamily)},
+            {{BF16TyID, F8E4M3FNTyID, RoundingMode::RTNE},
+             Bf16_to_Fp8E4M3FN(isaFamily)},
             {{BF16TyID, F8E5M2FNUZTyID, RoundingMode::RTNE},
              Bf16_to_Fp8E5M2FNUZ},
             {{BF16TyID, F8E4M3FNUZTyID, RoundingMode::RTNE},
