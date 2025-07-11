@@ -120,7 +120,6 @@ def test_extract_slice(dtype, M, N, M_tile_size, N_tile_size, M_tile_offset, N_t
     }}
     }}
     """
-    print(ir)
     x = torch.randn((M, N), device=device, dtype=torch.float16)
     import tempfile
     with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
