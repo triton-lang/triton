@@ -195,8 +195,9 @@ void testReshape(RankedTensorType srcTy, RankedTensorType dstTy,
         << " " << stringifyLLVMType(inferredEnc) << " -> "
         << triton::join(srcTy.getShape(), "x") << "failed:\n"
         << join(diags, "\n");
-    auto srcLinear = toLinearLayout(srcTy.getShape(), srcTy.getEncoding());
-    auto inferredSrcLinear = toLinearLayout(srcTy.getShape(), inferredSrcEnc);
+    auto srcLinear = toLinearLayout(srcTy);
+    auto inferredSrcLinear =
+        toLinearLayout(srcTy.getShape(), inferredSrcEnc, {});
     EXPECT_EQ(inferredSrcLinear, srcLinear)
         << "Inverse encoding inference (" << triton::join(dstTy.getShape(), "x")
         << " " << stringifyLLVMType(inferredEnc) << " -> "
@@ -211,7 +212,7 @@ void testReshape(RankedTensorType srcTy, RankedTensorType dstTy,
   // when considered as C-contiguous.
   auto makeFlattenedCContig = [](ArrayRef<int64_t> shape, Attribute layout) {
     auto ctx = layout.getContext();
-    auto linear = toLinearLayout(shape, layout);
+    auto linear = toLinearLayout(shape, layout, {});
     auto dims = standardOutDimNames(ctx, shape.size());
     std::reverse(dims.begin(), dims.end());
     return linear.transposeOuts(dims).reshapeOuts(
