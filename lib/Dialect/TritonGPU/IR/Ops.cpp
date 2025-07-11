@@ -474,7 +474,7 @@ LogicalResult MemDescReshapeOp::verify() {
     return emitError("result element type must match src element type");
   }
   auto srcShape = srcType.getShape();
-  if (srcType.getAllocShape().take_front(srcShape.size()) != srcShape) {
+  if (srcType.getAllocShape().take_back(srcShape.size()) != srcShape) {
     return emitError("NYI: memdesc_reshape of memdesc_subviews");
   }
 
