@@ -1407,7 +1407,7 @@ void AMDMfmaEncodingAttr::print(AsmPrinter &printer) const {
           << ", isTransposed = " << getIsTransposed();
   maybePrintCTALayout(getContext(), printer, getCTALayout(),
                       /*rank=*/getRank());
-  if (getElementType() && !(getElementType()->isF16())) {
+  if (getElementType() && !(getElementType()->isF32())) {
     std::string typeStr;
     llvm::raw_string_ostream rso(typeStr);
     getElementType()->print(rso);
@@ -1429,8 +1429,11 @@ LogicalResult AMDMfmaEncodingAttr::verify(
     return emitError()
            << "(M, N) cases other than (32, 32) or (16, 16) unimplemented";
   }
-  if (elementType && !(elementType->isF64() || elementType->isF32())) {
-    return emitError() << "element type must be f64 or f32 or none";
+  if (elementType && !(elementType->isF64() || elementType->isF32() || elementType->isInteger(32))) {
+    std::string typeStr;
+    llvm::raw_string_ostream rso(typeStr);
+    elementType->print(rso);
+    return emitError() << "element type must be f64, f32, i32, or none. Received " << rso.str();
   }
 
   return success();
