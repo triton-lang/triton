@@ -1390,7 +1390,7 @@ Attribute AMDMfmaEncodingAttr::parse(AsmParser &parser, Type type) {
 
   return parser.getChecked<AMDMfmaEncodingAttr>(
       parser.getContext(), version, warpsPerCTA, tilesPerWarp, instrShape[0],
-      instrShape[1], isTransposed, *CTALayout, std::nullopt);
+      instrShape[1], isTransposed, *CTALayout, elementType);
 }
 
 void AMDMfmaEncodingAttr::print(AsmPrinter &printer) const {
@@ -1407,7 +1407,7 @@ void AMDMfmaEncodingAttr::print(AsmPrinter &printer) const {
           << ", isTransposed = " << getIsTransposed();
   maybePrintCTALayout(getContext(), printer, getCTALayout(),
                       /*rank=*/getRank());
-  if (getElementType()) {
+  if (getElementType() && !(getElementType()->isF16())) {
     std::string typeStr;
     llvm::raw_string_ostream rso(typeStr);
     getElementType()->print(rso);
@@ -1429,7 +1429,7 @@ LogicalResult AMDMfmaEncodingAttr::verify(
     return emitError()
            << "(M, N) cases other than (32, 32) or (16, 16) unimplemented";
   }
-  if (!(!elementType.has_value() || (elementType->isF64() || elementType->isF32()))) {
+  if (elementType && !(elementType->isF64() || elementType->isF32())) {
     return emitError() << "element type must be f64 or f32 or none";
   }
 
