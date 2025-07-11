@@ -315,7 +315,7 @@ class CUDABackend(BaseBackend):
         metadata["tensordesc_meta"] = mod.get_tensordesc_metadata()
         return mod
 
-    def make_llir(self, src, metadata, options, capability):
+    def make_llvmir(self, src, metadata, options, capability):
         ptx_version = get_ptx_version_from_options(options, self.target.arch)
 
         mod = src
@@ -338,9 +338,27 @@ class CUDABackend(BaseBackend):
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
-        if not knobs.compilation.disable_line_info:
-            passes.llvmir.add_di_scope(pm)
         pm.run(mod)
+        return mod
+
+    def make_llir(self, src, metadata, options, capability):
+        mod = src
+        # Important dev note: several methods will step in unknown fault when dumping the IR with Dbg attribute here,
+        #       if add_di_scope is called and DISubprogramAttr was inserted into Location
+        # From the deep core dump message shows "signal SIGSEGV" when calling llvm::DenseMap::count is called when printing the IR's llvm's dbg attribute
+
+        # All those methods works fine when using triton-opt with a new cutomized pass, but failed when using python API
+        # Current example include mod.print(os, flags), mlir::translateModuleToLLVMIR(mod, ctx);
+
+        # The reason is unclear, but we must avoid using print(mod), str(mod) or mod.str() for now;
+        #       mod.dump() is fine since it does not print debug info
+        # Therefore, add_di_scope(pm) was moved after printing to avoid such issue
+
+        if not knobs.compilation.disable_line_info:
+            pm = ir.pass_manager(mod.context)
+            pm.enable_debug()
+            passes.llvmir.add_di_scope(pm)
+            pm.run(mod)
         # LLVM-IR (MLIR) -> LLVM-IR (LLVM)
         llvm.init_targets()
         context = llvm.context()
@@ -455,6 +473,7 @@ class CUDABackend(BaseBackend):
             stages["ttgir"] = lambda src, metadata: self.make_ttgir(src, metadata, options, capability)
         elif language == Language.GLUON:
             stages["ttgir"] = lambda src, metadata: self.ttgir_opt(src, metadata, options, capability)
+        stages["llvmir"] = lambda src, metadata: self.make_llvmir(src, metadata, options, capability)
         stages["llir"] = lambda src, metadata: self.make_llir(src, metadata, options, capability)
         stages["ptx"] = lambda src, metadata: self.make_ptx(src, metadata, options, self.target.arch)
         stages["cubin"] = lambda src, metadata: self.make_cubin(src, metadata, options, self.target.arch)
