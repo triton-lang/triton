@@ -4,6 +4,7 @@
 
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Types.h"
+#include "triton/Dialect/Gluon/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Types.h"
@@ -16,6 +17,7 @@ namespace py = pybind11;
 namespace tt = triton;
 namespace ttg = triton::gpu;
 namespace ttng = triton::nvidia_gpu;
+namespace gluon = mlir::triton::gluon;
 
 // Helper to check if an MLIR type or attribute has a verifier method.
 template <typename AttrOrType>
@@ -83,6 +85,7 @@ struct GluonOpBuilder : public TritonOpBuilder {
 };
 
 struct GluonLayouts {
+  py::handle AutoLayout;
   py::handle BlockedLayout;
   py::handle SliceLayout;
   py::handle DistributedLinearLayout;
@@ -93,6 +96,7 @@ struct GluonLayouts {
   GluonLayouts() {
     auto layouts =
         py::module::import("triton.experimental.gluon.language._layouts");
+    AutoLayout = py::object(layouts.attr("AutoLayout")).release();
     BlockedLayout = py::object(layouts.attr("BlockedLayout")).release();
     SliceLayout = py::object(layouts.attr("SliceLayout")).release();
     DistributedLinearLayout =
@@ -138,10 +142,10 @@ py::object layoutToGluon(Attribute layout) {
     auto ctaLayout = mma.getCTALayout();
     return layouts.NVMMADistributedLayout(
         std::vector<unsigned>{mma.getVersionMajor(), mma.getVersionMinor()},
-        toStdVector(mma.getWarpsPerCTA()),
+        toStdVector(mma.getWarpsPerCTA()), toStdVector(mma.getInstrShape()),
         toStdVector(ctaLayout.getCTAsPerCGA()),
         toStdVector(ctaLayout.getCTASplitNum()),
-        toStdVector(ctaLayout.getCTAOrder()), toStdVector(mma.getInstrShape()));
+        toStdVector(ctaLayout.getCTAOrder()));
   } else if (auto nvmma = dyn_cast<ttg::NVMMASharedEncodingAttr>(layout)) {
     auto ctaLayout = nvmma.getCTALayout();
     return layouts.NVMMASharedLayout(
@@ -158,6 +162,8 @@ py::object layoutToGluon(Attribute layout) {
         swizzled.getOrder(), toStdVector(ctaLayout.getCTAsPerCGA()),
         toStdVector(ctaLayout.getCTASplitNum()),
         toStdVector(ctaLayout.getCTAOrder()));
+  } else if (auto autoEnc = dyn_cast<gluon::AutoEncodingAttr>(layout)) {
+    return layouts.AutoLayout();
   }
   throw py::value_error("Unhandled encoding encountered");
 }
@@ -261,6 +267,10 @@ void init_gluon_ir(py::module &&m) {
              return self.getChecked<ttg::NVMMASharedEncodingAttr>(
                  ctx, swizzleByteWidth, transposed, elementBitwidth, fp4Padded,
                  ctaLayout);
+           })
+      .def("get_auto_layout",
+           [](GluonOpBuilder &self) -> Attribute {
+             return self.getChecked<gluon::AutoEncodingAttr>(self.getContext());
            })
       .def("get_swizzled_shared_layout",
            [](GluonOpBuilder &self, int vec, int perPhase, int maxPhase,
@@ -495,11 +505,6 @@ void init_gluon_ir(py::module &&m) {
            [](TritonOpBuilder &self, Value &arg, Type retTy) -> Value {
              return self.create<tt::BroadcastOp>(retTy, arg);
            })
-      .def(
-          "create_expand_dims",
-          [](TritonOpBuilder &self, Value &arg, int axis, Type retTy) -> Value {
-            return self.create<tt::ExpandDimsOp>(retTy, arg, axis);
-          })
       .def("create_warp_return",
            [](GluonOpBuilder &self) -> Operation * {
              return self.create<ttg::WarpReturnOp>();

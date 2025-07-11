@@ -33,7 +33,11 @@ struct ConcatOpConversion : public ConvertOpToLLVMPattern<amdgpu::ConcatOp> {
 
     MLIRContext *context = resultType.getContext();
     auto linearLayoutSrc = triton::gpu::toLinearLayout(srcShape, srcEncoding);
-    auto linearLayoutDst = triton::gpu::toLinearLayout(dstShape, dstEncoding);
+    auto outDimNames = llvm::to_vector(linearLayoutSrc.getOutDimNames());
+    // Call transposeOuts, to ensure that order of input and output tensor
+    // element coordinates are compatible on stage 8 in algorithm below.
+    auto linearLayoutDst = triton::gpu::toLinearLayout(dstShape, dstEncoding)
+                               .transposeOuts(outDimNames);
     auto srcCTAOrder = LLVM::AMD::getCTATileOrder(context, linearLayoutSrc);
     auto dstCTAOrder = LLVM::AMD::getCTATileOrder(context, linearLayoutSrc);
 
@@ -69,34 +73,77 @@ struct ConcatOpConversion : public ConvertOpToLLVMPattern<amdgpu::ConcatOp> {
       unpackedSources.push_back(unpackLLElements(loc, currSrc, rewriter));
     }
 
-    // Traverse CTA tiles in the result tensor
-    for (int i = 0; i < numCTATiles; ++i) {
-      auto currTileIdx = mlir::LLVM::delinearize(i, dstCTAShape, dstCTAOrder);
+    // Algorithm:
+    // 1. for all registers in src tensor
+    // 2.   compute src location in tensor relative to tile beginnig
+    // 3.   save mapping from src elem coordinates to register idx
+    // 4. for all elements in dst tensor
+    // 5.   get dst value location in tensor
+    // 6.   find, which input tile holds the dst value
+    // 7.   subtract dst coordinates and start coordinates of the tile
+    // 8.   find source register number which holds dst value
+    // 9.   copy dst element from computed tile and register
+    auto ctx = rewriter.getContext();
+    StringAttr kReg = StringAttr::get(ctx, "register");
+    auto srcRegBases = linearLayoutSrc.getBases().lookup(kReg);
+    auto dstRegBases = linearLayoutDst.getBases().lookup(kReg);
+
+    using ElemLocationKey = decltype(linearLayoutSrc.apply({}));
+    llvm::MapVector<ElemLocationKey, unsigned> srcElemToReg;
+    int srcRegNum = 1 << srcRegBases.size();
+    // 1. for all registers in src tensor
+    for (int regId = 0; regId < srcRegNum; ++regId) {
+      // 2.   compute src location in tensor relative to tile beginnig
+      SmallVector<std::pair<StringAttr, int32_t>> hardwareLocation;
+      for (auto dimName : linearLayoutSrc.getInDimNames()) {
+        if (dimName == kReg)
+          hardwareLocation.push_back({dimName, regId});
+        else
+          hardwareLocation.push_back({dimName, 0});
+      }
+      auto elemCoords = linearLayoutSrc.apply(hardwareLocation);
+      // 3.  save mapping from src elem coordinates to register idx
+      srcElemToReg[elemCoords] = regId;
+    }
+    // for every output register get element coords,
+    // find corresponding operand and copy src register
+    int dstRegNum = 1 << dstRegBases.size();
+    // 4. for all elements in dst tensor
+    for (int regId = 0; regId < dstRegNum; ++regId) {
+      SmallVector<std::pair<StringAttr, int32_t>> hardwareLocation;
+      // 5.   get dst value location in tensor
+      for (auto dimName : linearLayoutDst.getInDimNames()) {
+        if (dimName == kReg)
+          hardwareLocation.push_back({dimName, regId});
+        else
+          hardwareLocation.push_back({dimName, 0});
+      }
+      auto elemCoords = linearLayoutDst.apply(hardwareLocation);
+      auto elemCoordsArray =
+          llvm::to_vector(llvm::make_second_range(elemCoords));
       // The n-dim destination tensor is built by arranging n-dim source tensors
       // into a destination tensor shape. Determine which source tensor contains
       // the current CTA tile.
-      auto multiDimSrcIdx = LLVM::AMD::multiDimElementwise<unsigned, unsigned>(
-          currTileIdx, srcCTAShape, std::divides<unsigned>());
+      auto multiDimOperandIdx =
+          LLVM::AMD::multiDimElementwise<int32_t, int64_t>(
+              elemCoordsArray, srcShape, std::divides<unsigned>());
       // Compute linear index of the current source tensor.
       // Concat operands are laid out in the destination tensor
       // in fastest slowest varying dimension order.
-      auto linearSrcIdx =
-          mlir::LLVM::linearize(multiDimSrcIdx, srcToDstShape, defaultOrder);
+      // 6.   find, which input tile holds the dst value
+      auto linearOperandIdx = mlir::LLVM::linearize(
+          multiDimOperandIdx, srcToDstShape, defaultOrder);
 
-      // After determining which source tensor the current CTA tile belongs to,
-      // compute the index of this CTA tile within that source tensor,
-      // considering the source tensors may include CTA tiles.
-      auto multiDimSrcCTAIdx =
-          LLVM::AMD::multiDimElementwise<unsigned, unsigned>(
-              currTileIdx, srcCTAShape, std::modulus<unsigned>());
-      auto linearSrcCTAIdx =
-          mlir::LLVM::linearize(multiDimSrcCTAIdx, srcCTAShape, srcCTAOrder);
-      auto unpackedElements = unpackedSources[linearSrcIdx];
+      // 7.   subtract dst coordinates and start coordinates of the tile
+      for (int dim = 0; dim < rank; ++dim)
+        elemCoords[dim].second -= multiDimOperandIdx[dim] * srcShape[dim];
 
-      auto startIt =
-          unpackedElements.begin() + linearSrcCTAIdx * elemsPerThreadPerCTA;
-      auto endIt = startIt + elemsPerThreadPerCTA;
-      llvm::append_range(resultVals, llvm::make_range(startIt, endIt));
+      assert(srcElemToReg.contains(elemCoords));
+      // 8.   find source register number which holds dst value
+      int srcRegIdx = srcElemToReg.lookup(elemCoords);
+
+      // 9.   copy dst element from found tile and register
+      resultVals.push_back(unpackedSources[linearOperandIdx][srcRegIdx]);
     }
 
     Value packedResult = packLLElements(loc, this->getTypeConverter(),

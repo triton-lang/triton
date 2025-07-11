@@ -1033,16 +1033,15 @@ class CodeGenerator(ast.NodeVisitor):
         assert isinstance(node.ctx, ast.Load)
         lhs = self.visit(node.value)
         slices = self.visit(node.slice)
-        if _is_triton_tensor(lhs):
-            return lhs.__getitem__(slices, _semantic=self.semantic)
+        if _is_triton_value(lhs):
+            return self.call_Method(node, lhs.__getitem__, lhs, [slices], {})
         return lhs[slices]
 
     def visit_Subscript_Store(self, node, value):
         assert isinstance(node.ctx, ast.Store)
         lhs = self.visit(node.value)
         slices = self.visit(node.slice)
-        assert isinstance(lhs, language.tuple)
-        lhs.__setitem__(slices, value)
+        self.call_Method(node, lhs.__setitem__, lhs, [slices, value], {})
 
     def visit_Subscript(self, node):
         return self.visit_Subscript_Load(node)
@@ -1238,23 +1237,7 @@ class CodeGenerator(ast.NodeVisitor):
         handles = [call_op.get_result(i) for i in range(call_op.get_num_results())]
         return next(unflatten_ir_values(handles, [callee_ret_type]))
 
-    def visit_Call(self, node):
-        fn = _unwrap_if_constexpr(self.visit(node.func))
-        if not isinstance(fn, BoundJITMethod):
-            static_implementation = self.statically_implemented_functions.get(fn)
-            if static_implementation is not None:
-                return static_implementation(self, node)
-
-        mur = getattr(fn, '_must_use_result', False)
-        if mur and getattr(node, '_is_unused', False):
-            error_message = ["The result of %s is not being used." % ast.unparse(node.func)]
-            if isinstance(mur, str):
-                error_message.append(mur)
-            raise CompilationError(self.jit_fn.src, node, " ".join(error_message))
-
-        kws = dict(self.visit(keyword) for keyword in node.keywords)
-        args = [self.visit(arg) for arg in node.args]
-        args = list(itertools.chain.from_iterable(x if isinstance(x, list) else [x] for x in args))
+    def call_Function(self, node, fn, args, kws):
         if isinstance(fn, BoundJITMethod):
             args.insert(0, fn.__self__)
             fn = fn.__func__
@@ -1262,8 +1245,10 @@ class CodeGenerator(ast.NodeVisitor):
             _check_fn_args(node, fn, args)
             return self.call_JitFunction(fn, args, kws)
         if (hasattr(fn, '__self__') and _is_triton_value(fn.__self__)) or language.core.is_builtin(fn):
-            extra_kwargs = {"_semantic": self.semantic}
+            extra_kwargs = dict()
             sig = inspect.signature(fn)
+            if '_semantic' in sig.parameters:
+                extra_kwargs["_semantic"] = self.semantic
             if '_generator' in sig.parameters:
                 extra_kwargs['_generator'] = self
             try:
@@ -1281,12 +1266,37 @@ class CodeGenerator(ast.NodeVisitor):
                 # itself).  But when calling a function, we raise as `from e` to
                 # preserve the traceback of the original error, which may e.g.
                 # be in core.py.
-                raise CompilationError(self.jit_fn.src, node, None) from e
+                raise CompilationError(self.jit_fn.src, node, str(e)) from e
 
         if fn in self.builtin_namespace.values():
             args = map(_unwrap_if_constexpr, args)
         ret = fn(*args, **kws)
         return _apply_to_tuple_values(ret, lambda x: x) if _is_namedtuple(type(ret)) else ret
+
+    def call_Method(self, node, fn, fn_self, args, kws):
+        if isinstance(fn, JITFunction):
+            args.insert(0, fn_self)
+        return self.call_Function(node, fn, args, kws)
+
+    def visit_Call(self, node):
+        fn = _unwrap_if_constexpr(self.visit(node.func))
+        if not isinstance(fn, BoundJITMethod):
+            static_implementation = self.statically_implemented_functions.get(fn)
+            if static_implementation is not None:
+                return static_implementation(self, node)
+
+        mur = getattr(fn, '_must_use_result', False)
+        if mur and getattr(node, '_is_unused', False):
+            error_message = ["The result of %s is not being used." % ast.unparse(node.func)]
+            if isinstance(mur, str):
+                error_message.append(mur)
+            raise CompilationError(self.jit_fn.src, node, " ".join(error_message))
+
+        kws = dict(self.visit(keyword) for keyword in node.keywords)
+        args = [self.visit(arg) for arg in node.args]
+        args = list(itertools.chain.from_iterable(x if isinstance(x, list) else [x] for x in args))
+
+        return self.call_Function(node, fn, args, kws)
 
     def visit_Constant(self, node):
         return constexpr(node.value)
