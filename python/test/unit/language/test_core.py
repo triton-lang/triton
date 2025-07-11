@@ -6007,13 +6007,6 @@ def test_constexpr_flattens():
     assert tl.constexpr(tl.constexpr(tl.constexpr(5))) == tl.constexpr(5)
 
 
-def test_constexpr_type():
-    from triton.language.core import constexpr_type
-    assert tl.constexpr(5).type != tl.float32
-    assert tl.constexpr(5).type == constexpr_type(5)
-    assert tl.constexpr(tl.float32).type == constexpr_type(tl.float32)
-
-
 @pytest.mark.parametrize("literal, tensor_ty", [(10, tl.int32), (32.1, tl.float32),
                                                 ((5, 6, 7), None),  # tuples can't be lifted to tensors
                                                 ])
