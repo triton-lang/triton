@@ -1211,7 +1211,7 @@ TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
   } else {
     assert(!allocationShape.empty() &&
            "allocationShape not supported for shared layout");
-    allocationShape = allocationShape.take_front(shape.size());
+    allocationShape = allocationShape.take_back(shape.size());
     assert(llvm::all_of(allocationShape,
                         [](int64_t dim) {
                           return llvm::isPowerOf2_32(dim) && dim >= 1;
