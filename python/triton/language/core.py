@@ -774,9 +774,6 @@ class tuple_type(base_type):
     def __iter__(self):
         return iter(self.types)
 
-    def _update_type(self, idx, new_type):
-        self.types[idx] = new_type
-
     def _flatten_ir_types(self, builder: ir.builder, out: List[ir.type]):
         for ty in self.types:
             if not isinstance(ty, constexpr):
@@ -1273,19 +1270,23 @@ class tensor(base_value):
         ...
 
 
-def _type_for_tuple_value(x):
-    if isinstance(x, dtype):
-        return x
-    if isinstance(x, (int, float)):
-        return constexpr_type(x)
-    return x.type
+def _type_for_tuple_values(values):
+
+    def get_type(x):
+        if isinstance(x, dtype):
+            return x
+        if isinstance(x, (int, float)):
+            return constexpr_type(x)
+        return x.type
+
+    return tuple_type([get_type(x) for x in values])
 
 
 class tuple(base_value):
 
     def __init__(self, args: Sequence, type: tuple_type = None):
         self.values = [i for i in args]
-        self.type = type or tuple_type([_type_for_tuple_value(x) for x in self.values])
+        self.type = type or _type_for_tuple_values(self.values)
 
     def __getitem__(self, idx: constexpr):
         if isinstance(idx, int):
@@ -1305,8 +1306,7 @@ class tuple(base_value):
             idx = constexpr(idx)
         assert isinstance(idx, constexpr)
         self.values[idx] = value
-        if isinstance(self.type, tuple_type):
-            self.type._update_type(idx.value, _type_for_tuple_value(value))
+        self.type = _type_for_tuple_values(self.values)
 
     def __add__(self, other):
         other = _normalize_tuple(other)
