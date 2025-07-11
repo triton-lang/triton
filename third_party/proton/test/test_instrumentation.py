@@ -464,6 +464,7 @@ def test_sched_barrier(tmp_path: pathlib.Path):
     proton.finalize()
 
     asm = kernel.asm["amdgcn"]
+    print(asm)
 
     # Make sure a sched barrier is inserted before every s_memtime call
     lines = asm.splitlines()
