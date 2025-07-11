@@ -3,6 +3,7 @@ import torch
 import triton
 import triton.language as tl
 import pytest
+import numpy as np
 
 
 def annotated_function(return_type=None, **arg_types):
@@ -49,3 +50,36 @@ def test_unknown_annotation(device):
         _kernel[(1, )](x.shape[0], x.shape[0], 32)
     except AttributeError:
         pass
+
+
+# Test float annotations are properly respected
+@pytest.mark.parametrize(
+    ("dtype", "test_val"),
+    [(dtype, test_val)
+     for dtype in [tl.float16, tl.bfloat16, tl.float32, tl.float64]
+     for test_val in [0.0, 42.0, float("inf"), float("nan")]],
+)
+def test_float_annotation(device, dtype, test_val):
+
+    @triton.jit
+    @annotated_function(val=dtype)
+    def _kernel(ptr, val):
+        tl.static_assert(val.dtype == dtype)
+        tl.store(ptr, val)
+
+    ptr = torch.empty(1, device=device, dtype=torch.float32)
+    h = _kernel[(1, )](ptr, test_val)
+    np.testing.assert_allclose(ptr.cpu().numpy(), [test_val], atol=1e-6)
+
+    # Check that the type is properly emitted in the IR
+    if dtype == tl.float16:
+        assert "%arg1: f16" in h.asm["ttir"]
+        assert "arith.extf %arg1 : f16 to f32" in h.asm["ttir"]
+    elif dtype == tl.bfloat16:
+        assert "%arg1: bf16" in h.asm["ttir"]
+        assert "arith.extf %arg1 : bf16 to f32" in h.asm["ttir"]
+    elif dtype == tl.float32:
+        assert "%arg1: f32" in h.asm["ttir"]
+    elif dtype == tl.float64:
+        assert "%arg1: f64" in h.asm["ttir"]
+        assert "arith.truncf %arg1 : f64 to f32" in h.asm["ttir"]
