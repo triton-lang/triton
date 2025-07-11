@@ -994,8 +994,12 @@ LinearLayout lstsq(const LinearLayout &A, const LinearLayout &B) {
   std::unique_ptr<uint64_t[]> retMat(new uint64_t[numColsA]());
   for (int c = 0; c < numColsA; ++c) {
     int row = pivotRowOfCol[c];
-    retMat[c] =
-        combinedMat[row] >> numColsA; // strip the A‑part, keep the B‑part
+    if (row == -1) {
+      retMat[c] = 0;
+    } else {
+      retMat[c] =
+          combinedMat[row] >> numColsA; // strip the A‑part, keep the B‑part
+    }
   }
 
   // We need names for the in/out dim of the flattened layout we're going to
