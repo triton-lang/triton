@@ -94,7 +94,7 @@ def start(
                                                Each mode has a set of control knobs following with the mode name.
                                                For example, "pcsampling" has an "interval" control knob, expressed as "pcsampling:interval=1000".
         hook (str, optional): The hook to use for profiling.
-                              Available options are [None, "triton"].
+                              Available options are [None, "launch"].
                               Defaults to None.
     Returns:
         session (int): The session ID of the profiling session.

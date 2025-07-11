@@ -3,6 +3,7 @@ from typing import List, Optional
 from triton.language.core import _unwrap_if_constexpr, _unwrap_shape, constexpr_type
 
 __all__ = [
+    "AutoLayout",
     "BlockedLayout",
     "SliceLayout",
     "DistributedLinearLayout",
@@ -29,6 +30,16 @@ class DistributedLayout:
     @property
     def type(self):
         return constexpr_type(self)
+
+
+@dataclass(frozen=True)
+class AutoLayout(DistributedLayout):
+
+    def _to_ir(self, builder):
+        return builder.get_auto_layout()
+
+    def mangle(self):
+        return "AL"
 
 
 @dataclass(frozen=True)
