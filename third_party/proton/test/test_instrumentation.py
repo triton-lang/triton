@@ -151,7 +151,7 @@ def test_record(method, tmp_path: pathlib.Path):
     assert "proton.record end" in ttir
 
 
-@pytest.mark.parametrize("hook", ["launch", None])
+@pytest.mark.parametrize("hook", ["triton", None])
 def test_tree(tmp_path: pathlib.Path, hook):
 
     def metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
