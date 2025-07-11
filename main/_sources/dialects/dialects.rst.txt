@@ -6,6 +6,7 @@ Triton MLIR Dialects and Ops
    :maxdepth: 1
    :caption: Dialects
 
+   ./GluonDialect.md
    ./TritonNvidiaGPUDialect.md
    ./TritonGPUDialect.md
    ./ProtonDialect.md
