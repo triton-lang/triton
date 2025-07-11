@@ -6007,6 +6007,13 @@ def test_constexpr_flattens():
     assert tl.constexpr(tl.constexpr(tl.constexpr(5))) == tl.constexpr(5)
 
 
+def test_constexpr_type():
+    from triton.language.core import constexpr_type
+    assert tl.constexpr(5).type != tl.float32
+    assert tl.constexpr(5).type == constexpr_type(5)
+    assert tl.constexpr(tl.float32).type == constexpr_type(tl.float32)
+
+
 @triton.jit
 def return_poison(x):
     a = False
