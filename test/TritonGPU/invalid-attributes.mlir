@@ -74,6 +74,11 @@
 
 // -----
 
+// expected-error@+1 {{element type must be f64, f32, i32, or none}}
+#mfma = #ttg.amd_mfma<{version = 2, warpsPerCTA = [1, 1, 1], instrShape = [16, 16], isTransposed = false, elementType = f16}>
+
+// -----
+
 // expected-error@+1 {{interval values must all be power of two}}
 #shared = #ttg.padded_shared<[3:+2]>
 

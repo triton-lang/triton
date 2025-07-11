@@ -561,6 +561,17 @@ static LogicalResult parseBool(AsmParser &parser, const NamedAttribute &attr,
   return parseBoolAttrValue(parser, attr.getValue(), value, desc);
 };
 
+static LogicalResult parseType(AsmParser &parser, const NamedAttribute &attr,
+                               std::optional<Type> &value, StringRef desc) {
+  auto typeAttr = mlir::dyn_cast<TypeAttr>(attr.getValue());
+  if (!typeAttr) {
+    parser.emitError(parser.getNameLoc(), "expected a Type in ") << desc;
+    return failure();
+  }
+  value = typeAttr.getValue();
+  return success();
+}
+
 // Print the CTALayout if it's not equal to the default.
 static void maybePrintCTALayout(mlir::MLIRContext *context,
                                 mlir::AsmPrinter &printer, CTALayoutAttr layout,
@@ -1327,6 +1338,7 @@ Attribute AMDMfmaEncodingAttr::parse(AsmParser &parser, Type type) {
   std::optional<SmallVector<unsigned>> CTAsPerCGA;
   std::optional<SmallVector<unsigned>> CTASplitNum;
   std::optional<SmallVector<unsigned>> CTAOrder;
+  std::optional<Type> elementType;
 
   for (const NamedAttribute &attr : dict) {
     if (attr.getName() == "version") {
@@ -1366,6 +1378,10 @@ Attribute AMDMfmaEncodingAttr::parse(AsmParser &parser, Type type) {
               .failed())
         return {};
     }
+    if (attr.getName() == "elementType") {
+      if (parseType(parser, attr, elementType, "elementType").failed())
+        return {};
+    }
   }
 
   if (tilesPerWarp.empty()) {
@@ -1379,7 +1395,7 @@ Attribute AMDMfmaEncodingAttr::parse(AsmParser &parser, Type type) {
 
   return parser.getChecked<AMDMfmaEncodingAttr>(
       parser.getContext(), version, warpsPerCTA, tilesPerWarp, instrShape[0],
-      instrShape[1], isTransposed, *CTALayout);
+      instrShape[1], isTransposed, *CTALayout, elementType);
 }
 
 void AMDMfmaEncodingAttr::print(AsmPrinter &printer) const {
@@ -1396,6 +1412,12 @@ void AMDMfmaEncodingAttr::print(AsmPrinter &printer) const {
           << ", isTransposed = " << getIsTransposed();
   maybePrintCTALayout(getContext(), printer, getCTALayout(),
                       /*rank=*/getRank());
+  if (getElementType() && !(getElementType()->isF32())) {
+    std::string typeStr;
+    llvm::raw_string_ostream rso(typeStr);
+    getElementType()->print(rso);
+    printer << ", elementType = " << rso.str();
+  }
   printer << "}>";
 }
 
@@ -1403,13 +1425,21 @@ LogicalResult AMDMfmaEncodingAttr::verify(
     function_ref<mlir::InFlightDiagnostic()> emitError, unsigned version,
     llvm::ArrayRef<unsigned int> warpsPerCTA,
     llvm::ArrayRef<unsigned int> tilesPerWarp, unsigned mDim, unsigned nDim,
-    bool isTransposed, mlir::triton::gpu::CTALayoutAttr) {
+    bool isTransposed, mlir::triton::gpu::CTALayoutAttr,
+    std::optional<Type> elementType) {
   if (!(version >= 0 && version <= 4)) {
     return emitError() << "version must be in the [0, 4] range";
   }
   if (!((mDim == 32 && nDim == 32) || (mDim == 16 && nDim == 16))) {
     return emitError()
            << "(M, N) cases other than (32, 32) or (16, 16) unimplemented";
+  }
+  if (elementType && !(elementType->isF64() || elementType->isF32() ||
+                       elementType->isInteger(32))) {
+    std::string typeStr;
+    llvm::raw_string_ostream rso(typeStr);
+    elementType->print(rso);
+    return emitError() << "element type must be f64, f32, i32, or none";
   }
 
   return success();

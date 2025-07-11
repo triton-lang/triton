@@ -293,9 +293,12 @@ class AttentionConfig:
     alpha_2d_layout: gl.constexpr
 
     num_kv_buffers: gl.constexpr
+    use_fadd2_reduce: gl.constexpr
+    use_exp2_turnstile: gl.constexpr
+    use_ffma2_scale_rowmax: gl.constexpr
 
-    def __init__(self, qk_scale, Z, H, N_CTX, BLOCK_M, BLOCK_N, HEAD_DIM, GROUP_SIZE_N, NUM_SMS, dtype, num_warps,
-                 SPLIT_D_FACTOR):
+    def __init__(self, qk_scale, Z, H, N_CTX, BLOCK_M, BLOCK_N, HEAD_DIM, GROUP_SIZE_N, NUM_SMS, STAGE, dtype,
+                 num_warps, SPLIT_D_FACTOR):
         self.qk_scale = qk_scale
         self.Z = Z
         self.H = H
@@ -332,12 +335,15 @@ class AttentionConfig:
                                        (self.o_shape[0], self.o_shape[1] // self.SPLIT_D_FACTOR), self.num_warps))
         self.alpha_2d_layout = gl.constexpr(gl.BlockedLayout([1, 1], [32, 1], [self.num_warps, 1], [0, 1]))
 
-        if dtype == gl.float16:
-            self.num_kv_buffers = gl.constexpr(3 if HEAD_DIM == 128 else 6)
-        elif dtype == gl.bfloat16:
+        is_fp16 = dtype.value in [gl.float16, gl.bfloat16]
+        if is_fp16:
             self.num_kv_buffers = gl.constexpr(3 if HEAD_DIM == 128 else 6)
         else:
             self.num_kv_buffers = gl.constexpr(4 if HEAD_DIM == 128 else 8)
+
+        self.use_fadd2_reduce = gl.constexpr(HEAD_DIM == 64)
+        self.use_exp2_turnstile = gl.constexpr(HEAD_DIM == 64)
+        self.use_ffma2_scale_rowmax = gl.constexpr(HEAD_DIM == 128 or is_fp16 == (STAGE == 3))
 
     @gluon.jit
     def get_program(self, pid_m, pid_n):
@@ -470,6 +476,68 @@ def _mul_f32x2(a, b):
     )
 
 
+@gluon.jit
+def _fma_f32x2(a, b, c):
+    return gl.inline_asm_elementwise(
+        """
+        {
+            .reg .b64 ra, rb, rc, rd;
+            mov.b64 ra, { $2, $3 };
+            mov.b64 rb, { $4, $5 };
+            mov.b64 rc, { $6, $7 };
+            fma.rn.f32x2 rd, ra, rb, rc;
+            mov.b64 { $0, $1 }, rd;
+        }
+        """,
+        "=r,=r,r,r,r,r,r,r",
+        [a, b, c],
+        dtype=gl.float32,
+        is_pure=True,
+        pack=2,
+    )
+
+
+@gluon.jit
+def _reduce_fadd2(p0a, p1a, p0b, p1b):
+    return gl.inline_asm_elementwise(
+        """
+        {
+            .reg .b64 rc, ra, rb;
+            mov.b64 ra, { $2, $4 };
+            mov.b64 rb, { $3, $5 };
+            add.f32x2 rc, ra, rb;
+            mov.b64 { $0, $1 }, rc;
+        }
+        """,
+        "=r,=r,r,r,r,r",
+        [p0a, p0b, p1a, p1b],
+        dtype=[gl.float32, gl.float32],
+        is_pure=True,
+        pack=1,
+    )
+
+
+@gluon.jit
+def _pairwise_fma_f32x2(a0, b0, c0, a1, b1, c1):
+    return gl.inline_asm_elementwise(
+        """
+        {
+            .reg .b64 rd, ra, rb, rc;
+            mov.b64 ra, { $2, $5 };
+            mov.b64 rb, { $3, $6 };
+            mov.b64 rc, { $4, $7 };
+            fma.rn.f32x2 rd, ra, rb, rc;
+            mov.b64 { $0, $1 }, rd;
+        }
+        """,
+        "=r,=r,r,r,r,r,r,r",
+        [a0, b0, c0, a1, b1, c1],
+        dtype=[gl.float32, gl.float32],
+        is_pure=True,
+        pack=1,
+    )
+
+
 # ===-----------------------------------------------------------------------===#
 # _gluon_attn
 # ===-----------------------------------------------------------------------===#
@@ -500,7 +568,7 @@ def _borrow_s_for_epilogue(config, s_tmem):
 
 @gluon.jit
 def _attn_fwd_load(config, chnls, descs, M, STAGE: gl.constexpr):
-    q_chnl, kv_chnl, o_chnl, epi_chnl, s0_chnl, s1_chnl, c0_chnl, c1_chnl = chnls
+    q_chnl, kv_chnl, o_chnl, epi_chnl, s0_chnl, s1_chnl, c0_chnl, c1_chnl, exp_turnstile = chnls
     desc_q, desc_k, desc_v, desc_o = descs
 
     q_producer = q_chnl.create_producer()
@@ -536,7 +604,7 @@ def _attn_fwd_load(config, chnls, descs, M, STAGE: gl.constexpr):
 
 @gluon.jit
 def _attn_fwd_mma(config, chnls, descs, M, STAGE: gl.constexpr):
-    q_chnl, kv_chnl, o_chnl, epi_chnl, s0_chnl, s1_chnl, c0_chnl, c1_chnl = chnls
+    q_chnl, kv_chnl, o_chnl, epi_chnl, s0_chnl, s1_chnl, c0_chnl, c1_chnl, exp_turnstile = chnls
     desc_q, desc_k, desc_v, desc_o = descs
 
     q_consumer = q_chnl.create_consumer()
@@ -598,8 +666,8 @@ def _attn_fwd_mma(config, chnls, descs, M, STAGE: gl.constexpr):
 
 @gluon.jit
 def _softmax_inner_loop(tile_id: gl.constexpr, config, prog,  #
-                        s_consumer, corr_producer, corr_bar,  #
-                        offs_m, offs_n, m_i, l_i, STAGE: gl.constexpr):
+                        s_consumer, corr_producer, exp_turnstile, corr_bar,  #
+                        offs_m, offs_n, m_i, l_i0, l_i1, STAGE: gl.constexpr):
     lo, hi = prog.get_loop_bounds(STAGE)
 
     for start_n in range(lo, hi, config.BLOCK_N):
@@ -619,31 +687,79 @@ def _softmax_inner_loop(tile_id: gl.constexpr, config, prog,  #
         alpha_tmem.store(gl.convert_layout(alpha.expand_dims(1), config.alpha_2d_layout))
         mbarrier.arrive(corr_bar, count=1)
 
-        qk = _mul_f32x2(qk, gl.full_like(qk, config.qk_scale))
-        qk = _add_f32x2(qk, -m_ij[:, None])
+        if config.use_ffma2_scale_rowmax:
+            qk = _fma_f32x2(qk, gl.full_like(qk, config.qk_scale), -m_ij[:, None])
+        else:
+            qk = _mul_f32x2(qk, gl.full_like(qk, config.qk_scale))
+            qk = _add_f32x2(qk, -m_ij[:, None])
         qk0, qk1, = qk.reshape([config.SPLIT_M, 2, config.BLOCK_N // 2]).permute(0, 2, 1).split()
 
         p_tmem = _borrow_s_as_p(config, s_tmem)
-        p0 = gl.exp2(qk0)
-        p_tmem.slice(0, config.BLOCK_N // 2).store(p0.to(config.dtype))
-        p1 = gl.exp2(qk1)
-        p_tmem.slice(config.BLOCK_N // 2, config.BLOCK_N // 2).store(p1.to(config.dtype))
+        BN4: gl.constexpr = config.BLOCK_N // 4
+        BN2: gl.constexpr = config.BLOCK_N // 2
+
+        # Force the softmax partitions to take turns in the EX2 section. This
+        # prevents contention for the EX2 unit and improves utilization.
+        if config.use_exp2_turnstile:
+            _, exp_bar, exp_turnstile = exp_turnstile.acquire()
+
+        # FIXME: When using FADD2 reductions, ptxas misbehaves and spills far
+        # below the register limit in the FADD2, FMUL2, EX2 section. Subtile by
+        # 4 to minimize the spilling.
+        if config.HEAD_DIM == 64:
+            qk00, qk01 = qk0.reshape([config.SPLIT_M, 2, config.BLOCK_N // 4]).permute(0, 2, 1).split()
+            p00 = gl.exp2(qk00)
+            p_tmem.slice(0, BN4).store(p00.to(config.dtype))
+            p01 = gl.exp2(qk01)
+            p_tmem.slice(BN4, BN4).store(p01.to(config.dtype))
+            p0 = gl.join(p00, p01).permute(0, 2, 1).reshape([config.SPLIT_M, config.BLOCK_N // 2])
+            p0 = gl.convert_layout(p0, config.qk_layout)
+        else:
+            p0 = gl.exp2(qk0)
+            p_tmem.slice(0, BN2).store(p0.to(config.dtype))
+
+        if config.HEAD_DIM == 64:
+            qk10, qk11 = qk1.reshape([config.SPLIT_M, 2, config.BLOCK_N // 4]).permute(0, 2, 1).split()
+            p10 = gl.exp2(qk10)
+            p_tmem.slice(2 * BN4, BN4).store(p10.to(config.dtype))
+            p11 = gl.exp2(qk11)
+            p_tmem.slice(3 * BN4, BN4).store(p11.to(config.dtype))
+            p1 = gl.join(p10, p11).permute(0, 2, 1).reshape([config.SPLIT_M, config.BLOCK_N // 2])
+            p1 = gl.convert_layout(p1, config.qk_layout)
+        else:
+            p1 = gl.exp2(qk1)
+            p_tmem.slice(BN2, BN2).store(p1.to(config.dtype))
+
         mbarrier.arrive(s_bar, count=1)
 
         _, corr_bar, corr_producer = corr_producer.acquire()
 
-        p = gl.join(p0, p1).permute(0, 2, 1).reshape([config.SPLIT_M, config.BLOCK_N])
-        p = gl.convert_layout(p, config.qk_layout)
-        l_ij = gl.sum(p, axis=1)
-        l_i = l_i * alpha + l_ij
+        if config.HEAD_DIM == 64:
+            mbarrier.arrive(exp_bar, count=1)
+
+        if config.use_fadd2_reduce:
+            l_ij0, l_ij1 = gl.reduce((p0, p1), axis=1, combine_fn=_reduce_fadd2)
+            # This is a difference of 1 SASS instruction but it dramatically
+            # affects instruction scheduling.
+            if config.dtype == gl.float8e5:
+                l_i0, l_i1 = _pairwise_fma_f32x2(l_i0, alpha, l_ij0, l_i1, alpha, l_ij1)
+            else:
+                l_i0 = l_i0 * alpha + l_ij0
+                l_i1 = l_i1 * alpha + l_ij1
+        else:
+            p = gl.join(p0, p1).permute(0, 2, 1).reshape([config.SPLIT_M, config.BLOCK_N])
+            p = gl.convert_layout(p, config.qk_layout)
+            l_ij = gl.sum(p, axis=1)
+            l_i0 = l_i0 * alpha + l_ij
+
         m_i = m_ij
 
-    return m_i, l_i, corr_bar, s_consumer, corr_producer
+    return m_i, l_i0, l_i1, corr_bar, s_consumer, corr_producer, exp_turnstile
 
 
 @gluon.jit
 def _softmax_tile(tile_id: gl.constexpr, config, M, desc_o, STAGE: gl.constexpr,  #
-                  s_chnl, corr_chnl):
+                  s_chnl, corr_chnl, exp_turnstile):
     qk_slice_dim0: gl.constexpr = gl.SliceLayout(0, config.qk_layout)
     qk_slice_dim1: gl.constexpr = gl.SliceLayout(1, config.qk_layout)
 
@@ -661,16 +777,26 @@ def _softmax_tile(tile_id: gl.constexpr, config, M, desc_o, STAGE: gl.constexpr,
         offs_m += gl.arange(tile_id * config.SPLIT_M, (1 + tile_id) * config.SPLIT_M, qk_slice_dim1)
 
         m_i = gl.full([config.SPLIT_M], -float("inf"), gl.float32, qk_slice_dim1)
-        l_i = gl.full([config.SPLIT_M], 1.0, gl.float32, qk_slice_dim1)
+        l_i0 = gl.full([config.SPLIT_M], 0.0, gl.float32, qk_slice_dim1)
+        # Accumulate into 2 row-sums so the reduction can be performed with FADD2.
+        if config.use_fadd2_reduce:
+            l_i1 = gl.full([config.SPLIT_M], 0.0, gl.float32, qk_slice_dim1)
+        else:
+            l_i1 = 0
 
         if STAGE & 1:
-            m_i, l_i, corr_bar, s_consumer, corr_producer = _softmax_inner_loop(  #
-                tile_id, config, prog, s_consumer, corr_producer, corr_bar,  #
-                offs_m, offs_n, m_i, l_i, STAGE=4 - STAGE)
+            m_i, l_i0, l_i1, corr_bar, s_consumer, corr_producer, exp_turnstile = _softmax_inner_loop(  #
+                tile_id, config, prog, s_consumer, corr_producer, exp_turnstile, corr_bar,  #
+                offs_m, offs_n, m_i, l_i0, l_i1, STAGE=4 - STAGE)
         if STAGE & 2:
-            m_i, l_i, corr_bar, s_consumer, corr_producer = _softmax_inner_loop(  #
-                tile_id, config, prog, s_consumer, corr_producer, corr_bar,  #
-                offs_m, offs_n, m_i, l_i, STAGE=2)
+            m_i, l_i0, l_i1, corr_bar, s_consumer, corr_producer, exp_turnstile = _softmax_inner_loop(  #
+                tile_id, config, prog, s_consumer, corr_producer, exp_turnstile, corr_bar,  #
+                offs_m, offs_n, m_i, l_i0, l_i1, STAGE=2)
+
+        if config.use_fadd2_reduce:
+            l_i = l_i0 + l_i1
+        else:
+            l_i = l_i0
 
         s_tmem, s_bar, s_consumer = s_consumer.acquire()
         m_i_tmem, l_i_tmem = _borrow_s_for_epilogue(config, s_tmem)
@@ -685,21 +811,21 @@ def _softmax_tile(tile_id: gl.constexpr, config, M, desc_o, STAGE: gl.constexpr,
 
 @gluon.jit
 def _attn_fwd_softmax0(config, chnls, descs, M, STAGE: gl.constexpr):
-    q_chnl, kv_chnl, o_chnl, epi_chnl, s0_chnl, s1_chnl, c0_chnl, c1_chnl = chnls
+    q_chnl, kv_chnl, o_chnl, epi_chnl, s0_chnl, s1_chnl, c0_chnl, c1_chnl, exp_turnstile = chnls
     desc_q, desc_k, desc_v, desc_o = descs
-    _softmax_tile(0, config, M, desc_o, STAGE, s0_chnl, c0_chnl)
+    _softmax_tile(0, config, M, desc_o, STAGE, s0_chnl, c0_chnl, exp_turnstile.create_producer())
 
 
 @gluon.jit
 def _attn_fwd_softmax1(config, chnls, descs, M, STAGE: gl.constexpr):
-    q_chnl, kv_chnl, o_chnl, epi_chnl, s0_chnl, s1_chnl, c0_chnl, c1_chnl = chnls
+    q_chnl, kv_chnl, o_chnl, epi_chnl, s0_chnl, s1_chnl, c0_chnl, c1_chnl, exp_turnstile = chnls
     desc_q, desc_k, desc_v, desc_o = descs
-    _softmax_tile(1, config, M, desc_o, STAGE, s1_chnl, c1_chnl)
+    _softmax_tile(1, config, M, desc_o, STAGE, s1_chnl, c1_chnl, exp_turnstile.create_consumer())
 
 
 @gluon.jit
 def _attn_fwd_epilogue(config, chnls, descs, M, STAGE: gl.constexpr):
-    q_chnl, kv_chnl, o_chnl, epi_chnl, s0_chnl, s1_chnl, c0_chnl, c1_chnl = chnls
+    q_chnl, kv_chnl, o_chnl, epi_chnl, s0_chnl, s1_chnl, c0_chnl, c1_chnl, exp_turnstile = chnls
     desc_q, desc_k, desc_v, desc_o = descs
 
     epi_consumer = epi_chnl.create_consumer()
@@ -723,12 +849,13 @@ def _attn_fwd_epilogue(config, chnls, descs, M, STAGE: gl.constexpr):
 def _attn_fwd_correction_rescale(config, s_tmem, corr_consumer, o_consumer):
     alpha_layout: gl.constexpr = gl.SliceLayout(1, config.o_splitn_layout)
 
+    o_tmem, o_bar, o_consumer = o_consumer.acquire()
+
     _, corr_bar, corr_consumer = corr_consumer.acquire()
     alpha = _borrow_s_as_alpha(config, s_tmem).load(config.alpha_2d_layout)
     mbarrier.arrive(corr_bar, count=1)
     alpha = gl.convert_layout(alpha.reshape([config.SPLIT_M]), alpha_layout)
 
-    o_tmem, o_bar, o_consumer = o_consumer.acquire()
     for i in tl.static_range(config.SPLIT_D_FACTOR):
         o_ref = o_tmem.slice(i * config.SPLIT_D, config.SPLIT_D)
         o = o_ref.load(config.o_splitn_layout)
@@ -753,6 +880,7 @@ def _attn_fwd_correction_epilogue(config, prog, s_tmem, M, corr_consumer, epi_pr
     o_smem, epi_bar, epi_producer = epi_producer.acquire()
     o_tmem, o_bar, o_consumer = o_consumer.acquire()
 
+    # Shared memory subtile size is limited by the swizzle byte size.
     contigDimSize: gl.constexpr = o_smem.type.layout.swizzle_byte_width * 8 / o_smem.type.element_ty.primitive_bitwidth
     if o_smem.type.shape[1] // config.SPLIT_D_FACTOR >= contigDimSize:
         SPLIT_N_FACTOR: gl.constexpr = config.SPLIT_D_FACTOR
@@ -785,7 +913,7 @@ def _attn_fwd_correction_epilogue(config, prog, s_tmem, M, corr_consumer, epi_pr
 
 @gluon.jit
 def _attn_fwd_correction(config, chnls, descs, M, STAGE: gl.constexpr):
-    q_chnl, kv_chnl, o_chnl, epi_chnl, s0_chnl, s1_chnl, c0_chnl, c1_chnl = chnls
+    q_chnl, kv_chnl, o_chnl, epi_chnl, s0_chnl, s1_chnl, c0_chnl, c1_chnl, exp_turnstile = chnls
 
     s0_tmem = s0_chnl.mem.index(0)
     s1_tmem = s1_chnl.mem.index(0)
@@ -831,7 +959,7 @@ def attention_kernel(  #
         GROUP_SIZE_N: gl.constexpr, NUM_SMS: gl.constexpr, STAGE: gl.constexpr, dtype: gl.constexpr,  #
         num_warps: gl.constexpr):
     qk_scale = sm_scale * 1.44269504
-    config = AttentionConfig(qk_scale, Z, H, N_CTX, BLOCK_M, BLOCK_N, HEAD_DIM, GROUP_SIZE_N, NUM_SMS,  # i
+    config = AttentionConfig(qk_scale, Z, H, N_CTX, BLOCK_M, BLOCK_N, HEAD_DIM, GROUP_SIZE_N, NUM_SMS, STAGE,  #
                              dtype, num_warps, SPLIT_D_FACTOR=2)
 
     q_chnl = get_desc_channel(desc_q, num_buffers=2)
@@ -842,8 +970,9 @@ def attention_kernel(  #
     s1_chnl = TensorMemoryChannel.alloc(config.qk_shape, gl.float32, config.qk_tmem_layout, num_buffers=1)
     c0_chnl = SharedMemoryChannel.alloc([1], gl.int8, gl.constexpr(mbarrier.MBarrierLayout()), num_buffers=1)
     c1_chnl = SharedMemoryChannel.alloc([1], gl.int8, gl.constexpr(mbarrier.MBarrierLayout()), num_buffers=1)
+    exp_turnstile = SharedMemoryChannel.alloc([1], gl.int8, gl.constexpr(mbarrier.MBarrierLayout()), num_buffers=1)
 
-    chnls = (q_chnl, kv_chnl, o_chnl, epi_chnl, s0_chnl, s1_chnl, c0_chnl, c1_chnl)
+    chnls = (q_chnl, kv_chnl, o_chnl, epi_chnl, s0_chnl, s1_chnl, c0_chnl, c1_chnl, exp_turnstile)
     descs = (desc_q, desc_k, desc_v, desc_o)
     gl.warp_specialize((config, chnls, descs, M, STAGE), _attn_fwd_correction, (config, chnls, descs, M, STAGE), [
         _attn_fwd_softmax0,
@@ -861,6 +990,7 @@ def attention_kernel(  #
     s1_chnl.release()
     c0_chnl.release()
     c1_chnl.release()
+    exp_turnstile.release()
 
 
 # ===-----------------------------------------------------------------------===#
@@ -938,7 +1068,7 @@ def is_blackwell():
 @pytest.mark.parametrize("causal", [False, True])
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
 @pytest.mark.skipif(not is_blackwell(), reason="Gluon attention is only supported on Blackwell GPUs")
-def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype):
+def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype, profile=False):
     device = "cuda"
 
     torch.manual_seed(42)
@@ -961,7 +1091,7 @@ BATCH = [4]
 N_HEADS = [32]
 HEAD_DIM = [64, 128]
 causal = [False, True]
-providers = ["triton-fp16", "triton-bf16", "triton-fp8", "cudnn-fp16", "cudnn-bf16"]
+providers = ["triton-fp16", "triton-fp8"]
 N_CTX = [2**i for i in range(10, 17)]
 
 bench_configs = []
