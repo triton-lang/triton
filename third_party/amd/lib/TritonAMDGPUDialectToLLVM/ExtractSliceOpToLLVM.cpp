@@ -52,8 +52,8 @@ struct ExtractSliceOpConversion
     auto outDimNames = llvm::to_vector(linearLayoutSrc.getOutDimNames());
     // Call transposeOuts, to ensure that order of input and output tensor
     // element coordinates are compatible on stage 7 in algorithm below.
-    auto linearLayoutDst = triton::gpu::toLinearLayout(srcTy)
-                               .transposeOuts(outDimNames);
+    auto linearLayoutDst =
+        triton::gpu::toLinearLayout(srcTy).transposeOuts(outDimNames);
 
     auto srcCTAOrder =
         LLVM::AMD::getCTATileOrder(srcTy.getContext(), linearLayoutSrc);
