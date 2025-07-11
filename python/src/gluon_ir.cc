@@ -4,6 +4,7 @@
 
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Types.h"
+#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Gluon/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -108,6 +109,23 @@ struct GluonLayouts {
         py::object(layouts.attr("SwizzledSharedLayout")).release();
   }
 };
+
+static bool isConvertLayoutTrivial(RankedTensorType dstTy, Value value) {
+  auto srcTy = cast<RankedTensorType>(value.getType());
+  if (srcTy.getEncoding() == dstTy.getEncoding())
+    return true;
+  // Handle unresolved layouts. auto -> T is trivial but T -> auto is not
+  // necessarily.
+  if (isa<gluon::AutoEncodingAttr>(srcTy.getEncoding()))
+    return true;
+  if (isa<gluon::AutoEncodingAttr>(dstTy.getEncoding()))
+    return false;
+
+  // Check concrete layouts.
+  triton::LinearLayout cvt = minimalCvtLayout(srcTy, dstTy);
+  auto dims = llvm::to_vector(cvt.getInDimNames());
+  return dims.empty() || (dims.size() == 1 && dims.front() == "register");
+}
 
 template <typename T> std::vector<T> toStdVector(llvm::ArrayRef<T> array) {
   return std::vector<T>(array.begin(), array.end());
@@ -312,6 +330,11 @@ void init_gluon_ir(py::module &&m) {
              auto blockTy = cast<RankedTensorType>(blockType);
              auto blockTyLayout = blockTy.cloneWithEncoding(layout);
              return triton::TensorDescType::get(ctx, blockTyLayout, isSigned);
+           })
+      .def("is_convert_layout_trivial",
+           [](GluonOpBuilder &self, Type resultTy, Value value) -> bool {
+             auto dstTy = cast<RankedTensorType>(resultTy);
+             return isConvertLayoutTrivial(dstTy, value);
            })
       .def("create_async_copy_global_to_local",
            [](GluonOpBuilder &self, Value smem, Value pointer, Value mask,
