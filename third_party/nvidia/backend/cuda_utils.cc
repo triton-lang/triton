@@ -230,66 +230,88 @@ void extractTmaDesc(py::handle obj, void *ptr) {
       *reinterpret_cast<CUtensorMap *>(ptrAsUint);
 }
 
+void extractfp16(py::handle obj, void *ptr) {
+  double temp_double = obj.cast<double>();
+  uint16_t result;
+  // from https://github.com/python/pythoncapi-compat
+#if 0x030600B1 <= PY_VERSION_HEX && PY_VERSION_HEX <= 0x030B00A1 &&            \
+    !defined(PYPY_VERSION)
+  _PyFloat_Pack2(temp_double, (unsigned char *)&result, 1);
+#else
+  PyFloat_Pack2(temp_double, (char *)&result, 1);
+#endif
+  *static_cast<uint16_t *>(ptr) = result;
+}
+
+void extractbf16(py::handle obj, void *ptr) {
+  double temp_double = obj.cast<double>();
+  float temp_float = (float)temp_double;
+  uint32_t u32 = *(uint32_t *)&temp_float;
+  *static_cast<uint16_t *>(ptr) = (u32 >> 16);
+}
+
+void extractfp32(py::handle obj, void *ptr) {
+  double temp_double = obj.cast<double>();
+  float temp_float = (float)temp_double;
+  uint32_t u32 = *(uint32_t *)&temp_float;
+  *static_cast<uint32_t *>(ptr) = u32;
+}
+
+void extractfp64(py::handle obj, void *ptr) {
+  double temp = obj.cast<double>();
+  *static_cast<uint64_t *>(ptr) = *(uint64_t *)&temp;
+}
+
 // Extract a value of type T from obj and store it into memory pointed by ptr.
 // Returns true if extraction succeeded, and false otherwise.
 template <typename T> void extractValue(py::handle obj, void *ptr) {
   *static_cast<T *>(ptr) = obj.cast<T>();
 }
 
-constexpr std::size_t MAX_PREFIXES = 4;
 // Contains information necessary for extracting a certain type from a
 // py::object.
 struct ExtractionInfo {
   // Prefixes of types reprs supported by the extractor.
-  std::array<std::string_view, MAX_PREFIXES> supportedTypeReprPrefixes;
-  std::size_t numPrefixes;
+  std::string_view prefix;
   std::size_t size;        // Size required by the extracted value.
   ExtractorType extractor; // Function to call to extract the value.
 
   // Builds an ExtractionInfo for a given type T and a list of type reprs that
   // are backed by that type.
-  template <typename T, std::size_t N>
-  static ExtractionInfo
-  build(std::array<std::string_view, N> supportedTypeReprs,
-        ExtractorType extractor = extractValue<T>) {
-    if (N > MAX_PREFIXES) {
-      throw py::type_error(py::str("too many elements in extraction info "
-                                   "({0}). Must increase max prefixes {1}")
-                               .format(N, MAX_PREFIXES));
-    }
-    auto info = ExtractionInfo{{}, N, sizeof(T), extractor};
-    std::copy(supportedTypeReprs.begin(), supportedTypeReprs.end(),
-              info.supportedTypeReprPrefixes.begin());
-    return info;
+  template <typename T>
+  static ExtractionInfo build(std::string_view prefix,
+                              ExtractorType extractor = extractValue<T>) {
+    return ExtractionInfo{prefix, sizeof(T), extractor};
   }
 
   // Checks if the extractor supports extracting a given type repr.
   bool supports(std::string_view typeRepr) const {
-    return std::any_of(supportedTypeReprPrefixes.begin(),
-                       supportedTypeReprPrefixes.begin() + numPrefixes,
-                       [&](std::string_view prefix) {
-                         return typeRepr.length() >= prefix.length() &&
-                                typeRepr.substr(0, prefix.length()) == prefix;
-                       });
+    return typeRepr.length() >= prefix.length() &&
+           typeRepr.substr(0, prefix.length()) == prefix;
   }
 };
 
 // Array of supported extractors
 const ExtractionInfo kExtractionInfos[]{
-    ExtractionInfo::build<std::int8_t, 1>({"i8"}),
-    ExtractionInfo::build<std::int16_t, 1>({"i16"}),
-    ExtractionInfo::build<std::int32_t, 2>({"i1", "i32"}),
-    ExtractionInfo::build<std::int64_t, 1>({"i64"}),
-    ExtractionInfo::build<std::uint8_t, 1>({"u8"}),
-    ExtractionInfo::build<std::uint16_t, 1>({"u16"}),
-    ExtractionInfo::build<std::uint32_t, 2>({"u1", "u32"}),
-    ExtractionInfo::build<std::uint64_t, 1>({"u64"}),
-    ExtractionInfo::build<float, 4>({"fp16", "bf16", "fp32", "f32"}),
-    ExtractionInfo::build<double, 1>({"fp64"}),
-    ExtractionInfo::build<void *, 1>({"*"}, extractPointer),
-    ExtractionInfo{
-        {"None", "none"}, 2, 0, nullptr}, // Represent constexprs as None
-    ExtractionInfo::build<CUtensorMap, 1>({"nvTmaDesc"}, extractTmaDesc),
+    ExtractionInfo::build<std::int8_t>("i8"),
+    ExtractionInfo::build<std::int16_t>("i16"),
+    ExtractionInfo::build<std::int32_t>("i32"),
+    ExtractionInfo::build<std::int32_t>("i1"),
+    ExtractionInfo::build<std::int64_t>("i64"),
+    ExtractionInfo::build<std::uint8_t>("u8"),
+    ExtractionInfo::build<std::uint16_t>("u16"),
+    ExtractionInfo::build<std::uint32_t>("u1"),
+    ExtractionInfo::build<std::uint32_t>("u32"),
+    ExtractionInfo::build<std::uint64_t>("u64"),
+    ExtractionInfo::build<uint16_t>("fp16", extractfp16),
+    ExtractionInfo::build<uint16_t>("bf16", extractbf16),
+    ExtractionInfo::build<uint32_t>("fp32", extractfp32),
+    ExtractionInfo::build<uint32_t>("f32", extractfp32),
+    ExtractionInfo::build<uint64_t>("fp64", extractfp64),
+    ExtractionInfo::build<void *>("*", extractPointer),
+    ExtractionInfo{"None", 0, nullptr}, // Represent constexprs as None
+    ExtractionInfo{"none", 0, nullptr}, // Represent constexprs as None
+    ExtractionInfo::build<CUtensorMap>({"nvTmaDesc"}, extractTmaDesc),
 };
 
 using ExtractorIndex = uint8_t;
