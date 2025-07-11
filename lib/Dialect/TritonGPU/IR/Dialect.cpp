@@ -1434,8 +1434,7 @@ LogicalResult AMDMfmaEncodingAttr::verify(
     std::string typeStr;
     llvm::raw_string_ostream rso(typeStr);
     elementType->print(rso);
-    return emitError()
-           << "element type must be f64, f32, i32, or none";
+    return emitError() << "element type must be f64, f32, i32, or none";
   }
 
   return success();
