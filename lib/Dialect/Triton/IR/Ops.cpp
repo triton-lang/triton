@@ -1244,9 +1244,7 @@ LogicalResult GatherOp::inferReturnTypes(
   auto srcType = cast<RankedTensorType>(adaptor.getSrc().getType());
 
   // Shape and encoding of the indices with the element type of the src.
-  inferredReturnTypes.push_back(
-      RankedTensorType::get(indicesType.getShape(), srcType.getElementType(),
-                            indicesType.getEncoding()));
+  inferredReturnTypes.push_back(indicesType.clone(srcType.getElementType()));
   return success();
 }
 

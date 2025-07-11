@@ -6,7 +6,8 @@ from triton.profiler import viewer
 import torch
 import triton_kernels
 import triton_kernels.swiglu
-from triton_kernels.numerics_details.mxfp import downcast_to_mxfp, SwizzlingType
+from triton_kernels.numerics_details.mxfp import downcast_to_mxfp
+from triton_kernels.tensor import SwizzlingType, swizzle
 from triton_kernels.matmul_ogs import MicroscalingCtx, matmul_ogs, PrecisionConfig, FlexCtx, FnSpecs, FusedActivation
 from triton_kernels.numerics import InFlexData
 from triton_kernels.routing import routing
@@ -35,14 +36,12 @@ def quantize(w, dtype, dev, **opt):
         assert dtype == "mx4", f"{dtype=}"
         swizzle_mx_scale = opt.get("swizzle_mx_scale", None)
         swizzle_mx_value = opt.get("swizzle_mx_value", None)
-        swizzle_axis = 2 if swizzle_mx_scale else None
         w = w.to(torch.bfloat16)
-        w, mx_scales, weight_scale_shape = downcast_to_mxfp(w, torch.uint8, axis=1, swizzle_axis=swizzle_axis,
-                                                            swizzle_scale=swizzle_mx_scale,
-                                                            swizzle_value=swizzle_mx_value)
+        w, mx_scales = downcast_to_mxfp(w, torch.uint8, axis=1)
+        w = swizzle(w, swizzle_mx_value)
+        mx_scales = swizzle(mx_scales, swizzle_mx_scale)
         return w, InFlexData(), MicroscalingCtx(weight_scale=mx_scales, swizzle_scale=swizzle_mx_scale,
-                                                swizzle_value=swizzle_mx_value,
-                                                actual_weight_scale_shape=weight_scale_shape)
+                                                swizzle_value=swizzle_mx_value)
 
 
 @dataclass
@@ -111,11 +110,11 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP,
             swizzle_mx_value = None
             swizzle_mx_scale = None
         elif torch.cuda.get_device_capability()[0] < 10:
-            swizzle_mx_value = SwizzlingType.HOPPER
-            swizzle_mx_scale = SwizzlingType.HOPPER
+            swizzle_mx_value = SwizzlingType.HOPPER_VALUE
+            swizzle_mx_scale = SwizzlingType.HOPPER_SCALE
         else:
             swizzle_mx_value = None
-            swizzle_mx_scale = SwizzlingType.BLACKWELL
+            swizzle_mx_scale = SwizzlingType.BLACKWELL_SCALE
         opt1 = {"swizzle_mx_value": swizzle_mx_value, "swizzle_mx_scale": swizzle_mx_scale}
         opt2 = deepcopy(opt1)
     wg, wg_flex, wg_mx = quantize(wg, "bf16", dev, **optg)
@@ -216,7 +215,7 @@ if __name__ == "__main__":
     batch_ranges_moe = [(128, 512, 32), (512, 32000, 128)]
     dense_dtypes = ["fp8", "fp8"]
     quantized_dtypes = ["fp8", "mx4"] if has_native_mx4 else ["bf16", "mx4"]
-    roofline_mlp(batch_ranges_dense, 8192, 8192, 1, 1, *dense_dtypes, TP=1, EP=1, name="dense")
+    # roofline_mlp(batch_ranges_dense, 8192, 8192, 1, 1, *dense_dtypes, TP=1, EP=1, name="dense")
     roofline_mlp(batch_ranges_dense, 8192, 8192, 1, 1, *quantized_dtypes, TP=1, EP=1, name="dense")
-    roofline_mlp(batch_ranges_moe, 5120, 8192, 128, 4, *dense_dtypes, TP=1, EP=1, name="llama4-maverick")
-    roofline_mlp(batch_ranges_moe, 5120, 8192, 128, 4, *quantized_dtypes, TP=1, EP=1, name="llama4-maverick")
+    # roofline_mlp(batch_ranges_moe, 5120, 8192, 128, 4, *dense_dtypes, TP=1, EP=1, name="llama4-maverick")
+    # roofline_mlp(batch_ranges_moe, 5120, 8192, 128, 4, *quantized_dtypes, TP=1, EP=1, name="llama4-maverick")

@@ -2,9 +2,9 @@ import torch
 import triton
 import triton.language as tl
 from triton_kernels import target_info
-from triton_kernels.numerics_details.mxfp import unswizzle_mx_scale_bw, get_scaled_dot_format_string
+from triton_kernels.tensor_details.layout_details.blackwell_scale import unswizzle_mx_scale_bw
 from triton_kernels.numerics_details.flexpoint import float_to_flex, load_scale, nan_propagating_absmax_reduce, compute_scale
-from ._common import make_matmul_repr, matmul_launch_metadata, swizzle2d, xcd_swizzle
+from ._common import make_matmul_repr, matmul_launch_metadata, swizzle2d, xcd_swizzle, get_scaled_dot_format_string
 
 # fmt: off
 
@@ -105,7 +105,7 @@ def _p_matmul_ogs(
              XScale,
              W, stride_w_e, stride_w_k, stride_w_n, W_TRANSPOSE: tl.constexpr,
              WScale,
-             MxScale, stride_mx_e, stride_mx_k, stride_mx_n, MX_TRANSPOSE: tl.constexpr,
+             MxScale, stride_mx_e, stride_mx_k, stride_mx_n,
              B, stride_b_e, # Bias
              M, N, K, # shapes
              # expt data
@@ -154,7 +154,7 @@ def _p_matmul_ogs(
                          "mx_weight_ptr must be uint8")
         tl.static_assert(get_dtype(MxScale) == tl.uint8, "mx_scale_ptr must be uint8")
         tl.static_assert(BLOCK_K % MX_PACK_DIVISOR == 0, "BLOCK_K must be a multiple of MX_PACK_DIVISOR")
-        tl.static_assert(SWIZZLE_MX_SCALE == "BLACKWELL" or SWIZZLE_MX_SCALE is None, "Only Blackwell swizzling is supported for scales")
+        tl.static_assert(SWIZZLE_MX_SCALE == "BLACKWELL_SCALE" or SWIZZLE_MX_SCALE is None, "Only Blackwell swizzling is supported for scales")
 
         # We have pack 2 fp4 values in a byte
         W_PACK_DIVISOR: tl.constexpr = 2 if w_type == tl.uint8 else 1
@@ -307,13 +307,13 @@ def _p_matmul_ogs(
                     x_scales: tl.constexpr = None
                 else:
                     x_scales = tl.full((BLOCK_M, BLOCK_K // MX_PACK_DIVISOR), 127, dtype=tl.uint8)
-                if SWIZZLE_MX_SCALE == "BLACKWELL":
+                if SWIZZLE_MX_SCALE == "BLACKWELL_SCALE":
                     flattened_expt_n_idx = expt_id * ((N + 127) // 128) + (off_n // 128)
                     w_scales = MxScale.load([0, flattened_expt_n_idx, pid_k * MX_SCALE_BLOCK_K // 4 + ki * (MX_SCALE_BLOCK_K // 4 * SPLIT_K), 0, 0])
                     w_scales = w_scales.reshape((w_scales.shape[1], w_scales.shape[2] * w_scales.shape[-2] * w_scales.shape[-1]))
                     w_scales = unswizzle_mx_scale_bw(w_scales)
                 else:
-                    w_scales = _tma_load_2d(MxScale, [expt_id, off_k_mx, off_n], transpose=MX_TRANSPOSE).T
+                    w_scales = _tma_load_2d(MxScale, [expt_id, off_k_mx, off_n]).T
                 if SWAP_XW:
                     acc = tl.dot_scaled(w.T, w_scales, mx_format, x.T, x_scales, x_format, acc=acc, fast_math=True)
                 else:

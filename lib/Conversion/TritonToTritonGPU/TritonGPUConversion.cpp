@@ -34,7 +34,7 @@ TritonGPUTypeConverter::TritonGPUTypeConverter(MLIRContext *context,
     triton::gpu::BlockedEncodingAttr encoding =
         getDefaultBlockedEncoding(this->context, shape, this->numWarps,
                                   this->threadsPerWarp, this->numCTAs);
-    return RankedTensorType::get(shape, tensorType.getElementType(), encoding);
+    return tensorType.cloneWithEncoding(encoding);
   });
 
   // Add encoding for tensor pointer
@@ -150,8 +150,7 @@ static RankedTensorType getNewIndicesType(RankedTensorType type,
   if (enc == newEncoding)
     return {};
 
-  return RankedTensorType::get(type.getShape(), type.getElementType(),
-                               newEncoding);
+  return type.cloneWithEncoding(newEncoding);
 }
 
 // Function for converting any gather or scatter op that requires a specific
