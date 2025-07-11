@@ -33,10 +33,8 @@ namespace {
 // memory.
 int getNumberOfLoadInstructions(RankedTensorType srcTy,
                                 ttg::MemDescType dstTy) {
-  auto shape = srcTy.getShape();
-  LinearLayout srcLayout = tt::gpu::toLinearLayout(shape, srcTy.getEncoding());
-  LinearLayout sharedLayout =
-      tt::gpu::toLinearLayout(shape, dstTy.getEncoding());
+  LinearLayout srcLayout = tt::gpu::toLinearLayout(srcTy);
+  LinearLayout sharedLayout = tt::gpu::toLinearLayout(dstTy);
   LinearLayout srcToSharedLayout = srcLayout.invertAndCompose(sharedLayout);
 
   // On GFX9 we cannot split direct to lds loads into multiple ones because we

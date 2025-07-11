@@ -551,8 +551,7 @@ unsigned getContiguity(Value ptr, Value offset,
   // FIXME (Alex): this should not be needed anymore because it's done inside
   // getContiguity, but we have an order issues with LL, so we keep this
   // until the LL order issue is fixed
-  auto layout = tensorTy.getEncoding();
-  auto linearLayout = triton::gpu::toLinearLayout(tensorTy.getShape(), layout);
+  auto linearLayout = triton::gpu::toLinearLayout(tensorTy);
   auto llAttr =
       triton::gpu::LinearEncodingAttr::get(tensorTy.getContext(), linearLayout);
   auto order = triton::gpu::getOrder(tensorTy);

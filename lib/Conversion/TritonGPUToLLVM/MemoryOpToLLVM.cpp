@@ -39,9 +39,8 @@ LogicalResult lowerLocalStore(Location loc, MLIRContext *ctx, Value regVal,
   auto regTy = cast<RankedTensorType>(regVal.getType());
   auto llvmElemTy = typeConverter->convertType(memDescTy.getElementType());
 
-  auto regLayout = toLinearLayout(regTy.getShape(), regTy.getEncoding());
-  auto sharedLayout =
-      toLinearLayout(memDescTy.getShape(), memDescTy.getEncoding());
+  auto regLayout = toLinearLayout(regTy);
+  auto sharedLayout = toLinearLayout(memDescTy);
   auto cvt = regLayout.invertAndCompose(sharedLayout);
 
   auto kBlock = str_attr("block");
@@ -193,9 +192,8 @@ public:
       return success();
     }
 
-    auto regLayout = toLinearLayout(regTy.getShape(), regTy.getEncoding());
-    auto sharedLayout =
-        toLinearLayout(memDescTy.getShape(), memDescTy.getEncoding());
+    auto regLayout = toLinearLayout(regTy);
+    auto sharedLayout = toLinearLayout(memDescTy);
     auto cvt = regLayout.invertAndCompose(sharedLayout);
     auto kBlock = str_attr("block");
     // NYI. We would need to emit a map.shared::cluster instruction.
