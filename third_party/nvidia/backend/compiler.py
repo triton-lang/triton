@@ -314,11 +314,11 @@ class CUDABackend(BaseBackend):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
 
-        passes.ttgpuir.add_inliner(pm)
+        passes.gluon.add_inliner(pm)
         passes.gluon.add_resolve_auto_encodings(pm)
         passes.common.add_sccp(pm)
         passes.ttir.add_loop_aware_cse(pm)
-        passes.ttgpuir.add_canonicalizer(pm)
+        passes.gluon.add_canonicalizer(pm)
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)
 
         pm.run(mod)

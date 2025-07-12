@@ -3,7 +3,6 @@
 #include "BufferOpsEmitter.h"
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "PatternTritonGPUOpToLLVM.h"
-#include "SchedInstructions.h"
 #include "TargetInfo.h"
 #include "Utility.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
