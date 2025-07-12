@@ -20,7 +20,6 @@ void InstrumentationMetadata::parse() {
     scratchMemorySize = metadataJson["profile_scratch_size"].get<size_t>();
   }
 
-  // FIXME: this is wrong
   if (metadataJson.contains("num_warps")) {
     numWarps = metadataJson["num_warps"].get<size_t>();
   }
