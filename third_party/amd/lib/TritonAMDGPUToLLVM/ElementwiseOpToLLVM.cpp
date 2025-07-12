@@ -65,6 +65,12 @@ template <typename FPType> struct FPTypeInfo {
       if (dstTyID == TypeID::get<Float8E5M2Type>())
         return {0x0080, 0x0180, 0x0200, 0x0380};
     }
+    if constexpr (std::is_same_v<FPType, BFloat16Type>) {
+      if (dstTyID == TypeID::get<Float8E4M3FNType>())
+        return {0x3a80, 0x3b40, 0x3ba0, 0x3be0, 0x3c10, 0x3c30, 0x3c50, 0x3c70};
+      if (dstTyID == TypeID::get<Float8E5M2Type>())
+        return {0x3700, 0x37c0, 0x3820, 0x3860};
+    }
     return {};
   }
 
@@ -278,13 +284,16 @@ static Value Fp_to_Fp8E4M3FN_RTNE_oneValue(Location loc,
                                            ConversionPatternRewriter &rewriter,
                                            Value v) {
   static_assert((std::is_same_v<SrcFPType, Float32Type>) ||
-                (std::is_same_v<SrcFPType, Float16Type>));
+                (std::is_same_v<SrcFPType, Float16Type>) ||
+                (std::is_same_v<SrcFPType, BFloat16Type>));
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   const llvm::fltSemantics *srcSemantic = nullptr;
   if constexpr (std::is_same_v<SrcFPType, Float32Type>)
     srcSemantic = &llvm::APFloat::IEEEsingle();
-  else
+  else if constexpr (std::is_same_v<SrcFPType, Float16Type>)
     srcSemantic = &llvm::APFloat::IEEEhalf();
+  else
+    srcSemantic = &llvm::APFloat::BFloat();
   auto srcWidth = llvm::APFloat::getSizeInBits(*srcSemantic);
   auto srcMantissaBits = llvm::APFloat::semanticsPrecision(*srcSemantic) - 1;
   auto srcExponentBits = srcWidth - srcMantissaBits - 1;
@@ -365,8 +374,10 @@ static Value Fp_to_Fp8E4M3FN_RTNE_oneValue(Location loc,
   // number(including infinity) after rounding in FP8E4M3
   if constexpr (std::is_same_v<SrcFPType, Float32Type>)
     dstMaxOfSrcType |= 0x7ffff;
-  else
+  else if constexpr (std::is_same_v<SrcFPType, Float16Type>)
     dstMaxOfSrcType |= 0x7f;
+  else
+    dstMaxOfSrcType |= 0x7;
   Value isOverflowOrInf =
       b.icmp_ugt(intVal, srcFpInfo.toLLVMIntValue(dstMaxOfSrcType));
   vFp8 =
@@ -1168,13 +1179,28 @@ static ConverterT Bf16_to_Fp8E5M2(AMD::ISAFamily isaFamily) {
   return isaFamily == AMD::ISAFamily::CDNA4 ? Bf16_to_Fp8E5M2_HW
                                             : Bf16_to_Fp8E5M2_SW;
 }
-// Bf16 -> OCP Fp8
-static SmallVector<Value> Bf16_to_Fp8E4M3FN(Location loc,
-                                            ConversionPatternRewriter &rewriter,
-                                            const SmallVector<Value> &v) {
+
+// Bf16 -> OCP Fp8 using RTNE
+static SmallVector<Value>
+Bf16_to_Fp8E4M3FN_RTNE_SW(Location loc, ConversionPatternRewriter &rewriter,
+                          const SmallVector<Value> &v) {
+  SmallVector<Value> result(2);
+  result[0] = Fp_to_Fp8E4M3FN_RTNE_oneValue<BFloat16Type>(loc, rewriter, v[0]);
+  result[1] = Fp_to_Fp8E4M3FN_RTNE_oneValue<BFloat16Type>(loc, rewriter, v[1]);
+  return result;
+}
+
+static SmallVector<Value>
+Bf16_to_Fp8E4M3FN_RTNE_HW(Location loc, ConversionPatternRewriter &rewriter,
+                          const SmallVector<Value> &v) {
   assert(v.size() == 2);
   return cvtScalePkDowncastToFp8<ROCDL::CvtScaleF32PkFp8Bf16Op>(loc, rewriter,
                                                                 v[0], v[1]);
+}
+
+ConverterT Bf16_to_Fp8E4M3FN(AMD::ISAFamily isaFamily) {
+  return isaFamily == AMD::ISAFamily::CDNA4 ? Bf16_to_Fp8E4M3FN_RTNE_HW
+                                            : Bf16_to_Fp8E4M3FN_RTNE_SW;
 }
 
 // fp8e4m3fn to bf16
@@ -1472,7 +1498,8 @@ struct FpToFpOpConversion
             // BF16 -> F8
             {{BF16TyID, F8E5M2TyID, RoundingMode::RTNE},
              Bf16_to_Fp8E5M2(isaFamily)},
-            {{BF16TyID, F8E4M3FNTyID, RoundingMode::RTNE}, Bf16_to_Fp8E4M3FN},
+            {{BF16TyID, F8E4M3FNTyID, RoundingMode::RTNE},
+             Bf16_to_Fp8E4M3FN(isaFamily)},
             {{BF16TyID, F8E5M2FNUZTyID, RoundingMode::RTNE},
              Bf16_to_Fp8E5M2FNUZ},
             {{BF16TyID, F8E4M3FNUZTyID, RoundingMode::RTNE},

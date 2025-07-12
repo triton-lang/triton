@@ -5,6 +5,8 @@ import triton.profiler as proton
 import triton.profiler.language as pl
 from triton.profiler.hooks import InstrumentationHook
 
+pl.enable_semantic("triton")
+
 
 def write_tensor_to_file(tensor, filename):
     data_ptr = tensor.data_ptr()
