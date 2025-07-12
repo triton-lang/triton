@@ -202,6 +202,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
 
     assert(permutedInVals.size() == tileSize * nReps);
     SmallVector<Value> outVals;
+    auto zeroAddon = [](Value v) { return v; };
     for (int i = 0; i < nReps; ++i) {
       if (i > 0)
         b.barrier();
@@ -210,11 +211,12 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
           ArrayRef<Value>(permutedInVals).slice(i * tileSize, tileSize);
       // Store
       lowerLdStShared(loc, ctx, storeCvt, tileInVals, llvmElemTy, smemBase,
-                      rewriter, targetInfo);
+                      zeroAddon, rewriter, targetInfo);
       b.barrier();
       // Load
-      SmallVector<Value> tileOutVals = lowerLdStShared(
-          loc, ctx, loadCvt, {}, llvmElemTy, smemBase, rewriter, targetInfo);
+      SmallVector<Value> tileOutVals =
+          lowerLdStShared(loc, ctx, loadCvt, {}, llvmElemTy, smemBase,
+                          zeroAddon, rewriter, targetInfo);
       llvm::append_range(outVals, tileOutVals);
     }
 

@@ -553,13 +553,6 @@ SmallVector<Value> loadSharedToDistributed(triton::gpu::LocalLoadOp localLoadOp,
                                            Location loc, RewriterBase &rewriter,
                                            const TargetInfoBase &target);
 
-void storeDistributedToShared(triton::gpu::MemDescType dstTy,
-                              RankedTensorType srcTy, Type elemLlvmTy,
-                              ArrayRef<Value> srcVals,
-                              const SharedMemoryObject &smemObj, Location loc,
-                              RewriterBase &rewriter,
-                              const TargetInfoBase &target);
-
 // Close cousin of lowerLdStMatrix in MemoryOpToLLVM.cpp
 // We might want to merge them at some point, but having to support
 // ldmatrix.trans makes the code in lowerLdStMatrix a bit specific
@@ -569,8 +562,9 @@ SmallVector<Value>
 lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout cvt,
                 ArrayRef<Value> valsArray, // Input for store, output for load
                 Type llvmElemTy, Value smemBase,
+                std::function<Value(Value)> smemAddrAddon,
                 ConversionPatternRewriter &rewriter,
-                const TargetInfoBase &targetInfo);
+                const TargetInfoBase &targetInfo, Operation *op = nullptr);
 
 // Lower an ld/st-like operation given a layout and a callback that creates the
 // PTX instruction Lowers to st when valArrays is empty, and to ld when it is
@@ -578,20 +572,22 @@ lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout cvt,
 SmallVector<Value> lowerLdSt(
     Location loc, MLIRContext *ctx, LinearLayout cvt,
     ArrayRef<Value> valsArray, // Input for store, output for load
-    Type llvmElemTy, Value smemBase, ConversionPatternRewriter &rewriter,
-    const TargetInfoBase &targetInfo, std::optional<int> maybeMaxVecElems,
+    Type llvmElemTy, Value smemBase, std::function<Value(Value)> smemAddrAddon,
+    ConversionPatternRewriter &rewriter, const TargetInfoBase &targetInfo,
+    std::optional<int> maybeMaxVecElems,
     std::function<SmallVector<Value>(ConversionPatternRewriter &, Location,
                                      ArrayRef<Value>, Value, int, VectorType)>
         lowerInst);
 
 // Lower local_load/local_store via ld.shared/st.shared
-SmallVector<Value> lowerLocalLdSt(Location loc, MLIRContext *ctx,
-                                  // Map from registers to offset
-                                  LinearLayout cvt, ArrayRef<Value> valsArray,
-                                  // Input for store, output for load
-                                  Type llvmElemTy, Value smemBase,
-                                  ConversionPatternRewriter &rewriter,
-                                  const TargetInfoBase &targetInfo);
+SmallVector<Value>
+lowerLocalLdSt(Location loc, MLIRContext *ctx,
+               // Map from registers to offset
+               LinearLayout cvt, ArrayRef<Value> valsArray,
+               // Input for store, output for load
+               Type llvmElemTy, triton::gpu::MemDescType memDescTy,
+               Value smemBase, ConversionPatternRewriter &rewriter,
+               const TargetInfoBase &targetInfo, Operation *op = nullptr);
 
 SmallVector<Value> unpackLLElements(Location loc, Value llvmStruct,
                                     RewriterBase &rewriter);

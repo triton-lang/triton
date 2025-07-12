@@ -32,6 +32,9 @@ public:
   Value loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
                     std::optional<Value> ctaId, Type elemTy,
                     Value pred) const override;
+  Value loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
+                    std::optional<Value> ctaId, Type elemTy, Value pred,
+                    Operation *op) const override;
   bool canUseLDSTransLoad(int bitwidth) const;
 
   bool canUseStMatrix(RankedTensorType tensorTy, ArrayRef<unsigned> repShape,

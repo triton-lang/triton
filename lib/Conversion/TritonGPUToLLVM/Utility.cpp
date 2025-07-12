@@ -653,8 +653,9 @@ SmallVector<Value>
 lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout cvt,
                 ArrayRef<Value> valsArray, // Input for store, output for load
                 Type llvmElemTy, Value smemBase,
+                std::function<Value(Value)> smemAddrAddon,
                 ConversionPatternRewriter &rewriter,
-                const TargetInfoBase &targetInfo) {
+                const TargetInfoBase &targetInfo, Operation *op) {
 
   bool isStore = !valsArray.empty();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -671,20 +672,22 @@ lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout cvt,
       return {};
     } else {
       assert(vals.empty());
-      Value valsVec = targetInfo.loadDShared(
-          rewriter, loc, shmemAddr, std::nullopt, vecTy, /*pred=*/b.true_val());
+      Value valsVec =
+          targetInfo.loadDShared(rewriter, loc, shmemAddr, std::nullopt, vecTy,
+                                 /*pred=*/b.true_val(), op);
       return unpackLLVector(loc, valsVec, rewriter);
     }
   };
-  return lowerLdSt(loc, ctx, cvt, valsArray, llvmElemTy, smemBase, rewriter,
-                   targetInfo, {}, emitCpAsync);
+  return lowerLdSt(loc, ctx, cvt, valsArray, llvmElemTy, smemBase,
+                   smemAddrAddon, rewriter, targetInfo, {}, emitCpAsync);
 }
 
 SmallVector<Value> lowerLdSt(
     Location loc, MLIRContext *ctx, LinearLayout cvt,
     ArrayRef<Value> valsArray, // Input for store, output for load
-    Type llvmElemTy, Value smemBase, ConversionPatternRewriter &rewriter,
-    const TargetInfoBase &targetInfo, std::optional<int> maybeMaxVecElems,
+    Type llvmElemTy, Value smemBase, std::function<Value(Value)> smemAddrAddon,
+    ConversionPatternRewriter &rewriter, const TargetInfoBase &targetInfo,
+    std::optional<int> maybeMaxVecElems,
     std::function<SmallVector<Value>(ConversionPatternRewriter &, Location,
                                      ArrayRef<Value>, Value, int, VectorType)>
         lowerInst) {
@@ -742,8 +745,9 @@ SmallVector<Value> lowerLdSt(
           reps.apply({{kReg, j}, {kLane, 0}, {kWarp, 0}})[0].second;
       auto regIdxAddI8 = regIdxAdd * (bitwidth / 8);
       Value innerOffset = b.add(offset, b.i32_val(regIdxAddI8));
-      auto vecAddr = b.gep(smemPtrTy, i8_ty, smemBase, innerOffset,
-                           LLVM::GEPNoWrapFlags::inbounds);
+      auto vecAddr =
+          b.gep(smemPtrTy, i8_ty, smemBase, smemAddrAddon(innerOffset),
+                LLVM::GEPNoWrapFlags::inbounds);
       llvm::append_range(outVals,
                          lowerInst(rewriter, loc, vals, vecAddr, i + j, vecTy));
     }
@@ -759,14 +763,25 @@ SmallVector<Value> lowerLdSt(
   return outVals;
 }
 
-SmallVector<Value> lowerLocalLdSt(Location loc, MLIRContext *ctx,
-                                  LinearLayout cvt, ArrayRef<Value> valsArray,
-                                  // Input for store, output for load
-                                  Type llvmElemTy, Value smemBase,
-                                  ConversionPatternRewriter &rewriter,
-                                  const TargetInfoBase &targetInfo) {
+SmallVector<Value>
+lowerLocalLdSt(Location loc, MLIRContext *ctx, LinearLayout cvt,
+               ArrayRef<Value> valsArray,
+               // Input for store, output for load
+               Type llvmElemTy, triton::gpu::MemDescType memDescTy,
+               Value smemBase, ConversionPatternRewriter &rewriter,
+               const TargetInfoBase &targetInfo, Operation *op) {
   assert(cvt.getNumOutDims() == 1);
   assert(*cvt.getOutDimNames().begin() == str_attr("offset"));
+  auto smemAddrAddon = [&](Value smemOffset) {
+    TritonLLVMOpBuilder b(loc, rewriter);
+    if (auto paddedLayout = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(
+            memDescTy.getEncoding())) {
+      // Apply the offset needed for padding.
+      Value padOffset = emitPadding(loc, rewriter, paddedLayout, smemOffset);
+      smemOffset = b.add(smemOffset, padOffset);
+    }
+    return smemOffset;
+  };
   auto isStore = !valsArray.empty();
   // Remove broadcasting in the registers
   auto removeBroadcastSrc = actionRemoveBroadcastedRegs(cvt);
@@ -776,8 +791,9 @@ SmallVector<Value> lowerLocalLdSt(Location loc, MLIRContext *ctx,
     if (isStore) {
       inVals = removeBroadcastSrc.apply(inVals);
     }
-    auto outVals = lowerLdStShared(loc, ctx, prmtCvt, inVals, llvmElemTy,
-                                   smemBase, rewriter, targetInfo);
+    auto outVals =
+        lowerLdStShared(loc, ctx, prmtCvt, inVals, llvmElemTy, smemBase,
+                        smemAddrAddon, rewriter, targetInfo, op);
     if (!isStore) {
       outVals = broadcastAs(outVals, cvt);
     }
@@ -785,7 +801,7 @@ SmallVector<Value> lowerLocalLdSt(Location loc, MLIRContext *ctx,
   }
 
   return lowerLdStShared(loc, ctx, cvt, valsArray, llvmElemTy, smemBase,
-                         rewriter, targetInfo);
+                         smemAddrAddon, rewriter, targetInfo, op);
 }
 
 bool emitTransferBetweenRegistersAndShared(
@@ -920,32 +936,6 @@ SmallVector<Value> loadSharedToDistributed(triton::gpu::LocalLoadOp localLoadOp,
     llvm::report_fatal_error("Failed to emit transfer from shared to register");
 
   return ret;
-}
-
-void storeDistributedToShared(triton::gpu::MemDescType dstTy,
-                              RankedTensorType srcTy, Type elemLlvmTy,
-                              ArrayRef<Value> srcVals,
-                              const SharedMemoryObject &smemObj, Location loc,
-                              RewriterBase &rewriter,
-                              const TargetInfoBase &target) {
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  bool success = emitTransferBetweenRegistersAndShared(
-      srcTy, dstTy, elemLlvmTy, /*maxVecElems=*/std::nullopt, smemObj, loc,
-      rewriter, target, [&](VectorType vecTy, Value vecAddr) {
-        ArrayRef<Value> vals = srcVals.take_front(vecTy.getNumElements());
-        srcVals = srcVals.drop_front(vecTy.getNumElements());
-
-        Value vec = b.undef(vecTy);
-        for (int i = 0; i < vals.size(); i++) {
-          vec = b.insert_element(vec, vals[i], b.i32_val(i));
-        }
-        b.store(vec, vecAddr)
-            .setAlignment(vecTy.getNumElements() *
-                          elemLlvmTy.getIntOrFloatBitWidth() / 8);
-      });
-
-  if (!success)
-    llvm::report_fatal_error("Failed to emit transfer from register to shared");
 }
 
 SmallVector<Value> unpackLLElements(Location loc, Value llvmStruct,
