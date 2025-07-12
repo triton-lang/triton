@@ -121,9 +121,12 @@ LogicalResult inferAutoLayouts(FuncOp func) {
       } else {
         auto srcEncoding = inferSrcEncoding(definingOp, enc);
         if (srcEncoding) {
-          if (failed(updateEncoding(
-                  llvm::to_vector_of<Value>(definingOp->getOperands()),
-                  srcEncoding)))
+          llvm::SmallVector<Value> tensorOperands;
+          for (auto operand : definingOp->getOperands())
+            if (isa<RankedTensorType>(operand.getType()))
+              tensorOperands.push_back(operand);
+
+          if (failed(updateEncoding(tensorOperands, srcEncoding)))
             return failure();
         }
       }
