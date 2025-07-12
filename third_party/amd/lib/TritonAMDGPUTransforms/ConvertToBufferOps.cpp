@@ -434,7 +434,7 @@ struct ConvertTritonLoadToBufferLoad : public mlir::OpRewritePattern<SourceOp> {
       if (op.getOther() && !isZeroConst(op.getOther()))
         maybeOther = op.getOther();
       Value maybeMask{};
-      if (op.getMask() && !isZeroConst(op.getMask()))
+      if (op.getMask())
         maybeMask = op.getMask();
       Value blockStride = getBlockStride(op->getLoc(), tensorOffset, rewriter);
 

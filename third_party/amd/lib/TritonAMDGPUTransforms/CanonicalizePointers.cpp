@@ -127,7 +127,7 @@ std::optional<Value> maybeGetOrCreateScalarConstant(RewriterBase &rewriter,
 
   // Check for splatness
   if (auto splatOp = dyn_cast_or_null<tt::SplatOp>(op))
-    return splatOp.getSrc();
+    return maybeGetOrCreateScalarConstant(rewriter, loc, splatOp.getSrc());
 
   // Check for constant
   DenseIntElementsAttr constVal;
