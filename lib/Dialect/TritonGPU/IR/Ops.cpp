@@ -493,8 +493,6 @@ MemDescReshapeOp::inferReturnTypes(MLIRContext *context,
                                    MemDescReshapeOp::Adaptor adaptor,
                                    SmallVectorImpl<Type> &inferredReturnTypes) {
   auto srcTy = cast<MemDescType>(adaptor.getSrc().getType());
-
-  // The desired destination shape comes from the DenseI64ArrayAttr attribute.
   auto dstShape = adaptor.getShape();
 
   if (product<int64_t>(dstShape) != product<int64_t>(srcTy.getShape()))
@@ -509,8 +507,6 @@ MemDescReshapeOp::inferReturnTypes(MLIRContext *context,
       return failure();
   }
 
-  // Preserve any leading dimensions in the allocation shape that come from a
-  // potential parent memdesc_subview, and reshape the logical part.
   SmallVector<int64_t> dstAllocShape;
   auto srcAllocShape = srcTy.getAllocShape();
   unsigned prefix = srcAllocShape.size() - srcTy.getShape().size();
