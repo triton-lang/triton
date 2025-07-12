@@ -2520,3 +2520,95 @@ tt.func private @arith_constant_array() {
   tt.return
 }
 }
+
+// -----
+
+
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
+// CHECK-LABEL: @arith_constant_array
+tt.func private @arith_constant_array() {
+  // CHECK: %[[C0:.+]] = llvm.mlir.constant(0 : i32) : i32
+  // CHECK: %[[C1:.+]] = llvm.mlir.constant(1 : i32) : i32
+  // CHECK: %[[C2:.+]] = llvm.mlir.constant(2 : i32) : i32
+  // CHECK: %[[C3:.+]] = llvm.mlir.constant(3 : i32) : i32
+  // CHECK: %[[S0:.+]] = llvm.mlir.undef : !llvm.struct<(i32, i32, i32, i32)>
+  // CHECK: %[[S1:.+]] = llvm.insertvalue %[[C0]], %[[S0]][0] : !llvm.struct<(i32, i32, i32, i32)>
+  // CHECK: %[[S2:.+]] = llvm.insertvalue %[[C1]], %[[S1]][1] : !llvm.struct<(i32, i32, i32, i32)>
+  // CHECK: %[[S3:.+]] = llvm.insertvalue %[[C2]], %[[S2]][2] : !llvm.struct<(i32, i32, i32, i32)>
+  // CHECK: %[[S4:.+]] = llvm.insertvalue %[[C3]], %[[S3]][3] : !llvm.struct<(i32, i32, i32, i32)>
+  %0 = arith.constant dense<[0, 1, 2, 3]> : tensor<4xi32, #blocked>
+  tt.return
+}
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#blocked2 = #ttg.blocked<{sizePerThread = [2, 2], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [0, 1]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
+#shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
+// CHECK-LABEL: @experimental_clear_read_barrier
+// CHECK: st.global
+tt.func private @experimental_clear_read_barrier(
+  %mbar: !ttg.memdesc<1xi64, #shared1, #smem, mutable>,
+  %barriers: tensor<2xi64, #blocked>,
+  %readBars: !tt.ptr<i8>
+) {
+  tti.experimental_clear_read_barrier %mbar {%barriers, %readBars(tensor<2x2xi8, #blocked2>)} : !ttg.memdesc<1xi64, #shared1, #smem, mutable>, tensor<2xi64, #blocked>, !tt.ptr<i8>
+  tt.return
+}
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+
+module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
+// CHECK-LABEL: @experimental_assert_in_thread_any
+// CHECK: %[[E0:.+]] = llvm.extractvalue %arg0[0] : !llvm.struct<(i1, i1)>
+// CHECK: %[[E1:.+]] = llvm.extractvalue %arg0[1] : !llvm.struct<(i1, i1)>
+// CHECK: %[[INIT:.+]] = llvm.mlir.constant(false) : i1
+// CHECK: %[[FALSE:.+]] = llvm.mlir.constant(false) : i1
+// CHECK: %[[OR0:.+]] = llvm.or %[[INIT]], %[[E0]] : i1
+// CHECK: %[[OR1:.+]] = llvm.or %[[OR0]], %[[E1]] : i1
+// CHECK: %[[XOR:.+]] = llvm.xor %[[OR1]]
+
+// CHECK: @__assertfail
+// CHECK: nvvm.barrier0
+tt.func private @experimental_assert_in_thread_any(
+  %condition: tensor<2xi1, #blocked>,
+  %message: !llvm.ptr<8>
+) {
+  tti.experimental_assert_in_thread %condition, "test" {check_any = true} : tensor<2xi1, #blocked>
+  tt.return
+}
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+
+module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
+// CHECK-LABEL: @experimental_assert_in_thread_all
+// CHECK: %[[E0:.+]] = llvm.extractvalue %arg0[0] : !llvm.struct<(i1, i1)>
+// CHECK: %[[E1:.+]] = llvm.extractvalue %arg0[1] : !llvm.struct<(i1, i1)>
+// CHECK: %[[INIT:.+]] = llvm.mlir.constant(true) : i1
+// CHECK: %[[FALSE:.+]] = llvm.mlir.constant(false) : i1
+// CHECK: %[[AND0:.+]] = llvm.and %[[INIT]], %[[E0]] : i1
+// CHECK: %[[AND1:.+]] = llvm.and %[[AND0]], %[[E1]] : i1
+// CHECK: %[[XOR:.+]] = llvm.xor %[[AND1]]
+
+// CHECK: @__assertfail
+// CHECK: nvvm.barrier0
+tt.func private @experimental_assert_in_thread_all(
+  %condition: tensor<2xi1, #blocked>,
+  %message: !llvm.ptr<8>
+) {
+  tti.experimental_assert_in_thread %condition, "test" {check_any = false} : tensor<2xi1, #blocked>
+  tt.return
+}
+}

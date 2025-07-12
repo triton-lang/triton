@@ -201,3 +201,82 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     tt.return
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [1, 1], order = [0, 1]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
+  // CHECK-LABEL: @async_copy_local_to_global
+  tt.func public @async_copy_local_to_global(%ptr: tensor<128x128x!tt.ptr<f16>, #blocked>) {
+    // CHECK: %[[BUFFERS:.*]] = tti.experimental_shared_buffer_pointers {offsets = array<i32: 0>} : tensor<1xi64
+    // CHECK: %[[WRITE_COMMITS:.*]] = arith.constant dense<0> : tensor<1xi8
+    // CHECK: %[[WRT_COMMITS_GLOB:.*]] = ttg.global_scratch_alloc {alignment = 1 : i32, nbytes = 1 : i32} : !tt.ptr<i8>
+
+    // CHECK-NOT: tti.experimental_check_outstanding_writes
+    // CHECK-NOT: tti.experimental_check_outstanding_reads
+    // CHECK: tti.experimental_check_write_commit %[[A:.*]]{%[[BUFFERS]], %[[WRT_COMMITS_GLOB]](tensor<1xi8,
+    // CHECK: tti.experimental_stage_write_for_commit %[[A]]{%[[BUFFERS]], %[[WRT_COMMITS_GLOB]](tensor<1xi8,
+    // CHECK: ttg.async_copy_global_to_local %{{.*}}, %[[A]]
+
+    %shmem = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+    ttg.async_copy_global_to_local %ptr, %shmem : tensor<128x128x!tt.ptr<f16>, #blocked> -> <128x128xf16, #shared, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [1, 1], order = [0, 1]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
+  // CHECK-LABEL: @async_copy_local_to_global_with_barriers
+  tt.func public @async_copy_local_to_global_with_barriers(%ptr: tensor<128x128x!tt.ptr<f16>, #blocked>) {
+    // CHECK: %[[BUFFERS:.*]] = tti.experimental_shared_buffer_pointers {offsets = array<i32: 0>} : tensor<1xi64
+    // CHECK: %[[WRITE_COMMITS:.*]] = arith.constant dense<0> : tensor<1xi8
+    // CHECK: %[[WRT_COMMITS_GLOB:.*]] = ttg.global_scratch_alloc {alignment = 1 : i32, nbytes = 1 : i32} : !tt.ptr<i8>
+
+    // CHECK: tti.experimental_check_outstanding_writes
+    // CHECK: tti.experimental_check_write_commit %[[A:.*]]{%[[BUFFERS]], %[[WRT_COMMITS_GLOB]](tensor<1xi8,
+    // CHECK: tti.experimental_check_outstanding_reads
+    // CHECK: tti.experimental_stage_write_for_commit %[[A]]{%[[BUFFERS]], %[[WRT_COMMITS_GLOB]](tensor<1xi8,
+    // CHECK: ttg.async_copy_global_to_local %{{.*}}, %[[A]]
+    %bar = ttg.local_alloc {allocation.offset = 65536 : i32} : () -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
+    ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
+    %shmem = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+    ttg.async_copy_global_to_local %ptr, %shmem : tensor<128x128x!tt.ptr<f16>, #blocked> -> <128x128xf16, #shared, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
+  // CHECK-LABEL: @async_commit_group
+  tt.func public @async_commit_group() {
+    // CHECK: tti.experimental_commit_writes
+    %shmem = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+    ttg.async_commit_group
+    tt.return
+  }
+}
+
+// -----
+
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
+  // CHECK-LABEL: @async_commit_group
+  tt.func public @async_commit_group() {
+    // CHECK: tti.experimental_clear_write_commits{{.*}}, 42 : !tt.ptr<i8>
+    %shmem = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+    ttg.async_wait {num = 42 : i32}
+    tt.return
+  }
+}

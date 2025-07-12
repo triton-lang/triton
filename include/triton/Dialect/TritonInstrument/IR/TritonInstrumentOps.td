@@ -160,4 +160,71 @@ def TTI_ExperimentalClearReadBarrierOp : TTI_Op<"experimental_clear_read_barrier
   let hasVerifier = 1;
 }
 
+def TTI_ExperimentalStageWriteForCommitOp : TTI_Op<"experimental_stage_write_for_commit", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+  let summary = "Preapre to an async copy of a buffer. Staged until commit_group is called.";
+  let description = [{
+    Preapre to an async copy of a buffer. Staged until commit_group is called. The implementation will write `-1` to the
+    `write_commits` tensor under the indices corresponding to the buffer.
+  }];
+  let arguments = (ins
+    TTG_MemDescType:$buf,
+    TT_Tensor:$buffers,
+    TT_PtrLike:$writeCommits,
+    TypeAttr:$writeCommitsType,
+    Optional<I1>:$pred
+  );
+  let assemblyFormat = [{
+    $buf `{` $buffers `,` $writeCommits `(` $writeCommitsType `)` `}` (`,` $pred^)? attr-dict `:` type($buf) `,` type($buffers) `,` type($writeCommits)
+  }];
+  // let hasVerifier = 1;
+}
+
+def TTI_ExperimentalCommitWritesOp : TTI_Op<"experimental_commit_writes", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+  let summary = "Commit all the staged writes for all the buffers.";
+  let description = [{
+    Commit all the staged writes for all the buffers.
+  }];
+  let arguments = (ins
+    TT_PtrLike:$writeCommits,
+    TypeAttr:$writeCommitsType,
+    Optional<I1>:$pred);
+  let assemblyFormat = [{
+    `{` $writeCommits `(` $writeCommitsType `)` `}` (`,` $pred^)? attr-dict `:` type($writeCommits)
+  }];
+  // let hasVerifier = 1;
+}
+
+def TTI_ExperimentalClearWriteCommitsOp : TTI_Op<"experimental_clear_write_commits", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+  let summary = "Clear all the write commits more distant than `outstandingNum.";
+  let description = [{
+    Clear all the write commits more distant than `outstandingNum` from the current thread.
+  }];
+  let arguments = (ins
+    TT_PtrLike:$writeCommits,
+    TypeAttr:$writeCommitsType,
+    I32Attr:$outstandingNum,
+    Optional<I1>:$pred);
+  let assemblyFormat = [{
+    `{` $writeCommits `(` $writeCommitsType `)` `}` `,` $outstandingNum (`,` $pred^)? attr-dict `:` type($writeCommits)
+  }];
+  // let hasVerifier = 1;
+}
+
+def TTI_ExperimentalCheckWriteCommitOp : TTI_Op<"experimental_check_write_commit", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+  let summary = "Check if the buffer has an outstanding write commit.";
+  let description = [{
+    Check if the buffer has an outstanding write commit.
+  }];
+  let arguments = (ins
+    TTG_MemDescType:$buf,
+    TT_Tensor:$buffers,
+    TT_PtrLike:$writeCommits,
+    TypeAttr:$writeCommitsType,
+    Optional<I1>:$pred);
+  let assemblyFormat = [{
+    $buf `{` $buffers `,` $writeCommits `(` $writeCommitsType `)` `}` (`,` $pred^)? attr-dict `:` type($buf) `,` type($buffers) `,` type($writeCommits)
+  }];
+  // let hasVerifier = 1;
+}
+
 #endif // TRITONINSTRUMENT_OPS
