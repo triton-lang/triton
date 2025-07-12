@@ -449,7 +449,6 @@ MemDescTransOp::inferReturnTypes(MLIRContext *context,
       return failure();
     }
   }
-  llvm::errs() << "retEncoding: " << retEncoding << "\n";
 
   // Permute the last `rank` dims of the source alloc shape.
   SmallVector<int64_t> allocShape =
