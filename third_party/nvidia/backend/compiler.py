@@ -351,6 +351,7 @@ class CUDABackend(BaseBackend):
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
+        passes.convert.add_nvvm_to_llvm(pm)
         if not knobs.compilation.disable_line_info:
             passes.llvmir.add_di_scope(pm)
         pm.run(mod)
