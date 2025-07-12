@@ -127,6 +127,27 @@ BufferEmitter::emitLoadToLds(Type type, Value byteWidth, Value rsrcDesc,
       ArrayRef<NamedAttribute>());
 }
 
+Value BufferEmitter::emitAtomicCAS(Type type, Value rsrcDesc, Value offset,
+                                   Value casStoreVal, Value casCmpVal,
+                                   Value pred, bool hasUsers) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  VectorType storeVecTy = cast<VectorType>(casStoreVal.getType());
+  VectorType cmpVecTy = cast<VectorType>(casCmpVal.getType());
+  Type bufferType = getBufferOpType(type, true);
+  if (storeVecTy != bufferType)
+    casStoreVal = b.bitcast(casStoreVal, bufferType);
+  if (cmpVecTy != bufferType)
+    casCmpVal = b.bitcast(casCmpVal, bufferType);
+
+  SmallVector<Value, 6> args{casCmpVal, casStoreVal};
+  fillCommonArgsAtomics(type, rsrcDesc, offset, pred, hasUsers, args);
+
+  Value data = rewriter.create<ROCDL::RawPtrBufferAtomicCmpSwap>(
+      loc, bufferType, args, ArrayRef<NamedAttribute>());
+  data = b.bitcast(data, type);
+  return data;
+}
+
 Value BufferEmitter::emitAtomicRMW(RMWOp rmwType, Type type, Value rsrcDesc,
                                    Value offset, Value data, Value pred,
                                    bool hasUsers) {

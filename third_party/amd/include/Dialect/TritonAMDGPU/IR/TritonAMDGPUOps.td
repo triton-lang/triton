@@ -411,6 +411,42 @@ def BufferAtomicRMWOp : TT_AMDGPU_Op<"buffer_atomic_rmw", [
 }
 
 //===----------------------------------------------------------------------===//
+// BufferAtomicCASOp
+//===----------------------------------------------------------------------===//
+def BufferAtomicCASOp : TT_AMDGPU_Op<"buffer_atomic_cas", [
+  SameLoadStoreOperandsAndResultEncoding,
+  TypesMatchWith<"result element type matches the val type", "result", "val", "$_self">,
+  TypesMatchWith<"result element type matches the cmp type", "result", "cmp", "$_self">,
+  TypesMatchWith<"result element type matches the pointed type of ptr", "result", "ptr", "getPointerTypeToElement($_self)">,
+  TypesMatchWith<"result and offsets have the same shape", "result", "offsets", "getI32SameShape($_self)">,
+  TypesMatchWith<"val and offsets have the same shape", "val", "offsets", "getI32SameShape($_self)">,
+  TypesMatchWith<"val and cmp have the same shape", "val", "cmp", "getI1SameShape($_self)",
+                 "($_op.getOperands().size() <= 4) || std::equal_to<>()">,
+]>{
+    let summary = "Atomic CAS op which does compare-exchange to a scalar base pointer and a tensor offset";
+    let description = [{
+        AMD Buffer Atomic CAS operation. Buffer atomics are similar to normal atomics, but access global memory via a
+        scalar base pointer and a tensor of offsets instead of a tensor of pointers.
+        Similar to TT_AtomicCASOp: Buffer atomic CAS op loads data at $ptr, and stores $val to $ptr atomically if value at $ptr equals $cmp, with
+        the specified memory semantics and scope. Atomic CAS ops return the pre-op value if used, otherwise the value is implicitly dropped.
+    }];
+    let arguments = (
+      ins
+      Arg<TT_Ptr, "Global memory pointer", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$ptr,
+      I32Tensor:$offsets,
+      TT_Tensor:$cmp,
+      TT_Tensor:$val,
+      TT_MemSemanticAttr:$sem,
+      TT_MemSyncScopeAttr:$scope
+    );
+    let results = (outs TT_Tensor:$result);
+
+    let assemblyFormat = [{
+        $sem `,` $scope `,` $cmp `,` $val `,` $ptr `[` $offsets `]` attr-dict `:` type($result)
+    }];
+}
+
+//===----------------------------------------------------------------------===//
 // BufferStoreOp
 //===----------------------------------------------------------------------===//
 
