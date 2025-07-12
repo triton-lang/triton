@@ -43,6 +43,9 @@ void CircularLayoutParser::parseMetadata() {
   bt.blockId = decoder.decode<I32Entry>()->value;
   bt.procId = decoder.decode<I32Entry>()->value;
   bt.bufSize = decoder.decode<I32Entry>()->value;
+  bt.initialTime = decoder.decode<I64Entry>()->value;
+  bt.preFinalTime = decoder.decode<I64Entry>()->value;
+  bt.postFinalTime = decoder.decode<I64Entry>()->value;
 
   std::vector<uint32_t> countVec;
   for (int i = 0; i < getConfig().totalUnits; i++) {
@@ -120,7 +123,8 @@ void CircularLayoutParser::parseSegment(
 
           if (activeProfileEvent.first->cycle >
               activeProfileEvent.second->cycle) {
-            throw ClockOverflowException("Clock overflow");
+            std::cerr << "Warning: clock overflow" << std::endl;
+            // throw ClockOverflowException("Clock overflow");
           }
           trace.profileEvents.push_back(activeProfileEvent);
         } else {

@@ -1,4 +1,5 @@
 #include "TraceDataIO/Parser.h"
+#include <iomanip>
 
 using namespace proton;
 
@@ -14,6 +15,16 @@ void ParserBase::reportException(const ParserException &e, size_t pos) {
       config.printLevel == ParserConfig::PrintMode::ALL) {
     std::cerr << "ParserException [offset=" << pos << "]: " << e.what()
               << std::endl;
+    std::cerr << "Buffer: " << std::endl;
+    buffer.seek(0);
+    for (size_t i = 0; i < buffer.size() / 4; i++) {
+      std::cerr << std::setw(8) << std::setfill('0') << std::hex
+                << buffer.readInt32() << " ";
+      if (i % 4 == 3) {
+        std::cerr << std::endl;
+      }
+    }
+    std::cerr << std::dec << std::endl;
   }
 
   if (e.severity == ExceptionSeverity::WARNING)

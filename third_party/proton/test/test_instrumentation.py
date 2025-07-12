@@ -131,7 +131,7 @@ def test_record(method, tmp_path: pathlib.Path):
         host_buffer = proton.hooks.InstrumentationHook.host_buffer[payload_offset:]
         preamble = host_buffer[0:4]
         assert int.from_bytes(preamble.numpy().tobytes(), "little") == 0xDEADBEEF
-        header_size = 16
+        header_size = 40
         metadata_size = header_size + pgm.metadata.num_warps * 4
         start_tag = host_buffer[metadata_size:metadata_size + 4]
         start_clock = host_buffer[metadata_size + 4:metadata_size + 8]
@@ -385,7 +385,7 @@ def test_autotune(tmp_path: pathlib.Path):
         assert "add_1024" in names
 
 
-def test_sched_barrier(tmp_path: pathlib.Path):
+def test_sched_barrier(tmp_path: pathlib.Path, capsys):
     if is_cuda():
         pytest.skip("CUDA backend does not support instruction scheduling barriers")
 
@@ -424,17 +424,17 @@ def test_sched_barrier(tmp_path: pathlib.Path):
             b_ptrs += BLOCK_SIZE_K * stride_bk
         pl.exit_scope("warpgroup_2")
 
-        pl.enter_scope("warpgroup_3")
+        # pl.enter_scope("warpgroup_3")
         c = accumulator.to(tl.float16)
-        pl.exit_scope("warpgroup_3")
+        # pl.exit_scope("warpgroup_3")
 
-        pl.enter_scope("warpgroup_4")
+        # pl.enter_scope("warpgroup_4")
         offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
         offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
         c_ptrs = c_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
         c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
         tl.store(c_ptrs, c, mask=c_mask)
-        pl.exit_scope("warpgroup_4")
+        # pl.exit_scope("warpgroup_4")
 
     torch.manual_seed(0)
     a = torch.randn((512, 512), device="cuda", dtype=torch.float16)
@@ -451,6 +451,7 @@ def test_sched_barrier(tmp_path: pathlib.Path):
 
     temp_file = tmp_path / "test_sched_barrier.hatchet"
     mode = proton.mode.Default(metric_type="cycle", optimizations="sched_barriers")
+    proton.hooks.InstrumentationHook.enable_host_buffer = True
     proton.start(str(temp_file.with_suffix("")), backend="instrumentation", mode=mode)
 
     grid = lambda META: (triton.cdiv(M, BLOCK_SIZE_M) * triton.cdiv(N, BLOCK_SIZE_N), )
@@ -461,6 +462,23 @@ def test_sched_barrier(tmp_path: pathlib.Path):
         b.stride(0), b.stride(1),  #
         c.stride(0), c.stride(1),  #
         BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, GROUP_SIZE_M)
+    with capsys.disabled():
+        print("======= ttir =======")
+        print(kernel.asm["ttir"])
+
+        print("======= llir ========")
+        print(kernel.asm["llir"])
+
+        print("======= amdgcn ========")
+        print(kernel.asm["amdgcn"])
+
+        print("======= host buffer ========")
+        buffer = proton.hooks.InstrumentationHook.host_buffer
+        for i in range(0, len(buffer), 4):
+            word = int.from_bytes(buffer[i:i + 4], byteorder="little")
+            print(f"{word:08x}", end=" ")
+            if i % 16 == 12:
+                print()
     proton.finalize()
 
     asm = kernel.asm["amdgcn"]

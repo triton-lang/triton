@@ -78,6 +78,24 @@ def PTG_ReadCounterOp : PTG_Op<"read_counter", [
   }];
 }
 
+def PTG_InitializeOp : PTG_Op<"initialize", [
+    MemoryEffects<[MemWrite<GlobalMemory>]>
+]> {
+  let summary = "Initialize the intra kernel profiler";
+
+  let description = [{
+    Initialize the intra kernel profiler by filling the auxiliary metadata to the header.
+    `scratchPtr` is the base address of the profiling scratch buffer where the header is stored.
+  }];
+
+  let arguments = (ins
+    TT_Ptr:$scratchPtr
+  );
+
+  let assemblyFormat = "$scratchPtr attr-dict `:` qualified(type($scratchPtr))";
+}
+
+
 def PTG_FinalizeOp : PTG_Op<"finalize", [
     MemoryEffects<[MemRead<SharedMemory>]>, // FIXME: it shouldn't always have shared memory effects
     MemoryEffects<[MemRead<GlobalMemory>]>,
