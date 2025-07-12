@@ -293,21 +293,19 @@ class shared_memory_descriptor(base_value):
         return _semantic.memdesc_trans(self, order)
 
     @builtin
-    def reshape(self, shape, layout, _semantic: GluonSemantic) -> shared_memory_descriptor:
+    def reshape(self, shape, _semantic: GluonSemantic) -> shared_memory_descriptor:
         """
         Reshape the shared memory descriptor to a new shape and layout.
 
         Args:
             shape (List[int]): The target shape.
-            layout (SharedLayout): The new layout for the descriptor.
 
         Returns:
             shared_memory_descriptor: Descriptor with the new shape and layout.
         """
         shape = [_unwrap_if_constexpr(s) for s in shape]
-        layout = _unwrap_if_constexpr(layout)
 
-        return _semantic.memdesc_reshape(self, shape, layout)
+        return _semantic.memdesc_reshape(self, shape)
 
     @builtin
     def _reinterpret(self, dtype, shape, layout, _semantic: GluonSemantic = None) -> shared_memory_descriptor:

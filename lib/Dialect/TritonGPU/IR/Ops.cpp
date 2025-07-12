@@ -487,6 +487,38 @@ LogicalResult MemDescReshapeOp::verify() {
   return success();
 }
 
+LogicalResult
+MemDescReshapeOp::inferReturnTypes(MLIRContext *context,
+                                   std::optional<Location> loc,
+                                   MemDescReshapeOp::Adaptor adaptor,
+                                   SmallVectorImpl<Type> &inferredReturnTypes) {
+  auto srcTy = cast<MemDescType>(adaptor.getSrc().getType());
+  auto dstShape = adaptor.getShape();
+
+  if (product<int64_t>(dstShape) != product<int64_t>(srcTy.getShape()))
+    return emitOptionalError(
+        loc, "dst shape has different number of elements than src");
+
+  Attribute dstEncoding;
+  if (Attribute srcEnc = srcTy.getEncoding()) {
+    auto *inferLayout = cast<DialectInferLayoutInterface>(&srcEnc.getDialect());
+    if (failed(inferLayout->inferReshapeOpEncoding(srcTy.getShape(), srcEnc,
+                                                   dstShape, dstEncoding, loc)))
+      return failure();
+  }
+
+  SmallVector<int64_t> dstAllocShape;
+  auto srcAllocShape = srcTy.getAllocShape();
+  unsigned prefix = srcAllocShape.size() - srcTy.getShape().size();
+  dstAllocShape.append(srcAllocShape.begin(), srcAllocShape.begin() + prefix);
+  dstAllocShape.append(dstShape.begin(), dstShape.end());
+
+  inferredReturnTypes.push_back(MemDescType::get(
+      dstShape, srcTy.getElementType(), dstEncoding, srcTy.getMemorySpace(),
+      srcTy.getMutableMemory(), dstAllocShape));
+  return success();
+}
+
 // MemDescReinterpretOp
 LogicalResult MemDescReinterpretOp::verify() {
   if (getSrc().getType().getMemorySpace() != getType().getMemorySpace())
