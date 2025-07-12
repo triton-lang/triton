@@ -206,11 +206,7 @@ assert torch.allclose(y_triton, y_torch), (y_triton, y_torch)
         x_vals=[128 * i for i in range(2, 100)],  # different possible values for `x_name`
         line_arg='provider',  # argument name whose value corresponds to a different line in the plot
         line_vals=['triton', 'torch', 'naive_softmax'],  # possible values for `line_arg``
-        line_names=[
-            "Triton",
-            "Torch",
-            "Naive Softmax"
-        ],  # label name for the lines
+        line_names=["Triton", "Torch", "Naive Softmax"],  # label name for the lines
         styles=[('blue', '-'), ('green', '-'), ('red', '-')],  # line styles
         ylabel="GB/s",  # label name for the y-axis
         plot_name="softmax-performance",  # name for the plot. Used also as a file name for saving the plot.
