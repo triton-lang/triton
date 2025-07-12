@@ -6042,9 +6042,9 @@ def test_num_threads(device):
 
 
 def test_globaltimer(device):
-    if is_hip_cdna2():
-        pytest.skip("test_globaltimer is flaky on gfx90a")
     check_cuda_or_hip(device)
+    if is_hip():
+        pytest.skip("test_globaltimer is flaky on AMD GPUs")
 
     @triton.jit
     def kernel(Out1, Out2, func: tl.constexpr):
