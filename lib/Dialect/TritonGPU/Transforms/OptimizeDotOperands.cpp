@@ -143,9 +143,10 @@ public:
   }
 };
 
-static Attribute inferSrcEncodingMemDescReshape(Attribute dstEncoding,
-                                                ArrayRef<int64_t> srcShape,
-                                                ArrayRef<int64_t> dstShape) {
+static Attribute inferSrcEncodingMemDescReshape(ArrayRef<int64_t> srcShape,
+                                                MemDescType dstType) {
+  auto dstEncoding = dstType.getEncoding();
+  auto dstShape = dstType.getShape();
   auto mmaEncoding = dyn_cast<NVMMASharedEncodingAttr>(dstEncoding);
   if (!mmaEncoding)
     return {};
@@ -203,8 +204,8 @@ public:
     auto allocEncoding = allocType.getEncoding();
 
     RankedTensorType srcTy = reshapeOp.getSrc().getType();
-    auto newAllocEncoding = inferSrcEncodingMemDescReshape(
-        allocEncoding, srcTy.getShape(), allocType.getShape());
+    auto newAllocEncoding =
+        inferSrcEncodingMemDescReshape(srcTy.getShape(), allocType);
     if (!newAllocEncoding)
       return failure();
 

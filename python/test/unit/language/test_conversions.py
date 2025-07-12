@@ -7,7 +7,7 @@ import pytest
 import triton
 import triton.language as tl
 
-from triton._internal_testing import is_cuda, is_hip, is_hip_cdna2, is_hip_cdna3, is_hip_cdna4
+from triton._internal_testing import is_cuda, is_hip, is_hip_cdna3, is_hip_cdna4
 
 
 def matching_int(dtype):
@@ -341,12 +341,6 @@ def test_typeconvert_downcast(src_dtype, dst_dtype, rounding, max_repr, device):
             pytest.skip(f"{dst_dtype} downcast with RTNE rounding tests only supported on AMDGPU CDNA3")
 
     if is_hip():
-        if dst_dtype == 'float8e4nv':
-            if not rounding == 'rtne':
-                pytest.skip("float8e4nv downcast tests only supported with RTNE rounding on AMDGPU")
-            if not is_hip_cdna4() and src_dtype == 'bfloat16':
-                pytest.skip("float8e4nv downcast tests from bfloat16 only supported on AMDGPU CDNA4")
-
         if dst_dtype in ('float8e5b16', 'float8e4b8') and rounding == 'rtne' and not is_hip_cdna3():
             pytest.skip(f"{dst_dtype} downcast with RTNE rounding tests only supported on AMDGPU CDNA3")
 
@@ -376,9 +370,6 @@ def test_typeconvert_downcast_clamping(src_dtype, dst_dtype, mode, device, round
 
         if dst_dtype in ('float8e5', 'float8e4nv') and rounding == 'rtne' and torch.cuda.get_device_capability(0) < (9, 0):
             pytest.skip(f"{dst_dtype} downcast with RTNE rounding tests only supported on NVGPU with compute capability 9.0+")
-    elif is_hip_cdna2() or is_hip_cdna3():
-        if src_dtype == 'bfloat16' and dst_dtype == 'float8e4nv':
-            pytest.skip(f"{src_dtype} downcast to {dst_dtype} with clamping is not fully tested on AMDGPU CDNA2/3")
 
     converter = {
         tl.float8e4nv: torch.float8_e4m3fn,

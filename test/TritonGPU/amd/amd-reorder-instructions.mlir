@@ -136,9 +136,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %3 = ttg.local_alloc : () -> !ttg.memdesc<1x128x128xf8E5M2FNUZ, #shared1, #smem, mutable>
     %4 = arith.cmpi sgt, %arg2, %c0_i32 : i32
     %5 = tt.splat %4 : i1 -> tensor<128x128xi1, #blocked>
-    %6 = tt.load %0, %5 {OpIdx = #amdgpu.OpIdx<0>, amd.pipeliner_part = "prologue"} : tensor<128x128x!tt.ptr<f16>, #blocked>
+    %6 = tt.load %0, %5 {amd.pipeliner_part = "prologue"} : tensor<128x128x!tt.ptr<f16>, #blocked>
     %7 = tt.splat %4 : i1 -> tensor<128x128xi1, #blocked1>
-    %8 = tt.load %1, %7 {OpIdx = #amdgpu.OpIdx<1>, amd.pipeliner_part = "prologue"} : tensor<128x128x!tt.ptr<f8E5M2FNUZ>, #blocked1>
+    %8 = tt.load %1, %7 {amd.pipeliner_part = "prologue"} : tensor<128x128x!tt.ptr<f8E5M2FNUZ>, #blocked1>
     tt.return
   }
 }
@@ -550,22 +550,22 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
     %2 = ttg.local_alloc : () -> !ttg.memdesc<2x32x128xf16, #shared, #smem, mutable>
     %3 = ttg.local_alloc : () -> !ttg.memdesc<2x128x32xf8E5M2FNUZ, #shared1, #smem, mutable>
-    %4 = tt.load %arg0 {OpIdx = #amdgpu.OpIdx<0>, amd.pipeliner_part = "prologue"} : tensor<32x128x!tt.ptr<f16>, #blocked>
-    %5 = tt.load %arg1 {OpIdx = #amdgpu.OpIdx<1>, amd.pipeliner_part = "prologue"} : tensor<128x32x!tt.ptr<f8E5M2FNUZ>, #blocked1>
+    %4 = tt.load %arg0 {amd.pipeliner_part = "prologue"} : tensor<32x128x!tt.ptr<f16>, #blocked>
+    %5 = tt.load %arg1 {amd.pipeliner_part = "prologue"} : tensor<128x32x!tt.ptr<f8E5M2FNUZ>, #blocked1>
 
-    %6 = tt.load %0 {OpIdx = #amdgpu.OpIdx<0>, amd.pipeliner_part = "prologue"} : tensor<32x128x!tt.ptr<f16>, #blocked>
-    %7 = tt.load %1 {OpIdx = #amdgpu.OpIdx<1>, amd.pipeliner_part = "prologue"} : tensor<128x32x!tt.ptr<f8E5M2FNUZ>, #blocked1>
+    %6 = tt.load %0 {amd.pipeliner_part = "prologue"} : tensor<32x128x!tt.ptr<f16>, #blocked>
+    %7 = tt.load %1 {amd.pipeliner_part = "prologue"} : tensor<128x32x!tt.ptr<f8E5M2FNUZ>, #blocked1>
 
     %8 = ttg.memdesc_subview %2[%c0_i32, %c0_i32, %c0_i32] : !ttg.memdesc<2x32x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<32x128xf16, #shared, #smem, mutable>
     %9 = ttg.memdesc_subview %3[%c0_i32, %c0_i32, %c0_i32] : !ttg.memdesc<2x128x32xf8E5M2FNUZ, #shared1, #smem, mutable> -> !ttg.memdesc<128x32xf8E5M2FNUZ, #shared1, #smem, mutable>
     %10 = ttg.memdesc_subview %2[%c1_i32, %c0_i32, %c0_i32] : !ttg.memdesc<2x32x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<32x128xf16, #shared, #smem, mutable>
     %11 = ttg.memdesc_subview %3[%c1_i32, %c0_i32, %c0_i32] : !ttg.memdesc<2x128x32xf8E5M2FNUZ, #shared1, #smem, mutable> -> !ttg.memdesc<128x32xf8E5M2FNUZ, #shared1, #smem, mutable>
 
-    ttg.local_store %4, %8 {OpIdx = #amdgpu.OpIdx<0>} : tensor<32x128xf16, #blocked> -> !ttg.memdesc<32x128xf16, #shared, #smem, mutable>
-    ttg.local_store %5, %9 {OpIdx = #amdgpu.OpIdx<1>} : tensor<128x32xf8E5M2FNUZ, #blocked1> -> !ttg.memdesc<128x32xf8E5M2FNUZ, #shared1, #smem, mutable>
+    ttg.local_store %4, %8 : tensor<32x128xf16, #blocked> -> !ttg.memdesc<32x128xf16, #shared, #smem, mutable>
+    ttg.local_store %5, %9 : tensor<128x32xf8E5M2FNUZ, #blocked1> -> !ttg.memdesc<128x32xf8E5M2FNUZ, #shared1, #smem, mutable>
 
-    ttg.local_store %6, %10 {OpIdx = #amdgpu.OpIdx<0>} : tensor<32x128xf16, #blocked> -> !ttg.memdesc<32x128xf16, #shared, #smem, mutable>
-    ttg.local_store %7, %11 {OpIdx = #amdgpu.OpIdx<1>} : tensor<128x32xf8E5M2FNUZ, #blocked1> -> !ttg.memdesc<128x32xf8E5M2FNUZ, #shared1, #smem, mutable>
+    ttg.local_store %6, %10 : tensor<32x128xf16, #blocked> -> !ttg.memdesc<32x128xf16, #shared, #smem, mutable>
+    ttg.local_store %7, %11 : tensor<128x32xf8E5M2FNUZ, #blocked1> -> !ttg.memdesc<128x32xf8E5M2FNUZ, #shared1, #smem, mutable>
     tt.return
   }
 }

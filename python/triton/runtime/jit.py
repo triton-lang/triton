@@ -690,6 +690,9 @@ class JITFunction(KernelInterface[T]):
     def cache_key(self):
         # TODO : hash should be attribute of `self`
         if self.hash is None:
+            # Set a placeholder hash to break recursion in case the function
+            # transitively calls itself. The full hash is set after.
+            self.hash = f"recursion:{self._fn_name}"
             nonlocals = inspect.getclosurevars(self.fn).nonlocals
             dependencies_finder = DependenciesFinder(name=self._fn_name, globals=self.__globals__, nonlocals=nonlocals,
                                                      src=self.src)

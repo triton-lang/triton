@@ -32,6 +32,18 @@ class Pair:
     def unpack(self):
         return self.get_first(), self.get_second()
 
+    def __getitem__(self, ind: tl.constexpr, _semantic=None):
+        if ind == 0:
+            return self.first
+        assert ind == 1
+        return self.second
+
+    def __setitem__(self, ind: tl.constexpr, value, _semantic=None):
+        if ind == 0:
+            self.first = value
+        assert ind == 1
+        self.second = value
+
 
 @filecheck_test
 @triton.jit
@@ -64,6 +76,47 @@ def test_augassign_attribute():
 
 @filecheck_test
 @triton.jit
+def test_retrieve_item():
+    # CHECK-LABEL: test_retrieve_item
+    # CHECK: %c11_i32 = arith.constant 11 : i32
+    # CHECK: [[RANGE:%.*]] = tt.make_range {end = 4 : i32, start = 0 : i32}
+    scalar = 11
+    pair = Pair(tl.arange(0, 4), scalar)
+    # CHECK-NEXT: call @{{.*}}anchor{{.*}}(%c11_i32)
+    anchor(pair[1])
+
+
+@filecheck_test
+@triton.jit
+def test_assign_item():
+    # CHECK-LABEL: test_assign_item
+    # CHECK: %c11_i32 = arith.constant 11 : i32
+    # CHECK: [[RANGE:%.*]] = tt.make_range {end = 4 : i32, start = 0 : i32}
+    scalar = 11
+    pair = Pair(tl.arange(0, 4), scalar)
+    # CHECK: %c42_i32 = arith.constant 42 : i32
+    pair[1] = 42
+    # CHECK-NEXT: call @{{.*}}anchor{{.*}}([[RANGE]], %c42_i32)
+    anchor(pair)
+
+
+@filecheck_test
+@triton.jit
+def test_augassign_item():
+    # CHECK-LABEL: test_augassign_item
+    # CHECK: %c11_i32 = arith.constant 11 : i32
+    # CHECK: [[RANGE:%.*]] = tt.make_range {end = 4 : i32, start = 0 : i32}
+    scalar = 11
+    pair = Pair(tl.arange(0, 4), scalar)
+    # CHECK: %c42_i32 = arith.constant 42 : i32
+    # CHECK: [[VALUE:%.*]] = arith.addi %c11_i32, %c42_i32
+    pair[1] += 42
+    # CHECK-NEXT: call @{{.*}}anchor{{.*}}([[RANGE]], [[VALUE]])
+    anchor(pair)
+
+
+@filecheck_test
+@triton.jit
 def test_jit_method():
     # CHECK-LABEL: test_jit_method
     # CHECK: %c11_i32 = arith.constant 11 : i32
@@ -76,6 +129,32 @@ def test_jit_method():
     anchor(a)
     # CHECK: call @{{.*}}anchor{{.*}}([[V]]#1)
     anchor(b)
+
+
+@tl.core._aggregate
+class TypeWithJitGetItem:
+    value: tl.tensor
+
+    def __init__(self, value):
+        self.value = value
+
+    @triton.jit
+    def __getitem__(self, ind):
+        return self.value
+
+
+@filecheck_test
+@triton.jit
+def test_jit_getitem():
+    # CHECK-LABEL: test_jit_getitem
+    # CHECK: [[RANGE:%.*]] = tt.make_range {end = 4 : i32, start = 0 : i32}
+    v = TypeWithJitGetItem(tl.arange(0, 4))
+    # CHECK: [[V:%.*]] = tt.call [[METHOD:@.*__getitem__.*]]([[RANGE]])
+    a = v[0]
+    # CHECK: call @{{.*}}anchor{{.*}}([[V]])
+    anchor(a)
+    # CHECK: tt.func private [[METHOD]]([[ARG0:%.*]]:
+    # CHECK: tt.return [[ARG0]]
 
 
 @tl.core._aggregate
@@ -422,3 +501,30 @@ def test_modify_if_livein():
         if box.value:
             box.value = False
     anchor(box.value)
+
+
+@triton.jit
+def recursive_reduce(x):
+    if x.shape[0] == 1:
+        return x
+    else:
+        x0, x1 = x.reshape((x.shape[0] // 2, 2)).split()
+        return recursive_reduce(x0) + recursive_reduce(x1)
+
+
+@filecheck_test
+@triton.jit
+def test_specialized_recursion():
+    # CHECK-LABEL: test_specialized_recursion
+    # CHECK: call {{.*}}recursive_reduce__i32S16S
+    x = tl.arange(0, 16)
+    recursive_reduce(x)
+
+    # CHECK: func {{.*}}recursive_reduce__i32S16S
+    # CHECK-COUNT-2: call {{.*}}recursive_reduce__i32S8S
+
+    # CHECK: func {{.*}}recursive_reduce__i32S8S
+    # CHECK-COUNT-2: call {{.*}}recursive_reduce__i32S4S
+
+    # CHECK: func {{.*}}recursive_reduce__i32S4S
+    # CHECK-COUNT-2: call {{.*}}recursive_reduce__i32S2S
