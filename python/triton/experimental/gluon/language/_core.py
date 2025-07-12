@@ -43,6 +43,7 @@ from triton.language.core import (
 )
 
 _IMPORT_FROM_TRITON: List[str] = [
+    "broadcast",
     "expand_dims",
     "inline_asm_elementwise",
     "join",
@@ -341,14 +342,14 @@ for name in _IMPORT_FROM_TRITON:
 
 
 @builtin
-def arange(start, end, layout, _semantic=None):
+def arange(start, end, layout=None, _semantic=None):
     """
     Generate a sequence tensor with values in [start, end) using a specified layout.
 
     Args:
         start (int): Inclusive start of the sequence.
         end (int): Exclusive end of the sequence.
-        layout (DistributedLayout): The layout of the output tensor.
+        layout (DistributedLayout): The layout of the output tensor. Defaults to AutoLayout.
 
     Returns:
         tensor: A 1D tensor containing sequential values.

@@ -42,8 +42,9 @@ def run_filecheck(name, module_str, check_template):
             temp.write(check_template)
 
         try:
-            subprocess.check_output([filecheck_path, temp_expected, "--input-file", temp_module],
-                                    stderr=subprocess.STDOUT)
+            subprocess.check_output(
+                [filecheck_path, temp_expected, "--input-file", temp_module, "--dump-input-context=50"],
+                stderr=subprocess.STDOUT)
         except subprocess.CalledProcessError as error:
             decoded = error.output.decode('unicode_escape')
             raise ValueError(decoded)
@@ -60,8 +61,10 @@ def run_parser(kernel_fn):
     ir.load_dialects(context)
     stub_backend.load_dialects(context)
 
-    extra_options = src.parse_options()
-    options = stub_backend.parse_options(dict(**extra_options))
+    options = dict(sanitize_overflow=False)
+    options.update(src.parse_options())
+
+    options = stub_backend.parse_options(options)
     codegen_fns = stub_backend.get_codegen_implementation(options)
     module_map = stub_backend.get_module_map()
     module = src.make_ir(options, codegen_fns, module_map, context)
