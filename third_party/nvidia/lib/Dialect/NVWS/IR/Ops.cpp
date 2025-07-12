@@ -20,7 +20,8 @@ LogicalResult ArefCreateOp::verify() {
   SmallVector<int> dims;
   for (auto operand : getOperands()) {
     SmallVector<Operation *> users(operand.user_begin(), operand.user_end());
-    if (users.size() != 1)
+    if (!llvm::all_of(users,
+                      [](Operation *op) { return isa<ArefCreateOp>(op); }))
       return emitError("Aref buffer is used elsewhere, Aref cannot guarantee "
                        "async safety");
     auto type = operand.getType();
@@ -137,6 +138,33 @@ void CreateTokenOp::build(::mlir::OpBuilder &builder,
   auto tokenType = TokenType::get(builder.getContext());
   auto resultType = RankedTensorType::get({num}, tokenType);
   build(builder, state, resultType, num, loadType);
+}
+
+static LogicalResult
+verifyBarrierType(Operation *op, mlir::triton::gpu::MemDescType barrierType) {
+  if (!barrierType.getElementType().isInteger(64) ||
+      barrierType.getShape() != ArrayRef<int64_t>({1}))
+    return op->emitOpError(
+        "barrier allocation must be a descriptor of 1xi64 type");
+  return success();
+}
+
+// -- ArriveBarrierOp --
+LogicalResult ArriveBarrierOp::verify() {
+  if (failed(verifyBarrierType(*this, getAlloc().getType())))
+    return failure();
+  return success();
+}
+
+void ArriveBarrierOp::getEffects(
+    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
+        &effects) {
+  effects.emplace_back(MemoryEffects::Read::get(), &getAllocMutable(),
+                       mlir::triton::gpu::SharedMemory::get());
+  // Need a side effect to prevent compiler from reordering and removing
+  // the arrive operation.
+  effects.emplace_back(MemoryEffects::Write::get(),
+                       mlir::SideEffects::DefaultResource::get());
 }
 
 } // namespace mlir::triton::nvws
