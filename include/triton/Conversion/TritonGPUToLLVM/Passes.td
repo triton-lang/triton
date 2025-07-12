@@ -42,4 +42,15 @@ def TritonGPUAllocateWarpGroups : Pass<"tritongpu-allocate-warp-groups", "mlir::
   }];
 }
 
+def TritonGPUMembarAnalysis : Pass<"tritongpu-membar-analysis", "mlir::ModuleOp"> {
+    let summary = "Runs membar analysis";
+    let description = [{
+      The `tritongpu-membar-analysis` runs the analysis which generates
+      the shared memory barriers respecting RAW and WAR data hconsistencies.
+     }];
+
+    let dependentDialects = ["mlir::triton::TritonDialect",
+                            "mlir::triton::gpu::TritonGPUDialect"];
+}
+
 #endif

@@ -18,9 +18,6 @@
 #include "mlir/Pass/Pass.h"
 #include "third_party/amd/include/Analysis/AxisInfoExt.h"
 #include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
-#include "triton/Analysis/Allocation.h"
-#include "triton/Analysis/AxisInfo.h"
-#include "triton/Analysis/Membar.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -98,13 +95,7 @@ struct ConvertTritonAMDGPUToLLVM
     int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
     int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
 
-    // Allocate shared memory and set barrier
-    ModuleAllocation allocation(mod);
-
     AMD::annotateLocalLoadsSyncedViaAsyncWait(mod);
-    ModuleMembarAnalysis membarPass(&allocation,
-                                    mlir::triton::AMD::membarFilter);
-    membarPass.run();
 
     // Lower functions
     {
@@ -148,8 +139,7 @@ struct ConvertTritonAMDGPUToLLVM
     // patterns
     int AMDBenefit = commonBenefit + 1;
     auto populatePatterns1 = [&](auto populateFunc, int benefit) {
-      populateFunc(typeConverter, patterns, axisInfoAnalysis, allocation,
-                   benefit);
+      populateFunc(typeConverter, patterns, axisInfoAnalysis, benefit);
     };
 
     auto populatePatterns5 = [&](auto populateFunc, int benefit) {
@@ -157,8 +147,8 @@ struct ConvertTritonAMDGPUToLLVM
     };
 
     auto populatePatterns6 = [&](auto populateFunc, int benefit) {
-      populateFunc(typeConverter, patterns, axisInfoAnalysis, allocation,
-                   targetInfo, benefit);
+      populateFunc(typeConverter, patterns, axisInfoAnalysis, targetInfo,
+                   benefit);
     };
 
     auto populatePatterns7 = [&](auto populateFunc, int benefit) {
@@ -171,9 +161,8 @@ struct ConvertTritonAMDGPUToLLVM
         typeConverter, targetInfo, patterns, commonBenefit);
     AMD::populateDotOpToLLVMPatterns(typeConverter, patterns, axisInfoAnalysis,
                                      AMDBenefit);
-    AMD::populateElementwiseOpToLLVMPatterns(typeConverter, patterns, ftz,
-                                             axisInfoAnalysis, allocation,
-                                             targetInfo, AMDBenefit);
+    AMD::populateElementwiseOpToLLVMPatterns(
+        typeConverter, patterns, ftz, axisInfoAnalysis, targetInfo, AMDBenefit);
     AMD::populateLoadStoreOpToLLVMPatterns(typeConverter, targetInfo, patterns,
                                            axisInfoAnalysis, AMDBenefit);
     populatePatterns7(mlir::triton::populateReduceOpToLLVMPatterns,
