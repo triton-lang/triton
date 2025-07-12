@@ -17,6 +17,7 @@ def TritonGPU_Dialect : Dialect {
   let dependentDialects = [
     "triton::TritonDialect",
     "mlir::gpu::GPUDialect",
+    "triton::nvws::NVWSDialect"
   ];
 
   let extraClassDeclaration = [{
