@@ -68,6 +68,19 @@ module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-w
 
 // -----
 
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 16}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: memdesc_reshape
+    // CHECK-SAME: !ttg.memdesc<128x64xf16, #{{.+}}, mutable, 1x128x64>
+  tt.func @memdesc_reshape(%d : !ttg.memdesc<32x1x4x64xf16, #shared, #smem, mutable>){
+    %1 = ttg.memdesc_reshape %d {shape = array<i64: 128, 64>} : !ttg.memdesc<32x1x4x64xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x64xf16, #shared, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
 // CHECK-LABEL: @warp_specialize_nothing
 tt.func @warp_specialize_nothing() {
   // CHECK-NEXT: ttg.warp_specialize()

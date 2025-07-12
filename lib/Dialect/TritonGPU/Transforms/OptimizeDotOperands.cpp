@@ -143,44 +143,6 @@ public:
   }
 };
 
-static Attribute inferSrcEncodingMemDescReshape(ArrayRef<int64_t> srcShape,
-                                                MemDescType dstType) {
-  auto dstEncoding = dstType.getEncoding();
-  auto dstShape = dstType.getShape();
-  auto mmaEncoding = dyn_cast<NVMMASharedEncodingAttr>(dstEncoding);
-  if (!mmaEncoding)
-    return {};
-  // TODO: supporting reshape of CTA layouts is non-trivial.
-  if (getNumCTAs(mmaEncoding) > 1)
-    return {};
-  int innerDimDst =
-      mmaEncoding.getTransposed() ? dstShape.front() : dstShape.back();
-  int innerDimSrc =
-      mmaEncoding.getTransposed() ? srcShape.front() : srcShape.back();
-  // For now disallow reshape of the inner dimension.
-  if (innerDimDst != innerDimSrc)
-    return {};
-
-  // CTALayout can be all 1's because we bailed on multi-CTA layouts above.
-  auto CTALayout = CTALayoutAttr::get(
-      dstEncoding.getContext(),
-      /*CTAsPerCGA=*/SmallVector<unsigned>(srcShape.size(), 1),
-      /*CTASplitNum=*/SmallVector<unsigned>(srcShape.size(), 1),
-      /*CTAOrder=*/llvm::to_vector(llvm::seq<unsigned>(srcShape.size())));
-  auto srcEncoding = NVMMASharedEncodingAttr::get(
-      dstEncoding.getContext(), mmaEncoding.getSwizzlingByteWidth(),
-      mmaEncoding.getTransposed(), mmaEncoding.getElementBitWidth(),
-      mmaEncoding.getFp4Padded(), CTALayout);
-  // Big guns, check linear layouts are equivalent
-  auto srcLL = toLinearLayout(srcShape, srcEncoding);
-  auto dstLL = toLinearLayout(dstShape, dstEncoding);
-  auto ctx = dstEncoding.getContext();
-  if (reshapeLayout(ctx, srcLL, dstShape) != dstLL) {
-    return {};
-  }
-  return srcEncoding;
-}
-
 // Rewrite
 //
 //   alloc(reshape(), #shared1) ->
@@ -204,9 +166,13 @@ public:
     auto allocEncoding = allocType.getEncoding();
 
     RankedTensorType srcTy = reshapeOp.getSrc().getType();
-    auto newAllocEncoding =
-        inferSrcEncodingMemDescReshape(srcTy.getShape(), allocType);
-    if (!newAllocEncoding)
+    auto *inferLayout =
+        cast<DialectInferLayoutInterface>(&allocEncoding.getDialect());
+    Attribute newAllocEncoding;
+    // Reshape backwards inference is equivalent to forward inference.
+    if (failed(inferLayout->inferReshapeOpEncoding(
+            allocType.getShape(), allocEncoding, srcTy.getShape(),
+            newAllocEncoding, allocOp.getLoc())))
       return failure();
 
     MemDescType innerTy =
@@ -214,8 +180,8 @@ public:
                          newAllocEncoding, allocType.getMemorySpace());
     auto newAlloc = rewriter.create<LocalAllocOp>(allocOp.getLoc(), innerTy,
                                                   reshapeOp.getSrc());
-    rewriter.replaceOpWithNewOp<MemDescReshapeOp>(allocOp, allocOp.getType(),
-                                                  newAlloc);
+    rewriter.replaceOpWithNewOp<MemDescReshapeOp>(allocOp, newAlloc,
+                                                  allocOp.getType().getShape());
     return success();
   }
 };

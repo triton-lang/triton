@@ -264,6 +264,7 @@ def TTG_MemDescTransOp : TTG_Op<"memdesc_trans", [Pure,
 
 def TTG_MemDescReshapeOp : TTG_Op<"memdesc_reshape", [Pure,
                                                       MemDescViewTrait,
+                                                      InferTypeOpWithLayoutEquivalence,
                                                       SameOperandsAndResultElementType]> {
   let summary = "creates a descriptor for the new shape";
 
@@ -272,7 +273,8 @@ def TTG_MemDescReshapeOp : TTG_Op<"memdesc_reshape", [Pure,
     This doesn't affect the memory.
   }];
 
-  let arguments = (ins TTG_MemDescType:$src);
+  let arguments = (ins TTG_MemDescType:$src, DenseI64ArrayAttr:$shape);
+
   let results = (outs TTG_MemDescType:$result);
 
   let assemblyFormat = "$src attr-dict `:` qualified(type($src)) `->` qualified(type($result))";

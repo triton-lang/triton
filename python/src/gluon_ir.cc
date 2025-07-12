@@ -396,8 +396,9 @@ void init_gluon_ir(py::module &&m) {
              return self.create<ttg::MemDescTransOp>(src, order);
            })
       .def("create_memdesc_reshape",
-           [](GluonOpBuilder &self, Type resultType, Value src) -> Value {
-             return self.create<ttg::MemDescReshapeOp>(resultType, src);
+           [](GluonOpBuilder &self, Value src,
+              std::vector<int64_t> &shape) -> Value {
+             return self.create<ttg::MemDescReshapeOp>(src, shape);
            })
       .def("create_memdesc_reinterpret",
            [](GluonOpBuilder &self, Type resultType, Value src) -> Value {
