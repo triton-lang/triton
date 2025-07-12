@@ -271,12 +271,11 @@ LinearLayout::checkInvariants(bool requireSurjective) {
   // the rank of our matrix using Gaussian elimination, which runs in O(n^3)
   // for an n x n matrix.  Our matrix size is sum(inDimSizeLog2) x
   // sum(outDimSizeLog2), so this should be plenty fast.
-  this->surjective =
+  this->rank =
       getMatrixRank(getMatrix(*this), /*numRows=*/getTotalOutDimSizeLog2(),
-                    /*numCols=*/getTotalInDimSizeLog2()) ==
-      getTotalOutDimSizeLog2();
+                    /*numCols=*/getTotalInDimSizeLog2());
 
-  if (requireSurjective && !surjective) {
+  if (requireSurjective && !isSurjective()) {
     return "Layout is expected to be surjective, i.e. every `out` coordinate "
            "can be reached by some `in` coordinate, but was not:" +
            toString();
@@ -404,7 +403,7 @@ LinearLayout LinearLayout::transposeIns(ArrayRef<StringAttr> newInDims) const {
     newBases[inDim] = bases.find(inDim)->second;
   }
   return LinearLayout(std::move(newBases), llvm::to_vector(outDims),
-                      surjective);
+                      isSurjective());
 }
 
 LinearLayout
@@ -432,7 +431,7 @@ LinearLayout::transposeOuts(ArrayRef<StringAttr> newOutDims) const {
   for (auto outDim : newOutDims) {
     newOutDimSizes.push_back({outDim, getOutDimSize(outDim)});
   }
-  return LinearLayout(std::move(newBases), newOutDimSizes, surjective);
+  return LinearLayout(std::move(newBases), newOutDimSizes, isSurjective());
 }
 
 LinearLayout LinearLayout::reshapeIns(
@@ -464,7 +463,7 @@ LinearLayout LinearLayout::reshapeIns(
     }
   }
   return LinearLayout(std::move(newBases), llvm::to_vector(outDims),
-                      surjective);
+                      isSurjective());
 }
 
 LinearLayout LinearLayout::reshapeOuts(
@@ -510,7 +509,7 @@ LinearLayout LinearLayout::reshapeOuts(
     }
   }
 
-  return LinearLayout(std::move(newBases), newOutDims, surjective);
+  return LinearLayout(std::move(newBases), newOutDims, isSurjective());
 }
 
 LinearLayout LinearLayout::concatIns(const LinearLayout &other) const {
@@ -956,9 +955,9 @@ std::unique_ptr<uint64_t[]> concatMatrices(const LinearLayout &A,
 }
 
 LinearLayout lstsq(const LinearLayout &A, const LinearLayout &B) {
-  // Solve the least square system AX = B for A = outer, B = *this
-  // and return the least square solution X of minimal norm
-  // A and B may not be surjective, but we assume that Im(B) \subset Im(A)
+  // Solve the system AX = B.
+  // We compute the solution X given by setting all the free variables to zero.
+  // If
   // Sketch of the algorithm:
   // https://github.com/triton-lang/triton/pull/5309#discussion_r1869084111
   int numRows = A.getTotalOutDimSizeLog2();
@@ -972,25 +971,35 @@ LinearLayout lstsq(const LinearLayout &A, const LinearLayout &B) {
   // Compute the pivot columns
   // Since A and B have the same image, each row will either have a pivot
   // or will be all zeros
-  SmallVector<int32_t> pivotCols;
+  SmallVector<int32_t> pivotRowOfCol(numColsA, -1);
   for (int r = 0; r < numRows; r++) {
     auto row = combinedMat[r];
     if (row == 0) {
       continue;
     }
     int c = __builtin_ctzll(row);
-    assert(c < numColsA && "Precondition broken. Im(B) not contained in Im(A)");
-    assert(pivotCols.empty() ||
-           pivotCols.back() < c && "Pivot columns are not in increasing order");
-    pivotCols.push_back(c);
+    // We have Im(A) \not\subset Im(B).
+    // In this case we don't return a solution of the system.
+    // If A is injective, we'll return A_L^{-1}B where A_L is the left inverse
+    // of A, namely A_L A = I.
+    if (c >= numColsA) {
+      continue;
+    }
+    assert(pivotRowOfCol[c] == -1 &&
+           "duplicate pivot => A not in RREF or not injective");
+    pivotRowOfCol[c] = r;
   }
 
   // Extract A^{-1}B and complete the matrix using zeros
   std::unique_ptr<uint64_t[]> retMat(new uint64_t[numColsA]());
-  int j = 0;
-  for (int r = 0; r < numColsA; r++) {
-    auto isPivot = j < pivotCols.size() && pivotCols[j] == r;
-    retMat[r] = isPivot ? combinedMat[j++] >> numColsA : 0;
+  for (int c = 0; c < numColsA; ++c) {
+    int row = pivotRowOfCol[c];
+    if (row == -1) {
+      retMat[c] = 0;
+    } else {
+      retMat[c] =
+          combinedMat[row] >> numColsA; // strip the A‑part, keep the B‑part
+    }
   }
 
   // We need names for the in/out dim of the flattened layout we're going to
@@ -1051,11 +1060,6 @@ LinearLayout LinearLayout::invertAndCompose(const LinearLayout &outer) const {
       llvm::report_fatal_error(msg.str().c_str());
     }
   }
-
-  // We'll write A^{-1} to mean the inverse or the pseudo-inverse of A
-  // We are computing A^{-1}B so A must be surjective so that
-  // it has a left inverse.
-  assert(A.isSurjective());
 
   // Broadcasting heuristic
   // Imagine we have two layouts with `warps = [[0, 0],  [0, 0]]`
@@ -1119,9 +1123,6 @@ LinearLayout LinearLayout::invert() const {
 }
 
 LinearLayout LinearLayout::pseudoinvert() const {
-  // A^-1(x) = A^-1(I(x)), thus A.invert() = I.invertAndCompose(A)
-  assert(isSurjective() &&
-         "A linear layout must be surjective to compute its pseudoinverse");
   LinearLayout identity = LinearLayout::empty();
   for (auto outDim : getOutDimNames()) {
     identity *= LinearLayout::identity1D(getOutDimSize(outDim), outDim, outDim);

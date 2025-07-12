@@ -47,7 +47,8 @@ class MemDescType;
 // elemBitWidth is the bit width of one element in the layout.  This is required
 // to compute the linear layout for MMAv3 (i.e. Hopper) shared layouts (i.e.
 // shared layouts with nvmma_shared layout) but is otherwise unused.
-LinearLayout toLinearLayout(ArrayRef<int64_t> shape, Attribute layout);
+LinearLayout toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
+                            ArrayRef<int64_t> allocationShape);
 LinearLayout toLinearLayout(RankedTensorType type);
 LinearLayout toLinearLayout(MemDescType type);
 LinearLayout toLinearLayout(TensorOrMemDesc type);

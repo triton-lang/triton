@@ -122,6 +122,24 @@ LinearLayout combineCtaCgaWithShape(LinearLayout ctaLayout,
   return ret;
 }
 
+static LinearLayout memdescSubview(LinearLayout layout,
+                                   ArrayRef<int64_t> shape) {
+  // We remove the extra bases from the inverse of the layout and then invert it
+  // back This is sound as the initial layout is invertible so we don't lose any
+  // information in the process of inverting twice
+  auto inverse = layout.invert();
+  auto bases = inverse.getBases();
+  for (auto [s, dim] : llvm::zip(shape, inverse.getInDimNames())) {
+    auto &base = bases[dim];
+    base.resize(llvm::Log2_32(s));
+  }
+  auto subviewInv =
+      LinearLayout(bases, inverse.getOutDims(), /*requiresSurjective=*/false);
+  // subviewInv is injective but not surjective
+  // subviewInv.pseudoinvert() is surjective
+  return subviewInv.pseudoinvert();
+}
+
 LinearLayout swizzledSharedToLinearLayout(ArrayRef<int64_t> shape,
                                           SwizzledSharedEncodingAttr shared) {
   MLIRContext *ctx = shared.getContext();
@@ -1133,7 +1151,8 @@ LinearLayout SliceEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   // First compute the linear layout for this layout's parent.
   SmallVector<int64_t> parentShape(shape);
   parentShape.insert(parentShape.begin() + getDim(), 1);
-  LinearLayout parentLL = triton::gpu::toLinearLayout(parentShape, getParent());
+  LinearLayout parentLL =
+      triton::gpu::toLinearLayout(parentShape, getParent(), {});
 
   // Remove dimension getDim() from the parent layout.
   //
@@ -1172,9 +1191,12 @@ LinearLayout SliceEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
                       llvm::to_vector(sliceLL.getOutDimNames()));
 }
 
-LinearLayout TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape,
-                                              Attribute layout) {
-  CacheKey key{std::vector<int64_t>(shape.begin(), shape.end()), layout};
+LinearLayout
+TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
+                                 ArrayRef<int64_t> allocationShape) {
+  CacheKey key{
+      std::vector<int64_t>(shape.begin(), shape.end()), layout,
+      std::vector<int64_t>(allocationShape.begin(), allocationShape.end())};
   if (auto result = llCache.get(key)) {
     return *result;
   }
@@ -1183,16 +1205,35 @@ LinearLayout TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape,
   // To add a new layout add an else-if clause
   LinearLayout result = LinearLayout::empty();
   if (auto distributed = dyn_cast<DistributedEncodingTrait>(layout)) {
+    assert(allocationShape.empty() &&
+           "allocationShape not supported for distributed layout");
     result = distributed.toLinearLayout(shape);
   } else {
+    assert(!allocationShape.empty() &&
+           "allocationShape not supported for shared layout");
+    allocationShape = allocationShape.take_back(shape.size());
+    assert(llvm::all_of(allocationShape,
+                        [](int64_t dim) {
+                          return llvm::isPowerOf2_32(dim) && dim >= 1;
+                        }) &&
+           "allocationShape must be a postive power of 2");
+    assert(llvm::all_of(llvm::zip(allocationShape, shape),
+                        [](auto dims) {
+                          return std::get<0>(dims) >= std::get<1>(dims);
+                        }) &&
+           "allocationShape must be at least as large as shape");
+
     if (auto shared = dyn_cast<SwizzledSharedEncodingAttr>(layout)) {
-      result = swizzledSharedToLinearLayout(shape, shared);
+      result = swizzledSharedToLinearLayout(allocationShape, shared);
     } else if (auto shared = dyn_cast<NVMMASharedEncodingAttr>(layout)) {
-      result = nvmmaSharedToLinearLayout(shape, shared);
+      result = nvmmaSharedToLinearLayout(allocationShape, shared);
     } else if (auto sbl = dyn_cast<AMDRotatingSharedEncodingAttr>(layout)) {
-      result = sharedToLinearLayoutAMDRotating(shape, sbl);
+      result = sharedToLinearLayoutAMDRotating(allocationShape, sbl);
     } else {
       assert(0 && "unknown layout");
+    }
+    if (shape != allocationShape) {
+      result = memdescSubview(result, shape);
     }
   }
 
@@ -1201,11 +1242,12 @@ LinearLayout TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape,
 }
 
 LinearLayout toLinearLayout(RankedTensorType type) {
-  return toLinearLayout(type.getShape(), type.getEncoding());
+  return toLinearLayout(type.getShape(), type.getEncoding(), {});
 }
 
 LinearLayout toLinearLayout(MemDescType type) {
-  return toLinearLayout(type.getShape(), type.getEncoding());
+  return toLinearLayout(type.getShape(), type.getEncoding(),
+                        type.getAllocShape());
 }
 
 LinearLayout toLinearLayout(TensorOrMemDesc type) {
@@ -1217,10 +1259,11 @@ LinearLayout toLinearLayout(TensorOrMemDesc type) {
   }
 }
 
-LinearLayout toLinearLayout(ArrayRef<int64_t> shape, Attribute layout) {
+LinearLayout toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
+                            ArrayRef<int64_t> allocationShape) {
   auto *ctx = layout.getContext();
-  return ctx->getLoadedDialect<TritonGPUDialect>()->toLinearLayout(shape,
-                                                                   layout);
+  return ctx->getLoadedDialect<TritonGPUDialect>()->toLinearLayout(
+      shape, layout, allocationShape);
 }
 
 LinearLayout getLayoutWithinBlock(const LinearLayout &layout) {
