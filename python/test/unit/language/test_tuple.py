@@ -197,3 +197,82 @@ def test_add(device):
     rets = torch.zeros((8, ), dtype=torch.int32, device=device)
     fn[(1, )](rets)
     torch.testing.assert_close(rets.cpu(), torch.arange(8, dtype=torch.int32))
+
+
+def test_passing_tuple_with_constexpr(device):
+
+    @triton.jit
+    def m_to_the_n(X, shape: tl.constexpr, strides, m_n):
+        Xs = X + tl.arange(0, shape[0])[:, None] * strides[0] + tl.arange(0, shape[1])[None, :] * strides[1]
+        # Include a for loop to ensure strides[1] is lifted into a constexpr
+        # (otherwise cloning the local scope will fail).
+        data = tl.load(Xs)
+        for i in tl.range(0, m_n[1]):
+            data = m_n[0] * data
+        tl.store(Xs, data)
+
+    x = torch.arange(0, 64, device=device).reshape(8, 8)
+    expected_x = 8 * x.clone()
+    m_to_the_n[(1, )](x, x.shape, x.stride(), (2, 3))
+    torch.testing.assert_close(x, expected_x, rtol=0, atol=0)
+
+
+def test_passing_tuple_to_make_tensor_descriptor(device, with_allocator):
+
+    from triton.language.core import builtin
+
+    @builtin
+    def is_constexpr(v, _semantic=None):
+        return isinstance(v, tl.constexpr)
+
+    @triton.jit
+    def m_to_the_n(X_base, shape, strides, m_n, BLOCK_DIM: tl.constexpr):
+        tl.static_assert(is_constexpr(strides[1]))
+        X = tl.make_tensor_descriptor(
+            X_base,
+            shape=shape,
+            strides=strides,
+            block_shape=[BLOCK_DIM, BLOCK_DIM],
+        )
+        # Make sure tl.make_tensor_descriptor didn't modify strides (i.e. didn't unwrap the constexpr)
+        tl.static_assert(is_constexpr(strides[1]))
+        data = X.load([0, 0])
+        # Include a for loop to ensure strides[1] is lifted into a constexpr
+        # (otherwise cloning the local scope will fail).
+        for i in tl.range(0, m_n[1]):
+            data = m_n[0] * data
+        X.store([0, 0], data)
+
+    x = torch.arange(0, 16, device=device).reshape(4, 4)
+    expected_x = 8 * x.clone()
+    m_to_the_n[(1, )](x, x.size(), x.stride(), (2, 3), x.size(0))
+    torch.testing.assert_close(x, expected_x, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("init_val, idx, new_val, expected_ty",
+                         [((5, 6, 7), 0, 32.1, tl.float32),  # i32 > fp32
+                          ((5, 6, 7), 2, tl.constexpr(20), tl.int32),  # i32 > constexpr which converts to dtype
+                          ((5, tl.constexpr(6), 7), 1, 32.1, tl.float32),  # constexpr > fp32
+                          ((5, 1, 7), 1, 20, tl.int32),  # constexpr > i32 but with specialization of 1
+                          ])
+def test_modifying_tuples(init_val, idx, new_val, expected_ty):
+
+    @triton.jit
+    def set_tuple_value_at_idx(tuple_value, idx: tl.constexpr, new_value, expected_type: tl.constexpr):
+        before_tuple_type: tl.constexpr = tuple_value.type
+        before_type: tl.constexpr = tuple_value[idx].type
+        tl.static_print(before_type, expected_type)
+
+        # Make sure the underlying tuple_type matches the tuple's value's types
+        tl.static_assert(before_type == tuple_value.type[idx])
+        # Update the value to have a different type
+        tuple_value[idx] = new_value
+        # Make sure the tuple's type and the tuple's value's type were updated
+        tl.static_print(new_value, tuple_value[idx].type, expected_type)
+        tl.static_assert(tuple_value[idx].type == expected_type)
+        tl.static_assert(tuple_value.type[idx] == expected_type)
+
+        # Make sure the tuple type updated when the type updated
+        tl.static_assert(before_type == expected_type or before_tuple_type != tuple_value.type)
+
+    set_tuple_value_at_idx[(1, )](init_val, idx, new_val, expected_ty)
