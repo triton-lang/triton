@@ -148,10 +148,10 @@ void changeSharedEncoding(PatternRewriter &rewriter, Value memVal,
   rewriter.finalizeOpModification(parentOp);
 }
 
-/// Structure describes operations involved in tt.load -> ttg.local_store op
-/// chain
-struct GlobalToSharedMemoryOpChain {
-  SetVector<tt::LoadOp> globalLoads;
+/// Structure describes operations involved in
+/// value -> ttg.local_alloc -> ttg.local_store op chain
+struct RegisterToSharedMemoryOpChain {
+  SetVector<Value> valsOnRegs;
   // list of localAllocOp and localStoreOp operations
   SetVector<Operation *> localAllocStores;
   // list of MemDescSubviewOp, control flow results and block operands
@@ -444,28 +444,6 @@ traverseCFForValueUses(Value val, SetVector<Value> &visitedVals) {
   return result;
 }
 
-/// Look for defining operation, hopping over control flow.
-///
-/// Gather all operations of type T within one def-use hop from val,
-/// control flow constructions are not considered as an operations.
-/// \returns true on success, false if analysis failed
-template <typename Op>
-FailureOr<SmallVector<Op>> findAllDefiningOps(Value val) {
-  SetVector<Value> visitedVals;
-  auto candidates = traverseCFForValueDefs(val, visitedVals);
-  if (failed(candidates))
-    return failure();
-  SmallVector<Op> result;
-  for (auto candidateValue : candidates.value()) {
-    auto op = candidateValue.getDefiningOp();
-    if (!op)
-      continue;
-    if (auto typedOp = dyn_cast<Op>(op))
-      result.push_back(typedOp);
-  }
-  return result;
-}
-
 /// Find all shared mem related operations reachable from given ttg.local_load
 /// along shared memory data flow.
 ///
@@ -477,8 +455,9 @@ FailureOr<SmallVector<Op>> findAllDefiningOps(Value val) {
 ///                      V
 /// tt.load -> ttg.local_store -> ttg.mem_subview -> ttg.local_load
 ///
-/// \returns partially filled GlobalToSharedMemoryOpChain structure of failure.
-FailureOr<GlobalToSharedMemoryOpChain>
+/// \returns partially filled RegisterToSharedMemoryOpChain structure of
+/// failure.
+FailureOr<RegisterToSharedMemoryOpChain>
 findReachableSMemOps(ttg::LocalLoadOp root) {
   SetVector<Operation *> visitedOps;
   // Use separate sets for forward and backward search,
@@ -486,7 +465,7 @@ findReachableSMemOps(ttg::LocalLoadOp root) {
   SetVector<Value> visitedValsForward;
   SetVector<Value> visitedValsBackward;
   // breadth-first search for reachable opeations
-  GlobalToSharedMemoryOpChain foundNetwork;
+  RegisterToSharedMemoryOpChain foundNetwork;
   SmallVector<Operation *> traversalStep{root};
   while (!traversalStep.empty()) {
     LDBG("begin new step in smem op analysis");
@@ -581,7 +560,7 @@ unsigned getMaxSizePerThread(RankedTensorType type, int dimIdx) {
 //
 // If data flow pattern match, check applicability
 // of inThreadTrasnpose optimization and return found pattern.
-llvm::FailureOr<GlobalToSharedMemoryOpChain>
+llvm::FailureOr<RegisterToSharedMemoryOpChain>
 matchInThreadTransposePattern(ttg::LocalLoadOp lLoad) {
   auto opTensorTy = cast<RankedTensorType>(lLoad.getType());
   auto opEnc = opTensorTy.getEncoding();
@@ -601,7 +580,7 @@ matchInThreadTransposePattern(ttg::LocalLoadOp lLoad) {
   // operations
   auto sharedMemSearch = findReachableSMemOps(lLoad);
   if (failed(sharedMemSearch)) {
-    LDBG("Failed to traverse shared memmory operation network");
+    LDBG("Failed to traverse shared memory operation network");
     return failure();
   }
   auto pattern = sharedMemSearch.value();
@@ -616,26 +595,27 @@ matchInThreadTransposePattern(ttg::LocalLoadOp lLoad) {
     // check if it is a local alloc with no predecessor
     if (localMemStore->getNumOperands() == 0)
       continue;
-    Value loadCandidate = localMemStore->getOperand(0);
-    auto loadedEnc =
-        cast<RankedTensorType>(loadCandidate.getType()).getEncoding();
-    auto blockedEnc = dyn_cast<ttg::BlockedEncodingAttr>(loadedEnc);
+    Value onRegs = localMemStore->getOperand(0);
+    auto onRegsEnc = cast<RankedTensorType>(onRegs.getType()).getEncoding();
+    auto blockedEnc = dyn_cast<ttg::BlockedEncodingAttr>(onRegsEnc);
     if (!blockedEnc)
       return failure();
     auto order = blockedEnc.getOrder();
     if (order[0] == kDimNum) {
       return failure();
     }
-    auto globalLoadSearch = findAllDefiningOps<tt::LoadOp>(loadCandidate);
-    if (failed(globalLoadSearch)) {
-      LDBG("Failed to traverse path to global loads");
-      return failure();
+    SetVector<Value> visitedVals;
+    auto predValsSearch = traverseCFForValueDefs(onRegs, visitedVals);
+    if (failed(predValsSearch)) {
+      LDBG("Failed to traverse path to defining operations");
+      pattern.valsOnRegs.insert(onRegs);
+    } else {
+      pattern.valsOnRegs.insert_range(predValsSearch.value());
     }
-    pattern.globalLoads.insert_range(globalLoadSearch.value());
   }
 
-  LDBG("found global loads: " << pattern.globalLoads.size());
-  for (auto load : pattern.globalLoads)
+  LDBG("found predecessors to value on regs: " << pattern.valsOnRegs.size());
+  for (auto load : pattern.valsOnRegs)
     LDBG(load);
   LDBG("found local alloc stores: " << pattern.localAllocStores.size());
   for (auto local : pattern.localAllocStores)
@@ -644,15 +624,14 @@ matchInThreadTransposePattern(ttg::LocalLoadOp lLoad) {
   for (auto val : pattern.sharedMemVals)
     LDBG(val);
 
-  if (pattern.globalLoads.empty()) {
-    LDBG("Did not find global load operation");
+  if (pattern.valsOnRegs.empty()) {
+    LDBG("Did not find predecessor operations");
     return failure();
   }
-  // check that all global loads have same type(i.e. shape and layout),
+  // check that all defining operations have same type(i.e. shape and layout),
   // otherwise can not guarantee transformation overhead is cheap
-  auto firstLoadOp = pattern.globalLoads.front();
-  auto expectedLoadType =
-      cast<RankedTensorType>(firstLoadOp.getResult().getType());
+  auto firstVal = pattern.valsOnRegs.front();
+  auto expectedLoadType = cast<RankedTensorType>(firstVal.getType());
   // TODO support non 2d tensors:
   // in_thread_transpose operation and getTransposableBlockedEnc function
   // are limited to 2d tensors
@@ -668,9 +647,9 @@ matchInThreadTransposePattern(ttg::LocalLoadOp lLoad) {
     return failure();
   }
 
-  for (auto load : pattern.globalLoads) {
-    if (load->getResult(0).getType() != expectedLoadType) {
-      LDBG("Mismatch between global loads result types");
+  for (auto val : pattern.valsOnRegs) {
+    if (val.getType() != expectedLoadType) {
+      LDBG("Mismatch between predecessors result types");
       return failure();
     }
   }
@@ -681,18 +660,18 @@ matchInThreadTransposePattern(ttg::LocalLoadOp lLoad) {
   return pattern;
 }
 
-/// Extends global load layout sizePerThread across k dimension, so it could be
-/// transposed in registers.
+/// Extends layout sizePerThread across k dimension, so it could be transposed
+/// in registers.
 ///
-/// Consider 2d dot operand idx = 1(i.e. kDim idx = 0), and global load layout
-/// is n-continous:
+/// Consider 2d dot operand idx = 1(i.e. kDim idx = 0), and original layout is
+/// n-continous:
 ///   #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA
 ///   = [1, 1], order = [1, 0]}>
 /// Possible output is:
 ///   #ttg.blocked<{sizePerThread = [4, 8], threadsPerWarp = [8, 8], warpsPerCTA
 ///   = [1, 1], order = [1, 0]}>
 ///
-/// Consider 2d dot operand idx = 0(i.e. kDim idx = 1), global load layout is
+/// Consider 2d dot operand idx = 0(i.e. kDim idx = 1), original layout is
 /// m-continous:
 ///   #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [8, 8], warpsPerCTA
 ///   = [1, 1], order = [0, 1]}>
@@ -752,17 +731,20 @@ public:
     auto dotOpEnc =
         cast<ttg::DotOperandEncodingAttr>(localLoad.getType().getEncoding());
 
-    LDBG("Adjusting global loads");
-    auto firstLoadOp = pattern.globalLoads.front();
-    RankedTensorType loadResultType =
-        cast<RankedTensorType>(firstLoadOp.getResult().getType());
+    auto firstVal = pattern.valsOnRegs.front();
+    RankedTensorType onRegsType = cast<RankedTensorType>(firstVal.getType());
     auto newBlockedEnc =
-        getTransposableBlockedEnc(dotOpEnc.getOpIdx(), loadResultType);
-    auto loadShape = loadResultType.getShape();
+        getTransposableBlockedEnc(dotOpEnc.getOpIdx(), onRegsType);
+    LDBG("operand newBlockedEnc = " << newBlockedEnc);
+    auto loadShape = onRegsType.getShape();
 
-    for (auto gLoad : pattern.globalLoads) {
-      LDBG("operand newBlockedEnc = " << newBlockedEnc);
-      refineGlobalLoadLayout(rewriter, newBlockedEnc, gLoad);
+    LDBG("Adjusting global loads");
+    for (auto onReg : pattern.valsOnRegs) {
+      auto gLoadCandidate = onReg.getDefiningOp();
+      if (!gLoadCandidate)
+        continue;
+      if (auto gLoad = dyn_cast<tt::LoadOp>(gLoadCandidate))
+        refineGlobalLoadLayout(rewriter, newBlockedEnc, gLoad);
     }
 
     LDBG("Inserting transpose in registers before store in LDS");
