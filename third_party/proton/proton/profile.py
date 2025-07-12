@@ -90,7 +90,7 @@ def start(
                                                Defaults to None.
                                                For "cupti", available options are [None, "pcsampling"].
                                                For "roctracer", available options are [None].
-                                               For "instrumentation", available options are [None, "mma"].
+                                               For "instrumentation", available options are [None].
                                                Each mode has a set of control knobs following with the mode name.
                                                For example, "pcsampling" has an "interval" control knob, expressed as "pcsampling:interval=1000".
         hook (str, optional): The hook to use for profiling.
