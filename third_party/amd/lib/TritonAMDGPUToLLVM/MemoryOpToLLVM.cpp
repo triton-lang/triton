@@ -213,14 +213,9 @@ private:
     auto bitwidth = typeConverter->convertType(dstTy.getElementType())
                         .getIntOrFloatBitWidth();
 
-    // Triton does not natively support the FP4 type, so it is packed and
-    // represented as an i8. Currently, the only way to distinguish FP4 from an
-    // actual int8 is by checking whether the localLoad is used in a scaled dot
-    // operation, as int8 is never used in one.
-    bool isFP4 = isUsedByDotScaledOp(localLoad) && bitwidth == 8 &&
-                 dstTy.getElementType().isInteger();
-
-    if (isFP4 || (bitwidth != 16 && bitwidth != 8)) {
+    // FP4 is represented as i8 and, when packed along K, can be
+    // transposed using ds_read_tr8 which doesn't change packing.
+    if (bitwidth != 16 && bitwidth != 8) {
       return false;
     }
 
