@@ -415,26 +415,26 @@ def test_sched_barrier(tmp_path: pathlib.Path):
 
         accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
         pl.exit_scope("warpgroup_1")
-        pl.enter_scope("warpgroup_2")
+        # pl.enter_scope("warpgroup_2")
         for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
             a = tl.load(a_ptrs, mask=offs_k[None, :] < K - k * BLOCK_SIZE_K, other=0.0)
             b = tl.load(b_ptrs, mask=offs_k[:, None] < K - k * BLOCK_SIZE_K, other=0.0)
             accumulator = tl.dot(a, b, accumulator)
             a_ptrs += BLOCK_SIZE_K * stride_ak
             b_ptrs += BLOCK_SIZE_K * stride_bk
-        pl.exit_scope("warpgroup_2")
+        # pl.exit_scope("warpgroup_2")
 
-        pl.enter_scope("warpgroup_3")
+        # pl.enter_scope("warpgroup_3")
         c = accumulator.to(tl.float16)
-        pl.exit_scope("warpgroup_3")
+        # pl.exit_scope("warpgroup_3")
 
-        pl.enter_scope("warpgroup_4")
+        # pl.enter_scope("warpgroup_4")
         offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
         offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
         c_ptrs = c_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
         c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
         tl.store(c_ptrs, c, mask=c_mask)
-        pl.exit_scope("warpgroup_4")
+        # pl.exit_scope("warpgroup_4")
 
     torch.manual_seed(0)
     a = torch.randn((512, 512), device="cuda", dtype=torch.float16)
@@ -450,7 +450,8 @@ def test_sched_barrier(tmp_path: pathlib.Path):
     grid = lambda META: (triton.cdiv(M, 128) * triton.cdiv(N, 256), )
 
     temp_file = tmp_path / "test_sched_barrier.hatchet"
-    mode = proton.mode.Default(metric_type="cycle")
+    mode = proton.mode.Default(metric_type="cycle", optimizations="sched_barriers")
+    # proton.hooks.InstrumentationHook.enable_host_buffer = True
     proton.start(str(temp_file.with_suffix("")), backend="instrumentation", mode=mode)
 
     grid = lambda META: (triton.cdiv(M, BLOCK_SIZE_M) * triton.cdiv(N, BLOCK_SIZE_N), )
@@ -461,13 +462,14 @@ def test_sched_barrier(tmp_path: pathlib.Path):
         b.stride(0), b.stride(1),  #
         c.stride(0), c.stride(1),  #
         BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, GROUP_SIZE_M)
+    # print(proton.hooks.InstrumentationHook.host_buffer)
     proton.finalize()
 
-    print("======= ttir =======")
-    print(kernel.asm["ttir"])
-    print("======= llir ========")
-    print(kernel.asm["llir"])
-    print("======= amdgcn ========")
+    # print("======= ttir =======")
+    # print(kernel.asm["ttir"])
+    # print("======= llir ========")
+    # print(kernel.asm["llir"])
+    # print("======= amdgcn ========")
     asm = kernel.asm["amdgcn"]
     print(asm)
 
@@ -480,7 +482,7 @@ def test_sched_barrier(tmp_path: pathlib.Path):
             else:
                 assert "sched_barrier" in lines[i - 1]
 
-    assert False  # make sure this test fails so we can see the output
+    assert False, asm
 
 
 def test_warp_spec(tmp_path: pathlib.Path):
