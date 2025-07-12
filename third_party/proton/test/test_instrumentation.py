@@ -385,7 +385,7 @@ def test_autotune(tmp_path: pathlib.Path):
         assert "add_1024" in names
 
 
-def test_sched_barrier(tmp_path: pathlib.Path):
+def test_sched_barrier(tmp_path: pathlib.Path, capsys):
     if is_cuda():
         pytest.skip("CUDA backend does not support instruction scheduling barriers")
 
@@ -415,14 +415,14 @@ def test_sched_barrier(tmp_path: pathlib.Path):
 
         accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
         pl.exit_scope("warpgroup_1")
-        # pl.enter_scope("warpgroup_2")
+        pl.enter_scope("warpgroup_2")
         for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
             a = tl.load(a_ptrs, mask=offs_k[None, :] < K - k * BLOCK_SIZE_K, other=0.0)
             b = tl.load(b_ptrs, mask=offs_k[:, None] < K - k * BLOCK_SIZE_K, other=0.0)
             accumulator = tl.dot(a, b, accumulator)
             a_ptrs += BLOCK_SIZE_K * stride_ak
             b_ptrs += BLOCK_SIZE_K * stride_bk
-        # pl.exit_scope("warpgroup_2")
+        pl.exit_scope("warpgroup_2")
 
         # pl.enter_scope("warpgroup_3")
         c = accumulator.to(tl.float16)
@@ -451,7 +451,7 @@ def test_sched_barrier(tmp_path: pathlib.Path):
 
     temp_file = tmp_path / "test_sched_barrier.hatchet"
     mode = proton.mode.Default(metric_type="cycle", optimizations="sched_barriers")
-    # proton.hooks.InstrumentationHook.enable_host_buffer = True
+    proton.hooks.InstrumentationHook.enable_host_buffer = True
     proton.start(str(temp_file.with_suffix("")), backend="instrumentation", mode=mode)
 
     grid = lambda META: (triton.cdiv(M, BLOCK_SIZE_M) * triton.cdiv(N, BLOCK_SIZE_N), )
@@ -462,16 +462,26 @@ def test_sched_barrier(tmp_path: pathlib.Path):
         b.stride(0), b.stride(1),  #
         c.stride(0), c.stride(1),  #
         BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, GROUP_SIZE_M)
-    # print(proton.hooks.InstrumentationHook.host_buffer)
+    with capsys.disabled():
+        print("======= ttir =======")
+        print(kernel.asm["ttir"])
+
+        print("======= llir ========")
+        print(kernel.asm["llir"])
+
+        print("======= amdgcn ========")
+        print(kernel.asm["amdgcn"])
+
+        print("======= host buffer ========")
+        buffer = proton.hooks.InstrumentationHook.host_buffer
+        for i in range(0, len(buffer), 4):
+            word = int.from_bytes(buffer[i:i + 4], byteorder="little")
+            print(f"{word:08x}", end=" ")
+            if i % 16 == 12:
+                print()
     proton.finalize()
 
-    # print("======= ttir =======")
-    # print(kernel.asm["ttir"])
-    # print("======= llir ========")
-    # print(kernel.asm["llir"])
-    # print("======= amdgcn ========")
     asm = kernel.asm["amdgcn"]
-    print(asm)
 
     # Make sure a sched barrier is inserted before every s_memtime call
     lines = asm.splitlines()
@@ -481,8 +491,6 @@ def test_sched_barrier(tmp_path: pathlib.Path):
                 assert "sched_barrier" in lines[i - 2]
             else:
                 assert "sched_barrier" in lines[i - 1]
-
-    assert False, asm
 
 
 def test_warp_spec(tmp_path: pathlib.Path):
