@@ -235,46 +235,6 @@ private:
           }
         }
       }
-      if (auto mmav5Op = dyn_cast<ttng::TCGen5MMAOp>(op)) {
-        b.setLoc(mmav5Op.getLoc());
-        b.setInsertionPoint(mmav5Op);
-        Value barriers =
-            createLoadScratchMemory(b, barriersAlloc, barriersType);
-        Value state = createLoadScratchMemory(b, stateAlloc, stateType);
-        if (isa<ttg::NVMMASharedEncodingAttr>(
-                mmav5Op.getA().getType().getEncoding())) {
-          auto checkAOp = b.create<tti::ExperimentalCheckReadSharedOp>(
-              mmav5Op.getA(), buffers, state, barriers);
-          state = checkAOp.getOutStates();
-          barriers = checkAOp.getOutBarriers();
-        }
-        auto checkBOp = b.create<tti::ExperimentalCheckReadSharedOp>(
-            mmav5Op.getA(), buffers, state, barriers);
-        state = checkBOp.getOutStates();
-        barriers = checkBOp.getOutBarriers();
-        createStoreScratchMemory(b, barriersAlloc, barriers, barriersType);
-        createStoreScratchMemory(b, stateAlloc, state, stateType);
-      }
-      if (auto mmav5Op = dyn_cast<ttng::TCGen5MMAOp>(op)) {
-        b.setLoc(mmav5Op.getLoc());
-        b.setInsertionPoint(mmav5Op);
-        Value barriers =
-            createLoadScratchMemory(b, barriersAlloc, barriersType);
-        Value state = createLoadScratchMemory(b, stateAlloc, stateType);
-        if (isa<ttg::NVMMASharedEncodingAttr>(
-                mmav5Op.getA().getType().getEncoding())) {
-          auto checkAOp = b.create<tti::ExperimentalCheckReadSharedOp>(
-              mmav5Op.getA(), buffers, state, barriers);
-          state = checkAOp.getOutStates();
-          barriers = checkAOp.getOutBarriers();
-        }
-        auto checkBOp = b.create<tti::ExperimentalCheckReadSharedOp>(
-            mmav5Op.getA(), buffers, state, barriers);
-        state = checkBOp.getOutStates();
-        barriers = checkBOp.getOutBarriers();
-        createStoreScratchMemory(b, barriersAlloc, barriers, barriersType);
-        createStoreScratchMemory(b, stateAlloc, state, stateType);
-      }
       if (auto waitOp = dyn_cast<ttng::WaitBarrierOp>(op)) {
         assert(barriers);
         auto pred = waitOp.getPred();
@@ -358,20 +318,6 @@ private:
     return sliceEncoding;
   }
 
-  ttg::DistributedEncodingTrait
-  getSingleDimSliceEncoding(ttg::BlockedEncodingAttr encoding, int dim) {
-    int rank = encoding.getOrder().size();
-    MLIRContext *ctx = encoding.getContext();
-    assert(dim < rank && "Expected dim to be less than rank");
-    ttg::DistributedEncodingTrait sliceEncoding = encoding;
-    for (int i = 0; i < rank; ++i) {
-      if (i != dim) {
-        sliceEncoding = ttg::SliceEncodingAttr::get(ctx, i, encoding);
-      }
-    }
-    return sliceEncoding;
-  }
-
   Value expandAllSlicedDims(ImplicitLocOpBuilder &b, Value tensor) {
     auto type = cast<RankedTensorType>(tensor.getType());
     auto sliceEncoding = dyn_cast<ttg::SliceEncodingAttr>(type.getEncoding());
@@ -387,20 +333,6 @@ private:
       sliceEncoding = dyn_cast<ttg::SliceEncodingAttr>(type.getEncoding());
     }
     return tensor;
-  }
-
-  Value createInitializedScratchMemory(ImplicitLocOpBuilder &b,
-                                       TypedValue<RankedTensorType> tensor) {
-    auto encoding = tensor.getType().getEncoding();
-    Type elType = tensor.getType().getElementType();
-    int elSize = elType.getIntOrFloatBitWidth() / 8;
-    int numEls = product(tensor.getType().getShape());
-    int64_t sizeInBytes = numEls * elSize;
-    Type ptrType = triton::getPointerType(elType);
-    auto alloc =
-        b.create<tt::gpu::GlobalScratchAllocOp>(ptrType, sizeInBytes, elSize);
-    createStoreScratchMemory(b, b.getLoc(), alloc, tensor, tensor.getType());
-    return alloc;
   }
 
   Value createInitializedScratchMemory(ImplicitLocOpBuilder &b,

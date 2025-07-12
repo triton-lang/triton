@@ -128,44 +128,6 @@ def TTI_ExperimentalMarkAsReadOp : TTI_Op<"experimental_mark_as_read", [MemoryEf
 def TTI_ExperimentalClearWriteBarrierOp : TTI_Op<"experimental_clear_write_barrier", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
   let summary = "clear the write state for buffers being guarded by an mbar";
   let description = [{
-    Mark a buffer as being read from using mbar as a guard.
-  }];
-  let arguments = (ins
-    TTG_MemDescType:$buf,
-    TTG_MemDescType:$mbar,
-    TT_PtrLike:$writeBars,
-    TypeAttr:$writeBarsType,
-    Optional<I1>:$pred
-  );
-  let assemblyFormat = [{
-    $mbar `{` $writeBars `(` $writeBarsType `)` `}` (`,` $pred^)? attr-dict `:` type($mbar) `,` type($writeBars)
-  }];
-}
-
-
-def TTI_ExperimentalCheckReadSharedOp : TTI_Op<"experimental_check_read_shared", [Pure]> {
-  let summary = "Check if reading from a shared memory buffer is valid";
-  let description = [{
-    Check if reading from a shared memory buffer is valid.
-  }];
-  let arguments = (ins
-    TTG_MemDescType:$buffer,
-    TT_Tensor:$buffers,
-    TT_Tensor:$barriers,
-    TT_PtrLike:$readBars,
-    TypeAttr:$readBarsType,
-    Optional<I1>:$pred
-  );
-  let assemblyFormat = [{
-    $buf `,` $mbar `{` $buffers `,` $barriers `,` $readBars `(` $readBarsType `)` `}` (`,` $pred^)? attr-dict `:` type($buf) `,` type($mbar) `,` type($buffers) `,` type($barriers) `,` type($readBars)
-  }];
-  let hasVerifier = 1;
-}
-
-
-def TTI_ExperimentalClearWriteBarrierOp : TTI_Op<"experimental_clear_write_barrier", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
-  let summary = "clear the write state for buffers being guarded by an mbar";
-  let description = [{
     Clear the write state for buffers being guarded by an mbar.
   }];
   let arguments = (ins
