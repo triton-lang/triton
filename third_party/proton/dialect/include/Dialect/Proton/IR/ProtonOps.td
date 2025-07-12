@@ -3,63 +3,43 @@
 
 include "mlir/IR/OpBase.td"
 include "mlir/IR/EnumAttr.td"
-include "triton/Dialect/Triton/IR/TritonTypes.td"
 include "mlir/Dialect/LLVMIR/LLVMOpBase.td"
 include "mlir/Interfaces/InferTypeOpInterface.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
-include "triton/Dialect/Triton/IR/TritonInterfaces.td"
-include "ProtonDialect.td"
-include "ProtonAttrDefs.td"
+include "proton/dialect/include/Dialect/Proton/IR/ProtonDialect.td"
+include "proton/dialect/include/Dialect/Proton/IR/ProtonAttrDefs.td"
 
-class TT_Proton_Op<string mnemonic, list<Trait> traits = []> :
-    Op<Proton_Dialect, mnemonic, !listconcat(traits, [])> {
+class PT_Op<string mnemonic, list<Trait> traits = []> :
+  Op<Proton_Dialect, mnemonic, !listconcat(traits, [])> {
 }
 
-// Proton profiling metric.
-def MetricAttr : I32EnumAttr<
-    "Metric", "",
-    [
-        I32EnumAttrCase<"CYCLE", 0, "cycle">,
-    ]> {
-    let cppNamespace = "::mlir::triton::proton";
-}
-
-// Proton profiling granularity.
-def GranularityAttr : I32EnumAttr<
-    "Granularity", "",
-    [
-        I32EnumAttrCase<"WARPGROUP", 0, "warpgroup">,
-        I32EnumAttrCase<"WARP", 1, "warp">,
-    ]> {
-    let cppNamespace = "::mlir::triton::proton";
-}
-
-def TT_RecordOp : TT_Proton_Op<"record", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
-  let summary = "Record a GPU hardware event";
+def PT_RecordOp : PT_Op<"record", [
+  MemoryEffects<[MemRead<DefaultResource>, MemWrite<DefaultResource>]>
+]> {
+  let summary = "Record an event";
 
   let description = [{
-    The operator records GPU events from performance counters.
-    Currently only cycle counter is supported.
+    This operation annotates a region of IR where events are recorded.
+    Events can be classified as hardware or software events.
+    Hardware events are provided by the hardware performance counters obtained in later passes that convert Triton to target-specific IR.
+    Software events are provided by the user or the compiler.
 
     Example:
 
     ```mlir
-    proton.record() {isStart = true, regionId = 4 : i32}
+    proton.record start "name0"
     ...
-    proton.record() {isStart = false, regionId = 4 : i32}
-    ...
-    proton.record() {isStart = true, regionId = 1 : i32, granularity = 1 : i32}
-    ...
-    proton.record() {isStart = false, regionId = 1 : i32, granularity = 1 : i32}
+    proton.record end "name0"
     ```
+
+    Scope names cannot be reused within the same function.
   }];
   let arguments = (
-    ins BoolAttr: $isStart,
-    ConfinedAttr<I32Attr, [IntNonNegative]>:$regionId,
-    DefaultValuedAttr<MetricAttr, "Metric::CYCLE">:$metric,
-    DefaultValuedAttr<GranularityAttr, "Granularity::WARPGROUP">:$granularity
+    ins UnitAttr: $isStart,
+    StrAttr: $name
   );
-  let assemblyFormat = " `(` operands `)` attr-dict";
+
+  let assemblyFormat = "(`start` $isStart^):(`end`)? $name attr-dict";
 }
 
 #endif // PROTON_OPS

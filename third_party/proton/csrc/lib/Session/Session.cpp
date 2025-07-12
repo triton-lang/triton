@@ -1,23 +1,32 @@
 #include "Session/Session.h"
 #include "Context/Python.h"
 #include "Context/Shadow.h"
+#include "Data/TraceData.h"
 #include "Data/TreeData.h"
 #include "Profiler/Cupti/CuptiProfiler.h"
+#include "Profiler/Instrumentation/InstrumentationProfiler.h"
 #include "Profiler/Roctracer/RoctracerProfiler.h"
 #include "Utility/String.h"
 
 namespace proton {
 
 namespace {
-Profiler *getProfiler(const std::string &name, const std::string &path) {
+
+Profiler *getProfiler(const std::string &name, const std::string &path,
+                      const std::string &mode) {
+  std::vector<std::string> modeAndOptions = proton::split(mode, ":");
   if (proton::toLower(name) == "cupti") {
-    return &CuptiProfiler::instance().setLibPath(path);
-  }
-  if (proton::toLower(name) == "cupti_pcsampling") {
-    return &CuptiProfiler::instance().setLibPath(path).enablePCSampling();
+    auto *profiler = &CuptiProfiler::instance();
+    profiler->setLibPath(path);
+    if (proton::toLower(modeAndOptions[0]) == "pcsampling")
+      profiler->enablePCSampling();
+    return profiler;
   }
   if (proton::toLower(name) == "roctracer") {
     return &RoctracerProfiler::instance();
+  }
+  if (proton::toLower(name) == "instrumentation") {
+    return InstrumentationProfiler::instance().setMode(modeAndOptions);
   }
   throw std::runtime_error("Unknown profiler: " + name);
 }
@@ -27,6 +36,8 @@ std::unique_ptr<Data> makeData(const std::string &dataName,
                                ContextSource *contextSource) {
   if (toLower(dataName) == "tree") {
     return std::make_unique<TreeData>(path, contextSource);
+  } else if (toLower(dataName) == "trace") {
+    return std::make_unique<TraceData>(path, contextSource);
   }
   throw std::runtime_error("Unknown data: " + dataName);
 }
@@ -64,7 +75,7 @@ void Session::deactivate() {
   data->clear();
 }
 
-void Session::finalize(OutputFormat outputFormat) {
+void Session::finalize(const std::string &outputFormat) {
   profiler->stop();
   data->dump(outputFormat);
 }
@@ -74,8 +85,8 @@ size_t Session::getContextDepth() { return contextSource->getDepth(); }
 std::unique_ptr<Session> SessionManager::makeSession(
     size_t id, const std::string &path, const std::string &profilerName,
     const std::string &profilerPath, const std::string &contextSourceName,
-    const std::string &dataName) {
-  auto profiler = getProfiler(profilerName, profilerPath);
+    const std::string &dataName, const std::string &mode) {
+  auto profiler = getProfiler(profilerName, profilerPath, mode);
   auto contextSource = makeContextSource(contextSourceName);
   auto data = makeData(dataName, path, contextSource.get());
   auto *session = new Session(id, path, profiler, std::move(contextSource),
@@ -115,6 +126,8 @@ void SessionManager::activateSessionImpl(size_t sessionId) {
   sessions[sessionId]->activate();
   registerInterface<ScopeInterface>(sessionId, scopeInterfaceCounts);
   registerInterface<OpInterface>(sessionId, opInterfaceCounts);
+  registerInterface<InstrumentationInterface>(sessionId,
+                                              instrumentationInterfaceCounts);
   registerInterface<ContextSource>(sessionId, contextSourceCounts);
 }
 
@@ -127,6 +140,8 @@ void SessionManager::deActivateSessionImpl(size_t sessionId) {
   sessions[sessionId]->deactivate();
   unregisterInterface<ScopeInterface>(sessionId, scopeInterfaceCounts);
   unregisterInterface<OpInterface>(sessionId, opInterfaceCounts);
+  unregisterInterface<InstrumentationInterface>(sessionId,
+                                                instrumentationInterfaceCounts);
   unregisterInterface<ContextSource>(sessionId, contextSourceCounts);
 }
 
@@ -144,7 +159,8 @@ size_t SessionManager::addSession(const std::string &path,
                                   const std::string &profilerName,
                                   const std::string &profilerPath,
                                   const std::string &contextSourceName,
-                                  const std::string &dataName) {
+                                  const std::string &dataName,
+                                  const std::string &mode) {
   std::lock_guard<std::mutex> lock(mutex);
   if (hasSession(path)) {
     auto sessionId = getSessionId(path);
@@ -154,12 +170,12 @@ size_t SessionManager::addSession(const std::string &path,
   auto sessionId = nextSessionId++;
   sessionPaths[path] = sessionId;
   sessions[sessionId] = makeSession(sessionId, path, profilerName, profilerPath,
-                                    contextSourceName, dataName);
+                                    contextSourceName, dataName, mode);
   return sessionId;
 }
 
 void SessionManager::finalizeSession(size_t sessionId,
-                                     OutputFormat outputFormat) {
+                                     const std::string &outputFormat) {
   std::lock_guard<std::mutex> lock(mutex);
   if (!hasSession(sessionId)) {
     return;
@@ -169,7 +185,7 @@ void SessionManager::finalizeSession(size_t sessionId,
   removeSession(sessionId);
 }
 
-void SessionManager::finalizeAllSessions(OutputFormat outputFormat) {
+void SessionManager::finalizeAllSessions(const std::string &outputFormat) {
   std::lock_guard<std::mutex> lock(mutex);
   auto sessionIds = std::vector<size_t>{};
   for (auto &[sessionId, session] : sessions) {
@@ -184,42 +200,66 @@ void SessionManager::finalizeAllSessions(OutputFormat outputFormat) {
 
 void SessionManager::enterScope(const Scope &scope) {
   std::lock_guard<std::mutex> lock(mutex);
-  for (auto iter : scopeInterfaceCounts) {
-    auto [scopeInterface, count] = iter;
-    if (count > 0) {
-      scopeInterface->enterScope(scope);
-    }
-  }
+  executeInterface(scopeInterfaceCounts, [&](auto *scopeInterface) {
+    scopeInterface->enterScope(scope);
+  });
 }
 
 void SessionManager::exitScope(const Scope &scope) {
   std::lock_guard<std::mutex> lock(mutex);
-  for (auto iter : scopeInterfaceCounts) {
-    auto [scopeInterface, count] = iter;
-    if (count > 0) {
-      scopeInterface->exitScope(scope);
-    }
-  }
+  executeInterface(
+      scopeInterfaceCounts,
+      [&](auto *scopeInterface) { scopeInterface->exitScope(scope); },
+      /*isReversed=*/true);
 }
 
 void SessionManager::enterOp(const Scope &scope) {
   std::lock_guard<std::mutex> lock(mutex);
-  for (auto iter : opInterfaceCounts) {
-    auto [opInterface, count] = iter;
-    if (count > 0) {
-      opInterface->enterOp(scope);
-    }
-  }
+  executeInterface(opInterfaceCounts,
+                   [&](auto *opInterface) { opInterface->enterOp(scope); });
 }
 
 void SessionManager::exitOp(const Scope &scope) {
   std::lock_guard<std::mutex> lock(mutex);
-  for (auto iter : opInterfaceCounts) {
-    auto [opInterface, count] = iter;
-    if (count > 0) {
-      opInterface->exitOp(scope);
-    }
-  }
+  executeInterface(
+      opInterfaceCounts, [&](auto *opInterface) { opInterface->exitOp(scope); },
+      /*isReversed=*/true);
+}
+
+void SessionManager::initFunctionMetadata(
+    uint64_t functionId, const std::string &functionName,
+    const std::vector<std::pair<size_t, std::string>> &scopeIdNames,
+    const std::vector<std::pair<size_t, size_t>> &scopeIdParents,
+    const std::string &metadataPath) {
+  std::lock_guard<std::mutex> lock(mutex);
+  executeInterface(instrumentationInterfaceCounts,
+                   [&](auto *instrumentationInterface) {
+                     instrumentationInterface->initFunctionMetadata(
+                         functionId, functionName, scopeIdNames, scopeIdParents,
+                         metadataPath);
+                   });
+}
+
+void SessionManager::enterInstrumentedOp(uint64_t streamId, uint64_t functionId,
+                                         uint8_t *buffer, size_t size) {
+  std::lock_guard<std::mutex> lock(mutex);
+  executeInterface(instrumentationInterfaceCounts,
+                   [&](auto *instrumentationInterface) {
+                     instrumentationInterface->enterInstrumentedOp(
+                         streamId, functionId, buffer, size);
+                   });
+}
+
+void SessionManager::exitInstrumentedOp(uint64_t streamId, uint64_t functionId,
+                                        uint8_t *buffer, size_t size) {
+  std::lock_guard<std::mutex> lock(mutex);
+  executeInterface(
+      instrumentationInterfaceCounts,
+      [&](auto *instrumentationInterface) {
+        instrumentationInterface->exitInstrumentedOp(streamId, functionId,
+                                                     buffer, size);
+      },
+      /*isReversed=*/true);
 }
 
 void SessionManager::addMetrics(

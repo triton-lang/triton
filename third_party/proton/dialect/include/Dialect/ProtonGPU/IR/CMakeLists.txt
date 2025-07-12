@@ -1,0 +1,23 @@
+set(MLIR_BINARY_DIR ${CMAKE_BINARY_DIR})
+
+set(LLVM_TARGET_DEFINITIONS ProtonGPUOps.td)
+mlir_tablegen(Ops.h.inc -gen-op-decls)
+mlir_tablegen(Ops.cpp.inc -gen-op-defs)
+mlir_tablegen(Dialect.h.inc -gen-dialect-decls -dialect=proton_gpu)
+mlir_tablegen(Dialect.cpp.inc -gen-dialect-defs -dialect=proton_gpu)
+add_mlir_doc(ProtonGPUOps ProtonGPUOps dialects/ -gen-op-doc)
+add_mlir_doc(ProtonGPUDialect ProtonGPUDialect dialects/ -gen-dialect-doc)
+add_public_tablegen_target(ProtonGPUTableGen)
+
+set(LLVM_TARGET_DEFINITIONS ProtonGPUAttrDefs.td)
+mlir_tablegen(AttrDefs.h.inc -gen-attrdef-decls)
+mlir_tablegen(AttrDefs.cpp.inc -gen-attrdef-defs)
+mlir_tablegen(OpsEnums.h.inc -gen-enum-decls)
+mlir_tablegen(OpsEnums.cpp.inc -gen-enum-defs)
+add_mlir_doc(ProtonGPUAttrDefs ProtonGPUAttrDefs dialects/ -gen-attrdef-doc)
+add_public_tablegen_target(ProtonGPUAttrDefsIncGen)
+
+set(LLVM_TARGET_DEFINITIONS ProtonGPUTypes.td)
+mlir_tablegen(Types.h.inc -gen-typedef-decls)
+mlir_tablegen(Types.cpp.inc -gen-typedef-defs)
+add_public_tablegen_target(ProtonGPUTypesIncGen)

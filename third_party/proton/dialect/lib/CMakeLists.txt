@@ -1,2 +1,4 @@
+add_subdirectory(Analysis)
 add_subdirectory(Dialect)
-add_subdirectory(TritonProtonToLLVM)
+add_subdirectory(ProtonToProtonGPU)
+add_subdirectory(ProtonGPUToLLVM)
