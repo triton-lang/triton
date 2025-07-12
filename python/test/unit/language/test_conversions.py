@@ -342,6 +342,10 @@ def test_typeconvert_downcast(src_dtype, dst_dtype, rounding, max_repr, device):
         if dst_dtype in ('float8e5b16', 'float8e4b8') and rounding == 'rtne':
             pytest.skip(f"{dst_dtype} downcast with RTNE rounding tests only supported on AMDGPU CDNA3")
 
+    if is_hip():
+        if dst_dtype in ('float8e4b8', 'float8e5b16') and is_hip_cdna2():
+            pytest.skip(f"{dst_dtype} is not supported on AMDGPU CDNA2")
+
     # dtype : (exponent_bits, mantissa_bits, exponent_bias)
     stuff = {
         'float16': (5, 10, 15),
