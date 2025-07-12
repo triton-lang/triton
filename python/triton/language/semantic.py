@@ -1487,6 +1487,18 @@ class TritonSemantic(Generic[TensorTy]):
             lhs = self.cast(lhs, tl.float16)
             rhs = self.cast(rhs, tl.float16)
 
+        uses_fp8e4b8 = lhs.dtype.is_fp8e4b8() or rhs.dtype.is_fp8e4b8()
+        uses_fp8e5b16 = lhs.dtype.is_fp8e5b16() or rhs.dtype.is_fp8e5b16()
+        if uses_fp8e4b8 or uses_fp8e5b16:
+            type_name = "fp8e4b8" if uses_fp8e4b8 else "fp8e5b16"
+            if type_name in self.builder.options.deprecated_fp8_dot_operand_dtypes:
+                arch = self.builder.options.arch
+                warnings.warn(
+                    f"{type_name} is AMD gfx942 specific and not supported on {arch} so it's upcasted to fp16 and can cause significant slow down. "
+                    f"Please use OCP fp8 variants on {arch} for performance")
+                lhs = self.cast(lhs, tl.float16)
+                rhs = self.cast(rhs, tl.float16)
+
         if input_precision is None:
             input_precision = self.builder.options.default_dot_input_precision
 
