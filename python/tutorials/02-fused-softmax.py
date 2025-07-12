@@ -205,11 +205,11 @@ assert torch.allclose(y_triton, y_torch), (y_triton, y_torch)
         x_names=['N'],  # argument names to use as an x-axis for the plot
         x_vals=[128 * i for i in range(2, 100)],  # different possible values for `x_name`
         line_arg='provider',  # argument name whose value corresponds to a different line in the plot
-        line_vals=['triton', 'torch', 'native_softmax'],  # possible values for `line_arg``
+        line_vals=['triton', 'torch', 'naive_softmax'],  # possible values for `line_arg``
         line_names=[
             "Triton",
             "Torch",
-            "Native Softmax"
+            "Naive Softmax"
         ],  # label name for the lines
         styles=[('blue', '-'), ('green', '-'), ('red', '-')],  # line styles
         ylabel="GB/s",  # label name for the y-axis
@@ -224,7 +224,7 @@ def benchmark(M, N, provider):
         ms = triton.testing.do_bench(lambda: torch.softmax(x, axis=-1))
     if provider == 'triton':
         ms = triton.testing.do_bench(lambda: softmax(x))
-    if provider == 'native_softmax':
+    if provider == 'naive_softmax':
         ms = triton.testing.do_bench(lambda: naive_softmax(x))
     gbps = lambda ms: 2 * x.numel() * x.element_size() * 1e-9 / (ms * 1e-3)
     return gbps(ms)
