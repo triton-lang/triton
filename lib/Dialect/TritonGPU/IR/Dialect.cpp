@@ -3046,7 +3046,9 @@ std::string getSharedLayoutStr(RankedTensorType type, bool useHWPointOfView) {
     return "";
 
   // This RankedTensorType is a MemDescType (?!)
-  LinearLayout ll = triton::gpu::toLinearLayout(type);
+  auto shape = type.getShape();
+  auto layout = type.getEncoding();
+  LinearLayout ll = triton::gpu::toLinearLayout(shape, layout, shape);
 
   StringAttr kOffset = StringAttr::get(type.getContext(), "offset");
   StringAttr kBlock = StringAttr::get(type.getContext(), "block");
