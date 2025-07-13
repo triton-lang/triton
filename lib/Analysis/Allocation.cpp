@@ -213,8 +213,13 @@ unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
     auto value = op->getOperand(0);
     // only scalar requires scratch memory
     // make it explicit for readability
-    if (dyn_cast<RankedTensorType>(value.getType())) {
-      return 0;
+    if (auto tensorTy = dyn_cast<RankedTensorType>(value.getType())) {
+      auto shape = tensorTy.getShape();
+      int elems = 1;
+      for (auto dim_size : shape) {
+        elems *= dim_size;
+      }
+      return (getBitwidth(tensorTy) / 8) * elems;
     }
     auto smemShape = getRepShapeForAtomic(op->getResult(0));
     auto elems = getNumScratchElements(smemShape);

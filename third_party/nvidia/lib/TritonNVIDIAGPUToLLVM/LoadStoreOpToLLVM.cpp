@@ -17,6 +17,7 @@
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
+#include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 #include "triton/Tools/LayoutUtils.h"
@@ -1080,7 +1081,6 @@ struct AtomicRMWOpConversion
       atom.o(semStr).o(rmwOp).v(vec).o(sTy);
       if (tensorTy) {
         atom(dstOpr, ptrOpr, valOpr).maybePredicate(pred);
-        // atom(dstOpr, ptrOpr, valOpr);
         Type retType;
         if (vec > 1) {
           SmallVector<Type> retTys(vec, valueElemTy);
@@ -1091,26 +1091,68 @@ struct AtomicRMWOpConversion
           retType = valueElemTy;
         }
 
-        auto ret = ptxBuilderAtomicRMW.launch(rewriter, loc, retType);
+        auto after_add = ptxBuilderAtomicRMW.launch(rewriter, loc, retType);
+        LinearLayout dstLayout =
+            ttg::toLinearLayout(tensorTy.getShape(), tensorTy.getEncoding());
 
-        // Just implement warp level broadcasting, if elements > 32, we should
-        // do block level broadcasting.
-        auto inline_asm = ptxBuilderAtomicRMW.launch(rewriter, loc, retType);
-        auto ret = targetInfo.shuffleIdx(rewriter, loc, inline_asm, 0);
+        Value smemBase = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo,
+                                                   op.getOperation());
+        auto smemPtrTy = ptr_ty(ctx, 3);
+
+        StringAttr kRegister = str_attr("register");
+        StringAttr kLane = str_attr("lane");
+        StringAttr kWarp = str_attr("warp");
+        StringAttr kBlock = str_attr("block");
+        auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
+
+        auto smemOffset = applyLinearLayout(loc, rewriter, dstLayout,
+                                            {{kRegister, b.i32_val(0)},
+                                             {kLane, laneId},
+                                             {kWarp, warpId},
+                                             {kBlock, b.i32_val(0)}})[0]
+                              .second;
 
         if (vec > 1) {
+          // TODO(Wenqin): try to use packLLVector for pack umpacked_elems and
+          // load it through vectorization.
+          auto umpacked_elems = unpackLLElements(loc, after_add, rewriter);
+          auto vecAddr = b.gep(smemPtrTy, valueElemTy, smemBase, smemOffset,
+                               LLVM::GEPNoWrapFlags::inbounds);
           for (unsigned ii = 0; ii < vec; ++ii) {
-            resultVals[i + ii] = b.extract_val(valueElemTy, ret, ii);
+            targetInfo.storeDShared(rewriter, loc, vecAddr, std::nullopt,
+                                    umpacked_elems[ii],
+                                    pred ? pred : b.true_val());
+            b.barrier();
+            Value ret =
+                targetInfo.loadDShared(rewriter, loc, vecAddr, std::nullopt,
+                                       valueElemTy, b.true_val());
+            resultVals[i + ii] = ret;
           }
+          auto umpacked_elems = unpackLLElements(loc, after_add, rewriter);
         } else if (packed > 1) {
+          auto vecAddr = b.gep(smemPtrTy, packedTy, smemBase, smemOffset,
+                               LLVM::GEPNoWrapFlags::inbounds);
+          targetInfo.storeDShared(rewriter, loc, vecAddr, std::nullopt,
+                                  after_add, pred ? pred : b.true_val());
+          b.barrier();
+          Value ret = targetInfo.loadDShared(
+              rewriter, loc, vecAddr, std::nullopt, packedTy, b.true_val());
           for (unsigned ii = 0; ii < packed; ++ii) {
             resultVals[i + ii] =
                 b.extract_element(valueElemTy, ret, b.i32_val(ii));
           }
         } else {
+          auto vecAddr = b.gep(smemPtrTy, valueElemTy, smemBase, smemOffset,
+                               LLVM::GEPNoWrapFlags::inbounds);
+          Value valsVec =
+              packLLVector(loc, ArrayRef<Value>(after_add), rewriter);
+          targetInfo.storeDShared(rewriter, loc, vecAddr, std::nullopt, valsVec,
+                                  pred ? pred : b.true_val());
+          b.barrier();
+          Value ret = targetInfo.loadDShared(
+              rewriter, loc, vecAddr, std::nullopt, valueElemTy, b.true_val());
           resultVals[i] = ret;
         }
-
       } else {
         auto ASMReturnTy = void_ty(ctx);
         atom(dstOpr, ptrOpr, valOpr).maybePredicate(pred);
