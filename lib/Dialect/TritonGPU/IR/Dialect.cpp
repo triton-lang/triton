@@ -2466,6 +2466,38 @@ struct TritonGPUInferLayoutInterface
                                              Attribute srcEnc,
                                              ArrayRef<int64_t> dstShape,
                                              Attribute &dstEnc) const {
+    if (auto mmaEncoding = dyn_cast<NVMMASharedEncodingAttr>(srcEnc)) {
+      // TODO: supporting reshape of CTA layouts is non-trivial.
+      if (getNumCTAs(mmaEncoding) > 1)
+        return failure();
+      int innerDimDst =
+          mmaEncoding.getTransposed() ? dstShape.front() : dstShape.back();
+      int innerDimSrc =
+          mmaEncoding.getTransposed() ? srcShape.front() : srcShape.back();
+      // For now disallow reshape of the inner dimension.
+      if (innerDimDst != innerDimSrc)
+        return failure();
+      auto *ctx = srcEnc.getContext();
+
+      // CTALayout can be all 1's because we bailed on multi-CTA layouts above.
+      auto CTALayout = CTALayoutAttr::get(
+          ctx,
+          /*CTAsPerCGA=*/SmallVector<unsigned>(dstShape.size(), 1),
+          /*CTASplitNum=*/SmallVector<unsigned>(dstShape.size(), 1),
+          /*CTAOrder=*/llvm::to_vector(llvm::seq<unsigned>(dstShape.size())));
+      dstEnc = NVMMASharedEncodingAttr::get(
+          ctx, mmaEncoding.getSwizzlingByteWidth(), mmaEncoding.getTransposed(),
+          mmaEncoding.getElementBitWidth(), mmaEncoding.getFp4Padded(),
+          CTALayout);
+      // Big guns, check linear layouts are equivalent
+      // We disallow reshaping memdesc_subviews in the verifier
+      auto srcLL = toLinearLayout(srcShape, srcEnc);
+      auto dstLL = toLinearLayout(dstShape, dstEnc);
+      if (reshapeLayout(ctx, srcLL, dstShape) != dstLL) {
+        return failure();
+      }
+      return success();
+    }
     auto src = mlir::dyn_cast<BlockedEncodingAttr>(srcEnc);
     if (!src) {
       return failure();
@@ -2712,6 +2744,10 @@ struct TritonGPUInferLayoutInterface
         inferReshapeOpLegacyEncoding(srcShape, srcEnc, dstShape, dstEnc);
     if (succeeded(result)) {
       return result;
+    }
+    if (!isa<DistributedEncodingTrait>(srcEnc)) {
+      return emitOptionalError(loc,
+                               "Failed MemDescReshapeOp encoding inference");
     }
     // If the legacy encoding failed use LinearLayouts.
     // Once LinearLayouts are more widely used, we can remove

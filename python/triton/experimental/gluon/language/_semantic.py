@@ -1,4 +1,5 @@
 from typing import Sequence, List, TypeVar, Tuple, Callable
+import math
 from triton.language.semantic import TritonSemantic
 from . import _core as ttgl
 from ._layouts import SliceLayout, AutoLayout
@@ -213,10 +214,26 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         return ttgl.shared_memory_descriptor(handle, element_ty=mem_desc.dtype, shape=shape,
                                              alloc_shape=new_alloc_shape, layout=layout)
 
-    def memdesc_reshape(self, mem_desc, shape, layout):
-        ty = ttgl.shared_memory_descriptor_type(mem_desc.dtype, shape, layout, mem_desc.type.alloc_shape)
-        handle = self.builder.create_memdesc_reshape(ty.to_ir(self.builder), mem_desc.handle)
-        return ttgl.shared_memory_descriptor(handle, **ty.__dict__)
+    def memdesc_reshape(self, mem_desc, shape):
+        _check(
+            math.prod(shape) == math.prod(mem_desc.shape),
+            lambda: (f"memdesc_reshape total elements mismatch: "
+                     f"{mem_desc.shape} -> {shape}"),
+        )
+
+        handle = self.builder.create_memdesc_reshape(mem_desc.handle, shape)
+        layout = self.builder.get_gluon_layout_from_memdesc(handle)
+        alloc_shape = mem_desc.type.alloc_shape
+        prefix_len = len(alloc_shape) - mem_desc.rank
+        new_alloc_shape = alloc_shape[:prefix_len] + list(shape)
+
+        return ttgl.shared_memory_descriptor(
+            handle,
+            element_ty=mem_desc.dtype,
+            shape=shape,
+            alloc_shape=new_alloc_shape,
+            layout=layout,
+        )
 
     def memdesc_reinterpret(self, mem_desc, dtype, shape, layout):
         ty = ttgl.shared_memory_descriptor_type(dtype, shape, layout, shape)
