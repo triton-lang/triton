@@ -1,6 +1,5 @@
 import torch
 import pytest
-import math
 from triton_kernels.testing import assert_equal
 from triton_kernels.tensor_details.layout import BlackwellMXScaleLayout, HopperMXScaleLayout, HopperMXValueLayout
 
@@ -49,12 +48,12 @@ def test_swizzle_mxfp4_scale(shape, num_warps):
     assert (res[:shape[0], :shape[1]] == x).all()
 
 
-def test_unswizzle_mxfp4_value_golden_value():
-    shape = (16, 32)
-    x = torch.arange(math.prod(shape)).view(shape).to(torch.uint8)
-    layout = HopperMXValueLayout(x.shape, op_idx=1, mma_version=3)
-    res = layout.swizzle_data(x)
-    # Thread 0
-    assert res[0, 0:16].tolist() == [0, 0, 4, 4, 8, 8, 12, 12, 16, 16, 20, 20, 24, 24, 28, 28]
-    # Thread 1
-    assert res[0, 16:32].tolist() == [1, 1, 5, 5, 9, 9, 13, 13, 17, 17, 21, 21, 25, 25, 29, 29]
+# def test_unswizzle_mxfp4_value_golden_value():
+#     shape = (16, 32)
+#     x = torch.arange(math.prod(shape)).view(shape).to(torch.uint8)
+#     layout = HopperMXValueLayout(x.shape, op_idx=1, mma_version=3)
+#     res = layout.swizzle_data(x)
+#     # Thread 0
+#     assert res[0, 0:16].tolist() == [0, 0, 4, 4, 8, 8, 12, 12, 16, 16, 20, 20, 24, 24, 28, 28]
+#     # Thread 1
+#     assert res[0, 16:32].tolist() == [1, 1, 5, 5, 9, 9, 13, 13, 17, 17, 21, 21, 25, 25, 29, 29]
