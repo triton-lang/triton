@@ -179,8 +179,8 @@ public:
 
     auto newAlloc = rewriter.create<LocalAllocOp>(allocOp.getLoc(), innerTy,
                                                   reshapeOp.getSrc());
-    rewriter.replaceOpWithNewOp<MemDescReshapeOp>(allocOp, newAlloc,
-                                                  allocOp.getType().getShape());
+    rewriter.replaceOpWithNewOp<MemDescReshapeOp>(allocOp, allocOp.getType(),
+                                                  newAlloc);
     return success();
   }
 };
