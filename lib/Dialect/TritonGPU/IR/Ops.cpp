@@ -507,10 +507,9 @@ MemDescReshapeOp::inferReturnTypes(MLIRContext *context,
       return failure();
   }
 
-  SmallVector<int64_t> dstAllocShape;
-  auto srcAllocShape = srcTy.getAllocShape();
-  unsigned prefix = srcAllocShape.size() - srcTy.getShape().size();
-  dstAllocShape.append(srcAllocShape.begin(), srcAllocShape.begin() + prefix);
+  SmallVector<int64_t> dstAllocShape =
+      to_vector(srcTy.getAllocShape().take_front(srcTy.getAllocShape().size() -
+                                                 srcTy.getShape().size()));
   dstAllocShape.append(dstShape.begin(), dstShape.end());
 
   inferredReturnTypes.push_back(MemDescType::get(

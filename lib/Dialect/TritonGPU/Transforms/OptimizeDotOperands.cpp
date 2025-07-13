@@ -166,18 +166,26 @@ public:
     auto allocEncoding = allocType.getEncoding();
 
     RankedTensorType srcTy = reshapeOp.getSrc().getType();
+    auto srcShape = srcTy.getShape();
+    auto dstShape = allocType.getShape();
     auto *inferLayout =
         cast<DialectInferLayoutInterface>(&allocEncoding.getDialect());
     Attribute newAllocEncoding;
     // Reshape backwards inference is equivalent to forward inference.
-    if (failed(inferLayout->inferReshapeOpEncoding(
-            allocType.getShape(), allocEncoding, srcTy.getShape(),
-            newAllocEncoding, allocOp.getLoc())))
+    if (failed(inferLayout->inferReshapeOpEncoding(dstShape, allocEncoding,
+                                                   srcShape, newAllocEncoding,
+                                                   allocOp.getLoc())))
       return failure();
+
+    SmallVector<int64_t> newAllocShape =
+        to_vector(allocType.getAllocShape().take_front(
+            allocType.getAllocShape().size() - dstShape.size()));
+    newAllocShape.append(srcShape.begin(), srcShape.end());
 
     MemDescType innerTy =
         MemDescType::get(srcTy.getShape(), srcTy.getElementType(),
-                         newAllocEncoding, allocType.getMemorySpace());
+                         newAllocEncoding, allocType.getMemorySpace(),
+                         allocType.getMutableMemory(), newAllocShape);
     auto newAlloc = rewriter.create<LocalAllocOp>(allocOp.getLoc(), innerTy,
                                                   reshapeOp.getSrc());
     rewriter.replaceOpWithNewOp<MemDescReshapeOp>(allocOp, newAlloc,
