@@ -2494,8 +2494,9 @@ struct TritonGPUInferLayoutInterface
           CTALayout);
       // Big guns, check linear layouts are equivalent
       // We disallow reshaping memdesc_subviews in the verifier
-      auto srcLL = toLinearLayout(srcShape, srcEnc);
-      auto dstLL = toLinearLayout(dstShape, dstEnc);
+      // We disallow reshaping memdesc_subviews in the verifier
+      auto srcLL = toLinearLayout(srcShape, srcEnc, srcShape);
+      auto dstLL = toLinearLayout(dstShape, dstEnc, dstShape);
       if (reshapeLayout(ctx, srcLL, dstShape) != dstLL) {
         return failure();
       }
