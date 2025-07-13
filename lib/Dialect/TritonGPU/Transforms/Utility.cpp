@@ -1500,7 +1500,7 @@ void replaceUsesAndPropagateType(OpBuilder &builder, Operation *oldUse,
       newVal = builder.create<ttg::MemDescTransOp>(trans.getLoc(), val,
                                                    trans.getOrder());
     } else if (auto reshape = dyn_cast<ttg::MemDescReshapeOp>(user)) {
-      auto shape = reshape.getShape();
+      auto shape = reshape.getType().getShape();
       newVal =
           builder.create<ttg::MemDescReshapeOp>(reshape.getLoc(), val, shape);
     }

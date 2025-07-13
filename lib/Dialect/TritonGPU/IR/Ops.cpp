@@ -474,27 +474,25 @@ LogicalResult MemDescReshapeOp::verify() {
     return emitError("result element type must match src element type");
   }
 
-  // Infer the dst layout from the source and verify that it is equivalent.
-  auto srcEncoding = srcType.getEncoding();
-  Attribute inferedDstEncoding;
-
-  LinearLayout ll = inferReshapeLinearLayout(cast<TensorOrMemDesc>(srcType),
-                                             dstType.getShape());
-  LinearLayout llDst = triton::gpu::toLinearLayout(dstType);
-  if (ll != llDst) {
+  MemDescType expectedTy;
+  if (failed(inferReturnTypes(getContext(), getLoc(), srcType,
+                              dstType.getShape(), expectedTy)))
+    return failure();
+  // Check that the alloc shape separately to give a cleaner error, given that
+  // it's the most likely source of the error.
+  if (expectedTy.getAllocShape() != dstType.getAllocShape()) {
+    return emitError(
+        "The result alloc shape does not match the expected alloc shape.");
+  }
+  if (expectedTy != dstType) {
     return emitError("source and destination layout are incompatible.");
   }
   return success();
 }
 
-LogicalResult
-MemDescReshapeOp::inferReturnTypes(MLIRContext *context,
-                                   std::optional<Location> loc,
-                                   MemDescReshapeOp::Adaptor adaptor,
-                                   SmallVectorImpl<Type> &inferredReturnTypes) {
-  auto srcTy = cast<MemDescType>(adaptor.getSrc().getType());
-  auto dstShape = adaptor.getShape();
-
+LogicalResult MemDescReshapeOp::inferReturnTypes(
+    MLIRContext *context, std::optional<Location> loc, MemDescType srcTy,
+    ArrayRef<int64_t> dstShape, MemDescType &inferredReturnType) {
   if (product<int64_t>(dstShape) != product<int64_t>(srcTy.getShape()))
     return emitOptionalError(
         loc, "dst shape has different number of elements than src");
@@ -512,9 +510,9 @@ MemDescReshapeOp::inferReturnTypes(MLIRContext *context,
                                                  srcTy.getShape().size()));
   dstAllocShape.append(dstShape.begin(), dstShape.end());
 
-  inferredReturnTypes.push_back(MemDescType::get(
+  inferredReturnType = MemDescType::get(
       dstShape, srcTy.getElementType(), dstEncoding, srcTy.getMemorySpace(),
-      srcTy.getMutableMemory(), dstAllocShape));
+      srcTy.getMutableMemory(), dstAllocShape);
   return success();
 }
 

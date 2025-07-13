@@ -264,7 +264,6 @@ def TTG_MemDescTransOp : TTG_Op<"memdesc_trans", [Pure,
 
 def TTG_MemDescReshapeOp : TTG_Op<"memdesc_reshape", [Pure,
                                                       MemDescViewTrait,
-                                                      InferTypeOpWithLayoutEquivalence,
                                                       SameOperandsAndResultElementType]> {
   let summary = "creates a descriptor for the new shape";
 
@@ -273,7 +272,27 @@ def TTG_MemDescReshapeOp : TTG_Op<"memdesc_reshape", [Pure,
     This doesn't affect the memory.
   }];
 
-  let arguments = (ins TTG_MemDescType:$src, DenseI64ArrayAttr:$shape);
+  let arguments = (ins TTG_MemDescType:$src);
+
+  let builders = [
+    OpBuilder<(ins "Value":$src, "ArrayRef<int64_t>":$shape),
+              [{
+                MemDescType dstTy;
+                auto srcTy = cast<MemDescType>(src.getType());
+                auto result = inferReturnTypes($_builder.getContext(),
+                                           $_builder.getUnknownLoc(),
+                                           srcTy, shape, dstTy);
+                assert(succeeded(result) && "failed to infer return types");
+                build($_builder, $_state, dstTy, src);
+              }]>
+  ];
+  let extraClassDeclaration = [{
+      static LogicalResult inferReturnTypes(MLIRContext *context,
+                                        std::optional<Location> loc,
+                                        MemDescType srcTy,
+                                        ArrayRef<int64_t> dstShape,
+                                        MemDescType &inferredReturnType);
+  }];
 
   let results = (outs TTG_MemDescType:$result);
 

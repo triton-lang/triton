@@ -172,18 +172,10 @@ public:
     // We use the fact that forward and backward inference are the same for
     // MemDescReshapeOp to infer the source MemDescType that would produce
     // `allocType` after a reshape.
-    SmallVector<Type> inferredTypes;
-    {
-      auto ctx = getContext();
-      auto shapeAttr = DenseI64ArrayAttr::get(ctx, srcShape);
-      MemDescReshapeOp::Adaptor adaptor(
-          {allocOp.getResult()}, DictionaryAttr::get(getContext()),
-          MemDescReshapeOp::Properties{shapeAttr});
-      if (failed(MemDescReshapeOp::inferReturnTypes(ctx, allocOp.getLoc(),
-                                                    adaptor, inferredTypes)))
-        return failure();
-    }
-    auto innerTy = cast<MemDescType>(inferredTypes.front());
+    MemDescType innerTy;
+    if (failed(MemDescReshapeOp::inferReturnTypes(
+            getContext(), allocOp.getLoc(), allocType, srcShape, innerTy)))
+      return failure();
 
     auto newAlloc = rewriter.create<LocalAllocOp>(allocOp.getLoc(), innerTy,
                                                   reshapeOp.getSrc());

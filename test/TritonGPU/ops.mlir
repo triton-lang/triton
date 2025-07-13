@@ -75,7 +75,7 @@ module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-w
   // CHECK-LABEL: memdesc_reshape
   // CHECK: !ttg.memdesc<128x64xf16, #{{.+}}, mutable>
   tt.func @memdesc_reshape(%d : !ttg.memdesc<32x1x4x64xf16, #shared, #smem, mutable>){
-    %1 = ttg.memdesc_reshape %d {shape = array<i64: 128, 64>} : !ttg.memdesc<32x1x4x64xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x64xf16, #shared1, #smem, mutable, 128x64>
+    %1 = ttg.memdesc_reshape %d : !ttg.memdesc<32x1x4x64xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x64xf16, #shared1, #smem, mutable>
     tt.return
   }
 }
