@@ -513,8 +513,9 @@ bool canBeConvertedToAsyncLoad(unsigned numBuffers, tt::LoadOp loadOp,
   auto dstTy = cast<ttg::MemDescType>(alloc.getType());
   auto regLayout = triton::gpu::toLinearLayout(srcTy);
   // It's the allocation so we can pass the srcTy shape
+  auto srcShape = srcTy.getShape();
   auto sharedLayout =
-      triton::gpu::toLinearLayout(srcTy.getShape(), dstTy.getEncoding());
+      triton::gpu::toLinearLayout(srcShape, dstTy.getEncoding(), srcShape);
   auto regToSharedLayout = regLayout.invertAndCompose(sharedLayout);
   unsigned loadContig = regToSharedLayout.getNumConsecutiveInOut();
   unsigned width = loadContig * dstTy.getElementTypeBitWidth();

@@ -39,11 +39,14 @@ namespace gpu {
 
 LinearEncodingAttr TritonGPUDialect::toLinearEncoding(ArrayRef<int64_t> shape,
                                                       Attribute layout) {
-  CacheKey key{std::vector<int64_t>(shape.begin(), shape.end()), layout};
+  // LinearEncoding is a DistributedLayout
+  std::vector<int64_t> allocationShape;
+  CacheKey key{std::vector<int64_t>(shape.begin(), shape.end()), layout,
+               allocationShape};
   if (auto result = leCache.get(key)) {
     return *result;
   }
-  auto linearLayout = toLinearLayout(shape, layout);
+  auto linearLayout = toLinearLayout(shape, layout, {});
   auto linearEncoding =
       LinearEncodingAttr::get(layout.getContext(), std::move(linearLayout));
   leCache.set(key, linearEncoding);
@@ -2369,7 +2372,7 @@ struct TritonGPUInferLayoutInterface
       return success();
     }
 
-    auto ll = toLinearLayout(shape, operandEncoding);
+    auto ll = toLinearLayout(shape, operandEncoding, {});
     auto transposedLl = transposeLinearLayout(ll, order);
     resultEncoding = LinearEncodingAttr::get(ctx, std::move(transposedLl));
     return success();
@@ -2491,8 +2494,9 @@ struct TritonGPUInferLayoutInterface
           CTALayout);
       // Big guns, check linear layouts are equivalent
       // We disallow reshaping memdesc_subviews in the verifier
-      auto srcLL = toLinearLayout(srcShape, srcEnc);
-      auto dstLL = toLinearLayout(dstShape, dstEnc);
+      // We disallow reshaping memdesc_subviews in the verifier
+      auto srcLL = toLinearLayout(srcShape, srcEnc, srcShape);
+      auto dstLL = toLinearLayout(dstShape, dstEnc, dstShape);
       if (reshapeLayout(ctx, srcLL, dstShape) != dstLL) {
         return failure();
       }
@@ -2774,7 +2778,7 @@ struct TritonGPUInferLayoutInterface
       SmallVector<int64_t> joinedShape(shape);
       joinedShape.push_back(2);
       auto parent = enc.getParent();
-      auto parentLL = toLinearLayout(joinedShape, parent);
+      auto parentLL = toLinearLayout(joinedShape, parent, {});
 
       Attribute splitEnc;
       auto result = inferSplitOpEncoding(parent, splitEnc, joinedShape, loc);
@@ -2810,7 +2814,7 @@ struct TritonGPUInferLayoutInterface
     }
 
     // Append dim to shape
-    auto ll = toLinearLayout(shape, srcEnc);
+    auto ll = toLinearLayout(shape, srcEnc, {});
     SmallVector<int64_t> dstShape(shape.begin(), shape.end());
     dstShape.push_back(1);
     ll = ll.reshapeOuts(standardOutDimPairs(ctx, dstShape));
@@ -2866,7 +2870,7 @@ struct TritonGPUInferLayoutInterface
     auto ctx = getContext();
 
     // Split on last dim
-    auto ll = toLinearLayout(shape, srcEnc);
+    auto ll = toLinearLayout(shape, srcEnc, {});
     auto newLl = LinearLayout::empty();
     auto result =
         tryJoinOnAxis(ctx, ll, newLl, /*fwdInference=*/false, axis, loc);
@@ -2935,7 +2939,7 @@ struct TritonGPUInferLayoutInterface
       }
     }
 
-    auto ll = toLinearLayout(shape, inEnc);
+    auto ll = toLinearLayout(shape, inEnc, {});
     auto newLl = LinearLayout::empty();
     auto result = tryJoinOnAxis(ctx, ll, newLl, fwdInference, axis, loc);
     if (!result.succeeded())
@@ -3042,7 +3046,9 @@ std::string getSharedLayoutStr(RankedTensorType type, bool useHWPointOfView) {
     return "";
 
   // This RankedTensorType is a MemDescType (?!)
-  LinearLayout ll = triton::gpu::toLinearLayout(type);
+  auto shape = type.getShape();
+  auto layout = type.getEncoding();
+  LinearLayout ll = triton::gpu::toLinearLayout(shape, layout, shape);
 
   StringAttr kOffset = StringAttr::get(type.getContext(), "offset");
   StringAttr kBlock = StringAttr::get(type.getContext(), "block");
@@ -3050,7 +3056,6 @@ std::string getSharedLayoutStr(RankedTensorType type, bool useHWPointOfView) {
   auto enc = type.getEncoding();
   unsigned numBlocks = getNumCTAs(enc);
   int32_t blockSize = tensorSize / numBlocks;
-  auto shape = type.getShape();
 
   // elementMapping is for the non-hw layout, offsetMapping for hw-layout
   std::vector<std::string> elementMapping(tensorSize);
@@ -3463,8 +3468,8 @@ int triton::gpu::lookupThreadsPerWarp(OpBuilder &rewriter) {
 bool triton::gpu::areLayoutsEquivalent(ArrayRef<int64_t> shape,
                                        DistributedEncodingTrait lhs,
                                        DistributedEncodingTrait rhs) {
-  auto lhsLL = triton::gpu::toLinearLayout(shape, lhs);
-  auto rhsLL = triton::gpu::toLinearLayout(shape, rhs);
+  auto lhsLL = triton::gpu::toLinearLayout(shape, lhs, {});
+  auto rhsLL = triton::gpu::toLinearLayout(shape, rhs, {});
   return lhsLL == rhsLL;
 }
 
