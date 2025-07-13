@@ -156,6 +156,13 @@ def make_default_opt_flags_nvidia(
         block_m = constraints["block_m"]
     elif enforce_bitwise_invariance:
         block_m = 128
+    # elif precision_config.weight_scale is not None and not has_native_mxfp():
+    #     if m <= 1024:
+    #         block_m = 16
+    #     elif m <= 2048:
+    #         block_m = 32
+    #     else:
+    #         block_m = 64
     else:
         block_m = max(64, min(triton.next_power_of_2(tokens_per_expt), 128))
     # block n
@@ -212,6 +219,7 @@ def make_default_opt_flags_nvidia(
     assert num_stages >= 1
     if constraints.get("num_stages", None):
         num_stages = constraints["num_stages"]
+    # num_stages = 5
 
     # fused scatter scratchpad
     if constraints.get("fused_scatter", None) is not None:
