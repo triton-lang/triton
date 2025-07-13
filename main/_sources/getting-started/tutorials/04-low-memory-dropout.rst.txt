@@ -116,7 +116,7 @@ Let's first take a look at the baseline implementation.
 
  .. code-block:: none
 
-    /home/runner/_work/triton/triton/python/triton/language/semantic.py:1626: UserWarning: tl.where with a non-boolean condition is deprecated and will error out in a future triton release. Got int32
+    /home/runner/_work/triton/triton/python/triton/language/semantic.py:1638: UserWarning: tl.where with a non-boolean condition is deprecated and will error out in a future triton release. Got int32
       warnings.warn(
     ---------  ---------  -------  --------  -------  --------  -------  ---------  --------  --------  -------
     input      -0.940469  0.17792  0.529538  0.13197  0.135063  1.64092  -0.309264  0.618883  -1.53066  0.46037
@@ -246,7 +246,7 @@ References
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (0 minutes 0.745 seconds)
+   **Total running time of the script:** (0 minutes 0.750 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_04-low-memory-dropout.py:
