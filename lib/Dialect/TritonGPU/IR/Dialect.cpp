@@ -3056,7 +3056,6 @@ std::string getSharedLayoutStr(RankedTensorType type, bool useHWPointOfView) {
   auto enc = type.getEncoding();
   unsigned numBlocks = getNumCTAs(enc);
   int32_t blockSize = tensorSize / numBlocks;
-  auto shape = type.getShape();
 
   // elementMapping is for the non-hw layout, offsetMapping for hw-layout
   std::vector<std::string> elementMapping(tensorSize);
