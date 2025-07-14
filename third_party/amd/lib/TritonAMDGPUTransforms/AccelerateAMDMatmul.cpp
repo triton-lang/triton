@@ -840,6 +840,8 @@ public:
     ScaleDotElemType bElemType = dotOp.getBElemType();
     auto supportsTypes = [](ScaleDotElemType elemType) {
       return elemType == ScaleDotElemType::E2M1 ||
+             elemType == ScaleDotElemType::E3M2 ||
+             elemType == ScaleDotElemType::E2M3 ||
              elemType == ScaleDotElemType::E4M3 ||
              elemType == ScaleDotElemType::E5M2;
     };
