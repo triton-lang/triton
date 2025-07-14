@@ -106,26 +106,51 @@ void transposeInRegsitersBeforeStoreInLocalMemory(
   rewriter.finalizeOpModification(memStoreOp);
 }
 
-Attribute createNewSharedEncoding(RankedTensorType operandType) {
+Attribute createNewSharedEncoding(ttg::BlockedEncodingAttr globalLoadEnc,
+                                  RankedTensorType operandType) {
   auto ctx = operandType.getContext();
   auto dotOperandEnc =
       cast<ttg::DotOperandEncodingAttr>(operandType.getEncoding());
   auto ctaLayout = ttg::getCTALayout(dotOperandEnc);
   auto bitWidth = operandType.getElementTypeBitWidth();
-  SmallVector<unsigned> order{1, 0};
+  auto shape = operandType.getShape();
+  int rank = operandType.getRank();
+  SmallVector<unsigned> order(rank);
+  std::iota(order.rbegin(), order.rend(), 0);
   if (dotOperandEnc.getOpIdx() == 1)
     std::swap(order[0], order[1]);
 
-  auto tempAttr = ttg::SwizzledSharedEncodingAttr::get(
-      ctx, dotOperandEnc, operandType.getShape(), order, ctaLayout, bitWidth,
-      /*needTrans=*/false);
+  int kDimIdx = dotOperandEnc.getOpIdx() == 1 ? rank - 2 : rank - 1;
+  int nonKDimIdx = dotOperandEnc.getOpIdx() == 1 ? rank - 1 : rank - 2;
+  int kDimSize = shape[kDimIdx];
+  int nonKDimSize = shape[nonKDimIdx];
+  // Unit of values below is one byte
+  auto elemWidth = bitWidth / 8;
+  unsigned writeWidth = globalLoadEnc.getSizePerThread()[kDimIdx] * elemWidth;
 
-  auto sharedVec = tempAttr.getVec();
-  auto perPhase = tempAttr.getPerPhase();
-  auto maxPhase = tempAttr.getMaxPhase();
+  SmallVector<unsigned> intervals;
+  SmallVector<unsigned> pads;
 
-  auto newSharedEnc = ttg::AMDRotatingSharedEncodingAttr::get(
-      ctx, sharedVec, perPhase, maxPhase, order, ctaLayout);
+  // Heuristic is based on empirical benchmarking of different padding
+  // combinations for tensor sizes:
+  // (32, 128), (32, 256), (32, 512), (64, 64), (64, 128), (64, 256),
+  // (128, 32), (128, 64), (128, 128), (256, 32), (256, 64)
+  if (writeWidth < 16) {
+    intervals.push_back(kDimSize);
+    pads.push_back(8 / elemWidth);
+
+    intervals.push_back(kDimSize * 16);
+    pads.push_back(std::max(std::min(1024 / nonKDimSize, 16), 8) / elemWidth);
+  } else {
+    intervals.push_back(kDimSize);
+    pads.push_back(16 / elemWidth);
+
+    intervals.push_back(kDimSize * 16);
+    pads.push_back(std::max(1024 / nonKDimSize, 16) / elemWidth);
+  }
+
+  auto newSharedEnc = ttg::PaddedSharedEncodingAttr::get(ctx, intervals, pads,
+                                                         order, ctaLayout);
 
   return newSharedEnc;
 }
@@ -771,8 +796,8 @@ public:
                                                    newBlockedEnc);
 
     LDBG("Adjust shared encoding");
-    auto newSharedEncoding =
-        createNewSharedEncoding(cast<RankedTensorType>(localLoad.getType()));
+    auto newSharedEncoding = createNewSharedEncoding(
+        newBlockedEnc, cast<RankedTensorType>(localLoad.getType()));
     for (auto memVal : pattern.sharedMemVals)
       changeSharedEncoding(rewriter, memVal, newSharedEncoding);
     return success();
