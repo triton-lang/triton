@@ -763,10 +763,7 @@ class tuple_type(base_type):
     def __init__(self, types, fields=None):
         self.types = types
         self.fields = fields or [''] * len(types)
-
-    @property
-    def name(self) -> str:
-        return '[' + ','.join([f"{k}:{v}" for k, v in zip(self.fields, self.types)]) + ']'
+        self.name = '[' + ','.join([f"{k}:{v}" for k, v in zip(self.fields, self.types)]) + ']'
 
     def __str__(self):
         return self.name
