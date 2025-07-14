@@ -32,7 +32,6 @@ include "triton/Dialect/Triton/IR/TritonAttrDefs.td"
 include "triton/Dialect/Triton/IR/TritonInterfaces.td"
 include "triton/Dialect/Triton/IR/TritonOpInterfaces.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUTypes.td"
-include "triton/Dialect/TritonGPU/IR/TritonGPUAttrDefs.td"
 
 include "mlir/IR/EnumAttr.td"
 include "mlir/Dialect/LLVMIR/LLVMOpBase.td"
@@ -551,7 +550,6 @@ def InThreadTransposeOp : TT_AMDGPU_Op<"in_thread_transpose", [Pure]> {
 def LocalLoadPackedTransposedOp : TT_AMDGPU_Op<"local_load_packed_tranposed"> {
     let summary = "Load a transposed packed tensor from shared memory into a distributed tensor";
     let description = [{
-      Load a transposed packed tensor from shared memory into a distributed tensor.
       Requires a M/N packed and M/N contiguous tensor in shared memory and will yield a K packed K contiguous tensor in registers.
       The packing change will change the shape of the tensor by doubling the M/N dimension and halving the K dimension.
       For example if A is 16x64 in shared memory, the result of this operation will be 32x32.
