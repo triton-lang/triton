@@ -214,6 +214,13 @@ unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
     // only scalar requires scratch memory
     // make it explicit for readability
     if (auto tensorTy = dyn_cast<RankedTensorType>(value.getType())) {
+      Value result = op->getResult(0);
+      int numUsers = std::distance(result.use_begin(), result.use_end());
+      if (numUsers == 0) {
+        // we didn't need shared memory to broadcast result of AtomicRMW op if
+        // there is no user for it.
+        return 0;
+      }
       auto shape = tensorTy.getShape();
       int elems = 1;
       for (auto dim_size : shape) {

@@ -1091,66 +1091,62 @@ struct AtomicRMWOpConversion
           retType = valueElemTy;
         }
 
-        auto after_add = ptxBuilderAtomicRMW.launch(rewriter, loc, retType);
-        LinearLayout dstLayout =
-            ttg::toLinearLayout(tensorTy.getShape(), tensorTy.getEncoding());
+        auto after_rmw = ptxBuilderAtomicRMW.launch(rewriter, loc, retType);
+        Value ret = after_rmw;
+        if (op->hasAttr("allocation.offset")) {
+          // If the AtomicRMW has the "allocation.offset", we suppose its
+          // results will be used in later, so we will broadcasting it.
+          LinearLayout dstLayout =
+              ttg::toLinearLayout(tensorTy.getShape(), tensorTy.getEncoding());
 
-        Value smemBase = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo,
-                                                   op.getOperation());
-        auto smemPtrTy = ptr_ty(ctx, 3);
+          Value smemBase = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo,
+                                                     op.getOperation());
+          auto smemPtrTy = ptr_ty(ctx, 3);
 
-        StringAttr kRegister = str_attr("register");
-        StringAttr kLane = str_attr("lane");
-        StringAttr kWarp = str_attr("warp");
-        StringAttr kBlock = str_attr("block");
-        auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
+          StringAttr kRegister = str_attr("register");
+          StringAttr kLane = str_attr("lane");
+          StringAttr kWarp = str_attr("warp");
+          StringAttr kBlock = str_attr("block");
+          auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
 
-        auto smemOffset = applyLinearLayout(loc, rewriter, dstLayout,
-                                            {{kRegister, b.i32_val(0)},
-                                             {kLane, laneId},
-                                             {kWarp, warpId},
-                                             {kBlock, b.i32_val(0)}})[0]
-                              .second;
+          auto smemOffset = applyLinearLayout(loc, rewriter, dstLayout,
+                                              {{kRegister, b.i32_val(0)},
+                                               {kLane, laneId},
+                                               {kWarp, warpId},
+                                               {kBlock, b.i32_val(0)}})[0]
+                                .second;
+
+          auto smemAddr = b.gep(smemPtrTy, retType, smemBase, smemOffset,
+                                LLVM::GEPNoWrapFlags::inbounds);
+          Value vals;
+
+          if (vec > 1) {
+            SmallVector<Value> umpacked_elems =
+                unpackLLElements(loc, after_rmw, rewriter);
+            vals = packLLVector(loc, umpacked_elems, rewriter);
+          } else if (packed > 1) {
+            vals = after_rmw;
+          } else {
+            vals = packLLVector(loc, ArrayRef<Value>(after_rmw), rewriter);
+          }
+
+          targetInfo.storeDShared(rewriter, loc, smemAddr, std::nullopt, vals,
+                                  pred ? pred : b.true_val());
+          b.barrier();
+          ret = targetInfo.loadDShared(rewriter, loc, smemAddr, std::nullopt,
+                                       retType, b.true_val());
+        }
 
         if (vec > 1) {
-          // TODO(Wenqin): try to use packLLVector for pack umpacked_elems and
-          // load it through vectorization.
-          auto umpacked_elems = unpackLLElements(loc, after_add, rewriter);
-          auto vecAddr = b.gep(smemPtrTy, valueElemTy, smemBase, smemOffset,
-                               LLVM::GEPNoWrapFlags::inbounds);
           for (unsigned ii = 0; ii < vec; ++ii) {
-            targetInfo.storeDShared(rewriter, loc, vecAddr, std::nullopt,
-                                    umpacked_elems[ii],
-                                    pred ? pred : b.true_val());
-            b.barrier();
-            Value ret =
-                targetInfo.loadDShared(rewriter, loc, vecAddr, std::nullopt,
-                                       valueElemTy, b.true_val());
-            resultVals[i + ii] = ret;
+            resultVals[i + ii] = b.extract_val(valueElemTy, ret, ii);
           }
-          auto umpacked_elems = unpackLLElements(loc, after_add, rewriter);
         } else if (packed > 1) {
-          auto vecAddr = b.gep(smemPtrTy, packedTy, smemBase, smemOffset,
-                               LLVM::GEPNoWrapFlags::inbounds);
-          targetInfo.storeDShared(rewriter, loc, vecAddr, std::nullopt,
-                                  after_add, pred ? pred : b.true_val());
-          b.barrier();
-          Value ret = targetInfo.loadDShared(
-              rewriter, loc, vecAddr, std::nullopt, packedTy, b.true_val());
           for (unsigned ii = 0; ii < packed; ++ii) {
             resultVals[i + ii] =
                 b.extract_element(valueElemTy, ret, b.i32_val(ii));
           }
         } else {
-          auto vecAddr = b.gep(smemPtrTy, valueElemTy, smemBase, smemOffset,
-                               LLVM::GEPNoWrapFlags::inbounds);
-          Value valsVec =
-              packLLVector(loc, ArrayRef<Value>(after_add), rewriter);
-          targetInfo.storeDShared(rewriter, loc, vecAddr, std::nullopt, valsVec,
-                                  pred ? pred : b.true_val());
-          b.barrier();
-          Value ret = targetInfo.loadDShared(
-              rewriter, loc, vecAddr, std::nullopt, valueElemTy, b.true_val());
           resultVals[i] = ret;
         }
       } else {
