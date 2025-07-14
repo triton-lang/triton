@@ -106,24 +106,18 @@ static int checkDriverVersion(void *lib) {
 }
 
 bool initSymbolTable() {
-  // Use the HIP runtime library loaded into the existing process if it exits.
-  void *lib = dlopen("libamdhip64.so", RTLD_NOLOAD);
-  if (lib) {
-    // printf("[triton] chosen loaded libamdhip64.so in the process\n");
-  }
+  void *lib;
 
-  // Otherwise, go through the list of search paths to dlopen the first HIP
-  // driver library.
-  if (!lib) {
-    int n = sizeof(hipLibSearchPaths) / sizeof(hipLibSearchPaths[0]);
-    for (int i = 0; i < n; ++i) {
-      void *handle = dlopen(hipLibSearchPaths[i], RTLD_LAZY | RTLD_LOCAL);
-      if (handle) {
-        lib = handle;
-        // printf("[triton] chosen %s\n", hipLibSearchPaths[i]);
-      }
+  // Go through the list of search paths to dlopen the first HIP driver library.
+  int n = sizeof(hipLibSearchPaths) / sizeof(hipLibSearchPaths[0]);
+  for (int i = 0; i < n; ++i) {
+    void *handle = dlopen(hipLibSearchPaths[i], RTLD_LAZY | RTLD_LOCAL);
+    if (handle) {
+      lib = handle;
+      // printf("[triton] chosen %s\n", hipLibSearchPaths[i]);
     }
   }
+
   if (!lib) {
     PyErr_SetString(PyExc_RuntimeError, "cannot open libamdhip64.so");
     return false;
