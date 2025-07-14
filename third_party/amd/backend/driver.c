@@ -86,8 +86,6 @@ static int checkDriverVersion(void *lib) {
   (void)hipDriverGetVersion(&hipVersion);
   char msgBuff[HIP_MSG_BUFF_SIZE] = {0};
 
-  HIP_DRIVER_LOG_VERSION(hipVersion, msgBuff);
-
   const int hipMajVersion = HIP_DRIVER_EXTRACT_MAJOR_VERSION(hipVersion);
   if (hipMajVersion < HIP_DRIVER_REQ_MAJOR_VERSION) {
     const int hipMinVersion = HIP_DRIVER_EXTRACT_MIN_VERSION(hipVersion);
@@ -101,6 +99,8 @@ static int checkDriverVersion(void *lib) {
     dlclose(lib);
     return -1;
   }
+
+  HIP_DRIVER_LOG_VERSION(hipVersion, msgBuff);
 
   return hipVersion;
 }
