@@ -326,7 +326,6 @@ class HIPBackend(BaseBackend):
             amd.passes.ttgpuir.lower_instruction_sched_hints(pm, options.arch, options.num_stages)
         amd.passes.ttgpuir.add_builtin_func_to_llvmir(pm, __HIP_FTZ)
         pm.run(mod)
-        # breakpoint()
         return mod
 
     @staticmethod
@@ -348,6 +347,14 @@ class HIPBackend(BaseBackend):
             pm.enable_debug()
             passes.llvmir.add_di_scope(pm)
             pm.run(mod)
+
+        # insert dbg intrinsic with several DI Attribute including source var name and type info
+        if knobs.compilation.dump_ir_extract_di_local_variables:
+            pm = ir.pass_manager(mod.context)
+            pm.enable_debug()
+            passes.llvmir.add_di_local_variable(pm)
+            pm.run(mod)
+
         # LLVM-IR (MLIR) -> LLVM-IR (LLVM)
         llvm.init_targets()
         context = llvm.context()
