@@ -309,10 +309,8 @@ def shared_memory_cast_kernel():
 
     layout_b: ttgl.constexpr = ttgl.NVMMASharedLayout(swizzle_byte_width=64, transposed=False, element_bitwidth=16,
                                                       rank=4, cta_order=[3, 2, 1, 0])
-    layout_reshape: ttgl.constexpr = ttgl.NVMMASharedLayout(swizzle_byte_width=64, transposed=False,
-                                                            element_bitwidth=16, rank=2)
     smem = ttgl.allocate_shared_memory(ttgl.float16, [32, 1, 4, 64], layout_b)
-    smem.reshape((128, 64), layout_reshape)
+    smem.reshape((128, 64))
 
     smem._reinterpret(ttgl.int8, [1024], ttgl.SwizzledSharedLayout(1, 1, 1, [0, 1]))
 
@@ -336,7 +334,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %2 = ttg.memdesc_trans %1 {order = array<i32: 1, 0>} : !ttg.memdesc<256x128xi8, #shared, #smem, mutable, 2x256x128> -> !ttg.memdesc<128x256xi8, #shared1, #smem, mutable, 2x128x256>
     tt.call @"test_frontend.anchor_noinline__MDi8S128_256SLNVMMA_64_8_True_False_NVMMALAS[2, 128, 256]ASMD__"(%2) : (!ttg.memdesc<128x256xi8, #shared1, #smem, mutable, 2x128x256>) -> ()
     %3 = ttg.local_alloc : () -> !ttg.memdesc<32x1x4x64xf16, #shared2, #smem, mutable>
-    %4 = ttg.memdesc_reshape %3 : !ttg.memdesc<32x1x4x64xf16, #shared2, #smem, mutable> -> !ttg.memdesc<128x64xf16, #shared3, #smem, mutable, 32x1x4x64>
+    %4 = ttg.memdesc_reshape %3 : !ttg.memdesc<32x1x4x64xf16, #shared2, #smem, mutable> -> !ttg.memdesc<128x64xf16, #shared3, #smem, mutable>
     %5 = ttg.memdesc_reinterpret %3 : !ttg.memdesc<32x1x4x64xf16, #shared2, #smem, mutable> -> !ttg.memdesc<1024xi8, #shared4, #smem, mutable>
     tt.return
   }
@@ -1233,3 +1231,28 @@ def test_auto_layout():
     z = x + y
     # CHECK: (tensor<16x8xi32, #gluon.auto_encoding>) -> tensor<16xi32, #gluon.auto_encoding
     ttgl.sum(z, axis=1)
+
+    # CHECK: tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #gluon.auto_encoding>
+    ttgl.arange(0, 32)
+
+
+@filecheck_test
+@gluon.jit
+def test_auto_layout_broadcast():
+    # CHECK: [[BLOCKED:#.*]] = #ttg.blocked
+    # CHECK: [[X:%.*]] = arith.constant dense<1> : tensor<16x1xi32, #gluon.auto_encoding>
+    # CHECK: [[Y:%.*]] = arith.constant dense<2> : tensor<1x16xi32, [[BLOCKED]]>
+    x = ttgl.full([16, 1], 1, ttgl.int32, layout=ttgl.AutoLayout())
+    y = ttgl.full([1, 16], 2, ttgl.int32, layout=ttgl.BlockedLayout([1, 1], [1, 32], [4, 1], [1, 0]))
+
+    # CHECK: [[XCVT:%.*]] = ttg.convert_layout [[X]] : tensor<16x1xi32, #gluon.auto_encoding> -> tensor<16x1xi32, [[BLOCKED]]>
+    # CHECK: [[XBCAST:%.*]] = tt.broadcast [[XCVT]]
+    # CHECK: [[YBCAST:%.*]] = tt.broadcast [[Y]]
+    # CHECK: arith.addi [[XBCAST]], [[YBCAST]] : tensor<16x16xi32, [[BLOCKED]]>
+    _ = x + y
+
+    # CHECK: [[XCVT2:%.*]] = ttg.convert_layout [[X]] : tensor<16x1xi32, #gluon.auto_encoding> -> tensor<16x1xi32, [[BLOCKED]]>
+    # CHECK: [[YBCAST2:%.*]] = tt.broadcast [[Y]]
+    # CHECK: [[XBCAST2:%.*]] = tt.broadcast [[XCVT2]]
+    # CHECK: arith.muli [[YBCAST2]], [[XBCAST2]] : tensor<16x16xi32, [[BLOCKED]]>
+    _ = y * x

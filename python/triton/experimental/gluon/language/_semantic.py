@@ -1,4 +1,5 @@
 from typing import Sequence, List, TypeVar, Tuple, Callable
+import math
 from triton.language.semantic import TritonSemantic
 from . import _core as ttgl
 from ._layouts import SliceLayout, AutoLayout
@@ -112,7 +113,14 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         lhs_shape = lhs_ty.get_block_shapes()
         rhs_shape = rhs_ty.get_block_shapes()
         ret_shape = self._broadcast_shapes(lhs_shape, rhs_shape)
-        if lhs_ty.layout != rhs_ty.layout:
+
+        is_lhs_auto = isinstance(lhs_ty.layout, AutoLayout)
+        is_rhs_auto = isinstance(rhs_ty.layout, AutoLayout)
+        if is_lhs_auto and not is_rhs_auto:
+            lhs = self.convert_layout(lhs, rhs_ty.layout)
+        elif is_rhs_auto and not is_lhs_auto:
+            rhs = self.convert_layout(rhs, lhs_ty.layout)
+        elif lhs_ty.layout != rhs_ty.layout:
             raise ValueError(f"Layout mismatch in broadcast: {lhs_ty.layout} vs {rhs_ty.layout}")
 
         lhs = self.broadcast_impl_shape(lhs, ret_shape)
@@ -121,6 +129,8 @@ class GluonSemantic(TritonSemantic[TensorTy]):
 
     def arange(self, start, end, layout):
         shape = [end - start]
+        if layout is None:
+            layout = AutoLayout()
         ret_ty = ttgl.distributed_type(ttgl.int32, shape, layout)
         return super().arange(start, end, ret_ty=ret_ty)
 
@@ -138,7 +148,7 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         scalar = self.make_scalar(value, dtype)
         return self.splat(scalar, shape, layout)
 
-    def convert_layout(self, value, layout, assert_trivial):
+    def convert_layout(self, value, layout, assert_trivial=False):
         ty = value.type
         _check(isinstance(ty, ttgl.distributed_type),
                lambda: f"expected convert_layout input to be a distributed_type but got: {ty!r}")
@@ -204,10 +214,26 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         return ttgl.shared_memory_descriptor(handle, element_ty=mem_desc.dtype, shape=shape,
                                              alloc_shape=new_alloc_shape, layout=layout)
 
-    def memdesc_reshape(self, mem_desc, shape, layout):
-        ty = ttgl.shared_memory_descriptor_type(mem_desc.dtype, shape, layout, mem_desc.type.alloc_shape)
-        handle = self.builder.create_memdesc_reshape(ty.to_ir(self.builder), mem_desc.handle)
-        return ttgl.shared_memory_descriptor(handle, **ty.__dict__)
+    def memdesc_reshape(self, mem_desc, shape):
+        _check(
+            math.prod(shape) == math.prod(mem_desc.shape),
+            lambda: (f"memdesc_reshape total elements mismatch: "
+                     f"{mem_desc.shape} -> {shape}"),
+        )
+
+        handle = self.builder.create_memdesc_reshape(mem_desc.handle, shape)
+        layout = self.builder.get_gluon_layout_from_memdesc(handle)
+        alloc_shape = mem_desc.type.alloc_shape
+        prefix_len = len(alloc_shape) - mem_desc.rank
+        new_alloc_shape = alloc_shape[:prefix_len] + list(shape)
+
+        return ttgl.shared_memory_descriptor(
+            handle,
+            element_ty=mem_desc.dtype,
+            shape=shape,
+            alloc_shape=new_alloc_shape,
+            layout=layout,
+        )
 
     def memdesc_reinterpret(self, mem_desc, dtype, shape, layout):
         ty = ttgl.shared_memory_descriptor_type(dtype, shape, layout, shape)

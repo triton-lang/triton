@@ -96,3 +96,23 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
     tt.return %cvt : tensor<32xi32, #blocked>
   }
 }
+
+
+// -----
+
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+
+module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @infer_make_range() -> tensor<16xi32, #blocked> {
+    // CHECK-DAG: [[BLOCKED:#.*]] = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+    // CHECK: [[CST:%.*]] = arith.constant 0 : i32
+    // CHECK: [[SPLAT: %.*]] = tt.splat [[CST]] : i32 -> tensor<16xi32, [[BLOCKED]]>
+    // CHECK: [[RES:%.*]] = ttg.convert_layout [[RANGE]] : tensor<16xi32, [[BLOCKED]]> -> tensor<16xi32, [[BLOCKED]]>
+    // CHECK: tt.return [[RES]] : tensor<16xi32, [[BLOCKED]]>
+    %cst = arith.constant 0 : i32
+    %0 = tt.splat %cst : i32 -> tensor<16xi32, #gluon.auto_encoding>
+    %cvt = ttg.convert_layout %0 : tensor<16xi32, #gluon.auto_encoding> -> tensor<16xi32, #blocked>
+    tt.return %cvt : tensor<16xi32, #blocked>
+  }
+}

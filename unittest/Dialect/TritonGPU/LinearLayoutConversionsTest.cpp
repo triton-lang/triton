@@ -17,6 +17,15 @@ std::ostream &operator<<(std::ostream &os, StringAttr str) {
 } // namespace mlir
 
 namespace mlir::triton::gpu {
+
+static LinearLayout toLinearLayout(ArrayRef<int64_t> shape, Attribute layout) {
+  if (isa<DistributedEncodingTrait>(layout)) {
+    return toLinearLayout(shape, layout, {});
+  } else {
+    assert(isa<SharedEncodingTrait>(layout));
+    return toLinearLayout(shape, layout, shape);
+  }
+}
 namespace {
 
 class LinearLayoutConversionsTest : public ::testing::Test {

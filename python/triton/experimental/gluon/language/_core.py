@@ -43,6 +43,7 @@ from triton.language.core import (
 )
 
 _IMPORT_FROM_TRITON: List[str] = [
+    "broadcast",
     "expand_dims",
     "inline_asm_elementwise",
     "join",
@@ -292,21 +293,19 @@ class shared_memory_descriptor(base_value):
         return _semantic.memdesc_trans(self, order)
 
     @builtin
-    def reshape(self, shape, layout, _semantic: GluonSemantic) -> shared_memory_descriptor:
+    def reshape(self, shape, _semantic: GluonSemantic) -> shared_memory_descriptor:
         """
         Reshape the shared memory descriptor to a new shape and layout.
 
         Args:
             shape (List[int]): The target shape.
-            layout (SharedLayout): The new layout for the descriptor.
 
         Returns:
             shared_memory_descriptor: Descriptor with the new shape and layout.
         """
         shape = [_unwrap_if_constexpr(s) for s in shape]
-        layout = _unwrap_if_constexpr(layout)
 
-        return _semantic.memdesc_reshape(self, shape, layout)
+        return _semantic.memdesc_reshape(self, shape)
 
     @builtin
     def _reinterpret(self, dtype, shape, layout, _semantic: GluonSemantic = None) -> shared_memory_descriptor:
@@ -341,14 +340,14 @@ for name in _IMPORT_FROM_TRITON:
 
 
 @builtin
-def arange(start, end, layout, _semantic=None):
+def arange(start, end, layout=None, _semantic=None):
     """
     Generate a sequence tensor with values in [start, end) using a specified layout.
 
     Args:
         start (int): Inclusive start of the sequence.
         end (int): Exclusive end of the sequence.
-        layout (DistributedLayout): The layout of the output tensor.
+        layout (DistributedLayout): The layout of the output tensor. Defaults to AutoLayout.
 
     Returns:
         tensor: A 1D tensor containing sequential values.
