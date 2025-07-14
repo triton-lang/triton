@@ -102,6 +102,7 @@ __all__ = [
     "full",
     "convert_layout",
     "allocate_shared_memory",
+    "set_auto_layout",
     "shared_memory_descriptor",
     "warp_specialize",
     *_IMPORT_FROM_TRITON,
@@ -415,6 +416,22 @@ def allocate_shared_memory(element_ty, shape, layout, value=None, _semantic=None
     shape = [_unwrap_if_constexpr(s) for s in shape]
     layout = _unwrap_if_constexpr(layout)
     return _semantic.allocate_shared(element_ty, shape, layout, value)
+
+
+@builtin
+def set_auto_layout(value, layout, _semantic=None):
+    """
+    Set a a tensor with AutoLayout to a concrete layout
+
+    Args:
+        value (tensor): The input tensor.
+        layout (DistribtedLayout): The target layout.
+
+    Returns:
+        tensor: The tensor with the new layout.
+    """
+    layout = _unwrap_if_constexpr(layout)
+    return _semantic.set_auto_layout(value, layout)
 
 
 @builtin
