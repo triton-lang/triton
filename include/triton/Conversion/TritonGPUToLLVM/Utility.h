@@ -624,6 +624,11 @@ inline bool isCanonicalIndex(unsigned index, unsigned freeVarMask) {
 // group code isolated from above by invoking this function.
 void makeAllWarpGroupsIsolatedFromAbove(Operation *op);
 
+/// Emit code conversion llvm code using padded pattern
+Value transferWithinBlockPadding(triton::gpu::ConvertLayoutOp op, Value src,
+                                 const TargetInfoBase &targetInfo,
+                                 const LLVMTypeConverter *typeConverter,
+                                 RewriterBase &rewriter);
 } // namespace mlir
 
 #endif
