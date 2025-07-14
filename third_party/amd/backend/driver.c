@@ -27,6 +27,34 @@ static const char *hipLibSearchPaths[] = {"/*py_libhip_search_path*/"};
   FOR_EACH_ERR_FN(hipFuncGetAttribute, int *, hipFunction_attribute attr,      \
                   hipFunction_t function)
 
+// HIP driver version format: HIP_VERSION_MAJOR * 10000000 + HIP_VERSION_MINOR *
+// 100000 + HIP_VERSION_PATCH.
+#define HIP_DRIVER_EXTRACT_MAJOR_VERSION(version) ((version) / 10000000)
+#define HIP_DRIVER_EXTRACT_MIN_VERSION(version)                                \
+  (((version) % 10000000) / 100000)
+#define HIP_DRIVER_EXTRACT_PATCH_VERSION(version) ((version) % 100000)
+#define HIP_DRIVER_REQ_MAJOR_VERSION (HIP_VERSION_MAJOR)
+
+// #define HIP_DRIVER_DBG_VERSION
+#ifdef HIP_DRIVER_DBG_VERSION
+#define HIP_DRIVER_LOG_VERSION(version, msgBuff)                               \
+  do {                                                                         \
+    snprintf(msgBuff, sizeof(msgBuff), "libamdhip64 version is: %d.%d.%d",     \
+             HIP_DRIVER_EXTRACT_MAJOR_VERSION(version),                        \
+             HIP_DRIVER_EXTRACT_MIN_VERSION(version),                          \
+             HIP_DRIVER_EXTRACT_PATCH_VERSION(version));                       \
+    printf("%s\n", msgBuff);                                                   \
+  } while (0);
+#else
+#define HIP_DRIVER_LOG_VERSION(version, msgBuff)                               \
+  do {                                                                         \
+    (void)msgBuff;                                                             \
+    (void)(version);                                                           \
+  } while (0);
+#endif
+
+#define HIP_MSG_BUFF_SIZE (1024U)
+
 // The HIP symbol table for holding resolved dynamic library symbols.
 struct HIPSymbolTable {
 #define DEFINE_EACH_ERR_FIELD(hipSymbolName, ...)                              \
@@ -38,6 +66,44 @@ struct HIPSymbolTable {
 };
 
 static struct HIPSymbolTable hipSymbolTable;
+
+static int checkDriverVersion(void *lib) {
+  int hipVersion = -1;
+  const char *error = NULL;
+  typedef hipError_t (*hipDriverGetVersion_fn)(int *driverVersion);
+  hipDriverGetVersion_fn hipDriverGetVersion;
+  dlerror(); // Clear existing errors
+  hipDriverGetVersion =
+      (hipDriverGetVersion_fn)dlsym(lib, "hipDriverGetVersion");
+  error = dlerror();
+  if (error) {
+    PyErr_SetString(PyExc_RuntimeError,
+                    "cannot query 'hipDriverGetVersion' from libamdhip64.so");
+    dlclose(lib);
+    return -1;
+  }
+
+  (void)hipDriverGetVersion(&hipVersion);
+  char msgBuff[HIP_MSG_BUFF_SIZE] = {0};
+
+  HIP_DRIVER_LOG_VERSION(hipVersion, msgBuff);
+
+  const int hipMajVersion = HIP_DRIVER_EXTRACT_MAJOR_VERSION(hipVersion);
+  if (hipMajVersion < HIP_DRIVER_REQ_MAJOR_VERSION) {
+    const int hipMinVersion = HIP_DRIVER_EXTRACT_MIN_VERSION(hipVersion);
+    const int hipPatchVersion = HIP_DRIVER_EXTRACT_PATCH_VERSION(hipVersion);
+    snprintf(msgBuff, sizeof(msgBuff),
+             "libamdhip64 version %d.%d.%d is not supported! Required major "
+             "version is >=%d.",
+             hipMajVersion, hipMinVersion, hipPatchVersion,
+             HIP_DRIVER_REQ_MAJOR_VERSION);
+    PyErr_SetString(PyExc_RuntimeError, msgBuff);
+    dlclose(lib);
+    return -1;
+  }
+
+  return hipVersion;
+}
 
 bool initSymbolTable() {
   // Use the HIP runtime library loaded into the existing process if it exits.
@@ -63,12 +129,17 @@ bool initSymbolTable() {
     return false;
   }
 
+  int hipVersion = checkDriverVersion(lib);
+  if (hipVersion == -1)
+    return false;
+
+  const char *error = NULL;
   typedef hipError_t (*hipGetProcAddress_fn)(
       const char *symbol, void **pfn, int hipVersion, uint64_t hipFlags,
       hipDriverProcAddressQueryResult *symbolStatus);
   hipGetProcAddress_fn hipGetProcAddress;
   dlerror(); // Clear existing errors
-  const char *error = NULL;
+
   *(void **)&hipGetProcAddress = dlsym(lib, "hipGetProcAddress");
   error = dlerror();
   if (error) {
@@ -79,7 +150,6 @@ bool initSymbolTable() {
   }
 
   // Resolve all symbols we are interested in.
-  int hipVersion = HIP_VERSION;
   uint64_t hipFlags = 0;
   hipDriverProcAddressQueryResult symbolStatus;
   hipError_t status = hipSuccess;
@@ -106,8 +176,9 @@ static inline void gpuAssert(hipError_t code, const char *file, int line) {
       {
         const char *prefix = "Triton Error [HIP]: ";
         const char *str = hipSymbolTable.hipGetErrorString(code);
-        char err[1024] = {0};
-        snprintf(err, 1024, "%s Code: %d, Messsage: %s", prefix, code, str);
+        char err[HIP_MSG_BUFF_SIZE] = {0};
+        snprintf(err, sizeof(err), "%s Code: %d, Messsage: %s", prefix, code,
+                 str);
         PyGILState_STATE gil_state;
         gil_state = PyGILState_Ensure();
         PyErr_SetString(PyExc_RuntimeError, err);
