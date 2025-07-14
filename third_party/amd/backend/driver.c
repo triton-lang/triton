@@ -30,7 +30,7 @@ static const char *hipLibSearchPaths[] = {"/*py_libhip_search_path*/"};
 // HIP driver version format: HIP_VERSION_MAJOR * 10000000 + HIP_VERSION_MINOR *
 // 100000 + HIP_VERSION_PATCH.
 #define HIP_DRIVER_EXTRACT_MAJOR_VERSION(version) ((version) / 10000000)
-#define HIP_DRIVER_EXTRACT_MIN_VERSION(version)                                \
+#define HIP_DRIVER_EXTRACT_MINOR_VERSION(version)                              \
   (((version) % 10000000) / 100000)
 #define HIP_DRIVER_EXTRACT_PATCH_VERSION(version) ((version) % 100000)
 #define HIP_DRIVER_REQ_MAJOR_VERSION (HIP_VERSION_MAJOR)
@@ -41,7 +41,7 @@ static const char *hipLibSearchPaths[] = {"/*py_libhip_search_path*/"};
   do {                                                                         \
     snprintf(msgBuff, sizeof(msgBuff), "libamdhip64 version is: %d.%d.%d",     \
              HIP_DRIVER_EXTRACT_MAJOR_VERSION(version),                        \
-             HIP_DRIVER_EXTRACT_MIN_VERSION(version),                          \
+             HIP_DRIVER_EXTRACT_MINOR_VERSION(version),                        \
              HIP_DRIVER_EXTRACT_PATCH_VERSION(version));                       \
     printf("%s\n", msgBuff);                                                   \
   } while (0);
@@ -88,7 +88,7 @@ static int checkDriverVersion(void *lib) {
 
   const int hipMajVersion = HIP_DRIVER_EXTRACT_MAJOR_VERSION(hipVersion);
   if (hipMajVersion < HIP_DRIVER_REQ_MAJOR_VERSION) {
-    const int hipMinVersion = HIP_DRIVER_EXTRACT_MIN_VERSION(hipVersion);
+    const int hipMinVersion = HIP_DRIVER_EXTRACT_MINOR_VERSION(hipVersion);
     const int hipPatchVersion = HIP_DRIVER_EXTRACT_PATCH_VERSION(hipVersion);
     snprintf(msgBuff, sizeof(msgBuff),
              "libamdhip64 version %d.%d.%d is not supported! Required major "
