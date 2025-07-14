@@ -126,6 +126,78 @@ tt.func private @experimental_clear_read_barrier(
 // -----
 
 #blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
+// CHECK-LABEL: @experimental_stage_write_for_commit
+// CHECK: st.global
+tt.func private @experimental_stage_write_for_commit(
+  %buf: !ttg.memdesc<32x32xf32, #shared, #smem, mutable>,
+  %buffers: tensor<2xi64, #blocked>,
+  %writeCommits: !tt.ptr<i8>
+) {
+  tti.experimental_stage_write_for_commit %buf {%buffers, %writeCommits(tensor<2xi8, #blocked>)} : !ttg.memdesc<32x32xf32, #shared, #smem, mutable>, tensor<2xi64, #blocked>, !tt.ptr<i8>
+  tt.return
+}
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
+// CHECK-LABEL: @experimental_check_write_commit
+// CHECK: @__assertfail
+tt.func private @experimental_check_write_commit(
+  %buf: !ttg.memdesc<32x32xf32, #shared, #smem, mutable>,
+  %buffers: tensor<2xi64, #blocked>,
+  %writeCommits: !tt.ptr<i8>
+) {
+  tti.experimental_check_write_commit %buf {%buffers, %writeCommits(tensor<2xi8, #blocked>)} : !ttg.memdesc<32x32xf32, #shared, #smem, mutable>, tensor<2xi64, #blocked>, !tt.ptr<i8>
+  tt.return
+}
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
+// CHECK-LABEL: @experimental_commit_writes
+// CHECK: st.global
+tt.func private @experimental_commit_writes(
+  %writeCommits: !tt.ptr<i8>
+) {
+  tti.experimental_commit_writes {%writeCommits(tensor<2xi8, #blocked>)} : !tt.ptr<i8>
+  tt.return
+}
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
+// CHECK-LABEL: @experimental_clear_write_commits
+// CHECK: st.global
+tt.func private @experimental_clear_write_commits(
+  %writeCommits: !tt.ptr<i8>
+) {
+  tti.experimental_clear_write_commits {%writeCommits(tensor<2xi8, #blocked>)}, 42 : !tt.ptr<i8>
+  tt.return
+}
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 
 module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
 // CHECK-LABEL: @experimental_assert_in_thread_any
