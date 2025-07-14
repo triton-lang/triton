@@ -50,9 +50,6 @@ llvm.func @wgmma(%desc: i64, %in: !struct_64xf32) {
   k = 32 : i32
 } : (i64, i64, i1) -> !struct_128xf32
 
-  // CHECK: // wait for regs: $0,$1,$2,{{.*}},$127
-  // CHECK: wgmma.wait_group.sync.aligned 0;
-  %out = nvgpu.wgmma_wait_group %in {pendings = 0 : i32} : !struct_64xf32
   llvm.return
 }
 

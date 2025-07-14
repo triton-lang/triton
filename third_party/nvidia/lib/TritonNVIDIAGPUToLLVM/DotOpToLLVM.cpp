@@ -1,6 +1,7 @@
 #include "PatternTritonGPUOpToLLVM.h"
 #include "Utility.h"
 
+#include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 
 using namespace mlir;
@@ -108,54 +109,12 @@ struct WarpGroupDotWaitOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     auto pendings = op.getPendings();
     Location loc = op.getLoc();
-    if (adaptor.getInputs().size() <= 1) {
-      Value input =
-          adaptor.getInputs().size() == 1 ? adaptor.getInputs()[0] : Value();
-      rewriter.replaceOpWithNewOp<triton::nvgpu::WGMMAWaitGroupOp>(op, input,
-                                                                   pendings);
-      return success();
+    rewriter.create<NVVM::WgmmaWaitGroupSyncOp>(loc, pendings);
+    if (adaptor.getInputs().empty()) {
+      rewriter.eraseOp(op);
+    } else {
+      rewriter.replaceOp(op, adaptor.getInputs());
     }
-    std::vector<Type> types;
-    // Pack the inputs into a single struct.
-    for (Value input : adaptor.getInputs()) {
-      auto structType = dyn_cast<LLVM::LLVMStructType>(input.getType());
-      if (!structType)
-        return failure();
-      for (Type type : structType.getBody())
-        types.push_back(type);
-    }
-    auto packedType =
-        LLVM::LLVMStructType::getLiteral(rewriter.getContext(), types);
-    Value packed = rewriter.create<LLVM::UndefOp>(loc, packedType);
-    unsigned outputStructIndex = 0;
-    for (Value input : adaptor.getInputs()) {
-      auto structType = dyn_cast<LLVM::LLVMStructType>(input.getType());
-      for (unsigned i = 0; i < structType.getBody().size(); ++i) {
-        Value value = rewriter.create<LLVM::ExtractValueOp>(
-            loc, structType.getBody()[i], input, i);
-        packed = rewriter.create<LLVM::InsertValueOp>(
-            loc, packedType, packed, value, outputStructIndex++);
-      }
-    }
-    Value packedOutput =
-        rewriter.create<triton::nvgpu::WGMMAWaitGroupOp>(loc, packed, pendings);
-    // Unpack the output into the original struct types.
-    SmallVector<Value> outputs;
-    outputStructIndex = 0;
-    for (Value input : adaptor.getInputs()) {
-      auto structType = cast<LLVM::LLVMStructType>(input.getType());
-      Value unpacked = rewriter.create<LLVM::UndefOp>(loc, structType);
-      for (unsigned i = 0; i < structType.getBody().size(); ++i) {
-        Value value = rewriter.create<LLVM::ExtractValueOp>(
-            loc, packedType.getBody()[outputStructIndex], packedOutput,
-            outputStructIndex);
-        outputStructIndex++;
-        unpacked = rewriter.create<LLVM::InsertValueOp>(loc, structType,
-                                                        unpacked, value, i);
-      }
-      outputs.push_back(unpacked);
-    }
-    rewriter.replaceOp(op, outputs);
     return success();
   }
 };
