@@ -5999,6 +5999,36 @@ def test_constexpr_if_return(device):
     assert out.item() >= 0
 
 
+def test_constexpr_flattens():
+    assert tl.constexpr(tl.constexpr(5)) == tl.constexpr(5)
+    assert tl.constexpr(tl.constexpr(tl.constexpr(5))) == tl.constexpr(5)
+
+
+@pytest.mark.parametrize("literal, tensor_ty", [(10, tl.int32), (32.1, tl.float32),
+                                                ((5, 6, 7), None),  # tuples can't be lifted to tensors
+                                                ])
+def test_constexpr_assignment(literal, tensor_ty):
+    from triton.language.core import constexpr_type
+
+    @triton.jit
+    def kernel(input_literal: tl.constexpr, tensor_type: tl.constexpr):
+        patched_literal: tl.constexpr = PATCHED
+        # Sanity checks
+        tl.static_assert(patched_literal.type == constexpr_type(PATCHED))
+        tl.static_assert(input_literal.type == constexpr_type(PATCHED))
+
+        assigned_literal: tl.constexpr = input_literal
+        tl.static_assert(assigned_literal.type == constexpr_type(PATCHED))
+        tl.static_assert(assigned_literal == patched_literal)
+
+        if tensor_type is not None:
+            assigned_variable = input_literal
+            tl.static_assert(assigned_variable.type == tensor_type)
+
+    kernel_patched = patch_kernel(kernel, {'PATCHED': f"{literal}"})
+    kernel_patched[(1, )](literal, tensor_ty)
+
+
 @triton.jit
 def return_poison(x):
     a = False
