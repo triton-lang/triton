@@ -67,21 +67,6 @@ Value computeOffset(ConversionPatternRewriter &rewriter, Location loc,
   return b.add(rowOffset, colOffset);
 }
 
-Value computeBasePtr(ConversionPatternRewriter &rewriter, Location loc,
-                     const SharedMemoryObject &smemObj,
-                     ArrayRef<Value> smemStrides) {
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  Value base = smemObj.getBase();
-  Type type = base.getType();
-  Type elemType = smemObj.getBaseElemType();
-  for (int i = 0; i < smemStrides.size(); ++i) {
-    Value offset =
-        b.sub(b.i32_val(0), b.mul(smemObj.getOffsets()[i], smemStrides[i]));
-    base = b.gep(type, elemType, base, offset);
-  }
-  return base;
-}
-
 bool isKContig(llvm::ArrayRef<unsigned> order, int opIdx) {
   auto rank = order.size();
   int kdim = opIdx == 0 ? rank - 1 : rank - 2;

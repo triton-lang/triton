@@ -380,6 +380,8 @@ struct MemDescReshapeOpConversion
     auto srcSmemObj = getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
                                                       llvmElemTy, rewriter);
     SmallVector<Value> offsets = srcSmemObj.getOffsets();
+    // FIXME: This should be done by composing a linear layout with its
+    // reshaped counterpart.
     SmallVector<unsigned> srcShape;
     for (int64_t d : op.getSrc().getType().getShape())
       srcShape.push_back(d);
@@ -480,7 +482,6 @@ struct MemDescSubviewOpConversion
     auto layoutOrder = getOrder(srcTy);
     auto enc = srcTy.getEncoding();
 
-    // newBase = base + offset
     auto smemObj = getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
                                                    llvmElemTy, rewriter);
     SmallVector<Value> opOffsetVals = op.getOffsets();
@@ -488,45 +489,39 @@ struct MemDescSubviewOpConversion
     // Compute total offset
     auto rankReduced = srcTy.getRank() - destTy.getRank();
 
-    Value offset;
-    if (rankReduced || (destTy.getRank() == 1 && destTy.getDimSize(0) == 1)) {
-      auto smemStrides = smemObj.getStrides(srcTy, loc, rewriter);
-      SmallVector<Value> opSmemStrides(smemStrides.end() - opOffsetVals.size(),
-                                       smemStrides.end());
-      // We are splitting the pipelining dimension which may not be a power of 2
-      // so we can't use LinearLayouts
-      offset = dot(rewriter, loc, opOffsetVals, opSmemStrides);
-    } else {
-      auto dimNames = standardOutDimNames(ctx, opOffsetVals.size());
-      SmallVector<std::pair<StringAttr, Value>> logicalOffsets;
-      for (auto [dim, offset] : llvm::zip(dimNames, opOffsetVals)) {
-        logicalOffsets.push_back({dim, offset});
-      }
-      auto ll = toLinearLayout(srcTy);
-      // Checked in the verifier.
-      assert(ll.getInDimSize(str_attr("block")) == 1);
-      auto kOffset = str_attr("offset");
-      ll = ll.reshapeIns({{kOffset, ll.getTotalInDimSize()}});
-      offset = applyLinearLayout(loc, rewriter, ll.invert(), logicalOffsets)[0]
-                   .second;
-    }
-
-    if (auto paddedLayout = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(
-            srcTy.getEncoding())) {
-      // Apply padding based on the computed offset
-      Value padOffset = emitPadding(loc, rewriter, paddedLayout, offset);
-      offset = b.add(offset, padOffset);
-    }
-
-    SmallVector<Value> offsetVals;
-    for (int i = rankReduced; i < opOffsetVals.size(); i++) {
-      offsetVals.push_back(b.add(opOffsetVals[i], smemObj.getOffsets()[i]));
-    }
-
     auto base = smemObj.getBase();
     auto elemPtrTy = base.getType();
-    smemObj = SharedMemoryObject(b.gep(elemPtrTy, llvmElemTy, base, offset),
-                                 llvmElemTy, offsetVals);
+    if (rankReduced || (destTy.getRank() == 1 && destTy.getDimSize(0) == 1)) {
+      // TODO Split into its own op
+      // At the moment we assume this is only used in the context of pipelining
+      // If we want to generalise it, we should use `applyLinearLayout` whenever
+      // all the shapes are powers of 2 and effectively treat it as the other
+      // memdesc_subview
+
+      // We just allow to split along the first dimension in the verifier
+      auto shape = srcTy.getShape().take_back(destTy.getRank());
+      auto stride = product(shape);
+      Value offset = b.mul(opOffsetVals[0], b.i32_val(stride));
+      // Remove the first offset
+      SmallVector<Value> offsetVals;
+      for (auto [oldOff, newOff] :
+           llvm::zip(smemObj.getOffsets(),
+                     ArrayRef<Value>(opOffsetVals).drop_front())) {
+        offsetVals.push_back(b.add(oldOff, newOff));
+      }
+      // Advance the pointer and keep the opOffsets as the new shape
+      smemObj = SharedMemoryObject(b.gep(elemPtrTy, llvmElemTy, base, offset),
+                                   llvmElemTy, offsetVals);
+    } else {
+      // Accumulate the logical offsets
+      SmallVector<Value> offsetVals;
+      for (auto [oldOff, newOff] :
+           llvm::zip(smemObj.getOffsets(), opOffsetVals)) {
+        offsetVals.push_back(b.add(oldOff, newOff));
+      }
+      smemObj = SharedMemoryObject(base, llvmElemTy, offsetVals);
+    }
+
     auto retVal = getStructFromSharedMemoryObject(loc, smemObj, rewriter);
     rewriter.replaceOp(op, retVal);
     return success();
