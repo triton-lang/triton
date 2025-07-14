@@ -404,7 +404,7 @@ public:
       : OpRewritePattern(context, benefit), mfmaVersion(mfmaVersion),
         nonKDim(nonKDim){
     // overwrite kpack to 1 on cdna4
-    kPack = (mfmaVersion == 4) ? 1 : kPack;
+    this->kPack = (mfmaVersion == 4) ? 1 : kPack;
   }
 
   LogicalResult matchAndRewrite(tt::DotOp dotOp,
@@ -585,7 +585,7 @@ public:
       : OpRewritePattern(context, benefit), mfmaVersion(mfmaVersion),
         nonKDim(nonKDim) {
     // overwrite kpack to 1 on cdna4
-    kPack = (mfmaVersion == 4) ? 1 : kPack;
+    this->kPack = (mfmaVersion == 4) ? 1 : kPack;
   }
 
   LogicalResult matchAndRewrite(triton::DotScaledOp dotOp,
