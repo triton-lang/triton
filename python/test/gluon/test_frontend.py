@@ -113,6 +113,8 @@ def shared_memory_kernel(XBLOCK: ttgl.constexpr, YBLOCK: ttgl.constexpr, layout_
                          layout_b: ttgl.constexpr, smem_layout: ttgl.constexpr):
     unused = ttgl.allocate_shared_memory(ttgl.int32, [XBLOCK, YBLOCK], smem_layout)
     a = ttgl.full([XBLOCK, YBLOCK], 0, ttgl.int32, layout_a)
+    tl.static_assert(a.numel == unused.numel)
+    tl.static_assert(unused.numel == XBLOCK * YBLOCK)
     mem = ttgl.allocate_shared_memory(ttgl.int32, a.shape, smem_layout, a)
     b = mem.load(layout_b)  # noqa: F841
     mem.store(a)
@@ -611,7 +613,8 @@ def async_tma_kernel(input_desc, XBLOCK: ttgl.constexpr):
     mbarrier.init(bar, count=1)
 
     tma.async_copy_global_to_shared(input_desc, [0, 0], bar, smem)
-    mbarrier.expect(bar, XBLOCK * XBLOCK * ttgl.float16.primitive_bitwidth // 8)
+    tl.static_assert(input_desc.block_type.nbytes == XBLOCK * XBLOCK * 2)
+    mbarrier.expect(bar, input_desc.block_type.nbytes)
     mbarrier.wait(bar, 0)
 
     mbarrier.invalidate(bar)
