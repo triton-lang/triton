@@ -21,22 +21,6 @@ Effects: `MemoryEffects::Effect{}`
 | `result` | 32-bit signless integer |
 
 
-### `nvgpu.fence_async_shared` (triton::nvgpu::FenceAsyncSharedOp)
-
-Syntax:
-
-```
-operation ::= `nvgpu.fence_async_shared` attr-dict
-```
-
-#### Attributes:
-
-<table>
-<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
-<tr><td><code>bCluster</code></td><td>::mlir::BoolAttr</td><td>bool attribute</td></tr>
-</table>
-
-
 ### `nvgpu.ld_acquire` (triton::nvgpu::LoadAcquireOp)
 
 Syntax:
@@ -69,65 +53,6 @@ Effects: `MemoryEffects::Effect{MemoryEffects::Read on ::mlir::SideEffects::Defa
 | Result | Description |
 | :----: | ----------- |
 | `result` | floating-point or integer |
-
-
-### `nvgpu.ldmatrix` (triton::nvgpu::LoadMatrixOp)
-
-Syntax:
-
-```
-operation ::= `nvgpu.ldmatrix` $addr attr-dict `:` functional-type($addr, $result)
-```
-
-Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
-
-Effects: `MemoryEffects::Effect{MemoryEffects::Read on ::mlir::SideEffects::DefaultResource}`
-
-#### Attributes:
-
-<table>
-<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
-<tr><td><code>trans</code></td><td>::mlir::UnitAttr</td><td>unit attribute</td></tr>
-</table>
-
-#### Operands:
-
-| Operand | Description |
-| :-----: | ----------- |
-| `addr` | LLVM pointer in address space 3 |
-
-#### Results:
-
-| Result | Description |
-| :----: | ----------- |
-| `result` | LLVM structure type or 32-bit signless integer |
-
-
-### `nvgpu.stmatrix` (triton::nvgpu::StoreMatrixOp)
-
-Syntax:
-
-```
-operation ::= `nvgpu.stmatrix` operands attr-dict `:` type(operands)
-```
-
-Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
-
-Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::SideEffects::DefaultResource}`
-
-#### Attributes:
-
-<table>
-<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
-<tr><td><code>trans</code></td><td>::mlir::UnitAttr</td><td>unit attribute</td></tr>
-</table>
-
-#### Operands:
-
-| Operand | Description |
-| :-----: | ----------- |
-| `addr` | LLVM pointer in address space 3 |
-| `vals` | variadic of 32-bit signless integer |
 
 
 ### `nvgpu.tensor_memory_base` (triton::nvgpu::TensorMemoryBaseAddress)
