@@ -496,8 +496,8 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule,
     if (isa<tt::LoadOp, tt::DescriptorLoadOp, tt::DescriptorGatherOp>(op)) {
       int stageDiff = getDefUseStageDiff(&op, forOp, schedule);
       if (stageDiff == 0) {
-        // Don't care about non-pipelined loads. Don't use async loads for
-        // scalar values.
+        // Don't care about non-pipelined loads. Scalar loads will be converted
+        // to tensor loads if they are pipelined.
         continue;
       }
       SharedEncodingTrait sharedEncoding;
