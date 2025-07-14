@@ -23,10 +23,6 @@ namespace triton {
 
 namespace {
 
-const std::string kWgmmaFenceOp = "wgmma.fence.sync.aligned;";
-const std::string kWgmmaCommitGroupOp = "wgmma.commit_group.sync.aligned;";
-const std::string kClusterWaitOp = "barrier.cluster.wait.aligned;";
-const std::string kFenceMbarrierInitOp = "fence.mbarrier_init.release.cluster;";
 const std::string kClusterCtaIdOp = "{\n"
                                     ".reg .u32 a<5>;              \n"
                                     "mov.u32 a0, %cluster_ctaid.x;\n"  // x
@@ -210,19 +206,6 @@ private:
   Constraints inputConstraints;
 };
 
-class FenceAsyncSharedOpPattern
-    : public OpRewritePattern<ttn::FenceAsyncSharedOp> {
-public:
-  using OpRewritePattern<ttn::FenceAsyncSharedOp>::OpRewritePattern;
-
-  LogicalResult matchAndRewrite(ttn::FenceAsyncSharedOp op,
-                                PatternRewriter &rewriter) const override {
-    std::string ptxAsm = op.getBCluster() ? "fence.proxy.async.shared::cluster;"
-                                          : "fence.proxy.async.shared::cta;";
-    return rewriteAsPtxAsm(op, rewriter, std::move(ptxAsm));
-  }
-};
-
 class WarpIdOpPattern : public OpRewritePattern<ttn::WarpIdOp> {
 public:
   using OpRewritePattern<ttn::WarpIdOp>::OpRewritePattern;
@@ -252,157 +235,6 @@ public:
     warpId = LLVM::NVIDIA::shuffleIdx(loc, rewriter, warpId, 0);
     rewriter.replaceOp(op, warpId);
     return success();
-  }
-};
-
-class ClusterArriveOpPattern : public OpRewritePattern<ttn::ClusterArriveOp> {
-public:
-  using OpRewritePattern<ttn::ClusterArriveOp>::OpRewritePattern;
-
-  LogicalResult matchAndRewrite(ttn::ClusterArriveOp op,
-                                PatternRewriter &rewriter) const override {
-    std::string ptxAsm = op.getRelaxed()
-                             ? "barrier.cluster.arrive.relaxed.aligned;"
-                             : "barrier.cluster.arrive.aligned;";
-    return rewriteAsPtxAsm(op, rewriter, std::move(ptxAsm));
-  }
-};
-
-// Base class for Matrix Operation Patterns
-template <typename MatrixOpType, typename ConcreteMatrixOpPattern>
-class MatrixOpPattern : public OpRewritePattern<MatrixOpType> {
-public:
-  using OpRewritePattern<MatrixOpType>::OpRewritePattern;
-
-  LogicalResult matchAndRewrite(MatrixOpType op,
-                                PatternRewriter &rewriter) const override {
-    unsigned vecSize = getVectorSize(op);
-    bool trans = op.getTrans();
-    // Template method for PTX assembly generation
-    std::string ptxAsm =
-        (llvm::Twine(ConcreteMatrixOpPattern::kOpCode) +
-         getPtxModifiers(vecSize, trans) + " " + getOperands(op, vecSize) + ";")
-            .str();
-
-    OperandsAndConstraints operandAndConstraints =
-        getOperandsAndConstraints(op, vecSize);
-    Constraints outputConstraints = getOutputConstraints(op, vecSize);
-
-    return rewriteAsPtxAsm(op, rewriter, ptxAsm, operandAndConstraints,
-                           outputConstraints);
-  }
-
-protected:
-  // Shared helper methods
-  std::string getPtxModifiers(unsigned vecSize, bool trans) const {
-    auto ptxAsmBase = llvm::Twine(".sync.aligned.m8n8");
-    const std::string suffix = trans ? ".trans.shared.b16" : ".shared.b16";
-    switch (vecSize) {
-    case 1:
-      return (ptxAsmBase + ".x1" + suffix).str();
-    case 2:
-      return (ptxAsmBase + ".x2" + suffix).str();
-    case 4:
-      return (ptxAsmBase + ".x4" + suffix).str();
-    default:
-      llvm_unreachable("Invalid vector size");
-    }
-  }
-
-  std::string getPtxRegOperands(unsigned startIdx, unsigned count) const {
-    llvm::SmallString<20> regOperands;
-    llvm::raw_svector_ostream stream(regOperands);
-    stream << "{";
-    for (unsigned i = 0; i < count; i++) {
-      stream << "$" + llvm::utostr(startIdx + i);
-      if (i != count - 1)
-        stream << ", ";
-    }
-    stream << "}";
-    return std::string(regOperands.str());
-  }
-
-  std::string getPtxAddrOperand(unsigned idx) const {
-    return (llvm::Twine("[$") + llvm::utostr(idx) + "]").str();
-  }
-
-  virtual std::string getOperands(MatrixOpType op, unsigned vecSize) const = 0;
-  virtual OperandsAndConstraints
-  getOperandsAndConstraints(MatrixOpType op, unsigned vecSize) const = 0;
-  virtual Constraints getOutputConstraints(MatrixOpType op,
-                                           unsigned vecSize) const = 0;
-  virtual unsigned getVectorSize(MatrixOpType op) const = 0;
-};
-
-// StoreMatrixOp Pattern
-class StoreMatrixOpPattern
-    : public MatrixOpPattern<ttn::StoreMatrixOp, StoreMatrixOpPattern> {
-public:
-  using MatrixOpPattern<ttn::StoreMatrixOp,
-                        StoreMatrixOpPattern>::MatrixOpPattern;
-  static constexpr const char *kOpCode = "stmatrix";
-
-protected:
-  unsigned getVectorSize(ttn::StoreMatrixOp op) const override {
-    return op.getVals().size();
-  }
-
-  std::string getOperands(ttn::StoreMatrixOp op,
-                          unsigned vecSize) const override {
-    return (llvm::Twine(getPtxAddrOperand(0)) + ", " +
-            getPtxRegOperands(1, vecSize))
-        .str();
-  }
-
-  OperandsAndConstraints
-  getOperandsAndConstraints(ttn::StoreMatrixOp op,
-                            unsigned vecSize) const override {
-    OperandsAndConstraints constraints = {{op.getAddr(), "r"}};
-    for (unsigned i = 0; i < vecSize; i++) {
-      constraints.push_back({op.getVals()[i], "r"});
-    }
-    return constraints;
-  }
-
-  Constraints getOutputConstraints(ttn::StoreMatrixOp op,
-                                   unsigned vecSize) const override {
-    return {}; // No output constraints for StoreMatrixOp
-  }
-};
-
-// LoadMatrixOp Pattern
-class LoadMatrixOpPattern
-    : public MatrixOpPattern<ttn::LoadMatrixOp, LoadMatrixOpPattern> {
-public:
-  using MatrixOpPattern<ttn::LoadMatrixOp,
-                        LoadMatrixOpPattern>::MatrixOpPattern;
-  static constexpr const char *kOpCode = "ldmatrix";
-
-protected:
-  unsigned getVectorSize(ttn::LoadMatrixOp op) const override {
-    auto resultType = op.getType();
-    if (auto structTy = dyn_cast<LLVM::LLVMStructType>(resultType)) {
-      return structTy.getBody().size();
-    }
-    return 1;
-  }
-
-  std::string getOperands(ttn::LoadMatrixOp op,
-                          unsigned vecSize) const override {
-    return (llvm::Twine(getPtxRegOperands(0, vecSize)) + ", " +
-            getPtxAddrOperand(vecSize))
-        .str();
-  }
-
-  OperandsAndConstraints
-  getOperandsAndConstraints(ttn::LoadMatrixOp op,
-                            unsigned vecSize) const override {
-    return {{op.getAddr(), "r"}};
-  }
-
-  Constraints getOutputConstraints(ttn::LoadMatrixOp op,
-                                   unsigned vecSize) const override {
-    return Constraints(vecSize, "=r");
   }
 };
 
@@ -788,21 +620,11 @@ public:
     ModuleOp mod = getOperation();
     RewritePatternSet patterns(context);
 
-#define POPULATE_NVGPU_OP(SRC_OP, ASM)                                         \
-  patterns.add<NVGPUOpGenericPattern<SRC_OP>>(context, ASM, Constraints(),     \
-                                              Constraints());
-    POPULATE_NVGPU_OP(ttn::WGMMAFenceOp, kWgmmaFenceOp)
-    POPULATE_NVGPU_OP(ttn::WGMMACommitGroupOp, kWgmmaCommitGroupOp)
-    POPULATE_NVGPU_OP(ttn::ClusterWaitOp, kClusterWaitOp)
-#undef POPULATE_NVGPU_OP
     patterns.add<NVGPUOpGenericPattern<ttn::ClusterCTAIdOp>>(
         context, kClusterCtaIdOp, Constraints({"=r"}), Constraints());
 
-    patterns
-        .add<FenceAsyncSharedOpPattern, LoadMatrixOpPattern,
-             StoreMatrixOpPattern, ClusterArriveOpPattern, WGMMAOpPattern,
-             LoadAcquireOpPattern, WGMMAWaitGroupOpPattern, WarpIdOpPattern>(
-            context);
+    patterns.add<WGMMAOpPattern, LoadAcquireOpPattern, WGMMAWaitGroupOpPattern,
+                 WarpIdOpPattern>(context);
 
     if (applyPatternsGreedily(mod, std::move(patterns)).failed())
       signalPassFailure();

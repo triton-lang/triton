@@ -93,4 +93,49 @@ tt.func public @attention_forward(
   tt.return
 }
 
+// CHECK-LABEL: @mma_operand_view
+tt.func public @mma_operand_view(
+  %Q_shared: !ttg.memdesc<256x64xf16, #shared, #smem>,
+  %K_desc: !tt.tensordesc<tensor<64x64xf16, #shared>>,
+  %V_desc: !tt.tensordesc<tensor<64x64xf16, #shared>>,
+  %qk_scale: f32,
+  %n_tiles: i32
+) {
+  %true = arith.constant true
+  %false = arith.constant false
+  %c0_i32 = arith.constant 0 : i32
+  %c64_i32 = arith.constant 64 : i32
+
+  %neg_inf = arith.constant dense<0xFF800000> : tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
+  %zero = arith.constant dense<0.0> : tensor<256x64xf32, #blocked>
+  %one = arith.constant dense<1.0> : tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
+
+  %QK_tmem, %QK_tok = ttng.tmem_alloc : () -> (!ttg.memdesc<256x64xf32, #tmem_acc, #ttng.tensor_memory, mutable>, !ttg.async.token)
+
+  scf.for %i = %c0_i32 to %n_tiles step %c64_i32 : i32 {
+    %K = tt.descriptor_load %K_desc[%i, %c0_i32] : !tt.tensordesc<tensor<64x64xf16, #shared>> -> tensor<64x64xf16, #load_blocked>
+    // CHECK: [[K_SHARED:%.*]] = ttg.local_alloc {{.*}}partition = 2
+    %K_shared = ttg.local_alloc %K : (tensor<64x64xf16, #load_blocked>) -> !ttg.memdesc<64x64xf16, #shared, #smem>
+
+    // CHECK-DAG: [[TRANS_MMA:%.*]] = ttg.memdesc_trans [[K_SHARED]] {{.*}}partition = 1
+    // CHECK-DAG: [[K_VIEW:%.*]] = ttg.memdesc_subview [[TRANS_MMA]]{{.*}}partition = 1
+    // CHECK-DAG: [[TRANS_USER:%.*]] = ttg.memdesc_trans [[K_SHARED]] {{.*}}partition = 0
+    %K_trans = ttg.memdesc_trans %K_shared {order = array<i32: 1, 0>} : !ttg.memdesc<64x64xf16, #shared, #smem> -> !ttg.memdesc<64x64xf16, #shared_T, #smem>
+    %K_view = ttg.memdesc_subview %K_trans[%c0_i32, %c0_i32] : !ttg.memdesc<64x64xf16, #shared_T, #smem> -> !ttg.memdesc<64x64xf16, #shared_T, #smem>
+
+    // CHECK: ttng.tc_gen5_mma %arg0, [[K_VIEW]]{{.*}}partition = 1
+    %QK_mma_tok = ttng.tc_gen5_mma %Q_shared, %K_view, %QK_tmem[%QK_tok], %false, %true : !ttg.memdesc<256x64xf16, #shared, #smem>, !ttg.memdesc<64x64xf16, #shared_T, #smem>, !ttg.memdesc<256x64xf32, #tmem_acc, #ttng.tensor_memory, mutable>
+
+    // CHECK: local_load [[TRANS_USER]] {{.*}}partition = 0
+    %x = ttg.local_load %K_trans : !ttg.memdesc<64x64xf16, #shared_T, #smem> -> tensor<64x64xf16, #load_blocked>
+
+    // CHECK: tmem_load {{.*}}partition = 0
+    %QK, %QK_load_tok = ttng.tmem_load %QK_tmem[%QK_mma_tok] : !ttg.memdesc<256x64xf32, #tmem_acc, #ttng.tensor_memory, mutable> -> tensor<256x64xf32, #blocked>
+
+    "use"(%x, %QK) : (tensor<64x64xf16, #load_blocked>, tensor<256x64xf32, #blocked>) -> ()
+  } {tt.warp_specialize}
+
+  tt.return
+}
+
 }

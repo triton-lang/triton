@@ -1,5 +1,4 @@
 #include "TargetInfo.h"
-#include "SchedInstructions.h"
 #include "TritonAMDGPUToLLVM/GCNAsmFormat.h"
 #include "TritonAMDGPUToLLVM/TargetUtils.h"
 #include "Utility.h"
@@ -568,12 +567,6 @@ bool TargetInfo::supportVectorizedAtomics() const {
   // Note: not currently tested or used, but AMD generally supports vectorized
   // atomics.
   return true;
-}
-
-void TargetInfo::localStoreOpAnnotation(triton::gpu::LocalStoreOp op,
-                                        size_t localStoreOpCount,
-                                        Type type) const {
-  storeOpSchedAnnotations(op, localStoreOpCount, type);
 }
 
 bool TargetInfo::supportsDirectToLdsLoadBitWidth(int bitWidth) const {

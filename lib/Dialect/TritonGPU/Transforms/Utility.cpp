@@ -636,8 +636,7 @@ bool canFoldIntoConversion(Operation *op, Attribute targetEncoding) {
   if (auto reshape = dyn_cast<triton::ReshapeOp>(op)) {
     auto reshapeDstType = reshape.getType();
     RankedTensorType newDstType =
-        RankedTensorType::get(reshapeDstType.getShape(),
-                              reshapeDstType.getElementType(), targetEncoding);
+        reshapeDstType.cloneWithEncoding(targetEncoding);
     return reshape.getAllowReorder() && !reshape.getEfficientLayout() &&
            !triton::gpu::isExpensiveView(reshape.getSrc().getType(),
                                          newDstType);
@@ -824,8 +823,7 @@ Operation *cloneWithInferType(mlir::OpBuilder &rewriter, Operation *op,
   auto argType = dyn_cast<RankedTensorType>(newOp->getOperand(0).getType());
   if (!origType || !argType)
     return newOp;
-  auto newType = RankedTensorType::get(
-      origType.getShape(), origType.getElementType(), argType.getEncoding());
+  auto newType = origType.cloneWithEncoding(argType.getEncoding());
   newOp->getResult(0).setType(newType);
   auto typeInfer = dyn_cast<InferTypeOpInterface>(newOp);
   if (typeInfer) {
@@ -1467,6 +1465,7 @@ void eraseLoopCarriedValues(scf::ForOp &loop, llvm::BitVector indices) {
 namespace mlir::triton {
 void replaceUsesAndPropagateType(OpBuilder &builder, Operation *oldUse,
                                  Value val) {
+  OpBuilder::InsertionGuard guard(builder);
   SmallVector<Operation *> opsToDelete;
   SmallVector<OpOperand *> operandsToReplace;
 
@@ -1487,7 +1486,6 @@ void replaceUsesAndPropagateType(OpBuilder &builder, Operation *oldUse,
 
     Operation *user = use.getOwner();
     // `subview(old_op)` is replaced by a new `subview(val)`.
-    OpBuilder::InsertionGuard g(builder);
     builder.setInsertionPoint(user);
     Value newVal;
     if (auto subview = dyn_cast<ttg::MemDescSubviewOp>(user)) {
@@ -1502,8 +1500,9 @@ void replaceUsesAndPropagateType(OpBuilder &builder, Operation *oldUse,
       newVal = builder.create<ttg::MemDescTransOp>(trans.getLoc(), val,
                                                    trans.getOrder());
     } else if (auto reshape = dyn_cast<ttg::MemDescReshapeOp>(user)) {
-      newVal = builder.create<ttg::MemDescReshapeOp>(reshape.getLoc(),
-                                                     reshape.getType(), val);
+      auto shape = reshape.getType().getShape();
+      newVal =
+          builder.create<ttg::MemDescReshapeOp>(reshape.getLoc(), val, shape);
     }
     assert(newVal && "unhandled memdesc view");
     newVal.getDefiningOp()->setAttrs(user->getAttrs());

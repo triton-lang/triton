@@ -310,10 +310,11 @@ mlir::triton::getDefiningOpAndDistance(scf::ForOp forOp, Value value) {
 
 int mlir::triton::getCopyVecBytes(RankedTensorType registerTy,
                                   ttg::SharedEncodingTrait sharedEnc) {
-  auto regLayout = triton::gpu::toLinearLayout(registerTy.getShape(),
-                                               registerTy.getEncoding());
-  auto sharedLayout =
-      triton::gpu::toLinearLayout(registerTy.getShape(), sharedEnc);
+  auto shape = registerTy.getShape();
+  auto regLayout =
+      triton::gpu::toLinearLayout(shape, registerTy.getEncoding(), {});
+  // FIXME: Here we should pass a MemDescType instead of a SharedEncodingTrait!!
+  auto sharedLayout = triton::gpu::toLinearLayout(shape, sharedEnc, shape);
   auto regToSharedLayout = regLayout.invertAndCompose(sharedLayout);
   const int vecElems = regToSharedLayout.getNumConsecutiveInOut();
   return vecElems * registerTy.getElementTypeBitWidth() / 8;
