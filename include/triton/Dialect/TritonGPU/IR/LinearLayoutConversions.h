@@ -17,6 +17,8 @@ class SwizzledSharedEncodingAttr;
 class NVMMASharedEncodingAttr;
 class AMDRotatingSharedEncodingAttr;
 class AMDMfmaEncodingAttr;
+class TensorOrMemDesc;
+class MemDescType;
 
 // - BlockedEncodingAttrs have the following input dimensions.
 //
@@ -45,9 +47,11 @@ class AMDMfmaEncodingAttr;
 // elemBitWidth is the bit width of one element in the layout.  This is required
 // to compute the linear layout for MMAv3 (i.e. Hopper) shared layouts (i.e.
 // shared layouts with nvmma_shared layout) but is otherwise unused.
-//
-// Returns std::nullopt if the given layout can't be converted to an LL.
-LinearLayout toLinearLayout(ArrayRef<int64_t> shape, Attribute layout);
+LinearLayout toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
+                            ArrayRef<int64_t> allocationShape);
+LinearLayout toLinearLayout(RankedTensorType type);
+LinearLayout toLinearLayout(MemDescType type);
+LinearLayout toLinearLayout(TensorOrMemDesc type);
 
 // Convert the shared encoding of a tensor with `nvmma_shared` layout to a
 // LinearLayout that maps from a linear shared memory offset to tensor index.

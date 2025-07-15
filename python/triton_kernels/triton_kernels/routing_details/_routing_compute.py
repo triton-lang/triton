@@ -47,12 +47,10 @@ def _keyed_add(x, y):
 
 @triton.jit
 def _routing_compute_indx(pid_m, GatherIndx, ScatterIndx, GateScal, ExptScal, ExptIndx, PartialOffs, stride_pm,
-                          stride_pn, TokensStart, n_tokens_pad, NTokensRaw, BLOCK_M: tl.constexpr,
-                          N_EXPTS_ACT: tl.constexpr):
+                          stride_pn, TokensStart, n_tokens, BLOCK_M: tl.constexpr, N_EXPTS_ACT: tl.constexpr):
 
-    n_tokens = n_tokens_pad
-    if NTokensRaw is not None:
-        n_tokens = tl.load(NTokensRaw)
+    if isinstance(n_tokens, tl.tensor) and n_tokens.dtype.is_ptr():
+        n_tokens = tl.load(n_tokens)
     n_gates = n_tokens * N_EXPTS_ACT
 
     tl.static_assert(N_EXPTS_ACT * BLOCK_M <= 32768)
@@ -85,9 +83,9 @@ def _routing_compute_indx(pid_m, GatherIndx, ScatterIndx, GateScal, ExptScal, Ex
 
 @triton.jit
 def _combined_routing_compute(GatherIndx, ScatterIndx, GateScal, ExptScal, ExptIndx, PartialOffs, stride_pm, stride_pn,
-                              TokensStart, n_tokens_pad, NTokensRaw, BLOCK_M: tl.constexpr, N_EXPTS_ACT: tl.constexpr,
-                              Hist, MDTileStarts, tile_starts_stridem, MDTileInfo, tile_info_stridem,
-                              first_tile_dim_log2, SIZES: tl.constexpr, BLOCK: tl.constexpr, blocks2a):
+                              TokensStart, n_tokens, BLOCK_M: tl.constexpr, N_EXPTS_ACT: tl.constexpr, Hist,
+                              MDTileStarts, tile_starts_stridem, MDTileInfo, tile_info_stridem, first_tile_dim_log2,
+                              SIZES: tl.constexpr, BLOCK: tl.constexpr, blocks2a):
 
     pid = tl.program_id(0)
     if pid < blocks2a:
@@ -96,7 +94,7 @@ def _combined_routing_compute(GatherIndx, ScatterIndx, GateScal, ExptScal, ExptI
     else:
         pid -= blocks2a
         _routing_compute_indx(pid, GatherIndx, ScatterIndx, GateScal, ExptScal, ExptIndx, PartialOffs, stride_pm,
-                              stride_pn, TokensStart, n_tokens_pad, NTokensRaw, BLOCK_M, N_EXPTS_ACT)
+                              stride_pn, TokensStart, n_tokens, BLOCK_M, N_EXPTS_ACT)
 
 
 @triton.jit

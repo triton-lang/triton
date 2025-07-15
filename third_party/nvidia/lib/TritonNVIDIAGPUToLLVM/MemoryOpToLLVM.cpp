@@ -2,6 +2,7 @@
 #include "TargetInfo.h"
 #include "Utility.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
+#include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/IR/PatternMatch.h"
 #include "triton/Analysis/Allocation.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
@@ -33,8 +34,8 @@ LogicalResult lowerLdStMatrix(
   assert(llvmOpCount == nullptr && "NYI");
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto *ctx = tensorTy.getContext();
-  auto regL = toLinearLayout(tensorTy.getShape(), tensorTy.getEncoding());
-  auto memL = toLinearLayout(memDescType.getShape(), memDescType.getEncoding());
+  auto regL = toLinearLayout(tensorTy);
+  auto memL = toLinearLayout(memDescType);
   auto cvt = minimalCvtLayout(memDescType, tensorTy);
 
   auto S = [ctx](StringRef v) { return StringAttr::get(ctx, v); };
@@ -192,6 +193,7 @@ LogicalResult lowerLdStMatrix(
     auto vecAddr = b.gep(smemPtrTy, llvmElemTy, smemBase, offset,
                          LLVM::GEPNoWrapFlags::inbounds);
     Type packedTy = vec_ty(llvmElemTy, 32 / bitwidth);
+    auto layout = transpose ? NVVM::MMALayout::col : NVVM::MMALayout::row;
     if (isStore) {
       // Pack into vector of i32
       SmallVector<Value> inputs;
@@ -203,17 +205,14 @@ LogicalResult lowerLdStMatrix(
         }
         inputs.push_back(b.bitcast(input, i32_ty));
       }
-      rewriter.create<triton::nvgpu::StoreMatrixOp>(loc, vecAddr, inputs,
-                                                    /*needTrans=*/transpose);
+      rewriter.create<NVVM::StMatrixOp>(loc, vecAddr, inputs, layout);
     } else {
       Type matTy = nVecs == 1
                        ? i32_ty
                        : static_cast<Type>(LLVM::LLVMStructType::getLiteral(
                              ctx, SmallVector<Type>(nVecs, i32_ty)));
       auto res =
-          rewriter
-              .create<triton::nvgpu::LoadMatrixOp>(loc, matTy, vecAddr,
-                                                   /*needTrans=*/transpose)
+          rewriter.create<NVVM::LdMatrixOp>(loc, matTy, vecAddr, nVecs, layout)
               .getResult();
       // Extract result into srcVals
       for (int j = 0; j < nVecs; j++) {

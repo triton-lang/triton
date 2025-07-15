@@ -1195,7 +1195,7 @@ struct AsyncCopyGlobalToLocalOpConversion
     }
 
     // Remove broadcasted registers
-    auto srcLayout = ttg::toLinearLayout(srcTy.getShape(), srcTy.getEncoding());
+    auto srcLayout = ttg::toLinearLayout(srcTy);
     auto removeBroadcastSrc = actionRemoveBroadcastedRegs(srcLayout);
     srcLayout = removeBroadcastSrc.apply(srcLayout);
     vals = removeBroadcastSrc.apply(vals);
@@ -1273,8 +1273,7 @@ struct AsyncCopyGlobalToLocalOpConversion
     // %dst
     auto smemObj =
         getSharedMemoryObjectFromStruct(loc, llDst, resElemTy, rewriter);
-    auto smemLayout =
-        ttg::toLinearLayout(dstTy.getShape(), dstTy.getEncoding());
+    auto smemLayout = ttg::toLinearLayout(dstTy);
     auto cvt = srcLayout.invertAndCompose(smemLayout);
     if (!cvt.isTrivialOver({str_attr("block")})) {
       return emitError(loc,
@@ -1384,7 +1383,7 @@ struct AsyncTMACopyGlobalToLocalOpConversion
     int rank = op.getCoord().size();
 
     auto msgToPackedOffset = getMsgToPackedOffsetLayout(smemTy);
-    auto smemLayout = ttg::toLinearLayout(smemTy.getShape(), encoding);
+    auto smemLayout = ttg::toLinearLayout(smemTy);
     auto msgToShared = msgToPackedOffset.invertAndCompose(smemLayout);
     auto msgToOffset = getMsgToUnpackedOffsetLayout(msgToPackedOffset, smemTy);
 
@@ -1477,7 +1476,7 @@ LogicalResult convertTMAStoreLikeOp(Operation *op,
   auto encoding = srcTy.getEncoding();
 
   auto msgToPackedOffset = getMsgToPackedOffsetLayout(srcTy);
-  auto smemLayout = ttg::toLinearLayout(srcTy.getShape(), encoding);
+  auto smemLayout = ttg::toLinearLayout(srcTy);
   auto msgToShared = msgToPackedOffset.invertAndCompose(smemLayout);
   auto msgToOffset = getMsgToUnpackedOffsetLayout(msgToPackedOffset, srcTy);
 
@@ -1582,11 +1581,10 @@ struct AsyncTMAReduceOpConversion
 };
 
 static LinearLayout getUnswizzledLayout(triton::gpu::MemDescType type) {
-  auto encoding = type.getEncoding();
   auto mmaEncoding = dyn_cast<NVMMASharedEncodingAttr>(type.getEncoding());
   if (!mmaEncoding) {
-    assert(isa<ttg::SwizzledSharedEncodingAttr>(encoding));
-    return ttg::toLinearLayout(type.getShape(), encoding);
+    assert(isa<ttg::SwizzledSharedEncodingAttr>(type.getEncoding()));
+    return ttg::toLinearLayout(type);
   }
   return ttg::nvmmaSharedToLinearLayout(
       type.getShape(), cast<NVMMASharedEncodingAttr>(type.getEncoding()),
@@ -1621,9 +1619,7 @@ static LogicalResult iterateGatherScatterIndices(
   // Each warp can issue a distinct `gather4` instruction that loads 4 rows into
   // consecutive shared memory. Thus, the layout of the x offsets must be such
   // that 4 consecutive elements are broadcasted to a warp.
-  RankedTensorType xCoordsTy = xCoords.getType();
-  LinearLayout xCoordsLayout = triton::gpu::toLinearLayout(
-      xCoordsTy.getShape(), xCoordsTy.getEncoding());
+  LinearLayout xCoordsLayout = triton::gpu::toLinearLayout(xCoords.getType());
   if (xCoordsLayout.getInDimSize(kRegister) < 4)
     return op->emitError("must have at least 4 x offsets per warp");
   // Check that the first two bases are [1] and [2].

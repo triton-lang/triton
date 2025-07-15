@@ -355,8 +355,7 @@ public:
     auto mmaEnc = NvidiaMmaEncodingAttr::get(
         oldRetType.getContext(), versionMajor, versionMinor, warpsPerTile,
         CTALayout, instrShape);
-    auto newRetType = RankedTensorType::get(
-        oldRetType.getShape(), oldRetType.getElementType(), mmaEnc);
+    auto newRetType = oldRetType.cloneWithEncoding(mmaEnc);
     // convert accumulator
     auto oldAcc = dotOp.getOperand(2);
     auto newAcc =
@@ -368,8 +367,7 @@ public:
       auto vType = cast<RankedTensorType>(v.getType());
       auto newVEncoding = DotOperandEncodingAttr::get(
           v.getContext(), opIdx, newRetType.getEncoding(), minType);
-      auto newVType = RankedTensorType::get(
-          vType.getShape(), vType.getElementType(), newVEncoding);
+      auto newVType = vType.cloneWithEncoding(newVEncoding);
       return rewriter.create<ConvertLayoutOp>(v.getLoc(), newVType, v);
     };
 
@@ -476,14 +474,11 @@ static Value splitBOperand(Value b, mlir::PatternRewriter &rewriter) {
     if (!tensorType)
       continue;
     Value newOperand = rewriter.create<ConvertLayoutOp>(
-        operand.get().getLoc(),
-        RankedTensorType::get(tensorType.getShape(),
-                              tensorType.getElementType(), newLayout),
+        operand.get().getLoc(), tensorType.cloneWithEncoding(newLayout),
         operand.get());
     loadOp->setOperand(operand.getOperandNumber(), newOperand);
   }
-  loadOp->getResult(0).setType(RankedTensorType::get(
-      bType.getShape(), bType.getElementType(), newLayout));
+  loadOp->getResult(0).setType(bType.cloneWithEncoding(newLayout));
   Value newB = loadOp->getResult(0);
   rewriter.setInsertionPointAfter(loadOp);
   auto cvt = rewriter.create<ConvertLayoutOp>(b.getLoc(), bType, newB);
@@ -549,9 +544,7 @@ public:
         /*mutableMemory=*/true);
     Attribute newDistributedEncoding = nvidia_gpu::getTmemCompatibleLayout(
         instrShape[0], instrShape[1], oldRetType, numWarps);
-    auto newAccType = RankedTensorType::get(oldRetType.getShape(),
-                                            oldRetType.getElementType(),
-                                            newDistributedEncoding);
+    auto newAccType = oldRetType.cloneWithEncoding(newDistributedEncoding);
     Value cvtAcc =
         rewriter.create<ConvertLayoutOp>(loc, newAccType, dotOp.getOperand(2));
     auto tokType = rewriter.getType<AsyncTokenType>();
@@ -704,9 +697,7 @@ public:
         /*mutableMemory=*/true);
     Attribute newDistributedEncoding =
         nvidia_gpu::getTmemCompatibleLayout(m, n, oldRetType, numWarps);
-    auto newAccType = RankedTensorType::get(oldRetType.getShape(),
-                                            oldRetType.getElementType(),
-                                            newDistributedEncoding);
+    auto newAccType = oldRetType.cloneWithEncoding(newDistributedEncoding);
     Value cvtAcc =
         rewriter.create<ConvertLayoutOp>(loc, newAccType, dotOp.getOperand(2));
     auto tokType = rewriter.getType<AsyncTokenType>();
@@ -729,10 +720,10 @@ public:
         /*mutableMemory=*/false);
     Attribute scaleALayout = getTmemScales(oldScaleAType, numWarps);
     Attribute scaleBLayout = getTmemScales(oldScaleBType, numWarps);
-    RankedTensorType newScaleAType = RankedTensorType::get(
-        oldScaleAType.getShape(), oldScaleAType.getElementType(), scaleALayout);
-    RankedTensorType newScaleBType = RankedTensorType::get(
-        oldScaleBType.getShape(), oldScaleBType.getElementType(), scaleBLayout);
+    RankedTensorType newScaleAType =
+        oldScaleAType.cloneWithEncoding(scaleALayout);
+    RankedTensorType newScaleBType =
+        oldScaleBType.cloneWithEncoding(scaleBLayout);
 
     auto lhsScale = addSmemStageToScaleLoad(dotOp.getAScale(), rewriter);
     auto rhsScale = addSmemStageToScaleLoad(dotOp.getBScale(), rewriter);

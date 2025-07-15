@@ -624,6 +624,25 @@ inline bool isCanonicalIndex(unsigned index, unsigned freeVarMask) {
 // group code isolated from above by invoking this function.
 void makeAllWarpGroupsIsolatedFromAbove(Operation *op);
 
+/// Converts ConverLayoutOp to llvm using padded pattern.
+/// This pattern adds unused memory locations after every rows of tensor fastest
+/// changing dimension:
+/// e0 e1 e2 e3 p p \
+/// e4 e5 e6 e7 p p \
+/// ...
+/// e e e e p p
+/// Dimension order is chosen in order to use wide output reads.
+///
+/// \param op operation to convert
+/// \param src llvm structure containing operation input
+/// \param targetInfo
+/// \param typeConverter
+/// \param rewriter
+/// \returns llvm structure containing converted output
+Value transferWithinBlockPadding(triton::gpu::ConvertLayoutOp op, Value src,
+                                 const TargetInfoBase &targetInfo,
+                                 const LLVMTypeConverter *typeConverter,
+                                 RewriterBase &rewriter);
 } // namespace mlir
 
 #endif

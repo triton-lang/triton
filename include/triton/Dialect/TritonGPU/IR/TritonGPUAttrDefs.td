@@ -1109,7 +1109,8 @@ w2 w2 w3 w3
     "unsigned":$MDim,
     "unsigned":$NDim,
     "bool":$isTransposed,
-    "CTALayoutAttr":$CTALayout
+    "CTALayoutAttr":$CTALayout,
+    DefaultValuedParameter<"std::optional<Type>", "FloatType::get($_ctxt, 32)">:$elementType
   );
 
   let builders = [
@@ -1118,9 +1119,11 @@ w2 w2 w3 w3
                      "unsigned":$MDim,
                      "unsigned":$NDim,
                      "bool":$isTransposed,
-                     "CTALayoutAttr":$CTALayout), [{
+                     "CTALayoutAttr":$CTALayout,
+                     "std::optional<Type>":$elementType), [{
       SmallVector<unsigned> tilesPerWarp(warpsPerCTA.size(), 1);
-      return $_get(context, version, warpsPerCTA, tilesPerWarp, MDim, NDim, isTransposed, CTALayout);
+
+      return $_get(context, version, warpsPerCTA, tilesPerWarp, MDim, NDim, isTransposed, CTALayout, elementType);
     }]>
   ];
 

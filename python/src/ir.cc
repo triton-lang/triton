@@ -27,6 +27,7 @@
 #include "mlir/Transforms/LocationSnapshot.h"
 
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Dialect/Gluon/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
@@ -304,7 +305,7 @@ void init_triton_ir(py::module &&m) {
                     math::MathDialect, arith::ArithDialect, scf::SCFDialect,
                     ::mlir::gpu::GPUDialect, cf::ControlFlowDialect,
                     ::mlir::triton::proton::ProtonDialect, LLVM::LLVMDialect,
-                    mlir::ub::UBDialect>();
+                    mlir::ub::UBDialect, mlir::triton::gluon::GluonDialect>();
     mlir::LLVM::registerInlinerInterface(registry);
     registerBuiltinDialectTranslation(registry);
     registerLLVMDialectTranslation(registry);
@@ -349,6 +350,7 @@ void init_triton_ir(py::module &&m) {
       });
 
   py::class_<Value>(m, "value", py::module_local())
+      .def(py::init<>())
       .def("set_attr",
            [](Value &self, std::string &name, Attribute &attr) -> void {
              if (Operation *definingOp = self.getDefiningOp())
@@ -1439,9 +1441,7 @@ void init_triton_ir(py::module &&m) {
                    "shape not supported by cat. Expecting rank-1 inputs");
              std::vector<int64_t> shape{lhsType.getShape()[0] +
                                         rhsType.getShape()[0]};
-             return self.create<CatOp>(
-                 RankedTensorType::get(shape, lhsType.getElementType()), lhs,
-                 rhs);
+             return self.create<CatOp>(lhsType.clone(shape), lhs, rhs);
            })
       .def("create_join",
            [](TritonOpBuilder &self, Value &a, Value &b) -> Value {
@@ -1460,8 +1460,7 @@ void init_triton_ir(py::module &&m) {
            [](TritonOpBuilder &self, Value &arg,
               std::vector<int64_t> &shape) -> Value {
              if (auto argType = dyn_cast<RankedTensorType>(arg.getType()))
-               return self.createOrFold<BroadcastOp>(
-                   RankedTensorType::get(shape, argType.getElementType()), arg);
+               return self.createOrFold<BroadcastOp>(argType.clone(shape), arg);
              throw std::invalid_argument(
                  "arg is not of RankedTensorType, use create_splat");
            })
@@ -1479,8 +1478,7 @@ void init_triton_ir(py::module &&m) {
                Type dstElemType =
                    cast<PointerType>(srcTensorType.getElementType())
                        .getPointeeType();
-               dstType =
-                   RankedTensorType::get(srcTensorType.getShape(), dstElemType);
+               dstType = srcTensorType.clone(dstElemType);
              } else {
                auto ptrType = cast<PointerType>(getElementTypeOrSelf(ptr));
                dstType = ptrType.getPointeeType();
@@ -1497,8 +1495,7 @@ void init_triton_ir(py::module &&m) {
                Type dstElemType =
                    cast<PointerType>(srcTensorType.getElementType())
                        .getPointeeType();
-               dstType =
-                   RankedTensorType::get(srcTensorType.getShape(), dstElemType);
+               dstType = srcTensorType.clone(dstElemType);
              } else {
                auto ptrType = cast<PointerType>(getElementTypeOrSelf(ptr));
                dstType = ptrType.getPointeeType();

@@ -1,14 +1,10 @@
 import triton
 import triton.language as tl
-from triton_kernels.numerics_details.mxfp import (
-    get_scaled_dot_format_string,
-    unswizzle_mx_scale_bw,
-    unswizzle_mxfp4_scale_hopper,
-    unswizzle_mxfp4_value_hopper,
-)
-
+from triton_kernels.tensor_details.layout_details.blackwell_scale import unswizzle_mx_scale_bw
+from triton_kernels.tensor_details.layout_details.hopper_scale import unswizzle_mxfp4_scale_hopper
+from triton_kernels.tensor_details.layout_details.hopper_value import unswizzle_mxfp4_value_hopper
 from triton_kernels.numerics_details.flexpoint import float_to_flex, load_scale
-from ._common import make_matmul_repr, matmul_launch_metadata, swizzle2d, xcd_swizzle
+from ._common import make_matmul_repr, matmul_launch_metadata, swizzle2d, xcd_swizzle, get_scaled_dot_format_string
 
 # fmt: off
 
@@ -38,7 +34,7 @@ def _matmul_ogs(
              XScale,
              W, stride_w_e, stride_w_k, stride_w_n, W_TRANSPOSE: tl.constexpr,
              WScale,
-             MxScale, stride_mx_e, stride_mx_k, stride_mx_n, MX_TRANSPOSE: tl.constexpr,
+             MxScale, stride_mx_e, stride_mx_k, stride_mx_n,
              B, stride_b_e, # Bias
              M, N, K, # shapes
              # expt data
@@ -87,7 +83,7 @@ def _matmul_ogs(
                          "mx_weight_ptr must be uint8")
         tl.static_assert(MxScale.dtype.element_ty == tl.uint8, "mx_scale_ptr must be uint8")
         tl.static_assert(BLOCK_K % MX_PACK_DIVISOR == 0, "BLOCK_K must be a multiple of MX_PACK_DIVISOR")
-        tl.static_assert(SWIZZLE_MX_VALUE == "HOPPER" or SWIZZLE_MX_VALUE is None, "Only Hopper swizzling is supported for values")
+        tl.static_assert(SWIZZLE_MX_VALUE == "HOPPER_VALUE" or SWIZZLE_MX_VALUE is None, "Only Hopper swizzling is supported for values")
     else:
         tl.static_assert(SWIZZLE_MX_VALUE is None)
         tl.static_assert(SWIZZLE_MX_SCALE is None)
@@ -165,7 +161,7 @@ def _matmul_ogs(
 
     # TODO: refactor if/else when triton front end improves
     if is_microscaled_format:
-        if SWIZZLE_MX_VALUE == "HOPPER":
+        if SWIZZLE_MX_VALUE == "HOPPER_VALUE":
             x_type: tl.constexpr = X.dtype.element_ty
             tl.static_assert(x_type == tl.bfloat16 or x_type == tl.float16, "Only bfloat16 or float16 is supported for HOPPER swizzling")
             tl.static_assert(is_mxfp4, "Only mxfp4 is supported for HOPPER swizzling")
@@ -186,13 +182,13 @@ def _matmul_ogs(
 
         MxScale += expt_id * stride_mx_e
 
-        if SWIZZLE_MX_SCALE == "BLACKWELL":
+        if SWIZZLE_MX_SCALE == "BLACKWELL_SCALE":
             tl.static_assert(BLOCK_N % 128 == 0)
             tl.static_assert(MX_SCALE_BLOCK_K % 4 == 0)
             PACKED_MX_BLOCK: tl.constexpr = (MX_SCALE_BLOCK_K // 4) * 32 * 4 * 4
             SCALE_BLOCK_N: tl.constexpr = BLOCK_N // 128
             stride_scale_k: tl.constexpr = 1
-        elif SWIZZLE_MX_SCALE == "HOPPER":
+        elif SWIZZLE_MX_SCALE == "HOPPER_SCALE":
             n_warps: tl.constexpr = tl.extra.cuda.num_warps()
             tl.static_assert(BLOCK_N % (2 * n_warps * 2 * 8) == 0)
             tl.static_assert(MX_SCALE_BLOCK_K % 2 == 0)
@@ -249,23 +245,23 @@ def _matmul_ogs(
                 # Scale of 1 in E8M0 format
                 x_scales = tl.full((BLOCK_M, BLOCK_K // MX_PACK_DIVISOR), 127, dtype=tl.uint8)
 
-            if SWIZZLE_MX_SCALE == "BLACKWELL":
+            if SWIZZLE_MX_SCALE == "BLACKWELL_SCALE":
                 w_scales = unswizzle_mx_scale_bw(tl.load(MxScalePtrs))
-            elif SWIZZLE_MX_SCALE == "HOPPER":
+            elif SWIZZLE_MX_SCALE == "HOPPER_SCALE":
                 # Handshake with the swizzling code
                 tl.static_assert(tl.extra.cuda.num_warps() == 8, "Only 8 warps are supported for Hopper swizzling. Got %d" % tl.extra.cuda.num_warps())
                 w_scales = unswizzle_mxfp4_scale_hopper(tl.load(MxScalePtrs), num_warps=8)
             else:
                 w_scales = tl.load(MxScalePtrs, mask=mask_k_scale[None, :], other=0.0)
 
-            if SWIZZLE_MX_VALUE == "HOPPER":
+            if SWIZZLE_MX_VALUE == "HOPPER_VALUE":
                 # Handshake with the swizzling code
                 w = unswizzle_mxfp4_value_hopper(w, op_idx=1, mma_version=3)
                 mma_version: tl.constexpr = 3 if w.shape[1] >= 64 else 2
                 tl.static_assert(mma_version == 3, "Only mma_version 3 is supported for Hopper swizzling")
 
             acc = tl.dot_scaled(x, x_scales, x_format, w, w_scales, mx_format, acc=acc, fast_math=True)
-            if SWIZZLE_MX_SCALE == "BLACKWELL":
+            if SWIZZLE_MX_SCALE == "BLACKWELL_SCALE":
                 MxScalePtrs += (MX_SCALE_BLOCK_K // 4 * SPLIT_K) * stride_mx_k
             else:
                 MxScalePtrs += (PACKED_MX_BLOCK * SPLIT_K) * stride_mx_k
