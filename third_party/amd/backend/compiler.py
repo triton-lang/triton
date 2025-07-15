@@ -331,16 +331,6 @@ class HIPBackend(BaseBackend):
     @staticmethod
     def make_llir(src, metadata, options):
         mod = src
-        # Important dev note: several methods will step in unknown fault when dumping the IR with Dbg attribute here,
-        #       if add_di_scope is called and DISubprogramAttr was inserted into Location
-        # From the deep core dump message shows "signal SIGSEGV" when calling llvm::DenseMap::count is called when printing the IR's llvm's dbg attribute
-
-        # All those methods works fine when using triton-opt with a new cutomized pass, but failed when using python API
-        # Current example include mod.print(os, flags), mlir::translateModuleToLLVMIR(mod, ctx);
-
-        # The reason is unclear, but we must avoid using print(mod), str(mod) or mod.str() for now;
-        #       mod.dump() is fine since it does not print debug info
-        # Therefore, add_di_scope(pm) was moved after printing to avoid such issue
 
         if not knobs.compilation.disable_line_info:
             pm = ir.pass_manager(mod.context)

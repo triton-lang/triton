@@ -1,4 +1,5 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/Dialect/LLVMIR/LLVMTypes.h"
 #include "mlir/Target/LLVMIR/Export.h"
 #include "mlir/Target/LLVMIR/ModuleTranslation.h"
 #include "mlir/Target/LLVMIR/Dialect/Builtin/BuiltinToLLVMIRTranslation.h"
@@ -45,10 +46,15 @@ struct LLVMDILocalVariablePass : public impl::LLVMDILocalVariableBase<LLVMDILoca
 
       // TODO: Those instantiation using defult is necessary for first viable result, but no meaning for now
       mlir::LLVM::DIFileAttr diFileAttr = LLVM::DIFileAttr::get(context, "<unknown>", "<unknown>");
-      // TODO: getting type info requires improvement on higher level ast walking
-      mlir::LLVM::DITypeAttr diTypeAttr= LLVM::DINullTypeAttr::get(context);
-      mlir::LLVM::DIFlags diFlags = LLVM::DIFlags::Zero;
 
+      // Extracting type info into DITypeAttr
+      mlir::Type resultType = op->getResult(0).getType();
+      if(isa<LLVM::LLVMVoidType>(resultType)){
+        // we cannot allow void type to be noted as data type, otherwise trigger later assertion fault
+        return;
+      }
+      mlir::LLVM::DITypeAttr diTypeAttr = convertType(context, resultType);
+      mlir::LLVM::DIFlags diFlags = LLVM::DIFlags::Zero;
 
       // LLVM Dialect to LLVM translation requires DILocalScope when DILocalVariable is present
       LLVM::DILocalScopeAttr diLocalScopeAttr = dyn_cast<LLVM::DILocalScopeAttr>(diSubprogramAttr);
@@ -67,6 +73,76 @@ struct LLVMDILocalVariablePass : public impl::LLVMDILocalVariableBase<LLVMDILoca
       // create and insert this call-dbg-value intrinsic after the op
       Operation* dbgOp = builder.create<LLVM::DbgValueOp>(childLoc, opResult, diLocalVarAttr, diExprAttr);
     }
+  }
+
+  unsigned calcBitWidth(mlir::Type type){
+    if (type.isInteger()){
+      return type.getIntOrFloatBitWidth();
+    } else if (type.isF32()) {
+      return 32;
+    } else if (type.isF64()) {
+      return 64;
+    } else if (mlir::isa<mlir::VectorType>(type)){
+      auto vectorType = dyn_cast<mlir::VectorType>(type);
+      ::llvm::ArrayRef<int64_t> shape = vectorType.getShape();
+      ::mlir::Type elementType = vectorType.getElementType();
+      ::llvm::ArrayRef<bool> scalableDims = vectorType.getScalableDims();
+      unsigned size = 1;
+      for (auto i: shape){
+        size *= i;
+      }
+      return size * calcBitWidth(elementType);
+    }
+
+    return 0;
+  }
+
+  // Note: mlir does not provided any built-in conversion from mlir::Type to mlir::LLVM::DITypeAttr
+  mlir::LLVM::DITypeAttr convertType(MLIRContext* context, mlir::Type type){
+    if (type.isInteger(1)){
+      return mlir::LLVM::DIBasicTypeAttr::get(context,
+                                          llvm::dwarf::DW_TAG_base_type,
+                                          mlir::StringAttr::get(context, "bool"),
+                                          type.getIntOrFloatBitWidth(),
+                                          llvm::dwarf::DW_ATE_boolean);
+    } if (type.isInteger()){
+      return mlir::LLVM::DIBasicTypeAttr::get(context,
+                                          llvm::dwarf::DW_TAG_base_type,
+                                          mlir::StringAttr::get(context, "int"),
+                                          type.getIntOrFloatBitWidth(),
+                                          llvm::dwarf::DW_ATE_signed);
+    } else if (type.isF16()) {
+      return mlir::LLVM::DIBasicTypeAttr::get(context,
+                                          llvm::dwarf::DW_TAG_base_type,
+                                          mlir::StringAttr::get(context, "half"),
+                                          type.getIntOrFloatBitWidth(),
+                                          llvm::dwarf::DW_ATE_float);
+    } else if (type.isF32()) {
+      return mlir::LLVM::DIBasicTypeAttr::get(context,
+                                          llvm::dwarf::DW_TAG_base_type,
+                                          mlir::StringAttr::get(context, "float"),
+                                          type.getIntOrFloatBitWidth(),
+                                          llvm::dwarf::DW_ATE_float);
+    } else if (type.isF64()) {
+      return mlir::LLVM::DIBasicTypeAttr::get(context,
+                                          llvm::dwarf::DW_TAG_base_type,
+                                          mlir::StringAttr::get(context, "double"),
+                                          type.getIntOrFloatBitWidth(),
+                                          llvm::dwarf::DW_ATE_float);
+    } else if (mlir::isa<mlir::VectorType>(type)){
+      return mlir::LLVM::DIBasicTypeAttr::get(context,
+                                    llvm::dwarf::DW_TAG_base_type,
+                                    mlir::StringAttr::get(context, "vector"),
+                                    calcBitWidth(type),
+                                    llvm::dwarf::DW_ATE_float);
+    }
+
+    return mlir::LLVM::DIBasicTypeAttr::get(context,
+                                            llvm::dwarf::DW_TAG_base_type,
+                                            mlir::StringAttr::get(context, "unknown_type"),
+                                            0,
+                                            llvm::dwarf::DW_ATE_signed);
+
   }
 
   /// Attempt to extract a filename for the given loc.
@@ -132,7 +208,7 @@ struct LLVMDILocalVariablePass : public impl::LLVMDILocalVariableBase<LLVMDILoca
         compileUnitAttr = LLVM::DICompileUnitAttr::get(
             distinctId, llvm::dwarf::DW_LANG_C, fileAttr,
             StringAttr::get(context, "triton"),
-            /*isOptimized=*/true, LLVM::DIEmissionKind::LineTablesOnly);
+            /*isOptimized=*/true, LLVM::DIEmissionKind::Full);
       }
       subprogramFlags = subprogramFlags | LLVM::DISubprogramFlags::Definition;
     } else {
