@@ -145,8 +145,13 @@ def NVWS_WarpGroupYieldOp : NVWS_Op<"warp_group.yield", [
   Pure, Terminator, ReturnLike, HasParent<"WarpGroupOp">,
   DeclareOpInterfaceMethods<RegionBranchTerminatorOpInterface>
 ]> {
-  let summary = "yield from the default region of `ttg.warp_specialize`";
+  let summary = "yield from the first region of `nvws.warp_group`";
   let description = [{
+    This op is equivalent to ttg.warp_yield op for ttg.warp_specialize op.
+
+    TODO: Decide if we should move nvws.warp_group to TritonGPU, or continue to
+    have TritonGPU depend on NVWS. In the former case, this op can be removed.
+    The latter one involves a circular dependency between TritonGPU and NVWS.
   }];
 
   let arguments = (ins Variadic<AnyType>:$values);
