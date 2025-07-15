@@ -24,11 +24,9 @@ namespace {
 struct WarpGroupBuilder : public OpBuilder {
   using OpBuilder::OpBuilder;
 
-  static WarpGroupBuilder atBlockEnd(Block *block, size_t partitionId) {
-    WarpGroupBuilder builder(block, block->end(), nullptr);
-    builder.partitionId = partitionId;
-    return builder;
-  }
+  WarpGroupBuilder(Block *block, Block::iterator insertPoint,
+                   size_t partitionId)
+      : OpBuilder(block, insertPoint), partitionId(partitionId) {}
 
   IRMapping mapping;
   size_t partitionId;
@@ -410,8 +408,8 @@ LogicalResult triton::gpu::partitionLoop(scf::ForOp loop) {
   SmallVector<WarpGroupBuilder> builders;
   for (Region &region : wgOp.getPartitionRegions()) {
     auto partitionId = builders.size();
-    builders.push_back(
-        WarpGroupBuilder::atBlockEnd(&region.emplaceBlock(), partitionId));
+    auto &block = region.emplaceBlock();
+    builders.push_back(WarpGroupBuilder(&block, block.end(), partitionId));
   }
 
   cloneForOp(loop, builders, schedule);
