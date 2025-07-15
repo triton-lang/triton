@@ -36,9 +36,20 @@ struct WarpGroupBuilder : public OpBuilder {
 
 // This is computed per loop and partition
 enum class LoopVarCategory {
+  // The given loop variable is not used by the given partition. For example,
+  // the use-D flag for MMA is only used by the MMA partition.
   Unused,
+  // The given loop variable is used by the given partition. For example, a loop
+  // index might be used to compute a relevant stage or phase value for the
+  // given partition.
   Used,
-  // This is only relevant for the default partition.
+  // The results of warp_group op are defined to be those of the first
+  // partition. If the  original loop results include a tensor which is computed
+  // only by a non-default partition, such tensor cannot be returned from the
+  // first partition. The corresponding loop variable falls into this category.
+  // Recognizing this category is necessary for the first partition. For other
+  // partitions, some loop variables might be assigned this category, but that
+  // information is not used.
   TensorResultFromOtherPartition,
 };
 
