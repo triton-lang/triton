@@ -7,12 +7,14 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
 #include "triton/Dialect/TritonInstrument/IR/Utility.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
 namespace {
 
 namespace tt = mlir::triton;
 namespace ttg = tt::gpu;
 namespace tti = mlir::triton::instrument;
+namespace ttng = mlir::triton::nvidia_gpu;
 
 ////////////////////////////////////////////
 // Utility functions
@@ -39,6 +41,12 @@ Value createCmpIntTensorScalar(
 Value createMemDescToI64(RewriterBase &rewriter, Location loc,
                          const LLVMTypeConverter *typeConverter,
                          ttg::MemDescType memDescTy, Value sharedMemStruct) {
+  if (isa<ttng::TensorMemoryEncodingAttr>(memDescTy.getEncoding())) {
+    TritonLLVMOpBuilder b(loc, rewriter);
+    return b.ptrtoint(rewriter.getIntegerType(64), sharedMemStruct);
+  }
+  assert(isa<ttg::SharedEncodingTrait>(memDescTy.getEncoding()) &&
+         "Unsupported memory encoding");
   Type srcElemTy = typeConverter->convertType(memDescTy.getElementType());
   int elemSize = srcElemTy.getIntOrFloatBitWidth() / 8;
   auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, sharedMemStruct,
