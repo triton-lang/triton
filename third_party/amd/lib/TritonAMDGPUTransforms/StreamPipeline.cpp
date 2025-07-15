@@ -1,7 +1,6 @@
 #include "TritonAMDGPUTransforms/Passes.h"
 #include "amd/lib/TritonAMDGPUToLLVM/TargetInfo.h"
 #include "third_party/amd/include/Analysis/AxisInfoExt.h"
-#include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Dialect/Triton/IR/OpInterfaces.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
@@ -366,7 +365,7 @@ void createAndScheduleStreamCopy(tt::LoadOp loadOp, Value alloc,
 // with which dot operand |inputValue| is fed into if possible.
 static ttg::AMDMfmaEncodingAttr getDotEncoding(Value inputValue,
                                                unsigned *opIdx) {
-  if (!llvm::hasSingleElement(inputValue.getUses()))
+  if (!inputValue.hasOneUse())
     return nullptr;
 
   Operation *user = *inputValue.getUsers().begin();
@@ -524,8 +523,6 @@ SmallVector<std::pair<Operation *, Value>> createAndScheduleStreamOps(
     const int &numBuffers, bool useAsyncCopy, tt::CoarseSchedule &schedule,
     const StreamStages &stages, const StreamClusters &clusters,
     tt::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
-  Attribute sharedMemorySpace =
-      ttg::SharedMemorySpaceAttr::get(forOp.getContext());
   SmallVector<std::pair<Operation *, Value>> loadToAllocs;
   for (auto &[loadOp, info] : loadToInfo) {
     if (!info.sharedEncoding)
