@@ -26,6 +26,7 @@
 #include "mlir/IR/AttrTypeSubElements.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/ImplicitLocOpBuilder.h"
 #include "mlir/IR/Location.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Value.h"
@@ -65,20 +66,6 @@ struct ArefValue {
   int depth;
   SmallVector<Value> buffers;
 };
-
-MemDescType getBarrierMemDesc(PatternRewriter &rewriter,
-                              llvm::ArrayRef<int64_t> shape) {
-  auto ctx = rewriter.getContext();
-  Attribute sharedMemorySpace = triton::gpu::SharedMemorySpaceAttr::get(ctx);
-  auto barrierCTALayout = CTALayoutAttr::get(
-      /*context=*/ctx, /*CTAsPerCGA=*/{1},
-      /*CTASplitNum=*/{1}, /*CTAOrder=*/{0});
-  auto barrierEncoding =
-      SwizzledSharedEncodingAttr::get(ctx, 1, 1, 1, {0}, barrierCTALayout);
-  return MemDescType::get(shape, rewriter.getI64Type(), barrierEncoding,
-                          sharedMemorySpace,
-                          /*mutableMemory=*/true);
-}
 
 Value getEmptyBarrier(PatternRewriter &rewriter, Location loc, ArefValue aref,
                       Value arefIdx) {
@@ -189,12 +176,9 @@ ArefValue createAndInitMbar(ArefCreateOp op, PatternRewriter &rewriter) {
   auto shape = arefBufTypes[0].getShape();
   auto depth = shape[0];
 
-  MemDescType barrierMemDescType = getBarrierMemDesc(rewriter, {depth});
-  // Create two mbarriers
-  auto emptyMbars =
-      rewriter.create<LocalAllocOp>(loc, barrierMemDescType, Value());
-  auto fullMbars =
-      rewriter.create<LocalAllocOp>(loc, barrierMemDescType, Value());
+  ImplicitLocOpBuilder builder(op.getLoc(), rewriter);
+  auto emptyMbars = createScalarAlloc(builder, rewriter.getI64Type(), depth);
+  auto fullMbars = createScalarAlloc(builder, rewriter.getI64Type(), depth);
   auto lb = rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
   auto ub = rewriter.create<arith::ConstantIntOp>(loc, depth, 32);
   auto step = rewriter.create<arith::ConstantIntOp>(loc, 1, 32);
