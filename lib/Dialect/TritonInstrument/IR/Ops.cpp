@@ -4,6 +4,8 @@
 #define GET_OP_CLASSES
 #include "triton/Dialect/TritonInstrument/IR/Ops.cpp.inc"
 
+#include "triton/Dialect/TritonInstrument/IR/OpsEnums.cpp.inc"
+
 using namespace mlir;
 namespace {
 // readBars should have encoding that ensures that all its elements reside
