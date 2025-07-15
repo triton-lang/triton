@@ -1532,7 +1532,7 @@ void replaceUsesAndPropagateType(OpBuilder &builder, Operation *oldUse,
     op->erase();
 }
 
-std::optional<ttg::LocalLoadOp>
+ttg::LocalLoadOp
 replaceUsesWithLocalLoad(OpBuilder &builder, OpResult old,
                          TypedValue<ttg::MemDescType> alloc,
                          TypedValue<ttg::AsyncTokenType> token) {
@@ -1550,13 +1550,13 @@ replaceUsesWithLocalLoad(OpBuilder &builder, OpResult old,
 
   // If there are some uses that were not local_allocs, we need to create a
   // local_load for them.
-  std::optional<ttg::LocalLoadOp> maybeLocalLoad;
+  ttg::LocalLoadOp maybeLocalLoad;
   if (std::distance(old.getUsers().begin(), old.getUsers().end()) >
       allocsToErase.size()) {
     auto loc = old.getOwner()->getLoc();
     maybeLocalLoad = builder.template create<ttg::LocalLoadOp>(
         loc, old.getType(), alloc, token);
-    old.replaceAllUsesWith(maybeLocalLoad->getResult());
+    old.replaceAllUsesWith(maybeLocalLoad);
   }
   for (auto alloc : allocsToErase) {
     alloc.erase();

@@ -230,7 +230,7 @@ struct AsyncCopyChainOps {
   ttg::AsyncCopyGlobalToLocalOp copyOp;
   ttg::AsyncCommitGroupOp commitOp;
   ttg::AsyncWaitOp waitOp;
-  std::optional<ttg::LocalLoadOp> maybeLocalLoadOp;
+  ttg::LocalLoadOp maybeLocalLoadOp;
 };
 
 AsyncCopyChainOps createAsyncCopy(tt::LoadOp loadOp, Value alloc,
@@ -293,8 +293,8 @@ void scheduleAsyncCopy(const AsyncCopyChainOps &asyncOps, tt::LoadOp loadOp,
     schedule.insert(waitOp, stages[SCHED_ASYNC_WAIT],
                     clusters[SCHED_ASYNC_WAIT]);
 
-  if (maybeLocalLoadOp.has_value())
-    scheduleLocalLoad(*maybeLocalLoadOp, schedule, stages, clusters);
+  if (maybeLocalLoadOp)
+    scheduleLocalLoad(maybeLocalLoadOp, schedule, stages, clusters);
 }
 
 void createAndScheduleAsyncCopy(tt::LoadOp loadOp, Value alloc,
@@ -313,7 +313,7 @@ struct StreamCopyChainOps {
   tt::LoadOp loadOp;
   ttg::MemDescSubviewOp subviewOp;
   ttg::LocalStoreOp localStoreOp;
-  std::optional<ttg::LocalLoadOp> maybeLocalLoadOp;
+  ttg::LocalLoadOp maybeLocalLoadOp;
 };
 
 StreamCopyChainOps createStreamCopy(tt::LoadOp loadOp, Value alloc,
@@ -345,8 +345,8 @@ void scheduleStreamCopy(const StreamCopyChainOps &streamOps,
                   clusters[SCHED_LOCAL_STORE]);
   schedule.insert(localStoreOp, stages[SCHED_LOCAL_STORE],
                   clusters[SCHED_LOCAL_STORE]);
-  if (maybeLocalLoadOp.has_value())
-    scheduleLocalLoad(*maybeLocalLoadOp, schedule, stages, clusters);
+  if (maybeLocalLoadOp)
+    scheduleLocalLoad(maybeLocalLoadOp, schedule, stages, clusters);
 }
 
 void createAndScheduleStreamCopy(tt::LoadOp loadOp, Value alloc,
