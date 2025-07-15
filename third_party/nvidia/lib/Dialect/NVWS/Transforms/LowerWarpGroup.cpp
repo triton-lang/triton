@@ -114,6 +114,8 @@ class LowerWarpGroup : public OpRewritePattern<WarpGroupOp> {
 
     while (!que.empty()) {
       Value capture = que.front();
+      // Rematerialize constants and also pure tensor ops to get around the
+      // restriction below on capturing tensors.
       Operation *defOp = capture.getDefiningOp();
       if (!isa<BlockArgument>(capture) && defOp && isPure(defOp) &&
           (defOp->hasTrait<OpTrait::ConstantLike>() ||

@@ -90,9 +90,8 @@ SmallVector<LoopVarCategory> classifyLoopVars(scf::ForOp loop,
   return categories;
 }
 
-auto getLoopVarIndicesToKeep(
-    scf::ForOp loop, const Partition *partition,
-    ArrayRef<LoopVarCategory> loopVarCategories) {
+auto getLoopVarIndicesToKeep(scf::ForOp loop, const Partition *partition,
+                             ArrayRef<LoopVarCategory> loopVarCategories) {
   SmallVector<size_t> indices;
   SmallVector<int> reverseIndices(loop.getNumRegionIterArgs(), -1);
   for (auto [i, arg] : llvm::enumerate(loop.getRegionIterArgs())) {
@@ -117,11 +116,17 @@ auto getLoopVarIndicesToKeep(scf::ForOp loop, const Partition *partition,
 }
 
 const Partition *getPartition(Operation *op, const WarpSchedule &schedule) {
+  auto origOp = op;
   while (op && !schedule.getPartition(op)) {
     op = op->getParentOp();
   }
   if (op) {
     return schedule.getPartition(op);
+  }
+
+  // Some yield ops, e.g. automatically added one, might not have a partition
+  if (!isa<scf::YieldOp>(origOp)) {
+    llvm_unreachable("No partition is found for an op.");
   }
   return nullptr;
 }
@@ -310,8 +315,6 @@ void cloneOpsInBlock(Block *block, SmallVector<WarpGroupBuilder> &builders,
         }
       }
     } else {
-      assert(partition);
-
       if (op->getNumRegions() != 0) {
         llvm::report_fatal_error(
             "Ops are expected to be regionless at this point.");
