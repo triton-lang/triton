@@ -69,32 +69,24 @@ struct ArefValue {
 
 Value getEmptyBarrier(PatternRewriter &rewriter, Location loc, ArefValue aref,
                       Value arefIdx) {
-  // stage= arefIdx % depth
-  Value stage;
-  auto remsi = rewriter.create<arith::RemSIOp>(
+  // stage = arefIdx % depth
+  Value stage = rewriter.create<arith::RemSIOp>(
       loc, arefIdx, rewriter.create<arith::ConstantIntOp>(loc, aref.depth, 32));
-  stage = remsi;
 
   return createSingleBufferView(rewriter, aref.emptyMbars, stage);
 }
 
 Value getFullBarrier(PatternRewriter &rewriter, Location loc, ArefValue aref,
                      Value arefIdx) {
-  Value stage;
-  auto remsi = rewriter.create<arith::RemSIOp>(
+  Value stage = rewriter.create<arith::RemSIOp>(
       loc, arefIdx, rewriter.create<arith::ConstantIntOp>(loc, aref.depth, 32));
-  stage = remsi;
   return createSingleBufferView(rewriter, aref.fullMbars, stage);
 }
 
 std::pair<WarpGroupOp, int> getWarpGroupIdx(Operation *op) {
   if (auto wgOp = dyn_cast<WarpGroupOp>(op->getParentOp())) {
     auto region = op->getParentRegion();
-    for (auto [idx, r] : llvm::enumerate(wgOp.getPartitionRegions())) {
-      if (&r == region)
-        return {wgOp, idx};
-    }
-    llvm_unreachable("op is not in any warp-group region");
+    return {wgOp, region->getRegionNumber()};
   }
   if (isa<triton::FuncOp>(op))
     return {nullptr, -1};
@@ -289,9 +281,8 @@ void waitOnBarrier(PatternRewriter &rewriter, Location loc, Value mbar,
 Value getStage(PatternRewriter &rewriter, Location loc, Value index, int depth,
                std::string attrName) {
   // stage = index % depth
-  Operation *stage = rewriter.create<arith::RemSIOp>(
+  return rewriter.create<arith::RemSIOp>(
       loc, index, rewriter.create<arith::ConstantIntOp>(loc, depth, 32));
-  return stage->getResult(0);
 }
 
 LogicalResult rewritePutEnterOp(ArefCreateOp arefOp, ArefPutEnterOp op,
