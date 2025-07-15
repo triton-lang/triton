@@ -1206,9 +1206,7 @@ Value SharedMemoryObject::getShmemOffset(Location loc, RewriterBase &rewriter,
     logicalOffsets.push_back({dim, offset});
   }
 
-  auto allocShape = srcTy.getAllocShape();
-  LinearLayout ll =
-      triton::gpu::toLinearLayout(allocShape, srcTy.getEncoding(), allocShape);
+  LinearLayout ll = triton::gpu::toLinearLayout(srcTy);
   ll = ll.sublayout({str_attr("offset")}, dimNames);
   auto offset =
       applyLinearLayout(loc, rewriter, ll.invert(), logicalOffsets)[0].second;
