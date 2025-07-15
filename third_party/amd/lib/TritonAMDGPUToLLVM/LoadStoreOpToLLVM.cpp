@@ -1535,15 +1535,18 @@ struct AtomicRMWOpConversion
                                       b.i32_val(ii));
           valElement = vecVal;
         }
+
         // If we have a single tl.atomic_rmw that is lowered into multiple
-        // llvm.atomic_rmw, and we set the ordering for each to aql_rel the llvm
-        // backend will insert extra buffer invalidates and L2 write backs
-        // causing a perforance degration. To avoid this we set the ordering to
-        // release for the first, acquire for the last, and relaxed for anything
-        // in between so that only a single set of buffer_inv and buffer_wbl2
-        // instructions are inserted by the backend for any "cluster" of atomic
-        // ops.
-        if (vec > 1 && op.getSem() == MemSemantic::ACQUIRE_RELEASE) {
+        // llvm.atomic_rmw, and we set the ordering for each to aql_rel (the
+        // default if no sem value is explicitly set in the DSL level
+        // tl.atomic_add. The llvm backend will insert extra buffer invalidates
+        // and L2 write backs causing a perforance degration. To avoid this we
+        // set the ordering to release for the first, acquire for the last, and
+        // relaxed for anything in between so that only a single set of
+        // buffer_inv and buffer_wbl2 instructions are inserted by the backend
+        // for any "cluster" of atomic ops.
+        if ((vec > 1 || elemsPerThread > 1) &&
+            op.getSem() == MemSemantic::ACQUIRE_RELEASE) {
           if (i == 0) {
             // First
             emitter.setAtomicOrdering(LLVM::AtomicOrdering::release);
