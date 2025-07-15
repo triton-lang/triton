@@ -22,8 +22,6 @@ using namespace triton::gpu;
 namespace {
 
 struct WarpGroupBuilder : public OpBuilder {
-  using OpBuilder::OpBuilder;
-
   WarpGroupBuilder(Block *block, Block::iterator insertPoint,
                    size_t partitionId)
       : OpBuilder(block, insertPoint), partitionId(partitionId) {}
@@ -35,16 +33,18 @@ struct WarpGroupBuilder : public OpBuilder {
 // This is computed per loop and partition
 enum class LoopVarCategory {
   // The given loop variable is not used by the given partition. For example,
-  // the use-D flag for MMA is only used by the MMA partition.
+  // the use-D flag for MMA is only used by the MMA partition, and thus
+  // is `Unused` for any other partition.
   Unused,
   // The given loop variable is used by the given partition. For example, a loop
   // index might be used to compute a relevant stage or phase value for the
   // given partition.
   Used,
   // The results of warp_group op are defined to be those of the first
-  // partition. If the  original loop results include a tensor which is computed
+  // partition. If the original loop results include a tensor which is computed
   // only by a non-default partition, such tensor cannot be returned from the
-  // first partition. The corresponding loop variable falls into this category.
+  // first partition and and must be passed through shared memory. The
+  // corresponding loop variable falls into this category.
   // Recognizing this category is necessary for the first partition. For other
   // partitions, some loop variables might be assigned this category, but that
   // information is not used.
@@ -99,13 +99,14 @@ SmallVector<LoopVarCategory> classifyLoopVars(scf::ForOp loop,
   return categories;
 }
 
-std::pair<SmallVector<size_t>, SmallVector<int>>
+std::pair<SmallVector<size_t>, SmallVector<std::optional<size_t>>>
 getLoopVarIndicesToKeep(scf::ForOp loop, const Partition *partition,
                         ArrayRef<LoopVarCategory> loopVarCategories) {
   SmallVector<size_t> indices;
-  // The index -1 means an invalid index, the corresponding loop variable in the
-  // original loop is removed in the cloned loop
-  SmallVector<int> reverseIndices(loop.getNumRegionIterArgs(), -1);
+  // The null index means an invalid index, the corresponding loop variable in
+  // the original loop is removed in the cloned loop
+  SmallVector<std::optional<size_t>> reverseIndices(loop.getNumRegionIterArgs(),
+                                                    std::nullopt);
   for (auto [i, arg] : llvm::enumerate(loop.getRegionIterArgs())) {
     // For the default partition, keep non-tensor results used outside of the
     // loop even if the corresponding loop variable is not used in that
@@ -121,7 +122,7 @@ getLoopVarIndicesToKeep(scf::ForOp loop, const Partition *partition,
   return std::make_pair(indices, reverseIndices);
 }
 
-std::pair<SmallVector<size_t>, SmallVector<int>>
+std::pair<SmallVector<size_t>, SmallVector<std::optional<size_t>>>
 getLoopVarIndicesToKeep(scf::ForOp loop, const Partition *partition,
                         const WarpSchedule &schedule) {
   auto loopVarCategories = classifyLoopVars(loop, partition, schedule);
@@ -138,9 +139,7 @@ const Partition *getPartition(Operation *op, const WarpSchedule &schedule) {
   }
 
   // Some yield ops, e.g. automatically added one, might not have a partition
-  if (!isa<scf::YieldOp>(origOp)) {
-    llvm_unreachable("No partition is found for an op.");
-  }
+  assert(isa<scf::YieldOp>(origOp) && "No partition is found for an op.");
   return nullptr;
 }
 
@@ -437,7 +436,8 @@ LogicalResult triton::gpu::partitionLoop(scf::ForOp loop) {
         if (loopVarCategories[i] ==
                 LoopVarCategory::TensorResultFromOtherPartition &&
             isTensorResultComputedBy(loop, i, &partition, schedule)) {
-          auto result = newForOp.getResult(reverseIndices[i]);
+          assert(reverseIndices[i] && "A valid index is expected.");
+          auto result = newForOp.getResult(*reverseIndices[i]);
           b.create<LocalStoreOp>(wgOp.getLoc(), result, tensorResultAllocs[i]);
         }
       }
@@ -458,7 +458,8 @@ LogicalResult triton::gpu::partitionLoop(scf::ForOp loop) {
       topBuilder.create<LocalDeallocOp>(tensorResultAllocs[i]);
       res.replaceAllUsesWith(output);
     } else {
-      res.replaceAllUsesWith(wgOp.getResult(newResultIndices[i]));
+      assert(newResultIndices[i] && "A valid index is expected.");
+      res.replaceAllUsesWith(wgOp.getResult(*newResultIndices[i]));
     }
   }
 
