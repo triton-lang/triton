@@ -114,10 +114,9 @@ static bool isConvertLayoutTrivial(RankedTensorType dstTy, Value value) {
   auto srcTy = cast<RankedTensorType>(value.getType());
   if (srcTy.getEncoding() == dstTy.getEncoding())
     return true;
-  // Handle unresolved layouts. auto -> T is trivial but T -> auto is not
-  // necessarily.
+  // Fail safe on unresolved layouts.
   if (isa<gluon::AutoEncodingAttr>(srcTy.getEncoding()))
-    return true;
+    return false;
   if (isa<gluon::AutoEncodingAttr>(dstTy.getEncoding()))
     return false;
 
@@ -403,6 +402,10 @@ void init_gluon_ir(py::module &&m) {
       .def("create_memdesc_reinterpret",
            [](GluonOpBuilder &self, Type resultType, Value src) -> Value {
              return self.create<ttg::MemDescReinterpretOp>(resultType, src);
+           })
+      .def("create_set_auto_layout",
+           [](GluonOpBuilder &self, Attribute layout, Value value) -> Value {
+             return self.create<gluon::SetAutoLayoutOp>(layout, value);
            })
       .def("create_split",
            [](GluonOpBuilder &self, Value &a) -> py::tuple {

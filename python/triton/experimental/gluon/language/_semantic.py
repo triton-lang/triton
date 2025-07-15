@@ -2,7 +2,7 @@ from typing import Sequence, List, TypeVar, Tuple, Callable
 import math
 from triton.language.semantic import TritonSemantic
 from . import _core as ttgl
-from ._layouts import SliceLayout, AutoLayout
+from ._layouts import AutoLayout, DistributedLayout, SliceLayout
 from triton._C.libtriton.gluon_ir import GluonOpBuilder
 from triton.compiler.code_generator import flatten_values_to_ir, unflatten_ir_values
 
@@ -117,9 +117,9 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         is_lhs_auto = isinstance(lhs_ty.layout, AutoLayout)
         is_rhs_auto = isinstance(rhs_ty.layout, AutoLayout)
         if is_lhs_auto and not is_rhs_auto:
-            lhs = self.convert_layout(lhs, rhs_ty.layout)
+            lhs = self.set_auto_layout(lhs, rhs_ty.layout)
         elif is_rhs_auto and not is_lhs_auto:
-            rhs = self.convert_layout(rhs, lhs_ty.layout)
+            rhs = self.set_auto_layout(rhs, lhs_ty.layout)
         elif lhs_ty.layout != rhs_ty.layout:
             raise ValueError(f"Layout mismatch in broadcast: {lhs_ty.layout} vs {rhs_ty.layout}")
 
@@ -179,6 +179,16 @@ class GluonSemantic(TritonSemantic[TensorTy]):
 
     def shared_dealloc(self, mem_desc):
         self.builder.create_local_dealloc(mem_desc.handle)
+
+    def set_auto_layout(self, value, layout):
+        src_ty = value.type
+        assert isinstance(layout,
+                          DistributedLayout), f"set_auto_layout must set to a distributed layout but got {layout}"
+        assert isinstance(src_ty.layout,
+                          AutoLayout), f"set_auto_layout input must have auto layout but got {value.type.layout}"
+        handle = self.builder.create_set_auto_layout(layout._to_ir(self.builder), value.handle)
+        res_ty = ttgl.distributed_type(src_ty.element_ty, src_ty.shape, layout)
+        return self.tensor(handle, res_ty)
 
     def _memdesc_subview(self, mem_desc, offsets, shape):
         layout = mem_desc.layout

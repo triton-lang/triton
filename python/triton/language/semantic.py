@@ -1881,12 +1881,12 @@ class TritonSemantic(Generic[TensorTy]):
                 f"Descriptor block shape must have at least 16 bytes in the last dimension, but got {contig_dim_size} * {elem_size} = {contig_dim_size * elem_size} bytes"
             )
 
-        strides[-1] = tl._unwrap_if_constexpr(strides[-1])
-        if strides[-1] != 1:
-            raise ValueError(f"Tensor descriptor last dim must be 1 but got {strides[-1]}")
+        last_stride = tl._unwrap_if_constexpr(strides[-1])
+        if last_stride != 1:
+            raise ValueError(f"Tensor descriptor last dim must be 1 but got {last_stride}")
 
         shape = [self.make_scalar(x, tl.int32) for x in shape]
-        strides = [self.make_scalar(x, tl.int64) for x in strides]
+        strides = [self.make_scalar(tl._unwrap_if_constexpr(x), tl.int64) for x in strides]
 
         # Check whether `block_shape` is static
         block_shape = tl._unwrap_shape(block_shape)
