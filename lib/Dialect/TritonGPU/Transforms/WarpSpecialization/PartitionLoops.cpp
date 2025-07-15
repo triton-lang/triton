@@ -75,7 +75,7 @@ SmallVector<LoopVarCategory> classifyLoopVars(scf::ForOp loop,
   };
   auto isTensorResultFromOtherPartition = [&](int i) {
     for (auto otherPartition : schedule.getPartitions()) {
-      if (otherPartition.getIndex() == partition->getIndex()) {
+      if (&otherPartition == partition) {
         continue;
       }
       if (isTensorResultComputedBy(loop, i, &otherPartition, schedule)) {
