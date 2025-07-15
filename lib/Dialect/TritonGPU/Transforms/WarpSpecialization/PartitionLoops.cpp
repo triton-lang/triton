@@ -177,7 +177,7 @@ getPartitionIndicesToCloneInto(const Partition *partition,
                                const WarpSchedule &schedule) {
   SmallVector<size_t> partitionIndices;
 
-  if (partition == schedule.getRootPartition()) {
+  if (!partition || partition == schedule.getRootPartition()) {
     for (size_t i = 0; i < schedule.getNumPartitions(); ++i) {
       partitionIndices.push_back(i);
     }
@@ -272,6 +272,7 @@ void cloneOpsInBlock(Block *block, SmallVector<WarpGroupBuilder> &builders,
   for (auto &op_ : *block) {
     auto op = &op_;
     auto partition = getPartition(op, schedule);
+    auto partitionIndices = getPartitionIndicesToCloneInto(partition, schedule);
 
     if (auto forOp = dyn_cast<scf::ForOp>(op)) {
       cloneForOp(forOp, builders, schedule);
@@ -284,7 +285,8 @@ void cloneOpsInBlock(Block *block, SmallVector<WarpGroupBuilder> &builders,
         continue;
       }
 
-      auto doClone = [&](WarpGroupBuilder &builder) {
+      for (size_t idx : partitionIndices) {
+        auto &builder = builders[idx];
         SmallVector<size_t> newOperandIndices;
         if (auto forOp = dyn_cast<scf::ForOp>(yieldOp->getParentOp())) {
           newOperandIndices =
@@ -306,15 +308,6 @@ void cloneOpsInBlock(Block *block, SmallVector<WarpGroupBuilder> &builders,
         if (!newYieldOperands.empty()) {
           builder.create<scf::YieldOp>(op->getLoc(), newYieldOperands);
         }
-      };
-
-      if (!partition || partition == schedule.getRootPartition()) {
-        for (auto &builder : builders) {
-          doClone(builder);
-        }
-      } else {
-        auto &builder = builders[partition->getIndex()];
-        doClone(builder);
       }
     } else {
       assert(partition);
@@ -324,18 +317,10 @@ void cloneOpsInBlock(Block *block, SmallVector<WarpGroupBuilder> &builders,
             "Ops are expected to be regionless at this point.");
       }
 
-      auto doClone = [&](WarpGroupBuilder &builder, Operation *op) {
+      for (size_t idx : partitionIndices) {
+        auto &builder = builders[idx];
         auto newOp = builder.clone(*op, builder.mapping);
         mapRange(op->getResults(), newOp->getResults(), builder.mapping);
-      };
-
-      if (partition == schedule.getRootPartition()) {
-        for (auto &builder : builders) {
-          doClone(builder, op);
-        }
-      } else {
-        auto &builder = builders[partition->getIndex()];
-        doClone(builder, op);
       }
     }
   }
