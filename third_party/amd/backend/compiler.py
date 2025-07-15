@@ -13,7 +13,6 @@ import warnings
 from pathlib import Path
 
 
-
 def get_min_dot_size(target: GPUTarget):
     # We fallback to use FMA and cast arguments if certain configurations is
     # not supported natively by matrix core units.
