@@ -36,6 +36,7 @@
 #include "nvidia/include/Dialect/NVWS/IR/Dialect.h"
 #include "nvidia/include/Dialect/NVWS/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
@@ -79,23 +80,15 @@ MemDescType getBarrierMemDesc(PatternRewriter &rewriter,
                           /*mutableMemory=*/true);
 }
 
-Value getBarrier(PatternRewriter &rewriter, Location loc, Value mbars,
-                 Value idx) {
-  auto memDesc = getBarrierMemDesc(rewriter, {1});
-  return rewriter.create<triton::gpu::MemDescSubviewOp>(
-      loc, memDesc, mbars, SmallVector<Value>{idx});
-}
-
 Value getEmptyBarrier(PatternRewriter &rewriter, Location loc, ArefValue aref,
                       Value arefIdx) {
   // stage= arefIdx % depth
   Value stage;
   auto remsi = rewriter.create<arith::RemSIOp>(
       loc, arefIdx, rewriter.create<arith::ConstantIntOp>(loc, aref.depth, 32));
-  remsi->setAttr("empty_mbar", rewriter.getUnitAttr());
   stage = remsi;
 
-  return getBarrier(rewriter, loc, aref.emptyMbars, stage);
+  return createSingleBufferView(rewriter, aref.emptyMbars, stage);
 }
 
 Value getFullBarrier(PatternRewriter &rewriter, Location loc, ArefValue aref,
@@ -103,12 +96,11 @@ Value getFullBarrier(PatternRewriter &rewriter, Location loc, ArefValue aref,
   Value stage;
   auto remsi = rewriter.create<arith::RemSIOp>(
       loc, arefIdx, rewriter.create<arith::ConstantIntOp>(loc, aref.depth, 32));
-  remsi->setAttr("full_mbar", rewriter.getUnitAttr());
   stage = remsi;
-  return getBarrier(rewriter, loc, aref.fullMbars, stage);
+  return createSingleBufferView(rewriter, aref.fullMbars, stage);
 }
 
-std::pair<WarpGroupOp, int> getWgIdx(Operation *op) {
+std::pair<WarpGroupOp, int> getWarpGroupIdx(Operation *op) {
   if (auto wgOp = dyn_cast<WarpGroupOp>(op->getParentOp())) {
     auto region = op->getParentRegion();
     for (auto [idx, r] : llvm::enumerate(wgOp.getPartitionRegions())) {
@@ -119,14 +111,14 @@ std::pair<WarpGroupOp, int> getWgIdx(Operation *op) {
   }
   if (isa<triton::FuncOp>(op))
     return {nullptr, -1};
-  return getWgIdx(op->getParentOp());
+  return getWarpGroupIdx(op->getParentOp());
 }
 
 std::pair<int, int> getArrivalCount(ArefCreateOp op) {
   std::optional<int> producerArrivalCount, consumerArrivalCount;
 
   for (auto user : op->getUsers()) {
-    auto [wgOp, idx] = getWgIdx(user);
+    auto [wgOp, idx] = getWarpGroupIdx(user);
     auto numWarps = wgOp.getNumWarps()[idx];
 
     if (auto putExitOp = dyn_cast<ArefPutExitOp>(user)) {
@@ -201,10 +193,8 @@ ArefValue createAndInitMbar(ArefCreateOp op, PatternRewriter &rewriter) {
   // Create two mbarriers
   auto emptyMbars =
       rewriter.create<LocalAllocOp>(loc, barrierMemDescType, Value());
-  emptyMbars->setAttr("aref_empty_mbarriers", rewriter.getUnitAttr());
   auto fullMbars =
       rewriter.create<LocalAllocOp>(loc, barrierMemDescType, Value());
-  fullMbars->setAttr("aref_full_mbarriers", rewriter.getUnitAttr());
   auto lb = rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
   auto ub = rewriter.create<arith::ConstantIntOp>(loc, depth, 32);
   auto step = rewriter.create<arith::ConstantIntOp>(loc, 1, 32);
@@ -214,7 +204,7 @@ ArefValue createAndInitMbar(ArefCreateOp op, PatternRewriter &rewriter) {
   for (int i = 0; i < 2; ++i) {
     auto mbars = i == 0 ? emptyMbars : fullMbars;
     auto singleBarrier =
-        getBarrier(rewriter, loc, mbars, dLoop.getInductionVar());
+        createSingleBufferView(rewriter, mbars, dLoop.getInductionVar());
     int arrivalCount = i == 0 ? consumerArrivalCount : producerArrivalCount;
     rewriter.create<InitBarrierOp>(loc, singleBarrier, arrivalCount);
   }
@@ -296,27 +286,19 @@ void lowerAsyncLoads(ArefPutEnterOp op, PatternRewriter &rewriter,
 }
 
 void waitOnBarrier(PatternRewriter &rewriter, Location loc, Value mbar,
-                   Value index, int depth, bool isPut, bool firstGet,
-                   std::string attrName) {
+                   Value index, int depth, bool isPut) {
   // phase = (index / depth) & 1
   Operation *phase = rewriter.create<arith::DivSIOp>(
       loc, index, rewriter.create<arith::ConstantIntOp>(loc, depth, 32));
-  phase->setAttr(attrName, rewriter.getUnitAttr());
   phase = rewriter.create<arith::AndIOp>(
       loc, phase->getResult(0),
       rewriter.create<arith::ConstantIntOp>(loc, 1, 32));
-  phase->setAttr(attrName, rewriter.getUnitAttr());
-  if (isPut != firstGet) {
-    // If this is (isPut && !firstGet) or (!isPut && firstGet), we need to xor
-    // the phase with 1. In aref-tmem-insertion, put/get act as ping/pong for
-    // ownership transfer between two groups. When ownership is transferred
-    // between three groups via another aref, pong can be first to wait, so we
-    // need to xor the get phase instead of the put phase.
+  if (isPut) {
+    // When put, xor the phase with 1, as put is expected to be first
     phase = rewriter.create<arith::XOrIOp>(
         loc, phase->getResult(0),
         rewriter.create<arith::ConstantIntOp>(loc, 1, 32));
   }
-  phase->setAttr(attrName, rewriter.getUnitAttr());
   rewriter.create<WaitBarrierOp>(loc, mbar, phase->getResult(0));
 }
 
@@ -325,7 +307,6 @@ Value getStage(PatternRewriter &rewriter, Location loc, Value index, int depth,
   // stage = index % depth
   Operation *stage = rewriter.create<arith::RemSIOp>(
       loc, index, rewriter.create<arith::ConstantIntOp>(loc, depth, 32));
-  stage->setAttr(attrName, rewriter.getUnitAttr());
   return stage->getResult(0);
 }
 
@@ -337,8 +318,8 @@ LogicalResult rewritePutEnterOp(ArefCreateOp arefOp, ArefPutEnterOp op,
   // get empty barrier at a given stage
   Value emptyBarrier = getEmptyBarrier(rewriter, loc, arefVal, op.getIndex());
 
-  waitOnBarrier(rewriter, loc, emptyBarrier, op.getIndex(), arefVal.depth, true,
-                arefOp->hasAttr("first_get"), "put_phase");
+  waitOnBarrier(rewriter, loc, emptyBarrier, op.getIndex(), arefVal.depth,
+                true);
   Value stage =
       getStage(rewriter, loc, op.getIndex(), arefVal.depth, "put_stage");
   auto views = getSubViews(arefVal, stage, loc, rewriter);
@@ -361,8 +342,8 @@ LogicalResult rewriteGetEnterOp(ArefCreateOp arefOp, ArefGetEnterOp op,
   rewriter.setInsertionPointAfter(op);
 
   Value fullBarrier = getFullBarrier(rewriter, loc, arefVal, op.getIndex());
-  waitOnBarrier(rewriter, loc, fullBarrier, op.getIndex(), arefVal.depth, false,
-                arefOp->hasAttr("first_get"), "get_phase");
+  waitOnBarrier(rewriter, loc, fullBarrier, op.getIndex(), arefVal.depth,
+                false);
   Value stage =
       getStage(rewriter, loc, op.getIndex(), arefVal.depth, "get_stage");
   auto views = getSubViews(arefVal, stage, loc, rewriter);
@@ -379,7 +360,7 @@ LogicalResult insertArriveBarrier(Location loc, ArrayAttr asyncOps,
 
   for (auto asyncOp : asyncOps) {
     auto asyncOpEnum = cast<AsyncOpAttr>(asyncOp).getValue();
-    rewriter.create<nvws::ArriveBarrierOp>(loc, mbar, asyncOpEnum);
+    rewriter.create<nvws::ArefCompleteOp>(loc, mbar, asyncOpEnum);
   }
 
   return success();
@@ -565,7 +546,6 @@ template <class T> struct ArefIndex<T> {
         auto nextIndex = builder.create<arith::AddIOp>(
             opT.getLoc(), index,
             builder.create<arith::ConstantIntOp>(opT.getLoc(), 1, 32));
-        nextIndex->setAttr("next_aref_index", builder.getUnitAttr());
         arefIndexMap[opT.getAref()] = nextIndex;
       } else if (auto forOp = dyn_cast<scf::ForOp>(op)) {
         assignArefIndexInForOp(forOp, arefIndexMap);
@@ -587,7 +567,7 @@ template <class T> struct ArefIndex<T> {
     for (auto aref : arefs) {
       for (auto user : aref.getUsers()) {
         if (isa<T>(user)) {
-          auto [wg, idx] = getWgIdx(user);
+          auto [wg, idx] = getWarpGroupIdx(user);
           auto region = &wg.getPartitionRegions()[idx];
           if (opRegion && opRegion != region) {
             return mlir::emitWarning(user->getLoc(),

@@ -149,14 +149,14 @@ verifyBarrierType(Operation *op, mlir::triton::gpu::MemDescType barrierType) {
   return success();
 }
 
-// -- ArriveBarrierOp --
-LogicalResult ArriveBarrierOp::verify() {
+// -- ArefCompleteOp --
+LogicalResult ArefCompleteOp::verify() {
   if (failed(verifyBarrierType(*this, getAlloc().getType())))
     return failure();
   return success();
 }
 
-void ArriveBarrierOp::getEffects(
+void ArefCompleteOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
   effects.emplace_back(MemoryEffects::Read::get(), &getAllocMutable(),

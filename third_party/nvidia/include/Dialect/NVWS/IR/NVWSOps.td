@@ -155,20 +155,21 @@ def NVWS_WarpGroupReturnOp : NVWS_Op<"warp_group.return", [
   let assemblyFormat = "attr-dict";
 }
 
-def NVWS_ArriveBarrierOp : NVWS_Op<"arrive_barrier", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
-    let summary = "mbarrier.arrive or tcgen5.commit";
+def NVWS_ArefCompleteOp : NVWS_Op<"arrive_barrier", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
+  let summary = "mbarrier.arrive or tcgen5.commit";
 
-    let description = [{
-      Lowers to mbarrier.arrive.shared.b64, cp.async.mbarrier.arrive.noinc or
-      tcgen05.commit depending on the value of commit.
-       * This op allows all threads to arrive
-       * It has an optional "arrive after a given async op completes" semantics.
-    }];
+  let description = [{
+    Lowers to mbarrier.arrive.shared.b64, cp.async.mbarrier.arrive.noinc or
+    tcgen05.commit depending on the value of commit.
+     * This op allows all threads to arrive
+     * It has an optional "arrive after a given async op completes" semantics.
+  }];
 
-    let hasVerifier = 1;
-    let arguments = (ins TTG_MemDescType:$alloc, NVWS_AsyncOpEnum:$async_op);
-    let assemblyFormat = [{ $alloc `,` `async_op` `=` $async_op attr-dict `:` type($alloc)
-    }];
+  let hasVerifier = 1;
+  let arguments = (ins TTG_MemDescType:$alloc, NVWS_AsyncOpEnum:$async_op);
+  let assemblyFormat = [{
+    $alloc `,` `async_op` `=` $async_op attr-dict `:` type($alloc)
+  }];
 }
 
 def NVWS_CreateTokenOp : NVWS_Op<"create_token"> {
