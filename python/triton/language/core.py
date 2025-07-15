@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from warnings import warn
 from contextlib import contextmanager
 from enum import Enum
@@ -752,6 +753,10 @@ class block_type(dtype):
     def scalar(self):
         return self.element_ty
 
+    @property
+    def nbytes(self):
+        return self.numel * (self.element_ty.primitive_bitwidth // 8)
+
     def mangle(self) -> str:
         elt = self.scalar.mangle()
         shape = '_'.join(map(str, self.shape))
@@ -878,10 +883,7 @@ class tensor(base_value):
         self.handle = handle
         # Block shape
         self.shape = type.shape if type.is_block() else ()
-        self.numel = 1
-        for s in self.shape:
-            self.numel *= s
-        self.numel = constexpr(self.numel)
+        self.numel = constexpr(math.prod(self.shape))
         self.type = type  # Tensor type (can be block_type)
         # Following the practice in pytorch, dtype is scalar type
         self.dtype = type.scalar
