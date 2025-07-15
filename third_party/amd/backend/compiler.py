@@ -75,7 +75,9 @@ class HIPOptions:
                "num_warps must be a power of 2"
 
         if (self.arch == 'gfx950') and (self.kpack != 1):
-            warnings.warn(f"kpack is deprecated starting from gfx950 and will be removed in later releases. So for now kpack = {self.kpack} will be overwritten to 1.")
+            warnings.warn(
+                f"kpack is deprecated starting from gfx950 and will be removed in later releases. So for now kpack = {self.kpack} will be overwritten to 1."
+            )
 
         default_libdir = Path(__file__).parent / 'lib'
         extern_libs = {} if self.extern_libs is None else dict(self.extern_libs)
@@ -222,9 +224,8 @@ class HIPBackend(BaseBackend):
         passes.ttgpuir.add_coalesce(pm)
         passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_optimize_thread_locality(pm)
-        if options.arch == 'gfx950':
-            options.kpack = 1
-        amd.passes.ttgpuir.add_accelerate_matmul(pm, options.arch, options.matrix_instr_nonkdim, options.kpack)
+        amd.passes.ttgpuir.add_accelerate_matmul(pm, options.arch, options.matrix_instr_nonkdim,
+                                                 1 if options.arch == 'gfx950' else options.kpack)
         passes.ttgpuir.add_remove_layout_conversions(pm)
         amd.passes.ttgpuir.add_optimize_epilogue(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
