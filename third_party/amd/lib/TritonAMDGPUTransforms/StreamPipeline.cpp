@@ -591,16 +591,9 @@ SmallVector<std::pair<Operation *, Value>> createAndScheduleStreamOps(
       continue;
 
     // Create an allocation that can hold distance number of loadOp shapes.
-    builder.setInsertionPoint(forOp);
     auto ty = cast<RankedTensorType>(loadOp->getResultTypes()[0]);
-    SmallVector<int64_t> bufferShape(ty.getShape());
-    bufferShape.insert(bufferShape.begin(), numBuffers);
-    Type memdescType =
-        ttg::MemDescType::get(bufferShape, ty.getElementType(),
-                              info.sharedEncoding, sharedMemorySpace,
-                              /*mutableMemory=*/true);
-    Value alloc =
-        builder.create<ttg::LocalAllocOp>(loadOp->getLoc(), memdescType);
+    Value alloc = triton::createAlloc(forOp, ty, loadOp->getLoc(),
+                                      info.sharedEncoding, numBuffers);
     assert(alloc && "Failed to create alloc for the async load.");
     loadToAllocs.emplace_back(loadOp, alloc);
   }
@@ -737,12 +730,6 @@ LogicalResult preprocessLoopAndBuildSchedule(scf::ForOp &forOp, int numStages,
                        std::vector<std::pair<Operation *, unsigned>> &s) {
         s = std::move(coarseSchedule);
       };
-
-  OpBuilder builder(forOp);
-  builder.setInsertionPointAfter(forOp);
-  // Explicitly deallocate created allocations.
-  for (auto [_load, alloc] : sharedMemAllocs)
-    builder.create<ttg::LocalDeallocOp>(forOp.getLoc(), alloc);
 
   return success();
 }

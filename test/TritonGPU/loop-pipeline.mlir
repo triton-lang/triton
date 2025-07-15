@@ -462,8 +462,8 @@ tt.func @matmul_loop_single_pipeline(%lb : index, %ub : index, %step : index,
 //       AMD:       scf.yield %[[SELECT_33]]
 //       AMD:     }
 //       AMD:     %[[SELECT_37:.*]] = arith.select %[[CMPI_29]], %[[IF_36]], %[[SELECT_33]]
-//       AMD:     ttg.local_dealloc %[[LOCAL_ALLOC_0]]
-//       AMD:     ttg.local_dealloc %[[LOCAL_ALLOC_1]]
+//       AMD-DAG:     ttg.local_dealloc %[[LOCAL_ALLOC_0]]
+//       AMD-DAG:     ttg.local_dealloc %[[LOCAL_ALLOC_1]]
 tt.func @indirect_bmm_scalar(%77: i64 {tt.divisibility=16: i32},
                    %76: index,
                    %49: tensor<16x16x!tt.ptr<f16>, #AL> {tt.divisibility=16: i32, tt.contiguity=2 : i32},
