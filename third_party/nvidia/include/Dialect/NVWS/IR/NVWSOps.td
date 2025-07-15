@@ -155,7 +155,7 @@ def NVWS_WarpGroupReturnOp : NVWS_Op<"warp_group.return", [
   let assemblyFormat = "attr-dict";
 }
 
-def NVWS_ArefCompleteOp : NVWS_Op<"arrive_barrier", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
+def NVWS_ArefCompleteOp : NVWS_Op<"aref_complete", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
   let summary = "mbarrier.arrive or tcgen5.commit";
 
   let description = [{

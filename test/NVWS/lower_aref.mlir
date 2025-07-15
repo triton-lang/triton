@@ -63,8 +63,8 @@ module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-w
 
         // CHECK-NEXT: [[FULLIDX:%.*]] = arith.remsi [[IDX2]], [[C3]]
         // CHECK-NEXT: [[FULLMBAR:%.*]] = ttg.memdesc_subview [[FULL0]][[[FULLIDX]]]
-        // CHECK-NEXT: nvws.arrive_barrier [[FULLMBAR]], async_op = <tma_load>
-        // CHECK-NEXT: nvws.arrive_barrier [[FULLMBAR]], async_op = <cp_async>
+        // CHECK-NEXT: nvws.aref_complete [[FULLMBAR]], async_op = <tma_load>
+        // CHECK-NEXT: nvws.aref_complete [[FULLMBAR]], async_op = <cp_async>
         // CHECK-NEXT: [[IDX2a:%.*]] = arith.addi [[IDX2]], [[C1]]
         nvws.aref.put.exit %aref0[%c0_i32] [#nvws.async_op<tma_load>, #nvws.async_op<cp_async>] {aref_tag = "put0"} : !nvws.aref<[!ttg.memdesc<3x64x16xf16, #shared0, #tmem>, !ttg.memdesc<3x16x32xf16, #shared0, #smem>]>
 
@@ -136,7 +136,7 @@ module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-w
 
         // CHECK-NEXT: [[EMPTYIDX:%.*]] = arith.remsi [[IDX2]], [[C3]]
         // CHECK-NEXT: [[EMPTYMBAR:%.*]] = ttg.memdesc_subview [[EMPTY0]][[[EMPTYIDX]]]
-        // CHECK-NEXT: nvws.arrive_barrier [[EMPTYMBAR]], async_op = <tc5mma>
+        // CHECK-NEXT: nvws.aref_complete [[EMPTYMBAR]], async_op = <tc5mma>
         // CHECK-NEXT: arith.addi
         nvws.aref.get.exit %aref0[%c0_i32] [#nvws.async_op<tc5mma>] : !nvws.aref<[!ttg.memdesc<3x64x16xf16, #shared0, #tmem>, !ttg.memdesc<3x16x32xf16, #shared0, #smem>]>
 
@@ -151,7 +151,7 @@ module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-w
 
           // CHECK: arith.remsi [[IDX3]], [[C3]]
           // CHECK-NEXT: ttg.memdesc_subview
-          // CHECK-NEXT: nvws.arrive_barrier {{.*}}, async_op = <none>
+          // CHECK-NEXT: nvws.aref_complete {{.*}}, async_op = <none>
           nvws.aref.get.exit %aref1[%c0_i32] [#nvws.async_op<none>] : !nvws.aref<[!ttg.memdesc<3x64x16xf16, #shared0, #tmem>, !ttg.memdesc<3x16x32xf16, #shared0, #smem>]>
         }
         // CHECK: } else {
