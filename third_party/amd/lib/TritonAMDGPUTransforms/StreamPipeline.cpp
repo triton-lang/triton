@@ -693,6 +693,14 @@ LogicalResult preprocessLoopAndBuildSchedule(scf::ForOp &forOp, int numStages,
     maxDist = std::max(maxDist, distance);
   }
 
+  auto dumpSchedule = [&](llvm::StringRef msg) {
+    LLVM_DEBUG({
+      llvm::dbgs() << "\n";
+      LDBG(msg);
+      schedule.dump();
+    });
+  };
+
   if (failed(initSchedule(maxDist, stages, numStages, numBuffers, useAsyncCopy,
                           clusters, schedule)))
     return failure();
@@ -700,45 +708,23 @@ LogicalResult preprocessLoopAndBuildSchedule(scf::ForOp &forOp, int numStages,
   if (failed(scheduleLoads(loadToInfo, maxDist, numStages, stages, clusters,
                            schedule)))
     return failure();
-
-  LLVM_DEBUG({
-    llvm::dbgs() << "\n";
-    LDBG("Coarse schedule loads only:");
-    schedule.dump();
-  });
+  dumpSchedule("Coarse schedule loads only:");
 
   // Convert the loads into shared memory allocations and loads from them.
   SmallVector<std::pair<Operation *, Value>> sharedMemAllocs =
       createAndScheduleStreamOps(loadToInfo, forOp, numBuffers, useAsyncCopy,
                                  schedule, stages, clusters, axisInfoAnalysis);
-
-  LLVM_DEBUG({
-    llvm::dbgs() << "\n";
-    LDBG("Coarse schedule stream ops:");
-    schedule.dump();
-  });
+  dumpSchedule("Coarse schedule stream ops:");
 
   scheduleDependencies(forOp, schedule);
-  LLVM_DEBUG({
-    llvm::dbgs() << "\n";
-    LDBG("Coarse schedule with dependencies:");
-    schedule.dump();
-  });
+  dumpSchedule("Coarse schedule with dependencies:");
 
   triton::gpu::scheduleDistanceOneDependencies(forOp, schedule);
-  LLVM_DEBUG({
-    llvm::dbgs() << "\n";
-    LDBG("Coarse schedule with dist 1:");
-    schedule.dump();
-  });
+  dumpSchedule("Coarse schedule with dist 1:");
 
   tt::CoarseSchedule::Cluster computeCluster = clusters[SCHED_COMPUTE];
   triton::gpu::scheduleRemainingToLastStage(forOp, schedule, computeCluster);
-  LLVM_DEBUG({
-    llvm::dbgs() << "\n";
-    LDBG("Final coarse schedule:");
-    schedule.dump();
-  });
+  dumpSchedule("Final coarse schedule:");
 
   // Create the final schedule for the kernel loop. This will dictate the
   // stages and order of operations to the pipeline expander.
