@@ -7,10 +7,10 @@ namespace mlir::triton::proton::gpu {
 
 // Generate the pass class declarations.
 #define GEN_PASS_DECL
-#include "proton/dialect/include/Dialect/ProtonGPU/Transforms/Passes.h.inc"
+#include "proton/Dialect/include/Dialect/ProtonGPU/Transforms/Passes.h.inc"
 
 #define GEN_PASS_REGISTRATION
-#include "proton/dialect/include/Dialect/ProtonGPU/Transforms/Passes.h.inc"
+#include "proton/Dialect/include/Dialect/ProtonGPU/Transforms/Passes.h.inc"
 
 } // namespace mlir::triton::proton::gpu
 

@@ -5,7 +5,7 @@
 #include "llvm/ADT/TypeSwitch.h"
 
 #define GET_ATTRDEF_CLASSES
-#include "proton/dialect/include/Dialect/ProtonGPU/IR/AttrDefs.cpp.inc"
+#include "proton/Dialect/include/Dialect/ProtonGPU/IR/AttrDefs.cpp.inc"
 
 using namespace mlir;
 

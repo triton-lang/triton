@@ -3,7 +3,7 @@
 
 include "mlir/IR/EnumAttr.td"
 include "mlir/IR/AttrTypeBase.td"
-include "proton/dialect/include/Dialect/ProtonGPU/IR/ProtonGPUDialect.td"
+include "proton/Dialect/include/Dialect/ProtonGPU/IR/ProtonGPUDialect.td"
 
 def GranularityAttr : I32EnumAttr<
   "Granularity", "The granularity of the profiling metric",

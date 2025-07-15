@@ -9,10 +9,10 @@ include "mlir/Dialect/LLVMIR/LLVMOpBase.td"
 include "mlir/Interfaces/InferTypeOpInterface.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
 include "triton/Dialect/Triton/IR/TritonInterfaces.td"
-include "proton/dialect/include/Dialect/Proton/IR/ProtonAttrDefs.td"
-include "proton/dialect/include/Dialect/ProtonGPU/IR/ProtonGPUDialect.td"
-include "proton/dialect/include/Dialect/ProtonGPU/IR/ProtonGPUAttrDefs.td"
-include "proton/dialect/include/Dialect/ProtonGPU/IR/ProtonGPUTypes.td"
+include "proton/Dialect/include/Dialect/Proton/IR/ProtonAttrDefs.td"
+include "proton/Dialect/include/Dialect/ProtonGPU/IR/ProtonGPUDialect.td"
+include "proton/Dialect/include/Dialect/ProtonGPU/IR/ProtonGPUAttrDefs.td"
+include "proton/Dialect/include/Dialect/ProtonGPU/IR/ProtonGPUTypes.td"
 
 //===----------------------------------------------------------------------===//
 // Resources

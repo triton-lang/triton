@@ -319,6 +319,7 @@ public:
 
 namespace mlir {
 
+// See FuncOpToLLVM.cpp for details about Triton's function calling conventions
 constexpr int kProfileScratchBufferOffset = -1;
 constexpr int kGlobalScratchBufferOffset = -2;
 constexpr int kSharedMemoryOffset = -3;

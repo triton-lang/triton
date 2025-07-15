@@ -7,9 +7,9 @@
 #include "mlir/IR/TypeSupport.h"
 #include "mlir/IR/Types.h"
 
-#include "proton/dialect/include/Dialect/ProtonGPU/IR/OpsEnums.h.inc"
+#include "proton/Dialect/include/Dialect/ProtonGPU/IR/OpsEnums.h.inc"
 
 #define GET_TYPEDEF_CLASSES
-#include "proton/dialect/include/Dialect/ProtonGPU/IR/Types.h.inc"
+#include "proton/Dialect/include/Dialect/ProtonGPU/IR/Types.h.inc"
 
 #endif // PROTONGPU_IR_TYPES_H_

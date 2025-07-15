@@ -15,13 +15,13 @@ template <typename T> class OperationPass;
 namespace triton::proton::gpu {
 
 #define GEN_PASS_DECL
-#include "proton/dialect/include/Conversion/ProtonGPUToLLVM/ProtonAMDGPUToLLVM/Passes.h.inc"
+#include "proton/Dialect/include/Conversion/ProtonGPUToLLVM/ProtonAMDGPUToLLVM/Passes.h.inc"
 
 std::unique_ptr<OperationPass<ModuleOp>>
 createConvertProtonAMDGPUToLLVMPass(std::string arch = "");
 
 #define GEN_PASS_REGISTRATION
-#include "proton/dialect/include/Conversion/ProtonGPUToLLVM/ProtonAMDGPUToLLVM/Passes.h.inc"
+#include "proton/Dialect/include/Conversion/ProtonGPUToLLVM/ProtonAMDGPUToLLVM/Passes.h.inc"
 
 } // namespace triton::proton::gpu
 
