@@ -491,7 +491,15 @@ struct MemDescSubviewOpConversion
 
     auto base = smemObj.getBase();
     auto elemPtrTy = base.getType();
-    if (rankReduced || (destTy.getRank() == 1 && destTy.getDimSize(0) == 1)) {
+    auto is1d = srcTy.getRank() == 1 && destTy.getRank() == 1 &&
+                destTy.getDimSize(0) == 1;
+    if (rankReduced) {
+      if (is1d) {
+        smemObj = SharedMemoryObject(
+            b.gep(elemPtrTy, llvmElemTy, base, opOffsetVals[0]), llvmElemTy,
+            {b.i32_val(0)});
+        return success();
+      }
       // TODO Split into its own op
       // At the moment we assume this is only used in the context of pipelining
       // If we want to generalise it, we should use `applyLinearLayout` whenever
