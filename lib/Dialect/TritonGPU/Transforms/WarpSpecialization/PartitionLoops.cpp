@@ -26,7 +26,6 @@ struct WarpGroupBuilder : public OpBuilder {
 
   static WarpGroupBuilder atBlockEnd(Block *block, size_t partitionId) {
     WarpGroupBuilder builder(block, block->end(), nullptr);
-    builder.mapping = IRMapping();
     builder.partitionId = partitionId;
     return builder;
   }
@@ -93,7 +92,7 @@ SmallVector<LoopVarCategory> classifyLoopVars(scf::ForOp loop,
 
 auto getLoopVarIndicesToKeep(
     scf::ForOp loop, const Partition *partition,
-    const SmallVector<LoopVarCategory> loopVarCategories) {
+    ArrayRef<LoopVarCategory> loopVarCategories) {
   SmallVector<size_t> indices;
   SmallVector<int> reverseIndices(loop.getNumRegionIterArgs(), -1);
   for (auto [i, arg] : llvm::enumerate(loop.getRegionIterArgs())) {
@@ -192,7 +191,6 @@ getPartitionIndicesToCloneInto(const Partition *partition,
 void cloneIfOp(scf::IfOp ifOp, SmallVector<WarpGroupBuilder> &builders,
                const WarpSchedule &schedule) {
   auto partition = getPartition(ifOp, schedule);
-  assert(partition);
   auto partitionIndices = getPartitionIndicesToCloneInto(partition, schedule);
 
   SmallVector<scf::IfOp> newIfOps;
@@ -234,7 +232,6 @@ void cloneReduceOp(triton::ReduceOp reduceOp,
                    SmallVector<WarpGroupBuilder> &builders,
                    const WarpSchedule &schedule) {
   auto partition = getPartition(reduceOp, schedule);
-  assert(partition);
   auto partitionIndices = getPartitionIndicesToCloneInto(partition, schedule);
 
   SmallVector<ReduceOp> newReduceOps;
@@ -450,16 +447,17 @@ LogicalResult triton::gpu::partitionLoop(scf::ForOp loop) {
   topBuilder.setInsertionPointAfter(wgOp);
 
   for (auto [i, res] : llvm::enumerate(loop.getResults())) {
-    if (!res.use_empty()) {
-      if (loopVarCategories[i] ==
-          LoopVarCategory::TensorResultFromOtherPartition) {
-        auto ty = cast<RankedTensorType>(loop.getResult(i).getType());
-        auto output = topBuilder.create<LocalLoadOp>(ty, tensorResultAllocs[i]);
-        topBuilder.create<LocalDeallocOp>(tensorResultAllocs[i]);
-        res.replaceAllUsesWith(output);
-      } else {
-        res.replaceAllUsesWith(wgOp.getResult(newResultIndices[i]));
-      }
+    if (res.use_empty())
+      continue;
+
+    if (loopVarCategories[i] ==
+        LoopVarCategory::TensorResultFromOtherPartition) {
+      auto ty = cast<RankedTensorType>(loop.getResult(i).getType());
+      auto output = topBuilder.create<LocalLoadOp>(ty, tensorResultAllocs[i]);
+      topBuilder.create<LocalDeallocOp>(tensorResultAllocs[i]);
+      res.replaceAllUsesWith(output);
+    } else {
+      res.replaceAllUsesWith(wgOp.getResult(newResultIndices[i]));
     }
   }
 
