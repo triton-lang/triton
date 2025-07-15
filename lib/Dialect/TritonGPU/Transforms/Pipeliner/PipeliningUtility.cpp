@@ -310,10 +310,11 @@ mlir::triton::getDefiningOpAndDistance(scf::ForOp forOp, Value value) {
 
 int mlir::triton::getCopyVecBytes(RankedTensorType registerTy,
                                   ttg::SharedEncodingTrait sharedEnc) {
-  auto regLayout = triton::gpu::toLinearLayout(registerTy.getShape(),
-                                               registerTy.getEncoding());
-  auto sharedLayout =
-      triton::gpu::toLinearLayout(registerTy.getShape(), sharedEnc);
+  auto shape = registerTy.getShape();
+  auto regLayout =
+      triton::gpu::toLinearLayout(shape, registerTy.getEncoding(), {});
+  // FIXME: Here we should pass a MemDescType instead of a SharedEncodingTrait!!
+  auto sharedLayout = triton::gpu::toLinearLayout(shape, sharedEnc, shape);
   auto regToSharedLayout = regLayout.invertAndCompose(sharedLayout);
   const int vecElems = regToSharedLayout.getNumConsecutiveInOut();
   return vecElems * registerTy.getElementTypeBitWidth() / 8;
@@ -329,10 +330,15 @@ bool mlir::triton::canBeConvertedToAsyncLoad(
     vec = std::min<unsigned>(vec, axisInfoAnalysis.getMaskAlignment(mask));
 
   auto tensorTy = dyn_cast<RankedTensorType>(ptr.getType());
-  if (!tensorTy)
-    return false;
-  auto ty = cast<tt::PointerType>(tensorTy.getElementType()).getPointeeType();
-  unsigned width = vec * ty.getIntOrFloatBitWidth();
+  unsigned width = 0;
+  if (tensorTy) {
+    auto ty = cast<tt::PointerType>(tensorTy.getElementType()).getPointeeType();
+    width = vec * ty.getIntOrFloatBitWidth();
+  } else {
+    width = cast<tt::PointerType>(ptr.getType())
+                .getPointeeType()
+                .getIntOrFloatBitWidth();
+  }
 
   // We do not pipeline all loads for the following reasons:
   // 1. On nvidia GPUs, cp.async's cp-size can only be 4, 8, or 16.

@@ -2,7 +2,6 @@
 #include "amd/lib/TritonAMDGPUToLLVM/TargetInfo.h"
 #include "third_party/amd/include/Analysis/AxisInfoExt.h"
 #include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
-#include "third_party/amd/lib/TritonAMDGPUToLLVM/SchedInstructions.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Dialect/Triton/IR/OpInterfaces.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
@@ -362,15 +361,6 @@ void createAndScheduleStreamCopy(
     schedule.insert(sharedLoad, stages[SCHED_LOCAL_LOAD],
                     clusters[SCHED_LOCAL_LOAD]);
 
-  // If the currently processed `LoadOp` is labeled with an index regarding
-  // to which `DotOp` operand the corresponding data belongs to, then label the
-  // expanded `LocalStoreOp` with the same index. This is required for
-  // instruction scheduling hints to correctly count the emitted `ds_write`
-  // instructions for each GEMM tile.
-  if (auto attr = loadOp->getAttr(tt::amdgpu::OpIdxAttr::getMnemonic())) {
-    storeOp->setAttr(tt::amdgpu::OpIdxAttr::getMnemonic(), attr);
-  }
-
   loadOp->replaceAllUsesWith(ValueRange{result});
 
   if (stages[SCHED_LOCAL_LOAD] != stages[SCHED_COMPUTE] && result.hasOneUse()) {
@@ -521,9 +511,11 @@ bool canBeConvertedToAsyncLoad(unsigned numBuffers, tt::LoadOp loadOp,
   // and sharedEncoding. We can only use AsyncCopy if the width is >= 32 bit
   auto srcTy = cast<RankedTensorType>(loadOp.getPtr().getType());
   auto dstTy = cast<ttg::MemDescType>(alloc.getType());
-  auto shape = srcTy.getShape();
-  auto regLayout = triton::gpu::toLinearLayout(shape, srcTy.getEncoding());
-  auto sharedLayout = triton::gpu::toLinearLayout(shape, dstTy.getEncoding());
+  auto regLayout = triton::gpu::toLinearLayout(srcTy);
+  // It's the allocation so we can pass the srcTy shape
+  auto srcShape = srcTy.getShape();
+  auto sharedLayout =
+      triton::gpu::toLinearLayout(srcShape, dstTy.getEncoding(), srcShape);
   auto regToSharedLayout = regLayout.invertAndCompose(sharedLayout);
   unsigned loadContig = regToSharedLayout.getNumConsecutiveInOut();
   unsigned width = loadContig * dstTy.getElementTypeBitWidth();
@@ -762,44 +754,6 @@ LogicalResult pipelineLoop(scf::ForOp forOp, int numStages, int globalPrefetch,
   return tt::pipelineForLoop(rewriter, forOp, options);
 }
 
-namespace {
-// Go through a single use chain to get the result of the target op after all
-// unary ops - e.g., `convert_layout`, `fp_to_fp`, etc.
-template <typename TargetOpType> Operation *passPrevUnaryOps(Value value) {
-  auto getNextUnaryOps = [](Value value) -> Operation * {
-    if (auto defOp = value.getDefiningOp()) {
-      if ((defOp->getNumOperands() == 1) || llvm::dyn_cast<TargetOpType>(defOp))
-        return defOp;
-    }
-    return nullptr;
-  };
-
-  auto unaryOp = getNextUnaryOps(value);
-  while (unaryOp) {
-    if (llvm::dyn_cast<TargetOpType>(unaryOp))
-      return unaryOp;
-    unaryOp = getNextUnaryOps(unaryOp->getOperand(0));
-  }
-  return nullptr;
-}
-
-// Annotate each `tt.LoadOp` instruction with its corresponding gemm operand
-// index. Note, this is a part of the instruction scheduling routine. Currently,
-// we support `forOp`s which contain only a single `tt.DotOp` in the bodies.
-void labelLoadOpsForTritonDot(scf::ForOp forOp) {
-  mlir::MLIRContext *ctx = forOp->getContext();
-  if (auto dotOp = tt::getSingleDotOpIfExists(forOp)) {
-    for (auto [opIdx, dotOperand] : llvm::enumerate(dotOp->getOperands())) {
-      if (auto loadOp = passPrevUnaryOps<tt::LoadOp>(dotOperand)) {
-        auto opIdxAttr = tt::amdgpu::OpIdxAttr::get(ctx, opIdx);
-        loadOp->setAttr(tt::amdgpu::OpIdxAttr::getMnemonic(), opIdxAttr);
-      }
-    }
-  }
-}
-
-} // anonymous namespace
-
 struct PipelinePass : impl::TritonAMDGPUStreamPipelineBase<PipelinePass> {
   using impl::TritonAMDGPUStreamPipelineBase<
       PipelinePass>::TritonAMDGPUStreamPipelineBase;
@@ -821,7 +775,6 @@ struct PipelinePass : impl::TritonAMDGPUStreamPipelineBase<PipelinePass> {
 
     SmallVector<scf::ForOp> loops;
     getOperation()->walk([&](scf::ForOp forOp) {
-      labelLoadOpsForTritonDot(forOp);
       // Bail out for loops with num_stage <= 1.
       if (tt::getNumStagesOrDefault(forOp, numStages) > 1)
         loops.push_back(forOp);

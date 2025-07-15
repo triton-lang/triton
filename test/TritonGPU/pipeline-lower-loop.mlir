@@ -1634,3 +1634,24 @@ tt.func @load_cant_use_async_cp(%lb : index, %ub : index, %step : index,
   tt.return
 }
 }
+
+// -----
+
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
+// CHECK-LABEL: @scalar_load
+tt.func @scalar_load(%lb : index, %ub : index, %step : index,
+                     %a_ptr_init : !tt.ptr<i32>) -> () {
+  scf.for %iv = %lb to %ub step %step : index {
+    // CHECK: %[[PTR:.+]] = tt.splat %{{.*}} {loop.cluster = 0 : i32, loop.stage = 0 : i32} : !tt.ptr<i32>
+    // CHECK: %[[CP:.+]] = ttg.async_copy_global_to_local %[[PTR]], %{{.+}} {loop.cluster = 0 : i32, loop.stage = 0 : i32}
+    // CHECK: %[[T0:.+]] = ttg.async_commit_group %[[CP]] {loop.cluster = 0 : i32, loop.stage = 0 : i32}
+    // CHECK: %[[T1:.+]] = ttg.async_wait %[[T0]] {loop.cluster = 1 : i32, loop.stage = 3 : i32, num = 0 : i32}
+    // CHECK: %[[L:.+]] = ttg.local_load %{{.+}} token %[[T1]] {loop.cluster = 1 : i32, loop.stage = 3 : i32}
+    // CHECK: %[[R:.+]] = tt.unsplat %[[L]] {loop.cluster = 1 : i32, loop.stage = 3 : i32}
+    // CHECK: "use"(%[[R]]) {loop.cluster = 1 : i32, loop.stage = 3 : i32} : (i32) -> ()
+    %a = tt.load %a_ptr_init {loop.cluster = 1 : i32, loop.stage = 0 : i32} : !tt.ptr<i32>
+    "use"(%a) {loop.cluster = 2 : i32, loop.stage = 3 : i32} : (i32) -> ()
+  } {tt.scheduled_max_stage = 3 : i32}
+  tt.return
+}
+}

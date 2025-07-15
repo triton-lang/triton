@@ -63,14 +63,6 @@ def NVGPU_MemSyncScopeAttr : I32EnumAttr<
 class NVGPU_Op<string mnemonic, list<Trait> traits = []> :
     LLVM_OpBase<NVGPU_Dialect, mnemonic, traits>;
 
-def NVGPU_WGMMAFenceOp : NVGPU_Op<"wgmma_fence", []> {
-  let assemblyFormat = "attr-dict";
-}
-
-def NVGPU_WGMMACommitGroupOp : NVGPU_Op<"wgmma_commit_group", []> {
-  let assemblyFormat = "attr-dict";
-}
-
 def NVGPU_WGMMAWaitGroupOp : NVGPU_Op<"wgmma_wait_group", [DeclareOpInterfaceMethods<InferTypeOpInterface>,
                                                            AllTypesMatch<["input", "output"]>]> {
   let arguments = (ins LLVM_AnyStruct:$input, I32Attr:$pendings);
@@ -111,39 +103,6 @@ def NVGPU_WGMMAOp : NVGPU_Op<"wgmma", []> {
                    WGMMA_LayoutAttr:$layoutA, WGMMA_LayoutAttr:$layoutB);
   let results = (outs LLVM_AnyStruct:$res);
   let assemblyFormat = "$opA `,` $opB `,` $useC (`,` $opC^)? attr-dict `:` functional-type(operands, $res)";
-}
-
-def NVGPU_FenceAsyncSharedOp : NVGPU_Op<"fence_async_shared", []> {
-  let arguments = (ins BoolAttr:$bCluster);
-  let assemblyFormat = "attr-dict";
-}
-
-def NVGPU_ClusterArriveOp : NVGPU_Op<"cluster_arrive", []> {
-  let arguments = (ins I1Attr:$relaxed);
-
-  let assemblyFormat = "attr-dict";
-}
-
-def NVGPU_ClusterWaitOp : NVGPU_Op<"cluster_wait", []> {
-  let assemblyFormat = "attr-dict";
-}
-
-def NVGPU_StoreMatrixOp : NVGPU_Op<"stmatrix", [MemoryEffects<[MemWrite]>]> {
-  let arguments = (
-    ins LLVM_PointerShared:$addr,
-    Variadic<I32>:$vals,
-    UnitAttr:$trans
-  );
-  let assemblyFormat = "operands attr-dict `:` type(operands)";
-}
-
-def NVGPU_LoadMatrixOp : NVGPU_Op<"ldmatrix", [MemoryEffects<[MemRead]>]> {
-  let arguments = (
-    ins LLVM_PointerShared:$addr,
-    UnitAttr:$trans
-  );
-  let results = (outs AnyTypeOf<[LLVM_AnyStruct, I32]>:$result);
-  let assemblyFormat = "$addr attr-dict `:` functional-type($addr, $result)";
 }
 
 def NVGPU_ClusterCTAIdOp : NVGPU_Op<"cluster_id", [Pure]> {
