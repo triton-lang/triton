@@ -47,6 +47,16 @@ SmallVector<int32_t> flatten(const LinearLayout &ll, StringAttr dim) {
   return vec;
 };
 
+SmallVector<int32_t> removeZeros(ArrayRef<int32_t> vec) {
+  SmallVector<int32_t> result;
+  for (int32_t r : vec) {
+    if (r != 0) {
+      result.push_back(r);
+    }
+  }
+  return result;
+}
+
 // [1, 2, 4, 8] -> [[1], [2], [4], [8]]
 std::vector<std::vector<int32_t>> unflatten(ArrayRef<int32_t> basis) {
   std::vector<std::vector<int32_t>> unflattened;
@@ -131,9 +141,6 @@ SmallVector<int32_t> computeSegment(const SmallVector<int32_t> &bankSrc,
                                     int32_t dim, int32_t lenSegment) {
   llvm::SmallDenseSet<int32_t> setSrc(bankSrc.begin(), bankSrc.end());
   llvm::SmallDenseSet<int32_t> setDst(bankDst.begin(), bankDst.end());
-  // Remove the 0 as it's not a basis
-  setSrc.erase(0);
-  setDst.erase(0);
 
   SmallVector<int32_t> segment;
   for (int32_t b = 0; b < dim; ++b)
@@ -298,8 +305,8 @@ LinearLayout optimalSwizzling(const LinearLayout &src, const LinearLayout &dst,
 
   auto regSrc = flatten(srcFlat, kReg);
   auto regDst = flatten(dstFlat, kReg);
-  auto laneSrc = flatten(srcFlat, kLane);
-  auto laneDst = flatten(dstFlat, kLane);
+  auto laneSrc = removeZeros(flatten(srcFlat, kLane));
+  auto laneDst = removeZeros(flatten(dstFlat, kLane));
 
   // Compute the vectorisation we can use
   SmallVector<int32_t> vbasis = intersectionBasis(regSrc, regDst, dim);
@@ -309,10 +316,10 @@ LinearLayout optimalSwizzling(const LinearLayout &src, const LinearLayout &dst,
     vbasis.resize(maxVecBases);
   }
   // We fill-up vbasis until it has 32 bits as best we can
-  auto instrBitwidth = (1 << vbasis.size()) * bitwidth;
-  if (instrBitwidth < 32) {
-    auto warpSrc = flatten(srcFlat, kWarp);
-    auto warpDst = flatten(dstFlat, kWarp);
+  auto vecFillsBank = (1 << vbasis.size()) * bitwidth >= 32;
+  if (!vecFillsBank) {
+    auto warpSrc = removeZeros(flatten(srcFlat, kWarp));
+    auto warpDst = removeZeros(flatten(dstFlat, kWarp));
     auto removeVec = [&vbasis](ArrayRef<int32_t> vec) {
       SmallVector<int32_t> result;
       for (int32_t r : vec) {
@@ -340,6 +347,8 @@ LinearLayout optimalSwizzling(const LinearLayout &src, const LinearLayout &dst,
       largest = regSrcWarp.size() > regDstWarp.size() ? regSrcWarp : regDstWarp;
     }
     vbasis.append(largest.begin(), largest.end());
+    // We allow vbasis.size > Log2_32(32 / bitwidth) at this point, as it is in
+    // general good, but one should note
     if (vbasis.size() < llvm::Log2_32(32 / bitwidth)) {
       // Pad the vectorisation to 32 bits with warp bases
       auto warpSrcWarp = intersectionBasis(warpSrc, warpDst, dim);
@@ -348,7 +357,7 @@ LinearLayout optimalSwizzling(const LinearLayout &src, const LinearLayout &dst,
 
     int i = 0;
     while (vbasis.size() < llvm::Log2_32(32 / bitwidth) &&
-           (i < warpSrc.size() && i < warpDst.size())) {
+           (i < warpSrc.size() || i < warpDst.size())) {
       // If we have not filled up a whole bank, we add more warp bases
       // until we have 32 bits. They will at least avoid bank conflicts in one
       // direction
@@ -376,8 +385,11 @@ LinearLayout optimalSwizzling(const LinearLayout &src, const LinearLayout &dst,
   auto bankDst = llvm::to_vector(llvm::concat<int32_t>(vbasis, laneDst));
 
   // Whether we'll use b32.v1 / b32.v2 / b32.v4
-  auto b32Vec =
-      llvm::Log2_32(std::max<int32_t>((1 << vbasis.size()) * bitwidth / 32, 1));
+  // FIXME: With !vecFillsBank we may use b32.v2 or b32.v4 for the load or
+  // store, but we pesimistically assume we don't.
+  auto b32Vec = !vecFillsBank ? 0
+                              : llvm::Log2_32(std::max<int32_t>(
+                                    (1 << vbasis.size()) * bitwidth / 32, 1));
   // Drop the last vec bases of the banks
   bankSrc.resize(bankSrc.size() - b32Vec);
   bankDst.resize(bankDst.size() - b32Vec);
