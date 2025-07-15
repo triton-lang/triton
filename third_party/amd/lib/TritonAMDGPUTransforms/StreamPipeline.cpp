@@ -238,39 +238,20 @@ AsyncCopyChainOps createAsyncCopy(tt::LoadOp loadOp, Value alloc,
   OpBuilder builder(loadOp);
   Location loc = loadOp.getLoc();
 
-  ttg::MemDescType allocTy = cast<ttg::MemDescType>(alloc.getType());
-
   // Extract local subview from shared allocation
   auto viewLoad = triton::createSingleBufferView(builder, alloc, extractIdx)
                       .getDefiningOp<ttg::MemDescSubviewOp>();
 
-  // If the load is used by an existing local allocation we replace it with the
-  // new subview
-  SmallVector<ttg::LocalAllocOp> allocsToErase;
-  for (Operation *user : loadOp->getUsers()) {
-    if (auto userAlloc = dyn_cast<ttg::LocalAllocOp>(user)) {
-      tt::replaceUsesAndPropagateType(builder, userAlloc, viewLoad);
-      allocsToErase.push_back(userAlloc);
-    }
-  }
-  for (auto allocToErase : allocsToErase)
-    allocToErase.erase();
-
   auto copyOp = builder.create<ttg::AsyncCopyGlobalToLocalOp>(
-      loadOp.getLoc(), loadOp.getPtr(), viewLoad, loadOp.getMask(),
-      loadOp.getOther(), loadOp.getCache(), loadOp.getEvict(),
-      loadOp.getIsVolatile());
-
-  // Insert synchronization primitives to create barriers during lowering
+      loc, loadOp.getPtr(), viewLoad, loadOp.getMask(), loadOp.getOther(),
+      loadOp.getCache(), loadOp.getEvict(), loadOp.getIsVolatile());
   auto commitOp =
       builder.create<ttg::AsyncCommitGroupOp>(loc, copyOp->getResult(0));
-
   ttg::AsyncWaitOp waitOp =
       builder.create<ttg::AsyncWaitOp>(loc, commitOp->getResult(0), 0);
 
-  // Create local load which consumes the async token from the AsyncWait
   auto maybeSharedLoad = tt::replaceUsesWithLocalLoad(
-      builder, loadOp->getResult(0), viewLoad, waitOp.getRetToken());
+      builder, loadOp->getResult(0), viewLoad, waitOp);
 
   return {copyOp, commitOp, waitOp, maybeSharedLoad};
 }
@@ -279,15 +260,11 @@ void scheduleLocalLoad(
     ttg::LocalLoadOp localLoadOp, tt::CoarseSchedule &schedule,
     const int stages[SCHED_SIZE],
     const std::array<tt::CoarseSchedule::Cluster, SCHED_SIZE> &clusters) {
-  auto localLoadStage = stages[SCHED_LOCAL_LOAD];
-  auto computeStage = stages[SCHED_COMPUTE];
-
-  if (localLoadStage != computeStage) {
+  if (stages[SCHED_LOCAL_LOAD] != stages[SCHED_COMPUTE]) {
     schedule.insert(localLoadOp, stages[SCHED_LOCAL_LOAD],
                     clusters[SCHED_LOCAL_LOAD]);
-
-    // If it's only used by a ConvertLayout we place it next to the LocalLoad so
-    // it can be folded into the LocalLoad
+    // If its only user is a ConvertLayout, we place it into the same stage so
+    // it can be folded by a later pass
     if (localLoadOp->hasOneUse()) {
       auto cvt = *localLoadOp->getUsers().begin();
       if (isa<ttg::ConvertLayoutOp>(cvt)) {
@@ -326,9 +303,7 @@ void createAndScheduleAsyncCopy(
     tt::LoadOp loadOp, Value alloc, Value extractIdx, scf::ForOp forOp,
     tt::CoarseSchedule &schedule, const int stages[SCHED_SIZE],
     const std::array<tt::CoarseSchedule::Cluster, SCHED_SIZE> &clusters) {
-
   auto asyncOps = createAsyncCopy(loadOp, alloc, extractIdx, forOp);
-
   scheduleAsyncCopy(asyncOps, loadOp, schedule, stages, clusters);
 
   schedule.erase(loadOp);
@@ -336,7 +311,7 @@ void createAndScheduleAsyncCopy(
 }
 
 struct StreamCopyChainOps {
-  tt::LoadOp copyOp;
+  tt::LoadOp loadOp;
   ttg::MemDescSubviewOp subviewOp;
   ttg::LocalStoreOp localStoreOp;
   std::optional<ttg::LocalLoadOp> maybeLocalLoadOp;
@@ -344,56 +319,33 @@ struct StreamCopyChainOps {
 
 StreamCopyChainOps createStreamCopy(tt::LoadOp loadOp, Value alloc,
                                     Value extractIdx, scf::ForOp forOp) {
-  OpBuilder builder(forOp);
-  Value zero = builder.create<arith::ConstantIntOp>(forOp.getLoc(), 0, 32);
-  // Replace the load with insert/extract slice.
-  builder.setInsertionPoint(loadOp);
+  OpBuilder builder(loadOp);
   Location loc = loadOp.getLoc();
 
-  ttg::MemDescType allocTy = cast<ttg::MemDescType>(alloc.getType());
-  SmallVector<Value> copyOffsets(allocTy.getRank(), zero);
-  tt::LoadOp copy = cast<tt::LoadOp>(builder.clone(*loadOp));
-
+  // Extract local subview from shared allocation
   auto viewLoad = triton::createSingleBufferView(builder, alloc, extractIdx)
                       .getDefiningOp<ttg::MemDescSubviewOp>();
-  assert(viewLoad);
 
-  // Clean up old local caches.
-  SmallVector<ttg::LocalAllocOp> allocsToErase;
-  for (Operation *user : loadOp->getUsers()) {
-    if (auto userAlloc = dyn_cast<ttg::LocalAllocOp>(user)) {
-      tt::replaceUsesAndPropagateType(builder, userAlloc, viewLoad);
-      allocsToErase.push_back(userAlloc);
-    }
-  }
-  for (auto allocToErase : allocsToErase)
-    allocToErase.erase();
-
-  // Prefetch load ahead of the dot stage if is used by the dot.
-  auto storeOp = builder.create<ttg::LocalStoreOp>(loc, copy, viewLoad);
-
+  tt::LoadOp newLoadOp = cast<tt::LoadOp>(builder.clone(*loadOp));
+  auto storeOp = builder.create<ttg::LocalStoreOp>(loc, newLoadOp, viewLoad);
   auto maybeLocalLoad =
       tt::replaceUsesWithLocalLoad(builder, loadOp->getResult(0), viewLoad);
 
-  return {copy, viewLoad, storeOp, maybeLocalLoad};
+  return {newLoadOp, viewLoad, storeOp, maybeLocalLoad};
 }
 
 void scheduleStreamCopy(
-    const StreamCopyChainOps &streamOps, tt::LoadOp loadOp,
+    const StreamCopyChainOps &streamOps, tt::LoadOp oldLoadOp,
     tt::CoarseSchedule &schedule, const int stages[SCHED_SIZE],
     const std::array<tt::CoarseSchedule::Cluster, SCHED_SIZE> &clusters) {
-  auto [copyOp, subviewOp, localStoreOp, maybeLocalLoadOp] = streamOps;
-  auto [stage, cluster] = schedule[loadOp];
-  schedule.insert(copyOp, stage, cluster);
+  auto [newLoadOp, subviewOp, localStoreOp, maybeLocalLoadOp] = streamOps;
+  auto [loadStage, loadCluster] = schedule[oldLoadOp];
 
+  schedule.insert(newLoadOp, loadStage, loadCluster);
   schedule.insert(subviewOp, stages[SCHED_LOCAL_STORE],
                   clusters[SCHED_LOCAL_STORE]);
   schedule.insert(localStoreOp, stages[SCHED_LOCAL_STORE],
                   clusters[SCHED_LOCAL_STORE]);
-
-  auto localLoadStage = stages[SCHED_LOCAL_LOAD];
-  auto computeStage = stages[SCHED_COMPUTE];
-
   if (maybeLocalLoadOp.has_value())
     scheduleLocalLoad(*maybeLocalLoadOp, schedule, stages, clusters);
 }
@@ -402,9 +354,7 @@ void createAndScheduleStreamCopy(
     tt::LoadOp loadOp, Value alloc, Value extractIdx, scf::ForOp forOp,
     tt::CoarseSchedule &schedule, const int stages[SCHED_SIZE],
     const std::array<tt::CoarseSchedule::Cluster, SCHED_SIZE> &clusters) {
-
   auto streamOps = createStreamCopy(loadOp, alloc, extractIdx, forOp);
-
   scheduleStreamCopy(streamOps, loadOp, schedule, stages, clusters);
 
   schedule.erase(loadOp);
@@ -579,7 +529,7 @@ SmallVector<std::pair<Operation *, Value>> createAndScheduleStreamOps(
       ttg::SharedMemorySpaceAttr::get(forOp.getContext());
   SmallVector<std::pair<Operation *, Value>> loadToAllocs;
   for (auto &[loadOp, info] : loadToInfo) {
-    if (!info.sharedEncoding || info.isAsync)
+    if (!info.sharedEncoding && !info.isAsync)
       continue;
 
     // Create an allocation that can hold distance number of loadOp shapes.
