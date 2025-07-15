@@ -1518,12 +1518,16 @@ Bf16_to_Fp8E4M3FNUZ_HW(Location loc, ConversionPatternRewriter &rewriter,
 static SmallVector<Value>
 Bf16_to_Fp8E4M3FNUZ_SW(Location loc, ConversionPatternRewriter &rewriter,
                        const SmallVector<Value> &v) {
-  assert(v.size() == 2);
-  SmallVector<Value> result(2);
+  assert(v.size() == 4);
+  SmallVector<Value> result(4);
   result[0] = downcastToFp8_RTNE_oneValue<BFloat16Type, Float8E4M3FNUZType>(
       loc, rewriter, v[0]);
   result[1] = downcastToFp8_RTNE_oneValue<BFloat16Type, Float8E4M3FNUZType>(
       loc, rewriter, v[1]);
+  result[2] = downcastToFp8_RTNE_oneValue<BFloat16Type, Float8E4M3FNUZType>(
+      loc, rewriter, v[2]);
+  result[3] = downcastToFp8_RTNE_oneValue<BFloat16Type, Float8E4M3FNUZType>(
+      loc, rewriter, v[3]);
   return result;
 }
 
@@ -1561,12 +1565,16 @@ Bf16_to_Fp8E5M2FNUZ_HW(Location loc, ConversionPatternRewriter &rewriter,
 static SmallVector<Value>
 Bf16_to_Fp8E5M2FNUZ_SW(Location loc, ConversionPatternRewriter &rewriter,
                        const SmallVector<Value> &v) {
-  assert(v.size() == 2);
-  SmallVector<Value> result(2);
+  assert(v.size() == 4);
+  SmallVector<Value> result(4);
   result[0] = downcastToFp8_RTNE_oneValue<BFloat16Type, Float8E5M2FNUZType>(
       loc, rewriter, v[0]);
   result[1] = downcastToFp8_RTNE_oneValue<BFloat16Type, Float8E5M2FNUZType>(
       loc, rewriter, v[1]);
+  result[2] = downcastToFp8_RTNE_oneValue<BFloat16Type, Float8E5M2FNUZType>(
+      loc, rewriter, v[2]);
+  result[3] = downcastToFp8_RTNE_oneValue<BFloat16Type, Float8E5M2FNUZType>(
+      loc, rewriter, v[3]);
   return result;
 }
 
@@ -1830,14 +1838,18 @@ struct FpToFpOpConversion
     }
 
     size_t numElements = 4;
-    // numElements = 2 for fp32 -> fp16 with RTZ or fp32/fp16 -> nanoo fp8/bf8
-    // on non-CDNA3
+    // numElements = 2 for :
+    // fp32 -> fp16 with RTZ
+    // fp32/fp16 -> nanoo fp8/bf8 on non-CDNA3
+    // nanoo fp8 -> bf16 on CDNA4
     if ((llvm::isa<Float32Type>(srcElementType) &&
          llvm::isa<Float16Type>(dstElementType) &&
          roundingMode == RoundingMode::RTZ) ||
         (llvm::isa<Float32Type, Float16Type>(srcElementType) &&
          llvm::isa<Float8E4M3FNUZType, Float8E5M2FNUZType>(dstElementType) &&
-         isaFamily != AMD::ISAFamily::CDNA3))
+         isaFamily != AMD::ISAFamily::CDNA3) ||
+        (llvm::isa<Float8E4M3FNUZType>(srcElementType) &&
+         dstElementType.isBF16() && isaFamily == AMD::ISAFamily::CDNA4))
       numElements = 2;
 
     // fp32 -> fp8 with rtne can be done in two steps:
