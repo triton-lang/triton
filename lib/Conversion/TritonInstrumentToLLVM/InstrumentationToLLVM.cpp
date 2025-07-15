@@ -1,5 +1,6 @@
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/IR/ImplicitLocOpBuilder.h"
+#include "third_party/nvidia/include/Dialect/NVGPU/IR/Dialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
@@ -197,26 +198,36 @@ protected:
   const TargetInfoBase &targetInfo;
 };
 
-struct SharedBufferPointersOpConversion
-    : public ConvertOpToLLVMPattern<tti::ExperimentalSharedBufferPointersOp> {
+struct BufferPointersOpConversion
+    : public ConvertOpToLLVMPattern<tti::ExperimentalBufferPointersOp> {
   using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
 
-  LogicalResult matchAndRewrite(tti::ExperimentalSharedBufferPointersOp op,
-                                OpAdaptor adaptor,
-                                ConversionPatternRewriter &b) const override {
+  LogicalResult
+  matchAndRewrite(tti::ExperimentalBufferPointersOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
-    auto *ctx = b.getContext();
+    auto *ctx = rewriter.getContext();
     auto module = op->getParentOfType<ModuleOp>();
     auto values = adaptor.getOffsets();
     auto encoding =
         cast<ttg::BlockedEncodingAttr>(op.getResult().getType().getEncoding());
-    auto shMemBufs = createInitializedIntArrayTensor(b, loc, encoding, values);
-    auto base =
-        getSharedMemoryBase(b, op->getParentOfType<FunctionOpInterface>());
-    shMemBufs = b.create<arith::AddIOp>(
-        loc, shMemBufs,
-        b.create<triton::SplatOp>(loc, shMemBufs.getType(), base));
-    b.replaceOp(op, shMemBufs);
+    auto bufPointers =
+        createInitializedIntArrayTensor(rewriter, loc, encoding, values);
+    Value base = nullptr;
+    if (op.getMemType() == tti::MemType::SHARED) {
+      base = getSharedMemoryBase(rewriter,
+                                 op->getParentOfType<FunctionOpInterface>());
+    } else {
+      assert(op.getMemType() == tti::MemType::TMEM &&
+             "Unsupported memory type");
+      TritonLLVMOpBuilder b(loc, rewriter);
+      base = rewriter.create<nvgpu::TensorMemoryBaseAddress>(loc);
+      base = b.ptrtoint(i32_ty, base);
+    }
+    bufPointers = rewriter.create<arith::AddIOp>(
+        loc, bufPointers,
+        rewriter.create<triton::SplatOp>(loc, bufPointers.getType(), base));
+    rewriter.replaceOp(op, bufPointers);
     return success();
   }
 
@@ -698,7 +709,7 @@ void mlir::triton::populateInstrumentationToLLVMPatterns(
     LLVMTypeConverter &typeConverter, const TargetInfoBase &targetInfo,
     RewritePatternSet &patterns, PatternBenefit benefit) {
   patterns.add<AssertInThreadOpConversion>(typeConverter, targetInfo, benefit);
-  patterns.add<SharedBufferPointersOpConversion>(typeConverter);
+  patterns.add<BufferPointersOpConversion>(typeConverter);
   patterns.add<CheckOutstandingWritesOpConversion>(typeConverter);
   patterns.add<CheckOutstandingReadsOpConversion>(typeConverter);
   patterns.add<MarkAsWriteOpConversion>(typeConverter);

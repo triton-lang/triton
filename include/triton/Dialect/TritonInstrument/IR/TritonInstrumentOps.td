@@ -6,6 +6,7 @@ include "triton/Dialect/TritonGPU/IR/TritonGPUTypes.td"
 include "triton/Dialect/Triton/IR/TritonTypes.td"
 include "mlir/IR/OpBase.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
+include "triton/Dialect/TritonInstrument/IR/TritonInstrumentAttrDefs.td"
 
 //
 // Interfaces
@@ -33,15 +34,15 @@ def TTI_ExperimentalAssertInThreadOp : TTI_Op<"experimental_assert_in_thread", [
 }
 
 
-def TTI_ExperimentalSharedBufferPointersOp : TTI_Op<"experimental_shared_buffer_pointers", [Pure]> {
+def TTI_ExperimentalBufferPointersOp : TTI_Op<"experimental_buffer_pointers", [Pure]> {
   let summary = "definte an array of pointers to shared memory buffers";
   let description = [{
     Create a tensor of pointers to shared memory buffers.
   }];
-  let arguments = (ins DenseI32ArrayAttr:$offsets);
+  let arguments = (ins DenseI32ArrayAttr:$offsets, TT_MemTypeAttr:$memType);
   let results = (outs TT_Tensor:$result);
   let assemblyFormat = [{
-    attr-dict `:` type($result)
+    $offsets `,` $memType attr-dict `:` type($result)
   }];
 }
 
