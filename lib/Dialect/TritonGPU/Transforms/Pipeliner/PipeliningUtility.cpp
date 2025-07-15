@@ -330,10 +330,15 @@ bool mlir::triton::canBeConvertedToAsyncLoad(
     vec = std::min<unsigned>(vec, axisInfoAnalysis.getMaskAlignment(mask));
 
   auto tensorTy = dyn_cast<RankedTensorType>(ptr.getType());
-  if (!tensorTy)
-    return false;
-  auto ty = cast<tt::PointerType>(tensorTy.getElementType()).getPointeeType();
-  unsigned width = vec * ty.getIntOrFloatBitWidth();
+  unsigned width = 0;
+  if (tensorTy) {
+    auto ty = cast<tt::PointerType>(tensorTy.getElementType()).getPointeeType();
+    width = vec * ty.getIntOrFloatBitWidth();
+  } else {
+    width = cast<tt::PointerType>(ptr.getType())
+                .getPointeeType()
+                .getIntOrFloatBitWidth();
+  }
 
   // We do not pipeline all loads for the following reasons:
   // 1. On nvidia GPUs, cp.async's cp-size can only be 4, 8, or 16.
