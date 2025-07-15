@@ -279,6 +279,7 @@ LinearLayout optimalSwizzling(const LinearLayout &src, const LinearLayout &dst,
   auto *ctx = src.getInDimNames().begin()->getContext();
   auto kReg = StringAttr::get(ctx, "register");
   auto kLane = StringAttr::get(ctx, "lane");
+  auto kWarp = StringAttr::get(ctx, "warp");
 
   // We work on the flattened tensors as the tensor dimensions are not relevant
   const LinearLayout srcFlat = src.flattenOuts();
@@ -306,6 +307,60 @@ LinearLayout optimalSwizzling(const LinearLayout &src, const LinearLayout &dst,
   auto maxVecBases = llvm::Log2_32(128 / bitwidth);
   if (vbasis.size() > maxVecBases) {
     vbasis.resize(maxVecBases);
+  }
+  // We fill-up vbasis until it has 32 bits as best we can
+  auto instrBitwidth = (1 << vbasis.size()) * bitwidth;
+  if (instrBitwidth < 32) {
+    auto warpSrc = flatten(srcFlat, kWarp);
+    auto warpDst = flatten(dstFlat, kWarp);
+    auto removeVec = [&vbasis](ArrayRef<int32_t> vec) {
+      SmallVector<int32_t> result;
+      for (int32_t r : vec) {
+        if (!llvm::is_contained(vbasis, r)) {
+          result.push_back(r);
+        }
+      }
+      return result;
+    };
+    auto regSrcWarp = intersectionBasis(removeVec(regSrc), warpDst, dim);
+    auto regDstWarp = intersectionBasis(removeVec(regDst), warpSrc, dim);
+    // Maximise vectorisation in the load or the store without creating
+    // conflicts
+    SmallVector<int32_t> largest;
+    if (regSrcWarp.size() == regDstWarp.size() && regSrcWarp.size() > 0) {
+      // We choose the one with the lowest basis in the hope that it will
+      // avoid PRMTs. The comparison of the mins will be strict as the sets
+      // removeVec(regSrc) and removeVec(regDst) don't intersect
+      if (*llvm::min_element(regSrcWarp) < *llvm::min_element(regDstWarp)) {
+        largest = regSrcWarp;
+      } else {
+        largest = regDstWarp;
+      }
+    } else {
+      largest = regSrcWarp.size() > regDstWarp.size() ? regSrcWarp : regDstWarp;
+    }
+    vbasis.append(largest.begin(), largest.end());
+    if (vbasis.size() < llvm::Log2_32(32 / bitwidth)) {
+      // Pad the vectorisation to 32 bits with warp bases
+      auto warpSrcWarp = intersectionBasis(warpSrc, warpDst, dim);
+      vbasis.append(warpSrcWarp.begin(), warpSrcWarp.end());
+    }
+
+    int i = 0;
+    while (vbasis.size() < llvm::Log2_32(32 / bitwidth) &&
+           (i < warpSrc.size() && i < warpDst.size())) {
+      // If we have not filled up a whole bank, we add more warp bases
+      // until we have 32 bits. They will at least avoid bank conflicts in one
+      // direction
+      if (i < warpSrc.size() && !llvm::is_contained(vbasis, warpSrc[i])) {
+        vbasis.push_back(warpSrc[i]);
+      }
+      if (vbasis.size() < llvm::Log2_32(32 / bitwidth) && i < warpDst.size() &&
+          !llvm::is_contained(vbasis, warpDst[i])) {
+        vbasis.push_back(warpDst[i]);
+      }
+      ++i;
+    }
   }
 
   // Bits in a bank segment: 32 banks x 32 bits
