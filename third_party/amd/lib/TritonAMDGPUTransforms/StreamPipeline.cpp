@@ -275,6 +275,29 @@ AsyncCopyChainOps createAsyncCopy(tt::LoadOp loadOp, Value alloc,
   return {copyOp, commitOp, waitOp, maybeSharedLoad};
 }
 
+void scheduleLocalLoad(
+    ttg::LocalLoadOp localLoadOp, tt::CoarseSchedule &schedule,
+    const int stages[SCHED_SIZE],
+    const std::array<tt::CoarseSchedule::Cluster, SCHED_SIZE> &clusters) {
+  auto localLoadStage = stages[SCHED_LOCAL_LOAD];
+  auto computeStage = stages[SCHED_COMPUTE];
+
+  if (localLoadStage != computeStage) {
+    schedule.insert(localLoadOp, stages[SCHED_LOCAL_LOAD],
+                    clusters[SCHED_LOCAL_LOAD]);
+
+    // If it's only used by a ConvertLayout we place it next to the LocalLoad so
+    // it can be folded into the LocalLoad
+    if (localLoadOp->hasOneUse()) {
+      auto cvt = *localLoadOp->getUsers().begin();
+      if (isa<ttg::ConvertLayoutOp>(cvt)) {
+        schedule.insert(cvt, stages[SCHED_LOCAL_LOAD],
+                        clusters[SCHED_LOCAL_LOAD]);
+      }
+    }
+  }
+}
+
 void scheduleAsyncCopy(
     const AsyncCopyChainOps &asyncOps, tt::LoadOp loadOp,
     tt::CoarseSchedule &schedule, const int stages[SCHED_SIZE],
@@ -295,21 +318,8 @@ void scheduleAsyncCopy(
     schedule.insert(waitOp, stages[SCHED_ASYNC_WAIT],
                     clusters[SCHED_ASYNC_WAIT]);
 
-  if (maybeLocalLoadOp.has_value()) {
-    auto localLoadOp = *maybeLocalLoadOp;
-    if (stages[SCHED_LOCAL_LOAD] != stages[SCHED_COMPUTE])
-      schedule.insert(localLoadOp, stages[SCHED_LOCAL_LOAD],
-                      clusters[SCHED_LOCAL_LOAD]);
-
-    if (stages[SCHED_LOCAL_LOAD] != stages[SCHED_COMPUTE] &&
-        localLoadOp->hasOneUse()) {
-      if (auto cvt = dyn_cast<ttg::ConvertLayoutOp>(
-              *localLoadOp->getUsers().begin())) {
-        schedule.insert(cvt, stages[SCHED_LOCAL_LOAD],
-                        clusters[SCHED_LOCAL_LOAD]);
-      }
-    }
-  }
+  if (maybeLocalLoadOp.has_value())
+    scheduleLocalLoad(*maybeLocalLoadOp, schedule, stages, clusters);
 }
 
 void createAndScheduleAsyncCopy(
@@ -381,20 +391,11 @@ void scheduleStreamCopy(
   schedule.insert(localStoreOp, stages[SCHED_LOCAL_STORE],
                   clusters[SCHED_LOCAL_STORE]);
 
-  if (maybeLocalLoadOp.has_value()) {
-    auto localLoadOp = *maybeLocalLoadOp;
-    if (stages[SCHED_LOCAL_LOAD] != stages[SCHED_COMPUTE])
-      schedule.insert(localLoadOp, stages[SCHED_LOCAL_LOAD],
-                      clusters[SCHED_LOCAL_LOAD]);
+  auto localLoadStage = stages[SCHED_LOCAL_LOAD];
+  auto computeStage = stages[SCHED_COMPUTE];
 
-    if (stages[SCHED_LOCAL_LOAD] != stages[SCHED_COMPUTE] &&
-        localLoadOp->hasOneUse()) {
-      if (auto cvt =
-              dyn_cast<ttg::ConvertLayoutOp>(*localLoadOp->getUsers().begin()))
-        schedule.insert(cvt, stages[SCHED_LOCAL_LOAD],
-                        clusters[SCHED_LOCAL_LOAD]);
-    }
-  }
+  if (maybeLocalLoadOp.has_value())
+    scheduleLocalLoad(*maybeLocalLoadOp, schedule, stages, clusters);
 }
 
 void createAndScheduleStreamCopy(
