@@ -141,6 +141,9 @@ SmallVector<int32_t> computeSegment(const SmallVector<int32_t> &bankSrc,
                                     int32_t dim, int32_t lenSegment) {
   llvm::SmallDenseSet<int32_t> setSrc(bankSrc.begin(), bankSrc.end());
   llvm::SmallDenseSet<int32_t> setDst(bankDst.begin(), bankDst.end());
+  // Remove the 0 as it's not a basis
+  setSrc.erase(0);
+  setDst.erase(0);
 
   SmallVector<int32_t> segment;
   for (int32_t b = 0; b < dim; ++b)
@@ -305,8 +308,8 @@ LinearLayout optimalSwizzling(const LinearLayout &src, const LinearLayout &dst,
 
   auto regSrc = flatten(srcFlat, kReg);
   auto regDst = flatten(dstFlat, kReg);
-  auto laneSrc = removeZeros(flatten(srcFlat, kLane));
-  auto laneDst = removeZeros(flatten(dstFlat, kLane));
+  auto laneSrc = flatten(srcFlat, kLane);
+  auto laneDst = flatten(dstFlat, kLane);
 
   // Compute the vectorisation we can use
   SmallVector<int32_t> vbasis = intersectionBasis(regSrc, regDst, dim);
@@ -347,6 +350,9 @@ LinearLayout optimalSwizzling(const LinearLayout &src, const LinearLayout &dst,
       largest = regSrcWarp.size() > regDstWarp.size() ? regSrcWarp : regDstWarp;
     }
     vbasis.append(largest.begin(), largest.end());
+    if (vbasis.size() > maxVecBases) {
+      vbasis.resize(maxVecBases);
+    }
     // We allow vbasis.size > Log2_32(32 / bitwidth) at this point, as it is in
     // general good, but one should note
     if (vbasis.size() < llvm::Log2_32(32 / bitwidth)) {
