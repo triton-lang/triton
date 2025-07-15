@@ -634,16 +634,16 @@ LogicalResult Pingponger::transformTwoPPClusters(OpBuilder &builder,
   return success();
 }
 
-// This transform schedules instructions into two clusters, the first cluster with 
-// async copy only and the second cluster with all the other ops.
-// This requires additional second step in lowering mfma to llvm
-// that splits dot into two groups of mfmas, so ds_read instructions can be
-// only reside together with the first mfma group.
+// This transform schedules instructions into two clusters, the first cluster
+// with async copy only and the second cluster with all the other ops. This
+// requires additional second step in lowering mfma to llvm that splits dot into
+// two groups of mfmas, so ds_read instructions can only reside together with
+// the first mfma group.
 LogicalResult Pingponger::transform2step(OpBuilder &builder, Location loc) {
   if (asyncCopyOps.size() == 0)
     return failure();
-  builder.setInsertionPointAfter(asyncCopyOps[0]);
-  updateOpInsertion(asyncCopyOps[0]);
+  builder.setInsertionPointAfter(asyncWaitOps[0]);
+  updateOpInsertion(asyncWaitOps[0]);
 
   // mem cluster contains async_copies and tt.load if LDS bypassed.
   for (auto cop : asyncCommitOps)
@@ -664,18 +664,20 @@ LogicalResult Pingponger::transform2step(OpBuilder &builder, Location loc) {
 }
 
 // This pingpong variant tries to construct one memory cluster and one
-// dot cluster. Instead of slice the tile, it is supposed to use half 
+// dot cluster. Instead of slice the tile, it is supposed to use half
 // sized tile_K and use num_stages=3 to prefetch and hide the buffer
 // loading cycles. Suitable for large LDS using async copy.
 LogicalResult Pingponger::transformNS3(OpBuilder &builder, Location loc) {
   Operation *gLoadRhs = useAsyncCopy ? asyncCopyOps[1] : gLoadOps[1];
   builder.setInsertionPointAfter(gLoadRhs);
   updateOpInsertion(gLoadRhs);
- 
+
   // Combine asyncWaitOps.
-  // FIXME: This can be done in the streamPipeline pass but currently there's a know issue with combineRedundantWaitOps that produces incorrect IR. Can be removed once the issue is fixed.
+  // FIXME: This can be done in the streamPipeline pass but currently there's a
+  // know issue with combineRedundantWaitOps that produces incorrect IR. Can be
+  // removed once the issue is fixed.
   auto newAsyncWaitOp = asyncWaitOps[0];
-  if (asyncWaitOps.size() > 1){
+  if (asyncWaitOps.size() > 1) {
     SmallVector<Value> tokens;
     for (auto asyncWaitOp : asyncWaitOps) {
       for (auto token : asyncWaitOp.getAsyncToken()) {
@@ -689,13 +691,10 @@ LogicalResult Pingponger::transformNS3(OpBuilder &builder, Location loc) {
     }
   }
 
-  // Try to interleave address calculation with ds_read by seperating them with sched.barrier
   moveOpAndPredecessorsUpSameBlock(lLoadOps[0]);
   moveOpAndPredecessorsUpSameBlock(lLoadOps[1]);
-  lLoadOps[0]->setAttr("split_dsread", builder.getUnitAttr());
-  lLoadOps[1]->setAttr("split_dsread", builder.getUnitAttr());
   appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
-  
+
   appendOp(asyncCopyOps[0]);
   appendOp(asyncCommitOps[0]);
 
@@ -707,6 +706,7 @@ LogicalResult Pingponger::transformNS3(OpBuilder &builder, Location loc) {
   appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
 
   // Give hint to backend so it can interleave instructions better.
+  // This tries to interleave 3 SALU instructions per each MFMA
   appendOp(builder.create<ROCDL::SchedGroupBarrier>(loc, 8, 1, 0));
   appendOp(builder.create<ROCDL::SchedGroupBarrier>(loc, 4, 3, 0));
   appendOp(builder.create<ROCDL::SchedGroupBarrier>(loc, 8, 1, 0));
@@ -714,7 +714,7 @@ LogicalResult Pingponger::transformNS3(OpBuilder &builder, Location loc) {
   appendOp(builder.create<ROCDL::SchedGroupBarrier>(loc, 8, 1, 0));
 
   appendOp(asyncCopyOps[1]);
-  appendOp(asyncCommitOps[1]);  
+  appendOp(asyncCommitOps[1]);
   appendOp(dotOps[0]);
 
   appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
@@ -837,8 +837,9 @@ void Pingponger::getDotPingponged() {
         elemWidth == 8) {
       kWidth = 16;
       if (transform2step(builder, dotSOps[0]->getLoc()).failed()) {
-        LDBG("Encountered failure when trying to execute the two-step ping pong "
-             "cluster transformation");
+        LDBG(
+            "Encountered failure when trying to execute the two-step ping pong "
+            "cluster transformation");
         return;
       }
     }
@@ -877,16 +878,16 @@ void Pingponger::getDotPingponged() {
       LDBG("Currently only support num_warp=8 for async PP");
       return;
     }
-    if (numStages > 2 && dotOps.size() == 1 && tileSize == mediumTile && aShape[1] == 32 && elemWidth == 16) {
+    if (numStages > 2 && dotOps.size() == 1 && tileSize == mediumTile &&
+        aShape[1] == 32 && elemWidth == 16) {
       if (transformNS3(builder, loc).failed()) {
         LDBG("Encountered failure when trying to execute the NS3 ping pong "
-            "cluster transformation");
+             "cluster transformation");
         return;
       }
       addAsymmetricSyncToLoop(builder, loc);
       return;
     }
-
   }
   // The existing code depends on the loads being targeted being safe to move,
   // which will not hold if we do not properly have a GEMM. As a result, we
@@ -991,7 +992,8 @@ void Pingponger::getDotPingponged() {
       transformOnePPClusters(builder, loc);
     // numWarps=4 doesn't need asymmetric sync, return.
     return;
-  } else if (numWarps == 8 && numStages == 2) { // Pingpong between warps from the same block
+  } else if (numWarps == 8 &&
+             numStages == 2) { // Pingpong between warps from the same block
     if (lStoreOps.size() != 2) {
       std::stringstream message;
       message << "Unable to match ping pong slicing pattern. Details: "

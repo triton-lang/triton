@@ -615,7 +615,8 @@ SmallVector<std::pair<Operation *, Value>> createAndScheduleStreamOps(
 
 LogicalResult preprocessLoopAndBuildSchedule(scf::ForOp &forOp, int numStages,
                                              int stages[SCHED_SIZE],
-                                             bool useAsyncCopy, bool useF16BlockPingpong,
+                                             bool useAsyncCopy,
+                                             bool useF16BlockPingpong,
                                              tt::PipeliningOption &options) {
   triton::AMD::ModuleAxisInfoAnalysis axisInfoAnalysis(
       forOp->getParentOfType<ModuleOp>());
@@ -728,7 +729,8 @@ LogicalResult preprocessLoopAndBuildSchedule(scf::ForOp &forOp, int numStages,
 }
 
 LogicalResult pipelineLoop(scf::ForOp forOp, int numStages, int globalPrefetch,
-                           int localPrefetch, bool useAsyncCopy, bool useF16BlockPingpong) {
+                           int localPrefetch, bool useAsyncCopy,
+                           bool useF16BlockPingpong) {
 
   int lastStage = numStages - 1;
   int stages[SCHED_SIZE];
@@ -757,7 +759,8 @@ LogicalResult pipelineLoop(scf::ForOp forOp, int numStages, int globalPrefetch,
   };
 
   if (failed(preprocessLoopAndBuildSchedule(forOp, numStages, stages,
-                                            useAsyncCopy, useF16BlockPingpong, options)))
+                                            useAsyncCopy, useF16BlockPingpong,
+                                            options)))
     return failure();
   LDBG("Loop before sending to expander:\n" << *forOp);
 
@@ -823,7 +826,6 @@ struct PipelinePass : impl::TritonAMDGPUStreamPipelineBase<PipelinePass> {
       return signalPassFailure();
     }
 
-
     auto strVal = triton::tools::getStrEnv("TRITON_HIP_USE_BLOCK_PINGPONG");
     bool pingpongDisabled = false;
     if (!strVal.empty()) {
@@ -831,8 +833,7 @@ struct PipelinePass : impl::TritonAMDGPUStreamPipelineBase<PipelinePass> {
       if (boolV.has_value())
         if (!boolV.value())
           pingpongDisabled = true;
-        //pingpongDisabled = boolV.value() ? "false" : "true";
-
+      // pingpongDisabled = boolV.value() ? "false" : "true";
     }
     bool useF16BlockPingpong = !pingpongDisabled & (numStages == 3);
 
@@ -850,7 +851,8 @@ struct PipelinePass : impl::TritonAMDGPUStreamPipelineBase<PipelinePass> {
         continue;
       }
       (void)pipelineLoop(forOp, tt::getNumStagesOrDefault(forOp, numStages),
-                         globalPrefetch, localPrefetch, useAsyncCopy, useF16BlockPingpong);
+                         globalPrefetch, localPrefetch, useAsyncCopy,
+                         useF16BlockPingpong);
     }
 
     if (useAsyncCopy && !useF16BlockPingpong) {
