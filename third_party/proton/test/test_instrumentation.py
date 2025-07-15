@@ -78,6 +78,51 @@ def test_jit(tmp_path):
     assert len(foo.device_caches[device][0]) == 2, "Instrumented and uninstrumented kernels both should be cached"
 
 
+def test_scope(tmp_path: pathlib.Path, capfd):
+
+    @triton.jit
+    def scope_not_exited():
+        pl.enter_scope("a")
+
+    @triton.jit
+    def scope_double_enter():
+        pl.enter_scope("a")
+        pl.enter_scope("a")
+
+    @triton.jit
+    def scope_mismatch():
+        pl.enter_scope("a")
+        pl.enter_scope("b")
+        pl.exit_scope("a")
+        pl.exit_scope("b")
+
+    @triton.jit
+    def scope_exit_without_enter():
+        pl.exit_scope("a")
+
+    temp_file = tmp_path / "test_scope.hatchet"
+    proton.start(str(temp_file.with_suffix("")), backend="instrumentation")
+
+    scope_not_exited[(1, )]()
+    captured = capfd.readouterr()
+    assert "Scope \'a\' has not exited" in captured.err
+
+    scope_double_enter[(1, )]()
+    captured = capfd.readouterr()
+    assert "Scope \'a\' has already entered" in captured.err
+
+    scope_mismatch[(1, )]()
+    captured = capfd.readouterr()
+    assert "Scope 'a' does not match the last entered scope 'b'" in captured.err
+
+    scope_exit_without_enter[(1, )]()
+    captured = capfd.readouterr()
+    assert "Scope 'a' does not match any entered scope" in captured.err
+
+    proton.finalize()
+    assert temp_file.exists()
+
+
 @pytest.mark.parametrize("method", ["operator", "context_manager"])
 def test_record(method, tmp_path: pathlib.Path):
     from contextlib import contextmanager

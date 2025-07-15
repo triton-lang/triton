@@ -29,22 +29,32 @@ void ScopeIdAllocation::run() {
         scopeIdStack.push(id);
         id++;
       } else {
-        recordOp->emitError("The scope name must appear in pairs");
+        recordOp->emitError("Scope '") << name << "' has already entered";
       }
     } else {
       if (nameToIdMap.contains(name)) {
-        scopeIdStack.pop();
+        if (!scopeIdStack.empty()) {
+          ScopeId topId = scopeIdStack.top();
+          auto topName = idToNameMap.lookup(topId);
+          if (topName != name) {
+            recordOp->emitError("Scope '")
+                << name << "' does not match the " << "last entered scope '"
+                << topName << "'";
+          }
+          scopeIdStack.pop();
+        }
         opToIdMap[recordOp] = nameToIdMap.lookup(name);
         nameToIdMap.erase(name);
       } else {
-        recordOp->emitError("The scope name must appear in pairs");
+        recordOp->emitError("Scope '")
+            << name << "' does not match any entered scope";
       }
     }
   });
 
   if (nameToIdMap.size() > 0) {
     for (auto &[name, _] : nameToIdMap) {
-      funcOp->emitError("Scope name '") << name << "' must appear in pairs";
+      funcOp->emitError("Scope '") << name << "' has not exited";
     }
   }
 }
