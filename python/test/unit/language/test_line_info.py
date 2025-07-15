@@ -251,3 +251,34 @@ def test_line_info_ir_source(monkeypatch, status, tmp_path):
         assert check_file_lines(file_lines, str(temp_file), -1, should_contain=True)
     else:
         assert check_file_lines(file_lines, "/path/test.py", 8, should_contain=True)
+
+
+def test_use_name_loc_as_prefix(monkeypatch, device, capfd, fresh_triton_cache):
+    monkeypatch.setenv("MLIR_USE_NAME_LOC", "1")
+    monkeypatch.setenv("MLIR_ENABLE_DUMP", "1")
+
+    N = 1024
+
+    grid = lambda META: (triton.cdiv(N, META["BLOCK_SIZE"]), )
+
+    @triton.jit
+    def _kernel(src, N, BLOCK_SIZE: tl.constexpr):
+        pid = tl.program_id(0)
+        offset = pid * BLOCK_SIZE
+        offsets = offset + tl.arange(0, BLOCK_SIZE)
+        load_src_store_dst = src + offsets
+        mask = offsets < N
+        x_plus_1 = tl.load(load_src_store_dst, mask=mask) + 1
+        tl.store(load_src_store_dst, x_plus_1, mask=mask)
+
+    BLOCK_SIZE = 16
+    src = torch.zeros(N, device=device)
+    _kernel[grid](src, N, BLOCK_SIZE)
+
+    captured = capfd.readouterr()
+    assert "%pid" in captured.err
+    assert "%offset =" in captured.err
+    assert "%offsets" in captured.err
+    assert "%load_src_store_dst" in captured.err
+    assert "%mask" in captured.err
+    assert "%x_plus_1" in captured.err

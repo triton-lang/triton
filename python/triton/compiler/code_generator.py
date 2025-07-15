@@ -1,4 +1,5 @@
 import ast
+import contextlib
 import copy
 import inspect
 import re
@@ -305,6 +306,8 @@ class CodeGenerator(ast.NodeVisitor):
             from triton.language.semantic import TritonSemantic
             self.builder = ir.builder(context)
             self.semantic = TritonSemantic(self.builder)
+
+        self.name_loc_as_prefix = None
         self.file_name = file_name
         # node.lineno starts from 1, so we need to subtract 1
         self.begin_line = begin_line - 1
@@ -577,6 +580,8 @@ class CodeGenerator(ast.NodeVisitor):
             self.caller_context.initialize_callee(self.fn, self.builder)
         # bind arguments to symbols
         for arg_name, arg_value in zip(arg_names, arg_values):
+            if knobs.compilation.use_name_loc_as_prefix and _is_triton_tensor(arg_value):
+                arg_value.handle.set_loc(self.builder.create_name_loc(arg_name, arg_value.handle.get_loc()))
             self.set_value(arg_name, arg_value)
         insert_pt = self.builder.get_insertion_block()
         self.builder.set_insertion_point_to_start(entry)
@@ -642,6 +647,12 @@ class CodeGenerator(ast.NodeVisitor):
         assert isinstance(target, ast.Name)
         self.set_value(self.visit(target), value)
 
+    @contextlib.contextmanager
+    def _name_loc_prefix(self, prefix):
+        self.name_loc_as_prefix = prefix
+        yield
+        self.name_loc_as_prefix = None
+
     def visit_Assign(self, node):
         # construct values to assign
         def _sanitize_value(value):
@@ -655,10 +666,15 @@ class CodeGenerator(ast.NodeVisitor):
                 value = self.semantic.to_tensor(value)
             return value
 
-        values = _sanitize_value(self.visit(node.value))
         targets = [node.target] if isinstance(node, ast.AnnAssign) else node.targets
         assert len(targets) == 1
-        self.assignTarget(targets[0], values)
+        target = targets[0]
+        if knobs.compilation.use_name_loc_as_prefix and isinstance(target, ast.Name):
+            with self._name_loc_prefix(target.id):
+                values = _sanitize_value(self.visit(node.value))
+        else:
+            values = _sanitize_value(self.visit(node.value))
+        self.assignTarget(target, values)
 
     def visit_AugAssign(self, node):
         lhs = copy.deepcopy(node.target)
@@ -1407,7 +1423,11 @@ class CodeGenerator(ast.NodeVisitor):
             last_loc = self.builder.get_loc()
             self.cur_node = node
             if hasattr(node, 'lineno') and hasattr(node, 'col_offset'):
-                self.builder.set_loc(self.file_name, self.begin_line + node.lineno, node.col_offset)
+                here_loc = self.builder.create_loc(self.file_name, self.begin_line + node.lineno, node.col_offset)
+                if knobs.compilation.use_name_loc_as_prefix and self.name_loc_as_prefix is not None:
+                    self.builder.set_loc(self.builder.create_name_loc(self.name_loc_as_prefix, here_loc))
+                else:
+                    self.builder.set_loc(here_loc)
                 last_loc = self.builder.get_loc()
             try:
                 ret = super().visit(node)
