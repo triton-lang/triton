@@ -147,8 +147,8 @@ LogicalResult lowerLdStMatrix(
   }
 
   // Choose up to 4 packs of 32-bit elements indexed by the next (at most) two
-  // bases as the vectorisation factor. We don't consider the basis of the
-  // tile for vectorisation so we substract them
+  // bases as the vectorisation factor. We don't consider the basis of the tile
+  // for vectorisation so we substract them
   auto vec = std::min<int32_t>(2, reps.getInDimSizeLog2(kReg) -
                                       llvm::Log2_32(32 / bitwidth));
 
@@ -159,8 +159,8 @@ LogicalResult lowerLdStMatrix(
   // Compute the addresses for the 0th tile
   // Here we implement the stmatrix.x4 addressing. As per the PTX docs, the
   // threads 0-7 hold the address of the first element of the 8 columns of the
-  // first submatrix, threads 8-15 for the second submatrix, etc. In general
-  // we map:
+  // first submatrix, threads 8-15 for the second submatrix, etc. In general we
+  // map:
   // - The lowest 3 bits of the laneId to the columns of each submatrix, which
   // is
   //   given by the 3 kLane bases of quotient that are not part of the tile
@@ -178,8 +178,8 @@ LogicalResult lowerLdStMatrix(
       laneBases.push_back(reps.getBasis(kReg, tileDimSizeReg + i));
     }
   } else {
-    // We choose the first basis of the register. In the future we could
-    // choose a basis that minimises the bank conflicts
+    // We choose the first basis of the register. In the future we could choose
+    // a basis that minimises the bank conflicts
     laneBases.push_back(reps.getBasis(kReg, 0));
     laneBases.push_back(reps.getBasis(kLane, 0));
     laneBases.push_back(reps.getBasis(kLane, 1));

@@ -968,27 +968,25 @@ LinearLayout lstsq(const LinearLayout &A, const LinearLayout &B) {
   // A and B may not be surjective, but we assume that Im(B) \subset Im(A)
   // Sketch of the algorithm:
   // https://github.com/triton-lang/triton/pull/5309#discussion_r1869084111
-  assert(A.getTotalOutDimSizeLog2() >= B.getTotalOutDimSizeLog2() &&
+  int numRows = A.getTotalOutDimSizeLog2();
+  assert(numRows >= B.getTotalOutDimSizeLog2() &&
          "A.lstsq(B) called with incompatible output shapes");
-  int numRowsA = A.getTotalOutDimSizeLog2();
-  int numRowsB = B.getTotalOutDimSizeLog2();
   int numColsA = A.getTotalInDimSizeLog2();
   int numColsB = B.getTotalInDimSizeLog2();
   int numCols = numColsA + numColsB;
   std::unique_ptr<uint64_t[]> combinedMat = concatMatrices(A, B);
-  f2reduce::inplace_rref_strided(combinedMat.get(), numRowsA, numCols,
+  f2reduce::inplace_rref_strided(combinedMat.get(), numRows, numCols,
                                  /*stride=*/1);
 
   // Compute the pivot columns
   // Since A and B have the same image, each row will either have a pivot
   // or will be all zeros
   SmallVector<int32_t> pivotRowOfCol(numColsA, -1);
-  for (int r = 0; r < numRowsA; r++) {
-    uint64_t row = combinedMat[r];
+  for (int r = 0; r < numRows; r++) {
+    auto row = combinedMat[r];
     if (row == 0) {
       continue;
     }
-
     int c = __builtin_ctzll(row);
     assert(c < numColsA && "Precondition broken. Im(B) not contained in Im(A)");
     assert(pivotRowOfCol[c] == -1 &&
@@ -996,6 +994,7 @@ LinearLayout lstsq(const LinearLayout &A, const LinearLayout &B) {
     pivotRowOfCol[c] = r;
   }
 
+  // Extract A^{-1}B and complete the matrix using zeros
   std::unique_ptr<uint64_t[]> retMat(new uint64_t[numColsA]());
   for (int c = 0; c < numColsA; ++c) {
     int row = pivotRowOfCol[c];
