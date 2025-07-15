@@ -76,7 +76,7 @@ class HIPOptions:
 
         if (self.arch == 'gfx950') and (self.kpack != 1):
             warnings.warn(
-                f"kpack is deprecated starting from gfx950 and will be removed in later releases. So for now kpack = {self.kpack} will be overwritten to 1."
+                f"kpack is deprecated starting from gfx950 and will be removed in later releases. So for now kpack = {self.kpack} will be overwritten to 1 to make transitioning easier."
             )
 
         default_libdir = Path(__file__).parent / 'lib'
