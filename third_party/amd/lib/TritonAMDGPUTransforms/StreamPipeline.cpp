@@ -241,15 +241,8 @@ AsyncCopyChainOps createAsyncCopy(tt::LoadOp loadOp, Value alloc,
   ttg::MemDescType allocTy = cast<ttg::MemDescType>(alloc.getType());
 
   // Extract local subview from shared allocation
-  Value zero = builder.create<arith::ConstantIntOp>(forOp.getLoc(), 0, 32);
-  SmallVector<Value> loadOffsets(allocTy.getRank(), zero);
-  loadOffsets[0] = extractIdx;
-  auto sharedMemorySpace = ttg::SharedMemorySpaceAttr::get(forOp.getContext());
-  auto subviewTy = ttg::MemDescType::get(
-      allocTy.getShape().drop_front(), allocTy.getElementType(),
-      allocTy.getEncoding(), sharedMemorySpace, /*mutableMemory=*/true);
-  auto viewLoad =
-      builder.create<ttg::MemDescSubviewOp>(loc, subviewTy, alloc, loadOffsets);
+  auto viewLoad = triton::createSingleBufferView(builder, alloc, extractIdx)
+                      .getDefiningOp<ttg::MemDescSubviewOp>();
 
   // If the load is used by an existing local allocation we replace it with the
   // new subview
@@ -348,21 +341,16 @@ StreamCopyChainOps createStreamCopy(tt::LoadOp loadOp, Value alloc,
   SmallVector<Value> copyOffsets(allocTy.getRank(), zero);
   tt::LoadOp copy = cast<tt::LoadOp>(builder.clone(*loadOp));
 
-  // Extract part.
-  SmallVector<Value> loadOffsets(allocTy.getRank(), zero);
-  loadOffsets[0] = extractIdx;
-  auto sharedMemorySpace = ttg::SharedMemorySpaceAttr::get(forOp.getContext());
-  auto subviewTy = ttg::MemDescType::get(
-      allocTy.getShape().drop_front(), allocTy.getElementType(),
-      allocTy.getEncoding(), sharedMemorySpace, /*mutableMemory=*/true);
-  auto subviewOp =
-      builder.create<ttg::MemDescSubviewOp>(loc, subviewTy, alloc, loadOffsets);
+  // Extract local subview from shared allocation
+  auto viewLoad = triton::createSingleBufferView(builder, alloc, extractIdx)
+                      .getDefiningOp<ttg::MemDescSubviewOp>();
+  assert(viewLoad);
+
   // Clean up old local caches.
   SmallVector<ttg::LocalAllocOp> allocsToErase;
   for (Operation *user : loadOp->getUsers()) {
     if (auto userAlloc = dyn_cast<ttg::LocalAllocOp>(user)) {
-      tt::replaceUsesAndPropagateType(builder, userAlloc,
-                                      subviewOp.getResult());
+      tt::replaceUsesAndPropagateType(builder, userAlloc, viewLoad);
       allocsToErase.push_back(userAlloc);
     }
   }
@@ -370,12 +358,12 @@ StreamCopyChainOps createStreamCopy(tt::LoadOp loadOp, Value alloc,
     allocToErase.erase();
 
   // Prefetch load ahead of the dot stage if is used by the dot.
-  auto storeOp = builder.create<ttg::LocalStoreOp>(loc, copy, subviewOp);
+  auto storeOp = builder.create<ttg::LocalStoreOp>(loc, copy, viewLoad);
 
   auto sharedLoad =
-      builder.create<ttg::LocalLoadOp>(loc, loadOp.getType(), subviewOp);
+      builder.create<ttg::LocalLoadOp>(loc, loadOp.getType(), viewLoad);
 
-  return {copy, subviewOp, storeOp, sharedLoad};
+  return {copy, viewLoad, storeOp, sharedLoad};
 }
 
 void scheduleStreamCopy(
