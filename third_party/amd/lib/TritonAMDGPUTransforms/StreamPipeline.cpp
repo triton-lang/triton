@@ -126,6 +126,9 @@ struct LoadInfo {
   Operation *use = nullptr;
 };
 
+using StreamClusters = std::array<tt::CoarseSchedule::Cluster, SCHED_SIZE>;
+using StreamStages = std::array<int, SCHED_SIZE>;
+
 } // namespace
 
 // Init Schedule Config based on settings and loop characteristics.
@@ -134,11 +137,10 @@ struct LoadInfo {
 // scheduling.
 //   WARNING: Changing the order of schedule.clusters.newAtBack() calls
 //            can cause invalid schedules to be produced.
-LogicalResult
-initSchedule(int maxDist, int stages[SCHED_SIZE], int numStages,
-             int &numBuffers, bool useAsyncCopy,
-             std::array<tt::CoarseSchedule::Cluster, SCHED_SIZE> &clusters,
-             tt::CoarseSchedule &schedule) {
+LogicalResult initSchedule(int maxDist, StreamStages &stages, int numStages,
+                           int &numBuffers, bool useAsyncCopy,
+                           StreamClusters &clusters,
+                           tt::CoarseSchedule &schedule) {
   bool pairedGlobalLoadLocalStore = stages[SCHED_LOCAL_STORE] == 0;
   stages[SCHED_LOCAL_STORE] += maxDist;
 
@@ -205,7 +207,7 @@ initSchedule(int maxDist, int stages[SCHED_SIZE], int numStages,
   }
 
   // Make assignments
-  std::array<tt::CoarseSchedule::Cluster, SCHED_SIZE> clusterVec;
+  StreamClusters clusterVec;
   std::generate(clusterVec.begin(), clusterVec.end(),
                 [&]() { return schedule.clusters.newAtBack(); });
 
@@ -255,10 +257,9 @@ AsyncCopyChainOps createAsyncCopy(tt::LoadOp loadOp, Value alloc,
   return {copyOp, commitOp, waitOp, maybeSharedLoad};
 }
 
-void scheduleLocalLoad(
-    ttg::LocalLoadOp localLoadOp, tt::CoarseSchedule &schedule,
-    const int stages[SCHED_SIZE],
-    const std::array<tt::CoarseSchedule::Cluster, SCHED_SIZE> &clusters) {
+void scheduleLocalLoad(ttg::LocalLoadOp localLoadOp,
+                       tt::CoarseSchedule &schedule, const StreamStages &stages,
+                       const StreamClusters &clusters) {
   if (stages[SCHED_LOCAL_LOAD] != stages[SCHED_COMPUTE]) {
     schedule.insert(localLoadOp, stages[SCHED_LOCAL_LOAD],
                     clusters[SCHED_LOCAL_LOAD]);
@@ -274,10 +275,9 @@ void scheduleLocalLoad(
   }
 }
 
-void scheduleAsyncCopy(
-    const AsyncCopyChainOps &asyncOps, tt::LoadOp loadOp,
-    tt::CoarseSchedule &schedule, const int stages[SCHED_SIZE],
-    const std::array<tt::CoarseSchedule::Cluster, SCHED_SIZE> &clusters) {
+void scheduleAsyncCopy(const AsyncCopyChainOps &asyncOps, tt::LoadOp loadOp,
+                       tt::CoarseSchedule &schedule, const StreamStages &stages,
+                       const StreamClusters &clusters) {
   auto [copyOp, commitOp, waitOp, maybeLocalLoadOp] = asyncOps;
   auto [loadStage, loadCluster] = schedule[loadOp];
   schedule.insert(copyOp, loadStage, loadCluster);
@@ -298,10 +298,11 @@ void scheduleAsyncCopy(
     scheduleLocalLoad(*maybeLocalLoadOp, schedule, stages, clusters);
 }
 
-void createAndScheduleAsyncCopy(
-    tt::LoadOp loadOp, Value alloc, Value extractIdx, scf::ForOp forOp,
-    tt::CoarseSchedule &schedule, const int stages[SCHED_SIZE],
-    const std::array<tt::CoarseSchedule::Cluster, SCHED_SIZE> &clusters) {
+void createAndScheduleAsyncCopy(tt::LoadOp loadOp, Value alloc,
+                                Value extractIdx, scf::ForOp forOp,
+                                tt::CoarseSchedule &schedule,
+                                const StreamStages &stages,
+                                const StreamClusters &clusters) {
   auto asyncOps = createAsyncCopy(loadOp, alloc, extractIdx, forOp);
   scheduleAsyncCopy(asyncOps, loadOp, schedule, stages, clusters);
 
@@ -333,10 +334,10 @@ StreamCopyChainOps createStreamCopy(tt::LoadOp loadOp, Value alloc,
   return {newLoadOp, viewLoad, storeOp, maybeLocalLoad};
 }
 
-void scheduleStreamCopy(
-    const StreamCopyChainOps &streamOps, tt::LoadOp oldLoadOp,
-    tt::CoarseSchedule &schedule, const int stages[SCHED_SIZE],
-    const std::array<tt::CoarseSchedule::Cluster, SCHED_SIZE> &clusters) {
+void scheduleStreamCopy(const StreamCopyChainOps &streamOps,
+                        tt::LoadOp oldLoadOp, tt::CoarseSchedule &schedule,
+                        const StreamStages &stages,
+                        const StreamClusters &clusters) {
   auto [newLoadOp, subviewOp, localStoreOp, maybeLocalLoadOp] = streamOps;
   auto [loadStage, loadCluster] = schedule[oldLoadOp];
 
@@ -349,10 +350,11 @@ void scheduleStreamCopy(
     scheduleLocalLoad(*maybeLocalLoadOp, schedule, stages, clusters);
 }
 
-void createAndScheduleStreamCopy(
-    tt::LoadOp loadOp, Value alloc, Value extractIdx, scf::ForOp forOp,
-    tt::CoarseSchedule &schedule, const int stages[SCHED_SIZE],
-    const std::array<tt::CoarseSchedule::Cluster, SCHED_SIZE> &clusters) {
+void createAndScheduleStreamCopy(tt::LoadOp loadOp, Value alloc,
+                                 Value extractIdx, scf::ForOp forOp,
+                                 tt::CoarseSchedule &schedule,
+                                 const StreamStages &stages,
+                                 const StreamClusters &clusters) {
   auto streamOps = createStreamCopy(loadOp, alloc, extractIdx, forOp);
   scheduleStreamCopy(streamOps, loadOp, schedule, stages, clusters);
 
@@ -456,11 +458,10 @@ getSharedEncIfAllUsersAreDotEnc(Value loadedValue) {
   return attr;
 }
 
-LogicalResult scheduleLoads(
-    const llvm::MapVector<Operation *, LoadInfo> &loadToInfo, int maxDist,
-    int numStages, int stages[SCHED_SIZE],
-    const std::array<tt::CoarseSchedule::Cluster, SCHED_SIZE> &clusters,
-    tt::CoarseSchedule &schedule) {
+LogicalResult
+scheduleLoads(const llvm::MapVector<Operation *, LoadInfo> &loadToInfo,
+              int maxDist, int numStages, const StreamStages &stages,
+              const StreamClusters &clusters, tt::CoarseSchedule &schedule) {
   // The stage gap between chained loads--this allows us to "spread" loads
   // with a non-one step in case the number of stages given by the user is
   // large.
@@ -521,8 +522,7 @@ bool canBeConvertedToAsyncLoad(unsigned numBuffers, tt::LoadOp loadOp,
 SmallVector<std::pair<Operation *, Value>> createAndScheduleStreamOps(
     const llvm::MapVector<Operation *, LoadInfo> &loadToInfo, scf::ForOp &forOp,
     const int &numBuffers, bool useAsyncCopy, tt::CoarseSchedule &schedule,
-    const int stages[SCHED_SIZE],
-    const std::array<tt::CoarseSchedule::Cluster, SCHED_SIZE> &clusters,
+    const StreamStages &stages, const StreamClusters &clusters,
     tt::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
   Attribute sharedMemorySpace =
       ttg::SharedMemorySpaceAttr::get(forOp.getContext());
@@ -582,13 +582,13 @@ SmallVector<std::pair<Operation *, Value>> createAndScheduleStreamOps(
 }
 
 LogicalResult preprocessLoopAndBuildSchedule(scf::ForOp &forOp, int numStages,
-                                             int stages[SCHED_SIZE],
+                                             StreamStages &stages,
                                              bool useAsyncCopy,
                                              tt::PipeliningOption &options) {
   triton::AMD::ModuleAxisInfoAnalysis axisInfoAnalysis(
       forOp->getParentOfType<ModuleOp>());
   int numBuffers = 1;
-  std::array<tt::CoarseSchedule::Cluster, SCHED_SIZE> clusters;
+  StreamClusters clusters;
   tt::CoarseSchedule schedule(numStages);
 
   auto arch = getAMDArch(forOp->getParentOfType<ModuleOp>());
@@ -679,7 +679,7 @@ LogicalResult pipelineLoop(scf::ForOp forOp, int numStages, int globalPrefetch,
                            int localPrefetch, bool useAsyncCopy) {
 
   int lastStage = numStages - 1;
-  int stages[SCHED_SIZE];
+  StreamStages stages;
   stages[SCHED_GLOBAL_LOAD] = 0;
   stages[SCHED_LOCAL_STORE] = globalPrefetch;
   stages[SCHED_LOCAL_LOAD] = lastStage - localPrefetch;
