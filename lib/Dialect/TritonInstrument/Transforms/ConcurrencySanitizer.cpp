@@ -257,75 +257,183 @@ private:
     }
   }
 
+  struct MemEffects {
+    enum class RW { Read, Write };
+    Value buf;
+    RW rw;
+    SmallVector<std::tuple<Value, Value>> barriersAndPreds;
+    bool commitTracking = false;
+    Value pred;
+  };
+
+  SmallVector<MemEffects> getMemEffects(Operation *op) {
+    SmallVector<MemEffects> effects;
+    if (auto copyOp = dyn_cast<ttng::AsyncTMACopyGlobalToLocalOp>(op)) {
+      effects.emplace_back(
+          MemEffects{.buf = copyOp.getResult(),
+                     .rw = MemEffects::RW::Write,
+                     .barriersAndPreds = {{copyOp.getBarrier(), nullptr}},
+                     .pred = copyOp.getPred()});
+    }
+    if (auto copyOp = dyn_cast<ttg::AsyncCopyGlobalToLocalOp>(op)) {
+      effects.emplace_back(MemEffects{.buf = copyOp.getResult(),
+                                      .rw = MemEffects::RW::Write,
+                                      .commitTracking = true});
+    }
+    if (auto loadOp = dyn_cast<ttng::TMEMLoadOp>(op)) {
+      effects.emplace_back(
+          MemEffects{.buf = loadOp.getSrc(), .rw = MemEffects::RW::Read});
+    }
+    if (auto storeOp = dyn_cast<ttng::TMEMStoreOp>(op)) {
+      effects.emplace_back(
+          MemEffects{.buf = storeOp.getDst(), .rw = MemEffects::RW::Write});
+    }
+    if (auto mmav5Op = dyn_cast<ttng::TCGen5MMAOp>(op)) {
+      SmallVector<std::tuple<Value, Value>> barriersAndPreds = llvm::to_vector(
+          llvm::zip(mmav5Op.getBarriers(), mmav5Op.getBarrierPreds()));
+
+      effects.emplace_back(MemEffects{.buf = mmav5Op.getA(),
+                                      .rw = MemEffects::RW::Read,
+                                      .barriersAndPreds = barriersAndPreds,
+                                      .pred = mmav5Op.getPred()});
+
+      effects.emplace_back(MemEffects{.buf = mmav5Op.getB(),
+                                      .rw = MemEffects::RW::Read,
+                                      .barriersAndPreds = barriersAndPreds,
+                                      .pred = mmav5Op.getPred()});
+
+      effects.emplace_back(MemEffects{.buf = mmav5Op.getAccumulator(),
+                                      .rw = MemEffects::RW::Write,
+                                      .barriersAndPreds = barriersAndPreds,
+                                      .pred = mmav5Op.getPred()});
+    }
+    return effects;
+  }
+
   void instrumentMemoryOperations(ImplicitLocOpBuilder &b) {
     module.walk([&](Operation *op) {
       b.setLoc(op->getLoc());
       b.setInsertionPoint(op);
-      if (auto copyOp = dyn_cast<ttng::AsyncTMACopyGlobalToLocalOp>(op)) {
-        MemType memType = MemType::SHARED;
-        auto buf = copyOp.getResult();
-        auto pred = copyOp.getPred();
-        auto barrier = copyOp.getBarrier();
-        assert(barriers);
-        addWriteChecks(b, buf, pred, memType);
-        addReadChecks(b, buf, pred, memType);
-        b.create<tti::ExperimentalMarkAsWriteOp>(
-            buf, barrier, buffersTensor[(int)memType],
-            writeBarriersAlloc[(int)memType], writeBarriersType[(int)memType],
-            pred);
-      }
-      if (auto mmav5Op = dyn_cast<ttng::TCGen5MMAOp>(op)) {
-        auto pred = mmav5Op.getPred();
-        b.setInsertionPoint(mmav5Op);
-
-        auto instrumentOperand = [&](TypedValue<ttg::MemDescType> operand) {
+      SmallVector<MemEffects> effects = getMemEffects(op);
+      if (!effects.empty()) {
+        for (MemEffects effect : effects) {
+          Value buf = effect.buf;
+          auto bufType = cast<ttg::MemDescType>(buf.getType());
           MemType memType = MemType::TMEM;
-          if (isa<ttg::NVMMASharedEncodingAttr>(
-                  operand.getType().getEncoding())) {
+          if (isa<ttg::NVMMASharedEncodingAttr>(bufType.getEncoding())) {
             memType = MemType::SHARED;
           }
-          addWriteChecks(b, operand, pred, memType);
-          for (auto barrier : mmav5Op.getBarriers()) {
-            assert(barriers);
-            b.create<tti::ExperimentalMarkAsReadOp>(
-                operand, barrier, buffersTensor[(int)memType], barriers,
-                readBarriersAlloc[(int)memType], readBarriersType[(int)memType],
-                pred);
+          if (effect.rw == MemEffects::RW::Read) {
+            // For op that is reading, we only need to check if anything else
+            // is writing to the same buffer.
+            addWriteChecks(b, buf, effect.pred, memType);
+            if (!effect.barriersAndPreds.empty()) {
+              for (auto [barrier, pred] : effect.barriersAndPreds) {
+                if (pred && effect.pred) {
+                  pred = b.create<arith::AndIOp>(effect.pred, pred);
+                }
+                b.create<tti::ExperimentalMarkAsReadOp>(
+                    buf, barrier, buffersTensor[(int)memType], barriers,
+                    readBarriersAlloc[(int)memType],
+                    readBarriersType[(int)memType], pred);
+              }
+            }
+            // TODO: commit tracking for reads
           }
-        };
-
-        instrumentOperand(mmav5Op.getA());
-        instrumentOperand(mmav5Op.getB());
-
-        addWriteChecks(b, mmav5Op.getAccumulator(), pred, MemType::TMEM);
-        addReadChecks(b, mmav5Op.getAccumulator(), pred, MemType::TMEM);
-        for (auto barrier : mmav5Op.getBarriers()) {
-          assert(barriers);
-          b.create<tti::ExperimentalMarkAsWriteOp>(
-              mmav5Op.getAccumulator(), barrier,
-              buffersTensor[(int)MemType::TMEM],
-              writeBarriersAlloc[(int)MemType::TMEM],
-              writeBarriersType[(int)MemType::TMEM], pred);
+          if (effect.rw == MemEffects::RW::Write) {
+            // Op is writing to the buffer, we need to check if anything else
+            // is reading or writing to the same buffer.
+            addWriteChecks(b, buf, effect.pred, memType);
+            addReadChecks(b, buf, effect.pred, memType);
+            if (!effect.barriersAndPreds.empty()) {
+              for (auto [barrier, pred] : effect.barriersAndPreds) {
+                if (pred && effect.pred) {
+                  pred = b.create<arith::AndIOp>(effect.pred, pred);
+                }
+                b.create<tti::ExperimentalMarkAsWriteOp>(
+                    buf, barrier, buffersTensor[(int)memType],
+                    writeBarriersAlloc[(int)memType],
+                    writeBarriersType[(int)memType], pred);
+              }
+            }
+            if (effect.commitTracking) {
+              b.create<tti::ExperimentalStageWriteForCommitOp>(
+                  buf, buffersTensor[(int)memType], writeCommitsAlloc,
+                  writeCommitsType, effect.pred);
+            }
+          }
         }
       }
+
+      // if (auto copyOp = dyn_cast<ttng::AsyncTMACopyGlobalToLocalOp>(op)) {
+      //   MemType memType = MemType::SHARED;
+      //   auto buf = copyOp.getResult();
+      //   auto pred = copyOp.getPred();
+      //   auto barrier = copyOp.getBarrier();
+      //   assert(barriers);
+      //   addWriteChecks(b, buf, pred, memType);
+      //   addReadChecks(b, buf, pred, memType);
+      //   b.create<tti::ExperimentalMarkAsWriteOp>(
+      //       buf, barrier, buffersTensor[(int)memType],
+      //       writeBarriersAlloc[(int)memType],
+      //       writeBarriersType[(int)memType], pred);
+      // }
+      // if (auto mmav5Op = dyn_cast<ttng::TCGen5MMAOp>(op)) {
+      //   auto pred = mmav5Op.getPred();
+      //   b.setInsertionPoint(mmav5Op);
+
+      //   auto instrumentOperand = [&](TypedValue<ttg::MemDescType> operand) {
+      //     MemType memType = MemType::TMEM;
+      //     if (isa<ttg::NVMMASharedEncodingAttr>(
+      //             operand.getType().getEncoding())) {
+      //       memType = MemType::SHARED;
+      //     }
+      //     addWriteChecks(b, operand, pred, memType);
+      //     for (auto barrier : mmav5Op.getBarriers()) {
+      //       assert(barriers);
+      //       b.create<tti::ExperimentalMarkAsReadOp>(
+      //           operand, barrier, buffersTensor[(int)memType], barriers,
+      //           readBarriersAlloc[(int)memType],
+      //           readBarriersType[(int)memType], pred);
+      //     }
+      //   };
+
+      //   instrumentOperand(mmav5Op.getA());
+      //   instrumentOperand(mmav5Op.getB());
+
+      //   addWriteChecks(b, mmav5Op.getAccumulator(), pred, MemType::TMEM);
+      //   addReadChecks(b, mmav5Op.getAccumulator(), pred, MemType::TMEM);
+      //   for (auto barrier : mmav5Op.getBarriers()) {
+      //     assert(barriers);
+      //     b.create<tti::ExperimentalMarkAsWriteOp>(
+      //         mmav5Op.getAccumulator(), barrier,
+      //         buffersTensor[(int)MemType::TMEM],
+      //         writeBarriersAlloc[(int)MemType::TMEM],
+      //         writeBarriersType[(int)MemType::TMEM], pred);
+      //   }
+      // }
       if (auto waitOp = dyn_cast<ttng::WaitBarrierOp>(op)) {
         assert(barriers);
         auto pred = waitOp.getPred();
         auto barrier = waitOp.getAlloc();
-        b.create<tti::ExperimentalClearWriteBarrierOp>(
-            barrier, writeBarriersAlloc[(int)MemType::SHARED],
-            writeBarriersType[(int)MemType::SHARED], pred);
-        b.create<tti::ExperimentalClearReadBarrierOp>(
-            barrier, barriers, readBarriersAlloc[(int)MemType::SHARED],
-            readBarriersType[(int)MemType::SHARED], pred);
+        for (MemType memType : {MemType::SHARED, MemType::TMEM}) {
+          if (writeBarriersAlloc[(int)memType]) {
+            b.create<tti::ExperimentalClearWriteBarrierOp>(
+                barrier, writeBarriersAlloc[(int)memType],
+                writeBarriersType[(int)memType], pred);
+            b.create<tti::ExperimentalClearReadBarrierOp>(
+                barrier, barriers, readBarriersAlloc[(int)memType],
+                readBarriersType[(int)memType], pred);
+          }
+        }
       }
-      if (auto asyncCopyOp = dyn_cast<ttg::AsyncCopyGlobalToLocalOp>(op)) {
-        addWriteChecks(b, asyncCopyOp.getResult(), nullptr, MemType::SHARED);
-        addReadChecks(b, asyncCopyOp.getResult(), nullptr, MemType::SHARED);
-        b.create<tti::ExperimentalStageWriteForCommitOp>(
-            asyncCopyOp.getResult(), buffersTensor[(int)MemType::SHARED],
-            writeCommitsAlloc, writeCommitsType, nullptr);
-      }
+      // if (auto asyncCopyOp = dyn_cast<ttg::AsyncCopyGlobalToLocalOp>(op)) {
+      //   addWriteChecks(b, asyncCopyOp.getResult(), nullptr, MemType::SHARED);
+      //   addReadChecks(b, asyncCopyOp.getResult(), nullptr, MemType::SHARED);
+      //   b.create<tti::ExperimentalStageWriteForCommitOp>(
+      //       asyncCopyOp.getResult(), buffersTensor[(int)MemType::SHARED],
+      //       writeCommitsAlloc, writeCommitsType, nullptr);
+      // }
       if (auto asyncCommitGroupOp = dyn_cast<ttg::AsyncCommitGroupOp>(op)) {
         b.create<tti::ExperimentalCommitWritesOp>(writeCommitsAlloc,
                                                   writeCommitsType, nullptr);
@@ -334,6 +442,13 @@ private:
         b.create<tti::ExperimentalClearWriteCommitsOp>(
             writeCommitsAlloc, writeCommitsType, asyncWaitOp.getNum(), nullptr);
       }
+      // if (auto tmemLoadOp = dyn_cast<ttng::TMEMLoadOp>(op)) {
+      //   addWriteChecks(b, tmemLoadOp.getSrc(), nullptr, MemType::TMEM);
+      // }
+      // if (auto tmemStoreOp = dyn_cast<ttng::TMEMStoreOp>(op)) {
+      //   addWriteChecks(b, tmemStoreOp.getDst(), nullptr, MemType::TMEM);
+      //   addReadChecks(b, tmemStoreOp.getDst(), nullptr, MemType::TMEM);
+      // }
     });
   }
 

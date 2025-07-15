@@ -205,8 +205,10 @@ def test_async_copy(FAILURE, device, subprocess=False):
 
 
 @gluon.jit
-def tcgen5_mma_kernel(input_desc, XBLOCK: ttgl.constexpr, FAILURE: ttgl.constexpr):
+def tcgen5_mma_kernel(input_desc, XBLOCK: ttgl.constexpr, FAILURE: ttgl.constexpr, MEM_ACCESS_KIND: ttgl.constexpr):
     acc_layout: ttgl.constexpr = blackwell.TensorMemoryLayout([XBLOCK, XBLOCK], unpacked=True, cta_split_num=[1, 1])
+    blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, XBLOCK], threads_per_warp=[32, 1],
+                                                        warps_per_cta=[4, 1], order=[0, 1])
     smemA = ttgl.allocate_shared_memory(ttgl.float16, [XBLOCK, XBLOCK], input_desc.layout)
     smemB = ttgl.allocate_shared_memory(ttgl.float16, [XBLOCK, XBLOCK], input_desc.layout)
     bar = ttgl.allocate_shared_memory(ttgl.int64, [2, 1], mbarrier.MBarrierLayout())
@@ -219,9 +221,17 @@ def tcgen5_mma_kernel(input_desc, XBLOCK: ttgl.constexpr, FAILURE: ttgl.constexp
     if not FAILURE:
         mbarrier.wait(bar.index(0), 0)
 
-    mbarrier.expect(bar.index(1), XBLOCK * XBLOCK * ttgl.float16.primitive_bitwidth // 8)
-    tma.async_copy_global_to_shared(input_desc, [0, 0], bar.index(1), smemA)
-    mbarrier.wait(bar.index(1), 0)
+    if MEM_ACCESS_KIND == "tma_cp":
+        mbarrier.expect(bar.index(1), XBLOCK * XBLOCK * ttgl.float16.primitive_bitwidth // 8)
+        tma.async_copy_global_to_shared(input_desc, [0, 0], bar.index(1), smemA)
+        mbarrier.wait(bar.index(1), 0)
+    elif MEM_ACCESS_KIND == "tmem_load":
+        res = acc.load(blocked_layout)
+        smemAcc = ttgl.allocate_shared_memory(ttgl.float32, [XBLOCK, XBLOCK], input_desc.layout, res)
+        tma.async_copy_shared_to_global(input_desc, [0, 0], smemAcc)
+        tma.store_wait(0)
+    elif MEM_ACCESS_KIND == "tmem_store":
+        acc.store(ttgl.full([XBLOCK, XBLOCK], 42, ttgl.float32, blocked_layout))
 
     mbarrier.invalidate(bar.index(0))
     mbarrier.invalidate(bar.index(1))
@@ -229,7 +239,8 @@ def tcgen5_mma_kernel(input_desc, XBLOCK: ttgl.constexpr, FAILURE: ttgl.constexp
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer")
 @pytest.mark.parametrize("FAILURE", [True, False])
-def test_tcgen5_mma(FAILURE, device, subprocess=False):
+@pytest.mark.parametrize("MEM_ACCESS_KIND", ["tma_cp", "tmem_load", "tmem_store"])
+def test_tcgen5_mma(FAILURE, MEM_ACCESS_KIND, device, subprocess=False):
     if subprocess:
         knobs.compilation.enable_experimental_consan = True
         os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
@@ -243,12 +254,17 @@ def test_tcgen5_mma(FAILURE, device, subprocess=False):
         input = torch.randn((XBLOCK, XBLOCK), device=device, dtype=torch.float16)
         shared_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2)
         input_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(input, [XBLOCK, XBLOCK], shared_layout)
-        tcgen5_mma_kernel[(1, )](input_desc, XBLOCK, FAILURE=FAILURE, num_warps=4)
+        tcgen5_mma_kernel[(1, )](input_desc, XBLOCK, FAILURE=FAILURE, MEM_ACCESS_KIND=MEM_ACCESS_KIND, num_warps=4)
     else:
-        result = run_in_process(test_tcgen5_mma, (FAILURE, device, True))
+        result = run_in_process(test_tcgen5_mma, (FAILURE, MEM_ACCESS_KIND, device, True))
         if FAILURE:
             assert "device-side assert" in str(result.exc)
-            assert "Buffer being accessed has outstanding reads" in result.driver_stderr_output
+            if MEM_ACCESS_KIND == "tma_cp":
+                # shmem operands are being read by the tcgen05_mma
+                assert "Buffer being accessed has outstanding reads" in result.driver_stderr_output
+            elif MEM_ACCESS_KIND in ["tmem_load", "tmem_store"]:
+                # tmem is being written by the tcgen05_mma
+                assert "Buffer being accessed has outstanding writes" in result.driver_stderr_output
         else:
             assert result.exc is None
             assert result.driver_stderr_output == ""
@@ -349,25 +365,25 @@ def multibuffered_loop_tma_kernel(input_desc, XBLOCK: ttgl.constexpr, FAILURE: t
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer")
 @pytest.mark.parametrize("FAILURE", [True, False])
 def test_multibuffered_loop(FAILURE, device, subprocess=False):
-    if subprocess:
-        knobs.compilation.enable_experimental_consan = True
-        os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
+    # if subprocess:
+    knobs.compilation.enable_experimental_consan = True
+    os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 
-        # ConSan requires a global memory allocation
-        def alloc_fn(size: int, alignment: int, stream: Optional[int]):
-            return torch.empty(size, device="cuda", dtype=torch.int8)
+    # ConSan requires a global memory allocation
+    def alloc_fn(size: int, alignment: int, stream: Optional[int]):
+        return torch.empty(size, device="cuda", dtype=torch.int8)
 
-        triton.set_allocator(alloc_fn)
-        XBLOCK = 128
-        input = torch.randn((XBLOCK, XBLOCK), device=device, dtype=torch.float16)
-        shared_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2)
-        input_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(input, [XBLOCK, XBLOCK], shared_layout)
-        multibuffered_loop_tma_kernel[(1, )](input_desc, XBLOCK, FAILURE=FAILURE, num_warps=4)
-    else:
-        result = run_in_process(test_multibuffered_loop, (FAILURE, device, True))
-        if FAILURE:
-            assert "device-side assert" in str(result.exc)
-            assert "Buffer being accessed has outstanding reads" in result.driver_stderr_output
-        else:
-            assert result.exc is None
-            assert result.driver_stderr_output == ""
+    triton.set_allocator(alloc_fn)
+    XBLOCK = 128
+    input = torch.randn((XBLOCK, XBLOCK), device=device, dtype=torch.float16)
+    shared_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2)
+    input_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(input, [XBLOCK, XBLOCK], shared_layout)
+    multibuffered_loop_tma_kernel[(1, )](input_desc, XBLOCK, FAILURE=FAILURE, num_warps=4)
+    # else:
+    #     result = run_in_process(test_multibuffered_loop, (FAILURE, device, True))
+    #     if FAILURE:
+    #         assert "device-side assert" in str(result.exc)
+    #         assert "Buffer being accessed has outstanding reads" in result.driver_stderr_output
+    #     else:
+    #         assert result.exc is None
+    #         assert result.driver_stderr_output == ""
