@@ -175,8 +175,10 @@ initSchedule(int maxDist, int stages[SCHED_SIZE], int numStages,
   LDBG("deduced max shared memory buffer number = " << numBuffers);
 
   // We place async wait as the first cluster because we want to have it being
-  // the first in the main loop after pipelining. However if we intend on doing
-  // PP then we set it near the end of the loop for reasons state above.
+  // the first in the main loop after pipelining.
+  // In case we use async_copy with pingpong, we need to place async_wait at 
+  // the end of the previous iteration, so it can guarantee the correct 
+  // dependency when warp0 and warp1 are pipelined.
   int asyncWaitCluster = waitAtTail ? 4 : 0;
   // If tt.load and ttg.local_store are in the same stage
   //   spread them apart to allow overlap with compute
