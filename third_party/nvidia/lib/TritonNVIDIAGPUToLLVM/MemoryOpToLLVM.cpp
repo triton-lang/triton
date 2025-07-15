@@ -212,7 +212,9 @@ LogicalResult lowerLdStMatrix(
                        : static_cast<Type>(LLVM::LLVMStructType::getLiteral(
                              ctx, SmallVector<Type>(nVecs, i32_ty)));
       auto res =
-          rewriter.create<NVVM::LdMatrixOp>(loc, matTy, vecAddr, nVecs, layout)
+          rewriter
+              .create<triton::nvgpu::LoadMatrixOp>(loc, matTy, vecAddr,
+                                                   /*needTrans=*/transpose)
               .getResult();
       // Extract result into srcVals
       for (int j = 0; j < nVecs; j++) {

@@ -105,6 +105,15 @@ def NVGPU_WGMMAOp : NVGPU_Op<"wgmma", []> {
   let assemblyFormat = "$opA `,` $opB `,` $useC (`,` $opC^)? attr-dict `:` functional-type(operands, $res)";
 }
 
+def NVGPU_LoadMatrixOp : NVGPU_Op<"ldmatrix", [MemoryEffects<[MemRead]>]> {
+  let arguments = (
+    ins LLVM_PointerShared:$addr,
+    UnitAttr:$trans
+  );
+  let results = (outs AnyTypeOf<[LLVM_AnyStruct, I32]>:$result);
+  let assemblyFormat = "$addr attr-dict `:` functional-type($addr, $result)";
+}
+
 def NVGPU_ClusterCTAIdOp : NVGPU_Op<"cluster_id", [Pure]> {
   let results = (outs I32:$result);
   let assemblyFormat = "attr-dict";
