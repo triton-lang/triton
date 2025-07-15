@@ -24,6 +24,7 @@ Triton MLIR Dialects and Ops
    ./TritonAMDGPUOps.md
    ./TritonGPUOps.md
    ./ProtonOps.md
+   ./GluonOps.md
    ./TritonOps.md
    ./TritonNvidiaGPUOps.md
    ./NVGPUOps.md

@@ -485,6 +485,34 @@ interleave for better instruction level parallelism.
 </table>
 
 
+### `amdgpu.local_load_packed_tranposed` (triton::amdgpu::LocalLoadPackedTransposedOp)
+
+_Load a transposed packed tensor from shared memory into a distributed tensor_
+
+Syntax:
+
+```
+operation ::= `amdgpu.local_load_packed_tranposed` $src (`token` $token^)? attr-dict `:` qualified(type($src)) `->` type($result)
+```
+
+Requires a M/N packed and M/N contiguous tensor in shared memory and will yield a K packed K contiguous tensor in registers.
+The packing change will change the shape of the tensor by doubling the M/N dimension and halving the K dimension.
+For example if A is 16x64 in shared memory, the result of this operation will be 32x32.
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `src` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
+| `token` | async token type |
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `result` | ranked tensor of floating-point or integer or ptr values |
+
+
 ### `amdgpu.upcast_mxfp` (triton::amdgpu::UpcastMXFPOp)
 
 _Convert an mxfp tensor to bf16/fp16_
