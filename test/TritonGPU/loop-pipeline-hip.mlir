@@ -501,9 +501,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   //
   //         ASYNC:    ttg.async_wait
   //         ASYNC:    ttg.async_copy_global_to_local
-  //         ASYNC:    ttg.local_load
+  //         ASYNC:    ttg.local_load {{.*}} token
   //         ASYNC:    ttg.async_copy_global_to_local
-  //         ASYNC:    ttg.local_load
+  //         ASYNC:    ttg.local_load {{.*}} token
   //         ASYNC:    ttg.dot
 
 // Epilogue

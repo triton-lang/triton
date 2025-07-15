@@ -269,8 +269,8 @@ AsyncCopyChainOps createAsyncCopy(tt::LoadOp loadOp, Value alloc,
       builder.create<ttg::AsyncWaitOp>(loc, commitOp->getResult(0), 0);
 
   // Create local load which consumes the async token from the AsyncWait
-  auto maybeSharedLoad =
-      tt::replaceUsesWithLocalLoad(builder, loadOp->getResult(0), viewLoad);
+  auto maybeSharedLoad = tt::replaceUsesWithLocalLoad(
+      builder, loadOp->getResult(0), viewLoad, waitOp.getRetToken());
 
   return {copyOp, commitOp, waitOp, maybeSharedLoad};
 }
