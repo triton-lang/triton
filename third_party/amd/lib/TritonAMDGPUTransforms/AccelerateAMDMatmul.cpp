@@ -402,10 +402,7 @@ public:
   BlockedToMFMA(MLIRContext *context, int mfmaVersion, int nonKDim, int kPack,
                 PatternBenefit benefit = 1)
       : OpRewritePattern(context, benefit), mfmaVersion(mfmaVersion),
-        nonKDim(nonKDim) {
-    // overwrite kpack to 1 on cdna4
-    this->kPack = (mfmaVersion == 4) ? 1 : kPack;
-  }
+        nonKDim(nonKDim), kPack(kPack) {}
 
   LogicalResult matchAndRewrite(tt::DotOp dotOp,
                                 PatternRewriter &rewriter) const override {
@@ -583,10 +580,7 @@ public:
   ScaledBlockedToMFMA(MLIRContext *context, int mfmaVersion, int nonKDim,
                       int kPack, PatternBenefit benefit = 1)
       : OpRewritePattern(context, benefit), mfmaVersion(mfmaVersion),
-        nonKDim(nonKDim) {
-    // overwrite kpack to 1 on cdna4
-    this->kPack = (mfmaVersion == 4) ? 1 : kPack;
-  }
+        nonKDim(nonKDim), kPack(kPack) {}
 
   LogicalResult matchAndRewrite(triton::DotScaledOp dotOp,
                                 PatternRewriter &rewriter) const override {
