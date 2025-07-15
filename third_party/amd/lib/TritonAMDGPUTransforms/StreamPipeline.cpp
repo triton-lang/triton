@@ -124,7 +124,6 @@ struct LoadInfo {
   // The distance of this load's stage to its use' stage.
   int distToUse = 0;
   Operation *use = nullptr;
-  bool isAsync = false;
 };
 
 } // namespace
@@ -529,7 +528,7 @@ SmallVector<std::pair<Operation *, Value>> createAndScheduleStreamOps(
       ttg::SharedMemorySpaceAttr::get(forOp.getContext());
   SmallVector<std::pair<Operation *, Value>> loadToAllocs;
   for (auto &[loadOp, info] : loadToInfo) {
-    if (!info.sharedEncoding && !info.isAsync)
+    if (!info.sharedEncoding)
       continue;
 
     // Create an allocation that can hold distance number of loadOp shapes.
@@ -624,7 +623,7 @@ LogicalResult preprocessLoopAndBuildSchedule(scf::ForOp &forOp, int numStages,
     auto [distance, use] = info;
     auto sharedEncoding =
         getSharedEncIfAllUsersAreDotEnc(load->getResult(0)).value_or(nullptr);
-    loadToInfo[load] = {sharedEncoding, distance, use, false};
+    loadToInfo[load] = {sharedEncoding, distance, use};
     maxDist = std::max(maxDist, distance);
   }
 
