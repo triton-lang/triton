@@ -4,17 +4,17 @@
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Dialect.h"
-#include "proton/dialect/include/Dialect/Proton/IR/Dialect.h"
-#include "proton/dialect/include/Dialect/ProtonGPU/IR/Dialect.h.inc"
-#include "proton/dialect/include/Dialect/ProtonGPU/IR/Types.h"
+#include "proton/Dialect/include/Dialect/Proton/IR/Dialect.h"
+#include "proton/Dialect/include/Dialect/ProtonGPU/IR/Dialect.h.inc"
+#include "proton/Dialect/include/Dialect/ProtonGPU/IR/Types.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
 #define GET_OP_CLASSES
-#include "proton/dialect/include/Dialect/ProtonGPU/IR/Ops.h.inc"
+#include "proton/Dialect/include/Dialect/ProtonGPU/IR/Ops.h.inc"
 
 #define GET_ATTRDEF_CLASSES
-#include "proton/dialect/include/Dialect/ProtonGPU/IR/AttrDefs.h.inc"
+#include "proton/Dialect/include/Dialect/ProtonGPU/IR/AttrDefs.h.inc"
 
 namespace mlir {
 namespace triton {

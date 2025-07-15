@@ -4,8 +4,8 @@
 include "mlir/IR/AttrTypeBase.td"
 include "mlir/IR/BuiltinAttributes.td"
 include "mlir/IR/BuiltinTypeInterfaces.td"
-include "proton/dialect/include/Dialect/ProtonGPU/IR/ProtonGPUDialect.td"
-include "proton/dialect/include/Dialect/ProtonGPU/IR/ProtonGPUAttrDefs.td"
+include "proton/Dialect/include/Dialect/ProtonGPU/IR/ProtonGPUDialect.td"
+include "proton/Dialect/include/Dialect/ProtonGPU/IR/ProtonGPUAttrDefs.td"
 
 class PTG_TypeDef<string name, string _mnemonic, list<Trait> traits = []>
     : TypeDef<ProtonGPU_Dialect, name, traits> {

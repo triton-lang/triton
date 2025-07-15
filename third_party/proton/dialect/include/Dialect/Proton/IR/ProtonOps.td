@@ -6,8 +6,8 @@ include "mlir/IR/EnumAttr.td"
 include "mlir/Dialect/LLVMIR/LLVMOpBase.td"
 include "mlir/Interfaces/InferTypeOpInterface.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
-include "proton/dialect/include/Dialect/Proton/IR/ProtonDialect.td"
-include "proton/dialect/include/Dialect/Proton/IR/ProtonAttrDefs.td"
+include "proton/Dialect/include/Dialect/Proton/IR/ProtonDialect.td"
+include "proton/Dialect/include/Dialect/Proton/IR/ProtonAttrDefs.td"
 
 class PT_Op<string mnemonic, list<Trait> traits = []> :
   Op<Proton_Dialect, mnemonic, !listconcat(traits, [])> {
