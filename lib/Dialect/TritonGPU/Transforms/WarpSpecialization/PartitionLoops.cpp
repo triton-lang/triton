@@ -90,9 +90,12 @@ SmallVector<LoopVarCategory> classifyLoopVars(scf::ForOp loop,
   return categories;
 }
 
-auto getLoopVarIndicesToKeep(scf::ForOp loop, const Partition *partition,
-                             ArrayRef<LoopVarCategory> loopVarCategories) {
+std::pair<SmallVector<size_t>, SmallVector<int>>
+getLoopVarIndicesToKeep(scf::ForOp loop, const Partition *partition,
+                        ArrayRef<LoopVarCategory> loopVarCategories) {
   SmallVector<size_t> indices;
+  // The index -1 means an invalid index, the corresponding loop variable in the
+  // original loop is removed in the cloned loop
   SmallVector<int> reverseIndices(loop.getNumRegionIterArgs(), -1);
   for (auto [i, arg] : llvm::enumerate(loop.getRegionIterArgs())) {
     // For the default partition, keep non-tensor results used outside of the
@@ -109,8 +112,9 @@ auto getLoopVarIndicesToKeep(scf::ForOp loop, const Partition *partition,
   return std::make_pair(indices, reverseIndices);
 }
 
-auto getLoopVarIndicesToKeep(scf::ForOp loop, const Partition *partition,
-                             const WarpSchedule &schedule) {
+std::pair<SmallVector<size_t>, SmallVector<int>>
+getLoopVarIndicesToKeep(scf::ForOp loop, const Partition *partition,
+                        const WarpSchedule &schedule) {
   auto loopVarCategories = classifyLoopVars(loop, partition, schedule);
   return getLoopVarIndicesToKeep(loop, partition, loopVarCategories);
 }
