@@ -367,4 +367,42 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return
   }
 
+  //  CHECK-LABEL: ds_transpose_fp4_mfma_32
+  tt.func @ds_transpose_fp4_mfma_32(%arg0: !ttg.memdesc<128x128xi8, #shared, #smem, mutable>, %arg1: !ttg.memdesc<128x128xi8, #shared1, #smem, mutable>, %arg2: !ttg.memdesc<128x128xf32, #shared1, #smem, mutable>) {
+    // CHECK-COUNT-32: rocdl.ds.read.tr8.b64 %{{.*}} : <3> -> vector<2xi32>
+    // CHECK-NOT: rocdl.ds.read.tr8.b64 %{{.*}} : <3> -> vector<2xi32>
+    %1 = ttg.local_load %arg0 : !ttg.memdesc<128x128xi8, #shared, #smem, mutable> -> tensor<128x128xi8, #ttg.dot_op<{opIdx = 0, parent = #mma32, kWidth = 16}>>
+    %2 = ttg.local_load %arg1 : !ttg.memdesc<128x128xi8, #shared1, #smem, mutable> -> tensor<128x128xi8, #ttg.dot_op<{opIdx = 1, parent = #mma32, kWidth = 16}>>
+    %cst_2 = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #mma32>
+    %3 = tt.dot_scaled %1, %2, %cst_2 lhs = e2m1 rhs = e2m1 {fastMath = false} : tensor<128x128xi8, #ttg.dot_op<{opIdx = 0, parent = #mma32, kWidth = 16}>> * tensor<128x128xi8, #ttg.dot_op<{opIdx = 1, parent = #mma32, kWidth = 16}>> -> tensor<128x128xf32, #mma32>
+    ttg.local_store %3, %arg2 : tensor<128x128xf32, #mma32> -> !ttg.memdesc<128x128xf32, #shared1, #smem, mutable>
+    tt.return
+  }
+
+  //  CHECK-LABEL: ds_transpose_t_fp4_mfma32_small
+  tt.func @ds_transpose_t_fp4_mfma32_small(%arg0: !ttg.memdesc<16x64xi8, #shared, #smem, mutable>, %arg1: !ttg.memdesc<64x16xi8, #shared1, #smem, mutable>) {
+    // CHECK-COUNT-4: rocdl.ds.read.tr4.b64 %{{.*}} : <3> -> vector<2xi32>
+    // CHECK-NOT: rocdl.ds.read.tr4.b64
+    %1 = amdgpu.local_load_packed_tranposed %arg0 : !ttg.memdesc<16x64xi8, #shared, #smem, mutable> -> tensor<32x32xi8, #ttg.dot_op<{opIdx = 0, parent = #mma32, kWidth = 16}>>
+    %2 = amdgpu.local_load_packed_tranposed %arg1 : !ttg.memdesc<64x16xi8, #shared1, #smem, mutable> -> tensor<32x32xi8, #ttg.dot_op<{opIdx = 1, parent = #mma32, kWidth = 16}>>
+    tt.return
+  }
+
+  //  CHECK-LABEL: ds_transpose_t_fp4_mfma16
+  tt.func @ds_transpose_t_fp4_mfma16(%arg0: !ttg.memdesc<8x128xi8, #shared, #smem, mutable>, %arg1: !ttg.memdesc<128x8xi8, #shared1, #smem, mutable>) {
+    // CHECK-COUNT-4: rocdl.ds.read.tr4.b64 %{{.*}} : <3> -> vector<2xi32>
+    // CHECK-NOT: rocdl.ds.read.tr4.b64
+    %1 = amdgpu.local_load_packed_tranposed %arg0 : !ttg.memdesc<8x128xi8, #shared, #smem, mutable> -> tensor<16x64xi8, #ttg.dot_op<{opIdx = 0, parent = #mma16, kWidth = 16}>>
+    %2 = amdgpu.local_load_packed_tranposed %arg1 : !ttg.memdesc<128x8xi8, #shared1, #smem, mutable> -> tensor<64x16xi8, #ttg.dot_op<{opIdx = 1, parent = #mma16, kWidth = 16}>>
+    tt.return
+  }
+
+  //  CHECK-LABEL: ds_transpose_t_fp4_mfma32
+  tt.func @ds_transpose_t_fp4_mfma32(%arg0: !ttg.memdesc<256x256xi8, #shared, #smem, mutable>, %arg1: !ttg.memdesc<256x256xi8, #shared1, #smem, mutable>) {
+    // CHECK-COUNT-128: rocdl.ds.read.tr4.b64 %{{.*}} : <3> -> vector<2xi32>
+    // CHECK-NOT: rocdl.ds.read.tr4.b64
+    %1 = amdgpu.local_load_packed_tranposed %arg0 : !ttg.memdesc<256x256xi8, #shared, #smem, mutable> -> tensor<512x128xi8, #ttg.dot_op<{opIdx = 0, parent = #mma32, kWidth = 16}>>
+    %2 = amdgpu.local_load_packed_tranposed %arg1 : !ttg.memdesc<256x256xi8, #shared1, #smem, mutable> -> tensor<128x512xi8, #ttg.dot_op<{opIdx = 1, parent = #mma32, kWidth = 16}>>
+    tt.return
+  }
 }

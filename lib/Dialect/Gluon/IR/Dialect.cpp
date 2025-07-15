@@ -12,6 +12,9 @@ namespace gluon = mlir::triton::gluon;
 #include "triton/Dialect/Gluon/IR/Dialect.cpp.inc"
 #include "triton/Dialect/Gluon/IR/GluonAttrDefs.cpp.inc"
 
+#define GET_OP_CLASSES
+#include "triton/Dialect/Gluon/IR/Ops.cpp.inc"
+
 namespace {
 
 // Layout inference for AutoEncodingAttr -> always propagate AutoEncodingAttr to
@@ -109,6 +112,24 @@ void GluonDialect::initialize() {
 #include "triton/Dialect/Gluon/IR/Ops.cpp.inc"
       >();
   addInterfaces<GluonInferLayoutInterface>();
+}
+
+void SetAutoLayoutOp::build(OpBuilder &builder, OperationState &state,
+                            Attribute enc, Value value) {
+  auto resTy = cast<RankedTensorType>(value.getType()).cloneWithEncoding(enc);
+  return build(builder, state, resTy, value);
+}
+
+LogicalResult SetAutoLayoutOp::verify() {
+  if (!isa<gluon::AutoEncodingAttr>(getSrc().getType().getEncoding())) {
+    return emitOpError("input tensor must have an auto layout type");
+  }
+  auto dstEncoding = getType().getEncoding();
+  if (!dstEncoding)
+    return emitOpError("result tensor must have an encoding");
+  if (isa<gluon::AutoEncodingAttr>(dstEncoding))
+    return emitOpError("result type must not be auto layout");
+  return success();
 }
 
 } // namespace mlir::triton::gluon
