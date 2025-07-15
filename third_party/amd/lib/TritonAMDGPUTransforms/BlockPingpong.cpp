@@ -803,8 +803,6 @@ void Pingponger::getDotPingponged() {
   // supported combination of operations because this transformation is very
   // tightly scheduling the latencies.
 
-  // FIXME: get better condition to enable pingpong either for dot or for
-  // dot_scaled
   int64_t numOfDotLikeOps = dotSOps.size() + dotOps.size();
   if (numOfDotLikeOps != 1) {
     LDBG("Only handle a single of either dot or dot_scaled op");
@@ -822,7 +820,8 @@ void Pingponger::getDotPingponged() {
     return;
   }
 
-  // FIXME: place tile size restriction here and obtain kWidth
+  // dot_scaled case
+
   if (dotSOps.size() == 1 && numWarps == 8 && numStages == 2 &&
       asyncCopyOps.size() > 0) {
     auto dotSType = dotSOps[0].getType();
@@ -847,6 +846,8 @@ void Pingponger::getDotPingponged() {
     return;
   } else if (dotSOps.size() == 1)
     return;
+
+  // dot case
 
   // Determine if we have a persistent GEMM. This will decide how we interpret
   // any memory operations that we find in conditionals.
