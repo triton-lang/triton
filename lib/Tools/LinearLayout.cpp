@@ -982,24 +982,18 @@ LinearLayout lstsq(const LinearLayout &A, const LinearLayout &B) {
   // Compute the pivot columns
   // Since A and B have the same image, each row will either have a pivot
   // or will be all zeros
-
   SmallVector<int32_t> pivotRowOfCol(numColsA, -1);
-  int rowIdx = -1;
-  for (auto [outDim, outDimSize] : A.getOutDims()) {
-    for (int r = 0; r < llvm::Log2_32(outDimSize); r++) {
-      rowIdx++;
-      uint64_t row = combinedMat[rowIdx];
-      if (row == 0) {
-        continue;
-      }
-
-      int c = __builtin_ctzll(row);
-      assert(c < numColsA &&
-             "Precondition broken. Im(B) not contained in Im(A)");
-      assert(pivotRowOfCol[c] == -1 &&
-             "duplicate pivot => matrix not in RREF or A not injective");
-      pivotRowOfCol[c] = rowIdx;
+  for (int r = 0; r < numRowsA; r++) {
+    uint64_t row = combinedMat[r];
+    if (row == 0) {
+      continue;
     }
+
+    int c = __builtin_ctzll(row);
+    assert(c < numColsA && "Precondition broken. Im(B) not contained in Im(A)");
+    assert(pivotRowOfCol[c] == -1 &&
+           "duplicate pivot => matrix not in RREF or A not injective");
+    pivotRowOfCol[c] = r;
   }
 
   std::unique_ptr<uint64_t[]> retMat(new uint64_t[numColsA]());

@@ -384,6 +384,7 @@ private:
                                                ArrayRef<unsigned> layoutOrder,
                                                Location loc,
                                                RewriterBase &rewriter);
+
   Value base; // i32 ptr. The start address of the shared memory object.
   Type baseElemType;
   SmallVector<Value>
