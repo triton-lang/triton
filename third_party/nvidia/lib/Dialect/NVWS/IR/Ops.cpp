@@ -5,6 +5,7 @@
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Types.h"
+#include "triton/Dialect/TritonNvidiaGPU/Transforms/Utility.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVectorExtras.h"
 
@@ -140,18 +141,9 @@ void CreateTokenOp::build(::mlir::OpBuilder &builder,
   build(builder, state, resultType, num, loadType);
 }
 
-static LogicalResult
-verifyBarrierType(Operation *op, mlir::triton::gpu::MemDescType barrierType) {
-  if (!barrierType.getElementType().isInteger(64) ||
-      barrierType.getShape() != ArrayRef<int64_t>({1}))
-    return op->emitOpError(
-        "barrier allocation must be a descriptor of 1xi64 type");
-  return success();
-}
-
 // -- ArefCompleteOp --
 LogicalResult ArefCompleteOp::verify() {
-  if (failed(verifyBarrierType(*this, getAlloc().getType())))
+  if (failed(nvidia_gpu::verifyBarrierType(*this, getAlloc().getType())))
     return failure();
   return success();
 }
