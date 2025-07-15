@@ -1,5 +1,4 @@
 #include "TargetInfo.h"
-#include "SchedInstructions.h"
 #include "TritonAMDGPUToLLVM/GCNAsmFormat.h"
 #include "TritonAMDGPUToLLVM/TargetUtils.h"
 #include "Utility.h"

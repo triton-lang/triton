@@ -3,7 +3,6 @@ add_triton_library(GluonIR
 
   DEPENDS
   GluonTableGen
-  GluonAttrDefsIncGen
 
   LINK_LIBS PUBLIC
   TritonIR

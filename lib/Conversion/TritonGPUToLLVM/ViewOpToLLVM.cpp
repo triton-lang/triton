@@ -60,6 +60,18 @@ struct SplatOpConversion : public ConvertOpToLLVMPattern<triton::SplatOp> {
     return success();
   }
 };
+
+struct UnsplatOpConversion : public ConvertOpToLLVMPattern<triton::UnsplatOp> {
+  using ConvertOpToLLVMPattern<triton::UnsplatOp>::ConvertOpToLLVMPattern;
+  LogicalResult matchAndRewrite(triton::UnsplatOp op, OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const {
+    auto loc = op->getLoc();
+    auto scrVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
+    rewriter.replaceOp(op, scrVals[0]);
+    return success();
+  }
+};
+
 // This pattern helps to convert arith::ConstantOp(with SplatElementsAttr),
 // the logic is the same as triton::SplatOp, so the underlying implementation
 // is reused.
@@ -471,35 +483,24 @@ struct MemDescSubviewOpConversion
     // newBase = base + offset
     auto smemObj = getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
                                                    llvmElemTy, rewriter);
-    auto smemStrides = smemObj.getStrides(srcTy, loc, rewriter);
     SmallVector<Value> opOffsetVals = op.getOffsets();
     // We assume we always create a subview of the last dimensions
-    SmallVector<Value> opSmemStrides(smemStrides.end() - opOffsetVals.size(),
-                                     smemStrides.end());
     // Compute total offset
-    SmallVector<Value> offsetVals;
-    auto destRank = op.getResult().getType().getRank();
-    auto rankReduced = srcTy.getRank() - destRank;
-    for (int i = rankReduced; i < opOffsetVals.size(); i++) {
-      offsetVals.push_back(b.add(opOffsetVals[i], smemObj.getOffsets()[i]));
-    }
+    auto rankReduced = srcTy.getRank() - destTy.getRank();
 
     Value offset;
     if (rankReduced || (destTy.getRank() == 1 && destTy.getDimSize(0) == 1)) {
+      auto smemStrides = smemObj.getStrides(srcTy, loc, rewriter);
+      SmallVector<Value> opSmemStrides(smemStrides.end() - opOffsetVals.size(),
+                                       smemStrides.end());
       // We are splitting the pipelining dimension which may not be a power of 2
       // so we can't use LinearLayouts
       offset = dot(rewriter, loc, opOffsetVals, opSmemStrides);
     } else {
       auto dimNames = standardOutDimNames(ctx, opOffsetVals.size());
       SmallVector<std::pair<StringAttr, Value>> logicalOffsets;
-      // This assumes the subviews are additive, in the sense that we can
-      // compute the offset of one and an add it to the offset of the previous
-      // one we computed. We check for this in the verifier.
-      for (int i = 0; i < rankReduced; i++) {
-        logicalOffsets.push_back({dimNames[i], b.i32_val(0)});
-      }
-      for (int i = rankReduced; i < opOffsetVals.size(); i++) {
-        logicalOffsets.push_back({dimNames[i], offsetVals[i - rankReduced]});
+      for (auto [dim, offset] : llvm::zip(dimNames, opOffsetVals)) {
+        logicalOffsets.push_back({dim, offset});
       }
       auto ll = toLinearLayout(srcTy);
       // Checked in the verifier.
@@ -515,6 +516,11 @@ struct MemDescSubviewOpConversion
       // Apply padding based on the computed offset
       Value padOffset = emitPadding(loc, rewriter, paddedLayout, offset);
       offset = b.add(offset, padOffset);
+    }
+
+    SmallVector<Value> offsetVals;
+    for (int i = rankReduced; i < opOffsetVals.size(); i++) {
+      offsetVals.push_back(b.add(opOffsetVals[i], smemObj.getOffsets()[i]));
     }
 
     auto base = smemObj.getBase();
@@ -556,6 +562,7 @@ void mlir::triton::populateViewOpToLLVMPatterns(
   patterns.add<ReshapeOpConversion>(typeConverter, benefit);
   patterns.add<ExpandDimsOpConversion>(typeConverter, benefit);
   patterns.add<SplatOpConversion>(typeConverter, benefit);
+  patterns.add<UnsplatOpConversion>(typeConverter, benefit);
   patterns.add<ArithConstantSplatOpConversion>(typeConverter, benefit);
   patterns.add<ArithConstantArrayOpConversion>(typeConverter, benefit);
   patterns.add<CatOpConversion>(typeConverter, benefit);

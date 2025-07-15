@@ -233,18 +233,9 @@ def get_desc_channel(desc, num_buffers: gl.constexpr, num_consumers: gl.constexp
     return SharedMemoryChannel.alloc(shape, desc.dtype, layout, num_buffers, num_consumers)
 
 
-@tl.constexpr_function
-def get_load_size_bytes(desc):
-    size = desc.dtype.primitive_bitwidth // 8
-    for dim in desc.block_type.shape:
-        size *= dim
-    return size
-
-
 @gluon.jit
 def issue_async_tma_load(smem, bar, desc, offset):
-    size: gl.constexpr = get_load_size_bytes(desc)
-    mbarrier.expect(bar, size)
+    mbarrier.expect(bar, desc.block_type.nbytes)
     tma.async_copy_global_to_shared(desc, [offset, 0], bar, smem)
 
 

@@ -944,9 +944,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     %12 = tt.load %2 : tensor<256x64x!tt.ptr<f16>, #blocked1>
     %13 = tt.load %8 : tensor<64x128x!tt.ptr<f16>, #blocked>
     %14 = ttg.memdesc_subview %10[%c0_i32, %c0_i32, %c0_i32] : !ttg.memdesc<1x256x64xf16, #shared, #smem, mutable> -> !ttg.memdesc<256x64xf16, #shared, #smem, mutable>
-    ttg.local_store %12, %14 {OpIdx = #amdgpu.OpIdx<0>} : tensor<256x64xf16, #blocked1> -> !ttg.memdesc<256x64xf16, #shared, #smem, mutable>
+    ttg.local_store %12, %14 : tensor<256x64xf16, #blocked1> -> !ttg.memdesc<256x64xf16, #shared, #smem, mutable>
     %15 = ttg.memdesc_subview %11[%c0_i32, %c0_i32, %c0_i32] : !ttg.memdesc<1x64x128xf16, #shared1, #smem, mutable> -> !ttg.memdesc<64x128xf16, #shared1, #smem, mutable>
-    ttg.local_store %13, %15 {OpIdx = #amdgpu.OpIdx<1>} : tensor<64x128xf16, #blocked> -> !ttg.memdesc<64x128xf16, #shared1, #smem, mutable>
+    ttg.local_store %13, %15 : tensor<64x128xf16, #blocked> -> !ttg.memdesc<64x128xf16, #shared1, #smem, mutable>
     %16:6 = scf.for %arg3 = %c0_i32 to %c192_i32 step %c64_i32 iter_args(%arg4 = %c0_i64, %arg5 = %c0_i64, %arg6 = %cst, %arg7 = %c0_i32, %arg8 = %14, %arg9 = %15) -> (i64, i64, tensor<256x128xf32, #mma>, i32, !ttg.memdesc<256x64xf16, #shared, #smem, mutable>, !ttg.memdesc<64x128xf16, #shared1, #smem, mutable>)  : i32 {
       %22 = arith.addi %arg4, %c64_i64 : i64
       %23 = arith.addi %arg5, %c64_i64 : i64
@@ -956,7 +956,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
       %27 = tt.broadcast %26 : tensor<1x64xi64, #blocked1> -> tensor<256x64xi64, #blocked1>
       %28 = arith.addi %3, %27 : tensor<256x64xi64, #blocked1>
       %29 = tt.addptr %2, %28 : tensor<256x64x!tt.ptr<f16>, #blocked1>, tensor<256x64xi64, #blocked1>
-      %30 = tt.load %29 {OpIdx = #amdgpu.OpIdx<0>} : tensor<256x64x!tt.ptr<f16>, #blocked1>
+      %30 = tt.load %29 : tensor<256x64x!tt.ptr<f16>, #blocked1>
       %31 = ttg.local_load %arg8 : !ttg.memdesc<256x64xf16, #shared, #smem, mutable> -> tensor<256x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>>
       %32 = tt.splat %23 : i64 -> tensor<64xi64, #ttg.slice<{dim = 1, parent = #blocked}>>
       %33 = arith.addi %32, %7 : tensor<64xi64, #ttg.slice<{dim = 1, parent = #blocked}>>
@@ -965,16 +965,16 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
       %36 = tt.broadcast %35 : tensor<64x1xi64, #blocked> -> tensor<64x128xi64, #blocked>
       %37 = arith.addi %36, %9 : tensor<64x128xi64, #blocked>
       %38 = tt.addptr %8, %37 : tensor<64x128x!tt.ptr<f16>, #blocked>, tensor<64x128xi64, #blocked>
-      %39 = tt.load %38 {OpIdx = #amdgpu.OpIdx<1>} : tensor<64x128x!tt.ptr<f16>, #blocked>
+      %39 = tt.load %38 : tensor<64x128x!tt.ptr<f16>, #blocked>
       %40 = ttg.local_load %arg9 : !ttg.memdesc<64x128xf16, #shared1, #smem, mutable> -> tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>>
       %41 = tt.dot %31, %40, %arg6, inputPrecision = tf32 : tensor<256x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>> * tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>> -> tensor<256x128xf32, #mma>
       %42 = arith.addi %arg7, %c1_i32 : i32
       %43 = arith.cmpi slt, %42, %c1_i32 : i32
       %44 = arith.select %43, %42, %c0_i32 : i32
       %45 = ttg.memdesc_subview %10[%44, %c0_i32, %c0_i32] : !ttg.memdesc<1x256x64xf16, #shared, #smem, mutable> -> !ttg.memdesc<256x64xf16, #shared, #smem, mutable>
-      ttg.local_store %30, %45 {OpIdx = #amdgpu.OpIdx<0>} : tensor<256x64xf16, #blocked1> -> !ttg.memdesc<256x64xf16, #shared, #smem, mutable>
+      ttg.local_store %30, %45 : tensor<256x64xf16, #blocked1> -> !ttg.memdesc<256x64xf16, #shared, #smem, mutable>
       %46 = ttg.memdesc_subview %11[%44, %c0_i32, %c0_i32] : !ttg.memdesc<1x64x128xf16, #shared1, #smem, mutable> -> !ttg.memdesc<64x128xf16, #shared1, #smem, mutable>
-      ttg.local_store %39, %46 {OpIdx = #amdgpu.OpIdx<1>} : tensor<64x128xf16, #blocked> -> !ttg.memdesc<64x128xf16, #shared1, #smem, mutable>
+      ttg.local_store %39, %46 : tensor<64x128xf16, #blocked> -> !ttg.memdesc<64x128xf16, #shared1, #smem, mutable>
       scf.yield %22, %23, %41, %44, %45, %46 : i64, i64, tensor<256x128xf32, #mma>, i32, !ttg.memdesc<256x64xf16, #shared, #smem, mutable>, !ttg.memdesc<64x128xf16, #shared1, #smem, mutable>
     }
     %17 = ttg.local_load %16#4 : !ttg.memdesc<256x64xf16, #shared, #smem, mutable> -> tensor<256x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>>

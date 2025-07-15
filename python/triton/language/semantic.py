@@ -1487,6 +1487,18 @@ class TritonSemantic(Generic[TensorTy]):
             lhs = self.cast(lhs, tl.float16)
             rhs = self.cast(rhs, tl.float16)
 
+        uses_fp8e4b8 = lhs.dtype.is_fp8e4b8() or rhs.dtype.is_fp8e4b8()
+        uses_fp8e5b16 = lhs.dtype.is_fp8e5b16() or rhs.dtype.is_fp8e5b16()
+        if uses_fp8e4b8 or uses_fp8e5b16:
+            type_name = "fp8e4b8" if uses_fp8e4b8 else "fp8e5b16"
+            if type_name in self.builder.options.deprecated_fp8_dot_operand_dtypes:
+                arch = self.builder.options.arch
+                warnings.warn(
+                    f"{type_name} is AMD gfx942 specific and not supported on {arch} so it's upcasted to fp16 and can cause significant slow down. "
+                    f"Please use OCP fp8 variants on {arch} for performance")
+                lhs = self.cast(lhs, tl.float16)
+                rhs = self.cast(rhs, tl.float16)
+
         if input_precision is None:
             input_precision = self.builder.options.default_dot_input_precision
 
@@ -1869,12 +1881,12 @@ class TritonSemantic(Generic[TensorTy]):
                 f"Descriptor block shape must have at least 16 bytes in the last dimension, but got {contig_dim_size} * {elem_size} = {contig_dim_size * elem_size} bytes"
             )
 
-        strides[-1] = tl._unwrap_if_constexpr(strides[-1])
-        if strides[-1] != 1:
-            raise ValueError(f"Tensor descriptor last dim must be 1 but got {strides[-1]}")
+        last_stride = tl._unwrap_if_constexpr(strides[-1])
+        if last_stride != 1:
+            raise ValueError(f"Tensor descriptor last dim must be 1 but got {last_stride}")
 
         shape = [self.make_scalar(x, tl.int32) for x in shape]
-        strides = [self.make_scalar(x, tl.int64) for x in strides]
+        strides = [self.make_scalar(tl._unwrap_if_constexpr(x), tl.int64) for x in strides]
 
         # Check whether `block_shape` is static
         block_shape = tl._unwrap_shape(block_shape)

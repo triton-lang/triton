@@ -40,11 +40,13 @@ namespace {
 LinearLayout getRegToSharedLayout(MLIRContext *ctx, ArrayRef<int64_t> shape,
                                   LinearLayout regLayout,
                                   triton::gpu::SharedEncodingTrait dstEnc,
-                                  int elemBitWidth) {
+                                  int elemBitWidth,
+                                  ArrayRef<int64_t> allocShape) {
   StringAttr kBlock = StringAttr::get(ctx, ("block"));
   int rank = shape.size();
 
-  LinearLayout sharedLayout = triton::gpu::toLinearLayout(shape, dstEnc);
+  LinearLayout sharedLayout =
+      triton::gpu::toLinearLayout(shape, dstEnc, allocShape);
   auto sharedOrder = triton::gpu::getOrder(dstEnc, shape);
 
   // sharedLayout's in-dims are currently (offset, block).  Reshape to
@@ -378,7 +380,7 @@ emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
   MLIRContext *ctx = rewriter.getContext();
   auto shape = type.getShape();
 
-  LinearLayout ll = triton::gpu::toLinearLayout(shape, layout);
+  LinearLayout ll = triton::gpu::toLinearLayout(shape, layout, {});
 
   StringAttr kRegister = str_attr("register");
   StringAttr kLane = str_attr("lane");
@@ -503,7 +505,7 @@ SmallVector<Value> getSmemVecAddrVec(
                 sharedEnc)) {
       auto regToSharedSwizzledLayout =
           getRegToSharedLayout(ctx, shape, regLayout, swizzledSharedEnc,
-                               elemLlvmTy.getIntOrFloatBitWidth());
+                               elemLlvmTy.getIntOrFloatBitWidth(), allocShape);
       auto smemOrder = swizzledSharedEnc.getOrder();
 
       auto swizzledIndicesVec =
@@ -660,9 +662,9 @@ lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout cvt,
   bool isStore = !valsArray.empty();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
-  auto emitCpAsync = [&](ConversionPatternRewriter &rewriter, Location loc,
-                         ArrayRef<Value> vals, Value shmemAddr, int idx,
-                         VectorType vecTy) -> SmallVector<Value> {
+  auto emitLdSt = [&](ConversionPatternRewriter &rewriter, Location loc,
+                      ArrayRef<Value> vals, Value shmemAddr, int idx,
+                      VectorType vecTy) -> SmallVector<Value> {
     auto length = vecTy.getNumElements();
     if (isStore) {
       Value valsVec =
@@ -679,7 +681,7 @@ lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout cvt,
     }
   };
   return lowerLdSt(loc, ctx, cvt, valsArray, llvmElemTy, smemBase,
-                   smemAddrAddon, rewriter, targetInfo, {}, emitCpAsync);
+                   smemAddrAddon, rewriter, targetInfo, {}, emitLdSt);
 }
 
 SmallVector<Value> lowerLdSt(
@@ -875,11 +877,13 @@ bool emitTransferBetweenRegistersAndShared(
   auto allocShape = sharedTy.getAllocShape();
   auto invertAllocSharedLayout = LinearLayout::empty();
   if (!paddedLayout) {
-    // For now this is only needed for the cases where we have swizzling.
-    invertAllocSharedLayout =
-        triton::gpu::toLinearLayout(allocShape.take_back(sharedTy.getRank()),
-                                    sharedTy.getEncoding())
-            .pseudoinvert();
+    // This is the legacy way of doing things that's much more ad-hoc
+    // For generic shared layouts it may or may not be correct
+    auto allocShape = sharedTy.getAllocShape();
+    auto trimShape = allocShape.take_back(sharedTy.getRank());
+    invertAllocSharedLayout = triton::gpu::toLinearLayout(
+                                  trimShape, sharedTy.getEncoding(), trimShape)
+                                  .pseudoinvert();
   }
 
   int numElems = regToSharedLayout.getInDimSize(kRegister);
@@ -1463,7 +1467,7 @@ delinearize(RewriterBase &rewriter, Location loc,
             triton::gpu::DistributedEncodingTrait layout,
             ArrayRef<int64_t> shape, StringAttr dimName, Value linear) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  auto ll = triton::gpu::toLinearLayout(shape, layout);
+  auto ll = triton::gpu::toLinearLayout(shape, layout, {});
   auto linearLayout =
       triton::gpu::LinearEncodingAttr::get(rewriter.getContext(), ll);
   assert(ll.hasInDim(dimName));
