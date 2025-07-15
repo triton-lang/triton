@@ -75,9 +75,8 @@ class HIPOptions:
         assert self.num_warps > 0 and (self.num_warps & (self.num_warps - 1)) == 0, \
                "num_warps must be a power of 2"
 
-        if (self.arch == 'gfx950') & (self.kpack == 2):
-            warnings.warn("gfx950 does not accept kpack = 2, will overwrite kpack to 1 ...")
-            # assert self.kpack == 1, "gfx950 only accepts kpack == 1"
+        if (self.arch == 'gfx950') & (self.kpack != 1):
+            warnings.warn(f"kpack = {self.kpack} does not work for gfx950, will be overwritten to 1 ...")
 
         default_libdir = Path(__file__).parent / 'lib'
         extern_libs = {} if self.extern_libs is None else dict(self.extern_libs)
