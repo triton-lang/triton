@@ -251,7 +251,8 @@ public:
     // Template method for PTX assembly generation
     std::string ptxAsm =
         (llvm::Twine(ConcreteMatrixOpPattern::kOpCode) +
-         getPtxModifiers(vecSize, trans) + " " + getOperands(op, vecSize) + ";")
+         getPtxModifiers(vecSize, trans, op.getShape(), op.getBitWidth()) +
+         " " + getOperands(op, vecSize) + ";")
             .str();
 
     OperandsAndConstraints operandAndConstraints =
@@ -264,16 +265,29 @@ public:
 
 protected:
   // Shared helper methods
-  std::string getPtxModifiers(unsigned vecSize, bool trans) const {
-    auto ptxAsmBase = llvm::Twine(".sync.aligned.m8n8");
-    const std::string suffix = trans ? ".trans.shared.b16" : ".shared.b16";
+  std::string getPtxModifiers(unsigned vecSize, bool trans,
+                              triton::nvgpu::LoadMatrixShape shape,
+                              int bitWidth) const {
+    std::string ptxAsmBase = std::string(".sync.aligned");
+    switch (shape) {
+    case triton::nvgpu::LoadMatrixShape::m8n8:
+      ptxAsmBase += ".m8n8";
+      break;
+    case triton::nvgpu::LoadMatrixShape::m16n16:
+      ptxAsmBase += ".m16n16";
+      break;
+    default:
+      llvm_unreachable("Invalid load matrix shape");
+    }
+    std::string suffix = trans ? ".trans.shared" : ".shared";
+    suffix += ".b" + std::to_string(bitWidth);
     switch (vecSize) {
     case 1:
-      return (ptxAsmBase + ".x1" + suffix).str();
+      return ptxAsmBase + ".x1" + suffix;
     case 2:
-      return (ptxAsmBase + ".x2" + suffix).str();
+      return ptxAsmBase + ".x2" + suffix;
     case 4:
-      return (ptxAsmBase + ".x4" + suffix).str();
+      return ptxAsmBase + ".x4" + suffix;
     default:
       llvm_unreachable("Invalid vector size");
     }
