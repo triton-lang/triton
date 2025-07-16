@@ -100,8 +100,8 @@ class OptimizeAMDLDSUsage
 
     if (!cvtOp->hasAttr(triton::AMD::AttrSharedMemPadded)) {
       auto emptyAttribute = UnitAttr::get(ctx);
-      // Padded conversion seems more friendly with this optimization use it
-      // instead of general swizzling.
+      // Padded conversion seems more friendly with this optimization
+      // use it instead of general swizzling.
       cvtOp->setAttr(triton::AMD::AttrSharedMemPadded, emptyAttribute);
       // if padded layout drops LDS usage on itself, we are done, return
       if (triton::AMD::getConvertLayoutScratchInBytes(
