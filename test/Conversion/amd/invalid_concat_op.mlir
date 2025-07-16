@@ -157,18 +157,19 @@ module attributes {"ttg.compute-capability" = 0 : i32, "ttg.num-ctas" = 1 : i32,
 // -----
 
 // Different layouts 2
-#src_layout = #ttg.linear<{register=[[0, 1], [0, 2], [0, 8], [0, 16], [0, 64], [64, 0]], lane=[[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [0, 4]], warp=[[0, 32], [32, 0]], block=[]}>
-#dst_layout = #ttg.linear<{register=[[0, 0], [0, 1], [0, 2], [0, 8], [0, 16], [0, 64], [0, 128], [64, 0], [128, 0]], lane=[[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [0, 4]], warp=[[0, 32], [32, 0]], block=[]}>
+// Case when src and dst layouts have same CTA tile shape, but different number of registers
+#src_layout = #ttg.linear<{register=[[1, 0], [2, 0]], lane=[[4, 0], [8, 0], [16, 0], [0, 1], [0, 2], [0, 4]], warp=[[0, 0], [0, 8]], block=[]}>
+#dst_layout = #ttg.linear<{register=[[1, 0]], lane=[[4, 0], [8, 0], [16, 0], [0, 1], [0, 2], [0, 4]], warp=[[2, 0], [0, 8]], block=[]}>
 module attributes {"ttg.compute-capability" = 0 : i32, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
   tt.func @invalid_concat(
-    %arg0: tensor<128x128xf32, #src_layout>,
-    %arg1: tensor<128x128xf32, #src_layout>,
-    %arg2: tensor<128x128xf32, #src_layout>,
-    %arg3: tensor<128x128xf32, #src_layout>) {
+    %arg0: tensor<32x16xf32, #src_layout>,
+    %arg1: tensor<32x16xf32, #src_layout>,
+    %arg2: tensor<32x16xf32, #src_layout>,
+    %arg3: tensor<32x16xf32, #src_layout>) {
 
     // expected-error @+1 {{Register basis must match on a CTA tile between source and destination.}}
     %1 = amdgpu.concat %arg0, %arg1, %arg2, %arg3:
-    tensor<128x128xf32, #src_layout>, tensor<128x128xf32, #src_layout>, tensor<128x128xf32, #src_layout>, tensor<128x128xf32, #src_layout> -> tensor<256x256xf32, #dst_layout>
+    tensor<32x16xf32, #src_layout>, tensor<32x16xf32, #src_layout>, tensor<32x16xf32, #src_layout>, tensor<32x16xf32, #src_layout> -> tensor<64x32xf32, #dst_layout>
     tt.return
   }
 }

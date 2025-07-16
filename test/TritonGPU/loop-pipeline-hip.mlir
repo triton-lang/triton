@@ -250,7 +250,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // Check that the stream pipeliner updates the resulting memory layout of transpose ops to mutable if immutable local buffers are replaced
 // COMMON-LABEL: loop_with_dot_and_transpose
 // COMMON: ttg.local_alloc {{.*}}, mutable>
-// COMMON: ttg.memdesc_trans {{.*}}, mutable> -> {{.*}}, mutable>
+// COMMON: ttg.memdesc_trans {{.*}}, mutable, {{.*}} -> {{.*}}, mutable
 
 #blocked = #ttg.blocked<{sizePerThread = [2, 2], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [0, 1]}>
@@ -501,9 +501,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   //
   //         ASYNC:    ttg.async_wait
   //         ASYNC:    ttg.async_copy_global_to_local
-  //         ASYNC:    ttg.local_load
+  //         ASYNC:    ttg.local_load {{.*}} token
   //         ASYNC:    ttg.async_copy_global_to_local
-  //         ASYNC:    ttg.local_load
+  //         ASYNC:    ttg.local_load {{.*}} token
   //         ASYNC:    ttg.dot
 
 // Epilogue

@@ -1,15 +1,5 @@
 // RUN: triton-opt %s --convert-nv-gpu-to-llvm -allow-unregistered-dialect -split-input-file | FileCheck %s
 
-// CHECK-LABEL: @nvvm_syncs
-llvm.func @nvvm_syncs() {
-  // CHECK: fence.proxy.async.shared::cta;
-  nvgpu.fence_async_shared {bCluster = false}
-  // CHECK: fence.proxy.async.shared::cluster;
-  nvgpu.fence_async_shared {bCluster = true}
-
-  llvm.return
-}
-
 // CHECK-LABEL: @cluster_id
 llvm.func @cluster_id() -> i32 {
   // CHECK:      %cluster_ctaid.x;
@@ -23,26 +13,19 @@ llvm.func @cluster_id() -> i32 {
 
 // -----
 
-// CHECK-LABEL: @stmatrix
-llvm.func @stmatrix(%i: i32, %ptr: !llvm.ptr<3>) {
-  // CHECK: stmatrix.sync.aligned.m8n8.x4.shared.b16 [$0], {$1, $2, $3, $4};
-  nvgpu.stmatrix %ptr, %i, %i, %i, %i : !llvm.ptr<3>, i32, i32, i32, i32
-  // CHECK: stmatrix.sync.aligned.m8n8.x4.trans.shared.b16 [$0], {$1, $2, $3, $4};
-  nvgpu.stmatrix %ptr, %i, %i, %i, %i {trans} : !llvm.ptr<3>, i32, i32, i32, i32
-  llvm.return
-}
-
-// -----
-
 // CHECK-LABEL: @ldmatrix
 llvm.func @ldmatrix(%ptr: !llvm.ptr<3>) -> !llvm.struct<(i32, i32, i32, i32)> {
   // CHECK: ldmatrix.sync.aligned.m8n8.x4.shared.b16 {$0, $1, $2, $3}, [$4];
-  %0 = nvgpu.ldmatrix %ptr : (!llvm.ptr<3>) -> !llvm.struct<(i32, i32, i32, i32)>
+  %0 = nvgpu.ldmatrix %ptr, m8n8, 16 : (!llvm.ptr<3>) -> !llvm.struct<(i32, i32, i32, i32)>
   // CHECK: ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16 {$0, $1, $2, $3}, [$4];
-  %1 = nvgpu.ldmatrix %ptr {trans} : (!llvm.ptr<3>) -> !llvm.struct<(i32, i32, i32, i32)>
+  %1 = nvgpu.ldmatrix %ptr, m8n8, 16 {trans} : (!llvm.ptr<3>) -> !llvm.struct<(i32, i32, i32, i32)>
+  // CHECK: ldmatrix.sync.aligned.m16n16.x4.trans.shared.b8 {$0, $1, $2, $3}, [$4];
+  %l = nvgpu.ldmatrix %ptr, m16n16, 8 {trans} : (!llvm.ptr<3>) -> !llvm.struct<(i32, i32, i32, i32)>
   %2 = llvm.extractvalue %1[0] : !llvm.struct<(i32, i32, i32, i32)>
   %3 = llvm.insertvalue %2, %0[0] : !llvm.struct<(i32, i32, i32, i32)>
-  llvm.return %3 : !llvm.struct<(i32, i32, i32, i32)>
+  %4 = llvm.extractvalue %l[0] : !llvm.struct<(i32, i32, i32, i32)>
+  %5 = llvm.insertvalue %4, %3[1] : !llvm.struct<(i32, i32, i32, i32)>
+  llvm.return %5 : !llvm.struct<(i32, i32, i32, i32)>
 }
 
 // -----

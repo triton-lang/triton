@@ -636,8 +636,7 @@ bool canFoldIntoConversion(Operation *op, Attribute targetEncoding) {
   if (auto reshape = dyn_cast<triton::ReshapeOp>(op)) {
     auto reshapeDstType = reshape.getType();
     RankedTensorType newDstType =
-        RankedTensorType::get(reshapeDstType.getShape(),
-                              reshapeDstType.getElementType(), targetEncoding);
+        reshapeDstType.cloneWithEncoding(targetEncoding);
     return reshape.getAllowReorder() && !reshape.getEfficientLayout() &&
            !triton::gpu::isExpensiveView(reshape.getSrc().getType(),
                                          newDstType);
@@ -824,8 +823,7 @@ Operation *cloneWithInferType(mlir::OpBuilder &rewriter, Operation *op,
   auto argType = dyn_cast<RankedTensorType>(newOp->getOperand(0).getType());
   if (!origType || !argType)
     return newOp;
-  auto newType = RankedTensorType::get(
-      origType.getShape(), origType.getElementType(), argType.getEncoding());
+  auto newType = origType.cloneWithEncoding(argType.getEncoding());
   newOp->getResult(0).setType(newType);
   auto typeInfer = dyn_cast<InferTypeOpInterface>(newOp);
   if (typeInfer) {
@@ -1502,8 +1500,9 @@ void replaceUsesAndPropagateType(OpBuilder &builder, Operation *oldUse,
       newVal = builder.create<ttg::MemDescTransOp>(trans.getLoc(), val,
                                                    trans.getOrder());
     } else if (auto reshape = dyn_cast<ttg::MemDescReshapeOp>(user)) {
-      newVal = builder.create<ttg::MemDescReshapeOp>(reshape.getLoc(),
-                                                     reshape.getType(), val);
+      auto shape = reshape.getType().getShape();
+      newVal =
+          builder.create<ttg::MemDescReshapeOp>(reshape.getLoc(), val, shape);
     }
     assert(newVal && "unhandled memdesc view");
     newVal.getDefiningOp()->setAttrs(user->getAttrs());
@@ -1533,9 +1532,10 @@ void replaceUsesAndPropagateType(OpBuilder &builder, Operation *oldUse,
     op->erase();
 }
 
-void replaceUsesWithLocalLoad(OpBuilder &builder, OpResult old,
-                              TypedValue<ttg::MemDescType> alloc,
-                              TypedValue<ttg::AsyncTokenType> token) {
+ttg::LocalLoadOp
+replaceUsesWithLocalLoad(OpBuilder &builder, OpResult old,
+                         TypedValue<ttg::MemDescType> alloc,
+                         TypedValue<ttg::AsyncTokenType> token) {
   //  Remove redundant local_load -> local_alloc
   auto allocTy = alloc.getType();
   SmallVector<ttg::LocalAllocOp> allocsToErase;
@@ -1550,16 +1550,18 @@ void replaceUsesWithLocalLoad(OpBuilder &builder, OpResult old,
 
   // If there are some uses that were not local_allocs, we need to create a
   // local_load for them.
+  ttg::LocalLoadOp maybeLocalLoad;
   if (std::distance(old.getUsers().begin(), old.getUsers().end()) >
       allocsToErase.size()) {
     auto loc = old.getOwner()->getLoc();
-    auto sharedLoad = builder.template create<ttg::LocalLoadOp>(
+    maybeLocalLoad = builder.template create<ttg::LocalLoadOp>(
         loc, old.getType(), alloc, token);
-    old.replaceAllUsesWith(sharedLoad.getResult());
+    old.replaceAllUsesWith(maybeLocalLoad);
   }
   for (auto alloc : allocsToErase) {
     alloc.erase();
   }
+  return maybeLocalLoad;
 }
 
 bool comesFromLoadOrBlockArg(Value v) {
