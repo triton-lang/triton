@@ -666,10 +666,9 @@ buildSchedule(scf::ForOp &forOp, int numStages, StreamStages &stages,
   return schedule;
 }
 
-LogicalResult preprocessLoopAndBuildSchedule(scf::ForOp &forOp, int numStages,
-                                             StreamStages &stages,
-                                             bool useAsyncCopy,
-                                             tt::PipeliningOption &options) {
+LogicalResult pipelineLoop(scf::ForOp forOp, int numStages, int globalPrefetch,
+                           int localPrefetch, bool useAsyncCopy) {
+
   triton::AMD::ModuleAxisInfoAnalysis axisInfoAnalysis(
       forOp->getParentOfType<ModuleOp>());
 
@@ -679,6 +678,14 @@ LogicalResult preprocessLoopAndBuildSchedule(scf::ForOp &forOp, int numStages,
     LDBG("couldn't find any pipeline-able loads:\n" << *forOp);
     return failure();
   }
+
+  int lastStage = numStages - 1;
+  StreamStages stages;
+  stages[SCHED_GLOBAL_LOAD] = 0;
+  stages[SCHED_LOCAL_STORE] = globalPrefetch;
+  stages[SCHED_LOCAL_LOAD] = lastStage - localPrefetch;
+  stages[SCHED_COMPUTE] = lastStage;
+  stages[SCHED_ASYNC_WAIT] = stages[SCHED_LOCAL_LOAD];
 
   auto schedule = buildSchedule(forOp, numStages, stages, loadToInfo,
                                 useAsyncCopy, axisInfoAnalysis);
@@ -690,32 +697,10 @@ LogicalResult preprocessLoopAndBuildSchedule(scf::ForOp &forOp, int numStages,
   // stages and order of operations to the pipeline expander.
   auto coarseSchedule = schedule.createFinalSchedule(forOp);
 
-  // Set the final schedule as our scheduling function
-  options.getScheduleFn =
-      [coarseSchedule](scf::ForOp,
-                       std::vector<std::pair<Operation *, unsigned>> &s) {
-        s = std::move(coarseSchedule);
-      };
-
-  return success();
-}
-
-LogicalResult pipelineLoop(scf::ForOp forOp, int numStages, int globalPrefetch,
-                           int localPrefetch, bool useAsyncCopy) {
-
-  int lastStage = numStages - 1;
-  StreamStages stages;
-  stages[SCHED_GLOBAL_LOAD] = 0;
-  stages[SCHED_LOCAL_STORE] = globalPrefetch;
-  stages[SCHED_LOCAL_LOAD] = lastStage - localPrefetch;
-  stages[SCHED_COMPUTE] = lastStage;
-  stages[SCHED_ASYNC_WAIT] = stages[SCHED_LOCAL_LOAD];
-
   tt::PipeliningOption options;
   options.supportDynamicLoops = true;
   options.peelEpilogue = true;
   options.predicateFn = streamPredication;
-
   // Annotate loadOp in prologue for further moving up
   options.annotateFn = [](Operation *op,
                           tt::PipeliningOption::PipelinerPart part,
@@ -728,10 +713,13 @@ LogicalResult pipelineLoop(scf::ForOp forOp, int numStages, int globalPrefetch,
                       StringAttr::get(op->getContext(), "prologue"));
     }
   };
+  // Set the final schedule as our scheduling function
+  options.getScheduleFn =
+      [coarseSchedule](scf::ForOp,
+                       std::vector<std::pair<Operation *, unsigned>> &s) {
+        s = std::move(coarseSchedule);
+      };
 
-  if (failed(preprocessLoopAndBuildSchedule(forOp, numStages, stages,
-                                            useAsyncCopy, options)))
-    return failure();
   LDBG("Loop before sending to expander:\n" << *forOp);
 
   IRRewriter rewriter(forOp);
