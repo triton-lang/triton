@@ -580,7 +580,7 @@ class CodeGenerator(ast.NodeVisitor):
             self.caller_context.initialize_callee(self.fn, self.builder)
         # bind arguments to symbols
         for arg_name, arg_value in zip(arg_names, arg_values):
-            if knobs.compilation.use_name_loc_as_prefix and _is_triton_tensor(arg_value):
+            if _is_triton_tensor(arg_value) or isinstance(arg_value, language.core.tensor_descriptor):
                 arg_value.handle.set_loc(self.builder.create_name_loc(arg_name, arg_value.handle.get_loc()))
             self.set_value(arg_name, arg_value)
         insert_pt = self.builder.get_insertion_block()
@@ -1424,7 +1424,7 @@ class CodeGenerator(ast.NodeVisitor):
             self.cur_node = node
             if hasattr(node, 'lineno') and hasattr(node, 'col_offset'):
                 here_loc = self.builder.create_loc(self.file_name, self.begin_line + node.lineno, node.col_offset)
-                if knobs.compilation.use_name_loc_as_prefix and self.name_loc_as_prefix is not None:
+                if self.name_loc_as_prefix is not None:
                     self.builder.set_loc(self.builder.create_name_loc(self.name_loc_as_prefix, here_loc))
                 else:
                     self.builder.set_loc(here_loc)

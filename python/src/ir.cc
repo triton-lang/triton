@@ -152,6 +152,7 @@ ReproducerStreamFactory makeConsoleReproducer() {
 OpPrintingFlags getOpPrintingFlags() {
   auto printingFlags = OpPrintingFlags();
   printingFlags.enableDebugInfo();
+  printingFlags.printNameLocAsPrefix(true);
   return printingFlags;
 }
 
@@ -501,9 +502,6 @@ void init_triton_ir(py::module &&m) {
              std::string str;
              llvm::raw_string_ostream os(str);
              auto printingFlags = getOpPrintingFlags();
-             bool useNameLoc = ::triton::tools::getBoolEnv("MLIR_USE_NAME_LOC");
-             if (useNameLoc)
-               printingFlags.printNameLocAsPrefix(true);
              self->print(os, printingFlags);
              return str;
            })
@@ -1775,10 +1773,6 @@ void init_triton_ir(py::module &&m) {
 
                  return false;
                };
-               bool useNameLoc =
-                   ::triton::tools::getBoolEnv("MLIR_USE_NAME_LOC");
-               if (useNameLoc)
-                 printingFlags.printNameLocAsPrefix(true);
                self.enableIRPrinting(
                    /*shouldPrintBeforePass=*/printAlways,
                    /*shouldPrintAfterPass=*/printAlways,
