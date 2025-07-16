@@ -29,31 +29,31 @@ static const char *hipLibSearchPaths[] = {"/*py_libhip_search_path*/"};
 
 // HIP driver version format: HIP_VERSION_MAJOR * 10000000 + HIP_VERSION_MINOR *
 // 100000 + HIP_VERSION_PATCH.
-#define HIP_DRIVER_EXTRACT_MAJOR_VERSION(version) ((version) / 10000000)
-#define HIP_DRIVER_EXTRACT_MINOR_VERSION(version)                              \
+#define TRITON_HIP_DRIVER_EXTRACT_MAJOR_VERSION(version) ((version) / 10000000)
+#define TRITON_HIP_DRIVER_EXTRACT_MINOR_VERSION(version)                       \
   (((version) % 10000000) / 100000)
-#define HIP_DRIVER_EXTRACT_PATCH_VERSION(version) ((version) % 100000)
-#define HIP_DRIVER_REQ_MAJOR_VERSION (HIP_VERSION_MAJOR)
+#define TRITON_HIP_DRIVER_EXTRACT_PATCH_VERSION(version) ((version) % 100000)
+#define TRITON_HIP_DRIVER_REQ_MAJOR_VERSION (HIP_VERSION_MAJOR)
 
-// #define HIP_DRIVER_DBG_VERSION
-#ifdef HIP_DRIVER_DBG_VERSION
-#define HIP_DRIVER_LOG_VERSION(version, msgBuff)                               \
+// #define TRITON_HIP_DRIVER_DBG_VERSION
+#ifdef TRITON_HIP_DRIVER_DBG_VERSION
+#define TRITON_HIP_DRIVER_LOG_VERSION(version, msgBuff)                        \
   do {                                                                         \
     snprintf(msgBuff, sizeof(msgBuff), "libamdhip64 version is: %d.%d.%d",     \
-             HIP_DRIVER_EXTRACT_MAJOR_VERSION(version),                        \
-             HIP_DRIVER_EXTRACT_MINOR_VERSION(version),                        \
-             HIP_DRIVER_EXTRACT_PATCH_VERSION(version));                       \
+             TRITON_HIP_DRIVER_EXTRACT_MAJOR_VERSION(version),                 \
+             TRITON_HIP_DRIVER_EXTRACT_MINOR_VERSION(version),                 \
+             TRITON_HIP_DRIVER_EXTRACT_PATCH_VERSION(version));                \
     printf("%s\n", msgBuff);                                                   \
   } while (0);
 #else
-#define HIP_DRIVER_LOG_VERSION(version, msgBuff)                               \
+#define TRITON_HIP_DRIVER_LOG_VERSION(version, msgBuff)                        \
   do {                                                                         \
     (void)msgBuff;                                                             \
     (void)(version);                                                           \
   } while (0);
 #endif
 
-#define HIP_MSG_BUFF_SIZE (1024U)
+#define TRITON_HIP_MSG_BUFF_SIZE (1024U)
 
 // The HIP symbol table for holding resolved dynamic library symbols.
 struct HIPSymbolTable {
@@ -84,23 +84,25 @@ static int checkDriverVersion(void *lib) {
   }
 
   (void)hipDriverGetVersion(&hipVersion);
-  char msgBuff[HIP_MSG_BUFF_SIZE] = {0};
+  char msgBuff[TRITON_HIP_MSG_BUFF_SIZE] = {0};
 
-  const int hipMajVersion = HIP_DRIVER_EXTRACT_MAJOR_VERSION(hipVersion);
-  if (hipMajVersion < HIP_DRIVER_REQ_MAJOR_VERSION) {
-    const int hipMinVersion = HIP_DRIVER_EXTRACT_MINOR_VERSION(hipVersion);
-    const int hipPatchVersion = HIP_DRIVER_EXTRACT_PATCH_VERSION(hipVersion);
+  const int hipMajVersion = TRITON_HIP_DRIVER_EXTRACT_MAJOR_VERSION(hipVersion);
+  if (hipMajVersion < TRITON_HIP_DRIVER_REQ_MAJOR_VERSION) {
+    const int hipMinVersion =
+        TRITON_HIP_DRIVER_EXTRACT_MINOR_VERSION(hipVersion);
+    const int hipPatchVersion =
+        TRITON_HIP_DRIVER_EXTRACT_PATCH_VERSION(hipVersion);
     snprintf(msgBuff, sizeof(msgBuff),
              "libamdhip64 version %d.%d.%d is not supported! Required major "
              "version is >=%d.",
              hipMajVersion, hipMinVersion, hipPatchVersion,
-             HIP_DRIVER_REQ_MAJOR_VERSION);
+             TRITON_HIP_DRIVER_REQ_MAJOR_VERSION);
     PyErr_SetString(PyExc_RuntimeError, msgBuff);
     dlclose(lib);
     return -1;
   }
 
-  HIP_DRIVER_LOG_VERSION(hipVersion, msgBuff);
+  TRITON_HIP_DRIVER_LOG_VERSION(hipVersion, msgBuff);
 
   return hipVersion;
 }
@@ -170,7 +172,7 @@ static inline void gpuAssert(hipError_t code, const char *file, int line) {
       {
         const char *prefix = "Triton Error [HIP]: ";
         const char *str = hipSymbolTable.hipGetErrorString(code);
-        char err[HIP_MSG_BUFF_SIZE] = {0};
+        char err[TRITON_HIP_MSG_BUFF_SIZE] = {0};
         snprintf(err, sizeof(err), "%s Code: %d, Messsage: %s", prefix, code,
                  str);
         PyGILState_STATE gil_state;
