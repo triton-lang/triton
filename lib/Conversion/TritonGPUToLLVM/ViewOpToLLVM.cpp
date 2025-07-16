@@ -510,10 +510,10 @@ struct MemDescSubviewOpConversion
       auto shape = srcTy.getShape().take_back(destTy.getRank());
       auto stride = product(shape);
       Value offset = b.mul(opOffsetVals[0], b.i32_val(stride));
-      // Remove the first offset
+      // Remove the first offsets
       SmallVector<Value> offsetVals;
       for (auto [oldOff, newOff] :
-           llvm::zip(smemObj.getOffsets(),
+           llvm::zip(ArrayRef<Value>(smemObj.getOffsets()).drop_front(),
                      ArrayRef<Value>(opOffsetVals).drop_front())) {
         offsetVals.push_back(b.add(oldOff, newOff));
       }
