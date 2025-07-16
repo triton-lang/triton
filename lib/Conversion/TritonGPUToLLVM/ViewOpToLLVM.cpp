@@ -494,28 +494,16 @@ struct MemDescSubviewOpConversion
     auto is1d = srcTy.getRank() == 1 && destTy.getRank() == 1 &&
                 destTy.getDimSize(0) == 1;
     if (rankReduced || is1d) {
-      if (is1d) {
-        smemObj = SharedMemoryObject(
-            b.gep(elemPtrTy, llvmElemTy, base, opOffsetVals[0]), llvmElemTy,
-            {b.i32_val(0)});
-        return success();
-      }
-      // TODO Split into its own op
-      // At the moment we assume this is only used in the context of pipelining
-      // If we want to generalise it, we should use `applyLinearLayout` whenever
-      // all the shapes are powers of 2 and effectively treat it as the other
-      // memdesc_subview
-
-      // We just allow to split along the first dimension in the verifier
-      auto shape = srcTy.getShape().take_back(destTy.getRank());
-      auto stride = product(shape);
-      Value offset = b.mul(opOffsetVals[0], b.i32_val(stride));
+      auto smemStrides = smemObj.getStrides(srcTy, loc, rewriter);
+      SmallVector<Value> opSmemStrides(smemStrides.end() - opOffsetVals.size(),
+                                       smemStrides.end());
+      // We are splitting the pipelining dimension which may not be a power of 2
+      // so we can't use LinearLayouts
+      auto offset = dot(rewriter, loc, opOffsetVals, opSmemStrides);
       // Remove the first offsets
       SmallVector<Value> offsetVals;
-      for (auto [oldOff, newOff] :
-           llvm::zip(ArrayRef<Value>(smemObj.getOffsets()).drop_front(),
-                     ArrayRef<Value>(opOffsetVals).drop_front())) {
-        offsetVals.push_back(b.add(oldOff, newOff));
+      for (int i = rankReduced; i < opOffsetVals.size(); i++) {
+        offsetVals.push_back(b.add(opOffsetVals[i], smemObj.getOffsets()[i]));
       }
       // Advance the pointer and keep the opOffsets as the new shape
       smemObj = SharedMemoryObject(b.gep(elemPtrTy, llvmElemTy, base, offset),
