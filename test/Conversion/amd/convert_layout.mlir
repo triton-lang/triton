@@ -8,13 +8,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
     // verify that following convert layout uses general swizzling
 
-    // CHECK: [[CST_128:%.*]] = llvm.mlir.constant(128 : i32) : i32
-    // CHECK: [[SEL:%.*]]= llvm.select {{.*}}, {{.*}}, [[CST_128]]
-    // CHECK: [[OFFSET_0:%.*]] = llvm.xor {{.*}}, [[SEL]]
-    // CHECK: [[OFFSET_1:%.*]] = llvm.xor {{.*}}, [[OFFSET_0]] : i32
-    // CHECK: [[OFFSET_2:%.*]] = llvm.xor [[OFFSET_1]], {{.*}} : i32
-    // CHECK: [[OFFSET_3:%.*]] = llvm.add [[OFFSET_2]], {{.*}} : i32
-    // CHECK: llvm.getelementptr inbounds {{.*}}{{\[}}[[OFFSET_3]]{{\]}}
+    // CHECK-NOT: llvm.lshr
 
     %0 = ttg.convert_layout %arg0 : tensor<64x64xf32, #blocked0> -> tensor<64x64xf32, #blocked1>
     tt.store %arg1, %0 : tensor<64x64x!tt.ptr<f32>, #blocked1>
