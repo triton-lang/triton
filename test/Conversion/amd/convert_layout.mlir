@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=arch=gfx942 | FileCheck %s
+// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=arch=gfx942 --canonicalize| FileCheck %s
 
 #blocked0 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [16, 4], warpsPerCTA = [2, 2], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [4, 1], threadsPerWarp = [4, 16], warpsPerCTA = [2, 2], order = [0, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
@@ -8,10 +8,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
     // verify that following convert layout uses general swizzling
 
-    // CHECK-NOT: llvm.add
-    // CHECK-COUNT-6: llvm.select
-    // CHECK-NOT: llvm.add
-    // CHECK: [[OFFSET_0:%.*]] = llvm.xor
+    // CHECK: [[CST_128:%.*]] = llvm.mlir.constant(128 : i32) : i32
+    // CHECK: [[SEL:%.*]]= llvm.select {{.*}}, {{.*}}, [[CST_128]]
+    // CHECK: [[OFFSET_0:%.*]] = llvm.xor {{.*}}, [[SEL]]
     // CHECK: [[OFFSET_1:%.*]] = llvm.xor {{.*}}, [[OFFSET_0]] : i32
     // CHECK: [[OFFSET_2:%.*]] = llvm.xor [[OFFSET_1]], {{.*}} : i32
     // CHECK: [[OFFSET_3:%.*]] = llvm.add [[OFFSET_2]], {{.*}} : i32
@@ -34,9 +33,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     // verify that following convert layout uses padded path
     // see getVecAddr lambda in transferWithinBlockImpl function
 
-    // CHECK: [[CST_5:%.*]] = llvm.mlir.constant(5 : i32) : i32
-    // CHECK: [[OFFSET_0:%.*]] = llvm.lshr {{.*}}, [[CST_5]] : i32
-    // CHECK: [[CST_0:%.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK-DAG: [[CST_0:%.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK-DAG: [[CST_5:%.*]] = llvm.mlir.constant(5 : i32) : i32
+    // CHECK-DAG: [[OFFSET_0:%.*]] = llvm.lshr {{.*}}, [[CST_5]] : i32
     // CHECK: [[OFFSET_1:%.*]] = llvm.shl [[OFFSET_0]], [[CST_0]] : i32
     // CHECK: [[OFFSET_2:%.*]] = llvm.add [[OFFSET_1]], {{.*}} : i32
     // CHECK: llvm.getelementptr inbounds {{.*}}{{\[}}[[OFFSET_2]]{{\]}}
