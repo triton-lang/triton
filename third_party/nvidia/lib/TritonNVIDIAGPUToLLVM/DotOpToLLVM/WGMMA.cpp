@@ -319,27 +319,6 @@ static Value faddAccumulate(ConversionPatternRewriter &rewriter, Location loc,
   return newStruct;
 }
 
-static SmallVector<Value> emitWait(ConversionPatternRewriter &rewriter,
-                                   Location loc, SmallVector<Value> acc,
-                                   int pendings) {
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  SmallVector<Type> types(acc.size(), acc[0].getType());
-  auto structTy =
-      LLVM::LLVMStructType::getLiteral(rewriter.getContext(), types);
-  Value llvmStruct = rewriter.create<LLVM::UndefOp>(loc, structTy);
-  int i = 0;
-  for (Value v : acc) {
-    llvmStruct = b.insert_val(structTy, llvmStruct, v, i++);
-  }
-  Value res = rewriter.create<triton::nvgpu::WGMMAWaitGroupOp>(loc, llvmStruct,
-                                                               pendings);
-  SmallVector<Value> results;
-  for (int i = 0; i < acc.size(); ++i) {
-    results.push_back(b.extract_val(types[0], res, i));
-  }
-  return results;
-}
-
 LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
                          ConversionPatternRewriter &rewriter, Location loc,
                          Operation *op, Value a, Value b, Value c, Value d,
@@ -483,7 +462,7 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
   rewriter.create<NVVM::WgmmaGroupSyncAlignedOp>(loc);
 
   if (sync)
-    mmaResults = emitWait(rewriter, loc, mmaResults, 0);
+    rewriter.create<NVVM::WgmmaWaitGroupSyncOp>(loc, 0);
 
   SmallVector<Value> results =
       unpackAccumulator(rewriter, loc, mmaResults, dTensorTy);

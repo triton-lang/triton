@@ -63,13 +63,6 @@ def NVGPU_MemSyncScopeAttr : I32EnumAttr<
 class NVGPU_Op<string mnemonic, list<Trait> traits = []> :
     LLVM_OpBase<NVGPU_Dialect, mnemonic, traits>;
 
-def NVGPU_WGMMAWaitGroupOp : NVGPU_Op<"wgmma_wait_group", [DeclareOpInterfaceMethods<InferTypeOpInterface>,
-                                                           AllTypesMatch<["input", "output"]>]> {
-  let arguments = (ins LLVM_AnyStruct:$input, I32Attr:$pendings);
-  let results = (outs LLVM_AnyStruct:$output);
-  let assemblyFormat = "$input attr-dict `:` type($input)";
-}
-
 def WGMMA_LayoutAttr : I32EnumAttr<"WGMMALayout",
     "wgmma layout, either 'row' or 'col'",
     [

@@ -279,47 +279,6 @@ public:
   }
 };
 
-class WGMMAWaitGroupOpPattern : public OpRewritePattern<ttn::WGMMAWaitGroupOp> {
-public:
-  using OpRewritePattern<ttn::WGMMAWaitGroupOp>::OpRewritePattern;
-
-  LogicalResult matchAndRewrite(ttn::WGMMAWaitGroupOp op,
-                                PatternRewriter &rewriter) const override {
-    return rewriteAsPtxAsm(op, rewriter, getPtxAsm(op),
-                           getOperandsAndConstraints(op),
-                           getOutputConstraints(op));
-  }
-
-  Constraints getOutputConstraints(ttn::WGMMAWaitGroupOp op) const {
-    auto outputStructType = cast<LLVM::LLVMStructType>(op.getType());
-    uint32_t numOutputRegs = outputStructType.getBody().size();
-    std::string output =
-        outputStructType.getBody().front().isF32() ? "=f" : "=r";
-    return Constraints(numOutputRegs, output);
-  }
-
-  OperandsAndConstraints
-  getOperandsAndConstraints(ttn::WGMMAWaitGroupOp op) const {
-    OperandsAndConstraints operandsAndConstraints;
-    auto input = op.getInput();
-    operandsAndConstraints.push_back({input, "0"});
-    return operandsAndConstraints;
-  }
-
-  std::string getPtxAsm(ttn::WGMMAWaitGroupOp op) const {
-    auto outputStructType = dyn_cast<LLVM::LLVMStructType>(op.getType());
-    uint32_t numCRegs = outputStructType.getBody().size();
-    std::string args = "";
-    uint32_t asmOpIdx = 0;
-    for (uint32_t i = 0; i < numCRegs; ++i) {
-      args += "$" + std::to_string(asmOpIdx++) + (i == numCRegs - 1 ? "" : ",");
-    }
-    auto ptxAsm = "// wait for regs: " + args + "\n\t" +
-                  "wgmma.wait_group.sync.aligned #pendings;";
-    return ptxAsm;
-  }
-};
-
 class WGMMAOpPattern : public OpRewritePattern<ttn::WGMMAOp> {
 public:
   using OpRewritePattern<ttn::WGMMAOp>::OpRewritePattern;
@@ -623,8 +582,8 @@ public:
     patterns.add<NVGPUOpGenericPattern<ttn::ClusterCTAIdOp>>(
         context, kClusterCtaIdOp, Constraints({"=r"}), Constraints());
 
-    patterns.add<WGMMAOpPattern, LoadAcquireOpPattern, WGMMAWaitGroupOpPattern,
-                 WarpIdOpPattern>(context);
+    patterns.add<WGMMAOpPattern, LoadAcquireOpPattern, WarpIdOpPattern>(
+        context);
 
     if (applyPatternsGreedily(mod, std::move(patterns)).failed())
       signalPassFailure();
