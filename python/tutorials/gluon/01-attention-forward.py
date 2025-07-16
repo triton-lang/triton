@@ -1,6 +1,5 @@
 import torch
 import triton
-import triton.language as tl
 import pytest
 import itertools
 
@@ -25,7 +24,7 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
 # ===-----------------------------------------------------------------------===#
 
 
-@tl.constexpr_function
+@gl.constexpr_function
 def get_tmem_32x32b_reg_layout(instr_shape, shape, num_warps):
     assert len(shape) == 2, "expected a 2D tensor"
     assert num_warps in [4, 8], "expected 4 or 8 warps"
@@ -61,7 +60,7 @@ def get_tmem_32x32b_reg_layout(instr_shape, shape, num_warps):
     )
 
 
-@tl.constexpr_function
+@gl.constexpr_function
 def get_mma_instr_shape(shape, element_ty):
     m = 128 if shape[0] >= 128 else 64
     n = 256 if shape[1] >= 256 else shape[1]
@@ -69,37 +68,7 @@ def get_mma_instr_shape(shape, element_ty):
     return (m, n, k)
 
 
-@tl.constexpr_function
-def get_nvmma_layout(shape, element_ty, order=[1, 0], fp4_padded=False):
-    packing_factor = 2 if fp4_padded else 1
-
-    contig_dim_size = shape[order[0]] * packing_factor * element_ty.primitive_bitwidth // 8
-    if contig_dim_size >= 128 and contig_dim_size % 128 == 0:
-        swizzle_byte_width = 128
-    elif contig_dim_size >= 64 and contig_dim_size % 64 == 0:
-        swizzle_byte_width = 64
-    elif contig_dim_size >= 32 and contig_dim_size % 32 == 0:
-        swizzle_byte_width = 32
-    else:
-        swizzle_byte_width = 0
-
-    flatten_outer_dim = 1
-    for i in range(1, len(shape)):
-        flatten_outer_dim *= shape[order[i]]
-    if len(shape) < 2 or flatten_outer_dim < 8:
-        swizzle_byte_width = 0
-    transposed = order[0] == 0
-
-    return gl.NVMMASharedLayout(
-        swizzle_byte_width=swizzle_byte_width,
-        element_bitwidth=element_ty.primitive_bitwidth,
-        rank=len(shape),
-        transposed=transposed,
-        fp4_padded=fp4_padded,
-    )
-
-
-@tl.constexpr_function
+@gl.constexpr_function
 def get_mma_reg_layout(shape, num_warps, dtype=gl.float32):
     instr_shape = get_mma_instr_shape(shape, dtype)
     return get_tmem_32x32b_reg_layout(instr_shape, shape, num_warps)
@@ -133,7 +102,7 @@ def Channel(T, alloc_fn):
             mem = alloc_fn(dtype, [num_buffers] + shape, layout)
             ready_bars = gl.allocate_shared_memory(gl.int64, [num_buffers, 1], mbarrier.MBarrierLayout())
             empty_bars = gl.allocate_shared_memory(gl.int64, [num_buffers, 1], mbarrier.MBarrierLayout())
-            for i in tl.static_range(num_buffers):
+            for i in gl.static_range(num_buffers):
                 mbarrier.init(ready_bars.index(i), count=1)
                 mbarrier.init(empty_bars.index(i), count=num_consumers)
                 mbarrier.arrive(empty_bars.index(i), count=num_consumers)
@@ -179,7 +148,7 @@ def Channel(T, alloc_fn):
         def release(self):
             if isinstance(self.mem, gl.shared_memory_descriptor):
                 self.mem._keep_alive()
-            for i in tl.static_range(self.num_buffers):
+            for i in gl.static_range(self.num_buffers):
                 mbarrier.invalidate(self.ready_bars.index(i))
                 mbarrier.invalidate(self.empty_bars.index(i))
 
@@ -847,7 +816,7 @@ def _attn_fwd_correction_rescale(config, s_tmem, corr_consumer, o_consumer):
     mbarrier.arrive(corr_bar, count=1)
     alpha = gl.convert_layout(alpha.reshape([config.SPLIT_M]), alpha_layout)
 
-    for i in tl.static_range(config.SPLIT_D_FACTOR):
+    for i in gl.static_range(config.SPLIT_D_FACTOR):
         o_ref = o_tmem.slice(i * config.SPLIT_D, config.SPLIT_D)
         o = o_ref.load(config.o_splitn_layout)
         o = _mul_f32x2(o, alpha[:, None])
@@ -882,7 +851,7 @@ def _attn_fwd_correction_epilogue(config, prog, s_tmem, M, corr_consumer, epi_pr
     SPLIT_N: gl.constexpr = o_smem.type.shape[1] // SPLIT_N_FACTOR
 
     scale = 1 / l_i
-    for i in tl.static_range(SPLIT_N_FACTOR):
+    for i in gl.static_range(SPLIT_N_FACTOR):
         o_ref = o_tmem.slice(i * SPLIT_N, SPLIT_N)
         o = o_ref.load(config.o_splitn_layout)
         o = _mul_f32x2(o, scale[:, None])
@@ -992,12 +961,12 @@ def attention_kernel(  #
 def torch_dtype_to_triton(dtype):
     if dtype == torch.float8_e5m2:
         return gl.float8e5
-    return getattr(tl, str(dtype).split('.')[1])
+    return getattr(gl, str(dtype).split('.')[1])
 
 
 def make_tensor_desc(x, shape, strides, block_shape):
-    layout = get_nvmma_layout(block_shape, torch_dtype_to_triton(x.dtype))
-    return TensorDescriptor(x, shape=shape, strides=strides, block_shape=block_shape, layout=layout.value)
+    layout = gl.NVMMASharedLayout.get_default_for(block_shape, torch_dtype_to_triton(x.dtype))
+    return TensorDescriptor(x, shape=shape, strides=strides, block_shape=block_shape, layout=layout)
 
 
 def attention_forward(q, k, v, causal, sm_scale):
