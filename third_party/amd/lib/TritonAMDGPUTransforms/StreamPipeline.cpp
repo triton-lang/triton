@@ -615,8 +615,8 @@ preprocessLoop(triton::AMD::ModuleAxisInfoAnalysis &axisInfoAnalysis,
 }
 
 tt::CoarseSchedule
-buildSchedule(scf::ForOp &forOp, int numStages, StreamStages &stages,
-              const LoadToInfoMap &loadToInfo, bool useAsyncCopy,
+buildSchedule(scf::ForOp &forOp, int numStages, const LoadToInfoMap &loadToInfo,
+              int globalPrefetch, int localPrefetch, bool useAsyncCopy,
               triton::AMD::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
   tt::CoarseSchedule schedule(numStages);
   StreamClusters clusters;
@@ -634,6 +634,14 @@ buildSchedule(scf::ForOp &forOp, int numStages, StreamStages &stages,
   for (auto &[l, info] : loadToInfo) {
     maxDist = std::max(maxDist, info.distToUse);
   }
+
+  int lastStage = numStages - 1;
+  StreamStages stages;
+  stages[SCHED_GLOBAL_LOAD] = 0;
+  stages[SCHED_LOCAL_STORE] = globalPrefetch;
+  stages[SCHED_LOCAL_LOAD] = lastStage - localPrefetch;
+  stages[SCHED_COMPUTE] = lastStage;
+  stages[SCHED_ASYNC_WAIT] = stages[SCHED_LOCAL_LOAD];
 
   if (failed(initSchedule(maxDist, stages, numStages, numBuffers, useAsyncCopy,
                           clusters, schedule)))
@@ -679,16 +687,8 @@ LogicalResult pipelineLoop(scf::ForOp forOp, int numStages, int globalPrefetch,
     return failure();
   }
 
-  int lastStage = numStages - 1;
-  StreamStages stages;
-  stages[SCHED_GLOBAL_LOAD] = 0;
-  stages[SCHED_LOCAL_STORE] = globalPrefetch;
-  stages[SCHED_LOCAL_LOAD] = lastStage - localPrefetch;
-  stages[SCHED_COMPUTE] = lastStage;
-  stages[SCHED_ASYNC_WAIT] = stages[SCHED_LOCAL_LOAD];
-
-  auto schedule = buildSchedule(forOp, numStages, stages, loadToInfo,
-                                useAsyncCopy, axisInfoAnalysis);
+  auto schedule = buildSchedule(forOp, numStages, loadToInfo, globalPrefetch,
+                                localPrefetch, useAsyncCopy, axisInfoAnalysis);
   if (schedule.empty()) {
     return failure();
   }
