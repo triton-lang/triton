@@ -246,7 +246,7 @@ LogicalResult initSchedule(int maxDist, StreamStages &stages, int numStages,
 }
 
 AsyncCopyChainOps createAsyncCopy(tt::LoadOp loadOp, Value alloc,
-                                  Value extractIdx, scf::ForOp forOp) {
+                                  Value extractIdx) {
   OpBuilder builder(loadOp);
   Location loc = loadOp.getLoc();
 
@@ -310,7 +310,7 @@ void scheduleAsyncCopy(const AsyncCopyChainOps &asyncOps, tt::LoadOp loadOp,
 }
 
 StreamCopyChainOps createStreamCopy(tt::LoadOp loadOp, Value alloc,
-                                    Value extractIdx, scf::ForOp forOp) {
+                                    Value extractIdx) {
   OpBuilder builder(loadOp);
   Location loc = loadOp.getLoc();
 
@@ -547,11 +547,9 @@ createStreamOps(const LoadToInfoMap &loadToInfo, scf::ForOp &forOp,
     // Replace the old load with multi-buffered loads
     if (useAsyncCopy && canBeConvertedToAsyncLoad(numBuffers, loadOp, alloc,
                                                   axisInfoAnalysis)) {
-      loadToStreamOp[loadOp] =
-          createAsyncCopy(loadOp, alloc, extractIdx, forOp);
+      loadToStreamOp[loadOp] = createAsyncCopy(loadOp, alloc, extractIdx);
     } else {
-      loadToStreamOp[loadOp] =
-          createStreamCopy(loadOp, alloc, extractIdx, forOp);
+      loadToStreamOp[loadOp] = createStreamCopy(loadOp, alloc, extractIdx);
     }
   }
 
@@ -559,11 +557,8 @@ createStreamOps(const LoadToInfoMap &loadToInfo, scf::ForOp &forOp,
 }
 
 void scheduleStreamOps(const LoadToStreamOpMap &loadToStreamOp,
-                       const LoadToInfoMap &loadToInfo, scf::ForOp &forOp,
-                       const int &numBuffers, bool useAsyncCopy,
                        tt::CoarseSchedule &schedule, const StreamStages &stages,
-                       const StreamClusters &clusters,
-                       tt::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
+                       const StreamClusters &clusters) {
   SmallVector<std::pair<Operation *, Value>> loadToAllocs;
 
   for (auto [l, streamOps] : loadToStreamOp) {
@@ -655,8 +650,7 @@ buildSchedule(scf::ForOp &forOp, int numStages, const LoadToInfoMap &loadToInfo,
   // Convert the loads into shared memory allocations and loads from them.
   auto loadToStreamOp = createStreamOps(loadToInfo, forOp, numBuffers,
                                         useAsyncCopy, axisInfoAnalysis);
-  scheduleStreamOps(loadToStreamOp, loadToInfo, forOp, numBuffers, useAsyncCopy,
-                    schedule, stages, clusters, axisInfoAnalysis);
+  scheduleStreamOps(loadToStreamOp, schedule, stages, clusters);
   dumpSchedule("Coarse schedule stream ops:");
 
   scheduleDependencies(forOp, schedule);
