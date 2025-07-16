@@ -1091,13 +1091,13 @@ struct AtomicRMWOpConversion
           retType = valueElemTy;
         }
 
-        auto after_rmw = ptxBuilderAtomicRMW.launch(rewriter, loc, retType);
-        Value ret = after_rmw;
+        auto afterRMW = ptxBuilderAtomicRMW.launch(rewriter, loc, retType);
+        Value ret = afterRMW;
         if (op->hasAttr("allocation.offset")) {
           // If the AtomicRMW has the "allocation.offset", we suppose its
-          // results will be used in later, so we will broadcasting it.
-          LinearLayout dstLayout =
-              ttg::toLinearLayout(tensorTy.getShape(), tensorTy.getEncoding());
+          // value before atomic RMW will be used in later, so we will
+          // broadcasting it.
+          LinearLayout smemLayout = ttg::toLinearLayout(tensorTy);
 
           Value smemBase = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo,
                                                      op.getOperation());
@@ -1107,9 +1107,10 @@ struct AtomicRMWOpConversion
           StringAttr kLane = str_attr("lane");
           StringAttr kWarp = str_attr("warp");
           StringAttr kBlock = str_attr("block");
+          StringAttr kOffset = str_attr("offset");
           auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
 
-          auto smemOffset = applyLinearLayout(loc, rewriter, dstLayout,
+          auto smemOffset = applyLinearLayout(loc, rewriter, smemLayout,
                                               {{kRegister, b.i32_val(0)},
                                                {kLane, laneId},
                                                {kWarp, warpId},
@@ -1121,20 +1122,65 @@ struct AtomicRMWOpConversion
           Value vals;
 
           if (vec > 1) {
-            SmallVector<Value> umpacked_elems =
-                unpackLLElements(loc, after_rmw, rewriter);
-            vals = packLLVector(loc, umpacked_elems, rewriter);
+            SmallVector<Value> unpackedElems =
+                unpackLLElements(loc, afterRMW, rewriter);
+            vals = packLLVector(loc, unpackedElems, rewriter);
           } else if (packed > 1) {
-            vals = after_rmw;
+            vals = afterRMW;
           } else {
-            vals = packLLVector(loc, ArrayRef<Value>(after_rmw), rewriter);
+            vals = packLLVector(loc, ArrayRef<Value>(afterRMW), rewriter);
           }
 
-          targetInfo.storeDShared(rewriter, loc, smemAddr, std::nullopt, vals,
-                                  pred ? pred : b.true_val());
+          auto emitSt = [&](ConversionPatternRewriter &rewriter, Location loc,
+                            ArrayRef<Value> vals, Value shmemAddr, int idx,
+                            VectorType vecTy) -> SmallVector<Value> {
+            auto length = vecTy.getNumElements();
+            Value valsVec = packLLVector(
+                loc, ArrayRef<Value>(vals).slice(idx, length), rewriter);
+            targetInfo.storeDShared(rewriter, loc, shmemAddr, std::nullopt,
+                                    valsVec,
+                                    /*pred=*/pred ? pred : b.true_val());
+            return {};
+          };
+
+          auto emitLd = [&](ConversionPatternRewriter &rewriter, Location loc,
+                            ArrayRef<Value> vals, Value shmemAddr, int idx,
+                            VectorType vecTy) -> SmallVector<Value> {
+            auto length = vecTy.getNumElements();
+            assert(vals.empty());
+            Value valsVec =
+                targetInfo.loadDShared(rewriter, loc, shmemAddr, std::nullopt,
+                                       vecTy, /*pred=*/b.true_val());
+            return unpackLLVector(loc, valsVec, rewriter);
+          };
+
+          // TODO(Wenqin): we may not use smemLayout.getTotalOutDimSize(),
+          // because we use a loop to traversal, so we didn't map all offset in
+          // one iteration, but there is no correctness issue, and could save
+          // SMEM usage.
+          auto cvt = smemLayout.reshapeOuts(
+              {{kOffset, smemLayout.getTotalOutDimSize()}});
+          cvt = cvt.sublayout({kLane, kWarp}, {kOffset});
+          // we only process vec*packed elements in one iteration, so we have to
+          // modify the LL for reigister input dim.
+          cvt =
+              LinearLayout::identity1D(vec * packed, kRegister, kOffset) * cvt;
+
+          SmallVector<Value> valsArray = unpackLLVector(loc, vals, rewriter);
+          lowerLdSt(loc, ctx, cvt, valsArray, valueElemTy, smemBase, rewriter,
+                    targetInfo, {}, emitSt);
           b.barrier();
-          ret = targetInfo.loadDShared(rewriter, loc, smemAddr, std::nullopt,
-                                       retType, b.true_val());
+          auto unpackedRet =
+              lowerLdSt(loc, ctx, cvt, std::nullopt, valueElemTy, smemBase,
+                        rewriter, targetInfo, {}, emitLd);
+          if (vec > 1) {
+            ret = packLLVector(loc, unpackedRet, rewriter);
+          } else if (packed > 1) {
+            ret = packLLElements(loc, getTypeConverter(), unpackedRet, rewriter,
+                                 retType);
+          } else {
+            ret = unpackedRet[0];
+          }
         }
 
         if (vec > 1) {
