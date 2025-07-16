@@ -93,7 +93,25 @@ LogicalResult WarpGroupOp::verify() {
   auto numWarps = getNumWarps();
   auto regions = getRegions();
   if (numWarps.size() != regions.size())
-    return emitError("Must supply numWarps for each Warp Group");
+    return emitError("Must supply numWarps for each Warp Group.");
+  if (getResults().size() > 0) {
+    if (regions.size() == 0) {
+      return emitError("Must have at least one region when there are results.");
+    }
+    if (!isa<nvws::WarpGroupYieldOp>(
+            regions.front()->front().getTerminator())) {
+      return emitError("When nvws.warp_group op has results, the first region "
+                       "should be terminated by nvws.warp_group.yield op.");
+    }
+    auto yieldOp =
+        cast<nvws::WarpGroupYieldOp>(regions.front()->front().getTerminator());
+    if (getResults().size() != yieldOp.getNumOperands()) {
+      return emitError(
+          "Mismatch in the number of results returned by nvws.warp_group op "
+          "and the number of the operands of the corresponding "
+          "nvws.warp_group.yield op in the first region.");
+    }
+  }
   return success();
 }
 
