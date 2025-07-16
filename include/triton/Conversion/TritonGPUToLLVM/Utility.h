@@ -352,6 +352,21 @@ public:
   SmallVector<Value> getStrides(triton::gpu::MemDescType memDesc, Location loc,
                                 RewriterBase &rewriter) const;
 
+  // Returns a mask representing all the bits of the memdesc offsets that
+  // may be modified by an affine offset coming from a memdesc_subview.
+  // The offsets are considered to be in the type of the memdesc.
+  // For padded layouts, we return the offsets without padding.
+  static uint64_t getMaskSpanOffsets(triton::gpu::MemDescType srcTy);
+
+  // Returns whether the shared memory access had a memdesc_subview
+  // that is rank-preserving (soon to be called memdesc_slice)
+  static bool isAffineSharedMemoryAccess(triton::gpu::MemDescType srcTy) {
+    return getMaskSpanOffsets(srcTy) != 0;
+  }
+
+  Value getShmemOffset(Location loc, RewriterBase &rewriter,
+                       triton::gpu::MemDescType srcTy) const;
+
   // TODO(Keren): deprecate the method once AMD backend has cleaned up
   Value getCSwizzleOffset(int dim) const {
     assert(dim >= 0 && dim < offsets.size());
@@ -462,7 +477,6 @@ std::pair<Value, Value> getLaneAndWarpId(OpBuilder &rewriter, Location loc);
 // -----------------------------------------------------------------------
 using LLVM::SharedMemoryObject;
 using ::mlir::LLVM::delinearize;
-using ::mlir::LLVM::SharedMemoryObject;
 using ::mlir::triton::gpu::AMDMfmaEncodingAttr;
 using ::mlir::triton::gpu::AMDWmmaEncodingAttr;
 using ::mlir::triton::gpu::BlockedEncodingAttr;
@@ -473,24 +487,6 @@ using ::mlir::triton::gpu::SliceEncodingAttr;
 
 Value dot(RewriterBase &rewriter, Location loc, ArrayRef<Value> offsets,
           ArrayRef<Value> strides);
-
-/// Extend 2d shared object to 3d.
-///
-/// If tensor has 3 dimensions, returns original shared object.
-/// If tensor shape is [M, N], return shared object describing shape [1, M, N]
-///
-/// This Function is used to simplify processing of 2d and 3d dot operands,
-/// particularly in the conversion of local_load operation.
-///
-/// \param rewriter
-/// \param loc
-/// \param smemObj
-/// \param shape shape of a tensor represented by smemObj
-/// \returns shared object describing 3d tensor
-SharedMemoryObject
-getExpandedSharedMemoryObject(ConversionPatternRewriter &rewriter, Location loc,
-                              SharedMemoryObject smemObj,
-                              ArrayRef<int64_t> shape);
 
 // "Applies" the given layout by computing layout(indices) and returning the
 // resulting Values.
@@ -568,7 +564,8 @@ void storeDistributedToShared(triton::gpu::MemDescType dstTy,
 SmallVector<Value>
 lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout cvt,
                 ArrayRef<Value> valsArray, // Input for store, output for load
-                Type llvmElemTy, Value smemBase,
+                Type llvmElemTy, Value smemBase, Value affineOffset,
+                uint64_t maskSpanAffineOffset,
                 ConversionPatternRewriter &rewriter,
                 const TargetInfoBase &targetInfo);
 
@@ -578,20 +575,21 @@ lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout cvt,
 SmallVector<Value> lowerLdSt(
     Location loc, MLIRContext *ctx, LinearLayout cvt,
     ArrayRef<Value> valsArray, // Input for store, output for load
-    Type llvmElemTy, Value smemBase, ConversionPatternRewriter &rewriter,
+    Type llvmElemTy, Value smemBase, Value affineOffset,
+    uint64_t maskSpanAffineOffset, ConversionPatternRewriter &rewriter,
     const TargetInfoBase &targetInfo, std::optional<int> maybeMaxVecElems,
     std::function<SmallVector<Value>(ConversionPatternRewriter &, Location,
                                      ArrayRef<Value>, Value, int, VectorType)>
         lowerInst);
 
 // Lower local_load/local_store via ld.shared/st.shared
-SmallVector<Value> lowerLocalLdSt(Location loc, MLIRContext *ctx,
-                                  // Map from registers to offset
-                                  LinearLayout cvt, ArrayRef<Value> valsArray,
-                                  // Input for store, output for load
-                                  Type llvmElemTy, Value smemBase,
-                                  ConversionPatternRewriter &rewriter,
-                                  const TargetInfoBase &targetInfo);
+SmallVector<Value>
+lowerLocalLdSt(Location loc, MLIRContext *ctx,
+               LinearLayout cvt,          // Map from registers to offset
+               ArrayRef<Value> valsArray, // Input for store, empty for load
+               Type llvmElemTy, triton::gpu::MemDescType srcTy,
+               SharedMemoryObject smemObj, ConversionPatternRewriter &rewriter,
+               const TargetInfoBase &targetInfo);
 
 SmallVector<Value> unpackLLElements(Location loc, Value llvmStruct,
                                     RewriterBase &rewriter);
