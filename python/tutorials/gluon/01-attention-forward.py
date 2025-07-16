@@ -69,36 +69,6 @@ def get_mma_instr_shape(shape, element_ty):
 
 
 @gl.constexpr_function
-def get_nvmma_layout(shape, element_ty, order=[1, 0], fp4_padded=False):
-    packing_factor = 2 if fp4_padded else 1
-
-    contig_dim_size = shape[order[0]] * packing_factor * element_ty.primitive_bitwidth // 8
-    if contig_dim_size >= 128 and contig_dim_size % 128 == 0:
-        swizzle_byte_width = 128
-    elif contig_dim_size >= 64 and contig_dim_size % 64 == 0:
-        swizzle_byte_width = 64
-    elif contig_dim_size >= 32 and contig_dim_size % 32 == 0:
-        swizzle_byte_width = 32
-    else:
-        swizzle_byte_width = 0
-
-    flatten_outer_dim = 1
-    for i in range(1, len(shape)):
-        flatten_outer_dim *= shape[order[i]]
-    if len(shape) < 2 or flatten_outer_dim < 8:
-        swizzle_byte_width = 0
-    transposed = order[0] == 0
-
-    return gl.NVMMASharedLayout(
-        swizzle_byte_width=swizzle_byte_width,
-        element_bitwidth=element_ty.primitive_bitwidth,
-        rank=len(shape),
-        transposed=transposed,
-        fp4_padded=fp4_padded,
-    )
-
-
-@gl.constexpr_function
 def get_mma_reg_layout(shape, num_warps, dtype=gl.float32):
     instr_shape = get_mma_instr_shape(shape, dtype)
     return get_tmem_32x32b_reg_layout(instr_shape, shape, num_warps)
@@ -995,8 +965,8 @@ def torch_dtype_to_triton(dtype):
 
 
 def make_tensor_desc(x, shape, strides, block_shape):
-    layout = get_nvmma_layout(block_shape, torch_dtype_to_triton(x.dtype))
-    return TensorDescriptor(x, shape=shape, strides=strides, block_shape=block_shape, layout=layout.value)
+    layout = gl.NVMMASharedLayout.get_default_for(block_shape, torch_dtype_to_triton(x.dtype))
+    return TensorDescriptor(x, shape=shape, strides=strides, block_shape=block_shape, layout=layout)
 
 
 def attention_forward(q, k, v, causal, sm_scale):
