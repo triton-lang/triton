@@ -14,6 +14,18 @@ def _check(cond: bool, msg_fn: Callable[[], str], category=ValueError):
         raise category(msg_fn())
 
 
+class GluonCallerContext:
+
+    def __init__(self, num_warps: int):
+        self.num_warps = num_warps
+
+    def mangle(self):
+        return f"_NW{self.num_warps}"
+
+    def initialize_callee(self, fn, builder):
+        fn.set_attr("ttg.num-warps", builder.get_int32_attr(self.num_warps))
+
+
 class GluonSemantic(TritonSemantic[TensorTy]):
     tensor = ttgl.tensor
     lang = ttgl
@@ -319,10 +331,11 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         partitions_op = builder.create_warp_specialize_partitions(num_partitions)
         arg_types = [arg.get_type() for arg in mlir_args]
         for i in range(num_partitions):
+            caller_context = GluonCallerContext(num_warps=worker_num_warps[i])
             block = builder.create_block_with_parent(partitions_op.get_region(i), arg_types)
             block_args = [block.get_argument(j) for j in range(len(mlir_args))]
             block_args = unflatten_ir_values(block_args, [arg.type for arg in worker_args])
-            generator.call_JitFunction(worker_partitions[i], block_args, kwargs={})
+            generator.call_JitFunction(worker_partitions[i], block_args, kwargs={}, caller_context=caller_context)
             builder.create_warp_return()
 
         builder.set_insertion_point_after(ws_op.get_operation())

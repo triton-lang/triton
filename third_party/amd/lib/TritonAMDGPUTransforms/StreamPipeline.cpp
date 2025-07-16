@@ -11,6 +11,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/Debug.h"
+#include <variant>
 
 //===----------------------------------------------------------------------===//
 // This file will create a schedule that will be handed over to the pipeline
@@ -36,8 +37,8 @@ namespace mlir {
 
 namespace {
 
-static Operation *streamPredication(RewriterBase &rewriter, Operation *op,
-                                    Value pred) {
+Operation *streamPredication(RewriterBase &rewriter, Operation *op,
+                             Value pred) {
   // The epilogue peeling generates a select for the stage output. This causes
   // too much register pressure with the loop result and the epilogue-dot in
   // regs for the select. Conditionally executing the dot will allow the backend
@@ -124,11 +125,27 @@ struct LoadInfo {
   int distToUse = 0;
   Operation *use = nullptr;
 };
+using LoadToInfoMap = llvm::MapVector<Operation *, LoadInfo>;
 
 using StreamClusters = std::array<tt::CoarseSchedule::Cluster, SCHED_SIZE>;
 using StreamStages = std::array<int, SCHED_SIZE>;
 
-} // namespace
+struct StreamCopyChainOps {
+  tt::LoadOp loadOp;
+  ttg::MemDescSubviewOp subviewOp;
+  ttg::LocalStoreOp localStoreOp;
+  ttg::LocalLoadOp maybeLocalLoadOp;
+};
+
+struct AsyncCopyChainOps {
+  ttg::AsyncCopyGlobalToLocalOp copyOp;
+  ttg::AsyncCommitGroupOp commitOp;
+  ttg::AsyncWaitOp waitOp;
+  ttg::LocalLoadOp maybeLocalLoadOp;
+};
+
+using StreamOpVariant = std::variant<StreamCopyChainOps, AsyncCopyChainOps>;
+using LoadToStreamOpMap = llvm::MapVector<Operation *, StreamOpVariant>;
 
 // Init Schedule Config based on settings and loop characteristics.
 // Create clusters in order of ops in loop. This can interleave ops
@@ -226,15 +243,8 @@ LogicalResult initSchedule(int maxDist, StreamStages &stages, int numStages,
   return success();
 }
 
-struct AsyncCopyChainOps {
-  ttg::AsyncCopyGlobalToLocalOp copyOp;
-  ttg::AsyncCommitGroupOp commitOp;
-  ttg::AsyncWaitOp waitOp;
-  ttg::LocalLoadOp maybeLocalLoadOp;
-};
-
 AsyncCopyChainOps createAsyncCopy(tt::LoadOp loadOp, Value alloc,
-                                  Value extractIdx, scf::ForOp forOp) {
+                                  Value extractIdx) {
   OpBuilder builder(loadOp);
   Location loc = loadOp.getLoc();
 
@@ -257,19 +267,15 @@ AsyncCopyChainOps createAsyncCopy(tt::LoadOp loadOp, Value alloc,
 }
 
 void scheduleLocalLoad(ttg::LocalLoadOp localLoadOp,
-                       tt::CoarseSchedule &schedule, const StreamStages &stages,
-                       const StreamClusters &clusters) {
-  if (stages[SCHED_LOCAL_LOAD] != stages[SCHED_COMPUTE]) {
-    schedule.insert(localLoadOp, stages[SCHED_LOCAL_LOAD],
-                    clusters[SCHED_LOCAL_LOAD]);
-    // If its only user is a ConvertLayout, we place it into the same stage so
-    // it can be folded by a later pass
-    if (localLoadOp->hasOneUse()) {
-      auto cvt = *localLoadOp->getUsers().begin();
-      if (isa<ttg::ConvertLayoutOp>(cvt)) {
-        schedule.insert(cvt, stages[SCHED_LOCAL_LOAD],
-                        clusters[SCHED_LOCAL_LOAD]);
-      }
+                       tt::CoarseSchedule &schedule, int stage,
+                       const tt::CoarseSchedule::Cluster &cluster) {
+  schedule.insert(localLoadOp, stage, cluster);
+  // If its only user is a ConvertLayout, we place it into the same stage so
+  // it can be folded by a later pass
+  if (localLoadOp->hasOneUse()) {
+    auto cvt = *localLoadOp->getUsers().begin();
+    if (isa<ttg::ConvertLayoutOp>(cvt)) {
+      schedule.insert(cvt, stage, cluster);
     }
   }
 }
@@ -293,31 +299,14 @@ void scheduleAsyncCopy(const AsyncCopyChainOps &asyncOps, tt::LoadOp loadOp,
     schedule.insert(waitOp, stages[SCHED_ASYNC_WAIT],
                     clusters[SCHED_ASYNC_WAIT]);
 
-  if (maybeLocalLoadOp)
-    scheduleLocalLoad(maybeLocalLoadOp, schedule, stages, clusters);
+  if (maybeLocalLoadOp && stages[SCHED_LOCAL_LOAD] != stages[SCHED_COMPUTE]) {
+    scheduleLocalLoad(maybeLocalLoadOp, schedule, stages[SCHED_LOCAL_LOAD],
+                      clusters[SCHED_LOCAL_LOAD]);
+  }
 }
-
-void createAndScheduleAsyncCopy(tt::LoadOp loadOp, Value alloc,
-                                Value extractIdx, scf::ForOp forOp,
-                                tt::CoarseSchedule &schedule,
-                                const StreamStages &stages,
-                                const StreamClusters &clusters) {
-  auto asyncOps = createAsyncCopy(loadOp, alloc, extractIdx, forOp);
-  scheduleAsyncCopy(asyncOps, loadOp, schedule, stages, clusters);
-
-  schedule.erase(loadOp);
-  loadOp.erase();
-}
-
-struct StreamCopyChainOps {
-  tt::LoadOp loadOp;
-  ttg::MemDescSubviewOp subviewOp;
-  ttg::LocalStoreOp localStoreOp;
-  ttg::LocalLoadOp maybeLocalLoadOp;
-};
 
 StreamCopyChainOps createStreamCopy(tt::LoadOp loadOp, Value alloc,
-                                    Value extractIdx, scf::ForOp forOp) {
+                                    Value extractIdx) {
   OpBuilder builder(loadOp);
   Location loc = loadOp.getLoc();
 
@@ -345,26 +334,15 @@ void scheduleStreamCopy(const StreamCopyChainOps &streamOps,
                   clusters[SCHED_LOCAL_STORE]);
   schedule.insert(localStoreOp, stages[SCHED_LOCAL_STORE],
                   clusters[SCHED_LOCAL_STORE]);
-  if (maybeLocalLoadOp)
-    scheduleLocalLoad(maybeLocalLoadOp, schedule, stages, clusters);
-}
-
-void createAndScheduleStreamCopy(tt::LoadOp loadOp, Value alloc,
-                                 Value extractIdx, scf::ForOp forOp,
-                                 tt::CoarseSchedule &schedule,
-                                 const StreamStages &stages,
-                                 const StreamClusters &clusters) {
-  auto streamOps = createStreamCopy(loadOp, alloc, extractIdx, forOp);
-  scheduleStreamCopy(streamOps, loadOp, schedule, stages, clusters);
-
-  schedule.erase(loadOp);
-  loadOp.erase();
+  if (maybeLocalLoadOp && stages[SCHED_LOCAL_LOAD] != stages[SCHED_COMPUTE]) {
+    scheduleLocalLoad(maybeLocalLoadOp, schedule, stages[SCHED_LOCAL_LOAD],
+                      clusters[SCHED_LOCAL_LOAD]);
+  }
 }
 
 // Returns the given |inputValue|'s dot user result encoding and updates |opIdx|
 // with which dot operand |inputValue| is fed into if possible.
-static ttg::AMDMfmaEncodingAttr getDotEncoding(Value inputValue,
-                                               unsigned *opIdx) {
+ttg::AMDMfmaEncodingAttr getDotEncoding(Value inputValue, unsigned *opIdx) {
   if (!inputValue.hasOneUse())
     return nullptr;
 
@@ -390,7 +368,7 @@ static ttg::AMDMfmaEncodingAttr getDotEncoding(Value inputValue,
 // If all the transitive uses of the given value have are used by a convert to
 // the same dot operand encoding, return true and get the shared encoding that
 // needs to be used to be compatible with users' layouts.
-static std::optional<ttg::SwizzledSharedEncodingAttr>
+std::optional<ttg::SwizzledSharedEncodingAttr>
 getSharedEncIfAllUsersAreDotEnc(Value loadedValue) {
   ttg::SwizzledSharedEncodingAttr attr;
   for (Operation *user : loadedValue.getUsers()) {
@@ -457,10 +435,10 @@ getSharedEncIfAllUsersAreDotEnc(Value loadedValue) {
   return attr;
 }
 
-LogicalResult
-scheduleLoads(const llvm::MapVector<Operation *, LoadInfo> &loadToInfo,
-              int maxDist, int numStages, const StreamStages &stages,
-              const StreamClusters &clusters, tt::CoarseSchedule &schedule) {
+LogicalResult scheduleLoads(const LoadToInfoMap &loadToInfo, int maxDist,
+                            int numStages, const StreamStages &stages,
+                            const StreamClusters &clusters,
+                            tt::CoarseSchedule &schedule) {
   // The stage gap between chained loads--this allows us to "spread" loads
   // with a non-one step in case the number of stages given by the user is
   // large.
@@ -484,7 +462,6 @@ scheduleLoads(const llvm::MapVector<Operation *, LoadInfo> &loadToInfo,
   return success();
 }
 
-namespace {
 bool canBeConvertedToAsyncLoad(unsigned numBuffers, tt::LoadOp loadOp,
                                Value alloc,
                                tt::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
@@ -514,28 +491,13 @@ bool canBeConvertedToAsyncLoad(unsigned numBuffers, tt::LoadOp loadOp,
   // for at least 32 bit wide loads
   return triton::canBeConvertedToAsyncLoad(loadOp, axisInfoAnalysis);
 }
-} // namespace
 
 // Convert load ops into shared memory allocation loads and apply
 // multi-buffering based on the required number of buffers.
-SmallVector<std::pair<Operation *, Value>> createAndScheduleStreamOps(
-    const llvm::MapVector<Operation *, LoadInfo> &loadToInfo, scf::ForOp &forOp,
-    const int &numBuffers, bool useAsyncCopy, tt::CoarseSchedule &schedule,
-    const StreamStages &stages, const StreamClusters &clusters,
-    tt::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
-  SmallVector<std::pair<Operation *, Value>> loadToAllocs;
-  for (auto &[loadOp, info] : loadToInfo) {
-    if (!info.sharedEncoding)
-      continue;
-
-    // Create an allocation that can hold distance number of loadOp shapes.
-    auto ty = cast<RankedTensorType>(loadOp->getResultTypes()[0]);
-    Value alloc = triton::createAlloc(forOp, ty, loadOp->getLoc(),
-                                      info.sharedEncoding, numBuffers);
-    assert(alloc && "Failed to create alloc for the async load.");
-    loadToAllocs.emplace_back(loadOp, alloc);
-  }
-
+LoadToStreamOpMap
+createStreamOps(const LoadToInfoMap &loadToInfo, scf::ForOp &forOp,
+                const int &numBuffers, bool useAsyncCopy,
+                tt::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
   IRRewriter builder(forOp);
   Location loc = forOp.getLoc();
   Value minusOne = builder.create<arith::ConstantIntOp>(loc, -1, 32);
@@ -546,7 +508,7 @@ SmallVector<std::pair<Operation *, Value>> createAndScheduleStreamOps(
       builder.create<arith::ConstantIntOp>(loc, numBuffers, 32);
 
   unsigned newOperandIndex = forOp.getBody()->getNumArguments();
-  // Patch the loop to add the new loop carried dependencies.
+  // Patch the loop to add the new loop carried dependency.
   forOp = addIterArgsToLoop(builder, forOp, {extractIdx});
 
   // Create one counter for the extract indices to avoid creating long
@@ -559,35 +521,55 @@ SmallVector<std::pair<Operation *, Value>> createAndScheduleStreamOps(
                                                extractIdx, numBuffersVal);
   extractIdx = builder.create<arith::SelectOp>(loc, cndExt, extractIdx, zero);
 
-  // Replace tt.loads with async copies or stream copies
-  for (auto &[op, alloc] : loadToAllocs) {
-    if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
-      if (useAsyncCopy && canBeConvertedToAsyncLoad(numBuffers, loadOp, alloc,
-                                                    axisInfoAnalysis)) {
-        createAndScheduleAsyncCopy(loadOp, alloc, extractIdx, forOp, schedule,
-                                   stages, clusters);
-      } else {
-        createAndScheduleStreamCopy(loadOp, alloc, extractIdx, forOp, schedule,
-                                    stages, clusters);
-      }
-    }
-  }
-  // Patch the yield with the updated counters.
+  // Patch the yield with the updated counter.
   appendToForOpYield(forOp, {extractIdx});
 
-  return loadToAllocs;
+  LoadToStreamOpMap loadToStreamOp;
+  for (auto &[l, info] : loadToInfo) {
+    if (!info.sharedEncoding)
+      continue;
+
+    auto loadOp = dyn_cast<tt::LoadOp>(l);
+    if (!loadOp)
+      continue;
+
+    // Create an allocation that can hold distance number of loadOp shapes.
+    auto ty = cast<RankedTensorType>(loadOp->getResultTypes()[0]);
+    Value alloc = triton::createAlloc(forOp, ty, loadOp->getLoc(),
+                                      info.sharedEncoding, numBuffers);
+    assert(alloc && "Failed to create alloc for the async load.");
+
+    // Replace the old load with multi-buffered loads
+    if (useAsyncCopy && canBeConvertedToAsyncLoad(numBuffers, loadOp, alloc,
+                                                  axisInfoAnalysis)) {
+      loadToStreamOp[loadOp] = createAsyncCopy(loadOp, alloc, extractIdx);
+    } else {
+      loadToStreamOp[loadOp] = createStreamCopy(loadOp, alloc, extractIdx);
+    }
+  }
+
+  return loadToStreamOp;
 }
 
-LogicalResult preprocessLoopAndBuildSchedule(scf::ForOp &forOp, int numStages,
-                                             StreamStages &stages,
-                                             bool useAsyncCopy,
-                                             tt::PipeliningOption &options) {
-  triton::AMD::ModuleAxisInfoAnalysis axisInfoAnalysis(
-      forOp->getParentOfType<ModuleOp>());
-  int numBuffers = 1;
-  StreamClusters clusters;
-  tt::CoarseSchedule schedule(numStages);
+void scheduleStreamOps(const LoadToStreamOpMap &loadToStreamOp,
+                       tt::CoarseSchedule &schedule, const StreamStages &stages,
+                       const StreamClusters &clusters) {
+  for (auto [l, streamOps] : loadToStreamOp) {
+    auto loadOp = dyn_cast<tt::LoadOp>(l);
+    if (!loadOp)
+      continue;
 
+    if (auto asyncOps = std::get_if<AsyncCopyChainOps>(&streamOps)) {
+      scheduleAsyncCopy(*asyncOps, loadOp, schedule, stages, clusters);
+    } else if (auto sOps = std::get_if<StreamCopyChainOps>(&streamOps)) {
+      scheduleStreamCopy(*sOps, loadOp, schedule, stages, clusters);
+    }
+  }
+}
+
+LoadToInfoMap
+preprocessLoop(triton::AMD::ModuleAxisInfoAnalysis &axisInfoAnalysis,
+               scf::ForOp &forOp, int numStages) {
   auto arch = getAMDArch(forOp->getParentOfType<ModuleOp>());
   triton::AMD::ISAFamily isaFamily = triton::AMD::ISAFamily::Unknown;
   if (arch)
@@ -609,20 +591,23 @@ LogicalResult preprocessLoopAndBuildSchedule(scf::ForOp &forOp, int numStages,
     }
   });
 
-  if (loadOpToIndLevel.empty()) {
-    LDBG("couldn't find any pipeline-able loads:\n" << *forOp);
-    return failure();
-  }
-
-  llvm::MapVector<Operation *, LoadInfo> loadToInfo;
-  int maxDist = -1;
+  LoadToInfoMap loadToInfo;
   for (const auto &[load, info] : loadOpToIndLevel) {
     auto [distance, use] = info;
     auto sharedEncoding =
         getSharedEncIfAllUsersAreDotEnc(load->getResult(0)).value_or(nullptr);
     loadToInfo[load] = {sharedEncoding, distance, use};
-    maxDist = std::max(maxDist, distance);
   }
+
+  return loadToInfo;
+}
+
+tt::CoarseSchedule
+buildSchedule(scf::ForOp &forOp, int numStages, const LoadToInfoMap &loadToInfo,
+              int globalPrefetch, int localPrefetch, bool useAsyncCopy,
+              triton::AMD::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
+  tt::CoarseSchedule schedule(numStages);
+  StreamClusters clusters;
 
   auto dumpSchedule = [&](llvm::StringRef msg) {
     LLVM_DEBUG({
@@ -632,19 +617,33 @@ LogicalResult preprocessLoopAndBuildSchedule(scf::ForOp &forOp, int numStages,
     });
   };
 
+  int numBuffers = 1;
+  int maxDist = 0;
+  for (auto &[l, info] : loadToInfo) {
+    maxDist = std::max(maxDist, info.distToUse);
+  }
+
+  int lastStage = numStages - 1;
+  StreamStages stages;
+  stages[SCHED_GLOBAL_LOAD] = 0;
+  stages[SCHED_LOCAL_STORE] = globalPrefetch;
+  stages[SCHED_LOCAL_LOAD] = lastStage - localPrefetch;
+  stages[SCHED_COMPUTE] = lastStage;
+  stages[SCHED_ASYNC_WAIT] = stages[SCHED_LOCAL_LOAD];
+
   if (failed(initSchedule(maxDist, stages, numStages, numBuffers, useAsyncCopy,
                           clusters, schedule)))
-    return failure();
+    return {};
 
   if (failed(scheduleLoads(loadToInfo, maxDist, numStages, stages, clusters,
                            schedule)))
-    return failure();
+    return {};
   dumpSchedule("Coarse schedule loads only:");
 
   // Convert the loads into shared memory allocations and loads from them.
-  SmallVector<std::pair<Operation *, Value>> sharedMemAllocs =
-      createAndScheduleStreamOps(loadToInfo, forOp, numBuffers, useAsyncCopy,
-                                 schedule, stages, clusters, axisInfoAnalysis);
+  auto loadToStreamOp = createStreamOps(loadToInfo, forOp, numBuffers,
+                                        useAsyncCopy, axisInfoAnalysis);
+  scheduleStreamOps(loadToStreamOp, schedule, stages, clusters);
   dumpSchedule("Coarse schedule stream ops:");
 
   scheduleDependencies(forOp, schedule);
@@ -657,37 +656,39 @@ LogicalResult preprocessLoopAndBuildSchedule(scf::ForOp &forOp, int numStages,
   triton::gpu::scheduleRemainingToLastStage(forOp, schedule, computeCluster);
   dumpSchedule("Final coarse schedule:");
 
-  // Create the final schedule for the kernel loop. This will dictate the
-  // stages and order of operations to the pipeline expander.
   std::vector<std::pair<Operation *, unsigned>> coarseSchedule =
       schedule.createFinalSchedule(forOp);
 
-  // Fill out the pipeline options.
-  options.getScheduleFn =
-      [coarseSchedule](scf::ForOp,
-                       std::vector<std::pair<Operation *, unsigned>> &s) {
-        s = std::move(coarseSchedule);
-      };
-
-  return success();
+  return schedule;
 }
 
 LogicalResult pipelineLoop(scf::ForOp forOp, int numStages, int globalPrefetch,
                            int localPrefetch, bool useAsyncCopy) {
 
-  int lastStage = numStages - 1;
-  StreamStages stages;
-  stages[SCHED_GLOBAL_LOAD] = 0;
-  stages[SCHED_LOCAL_STORE] = globalPrefetch;
-  stages[SCHED_LOCAL_LOAD] = lastStage - localPrefetch;
-  stages[SCHED_COMPUTE] = lastStage;
-  stages[SCHED_ASYNC_WAIT] = stages[SCHED_LOCAL_LOAD];
+  triton::AMD::ModuleAxisInfoAnalysis axisInfoAnalysis(
+      forOp->getParentOfType<ModuleOp>());
+
+  LoadToInfoMap loadToInfo = preprocessLoop(axisInfoAnalysis, forOp, numStages);
+
+  if (loadToInfo.empty()) {
+    LDBG("couldn't find any pipeline-able loads:\n" << *forOp);
+    return failure();
+  }
+
+  auto schedule = buildSchedule(forOp, numStages, loadToInfo, globalPrefetch,
+                                localPrefetch, useAsyncCopy, axisInfoAnalysis);
+  if (schedule.empty()) {
+    return failure();
+  }
+
+  // Create the final schedule for the kernel loop. This will dictate the
+  // stages and order of operations to the pipeline expander.
+  auto coarseSchedule = schedule.createFinalSchedule(forOp);
 
   tt::PipeliningOption options;
   options.supportDynamicLoops = true;
   options.peelEpilogue = true;
   options.predicateFn = streamPredication;
-
   // Annotate loadOp in prologue for further moving up
   options.annotateFn = [](Operation *op,
                           tt::PipeliningOption::PipelinerPart part,
@@ -700,15 +701,19 @@ LogicalResult pipelineLoop(scf::ForOp forOp, int numStages, int globalPrefetch,
                       StringAttr::get(op->getContext(), "prologue"));
     }
   };
+  // Set the final schedule as our scheduling function
+  options.getScheduleFn =
+      [coarseSchedule](scf::ForOp,
+                       std::vector<std::pair<Operation *, unsigned>> &s) {
+        s = std::move(coarseSchedule);
+      };
 
-  if (failed(preprocessLoopAndBuildSchedule(forOp, numStages, stages,
-                                            useAsyncCopy, options)))
-    return failure();
   LDBG("Loop before sending to expander:\n" << *forOp);
 
   IRRewriter rewriter(forOp);
   return tt::pipelineForLoop(rewriter, forOp, options);
 }
+} // namespace
 
 struct PipelinePass : impl::TritonAMDGPUStreamPipelineBase<PipelinePass> {
   using impl::TritonAMDGPUStreamPipelineBase<
