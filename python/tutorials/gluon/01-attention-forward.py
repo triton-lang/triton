@@ -12,6 +12,7 @@ from triton.experimental.gluon.language.nvidia.hopper import fence_async_shared
 from triton.experimental.gluon.language.nvidia.blackwell import (
     TensorMemoryLayout,
     allocate_tensor_memory,
+    get_tmem_32x32b_reg_layout,
     tensor_memory_descriptor,
     tma,
     mbarrier,
@@ -25,42 +26,6 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
 
 
 @gl.constexpr_function
-def get_tmem_32x32b_reg_layout(instr_shape, shape, num_warps):
-    assert len(shape) == 2, "expected a 2D tensor"
-    assert num_warps in [4, 8], "expected 4 or 8 warps"
-    M, N, _ = instr_shape
-
-    blocks_per_tile = [shape[0] // M, shape[1] // N]
-    num_blocks = blocks_per_tile[0] * blocks_per_tile[1]
-
-    num_warp_groups = num_warps // 4
-    if M == 64:
-        threads_per_warp = [16, 2]
-        if num_blocks == 1:
-            size_per_thread = [1, N // (num_warp_groups * 2)]
-            warps_per_cta = [4, num_warp_groups]
-        else:
-            size_per_thread = [1, N // 2]
-            warps_per_cta = [4 * min(blocks_per_tile[0], num_warp_groups)]
-            warps_per_cta.append(triton.cdiv(num_warp_groups, warps_per_cta[0] // 4))
-    else:
-        if shape[0] > 128:
-            size_per_thread = [1, N]
-            threads_per_warp = [32, 1]
-            warps_per_cta = [4 * num_warp_groups, 1]
-        else:
-            size_per_thread = [1, N // num_warp_groups]
-            threads_per_warp = [32, 1]
-            warps_per_cta = [4, num_warp_groups]
-    return gl.BlockedLayout(
-        size_per_thread=size_per_thread,
-        threads_per_warp=threads_per_warp,
-        warps_per_cta=warps_per_cta,
-        order=[0, 1],
-    )
-
-
-@gl.constexpr_function
 def get_mma_instr_shape(shape, element_ty):
     m = 128 if shape[0] >= 128 else 64
     n = 256 if shape[1] >= 256 else shape[1]
@@ -71,7 +36,7 @@ def get_mma_instr_shape(shape, element_ty):
 @gl.constexpr_function
 def get_mma_reg_layout(shape, num_warps, dtype=gl.float32):
     instr_shape = get_mma_instr_shape(shape, dtype)
-    return get_tmem_32x32b_reg_layout(instr_shape, shape, num_warps)
+    return get_tmem_32x32b_reg_layout(*instr_shape[:2], shape, num_warps)
 
 
 # ===-----------------------------------------------------------------------===#
@@ -288,10 +253,12 @@ class AttentionConfig:
         self.o_tmem_layout = gl.constexpr(TensorMemoryLayout((o_instr_shape[0], o_instr_shape[1]), unpacked=True))
         self.p_tmem_layout = gl.constexpr(TensorMemoryLayout((qk_instr_shape[0], qk_instr_shape[1]), unpacked=False))
 
-        self.qk_layout = gl.constexpr(get_tmem_32x32b_reg_layout(qk_instr_shape, self.qk_shape, self.num_warps))
-        self.o_layout = gl.constexpr(get_tmem_32x32b_reg_layout(o_instr_shape, self.o_shape, self.num_warps))
+        self.qk_layout = gl.constexpr(
+            get_tmem_32x32b_reg_layout(qk_instr_shape[0], qk_instr_shape[0], self.qk_shape, self.num_warps))
+        self.o_layout = gl.constexpr(
+            get_tmem_32x32b_reg_layout(o_instr_shape[0], o_instr_shape[1], self.o_shape, self.num_warps))
         self.o_splitn_layout = gl.constexpr(
-            get_tmem_32x32b_reg_layout((o_instr_shape[0], o_instr_shape[1] // self.SPLIT_D_FACTOR, o_instr_shape[2]),
+            get_tmem_32x32b_reg_layout(o_instr_shape[0], o_instr_shape[1] // self.SPLIT_D_FACTOR,
                                        (self.o_shape[0], self.o_shape[1] // self.SPLIT_D_FACTOR), self.num_warps))
         self.alpha_2d_layout = gl.constexpr(gl.BlockedLayout([1, 1], [32, 1], [self.num_warps, 1], [0, 1]))
 
