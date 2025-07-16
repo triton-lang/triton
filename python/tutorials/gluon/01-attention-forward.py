@@ -16,7 +16,7 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
     tensor_memory_descriptor,
     tma,
     mbarrier,
-    tcgen05_mma as _tcgen05_mma_impl,
+    tcgen05_mma,
     tcgen05_commit,
 )
 
@@ -171,11 +171,6 @@ def get_desc_channel(desc, num_buffers: gl.constexpr, num_consumers: gl.constexp
 def issue_async_tma_load(smem, bar, desc, offset):
     mbarrier.expect(bar, desc.block_type.nbytes)
     tma.async_copy_global_to_shared(desc, [offset, 0], bar, smem)
-
-
-@gluon.jit
-def tcgen05_mma(a, b, d, use_acc, mbarriers):
-    _tcgen05_mma_impl(a, b, d, use_acc=use_acc, mbarriers=mbarriers, mbarrier_preds=[True] * len(mbarriers))
 
 
 # ===-----------------------------------------------------------------------===#
