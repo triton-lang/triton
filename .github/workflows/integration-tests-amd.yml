@@ -68,6 +68,7 @@ jobs:
         run: |
           mkdir -p ~/.triton
           du -h -d 1 ~/.triton
+          ls -alh ~/.triton/nvidia
 
           mkdir -p ~/.ccache
           du -h -d 1 ~/.ccache
