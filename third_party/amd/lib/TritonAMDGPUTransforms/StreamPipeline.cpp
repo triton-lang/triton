@@ -124,6 +124,7 @@ struct LoadInfo {
   int distToUse = 0;
   Operation *use = nullptr;
 };
+using LoadToInfoMap = llvm::MapVector<Operation *, LoadInfo>;
 
 using StreamClusters = std::array<tt::CoarseSchedule::Cluster, SCHED_SIZE>;
 using StreamStages = std::array<int, SCHED_SIZE>;
@@ -457,10 +458,10 @@ getSharedEncIfAllUsersAreDotEnc(Value loadedValue) {
   return attr;
 }
 
-LogicalResult
-scheduleLoads(const llvm::MapVector<Operation *, LoadInfo> &loadToInfo,
-              int maxDist, int numStages, const StreamStages &stages,
-              const StreamClusters &clusters, tt::CoarseSchedule &schedule) {
+LogicalResult scheduleLoads(const LoadToInfoMap &loadToInfo, int maxDist,
+                            int numStages, const StreamStages &stages,
+                            const StreamClusters &clusters,
+                            tt::CoarseSchedule &schedule) {
   // The stage gap between chained loads--this allows us to "spread" loads
   // with a non-one step in case the number of stages given by the user is
   // large.
@@ -519,9 +520,9 @@ bool canBeConvertedToAsyncLoad(unsigned numBuffers, tt::LoadOp loadOp,
 // Convert load ops into shared memory allocation loads and apply
 // multi-buffering based on the required number of buffers.
 SmallVector<std::pair<Operation *, Value>> createAndScheduleStreamOps(
-    const llvm::MapVector<Operation *, LoadInfo> &loadToInfo, scf::ForOp &forOp,
-    const int &numBuffers, bool useAsyncCopy, tt::CoarseSchedule &schedule,
-    const StreamStages &stages, const StreamClusters &clusters,
+    const LoadToInfoMap &loadToInfo, scf::ForOp &forOp, const int &numBuffers,
+    bool useAsyncCopy, tt::CoarseSchedule &schedule, const StreamStages &stages,
+    const StreamClusters &clusters,
     tt::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
   SmallVector<std::pair<Operation *, Value>> loadToAllocs;
   for (auto &[loadOp, info] : loadToInfo) {
@@ -578,16 +579,9 @@ SmallVector<std::pair<Operation *, Value>> createAndScheduleStreamOps(
   return loadToAllocs;
 }
 
-LogicalResult preprocessLoopAndBuildSchedule(scf::ForOp &forOp, int numStages,
-                                             StreamStages &stages,
-                                             bool useAsyncCopy,
-                                             tt::PipeliningOption &options) {
-  triton::AMD::ModuleAxisInfoAnalysis axisInfoAnalysis(
-      forOp->getParentOfType<ModuleOp>());
-  int numBuffers = 1;
-  StreamClusters clusters;
-  tt::CoarseSchedule schedule(numStages);
-
+LoadToInfoMap
+preprocessLoop(triton::AMD::ModuleAxisInfoAnalysis &axisInfoAnalysis,
+               scf::ForOp &forOp, int numStages) {
   auto arch = getAMDArch(forOp->getParentOfType<ModuleOp>());
   triton::AMD::ISAFamily isaFamily = triton::AMD::ISAFamily::Unknown;
   if (arch)
@@ -609,20 +603,23 @@ LogicalResult preprocessLoopAndBuildSchedule(scf::ForOp &forOp, int numStages,
     }
   });
 
-  if (loadOpToIndLevel.empty()) {
-    LDBG("couldn't find any pipeline-able loads:\n" << *forOp);
-    return failure();
-  }
-
-  llvm::MapVector<Operation *, LoadInfo> loadToInfo;
-  int maxDist = -1;
+  LoadToInfoMap loadToInfo;
   for (const auto &[load, info] : loadOpToIndLevel) {
     auto [distance, use] = info;
     auto sharedEncoding =
         getSharedEncIfAllUsersAreDotEnc(load->getResult(0)).value_or(nullptr);
     loadToInfo[load] = {sharedEncoding, distance, use};
-    maxDist = std::max(maxDist, distance);
   }
+
+  return loadToInfo;
+}
+
+tt::CoarseSchedule
+buildSchedule(scf::ForOp &forOp, int numStages, StreamStages &stages,
+              const LoadToInfoMap &loadToInfo, bool useAsyncCopy,
+              triton::AMD::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
+  tt::CoarseSchedule schedule(numStages);
+  StreamClusters clusters;
 
   auto dumpSchedule = [&](llvm::StringRef msg) {
     LLVM_DEBUG({
@@ -632,13 +629,19 @@ LogicalResult preprocessLoopAndBuildSchedule(scf::ForOp &forOp, int numStages,
     });
   };
 
+  int numBuffers = 1;
+  int maxDist = 0;
+  for (auto &[l, info] : loadToInfo) {
+    maxDist = std::max(maxDist, info.distToUse);
+  }
+
   if (failed(initSchedule(maxDist, stages, numStages, numBuffers, useAsyncCopy,
                           clusters, schedule)))
-    return failure();
+    return {};
 
   if (failed(scheduleLoads(loadToInfo, maxDist, numStages, stages, clusters,
                            schedule)))
-    return failure();
+    return {};
   dumpSchedule("Coarse schedule loads only:");
 
   // Convert the loads into shared memory allocations and loads from them.
@@ -657,12 +660,37 @@ LogicalResult preprocessLoopAndBuildSchedule(scf::ForOp &forOp, int numStages,
   triton::gpu::scheduleRemainingToLastStage(forOp, schedule, computeCluster);
   dumpSchedule("Final coarse schedule:");
 
-  // Create the final schedule for the kernel loop. This will dictate the
-  // stages and order of operations to the pipeline expander.
   std::vector<std::pair<Operation *, unsigned>> coarseSchedule =
       schedule.createFinalSchedule(forOp);
 
-  // Fill out the pipeline options.
+  return schedule;
+}
+
+LogicalResult preprocessLoopAndBuildSchedule(scf::ForOp &forOp, int numStages,
+                                             StreamStages &stages,
+                                             bool useAsyncCopy,
+                                             tt::PipeliningOption &options) {
+  triton::AMD::ModuleAxisInfoAnalysis axisInfoAnalysis(
+      forOp->getParentOfType<ModuleOp>());
+
+  LoadToInfoMap loadToInfo = preprocessLoop(axisInfoAnalysis, forOp, numStages);
+
+  if (loadToInfo.empty()) {
+    LDBG("couldn't find any pipeline-able loads:\n" << *forOp);
+    return failure();
+  }
+
+  auto schedule = buildSchedule(forOp, numStages, stages, loadToInfo,
+                                useAsyncCopy, axisInfoAnalysis);
+  if (schedule.empty()) {
+    return failure();
+  }
+
+  // Create the final schedule for the kernel loop. This will dictate the
+  // stages and order of operations to the pipeline expander.
+  auto coarseSchedule = schedule.createFinalSchedule(forOp);
+
+  // Set the final schedule as our scheduling function
   options.getScheduleFn =
       [coarseSchedule](scf::ForOp,
                        std::vector<std::pair<Operation *, unsigned>> &s) {
