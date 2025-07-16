@@ -141,14 +141,14 @@ void CreateTokenOp::build(::mlir::OpBuilder &builder,
   build(builder, state, resultType, num, loadType);
 }
 
-// -- ArefCompleteOp --
-LogicalResult ArefCompleteOp::verify() {
+// -- AsyncCompleteOp --
+LogicalResult AsyncCompleteOp::verify() {
   if (failed(nvidia_gpu::verifyBarrierType(*this, getAlloc().getType())))
     return failure();
   return success();
 }
 
-void ArefCompleteOp::getEffects(
+void AsyncCompleteOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
   effects.emplace_back(MemoryEffects::Read::get(), &getAllocMutable(),

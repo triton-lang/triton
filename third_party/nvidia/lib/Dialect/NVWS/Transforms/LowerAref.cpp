@@ -335,7 +335,7 @@ LogicalResult insertArriveBarrier(Location loc, ArrayAttr asyncOps,
 
   for (auto asyncOp : asyncOps) {
     auto asyncOpEnum = cast<AsyncOpAttr>(asyncOp).getValue();
-    rewriter.create<nvws::ArefCompleteOp>(loc, mbar, asyncOpEnum);
+    rewriter.create<nvws::AsyncCompleteOp>(loc, mbar, asyncOpEnum);
   }
 
   return success();
