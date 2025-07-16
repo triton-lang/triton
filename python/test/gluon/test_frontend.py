@@ -73,41 +73,39 @@ def test_convert_layout_assert_trivial():
     # CHECK: ttg.convert_layout
     ttgl.convert_layout(value, equiv_layout, assert_trivial=True)
 
-    value = ttgl.arange(0, 128, layout=ttgl.AutoLayout())
-    # CHECK: ttg.convert_layout
-    ttgl.convert_layout(value, equiv_layout, assert_trivial=True)
-
 
 def test_convert_layout_not_trivial():
 
     @gluon.jit
-    def kernel():
-        src_layout: ttgl.constexpr = ttgl.BlockedLayout([2], [32], [4], [0])
-        dst_layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
-
+    def kernel(src_layout: ttgl.constexpr, dst_layout: ttgl.constexpr):
         value = ttgl.arange(0, 128, layout=src_layout)
         ttgl.convert_layout(value, dst_layout, assert_trivial=True)
 
     with pytest.raises(CompilationError) as e:
-        run_parser(kernel)
+        src_layout = ttgl.BlockedLayout([2], [32], [4], [0])
+        dst_layout = ttgl.BlockedLayout([1], [32], [4], [0])
+        kernel.warmup(src_layout, dst_layout, grid=(1, ))
 
-    assert "layout conversion from BlockedLayout(size_per_thread=(2)" in str(e.value.__cause__)
-    assert "to BlockedLayout(size_per_thread=(1)" in str(e.value.__cause__)
+    assert "layout conversion from BlockedLayout(size_per_thread=[2]" in str(e.value.__cause__)
+    assert "to BlockedLayout(size_per_thread=[1]" in str(e.value.__cause__)
     assert "is not trivial" in str(e.value.__cause__)
 
-    @gluon.jit
-    def kernel():
-        src_layout: ttgl.constexpr = ttgl.BlockedLayout([2], [32], [4], [0])
-        dst_layout: ttgl.constexpr = ttgl.AutoLayout()
+    with pytest.raises(CompilationError) as e:
+        src_layout = ttgl.BlockedLayout([2], [32], [4], [0])
+        dst_layout = ttgl.AutoLayout()
+        kernel.warmup(src_layout, dst_layout, grid=(1, ))
 
-        value = ttgl.arange(0, 128, layout=src_layout)
-        ttgl.convert_layout(value, dst_layout, assert_trivial=True)
+    assert "layout conversion from BlockedLayout(size_per_thread=[2]" in str(e.value.__cause__)
+    assert "to AutoLayout() is not trivial" in str(e.value.__cause__)
 
     with pytest.raises(CompilationError) as e:
-        run_parser(kernel)
+        src_layout: ttgl.constexpr = ttgl.AutoLayout()
+        dst_layout: ttgl.constexpr = ttgl.BlockedLayout([2], [32], [4], [0])
+        kernel.warmup(src_layout, dst_layout, grid=(1, ))
 
-    assert "layout conversion from BlockedLayout(size_per_thread=(2)" in str(e.value.__cause__)
-    assert "to AutoLayout() is not trivial" in str(e.value.__cause__)
+    assert "layout conversion from AutoLayout()" in str(e.value.__cause__)
+    assert "to BlockedLayout(size_per_thread=[2]" in str(e.value.__cause__)
+    assert "is not trivial" in str(e.value.__cause__)
 
 
 @gluon.jit
@@ -115,6 +113,8 @@ def shared_memory_kernel(XBLOCK: ttgl.constexpr, YBLOCK: ttgl.constexpr, layout_
                          layout_b: ttgl.constexpr, smem_layout: ttgl.constexpr):
     unused = ttgl.allocate_shared_memory(ttgl.int32, [XBLOCK, YBLOCK], smem_layout)
     a = ttgl.full([XBLOCK, YBLOCK], 0, ttgl.int32, layout_a)
+    tl.static_assert(a.numel == unused.numel)
+    tl.static_assert(unused.numel == XBLOCK * YBLOCK)
     mem = ttgl.allocate_shared_memory(ttgl.int32, a.shape, smem_layout, a)
     b = mem.load(layout_b)  # noqa: F841
     mem.store(a)
@@ -309,10 +309,8 @@ def shared_memory_cast_kernel():
 
     layout_b: ttgl.constexpr = ttgl.NVMMASharedLayout(swizzle_byte_width=64, transposed=False, element_bitwidth=16,
                                                       rank=4, cta_order=[3, 2, 1, 0])
-    layout_reshape: ttgl.constexpr = ttgl.NVMMASharedLayout(swizzle_byte_width=64, transposed=False,
-                                                            element_bitwidth=16, rank=2)
     smem = ttgl.allocate_shared_memory(ttgl.float16, [32, 1, 4, 64], layout_b)
-    smem.reshape((128, 64), layout_reshape)
+    smem.reshape((128, 64))
 
     smem._reinterpret(ttgl.int8, [1024], ttgl.SwizzledSharedLayout(1, 1, 1, [0, 1]))
 
@@ -336,7 +334,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %2 = ttg.memdesc_trans %1 {order = array<i32: 1, 0>} : !ttg.memdesc<256x128xi8, #shared, #smem, mutable, 2x256x128> -> !ttg.memdesc<128x256xi8, #shared1, #smem, mutable, 2x128x256>
     tt.call @"test_frontend.anchor_noinline__MDi8S128_256SLNVMMA_64_8_True_False_NVMMALAS[2, 128, 256]ASMD__"(%2) : (!ttg.memdesc<128x256xi8, #shared1, #smem, mutable, 2x128x256>) -> ()
     %3 = ttg.local_alloc : () -> !ttg.memdesc<32x1x4x64xf16, #shared2, #smem, mutable>
-    %4 = ttg.memdesc_reshape %3 : !ttg.memdesc<32x1x4x64xf16, #shared2, #smem, mutable> -> !ttg.memdesc<128x64xf16, #shared3, #smem, mutable, 32x1x4x64>
+    %4 = ttg.memdesc_reshape %3 : !ttg.memdesc<32x1x4x64xf16, #shared2, #smem, mutable> -> !ttg.memdesc<128x64xf16, #shared3, #smem, mutable>
     %5 = ttg.memdesc_reinterpret %3 : !ttg.memdesc<32x1x4x64xf16, #shared2, #smem, mutable> -> !ttg.memdesc<1024xi8, #shared4, #smem, mutable>
     tt.return
   }
@@ -615,7 +613,8 @@ def async_tma_kernel(input_desc, XBLOCK: ttgl.constexpr):
     mbarrier.init(bar, count=1)
 
     tma.async_copy_global_to_shared(input_desc, [0, 0], bar, smem)
-    mbarrier.expect(bar, XBLOCK * XBLOCK * ttgl.float16.primitive_bitwidth // 8)
+    tl.static_assert(input_desc.block_type.nbytes == XBLOCK * XBLOCK * 2)
+    mbarrier.expect(bar, input_desc.block_type.nbytes)
     mbarrier.wait(bar, 0)
 
     mbarrier.invalidate(bar)
@@ -1225,6 +1224,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 @filecheck_test
 @gluon.jit
 def test_auto_layout():
+    # CHECK-DAG: [[BLOCKED:#.*]] = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
     # CHECK: [[X_1D:%.*]] = arith.constant dense<7> : tensor<16xi32, #gluon.auto_encoding>
     # CHECK: [[Y_1D:%.*]] = arith.constant dense<2> : tensor<8xi32, #gluon.auto_encoding>
     x = ttgl.full([16], 7, ttgl.int32, layout=ttgl.AutoLayout())[:, None]
@@ -1233,3 +1233,31 @@ def test_auto_layout():
     z = x + y
     # CHECK: (tensor<16x8xi32, #gluon.auto_encoding>) -> tensor<16xi32, #gluon.auto_encoding
     ttgl.sum(z, axis=1)
+
+    # CHECK: [[I:%.*]] = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #gluon.auto_encoding>
+    i = ttgl.arange(0, 32)
+
+    # CHECK: gluon.set_auto_layout [[I]] : tensor<32xi32, #gluon.auto_encoding> -> tensor<32xi32, [[BLOCKED]]
+    ttgl.set_auto_layout(i, ttgl.BlockedLayout([1], [32], [4], [0]))
+
+
+@filecheck_test
+@gluon.jit
+def test_auto_layout_broadcast():
+    # CHECK: [[BLOCKED:#.*]] = #ttg.blocked
+    # CHECK: [[X:%.*]] = arith.constant dense<1> : tensor<16x1xi32, #gluon.auto_encoding>
+    # CHECK: [[Y:%.*]] = arith.constant dense<2> : tensor<1x16xi32, [[BLOCKED]]>
+    x = ttgl.full([16, 1], 1, ttgl.int32, layout=ttgl.AutoLayout())
+    y = ttgl.full([1, 16], 2, ttgl.int32, layout=ttgl.BlockedLayout([1, 1], [1, 32], [4, 1], [1, 0]))
+
+    # CHECK: [[XCVT:%.*]] = gluon.set_auto_layout [[X]] : tensor<16x1xi32, #gluon.auto_encoding> -> tensor<16x1xi32, [[BLOCKED]]>
+    # CHECK: [[XBCAST:%.*]] = tt.broadcast [[XCVT]]
+    # CHECK: [[YBCAST:%.*]] = tt.broadcast [[Y]]
+    # CHECK: arith.addi [[XBCAST]], [[YBCAST]] : tensor<16x16xi32, [[BLOCKED]]>
+    _ = x + y
+
+    # CHECK: [[XCVT2:%.*]] = gluon.set_auto_layout [[X]] : tensor<16x1xi32, #gluon.auto_encoding> -> tensor<16x1xi32, [[BLOCKED]]>
+    # CHECK: [[YBCAST2:%.*]] = tt.broadcast [[Y]]
+    # CHECK: [[XBCAST2:%.*]] = tt.broadcast [[XCVT2]]
+    # CHECK: arith.muli [[YBCAST2]], [[XBCAST2]] : tensor<16x16xi32, [[BLOCKED]]>
+    _ = y * x

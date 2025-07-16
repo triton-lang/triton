@@ -7,7 +7,7 @@ import pytest
 import triton
 import triton.language as tl
 
-from triton._internal_testing import is_cuda, is_hip, is_hip_cdna3, is_hip_cdna4
+from triton._internal_testing import is_cuda, is_hip, is_hip_cdna2, is_hip_cdna3, is_hip_cdna4
 
 
 def matching_int(dtype):
@@ -265,6 +265,7 @@ def upcast_test(src_dtype, dst_dtype, exponent_bits, mantissa_bits, exponent_bia
     ('float8e4nv', 'float32'),
 
     ('float8e4b8', 'float32'),
+    ('float8e4b8', 'bfloat16'),
     ('float8e4b8', 'float16'),
 
     ('float8e5b16', 'float32'),
@@ -284,12 +285,13 @@ def test_typeconvert_upcast(src_dtype, dst_dtype, device):
     elif is_hip():
         if  (src_dtype == 'float8e4nv' and not (is_hip_cdna3() or is_hip_cdna4())):
             pytest.skip(f"upcasting {src_dtype} to {dst_dtype} not supported in this architecture")
-        if  (src_dtype in ('float8e4b15') or
-            (src_dtype in ('float8e4b8', 'float8e5b16') and not is_hip_cdna3())):
+        if  src_dtype == 'float8e4b15':
             # If the dtype should error out in the given device, we assert that and return
             with pytest.raises(triton.CompilationError, match="not supported in this architecture"):
                 launch_exhaustive_populate(getattr(tl, src_dtype), 0, 65536, False, 8, 0x7f, device=device)
             return
+        if src_dtype in ('float8e4b8', 'float8e5b16') and is_hip_cdna2():
+            pytest.skip(f"{src_dtype} is not supported on AMDGPU CDNA2")
 
     # dtype : (exponent_bits, mantissa_bits, exponent_bias, max_repr)
     stuff = {
@@ -341,8 +343,8 @@ def test_typeconvert_downcast(src_dtype, dst_dtype, rounding, max_repr, device):
             pytest.skip(f"{dst_dtype} downcast with RTNE rounding tests only supported on AMDGPU CDNA3")
 
     if is_hip():
-        if dst_dtype in ('float8e5b16', 'float8e4b8') and rounding == 'rtne' and not is_hip_cdna3():
-            pytest.skip(f"{dst_dtype} downcast with RTNE rounding tests only supported on AMDGPU CDNA3")
+        if dst_dtype in ('float8e4b8', 'float8e5b16') and is_hip_cdna2():
+            pytest.skip(f"{dst_dtype} is not supported on AMDGPU CDNA2")
 
     # dtype : (exponent_bits, mantissa_bits, exponent_bias)
     stuff = {

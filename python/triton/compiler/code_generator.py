@@ -1381,7 +1381,7 @@ class CodeGenerator(ast.NodeVisitor):
         if _is_triton_tensor(lhs) and node.attr == "T":
             return self.semantic.permute(lhs, (1, 0))
         # NOTE: special case ".value" for BC
-        if isinstance(lhs, constexpr) and node.attr != "value":
+        if isinstance(lhs, constexpr) and node.attr not in ("value", "type"):
             lhs = lhs.value
         attr = getattr(lhs, node.attr)
         if _is_triton_value(lhs) and isinstance(attr, JITFunction):

@@ -1,7 +1,9 @@
+#include "Dialect/NVGPU/IR/Dialect.h"
 #include "PatternTritonGPUOpToLLVM.h"
 #include "TargetInfo.h"
 #include "Utility.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
+#include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/IR/PatternMatch.h"
 #include "triton/Analysis/Allocation.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
@@ -192,6 +194,7 @@ LogicalResult lowerLdStMatrix(
     auto vecAddr = b.gep(smemPtrTy, llvmElemTy, smemBase, offset,
                          LLVM::GEPNoWrapFlags::inbounds);
     Type packedTy = vec_ty(llvmElemTy, 32 / bitwidth);
+    auto layout = transpose ? NVVM::MMALayout::col : NVVM::MMALayout::row;
     if (isStore) {
       // Pack into vector of i32
       SmallVector<Value> inputs;
@@ -203,8 +206,7 @@ LogicalResult lowerLdStMatrix(
         }
         inputs.push_back(b.bitcast(input, i32_ty));
       }
-      rewriter.create<triton::nvgpu::StoreMatrixOp>(loc, vecAddr, inputs,
-                                                    /*needTrans=*/transpose);
+      rewriter.create<NVVM::StMatrixOp>(loc, vecAddr, inputs, layout);
     } else {
       Type matTy = nVecs == 1
                        ? i32_ty
@@ -212,8 +214,10 @@ LogicalResult lowerLdStMatrix(
                              ctx, SmallVector<Type>(nVecs, i32_ty)));
       auto res =
           rewriter
-              .create<triton::nvgpu::LoadMatrixOp>(loc, matTy, vecAddr,
-                                                   /*needTrans=*/transpose)
+              .create<triton::nvgpu::LoadMatrixOp>(
+                  loc, matTy, vecAddr, triton::nvgpu::LoadMatrixShape::m8n8,
+                  /*bitWidth=*/16,
+                  /*needTrans=*/transpose)
               .getResult();
       // Extract result into srcVals
       for (int j = 0; j < nVecs; j++) {

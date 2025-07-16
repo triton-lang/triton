@@ -15,7 +15,8 @@
 #include <unordered_map>
 
 // LinearLayoutCache Utils
-using CacheKey = std::tuple<std::vector<int64_t>, mlir::Attribute>;
+using CacheKey =
+    std::tuple<std::vector<int64_t>, mlir::Attribute, std::vector<int64_t>>;
 
 namespace llvm {
 template <typename T> size_t hash_value(const std::vector<T> &vec) {
