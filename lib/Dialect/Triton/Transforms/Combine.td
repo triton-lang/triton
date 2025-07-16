@@ -35,6 +35,28 @@ def CombineDotAddFRevPattern : Pat<
          (Constraint<CPred<"::llvm::cast<::mlir::IntegerAttr>($0).getInt() == 0">> $maxNumImpreciseAcc),
          (Constraint<CPred<"res->hasOneUse()">, "dot result has a single use">)]>;
 
+def CombineDotScaledAddIPattern : Pat<
+        (Arith_AddIOp $d, (TT_DotScaledOp:$res $a, $b, $c, $a_scale, $b_scale, $a_elem_type, $b_elem_type, $fastMath0, $lhs_k_pack, $rhs_k_pack), $overflow),
+        (TT_DotScaledOp $a, $b, $d, $a_scale, $b_scale, $a_elem_type, $b_elem_type, $fastMath0, $lhs_k_pack, $rhs_k_pack, (location $res)),
+        [(Constraint<CPred<"isZero($0)">> $c),
+         (Constraint<CPred<"res->hasOneUse()">, "dot_scaled result has a single use">)]>;
+def CombineDotScaledAddFPattern : Pat<
+        (Arith_AddFOp $d, (TT_DotScaledOp:$res $a, $b, $c, $a_scale, $b_scale, $a_elem_type, $b_elem_type, $fastMath0, $lhs_k_pack, $rhs_k_pack), $fastmath),
+        (TT_DotScaledOp $a, $b, $d, $a_scale, $b_scale, $a_elem_type, $b_elem_type, $fastMath0, $lhs_k_pack, $rhs_k_pack, (location $res)),
+        [(Constraint<CPred<"isZero($0)">> $c),
+         (Constraint<CPred<"res->hasOneUse()">, "dot result has a single use">)]>;
+
+def CombineDotScaledAddIRevPattern : Pat<
+        (Arith_AddIOp $d, (TT_DotScaledOp:$res $a, $b, $c, $a_scale, $b_scale, $a_elem_type, $b_elem_type, $fastMath0, $lhs_k_pack, $rhs_k_pack), $overflow),
+        (TT_DotScaledOp $a, $b, $d, $a_scale, $b_scale, $a_elem_type, $b_elem_type, $fastMath0, $lhs_k_pack, $rhs_k_pack, (location $res)),
+        [(Constraint<CPred<"isZero($0)">> $c),
+         (Constraint<CPred<"res->hasOneUse()">, "dot result has a single use">)]>;
+def CombineDotScaledAddFRevPattern : Pat<
+        (Arith_AddFOp $d, (TT_DotScaledOp:$res $a, $b, $c, $a_scale, $b_scale, $a_elem_type, $b_elem_type, $fastMath0, $lhs_k_pack, $rhs_k_pack), $fastmath),
+        (TT_DotScaledOp $a, $b, $d, $a_scale, $b_scale, $a_elem_type, $b_elem_type, $fastMath0, $lhs_k_pack, $rhs_k_pack, (location $res)),
+        [(Constraint<CPred<"isZero($0)">> $c),
+         (Constraint<CPred<"res->hasOneUse()">, "dot result has a single use">)]>;
+
 // addptr(addptr(%ptr, %idx0), %idx1) => addptr(%ptr, AddI(%idx0, %idx1))
 //   Note: leave (sub %c0, %c0) canceling to ArithDialect
 //         (ref: ArithCanonicalization.td)
