@@ -493,7 +493,7 @@ struct MemDescSubviewOpConversion
     auto elemPtrTy = base.getType();
     auto is1d = srcTy.getRank() == 1 && destTy.getRank() == 1 &&
                 destTy.getDimSize(0) == 1;
-    if (rankReduced) {
+    if (rankReduced || is1d) {
       if (is1d) {
         smemObj = SharedMemoryObject(
             b.gep(elemPtrTy, llvmElemTy, base, opOffsetVals[0]), llvmElemTy,
