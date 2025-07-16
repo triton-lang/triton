@@ -290,7 +290,7 @@ class GluonSemantic(TritonSemantic[TensorTy]):
 
         reduce_op = self.builder.create_reduce([t.handle for t in inputs], axis)
         region_builder_fn(reduce_op)
-        assert reduce_op.verify()
+        assert reduce_op.verify(), f"invalid reduce_op {ascii(reduce_op)}"
 
         return tuple(
             self._wrap_handle_infer_layout(reduce_op.get_result(i), inputs[i].type.scalar, ret_shape)

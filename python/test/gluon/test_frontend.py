@@ -1329,3 +1329,24 @@ def test_auto_layout_broadcast():
     # CHECK: [[XBCAST2:%.*]] = tt.broadcast [[XCVT2]]
     # CHECK: arith.muli [[YBCAST2]], [[XBCAST2]] : tensor<16x16xi32, [[BLOCKED]]>
     _ = y * x
+
+
+@pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
+@filecheck_test
+@gluon.jit
+def test_amd_mfma_layout():
+    mfma_layout: ttgl.constexpr = ttgl.AMDMFMALayout(version=[4, 0], warps_per_cta=[1, 1], tiles_per_warp=[1, 0],
+                                                     m_dim=32, n_dim=32, transposed=False, ctas_per_cga=[1, 1],
+                                                     cta_split_num=[1, 1], cta_order=[1, 0], elem_type_width=32)
+
+    ll: ttgl.constexpr = ttgl.DistributedLinearLayout(reg_bases=[[0, 1], [0, 2], [0, 8], [0, 16]], lane_bases=[[1, 0],
+                                                                                                               [2, 0],
+                                                                                                               [4, 0],
+                                                                                                               [8, 0],
+                                                                                                               [16, 0],
+                                                                                                               [0, 4]],
+                                                      warp_bases=[[32, 0], [64, 0]], block_bases=[[]], shape=[32, 32])
+
+    x = ttgl.arange(0, 1024, ll)
+    # CHECK:#mma = #ttg.amd_mfma<{versionMajor = 4, versionMinor = 0, warpsPerCTA = [1, 1], instrShape = [32, 32],
+    res = ttgl.convert_layout(x, mfma_layout)  # noqa: F841
