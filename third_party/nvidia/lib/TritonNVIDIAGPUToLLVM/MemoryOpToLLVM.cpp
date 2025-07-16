@@ -1,3 +1,4 @@
+#include "Dialect/NVGPU/IR/Dialect.h"
 #include "PatternTritonGPUOpToLLVM.h"
 #include "TargetInfo.h"
 #include "Utility.h"
@@ -212,7 +213,11 @@ LogicalResult lowerLdStMatrix(
                        : static_cast<Type>(LLVM::LLVMStructType::getLiteral(
                              ctx, SmallVector<Type>(nVecs, i32_ty)));
       auto res =
-          rewriter.create<NVVM::LdMatrixOp>(loc, matTy, vecAddr, nVecs, layout)
+          rewriter
+              .create<triton::nvgpu::LoadMatrixOp>(
+                  loc, matTy, vecAddr, triton::nvgpu::LoadMatrixShape::m8n8,
+                  /*bitWidth=*/16,
+                  /*needTrans=*/transpose)
               .getResult();
       // Extract result into srcVals
       for (int j = 0; j < nVecs; j++) {
