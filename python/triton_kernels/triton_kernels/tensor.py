@@ -172,7 +172,9 @@ class Bitmatrix(Tensor):
         return sum_bitmatrix_rows(self, out_ret, partials_block_size)
 
 
-def get_layout(tensor: torch.Tensor | Tensor):
+def get_layout(tensor: torch.Tensor | Tensor | None):
+    if tensor is None:
+        return None
     if isinstance(tensor, Tensor):
         return tensor.storage.layout
     return StridedLayout

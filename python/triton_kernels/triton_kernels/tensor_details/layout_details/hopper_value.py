@@ -109,7 +109,6 @@ class HopperMXValueLayout(Layout):
         WARNING: Assumes that the matmul will be done in bf16 or fp16!
         Implementing it for fp8 is as easy as making the tile size (8, 8)
         """
-
         assert self.op_idx in (0, 1)
         batch = data.ndim - 2
         assert batch >= 0
@@ -288,6 +287,7 @@ def bit_untwiddling_mxfp4_value_hopper(x, scale, op_idx: tl.constexpr):
     #scale = scale.to(tl.uint16)
     #scale = scale << 7
     #scale = scale.to(tl.bfloat16, bitcast=True)
+    tl.static_print(scale.shape)
     scale = tl.inline_asm_elementwise(
         r"""
         {
@@ -306,13 +306,78 @@ def bit_untwiddling_mxfp4_value_hopper(x, scale, op_idx: tl.constexpr):
         pack=4,
     )
     # Broadcast scale
-    scale = scale.expand_dims(2)
-    scale = scale.broadcast_to(scale.shape[:-1] + (32, ))
-    scale = scale.reshape(x.shape)
+    # scale = scale.expand_dims(2)
+    # scale = scale.broadcast_to(scale.shape[:-1] + (32, ))
+    # scale = scale.reshape(x.shape)
 
-    # Combine scale and x
-    x = x * scale
+    # # Combine scale and x
+    # x = x * scale
 
     if op_idx == 1:
         x = x.trans()
+    return x, scale
+
+
+def unswizzle_mxfp4_value_hopper_torch(x, op_idx: int, mma_version: int):
+    """
+    PyTorch inverse of swizzle_mxfp4_value_hopper. (Testing only)
+    """
+    assert op_idx in (0, 1), "op_idx must be 0 or 1"
+    assert mma_version in (2, 3), "mma_version must be 2 or 3"
+    if op_idx == 1:
+        x = x.transpose(-2, -1)
+
+    *batch, M, K = x.shape
+    # We have two times the elements if we already upcasted to bfloat16
+    mult = 2 if x.dtype == torch.bfloat16 else 1
+    assert M % 4 == 0, "M must be divisible by 4"
+    assert K % (4 * 8 * 2 * 2 * mult) == 0, f"K must be divisible by {4 * 8 * 2 * 2 * mult}"
+
+    # We are loading 8 bf16 elements per thread to use ld.global.v4
+    # Every u8 represents 2 mxfp4 elements
+    u8_kwidth = 8 // 2 if mma_version == 2 else 1
+    x = x.reshape(*batch, M // 4, 4, K // (4 * 8 * 2 * 2 * mult), 2, 4, 8 // u8_kwidth, 2, u8_kwidth * mult)
+    b = len(batch)
+    perm = [0, 6, 1, 3, 2, 5, 4, 7]
+    perm = list(range(b)) + [b + p for p in perm]
+    x = x.permute(*perm)
+    x = x.reshape(*batch, M * 4, K // 4)
+    if op_idx == 1:
+        x = x.transpose(-2, -1)
+    return x
+
+
+def bit_untwiddling_mxfp4_value_hopper_torch(x: torch.Tensor, scale: torch.Tensor, op_idx: int):
+    assert x.dtype == torch.uint8, "Input tensor must be of type torch.uint8"
+    if op_idx == 1:
+        x = x.mT
+    assert x.is_contiguous()
+    x = x.view(torch.int32)
+
+    def unpack(x):
+        x = x.view(torch.int32)
+        m = 0b10000001110000001000000111000000
+        a = (x << 1) & 0b10000000000000001000000000000000
+        b = right_shift_unsigned(x, 3) & 0b00000001100000000000000110000000
+        c = right_shift_unsigned(x, 7) & 0b00000000010000000000000001000000
+        unpacked = [x & m, (x << 3) & m, (x << 6) & m, (a | b) | c]
+        x = torch.stack(unpacked, dim=-1)
+        x = x.flatten(-2, -1)
+        return x.view(torch.bfloat16)
+
+    x = unpack(x)
+    x = unswizzle_mxfp4_value_hopper_torch(x, op_idx=0, mma_version=3)
+
+    scale = scale + 126
+    scale = scale.to(torch.int16)
+    scale = scale << 7
+    scale = scale.view(torch.bfloat16)
+
+    scale = scale.unsqueeze(-1)
+    scale = scale.expand(scale.shape[:-1] + (32, ))
+    scale = scale.flatten(-2, -1)
+    x = x * scale
+
+    if op_idx == 1:
+        x = x.mT
     return x

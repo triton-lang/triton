@@ -457,15 +457,6 @@ struct ConvertTritonLoadToBufferLoad : public mlir::OpRewritePattern<SourceOp> {
 
       assert(bufferLoadOp);
 
-      // Propagate `OpIdxAttr` if the currently processed `tt.LoadOp` was
-      // labeled it. The attribute needs to be preserved for custom instruction
-      // scheduling.
-      if (auto opIdxAttr =
-              op->template getAttrOfType<triton::amdgpu::OpIdxAttr>(
-                  triton::amdgpu::OpIdxAttr::getMnemonic())) {
-        bufferLoadOp->setAttr(triton::amdgpu::OpIdxAttr::getMnemonic(),
-                              opIdxAttr);
-      }
       rewriter.replaceOp(op, bufferLoadOp);
       return success();
     }

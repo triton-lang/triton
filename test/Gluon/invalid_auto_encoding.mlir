@@ -7,8 +7,8 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
   tt.func public @infer_conflict() -> (tensor<16xi32, #blocked>, tensor<16xi32, #blocked1>) {
     // expected-error @+1 {{Found conflicting encodings for value}}
     %0 = arith.constant dense<7> : tensor<16xi32, #gluon.auto_encoding>
-    %cvt1 = ttg.convert_layout %0 : tensor<16xi32, #gluon.auto_encoding> -> tensor<16xi32, #blocked>
-    %cvt2 = ttg.convert_layout %0 : tensor<16xi32, #gluon.auto_encoding> -> tensor<16xi32, #blocked1>
+    %cvt1 = gluon.set_auto_layout %0 : tensor<16xi32, #gluon.auto_encoding> -> tensor<16xi32, #blocked>
+    %cvt2 = gluon.set_auto_layout %0 : tensor<16xi32, #gluon.auto_encoding> -> tensor<16xi32, #blocked1>
     tt.return %cvt1, %cvt2 : tensor<16xi32, #blocked>, tensor<16xi32, #blocked1>
   }
 }

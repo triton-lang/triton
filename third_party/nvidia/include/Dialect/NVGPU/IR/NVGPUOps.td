@@ -105,29 +105,6 @@ def NVGPU_WGMMAOp : NVGPU_Op<"wgmma", []> {
   let assemblyFormat = "$opA `,` $opB `,` $useC (`,` $opC^)? attr-dict `:` functional-type(operands, $res)";
 }
 
-def NVGPU_FenceAsyncSharedOp : NVGPU_Op<"fence_async_shared", []> {
-  let arguments = (ins BoolAttr:$bCluster);
-  let assemblyFormat = "attr-dict";
-}
-
-def NVGPU_StoreMatrixOp : NVGPU_Op<"stmatrix", [MemoryEffects<[MemWrite]>]> {
-  let arguments = (
-    ins LLVM_PointerShared:$addr,
-    Variadic<I32>:$vals,
-    UnitAttr:$trans
-  );
-  let assemblyFormat = "operands attr-dict `:` type(operands)";
-}
-
-def NVGPU_LoadMatrixOp : NVGPU_Op<"ldmatrix", [MemoryEffects<[MemRead]>]> {
-  let arguments = (
-    ins LLVM_PointerShared:$addr,
-    UnitAttr:$trans
-  );
-  let results = (outs AnyTypeOf<[LLVM_AnyStruct, I32]>:$result);
-  let assemblyFormat = "$addr attr-dict `:` functional-type($addr, $result)";
-}
-
 def NVGPU_ClusterCTAIdOp : NVGPU_Op<"cluster_id", [Pure]> {
   let results = (outs I32:$result);
   let assemblyFormat = "attr-dict";

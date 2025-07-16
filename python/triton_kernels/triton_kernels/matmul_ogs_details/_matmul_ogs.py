@@ -258,6 +258,7 @@ def _matmul_ogs(
                 # Handshake with the swizzling code
                 tl.static_assert(x_format == "bf16")
                 tl.static_assert(mx_format == "e2m1")
+                tl.static_print(w.shape)
                 w = bit_untwiddling_mxfp4_value_hopper(w, w_scales, op_idx=1)
                 tl.static_assert(w.dtype == tl.bfloat16)
                 acc = acc.trans()
