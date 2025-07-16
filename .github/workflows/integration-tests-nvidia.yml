@@ -74,6 +74,8 @@ jobs:
           if [ "${{ matrix.runner[0] }}" == "nvidia-gb200" ]; then
             source /venv/bin/activate
           fi
+          # install torch rc
+          python3 -m pip install torch --index-url https://download.pytorch.org/whl/test/cu128
           nproc
           nvidia-smi
           echo "PATH is '$PATH'"
