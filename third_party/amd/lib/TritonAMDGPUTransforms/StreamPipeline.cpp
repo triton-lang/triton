@@ -37,8 +37,8 @@ namespace mlir {
 
 namespace {
 
-static Operation *streamPredication(RewriterBase &rewriter, Operation *op,
-                                    Value pred) {
+Operation *streamPredication(RewriterBase &rewriter, Operation *op,
+                             Value pred) {
   // The epilogue peeling generates a select for the stage output. This causes
   // too much register pressure with the loop result and the epilogue-dot in
   // regs for the select. Conditionally executing the dot will allow the backend
@@ -146,8 +146,6 @@ struct AsyncCopyChainOps {
 
 using StreamOpVariant = std::variant<StreamCopyChainOps, AsyncCopyChainOps>;
 using LoadToStreamOpMap = llvm::MapVector<Operation *, StreamOpVariant>;
-
-} // namespace
 
 // Init Schedule Config based on settings and loop characteristics.
 // Create clusters in order of ops in loop. This can interleave ops
@@ -344,8 +342,7 @@ void scheduleStreamCopy(const StreamCopyChainOps &streamOps,
 
 // Returns the given |inputValue|'s dot user result encoding and updates |opIdx|
 // with which dot operand |inputValue| is fed into if possible.
-static ttg::AMDMfmaEncodingAttr getDotEncoding(Value inputValue,
-                                               unsigned *opIdx) {
+ttg::AMDMfmaEncodingAttr getDotEncoding(Value inputValue, unsigned *opIdx) {
   if (!inputValue.hasOneUse())
     return nullptr;
 
@@ -371,7 +368,7 @@ static ttg::AMDMfmaEncodingAttr getDotEncoding(Value inputValue,
 // If all the transitive uses of the given value have are used by a convert to
 // the same dot operand encoding, return true and get the shared encoding that
 // needs to be used to be compatible with users' layouts.
-static std::optional<ttg::SwizzledSharedEncodingAttr>
+std::optional<ttg::SwizzledSharedEncodingAttr>
 getSharedEncIfAllUsersAreDotEnc(Value loadedValue) {
   ttg::SwizzledSharedEncodingAttr attr;
   for (Operation *user : loadedValue.getUsers()) {
@@ -465,7 +462,6 @@ LogicalResult scheduleLoads(const LoadToInfoMap &loadToInfo, int maxDist,
   return success();
 }
 
-namespace {
 bool canBeConvertedToAsyncLoad(unsigned numBuffers, tt::LoadOp loadOp,
                                Value alloc,
                                tt::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
@@ -495,7 +491,6 @@ bool canBeConvertedToAsyncLoad(unsigned numBuffers, tt::LoadOp loadOp,
   // for at least 32 bit wide loads
   return triton::canBeConvertedToAsyncLoad(loadOp, axisInfoAnalysis);
 }
-} // namespace
 
 // Convert load ops into shared memory allocation loads and apply
 // multi-buffering based on the required number of buffers.
@@ -720,6 +715,7 @@ LogicalResult pipelineLoop(scf::ForOp forOp, int numStages, int globalPrefetch,
   IRRewriter rewriter(forOp);
   return tt::pipelineForLoop(rewriter, forOp, options);
 }
+} // namespace
 
 struct PipelinePass : impl::TritonAMDGPUStreamPipelineBase<PipelinePass> {
   using impl::TritonAMDGPUStreamPipelineBase<
