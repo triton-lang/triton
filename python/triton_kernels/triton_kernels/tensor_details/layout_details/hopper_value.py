@@ -287,7 +287,6 @@ def bit_untwiddling_mxfp4_value_hopper(x, scale, op_idx: tl.constexpr):
     #scale = scale.to(tl.uint16)
     #scale = scale << 7
     #scale = scale.to(tl.bfloat16, bitcast=True)
-    tl.static_print(scale.shape)
     scale = tl.inline_asm_elementwise(
         r"""
         {
@@ -306,16 +305,16 @@ def bit_untwiddling_mxfp4_value_hopper(x, scale, op_idx: tl.constexpr):
         pack=4,
     )
     # Broadcast scale
-    # scale = scale.expand_dims(2)
-    # scale = scale.broadcast_to(scale.shape[:-1] + (32, ))
-    # scale = scale.reshape(x.shape)
-
-    # # Combine scale and x
-    # x = x * scale
+    scale = scale.expand_dims(1)
+    scale = scale.broadcast_to((8, 32, 128))
+    scale = scale.reshape((256, 128))
 
     if op_idx == 1:
         x = x.trans()
-    return x, scale
+
+    # Combine scale and x
+    x = x * scale
+    return x
 
 
 def unswizzle_mxfp4_value_hopper_torch(x, op_idx: int, mma_version: int):

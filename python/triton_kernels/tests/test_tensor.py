@@ -54,9 +54,8 @@ def test_swizzle_mxfp4_scale(shape, num_warps):
 
 
 @triton.jit
-def _upcast_mxfp4_to_bf16(Y, YScale, X, XScale, x_stride_m, x_stride_n, x_scale_stride_m, x_scale_stride_n, y_stride_m,
-                          y_stride_n, y_scale_stride_m, y_scale_stride_n, X_BLOCK_M: tl.constexpr,
-                          X_BLOCK_N: tl.constexpr, X_SCALE_BLOCK_M: tl.constexpr, X_SCALE_BLOCK_N: tl.constexpr):
+def _upcast_mxfp4_to_bf16(Y, X, XScale, x_stride_m, x_stride_n, x_scale_stride_m, x_scale_stride_n, y_stride_m,
+                          y_stride_n, X_BLOCK_M: tl.constexpr, X_BLOCK_N: tl.constexpr):
     # num_warps: tl.constexpr = tl.extra.cuda.num_warps()
     W_K_DIVISOR: tl.constexpr = 1
     W_K_MULTIPLIER: tl.constexpr = 2
@@ -65,7 +64,6 @@ def _upcast_mxfp4_to_bf16(Y, YScale, X, XScale, x_stride_m, x_stride_n, x_scale_
     PACKED_X_BLOCK_M: tl.constexpr = (X_BLOCK_M // W_K_DIVISOR) * W_K_MULTIPLIER
     PACKED_X_BLOCK_N: tl.constexpr = X_BLOCK_N // W_N_DIVISOR
     # PACKED_X_SCALE_BLOCK_M: tl.constexpr = X_BLOCK_M // MX_PACK_DIVISOR
-
     offs_m_val = tl.arange(0, PACKED_X_BLOCK_M)
     offs_n_val = tl.arange(0, PACKED_X_BLOCK_N)
     offs_m_scale = tl.arange(0, X_BLOCK_M // 32)
@@ -77,17 +75,12 @@ def _upcast_mxfp4_to_bf16(Y, YScale, X, XScale, x_stride_m, x_stride_n, x_scale_
     offs_x_scale = offs_m_scale[:, None] * x_scale_stride_m + offs_n_scale[None, :] * x_scale_stride_n
     x_scale = tl.load(XScale + offs_x_scale)
     # x_scale = unswizzle_mxfp4_scale_hopper(x_scale, num_warps=num_warps)
-    y, y_scale = bit_untwiddling_mxfp4_value_hopper(x, x_scale, 1)
+    y = bit_untwiddling_mxfp4_value_hopper(x, x_scale, 1)
     # write back output
     offs_m_val = tl.arange(0, X_BLOCK_M)
     offs_n_val = tl.arange(0, X_BLOCK_N)
     offs_y = offs_m_val[:, None] * y_stride_m + offs_n_val[None, :] * y_stride_n
     tl.store(Y + offs_y, y)
-    offs_y_scale = offs_m_scale[:, None] * y_scale_stride_m + offs_n_scale[None, :] * y_scale_stride_n
-    # tl.static_print("x_scale", x_scale.shape)
-    # tl.static_print("y_scale", y_scale.shape)
-    # tl.static_print("offs_y_scale", offs_y_scale.shape)
-    tl.store(YScale + offs_y_scale, y_scale)
 
 
 def test_mxfp4_to_bf16():
@@ -102,24 +95,11 @@ def test_mxfp4_to_bf16():
     x_fp4_val = convert_layout(x_fp4_val, HopperMXValueLayout)
     x_fp4_scale = convert_layout(x_fp4_scale, StridedLayout)
     y = torch.empty_like(x_bf16)
-    y_scale = torch.empty((8, 128), device=x_fp4_scale.device, dtype=torch.bfloat16)
-    _upcast_mxfp4_to_bf16[(1, )](y, y_scale, x_fp4_val.storage.data, x_fp4_scale.storage.data,
-                                 x_fp4_val.storage.data.stride(0), x_fp4_val.storage.data.stride(1),
-                                 x_fp4_scale.storage.data.stride(0), x_fp4_scale.storage.data.stride(1), y.stride(0),
-                                 y.stride(1), y_scale.stride(0), y_scale.stride(1), x_fp4_val.shape[0],
-                                 x_fp4_val.shape[1], x_fp4_scale.shape[0], x_fp4_scale.shape[1], num_warps=4)
-    # print(y)
-    # print(y_scale)
-    # breakpoint()
-    y_scale = y_scale.mT
-    y_scale = y_scale.unsqueeze(2)
-    y_scale = y_scale.expand(y_scale.shape[:-1] + (32, ))
-    y_scale = y_scale.flatten(-2, -1)
-    y_scale = y_scale.mT
-    y = y * y_scale
-
-    print((y != x_bf16).sum())
-    # assert (y == x_bf16).all()
+    _upcast_mxfp4_to_bf16[(1, )](y, x_fp4_val.storage.data, x_fp4_scale.storage.data, x_fp4_val.storage.data.stride(0),
+                                 x_fp4_val.storage.data.stride(1), x_fp4_scale.storage.data.stride(0),
+                                 x_fp4_scale.storage.data.stride(1), y.stride(0), y.stride(1), x_fp4_val.shape[0],
+                                 x_fp4_val.shape[1], num_warps=4)
+    assert (y == x_bf16).all()
 
 
 # def test_unswizzle_mxfp4_value_golden_value():
