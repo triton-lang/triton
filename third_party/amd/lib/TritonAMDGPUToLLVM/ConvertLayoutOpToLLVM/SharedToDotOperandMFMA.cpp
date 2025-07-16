@@ -358,7 +358,7 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
           spatialWarpId, lane, warpsPerBlockNonK, numOfElems, numReps, smemObj,
           smemStrides, sharedLayout, nDim, mfmaInstrK);
     }
-    smemBase = AMD::computeBasePtr(rewriter, loc, smemObj, smemStrides);
+    smemBase = smemObj.getBase();
   }
 
   Type resElemTy = typeConverter->convertType(elemTy);
