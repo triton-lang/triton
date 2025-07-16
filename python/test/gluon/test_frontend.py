@@ -1331,12 +1331,10 @@ def test_auto_layout_broadcast():
     _ = y * x
 
 
-@pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
-@filecheck_test
 @gluon.jit
-def test_amd_mfma_layout():
+def amd_mfma_layout_kernel():
     mfma_layout: ttgl.constexpr = ttgl.AMDMFMALayout(version=[4, 0], warps_per_cta=[1, 1], tiles_per_warp=[1, 0],
-                                                     m_dim=32, n_dim=32, transposed=False, ctas_per_cga=[1, 1],
+                                                     m_dim=32, n_dim=32, transposed=False, ctas_per_cga=[2, 1],
                                                      cta_split_num=[1, 1], cta_order=[1, 0], elem_type_width=32)
 
     ll: ttgl.constexpr = ttgl.DistributedLinearLayout(reg_bases=[[0, 1], [0, 2], [0, 8], [0, 16]], lane_bases=[[1, 0],
@@ -1345,8 +1343,30 @@ def test_amd_mfma_layout():
                                                                                                                [8, 0],
                                                                                                                [16, 0],
                                                                                                                [0, 4]],
-                                                      warp_bases=[[32, 0], [64, 0]], block_bases=[[]], shape=[32, 32])
+                                                      warp_bases=[[32, 0], [64, 0]], block_bases=[[0,
+                                                                                                   0]], shape=[128, 32])
 
-    x = ttgl.arange(0, 1024, ll)
+    x = ttgl.full([128, 32], 0, ttgl.float32, ll)
     # CHECK:#mma = #ttg.amd_mfma<{versionMajor = 4, versionMinor = 0, warpsPerCTA = [1, 1], instrShape = [32, 32],
     res = ttgl.convert_layout(x, mfma_layout)  # noqa: F841
+
+
+@pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
+def test_amd_mfma_layout(fresh_knobs):
+    knobs.compilation.disable_line_info = True
+
+    h = amd_mfma_layout_kernel.warmup(grid=(1, ), sanitize_overflow=False)
+    expecttest.assert_expected_inline(
+        h.asm["source"], """\
+#linear = #ttg.linear<{register = [[0, 1], [0, 2], [0, 8], [0, 16]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [0, 4]], warp = [[32, 0], [64, 0]], block = [[0, 0]]}>
+#mma = #ttg.amd_mfma<{version = 4, warpsPerCTA = [1, 1], tilesPerWarp = [1, 0], instrShape = [32, 32], isTransposed = false, CTAsPerCGA = [2, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
+"builtin.module"() ({
+  "tt.func"() <{function_type = () -> (), sym_name = "amd_mfma_layout_kernel", sym_visibility = "public"}> ({
+    %0 = "arith.constant"() <{value = 0.000000e+00 : f32}> : () -> f32 loc(#loc)
+    %1 = "arith.constant"() <{value = dense<0.000000e+00> : tensor<128x32xf32, #linear>}> : () -> tensor<128x32xf32, #linear> loc(#loc)
+    %2 = "ttg.convert_layout"(%1) : (tensor<128x32xf32, #linear>) -> tensor<128x32xf32, #mma> loc(#loc)
+    "tt.return"() : () -> () loc(#loc)
+  }) {noinline = false} : () -> () loc(#loc)
+}) {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} : () -> () loc(#loc)
+#loc = loc(unknown)
+""")
