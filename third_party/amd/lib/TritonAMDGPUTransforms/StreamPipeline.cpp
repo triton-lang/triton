@@ -267,19 +267,15 @@ AsyncCopyChainOps createAsyncCopy(tt::LoadOp loadOp, Value alloc,
 }
 
 void scheduleLocalLoad(ttg::LocalLoadOp localLoadOp,
-                       tt::CoarseSchedule &schedule, const StreamStages &stages,
-                       const StreamClusters &clusters) {
-  if (stages[SCHED_LOCAL_LOAD] != stages[SCHED_COMPUTE]) {
-    schedule.insert(localLoadOp, stages[SCHED_LOCAL_LOAD],
-                    clusters[SCHED_LOCAL_LOAD]);
-    // If its only user is a ConvertLayout, we place it into the same stage so
-    // it can be folded by a later pass
-    if (localLoadOp->hasOneUse()) {
-      auto cvt = *localLoadOp->getUsers().begin();
-      if (isa<ttg::ConvertLayoutOp>(cvt)) {
-        schedule.insert(cvt, stages[SCHED_LOCAL_LOAD],
-                        clusters[SCHED_LOCAL_LOAD]);
-      }
+                       tt::CoarseSchedule &schedule, int stage,
+                       const tt::CoarseSchedule::Cluster &cluster) {
+  schedule.insert(localLoadOp, stage, cluster);
+  // If its only user is a ConvertLayout, we place it into the same stage so
+  // it can be folded by a later pass
+  if (localLoadOp->hasOneUse()) {
+    auto cvt = *localLoadOp->getUsers().begin();
+    if (isa<ttg::ConvertLayoutOp>(cvt)) {
+      schedule.insert(cvt, stage, cluster);
     }
   }
 }
@@ -303,8 +299,10 @@ void scheduleAsyncCopy(const AsyncCopyChainOps &asyncOps, tt::LoadOp loadOp,
     schedule.insert(waitOp, stages[SCHED_ASYNC_WAIT],
                     clusters[SCHED_ASYNC_WAIT]);
 
-  if (maybeLocalLoadOp)
-    scheduleLocalLoad(maybeLocalLoadOp, schedule, stages, clusters);
+  if (maybeLocalLoadOp && stages[SCHED_LOCAL_LOAD] != stages[SCHED_COMPUTE]) {
+    scheduleLocalLoad(maybeLocalLoadOp, schedule, stages[SCHED_LOCAL_LOAD],
+                      clusters[SCHED_LOCAL_LOAD]);
+  }
 }
 
 StreamCopyChainOps createStreamCopy(tt::LoadOp loadOp, Value alloc,
@@ -336,8 +334,10 @@ void scheduleStreamCopy(const StreamCopyChainOps &streamOps,
                   clusters[SCHED_LOCAL_STORE]);
   schedule.insert(localStoreOp, stages[SCHED_LOCAL_STORE],
                   clusters[SCHED_LOCAL_STORE]);
-  if (maybeLocalLoadOp)
-    scheduleLocalLoad(maybeLocalLoadOp, schedule, stages, clusters);
+  if (maybeLocalLoadOp && stages[SCHED_LOCAL_LOAD] != stages[SCHED_COMPUTE]) {
+    scheduleLocalLoad(maybeLocalLoadOp, schedule, stages[SCHED_LOCAL_LOAD],
+                      clusters[SCHED_LOCAL_LOAD]);
+  }
 }
 
 // Returns the given |inputValue|'s dot user result encoding and updates |opIdx|
