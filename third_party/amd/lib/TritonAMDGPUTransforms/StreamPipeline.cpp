@@ -537,7 +537,7 @@ createStreamOps(const LoadToInfoMap &loadToInfo, scf::ForOp &forOp,
       builder.create<arith::ConstantIntOp>(loc, numBuffers, 32);
 
   unsigned newOperandIndex = forOp.getBody()->getNumArguments();
-  // Patch the loop to add the new loop carried dependencies.
+  // Patch the loop to add the new loop carried dependency.
   forOp = addIterArgsToLoop(builder, forOp, {extractIdx});
 
   // Create one counter for the extract indices to avoid creating long
@@ -550,7 +550,7 @@ createStreamOps(const LoadToInfoMap &loadToInfo, scf::ForOp &forOp,
                                                extractIdx, numBuffersVal);
   extractIdx = builder.create<arith::SelectOp>(loc, cndExt, extractIdx, zero);
 
-  // Patch the yield with the updated counters.
+  // Patch the yield with the updated counter.
   appendToForOpYield(forOp, {extractIdx});
 
   LoadToStreamOpMap loadToStreamOp;
@@ -558,27 +558,30 @@ createStreamOps(const LoadToInfoMap &loadToInfo, scf::ForOp &forOp,
     if (!info.sharedEncoding)
       continue;
 
+    auto loadOp = dyn_cast<tt::LoadOp>(l);
+    if (!loadOp)
+      continue;
+
     // Create an allocation that can hold distance number of loadOp shapes.
-    auto ty = cast<RankedTensorType>(l->getResultTypes()[0]);
-    Value alloc = triton::createAlloc(forOp, ty, l->getLoc(),
+    auto ty = cast<RankedTensorType>(loadOp->getResultTypes()[0]);
+    Value alloc = triton::createAlloc(forOp, ty, loadOp->getLoc(),
                                       info.sharedEncoding, numBuffers);
     assert(alloc && "Failed to create alloc for the async load.");
 
-    if (auto loadOp = dyn_cast<tt::LoadOp>(l)) {
-      if (useAsyncCopy && canBeConvertedToAsyncLoad(numBuffers, loadOp, alloc,
-                                                    axisInfoAnalysis)) {
-        loadToStreamOp[l] = createAsyncCopy(loadOp, alloc, extractIdx, forOp);
-      } else {
-        loadToStreamOp[l] = createStreamCopy(loadOp, alloc, extractIdx, forOp);
-      }
+    // Replace the old load with multi-buffered loads
+    if (useAsyncCopy && canBeConvertedToAsyncLoad(numBuffers, loadOp, alloc,
+                                                  axisInfoAnalysis)) {
+      loadToStreamOp[loadOp] =
+          createAsyncCopy(loadOp, alloc, extractIdx, forOp);
+    } else {
+      loadToStreamOp[loadOp] =
+          createStreamCopy(loadOp, alloc, extractIdx, forOp);
     }
   }
 
   return loadToStreamOp;
 }
 
-// Convert load ops into shared memory allocation loads and apply
-// multi-buffering based on the required number of buffers.
 void scheduleStreamOps(const LoadToStreamOpMap &loadToStreamOp,
                        const LoadToInfoMap &loadToInfo, scf::ForOp &forOp,
                        const int &numBuffers, bool useAsyncCopy,
