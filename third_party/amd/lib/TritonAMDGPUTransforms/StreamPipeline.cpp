@@ -11,6 +11,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/Debug.h"
+#include <variant>
 
 //===----------------------------------------------------------------------===//
 // This file will create a schedule that will be handed over to the pipeline
@@ -129,6 +130,23 @@ using LoadToInfoMap = llvm::MapVector<Operation *, LoadInfo>;
 using StreamClusters = std::array<tt::CoarseSchedule::Cluster, SCHED_SIZE>;
 using StreamStages = std::array<int, SCHED_SIZE>;
 
+struct StreamCopyChainOps {
+  tt::LoadOp loadOp;
+  ttg::MemDescSubviewOp subviewOp;
+  ttg::LocalStoreOp localStoreOp;
+  ttg::LocalLoadOp maybeLocalLoadOp;
+};
+
+struct AsyncCopyChainOps {
+  ttg::AsyncCopyGlobalToLocalOp copyOp;
+  ttg::AsyncCommitGroupOp commitOp;
+  ttg::AsyncWaitOp waitOp;
+  ttg::LocalLoadOp maybeLocalLoadOp;
+};
+
+using StreamOpVariant = std::variant<StreamCopyChainOps, AsyncCopyChainOps>;
+using LoadToStreamOpMap = llvm::MapVector<Operation *, StreamOpVariant>;
+
 } // namespace
 
 // Init Schedule Config based on settings and loop characteristics.
@@ -227,13 +245,6 @@ LogicalResult initSchedule(int maxDist, StreamStages &stages, int numStages,
   return success();
 }
 
-struct AsyncCopyChainOps {
-  ttg::AsyncCopyGlobalToLocalOp copyOp;
-  ttg::AsyncCommitGroupOp commitOp;
-  ttg::AsyncWaitOp waitOp;
-  ttg::LocalLoadOp maybeLocalLoadOp;
-};
-
 AsyncCopyChainOps createAsyncCopy(tt::LoadOp loadOp, Value alloc,
                                   Value extractIdx, scf::ForOp forOp) {
   OpBuilder builder(loadOp);
@@ -309,13 +320,6 @@ void createAndScheduleAsyncCopy(tt::LoadOp loadOp, Value alloc,
   schedule.erase(loadOp);
   loadOp.erase();
 }
-
-struct StreamCopyChainOps {
-  tt::LoadOp loadOp;
-  ttg::MemDescSubviewOp subviewOp;
-  ttg::LocalStoreOp localStoreOp;
-  ttg::LocalLoadOp maybeLocalLoadOp;
-};
 
 StreamCopyChainOps createStreamCopy(tt::LoadOp loadOp, Value alloc,
                                     Value extractIdx, scf::ForOp forOp) {
@@ -519,24 +523,10 @@ bool canBeConvertedToAsyncLoad(unsigned numBuffers, tt::LoadOp loadOp,
 
 // Convert load ops into shared memory allocation loads and apply
 // multi-buffering based on the required number of buffers.
-SmallVector<std::pair<Operation *, Value>> createAndScheduleStreamOps(
-    const LoadToInfoMap &loadToInfo, scf::ForOp &forOp, const int &numBuffers,
-    bool useAsyncCopy, tt::CoarseSchedule &schedule, const StreamStages &stages,
-    const StreamClusters &clusters,
-    tt::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
-  SmallVector<std::pair<Operation *, Value>> loadToAllocs;
-  for (auto &[loadOp, info] : loadToInfo) {
-    if (!info.sharedEncoding)
-      continue;
-
-    // Create an allocation that can hold distance number of loadOp shapes.
-    auto ty = cast<RankedTensorType>(loadOp->getResultTypes()[0]);
-    Value alloc = triton::createAlloc(forOp, ty, loadOp->getLoc(),
-                                      info.sharedEncoding, numBuffers);
-    assert(alloc && "Failed to create alloc for the async load.");
-    loadToAllocs.emplace_back(loadOp, alloc);
-  }
-
+LoadToStreamOpMap
+createStreamOps(const LoadToInfoMap &loadToInfo, scf::ForOp &forOp,
+                const int &numBuffers, bool useAsyncCopy,
+                tt::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
   IRRewriter builder(forOp);
   Location loc = forOp.getLoc();
   Value minusOne = builder.create<arith::ConstantIntOp>(loc, -1, 32);
@@ -560,23 +550,54 @@ SmallVector<std::pair<Operation *, Value>> createAndScheduleStreamOps(
                                                extractIdx, numBuffersVal);
   extractIdx = builder.create<arith::SelectOp>(loc, cndExt, extractIdx, zero);
 
-  // Replace tt.loads with async copies or stream copies
-  for (auto &[op, alloc] : loadToAllocs) {
-    if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
-      if (useAsyncCopy && canBeConvertedToAsyncLoad(numBuffers, loadOp, alloc,
-                                                    axisInfoAnalysis)) {
-        createAndScheduleAsyncCopy(loadOp, alloc, extractIdx, forOp, schedule,
-                                   stages, clusters);
-      } else {
-        createAndScheduleStreamCopy(loadOp, alloc, extractIdx, forOp, schedule,
-                                    stages, clusters);
-      }
-    }
-  }
   // Patch the yield with the updated counters.
   appendToForOpYield(forOp, {extractIdx});
 
-  return loadToAllocs;
+  LoadToStreamOpMap loadToStreamOp;
+  for (auto &[l, info] : loadToInfo) {
+    if (!info.sharedEncoding)
+      continue;
+
+    // Create an allocation that can hold distance number of loadOp shapes.
+    auto ty = cast<RankedTensorType>(l->getResultTypes()[0]);
+    Value alloc = triton::createAlloc(forOp, ty, l->getLoc(),
+                                      info.sharedEncoding, numBuffers);
+    assert(alloc && "Failed to create alloc for the async load.");
+
+    if (auto loadOp = dyn_cast<tt::LoadOp>(l)) {
+      if (useAsyncCopy && canBeConvertedToAsyncLoad(numBuffers, loadOp, alloc,
+                                                    axisInfoAnalysis)) {
+        loadToStreamOp[l] = createAsyncCopy(loadOp, alloc, extractIdx, forOp);
+      } else {
+        loadToStreamOp[l] = createStreamCopy(loadOp, alloc, extractIdx, forOp);
+      }
+    }
+  }
+
+  return loadToStreamOp;
+}
+
+// Convert load ops into shared memory allocation loads and apply
+// multi-buffering based on the required number of buffers.
+void scheduleStreamOps(const LoadToStreamOpMap &loadToStreamOp,
+                       const LoadToInfoMap &loadToInfo, scf::ForOp &forOp,
+                       const int &numBuffers, bool useAsyncCopy,
+                       tt::CoarseSchedule &schedule, const StreamStages &stages,
+                       const StreamClusters &clusters,
+                       tt::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
+  SmallVector<std::pair<Operation *, Value>> loadToAllocs;
+
+  for (auto [l, streamOps] : loadToStreamOp) {
+    auto loadOp = dyn_cast<tt::LoadOp>(l);
+    if (!loadOp)
+      continue;
+
+    if (auto asyncOps = std::get_if<AsyncCopyChainOps>(&streamOps)) {
+      scheduleAsyncCopy(*asyncOps, loadOp, schedule, stages, clusters);
+    } else if (auto sOps = std::get_if<StreamCopyChainOps>(&streamOps)) {
+      scheduleStreamCopy(*sOps, loadOp, schedule, stages, clusters);
+    }
+  }
 }
 
 LoadToInfoMap
@@ -653,9 +674,10 @@ buildSchedule(scf::ForOp &forOp, int numStages, const LoadToInfoMap &loadToInfo,
   dumpSchedule("Coarse schedule loads only:");
 
   // Convert the loads into shared memory allocations and loads from them.
-  SmallVector<std::pair<Operation *, Value>> sharedMemAllocs =
-      createAndScheduleStreamOps(loadToInfo, forOp, numBuffers, useAsyncCopy,
-                                 schedule, stages, clusters, axisInfoAnalysis);
+  auto loadToStreamOp = createStreamOps(loadToInfo, forOp, numBuffers,
+                                        useAsyncCopy, axisInfoAnalysis);
+  scheduleStreamOps(loadToStreamOp, loadToInfo, forOp, numBuffers, useAsyncCopy,
+                    schedule, stages, clusters, axisInfoAnalysis);
   dumpSchedule("Coarse schedule stream ops:");
 
   scheduleDependencies(forOp, schedule);
