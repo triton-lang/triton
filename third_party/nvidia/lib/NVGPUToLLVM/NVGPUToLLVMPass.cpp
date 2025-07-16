@@ -290,6 +290,11 @@ protected:
     }
     std::string suffix = trans ? ".trans.shared" : ".shared";
     suffix += ".b" + std::to_string(bitWidth);
+    // Weird: m16n16 is implicitly two tiles together, and it just
+    // supports .x1 and .x2 modes...
+    if (shape == triton::nvgpu::LoadMatrixShape::m16n16) {
+      vecSize /= 2;
+    }
     switch (vecSize) {
     case 1:
       return ptxAsmBase + ".x1" + suffix;
