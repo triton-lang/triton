@@ -5,6 +5,7 @@
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Types.h"
+#include "triton/Dialect/TritonNvidiaGPU/Transforms/Utility.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVectorExtras.h"
 
@@ -20,7 +21,8 @@ LogicalResult ArefCreateOp::verify() {
   SmallVector<int> dims;
   for (auto operand : getOperands()) {
     SmallVector<Operation *> users(operand.user_begin(), operand.user_end());
-    if (users.size() != 1)
+    if (!llvm::all_of(users,
+                      [](Operation *op) { return isa<ArefCreateOp>(op); }))
       return emitError("Aref buffer is used elsewhere, Aref cannot guarantee "
                        "async safety");
     auto type = operand.getType();
@@ -137,6 +139,24 @@ void CreateTokenOp::build(::mlir::OpBuilder &builder,
   auto tokenType = TokenType::get(builder.getContext());
   auto resultType = RankedTensorType::get({num}, tokenType);
   build(builder, state, resultType, num, loadType);
+}
+
+// -- AsyncCompleteOp --
+LogicalResult AsyncCompleteOp::verify() {
+  if (failed(nvidia_gpu::verifyBarrierType(*this, getAlloc().getType())))
+    return failure();
+  return success();
+}
+
+void AsyncCompleteOp::getEffects(
+    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
+        &effects) {
+  effects.emplace_back(MemoryEffects::Read::get(), &getAllocMutable(),
+                       mlir::triton::gpu::SharedMemory::get());
+  // Need a side effect to prevent compiler from reordering and removing
+  // the arrive operation.
+  effects.emplace_back(MemoryEffects::Write::get(),
+                       mlir::SideEffects::DefaultResource::get());
 }
 
 } // namespace mlir::triton::nvws
