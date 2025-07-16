@@ -852,8 +852,7 @@ class CodeGenerator(ast.NodeVisitor):
                     % ast.unparse(node.test))
                 cond = language.core._unsplat(cond, _semantic=self.semantic, _generator=self)
             cond = cond.to(language.int1, _semantic=self.semantic)
-            contains_return = ContainsReturnChecker(self.gscope).visit(node)
-            if contains_return:
+            if ContainsReturnChecker(self.gscope).visit(node):
                 if self.scf_stack:
                     raise self._unsupported(
                         node, "Cannot have `return` statements inside `while` or `for` statements in triton "
@@ -943,6 +942,8 @@ class CodeGenerator(ast.NodeVisitor):
             if item.optional_vars is not None:
                 var_name = self.visit(item.optional_vars)
                 self.set_value(var_name, res)
+        if ContainsReturnChecker(self.gscope).visit(node):
+            raise self._unsupported(node, "Cannot have `return` statements inside `with` statements in triton ")
         self.visit_compound_statement(node.body)
         for cm in reversed(cm_list):
             cm.__exit__(None, None, None)
