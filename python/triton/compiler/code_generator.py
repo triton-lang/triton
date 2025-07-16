@@ -974,6 +974,8 @@ class CodeGenerator(ast.NodeVisitor):
             if item.optional_vars is not None:
                 var_name = self.visit(item.optional_vars)
                 self.set_value(var_name, res)
+        if ContainsReturnChecker(self.gscope).visit(node):
+            raise self._unsupported(node, "Cannot have `return` statements inside `with` statements in triton ")
         self.visit_compound_statement(node.body)
         for cm in reversed(cm_list):
             cm.__exit__(None, None, None)
