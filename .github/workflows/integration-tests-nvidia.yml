@@ -83,6 +83,35 @@ jobs:
         run: ccache --print-stats
       - name: Run lit tests
         run: make test-lit
+      - name: GPU diag
+        run: |
+          if [ "${{ matrix.runner[0] }}" == "nvidia-gb200" ]; then
+            source /venv/bin/activate
+          fi
+          echo "== ls /dev/nvidia* =="
+          ls -l /dev/nvidia* || echo "no /dev/nvidia*"
+          echo "== nvidia-smi =="
+          nvidia-smi || echo "nvidia-smi failed"
+          echo "== torch cuda =="
+          python3 - <<'EOF'
+          import torch
+          print("torch:", torch.__version__)
+          print("cuda avail:", torch.cuda.is_available())
+          print("device count:", torch.cuda.device_count() if torch.cuda.is_available() else 0)
+          EOF
+              echo "== triton driver check =="
+              python3 - <<'EOF'
+          import triton
+          from triton.runtime import driver
+          print("cuda available:", getattr(driver, "cuda").is_available())
+          print("rocm available:", getattr(driver, "rocm").is_available() if hasattr(driver,"rocm") else False)
+          try:
+              triton.runtime.driver.active.get_current_target()
+              print("active target ok")
+          except Exception as e:
+              print("active target error:", e)
+          EOF
+
       - name: Run python tests on CUDA
         run: |
           if [ "${{ matrix.runner[0] }}" == "nvidia-gb200" ]; then
