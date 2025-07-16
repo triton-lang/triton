@@ -60,6 +60,18 @@ struct SplatOpConversion : public ConvertOpToLLVMPattern<triton::SplatOp> {
     return success();
   }
 };
+
+struct UnsplatOpConversion : public ConvertOpToLLVMPattern<triton::UnsplatOp> {
+  using ConvertOpToLLVMPattern<triton::UnsplatOp>::ConvertOpToLLVMPattern;
+  LogicalResult matchAndRewrite(triton::UnsplatOp op, OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const {
+    auto loc = op->getLoc();
+    auto scrVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
+    rewriter.replaceOp(op, scrVals[0]);
+    return success();
+  }
+};
+
 // This pattern helps to convert arith::ConstantOp(with SplatElementsAttr),
 // the logic is the same as triton::SplatOp, so the underlying implementation
 // is reused.
@@ -550,6 +562,7 @@ void mlir::triton::populateViewOpToLLVMPatterns(
   patterns.add<ReshapeOpConversion>(typeConverter, benefit);
   patterns.add<ExpandDimsOpConversion>(typeConverter, benefit);
   patterns.add<SplatOpConversion>(typeConverter, benefit);
+  patterns.add<UnsplatOpConversion>(typeConverter, benefit);
   patterns.add<ArithConstantSplatOpConversion>(typeConverter, benefit);
   patterns.add<ArithConstantArrayOpConversion>(typeConverter, benefit);
   patterns.add<CatOpConversion>(typeConverter, benefit);

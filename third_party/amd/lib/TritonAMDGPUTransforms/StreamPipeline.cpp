@@ -226,10 +226,15 @@ initSchedule(int maxDist, int stages[SCHED_SIZE], int numStages,
   return success();
 }
 
-void createAndScheduleAsyncCopy(
-    tt::LoadOp loadOp, Value alloc, Value extractIdx, scf::ForOp forOp,
-    tt::CoarseSchedule &schedule, const int stages[SCHED_SIZE],
-    const std::array<tt::CoarseSchedule::Cluster, SCHED_SIZE> &clusters) {
+struct AsyncCopyChainOps {
+  ttg::AsyncCopyGlobalToLocalOp copyOp;
+  ttg::AsyncCommitGroupOp commitOp;
+  ttg::AsyncWaitOp waitOp;
+  ttg::LocalLoadOp localLoadOp;
+};
+
+AsyncCopyChainOps createAsyncCopy(tt::LoadOp loadOp, Value alloc,
+                                  Value extractIdx, scf::ForOp forOp) {
   OpBuilder builder(loadOp);
   Location loc = loadOp.getLoc();
 
@@ -274,9 +279,15 @@ void createAndScheduleAsyncCopy(
   auto sharedLoad =
       builder.create<ttg::LocalLoadOp>(loc, loadOp.getType(), viewLoad, waitOp);
 
+  return {copyOp, commitOp, waitOp, sharedLoad};
+}
+
+void scheduleAsyncCopy(
+    const AsyncCopyChainOps &asyncOps, tt::LoadOp loadOp,
+    tt::CoarseSchedule &schedule, const int stages[SCHED_SIZE],
+    const std::array<tt::CoarseSchedule::Cluster, SCHED_SIZE> &clusters) {
+  auto [copyOp, commitOp, waitOp, localLoadOp] = asyncOps;
   auto [loadStage, loadCluster] = schedule[loadOp];
-  schedule.erase(loadOp);
-  // Schedule new ops
   schedule.insert(copyOp, loadStage, loadCluster);
   // Place ttg.async_commit_group op following AsyncCopyGlobalToLocal so the
   // later UpdateAsyncWaitCount pass can deduce better waitcnts
@@ -292,25 +303,41 @@ void createAndScheduleAsyncCopy(
                     clusters[SCHED_ASYNC_WAIT]);
 
   if (stages[SCHED_LOCAL_LOAD] != stages[SCHED_COMPUTE])
-    schedule.insert(sharedLoad, stages[SCHED_LOCAL_LOAD],
+    schedule.insert(localLoadOp, stages[SCHED_LOCAL_LOAD],
                     clusters[SCHED_LOCAL_LOAD]);
 
-  loadOp->replaceAllUsesWith(ValueRange{sharedLoad});
   if (stages[SCHED_LOCAL_LOAD] != stages[SCHED_COMPUTE] &&
-      sharedLoad->hasOneUse()) {
+      localLoadOp->hasOneUse()) {
     if (auto cvt =
-            dyn_cast<ttg::ConvertLayoutOp>(*sharedLoad->getUsers().begin()))
+            dyn_cast<ttg::ConvertLayoutOp>(*localLoadOp->getUsers().begin()))
       schedule.insert(cvt, stages[SCHED_LOCAL_LOAD],
                       clusters[SCHED_LOCAL_LOAD]);
   }
-
-  loadOp.erase();
 }
 
-void createAndScheduleStreamCopy(
+void createAndScheduleAsyncCopy(
     tt::LoadOp loadOp, Value alloc, Value extractIdx, scf::ForOp forOp,
     tt::CoarseSchedule &schedule, const int stages[SCHED_SIZE],
     const std::array<tt::CoarseSchedule::Cluster, SCHED_SIZE> &clusters) {
+
+  auto asyncOps = createAsyncCopy(loadOp, alloc, extractIdx, forOp);
+  loadOp->replaceAllUsesWith(ValueRange{asyncOps.localLoadOp});
+
+  scheduleAsyncCopy(asyncOps, loadOp, schedule, stages, clusters);
+
+  schedule.erase(loadOp);
+  loadOp.erase();
+}
+
+struct StreamCopyChainOps {
+  tt::LoadOp copyOp;
+  ttg::MemDescSubviewOp subviewOp;
+  ttg::LocalStoreOp localStoreOp;
+  ttg::LocalLoadOp localLoadOp;
+};
+
+StreamCopyChainOps createStreamCopy(tt::LoadOp loadOp, Value alloc,
+                                    Value extractIdx, scf::ForOp forOp) {
   OpBuilder builder(forOp);
   Value zero = builder.create<arith::ConstantIntOp>(forOp.getLoc(), 0, 32);
   // Replace the load with insert/extract slice.
@@ -319,11 +346,7 @@ void createAndScheduleStreamCopy(
 
   ttg::MemDescType allocTy = cast<ttg::MemDescType>(alloc.getType());
   SmallVector<Value> copyOffsets(allocTy.getRank(), zero);
-  Operation *copy = builder.clone(*loadOp);
-
-  auto [stage, cluster] = schedule[loadOp];
-  schedule.erase(loadOp);
-  schedule.insert(copy, stage, cluster);
+  tt::LoadOp copy = cast<tt::LoadOp>(builder.clone(*loadOp));
 
   // Extract part.
   SmallVector<Value> loadOffsets(allocTy.getRank(), zero);
@@ -332,13 +355,14 @@ void createAndScheduleStreamCopy(
   auto subviewTy = ttg::MemDescType::get(
       allocTy.getShape().drop_front(), allocTy.getElementType(),
       allocTy.getEncoding(), sharedMemorySpace, /*mutableMemory=*/true);
-  auto viewLoad =
+  auto subviewOp =
       builder.create<ttg::MemDescSubviewOp>(loc, subviewTy, alloc, loadOffsets);
   // Clean up old local caches.
   SmallVector<ttg::LocalAllocOp> allocsToErase;
   for (Operation *user : loadOp->getUsers()) {
     if (auto userAlloc = dyn_cast<ttg::LocalAllocOp>(user)) {
-      tt::replaceUsesAndPropagateType(builder, userAlloc, viewLoad.getResult());
+      tt::replaceUsesAndPropagateType(builder, userAlloc,
+                                      subviewOp.getResult());
       allocsToErase.push_back(userAlloc);
     }
   }
@@ -346,29 +370,51 @@ void createAndScheduleStreamCopy(
     allocToErase.erase();
 
   // Prefetch load ahead of the dot stage if is used by the dot.
-  auto storeOp =
-      builder.create<ttg::LocalStoreOp>(loc, copy->getResult(0), viewLoad);
-  schedule.insert(viewLoad, stages[SCHED_LOCAL_STORE],
+  auto storeOp = builder.create<ttg::LocalStoreOp>(loc, copy, subviewOp);
+
+  auto sharedLoad =
+      builder.create<ttg::LocalLoadOp>(loc, loadOp.getType(), subviewOp);
+
+  return {copy, subviewOp, storeOp, sharedLoad};
+}
+
+void scheduleStreamCopy(
+    const StreamCopyChainOps &streamOps, tt::LoadOp loadOp,
+    tt::CoarseSchedule &schedule, const int stages[SCHED_SIZE],
+    const std::array<tt::CoarseSchedule::Cluster, SCHED_SIZE> &clusters) {
+  auto [copyOp, subviewOp, localStoreOp, localLoadOp] = streamOps;
+  auto [stage, cluster] = schedule[loadOp];
+  schedule.insert(copyOp, stage, cluster);
+
+  schedule.insert(subviewOp, stages[SCHED_LOCAL_STORE],
                   clusters[SCHED_LOCAL_STORE]);
-  schedule.insert(storeOp, stages[SCHED_LOCAL_STORE],
+  schedule.insert(localStoreOp, stages[SCHED_LOCAL_STORE],
                   clusters[SCHED_LOCAL_STORE]);
 
-  // Create local load
-  auto sharedLoad =
-      builder.create<ttg::LocalLoadOp>(loc, loadOp.getType(), viewLoad);
-  Value result = sharedLoad.getResult();
   if (stages[SCHED_LOCAL_LOAD] != stages[SCHED_COMPUTE])
-    schedule.insert(sharedLoad, stages[SCHED_LOCAL_LOAD],
+    schedule.insert(localLoadOp, stages[SCHED_LOCAL_LOAD],
                     clusters[SCHED_LOCAL_LOAD]);
 
-  loadOp->replaceAllUsesWith(ValueRange{result});
-
-  if (stages[SCHED_LOCAL_LOAD] != stages[SCHED_COMPUTE] && result.hasOneUse()) {
-    if (auto cvt = dyn_cast<ttg::ConvertLayoutOp>(*result.getUsers().begin()))
+  if (stages[SCHED_LOCAL_LOAD] != stages[SCHED_COMPUTE] &&
+      localLoadOp->hasOneUse()) {
+    if (auto cvt =
+            dyn_cast<ttg::ConvertLayoutOp>(*localLoadOp->getUsers().begin()))
       schedule.insert(cvt, stages[SCHED_LOCAL_LOAD],
                       clusters[SCHED_LOCAL_LOAD]);
   }
+}
 
+void createAndScheduleStreamCopy(
+    tt::LoadOp loadOp, Value alloc, Value extractIdx, scf::ForOp forOp,
+    tt::CoarseSchedule &schedule, const int stages[SCHED_SIZE],
+    const std::array<tt::CoarseSchedule::Cluster, SCHED_SIZE> &clusters) {
+
+  auto streamOps = createStreamCopy(loadOp, alloc, extractIdx, forOp);
+  loadOp->replaceAllUsesWith(ValueRange{streamOps.localLoadOp});
+
+  scheduleStreamCopy(streamOps, loadOp, schedule, stages, clusters);
+
+  schedule.erase(loadOp);
   loadOp.erase();
 }
 

@@ -1,4 +1,5 @@
 from __future__ import annotations
+import math
 from typing import TypeVar, List, TYPE_CHECKING, Tuple
 from functools import wraps
 
@@ -215,6 +216,10 @@ class shared_memory_descriptor(base_value):
     @property
     def rank(self):
         return len(self.shape)
+
+    @property
+    def numel(self) -> int:
+        return math.prod(self.shape)
 
     @property
     def layout(self):
