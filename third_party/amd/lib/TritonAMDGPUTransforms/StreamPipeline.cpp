@@ -309,18 +309,6 @@ void scheduleAsyncCopy(const AsyncCopyChainOps &asyncOps, tt::LoadOp loadOp,
     scheduleLocalLoad(maybeLocalLoadOp, schedule, stages, clusters);
 }
 
-void createAndScheduleAsyncCopy(tt::LoadOp loadOp, Value alloc,
-                                Value extractIdx, scf::ForOp forOp,
-                                tt::CoarseSchedule &schedule,
-                                const StreamStages &stages,
-                                const StreamClusters &clusters) {
-  auto asyncOps = createAsyncCopy(loadOp, alloc, extractIdx, forOp);
-  scheduleAsyncCopy(asyncOps, loadOp, schedule, stages, clusters);
-
-  schedule.erase(loadOp);
-  loadOp.erase();
-}
-
 StreamCopyChainOps createStreamCopy(tt::LoadOp loadOp, Value alloc,
                                     Value extractIdx, scf::ForOp forOp) {
   OpBuilder builder(loadOp);
@@ -352,18 +340,6 @@ void scheduleStreamCopy(const StreamCopyChainOps &streamOps,
                   clusters[SCHED_LOCAL_STORE]);
   if (maybeLocalLoadOp)
     scheduleLocalLoad(maybeLocalLoadOp, schedule, stages, clusters);
-}
-
-void createAndScheduleStreamCopy(tt::LoadOp loadOp, Value alloc,
-                                 Value extractIdx, scf::ForOp forOp,
-                                 tt::CoarseSchedule &schedule,
-                                 const StreamStages &stages,
-                                 const StreamClusters &clusters) {
-  auto streamOps = createStreamCopy(loadOp, alloc, extractIdx, forOp);
-  scheduleStreamCopy(streamOps, loadOp, schedule, stages, clusters);
-
-  schedule.erase(loadOp);
-  loadOp.erase();
 }
 
 // Returns the given |inputValue|'s dot user result encoding and updates |opIdx|
