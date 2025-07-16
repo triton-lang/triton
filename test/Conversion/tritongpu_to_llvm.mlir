@@ -556,8 +556,16 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     // CHECK-NEXT: llvm.extractvalue
     // CHECK-NEXT: llvm.extractvalue
     // CHECK-NEXT: llvm.extractvalue
+    // CHECK-NEXT: llvm.mlir.constant(1 : i32) : i32
+    // CHECK-NEXT: llvm.mlir.constant(32 : i32) : i32
     // CHECK-NEXT: llvm.mlir.constant(512 : i32) : i32
+    // CHECK-NEXT: llvm.mlir.constant(0 : i32) : i32
     // CHECK-NEXT: llvm.mul
+    // CHECK-NEXT: llvm.add
+    // CHECK-NEXT: llvm.mul
+    // CHECK-NEXT: llvm.add
+    // CHECK-NEXT: llvm.mul
+    // CHECK-NEXT: llvm.add
     // CHECK-NEXT: llvm.add
     // CHECK-NEXT: llvm.add
     // CHECK-NEXT: llvm.getelementptr
