@@ -1,0 +1,254 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../../">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>How to run a Triton Community Meetup &mdash; Triton  documentation</title>
+      <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=03e43079" />
+      <link rel="stylesheet" type="text/css" href="../../_static/css/theme.css?v=e59714d7" />
+      <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery.css?v=d2d258e8" />
+      <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-binder.css?v=f4aeca0c" />
+      <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-dataframe.css?v=2082cf3c" />
+      <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-rendered-html.css?v=1277b6f3" />
+      <link rel="stylesheet" type="text/css" href="../../_static/css/custom.css" />
+
+  
+      <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
+      <script src="../../_static/doctools.js?v=9bcbadda"></script>
+      <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../../index.html" class="icon icon-home">
+            Triton
+              <img src="https://cdn.openai.com/triton/assets/triton-logo.png" class="logo" alt="Logo"/>
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Getting Started</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../getting-started/installation.html">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../getting-started/tutorials/index.html">Tutorials</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Python API</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../python-api/triton.html">triton</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../python-api/triton.language.html">triton.language</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../python-api/triton.testing.html">triton.testing</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../python-api/triton-semantics.html">Triton Semantics</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Triton MLIR Dialects</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../dialects/dialects.html">Triton MLIR Dialects and Ops</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Programming Guide</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../programming-guide/chapter-1/introduction.html">Introduction</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../programming-guide/chapter-2/related-work.html">Related Work</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../programming-guide/chapter-3/debugging.html">Debugging Triton</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../index.html">Triton</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+      <li class="breadcrumb-item active">How to run a Triton Community Meetup</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../../_sources/meetups/for_moderators/README.md.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="how-to-run-a-triton-community-meetup">
+<h1>How to run a Triton Community Meetup<a class="headerlink" href="#how-to-run-a-triton-community-meetup" title="Link to this heading">¶</a></h1>
+<p>Contributors:  Bill Yoshimi, Areg Melikadamyan, Whitney Tsang, Ksharma Pawar</p>
+<p>Last updated: July 3, 2025</p>
+<p>Community meetups give the on-line community a chance to interact with each other and the Triton developers in a more face-to-face format vs slack chats.  Example topics covered during community meetups include:</p>
+<ul class="simple">
+<li><p>Developers presenting updates on features they’re working on.</p></li>
+<li><p>Developers asking community for feedback on new initiatives</p></li>
+<li><p>Questions from community for developers</p></li>
+<li><p>Questions about Triton strategy/direction.</p></li>
+</ul>
+</section>
+<section id="some-logistics">
+<h1>Some logistics<a class="headerlink" href="#some-logistics" title="Link to this heading">¶</a></h1>
+<p>Community meetups occur once 8 weeks (usually during the first 1-2 weeks of a month).
+Reminders are sent out 2 weeks ahead of time</p>
+<p>Only companies that paid for corp Microsoft Teams access can create webinars.  Three folks who have done this (or have access in the past are):</p>
+<ul class="simple">
+<li><p>Areg Melikadamyan</p></li>
+<li><p>Whitney Tsang</p></li>
+<li><p>Ksharma Pawar</p></li>
+<li><p>Jian Hui</p></li>
+</ul>
+<p>Webinars are automatically recorded.  The person with corp access can upload the video to youtube after the webinar is finished.</p>
+<p>Only the person with corp access can open a webinar.  Even if you’re a registered speaker or MC, you’ll see</p>
+<div align="center">
+  <img src="https://private-user-images.githubusercontent.com/85795580/459649517-42acf22a-6ae3-4c0f-a585-dffc25fabc33.png?jwt=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTUiLCJleHAiOjE3NTE1NTg1MzEsIm5iZiI6MTc1MTU1ODIzMSwicGF0aCI6Ii84NTc5NTU4MC80NTk2NDk1MTctNDJhY2YyMmEtNmFlMy00YzBmLWE1ODUtZGZmYzI1ZmFiYzMzLnBuZz9YLUFtei1BbGdvcml0aG09QVdTNC1ITUFDLVNIQTI1NiZYLUFtei1DcmVkZW50aWFsPUFLSUFWQ09EWUxTQTUzUFFLNFpBJTJGMjAyNTA3MDMlMkZ1cy1lYXN0LTElMkZzMyUyRmF3czRfcmVxdWVzdCZYLUFtei1EYXRlPTIwMjUwNzAzVDE1NTcxMVomWC1BbXotRXhwaXJlcz0zMDAmWC1BbXotU2lnbmF0dXJlPWZhZWQ2NjQ3MDIxNGVkNThkMGYxZmNjMmI2Yzg5MjMyZTAxZGI5NmFiZDIwYzczMDc0N2YzOTM3MTYwMThiOWEmWC1BbXotU2lnbmVkSGVhZGVycz1ob3N0In0.UwzTbqMIsFw1Ex9t-5HY8A3KHzOnY6eqgqz2eJ0qTbE" alt="Microsoft Meeting waiting for meeting to start view">
+</div>
+<p>before the meeting owner opens it up.</p>
+<p>During the meetup, take notes.</p>
+<p>Post the final notes on the Triton-lang website here: https://github.com/triton-lang/triton/tree/main/docs/meetups</p>
+</section>
+<section id="how-to-run-a-community-meetup">
+<h1>How to run a community meetup<a class="headerlink" href="#how-to-run-a-community-meetup" title="Link to this heading">¶</a></h1>
+<ol class="arabic simple">
+<li><p>Work with one of the folks above to create a Microsoft Teams webinar (occurring 6-8 weeks in the future).  Template:</p></li>
+</ol>
+<pre>
+Title: “Triton Community Meetup (online)”
+External presenter: **“<your name>”**
+Co-organizer: **add organizers**
+    Date: **Add date**
+    Time: 10:00-11:00 PDT
+    Duration: 1 hr
+    Recurring meeting: link **(created by XXX@YYY.com)**
+</pre>
+<ol class="arabic simple" start="2">
+<li><p>If you don’t have details about the meeting (e.g. meeting ID, passcode, phone number, etc.) you can login to the meeting, click on More -&gt; Meeting Info and get data that way.</p></li>
+</ol>
+<div align="center">
+  <img src="https://private-user-images.githubusercontent.com/85795580/459649518-f9a924df-2020-4dde-b8bb-e901a9298cef.png?jwt=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTUiLCJleHAiOjE3NTE1NTg1MzEsIm5iZiI6MTc1MTU1ODIzMSwicGF0aCI6Ii84NTc5NTU4MC80NTk2NDk1MTgtZjlhOTI0ZGYtMjAyMC00ZGRlLWI4YmItZTkwMWE5Mjk4Y2VmLnBuZz9YLUFtei1BbGdvcml0aG09QVdTNC1ITUFDLVNIQTI1NiZYLUFtei1DcmVkZW50aWFsPUFLSUFWQ09EWUxTQTUzUFFLNFpBJTJGMjAyNTA3MDMlMkZ1cy1lYXN0LTElMkZzMyUyRmF3czRfcmVxdWVzdCZYLUFtei1EYXRlPTIwMjUwNzAzVDE1NTcxMVomWC1BbXotRXhwaXJlcz0zMDAmWC1BbXotU2lnbmF0dXJlPTM0YzI3OGRmMWI1NDk2NjQxOTJhMmJiNTM5ZDg4ZGZjOTk4OGM2YWRkNTk1ZTY4NjNhMjk2ZWZlZDhiZDYzZGEmWC1BbXotU2lnbmVkSGVhZGVycz1ob3N0In0.6bgthh7pHDV-ooMMm1WsgbbLJH39nzk-DPre6GDjZnI" alt="Microsoft Meeting info pane">
+</div>
+<ol class="arabic simple" start="3">
+<li><p>Copy the invite generated from the meeting to <a class="reference external" href="https://app.slack.com/huddle/T01379XQ9FG/C013E22BPPC">triton #general chat</a> on slack. Example text to use in slack:</p></li>
+</ol>
+<pre>
+The next community meetup will be on <date> from 10am-11am PST. The meeting link is below. If anyone has agenda items to add for the meetup please reach out to me.
+
+Thanks,
+**<your name>**
+----
+Microsoft Teams Need help?
+Join the meeting now <- **change this**
+Meeting ID: 247 993 489 59 <- **change this**
+Passcode: Dg8TLJ <- **change this**
+Dial in by phone
++1 323-849-4874,,637393478# United States, Los Angeles <- **change this**
+Find a local number
+Phone conference ID: 637 393 478# <- **change this**
+</pre>
+<ol class="arabic simple" start="4">
+<li><p>Post the same invite to the <a class="reference external" href="https://discord.com/channels/1189498204333543425/1189607595451895918">#triton channel on Discord GPU_MODE</a>. You will need to join GPU_MODE to post to it.</p></li>
+<li><p>1-2 Days before the meeting. Verify that someone with corp Microsoft Teams access will open the meeting up for you.</p></li>
+<li><p>Day before meeting, post reminders to slack and discord (reply to your original message):
+Reminder, this month’s community meetup is tomorrow at 10am PST.</p></li>
+</ol>
+<pre>
+Agenda:
+   Topic #1 <who>
+   Topic #2 <who>
+</pre>
+<ol class="arabic simple" start="7">
+<li><p>Day of meeting, login a little early and verify everything is working as expected.</p></li>
+<li><p>During the meeting, keep an eye on the comments section. Some folks might post questions for the speaker there and/or issues they’re having with Teams.</p></li>
+<li><p>After the meeting has finished, work with the person with corp Microsoft Teams access to upload the recorded video to youtube.  Post the youtube link in <a class="reference external" href="https://app.slack.com/huddle/T01379XQ9FG/C013E22BPPC">triton #general chat</a>.</p></li>
+</ol>
+<p>If this is your first time using Microsoft Teams, work with the meeting creator to test out the UI (e.g. logging in, verifying your camera, audio work, verifying you can present your screen if using that functionality, play around with hand raising, play around with people/attendees/muting others, log off and log back in again.)</p>
+</section>
+<section id="how-to-upload-videos-to-youtube">
+<h1>How to upload videos to Youtube<a class="headerlink" href="#how-to-upload-videos-to-youtube" title="Link to this heading">¶</a></h1>
+<ol class="arabic simple">
+<li><p>Register to use youtube. That is, the top right symbol when you go to youtube.com should be your login.</p></li>
+</ol>
+<div align="center">
+  <img src="https://private-user-images.githubusercontent.com/85795580/459649516-4bea87d7-1c6b-4331-92c1-e480b2f3d295.png?jwt=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTUiLCJleHAiOjE3NTE1NTg1MzEsIm5iZiI6MTc1MTU1ODIzMSwicGF0aCI6Ii84NTc5NTU4MC80NTk2NDk1MTYtNGJlYTg3ZDctMWM2Yi00MzMxLTkyYzEtZTQ4MGIyZjNkMjk1LnBuZz9YLUFtei1BbGdvcml0aG09QVdTNC1ITUFDLVNIQTI1NiZYLUFtei1DcmVkZW50aWFsPUFLSUFWQ09EWUxTQTUzUFFLNFpBJTJGMjAyNTA3MDMlMkZ1cy1lYXN0LTElMkZzMyUyRmF3czRfcmVxdWVzdCZYLUFtei1EYXRlPTIwMjUwNzAzVDE1NTcxMVomWC1BbXotRXhwaXJlcz0zMDAmWC1BbXotU2lnbmF0dXJlPWVjNWUxMTIzNTA4MGQxMmRkMjQ1NWQzMzFhMTIwNmVhZDNhMmJlMWQwMDQwYmUyNmQ4YTkwNTUxMTI3ZWJjNjAmWC1BbXotU2lnbmVkSGVhZGVycz1ob3N0In0.RUIK1GbqVtC8sfu_2ntb8to9FFQv7MfHrYbvNCfLCh8" alt="Youtube Login">
+</div>
+<ol class="arabic simple" start="2">
+<li><p>Click on https://www.youtube.com/feed/you</p></li>
+<li><p>Click on “+ Create” on top next to search box.</p></li>
+<li><p>Select the video you want to upload</p></li>
+<li><p>For Title use something like “Triton Community Meetup May 2025”</p></li>
+<li><p>No, it’s not made for kids</p></li>
+<li><p>No video elements</p></li>
+<li><p>Save or publish: “public”</p></li>
+<li><p>Make a copy of the video link so you can post it on slack and discord. (like: https://youtu.be/kJjBurkPn_8)</p></li>
+</ol>
+</section>
+<section id="past-community-meetups">
+<h1>Past community meetups<a class="headerlink" href="#past-community-meetups" title="Link to this heading">¶</a></h1>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Date</p></th>
+<th class="head"><p>Meet setup</p></th>
+<th class="head"><p>Agenda &amp; who</p></th>
+<th class="head"><p>Recording</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>2025-05-01</p></td>
+<td><p><a class="reference external" href="https://tinyurl.com/mr397f6x">Link</a></p></td>
+<td><p>Topic: what are plans for existing block pointer programming model? (Context: Intel GPU backend relies heavily on it and will need time to fully move to tensor descriptor programming model.) - Jianhui Li, Intel <br/> Topic: infrastructure for Triton performance tests - Sayce, Google<br/>Topic: what talks/tutorials/open discussions would you like to see at the 2025 Triton Developers’ Summit? How can we help? - Adnan Aziz, Meta <br/> Topic: what are plans for existing block pointer programming model? (Context: Intel GPU backend relies heavily on it and will need time to fully move to tensor descriptor programming model.) - Jianhui Li, Intel<br/>Topic: infrastructure for Triton performance tests - Sayce, Google<br/>Topic: what talks/tutorials/open discussions would you like to see at the 2025 Triton Developers’ Summit? How can we help? - Adnan Aziz, Meta </pre></p></td>
+<td><p>https://www.youtube.com/watch?v=W16BrXc5BYE</p></td>
+</tr>
+<tr class="row-odd"><td><p>2025-07-09</p></td>
+<td><p><a class="reference external" href="https://tinyurl.com/mus5wyax">Link</a></p></td>
+<td><p>Topic: Gluon update - Jeff Niu, OpenAI <br/> Topic: Interest and requirements for a nightly performance regression suite - Simon Waters,  kernelize.ai<br/>Triton developer’s summit update - Ofer Dekel, Microsoft</p></td>
+<td><p></p></td>
+</tr>
+</tbody>
+</table>
+</section>
+
+
+           </div>
+          </div>
+          <footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2020, Philippe Tillet.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

@@ -1709,3 +1709,32 @@ Effects: `MemoryEffects::Effect{}`
 | :----: | ----------- |
 | `result` | ranked tensor of floating-point or integer or ptr values |
 
+
+### `tt.unsplat` (triton::UnsplatOp)
+
+_Convert a tensor with a single element to a scalar_
+
+Syntax:
+
+```
+operation ::= `tt.unsplat` $src attr-dict `:` type($src)
+```
+
+Traits: `AlwaysSpeculatableImplTrait`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
+
+Interfaces: `ConditionallySpeculatable`, `InferTypeOpInterface`, `NoMemoryEffect (MemoryEffectOpInterface)`
+
+Effects: `MemoryEffects::Effect{}`
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `src` | ranked tensor of floating-point or integer or ptr values |
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `result` | floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values or ptr |
+
