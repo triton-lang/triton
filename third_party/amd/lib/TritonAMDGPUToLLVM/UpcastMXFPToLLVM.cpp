@@ -22,6 +22,41 @@ using namespace mlir::triton::gpu;
 
 namespace {
 
+SmallVector<Value, 4> upcast8xMxfp4_HW(RewriterBase &rewriter,
+                                    amdgpu::UpcastMXFPOp upcastOp, bool tofp16,
+                                    Value packedVec) {
+  
+  Location loc = upcastOp.getLoc();
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+
+  Type retElemType = tofp16 ? f16_ty : bf16_ty;
+  Type resType = vec_ty(retElemType, 2);
+  Value scale = b.f32_val(1);
+  packedVec = b.bitcast(packedVec, i32_ty);
+  Value ret0, ret1, ret2, ret3;
+  if ( tofp16) {
+    ret0 = rewriter.create<ROCDL::CvtScaleF32PkF16Fp4Op>(loc, resType, packedVec , scale,
+                                           /*srcSelIndex=*/0);
+    ret1 = rewriter.create<ROCDL::CvtScaleF32PkF16Fp4Op>(loc, resType, packedVec, scale,
+                                           /*srcSelIndex=*/1);
+    ret2 = rewriter.create<ROCDL::CvtScaleF32PkF16Fp4Op>(loc, resType, packedVec , scale,
+                                           /*srcSelIndex=*/2);
+    ret3 = rewriter.create<ROCDL::CvtScaleF32PkF16Fp4Op>(loc, resType, packedVec, scale,
+                                           /*srcSelIndex=*/3);
+  }
+  else {
+    ret0 = rewriter.create<ROCDL::CvtScaleF32PkBf16Fp4Op>(loc, resType, packedVec , scale,
+                                           /*srcSelIndex=*/0);
+    ret1 = rewriter.create<ROCDL::CvtScaleF32PkBf16Fp4Op>(loc, resType, packedVec, scale,
+                                           /*srcSelIndex=*/1);
+    ret2 = rewriter.create<ROCDL::CvtScaleF32PkBf16Fp4Op>(loc, resType, packedVec , scale,
+                                           /*srcSelIndex=*/2);
+    ret3 = rewriter.create<ROCDL::CvtScaleF32PkBf16Fp4Op>(loc, resType, packedVec, scale,
+                                           /*srcSelIndex=*/3);
+  }
+  return {ret0, ret1, ret2, ret3};
+}
+
 SmallVector<Value, 4> upcast8xMxfp4(RewriterBase &rewriter,
                                     amdgpu::UpcastMXFPOp upcastOp, bool tofp16,
                                     Value packedVec) {
@@ -168,6 +203,9 @@ SmallVector<Value> upcastMxfp4(RewriterBase &rewriter,
   assert(values.size() % 4 == 0);
   Location loc = upcastOp.getLoc();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Value fp16OVFLModeRegLoc = b.i32_val(1473);
+  LLVM::createLLVMIntrinsicCallOp(rewriter, loc, "llvm.amdgcn.s.setreg", {},
+                                  {fp16OVFLModeRegLoc, b.i32_val(1)});
 
   SmallVector<Value> results;
   results.reserve(values.size() * 2);
@@ -183,7 +221,7 @@ SmallVector<Value> upcastMxfp4(RewriterBase &rewriter,
     packedVec = b.insert_element(packedVec, v2, b.i32_val(2));
     packedVec = b.insert_element(packedVec, v3, b.i32_val(3));
     SmallVector<Value, 4> v4i32 =
-        upcast8xMxfp4(rewriter, upcastOp, toFp16, packedVec);
+        upcast8xMxfp4_HW(rewriter, upcastOp, toFp16, packedVec);
     for (int j = 0; j < 4; j++) {
       Value elements = b.bitcast(v4i32[j], vec_ty(elemType, 2));
       results.push_back(b.extract_element(elements, b.i32_val(0)));
