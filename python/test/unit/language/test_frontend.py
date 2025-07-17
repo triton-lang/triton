@@ -562,4 +562,4 @@ def test_return_in_while():
     with pytest.raises(CompilationError) as e:
         kernel.warmup(grid=(1, ))
 
-    assert "Cannot have `return` statements inside `while` or `for` statements in triton" in str(e.value.__cause__)
+    assert "Cannot have `return` statements inside `while` or `for` statements in triton" in str(e.value)
