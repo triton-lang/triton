@@ -21,7 +21,6 @@
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 #include "../PatternTritonGPUOpToLLVM.h"
-#include "../TritonAMDGPUToLLVM/SchedInstructions.h"
 #include "TritonAMDGPUTransforms/MfmaGroup.h"
 #include "Utility.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
@@ -145,6 +144,8 @@ struct DotOpMFMAConversionHelper {
       Value zero;
       if (elemType.isInteger(32))
         zero = b.i32_val(0);
+      else if (elemType.isF64())
+        zero = b.f64_val(0.0);
       else
         zero = b.f32_val(0.0);
       auto cond = b.icmp_ult(laneId, b.i32_val(subBlockSize));
@@ -462,9 +463,9 @@ struct DotOpMFMAConversionHelper {
           }
 
           // Step 2: process rawElems based on element type
-          // Note that for f32 input and XF32 is not allowed, nothing needs to
-          // be done and rawElems is inserted into the ValueTable directly
-          if (type.isF32() && !allowXF32) {
+          // Note that for f32/fp64 input and XF32 is not allowed, nothing needs
+          // to be done and rawElems is inserted into the ValueTable directly
+          if ((type.isF32() || type.isF64()) && !allowXF32) {
             dotOpVals[{b, nonK, kBaseVec}] =
                 tb.extract_element(type, rawElems, tb.i32_val(0));
           } else {

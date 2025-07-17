@@ -87,12 +87,22 @@ namespace mlir::triton::NVIDIA {
 
 // Check if the reduction can use a redux op and return the kind.
 static std::optional<NVVM::ReduxKind> matchReduxKind(triton::ReduceOp op,
-                                                     int computeCapability) {
+                                                     int computeCapability,
+                                                     bool &useNanQualifier) {
+  useNanQualifier = false;
   if (computeCapability < 80)
     return std::nullopt;
   Operation *reduceOp = op.getSingleCombiner();
   if (!reduceOp)
     return std::nullopt;
+  if (computeCapability == 100 && reduceOp->getResultTypes()[0].isF32()) {
+    if (isa<arith::MinimumFOp, arith::MaximumFOp>(reduceOp))
+      useNanQualifier = true;
+    if (isa<arith::MaxNumFOp, arith::MaximumFOp>(reduceOp))
+      return NVVM::ReduxKind::FMAX;
+    if (isa<arith::MinNumFOp, arith::MinimumFOp>(reduceOp))
+      return NVVM::ReduxKind::FMIN;
+  }
   auto intType = dyn_cast<IntegerType>(reduceOp->getResultTypes()[0]);
   if (!intType || intType.getWidth() > 32)
     return std::nullopt;
@@ -434,7 +444,8 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
                             unsigned numLaneToReduce,
                             unsigned interleave) const {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  if (auto kind = matchReduxKind(op, computeCapability)) {
+  bool useNanQualifier = false;
+  if (auto kind = matchReduxKind(op, computeCapability, useNanQualifier)) {
     // Based on benchmarking on A100 redux op gives a speed up only when doing
     // a single reduction (not partitioned) and when the mask is static.
     // Therefore we currently only enable it to reduce across all the lanes.
@@ -452,17 +463,22 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
                      b.and_(laneId, b.i32_val(~(numLaneToReduce - 1))));
       }
       for (unsigned i = 0; i < acc.size(); ++i) {
-        unsigned bitwidth = cast<IntegerType>(acc[i].getType()).getWidth();
-        if (bitwidth < 32) {
-          if (*kind == NVVM::ReduxKind::MIN || *kind == NVVM::ReduxKind::MAX)
-            acc[i] = b.sext(i32_ty, acc[i]);
-          else
-            acc[i] = b.zext(i32_ty, acc[i]);
+        unsigned bitwidth = acc[i].getType().getIntOrFloatBitWidth();
+        if (acc[i].getType().isInteger()) {
+          if (bitwidth < 32) {
+            if (*kind == NVVM::ReduxKind::MIN || *kind == NVVM::ReduxKind::MAX)
+              acc[i] = b.sext(i32_ty, acc[i]);
+            else
+              acc[i] = b.zext(i32_ty, acc[i]);
+          }
         }
         acc[i] = rewriter.create<NVVM::ReduxOp>(loc, acc[i].getType(), acc[0],
-                                                *kind, mask);
-        if (bitwidth < 32)
-          acc[i] = b.trunc(int_ty(bitwidth), acc[i]);
+                                                *kind, mask, /*abs=*/false,
+                                                /*nan=*/useNanQualifier);
+        if (acc[i].getType().isInteger()) {
+          if (bitwidth < 32)
+            acc[i] = b.trunc(int_ty(bitwidth), acc[i]);
+        }
       }
       return true;
     }
@@ -534,7 +550,7 @@ void TargetInfo::storeMatrixShared(RewriterBase &rewriter, Location loc,
     }
     inputs.push_back(b.bitcast(input, i32_ty));
   }
-  rewriter.create<triton::nvgpu::StoreMatrixOp>(loc, ptr, inputs);
+  rewriter.create<NVVM::StMatrixOp>(loc, ptr, inputs, NVVM::MMALayout::row);
 }
 
 std::string TargetInfo::getMulhiFuncName(Type resultElementTy) const {

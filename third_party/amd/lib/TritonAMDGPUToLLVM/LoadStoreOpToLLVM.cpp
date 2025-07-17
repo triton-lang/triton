@@ -3,7 +3,6 @@
 #include "BufferOpsEmitter.h"
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "PatternTritonGPUOpToLLVM.h"
-#include "SchedInstructions.h"
 #include "TargetInfo.h"
 #include "Utility.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
@@ -170,11 +169,8 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
       return failure();
     }
     // Compute the blocked -> shared linear layout to check preconditions
-    auto shape = srcTy.getShape();
-    LinearLayout srcLayout =
-        triton::gpu::toLinearLayout(shape, srcTy.getEncoding());
-    LinearLayout sharedLayout =
-        triton::gpu::toLinearLayout(shape, dstTy.getEncoding());
+    LinearLayout srcLayout = triton::gpu::toLinearLayout(srcTy);
+    LinearLayout sharedLayout = triton::gpu::toLinearLayout(dstTy);
     LinearLayout srcToSharedLayout = srcLayout.invertAndCompose(sharedLayout);
 
     unsigned threadsPerWarp = lookupThreadsPerWarp(rewriter);
@@ -220,8 +216,7 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
 
     auto smemObj = mlir::LLVM::getSharedMemoryObjectFromStruct(
         loc, llDst, resElemTy, rewriter);
-    auto regLayout =
-        triton::gpu::toLinearLayout(srcTy.getShape(), srcTy.getEncoding());
+    auto regLayout = triton::gpu::toLinearLayout(srcTy);
 
     // The warp ID is always a scalar so we use the ThreadId from the first lane
     // to compute the warp ID which improves codegen. shuffleIdx will be lowered
@@ -266,12 +261,10 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
                                    flatSharedEnc, dstTy.getMemorySpace());
 
     // Create regToShared layout for the swizzled and flat encoding
-    auto regLayout =
-        triton::gpu::toLinearLayout(srcTy.getShape(), srcTy.getEncoding());
-    auto shape = dstTy.getShape();
+    auto regLayout = triton::gpu::toLinearLayout(srcTy);
 
-    auto sharedSwizz = triton::gpu::toLinearLayout(shape, dstTy.getEncoding());
-    auto sharedFlat = triton::gpu::toLinearLayout(shape, flatTy.getEncoding());
+    auto sharedSwizz = triton::gpu::toLinearLayout(dstTy);
+    auto sharedFlat = triton::gpu::toLinearLayout(flatTy);
 
     auto regToSharedSwizzled = regLayout.invertAndCompose(sharedSwizz);
     auto regToSharedFlat = regLayout.invertAndCompose(sharedFlat);
@@ -1536,6 +1529,29 @@ struct AtomicRMWOpConversion
           valElement = vecVal;
         }
 
+        // If we have a single tl.atomic_rmw that is lowered into multiple
+        // llvm.atomic_rmw, and we set the ordering for each to aql_rel (the
+        // default if no sem value is explicitly set in the DSL level
+        // tl.atomic_add. The llvm backend will insert extra buffer invalidates
+        // and L2 write backs causing a perforance degration. To avoid this we
+        // set the ordering to release for the first, acquire for the last, and
+        // relaxed for anything in between so that only a single set of
+        // buffer_inv and buffer_wbl2 instructions are inserted by the backend
+        // for any "cluster" of atomic ops.
+        if ((vec > 1 || elemsPerThread > 1) &&
+            op.getSem() == MemSemantic::ACQUIRE_RELEASE) {
+          if (i == 0) {
+            // First
+            emitter.setAtomicOrdering(LLVM::AtomicOrdering::release);
+          } else if (i == elemsPerThread - vec) {
+            // Last
+            emitter.setAtomicOrdering(LLVM::AtomicOrdering::acquire);
+          } else {
+            // Middle
+            emitter.setAtomicOrdering(LLVM::AtomicOrdering::monotonic);
+          }
+        }
+
         Value retVal =
             emitter.emitAtomicRMW(rewriter, ptrElements[i], valElement, rmwMask,
                                   atomicSharedMemBase, enableIntraWaveReduce);
@@ -1555,6 +1571,7 @@ struct AtomicRMWOpConversion
           Value atomPtr = *atomicSharedMemBase;
           b.barrier();
           Value ret = b.load(valueElemTy, atomPtr);
+
           rewriter.replaceOp(op, {ret});
         }
       }

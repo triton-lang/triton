@@ -206,19 +206,6 @@ private:
   Constraints inputConstraints;
 };
 
-class FenceAsyncSharedOpPattern
-    : public OpRewritePattern<ttn::FenceAsyncSharedOp> {
-public:
-  using OpRewritePattern<ttn::FenceAsyncSharedOp>::OpRewritePattern;
-
-  LogicalResult matchAndRewrite(ttn::FenceAsyncSharedOp op,
-                                PatternRewriter &rewriter) const override {
-    std::string ptxAsm = op.getBCluster() ? "fence.proxy.async.shared::cluster;"
-                                          : "fence.proxy.async.shared::cta;";
-    return rewriteAsPtxAsm(op, rewriter, std::move(ptxAsm));
-  }
-};
-
 class WarpIdOpPattern : public OpRewritePattern<ttn::WarpIdOp> {
 public:
   using OpRewritePattern<ttn::WarpIdOp>::OpRewritePattern;
@@ -264,7 +251,8 @@ public:
     // Template method for PTX assembly generation
     std::string ptxAsm =
         (llvm::Twine(ConcreteMatrixOpPattern::kOpCode) +
-         getPtxModifiers(vecSize, trans) + " " + getOperands(op, vecSize) + ";")
+         getPtxModifiers(vecSize, trans, op.getShape(), op.getBitWidth()) +
+         " " + getOperands(op, vecSize) + ";")
             .str();
 
     OperandsAndConstraints operandAndConstraints =
@@ -277,16 +265,29 @@ public:
 
 protected:
   // Shared helper methods
-  std::string getPtxModifiers(unsigned vecSize, bool trans) const {
-    auto ptxAsmBase = llvm::Twine(".sync.aligned.m8n8");
-    const std::string suffix = trans ? ".trans.shared.b16" : ".shared.b16";
+  std::string getPtxModifiers(unsigned vecSize, bool trans,
+                              triton::nvgpu::LoadMatrixShape shape,
+                              int bitWidth) const {
+    std::string ptxAsmBase = std::string(".sync.aligned");
+    switch (shape) {
+    case triton::nvgpu::LoadMatrixShape::m8n8:
+      ptxAsmBase += ".m8n8";
+      break;
+    case triton::nvgpu::LoadMatrixShape::m16n16:
+      ptxAsmBase += ".m16n16";
+      break;
+    default:
+      llvm_unreachable("Invalid load matrix shape");
+    }
+    std::string suffix = trans ? ".trans.shared" : ".shared";
+    suffix += ".b" + std::to_string(bitWidth);
     switch (vecSize) {
     case 1:
-      return (ptxAsmBase + ".x1" + suffix).str();
+      return ptxAsmBase + ".x1" + suffix;
     case 2:
-      return (ptxAsmBase + ".x2" + suffix).str();
+      return ptxAsmBase + ".x2" + suffix;
     case 4:
-      return (ptxAsmBase + ".x4" + suffix).str();
+      return ptxAsmBase + ".x4" + suffix;
     default:
       llvm_unreachable("Invalid vector size");
     }
@@ -315,42 +316,6 @@ protected:
   virtual Constraints getOutputConstraints(MatrixOpType op,
                                            unsigned vecSize) const = 0;
   virtual unsigned getVectorSize(MatrixOpType op) const = 0;
-};
-
-// StoreMatrixOp Pattern
-class StoreMatrixOpPattern
-    : public MatrixOpPattern<ttn::StoreMatrixOp, StoreMatrixOpPattern> {
-public:
-  using MatrixOpPattern<ttn::StoreMatrixOp,
-                        StoreMatrixOpPattern>::MatrixOpPattern;
-  static constexpr const char *kOpCode = "stmatrix";
-
-protected:
-  unsigned getVectorSize(ttn::StoreMatrixOp op) const override {
-    return op.getVals().size();
-  }
-
-  std::string getOperands(ttn::StoreMatrixOp op,
-                          unsigned vecSize) const override {
-    return (llvm::Twine(getPtxAddrOperand(0)) + ", " +
-            getPtxRegOperands(1, vecSize))
-        .str();
-  }
-
-  OperandsAndConstraints
-  getOperandsAndConstraints(ttn::StoreMatrixOp op,
-                            unsigned vecSize) const override {
-    OperandsAndConstraints constraints = {{op.getAddr(), "r"}};
-    for (unsigned i = 0; i < vecSize; i++) {
-      constraints.push_back({op.getVals()[i], "r"});
-    }
-    return constraints;
-  }
-
-  Constraints getOutputConstraints(ttn::StoreMatrixOp op,
-                                   unsigned vecSize) const override {
-    return {}; // No output constraints for StoreMatrixOp
-  }
 };
 
 // LoadMatrixOp Pattern
@@ -774,8 +739,7 @@ public:
     patterns.add<NVGPUOpGenericPattern<ttn::ClusterCTAIdOp>>(
         context, kClusterCtaIdOp, Constraints({"=r"}), Constraints());
 
-    patterns.add<FenceAsyncSharedOpPattern, LoadMatrixOpPattern,
-                 StoreMatrixOpPattern, WGMMAOpPattern, LoadAcquireOpPattern,
+    patterns.add<LoadMatrixOpPattern, WGMMAOpPattern, LoadAcquireOpPattern,
                  WGMMAWaitGroupOpPattern, WarpIdOpPattern>(context);
 
     if (applyPatternsGreedily(mod, std::move(patterns)).failed())

@@ -64,18 +64,16 @@ unsigned getPointeeBitWidth(Type type) {
 Type getI1SameShape(Type type) {
   auto i1Type = IntegerType::get(type.getContext(), 1);
   if (auto tensorTy = dyn_cast<RankedTensorType>(type))
-    return RankedTensorType::get(tensorTy.getShape(), i1Type,
-                                 tensorTy.getEncoding());
+    return tensorTy.clone(i1Type);
   return i1Type;
 }
 
 Type getPointeeType(Type type) {
   if (auto tensorTy = dyn_cast<RankedTensorType>(type)) {
     // Tensor of pointers
-    auto shape = tensorTy.getShape();
     auto ptrType = dyn_cast<PointerType>(tensorTy.getElementType());
     Type pointeeType = ptrType.getPointeeType();
-    return RankedTensorType::get(shape, pointeeType, tensorTy.getEncoding());
+    return tensorTy.clone(pointeeType);
   } else if (auto ptrType = dyn_cast<PointerType>(type)) {
     // scalar pointer
     Type pointeeType = ptrType.getPointeeType();
@@ -87,17 +85,15 @@ Type getPointeeType(Type type) {
 Type getI32SameShape(Type type) {
   auto i32Type = IntegerType::get(type.getContext(), 32);
   if (auto tensorTy = dyn_cast<RankedTensorType>(type))
-    return RankedTensorType::get(tensorTy.getShape(), i32Type,
-                                 tensorTy.getEncoding());
+    return tensorTy.clone(i32Type);
   return i32Type;
 }
 
 Type getPointerTypeSameShape(Type type) {
   if (auto tensorTy = dyn_cast<RankedTensorType>(type)) {
     Type elementType = tensorTy.getElementType();
-    auto shape = tensorTy.getShape();
     PointerType ptrType = PointerType::get(elementType, 1);
-    return RankedTensorType::get(shape, ptrType, tensorTy.getEncoding());
+    return tensorTy.clone(ptrType);
   } else {
     return PointerType::get(type, 1);
   }

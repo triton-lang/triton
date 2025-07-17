@@ -5,6 +5,7 @@
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Types.h"
+#include "triton/Dialect/TritonNvidiaGPU/Transforms/Utility.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVectorExtras.h"
 
@@ -20,7 +21,8 @@ LogicalResult ArefCreateOp::verify() {
   SmallVector<int> dims;
   for (auto operand : getOperands()) {
     SmallVector<Operation *> users(operand.user_begin(), operand.user_end());
-    if (users.size() != 1)
+    if (!llvm::all_of(users,
+                      [](Operation *op) { return isa<ArefCreateOp>(op); }))
       return emitError("Aref buffer is used elsewhere, Aref cannot guarantee "
                        "async safety");
     auto type = operand.getType();
@@ -91,7 +93,25 @@ LogicalResult WarpGroupOp::verify() {
   auto numWarps = getNumWarps();
   auto regions = getRegions();
   if (numWarps.size() != regions.size())
-    return emitError("Must supply numWarps for each Warp Group");
+    return emitError("Must supply numWarps for each Warp Group.");
+  if (getResults().size() > 0) {
+    if (regions.size() == 0) {
+      return emitError("Must have at least one region when there are results.");
+    }
+    if (!isa<nvws::WarpGroupYieldOp>(
+            regions.front()->front().getTerminator())) {
+      return emitError("When nvws.warp_group op has results, the first region "
+                       "should be terminated by nvws.warp_group.yield op.");
+    }
+    auto yieldOp =
+        cast<nvws::WarpGroupYieldOp>(regions.front()->front().getTerminator());
+    if (getResults().size() != yieldOp.getNumOperands()) {
+      return emitError(
+          "Mismatch in the number of results returned by nvws.warp_group op "
+          "and the number of the operands of the corresponding "
+          "nvws.warp_group.yield op in the first region.");
+    }
+  }
   return success();
 }
 
@@ -137,6 +157,24 @@ void CreateTokenOp::build(::mlir::OpBuilder &builder,
   auto tokenType = TokenType::get(builder.getContext());
   auto resultType = RankedTensorType::get({num}, tokenType);
   build(builder, state, resultType, num, loadType);
+}
+
+// -- AsyncCompleteOp --
+LogicalResult AsyncCompleteOp::verify() {
+  if (failed(nvidia_gpu::verifyBarrierType(*this, getAlloc().getType())))
+    return failure();
+  return success();
+}
+
+void AsyncCompleteOp::getEffects(
+    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
+        &effects) {
+  effects.emplace_back(MemoryEffects::Read::get(), &getAllocMutable(),
+                       mlir::triton::gpu::SharedMemory::get());
+  // Need a side effect to prevent compiler from reordering and removing
+  // the arrive operation.
+  effects.emplace_back(MemoryEffects::Write::get(),
+                       mlir::SideEffects::DefaultResource::get());
 }
 
 } // namespace mlir::triton::nvws

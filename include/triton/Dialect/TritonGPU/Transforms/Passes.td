@@ -106,7 +106,8 @@ def TritonGPUAutomaticWarpSpecialization : Pass<"tritongpu-automatic-warp-specia
     "mlir::triton::gpu::TritonGPUDialect",
     "mlir::scf::SCFDialect",
     "mlir::arith::ArithDialect",
-    "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
+    "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect",
+    "triton::nvws::NVWSDialect"
   ];
 
   let options = [
@@ -143,7 +144,10 @@ def TritonGPUPartitionLoops : Pass<"tritongpu-partition-loops", "mlir::ModuleOp"
     between any of the partitions.
   }];
 
-  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect"];
+  let dependentDialects = [
+    "mlir::triton::gpu::TritonGPUDialect",
+    "triton::nvws::NVWSDialect"
+  ];
 }
 
 def TritonGPUOptimizePartitionWarps : Pass<"tritongpu-optimize-partition-warps", "mlir::ModuleOp"> {
@@ -358,20 +362,6 @@ def TritonGPUCoalesceAsyncCopy: Pass<"tritongpu-coalesce-async-copy", "mlir::Mod
 
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
                            "mlir::triton::TritonDialect"];
-}
-
-def TritonGPUCanonicalize: Pass<"tritongpu-canonicalize"> {
-  let summary = "reduced set of simplifications for TTGIR";
-
-  let description = [{
-    The `tritongpu-canonicalize` pass applies a reduced set of simplification
-    and canonicalization patterns to the module.
-  }];
-  let dependentDialects = [
-    "mlir::arith::ArithDialect",
-    "mlir::cf::ControlFlowDialect",
-    "mlir::scf::SCFDialect",
-  ];
 }
 
 #endif

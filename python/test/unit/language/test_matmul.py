@@ -112,8 +112,6 @@ def test_simple_matmul(dtype_src_str, dtype_dst_str, BLOCK_M, BLOCK_N, BLOCK_K, 
         pytest.skip("Float8 requires compute capability >= 9")
     if (dtype_src_str == "float64") != (dtype_dst_str == "float64"):
         pytest.skip("Skipping unsupported case")
-    if dtype_src_str == "float64" and not is_cuda():
-        pytest.skip("Float64 not supported on HIP yet")
     if "float32" in dtype_src_str and dtype_dst_str == "float16":
         pytest.skip("Skipping unsupported case")
     if "float32" == dtype_src_str and NUM_CTAS > 1:

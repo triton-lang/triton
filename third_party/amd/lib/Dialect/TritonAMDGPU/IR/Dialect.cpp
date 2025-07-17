@@ -68,10 +68,14 @@ bool hasMatchingCTATileLayoutForSliceConcat(
     std::function<void(const Twine &)> emitError) {
   auto srcShape = srcTy.getShape();
   auto dstShape = dstTy.getShape();
-  auto srcLL = triton::gpu::toLinearLayout(srcShape, srcTy.getEncoding());
-  auto dstLL = triton::gpu::toLinearLayout(dstShape, dstTy.getEncoding());
+  auto srcLL = triton::gpu::toLinearLayout(srcTy);
+  auto dstLL = triton::gpu::toLinearLayout(dstTy);
 
   MLIRContext *ctx = srcTy.getContext();
+  auto kReg = StringAttr::get(ctx, "register");
+  srcLL = srcLL.removeZeroBasesAlongDim(kReg);
+  dstLL = dstLL.removeZeroBasesAlongDim(kReg);
+
   auto getBases = [&](StringRef name) {
     auto key = StringAttr::get(ctx, name);
     return std::pair{srcLL.getBases().lookup(key),
@@ -98,14 +102,22 @@ bool hasMatchingCTATileLayoutForSliceConcat(
     numCTAs *= srcShape[d] / shapeCTASrc[d];
   }
 
-  unsigned elemsPerThreadPerCTA =
-      triton::gpu::getTotalElemsPerThread(srcTy) / numCTAs;
-  unsigned regCompareLen = std::log2(elemsPerThreadPerCTA);
+  assert(llvm::isPowerOf2_32(numCTAs) &&
+         "expect number of CTAs to be power of 2");
+
+  unsigned totalElemsPerThreadNoBroadcastLog = regSrc.size();
+  unsigned elemsPerThreadPerCTALog =
+      totalElemsPerThreadNoBroadcastLog - llvm::Log2_32(numCTAs);
+  unsigned regCompareLen = elemsPerThreadPerCTALog;
 
   auto compareBasis = [&](auto &srcBasis, auto &dstBasis, StringRef message,
                           int limit = -1) {
     int n = (limit < 0 ? srcBasis.size()
                        : std::min<unsigned>(srcBasis.size(), limit));
+    if (dstBasis.size() < n) {
+      emitError(message);
+      return false;
+    }
     for (size_t i = 0; i < n; ++i) {
       if (srcBasis[i] != dstBasis[i]) {
         emitError(message);
@@ -361,9 +373,8 @@ LogicalResult InThreadTransposeOp::verify() {
     return emitOpError("Expect input tensor in Blocked encoding");
   }
 
-  auto dstEncoding = dstTy.getEncoding();
   auto expectedLinearLayout = deduceOutputLayout(shape, srcEncoding);
-  auto dstLinearLayout = triton::gpu::toLinearLayout(shape, dstEncoding);
+  auto dstLinearLayout = triton::gpu::toLinearLayout(dstTy);
   if (dstLinearLayout != expectedLinearLayout) {
     return emitOpError("Expect output layout to be transposed per thread: " +
                        expectedLinearLayout.toString());
@@ -443,6 +454,61 @@ LogicalResult ConcatOp::verify() {
   if (!hasMatchingCTATileLayoutForSliceConcat(
           srcType, dstType, [&](const Twine &msg) { emitError() << msg; }))
     return failure();
+
+  return success();
+}
+
+LogicalResult LocalLoadPackedTransposedOp::verify() {
+  auto srcTy = getSrc().getType();
+  auto dstTy = getType();
+  auto srcShape = srcTy.getShape();
+
+  auto dotEnc = dyn_cast<DotOperandEncodingAttr>(dstTy.getEncoding());
+  if (!dotEnc)
+    return emitOpError("only works with DotOperandEncodingAttr dst encoding");
+
+  auto sharedEnc =
+      dyn_cast<triton::gpu::SwizzledSharedEncodingAttr>(srcTy.getEncoding());
+  if (!sharedEnc)
+    return emitOpError(
+        "only works with SwizzledSharedEncodingAttr src encoding");
+
+  auto order = sharedEnc.getOrder();
+  bool isA = dotEnc.getOpIdx() == 0;
+
+  // operand A: [0, 1] / [1, 2, 0]
+  // operand B: [1, 0] / [2, 1, 0]
+  bool hasBatchDim = srcShape.size() == 3;
+
+  if (isA) {
+    bool matchingOrderA =
+        order.equals({0, 1}) || (hasBatchDim && order.equals({1, 2, 0}));
+    if (!matchingOrderA)
+      return emitOpError("Order of dimensions don't match expected");
+
+    SmallVector<int64_t> srcShapeBasedOnDstA(dstTy.getShape());
+    srcShapeBasedOnDstA[hasBatchDim ? 1 : 0] /= 2;
+    srcShapeBasedOnDstA[hasBatchDim ? 2 : 1] *= 2;
+
+    bool aDimMatch = srcShape.equals(ArrayRef(srcShapeBasedOnDstA));
+    if (!aDimMatch)
+      return emitOpError(
+          "Input and output dimensions don't match after packing changes");
+  } else {
+    bool matchingOrderB =
+        order.equals({1, 0}) || (hasBatchDim && order.equals({2, 1, 0}));
+    if (!matchingOrderB)
+      return emitOpError("Order of dimensions don't match expected");
+
+    SmallVector<int64_t> srcShapeBasedOnDstB(dstTy.getShape());
+    srcShapeBasedOnDstB[hasBatchDim ? 1 : 0] *= 2;
+    srcShapeBasedOnDstB[hasBatchDim ? 2 : 1] /= 2;
+
+    bool bDimMatch = srcShape.equals(ArrayRef(srcShapeBasedOnDstB));
+    if (!bDimMatch)
+      return emitOpError(
+          "Input and output dimensions don't match after packing changes");
+  }
 
   return success();
 }
