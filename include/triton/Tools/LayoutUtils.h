@@ -148,6 +148,19 @@ LinearLayout reshapeLayout(MLIRContext *ctx, LinearLayout layout,
 // order.
 LinearLayout transposeLinearLayout(LinearLayout layout, ArrayRef<int> order);
 
+// For two layouts, `src` and `dst`, that differ only by a permutation of
+// their basis vectors, return a permutation layout `P` which satisfies
+// `dst` \circ `P` = `src`.
+//
+// The returned layout has the following properties:
+// - The orders of the input and output dimensions of `P` match the order of the
+//   input dimensions of `src`.
+// - The permutation has zero (broadcasting) vectors as fixed-points when
+//   possible. I.e., zero vectors at the same position in `src` and `dst` are
+//   mapped to themselves under `P`.
+LinearLayout
+basisPermutationLayout(const LinearLayout &src, const LinearLayout &dst);
+
 } // namespace mlir::triton
 
 #endif // TRITON_TOOLS_LAYOUTUTILS_H
