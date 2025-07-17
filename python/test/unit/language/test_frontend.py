@@ -540,7 +540,7 @@ def trivial_return():
 @filecheck_test
 @triton.jit
 def test_call_in_while():
-    # CHECK-LABEL: test_return_in_while
+    # CHECK-LABEL: test_call_in_while
     i = 0
     while i < 10:
         if i == 5:
