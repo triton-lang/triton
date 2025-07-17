@@ -74,7 +74,7 @@ jobs:
           du -h -d 1 ~/.triton
           mkdir -p /home/runner/.triton
           du -h -d 1 /home/runner/.triton
-          du -h -d 2 /__w/
+          du -h -d 2 /__w/triton/
 
           mkdir -p ~/.ccache
           du -h -d 1 ~/.ccache
