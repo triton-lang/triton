@@ -112,15 +112,16 @@ def tma_interleave_kernel(input_desc, XBLOCK: ttgl.constexpr, FAILURE: ttgl.cons
     mbarrier.expect(bar.index(1), XBLOCK * XBLOCK * ttgl.float16.primitive_bitwidth // 8)
     tma.async_copy_global_to_shared(input_desc, [0, 0], bar.index(0), smem.index(0))
     tma.async_copy_global_to_shared(input_desc, [0, 0], bar.index(1), smem.index(1))
+
+    mbarrier.wait(bar.index(0), 0)
     if not FAILURE:
-        mbarrier.wait(bar.index(0), 0)
-    mbarrier.wait(bar.index(1), 0)
+        mbarrier.wait(bar.index(1), 0)
 
     mbarrier.expect(bar.index(0), XBLOCK * XBLOCK * ttgl.float16.primitive_bitwidth // 8)
     mbarrier.expect(bar.index(1), XBLOCK * XBLOCK * ttgl.float16.primitive_bitwidth // 8)
     tma.async_copy_global_to_shared(input_desc, [0, 0], bar.index(0), smem.index(0))
-    mbarrier.wait(bar.index(0), 1)
     tma.async_copy_global_to_shared(input_desc, [0, 0], bar.index(1), smem.index(1))
+    mbarrier.wait(bar.index(0), 1)
     mbarrier.wait(bar.index(1), 1)
 
     mbarrier.invalidate(bar.index(0))
@@ -365,25 +366,25 @@ def multibuffered_loop_tma_kernel(input_desc, XBLOCK: ttgl.constexpr, FAILURE: t
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer")
 @pytest.mark.parametrize("FAILURE", [True, False])
 def test_multibuffered_loop(FAILURE, device, subprocess=False):
-    # if subprocess:
-    knobs.compilation.enable_experimental_consan = True
-    os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
+    if subprocess:
+        knobs.compilation.enable_experimental_consan = True
+        os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 
-    # ConSan requires a global memory allocation
-    def alloc_fn(size: int, alignment: int, stream: Optional[int]):
-        return torch.empty(size, device="cuda", dtype=torch.int8)
+        # ConSan requires a global memory allocation
+        def alloc_fn(size: int, alignment: int, stream: Optional[int]):
+            return torch.empty(size, device="cuda", dtype=torch.int8)
 
-    triton.set_allocator(alloc_fn)
-    XBLOCK = 128
-    input = torch.randn((XBLOCK, XBLOCK), device=device, dtype=torch.float16)
-    shared_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2)
-    input_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(input, [XBLOCK, XBLOCK], shared_layout)
-    multibuffered_loop_tma_kernel[(1, )](input_desc, XBLOCK, FAILURE=FAILURE, num_warps=4)
-    # else:
-    #     result = run_in_process(test_multibuffered_loop, (FAILURE, device, True))
-    #     if FAILURE:
-    #         assert "device-side assert" in str(result.exc)
-    #         assert "Buffer being accessed has outstanding reads" in result.driver_stderr_output
-    #     else:
-    #         assert result.exc is None
-    #         assert result.driver_stderr_output == ""
+        triton.set_allocator(alloc_fn)
+        XBLOCK = 128
+        input = torch.randn((XBLOCK, XBLOCK), device=device, dtype=torch.float16)
+        shared_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2)
+        input_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(input, [XBLOCK, XBLOCK], shared_layout)
+        multibuffered_loop_tma_kernel[(1, )](input_desc, XBLOCK, FAILURE=FAILURE, num_warps=4)
+    else:
+        result = run_in_process(test_multibuffered_loop, (FAILURE, device, True))
+        if FAILURE:
+            assert "device-side assert" in str(result.exc)
+            assert "Buffer being accessed has outstanding reads" in result.driver_stderr_output
+        else:
+            assert result.exc is None
+            assert result.driver_stderr_output == ""
