@@ -541,4 +541,7 @@ def test_return_in_while():
     # CHECK-LABEL: test_return_in_while
     i = 0
     while i < 10:
-        i = trivial_return(i + 1)
+        if i == 5:
+            i = trivial_return(i + 1)
+        else:
+            i = trivial_return(i + 1)
