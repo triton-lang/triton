@@ -769,53 +769,53 @@ void init_triton_ir(py::module &&m) {
       .def("get_int1",
            [](TritonOpBuilder &self, bool v) -> Value {
              return Value(self.create<arith::ConstantIntOp>(
-                 self.getBuilder().getI1Type(), v));
+                 v, self.getBuilder().getI1Type()));
            })
       .def("get_int8",
            [](TritonOpBuilder &self, int64_t v) -> Value {
              return Value(self.create<arith::ConstantIntOp>(
-                 self.getBuilder().getI8Type(), v));
+                 v, self.getBuilder().getI8Type()));
            })
       .def("get_int16",
            [](TritonOpBuilder &self, int64_t v) -> Value {
              return Value(self.create<arith::ConstantIntOp>(
-                 self.getBuilder().getI16Type(), v));
+                 v, self.getBuilder().getI16Type()));
            })
       .def("get_int32",
            [](TritonOpBuilder &self, int64_t v) -> Value {
              return Value(self.create<arith::ConstantIntOp>(
-                 self.getBuilder().getI32Type(), v));
+                 v, self.getBuilder().getI32Type()));
            })
       .def("get_int64",
            [](TritonOpBuilder &self, int64_t v) -> Value {
              return Value(self.create<arith::ConstantIntOp>(
-                 self.getBuilder().getI64Type(), v));
+                 v, self.getBuilder().getI64Type()));
            })
       .def("get_uint8",
            [](TritonOpBuilder &self, uint64_t v) -> Value {
              return Value(self.create<arith::ConstantIntOp>(
-                 self.getBuilder().getI8Type(), v));
+                 v, self.getBuilder().getI8Type()));
            })
       .def("get_uint16",
            [](TritonOpBuilder &self, uint64_t v) -> Value {
              return Value(self.create<arith::ConstantIntOp>(
-                 self.getBuilder().getI16Type(), v));
+                 v, self.getBuilder().getI16Type()));
            })
       .def("get_uint32",
            [](TritonOpBuilder &self, uint64_t v) -> Value {
              return Value(self.create<arith::ConstantIntOp>(
-                 self.getBuilder().getI32Type(), v));
+                 v, self.getBuilder().getI32Type()));
            })
       .def("get_uint64",
            [](TritonOpBuilder &self, uint64_t v) -> Value {
              return Value(self.create<arith::ConstantIntOp>(
-                 self.getBuilder().getI64Type(), v));
+                 v, self.getBuilder().getI64Type()));
            })
       .def("get_bf16",
            [](TritonOpBuilder &self, float v) -> Value {
              auto type = self.getBuilder().getBF16Type();
              return self.create<arith::ConstantFloatOp>(
-                 type, APFloat(type.getFloatSemantics(), std::to_string(v)));
+                 APFloat(type.getFloatSemantics(), std::to_string(v)), type);
            })
       .def("get_fp16",
            [](TritonOpBuilder &self, float v) -> Value {
@@ -836,9 +836,9 @@ void init_triton_ir(py::module &&m) {
            [](TritonOpBuilder &self, Type type) -> Value {
              if (auto floatTy = dyn_cast<FloatType>(type))
                return self.create<arith::ConstantFloatOp>(
-                   floatTy, APFloat(floatTy.getFloatSemantics(), 0));
+                   APFloat(floatTy.getFloatSemantics(), 0), floatTy);
              else if (auto intTy = dyn_cast<IntegerType>(type))
-               return self.create<arith::ConstantIntOp>(intTy, 0);
+               return self.create<arith::ConstantIntOp>(0, intTy);
              else
                throw std::runtime_error("Not implemented");
            })
@@ -846,7 +846,7 @@ void init_triton_ir(py::module &&m) {
            [](TritonOpBuilder &self, Type type) -> Value {
              uint64_t val = 0xFFFFFFFFFFFFFFFF;
              if (auto intTy = dyn_cast<IntegerType>(type))
-               return self.create<arith::ConstantIntOp>(intTy, val);
+               return self.create<arith::ConstantIntOp>(val, intTy);
              else
                throw std::runtime_error("Not implemented");
            })
