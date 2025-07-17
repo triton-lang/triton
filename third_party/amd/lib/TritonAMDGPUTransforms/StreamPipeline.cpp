@@ -154,8 +154,8 @@ using LoadToStreamOpMap = llvm::MapVector<Operation *, StreamOpVariant>;
 //   WARNING: Changing the order of schedule.clusters.newAtBack() calls
 //            can cause invalid schedules to be produced.
 LogicalResult initSchedule(int maxDist, StreamStages &stages, int numStages,
-                           int &numBuffers, bool useAsyncCopy,
-                           StreamClusters &clusters, bool waitAtTail,
+                           int &numBuffers, bool useAsyncCopy, bool waitAtTail,
+                           StreamClusters &clusters, 
                            tt::CoarseSchedule &schedule) {
   bool pairedGlobalLoadLocalStore = stages[SCHED_LOCAL_STORE] == 0;
   stages[SCHED_LOCAL_STORE] += maxDist;
@@ -609,7 +609,7 @@ preprocessLoop(triton::AMD::ModuleAxisInfoAnalysis &axisInfoAnalysis,
 
 tt::CoarseSchedule
 buildSchedule(scf::ForOp &forOp, int numStages, const LoadToInfoMap &loadToInfo,
-              int globalPrefetch, int localPrefetch, bool useAsyncCopy,
+              int globalPrefetch, int localPrefetch, bool useAsyncCopy, bool waitAtTail,
               triton::AMD::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
   tt::CoarseSchedule schedule(numStages);
   StreamClusters clusters;
@@ -682,7 +682,7 @@ LogicalResult pipelineLoop(scf::ForOp forOp, int numStages, int globalPrefetch,
   }
 
   auto schedule = buildSchedule(forOp, numStages, loadToInfo, globalPrefetch,
-                                localPrefetch, useAsyncCopy, axisInfoAnalysis);
+                                localPrefetch, useAsyncCopy, waitAtTail, axisInfoAnalysis);
   if (schedule.empty()) {
     return failure();
   }
