@@ -29,7 +29,8 @@ void ScopeIdAllocation::run() {
         scopeIdStack.push(id);
         id++;
       } else {
-        recordOp->emitError("The scope name must appear in pairs");
+        mlir::emitError(recordOp.getLoc(), "The scope name '")
+            << name << "' must appear in pairs";
       }
     } else {
       if (nameToIdMap.contains(name)) {
@@ -37,7 +38,8 @@ void ScopeIdAllocation::run() {
         opToIdMap[recordOp] = nameToIdMap.lookup(name);
         nameToIdMap.erase(name);
       } else {
-        recordOp->emitError("The scope name must appear in pairs");
+        mlir::emitError(recordOp.getLoc(), "The scope name '")
+            << name << "' must appear in pairs";
       }
     }
   });
@@ -45,6 +47,8 @@ void ScopeIdAllocation::run() {
   if (nameToIdMap.size() > 0) {
     for (auto &[name, _] : nameToIdMap) {
       funcOp->emitError("Scope name '") << name << "' must appear in pairs";
+      mlir::emitError(funcOp->getLoc(), "Scope name '")
+          << name << "' must appear in pairs";
     }
   }
 }

@@ -31,7 +31,6 @@ def SamplingStrategyAttr : I32EnumAttr<
   }];
 }
 
-// TODO(Keren): Expose it in the frontend
 def ModeAttr : I32EnumAttr<
   "Mode", "The mode of profiling",
   [

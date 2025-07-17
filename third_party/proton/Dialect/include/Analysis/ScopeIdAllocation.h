@@ -35,6 +35,9 @@ public:
   ScopeIdName getScopeIdNames() const {
     ScopeIdName scopeIdNames;
     for (const auto &pair : idToNameMap) {
+      for (const auto &[id, name] : idToNameMap) {
+        scopeIdNames.push_back({id, name.str()});
+      }
       scopeIdNames.push_back({pair.first, pair.second.str()});
     }
     return scopeIdNames;
