@@ -213,6 +213,18 @@ def tcgen05_mma(a, b, d, use_acc, mbarriers):
     _tcgen05_mma_impl(a, b, d, use_acc=use_acc, mbarriers=mbarriers, mbarrier_preds=[True] * len(mbarriers))
 
 
+@gluon.jit
+def _interleave_n(a, b, size: gl.constexpr, f: gl.constexpr, i: gl.constexpr = 0):
+    if a.shape[1] == size:
+        return f(a, b, i)
+    else:
+        a0, a1 = a.reshape([a.shape[0], 2, a.shape[1] // 2]).permute(0, 2, 1).split()
+        b0, b1 = b.reshape([b.shape[0], 2, b.shape[1] // 2]).permute(0, 2, 1).split()
+        c0 = _interleave_n(a0, b0, size, f, i)
+        c1 = _interleave_n(a1, b1, size, f, i + a.shape[1] // 2)
+        return gl.convert_layout(gl.join(c0, c1).permute(0, 2, 1).reshape(a.shape), a.type.layout)
+
+
 # ===-----------------------------------------------------------------------===#
 # Gluon Attention
 # ===-----------------------------------------------------------------------===#
@@ -625,38 +637,32 @@ def _attn_fwd_mma(config, chnls, descs, M, STAGE: gl.constexpr):
 
 
 @gluon.jit
-def _split_n(x):
-    return x.reshape([x.shape[0], 2, x.shape[1] // 2]).permute(0, 2, 1).split()
-
-
-@gluon.jit
 def _mask_inner(qk, mask, i: gl.constexpr):
-    if qk.shape[1] == 1:
-        mask_i_bit = mask & (1 << i) == 0
-        return gl.where(mask_i_bit, qk, -float("inf"))
-    else:
-        qk0, qk1 = _split_n(qk)
-        mask0, mask1 = _split_n(mask)
-        qk0 = _mask_inner(qk0, mask0, i)
-        qk1 = _mask_inner(qk1, mask1, i + qk.shape[1] // 2)
-        return gl.convert_layout(
-            gl.join(qk0, qk1).permute(0, 2, 1).reshape(qk.shape), qk.type.layout, assert_trivial=True)
+    mask_i_bit = mask & (1 << i) == 0
+    return gl.where(mask_i_bit, qk, -float("inf"))
 
 
 @gluon.jit
 def _mask_frag(qk, col_limit_right, s: gl.constexpr):
-    if qk.shape[1] == 16:
-        col_limit_right_s = col_limit_right - s
-        col_limit_right_cur = max(col_limit_right_s, 0)
-        mask = -1 << col_limit_right_cur
-        return _mask_inner(qk, mask, 0)
-    else:
-        qk0, qk1 = _split_n(qk)
-        col_limit_right0, col_limit_right1 = _split_n(col_limit_right)
-        qk0 = _mask_frag(qk0, col_limit_right0, s)
-        qk1 = _mask_frag(qk1, col_limit_right1, s + qk.shape[1] // 2)
-        return gl.convert_layout(
-            gl.join(qk0, qk1).permute(0, 2, 1).reshape(qk.shape), qk.type.layout, assert_trivial=True)
+    col_limit_right_s = col_limit_right - s
+    col_limit_right_cur = max(col_limit_right_s, 0)
+    mask = -1 << col_limit_right_cur
+    return _interleave_n(qk, mask, 1, _mask_inner)
+
+
+@gluon.jit
+def _mask_bits(qk, col_limit_right):
+    # FIXME: This is a more concise implementation (which compiles faster) but
+    # it results in slightly slower code due to the lack of interleaving.
+    offs_n = gl.arange(0, qk.shape[1], layout=gl.SliceLayout(0, qk.type.layout))[None, :]
+    s = offs_n & ~0xf
+    i = offs_n & 0xf
+
+    col_lim_right_s = col_limit_right - s
+    col_lim_right_cur = max(col_lim_right_s, 0)
+    mask = -1 << col_lim_right_cur
+    mask_i_bit = (mask & (1 << i)) == 0
+    return gl.where(mask_i_bit, qk, -float("inf"))
 
 
 @gluon.jit
@@ -670,8 +676,8 @@ def _softmax_inner_loop(tile_id: gl.constexpr, config, prog,  #
         qk = s_tmem.load(config.qk_layout)
 
         if STAGE == 2:
-            col_limit_right = offs_m - start_n + 1
-            qk = _mask_frag(qk, col_limit_right[:, None].broadcast_to(qk.shape), 0)
+            col_limit_right = (offs_m - start_n + 1)[:, None].broadcast_to(qk.shape)
+            qk = _interleave_n(qk, col_limit_right, 16, _mask_frag)
 
         m_ij = gl.maximum(m_i, gl.max(qk, 1) * config.qk_scale)
         alpha = gl.exp2(m_i - m_ij)
