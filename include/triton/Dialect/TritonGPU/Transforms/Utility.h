@@ -260,11 +260,12 @@ void replaceUsesAndPropagateType(OpBuilder &builder, Operation *oldUse,
 
 /// Replace all uses of `old` with a local load from `alloc` unless the use is a
 /// `ttg.local_alloc` with a matching shared encoding, in which case the shared
-/// memory is forwarded directly into the use.
-void replaceUsesWithLocalLoad(
-    OpBuilder &builder, OpResult old,
-    TypedValue<triton::gpu::MemDescType> alloc,
-    TypedValue<triton::gpu::AsyncTokenType> token = {});
+/// memory is forwarded directly into the use. Returns the `ttg.local_load` if
+/// it created one.
+triton::gpu::LocalLoadOp
+replaceUsesWithLocalLoad(OpBuilder &builder, OpResult old,
+                         TypedValue<triton::gpu::MemDescType> alloc,
+                         TypedValue<triton::gpu::AsyncTokenType> token = {});
 
 // Return true if the value comes from a load or a block argument.
 // This will skip convert layouts and memdesc views.

@@ -28,7 +28,7 @@ def check_identifier_legality(name, type):
     return name
 
 
-def mangle_fn(name, arg_tys, constants):
+def mangle_fn(name, arg_tys, constants, caller_context):
     # doesn't mangle ret type, which must be a function of arg tys
     mangled_arg_names = '_'.join([ty.mangle() for ty in arg_tys])
     mangled_constants = '_'.join([f'{i}c{repr(constants[i])}' for i in sorted(constants)])
@@ -37,6 +37,8 @@ def mangle_fn(name, arg_tys, constants):
     # [ and ] are not allowed in LLVM identifiers
     mangled_constants = mangled_constants.replace('[', '_').replace(']', '_')
     ret = f'{name}__{mangled_arg_names}__{mangled_constants}'
+    if caller_context is not None:
+        ret += caller_context.mangle()
     return ret
 
 
@@ -147,9 +149,9 @@ class ContainsReturnChecker(ast.NodeVisitor):
         return any(self.visit(s) for s in body)
 
     def _visit_function(self, fn) -> bool:
-        # no need to check within the function as it won't cause an early return.
-        # If the function itself has unstructured control flow we may not be able to inline it causing poor performance.
-        # We should check for this and fail or emit a warning.
+        # No need to check within the function as it won't cause an early return.
+        # If the function itself has unstructured control flow we may not be able to inline it causing poor performance,
+        # we should check for this and emit a warning.
         return False
 
     def generic_visit(self, node) -> bool:
@@ -293,7 +295,7 @@ class CodeGenerator(ast.NodeVisitor):
 
     def __init__(self, context, prototype, gscope, function_name, jit_fn: JITFunction, options, codegen_fns, module_map,
                  module=None, is_kernel=False, function_types: Optional[Dict] = None, noinline=False,
-                 file_name: Optional[str] = None, begin_line=0):
+                 caller_context=None, file_name: Optional[str] = None, begin_line=0):
         self.context = context
         if jit_fn.is_gluon():
             from triton.experimental.gluon.language._semantic import GluonSemantic
@@ -339,6 +341,7 @@ class CodeGenerator(ast.NodeVisitor):
         self.is_kernel = is_kernel
         self.cur_node = None
         self.noinline = noinline
+        self.caller_context = caller_context
         self.scf_stack = []
         self.ret_type = None
         # SSA-construction
@@ -570,6 +573,8 @@ class CodeGenerator(ast.NodeVisitor):
         self.module.push_back(self.fn)
         entry = self.fn.add_entry_block()
         arg_values = self.prototype.deserialize(self.fn)
+        if self.caller_context is not None:
+            self.caller_context.initialize_callee(self.fn, self.builder)
         # bind arguments to symbols
         for arg_name, arg_value in zip(arg_names, arg_values):
             self.set_value(arg_name, arg_value)
@@ -852,13 +857,10 @@ class CodeGenerator(ast.NodeVisitor):
                     % ast.unparse(node.test))
                 cond = language.core._unsplat(cond, _semantic=self.semantic, _generator=self)
             cond = cond.to(language.int1, _semantic=self.semantic)
-            contains_return = ContainsReturnChecker(self.gscope).visit(node)
-            if contains_return:
+            if ContainsReturnChecker(self.gscope).visit(node):
                 if self.scf_stack:
                     raise self._unsupported(
-                        node, "Cannot have `return` statements inside `while` or `for` statements in triton "
-                        "(note that this also applies to `return` statements that are inside functions "
-                        "transitively called from within `while`/`for` statements)")
+                        node, "Cannot have `return` statements inside `while` or `for` statements in triton.")
                 self.visit_if_top_level(cond, node)
             else:
                 self.visit_if_scf(cond, node)
@@ -1190,7 +1192,7 @@ class CodeGenerator(ast.NodeVisitor):
         msg = self.visit(node.msg) if node.msg is not None else ""
         return language.core.device_assert(test, msg, _semantic=self.semantic)
 
-    def call_JitFunction(self, fn: JITFunction, args, kwargs):
+    def call_JitFunction(self, fn: JITFunction, args, kwargs, caller_context=None):
         args = inspect.getcallargs(fn.fn, *args, **kwargs)
         args = [args[name] for name in fn.arg_names]
         for i, arg in enumerate(args):
@@ -1201,7 +1203,8 @@ class CodeGenerator(ast.NodeVisitor):
         args_path = find_paths_if(args, lambda _, x: not _is_constexpr(x))
         args_val = [get_iterable_path(args, path) for path in args_path]
         # mangle
-        fn_name = mangle_fn(get_full_name(fn), [arg.type for arg in args_val], args_cst)
+        caller_context = caller_context or self.caller_context
+        fn_name = mangle_fn(get_full_name(fn), [arg.type for arg in args_val], args_cst, caller_context)
         # generate function def if necessary
         if not self.module.has_function(fn_name):
             # If the callee is not set, we use the same debug setting as the caller
@@ -1216,7 +1219,7 @@ class CodeGenerator(ast.NodeVisitor):
                                       function_name=fn_name, function_types=self.function_ret_types,
                                       noinline=fn.noinline, file_name=file_name, begin_line=begin_line,
                                       options=self.builder.options, codegen_fns=self.builder.codegen_fns,
-                                      module_map=self.builder.module_map)
+                                      module_map=self.builder.module_map, caller_context=caller_context)
             try:
                 generator.visit(fn.parse())
             except Exception as e:
