@@ -29,7 +29,7 @@ jobs:
       CCACHE_COMPRESS: "true"
     container:
       image: ${{ matrix.image }}
-      options: --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --user root
+      options: --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --user root --volume /home/runner/.triton:/github/home/.triton
     steps:
       - name: Checkout
         uses: actions/checkout@v4
