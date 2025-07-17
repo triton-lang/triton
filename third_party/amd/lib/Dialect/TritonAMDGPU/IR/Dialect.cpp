@@ -458,6 +458,61 @@ LogicalResult ConcatOp::verify() {
   return success();
 }
 
+LogicalResult LocalLoadPackedTransposedOp::verify() {
+  auto srcTy = getSrc().getType();
+  auto dstTy = getType();
+  auto srcShape = srcTy.getShape();
+
+  auto dotEnc = dyn_cast<DotOperandEncodingAttr>(dstTy.getEncoding());
+  if (!dotEnc)
+    return emitOpError("only works with DotOperandEncodingAttr dst encoding");
+
+  auto sharedEnc =
+      dyn_cast<triton::gpu::SwizzledSharedEncodingAttr>(srcTy.getEncoding());
+  if (!sharedEnc)
+    return emitOpError(
+        "only works with SwizzledSharedEncodingAttr src encoding");
+
+  auto order = sharedEnc.getOrder();
+  bool isA = dotEnc.getOpIdx() == 0;
+
+  // operand A: [0, 1] / [1, 2, 0]
+  // operand B: [1, 0] / [2, 1, 0]
+  bool hasBatchDim = srcShape.size() == 3;
+
+  if (isA) {
+    bool matchingOrderA =
+        order.equals({0, 1}) || (hasBatchDim && order.equals({1, 2, 0}));
+    if (!matchingOrderA)
+      return emitOpError("Order of dimensions don't match expected");
+
+    SmallVector<int64_t> srcShapeBasedOnDstA(dstTy.getShape());
+    srcShapeBasedOnDstA[hasBatchDim ? 1 : 0] /= 2;
+    srcShapeBasedOnDstA[hasBatchDim ? 2 : 1] *= 2;
+
+    bool aDimMatch = srcShape.equals(ArrayRef(srcShapeBasedOnDstA));
+    if (!aDimMatch)
+      return emitOpError(
+          "Input and output dimensions don't match after packing changes");
+  } else {
+    bool matchingOrderB =
+        order.equals({1, 0}) || (hasBatchDim && order.equals({2, 1, 0}));
+    if (!matchingOrderB)
+      return emitOpError("Order of dimensions don't match expected");
+
+    SmallVector<int64_t> srcShapeBasedOnDstB(dstTy.getShape());
+    srcShapeBasedOnDstB[hasBatchDim ? 1 : 0] *= 2;
+    srcShapeBasedOnDstB[hasBatchDim ? 2 : 1] /= 2;
+
+    bool bDimMatch = srcShape.equals(ArrayRef(srcShapeBasedOnDstB));
+    if (!bDimMatch)
+      return emitOpError(
+          "Input and output dimensions don't match after packing changes");
+  }
+
+  return success();
+}
+
 // This pattern removes a concatOp if it has a single input operand.
 // This scenario can potentially happen as a result of ops refinement.
 mlir::LogicalResult foldConcatOpFromSingleSource(amdgpu::ConcatOp op,

@@ -233,6 +233,15 @@ class SharedLayout:
         return constexpr_type(self)
 
 
+def _get_shape_per_cta(shape, cta_split_num):
+    shape_per_cta = shape
+    if cta_split_num is not None:
+        assert len(cta_split_num) == len(shape)
+        for dim in range(len(shape_per_cta)):
+            shape_per_cta[dim] /= cta_split_num[dim]
+    return shape_per_cta
+
+
 @dataclass(frozen=True)
 class NVMMASharedLayout(SharedLayout):
     """
@@ -284,6 +293,47 @@ class NVMMASharedLayout(SharedLayout):
             self.ctas_per_cga,
             self.cta_split_num,
             self.cta_order,
+        )
+
+    @staticmethod
+    def get_default_for(block_shape, dtype, transposed=False, fp4_padded=False, ctas_per_cga=None, cta_split_num=None,
+                        cta_order=None):
+        """Returns an NVMMASharedLayout with default swizzling for a given shape.
+
+        This picks the largest swizzle pattern compatible with the shape, which
+        allows emitting the fewest TMA or MMA messages.
+        """
+        packing_factor = 2 if fp4_padded else 1
+        shape_per_cta = _get_shape_per_cta(block_shape, cta_split_num)
+        rank = len(block_shape)
+        if transposed:
+            shape_per_cta = shape_per_cta[1:] + shape_per_cta[:1]
+        contig_dim_size = shape_per_cta[-1] * packing_factor
+        contig_dim_bytes = contig_dim_size * dtype.primitive_bitwidth // 8
+        if contig_dim_bytes >= 128 and contig_dim_bytes % 128 == 0:
+            swizzle_byte_width = 128
+        elif contig_dim_bytes >= 64 and contig_dim_bytes % 64 == 0:
+            swizzle_byte_width = 64
+        elif contig_dim_bytes >= 32 and contig_dim_bytes % 32 == 0:
+            swizzle_byte_width = 32
+        else:
+            swizzle_byte_width = 0
+
+        flatten_outer_dim = 1
+        for size in shape_per_cta[:-1]:
+            flatten_outer_dim *= size
+        if len(block_shape) < 2 or flatten_outer_dim < 8:
+            swizzle_byte_width = 0
+
+        return NVMMASharedLayout(
+            swizzle_byte_width=swizzle_byte_width,
+            element_bitwidth=dtype.primitive_bitwidth,
+            rank=rank,
+            transposed=transposed,
+            fp4_padded=fp4_padded,
+            ctas_per_cga=ctas_per_cga,
+            cta_split_num=cta_split_num,
+            cta_order=cta_order,
         )
 
     def mangle(self) -> str:

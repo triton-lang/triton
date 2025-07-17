@@ -314,11 +314,11 @@ class CUDABackend(BaseBackend):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
 
-        passes.ttgpuir.add_inliner(pm)
+        passes.gluon.add_inliner(pm)
         passes.gluon.add_resolve_auto_encodings(pm)
         passes.common.add_sccp(pm)
         passes.ttir.add_loop_aware_cse(pm)
-        passes.ttgpuir.add_canonicalizer(pm)
+        passes.gluon.add_canonicalizer(pm)
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)
 
         pm.run(mod)
@@ -351,6 +351,7 @@ class CUDABackend(BaseBackend):
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
+        passes.convert.add_nvvm_to_llvm(pm)
         if not knobs.compilation.disable_line_info:
             passes.llvmir.add_di_scope(pm)
         pm.run(mod)

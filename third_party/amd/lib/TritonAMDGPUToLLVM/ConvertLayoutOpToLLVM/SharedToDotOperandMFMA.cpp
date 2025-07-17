@@ -21,7 +21,6 @@
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 #include "../PatternTritonGPUOpToLLVM.h"
-#include "../TritonAMDGPUToLLVM/SchedInstructions.h"
 #include "AsyncUtility.h"
 #include "SharedToDotOperandHelper.h"
 #include "Utility.h"
@@ -359,7 +358,7 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
           spatialWarpId, lane, warpsPerBlockNonK, numOfElems, numReps, smemObj,
           smemStrides, sharedLayout, nDim, mfmaInstrK);
     }
-    smemBase = AMD::computeBasePtr(rewriter, loc, smemObj, smemStrides);
+    smemBase = smemObj.getBase();
   }
 
   Type resElemTy = typeConverter->convertType(elemTy);
