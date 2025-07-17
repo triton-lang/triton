@@ -375,7 +375,7 @@ private:
                   pred = b.create<arith::AndIOp>(effect.pred, pred);
                 }
                 b.create<tti::ExperimentalCommitWriteWithBarrierOp>(
-                    barrier, writeBarriersAlloc[(int)memType],
+                    barrier, barriers, writeBarriersAlloc[(int)memType],
                     writeBarriersType[(int)memType],
                     writeStateAlloc[(int)memType], writeStateType[(int)memType],
                     pred);
