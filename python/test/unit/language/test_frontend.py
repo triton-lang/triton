@@ -528,3 +528,16 @@ def test_specialized_recursion():
 
     # CHECK: func {{.*}}recursive_reduce__i32S4S
     # CHECK-COUNT-2: call {{.*}}recursive_reduce__i32S2S
+
+
+@triton.jit
+def trivial_return(x):
+    return x
+
+
+@filecheck_test
+@triton.jit
+def test_return_in_while():
+    i = 0
+    while i < 10:
+        i = trivial_return(i + 1)
