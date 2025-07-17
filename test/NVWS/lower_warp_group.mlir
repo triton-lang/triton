@@ -82,6 +82,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   //       CHECK-NEXT:   ttng.tc_gen5_mma
   //       CHECK:   partition0(%
   //       CHECK-NEXT:   arith.constant
+  //       CHECK-NEXT:   ttg.local_load
   //       CHECK-NEXT:   ttng.wait_barrier
   //       CHECK-NEXT:   ttng.tmem_load
   //       CHECK-NEXT:   tt.store

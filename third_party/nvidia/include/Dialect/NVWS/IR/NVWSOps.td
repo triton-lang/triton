@@ -128,18 +128,36 @@ def NVWS_WarpGroupOp : NVWS_Op<"warp_group", [
     the number of warps in each group, plus a region to hold the
     computation for that warp group.
 
-    Regions are not Isolated from Above to aid in analysis,
-    and take inputs purely by reference.
+    The results of this op, if any, are those of the first region, as returned by
+    nvws.warp_group.yield op.
 
     nvws.warp_group should be lowered to ttg.warp_specialize
     before execution.
   }];
 
   let arguments = (ins DenseI32ArrayAttr:$numWarps);
-
+  let results = (outs Variadic<AnyType>:$results);
   let regions = (region VariadicRegion<MinSizedRegion<1>>:$partitionRegions);
   let hasVerifier=1;
   let hasCustomAssemblyFormat = 1;
+}
+
+def NVWS_WarpGroupYieldOp : NVWS_Op<"warp_group.yield", [
+  Pure, Terminator, ReturnLike, HasParent<"WarpGroupOp">,
+  DeclareOpInterfaceMethods<RegionBranchTerminatorOpInterface>
+]> {
+  let summary = "yield from the first region of `nvws.warp_group`";
+  let description = [{
+    This op is equivalent to ttg.warp_yield op for ttg.warp_specialize op.
+
+    TODO: Decide if we should move nvws.warp_group to TritonGPU, or continue to
+    have TritonGPU depend on NVWS. In the former case, this op can be removed.
+    The latter one involves a circular dependency between TritonGPU and NVWS.
+  }];
+
+  let arguments = (ins Variadic<AnyType>:$values);
+
+  let assemblyFormat = "($values^)? attr-dict (`:` type($values)^)?";
 }
 
 def NVWS_WarpGroupReturnOp : NVWS_Op<"warp_group.return", [
