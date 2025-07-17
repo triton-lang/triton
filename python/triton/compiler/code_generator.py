@@ -431,9 +431,24 @@ class CodeGenerator(ast.NodeVisitor):
 
         return name_lookup
 
+    @contextlib.contextmanager
+    def _name_loc_prefix(self, prefix):
+        self.name_loc_as_prefix = prefix
+        yield
+        self.name_loc_as_prefix = None
+
     def _maybe_set_loc_to_name(self, val, name):
-        if hasattr(val, "handle"):
-            val.handle.set_loc(self.builder.create_name_loc(name, val.handle.get_loc()))
+        from ..experimental.gluon.language._core import shared_memory_descriptor
+        from ..experimental.gluon.language.nvidia import blackwell, hopper
+        if isinstance(val, (ir.value, ir.block_argument)):
+            handle = val
+        elif _is_triton_tensor(val) or isinstance(val,
+                                                  (language.core.tensor_descriptor, shared_memory_descriptor,
+                                                   blackwell.tensor_memory_descriptor, hopper.tma.tensor_descriptor)):
+            handle = val.handle
+        else:
+            return
+        handle.set_loc(self.builder.create_name_loc(name, handle.get_loc()))
 
     def set_value(self, name: str, value: Union[base_value, constexpr]) -> None:
         ''' This function:
@@ -650,12 +665,6 @@ class CodeGenerator(ast.NodeVisitor):
         assert isinstance(target, ast.Name)
         self.set_value(self.visit(target), value)
 
-    @contextlib.contextmanager
-    def _name_loc_prefix(self, prefix):
-        self.name_loc_as_prefix = prefix
-        yield
-        self.name_loc_as_prefix = None
-
     def visit_Assign(self, node):
         # construct values to assign
         def _sanitize_value(value):
@@ -672,7 +681,7 @@ class CodeGenerator(ast.NodeVisitor):
         targets = [node.target] if isinstance(node, ast.AnnAssign) else node.targets
         assert len(targets) == 1
         target = targets[0]
-        if knobs.compilation.use_name_loc_as_prefix and isinstance(target, ast.Name):
+        if isinstance(target, ast.Name):
             with self._name_loc_prefix(target.id):
                 values = _sanitize_value(self.visit(node.value))
         else:
@@ -842,12 +851,9 @@ class CodeGenerator(ast.NodeVisitor):
             then_defs, else_defs, then_block, else_block, names = \
                 self.visit_then_else_blocks(node, liveins, then_block, else_block)
             # create if op
-            then_handles = []
-            for name in names:
-                then_def = then_defs[name]
-                then_def._flatten_ir(then_handles)
-                self._maybe_set_loc_to_name(then_def, name)
-
+            then_handles = flatten_values_to_ir(then_defs[name] for name in names)
+            for name, val in zip(names, then_handles):
+                self._maybe_set_loc_to_name(val, name)
             self._set_insertion_point_and_loc(ip, last_loc)
             if_op = self.builder.create_if_op([h.get_type() for h in then_handles], cond.handle, True)
             then_block.merge_block_before(if_op.get_then_block())
@@ -860,11 +866,9 @@ class CodeGenerator(ast.NodeVisitor):
                 else_block.merge_block_before(if_op.get_else_block())
             self.builder.set_insertion_point_to_end(if_op.get_else_block())
             if len(names) > 0:
-                else_handles = []
-                for name in names:
-                    else_def = else_defs[name]
-                    else_def._flatten_ir(else_handles)
-                    self._maybe_set_loc_to_name(else_def, name)
+                else_handles = flatten_values_to_ir(else_defs[name] for name in names)
+                for name, val in zip(names, else_handles):
+                    self._maybe_set_loc_to_name(val, name)
                 self.builder.create_yield_op(else_handles)
         # update values
         res_handles = [if_op.get_result(i) for i in range(len(then_handles))]
@@ -1196,7 +1200,7 @@ class CodeGenerator(ast.NodeVisitor):
                 iv = self.builder.create_add(iv, lb)
             self.lscope[node.target.id].handle.replace_all_uses_with(iv)
             self.set_value(node.target.id, language.core.tensor(iv, iv_type))
-            iv.set_loc(self.builder.create_name_loc(node.target.id, iv.get_loc()))
+            self._maybe_set_loc_to_name(iv, node.target.id)
 
         # update lscope & local_defs (ForOp defines new values)
         result_handles = [for_op.get_result(i) for i in range(len(init_handles))]

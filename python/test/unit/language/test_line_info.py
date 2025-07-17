@@ -1,25 +1,12 @@
-import inspect
-import re
 import subprocess
 import tempfile
 
-import expecttest
 import pytest
 import torch
 
 import triton
 import triton.language as tl
 from triton._internal_testing import is_interpreter
-
-from triton._filecheck import run_filecheck
-from triton.experimental import gluon
-from triton.experimental.gluon import language as ttgl
-
-TARGET_PAT = re.compile('ttg.target = "[^"]*"')
-
-
-def anonymize_ir(ir):
-    return TARGET_PAT.sub('ttg.target = "..."', ir)
 
 
 @triton.jit
@@ -266,12 +253,13 @@ def test_line_info_ir_source(monkeypatch, status, tmp_path):
         assert check_file_lines(file_lines, "/path/test.py", 8, should_contain=True)
 
 
-def test_use_name_loc_as_prefix(monkeypatch, fresh_triton_cache):
-    monkeypatch.setenv("MLIR_USE_NAME_LOC", "1")
+def test_use_name_loc_as_prefix(fresh_triton_cache):
+    import inspect
+    from triton._filecheck import run_filecheck
 
     @triton.jit
     def kernel_basic(src, N, BLOCK_SIZE: tl.constexpr):
-        # CHECK: #loc = loc("{{.*}}":273:0)
+        # CHECK: #loc = loc("{{.*}}":261:0)
         # CHECK-LABEL:  tt.func public @kernel_basic(
         # CHECK-SAME:                                %src: !tt.ptr<f32> loc("src"(#loc)), %N: i32 loc("N"(#loc)))
         # CHECK:          %cst = arith.constant dense<1.000000e+00> : tensor<16xf32> loc(#loc1)
