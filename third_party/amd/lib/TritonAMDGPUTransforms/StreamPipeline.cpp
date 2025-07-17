@@ -11,7 +11,6 @@
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Schedule.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-#include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/Debug.h"
 
@@ -144,7 +143,7 @@ initSchedule(int maxDist, int stages[SCHED_SIZE], int numStages,
              tt::CoarseSchedule &schedule) {
   bool pairedGlobalLoadLocalStore = stages[SCHED_LOCAL_STORE] == 0;
   stages[SCHED_LOCAL_STORE] += maxDist;
-  if (useAsyncCopy && waitAtTail) {
+  if (waitAtTail) {
     stages[SCHED_ASYNC_WAIT] = std::max(0, stages[SCHED_LOCAL_LOAD] - 1);
   }
 
@@ -826,17 +825,9 @@ struct PipelinePass : impl::TritonAMDGPUStreamPipelineBase<PipelinePass> {
       return signalPassFailure();
     }
 
-    auto strVal = triton::tools::getStrEnv("TRITON_HIP_USE_BLOCK_PINGPONG");
-    bool pingpongDisabled = false;
-    if (!strVal.empty()) {
-      auto boolV = triton::tools::isEnvValueBool(strVal);
-      if (boolV.has_value())
-        if (!boolV.value())
-          pingpongDisabled = true;
-    }
     // i.e., we can still disable `waitAtTail` by explicitly disabling
     // pingpong, which is the only use case of this scheduling variant.
-    bool waitAtTail = !pingpongDisabled & (numStages == 3);
+    bool waitAtTail = usePingpong && (numStages == 3) && useAsyncCopy;
 
     SmallVector<scf::ForOp> loops;
     getOperation()->walk([&](scf::ForOp forOp) {

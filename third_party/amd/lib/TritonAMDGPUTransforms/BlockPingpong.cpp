@@ -10,6 +10,7 @@
 #include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "llvm/ADT/TypeSwitch.h"
 
 #define DEBUG_TYPE "tritonamdgpu-block-pingpong"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
@@ -43,7 +44,7 @@ class Pingponger {
   SmallVector<ttg::AsyncWaitOp> asyncWaitOps;
   SmallVector<ttg::AsyncCommitGroupOp> asyncCommitOps;
   SmallVector<tt::DotOp> dotOps;
-  SmallVector<tt::DotScaledOp> dotSOps;
+  SmallVector<tt::DotScaledOp> scaledDotOps;
   SmallVector<SmallVector<Operation *>> subViewOps;
   SmallVector<SmallVector<Operation *>> loadSliceOps;
   SmallVector<Operation *> dotSliceOps;
@@ -80,8 +81,10 @@ private:
   void transformOnePPClusters(OpBuilder &builder, Location loc);
   LogicalResult transformFourPPClusters(OpBuilder &builder, Location loc);
   LogicalResult transformTwoPPClusters(OpBuilder &builder, Location loc);
-  LogicalResult transformNS3(OpBuilder &builder, Location loc);
-  LogicalResult transform2step(OpBuilder &builder, Location loc);
+  LogicalResult transformTwoClusterWithLocalLoadAndAll(OpBuilder &builder,
+                                                       Location loc);
+  LogicalResult transformTwoClusterWithAsyncAndAll(OpBuilder &builder,
+                                                   Location loc);
   void addAsymmetricSyncToLoop(OpBuilder &builder, Location loc);
   void updateOpInsertion(Operation *Op);
   void appendOp(Operation *Op);
@@ -639,7 +642,8 @@ LogicalResult Pingponger::transformTwoPPClusters(OpBuilder &builder,
 // requires additional second step in lowering mfma to llvm that splits dot into
 // two groups of mfmas, so ds_read instructions can only reside together with
 // the first mfma group.
-LogicalResult Pingponger::transform2step(OpBuilder &builder, Location loc) {
+LogicalResult Pingponger::transformTwoClusterWithAsyncAndAll(OpBuilder &builder,
+                                                             Location loc) {
   if (asyncCopyOps.size() == 0)
     return failure();
   builder.setInsertionPointAfter(asyncWaitOps[0]);
@@ -658,7 +662,7 @@ LogicalResult Pingponger::transform2step(OpBuilder &builder, Location loc) {
   // all other ops are placed in the second cluster
   // set unit attr, so it can trigger the second step in the ttg to llvm
   // lowering pass.
-  dotSOps[0]->setAttr("pingpong_2step", builder.getUnitAttr());
+  scaledDotOps[0]->setAttr("pingpong_2step", builder.getUnitAttr());
 
   return success();
 }
@@ -667,7 +671,9 @@ LogicalResult Pingponger::transform2step(OpBuilder &builder, Location loc) {
 // dot cluster. Instead of slice the tile, it is supposed to use half
 // sized tile_K and use num_stages=3 to prefetch and hide the buffer
 // loading cycles. Suitable for large LDS using async copy.
-LogicalResult Pingponger::transformNS3(OpBuilder &builder, Location loc) {
+LogicalResult
+Pingponger::transformTwoClusterWithLocalLoadAndAll(OpBuilder &builder,
+                                                   Location loc) {
   Operation *gLoadRhs = useAsyncCopy ? asyncCopyOps[1] : gLoadOps[1];
   builder.setInsertionPointAfter(gLoadRhs);
   updateOpInsertion(gLoadRhs);
@@ -756,7 +762,7 @@ void Pingponger::addAsymmetricSyncToLoop(OpBuilder &builder, Location loc) {
 }
 
 void Pingponger::getDotPingponged() {
-  if (numStages == 1) {
+  if (numStages <= 1) {
     std::stringstream message;
     message << "All ping pong scheduling requires to be pipelined";
     LDBG(message.str());
@@ -768,33 +774,33 @@ void Pingponger::getDotPingponged() {
   Location loc = forOp.getLoc();
 
   forOp->walk([&](Operation *op) {
-    if (auto gLoad = dyn_cast<tt::LoadOp>(op))
-      gLoadOps.push_back(gLoad);
-    if (auto asyncCopy = dyn_cast<ttg::AsyncCopyGlobalToLocalOp>(op))
-      asyncCopyOps.push_back(asyncCopy);
-    else if (auto lLoad = dyn_cast<ttg::LocalLoadOp>(op)) {
-      // This scheduling doesn't help hiding intra-warp latency. So, we only
-      // collect local_load ops that are software pipelined, which means their
-      // source is from loop carried values
-      auto src = lLoad.getSrc();
-      if (auto arg = mlir::dyn_cast<BlockArgument>(src))
-        if (auto tiedLoopInit = forOp.getTiedLoopInit(arg))
-          if (tiedLoopInit->get())
-            lLoadOps.push_back(lLoad);
-    } else if (auto lStore = dyn_cast<ttg::LocalStoreOp>(op))
-      lStoreOps.push_back(lStore);
-    else if (auto pingpongDot = dyn_cast<tt::DotOp>(op)) {
-      if (pingpongDot.getType().getRank() == 2)
-        dotOps.push_back(pingpongDot);
-    } else if (auto pingpongDot = dyn_cast<tt::DotScaledOp>(op)) {
-      dotSOps.push_back(pingpongDot);
-    } else if (auto asyncOp = dyn_cast<ttg::AsyncCopyGlobalToLocalOp>(op)) {
-      asyncCopyOps.push_back(asyncOp);
-    } else if (auto asyncCommitGroupOp =
-                   dyn_cast<ttg::AsyncCommitGroupOp>(op)) {
-      asyncCommitOps.push_back(asyncCommitGroupOp);
-    } else if (auto asyncOp = dyn_cast<ttg::AsyncWaitOp>(op))
-      asyncWaitOps.push_back(asyncOp);
+    llvm::TypeSwitch<Operation *>(op)
+        .Case<tt::LoadOp>([&](auto gLoadOp) { gLoadOps.push_back(gLoadOp); })
+        .Case<ttg::AsyncCopyGlobalToLocalOp>(
+            [&](auto asyncCopyOp) { asyncCopyOps.push_back(asyncCopyOp); })
+        .Case<ttg::LocalLoadOp>([&](auto lLoad) {
+          // This scheduling doesn't help hiding intra-warp latency. So, we only
+          // collect local_load ops that are software pipelined, which means
+          // their source is from loop carried values
+          auto src = lLoad.getSrc();
+          if (auto arg = mlir::dyn_cast<BlockArgument>(src))
+            if (auto tiedLoopInit = forOp.getTiedLoopInit(arg))
+              if (tiedLoopInit->get())
+                lLoadOps.push_back(lLoad);
+        })
+        .Case<ttg::LocalStoreOp>(
+            [&](auto lStore) { lStoreOps.push_back(lStore); })
+        .Case<tt::DotOp>(
+            [&](auto pingpongDot) { dotOps.push_back(pingpongDot); })
+        .Case<tt::DotScaledOp>(
+            [&](auto pingpongDot) { scaledDotOps.push_back(pingpongDot); })
+        .Case<ttg::AsyncCopyGlobalToLocalOp>(
+            [&](auto asyncOp) { asyncCopyOps.push_back(asyncOp); })
+        .Case<ttg::AsyncCommitGroupOp>([&](auto asyncCommitGroupOp) {
+          asyncCommitOps.push_back(asyncCommitGroupOp);
+        })
+        .Case<ttg::AsyncWaitOp>(
+            [&](auto asyncOp) { asyncWaitOps.push_back(asyncOp); });
   });
 
   // Currently, pingpong scheduling is known as helpful under limited condition.
@@ -803,14 +809,15 @@ void Pingponger::getDotPingponged() {
   // supported combination of operations because this transformation is very
   // tightly scheduling the latencies.
 
-  int64_t numOfDotLikeOps = dotSOps.size() + dotOps.size();
+  int64_t numOfDotLikeOps = scaledDotOps.size() + dotOps.size();
   if (numOfDotLikeOps != 1) {
     LDBG("Only handle a single of either dot or dot_scaled op");
     return;
   }
-  useAsyncCopy = (asyncCopyOps.size() > 0) ? true : false;
+  useAsyncCopy = (asyncCopyOps.size() > 0);
   int64_t gloadSize = useAsyncCopy ? asyncCopyOps.size() : gLoadOps.size();
-  int64_t dotSize = dotSOps.size() > 0 ? dotSOps.size() : dotOps.size();
+  int64_t dotSize =
+      scaledDotOps.size() > 0 ? scaledDotOps.size() : dotOps.size();
   if ((gloadSize < 2 || lLoadOps.size() < 2 || dotSize != 1)) {
     std::stringstream message;
     message << "Unable to match ping pong scheduling pattern. Details: "
@@ -822,20 +829,21 @@ void Pingponger::getDotPingponged() {
 
   // dot_scaled case
 
-  if (dotSOps.size() == 1 && numWarps == 8 && numStages == 2 &&
+  if (scaledDotOps.size() == 1 && numWarps == 8 && numStages == 2 &&
       asyncCopyOps.size() > 0) {
-    auto dotSType = dotSOps[0].getType();
-    auto dotSShape = dotSType.getShape();
-    auto aType = dotSOps[0].getA().getType();
+    auto scaledDotType = scaledDotOps[0].getType();
+    auto scaledDotShape = scaledDotType.getShape();
+    auto aType = scaledDotOps[0].getA().getType();
     auto aShape = aType.getShape();
     auto elemWidth = aType.getElementTypeBitWidth();
-    int64_t tileSize = dotSShape[0] * dotSShape[1] * aShape[1];
+    int64_t tileSize = scaledDotShape[0] * scaledDotShape[1] * aShape[1];
 
     // 256x256x256 (128xi8)
     if (tileSize == 8388608 && aShape[0] == 256 && aShape[1] == 128 &&
         elemWidth == 8) {
       kWidth = 16;
-      if (transform2step(builder, dotSOps[0]->getLoc()).failed()) {
+      if (transformTwoClusterWithAsyncAndAll(builder, scaledDotOps[0]->getLoc())
+              .failed()) {
         LDBG(
             "Encountered failure when trying to execute the two-step ping pong "
             "cluster transformation");
@@ -844,7 +852,7 @@ void Pingponger::getDotPingponged() {
     }
     addAsymmetricSyncToLoop(builder, loc);
     return;
-  } else if (dotSOps.size() == 1)
+  } else if (scaledDotOps.size() == 1)
     return;
 
   // dot case
@@ -881,7 +889,7 @@ void Pingponger::getDotPingponged() {
     }
     if (numStages > 2 && dotOps.size() == 1 && tileSize == mediumTile &&
         aShape[1] == 32 && elemWidth == 16) {
-      if (transformNS3(builder, loc).failed()) {
+      if (transformTwoClusterWithLocalLoadAndAll(builder, loc).failed()) {
         LDBG("Encountered failure when trying to execute the NS3 ping pong "
              "cluster transformation");
         return;
@@ -993,8 +1001,8 @@ void Pingponger::getDotPingponged() {
       transformOnePPClusters(builder, loc);
     // numWarps=4 doesn't need asymmetric sync, return.
     return;
-  } else if (numWarps == 8 &&
-             numStages == 2) { // Pingpong between warps from the same block
+  } else if (numWarps == 8 && numStages == 2) {
+    // Pingpong between warps from the same block
     if (lStoreOps.size() != 2) {
       std::stringstream message;
       message << "Unable to match ping pong slicing pattern. Details: "

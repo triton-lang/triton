@@ -1840,6 +1840,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // -----
 // CHECK-LABEL: async_ns3_gemm
 // CHECK-NOT: rocdl
+// CHECK-NS3-LABEL: async_ns3_gemm
 // CHECK-NS3: amdgpu.cond_barrier
 // CHECK-NS3: %[[LL0:.+]] = ttg.local_load
 // CHECK-NS3: %[[LL1:.+]] = ttg.local_load

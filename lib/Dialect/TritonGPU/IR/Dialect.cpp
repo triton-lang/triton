@@ -1987,6 +1987,12 @@ SwizzledSharedEncodingAttr AMDMfmaEncodingAttr::composeSharedLayoutForOperand(
   int maxPhase =
       std::max(std::min(simdWidth / perPhase, innerDimLength / vectorSize), 1u);
 
+  // Disable swizzling for scales
+  if (operandIdx >= 2) {
+    return SwizzledSharedEncodingAttr::get(getContext(), 1, 1, 1, sharedOrder,
+                                           ctaLayout);
+  }
+
   // TODO (zhanglx): figure out better parameters for mfma4
   if (getMDim() == 4)
     maxPhase = 4;
