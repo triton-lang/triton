@@ -155,8 +155,8 @@ using LoadToStreamOpMap = llvm::MapVector<Operation *, StreamOpVariant>;
 //            can cause invalid schedules to be produced.
 LogicalResult initSchedule(int maxDist, StreamStages &stages, int numStages,
                            int &numBuffers, int globalPrefetch,
-                           int localPrefetch, bool useAsyncCopy, bool waitAtTail,
-                           StreamClusters &clusters,
+                           int localPrefetch, bool useAsyncCopy,
+                           bool waitAtTail, StreamClusters &clusters,
                            tt::CoarseSchedule &schedule) {
   int lastStage = numStages - 1;
   stages[SCHED_GLOBAL_LOAD] = 0;
@@ -617,7 +617,8 @@ preprocessLoop(triton::AMD::ModuleAxisInfoAnalysis &axisInfoAnalysis,
 
 tt::CoarseSchedule
 buildSchedule(scf::ForOp &forOp, int numStages, const LoadToInfoMap &loadToInfo,
-              int globalPrefetch, int localPrefetch, bool useAsyncCopy, bool waitAtTail,
+              int globalPrefetch, int localPrefetch, bool useAsyncCopy,
+              bool waitAtTail,
               triton::AMD::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
   tt::CoarseSchedule schedule(numStages);
   StreamStages stages;
@@ -683,8 +684,9 @@ LogicalResult pipelineLoop(scf::ForOp forOp, int numStages, int globalPrefetch,
     return failure();
   }
 
-  auto schedule = buildSchedule(forOp, numStages, loadToInfo, globalPrefetch,
-                                localPrefetch, useAsyncCopy, waitAtTail, axisInfoAnalysis);
+  auto schedule =
+      buildSchedule(forOp, numStages, loadToInfo, globalPrefetch, localPrefetch,
+                    useAsyncCopy, waitAtTail, axisInfoAnalysis);
   if (schedule.empty()) {
     return failure();
   }
