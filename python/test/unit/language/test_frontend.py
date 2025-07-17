@@ -544,9 +544,9 @@ def test_call_in_while():
     i = 0
     while i < 10:
         if i == 5:
-            i = trivial_return(i + 1)
+            trivial_return()
         else:
-            i = trivial_return(i + 1)
+            trivial_return()
 
 
 def test_return_in_while():
