@@ -403,10 +403,44 @@ module attributes {"ttg.target" = "hip:gfx942", "ttg.num-ctas" = 1 : i32, "ttg.n
     // CHECK-NEXT: %[[SHL1:.+]] = llvm.shl %[[SHR1]], %[[CST3]] : i32
     // CHECK-NEXT: %[[ADD1:.+]] = llvm.add %[[ADD0]], %[[SHL1]] : i32
     // CHECK-NEXT: %[[ADD2:.+]] = llvm.add %[[XOR]], %[[ADD1]] : i32
-    // CHECK-NEXT: llvm.getelementptr inbounds %{{.+}}[%[[ADD2]]]
+    // CHECK: llvm.getelementptr inbounds %{{.+}}[%[[ADD2]]]
 
     // CHECK-COUNT-16: llvm.store {{.*}} : vector<1xf16>, !llvm.ptr<3>
     %0 = ttg.local_alloc %arg0 : (tensor<64x64xf16, #blocked>) -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+// CHECK-LABEL: padded_shared_layout_subview
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 8], warpsPerCTA = [2, 2], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
+#shared = #ttg.padded_shared<[128:+4, 256:+8] {order = [1, 0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.target" = "hip:gfx942", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  tt.func @padded_shared_layout_subview(%arg0: !ttg.memdesc<2x64x64xf16, #shared, #smem, mutable>) {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    // Skip two constants from the stride calculation
+
+    // CHECK-DAG: %[[CST0:.+]] = llvm.mlir.constant(0 : i32)
+    // CHECK-DAG: %[[CST2:.+]] = llvm.mlir.constant(2 : i32)
+    // CHECK-DAG: %[[CST7:.+]] = llvm.mlir.constant(7 : i32)
+    // CHECK-DAG: %[[CST8:.+]] = llvm.mlir.constant(8 : i32)
+    // CHECK-DAG: %[[CST3:.+]] = llvm.mlir.constant(3 : i32)
+
+    //  CHECK: %[[SHR0:.+]] = llvm.ashr %[[XOR:.+]], %[[CST7]] : i32
+    // CHECK-NEXT: %[[SHL0:.+]] = llvm.shl %[[SHR0]], %[[CST2]] : i32
+    // CHECK-NEXT: %[[ADD0:.+]] = llvm.add %[[SHL0]], %[[CST0]] : i32
+    // CHECK-NEXT: %[[SHR1:.+]] = llvm.ashr %[[XOR]], %[[CST8]] : i32
+    // CHECK-NEXT: %[[SHL1:.+]] = llvm.shl %[[SHR1]], %[[CST3]] : i32
+    // CHECK-NEXT: %[[ADD1:.+]] = llvm.add %[[ADD0]], %[[SHL1]] : i32
+    // CHECK-NEXT: %[[ADD2:.+]] = llvm.add %[[XOR]], %[[ADD1]] : i32
+    // CHECK: llvm.getelementptr inbounds %{{.+}}[%[[ADD2]]]
+
+    %1 = ttg.memdesc_subview %arg0[%c1_i32, %c0_i32, %c0_i32] : !ttg.memdesc<2x64x64xf16, #shared, #smem, mutable> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
+    %2 = ttg.local_load %1 : !ttg.memdesc<64x64xf16, #shared, #smem, mutable> -> tensor<64x64xf16, #blocked>
+    ttg.local_store %2, %1 : tensor<64x64xf16, #blocked> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
     tt.return
   }
 }
@@ -439,5 +473,76 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   "tt.reduce.return"(%3166) : (f32) -> ()
 }) : (tensor<64x16xf32, #ttg.amd_mfma<{versionMajor = 4, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 16], isTransposed = true}>>) -> tensor<64xf32, #ttg.slice<{dim = 1, parent = #ttg.amd_mfma<{versionMajor = 4, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 16], isTransposed = true}>}>>
   tt.return
+  }
+}
+
+// -----
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @atomic_kernel_bf16(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) attributes {noinline = false} {
+    // CHECK: llvm.atomicrmw {{.*}}, {{.*}} syncscope({{"agent"}}) release
+    // CHECK: llvm.atomicrmw {{.*}}, {{.*}} syncscope({{"agent"}}) acquire
+    %cst = arith.constant dense<true> : tensor<1024xi1, #blocked>
+    %cst_0 = arith.constant dense<1.000000e+00> : tensor<1024xbf16, #blocked>
+    %c1024_i32 = arith.constant 1024 : i32
+    %0 = tt.get_program_id x : i32
+    %1 = arith.muli %0, %c1024_i32 : i32
+    %2 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #blocked>
+    %3 = tt.addptr %arg0, %1 : !tt.ptr<bf16>, i32
+    %4 = tt.splat %3 : !tt.ptr<bf16> -> tensor<1024x!tt.ptr<bf16>, #blocked>
+    %5 = tt.addptr %4, %2 : tensor<1024x!tt.ptr<bf16>, #blocked>, tensor<1024xi32, #blocked>
+    %6 = tt.atomic_rmw fadd, acq_rel, gpu, %5, %cst_0, %cst : (tensor<1024x!tt.ptr<bf16>, #blocked>, tensor<1024xbf16, #blocked>, tensor<1024xi1, #blocked>) -> tensor<1024xbf16, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @atomic_kernel_bf16(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) attributes {noinline = false} {
+    // CHECK: llvm.atomicrmw {{.*}}, {{.*}} syncscope({{"agent"}}) release
+    // CHECK: llvm.atomicrmw {{.*}}, {{.*}} syncscope({{"agent"}}) monotonic
+    // CHECK: llvm.atomicrmw {{.*}}, {{.*}} syncscope({{"agent"}}) monotonic
+    // CHECK: llvm.atomicrmw {{.*}}, {{.*}} syncscope({{"agent"}}) acquire
+    %cst = arith.constant dense<true> : tensor<1024xi1, #blocked>
+    %cst_0 = arith.constant dense<1.000000e+00> : tensor<1024xbf16, #blocked>
+    %c1024_i32 = arith.constant 1024 : i32
+    %0 = tt.get_program_id x : i32
+    %1 = arith.muli %0, %c1024_i32 : i32
+    %2 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #blocked>
+    %3 = tt.addptr %arg0, %1 : !tt.ptr<bf16>, i32
+    %4 = tt.splat %3 : !tt.ptr<bf16> -> tensor<1024x!tt.ptr<bf16>, #blocked>
+    %5 = tt.addptr %4, %2 : tensor<1024x!tt.ptr<bf16>, #blocked>, tensor<1024xi32, #blocked>
+    %6 = tt.atomic_rmw fadd, acq_rel, gpu, %5, %cst_0, %cst : (tensor<1024x!tt.ptr<bf16>, #blocked>, tensor<1024xbf16, #blocked>, tensor<1024xi1, #blocked>) -> tensor<1024xbf16, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @atomic_kernel_fp32(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+    // CHECK: llvm.atomicrmw {{.*}}, {{.*}} syncscope({{"agent"}}) release
+    // CHECK: llvm.atomicrmw {{.*}}, {{.*}} syncscope({{"agent"}}) monotonic
+    // CHECK: llvm.atomicrmw {{.*}}, {{.*}} syncscope({{"agent"}}) monotonic
+    // CHECK: llvm.atomicrmw {{.*}}, {{.*}} syncscope({{"agent"}}) monotonic
+    // CHECK: llvm.atomicrmw {{.*}}, {{.*}} syncscope({{"agent"}}) monotonic
+    // CHECK: llvm.atomicrmw {{.*}}, {{.*}} syncscope({{"agent"}}) monotonic
+    // CHECK: llvm.atomicrmw {{.*}}, {{.*}} syncscope({{"agent"}}) monotonic
+    // CHECK: llvm.atomicrmw {{.*}}, {{.*}} syncscope({{"agent"}}) acquire
+    %cst = arith.constant dense<true> : tensor<1024xi1, #blocked>
+    %cst_0 = arith.constant dense<1.000000e+00> : tensor<1024xf32, #blocked>
+    %c1024_i32 = arith.constant 1024 : i32
+    %0 = tt.get_program_id x : i32
+    %1 = arith.muli %0, %c1024_i32 : i32
+    %2 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #blocked>
+    %3 = tt.splat %1 : i32 -> tensor<1024xi32, #blocked>
+    %4 = arith.addi %3, %2 : tensor<1024xi32, #blocked>
+    %5 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>, #blocked>
+    %6 = tt.addptr %5, %4 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
+    %7 = tt.atomic_rmw fadd, acq_rel, gpu, %6, %cst_0, %cst : (tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xf32, #blocked>, tensor<1024xi1, #blocked>) -> tensor<1024xf32, #blocked>
+    tt.return
   }
 }

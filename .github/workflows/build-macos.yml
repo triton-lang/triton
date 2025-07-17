@@ -97,6 +97,8 @@ jobs:
           # macos-latest has 3 vcpus and 7GB DRAM, to save memory we limit the number of jobs to 3
           # https://docs.github.com/en/actions/using-github-hosted-runners/about-github-hosted-runners/about-github-hosted-runners#standard-github-hosted-runners-for-public-repositories
           MAX_JOBS: 3
+          # Add elapsed time in seconds to ninja status to monitor where build stalls
+          NINJA_STATUS: "[%f/%t, %es elapsed] "
         run: |
           source ~/.venv/bin/activate
           echo "PATH is '$PATH'"

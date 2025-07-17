@@ -155,8 +155,15 @@ chooseMfmaInstruction(Location loc, int mfmaVersion, RankedTensorType cType,
   } else {
     int minSize = std::min(M, N);
     if (minSize >= 32) {
-      mDim = 32;
-      nDim = 32;
+      // On CNDA2-4, if the element type is f64, we use 16x16 intrinsic as
+      // there's no 32x32 intrinsic.
+      if (aElemType.isF64() || bElemType.isF64()) {
+        mDim = 16;
+        nDim = 16;
+      } else {
+        mDim = 32;
+        nDim = 32;
+      }
     }
     if (minSize >= 16 && minSize < 32) {
       mDim = 16;
@@ -450,19 +457,22 @@ public:
     auto warpsPerTile =
         warpsPerTileMFMA(dotOp, retShape, numWarps, {mDim, nDim});
 
+    Type mfmaAccType;
+    if (oldRetType.getElementType().isIntOrIndex())
+      mfmaAccType = rewriter.getIntegerType(32);
+    else if (oldRetType.getElementType().isF64())
+      mfmaAccType = rewriter.getF64Type();
+    else
+      mfmaAccType = rewriter.getF32Type();
+
     // Use transposed mfma layout to enable larger vectorization for global
     // store instructions.
     auto aElemTy = mfmaInstr->aElementType;
     ttg::AMDMfmaEncodingAttr mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
         oldRetType.getContext(),
         /*version*/ mfmaVersion, warpsPerTile,
-        /*instrShape*/ mDim, nDim, /*isTransposed=*/true, CTALayout);
-
-    Type mfmaAccType;
-    if (oldRetType.getElementType().isIntOrIndex())
-      mfmaAccType = rewriter.getIntegerType(32);
-    else
-      mfmaAccType = rewriter.getF32Type();
+        /*instrShape*/ mDim, nDim, /*isTransposed=*/true, CTALayout,
+        mfmaAccType);
 
     // convert accumulator
     auto oldAcc = dotOp.getC();
@@ -657,7 +667,7 @@ public:
     // for global store instructions.
     auto mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
         ctx, /*version=*/mfmaVersion, mfmaWarpsPerCTA, /*instrShape=*/mDim,
-        nDim, /*isTransposed=*/true, ctaLayout);
+        nDim, /*isTransposed=*/true, ctaLayout, oldRetType.getElementType());
 
     auto newRetType = RankedTensorType::get(
         oldRetType.getShape(), oldRetType.getElementType(), mfmaEnc);
@@ -815,7 +825,8 @@ public:
     // for global store instructions.
     auto mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
         ctx, /*verison=*/mfmaVersion, warpsPerTile,
-        /*instrShape=*/mDim, nDim, /*isTransposed=*/true, ctaLayout);
+        /*instrShape=*/mDim, nDim, /*isTransposed=*/true, ctaLayout,
+        oldRetType.getElementType());
 
     auto newRetType =
         RankedTensorType::get(oldShape, oldRetType.getElementType(), mfmaEnc);

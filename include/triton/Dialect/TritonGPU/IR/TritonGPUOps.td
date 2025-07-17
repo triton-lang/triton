@@ -273,6 +273,27 @@ def TTG_MemDescReshapeOp : TTG_Op<"memdesc_reshape", [Pure,
   }];
 
   let arguments = (ins TTG_MemDescType:$src);
+
+  let builders = [
+    OpBuilder<(ins "Value":$src, "ArrayRef<int64_t>":$shape),
+              [{
+                MemDescType dstTy;
+                auto srcTy = cast<MemDescType>(src.getType());
+                auto result = inferReturnTypes($_builder.getContext(),
+                                           $_builder.getUnknownLoc(),
+                                           srcTy, shape, dstTy);
+                assert(succeeded(result) && "failed to infer return types");
+                build($_builder, $_state, dstTy, src);
+              }]>
+  ];
+  let extraClassDeclaration = [{
+      static LogicalResult inferReturnTypes(MLIRContext *context,
+                                        std::optional<Location> loc,
+                                        MemDescType srcTy,
+                                        ArrayRef<int64_t> dstShape,
+                                        MemDescType &inferredReturnType);
+  }];
+
   let results = (outs TTG_MemDescType:$result);
 
   let assemblyFormat = "$src attr-dict `:` qualified(type($src)) `->` qualified(type($result))";
@@ -410,12 +431,6 @@ def TTG_GlobalScratchAllocOp : TTG_Op<"global_scratch_alloc"> {
     I32Attr:$alignment
   );
   let results = (outs Arg<TT_Ptr, "", [MemAlloc<GlobalMemory>]>:$result);
-
-  let builders = [
-    OpBuilder<(ins "Type":$result, "int32_t":$nbytes, "int32_t":$alignment),
-              [{ build($_builder, $_state, result,
-                       $_builder.getI32IntegerAttr(nbytes), $_builder.getI32IntegerAttr(alignment)); }]>
-  ];
 
   let assemblyFormat = [{attr-dict `:` qualified(type($result))}];
 }

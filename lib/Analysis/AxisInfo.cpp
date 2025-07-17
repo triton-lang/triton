@@ -480,11 +480,19 @@ private:
 
   int64_t getDivisibility(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
                           int dim) override {
-    // lhs: d_lhs * k = gcd(d_lhs, d_rhs) * k' * k = gcd(d_lhs, d_rhs) * k''
-    // rhs: d_rhs * p = gcd(d_lhs, d_rhs) * p' * p = gcd(d_lhs, d_rhs) * p''
-    // lhs = gcd(d_lhs, d_rhs) * k'' = gcd(d_lhs, d_rhs) * d + r
-    // r must be divisible by gcd(d_lhs, d_rhs)
-    return gcd(lhs.getDivisibility(dim), rhs.getDivisibility(dim));
+    auto resTy = dyn_cast<RankedTensorType>(op.getType());
+    if (rhs.getConstancy(dim) > 1) {
+      // lhs: d_lhs * k = gcd(d_lhs, d_rhs) * k' * k = gcd(d_lhs, d_rhs) * k''
+      // rhs: d_rhs * p = gcd(d_lhs, d_rhs) * p' * p = gcd(d_lhs, d_rhs) * p''
+      // lhs = gcd(d_lhs, d_rhs) * k'' = gcd(d_lhs, d_rhs) * d + r
+      // r must be divisible by gcd(d_lhs, d_rhs)
+      return gcd(lhs.getDivisibility(dim), rhs.getDivisibility(dim));
+    }
+    // Otherwise we shouldn't assume any divisibility.
+    // For example:
+    // lhs: [2, 2, 4, 4], rhs: [0, 1, 2, 3]
+    // lhs % rhs = [0, 0, 0, 1]
+    return 1;
   };
 
   int64_t getConstancy(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
@@ -1224,8 +1232,7 @@ unsigned ModuleAxisInfoAnalysis::getContiguity(Value offsetsValue,
   // the analysis to one dimension. We should determine contiguity on the
   // flattenOuts() layout
   auto tensorTy = cast<RankedTensorType>(offsetsValue.getType());
-  auto linAttr =
-      gpu::toLinearEncoding(tensorTy.getEncoding(), tensorTy.getShape());
+  auto linAttr = gpu::toLinearEncoding(tensorTy);
   auto order = linAttr.getOrder();
   unsigned align = getAlignment(offsetsValue, elementBitWidth);
 
@@ -1258,8 +1265,7 @@ unsigned ModuleAxisInfoAnalysis::getAlignment(Value offsetsValue,
   auto *axisInfo = getAxisInfo(offsetsValue);
   if (!axisInfo)
     return 1;
-  auto linAttr =
-      gpu::toLinearEncoding(tensorTy.getEncoding(), tensorTy.getShape());
+  auto linAttr = gpu::toLinearEncoding(tensorTy);
   auto order = linAttr.getOrder();
   auto maxMultipleBytes = axisInfo->getDivisibility(order[0]);
   auto maxContig = axisInfo->getContiguity(order[0]);
@@ -1287,8 +1293,7 @@ unsigned ModuleAxisInfoAnalysis::getMaskAlignment(Value mask) {
   auto *axisInfo = getAxisInfo(mask);
   if (!axisInfo)
     return 1;
-  auto linAttr =
-      gpu::toLinearEncoding(tensorTy.getEncoding(), tensorTy.getShape());
+  auto linAttr = gpu::toLinearEncoding(tensorTy);
   auto maskOrder = linAttr.getOrder();
   auto alignment = std::max<unsigned>(axisInfo->getConstancy(maskOrder[0]), 1);
   LDBG("getMaskAlignment maskOrder[0] " << maskOrder[0] << " alignment "

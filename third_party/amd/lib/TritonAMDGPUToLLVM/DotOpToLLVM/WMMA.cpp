@@ -22,7 +22,6 @@
  */
 
 #include "../PatternTritonGPUOpToLLVM.h"
-#include "../TritonAMDGPUToLLVM/SchedInstructions.h"
 #include "TritonAMDGPUTransforms/WmmaGroup.h"
 #include "Utility.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
@@ -394,11 +393,6 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
   Type structTy = LLVM::LLVMStructType::getLiteral(
       wmmaLayout.getContext(), SmallVector<Type>(fc.size(), dstElemTy));
   Value res = packLLElements(loc, typeConverter, fc, rewriter, structTy);
-
-  const size_t mmaCount = numRepB * numRepM * numRepN * numRepK;
-  setNumGeneratedMMAs(op, mmaCount, maybeWmmaIntrinsic->mDim,
-                      maybeWmmaIntrinsic->nDim, maybeWmmaIntrinsic->kDim,
-                      aElemTy);
 
   rewriter.replaceOp(op, res);
   return success();

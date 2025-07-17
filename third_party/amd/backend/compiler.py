@@ -9,6 +9,7 @@ import tempfile
 import re
 import subprocess
 import functools
+import warnings
 from pathlib import Path
 
 
@@ -37,9 +38,11 @@ class HIPOptions:
     debug: bool = False
     sanitize_overflow: bool = True
     arch: str = None
-    # We have native support for OCP fp8 variants since CNDA4/RDNA4. For earlier generations,
+    # We have native support for OCP fp8 variants since CDNA4/RDNA4. For earlier generations,
     # we software emulate the support for them.
-    supported_fp8_dtypes: Tuple[str] = ("fp8e4nv", "fp8e5")
+    # UZ fp8 variants (fp8e4b8 and fp8e5b16) are natively supported for CDNA3. For other
+    # architectures they are software emulated.
+    supported_fp8_dtypes: Tuple[str] = ("fp8e4nv", "fp8e5", "fp8e5b16", "fp8e4b8")
     deprecated_fp8_dot_operand_dtypes: Tuple[str] = ()
     default_dot_input_precision: str = "ieee"
     allowed_dot_input_precisions: Tuple[str] = ("ieee", )
@@ -59,10 +62,6 @@ class HIPOptions:
     #
     # Current experimental scheduling variants:
     #
-    # local-prefetch: implements instruction scheduling similar to the one from the ROCm Composable
-    #                 Kernel library. Note, this variant requires the use of buffer load/store ops
-    #                 and a special software pipelining style - i.e., 1x LDS and 1x register
-    #                 prefetch buffers for each GEMM tile.
     # attention: enables a bunch of optimizations for attention kernels, including:
     #            - iglp 2 and sched.barrier around it
     #            - sink-insts-to-avoid-spills flag to avoid register spills
@@ -75,8 +74,11 @@ class HIPOptions:
         assert self.num_warps > 0 and (self.num_warps & (self.num_warps - 1)) == 0, \
                "num_warps must be a power of 2"
 
-        if self.arch == 'gfx950':
-            assert self.kpack == 1, "gfx950 only accepts kpack == 1"
+        if (self.arch == 'gfx950') and (self.kpack != 1):
+            warnings.warn(
+                f"kpack is deprecated starting from gfx950 and will be removed in later releases. So for now kpack = {self.kpack} will be overwritten to 1 to make transitioning easier."
+            )
+            object.__setattr__(self, 'kpack', 1)
 
         default_libdir = Path(__file__).parent / 'lib'
         extern_libs = {} if self.extern_libs is None else dict(self.extern_libs)
@@ -113,11 +115,12 @@ class HIPBackend(BaseBackend):
             args["allowed_dot_input_precisions"] = tuple(sorted(allowed_dot_input_precisions))
 
         if "supported_fp8_dtypes" not in opts:
-            supported_fp8_dtypes = set(HIPOptions.supported_fp8_dtypes)
-            if self.target.arch == 'gfx942':
-                # CDNA3/gfx942 has native support for AMD specific FP8 types.
-                supported_fp8_dtypes.update({'fp8e4b8', 'fp8e5b16'})
-            args["supported_fp8_dtypes"] = tuple(sorted(supported_fp8_dtypes))
+            args["supported_fp8_dtypes"] = tuple(sorted(HIPOptions.supported_fp8_dtypes))
+
+        if self.target.arch == 'gfx950':
+            deprecated_fp8_dot_operand_dtypes = set(HIPOptions.deprecated_fp8_dot_operand_dtypes)
+            deprecated_fp8_dot_operand_dtypes.update({"fp8e5b16", "fp8e4b8"})
+            args["deprecated_fp8_dot_operand_dtypes"] = tuple(sorted(deprecated_fp8_dot_operand_dtypes))
 
         if "enable_fp_fusion" not in opts:
             args["enable_fp_fusion"] = knobs.language.default_fp_fusion
@@ -237,10 +240,6 @@ class HIPBackend(BaseBackend):
         local_prefetch = knobs.amd.local_prefetch
         use_async_copy = knobs.amd.use_async_copy
 
-        # The `local-prefetch` scheduling variant requires turning on buffer ops.
-        if options.schedule_hint == "local-prefetch":
-            global_prefetch = local_prefetch = 1
-
         amd.passes.ttgpuir.add_stream_pipeline(pm, options.num_stages, global_prefetch, local_prefetch, use_async_copy)
         if use_async_copy:
             amd.passes.ttgpuir.add_coalesce_async_copy(pm, options.arch)
@@ -273,15 +272,16 @@ class HIPBackend(BaseBackend):
         return mod
 
     @staticmethod
-    def ttgir_opt(src, metadata, options):
+    def gluon_to_ttgir(src, metadata, options):
         mod = src
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
 
-        passes.ttgpuir.add_inliner(pm)
+        passes.gluon.add_inliner(pm)
+        passes.gluon.add_resolve_auto_encodings(pm)
         passes.common.add_sccp(pm)
         passes.ttir.add_loop_aware_cse(pm)
-        passes.ttgpuir.add_canonicalizer(pm)
+        passes.gluon.add_canonicalizer(pm)
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)
 
         pm.run(mod)
@@ -385,6 +385,15 @@ class HIPBackend(BaseBackend):
 
         llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3, options.arch, '', [], options.enable_fp_fusion)
 
+        # Architectures with architected SGPRs store the workgroup id in ttmp9 (X) and ttmp7 (Y[15:0], Z[31:16]).
+        # These attributes are used to determine if Z should be masked out when loading Y. They are inferred during
+        # optimize_module from calls to @llvm.amdgcn.workgroup.id.x/y/z(). We cannot rely on this because a
+        # dispatch dimensions might be used even if there is no program_id() call for it.
+        if amd.has_architected_sgprs(options.arch):
+            fns[0].remove_fn_attr("amdgpu-no-workgroup-id-x")
+            fns[0].remove_fn_attr("amdgpu-no-workgroup-id-y")
+            fns[0].remove_fn_attr("amdgpu-no-workgroup-id-z")
+
         if knobs.amd.scalarize_packed_fops:
             amd.add_scalarize_packed_fops_llvm_pass(fns[0])
 
@@ -441,7 +450,7 @@ class HIPBackend(BaseBackend):
             stages["ttir"] = lambda src, metadata: self.make_ttir(src, metadata, options)
             stages["ttgir"] = lambda src, metadata: self.make_ttgir(src, metadata, options)
         elif language == Language.GLUON:
-            stages["ttgir"] = lambda src, metadata: self.ttgir_opt(src, metadata, options)
+            stages["ttgir"] = lambda src, metadata: self.gluon_to_ttgir(src, metadata, options)
         stages["llir"] = lambda src, metadata: self.make_llir(src, metadata, options)
         stages["amdgcn"] = lambda src, metadata: self.make_amdgcn(src, metadata, options)
         stages["hsaco"] = lambda src, metadata: self.make_hsaco(src, metadata, options)

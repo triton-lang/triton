@@ -15,18 +15,19 @@ using namespace mlir::triton::gpu;
 // blocked -> shared.
 // Swizzling in shared memory to avoid bank conflict. Normally used for
 // A/B operands of dots.
-void lowerDistributedToShared(
-    Location loc, Value src, Value dst, Value adaptorSrc,
-    const SharedMemoryObject &smemObj, const LLVMTypeConverter *typeConverter,
-    ConversionPatternRewriter &rewriter, const TargetInfoBase &targetInfo,
-    std::pair<size_t, Type> *const llvmOpCount = nullptr) {
+void lowerDistributedToShared(Location loc, Value src, Value dst,
+                              Value adaptorSrc,
+                              const SharedMemoryObject &smemObj,
+                              const LLVMTypeConverter *typeConverter,
+                              ConversionPatternRewriter &rewriter,
+                              const TargetInfoBase &targetInfo) {
   auto srcTy = cast<RankedTensorType>(src.getType());
   auto dstTy = cast<MemDescType>(dst.getType());
   auto elemTy = typeConverter->convertType(srcTy.getElementType());
 
   auto inVals = unpackLLElements(loc, adaptorSrc, rewriter);
   storeDistributedToShared(dstTy, srcTy, elemTy, inVals, smemObj, loc, rewriter,
-                           targetInfo, llvmOpCount);
+                           targetInfo);
 }
 
 LogicalResult lowerLocalStore(Location loc, MLIRContext *ctx, Value regVal,
@@ -38,9 +39,8 @@ LogicalResult lowerLocalStore(Location loc, MLIRContext *ctx, Value regVal,
   auto regTy = cast<RankedTensorType>(regVal.getType());
   auto llvmElemTy = typeConverter->convertType(memDescTy.getElementType());
 
-  auto regLayout = toLinearLayout(regTy.getShape(), regTy.getEncoding());
-  auto sharedLayout =
-      toLinearLayout(memDescTy.getShape(), memDescTy.getEncoding());
+  auto regLayout = toLinearLayout(regTy);
+  auto sharedLayout = toLinearLayout(memDescTy);
   auto cvt = regLayout.invertAndCompose(sharedLayout);
 
   auto kBlock = str_attr("block");
@@ -53,8 +53,8 @@ LogicalResult lowerLocalStore(Location loc, MLIRContext *ctx, Value regVal,
   auto kWarp = str_attr("warp");
   auto kOffset = str_attr("offset");
   cvt = cvt.sublayout({kReg, kLane, kWarp}, {kOffset});
-  lowerLocalLdSt(loc, ctx, cvt, inVals, llvmElemTy, smemObj.getBase(), rewriter,
-                 targetInfo);
+  lowerLocalLdSt(loc, ctx, cvt, inVals, llvmElemTy, memDescTy, smemObj,
+                 rewriter, targetInfo);
 
   return success();
 }
@@ -177,10 +177,9 @@ public:
     auto regTy = cast<RankedTensorType>(regVal.getType());
     auto typeConverter = getTypeConverter();
 
-    auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
-        loc, adaptor.getSrc(),
-        typeConverter->convertType(memDescTy.getElementType()), rewriter);
-    auto llvmElemTy = typeConverter->convertType(regTy.getElementType());
+    auto llvmElemTy = typeConverter->convertType(memDescTy.getElementType());
+    auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
+                                                         llvmElemTy, rewriter);
 
     // See [Legacy local_load/local_store]
     if (!targetInfo.isCuda()) {
@@ -192,9 +191,8 @@ public:
       return success();
     }
 
-    auto regLayout = toLinearLayout(regTy.getShape(), regTy.getEncoding());
-    auto sharedLayout =
-        toLinearLayout(memDescTy.getShape(), memDescTy.getEncoding());
+    auto regLayout = toLinearLayout(regTy);
+    auto sharedLayout = toLinearLayout(memDescTy);
     auto cvt = regLayout.invertAndCompose(sharedLayout);
     auto kBlock = str_attr("block");
     // NYI. We would need to emit a map.shared::cluster instruction.
@@ -207,8 +205,8 @@ public:
     auto kOffset = str_attr("offset");
     cvt = cvt.sublayout({kReg, kLane, kWarp}, {kOffset});
 
-    auto outVals = lowerLocalLdSt(op.getLoc(), ctx, cvt, {}, llvmElemTy,
-                                  smemObj.getBase(), rewriter, targetInfo);
+    auto outVals = lowerLocalLdSt(loc, ctx, cvt, {}, llvmElemTy, memDescTy,
+                                  smemObj, rewriter, targetInfo);
 
     Value result = packLLElements(loc, typeConverter, outVals, rewriter, regTy);
     rewriter.replaceOp(op, result);
@@ -245,7 +243,6 @@ public:
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, adaptor.getDst(),
                                                          llvmElemTy, rewriter);
     auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
-    std::pair<size_t, Type> llvmOpCount;
     if (targetInfo.isCuda()) {
       if (failed(lowerLocalStore(loc, ctx, regVal, memDescTy, smemObj, inVals,
                                  typeConverter, rewriter, targetInfo))) {
@@ -253,12 +250,9 @@ public:
       }
     } else {
       lowerDistributedToShared(loc, regVal, memDescVal, adaptor.getSrc(),
-                               smemObj, typeConverter, rewriter, targetInfo,
-                               &llvmOpCount);
+                               smemObj, typeConverter, rewriter, targetInfo);
     }
 
-    targetInfo.localStoreOpAnnotation(op, llvmOpCount.first,
-                                      llvmOpCount.second);
     rewriter.eraseOp(op);
     return success();
   }

@@ -538,3 +538,11 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32}
     tt.return %result : tensor<128x128xf32, #blocked>
   }
 }
+
+// -----
+
+tt.func @unsplat_invalid(%arg0: tensor<128xf32>) {
+  // expected-error @below {{source tensor must have exactly one element}}
+  %0 = tt.unsplat %arg0 : tensor<128xf32>
+  tt.return
+}
