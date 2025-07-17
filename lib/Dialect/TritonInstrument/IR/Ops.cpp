@@ -67,6 +67,21 @@ LogicalResult ExperimentalMarkAsWriteOp::verify() {
   return success();
 }
 
+LogicalResult ExperimentalCommitWriteWithBarrierOp::verify() {
+  auto writeBarsType = cast<RankedTensorType>(getWriteBarsType());
+  auto writeStateType = cast<RankedTensorType>(getWriteStateType());
+  auto barriersType = getBarriers().getType();
+  if (writeBarsType.getShape()[0] != writeStateType.getShape()[0])
+    return emitError()
+           << "writeBars and writeState must have the same number of buffers";
+  if (writeBarsType.getShape()[1] != barriersType.getShape()[0])
+    return emitError() << "writeBars dim 1 must match number of barriers";
+  if (!verifyBarsEncoding(writeBarsType))
+    return emitError() << "writeBars must have encoding that ensures that all "
+                          "its elements reside in a single thread";
+  return success();
+}
+
 LogicalResult ExperimentalMarkAsReadOp::verify() {
   auto buffersType = getBuffers().getType();
   auto barriersType = getBarriers().getType();
@@ -78,6 +93,21 @@ LogicalResult ExperimentalMarkAsReadOp::verify() {
     return emitError() << "readBars dim 1 must match number of barriers";
   if (!verifyBarsEncoding(readBarsType))
     return emitError() << "readBars must have encoding that ensures that all "
+                          "its elements reside in a single thread";
+  return success();
+}
+
+LogicalResult ExperimentalClearWriteBarrierOp::verify() {
+  auto writeBarsType = cast<RankedTensorType>(getWriteBarsType());
+  auto barriersType = getBarriers().getType();
+  auto writeStateType = cast<RankedTensorType>(getWriteStateType());
+  if (writeBarsType.getShape()[0] != writeStateType.getShape()[0])
+    return emitError()
+           << "writeBars and writeState must have the same number of buffers";
+  if (writeBarsType.getShape()[1] != barriersType.getShape()[0])
+    return emitError() << "writeBars dim 1 must match number of barriers";
+  if (!verifyBarsEncoding(writeBarsType))
+    return emitError() << "writeBars must have encoding that ensures that all "
                           "its elements reside in a single thread";
   return success();
 }

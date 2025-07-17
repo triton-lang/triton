@@ -401,6 +401,14 @@ private:
           }
         }
       }
+      if (auto commitOp = dyn_cast<ttng::TCGen5CommitOp>(op)) {
+        b.create<tti::ExperimentalCommitWriteWithBarrierOp>(
+            commitOp.getBarrier(), barriers,
+            writeBarriersAlloc[(int)MemType::TMEM],
+            writeBarriersType[(int)MemType::TMEM],
+            writeStateAlloc[(int)MemType::TMEM],
+            writeStateType[(int)MemType::TMEM], commitOp.getPred());
+      }
       if (auto asyncCommitGroupOp = dyn_cast<ttg::AsyncCommitGroupOp>(op)) {
         b.create<tti::ExperimentalCommitWritesOp>(writeCommitsAlloc,
                                                   writeCommitsType, nullptr);
