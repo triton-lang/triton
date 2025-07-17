@@ -7,9 +7,10 @@ from .base import Layout
 class HopperMXScaleLayout(Layout):
     name: str = "HOPPER_SCALE"
 
-    def __init__(self, shape, num_warps=8) -> None:
+    def __init__(self, shape, mx_axis=0, num_warps=8) -> None:
         assert num_warps & (num_warps - 1) == 0, "warps_n must be a power of 2"
         super().__init__(shape)
+        self.mx_axis = mx_axis
         self.num_warps = num_warps
 
     def swizzle_data(self, data):
@@ -54,11 +55,13 @@ class HopperMXScaleLayout(Layout):
 
 
 @triton.jit
-def unswizzle_mxfp4_scale_hopper(x, num_warps: tl.constexpr):
+def unswizzle_mxfp4_scale_hopper(x, mx_axis: tl.constexpr, num_warps: tl.constexpr):
     """
     Triton inverse of swizzle_mxfp4_scale_hopper
     """
     tl.static_assert(len(x.shape) == 2, "NYI")
+    # implementation assumes mxfp data is packed along the last dimension
+    x = x.trans() if mx_axis == 0 else x
     M: tl.constexpr = x.shape[0]
     K: tl.constexpr = x.shape[1]
     tl.static_assert(M % num_warps == 0, f"M must be divisible by {num_warps}. Got {M}")
@@ -66,4 +69,6 @@ def unswizzle_mxfp4_scale_hopper(x, num_warps: tl.constexpr):
     x = x.reshape(M // num_warps, num_warps, K // 64, 2, 8, 2, 2)
     x = x.trans(0, 3, 1, 6, 4, 2, 5)
     x = x.reshape(M * 32, K // 32)
+    # implementation assumed mxfp data is packed along the last dimension
+    x = x.trans() if mx_axis == 0 else x
     return x

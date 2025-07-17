@@ -28,8 +28,8 @@ def _compress_fourth(x):
     return ((x & 0x8) << 11) | ((x & 0x6) << 9) | ((x & 0x1) << 13)
 
 
-def _pack_bits(x: torch.Tensor, op_idx: int):
-    if op_idx == 1:
+def _pack_bits(x: torch.Tensor, mx_axis: int):
+    if mx_axis == 1:
         x = x.mT
     x = x.contiguous()
     assert x.shape[-1] % 4 == 0, "Input tensor must have a last dimension divisible by 4"
@@ -41,7 +41,7 @@ def _pack_bits(x: torch.Tensor, op_idx: int):
     x = first | right_shift_unsigned(second, 3) | right_shift_unsigned(third, 6) | fourth
     assert x.is_contiguous()
     x = x.view(torch.uint8)
-    if op_idx == 1:
+    if mx_axis == 1:
         x = x.mT
     return x
 
@@ -69,8 +69,8 @@ def _bf16x2_to_fp4e2m1x2(x):
     return ret_lo | (ret_hi << 4)
 
 
-def _unpack_bits(x, op_idx: int):
-    if op_idx == 1:
+def _unpack_bits(x, mx_axis: int):
+    if mx_axis == 1:
         x = x.mT
     x = x.view(torch.int32)
     m = 0b10000001110000001000000111000000
@@ -81,7 +81,7 @@ def _unpack_bits(x, op_idx: int):
     x = torch.stack(unpacked, dim=-1)
     x = x.flatten(-2, -1)
     x = _bf16x2_to_fp4e2m1x2(x)
-    if op_idx == 1:
+    if mx_axis == 1:
         x = x.mT
     return x
 
@@ -92,9 +92,9 @@ def _unpack_bits(x, op_idx: int):
 class HopperMXValueLayout(Layout):
     name: str = "HOPPER_VALUE"
 
-    def __init__(self, shape, op_idx=0, mma_version=3):
+    def __init__(self, shape, mx_axis=0, mma_version=3):
         super().__init__(shape)
-        self.op_idx = op_idx
+        self.mx_axis = mx_axis
         self.mma_version = mma_version
         *self.leading_shape, self.K, self.N, = shape
 
@@ -113,17 +113,17 @@ class HopperMXValueLayout(Layout):
         from thread 0-3. This is done to get a full cache line when loading them
         from HBM.
 
-        op_idx selects the lhs or rhs of the matmul.
+        mx_axis selects the lhs or rhs of the matmul.
 
         WARNING: Assumes that the matmul will be done in bf16 or fp16!
         Implementing it for fp8 is as easy as making the tile size (8, 8)
         """
-        assert self.op_idx in (0, 1)
+        assert self.mx_axis in (0, 1)
         batch = data.ndim - 2
         assert batch >= 0
         assert self.mma_version in (2, 3)
         # canonicalize dimensions
-        if self.op_idx == 0:
+        if self.mx_axis == 0:
             data = data.mT
         init_shape = data.shape
 
@@ -176,16 +176,16 @@ class HopperMXValueLayout(Layout):
         assert data.shape[-2] == init_shape[-2] // 4
         assert data.shape[-1] == init_shape[-1] * 4
         # twiddle the bits
-        data = _pack_bits(data, self.op_idx)
+        data = _pack_bits(data, self.mx_axis)
         # de-canonicalize
-        if self.op_idx == 0:
+        if self.mx_axis == 0:
             data = data.mT
         return data
 
     def unswizzle_data(self, data):
-        if self.op_idx == 0:
+        if self.mx_axis == 0:
             data = data.mT
-        data = _unpack_bits(data, self.op_idx)
+        data = _unpack_bits(data, self.mx_axis)
         *batch, M, K = data.shape
         # We have two times the elements if we already upcasted to bfloat16
         mult = 2 if data.dtype == torch.bfloat16 else 1
@@ -200,7 +200,7 @@ class HopperMXValueLayout(Layout):
         perm = list(range(b)) + [b + p for p in perm]
         data = data.permute(*perm)
         data = data.reshape(*batch, M * 4, K // 4)
-        if self.op_idx == 0:
+        if self.mx_axis == 0:
             data = data.mT
         return data[..., :self.K, :self.N]
 
@@ -209,14 +209,14 @@ class HopperMXValueLayout(Layout):
 
 
 @triton.jit
-def _unshuffle_triton(x, op_idx: tl.constexpr, mma_version: tl.constexpr):
+def _unshuffle_triton(x, mx_axis: tl.constexpr, mma_version: tl.constexpr):
     """
     Triton inverse of swizzle_mxfp4_value_hopper
     """
-    tl.static_assert(op_idx == 0 or op_idx == 1, "op_idx must be 0 or 1")
+    tl.static_assert(mx_axis == 0 or mx_axis == 1, "mx_axis must be 0 or 1")
     tl.static_assert(len(x.shape) == 2, "NYI")
     tl.static_assert(mma_version == 2 or mma_version == 3, "mma_version must be 2 or 3")
-    if op_idx == 1:
+    if mx_axis == 1:
         x = x.trans()
 
     # We have two times the elements if we already upcasted to bfloat16
@@ -232,13 +232,13 @@ def _unshuffle_triton(x, op_idx: tl.constexpr, mma_version: tl.constexpr):
     x = x.reshape(M // 4, 4, K // (4 * 8 * 2 * 2 * mult), 2, 4, 8 // u8_kwidth, 2, u8_kwidth * mult)
     x = x.trans(0, 6, 1, 3, 2, 5, 4, 7)
     x = x.reshape(M * 4, K // 4)
-    if op_idx == 1:
+    if mx_axis == 1:
         x = x.trans()
     return x
 
 
 @triton.jit
-def _unpack_fp4_to_bf16_triton(x):
+def _unpack_fp4_to_bf16_triton(x, mx_axis: tl.constexpr):
     # For now we implement just H100 support (mul.bf16x2)
     # A100 support is possible via fma
     r0, r1 = tl.inline_asm_elementwise(
@@ -277,7 +277,7 @@ def _unpack_fp4_to_bf16_triton(x):
 
 
 @triton.jit
-def mxfp4_to_bf16_triton(x, scale, mx_axis: tl.constexpr, op_idx: tl.constexpr):
+def mxfp4_to_bf16_triton(x, scale, mx_axis: tl.constexpr):
     """
     Implements the bit-untwiddling of a 32-bit integer (8 mxfp4 elements):
     (x << 0) & 0b1000000111000000
@@ -290,8 +290,8 @@ def mxfp4_to_bf16_triton(x, scale, mx_axis: tl.constexpr, op_idx: tl.constexpr):
     tl.static_assert(x.dtype == tl.uint8)
     if mx_axis == 0:
         x = x.trans()
-    x = _unpack_fp4_to_bf16_triton(x)
-    x = _unshuffle_triton(x, op_idx=0, mma_version=3)
+    x = _unpack_fp4_to_bf16_triton(x, mx_axis=mx_axis)
+    x = _unshuffle_triton(x, mx_axis=mx_axis, mma_version=3)
     if mx_axis == 0:
         x = x.trans()
 
