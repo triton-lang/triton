@@ -46,7 +46,6 @@ void ScopeIdAllocation::run() {
 
   if (nameToIdMap.size() > 0) {
     for (auto &[name, _] : nameToIdMap) {
-      funcOp->emitError("Scope name '") << name << "' must appear in pairs";
       mlir::emitError(funcOp->getLoc(), "Scope name '")
           << name << "' must appear in pairs";
     }
