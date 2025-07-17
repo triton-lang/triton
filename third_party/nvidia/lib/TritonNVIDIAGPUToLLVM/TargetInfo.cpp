@@ -95,7 +95,7 @@ static std::optional<NVVM::ReduxKind> matchReduxKind(triton::ReduceOp op,
   Operation *reduceOp = op.getSingleCombiner();
   if (!reduceOp)
     return std::nullopt;
-  if (computeCapability >= 100 && reduceOp->getResultTypes()[0].isF32()) {
+  if (computeCapability == 100 && reduceOp->getResultTypes()[0].isF32()) {
     if (isa<arith::MinimumFOp, arith::MaximumFOp>(reduceOp))
       useNanQualifier = true;
     if (isa<arith::MaxNumFOp, arith::MaximumFOp>(reduceOp))
@@ -550,7 +550,7 @@ void TargetInfo::storeMatrixShared(RewriterBase &rewriter, Location loc,
     }
     inputs.push_back(b.bitcast(input, i32_ty));
   }
-  rewriter.create<triton::nvgpu::StoreMatrixOp>(loc, ptr, inputs);
+  rewriter.create<NVVM::StMatrixOp>(loc, ptr, inputs, NVVM::MMALayout::row);
 }
 
 std::string TargetInfo::getMulhiFuncName(Type resultElementTy) const {
