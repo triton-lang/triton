@@ -10,7 +10,6 @@
 namespace mlir {
 
 class ModuleOp;
-template <typename T> class OperationPass;
 
 namespace triton::proton::gpu {
 
