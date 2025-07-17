@@ -16,7 +16,7 @@ jobs:
     timeout-minutes: 60
     env:
       RUNNER_TYPE: ${{ matrix.runner[0] }}
-      TRITON_BUILD_WITH_CCACHE: "true"
+      #TRITON_BUILD_WITH_CCACHE: "true"
       TRITON_BUILD_WITH_CLANG_LLD: "TRUE"
     name: Build MacOS
     steps:
