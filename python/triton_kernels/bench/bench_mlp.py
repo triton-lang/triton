@@ -101,14 +101,15 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP,
     optg = dict()
     opt1 = dict()
     opt2 = dict()
-    if w_dtype == "mx4" and not is_hip():
+    if w_dtype == "mx4":
         value_layout = StridedLayout
         scale_layout = StridedLayout
-        if torch.cuda.get_device_capability()[0] == 9:
-            value_layout = HopperMXValueLayout
-            scale_layout = HopperMXScaleLayout
-        if torch.cuda.get_device_capability()[0] == 10:
-            scale_layout = BlackwellMXScaleLayout
+        if not is_hip():
+            if torch.cuda.get_device_capability()[0] == 9:
+                value_layout = HopperMXValueLayout
+                scale_layout = HopperMXScaleLayout
+            if torch.cuda.get_device_capability()[0] == 10:
+                scale_layout = BlackwellMXScaleLayout
         opt1 = {"value_layout": value_layout, "scale_layout": scale_layout}
         opt2 = deepcopy(opt1)
     wg, wg_flex, wg_scale = quantize(wg, "bf16", dev, **optg)
