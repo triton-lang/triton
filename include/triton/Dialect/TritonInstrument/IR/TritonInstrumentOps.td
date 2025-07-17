@@ -51,16 +51,21 @@ def TTI_ExperimentalCheckOutstandingWritesOp : TTI_Op<"experimental_check_outsta
   let summary = "check if there are outstanding writes to a buffer guarded by a mbar";
   let description = [{
     Check if there are outstanding writes to a buffer guarded by a mbar.
+    If hwPipelined is true, error won't be trigerred if another pipelined
+    write is outstanding.
   }];
   let arguments = (ins
     TTG_MemDescType:$buf,
     TT_Tensor:$buffers,
     TT_PtrLike:$writeBars,
     TypeAttr:$writeBarsType,
+    TT_PtrLike:$writeState,
+    TypeAttr:$writeStateType,
+    I1Attr:$hwPipelined,
     Optional<I1>:$pred
   );
   let assemblyFormat = [{
-    $buf `{` $buffers `,` $writeBars `(` $writeBarsType `)` `}` (`,` $pred^)? attr-dict `:` type($buf) `,` type($buffers) `,` type($writeBars)
+    $buf `{` $buffers `,` $writeBars `(` $writeBarsType `)` `,` $writeState `(` $writeStateType `)` `}` (`,` $pred^)? `pipelined` $hwPipelined attr-dict `:` type($buf) `,` type($buffers) `,` type($writeBars) `,` type($writeState)
   }];
   let hasVerifier = 1;
 }
@@ -89,19 +94,41 @@ def TTI_ExperimentalMarkAsWriteOp : TTI_Op<"experimental_mark_as_write", [Memory
   let summary = "mark a buffer as being written to using mbar as a guard";
   let description = [{
     Mark a buffer as being written to using mbar as a guard.
+    If hwPipelined is true, the write won't trigger an error if another pipelined
+    write is executed later without waiting for the barrier.
   }];
   let arguments = (ins
     TTG_MemDescType:$buf,
-    TTG_MemDescType:$mbar,
     TT_Tensor:$buffers,
-    TT_PtrLike:$writeBars,
-    TypeAttr:$writeBarsType,
+    TT_PtrLike:$writeState,
+    TypeAttr:$writeStateType,
+    I1Attr:$hwPipelined,
     Optional<I1>:$pred
   );
   let assemblyFormat = [{
-    $buf `,` $mbar `{` $buffers `,` $writeBars `(` $writeBarsType `)` `}` (`,` $pred^)? attr-dict `:` type($buf) `,` type($mbar) `,` type($buffers) `,` type($writeBars)
+    $buf `{` $buffers `,` $writeState `(` $writeStateType `)` `}` (`,` $pred^)? `pipelined` $hwPipelined attr-dict `:` type($buf) `,` type($buffers) `,` type($writeState)
   }];
   let hasVerifier = 1;
+}
+
+
+def TTI_ExperimentalCommitWriteWithBarrierOp : TTI_Op<"experimental_commit_write_with_barrier", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+  let summary = "Mark all buffers being currently written as tracked by the barrier.";
+  let description = [{
+    Mark all buffers being currently written as tracked by the barrier.
+  }];
+  let arguments = (ins
+    TTG_MemDescType:$mbar,
+    TT_PtrLike:$writeBars,
+    TypeAttr:$writeBarsType,
+    TT_PtrLike:$writeState,
+    TypeAttr:$writeStateType,
+    Optional<I1>:$pred
+  );
+  let assemblyFormat = [{
+    $mbar `{` $writeBars `(` $writeBarsType `)` `,` $writeState `(` $writeStateType `)` `}` (`,` $pred^)? attr-dict `:` type($mbar) `,` type($writeBars) `,` type($writeState)
+  }];
+  // let hasVerifier = 1;
 }
 
 
@@ -133,12 +160,15 @@ def TTI_ExperimentalClearWriteBarrierOp : TTI_Op<"experimental_clear_write_barri
   }];
   let arguments = (ins
     TTG_MemDescType:$mbar,
+    TT_Tensor:$barriers,
     TT_PtrLike:$writeBars,
     TypeAttr:$writeBarsType,
+    TT_PtrLike:$writeState,
+    TypeAttr:$writeStateType,
     Optional<I1>:$pred
   );
   let assemblyFormat = [{
-    $mbar `{` $writeBars `(` $writeBarsType `)` `}` (`,` $pred^)? attr-dict `:` type($mbar) `,` type($writeBars)
+    $mbar `{` $barriers `,` $writeBars `(` $writeBarsType `)` `,` $writeState `(` $writeStateType `)` `}` (`,` $pred^)? attr-dict `:` type($mbar) `,` type($barriers) `,` type($writeBars) `,` type($writeState)
   }];
 }
 
@@ -161,6 +191,8 @@ def TTI_ExperimentalClearReadBarrierOp : TTI_Op<"experimental_clear_read_barrier
   let hasVerifier = 1;
 }
 
+
+// TODO: Potentially resolve the naming/functionality clash with commit_write_with_barrier
 def TTI_ExperimentalStageWriteForCommitOp : TTI_Op<"experimental_stage_write_for_commit", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
   let summary = "Preapre to an async copy of a buffer. Staged until commit_group is called.";
   let description = [{

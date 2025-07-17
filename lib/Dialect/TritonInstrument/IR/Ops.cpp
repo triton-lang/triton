@@ -8,9 +8,9 @@
 
 using namespace mlir;
 namespace {
-// readBars should have encoding that ensures that all its elements reside
-// in a single thread
-bool verifyReadBarsEncoding(RankedTensorType readBarsType) {
+// readBars/writeBars should have encoding that ensures that all its elements
+// reside in a single thread
+bool verifyBarsEncoding(RankedTensorType readBarsType) {
   auto encoding =
       cast<triton::gpu::BlockedEncodingAttr>(readBarsType.getEncoding());
   int rank = encoding.getRank();
@@ -27,12 +27,20 @@ bool verifyReadBarsEncoding(RankedTensorType readBarsType) {
 namespace mlir::triton::instrument {
 
 LogicalResult ExperimentalCheckOutstandingWritesOp::verify() {
-  auto writeBarsType = cast<RankedTensorType>(getWriteBarsType());
+  auto writeStateType = cast<RankedTensorType>(getWriteStateType());
   auto buffersType = getBuffers().getType();
-  if (writeBarsType.getShape() != buffersType.getShape() ||
-      writeBarsType.getEncoding() != buffersType.getEncoding())
+  if (writeStateType.getShape() != buffersType.getShape() ||
+      writeStateType.getEncoding() != buffersType.getEncoding())
     return emitError()
-           << "writeBars and buffers must have the same shape and encoding";
+           << "writeState and buffers must have the same shape and encoding";
+  auto writeBarsType = cast<RankedTensorType>(getWriteBarsType());
+  // writeBars is 2D tensor of shape [num_buffers, num_barriers]
+  if (writeBarsType.getShape()[0] != buffersType.getShape()[0])
+    return emitError() << "writeBars dim 0 must match number of buffers";
+
+  if (!verifyBarsEncoding(writeBarsType))
+    return emitError() << "writeBars must have encoding that ensures that all "
+                          "its elements reside in a single thread";
   return success();
 }
 
@@ -43,7 +51,7 @@ LogicalResult ExperimentalCheckOutstandingReadsOp::verify() {
   if (readBarsType.getShape()[0] != buffersType.getShape()[0])
     return emitError() << "readBars dim 0 must match number of buffers";
 
-  if (!verifyReadBarsEncoding(readBarsType))
+  if (!verifyBarsEncoding(readBarsType))
     return emitError() << "readBars must have encoding that ensures that all "
                           "its elements reside in a single thread";
   return success();
@@ -51,11 +59,11 @@ LogicalResult ExperimentalCheckOutstandingReadsOp::verify() {
 
 LogicalResult ExperimentalMarkAsWriteOp::verify() {
   auto buffersType = getBuffers().getType();
-  auto writeBarsType = cast<RankedTensorType>(getWriteBarsType());
-  if (writeBarsType.getShape() != buffersType.getShape() ||
-      writeBarsType.getEncoding() != buffersType.getEncoding())
+  auto writeStateType = cast<RankedTensorType>(getWriteStateType());
+  if (writeStateType.getShape() != buffersType.getShape() ||
+      writeStateType.getEncoding() != buffersType.getEncoding())
     return emitError()
-           << "writeBars and buffers must have the same shape and encoding";
+           << "writeState and buffers must have the same shape and encoding";
   return success();
 }
 
@@ -68,7 +76,7 @@ LogicalResult ExperimentalMarkAsReadOp::verify() {
     return emitError() << "readBars dim 0 must match number of buffers";
   if (readBarsType.getShape()[1] != barriersType.getShape()[0])
     return emitError() << "readBars dim 1 must match number of barriers";
-  if (!verifyReadBarsEncoding(readBarsType))
+  if (!verifyBarsEncoding(readBarsType))
     return emitError() << "readBars must have encoding that ensures that all "
                           "its elements reside in a single thread";
   return success();
@@ -80,7 +88,7 @@ LogicalResult ExperimentalClearReadBarrierOp::verify() {
   // readBars is 2D tensor of shape [num_buffers, num_barriers]
   if (readBarsType.getShape()[1] != barriersType.getShape()[0])
     return emitError() << "readBars dim 0 must match number of barriers";
-  if (!verifyReadBarsEncoding(readBarsType))
+  if (!verifyBarsEncoding(readBarsType))
     return emitError() << "readBars must have encoding that ensures that all "
                           "its elements reside in a single thread";
   return success();

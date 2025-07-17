@@ -371,25 +371,23 @@ struct MarkAsWriteOpConversion
       b.setInsertionPointToStart(ifBlock);
     }
     TypedValue<RankedTensorType> buffers = op.getBuffers();
-    RankedTensorType writeBarsType =
-        cast<RankedTensorType>(op.getWriteBarsType());
-    Value writeBars =
-        tti::createLoadScratchMemory(b, loc, op.getWriteBars(), writeBarsType)
+    RankedTensorType writeStateType =
+        cast<RankedTensorType>(op.getWriteStateType());
+    Value writeState =
+        tti::createLoadScratchMemory(b, loc, op.getWriteState(), writeStateType)
             ->getResult(0);
     Value buf = createMemDescToI64(b, loc, getTypeConverter(),
                                    op.getBuf().getType(), adaptor.getBuf());
-    Value mbar = createMemDescToI64(b, loc, getTypeConverter(),
-                                    op.getMbar().getType(), adaptor.getMbar());
 
     // Gluon pseudo-code:
-    // write_bars = tl.where(bufs == buf, mbar, write_bars)
+    // write_state = tl.where(bufs == buf, 1, write_state)
 
     auto buffersEqBuf = createCmpIntTensorScalar(b, loc, buffers, buf);
-    writeBars = b.create<arith::SelectOp>(
-        loc, buffersEqBuf, createFullLike(b, loc, mbar, writeBarsType),
-        writeBars);
-    tti::createStoreScratchMemory(b, loc, op.getWriteBars(), writeBars,
-                                  writeBarsType);
+    writeState = b.create<arith::SelectOp>(
+        loc, buffersEqBuf, tti::createConstIntTensor(b, loc, 1, writeStateType),
+        writeState);
+    tti::createStoreScratchMemory(b, loc, op.getWriteState(), writeState,
+                                  writeStateType);
     b.eraseOp(op);
     return success();
   }
