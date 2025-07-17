@@ -2,6 +2,7 @@
 #include "TritonAMDGPUToLLVM/Passes.h"
 #include "TritonAMDGPUToLLVM/TargetUtils.h"
 #include "TritonAMDGPUTransforms/Passes.h"
+#include "lld/Common/CommonLinkerContext.h"
 #include "lld/Common/Driver.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Target/LLVMIR/Dialect/ROCDL/ROCDLToLLVMIRTranslation.h"
@@ -28,7 +29,6 @@
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/TargetParser/TargetParser.h"
-
 #include <iostream>
 #include <pybind11/pybind11.h>
 #include <stdexcept>
@@ -131,6 +131,9 @@ static std::optional<std::string> lldInvoke(const char *inPath,
   llvm::raw_string_ostream errStream(errString);
   bool noErrors = lld::elf::link(args, llvm::outs(), errStream,
                                  /*exitEarly=*/false, /*disableOutput*/ false);
+  // Allow for calling the driver again in the same process.
+  // Force global state cleanup
+  lld::CommonLinkerContext::destroy();
   if (!noErrors) {
     errStream.flush();
     return errString;
