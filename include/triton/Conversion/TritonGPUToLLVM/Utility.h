@@ -327,7 +327,7 @@ LLVM::LLVMFuncOp appendOrGetExternFuncOp(RewriterBase &rewriter, Operation *op,
                                          StringRef funcName, Type funcType,
                                          StringRef libname = "",
                                          StringRef libpath = "");
-                                         
+
 // Multiply a square layout with 1 input and output dimension with a vector
 Value matrixVectorProd(TritonLLVMOpBuilder &b, const LinearLayout &A, Value x);
 } // namespace gpu

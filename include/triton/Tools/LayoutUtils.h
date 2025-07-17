@@ -158,8 +158,8 @@ LinearLayout transposeLinearLayout(LinearLayout layout, ArrayRef<int> order);
 // - Prioritizes making zero (broadcasting) vectors fixed-points of the
 //   permutation. I.e., if a vector is zero in both `src` and `dst` for the same
 //   input coordinate, it maps to itself under `P`.
-LinearLayout
-basisPermutationLayout(const LinearLayout &src, const LinearLayout &dst);
+LinearLayout basisPermutationLayout(const LinearLayout &src,
+                                    const LinearLayout &dst);
 
 } // namespace mlir::triton
 

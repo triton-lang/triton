@@ -302,7 +302,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     StringAttr kLane = str_attr("lane");
 
     auto factors = getWarpLayoutConvertDecomposition(srcTy, dstTy);
-    auto& [pReg, pLane, mixedTranspositions] = factors;
+    auto &[pReg, pLane, mixedTranspositions] = factors;
     int m = mixedTranspositions.size();
     bool pLaneIsTrivial = squareSublayoutIsIdentity(pLane, kLane);
     assert((m > 0 || !pLaneIsTrivial) && "Shuffles not needed for conversion");
@@ -360,14 +360,14 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     // under the layout conversion is 1 - (1/2)^m. The remaining fraction can be
     // packed into 32-bit registers so long as they fit.
     auto elemTy = getTypeConverter()->convertType(srcTy.getElementType());
-    int bitwidth = elemTy.isIntOrFloat() ? elemTy.getIntOrFloatBitWidth()
-                                         : kPtrBitWidth;
+    int bitwidth =
+        elemTy.isIntOrFloat() ? elemTy.getIntOrFloatBitWidth() : kPtrBitWidth;
     int nPackPrelim = llvm::Log2_32(std::clamp(32 / bitwidth, 1, 4));
     int nReg = pReg.getTotalInDimSizeLog2();
     int nPack = std::min(nPackPrelim, nReg - m);
-    
+
     // Determine any needed register bit conjugations.
-    SmallVector<std::pair<int32_t,int32_t>> regConjugations;
+    SmallVector<std::pair<int32_t, int32_t>> regConjugations;
     llvm::SmallSet<int32_t, 6> usedRegBits;
     if (nPack > 0) {
       // Any `regBitIdx` not originally in `mixedTranspositions` and `>= nPack`
@@ -472,7 +472,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     if (!removeBroadcastDst.isIdentity())
       outVals = broadcastAs(outVals, dstLayout);
 
-    Value result = packLLElements(loc, getTypeConverter(), outVals, rewriter, 
+    Value result = packLLElements(loc, getTypeConverter(), outVals, rewriter,
                                   op.getType());
     rewriter.replaceOp(op, result);
     return success();
@@ -574,9 +574,10 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     return vals;
   }
 
-  SmallVector<Value> transferWithinWarpShipImpl(
-      Location loc, ConversionPatternRewriter &rewriter, ArrayRef<Value> inVals,
-      int nPack, std::pair<int, int> mixedTransposition) const {
+  SmallVector<Value>
+  transferWithinWarpShipImpl(Location loc, ConversionPatternRewriter &rewriter,
+                             ArrayRef<Value> inVals, int nPack,
+                             std::pair<int, int> mixedTransposition) const {
     // Implements the effects of a single mixed transposition as in
     // `transferWithinWarpSwapImpl`, but uses auxiliary registers to hold the
     // values to be shuffled, resulting in fewer emitted instructions.

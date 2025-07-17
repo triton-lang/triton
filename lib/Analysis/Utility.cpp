@@ -254,7 +254,7 @@ getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
   // viewed as surjections of GF(2) vector spaces:
   //
   //            ll_src: H_src -> M   and   ll_dst: H_dst -> M,
-  // 
+  //
   // where each is represented by a 'subpermutation' matrix, i.e., a permutation
   // matrix with zero columns possibly inserted. A layout conversion can be
   // viewed as a map P': H_src -> H_dst which factors ll_src = ll_dst \circ P'.
@@ -327,7 +327,7 @@ getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
       padDim(kLane, nLaneBases);
       // Surjectivity is not expected in general since we do not consider
       // the 'warp' and 'block' dimensions of the original layouts.
-      return LinearLayout(std::move(newBases), ll.getOutDims(), 
+      return LinearLayout(std::move(newBases), ll.getOutDims(),
                           /*requireSurjective=*/false);
     };
     S = padWithZeros(S);
@@ -766,10 +766,10 @@ bool cvtNeedsWarpShuffle(RankedTensorType srcTy, RankedTensorType dstTy) {
   auto kRegister = StringAttr::get(ctx, "register");
   auto kLane = StringAttr::get(ctx, "lane");
   if (to_vector(layout.getOutDimNames()) ==
-         SmallVector<StringAttr, 2>{kRegister, kLane}) {
+      SmallVector<StringAttr, 2>{kRegister, kLane}) {
     auto factors = getWarpLayoutConvertDecomposition(srcTy, dstTy);
     return (factors.mixedTranspositions.size() < 2);
-  } 
+  }
   return false;
 }
 

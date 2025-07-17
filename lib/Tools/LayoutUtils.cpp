@@ -447,8 +447,8 @@ LinearLayout transposeLinearLayout(LinearLayout layout, ArrayRef<int> order) {
                       to_vector(layout.getOutDimNames()));
 }
 
-LinearLayout
-basisPermutationLayout(const LinearLayout &src, const LinearLayout &dst) {
+LinearLayout basisPermutationLayout(const LinearLayout &src,
+                                    const LinearLayout &dst) {
   // This function computes a permutation layout `P` which satisfies the
   // property `src = dst \circ P`. It requires that the multiset of basis
   // vectors for each of `src` and `dst` agree and that the nonzero values in
@@ -456,8 +456,8 @@ basisPermutationLayout(const LinearLayout &src, const LinearLayout &dst) {
   // layout so long as the degree of broadcasting (the number of zero basis
   // vectors) is the same between the two layouts.
   //
-  // The orders of the input and output dimensions of `P` are set to be the order
-  // of the input dimensions of `src`.
+  // The orders of the input and output dimensions of `P` are set to be the
+  // order of the input dimensions of `src`.
   //
   // The mapping of broadcasting basis vectors prioritizes keeping such vectors
   // as fixed points of the permutation. I.e., if `src[inDim][i]` and
@@ -465,7 +465,7 @@ basisPermutationLayout(const LinearLayout &src, const LinearLayout &dst) {
   // where `inDimIdx` is the index of `inDim` in `src`. Otherwise, they are
   // paired according to their order of appearance in the two layouts, again
   // following the order of the input dimensions of `src`.
-  // 
+  //
   // The algorithm first performs a linear scan over the columns of `dst` and
   // `src` to build a map from ('flattened') basis vectors to the input
   // vectors of `dst` while tracking the fixed-point zero vectors and 'free'
@@ -478,7 +478,7 @@ basisPermutationLayout(const LinearLayout &src, const LinearLayout &dst) {
                              dst.getInDimNames().begin()) &&
          "Layouts must have same input dimensions");
   for (auto inDim : srcInDims) {
-    assert(src.getInDimSize(inDim) == dst.getInDimSize(inDim) && 
+    assert(src.getInDimSize(inDim) == dst.getInDimSize(inDim) &&
            "Layouts must have same input dimension sizes");
   }
   auto srcOutDims = src.getOutDims();
@@ -525,7 +525,7 @@ basisPermutationLayout(const LinearLayout &src, const LinearLayout &dst) {
       }
     }
   }
-  assert(srcFreeZerosCount == dstFreeZeros.size() && 
+  assert(srcFreeZerosCount == dstFreeZeros.size() &&
          "src and dst layouts have differing number of zero bases");
 
   // Build the basis vectors for the permutation layout `P`.

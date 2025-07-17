@@ -180,15 +180,15 @@ private:
 //
 // `pReg` and `pLane` are square layouts each with only one input and output
 // dimension. `mixedTranspositions` holds pairs of integers (i, j)
-// corresponding to the transposition (r_i l_j) of the i-th register basis vector
-// with the j-th lane basis vector.
+// corresponding to the transposition (r_i l_j) of the i-th register basis
+// vector with the j-th lane basis vector.
 struct DecomposedWarpConversion {
   triton::LinearLayout pReg, pLane;
   SmallVector<std::pair<int, int>> mixedTranspositions;
 };
 
 // Produces a decomposition of a permutation describing a warp-local layout
-// conversion as described in `DecomposedWarpConversion` above. 
+// conversion as described in `DecomposedWarpConversion` above.
 //
 // This function handles cases where the numbers of register and lane basis
 // vectors differ between the two layouts. This is done by padding the smaller
