@@ -6,7 +6,7 @@ module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
 // CHECK-LABEL: @experimental_buffer_pointers_tmem
 // CHECK:nvgpu.tensor_memory_base
 tt.func private @experimental_buffer_pointers_tmem() {
-  tti.experimental_buffer_pointers [0, 42], tmem : tensor<2xi64, #blocked>
+  tti.experimental_buffer_pointers [0, 42], tensor : tensor<2xi64, #blocked>
   tt.return
 }
 }

@@ -7,7 +7,7 @@ def TT_MemTypeAttr : I32EnumAttr<
     "MemType", "",
     [
         I32EnumAttrCase<"SHARED", 0, "shared">,
-        I32EnumAttrCase<"TMEM", 1, "tmem">,
+        I32EnumAttrCase<"TENSOR", 1, "tensor">,
     ]> {
     let cppNamespace = "::mlir::triton::instrument";
 }

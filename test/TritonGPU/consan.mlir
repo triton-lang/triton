@@ -140,7 +140,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
   // CHECK: #[[BUFS_L:.*]] = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
   // CHECK: @tmem_alloc
   tt.func public @tmem_alloc() {
-    // CHECK-DAG: %[[TMEM_BUFS:.*]] = tti.experimental_buffer_pointers [0], tmem : tensor<1xi64, #[[BUFS_L]]>
+    // CHECK-DAG: %[[TMEM_BUFS:.*]] = tti.experimental_buffer_pointers [0], tensor : tensor<1xi64, #[[BUFS_L]]>
     // CHECK-DAG: %[[BUFFERS:.*]] = tti.experimental_buffer_pointers [4096], shared : tensor<1xi64, #[[BUFS_L]]>
     // CHECK-DAG: %[[WRITE_BARS:.*]] = arith.constant dense<0> : tensor<1x1xi8,
     // CHECK: %[[WRT_BARS_GLOB:.*]] = ttg.global_scratch_alloc {alignment = 1 : i32, nbytes = 1 : i32} : !tt.ptr<i8>
@@ -179,7 +179,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // CHECK: tti.experimental_check_write_commit {{.*}}{%[[BUFFERS]], %[[OUTSTANDING_COMMITS_GLOB]](tensor<1xi8, #{{.*}}>)}
     // CHECK: tti.experimental_check_outstanding_reads {{.*}}{%[[BUFFERS]], %[[READ_BARS_GLOB]](tensor<1x1xi8, #{{.*}}>)}
     // CHECK: tti.experimental_mark_as_write {{.*}}{%[[BUFFERS]], %[[WRITE_STATE_GLOB]](tensor<1xi8, #{{.*}}>)}, %true pipelined false
-    // CHECK: tti.experimental_commit_write_with_barrier {{.*}}{%[[WRT_BARS_GLOB]](tensor<1x1xi8, #{{.*}}>), %[[WRITE_STATE_GLOB]](tensor<1xi8, #{{.*}}>)}
+    // CHECK: tti.experimental_commit_write_with_barrier {{.*}}{%[[BARRIERS]], %[[WRT_BARS_GLOB]](tensor<1x1xi8, #{{.*}}>), %[[WRITE_STATE_GLOB]](tensor<1xi8, #{{.*}}>)}
     ttng.async_tma_copy_global_to_local %arg0[%c0_i32, %c0_i32] %0, %bar, %true : !tt.tensordesc<tensor<32x32xf32, #shared>>, !ttg.memdesc<1xi64, #shared1, #smem, mutable> -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
     tt.return
   }
@@ -220,7 +220,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
   // CHECK-LABEL: @tcgen5_mma
   tt.func public @tcgen5_mma(%arg0: !tt.tensordesc<tensor<32x32xf32, #shared>>) {
     // CHECK-DAG: %[[SM_BUFS:.*]] = tti.experimental_buffer_pointers [0, 32768], shared : tensor<2xi64
-    // CHECK-DAG: %[[TM_BUFS:.*]] = tti.experimental_buffer_pointers [0], tmem : tensor<1xi64
+    // CHECK-DAG: %[[TM_BUFS:.*]] = tti.experimental_buffer_pointers [0], tensor : tensor<1xi64
     // CHECK-DAG: %[[BARRIERS:.*]] = tti.experimental_buffer_pointers [65536], shared : tensor<1xi64
     // CHECK: %[[SM_WRT_BARS_GLOB:.*]] = ttg.global_scratch_alloc {alignment = 1 : i32, nbytes = 2 : i32} : !tt.ptr<i8>
     // CHECK: %[[SM_WRITE_STATE_GLOB:.*]] = ttg.global_scratch_alloc {alignment = 1 : i32, nbytes = 2 : i32} : !tt.ptr<i8>
@@ -239,7 +239,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // CHECK: tti.experimental_check_outstanding_writes %[[ACC:.*]]{%[[TM_BUFS]], %[[TM_WRT_BARS_GLOB]](tensor<1x1xi8, #{{.*}}>), %[[TM_WRITE_STATE_GLOB]](tensor<1xi8, #{{.*}}>)}, %true pipelined true
     // CHECK: tti.experimental_check_outstanding_reads %[[ACC]]{%[[TM_BUFS]], %[[TM_READ_BARS_GLOB]](tensor<1x1xi8, #{{.*}}>)}
     // CHECK: tti.experimental_mark_as_write %[[ACC]]{%[[TM_BUFS]], %[[TM_WRITE_STATE_GLOB]](tensor<1xi8, #{{.*}}>)}, {{.*}} pipelined true
-    // CHECK: tti.experimental_commit_write_with_barrier {{.*}}{%[[TM_WRT_BARS_GLOB]](tensor<1x1xi8, #{{.*}}>), %[[TM_WRITE_STATE_GLOB]](tensor<1xi8, #{{.*}}>)}
+    // CHECK: tti.experimental_commit_write_with_barrier {{.*}}{%[[BARRIERS]], %[[TM_WRT_BARS_GLOB]](tensor<1x1xi8, #{{.*}}>), %[[TM_WRITE_STATE_GLOB]](tensor<1xi8, #{{.*}}>)}
     // CHECK: ttng.tc_gen5_mma %[[A]], %[[B]], %[[ACC]][], {{.*}}, {{.*}}, %[[BAR]]
     %c0_i32 = arith.constant 0 : i32
     %0 = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
@@ -264,7 +264,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
   // CHECK-LABEL: @tcgen5_mma_lhs_in_tmem
   tt.func public @tcgen5_mma_lhs_in_tmem(%arg0: !tt.tensordesc<tensor<32x32xf32, #shared>>) {
     // CHECK-DAG: %[[SM_BUFS:.*]] = tti.experimental_buffer_pointers [32768], shared : tensor<1xi64
-    // CHECK-DAG: %[[TM_BUFS:.*]] = tti.experimental_buffer_pointers [0, 128], tmem : tensor<2xi64
+    // CHECK-DAG: %[[TM_BUFS:.*]] = tti.experimental_buffer_pointers [0, 128], tensor : tensor<2xi64
     // CHECK-DAG: %[[BARRIERS:.*]] = tti.experimental_buffer_pointers [65536], shared : tensor<1xi64
     // CHECK: %[[SM_WRT_BARS_GLOB:.*]] = ttg.global_scratch_alloc {alignment = 1 : i32, nbytes = 1 : i32} : !tt.ptr<i8>
     // CHECK: %[[SM_WRITE_STATE_GLOB:.*]] = ttg.global_scratch_alloc {alignment = 1 : i32, nbytes = 1 : i32} : !tt.ptr<i8>
@@ -282,7 +282,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // CHECK: tti.experimental_check_outstanding_writes %[[ACC:.*]]{%[[TM_BUFS]], %[[TM_WRT_BARS_GLOB]](tensor<2x1xi8, #{{.*}}>), %[[TM_WRITE_STATE_GLOB]](tensor<2xi8, #{{.*}}>)}, %true pipelined true
     // CHECK: tti.experimental_check_outstanding_reads %[[ACC]]{%[[TM_BUFS]], %[[TM_READ_BARS_GLOB]](tensor<2x1xi8, #{{.*}}>)}
     // CHECK: tti.experimental_mark_as_write %[[ACC]]{%[[TM_BUFS]], %[[TM_WRITE_STATE_GLOB]](tensor<2xi8, #{{.*}}>)}, {{.*}} pipelined true
-    // CHECK: tti.experimental_commit_write_with_barrier {{.*}}{%[[TM_WRT_BARS_GLOB]](tensor<2x1xi8, #{{.*}}>), %[[TM_WRITE_STATE_GLOB]](tensor<2xi8, #{{.*}}>)}
+    // CHECK: tti.experimental_commit_write_with_barrier {{.*}}{%[[BARRIERS]], %[[TM_WRT_BARS_GLOB]](tensor<2x1xi8, #{{.*}}>), %[[TM_WRITE_STATE_GLOB]](tensor<2xi8, #{{.*}}>)}
     // CHECK: ttng.tc_gen5_mma %[[A]], %[[B]], %[[ACC]][], {{.*}}, {{.*}}, %[[BAR]]
     %c0_i32 = arith.constant 0 : i32
     %0 = ttng.tmem_alloc  {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<128x128xf16, #tmem1, #ttng.tensor_memory, mutable>
