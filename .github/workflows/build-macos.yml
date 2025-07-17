@@ -16,6 +16,8 @@ jobs:
     timeout-minutes: 60
     env:
       RUNNER_TYPE: ${{ matrix.runner[0] }}
+      TRITON_BUILD_WITH_CCACHE: "true"
+      TRITON_BUILD_WITH_CLANG_LLD: "TRUE"
     name: Build MacOS
     steps:
       - name: Checkout
@@ -43,7 +45,7 @@ jobs:
           echo "llvm=$(cat $llvm_file | cut -c 1-8)" >> $GITHUB_OUTPUT
           echo "nvidia=$(sha256sum $nvidia_file | cut -d ' ' -f 1)" >> $GITHUB_OUTPUT
           echo "json=$(cat $json_file)" >> $GITHUB_OUTPUT
-          echo "datetime=$(date -u -Iseconds)" >> $GITHUB_OUTPUT
+          # echo "datetime=$(date -u -Iseconds)" >> $GITHUB_OUTPUT
         shell: bash
       - name: Cache build dependencies
         uses: actions/cache@v4
