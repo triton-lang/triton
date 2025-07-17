@@ -345,9 +345,6 @@ def download_and_copy(name, src_func, dst_path, variable, version, url_func):
     tmp_path = os.path.join(triton_cache_path, "nvidia", name)  # path to cache the download
     dst_path = os.path.join(base_dir, "third_party", "nvidia", "backend", dst_path)  # final binary path
     src_path = os.path.join(tmp_path, src_path)
-    print(f"download_and_copy {tmp_path=}")
-    print(f"download_and_copy {src_path=}")
-    print(f"download_and_copy {dst_path=}")
     download = not os.path.exists(src_path)
     if os.path.exists(dst_path) and system == "Linux" and shutil.which(dst_path) is not None:
         curr_version = subprocess.check_output([dst_path, "--version"]).decode("utf-8").strip()
