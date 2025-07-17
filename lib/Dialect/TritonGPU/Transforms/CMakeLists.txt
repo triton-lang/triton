@@ -1,6 +1,5 @@
 add_triton_library(TritonGPUTransforms
   AccelerateMatmul.cpp
-  Canonicalize.cpp
   Coalesce.cpp
   F32DotTC.cpp
   FuseNestedLoops.cpp
@@ -47,6 +46,8 @@ add_triton_library(TritonGPUTransforms
   TritonTransforms
   TritonGPUIR
   TritonNvidiaGPUIR
+  NVWSIR
+  NVWSTransforms
   TritonToTritonGPU
   TritonInstrumentIR
   MLIRTransformUtils

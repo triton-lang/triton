@@ -223,7 +223,7 @@ static bool is16x256Layout(RankedTensorType tensorType, Attribute memEncoding,
   int blockN = tmemLayout.getBlockN();
   std::optional<LinearLayout> ll0 =
       getTmemLoadStoreLayout16x256(blockM, blockN, tensorType, numWarps);
-  auto ll1 = toLinearLayout(tensorType.getShape(), tensorType.getEncoding());
+  auto ll1 = toLinearLayout(tensorType);
   return ll0.has_value() && ll0.value() == ll1;
 }
 
@@ -770,7 +770,7 @@ struct TensorMemoryCopyOpConversion
     // the warpx4.32x128b mode, to load blocked scales from MXFP.
     // We will expand the support as we find more use cases for the instruction.
 
-    auto ll = toLinearLayout(srcTy.getShape(), srcTy.getEncoding());
+    auto ll = toLinearLayout(srcTy);
     // flattenOuts flattens into fortran order, so need to transpose first to
     // get C-order
     auto ctx = op.getContext();

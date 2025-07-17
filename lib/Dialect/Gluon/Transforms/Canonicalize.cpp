@@ -1,25 +1,28 @@
+#include "triton/Dialect/Gluon/Transforms/Passes.h"
+
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
-#include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
 using namespace mlir;
 using namespace triton;
 namespace ttg = triton::gpu;
 namespace ttng = triton::nvidia_gpu;
+namespace gluon = mlir::triton::gluon;
 
-namespace mlir::triton::gpu {
-#define GEN_PASS_DEF_TRITONGPUCANONICALIZE
-#include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
-} // namespace mlir::triton::gpu
+namespace mlir::triton::gluon {
+#define GEN_PASS_DEF_GLUONCANONICALIZE
+#include "triton/Dialect/Gluon/Transforms/Passes.h.inc"
+} // namespace mlir::triton::gluon
 
 namespace {
-struct Canonicalize
-    : public ttg::impl::TritonGPUCanonicalizeBase<Canonicalize> {
+struct Canonicalize : public gluon::impl::GluonCanonicalizeBase<Canonicalize> {
   void runOnOperation() override;
 };
 } // namespace

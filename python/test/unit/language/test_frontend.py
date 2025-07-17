@@ -311,11 +311,11 @@ def add_rhs_constexpr(agg):
 @triton.jit
 def test_aggregate_with_constexpr():
     # CHECK-LABEL: test_aggregate_with_constexpr
-    # CHECK: tt.call @"test_frontend.add_rhs_constexpr__test_frontend.AggregateWithConstexpr<i32S4S, constexpr[42]>
+    # CHECK: tt.call @"test_frontend.add_rhs_constexpr__test_frontend.AggregateWithConstexpr<i32S4S, constexpr_type[42]>
     agg = AggregateWithConstexpr.create(tl.arange(0, 4))
     add_rhs_constexpr(agg)
 
-    # CHECK: tt.func private @"test_frontend.add_rhs_constexpr__test_frontend.AggregateWithConstexpr<i32S4S, constexpr[42]>
+    # CHECK: tt.func private @"test_frontend.add_rhs_constexpr__test_frontend.AggregateWithConstexpr<i32S4S, constexpr_type[42]>
     # CHECK: %cst = arith.constant dense<42> : tensor<4xi32>
     # CHECK: arith.addi %arg0, %cst : tensor<4xi32>
 
@@ -501,3 +501,30 @@ def test_modify_if_livein():
         if box.value:
             box.value = False
     anchor(box.value)
+
+
+@triton.jit
+def recursive_reduce(x):
+    if x.shape[0] == 1:
+        return x
+    else:
+        x0, x1 = x.reshape((x.shape[0] // 2, 2)).split()
+        return recursive_reduce(x0) + recursive_reduce(x1)
+
+
+@filecheck_test
+@triton.jit
+def test_specialized_recursion():
+    # CHECK-LABEL: test_specialized_recursion
+    # CHECK: call {{.*}}recursive_reduce__i32S16S
+    x = tl.arange(0, 16)
+    recursive_reduce(x)
+
+    # CHECK: func {{.*}}recursive_reduce__i32S16S
+    # CHECK-COUNT-2: call {{.*}}recursive_reduce__i32S8S
+
+    # CHECK: func {{.*}}recursive_reduce__i32S8S
+    # CHECK-COUNT-2: call {{.*}}recursive_reduce__i32S4S
+
+    # CHECK: func {{.*}}recursive_reduce__i32S4S
+    # CHECK-COUNT-2: call {{.*}}recursive_reduce__i32S2S

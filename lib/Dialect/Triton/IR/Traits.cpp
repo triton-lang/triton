@@ -26,6 +26,8 @@ LogicalResult OpTrait::impl::verifyEquivalentType(Type typeA, Type typeB) {
   // If there's no encoding or the encodings are the same
   if (encodingA == encodingB)
     return success();
+  if (bool(encodingA) != bool(encodingB))
+    return failure();
 
   return cast<triton::DialectInferLayoutInterface>(&encodingA.getDialect())
       ->verifyLayoutsAreEqual(shapeA, encodingA, encodingB, {});

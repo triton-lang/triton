@@ -89,12 +89,6 @@ void init_triton_passes_ttgpuir(py::module &&m) {
   ADD_PASS_WRAPPER_0("add_fuse_nested_loops", createTritonGPUFuseNestedLoops);
   ADD_PASS_WRAPPER_0("add_coalesce_async_copy",
                      createTritonGPUCoalesceAsyncCopy);
-  ADD_PASS_WRAPPER_0("add_canonicalizer", createTritonGPUCanonicalize);
-  ADD_PASS_WRAPPER_0("add_inliner", [] {
-    return createInlinerPass(/*opPipelines=*/{}, [](OpPassManager &pm) {
-      pm.addPass(createTritonGPUCanonicalize());
-    });
-  });
   ADD_PASS_WRAPPER_0("add_concurrency_sanitizer",
                      createTritonInstrumentConcurrencySanitizer);
 }
@@ -105,6 +99,7 @@ void init_triton_passes_convert(py::module &&m) {
   ADD_PASS_WRAPPER_0("add_cf_to_llvmir", createConvertControlFlowToLLVMPass);
   ADD_PASS_WRAPPER_0("add_index_to_llvmir", createConvertIndexToLLVMPass);
   ADD_PASS_WRAPPER_0("add_arith_to_llvmir", createArithToLLVMConversionPass);
+  ADD_PASS_WRAPPER_0("add_nvvm_to_llvm", createConvertNVVMToLLVMPass);
 }
 
 void init_triton_passes_llvmir(py::module &&m) {
@@ -117,6 +112,8 @@ void init_gluon_passes(py::module &&m) {
   namespace gluon = mlir::triton::gluon;
   ADD_PASS_WRAPPER_0("add_resolve_auto_encodings",
                      gluon::createGluonResolveAutoEncodingsPass);
+  ADD_PASS_WRAPPER_0("add_canonicalizer", gluon::createGluonCanonicalize);
+  ADD_PASS_WRAPPER_0("add_inliner", gluon::createGluonInline);
 }
 
 void init_triton_passes(py::module &&m) {
