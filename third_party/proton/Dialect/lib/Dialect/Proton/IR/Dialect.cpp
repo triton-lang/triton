@@ -2,6 +2,7 @@
 
 #include "mlir/IR/DialectImplementation.h"
 #include "mlir/IR/OpImplementation.h"
+#include "mlir/Transforms/InliningUtils.h"
 
 #include "Dialect/Proton/IR/Dialect.cpp.inc"
 
