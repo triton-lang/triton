@@ -293,16 +293,17 @@ ColumnAction actionRemoveBroadcastedRegs(const LinearLayout &layout) {
   return ColumnAction(permOrder, kReg, bases.size());
 }
 std::pair<int64_t, ColumnAction>
-actionAdditiveStrides(const LinearLayout &layout) {
+actionAdditiveStrides(const LinearLayout &layout, uint64_t maskSpanOffsets) {
   // We are looking to put at the front (after any zeros) any basis that does
   // not intersect with any bit moved by any basis in kLane / kWarp
+  // and that is not moved by any affine offset
   assert(layout.getNumInDims() != 0);
   auto kReg = *layout.getInDimNames().begin();
   assert(kReg.str() == "register");
   auto kLane = StringAttr::get(kReg.getContext(), "lane");
   auto kWarp = StringAttr::get(kReg.getContext(), "warp");
   assert(layout.getNumOutDims() == 1);
-  uint32_t bits = 0;
+  uint32_t bits = maskSpanOffsets;
   for (auto dim : {kLane, kWarp}) {
     const auto &bases = layout.getBases().lookup(dim);
     for (auto basis : bases) {

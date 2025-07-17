@@ -21,8 +21,9 @@ using namespace mlir::triton::NVIDIA;
 LogicalResult lowerLdStMatrix(
     Location loc, RankedTensorType tensorTy, MemDescType memDescType,
     bool transpose, Value &src, // Input for stmatrix, output for ldmatrix
-    Value smemBase, Type llvmElemTy, ConversionPatternRewriter &rewriter,
-    const TargetInfo &targetInfo, const LLVMTypeConverter *typeConverter,
+    SharedMemoryObject smemObj, Type llvmElemTy,
+    ConversionPatternRewriter &rewriter, const TargetInfo &targetInfo,
+    const LLVMTypeConverter *typeConverter,
     std::pair<size_t, Type> *const llvmOpCount = nullptr) {
   // Lower load via ldmatrix, store via stmatrix
 
@@ -68,11 +69,9 @@ LogicalResult lowerLdStMatrix(
   }
 
   std::optional<ColumnAction> maybePermutation;
-  LinearLayout tile;
+  LinearLayout tile = LinearLayout::identity1D(32 / bitwidth, kReg, kOffset) *
+                      LinearLayout::identity1D(4, kLane, kOffset);
   if (!transpose) {
-    tile = LinearLayout::identity1D(32 / bitwidth, kReg, kOffset) *
-           LinearLayout::identity1D(4, kLane, kOffset);
-
     // Find if there is a register permutation that allows us to divideLeft
     // We need to pass the map from regs to offsets, as is cvt
     maybePermutation = regPermForDivide(cvt, tile, /*left=*/true);
@@ -130,6 +129,19 @@ LogicalResult lowerLdStMatrix(
     reps = cvt;
   }
 
+  // If we are lowering a subslice, the subslice offsets shall not touch the
+  // contiguous part of the tile
+  if (auto mask = smemObj.getMaskSpanOffsets(memDescType)) {
+    for (const auto &bases : llvm::make_second_range(tile.getBases())) {
+      for (auto basis : bases) {
+        assert(basis.size() == 1 && "Expecting just kOffset");
+        if (basis[0] & mask) {
+          return failure();
+        }
+      }
+    }
+  }
+
   // We must have at least 2 register elements to use stmatrix.trans
   if (transpose && reps.getInDimSizeLog2(kReg) < llvm::Log2_32(32 / bitwidth)) {
     return failure();
@@ -183,6 +195,8 @@ LogicalResult lowerLdStMatrix(
   auto regBase = applyLinearLayout(loc, rewriter, addrLayout,
                                    {{kLane, laneId}, {kWarp, warpId}})[0]
                      .second;
+  auto affineOffset = smemObj.getShmemOffset(loc, rewriter, memDescType);
+  regBase = b.xor_(regBase, affineOffset);
 
   // Elements per op
   auto nVecs = 1 << vec;
@@ -191,7 +205,7 @@ LogicalResult lowerLdStMatrix(
   for (int i = 0; i < cvt.getInDimSize(kReg); i += step) {
     auto regIdx = reps.apply({{kReg, i}, {kLane, 0}, {kWarp, 0}})[0].second;
     Value offset = b.xor_(regBase, b.i32_val(regIdx));
-    auto vecAddr = b.gep(smemPtrTy, llvmElemTy, smemBase, offset,
+    auto vecAddr = b.gep(smemPtrTy, llvmElemTy, smemObj.getBase(), offset,
                          LLVM::GEPNoWrapFlags::inbounds);
     Type packedTy = vec_ty(llvmElemTy, 32 / bitwidth);
     auto layout = transpose ? NVVM::MMALayout::col : NVVM::MMALayout::row;
@@ -265,14 +279,13 @@ public:
     Type llvmElemTy = typeConverter->convertType(dstTy.getElementType());
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
         op.getLoc(), adaptor.getSrc(), llvmElemTy, rewriter);
-    Value smemBase = smemObj.getBase();
 
     // Try to lower transposed or not
     bool lowered = false;
     Value values;
     for (bool transpose : {false, true}) {
       lowered = lowerLdStMatrix(op.getLoc(), dstTy, memDescType, transpose,
-                                values, smemBase, llvmElemTy, rewriter,
+                                values, smemObj, llvmElemTy, rewriter,
                                 targetInfo, getTypeConverter())
                     .succeeded();
       if (lowered) {
@@ -308,13 +321,15 @@ struct LocalAllocOpConversion
     Type llvmElemTy = typeConverter->convertType(srcTy.getElementType());
     Value smemBase =
         LLVM::getSharedMemoryBase(op.getLoc(), rewriter, targetInfo, op);
+    auto smemObj = SharedMemoryObject(
+        smemBase, llvmElemTy, memDescType.getRank(), op.getLoc(), rewriter);
 
     // Try to lower transposed or not
     bool lowered = false;
     auto src = adaptor.getSrc();
     for (bool transpose : {false, true}) {
       lowered = lowerLdStMatrix(op.getLoc(), srcTy, memDescType, transpose, src,
-                                smemBase, llvmElemTy, rewriter, targetInfo,
+                                smemObj, llvmElemTy, rewriter, targetInfo,
                                 getTypeConverter())
                     .succeeded();
       if (lowered) {
@@ -325,9 +340,6 @@ struct LocalAllocOpConversion
       return failure();
     }
 
-    auto resultTy = cast<MemDescType>(op.getType());
-    auto smemObj = SharedMemoryObject(smemBase, llvmElemTy, resultTy.getRank(),
-                                      op.getLoc(), rewriter);
     auto retVal =
         getStructFromSharedMemoryObject(op.getLoc(), smemObj, rewriter);
     rewriter.replaceOp(op, retVal);
@@ -358,11 +370,11 @@ struct LocalStoreOpConversion
     bool lowered = false;
     auto src = adaptor.getSrc();
     for (bool transpose : {false, true}) {
-      lowered = lowerLdStMatrix(op.getLoc(), op.getSrc().getType(),
-                                op.getDst().getType(), transpose, src,
-                                smemObj.getBase(), llvmElemTy, rewriter,
-                                targetInfo, getTypeConverter())
-                    .succeeded();
+      lowered =
+          lowerLdStMatrix(op.getLoc(), op.getSrc().getType(),
+                          op.getDst().getType(), transpose, src, smemObj,
+                          llvmElemTy, rewriter, targetInfo, getTypeConverter())
+              .succeeded();
       if (lowered) {
         break;
       }
