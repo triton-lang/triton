@@ -1,4 +1,5 @@
 import ast
+import contextlib
 import copy
 import inspect
 import re
@@ -305,6 +306,8 @@ class CodeGenerator(ast.NodeVisitor):
             from triton.language.semantic import TritonSemantic
             self.builder = ir.builder(context)
             self.semantic = TritonSemantic(self.builder)
+
+        self.name_loc_as_prefix = None
         self.file_name = file_name
         # node.lineno starts from 1, so we need to subtract 1
         self.begin_line = begin_line - 1
@@ -427,6 +430,21 @@ class CodeGenerator(ast.NodeVisitor):
             raise NameError(f'{name} is not defined')
 
         return name_lookup
+
+    @contextlib.contextmanager
+    def _name_loc_prefix(self, prefix):
+        self.name_loc_as_prefix = prefix
+        yield
+        self.name_loc_as_prefix = None
+
+    def _maybe_set_loc_to_name(self, val, name):
+        if isinstance(val, (ir.value, ir.block_argument)):
+            val.set_loc(self.builder.create_name_loc(name, val.get_loc()))
+        elif _is_triton_value(val):
+            handles = []
+            val._flatten_ir(handles)
+            for handle in handles:
+                handle.set_loc(self.builder.create_name_loc(name, handle.get_loc()))
 
     def set_value(self, name: str, value: Union[base_value, constexpr]) -> None:
         ''' This function:
@@ -577,6 +595,7 @@ class CodeGenerator(ast.NodeVisitor):
             self.caller_context.initialize_callee(self.fn, self.builder)
         # bind arguments to symbols
         for arg_name, arg_value in zip(arg_names, arg_values):
+            self._maybe_set_loc_to_name(arg_value, arg_name)
             self.set_value(arg_name, arg_value)
         insert_pt = self.builder.get_insertion_block()
         self.builder.set_insertion_point_to_start(entry)
@@ -655,10 +674,15 @@ class CodeGenerator(ast.NodeVisitor):
                 value = self.semantic.to_tensor(value)
             return value
 
-        values = _sanitize_value(self.visit(node.value))
         targets = [node.target] if isinstance(node, ast.AnnAssign) else node.targets
         assert len(targets) == 1
-        self.assignTarget(targets[0], values)
+        target = targets[0]
+        if isinstance(target, ast.Name):
+            with self._name_loc_prefix(target.id):
+                values = _sanitize_value(self.visit(node.value))
+        else:
+            values = _sanitize_value(self.visit(node.value))
+        self.assignTarget(target, values)
 
     def visit_AugAssign(self, node):
         lhs = copy.deepcopy(node.target)
@@ -824,6 +848,8 @@ class CodeGenerator(ast.NodeVisitor):
                 self.visit_then_else_blocks(node, liveins, then_block, else_block)
             # create if op
             then_handles = flatten_values_to_ir(then_defs[name] for name in names)
+            for name, val in zip(names, then_handles):
+                self._maybe_set_loc_to_name(val, name)
             self._set_insertion_point_and_loc(ip, last_loc)
             if_op = self.builder.create_if_op([h.get_type() for h in then_handles], cond.handle, True)
             then_block.merge_block_before(if_op.get_then_block())
@@ -837,6 +863,8 @@ class CodeGenerator(ast.NodeVisitor):
             self.builder.set_insertion_point_to_end(if_op.get_else_block())
             if len(names) > 0:
                 else_handles = flatten_values_to_ir(else_defs[name] for name in names)
+                for name, val in zip(names, else_handles):
+                    self._maybe_set_loc_to_name(val, name)
                 self.builder.create_yield_op(else_handles)
         # update values
         res_handles = [if_op.get_result(i) for i in range(len(then_handles))]
@@ -999,6 +1027,7 @@ class CodeGenerator(ast.NodeVisitor):
             for name, val in zip(names, condition_args):
                 self.lscope[name] = val
                 self.local_defs[name] = val
+                self._maybe_set_loc_to_name(val, name)
             cond = self.visit(node.test)
             self.builder.set_insertion_point_to_end(before_block)
             # create ConditionOp: e.g., scf.condition(%cond) %arg0, %arg1, ...
@@ -1013,6 +1042,7 @@ class CodeGenerator(ast.NodeVisitor):
             for name, val in zip(names, body_args):
                 self.lscope[name] = val
                 self.local_defs[name] = val
+                self._maybe_set_loc_to_name(val, name)
             self.scf_stack.append(node)
             self.visit_compound_statement(node.body)
             self.scf_stack.pop()
@@ -1026,6 +1056,7 @@ class CodeGenerator(ast.NodeVisitor):
         for name, new_def in zip(names, result_vals):
             self.lscope[name] = new_def
             self.local_defs[name] = new_def
+            self._maybe_set_loc_to_name(new_def, name)
 
         for stmt in node.orelse:
             assert False, "Not implemented"
@@ -1145,6 +1176,7 @@ class CodeGenerator(ast.NodeVisitor):
             block_handles = [for_op_body.arg(i + 1) for i in range(len(init_handles))]
             block_args = unflatten_ir_values(block_handles, init_tys)
             for name, val in zip(names, block_args):
+                self._maybe_set_loc_to_name(val, name)
                 self.set_value(name, val)
             self.visit_compound_statement(node.body)
             self.scf_stack.pop()
@@ -1164,12 +1196,14 @@ class CodeGenerator(ast.NodeVisitor):
                 iv = self.builder.create_add(iv, lb)
             self.lscope[node.target.id].handle.replace_all_uses_with(iv)
             self.set_value(node.target.id, language.core.tensor(iv, iv_type))
+            self._maybe_set_loc_to_name(iv, node.target.id)
 
         # update lscope & local_defs (ForOp defines new values)
         result_handles = [for_op.get_result(i) for i in range(len(init_handles))]
         result_values = unflatten_ir_values(result_handles, init_tys)
         for name, val in zip(names, result_values):
             self.set_value(name, val)
+            self._maybe_set_loc_to_name(val, name)
 
         for stmt in node.orelse:
             assert False, "Don't know what to do with else after for"
@@ -1407,7 +1441,11 @@ class CodeGenerator(ast.NodeVisitor):
             last_loc = self.builder.get_loc()
             self.cur_node = node
             if hasattr(node, 'lineno') and hasattr(node, 'col_offset'):
-                self.builder.set_loc(self.file_name, self.begin_line + node.lineno, node.col_offset)
+                here_loc = self.builder.create_loc(self.file_name, self.begin_line + node.lineno, node.col_offset)
+                if self.name_loc_as_prefix is not None:
+                    self.builder.set_loc(self.builder.create_name_loc(self.name_loc_as_prefix, here_loc))
+                else:
+                    self.builder.set_loc(here_loc)
                 last_loc = self.builder.get_loc()
             try:
                 ret = super().visit(node)
