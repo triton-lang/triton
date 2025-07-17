@@ -154,9 +154,17 @@ using LoadToStreamOpMap = llvm::MapVector<Operation *, StreamOpVariant>;
 //   WARNING: Changing the order of schedule.clusters.newAtBack() calls
 //            can cause invalid schedules to be produced.
 LogicalResult initSchedule(int maxDist, StreamStages &stages, int numStages,
-                           int &numBuffers, bool useAsyncCopy,
+                           int &numBuffers, int globalPrefetch,
+                           int localPrefetch, bool useAsyncCopy,
                            StreamClusters &clusters,
                            tt::CoarseSchedule &schedule) {
+  int lastStage = numStages - 1;
+  stages[SCHED_GLOBAL_LOAD] = 0;
+  stages[SCHED_LOCAL_STORE] = globalPrefetch;
+  stages[SCHED_LOCAL_LOAD] = lastStage - localPrefetch;
+  stages[SCHED_COMPUTE] = lastStage;
+  stages[SCHED_ASYNC_WAIT] = stages[SCHED_LOCAL_LOAD];
+
   bool pairedGlobalLoadLocalStore = stages[SCHED_LOCAL_STORE] == 0;
   stages[SCHED_LOCAL_STORE] += maxDist;
 
@@ -607,6 +615,7 @@ buildSchedule(scf::ForOp &forOp, int numStages, const LoadToInfoMap &loadToInfo,
               int globalPrefetch, int localPrefetch, bool useAsyncCopy,
               triton::AMD::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
   tt::CoarseSchedule schedule(numStages);
+  StreamStages stages;
   StreamClusters clusters;
 
   auto dumpSchedule = [&](llvm::StringRef msg) {
@@ -617,22 +626,15 @@ buildSchedule(scf::ForOp &forOp, int numStages, const LoadToInfoMap &loadToInfo,
     });
   };
 
-  int numBuffers = 1;
   int maxDist = 0;
   for (auto &[l, info] : loadToInfo) {
     maxDist = std::max(maxDist, info.distToUse);
   }
 
-  int lastStage = numStages - 1;
-  StreamStages stages;
-  stages[SCHED_GLOBAL_LOAD] = 0;
-  stages[SCHED_LOCAL_STORE] = globalPrefetch;
-  stages[SCHED_LOCAL_LOAD] = lastStage - localPrefetch;
-  stages[SCHED_COMPUTE] = lastStage;
-  stages[SCHED_ASYNC_WAIT] = stages[SCHED_LOCAL_LOAD];
-
-  if (failed(initSchedule(maxDist, stages, numStages, numBuffers, useAsyncCopy,
-                          clusters, schedule)))
+  int numBuffers = 1;
+  if (failed(initSchedule(maxDist, stages, numStages, numBuffers,
+                          globalPrefetch, localPrefetch, useAsyncCopy, clusters,
+                          schedule)))
     return {};
 
   if (failed(scheduleLoads(loadToInfo, maxDist, numStages, stages, clusters,
