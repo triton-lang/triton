@@ -24,16 +24,15 @@ struct TestScopeIdAllocationPass
   }
 
   void runOnOperation() override {
-    auto &os = llvm::errs();
     ModuleOp moduleOp = getOperation();
     // Convert to std::string can remove quotes from opName
     ModuleScopeIdAllocation moduleScopeIdAllocation(moduleOp);
     moduleOp.walk([&](triton::FuncOp funcOp) {
       auto opName = SymbolTable::getSymbolName(funcOp).getValue().str();
-      os << opName << "\n";
+      mlir::emitRemark(funcOp.getLoc(), opName);
       funcOp.walk([&](RecordOp recordOp) {
         auto scopeId = moduleScopeIdAllocation.getOpScopeId(recordOp);
-        os << "scope id = " << scopeId << "\n";
+        mlir::emitRemark(recordOp.getLoc()) << "scope id = " << scopeId;
       });
     });
   }
