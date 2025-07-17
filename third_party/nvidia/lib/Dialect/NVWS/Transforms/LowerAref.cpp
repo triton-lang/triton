@@ -40,6 +40,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "llvm/Support/ErrorHandling.h"
 
 using namespace mlir::triton;
 using namespace mlir::triton::gpu;
@@ -64,6 +65,7 @@ struct ArefValue {
   Value emptyMbars;
   Value fullMbars;
   int depth;
+  int producerCount, consumerCount;
   SmallVector<Value> buffers;
 };
 
@@ -185,7 +187,11 @@ ArefValue createAndInitMbar(ArefCreateOp op, PatternRewriter &rewriter) {
     rewriter.create<InitBarrierOp>(loc, singleBarrier, arrivalCount);
   }
 
-  return ArefValue{emptyMbars, fullMbars, static_cast<int>(depth),
+  return ArefValue{emptyMbars,
+                   fullMbars,
+                   static_cast<int>(depth),
+                   producerArrivalCount,
+                   consumerArrivalCount,
                    op.getOperands()};
 }
 
@@ -331,11 +337,18 @@ LogicalResult rewriteGetEnterOp(ArefCreateOp arefOp, ArefGetEnterOp op,
 }
 
 LogicalResult insertArriveBarrier(Location loc, ArrayAttr asyncOps,
-                                  PatternRewriter &rewriter, Value mbar) {
-
+                                  PatternRewriter &rewriter, Value mbar,
+                                  int count) {
   for (auto asyncOp : asyncOps) {
     auto asyncOpEnum = cast<AsyncOpAttr>(asyncOp).getValue();
-    rewriter.create<nvws::AsyncCompleteOp>(loc, mbar, asyncOpEnum);
+    switch (asyncOpEnum) {
+    case AsyncOp::NONE:
+      rewriter.create<nvidia_gpu::ArriveBarrierOp>(loc, mbar, count);
+      break;
+    default:
+      rewriter.create<nvws::AsyncCompleteOp>(loc, mbar, asyncOpEnum, Value());
+      break;
+    }
   }
 
   return success();
@@ -346,7 +359,8 @@ LogicalResult rewritePutExitOp(ArefPutExitOp op, PatternRewriter &rewriter,
   auto loc = op->getLoc();
   rewriter.setInsertionPointAfter(op);
   Value fullBarrier = getFullBarrier(rewriter, loc, arefVal, op.getIndex());
-  return insertArriveBarrier(loc, op.getAsyncOps(), rewriter, fullBarrier);
+  return insertArriveBarrier(loc, op.getAsyncOps(), rewriter, fullBarrier,
+                             arefVal.producerCount);
 }
 
 LogicalResult rewriteGetExitOp(ArefGetExitOp op, PatternRewriter &rewriter,
@@ -354,7 +368,8 @@ LogicalResult rewriteGetExitOp(ArefGetExitOp op, PatternRewriter &rewriter,
   auto loc = op->getLoc();
   rewriter.setInsertionPointAfter(op);
   Value emptyBarrier = getEmptyBarrier(rewriter, loc, arefVal, op.getIndex());
-  return insertArriveBarrier(loc, op.getAsyncOps(), rewriter, emptyBarrier);
+  return insertArriveBarrier(loc, op.getAsyncOps(), rewriter, emptyBarrier,
+                             arefVal.consumerCount);
 }
 
 class LowerArefCreate : public OpRewritePattern<ArefCreateOp> {
@@ -615,7 +630,7 @@ public:
     if (applyPatternsGreedily(m, std::move(patterns), config).failed())
       signalPassFailure();
   }
-};
+}; // namespace triton
 
 } // namespace triton
 } // namespace mlir

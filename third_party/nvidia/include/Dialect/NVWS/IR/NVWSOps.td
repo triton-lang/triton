@@ -184,9 +184,9 @@ def NVWS_AsyncCompleteOp : NVWS_Op<"async_complete", [DeclareOpInterfaceMethods<
   }];
 
   let hasVerifier = 1;
-  let arguments = (ins TTG_MemDescType:$alloc, NVWS_AsyncOpEnum:$async_op);
+  let arguments = (ins TTG_MemDescType:$alloc, NVWS_AsyncOpEnum:$async_op, Optional<I1>:$pred);
   let assemblyFormat = [{
-    $alloc `,` `async_op` `=` $async_op attr-dict `:` type($alloc)
+    $alloc `,` `async_op` `=` $async_op (`,` $pred^)? attr-dict `:` type($alloc)
   }];
 }
 

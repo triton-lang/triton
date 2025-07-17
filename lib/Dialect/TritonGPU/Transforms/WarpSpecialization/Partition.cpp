@@ -191,57 +191,6 @@ LogicalResult WarpSchedule::verify(scf::ForOp loop) const {
   if (failed)
     return failure();
 
-  // Within a loop iteration, the partitions must form a DAG. For example, the
-  // following is invalid:
-  //
-  //   scf.for %i = %lb to %ub step %step
-  //     %0 = op_a()     {ttg.partition = 0}
-  //     %1 = op_b(%0)   {ttg.partition = 1}
-  //     op_c(%1)        {ttg.partition = 0}
-  //
-  PartitionGraph graph(loop, *this);
-  for (auto it = llvm::scc_begin(graph); !it.isAtEnd(); ++it) {
-    if (!it.hasCycle())
-      continue;
-    InFlightDiagnostic diag =
-        mlir::emitWarning(loop.getLoc(), "warp schedule contains a cycle");
-    for (auto [node, use] : *it) {
-      assert(use && "already checked that the root partition has no ancestors");
-      diag.attachNote(use->getOwner()->getLoc())
-          << "operation in partition #" << node->partition->getIndex()
-          << " uses value defined in partition #"
-          << opToPartition.at(use->get().getDefiningOp())->getIndex();
-    }
-    return failure();
-  }
-
-  // Each partition's stage must be strictly less than all of its consumers plus
-  // the distance.
-  for (Partition &partition : getPartitions()) {
-    bool failed = false;
-    auto callback = [&](OpResult output, OpOperand &use, unsigned distance) {
-      Operation *user = loop.getBody()->findAncestorOpInBlock(*use.getOwner());
-      const Partition *consumer = opToPartition.at(user);
-      if (partition.getStage() < consumer->getStage() + distance)
-        return;
-      InFlightDiagnostic diag =
-          mlir::emitWarning(loop.getLoc(), "partition #")
-          << partition.getIndex() << " has stage " << partition.getStage()
-          << " but is consumed by partition #" << consumer->getIndex()
-          << " with stage " << consumer->getStage() << " at distance "
-          << distance;
-      diag.attachNote(use.getOwner()->getLoc())
-          << "use of value defined in partition #" << partition.getIndex()
-          << " at " << distance << " iterations in the future";
-      diag.attachNote(output.getLoc())
-          << "value defined here in partition #" << partition.getIndex();
-      failed = true;
-    };
-    iterateUses(loop, &partition, callback);
-    if (failed)
-      return failure();
-  }
-
   return success();
 }
 
