@@ -33,7 +33,6 @@ jobs:
       # # container expect it at /github/home/.triton. So map here to make sure we indeed use the cache.
       options: >-
         --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --user root
-        --volume /home/runner/.triton:/github/home/.triton
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -75,7 +74,7 @@ jobs:
           mkdir -p /home/runner/.triton
           du -h -d 1 /home/runner/.triton
           du -h -d 3 /__w/triton/
-          du -h -d 2 /__w/temp/
+          du -h -d 2 /__w/_temp/
 
           mkdir -p ~/.ccache
           du -h -d 1 ~/.ccache
