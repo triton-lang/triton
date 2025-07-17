@@ -852,13 +852,10 @@ class CodeGenerator(ast.NodeVisitor):
                     % ast.unparse(node.test))
                 cond = language.core._unsplat(cond, _semantic=self.semantic, _generator=self)
             cond = cond.to(language.int1, _semantic=self.semantic)
-            contains_return = ContainsReturnChecker(self.gscope).visit(node)
-            if contains_return:
+            if ContainsReturnChecker(self.gscope).visit(node):
                 if self.scf_stack:
                     raise self._unsupported(
-                        node, "Cannot have `return` statements inside `while` or `for` statements in triton "
-                        "(note that this also applies to `return` statements that are inside functions "
-                        "transitively called from within `while`/`for` statements)")
+                        node, "Cannot have `return` statements inside `while` or `for` statements in triton.")
                 self.visit_if_top_level(cond, node)
             else:
                 self.visit_if_scf(cond, node)
