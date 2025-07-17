@@ -46,17 +46,6 @@ jobs:
           echo "nvidia=$(sha256sum $nvidia_file | cut -d ' ' -f 1)" >> $GITHUB_OUTPUT
           # echo "json=$(cat $json_file)" >> $GITHUB_OUTPUT
         shell: bash
-      - name: Cache build dependencies
-        uses: actions/cache@v4
-        with:
-          # Note that we cannot use environment variables here given there is
-          # no shell to interpret them in the paths.
-          path: |
-            ~/.triton/llvm
-            ~/.triton/nvidia
-            ~/.triton/json
-          # key: ${{ runner.os }}-${{ runner.arch }}-llvm-${{ steps.cache-key.outputs.llvm }}-nvidia-${{ steps.cache-key.outputs.nvidia }}-json-${{ steps.cache-key.outputs.json }}
-          key: ${{ runner.os }}-${{ runner.arch }}-llvm-${{ steps.cache-key.outputs.llvm }}-nvidia-${{ steps.cache-key.outputs.nvidia }}
       - name: Inspect cache directories
         run: |
           mkdir -p ~/.triton
