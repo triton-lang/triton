@@ -149,9 +149,9 @@ class ContainsReturnChecker(ast.NodeVisitor):
         return any(self.visit(s) for s in body)
 
     def _visit_function(self, fn) -> bool:
-        # no need to check within the function as it won't cause an early return.
-        # If the function itself has unstructured control flow we may not be able to inline it causing poor performance.
-        # We should check for this and fail or emit a warning.
+        # No need to check within the function as it won't cause an early return.
+        # If the function itself has unstructured control flow we may not be able to inline it causing poor performance,
+        # we should check for this and emit a warning.
         return False
 
     def generic_visit(self, node) -> bool:
@@ -860,9 +860,7 @@ class CodeGenerator(ast.NodeVisitor):
             if ContainsReturnChecker(self.gscope).visit(node):
                 if self.scf_stack:
                     raise self._unsupported(
-                        node, "Cannot have `return` statements inside `while` or `for` statements in triton "
-                        "(note that this also applies to `return` statements that are inside functions "
-                        "transitively called from within `while`/`for` statements)")
+                        node, "Cannot have `return` statements inside `while` or `for` statements in triton.")
                 self.visit_if_top_level(cond, node)
             else:
                 self.visit_if_scf(cond, node)
