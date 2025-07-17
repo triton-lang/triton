@@ -473,18 +473,89 @@ LogicalResult MemDescReshapeOp::verify() {
   if (dstType.getElementType() != srcType.getElementType()) {
     return emitError("result element type must match src element type");
   }
+  auto srcShape = srcType.getShape();
+  if (srcType.getAllocShape().take_back(srcShape.size()) != srcShape) {
+    return emitError("NYI: memdesc_reshape of memdesc_subviews");
+  }
 
-  // Infer the dst layout from the source and verify that it is equivalent.
-  auto srcEncoding = srcType.getEncoding();
-  Attribute inferedDstEncoding;
-
-  LinearLayout ll = inferReshapeLinearLayout(
-      srcType.getShape(), srcType.getEncoding(), dstType.getShape());
-  LinearLayout llDst =
-      triton::gpu::toLinearLayout(dstType.getShape(), dstType.getEncoding());
-  if (ll != llDst) {
+  MemDescType expectedTy;
+  if (failed(inferReturnTypes(getContext(), getLoc(), srcType,
+                              dstType.getShape(), expectedTy)))
+    return failure();
+  // Check that the alloc shape separately to give a cleaner error, given that
+  // it's the most likely source of the error.
+  if (expectedTy.getAllocShape() != dstType.getAllocShape()) {
+    return emitError(
+        "The result alloc shape does not match the expected alloc shape.");
+  }
+  if (expectedTy != dstType) {
     return emitError("source and destination layout are incompatible.");
   }
+  return success();
+}
+
+static LogicalResult inferMemDescReshapeOpEncoding(ArrayRef<int64_t> srcShape,
+                                                   Attribute srcEnc,
+                                                   ArrayRef<int64_t> dstShape,
+                                                   Attribute &dstEnc) {
+  if (auto mmaEncoding = dyn_cast<NVMMASharedEncodingAttr>(srcEnc)) {
+    // TODO: supporting reshape of CTA layouts is non-trivial.
+    if (getNumCTAs(mmaEncoding) > 1)
+      return failure();
+    int innerDimDst =
+        mmaEncoding.getTransposed() ? dstShape.front() : dstShape.back();
+    int innerDimSrc =
+        mmaEncoding.getTransposed() ? srcShape.front() : srcShape.back();
+    // For now disallow reshape of the inner dimension.
+    if (innerDimDst != innerDimSrc)
+      return failure();
+    auto *ctx = srcEnc.getContext();
+
+    // CTALayout can be all 1's because we bailed on multi-CTA layouts above.
+    auto CTALayout = CTALayoutAttr::get(
+        ctx,
+        /*CTAsPerCGA=*/SmallVector<unsigned>(dstShape.size(), 1),
+        /*CTASplitNum=*/SmallVector<unsigned>(dstShape.size(), 1),
+        /*CTAOrder=*/llvm::to_vector(llvm::seq<unsigned>(dstShape.size())));
+    dstEnc = NVMMASharedEncodingAttr::get(
+        ctx, mmaEncoding.getSwizzlingByteWidth(), mmaEncoding.getTransposed(),
+        mmaEncoding.getElementBitWidth(), mmaEncoding.getFp4Padded(),
+        CTALayout);
+    // Big guns, check linear layouts are equivalent
+    // We disallow reshaping memdesc_subviews in the verifier
+    // We disallow reshaping memdesc_subviews in the verifier
+    auto srcLL = toLinearLayout(srcShape, srcEnc, srcShape);
+    auto dstLL = toLinearLayout(dstShape, dstEnc, dstShape);
+    if (reshapeLayout(ctx, srcLL, dstShape) != dstLL) {
+      return failure();
+    }
+    return success();
+  }
+  return failure();
+}
+
+LogicalResult MemDescReshapeOp::inferReturnTypes(
+    MLIRContext *context, std::optional<Location> loc, MemDescType srcTy,
+    ArrayRef<int64_t> dstShape, MemDescType &inferredReturnType) {
+  if (product<int64_t>(dstShape) != product<int64_t>(srcTy.getShape()))
+    return emitOptionalError(
+        loc, "dst shape has different number of elements than src");
+
+  Attribute dstEncoding;
+  if (Attribute srcEnc = srcTy.getEncoding()) {
+    if (failed(inferMemDescReshapeOpEncoding(srcTy.getShape(), srcEnc, dstShape,
+                                             dstEncoding)))
+      return failure();
+  }
+
+  SmallVector<int64_t> dstAllocShape =
+      to_vector(srcTy.getAllocShape().take_front(srcTy.getAllocShape().size() -
+                                                 srcTy.getShape().size()));
+  dstAllocShape.append(dstShape.begin(), dstShape.end());
+
+  inferredReturnType = MemDescType::get(
+      dstShape, srcTy.getElementType(), dstEncoding, srcTy.getMemorySpace(),
+      srcTy.getMutableMemory(), dstAllocShape);
   return success();
 }
 
@@ -716,9 +787,7 @@ LogicalResult MemDescSubviewOp::verify() {
   }
 
   auto ctx = getContext();
-  // The order gives us the honest-to-goodness layout rank
-  auto srcAllocShape = srcTy.getAllocShape().take_back(getOrder(srcTy).size());
-  auto ll = triton::gpu::toLinearLayout(srcAllocShape, srcTy.getEncoding());
+  auto ll = triton::gpu::toLinearLayout(srcTy);
   // NYI: We don't support non-trivial block dimension for now.
   auto kBlock = mlir::StringAttr::get(getContext(), "block");
   if (ll.getInDimSize(kBlock) != 1) {
@@ -761,8 +830,7 @@ int32_t LocalAllocOp::getAlignmentOrDefault() {
 
 static Type removeEncodingIfTensor(Type type) {
   if (auto tensorType = dyn_cast<RankedTensorType>(type)) {
-    return RankedTensorType::get(tensorType.getShape(),
-                                 tensorType.getElementType());
+    return tensorType.cloneWithEncoding({});
   }
   return type;
 }

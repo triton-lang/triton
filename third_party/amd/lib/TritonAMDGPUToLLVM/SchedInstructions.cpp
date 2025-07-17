@@ -1,10 +1,10 @@
-#include "SchedInstructions.h"
 #include "TritonAMDGPUToLLVM/Passes.h"
 #include "Utility.h"
 #include "mlir/Dialect/AMDGPU/IR/AMDGPUDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/Pass/Pass.h"
+#include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
 namespace mlir::triton {
@@ -26,62 +26,7 @@ using ::mlir::LLVM::AMD::isChainDotHead;
 // Note, we need to relax this assumption in the future and extend the current
 // implementation.
 
-namespace mlir::triton {
-
-triton::DotOp getSingleDotOpIfExists(scf::ForOp forOp) {
-  triton::DotOp dotOp = nullptr;
-  size_t dotCounter = 0;
-  forOp->walk(
-      [&dotOp, &dotCounter](triton::DotOp op) { dotOp = op, ++dotCounter; });
-
-  return (dotCounter == 1) ? dotOp : nullptr;
-}
-
-// The AMDGPU compiler backend can fold consecutive `ds_read/ds_write`
-// instructions into wider variants as a part of its load/store optimization
-// during the instruction selection pass. If it happens, then it means that
-// we are overestimated these types of instructions at the current level of
-// the IR. In this scenario, the inserted `sched.group.barriers` will result
-// in "fooling" the scheduling solver which can mess up the final assembly.
-// To avoid this, we switch off the backend load/store folding optimization
-// which is going to prevent instructions folding. In this case, the
-// instruction widths of `ds_read/ds_write` instructions are going to match
-// their LLVM representations. This is implemented as follows.
-// TODO: The current implementation disables `ds_read/ds_write` folding for
-// all basic blocks in the currently processed function. We should try to
-// avoid it. The compiler backend team proposed to play we the load/store
-// alignment values within the currently processed basic block as an
-// alternative solution.
-void disableInstructionFolding(triton::amdgpu::InstructionSchedHint schedHint) {
-  auto funcOp = schedHint->getParentOfType<LLVM::LLVMFuncOp>();
-  MLIRContext *ctx = schedHint->getContext();
-  llvm::SmallVector<StringAttr> targetFeatures;
-  if (auto attr = funcOp.getTargetFeatures()) {
-    llvm::copy(attr->getFeatures(), std::back_inserter(targetFeatures));
-  }
-  targetFeatures.push_back(str_attr("-load-store-opt"));
-  funcOp.setTargetFeaturesAttr(
-      ::mlir::LLVM::TargetFeaturesAttr::get(ctx, targetFeatures));
-}
-} // namespace mlir::triton
-
 namespace {
-
-// Create an intrinsic to control how different instruction kinds should
-// interleave for better ILP.
-void createSchedGroupBarrier(PatternRewriter &rewriter, Location loc,
-                             mlir::amdgpu::sched_barrier_opt_enum maskValue,
-                             int sizeValue, int groupIdValue) {
-  if (sizeValue < 1)
-    return;
-  IntegerAttr mask =
-      rewriter.getI32IntegerAttr(static_cast<int32_t>(maskValue));
-  IntegerAttr size =
-      rewriter.getI32IntegerAttr(static_cast<int32_t>(sizeValue));
-  IntegerAttr groupId =
-      rewriter.getI32IntegerAttr(static_cast<int32_t>(groupIdValue));
-  rewriter.create<ROCDL::SchedGroupBarrier>(loc, mask, size, groupId);
-}
 
 // Insert intrinsic that controls the types of instructions that may be
 // allowed to cross the intrinsic during instruction scheduling.

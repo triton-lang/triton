@@ -28,7 +28,7 @@ def check_identifier_legality(name, type):
     return name
 
 
-def mangle_fn(name, arg_tys, constants):
+def mangle_fn(name, arg_tys, constants, caller_context):
     # doesn't mangle ret type, which must be a function of arg tys
     mangled_arg_names = '_'.join([ty.mangle() for ty in arg_tys])
     mangled_constants = '_'.join([f'{i}c{repr(constants[i])}' for i in sorted(constants)])
@@ -37,6 +37,8 @@ def mangle_fn(name, arg_tys, constants):
     # [ and ] are not allowed in LLVM identifiers
     mangled_constants = mangled_constants.replace('[', '_').replace(']', '_')
     ret = f'{name}__{mangled_arg_names}__{mangled_constants}'
+    if caller_context is not None:
+        ret += caller_context.mangle()
     return ret
 
 
@@ -147,9 +149,9 @@ class ContainsReturnChecker(ast.NodeVisitor):
         return any(self.visit(s) for s in body)
 
     def _visit_function(self, fn) -> bool:
-        # no need to check within the function as it won't cause an early return.
-        # If the function itself has unstructured control flow we may not be able to inline it causing poor performance.
-        # We should check for this and fail or emit a warning.
+        # No need to check within the function as it won't cause an early return.
+        # If the function itself has unstructured control flow we may not be able to inline it causing poor performance,
+        # we should check for this and emit a warning.
         return False
 
     def generic_visit(self, node) -> bool:
@@ -293,7 +295,7 @@ class CodeGenerator(ast.NodeVisitor):
 
     def __init__(self, context, prototype, gscope, function_name, jit_fn: JITFunction, options, codegen_fns, module_map,
                  module=None, is_kernel=False, function_types: Optional[Dict] = None, noinline=False,
-                 file_name: Optional[str] = None, begin_line=0):
+                 caller_context=None, file_name: Optional[str] = None, begin_line=0):
         self.context = context
         if jit_fn.is_gluon():
             from triton.experimental.gluon.language._semantic import GluonSemantic
@@ -339,6 +341,7 @@ class CodeGenerator(ast.NodeVisitor):
         self.is_kernel = is_kernel
         self.cur_node = None
         self.noinline = noinline
+        self.caller_context = caller_context
         self.scf_stack = []
         self.ret_type = None
         # SSA-construction
@@ -570,6 +573,8 @@ class CodeGenerator(ast.NodeVisitor):
         self.module.push_back(self.fn)
         entry = self.fn.add_entry_block()
         arg_values = self.prototype.deserialize(self.fn)
+        if self.caller_context is not None:
+            self.caller_context.initialize_callee(self.fn, self.builder)
         # bind arguments to symbols
         for arg_name, arg_value in zip(arg_names, arg_values):
             self.set_value(arg_name, arg_value)
@@ -852,13 +857,10 @@ class CodeGenerator(ast.NodeVisitor):
                     % ast.unparse(node.test))
                 cond = language.core._unsplat(cond, _semantic=self.semantic, _generator=self)
             cond = cond.to(language.int1, _semantic=self.semantic)
-            contains_return = ContainsReturnChecker(self.gscope).visit(node)
-            if contains_return:
+            if ContainsReturnChecker(self.gscope).visit(node):
                 if self.scf_stack:
                     raise self._unsupported(
-                        node, "Cannot have `return` statements inside `while` or `for` statements in triton "
-                        "(note that this also applies to `return` statements that are inside functions "
-                        "transitively called from within `while`/`for` statements)")
+                        node, "Cannot have `return` statements inside `while` or `for` statements in triton.")
                 self.visit_if_top_level(cond, node)
             else:
                 self.visit_if_scf(cond, node)
@@ -1033,16 +1035,15 @@ class CodeGenerator(ast.NodeVisitor):
         assert isinstance(node.ctx, ast.Load)
         lhs = self.visit(node.value)
         slices = self.visit(node.slice)
-        if _is_triton_tensor(lhs):
-            return lhs.__getitem__(slices, _semantic=self.semantic)
+        if _is_triton_value(lhs):
+            return self.call_Method(node, lhs.__getitem__, lhs, [slices], {})
         return lhs[slices]
 
     def visit_Subscript_Store(self, node, value):
         assert isinstance(node.ctx, ast.Store)
         lhs = self.visit(node.value)
         slices = self.visit(node.slice)
-        assert isinstance(lhs, language.tuple)
-        lhs.__setitem__(slices, value)
+        self.call_Method(node, lhs.__setitem__, lhs, [slices, value], {})
 
     def visit_Subscript(self, node):
         return self.visit_Subscript_Load(node)
@@ -1191,7 +1192,7 @@ class CodeGenerator(ast.NodeVisitor):
         msg = self.visit(node.msg) if node.msg is not None else ""
         return language.core.device_assert(test, msg, _semantic=self.semantic)
 
-    def call_JitFunction(self, fn: JITFunction, args, kwargs):
+    def call_JitFunction(self, fn: JITFunction, args, kwargs, caller_context=None):
         args = inspect.getcallargs(fn.fn, *args, **kwargs)
         args = [args[name] for name in fn.arg_names]
         for i, arg in enumerate(args):
@@ -1202,7 +1203,8 @@ class CodeGenerator(ast.NodeVisitor):
         args_path = find_paths_if(args, lambda _, x: not _is_constexpr(x))
         args_val = [get_iterable_path(args, path) for path in args_path]
         # mangle
-        fn_name = mangle_fn(get_full_name(fn), [arg.type for arg in args_val], args_cst)
+        caller_context = caller_context or self.caller_context
+        fn_name = mangle_fn(get_full_name(fn), [arg.type for arg in args_val], args_cst, caller_context)
         # generate function def if necessary
         if not self.module.has_function(fn_name):
             # If the callee is not set, we use the same debug setting as the caller
@@ -1217,7 +1219,7 @@ class CodeGenerator(ast.NodeVisitor):
                                       function_name=fn_name, function_types=self.function_ret_types,
                                       noinline=fn.noinline, file_name=file_name, begin_line=begin_line,
                                       options=self.builder.options, codegen_fns=self.builder.codegen_fns,
-                                      module_map=self.builder.module_map)
+                                      module_map=self.builder.module_map, caller_context=caller_context)
             try:
                 generator.visit(fn.parse())
             except Exception as e:
@@ -1238,23 +1240,7 @@ class CodeGenerator(ast.NodeVisitor):
         handles = [call_op.get_result(i) for i in range(call_op.get_num_results())]
         return next(unflatten_ir_values(handles, [callee_ret_type]))
 
-    def visit_Call(self, node):
-        fn = _unwrap_if_constexpr(self.visit(node.func))
-        if not isinstance(fn, BoundJITMethod):
-            static_implementation = self.statically_implemented_functions.get(fn)
-            if static_implementation is not None:
-                return static_implementation(self, node)
-
-        mur = getattr(fn, '_must_use_result', False)
-        if mur and getattr(node, '_is_unused', False):
-            error_message = ["The result of %s is not being used." % ast.unparse(node.func)]
-            if isinstance(mur, str):
-                error_message.append(mur)
-            raise CompilationError(self.jit_fn.src, node, " ".join(error_message))
-
-        kws = dict(self.visit(keyword) for keyword in node.keywords)
-        args = [self.visit(arg) for arg in node.args]
-        args = list(itertools.chain.from_iterable(x if isinstance(x, list) else [x] for x in args))
+    def call_Function(self, node, fn, args, kws):
         if isinstance(fn, BoundJITMethod):
             args.insert(0, fn.__self__)
             fn = fn.__func__
@@ -1262,8 +1248,10 @@ class CodeGenerator(ast.NodeVisitor):
             _check_fn_args(node, fn, args)
             return self.call_JitFunction(fn, args, kws)
         if (hasattr(fn, '__self__') and _is_triton_value(fn.__self__)) or language.core.is_builtin(fn):
-            extra_kwargs = {"_semantic": self.semantic}
+            extra_kwargs = dict()
             sig = inspect.signature(fn)
+            if '_semantic' in sig.parameters:
+                extra_kwargs["_semantic"] = self.semantic
             if '_generator' in sig.parameters:
                 extra_kwargs['_generator'] = self
             try:
@@ -1281,12 +1269,37 @@ class CodeGenerator(ast.NodeVisitor):
                 # itself).  But when calling a function, we raise as `from e` to
                 # preserve the traceback of the original error, which may e.g.
                 # be in core.py.
-                raise CompilationError(self.jit_fn.src, node, None) from e
+                raise CompilationError(self.jit_fn.src, node, str(e)) from e
 
         if fn in self.builtin_namespace.values():
             args = map(_unwrap_if_constexpr, args)
         ret = fn(*args, **kws)
         return _apply_to_tuple_values(ret, lambda x: x) if _is_namedtuple(type(ret)) else ret
+
+    def call_Method(self, node, fn, fn_self, args, kws):
+        if isinstance(fn, JITFunction):
+            args.insert(0, fn_self)
+        return self.call_Function(node, fn, args, kws)
+
+    def visit_Call(self, node):
+        fn = _unwrap_if_constexpr(self.visit(node.func))
+        if not isinstance(fn, BoundJITMethod):
+            static_implementation = self.statically_implemented_functions.get(fn)
+            if static_implementation is not None:
+                return static_implementation(self, node)
+
+        mur = getattr(fn, '_must_use_result', False)
+        if mur and getattr(node, '_is_unused', False):
+            error_message = ["The result of %s is not being used." % ast.unparse(node.func)]
+            if isinstance(mur, str):
+                error_message.append(mur)
+            raise CompilationError(self.jit_fn.src, node, " ".join(error_message))
+
+        kws = dict(self.visit(keyword) for keyword in node.keywords)
+        args = [self.visit(arg) for arg in node.args]
+        args = list(itertools.chain.from_iterable(x if isinstance(x, list) else [x] for x in args))
+
+        return self.call_Function(node, fn, args, kws)
 
     def visit_Constant(self, node):
         return constexpr(node.value)
@@ -1350,7 +1363,7 @@ class CodeGenerator(ast.NodeVisitor):
         if _is_triton_tensor(lhs) and node.attr == "T":
             return self.semantic.permute(lhs, (1, 0))
         # NOTE: special case ".value" for BC
-        if isinstance(lhs, constexpr) and node.attr != "value":
+        if isinstance(lhs, constexpr) and node.attr not in ("value", "type"):
             lhs = lhs.value
         attr = getattr(lhs, node.attr)
         if _is_triton_value(lhs) and isinstance(attr, JITFunction):

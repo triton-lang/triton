@@ -1,7 +1,8 @@
 from typing import Sequence, List, TypeVar, Tuple, Callable
+import math
 from triton.language.semantic import TritonSemantic
 from . import _core as ttgl
-from ._layouts import SliceLayout
+from ._layouts import AutoLayout, DistributedLayout, SliceLayout
 from triton._C.libtriton.gluon_ir import GluonOpBuilder
 from triton.compiler.code_generator import flatten_values_to_ir, unflatten_ir_values
 
@@ -13,6 +14,18 @@ def _check(cond: bool, msg_fn: Callable[[], str], category=ValueError):
         raise category(msg_fn())
 
 
+class GluonCallerContext:
+
+    def __init__(self, num_warps: int):
+        self.num_warps = num_warps
+
+    def mangle(self):
+        return f"_NW{self.num_warps}"
+
+    def initialize_callee(self, fn, builder):
+        fn.set_attr("ttg.num-warps", builder.get_int32_attr(self.num_warps))
+
+
 class GluonSemantic(TritonSemantic[TensorTy]):
     tensor = ttgl.tensor
     lang = ttgl
@@ -22,10 +35,15 @@ class GluonSemantic(TritonSemantic[TensorTy]):
     def __init__(self, builder: GluonOpBuilder):
         self.builder = builder
 
+    def _wrap_handle_infer_layout(self, handle, scalar_ty, shape):
+        if shape == []:
+            ty = scalar_ty
+        else:
+            ty = ttgl.distributed_type(scalar_ty, shape, self.builder.get_gluon_layout_from_tensor(handle))
+        return self.tensor(handle, ty)
+
     def _wrap_tensor_infer_layout(self, tensor):
-        ty = ttgl.distributed_type(tensor.type.scalar, tensor.shape,
-                                   self.builder.get_gluon_layout_from_tensor(tensor.handle))
-        return self.tensor(tensor.handle, ty)
+        return self._wrap_handle_infer_layout(tensor.handle, tensor.type.scalar, tensor.shape)
 
     def _broadcast_shapes(self, lhs_shape: List[int], rhs_shape: List[int]):
         if len(lhs_shape) != len(rhs_shape):
@@ -53,14 +71,14 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         _check(isinstance(input.type, ttgl.distributed_type),
                lambda: f"expected expand_dims input to be a distributed_type but got: {input.type!r}")
         layout = input.type.layout
-        _check(isinstance(layout, SliceLayout),
+        _check(isinstance(layout, (SliceLayout, AutoLayout)),
                lambda: f"expected expand_dims input to have a SliceLayout, but got: {layout}")
-        _check(layout.dim == axis,
-               lambda: f"expected expand_dims input layout to be sliced in axis {axis} but got {layout.dim}")
+        _check(
+            isinstance(layout, AutoLayout) or layout.dim == axis,
+            lambda: f"expected expand_dims input layout to be sliced in axis {axis} but got {layout.dim}")
 
-        ret_ty = ttgl.distributed_type(input.type.scalar, dst_shape, layout.parent)
-        handle = self.builder.create_expand_dims(input.handle, axis, ret_ty.to_ir(self.builder))
-        return self.tensor(handle, ret_ty)
+        handle = self.builder.create_expand_dims(input.handle, axis)
+        return self._wrap_handle_infer_layout(handle, input.type.scalar, dst_shape)
 
     def join(self, a: TensorTy, b: TensorTy) -> TensorTy:
         a, b = self.broadcast_impl_value(a, b)
@@ -107,7 +125,14 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         lhs_shape = lhs_ty.get_block_shapes()
         rhs_shape = rhs_ty.get_block_shapes()
         ret_shape = self._broadcast_shapes(lhs_shape, rhs_shape)
-        if lhs_ty.layout != rhs_ty.layout:
+
+        is_lhs_auto = isinstance(lhs_ty.layout, AutoLayout)
+        is_rhs_auto = isinstance(rhs_ty.layout, AutoLayout)
+        if is_lhs_auto and not is_rhs_auto:
+            lhs = self.set_auto_layout(lhs, rhs_ty.layout)
+        elif is_rhs_auto and not is_lhs_auto:
+            rhs = self.set_auto_layout(rhs, lhs_ty.layout)
+        elif lhs_ty.layout != rhs_ty.layout:
             raise ValueError(f"Layout mismatch in broadcast: {lhs_ty.layout} vs {rhs_ty.layout}")
 
         lhs = self.broadcast_impl_shape(lhs, ret_shape)
@@ -116,6 +141,8 @@ class GluonSemantic(TritonSemantic[TensorTy]):
 
     def arange(self, start, end, layout):
         shape = [end - start]
+        if layout is None:
+            layout = AutoLayout()
         ret_ty = ttgl.distributed_type(ttgl.int32, shape, layout)
         return super().arange(start, end, ret_ty=ret_ty)
 
@@ -133,12 +160,15 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         scalar = self.make_scalar(value, dtype)
         return self.splat(scalar, shape, layout)
 
-    def convert_layout(self, value, layout):
+    def convert_layout(self, value, layout, assert_trivial=False):
         ty = value.type
         _check(isinstance(ty, ttgl.distributed_type),
                lambda: f"expected convert_layout input to be a distributed_type but got: {ty!r}")
         ret_ty = ttgl.distributed_type(ty.element_ty, ty.shape, layout)
-        handle = self.builder.create_convert_layout(ret_ty.to_ir(self.builder), value.handle)
+        ret_ty_ir = ret_ty.to_ir(self.builder)
+        if assert_trivial and not self.builder.is_convert_layout_trivial(ret_ty_ir, value.handle):
+            raise TypeError(f"layout conversion from {ty.layout} to {layout} is not trivial")
+        handle = self.builder.create_convert_layout(ret_ty_ir, value.handle)
         return ttgl.tensor(handle, ret_ty)
 
     def allocate_shared(self, element_ty, shape, layout, value):
@@ -161,6 +191,16 @@ class GluonSemantic(TritonSemantic[TensorTy]):
 
     def shared_dealloc(self, mem_desc):
         self.builder.create_local_dealloc(mem_desc.handle)
+
+    def set_auto_layout(self, value, layout):
+        src_ty = value.type
+        assert isinstance(layout,
+                          DistributedLayout), f"set_auto_layout must set to a distributed layout but got {layout}"
+        assert isinstance(src_ty.layout,
+                          AutoLayout), f"set_auto_layout input must have auto layout but got {value.type.layout}"
+        handle = self.builder.create_set_auto_layout(layout._to_ir(self.builder), value.handle)
+        res_ty = ttgl.distributed_type(src_ty.element_ty, src_ty.shape, layout)
+        return self.tensor(handle, res_ty)
 
     def _memdesc_subview(self, mem_desc, offsets, shape):
         layout = mem_desc.layout
@@ -196,10 +236,26 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         return ttgl.shared_memory_descriptor(handle, element_ty=mem_desc.dtype, shape=shape,
                                              alloc_shape=new_alloc_shape, layout=layout)
 
-    def memdesc_reshape(self, mem_desc, shape, layout):
-        ty = ttgl.shared_memory_descriptor_type(mem_desc.dtype, shape, layout, mem_desc.type.alloc_shape)
-        handle = self.builder.create_memdesc_reshape(ty.to_ir(self.builder), mem_desc.handle)
-        return ttgl.shared_memory_descriptor(handle, **ty.__dict__)
+    def memdesc_reshape(self, mem_desc, shape):
+        _check(
+            math.prod(shape) == math.prod(mem_desc.shape),
+            lambda: (f"memdesc_reshape total elements mismatch: "
+                     f"{mem_desc.shape} -> {shape}"),
+        )
+
+        handle = self.builder.create_memdesc_reshape(mem_desc.handle, shape)
+        layout = self.builder.get_gluon_layout_from_memdesc(handle)
+        alloc_shape = mem_desc.type.alloc_shape
+        prefix_len = len(alloc_shape) - mem_desc.rank
+        new_alloc_shape = alloc_shape[:prefix_len] + list(shape)
+
+        return ttgl.shared_memory_descriptor(
+            handle,
+            element_ty=mem_desc.dtype,
+            shape=shape,
+            alloc_shape=new_alloc_shape,
+            layout=layout,
+        )
 
     def memdesc_reinterpret(self, mem_desc, dtype, shape, layout):
         ty = ttgl.shared_memory_descriptor_type(dtype, shape, layout, shape)
@@ -230,7 +286,6 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         _check(0 <= axis < rank, lambda: f"expected reduction axis to be in the range [0, {rank}) but got {axis}")
         self._check_same_layout(inputs)
         ret_shape = [s for i, s in enumerate(shape) if i != axis]
-        ret_layout = SliceLayout(axis, inputs[0].type.layout)
         assert all(t.type.shape == shape for t in inputs), "all reduction inputs must have the same shape"
 
         reduce_op = self.builder.create_reduce([t.handle for t in inputs], axis)
@@ -238,7 +293,7 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         assert reduce_op.verify()
 
         return tuple(
-            self.wrap_tensor(reduce_op.get_result(i), inputs[i].type.scalar, ret_shape, ret_layout)
+            self._wrap_handle_infer_layout(reduce_op.get_result(i), inputs[i].type.scalar, ret_shape)
             for i in range(len(inputs)))
 
     def warp_specialize(self, default_args, default_partition, worker_args, worker_partitions,
@@ -276,10 +331,11 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         partitions_op = builder.create_warp_specialize_partitions(num_partitions)
         arg_types = [arg.get_type() for arg in mlir_args]
         for i in range(num_partitions):
+            caller_context = GluonCallerContext(num_warps=worker_num_warps[i])
             block = builder.create_block_with_parent(partitions_op.get_region(i), arg_types)
             block_args = [block.get_argument(j) for j in range(len(mlir_args))]
             block_args = unflatten_ir_values(block_args, [arg.type for arg in worker_args])
-            generator.call_JitFunction(worker_partitions[i], block_args, kwargs={})
+            generator.call_JitFunction(worker_partitions[i], block_args, kwargs={}, caller_context=caller_context)
             builder.create_warp_return()
 
         builder.set_insertion_point_after(ws_op.get_operation())

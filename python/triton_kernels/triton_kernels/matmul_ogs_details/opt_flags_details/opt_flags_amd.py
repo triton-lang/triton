@@ -1,11 +1,12 @@
 import torch
 import triton
 from triton_kernels.target_info import get_cdna_version
+from triton_kernels.tensor import bitwidth
 
 
-def compute_block_nk(n, block_m, grid_m, num_xcds, lhs_dtype, rhs_dtype, microscaling_ctx):
-    lhs_width = lhs_dtype.itemsize
-    rhs_width = rhs_dtype.itemsize if rhs_dtype != torch.uint8 else 0.5
+def compute_block_nk(n, block_m, grid_m, num_xcds, lhs_dtype, rhs_dtype, precision_config):
+    lhs_width = bitwidth(lhs_dtype) / 8
+    rhs_width = bitwidth(rhs_dtype) / 8
 
     # block_n:
     n_cu = torch.cuda.get_device_properties(0).multi_processor_count
@@ -27,6 +28,6 @@ def compute_block_nk(n, block_m, grid_m, num_xcds, lhs_dtype, rhs_dtype, microsc
 
     # TODO: block_k = 128 seems to work better for now.
     #       perhaps due to increased number of k loops to pipeline
-    if microscaling_ctx.weight_scale is not None and get_cdna_version() != 4:
+    if precision_config.weight_scale is not None and get_cdna_version() != 4:
         block_k = 128
     return block_n, block_k
