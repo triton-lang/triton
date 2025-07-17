@@ -33,9 +33,7 @@ jobs:
       # container expect it at /github/home/.triton. So map here to make sure we indeed use the cache.
       options: >-
         --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --user root
-        --volume /home/runner/.triton/llvm:/github/home/.triton/llvm
-        --volume /home/runner/.triton/nvidia:/github/home/.triton/nvidia
-        --volume /home/runner/.triton/json:/github/home/.triton/json
+        --volume /home/runner/.triton:/github/home/.triton
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -166,5 +164,5 @@ jobs:
         # Always cleanup the worker, even if builds or tests failed
         if: always()
         run: |
-          rm -rf ~/.triton/cache
+          rm -rf ~/.triton/*
           rm -rf ~/.ccache
