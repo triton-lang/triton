@@ -2,9 +2,9 @@ import torch
 import pytest
 from triton_kernels.testing import assert_equal
 from triton_kernels.tensor import wrap_torch_tensor, convert_layout, FP4
-from triton_kernels.tensor_details.layout import BlackwellMXScaleLayout, HopperMXScaleLayout, HopperMXValueLayout, StridedLayout
+from triton_kernels.tensor_details.layout import BlackwellMXScaleLayout, HopperMXScaleLayout, HopperMXValueLayout
 from triton_kernels.numerics_details.mxfp import downcast_to_mxfp, upcast_from_mxfp
-from triton_kernels.tensor_details.layout_details.hopper_value import bit_untwiddling_mxfp4_value_hopper
+from triton_kernels.tensor_details.layout_details.hopper_value import mxfp4_to_bf16_triton
 import triton
 import triton.language as tl
 
@@ -55,8 +55,8 @@ def test_swizzle_mxfp4_scale(shape, num_warps):
 
 @triton.jit
 def _upcast_mxfp4_to_bf16(Y, X, XScale, x_stride_m, x_stride_n, x_scale_stride_m, x_scale_stride_n, y_stride_m,
-                          y_stride_n, X_BLOCK_M: tl.constexpr, X_BLOCK_N: tl.constexpr):
-    # num_warps: tl.constexpr = tl.extra.cuda.num_warps()
+                          y_stride_n, X_BLOCK_M: tl.constexpr, X_BLOCK_N: tl.constexpr, SCALE_BLOCK_M: tl.constexpr,
+                          SCALE_BLOCK_N: tl.constexpr, mx_axis: tl.constexpr, op_idx: tl.constexpr):
     W_K_DIVISOR: tl.constexpr = 1
     W_K_MULTIPLIER: tl.constexpr = 2
     W_N_DIVISOR: tl.constexpr = 4
@@ -66,16 +66,16 @@ def _upcast_mxfp4_to_bf16(Y, X, XScale, x_stride_m, x_stride_n, x_scale_stride_m
     # PACKED_X_SCALE_BLOCK_M: tl.constexpr = X_BLOCK_M // MX_PACK_DIVISOR
     offs_m_val = tl.arange(0, PACKED_X_BLOCK_M)
     offs_n_val = tl.arange(0, PACKED_X_BLOCK_N)
-    offs_m_scale = tl.arange(0, X_BLOCK_M // 32)
-    offs_n_scale = tl.arange(0, X_BLOCK_N)
+    offs_m_scale = tl.arange(0, SCALE_BLOCK_M)
+    offs_n_scale = tl.arange(0, SCALE_BLOCK_N)
     # load values
     offs_x = offs_m_val[:, None] * x_stride_m + offs_n_val[None, :] * x_stride_n
     x = tl.load(X + offs_x)
     # load scales
     offs_x_scale = offs_m_scale[:, None] * x_scale_stride_m + offs_n_scale[None, :] * x_scale_stride_n
     x_scale = tl.load(XScale + offs_x_scale)
-    # x_scale = unswizzle_mxfp4_scale_hopper(x_scale, num_warps=num_warps)
-    y = bit_untwiddling_mxfp4_value_hopper(x, x_scale, 1)
+    # x_scale = unswizzle_mxfp4_scale_hopper(x_scale, num_warps=tl.extra.cuda.num_warps())
+    y = mxfp4_to_bf16_triton(x, x_scale, mx_axis=mx_axis, op_idx=op_idx)
     # write back output
     offs_m_val = tl.arange(0, X_BLOCK_M)
     offs_n_val = tl.arange(0, X_BLOCK_N)
@@ -84,21 +84,26 @@ def _upcast_mxfp4_to_bf16(Y, X, XScale, x_stride_m, x_stride_n, x_scale_stride_m
 
 
 def test_mxfp4_to_bf16():
+    mx_axis = 0
+    op_idx = 0
     torch.manual_seed(0)
     torch.cuda.manual_seed(0)
     shape = (256, 128)
     x = torch.randn(shape, dtype=torch.bfloat16, device="cuda")
-    x_fp4_val, x_fp4_scale = downcast_to_mxfp(x, torch.uint8, axis=0)
-    x_bf16 = upcast_from_mxfp(x_fp4_val, x_fp4_scale, x.dtype, axis=0)
+    x_fp4_val, x_fp4_scale = downcast_to_mxfp(x, torch.uint8, axis=mx_axis)
+    x_bf16 = upcast_from_mxfp(x_fp4_val, x_fp4_scale, x.dtype, axis=mx_axis)
     x_fp4_val = wrap_torch_tensor(x_fp4_val, dtype=FP4)
     x_fp4_scale = wrap_torch_tensor(x_fp4_scale)
-    x_fp4_val = convert_layout(x_fp4_val, HopperMXValueLayout)
-    x_fp4_scale = convert_layout(x_fp4_scale, StridedLayout)
+    x_fp4_val = convert_layout(x_fp4_val, HopperMXValueLayout, op_idx=op_idx)
+    # x_fp4_scale = convert_layout(x_fp4_scale, HopperMXScaleLayout)
+    num_warps = x_fp4_scale.storage.layout.num_warps if isinstance(x_fp4_scale.storage.layout,
+                                                                   HopperMXScaleLayout) else 4
     y = torch.empty_like(x_bf16)
     _upcast_mxfp4_to_bf16[(1, )](y, x_fp4_val.storage.data, x_fp4_scale.storage.data, x_fp4_val.storage.data.stride(0),
                                  x_fp4_val.storage.data.stride(1), x_fp4_scale.storage.data.stride(0),
                                  x_fp4_scale.storage.data.stride(1), y.stride(0), y.stride(1), x_fp4_val.shape[0],
-                                 x_fp4_val.shape[1], num_warps=4)
+                                 x_fp4_val.shape[1], x_fp4_scale.storage.data.shape[0],
+                                 x_fp4_scale.storage.data.shape[1], mx_axis=mx_axis, op_idx=op_idx, num_warps=num_warps)
     assert (y == x_bf16).all()
 
 

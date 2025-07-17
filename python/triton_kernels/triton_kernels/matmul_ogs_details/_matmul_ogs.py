@@ -2,7 +2,7 @@ import triton
 import triton.language as tl
 from triton_kernels.tensor_details.layout_details.blackwell_scale import unswizzle_mx_scale_bw
 from triton_kernels.tensor_details.layout_details.hopper_scale import unswizzle_mxfp4_scale_hopper
-from triton_kernels.tensor_details.layout_details.hopper_value import bit_untwiddling_mxfp4_value_hopper
+from triton_kernels.tensor_details.layout_details.hopper_value import mxfp4_to_bf16_triton
 from triton_kernels.numerics_details.flexpoint import float_to_flex, load_scale
 from ._common import make_matmul_repr, matmul_launch_metadata, swizzle2d, xcd_swizzle, get_scaled_dot_format_string
 
@@ -258,12 +258,12 @@ def _matmul_ogs(
                 # Handshake with the swizzling code
                 tl.static_assert(x_format == "bf16")
                 tl.static_assert(mx_format == "e2m1")
-                tl.static_print(w.shape)
-                w = bit_untwiddling_mxfp4_value_hopper(w, w_scales, op_idx=1)
+                tl.static_print(w_scales.shape)
+                w = mxfp4_to_bf16_triton(w.trans(), w_scales, 1)
                 tl.static_assert(w.dtype == tl.bfloat16)
                 acc = acc.trans()
                 x = x.trans()
-                w = w.trans()
+                # w = w.trans()
                 acc = tl.dot(w, x, acc, max_num_imprecise_acc=MAX_NUM_IMPRECISE_ACC, allow_tf32=ALLOW_TF32)
                 acc = acc.trans()
             else:
