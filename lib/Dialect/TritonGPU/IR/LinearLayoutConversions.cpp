@@ -122,24 +122,6 @@ LinearLayout combineCtaCgaWithShape(LinearLayout ctaLayout,
   return ret;
 }
 
-static LinearLayout memdescSubview(LinearLayout layout,
-                                   ArrayRef<int64_t> shape) {
-  // We remove the extra bases from the inverse of the layout and then invert it
-  // back This is sound as the initial layout is invertible so we don't lose any
-  // information in the process of inverting twice
-  auto inverse = layout.invert();
-  auto bases = inverse.getBases();
-  for (auto [s, dim] : llvm::zip(shape, inverse.getInDimNames())) {
-    auto &base = bases[dim];
-    base.resize(llvm::Log2_32(s));
-  }
-  auto subviewInv =
-      LinearLayout(bases, inverse.getOutDims(), /*requiresSurjective=*/false);
-  // subviewInv is injective but not surjective
-  // subviewInv.pseudoinvert() is surjective
-  return subviewInv.pseudoinvert();
-}
-
 LinearLayout swizzledSharedToLinearLayout(ArrayRef<int64_t> shape,
                                           SwizzledSharedEncodingAttr shared) {
   MLIRContext *ctx = shared.getContext();
@@ -1281,9 +1263,6 @@ TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
       result = sharedToLinearLayoutAMDRotating(allocationShape, sbl);
     } else {
       assert(0 && "unknown layout");
-    }
-    if (shape != allocationShape) {
-      result = memdescSubview(result, shape);
     }
   }
 

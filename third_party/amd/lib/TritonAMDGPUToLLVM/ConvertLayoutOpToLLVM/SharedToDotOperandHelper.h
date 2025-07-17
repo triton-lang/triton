@@ -33,10 +33,6 @@ Value computeOffset(ConversionPatternRewriter &rewriter, Location loc,
                     ArrayRef<Value> strides,
                     gpu::SwizzledSharedEncodingAttr srcLayout);
 
-Value computeBasePtr(ConversionPatternRewriter &rewriter, Location loc,
-                     const SharedMemoryObject &smemObj,
-                     ArrayRef<Value> strides);
-
 bool isKContig(llvm::ArrayRef<unsigned> order, int opIdx);
 
 using computeTensorElemMappingInBlockT =
