@@ -8,7 +8,55 @@ on:
         type: string
 
 jobs:
+  host-cache-restore:
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        runner: ${{ fromJson(inputs.matrix) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: 'true'
+      - name: Compute cache keys
+        id: cache-key
+        run: |
+          llvm_file="cmake/llvm-hash.txt"
+          nvidia_file="cmake/nvidia-toolchain-version.json"
+          json_file="cmake/json-version.txt"
+
+          # Check if files exist before proceeding
+          if [[ ! -f "$llvm_file" || ! -f "$nvidia_file" || ! -f "$json_file" ]]; then
+            echo "Error: Required dependency files are missing."
+            exit 1
+          fi
+
+          # Process the files if they exist
+          echo "llvm=$(cat $llvm_file | cut -c 1-8)" >> $GITHUB_OUTPUT
+          echo "nvidia=$(sha256sum $nvidia_file | cut -d ' ' -f 1)" >> $GITHUB_OUTPUT
+          echo "json=$(cat $json_file)" >> $GITHUB_OUTPUT
+        shell: bash
+      - name: Cache build dependencies
+        uses: actions/cache/restore@v4
+        with:
+          # Note that we cannot use environment variables here given there is
+          # no shell to interpret them in the paths.
+          path: |
+            ~/.triton/llvm
+            ~/.triton/nvidia
+            ~/.triton/json
+          key: ${{ runner.os }}-${{ runner.arch }}-llvm-${{ steps.cache-key.outputs.llvm }}-nvidia-${{ steps.cache-key.outputs.nvidia }}-json-${{ steps.cache-key.outputs.json }}
+      - name: Inspect cache directories
+        run: |
+          mkdir -p ~/.triton
+          du -h -d 1 ~/.triton
+
+          mkdir -p ~/.ccache
+          du -h -d 1 ~/.ccache
+
   integration-tests-amd:
+    needs: host-cache-restore
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     strategy:
@@ -35,38 +83,6 @@ jobs:
         --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --user root
         --volume /home/runner/.triton:/github/home/.triton
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          submodules: 'true'
-      - name: Compute cache keys
-        id: cache-key
-        run: |
-          llvm_file="cmake/llvm-hash.txt"
-          nvidia_file="cmake/nvidia-toolchain-version.json"
-          json_file="cmake/json-version.txt"
-
-          # Check if files exist before proceeding
-          if [[ ! -f "$llvm_file" || ! -f "$nvidia_file" || ! -f "$json_file" ]]; then
-            echo "Error: Required dependency files are missing."
-            exit 1
-          fi
-
-          # Process the files if they exist
-          echo "llvm=$(cat $llvm_file | cut -c 1-8)" >> $GITHUB_OUTPUT
-          echo "nvidia=$(sha256sum $nvidia_file | cut -d ' ' -f 1)" >> $GITHUB_OUTPUT
-          echo "json=$(cat $json_file)" >> $GITHUB_OUTPUT
-        shell: bash
-      - name: Cache build dependencies
-        uses: actions/cache@v4
-        with:
-          # Note that we cannot use environment variables here given there is
-          # no shell to interpret them in the paths.
-          path: |
-            ~/.triton/llvm
-            ~/.triton/nvidia
-            ~/.triton/json
-          key: ${{ runner.os }}-${{ runner.arch }}-llvm-${{ steps.cache-key.outputs.llvm }}-nvidia-${{ steps.cache-key.outputs.nvidia }}-json-${{ steps.cache-key.outputs.json }}
       - name: Inspect cache directories
         run: |
           mkdir -p ~/.triton
