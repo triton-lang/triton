@@ -165,8 +165,8 @@ def tensor_memory_kernel(layout: ttgl.constexpr, tmem_layout: ttgl.constexpr):
     slice2 = mem.slice(YBLOCK // 2, YBLOCK // 2)  # noqa: F841
 
     buffers = ttgl.nvidia.blackwell.allocate_tensor_memory(ttgl.float32, [2, XBLOCK, YBLOCK], tmem_layout)
-    for i in range(2):
-        buffers.index(i).load(layout)
+    for ivar in range(2):
+        buffers.index(ivar).load(layout)
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires blackwell tensor cores")
@@ -200,9 +200,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %3 = arith.bitcast %c2_i32 : i32 to i32 loc(#loc)
     %4 = arith.bitcast %c1_i32 : i32 to i32 loc(#loc)
     %5 = ub.poison : i32 loc(#loc)
-    scf.for %arg0 = %2 to %3 step %4  : i32 {
+    scf.for %ivar = %2 to %3 step %4  : i32 {
       %c0_i32_4 = arith.constant 0 : i32 loc(#loc)
-      %6 = ttg.memdesc_subview %result_2[%arg0, %c0_i32_4, %c0_i32_4] : !ttg.memdesc<2x128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable, 2x128x128> loc(#loc)
+      %6 = ttg.memdesc_subview %result_2[%ivar, %c0_i32_4, %c0_i32_4] : !ttg.memdesc<2x128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable, 2x128x128> loc(#loc)
       %result_5 = ttng.tmem_load %6 : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable, 2x128x128> -> tensor<128x128xf32, #blocked> loc(#loc)
     } loc(#loc)
     tt.return loc(#loc)
@@ -257,8 +257,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 @gluon.jit
 def shared_memory_index_kernel(XBLOCK: ttgl.constexpr, layout: ttgl.constexpr, smem_layout: ttgl.constexpr):
     smem = ttgl.allocate_shared_memory(ttgl.int32, [4, XBLOCK], smem_layout)
-    for i in range(4):
-        smem.index(i).load(layout)
+    for ivar in range(4):
+        smem.index(ivar).load(layout)
 
 
 @pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
@@ -283,9 +283,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %2 = arith.bitcast %c4_i32 : i32 to i32 loc(#loc)
     %3 = arith.bitcast %c1_i32 : i32 to i32 loc(#loc)
     %4 = ub.poison : i32 loc(#loc)
-    scf.for %arg0 = %1 to %2 step %3  : i32 {
+    scf.for %ivar = %1 to %2 step %3  : i32 {
       %c0_i32_0 = arith.constant 0 : i32 loc(#loc)
-      %5 = ttg.memdesc_subview %0[%arg0, %c0_i32_0] : !ttg.memdesc<4x256xi32, #shared, #smem, mutable> -> !ttg.memdesc<256xi32, #shared, #smem, mutable, 4x256> loc(#loc)
+      %5 = ttg.memdesc_subview %0[%ivar, %c0_i32_0] : !ttg.memdesc<4x256xi32, #shared, #smem, mutable> -> !ttg.memdesc<256xi32, #shared, #smem, mutable, 4x256> loc(#loc)
       %6 = ttg.local_load %5 : !ttg.memdesc<256xi32, #shared, #smem, mutable, 4x256> -> tensor<256xi32, #blocked> loc(#loc)
     } loc(#loc)
     tt.return loc(#loc)
@@ -676,32 +676,33 @@ def test_async_tma(fresh_knobs):
     h = async_tma_kernel.warmup(input_desc, XBLOCK, grid=(1, ), num_warps=4)
     expecttest.assert_expected_inline(
         anonymize_ir(h.asm["source"]), """\
-#loc = loc(unknown)
+#loc1 = loc("input_desc")
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
 #shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
-  tt.func public @async_tma_kernel(%arg0: !tt.tensordesc<tensor<128x128xf16, #shared>> loc(unknown), %arg1: i32 loc(unknown), %arg2: i32 loc(unknown), %arg3: i64 loc(unknown), %arg4: i64 loc(unknown)) attributes {noinline = false} {
+  tt.func public @async_tma_kernel(%input_desc: !tt.tensordesc<tensor<128x128xf16, #shared>> loc("input_desc"), %input_desc_0: i32 loc("input_desc"), %input_desc_1: i32 loc("input_desc"), %input_desc_2: i64 loc("input_desc"), %input_desc_3: i64 loc("input_desc")) attributes {noinline = false} {
     %0 = ttg.local_alloc : () -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable> loc(#loc)
     %1 = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared1, #smem, mutable> loc(#loc)
     ttng.init_barrier %1, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable> loc(#loc)
     %c0_i32 = arith.constant 0 : i32 loc(#loc)
-    %c0_i32_0 = arith.constant 0 : i32 loc(#loc)
-    %true = arith.constant true loc(#loc)
-    ttng.async_tma_copy_global_to_local %arg0[%c0_i32, %c0_i32_0] %0, %1, %true : !tt.tensordesc<tensor<128x128xf16, #shared>>, !ttg.memdesc<1xi64, #shared1, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable> loc(#loc)
-    %true_1 = arith.constant true loc(#loc)
-    ttng.barrier_expect %1, 32768, %true_1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable> loc(#loc)
-    %c0_i32_2 = arith.constant 0 : i32 loc(#loc)
-    %true_3 = arith.constant true loc(#loc)
-    ttng.wait_barrier %1, %c0_i32_2, %true_3 : !ttg.memdesc<1xi64, #shared1, #smem, mutable> loc(#loc)
-    ttng.inval_barrier %1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable> loc(#loc)
     %c0_i32_4 = arith.constant 0 : i32 loc(#loc)
-    %c0_i32_5 = arith.constant 0 : i32 loc(#loc)
-    ttng.async_tma_copy_local_to_global %arg0[%c0_i32_4, %c0_i32_5] %0 : !tt.tensordesc<tensor<128x128xf16, #shared>>, !ttg.memdesc<128x128xf16, #shared, #smem, mutable> loc(#loc)
+    %true = arith.constant true loc(#loc)
+    ttng.async_tma_copy_global_to_local %input_desc[%c0_i32, %c0_i32_4] %0, %1, %true : !tt.tensordesc<tensor<128x128xf16, #shared>>, !ttg.memdesc<1xi64, #shared1, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable> loc(#loc)
+    %true_5 = arith.constant true loc(#loc)
+    ttng.barrier_expect %1, 32768, %true_5 : !ttg.memdesc<1xi64, #shared1, #smem, mutable> loc(#loc)
+    %c0_i32_6 = arith.constant 0 : i32 loc(#loc)
+    %true_7 = arith.constant true loc(#loc)
+    ttng.wait_barrier %1, %c0_i32_6, %true_7 : !ttg.memdesc<1xi64, #shared1, #smem, mutable> loc(#loc)
+    ttng.inval_barrier %1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable> loc(#loc)
+    %c0_i32_8 = arith.constant 0 : i32 loc(#loc)
+    %c0_i32_9 = arith.constant 0 : i32 loc(#loc)
+    ttng.async_tma_copy_local_to_global %input_desc[%c0_i32_8, %c0_i32_9] %0 : !tt.tensordesc<tensor<128x128xf16, #shared>>, !ttg.memdesc<128x128xf16, #shared, #smem, mutable> loc(#loc)
     ttng.async_tma_store_wait {pendings = 0 : i32} loc(#loc)
     tt.return loc(#loc)
   } loc(#loc)
 } loc(#loc)
+#loc = loc(unknown)
 """)
 
 
@@ -736,31 +737,32 @@ def test_async_tma_blackwell(fresh_knobs):
     expecttest.assert_expected_inline(
         anonymize_ir(h.asm["source"]), """\
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [1, 0]}>
-#loc = loc(unknown)
+#loc1 = loc("input_desc")
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
 #shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
-  tt.func public @async_tma_blackwell_kernel(%arg0: !tt.tensordesc<tensor<1x128xf16, #shared>> loc(unknown), %arg1: i32 loc(unknown), %arg2: i32 loc(unknown), %arg3: i64 loc(unknown), %arg4: i64 loc(unknown)) attributes {noinline = false} {
+  tt.func public @async_tma_blackwell_kernel(%input_desc: !tt.tensordesc<tensor<1x128xf16, #shared>> loc("input_desc"), %input_desc_0: i32 loc("input_desc"), %input_desc_1: i32 loc("input_desc"), %input_desc_2: i64 loc("input_desc"), %input_desc_3: i64 loc("input_desc")) attributes {noinline = false} {
     %0 = ttg.local_alloc : () -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable> loc(#loc)
     %1 = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared1, #smem, mutable> loc(#loc)
     ttng.init_barrier %1, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable> loc(#loc)
     %2 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 0, parent = #blocked}>> loc(#loc)
     %true = arith.constant true loc(#loc)
     %c0_i32 = arith.constant 0 : i32 loc(#loc)
-    ttng.async_tma_gather %arg0[%2, %c0_i32] %0, %1, %true : !tt.tensordesc<tensor<1x128xf16, #shared>>, tensor<128xi32, #ttg.slice<{dim = 0, parent = #blocked}>>, i32, !ttg.memdesc<1xi64, #shared1, #smem, mutable>, !ttg.memdesc<128x128xf16, #shared, #smem, mutable>, i1 loc(#loc)
-    %true_0 = arith.constant true loc(#loc)
-    ttng.barrier_expect %1, 32768, %true_0 : !ttg.memdesc<1xi64, #shared1, #smem, mutable> loc(#loc)
-    %c0_i32_1 = arith.constant 0 : i32 loc(#loc)
-    %true_2 = arith.constant true loc(#loc)
-    ttng.wait_barrier %1, %c0_i32_1, %true_2 : !ttg.memdesc<1xi64, #shared1, #smem, mutable> loc(#loc)
+    ttng.async_tma_gather %input_desc[%2, %c0_i32] %0, %1, %true : !tt.tensordesc<tensor<1x128xf16, #shared>>, tensor<128xi32, #ttg.slice<{dim = 0, parent = #blocked}>>, i32, !ttg.memdesc<1xi64, #shared1, #smem, mutable>, !ttg.memdesc<128x128xf16, #shared, #smem, mutable>, i1 loc(#loc)
+    %true_4 = arith.constant true loc(#loc)
+    ttng.barrier_expect %1, 32768, %true_4 : !ttg.memdesc<1xi64, #shared1, #smem, mutable> loc(#loc)
+    %c0_i32_5 = arith.constant 0 : i32 loc(#loc)
+    %true_6 = arith.constant true loc(#loc)
+    ttng.wait_barrier %1, %c0_i32_5, %true_6 : !ttg.memdesc<1xi64, #shared1, #smem, mutable> loc(#loc)
     ttng.inval_barrier %1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable> loc(#loc)
-    %c0_i32_3 = arith.constant 0 : i32 loc(#loc)
-    ttng.async_tma_scatter %arg0[%2, %c0_i32_3] %0 : !tt.tensordesc<tensor<1x128xf16, #shared>>, tensor<128xi32, #ttg.slice<{dim = 0, parent = #blocked}>>, i32, !ttg.memdesc<128x128xf16, #shared, #smem, mutable> loc(#loc)
+    %c0_i32_7 = arith.constant 0 : i32 loc(#loc)
+    ttng.async_tma_scatter %input_desc[%2, %c0_i32_7] %0 : !tt.tensordesc<tensor<1x128xf16, #shared>>, tensor<128xi32, #ttg.slice<{dim = 0, parent = #blocked}>>, i32, !ttg.memdesc<128x128xf16, #shared, #smem, mutable> loc(#loc)
     ttng.async_tma_store_wait {pendings = 0 : i32} loc(#loc)
     tt.return loc(#loc)
   } loc(#loc)
 } loc(#loc)
+#loc = loc(unknown)
 """)
 
 

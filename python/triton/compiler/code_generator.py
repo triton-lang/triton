@@ -438,17 +438,13 @@ class CodeGenerator(ast.NodeVisitor):
         self.name_loc_as_prefix = None
 
     def _maybe_set_loc_to_name(self, val, name):
-        from ..experimental.gluon.language._core import shared_memory_descriptor
-        from ..experimental.gluon.language.nvidia import blackwell, hopper
         if isinstance(val, (ir.value, ir.block_argument)):
-            handle = val
-        elif _is_triton_tensor(val) or isinstance(val,
-                                                  (language.core.tensor_descriptor, shared_memory_descriptor,
-                                                   blackwell.tensor_memory_descriptor, hopper.tma.tensor_descriptor)):
-            handle = val.handle
-        else:
-            return
-        handle.set_loc(self.builder.create_name_loc(name, handle.get_loc()))
+            val.set_loc(self.builder.create_name_loc(name, val.get_loc()))
+        elif _is_triton_value(val):
+            handles = []
+            val._flatten_ir(handles)
+            for handle in handles:
+                handle.set_loc(self.builder.create_name_loc(name, handle.get_loc()))
 
     def set_value(self, name: str, value: Union[base_value, constexpr]) -> None:
         ''' This function:
