@@ -625,9 +625,44 @@ def _attn_fwd_mma(config, chnls, descs, M, STAGE: gl.constexpr):
 
 
 @gluon.jit
+def _split_n(x):
+    return x.reshape([x.shape[0], 2, x.shape[1] // 2]).permute(0, 2, 1).split()
+
+
+@gluon.jit
+def _mask_inner(qk, mask, i: gl.constexpr):
+    if qk.shape[1] == 1:
+        mask_i_bit = mask & (1 << i) == 0
+        return gl.where(mask_i_bit, qk, -float("inf"))
+    else:
+        qk0, qk1 = _split_n(qk)
+        mask0, mask1 = _split_n(mask)
+        qk0 = _mask_inner(qk0, mask0, i)
+        qk1 = _mask_inner(qk1, mask1, i + qk.shape[1] // 2)
+        return gl.convert_layout(
+            gl.join(qk0, qk1).permute(0, 2, 1).reshape(qk.shape), qk.type.layout, assert_trivial=True)
+
+
+@gluon.jit
+def _mask_frag(qk, col_limit_right, s: gl.constexpr):
+    if qk.shape[1] == 16:
+        col_limit_right_s = col_limit_right - s
+        col_limit_right_cur = max(col_limit_right_s, 0)
+        mask = -1 << col_limit_right_cur
+        return _mask_inner(qk, mask, 0)
+    else:
+        qk0, qk1 = _split_n(qk)
+        col_limit_right0, col_limit_right1 = _split_n(col_limit_right)
+        qk0 = _mask_frag(qk0, col_limit_right0, s)
+        qk1 = _mask_frag(qk1, col_limit_right1, s + qk.shape[1] // 2)
+        return gl.convert_layout(
+            gl.join(qk0, qk1).permute(0, 2, 1).reshape(qk.shape), qk.type.layout, assert_trivial=True)
+
+
+@gluon.jit
 def _softmax_inner_loop(tile_id: gl.constexpr, config, prog,  #
                         s_consumer, corr_producer, exp_turnstile, corr_bar,  #
-                        offs_m, offs_n, m_i, l_i0, l_i1, STAGE: gl.constexpr):
+                        offs_m, m_i, l_i0, l_i1, STAGE: gl.constexpr):
     lo, hi = prog.get_loop_bounds(STAGE)
 
     for start_n in range(lo, hi, config.BLOCK_N):
@@ -635,11 +670,9 @@ def _softmax_inner_loop(tile_id: gl.constexpr, config, prog,  #
         qk = s_tmem.load(config.qk_layout)
 
         if STAGE == 2:
-            # Prevent LLVM from hoisting the partial sums, which triggers spilling.
-            offs_n = gl.inline_asm_elementwise("mov.b32 $0, $0;", "=r,r", [offs_n], dtype=gl.int32, is_pure=True,
-                                               pack=1)
-            mask = offs_m[:, None] < (start_n + offs_n[None, :])
-            qk = gl.where(mask, -1.0e8, qk)
+            col_limit_right = offs_m - start_n + 1
+            qk = _mask_frag(qk, col_limit_right[:, None].broadcast_to(qk.shape), 0)
+
         m_ij = gl.maximum(m_i, gl.max(qk, 1) * config.qk_scale)
         alpha = gl.exp2(m_i - m_ij)
 
@@ -720,10 +753,7 @@ def _softmax_inner_loop(tile_id: gl.constexpr, config, prog,  #
 @gluon.jit
 def _softmax_tile(tile_id: gl.constexpr, config, M, desc_o, STAGE: gl.constexpr,  #
                   s_chnl, corr_chnl, exp_turnstile):
-    qk_slice_dim0: gl.constexpr = gl.SliceLayout(0, config.qk_layout)
     qk_slice_dim1: gl.constexpr = gl.SliceLayout(1, config.qk_layout)
-
-    offs_n = gl.arange(0, config.BLOCK_N, qk_slice_dim0)
 
     s_consumer = s_chnl.create_consumer()
     corr_producer = corr_chnl.create_producer()
@@ -747,11 +777,11 @@ def _softmax_tile(tile_id: gl.constexpr, config, M, desc_o, STAGE: gl.constexpr,
         if STAGE & 1:
             m_i, l_i0, l_i1, corr_bar, s_consumer, corr_producer, exp_turnstile = _softmax_inner_loop(  #
                 tile_id, config, prog, s_consumer, corr_producer, exp_turnstile, corr_bar,  #
-                offs_m, offs_n, m_i, l_i0, l_i1, STAGE=4 - STAGE)
+                offs_m, m_i, l_i0, l_i1, STAGE=4 - STAGE)
         if STAGE & 2:
             m_i, l_i0, l_i1, corr_bar, s_consumer, corr_producer, exp_turnstile = _softmax_inner_loop(  #
                 tile_id, config, prog, s_consumer, corr_producer, exp_turnstile, corr_bar,  #
-                offs_m, offs_n, m_i, l_i0, l_i1, STAGE=2)
+                offs_m, m_i, l_i0, l_i1, STAGE=2)
 
         if config.use_fadd2_reduce:
             l_i = l_i0 + l_i1
