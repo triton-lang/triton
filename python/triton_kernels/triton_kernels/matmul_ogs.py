@@ -7,7 +7,7 @@ import triton
 from triton_kernels import target_info
 from triton_kernels.numerics import InFlexData, OutFlexData
 from triton_kernels.routing import GatherIndx, RoutingData, ScatterIndx
-from triton_kernels.target_info import is_hip, is_cuda
+from triton_kernels.target_info import is_cuda
 # details
 from .matmul_ogs_details._matmul_ogs import _compute_writeback_idx
 from .matmul_ogs_details._matmul_ogs import _matmul_ogs
