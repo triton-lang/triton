@@ -155,9 +155,9 @@ LinearLayout transposeLinearLayout(LinearLayout layout, ArrayRef<int> order);
 // The returned layout has the following properties:
 // - The orders of the input and output dimensions of `P` match the order of the
 //   input dimensions of `src`.
-// - The permutation has zero (broadcasting) vectors as fixed-points when
-//   possible. I.e., zero vectors at the same position in `src` and `dst` are
-//   mapped to themselves under `P`.
+// - Prioritizes making zero (broadcasting) vectors fixed-points of the
+//   permutation. I.e., if a vector is zero in both `src` and `dst` for the same
+//   input coordinate, it maps to itself under `P`.
 LinearLayout
 basisPermutationLayout(const LinearLayout &src, const LinearLayout &dst);
 

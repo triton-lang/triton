@@ -449,12 +449,12 @@ LinearLayout transposeLinearLayout(LinearLayout layout, ArrayRef<int> order) {
 
 LinearLayout
 basisPermutationLayout(const LinearLayout &src, const LinearLayout &dst) {
-  // This function builds a layout `P` which maps the basis vectors of `src`
-  // to the basis vectors of `dst`. It requires that the multiset of basis
+  // This function computes a permutation layout `P` which satisfies the
+  // property `src = dst \circ P`. It requires that the multiset of basis
   // vectors for each of `src` and `dst` agree and that the nonzero values in
-  // each of the multisets are unique. I.e., broadcasting is allowed in both
-  // layouts so long as the degree of broadcasting (the number of zero basis
-  // vectors) is the same in the two layouts.
+  // each of the multisets are unique. I.e., broadcasting is allowed in either
+  // layout so long as the degree of broadcasting (the number of zero basis
+  // vectors) is the same between the two layouts.
   //
   // The orders of the input and output dimensions of `P` are set to be the order
   // of the input dimensions of `src`.
@@ -487,7 +487,8 @@ basisPermutationLayout(const LinearLayout &src, const LinearLayout &dst) {
          "Layouts must have same output dimensions and dimension sizes");
 
   auto srcFlat = src.flattenOuts();
-  // Reorder the output dimensions of `dst` if necessary before flattening.
+  // Reorder the output dimensions of `dst` if necessary before flattening, as
+  // flattening depends on the order.
   LinearLayout dstFlat;
   if (!llvm::equal(src.getOutDims(), dst.getOutDims())) {
     auto temp = dst.transposeOuts(llvm::to_vector(src.getOutDimNames()));

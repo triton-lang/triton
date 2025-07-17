@@ -411,10 +411,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     if (elemsPerVec > 1) {
       SmallVector<Value> packedVals;
       packedVals.reserve(regDim / elemsPerVec);
-      // Zero extend sub-byte types when packing.
       if (bitwidth < 8)
         llvm::for_each(inVals, [&](Value &v) { v = b.zext(i8_ty, v); });
-      // Pack into vectors and convert to `i32_ty`.
       for (int i = 0; i < regDim; i += elemsPerVec) {
         auto slice = ArrayRef<Value>(inVals).slice(i, elemsPerVec);
         Value v = packLLVector(loc, slice, rewriter);
@@ -428,12 +426,9 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
 
     SmallVector<Value> outVals;
     if (m == 1 && pLaneIsTrivial) {
-      // Emits .5 * R selects, then .5 * R shuffles, then R selects.
       outVals = transferWithinWarpShipImpl(loc, rewriter, inVals, nPack,
                                            mixedTranspositions[0]);
     } else {
-      // Emits m * R selects, then `pLaneIsTrivial ? (1 - (1/2)^m) * R : R`
-      // shuffles, then m * R selects.
       outVals = transferWithinWarpSwapImpl(loc, rewriter, inVals, nPack, pLane,
                                            pLaneIsTrivial, mixedTranspositions);
     }
@@ -509,7 +504,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     //   2. l_j ^= r_i (shfl)        [ 0 1 ]     [ 1 1 ] [ 1 0 ] [ 1 1 ]
     //   3. r_i ^= l_j (selp),       [ 1 0 ]  =  [ 0 1 ] [ 1 1 ] [ 0 1 ],
     //
-    // where we pass in bits as column vectors [r_i, l_j] and left-multiply.
+    // where we pass in bits as column vectors [r_i, l_j].
     //
     // When the transpositions are all disjoint, we can group the three stages
     // of each transposition together. The two combined `selp` stages each use
