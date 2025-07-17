@@ -435,6 +435,10 @@ class CUDABackend(BaseBackend):
             ]
             try:
                 subprocess.run(ptxas_cmd, check=True, close_fds=False, stderr=flog)
+                if knobs.nvidia.dump_ptxas_log:
+                    with open(flog.name) as log_file:
+                        print(log_file.read())
+
                 if os.path.exists(fsrc.name):
                     os.remove(fsrc.name)
                 if os.path.exists(flog.name):

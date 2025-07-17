@@ -1,7 +1,7 @@
 #include "triton/Dialect/Gluon/IR/Dialect.h"
 
-#include "mlir/IR/DialectImplementation.h"
 #include "mlir/Support/LLVM.h"
+#include "triton/Dialect/Triton/IR/Interfaces.h"
 #include "llvm/ADT/TypeSwitch.h"
 
 using namespace mlir;
@@ -111,6 +111,7 @@ void GluonDialect::initialize() {
 #define GET_OP_LIST
 #include "triton/Dialect/Gluon/IR/Ops.cpp.inc"
       >();
+  addInterfaces<TritonInlinerInterface>();
   addInterfaces<GluonInferLayoutInterface>();
 }
 

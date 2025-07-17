@@ -66,12 +66,9 @@ LogicalResult inferAutoLayouts(FuncOp func) {
     return success();
   };
 
-  // 1. Set seed values from layout conversions
+  // 1. Set seed values from set_auto_layout ops
   auto res = func.walk([&](gluon::SetAutoLayoutOp op) -> WalkResult {
-    auto res = updateEncoding({op.getSrc()}, op.getType().getEncoding());
-    op.getResult().replaceAllUsesWith(op.getSrc());
-    op->erase();
-    return res;
+    return updateEncoding({op.getSrc()}, op.getType().getEncoding());
   });
 
   if (res.wasInterrupted())
@@ -152,6 +149,13 @@ LogicalResult inferAutoLayouts(FuncOp func) {
       }
     }
   }
+
+  // 4. Cleanup set_auto_layout ops
+  func.walk([&](gluon::SetAutoLayoutOp op) {
+    assert(op.getSrc().getType() == op.getType());
+    op.getResult().replaceAllUsesWith(op.getSrc());
+    op->erase();
+  });
 
   return success();
 }
