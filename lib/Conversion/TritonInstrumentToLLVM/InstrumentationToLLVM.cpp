@@ -302,11 +302,13 @@ struct CheckOutstandingWritesOpConversion
     Value writeState =
         tti::createLoadScratchMemory(b, loc, op.getWriteState(), writeStateType)
             ->getResult(0);
+    int hwPipelined = op.getHwPipelined() ? 1 : 0;
     Value buf = createMemDescToI64(b, loc, getTypeConverter(),
                                    op.getBuf().getType(), adaptor.getBuf());
 
     // Gluon pseudo-code:
     // curr_buf_state = tl.where(bufs == buf, write_state, 0)
+    // curr_buf_state = curr_buf_state >> 1 if hw_pipelined else 0
     // tl.device_assert(curr_buf_state == ttgl.zeros_like(curr_buf_state),
     // "Buffer being accessed has outstanding writes")
 
@@ -314,6 +316,9 @@ struct CheckOutstandingWritesOpConversion
     Value buffersEqBuf = createCmpIntTensorScalar(b, loc, buffers, buf);
     Value currBufState = b.create<arith::SelectOp>(loc, buffersEqBuf,
                                                    writeState, writeStateZero);
+    auto shiftVal =
+        tti::createConstIntTensor(b, loc, hwPipelined, writeStateType);
+    currBufState = b.create<arith::ShRUIOp>(loc, currBufState, shiftVal);
     Value currBufStateEqZero = b.create<arith::CmpIOp>(
         loc, arith::CmpIPredicate::eq, currBufState, writeStateZero);
     b.create<tti::ExperimentalAssertInThreadOp>(
@@ -394,16 +399,19 @@ struct MarkAsWriteOpConversion
     Value writeState =
         tti::createLoadScratchMemory(b, loc, op.getWriteState(), writeStateType)
             ->getResult(0);
+    int notHwPipelined = op.getHwPipelined() ? 0 : 1;
     Value buf = createMemDescToI64(b, loc, getTypeConverter(),
                                    op.getBuf().getType(), adaptor.getBuf());
 
     // Gluon pseudo-code:
+    // val = 1 | (not_hw_pipelined << 1)
     // write_state = tl.where(bufs == buf, 1, write_state)
 
+    int val = 1 | (notHwPipelined << 1);
     auto buffersEqBuf = createCmpIntTensorScalar(b, loc, buffers, buf);
     writeState = b.create<arith::SelectOp>(
-        loc, buffersEqBuf, tti::createConstIntTensor(b, loc, 1, writeStateType),
-        writeState);
+        loc, buffersEqBuf,
+        tti::createConstIntTensor(b, loc, val, writeStateType), writeState);
     tti::createStoreScratchMemory(b, loc, op.getWriteState(), writeState,
                                   writeStateType);
     b.eraseOp(op);

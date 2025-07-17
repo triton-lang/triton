@@ -51,9 +51,13 @@ def TTI_ExperimentalCheckOutstandingWritesOp : TTI_Op<"experimental_check_outsta
   let summary = "check if there are outstanding writes to a buffer guarded by a mbar";
   let description = [{
     Check if the writeState tensor has non-zero value associated with the buffer.
-    // TODO: explain how the value is checked for hwPipelined ops
-    If hwPipelined is true, error won't be trigerred if another pipelined
-    write is outstanding.
+
+    `writeState` is a tensor of 8b bitfields, where:
+    - bit 0: 1 if the buffer is being written to
+    - bit 1: 1 if the write is *not* hwPipelined
+
+    If hwPipelined is true, shift the bitfield by 1 to check the second bit - this
+    means that the error won't be triggered if another pipelined write is outstanding.
   }];
   let arguments = (ins
     TTG_MemDescType:$buf,
@@ -94,7 +98,14 @@ def TTI_ExperimentalCheckOutstandingReadsOp : TTI_Op<"experimental_check_outstan
 def TTI_ExperimentalMarkAsWriteOp : TTI_Op<"experimental_mark_as_write", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
   let summary = "mark a buffer as being written to using mbar as a guard";
   let description = [{
-    Mark a buffer as being written to using mbar as a guard.
+    Mark a buffer as being written to. It is not yet tracked by a barrier, until
+    `commit_write_with_barrier` is called, at which point all the buffers being written
+    to are marked as tracked by the barrier.
+
+    `writeState` is a tensor of 8b bitfields, where:
+    - bit 0: 1 if the buffer is being written to
+    - bit 1: 1 if the write is *not* hwPipelined
+
     If hwPipelined is true, the write won't trigger an error if another pipelined
     write is executed later without waiting for the barrier.
   }];
@@ -131,7 +142,7 @@ def TTI_ExperimentalCommitWriteWithBarrierOp : TTI_Op<"experimental_commit_write
   let assemblyFormat = [{
     $mbar `{` $barriers `,` $writeBars `(` $writeBarsType `)` `,` $writeState `(` $writeStateType `)` `}` (`,` $pred^)? attr-dict `:` type($mbar) `,` type($barriers) `,` type($writeBars) `,` type($writeState)
   }];
-  // let hasVerifier = 1;
+  let hasVerifier = 1;
 }
 
 
@@ -173,6 +184,7 @@ def TTI_ExperimentalClearWriteBarrierOp : TTI_Op<"experimental_clear_write_barri
   let assemblyFormat = [{
     $mbar `{` $barriers `,` $writeBars `(` $writeBarsType `)` `,` $writeState `(` $writeStateType `)` `}` (`,` $pred^)? attr-dict `:` type($mbar) `,` type($barriers) `,` type($writeBars) `,` type($writeState)
   }];
+  let hasVerifier = 1;
 }
 
 

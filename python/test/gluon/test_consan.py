@@ -19,6 +19,13 @@ except RuntimeError:
     pass  # start method already set
 
 
+@pytest.fixture
+def run_wrapper():
+    # Use DISABLE_SUBPROCESS to run the tests in the main process
+    # (useful for debugging but assert in any test will make all the tests fail)
+    return not os.environ.get("DISABLE_SUBPROCESS")
+
+
 class ProcessResult:
 
     def __init__(self, exc, driver_stderr_output):
@@ -79,26 +86,27 @@ def async_tma_kernel(input_desc, XBLOCK: ttgl.constexpr, FAILURE: ttgl.constexpr
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
 @pytest.mark.parametrize("FAILURE", [True, False])
-def test_async_tma_kernel(FAILURE, device, subprocess=False):
-    if subprocess:
-        knobs.compilation.enable_experimental_consan = True
-        os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
-
-        # ConSan requires a global memory allocation
-        def alloc_fn(size: int, alignment: int, stream: Optional[int]):
-            return torch.empty(size, device="cuda", dtype=torch.int8)
-
-        triton.set_allocator(alloc_fn)
-        XBLOCK = 128
-        input = torch.randn((XBLOCK, XBLOCK), device=device, dtype=torch.float16)
-        shared_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2)
-        input_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(input, [XBLOCK, XBLOCK], shared_layout)
-        async_tma_kernel[(1, )](input_desc, XBLOCK, FAILURE=FAILURE, num_warps=4)
-    else:
-        result = run_in_process(test_async_tma_kernel, (FAILURE, device, True))
+def test_async_tma_kernel(FAILURE, device, run_wrapper):
+    if run_wrapper:
+        result = run_in_process(test_async_tma_kernel, (FAILURE, device, False))
         if FAILURE:
             assert "device-side assert" in str(result.exc)
             assert "Buffer being accessed has outstanding writes" in result.driver_stderr_output
+        return
+
+    knobs.compilation.enable_experimental_consan = True
+    os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
+
+    # ConSan requires a global memory allocation
+    def alloc_fn(size: int, alignment: int, stream: Optional[int]):
+        return torch.empty(size, device="cuda", dtype=torch.int8)
+
+    triton.set_allocator(alloc_fn)
+    XBLOCK = 128
+    input = torch.randn((XBLOCK, XBLOCK), device=device, dtype=torch.float16)
+    shared_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2)
+    input_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(input, [XBLOCK, XBLOCK], shared_layout)
+    async_tma_kernel[(1, )](input_desc, XBLOCK, FAILURE=FAILURE, num_warps=4)
 
 
 @gluon.jit
@@ -133,29 +141,30 @@ def tma_interleave_kernel(input_desc, XBLOCK: ttgl.constexpr, FAILURE: ttgl.cons
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
 @pytest.mark.parametrize("FAILURE", [True, False])
-def test_tma_interleave_kernel(FAILURE, device, subprocess=False):
-    if subprocess:
-        knobs.compilation.enable_experimental_consan = True
-        os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
-
-        # ConSan requires a global memory allocation
-        def alloc_fn(size: int, alignment: int, stream: Optional[int]):
-            return torch.empty(size, device="cuda", dtype=torch.int8)
-
-        triton.set_allocator(alloc_fn)
-        XBLOCK = 128
-        input = torch.randn((XBLOCK, XBLOCK), device=device, dtype=torch.float16)
-        shared_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2)
-        input_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(input, [XBLOCK, XBLOCK], shared_layout)
-        tma_interleave_kernel[(1, )](input_desc, XBLOCK, FAILURE=FAILURE, num_warps=4)
-    else:
-        result = run_in_process(test_tma_interleave_kernel, (FAILURE, device, True))
+def test_tma_interleave_kernel(FAILURE, device, run_wrapper):
+    if run_wrapper:
+        result = run_in_process(test_tma_interleave_kernel, (FAILURE, device, False))
         if FAILURE:
             assert "device-side assert" in str(result.exc)
             assert "Buffer being accessed has outstanding writes" in result.driver_stderr_output
         else:
             assert result.exc is None
             assert result.driver_stderr_output == ""
+        return
+
+    knobs.compilation.enable_experimental_consan = True
+    os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
+
+    # ConSan requires a global memory allocation
+    def alloc_fn(size: int, alignment: int, stream: Optional[int]):
+        return torch.empty(size, device="cuda", dtype=torch.int8)
+
+    triton.set_allocator(alloc_fn)
+    XBLOCK = 128
+    input = torch.randn((XBLOCK, XBLOCK), device=device, dtype=torch.float16)
+    shared_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2)
+    input_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(input, [XBLOCK, XBLOCK], shared_layout)
+    tma_interleave_kernel[(1, )](input_desc, XBLOCK, FAILURE=FAILURE, num_warps=4)
 
 
 @gluon.jit
@@ -181,28 +190,28 @@ def async_copy_kernel(input, XBLOCK: ttgl.constexpr, FAILURE: ttgl.constexpr):
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires ampere or newer")
 @pytest.mark.parametrize("FAILURE", [True, False])
-def test_async_copy(FAILURE, device, subprocess=False):
-    if subprocess:
-        knobs.compilation.enable_experimental_consan = True
-        os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
-
-        # ConSan requires a global memory allocation
-        def alloc_fn(size: int, alignment: int, stream: Optional[int]):
-            return torch.empty(size, device="cuda", dtype=torch.int8)
-
-        triton.set_allocator(alloc_fn)
-        XBLOCK = 128
-        input = torch.randn((XBLOCK, XBLOCK), device=device, dtype=torch.float16)
-        async_copy_kernel[(1, )](input, XBLOCK, FAILURE=FAILURE, num_warps=4)
-
-    else:
-        result = run_in_process(test_async_copy, (FAILURE, device, True))
+def test_async_copy(FAILURE, device, run_wrapper):
+    if run_wrapper:
+        result = run_in_process(test_async_copy, (FAILURE, device, False))
         if FAILURE:
             assert "device-side assert" in str(result.exc)
             assert "Buffer being accessed has outstanding writes" in result.driver_stderr_output
         else:
             assert result.exc is None
             assert result.driver_stderr_output == ""
+        return
+
+    knobs.compilation.enable_experimental_consan = True
+    os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
+
+    # ConSan requires a global memory allocation
+    def alloc_fn(size: int, alignment: int, stream: Optional[int]):
+        return torch.empty(size, device="cuda", dtype=torch.int8)
+
+    triton.set_allocator(alloc_fn)
+    XBLOCK = 128
+    input = torch.randn((XBLOCK, XBLOCK), device=device, dtype=torch.float16)
+    async_copy_kernel[(1, )](input, XBLOCK, FAILURE=FAILURE, num_warps=4)
 
 
 @gluon.jit
@@ -241,23 +250,9 @@ def tcgen5_mma_kernel(input_desc, XBLOCK: ttgl.constexpr, FAILURE: ttgl.constexp
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer")
 @pytest.mark.parametrize("FAILURE", [True, False])
 @pytest.mark.parametrize("MEM_ACCESS_KIND", ["tma_cp", "tmem_load", "tmem_store"])
-def test_tcgen5_mma(FAILURE, MEM_ACCESS_KIND, device, subprocess=False):
-    if subprocess:
-        knobs.compilation.enable_experimental_consan = True
-        os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
-
-        # ConSan requires a global memory allocation
-        def alloc_fn(size: int, alignment: int, stream: Optional[int]):
-            return torch.empty(size, device="cuda", dtype=torch.int8)
-
-        triton.set_allocator(alloc_fn)
-        XBLOCK = 128
-        input = torch.randn((XBLOCK, XBLOCK), device=device, dtype=torch.float16)
-        shared_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2)
-        input_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(input, [XBLOCK, XBLOCK], shared_layout)
-        tcgen5_mma_kernel[(1, )](input_desc, XBLOCK, FAILURE=FAILURE, MEM_ACCESS_KIND=MEM_ACCESS_KIND, num_warps=4)
-    else:
-        result = run_in_process(test_tcgen5_mma, (FAILURE, MEM_ACCESS_KIND, device, True))
+def test_tcgen5_mma(FAILURE, MEM_ACCESS_KIND, device, run_wrapper):
+    if run_wrapper:
+        result = run_in_process(test_tcgen5_mma, (FAILURE, MEM_ACCESS_KIND, device, False))
         if FAILURE:
             assert "device-side assert" in str(result.exc)
             if MEM_ACCESS_KIND == "tma_cp":
@@ -269,6 +264,78 @@ def test_tcgen5_mma(FAILURE, MEM_ACCESS_KIND, device, subprocess=False):
         else:
             assert result.exc is None
             assert result.driver_stderr_output == ""
+        return
+
+    knobs.compilation.enable_experimental_consan = True
+    os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
+
+    # ConSan requires a global memory allocation
+    def alloc_fn(size: int, alignment: int, stream: Optional[int]):
+        return torch.empty(size, device="cuda", dtype=torch.int8)
+
+    triton.set_allocator(alloc_fn)
+    XBLOCK = 128
+    input = torch.randn((XBLOCK, XBLOCK), device=device, dtype=torch.float16)
+    shared_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2)
+    input_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(input, [XBLOCK, XBLOCK], shared_layout)
+    tcgen5_mma_kernel[(1, )](input_desc, XBLOCK, FAILURE=FAILURE, MEM_ACCESS_KIND=MEM_ACCESS_KIND, num_warps=4)
+
+
+@gluon.jit
+def tcgen5_mma_multibar_kernel(input_desc, XBLOCK: ttgl.constexpr, BUF_IDX: ttgl.constexpr, BAR_IDX: ttgl.constexpr):
+    acc_layout: ttgl.constexpr = blackwell.TensorMemoryLayout([XBLOCK, XBLOCK], unpacked=True, cta_split_num=[1, 1])
+    blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, XBLOCK], threads_per_warp=[32, 1],
+                                                        warps_per_cta=[4, 1], order=[0, 1])
+    smemA = ttgl.allocate_shared_memory(ttgl.float16, [XBLOCK, XBLOCK], input_desc.layout)
+    smemB = ttgl.allocate_shared_memory(ttgl.float16, [XBLOCK, XBLOCK], input_desc.layout)
+    bar = ttgl.allocate_shared_memory(ttgl.int64, [4, 1], mbarrier.MBarrierLayout())
+    acc = blackwell.allocate_tensor_memory(ttgl.float32, [2, XBLOCK, XBLOCK], acc_layout)
+    for i in range(4):
+        mbarrier.init(bar.index(i), count=1)
+
+    blackwell.tcgen05_mma(smemA, smemB.permute([1, 0]), acc.index(0), mbarriers=[bar.index(0),
+                                                                                 bar.index(1)],
+                          mbarrier_preds=[False, True])
+    blackwell.tcgen05_mma(smemA, smemB.permute([1, 0]), acc.index(1), mbarriers=[bar.index(2)])
+    blackwell.tcgen05_commit(bar.index(3))
+
+    mbarrier.wait(bar.index(BAR_IDX), 0)
+
+    acc.index(BUF_IDX).store(ttgl.full([XBLOCK, XBLOCK], 42, ttgl.float32, blocked_layout))
+
+    for i in range(4):
+        mbarrier.invalidate(bar.index(i))
+
+
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer")
+@pytest.mark.parametrize("BUF_IDX", [0, 1])
+@pytest.mark.parametrize("BAR_IDX", [0, 1, 2, 3])
+def test_tcgen5_mma_multibar(BUF_IDX, BAR_IDX, device, run_wrapper):
+    if BAR_IDX == 0:
+        pytest.skip("Skipping due to wait on false-predicated barrier - not supported yet")
+    if run_wrapper:
+        result = run_in_process(test_tcgen5_mma_multibar, (BUF_IDX, BAR_IDX, device, False))
+        if BAR_IDX // 2 < BUF_IDX:
+            assert "device-side assert" in str(result.exc)
+            assert "Buffer being accessed has outstanding writes" in result.driver_stderr_output
+        else:
+            assert result.exc is None
+            assert result.driver_stderr_output == ""
+        return
+    knobs.compilation.enable_experimental_consan = True
+    os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
+
+    # ConSan requires a global memory allocation
+    def alloc_fn(size: int, alignment: int, stream: Optional[int]):
+        return torch.empty(size, device="cuda", dtype=torch.int8)
+
+    triton.set_allocator(alloc_fn)
+    XBLOCK = 128
+
+    input = torch.randn((XBLOCK, XBLOCK), device=device, dtype=torch.float16)
+    shared_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2)
+    input_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(input, [XBLOCK, XBLOCK], shared_layout)
+    tcgen5_mma_multibar_kernel[(1, )](input_desc, XBLOCK, BUF_IDX, BAR_IDX, num_warps=4)
 
 
 @gluon.jit
@@ -365,26 +432,27 @@ def multibuffered_loop_tma_kernel(input_desc, XBLOCK: ttgl.constexpr, FAILURE: t
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer")
 @pytest.mark.parametrize("FAILURE", [True, False])
-def test_multibuffered_loop(FAILURE, device, subprocess=False):
-    if subprocess:
-        knobs.compilation.enable_experimental_consan = True
-        os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
-
-        # ConSan requires a global memory allocation
-        def alloc_fn(size: int, alignment: int, stream: Optional[int]):
-            return torch.empty(size, device="cuda", dtype=torch.int8)
-
-        triton.set_allocator(alloc_fn)
-        XBLOCK = 128
-        input = torch.randn((XBLOCK, XBLOCK), device=device, dtype=torch.float16)
-        shared_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2)
-        input_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(input, [XBLOCK, XBLOCK], shared_layout)
-        multibuffered_loop_tma_kernel[(1, )](input_desc, XBLOCK, FAILURE=FAILURE, num_warps=4)
-    else:
-        result = run_in_process(test_multibuffered_loop, (FAILURE, device, True))
+def test_multibuffered_loop(FAILURE, device, run_wrapper):
+    if run_wrapper:
+        result = run_in_process(test_multibuffered_loop, (FAILURE, device, False))
         if FAILURE:
             assert "device-side assert" in str(result.exc)
             assert "Buffer being accessed has outstanding reads" in result.driver_stderr_output
         else:
             assert result.exc is None
             assert result.driver_stderr_output == ""
+        return
+
+    knobs.compilation.enable_experimental_consan = True
+    os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
+
+    # ConSan requires a global memory allocation
+    def alloc_fn(size: int, alignment: int, stream: Optional[int]):
+        return torch.empty(size, device="cuda", dtype=torch.int8)
+
+    triton.set_allocator(alloc_fn)
+    XBLOCK = 128
+    input = torch.randn((XBLOCK, XBLOCK), device=device, dtype=torch.float16)
+    shared_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2)
+    input_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(input, [XBLOCK, XBLOCK], shared_layout)
+    multibuffered_loop_tma_kernel[(1, )](input_desc, XBLOCK, FAILURE=FAILURE, num_warps=4)
