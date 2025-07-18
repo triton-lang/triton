@@ -388,6 +388,42 @@ TEST_F(LinearLayoutTest, InvertAndCompose_Simple) {
   EXPECT_EQ(composition.compose(l2), l1);
 }
 
+TEST_F(LinearLayoutTest, InvertAndComposeLargerA) {
+  // Note that dim0 and dim1 are larger in sharedLaoyout
+  auto regLayout =
+      LinearLayout({{S("register"), {{0, 1}, {0, 2}, {0, 4}, {0, 32}, {32, 0}}},
+                    {S("lane"), {{0, 8}, {0, 16}, {1, 0}, {2, 0}, {4, 0}}},
+                    {S("warp"), {{8, 0}, {16, 0}}},
+                    {S("block"), {}}},
+                   {S("dim0"), S("dim1")});
+  auto sharedLayout = LinearLayout({{S("offset"),
+                                     {{0, 1},
+                                      {0, 2},
+                                      {0, 4},
+                                      {0, 8},
+                                      {0, 16},
+                                      {0, 32},
+                                      {0, 64},
+                                      {1, 8},
+                                      {2, 16},
+                                      {4, 32},
+                                      {8, 0},
+                                      {16, 0},
+                                      {32, 0},
+                                      {64, 0},
+                                      {128, 0}}},
+                                    {S("block"), {}}},
+                                   {S("dim0"), S("dim1")});
+  auto expected = LinearLayout(
+      {{S("register"), {{1, 0}, {2, 0}, {4, 0}, {32, 0}, {4096, 0}}},
+       {S("lane"), {{8, 0}, {16, 0}, {136, 0}, {272, 0}, {544, 0}}},
+       {S("warp"), {{1024, 0}, {2048, 0}}},
+       {S("block"), {}}},
+      {{S("offset"), 32768}, {S("block"), 1}}, /*requireSurjective=*/false);
+  EXPECT_EQ(regLayout.invertAndCompose(sharedLayout), expected);
+  EXPECT_EQ(regLayout.compose(sharedLayout.invert()), expected);
+}
+
 TEST_F(LinearLayoutTest, InvertAndCompose_NonInjective) {
   LinearLayout l1({{S("in1"), {{2}, {1}, {4}}}}, {S("out")});
   LinearLayout l2({{S("in2"), {{0}, {2}, {1}, {4}}}}, {S("out")});

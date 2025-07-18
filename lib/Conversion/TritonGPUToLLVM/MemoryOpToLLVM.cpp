@@ -53,8 +53,8 @@ LogicalResult lowerLocalStore(Location loc, MLIRContext *ctx, Value regVal,
   auto kWarp = str_attr("warp");
   auto kOffset = str_attr("offset");
   cvt = cvt.sublayout({kReg, kLane, kWarp}, {kOffset});
-  lowerLocalLdSt(loc, ctx, cvt, inVals, llvmElemTy, smemObj.getBase(), rewriter,
-                 targetInfo);
+  lowerLocalLdSt(loc, ctx, cvt, inVals, llvmElemTy, memDescTy, smemObj,
+                 rewriter, targetInfo);
 
   return success();
 }
@@ -177,10 +177,9 @@ public:
     auto regTy = cast<RankedTensorType>(regVal.getType());
     auto typeConverter = getTypeConverter();
 
-    auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
-        loc, adaptor.getSrc(),
-        typeConverter->convertType(memDescTy.getElementType()), rewriter);
-    auto llvmElemTy = typeConverter->convertType(regTy.getElementType());
+    auto llvmElemTy = typeConverter->convertType(memDescTy.getElementType());
+    auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
+                                                         llvmElemTy, rewriter);
 
     // See [Legacy local_load/local_store]
     if (!targetInfo.isCuda()) {
@@ -206,8 +205,8 @@ public:
     auto kOffset = str_attr("offset");
     cvt = cvt.sublayout({kReg, kLane, kWarp}, {kOffset});
 
-    auto outVals = lowerLocalLdSt(op.getLoc(), ctx, cvt, {}, llvmElemTy,
-                                  smemObj.getBase(), rewriter, targetInfo);
+    auto outVals = lowerLocalLdSt(loc, ctx, cvt, {}, llvmElemTy, memDescTy,
+                                  smemObj, rewriter, targetInfo);
 
     Value result = packLLElements(loc, typeConverter, outVals, rewriter, regTy);
     rewriter.replaceOp(op, result);

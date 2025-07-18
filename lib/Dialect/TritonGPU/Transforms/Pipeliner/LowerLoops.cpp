@@ -334,6 +334,49 @@ struct LoadGroupInfo {
   bool hasTMALoad = false;
 };
 
+// Convert a scalar load to a load of a tensor of shape <1>.
+void convertScalarToTensorLoad(Operation *op, CoarseSchedule &schedule,
+                               scf::ForOp forOp) {
+  auto scalarLoad = cast<tt::LoadOp>(op);
+  Type scalarTy = scalarLoad.getType();
+  OpBuilderForStage builder(op->getLoc(), op, schedule);
+  builder.setInsertionPoint(op);
+  MLIRContext *ctx = op->getContext();
+  auto nWarps = lookupNumWarps(op);
+  ModuleOp mod = forOp->getParentOfType<ModuleOp>();
+  auto threadsPerWarp = TritonGPUDialect::getThreadsPerWarp(mod);
+  auto numCTAs = TritonGPUDialect::getNumCTAs(mod);
+  auto blockedEnc =
+      getDefaultBlockedEncoding(ctx, {1}, nWarps, threadsPerWarp, numCTAs);
+  auto newPtrTy =
+      RankedTensorType::get({1}, scalarLoad.getPtr().getType(), blockedEnc);
+  auto newPtr =
+      builder.create<tt::SplatOp>(op->getLoc(), newPtrTy, scalarLoad.getPtr());
+  scalarLoad.getPtrMutable().assign(newPtr);
+  if (scalarLoad.getMask()) {
+    auto newMaskTy =
+        RankedTensorType::get({1}, scalarLoad.getMask().getType(), blockedEnc);
+    auto newMask = builder.create<tt::SplatOp>(op->getLoc(), newMaskTy,
+                                               scalarLoad.getMask());
+    scalarLoad.getMaskMutable().assign(newMask);
+  }
+  if (scalarLoad.getOther()) {
+    auto newOtherTy =
+        RankedTensorType::get({1}, scalarLoad.getOther().getType(), blockedEnc);
+    auto newOther = builder.create<tt::SplatOp>(op->getLoc(), newOtherTy,
+                                                scalarLoad.getOther());
+    scalarLoad.getOtherMutable().assign(newOther);
+  }
+  auto newDstTy = RankedTensorType::get({1}, scalarLoad.getType(), blockedEnc);
+  scalarLoad.getResult().setType(newDstTy);
+  builder.setInsertionPointAfter(op);
+  Operation *firstUse = getFirstUseOfPipelinedOp({op}, forOp, schedule);
+  builder.setStageCluster(schedule[firstUse]);
+  Operation *unsplat = builder.create<tt::UnsplatOp>(op->getLoc(), scalarTy,
+                                                     scalarLoad.getResult());
+  scalarLoad.getResult().replaceAllUsesExcept(unsplat->getResult(0), unsplat);
+}
+
 void createTMABarrierAndWait(
     scf::ForOp forOp, llvm::MapVector<Operation *, AsyncLoad> &asyncLoads,
     const llvm::MapVector<int, LoadGroupInfo> &loadGroups,
@@ -446,25 +489,39 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule,
                       triton::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
   llvm::MapVector<Operation *, AsyncLoad> asyncLoads;
   llvm::MapVector<int, LoadGroupInfo> loadGroups;
+  llvm::SmallVector<Operation *> scalarLoads;
   // Only visit the top level ops, we do not support pipelining conditional
   // loads for now
   for (auto &op : forOp.getBody()->without_terminator()) {
     if (isa<tt::LoadOp, tt::DescriptorLoadOp, tt::DescriptorGatherOp>(op)) {
       int stageDiff = getDefUseStageDiff(&op, forOp, schedule);
-      if (stageDiff == 0 || !isa<RankedTensorType>(op.getResultTypes()[0])) {
-        // Don't care about non-pipelined loads. Don't use async loads for
-        // scalar values.
+      if (stageDiff == 0) {
+        // Don't care about non-pipelined loads. Scalar loads will be converted
+        // to tensor loads if they are pipelined.
         continue;
       }
-      SharedEncodingTrait sharedEncoding = getSharedEncoding(&op);
-      // Do not create async loads for small loads (cp.async requires at least 4
-      // bytes)
-      bool canUseAsyncCp =
-          isa<tt::LoadOp>(op) &&
-          canBeConvertedToAsyncLoad(cast<tt::LoadOp>(op), axisInfoAnalysis);
-      int copyVecBytes = getCopyVecBytes(
-          cast<RankedTensorType>(op.getResultTypes()[0]), sharedEncoding);
-      canUseAsyncCp &= copyVecBytes >= 4;
+      SharedEncodingTrait sharedEncoding;
+      bool canUseAsyncCp = false;
+      if (!isa<RankedTensorType>(op.getResultTypes()[0])) {
+        canUseAsyncCp = op.getResultTypes()[0].getIntOrFloatBitWidth() >= 32;
+        sharedEncoding = ttg::SwizzledSharedEncodingAttr::get(
+            forOp.getContext(), 1, 1, 1, {0},
+            ttg::CTALayoutAttr::get(forOp.getContext(), {1}, {1}, {0}));
+        if (canUseAsyncCp) {
+          scalarLoads.push_back(&op);
+        }
+      } else {
+        sharedEncoding = getSharedEncoding(&op);
+        // Do not create async loads for small loads (cp.async requires at least
+        // 4 bytes)
+        canUseAsyncCp =
+            isa<tt::LoadOp>(op) &&
+            canBeConvertedToAsyncLoad(cast<tt::LoadOp>(op), axisInfoAnalysis);
+        int copyVecBytes = getCopyVecBytes(
+            cast<RankedTensorType>(op.getResultTypes()[0]), sharedEncoding);
+
+        canUseAsyncCp &= copyVecBytes >= 4;
+      }
       if (canUseAsyncCp || isTMALoad(&op)) {
         if (loadRequiresAdditionalBuffer(&op)) {
           // Allocate additional buffer required by the wgmma pipelining.
@@ -484,6 +541,11 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule,
                            "performance degradation.";
       }
     }
+  }
+
+  // Convert scalar loads to be able to use async copy.
+  for (auto op : scalarLoads) {
+    convertScalarToTensorLoad(op, schedule, forOp);
   }
 
   if (asyncLoads.empty())

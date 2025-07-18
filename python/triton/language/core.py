@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from warnings import warn
 from contextlib import contextmanager
 from enum import Enum
@@ -178,10 +179,10 @@ class constexpr_type(base_type):
         self.value = value
 
     def __eq__(self, other):
-        return self.value == other.value
+        return isinstance(other, constexpr_type) and self.value == other.value
 
     def __repr__(self) -> str:
-        return f"constexpr[{self.value}]"
+        return f"constexpr_type[{self.value}]"
 
     def mangle(self) -> str:
         return repr(self)
@@ -199,10 +200,9 @@ class constexpr(base_value):
     """
 
     def __init__(self, value):
-        if isinstance(value, constexpr):
-            self.value = value.value
-        else:
-            self.value = value
+        while isinstance(value, constexpr):
+            value = value.value
+        self.value = value
         self.type = constexpr_type(value)
 
     def __repr__(self) -> str:
@@ -753,6 +753,10 @@ class block_type(dtype):
     def scalar(self):
         return self.element_ty
 
+    @property
+    def nbytes(self):
+        return self.numel * (self.element_ty.primitive_bitwidth // 8)
+
     def mangle(self) -> str:
         elt = self.scalar.mangle()
         shape = '_'.join(map(str, self.shape))
@@ -879,10 +883,7 @@ class tensor(base_value):
         self.handle = handle
         # Block shape
         self.shape = type.shape if type.is_block() else ()
-        self.numel = 1
-        for s in self.shape:
-            self.numel *= s
-        self.numel = constexpr(self.numel)
+        self.numel = constexpr(math.prod(self.shape))
         self.type = type  # Tensor type (can be block_type)
         # Following the practice in pytorch, dtype is scalar type
         self.dtype = type.scalar
@@ -1268,19 +1269,20 @@ class tensor(base_value):
         ...
 
 
+def _type_for_tuple_values(values, fields=None):
+    return tuple_type([constexpr_type(x) if isinstance(x, (int, float, dtype)) else x.type for x in values], fields)
+
+
 class tuple(base_value):
 
     def __init__(self, args: Sequence, type: tuple_type = None):
         self.values = [i for i in args]
-
-        def get_type(x):
-            if isinstance(x, dtype):
-                return dtype
-            if isinstance(x, (int, float)):
-                return constexpr
-            return x.type
-
-        self.type = type or tuple_type([get_type(x) for x in self.values])
+        if isinstance(type, tuple_type):
+            self.type = type
+        elif type is not None:  # make_template in ASTFunction.deserialize may pass us a list/tuple
+            self.type = tuple_type(type)
+        else:
+            self.type = _type_for_tuple_values(self.values)
 
     def __getitem__(self, idx: constexpr):
         if isinstance(idx, int):
@@ -1300,6 +1302,7 @@ class tuple(base_value):
             idx = constexpr(idx)
         assert isinstance(idx, constexpr)
         self.values[idx] = value
+        self.type = _type_for_tuple_values(self.values, self.type.fields)
 
     def __add__(self, other):
         other = _normalize_tuple(other)

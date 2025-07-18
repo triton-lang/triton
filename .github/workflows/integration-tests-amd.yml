@@ -29,7 +29,11 @@ jobs:
       CCACHE_COMPRESS: "true"
     container:
       image: ${{ matrix.image }}
-      options: --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --user root
+      # Cache save/restore is on the host machine at directory /home/runner/.triton, while in the docker
+      # container expect it at /github/home/.triton. So map here to make sure visible in docker.
+      options: >-
+        --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --user root
+        --volume /home/runner/.triton:/github/home/.triton
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -52,7 +56,6 @@ jobs:
           echo "llvm=$(cat $llvm_file | cut -c 1-8)" >> $GITHUB_OUTPUT
           echo "nvidia=$(sha256sum $nvidia_file | cut -d ' ' -f 1)" >> $GITHUB_OUTPUT
           echo "json=$(cat $json_file)" >> $GITHUB_OUTPUT
-          echo "datetime=$(date -u -Iseconds)" >> $GITHUB_OUTPUT
         shell: bash
       - name: Cache build dependencies
         uses: actions/cache@v4
@@ -160,5 +163,5 @@ jobs:
         # Always cleanup the worker, even if builds or tests failed
         if: always()
         run: |
-          rm -rf ~/.triton
+          rm -rf ~/.triton/cache
           rm -rf ~/.ccache

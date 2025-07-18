@@ -319,7 +319,7 @@ loadOpsToIndirectionLevel(scf::ForOp forOp, bool pipelineWithoutDot,
 
   // If the loop has numStages attribute, also consider pipelining other loads
   // that are not directly used by dot ops.
-  if (pipelineWithoutDot && !seenDot) {
+  if (pipelineWithoutDot) {
     for (Operation &op : forOp.getBody()->without_terminator()) {
       if (!isa<tt::LoadOp, tt::DescriptorLoadOp, tt::DescriptorGatherOp>(op))
         dfs(&op, &op, 0);

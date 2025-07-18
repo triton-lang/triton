@@ -606,6 +606,24 @@ OpFoldResult SplatOp::fold(FoldAdaptor adaptor) {
   return ret;
 }
 
+//-- UnsplatOp --
+LogicalResult UnsplatOp::verify() {
+  auto srcShape = getSrc().getType().getShape();
+  if (product(srcShape) != 1) {
+    return emitError("source tensor must have exactly one element");
+  }
+  return success();
+}
+
+LogicalResult UnsplatOp::inferReturnTypes(
+    MLIRContext *context, std::optional<Location> location, ValueRange operands,
+    DictionaryAttr attributes, OpaqueProperties properties, RegionRange regions,
+    SmallVectorImpl<Type> &inferredReturnTypes) {
+  auto dstTy = cast<RankedTensorType>(operands[0].getType()).getElementType();
+  inferredReturnTypes.push_back(dstTy);
+  return success();
+}
+
 //-- ExpandDimsOp --
 LogicalResult ExpandDimsOp::inferReturnTypes(
     MLIRContext *context, std::optional<Location> loc, ValueRange operands,

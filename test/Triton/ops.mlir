@@ -278,3 +278,10 @@ tt.func @tma_scatter(%arg0: !tt.tensordesc<tensor<1x128xbf16>>, %arg1: tensor<32
   tt.descriptor_scatter %arg0[%arg1, %arg2], %arg3 : !tt.tensordesc<tensor<1x128xbf16>>, tensor<32xi32>, i32, tensor<32x128xbf16>
   tt.return
 }
+
+// CHECK-LABEL: @unsplat
+tt.func @unsplat(%arg0: tensor<1x1xf32>) -> f32 {
+  // CHECK-NEXT: tt.unsplat %{{.+}} : tensor<1x1xf32>
+  %0 = tt.unsplat %arg0 : tensor<1x1xf32>
+  tt.return %0 : f32
+}

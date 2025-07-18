@@ -105,6 +105,26 @@ def NVGPU_WGMMAOp : NVGPU_Op<"wgmma", []> {
   let assemblyFormat = "$opA `,` $opB `,` $useC (`,` $opC^)? attr-dict `:` functional-type(operands, $res)";
 }
 
+def NVGPU_LoadMatrixShapeAttr : I32EnumAttr<
+    "LoadMatrixShape", "",
+    [
+      I32EnumAttrCase<"m8n8", 0, "m8n8">,
+      I32EnumAttrCase<"m16n16", 1, "m16n16">
+    ]> {
+    let cppNamespace = "::mlir::triton::nvgpu";
+}
+
+def NVGPU_LoadMatrixOp : NVGPU_Op<"ldmatrix", [MemoryEffects<[MemRead]>]> {
+  let arguments = (
+    ins LLVM_PointerShared:$addr,
+    NVGPU_LoadMatrixShapeAttr:$shape,
+    I32Attr:$bit_width,
+    UnitAttr:$trans
+  );
+  let results = (outs AnyTypeOf<[LLVM_AnyStruct, I32]>:$result);
+  let assemblyFormat = "$addr `,` $shape `,` $bit_width attr-dict `:` functional-type($addr, $result)";
+}
+
 def NVGPU_ClusterCTAIdOp : NVGPU_Op<"cluster_id", [Pure]> {
   let results = (outs I32:$result);
   let assemblyFormat = "attr-dict";

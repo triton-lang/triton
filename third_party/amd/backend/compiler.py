@@ -9,6 +9,7 @@ import tempfile
 import re
 import subprocess
 import functools
+import warnings
 from pathlib import Path
 
 
@@ -73,8 +74,11 @@ class HIPOptions:
         assert self.num_warps > 0 and (self.num_warps & (self.num_warps - 1)) == 0, \
                "num_warps must be a power of 2"
 
-        if self.arch == 'gfx950':
-            assert self.kpack == 1, "gfx950 only accepts kpack == 1"
+        if (self.arch == 'gfx950') and (self.kpack != 1):
+            warnings.warn(
+                f"kpack is deprecated starting from gfx950 and will be removed in later releases. So for now kpack = {self.kpack} will be overwritten to 1 to make transitioning easier."
+            )
+            object.__setattr__(self, 'kpack', 1)
 
         default_libdir = Path(__file__).parent / 'lib'
         extern_libs = {} if self.extern_libs is None else dict(self.extern_libs)

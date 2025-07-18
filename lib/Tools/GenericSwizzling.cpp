@@ -47,6 +47,16 @@ SmallVector<int32_t> flatten(const LinearLayout &ll, StringAttr dim) {
   return vec;
 };
 
+SmallVector<int32_t> removeZeros(ArrayRef<int32_t> vec) {
+  SmallVector<int32_t> result;
+  for (int32_t r : vec) {
+    if (r != 0) {
+      result.push_back(r);
+    }
+  }
+  return result;
+}
+
 // [1, 2, 4, 8] -> [[1], [2], [4], [8]]
 std::vector<std::vector<int32_t>> unflatten(ArrayRef<int32_t> basis) {
   std::vector<std::vector<int32_t>> unflattened;
@@ -279,6 +289,7 @@ LinearLayout optimalSwizzling(const LinearLayout &src, const LinearLayout &dst,
   auto *ctx = src.getInDimNames().begin()->getContext();
   auto kReg = StringAttr::get(ctx, "register");
   auto kLane = StringAttr::get(ctx, "lane");
+  auto kWarp = StringAttr::get(ctx, "warp");
 
   // We work on the flattened tensors as the tensor dimensions are not relevant
   const LinearLayout srcFlat = src.flattenOuts();
@@ -307,6 +318,65 @@ LinearLayout optimalSwizzling(const LinearLayout &src, const LinearLayout &dst,
   if (vbasis.size() > maxVecBases) {
     vbasis.resize(maxVecBases);
   }
+  // We fill-up vbasis until it has 32 bits as best we can
+  auto vecFillsBank = (1 << vbasis.size()) * bitwidth >= 32;
+  if (!vecFillsBank) {
+    auto warpSrc = removeZeros(flatten(srcFlat, kWarp));
+    auto warpDst = removeZeros(flatten(dstFlat, kWarp));
+    auto removeVec = [&vbasis](ArrayRef<int32_t> vec) {
+      SmallVector<int32_t> result;
+      for (int32_t r : vec) {
+        if (!llvm::is_contained(vbasis, r)) {
+          result.push_back(r);
+        }
+      }
+      return result;
+    };
+    auto regSrcWarp = intersectionBasis(removeVec(regSrc), warpDst, dim);
+    auto regDstWarp = intersectionBasis(removeVec(regDst), warpSrc, dim);
+    // Maximise vectorisation in the load or the store without creating
+    // conflicts
+    SmallVector<int32_t> largest;
+    if (regSrcWarp.size() == regDstWarp.size() && regSrcWarp.size() > 0) {
+      // We choose the one with the lowest basis in the hope that it will
+      // avoid PRMTs. The comparison of the mins will be strict as the sets
+      // removeVec(regSrc) and removeVec(regDst) don't intersect
+      if (*llvm::min_element(regSrcWarp) < *llvm::min_element(regDstWarp)) {
+        largest = regSrcWarp;
+      } else {
+        largest = regDstWarp;
+      }
+    } else {
+      largest = regSrcWarp.size() > regDstWarp.size() ? regSrcWarp : regDstWarp;
+    }
+    vbasis.append(largest.begin(), largest.end());
+    if (vbasis.size() > maxVecBases) {
+      vbasis.resize(maxVecBases);
+    }
+    // We allow vbasis.size > Log2_32(32 / bitwidth) at this point, as it is in
+    // general good, but one should note
+    if (vbasis.size() < llvm::Log2_32(32 / bitwidth)) {
+      // Pad the vectorisation to 32 bits with warp bases
+      auto warpSrcWarp = intersectionBasis(warpSrc, warpDst, dim);
+      vbasis.append(warpSrcWarp.begin(), warpSrcWarp.end());
+    }
+
+    int i = 0;
+    while (vbasis.size() < llvm::Log2_32(32 / bitwidth) &&
+           (i < warpSrc.size() || i < warpDst.size())) {
+      // If we have not filled up a whole bank, we add more warp bases
+      // until we have 32 bits. They will at least avoid bank conflicts in one
+      // direction
+      if (i < warpSrc.size() && !llvm::is_contained(vbasis, warpSrc[i])) {
+        vbasis.push_back(warpSrc[i]);
+      }
+      if (vbasis.size() < llvm::Log2_32(32 / bitwidth) && i < warpDst.size() &&
+          !llvm::is_contained(vbasis, warpDst[i])) {
+        vbasis.push_back(warpDst[i]);
+      }
+      ++i;
+    }
+  }
 
   // Bits in a bank segment: 32 banks x 32 bits
   constexpr int32_t bankBits = 32 * 32;
@@ -321,8 +391,11 @@ LinearLayout optimalSwizzling(const LinearLayout &src, const LinearLayout &dst,
   auto bankDst = llvm::to_vector(llvm::concat<int32_t>(vbasis, laneDst));
 
   // Whether we'll use b32.v1 / b32.v2 / b32.v4
-  auto b32Vec =
-      llvm::Log2_32(std::max<int32_t>((1 << vbasis.size()) * bitwidth / 32, 1));
+  // FIXME: With !vecFillsBank we may use b32.v2 or b32.v4 for the load or
+  // store, but we pesimistically assume we don't.
+  auto b32Vec = !vecFillsBank ? 0
+                              : llvm::Log2_32(std::max<int32_t>(
+                                    (1 << vbasis.size()) * bitwidth / 32, 1));
   // Drop the last vec bases of the banks
   bankSrc.resize(bankSrc.size() - b32Vec);
   bankDst.resize(bankDst.size() - b32Vec);

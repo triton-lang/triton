@@ -17,11 +17,29 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: wait_barrier
-  tt.func @wait_barrier(%alloc: !ttg.memdesc<1xi64, #shared0, #smem>, %phase: i32) {
+  tt.func @wait_barrier(%alloc: !ttg.memdesc<1xi64, #shared0, #smem>, %phase: i32, %pred: i1) {
     // CHECK: waitLoop:
     // CHECK: mbarrier.try_wait.parity.shared.b64
     // CHECK: @!complete bra.uni waitLoop
+    // CHECK-NOT: skipWait
+    // CHECK: %{{[0-9]+}}, %arg1 :
     ttng.wait_barrier %alloc, %phase : !ttg.memdesc<1xi64, #shared0, #smem>
+    %true = arith.constant true
+
+    // CHECK: waitLoop:
+    // CHECK: mbarrier.try_wait.parity.shared.b64
+    // CHECK: @!complete bra.uni waitLoop
+    // CHECK-NOT: skipWait
+    // CHECK: %{{[0-9]+}}, %arg1 :
+    ttng.wait_barrier %alloc, %phase, %true : !ttg.memdesc<1xi64, #shared0, #smem>
+
+    // CHECK: @!$2 bra.uni skipWait
+    // CHECK: waitLoop:
+    // CHECK: mbarrier.try_wait.parity.shared.b64
+    // CHECK: @!complete bra.uni waitLoop
+    // CHECK: skipWait:
+    // CHECK: %{{[0-9]+}}, %arg1, %arg2 :
+    ttng.wait_barrier %alloc, %phase, %pred : !ttg.memdesc<1xi64, #shared0, #smem>
     tt.return
   }
 

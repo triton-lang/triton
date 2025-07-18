@@ -1,6 +1,8 @@
 import triton
 import triton.language as tl
 from triton._filecheck import filecheck_test, run_filecheck_test
+from triton.compiler.errors import CompilationError
+import pytest
 
 # ===-----------------------------------------------------------------------===#
 # Unit Tests
@@ -311,11 +313,11 @@ def add_rhs_constexpr(agg):
 @triton.jit
 def test_aggregate_with_constexpr():
     # CHECK-LABEL: test_aggregate_with_constexpr
-    # CHECK: tt.call @"test_frontend.add_rhs_constexpr__test_frontend.AggregateWithConstexpr<i32S4S, constexpr[42]>
+    # CHECK: tt.call @"test_frontend.add_rhs_constexpr__test_frontend.AggregateWithConstexpr<i32S4S, constexpr_type[42]>
     agg = AggregateWithConstexpr.create(tl.arange(0, 4))
     add_rhs_constexpr(agg)
 
-    # CHECK: tt.func private @"test_frontend.add_rhs_constexpr__test_frontend.AggregateWithConstexpr<i32S4S, constexpr[42]>
+    # CHECK: tt.func private @"test_frontend.add_rhs_constexpr__test_frontend.AggregateWithConstexpr<i32S4S, constexpr_type[42]>
     # CHECK: %cst = arith.constant dense<42> : tensor<4xi32>
     # CHECK: arith.addi %arg0, %cst : tensor<4xi32>
 
@@ -528,3 +530,36 @@ def test_specialized_recursion():
 
     # CHECK: func {{.*}}recursive_reduce__i32S4S
     # CHECK-COUNT-2: call {{.*}}recursive_reduce__i32S2S
+
+
+@triton.jit
+def trivial_return():
+    return
+
+
+@filecheck_test
+@triton.jit
+def test_call_in_while():
+    # CHECK-LABEL: test_call_in_while
+    i = 0
+    while i < 10:
+        if i == 5:
+            trivial_return()
+        else:
+            trivial_return()
+
+
+def test_return_in_while():
+
+    @triton.jit
+    def kernel():
+        i = 0
+        while i < 10:
+            if i == 5:
+                return
+            i += 1
+
+    with pytest.raises(CompilationError) as e:
+        kernel.warmup(grid=(1, ))
+
+    assert "Cannot have `return` statements inside `while` or `for` statements in triton" in str(e.value)

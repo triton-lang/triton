@@ -60,6 +60,18 @@ struct SplatOpConversion : public ConvertOpToLLVMPattern<triton::SplatOp> {
     return success();
   }
 };
+
+struct UnsplatOpConversion : public ConvertOpToLLVMPattern<triton::UnsplatOp> {
+  using ConvertOpToLLVMPattern<triton::UnsplatOp>::ConvertOpToLLVMPattern;
+  LogicalResult matchAndRewrite(triton::UnsplatOp op, OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const {
+    auto loc = op->getLoc();
+    auto scrVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
+    rewriter.replaceOp(op, scrVals[0]);
+    return success();
+  }
+};
+
 // This pattern helps to convert arith::ConstantOp(with SplatElementsAttr),
 // the logic is the same as triton::SplatOp, so the underlying implementation
 // is reused.
@@ -368,6 +380,8 @@ struct MemDescReshapeOpConversion
     auto srcSmemObj = getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
                                                       llvmElemTy, rewriter);
     SmallVector<Value> offsets = srcSmemObj.getOffsets();
+    // FIXME: This should be done by composing a linear layout with its
+    // reshaped counterpart.
     SmallVector<unsigned> srcShape;
     for (int64_t d : op.getSrc().getType().getShape())
       srcShape.push_back(d);
@@ -468,7 +482,6 @@ struct MemDescSubviewOpConversion
     auto layoutOrder = getOrder(srcTy);
     auto enc = srcTy.getEncoding();
 
-    // newBase = base + offset
     auto smemObj = getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
                                                    llvmElemTy, rewriter);
     SmallVector<Value> opOffsetVals = op.getOffsets();
@@ -476,45 +489,35 @@ struct MemDescSubviewOpConversion
     // Compute total offset
     auto rankReduced = srcTy.getRank() - destTy.getRank();
 
-    Value offset;
-    if (rankReduced || (destTy.getRank() == 1 && destTy.getDimSize(0) == 1)) {
+    auto base = smemObj.getBase();
+    auto elemPtrTy = base.getType();
+    auto is1d = srcTy.getRank() == 1 && destTy.getRank() == 1 &&
+                destTy.getDimSize(0) == 1;
+    if (rankReduced || is1d) {
       auto smemStrides = smemObj.getStrides(srcTy, loc, rewriter);
       SmallVector<Value> opSmemStrides(smemStrides.end() - opOffsetVals.size(),
                                        smemStrides.end());
       // We are splitting the pipelining dimension which may not be a power of 2
       // so we can't use LinearLayouts
-      offset = dot(rewriter, loc, opOffsetVals, opSmemStrides);
-    } else {
-      auto dimNames = standardOutDimNames(ctx, opOffsetVals.size());
-      SmallVector<std::pair<StringAttr, Value>> logicalOffsets;
-      for (auto [dim, offset] : llvm::zip(dimNames, opOffsetVals)) {
-        logicalOffsets.push_back({dim, offset});
+      auto offset = dot(rewriter, loc, opOffsetVals, opSmemStrides);
+      // Remove the first offsets
+      SmallVector<Value> offsetVals;
+      for (int i = rankReduced; i < opOffsetVals.size(); i++) {
+        offsetVals.push_back(b.add(opOffsetVals[i], smemObj.getOffsets()[i]));
       }
-      auto ll = toLinearLayout(srcTy);
-      // Checked in the verifier.
-      assert(ll.getInDimSize(str_attr("block")) == 1);
-      auto kOffset = str_attr("offset");
-      ll = ll.reshapeIns({{kOffset, ll.getTotalInDimSize()}});
-      offset = applyLinearLayout(loc, rewriter, ll.invert(), logicalOffsets)[0]
-                   .second;
+      // Advance the pointer and keep the opOffsets as the new shape
+      smemObj = SharedMemoryObject(b.gep(elemPtrTy, llvmElemTy, base, offset),
+                                   llvmElemTy, offsetVals);
+    } else {
+      // Accumulate the logical offsets
+      SmallVector<Value> offsetVals;
+      for (auto [oldOff, newOff] :
+           llvm::zip(smemObj.getOffsets(), opOffsetVals)) {
+        offsetVals.push_back(b.add(oldOff, newOff));
+      }
+      smemObj = SharedMemoryObject(base, llvmElemTy, offsetVals);
     }
 
-    if (auto paddedLayout = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(
-            srcTy.getEncoding())) {
-      // Apply padding based on the computed offset
-      Value padOffset = emitPadding(loc, rewriter, paddedLayout, offset);
-      offset = b.add(offset, padOffset);
-    }
-
-    SmallVector<Value> offsetVals;
-    for (int i = rankReduced; i < opOffsetVals.size(); i++) {
-      offsetVals.push_back(b.add(opOffsetVals[i], smemObj.getOffsets()[i]));
-    }
-
-    auto base = smemObj.getBase();
-    auto elemPtrTy = base.getType();
-    smemObj = SharedMemoryObject(b.gep(elemPtrTy, llvmElemTy, base, offset),
-                                 llvmElemTy, offsetVals);
     auto retVal = getStructFromSharedMemoryObject(loc, smemObj, rewriter);
     rewriter.replaceOp(op, retVal);
     return success();
@@ -550,6 +553,7 @@ void mlir::triton::populateViewOpToLLVMPatterns(
   patterns.add<ReshapeOpConversion>(typeConverter, benefit);
   patterns.add<ExpandDimsOpConversion>(typeConverter, benefit);
   patterns.add<SplatOpConversion>(typeConverter, benefit);
+  patterns.add<UnsplatOpConversion>(typeConverter, benefit);
   patterns.add<ArithConstantSplatOpConversion>(typeConverter, benefit);
   patterns.add<ArithConstantArrayOpConversion>(typeConverter, benefit);
   patterns.add<CatOpConversion>(typeConverter, benefit);

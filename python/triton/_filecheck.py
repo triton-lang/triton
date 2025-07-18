@@ -1,3 +1,4 @@
+import functools
 import os
 import inspect
 import subprocess
@@ -84,6 +85,7 @@ def run_filecheck_test(kernel_fn):
 
 def filecheck_test(fn):
 
+    @functools.wraps(fn)
     def test_fn():
         run_filecheck_test(fn)
 

@@ -94,15 +94,26 @@ class OptimizeAMDLDSUsage
     LDBG("Trying fit " << cvtOp << " into " << targetLDSSize << " bytes");
     OpBuilder builder(cvtOp);
 
+    auto ctx = builder.getContext();
     auto srcType = cvtOp.getSrc().getType();
     auto dstType = cvtOp.getType();
+
+    if (!cvtOp->hasAttr(triton::AMD::AttrSharedMemPadded)) {
+      auto emptyAttribute = UnitAttr::get(ctx);
+      // Padded conversion seems more friendly with this optimization
+      // use it instead of general swizzling.
+      cvtOp->setAttr(triton::AMD::AttrSharedMemPadded, emptyAttribute);
+      // if padded layout drops LDS usage on itself, we are done, return
+      if (triton::AMD::getConvertLayoutScratchInBytes(
+              srcType, dstType, /*usePadding*/ true) <= targetLDSSize)
+        return;
+    }
 
     auto srcEnc =
         cast<triton::gpu::DistributedEncodingTrait>(srcType.getEncoding());
     auto dstEnc =
         cast<triton::gpu::DistributedEncodingTrait>(dstType.getEncoding());
 
-    auto ctx = srcEnc.getContext();
     auto rank = srcType.getRank();
 
     unsigned numWarps = triton::gpu::lookupNumWarps(cvtOp);
@@ -243,13 +254,6 @@ public:
       triton::AMD::TargetInfo targetInfo(this->targetArch.c_str());
       LDSLimit = targetInfo.getSharedMemorySize();
     }
-
-    auto context = mod.getContext();
-    auto emptyAttribute = UnitAttr::get(context);
-    // TODO choose between padded and swizzled memory patterns
-    mod.walk([emptyAttribute](triton::gpu::ConvertLayoutOp op) -> void {
-      op->setAttr(mlir::triton::AMD::AttrSharedMemPadded, emptyAttribute);
-    });
 
     ModuleAllocation allocAnalysis(
         mod, mlir::triton::AMD::AMDAllocationAnalysisScratchSizeFn);

@@ -3,5 +3,7 @@ add_triton_library(NVGPUToLLVM
 
     DEPENDS
     NVGPUConversionPassIncGen
+
+    LINK_LIBS PUBLIC
     NVGPUIR
 )

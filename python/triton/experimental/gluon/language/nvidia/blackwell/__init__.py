@@ -2,8 +2,10 @@ from __future__ import annotations
 from typing import Optional, Tuple, List, TYPE_CHECKING
 
 from dataclasses import dataclass
+import triton
 from triton.experimental.gluon.language import _core as ttgl
-from triton.experimental.gluon.language._core import builtin, base_type, base_value, _unwrap_if_constexpr
+from triton.experimental.gluon.language._core import builtin, base_type, base_value, _unwrap_if_constexpr, constexpr_function
+from triton.experimental.gluon.language._layouts import BlockedLayout, _get_shape_per_cta
 from triton.experimental.gluon.language._semantic import _check
 
 from . import tma
@@ -19,6 +21,7 @@ __all__ = [
     "allocate_tensor_memory",
     "async_copy",
     "fence_async_shared",
+    "get_tmem_32x32b_reg_layout",
     "mbarrier",
     "tensor_memory_descriptor",
     "TensorMemoryLayout",
@@ -57,6 +60,47 @@ class TensorMemoryLayout:
         unpacked_str = "U" if self.unpacked else "P"
         cta_split_str = f"CS{self.cta_split_num[0]}x{self.cta_split_num[1]}" if self.cta_split_num else ""
         return f"TL{block_str}{unpacked_str}{cta_split_str}TL"
+
+
+@constexpr_function
+def get_tmem_32x32b_reg_layout(M, N, shape, num_warps, ctas_per_cga=None, cta_split_num=None, cta_order=None):
+    """Returns a BlockedLayout compatible with load/store on tensor memory with the 32x32b instruction variant.
+    """
+    assert len(shape) == 2, "expected a 2D tensor"
+    assert num_warps in [4, 8], "expected 4 or 8 warps"
+
+    shape_per_cta = _get_shape_per_cta(shape, cta_split_num)
+    blocks_per_tile = [shape_per_cta[0] // M, shape_per_cta[1] // N]
+    num_blocks = blocks_per_tile[0] * blocks_per_tile[1]
+
+    num_warp_groups = num_warps // 4
+    if M == 64:
+        threads_per_warp = [16, 2]
+        if num_blocks == 1:
+            size_per_thread = [1, N // (num_warp_groups * 2)]
+            warps_per_cta = [4, num_warp_groups]
+        else:
+            size_per_thread = [1, N // 2]
+            warps_per_cta = [4 * min(blocks_per_tile[0], num_warp_groups)]
+            warps_per_cta.append(triton.cdiv(num_warp_groups, warps_per_cta[0] // 4))
+    else:
+        if shape[0] > 128:
+            size_per_thread = [1, N]
+            threads_per_warp = [32, 1]
+            warps_per_cta = [4 * num_warp_groups, 1]
+        else:
+            size_per_thread = [1, N // num_warp_groups]
+            threads_per_warp = [32, 1]
+            warps_per_cta = [4, num_warp_groups]
+    return BlockedLayout(
+        size_per_thread=size_per_thread,
+        threads_per_warp=threads_per_warp,
+        warps_per_cta=warps_per_cta,
+        order=[0, 1],
+        ctas_per_cga=ctas_per_cga,
+        cta_split_num=cta_split_num,
+        cta_order=cta_order,
+    )
 
 
 class tensor_memory_descriptor_type(base_type):

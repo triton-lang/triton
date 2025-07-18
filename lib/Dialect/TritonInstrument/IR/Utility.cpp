@@ -12,8 +12,8 @@ TypedValue<RankedTensorType> createConstIntTensor(OpBuilder &builder,
                                                   Location loc, int val,
                                                   RankedTensorType tensorType) {
   auto denseAttr = DenseElementsAttr::get(
-      tensorType,
-      APInt(tensorType.getElementType().getIntOrFloatBitWidth(), val));
+      tensorType, APInt(tensorType.getElementType().getIntOrFloatBitWidth(),
+                        val, /*isSigned=*/true));
   return cast<TypedValue<RankedTensorType>>(
       builder.create<arith::ConstantOp>(loc, tensorType, denseAttr)
           .getResult());

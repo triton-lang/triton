@@ -432,6 +432,16 @@ def TT_SplatOp : TT_Op<"splat", [Pure,
     let hasFolder = 1;
 }
 
+def TT_UnsplatOp : TT_Op<"unsplat", [Pure,
+                                     DeclareOpInterfaceMethods<InferTypeOpInterface>]> {
+    let summary = "convert a tensor with a single element to a scalar";
+    let arguments = (ins TT_Tensor:$src);
+    let results = (outs TT_Type:$result);
+
+    let assemblyFormat = "$src attr-dict `:` type($src)";
+    let hasVerifier = 1;
+}
+
 def TT_ExpandDimsOp : TT_Op<"expand_dims", [Pure,
                                             DeclareOpInterfaceMethods<InferTypeOpInterface>,
                                             SameOperandsAndResultElementType]> {

@@ -24,8 +24,8 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
-
 #include "triton/Dialect/TritonNvidiaGPU/IR/TritonNvidiaGPUOpInterfaces.cpp.inc"
+#include "triton/Dialect/TritonNvidiaGPU/Transforms/Utility.h"
 
 using namespace mlir::triton::gpu;
 
@@ -129,15 +129,6 @@ LogicalResult WarpGroupDotWaitOp::inferReturnTypes(
   for (Value operand : operands)
     inferredReturnTypes.push_back(operand.getType());
   return mlir::success();
-}
-
-static LogicalResult
-verifyBarrierType(Operation *op, mlir::triton::gpu::MemDescType barrierType) {
-  if (!barrierType.getElementType().isInteger(64) ||
-      barrierType.getShape() != ArrayRef<int64_t>({1}))
-    return op->emitOpError(
-        "barrier allocation must be a descriptor of 1xi64 type");
-  return success();
 }
 
 // -- InitBarrierOp --

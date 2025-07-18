@@ -27,6 +27,34 @@ static const char *hipLibSearchPaths[] = {"/*py_libhip_search_path*/"};
   FOR_EACH_ERR_FN(hipFuncGetAttribute, int *, hipFunction_attribute attr,      \
                   hipFunction_t function)
 
+// HIP driver version format: HIP_VERSION_MAJOR * 10000000 + HIP_VERSION_MINOR *
+// 100000 + HIP_VERSION_PATCH.
+#define TRITON_HIP_DRIVER_EXTRACT_MAJOR_VERSION(version) ((version) / 10000000)
+#define TRITON_HIP_DRIVER_EXTRACT_MINOR_VERSION(version)                       \
+  (((version) % 10000000) / 100000)
+#define TRITON_HIP_DRIVER_EXTRACT_PATCH_VERSION(version) ((version) % 100000)
+#define TRITON_HIP_DRIVER_REQ_MAJOR_VERSION (HIP_VERSION_MAJOR)
+
+// #define TRITON_HIP_DRIVER_DBG_VERSION
+#ifdef TRITON_HIP_DRIVER_DBG_VERSION
+#define TRITON_HIP_DRIVER_LOG_VERSION(version, msgBuff)                        \
+  do {                                                                         \
+    snprintf(msgBuff, sizeof(msgBuff), "libamdhip64 version is: %d.%d.%d",     \
+             TRITON_HIP_DRIVER_EXTRACT_MAJOR_VERSION(version),                 \
+             TRITON_HIP_DRIVER_EXTRACT_MINOR_VERSION(version),                 \
+             TRITON_HIP_DRIVER_EXTRACT_PATCH_VERSION(version));                \
+    printf("%s\n", msgBuff);                                                   \
+  } while (0);
+#else
+#define TRITON_HIP_DRIVER_LOG_VERSION(version, msgBuff)                        \
+  do {                                                                         \
+    (void)msgBuff;                                                             \
+    (void)(version);                                                           \
+  } while (0);
+#endif
+
+#define TRITON_HIP_MSG_BUFF_SIZE (1024U)
+
 // The HIP symbol table for holding resolved dynamic library symbols.
 struct HIPSymbolTable {
 #define DEFINE_EACH_ERR_FIELD(hipSymbolName, ...)                              \
@@ -39,36 +67,75 @@ struct HIPSymbolTable {
 
 static struct HIPSymbolTable hipSymbolTable;
 
-bool initSymbolTable() {
-  // Use the HIP runtime library loaded into the existing process if it exits.
-  void *lib = dlopen("libamdhip64.so", RTLD_NOLOAD);
-  if (lib) {
-    // printf("[triton] chosen loaded libamdhip64.so in the process\n");
+static int checkDriverVersion(void *lib) {
+  int hipVersion = -1;
+  const char *error = NULL;
+  typedef hipError_t (*hipDriverGetVersion_fn)(int *driverVersion);
+  hipDriverGetVersion_fn hipDriverGetVersion;
+  dlerror(); // Clear existing errors
+  hipDriverGetVersion =
+      (hipDriverGetVersion_fn)dlsym(lib, "hipDriverGetVersion");
+  error = dlerror();
+  if (error) {
+    PyErr_SetString(PyExc_RuntimeError,
+                    "cannot query 'hipDriverGetVersion' from libamdhip64.so");
+    dlclose(lib);
+    return -1;
   }
 
-  // Otherwise, go through the list of search paths to dlopen the first HIP
-  // driver library.
-  if (!lib) {
-    int n = sizeof(hipLibSearchPaths) / sizeof(hipLibSearchPaths[0]);
-    for (int i = 0; i < n; ++i) {
-      void *handle = dlopen(hipLibSearchPaths[i], RTLD_LAZY | RTLD_LOCAL);
-      if (handle) {
-        lib = handle;
-        // printf("[triton] chosen %s\n", hipLibSearchPaths[i]);
-      }
+  (void)hipDriverGetVersion(&hipVersion);
+  char msgBuff[TRITON_HIP_MSG_BUFF_SIZE] = {0};
+
+  const int hipMajVersion = TRITON_HIP_DRIVER_EXTRACT_MAJOR_VERSION(hipVersion);
+  if (hipMajVersion < TRITON_HIP_DRIVER_REQ_MAJOR_VERSION) {
+    const int hipMinVersion =
+        TRITON_HIP_DRIVER_EXTRACT_MINOR_VERSION(hipVersion);
+    const int hipPatchVersion =
+        TRITON_HIP_DRIVER_EXTRACT_PATCH_VERSION(hipVersion);
+    snprintf(msgBuff, sizeof(msgBuff),
+             "libamdhip64 version %d.%d.%d is not supported! Required major "
+             "version is >=%d.",
+             hipMajVersion, hipMinVersion, hipPatchVersion,
+             TRITON_HIP_DRIVER_REQ_MAJOR_VERSION);
+    PyErr_SetString(PyExc_RuntimeError, msgBuff);
+    dlclose(lib);
+    return -1;
+  }
+
+  TRITON_HIP_DRIVER_LOG_VERSION(hipVersion, msgBuff);
+
+  return hipVersion;
+}
+
+bool initSymbolTable() {
+  void *lib;
+
+  // Go through the list of search paths to dlopen the first HIP driver library.
+  int n = sizeof(hipLibSearchPaths) / sizeof(hipLibSearchPaths[0]);
+  for (int i = 0; i < n; ++i) {
+    void *handle = dlopen(hipLibSearchPaths[i], RTLD_LAZY | RTLD_LOCAL);
+    if (handle) {
+      lib = handle;
+      // printf("[triton] chosen %s\n", hipLibSearchPaths[i]);
     }
   }
+
   if (!lib) {
     PyErr_SetString(PyExc_RuntimeError, "cannot open libamdhip64.so");
     return false;
   }
 
+  int hipVersion = checkDriverVersion(lib);
+  if (hipVersion == -1)
+    return false;
+
+  const char *error = NULL;
   typedef hipError_t (*hipGetProcAddress_fn)(
       const char *symbol, void **pfn, int hipVersion, uint64_t hipFlags,
       hipDriverProcAddressQueryResult *symbolStatus);
   hipGetProcAddress_fn hipGetProcAddress;
   dlerror(); // Clear existing errors
-  const char *error = NULL;
+
   *(void **)&hipGetProcAddress = dlsym(lib, "hipGetProcAddress");
   error = dlerror();
   if (error) {
@@ -79,7 +146,6 @@ bool initSymbolTable() {
   }
 
   // Resolve all symbols we are interested in.
-  int hipVersion = HIP_VERSION;
   uint64_t hipFlags = 0;
   hipDriverProcAddressQueryResult symbolStatus;
   hipError_t status = hipSuccess;
@@ -106,8 +172,9 @@ static inline void gpuAssert(hipError_t code, const char *file, int line) {
       {
         const char *prefix = "Triton Error [HIP]: ";
         const char *str = hipSymbolTable.hipGetErrorString(code);
-        char err[1024] = {0};
-        snprintf(err, 1024, "%s Code: %d, Messsage: %s", prefix, code, str);
+        char err[TRITON_HIP_MSG_BUFF_SIZE] = {0};
+        snprintf(err, sizeof(err), "%s Code: %d, Messsage: %s", prefix, code,
+                 str);
         PyGILState_STATE gil_state;
         gil_state = PyGILState_Ensure();
         PyErr_SetString(PyExc_RuntimeError, err);

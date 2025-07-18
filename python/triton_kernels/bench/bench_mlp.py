@@ -10,7 +10,7 @@ from triton_kernels.numerics_details.mxfp import downcast_to_mxfp
 from triton_kernels.matmul_ogs import matmul_ogs, PrecisionConfig, FlexCtx, FnSpecs, FusedActivation
 from triton_kernels.numerics import InFlexData
 from triton_kernels.routing import routing
-from triton_kernels.target_info import is_hip, get_cdna_version
+from triton_kernels.target_info import is_hip, get_cdna_version, is_cuda
 from triton_kernels.tensor import convert_layout
 from triton_kernels.tensor_details.layout import StridedLayout, BlackwellMXScaleLayout, HopperMXScaleLayout, HopperMXValueLayout
 from triton_kernels.tensor import wrap_torch_tensor, FP4
@@ -101,14 +101,15 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP,
     optg = dict()
     opt1 = dict()
     opt2 = dict()
-    if w_dtype == "mx4" and not is_hip():
+    if w_dtype == "mx4":
         value_layout = StridedLayout
         scale_layout = StridedLayout
-        if torch.cuda.get_device_capability()[0] == 9:
-            value_layout = HopperMXValueLayout
-            scale_layout = HopperMXScaleLayout
-        if torch.cuda.get_device_capability()[0] == 10:
-            scale_layout = BlackwellMXScaleLayout
+        if is_cuda():
+            if torch.cuda.get_device_capability()[0] == 9:
+                value_layout = HopperMXValueLayout
+                scale_layout = HopperMXScaleLayout
+            if torch.cuda.get_device_capability()[0] == 10:
+                scale_layout = BlackwellMXScaleLayout
         opt1 = {"value_layout": value_layout, "scale_layout": scale_layout}
         opt2 = deepcopy(opt1)
     wg, wg_flex, wg_scale = quantize(wg, "bf16", dev, **optg)
