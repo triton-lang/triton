@@ -62,11 +62,6 @@ def NVWSLowerAref : Pass<"nvws-lower-aref", "mlir::ModuleOp"> {
     "mlir::triton::TritonDialect",
     "mlir::triton::gpu::TritonGPUDialect"
   ];
-
-  let options = [
-    Option<"numStages", "num-stages", "int32_t", /*default*/"3",
-           "number of pipeline stages">
-  ];
 }
 
 def NVWSInsertAref: Pass<"nvws-insert-aref", "mlir::ModuleOp"> {
