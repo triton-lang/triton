@@ -734,34 +734,6 @@ bool emitTransferBetweenRegistersAndShared(
       target, laneId, warpId, perVectorCallback);
 }
 
-SmallVector<Value> loadSharedToDistributed(triton::gpu::LocalLoadOp localLoadOp,
-                                           Type elemLlvmTy,
-                                           const SharedMemoryObject &smemObj,
-                                           Location loc, RewriterBase &rewriter,
-                                           const TargetInfoBase &target) {
-  auto srcTy = localLoadOp.getSrc().getType();
-  auto dstTy = localLoadOp.getResult().getType();
-
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  SmallVector<Value> ret;
-  bool success = emitTransferBetweenRegistersAndShared(
-      dstTy, srcTy, elemLlvmTy, /*maxVecElems=*/std::nullopt, smemObj, loc,
-      rewriter, target, [&](VectorType vecTy, Value vecAddr) {
-        auto vecVal = b.load(vecTy, vecAddr);
-        target.localLoadOpAnnotation(localLoadOp, vecVal);
-        vecVal.setAlignment(vecTy.getNumElements() *
-                            elemLlvmTy.getIntOrFloatBitWidth() / 8);
-
-        for (int v = 0; v < vecTy.getNumElements(); v++) {
-          ret.push_back(b.extract_element(elemLlvmTy, vecVal, b.i32_val(v)));
-        }
-      });
-  if (!success)
-    llvm::report_fatal_error("Failed to emit transfer from shared to register");
-
-  return ret;
-}
-
 SmallVector<Value> unpackLLElements(Location loc, Value llvmStruct,
                                     RewriterBase &rewriter) {
   assert(bool(llvmStruct) && "can not unpack null values");

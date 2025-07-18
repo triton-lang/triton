@@ -103,13 +103,6 @@ struct LocalAllocOpConversion
                                       loc, rewriter);
     // If there is an initial tensor, store it into the shared memory.
     if (op.getSrc()) {
-      // [Legacy local_load/local_store]
-      // TODO(Lezcano) We should activate this path for other targets as it's
-      // more efficient. AFAIK The main blockers are:
-      // - The legacy path calls localLoadOpAnnotation
-      // - The legacy path calls llvm.load/llvm.store unconditionally, while
-      //   the AMD lowering of storeDShared does not, even when the predicate
-      //   is constant true.
       auto *ctx = op.getContext();
       auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
       if (failed(lowerLocalStore(loc, ctx, op.getSrc(), memDescTy, smemObj,
@@ -163,18 +156,8 @@ public:
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
                                                          llvmElemTy, rewriter);
 
-    auto shape = memDescTy.getShape();
-    auto allocShape = memDescTy.getAllocShape();
     auto sharedEnc =
         cast<triton::gpu::SharedEncodingTrait>(memDescTy.getEncoding());
-    if (!isSimpleSharedMemoryAccess(shape, allocShape, sharedEnc)) {
-      SmallVector<Value> outVals = loadSharedToDistributed(
-          op, llvmElemTy, smemObj, loc, rewriter, targetInfo);
-      Value result =
-          packLLElements(loc, typeConverter, outVals, rewriter, regTy);
-      rewriter.replaceOp(op, result);
-      return success();
-    }
     auto kReg = str_attr("register");
     auto kLane = str_attr("lane");
     auto kWarp = str_attr("warp");

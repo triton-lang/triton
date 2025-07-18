@@ -543,12 +543,6 @@ Value emitPadding(Location loc, RewriterBase &rewriter,
     Value laneId, Value warpId,
     std::function<void(VectorType, Value /*shmemAddr*/)> perVectorCallback);
 
-SmallVector<Value> loadSharedToDistributed(triton::gpu::LocalLoadOp localLoadOp,
-                                           Type elemLlvmTy,
-                                           const SharedMemoryObject &smemObj,
-                                           Location loc, RewriterBase &rewriter,
-                                           const TargetInfoBase &target);
-
 // Close cousin of lowerLdStMatrix in MemoryOpToLLVM.cpp
 // We might want to merge them at some point, but having to support
 // ldmatrix.trans makes the code in lowerLdStMatrix a bit specific
