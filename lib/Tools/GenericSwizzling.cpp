@@ -246,7 +246,10 @@ std::pair<int, int> logBankConflicts(ArrayRef<int32_t> tileSrc,
   // Take all the bases in the first bank (32 bits)
   auto smemBases =
       flatten(smemFlat.flattenIns(), *smemFlat.getInDimNames().begin());
-  smemBases.resize(llvm::Log2_32(32 / bitwidth));
+  auto nBankZero = llvm::Log2_32(std::max<int32_t>(1, 32 / bitwidth));
+  if (smemBases.size() >= nBankZero) {
+    smemBases.resize(nBankZero);
+  }
   // And segments
   auto segment = StringAttr::get(ctx, "segment");
   auto segmentBases = flatten(smemFlat, segment);
