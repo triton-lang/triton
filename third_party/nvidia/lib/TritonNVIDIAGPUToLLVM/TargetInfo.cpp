@@ -95,7 +95,7 @@ static std::optional<NVVM::ReduxKind> matchReduxKind(triton::ReduceOp op,
   Operation *reduceOp = op.getSingleCombiner();
   if (!reduceOp)
     return std::nullopt;
-  if (computeCapability >= 100 && reduceOp->getResultTypes()[0].isF32()) {
+  if (computeCapability == 100 && reduceOp->getResultTypes()[0].isF32()) {
     if (isa<arith::MinimumFOp, arith::MaximumFOp>(reduceOp))
       useNanQualifier = true;
     if (isa<arith::MaxNumFOp, arith::MaximumFOp>(reduceOp))
