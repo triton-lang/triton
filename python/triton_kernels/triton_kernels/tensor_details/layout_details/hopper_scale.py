@@ -14,7 +14,8 @@ class HopperMXScaleLayout(Layout):
         self.num_warps = num_warps
 
     def swizzle_data(self, data):
-        data = data.transpose(-1, -2).contiguous()
+        if self.mx_axis == 0:
+            data = data.transpose(-1, -2).contiguous()
         *batch, M, K = data.shape
         SWIZZLE_ALIGN_M = 2 * self.num_warps * 2 * 8
         SWIZZLE_ALIGN_K = 2
@@ -35,7 +36,8 @@ class HopperMXScaleLayout(Layout):
         data = data.flatten(-3, -2)
         assert data.shape[-2] == M // 32
         assert data.shape[-1] == K * 32
-        data = data.transpose(-1, -2).contiguous()
+        if self.mx_axis == 0:
+            data = data.transpose(-1, -2).contiguous()
         return data
 
     def unswizzle_data(self, data):

@@ -29,8 +29,6 @@ def _compress_fourth(x):
 
 
 def _pack_bits(x: torch.Tensor, mx_axis: int):
-    if mx_axis == 1:
-        x = x.mT
     x = x.contiguous()
     assert x.shape[-1] % 4 == 0, "Input tensor must have a last dimension divisible by 4"
     x = x.reshape(x.shape[:-1] + (x.shape[-1] // 4, 4))
@@ -41,8 +39,6 @@ def _pack_bits(x: torch.Tensor, mx_axis: int):
     x = first | right_shift_unsigned(second, 3) | right_shift_unsigned(third, 6) | fourth
     assert x.is_contiguous()
     x = x.view(torch.uint8)
-    if mx_axis == 1:
-        x = x.mT
     return x
 
 
@@ -70,8 +66,6 @@ def _bf16x2_to_fp4e2m1x2(x):
 
 
 def _unpack_bits(x, mx_axis: int):
-    if mx_axis == 1:
-        x = x.mT
     x = x.view(torch.int32)
     m = 0b10000001110000001000000111000000
     a = (x << 1) & 0b10000000000000001000000000000000
@@ -81,8 +75,6 @@ def _unpack_bits(x, mx_axis: int):
     x = torch.stack(unpacked, dim=-1)
     x = x.flatten(-2, -1)
     x = _bf16x2_to_fp4e2m1x2(x)
-    if mx_axis == 1:
-        x = x.mT
     return x
 
 
@@ -216,8 +208,8 @@ def _unshuffle_triton(x, mx_axis: tl.constexpr, mma_version: tl.constexpr):
     tl.static_assert(mx_axis == 0 or mx_axis == 1, "mx_axis must be 0 or 1")
     tl.static_assert(len(x.shape) == 2, "NYI")
     tl.static_assert(mma_version == 2 or mma_version == 3, "mma_version must be 2 or 3")
-    if mx_axis == 1:
-        x = x.trans()
+    # if mx_axis == 0:
+    #     x = x.trans()
 
     # We have two times the elements if we already upcasted to bfloat16
     mult: tl.constexpr = 2 if x.dtype == tl.bfloat16 else 1
@@ -232,8 +224,8 @@ def _unshuffle_triton(x, mx_axis: tl.constexpr, mma_version: tl.constexpr):
     x = x.reshape(M // 4, 4, K // (4 * 8 * 2 * 2 * mult), 2, 4, 8 // u8_kwidth, 2, u8_kwidth * mult)
     x = x.trans(0, 6, 1, 3, 2, 5, 4, 7)
     x = x.reshape(M * 4, K // 4)
-    if mx_axis == 1:
-        x = x.trans()
+    # if mx_axis == 0:
+    #     x = x.trans()
     return x
 
 
