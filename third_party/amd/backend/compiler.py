@@ -1,4 +1,4 @@
-from triton.backends.compiler import BaseBackend, GPUTarget, Language
+from triton.backends.compiler import BaseBackend, GPUTarget, Language, enable_debug
 from triton._C.libtriton import ir, passes, llvm, amd
 from triton import knobs
 from dataclasses import dataclass
@@ -24,12 +24,6 @@ def is_pingpong_schedule_enabled(arch):
 
 def is_in_thread_transpose_enabled(arch):
     return (arch == "gfx942") if knobs.amd.use_in_thread_transpose is None else knobs.amd.use_in_thread_transpose
-
-
-def enable_debug(pm) -> None:
-    pm.enable_debug()
-    if (pass_listener := knobs.compilation.pass_listener) is not None:
-        pass_listener(pm)
 
 
 @dataclass(frozen=True)

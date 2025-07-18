@@ -1,4 +1,4 @@
-from triton.backends.compiler import BaseBackend, GPUTarget, Language
+from triton.backends.compiler import BaseBackend, GPUTarget, Language, enable_debug
 from triton._C.libtriton import ir, passes, llvm, nvidia
 from triton import knobs
 from triton.runtime.errors import PTXASError
@@ -99,13 +99,6 @@ def sm_arch_from_capability(capability: int):
     # TODO: Handle non-"a" sms
     suffix = "a" if capability >= 90 else ""
     return f"sm_{capability}{suffix}"
-
-
-def enable_debug(pm) -> bool:
-    dump_enabled = pm.enable_debug()
-    if (pass_listener := knobs.compilation.pass_listener) is not None:
-        dump_enabled |= pass_listener(pm)
-    return dump_enabled
 
 
 @dataclass(frozen=True)

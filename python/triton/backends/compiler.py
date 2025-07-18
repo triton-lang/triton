@@ -4,6 +4,8 @@ from enum import Enum
 from typing import Dict, Union
 from types import ModuleType
 
+from triton import knobs
+
 
 @dataclass(frozen=True)
 class GPUTarget(object):
@@ -16,6 +18,7 @@ class GPUTarget(object):
 
 class Language(Enum):
     """The input language being compiled by the backend."""
+
     TRITON = 0
     GLUON = 1
 
@@ -88,3 +91,10 @@ class BaseBackend(metaclass=ABCMeta):
         if ty == "tensor" and arg.data_ptr() % 16 == 0 and kwargs.get("align", False):
             return "D"
         return ""
+
+
+def enable_debug(pm) -> bool:
+    dump_enabled = pm.enable_debug()
+    if (pass_listener := knobs.compilation.pass_listener) is not None:
+        dump_enabled |= pass_listener(pm)
+    return dump_enabled
