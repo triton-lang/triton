@@ -440,6 +440,7 @@ def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [
     I1:$pred,
     Variadic<TTG_MemDescType>:$barriers,
     Variadic<I1>:$barrier_preds,
+    OptionalAttr<UnitAttr>:$is_async,
     OptionalAttr<UnitAttr>:$two_ctas
   );
   let results = (outs Optional<TTG_AsyncToken>:$token);
@@ -449,7 +450,8 @@ def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [
       "Value":$a, "Value":$b, "Value":$d, "Value":$acc_dep, "Value":$useD,
       "Value":$pred, CArg<"bool", "false">:$two_ctas,
       CArg<"ValueRange", "{}">:$barriers,
-      CArg<"ValueRange", "{}">:$barrier_preds)>
+      CArg<"ValueRange", "{}">:$barrier_preds,
+      CArg<"bool", "false">:$is_async)>
   ];
 
   let assemblyFormat = [{
@@ -490,7 +492,8 @@ def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [
     I1:$useD,
     I1:$pred,
     Variadic<TTG_MemDescType>:$barriers,
-    Variadic<I1>:$barrier_preds
+    Variadic<I1>:$barrier_preds,
+    OptionalAttr<UnitAttr>:$is_async
   );
   let results = (outs Optional<TTG_AsyncToken>:$token);
 
@@ -510,7 +513,8 @@ def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [
       "::mlir::triton::ScaleDotElemType":$b_type,
       "::mlir::Value":$useD, "::mlir::Value":$pred,
       CArg<"::mlir::ValueRange", "{}">:$barriers,
-      CArg<"::mlir::ValueRange", "{}">:$barrier_preds)>
+      CArg<"::mlir::ValueRange", "{}">:$barrier_preds,
+      CArg<"bool", "false">:$is_async)>
   ];
 
   let assemblyFormat = [{
