@@ -316,8 +316,8 @@ bool insertArefs(PartitionBuilder &builder, scf::ForOp loop,
                  int arefTag) {
   Partition *consumerPartition = nullptr;
   auto [producerPartition, result] = producedValue;
-  for (auto &useOpnd : result.getUses()) {
-    Partition *userPartition = schedule.getPartition((useOpnd.getOwner()));
+  for (auto &use : result.getUses()) {
+    Partition *userPartition = schedule.getPartition((use.getOwner()));
     if (producerPartition != userPartition) {
       consumerPartition = userPartition;
       break;
