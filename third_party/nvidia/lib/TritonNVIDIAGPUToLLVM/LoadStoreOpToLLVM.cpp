@@ -704,6 +704,41 @@ struct AtomicCASOpConversion
     }
 
     if (tensorTy) {
+      if (op->hasAttr("allocation.offset")) {
+        auto dstLayout = ttg::toLinearLayout(tensorTy);
+        auto smemBase = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo,
+                                                  op.getOperation());
+
+        auto emitLdStCommon = [&](auto &&func, SmallVector<Value> &vals) {
+          return lowerLdSt(loc, ctx, dstLayout, vals, valueElemTy, smemBase,
+                           /*affineOffset=*/b.i32_val(0),
+                           /*maskSpanAffineOffset=*/0, rewriter, targetInfo, {},
+                           func);
+        };
+
+        auto emitSt = [&](ConversionPatternRewriter &rewriter, Location loc,
+                          ArrayRef<Value> vals, Value shmemAddr, int idx,
+                          VectorType vecTy) -> SmallVector<Value> {
+          auto length = vecTy.getNumElements();
+          Value valsVec = packLLVector(
+              loc, ArrayRef<Value>(vals).slice(idx, length), rewriter);
+          targetInfo.storeDShared(rewriter, loc, shmemAddr, std::nullopt,
+                                  valsVec, threadPred);
+          return {};
+        };
+
+        auto emitLd = [&](ConversionPatternRewriter &rewriter, Location loc,
+                          ArrayRef<Value> vals, Value shmemAddr, int idx,
+                          VectorType vecTy) -> SmallVector<Value> {
+          Value loadedVec = targetInfo.loadDShared(
+              rewriter, loc, shmemAddr, std::nullopt, vecTy, b.true_val());
+          return unpackLLElements(loc, loadedVec, rewriter);
+        };
+
+        emitLdStCommon(emitSt, resultVals);
+        b.barrier();
+        resultVals = emitLdStCommon(emitLd, resultVals);
+      }
       Type structTy = getTypeConverter()->convertType(tensorTy);
       Value resultStruct = packLLElements(loc, getTypeConverter(), resultVals,
                                           rewriter, structTy);
@@ -1091,51 +1126,7 @@ struct AtomicRMWOpConversion
           retType = valueElemTy;
         }
 
-        auto afterRMW = ptxBuilderAtomicRMW.launch(rewriter, loc, retType);
-        Value ret = afterRMW;
-        if (op->hasAttr("allocation.offset")) {
-          // If the AtomicRMW has the "allocation.offset", we suppose its
-          // value before atomic RMW will be used in later, so we will
-          // broadcasting it.
-          LinearLayout smemLayout = ttg::toLinearLayout(tensorTy);
-
-          Value smemBase = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo,
-                                                     op.getOperation());
-          auto smemPtrTy = ptr_ty(ctx, 3);
-
-          StringAttr kRegister = str_attr("register");
-          StringAttr kLane = str_attr("lane");
-          StringAttr kWarp = str_attr("warp");
-          StringAttr kBlock = str_attr("block");
-          auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
-
-          auto smemOffset = applyLinearLayout(loc, rewriter, smemLayout,
-                                              {{kRegister, b.i32_val(0)},
-                                               {kLane, laneId},
-                                               {kWarp, warpId},
-                                               {kBlock, b.i32_val(0)}})[0]
-                                .second;
-
-          auto smemAddr = b.gep(smemPtrTy, retType, smemBase, smemOffset,
-                                LLVM::GEPNoWrapFlags::inbounds);
-          Value vals;
-
-          if (vec > 1) {
-            SmallVector<Value> unpackedElems =
-                unpackLLElements(loc, afterRMW, rewriter);
-            vals = packLLVector(loc, unpackedElems, rewriter);
-          } else if (packed > 1) {
-            vals = afterRMW;
-          } else {
-            vals = packLLVector(loc, ArrayRef<Value>(afterRMW), rewriter);
-          }
-
-          targetInfo.storeDShared(rewriter, loc, smemAddr, std::nullopt, vals,
-                                  pred ? pred : b.true_val());
-          b.barrier();
-          ret = targetInfo.loadDShared(rewriter, loc, smemAddr, std::nullopt,
-                                       retType, b.true_val());
-        }
+        Value ret = ptxBuilderAtomicRMW.launch(rewriter, loc, retType);
 
         if (vec > 1) {
           for (unsigned ii = 0; ii < vec; ++ii) {
@@ -1168,6 +1159,44 @@ struct AtomicRMWOpConversion
       }
     }
     if (tensorTy) {
+      if (op->hasAttr("allocation.offset")) {
+        auto dstLayout = ttg::toLinearLayout(tensorTy);
+        auto smemBase = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo,
+                                                  op.getOperation());
+
+        auto emitLdStCommon = [&](auto &&func, SmallVector<Value> &vals) {
+          return lowerLdSt(loc, ctx, dstLayout, vals, valueElemTy, smemBase,
+                           /*affineOffset=*/b.i32_val(0),
+                           /*maskSpanAffineOffset=*/0, rewriter, targetInfo, {},
+                           func);
+        };
+
+        auto emitSt = [&](ConversionPatternRewriter &rewriter, Location loc,
+                          ArrayRef<Value> vals, Value shmemAddr, int idx,
+                          VectorType vecTy) -> SmallVector<Value> {
+          Value pred =
+              llMask ? maybeAnd(rewriter, loc, threadPred, maskElements[idx])
+                     : threadPred;
+          auto length = vecTy.getNumElements();
+          Value valsVec = packLLVector(
+              loc, ArrayRef<Value>(vals).slice(idx, length), rewriter);
+          targetInfo.storeDShared(rewriter, loc, shmemAddr, std::nullopt,
+                                  valsVec, pred);
+          return {};
+        };
+
+        auto emitLd = [&](ConversionPatternRewriter &rewriter, Location loc,
+                          ArrayRef<Value> vals, Value shmemAddr, int idx,
+                          VectorType vecTy) -> SmallVector<Value> {
+          Value loadedVec = targetInfo.loadDShared(
+              rewriter, loc, shmemAddr, std::nullopt, vecTy, b.true_val());
+          return unpackLLElements(loc, loadedVec, rewriter);
+        };
+
+        emitLdStCommon(emitSt, resultVals);
+        b.barrier();
+        resultVals = emitLdStCommon(emitLd, resultVals);
+      }
       Type structTy = getTypeConverter()->convertType(tensorTy);
       Value resultStruct = packLLElements(loc, getTypeConverter(), resultVals,
                                           rewriter, structTy);

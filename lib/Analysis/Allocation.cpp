@@ -92,14 +92,26 @@ static SmallVector<unsigned> getRepShapeForCvt(RankedTensorType srcTy,
   return repShape;
 }
 
-// Both `atomic_cas` and `atomic_rmw need a single scratch element if returning
-// a scalar value because Triton's block-based programming model ensures that
-// all threads in each block see the same return value, even those threads that
-// do not participate in the atomic operation
+// Both `atomic_cas` and `atomic_rmw` may need scratch memory to store values
+// because Triton's block-based programming model ensures that
+// all threads sharing the same partition of the tensor see the same values,
+// even for threads that do not participate in the atomic operation
 static SmallVector<unsigned> getRepShapeForAtomic(Value result) {
   SmallVector<unsigned> smemShape;
   if (atomicNeedsSharedMemory(result)) {
-    smemShape.push_back(1);
+    if (auto tensorTy = dyn_cast<RankedTensorType>(result.getType())) {
+      // If the result is a tensor, we need to allocate a scratch memory of size
+      // equal to the number of unique elements in the tensor shape.
+      // gpu::ShapePerCTATile removes the broadcasted elements
+      auto shapePerCTA = gpu::getShapePerCTATile(tensorTy);
+      auto tensorShape = tensorTy.getShape();
+      if (product(shapePerCTA) < product(tensorShape)) {
+        smemShape = shapePerCTA;
+      }
+    } else {
+      // If the result is a scalar, we need to allocate a single element.
+      smemShape.push_back(1);
+    }
   }
   return smemShape;
 }
@@ -211,23 +223,10 @@ unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
   }
   if (isa<AtomicRMWOp, AtomicCASOp>(op)) {
     auto value = op->getOperand(0);
-    // only scalar requires scratch memory
-    // make it explicit for readability
-    if (auto tensorTy = dyn_cast<RankedTensorType>(value.getType())) {
-      if (op->getResult(0).use_empty()) {
-        // we didn't need shared memory to broadcast result of AtomicRMW op if
-        // there is no user for it.
-        return 0;
-      }
-      auto shape = tensorTy.getShape();
-      int elems = 1;
-      for (auto dimSize : shape) {
-        elems *= dimSize;
-      }
-      return (getBitwidth(tensorTy) / 8) * elems;
-    }
     auto smemShape = getRepShapeForAtomic(op->getResult(0));
     auto elems = getNumScratchElements(smemShape);
+    if (elems == 0)
+      return 0;
     auto elemTy = cast<PointerType>(value.getType()).getPointeeType();
     assert(!isa<PointerType>(elemTy) && "unexpected pointer type");
     return elems * std::max<int>(8, elemTy.getIntOrFloatBitWidth()) / 8;
