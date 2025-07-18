@@ -30,7 +30,6 @@ std::pair<int, int> logBankConflicts(llvm::ArrayRef<int32_t> tileSrc,
                                      llvm::ArrayRef<int32_t> tileDst,
                                      const LinearLayout &smem,
                                      int32_t bitwidth);
-
 } // namespace mlir::triton::gpu
 
 #endif // TRITON_GENERIC_SWIZZLING_H

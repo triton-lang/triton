@@ -468,8 +468,8 @@ LinearLayout optimalSwizzlingLdSt(const LinearLayout &src,
     if (vbasis.size() > maxVecBases) {
       vbasis.resize(maxVecBases);
     }
-    // We allow vbasis.size > Log2_32(32 / bitwidth) at this point, as it is
-    // in general good, but one should note
+    // We allow vbasis.size > Log2_32(32 / bitwidth) at this point, as it is in
+    // general good, but one should note
     if (vbasis.size() < llvm::Log2_32(32 / bitwidth)) {
       // Pad the vectorisation to 32 bits with warp bases
       auto warpSrcWarp = intersectionBasis(warpSrc, warpDst, dim);

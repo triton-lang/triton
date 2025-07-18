@@ -259,8 +259,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     rewriter.replaceOp(op, result);
   }
 
-  // Use warp shuffles to implement a layout conversion where data only needs
-  // to be moved within warps.
+  // Use warp shuffles to implement a layout conversion where data only needs to
+  // be moved within warps.
   void transferWithinWarp(ConvertLayoutOp op,
                           DecomposedWarpConversion decomposed,
                           OpAdaptor adaptor,
