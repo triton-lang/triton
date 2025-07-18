@@ -7,7 +7,6 @@ from types import ModuleType
 import hashlib
 import tempfile
 import re
-import subprocess
 import functools
 import warnings
 from pathlib import Path
@@ -175,26 +174,6 @@ class HIPBackend(BaseBackend):
         if knobs.amd.use_buffer_ops and ty == "tensor" and HIPBackend.is_within_2gb(arg):
             ret += "S"
         return ret
-
-    @staticmethod
-    def path_to_rocm_lld():
-        # Check env path for ld.lld
-        lld_env_path = knobs.amd.lld_path
-        if lld_env_path is not None:
-            lld = Path(lld_env_path)
-            if lld.is_file():
-                return lld
-        # Check backend for ld.lld (used for pytorch wheels)
-        lld = Path(__file__).parent / "llvm/bin/ld.lld"
-        if lld.is_file():
-            return lld
-        lld = Path("/opt/rocm/llvm/bin/ld.lld")
-        if lld.is_file():
-            return lld
-        lld = Path("/usr/bin/ld.lld")
-        if lld.is_file():
-            return lld
-        raise Exception("ROCm linker /opt/rocm/llvm/bin/ld.lld not found. Set 'TRITON_HIP_LLD_PATH' to its path.")
 
     @staticmethod
     def make_ttir(mod, metadata, options):
@@ -434,14 +413,12 @@ class HIPBackend(BaseBackend):
         if knobs.compilation.enable_asan:
             target_features = '+xnack'
         hsaco = amd.assemble_amdgcn(src, options.arch, target_features)
-
-        rocm_path = HIPBackend.path_to_rocm_lld()
         with tempfile.NamedTemporaryFile() as tmp_out:
             with tempfile.NamedTemporaryFile() as tmp_in:
-                with open(tmp_in.name, 'wb') as fd_in:
+                with open(tmp_in.name, "wb") as fd_in:
                     fd_in.write(hsaco)
-                subprocess.check_call([rocm_path, '-flavor', 'gnu', '-shared', tmp_in.name, '-o', tmp_out.name])
-            with open(tmp_out.name, 'rb') as fd_out:
+                amd.link_hsaco(tmp_in.name, tmp_out.name)
+            with open(tmp_out.name, "rb") as fd_out:
                 ret = fd_out.read()
         return ret
 
@@ -457,5 +434,4 @@ class HIPBackend(BaseBackend):
 
     @functools.lru_cache()
     def hash(self):
-        version = subprocess.check_output([HIPBackend.path_to_rocm_lld(), "--version"], encoding='utf-8')
-        return f'{version}-{self.target}'
+        return f'{self.target}'
