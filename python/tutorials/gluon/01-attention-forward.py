@@ -173,6 +173,18 @@ def issue_async_tma_load(smem, bar, desc, offset):
     tma.async_copy_global_to_shared(desc, [offset, 0], bar, smem)
 
 
+@gluon.jit
+def _interleave_n(a, b, size: gl.constexpr, f: gl.constexpr, i: gl.constexpr = 0):
+    if a.shape[1] == size:
+        return f(a, b, i)
+    else:
+        a0, a1 = a.reshape([a.shape[0], 2, a.shape[1] // 2]).permute(0, 2, 1).split()
+        b0, b1 = b.reshape([b.shape[0], 2, b.shape[1] // 2]).permute(0, 2, 1).split()
+        c0 = _interleave_n(a0, b0, size, f, i)
+        c1 = _interleave_n(a1, b1, size, f, i + a.shape[1] // 2)
+        return gl.convert_layout(gl.join(c0, c1).permute(0, 2, 1).reshape(a.shape), a.type.layout)
+
+
 # ===-----------------------------------------------------------------------===#
 # Gluon Attention
 # ===-----------------------------------------------------------------------===#
@@ -587,9 +599,38 @@ def _attn_fwd_mma(config, chnls, descs, M, STAGE: gl.constexpr):
 
 
 @gluon.jit
+def _mask_inner(qk, mask, i: gl.constexpr):
+    mask_i_bit = mask & (1 << i) == 0
+    return gl.where(mask_i_bit, qk, -float("inf"))
+
+
+@gluon.jit
+def _mask_frag(qk, col_limit_right, s: gl.constexpr):
+    col_limit_right_s = col_limit_right - s
+    col_limit_right_cur = max(col_limit_right_s, 0)
+    mask = -1 << col_limit_right_cur
+    return _interleave_n(qk, mask, 1, _mask_inner)
+
+
+@gluon.jit
+def _mask_bits(qk, col_limit_right):
+    # FIXME: This is a more concise implementation (which compiles faster) but
+    # it results in slightly slower code due to the lack of interleaving.
+    offs_n = gl.arange(0, qk.shape[1], layout=gl.SliceLayout(0, qk.type.layout))[None, :]
+    s = offs_n & ~0xf
+    i = offs_n & 0xf
+
+    col_lim_right_s = col_limit_right - s
+    col_lim_right_cur = max(col_lim_right_s, 0)
+    mask = -1 << col_lim_right_cur
+    mask_i_bit = (mask & (1 << i)) == 0
+    return gl.where(mask_i_bit, qk, -float("inf"))
+
+
+@gluon.jit
 def _softmax_inner_loop(tile_id: gl.constexpr, config, prog,  #
                         s_consumer, corr_producer, exp_turnstile, corr_bar,  #
-                        offs_m, offs_n, m_i, l_i0, l_i1, STAGE: gl.constexpr):
+                        offs_m, m_i, l_i0, l_i1, STAGE: gl.constexpr):
     lo, hi = prog.get_loop_bounds(STAGE)
 
     for start_n in range(lo, hi, config.BLOCK_N):
@@ -597,11 +638,9 @@ def _softmax_inner_loop(tile_id: gl.constexpr, config, prog,  #
         qk = s_tmem.load(config.qk_layout)
 
         if STAGE == 2:
-            # Prevent LLVM from hoisting the partial sums, which triggers spilling.
-            offs_n = gl.inline_asm_elementwise("mov.b32 $0, $0;", "=r,r", [offs_n], dtype=gl.int32, is_pure=True,
-                                               pack=1)
-            mask = offs_m[:, None] < (start_n + offs_n[None, :])
-            qk = gl.where(mask, -1.0e8, qk)
+            col_limit_right = (offs_m - start_n + 1)[:, None].broadcast_to(qk.shape)
+            qk = _interleave_n(qk, col_limit_right, 16, _mask_frag)
+
         m_ij = gl.maximum(m_i, gl.max(qk, 1) * config.qk_scale)
         alpha = gl.exp2(m_i - m_ij)
 
@@ -682,10 +721,7 @@ def _softmax_inner_loop(tile_id: gl.constexpr, config, prog,  #
 @gluon.jit
 def _softmax_tile(tile_id: gl.constexpr, config, M, desc_o, STAGE: gl.constexpr,  #
                   s_chnl, corr_chnl, exp_turnstile):
-    qk_slice_dim0: gl.constexpr = gl.SliceLayout(0, config.qk_layout)
     qk_slice_dim1: gl.constexpr = gl.SliceLayout(1, config.qk_layout)
-
-    offs_n = gl.arange(0, config.BLOCK_N, qk_slice_dim0)
 
     s_consumer = s_chnl.create_consumer()
     corr_producer = corr_chnl.create_producer()
@@ -709,11 +745,11 @@ def _softmax_tile(tile_id: gl.constexpr, config, M, desc_o, STAGE: gl.constexpr,
         if STAGE & 1:
             m_i, l_i0, l_i1, corr_bar, s_consumer, corr_producer, exp_turnstile = _softmax_inner_loop(  #
                 tile_id, config, prog, s_consumer, corr_producer, exp_turnstile, corr_bar,  #
-                offs_m, offs_n, m_i, l_i0, l_i1, STAGE=4 - STAGE)
+                offs_m, m_i, l_i0, l_i1, STAGE=4 - STAGE)
         if STAGE & 2:
             m_i, l_i0, l_i1, corr_bar, s_consumer, corr_producer, exp_turnstile = _softmax_inner_loop(  #
                 tile_id, config, prog, s_consumer, corr_producer, exp_turnstile, corr_bar,  #
-                offs_m, offs_n, m_i, l_i0, l_i1, STAGE=2)
+                offs_m, m_i, l_i0, l_i1, STAGE=2)
 
         if config.use_fadd2_reduce:
             l_i = l_i0 + l_i1
