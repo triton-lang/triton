@@ -763,9 +763,9 @@ void Pingponger::addAsymmetricSyncToLoop(OpBuilder &builder, Location loc) {
 
 void Pingponger::getDotPingponged() {
   if (numStages <= 1) {
-    std::stringstream message;
-    message << "All ping pong scheduling requires to be pipelined";
-    LDBG(message.str());
+    LDBG("Pingpong pass expect a loop transformed by pipeliner that prefetches "
+         "memory and reduces dependencies among the operations in the same "
+         "iteration.");
     return;
   }
 

@@ -744,10 +744,6 @@ struct PipelinePass : impl::TritonAMDGPUStreamPipelineBase<PipelinePass> {
       return signalPassFailure();
     }
 
-    // i.e., we can still disable `waitAtTail` by explicitly disabling
-    // pingpong, which is the only use case of this scheduling variant.
-    bool waitAtTail = usePingpong && (numStages == 3) && useAsyncCopy;
-
     SmallVector<scf::ForOp> loops;
     getOperation()->walk([&](scf::ForOp forOp) {
       // Bail out for loops with num_stage <= 1.
@@ -760,14 +756,23 @@ struct PipelinePass : impl::TritonAMDGPUStreamPipelineBase<PipelinePass> {
         LDBG("Loop not safe to pipeline:\n" << *forOp);
         continue;
       }
-      (void)pipelineLoop(forOp, tt::getNumStagesOrDefault(forOp, numStages),
-                         globalPrefetch, localPrefetch, useAsyncCopy,
-                         waitAtTail);
+      // i.e., we can still disable `waitAtTail` by explicitly disabling
+      // pingpong, which is the only use case of this scheduling variant.
+      int numStagesThis = tt::getNumStagesOrDefault(forOp, numStages);
+      bool waitAtTail = usePingpong && (numStagesThis == 3) && useAsyncCopy;
+      (void)pipelineLoop(forOp, numStagesThis, globalPrefetch, localPrefetch,
+                         useAsyncCopy, waitAtTail);
     }
 
-    if (useAsyncCopy && !waitAtTail) {
+    if (useAsyncCopy) {
       llvm::SmallSetVector<ttg::AsyncWaitOp, 8> waitOps;
-      moduleOp.walk([&](ttg::AsyncWaitOp waitOp) { waitOps.insert(waitOp); });
+      moduleOp.walk([&](ttg::AsyncWaitOp waitOp) {
+        if (maybeForOp = dyn_cast<scf::ForOp>(waitOp->getParentOp()))
+          // FIXME: There's potential bug in combinRedundantWaitOps(), it
+          // generate incorrect IR order when numStages==3.
+          if (tt::getNumStagesOrDefault(maybeforOp, numStages) == 3)
+            waitOps.insert(waitOp);
+      });
       tt::combineRedundantWaitOps(waitOps);
     }
   }

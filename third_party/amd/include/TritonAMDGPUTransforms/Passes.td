@@ -28,7 +28,7 @@ def TritonAMDGPUStreamPipeline : Pass<"tritonamdgpu-stream-pipeline", "mlir::Mod
            "Use AsyncCopyGlobalToLocal to directly load to shared memory">,
     Option<"usePingpong", "use_pingpong",
            "bool", /*default*/"false",
-           "pingpong pass is enabled">,
+           "Use schedules to enable block ping-pong">,
   ];
 }
 
