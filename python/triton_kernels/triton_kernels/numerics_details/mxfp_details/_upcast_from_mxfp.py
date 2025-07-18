@@ -1,14 +1,16 @@
 import triton
 import triton.language as tl
+from ._downcast_to_mxfp import MXFP_BLOCK_SIZE
 
 
+# fmt: off
 @triton.jit
 def _upcast_from_mxfp(out_ptr, stride_o_outer, stride_o_quant: tl.constexpr, mx_scale_ptr, stride_scale_outer,
                       stride_scale_quant, mx_tensor_ptr, stride_tensor_outer, stride_tensor_quant: tl.constexpr,
                       outer_dim, quant_dim, BLOCK_SIZE_OUT_DIM: tl.constexpr, BLOCK_SIZE_QUANT_DIM: tl.constexpr):
 
     tl.static_assert(stride_o_quant == 1, "the weight must be contiguous in the k dimension for mx")
-    tl.static_assert(BLOCK_SIZE_QUANT_DIM % 32 == 0, "BLOCK_SIZE_K must be a multiple of 32")
+    tl.static_assert(BLOCK_SIZE_QUANT_DIM % MXFP_BLOCK_SIZE == 0, "BLOCK_SIZE_K must be a multiple of 32")
     # uint8 signifies two fp4 e2m1 values packed into a single byte
     mx_tensor_dtype: tl.constexpr = mx_tensor_ptr.dtype.element_ty
     dst_dtype: tl.constexpr = out_ptr.dtype.element_ty
@@ -23,7 +25,7 @@ def _upcast_from_mxfp(out_ptr, stride_o_outer, stride_o_quant: tl.constexpr, mx_
     is_fp4: tl.constexpr = mx_tensor_dtype == tl.uint8
     is_fp8: tl.constexpr = mx_tensor_dtype == tl.float8e4nv or mx_tensor_dtype == tl.float8e5
     K_DIVISOR: tl.constexpr = 2 if is_fp4 else 1
-    BLOCK_SIZE_QUANT_MX_SCALE: tl.constexpr = BLOCK_SIZE_QUANT_DIM // 32
+    BLOCK_SIZE_QUANT_MX_SCALE: tl.constexpr = BLOCK_SIZE_QUANT_DIM // MXFP_BLOCK_SIZE
     BLOCK_SIZE_QUANT_MX_TENSOR: tl.constexpr = BLOCK_SIZE_QUANT_DIM // K_DIVISOR
 
     # Compute starting indices for the quantized (packed) dimension and the outer dimension.
@@ -52,7 +54,7 @@ def _upcast_from_mxfp(out_ptr, stride_o_outer, stride_o_quant: tl.constexpr, mx_
     mask_src_quant = start_mxt_quant + offs_src_quant < tl.cdiv(quant_dim, K_DIVISOR)
     full_mask_src = mask_src_quant & mask_outer
 
-    mask_scale = start_mx_scale_quant + offs_scale < tl.cdiv(quant_dim, 32)
+    mask_scale = start_mx_scale_quant + offs_scale < tl.cdiv(quant_dim, MXFP_BLOCK_SIZE)
     full_scale_mask = mask_scale & mask_outer
 
     tensor_offsets = offs_src_quant * stride_tensor_quant + offs_outer * stride_tensor_outer
@@ -109,7 +111,7 @@ def _upcast_from_mxfp(out_ptr, stride_o_outer, stride_o_quant: tl.constexpr, mx_
         dst_tensor = tl.interleave(x0, x1).to(dst_dtype, bitcast=True)
 
     # Reshape for proper broadcasting: the scale was stored with a 32‐sized “inner” grouping.
-    dst_tensor = dst_tensor.reshape([BLOCK_SIZE_OUT_DIM, BLOCK_SIZE_QUANT_MX_SCALE, 32])
+    dst_tensor = dst_tensor.reshape([BLOCK_SIZE_OUT_DIM, BLOCK_SIZE_QUANT_MX_SCALE, MXFP_BLOCK_SIZE])
     dst_scale = dst_scale.reshape([BLOCK_SIZE_OUT_DIM, BLOCK_SIZE_QUANT_MX_SCALE, 1])
     scale = scale.reshape(dst_scale.shape)
 
