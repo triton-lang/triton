@@ -173,18 +173,6 @@ def issue_async_tma_load(smem, bar, desc, offset):
     tma.async_copy_global_to_shared(desc, [offset, 0], bar, smem)
 
 
-@gluon.jit
-def _interleave_n(a, b, size: gl.constexpr, f: gl.constexpr, i: gl.constexpr = 0):
-    if a.shape[1] == size:
-        return f(a, b, i)
-    else:
-        a0, a1 = a.reshape([a.shape[0], 2, a.shape[1] // 2]).permute(0, 2, 1).split()
-        b0, b1 = b.reshape([b.shape[0], 2, b.shape[1] // 2]).permute(0, 2, 1).split()
-        c0 = _interleave_n(a0, b0, size, f, i)
-        c1 = _interleave_n(a1, b1, size, f, i + a.shape[1] // 2)
-        return gl.convert_layout(gl.join(c0, c1).permute(0, 2, 1).reshape(a.shape), a.type.layout)
-
-
 # ===-----------------------------------------------------------------------===#
 # Gluon Attention
 # ===-----------------------------------------------------------------------===#
