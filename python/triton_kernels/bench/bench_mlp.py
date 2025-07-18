@@ -14,7 +14,7 @@ from triton_kernels.target_info import is_hip, get_cdna_version
 from triton_kernels.tensor import convert_layout
 from triton_kernels.tensor import wrap_torch_tensor, FP4
 from dataclasses import dataclass
-from triton_kernels.tensor_details import layout
+from triton_kernels.tensor_details.layout import make_default_matmul_mxfp4_w_layout, make_default_matmul_mxfp4_w_scale_layout
 
 if torch.cuda.is_available() and not is_hip():
     from triton._C.libtriton import nvidia
@@ -103,9 +103,8 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP,
     opt2 = dict()
     if w_dtype == "mx4" and not is_hip():
         num_warps = 4 if batch <= 512 else 8
-        value_layout, value_layout_opts = layout.make_default_matmul_mxfp4_w_layout(mx_axis=1)
-        scale_layout, scale_layout_opts = layout.make_default_matmul_mxfp4_w_scale_layout(
-            mx_axis=1, num_warps=num_warps)
+        value_layout, value_layout_opts = make_default_matmul_mxfp4_w_layout(mx_axis=1)
+        scale_layout, scale_layout_opts = make_default_matmul_mxfp4_w_scale_layout(mx_axis=1, num_warps=num_warps)
         opt1 = {"value_layout": value_layout, "value_layout_opts": value_layout_opts, \
                 "scale_layout": scale_layout, "scale_layout_opts": scale_layout_opts}
         opt2 = deepcopy(opt1)
@@ -130,7 +129,7 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP,
     x = x.to(x_dtype)
     # run layer
     proton.start(str(fpath.with_suffix('')), hook="triton")
-    for i in range(100):
+    for i in range(1):
         if n_expts_tot > 1:
             logits = matmul_ogs(xg, wg, bg, precision_config=pcg)
             rdata, gather_indx, scatter_indx = routing(logits, n_expts_act, simulated_ep=EP)
@@ -204,7 +203,7 @@ def roofline_mlp(batch_ranges, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_
 if __name__ == "__main__":
     has_native_mx4 = torch.cuda.get_device_capability(0)[0] >= 10 or get_cdna_version() == 4
     batch_ranges_dense = [(1024, 32768, 1024)]
-    batch_ranges_moe = [(128, 512, 64), (512, 1024, 128), (1024, 8192, 512), (8192, 32768, 1024)]
+    batch_ranges_moe = [(128, 192, 64)]
     dense_dtypes = ["fp8", "fp8"]
     quantized_dtypes = ["fp8", "mx4"] if has_native_mx4 else ["bf16", "mx4"]
     # roofline_mlp(batch_ranges_dense, 8192, 8192, 1, 1, *dense_dtypes, TP=1, EP=1, name="dense")

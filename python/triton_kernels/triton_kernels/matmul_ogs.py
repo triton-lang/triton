@@ -489,7 +489,7 @@ def matmul_ogs(x, w, bias,
     #     print(opt_flags)
     # launch kernel
     kernels = get_kernels(epilogue.specs, fused_activation.specs)
-    (kernels._p_matmul_ogs if opt_flags.is_persistent else kernels._matmul_ogs)[(grid,)](
+    h = (kernels._p_matmul_ogs if opt_flags.is_persistent else kernels._matmul_ogs)[(grid,)](
                    flex.out_data.reinterpret(memory["output"]),
                    flex.out_data.reinterpret(out0), *out0.stride(), *out0_flex,
                    x_tensor_or_tma, x_storage.data, *x_strides,
@@ -535,6 +535,7 @@ def matmul_ogs(x, w, bias,
                    SWAP_XW=preprocessing_features.swap_xw,
                    NUM_SMS = grid if opt_flags.is_persistent else 0,
                    **opt_flags.target_kernel_kwargs)
+    print(h.asm["ptx"])
     # post-processing
     out = apply_postprocessing_features(scatter_indx, finalize_scatter_idxs, opt_flags, expt_token_offs_raw,
                                         num_indx, precision_config, routing_data,
