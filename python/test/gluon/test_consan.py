@@ -129,6 +129,7 @@ def tma_interleave_kernel(input_desc, XBLOCK: ttgl.constexpr, FAILURE: ttgl.cons
     mbarrier.expect(bar.index(1), XBLOCK * XBLOCK * ttgl.float16.primitive_bitwidth // 8)
     tma.async_copy_global_to_shared(input_desc, [0, 0], bar.index(0), smem.index(0))
     tma.async_copy_global_to_shared(input_desc, [0, 0], bar.index(1), smem.index(1))
+
     mbarrier.wait(bar.index(0), 1)
     mbarrier.wait(bar.index(1), 1)
 
@@ -146,7 +147,7 @@ def test_tma_interleave_kernel(FAILURE, device, run_wrapper):
         result = run_in_process(test_tma_interleave_kernel, (FAILURE, device, False))
         if FAILURE:
             assert "device-side assert" in str(result.exc)
-            assert "Buffer being accessed has outstanding writes" in result.driver_stderr_output
+            assert "Barrier is being reused while still tracking writes" in result.driver_stderr_output
         else:
             assert result.exc is None
             assert result.driver_stderr_output == ""

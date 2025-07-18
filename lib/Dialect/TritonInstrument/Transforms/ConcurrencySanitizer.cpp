@@ -417,6 +417,20 @@ private:
         b.create<tti::ExperimentalClearWriteCommitsOp>(
             writeCommitsAlloc, writeCommitsType, asyncWaitOp.getNum(), nullptr);
       }
+      if (auto expectOp = dyn_cast<ttng::BarrierExpectOp>(op)) {
+        if (writeBarriersAlloc[(int)MemType::SHARED]) {
+          b.create<tti::ExperimentalCheckBarrierWritesClearedOp>(
+              expectOp.getAlloc(), barriers,
+              writeBarriersAlloc[(int)MemType::SHARED],
+              writeBarriersType[(int)MemType::SHARED], expectOp.getPred());
+        }
+        if (writeBarriersAlloc[(int)MemType::TENSOR]) {
+          b.create<tti::ExperimentalCheckBarrierWritesClearedOp>(
+              expectOp.getAlloc(), barriers,
+              writeBarriersAlloc[(int)MemType::TENSOR],
+              writeBarriersType[(int)MemType::TENSOR], expectOp.getPred());
+        }
+      }
     });
   }
 

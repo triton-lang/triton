@@ -124,4 +124,12 @@ LogicalResult ExperimentalClearReadBarrierOp::verify() {
   return success();
 }
 
+LogicalResult ExperimentalCheckBarrierWritesClearedOp::verify() {
+  auto writeBarsType = cast<RankedTensorType>(getWriteBarsType());
+  auto barriersType = getBarriers().getType();
+  if (writeBarsType.getShape()[1] != barriersType.getShape()[0])
+    return emitError() << "writeBars dim 1 must match number of barriers";
+  return success();
+}
+
 } // namespace mlir::triton::instrument

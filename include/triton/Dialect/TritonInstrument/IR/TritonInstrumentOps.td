@@ -207,6 +207,25 @@ def TTI_ExperimentalClearReadBarrierOp : TTI_Op<"experimental_clear_read_barrier
 }
 
 
+def TTI_ExperimentalCheckBarrierWritesClearedOp : TTI_Op<"experimental_check_barrier_writes_cleared", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+  let summary = "verify that the barrier is not used to track any writes";
+  let description = [{
+    Verify that the barrier is not used to track any writes.
+  }];
+  let arguments = (ins
+    TTG_MemDescType:$mbar,
+    TT_Tensor:$barriers,
+    TT_PtrLike:$writeBars,
+    TypeAttr:$writeBarsType,
+    Optional<I1>:$pred
+  );
+  let assemblyFormat = [{
+    $mbar `{` $barriers `,` $writeBars `(` $writeBarsType `)` `}` (`,` $pred^)? attr-dict `:` type($mbar) `,` type($barriers) `,` type($writeBars)
+  }];
+  let hasVerifier = 1;
+}
+
+
 // TODO: Potentially resolve the naming/functionality clash with commit_write_with_barrier
 def TTI_ExperimentalStageWriteForCommitOp : TTI_Op<"experimental_stage_write_for_commit", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
   let summary = "Preapre to an async copy of a buffer. Staged until commit_group is called.";
