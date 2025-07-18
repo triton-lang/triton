@@ -1,6 +1,5 @@
 // RUN: triton-opt %s -split-input-file -allow-unregistered-dialect --tritongpu-hoist-tmem-alloc -tritongpu-partition-scheduling --nvws-insert-aref | FileCheck %s
 
-
 #blocked = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0]}>
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
@@ -9,11 +8,8 @@
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, unpacked = true>
 
 module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
-
-// FUNC-LABEL: @warp_specialize_tma_matmul
-
-// CHECK: @warp_specialize_tma_matmul
-module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
+  // FUNC-LABEL: @warp_specialize_tma_matmul
+  // CHECK: @warp_specialize_tma_matmul
   tt.func @warp_specialize_tma_matmul(%arg0: i32, %arg1: i32, %arg2: i32, %arg3: !tt.tensordesc<tensor<128x64xf16, #shared>>, %arg4: !tt.tensordesc<tensor<128x64xf16, #shared>>) {
     %true = arith.constant true
     %c0_i32 = arith.constant 0 : i32
@@ -55,6 +51,34 @@ module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
     "use"(%result_0) : (tensor<128x128xf32, #blocked>) -> ()
     tt.return
   }
-}
 
+  // CHECK-LABEL: @specialize_load_only
+  tt.func @specialize_load_only(%arg0: !tt.tensordesc<tensor<128x64xf16, #shared>>, %arg1: i32) {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    scf.for %arg2 = %c0_i32 to %arg1 step %c1_i32  : i32 {
+      // CHECK: nvws.aref.put.enter
+      // CHECK: nvws.descriptor_load
+      // CHECK: nvws.aref.put.exit
+      %0 = tt.descriptor_load %arg0[%arg2, %arg2] {ttg.partition = 2 : i32} : !tt.tensordesc<tensor<128x64xf16, #shared>> -> tensor<128x64xf16, #blocked1>
+      // CHECK: nvws.aref.get.enter
+      // CHECK: [[REG:%.*]] = ttg.local_load
+      // CHECK: nvws.aref.get.exit
+      // CHECK: "use"([[REG]])
+      "use"(%0) {ttg.partition = 0 : i32} : (tensor<128x64xf16, #blocked1>) -> ()
+    } {tt.warp_specialize, ttg.partition.stages = [0 : i32, 1 : i32, 0 : i32]}
+    tt.return
+  }
+
+  // CHECK-LABEL: @no_value_aref
+  tt.func @no_value_aref(%arg0: tensor<128x64xf16, #blocked1>, %arg1: i32) {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    // CHECK-NOT: nvws.aref.create
+    scf.for %arg2 = %c0_i32 to %arg1 step %c1_i32  : i32 {
+      %0 = "producer"(%arg0, %arg2) {ttg.partition = 1 : i32} : (tensor<128x64xf16, #blocked1>, i32) -> tensor<128x64xf16, #blocked1>
+      "use"(%0) {ttg.partition = 0 : i32} : (tensor<128x64xf16, #blocked1>) -> ()
+    } {tt.warp_specialize, ttg.partition.stages = [0 : i32, 1 : i32, 0 : i32]}
+    tt.return
+  }
 }
