@@ -2,7 +2,6 @@
 #include "TritonAMDGPUToLLVM/Passes.h"
 #include "TritonAMDGPUToLLVM/TargetUtils.h"
 #include "TritonAMDGPUTransforms/Passes.h"
-#include "lld/Common/CommonLinkerContext.h"
 #include "lld/Common/Driver.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Target/LLVMIR/Dialect/ROCDL/ROCDLToLLVMIRTranslation.h"
@@ -27,10 +26,9 @@
 #include "llvm/MC/MCTargetOptions.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/FileSystem.h"
-#include "llvm/Support/Parallel.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/TargetParser/TargetParser.h"
-#include <iostream>
+#include <array>
 #include <pybind11/pybind11.h>
 #include <stdexcept>
 
@@ -117,12 +115,7 @@ void addControlConstant(llvm::Module *module, const char *name,
 
 } // namespace
 
-namespace lld {
-namespace elf {
-bool link(llvm::ArrayRef<const char *> args, llvm::raw_ostream &stdoutOS,
-          llvm::raw_ostream &stderrOS, bool exitEarly, bool disableOutput);
-}
-} // namespace lld
+LLD_HAS_DRIVER(elf)
 
 static std::optional<std::string> lldInvoke(const char *inPath,
                                             const char *outPath) {
@@ -131,8 +124,7 @@ static std::optional<std::string> lldInvoke(const char *inPath,
   // Context: lld::elf::LinkerDriver::link uses parallelFor which uses the
   // LLVM's thread pool. During cleanup at ~TaskGroup() the child process hangs
   // waiting.
-  llvm::SmallVector<const char *> args{"ld.lld", "--threads=1", "-shared",
-                                       inPath,   "-o",          outPath};
+  std::array args{"ld.lld", "--threads=1", "-shared", inPath, "-o", outPath};
   std::string errString;
   llvm::raw_string_ostream errStream(errString);
   auto lldRes = lld::lldMain(args, llvm::outs(), llvm::errs(),
