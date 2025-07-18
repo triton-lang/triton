@@ -156,7 +156,7 @@ using LoadToStreamOpMap = llvm::MapVector<Operation *, StreamOpVariant>;
 LogicalResult initSchedule(int maxDist, StreamStages &stages, int numStages,
                            int &numBuffers, int globalPrefetch,
                            int localPrefetch, bool useAsyncCopy,
-                           StreamClusters &clusters,
+                           bool waitAtTail, StreamClusters &clusters,
                            tt::CoarseSchedule &schedule) {
   int lastStage = numStages - 1;
   stages[SCHED_GLOBAL_LOAD] = 0;
@@ -167,6 +167,9 @@ LogicalResult initSchedule(int maxDist, StreamStages &stages, int numStages,
 
   bool pairedGlobalLoadLocalStore = stages[SCHED_LOCAL_STORE] == 0;
   stages[SCHED_LOCAL_STORE] += maxDist;
+  if (waitAtTail) {
+    stages[SCHED_ASYNC_WAIT] = std::max(0, stages[SCHED_LOCAL_LOAD] - 1);
+  }
 
   LDBG(
       "Stage schedule:" << "  GLOBAL_LOAD stage = " << stages[SCHED_GLOBAL_LOAD]
@@ -196,8 +199,10 @@ LogicalResult initSchedule(int maxDist, StreamStages &stages, int numStages,
 
   // We place async wait as the first cluster because we want to have it being
   // the first in the main loop after pipelining.
-  int asyncWaitCluster = 0;
-
+  // In case we use async_copy with pingpong, we need to place async_wait at
+  // the end of the previous iteration, so it can guarantee the correct
+  // dependency when warp0 and warp1 are pipelined.
+  int asyncWaitCluster = waitAtTail ? 4 : 0;
   // If tt.load and ttg.local_store are in the same stage
   //   spread them apart to allow overlap with compute
   // else
@@ -613,6 +618,7 @@ preprocessLoop(triton::AMD::ModuleAxisInfoAnalysis &axisInfoAnalysis,
 tt::CoarseSchedule
 buildSchedule(scf::ForOp &forOp, int numStages, const LoadToInfoMap &loadToInfo,
               int globalPrefetch, int localPrefetch, bool useAsyncCopy,
+              bool waitAtTail,
               triton::AMD::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
   tt::CoarseSchedule schedule(numStages);
   StreamStages stages;
@@ -633,8 +639,8 @@ buildSchedule(scf::ForOp &forOp, int numStages, const LoadToInfoMap &loadToInfo,
 
   int numBuffers = 1;
   if (failed(initSchedule(maxDist, stages, numStages, numBuffers,
-                          globalPrefetch, localPrefetch, useAsyncCopy, clusters,
-                          schedule)))
+                          globalPrefetch, localPrefetch, useAsyncCopy,
+                          waitAtTail, clusters, schedule)))
     return {};
 
   if (failed(scheduleLoads(loadToInfo, maxDist, numStages, stages, clusters,
@@ -665,7 +671,8 @@ buildSchedule(scf::ForOp &forOp, int numStages, const LoadToInfoMap &loadToInfo,
 }
 
 LogicalResult pipelineLoop(scf::ForOp forOp, int numStages, int globalPrefetch,
-                           int localPrefetch, bool useAsyncCopy) {
+                           int localPrefetch, bool useAsyncCopy,
+                           bool waitAtTail) {
 
   triton::AMD::ModuleAxisInfoAnalysis axisInfoAnalysis(
       forOp->getParentOfType<ModuleOp>());
@@ -677,8 +684,9 @@ LogicalResult pipelineLoop(scf::ForOp forOp, int numStages, int globalPrefetch,
     return failure();
   }
 
-  auto schedule = buildSchedule(forOp, numStages, loadToInfo, globalPrefetch,
-                                localPrefetch, useAsyncCopy, axisInfoAnalysis);
+  auto schedule =
+      buildSchedule(forOp, numStages, loadToInfo, globalPrefetch, localPrefetch,
+                    useAsyncCopy, waitAtTail, axisInfoAnalysis);
   if (schedule.empty()) {
     return failure();
   }
@@ -748,13 +756,23 @@ struct PipelinePass : impl::TritonAMDGPUStreamPipelineBase<PipelinePass> {
         LDBG("Loop not safe to pipeline:\n" << *forOp);
         continue;
       }
-      (void)pipelineLoop(forOp, tt::getNumStagesOrDefault(forOp, numStages),
-                         globalPrefetch, localPrefetch, useAsyncCopy);
+      // i.e., we can still disable `waitAtTail` by explicitly disabling
+      // pingpong, which is the only use case of this scheduling variant.
+      int numStagesThis = tt::getNumStagesOrDefault(forOp, numStages);
+      bool waitAtTail = usePingpong && (numStagesThis == 3) && useAsyncCopy;
+      (void)pipelineLoop(forOp, numStagesThis, globalPrefetch, localPrefetch,
+                         useAsyncCopy, waitAtTail);
     }
 
     if (useAsyncCopy) {
       llvm::SmallSetVector<ttg::AsyncWaitOp, 8> waitOps;
-      moduleOp.walk([&](ttg::AsyncWaitOp waitOp) { waitOps.insert(waitOp); });
+      moduleOp.walk([&](ttg::AsyncWaitOp waitOp) {
+        if (auto maybeForOp = dyn_cast<scf::ForOp>(waitOp->getParentOp()))
+          // FIXME: There's potential bug in combinRedundantWaitOps(), it
+          // generate incorrect IR order when numStages==3.
+          if (tt::getNumStagesOrDefault(maybeForOp, numStages) == 3)
+            waitOps.insert(waitOp);
+      });
       tt::combineRedundantWaitOps(waitOps);
     }
   }
