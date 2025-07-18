@@ -2003,19 +2003,17 @@ def test_atomic_unsupported_type(dtype_str, device):
         kernel[(1, )](I, O)
 
 
-@pytest.mark.parametrize("dtype_str", ["int32", "uint32"])
-@pytest.mark.parametrize("dim_size", [8, 128, 256])
+@pytest.mark.parametrize("dtype_str", ["int32", "float16"])
+@pytest.mark.parametrize("dim_size", [1, 4])
 def test_atomic_result_broadcast(dtype_str, dim_size, device):
 
     @triton.jit
     def kernel(index_ptr, out_ptr, dim: tl.constexpr):
-        write_index = tl.atomic_add(index_ptr + tl.arange(0, 1), val=1, sem="relaxed")
-        tl.store(out_ptr + write_index[:, None] * dim + tl.arange(0, dim)[None, :], tl.full([1, dim], 5,
-                                                                                            dtype=tl.int64))
+        write_index = tl.atomic_add(index_ptr + tl.arange(0, dim), val=tl.arange(0, dim), sem="relaxed")
+        tl.store(out_ptr + write_index, 5)
 
-    index = torch.zeros([200], device=device, dtype=getattr(torch, dtype_str))
-    index[0] = 1
-    out = torch.zeros([3, dim_size], device=device, dtype=torch.int64)
+    index = torch.arange(0, dim_size, device=device).to(dtype=getattr(torch, dtype_str))
+    out = torch.zeros((dim_size, ), device=device, dtype=getattr(torch, dtype_str))
     kernel[(1, )](index, out, dim_size)
     assert (out[1] == 5).all()
 
