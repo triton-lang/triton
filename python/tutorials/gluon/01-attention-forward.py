@@ -607,7 +607,7 @@ def _mask_scalar(qk, col_limit_right, s, i):
 
 
 @gluon.jit
-def _mask_bits(qk, col_limit_right):
+def _apply_causal_mask(qk, col_limit_right):
     # NOTE: We use map_elementiwse here in order to generate an interleaved sequence of instructions
     # that processes one element of qk at a time. This improves ptxas's resulting SASS.
     offs_n = gl.arange(0, qk.shape[1])[None, :]
@@ -627,8 +627,8 @@ def _softmax_inner_loop(tile_id: gl.constexpr, config, prog,  #
         qk = s_tmem.load(config.qk_layout)
 
         if STAGE == 2:
-            col_limit_right = (offs_m - start_n + 1)[:, None].broadcast_to(qk.shape)
-            qk = _mask_bits(qk, col_limit_right)
+            col_limit_right = (offs_m - start_n + 1)[:, None]
+            qk = _apply_causal_mask(qk, col_limit_right)
 
         m_ij = gl.maximum(m_i, gl.max(qk, 1) * config.qk_scale)
         alpha = gl.exp2(m_i - m_ij)
