@@ -12,14 +12,6 @@ using ::mlir::triton::gpu::AMDWmmaEncodingAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::MemDescType;
 
-namespace SharedToDotOperandMFMA {
-Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
-                    Location loc, Value tensor,
-                    DotOperandEncodingAttr bEncoding,
-                    const SharedMemoryObject &smemObj,
-                    const LLVMTypeConverter *typeConverter, Value thread);
-} // namespace SharedToDotOperandMFMA
-
 namespace SharedToDotOperandWMMA {
 Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
                     Location loc, Value tensor,
@@ -52,7 +44,7 @@ public:
 
 private:
   /// Lower ttg.local_load in dot operand layout if the operand parent layout is
-  /// MFMA or WMMA.
+  /// WMMA.
   ///
   /// \returns value with packed loaded values or empty value if this local_load
   /// is not supported.
@@ -72,13 +64,10 @@ private:
                                                          llvmElemTy, rewriter);
     Value res;
     auto dopOpParent = dotOperandLayout.getParent();
-    if (isa<AMDMfmaEncodingAttr, AMDWmmaEncodingAttr>(dopOpParent)) {
-      auto sharedToDotConvert = isa<AMDMfmaEncodingAttr>(dopOpParent)
-                                    ? SharedToDotOperandMFMA::convertLayout
-                                    : SharedToDotOperandWMMA::convertLayout;
-      res = sharedToDotConvert(dotOperandLayout.getOpIdx(), rewriter, loc, src,
-                               dotOperandLayout, smemObj, typeConverter,
-                               getThreadId(rewriter, loc));
+    if (isa<AMDWmmaEncodingAttr>(dopOpParent)) {
+      res = SharedToDotOperandWMMA::convertLayout(
+          dotOperandLayout.getOpIdx(), rewriter, loc, src, dotOperandLayout,
+          smemObj, typeConverter, getThreadId(rewriter, loc));
     } else {
       assert(false && "unsupported layout found");
     }
