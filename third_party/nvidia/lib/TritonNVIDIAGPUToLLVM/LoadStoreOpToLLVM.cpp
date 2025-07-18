@@ -1161,6 +1161,13 @@ struct AtomicRMWOpConversion
     if (tensorTy) {
       if (op->hasAttr("allocation.offset")) {
         auto dstLayout = ttg::toLinearLayout(tensorTy);
+        auto kReg = str_attr("register");
+        auto kLane = str_attr("lane");
+        auto kWarp = str_attr("warp");
+        dstLayout = dstLayout.sublayout({kReg, kLane, kWarp},
+                                        to_vector(dstLayout.getOutDimNames()));
+        dstLayout = dstLayout.reshapeOuts(
+            {{str_attr("offset"), dstLayout.getTotalOutDimSize()}});
         auto smemBase = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo,
                                                   op.getOperation());
 
@@ -1190,7 +1197,7 @@ struct AtomicRMWOpConversion
                           VectorType vecTy) -> SmallVector<Value> {
           Value loadedVec = targetInfo.loadDShared(
               rewriter, loc, shmemAddr, std::nullopt, vecTy, b.true_val());
-          return unpackLLElements(loc, loadedVec, rewriter);
+          return unpackLLVector(loc, loadedVec, rewriter);
         };
 
         emitLdStCommon(emitSt, resultVals);

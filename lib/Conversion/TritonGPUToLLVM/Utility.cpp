@@ -469,7 +469,7 @@ largestVectorisation(MLIRContext *ctx, const LinearLayout &cvt, int bitwidth,
     }
     return {v, permutation};
   }
-  llvm_unreachable("No vectorisation found");
+  return {1, permutation};
 }
 } // namespace
 
