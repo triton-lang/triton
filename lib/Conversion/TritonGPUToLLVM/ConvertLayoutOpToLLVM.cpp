@@ -558,7 +558,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       for (auto [origRBitIdx, lBitIdx] : mixedTranspositions) {
         int rBitIdx = origRBitIdx - nPack;
         if (r & (1 << rBitIdx)) {
-          mask |= (1 << llvm::Log2_32(pLInvBases[lBitIdx][0]));
+          mask |= pLInvBases[lBitIdx][0];
         }
       }
       if (!pLaneIsTrivial || mask > 0) {
