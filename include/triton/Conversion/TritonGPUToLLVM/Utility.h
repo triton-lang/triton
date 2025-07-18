@@ -645,17 +645,9 @@ Value transferWithinBlockPadding(triton::gpu::ConvertLayoutOp op, Value src,
                                  const LLVMTypeConverter *typeConverter,
                                  RewriterBase &rewriter);
 
-SmallVector<Value> inlineRegionImpl(RewriterBase &rewriter, Region &region,
-                                    ArrayRef<Value> args,
-                                    mlir::TypeID terminatorTypeId,
-                                    Location loc);
-
-template <typename TerminatorOp>
-SmallVector<Value> inlineRegion(RewriterBase &rewriter, Region &region,
-                                ArrayRef<Value> args, Location loc) {
-  return inlineRegionImpl(rewriter, region, args,
-                          mlir::TypeID::get<TerminatorOp>(), loc);
-}
+LogicalResult inlineRegion(RewriterBase &rewriter, Region &region,
+                           ValueRange regionArgs, ValueRange resultsToReplace,
+                           Location loc);
 
 } // namespace mlir
 
