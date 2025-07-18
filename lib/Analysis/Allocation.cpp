@@ -223,7 +223,7 @@ unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
     auto elems = getNumScratchElements(smemShape);
     if (elems == 0)
       return 0;
-    auto elemTy = value.getType().getPointeeType();
+    auto elemTy = getPointeeType(value.getType());
     return elems * std::max<int>(8, elemTy.getIntOrFloatBitWidth()) / 8;
   }
   if (isa<ttng::TensormapCreateOp>(op)) {
