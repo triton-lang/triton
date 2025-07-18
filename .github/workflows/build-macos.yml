@@ -94,7 +94,6 @@ jobs:
       - name: Install Triton
         env:
           TRITON_BUILD_WITH_O1: "true"
-          TRITON_BUILD_PROTON: "OFF"
           # macos-latest has 3 vcpus and 7GB DRAM, to save memory we limit the number of jobs to 3
           # https://docs.github.com/en/actions/using-github-hosted-runners/about-github-hosted-runners/about-github-hosted-runners#standard-github-hosted-runners-for-public-repositories
           MAX_JOBS: 3
