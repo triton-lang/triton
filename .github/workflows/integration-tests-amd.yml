@@ -8,32 +8,12 @@ on:
         type: string
 
 jobs:
-  integration-tests-amd:
+  host-cache-restore:
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 45
+    timeout-minutes: 10
     strategy:
       matrix:
         runner: ${{ fromJson(inputs.matrix) }}
-        include:
-          - image: rocm/pytorch:rocm6.2.2_ubuntu22.04_py3.10_pytorch_2.5.1_asan
-          - image: rocm/7.0-preview:rocm7.0_preview_ubuntu22.04_llama2_70b_training_mlperf_mi35X_prealpha
-            runner: ["amd-gfx950"]
-    env:
-      RUNNER_TYPE: ${{ matrix.runner[1] }}
-      TRITON_BUILD_WITH_CCACHE: "true"
-      TRITON_BUILD_WITH_CLANG_LLD: "TRUE"
-      TRITON_USE_ASSERT_ENABLED_LLVM: "TRUE"
-      TRITON_DISABLE_LINE_INFO: 1
-      PROTON_SKIP_PC_SAMPLING_TEST: 1
-      PYTHON: "python3"
-      CCACHE_COMPRESS: "true"
-    container:
-      image: ${{ matrix.image }}
-      # Cache save/restore is on the host machine at directory /home/runner/.triton, while in the docker
-      # container expect it at /github/home/.triton. So map here to make sure visible in docker.
-      options: >-
-        --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --user root
-        --volume /home/runner/.triton:/github/home/.triton
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -58,7 +38,7 @@ jobs:
           echo "json=$(cat $json_file)" >> $GITHUB_OUTPUT
         shell: bash
       - name: Cache build dependencies
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           # Note that we cannot use environment variables here given there is
           # no shell to interpret them in the paths.
@@ -67,6 +47,42 @@ jobs:
             ~/.triton/nvidia
             ~/.triton/json
           key: ${{ runner.os }}-${{ runner.arch }}-llvm-${{ steps.cache-key.outputs.llvm }}-nvidia-${{ steps.cache-key.outputs.nvidia }}-json-${{ steps.cache-key.outputs.json }}
+      - name: Inspect cache directories
+        run: |
+          mkdir -p ~/.triton
+          du -h -d 1 ~/.triton
+
+          mkdir -p ~/.ccache
+          du -h -d 1 ~/.ccache
+
+  integration-tests-amd:
+    needs: host-cache-restore
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      matrix:
+        runner: ${{ fromJson(inputs.matrix) }}
+        include:
+          - image: rocm/pytorch:rocm6.2.2_ubuntu22.04_py3.10_pytorch_2.5.1_asan
+          - image: rocm/7.0-preview:rocm7.0_preview_ubuntu22.04_llama2_70b_training_mlperf_mi35X_prealpha
+            runner: ["amd-gfx950"]
+    env:
+      RUNNER_TYPE: ${{ matrix.runner[1] }}
+      TRITON_BUILD_WITH_CCACHE: "true"
+      TRITON_BUILD_WITH_CLANG_LLD: "TRUE"
+      TRITON_USE_ASSERT_ENABLED_LLVM: "TRUE"
+      TRITON_DISABLE_LINE_INFO: 1
+      PROTON_SKIP_PC_SAMPLING_TEST: 1
+      PYTHON: "python3"
+      CCACHE_COMPRESS: "true"
+    container:
+      image: ${{ matrix.image }}
+      # Cache save/restore is on the host machine at directory /home/runner/.triton, while in the docker
+      # container expect it at /github/home/.triton. So map here to make sure visible in docker.
+      options: >-
+        --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --user root
+        --volume "/home/runner/.triton":"/github/home/.triton"
+    steps:
       - name: Inspect cache directories
         run: |
           mkdir -p ~/.triton
