@@ -2010,12 +2010,12 @@ def test_atomic_result_broadcast(dtype_str, dim_size, device):
     @triton.jit
     def kernel(index_ptr, out_ptr, dim: tl.constexpr):
         write_index = tl.atomic_add(index_ptr + tl.arange(0, dim), val=tl.arange(0, dim), sem="relaxed")
-        tl.store(out_ptr + write_index, 5)
+        tl.store(out_ptr + write_index.to(tl.uint32), 5)
 
     index = torch.arange(0, dim_size, device=device).to(dtype=getattr(torch, dtype_str))
     out = torch.zeros((dim_size, ), device=device, dtype=getattr(torch, dtype_str))
     kernel[(1, )](index, out, dim_size)
-    assert (out[1] == 5).all()
+    assert (out[0] == 5).all()
 
 
 # ---------------
