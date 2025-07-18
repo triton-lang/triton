@@ -610,6 +610,13 @@ void init_triton_ir(py::module &&m) {
            [](ModuleOp &self, std::string &funcName) -> FuncOp {
              return self.lookupSymbol<FuncOp>(funcName);
            })
+      .def("has_call_op", [](ModuleOp &self) -> bool {
+            bool result;
+            self.walk([&result](Operation* op) {
+              result |= llvm::isa<LLVM::CallOp>(*op);
+            });
+            return result;
+          })
       /*
        * def ty_to_cpp(ty) is the consumer of this function.
        * If the type is a ptr it expects ty[0] == '*', else the type itself.
