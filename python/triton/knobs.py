@@ -360,6 +360,7 @@ class compilation_knobs(base_knobs):
     allow_non_constexpr_globals: env_bool = env_bool("TRITON_ALLOW_NON_CONSTEXPR_GLOBALS")
     enable_experimental_consan: env_bool = env_bool("TRITON_ENABLE_EXPERIMENTAL_CONSAN")
     listener: Union[CompilationListener, None] = None
+    disable_autotune: env_bool = env_bool("TRITON_DISABLE_AUTOTUNE")
 
 
 class autotuning_knobs(base_knobs):
