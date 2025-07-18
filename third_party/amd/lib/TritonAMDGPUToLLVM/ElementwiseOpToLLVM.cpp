@@ -196,7 +196,7 @@ cvtScalePkUpcastFromFp8(Location loc, ConversionPatternRewriter &rewriter,
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto fp8x4VecTy = vec_ty(i8_ty, 4);
   Value fp8x4Vec = b.undef(fp8x4VecTy);
-  SmallVector<Value> idx(4);
+  SmallVector<Value, 4> idx;
   for (size_t i = 0; i < 4; i++) {
     idx[i] = b.i32_val(i);
     fp8x4Vec = b.insert_element(fp8x4VecTy, fp8x4Vec, v[i], idx[i]);
@@ -591,7 +591,7 @@ static SmallVector<Value> cvtPkF8ToFp32(Location loc,
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto fp8x4VecTy = vec_ty(i8_ty, 4);
   Value fp8x4Vec = b.undef(fp8x4VecTy);
-  SmallVector<Value> idx(4);
+  SmallVector<Value, 4> idx;
   for (size_t i = 0; i < 4; i++) {
     idx[i] = b.i32_val(i);
     fp8x4Vec = b.insert_element(fp8x4VecTy, fp8x4Vec, v[i], idx[i]);
@@ -620,7 +620,7 @@ static SmallVector<Value> cvtPkF8ToFp32(Location loc,
 template <typename ConvertOp>
 static SmallVector<Value> cvtPkFp32ToF8(Location loc,
                                         ConversionPatternRewriter &rewriter,
-                                        const SmallVector<Value> v) {
+                                        const SmallVector<Value> &v) {
   assert(v.size() == 4);
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   Type v2I16Ty = vec_ty(i16_ty, 2);
@@ -663,14 +663,9 @@ static SmallVector<Value>
 Fp32_to_Fp8E4M3FN_RTNE_SW(Location loc, ConversionPatternRewriter &rewriter,
                           const SmallVector<Value> &v) {
   SmallVector<Value> result(4);
-  result[0] = downcastToFp8_RTNE_oneValue<Float32Type, Float8E4M3FNType>(
-      loc, rewriter, v[0]);
-  result[1] = downcastToFp8_RTNE_oneValue<Float32Type, Float8E4M3FNType>(
-      loc, rewriter, v[1]);
-  result[2] = downcastToFp8_RTNE_oneValue<Float32Type, Float8E4M3FNType>(
-      loc, rewriter, v[2]);
-  result[3] = downcastToFp8_RTNE_oneValue<Float32Type, Float8E4M3FNType>(
-      loc, rewriter, v[3]);
+  for (size_t i = 0; i < 4; i++)
+    result[i] = downcastToFp8_RTNE_oneValue<Float32Type, Float8E4M3FNType>(
+        loc, rewriter, v[i]);
   return result;
 }
 
@@ -1475,7 +1470,7 @@ static SmallVector<Value>
 Bf16_to_Fp8E4M3FNUZ_HW(Location loc, ConversionPatternRewriter &rewriter,
                        const SmallVector<Value> &v) {
   assert(v.size() == 4);
-  SmallVector<Value> fp32Vec;
+  SmallVector<Value> fp32Vec(4);
   for (size_t i = 0; i < 4; i++)
     fp32Vec[i] = convertBf16ToFp32(loc, rewriter, v[i]);
   return cvtPkFp32ToF8<ROCDL::CvtPkFp8F32Op>(loc, rewriter, fp32Vec);
