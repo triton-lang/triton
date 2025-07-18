@@ -126,20 +126,17 @@ bool link(llvm::ArrayRef<const char *> args, llvm::raw_ostream &stdoutOS,
 
 static std::optional<std::string> lldInvoke(const char *inPath,
                                             const char *outPath) {
-  llvm::SmallVector<const char *> args{"ld.lld", "-shared", inPath, "-o",
-                                       outPath};
-  std::string errString;
-  llvm::raw_string_ostream errStream(errString);
   // Workaround: Disable parallelism to avoid hangs caused by LLVM's thread pool
   // when the following code is executed in a forked child process.
   // Context: lld::elf::LinkerDriver::link uses parallelFor which uses the
   // LLVM's thread pool. During cleanup at ~TaskGroup() the child process hangs
   // waiting.
-  auto parallelThreadState = llvm::parallel::strategy.ThreadsRequested;
-  llvm::parallel::strategy.ThreadsRequested = 1;
+  llvm::SmallVector<const char *> args{"ld.lld", "--threads=1", "-shared",
+                                       inPath,   "-o",          outPath};
+  std::string errString;
+  llvm::raw_string_ostream errStream(errString);
   auto lldRes = lld::lldMain(args, llvm::outs(), llvm::errs(),
                              {{lld::Gnu, &lld::elf::link}});
-  llvm::parallel::strategy.ThreadsRequested = parallelThreadState;
   bool noErrors = (!lldRes.retCode && lldRes.canRunAgain);
   if (!noErrors) {
     errStream.flush();
