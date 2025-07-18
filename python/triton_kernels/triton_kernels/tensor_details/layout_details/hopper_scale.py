@@ -7,7 +7,7 @@ from .base import Layout
 class HopperMXScaleLayout(Layout):
     name: str = "HOPPER_SCALE"
 
-    def __init__(self, shape, mx_axis=0, num_warps=8) -> None:
+    def __init__(self, shape, mx_axis, num_warps=8) -> None:
         assert num_warps & (num_warps - 1) == 0, "warps_n must be a power of 2"
         super().__init__(shape)
         self.mx_axis = mx_axis

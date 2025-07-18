@@ -23,7 +23,7 @@ def make_default_matmul_mxfp4_w_layout(mx_axis: int):
         return StridedLayout, dict()
 
 
-def make_default_matmul_mxfp4_w_scale_layout(mx_axis: int, num_warps: int):
+def make_default_matmul_mxfp4_w_scale_layout(mx_axis: int, num_warps: int = 8):
     if cuda_capability_geq(10):
         return BlackwellMXScaleLayout, dict()
     elif cuda_capability_geq(9):

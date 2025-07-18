@@ -84,7 +84,7 @@ def _unpack_bits(x, mx_axis: int):
 class HopperMXValueLayout(Layout):
     name: str = "HOPPER_VALUE"
 
-    def __init__(self, shape, mx_axis=0, mma_version=3):
+    def __init__(self, shape, mx_axis, mma_version=3):
         super().__init__(shape)
         assert mx_axis in range(len(shape))
         self.mx_axis = mx_axis
