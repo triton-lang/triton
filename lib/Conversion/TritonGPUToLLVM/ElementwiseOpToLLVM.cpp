@@ -599,42 +599,24 @@ struct MapElementwiseOpConversion
 
     auto &scalarOp = op.getScalarOp();
     Region &parent = *rewriter.getBlock()->getParent();
+
     auto numOutputs = op.getNumResults();
     SmallVector<Value> scalarOutputs(numOutputs * packSize);
-
-    // The region inliner interface isn't really made to be used during
-    // conversion, so we have to do this awkward dance of creating a user of
-    // fake values as if it were being returned from a call. Then we can pass
-    // those fake values for the inliner to replace with the real results.
-    rewriter.setInsertionPointAfter(op);
-    for (auto iOut : llvm::seq(numOutputs)) {
-      Type ty = getElementTypeOrSelf(op.getType(iOut));
-      for (auto iPack : llvm::seq(packSize)) {
-        scalarOutputs[iOut * packSize + iPack] =
-            rewriter.create<LLVM::UndefOp>(loc, ty).getResult();
+    for (unsigned iPack = 0; iPack < packSize; ++iPack) {
+      ArrayRef<Value> packArgs(&scalarOperands[iPack * numOperands],
+                               numOperands);
+      auto packResults = inlineRegion<triton::MapElementwiseReturnOp>(
+          rewriter, scalarOp, packArgs, loc);
+      for (unsigned iOut = 0; iOut < numOutputs; ++iOut) {
+        scalarOutputs[iOut * packSize + iPack] = packResults[iOut];
       }
     }
 
     SmallVector<Value> packedOutputs(numOutputs);
-    for (auto iOut : llvm::seq(numOutputs)) {
+    for (unsigned iOut = 0; iOut < numOutputs; ++iOut) {
       ArrayRef<Value> vals(&scalarOutputs[iOut * packSize], packSize);
       packedOutputs[iOut] =
           packLLElements(loc, typeConverter, vals, rewriter, op.getType(iOut));
-    }
-
-    rewriter.setInsertionPointAfter(op);
-    for (auto iPack : llvm::seq(packSize)) {
-      ArrayRef<Value> packArgs(&scalarOperands[iPack * numOperands],
-                               numOperands);
-      SmallVector<Value> resultsToReplace;
-      for (auto iOut : llvm::seq(numOutputs)) {
-        resultsToReplace.push_back(scalarOutputs[iOut * packSize + iPack]);
-      }
-      auto res =
-          inlineRegion(rewriter, scalarOp, packArgs, resultsToReplace, loc);
-      if (failed(res)) {
-        return failure();
-      }
     }
     rewriter.replaceOp(op, packedOutputs);
     return success();

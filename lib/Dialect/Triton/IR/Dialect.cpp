@@ -33,11 +33,15 @@ bool TritonInlinerInterface::isLegalToInline(Operation *call,
 /// as necessary.
 void TritonInlinerInterface::handleTerminator(Operation *op,
                                               Block *newDest) const {
-  assert((isa<triton::ReturnOp, triton::MapElementwiseReturnOp>(op)));
+  // Only return needs to be handled here.
+  auto returnOp = dyn_cast<triton::ReturnOp>(op);
+  if (!returnOp)
+    return;
 
   // Replace the return with a branch to the dest.
   OpBuilder builder(op);
-  builder.create<mlir::cf::BranchOp>(op->getLoc(), newDest, op->getOperands());
+  builder.create<mlir::cf::BranchOp>(op->getLoc(), newDest,
+                                     returnOp.getOperands());
   op->erase();
 }
 
@@ -45,11 +49,12 @@ void TritonInlinerInterface::handleTerminator(Operation *op,
 /// as necessary.
 void TritonInlinerInterface::handleTerminator(Operation *op,
                                               ValueRange valuesToRepl) const {
-  assert((isa<triton::ReturnOp, triton::MapElementwiseReturnOp>(op)));
+  // Only return needs to be handled here.
+  auto returnOp = cast<triton::ReturnOp>(op);
 
   // Replace the values directly with the return operands.
-  assert(op->getNumOperands() == valuesToRepl.size());
-  for (const auto &it : llvm::enumerate(op->getOperands()))
+  assert(returnOp.getNumOperands() == valuesToRepl.size());
+  for (const auto &it : llvm::enumerate(returnOp.getOperands()))
     valuesToRepl[it.index()].replaceAllUsesWith(it.value());
 }
 
