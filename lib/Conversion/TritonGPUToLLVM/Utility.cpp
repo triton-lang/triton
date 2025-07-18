@@ -1,6 +1,8 @@
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/Attributes.h"
+#include "mlir/IR/IRMapping.h"
+#include "mlir/Transforms/InliningUtils.h"
 #include "mlir/Transforms/RegionUtils.h"
 #include "triton/Analysis/Allocation.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
@@ -1827,63 +1829,34 @@ Value transferWithinBlockPadding(triton::gpu::ConvertLayoutOp op, Value src,
   return result;
 }
 
-SmallVector<Value> inlineRegionImpl(RewriterBase &rewriter, Region &region,
-                                    ArrayRef<Value> args,
-                                    mlir::TypeID terminatorTypeId,
-                                    Location loc) {
-  // Inline regions with multiple blocks
-  //
-  //        Before                                   After
-  //                                              ┌─────────┐
-  //                                              │ op1     │
-  //                    ┌──────────┐              │ cf.br   │
-  //                    │region[0] │              └────┬────┘
-  //                    │cf.cond_br├─┐            ┌────▼─────┐
-  //                    └────┬─────┘ │            │region[0] │
-  //                         │       │            │cf.cond_br├─┐
-  // ┌───────┐          ┌────▼────┐  │            └────┬─────┘ │
-  // │  op1  │  IP      │region[1]│  │            ┌────▼────┐  │
-  // │       │◄───      │yield ...│  │            │region[1]│  │
-  // │  op2  │          └─────────┘  │          ┌─┤cf.br    │  │
-  // └───────┘                       │          │ └─────────┘  │
-  //                    ┌─────────┐  │          │ ┌─────────┐  │
-  //                    │region[2]│◄─┘          │ │region[2]│◄─┘
-  //                    │yield    │             │ │cf.br    │
-  //                    └─────────┘             │ └────┬────┘
-  //                                            │ ┌────▼────┐
-  //                                            └►│op2      │
-  //                                              └─────────┘
-  auto *curBlock = rewriter.getInsertionBlock();
-  auto opPosition = rewriter.getInsertionPoint();
-  auto *remainingOpsBlock = rewriter.splitBlock(curBlock, opPosition);
+LogicalResult inlineRegion(RewriterBase &rewriter, Region &region,
+                           ValueRange regionArgs, ValueRange resultsToReplace,
+                           Location loc) {
+  // Map arguments to block args
+  IRMapping mapping;
+  Block *firstBlock = &region.getBlocks().front();
+  assert(regionArgs.size() == firstBlock->getNumArguments());
 
-  IRMapping regionMap;
-  Region &parent = *curBlock->getParent();
-  rewriter.cloneRegionBefore(region, parent, parent.end(), regionMap);
-  rewriter.setInsertionPointToEnd(curBlock);
-  rewriter.create<LLVM::BrOp>(loc, args, regionMap.lookup(&region.front()));
-
-  ValueRange terminatorOperands;
-  for (Block &origBlock : region) {
-    Block *newBlock = regionMap.lookup(&origBlock);
-    rewriter.moveBlockBefore(newBlock, remainingOpsBlock);
-
-    auto terminator = newBlock->getTerminator();
-    if (terminator->getRegisteredInfo()->getTypeID() == terminatorTypeId) {
-      terminatorOperands = terminator->getOperands();
-      rewriter.setInsertionPointToEnd(newBlock);
-      rewriter.replaceOpWithNewOp<LLVM::BrOp>(terminator, terminatorOperands,
-                                              remainingOpsBlock);
-    }
+  for (auto i : llvm::seq(regionArgs.size())) {
+    mapping.map(firstBlock->getArgument(i), regionArgs[i]);
   }
 
-  rewriter.setInsertionPointToStart(remainingOpsBlock);
-  SmallVector<Value> vals;
-  for (auto resultTy : terminatorOperands.getType()) {
-    auto val = remainingOpsBlock->addArgument(resultTy, loc);
-    vals.push_back(val);
-  }
-  return vals;
+  InlinerInterface::CloneCallbackTy cloneCallback =
+      [](OpBuilder &builder, Region *src, Block *inlineBlock,
+         Block *postInsertBlock, IRMapping &mapper,
+         bool shouldCloneInlinedRegion) {
+        // Check to see if the region is being cloned, or moved inline. In
+        // either case, move the new blocks after the 'insertBlock' to improve
+        // IR readability.
+        Region *insertRegion = inlineBlock->getParent();
+        src->cloneInto(insertRegion, postInsertBlock->getIterator(), mapper);
+      };
+
+  mlir::InlinerInterface inlinerInterface(rewriter.getContext());
+  return mlir::inlineRegion(
+      inlinerInterface, cloneCallback, &region, rewriter.getInsertionBlock(),
+      rewriter.getInsertionPoint(), regionArgs, resultsToReplace, loc,
+      /*shouldCloneInlinedRegion*/ true);
 }
 
 } // namespace mlir
