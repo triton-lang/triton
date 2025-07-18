@@ -9,6 +9,7 @@
 #include "triton/Tools/LinearLayout.h"
 
 namespace mlir {
+
 inline bool isZeroConst(Value v) {
   auto constantOp = v.getDefiningOp<arith::ConstantOp>();
   if (!constantOp)
@@ -415,6 +416,7 @@ protected:
 };
 // Create a basic DataFlowSolver with constant and dead code analysis included.
 std::unique_ptr<DataFlowSolver> createDataFlowSolver();
+
 } // namespace mlir
 
 #endif // TRITON_ANALYSIS_UTILITY_H
