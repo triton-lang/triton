@@ -86,9 +86,15 @@ class HopperMXValueLayout(Layout):
 
     def __init__(self, shape, mx_axis=0, mma_version=3):
         super().__init__(shape)
+        assert mx_axis in range(len(shape))
         self.mx_axis = mx_axis
         self.mma_version = mma_version
         *self.leading_shape, self.K, self.N, = shape
+
+    def _maybe_mT(self, data):
+        if self.mx_axis == len(self.leading_shape):
+            return data.mT
+        return data
 
     def swizzle_data(self, data):
         """
@@ -110,13 +116,10 @@ class HopperMXValueLayout(Layout):
         WARNING: Assumes that the matmul will be done in bf16 or fp16!
         Implementing it for fp8 is as easy as making the tile size (8, 8)
         """
-        assert self.mx_axis in (0, 1)
         batch = data.ndim - 2
         assert batch >= 0
         assert self.mma_version in (2, 3)
-        # canonicalize dimensions
-        if self.mx_axis == 0:
-            data = data.mT
+        data = self._maybe_mT(data)
         init_shape = data.shape
 
         # We are loading 8 bf16 elements per thread to use ld.global.v4
@@ -169,14 +172,11 @@ class HopperMXValueLayout(Layout):
         assert data.shape[-1] == init_shape[-1] * 4
         # twiddle the bits
         data = _pack_bits(data, self.mx_axis)
-        # de-canonicalize
-        if self.mx_axis == 0:
-            data = data.mT
+        data = self._maybe_mT(data)
         return data
 
     def unswizzle_data(self, data):
-        if self.mx_axis == 0:
-            data = data.mT
+        data = self._maybe_mT(data)
         data = _unpack_bits(data, self.mx_axis)
         *batch, M, K = data.shape
         # We have two times the elements if we already upcasted to bfloat16
@@ -192,8 +192,7 @@ class HopperMXValueLayout(Layout):
         perm = list(range(b)) + [b + p for p in perm]
         data = data.permute(*perm)
         data = data.reshape(*batch, M * 4, K // 4)
-        if self.mx_axis == 0:
-            data = data.mT
+        data = self._maybe_mT(data)
         return data[..., :self.K, :self.N]
 
     def swizzle_block_shape(self, block_shape):
@@ -201,12 +200,10 @@ class HopperMXValueLayout(Layout):
 
 
 @triton.jit
-def _unshuffle_triton(x, mx_axis: tl.constexpr, mma_version: tl.constexpr):
+def _unshuffle_triton(x, mma_version: tl.constexpr):
     """
     Triton inverse of swizzle_mxfp4_value_hopper
     """
-    tl.static_assert(mx_axis == 0 or mx_axis == 1, "mx_axis must be 0 or 1")
-    tl.static_assert(len(x.shape) == 2, "NYI")
     tl.static_assert(mma_version == 2 or mma_version == 3, "mma_version must be 2 or 3")
     # if mx_axis == 0:
     #     x = x.trans()
@@ -230,7 +227,7 @@ def _unshuffle_triton(x, mx_axis: tl.constexpr, mma_version: tl.constexpr):
 
 
 @triton.jit
-def _unpack_fp4_to_bf16_triton(x, mx_axis: tl.constexpr):
+def _unpack_fp4_to_bf16_triton(x):
     # For now we implement just H100 support (mul.bf16x2)
     # A100 support is possible via fma
     r0, r1 = tl.inline_asm_elementwise(
@@ -278,12 +275,14 @@ def mxfp4_to_bf16_triton(x, scale, mx_axis: tl.constexpr):
     ((x << 1) & 0b1000000000000000) | ((x >> 3) & 0b0000000110000000) | ((x >> 7) & 0b0000000001000000)
     """
     # upcast values to bfloat16
+    tl.static_assert(len(x.shape) == 2)
+    tl.static_assert(mx_axis == 0 or mx_axis == 1, "mx_axis must be 0 or 1")
     tl.static_assert(x.shape[1] % 4 == 0)
     tl.static_assert(x.dtype == tl.uint8)
     if mx_axis == 0:
         x = x.trans()
-    x = _unpack_fp4_to_bf16_triton(x, mx_axis=mx_axis)
-    x = _unshuffle_triton(x, mx_axis=mx_axis, mma_version=3)
+    x = _unpack_fp4_to_bf16_triton(x)
+    x = _unshuffle_triton(x, mma_version=3)
     if mx_axis == 0:
         x = x.trans()
 

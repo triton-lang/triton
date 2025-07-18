@@ -266,7 +266,6 @@ def upcast_from_mxfp_torch(tensor: torch.Tensor, scale: torch.Tensor, target_dty
 
     # Permute the tensor and scale so that the quantization axis becomes the last dimension
     axis = axis if axis >= 0 else axis + ndim
-    print(scale)
     scale = scale.transpose(axis, scale.ndim - 1)
     tensor = tensor.transpose(axis, tensor.ndim - 1)
 

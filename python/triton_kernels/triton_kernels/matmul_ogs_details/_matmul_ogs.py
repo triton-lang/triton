@@ -250,7 +250,7 @@ def _matmul_ogs(
             elif SWIZZLE_MX_SCALE == "HOPPER_SCALE":
                 # Handshake with the swizzling code
                 num_warps: tl.constexpr = tl.extra.cuda.num_warps()
-                w_scales = unswizzle_mxfp4_scale_hopper(tl.load(MxScalePtrs), num_warps=num_warps)
+                w_scales = unswizzle_mxfp4_scale_hopper(tl.load(MxScalePtrs), mx_axis=1, num_warps=num_warps)
             else:
                 w_scales = tl.load(MxScalePtrs, mask=mask_k_scale[None, :], other=0.0)
 
@@ -258,7 +258,6 @@ def _matmul_ogs(
                 # Handshake with the swizzling code
                 tl.static_assert(x_format == "bf16")
                 tl.static_assert(mx_format == "e2m1")
-                tl.static_print(w_scales.shape)
                 w = mxfp4_to_bf16_triton(w.trans(), w_scales, 1)
                 tl.static_assert(w.dtype == tl.bfloat16)
                 acc = acc.trans()
