@@ -17,7 +17,7 @@ jobs:
     env:
       RUNNER_TYPE: ${{ matrix.runner[0] }}
       #TRITON_BUILD_WITH_CCACHE: "true"
-      TRITON_BUILD_WITH_CLANG_LLD: "TRUE"
+      #TRITON_BUILD_WITH_CLANG_LLD: "TRUE"
     name: Build MacOS
     steps:
       - name: Checkout
