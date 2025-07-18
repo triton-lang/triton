@@ -132,8 +132,8 @@ Value createElectPredicateWarp0(Location loc, RewriterBase &rewriter) {
   return b.and_(warp0, createElectPredicate(loc, rewriter));
 }
 
-void createTcgen05Commit(ConversionPatternRewriter &rewriter, Location loc,
-                         Value barrier, Value pred) {
+void createCommit(ConversionPatternRewriter &rewriter, Location loc,
+                  Value barrier, Value pred) {
   PTXBuilder ptxBuilder;
   auto *barrierOperand = ptxBuilder.newAddrOperand(barrier, "r");
   std::string opcode = "tcgen05.commit.cta_group::1.mbarrier::arrive::one.b64";

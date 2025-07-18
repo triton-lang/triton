@@ -65,11 +65,12 @@ def NVWS_ArefGetEnterOp : NVWS_Op<"aref.get.enter"> {
                       These ArefGet "regions" can span multiple iterations. }];
 
   let arguments = (ins NVWS_ArefType:$aref,
-                       I32:$index);
+                       I32:$stage,
+                       I32:$phase);
   let results = (outs Variadic<AnyType>:$results);
   let hasVerifier=1;
   let assemblyFormat = [{
-    $aref `[` $index `]` attr-dict
+    $aref `[` $stage `,` $phase `]` attr-dict
     `:` type($aref) `->` type($results)
   }];
 }
@@ -80,10 +81,10 @@ def NVWS_ArefGetExitOp : NVWS_Op<"aref.get.exit"> {
                       These ArefGet "regions" can span multiple iterations. }];
 
   let arguments = (ins NVWS_ArefType:$aref,
-                       I32:$index,
+                       I32:$stage,
                        NVWS_AsyncOpArrayAttr:$async_ops);
   let assemblyFormat = [{
-    $aref `[` $index `]` $async_ops attr-dict
+    $aref `[` $stage `]` $async_ops attr-dict
     `:` type($aref)
  }];
 }
@@ -94,11 +95,12 @@ def NVWS_ArefPutEnterOp : NVWS_Op<"aref.put.enter"> {
                       These ArefPut "regions" can span multiple iterations. }];
 
   let arguments = (ins NVWS_ArefType:$aref,
-                       I32:$index);
+                       I32:$stage,
+                       I32:$phase);
   let results = (outs Variadic<AnyType>:$results);
   let hasVerifier=1;
   let assemblyFormat = [{
-    $aref `[` $index `]` attr-dict
+    $aref `[` $stage `,` $phase `]` attr-dict
     `:` type($aref) `->` type($results)
   }];
 }
@@ -109,10 +111,10 @@ def NVWS_ArefPutExitOp : NVWS_Op<"aref.put.exit"> {
                       These ArefPut "regions" can span multiple iterations. }];
 
   let arguments = (ins NVWS_ArefType:$aref,
-                       I32:$index,
+                       I32:$stage,
                        NVWS_AsyncOpArrayAttr:$async_ops);
   let assemblyFormat = [{
-    $aref `[` $index `]` $async_ops attr-dict
+    $aref `[` $stage `]` $async_ops attr-dict
     `:` type($aref)
  }];
 }

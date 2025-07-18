@@ -63,7 +63,7 @@ struct AsyncRef {
                StageCluster srcStageCluster) {
     auto zero = b.create<arith::ConstantOp>(b.getI32IntegerAttr(0));
     auto enterOp = b.createInto<triton::nvws::ArefPutEnterOp>(
-        partition, srcStageCluster, viewType, aref, zero);
+        partition, srcStageCluster, viewType, aref, zero, zero);
 
     auto exitOp = [this, &partition, srcStageCluster](PartitionBuilder &b) {
       auto zero = b.create<arith::ConstantOp>(b.getI32IntegerAttr(0));
@@ -79,7 +79,7 @@ struct AsyncRef {
                StageCluster srcStageCluster) {
     auto zero = b.create<arith::ConstantOp>(b.getI32IntegerAttr(0));
     auto enterOp = b.createInto<triton::nvws::ArefGetEnterOp>(
-        partition, srcStageCluster, viewType, aref, zero);
+        partition, srcStageCluster, viewType, aref, zero, zero);
 
     auto exitOp = [this, &partition, srcStageCluster](PartitionBuilder &b) {
       auto zero = b.create<arith::ConstantOp>(b.getI32IntegerAttr(0));

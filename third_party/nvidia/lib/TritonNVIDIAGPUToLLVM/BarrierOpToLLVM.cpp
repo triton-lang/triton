@@ -305,7 +305,7 @@ struct AsyncCompleteOpConversion
       } else {
         pred = t0Pred;
       }
-      LLVM::NVIDIA::createTcgen05Commit(rewriter, loc, smemObj.getBase(), pred);
+      LLVM::NVIDIA::createCommit(rewriter, loc, smemObj.getBase(), pred);
     } else if (trackedOp == nvws::AsyncOp::CpAsync) {
       llvm_unreachable("cpasync support NYI");
     } else if (trackedOp == nvws::AsyncOp::NONE) {
