@@ -602,7 +602,7 @@ lowerLocalLdSt(Location loc, MLIRContext *ctx,
   auto smemAddrAddon = [&](Value smemOffset) {
     TritonLLVMOpBuilder b(loc, rewriter);
     if (auto paddedLayout = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(
-            memDescTy.getEncoding())) {
+            srcTy.getEncoding())) {
       // Apply the offset needed for padding.
       Value padOffset = emitPadding(loc, rewriter, paddedLayout, smemOffset);
       smemOffset = b.add(smemOffset, padOffset);
