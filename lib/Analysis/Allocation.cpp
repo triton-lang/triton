@@ -98,7 +98,7 @@ static SmallVector<unsigned> getRepShapeForCvt(RankedTensorType srcTy,
 // even for threads that do not participate in the atomic operation
 static SmallVector<unsigned> getRepShapeForAtomic(Value result) {
   SmallVector<unsigned> smemShape;
-  if (atomicNeedsSharedMemory(result)) {
+  if (!result.use_empty()) {
     if (auto tensorTy = dyn_cast<RankedTensorType>(result.getType())) {
       // If the result is a tensor, we need to allocate a scratch memory of size
       // equal to the number of unique elements in the tensor shape.

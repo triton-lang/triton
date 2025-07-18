@@ -681,7 +681,7 @@ struct AtomicCASOpConversion
         }
       } else {
         auto old = ptxBuilderAtomicCAS.launch(rewriter, loc, valueElemTy);
-        if (!atomicNeedsSharedMemory(op.getResult())) {
+        if (op.getResult().use_empty()) {
           rewriter.eraseOp(op);
           return success();
         }
@@ -920,7 +920,7 @@ struct AtomicRMWOpConversion
             ScopeMap[op.getScope()]);
 
         auto ASMReturnTy = void_ty(ctx);
-        if (!atomicNeedsSharedMemory(op.getResult())) {
+        if (op.getResult().use_empty()) {
           rewriter.eraseOp(op);
           return success();
         }
@@ -955,7 +955,7 @@ struct AtomicRMWOpConversion
 
         // Enter into predicate block
         rewriter.setInsertionPointToEnd(curBlock);
-        bool doesAtomicNeedMEM = atomicNeedsSharedMemory(op.getResult());
+        bool doesAtomicNeedMEM = !op.getResult().use_empty();
 
         // Setup for SMEM Sync case
         Value atomPtr = tensorTy || !doesAtomicNeedMEM
@@ -1144,7 +1144,7 @@ struct AtomicRMWOpConversion
         auto ASMReturnTy = void_ty(ctx);
         atom(dstOpr, ptrOpr, valOpr).maybePredicate(pred);
         auto old = ptxBuilderAtomicRMW.launch(rewriter, loc, valueElemTy);
-        if (!atomicNeedsSharedMemory(op.getResult())) {
+        if (op.getResult().use_empty()) {
           rewriter.eraseOp(op);
           return success();
         }
