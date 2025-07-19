@@ -1,4 +1,4 @@
-from triton.backends.compiler import BaseBackend, GPUTarget, Language
+from triton.backends.compiler import BaseBackend, GPUTarget, Language, enable_debug
 from triton._C.libtriton import ir, passes, llvm, amd
 from triton import knobs
 from dataclasses import dataclass
@@ -178,7 +178,7 @@ class HIPBackend(BaseBackend):
     @staticmethod
     def make_ttir(mod, metadata, options):
         pm = ir.pass_manager(mod.context)
-        pm.enable_debug()
+        enable_debug(pm)
         passes.common.add_inliner(pm)
         passes.ttir.add_rewrite_tensor_pointer(pm)
         passes.ttir.add_rewrite_tensor_descriptor_to_pointer(pm)
@@ -195,12 +195,12 @@ class HIPBackend(BaseBackend):
     @staticmethod
     def make_ttgir(mod, metadata, options):
         pm = ir.pass_manager(mod.context)
-        pm.enable_debug()
+        enable_debug(pm)
         passes.ttir.add_convert_to_ttgpuir(pm, f"hip:{options.arch}", options.num_warps, options.warp_size,
                                            options.num_ctas)
         pm.run(mod)
         pm = ir.pass_manager(mod.context)
-        pm.enable_debug()
+        enable_debug(pm)
         passes.ttgpuir.add_coalesce(pm)
         passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_optimize_thread_locality(pm)
@@ -255,7 +255,7 @@ class HIPBackend(BaseBackend):
     def gluon_to_ttgir(src, metadata, options):
         mod = src
         pm = ir.pass_manager(mod.context)
-        pm.enable_debug()
+        enable_debug(pm)
 
         passes.gluon.add_inliner(pm)
         passes.gluon.add_resolve_auto_encodings(pm)
@@ -272,7 +272,7 @@ class HIPBackend(BaseBackend):
         mod = src
         # TritonGPU -> LLVM-IR (MLIR)
         pm = ir.pass_manager(mod.context)
-        pm.enable_debug()
+        enable_debug(pm)
         # custom_lds_size is an experimental parameter that defines amount of LDS available
         # for one thread block. Measured in bytes.
         #
