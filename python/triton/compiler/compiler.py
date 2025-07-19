@@ -319,6 +319,13 @@ def compile(src, target=None, options=None, _env_vars=None):
     if compilation_listener:
         timer.finished_ir_initialization()
     for ext, compile_ir in list(stages.items())[first_stage:]:
+        """
+        if ext == 'ttir':
+            print("using hacked!!!!!!!!\n")
+            next_module = parse('/work/triton/e0.ttir', ext, context)
+        else:
+            next_module = compile_ir(module, metadata)
+        """
         next_module = compile_ir(module, metadata)
         ir_filename = f"{file_name}.{ext}"
         if fn_override_manager is None:

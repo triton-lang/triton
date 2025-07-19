@@ -13,7 +13,7 @@ from triton.experimental.gluon.language.nvidia.blackwell import mbarrier, tma, T
 from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
 from triton._filecheck import filecheck_test, run_parser
 import triton.language as tl
-from triton._internal_testing import is_cuda, is_ampere_or_newer, is_blackwell, is_hopper, is_hopper_or_newer, is_hip_cdna4
+from triton._internal_testing import is_cuda, is_ampere_or_newer, is_blackwell, is_hopper, is_hopper_or_newer, is_hip_cdna3plus
 from triton.compiler.errors import CompilationError, CompileTimeAssertionFailure
 
 TARGET_PAT = re.compile('ttg.target = "[^"]*"')
@@ -29,8 +29,8 @@ def convert_layout_kernel(XBLOCK: ttgl.constexpr, layout_a: ttgl.constexpr, layo
     res = ttgl.convert_layout(x, layout_b)  # noqa: F841
 
 
-# generic assembly format from CDNA4
-@pytest.mark.skipif(not is_cuda() and not is_hip_cdna4(), reason="Requires CUDA or CDNA4")
+# generic assembly format from CDNA3
+@pytest.mark.skipif(not is_cuda() and not is_hip_cdna3plus(), reason="Requires CUDA or CDNA3+")
 def test_convert_layout(fresh_knobs):
     knobs.compilation.disable_line_info = True
 
@@ -224,7 +224,7 @@ def shared_memory_subview_kernel(XBLOCK: ttgl.constexpr, layout: ttgl.constexpr,
     view.store(value.trans())
 
 
-@pytest.mark.skipif(not is_cuda() and not is_hip_cdna4(), reason="Requires CUDA or CDNA4")
+@pytest.mark.skipif(not is_cuda() and not is_hip_cdna3plus(), reason="Requires CUDA or CDNA3+")
 def test_shared_memory_subview(fresh_knobs):
     knobs.compilation.disable_line_info = True
 
@@ -851,7 +851,7 @@ def broadcast_kernel():
     0 + a + b
 
 
-@pytest.mark.skipif(not is_cuda() and not is_hip_cdna4(), reason="Requires CUDA or CDNA4")
+@pytest.mark.skipif(not is_cuda() and not is_hip_cdna3plus(), reason="Requires CUDA or CDNA3+")
 def test_broadcast(fresh_knobs):
     knobs.compilation.disable_line_info = True
 
@@ -906,7 +906,7 @@ def math_kernel():
     ttgl.fma(a, b, c)
 
 
-@pytest.mark.skipif(not is_cuda() and not is_hip_cdna4(), reason="Requires CUDA or CDNA4")
+@pytest.mark.skipif(not is_cuda() and not is_hip_cdna3plus(), reason="Requires CUDA or CDNA3+")
 def test_math(fresh_knobs):
     knobs.compilation.disable_line_info = True
 
@@ -977,7 +977,7 @@ def reduce_kernel(out, WARP_SIZE: ttgl.constexpr):
     tl.store(out + ttgl.arange(0, 16, s0.type.layout), result)
 
 
-@pytest.mark.skipif(not is_cuda() and not is_hip_cdna4(), reason="Requires CUDA or CDNA4")
+@pytest.mark.skipif(not is_cuda() and not is_hip_cdna3plus(), reason="Requires CUDA or CDNA3+")
 def test_reduce(fresh_knobs):
     knobs.compilation.disable_line_info = True
 
@@ -1024,7 +1024,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 } loc(#loc)
 """
 
-    if is_hip_cdna4():
+    if is_hip_cdna3plus():
         h = reduce_kernel.warmup(MockTensor(ttgl.float32), WARP_SIZE=64, sanitize_overflow=False, grid=(1, ))
         expected = re.sub(r"WARP_SIZE", "64", expected_template)
     else:
@@ -1036,7 +1036,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     expecttest.assert_expected_inline(anonymize_ir(h.asm["ttgir"]), expected)
 
 
-@pytest.mark.skipif(not is_cuda() and not is_hip_cdna4(), reason="Requires CUDA or CDNA4")
+@pytest.mark.skipif(not is_cuda() and not is_hip_cdna3plus(), reason="Requires CUDA or CDNA3+")
 @filecheck_test
 @gluon.jit
 def test_elementwise_core():
@@ -1064,7 +1064,7 @@ def linear_layout_kernel():
     ttgl.arange(0, 256, layout=ll)
 
 
-@pytest.mark.skipif(not is_cuda() and not is_hip_cdna4(), reason="Requires CUDA or CDNA4")
+@pytest.mark.skipif(not is_cuda() and not is_hip_cdna3plus(), reason="Requires CUDA or CDNA3+")
 def test_linear_layout(fresh_knobs):
     knobs.compilation.disable_line_info = True
     h = linear_layout_kernel.warmup(grid=(1, ))
@@ -1347,11 +1347,10 @@ def amd_mfma_layout_kernel():
                                                                                                    0]], shape=[128, 32])
 
     x = ttgl.full([128, 32], 0, ttgl.float32, ll)
-    # CHECK:#mma = #ttg.amd_mfma<{versionMajor = 4, versionMinor = 0, warpsPerCTA = [1, 1], instrShape = [32, 32],
     res = ttgl.convert_layout(x, mfma_layout)  # noqa: F841
 
 
-@pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
+@pytest.mark.skipif(not is_hip_cdna3plus(), reason="Requires CDNA3+")
 def test_amd_mfma_layout(fresh_knobs):
     knobs.compilation.disable_line_info = True
 
@@ -1370,3 +1369,47 @@ def test_amd_mfma_layout(fresh_knobs):
 }) {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} : () -> () loc(#loc)
 #loc = loc(unknown)
 """)
+
+
+@gluon.jit
+def buffer_ops_kernel(x, y):
+    # M: tl.int64 = 64
+    # N: tl.int64 = 64
+    layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[1, 64], warps_per_cta=[4, 1],
+                                                order=[1, 0])
+
+    input_offsets = ttgl.arange(0, 64 * 64).reshape(64, 64)
+    # layout is required or else the validation of buffer_load will fail due to shapes of result and offsets are different
+    input_offsets = ttgl.convert_layout(input_offsets, layout)
+    mask = ttgl.full((64, 64), 1, tl.int1, layout=layout)
+    other = ttgl.full((64, 64), 1.0, tl.float32, layout=layout)
+    """
+    this syntax is not supported since validation in the def of buffer_load requires ptr not to be a block of ptrs.
+    so, the global ptr should not be used like the global ptr in ttgl.load
+    # x_ptrs = x + input_offsets
+    # a = ttgl.amd.cdna3.create_buffer_load(ptr=x_ptrs, element_type=tl.float32, offsets=input_offsets, cache='.ca', mask=mask, other=other, layout=ll)
+    """
+    a = ttgl.amd.cdna3.create_buffer_load(ptr=x, element_type=tl.float32, offsets=input_offsets, cache='.ca', mask=mask,
+                                          other=other, layout=layout)
+
+    b = ttgl.amd.cdna3.create_buffer_load(ptr=x, element_type=tl.float32, offsets=input_offsets, cache='.ca', mask=mask,
+                                          other=other, layout=layout)
+    c = tl.dot(a, b)
+
+    output_offsets = ttgl.arange(0, 64 * 64).reshape(64, 64)
+    output_offsets = ttgl.convert_layout(output_offsets, layout)
+    # y_ptrs = y + output_offsets
+    ttgl.amd.cdna3.create_buffer_store(stored_value=c, ptr=y, offsets=output_offsets, cache='.ca',
+                                       mask=mask)  #noqa: F841
+
+
+@pytest.mark.skipif(not is_hip_cdna3plus(), reason="Requires CDNA3+")
+def test_buffer_ops(fresh_knobs):
+    knobs.compilation.disable_line_info = True
+
+    x = torch.randn((64, 64), device='cuda', dtype=torch.float32)
+    y = torch.randn((64, 64), device='cuda', dtype=torch.float32)
+
+    h = buffer_ops_kernel.warmup(x, y, grid=(1, ), sanitize_overflow=False)
+    print("ttir is ", h.asm['source'])
+    # expecttest.assert_expected_inline(h.asm["ttgir"], '')
