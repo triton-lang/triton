@@ -1503,7 +1503,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.tar
     %0 = tt.atomic_rmw fadd, relaxed, sys, %arg0, %arg2, %arg1 : (tensor<16x!tt.ptr<f32>, #blocked0>, tensor<16xf32, #blocked0>, tensor<16xi1, #blocked0>) -> tensor<16xf32, #blocked0>
     // CHECK: st.shared
     // CHECK: nvvm.barrier0
-    // CHECK: ld.shared
+    // CHECK: llvm.load
     tt.store %arg0, %0 : tensor<16x!tt.ptr<f32>, #blocked0>
     tt.return
   }
@@ -1518,7 +1518,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.tar
     %0 = tt.atomic_rmw fadd, relaxed, sys, %arg0, %arg2, %arg1 : (tensor<128x!tt.ptr<f32>, #blocked0>, tensor<128xf32, #blocked0>, tensor<128xi1, #blocked0>) -> tensor<128xf32, #blocked0>
     // CHECK-NOT: st.shared
     // CHECK-NOT: nvvm.barrier0
-    // CHECK-NOT: ld.shared
+    // CHECK-NOT: llvm.load
     tt.store %arg0, %0 : tensor<128x!tt.ptr<f32>, #blocked0>
     tt.return
   }
