@@ -148,15 +148,22 @@ Value createCachePolicy(triton::EvictionPolicy opEvict,
   return policyRet;
 }
 
-void broadcastTensorValues(Operation *op, RankedTensorType tensorTy,
-                           Location loc, MLIRContext *ctx,
-                           ConversionPatternRewriter &rewriter,
-                           SmallVector<Value> &resultVals, Type valueElemTy,
-                           TritonLLVMOpBuilder &b, Value threadPred,
-                           const NVIDIA::TargetInfo &targetInfo,
-                           const LLVMTypeConverter *typeConverter) {
-  if (!op->hasAttr("allocation.offset") && tensorTy)
+void finalizeTensorAtomicResults(Operation *op, RankedTensorType tensorTy,
+                                 Location loc, MLIRContext *ctx,
+                                 ConversionPatternRewriter &rewriter,
+                                 SmallVector<Value> &resultVals,
+                                 Type valueElemTy, TritonLLVMOpBuilder &b,
+                                 Value threadPred,
+                                 const NVIDIA::TargetInfo &targetInfo,
+                                 const LLVMTypeConverter *typeConverter) {
+  Type structTy = typeConverter->convertType(tensorTy);
+  if (!op->hasAttr("allocation.offset")) {
+    // No broadcasting, just pack the values into a struct
+    Value resultStruct =
+        packLLElements(loc, typeConverter, resultVals, rewriter, structTy);
+    rewriter.replaceOp(op, {resultStruct});
     return;
+  }
 
   auto dstLayout = ttg::toLinearLayout(tensorTy);
   auto kReg = str_attr("register");
@@ -198,7 +205,6 @@ void broadcastTensorValues(Operation *op, RankedTensorType tensorTy,
                 /*maskSpanAffineOffset=*/0, rewriter, targetInfo, {}, emitLd);
 
   // Create the result struct and replace the operation
-  Type structTy = typeConverter->convertType(tensorTy);
   Value resultStruct =
       packLLElements(loc, typeConverter, resultVals, rewriter, structTy);
   rewriter.replaceOp(op, {resultStruct});
@@ -759,9 +765,9 @@ struct AtomicCASOpConversion
       }
     }
 
-    broadcastTensorValues(op, tensorTy, loc, ctx, rewriter, resultVals,
-                          valueElemTy, b, threadPred, targetInfo,
-                          getTypeConverter());
+    finalizeTensorAtomicResults(op, tensorTy, loc, ctx, rewriter, resultVals,
+                                valueElemTy, b, threadPred, targetInfo,
+                                getTypeConverter());
     return success();
   }
 };
@@ -1177,9 +1183,9 @@ public:
         rewriter.replaceOp(op, {ret});
       }
     }
-    broadcastTensorValues(op, tensorTy, loc, ctx, rewriter, resultVals,
-                          valueElemTy, b, threadPred, targetInfo,
-                          getTypeConverter());
+    finalizeTensorAtomicResults(op, tensorTy, loc, ctx, rewriter, resultVals,
+                                valueElemTy, b, threadPred, targetInfo,
+                                getTypeConverter());
     return success();
   }
 };
