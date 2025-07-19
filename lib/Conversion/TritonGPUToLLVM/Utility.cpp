@@ -465,7 +465,7 @@ largestVectorisation(MLIRContext *ctx, const LinearLayout &cvt, int bitwidth,
     }
     return {v, permutation};
   }
-  llvm_unreachable("No vectorisation found");
+  llvm_unreachable("Vectorization < 1 is not valid");
 }
 } // namespace
 
@@ -529,8 +529,9 @@ SmallVector<Value> lowerLdSt(
   }
 
   auto tile = LinearLayout::identity1D(elemsPerVec, kReg, kOffset);
-  auto quot = *divideLeft(cvt, tile);
-  LinearLayout reps = zerosLike(tile) * quot;
+  auto quot = divideLeft(cvt, tile);
+  assert(quot.has_value() && "cvt must be divisible by tile");
+  LinearLayout reps = zerosLike(tile) * *quot;
 
   auto [nAdditive, permStrides] =
       actionAdditiveStrides(reps, maskSpanAffineOffset);

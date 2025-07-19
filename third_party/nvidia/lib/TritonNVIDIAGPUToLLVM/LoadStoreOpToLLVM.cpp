@@ -17,6 +17,7 @@
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
+#include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 #include "triton/Tools/LayoutUtils.h"
@@ -47,6 +48,17 @@ Value maybeAnd(RewriterBase &rewriter, Location loc, Value a, Value b) {
     return tb.and_(a, b);
   }
   return a ? a : b;
+}
+
+void createBarrier(ConversionPatternRewriter &rewriter, Location loc,
+                   int numCTAs) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  if (numCTAs == 1) {
+    b.barrier();
+  } else {
+    rewriter.create<triton::nvidia_gpu::ClusterArriveOp>(loc, false);
+    rewriter.create<triton::nvidia_gpu::ClusterWaitOp>(loc);
+  }
 }
 
 // Return a predicate that is true only if the current thread holds unique data,
@@ -134,6 +146,68 @@ Value createCachePolicy(triton::EvictionPolicy opEvict,
   }
 
   return policyRet;
+}
+
+void finalizeTensorAtomicResults(Operation *op, RankedTensorType tensorTy,
+                                 Location loc, MLIRContext *ctx,
+                                 ConversionPatternRewriter &rewriter,
+                                 SmallVector<Value> &resultVals,
+                                 Type valueElemTy, TritonLLVMOpBuilder &b,
+                                 Value threadPred,
+                                 const NVIDIA::TargetInfo &targetInfo,
+                                 const LLVMTypeConverter *typeConverter) {
+  Type structTy = typeConverter->convertType(tensorTy);
+  if (!op->hasAttr("allocation.offset")) {
+    // No broadcasting, just pack the values into a struct
+    Value resultStruct =
+        packLLElements(loc, typeConverter, resultVals, rewriter, structTy);
+    rewriter.replaceOp(op, {resultStruct});
+    return;
+  }
+
+  auto dstLayout = ttg::toLinearLayout(tensorTy);
+  auto kReg = str_attr("register");
+  auto kLane = str_attr("lane");
+  auto kWarp = str_attr("warp");
+  dstLayout = dstLayout.sublayout({kReg, kLane, kWarp},
+                                  to_vector(dstLayout.getOutDimNames()));
+  dstLayout = dstLayout.reshapeOuts(
+      {{str_attr("offset"), dstLayout.getTotalOutDimSize()}});
+  auto smemBase = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op);
+
+  auto emitSt = [&](ConversionPatternRewriter &rewriter, Location loc,
+                    ArrayRef<Value> vals, Value shmemAddr, int idx,
+                    VectorType vecTy) -> SmallVector<Value> {
+    auto length = vecTy.getNumElements();
+    Value valsVec =
+        packLLVector(loc, ArrayRef<Value>(vals).slice(idx, length), rewriter);
+    targetInfo.storeDShared(rewriter, loc, shmemAddr, std::nullopt, valsVec,
+                            threadPred);
+    return {};
+  };
+
+  auto emitLd = [&](ConversionPatternRewriter &rewriter, Location loc,
+                    ArrayRef<Value> vals, Value shmemAddr, int idx,
+                    VectorType vecTy) -> SmallVector<Value> {
+    Value loadedVec = targetInfo.loadDShared(rewriter, loc, shmemAddr,
+                                             std::nullopt, vecTy, b.true_val());
+    return unpackLLVector(loc, loadedVec, rewriter);
+  };
+
+  lowerLdSt(loc, ctx, dstLayout, resultVals, valueElemTy, smemBase,
+            /*affineOffset=*/b.i32_val(0),
+            /*maskSpanAffineOffset=*/0, rewriter, targetInfo, {}, emitSt);
+  int numCTAs = triton::gpu::getNumCTAs(tensorTy.getEncoding());
+  createBarrier(rewriter, loc, numCTAs);
+  resultVals =
+      lowerLdSt(loc, ctx, dstLayout, resultVals, valueElemTy, smemBase,
+                /*affineOffset=*/b.i32_val(0),
+                /*maskSpanAffineOffset=*/0, rewriter, targetInfo, {}, emitLd);
+
+  // Create the result struct and replace the operation
+  Value resultStruct =
+      packLLElements(loc, typeConverter, resultVals, rewriter, structTy);
+  rewriter.replaceOp(op, {resultStruct});
 }
 
 // Contains some helper functions for both Load and Store conversions.
@@ -564,17 +638,6 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
   int computeCapability;
 };
 
-void createBarrier(ConversionPatternRewriter &rewriter, Location loc,
-                   int numCTAs) {
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  if (numCTAs == 1) {
-    b.barrier();
-  } else {
-    rewriter.create<triton::nvidia_gpu::ClusterArriveOp>(loc, false);
-    rewriter.create<triton::nvidia_gpu::ClusterWaitOp>(loc);
-  }
-}
-
 struct AtomicCASOpConversion
     : public ConvertOpToLLVMPattern<triton::AtomicCASOp>,
       public LoadStoreConversionBase {
@@ -680,7 +743,7 @@ struct AtomicCASOpConversion
         }
       } else {
         auto old = ptxBuilderAtomicCAS.launch(rewriter, loc, valueElemTy);
-        if (!atomicNeedsSharedMemory(op.getResult())) {
+        if (op.getResult().use_empty()) {
           rewriter.eraseOp(op);
           return success();
         }
@@ -699,15 +762,13 @@ struct AtomicCASOpConversion
         createBarrier(rewriter, loc, numCTAs);
         Value ret = b.load(valueElemTy, atomPtr);
         rewriter.replaceOp(op, {ret});
+        return success();
       }
     }
 
-    if (tensorTy) {
-      Type structTy = getTypeConverter()->convertType(tensorTy);
-      Value resultStruct = packLLElements(loc, getTypeConverter(), resultVals,
-                                          rewriter, structTy);
-      rewriter.replaceOp(op, {resultStruct});
-    }
+    finalizeTensorAtomicResults(op, tensorTy, loc, ctx, rewriter, resultVals,
+                                valueElemTy, b, threadPred, targetInfo,
+                                getTypeConverter());
     return success();
   }
 };
@@ -776,6 +837,7 @@ struct AtomicRMWOpConversion
     return true;
   }
 
+public:
   LogicalResult
   matchAndRewrite(triton::AtomicRMWOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
@@ -884,7 +946,7 @@ struct AtomicRMWOpConversion
             ScopeMap[op.getScope()]);
 
         auto ASMReturnTy = void_ty(ctx);
-        if (!atomicNeedsSharedMemory(op.getResult())) {
+        if (op.getResult().use_empty()) {
           rewriter.eraseOp(op);
           return success();
         }
@@ -896,7 +958,7 @@ struct AtomicRMWOpConversion
         createBarrier(rewriter, loc, numCTAs);
         Value ret = b.load(valueElemTy, atomPtr);
         rewriter.replaceOp(op, {ret});
-        continue;
+        return success();
       }
 
       // Let LLVM handle compare+swap loop; branch-based pred should be fine
@@ -919,7 +981,7 @@ struct AtomicRMWOpConversion
 
         // Enter into predicate block
         rewriter.setInsertionPointToEnd(curBlock);
-        bool doesAtomicNeedMEM = atomicNeedsSharedMemory(op.getResult());
+        bool doesAtomicNeedMEM = !op.getResult().use_empty();
 
         // Setup for SMEM Sync case
         Value atomPtr = tensorTy || !doesAtomicNeedMEM
@@ -990,6 +1052,7 @@ struct AtomicRMWOpConversion
           b.barrier();
           Value ret = b.load(valueElemTy, atomPtr);
           rewriter.replaceOp(op, {ret});
+          return success();
         }
         continue;
       }
@@ -1090,7 +1153,7 @@ struct AtomicRMWOpConversion
           retType = valueElemTy;
         }
 
-        auto ret = ptxBuilderAtomicRMW.launch(rewriter, loc, retType);
+        Value ret = ptxBuilderAtomicRMW.launch(rewriter, loc, retType);
 
         if (vec > 1) {
           for (unsigned ii = 0; ii < vec; ++ii) {
@@ -1104,12 +1167,11 @@ struct AtomicRMWOpConversion
         } else {
           resultVals[i] = ret;
         }
-
       } else {
         auto ASMReturnTy = void_ty(ctx);
         atom(dstOpr, ptrOpr, valOpr).maybePredicate(pred);
         auto old = ptxBuilderAtomicRMW.launch(rewriter, loc, valueElemTy);
-        if (!atomicNeedsSharedMemory(op.getResult())) {
+        if (op.getResult().use_empty()) {
           rewriter.eraseOp(op);
           return success();
         }
@@ -1121,14 +1183,12 @@ struct AtomicRMWOpConversion
         createBarrier(rewriter, loc, numCTAs);
         Value ret = b.load(valueElemTy, atomPtr);
         rewriter.replaceOp(op, {ret});
+        return success();
       }
     }
-    if (tensorTy) {
-      Type structTy = getTypeConverter()->convertType(tensorTy);
-      Value resultStruct = packLLElements(loc, getTypeConverter(), resultVals,
-                                          rewriter, structTy);
-      rewriter.replaceOp(op, {resultStruct});
-    }
+    finalizeTensorAtomicResults(op, tensorTy, loc, ctx, rewriter, resultVals,
+                                valueElemTy, b, threadPred, targetInfo,
+                                getTypeConverter());
     return success();
   }
 };
