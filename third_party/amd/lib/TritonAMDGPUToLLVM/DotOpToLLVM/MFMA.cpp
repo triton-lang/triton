@@ -665,52 +665,81 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
     Value firstMfma;
     auto tb = TritonLLVMOpBuilder(loc, rewriter);
     auto vecTy = vec_ty(dstElemTy, elemsPerVec);
-    for (int b = 0; b < numRepB; ++b) {
-      for (int m = 0; m < numRepM; ++m) {
-        for (int n = 0; n < numRepN; ++n) {
-          Value acc = tb.undef(vecTy);
-          for (unsigned v = 0; v < elemsPerVec; ++v) {
-            acc = tb.insert_element(
-                vecTy, acc,
-                fc[b * numRepM * numRepN * elemsPerVec +
-                   m * numRepN * elemsPerVec + n * elemsPerVec + v],
-                tb.i32_val(v));
-          }
-          acc = zeroAuxiliarBlocks(subBlocks, acc);
-          for (int k = 0; k < numVecInKBase; k++) {
-            if (existBothScales) {
-              if (mfmaLayout.getIsTransposed()) {
-                acc = generateScaledMFMAOp(
-                    intrinsicName, operandB[{b, n, k}], operandA[{b, m, k}],
-                    acc, operandBScale[{b, n, k}], operandAScale[{b, m, k}],
-                    maybeMfmaIntrinsic->bElementType,
-                    maybeMfmaIntrinsic->aElementType);
-              } else {
-                acc = generateScaledMFMAOp(
-                    intrinsicName, operandA[{b, m, k}], operandB[{b, n, k}],
-                    acc, operandAScale[{b, m, k}], operandBScale[{b, n, k}],
-                    maybeMfmaIntrinsic->aElementType,
-                    maybeMfmaIntrinsic->bElementType);
-              }
-            } else {
-              if (mfmaLayout.getIsTransposed()) {
-                acc = generateScaledMFMAOp(intrinsicName, operandB[{b, n, k}],
-                                           operandA[{b, m, k}], acc,
-                                           maybeMfmaIntrinsic->bElementType,
-                                           maybeMfmaIntrinsic->aElementType);
-              } else {
-                acc = generateScaledMFMAOp(intrinsicName, operandA[{b, m, k}],
-                                           operandB[{b, n, k}], acc,
-                                           maybeMfmaIntrinsic->aElementType,
-                                           maybeMfmaIntrinsic->bElementType);
-              }
+
+    // 2-step pingpong got local_loads + dot_scaled in the dot cluster
+    // from the first step in the transform pingpong pass.
+    // Here, in the second step, it splits operations into two clusters
+    // The first cluster has local_load with mfma from the first half of K
+    // and the second cluster with the other half K of mfma.
+    // By splitting in K dim, we can retire registers used by the
+    // first half of mfma, backend compiler is supposed to schedule it.
+    int halfPoint = numVecInKBase * numRepB * numRepM * numRepN / 2;
+    int currIter = 0;
+    bool is2Step = false;
+    int innerK = 0, outerK = 0, innerKBound = 1, outerKBound = 1;
+    // In order to split mfma by K, change the outermost loop iterates
+    // over the K in emitting the mfma operations.
+    if (auto pingpongUnitAttr = op->getAttr("pingpong_2step")) {
+      is2Step = true;
+      outerKBound = numVecInKBase;
+    } else
+      innerKBound = numVecInKBase;
+
+    for (outerK = 0; outerK < outerKBound; outerK++) {
+      for (int b = 0; b < numRepB; ++b) {
+        for (int m = 0; m < numRepM; ++m) {
+          for (int n = 0; n < numRepN; ++n) {
+            // Insert pingpong cluster barrier when needed.
+            if (is2Step && currIter++ == halfPoint) {
+              rewriter.create<ROCDL::SchedBarrier>(loc, 0);
+              rewriter.create<ROCDL::SBarrierOp>(loc);
+              rewriter.create<ROCDL::SchedBarrier>(loc, 0);
             }
-            if (!firstMfma)
-              firstMfma = acc;
+            Value acc = tb.undef(vecTy);
+            for (unsigned v = 0; v < elemsPerVec; ++v) {
+              acc = tb.insert_element(
+                  vecTy, acc,
+                  fc[b * numRepM * numRepN * elemsPerVec +
+                     m * numRepN * elemsPerVec + n * elemsPerVec + v],
+                  tb.i32_val(v));
+            }
+            acc = zeroAuxiliarBlocks(subBlocks, acc);
+            for (innerK = 0; innerK < innerKBound; innerK++) {
+              int k = is2Step ? outerK : innerK;
+              if (existBothScales) {
+                if (mfmaLayout.getIsTransposed()) {
+                  acc = generateScaledMFMAOp(
+                      intrinsicName, operandB[{b, n, k}], operandA[{b, m, k}],
+                      acc, operandBScale[{b, n, k}], operandAScale[{b, m, k}],
+                      maybeMfmaIntrinsic->bElementType,
+                      maybeMfmaIntrinsic->aElementType);
+                } else {
+                  acc = generateScaledMFMAOp(
+                      intrinsicName, operandA[{b, m, k}], operandB[{b, n, k}],
+                      acc, operandAScale[{b, m, k}], operandBScale[{b, n, k}],
+                      maybeMfmaIntrinsic->aElementType,
+                      maybeMfmaIntrinsic->bElementType);
+                }
+              } else {
+                if (mfmaLayout.getIsTransposed()) {
+                  acc = generateScaledMFMAOp(intrinsicName, operandB[{b, n, k}],
+                                             operandA[{b, m, k}], acc,
+                                             maybeMfmaIntrinsic->bElementType,
+                                             maybeMfmaIntrinsic->aElementType);
+                } else {
+                  acc = generateScaledMFMAOp(intrinsicName, operandA[{b, m, k}],
+                                             operandB[{b, n, k}], acc,
+                                             maybeMfmaIntrinsic->aElementType,
+                                             maybeMfmaIntrinsic->bElementType);
+                }
+              }
+              if (!firstMfma)
+                firstMfma = acc;
+            }
+            acc = reduceSubBlocks(subBlocks, acc);
+            adjustAccForSmallKDim(fc, acc, dstElemTy, b, m, n, numRepM, numRepN,
+                                  kDimInstrSize, kDimOperandSize, elemsPerVec);
           }
-          acc = reduceSubBlocks(subBlocks, acc);
-          adjustAccForSmallKDim(fc, acc, dstElemTy, b, m, n, numRepM, numRepN,
-                                kDimInstrSize, kDimOperandSize, elemsPerVec);
         }
       }
     }

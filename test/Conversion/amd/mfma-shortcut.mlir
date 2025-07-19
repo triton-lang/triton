@@ -16,21 +16,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 // -----
 
-#mfma = #ttg.amd_mfma<{version = 2, warpsPerCTA = [4, 1], instrShape = [16, 16], isTransposed = true}>
-#dotop = #ttg.dot_op<{opIdx = 0, parent = #mfma, kWidth=8}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
-  // GFX942-LABEL: no_shortcut_mfma16
-  tt.func public @no_shortcut_mfma16(%arg0: tensor<16x16xf16, #mfma>) {
-    // GFX942: store
-    // GFX942: load
-    // GFX942: llvm.return
-    %0 = ttg.convert_layout %arg0 : tensor<16x16xf16, #mfma> -> tensor<16x16xf16, #dotop>
-    tt.return
-  }
-}
-
-// -----
-
 #mfma = #ttg.amd_mfma<{version = 3, warpsPerCTA = [4, 1], instrShape = [32, 32], isTransposed = true}>
 #dotop0 = #ttg.dot_op<{opIdx = 0, parent = #mfma, kWidth=8}>
 

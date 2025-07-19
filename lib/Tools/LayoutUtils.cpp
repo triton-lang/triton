@@ -1,5 +1,6 @@
 #include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/GenericSwizzling.h"
+#include "llvm/ADT/SmallSet.h"
 
 namespace mlir::triton {
 
@@ -444,6 +445,139 @@ LinearLayout transposeLinearLayout(LinearLayout layout, ArrayRef<int> order) {
   }
   return LinearLayout(std::move(namedBases),
                       to_vector(layout.getOutDimNames()));
+}
+
+LinearLayout reorder_like(const LinearLayout &x, const LinearLayout &y) {
+  // This will check that the names are the same up to permutation, and
+  // apply the necessary permutation:
+  auto x2 = x.transposeOuts(llvm::to_vector(y.getOutDimNames()));
+  auto x3 = x2.transposeIns(llvm::to_vector(y.getInDimNames()));
+  return x3;
+}
+
+LinearLayout basisPermutationLayout(const LinearLayout &src,
+                                    const LinearLayout &dst) {
+  // This function computes a permutation layout `P` which satisfies the
+  // property `src = dst \circ P`. It requires that the multiset of basis
+  // vectors for each of `src` and `dst` agree and that the nonzero values in
+  // each of the multisets are unique. I.e., broadcasting is allowed in either
+  // layout so long as the degree of broadcasting (the number of zero basis
+  // vectors) is the same between the two layouts.
+  //
+  // The orders of the input and output dimensions of `P` are set to be the
+  // order of the input dimensions of `src`.
+  //
+  // The mapping of broadcasting basis vectors prioritizes keeping such vectors
+  // as fixed points of the permutation. I.e., if `src[inDim][i]` and
+  // `dst[inDim][i]` are zero vectors, then `P[inDim][i][inDimIdx] == 1 << i`,
+  // where `inDimIdx` is the index of `inDim` in `src`. Otherwise, they are
+  // paired according to their order of appearance in the two layouts, again
+  // following the order of the input dimensions of `src`.
+  //
+  // The algorithm first performs a linear scan over the columns of `dst` and
+  // `src` to build a map from ('flattened') basis vectors to the input
+  // vectors of `dst` while tracking the fixed-point zero vectors and 'free'
+  // zero vectors. It then performs a second linear scan over `src` to build
+  // the basis of `P`.
+
+  // Check that the input and output dimensions are equal up to ordering.
+  auto srcInDims = src.getInDimNames();
+  assert(std::is_permutation(srcInDims.begin(), srcInDims.end(),
+                             dst.getInDimNames().begin()) &&
+         "Layouts must have same input dimensions");
+  for (auto inDim : srcInDims) {
+    assert(src.getInDimSize(inDim) == dst.getInDimSize(inDim) &&
+           "Layouts must have same input dimension sizes");
+  }
+  auto srcOutDims = src.getOutDims();
+  assert(std::is_permutation(srcOutDims.begin(), srcOutDims.end(),
+                             dst.getOutDims().begin()) &&
+         "Layouts must have same output dimensions and dimension sizes");
+
+  auto srcFlat = src.flattenOuts();
+  // Reorder the output dimensions of `dst` if necessary before flattening, as
+  // flattening depends on the order.
+  LinearLayout dstFlat;
+  if (!llvm::equal(src.getOutDims(), dst.getOutDims())) {
+    auto temp = dst.transposeOuts(llvm::to_vector(src.getOutDimNames()));
+    dstFlat = temp.flattenOuts();
+  } else {
+    dstFlat = dst.flattenOuts();
+  }
+
+  // Populate the map of flattened values to dst inputs and track zero vectors.
+  // The `commonZeros` become fixed-points of `P`, while the 'free' zeros are
+  // later paired with one another.
+  DenseMap<int32_t, std::pair<StringAttr, int32_t>> valToDstInput;
+  llvm::SmallDenseMap<StringAttr, llvm::SmallSet<int32_t, 4>> commonZeros;
+  SmallVector<std::pair<StringAttr, int32_t>> dstFreeZeros;
+  size_t srcFreeZerosCount = 0;
+
+  // We traverse the input dimensions according to their order in `src` so that
+  // 'free' zero vectors for a given input dimension in `src` prefer to map to
+  // 'free' zero vectors in the same dimension in `dst.
+  for (auto inDim : srcInDims) {
+    int inDimSize = dstFlat.getInDimSizeLog2(inDim);
+    for (int i = 0; i < inDimSize; ++i) {
+      int32_t dstVal = dstFlat.getBasis(inDim, i)[0];
+      int32_t srcVal = srcFlat.getBasis(inDim, i)[0];
+      if (dstVal == 0 && srcVal == 0) {
+        commonZeros[inDim].insert(i);
+      } else if (dstVal == 0) {
+        dstFreeZeros.emplace_back(inDim, i);
+      } else {
+        auto [it, success] = valToDstInput.try_emplace(dstVal, inDim, i);
+        assert(success && "Found duplicate nonzero vectors in dst layout");
+        if (srcVal == 0)
+          ++srcFreeZerosCount;
+      }
+    }
+  }
+  assert(srcFreeZerosCount == dstFreeZeros.size() &&
+         "src and dst layouts have differing number of zero bases");
+
+  // Build the basis vectors for the permutation layout `P`.
+  // For each basis vector in `src`, determine its target in `dst`:
+  // - If the vector is nonzero, find the corresponding vector in `dst`.
+  // - If it is a zero vector common to both layouts, set it as a fixed-point.
+  // - Otherwise, pair it with the next available free zero of `dst`.
+  LinearLayout::BasesT pBases;
+  size_t numDims = llvm::size(srcInDims);
+  size_t freeZeroIdx = 0;
+  for (auto inDim : srcInDims) {
+    int inDimSize = srcFlat.getInDimSizeLog2(inDim);
+    auto &inDimBases = pBases[inDim];
+    inDimBases.reserve(inDimSize);
+    for (int i = 0; i < inDimSize; ++i)
+      inDimBases.emplace_back(numDims, 0);
+
+    for (int inIdx = 0; inIdx < inDimSize; ++inIdx) {
+      int32_t val = srcFlat.getBasis(inDim, inIdx)[0];
+      std::pair<StringAttr, int32_t> dstTarget;
+
+      if (val != 0) {
+        auto it = valToDstInput.find(val);
+        assert(it != valToDstInput.end() && "src basis not found in dst");
+        dstTarget = it->second;
+      } else if (commonZeros.lookup(inDim).count(inIdx)) {
+        dstTarget = {inDim, inIdx};
+      } else {
+        dstTarget = dstFreeZeros[freeZeroIdx++];
+      }
+
+      // Build the basis vector for `P` using the ordering on output dimensions
+      // induced by the ordering on the input dimensions of `src`.
+      auto it = llvm::find(srcInDims, dstTarget.first);
+      int outDimIdx = std::distance(srcInDims.begin(), it);
+      inDimBases[inIdx][outDimIdx] = 1 << dstTarget.second;
+    }
+  }
+  // Declare the ordering on the `outDims` of `P` to be that of `srcInDims`.
+  SmallVector<std::pair<StringAttr, int32_t>> outDims;
+  for (auto outDim : srcInDims)
+    outDims.emplace_back(outDim, srcFlat.getInDimSize(outDim));
+
+  return LinearLayout(std::move(pBases), outDims, /*requireSurjective=*/true);
 }
 
 } // namespace mlir::triton
