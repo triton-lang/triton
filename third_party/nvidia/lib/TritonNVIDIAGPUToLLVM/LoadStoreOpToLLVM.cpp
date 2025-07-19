@@ -155,7 +155,7 @@ void broadcastTensorValues(Operation *op, RankedTensorType tensorTy,
                            TritonLLVMOpBuilder &b, Value threadPred,
                            const NVIDIA::TargetInfo &targetInfo,
                            const LLVMTypeConverter *typeConverter) {
-  if (!op->hasAttr("allocation.offset"))
+  if (!op->hasAttr("allocation.offset") && tensorTy)
     return;
 
   auto dstLayout = ttg::toLinearLayout(tensorTy);
