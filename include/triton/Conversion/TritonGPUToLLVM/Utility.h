@@ -512,10 +512,13 @@ SmallVector<SmallVector<Value>>
 emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
             Attribute layout, RankedTensorType type, bool withCTAOffset);
 
-// Emits the required padding in elements for the given shared memory offset
+// Emits the required padding given shared memory offset
+// - If `offsetInBytes` is true, smemOffset and padding is assumed in bytes.
+// - If false, smemOffset and padding are assumed to be scaled by element
+// bitwidth, in which case, `bitwidth` is not used.
 Value emitPadding(Location loc, RewriterBase &rewriter,
                   triton::gpu::PaddedSharedEncodingAttr layout,
-                  Value smemOffset);
+                  unsigned bitwidth, Value smemOffset, bool offsetInBytes);
 
 // Emits IR to load data from shared memory into registers, or to store data
 // from registers into shared memory.

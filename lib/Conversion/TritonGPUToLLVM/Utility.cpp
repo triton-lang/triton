@@ -421,14 +421,17 @@ emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
 
 Value emitPadding(Location loc, RewriterBase &rewriter,
                   triton::gpu::PaddedSharedEncodingAttr layout,
-                  Value smemOffset) {
+                  unsigned bitwidth, Value smemOffset, bool offsetInBytes) {
   TritonLLVMOpBuilder b(loc, rewriter);
 
   Value padOffset = b.i32_val(0);
+  unsigned offScale = offsetInBytes ? bitwidth / 8 : 1;
   for (auto [interval, padding] :
        llvm::zip_equal(layout.getIntervals(), layout.getPaddings())) {
-    Value iVal = b.i32_val(llvm::Log2_32(interval));
-    Value pVal = b.i32_val(llvm::Log2_32(padding));
+    unsigned intervalScaled = offScale * interval;
+    unsigned paddingScaled = offScale * padding;
+    Value iVal = b.i32_val(llvm::Log2_32(intervalScaled));
+    Value pVal = b.i32_val(llvm::Log2_32(paddingScaled));
     padOffset = b.add(padOffset, b.shl(b.ashr(smemOffset, iVal), pVal));
   }
   return padOffset;
@@ -601,10 +604,12 @@ lowerLocalLdSt(Location loc, MLIRContext *ctx,
   assert(*cvt.getOutDimNames().begin() == str_attr("offset"));
   auto calcPaddedOffset = [&](Value smemOffset) {
     TritonLLVMOpBuilder b(loc, rewriter);
+    auto bitwidth = llvmElemTy.getIntOrFloatBitWidth();
     if (auto paddedLayout = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(
             srcTy.getEncoding())) {
       // Apply the offset needed for padding.
-      Value padOffset = emitPadding(loc, rewriter, paddedLayout, smemOffset);
+      Value padOffset = emitPadding(loc, rewriter, paddedLayout, bitwidth,
+                                    smemOffset, /*offsetInBytes=*/true);
       smemOffset = b.add(smemOffset, padOffset);
     }
     return smemOffset;
@@ -707,7 +712,8 @@ bool emitTransferBetweenRegistersAndShared(
     smemOffset = b.xor_(smemOffset, offset);
     if (paddedLayout) {
       // Apply the offset needed for padding.
-      Value padOffset = emitPadding(loc, rewriter, paddedLayout, smemOffset);
+      Value padOffset = emitPadding(loc, rewriter, paddedLayout, /*bitwidth=*/0,
+                                    smemOffset, /*offsetInBytes=*/false);
       smemOffset = b.add(smemOffset, padOffset);
     }
     auto vecAddr = b.gep(smemBase.getType(), elemLlvmTy, smemBase, smemOffset,
