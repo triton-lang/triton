@@ -883,6 +883,31 @@ bool isSimpleSharedMemoryAccess(ArrayRef<int64_t> shape,
          (shape == allocShape.take_back(rank) && rank >= 2);
 }
 
+llvm::MapVector<StringAttr, int32_t> getAllFreeVarMasks(MLIRContext *ctx) {
+  // Mask where all elements are redundant
+  auto kReg = str_attr("reg");
+  auto kLane = str_attr("lane");
+  auto kWarp = str_attr("warp");
+  auto kBlock = str_attr("block");
+
+  int32_t fullMask = -1;
+  llvm::MapVector<StringAttr, int32_t> ret;
+  for (auto dimName : {kReg, kLane, kWarp, kBlock}) {
+    ret[dimName] = fullMask;
+  }
+  return ret;
+}
+
+llvm::MapVector<StringAttr, int32_t> getFreeVariableMasks(Type type) {
+  auto ctx = type.getContext();
+  auto tensorTy = dyn_cast<RankedTensorType>(type);
+  if (!tensorTy) {
+    return getAllFreeVarMasks(ctx);
+  }
+  auto ll = triton::gpu::toLinearLayout(tensorTy);
+  return ll.getFreeVariableMasks();
+}
+
 SmallVector<SmallVector<unsigned>> emitOffsetForLayout(Attribute layout,
                                                        RankedTensorType type) {
   MLIRContext *ctx = layout.getContext();
