@@ -82,6 +82,7 @@ jobs:
           source ~/.venv/bin/activate
           echo "PATH is '$PATH'"
           ccache --zero-stats
+          printenv
           make dev-install
       - name: CCache Stats
         run: ccache --print-stats
