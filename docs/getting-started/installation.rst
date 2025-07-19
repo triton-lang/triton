@@ -35,9 +35,10 @@ You can install the Python package from source by running the following commands
 
 .. code-block:: bash
 
-      git clone https://github.com/triton-lang/triton.git;
-      cd triton/python;
-      pip install ninja cmake wheel; # build-time dependencies
+      git clone https://github.com/triton-lang/triton.git
+      cd triton
+
+      pip install -r python/requirements.txt # build-time dependencies
       pip install -e .
 
 Note that, if llvm is not present on your system, the setup.py script will download the official LLVM static libraries and link against that.
@@ -49,7 +50,7 @@ You can then test your installation by running the unit tests:
 .. code-block:: bash
 
       pip install -e '.[tests]'
-      pytest -vs test/unit/
+      pytest -vs python/test/unit/
 
 and the benchmarks
 
