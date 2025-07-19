@@ -571,6 +571,58 @@ protected:
   const TargetInfoBase &targetInfo;
 };
 
+struct MapElementwiseOpConversion
+    : public ConvertOpToLLVMPattern<MapElementwiseOp> {
+  using Base = ConvertOpToLLVMPattern<MapElementwiseOp>;
+  using Adaptor = typename Base::OpAdaptor;
+
+  using Base::Base;
+
+  LogicalResult matchAndRewrite(MapElementwiseOp op, OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const {
+    Location loc = op->getLoc();
+    auto typeConverter = getTypeConverter();
+
+    auto operands = adaptor.getOperands();
+    const auto numOperands = operands.size();
+    const auto packSize =
+        cast<LLVM::LLVMStructType>(operands[0].getType()).getBody().size();
+
+    SmallVector<Value> scalarOperands(numOperands * packSize);
+    for (unsigned iOp = 0; iOp < numOperands; ++iOp) {
+      auto elems = unpackLLElements(loc, operands[iOp], rewriter);
+      assert(elems.size() == packSize);
+      for (unsigned iPack = 0; iPack < packSize; ++iPack) {
+        scalarOperands[iPack * numOperands + iOp] = elems[iPack];
+      }
+    }
+
+    auto &scalarOp = op.getScalarOp();
+    Region &parent = *rewriter.getBlock()->getParent();
+
+    auto numOutputs = op.getNumResults();
+    SmallVector<Value> scalarOutputs(numOutputs * packSize);
+    for (unsigned iPack = 0; iPack < packSize; ++iPack) {
+      ArrayRef<Value> packArgs(&scalarOperands[iPack * numOperands],
+                               numOperands);
+      auto packResults = inlineRegion<triton::MapElementwiseReturnOp>(
+          rewriter, scalarOp, packArgs, loc);
+      for (unsigned iOut = 0; iOut < numOutputs; ++iOut) {
+        scalarOutputs[iOut * packSize + iPack] = packResults[iOut];
+      }
+    }
+
+    SmallVector<Value> packedOutputs(numOutputs);
+    for (unsigned iOut = 0; iOut < numOutputs; ++iOut) {
+      ArrayRef<Value> vals(&scalarOutputs[iOut * packSize], packSize);
+      packedOutputs[iOut] =
+          packLLElements(loc, typeConverter, vals, rewriter, op.getType(iOut));
+    }
+    rewriter.replaceOp(op, packedOutputs);
+    return success();
+  }
+};
+
 } // namespace
 
 void mlir::triton::populateMinMaxFOpToLLVMPattern(
@@ -662,4 +714,5 @@ void mlir::triton::populateElementwiseOpToLLVMPatterns(
   patterns.add<AbsIOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<AbsFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<SelectOpConversion>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<MapElementwiseOpConversion>(typeConverter, benefit);
 }
