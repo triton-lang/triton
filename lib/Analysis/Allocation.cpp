@@ -102,11 +102,10 @@ static SmallVector<unsigned> getRepShapeForAtomic(Value result) {
     if (auto tensorTy = dyn_cast<RankedTensorType>(result.getType())) {
       auto freeVariableMasks =
           gpu::toLinearLayout(tensorTy).getFreeVariableMasks();
-      for (auto [freeVar, mask] : freeVariableMasks) {
-        if (mask != 0) {
-          smemShape = gpu::getShapePerCTATile(tensorTy);
-          break;
-        }
+      if (llvm::any_of(freeVariableMasks,
+                       [](auto mask) { return mask != 0; })) {
+        // The tensor has broadcasted dimensions
+        smemShape = gpu::getShapePerCTATile(tensorTy);
       }
     } else {
       // If the result is a scalar, we need to allocate a single element.
