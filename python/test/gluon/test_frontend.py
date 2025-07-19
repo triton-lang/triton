@@ -1347,7 +1347,6 @@ def amd_mfma_layout_kernel():
                                                                                                    0]], shape=[128, 32])
 
     x = ttgl.full([128, 32], 0, ttgl.float32, ll)
-    # CHECK:#mma = #ttg.amd_mfma<{versionMajor = 4, versionMinor = 0, warpsPerCTA = [1, 1], instrShape = [32, 32],
     res = ttgl.convert_layout(x, mfma_layout)  # noqa: F841
 
 
@@ -1369,4 +1368,44 @@ def test_amd_mfma_layout(fresh_knobs):
   }) {noinline = false} : () -> () loc(#loc)
 }) {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} : () -> () loc(#loc)
 #loc = loc(unknown)
+""")
+
+
+@gluon.jit
+def buffer_ops_kernel(x, y):
+    # M: tl.int64 = 64
+    # N: tl.int64 = 64
+    input_offsets = ttgl.arange(0, 32 * 32).reshape(32, 32)
+    output_offsets = ttgl.arange(0, 32 * 32).reshape(32, 32)
+
+    ll: ttgl.constexpr = ttgl.DistributedLinearLayout(reg_bases=[[0, 1], [0, 2], [0, 8], [0, 16]], lane_bases=[[1, 0],
+                                                                                                               [2, 0],
+                                                                                                               [4, 0],
+                                                                                                               [8, 0],
+                                                                                                               [16, 0],
+                                                                                                               [0, 4]],
+                                                      warp_bases=[[32, 0], [64, 0]], block_bases=[[0,
+                                                                                                   0]], shape=[128, 32])
+
+    mask = ttgl.full((32, 32), 1, tl.int32, layout=ll)
+    other: tl.float32 = 1.0
+    # d = tl.load(x, input_offsets)
+    x_ptrs = x + input_offsets
+    y_ptrs = y + output_offsets  #noqa: F841
+    a = ttgl.amd.cdna4.create_buffer_load(ptr=x_ptrs, offsets=input_offsets, cache='.ca', mask=mask, other=other,
+                                          layout=ll)
+    b = ttgl.amd.cdna4.create_buffer_load(ptr=x, offsets=input_offsets, cache='.ca', mask=mask, other=1.0, layout=ll)
+    c = tl.dot(a, b)  #noqa: F841
+    #ttgl.amd.cdna4.create_buffer_store(stored_value=c, ptr=y_ptrs, offsets=output_offsets, cache='.ca', mask=mask, layout=ll)  #noqa: F841
+
+
+@pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
+def test_buffer_ops(fresh_knobs):
+    knobs.compilation.disable_line_info = True
+
+    x = torch.randn((1024, 1024), device='cuda', dtype=torch.float32)
+    y = torch.randn((1024, 1024), device='cuda', dtype=torch.float32)
+
+    h = buffer_ops_kernel.warmup(x, y, grid=(1, ), sanitize_overflow=False)
+    expecttest.assert_expected_inline(h.asm["ttgir"], """\
 """)
