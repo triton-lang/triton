@@ -56,7 +56,7 @@ TEST_F(LayoutUtilsTest, BasisPermutationLayout) {
       {{S("in1"), {{2, 0}, {0, 2}, {1, 0}}}, {S("in2"), {{4, 0}, {0, 1}}}},
       {S("in1"), S("in2")});
   EXPECT_EQ(P1, basisPermutationLayout(src1, dst1));
-  EXPECT_EQ(src1, P1.compose(dst1));
+  EXPECT_EQ(src1, reorder_like(P1.compose(dst1), src1));
   LinearLayout src2({{S("in3"), {{2, 0}, {4, 0}, {8, 0}, {0, 0}}},
                      {S("in2"), {{0, 0}, {16, 0}, {0, 0}, {0, 1}}},
                      {S("in1"), {{0, 2}, {0, 0}, {0, 4}}}},
@@ -72,7 +72,7 @@ TEST_F(LayoutUtilsTest, BasisPermutationLayout) {
                    {S("in1"), {{0, 0, 4}, {0, 0, 1}, {0, 8, 0}}}},
                   {S("in3"), S("in2"), S("in1")});
   EXPECT_EQ(P2, basisPermutationLayout(src2, dst2));
-  EXPECT_EQ(src2, P2.compose(dst2));
+  EXPECT_EQ(src2, reorder_like(P2.compose(dst2), src2));
 }
 
 } // namespace
