@@ -157,10 +157,7 @@ void finalizeTensorAtomicResults(Operation *op, RankedTensorType tensorTy,
                                  const NVIDIA::TargetInfo &targetInfo,
                                  const LLVMTypeConverter *typeConverter) {
   Type structTy = typeConverter->convertType(tensorTy);
-  auto freeVarMasks = getFreeVariableMasks(tensorTy);
-  bool hasBroadcasting =
-      llvm::any_of(freeVarMasks, [](auto pair) { return pair.second != 0; });
-  if (!hasBroadcasting) {
+  if (!op->hasAttr("allocation.offset")) {
     // No broadcasting, just pack the values into a struct
     Value resultStruct =
         packLLElements(loc, typeConverter, resultVals, rewriter, structTy);
@@ -765,6 +762,7 @@ struct AtomicCASOpConversion
         createBarrier(rewriter, loc, numCTAs);
         Value ret = b.load(valueElemTy, atomPtr);
         rewriter.replaceOp(op, {ret});
+        return success();
       }
     }
 
@@ -1184,6 +1182,7 @@ public:
         createBarrier(rewriter, loc, numCTAs);
         Value ret = b.load(valueElemTy, atomPtr);
         rewriter.replaceOp(op, {ret});
+        return success();
       }
     }
     finalizeTensorAtomicResults(op, tensorTy, loc, ctx, rewriter, resultVals,
