@@ -160,7 +160,7 @@ void finalizeTensorAtomicResults(Operation *op, RankedTensorType tensorTy,
   auto freeVarMasks = getFreeVariableMasks(tensorTy);
   bool hasBroadcasting =
       llvm::any_of(freeVarMasks, [](auto pair) { return pair.second != 0; });
-  if (hasBroadcasting) {
+  if (!hasBroadcasting) {
     // No broadcasting, just pack the values into a struct
     Value resultStruct =
         packLLElements(loc, typeConverter, resultVals, rewriter, structTy);
