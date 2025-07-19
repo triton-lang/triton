@@ -2004,17 +2004,18 @@ def test_atomic_unsupported_type(dtype_str, device):
 
 
 @pytest.mark.parametrize("dtype_str", ["int32", "float16"])
-@pytest.mark.parametrize("dim_size", [1, 4])
-def test_atomic_result_broadcast(dtype_str, dim_size, device):
+@pytest.mark.parametrize("dim_size", [1, 4, 128])
+def test_tensor_atomic_use_result(dtype_str, size, device):
+    # size 1 and 4 should trigger value broadcasting, while 128 should not
 
     @triton.jit
     def kernel(index_ptr, out_ptr, dim: tl.constexpr):
         write_index = tl.atomic_add(index_ptr + tl.arange(0, dim), val=tl.arange(0, dim), sem="relaxed")
         tl.store(out_ptr + write_index.to(tl.uint32), 5)
 
-    index = torch.arange(0, dim_size, device=device).to(dtype=getattr(torch, dtype_str))
-    out = torch.zeros((dim_size, ), device=device, dtype=getattr(torch, dtype_str))
-    kernel[(1, )](index, out, dim_size)
+    index = torch.arange(0, size, device=device).to(dtype=getattr(torch, dtype_str))
+    out = torch.zeros((size, ), device=device, dtype=getattr(torch, dtype_str))
+    kernel[(1, )](index, out, size)
     assert (out[0] == 5).all()
 
 
@@ -7483,7 +7484,7 @@ def test_unroll_attr(device):
 
     # Try for all different loop unroll factors:
     for unroll_factor in [1, 2, 4, 5, 8]:
-        h = _kernel[(1, )](torch.empty(1, device=device), unroll_factor)
+        h = _kernel[(1, )](torch.empty(1, device=device), unroll_factor).warmup()
         check_loop_unroll_count(h.asm["ttir"], 'tt.atomic_rmw', unroll_factor)
 
 
