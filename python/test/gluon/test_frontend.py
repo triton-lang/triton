@@ -13,7 +13,7 @@ from triton.experimental.gluon.language.nvidia.blackwell import mbarrier, tma, T
 from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
 from triton._filecheck import filecheck_test, run_parser
 import triton.language as tl
-from triton._internal_testing import is_cuda, is_ampere_or_newer, is_blackwell, is_hopper, is_hopper_or_newer
+from triton._internal_testing import is_cuda, is_ampere_or_newer, is_blackwell, is_hopper, is_hopper_or_newer, is_hip_cdna4
 from triton.compiler.errors import CompilationError, CompileTimeAssertionFailure
 
 TARGET_PAT = re.compile('ttg.target = "[^"]*"')
@@ -29,7 +29,8 @@ def convert_layout_kernel(XBLOCK: ttgl.constexpr, layout_a: ttgl.constexpr, layo
     res = ttgl.convert_layout(x, layout_b)  # noqa: F841
 
 
-@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
+# generic assembly format from CDNA4
+@pytest.mark.skipif(not is_cuda() and not is_hip_cdna4(), reason="Requires CUDA or CDNA4")
 def test_convert_layout(fresh_knobs):
     knobs.compilation.disable_line_info = True
 
@@ -130,6 +131,7 @@ def test_shared_memory(fresh_knobs):
     smem_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=32, rank=2)
     h = shared_memory_kernel.warmup(8, 32, layout_a, layout_b, smem_layout, num_warps=layout_a.warps_per_cta[0],
                                     grid=(1, ))
+
     expecttest.assert_expected_inline(
         anonymize_ir(h.asm["source"]), """\
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
@@ -222,20 +224,16 @@ def shared_memory_subview_kernel(XBLOCK: ttgl.constexpr, layout: ttgl.constexpr,
     view.store(value.trans())
 
 
-@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
+@pytest.mark.skipif(not is_cuda() and not is_hip_cdna4(), reason="Requires CUDA or CDNA4")
 def test_shared_memory_subview(fresh_knobs):
     knobs.compilation.disable_line_info = True
 
-    layout = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[1, 32], warps_per_cta=[4, 1], order=[1, 0])
-    smem_layout = ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0])
-    h = shared_memory_subview_kernel.warmup(256, layout, smem_layout, num_warps=4, grid=(1, ))
-    expecttest.assert_expected_inline(
-        anonymize_ir(h.asm["source"]), """\
-#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
-#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [0, 1]}>
-#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+    expected_template = """\
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, WARP_SIZE], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [WARP_SIZE, 1], warpsPerCTA = [1, 4], order = [0, 1]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = MAX_PHASE, order = [1, 0]}>
 #smem = #ttg.shared_memory
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = WARP_SIZE : i32} {
   tt.func public @shared_memory_subview_kernel() attributes {noinline = false} {
     %0 = ttg.local_alloc : () -> !ttg.memdesc<256x256xi32, #shared, #smem, mutable> loc(#loc)
     %c0_i32 = arith.constant 0 : i32 loc(#loc)
@@ -251,7 +249,21 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   } loc(#loc)
 } loc(#loc)
 #loc = loc(unknown)
-""")
+"""
+    if is_cuda():
+        threads_per_warp = [1, 32]
+        smem_layout = ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0])
+        expected = re.sub(r"MAX_PHASE", "1", re.sub(r"WARP_SIZE", "32", expected_template))
+    else:
+        threads_per_warp = [1, 64]
+        smem_layout = ttgl.SwizzledSharedLayout(1, 1, 2, [1, 0])
+        expected = re.sub(r"MAX_PHASE", "2", re.sub(r"WARP_SIZE", "64", expected_template))
+
+    layout = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=threads_per_warp, warps_per_cta=[4, 1],
+                                order=[1, 0])
+
+    h = shared_memory_subview_kernel.warmup(256, layout, smem_layout, num_warps=4, grid=(1, ))
+    expecttest.assert_expected_inline(anonymize_ir(h.asm["source"]), expected)
 
 
 @gluon.jit
@@ -839,7 +851,7 @@ def broadcast_kernel():
     0 + a + b
 
 
-@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
+@pytest.mark.skipif(not is_cuda() and not is_hip_cdna4(), reason="Requires CUDA or CDNA4")
 def test_broadcast(fresh_knobs):
     knobs.compilation.disable_line_info = True
 
@@ -894,7 +906,7 @@ def math_kernel():
     ttgl.fma(a, b, c)
 
 
-@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
+@pytest.mark.skipif(not is_cuda() and not is_hip_cdna4(), reason="Requires CUDA or CDNA4")
 def test_math(fresh_knobs):
     knobs.compilation.disable_line_info = True
 
@@ -944,8 +956,8 @@ def pair_add(a0, a1, b0, b1):
 
 
 @gluon.jit
-def reduce_kernel(out):
-    layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 32], [4, 1], [1, 0])
+def reduce_kernel(out, WARP_SIZE: ttgl.constexpr):
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, WARP_SIZE], [4, 1], [1, 0])
     a = ttgl.full([16, 16], 1, ttgl.float32, layout)
     b = ttgl.full([16, 16], 2, ttgl.float32, layout)
     s0 = ttgl.sum(a, 0)
@@ -965,17 +977,15 @@ def reduce_kernel(out):
     tl.store(out + ttgl.arange(0, 16, s0.type.layout), result)
 
 
-@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
+@pytest.mark.skipif(not is_cuda() and not is_hip_cdna4(), reason="Requires CUDA or CDNA4")
 def test_reduce(fresh_knobs):
     knobs.compilation.disable_line_info = True
 
-    h = reduce_kernel.warmup(MockTensor(ttgl.float32), sanitize_overflow=False, grid=(1, ))
-    expecttest.assert_expected_inline(
-        anonymize_ir(h.asm["ttgir"]), """\
-#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+    expected_template = """\
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, WARP_SIZE], warpsPerCTA = [4, 1], order = [1, 0]}>
 #loc = loc(unknown)
 #loc1 = loc("out")
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = WARP_SIZE : i32} {
   tt.func public @reduce_kernel(%out: !tt.ptr<f32> {tt.divisibility = 16 : i32} loc("out")) attributes {noinline = false} {
     %cst = arith.constant dense<2.000000e+00> : tensor<16x16xf32, #blocked> loc(#loc)
     %cst_0 = arith.constant dense<1.000000e+00> : tensor<16x16xf32, #blocked> loc(#loc)
@@ -1012,10 +1022,21 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return loc(#loc)
   } loc(#loc)
 } loc(#loc)
-""")
+"""
+
+    if is_hip_cdna4():
+        h = reduce_kernel.warmup(MockTensor(ttgl.float32), WARP_SIZE=64, sanitize_overflow=False, grid=(1, ))
+        expected = re.sub(r"WARP_SIZE", "64", expected_template)
+    else:
+        h = reduce_kernel.warmup(MockTensor(ttgl.float32), WARP_SIZE=32, sanitize_overflow=False, grid=(1, ))
+        expected = re.sub(r"WARP_SIZE", "32", expected_template)
+
+    print("1234 h = ", h.asm["source"])
+
+    expecttest.assert_expected_inline(anonymize_ir(h.asm["ttgir"]), expected)
 
 
-@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
+@pytest.mark.skipif(not is_cuda() and not is_hip_cdna4(), reason="Requires CUDA or CDNA4")
 @filecheck_test
 @gluon.jit
 def test_elementwise_core():
@@ -1043,7 +1064,7 @@ def linear_layout_kernel():
     ttgl.arange(0, 256, layout=ll)
 
 
-@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
+@pytest.mark.skipif(not is_cuda() and not is_hip_cdna4(), reason="Requires CUDA or CDNA4")
 def test_linear_layout(fresh_knobs):
     knobs.compilation.disable_line_info = True
     h = linear_layout_kernel.warmup(grid=(1, ))
@@ -1170,6 +1191,7 @@ def test_fence_async_shared():
     blackwell.fence_async_shared(cluster=True)
 
 
+@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
 @filecheck_test
 @gluon.jit
 def test_inline_asm_elementwise():
@@ -1307,3 +1329,83 @@ def test_auto_layout_broadcast():
     # CHECK: [[XBCAST2:%.*]] = tt.broadcast [[XCVT2]]
     # CHECK: arith.muli [[YBCAST2]], [[XBCAST2]] : tensor<16x16xi32, [[BLOCKED]]>
     _ = y * x
+
+
+@gluon.jit
+def amd_mfma_layout_kernel():
+    mfma_layout: ttgl.constexpr = ttgl.AMDMFMALayout(version=[4, 0], warps_per_cta=[1, 1], tiles_per_warp=[1, 0],
+                                                     m_dim=32, n_dim=32, transposed=False, ctas_per_cga=[2, 1],
+                                                     cta_split_num=[1, 1], cta_order=[1, 0], elem_type_width=32)
+
+    ll: ttgl.constexpr = ttgl.DistributedLinearLayout(reg_bases=[[0, 1], [0, 2], [0, 8], [0, 16]], lane_bases=[[1, 0],
+                                                                                                               [2, 0],
+                                                                                                               [4, 0],
+                                                                                                               [8, 0],
+                                                                                                               [16, 0],
+                                                                                                               [0, 4]],
+                                                      warp_bases=[[32, 0], [64, 0]], block_bases=[[0,
+                                                                                                   0]], shape=[128, 32])
+
+    x = ttgl.full([128, 32], 0, ttgl.float32, ll)
+    res = ttgl.convert_layout(x, mfma_layout)  # noqa: F841
+
+
+@pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
+def test_amd_mfma_layout(fresh_knobs):
+    knobs.compilation.disable_line_info = True
+
+    h = amd_mfma_layout_kernel.warmup(grid=(1, ), sanitize_overflow=False)
+    expecttest.assert_expected_inline(
+        h.asm["source"], """\
+#linear = #ttg.linear<{register = [[0, 1], [0, 2], [0, 8], [0, 16]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [0, 4]], warp = [[32, 0], [64, 0]], block = [[0, 0]]}>
+#mma = #ttg.amd_mfma<{version = 4, warpsPerCTA = [1, 1], tilesPerWarp = [1, 0], instrShape = [32, 32], isTransposed = false, CTAsPerCGA = [2, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
+"builtin.module"() ({
+  "tt.func"() <{function_type = () -> (), sym_name = "amd_mfma_layout_kernel", sym_visibility = "public"}> ({
+    %0 = "arith.constant"() <{value = 0.000000e+00 : f32}> : () -> f32 loc(#loc)
+    %1 = "arith.constant"() <{value = dense<0.000000e+00> : tensor<128x32xf32, #linear>}> : () -> tensor<128x32xf32, #linear> loc(#loc)
+    %2 = "ttg.convert_layout"(%1) : (tensor<128x32xf32, #linear>) -> tensor<128x32xf32, #mma> loc(#loc)
+    "tt.return"() : () -> () loc(#loc)
+  }) {noinline = false} : () -> () loc(#loc)
+}) {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} : () -> () loc(#loc)
+#loc = loc(unknown)
+""")
+
+
+@gluon.jit
+def buffer_ops_kernel(x, y):
+    # M: tl.int64 = 64
+    # N: tl.int64 = 64
+    input_offsets = ttgl.arange(0, 32 * 32).reshape(32, 32)
+    output_offsets = ttgl.arange(0, 32 * 32).reshape(32, 32)
+
+    ll: ttgl.constexpr = ttgl.DistributedLinearLayout(reg_bases=[[0, 1], [0, 2], [0, 8], [0, 16]], lane_bases=[[1, 0],
+                                                                                                               [2, 0],
+                                                                                                               [4, 0],
+                                                                                                               [8, 0],
+                                                                                                               [16, 0],
+                                                                                                               [0, 4]],
+                                                      warp_bases=[[32, 0], [64, 0]], block_bases=[[0,
+                                                                                                   0]], shape=[128, 32])
+
+    mask = ttgl.full((32, 32), 1, tl.int32, layout=ll)
+    other: tl.float32 = 1.0
+    # d = tl.load(x, input_offsets)
+    x_ptrs = x + input_offsets
+    y_ptrs = y + output_offsets  #noqa: F841
+    a = ttgl.amd.cdna4.create_buffer_load(ptr=x_ptrs, offsets=input_offsets, cache='.ca', mask=mask, other=other,
+                                          layout=ll)
+    b = ttgl.amd.cdna4.create_buffer_load(ptr=x, offsets=input_offsets, cache='.ca', mask=mask, other=1.0, layout=ll)
+    c = tl.dot(a, b)  #noqa: F841
+    #ttgl.amd.cdna4.create_buffer_store(stored_value=c, ptr=y_ptrs, offsets=output_offsets, cache='.ca', mask=mask, layout=ll)  #noqa: F841
+
+
+@pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
+def test_buffer_ops(fresh_knobs):
+    knobs.compilation.disable_line_info = True
+
+    x = torch.randn((1024, 1024), device='cuda', dtype=torch.float32)
+    y = torch.randn((1024, 1024), device='cuda', dtype=torch.float32)
+
+    h = buffer_ops_kernel.warmup(x, y, grid=(1, ), sanitize_overflow=False)
+    expecttest.assert_expected_inline(h.asm["ttgir"], """\
+""")

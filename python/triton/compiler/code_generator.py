@@ -635,6 +635,8 @@ class CodeGenerator(ast.NodeVisitor):
         annotation = self.visit(node.annotation)
         target = self.visit(node.target)
         value = self.visit(node.value)
+
+        ast.dump(node)
         # constexpr
         if annotation == constexpr:
             if target in self.lscope:
@@ -644,6 +646,7 @@ class CodeGenerator(ast.NodeVisitor):
             self.lscope[target] = value
             return self.lscope[target]
         # default: call visit_Assign
+
         return self.visit_Assign(node)
 
     def assignTarget(self, target, value):

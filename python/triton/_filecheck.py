@@ -9,14 +9,10 @@ from triton.compiler import ASTSource, make_backend
 from triton.backends.compiler import GPUTarget
 from triton.experimental.gluon._runtime import GluonASTSource
 from triton._C.libtriton import ir
-
+from triton._internal_testing import is_hip_cdna4
 # ===-----------------------------------------------------------------------===#
 # filecheck_test
 # ===-----------------------------------------------------------------------===#
-
-# Stub target for testing the frontend.
-stub_target = GPUTarget("cuda", 100, 32)
-stub_backend = make_backend(stub_target)
 
 triton_dir = os.path.dirname(__file__)
 filecheck_path = os.path.join(triton_dir, "FileCheck")
@@ -60,6 +56,9 @@ def run_parser(kernel_fn):
 
     context = ir.context()
     ir.load_dialects(context)
+
+    stub_target = GPUTarget("hip", 'gfx950', 64) if is_hip_cdna4() else GPUTarget("cuda", 100, 32)
+    stub_backend = make_backend(stub_target)
     stub_backend.load_dialects(context)
 
     options = dict(sanitize_overflow=False)

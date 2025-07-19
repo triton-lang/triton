@@ -290,7 +290,7 @@ class GluonSemantic(TritonSemantic[TensorTy]):
 
         reduce_op = self.builder.create_reduce([t.handle for t in inputs], axis)
         region_builder_fn(reduce_op)
-        assert reduce_op.verify()
+        assert reduce_op.verify(), f"invalid reduce_op {ascii(reduce_op)}"
 
         return tuple(
             self._wrap_handle_infer_layout(reduce_op.get_result(i), inputs[i].type.scalar, ret_shape)
@@ -343,3 +343,10 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         if default_results is None:
             return
         return tuple(unflatten_ir_values(mlir_results, [r.type for r in default_results]))
+
+    def create_buffer_load(self, ptr: TensorTy, offsets: TensorTy, cache_modifier, mask, other, layout):
+        ret_ty = ttgl.distributed_type(other.dtype, offsets.shape, layout)
+        handle = self.builder.create_buffer_load(ret_ty.to_ir(self.builder), ptr.handle, offsets.handle, cache_modifier,
+                                                 mask.handle,
+                                                 ttgl.to_tensor(other).handle)
+        return ttgl.tensor(handle, ret_ty)

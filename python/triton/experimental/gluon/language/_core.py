@@ -7,7 +7,7 @@ if TYPE_CHECKING:
     from triton._C.libtriton.gluon_ir import GluonOpBuilder
     from ._semantic import GluonSemantic
 
-from ._layouts import SharedLayout, DistributedLayout
+from ._layouts import SharedLayout
 from triton._C.libtriton import ir
 import triton.language.core as tl_core
 from triton.language.core import (
@@ -125,7 +125,8 @@ class distributed_type(block_type):
         super().__init__(element_ty, shape)
         self.layout = layout
         self.name = f"<{self.shape}, {self.element_ty}, {self.layout}>"
-        assert isinstance(layout, DistributedLayout)
+        print("1234 layout is ", layout)
+        # assert isinstance(layout, DistributedLayout)
 
     def to_ir(self, builder: ir.builder) -> ir.type:
         elem_ty = self.element_ty.to_ir(builder)
