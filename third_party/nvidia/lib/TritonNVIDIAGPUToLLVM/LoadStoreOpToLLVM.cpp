@@ -137,6 +137,61 @@ Value createCachePolicy(triton::EvictionPolicy opEvict,
   return policyRet;
 }
 
+void broadcastTensorValues(Operation *op, RankedTensorType tensorTy,
+                           Location loc, MLIRContext *ctx,
+                           ConversionPatternRewriter &rewriter,
+                           SmallVector<Value> &resultVals, Type valueElemTy,
+                           TritonLLVMOpBuilder &b, Value threadPred,
+                           const NVIDIA::TargetInfo &targetInfo,
+                           const LLVMTypeConverter *typeConverter) {
+  if (!op->hasAttr("allocation.offset"))
+    return;
+
+  auto dstLayout = ttg::toLinearLayout(tensorTy);
+  auto kReg = str_attr("register");
+  auto kLane = str_attr("lane");
+  auto kWarp = str_attr("warp");
+  dstLayout = dstLayout.sublayout({kReg, kLane, kWarp},
+                                  to_vector(dstLayout.getOutDimNames()));
+  dstLayout = dstLayout.reshapeOuts(
+      {{str_attr("offset"), dstLayout.getTotalOutDimSize()}});
+  auto smemBase = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op);
+
+  auto emitSt = [&](ConversionPatternRewriter &rewriter, Location loc,
+                    ArrayRef<Value> vals, Value shmemAddr, int idx,
+                    VectorType vecTy) -> SmallVector<Value> {
+    auto length = vecTy.getNumElements();
+    Value valsVec =
+        packLLVector(loc, ArrayRef<Value>(vals).slice(idx, length), rewriter);
+    targetInfo.storeDShared(rewriter, loc, shmemAddr, std::nullopt, valsVec,
+                            threadPred);
+    return {};
+  };
+
+  auto emitLd = [&](ConversionPatternRewriter &rewriter, Location loc,
+                    ArrayRef<Value> vals, Value shmemAddr, int idx,
+                    VectorType vecTy) -> SmallVector<Value> {
+    Value loadedVec = targetInfo.loadDShared(rewriter, loc, shmemAddr,
+                                             std::nullopt, vecTy, b.true_val());
+    return unpackLLVector(loc, loadedVec, rewriter);
+  };
+
+  lowerLdSt(loc, ctx, dstLayout, resultVals, valueElemTy, smemBase,
+            /*affineOffset=*/b.i32_val(0),
+            /*maskSpanAffineOffset=*/0, rewriter, targetInfo, {}, emitSt);
+  b.barrier();
+  resultVals =
+      lowerLdSt(loc, ctx, dstLayout, resultVals, valueElemTy, smemBase,
+                /*affineOffset=*/b.i32_val(0),
+                /*maskSpanAffineOffset=*/0, rewriter, targetInfo, {}, emitLd);
+
+  // Create the result struct and replace the operation
+  Type structTy = typeConverter->convertType(tensorTy);
+  Value resultStruct =
+      packLLElements(loc, typeConverter, resultVals, rewriter, structTy);
+  rewriter.replaceOp(op, {resultStruct});
+}
+
 // Contains some helper functions for both Load and Store conversions.
 struct LoadStoreConversionBase {
   explicit LoadStoreConversionBase(const NVIDIA::TargetInfo &targetInfo,
@@ -703,47 +758,9 @@ struct AtomicCASOpConversion
       }
     }
 
-    if (tensorTy) {
-      if (op->hasAttr("allocation.offset")) {
-        auto dstLayout = ttg::toLinearLayout(tensorTy);
-        auto smemBase = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo,
-                                                  op.getOperation());
-
-        auto emitLdStCommon = [&](auto &&func, SmallVector<Value> &vals) {
-          return lowerLdSt(loc, ctx, dstLayout, vals, valueElemTy, smemBase,
-                           /*affineOffset=*/b.i32_val(0),
-                           /*maskSpanAffineOffset=*/0, rewriter, targetInfo, {},
-                           func);
-        };
-
-        auto emitSt = [&](ConversionPatternRewriter &rewriter, Location loc,
-                          ArrayRef<Value> vals, Value shmemAddr, int idx,
-                          VectorType vecTy) -> SmallVector<Value> {
-          auto length = vecTy.getNumElements();
-          Value valsVec = packLLVector(
-              loc, ArrayRef<Value>(vals).slice(idx, length), rewriter);
-          targetInfo.storeDShared(rewriter, loc, shmemAddr, std::nullopt,
-                                  valsVec, threadPred);
-          return {};
-        };
-
-        auto emitLd = [&](ConversionPatternRewriter &rewriter, Location loc,
-                          ArrayRef<Value> vals, Value shmemAddr, int idx,
-                          VectorType vecTy) -> SmallVector<Value> {
-          Value loadedVec = targetInfo.loadDShared(
-              rewriter, loc, shmemAddr, std::nullopt, vecTy, b.true_val());
-          return unpackLLElements(loc, loadedVec, rewriter);
-        };
-
-        emitLdStCommon(emitSt, resultVals);
-        b.barrier();
-        resultVals = emitLdStCommon(emitLd, resultVals);
-      }
-      Type structTy = getTypeConverter()->convertType(tensorTy);
-      Value resultStruct = packLLElements(loc, getTypeConverter(), resultVals,
-                                          rewriter, structTy);
-      rewriter.replaceOp(op, {resultStruct});
-    }
+    broadcastTensorValues(op, tensorTy, loc, ctx, rewriter, resultVals,
+                          valueElemTy, b, threadPred, targetInfo,
+                          getTypeConverter());
     return success();
   }
 };
@@ -812,6 +829,7 @@ struct AtomicRMWOpConversion
     return true;
   }
 
+public:
   LogicalResult
   matchAndRewrite(triton::AtomicRMWOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
@@ -1158,57 +1176,9 @@ struct AtomicRMWOpConversion
         rewriter.replaceOp(op, {ret});
       }
     }
-    if (tensorTy) {
-      if (op->hasAttr("allocation.offset")) {
-        auto dstLayout = ttg::toLinearLayout(tensorTy);
-        auto kReg = str_attr("register");
-        auto kLane = str_attr("lane");
-        auto kWarp = str_attr("warp");
-        dstLayout = dstLayout.sublayout({kReg, kLane, kWarp},
-                                        to_vector(dstLayout.getOutDimNames()));
-        dstLayout = dstLayout.reshapeOuts(
-            {{str_attr("offset"), dstLayout.getTotalOutDimSize()}});
-        auto smemBase = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo,
-                                                  op.getOperation());
-
-        auto emitLdStCommon = [&](auto &&func, SmallVector<Value> &vals) {
-          return lowerLdSt(loc, ctx, dstLayout, vals, valueElemTy, smemBase,
-                           /*affineOffset=*/b.i32_val(0),
-                           /*maskSpanAffineOffset=*/0, rewriter, targetInfo, {},
-                           func);
-        };
-
-        auto emitSt = [&](ConversionPatternRewriter &rewriter, Location loc,
-                          ArrayRef<Value> vals, Value shmemAddr, int idx,
-                          VectorType vecTy) -> SmallVector<Value> {
-          Value pred =
-              llMask ? maybeAnd(rewriter, loc, threadPred, maskElements[idx])
-                     : threadPred;
-          auto length = vecTy.getNumElements();
-          Value valsVec = packLLVector(
-              loc, ArrayRef<Value>(vals).slice(idx, length), rewriter);
-          targetInfo.storeDShared(rewriter, loc, shmemAddr, std::nullopt,
-                                  valsVec, pred);
-          return {};
-        };
-
-        auto emitLd = [&](ConversionPatternRewriter &rewriter, Location loc,
-                          ArrayRef<Value> vals, Value shmemAddr, int idx,
-                          VectorType vecTy) -> SmallVector<Value> {
-          Value loadedVec = targetInfo.loadDShared(
-              rewriter, loc, shmemAddr, std::nullopt, vecTy, b.true_val());
-          return unpackLLVector(loc, loadedVec, rewriter);
-        };
-
-        emitLdStCommon(emitSt, resultVals);
-        b.barrier();
-        resultVals = emitLdStCommon(emitLd, resultVals);
-      }
-      Type structTy = getTypeConverter()->convertType(tensorTy);
-      Value resultStruct = packLLElements(loc, getTypeConverter(), resultVals,
-                                          rewriter, structTy);
-      rewriter.replaceOp(op, {resultStruct});
-    }
+    broadcastTensorValues(op, tensorTy, loc, ctx, rewriter, resultVals,
+                          valueElemTy, b, threadPred, targetInfo,
+                          getTypeConverter());
     return success();
   }
 };

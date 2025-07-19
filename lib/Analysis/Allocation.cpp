@@ -103,7 +103,8 @@ static SmallVector<unsigned> getRepShapeForAtomic(Value result) {
       // If the result is a tensor, we need to allocate a scratch memory of size
       // equal to the number of unique elements in the tensor shape.
       // gpu::ShapePerCTATile removes the broadcasted elements
-      smemShape = gpu::getShapePerCTATile(tensorTy);
+      if (product(gpu::getShapePerCTA(tensorTy)) < product(tensorTy.getShape()))
+        smemShape = gpu::getShapePerCTATile(tensorTy);
     } else {
       // If the result is a scalar, we need to allocate a single element.
       smemShape.push_back(1);
