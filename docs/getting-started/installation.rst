@@ -38,16 +38,15 @@ Note that, if llvm is not present on your system, the setup.py script will downl
 
 For building with a custom LLVM, review the `Building with a custom LLVM <https://github.com/triton-lang/triton?tab=readme-ov-file#building-with-a-custom-llvm>`_ section on Github.
 
-You can then test your installation by running the unit tests:
+You can then test your installation by running the tests:
 
 .. code-block:: bash
 
-      pip install -e '.[tests]'
-      pytest -vs python/test/unit/
+      # One-time setup
+      make dev-install
 
-and the benchmarks
+      # To run all tests (requires a GPU)
+      make test
 
-.. code-block:: bash
-
-      cd bench
-      python -m run --with-plots --result-dir /tmp/triton-bench
+      # Or, to run tests without a GPU
+      make test-nogpu
