@@ -148,6 +148,9 @@ LinearLayout reshapeLayout(MLIRContext *ctx, LinearLayout layout,
 // order.
 LinearLayout transposeLinearLayout(LinearLayout layout, ArrayRef<int> order);
 
+// Reorders the in and out dimensions to match another layout.
+LinearLayout reorder_like(const LinearLayout &x, const LinearLayout &y)
+
 // For two layouts, `src` and `dst`, that differ only by a permutation of
 // their basis vectors, return a permutation layout `P` which satisfies
 // `dst` \circ `P` = `src`.
