@@ -10,7 +10,7 @@
 
 namespace proton {
 
-enum class OutputFormat { Hatchet, Count };
+enum class OutputFormat { Hatchet, ChromeTrace, Count };
 
 class Data : public ScopeInterface {
 public:
@@ -24,6 +24,14 @@ public:
   /// not empty.
   virtual size_t addOp(size_t scopeId, const std::string &opName = {}) = 0;
 
+  /// Add an op with custom contexts to the data.
+  /// This is often used when context source is not available or when
+  /// the profiler itself needs to supply the contexts, such as
+  /// instruction samples in GPUs whose contexts are
+  /// synthesized from the instruction address (no unwinder).
+  virtual size_t addOp(size_t scopeId,
+                       const std::vector<Context> &contexts) = 0;
+
   /// Add a single metric to the data.
   virtual void addMetric(size_t scopeId, std::shared_ptr<Metric> metric) = 0;
 
@@ -36,11 +44,13 @@ public:
   virtual void clear() = 0;
 
   /// Dump the data to the given output format.
-  void dump(OutputFormat outputFormat);
+  void dump(const std::string &outputFormat);
 
 protected:
   /// The actual implementation of the dump operation.
   virtual void doDump(std::ostream &os, OutputFormat outputFormat) const = 0;
+
+  virtual OutputFormat getDefaultOutputFormat() const = 0;
 
   mutable std::shared_mutex mutex;
   const std::string path{};
