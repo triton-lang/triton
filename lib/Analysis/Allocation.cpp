@@ -100,11 +100,14 @@ static SmallVector<unsigned> getRepShapeForAtomic(Value result) {
   SmallVector<unsigned> smemShape;
   if (!result.use_empty()) {
     if (auto tensorTy = dyn_cast<RankedTensorType>(result.getType())) {
-      // If the result is a tensor, we need to allocate a scratch memory of size
-      // equal to the number of unique elements in the tensor shape.
-      // gpu::ShapePerCTATile removes the broadcasted elements
-      if (product(gpu::getShapePerCTA(tensorTy)) < product(tensorTy.getShape()))
-        smemShape = gpu::getShapePerCTATile(tensorTy);
+      auto freeVariableMasks =
+          gpu::toLinearLayout(tensorTy).getFreeVariableMasks();
+      for (auto [freeVar, mask] : freeVariableMasks) {
+        if (mask != 0) {
+          smemShape = gpu::getShapePerCTATile(tensorTy);
+          break;
+        }
+      }
     } else {
       // If the result is a scalar, we need to allocate a single element.
       smemShape.push_back(1);
