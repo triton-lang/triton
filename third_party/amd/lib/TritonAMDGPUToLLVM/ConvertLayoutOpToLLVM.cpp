@@ -7,10 +7,7 @@
 
 using ::mlir::transferWithinBlockPadding;
 using ::mlir::triton::gpu::AMDMfmaEncodingAttr;
-using ::mlir::triton::gpu::AMDWmmaEncodingAttr;
 using ::mlir::triton::gpu::ConvertLayoutOp;
-using ::mlir::triton::gpu::DotOperandEncodingAttr;
-using ::mlir::triton::gpu::MemDescType;
 using ::triton::gpu::LinearEncodingAttr;
 
 namespace {
