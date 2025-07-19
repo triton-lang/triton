@@ -236,28 +236,6 @@ public:
   }
 };
 
-// Forward a TMEM load into the user allocation.
-class TMEMLoadForwarding : public OpRewritePattern<ttng::TMEMAllocOp> {
-public:
-  using OpRewritePattern::OpRewritePattern;
-
-  LogicalResult matchAndRewrite(ttng::TMEMAllocOp alloc,
-                                PatternRewriter &rewriter) const override {
-    if (!alloc.getToken())
-      return failure();
-    Value init = alloc.getSrc();
-    if (!init)
-      return failure();
-    auto load = init.getDefiningOp<TMEMTokenLoadOp>();
-    if (!load || !load->hasOneUse() || !load.getDep().hasOneUse())
-      return failure();
-    if (alloc.getType() != load.getSrc().getType())
-      return failure();
-    rewriter.replaceOp(alloc, {load.getSrc(), load.getDep()});
-    return success();
-  }
-};
-
 // Remove loop-carried tensor dependencies if they are fed immediately into a
 // TMEM store by pulling the store into the previous iteration.
 class RotateTMEMStoreInLoop : public OpRewritePattern<TMEMTokenStoreOp> {
@@ -523,7 +501,7 @@ struct HoistTMEMAlloc
     patterns.add<RotateTMEMStoreInLoop, RotateTMEMLoadInLoop,
                  CombineTMEMLoadAndStore, CombineTMEMStoreAndSelect,
                  SinkTMEMLoad, RemoveUnusedTMEMLoad, CombineTMEMStoreAndAlloc,
-                 HoistTMEMAllocOutOfIf, TMEMLoadForwarding>(&getContext());
+                 HoistTMEMAllocOutOfIf>(&getContext());
     scf::ForOp::getCanonicalizationPatterns(patterns, &getContext());
     if (failed(applyPatternsGreedily(getOperation(), std::move(patterns)))) {
       llvm_unreachable("Failed to hoist tmem_store");
