@@ -16,6 +16,7 @@ jobs:
     timeout-minutes: 60
     env:
       RUNNER_TYPE: ${{ matrix.runner[0] }}
+      TRITON_BUILD_WITH_CLANG_LLD: "FALSE"
     name: Build MacOS
     steps:
       - name: Checkout
