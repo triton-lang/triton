@@ -50,6 +50,17 @@ Value maybeAnd(RewriterBase &rewriter, Location loc, Value a, Value b) {
   return a ? a : b;
 }
 
+void createBarrier(ConversionPatternRewriter &rewriter, Location loc,
+                   int numCTAs) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  if (numCTAs == 1) {
+    b.barrier();
+  } else {
+    rewriter.create<triton::nvidia_gpu::ClusterArriveOp>(loc, false);
+    rewriter.create<triton::nvidia_gpu::ClusterWaitOp>(loc);
+  }
+}
+
 // Return a predicate that is true only if the current thread holds unique data,
 // according to freeVarsMask. The predicate may be null to indicate no
 // predication is required.
@@ -179,7 +190,8 @@ void broadcastTensorValues(Operation *op, RankedTensorType tensorTy,
   lowerLdSt(loc, ctx, dstLayout, resultVals, valueElemTy, smemBase,
             /*affineOffset=*/b.i32_val(0),
             /*maskSpanAffineOffset=*/0, rewriter, targetInfo, {}, emitSt);
-  b.barrier();
+  int numCTAs = triton::gpu::getNumCTAs(tensorTy.getEncoding());
+  createBarrier(rewriter, loc, numCTAs);
   resultVals =
       lowerLdSt(loc, ctx, dstLayout, resultVals, valueElemTy, smemBase,
                 /*affineOffset=*/b.i32_val(0),
@@ -619,17 +631,6 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
 
   int computeCapability;
 };
-
-void createBarrier(ConversionPatternRewriter &rewriter, Location loc,
-                   int numCTAs) {
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  if (numCTAs == 1) {
-    b.barrier();
-  } else {
-    rewriter.create<triton::nvidia_gpu::ClusterArriveOp>(loc, false);
-    rewriter.create<triton::nvidia_gpu::ClusterWaitOp>(loc);
-  }
-}
 
 struct AtomicCASOpConversion
     : public ConvertOpToLLVMPattern<triton::AtomicCASOp>,
