@@ -7493,7 +7493,7 @@ def test_unroll_attr(device):
 
     # Try for all different loop unroll factors:
     for unroll_factor in [1, 2, 4, 5, 8]:
-        h = _kernel[(1, )](torch.empty(1, device=device), unroll_factor).warmup()
+        h = _kernel[(1, )](torch.empty(1, device=device), unroll_factor)
         check_loop_unroll_count(h.asm["ttir"], 'tt.atomic_rmw', unroll_factor)
 
 
