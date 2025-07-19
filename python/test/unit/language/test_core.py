@@ -2004,7 +2004,7 @@ def test_atomic_unsupported_type(dtype_str, device):
 
 
 @pytest.mark.parametrize("dtype_str", ["int32", "float16"])
-@pytest.mark.parametrize("dim_size", [1, 4, 128])
+@pytest.mark.parametrize("dim", [1, 4, 128])
 @pytest.mark.parametrize("op", ["add", "cas"])
 def test_tensor_atomic_use_result(dtype_str, size, op, device):
     # size 1 and 4 should trigger value broadcasting, while 128 should not
