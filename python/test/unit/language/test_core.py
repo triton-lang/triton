@@ -2017,7 +2017,7 @@ def test_tensor_atomic_use_result(dtype_str, size, op, device):
             write_index = tl.atomic_cas(
                 index_ptr + tl.arange(0, size),
                 cmp=tl.zeros((size, ), dtype=index_ptr.dtype.element_ty),
-                val=tl.arange(0, size),
+                val=tl.arange(0, size).to(index_ptr.dtype.element_ty),
                 sem="relaxed",
             )
         tl.store(out_ptr + write_index.to(tl.uint32), 5)
