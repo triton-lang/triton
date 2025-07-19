@@ -278,10 +278,11 @@ getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
   // subsequences of consecutive lane bits from cycles involving both bit types.
   // Further explanation of this method is below.
   //
-  // The decomposition is implemented by building bases for the layouts `pReg`
-  // and `pLane` by walking the cycles of `P`, a permutation layout returned by
-  // `basisPermutationLayout(S, T)` which accepts two layouts `S` and `T` which
-  // differ only by a permutation of their basis vectors.
+  // The decomposition is performed in two stages. First, we compute the
+  // permutation matrix `P` by using `invertAndCompose` to generate a skeleton
+  // and then fill in any zero columns. Second, we walk the cycles of `P` to
+  // factor out mixed transpositions to build `mixedTranspositions`, `pReg`, and
+  // `pLane`.
 
   // We remove any broadcasting in the register dimensions of the layouts before
   // forming the permutation `P` as the components of the decomposition directly
@@ -310,9 +311,16 @@ getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
   int nRegBases = std::max(nSrcRegBases, nDstRegBases);
   int nLaneBases = std::max(nSrcLaneBases, nDstLaneBases);
   // Restrict attention to the input dimensions which matter.
+  SmallVector<StringAttr> inDimNames{kReg, kLane};
   auto outDimNames = llvm::to_vector(srcLayout.getOutDimNames());
-  auto S = srcLayout.sublayout({kReg, kLane}, outDimNames);
-  auto T = dstLayout.sublayout({kReg, kLane}, outDimNames);
+  auto S = srcLayout.sublayout(inDimNames, outDimNames);
+  auto T = dstLayout.sublayout(inDimNames, outDimNames);
+  // Flatten outs for ease of building `P`, and reorder outs as flattening
+  // depends on output dimension order.
+  if (outDimNames != llvm::to_vector(T.getOutDimNames()))
+    T = T.transposeOuts(outDimNames);
+  S = S.flattenOuts();
+  T = T.flattenOuts();
   // Conditionally pad.
   if (nSrcRegBases != nDstRegBases || nSrcLaneBases != nDstLaneBases) {
     auto padWithZeros = [&](const LinearLayout &ll) {
@@ -334,10 +342,34 @@ getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
     T = padWithZeros(T);
   }
 
-  // Now that `S` and `T` have the same basis vectors, we compute the
-  // permutation `P` which transforms `S` into `T`.
-  auto P = basisPermutationLayout(S, T);
-  auto &pBases = P.getBases();
+  // We compute T^transpose \circ S, which serves as a skeleton for `P`, then
+  // fill in zero columns, prioritizing producing fixed points. As we only need
+  // the basis vectors of `P`, we never actually produce the LinearLayout.
+  auto pBases = S.invertAndCompose(T).getBases();
+
+  // Find the common and uncommon zeros of S and T
+  SmallVector<std::pair<int32_t, int32_t>> srcFreeZeros;
+  SmallVector<std::pair<int32_t, int32_t>> dstFreeZeros;
+  for (auto [dimIdx, dim] : llvm::enumerate(inDimNames)) {
+    for (int inIdx = 0; inIdx < S.getInDimSizeLog2(dim); ++inIdx) {
+      int sVal = S.getBasis(dim, inIdx)[0];
+      int tVal = T.getBasis(dim, inIdx)[0];
+      if (sVal == 0 && tVal == 0) {
+        pBases[dim][inIdx][dimIdx] = 1 << inIdx;
+      } else if (sVal == 0) {
+        srcFreeZeros.emplace_back(dimIdx, inIdx);
+      } else if (tVal == 0) {
+        dstFreeZeros.emplace_back(dimIdx, inIdx);
+      }
+    }
+  }
+  // Fill in non-fixed-point zero vectors
+  for (auto [srcZeroLoc, dstZeroLoc] : llvm::zip(srcFreeZeros, dstFreeZeros)) {
+    auto [srcDimIdx, srcIdx] = srcZeroLoc;
+    auto [dstDimIdx, dstIdx] = dstZeroLoc;
+    auto inDim = inDimNames[srcDimIdx];
+    pBases[inDim][srcIdx][dstDimIdx] = 1 << dstIdx;
+  }
 
   // We walk the cycles of `P` to build the bases for `pReg` and `pLane` while
   // factoring out mixed transpositions from cycles that include both register
@@ -355,9 +387,8 @@ getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
     return (dim == kReg) ? index : nRegBases + index;
   };
 
-  auto dimNames = llvm::to_vector(P.getInDimNames());
-  for (auto dim : dimNames) {
-    int inDimSize = P.getInDimSizeLog2(dim);
+  for (auto dim : inDimNames) {
+    int inDimSize = S.getInDimSizeLog2(dim);
     for (int i = 0; i < inDimSize; ++i) {
       if (visited.test(flatIdx(dim, i)))
         continue;
@@ -393,7 +424,7 @@ getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
         int32_t nextIdx;
         for (auto [nextDimIdx, nextVal] : llvm::enumerate(nextVec)) {
           if (nextVal != 0) {
-            nextDim = dimNames[nextDimIdx];
+            nextDim = inDimNames[nextDimIdx];
             nextIdx = llvm::Log2_32(nextVal);
           }
         }
