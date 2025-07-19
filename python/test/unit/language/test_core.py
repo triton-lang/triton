@@ -2014,7 +2014,12 @@ def test_tensor_atomic_use_result(dtype_str, size, op, device):
         if op == "add":
             write_index = tl.atomic_add(index_ptr + tl.arange(0, size), val=tl.arange(0, size), sem="relaxed")
         elif op == "cas":
-            write_index = tl.atomic_cas(index_ptr + tl.arange(0, size), cmp=0, val=tl.arange(0, size), sem="relaxed")
+            write_index = tl.atomic_cas(
+                index_ptr + tl.arange(0, size),
+                cmp=tl.zeros((size, ), dtype=index_ptr.dtype.element_ty),
+                val=tl.arange(0, size),
+                sem="relaxed",
+            )
         tl.store(out_ptr + write_index.to(tl.uint32), 5)
 
     index = torch.arange(0, size, device=device).to(dtype=getattr(torch, dtype_str))
