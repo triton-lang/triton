@@ -151,7 +151,7 @@ module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-w
 
           // CHECK: arith.remsi [[IDX3]], [[C3]]
           // CHECK-NEXT: ttg.memdesc_subview
-          // CHECK-NEXT: nvws.async_complete {{.*}}, async_op = <none>
+          // CHECK-NEXT: ttng.arrive_barrier {{.*}}, 256
           nvws.aref.get.exit %aref1[%c0_i32] [#nvws.async_op<none>] : !nvws.aref<[!ttg.memdesc<3x64x16xf16, #shared0, #tmem>, !ttg.memdesc<3x16x32xf16, #shared0, #smem>]>
         }
         // CHECK: } else {

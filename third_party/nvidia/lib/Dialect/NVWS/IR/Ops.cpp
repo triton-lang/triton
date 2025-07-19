@@ -21,8 +21,9 @@ LogicalResult ArefCreateOp::verify() {
   SmallVector<int> dims;
   for (auto operand : getOperands()) {
     SmallVector<Operation *> users(operand.user_begin(), operand.user_end());
-    if (!llvm::all_of(users,
-                      [](Operation *op) { return isa<ArefCreateOp>(op); }))
+    if (!llvm::all_of(users, [](Operation *op) {
+          return isa<ArefCreateOp, gpu::LocalDeallocOp>(op);
+        }))
       return emitError("Aref buffer is used elsewhere, Aref cannot guarantee "
                        "async safety");
     auto type = operand.getType();
