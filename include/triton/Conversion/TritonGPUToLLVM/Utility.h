@@ -548,25 +548,30 @@ Value emitPadding(Location loc, RewriterBase &rewriter,
 // ldmatrix.trans makes the code in lowerLdStMatrix a bit specific
 // Lowers to st when valArrays is empty, and to ld when it is not,
 // and returns the output values.
-SmallVector<Value>
-lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout cvt,
-                ArrayRef<Value> valsArray, // Input for store, output for load
-                Type llvmElemTy, Value smemBase,
-                std::function<Value(Value)> smemAddrAddon, Value affineOffset,
-                uint64_t maskSpanAffineOffset,
-                ConversionPatternRewriter &rewriter,
-                const TargetInfoBase &targetInfo, Operation *op = nullptr);
+// calcPaddedOffset is a lambda that takes a base offset (mlir::Value)
+// and computes a new offset (mlir::Value) by applying padding based on
+// shared memory layout.
+SmallVector<Value> lowerLdStShared(
+    Location loc, MLIRContext *ctx, LinearLayout cvt,
+    ArrayRef<Value> valsArray, // Input for store, output for load
+    Type llvmElemTy, Value smemBase,
+    std::function<Value(Value)> calcPaddedOffset, Value affineOffset,
+    uint64_t maskSpanAffineOffset, ConversionPatternRewriter &rewriter,
+    const TargetInfoBase &targetInfo, Operation *localLoadOp = nullptr);
 
 // Lower an ld/st-like operation given a layout and a callback that creates the
 // PTX instruction Lowers to st when valArrays is empty, and to ld when it is
 // not, and returns the output values.
+// calcPaddedOffset is a lambda that takes a base offset (mlir::Value)
+// and computes a new offset (mlir::Value) by applying padding based on
+// shared memory layout.
 SmallVector<Value> lowerLdSt(
     Location loc, MLIRContext *ctx, LinearLayout cvt,
     ArrayRef<Value> valsArray, // Input for store, output for load
-    Type llvmElemTy, Value smemBase, std::function<Value(Value)> smemAddrAddon,
-    Value affineOffset, uint64_t maskSpanAffineOffset,
-    ConversionPatternRewriter &rewriter, const TargetInfoBase &targetInfo,
-    std::optional<int> maybeMaxVecElems,
+    Type llvmElemTy, Value smemBase,
+    std::function<Value(Value)> calcPaddedOffset, Value affineOffset,
+    uint64_t maskSpanAffineOffset, ConversionPatternRewriter &rewriter,
+    const TargetInfoBase &targetInfo, std::optional<int> maybeMaxVecElems,
     std::function<SmallVector<Value>(ConversionPatternRewriter &, Location,
                                      ArrayRef<Value>, Value, int, VectorType)>
         lowerInst);
@@ -578,7 +583,8 @@ lowerLocalLdSt(Location loc, MLIRContext *ctx,
                ArrayRef<Value> valsArray, // Input for store, empty for load
                Type llvmElemTy, triton::gpu::MemDescType srcTy,
                SharedMemoryObject smemObj, ConversionPatternRewriter &rewriter,
-               const TargetInfoBase &targetInfo, Operation *op = nullptr);
+               const TargetInfoBase &targetInfo,
+               Operation *localLoadOp = nullptr);
 
 SmallVector<Value> unpackLLElements(Location loc, Value llvmStruct,
                                     RewriterBase &rewriter);

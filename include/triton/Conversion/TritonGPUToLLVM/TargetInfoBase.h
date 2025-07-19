@@ -25,15 +25,8 @@ public:
                             std::optional<Value> ctaId, Value val,
                             Value pred) const = 0;
   virtual Value loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
-                            std::optional<Value> ctaId, Type elemTy,
-                            Value pred) const = 0;
-  // Overload from above which passes the original ttg op. The base behaviour
-  // will call the overload from above dropping the op.
-  virtual Value loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
                             std::optional<Value> ctaId, Type elemTy, Value pred,
-                            Operation *op) const {
-    return loadDShared(rewriter, loc, ptr, ctaId, elemTy, pred);
-  }
+                            Operation *localLoadOp = nullptr) const = 0;
 
   void storeShared(RewriterBase &rewriter, Location loc, Value ptr, Value val,
                    Value pred) const {

@@ -473,10 +473,10 @@ SmallVector<Value>
 lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout cvt,
                 ArrayRef<Value> valsArray, // Input for store, output for load
                 Type llvmElemTy, Value smemBase,
-                std::function<Value(Value)> smemAddrAddon, Value affineOffset,
-                uint64_t maskSpanAffineOffset,
+                std::function<Value(Value)> calcPaddedOffset,
+                Value affineOffset, uint64_t maskSpanAffineOffset,
                 ConversionPatternRewriter &rewriter,
-                const TargetInfoBase &targetInfo, Operation *op) {
+                const TargetInfoBase &targetInfo, Operation *localLoadOp) {
 
   bool isStore = !valsArray.empty();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -495,22 +495,22 @@ lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout cvt,
       assert(vals.empty());
       Value valsVec =
           targetInfo.loadDShared(rewriter, loc, shmemAddr, std::nullopt, vecTy,
-                                 /*pred=*/b.true_val(), op);
+                                 /*pred=*/b.true_val(), localLoadOp);
       return unpackLLVector(loc, valsVec, rewriter);
     }
   };
   return lowerLdSt(loc, ctx, cvt, valsArray, llvmElemTy, smemBase,
-                   smemAddrAddon, affineOffset, maskSpanAffineOffset, rewriter,
-                   targetInfo, {}, emitLdSt);
+                   calcPaddedOffset, affineOffset, maskSpanAffineOffset,
+                   rewriter, targetInfo, {}, emitLdSt);
 }
 
 SmallVector<Value> lowerLdSt(
     Location loc, MLIRContext *ctx, LinearLayout cvt,
     ArrayRef<Value> valsArray, // Input for store, output for load
-    Type llvmElemTy, Value smemBase, std::function<Value(Value)> smemAddrAddon,
-    Value affineOffset, uint64_t maskSpanAffineOffset,
-    ConversionPatternRewriter &rewriter, const TargetInfoBase &targetInfo,
-    std::optional<int> maybeMaxVecElems,
+    Type llvmElemTy, Value smemBase,
+    std::function<Value(Value)> calcPaddedOffset, Value affineOffset,
+    uint64_t maskSpanAffineOffset, ConversionPatternRewriter &rewriter,
+    const TargetInfoBase &targetInfo, std::optional<int> maybeMaxVecElems,
     std::function<SmallVector<Value>(ConversionPatternRewriter &, Location,
                                      ArrayRef<Value>, Value, int, VectorType)>
         lowerInst) {
@@ -573,7 +573,7 @@ SmallVector<Value> lowerLdSt(
       auto regIdxAddI8 = regIdxAdd * (bitwidth / 8);
       Value innerOffset = b.add(offset, b.i32_val(regIdxAddI8));
       auto vecAddr =
-          b.gep(smemPtrTy, i8_ty, smemBase, smemAddrAddon(innerOffset),
+          b.gep(smemPtrTy, i8_ty, smemBase, calcPaddedOffset(innerOffset),
                 LLVM::GEPNoWrapFlags::inbounds);
       llvm::append_range(outVals,
                          lowerInst(rewriter, loc, vals, vecAddr, i + j, vecTy));
@@ -596,10 +596,10 @@ lowerLocalLdSt(Location loc, MLIRContext *ctx,
                ArrayRef<Value> valsArray, // Input for store, empty for load
                Type llvmElemTy, triton::gpu::MemDescType srcTy,
                SharedMemoryObject smemObj, ConversionPatternRewriter &rewriter,
-               const TargetInfoBase &targetInfo, Operation *op) {
+               const TargetInfoBase &targetInfo, Operation *localLoadOp) {
   assert(cvt.getNumOutDims() == 1);
   assert(*cvt.getOutDimNames().begin() == str_attr("offset"));
-  auto smemAddrAddon = [&](Value smemOffset) {
+  auto calcPaddedOffset = [&](Value smemOffset) {
     TritonLLVMOpBuilder b(loc, rewriter);
     if (auto paddedLayout = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(
             srcTy.getEncoding())) {
@@ -619,7 +619,7 @@ lowerLocalLdSt(Location loc, MLIRContext *ctx,
       inVals = removeBroadcastSrc.apply(inVals);
     }
     auto outVals = lowerLocalLdSt(loc, ctx, prmtCvt, inVals, llvmElemTy, srcTy,
-                                  smemObj, rewriter, targetInfo, op);
+                                  smemObj, rewriter, targetInfo, localLoadOp);
     if (!isStore) {
       outVals = broadcastAs(outVals, cvt);
     }
@@ -627,9 +627,9 @@ lowerLocalLdSt(Location loc, MLIRContext *ctx,
   }
   auto affineOffset = smemObj.getShmemOffset(loc, rewriter, srcTy);
   auto maskSpanAffineOffset = smemObj.getMaskSpanOffsets(srcTy);
-  return lowerLdStShared(loc, ctx, cvt, valsArray, llvmElemTy,
-                         smemObj.getBase(), smemAddrAddon, affineOffset,
-                         maskSpanAffineOffset, rewriter, targetInfo, op);
+  return lowerLdStShared(
+      loc, ctx, cvt, valsArray, llvmElemTy, smemObj.getBase(), calcPaddedOffset,
+      affineOffset, maskSpanAffineOffset, rewriter, targetInfo, localLoadOp);
 }
 
 bool emitTransferBetweenRegistersAndShared(
