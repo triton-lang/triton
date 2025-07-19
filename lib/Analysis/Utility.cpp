@@ -315,12 +315,6 @@ getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
   auto outDimNames = llvm::to_vector(srcLayout.getOutDimNames());
   auto S = srcLayout.sublayout(inDimNames, outDimNames);
   auto T = dstLayout.sublayout(inDimNames, outDimNames);
-  // Flatten outs for ease of building `P`, and reorder outs as flattening
-  // depends on output dimension order.
-  if (outDimNames != llvm::to_vector(T.getOutDimNames()))
-    T = T.transposeOuts(outDimNames);
-  S = S.flattenOuts();
-  T = T.flattenOuts();
   // Conditionally pad.
   if (nSrcRegBases != nDstRegBases || nSrcLaneBases != nDstLaneBases) {
     auto padWithZeros = [&](const LinearLayout &ll) {
@@ -342,6 +336,13 @@ getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
     T = padWithZeros(T);
   }
 
+  // Flatten outs for ease of building `P`, and reorder outs as flattening
+  // depends on output dimension order.
+  if (outDimNames != llvm::to_vector(T.getOutDimNames()))
+    T = T.transposeOuts(outDimNames);
+  S = S.flattenOuts();
+  T = T.flattenOuts();
+  
   // We compute T^transpose \circ S, which serves as a skeleton for `P`, then
   // fill in zero columns, prioritizing producing fixed points. As we only need
   // the basis vectors of `P`, we never actually produce the LinearLayout.
