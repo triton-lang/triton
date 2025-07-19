@@ -342,7 +342,7 @@ getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
     T = T.transposeOuts(outDimNames);
   S = S.flattenOuts();
   T = T.flattenOuts();
-  
+
   // We compute T^transpose \circ S, which serves as a skeleton for `P`, then
   // fill in zero columns, prioritizing producing fixed points. As we only need
   // the basis vectors of `P`, we never actually produce the LinearLayout.
