@@ -2025,7 +2025,7 @@ def test_tensor_atomic_use_result(dtype_str, size, op, device):
     index = torch.arange(0, size, device=device).to(dtype=getattr(torch, dtype_str))
     out = torch.zeros((size, ), device=device, dtype=getattr(torch, dtype_str))
     kernel[(1, )](index, out, size, op)
-    assert (out[0] == 5).all()
+    assert (out == 5).all()
 
 
 # ---------------
