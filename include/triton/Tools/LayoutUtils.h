@@ -126,7 +126,7 @@ std::optional<ColumnAction> regPermForDivide(const LinearLayout &A,
 ColumnAction actionRemoveBroadcastedRegs(const LinearLayout &layout);
 
 std::pair<int64_t, ColumnAction>
-actionAdditiveStrides(const LinearLayout &layout);
+actionAdditiveStrides(const LinearLayout &layout, uint64_t maskSpanOffsets);
 
 // For a layout A with A.hasInDim(kReg), repeat the values so that they have
 // the same broadcasting as layout
@@ -147,6 +147,22 @@ LinearLayout reshapeLayout(MLIRContext *ctx, LinearLayout layout,
 // Return a new layout with the dimensions transposed according to the given
 // order.
 LinearLayout transposeLinearLayout(LinearLayout layout, ArrayRef<int> order);
+
+// Reorders the in and out dimensions to match another layout.
+LinearLayout reorder_like(const LinearLayout &x, const LinearLayout &y);
+
+// For two layouts, `src` and `dst`, that differ only by a permutation of
+// their basis vectors, return a permutation layout `P` which satisfies
+// `dst` \circ `P` = `src`.
+//
+// The returned layout has the following properties:
+// - The orders of the input and output dimensions of `P` match the order of the
+//   input dimensions of `src`.
+// - Prioritizes making zero (broadcasting) vectors fixed-points of the
+//   permutation. I.e., if a vector is zero in both `src` and `dst` for the same
+//   input coordinate, it maps to itself under `P`.
+LinearLayout basisPermutationLayout(const LinearLayout &src,
+                                    const LinearLayout &dst);
 
 } // namespace mlir::triton
 

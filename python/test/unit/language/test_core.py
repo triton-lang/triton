@@ -6358,10 +6358,7 @@ shared_layouts = [
 @pytest.mark.parametrize("M, N, M_tile_size, N_tile_size",
                          [[128, 128, 64, 64], [128, 128, 64, 32], [128, 64, 64, 32], [256, 128, 64, 64]])
 def test_split_subview(M, N, M_tile_size, N_tile_size, device='cuda'):
-    if not is_hip() and N_tile_size == 32:
-        pytest.skip("Will fix spliting along the swizzling pattern in the next PR")
-    threads_per_warp = 64 if is_hip() else 32
-    num_rows_per_warp = threads_per_warp // 4
+    num_rows_per_warp = THREADS_PER_WARP // 4
     num_repeats_M = triton.cdiv(M, M_tile_size)
     num_repeats_N = triton.cdiv(N, N_tile_size)
 

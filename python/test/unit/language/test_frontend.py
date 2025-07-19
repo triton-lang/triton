@@ -1,6 +1,8 @@
 import triton
 import triton.language as tl
 from triton._filecheck import filecheck_test, run_filecheck_test
+from triton.compiler.errors import CompilationError
+import pytest
 
 # ===-----------------------------------------------------------------------===#
 # Unit Tests
@@ -528,3 +530,36 @@ def test_specialized_recursion():
 
     # CHECK: func {{.*}}recursive_reduce__i32S4S
     # CHECK-COUNT-2: call {{.*}}recursive_reduce__i32S2S
+
+
+@triton.jit
+def trivial_return():
+    return
+
+
+@filecheck_test
+@triton.jit
+def test_call_in_while():
+    # CHECK-LABEL: test_call_in_while
+    i = 0
+    while i < 10:
+        if i == 5:
+            trivial_return()
+        else:
+            trivial_return()
+
+
+def test_return_in_while():
+
+    @triton.jit
+    def kernel():
+        i = 0
+        while i < 10:
+            if i == 5:
+                return
+            i += 1
+
+    with pytest.raises(CompilationError) as e:
+        kernel.warmup(grid=(1, ))
+
+    assert "Cannot have `return` statements inside `while` or `for` statements in triton" in str(e.value)

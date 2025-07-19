@@ -1,4 +1,5 @@
 from __future__ import annotations
+import math
 from typing import TypeVar, List, TYPE_CHECKING, Tuple
 from functools import wraps
 
@@ -11,6 +12,7 @@ from triton._C.libtriton import ir
 import triton.language.core as tl_core
 from triton.language.core import (
     constexpr,
+    constexpr_function,
     base_value,
     base_type,
     dtype,
@@ -37,6 +39,7 @@ from triton.language.core import (
     float64,
     _unwrap_if_constexpr,
     _unwrap_shape,
+    static_range,
     tensor,
     tuple,
     tuple_type,
@@ -67,6 +70,7 @@ _IMPORT_FROM_TRITON: List[str] = [
 
 __all__ = [
     "constexpr",
+    "constexpr_function",
     "base_value",
     "base_type",
     "dtype",
@@ -104,6 +108,7 @@ __all__ = [
     "allocate_shared_memory",
     "set_auto_layout",
     "shared_memory_descriptor",
+    "static_range",
     "warp_specialize",
     *_IMPORT_FROM_TRITON,
 ]
@@ -215,6 +220,10 @@ class shared_memory_descriptor(base_value):
     @property
     def rank(self):
         return len(self.shape)
+
+    @property
+    def numel(self) -> int:
+        return math.prod(self.shape)
 
     @property
     def layout(self):

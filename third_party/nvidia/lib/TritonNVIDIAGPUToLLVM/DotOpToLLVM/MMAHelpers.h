@@ -98,6 +98,19 @@ private:
   int numSlicePerBlockN;
 };
 
+static Value getOffsetedBase(Value v, gpu::MemDescType memDescTy,
+                             const TypeConverter *typeConverter,
+                             ConversionPatternRewriter &rewriter,
+                             Location loc) {
+  TritonLLVMOpBuilder tb(loc, rewriter);
+  auto llvmElemTy = typeConverter->convertType(memDescTy.getElementType());
+  auto smemObj =
+      LLVM::getSharedMemoryObjectFromStruct(loc, v, llvmElemTy, rewriter);
+  auto offset = smemObj.getShmemOffset(loc, rewriter, memDescTy);
+  auto base = smemObj.getBase();
+  return tb.gep(base.getType(), llvmElemTy, base, offset);
+}
+
 } // namespace NVIDIA
 } // namespace triton
 } // namespace mlir
