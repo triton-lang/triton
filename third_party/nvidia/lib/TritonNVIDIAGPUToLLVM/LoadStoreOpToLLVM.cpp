@@ -958,7 +958,7 @@ public:
         createBarrier(rewriter, loc, numCTAs);
         Value ret = b.load(valueElemTy, atomPtr);
         rewriter.replaceOp(op, {ret});
-        continue;
+        return success();
       }
 
       // Let LLVM handle compare+swap loop; branch-based pred should be fine
@@ -1052,6 +1052,7 @@ public:
           b.barrier();
           Value ret = b.load(valueElemTy, atomPtr);
           rewriter.replaceOp(op, {ret});
+          return success();
         }
         continue;
       }
