@@ -21,11 +21,13 @@
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
+#include <cstdint>
 #include <queue>
 
 #include "mlir/Support/LLVM.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 #include "llvm/ADT/STLExtras.h"
@@ -258,29 +260,152 @@ void CTAPlanner::setTiling(llvm::ArrayRef<unsigned> CTAsPerCGA) {
 }
 
 bool CTAPlanner::processDot(triton::FuncOp &funcOp) {
-  // TODO: This is a naive implementation and should be refactored
-  auto getCTATiling = [](int64_t M, int64_t N, int64_t K,
-                         unsigned numCTAs) -> std::pair<unsigned, unsigned> {
-    // prefer a larger chunk size, at most 128; first assign splitM.
-    unsigned chunk_m = 128;
-    auto isLegal = [](unsigned chunk) { return chunk >= 64; };
-    unsigned splitM, splitN;
-    for (; isLegal(chunk_m); chunk_m /= 2) {
-      splitM = std::clamp<unsigned>(M / chunk_m, 1, numCTAs);
-      splitN = numCTAs / splitM;
-      if (isLegal(N / splitN)) // chunk_n;
-        break;
+  ModuleOp mod = funcOp->getParentOfType<ModuleOp>();
+
+  // Heuristic tiler (steps 1–5)
+  auto chooseCTASplits = [mod](int64_t M, int64_t N,
+                               int64_t K) -> std::pair<unsigned, unsigned> {
+    int cc = getNVIDIAComputeCapability(mod);
+    unsigned numSMs = [cc]() -> unsigned {
+      if (cc >= 120)
+        return 144;
+      if (cc >= 100)
+        return 132;
+      if (cc >= 90)
+        return 128;
+      if (cc >= 86)
+        return 108;
+      if (cc >= 80)
+        return 96;
+      if (cc >= 75)
+        return 80;
+      return 64;
+    }();
+    constexpr int64_t K_SMALL = 256;
+    constexpr int64_t K_LARGE = 2048;
+    if (M <= 0 || N <= 0)
+      return {1u, 1u};
+
+    // 1. base chunk M
+    int64_t baseChunk = (cc >= 120) ? 256 : 128;
+    if (baseChunk > M)
+      baseChunk = M;
+    int64_t chunkM = baseChunk;
+
+    // 2. K-based
+    if (K <= K_SMALL) {
+      if (chunkM > 64)
+        chunkM = 64;
+    } else if (K >= K_LARGE) {
+      if (chunkM < 128 && M >= 128)
+        chunkM = std::min<int64_t>(128, M);
     }
+
+    // 3. aspect + init N
+    double aspect = double(M) / double(N);
+    int64_t chunkN = std::min<int64_t>(chunkM, N);
+    if (aspect >= 4.0) { // tall
+      int64_t half = std::max<int64_t>(32, chunkM / 2);
+      chunkN = std::min<int64_t>(half, N);
+    } else if (aspect <= 0.25) { // wide
+      int64_t halfM = std::max<int64_t>(32, chunkM / 2);
+      chunkM = std::min<int64_t>(halfM, M);
+      chunkN = std::min<int64_t>(chunkM, N);
+    }
+
+    // clamp
+    chunkM = std::max<int64_t>(32, std::min<int64_t>(chunkM, M));
+    chunkN = std::max<int64_t>(32, std::min<int64_t>(chunkN, N));
+
+    auto ceilDiv = [](int64_t a, int64_t b) {
+      return (uint64_t)((a + b - 1) / b);
+    };
+    auto computeSplits = [&](int64_t cM, int64_t cN, unsigned &sM,
+                             unsigned &sN) {
+      sM = (unsigned)ceilDiv(M, cM);
+      sN = (unsigned)ceilDiv(N, cN);
+      if (!sM)
+        sM = 1;
+      if (!sN)
+        sN = 1;
+    };
+
+    unsigned splitM, splitN;
+    computeSplits(chunkM, chunkN, splitM, splitN);
+
+    // 4. tail fix
+    auto smallTail = [](int64_t dim, int64_t tile) {
+      if (tile <= 0)
+        return false;
+      int64_t tail = dim % tile;
+      if (!tail)
+        return false;
+      return (double)tail < 0.25 * (double)tile;
+    };
+    bool changed = false;
+    if (smallTail(M, chunkM) && chunkM > 32) {
+      chunkM = std::max<int64_t>(32, chunkM / 2);
+      changed = true;
+    }
+    if (smallTail(N, chunkN) && chunkN > 32) {
+      chunkN = std::max<int64_t>(32, chunkN / 2);
+      changed = true;
+    }
+    if (changed)
+      computeSplits(chunkM, chunkN, splitM, splitN);
+
+    // 5. occupancy boost
+    auto totalCTAs = [&]() { return (uint64_t)splitM * (uint64_t)splitN; };
+    int tries = 0;
+    while (totalCTAs() < numSMs && tries < 4) {
+      if (chunkM >= chunkN && chunkM > 32)
+        chunkM = std::max<int64_t>(32, chunkM / 2);
+      else if (chunkN > 32)
+        chunkN = std::max<int64_t>(32, chunkN / 2);
+      else
+        break;
+      computeSplits(chunkM, chunkN, splitM, splitN);
+      ++tries;
+    }
+
     return {splitM, splitN};
   };
 
+  // Phase 1: collect all DotOps
+  struct DotInfo {
+    triton::DotOp op;
+    uint64_t M, N, K;
+    double flops;
+  };
+  SmallVector<DotInfo> dots;
   funcOp.walk([&](triton::DotOp dot) {
+    auto aTy = cast<RankedTensorType>(dot.getA().getType());
+    auto dTy = cast<RankedTensorType>(dot.getD().getType());
+    uint64_t M = dTy.getShape()[0];
+    uint64_t N = dTy.getShape()[1];
+    uint64_t K = aTy.getShape()[1];
+    double flops = 2.0 * (double)M * (double)N * (double)K;
+    dots.push_back({dot, M, N, K, flops});
+  });
+  if (dots.empty())
+    return false;
+
+  // Phase 2: choose primary (max FLOPs)
+  auto *primary =
+      &*llvm::max_element(dots, [](const DotInfo &a, const DotInfo &b) {
+        return a.flops < b.flops;
+      });
+  auto [splitM, splitN] = chooseCTASplits(primary->M, primary->N, primary->K);
+  setTiling({splitM, splitN, 1}); // single global tiling
+
+  // Phase 3: apply tiling layouts to every Dot
+  for (auto &info : dots) {
+    triton::DotOp dot = info.op;
     MLIRContext *ctx = dot.getContext();
 
     auto aTy = cast<RankedTensorType>(dot.getA().getType());
     auto bTy = cast<RankedTensorType>(dot.getB().getType());
     auto dTy = cast<RankedTensorType>(dot.getD().getType());
-
     assert(isa<ttg::DotOperandEncodingAttr>(aTy.getEncoding()) &&
            isa<ttg::DotOperandEncodingAttr>(bTy.getEncoding()) &&
            isa<ttg::BlockedEncodingAttr>(dTy.getEncoding()) &&
@@ -290,24 +415,17 @@ bool CTAPlanner::processDot(triton::FuncOp &funcOp) {
     auto bLayout = cast<ttg::DotOperandEncodingAttr>(bTy.getEncoding());
     auto dLayout = cast<ttg::BlockedEncodingAttr>(dTy.getEncoding());
 
-    unsigned M = dTy.getShape()[0];
-    unsigned N = dTy.getShape()[1];
-    unsigned K = aTy.getShape()[1];
-
-    unsigned splitM, splitN;
-    std::tie(splitM, splitN) = getCTATiling(M, N, K, ttg::getNumCTAs(dLayout));
-    // FIXME: Should consider IR with more than one DotOps
-    setTiling({splitM, splitN, 1});
-
     OpBuilder builder(dot);
     auto numThreads = ttg::lookupThreadsPerWarp(builder);
     auto numWarps = ttg::lookupNumWarps(dot);
 
     auto newCTALayout = ttg::CTALayoutAttr::get(ctx, {splitM, splitN},
                                                 {splitM, splitN}, {1, 0});
+
     auto newDLayout = ttg::BlockedEncodingAttr::get(
         ctx, dTy.getShape(), dLayout.getSizePerThread(), dLayout.getOrder(),
         numWarps, numThreads, newCTALayout);
+
     auto newALayout = ttg::DotOperandEncodingAttr::get(ctx, aLayout.getOpIdx(),
                                                        newDLayout, 0);
     auto newBLayout = ttg::DotOperandEncodingAttr::get(ctx, bLayout.getOpIdx(),
@@ -315,7 +433,7 @@ bool CTAPlanner::processDot(triton::FuncOp &funcOp) {
 
     insertCasts(dot.getOperation(), {newALayout, newBLayout, newDLayout},
                 {newDLayout});
-  });
+  }
 
   return true;
 }
