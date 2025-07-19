@@ -399,7 +399,8 @@ getSharedEncIfAllUsersAreDotEnc(Value loadedValue) {
       if (!getSharedEncIfAllUsersAreDotEnc(userResult).has_value())
         return std::nullopt;
     } else {
-      if (!isa<ttg::LocalLoadOp, ttg::ConvertLayoutOp>(user))
+      if (!(isa<ttg::ConvertLayoutOp>(user) ||
+            user->hasTrait<OpTrait::LocalLoadTrait>()))
         return std::nullopt;
 
       auto srcTy = cast<ttg::TensorOrMemDesc>(loadedValue.getType());
