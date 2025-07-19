@@ -191,14 +191,14 @@ template <typename FPType> struct FPTypeInfo {
 template <typename ConvertOp>
 static SmallVector<Value>
 cvtScalePkUpcastFromFp8(Location loc, ConversionPatternRewriter &rewriter,
-                        const SmallVector<Value> v) {
+                        const SmallVector<Value> &v) {
   assert(v.size() == 4);
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto fp8x4VecTy = vec_ty(i8_ty, 4);
   Value fp8x4Vec = b.undef(fp8x4VecTy);
   SmallVector<Value, 4> idx;
   for (size_t i = 0; i < 4; i++) {
-    idx[i] = b.i32_val(i);
+    idx.push_back(b.i32_val(i));
     fp8x4Vec = b.insert_element(fp8x4VecTy, fp8x4Vec, v[i], idx[i]);
   }
   auto i32v = b.bitcast(fp8x4Vec, i32_ty);
@@ -233,7 +233,7 @@ cvtScalePkUpcastFromFp8(Location loc, ConversionPatternRewriter &rewriter,
 template <typename ConvertOp>
 static SmallVector<Value>
 cvtScalePkDowncastToFp8(Location loc, ConversionPatternRewriter &rewriter,
-                        const SmallVector<Value> v) {
+                        const SmallVector<Value> &v) {
   assert(v.size() == 4);
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
@@ -586,14 +586,14 @@ static Value cvtFp16ToFp32(Location loc, ConversionPatternRewriter &rewriter,
 template <typename ConvertOp>
 static SmallVector<Value> cvtPkF8ToFp32(Location loc,
                                         ConversionPatternRewriter &rewriter,
-                                        const SmallVector<Value> v) {
+                                        const SmallVector<Value> &v) {
   assert(v.size() == 4);
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto fp8x4VecTy = vec_ty(i8_ty, 4);
   Value fp8x4Vec = b.undef(fp8x4VecTy);
   SmallVector<Value, 4> idx;
   for (size_t i = 0; i < 4; i++) {
-    idx[i] = b.i32_val(i);
+    idx.push_back(b.i32_val(i));
     fp8x4Vec = b.insert_element(fp8x4VecTy, fp8x4Vec, v[i], idx[i]);
   }
   auto i32v = b.bitcast(fp8x4Vec, i32_ty);
