@@ -10,6 +10,7 @@ import re
 import functools
 import warnings
 from pathlib import Path
+import os
 
 
 def get_min_dot_size(target: GPUTarget):
@@ -219,6 +220,37 @@ class HIPBackend(BaseBackend):
         local_prefetch = knobs.amd.local_prefetch
         use_async_copy = knobs.amd.use_async_copy
         use_block_pingpong = is_pingpong_schedule_enabled(options.arch)
+
+        pm.run(mod)
+        tname = "./cache.ir"
+        outname = "./tempout.ir"
+        with open(outname, 'wb') as fd_out:
+            fd_out.write(str(mod).encode())
+            fd_out.close()
+        if os.path.isfile(tname) is False:
+            tname = outname
+        else:
+            with open(tname, 'rb') as fd_in:
+                fd_in.seek(0)
+                new = fd_in.read()
+                fd_in.close()
+                alines = str(mod).splitlines()
+                rlines = str(new, 'UTF-8').splitlines()
+                found = False
+                fline = 0
+                for line in alines:
+                    if line.find("tt.func") > 0:
+                        found = True
+                        break
+                    fline = fline + 1
+            if alines[fline] != rlines[fline]:
+                tname = outname
+
+        mod2 = ir.parse_mlir_module(tname, mod.context)
+        mod2.context = mod.context
+        pm = ir.pass_manager(mod.context)
+        pm.enable_debug()
+        mod = mod2
 
         amd.passes.ttgpuir.add_stream_pipeline(pm, options.num_stages, global_prefetch, local_prefetch, use_async_copy,
                                                use_block_pingpong)
