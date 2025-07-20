@@ -326,11 +326,9 @@ bool CTAPlanner::processDot(triton::FuncOp &funcOp) {
 
     auto newCTALayout = ttg::CTALayoutAttr::get(ctx, {splitM, splitN},
                                                 {splitM, splitN}, {1, 0});
-
     auto newDLayout = ttg::BlockedEncodingAttr::get(
         ctx, dTy.getShape(), dLayout.getSizePerThread(), dLayout.getOrder(),
         numWarps, numThreads, newCTALayout);
-
     auto newALayout = ttg::DotOperandEncodingAttr::get(ctx, aLayout.getOpIdx(),
                                                        newDLayout, 0);
     auto newBLayout = ttg::DotOperandEncodingAttr::get(ctx, bLayout.getOpIdx(),
