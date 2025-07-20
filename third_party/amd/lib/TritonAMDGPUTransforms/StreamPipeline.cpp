@@ -772,7 +772,7 @@ struct PipelinePass : impl::TritonAMDGPUStreamPipelineBase<PipelinePass> {
           // generate incorrect IR order when numStages==3.
           if (tt::getNumStagesOrDefault(maybeForOp, numStages) == 3)
             return;
-	waitOps.insert(waitOp);
+        waitOps.insert(waitOp);
       });
       tt::combineRedundantWaitOps(waitOps);
     }
