@@ -1166,9 +1166,9 @@ struct BufferAtomicRMWOpConversion
       return failure();
     }
 
-    finalizeTensorAtomicResults(op, cast<RankedTensorType>(valueTy), rewriter,
-                                loadedVals, valueElemTy, b, threadPred,
-                                targetInfo, getTypeConverter());
+    finalizeTensorAtomicResults(op, dyn_cast<RankedTensorType>(valueTy),
+                                rewriter, loadedVals, valueElemTy, b,
+                                threadPred, targetInfo, getTypeConverter());
     return success();
   }
 };
@@ -1280,9 +1280,9 @@ struct BufferAtomicCASOpConversion
       return failure();
     }
 
-    finalizeTensorAtomicResults(op, cast<RankedTensorType>(valueTy), rewriter,
-                                loadedVals, valueElemTy, b, threadPred,
-                                targetInfo, getTypeConverter());
+    finalizeTensorAtomicResults(op, dyn_cast<RankedTensorType>(valueTy),
+                                rewriter, loadedVals, valueElemTy, b,
+                                threadPred, targetInfo, getTypeConverter());
     return success();
   }
 };
