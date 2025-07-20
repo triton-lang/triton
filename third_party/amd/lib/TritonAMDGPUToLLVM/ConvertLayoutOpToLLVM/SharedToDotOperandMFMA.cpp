@@ -230,6 +230,11 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   auto nDim = mfmaLayout.getNDim();
   assert((mDim == nDim && (mDim == 32 || mDim == 16 || mDim == 4)) ||
          (mDim == 64 && nDim == 4) || (mDim == 4 && nDim == 64));
+
+  // Do not use this path as it causes wrong results for 64x4 and 4x64
+  if ((mDim == 64 && nDim == 4) || (mDim == 4 && nDim == 64))
+    return Value();
+
   auto warpsPerCTA = mfmaLayout.getWarpsPerCTA();
 
   auto sharedLayout =
