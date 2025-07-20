@@ -7,6 +7,7 @@ import triton
 from triton_kernels import target_info
 from triton_kernels.numerics import InFlexData, OutFlexData
 from triton_kernels.routing import GatherIndx, RoutingData, ScatterIndx
+from triton_kernels.target_info import is_cuda
 # details
 from .matmul_ogs_details._matmul_ogs import _compute_writeback_idx
 from .matmul_ogs_details._matmul_ogs import _matmul_ogs
@@ -384,7 +385,7 @@ def matmul_ogs(x, w, bias,
     # unpack scales
     w_scale = precision_config.weight_scale
     has_mx = w_scale is not None
-    is_hopper_fp8 = not target_info.cuda_capability_geq(10, 0) and bitwidth(w.dtype) == 8
+    is_hopper_fp8 = is_cuda() and not target_info.cuda_capability_geq(10, 0) and bitwidth(w.dtype) == 8
     if has_mx: assert w.stride(-2) == 1, "`w` must be column-major when it has data-type mxfp"
     if is_hopper_fp8: assert w.stride(-2) == 1, "`w` must be column-major when it has data-type FP8 on capability < 10"
     if not isinstance(w, Tensor):

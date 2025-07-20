@@ -32,6 +32,7 @@ include "triton/Dialect/Triton/IR/TritonAttrDefs.td"
 include "triton/Dialect/Triton/IR/TritonInterfaces.td"
 include "triton/Dialect/Triton/IR/TritonOpInterfaces.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUTypes.td"
+include "triton/Dialect/TritonGPU/IR/TritonGPUAttrDefs.td"
 
 include "mlir/IR/EnumAttr.td"
 include "mlir/Dialect/LLVMIR/LLVMOpBase.td"
@@ -411,6 +412,46 @@ def BufferAtomicRMWOp : TT_AMDGPU_Op<"buffer_atomic_rmw", [
 }
 
 //===----------------------------------------------------------------------===//
+// BufferAtomicCASOp
+//===----------------------------------------------------------------------===//
+def BufferAtomicCASOp : TT_AMDGPU_Op<"buffer_atomic_cas", [
+  SameLoadStoreOperandsAndResultEncoding,
+  TypesMatchWith<"result element type matches the val type", "result", "val", "$_self">,
+  TypesMatchWith<"result element type matches the cmp type", "result", "cmp", "$_self">,
+  TypesMatchWith<"result element type matches the pointed type of ptr", "result", "ptr", "getPointerTypeToElement($_self)">,
+  TypesMatchWith<"result and offsets have the same shape", "result", "offsets", "getI32SameShape($_self)">,
+  TypesMatchWith<"val and offsets have the same shape", "val", "offsets", "getI32SameShape($_self)">,
+  TypesMatchWith<"val and cmp have the same shape", "val", "cmp", "$_self">,
+]>{
+    let summary = "Atomic CAS op which does compare-exchange to a scalar base pointer and a tensor offset";
+    let description = [{
+        AMD Buffer Atomic CAS operation. Buffer atomics are similar to normal atomics, but access global memory via a
+        scalar base pointer and a tensor of offsets instead of a tensor of pointers.
+        Similar to TT_AtomicCASOp: Buffer atomic CAS op loads data at $ptr, and stores $val to $ptr atomically if value at $ptr equals $cmp, with
+        the specified memory semantics and scope. Atomic CAS ops return the pre-op value if used, otherwise the value is implicitly dropped.
+        Stride is the distance between the beginning of contiguous memory chunks. When performing a CAS, the `stride` is
+        the address difference between the first elements of each row in bytes. Compiler tries to obtain the `stride`
+        when it converts to the buffer ops because it is important for optimizing the cache memory access.
+    }];
+    let arguments = (ins
+      Arg<TT_Ptr, "Global memory pointer", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$ptr,
+      I32Tensor:$offsets,
+      TT_Tensor:$cmp,
+      TT_Tensor:$val,
+      Optional<I32>:$stride,
+      TT_MemSemanticAttr:$sem,
+      TT_MemSyncScopeAttr:$scope
+    );
+    let results = (outs TT_Tensor:$result);
+
+    let assemblyFormat = [{
+        $sem `,` $scope `,` $cmp `,` $val `,` $ptr `[` $offsets `]`
+        (`stride` `=` $stride^)?
+        attr-dict `:` type($result)
+    }];
+}
+
+//===----------------------------------------------------------------------===//
 // BufferStoreOp
 //===----------------------------------------------------------------------===//
 
@@ -526,7 +567,7 @@ def InThreadTransposeOp : TT_AMDGPU_Op<"in_thread_transpose", [Pure]> {
 // LocalLoadPackedTransposedOp
 //===----------------------------------------------------------------------===//
 
-def LocalLoadPackedTransposedOp : TT_AMDGPU_Op<"local_load_packed_tranposed"> {
+def LocalLoadPackedTransposedOp : TT_AMDGPU_Op<"local_load_packed_tranposed", [LocalLoadTrait]> {
     let summary = "Load a transposed packed tensor from shared memory into a distributed tensor";
     let description = [{
       Requires a M/N packed and M/N contiguous tensor in shared memory and will yield a K packed K contiguous tensor in registers.

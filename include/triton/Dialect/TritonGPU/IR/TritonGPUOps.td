@@ -322,7 +322,7 @@ def TTG_MemDescReinterpretOp : TTG_Op<"memdesc_reinterpret", [Pure, MemDescViewT
   let hasFolder = 1;
 }
 
-def TTG_LocalLoadOp : TTG_Op<"local_load"> {
+def TTG_LocalLoadOp : TTG_Op<"local_load", [LocalLoadTrait]> {
   let summary = "Load a buffer from local memory into a distributed tensor";
 
   let description = [{
