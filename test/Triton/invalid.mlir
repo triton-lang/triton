@@ -546,3 +546,12 @@ tt.func @unsplat_invalid(%arg0: tensor<128xf32>) {
   %0 = tt.unsplat %arg0 : tensor<128xf32>
   tt.return
 }
+
+// -----
+
+tt.func @atomic_cas_different_elem_types(%arg0: tensor<128x!tt.ptr<f32>>, %arg1: tensor<128xi32>) {
+  // expected-error @below {{operand element types must match}}
+  %cmp = arith.constant dense<0> : tensor<128xi32>
+  %0 = tt.atomic_cas relaxed, gpu, %arg0, %cmp, %arg1 : (tensor<128x!tt.ptr<f32>>, tensor<128xi32>, tensor<128xi32>) -> tensor<128xi32>
+  tt.return
+}

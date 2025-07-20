@@ -384,6 +384,7 @@ def TT_AtomicRMWOp : TT_Op<"atomic_rmw", [
 }
 
 def TT_AtomicCASOp : TT_Op<"atomic_cas", [SameOperandsAndResultShape,
+                                          SameOperandsAndResultElementType,
                                           SameOperandsAndResultEncoding]> {
     let summary = "atomic cas";
 
