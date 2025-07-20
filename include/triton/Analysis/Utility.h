@@ -264,11 +264,6 @@ bool cvtNeedsWarpShuffle(RankedTensorType srcTy, RankedTensorType dstTy);
 // warps, and possibly blocks.
 bool cvtNeedsSharedMemory(RankedTensorType srcTy, RankedTensorType dstTy);
 
-// Check if WMMA layout can be converted to the dot operand
-// layout using warp shuffle.
-bool matchWMMAAndDotOperandShuffleCase(RankedTensorType srcTy,
-                                       RankedTensorType dstTy);
-
 // TODO: Move utility functions that belong to ConvertLayoutOp to class
 // ConvertLayoutOpHelper in the future
 bool shouldUseDistSmem(Attribute srcLayout, Attribute dstLayout);
