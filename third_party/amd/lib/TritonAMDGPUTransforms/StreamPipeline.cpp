@@ -771,7 +771,8 @@ struct PipelinePass : impl::TritonAMDGPUStreamPipelineBase<PipelinePass> {
           // FIXME: There's potential bug in combinRedundantWaitOps(), it
           // generate incorrect IR order when numStages==3.
           if (tt::getNumStagesOrDefault(maybeForOp, numStages) == 3)
-            waitOps.insert(waitOp);
+            return;
+	waitOps.insert(waitOp);
       });
       tt::combineRedundantWaitOps(waitOps);
     }
