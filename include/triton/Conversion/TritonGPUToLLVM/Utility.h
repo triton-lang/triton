@@ -655,6 +655,13 @@ SmallVector<Value> inlineRegion(RewriterBase &rewriter, Region &region,
                           mlir::TypeID::get<TerminatorOp>(), loc);
 }
 
+void finalizeTensorAtomicResults(Operation *op, RankedTensorType tensorTy,
+                                 ConversionPatternRewriter &rewriter,
+                                 SmallVector<Value> &resultVals,
+                                 Type valueElemTy, TritonLLVMOpBuilder &b,
+                                 Value threadPred,
+                                 const TargetInfoBase &targetInfo,
+                                 const LLVMTypeConverter *typeConverter);
 } // namespace mlir
 
 #endif
