@@ -749,25 +749,6 @@ bool matchMFMAAndDotOperandShuffleCase(RankedTensorType srcTy,
          mfmaLayout.getWarpsPerCTA()[1] == 1;
 }
 
-bool matchWMMAAndDotOperandShuffleCase(RankedTensorType srcTy,
-                                       RankedTensorType dstTy) {
-  auto wmmaLayout = dyn_cast<AMDWmmaEncodingAttr>(srcTy.getEncoding());
-  auto dotOperandLayout = dyn_cast<DotOperandEncodingAttr>(dstTy.getEncoding());
-
-  if (!wmmaLayout || wmmaLayout.getVersion() != 1 || !dotOperandLayout)
-    return false;
-
-  auto dotOperandWmmaLayout =
-      dyn_cast<AMDWmmaEncodingAttr>(dotOperandLayout.getParent());
-
-  return wmmaLayout.getIsTransposed() &&
-         ((srcTy.getElementType().isF16() && dstTy.getElementType().isF16()) ||
-          (srcTy.getElementType().isBF16() &&
-           dstTy.getElementType().isBF16())) &&
-         dotOperandWmmaLayout &&
-         wmmaLayout.getWarpsPerCTA() == dotOperandWmmaLayout.getWarpsPerCTA();
-}
-
 // We get the smallest submap of srcTy^{-1} * dstTy that is not the identity
 // under the common dimensions. The idea here is that if we have a
 // transformation that's the identity on kBlock, we don't need to use
@@ -832,7 +813,6 @@ bool cvtNeedsSharedMemory(RankedTensorType srcTy, RankedTensorType dstTy) {
          !matchMmaV3AndDotOperandLayout(srcTy, dstTy) &&
          // to be removed when generalized warp shuffle conversions
          // are ready:
-         !matchWMMAAndDotOperandShuffleCase(srcTy, dstTy) &&
          !matchMFMAAndDotOperandShuffleCase(srcTy, dstTy);
 }
 
