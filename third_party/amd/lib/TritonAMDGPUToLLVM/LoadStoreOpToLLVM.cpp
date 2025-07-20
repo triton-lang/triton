@@ -1479,7 +1479,7 @@ struct AtomicCASOpConversion
             loc, casPtr, casCmp, casVal, successOrdering, failureOrdering,
             StringRef("agent"));
 
-        if (atomicNeedsSharedMemory(op.getResult())) {
+        if (!op.getResult().use_empty()) {
           // Extract the new_loaded value from the pair.
           Value newLoaded = b.extract_val(valueElemTy, cmpxchg, 0);
           Value atomPtr =
@@ -1641,7 +1641,7 @@ struct AtomicRMWOpConversion
     auto tid = getThreadId(rewriter, loc);
 
     std::optional<Value> atomicSharedMemBase =
-        atomicNeedsSharedMemory(opResult)
+        op->hasAttr("allocation.offset")
             ? std::optional<Value>(getSharedMemoryBase(
                   loc, rewriter, targetInfo, op.getOperation()))
             : std::nullopt;
