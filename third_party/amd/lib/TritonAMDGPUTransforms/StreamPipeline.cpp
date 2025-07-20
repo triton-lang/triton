@@ -764,7 +764,7 @@ struct PipelinePass : impl::TritonAMDGPUStreamPipelineBase<PipelinePass> {
                          useAsyncCopy, waitAtTail);
     }
 
-    if (useAsyncCopy) {
+    if (useAsyncCopy && numStages != 3) {
       llvm::SmallSetVector<ttg::AsyncWaitOp, 8> waitOps;
       moduleOp.walk([&](ttg::AsyncWaitOp waitOp) {
         if (auto maybeForOp = dyn_cast<scf::ForOp>(waitOp->getParentOp()))
