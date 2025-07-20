@@ -17,7 +17,6 @@
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
-#include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 #include "triton/Tools/LayoutUtils.h"
@@ -48,17 +47,6 @@ Value maybeAnd(RewriterBase &rewriter, Location loc, Value a, Value b) {
     return tb.and_(a, b);
   }
   return a ? a : b;
-}
-
-void createBarrier(ConversionPatternRewriter &rewriter, Location loc,
-                   int numCTAs) {
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  if (numCTAs == 1) {
-    b.barrier();
-  } else {
-    rewriter.create<triton::nvidia_gpu::ClusterArriveOp>(loc, false);
-    rewriter.create<triton::nvidia_gpu::ClusterWaitOp>(loc);
-  }
 }
 
 // Return a predicate that is true only if the current thread holds unique data,
@@ -575,6 +563,17 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
 
   int computeCapability;
 };
+
+void createBarrier(ConversionPatternRewriter &rewriter, Location loc,
+                   int numCTAs) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  if (numCTAs == 1) {
+    b.barrier();
+  } else {
+    rewriter.create<triton::nvidia_gpu::ClusterArriveOp>(loc, false);
+    rewriter.create<triton::nvidia_gpu::ClusterWaitOp>(loc);
+  }
+}
 
 struct AtomicCASOpConversion
     : public ConvertOpToLLVMPattern<triton::AtomicCASOp>,
