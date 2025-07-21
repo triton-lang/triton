@@ -222,9 +222,12 @@ SmallVector<unsigned> getCTAOrder(Attribute layout);
 SmallVector<unsigned> getShapePerCTATile(RankedTensorType layout);
 
 // Returns the "logical" shape per CTA.
-// If shape has more dimensions than CTASplitNum, we assume only the last N
-// common dimensions are split, where N is the size of CTASplitNum. E.g. for
-// shape = [2, 4, 8] and CTASplitNum = [2, 2], the result is [2, 2, 4].
+// When shape and CTASplitNum have different number of dimensions, we assume
+// only the last N between common dimensions are split.
+// Example1: shape = [2, 4, 8], CTASplitNum = [2, 2], ret = [2, 2, 4].
+// It can be caused by pipelining.
+// Example2: shape = [2, 4], CTASplitNum = [2, 2, 2], ret = [1, 2].
+// It can be caused by memory slicing.
 SmallVector<int64_t> getShapePerCTA(ArrayRef<unsigned> CTASplitNum,
                                     ArrayRef<int64_t> shape);
 SmallVector<int64_t> getShapePerCTA(Attribute layout, ArrayRef<int64_t> shape);

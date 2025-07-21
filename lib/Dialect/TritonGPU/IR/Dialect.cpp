@@ -293,11 +293,15 @@ SmallVector<int64_t> getShapePerCTA(ArrayRef<unsigned> CTASplitNum,
                                     ArrayRef<int64_t> shape) {
   unsigned rank = shape.size();
   auto splitNum = llvm::to_vector(CTASplitNum);
-  splitNum.insert(splitNum.begin(), rank - splitNum.size(), 1);
+  if (splitNum.size() <= rank) { // pipelining
+    splitNum.insert(splitNum.begin(), rank - splitNum.size(), 1);
+  } else { // memory slicing
+    splitNum =
+        llvm::to_vector(llvm::drop_begin(splitNum, splitNum.size() - rank));
+  }
   SmallVector<int64_t> shapePerCTA(rank);
   for (unsigned i = 0; i < rank; ++i) {
-    unsigned split = std::min<unsigned>(shape[i], splitNum[i]);
-    shapePerCTA[i] = shape[i] / split;
+    shapePerCTA[i] = shape[i] / std::min<unsigned>(shape[i], splitNum[i]);
   }
   return shapePerCTA;
 }
