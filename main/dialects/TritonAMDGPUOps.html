@@ -839,6 +839,7 @@ interleave for better instruction level parallelism.</p>
 <p>Requires a M/N packed and M/N contiguous tensor in shared memory and will yield a K packed K contiguous tensor in registers.
 The packing change will change the shape of the tensor by doubling the M/N dimension and halving the K dimension.
 For example if A is 16x64 in shared memory, the result of this operation will be 32x32.</p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">LocalLoadTrait</span></code></p>
 <section id="id21">
 <h3>Operands:<a class="headerlink" href="#id21" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">

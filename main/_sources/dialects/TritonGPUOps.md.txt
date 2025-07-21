@@ -294,7 +294,7 @@ operation ::= `ttg.local_load` $src (`token` $token^)? attr-dict `:` qualified(t
 
 Load a tensor from the local memory descriptor into a distributed tensor.
 
-Traits: `VerifyTensorLayoutsTrait`
+Traits: `LocalLoadTrait`, `VerifyTensorLayoutsTrait`
 
 #### Operands:
 

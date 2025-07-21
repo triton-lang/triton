@@ -546,6 +546,8 @@ Requires a M/N packed and M/N contiguous tensor in shared memory and will yield 
 The packing change will change the shape of the tensor by doubling the M/N dimension and halving the K dimension.
 For example if A is 16x64 in shared memory, the result of this operation will be 32x32.
 
+Traits: `LocalLoadTrait`
+
 #### Operands:
 
 | Operand | Description |
