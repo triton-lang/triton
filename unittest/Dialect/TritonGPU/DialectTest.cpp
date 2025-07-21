@@ -380,20 +380,23 @@ TEST_F(ShapePerCTATest, ShapePerCTA) {
   SmallVector<unsigned> CTASplitNum = {2, 4};
   SmallVector<int64_t> shape = {64, 128};
   auto shapePerCTA = getShapePerCTA(CTASplitNum, shape);
+  auto expectedShapePerCTA = SmallVector<int64_t>{32, 32};
   EXPECT_EQ(shapePerCTA.size(), shape.size());
-  EXPECT_EQ(shapePerCTA, {32, 32});
+  EXPECT_EQ(shapePerCTA, expectedShapePerCTA);
 
   // rank(shape) < rank(CTASplitNum)
   CTASplitNum = {2, 4, 8};
   shapePerCTA = getShapePerCTA(CTASplitNum, shape);
+  expectedShapePerCTA = SmallVector<int64_t>{16, 16};
   EXPECT_EQ(shapePerCTA.size(), shape.size());
-  EXPECT_EQ(shapePerCTA, {16, 16});
+  EXPECT_EQ(shapePerCTA, expectedShapePerCTA);
 
   // rank(shape) > rank(CTASplitNum)
   CTASplitNum = {2};
   shapePerCTA = getShapePerCTA(CTASplitNum, shape);
+  expectedShapePerCTA = SmallVector<int64_t>{64, 64};
   EXPECT_EQ(shapePerCTA.size(), shape.size());
-  EXPECT_EQ(shapePerCTA, {64, 64});
+  EXPECT_EQ(shapePerCTA, expectedShapePerCTA);
 }
 
 TEST_F(JoinOpTest, JoinOpLayoutPropagation) {
