@@ -62,22 +62,40 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   tt.func @downcast_to_f8(%arg0: tensor<8x8xf32, #ttg.dot_op<{opIdx = 0, parent = #blocked2}>>,
                      %arg1: tensor<8x8xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked2}>>,
                      %arg2: tensor<8x8xbf16, #ttg.dot_op<{opIdx = 0, parent = #blocked2}>>) {
-    // GFX950-COUNT-4: rocdl.cvt.scalef32.pk.bf8.f32
+    // GFX950: rocdl.cvt.scalef32.pk.bf8.f32  %{{.*}}, %{{.*}}, %{{.*}} -> %{{.*}}[false]
+    // GFX950: rocdl.cvt.scalef32.pk.bf8.f32  %{{.*}}, %{{.*}}, %{{.*}} -> %{{.*}}[true]
+    // GFX950: rocdl.cvt.scalef32.pk.bf8.f32  %{{.*}}, %{{.*}}, %{{.*}} -> %{{.*}}[false]
+    // GFX950: rocdl.cvt.scalef32.pk.bf8.f32  %{{.*}}, %{{.*}}, %{{.*}} -> %{{.*}}[true]
     %0 = tt.fp_to_fp %arg0, rounding = rtne : tensor<8x8xf32, #ttg.dot_op<{opIdx = 0, parent = #blocked2}>> -> tensor<8x8xf8E5M2, #ttg.dot_op<{opIdx = 0, parent = #blocked2}>>
 
-    // GFX950-COUNT-4: rocdl.cvt.scalef32.pk.bf8.f16
+    // GFX950: rocdl.cvt.scalef32.pk.bf8.f16 %{{.*}}, %{{.*}} -> %{{.*}}[false]
+    // GFX950: rocdl.cvt.scalef32.pk.bf8.f16 %{{.*}}, %{{.*}} -> %{{.*}}[true]
+    // GFX950: rocdl.cvt.scalef32.pk.bf8.f16 %{{.*}}, %{{.*}} -> %{{.*}}[false]
+    // GFX950: rocdl.cvt.scalef32.pk.bf8.f16 %{{.*}}, %{{.*}} -> %{{.*}}[true]
     %1 = tt.fp_to_fp %arg1, rounding = rtne : tensor<8x8xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked2}>> -> tensor<8x8xf8E5M2, #ttg.dot_op<{opIdx = 0, parent = #blocked2}>>
 
-    // GFX950-COUNT-4: rocdl.cvt.scalef32.pk.bf8.bf16
+    // GFX950: rocdl.cvt.scalef32.pk.bf8.bf16 %{{.*}}, %{{.*}} -> %{{.*}}[false]
+    // GFX950: rocdl.cvt.scalef32.pk.bf8.bf16 %{{.*}}, %{{.*}} -> %{{.*}}[true]
+    // GFX950: rocdl.cvt.scalef32.pk.bf8.bf16 %{{.*}}, %{{.*}} -> %{{.*}}[false]
+    // GFX950: rocdl.cvt.scalef32.pk.bf8.bf16 %{{.*}}, %{{.*}} -> %{{.*}}[true]
     %2 = tt.fp_to_fp %arg2, rounding = rtne : tensor<8x8xbf16, #ttg.dot_op<{opIdx = 0, parent = #blocked2}>> -> tensor<8x8xf8E5M2, #ttg.dot_op<{opIdx = 0, parent = #blocked2}>>
 
-    // GFX950-COUNT-4: rocdl.cvt.scalef32.pk.fp8.f32
+    // GFX950: rocdl.cvt.scalef32.pk.fp8.f32 %{{.*}}, %{{.*}}, %{{.*}} -> %{{.*}}[false]
+    // GFX950: rocdl.cvt.scalef32.pk.fp8.f32 %{{.*}}, %{{.*}}, %{{.*}} -> %{{.*}}[true]
+    // GFX950: rocdl.cvt.scalef32.pk.fp8.f32 %{{.*}}, %{{.*}}, %{{.*}} -> %{{.*}}[false]
+    // GFX950: rocdl.cvt.scalef32.pk.fp8.f32 %{{.*}}, %{{.*}}, %{{.*}} -> %{{.*}}[true]
     %3 = tt.fp_to_fp %arg0, rounding = rtne : tensor<8x8xf32, #ttg.dot_op<{opIdx = 0, parent = #blocked2}>> -> tensor<8x8xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #blocked2}>>
 
-    // GFX950-COUNT-4: rocdl.cvt.scalef32.pk.fp8.f16
+    // GFX950: rocdl.cvt.scalef32.pk.fp8.f16 %{{.*}}, %{{.*}} -> %{{.*}}[false]
+    // GFX950: rocdl.cvt.scalef32.pk.fp8.f16 %{{.*}}, %{{.*}} -> %{{.*}}[true]
+    // GFX950: rocdl.cvt.scalef32.pk.fp8.f16 %{{.*}}, %{{.*}} -> %{{.*}}[false]
+    // GFX950: rocdl.cvt.scalef32.pk.fp8.f16 %{{.*}}, %{{.*}} -> %{{.*}}[true]
     %4 = tt.fp_to_fp %arg1, rounding = rtne : tensor<8x8xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked2}>> -> tensor<8x8xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #blocked2}>>
 
-    // GFX950-COUNT-4: rocdl.cvt.scalef32.pk.fp8.bf16
+    // GFX950: rocdl.cvt.scalef32.pk.fp8.bf16 %{{.*}}, %{{.*}} -> %{{.*}}[false]
+    // GFX950: rocdl.cvt.scalef32.pk.fp8.bf16 %{{.*}}, %{{.*}} -> %{{.*}}[true]
+    // GFX950: rocdl.cvt.scalef32.pk.fp8.bf16 %{{.*}}, %{{.*}} -> %{{.*}}[false]
+    // GFX950: rocdl.cvt.scalef32.pk.fp8.bf16 %{{.*}}, %{{.*}} -> %{{.*}}[true]
     %5 = tt.fp_to_fp %arg2, rounding = rtne : tensor<8x8xbf16, #ttg.dot_op<{opIdx = 0, parent = #blocked2}>> -> tensor<8x8xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #blocked2}>>
     tt.return
   }
@@ -89,8 +107,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 #blocked2 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   tt.func @downcast_to_bf8(%arg0: tensor<8x8xf32, #ttg.dot_op<{opIdx = 0, parent = #blocked2}>>) {
-    // GFX942-COUNT-4: rocdl.cvt.pk.bf8.f32
-    // GFX950-COUNT-4: llvm.fptrunc %{{.+}} : vector<2xf32> to vector<2xf16>
+    // GFX942: rocdl.cvt.pk.bf8.f32 %{{.*}}, %{{.*}} -> %{{.*}}[false]
+    // GFX942: rocdl.cvt.pk.bf8.f32 %{{.*}}, %{{.*}} -> %{{.*}}[true]
+    // GFX942: rocdl.cvt.pk.bf8.f32 %{{.*}}, %{{.*}} -> %{{.*}}[false]
+    // GFX942: rocdl.cvt.pk.bf8.f32 %{{.*}}, %{{.*}} -> %{{.*}}[true]
+    // GFX950-COUNT-16: llvm.trunc %{{.+}} : i32 to i8
     %6 = tt.fp_to_fp %arg0, rounding = rtne : tensor<8x8xf32, #ttg.dot_op<{opIdx = 0, parent = #blocked2}>> -> tensor<8x8xf8E5M2FNUZ, #ttg.dot_op<{opIdx = 0, parent = #blocked2}>>
     tt.return
   }
@@ -102,8 +123,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 #blocked2 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   tt.func @f32_to_f8(%arg0: tensor<8x8xf32, #ttg.dot_op<{opIdx = 0, parent = #blocked2}>>) {
-    // GFX942-COUNT-4: rocdl.cvt.pk.fp8.f32
-    // GFX950-COUNT-4: llvm.fptrunc %{{.+}} : vector<2xf32> to vector<2xf16>
+    // GFX942: rocdl.cvt.pk.fp8.f32 %{{.*}}, %{{.*}} -> %{{.*}}[false]
+    // GFX942: rocdl.cvt.pk.fp8.f32 %{{.*}}, %{{.*}} -> %{{.*}}[true]
+    // GFX942: rocdl.cvt.pk.fp8.f32 %{{.*}}, %{{.*}} -> %{{.*}}[false]
+    // GFX942: rocdl.cvt.pk.fp8.f32 %{{.*}}, %{{.*}} -> %{{.*}}[true]
+    // GFX950-COUNT-16: llvm.trunc %{{.+}} : i32 to i8
     %7 = tt.fp_to_fp %arg0, rounding = rtne : tensor<8x8xf32, #ttg.dot_op<{opIdx = 0, parent = #blocked2}>> -> tensor<8x8xf8E4M3FNUZ, #ttg.dot_op<{opIdx = 0, parent = #blocked2}>>
     tt.return
   }
@@ -118,28 +142,52 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
                      %arg1: tensor<8x8xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #blocked2}>>,
                      %arg2: tensor<8x8xf8E5M2FNUZ, #ttg.dot_op<{opIdx = 0, parent = #blocked2}>>,
                      %arg3: tensor<8x8xf8E4M3FNUZ, #ttg.dot_op<{opIdx = 0, parent = #blocked2}>>) {
-    // GFX950-COUNT-4: rocdl.cvt.scalef32.pk.f32.bf8
+    // GFX950: rocdl.cvt.scalef32.pk.f32.bf8 %[[VR1:.*]][false]
+    // GFX950: rocdl.cvt.scalef32.pk.f32.bf8 %[[VR1]][true]
+    // GFX950: rocdl.cvt.scalef32.pk.f32.bf8 %[[VR2:.*]][false]
+    // GFX950: rocdl.cvt.scalef32.pk.f32.bf8 %[[VR2]][true]
     %0 = tt.fp_to_fp %arg0 : tensor<8x8xf8E5M2, #ttg.dot_op<{opIdx = 0, parent = #blocked2}>> -> tensor<8x8xf32, #ttg.dot_op<{opIdx = 0, parent = #blocked2}>>
 
-    // GFX950-COUNT-4: rocdl.cvt.scalef32.pk.f16.bf8
+    // GFX950: rocdl.cvt.scalef32.pk.f16.bf8 %[[VR3:.*]][false]
+    // GFX950: rocdl.cvt.scalef32.pk.f16.bf8 %[[VR3]][true]
+    // GFX950: rocdl.cvt.scalef32.pk.f16.bf8 %[[VR4:.*]][false]
+    // GFX950: rocdl.cvt.scalef32.pk.f16.bf8 %[[VR4]][true]
     %1 = tt.fp_to_fp %arg0 : tensor<8x8xf8E5M2, #ttg.dot_op<{opIdx = 0, parent = #blocked2}>> -> tensor<8x8xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked2}>>
 
-    // GFX950-COUNT-4: rocdl.cvt.scalef32.pk.bf16.bf8
+    // GFX950: rocdl.cvt.scalef32.pk.bf16.bf8 %[[VR5:.*]][false]
+    // GFX950: rocdl.cvt.scalef32.pk.bf16.bf8 %[[VR5]][true]
+    // GFX950: rocdl.cvt.scalef32.pk.bf16.bf8 %[[VR6:.*]][false]
+    // GFX950: rocdl.cvt.scalef32.pk.bf16.bf8 %[[VR6]][true]
     %2 = tt.fp_to_fp %arg0 : tensor<8x8xf8E5M2, #ttg.dot_op<{opIdx = 0, parent = #blocked2}>> -> tensor<8x8xbf16, #ttg.dot_op<{opIdx = 0, parent = #blocked2}>>
 
-    // GFX950-COUNT-4: rocdl.cvt.scalef32.pk.f32.fp8
+    // GFX950: rocdl.cvt.scalef32.pk.f32.fp8 %[[VR7:.*]][false]
+    // GFX950: rocdl.cvt.scalef32.pk.f32.fp8 %[[VR7]][true]
+    // GFX950: rocdl.cvt.scalef32.pk.f32.fp8 %[[VR8:.*]][false]
+    // GFX950: rocdl.cvt.scalef32.pk.f32.fp8 %[[VR8]][true]
     %3 = tt.fp_to_fp %arg1 : tensor<8x8xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #blocked2}>> -> tensor<8x8xf32, #ttg.dot_op<{opIdx = 0, parent = #blocked2}>>
 
-    // GFX950-COUNT-4: rocdl.cvt.scalef32.pk.f16.fp8
+    // GFX950: rocdl.cvt.scalef32.pk.f16.fp8 %[[VR9:.*]][false]
+    // GFX950: rocdl.cvt.scalef32.pk.f16.fp8 %[[VR9]][true]
+    // GFX950: rocdl.cvt.scalef32.pk.f16.fp8 %[[VR10:.*]][false]
+    // GFX950: rocdl.cvt.scalef32.pk.f16.fp8 %[[VR10]][true]
     %4 = tt.fp_to_fp %arg1 : tensor<8x8xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #blocked2}>> -> tensor<8x8xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked2}>>
 
-    // GFX950-COUNT-4: rocdl.cvt.scalef32.pk.bf16.fp8
+    // GFX950: rocdl.cvt.scalef32.pk.bf16.fp8 %[[VR11:.*]][false]
+    // GFX950: rocdl.cvt.scalef32.pk.bf16.fp8 %[[VR11]][true]
+    // GFX950: rocdl.cvt.scalef32.pk.bf16.fp8 %[[VR12:.*]][false]
+    // GFX950: rocdl.cvt.scalef32.pk.bf16.fp8 %[[VR12]][true]
     %5 = tt.fp_to_fp %arg1 : tensor<8x8xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #blocked2}>> -> tensor<8x8xbf16, #ttg.dot_op<{opIdx = 0, parent = #blocked2}>>
 
-    // GFX942-COUNT-4: rocdl.cvt.pk.f32.bf8
+    // GFX942: rocdl.cvt.pk.f32.bf8 %[[VR13:.*]][false]
+    // GFX942: rocdl.cvt.pk.f32.bf8 %[[VR13]][true]
+    // GFX942: rocdl.cvt.pk.f32.bf8 %[[VR14:.*]][false]
+    // GFX942: rocdl.cvt.pk.f32.bf8 %[[VR14]][true]
     %6 = tt.fp_to_fp %arg2 : tensor<8x8xf8E5M2FNUZ, #ttg.dot_op<{opIdx = 0, parent = #blocked2}>> -> tensor<8x8xf32, #ttg.dot_op<{opIdx = 0, parent = #blocked2}>>
 
-    // GFX942-COUNT-4: rocdl.cvt.pk.f32.fp8
+    // GFX942: rocdl.cvt.pk.f32.fp8 %[[VR15:.*]][false]
+    // GFX942: rocdl.cvt.pk.f32.fp8 %[[VR15]][true]
+    // GFX942: rocdl.cvt.pk.f32.fp8 %[[VR16:.*]][false]
+    // GFX942: rocdl.cvt.pk.f32.fp8 %[[VR16]][true]
     %7 = tt.fp_to_fp %arg3 : tensor<8x8xf8E4M3FNUZ, #ttg.dot_op<{opIdx = 0, parent = #blocked2}>> -> tensor<8x8xf32, #ttg.dot_op<{opIdx = 0, parent = #blocked2}>>
     tt.return
   }

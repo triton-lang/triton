@@ -17,6 +17,7 @@ def TritonGPU_AttrTrait : AttrInterface<"TritonGPU_AttrTrait"> {
 
 def MemDescViewTrait : NativeOpTrait<"MemDescViewTrait">;
 
+def LocalLoadTrait : NativeOpTrait<"LocalLoadTrait">;
 
 class TritonGPU_Attr<string name, string attrMnemonic, list<Trait> traits = [],
                      Dialect dialect = TritonGPU_Dialect,
@@ -1109,7 +1110,8 @@ w2 w2 w3 w3
     "unsigned":$MDim,
     "unsigned":$NDim,
     "bool":$isTransposed,
-    "CTALayoutAttr":$CTALayout
+    "CTALayoutAttr":$CTALayout,
+    DefaultValuedParameter<"std::optional<Type>", "FloatType::get($_ctxt, 32)">:$elementType
   );
 
   let builders = [
@@ -1118,9 +1120,11 @@ w2 w2 w3 w3
                      "unsigned":$MDim,
                      "unsigned":$NDim,
                      "bool":$isTransposed,
-                     "CTALayoutAttr":$CTALayout), [{
+                     "CTALayoutAttr":$CTALayout,
+                     "std::optional<Type>":$elementType), [{
       SmallVector<unsigned> tilesPerWarp(warpsPerCTA.size(), 1);
-      return $_get(context, version, warpsPerCTA, tilesPerWarp, MDim, NDim, isTransposed, CTALayout);
+
+      return $_get(context, version, warpsPerCTA, tilesPerWarp, MDim, NDim, isTransposed, CTALayout, elementType);
     }]>
   ];
 
@@ -1472,7 +1476,7 @@ vecIdx (index of the element in the quad; this is always along the k-dim)
         return $_get(context, opIdx, parent, 0);
       // For MMAV2 and V3
       unsigned bitwidth = eltTy.getIntOrFloatBitWidth();
-      unsigned kWidth = 32 / bitwidth;
+      unsigned kWidth = std::max(32 / bitwidth, 1u);
       return $_get(context, opIdx, parent, kWidth);
     }]>
   ];

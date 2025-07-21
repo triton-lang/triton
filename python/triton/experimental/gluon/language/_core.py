@@ -1,4 +1,5 @@
 from __future__ import annotations
+import math
 from typing import TypeVar, List, TYPE_CHECKING, Tuple
 from functools import wraps
 
@@ -11,6 +12,7 @@ from triton._C.libtriton import ir
 import triton.language.core as tl_core
 from triton.language.core import (
     constexpr,
+    constexpr_function,
     base_value,
     base_type,
     dtype,
@@ -37,12 +39,14 @@ from triton.language.core import (
     float64,
     _unwrap_if_constexpr,
     _unwrap_shape,
+    static_range,
     tensor,
     tuple,
     tuple_type,
 )
 
 _IMPORT_FROM_TRITON: List[str] = [
+    "broadcast",
     "expand_dims",
     "inline_asm_elementwise",
     "join",
@@ -66,6 +70,7 @@ _IMPORT_FROM_TRITON: List[str] = [
 
 __all__ = [
     "constexpr",
+    "constexpr_function",
     "base_value",
     "base_type",
     "dtype",
@@ -101,7 +106,9 @@ __all__ = [
     "full",
     "convert_layout",
     "allocate_shared_memory",
+    "set_auto_layout",
     "shared_memory_descriptor",
+    "static_range",
     "warp_specialize",
     *_IMPORT_FROM_TRITON,
 ]
@@ -215,6 +222,10 @@ class shared_memory_descriptor(base_value):
         return len(self.shape)
 
     @property
+    def numel(self) -> int:
+        return math.prod(self.shape)
+
+    @property
     def layout(self):
         return self.type.layout
 
@@ -292,21 +303,19 @@ class shared_memory_descriptor(base_value):
         return _semantic.memdesc_trans(self, order)
 
     @builtin
-    def reshape(self, shape, layout, _semantic: GluonSemantic) -> shared_memory_descriptor:
+    def reshape(self, shape, _semantic: GluonSemantic) -> shared_memory_descriptor:
         """
         Reshape the shared memory descriptor to a new shape and layout.
 
         Args:
             shape (List[int]): The target shape.
-            layout (SharedLayout): The new layout for the descriptor.
 
         Returns:
             shared_memory_descriptor: Descriptor with the new shape and layout.
         """
         shape = [_unwrap_if_constexpr(s) for s in shape]
-        layout = _unwrap_if_constexpr(layout)
 
-        return _semantic.memdesc_reshape(self, shape, layout)
+        return _semantic.memdesc_reshape(self, shape)
 
     @builtin
     def _reinterpret(self, dtype, shape, layout, _semantic: GluonSemantic = None) -> shared_memory_descriptor:
@@ -341,14 +350,14 @@ for name in _IMPORT_FROM_TRITON:
 
 
 @builtin
-def arange(start, end, layout, _semantic=None):
+def arange(start, end, layout=None, _semantic=None):
     """
     Generate a sequence tensor with values in [start, end) using a specified layout.
 
     Args:
         start (int): Inclusive start of the sequence.
         end (int): Exclusive end of the sequence.
-        layout (DistributedLayout): The layout of the output tensor.
+        layout (DistributedLayout): The layout of the output tensor. Defaults to AutoLayout.
 
     Returns:
         tensor: A 1D tensor containing sequential values.
@@ -360,19 +369,20 @@ def arange(start, end, layout, _semantic=None):
 
 
 @builtin
-def convert_layout(value, layout, _semantic=None):
+def convert_layout(value, layout, assert_trivial=False, _semantic=None):
     """
     Convert a tensor to a different distributed layout.
 
     Args:
         value (tensor): The input tensor.
         layout (DistributedLayout): The target layout.
+        assert_trivial (bool): If True, asserts that the conversion is trivial (no data movement).
 
     Returns:
         tensor: The tensor with the new layout.
     """
     layout = _unwrap_if_constexpr(layout)
-    return _semantic.convert_layout(value, layout)
+    return _semantic.convert_layout(value, layout, assert_trivial)
 
 
 @builtin
@@ -415,6 +425,22 @@ def allocate_shared_memory(element_ty, shape, layout, value=None, _semantic=None
     shape = [_unwrap_if_constexpr(s) for s in shape]
     layout = _unwrap_if_constexpr(layout)
     return _semantic.allocate_shared(element_ty, shape, layout, value)
+
+
+@builtin
+def set_auto_layout(value, layout, _semantic=None):
+    """
+    Set a a tensor with AutoLayout to a concrete layout
+
+    Args:
+        value (tensor): The input tensor.
+        layout (DistribtedLayout): The target layout.
+
+    Returns:
+        tensor: The tensor with the new layout.
+    """
+    layout = _unwrap_if_constexpr(layout)
+    return _semantic.set_auto_layout(value, layout)
 
 
 @builtin

@@ -93,7 +93,7 @@ class RoutingData:
 class SortTokens(torch.autograd.Function):
 
     @staticmethod
-    def forward(ctx, expt_scal, expt_indx, bitmatrix):
+    def forward(ctx, expt_scal, expt_indx, n_expts_tot, bitmatrix):
         HIST_BLOCK_M = 32
         INDX_OFFS_BLOCK_M = 512
         MEMSET_BLOCK = 1024
@@ -101,11 +101,12 @@ class SortTokens(torch.autograd.Function):
 
         device = expt_scal.device
         dtype = expt_scal.dtype
-        n_tokens_raw, n_expts_tot = bitmatrix.shape_raw
+        n_tokens_raw, _ = bitmatrix.shape
         n_tokens_pad, n_expts_act = expt_scal.shape
         n_gates_pad = n_tokens_pad * n_expts_act
 
         hist, partial_hist = bitmatrix.sum(partials_block_size=HIST_BLOCK_M)
+        hist = hist[:n_expts_tot]
         assert hist.dtype == torch.int32
         # scratchpad
         expt_offs = torch.empty(n_expts_tot, dtype=torch.int32, device=device)
@@ -136,7 +137,7 @@ class SortTokens(torch.autograd.Function):
         _combined_routing_compute[(blocks2a + blocks2b, )](
             topk_indx, gate_indx, gate_scal,  # outputs
             expt_scal, expt_indx, indx_offs, indx_offs.stride(0), indx_offs.stride(1),  # inputs
-            expt_offs, n_tokens_pad, n_tokens_raw,  # input shape
+            expt_offs, n_tokens_raw,  # input shape
             HIST_BLOCK_M, n_expts_act,  # constants
             hist, token_offs_pad, token_offs_pad.stride(0), block_pid_map, block_pid_map.stride(0),  # outputs
             block_m_log2_start, block_m_num, HIST2_BLOCK_M, blocks2a,  # etc.
@@ -153,11 +154,11 @@ class SortTokens(torch.autograd.Function):
         (gate_indx, ) = ctx.saved_tensors
         dgate_scal = dgate_scal[gate_indx]
         dgate_scal = dgate_scal.reshape(ctx.n_tokens_pad, ctx.n_expts_act)
-        return dgate_scal, None, None
+        return dgate_scal, None, None, None
 
 
-def sort_tokens(expt_scal, expt_indx, bitmatrix):
-    return SortTokens.apply(expt_scal, expt_indx, bitmatrix)
+def sort_tokens(expt_scal, expt_indx, n_expts_tot, bitmatrix):
+    return SortTokens.apply(expt_scal, expt_indx, n_expts_tot, bitmatrix)
 
 
 # --------------------------
@@ -168,28 +169,27 @@ def sort_tokens(expt_scal, expt_indx, bitmatrix):
 class PruneRouting(torch.autograd.Function):
 
     @staticmethod
-    def forward(ctx, expt_scal, expt_indx, bitmatrix, simulated_ep):
+    def forward(ctx, expt_scal, expt_indx, bitmatrix, n_expts_tot, simulated_ep):
         from .compaction import compaction
         n_tokens_pad = expt_scal.shape[0]
-        n_expts_tot = bitmatrix.shape_raw[-1]
         assert n_expts_tot % simulated_ep == 0
         _routing_clear_bitmatrix[(n_tokens_pad, )](
-            bitmatrix.handle,
-            bitmatrix.handle.stride(0),
-            bitmatrix.handle.stride(1),
-            bitmatrix.handle.shape[1],
+            bitmatrix.storage.data,
+            bitmatrix.storage.data.stride(0),
+            bitmatrix.storage.data.stride(1),
+            bitmatrix.storage.data.shape[1],
             n_expts_tot // simulated_ep,
             BLOCK_N=512,
         )
         # perform compaction to update expt_scal / expt_indx
         expt_scal, expt_indx = compaction(expt_scal, expt_indx, bitmatrix)
         n_expts_tot = n_expts_tot // simulated_ep
-        bitmatrix.shape_raw[-1] = n_expts_tot
+        bitmatrix.shape[-1] = n_expts_tot
         return expt_scal, expt_indx, bitmatrix
 
 
-def prune_routing(expt_scal, expt_indx, bitmatrix, simulated_ep):
-    return PruneRouting.apply(expt_scal, expt_indx, bitmatrix, simulated_ep)
+def prune_routing(expt_scal, expt_indx, bitmatrix, n_expts_tot, simulated_ep):
+    return PruneRouting.apply(expt_scal, expt_indx, bitmatrix, n_expts_tot, simulated_ep)
 
 
 # --------------------------
@@ -236,7 +236,6 @@ def _compute_expt_data_internal(expt_hist, n_expts_tot, n_gates):
 
     blocks1 = memset_grid + block_m_num + 1
     blocks2 = n_expts_tot * block_m_num
-
     return token_offs_combined, token_offs_raw, token_offs_pad, block_pid_map, blocks1, blocks2, MEMSET_BLOCK, HIST2_BLOCK_M, block_m_log2_start, block_m_num
 
 
@@ -277,28 +276,31 @@ def compute_expt_data(expt_hist, n_expts_tot, n_gates):
 # --------------------------
 
 
+def routing_from_bitmatrix(bitmatrix, expt_scal, expt_indx, n_expts_tot, n_expts_act):
+    hist, topk_indx, gate_indx, gate_scal, token_offs_raw, token_offs_pad, block_pid_map = sort_tokens(
+        expt_scal, expt_indx, n_expts_tot, bitmatrix)
+    token_offs_pad = _unpack_into_dict(token_offs_pad)
+    block_pid_map = _unpack_into_dict(block_pid_map)
+    expt_data = ExptData(hist, token_offs_raw, token_offs_pad, block_pid_map)
+
+    # pack the matmul data structure
+    gather_indx = GatherIndx(src_indx=topk_indx, dst_indx=gate_indx)
+    scatter_indx = ScatterIndx(src_indx=gate_indx, dst_indx=topk_indx)
+    return RoutingData(gate_scal, hist, n_expts_tot, n_expts_act, expt_data), gather_indx, scatter_indx
+
+
 def routing(logits, n_expts_act, sm_first=False, expt_indx=None, simulated_ep=1, n_rows=None):
     from .topk import topk
     if sm_first:
         logits = torch.softmax(logits, dim=-1)
     expt_scal, expt_indx, bitmatrix = topk(logits, n_expts_act,  #
                                            apply_softmax=not sm_first, y_indx=expt_indx, n_rows=n_rows)
+    n_expts_tot = logits.shape[-1] // simulated_ep
     # mutate bitmatrix
     if simulated_ep > 1:
-        expt_scal, expt_indx, bitmatrix = prune_routing(expt_scal, expt_indx, bitmatrix, simulated_ep)
-    hist, topk_indx, gate_indx, gate_scal, token_offs_raw, token_offs_pad, block_pid_map = sort_tokens(
-        expt_scal, expt_indx, bitmatrix)
+        expt_scal, expt_indx, bitmatrix = prune_routing(expt_scal, expt_indx, bitmatrix, logits.shape[-1], simulated_ep)
 
-    token_offs_pad = _unpack_into_dict(token_offs_pad)
-    block_pid_map = _unpack_into_dict(block_pid_map)
-    expt_data = ExptData(hist, token_offs_raw, token_offs_pad, block_pid_map)
-
-    # pack the matmul data structure
-    n_expts_tot = logits.shape[-1] // simulated_ep
-    gather_indx = GatherIndx(src_indx=topk_indx, dst_indx=gate_indx)
-    scatter_indx = ScatterIndx(src_indx=gate_indx, dst_indx=topk_indx)
-
-    return RoutingData(gate_scal, hist, n_expts_tot, n_expts_act, expt_data), gather_indx, scatter_indx
+    return routing_from_bitmatrix(bitmatrix, expt_scal, expt_indx, n_expts_tot, n_expts_act)
 
 
 # --------------------------

@@ -277,6 +277,16 @@ LogicalResult PipelinedLoad::determineLiveRange(Block &container,
   return success();
 }
 
+static void propagateMutability(Value value) {
+  for (Operation *user : value.getUsers()) {
+    if (user->hasTrait<OpTrait::MemDescViewTrait>()) {
+      user->getResult(0).setType(
+          getAsMutable(cast<MemDescType>(user->getResult(0).getType())));
+      propagateMutability(user->getResult(0));
+    }
+  }
+}
+
 namespace {
 
 struct PipelinedLoadGroup {
@@ -684,6 +694,7 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
       allocOp->removeAttr(kPartitionAttrName);
       allocOp.getSrcMutable().clear();
       allocOp.getResult().setType(getAsMutable(allocOp.getType()));
+      propagateMutability(allocOp.getResult());
     } else if (auto tmemAllocOp = operand.getDefiningOp<ttng::TMEMAllocOp>()) {
       PartitionBuilder b(tmemAllocOp.getLoc(), tmemAllocOp);
       StageCluster stageCluster = getStageCluster(tmemAllocOp);
@@ -741,7 +752,7 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
         }
       } else {
         b.setInsertionPoint(domOp);
-        if (isa<scf::IfOp>(domOp->getParentOp()))
+        if (isa<scf::IfOp>(domOp->getParentOp()) && accIsMultiBuffered)
           b.setInsertionPointToStart(domOp->getBlock());
         Value bar = createSingleBufferView(b, node.barPrev, node.index);
         b.createInto<ttng::WaitBarrierOp>(*partition, nodeStageCluster, bar,
@@ -755,7 +766,7 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
         mmaOp.addCompletionBarrier(bar, userPred);
       } else {
         b.setInsertionPointAfter(lastOp);
-        if (isa<scf::IfOp>(lastOp->getParentOp()))
+        if (isa<scf::IfOp>(lastOp->getParentOp()) && accIsMultiBuffered)
           b.setInsertionPoint(lastOp->getBlock()->getTerminator());
         Value bar = createSingleBufferView(b, node.barNext, node.index);
         b.createInto<ttng::ArriveBarrierOp>(*partition, nodeStageCluster, bar,

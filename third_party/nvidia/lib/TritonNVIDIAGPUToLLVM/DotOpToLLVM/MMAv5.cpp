@@ -412,16 +412,10 @@ void convertDotImpl(const LLVMTypeConverter &typeConverter,
 
   Value baseA = loadedA;
   if (!aInTmem) {
-    baseA = getSharedMemoryObjectFromStruct(
-                loc, loadedA,
-                typeConverter.convertType(aTensorTy.getElementType()), rewriter)
-                .getBase();
+    baseA = getOffsetedBase(loadedA, aTensorTy, &typeConverter, rewriter, loc);
   }
   Value baseB =
-      getSharedMemoryObjectFromStruct(
-          loc, loadedB, typeConverter.convertType(bTensorTy.getElementType()),
-          rewriter)
-          .getBase();
+      getOffsetedBase(loadedB, bTensorTy, &typeConverter, rewriter, loc);
 
   auto [M, N, K] = op.shape;
 

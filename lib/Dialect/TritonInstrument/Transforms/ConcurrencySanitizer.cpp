@@ -1,8 +1,10 @@
+#include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/IR/ImplicitLocOpBuilder.h"
 #include "mlir/Transforms/Passes.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
+#include "triton/Dialect/TritonInstrument/IR/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
 namespace mlir {
@@ -51,6 +53,22 @@ bool isMultiBuffered(triton::gpu::LocalAllocOp op) {
   });
 }
 
+bool isBarrier(triton::gpu::LocalAllocOp op) {
+  // Is there InitBarrierOp in the forward slice of the op?
+  bool foundInitBarrier = false;
+  SetVector<Operation *> forwardSlice;
+  ForwardSliceOptions options;
+  options.filter = [&](Operation *op) {
+    if (isa<ttng::InitBarrierOp>(op)) {
+      foundInitBarrier = true;
+      return false;
+    }
+    return true;
+  };
+  getForwardSlice(op.getOperation(), &forwardSlice, options);
+  return foundInitBarrier;
+}
+
 uint64_t getAllocationOffset(triton::gpu::LocalAllocOp op) {
   auto offsetAttr = op->getAttr("allocation.offset");
   if (!offsetAttr) {
@@ -62,12 +80,12 @@ uint64_t getAllocationOffset(triton::gpu::LocalAllocOp op) {
 
 unsigned getNumBuffers(triton::gpu::LocalAllocOp op) {
   ttg::MemDescType ty = op.getType();
-  return ty.getShape().size();
+  return ty.getShape()[0];
 }
 
 unsigned getSubBufferSize(triton::gpu::LocalAllocOp op) {
   ttg::MemDescType ty = op.getType();
-  unsigned elSize = ty.getElementType().getIntOrFloatBitWidth();
+  unsigned elSize = ty.getElementType().getIntOrFloatBitWidth() / 8;
   return product(ty.getShape().drop_front()) * elSize;
 }
 
@@ -91,18 +109,20 @@ public:
     // TODO: We should actually map the region in IR + the offset in the buffer
     // to the local_alloc to give user a better error message
     llvm::SetVector<int32_t> shMemBufsSet;
+    llvm::SetVector<int32_t> barrierSet;
     module.walk([&](triton::gpu::LocalAllocOp op) {
       if (!canAllocBeInstrumented(op)) {
         return WalkResult::advance();
       }
       int32_t baseOffset = getAllocationOffset(op);
-      shMemBufsSet.insert(baseOffset);
+      auto &setToAdd = isBarrier(op) ? barrierSet : shMemBufsSet;
+      setToAdd.insert(baseOffset);
       if (isMultiBuffered(op)) {
         unsigned numBuffers = getNumBuffers(op);
         assert(numBuffers > 0 && "Expected at least one buffer");
         unsigned subBufferSize = getSubBufferSize(op);
         for (unsigned i = 1; i < numBuffers; ++i) {
-          shMemBufsSet.insert(baseOffset + i * subBufferSize);
+          setToAdd.insert(baseOffset + i * subBufferSize);
         }
       }
       return WalkResult::advance();
@@ -116,52 +136,133 @@ public:
     }
 
     SmallVector<int32_t> shMemBufsValues = llvm::to_vector(shMemBufsSet);
+    SmallVector<int32_t> barrierValues = llvm::to_vector(barrierSet);
     // Pad to the next power of 2 with zeros
-    uint64_t nextPowerOf2 = llvm::NextPowerOf2(shMemBufsValues.size() - 1);
-    shMemBufsValues.resize(nextPowerOf2, 0);
+    shMemBufsValues.resize(llvm::NextPowerOf2(shMemBufsValues.size() - 1), 0);
+    if (!barrierValues.empty()) {
+      barrierValues.resize(llvm::NextPowerOf2(barrierValues.size() - 1), 0);
+    }
 
     ImplicitLocOpBuilder b(entryPoint.getLoc(), entryPoint);
     b.setInsertionPointToStart(&entryPoint.getBody().front());
-    Value shMemBufs = createSharedBufferPointers(b, shMemBufsValues);
+    shBuffers = createSharedBufferPointers(b, shMemBufsValues);
 
-    // Create state tensors:
-    // 1. Barrier, tracking which barriers are tracking the buffer
-    // 2. State, a bitfield tracking if the buffer is written (0x1) or read
-    // (0x2)
-    Value barriers = createConstIntTensor(b, 0, b.getIntegerType(64),
-                                          shMemBufsValues.size());
-    Value state =
-        createConstIntTensor(b, 0, b.getIntegerType(8), shMemBufsValues.size());
+    if (!barrierValues.empty()) {
+      barriers = createSharedBufferPointers(b, barrierValues);
 
-    instrumentMemoryOperations(b, shMemBufs, barriers, state);
+      // Create state tensors:
+      writeBarriersType = RankedTensorType::get(
+          {(long)shMemBufsValues.size()}, b.getIntegerType(64),
+          getThreadLocalBlockedEncoding(shMemBufsValues.size()));
+      TypedValue<RankedTensorType> writeBarriers =
+          tti::createConstIntTensor(b, b.getLoc(), 0, writeBarriersType);
+      writeBarriersAlloc = createInitializedScratchMemory(b, writeBarriers);
+
+      readBarriersType = RankedTensorType::get(
+          {(long)shMemBufsValues.size(), (long)barrierValues.size()},
+          b.getIntegerType(8),
+          getReadBarriersEncoding(shMemBufsValues.size(),
+                                  barrierValues.size()));
+      TypedValue<RankedTensorType> readBarriers =
+          tti::createConstIntTensor(b, b.getLoc(), 0, readBarriersType);
+      readBarriersAlloc = createInitializedScratchMemory(b, readBarriers);
+    }
+
+    // Create write commits tensor
+    writeCommitsType = RankedTensorType::get(
+        {(long)shMemBufsValues.size()}, b.getIntegerType(8),
+        getThreadLocalBlockedEncoding(shMemBufsValues.size()));
+    TypedValue<RankedTensorType> writeCommits =
+        tti::createConstIntTensor(b, b.getLoc(), 0, writeCommitsType);
+    writeCommitsAlloc = createInitializedScratchMemory(b, writeCommits);
+
+    instrumentMemoryOperations(b);
   }
 
 private:
-  void instrumentMemoryOperations(ImplicitLocOpBuilder &b, Value buffers,
-                                  Value barriers, Value state) {
+  void addWriteChecks(ImplicitLocOpBuilder &b, Value buf, Value pred) {
+    if (barriers) {
+      b.create<tti::ExperimentalCheckOutstandingWritesOp>(
+          buf, shBuffers, writeBarriersAlloc, writeBarriersType, pred);
+    }
+    b.create<tti::ExperimentalCheckWriteCommitOp>(
+        buf, shBuffers, writeCommitsAlloc, writeCommitsType, pred);
+  }
+
+  void addReadChecks(ImplicitLocOpBuilder &b, Value buf, Value pred) {
+    if (barriers) {
+      b.create<tti::ExperimentalCheckOutstandingReadsOp>(
+          buf, shBuffers, readBarriersAlloc, readBarriersType, pred);
+    }
+  }
+
+  void instrumentMemoryOperations(ImplicitLocOpBuilder &b) {
     module.walk([&](Operation *op) {
+      b.setLoc(op->getLoc());
+      b.setInsertionPoint(op);
       if (auto copyOp = dyn_cast<ttng::AsyncTMACopyGlobalToLocalOp>(op)) {
-        b.setLoc(copyOp.getLoc());
-        b.setInsertionPoint(copyOp);
-        auto checkOp =
-            b.create<tti::ExperimentalCheckAsyncWriteWithMbarSharedOp>(
-                copyOp.getResult(), copyOp.getBarrier(), buffers, state,
-                barriers);
-        state = checkOp.getOutStates();
-        barriers = checkOp.getOutBarriers();
+        auto buf = copyOp.getResult();
+        auto pred = copyOp.getPred();
+        auto barrier = copyOp.getBarrier();
+        assert(barriers);
+        addWriteChecks(b, buf, pred);
+        addReadChecks(b, buf, pred);
+        b.create<tti::ExperimentalMarkAsWriteOp>(buf, barrier, shBuffers,
+                                                 writeBarriersAlloc,
+                                                 writeBarriersType, pred);
+      }
+      if (auto mmav5Op = dyn_cast<ttng::TCGen5MMAOp>(op)) {
+        auto pred = mmav5Op.getPred();
+        b.setInsertionPoint(mmav5Op);
+        if (isa<ttg::NVMMASharedEncodingAttr>(
+                mmav5Op.getA().getType().getEncoding())) {
+          addWriteChecks(b, mmav5Op.getA(), pred);
+          for (auto barrier : mmav5Op.getBarriers()) {
+            assert(barriers);
+            b.create<tti::ExperimentalMarkAsReadOp>(
+                mmav5Op.getA(), barrier, shBuffers, barriers, readBarriersAlloc,
+                readBarriersType, pred);
+          }
+        }
+        if (isa<ttg::NVMMASharedEncodingAttr>(
+                mmav5Op.getB().getType().getEncoding())) {
+          addWriteChecks(b, mmav5Op.getB(), pred);
+          for (auto barrier : mmav5Op.getBarriers()) {
+            assert(barriers);
+            b.create<tti::ExperimentalMarkAsReadOp>(
+                mmav5Op.getB(), barrier, shBuffers, barriers, readBarriersAlloc,
+                readBarriersType, pred);
+          }
+        }
       }
       if (auto waitOp = dyn_cast<ttng::WaitBarrierOp>(op)) {
-        b.setLoc(waitOp.getLoc());
-        b.setInsertionPoint(waitOp);
-        auto checkOp = b.create<tti::ExperimentalCheckWaitMbarOp>(
-            waitOp.getAlloc(), barriers, state);
-        state = checkOp.getOutStates();
-        barriers = checkOp.getOutBarriers();
+        assert(barriers);
+        auto pred = waitOp.getPred();
+        auto barrier = waitOp.getAlloc();
+        b.create<tti::ExperimentalClearWriteBarrierOp>(
+            barrier, writeBarriersAlloc, writeBarriersType, pred);
+        b.create<tti::ExperimentalClearReadBarrierOp>(
+            barrier, barriers, readBarriersAlloc, readBarriersType, pred);
+      }
+      if (auto asyncCopyOp = dyn_cast<ttg::AsyncCopyGlobalToLocalOp>(op)) {
+        addWriteChecks(b, asyncCopyOp.getResult(), nullptr);
+        addReadChecks(b, asyncCopyOp.getResult(), nullptr);
+        b.create<tti::ExperimentalStageWriteForCommitOp>(
+            asyncCopyOp.getResult(), shBuffers, writeCommitsAlloc,
+            writeCommitsType, nullptr);
+      }
+      if (auto asyncCommitGroupOp = dyn_cast<ttg::AsyncCommitGroupOp>(op)) {
+        b.create<tti::ExperimentalCommitWritesOp>(writeCommitsAlloc,
+                                                  writeCommitsType, nullptr);
+      }
+      if (auto asyncWaitOp = dyn_cast<ttg::AsyncWaitOp>(op)) {
+        b.create<tti::ExperimentalClearWriteCommitsOp>(
+            writeCommitsAlloc, writeCommitsType, asyncWaitOp.getNum(), nullptr);
       }
     });
   }
 
-  ttg::BlockedEncodingAttr getBlockedEncoding(unsigned int size) {
+  ttg::BlockedEncodingAttr getThreadLocalBlockedEncoding(unsigned int size) {
     MLIRContext *ctx = module.getContext();
     unsigned int warps =
         mlir::cast<mlir::IntegerAttr>(module->getAttr("ttg.num-warps"))
@@ -174,30 +275,90 @@ private:
                                          /*order=*/{0}, ctaLayout);
   }
 
+  ttg::BlockedEncodingAttr getReadBarriersEncoding(unsigned int buffers,
+                                                   unsigned int barriers) {
+    MLIRContext *ctx = module.getContext();
+    unsigned int warps =
+        mlir::cast<mlir::IntegerAttr>(module->getAttr("ttg.num-warps"))
+            .getInt();
+    auto ctaLayout = ttg::CTALayoutAttr::getDefault(ctx, /*rank=*/2);
+    return ttg::BlockedEncodingAttr::get(ctx,
+                                         /*sizePerThread=*/{buffers, barriers},
+                                         /*threadsPerWarp=*/{1, 32},
+                                         /*warpsPerCTA=*/{1, warps},
+                                         /*order=*/{0, 1}, ctaLayout);
+  }
+
   Value createSharedBufferPointers(ImplicitLocOpBuilder &builder,
                                    SmallVector<int32_t> values) {
     int64_t size = values.size();
     assert(llvm::isPowerOf2_64(size) && "Expected power of 2");
-    auto tensorType = RankedTensorType::get({size}, builder.getIntegerType(64),
-                                            getBlockedEncoding(size));
+    Type elType = builder.getI64Type();
+    auto tensorType = RankedTensorType::get(
+        {size}, elType, getThreadLocalBlockedEncoding(size));
     SmallVector<APInt> apInts = llvm::to_vector(
         llvm::map_range(values, [](int64_t v) { return APInt(64, v); }));
     auto denseAttr = DenseElementsAttr::get(tensorType, apInts);
-    return builder.create<tti::ExperimentalSharedBufferPointersOp>(tensorType,
-                                                                   values);
+    auto op = builder.create<tti::ExperimentalSharedBufferPointersOp>(
+        tensorType, values);
+    return op;
   }
 
-  Value createConstIntTensor(ImplicitLocOpBuilder &builder, int val,
-                             Type elType, int64_t size) {
-    assert(llvm::isPowerOf2_64(size) && "Expected power of 2");
-    auto tensorType =
-        RankedTensorType::get({size}, elType, getBlockedEncoding(size));
-    auto denseAttr = DenseElementsAttr::get(
-        tensorType, APInt(elType.getIntOrFloatBitWidth(), val));
-    return builder.create<arith::ConstantOp>(tensorType, denseAttr);
+  ttg::DistributedEncodingTrait
+  getSingleDimSliceEncoding(ttg::BlockedEncodingAttr encoding, int dim) {
+    int rank = encoding.getOrder().size();
+    MLIRContext *ctx = encoding.getContext();
+    assert(dim < rank && "Expected dim to be less than rank");
+    ttg::DistributedEncodingTrait sliceEncoding = encoding;
+    for (int i = 0; i < rank; ++i) {
+      if (i != dim) {
+        sliceEncoding = ttg::SliceEncodingAttr::get(ctx, i, encoding);
+      }
+    }
+    return sliceEncoding;
+  }
+
+  Value expandAllSlicedDims(ImplicitLocOpBuilder &b, Value tensor) {
+    auto type = cast<RankedTensorType>(tensor.getType());
+    auto sliceEncoding = dyn_cast<ttg::SliceEncodingAttr>(type.getEncoding());
+    while (sliceEncoding) {
+      int dim = sliceEncoding.getDim();
+      auto shape = type.getShape();
+      auto newShape = SmallVector<int64_t>(shape);
+      newShape.insert(newShape.begin() + dim, 1);
+      auto newType = RankedTensorType::get(newShape, type.getElementType(),
+                                           sliceEncoding.getParent());
+      tensor = b.create<tt::ExpandDimsOp>(newType, tensor, dim);
+      type = newType;
+      sliceEncoding = dyn_cast<ttg::SliceEncodingAttr>(type.getEncoding());
+    }
+    return tensor;
+  }
+
+  Value createInitializedScratchMemory(ImplicitLocOpBuilder &b,
+                                       TypedValue<RankedTensorType> tensor) {
+    auto encoding = tensor.getType().getEncoding();
+    Type elType = tensor.getType().getElementType();
+    int elSize = elType.getIntOrFloatBitWidth() / 8;
+    int numEls = product(tensor.getType().getShape());
+    int64_t sizeInBytes = numEls * elSize;
+    Type ptrType = triton::getPointerType(elType);
+    auto alloc =
+        b.create<tt::gpu::GlobalScratchAllocOp>(ptrType, sizeInBytes, elSize);
+    createStoreScratchMemory(b, b.getLoc(), alloc, tensor, tensor.getType());
+    return alloc;
   }
 
   ModuleOp module;
+
+  Value shBuffers;
+  Value barriers;
+  RankedTensorType writeBarriersType;
+  Value writeBarriersAlloc;
+  RankedTensorType readBarriersType;
+  Value readBarriersAlloc;
+  RankedTensorType writeCommitsType;
+  Value writeCommitsAlloc;
 };
 
 } // namespace instrument

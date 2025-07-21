@@ -79,8 +79,7 @@ public:
     rewriter.setInsertionPointAfter(localAllocOp);
     if (newLayout != srcLayout) {
       auto ty = cast<RankedTensorType>(src.getType());
-      auto newTy =
-          RankedTensorType::get(ty.getShape(), ty.getElementType(), newLayout);
+      auto newTy = ty.cloneWithEncoding(newLayout);
       src = rewriter.create<ttg::ConvertLayoutOp>(loc, newTy, src);
     }
     Value tMemAlloc = rewriter.create<TMEMAllocOp>(loc, lhsMemDescType, src);

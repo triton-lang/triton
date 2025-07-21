@@ -12,6 +12,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Tools/GenericSwizzling.h"
 #include "triton/Tools/LayoutUtils.h"
+#include "llvm/ADT/SmallSet.h"
 
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 
@@ -43,10 +44,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     auto dstTy = op.getType();
 
     LinearLayout conversion = minimalCvtLayout(srcTy, dstTy);
-    LinearLayout srcLayout =
-        toLinearLayout(srcTy.getShape(), srcTy.getEncoding());
-    LinearLayout dstLayout =
-        toLinearLayout(dstTy.getShape(), dstTy.getEncoding());
+    LinearLayout srcLayout = toLinearLayout(srcTy);
+    LinearLayout dstLayout = toLinearLayout(dstTy);
 
     StringAttr kBlock = str_attr("block");
     StringAttr kWarp = str_attr("warp");
@@ -68,12 +67,10 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     } else if (llvm::is_contained(dims, kLane)) {
       // Case 3. Transfer between values in the same warp, in which case we try
       //         to move values using warp shuffles, though if the pattern is
-      //         complicated enough we may fall back to using shared memory
-      if (auto decomposedCvt =
-              getWarpLayoutConvertDecomposition(srcTy, dstTy)) {
-        transferWithinWarp(op, *decomposedCvt, adaptor, rewriter);
-        return success();
-      }
+      //         expensive enough we fall back to using shared memory
+      if (cvtNeedsWarpShuffle(srcTy, dstTy))
+        return transferWithinWarp(op, adaptor, rewriter);
+
       // TODO: Since data is only transferred within a warp over shared memory,
       // we should use `bar.warp.sync` instead of `barrier`, which will improve
       // latency when warps issue barriers on different cycles.
@@ -204,6 +201,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
 
     assert(permutedInVals.size() == tileSize * nReps);
     SmallVector<Value> outVals;
+    auto affineOffset = b.i32_val(0);
+    auto maskSpanAffineOffset = 0;
     for (int i = 0; i < nReps; ++i) {
       if (i > 0)
         b.barrier();
@@ -212,11 +211,12 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
           ArrayRef<Value>(permutedInVals).slice(i * tileSize, tileSize);
       // Store
       lowerLdStShared(loc, ctx, storeCvt, tileInVals, llvmElemTy, smemBase,
-                      rewriter, targetInfo);
+                      affineOffset, maskSpanAffineOffset, rewriter, targetInfo);
       b.barrier();
       // Load
       SmallVector<Value> tileOutVals = lowerLdStShared(
-          loc, ctx, loadCvt, {}, llvmElemTy, smemBase, rewriter, targetInfo);
+          loc, ctx, loadCvt, {}, llvmElemTy, smemBase, affineOffset,
+          maskSpanAffineOffset, rewriter, targetInfo);
       llvm::append_range(outVals, tileOutVals);
     }
 
@@ -246,8 +246,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
 
     // Remove the kBlock dimension from the layout as it's the identity in the
     // cvt
-    auto srcLayout = toLinearLayout(srcTy.getShape(), srcTy.getEncoding());
-    auto dstLayout = toLinearLayout(dstTy.getShape(), dstTy.getEncoding());
+    auto srcLayout = toLinearLayout(srcTy);
+    auto dstLayout = toLinearLayout(dstTy);
     auto kReg = str_attr("register");
     auto kLane = str_attr("lane");
     auto kWarp = str_attr("warp");
@@ -274,64 +274,203 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
                                     const LinearLayout &dstLayout,
                                     OpAdaptor adaptor,
                                     ConversionPatternRewriter &rewriter) const {
-    MLIRContext *ctx = op.getContext();
-    auto loc = op.getLoc();
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
-    auto srcTy = op.getSrc().getType();
-    auto dstTy = op.getType();
-
-    assert(cvtNeedsSharedMemory(srcTy, dstTy));
+    assert(cvtNeedsSharedMemory(op.getSrc().getType(), op.getType()));
 
     // Try to use swizzling to implement the conversion
-    // HACK Remove once AMD tests pass for the swizzling path
-    if (targetInfo.isCuda() && succeeded(transferWithinBlockSwizzling(
-                                   op, adaptor.getSrc(), rewriter))) {
+    if (succeeded(
+            transferWithinBlockSwizzling(op, adaptor.getSrc(), rewriter))) {
       return success();
     }
 
-    SmallVector<Value> inVals =
-        unpackLLElements(loc, adaptor.getSrc(), rewriter);
-    assert(!inVals.empty());
+    Value result = transferWithinBlockPadding(op, adaptor.getSrc(), targetInfo,
+                                              getTypeConverter(), rewriter);
 
-    // We munge the input values by converting i<n> (n<8) elements to i8 and
-    // pointers to i64. This is necessary because TargetInfo::loadDShared and
-    // storeDShared can't handle vectors of pointers or sub-byte elements.
-    auto elemTy = srcTy.getElementType();
-    auto isSubByteInt =
-        elemTy.isInteger() && elemTy.getIntOrFloatBitWidth() < 8;
-    auto isPtr = isa<triton::PointerType>(elemTy);
-    auto llvmElemTyOrig = getTypeConverter()->convertType(elemTy);
-    if (isSubByteInt)
-      elemTy = IntegerType::get(elemTy.getContext(), 8);
-    else if (isPtr)
-      elemTy = IntegerType::get(elemTy.getContext(), 64);
-    auto llvmElemTy = getTypeConverter()->convertType(elemTy);
+    rewriter.replaceOp(op, result);
+    return success();
+  }
 
-    // Munge input values
-    for (const auto &it : llvm::enumerate(inVals)) {
-      if (isSubByteInt) {
-        inVals[it.index()] = b.zext(llvmElemTy, it.value());
-      } else if (isPtr) {
-        inVals[it.index()] = b.ptrtoint(llvmElemTy, it.value());
+  // Use warp shuffles to implement a layout conversion where data only needs to
+  // be moved within warps.
+  LogicalResult transferWithinWarp(ConvertLayoutOp op, OpAdaptor adaptor,
+                                   ConversionPatternRewriter &rewriter) const {
+    auto loc = op.getLoc();
+    auto *ctx = op.getContext();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    auto srcTy = op.getSrc().getType();
+    auto dstTy = op.getType();
+    StringAttr kReg = str_attr("register");
+    StringAttr kLane = str_attr("lane");
+
+    auto factors = getWarpLayoutConvertDecomposition(srcTy, dstTy);
+    auto &[pReg, pLane, mixedTranspositions] = factors;
+    int m = mixedTranspositions.size();
+    bool pLaneIsTrivial = squareSublayoutIsIdentity(pLane, kLane);
+    assert((m > 0 || !pLaneIsTrivial) && "Shuffles not needed for conversion");
+
+    // The desired layout conversion can be expressed as a permutation P of
+    // hardware index bits for the `kLane` and `kReg` dimensions. The `factors`
+    // of P describe a decomposition
+    //
+    //                 P = P_mixed \circ P_lane \circ P_reg,
+    //
+    // where P_reg and P_lane are permutations involving only register or only
+    // lane index bits and P_mixed is a product of disjoint transpositions of
+    // register index bits with lane index bits. Our goal is to implement P
+    // using predicated selects and warp-shuffles. We have two tools for this:
+    //  - An out-of-place `Ship` method which implements one mixed transposition
+    //    at a time using 1.5 * R selects and .5 * R shuffles each.
+    //  - An in-place `Swap` method which can simultaneously implement P_lane
+    //    and multiple mixed transpositions at a time using 2 * m * R selects
+    //    and either (1 - (1/2)^m) * R shuffles if `pLaneIsTrivial` or R
+    //    shuffles otherwise.
+    // Here, R denotes the number of 32-bit registers in use after packing (or
+    // splitting, if applied to 64-bit types or pointers), and in the `Swap`
+    // method, `m` denotes the number of mixed transpositions passed in.
+    auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
+
+    // To avoid unnecessary data movement, we remove any broadcasting in the
+    // register dimension from the `inVals`.
+    auto srcLayout = toLinearLayout(srcTy);
+    auto removeBroadcastSrc = actionRemoveBroadcastedRegs(srcLayout);
+    inVals = removeBroadcastSrc.apply(inVals);
+
+    // If the target layout has a larger register dimension than the source
+    // layout, then we broadcast along the register dimension to match size. The
+    // removal of broadcasting above and introduction here is expected by the
+    // `factors`.
+    int regDim = inVals.size();
+    int pRegDim = pReg.getInDimSize(kReg);
+    if (pRegDim > regDim) {
+      SmallVector<Value> original(inVals.begin(), inVals.end());
+      inVals.clear();
+      inVals.reserve(pRegDim);
+      while (inVals.size() < pRegDim)
+        inVals.append(original.begin(), original.end());
+      regDim = pRegDim;
+    }
+
+    // The `mixedTranspositions` and `pReg` apply to register indices before any
+    // packing (i.e., register indices should be read as element indices). To
+    // ensure that only elements which end up in the same destination lane are
+    // packed into a common register, we swap any 'low' register bits out with
+    // unused higher index register bits in the list of `mixedTranspositions`
+    // and apply their effects to `inVals` before packing.
+    //
+    // The fraction of elements in a lane that must be moved to another lane
+    // under the layout conversion is 1 - (1/2)^m. The remaining fraction can be
+    // packed into 32-bit registers so long as they fit.
+    auto elemTy = getTypeConverter()->convertType(srcTy.getElementType());
+    int bitwidth =
+        elemTy.isIntOrFloat() ? elemTy.getIntOrFloatBitWidth() : kPtrBitWidth;
+    int nPackPrelim = llvm::Log2_32(std::clamp(32 / bitwidth, 1, 4));
+    int nReg = pReg.getTotalInDimSizeLog2();
+    int nPack = std::min(nPackPrelim, nReg - m);
+
+    // Determine any needed register bit conjugations.
+    SmallVector<std::pair<int32_t, int32_t>> regConjugations;
+    llvm::SmallSet<int32_t, 6> usedRegBits;
+    if (nPack > 0) {
+      // Any `regBitIdx` not originally in `mixedTranspositions` and `>= nPack`
+      // can be used to swap out the original 'low' bit index.
+      for (auto [regBitIdx, laneBitIdx] : mixedTranspositions)
+        usedRegBits.insert(regBitIdx);
+      int potentialHighIdx = nPack;
+      for (auto &[regBitIdx, laneBitIdx] : mixedTranspositions) {
+        if (regBitIdx < nPack) {
+          while (usedRegBits.contains(potentialHighIdx))
+            ++potentialHighIdx;
+          regConjugations.emplace_back(regBitIdx, potentialHighIdx);
+          regBitIdx = potentialHighIdx++;
+        }
       }
     }
 
-    // Pretty sure this is the identity function ATM
-    // It'd be better to simply call `quotient({kBlock})` and
-    // remove kBlock from transferWithinBlockImpl
-    auto srcLayoutWithinBlock = getLayoutWithinBlock(srcLayout);
-    auto dstLayoutWithinBlock = getLayoutWithinBlock(dstLayout);
-    SmallVector<Value> outVals = transferWithinBlockImpl(
-        inVals, op, srcLayoutWithinBlock, dstLayoutWithinBlock, rewriter);
+    // Apply pReg and any conjugations.
+    SmallVector<Value> newInVals(regDim);
+    auto swapBits = [](const auto &p, int num) {
+      int bit0 = (num >> p.first) & 1;
+      int bit1 = (num >> p.second) & 1;
+      if (bit0 != bit1)
+        num ^= ((1 << p.first) | (1 << p.second));
+      return num;
+    };
+    auto applyConj = [&](int idx) {
+      for (const auto &p : regConjugations)
+        idx = swapBits(p, idx);
+      return idx;
+    };
+    for (const auto &[i, v] : llvm::enumerate(inVals))
+      newInVals[applyConj(pReg.apply({{kReg, i}})[0].second)] = v;
+    inVals = std::move(newInVals);
 
-    // Unmunge output values
-    for (const auto &it : llvm::enumerate(outVals)) {
-      if (isSubByteInt) {
-        outVals[it.index()] = b.trunc(llvmElemTyOrig, it.value());
-      } else if (isPtr) {
-        outVals[it.index()] = b.inttoptr(llvmElemTyOrig, it.value());
+    // Pack registers if possible.
+    int elemsPerVec = 1 << nPack;
+    int bitsPacked = elemsPerVec * std::max(bitwidth, 8);
+    auto packedIntTy = int_ty(bitsPacked);
+    bool padTo32 = bitsPacked < 32;
+    if (elemsPerVec > 1) {
+      SmallVector<Value> packedVals;
+      packedVals.reserve(regDim / elemsPerVec);
+      if (bitwidth < 8)
+        llvm::for_each(inVals, [&](Value &v) { v = b.zext(i8_ty, v); });
+      for (int i = 0; i < regDim; i += elemsPerVec) {
+        auto slice = ArrayRef<Value>(inVals).slice(i, elemsPerVec);
+        Value v = packLLVector(loc, slice, rewriter);
+        v = b.bitcast(v, packedIntTy);
+        if (padTo32)
+          v = b.zext(i32_ty, v);
+        packedVals.emplace_back(v);
       }
+      inVals = std::move(packedVals);
     }
+
+    SmallVector<Value> outVals;
+    if (m == 1 && pLaneIsTrivial) {
+      outVals = transferWithinWarpShipImpl(loc, rewriter, inVals, nPack,
+                                           mixedTranspositions[0]);
+    } else {
+      outVals = transferWithinWarpSwapImpl(loc, rewriter, inVals, nPack, pLane,
+                                           pLaneIsTrivial, mixedTranspositions);
+    }
+
+    // Unpack registers if needed.
+    if (elemsPerVec > 1) {
+      SmallVector<Value> unpackedVals;
+      unpackedVals.reserve(regDim);
+      auto vecTy = vec_ty(bitwidth < 8 ? i8_ty : elemTy, elemsPerVec);
+      auto unpackVal = [&](Value v) {
+        if (padTo32)
+          v = b.trunc(packedIntTy, v);
+        v = b.bitcast(v, vecTy);
+        return unpackLLVector(loc, v, rewriter);
+      };
+      for (auto v : outVals) {
+        auto unpacked = unpackVal(v);
+        unpackedVals.append(unpacked.begin(), unpacked.end());
+      }
+      if (bitwidth < 8)
+        llvm::for_each(unpackedVals, [&](Value &v) { v = b.trunc(elemTy, v); });
+      outVals = std::move(unpackedVals);
+    }
+
+    // Perform the second half of any prescribed register bit conjugations.
+    if (!regConjugations.empty()) {
+      SmallVector<Value> newOutVals(regDim);
+      for (const auto &[i, v] : llvm::enumerate(outVals))
+        newOutVals[applyConj(i)] = v;
+      outVals = std::move(newOutVals);
+    }
+
+    // If `dstLayout` has a smaller `kReg` dimension than `srcLayout` after
+    // broadcasting is removed, then drop the extra registers from `outVals`.
+    auto dstLayout = toLinearLayout(dstTy);
+    auto removeBroadcastDst = actionRemoveBroadcastedRegs(dstLayout);
+    auto strippedDstLayout = removeBroadcastDst.apply(dstLayout);
+    outVals.resize(strippedDstLayout.getInDimSize(kReg));
+
+    // Introduce broadcasting in registers if expected by `dstLayout`.
+    if (!removeBroadcastDst.isIdentity())
+      outVals = broadcastAs(outVals, dstLayout);
 
     Value result = packLLElements(loc, getTypeConverter(), outVals, rewriter,
                                   op.getType());
@@ -339,286 +478,138 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     return success();
   }
 
-  // Use warp shuffles to implement a layout conversion where data only needs to
-  // be moved within warps.
-  void transferWithinWarp(ConvertLayoutOp op,
-                          DecomposedWarpConversion decomposed,
-                          OpAdaptor adaptor,
-                          ConversionPatternRewriter &rewriter) const;
-
-  SmallVector<Value>
-  transferWithinBlockImpl(ArrayRef<Value> inVals, ConvertLayoutOp op,
-                          const LinearLayout &srcLayout,
-                          const LinearLayout &dstLayout,
-                          ConversionPatternRewriter &rewriter) const {
-    MLIRContext *ctx = op.getContext();
-    auto loc = op.getLoc();
+  SmallVector<Value> transferWithinWarpSwapImpl(
+      Location loc, ConversionPatternRewriter &rewriter, ArrayRef<Value> inVals,
+      int nPack, const LinearLayout &pLane, bool pLaneIsTrivial,
+      ArrayRef<std::pair<int, int>> mixedTranspositions) const {
+    auto *ctx = rewriter.getContext();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-
-    StringAttr kRegister = str_attr("register");
+    StringAttr kReg = str_attr("register");
     StringAttr kLane = str_attr("lane");
-    StringAttr kWarp = str_attr("warp");
-    StringAttr kBlock = str_attr("block");
-    StringAttr kOffset = str_attr("offset");
-    StringAttr kIteration = str_attr("iteration");
 
-    auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
-
-    auto scratchConfig =
-        getScratchConfigForCvt(op.getSrc().getType(), op.getType());
-    auto tensorShapePerCTA = convertType<unsigned, int64_t>(getShapePerCTA(
-        op.getSrc().getType().getEncoding(), op.getType().getShape()));
-    // Input dims: [offset, iteration, block]
-    // Output dims: dimN-1, dimN-2, ..., dim0, where N is obtained from repShape
-    LinearLayout sharedLayout = chooseShemLayoutForRegToRegConversion(
-        ctx, tensorShapePerCTA, scratchConfig.repShape, scratchConfig.order);
-
-    // Layout for the store from registers to shared memory.
+    SmallVector<Value> vals(inVals.begin(), inVals.end());
+    int m = mixedTranspositions.size();
+    int numRegs = inVals.size();
+    // A single mixed transposition (r_i l_j) which swaps the i-th register
+    // index bit and the j-th lane index bit of an element applies a tiled 2x2
+    // block transpose with block size (1 << i) by (1 << j) to the data. This
+    // can be realized as:
     //
-    // Note: If two threads in the same warp write to the same shmem offset, the
-    // hardware resolves that without a stall or a bank conflict.  Therefore we
-    // don't need to avoid duplicate writes.
-    // Input dims: [reg, lane, warp]
-    // Output dims: [offset, iteration]
-    bool isStMatrix = targetInfo.canUseStMatrix(
-        op.getSrc().getType(), scratchConfig.repShape,
-        scratchConfig.paddedRepShape, scratchConfig.order,
-        /*swizzleByteSize=*/0);
-    LinearLayout shmemStoreLayout =
-        isStMatrix ? chooseStMatrixLayout(ctx, op.getSrc().getType(),
-                                          /*swizzleByteSize=*/0)
-                   : srcLayout.invertAndCompose(sharedLayout);
-
-    const int shmemAllocatedNumElems =
-        getNumScratchElements(scratchConfig.paddedRepShape);
-    assert(shmemStoreLayout.getOutDimSize(kOffset) <= shmemAllocatedNumElems);
-
-    // Layout for the load from shmem to registers.
-    LinearLayout shmemLoadLayout = dstLayout.invertAndCompose(sharedLayout);
-
-    // Check that the `register` fully determines the `iteration`.  That is,
-    // each thread does exactly the same reads and writes to shmem on each
-    // iteration, just with different input/output registers.
-    assert(
-        shmemStoreLayout.sublayoutIsZero({kLane, kWarp, kBlock}, {kIteration}));
-    assert(
-        shmemLoadLayout.sublayoutIsZero({kLane, kWarp, kBlock}, {kIteration}));
-
-    // iteration -> registers
-    SmallVector<SmallVector<int>> inRegsForIter =
-        collectRegsForIter(ctx, shmemStoreLayout);
-    SmallVector<SmallVector<int>> outRegsForIter =
-        collectRegsForIter(ctx, shmemLoadLayout);
-
-    Value smemBase =
-        LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
-    auto sharedPtrTy = smemBase.getType();
-    Type elemTy = inVals[0].getType();
-    auto outSize = shmemLoadLayout.getInDimSize(kRegister);
-    auto iterations = sharedLayout.getInDimSize(kIteration);
-    assert(scratchConfig.inVec * iterations <= inVals.size());
-    assert(scratchConfig.outVec * iterations <= outSize);
-
-    // Check only one dimension has been padded.
-    // This means the difference between the padded shape and the original shape
-    // should only be in one dimension, specifically in
-    // `scratchConfig.order[0]`.
-    auto rank = scratchConfig.repShape.size();
-    for (auto i = 0; i < rank; i++) {
-      if (i == scratchConfig.order[0]) {
-        continue;
-      }
-      assert(scratchConfig.repShape[i] == scratchConfig.paddedRepShape[i]);
-    }
-    auto paddedStride = scratchConfig.repShape[scratchConfig.order[0]];
-    auto paddedSize =
-        scratchConfig.paddedRepShape[scratchConfig.order[0]] - paddedStride;
-
-    // Linear layout function is split in two parts below:
+    //             [ A B ] selp [ A D ] shfl [ A D ] selp [ A C ]
+    //             [ C D ] ---> [ C B ] ---> [ B C ] ---> [ B D ].
     //
-    // L(r, t, w, b) = L(0, t, w, b) xor L(r, 0, 0, 0)
-    //   offset      =    regBase   xor    regIdx
+    // In linear-algebraic terms, this is the factorization over GF(2):
     //
-    // It is the same hack as what we've done in the emitIndices function to get
-    // around performance issues on AMD GPUs
-    auto getVecAddr = [&](LinearLayout &layout, Value &regBase,
-                          int regSlice) -> Value {
-      auto regIdx = layout
-                        .apply({{kRegister, regSlice},
-                                {kLane, 0},
-                                {kWarp, 0},
-                                {kBlock, 0}})[0]
-                        .second;
-      Value offset = b.xor_(regBase, b.i32_val(regIdx));
-      if (paddedSize > 0) {
-        assert(llvm::isPowerOf2_32(paddedStride));
-        assert(llvm::isPowerOf2_32(paddedSize));
-        auto rshiftVal = llvm::Log2_32(paddedStride);
-        auto lshiftVal = llvm::Log2_32(paddedSize);
-        offset = b.add(
-            b.shl(b.lshr(offset, b.i32_val(rshiftVal)), b.i32_val(lshiftVal)),
-            offset);
-      }
-      auto vecAddr = b.gep(sharedPtrTy, elemTy, smemBase, offset,
-                           LLVM::GEPNoWrapFlags::inbounds);
-      return vecAddr;
-    };
+    //   1. r_i ^= l_j (selp)                     selp    shfl    selp
+    //   2. l_j ^= r_i (shfl)        [ 0 1 ]     [ 1 1 ] [ 1 0 ] [ 1 1 ]
+    //   3. r_i ^= l_j (selp),       [ 1 0 ]  =  [ 0 1 ] [ 1 1 ] [ 0 1 ],
+    //
+    // where we pass in bits as column vectors [r_i, l_j].
+    //
+    // When the transpositions are all disjoint, we can group the three stages
+    // of each transposition together. The two combined `selp` stages each use
+    // `numRegs` selects per transposition, while the `shfl` stage only requires
+    // code emission when at least one of the `r_i` bits is on, resulting in
+    // `(1 - (1/2)^m) * numRegs` shuffles in total. If `pLane` is nontrivial,
+    // then we can conjugate its effects through the first two stages and fuse
+    // it with the second stage, resulting in `numRegs` shuffles instead.
+    Value laneId = getLaneId(rewriter, loc);
 
-    auto storeBase = applyLinearLayout(loc, rewriter, shmemStoreLayout,
-                                       {{kRegister, b.i32_val(0)},
-                                        {kLane, laneId},
-                                        {kWarp, warpId},
-                                        {kBlock, b.i32_val(0)}})[0]
-                         .second;
-    auto loadBase = applyLinearLayout(loc, rewriter, shmemLoadLayout,
-                                      {{kRegister, b.i32_val(0)},
-                                       {kLane, laneId},
-                                       {kWarp, warpId},
-                                       {kBlock, b.i32_val(0)}})[0]
-                        .second;
-    // register idx -> Value
-    llvm::MapVector<int, Value> outVals;
-    for (int i = 0; i < iterations; i++) {
-      if (i != 0)
-        b.barrier();
+    // Implement r_i ^= l_j using `numRegs` independent selects.
+    auto applyConditionalSwap = [&](int rBitIdx, int lBitIdx) {
+      SmallVector<Value> newVals(numRegs);
+      Value lBitVal = b.and_(laneId, b.i32_val(1 << lBitIdx));
+      Value lBitOff = b.icmp_eq(lBitVal, b.i32_val(0));
 
-      auto &inRegs = inRegsForIter[i];
-      auto &outRegs = outRegsForIter[i];
-
-      // When using `stmatrix`, we can store `inVec` elements even if they are
-      // not contiguous
-      auto inVec = isStMatrix ? shmemStoreLayout.getNumConsecutiveInOut()
-                              : scratchConfig.inVec;
-      for (int j = 0; j < inVals.size() / iterations; j += inVec) {
-        auto inRegSlice = inRegs[j];
-        Value vecAddr = getVecAddr(shmemStoreLayout, storeBase, inRegSlice);
-        SmallVector<Value> inValsVec;
-        for (int k = 0; k < inVec; k++)
-          inValsVec.push_back(inVals[inRegSlice + k]);
-        Value valsVec = packLLVector(loc, inValsVec, rewriter);
-        if (isStMatrix) {
-          targetInfo.storeMatrixShared(rewriter, loc, vecAddr, valsVec);
-        } else {
-          targetInfo.storeDShared(rewriter, loc, vecAddr, std::nullopt, valsVec,
-                                  /*pred=*/b.true_val());
+      int tileSize = 1 << (rBitIdx + 1);
+      int numTiles = numRegs / tileSize;
+      for (int tileIdx = 0; tileIdx < numTiles; ++tileIdx) {
+        int baseIdx = tileIdx * tileSize;
+        for (int i = 0; i < tileSize / 2; ++i) {
+          int idx = baseIdx + i;
+          int partnerIdx = idx + (1 << rBitIdx);
+          Value val = vals[idx];
+          Value partnerVal = vals[partnerIdx];
+          newVals[idx] = b.select(lBitOff, val, partnerVal);
+          newVals[partnerIdx] = b.select(lBitOff, partnerVal, val);
         }
       }
+      return newVals;
+    };
 
-      b.barrier();
+    auto pLaneInv = pLane.invert();
+    const auto &pLInvBases = pLaneInv.getBases().lookup(kLane);
 
-      for (int j = 0; j < outSize / iterations; j += scratchConfig.outVec) {
-        auto outRegSlice = outRegs[j];
-        auto vecAddr = getVecAddr(shmemLoadLayout, loadBase, outRegSlice);
-        Value valsVec =
-            targetInfo.loadDShared(rewriter, loc, vecAddr, std::nullopt,
-                                   vec_ty(elemTy, scratchConfig.outVec),
-                                   /*pred=*/b.true_val());
-        for (Value v : unpackLLVector(loc, valsVec, rewriter))
-          outVals[outRegSlice++] = v;
+    // Perform r_i ^= l_{pLaneInv(j)}.
+    for (auto [origRBitIdx, origLBitIdx] : mixedTranspositions) {
+      int rBitIdx = origRBitIdx - nPack;
+      int lBitIdx = llvm::Log2_32(pLInvBases[origLBitIdx][0]);
+      vals = applyConditionalSwap(rBitIdx, lBitIdx);
+    }
+    // Perform l_{pLaneInv(j)} ^= r_i and apply pLane.
+    Value laneIdPerm;
+    if (pLaneIsTrivial) {
+      laneIdPerm = laneId;
+    } else {
+      laneIdPerm = triton::gpu::matrixVectorProd(b, pLaneInv, laneId);
+    }
+    for (int r = 0; r < numRegs; ++r) {
+      int mask = 0;
+      for (auto [origRBitIdx, lBitIdx] : mixedTranspositions) {
+        int rBitIdx = origRBitIdx - nPack;
+        if (r & (1 << rBitIdx)) {
+          mask |= pLInvBases[lBitIdx][0];
+        }
+      }
+      if (!pLaneIsTrivial || mask > 0) {
+        Value srcIdx = b.xor_(laneIdPerm, b.i32_val(mask));
+        vals[r] = targetInfo.shuffleIdx(rewriter, loc, vals[r], srcIdx);
       }
     }
-
-    SmallVector<Value> outValsVec;
-    for (size_t i = 0; i < outVals.size(); i++)
-      outValsVec.push_back(outVals[i]);
-    return outValsVec;
+    // Perform r_i ^= l_j.
+    for (auto [origRBitIdx, lBitIdx] : mixedTranspositions) {
+      int rBitIdx = origRBitIdx - nPack;
+      vals = applyConditionalSwap(rBitIdx, lBitIdx);
+    }
+    return vals;
   }
 
-  // Determine which registers are read/written in which iteration of the shmem
-  // transfer specified by `layout`.
-  SmallVector<SmallVector<int> /*registers*/>
-  collectRegsForIter(MLIRContext *ctx, const LinearLayout &layout) const {
-    StringAttr kRegister = str_attr("register");
-    StringAttr kLane = str_attr("lane");
-    StringAttr kWarp = str_attr("warp");
-    StringAttr kBlock = str_attr("block");
-    StringAttr kIteration = str_attr("iteration");
+  SmallVector<Value>
+  transferWithinWarpShipImpl(Location loc, ConversionPatternRewriter &rewriter,
+                             ArrayRef<Value> inVals, int nPack,
+                             std::pair<int, int> mixedTransposition) const {
+    // Implements the effects of a single mixed transposition as in
+    // `transferWithinWarpSwapImpl`, but uses auxiliary registers to hold the
+    // values to be shuffled, resulting in fewer emitted instructions.
+    int numRegs = inVals.size();
+    auto [origRBitIdx, lBitIdx] = mixedTransposition;
+    int rBitIdx = origRBitIdx - nPack;
+    int tileSize = 1 << (rBitIdx + 1);
+    int numTiles = numRegs / tileSize;
 
-    // The choice of iteration should be determined only by the register.  That
-    // is, it should be correct to split the register dimension into iterations.
-    assert(layout.sublayoutIsZero({kLane, kWarp, kBlock}, {kIteration}));
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    Value laneId = getLaneId(rewriter, loc);
+    Value lBitVal = b.and_(laneId, b.i32_val(1 << lBitIdx));
+    Value lBitOff = b.icmp_eq(lBitVal, b.i32_val(0));
+    SmallVector<Value> outVals(numRegs);
 
-    LinearLayout sublayout = layout.sublayout({kRegister}, {kIteration});
-    SmallVector<SmallVector<int>> ret(sublayout.getOutDimSize(kIteration));
-    for (int reg = 0; reg < sublayout.getInDimSize(kRegister); reg++) {
-      auto idx = sublayout.apply({{kRegister, reg}});
-      ret[idx.begin()->second].push_back(reg);
+    for (int tileIdx = 0; tileIdx < numTiles; ++tileIdx) {
+      int baseIdx = tileIdx * tileSize;
+      for (int i = 0; i < tileSize / 2; ++i) {
+        int idx = baseIdx + i;
+        int partnerIdx = idx + (1 << rBitIdx);
+        Value valToShip = b.select(lBitOff, inVals[partnerIdx], inVals[idx]);
+        Value shippedVal =
+            targetInfo.shuffleXor(rewriter, loc, valToShip, (1 << lBitIdx));
+        outVals[idx] = b.select(lBitOff, inVals[idx], shippedVal);
+        outVals[partnerIdx] = b.select(lBitOff, shippedVal, inVals[partnerIdx]);
+      }
     }
-    return ret;
+    return outVals;
   }
 };
 
 } // namespace
-
-void ConvertLayoutOpUsingLinearLayoutsConversion::transferWithinWarp(
-    ConvertLayoutOp op, DecomposedWarpConversion decomposed, OpAdaptor adaptor,
-    ConversionPatternRewriter &rewriter) const {
-  MLIRContext *ctx = op.getContext();
-  Location loc = op.getLoc();
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  StringAttr kRegister = str_attr("register");
-  StringAttr kLane = str_attr("lane");
-  assert(!cvtNeedsSharedMemory(op.getSrc().getType(), op.getType()));
-  auto [P1, Cp, P2inv, reducedP1, reducedP2] = std::move(decomposed);
-
-  // Grab the source elements and prepare the outputs of just the shuffles.
-  SmallVector<Value> srcValues =
-      unpackLLElements(loc, adaptor.getSrc(), rewriter);
-  SmallVector<Value> shflOuts(Cp.getInDimSize(kRegister));
-
-  Value laneId = getLaneId(rewriter, loc);
-
-  // Emit one shuffle per destination register.
-  for (int i : llvm::seq(shflOuts.size())) {
-    // 'Cp' maps a (dst_lane, dst_reg) -> (src_lane, src_reg), and we know that
-    // for a register, it does not map to different registers in the same lane.
-    // At the same time, for each register, P1 returns the source value index
-    // to provide as the shuffle value.
-    auto out = applyLinearLayout(loc, rewriter, P1,
-                                 {{kRegister, b.i32_val(i)}, {kLane, laneId}});
-    assert(out.size() == 1);
-    Value srcRegIdx = out.front().second;
-    // The size of the input lane dimension is the number of selects to emit.
-    // TODO(jeff): For dtypes smaller than i32, we can use byte permutes and
-    // shuffle multiple values at a time.
-    Value shflSrc = b.undef(srcValues.front().getType());
-    for (int j : llvm::seq(reducedP1.getInDimSize(kLane))) {
-      int32_t check =
-          reducedP1.apply({{kLane, j}, {kRegister, i}}).front().second;
-      shflSrc = b.select(b.icmp_eq(srcRegIdx, b.i32_val(check)),
-                         srcValues[check], shflSrc);
-    }
-
-    out = applyLinearLayout(loc, rewriter, Cp,
-                            {{kRegister, b.i32_val(i)}, {kLane, laneId}});
-    assert(out.size() == 1);
-    Value shflIdx = out.front().second;
-    shflOuts[i] = targetInfo.shuffleIdx(rewriter, loc, shflSrc, shflIdx);
-  }
-
-  // Finally, we just need to apply P2 to the shflOuts to permute the registers
-  // into their final form. Use the same trick to reduce the number of emitted
-  // selects.
-  SmallVector<Value> results(shflOuts.size());
-  for (int i : llvm::seq(results.size())) {
-    Value result = b.undef(srcValues.front().getType());
-
-    auto out = applyLinearLayout(loc, rewriter, P2inv,
-                                 {{kRegister, b.i32_val(i)}, {kLane, laneId}});
-    Value resultIdx = out.front().second;
-    for (int j : llvm::seq(reducedP2.getInDimSize(kLane))) {
-      int32_t check =
-          reducedP2.apply({{kLane, j}, {kRegister, i}}).front().second;
-      result = b.select(b.icmp_eq(resultIdx, b.i32_val(check)), shflOuts[check],
-                        result);
-    }
-    results[i] = result;
-  }
-
-  Value result =
-      packLLElements(loc, getTypeConverter(), results, rewriter, op.getType());
-  rewriter.replaceOp(op, result);
-}
 
 void mlir::triton::populateConvertLayoutOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, const TargetInfoBase &targetInfo,

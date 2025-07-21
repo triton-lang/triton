@@ -2,7 +2,6 @@
 
 #include "AsyncUtility.h"
 #include "PatternTritonGPUOpToLLVM.h"
-#include "SchedInstructions.h"
 #include "TargetInfo.h"
 #include "TritonAMDGPUToLLVM/MembarUtility.h"
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"

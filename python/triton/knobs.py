@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import functools
 import importlib
 import os
 import re
@@ -170,6 +171,7 @@ class NvidiaTool:
     version: str
 
     @staticmethod
+    @functools.lru_cache
     def from_path(path: str) -> Optional[NvidiaTool]:
         try:
             result = subprocess.check_output([path, "--version"], stderr=subprocess.STDOUT)
@@ -437,6 +439,7 @@ class nvidia_knobs(base_knobs):
     dump_nvptx: env_bool = env_bool("NVPTX_ENABLE_DUMP")
     disable_ptxas_opt: env_bool = env_bool("DISABLE_PTXAS_OPT")
     mock_ptx_version: env_opt_str = env_opt_str("TRITON_MOCK_PTX_VERSION")
+    dump_ptxas_log: env_bool = env_bool("TRITON_DUMP_PTXAS_LOG")
 
     libdevice_path: env_opt_str = env_opt_str("TRITON_LIBDEVICE_PATH")
     libcuda_path: env_opt_str = env_opt_str("TRITON_LIBCUDA_PATH")

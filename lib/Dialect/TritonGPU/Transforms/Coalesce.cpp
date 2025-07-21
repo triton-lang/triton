@@ -106,8 +106,7 @@ struct CoalescePass : public impl::TritonGPUCoalesceBase<CoalescePass> {
 
   static Type getNewType(Type type, Attribute encoding) {
     RankedTensorType tensorType = cast<RankedTensorType>(type);
-    return RankedTensorType::get(tensorType.getShape(),
-                                 tensorType.getElementType(), encoding);
+    return tensorType.cloneWithEncoding(encoding);
   }
 
   void coalesceOp(Attribute encoding, Operation *op) {

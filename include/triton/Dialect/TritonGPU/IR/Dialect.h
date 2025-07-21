@@ -15,7 +15,8 @@
 #include <unordered_map>
 
 // LinearLayoutCache Utils
-using CacheKey = std::tuple<std::vector<int64_t>, mlir::Attribute>;
+using CacheKey =
+    std::tuple<std::vector<int64_t>, mlir::Attribute, std::vector<int64_t>>;
 
 namespace llvm {
 template <typename T> size_t hash_value(const std::vector<T> &vec) {
@@ -93,7 +94,8 @@ struct SharedMemory : public SideEffects::Resource::Base<SharedMemory> {
 
 // Convert a distributed layout to a linear encoding
 LinearEncodingAttr toLinearEncoding(RankedTensorType type);
-LinearEncodingAttr toLinearEncoding(Attribute layout, ArrayRef<int64_t> shape);
+LinearEncodingAttr toLinearEncoding(DistributedEncodingTrait layout,
+                                    ArrayRef<int64_t> shape);
 
 unsigned getTotalElemsPerThread(Type type);
 
@@ -219,13 +221,19 @@ SmallVector<unsigned> getCTAOrder(Attribute layout);
 // [FIXME LL] Kill this function
 SmallVector<unsigned> getShapePerCTATile(RankedTensorType layout);
 
-// Returns the "logical" shape per CTA
+// Returns the "logical" shape per CTA.
+// When shape and CTASplitNum have different number of dimensions, we assume
+// only the last N between common dimensions are split.
+// Example1: shape = [2, 4, 8], CTASplitNum = [2, 2], ret = [2, 2, 4].
+// It can be caused by pipelining.
+// Example2: shape = [2, 4], CTASplitNum = [2, 2, 2], ret = [1, 2].
+// It can be caused by memory slicing.
 SmallVector<int64_t> getShapePerCTA(ArrayRef<unsigned> CTASplitNum,
                                     ArrayRef<int64_t> shape);
 SmallVector<int64_t> getShapePerCTA(Attribute layout, ArrayRef<int64_t> shape);
 SmallVector<int64_t> getShapePerCTA(Type type);
 
-// Returns the shape per CTA, which is "physically" allocated
+// Returns the shape per CTA, which is "physically" allocated.
 // Such shapes may be bigger than the logical one due to, for example, padding
 // in shared memory.
 SmallVector<int64_t> getAllocationShapePerCTA(Attribute layout,
@@ -274,14 +282,13 @@ llvm::SmallVector<unsigned>
 expandMatrixOrderWithBatch(llvm::ArrayRef<unsigned> o);
 
 // Return true if the two layouts represent the exact same mapping.
-bool areLayoutsEquivalent(ArrayRef<int64_t> shape, Attribute lhs,
-                          Attribute rhs);
+bool areLayoutsEquivalent(ArrayRef<int64_t> shape, DistributedEncodingTrait lhs,
+                          DistributedEncodingTrait rhs);
 
 // Return true if the innermost numElems are contiguous.
 bool isInnermostContiguous(MemDescType type, unsigned numElems);
 
-LinearLayout inferReshapeLinearLayout(ArrayRef<int64_t> srcShape,
-                                      Attribute srcEnc,
+LinearLayout inferReshapeLinearLayout(TensorOrMemDesc srcTy,
                                       ArrayRef<int64_t> dstShape);
 
 // Verify the types of operations that operate on memory.
