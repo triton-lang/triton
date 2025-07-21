@@ -632,7 +632,7 @@ class JITFunction(KernelInterface[T]):
         self.signature = inspect.signature(fn)
         self.do_not_specialize = do_not_specialize
         self.do_not_specialize_on_alignment = do_not_specialize_on_alignment
-        self.starting_line_number = inspect.getsourcelines(fn)[1]
+        self.raw_src, self.starting_line_number = inspect.getsourcelines(fn)
         self._repr = repr
         self._fn_name = get_full_name(fn)
         self.launch_metadata = launch_metadata
@@ -644,7 +644,7 @@ class JITFunction(KernelInterface[T]):
             self.params.append(KernelParam(i, param, dns, dns_oa))
 
         # function source code (without decorators)
-        src = textwrap.dedent(inspect.getsource(fn))
+        src = textwrap.dedent("".join(self.raw_src))
         src = src[re.search(r"^def\s+\w+\s*\(", src, re.MULTILINE).start():]
         self._unsafe_update_src(src)
         # cache of just-in-time compiled kernels
