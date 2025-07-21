@@ -942,8 +942,11 @@ buildSchedule(scf::ForOp &forOp, int numStages, const LoadToInfoMap &loadToInfo,
   dumpSchedule("Coarse schedule after schedule ops between dots:");
 
   // Convert the loads into shared memory allocations and loads from them.
-  auto loadToStreamOps = createStreamOps(loadToInfo, forOp, /*numBuffers=*/2,
-                                         useAsyncCopy, axisInfoAnalysis);
+  // TODO support different numBuffers
+  int numBuffers = useAsyncCopy ? 2 : 1;
+  auto loadToStreamOps =
+      createStreamOps(loadToInfo, forOp, /*numBuffers=*/numBuffers,
+                      useAsyncCopy, axisInfoAnalysis);
   scheduleStreamOps(loadToStreamOps, schedule, clusters);
   dumpSchedule("Coarse schedule stream ops:");
 
