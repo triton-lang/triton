@@ -367,9 +367,9 @@ TEST_F(Fp4ToFpOpTest, Fp4ToFpOpLayoutPropagation) {
   }
 }
 
-class JoinOpTest : public ::testing::Test {
+class ShapePerCTATest : public ::testing::Test {
 public:
-  JoinOpTest() { ctx.getOrLoadDialect<TritonGPUDialect>(); }
+  ShapePerCTATest() { ctx.getOrLoadDialect<TritonGPUDialect>(); }
 
 protected:
   MLIRContext ctx;
@@ -398,6 +398,14 @@ TEST_F(ShapePerCTATest, ShapePerCTA) {
   EXPECT_EQ(shapePerCTA.size(), shape.size());
   EXPECT_EQ(shapePerCTA, expectedShapePerCTA);
 }
+
+class JoinOpTest : public ::testing::Test {
+public:
+  JoinOpTest() { ctx.getOrLoadDialect<TritonGPUDialect>(); }
+
+protected:
+  MLIRContext ctx;
+};
 
 TEST_F(JoinOpTest, JoinOpLayoutPropagation) {
   SmallVector<SmallVector<int64_t>> shapes = {{64, 128}, {256, 1024}};
