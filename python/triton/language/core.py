@@ -10,7 +10,7 @@ from typing import Union, Callable, List, Sequence, TypeVar, Optional, Tuple
 from dataclasses import dataclass
 import builtins
 from .. import knobs
-from ..runtime.jit import jit, JITFunction
+from ..runtime.jit import JITFunction
 import inspect
 
 from .._C.libtriton import ir
@@ -1831,11 +1831,6 @@ def join(a, b, _semantic=None):
     return _semantic.join(a, b)
 
 
-@jit
-def _take_first(a, b):
-    return a
-
-
 def _unsplat(x, _semantic=None, _generator=None):
     """
     Convert a single-element tensor to a scalar.
@@ -1846,10 +1841,7 @@ def _unsplat(x, _semantic=None, _generator=None):
     for d in x.shape:
         numel *= d
     assert numel == 1, "can only unsplat single-element tensors"
-    if len(x.shape) >= 2:
-        x = _semantic.reshape(x, [1])
-    x = typing.cast(tensor, reduce(x, 0, _take_first, _semantic=_semantic, _generator=_generator))
-    return x
+    return _semantic.unsplat(x)
 
 
 @_tensor_member_fn
