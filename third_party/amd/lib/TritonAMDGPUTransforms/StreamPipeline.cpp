@@ -685,12 +685,12 @@ buildSchedule(scf::ForOp &forOp, int numStages, const LoadToInfoMap &loadToInfo,
 // pipeliner is meant to be used in combination with pingpong
 namespace chainedDotSchedule {
 
-enum CLUSTERS {
+enum Clusters {
   // ComputeCluster1
   CLUSTER_DOT1,
   CLUSTER_AFTER_DOT1,
   // MemoryCluster1
-  CLUSTER_ASYNCWAIT2,
+  CLUSTER_ASYNC_WAIT2,
   CLUSTER_LWRITE1,
   CLUSTER_LLOAD2,
   CLUSTER_LOAD1,
@@ -698,15 +698,18 @@ enum CLUSTERS {
   CLUSTER_DOT2,
   CLUSTER_AFTER_DOT2,
   // MemoryCluster2
-  CLUSTER_ASYNCWAIT1,
+  CLUSTER_ASYNC_WAIT1,
   CLUSTER_LWRITE2,
   CLUSTER_LLOAD1,
   CLUSTER_LOAD2,
 
-  COUNT
+  CLUSTER_COUNT
 };
 
-enum STAGES {
+using ChainedDotClusters =
+    std::array<tt::CoarseSchedule::Cluster, CLUSTER_COUNT>;
+
+enum Stages {
   STAGE_DOT1 = 2,
   STAGE_DOT2 = 3,
 
@@ -747,11 +750,11 @@ LogicalResult checkPreconditions(scf::ForOp forOp, int numStages,
 }
 
 // We schedule loads one stage in front of their dots
-LogicalResult scheduleLoads(
-    std::array<tt::DotOp, 2> dotOps,
-    const llvm::MapVector<Operation *, LoadInfo> &loadToInfo,
-    const std::array<tt::CoarseSchedule::Cluster, CLUSTERS::COUNT> &clusters,
-    tt::CoarseSchedule &schedule) {
+LogicalResult
+scheduleLoads(std::array<tt::DotOp, 2> dotOps,
+              const llvm::MapVector<Operation *, LoadInfo> &loadToInfo,
+              const ChainedDotClusters &clusters,
+              tt::CoarseSchedule &schedule) {
   for (auto [loadOp, info] : loadToInfo) {
     if (info.use == dotOps[0]) {
       schedule.insert(loadOp, STAGE_LOAD1, clusters[CLUSTER_LOAD1]);
@@ -764,10 +767,10 @@ LogicalResult scheduleLoads(
   return success();
 }
 
-LogicalResult scheduleOpsBetweenDots(
-    scf::ForOp forOp, std::array<tt::DotOp, 2> dotOps,
-    tt::CoarseSchedule &schedule,
-    const std::array<tt::CoarseSchedule::Cluster, CLUSTERS::COUNT> &clusters) {
+LogicalResult scheduleOpsBetweenDots(scf::ForOp forOp,
+                                     std::array<tt::DotOp, 2> dotOps,
+                                     tt::CoarseSchedule &schedule,
+                                     const ChainedDotClusters &clusters) {
   SetVector<Operation *> dot0Slice;
   getForwardSlice(Value(dotOps[0]), &dot0Slice);
 
@@ -801,11 +804,10 @@ LogicalResult scheduleOpsBetweenDots(
       if (numUsers > 1) {
         // Schedule this op to interleave with dot2. All its unscheduled
         // dependencies will be scheduled the same by scheduleDependencies
-        schedule.insert(defOp, STAGES::STAGE_DOT1,
-                        clusters[CLUSTER_AFTER_DOT2]);
+        schedule.insert(defOp, STAGE_DOT1, clusters[CLUSTER_AFTER_DOT2]);
         // Schedule the dot2 operand to interleave with dot1. Its unscheduled
         // dependencies will be scheduled the same by scheduleDependencies
-        schedule.insertIfAbsent(operandDefOp, STAGES::STAGE_DOT2,
+        schedule.insertIfAbsent(operandDefOp, STAGE_DOT2,
                                 clusters[CLUSTER_AFTER_DOT1]);
         continue;
       }
@@ -823,17 +825,15 @@ LogicalResult scheduleOpsBetweenDots(
     if (!defOp || !dot0Slice.contains(defOp))
       continue;
 
-    schedule.insertIfAbsent(defOp, STAGES::STAGE_DOT2,
-                            clusters[CLUSTER_AFTER_DOT1]);
+    schedule.insertIfAbsent(defOp, STAGE_DOT2, clusters[CLUSTER_AFTER_DOT1]);
   }
 
   return success();
 }
 
-void scheduleAsyncCopy(
-    const AsyncCopyChainOps &asyncOps, tt::LoadOp loadOp,
-    tt::CoarseSchedule &schedule,
-    const std::array<tt::CoarseSchedule::Cluster, CLUSTERS::COUNT> &clusters) {
+void scheduleAsyncCopy(const AsyncCopyChainOps &asyncOps, tt::LoadOp loadOp,
+                       tt::CoarseSchedule &schedule,
+                       const ChainedDotClusters &clusters) {
   auto [loadStage, loadCluster] = schedule[loadOp];
   auto [copyOp, commitOp, waitOp, maybeLocalLoadOp] = asyncOps;
 
@@ -842,44 +842,37 @@ void scheduleAsyncCopy(
   // later UpdateAsyncWaitCount pass can deduce better waitcnts
   schedule.insert(commitOp, loadStage, loadCluster);
 
-  if (loadStage == STAGES::STAGE_LOAD1) {
-    schedule.insert(waitOp, STAGES::STAGE_LLOAD1, clusters[CLUSTER_ASYNCWAIT1]);
+  if (loadStage == STAGE_LOAD1) {
+    schedule.insert(waitOp, STAGE_LLOAD1, clusters[CLUSTER_ASYNC_WAIT1]);
     if (maybeLocalLoadOp)
-      scheduleLocalLoad(maybeLocalLoadOp, schedule, STAGES::STAGE_LLOAD1,
+      scheduleLocalLoad(maybeLocalLoadOp, schedule, STAGE_LLOAD1,
                         clusters[CLUSTER_LLOAD1]);
   } else {
-    schedule.insert(waitOp, STAGES::STAGE_LLOAD2, clusters[CLUSTER_ASYNCWAIT2]);
+    schedule.insert(waitOp, STAGE_LLOAD2, clusters[CLUSTER_ASYNC_WAIT2]);
     if (maybeLocalLoadOp)
-      scheduleLocalLoad(maybeLocalLoadOp, schedule, STAGES::STAGE_LLOAD2,
+      scheduleLocalLoad(maybeLocalLoadOp, schedule, STAGE_LLOAD2,
                         clusters[CLUSTER_LLOAD2]);
   }
 }
 
-void scheduleStreamCopy(
-    const StreamCopyChainOps &streamOps, tt::LoadOp loadOp,
-    tt::CoarseSchedule &schedule,
-    const std::array<tt::CoarseSchedule::Cluster, CLUSTERS::COUNT> &clusters) {
+void scheduleStreamCopy(const StreamCopyChainOps &streamOps, tt::LoadOp loadOp,
+                        tt::CoarseSchedule &schedule,
+                        const ChainedDotClusters &clusters) {
   auto [loadStage, loadCluster] = schedule[loadOp];
   auto [copyOp, subviewOp, localStoreOp, maybeLocalLoadOp] = streamOps;
   schedule.insert(copyOp, loadStage, loadCluster);
 
-  if (loadStage == STAGES::STAGE_LOAD1) {
-    schedule.insert(subviewOp, STAGES::STAGE_LWRITE1,
-                    clusters[CLUSTER_LWRITE1]);
-    schedule.insert(localStoreOp, STAGES::STAGE_LWRITE1,
-                    clusters[CLUSTER_LWRITE1]);
+  if (loadStage == STAGE_LOAD1) {
+    schedule.insert(subviewOp, STAGE_LWRITE1, clusters[CLUSTER_LWRITE1]);
+    schedule.insert(localStoreOp, STAGE_LWRITE1, clusters[CLUSTER_LWRITE1]);
 
     if (maybeLocalLoadOp)
-      schedule.insert(maybeLocalLoadOp, STAGES::STAGE_LLOAD1,
-                      clusters[CLUSTER_LLOAD1]);
+      schedule.insert(maybeLocalLoadOp, STAGE_LLOAD1, clusters[CLUSTER_LLOAD1]);
   } else {
-    schedule.insert(subviewOp, STAGES::STAGE_LWRITE2,
-                    clusters[CLUSTER_LWRITE2]);
-    schedule.insert(localStoreOp, STAGES::STAGE_LWRITE2,
-                    clusters[CLUSTER_LWRITE2]);
+    schedule.insert(subviewOp, STAGE_LWRITE2, clusters[CLUSTER_LWRITE2]);
+    schedule.insert(localStoreOp, STAGE_LWRITE2, clusters[CLUSTER_LWRITE2]);
     if (maybeLocalLoadOp)
-      schedule.insert(maybeLocalLoadOp, STAGES::STAGE_LLOAD2,
-                      clusters[CLUSTER_LLOAD2]);
+      schedule.insert(maybeLocalLoadOp, STAGE_LLOAD2, clusters[CLUSTER_LLOAD2]);
   }
 
   if (maybeLocalLoadOp) {
@@ -891,9 +884,9 @@ void scheduleStreamCopy(
   }
 }
 
-void scheduleStreamOps(
-    const LoadToStreamOpMap &loadToStreamOp, tt::CoarseSchedule &schedule,
-    const std::array<tt::CoarseSchedule::Cluster, CLUSTERS::COUNT> &clusters) {
+void scheduleStreamOps(const LoadToStreamOpMap &loadToStreamOp,
+                       tt::CoarseSchedule &schedule,
+                       const ChainedDotClusters &clusters) {
   for (auto [l, streamOps] : loadToStreamOp) {
     auto loadOp = dyn_cast<tt::LoadOp>(l);
     if (!loadOp)
@@ -912,7 +905,7 @@ buildSchedule(scf::ForOp &forOp, int numStages, const LoadToInfoMap &loadToInfo,
               bool useAsyncCopy,
               triton::AMD::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
   tt::CoarseSchedule schedule(numStages);
-  std::array<tt::CoarseSchedule::Cluster, CLUSTERS::COUNT> clusters;
+  ChainedDotClusters clusters;
   std::generate(clusters.begin(), clusters.end(),
                 [&]() { return schedule.clusters.newAtBack(); });
   auto dumpSchedule = [&](llvm::StringRef msg) {
