@@ -424,6 +424,7 @@ Value emitPadding(Location loc, RewriterBase &rewriter,
                   unsigned bitwidth, Value smemOffset, bool offsetInBytes) {
   TritonLLVMOpBuilder b(loc, rewriter);
 
+  assert((bitwidth >= 8) && "Invalid bitwidth for padded shared layout");
   Value padOffset = b.i32_val(0);
   unsigned offScale = offsetInBytes ? bitwidth / 8 : 1;
   for (auto [interval, padding] :
@@ -712,7 +713,8 @@ bool emitTransferBetweenRegistersAndShared(
     smemOffset = b.xor_(smemOffset, offset);
     if (paddedLayout) {
       // Apply the offset needed for padding.
-      Value padOffset = emitPadding(loc, rewriter, paddedLayout, /*bitwidth=*/0,
+      auto bitwidth = elemLlvmTy.getIntOrFloatBitWidth();
+      Value padOffset = emitPadding(loc, rewriter, paddedLayout, bitwidth,
                                     smemOffset, /*offsetInBytes=*/false);
       smemOffset = b.add(smemOffset, padOffset);
     }

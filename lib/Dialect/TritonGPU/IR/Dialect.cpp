@@ -1780,6 +1780,8 @@ int64_t PaddedSharedEncodingAttr::getPaddedSize(ArrayRef<int64_t> shape) const {
        llvm::zip_equal(getIntervals(), getPaddings())) {
     paddingSize += (unpaddedSize >> llvm::Log2_32(interval))
                    << llvm::Log2_32(padding);
+    // There is no need for padding after the last element
+    paddingSize -= padding;
   }
   return unpaddedSize + paddingSize;
 }
