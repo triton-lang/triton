@@ -4,6 +4,7 @@ from triton_kernels.tensor_details.layout_details.blackwell_scale import unswizz
 from triton_kernels.tensor_details.layout_details.hopper_scale import unswizzle_mxfp4_scale_hopper
 from triton_kernels.tensor_details.layout_details.hopper_value import unswizzle_mxfp4_value_hopper
 from triton_kernels.numerics_details.flexpoint import float_to_flex, load_scale
+from triton_kernels.numerics_details.mxfp_details._downcast_to_mxfp import MXFP_BLOCK_SIZE
 from ._common import make_matmul_repr, matmul_launch_metadata, swizzle2d, xcd_swizzle, get_scaled_dot_format_string
 
 # fmt: off
@@ -75,7 +76,7 @@ def _matmul_ogs(
 
     Y = Out  # Y is passed for the purposes of annotation; replace it with Out
     is_microscaled_format: tl.constexpr = MxScale is not None
-    MX_PACK_DIVISOR: tl.constexpr = 32
+    MX_PACK_DIVISOR: tl.constexpr = MXFP_BLOCK_SIZE
     if is_microscaled_format:
         w_type: tl.constexpr = W.dtype.element_ty
         is_mxfp4: tl.constexpr = w_type == tl.uint8
