@@ -14,7 +14,10 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 
-#define GEN_PASS_CLASSES
+namespace mlir {
+namespace triton {
+
+#define GEN_PASS_DEF_NVWSINSERTAREF
 #include "nvidia/include/Dialect/NVWS/Transforms/Passes.h.inc"
 
 namespace {
@@ -350,7 +353,9 @@ bool insertArefs(PartitionBuilder &builder, scf::ForOp loop,
   return true;
 }
 
-class NVWSArefInsertion : public NVWSInsertArefBase<NVWSArefInsertion> {
+} // namespace
+
+class NVWSArefInsertion : public impl::NVWSInsertArefBase<NVWSArefInsertion> {
 public:
   void runOnOperation() override {
     SmallVector<scf::ForOp> loops;
@@ -388,8 +393,6 @@ public:
     }
   }
 };
-} // namespace
 
-std::unique_ptr<Pass> mlir::triton::createNVWSInsertAref() {
-  return std::make_unique<NVWSArefInsertion>();
-}
+} // namespace triton
+} // namespace mlir
