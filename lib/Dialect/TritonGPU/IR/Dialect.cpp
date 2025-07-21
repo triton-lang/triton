@@ -1434,9 +1434,9 @@ LogicalResult AMDMfmaEncodingAttr::verify(
     return emitError() << "version must be in the [0, 4] range";
   }
 
-  if (!((mDim == 32 && nDim == 32) || (mDim == 16 && nDim == 16) ||
-        (mDim == 64 && nDim == 4) || (mDim == 4 && nDim == 64) ||
-        (mDim == 4 && nDim == 4))) {
+  const std::array<std::pair<unsigned, unsigned>, 4> validDims = {
+      {{32, 32}, {16, 16}, {64, 4}, {4, 64}}};
+  if (!llvm::is_contained(validDims, std::make_pair(mDim, nDim))) {
     return emitError() << "invalid (mDim, nDim) combination: (" << mDim << ", "
                        << nDim << ")";
   }

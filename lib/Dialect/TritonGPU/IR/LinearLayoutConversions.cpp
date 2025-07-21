@@ -419,32 +419,33 @@ AMDMfmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   int height = (elementType && elementType->isF64()) ? 1 : 4;
   constexpr int warpSize = 64;
 
-  // Each lane holds 'height' elements along the M dimension.
-  LinearLayout regs = LinearLayout::identity1D(height, kRegister, dimM);
-  // First, distribute the lanes along the N dimension.
-  // Then, distribute the lanes along the M dimension. If the #elements exceeds
-  // the mDim, duplicate elements across lanes - this can happen for
-  // 4x4 output.
-  LinearLayout lanes = LinearLayout::identity1D(nDim, kLane, dimN) *
-                       LinearLayout::identity1D(warpSize / nDim, kLane, dimM);
-  LinearLayout tileLayout = (regs * lanes);
-
-  // Repeat the above distribution along the M dimension to fits the tile.
-  int tiles = (mDim * nDim) / (warpSize * height);
-  if (tiles > 0)
-    tileLayout *= LinearLayout::identity1D(tiles, kRegister, dimM);
-
   bool isTransposed = getIsTransposed();
-
   // Special case for 64x4 mfma: we always transpose the output to turn
   // the 64x4 mfma into a equalvalent 4x64 mfma and swap operand A and B, so
   // that we can use the mfma broadcast.
   if (mDim == 64 && nDim == 4)
     assert(isTransposed && "64x4 mfma must be transposed");
 
-  // For the transposed output, we will use the same method for layout but
-  // swap the order of the M and N dimensions.
-  if (isTransposed) {
+  int tiles = (mDim * nDim) / (warpSize * height);
+
+  LinearLayout tileLayout = LinearLayout::empty();
+  if (!isTransposed) {
+    // Each lane holds 'height' elements along the M dimension.
+    LinearLayout regs = LinearLayout::identity1D(height, kRegister, dimM);
+    // First, distribute the lanes along the N dimension.
+    // Then, distribute the lanes along the M dimension. If the #elements
+    // exceeds the mDim, duplicate elements across lanes - this can happen for
+    // 4x4 output.
+    LinearLayout lanes = LinearLayout::identity1D(nDim, kLane, dimN) *
+                         LinearLayout::identity1D(warpSize / nDim, kLane, dimM);
+    tileLayout = (regs * lanes);
+
+    // Repeat the above distribution along the M dimension to fits the tile.
+    if (tiles > 0)
+      tileLayout *= LinearLayout::identity1D(tiles, kRegister, dimM);
+  } else {
+    // For the transposed output, we will use the same method for layout but
+    // swap the order of the M and N dimensions.
     LinearLayout regs = LinearLayout::identity1D(height, kRegister, dimN);
     LinearLayout lanes = LinearLayout::identity1D(mDim, kLane, dimM) *
                          LinearLayout::identity1D(warpSize / mDim, kLane, dimN);
@@ -730,11 +731,11 @@ LinearLayout mfmaDotToLinearLayout(DotOperandEncodingAttr dotMfmaLayout,
   int mIndex = 0 + hasBatchDim;
 
   int32_t kWidth = dotMfmaLayout.getKWidth();
-  auto kDimOrder = dotMfmaLayout.getOpIdx() == 0 ? rank - 1 : rank - 2;
+  auto kDimIndex = dotMfmaLayout.getOpIdx() == 0 ? rank - 1 : rank - 2;
 
   auto warpsPerCTA = mfmaLayout.getWarpsPerCTA();
   auto tilesPerWarp = mfmaLayout.getTilesPerWarp();
-  auto tilePerWarpNonK = tilesPerWarp[kDimOrder];
+  auto tilePerWarpNonK = tilesPerWarp[kDimIndex];
 
   auto mDim = mfmaLayout.getMDim();
   auto nDim = mfmaLayout.getNDim();
@@ -742,7 +743,7 @@ LinearLayout mfmaDotToLinearLayout(DotOperandEncodingAttr dotMfmaLayout,
   auto nonKDim = opIdx == 0 ? mDim : nDim;
   constexpr int warpSize = 64;
 
-  int32_t kSize = shape[kDimOrder];
+  int32_t kSize = shape[kDimIndex];
 
   MLIRContext *ctx = dotMfmaLayout.getContext();
   SmallVector<StringAttr> outDimNames = standardOutDimNames(ctx, rank);
