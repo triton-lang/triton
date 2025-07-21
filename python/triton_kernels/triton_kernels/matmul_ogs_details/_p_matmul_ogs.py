@@ -3,7 +3,13 @@ import triton
 import triton.language as tl
 from triton_kernels import target_info
 from triton_kernels.tensor_details.layout_details.blackwell_scale import unswizzle_mx_scale_bw
-from triton_kernels.numerics_details.flexpoint import float_to_flex, load_scale, nan_propagating_absmax_reduce, compute_scale
+from triton_kernels.numerics_details.flexpoint import (
+    float_to_flex,
+    load_scale,
+    nan_propagating_absmax_reduce,
+    compute_scale,
+)
+from triton_kernels.numerics_details.mxfp_details._downcast_to_mxfp import MXFP_BLOCK_SIZE
 from ._common import make_matmul_repr, matmul_launch_metadata, swizzle2d, xcd_swizzle, get_scaled_dot_format_string
 
 # fmt: off
@@ -147,7 +153,7 @@ def _p_matmul_ogs(
     Y = Out  # Y is passed for the purposes of annotation; replace it with Out
 
     is_microscaled_format: tl.constexpr = MxScale is not None
-    MX_PACK_DIVISOR: tl.constexpr = 32
+    MX_PACK_DIVISOR: tl.constexpr = MXFP_BLOCK_SIZE
     if is_microscaled_format:
         w_type: tl.constexpr = get_dtype(W)
         tl.static_assert(w_type == tl.uint8 or (w_type == tl.float8e4nv or w_type == tl.float8e5),

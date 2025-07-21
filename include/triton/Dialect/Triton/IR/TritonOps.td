@@ -383,8 +383,14 @@ def TT_AtomicRMWOp : TT_Op<"atomic_rmw", [
     }];
 }
 
-def TT_AtomicCASOp : TT_Op<"atomic_cas", [SameOperandsAndResultShape,
-                                          SameOperandsAndResultEncoding]> {
+def TT_AtomicCASOp : TT_Op<"atomic_cas", [
+  SameOperandsAndResultShape,
+  SameOperandsAndResultEncoding,
+  TypesMatchWith<"ptr type matches cmp type", "cmp", "ptr",
+                  "getPointerTypeSameShape($_self)">,
+  TypesMatchWith<"ptr type matches value type", "val", "ptr",
+                  "getPointerTypeSameShape($_self)">
+]> {
     let summary = "atomic cas";
 
     let description = [{

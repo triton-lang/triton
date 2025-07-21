@@ -32,6 +32,7 @@ include "triton/Dialect/Triton/IR/TritonAttrDefs.td"
 include "triton/Dialect/Triton/IR/TritonInterfaces.td"
 include "triton/Dialect/Triton/IR/TritonOpInterfaces.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUTypes.td"
+include "triton/Dialect/TritonGPU/IR/TritonGPUAttrDefs.td"
 
 include "mlir/IR/EnumAttr.td"
 include "mlir/Dialect/LLVMIR/LLVMOpBase.td"
@@ -566,7 +567,7 @@ def InThreadTransposeOp : TT_AMDGPU_Op<"in_thread_transpose", [Pure]> {
 // LocalLoadPackedTransposedOp
 //===----------------------------------------------------------------------===//
 
-def LocalLoadPackedTransposedOp : TT_AMDGPU_Op<"local_load_packed_tranposed"> {
+def LocalLoadPackedTransposedOp : TT_AMDGPU_Op<"local_load_packed_tranposed", [LocalLoadTrait]> {
     let summary = "Load a transposed packed tensor from shared memory into a distributed tensor";
     let description = [{
       Requires a M/N packed and M/N contiguous tensor in shared memory and will yield a K packed K contiguous tensor in registers.

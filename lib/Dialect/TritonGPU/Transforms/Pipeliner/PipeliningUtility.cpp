@@ -173,7 +173,9 @@ Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
     return op;
   if (isa<ttg::AsyncCommitGroupOp, ttg::AsyncWaitOp>(op))
     return op;
-  if (isa<ttg::LocalLoadOp, ttg::LocalStoreOp>(op))
+  if (op->hasTrait<OpTrait::LocalLoadTrait>())
+    return op;
+  if (isa<ttg::LocalStoreOp>(op))
     return op;
   if (isa<ttng::TMEMAllocOp, ttng::TMEMLoadOp>(op))
     return op;

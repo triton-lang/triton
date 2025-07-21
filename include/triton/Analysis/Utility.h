@@ -172,22 +172,29 @@ private:
   RankedTensorType dstTy;
 };
 
-// This struct represents a decomposed layout conversion within a warp into
-// three transformations: P1 and P2 represent lane-dependent register shuffles
-// and W represents a warp shuffle. P2^-1 is returned because it represents the
-// (reg, lane) -> (reg) mapping from the perspective of the destination element.
+// This struct represents the factorization of a warp-local layout conversion
+// into three components: a register-only permutation, a lane-only permutation,
+// and a set of swaps between lane and register basis vectors. Algebraically, it
+// represents the factorization P = P_mixed \circ P_lane \circ P_reg. It is used
+// to aid in the implementation of the layout conversion using warp-shuffles.
 //
-// Nearly all layout conversions that only require data movement within a warp
-// can be implemented this way.
+// `pReg` and `pLane` are square layouts each with only one input and output
+// dimension. `mixedTranspositions` holds pairs of integers (i, j)
+// corresponding to the transposition (r_i l_j) of the i-th register basis
+// vector with the j-th lane basis vector.
 struct DecomposedWarpConversion {
-  triton::LinearLayout P1, W, P2inv;
-  triton::LinearLayout reducedP1, reducedP2inv;
+  triton::LinearLayout pReg, pLane;
+  SmallVector<std::pair<int, int>> mixedTranspositions;
 };
 
-// Given the source and destination tensor types where a layout conversion only
-// involves data movement within warps, attempt to find a decomposition for a
-// warp layout conversion.
-std::optional<DecomposedWarpConversion>
+// Produces a decomposition of a permutation describing a warp-local layout
+// conversion as described in `DecomposedWarpConversion` above.
+//
+// This function handles cases where the numbers of register and lane basis
+// vectors differ between the two layouts. This is done by padding the smaller
+// dimension(s) with zero vectors, ensuring that the layout conversion can be
+// represented as a permutation.
+DecomposedWarpConversion
 getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
                                   RankedTensorType dstTy);
 

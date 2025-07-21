@@ -16,6 +16,12 @@ class MemDescViewTrait
   // Optional: Add methods or verification logic here
 };
 
+template <typename ConcreteType>
+class LocalLoadTrait
+    : public mlir::OpTrait::TraitBase<ConcreteType, LocalLoadTrait> {
+  // Optional: Add methods or verification logic here
+};
+
 } // namespace OpTrait
 } // namespace mlir
 

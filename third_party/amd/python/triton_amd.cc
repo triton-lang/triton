@@ -2,6 +2,7 @@
 #include "TritonAMDGPUToLLVM/Passes.h"
 #include "TritonAMDGPUToLLVM/TargetUtils.h"
 #include "TritonAMDGPUTransforms/Passes.h"
+#include "lld/Common/Driver.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Target/LLVMIR/Dialect/ROCDL/ROCDLToLLVMIRTranslation.h"
 #include "passes.h"
@@ -27,6 +28,7 @@
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/TargetParser/TargetParser.h"
+#include <array>
 #include <pybind11/pybind11.h>
 #include <stdexcept>
 
@@ -79,9 +81,9 @@ void init_triton_amd_passes_ttgpuir(py::module &&m) {
   ADD_PASS_WRAPPER_0("add_fold_true_cmpi", mlir::createTritonAMDFoldTrueCmpI);
   ADD_PASS_OPTION_WRAPPER_1("add_block_pingpong",
                             mlir::createTritonAMDGPUBlockPingpong, int32_t);
-  ADD_PASS_OPTION_WRAPPER_4("add_stream_pipeline",
+  ADD_PASS_OPTION_WRAPPER_5("add_stream_pipeline",
                             mlir::createTritonAMDGPUStreamPipeline, int, int,
-                            int, bool);
+                            int, bool, bool);
   ADD_PASS_OPTION_WRAPPER_1("add_coalesce_async_copy",
                             mlir::createTritonAMDGPUCoalesceAsyncCopy,
                             std::string);
@@ -110,7 +112,30 @@ void addControlConstant(llvm::Module *module, const char *name,
   constant->setUnnamedAddr(GlobalVariable::UnnamedAddr::Local);
   constant->setVisibility(GlobalVariable::VisibilityTypes::ProtectedVisibility);
 }
+
 } // namespace
+
+LLD_HAS_DRIVER(elf)
+
+static std::optional<std::string> lldInvoke(const char *inPath,
+                                            const char *outPath) {
+  // Workaround: Disable parallelism to avoid hangs caused by LLVM's thread pool
+  // when the following code is executed in a forked child process.
+  // Context: lld::elf::LinkerDriver::link uses parallelFor which uses the
+  // LLVM's thread pool. During cleanup at ~TaskGroup() the child process hangs
+  // waiting.
+  std::array args{"ld.lld", "--threads=1", "-shared", inPath, "-o", outPath};
+  std::string errString;
+  llvm::raw_string_ostream errStream(errString);
+  auto lldRes = lld::lldMain(args, llvm::outs(), llvm::errs(),
+                             {{lld::Gnu, &lld::elf::link}});
+  bool noErrors = (!lldRes.retCode && lldRes.canRunAgain);
+  if (!noErrors) {
+    errStream.flush();
+    return errString;
+  }
+  return {};
+}
 
 void init_triton_amd(py::module &&m) {
   m.doc() = "Python bindings to the AMD Triton backend";
@@ -304,6 +329,14 @@ void init_triton_amd(py::module &&m) {
       arg.addAttr(llvm::Attribute::InReg);
     }
   });
+
+  m.def("link_hsaco",
+        [](const std::string &inPath, const std::string &outPath) {
+          if (auto errString = lldInvoke(inPath.c_str(), outPath.c_str()))
+            throw std::runtime_error("LLD failed to link hsaco source " +
+                                     inPath + " into object file " + outPath +
+                                     " because " + errString.value());
+        });
 
   m.def("add_scalarize_packed_fops_llvm_pass", [](llvm::Function *fn) {
     mlir::triton::AMD::runScalarizePackedFOpsPass(*fn);
