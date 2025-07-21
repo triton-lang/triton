@@ -7,6 +7,7 @@ import triton
 from triton_kernels import target_info
 from triton_kernels.numerics import InFlexData, OutFlexData
 from triton_kernels.routing import GatherIndx, RoutingData, ScatterIndx
+from triton_kernels.target_info import is_cuda
 # details
 from .matmul_ogs_details._matmul_ogs import _compute_writeback_idx
 from .matmul_ogs_details._matmul_ogs import _matmul_ogs
@@ -15,7 +16,6 @@ from .matmul_ogs_details._finalize_matmul import _finalize_matmul
 from .matmul_ogs_details.opt_flags import make_opt_flags, update_opt_flags_constraints
 from .specialize import specialize
 from .tensor import Storage, Tensor, FP4, bitwidth, wrap_torch_tensor
-from .tensor_details import layout
 
 
 @dataclass(frozen=True)
@@ -384,7 +384,7 @@ def matmul_ogs(x, w, bias,
     # unpack scales
     w_scale = precision_config.weight_scale
     has_mx = w_scale is not None
-    is_hopper_fp8 = not target_info.cuda_capability_geq(10, 0) and bitwidth(w.dtype) == 8
+    is_hopper_fp8 = is_cuda() and not target_info.cuda_capability_geq(10, 0) and bitwidth(w.dtype) == 8
     if has_mx: assert w.stride(-2) == 1, "`w` must be column-major when it has data-type mxfp"
     if is_hopper_fp8: assert w.stride(-2) == 1, "`w` must be column-major when it has data-type FP8 on capability < 10"
     if not isinstance(w, Tensor):
@@ -402,9 +402,6 @@ def matmul_ogs(x, w, bias,
     assert K == x.shape[-1]
     if x.ndim == 3 and w.ndim == 3:
         assert x.shape[0] == w.shape[0]
-    if isinstance(w.storage.layout, layout.HopperMXValueLayout):
-        if not (K % 64 == 0 and N % 64 == 0):
-            raise NotImplementedError("MXFP4 weight matrix dimensions must be divisible by 64 on hopper")
     # compute optimization flags
     out_dtype = precision_config.out_dtype or x.dtype
     can_use_tma = x.storage.is_tma_compliant() and \

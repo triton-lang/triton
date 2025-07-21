@@ -28,4 +28,6 @@ add_triton_library(TritonNVIDIAGPUToLLVM
     TritonGPUToLLVM
     TritonInstrumentToLLVM
     MLIRReconcileUnrealizedCasts
+    NVGPUIR
+    MLIRUBToLLVM
 )

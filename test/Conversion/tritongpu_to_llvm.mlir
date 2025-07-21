@@ -793,6 +793,34 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 // -----
 
+#blocked0 = #ttg.blocked<{sizePerThread = [32, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [16, 2], threadsPerWarp = [2, 16], warpsPerCTA = [1, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
+  //CHECK-LABEL: @convert_layout_blocked_blocked_shuffle_swap
+  tt.func @convert_layout_blocked_blocked_shuffle_swap(%arg0: tensor<32x32xi32, #blocked0>) {
+    //CHECK-COUNT-32: llvm.select
+    //CHECK-COUNT-32: nvvm.shfl.sync
+    //CHECK-COUNT-32: llvm.select
+    %0 = ttg.convert_layout %arg0 : tensor<32x32xi32, #blocked0> -> tensor<32x32xi32, #blocked1>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked0 = #ttg.blocked<{sizePerThread = [32, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 1], order = [0, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [16, 2], threadsPerWarp = [2, 16], warpsPerCTA = [1, 1], order = [0, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
+  //CHECK-LABEL: @convert_layout_blocked_blocked_shuffle_ship
+  tt.func @convert_layout_blocked_blocked_shuffle_ship(%arg0: tensor<32x32xi32, #blocked0>) {
+    //CHECK-COUNT-16: nvvm.shfl.sync
+    %0 = ttg.convert_layout %arg0 : tensor<32x32xi32, #blocked0> -> tensor<32x32xi32, #blocked1>
+    tt.return
+  }
+}
+
+// -----
+
 #blocked0 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [2, 2], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [4, 1], threadsPerWarp = [4, 8], warpsPerCTA = [2, 2], order = [0, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
@@ -846,23 +874,21 @@ tt.func @convert_layout_ptr_element(%arg0: tensor<16x16x!tt.ptr<i32>, #blocked0>
 
 // -----
 
-#blocked0 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [1, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
-#blocked1 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [1, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
+#blocked0 = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [32, 1], warpsPerCTA = [1, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [4, 8], threadsPerWarp = [8, 4], warpsPerCTA = [1, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
   // CHECK: llvm.mlir.global external @global_smem
   // CHECK-LABEL: convert_layout_blocked_blocked_multi_rep
-  tt.func @convert_layout_blocked_blocked_multi_rep(%arg0: tensor<16x16xf32, #blocked0>) {
+  tt.func @convert_layout_blocked_blocked_multi_rep(%arg0: tensor<32x32xf32, #blocked0>) {
     // CHECK: llvm.mlir.addressof @global_smem
-    // CHECK: llvm.store
+    // CHECK-COUNT-4: llvm.store
     // CHECK: nvvm.barrier0
-    // CHECK: llvm.load
-    // CHECK: llvm.load
+    // CHECK-COUNT-4: llvm.load
     // CHECK: nvvm.barrier0
-    // CHECK: llvm.store
+    // CHECK-COUNT-4: llvm.store
     // CHECK: nvvm.barrier0
-    // CHECK: llvm.load
-    // CHECK: llvm.load
-    %0 = ttg.convert_layout %arg0 : tensor<16x16xf32, #blocked0> -> tensor<16x16xf32, #blocked1>
+    // CHECK-COUNT-4: llvm.load
+    %0 = ttg.convert_layout %arg0 : tensor<32x32xf32, #blocked0> -> tensor<32x32xf32, #blocked1>
     tt.return
   }
 }
