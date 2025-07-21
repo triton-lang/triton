@@ -170,15 +170,9 @@ class NvidiaTool:
     path: str
     version: str
 
-    @classmethod
-    def from_path(cls, path: str) -> Optional[NvidiaTool]:
-        return cls._from_path(path, os.getenv("PATH"))
-
     @staticmethod
     @functools.lru_cache
-    def _from_path(path: str, PATH: Optional[str]) -> Optional[NvidiaTool]:
-        # PATH is implicitly passed by subprocess, so we take it as input so
-        # `lru_cache` can include it in the cache key.
+    def from_path(path: str) -> Optional[NvidiaTool]:
         try:
             result = subprocess.check_output([path, "--version"], stderr=subprocess.STDOUT)
             if result is None:
