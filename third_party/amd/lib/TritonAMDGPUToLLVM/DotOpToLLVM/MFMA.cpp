@@ -330,8 +330,6 @@ struct DotOpMFMAConversionHelper {
         computeStrides({numRepB, numRepM, numRepN, elemsPerVec});
 
     Value firstMfma;
-    Value laneId = getLaneId(rewriter, loc);
-    Value zero = dstElemTy.isInteger(32) ? tb.i32_val(0) : tb.f32_val(0.0);
     auto vecTy = vec_ty(dstElemTy, elemsPerVec);
     for (int b = 0; b < numRepB; ++b) {
       for (int m = 0; m < numRepM; ++m) {
