@@ -16,11 +16,11 @@ class HopperMXScaleLayout(Layout):
 
     def _maybe_mT(self, data):
         if self.mx_axis == len(self.leading_shape):
-            return data.mT.contiguous()
+            return data.contiguous().mT
         return data
 
     def swizzle_data(self, data):
-        data = self._maybe_mT(data)
+        data = self._maybe_mT(data).contiguous()
         *batch, M, K = data.shape
         SWIZZLE_ALIGN_M = 2 * self.num_warps * 2 * 8
         SWIZZLE_ALIGN_K = 2
