@@ -22,39 +22,41 @@ using namespace mlir::triton::gpu;
 
 namespace {
 
-SmallVector<Value, 4> upcast8xMxfp4_HW(RewriterBase &rewriter,
-                                    amdgpu::UpcastMXFPOp upcastOp, bool tofp16,
-                                    Value packedVec) {
-  
-  Location loc = upcastOp.getLoc();
+template <typename ConvertOp>
+SmallVector<Value, 4> mxfp4Scale_HW(RewriterBase &rewriter, Location loc,
+                                    const SmallVector<Value> &xVals, int idx,
+                                    Value scale) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-
-  Type retElemType = tofp16 ? f16_ty : bf16_ty;
-  Type resType = vec_ty(retElemType, 2);
-  Value scale = b.f32_val(1);
+  Value v0 = xVals[idx];
+  Value v1 = xVals[idx + 1];
+  Value v2 = xVals[idx + 2];
+  Value v3 = xVals[idx + 3];
+  Value packedVec = b.undef(vec_ty(i8_ty, 4));
+  packedVec = b.insert_element(packedVec, v0, b.i32_val(0));
+  packedVec = b.insert_element(packedVec, v1, b.i32_val(1));
+  packedVec = b.insert_element(packedVec, v2, b.i32_val(2));
+  packedVec = b.insert_element(packedVec, v3, b.i32_val(3));
   packedVec = b.bitcast(packedVec, i32_ty);
-  Value ret0, ret1, ret2, ret3;
-  if ( tofp16) {
-    ret0 = rewriter.create<ROCDL::CvtScaleF32PkF16Fp4Op>(loc, resType, packedVec , scale,
-                                           /*srcSelIndex=*/0);
-    ret1 = rewriter.create<ROCDL::CvtScaleF32PkF16Fp4Op>(loc, resType, packedVec, scale,
-                                           /*srcSelIndex=*/1);
-    ret2 = rewriter.create<ROCDL::CvtScaleF32PkF16Fp4Op>(loc, resType, packedVec , scale,
-                                           /*srcSelIndex=*/2);
-    ret3 = rewriter.create<ROCDL::CvtScaleF32PkF16Fp4Op>(loc, resType, packedVec, scale,
-                                           /*srcSelIndex=*/3);
-  }
-  else {
-    ret0 = rewriter.create<ROCDL::CvtScaleF32PkBf16Fp4Op>(loc, resType, packedVec , scale,
-                                           /*srcSelIndex=*/0);
-    ret1 = rewriter.create<ROCDL::CvtScaleF32PkBf16Fp4Op>(loc, resType, packedVec, scale,
-                                           /*srcSelIndex=*/1);
-    ret2 = rewriter.create<ROCDL::CvtScaleF32PkBf16Fp4Op>(loc, resType, packedVec , scale,
-                                           /*srcSelIndex=*/2);
-    ret3 = rewriter.create<ROCDL::CvtScaleF32PkBf16Fp4Op>(loc, resType, packedVec, scale,
-                                           /*srcSelIndex=*/3);
-  }
-  return {ret0, ret1, ret2, ret3};
+  Type retElemType = bf16_ty;
+  if constexpr (std::is_same_v<ConvertOp, ROCDL::CvtScaleF32PkF16Fp4Op>)
+    retElemType = f16_ty;
+  Type resType = vec_ty(retElemType, 2);
+  Value scaleF32 =
+      b.bitcast(b.shl(b.zext(i32_ty, scale), b.i32_val(23)), f32_ty);
+  SmallVector<Value, 4> results;
+  results.push_back(rewriter.create<ConvertOp>(loc, resType, packedVec,
+                                               scaleF32,
+                                               /*srcSelIndex=*/0));
+  results.push_back(rewriter.create<ConvertOp>(loc, resType, packedVec,
+                                               scaleF32,
+                                               /*srcSelIndex=*/2));
+  results.push_back(rewriter.create<ConvertOp>(loc, resType, packedVec,
+                                               scaleF32,
+                                               /*srcSelIndex=*/1));
+  results.push_back(rewriter.create<ConvertOp>(loc, resType, packedVec,
+                                               scaleF32,
+                                               /*srcSelIndex=*/3));
+  return results;
 }
 
 SmallVector<Value, 4> upcast8xMxfp4(RewriterBase &rewriter,
@@ -298,6 +300,11 @@ public:
     auto scaleVals = unpackLLElements(loc, adaptor.getScale(), rewriter);
     LDBG("x: " << xVals.size() << " x " << xVals.front().getType());
     LDBG("scale: " << scaleVals.size() << " x " << scaleVals.front().getType());
+    // llvm::outs()<<"x: " << xVals.size() << " x " << xVals.front().getType();
+    // llvm::outs()<<" scale: " << scaleVals.size() << " x " <<
+    // scaleVals.front().getType() <<"\n";
+    SmallVector<Value> yVals;
+    yVals.reserve(2 * xVals.size());
 
     // When we lower scaled dot op, we made sure to distribute K only on one
     // warp. MXFP spec mandates 1 scale value for every 32 onsecutive values
@@ -321,9 +328,7 @@ public:
     auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
 
     bool useFp16 = op.getType().getElementType().isF16();
-    if (isPacked) {
-      xVals = upcastMxfp4(rewriter, op, useFp16, xVals);
-    }
+    Type retElemType = useFp16 ? f16_ty : bf16_ty;
 
     // Given that MFMA layout for the A tensor arranges thread in a column-major
     // manner, for the current tid, it's at row (tid % mDim). When we set up
@@ -349,13 +354,31 @@ public:
             targetInfo.shuffleIdx(rewriter, loc, scaleVal, scaleThreads[1]),
         };
 
-        for (int j = 0; j < 32; ++j) {
-          int index = 32 * i + j;
-          xVals[index] =
-              useFp16 ? mxfpScaleFp16(rewriter, loc, xVals[index], si[j / 16],
-                                      op.getFastMath())
-                      : mxfpScaleBf16ViaF32(rewriter, loc, xVals[index],
-                                            si[j / 16], op.getFastMath());
+        if (isPacked) {
+          for (int j = 0; j < 16; j += 4) {
+            auto idx = 16 * i + j;
+            SmallVector<Value, 4> v4i32;
+            if (useFp16)
+              v4i32 = mxfp4Scale_HW<ROCDL::CvtScaleF32PkF16Fp4Op>(
+                  rewriter, loc, xVals, idx, si[j / 8]);
+            else
+              v4i32 = mxfp4Scale_HW<ROCDL::CvtScaleF32PkBf16Fp4Op>(
+                  rewriter, loc, xVals, idx, si[j / 8]);
+            for (int k = 0; k < 4; k++) {
+              Value elements = b.bitcast(v4i32[k], vec_ty(retElemType, 2));
+              yVals.push_back(b.extract_element(elements, b.i32_val(0)));
+              yVals.push_back(b.extract_element(elements, b.i32_val(1)));
+            }
+          }
+        } else {
+          for (int j = 0; j < 32; j++) {
+            auto idx = 32 * i + j;
+            xVals[idx] =
+                useFp16 ? mxfpScaleFp16(rewriter, loc, xVals[idx], si[j / 16],
+                                        op.getFastMath())
+                        : mxfpScaleBf16ViaF32(rewriter, loc, xVals[idx],
+                                              si[j / 16], op.getFastMath());
+          }
         }
       }
     } else {
@@ -375,17 +398,38 @@ public:
             targetInfo.shuffleIdx(rewriter, loc, scaleVal, scaleThreads[3]),
         };
 
-        for (int j = 0; j < 32; ++j) {
-          int index = 32 * i + j;
-          xVals[index] = useFp16
-                             ? mxfpScaleFp16(rewriter, loc, xVals[index],
+        SmallVector<Value, 4> v4i32;
+        if (isPacked) {
+          for (int j = 0; j < 16; j += 4) {
+            auto idx = 16 * i + j;
+            if (useFp16)
+              v4i32 = mxfp4Scale_HW<ROCDL::CvtScaleF32PkF16Fp4Op>(
+                  rewriter, loc, xVals, idx, si[j / 4]);
+            else
+              v4i32 = mxfp4Scale_HW<ROCDL::CvtScaleF32PkBf16Fp4Op>(
+                  rewriter, loc, xVals, idx, si[j / 4]);
+
+            for (int k = 0; k < 4; k++) {
+              Value elements = b.bitcast(v4i32[k], vec_ty(retElemType, 2));
+              yVals.push_back(b.extract_element(elements, b.i32_val(0)));
+              yVals.push_back(b.extract_element(elements, b.i32_val(1)));
+            }
+          }
+        } else {
+          for (int j = 0; j < 32; j++) {
+            auto idx = 32 * i + j;
+            xVals[idx] = useFp16
+                             ? mxfpScaleFp16(rewriter, loc, xVals[idx],
                                              si[j / 8], op.getFastMath())
-                             : mxfpScaleBf16ViaF32(rewriter, loc, xVals[index],
+                             : mxfpScaleBf16ViaF32(rewriter, loc, xVals[idx],
                                                    si[j / 8], op.getFastMath());
+          }
         }
       }
     }
 
+    if (isPacked)
+      xVals = yVals;
     Value result =
         packLLElements(loc, getTypeConverter(), xVals, rewriter, op.getType());
     rewriter.replaceOp(op, result);
