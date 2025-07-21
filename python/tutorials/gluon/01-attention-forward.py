@@ -596,6 +596,11 @@ def _mask_scalar(qk, col_limit_right, s, i):
 
 @gluon.jit
 def _apply_causal_mask(qk, col_limit_right):
+    # Apply causal mask via a bitmask calculated for each block of 16 elements.
+    # This allows the efficient R2P (register to predicate) instruction to be used at the SASS level.
+    # Credit to Tri Dao,
+    # https://github.com/Dao-AILab/flash-attention/commit/bac1001e4f6caa09d70537495d6746a685a2fa78
+    #
     # NOTE: We use map_elementiwse here in order to generate an interleaved sequence of instructions
     # that processes one element of qk at a time. This improves ptxas's resulting SASS.
     offs_n = gl.arange(0, qk.shape[1])[None, :]

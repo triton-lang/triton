@@ -5709,6 +5709,75 @@ def test_inline_asm_packed_multiple_outputs(device):
 
 
 # -----------------------
+# test map elementwise
+# -----------------------
+
+
+@pytest.mark.parametrize("num_ctas", num_ctas_list)
+def test_map_elementwise(num_ctas, device):
+
+    @triton.jit
+    def compare(x, y):
+        if x < y:
+            return -1
+        elif x == y:
+            return 0
+        else:
+            return 1
+
+    @triton.jit
+    def kernel(X, Y, Z, BLOCK: tl.constexpr):
+        x = tl.load(X + tl.arange(0, BLOCK))
+        y = tl.load(Y + tl.arange(0, BLOCK))
+        z = tl.map_elementwise(compare, x, y)
+        tl.store(Z + tl.arange(0, BLOCK), z)
+
+    shape = (128, )
+    rs = RandomState(17)
+    x = numpy_random(shape, dtype_str='int32', rs=rs)
+    y = numpy_random(shape, dtype_str='int32', rs=rs)
+    x_tri = to_triton(x, device=device)
+    y_tri = to_triton(y, device=device)
+    z_tri = to_triton(numpy_random(shape, dtype_str='int32', rs=rs), device=device)
+    kernel[(1, )](x_tri, y_tri, z_tri, BLOCK=shape[0], num_ctas=num_ctas)
+    z_ref = (x > y).astype(int) - (y > x).astype(int)
+    np.testing.assert_equal(z_ref, to_numpy(z_tri))
+
+
+def test_map_elementwise_multiple_outputs(device):
+
+    @triton.jit
+    def divmod(a, b):
+        return a // b, a % b
+
+    @triton.jit
+    def kernel(A, B, C, D, BLOCK: tl.constexpr):
+        a = tl.load(A + tl.arange(0, BLOCK))
+        b = tl.load(B + tl.arange(0, BLOCK))
+
+        c, d = tl.map_elementwise(divmod, a, b)
+
+        tl.store(C + tl.arange(0, BLOCK), c)
+        tl.store(D + tl.arange(0, BLOCK), d)
+
+    shape = (512, )
+    rs = RandomState(17)
+    A = numpy_random(shape, dtype_str='uint32', rs=rs)
+    B = numpy_random(shape, dtype_str='uint32', rs=rs)
+    A_tri = to_triton(A, device=device)
+    B_tri = to_triton(B, device=device)
+    C_tri = to_triton(numpy_random(shape, dtype_str='uint32', rs=rs), device=device)
+    D_tri = to_triton(numpy_random(shape, dtype_str='uint32', rs=rs), device=device)
+    kernel[(1, )](A_tri, B_tri, C_tri, D_tri, BLOCK=shape[0])
+
+    C_ref = A // B
+    D_ref = A % B
+
+    np.testing.assert_equal(C_ref, to_numpy(C_tri))
+    np.testing.assert_equal(D_ref, to_numpy(D_tri))
+
+
+# -----------------------
 # test control flow
 # -----------------------
 

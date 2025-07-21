@@ -444,16 +444,9 @@ template <class Op> LogicalResult verifyReduceScan(Op &op) {
     return op.emitOpError() << "must have the same number of inputs as outputs";
   }
 
-  auto getElementType = [](Type ty) {
-    if (auto tensorType = dyn_cast<RankedTensorType>(ty)) {
-      return tensorType.getElementType();
-    }
-    return ty;
-  };
-
   for (auto [opElemTy, resTy] :
        llvm::zip(op.getElementTypes(), op.getResultTypes())) {
-    if (opElemTy != getElementType(resTy)) {
+    if (opElemTy != getElementTypeOrSelf(resTy)) {
       return op.emitOpError() << "operand types and result types must agree";
     }
   }
@@ -517,8 +510,8 @@ getInputTypesImpl(const Operation::operand_range &operands) {
   return srcTys;
 }
 
-static llvm::SmallVector<Type>
-getElementTypesImpl(const Operation::operand_range &operands) {
+template <typename ValueRange>
+static llvm::SmallVector<Type> getElementTypesImpl(const ValueRange &operands) {
   llvm::SmallVector<Type> srcElemTys;
   srcElemTys.reserve(operands.size());
   for (const auto &op : operands) {
@@ -603,8 +596,33 @@ LogicalResult MapElementwiseOp::verify() {
 }
 
 LogicalResult MapElementwiseOp::verifyRegions() {
-  // TODO
-  return success();
+  // Verify signature
+  auto *firstBlock = &getRegion().getBlocks().front();
+  if (firstBlock->getNumArguments() != getNumOperands()) {
+    return emitOpError() << "region has wrong number of arguments";
+  }
+
+  auto expectedArgTypes = getElementTypesImpl(getOperands());
+  if (firstBlock->getArgumentTypes() != expectedArgTypes) {
+    return emitError() << "argument types did not match";
+  }
+  auto expectedReturnTypes = getElementTypesImpl(getResults());
+  auto walkRes = getRegion().walk([&](Operation *op) -> WalkResult {
+    auto memEffects = dyn_cast<MemoryEffectOpInterface>(op);
+    // Ban stores as we won't get the redundant masking correct by treating it
+    // as a scalar.
+    if (memEffects && memEffects.hasEffect<MemoryEffects::Write>()) {
+      return op->emitOpError()
+             << "Stores are not supported inside map_elementwise";
+    }
+    if (isa<MapElementwiseReturnOp>(op) &&
+        op->getOperandTypes() != expectedReturnTypes) {
+      return op->emitError()
+             << "region return does not match map_elementwise result";
+    }
+    return WalkResult::advance();
+  });
+  return success(!walkRes.wasInterrupted());
 }
 
 //-- SplatOp --

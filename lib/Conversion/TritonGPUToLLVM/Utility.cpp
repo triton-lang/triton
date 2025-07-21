@@ -1871,7 +1871,7 @@ SmallVector<Value> inlineRegionImpl(RewriterBase &rewriter, Region &region,
     auto terminator = newBlock->getTerminator();
     if (terminator->getRegisteredInfo()->getTypeID() == terminatorTypeId) {
       terminatorOperands = terminator->getOperands();
-      rewriter.setInsertionPointToEnd(newBlock);
+      rewriter.setInsertionPointAfter(terminator);
       rewriter.replaceOpWithNewOp<LLVM::BrOp>(terminator, terminatorOperands,
                                               remainingOpsBlock);
     }
