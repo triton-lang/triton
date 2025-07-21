@@ -723,6 +723,16 @@ createBlockedScalesSMEMDescriptor(ConversionPatternRewriter &rewriter,
                b.lshr(b.shl(smemAddr, b.int_val(64, 46)), b.int_val(64, 50)));
 }
 
+static void createCommit(ConversionPatternRewriter &rewriter, Location loc,
+                         Value barrier, Value pred) {
+  PTXBuilder ptxBuilder;
+  auto *barrierOperand = ptxBuilder.newAddrOperand(barrier, "r");
+  std::string opcode = "tcgen05.commit.cta_group::1.mbarrier::arrive::one.b64";
+  auto &barrierOp = *ptxBuilder.create<PTXInstr>(opcode);
+  barrierOp(barrierOperand).predicate(pred);
+  ptxBuilder.launch(rewriter, loc, void_ty(rewriter.getContext()));
+}
+
 static void createTcgen05Cp(ConversionPatternRewriter &rewriter, Location loc,
                             Value tmem_address, Value src_desc, Value pred) {
   PTXBuilder ptxBuilder;
@@ -840,7 +850,7 @@ struct TensorMemoryCopyOpConversion
     if (op.getBarrier()) {
       auto barrier = LLVM::getSharedMemoryObjectFromStruct(
           op.getLoc(), adaptor.getBarrier(), i64_ty, rewriter);
-      LLVM::NVIDIA::createCommit(rewriter, loc, barrier.getBase(), pred);
+      createCommit(rewriter, loc, barrier.getBase(), pred);
     }
 
     rewriter.eraseOp(op);

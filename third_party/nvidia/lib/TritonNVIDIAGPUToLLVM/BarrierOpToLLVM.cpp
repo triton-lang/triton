@@ -25,8 +25,6 @@
 #include "TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
-#include "nvidia/include/Dialect/NVWS/IR/Dialect.h"
-
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
@@ -263,7 +261,6 @@ struct ArriveBarrierOpConversion
     return success();
   }
 };
-
 } // namespace
 
 void mlir::triton::NVIDIA::populateBarrierOpToLLVMPatterns(

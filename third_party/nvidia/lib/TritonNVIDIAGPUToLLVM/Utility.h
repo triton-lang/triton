@@ -43,9 +43,6 @@ Value createElectPredicateWarp0(Location loc, RewriterBase &rewriter);
 // Create bar.warp.sync
 void createSyncWarp(Location loc, OpBuilder &builder);
 
-void createCommit(ConversionPatternRewriter &rewriter, Location loc,
-                  Value barrier, Value pred);
-
 } // namespace NVIDIA
 } // namespace LLVM
 
