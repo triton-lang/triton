@@ -499,10 +499,4 @@ void PartitionLoops::runOnOperation() {
     if (failed(partitionLoop(loop)))
       return signalPassFailure();
   }
-
-  OpPassManager pm;
-  pm.addPass(mlir::triton::createNVWSLowerWarpGroup());
-
-  if (failed(runPipeline(pm, getOperation())))
-    return signalPassFailure();
 }
