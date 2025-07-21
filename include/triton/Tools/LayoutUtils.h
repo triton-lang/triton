@@ -126,7 +126,7 @@ std::optional<ColumnAction> regPermForDivide(const LinearLayout &A,
 ColumnAction actionRemoveBroadcastedRegs(const LinearLayout &layout);
 
 std::pair<int64_t, ColumnAction>
-actionAdditiveStrides(const LinearLayout &layout);
+actionAdditiveStrides(const LinearLayout &layout, uint64_t maskSpanOffsets);
 
 // For a layout A with A.hasInDim(kReg), repeat the values so that they have
 // the same broadcasting as layout

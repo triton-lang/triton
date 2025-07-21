@@ -32,8 +32,8 @@ def test_int_annotation(signed, width, device):
     h = _kernel[(1, )](torch.empty(1, device=device), 3)
     pfx = 'si' if signed else 'ui'
     if not signed and width < 64:
-        assert "arith.extui %arg1" in h.asm["ttir"]
-    assert f'%arg1: i{width}' in h.asm["ttir"]
+        assert "arith.extui %v" in h.asm["ttir"]
+    assert f'%v: i{width}' in h.asm["ttir"]
     assert f'arith.{pfx}tofp' in h.asm["ttir"]
 
 
@@ -73,13 +73,13 @@ def test_float_annotation(device, dtype, test_val):
 
     # Check that the type is properly emitted in the IR
     if dtype == tl.float16:
-        assert "%arg1: f16" in h.asm["ttir"]
-        assert "arith.extf %arg1 : f16 to f32" in h.asm["ttir"]
+        assert "%val: f16" in h.asm["ttir"]
+        assert "arith.extf %val : f16 to f32" in h.asm["ttir"]
     elif dtype == tl.bfloat16:
-        assert "%arg1: bf16" in h.asm["ttir"]
-        assert "arith.extf %arg1 : bf16 to f32" in h.asm["ttir"]
+        assert "%val: bf16" in h.asm["ttir"]
+        assert "arith.extf %val : bf16 to f32" in h.asm["ttir"]
     elif dtype == tl.float32:
-        assert "%arg1: f32" in h.asm["ttir"]
+        assert "%val: f32" in h.asm["ttir"]
     elif dtype == tl.float64:
-        assert "%arg1: f64" in h.asm["ttir"]
-        assert "arith.truncf %arg1 : f64 to f32" in h.asm["ttir"]
+        assert "%val: f64" in h.asm["ttir"]
+        assert "arith.truncf %val : f64 to f32" in h.asm["ttir"]

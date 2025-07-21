@@ -939,28 +939,38 @@ LinearLayout LinearLayout::compose(const LinearLayout &outer) const {
 namespace {
 std::unique_ptr<uint64_t[]> concatMatrices(const LinearLayout &A,
                                            const LinearLayout &B) {
-  // In plain words, "convert_layout does not change the shape of a tensor"
-  assert(A.getTotalOutDimSizeLog2() == B.getTotalOutDimSizeLog2() &&
-         "Matrices must have the same number of output dimensions");
-  int numRows = A.getTotalOutDimSizeLog2();
+  // conv
+  assert(A.getTotalOutDimSizeLog2() >= B.getTotalOutDimSizeLog2() &&
+         "A must have at least as many output bits as B");
   int numColsA = A.getTotalInDimSizeLog2();
 
   // rref expects the lower bits to be the lower indices of the matrix
   auto concat = getMatrix(A);
   auto BMat = getMatrix(B);
-  for (int r = 0; r < numRows; r++) {
-    concat[r] |= BMat[r] << numColsA;
+  int rowA = 0;
+  int rowB = 0;
+  for (auto [outDim, outDimSize] : A.getOutDims()) {
+    for (int r = 0; r < llvm::Log2_32(outDimSize); r++) {
+      if (r < llvm::Log2_32(B.getOutDimSize(outDim))) {
+        concat[rowA] |= BMat[rowB] << numColsA;
+        rowB++;
+      }
+      rowA++;
+    }
   }
   return concat;
 }
 
 LinearLayout lstsq(const LinearLayout &A, const LinearLayout &B) {
-  // Solve the system AX = B.
-  // We compute the solution X given by setting all the free variables to zero.
-  // If
+  // Solve the least square system AX = B
+  // and return the least square solution X by computing RREF and setting
+  // the free variables to zero.
+  // A and B may not be surjective, but we assume that Im(B) \subset Im(A)
   // Sketch of the algorithm:
   // https://github.com/triton-lang/triton/pull/5309#discussion_r1869084111
   int numRows = A.getTotalOutDimSizeLog2();
+  assert(numRows >= B.getTotalOutDimSizeLog2() &&
+         "A.lstsq(B) called with incompatible output shapes");
   int numColsA = A.getTotalInDimSizeLog2();
   int numColsB = B.getTotalInDimSizeLog2();
   int numCols = numColsA + numColsB;
@@ -978,15 +988,9 @@ LinearLayout lstsq(const LinearLayout &A, const LinearLayout &B) {
       continue;
     }
     int c = __builtin_ctzll(row);
-    // We have Im(A) \not\subset Im(B).
-    // In this case we don't return a solution of the system.
-    // If A is injective, we'll return A_L^{-1}B where A_L is the left inverse
-    // of A, namely A_L A = I.
-    if (c >= numColsA) {
-      continue;
-    }
+    assert(c < numColsA && "Precondition broken. Im(B) not contained in Im(A)");
     assert(pivotRowOfCol[c] == -1 &&
-           "duplicate pivot => A not in RREF or not injective");
+           "duplicate pivot => matrix not in RREF or A not injective");
     pivotRowOfCol[c] = r;
   }
 
@@ -994,12 +998,7 @@ LinearLayout lstsq(const LinearLayout &A, const LinearLayout &B) {
   std::unique_ptr<uint64_t[]> retMat(new uint64_t[numColsA]());
   for (int c = 0; c < numColsA; ++c) {
     int row = pivotRowOfCol[c];
-    if (row == -1) {
-      retMat[c] = 0;
-    } else {
-      retMat[c] =
-          combinedMat[row] >> numColsA; // strip the A‑part, keep the B‑part
-    }
+    retMat[c] = (row == -1) ? 0 : (combinedMat[row] >> numColsA);
   }
 
   // We need names for the in/out dim of the flattened layout we're going to
@@ -1051,14 +1050,11 @@ LinearLayout LinearLayout::invertAndCompose(const LinearLayout &outer) const {
   const auto &B = *this;
   const auto A = outer.transposeOuts(outDims);
   for (auto dim : outDims) {
-    if (A.getOutDimSize(dim) != B.getOutDimSize(dim)) {
-      std::stringstream msg;
-      msg << "B.invertAndCompose(A) called with incompatible output shapes in ";
-      msg << "dim = " << std::string(dim.getValue()) << ": ";
-      msg << "A = " << A.getOutDimSize(dim) << ", ";
-      msg << "B = " << B.getOutDimSize(dim);
-      llvm::report_fatal_error(msg.str().c_str());
-    }
+    assert(A.getOutDimSize(dim) >= B.getOutDimSize(dim) &&
+           ("A.invertAndCompose(B) called with incompatible output shapes in " +
+            dim.str() + ": " + std::to_string(A.getOutDimSize(dim)) +
+            " >= " + std::to_string(B.getOutDimSize(dim)))
+               .c_str());
   }
 
   // Broadcasting heuristic
@@ -1073,6 +1069,9 @@ LinearLayout LinearLayout::invertAndCompose(const LinearLayout &outer) const {
   // - Otherwise, we just call lstsq (i.e. map all the equivalent elements
   //   to the same input element) to take advantage of broadcasting in shared
   //   memory and avoid saving repeated elements in shared memory
+
+  // FIXME: We should check that the other dimensions don't touch the image of
+  // this dimension.
   SmallVector<StringAttr> identityDims;
   for (auto dim : A.getInDimNames()) {
     if (B.hasInDim(dim) &&

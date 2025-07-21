@@ -202,6 +202,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
 
     assert(permutedInVals.size() == tileSize * nReps);
     SmallVector<Value> outVals;
+    auto affineOffset = b.i32_val(0);
+    auto maskSpanAffineOffset = 0;
     for (int i = 0; i < nReps; ++i) {
       if (i > 0)
         b.barrier();
@@ -210,11 +212,12 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
           ArrayRef<Value>(permutedInVals).slice(i * tileSize, tileSize);
       // Store
       lowerLdStShared(loc, ctx, storeCvt, tileInVals, llvmElemTy, smemBase,
-                      rewriter, targetInfo);
+                      affineOffset, maskSpanAffineOffset, rewriter, targetInfo);
       b.barrier();
       // Load
       SmallVector<Value> tileOutVals = lowerLdStShared(
-          loc, ctx, loadCvt, {}, llvmElemTy, smemBase, rewriter, targetInfo);
+          loc, ctx, loadCvt, {}, llvmElemTy, smemBase, affineOffset,
+          maskSpanAffineOffset, rewriter, targetInfo);
       llvm::append_range(outVals, tileOutVals);
     }
 
@@ -275,9 +278,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     assert(cvtNeedsSharedMemory(op.getSrc().getType(), op.getType()));
 
     // Try to use swizzling to implement the conversion
-    // HACK Remove once AMD tests pass for the swizzling path
-    if (targetInfo.isCuda() && succeeded(transferWithinBlockSwizzling(
-                                   op, adaptor.getSrc(), rewriter))) {
+    if (succeeded(
+            transferWithinBlockSwizzling(op, adaptor.getSrc(), rewriter))) {
       return success();
     }
 
