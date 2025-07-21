@@ -60,7 +60,7 @@ std::optional<Twine> static arefEnterVerify(
   auto typeArray = aref.getBaseType();
   if (typeArray.size() != resultTypes.size())
     return "Aref has different number of arguments than enter";
-  // This should probably rely on the memdescSubviewOp verifier?
+  // This should probably rely on the memdescSubsliceOp verifier?
   for (auto [orig, arg] : llvm::zip(typeArray, resultTypes)) {
     if (auto origT = dyn_cast<RankedTensorType>(orig)) {
       auto argT = dyn_cast<RankedTensorType>(arg);

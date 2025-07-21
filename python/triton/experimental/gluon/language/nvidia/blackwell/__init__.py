@@ -243,12 +243,10 @@ class tensor_memory_descriptor(base_value):
         """
         index = _semantic.to_tensor(index)
         builder = _semantic.builder
-        offsets = [builder.get_int32(0)] * self.rank
-        offsets[0] = index.handle
         shape = self.shape[1:]
         layout = self.layout
         ret = tensor_memory_descriptor(None, self.dtype, shape, layout, self.type.alloc_shape)
-        ret.handle = builder.create_memdesc_subview(ret.type.to_ir(builder), self.handle, offsets)
+        ret.handle = builder.create_memdesc_index(ret.type.to_ir(builder), self.handle, index.handle)
         return ret
 
     @builtin

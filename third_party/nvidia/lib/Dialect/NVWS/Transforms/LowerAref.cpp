@@ -193,21 +193,16 @@ SmallVector<Value> getSubViews(ArefValue arefVal, Value stage, Location loc,
                                OpBuilder &rewriter) {
   SmallVector<Value> views;
   for (auto buffer : arefVal.buffers) {
-    SmallVector<Value> offsetsVal{stage};
     auto memDescType = cast<MemDescType>(buffer.getType());
     auto shape = memDescType.getShape();
     auto rank = shape.size() - 1;
 
-    for (int i = 0; i < rank; ++i) {
-      offsetsVal.push_back(rewriter.create<arith::ConstantIntOp>(
-          loc, 0, rewriter.getIntegerType(32)));
-    }
     SmallVector<int64_t> tensorShape(shape.begin() + 1, shape.end());
     auto memDescTypeNew = MemDescType::get(
         tensorShape, memDescType.getElementType(), memDescType.getEncoding(),
         memDescType.getMemorySpace(), true);
-    Value singleBuffer = rewriter.create<MemDescSubviewOp>(loc, memDescTypeNew,
-                                                           buffer, offsetsVal);
+    Value singleBuffer =
+        rewriter.create<MemDescIndexOp>(loc, memDescTypeNew, buffer, stage);
     views.push_back(singleBuffer);
   }
 

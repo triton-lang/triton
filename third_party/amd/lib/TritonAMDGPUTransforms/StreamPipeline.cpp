@@ -113,7 +113,7 @@ using LoadToInfoMap = llvm::MapVector<Operation *, LoadInfo>;
 
 struct StreamCopyChainOps {
   tt::LoadOp loadOp;
-  ttg::MemDescSubviewOp subviewOp;
+  ttg::MemDescIndexOp subviewOp;
   ttg::LocalStoreOp localStoreOp;
   ttg::LocalLoadOp maybeLocalLoadOp;
 };
@@ -135,7 +135,7 @@ AsyncCopyChainOps createAsyncCopy(tt::LoadOp loadOp, Value alloc,
 
   // Extract local subview from shared allocation
   auto viewLoad = triton::createSingleBufferView(builder, alloc, extractIdx)
-                      .getDefiningOp<ttg::MemDescSubviewOp>();
+                      .getDefiningOp<ttg::MemDescIndexOp>();
 
   auto copyOp = builder.create<ttg::AsyncCopyGlobalToLocalOp>(
       loc, loadOp.getPtr(), viewLoad, loadOp.getMask(), loadOp.getOther(),
@@ -172,7 +172,7 @@ StreamCopyChainOps createStreamCopy(tt::LoadOp loadOp, Value alloc,
 
   // Extract local subview from shared allocation
   auto viewLoad = triton::createSingleBufferView(builder, alloc, extractIdx)
-                      .getDefiningOp<ttg::MemDescSubviewOp>();
+                      .getDefiningOp<ttg::MemDescIndexOp>();
 
   tt::LoadOp newLoadOp = cast<tt::LoadOp>(builder.clone(*loadOp));
   auto storeOp = builder.create<ttg::LocalStoreOp>(loc, newLoadOp, viewLoad);

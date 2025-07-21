@@ -6514,7 +6514,7 @@ def test_split_subview(M, N, M_tile_size, N_tile_size, device='cuda'):
         %c0_i32 = arith.constant 0 : i32
 
         %12 = ttg.local_alloc : () -> !ttg.memdesc<1x{M}x{N}xf16, #shared, #smem, mutable>
-        %13 = ttg.memdesc_subview %12[%c0_i32, %c0_i32, %c0_i32] : !ttg.memdesc<1x{M}x{N}xf16, #shared, #smem, mutable> -> !ttg.memdesc<{M}x{N}xf16, #shared, #smem, mutable>
+        %13 = ttg.memdesc_index %12, %c0_i32 : !ttg.memdesc<1x{M}x{N}xf16, #shared, #smem, mutable> -> !ttg.memdesc<{M}x{N}xf16, #shared, #smem, mutable>
         ttg.local_store %11, %13 : tensor<{M}x{N}xf16, #blocked> -> !ttg.memdesc<{M}x{N}xf16, #shared, #smem, mutable>
 
     """
@@ -6525,10 +6525,7 @@ def test_split_subview(M, N, M_tile_size, N_tile_size, device='cuda'):
             m_offset = m * M_tile_size
             n_offset = n * N_tile_size
             ir += f"""
-        %off0_{m}_{n} = arith.constant {m_offset} : i32
-        %off1_{m}_{n} = arith.constant {n_offset} : i32
-
-        %view{linear_idx} = ttg.memdesc_subview %13[%off0_{m}_{n}, %off1_{m}_{n}] : !ttg.memdesc<{M}x{N}xf16, #shared, #smem, mutable> -> !ttg.memdesc<{M_tile_size}x{N_tile_size}xf16, #shared, #smem, mutable, {M}x{N}>
+        %view{linear_idx} = ttg.memdesc_subslice %13 {{offsets=array<i32: {m_offset}, {n_offset}>}} : !ttg.memdesc<{M}x{N}xf16, #shared, #smem, mutable> -> !ttg.memdesc<{M_tile_size}x{N_tile_size}xf16, #shared, #smem, mutable, {M}x{N}>
         %data{linear_idx} = ttg.local_load %view{linear_idx} : !ttg.memdesc<{M_tile_size}x{N_tile_size}xf16, #shared, #smem, mutable, {M}x{N}> -> tensor<{M_tile_size}x{N_tile_size}xf16, #blocked>
         %inc{linear_idx} = arith.constant dense<{linear_idx}.0> : tensor<{M_tile_size}x{N_tile_size}xf16, #blocked>
 

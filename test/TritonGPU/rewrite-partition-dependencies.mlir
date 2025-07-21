@@ -11,14 +11,14 @@ tt.func @two_consumers(%lb: i32, %ub: i32, %step: i32) {
   // CHECK-NEXT: [[READY_BARS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2xi64,
   // CHECK-NEXT: [[EMPTY_BARS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2xi64,
 
-  // CHECK-NEXT: [[READY0:%.*]] = ttg.memdesc_subview [[READY_BARS]][%c0_i32]
-  // CHECK-NEXT: [[EMPTY0:%.*]] = ttg.memdesc_subview [[EMPTY_BARS]][%c0_i32]
+  // CHECK-NEXT: [[READY0:%.*]] = ttg.memdesc_index [[READY_BARS]], %c0_i32
+  // CHECK-NEXT: [[EMPTY0:%.*]] = ttg.memdesc_index [[EMPTY_BARS]], %c0_i32
   // CHECK-NEXT: ttng.init_barrier [[READY0]], 1
   // CHECK-NEXT: ttng.init_barrier [[EMPTY0]], 2
   // CHECK-NEXT: ttng.arrive_barrier [[EMPTY0]], 2
 
-  // CHECK-NEXT: [[READY1:%.*]] = ttg.memdesc_subview [[READY_BARS]][%c1_i32]
-  // CHECK-NEXT: [[EMPTY1:%.*]] = ttg.memdesc_subview [[EMPTY_BARS]][%c1_i32]
+  // CHECK-NEXT: [[READY1:%.*]] = ttg.memdesc_index [[READY_BARS]], %c1_i32
+  // CHECK-NEXT: [[EMPTY1:%.*]] = ttg.memdesc_index [[EMPTY_BARS]], %c1_i32
   // CHECK-NEXT: ttng.init_barrier [[READY1]], 1
   // CHECK-NEXT: ttng.init_barrier [[EMPTY1]], 2
   // CHECK-NEXT: ttng.arrive_barrier [[EMPTY1]], 2
@@ -38,9 +38,9 @@ tt.func @two_consumers(%lb: i32, %ub: i32, %step: i32) {
     // CHECK-NEXT: [[ROLLOVER:%.*]] = arith.cmpi eq, [[NEXT_IDX]], %c2_i32
     // CHECK-NEXT: [[PHASE0:%.*]] = arith.select [[ROLLOVER]], [[NEXT_PHASE]], [[PRODUCER_PHASE]]
     // CHECK-NEXT: [[IDX0:%.*]] = arith.select [[ROLLOVER]], %c0_i32, [[NEXT_IDX]]
-    // CHECK-NEXT: [[VIEW:%.*]] = ttg.memdesc_subview [[BUFFERS]][[[IDX0]], %c0_i32]
-    // CHECK-NEXT: [[READY:%.*]] = ttg.memdesc_subview [[READY_BARS]][[[IDX0]]]
-    // CHECK-NEXT: [[EMPTY:%.*]] = ttg.memdesc_subview [[EMPTY_BARS]][[[IDX0]]]
+    // CHECK-NEXT: [[VIEW:%.*]] = ttg.memdesc_index [[BUFFERS]], [[IDX0]]
+    // CHECK-NEXT: [[READY:%.*]] = ttg.memdesc_index [[READY_BARS]], [[IDX0]]
+    // CHECK-NEXT: [[EMPTY:%.*]] = ttg.memdesc_index [[EMPTY_BARS]], [[IDX0]]
     // CHECK-NEXT: ttng.wait_barrier [[EMPTY]], [[PHASE0]] {ttg.partition = 0 : i32}
     // CHECK-NEXT: ttg.local_store [[OUTPUT]], [[VIEW]] {ttg.partition = 0 : i32}
     // CHECK-NEXT: ttng.arrive_barrier [[READY]], 1 {ttg.partition = 0 : i32}
@@ -50,9 +50,9 @@ tt.func @two_consumers(%lb: i32, %ub: i32, %step: i32) {
     // CHECK-NEXT: [[ROLLOVER:%.*]] = arith.cmpi eq, [[NEXT_IDX]], %c2_i32
     // CHECK-NEXT: [[PHASE1:%.*]] = arith.select [[ROLLOVER]], [[NEXT_PHASE]], [[CONSUMER_PHASE0]]
     // CHECK-NEXT: [[IDX1:%.*]] = arith.select [[ROLLOVER]], %c0_i32, [[NEXT_IDX]]
-    // CHECK-NEXT: [[VIEW:%.*]] = ttg.memdesc_subview [[BUFFERS]][[[IDX1]], %c0_i32]
-    // CHECK-NEXT: [[READY:%.*]] = ttg.memdesc_subview [[READY_BARS]][[[IDX1]]]
-    // CHECK-NEXT: [[EMPTY:%.*]] = ttg.memdesc_subview [[EMPTY_BARS]][[[IDX1]]]
+    // CHECK-NEXT: [[VIEW:%.*]] = ttg.memdesc_index [[BUFFERS]], [[IDX1]]
+    // CHECK-NEXT: [[READY:%.*]] = ttg.memdesc_index [[READY_BARS]], [[IDX1]]
+    // CHECK-NEXT: [[EMPTY:%.*]] = ttg.memdesc_index [[EMPTY_BARS]], [[IDX1]]
     // CHECK-NEXT: ttng.wait_barrier [[READY]], [[PHASE1]] {ttg.partition = 1 : i32}
     // CHECK-NEXT: [[VALUE:%.*]] = ttg.local_load [[VIEW]] {ttg.partition = 1 : i32}
     // CHECK-NEXT: ttng.arrive_barrier [[EMPTY]], 1 {ttg.partition = 1 : i32}
@@ -64,9 +64,9 @@ tt.func @two_consumers(%lb: i32, %ub: i32, %step: i32) {
     // CHECK-NEXT: [[ROLLOVER:%.*]] = arith.cmpi eq, [[NEXT_IDX]], %c2_i32
     // CHECK-NEXT: [[PHASE2:%.*]] = arith.select [[ROLLOVER]], [[NEXT_PHASE]], [[CONSUMER_PHASE1]]
     // CHECK-NEXT: [[IDX2:%.*]] = arith.select [[ROLLOVER]], %c0_i32, [[NEXT_IDX]]
-    // CHECK-NEXT: [[VIEW:%.*]] = ttg.memdesc_subview [[BUFFERS]][[[IDX2]], %c0_i32]
-    // CHECK-NEXT: [[READY:%.*]] = ttg.memdesc_subview [[READY_BARS]][[[IDX2]]]
-    // CHECK-NEXT: [[EMPTY:%.*]] = ttg.memdesc_subview [[EMPTY_BARS]][[[IDX2]]]
+    // CHECK-NEXT: [[VIEW:%.*]] = ttg.memdesc_index [[BUFFERS]], [[IDX2]]
+    // CHECK-NEXT: [[READY:%.*]] = ttg.memdesc_index [[READY_BARS]], [[IDX2]]
+    // CHECK-NEXT: [[EMPTY:%.*]] = ttg.memdesc_index [[EMPTY_BARS]], [[IDX2]]
     // CHECK-NEXT: ttng.wait_barrier [[READY]], [[PHASE2]] {ttg.partition = 2 : i32}
     // CHECK-NEXT: [[VALUE:%.*]] = ttg.local_load [[VIEW]] {ttg.partition = 2 : i32}
     // CHECK-NEXT: ttng.arrive_barrier [[EMPTY]], 1 {ttg.partition = 2 : i32}
@@ -95,16 +95,16 @@ tt.func @distance_one(%lb: i32, %ub: i32, %step: i32) {
   // CHECK-NEXT: [[READY_BARS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2xi64,
   // CHECK-NEXT: [[EMPTY_BARS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2xi64,
 
-  // CHECK-NEXT: [[INIT:%.*]] = ttg.memdesc_subview [[BUFFERS]][%c0_i32, %c0_i32]
+  // CHECK-NEXT: [[INIT:%.*]] = ttg.memdesc_index [[BUFFERS]], %c0_i32
   // CHECK-NEXT: ttg.local_store %cst, [[INIT]]
-  // CHECK-NEXT: [[READY0:%.*]] = ttg.memdesc_subview [[READY_BARS]][%c0_i32]
-  // CHECK-NEXT: [[EMPTY0:%.*]] = ttg.memdesc_subview [[EMPTY_BARS]][%c0_i32]
+  // CHECK-NEXT: [[READY0:%.*]] = ttg.memdesc_index [[READY_BARS]], %c0_i32
+  // CHECK-NEXT: [[EMPTY0:%.*]] = ttg.memdesc_index [[EMPTY_BARS]], %c0_i32
   // CHECK-NEXT: ttng.init_barrier [[READY0]], 1
   // CHECK-NEXT: ttng.init_barrier [[EMPTY0]], 1
   // CHECK-NEXT: ttng.arrive_barrier [[READY0]], 1
 
-  // CHECK-NEXT: [[READY1:%.*]] = ttg.memdesc_subview [[READY_BARS]][%c1_i32]
-  // CHECK-NEXT: [[EMPTY1:%.*]] = ttg.memdesc_subview [[EMPTY_BARS]][%c1_i32]
+  // CHECK-NEXT: [[READY1:%.*]] = ttg.memdesc_index [[READY_BARS]], %c1_i32
+  // CHECK-NEXT: [[EMPTY1:%.*]] = ttg.memdesc_index [[EMPTY_BARS]], %c1_i32
   // CHECK-NEXT: ttng.init_barrier [[READY1]], 1
   // CHECK-NEXT: ttng.init_barrier [[EMPTY1]], 1
   // CHECK-NEXT: ttng.arrive_barrier [[EMPTY1]], 1
@@ -122,9 +122,9 @@ tt.func @distance_one(%lb: i32, %ub: i32, %step: i32) {
     // CHECK-NEXT: [[ROLLOVER:%.*]] = arith.cmpi eq, [[NEXT_IDX]], %c2_i32
     // CHECK-NEXT: [[PHASE0:%.*]] = arith.select [[ROLLOVER]], [[NEXT_PHASE]], [[PRODUCER_PHASE]]
     // CHECK-NEXT: [[IDX0:%.*]] = arith.select [[ROLLOVER]], %c1_i32, [[NEXT_IDX]]
-    // CHECK-NEXT: [[VIEW:%.*]] = ttg.memdesc_subview [[BUFFERS]][[[IDX0]], %c0_i32]
-    // CHECK-NEXT: [[READY:%.*]] = ttg.memdesc_subview [[READY_BARS]][[[IDX0]]]
-    // CHECK-NEXT: [[EMPTY:%.*]] = ttg.memdesc_subview [[EMPTY_BARS]][[[IDX0]]]
+    // CHECK-NEXT: [[VIEW:%.*]] = ttg.memdesc_index [[BUFFERS]], [[IDX0]]
+    // CHECK-NEXT: [[READY:%.*]] = ttg.memdesc_index [[READY_BARS]], [[IDX0]]
+    // CHECK-NEXT: [[EMPTY:%.*]] = ttg.memdesc_index [[EMPTY_BARS]], [[IDX0]]
     // CHECK-NEXT: ttng.wait_barrier [[EMPTY]], [[PHASE0]] {ttg.partition = 0 : i32}
     // CHECK-NEXT: ttg.local_store [[OUTPUT]], [[VIEW]] {ttg.partition = 0 : i32}
     // CHECK-NEXT: ttng.arrive_barrier [[READY]], 1 {ttg.partition = 0 : i32}
@@ -134,9 +134,9 @@ tt.func @distance_one(%lb: i32, %ub: i32, %step: i32) {
     // CHECK-NEXT: [[ROLLOVER:%.*]] = arith.cmpi eq, [[NEXT_IDX]], %c2_i32
     // CHECK-NEXT: [[PHASE1:%.*]] = arith.select [[ROLLOVER]], [[NEXT_PHASE]], [[CONSUMER_PHASE]]
     // CHECK-NEXT: [[IDX1:%.*]] = arith.select [[ROLLOVER]], %c1_i32, [[NEXT_IDX]]
-    // CHECK-NEXT: [[VIEW:%.*]] = ttg.memdesc_subview [[BUFFERS]][[[IDX1]], %c0_i32]
-    // CHECK-NEXT: [[READY:%.*]] = ttg.memdesc_subview [[READY_BARS]][[[IDX1]]]
-    // CHECK-NEXT: [[EMPTY:%.*]] = ttg.memdesc_subview [[EMPTY_BARS]][[[IDX1]]]
+    // CHECK-NEXT: [[VIEW:%.*]] = ttg.memdesc_index [[BUFFERS]], [[IDX1]]
+    // CHECK-NEXT: [[READY:%.*]] = ttg.memdesc_index [[READY_BARS]], [[IDX1]]
+    // CHECK-NEXT: [[EMPTY:%.*]] = ttg.memdesc_index [[EMPTY_BARS]], [[IDX1]]
     // CHECK-NEXT: ttng.wait_barrier [[READY]], [[PHASE1]] {ttg.partition = 1 : i32}
     // CHECK-NEXT: [[VALUE:%.*]] = ttg.local_load [[VIEW]] {ttg.partition = 1 : i32}
     // CHECK-NEXT: ttng.arrive_barrier [[EMPTY]], 1 {ttg.partition = 1 : i32}
@@ -200,9 +200,9 @@ tt.func @reuse_argument(%lb: i32, %ub: i32, %step: i32) {
   %cst1 = arith.constant dense<1> : !ty
 
   // CHECK: [[BUFFERS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<3x1xi32
-  // CHECK: [[VALUE:%.*]] = ttg.memdesc_subview [[BUFFERS]][%c0_i32, %c0_i32]
+  // CHECK: [[VALUE:%.*]] = ttg.memdesc_index [[BUFFERS]], %c0_i32
   // CHECK: local_store [[CST0]], [[VALUE]]
-  // CHECK: [[VALUE:%.*]] = ttg.memdesc_subview [[BUFFERS]][%c1_i32, %c0_i32]
+  // CHECK: [[VALUE:%.*]] = ttg.memdesc_index [[BUFFERS]], %c1_i32
   // CHECK: local_store [[CST1]], [[VALUE]]
   scf.for %i = %lb to %ub step %step iter_args(%k = %cst0, %l = %cst1) -> (!ty, !ty) : i32 {
     %0 = "op_a"() {ttg.partition = 0} : () -> !ty
@@ -224,14 +224,14 @@ tt.func @multiplicity_branch(%lb: i32, %ub: i32, %step: i32) {
 
   // CHECK: [[BUFFERS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<6x1xi32
 
-  // CHECK: [[VALUE:%.*]] = ttg.memdesc_subview [[BUFFERS]][%c0_i32, %c0_i32]
+  // CHECK: [[VALUE:%.*]] = ttg.memdesc_index [[BUFFERS]], %c0_i32
   // CHECK: local_store [[CST0]], [[VALUE]]
-  // CHECK: [[VALUE:%.*]] = ttg.memdesc_subview [[BUFFERS]][%c1_i32, %c0_i32]
+  // CHECK: [[VALUE:%.*]] = ttg.memdesc_index [[BUFFERS]], %c1_i32
   // CHECK: local_store [[CST2]], [[VALUE]]
 
-  // CHECK: [[VALUE:%.*]] = ttg.memdesc_subview [[BUFFERS]][%c2_i32, %c0_i32]
+  // CHECK: [[VALUE:%.*]] = ttg.memdesc_index [[BUFFERS]], %c2_i32
   // CHECK: local_store [[CST0]], [[VALUE]]
-  // CHECK: [[VALUE:%.*]] = ttg.memdesc_subview [[BUFFERS]][%c3_i32, %c0_i32]
+  // CHECK: [[VALUE:%.*]] = ttg.memdesc_index [[BUFFERS]], %c3_i32
   // CHECK: local_store [[CST1]], [[VALUE]]
 
   // CHECK: iter_args
@@ -245,21 +245,21 @@ tt.func @multiplicity_branch(%lb: i32, %ub: i32, %step: i32) {
     // CHECK: [[NEXT_IDX:%.*]] = arith.addi [[PIDX0]], %c1_i32
     // CHECK: [[ROLLOVER:%.*]] = arith.cmpi eq, [[NEXT_IDX]], %c6_i32
     // CHECK: [[IDX:%.*]] = arith.select [[ROLLOVER]], %c4_i32, [[NEXT_IDX]]
-    // CHECK: memdesc_subview [[BUFFERS]][[[IDX]], %c0_i32]
+    // CHECK: memdesc_index [[BUFFERS]], [[IDX]]
 
     // CHECK: [[NEXT_IDX:%.*]] = arith.addi [[CIDX0]], %c1_i32
     // CHECK: [[LAST:%.*]] = arith.cmpi eq, [[NEXT_IDX]], %c6_i32
     // CHECK: [[AT_END:%.*]] = arith.cmpi eq, [[NEXT_IDX]], %c2_i32
     // CHECK: [[ROLLOVER:%.*]] = arith.ori [[LAST]], [[AT_END]]
     // CHECK: [[IDX:%.*]] = arith.select [[ROLLOVER]], %c4_i32, [[NEXT_IDX]]
-    // CHECK: memdesc_subview [[BUFFERS]][[[IDX]], %c0_i32]
+    // CHECK: memdesc_index [[BUFFERS]], [[IDX]]
     // CHECK: op_b
     "op_b"(%a) {ttg.partition = 1}: (!ty) -> ()
 
     // CHECK: [[NEXT_IDX:%.*]] = arith.addi [[CIDX1]], %c1_i32
     // CHECK: [[ROLLOVER:%.*]] = arith.cmpi eq, [[NEXT_IDX]], %c6_i32
     // CHECK: [[IDX:%.*]] = arith.select [[ROLLOVER]], %c4_i32, [[NEXT_IDX]]
-    // CHECK: memdesc_subview [[BUFFERS]][[[IDX]], %c0_i32]
+    // CHECK: memdesc_index [[BUFFERS]], [[IDX]]
     // CHECK: op_c
     "op_c"(%b) {ttg.partition = 2}: (!ty) -> ()
 
@@ -268,7 +268,7 @@ tt.func @multiplicity_branch(%lb: i32, %ub: i32, %step: i32) {
     // CHECK: [[AT_END:%.*]] = arith.cmpi eq, [[NEXT_IDX]], %c2_i32
     // CHECK: [[ROLLOVER:%.*]] = arith.ori [[LAST]], [[AT_END]]
     // CHECK: [[IDX:%.*]] = arith.select [[ROLLOVER]], %c4_i32, [[NEXT_IDX]]
-    // CHECK: memdesc_subview [[BUFFERS]][[[IDX]], %c0_i32]
+    // CHECK: memdesc_index [[BUFFERS]], [[IDX]]
     // CHECK: op_d
     "op_d"(%c) {ttg.partition = 3}: (!ty) -> ()
 

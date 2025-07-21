@@ -705,7 +705,7 @@ bool emitTransferBetweenRegistersAndShared(
                                           {kBlock, blockId}},
                                          regIds);
 
-  // Compute affine offset given by memdesc_subview
+  // Compute affine offset given by memdesc_subslice
   auto offset = smemObj.getShmemOffset(loc, rewriter, sharedTy);
   SmallVector<Value> vecAddrVec;
   for (auto &indices : indicesVec) {
@@ -1153,7 +1153,7 @@ Value SharedMemoryObject::getShmemOffset(Location loc, RewriterBase &rewriter,
   auto ctx = srcTy.getContext();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
-  // If it did not have a memdesc_subview, we don't need to compute the offset
+  // If it did not have a memdesc_subslice we don't need to compute the offset
   // as it is zero
   if (!isAffineSharedMemoryAccess(srcTy)) {
     return b.i32_val(0);
