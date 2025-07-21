@@ -26,21 +26,6 @@ public:
     setLastLoc(mlir::FileLineColLoc::get(context, fileName, line, column));
   }
 
-  // record var name that was defined
-  void setLastLocDefName(std::string defName){
-    mlir::StringAttr nameAttr = mlir::StringAttr::get(builder->getContext(), defName);
-    mlir::NameLoc nameLoc = mlir::NameLoc::get(nameAttr, *lastLoc);
-    lastLoc = std::make_unique<mlir::Location>(nameLoc);
-  }
-
-  std::string getLastLocDefName() const {
-    if (auto nameLoc = llvm::dyn_cast<mlir::NameLoc>(*lastLoc)){
-      return nameLoc.getName().getValue().str();
-    } else {
-      return "";
-    }
-  }
-
   mlir::Location getLastLoc() {
     assert(lastLoc);
     return *lastLoc;

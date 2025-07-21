@@ -338,9 +338,6 @@ class CodeGenerator(ast.NodeVisitor):
         # Are we currently visiting an ast.arg's default value?  These have some
         # special handling.
         self.visiting_arg_default_value = False
-        # A global varibale to indicate whether current node defined a name
-        # it can only be None, string, or a (fused-)tuple of them
-        self.defined_name = None
 
     builtin_namespace: Dict[str, Any] = {
         _.__name__: _
@@ -425,6 +422,14 @@ class CodeGenerator(ast.NodeVisitor):
         '''
         self.lscope[name] = value
         self.local_defs[name] = value
+
+        # Record source var name in mlir::Location for low level debugging purpose
+        # "value" must be either mlir::BlockArgument, i.e. arguments of function,
+        #    or mlir::Value type, i.e. the named variables by a tensor or operation
+        if hasattr(value, "handle"):
+            loc = value.handle.get_loc()
+            loc.set_name(name)
+            value.handle.set_loc(loc)
 
     def _get_insertion_point_and_loc(self):
         # XXX: this is a hack to get the location of the insertion point.
@@ -626,22 +631,6 @@ class CodeGenerator(ast.NodeVisitor):
             return name_tuple
 
         targets = [node.target] if isinstance(node, ast.AnnAssign) else node.targets
-
-        # temporarily store the defined name globally,
-        # and delete it after finishing the visit of child nodes
-
-        if isinstance(targets[0], ast.Tuple):
-            # build a tuple of names, and carry it when visiting tuples that assign to it
-            self.defined_name = get_name_tuple(targets[0])
-        elif isinstance(targets[0], ast.Subscript):
-            # this
-            self.defined_name = None
-        elif isinstance(targets[0], ast.Attribute):
-            self.defined_name = node.targets[0].value.id + "." + node.targets[0].attr
-        else:
-            self.defined_name = node.targets[0].id
-
-        # self.defined_name will be handled by the next child visit
         values = _sanitize_value(self.visit(node.value))
         assert len(targets) == 1
         self.assignTarget(targets[0], values)
@@ -666,21 +655,7 @@ class CodeGenerator(ast.NodeVisitor):
         ast.NodeVisitor.generic_visit(self, node)
 
     def visit_Tuple(self, node):
-        if isinstance(self.defined_name, tuple):
-            # assign a tuple of a tuple of names
-            args = []
-            defined_name = self.defined_name
-            for i, x in enumerate(node.elts):
-                # carry the child tuple/name to child visit
-                self.defined_name = defined_name[i]
-                args.append(self.visit(x))
-            assert len(defined_name) == len(args)
-            # all names of tuple has been used, should reset to None
-            self.defined_name = None
-        # the case isinstance(self.defined_name, str) should be handled self.visit()
-        else:
-            args = [self.visit(x) for x in node.elts]
-
+        args = [self.visit(x) for x in node.elts]
         return language.tuple(args)
 
     def _apply_binary_method(self, method_name, lhs, rhs):
@@ -1458,12 +1433,6 @@ class CodeGenerator(ast.NodeVisitor):
             if hasattr(node, 'lineno') and hasattr(node, 'col_offset'):
                 self.builder.set_loc(self.file_name, self.begin_line + node.lineno, node.col_offset)
 
-            # if this node is used to define a name, temporarily store it
-            # and store it into the parent's loc after visiting the child node
-            if isinstance(self.defined_name, str):
-                self.builder.set_loc_def_name(self.defined_name)
-                # child nodes didn't define this name, so don't carry a name to them
-                self.defined_name = None
             try:
                 ret = super().visit(node)
             except CompilationError:
