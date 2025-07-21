@@ -292,18 +292,18 @@ SmallVector<unsigned> getCTAOrder(Attribute layout) {
 SmallVector<int64_t> getShapePerCTA(ArrayRef<unsigned> CTASplitNum,
                                     ArrayRef<int64_t> shape) {
   unsigned rank = shape.size();
+  auto splitNum = llvm::to_vector(CTASplitNum);
+  splitNum.insert(splitNum.begin(), rank - splitNum.size(), 1);
   SmallVector<int64_t> shapePerCTA(rank);
   for (unsigned i = 0; i < rank; ++i) {
-    unsigned splitNum = std::min<unsigned>(shape[i], CTASplitNum[i]);
-    shapePerCTA[i] = shape[i] / splitNum;
+    unsigned split = std::min<unsigned>(shape[i], splitNum[i]);
+    shapePerCTA[i] = shape[i] / split;
   }
   return shapePerCTA;
 }
 
 SmallVector<int64_t> getShapePerCTA(Attribute layout, ArrayRef<int64_t> shape) {
-  auto splitNum = getCTASplitNum(layout);
-  splitNum.insert(splitNum.begin(), shape.size() - splitNum.size(), 1);
-  return getShapePerCTA(splitNum, shape);
+  return getShapePerCTA(getCTASplitNum(layout), shape);
 }
 
 SmallVector<int64_t> getAllocationShapePerCTA(Attribute layout,
