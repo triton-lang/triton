@@ -186,7 +186,8 @@ private:
                         .getIntOrFloatBitWidth();
     int32_t kWidth = dotEnc.getKWidth();
     const int32_t mDim = mfmaEnc.getMDim();
-    assert((mDim == 32 || mDim == 16) && "Invalid MFMA instruction dimension");
+    if (mDim != 32 && mDim != 16)
+      return false;
 
     const int kFactor = 16 / bitwidth;
     const int kSizeDoubleRateMfma32 = 16 * kFactor;
