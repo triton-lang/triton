@@ -82,13 +82,14 @@ Operation *streamPredication(RewriterBase &rewriter, Operation *op,
 //    in the first stages and the compute that uses the loaded values in the
 //    last stage (num_stages - 1). Each operation will be clustered in the
 //    order to best overlap with other operations (see details below in the
-//    initSchedule method).
+//    initSchedule methods).
 // 3. When the compute is a tt.dot, the scheduler will insert a shared
-//    memory allocation between the global load and tt.dot. The ttg.local_store
-//    will save the global load value to shared memory and the ttg.local_load
-//    will load the relevant tiles for the tt.dot. These operations will be
-//    scheduled according to various scheduling schemes outlined below in the
-//    initSchedule method (see details there).
+//    memory allocation between the global load and tt.dot. The global load
+//    value will be saved to shared memory, via ttg.local_store or via
+//    ttg.async_copy_global_to_local writing directly to shared memory, and the
+//    ttg.local_load will load the relevant tiles for the tt.dot. These
+//    operations will be scheduled according to various scheduling schemes
+//    outlined below in the initSchedule methods (see details there).
 // 4. Finally the schedule will be passed to the PipelineExpander to rewrite
 //    accordingly. The new implementation will consist of:
 //    a. Prologue: containing the ramp-up of num_stages-1 stages for
@@ -403,13 +404,13 @@ preprocessLoop(triton::AMD::ModuleAxisInfoAnalysis &axisInfoAnalysis,
 
 namespace singleDotSchedule {
 // Define categories of scheduling details per Operation types.
-// The StreamPipeliner schedules 5 types of operations:
+// The SingleDotSchedule schedules 5 types of operations:
 // 1. GLOBAL_LOAD: tt.load / ttg.async_copy_global_to_local
 // 2. LOCAL_STORE: ttg.local_store
 // 3. LOCAL_LOAD:  ttg.local_load
 // 4. COMPUTE:     ops that use the loaded data
 // 5. ASYNC_WAIT:  ttg.async_wait
-// Note that ttg ops mentioned in the above list are created in this pass.
+// Note that ttg ops mentioned in the above list are created during scheduling.
 enum SchedType {
   SCHED_GLOBAL_LOAD,
   SCHED_LOCAL_STORE,
