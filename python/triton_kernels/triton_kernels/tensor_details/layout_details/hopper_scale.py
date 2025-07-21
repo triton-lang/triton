@@ -34,7 +34,7 @@ class HopperMXScaleLayout(Layout):
         data = data.flatten(-3, -2)
         assert data.shape[-2] == M // 32
         assert data.shape[-1] == K * 32
-        data = data.transpose(-1, -2).contiguous()
+        data = data.contiguous().transpose(-1, -2)
         return data
 
     def unswizzle_data(self, data):
@@ -46,7 +46,7 @@ class HopperMXScaleLayout(Layout):
         perm = list(range(b)) + [b + p for p in perm]
         data = data.permute(*perm)
         data = data.reshape(*batch, M * 32, K // 32)
-        data = data.transpose(-1, -2).contiguous()
+        data = data.contiguous().transpose(-1, -2)
         return data
 
     def swizzle_block_shape(self, block_shape):
