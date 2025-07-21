@@ -1703,7 +1703,7 @@ struct AtomicRMWOpConversion
         } else {
           if (!atomicSharedMemBase.has_value()) {
             rewriter.eraseOp(op);
-            continue;
+            return success();
           }
           Value atomPtr = *atomicSharedMemBase;
           b.barrier();
