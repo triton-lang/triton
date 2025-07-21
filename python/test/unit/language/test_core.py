@@ -80,6 +80,8 @@ elif is_hip():
     # 0 is a special value for automatic heuristic
     if is_hip_cdna():
         mma_nonk_sizes = [0, 16, 32]
+    else:
+        mma_nonk_sizes = [16]
 else:
     THREADS_PER_WARP = 32
 
@@ -4157,8 +4159,8 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
         if cc < (8, 9):
             pytest.skip("float8e4nv not supported on CUDA < 8.9")
     if is_hip():
-        if not is_hip_cdna():
-            pytest.skip("scaled_dot only implemented for HIP CDNA")
+        #if not is_hip_cdna():
+        #    pytest.skip("scaled_dot only implemented for HIP CDNA")
         if "e4m3" in (mxfp_type, normal_type):
             if not (is_hip_cdna3() or is_hip_cdna4()):
                 pytest.skip(f"scaled_dot({mxfp_type}, {normal_type}) only implemented for CDNA3 and CDNA4")

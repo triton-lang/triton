@@ -270,12 +270,18 @@ public:
 
     auto dotEncoding =
         cast<DotOperandEncodingAttr>(op.getSrc().getType().getEncoding());
-    auto mfmaEncoding = dyn_cast<AMDMfmaEncodingAttr>(dotEncoding.getParent());
-    if (!mfmaEncoding)
+    int mDim;
+    if (auto mfmaEncoding =
+            dyn_cast<AMDMfmaEncodingAttr>(dotEncoding.getParent())) {
+      LDBG("mfma: " << mfmaEncoding);
+      mDim = mfmaEncoding.getMDim();
+    } else if (auto wmmaEncoding =
+                   dyn_cast<AMDWmmaEncodingAttr>(dotEncoding.getParent())) {
+      LDBG("wmma: " << wmmaEncoding);
+      mDim = wmmaEncoding.getMNKDimPerInstr()[0];
+    } else {
       return rewriter.notifyMatchFailure(op, "NYI: non-mfma dot operand");
-    LDBG("mfma: " << mfmaEncoding);
-
-    int mDim = mfmaEncoding.getMDim();
+    }
     if (mDim != 32 && mDim != 16)
       return rewriter.notifyMatchFailure(op, "NYI: non-mfma32/16 intrinsics");
 
