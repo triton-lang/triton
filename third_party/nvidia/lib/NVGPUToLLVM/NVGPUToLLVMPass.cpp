@@ -745,8 +745,10 @@ public:
     ModuleOp mod = getOperation();
     RewritePatternSet patterns(context);
 
-    patterns.add<ClusterCTAIdOpPattern, LoadMatrixOpPattern, WGMMAOpPattern, 
-                 LoadAcquireOpPattern, WGMMAWaitGroupOpPattern, WarpIdOpPattern>(context);
+    patterns
+        .add<ClusterCTAIdOpPattern, LoadMatrixOpPattern, WGMMAOpPattern,
+             LoadAcquireOpPattern, WGMMAWaitGroupOpPattern, WarpIdOpPattern>(
+            context);
 
     if (applyPatternsGreedily(mod, std::move(patterns)).failed())
       signalPassFailure();
