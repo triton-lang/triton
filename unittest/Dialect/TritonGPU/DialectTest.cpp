@@ -375,6 +375,27 @@ protected:
   MLIRContext ctx;
 };
 
+TEST_F(ShapePerCTATest, ShapePerCTA) {
+  // Equal length
+  SmallVector<unsigned> CTASplitNum = {2, 4};
+  SmallVector<int64_t> shape = {64, 128};
+  auto shapePerCTA = getShapePerCTA(CTASplitNum, shape);
+  EXPECT_EQ(shapePerCTA.size(), shape.size());
+  EXPECT_EQ(shapePerCTA, {32, 32});
+
+  // rank(shape) < rank(CTASplitNum)
+  CTASplitNum = {2, 4, 8};
+  shapePerCTA = getShapePerCTA(CTASplitNum, shape);
+  EXPECT_EQ(shapePerCTA.size(), shape.size());
+  EXPECT_EQ(shapePerCTA, {16, 16});
+
+  // rank(shape) > rank(CTASplitNum)
+  CTASplitNum = {2};
+  shapePerCTA = getShapePerCTA(CTASplitNum, shape);
+  EXPECT_EQ(shapePerCTA.size(), shape.size());
+  EXPECT_EQ(shapePerCTA, {64, 64});
+}
+
 TEST_F(JoinOpTest, JoinOpLayoutPropagation) {
   SmallVector<SmallVector<int64_t>> shapes = {{64, 128}, {256, 1024}};
   auto distributedEncodings = createDistributedEncodings(ctx);
