@@ -673,16 +673,16 @@ buildSchedule(scf::ForOp &forOp, int numStages, const LoadToInfoMap &loadToInfo,
 }
 } // namespace SingleDotSchedule
 
-// Builds a schedule for chained dots which tries to better interleave mfams
-// with alu ops which can be co-executed on GFX9. It works for loops which have
-// 2 dots where the result of the first is transformed and used by the second
-// dot. The dot ops will be scheduled with a distance of one and the ops in
-// between will be spit into 2 parts. The first part will be scheduled to the
-// same stage as the fist dot so it can interleave with the second dot. Whereas
-// the second part will be scheduled to the stage of the second dot so it can be
-// interleaved with the first dot.
-// Loads will be double buffered and placed in between the dot/compute clusters.
-// This pipeliner is meant to be used in combination with pingpong
+// Builds a schedule for loops containing chained dots. This schedule aims to
+// better interleave mfams with alu ops which can be co-executed on GFX9. It
+// works for loops which have 2 dots where the result of the first is
+// transformed and used by the second dot. The dot ops will be scheduled with a
+// distance of one and the ops in between will be spit into 2 parts. The first
+// part will be scheduled to the same stage as the fist dot so it can interleave
+// with the second dot. Whereas the second part will be scheduled to the stage
+// of the second dot so it can be interleaved with the first dot. Loads will be
+// double buffered and placed in between the dot/compute clusters. This
+// pipeliner is meant to be used in combination with pingpong
 namespace chainedDotSchedule {
 
 enum CLUSTERS {
@@ -736,6 +736,7 @@ LogicalResult checkPreconditions(scf::ForOp forOp, int numStages,
     return failure();
   }
 
+  // Reject loops with indirect loads
   // TODO support indirect loads
   if (llvm::any_of(loadToInfo,
                    [](auto it) { return it.second.distToUse != 0; })) {
