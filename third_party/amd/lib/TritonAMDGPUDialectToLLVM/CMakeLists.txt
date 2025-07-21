@@ -7,4 +7,11 @@ add_triton_library(TritonAMDGPUDialectToLLVM
 
     DEPENDS
     TritonAMDGPUIR
+
+    LINK_LIBS PUBLIC
+    TritonGPUToLLVM
+    TritonAMDGPUIR
+    LLVMCore
+    LLVMPasses
+    LLVMSupport
 )

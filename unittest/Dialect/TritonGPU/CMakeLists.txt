@@ -32,3 +32,15 @@ add_triton_ut(
     TritonGPUTransforms
     TritonNvidiaGPUTransforms
 )
+
+add_triton_ut(
+  NAME AMDInferLinearLayoutTest
+  SRCS AMDInferLinearLayoutTest.cpp
+  LIBS
+    TritonTools
+    LLVMSupport
+    MLIRSupport
+    TritonGPUToLLVM
+    TritonAMDGPUIR
+    TritonAMDGPUDialectToLLVM
+)
