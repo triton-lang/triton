@@ -10,11 +10,40 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
     // CHECK-COUNT-64: ld.param.b8
 
-    // The layout conversion is described by the permutation (r1 r2 l1 l0).
-    // This factors as (r1 l1)(l0 l1)(r1 r2). As there are 4 elements per
-    // register, the 'low' bits are r0 and r1, so we conjugate the permutation
-    // by (r1 r2) to get (r1 r2)(r2 l1)(l0 l1). Only (r2 l1)(l0 l1) matters for
-    // tracking the movement of the packed registers.
+    // Intra-warp layout conversions can be viewed as a permutation of register
+    // and lane basis vectors. This can be read off from the linear layouts:
+    //
+    // #mma:     register: [[0,1], [8,0], [0,8], [0,16], [0,32], [64,0]]
+    //               lane: [[0,2], [0,4], [1,0], [2,0], [4,0]]
+    //               warp: [[16,0], [32,0]]
+    //
+    // #dot_op:  register: [[0,1], [0,2], [8,0], [0,16], [0,32], [64,0]]
+    //               lane: [[0,4], [0,8], [1,0], [2,0], [4,0]]
+    //               warp: [[16,0], [32,0]]
+    //
+    // The layout conversion is described by the permutation (r1 r2 l1 l0),
+    // which factors as (r1 l1)(l0 l1)(r1 r2).
+    //
+    // Register basis vectors correspond to the bits of the indices of the 64
+    // separate registers which hold the original elements. Since we end up
+    // packing 4 elements per register, we end up with only 16 registers in
+    // total before shuffling. The `transferWithinWarp` implementation handles
+    // register packing by ensuring that elements are packed together only if
+    // under the layout conversion, they end up in the same destination lane.
+    // To do this, it rearranges the 64 registers so that it can pack 4
+    // consecutive elements at a time according to their new register index. 
+    //
+    // The transposition (r1 l1) above indicates that intially, elements with
+    // register indices whose r1 bit is on are to be moved to new lanes. We thus
+    // need to rearrange the registers. The algorithm chooses the next smallest
+    // register bit which is not used an a mixed transposition. In this case,
+    // that bit is r2. Algebrically, this corresponds to conjugating the
+    // permutation with (r1 r2). This produces (r1 r2)(r2 l1)(l0 l1). The new
+    // (r1 r2) at the end rearranges elements after unpacking, and only
+    // (r2 l1)(l0 l1) matters for tracking the movement of the packed registers.
+    // From the point of view of the packed registers, the symbol `r2` now
+    // corresponds to the 0th bit of a (packed) register's index.
+    //
     // The transposition (r2 l1) is a bit swap which is implemented in-place as:
     //  1. r2 ^= l1
     //  2. l1 ^= r2
