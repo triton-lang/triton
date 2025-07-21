@@ -200,7 +200,7 @@ SmallVector<Value> getSubViews(ArefValue arefVal, Value stage, Location loc,
 
     for (int i = 0; i < rank; ++i) {
       offsetsVal.push_back(rewriter.create<arith::ConstantIntOp>(
-          loc, 0, rewriter.getIntegerType(32)));
+          loc, rewriter.getIntegerType(32), 0));
     }
     SmallVector<int64_t> tensorShape(shape.begin() + 1, shape.end());
     auto memDescTypeNew = MemDescType::get(
