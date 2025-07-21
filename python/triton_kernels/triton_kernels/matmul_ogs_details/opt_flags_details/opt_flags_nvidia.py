@@ -2,6 +2,7 @@ import torch
 import triton
 from triton_kernels import target_info
 from triton_kernels.tensor import bitwidth, FP4
+from triton_kernels.numerics_details.mxfp_details._downcast_to_mxfp import MXFP_BLOCK_SIZE
 
 
 def compute_grid_size(routing_data, m, n, block_m, block_n):
@@ -97,9 +98,9 @@ def compute_num_stages(
         smem_capacity -= int((block_m + 4) * acc_block_n * acc_size)
         if precision_config.weight_scale is not None:
             # mx scales
-            stage_size += block_n * (block_k // 32)
+            stage_size += block_n * (block_k // int(MXFP_BLOCK_SIZE))
     elif has_native_mxfp:
         # mx scales
-        stage_size += block_n * (block_k // 32)
+        stage_size += block_n * (block_k // int(MXFP_BLOCK_SIZE))
     num_stages = min(4, smem_capacity // int(stage_size))
     return num_stages

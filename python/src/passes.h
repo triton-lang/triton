@@ -36,3 +36,8 @@
 #define ADD_PASS_OPTION_WRAPPER_4(name, builder, ty0, ty1, ty2, ty3)           \
   m.def(name, [](mlir::PassManager &pm, ty0 val0, ty1 val1, ty2 val2,          \
                  ty3 val3) { pm.addPass(builder({val0, val1, val2, val3})); })
+
+#define ADD_PASS_OPTION_WRAPPER_5(name, builder, ty0, ty1, ty2, ty3, ty4)      \
+  m.def(name,                                                                  \
+        [](mlir::PassManager &pm, ty0 val0, ty1 val1, ty2 val2, ty3 val3,      \
+           ty4 val4) { pm.addPass(builder({val0, val1, val2, val3, val4})); })

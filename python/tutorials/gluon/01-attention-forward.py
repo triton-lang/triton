@@ -568,7 +568,7 @@ def _attn_fwd_mma(config, chnls, descs, M, STAGE: gl.constexpr):
         s0_tmem, s0_bar, s0_producer = s0_producer.acquire()
         p0_tmem = _borrow_s_as_p(config, s0_tmem)
         tcgen05_mma(p0_tmem, v_smem, o0_tmem, use_acc=False, mbarriers=[o0_bar])
-        o_init = False
+        o1_init = False
 
         for _ in range(num_mmas - 1):
             k_smem, k_bar, kv_consumer = kv_consumer.acquire()
@@ -577,8 +577,8 @@ def _attn_fwd_mma(config, chnls, descs, M, STAGE: gl.constexpr):
             o1_tmem, o1_bar, o_producer = o_producer.acquire()
             s1_tmem, s1_bar, s1_producer = s1_producer.acquire()
             p1_tmem = _borrow_s_as_p(config, s1_tmem)
-            tcgen05_mma(p1_tmem, v_smem, o1_tmem, use_acc=o_init, mbarriers=[o1_bar, v_bar])
-            o_init = True
+            tcgen05_mma(p1_tmem, v_smem, o1_tmem, use_acc=o1_init, mbarriers=[o1_bar, v_bar])
+            o1_init = True
 
             tcgen05_mma(q1_smem, k_smem.permute((1, 0)), s1_tmem, use_acc=False, mbarriers=[s1_bar, k_bar])
 
@@ -586,8 +586,7 @@ def _attn_fwd_mma(config, chnls, descs, M, STAGE: gl.constexpr):
             o0_tmem, o0_bar, o_producer = o_producer.acquire()
             s0_tmem, s0_bar, s0_producer = s0_producer.acquire()
             p0_tmem = _borrow_s_as_p(config, s0_tmem)
-            tcgen05_mma(p0_tmem, v_smem, o0_tmem, use_acc=o_init, mbarriers=[o0_bar])
-            o_init = True
+            tcgen05_mma(p0_tmem, v_smem, o0_tmem, mbarriers=[o0_bar])
 
         tcgen05_commit(q0_bar)
         tcgen05_commit(q1_bar)
@@ -595,7 +594,7 @@ def _attn_fwd_mma(config, chnls, descs, M, STAGE: gl.constexpr):
         o1_tmem, o1_bar, o_producer = o_producer.acquire()
         s1_tmem, s1_bar, s1_producer = s1_producer.acquire()
         p1_tmem = _borrow_s_as_p(config, s1_tmem)
-        tcgen05_mma(p1_tmem, v_smem, o1_tmem, use_acc=o_init, mbarriers=[o1_bar, v_bar, s0_bar, s1_bar])
+        tcgen05_mma(p1_tmem, v_smem, o1_tmem, use_acc=o1_init, mbarriers=[o1_bar, v_bar, s0_bar, s1_bar])
 
 
 @gluon.jit

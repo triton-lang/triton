@@ -1996,6 +1996,13 @@ SwizzledSharedEncodingAttr AMDMfmaEncodingAttr::composeSharedLayoutForOperand(
     ArrayRef<unsigned> sharedOrder, unsigned vectorSize, unsigned elemBitWidth,
     bool needTrans) const {
   int kDimIndex = operandIdx == 0 ? 1 : 0;
+
+  // Disable swizzling for scales
+  if (operandIdx >= 2) {
+    return SwizzledSharedEncodingAttr::get(getContext(), 1, 1, 1, sharedOrder,
+                                           ctaLayout);
+  }
+
   if (needTrans)
     kDimIndex = 1 - kDimIndex;
 
