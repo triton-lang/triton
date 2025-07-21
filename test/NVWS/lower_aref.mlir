@@ -22,7 +22,7 @@ module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-w
     // CHECK-NEXT:     [[EMPTYSLICE:%.*]] = ttg.memdesc_subview [[EMPTY0]]
     // CHECK-NEXT:     ttng.init_barrier [[EMPTYSLICE]], 1
     // CHECK-NEXT:     [[FULLSLICE:%.*]] = ttg.memdesc_subview [[FULL0]]
-    // CHECK-NEXT:     ttng.init_barrier [[FULLSLICE]], 129
+    // CHECK-NEXT:     ttng.init_barrier [[FULLSLICE]], 2
     // CHECK-NEXT:   }
     %aref0 = nvws.aref.create %d, %e : !nvws.aref<[!ttg.memdesc<3x64x16xf16, #shared0, #tmem>, !ttg.memdesc<3x16x32xf16, #shared0, #smem>]>
 
@@ -55,17 +55,16 @@ module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-w
         // CHECK-NEXT: [[P0a:%.*]] = arith.xori [[P0]], [[C1]]
         // CHECK-NEXT: [[P0b:%.*]] = arith.select [[CMP]], [[P0a]], [[P0]]
         // CHECK-NEXT: "tma_load"([[BUFA]])
-        // CHECK-NEXT: "cp_async"([[BUFB]])
+        // CHECK-NEXT: "sts"([[BUFB]])
         "tma_load"(%1#0) : (!ttg.memdesc<64x16xf16, #shared0, #tmem>) -> ()
-        "cp_async"(%1#1) : (!ttg.memdesc<16x32xf16, #shared0, #smem>) -> ()
+        "sts"(%1#1) : (!ttg.memdesc<16x32xf16, #shared0, #smem>) -> ()
 
         // CHECK-NEXT: [[FULLMBAR:%.*]] = ttg.memdesc_subview [[FULL0]][[[S2]]]
-        // CHECK-NEXT: nvws.async_complete [[FULLMBAR]], async_op = <tma_load>
-        // CHECK-NEXT: nvws.async_complete [[FULLMBAR]], async_op = <cp_async>
+        // CHECK-NEXT: ttng.arrive_barrier [[FULLMBAR]], 1
         // CHECK-NEXT: [[S2a:%.*]] = arith.addi [[S2]], [[C1]]
         // CHECK-NEXT: [[CMP:%.*]] = arith.cmpi eq, [[S2a]], [[C3]]
         // CHECK-NEXT: [[S2b:%.*]] = arith.select [[CMP]], [[C0]], [[S2a]]
-        nvws.aref.put.exit %aref0[%c0_i32] [#nvws.async_op<tma_load>, #nvws.async_op<cp_async>] {aref_tag = "put0"} : !nvws.aref<[!ttg.memdesc<3x64x16xf16, #shared0, #tmem>, !ttg.memdesc<3x16x32xf16, #shared0, #smem>]>
+        nvws.aref.put.exit %aref0[%c0_i32] [#nvws.async_op<tma_load>, #nvws.async_op<none>] {aref_tag = "put0"} : !nvws.aref<[!ttg.memdesc<3x64x16xf16, #shared0, #tmem>, !ttg.memdesc<3x16x32xf16, #shared0, #smem>]>
 
         // CHECK-NEXT: [[SP1S3:%.*]]:3 = scf.if
         scf.if %cond {
@@ -105,12 +104,12 @@ module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-w
         // CHECK-NEXT: ttng.wait_barrier [[BAR]], [[IDX]]#1
         %1:2 = nvws.aref.put.enter %aref0[%c0_i32, %c0_i32] {aref_tag = "put1"} : !nvws.aref<[!ttg.memdesc<3x64x16xf16, #shared0, #tmem>, !ttg.memdesc<3x16x32xf16, #shared0, #smem>]> -> !ttg.memdesc<64x16xf16, #shared0, #tmem>, !ttg.memdesc<16x32xf16, #shared0, #smem>
         "tma_load"(%1#0) : (!ttg.memdesc<64x16xf16, #shared0, #tmem>) -> ()
-        "cp_async"(%1#1) : (!ttg.memdesc<16x32xf16, #shared0, #smem>) -> ()
-        //CHECK: cp_async
+        "sts"(%1#1) : (!ttg.memdesc<16x32xf16, #shared0, #smem>) -> ()
+        //CHECK: sts
 
         // CHECK: [[BAR:%.*]] = ttg.memdesc_subview {{.*}}[[[IDX]]#4]
-        // CHECK-NEXT: nvws.async_complete [[BAR]]
-        nvws.aref.put.exit %aref0[%c0_i32] [#nvws.async_op<tma_load>, #nvws.async_op<cp_async>] {aref_tag = "put1"} : !nvws.aref<[!ttg.memdesc<3x64x16xf16, #shared0, #tmem>, !ttg.memdesc<3x16x32xf16, #shared0, #smem>]>
+        // CHECK-NEXT: ttng.arrive_barrier [[BAR]]
+        nvws.aref.put.exit %aref0[%c0_i32] [#nvws.async_op<tma_load>, #nvws.async_op<none>] {aref_tag = "put1"} : !nvws.aref<[!ttg.memdesc<3x64x16xf16, #shared0, #tmem>, !ttg.memdesc<3x16x32xf16, #shared0, #smem>]>
       }
 
       // CHECK: [[BAR:%.*]] = ttg.memdesc_subview {{.*}}[[[IDX]]#2]
@@ -141,7 +140,7 @@ module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-w
         "tc5mma"(%2#0, %2#1) : (!ttg.memdesc<64x16xf16, #shared0, #tmem>, !ttg.memdesc<16x32xf16, #shared0, #smem>) -> ()
 
         // CHECK-NEXT: [[EMPTYMBAR:%.*]] = ttg.memdesc_subview [[EMPTY0]][[[S2]]]
-        // CHECK-NEXT: nvws.async_complete [[EMPTYMBAR]], async_op = <tc5mma>
+        // CHECK-NEXT: ttng.tc_gen5_commit [[EMPTYMBAR]]
         // CHECK-NEXT: arith.addi
         // CHECK-NEXT: arith.cmpi
         // CHECK-NEXT: arith.select
@@ -174,7 +173,7 @@ module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-w
         "tc5mma"(%2#0, %2#1) : (!ttg.memdesc<64x16xf16, #shared0, #tmem>, !ttg.memdesc<16x32xf16, #shared0, #smem>) -> ()
 
         // CHECK: [[BAR:%.*]] = ttg.memdesc_subview {{.*}}[[[IDX]]#4]
-        // CHECK-NEXT: nvws.async_complete  [[BAR]]
+        // CHECK-NEXT: ttng.tc_gen5_commit  [[BAR]]
         nvws.aref.get.exit %aref0[%c0_i32] [#nvws.async_op<tc5mma>] : !nvws.aref<[!ttg.memdesc<3x64x16xf16, #shared0, #tmem>, !ttg.memdesc<3x16x32xf16, #shared0, #smem>]>
       }
       // CHECK: } else {

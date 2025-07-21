@@ -160,22 +160,4 @@ void CreateTokenOp::build(::mlir::OpBuilder &builder,
   build(builder, state, resultType, num, loadType);
 }
 
-// -- AsyncCompleteOp --
-LogicalResult AsyncCompleteOp::verify() {
-  if (failed(nvidia_gpu::verifyBarrierType(*this, getAlloc().getType())))
-    return failure();
-  return success();
-}
-
-void AsyncCompleteOp::getEffects(
-    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
-        &effects) {
-  effects.emplace_back(MemoryEffects::Read::get(), &getAllocMutable(),
-                       mlir::triton::gpu::SharedMemory::get());
-  // Need a side effect to prevent compiler from reordering and removing
-  // the arrive operation.
-  effects.emplace_back(MemoryEffects::Write::get(),
-                       mlir::SideEffects::DefaultResource::get());
-}
-
 } // namespace mlir::triton::nvws

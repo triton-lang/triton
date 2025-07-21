@@ -307,11 +307,20 @@ LogicalResult insertArriveBarrier(Location loc, ArrayAttr asyncOps,
     auto asyncOpEnum = cast<AsyncOpAttr>(asyncOp).getValue();
     switch (asyncOpEnum) {
     case AsyncOp::NONE:
+    case AsyncOp::WGMMA:
       rewriter.create<nvidia_gpu::ArriveBarrierOp>(loc, mbar, 1);
       break;
-    default:
-      rewriter.create<nvws::AsyncCompleteOp>(loc, mbar, asyncOpEnum, Value());
+    case AsyncOp::TC5MMA:
+    case AsyncOp::TMEMCopy:
+      rewriter.create<nvidia_gpu::TCGen5CommitOp>(loc, mbar);
       break;
+
+    case AsyncOp::TMALoad:
+      // nothing to do, TMA load is handled by lowering putEnterOp
+      break;
+    case AsyncOp::CpAsync:
+    default:
+      llvm_unreachable("unknown async op");
     }
   }
 
