@@ -405,8 +405,11 @@ class CUDABackend(BaseBackend):
         ptx_version = f'{ptx_version//10}.{ptx_version%10}'
         ret = re.sub(r'\.version \d+\.\d+', f'.version {ptx_version}', ret, flags=re.MULTILINE)
         ret = re.sub(r'\.target sm_\d+', f'.target sm_{capability}', ret, flags=re.MULTILINE)
-        # Remove the debug flag that prevents ptxas from optimizing the code
-        ret = re.sub(r",\s*debug|debug,\s*", "", ret)
+        if not knobs.compilation.dump_ir_extract_di_local_variables:
+            # Remove the debug flag that prevents ptxas from optimizing the code
+            # Note: if this flag is removed, the source var name and type info will be lost when ptx was compiled into cubin
+            #           and we may not be able to see them in cuda-gdb
+            ret = re.sub(r",\s*debug|debug,\s*", "", ret)
         if knobs.nvidia.dump_nvptx:
             print("// -----// NVPTX Dump //----- //")
             print(ret)
