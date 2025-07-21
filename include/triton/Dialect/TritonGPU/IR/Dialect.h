@@ -227,9 +227,12 @@ SmallVector<int64_t> getShapePerCTA(ArrayRef<unsigned> CTASplitNum,
 SmallVector<int64_t> getShapePerCTA(Attribute layout, ArrayRef<int64_t> shape);
 SmallVector<int64_t> getShapePerCTA(Type type);
 
-// Returns the shape per CTA, which is "physically" allocated
+// Returns the shape per CTA, which is "physically" allocated.
 // Such shapes may be bigger than the logical one due to, for example, padding
 // in shared memory.
+// If shape has more dimensions than CTASplitNum, we assume only the last N
+// common dimensions are split, where N is the size of CTASplitNum. E.g. for
+// shape = [2, 4, 8] and CTASplitNum = [2, 2], the result is [2, 2, 4].
 SmallVector<int64_t> getAllocationShapePerCTA(Attribute layout,
                                               ArrayRef<int64_t> shape);
 SmallVector<int64_t> getAllocationShapePerCTA(Type type);

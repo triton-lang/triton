@@ -301,24 +301,8 @@ SmallVector<int64_t> getShapePerCTA(ArrayRef<unsigned> CTASplitNum,
 }
 
 SmallVector<int64_t> getShapePerCTA(Attribute layout, ArrayRef<int64_t> shape) {
-  if (mlir::isa<SharedEncodingTrait>(layout)) {
-    // Special logic for pipeline pass, where shape is 3D and CTALayout is 2D.
-    // The first dim of shape is numStages. This is a work around, otherwise
-    // too many places would have to be modified in pipeline pass. Maybe we
-    // need to refactor this logic in the future.
-    auto CTASplitNum = cast<LayoutEncodingTrait>(layout).getCTASplitNum();
-    if (shape.size() == CTASplitNum.size() + 1) {
-      auto res = getShapePerCTA(CTASplitNum, shape.drop_front());
-      res.insert(res.begin(), shape.front());
-      return res;
-    }
-  }
-  SmallVector<unsigned> splitNum = getCTASplitNum(layout);
-  if (auto tmem = dyn_cast<nvidia_gpu::TensorMemoryEncodingAttr>(layout)) {
-    if (shape.size() > splitNum.size()) {
-      splitNum.insert(splitNum.begin(), shape.size() - splitNum.size(), 1);
-    }
-  }
+  auto splitNum = getCTASplitNum(layout);
+  splitNum.insert(splitNum.begin(), shape.size() - splitNum.size(), 1);
   return getShapePerCTA(splitNum, shape);
 }
 
