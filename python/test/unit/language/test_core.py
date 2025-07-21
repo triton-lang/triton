@@ -307,7 +307,7 @@ def warps_per_cta(layout, shape):
 
 
 def is_layout_applicable(layout) -> bool:
-    if isinstance(layout, (BlockedLayout, SwizzledSharedLayout, PaddedSharedLayout, LinearLayout)):
+    if isinstance(layout, (BlockedLayout, SwizzledSharedLayout, LinearLayout)):
         return True
     elif isinstance(layout, SliceLayout):
         return is_layout_applicable(layout.parent)
@@ -320,7 +320,9 @@ def is_layout_applicable(layout) -> bool:
         return True
     elif is_hip():
         target_arch = triton.runtime.driver.active.get_current_target().arch
-        if "gfx11" in target_arch:
+        if isinstance(layout, PaddedSharedLayout):
+            return true
+        elif "gfx11" in target_arch:
             # RDNA 3
             return isinstance(layout, WmmaLayout)
         elif any(arch for arch in ["gfx8", "gfx9"] if arch in target_arch):
@@ -6205,6 +6207,8 @@ def test_convert2d(M, N, src_layout, interm_layout, dst_layout, dtype, device, t
         # skip even if scratch buffer equal to lds_size, because real scratch buffer is typically larger due to padding
         if scratch_shape[0] * scratch_shape[1] * int32_size >= lds_size:
             pytest.skip("Scratch buffer is too large")
+    if is_cuda() and isinstance(interm_layout, PaddedSharedLayout):
+        pytest.skip("PaddedSharedLayout is not supported on CUDA")
 
     layouts = f"""
     #src = {src_layout}
