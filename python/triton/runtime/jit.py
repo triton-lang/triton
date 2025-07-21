@@ -977,13 +977,13 @@ def get_jit_fn_file_line(fn):
     while not isinstance(base_fn, JITFunction):
         base_fn = base_fn.fn
     file_name = base_fn.fn.__code__.co_filename
-    lines, begin_line = inspect.getsourcelines(base_fn.fn)
+    begin_line = base_fn.starting_line_number
     # Match the following pattern:
     # @triton.autotune(...) <- foo.__code__.co_firstlineno
     # @triton.heuristics(...)
     # @triton.jit
     # def foo(...): <- this line is the first line
-    for idx, line in enumerate(lines):
+    for idx, line in enumerate(base_fn.raw_src):
         if line.strip().startswith("def "):
             begin_line += idx
             break
