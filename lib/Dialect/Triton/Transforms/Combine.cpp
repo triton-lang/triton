@@ -255,6 +255,12 @@ public:
     patterns.add<CombineDotAddIRevPattern>(context);
     patterns.add<CombineDotAddFRevPattern>(context);
     // %}
+    // DotScaled Add %{
+    patterns.add<CombineDotScaledAddIPattern>(context);
+    patterns.add<CombineDotScaledAddFPattern>(context);
+    patterns.add<CombineDotScaledAddIRevPattern>(context);
+    patterns.add<CombineDotScaledAddFRevPattern>(context);
+    // %}
     patterns.add<CombineSelectMaskedLoadPattern>(context);
     patterns.add<CombineAddPtrPattern>(context);
     patterns.add<CombineBroadcastMulReducePattern>(context);
