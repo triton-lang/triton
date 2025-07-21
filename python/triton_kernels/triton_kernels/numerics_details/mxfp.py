@@ -46,19 +46,20 @@ def downcast_to_mxfp(src_tensor: torch.Tensor, out_quant_type: torch.dtype, axis
     out_quant_tensor = src_tensor.new_empty(out_shape, dtype=out_quant_type)
     out_scale = src_tensor.new_empty(out_scale_shape, dtype=torch.uint8)
 
-    kernel_src_tensor = src_tensor.reshape(-1, src_tensor.shape[-1])
-    kernel_quant_tensor = out_quant_tensor.view(-1, out_quant_tensor.shape[-1])
-    kernel_scale = out_scale.view(-1, out_scale.shape[-1])
+    if src_tensor.numel() > 0:
+        kernel_src_tensor = src_tensor.reshape(-1, src_tensor.shape[-1])
+        kernel_quant_tensor = out_quant_tensor.view(-1, out_quant_tensor.shape[-1])
+        kernel_scale = out_scale.view(-1, out_scale.shape[-1])
 
-    BLOCK_OUT_DIM = 128
-    BLOCK_QUANT_DIM = MXFP_BLOCK_SIZE
-    grid_out = triton.cdiv(kernel_src_tensor.shape[0], BLOCK_OUT_DIM)
-    grid_quant = triton.cdiv(kernel_src_tensor.shape[1], BLOCK_QUANT_DIM)
+        BLOCK_OUT_DIM = 128
+        BLOCK_QUANT_DIM = MXFP_BLOCK_SIZE
+        grid_out = triton.cdiv(kernel_src_tensor.shape[0], BLOCK_OUT_DIM)
+        grid_quant = triton.cdiv(kernel_src_tensor.shape[1], BLOCK_QUANT_DIM)
 
-    _downcast_to_mxfp[(grid_out, grid_quant)](kernel_quant_tensor, *kernel_quant_tensor.stride(), kernel_scale,
-                                              *kernel_scale.stride(), kernel_src_tensor, *kernel_src_tensor.stride(),
-                                              *kernel_src_tensor.shape, BLOCK_OUT_DIM, BLOCK_QUANT_DIM,
-                                              DEQUANT_SCALE_ROUNDING_MODE.value, num_warps=8)
+        _downcast_to_mxfp[(grid_out, grid_quant)](kernel_quant_tensor, *kernel_quant_tensor.stride(), kernel_scale,
+                                                *kernel_scale.stride(), kernel_src_tensor, *kernel_src_tensor.stride(),
+                                                *kernel_src_tensor.shape, BLOCK_OUT_DIM, BLOCK_QUANT_DIM,
+                                                DEQUANT_SCALE_ROUNDING_MODE.value, num_warps=8)
 
     out_quant_tensor = out_quant_tensor.transpose(axis, src_tensor.ndim - 1)
     out_scale = out_scale.transpose(axis, src_tensor.ndim - 1)
