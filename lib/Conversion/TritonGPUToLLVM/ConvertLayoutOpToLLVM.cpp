@@ -291,7 +291,11 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     return success();
   }
 
-  static uint32_t next_in_subcube(uint32_t x, uint32_t fixedBits, uint32_t setBits = 0) {
+  // Finds the next integer after x which has 1-bits in the positions
+  // specified by the mask setBits and 0-bits in the positions specified
+  // by the mask (fixedBits & ~setBits).
+  static uint32_t next_in_subcube(uint32_t x, uint32_t fixedBits,
+                                  uint32_t setBits = 0) {
     return (((x | fixedBits) + 1) & (~fixedBits)) | setBits;
   }
 
@@ -426,9 +430,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     Value laneId = getLaneId(rewriter, loc);
     // Perform l_{pLaneInv(j)} ^= r_i and apply pLane.
     Value laneIdPerm;
-    if (pLaneIsTrivial) {
-      laneIdPerm = laneId;
-    } else {
+    if (!pLaneIsTrivial) {
       laneIdPerm = triton::gpu::matrixVectorProd(b, pLaneInv, laneId);
     }
 
@@ -443,7 +445,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       // Pack registers if possible:
       if (elemsPerVec > 1) {
         // Iterate over vectors in this family:
-        for (uint32_t vi = fi; vi < regDim; vi = next_in_subcube(vi, vector_mask, fi)) {
+        for (uint32_t vi = fi; vi < regDim;
+             vi = next_in_subcube(vi, vector_mask, fi)) {
           if (bitwidth < 8) {
             for (uint32_t i = 0; i < elemsPerVec; i++) {
               inVals[vi + i] = b.zext(i8_ty, inVals[vi + i]);
@@ -459,26 +462,31 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
         }
       }
 
-      auto applyToPairs = [&](int r, int l, auto&& fn) {
+      auto applyToPairs = [&](int r, int l, auto &&fn) {
         // CSE will eliminate these calls in all but the 0th family:
         Value lBitVal = b.and_(laneId, b.i32_val(1 << l));
         Value lBitOff = b.icmp_eq(lBitVal, b.i32_val(0));
-        for (uint32_t vi = fi; vi < regDim; vi = next_in_subcube(vi, vector_mask | (1 << r), fi)) {
+        for (uint32_t vi = fi; vi < regDim;
+             vi = next_in_subcube(vi, vector_mask | (1 << r), fi)) {
           uint32_t wi = vi + (1 << r);
           std::pair<Value, Value> vpair{inVals[vi], inVals[wi]};
           fn(vpair, l, lBitOff);
-          inVals[vi] = vpair.first; inVals[wi] = vpair.second;
+          inVals[vi] = vpair.first;
+          inVals[wi] = vpair.second;
         }
       };
 
-      auto shipPair = [&](std::pair<Value, Value> &vpair, int l, const Value &lBitOff) {
+      auto shipPair = [&](std::pair<Value, Value> &vpair, int l,
+                          const Value &lBitOff) {
         Value valToShip = b.select(lBitOff, vpair.second, vpair.first);
-        Value shippedVal = targetInfo.shuffleXor(rewriter, loc, valToShip, (1 << l));
+        Value shippedVal =
+            targetInfo.shuffleXor(rewriter, loc, valToShip, (1 << l));
         vpair.first = b.select(lBitOff, vpair.first, shippedVal);
         vpair.second = b.select(lBitOff, shippedVal, vpair.second);
       };
 
-      auto swapPair = [&](std::pair<Value, Value> &vpair, int l, const Value &lBitOff) {
+      auto swapPair = [&](std::pair<Value, Value> &vpair, int l,
+                          const Value &lBitOff) {
         Value v1 = vpair.first;
         Value v2 = vpair.second;
         vpair.first = b.select(lBitOff, v1, v2);
@@ -492,12 +500,40 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
         }
       } else {
         // Swap
+
+        // A single mixed transposition (r_i l_j) which swaps the i-th register
+        // index bit and the j-th lane index bit of an element applies a tiled 2x2
+        // block transpose with block size (1 << i) by (1 << j) to the data. This
+        // can be realized as:
+        //
+        //             [ A B ] selp [ A D ] shfl [ A D ] selp [ A C ]
+        //             [ C D ] ---> [ C B ] ---> [ B C ] ---> [ B D ].
+        //
+        // In linear-algebraic terms, this is the factorization over GF(2):
+        //
+        //   1. r_i ^= l_j (selp)                     selp    shfl    selp
+        //   2. l_j ^= r_i (shfl)        [ 0 1 ]     [ 1 1 ] [ 1 0 ] [ 1 1 ]
+        //   3. r_i ^= l_j (selp),       [ 1 0 ]  =  [ 0 1 ] [ 1 1 ] [ 0 1 ],
+        //
+        // where we pass in bits as column vectors [r_i, l_j].
+        //
+        // When the transpositions are all disjoint, we can group the three stages
+        // of each transposition together. The two combined `selp` stages each use
+        // `numRegs` selects per transposition, while the `shfl` stage only requires
+        // code emission when at least one of the `r_i` bits is on, resulting in
+        // `(1 - (1/2)^m) * numRegs` shuffles in total. If `pLane` is nontrivial,
+        // then we can conjugate its effects through the first two stages and fuse
+        // it with the second stage, resulting in `numRegs` shuffles instead.
+
+        // Stage 1 (selp)
         for (auto [r, l] : mixedTranspositions) {
           int l2 = llvm::Log2_32(pLInvBases[l][0]);
           applyToPairs(r, l2, swapPair);
         }
 
-        for (uint32_t vi = fi; vi < regDim; vi = next_in_subcube(vi, vector_mask, fi)) {
+        // Stage 2 (shfl)
+        for (uint32_t vi = fi; vi < regDim;
+             vi = next_in_subcube(vi, vector_mask, fi)) {
           uint32_t mask = 0;
           for (auto [r, l] : mixedTranspositions) {
             if ((vi >> r) & 1)
@@ -505,13 +541,16 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
           }
           if (pLaneIsTrivial) {
             if (mask != 0)
-              inVals[vi] = targetInfo.shuffleXor(rewriter, loc, inVals[vi], mask);
+              inVals[vi] =
+                  targetInfo.shuffleXor(rewriter, loc, inVals[vi], mask);
           } else {
             Value srcIdx = b.xor_(laneIdPerm, b.i32_val(mask));
-            inVals[vi] = targetInfo.shuffleIdx(rewriter, loc, inVals[vi], srcIdx);
+            inVals[vi] =
+                targetInfo.shuffleIdx(rewriter, loc, inVals[vi], srcIdx);
           }
         }
 
+        // Stage 3 (selp)
         for (auto [r, l] : mixedTranspositions) {
           applyToPairs(r, l, swapPair);
         }
@@ -520,7 +559,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       // Unpack registers if needed:
       if (elemsPerVec > 1) {
         // Iterate over vectors in this family:
-        for (uint32_t vi = fi; vi < regDim; vi = next_in_subcube(vi, vector_mask, fi)) {
+        for (uint32_t vi = fi; vi < regDim;
+             vi = next_in_subcube(vi, vector_mask, fi)) {
           Value v = inVals[vi];
           if (padTo32)
             v = b.trunc(packedIntTy, v);
