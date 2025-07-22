@@ -303,7 +303,7 @@ TMemRuntimeInfo getTMemRuntimeInfo(Operation *op, RankedTensorType tensorType,
 void calculateAddressAndEmitTmemMessage(
     Location loc, Value baseAddress, const TMemRuntimeInfo &info,
     const TMemMessageTraits &message, ConversionPatternRewriter &rewriter,
-    const std::function<void(Value, int, int, bool, int, bool)>
+    const std::function<void(Value, int, std::optional<int>, bool, int, bool)>
         &createMemoryOp) {
 
   TritonLLVMOpBuilder b(loc, rewriter);
@@ -366,7 +366,7 @@ void calculateAddressAndEmitTmemMessage(
             b.add(address, b.shl(rowOffset, b.i32_val(16)));
         warpGroupAddress = b.add(warpGroupAddress, startColumnId);
 
-        int secondHalfColOffset = 0;
+        std::optional<int> secondHalfColOffset;
         if (info.useStridedMessage) {
           // Offset to half way through the set of columns for this warpgroup.
           secondHalfColOffset = numColumns;
@@ -380,9 +380,9 @@ void calculateAddressAndEmitTmemMessage(
 }
 
 void createTensorMemoryStore(Location loc, Value address, int colOffset,
-                             SmallVector<Value> &srcs, int secondHalfOffset,
-                             Value pred, bool unpacked,
-                             const TMemAccessAtom &atom,
+                             SmallVector<Value> &srcs,
+                             std::optional<int> secondHalfOffset, Value pred,
+                             bool unpacked, const TMemAccessAtom &atom,
                              ConversionPatternRewriter &rewriter) {
   PTXBuilder ptxBuilder;
   std::string packedStr = unpacked ? ".unpack::16b" : "";
@@ -392,7 +392,7 @@ void createTensorMemoryStore(Location loc, Value address, int colOffset,
                        std::to_string(numRepeats) + packedStr;
   opcode += ".b32 [$1 + " + std::to_string(colOffset) + "], ";
   if (secondHalfOffset)
-    opcode += std::to_string(secondHalfOffset) + ", {";
+    opcode += std::to_string(*secondHalfOffset) + ", {";
   else
     opcode += "{";
 
@@ -508,8 +508,9 @@ static void lowerStoreToTensorMemory(Location loc, Operation *op, Value src,
   int regIdx = 0;
   calculateAddressAndEmitTmemMessage(
       loc, tmemBase, info, message, rewriter,
-      [&](Value startAddress, int colOffset, int secondHalfColOffset,
-          bool unpackedb16, int regsPerMsg, bool useStridedMessage) {
+      [&](Value startAddress, int colOffset,
+          std::optional<int> secondHalfColOffset, bool unpackedb16,
+          int regsPerMsg, bool useStridedMessage) {
         SmallVector<Value> srcValuesSlice(srcValues.begin() + regIdx,
                                           srcValues.begin() + regIdx +
                                               regsPerMsg);
@@ -563,9 +564,9 @@ struct TensorMemoryAllocOpConversion
 };
 
 Value createTensorMemoryLoad(Location loc, triton::nvidia_gpu::TMEMLoadOp op,
-                             Value address, int colOffset, int secondHalfOffset,
-                             bool unpacked, int numRegPerMessage,
-                             const TMemAccessAtom &atom,
+                             Value address, int colOffset,
+                             std::optional<int> secondHalfOffset, bool unpacked,
+                             int numRegPerMessage, const TMemAccessAtom &atom,
                              ConversionPatternRewriter &rewriter) {
   PTXBuilder ptxBuilder;
   // If the memory is unpacked we need to pack on the fly when loading.
@@ -586,7 +587,7 @@ Value createTensorMemoryLoad(Location loc, triton::nvidia_gpu::TMEMLoadOp op,
   opcode += "}, [$" + std::to_string(numRegPerMessage) + " + " +
             std::to_string(colOffset) + "]";
   if (secondHalfOffset)
-    opcode += ", " + std::to_string(secondHalfOffset);
+    opcode += ", " + std::to_string(*secondHalfOffset);
   opcode += ";";
   operands.push_back(ptxBuilder.newOperand(address, "r"));
   auto &ld = *ptxBuilder.create<PTXInstr>(opcode);
@@ -665,8 +666,9 @@ struct TensorMemoryLoadOpConversion
     SmallVector<Value> resultVals;
     calculateAddressAndEmitTmemMessage(
         loc, tmemBase, info, message, rewriter,
-        [&](Value startAddress, int colOffset, int secondHalfColOffset,
-            bool unpackedb16, int regsPerMessage, bool useStridedMessage) {
+        [&](Value startAddress, int colOffset,
+            std::optional<int> secondHalfColOffset, bool unpackedb16,
+            int regsPerMessage, bool useStridedMessage) {
           Value packedValues = createTensorMemoryLoad(
               loc, op, startAddress, colOffset, secondHalfColOffset,
               unpackedb16, regsPerMessage, message.atom, rewriter);

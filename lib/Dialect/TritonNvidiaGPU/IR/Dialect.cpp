@@ -116,11 +116,11 @@ Attribute getTmemLoadStoreLayout32x32b(unsigned M, unsigned N,
     unsigned numWarpGroups = numWarps / 4;
     if (numBlocks == 1) {
       // Split along the N dimension
-      sizePerThread = {1, N / (numWarpGroups * 2)};
+      sizePerThread = {1, ceil<unsigned>(N, numWarpGroups * 2)};
       threadsPerWarp = {16, 2};
       warpsPerCTA = {4, numWarpGroups};
     } else {
-      sizePerThread = {1, N / 2};
+      sizePerThread = {1, ceil<unsigned>(N, 2)};
       threadsPerWarp = {16, 2};
       warpsPerCTA = {0, 0};
       // Distribute at most as many warp groups as there is blocks
@@ -138,7 +138,7 @@ Attribute getTmemLoadStoreLayout32x32b(unsigned M, unsigned N,
       warpsPerCTA = {4 * numWarpGroups, 1};
     } else {
       // Split along N dimension
-      sizePerThread = {1, N / numWarpGroups};
+      sizePerThread = {1, ceil<unsigned>(N, numWarpGroups)};
       threadsPerWarp = {32, 1};
       warpsPerCTA = {4, numWarpGroups};
     }
