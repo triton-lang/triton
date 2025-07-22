@@ -42,6 +42,7 @@ public:
     rewriter.create<InitBarrierOp>(loc, barrierAlloc, 1);
     op.addCompletionBarrier(barrierAlloc,
                             rewriter.create<arith::ConstantIntOp>(loc, 1, 1));
+    op.setIsSync(false);
 
     rewriter.setInsertionPointAfter(op);
     Value phase = rewriter.create<arith::ConstantIntOp>(loc, 0, 32);

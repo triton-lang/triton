@@ -826,6 +826,7 @@ desyncTCGen5MMAOp(OpBuilderWithAsyncTaskIds &builder, ttng::TCGen5MMAOp mmaOp,
   auto pred = builder.createWithAsyncTaskIds<arith::ConstantIntOp>(
       mmaOp->getLoc(), true, 1);
   mmaOp.addCompletionBarrier(consumerBarrier, pred);
+  mmaOp.setIsSync(false);
 
   // Create a wait_barrier before the producer.
   builder.setInsertionPoint(headProducer);
