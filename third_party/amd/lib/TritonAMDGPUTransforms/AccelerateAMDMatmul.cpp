@@ -1211,7 +1211,7 @@ public:
     bool isPacked = isAPacked || isBPacked;
 
     unsigned kWidths[] = {isPacked ? (isAPacked ? kBase / 2 : kBase) : kBase,
-                          isPacked ? (isAPacked ? kBase : kBase / 2) : kBase};
+                          isPacked ? (isBPacked ? kBase / 2 : kBase) : kBase};
 
     // For A/B tensor, 32 consecutive elements along K dim share the same scale.
     // We'd like to keep the scale values together with the base values in the
@@ -1223,9 +1223,9 @@ public:
 
     // Always use transposed wmma layout. This enables larger vectorization
     // for global store instructions.
-    auto wmmaEnc = ttg::AMDWmmaEncodingAttr::get(
-        ctx, /*version=*/wmmaVersion,
-        /*isTransposed=*/wmmaVersion == 2, wmmaWarpsPerCTA, ctaLayout);
+    auto wmmaEnc = ttg::AMDWmmaEncodingAttr::get(ctx, /*version=*/wmmaVersion,
+                                                 /*isTransposed=*/true,
+                                                 wmmaWarpsPerCTA, ctaLayout);
 
     auto newRetType = RankedTensorType::get(
         oldRetType.getShape(), oldRetType.getElementType(), wmmaEnc);

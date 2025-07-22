@@ -331,25 +331,20 @@ public:
       // One mfma16 intrinsic processes a 16x16 A tensor slice. Similarly, we
       // need to tile the warp 2 times to cover 32 values. So for a thread, the
       // first 2 1x4 vectors shares the first scale value at row (tid % mDim).
-      std::array<Value, 4> scaleThreads = {offset, b.add(offset, b.i32_val(1)),
-                                           b.add(offset, b.i32_val(2)),
-                                           b.add(offset, b.i32_val(3))};
+      std::array<Value, 2> scaleThreads = {offset, b.add(offset, b.i32_val(1))};
 
       for (auto [i, scaleVal] : llvm::enumerate(scaleVals)) {
-        auto si = std::array<Value, 4>{
+        auto si = std::array<Value, 2>{
             targetInfo.shuffleIdx(rewriter, loc, scaleVal, scaleThreads[0]),
-            targetInfo.shuffleIdx(rewriter, loc, scaleVal, scaleThreads[1]),
-            targetInfo.shuffleIdx(rewriter, loc, scaleVal, scaleThreads[2]),
-            targetInfo.shuffleIdx(rewriter, loc, scaleVal, scaleThreads[3]),
-        };
+            targetInfo.shuffleIdx(rewriter, loc, scaleVal, scaleThreads[1])};
 
         for (int j = 0; j < 32; ++j) {
           int index = 32 * i + j;
-          xVals[index] = useFp16
-                             ? mxfpScaleFp16(rewriter, loc, xVals[index],
-                                             si[j / 8], op.getFastMath())
-                             : mxfpScaleBf16ViaF32(rewriter, loc, xVals[index],
-                                                   si[j / 8], op.getFastMath());
+          xVals[index] =
+              useFp16 ? mxfpScaleFp16(rewriter, loc, xVals[index], si[j / 16],
+                                      op.getFastMath())
+                      : mxfpScaleBf16ViaF32(rewriter, loc, xVals[index],
+                                            si[j / 16], op.getFastMath());
         }
       }
     }
