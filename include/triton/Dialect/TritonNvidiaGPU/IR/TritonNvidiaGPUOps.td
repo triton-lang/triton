@@ -460,6 +460,8 @@ def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [
     attr-dict `:` qualified(type($a)) `,` qualified(type($b)) `,`
     qualified(type($d)) (`,` qualified(type($barriers))^)?
   }];
+
+  let hasVerifier = 1;
 }
 
 def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [
@@ -525,6 +527,8 @@ def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [
     qualified(type($d)) `,` qualified(type($a_scale)) `,`
     qualified(type($b_scale)) (`,` qualified(type($barriers))^)?
   }];
+
+  let hasVerifier = 1;
 }
 
 def TTNG_TCGen5CommitOp : TTNG_Op<"tc_gen5_commit"> {

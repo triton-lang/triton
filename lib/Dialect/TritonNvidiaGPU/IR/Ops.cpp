@@ -243,6 +243,13 @@ static void printToken(OpAsmPrinter &p, Operation *op, Value dep, Type token) {
   p << ']';
 }
 
+LogicalResult TCGen5MMAOp::verify() {
+  if (getIsSync() && !getBarriers().empty()) {
+    return emitOpError("The op is synchronous but a barrier is present.");
+  }
+  return success();
+}
+
 void TCGen5MMAOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
@@ -303,6 +310,13 @@ void TCGen5MMAOp::build(OpBuilder &builder, OperationState &state, Type token,
 }
 
 // -- TCGen5MMAScaledOp --
+LogicalResult TCGen5MMAScaledOp::verify() {
+  if (getIsSync() && !getBarriers().empty()) {
+    return emitOpError("The op is synchronous but a barrier is present.");
+  }
+  return success();
+}
+
 void TCGen5MMAScaledOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
