@@ -45,12 +45,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK-LABEL: tt.func @chained_dots_with_ops_in_between
 
   // Ops between dots
-  // dot1 -> reduce -> addf %dot1, %reduce1 -> mulf -> reduce -> dot2
-  // We expect to split at the addf because it's operand (dot1) has 2 users
+  // dot1 -> reduce -> addf %dot1, %reduce1 -> add -> exp2 -> add -> dot2
+  // We expect to split after the reduce because the result is used twice
 
-  // CHECK-COUNT-2: ttg.local_load
   // CHECK: scf.for
-  // CHECK:   tt.dot
+
+  // CHECK: tt.dot
   // CHECK:   arith.addf
   // CHECK:   math.exp2
   // CHECK:   arith.addf
@@ -108,13 +108,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: tt.func @chained_dots_with_loop_carried_partial_result
 
-  // Ops between dots
-  // dot1 -> reduce -> addf %dot1, %reduce1 -> mulf -> reduce -> dot2
-  // We expect to split at the addf because it's operand (dot1) has 2 users
+  // Similar to the previous test but we take the max of the reduce over all iterations (loop carried) so expect a split after the maximum
 
-  // CHECK-COUNT-2: ttg.local_load
   // CHECK: scf.for
-  // CHECK:   tt.dot
+
+  // CHECK: tt.dot
   // CHECK:   arith.mulf
 
   // CHECK:   ttg.async_wait
