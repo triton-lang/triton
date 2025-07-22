@@ -502,9 +502,9 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
         // Swap
 
         // A single mixed transposition (r_i l_j) which swaps the i-th register
-        // index bit and the j-th lane index bit of an element applies a tiled 2x2
-        // block transpose with block size (1 << i) by (1 << j) to the data. This
-        // can be realized as:
+        // index bit and the j-th lane index bit of an element applies a tiled
+        // 2x2 block transpose with block size (1 << i) by (1 << j) to the data.
+        // This can be realized as:
         //
         //             [ A B ] selp [ A D ] shfl [ A D ] selp [ A C ]
         //             [ C D ] ---> [ C B ] ---> [ B C ] ---> [ B D ].
@@ -517,13 +517,14 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
         //
         // where we pass in bits as column vectors [r_i, l_j].
         //
-        // When the transpositions are all disjoint, we can group the three stages
-        // of each transposition together. The two combined `selp` stages each use
-        // `numRegs` selects per transposition, while the `shfl` stage only requires
-        // code emission when at least one of the `r_i` bits is on, resulting in
-        // `(1 - (1/2)^m) * numRegs` shuffles in total. If `pLane` is nontrivial,
-        // then we can conjugate its effects through the first two stages and fuse
-        // it with the second stage, resulting in `numRegs` shuffles instead.
+        // When the transpositions are all disjoint, we can group the three
+        // stages of each transposition together. The two combined `selp` stages
+        // each use `numRegs` selects per transposition, while the `shfl` stage
+        // only requires code emission when at least one of the `r_i` bits is
+        // on, resulting in `(1 - (1/2)^m) * numRegs` shuffles in total. If
+        // `pLane` is nontrivial, then we can conjugate its effects through the
+        // first two stages and fuse it with the second stage, resulting in
+        // `numRegs` shuffles instead.
 
         // Stage 1 (selp)
         for (auto [r, l] : mixedTranspositions) {
