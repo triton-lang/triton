@@ -31,12 +31,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     // register packing by ensuring that elements are packed together only if
     // under the layout conversion, they end up in the same destination lane.
     // To do this, it rearranges the 64 registers so that it can pack 4
-    // consecutive elements at a time according to their new register index. 
+    // consecutive elements at a time according to their new register index.
     //
     // The transposition (r1 l1) above indicates that intially, elements with
     // register indices whose r1 bit is on are to be moved to new lanes. We thus
-    // need to rearrange the registers. The algorithm chooses the next smallest
-    // register bit which is not used an a mixed transposition. In this case,
+    // need to rearrange the registers. The algorithm chooses the next register
+    // bit > 1 which is not used in a mixed transposition. In this case,
     // that bit is r2. Algebrically, this corresponds to conjugating the
     // permutation with (r1 r2). This produces (r1 r2)(r2 l1)(l0 l1). The new
     // (r1 r2) at the end rearranges elements after unpacking, and only
