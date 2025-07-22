@@ -148,94 +148,6 @@ public:
   }
 };
 
-// Combine back TMEM alloc and store. This is equivalent but gives us a more
-// canonical form to do further optimizations.
-class CombineTMEMStoreAndAlloc : public OpRewritePattern<TMEMTokenStoreOp> {
-public:
-  using OpRewritePattern::OpRewritePattern;
-
-  LogicalResult matchAndRewrite(TMEMTokenStoreOp store,
-                                PatternRewriter &rewriter) const override {
-    if (!matchPattern(store.getPred(), m_One()))
-      return failure();
-    auto alloc = store.getDep().getDefiningOp<TMEMTokenAllocOp>();
-    if (!alloc)
-      return failure();
-    if (alloc->getBlock() != store->getBlock())
-      return failure();
-    alloc.getSrcMutable().assign(store.getSrc());
-    rewriter.replaceOp(store, alloc.getToken());
-    return success();
-  }
-};
-
-// Hoists a tmem alloc outside an if op like this:
-// %0 = scf.if {
-//   %1, %token0 = tmem.alloc %init
-//   ...
-//   %2 = tmem.load %1, %token1
-//   scf.yield %2
-// } else {
-//   scf.yield %init
-// }
-// ->
-// %a, %token0 = tmem.alloc %init
-// %token2 = scf.if {
-//
-//   ...
-//   scf.yield %token1
-// } else {
-//   scf.yield %token0
-// }
-// %2 = tmem.load %a, %token2
-class HoistTMEMAllocOutOfIf : public OpRewritePattern<ttng::TMEMAllocOp> {
-public:
-  using OpRewritePattern::OpRewritePattern;
-
-  LogicalResult matchAndRewrite(ttng::TMEMAllocOp alloc,
-                                PatternRewriter &rewriter) const override {
-    if (!alloc.getToken())
-      return failure();
-    Value init = alloc.getSrc();
-    if (!init)
-      return failure();
-    auto ifOp = dyn_cast<scf::IfOp>(alloc->getParentOp());
-    if (!ifOp)
-      return failure();
-    auto thenOp = ifOp.thenBlock()->getTerminator();
-    auto elseOp = ifOp.elseBlock()->getTerminator();
-    SmallVector<int> yieldArgs;
-    for (auto [thenOperand, elseOperand] :
-         llvm::zip(thenOp->getOpOperands(), elseOp->getOpOperands())) {
-      auto load = thenOperand.get().getDefiningOp<TMEMTokenLoadOp>();
-      if (!load || load.getSrc() != alloc.getResult())
-        continue;
-      if (elseOperand.get() != init)
-        continue;
-      yieldArgs.push_back(thenOperand.getOperandNumber());
-    }
-    if (yieldArgs.empty())
-      return failure();
-    // Since init is used in the else terminator we know that it dominates the
-    // if op.
-    alloc->moveBefore(ifOp);
-    rewriter.setInsertionPointAfter(ifOp);
-    for (int argNo : yieldArgs) {
-      auto load =
-          cast<TMEMTokenLoadOp>(thenOp->getOperand(argNo).getDefiningOp());
-      auto newLoad = cast<TMEMTokenLoadOp>(rewriter.clone(*load));
-      rewriter.modifyOpInPlace(ifOp, [&] {
-        ifOp->getResult(argNo).replaceAllUsesWith(newLoad.getResult());
-        newLoad.getDepMutable().assign(ifOp->getResult(argNo));
-        thenOp->setOperand(argNo, load.getToken());
-        elseOp->setOperand(argNo, alloc.getToken());
-        ifOp->getResult(argNo).setType(newLoad.getToken().getType());
-      });
-    }
-    return success();
-  }
-};
-
 // Remove loop-carried tensor dependencies if they are fed immediately into a
 // TMEM store by pulling the store into the previous iteration.
 class RotateTMEMStoreInLoop : public OpRewritePattern<TMEMTokenStoreOp> {
@@ -500,29 +412,11 @@ struct HoistTMEMAlloc
     mlir::RewritePatternSet patterns(&getContext());
     patterns.add<RotateTMEMStoreInLoop, RotateTMEMLoadInLoop,
                  CombineTMEMLoadAndStore, CombineTMEMStoreAndSelect,
-                 SinkTMEMLoad, RemoveUnusedTMEMLoad, CombineTMEMStoreAndAlloc,
-                 HoistTMEMAllocOutOfIf>(&getContext());
+                 SinkTMEMLoad, RemoveUnusedTMEMLoad>(&getContext());
     scf::ForOp::getCanonicalizationPatterns(patterns, &getContext());
     if (failed(applyPatternsGreedily(getOperation(), std::move(patterns)))) {
       llvm_unreachable("Failed to hoist tmem_store");
     }
-
-    // TODO: currently some code assumes that a mutable tmem alloc doesn't have
-    // an initial value. As a workaround we break up the op in order to keep
-    // this form for the downstream passes. We should remove this once the
-    // downstread passes are fixed.
-    m.walk([&](ttng::TMEMAllocOp alloc) {
-      if (alloc.getType().getMutableMemory() && alloc.getSrc()) {
-        OpBuilder builder(alloc);
-        builder.setInsertionPointAfter(alloc);
-        auto store = builder.create<ttng::TMEMStoreOp>(
-            alloc.getLoc(), builder.getType<AsyncTokenType>(),
-            alloc.getResult(), alloc.getToken(), alloc.getSrc(),
-            builder.create<arith::ConstantIntOp>(alloc.getLoc(), 1, 1));
-        alloc.getToken().replaceAllUsesExcept(store.getToken(), store);
-        alloc.getSrcMutable().clear();
-      }
-    });
   }
 };
 
