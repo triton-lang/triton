@@ -36,8 +36,9 @@ def quantize(w, dtype, dev, **opt):
     else:
         assert dtype == "mx4", f"{dtype=}"
         w, w_scale = downcast_to_mxfp(w.to(torch.bfloat16), torch.uint8, axis=1)
-        w = convert_layout(wrap_torch_tensor(w, dtype=FP4), opt["value_layout"], **opt["value_layout_opts"])
-        w_scale = convert_layout(wrap_torch_tensor(w_scale), opt["scale_layout"], **opt["scale_layout_opts"])
+        if opt:
+            w = convert_layout(wrap_torch_tensor(w, dtype=FP4), opt["value_layout"], **opt["value_layout_opts"])
+            w_scale = convert_layout(wrap_torch_tensor(w_scale), opt["scale_layout"], **opt["scale_layout_opts"])
         return w, InFlexData(), w_scale
 
 
