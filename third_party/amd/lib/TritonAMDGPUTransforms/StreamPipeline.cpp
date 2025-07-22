@@ -929,7 +929,6 @@ buildSchedule(scf::ForOp &forOp, int numStages, const LoadToInfoMap &loadToInfo,
     return {};
   dumpSchedule("Coarse schedule load and dots only:");
 
-  // Convert the loads into shared memory allocations and loads from them.
   if (failed(scheduleOpsBetweenDots(forOp, dotOps, schedule, clusters))) {
     return {};
   }
