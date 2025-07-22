@@ -864,24 +864,6 @@ std::optional<LLVM::AtomicOrdering> getMemoryOrdering(MemSemantic memOrdering) {
   }
 }
 
-bool isSimpleSharedMemoryAccess(ArrayRef<int64_t> shape,
-                                ArrayRef<int64_t> allocShape,
-                                triton::gpu::SharedEncodingTrait sharedEnc) {
-  auto rank = shape.size();
-  auto paddedLayout =
-      dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(sharedEnc);
-  auto swizzledLayout =
-      dyn_cast<triton::gpu::SwizzledSharedEncodingAttr>(sharedEnc);
-  auto nvmmaLayout = dyn_cast<triton::gpu::NVMMASharedEncodingAttr>(sharedEnc);
-  bool noSwizzling = paddedLayout ||
-                     (swizzledLayout && swizzledLayout.getMaxPhase() == 1) ||
-                     (nvmmaLayout && nvmmaLayout.getSwizzlingByteWidth() == 0);
-  return /*no swizzling*/ noSwizzling ||
-         /*swizzling but same shape*/ shape == allocShape ||
-         /*swizzling and rank-reduced and rank >= 2*/
-         (shape == allocShape.take_back(rank) && rank >= 2);
-}
-
 llvm::MapVector<StringAttr, int32_t> getAllFreeVarMasks(MLIRContext *ctx) {
   // Mask where all elements are redundant
   auto kReg = str_attr("reg");
@@ -1589,14 +1571,7 @@ SmallVector<Value> transferWithinBlockImpl(ArrayRef<Value> inVals,
   // don't need to avoid duplicate writes.
   // Input dims: [reg, lane, warp]
   // Output dims: [offset, iteration]
-  bool isStMatrix = targetInfo.canUseStMatrix(
-      op.getSrc().getType(), scratchConfig.repShape,
-      scratchConfig.paddedRepShape, scratchConfig.order,
-      /*swizzleByteSize=*/0);
-  LinearLayout shmemStoreLayout =
-      isStMatrix ? triton::gpu::chooseStMatrixLayout(ctx, op.getSrc().getType(),
-                                                     /*swizzleByteSize=*/0)
-                 : srcLayout.invertAndCompose(sharedLayout);
+  LinearLayout shmemStoreLayout = srcLayout.invertAndCompose(sharedLayout);
 
   const int shmemAllocatedNumElems =
       getNumScratchElements(scratchConfig.paddedRepShape);
@@ -1694,8 +1669,7 @@ SmallVector<Value> transferWithinBlockImpl(ArrayRef<Value> inVals,
 
     // When using `stmatrix`, we can store `inVec` elements even if they are
     // not contiguous
-    auto inVec = isStMatrix ? shmemStoreLayout.getNumConsecutiveInOut()
-                            : scratchConfig.inVec;
+    auto inVec = scratchConfig.inVec;
     for (int j = 0; j < inVals.size() / iterations; j += inVec) {
       auto inRegSlice = inRegs[j];
       Value vecAddr = getVecAddr(shmemStoreLayout, storeBase, inRegSlice);
@@ -1703,12 +1677,8 @@ SmallVector<Value> transferWithinBlockImpl(ArrayRef<Value> inVals,
       for (int k = 0; k < inVec; k++)
         inValsVec.push_back(inVals[inRegSlice + k]);
       Value valsVec = packLLVector(loc, inValsVec, rewriter);
-      if (isStMatrix) {
-        targetInfo.storeMatrixShared(rewriter, loc, vecAddr, valsVec);
-      } else {
-        targetInfo.storeDShared(rewriter, loc, vecAddr, std::nullopt, valsVec,
-                                /*pred=*/b.true_val());
-      }
+      targetInfo.storeDShared(rewriter, loc, vecAddr, std::nullopt, valsVec,
+                              /*pred=*/b.true_val());
     }
 
     b.barrier();

@@ -34,13 +34,6 @@ public:
                     Operation *localLoadOp = nullptr) const override;
   bool canUseLDSTransLoad(int bitwidth) const;
 
-  bool canUseStMatrix(RankedTensorType tensorTy, ArrayRef<unsigned> repShape,
-                      ArrayRef<unsigned> paddedRepShape,
-                      ArrayRef<unsigned> order,
-                      int swizzleByteSize) const override;
-  void storeMatrixShared(RewriterBase &rewriter, Location loc, Value ptr,
-                         Value val) const override;
-
   Value shuffleXor(RewriterBase &rewriter, Location loc, Value val,
                    int i) const override;
   Value shuffleUp(RewriterBase &rewriter, Location loc, Value val,

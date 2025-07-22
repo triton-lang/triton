@@ -1,16 +1,10 @@
 #include "Analysis/AMDGPUAllocation.h"
 #include "triton/Analysis/Allocation.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
 namespace mlir::triton::AMD {
-
-constexpr int globalPtrBitWidth = 64;
-
-static unsigned getBitwidth(RankedTensorType ty) {
-  auto isPtr = isa<PointerType>(ty.getElementType());
-  return isPtr ? globalPtrBitWidth : std::max(ty.getElementTypeBitWidth(), 8u);
-}
 
 unsigned getConvertLayoutScratchInBytes(RankedTensorType srcTy,
                                         RankedTensorType dstTy,
