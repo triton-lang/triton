@@ -32,13 +32,13 @@ def test_link_extern_libs(use_libdevice, kernel):
         if event == "c_call" and arg is llvm.link_extern_libs:
             link_called = True
 
-    x = torch.ones((1,), device="cuda")
+    x = torch.ones((1, ), device="cuda")
     prior_callback = sys.getprofile()
     try:
         sys.setprofile(callback)
         with (compilation := triton.knobs.compilation).scope():
             compilation.always_compile = True
-            kernel[(1,)](x, SQRT=use_libdevice)
+            kernel[(1, )](x, SQRT=use_libdevice)
     finally:
         sys.setprofile(prior_callback)
 
