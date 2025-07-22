@@ -470,7 +470,7 @@ void mlir::triton::combineRedundantWaitOps(
     unsigned minWaitNumber = waitOp.getNum();
     Operation *next = waitOp->getNextNode();
     // Stop if we reach the end of the block or if there is another commit group
-    // or branchOp (forOp, ifOp, whileOp) in between the waits
+    // or a branching op (forOp, ifOp, whileOp) in between the waits
     while (next &&
            !isa<ttg::AsyncCommitGroupOp, RegionBranchOpInterface>(next)) {
       if (auto nextWait = dyn_cast<ttg::AsyncWaitOp>(next)) {
