@@ -37,7 +37,7 @@ from triton._internal_testing import (
     is_hip_cdna3,
     is_hip_cdna4,
     is_hip_gfx12,
-    get_lds_size,
+    get_hip_lds_size,
     is_xpu,
     get_arch,
     torch_float8_dtypes,
@@ -6200,7 +6200,7 @@ def test_convert2d(M, N, src_layout, interm_layout, dst_layout, dtype, device, t
             scratch_shape = compute_scratch_buffer_shape(src_layout, dst_layout, (M, N))
         except AssertionError:
             pytest.skip("Can't compute scratch buffer size")
-        lds_size = get_lds_size()
+        lds_size = get_hip_lds_size()
         # consider int32 dtype in scratch buffer size,
         # because it is the largest dtype used in convert_layout in this test
         int32_size = 4
