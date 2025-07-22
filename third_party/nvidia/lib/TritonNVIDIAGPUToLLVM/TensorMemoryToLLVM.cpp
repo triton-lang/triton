@@ -168,7 +168,7 @@ int getEffectiveRegs(bool unpackedb16, bool useStridedMessage, int numRegs) {
   if (useStridedMessage) {
     numRegs /= 2;
   }
-  return numRegs;
+  return std::max(1, numRegs);
 }
 
 // If the workload runtime requires fewer registers than the default message
@@ -308,8 +308,14 @@ void calculateAddressAndEmitTmemMessage(
 
   TritonLLVMOpBuilder b(loc, rewriter);
   Value warpId = rewriter.create<nvgpu::WarpIdOp>(loc);
-  Value warpIdInGroup = b.urem(warpId, b.i32_val(4));
-  Value warpGroupId = b.udiv(warpId, b.i32_val(4));
+  Value warpIdInGroup, warpGroupId;
+  if (info.numWarpGroups == 1) {
+    warpIdInGroup = warpId;
+    warpGroupId = b.i32_val(0);
+  } else {
+    warpIdInGroup = b.urem(warpId, b.i32_val(4));
+    warpGroupId = b.udiv(warpId, b.i32_val(4));
+  }
 
   // When split along M, blockM=128 and num_warps=8, and a strided message is
   // selected such that all 8 warps read a 16 rows of a block at a time.
@@ -358,7 +364,7 @@ void calculateAddressAndEmitTmemMessage(
 
     for (int rowStart = 0; rowStart < numRowPerWarp;
          rowStart += message.numRows) {
-      for (int colStart = 0; colStart < numColumns;
+      for (int colStart = 0; colStart < std::max(1, numColumns);
            colStart += message.numCols) {
 
         Value rowOffset = b.add(blockRowId, b.i32_val(rowStart));
@@ -945,11 +951,6 @@ struct TMEMSubSliceOpConversion
     offsetCol = op.getN();
 
     if (blockM == 64) {
-      // With a 16x32bx2 layout, each row of TMEM contains 2 columns of the
-      // tensor, which cannot be further subdivided at the moment.
-      if (offsetCol % 2 != 0) {
-        return failure();
-      }
       // The layout interleaves blocks along the N dimension with the rows, such
       // that the odd numbered blocks are in lanes [16, 32), below the previous
       // even-numbered block.
