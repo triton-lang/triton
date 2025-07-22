@@ -216,12 +216,9 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = true, elementBitWidth = 8}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 // CHECK-LABEL: cvt_mma_to_dot_fp8
-// CHECK: nvvm.prmt
-// CHECK: nvvm.prmt
-// CHECK: nvvm.shfl.sync
-// CHECK: nvvm.shfl.sync
-// CHECK: nvvm.prmt
-// CHECK: nvvm.prmt
+// CHECK-COUNT-16: llvm.select
+// CHECK-COUNT-16: nvvm.shfl.sync
+// CHECK-COUNT-16: llvm.select
   tt.func @cvt_mma_to_dot_fp8(%a: tensor<128x64xf8E5M2, #mma>) {
     %opA = ttg.convert_layout %a : tensor<128x64xf8E5M2, #mma> -> tensor<128x64xf8E5M2, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>>
     tt.return

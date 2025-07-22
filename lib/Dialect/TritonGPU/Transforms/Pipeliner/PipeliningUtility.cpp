@@ -469,7 +469,10 @@ void mlir::triton::combineRedundantWaitOps(
     SmallVector<Value> depTokens = waitOp.getOperands();
     unsigned minWaitNumber = waitOp.getNum();
     Operation *next = waitOp->getNextNode();
-    while (next && !isa<ttg::AsyncCommitGroupOp>(next)) {
+    // Stop if we reach the end of the block or if there is another commit group
+    // or a branching op (forOp, ifOp, whileOp) in between the waits
+    while (next &&
+           !isa<ttg::AsyncCommitGroupOp, RegionBranchOpInterface>(next)) {
       if (auto nextWait = dyn_cast<ttg::AsyncWaitOp>(next)) {
         waitGroup.push_back(nextWait);
         minWaitNumber = std::min(minWaitNumber, nextWait.getNum());
