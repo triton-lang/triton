@@ -32,6 +32,7 @@ public:
 
   bool supportLdMatrix() const override { return computeCapability >= 75; }
   bool supportStMatrix() const override { return computeCapability >= 90; }
+  bool supportLdStMatrixB8() const override { return computeCapability >= 100; }
 
   void storeMatrixShared(RewriterBase &rewriter, Location loc, Value ptr,
                          Value val) const override;

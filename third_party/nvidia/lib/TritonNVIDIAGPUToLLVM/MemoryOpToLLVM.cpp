@@ -52,8 +52,15 @@ LogicalResult lowerLdStMatrix(
   // so we cannot split an fp32
   // We could support bitwidth == 8, but it'd be a rather weird layout
   // so we don't do that for now
-  if ((!transpose && bitwidth > 32) || (transpose && bitwidth != 16))
+
+  auto supported =
+      (!transpose && bitwidth <= 32) ||
+      (transpose &&
+       (bitwidth == 16 ||
+        (bitwidth == 8 && targetInfo.supportLdStMatrixB8() && !isStore)));
+  if (!supported)
     return failure();
+
   // Inter block stmatrix is not supported
   if (cvt.hasInDim(kBlock))
     return failure();
@@ -68,10 +75,16 @@ LogicalResult lowerLdStMatrix(
     srcVals = removeBroadcast.apply(srcVals);
   }
 
+  // We must have at least 32 / bitwidth elements
+  if (cvt.getInDimSize(kReg) < 32 / bitwidth) {
+    return failure();
+  }
+
   std::optional<ColumnAction> maybePermutation;
-  LinearLayout tile = LinearLayout::identity1D(32 / bitwidth, kReg, kOffset) *
-                      LinearLayout::identity1D(4, kLane, kOffset);
+  LinearLayout tile;
   if (!transpose) {
+    tile = LinearLayout::identity1D(32 / bitwidth, kReg, kOffset) *
+           LinearLayout::identity1D(4, kLane, kOffset);
     // Find if there is a register permutation that allows us to divideLeft
     // We need to pass the map from regs to offsets, as is cvt
     maybePermutation = regPermForDivide(cvt, tile, /*left=*/true);
@@ -111,15 +124,24 @@ LogicalResult lowerLdStMatrix(
       if (laneBases[i + 2][0] != (1 << i))
         return failure();
     }
-    // ... and no other basis should depend on 1, 2, 4
+    // In b8 (m16n16) mode, the first basis of the register should be 8
+    // TODO: We could check if the shmem 8 maps to a register and permute
+    // in the future
+    if (bitwidth == 8) {
+      const auto &regBases = cvt.getBases().find(kReg)->second;
+      if (regBases[0][0] != 8)
+        return failure();
+    }
+    // ... and no other basis should depend on 1, 2, 4 (or 8 in b8 mode)
     // Note that this gives us the usual alignment condition, but we have
     // translated it to checking that the matrix to the left of A is all zeros
+    auto mask = llvm::Log2_32(128 / bitwidth) - 1;
     for (auto dim : cvt.getInDimNames()) {
       const auto &bases = cvt.getBases().find(dim)->second;
       for (auto [i, basis] : llvm::enumerate(bases)) {
-        if (dim == kLane && i >= 2)
+        if (dim == kLane && i >= 2 || (bitwidth == 8 && dim == kReg && i == 0))
           continue;
-        if (basis[0] & 0b111)
+        if (basis[0] & mask)
           return failure();
       }
     }
@@ -132,19 +154,10 @@ LogicalResult lowerLdStMatrix(
   // If we are lowering a subslice, the subslice offsets shall not touch the
   // contiguous part of the tile
   if (auto mask = smemObj.getMaskSpanOffsets(memDescType)) {
-    for (const auto &bases : llvm::make_second_range(tile.getBases())) {
-      for (auto basis : bases) {
-        assert(basis.size() == 1 && "Expecting just kOffset");
-        if (basis[0] & mask) {
-          return failure();
-        }
-      }
+    auto contigTileMask = llvm::Log2_32(128 / bitwidth) - 1;
+    if (mask & contigTileMask) {
+      return failure();
     }
-  }
-
-  // We must have at least 2 register elements to use stmatrix.trans
-  if (transpose && reps.getInDimSizeLog2(kReg) < llvm::Log2_32(32 / bitwidth)) {
-    return failure();
   }
 
   // Choose up to 4 packs of 32-bit elements indexed by the next (at most) two
@@ -152,6 +165,11 @@ LogicalResult lowerLdStMatrix(
   // for vectorisation so we substract them
   auto vec = std::min<int32_t>(2, reps.getInDimSizeLog2(kReg) -
                                       llvm::Log2_32(32 / bitwidth));
+
+  // b8 just supports m16n16 mode which effectively implies vec == 1
+  if (bitwidth == 8 && vec == 0) {
+    return failure();
+  }
 
   // Map from kReg, kLane, kWarp to beginning of each tile
   assert(reps.getOutDimSize(kOffset) == cvt.getOutDimSize(kOffset));
@@ -226,12 +244,13 @@ LogicalResult lowerLdStMatrix(
                        ? i32_ty
                        : static_cast<Type>(LLVM::LLVMStructType::getLiteral(
                              ctx, SmallVector<Type>(nVecs, i32_ty)));
+      auto shape = bitwidth == 8 ? triton::nvgpu::LoadMatrixShape::m16n16
+                                 : triton::nvgpu::LoadMatrixShape::m8n8;
       auto res =
           rewriter
-              .create<triton::nvgpu::LoadMatrixOp>(
-                  loc, matTy, vecAddr, triton::nvgpu::LoadMatrixShape::m8n8,
-                  /*bitWidth=*/16,
-                  /*needTrans=*/transpose)
+              .create<triton::nvgpu::LoadMatrixOp>(loc, matTy, vecAddr, shape,
+                                                   /*bitWidth=*/bitwidth,
+                                                   /*needTrans=*/transpose)
               .getResult();
       // Extract result into srcVals
       for (int j = 0; j < nVecs; j++) {
