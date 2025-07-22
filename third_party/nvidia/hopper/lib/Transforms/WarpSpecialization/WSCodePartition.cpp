@@ -851,7 +851,7 @@ desyncTCGen5MMAOp(OpBuilderWithAsyncTaskIds &builder, ttng::TCGen5MMAOp mmaOp,
                   Value barrierAlloc, Value bufferIdx, Value inPhase,
                   unsigned numBuffers, Operation *headProducer,
                   DenseSet<Operation *> &regionsWithChannels,
-                  mlir::DominanceInfo &dom) {
+                  mlir::DominanceInfo &dom, ReuseConfig *config) {
   // Attach the barrier as an operand of the mma op.
   builder.setInsertionPoint(mmaOp);
   builder.setAsyncTaskIdsFromOp(mmaOp);
@@ -1161,9 +1161,10 @@ void insertAsyncComm(
         auto iter = commChannel.consumerBarriers.find(consumerTaskId);
         Value consumerBarrier = iter->second;
         // Use consumerBarrier as gen5 inline barrier.
-        auto tmemWaitBarrier = desyncTCGen5MMAOp(
-            builder, mmaOp, consumerBarrier, bufferIdx, phase,
-            masterChannel->numBuffers, headProducer, regionsWithChannels, dom);
+        auto tmemWaitBarrier =
+            desyncTCGen5MMAOp(builder, mmaOp, consumerBarrier, bufferIdx, phase,
+                              masterChannel->numBuffers, headProducer,
+                              regionsWithChannels, dom, config);
         tmemWaitBarriers[mmaOp] = tmemWaitBarrier;
       }
     }
