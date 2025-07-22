@@ -292,34 +292,22 @@ SmallVector<unsigned> getCTAOrder(Attribute layout) {
 SmallVector<int64_t> getShapePerCTA(ArrayRef<unsigned> CTASplitNum,
                                     ArrayRef<int64_t> shape) {
   unsigned rank = shape.size();
+  auto splitNum = llvm::to_vector(CTASplitNum);
+  if (splitNum.size() <= rank) { // pipelining
+    splitNum.insert(splitNum.begin(), rank - splitNum.size(), 1);
+  } else { // memory slicing
+    splitNum =
+        llvm::to_vector(llvm::drop_begin(splitNum, splitNum.size() - rank));
+  }
   SmallVector<int64_t> shapePerCTA(rank);
   for (unsigned i = 0; i < rank; ++i) {
-    unsigned splitNum = std::min<unsigned>(shape[i], CTASplitNum[i]);
-    shapePerCTA[i] = shape[i] / splitNum;
+    shapePerCTA[i] = shape[i] / std::min<unsigned>(shape[i], splitNum[i]);
   }
   return shapePerCTA;
 }
 
 SmallVector<int64_t> getShapePerCTA(Attribute layout, ArrayRef<int64_t> shape) {
-  if (mlir::isa<SharedEncodingTrait>(layout)) {
-    // Special logic for pipeline pass, where shape is 3D and CTALayout is 2D.
-    // The first dim of shape is numStages. This is a work around, otherwise
-    // too many places would have to be modified in pipeline pass. Maybe we
-    // need to refactor this logic in the future.
-    auto CTASplitNum = cast<LayoutEncodingTrait>(layout).getCTASplitNum();
-    if (shape.size() == CTASplitNum.size() + 1) {
-      auto res = getShapePerCTA(CTASplitNum, shape.drop_front());
-      res.insert(res.begin(), shape.front());
-      return res;
-    }
-  }
-  SmallVector<unsigned> splitNum = getCTASplitNum(layout);
-  if (auto tmem = dyn_cast<nvidia_gpu::TensorMemoryEncodingAttr>(layout)) {
-    if (shape.size() > splitNum.size()) {
-      splitNum.insert(splitNum.begin(), shape.size() - splitNum.size(), 1);
-    }
-  }
-  return getShapePerCTA(splitNum, shape);
+  return getShapePerCTA(getCTASplitNum(layout), shape);
 }
 
 SmallVector<int64_t> getAllocationShapePerCTA(Attribute layout,
@@ -1783,6 +1771,9 @@ int64_t PaddedSharedEncodingAttr::getPaddedSize(ArrayRef<int64_t> shape) const {
        llvm::zip_equal(getIntervals(), getPaddings())) {
     paddingSize += (unpaddedSize >> llvm::Log2_32(interval))
                    << llvm::Log2_32(padding);
+    // There is no need for padding after the last element
+    if (unpaddedSize % interval == 0)
+      paddingSize -= padding;
   }
   return unpaddedSize + paddingSize;
 }
@@ -1998,6 +1989,13 @@ SwizzledSharedEncodingAttr AMDMfmaEncodingAttr::composeSharedLayoutForOperand(
     ArrayRef<unsigned> sharedOrder, unsigned vectorSize, unsigned elemBitWidth,
     bool needTrans) const {
   int kDimIndex = operandIdx == 0 ? 1 : 0;
+
+  // Disable swizzling for scales
+  if (operandIdx >= 2) {
+    return SwizzledSharedEncodingAttr::get(getContext(), 1, 1, 1, sharedOrder,
+                                           ctaLayout);
+  }
+
   if (needTrans)
     kDimIndex = 1 - kDimIndex;
 

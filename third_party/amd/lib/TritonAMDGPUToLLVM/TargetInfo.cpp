@@ -119,14 +119,16 @@ void TargetInfo::storeMatrixShared(RewriterBase &rewriter, Location loc,
 
 Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
                               std::optional<Value> ctaId, Type elemTy,
-                              Value pred) const {
+                              Value pred, Operation *localLoadOp) const {
   if (ctaId.has_value()) {
     llvm::report_fatal_error(
         "AMDGPU does not support cross-CTA shared memory transfers");
   }
   Value falseVal = rewriter.create<LLVM::ConstantOp>(
       loc, elemTy, rewriter.getZeroAttr(elemTy));
-  return mlir::LLVM::AMD::llLoad(rewriter, loc, ptr, elemTy, pred, falseVal);
+  bool addAliasGroup = localLoadOp && isSyncedViaAsyncWait(localLoadOp);
+  return mlir::LLVM::AMD::llLoad(rewriter, loc, ptr, elemTy, pred, falseVal,
+                                 triton::CacheModifier::NONE, addAliasGroup);
 }
 
 Value TargetInfo::shuffleXor(RewriterBase &rewriter, Location loc, Value val,

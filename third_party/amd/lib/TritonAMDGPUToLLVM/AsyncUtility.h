@@ -12,7 +12,7 @@ namespace mlir::triton::AMD {
 void annotateLocalLoadsSyncedViaAsyncWait(ModuleOp mod);
 
 // Getter for the annotation applied by annotateLocalLoadsSyncedViaAsyncWait
-bool isSyncedViaAsyncWait(triton::gpu::LocalLoadOp localLoadOp);
+bool isSyncedViaAsyncWait(Operation *localLoadOp);
 
 // LLVM is unable to deduce dependencies across warps and loop iterations for
 // AsyncCopy and LocalLoad and will emit conservative wait counts. In triton the
