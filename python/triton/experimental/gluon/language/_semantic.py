@@ -156,10 +156,6 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         handle = self.builder.create_splat(ret_ty.to_ir(self.builder), value.handle)
         return ttgl.tensor(handle, ret_ty)
 
-    def unsplat(self, value, shape, layout):
-        handle = self.builder.create_unsplat(value.handle)
-        return ttgl.tensor(handle, value.dtype)
-
     def full(self, shape, value, dtype, layout):
         scalar = self.make_scalar(value, dtype)
         return self.splat(scalar, shape, layout)
