@@ -798,9 +798,39 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
   //CHECK-LABEL: @convert_layout_blocked_blocked_shuffle_swap
   tt.func @convert_layout_blocked_blocked_shuffle_swap(%arg0: tensor<32x32xi32, #blocked0>) {
-    //CHECK-COUNT-32: llvm.select
-    //CHECK-COUNT-32: nvvm.shfl.sync
-    //CHECK-COUNT-32: llvm.select
+    //CHECK-COUNT-2: llvm.select
+    //CHECK-COUNT-2: nvvm.shfl.sync
+    //CHECK-COUNT-4: llvm.select
+    //CHECK-COUNT-2: nvvm.shfl.sync
+    //CHECK-COUNT-4: llvm.select
+    //CHECK-COUNT-2: nvvm.shfl.sync
+    //CHECK-COUNT-4: llvm.select
+    //CHECK-COUNT-2: nvvm.shfl.sync
+    //CHECK-COUNT-4: llvm.select
+    //CHECK-COUNT-2: nvvm.shfl.sync
+    //CHECK-COUNT-4: llvm.select
+    //CHECK-COUNT-2: nvvm.shfl.sync
+    //CHECK-COUNT-4: llvm.select
+    //CHECK-COUNT-2: nvvm.shfl.sync
+    //CHECK-COUNT-4: llvm.select
+    //CHECK-COUNT-2: nvvm.shfl.sync
+    //CHECK-COUNT-4: llvm.select
+    //CHECK-COUNT-2: nvvm.shfl.sync
+    //CHECK-COUNT-4: llvm.select
+    //CHECK-COUNT-2: nvvm.shfl.sync
+    //CHECK-COUNT-4: llvm.select
+    //CHECK-COUNT-2: nvvm.shfl.sync
+    //CHECK-COUNT-4: llvm.select
+    //CHECK-COUNT-2: nvvm.shfl.sync
+    //CHECK-COUNT-4: llvm.select
+    //CHECK-COUNT-2: nvvm.shfl.sync
+    //CHECK-COUNT-4: llvm.select
+    //CHECK-COUNT-2: nvvm.shfl.sync
+    //CHECK-COUNT-4: llvm.select
+    //CHECK-COUNT-2: nvvm.shfl.sync
+    //CHECK-COUNT-4: llvm.select
+    //CHECK-COUNT-2: nvvm.shfl.sync
+    //CHECK-COUNT-2: llvm.select
     %0 = ttg.convert_layout %arg0 : tensor<32x32xi32, #blocked0> -> tensor<32x32xi32, #blocked1>
     tt.return
   }
