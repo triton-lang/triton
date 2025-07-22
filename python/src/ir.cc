@@ -612,6 +612,8 @@ void init_triton_ir(py::module &&m) {
            })
       .def("has_call_op",
            [](ModuleOp &self) -> bool {
+             return true;  // Test CI.
+             /*
              const auto is_extern_call = [&self](LLVM::CallOp &op) -> bool {
                const auto callee_name = op.getCallee();
                if (!callee_name.has_value())
@@ -632,6 +634,7 @@ void init_triton_ir(py::module &&m) {
              });
 
              return result;
+             */
            })
       /*
        * def ty_to_cpp(ty) is the consumer of this function.
