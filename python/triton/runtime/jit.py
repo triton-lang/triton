@@ -632,7 +632,7 @@ class JITFunction(KernelInterface[T]):
         self.signature = inspect.signature(fn)
         self.do_not_specialize = do_not_specialize
         self.do_not_specialize_on_alignment = do_not_specialize_on_alignment
-        self.starting_line_number = inspect.getsourcelines(fn)[1]
+        self.raw_src, self.starting_line_number = inspect.getsourcelines(fn)
         self._repr = repr
         self._fn_name = get_full_name(fn)
         self.launch_metadata = launch_metadata
@@ -644,7 +644,7 @@ class JITFunction(KernelInterface[T]):
             self.params.append(KernelParam(i, param, dns, dns_oa))
 
         # function source code (without decorators)
-        src = textwrap.dedent(inspect.getsource(fn))
+        src = textwrap.dedent("".join(self.raw_src))
         src = src[re.search(r"^def\s+\w+\s*\(", src, re.MULTILINE).start():]
         self._unsafe_update_src(src)
         # cache of just-in-time compiled kernels
@@ -977,13 +977,13 @@ def get_jit_fn_file_line(fn):
     while not isinstance(base_fn, JITFunction):
         base_fn = base_fn.fn
     file_name = base_fn.fn.__code__.co_filename
-    lines, begin_line = inspect.getsourcelines(base_fn.fn)
+    begin_line = base_fn.starting_line_number
     # Match the following pattern:
     # @triton.autotune(...) <- foo.__code__.co_firstlineno
     # @triton.heuristics(...)
     # @triton.jit
     # def foo(...): <- this line is the first line
-    for idx, line in enumerate(lines):
+    for idx, line in enumerate(base_fn.raw_src):
         if line.strip().startswith("def "):
             begin_line += idx
             break
