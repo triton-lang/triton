@@ -1497,13 +1497,15 @@ class tensor_descriptor(tensor_descriptor_base):
     """A descriptor representing a tensor in global memory.
     """
 
-    def __init__(self, handle, shape: List[tensor], strides: List[tensor], block_type: block_type):
+    def __init__(self, handle, shape: List[tensor], strides: List[tensor], block_type: block_type,
+                 padding: str = "nan"):
         """Not called by user code."""
         # IR handle
         super().__init__(handle, block_type)
         # Global shape
         self.shape = tuple(shape)
         self.strides = tuple(strides)
+        self.padding = padding
         self.type = tensor_descriptor_type(
             block_type,
             shape_type=self.shape.type,
@@ -2247,6 +2249,7 @@ def make_tensor_descriptor(
     shape: List[tensor],
     strides: List[tensor],
     block_shape: List[constexpr],
+    padding_option="",
     _semantic=None,
 ) -> tensor_descriptor:
     """Make a tensor descriptor object
@@ -2296,7 +2299,9 @@ def make_tensor_descriptor(
         inplace_abs[grid](x, M, N, M_BLOCK, N_BLOCK)
 
     """
-    return _semantic.make_tensor_descriptor(base, shape, strides, block_shape)
+
+    padding_option = _unwrap_if_constexpr(padding_option)
+    return _semantic.make_tensor_descriptor(base, shape, strides, block_shape, padding_option)
 
 
 # -----------------------
