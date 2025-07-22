@@ -610,11 +610,25 @@ void init_triton_ir(py::module &&m) {
            [](ModuleOp &self, std::string &funcName) -> FuncOp {
              return self.lookupSymbol<FuncOp>(funcName);
            })
-      .def("has_call_op", [](ModuleOp &self) -> bool {
-            bool result;
-            self.walk([&result](Operation* op) {
-              result |= llvm::isa<LLVM::CallOp>(*op);
+      .def("has_call_op",
+           [](ModuleOp &self) -> bool {
+            const auto is_extern_call = [&self](LLVM::CallOp& op) -> bool {
+              const auto callee_name = op.getCallee();
+              if (!callee_name.has_value())
+                return true;
+
+              auto* callee = self.lookupSymbol(callee_name.value());
+              if (!(callee && callee->hasAttr("linkage")))
+                return true;
+
+              return callee->getAttr("linkage") != LLVM::LinkageAttr::get(self->getContext(), LLVM::Linkage::Internal);
+            };
+
+            bool result{false};
+            self.walk([&result, &is_extern_call](LLVM::CallOp op) {
+              result |= is_extern_call(op);
             });
+
             return result;
           })
       /*
