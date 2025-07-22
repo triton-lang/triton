@@ -633,6 +633,8 @@ tt.func private @reinterpret(%arg0: !ttg.memdesc<128xf32, #tmem, #ttng.tensor_me
 #tmem_unpacked = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, unpacked = true>
 #tmem_x1 = #ttng.tensor_memory_encoding<blockM = 128, blockN = 1, unpacked = false>
 #tmem_x1_unpacked = #ttng.tensor_memory_encoding<blockM = 128, blockN = 2, unpacked = true>
+#tmem_bm64 = #ttng.tensor_memory_encoding<blockM = 64, blockN = 128, unpacked = true>
+#tmem_bm64_unpacked = #ttng.tensor_memory_encoding<blockM = 64, blockN = 128, unpacked = false>
 
 #blocked_x1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
 
@@ -655,6 +657,24 @@ tt.func private @subslice_packed(%arg0: !ttg.memdesc<128x128xf16, #tmem, #ttng.t
   // CHECK: llvm.add [[PTR]], [[OFFSET]]
   %0 = ttng.tmem_subslice %arg0 {N = 64 : i32} : !ttg.memdesc<128x128xf16, #tmem, #ttng.tensor_memory> -> !ttg.memdesc<128x64xf16, #tmem, #ttng.tensor_memory>
   tt.return %0 : !ttg.memdesc<128x64xf16, #tmem, #ttng.tensor_memory>
+}
+
+// CHECK-LABEL: @subslice_16x32bx2
+tt.func private @subslice_16x32bx2(%arg0: !ttg.memdesc<64x128xf32, #tmem_bm64, #ttng.tensor_memory>) -> !ttg.memdesc<64x64xf32, #tmem_bm64, #ttng.tensor_memory> {
+  // CHECK: [[OFFSET:%.*]] = llvm.mlir.constant(32 : i32)
+  // CHECK: [[PTR:%.*]] = llvm.ptrtoint
+  // CHECK: llvm.add [[PTR]], [[OFFSET]]
+  %0 = ttng.tmem_subslice %arg0 {N = 32 : i32} : !ttg.memdesc<64x128xf32, #tmem_bm64, #ttng.tensor_memory> -> !ttg.memdesc<64x64xf32, #tmem_bm64, #ttng.tensor_memory>
+  tt.return %0 : !ttg.memdesc<64x64xf32, #tmem_bm64, #ttng.tensor_memory>
+}
+
+// CHECK-LABEL: @subslice_16x32bx2_packed
+tt.func private @subslice_16x32bx2_packed(%arg0: !ttg.memdesc<64x128xf16, #tmem_bm64_unpacked, #ttng.tensor_memory>) -> !ttg.memdesc<64x64xf16, #tmem_bm64_unpacked, #ttng.tensor_memory> {
+  // CHECK: [[OFFSET:%.*]] = llvm.mlir.constant(16 : i32)
+  // CHECK: [[PTR:%.*]] = llvm.ptrtoint
+  // CHECK: llvm.add [[PTR]], [[OFFSET]]
+  %0 = ttng.tmem_subslice %arg0 {N = 32 : i32} : !ttg.memdesc<64x128xf16, #tmem_bm64_unpacked, #ttng.tensor_memory> -> !ttg.memdesc<64x64xf16, #tmem_bm64_unpacked, #ttng.tensor_memory>
+  tt.return %0 : !ttg.memdesc<64x64xf16, #tmem_bm64_unpacked, #ttng.tensor_memory>
 }
 
 // CHECK-LABEL: @load_store_x1

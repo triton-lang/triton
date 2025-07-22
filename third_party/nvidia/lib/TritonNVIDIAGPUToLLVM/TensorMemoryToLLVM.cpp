@@ -934,18 +934,12 @@ struct TMEMSubSliceOpConversion
 
     auto encoding = dyn_cast<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
         srcTy.getEncoding());
-    if (!encoding) {
-      return failure();
-    }
     auto shapePerCTA = getShapePerCTA(srcTy);
     int blockN = encoding.getBlockN();
     int blockM = encoding.getBlockM();
     int offsetCol = 0;
     int offsetRow = 0;
-    // TODO: support the more complex layout when M == 64.
-    if (shapePerCTA[0] != 128) {
-      return failure();
-    }
+    assert(llvm::is_contained({64, 128}, blockM) && "checked by the verifier");
     offsetCol = op.getN();
     if (!encoding.getUnpacked()) {
       int numElementsPer32B = 32 / srcTy.getElementTypeBitWidth();
@@ -953,6 +947,11 @@ struct TMEMSubSliceOpConversion
         return failure();
       }
       offsetCol /= numElementsPer32B;
+    }
+    // With a 16x32bx2 layout, each row of TMEM contains 2 columns of the
+    // tensor, which cannot be further subdivided at the moment.
+    if (blockM == 64 && offsetCol % 2 != 0) {
+      return failure();
     }
     Value tmemBase = adaptor.getSrc();
     Value offsetVal = b.i32_val(offsetCol | offsetRow << 16);
