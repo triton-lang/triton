@@ -1495,6 +1495,10 @@ void init_triton_ir(py::module &&m) {
            [](TritonOpBuilder &self, Type &retTy, Value &arg) -> Value {
              return self.createOrFold<SplatOp>(retTy, arg);
            })
+      .def("create_unsplat",
+           [](TritonOpBuilder &self, Value &arg) -> Value {
+             return self.createOrFold<UnsplatOp>(arg);
+           })
       // // atomic
       .def("create_atomic_cas",
            [](TritonOpBuilder &self, Value &ptr, Value &cmp, Value &val,

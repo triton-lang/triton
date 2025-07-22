@@ -619,6 +619,9 @@ class TritonSemantic(Generic[TensorTy]):
         ret_ty = tl.block_type(value.dtype, shape)
         return self.tensor(self.builder.create_splat(ret_ty.to_ir(self.builder), value.handle), ret_ty)
 
+    def unsplat(self, value: TensorTy) -> TensorTy:
+        return self.tensor(self.builder.create_unsplat(value.handle), value.dtype)
+
     def reshape(self, input: TensorTy, dst_shape: List[int], can_reorder: bool) -> TensorTy:
         numel = 1
         for s in dst_shape:
