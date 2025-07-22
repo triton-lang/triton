@@ -402,7 +402,7 @@ preprocessLoop(triton::AMD::ModuleAxisInfoAnalysis &axisInfoAnalysis,
   return loadToInfo;
 }
 
-namespace singleDotSchedule {
+namespace SingleDotSchedule {
 // Define categories of scheduling details per Operation types.
 // The SingleDotSchedule schedules 5 types of operations:
 // 1. GLOBAL_LOAD: tt.load / ttg.async_copy_global_to_local
@@ -420,8 +420,8 @@ enum SchedType {
   SCHED_SIZE
 };
 
-using StreamClusters = std::array<tt::CoarseSchedule::Cluster, SCHED_SIZE>;
-using StreamStages = std::array<int, SCHED_SIZE>;
+using Clusters = std::array<tt::CoarseSchedule::Cluster, SCHED_SIZE>;
+using Stages = std::array<int, SCHED_SIZE>;
 
 // Init Schedule Config based on settings and loop characteristics.
 // Create clusters in order of ops in loop. This can interleave ops
@@ -429,10 +429,10 @@ using StreamStages = std::array<int, SCHED_SIZE>;
 // scheduling.
 //   WARNING: Changing the order of schedule.clusters.newAtBack() calls
 //            can cause invalid schedules to be produced.
-LogicalResult initSchedule(int maxDist, StreamStages &stages, int numStages,
+LogicalResult initSchedule(int maxDist, Stages &stages, int numStages,
                            int &numBuffers, int globalPrefetch,
                            int localPrefetch, bool useAsyncCopy,
-                           bool waitAtTail, StreamClusters &clusters,
+                           bool waitAtTail, Clusters &clusters,
                            tt::CoarseSchedule &schedule) {
   int lastStage = numStages - 1;
   stages[SCHED_GLOBAL_LOAD] = 0;
@@ -512,7 +512,7 @@ LogicalResult initSchedule(int maxDist, StreamStages &stages, int numStages,
   }
 
   // Make assignments
-  StreamClusters clusterVec;
+  Clusters clusterVec;
   std::generate(clusterVec.begin(), clusterVec.end(),
                 [&]() { return schedule.clusters.newAtBack(); });
 
@@ -533,8 +533,8 @@ LogicalResult initSchedule(int maxDist, StreamStages &stages, int numStages,
 }
 
 void scheduleAsyncCopy(const AsyncCopyChainOps &asyncOps, tt::LoadOp loadOp,
-                       tt::CoarseSchedule &schedule, const StreamStages &stages,
-                       const StreamClusters &clusters) {
+                       tt::CoarseSchedule &schedule, const Stages &stages,
+                       const Clusters &clusters) {
   auto [copyOp, commitOp, waitOp, maybeLocalLoadOp] = asyncOps;
   auto [loadStage, loadCluster] = schedule[loadOp];
   schedule.insert(copyOp, loadStage, loadCluster);
@@ -559,8 +559,7 @@ void scheduleAsyncCopy(const AsyncCopyChainOps &asyncOps, tt::LoadOp loadOp,
 
 void scheduleStreamCopy(const StreamCopyChainOps &streamOps,
                         tt::LoadOp oldLoadOp, tt::CoarseSchedule &schedule,
-                        const StreamStages &stages,
-                        const StreamClusters &clusters) {
+                        const Stages &stages, const Clusters &clusters) {
   auto [newLoadOp, subviewOp, localStoreOp, maybeLocalLoadOp] = streamOps;
   auto [loadStage, loadCluster] = schedule[oldLoadOp];
 
@@ -576,8 +575,8 @@ void scheduleStreamCopy(const StreamCopyChainOps &streamOps,
 }
 
 LogicalResult scheduleLoads(const LoadToInfoMap &loadToInfo, int maxDist,
-                            int numStages, const StreamStages &stages,
-                            const StreamClusters &clusters,
+                            int numStages, const Stages &stages,
+                            const Clusters &clusters,
                             tt::CoarseSchedule &schedule) {
   // The stage gap between chained loads--this allows us to "spread" loads
   // with a non-one step in case the number of stages given by the user is
@@ -603,8 +602,8 @@ LogicalResult scheduleLoads(const LoadToInfoMap &loadToInfo, int maxDist,
 }
 
 void scheduleStreamOps(const LoadToStreamOpMap &loadToStreamOp,
-                       tt::CoarseSchedule &schedule, const StreamStages &stages,
-                       const StreamClusters &clusters) {
+                       tt::CoarseSchedule &schedule, const Stages &stages,
+                       const Clusters &clusters) {
   for (auto [l, streamOps] : loadToStreamOp) {
     auto loadOp = dyn_cast<tt::LoadOp>(l);
     if (!loadOp)
@@ -624,8 +623,8 @@ buildSchedule(scf::ForOp &forOp, int numStages, const LoadToInfoMap &loadToInfo,
               bool waitAtTail,
               triton::AMD::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
   tt::CoarseSchedule schedule(numStages);
-  StreamStages stages;
-  StreamClusters clusters;
+  Stages stages;
+  Clusters clusters;
 
   auto dumpSchedule = [&](llvm::StringRef msg) {
     LLVM_DEBUG({
@@ -672,7 +671,7 @@ buildSchedule(scf::ForOp &forOp, int numStages, const LoadToInfoMap &loadToInfo,
 
   return schedule;
 }
-} // namespace singleDotSchedule
+} // namespace SingleDotSchedule
 
 LogicalResult pipelineLoop(scf::ForOp forOp, int numStages, int globalPrefetch,
                            int localPrefetch, bool useAsyncCopy,
@@ -688,7 +687,7 @@ LogicalResult pipelineLoop(scf::ForOp forOp, int numStages, int globalPrefetch,
     return failure();
   }
 
-  auto schedule = singleDotSchedule::buildSchedule(
+  auto schedule = SingleDotSchedule::buildSchedule(
       forOp, numStages, loadToInfo, globalPrefetch, localPrefetch, useAsyncCopy,
       waitAtTail, axisInfoAnalysis);
   if (schedule.empty()) {
