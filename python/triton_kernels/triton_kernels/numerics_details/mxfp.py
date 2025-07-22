@@ -1,9 +1,11 @@
+# isort: off
+# fmt: off
 from enum import Enum
 import triton
 import torch
 import torch.nn.functional as F
 from .mxfp_details._upcast_from_mxfp import _upcast_from_mxfp
-from .mxfp_details._downcast_to_mxfp import _downcast_to_mxfp
+from .mxfp_details._downcast_to_mxfp import _downcast_to_mxfp, MXFP_BLOCK_SIZE
 
 # -----------------------------------------------------------------------------
 #                      Dequantization / Quantization Utilities
@@ -39,24 +41,25 @@ def downcast_to_mxfp(src_tensor: torch.Tensor, out_quant_type: torch.dtype, axis
     if is_fp4:
         assert L % 2 == 0, f"axis dim must be divisible by 2 for e2m1. Got {L}"
     out_shape = src_tensor.shape[:-1] + (L // divisor, )
-    out_scale_shape = src_tensor.shape[:-1] + (triton.cdiv(L, 32), )
+    out_scale_shape = src_tensor.shape[:-1] + (triton.cdiv(L, MXFP_BLOCK_SIZE), )
 
     out_quant_tensor = src_tensor.new_empty(out_shape, dtype=out_quant_type)
     out_scale = src_tensor.new_empty(out_scale_shape, dtype=torch.uint8)
 
-    kernel_src_tensor = src_tensor.reshape(-1, src_tensor.shape[-1])
-    kernel_quant_tensor = out_quant_tensor.view(-1, out_quant_tensor.shape[-1])
-    kernel_scale = out_scale.view(-1, out_scale.shape[-1])
+    if src_tensor.numel() > 0:
+        kernel_src_tensor = src_tensor.reshape(-1, src_tensor.shape[-1])
+        kernel_quant_tensor = out_quant_tensor.view(-1, out_quant_tensor.shape[-1])
+        kernel_scale = out_scale.view(-1, out_scale.shape[-1])
 
-    BLOCK_OUT_DIM = 128
-    BLOCK_QUANT_DIM = 32
-    grid_out = triton.cdiv(kernel_src_tensor.shape[0], BLOCK_OUT_DIM)
-    grid_quant = triton.cdiv(kernel_src_tensor.shape[1], BLOCK_QUANT_DIM)
+        BLOCK_OUT_DIM = 128
+        BLOCK_QUANT_DIM = MXFP_BLOCK_SIZE
+        grid_out = triton.cdiv(kernel_src_tensor.shape[0], BLOCK_OUT_DIM)
+        grid_quant = triton.cdiv(kernel_src_tensor.shape[1], BLOCK_QUANT_DIM)
 
-    _downcast_to_mxfp[(grid_out, grid_quant)](kernel_quant_tensor, *kernel_quant_tensor.stride(), kernel_scale,
-                                              *kernel_scale.stride(), kernel_src_tensor, *kernel_src_tensor.stride(),
-                                              *kernel_src_tensor.shape, BLOCK_OUT_DIM, BLOCK_QUANT_DIM,
-                                              DEQUANT_SCALE_ROUNDING_MODE.value, num_warps=8)
+        _downcast_to_mxfp[(grid_out, grid_quant)](kernel_quant_tensor, *kernel_quant_tensor.stride(), kernel_scale,
+                                                *kernel_scale.stride(), kernel_src_tensor, *kernel_src_tensor.stride(),
+                                                *kernel_src_tensor.shape, BLOCK_OUT_DIM, BLOCK_QUANT_DIM,
+                                                DEQUANT_SCALE_ROUNDING_MODE.value, num_warps=8)
 
     out_quant_tensor = out_quant_tensor.transpose(axis, src_tensor.ndim - 1)
     out_scale = out_scale.transpose(axis, src_tensor.ndim - 1)
@@ -90,7 +93,7 @@ def upcast_from_mxfp(tensor: torch.Tensor, scale: torch.Tensor, dtype: torch.dty
     reshaped_tensor = tensor.view(-1, tensor.shape[-1])
     reshaped_scale = scale.view(-1, scale.shape[-1])
     BLOCK_OUT_DIM = 128
-    BLOCK_QUANT_DIM = 32
+    BLOCK_QUANT_DIM = MXFP_BLOCK_SIZE
     blocks_out_dim = triton.cdiv(reshaped_out.shape[0], BLOCK_OUT_DIM)
     blocks_quant_dim = triton.cdiv(reshaped_out.shape[1], BLOCK_QUANT_DIM)
     _upcast_from_mxfp[(blocks_out_dim, blocks_quant_dim)](reshaped_out, *reshaped_out.stride(), reshaped_scale,
@@ -153,7 +156,7 @@ def downcast_to_mxfp_torch(src_tensor: torch.Tensor, out_quant_type: torch.dtype
     axis_shape = src.shape[-1]
 
     # Pad the axis to be divisible by 32, in case it is not.
-    next_multiple = (axis_shape + 31) // 32 * 32
+    next_multiple = triton.cdiv(axis_shape, MXFP_BLOCK_SIZE) * MXFP_BLOCK_SIZE
     pad_amount = next_multiple - axis_shape
     padded_src = F.pad(src, (0, pad_amount))
     valid_mask = F.pad(torch.ones_like(src, dtype=torch.bool), (0, pad_amount))
@@ -164,7 +167,7 @@ def downcast_to_mxfp_torch(src_tensor: torch.Tensor, out_quant_type: torch.dtype
     abs_f = torch.abs(padded_src)
     abs_f = torch.where(valid_mask, abs_f, torch.tensor(-1.0, device=device, dtype=padded_src.dtype))
     # Reshape the last dimension into groups of 32.
-    new_shape = padded_src.shape[:-1] + (padded_axis_shape // 32, 32)
+    new_shape = padded_src.shape[:-1] + (padded_axis_shape // MXFP_BLOCK_SIZE, MXFP_BLOCK_SIZE)
     abs_groups = abs_f.view(*new_shape)
     # Compute maximum along the group dimension (of size 32).
     max_val, _ = abs_groups.max(dim=-1, keepdim=True)
@@ -277,12 +280,12 @@ def upcast_from_mxfp_torch(tensor: torch.Tensor, scale: torch.Tensor, target_dty
 
     logical_quant_dim = tensor.shape[-1] * (2 if tensor.dtype == torch.uint8 else 1)
     axis_shape = fp32_tensor.size(-1)
-    padded_axis_shape = triton.cdiv(logical_quant_dim, 32) * 32
+    padded_axis_shape = triton.cdiv(logical_quant_dim, MXFP_BLOCK_SIZE) * MXFP_BLOCK_SIZE
     pad_size = padded_axis_shape - axis_shape
     padded_tensor = F.pad(fp32_tensor, (0, pad_size))
 
     new_axis_shape = padded_tensor.shape[-1]
-    new_shape = padded_tensor.shape[:-1] + (new_axis_shape // 32, 32)
+    new_shape = padded_tensor.shape[:-1] + (new_axis_shape // MXFP_BLOCK_SIZE, MXFP_BLOCK_SIZE)
     padded_tensor = padded_tensor.view(*new_shape)
     dq_scale_padded = dq_scale.unsqueeze(-1)  # shape: [..., ceil(axis_shape/32), 1]
     out_padded = padded_tensor * dq_scale_padded

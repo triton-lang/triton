@@ -37,6 +37,7 @@ from triton._internal_testing import (
     is_hip_cdna3,
     is_hip_cdna4,
     is_hip_gfx12,
+    get_hip_lds_size,
     is_xpu,
     get_arch,
     torch_float8_dtypes,
@@ -216,7 +217,7 @@ class BlockedLayout:
         return f"#{GPU_DIALECT}.blocked<{{sizePerThread={self.sz_per_thread}, threadsPerWarp={self.threads_per_warp}, warpsPerCTA={self.warps_per_cta}, order={self.order}, CTAsPerCGA={self.ctas_per_cga}, CTASplitNum={self.cta_split_num}, CTAOrder={self.cta_order}}}>"
 
 
-class SharedLayout:
+class SwizzledSharedLayout:
 
     def __init__(self, vec, per_phase, max_phase, order, ctas_per_cga, cta_split_num, cta_order):
         self.vec = vec
@@ -229,6 +230,19 @@ class SharedLayout:
 
     def __str__(self):
         return f"#{GPU_DIALECT}.swizzled_shared<{{vec={self.vec}, perPhase={self.per_phase}, maxPhase={self.max_phase}, order={self.order}, CTAsPerCGA={self.ctas_per_cga}, CTASplitNum={self.cta_split_num}, CTAOrder={self.cta_order}}}>"
+
+
+class PaddedSharedLayout:
+
+    def __init__(self, interval_padding_pairs, order, ctas_per_cga, cta_split_num, cta_order):
+        self.interval_padding_pairs = "[" + ", ".join(f"{v[0]}:{v[1]:+d}" for v in interval_padding_pairs) + "]"
+        self.order = order
+        self.ctas_per_cga = ctas_per_cga
+        self.cta_split_num = cta_split_num
+        self.cta_order = cta_order
+
+    def __str__(self):
+        return f"#{GPU_DIALECT}.padded_shared<{self.interval_padding_pairs} {{order={self.order}, CTAsPerCGA={self.ctas_per_cga}, CTASplitNum={self.cta_split_num}, CTAOrder={self.cta_order}}}>"
 
 
 class NVMMASharedLayout:
@@ -293,7 +307,7 @@ def warps_per_cta(layout, shape):
 
 
 def is_layout_applicable(layout) -> bool:
-    if isinstance(layout, (BlockedLayout, SharedLayout, LinearLayout)):
+    if isinstance(layout, (BlockedLayout, SwizzledSharedLayout, LinearLayout)):
         return True
     elif isinstance(layout, SliceLayout):
         return is_layout_applicable(layout.parent)
@@ -306,7 +320,9 @@ def is_layout_applicable(layout) -> bool:
         return True
     elif is_hip():
         target_arch = triton.runtime.driver.active.get_current_target().arch
-        if "gfx11" in target_arch:
+        if isinstance(layout, PaddedSharedLayout):
+            return true
+        elif "gfx11" in target_arch:
             # RDNA 3
             return isinstance(layout, WmmaLayout)
         elif any(arch for arch in ["gfx8", "gfx9"] if arch in target_arch):
@@ -6145,10 +6161,12 @@ layouts = [
 
 intermediate_layouts = [
     None,
-    SharedLayout(1, 1, 1, [0, 1], [1, 1], [1, 1], [0, 1]),
-    SharedLayout(1, 1, 1, [1, 0], [1, 1], [1, 1], [0, 1]),
-    SharedLayout(4, 2, 4, [1, 0], [1, 1], [1, 1], [0, 1]),
-    SharedLayout(2, 2, 4, [1, 0], [1, 1], [1, 1], [0, 1]),
+    SwizzledSharedLayout(1, 1, 1, [0, 1], [1, 1], [1, 1], [0, 1]),
+    SwizzledSharedLayout(1, 1, 1, [1, 0], [1, 1], [1, 1], [0, 1]),
+    SwizzledSharedLayout(4, 2, 4, [1, 0], [1, 1], [1, 1], [0, 1]),
+    SwizzledSharedLayout(2, 2, 4, [1, 0], [1, 1], [1, 1], [0, 1]),
+    PaddedSharedLayout([[32, 8]], [1, 0], [1, 1], [1, 1], [0, 1]),
+    PaddedSharedLayout([[64, 4], [128, 8]], [1, 0], [1, 1], [1, 1], [0, 1])
 ]
 
 
@@ -6182,13 +6200,15 @@ def test_convert2d(M, N, src_layout, interm_layout, dst_layout, dtype, device, t
             scratch_shape = compute_scratch_buffer_shape(src_layout, dst_layout, (M, N))
         except AssertionError:
             pytest.skip("Can't compute scratch buffer size")
-        lds_size = 65536
+        lds_size = get_hip_lds_size()
         # consider int32 dtype in scratch buffer size,
         # because it is the largest dtype used in convert_layout in this test
         int32_size = 4
         # skip even if scratch buffer equal to lds_size, because real scratch buffer is typically larger due to padding
         if scratch_shape[0] * scratch_shape[1] * int32_size >= lds_size:
             pytest.skip("Scratch buffer is too large")
+    if is_cuda() and isinstance(interm_layout, PaddedSharedLayout):
+        pytest.skip("PaddedSharedLayout is not supported on CUDA")
 
     layouts = f"""
     #src = {src_layout}
@@ -6258,10 +6278,10 @@ layouts_3d = [
 ]
 
 shared_layouts_3d = [
-    SharedLayout(1, 1, 1, [2, 1, 0], [1, 1, 1], [1, 1, 1], [0, 1, 2]),
-    SharedLayout(4, 2, 4, [1, 2, 0], [1, 1, 1], [1, 1, 1], [0, 1, 2]),
-    SharedLayout(8, 2, 4, [0, 2, 1], [1, 1, 1], [1, 1, 1], [0, 1, 2]),
-    SharedLayout(4, 2, 1, [2, 0, 1], [1, 1, 1], [1, 1, 1], [0, 1, 2]),
+    SwizzledSharedLayout(1, 1, 1, [2, 1, 0], [1, 1, 1], [1, 1, 1], [0, 1, 2]),
+    SwizzledSharedLayout(4, 2, 4, [1, 2, 0], [1, 1, 1], [1, 1, 1], [0, 1, 2]),
+    SwizzledSharedLayout(8, 2, 4, [0, 2, 1], [1, 1, 1], [1, 1, 1], [0, 1, 2]),
+    SwizzledSharedLayout(4, 2, 1, [2, 0, 1], [1, 1, 1], [1, 1, 1], [0, 1, 2]),
 ]
 
 
@@ -6349,9 +6369,9 @@ dot_layouts = [
 ]
 
 shared_layouts = [
-    SharedLayout(4, 2, 4, [0, 1], [1, 1], [1, 1], [0, 1]),
-    SharedLayout(8, 1, 8, [1, 0], [1, 1], [1, 1], [0, 1]),
-    SharedLayout(16, 1, 16, [1, 0], [1, 1], [1, 1], [0, 1]),
+    SwizzledSharedLayout(4, 2, 4, [0, 1], [1, 1], [1, 1], [0, 1]),
+    SwizzledSharedLayout(8, 1, 8, [1, 0], [1, 1], [1, 1], [0, 1]),
+    SwizzledSharedLayout(16, 1, 16, [1, 0], [1, 1], [1, 1], [0, 1]),
 ]
 
 
@@ -6502,7 +6522,7 @@ mma_layouts = [
 ]
 
 shared_layouts = [
-    SharedLayout(8, 1, 1, [1, 0], [1, 1], [1, 1], [0, 1]),
+    SwizzledSharedLayout(8, 1, 1, [1, 0], [1, 1], [1, 1], [0, 1]),
     NVMMASharedLayout(64, False, 16, [1, 1], [1, 1], [0, 1]),
     NVMMASharedLayout(128, False, 16, [1, 1], [1, 1], [0, 1]),
 ]
