@@ -328,7 +328,7 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
         w_ref = w_ref.squeeze(0).detach().requires_grad_(test_bwd)
 
     if is_mixed_input:
-        mx_axis = -2
+        mx_axis = w_tri.ndim - 2
         # compute layouts
         w_layout, w_layout_opts = layout.StridedLayout, dict()
         w_scale_layout, w_scale_layout_opts = layout.StridedLayout, dict()
