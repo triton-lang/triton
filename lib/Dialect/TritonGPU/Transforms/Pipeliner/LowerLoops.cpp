@@ -894,6 +894,9 @@ void multibufferTensorMemory(scf::ForOp forOp, CoarseSchedule &schedule,
       llvm::to_vector(alloc.getResult().getUsers());
   Value replTok = OpBuilder(forOp).create<ub::PoisonOp>(
       forOp.getLoc(), builder.getType<AsyncTokenType>());
+  if (newAlloc.getToken()) {
+    newAlloc.getToken().replaceAllUsesWith(replTok);
+  }
   for (auto user : allocUsers) {
     if (auto store = dyn_cast<ttng::TMEMStoreOp>(user)) {
       store.getDepMutable().clear();

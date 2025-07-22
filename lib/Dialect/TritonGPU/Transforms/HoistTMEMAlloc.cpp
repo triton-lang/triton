@@ -517,22 +517,24 @@ struct HoistTMEMAlloc
 
   void runOnOperation() override {
     ModuleOp m = getOperation();
-    SmallVector<ttng::MMAv5OpInterface> mmaOps;
-    m.walk([&](ttng::MMAv5OpInterface mmaOp) { mmaOps.push_back(mmaOp); });
-    for (auto mmaOp : mmaOps) {
-      auto forOp = dyn_cast<scf::ForOp>(mmaOp->getParentOp());
-      if (!forOp) {
-        continue;
-      }
-      hoistInvariantInputs(mmaOp, forOp);
+    if (!hoistOutOfIf) {
+      SmallVector<ttng::MMAv5OpInterface> mmaOps;
+      m.walk([&](ttng::MMAv5OpInterface mmaOp) { mmaOps.push_back(mmaOp); });
+      for (auto mmaOp : mmaOps) {
+        auto forOp = dyn_cast<scf::ForOp>(mmaOp->getParentOp());
+        if (!forOp) {
+          continue;
+        }
+        hoistInvariantInputs(mmaOp, forOp);
 
-      // Only hoist the TMEM alloc feeding into the accumulator. Leave the ones
-      // for the scales in the loop.
-      auto alloc = mmaOp.getAccumulator().getDefiningOp<TMEMTokenAllocOp>();
-      if (!alloc || alloc->getParentRegion() != mmaOp->getParentRegion()) {
-        continue;
+        // Only hoist the TMEM alloc feeding into the accumulator. Leave the
+        // ones for the scales in the loop.
+        auto alloc = mmaOp.getAccumulator().getDefiningOp<TMEMTokenAllocOp>();
+        if (!alloc || alloc->getParentRegion() != mmaOp->getParentRegion()) {
+          continue;
+        }
+        hoistTMEMAlloc(alloc, forOp);
       }
-      hoistTMEMAlloc(alloc, forOp);
     }
 
     mlir::RewritePatternSet patterns(&getContext());
