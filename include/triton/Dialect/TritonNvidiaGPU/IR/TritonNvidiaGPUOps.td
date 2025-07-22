@@ -421,7 +421,7 @@ def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [
 
   let description = [{
     $d += matrix_multiply($a, $b).
-    if is_sync is true, the op executes synchronously. The barrier operands must not be present in that case.
+    if is_async is false, the op executes synchronously. The barrier operands must not be present in that case.
     Otherwise, if a barrier is given, the op will trigger a commit/arrive on it. The result will be safe to read after a barrier wait.
     If $two_ctas is set the op will execute a matmul across two contiguous CTAs, it will read the data distributed across the two CTAs.
     and syncronize both CTAs if the op is synchronous.
@@ -440,7 +440,7 @@ def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [
     I1:$pred,
     Variadic<TTG_MemDescType>:$barriers,
     Variadic<I1>:$barrier_preds,
-    OptionalAttr<UnitAttr>:$is_sync,
+    OptionalAttr<UnitAttr>:$is_async,
     OptionalAttr<UnitAttr>:$two_ctas
   );
   let results = (outs Optional<TTG_AsyncToken>:$token);
@@ -451,7 +451,7 @@ def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [
       "Value":$pred, CArg<"bool", "false">:$two_ctas,
       CArg<"ValueRange", "{}">:$barriers,
       CArg<"ValueRange", "{}">:$barrier_preds,
-      CArg<"bool", "false">:$is_sync)>
+      CArg<"bool", "false">:$is_async)>
   ];
 
   let assemblyFormat = [{
@@ -474,8 +474,9 @@ def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [
 
   let description = [{
     $d += matrix_multiply(scale($lhs, $lhs_scale), scale(rlhs, $rhs_scale))
-    if is_sync is true, the op executes synchronously. The barrier operands must not be present in that case.
-    Otherwise, if a barrier is given, the op will trigger a commit/arrive on it. The result will be safe to read after a barrier wait.
+    if is_async is false, the op executes synchronously. The barrier operands must not be present in that case.
+    Otherwise, if a barrier is given, the op will trigger a commit/arrive on it.
+    The result will be safe to read after a barrier wait.
 
     This operation takes and produces an optional token to indicate TMEM read
     and write on its accumulator operand. When the tokens are present, they can
@@ -495,7 +496,7 @@ def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [
     I1:$pred,
     Variadic<TTG_MemDescType>:$barriers,
     Variadic<I1>:$barrier_preds,
-    OptionalAttr<UnitAttr>:$is_sync
+    OptionalAttr<UnitAttr>:$is_async
   );
   let results = (outs Optional<TTG_AsyncToken>:$token);
 
@@ -516,7 +517,7 @@ def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [
       "::mlir::Value":$useD, "::mlir::Value":$pred,
       CArg<"::mlir::ValueRange", "{}">:$barriers,
       CArg<"::mlir::ValueRange", "{}">:$barrier_preds,
-      CArg<"bool", "false">:$is_sync)>
+      CArg<"bool", "false">:$is_async)>
   ];
 
   let assemblyFormat = [{

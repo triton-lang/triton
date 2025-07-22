@@ -244,7 +244,7 @@ static void printToken(OpAsmPrinter &p, Operation *op, Value dep, Type token) {
 }
 
 LogicalResult TCGen5MMAOp::verify() {
-  if (getIsSync() && !getBarriers().empty()) {
+  if (!getIsAsync() && !getBarriers().empty()) {
     return emitOpError("The op is synchronous but a barrier is present.");
   }
   return success();
@@ -303,15 +303,15 @@ void TCGen5MMAOp::setPredicate(Value pred) { getPredMutable().assign(pred); }
 void TCGen5MMAOp::build(OpBuilder &builder, OperationState &state, Type token,
                         Value a, Value b, Value d, Value accDep, Value useD,
                         Value pred, bool useTwoCTAs, ValueRange barriers,
-                        ValueRange barrierPreds, bool isSync) {
+                        ValueRange barrierPreds, bool isAsync) {
   build(builder, state, token, a, b, d, accDep, useD, pred, barriers,
-        barrierPreds, isSync ? builder.getUnitAttr() : UnitAttr(),
+        barrierPreds, isAsync ? builder.getUnitAttr() : UnitAttr(),
         useTwoCTAs ? builder.getUnitAttr() : UnitAttr());
 }
 
 // -- TCGen5MMAScaledOp --
 LogicalResult TCGen5MMAScaledOp::verify() {
-  if (getIsSync() && !getBarriers().empty()) {
+  if (!getIsAsync() && !getBarriers().empty()) {
     return emitOpError("The op is synchronous but a barrier is present.");
   }
   return success();
@@ -465,12 +465,12 @@ void TCGen5MMAScaledOp::build(OpBuilder &builder, OperationState &state,
                               Value accDep, Value aScale, Value bScale,
                               ScaleDotElemType aType, ScaleDotElemType bType,
                               Value useD, Value pred, ValueRange barriers,
-                              ValueRange barrierPreds, bool isSync) {
+                              ValueRange barrierPreds, bool isAsync) {
   MLIRContext *ctx = builder.getContext();
   build(builder, state, token, a, b, d, accDep, aScale, bScale,
         ScaleDotElemTypeAttr::get(ctx, aType),
         ScaleDotElemTypeAttr::get(ctx, bType), useD, pred, barriers,
-        barrierPreds, isSync ? builder.getUnitAttr() : UnitAttr());
+        barrierPreds, isAsync ? builder.getUnitAttr() : UnitAttr());
 }
 
 // -- TMEMStoreOp --
