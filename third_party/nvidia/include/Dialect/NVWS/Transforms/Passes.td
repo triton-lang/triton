@@ -64,4 +64,22 @@ def NVWSLowerAref : Pass<"nvws-lower-aref", "mlir::ModuleOp"> {
   ];
 }
 
+def NVWSLowerSemaphore : Pass<"nvws-lower-semaphore", "mlir::ModuleOp"> {
+  let summary = "Convert nvws.sem.* to ttng.*barrier* ops.";
+
+  let description = [{
+    Convert nvws.sem.* to ttng.*barrier* ops.
+
+    The pass will convert each semaphore to a matched value and barrier set,
+    and will determined appropriate waits/signalling for values being
+    "empty" or "full" from the use/def chain of semaphore acquire/release.
+  }];
+
+  let dependentDialects = [
+    "mlir::triton::nvws::NVWSDialect",
+    "mlir::triton::TritonDialect",
+    "mlir::triton::gpu::TritonGPUDialect"
+  ];
+}
+
 #endif // NVWS_PASSES

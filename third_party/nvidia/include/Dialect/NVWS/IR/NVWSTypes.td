@@ -46,6 +46,12 @@ def NVWS_ArefType : NVWS_TypeDef<"Aref", "aref"> {
   let assemblyFormat = "`<` $baseType `>`";
 }
 
+def NVWS_SemaphoreType : NVWS_TypeDef<"Semaphore", "semaphore"> {
+  let summary = "Semaphore type";
+  let parameters = (ins DefaultValuedParameter<"std::optional<int>", "1">:$numStages);
+  let assemblyFormat = "`<` $numStages `>`";
+}
+
 def NVWS_TokenType : NVWS_TypeDef<"Token", "token">;
 
 #endif // NVWS_TYPES
