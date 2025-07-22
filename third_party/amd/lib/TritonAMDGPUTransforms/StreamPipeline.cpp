@@ -683,7 +683,7 @@ buildSchedule(scf::ForOp &forOp, int numStages, const LoadToInfoMap &loadToInfo,
 // of the second dot so it can be interleaved with the first dot. Loads will be
 // double buffered and placed in between the dot/compute clusters. This
 // pipeliner is meant to be used in combination with pingpong
-namespace chainedDotSchedule {
+namespace ChainedDotSchedule {
 
 enum Clusters {
   // ComputeCluster1
@@ -960,7 +960,7 @@ buildSchedule(scf::ForOp &forOp, int numStages, const LoadToInfoMap &loadToInfo,
 
   return schedule;
 }
-} // namespace chainedDotSchedule
+} // namespace ChainedDotSchedule
 
 LogicalResult pipelineLoop(scf::ForOp forOp, int numStages, int globalPrefetch,
                            int localPrefetch, bool useAsyncCopy,
@@ -978,9 +978,9 @@ LogicalResult pipelineLoop(scf::ForOp forOp, int numStages, int globalPrefetch,
 
   tt::CoarseSchedule schedule;
 
-  if (succeeded(chainedDotSchedule::checkPreconditions(forOp, numStages,
+  if (succeeded(ChainedDotSchedule::checkPreconditions(forOp, numStages,
                                                        loadToInfo))) {
-    schedule = chainedDotSchedule::buildSchedule(
+    schedule = ChainedDotSchedule::buildSchedule(
         forOp, numStages, loadToInfo, useAsyncCopy, axisInfoAnalysis);
   } else {
     schedule = SingleDotSchedule::buildSchedule(
