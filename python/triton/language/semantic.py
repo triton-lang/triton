@@ -1727,6 +1727,36 @@ class TritonSemantic(Generic[TensorTy]):
         gather = self.builder.create_gather(src.handle, index.handle, axis)
         return self.wrap_tensor(gather, src.type.scalar, index.type.shape)
 
+# ===----------------------------------------------------------------------===
+#                               Map Elementwise
+# ===----------------------------------------------------------------------===
+
+    def broadcast_tensors(self, *inputs):
+        if not inputs:
+            return ()
+        head, *tail = inputs
+        for i in range(len(tail)):
+            head, tail[i] = self.broadcast_impl_value(head, tail[i])
+        for i in range(len(tail)):
+            head, tail[i] = self.broadcast_impl_value(head, tail[i])
+        return (head, *tail)
+
+    def map_elementwise(self, inputs: Sequence[tl.tensor], result_types: Sequence[tl.dtype], pack: int,
+                        region_builder_fn) -> Tuple[tl.tensor, ...]:
+        inputs = self.broadcast_tensors(*inputs)
+
+        assert len(inputs) > 0, "map_elementwise must have at least 1 input tensor"
+        result_types = [inputs[0].type.with_element_ty(ty.scalar) for ty in result_types]
+        elementwise_op = self.builder.create_map_elementwise(
+            [t.handle for t in inputs],
+            [ty.to_ir(self.builder) for ty in result_types],
+            pack,
+        )
+        region_builder_fn(elementwise_op)
+        # assert elementwise_op.verify()
+
+        return tuple(self.tensor(elementwise_op.get_result(i), ty) for i, ty in enumerate(result_types))
+
 
 # ===----------------------------------------------------------------------===
 #                               Histogram
