@@ -941,18 +941,35 @@ struct TMEMSubSliceOpConversion
     int offsetRow = 0;
     assert(llvm::is_contained({64, 128}, blockM) && "checked by the verifier");
     offsetCol = op.getN();
+
+    if (blockM == 64) {
+      // With a 16x32bx2 layout, each row of TMEM contains 2 columns of the
+      // tensor, which cannot be further subdivided at the moment.
+      if (offsetCol % 2 != 0) {
+        return failure();
+      }
+      // The layout interleaves blocks along the N dimension with the rows, such
+      // that the odd numbered blocks are in lanes [16, 32), below the previous
+      // even-numbered block.
+      int blockOffset = op.getN() / blockN;
+      if (blockOffset % 2) {
+        // Offset into rows [16, 32).
+        offsetRow = 16;
+        // Normalize column offset to the even block.
+        offsetCol -= blockN;
+      }
+      offsetCol -= blockN * (blockOffset / 2);
+    }
+
     if (!encoding.getUnpacked()) {
+      // Adjust the column offset based on the element size.
       int numElementsPer32B = 32 / srcTy.getElementTypeBitWidth();
       if (offsetCol % numElementsPer32B != 0) {
         return failure();
       }
       offsetCol /= numElementsPer32B;
     }
-    // With a 16x32bx2 layout, each row of TMEM contains 2 columns of the
-    // tensor, which cannot be further subdivided at the moment.
-    if (blockM == 64 && offsetCol % 2 != 0) {
-      return failure();
-    }
+
     Value tmemBase = adaptor.getSrc();
     Value offsetVal = b.i32_val(offsetCol | offsetRow << 16);
     Value newBase = b.add(b.ptrtoint(i32_ty, tmemBase), offsetVal);
