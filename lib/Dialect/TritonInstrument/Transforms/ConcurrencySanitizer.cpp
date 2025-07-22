@@ -112,6 +112,27 @@ tt::FuncOp getEntryPoint(ModuleOp module) {
   return publicFuncs.front();
 }
 
+bool hasCpAsync(ModuleOp module) {
+  bool hasCpAsync = false;
+  module.walk([&](Operation *op) {
+    if (isa<ttg::AsyncCopyGlobalToLocalOp, ttg::AsyncCommitGroupOp,
+            ttg::AsyncWaitOp>(op)) {
+      hasCpAsync = true;
+    }
+  });
+  return hasCpAsync;
+}
+
+bool hasWGMMA(ModuleOp module) {
+  bool hasWGMMA = false;
+  module.walk([&](Operation *op) {
+    if (isa<ttng::WarpGroupDotOp, ttng::WarpGroupDotWaitOp>(op)) {
+      hasWGMMA = true;
+    }
+  });
+  return hasWGMMA;
+}
+
 } // namespace
 
 class ConcurrencySanitizerPass
@@ -227,15 +248,28 @@ public:
       }
     }
 
-    // Create write commits tensor
-    if (!bufValues[(int)MemType::SHARED].empty()) {
-      writeCommitsType = RankedTensorType::get(
+    // Create write commits tensor for cp-async
+    if (hasCpAsync(module)) {
+      assert(!bufValues[(int)MemType::SHARED].empty());
+      asyncCpCommitsType = RankedTensorType::get(
           {(long)bufValues[(int)MemType::SHARED].size()}, b.getIntegerType(8),
           getThreadLocalBlockedEncoding(
               bufValues[(int)MemType::SHARED].size()));
       TypedValue<RankedTensorType> writeCommits =
-          tti::createConstIntTensor(b, b.getLoc(), 0, writeCommitsType);
-      writeCommitsAlloc = createInitializedScratchMemory(b, writeCommits);
+          tti::createConstIntTensor(b, b.getLoc(), 0, asyncCpCommitsType);
+      asyncCpCommitsAlloc = createInitializedScratchMemory(b, writeCommits);
+    }
+
+    // Create reads commits tensor for wgmma
+    if (hasWGMMA(module)) {
+      assert(!bufValues[(int)MemType::SHARED].empty());
+      wgmmaCommitsType = RankedTensorType::get(
+          {(long)bufValues[(int)MemType::SHARED].size()}, b.getIntegerType(8),
+          getThreadLocalBlockedEncoding(
+              bufValues[(int)MemType::SHARED].size()));
+      TypedValue<RankedTensorType> readCommits =
+          tti::createConstIntTensor(b, b.getLoc(), 0, wgmmaCommitsType);
+      wgmmaCommitsAlloc = createInitializedScratchMemory(b, readCommits);
     }
 
     instrumentMemoryOperations(b);
@@ -251,10 +285,10 @@ private:
           writeStateType[(int)memType], hwPipelined, pred);
     }
     // commit-num-based synchronization is only supported for shared memory
-    if (memType == MemType::SHARED) {
-      b.create<tti::ExperimentalCheckWriteCommitOp>(
-          buf, buffersTensor[(int)memType], writeCommitsAlloc, writeCommitsType,
-          pred);
+    if (memType == MemType::SHARED && asyncCpCommitsAlloc) {
+      b.create<tti::ExperimentalCheckOutstandingCommitsOp>(
+          buf, buffersTensor[(int)memType], asyncCpCommitsAlloc,
+          asyncCpCommitsType, "async_copy_global_to_shared", pred);
     }
   }
 
@@ -264,6 +298,12 @@ private:
       b.create<tti::ExperimentalCheckOutstandingReadsOp>(
           buf, buffersTensor[(int)memType], readBarriersAlloc[(int)memType],
           readBarriersType[(int)memType], pred);
+    }
+    // commit-num-based synchronization is only supported for shared memory
+    if (memType == MemType::SHARED && wgmmaCommitsAlloc) {
+      b.create<tti::ExperimentalCheckOutstandingCommitsOp>(
+          buf, buffersTensor[(int)memType], wgmmaCommitsAlloc, wgmmaCommitsType,
+          "warpgroup_mma operand read", pred);
     }
   }
 
@@ -275,6 +315,7 @@ private:
     bool commitTracking = false;
     bool hwPipelined = false;
     Value pred;
+    bool requiresTracking = false;
   };
 
   SmallVector<MemEffects> getMemEffects(Operation *op) {
@@ -284,12 +325,48 @@ private:
           MemEffects{.buf = copyOp.getResult(),
                      .rw = MemEffects::RW::Write,
                      .barriersAndPreds = {{copyOp.getBarrier(), nullptr}},
-                     .pred = copyOp.getPred()});
+                     .pred = copyOp.getPred(),
+                     .requiresTracking = true});
+    }
+    if (auto storeOp = dyn_cast<ttng::AsyncTMACopyLocalToGlobalOp>(op)) {
+      effects.emplace_back(MemEffects{
+          .buf = storeOp.getSrc(),
+          .rw = MemEffects::RW::Read,
+          .requiresTracking = false}); // async tma writes not modelled yet
+    }
+    if (auto gatherOp = dyn_cast<ttng::AsyncTMAGatherOp>(op)) {
+      effects.emplace_back(
+          MemEffects{.buf = gatherOp.getResult(),
+                     .rw = MemEffects::RW::Write,
+                     .barriersAndPreds = {{gatherOp.getBarrier(), nullptr}},
+                     .pred = gatherOp.getPred(),
+                     .requiresTracking = true});
+    }
+    if (auto scatterOp = dyn_cast<ttng::AsyncTMAScatterOp>(op)) {
+      effects.emplace_back(MemEffects{
+          .buf = scatterOp.getSrc(),
+          .rw = MemEffects::RW::Read,
+          .requiresTracking = false}); // async tma writes not modelled yet
     }
     if (auto copyOp = dyn_cast<ttg::AsyncCopyGlobalToLocalOp>(op)) {
       effects.emplace_back(MemEffects{.buf = copyOp.getResult(),
                                       .rw = MemEffects::RW::Write,
-                                      .commitTracking = true});
+                                      .commitTracking = true,
+                                      .requiresTracking = true});
+    }
+    if (auto loadOp = dyn_cast<ttg::LocalLoadOp>(op)) {
+      effects.emplace_back(
+          MemEffects{.buf = loadOp.getSrc(), .rw = MemEffects::RW::Read});
+    }
+    if (auto storeOp = dyn_cast<ttg::LocalStoreOp>(op)) {
+      effects.emplace_back(
+          MemEffects{.buf = storeOp.getDst(), .rw = MemEffects::RW::Write});
+    }
+    if (auto allocOp = dyn_cast<ttg::LocalAllocOp>(op)) {
+      if (allocOp.getSrc()) {
+        effects.emplace_back(MemEffects{.buf = allocOp.getResult(),
+                                        .rw = MemEffects::RW::Write});
+      }
     }
     if (auto loadOp = dyn_cast<ttng::TMEMLoadOp>(op)) {
       effects.emplace_back(
@@ -299,6 +376,12 @@ private:
       effects.emplace_back(
           MemEffects{.buf = storeOp.getDst(), .rw = MemEffects::RW::Write});
     }
+    if (auto allocOp = dyn_cast<ttng::TMEMAllocOp>(op)) {
+      if (allocOp.getSrc()) {
+        effects.emplace_back(MemEffects{.buf = allocOp.getResult(),
+                                        .rw = MemEffects::RW::Write});
+      }
+    }
     if (auto mmav5Op = dyn_cast<ttng::TCGen5MMAOp>(op)) {
       SmallVector<std::tuple<Value, Value>> barriersAndPreds = llvm::to_vector(
           llvm::zip(mmav5Op.getBarriers(), mmav5Op.getBarrierPreds()));
@@ -306,18 +389,33 @@ private:
       effects.emplace_back(MemEffects{.buf = mmav5Op.getA(),
                                       .rw = MemEffects::RW::Read,
                                       .barriersAndPreds = barriersAndPreds,
-                                      .pred = mmav5Op.getPred()});
+                                      .pred = mmav5Op.getPred(),
+                                      .requiresTracking = true});
 
       effects.emplace_back(MemEffects{.buf = mmav5Op.getB(),
                                       .rw = MemEffects::RW::Read,
                                       .barriersAndPreds = barriersAndPreds,
-                                      .pred = mmav5Op.getPred()});
+                                      .pred = mmav5Op.getPred(),
+                                      .requiresTracking = true});
 
       effects.emplace_back(MemEffects{.buf = mmav5Op.getAccumulator(),
                                       .rw = MemEffects::RW::Write,
                                       .barriersAndPreds = barriersAndPreds,
                                       .hwPipelined = true,
-                                      .pred = mmav5Op.getPred()});
+                                      .pred = mmav5Op.getPred(),
+                                      .requiresTracking = true});
+    }
+    if (auto wgmmaOp = dyn_cast<ttng::WarpGroupDotOp>(op)) {
+      if (wgmmaOp.getIsAsync() == true) {
+        effects.emplace_back(MemEffects{.buf = wgmmaOp.getA(),
+                                        .rw = MemEffects::RW::Read,
+                                        .commitTracking = true,
+                                        .requiresTracking = true});
+        effects.emplace_back(MemEffects{.buf = wgmmaOp.getB(),
+                                        .rw = MemEffects::RW::Read,
+                                        .commitTracking = true,
+                                        .requiresTracking = true});
+      }
     }
     return effects;
   }
@@ -339,46 +437,64 @@ private:
             // For op that is reading, we only need to check if anything else
             // is writing to the same buffer.
             addWriteChecks(b, buf, effect.pred, memType, effect.hwPipelined);
-            if (!effect.barriersAndPreds.empty()) {
-              for (auto [barrier, pred] : effect.barriersAndPreds) {
-                if (pred && effect.pred) {
-                  pred = b.create<arith::AndIOp>(effect.pred, pred);
+            if (effect.requiresTracking) {
+              if (!effect.barriersAndPreds.empty()) {
+                for (auto [barrier, pred] : effect.barriersAndPreds) {
+                  if (pred && effect.pred) {
+                    pred = b.create<arith::AndIOp>(effect.pred, pred);
+                  }
+                  b.create<tti::ExperimentalMarkAsReadOp>(
+                      buf, barrier, buffersTensor[(int)memType], barriers,
+                      readBarriersAlloc[(int)memType],
+                      readBarriersType[(int)memType], pred);
                 }
-                b.create<tti::ExperimentalMarkAsReadOp>(
-                    buf, barrier, buffersTensor[(int)memType], barriers,
-                    readBarriersAlloc[(int)memType],
-                    readBarriersType[(int)memType], pred);
+              }
+              // TODO: this seems a bit vague - we decide whether to use wgmma
+              // or async cp commit tracking based on R or W. Rethink this.
+              if (effect.commitTracking) {
+                assert(isa<ttng::WarpGroupDotOp>(op));
+                assert(memType == MemType::SHARED);
+                b.create<tti::ExperimentalStageAccessForCommitOp>(
+                    buf, buffersTensor[(int)memType], wgmmaCommitsAlloc,
+                    wgmmaCommitsType, effect.pred);
               }
             }
-            // TODO: commit tracking for reads
           }
           if (effect.rw == MemEffects::RW::Write) {
+            if (isa<ttg::LocalAllocOp, ttng::TMEMAllocOp>(op)) {
+              // For allocs place insert point after the alloc - we want to
+              // check if it is not overwriting any earlier allocation, but the
+              // memref value can be referenced only after it is created.
+              b.setInsertionPointAfter(op);
+            }
             // Op is writing to the buffer, we need to check if anything else
             // is reading or writing to the same buffer.
             addWriteChecks(b, buf, effect.pred, memType, effect.hwPipelined);
             addReadChecks(b, buf, effect.pred, memType);
-            // TODO: Relationship between commit tracking and barrier commits
-            // needs to be clarified.
-            if (effect.commitTracking) {
-              b.create<tti::ExperimentalStageWriteForCommitOp>(
-                  buf, buffersTensor[(int)memType], writeCommitsAlloc,
-                  writeCommitsType, effect.pred);
-            } else {
-              b.create<tti::ExperimentalMarkAsWriteOp>(
-                  buf, buffersTensor[(int)memType],
-                  writeStateAlloc[(int)memType], writeStateType[(int)memType],
-                  effect.hwPipelined, effect.pred);
-            }
-            if (!effect.barriersAndPreds.empty()) {
-              for (auto [barrier, pred] : effect.barriersAndPreds) {
-                if (pred && effect.pred) {
-                  pred = b.create<arith::AndIOp>(effect.pred, pred);
-                }
-                b.create<tti::ExperimentalCommitWriteWithBarrierOp>(
-                    barrier, barriers, writeBarriersAlloc[(int)memType],
-                    writeBarriersType[(int)memType],
+            if (effect.requiresTracking) {
+              // TODO: Relationship between commit tracking and barrier commits
+              // needs to be clarified.
+              if (effect.commitTracking) {
+                b.create<tti::ExperimentalStageAccessForCommitOp>(
+                    buf, buffersTensor[(int)memType], asyncCpCommitsAlloc,
+                    asyncCpCommitsType, effect.pred);
+              } else {
+                b.create<tti::ExperimentalMarkAsWriteOp>(
+                    buf, buffersTensor[(int)memType],
                     writeStateAlloc[(int)memType], writeStateType[(int)memType],
-                    pred);
+                    effect.hwPipelined, effect.pred);
+              }
+              if (!effect.barriersAndPreds.empty()) {
+                for (auto [barrier, pred] : effect.barriersAndPreds) {
+                  if (pred && effect.pred) {
+                    pred = b.create<arith::AndIOp>(effect.pred, pred);
+                  }
+                  b.create<tti::ExperimentalCommitWriteWithBarrierOp>(
+                      barrier, barriers, writeBarriersAlloc[(int)memType],
+                      writeBarriersType[(int)memType],
+                      writeStateAlloc[(int)memType],
+                      writeStateType[(int)memType], pred);
+                }
               }
             }
           }
@@ -410,12 +526,13 @@ private:
             writeStateType[(int)MemType::TENSOR], commitOp.getPred());
       }
       if (auto asyncCommitGroupOp = dyn_cast<ttg::AsyncCommitGroupOp>(op)) {
-        b.create<tti::ExperimentalCommitWritesOp>(writeCommitsAlloc,
-                                                  writeCommitsType, nullptr);
+        b.create<tti::ExperimentalCommitAccessesOp>(
+            asyncCpCommitsAlloc, asyncCpCommitsType, nullptr);
       }
       if (auto asyncWaitOp = dyn_cast<ttg::AsyncWaitOp>(op)) {
-        b.create<tti::ExperimentalClearWriteCommitsOp>(
-            writeCommitsAlloc, writeCommitsType, asyncWaitOp.getNum(), nullptr);
+        b.create<tti::ExperimentalClearOutstandingCommitsOp>(
+            asyncCpCommitsAlloc, asyncCpCommitsType, asyncWaitOp.getNum(),
+            nullptr);
       }
       if (auto expectOp = dyn_cast<ttng::BarrierExpectOp>(op)) {
         if (writeBarriersAlloc[(int)MemType::SHARED]) {
@@ -430,6 +547,19 @@ private:
               writeBarriersAlloc[(int)MemType::TENSOR],
               writeBarriersType[(int)MemType::TENSOR], expectOp.getPred());
         }
+      }
+      if (auto wgmmaOp = dyn_cast<ttng::WarpGroupDotOp>(op)) {
+        if (wgmmaOp.getIsAsync() == true) {
+          // Add commit (implicit in ttgir) after staging wgmma's operand for
+          // read
+          b.create<tti::ExperimentalCommitAccessesOp>(
+              wgmmaCommitsAlloc, wgmmaCommitsType, nullptr);
+        }
+      }
+      if (auto wgmmaWaitOp = dyn_cast<ttng::WarpGroupDotWaitOp>(op)) {
+        b.create<tti::ExperimentalClearOutstandingCommitsOp>(
+            wgmmaCommitsAlloc, wgmmaCommitsType, wgmmaWaitOp.getPendings(),
+            nullptr);
       }
     });
   }
@@ -523,8 +653,12 @@ private:
   Value readBarriersAlloc[numMemTypes];
 
   // Tensor tracking number of outstanding write commits for given buffer
-  RankedTensorType writeCommitsType;
-  Value writeCommitsAlloc;
+  RankedTensorType asyncCpCommitsType;
+  Value asyncCpCommitsAlloc;
+
+  // Tensor tracking number of outstanding read commits for given buffer
+  RankedTensorType wgmmaCommitsType;
+  Value wgmmaCommitsAlloc;
 };
 
 } // namespace instrument

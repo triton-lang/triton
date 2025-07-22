@@ -227,69 +227,70 @@ def TTI_ExperimentalCheckBarrierWritesClearedOp : TTI_Op<"experimental_check_bar
 
 
 // TODO: Potentially resolve the naming/functionality clash with commit_write_with_barrier
-def TTI_ExperimentalStageWriteForCommitOp : TTI_Op<"experimental_stage_write_for_commit", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
-  let summary = "Preapre to an async copy of a buffer. Staged until commit_group is called.";
+def TTI_ExperimentalStageAccessForCommitOp : TTI_Op<"experimental_stage_access_for_commit", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+  let summary = "";
   let description = [{
-    Preapre to an async copy of a buffer. Staged until commit_group is called. The implementation will write `-1` to the
-    `write_commits` tensor under the indices corresponding to the buffer.
+    For operations that use `outstanding` to track the number of outstanding commits (rather than mbarriers),
+    mark the buffer as being accessed, but not commited yet, by marking it with `-1`.
   }];
   let arguments = (ins
     TTG_MemDescType:$buf,
     TT_Tensor:$buffers,
-    TT_PtrLike:$writeCommits,
-    TypeAttr:$writeCommitsType,
+    TT_PtrLike:$outstandingCommits,
+    TypeAttr:$outstandingCommitsType,
     Optional<I1>:$pred
   );
   let assemblyFormat = [{
-    $buf `{` $buffers `,` $writeCommits `(` $writeCommitsType `)` `}` (`,` $pred^)? attr-dict `:` type($buf) `,` type($buffers) `,` type($writeCommits)
+    $buf `{` $buffers `,` $outstandingCommits `(` $outstandingCommitsType `)` `}` (`,` $pred^)? attr-dict `:` type($buf) `,` type($buffers) `,` type($outstandingCommits)
   }];
   // let hasVerifier = 1;
 }
 
-def TTI_ExperimentalCommitWritesOp : TTI_Op<"experimental_commit_writes", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
-  let summary = "Commit all the staged writes for all the buffers.";
+def TTI_ExperimentalCommitAccessesOp : TTI_Op<"experimental_commit_accesses", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+  let summary = "Commit all the staged accesses for all the buffers.";
   let description = [{
-    Commit all the staged writes for all the buffers.
+    Commit all the staged accesses for all the buffers.
   }];
   let arguments = (ins
-    TT_PtrLike:$writeCommits,
-    TypeAttr:$writeCommitsType,
+    TT_PtrLike:$outstandingCommits,
+    TypeAttr:$outstandingCommitsType,
     Optional<I1>:$pred);
   let assemblyFormat = [{
-    `{` $writeCommits `(` $writeCommitsType `)` `}` (`,` $pred^)? attr-dict `:` type($writeCommits)
+    `{` $outstandingCommits `(` $outstandingCommitsType `)` `}` (`,` $pred^)? attr-dict `:` type($outstandingCommits)
   }];
   // let hasVerifier = 1;
 }
 
-def TTI_ExperimentalClearWriteCommitsOp : TTI_Op<"experimental_clear_write_commits", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
-  let summary = "Clear all the write commits more distant than `outstandingNum.";
+def TTI_ExperimentalClearOutstandingCommitsOp : TTI_Op<"experimental_clear_outstanding_commits", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+  let summary = "Clear all the outstanding commits more distant than `outstandingNum.";
   let description = [{
-    Clear all the write commits more distant than `outstandingNum` from the current thread.
+    Clear all the outstanding commits more distant than `outstandingNum` from the current thread.
   }];
   let arguments = (ins
-    TT_PtrLike:$writeCommits,
-    TypeAttr:$writeCommitsType,
+    TT_PtrLike:$outstandingCommits,
+    TypeAttr:$outstandingCommitsType,
     I32Attr:$outstandingNum,
     Optional<I1>:$pred);
   let assemblyFormat = [{
-    `{` $writeCommits `(` $writeCommitsType `)` `}` `,` $outstandingNum (`,` $pred^)? attr-dict `:` type($writeCommits)
+    `{` $outstandingCommits `(` $outstandingCommitsType `)` `}` `,` $outstandingNum (`,` $pred^)? attr-dict `:` type($outstandingCommits)
   }];
   // let hasVerifier = 1;
 }
 
-def TTI_ExperimentalCheckWriteCommitOp : TTI_Op<"experimental_check_write_commit", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
-  let summary = "Check if the buffer has an outstanding write commit.";
+def TTI_ExperimentalCheckOutstandingCommitsOp : TTI_Op<"experimental_check_outstanding_commits", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+  let summary = "Check if the buffer has an outstanding commit.";
   let description = [{
-    Check if the buffer has an outstanding write commit.
+    Check if the buffer has an outstanding commit.
   }];
   let arguments = (ins
     TTG_MemDescType:$buf,
     TT_Tensor:$buffers,
-    TT_PtrLike:$writeCommits,
-    TypeAttr:$writeCommitsType,
+    TT_PtrLike:$outstandingCommits,
+    TypeAttr:$outstandingCommitsType,
+    StrAttr:$pendingAccessType,
     Optional<I1>:$pred);
   let assemblyFormat = [{
-    $buf `{` $buffers `,` $writeCommits `(` $writeCommitsType `)` `}` (`,` $pred^)? attr-dict `:` type($buf) `,` type($buffers) `,` type($writeCommits)
+    $buf `{` $buffers `,` $outstandingCommits `(` $outstandingCommitsType `)` `}` `,` $pendingAccessType (`,` $pred^)? attr-dict `:` type($buf) `,` type($buffers) `,` type($outstandingCommits)
   }];
   // let hasVerifier = 1;
 }
