@@ -3833,9 +3833,11 @@ def get_test_dot_small_k_mfma_cases():
 
 # M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, kpack, mma_nonk_size
 # introduced in #4516
-def get_test_dot_small_mn_fma_cases():
+def get_test_dot_small_mn_mfma_cases():
+    if not is_hip_cdna():
+        return []
     return [(*shape_nw, False, False, epilogue, 'ieee', in_dtype, out_dtype, 1, None)
-            for shape_nw in [(2, 2, 16, 1), (1, 64, 64, 1), (64, 2, 64, 2), (64, 64, 4, 4)]
+            for shape_nw in [(4, 64, 64, 1), (64, 4, 64, 1)]
             for epilogue in ['none', 'trans', 'add-matrix', 'add-rows', 'add-cols']
             for in_dtype, out_dtype in [('float16', 'float16'), ('float32', 'float32')]]
 
@@ -3875,7 +3877,7 @@ def get_test_small_dots_cases():
     get_test_dot_mfma_edge_cases() + \
     get_test_dot_fp8_output_cases() + \
     get_test_dot_small_k_mfma_cases() + \
-    get_test_dot_small_mn_fma_cases() + \
+    get_test_dot_small_mn_mfma_cases() + \
     get_test_dot_softmax() + \
     get_test_small_dots_cases())
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
@@ -4070,13 +4072,15 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
         return
 
     if is_hip_cdna():
-        if M != 4:
-            return
         amdgcn = pgm.asm['amdgcn']
-        if in_dtype == 'float16':
-            assert 'v_dot2c_f32_f16' in amdgcn
-        elif (in_dtype == 'bfloat16') and is_hip_cdna4():
-            assert 'v_dot2c_f32_bf16' in amdgcn
+
+        if (M, N) == (4, 64) or (M, N) == (64, 4):
+            assert 'v_mfma_f32_4x4' in amdgcn
+        elif (M, N) == (4, 32):
+            if in_dtype == 'float16':
+                assert 'v_dot2c_f32_f16' in amdgcn
+            elif (in_dtype == 'bfloat16') and is_hip_cdna4():
+                assert 'v_dot2c_f32_bf16' in amdgcn
         return
 
     # make sure ld/st are vectorized
