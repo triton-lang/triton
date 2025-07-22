@@ -186,8 +186,11 @@ void StreamChromeTraceWriter::writeKernel(json &object,
             name = "scope_" + std::to_string(scopeId);
           else
             name = metadata->scopeName.at(scopeId);
-          int64_t ts = static_cast<int64_t>(event.first->cycle) -
-                       blockToStartCycle[ctaId] + bt->initialTime;
+          // TODO: We currently assume 1GHz clock frequency.
+          int64_t freq = 1; // 1GHz = 1e9 cycles per sec = 1 cycle per ns
+          int64_t ts_cycle = static_cast<int64_t>(event.first->cycle) -
+                             blockToStartCycle[ctaId];
+          int64_t ts_ns = bt->initialTime + ts_cycle / freq;
           int64_t dur =
               static_cast<int64_t>(event.second->cycle) - event.first->cycle;
 
@@ -198,10 +201,11 @@ void StreamChromeTraceWriter::writeKernel(json &object,
           element["ph"] = "X";
           element["pid"] = pid;
           element["tid"] = tid;
-          element["ts"] = static_cast<double>(ts) / 1000.0;
+          element["ts"] = static_cast<double>(ts_ns) / 1000.0;
           element["dur"] = static_cast<double>(dur) / 1000.0;
           json args;
           args["Unit"] = "GPU cycle";
+          args["Finalization Time"] = bt->postFinalTime - bt->preFinalTime;
           element["args"] = args;
           object["traceEvents"].push_back(element);
 
