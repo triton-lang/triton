@@ -713,24 +713,6 @@ bool supportMMA(Value value, int version) {
          (elemTy.isInteger(8) && version >= 2);
 }
 
-bool matchMFMAAndDotOperandShuffleCase(RankedTensorType srcTy,
-                                       RankedTensorType dstTy) {
-  auto mfmaLayout = dyn_cast<AMDMfmaEncodingAttr>(srcTy.getEncoding());
-  auto dotOperandLayout = dyn_cast<DotOperandEncodingAttr>(dstTy.getEncoding());
-  if (!mfmaLayout || !dotOperandLayout)
-    return false;
-
-  // Currently supporting 32x32 and 16x16 FP8 MFMA -> dot operand case
-  return dotOperandLayout.getParent() == mfmaLayout &&
-         dotOperandLayout.getOpIdx() == 0 && mfmaLayout.getIsTransposed() &&
-         dotOperandLayout.getKWidth() == 8 &&
-         ((mfmaLayout.getMDim() == 16 && mfmaLayout.getNDim() == 16) ||
-          (mfmaLayout.getMDim() == 32 && mfmaLayout.getNDim() == 32)) &&
-         triton::type::isFloat8(srcTy.getElementType()) &&
-         triton::type::isFloat8(dstTy.getElementType()) &&
-         mfmaLayout.getWarpsPerCTA()[1] == 1;
-}
-
 // We get the smallest submap of srcTy^{-1} * dstTy that is not the identity
 // under the common dimensions. The idea here is that if we have a
 // transformation that's the identity on kBlock, we don't need to use
@@ -791,10 +773,7 @@ bool cvtNeedsSharedMemory(RankedTensorType srcTy, RankedTensorType dstTy) {
   // TODO(jlebar): Remove these special cases `isMfmaToDotShortcut` once
   // they're fully subsumed by the linear-layout checks.
   return !cvtReordersRegisters(srcTy, dstTy) &&
-         !cvtNeedsWarpShuffle(srcTy, dstTy) &&
-         // to be removed when generalized warp shuffle conversions
-         // are ready:
-         !matchMFMAAndDotOperandShuffleCase(srcTy, dstTy);
+         !cvtNeedsWarpShuffle(srcTy, dstTy);
 }
 
 namespace {
