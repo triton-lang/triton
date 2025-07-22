@@ -555,6 +555,7 @@ public:
         loc, tokType, a, b, acc, acc.getToken(), /*useD=*/vTrue,
         /*pred=*/vTrue);
     mma.setTwoCtas(useTwoCTAs);
+    mma.setIsSync(true);
 
     auto ld = rewriter.create<triton::nvidia_gpu::TMEMLoadOp>(
         loc, newAccType, tokType, acc, /*dep=*/mma.getToken());
@@ -745,6 +746,7 @@ public:
         loc, tokType, a, b, acc.getResult(), acc.getToken(), scaleA.getResult(),
         scaleB.getResult(), dotOp.getAElemType(), dotOp.getBElemType(),
         /*useD=*/vTrue, /*pred=*/vTrue);
+    mmaOp.setIsSync(true);
 
     auto ld = rewriter.create<triton::nvidia_gpu::TMEMLoadOp>(
         loc, newAccType, tokType, acc, mmaOp.getToken());
