@@ -9,6 +9,7 @@
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/MathExtras.h"
 
 namespace mlir {
 namespace triton {
@@ -592,21 +593,36 @@ LogicalResult MapElementwiseOp::verify() {
   if (getOperands().empty()) {
     return emitOpError() << "MapElementwiseOp must have at least 1 operand";
   }
+  if (!llvm::isPowerOf2_32(getPack())) {
+    return emitOpError() << "Pack must be a power of 2";
+  }
   return success();
+}
+
+template <typename T>
+SmallVector<T> repeatInterleave(const SmallVectorImpl<T> &vs, int nRepeat) {
+  SmallVector<T> result;
+  result.reserve(vs.size() * nRepeat);
+  for (auto v : vs)
+    for (auto _ : llvm::seq(nRepeat))
+      result.push_back(v);
+  return result;
 }
 
 LogicalResult MapElementwiseOp::verifyRegions() {
   // Verify signature
   auto *firstBlock = &getRegion().getBlocks().front();
-  if (firstBlock->getNumArguments() != getNumOperands()) {
+  if (firstBlock->getNumArguments() != getNumOperands() * getPack()) {
     return emitOpError() << "region has wrong number of arguments";
   }
 
-  auto expectedArgTypes = getElementTypesImpl(getOperands());
+  auto expectedArgTypes =
+      repeatInterleave(getElementTypesImpl(getOperands()), getPack());
   if (firstBlock->getArgumentTypes() != expectedArgTypes) {
     return emitError() << "argument types did not match";
   }
-  auto expectedReturnTypes = getElementTypesImpl(getResults());
+  auto expectedReturnTypes =
+      repeatInterleave(getElementTypesImpl(getResults()), getPack());
   auto walkRes = getRegion().walk([&](Operation *op) -> WalkResult {
     auto memEffects = dyn_cast<MemoryEffectOpInterface>(op);
     // Ban stores as we won't get the redundant masking correct by treating it

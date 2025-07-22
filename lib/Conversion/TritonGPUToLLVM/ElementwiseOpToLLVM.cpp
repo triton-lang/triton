@@ -584,37 +584,56 @@ struct MapElementwiseOpConversion
     auto typeConverter = getTypeConverter();
 
     auto operands = adaptor.getOperands();
-    const auto numOperands = operands.size();
-    const auto packSize =
+    const auto nOperands = operands.size();
+    const auto nElems =
         cast<LLVM::LLVMStructType>(operands[0].getType()).getBody().size();
+    const auto nElemsPerPack = op.getPack();
+    if (nElems % nElemsPerPack != 0)
+      return op->emitError()
+             << "pack size must be a divisor of the number of elements per "
+                "thread, but got pack = "
+             << nElemsPerPack << ", elements per thread = " << nElems << "\n";
 
-    SmallVector<Value> scalarOperands(numOperands * packSize);
-    for (unsigned iOp = 0; iOp < numOperands; ++iOp) {
+    const auto nPacks = nElems / nElemsPerPack;
+    auto nArgsUnpacked = nElemsPerPack * nOperands;
+
+    SmallVector<Value> scalarOperands(nOperands * nElems);
+    for (auto iOp : llvm::seq(nOperands)) {
       auto elems = unpackLLElements(loc, operands[iOp], rewriter);
-      assert(elems.size() == packSize);
-      for (unsigned iPack = 0; iPack < packSize; ++iPack) {
-        scalarOperands[iPack * numOperands + iOp] = elems[iPack];
+      assert(elems.size() == nElems);
+      for (auto iPack : llvm::seq(nPacks)) {
+        auto *packOperands =
+            &scalarOperands[iPack * nArgsUnpacked + iOp * nElemsPerPack];
+        auto *packElems = &elems[iPack * nElemsPerPack];
+        for (auto iElem : llvm::seq(nElemsPerPack)) {
+          packOperands[iElem] = packElems[iElem];
+        }
       }
     }
 
     auto &scalarOp = op.getScalarOp();
     Region &parent = *rewriter.getBlock()->getParent();
 
-    auto numOutputs = op.getNumResults();
-    SmallVector<Value> scalarOutputs(numOutputs * packSize);
-    for (unsigned iPack = 0; iPack < packSize; ++iPack) {
-      ArrayRef<Value> packArgs(&scalarOperands[iPack * numOperands],
-                               numOperands);
+    auto nOutputs = op.getNumResults();
+    SmallVector<Value> scalarOutputs(nOutputs * nElems);
+    for (auto iPack : llvm::seq(nPacks)) {
+      ArrayRef<Value> packedArgs(&scalarOperands[iPack * nArgsUnpacked],
+                                 nArgsUnpacked);
       auto packResults = inlineRegion<triton::MapElementwiseReturnOp>(
-          rewriter, scalarOp, packArgs, loc);
-      for (unsigned iOut = 0; iOut < numOutputs; ++iOut) {
-        scalarOutputs[iOut * packSize + iPack] = packResults[iOut];
+          rewriter, scalarOp, packedArgs, loc);
+      assert(packResults.size() == nOutputs * nElemsPerPack);
+      for (auto iOut : llvm::seq(nOutputs)) {
+        auto *packOutputs =
+            &scalarOutputs[iOut * nElems + iPack * nElemsPerPack];
+        for (auto iElem : llvm::seq(nElemsPerPack)) {
+          packOutputs[iElem] = packResults[iOut * nElemsPerPack + iElem];
+        }
       }
     }
 
-    SmallVector<Value> packedOutputs(numOutputs);
-    for (unsigned iOut = 0; iOut < numOutputs; ++iOut) {
-      ArrayRef<Value> vals(&scalarOutputs[iOut * packSize], packSize);
+    SmallVector<Value> packedOutputs(nOutputs);
+    for (auto iOut : llvm::seq(nOutputs)) {
+      ArrayRef<Value> vals(&scalarOutputs[iOut * nElems], nElems);
       packedOutputs[iOut] =
           packLLElements(loc, typeConverter, vals, rewriter, op.getType(iOut));
     }

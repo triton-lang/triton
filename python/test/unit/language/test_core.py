@@ -5777,6 +5777,41 @@ def test_map_elementwise_multiple_outputs(device):
     np.testing.assert_equal(D_ref, to_numpy(D_tri))
 
 
+def test_map_elementwise_pack(device):
+
+    @triton.jit
+    def divmod(a0, a1, b0, b1):
+        return a0 // b0, a1 // b1, a0 % b0, a1 % b1
+
+    @triton.jit
+    def kernel(A, B, C, D, BLOCK: tl.constexpr):
+        a = tl.load(A + tl.arange(0, BLOCK))
+        b = tl.load(B + tl.arange(0, BLOCK))
+
+        c, d = tl.map_elementwise(divmod, a, b, pack=2)
+
+        tl.store(C + tl.arange(0, BLOCK), c)
+        tl.store(D + tl.arange(0, BLOCK), d)
+
+    shape = (512, )
+    rs = RandomState(17)
+    A = numpy_random(shape, dtype_str='uint32', rs=rs)
+    B = numpy_random(shape, dtype_str='uint32', rs=rs)
+    A_tri = to_triton(A, device=device)
+    B_tri = to_triton(B, device=device)
+    C_tri = to_triton(numpy_random(shape, dtype_str='uint32', rs=rs), device=device)
+    D_tri = to_triton(numpy_random(shape, dtype_str='uint32', rs=rs), device=device)
+    h = kernel[(1, )](A_tri, B_tri, C_tri, D_tri, BLOCK=shape[0])
+    print(h.asm["llir"])
+    print(h.asm["ttir"])
+
+    C_ref = A // B
+    D_ref = A % B
+
+    np.testing.assert_equal(C_ref, to_numpy(C_tri))
+    np.testing.assert_equal(D_ref, to_numpy(D_tri))
+
+
 # -----------------------
 # test control flow
 # -----------------------

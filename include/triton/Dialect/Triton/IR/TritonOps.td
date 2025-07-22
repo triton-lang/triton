@@ -804,7 +804,7 @@ def TT_MapElementwiseOp: TT_Op<"map_elementwise", [SameOperandsAndResultEncoding
                                                    SameOperandsAndResultShape,
                                                    RecursiveMemoryEffects]> {
     let summary = "Map a scalar subregion over a tensor";
-    let arguments = (ins Variadic<TT_Tensor>:$srcs);
+    let arguments = (ins Variadic<TT_Tensor>:$srcs, I32Attr:$pack);
     let results = (outs Variadic<TT_Tensor>:$result);
     let regions = (region AnyRegion:$scalarOp);
     let hasVerifier = 1;

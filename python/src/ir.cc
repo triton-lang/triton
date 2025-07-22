@@ -1648,8 +1648,8 @@ void init_triton_ir(py::module &&m) {
            })
       .def("create_map_elementwise",
            [](TritonOpBuilder &self, std::vector<Value> inputs,
-              std::vector<Type> returnTys) -> OpState {
-             return self.create<MapElementwiseOp>(returnTys, inputs);
+              std::vector<Type> returnTys, int pack) -> OpState {
+             return self.create<MapElementwiseOp>(returnTys, inputs, pack);
            })
       .def("create_map_elementwise_ret",
            [](TritonOpBuilder &self, std::vector<Value> returnVals) -> OpState {

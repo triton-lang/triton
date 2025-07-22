@@ -2791,6 +2791,7 @@ def gather(src, index, axis, _semantic=None):
 def map_elementwise(
     scalar_fn: Callable[..., Tuple[tensor, ...]],
     *args: tensor,
+    pack=1,
     _semantic=None,
     _generator=None,
 ):
@@ -2819,16 +2820,19 @@ def map_elementwise(
                 return tl.map_elementwise(selu_scalar, x, alpha)
 
         :param scalar_fn: the function to map over.
+        :param pack: the number of elements to be processed by one function call.
         :return: one tensor or a tuple of tensors, depending on the mapped function.
     '''
     # Build the block for the nested region first to discover the return types
+    assert pack >= 1
     in_scalar_tys = [t.type.scalar for t in args]
     builder = _semantic.builder
     block = builder.new_block()
     scalar_args = []
     for i, ty in enumerate(in_scalar_tys):
-        block.add_argument(ty.to_ir(builder))
-        scalar_args.append(tensor(block.arg(i), ty))
+        for j in builtins.range(pack):
+            block.add_argument(ty.to_ir(builder))
+            scalar_args.append(tensor(block.arg(i * pack + j), ty))
 
     with _insertion_guard(builder):
         builder.set_insertion_point_to_start(block)
@@ -2840,13 +2844,19 @@ def map_elementwise(
 
         handles = [r.handle for r in scalar_results]
         builder.create_map_elementwise_ret(handles)
-    result_types = [x.type for x in scalar_results]
+
+    fn_result_types = [x.type for x in scalar_results]
+    scalar_result_types = fn_result_types
+    if pack > 1:
+        scalar_result_types = fn_result_types[::pack]
+        for offset in builtins.range(1, pack):
+            assert scalar_result_types == fn_result_types[offset::pack], "type mismatch in unpacked results"
 
     def make_elementwise_region(elementwise_op):
         region = elementwise_op.get_region(0)
         region.push_back(block)
 
-    result = _semantic.map_elementwise(args, result_types, make_elementwise_region)
+    result = _semantic.map_elementwise(args, scalar_result_types, pack, make_elementwise_region)
     return result[0] if is_single else result
 
 

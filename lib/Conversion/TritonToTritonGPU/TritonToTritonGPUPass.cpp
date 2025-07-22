@@ -481,7 +481,7 @@ struct TritonMapElementwisePattern
     }
 
     auto newMapOp = rewriter.create<triton::MapElementwiseOp>(
-        op.getLoc(), resultTys, adaptor.getOperands());
+        op.getLoc(), resultTys, adaptor.getOperands(), op.getPack());
     addNamedAttrs(newMapOp, adaptor.getAttributes());
 
     auto &newScalarOp = newMapOp.getScalarOp();

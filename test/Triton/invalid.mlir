@@ -570,7 +570,7 @@ tt.func @atomic_cas_different_elem_types(%arg0: tensor<128x!tt.ptr<f32>>, %arg1:
 tt.func @map_elementwise_arg_num_mismatch() {
   %cst = arith.constant dense<0> : tensor<256xi32>
   // expected-error @below {{region has wrong number of arguments}}
-  "tt.map_elementwise" (%cst) ({
+  "tt.map_elementwise" (%cst) <{pack = 1 : i32}> ({
   ^bb0(%arg0: i64, %arg1 : i32):
      tt.map_elementwise.return %arg1 : i32
   }) : (tensor<256xi32>) -> (tensor<256xi32>)
@@ -582,7 +582,7 @@ tt.func @map_elementwise_arg_num_mismatch() {
 tt.func @map_elementwise_arg_mismatch() {
   %cst = arith.constant dense<0> : tensor<256xi32>
   // expected-error @below {{argument types did not match}}
-  "tt.map_elementwise" (%cst) ({
+  "tt.map_elementwise" (%cst) <{pack = 1 : i32}> ({
   ^bb0(%arg0: i64):
      tt.map_elementwise.return %arg0 : i64
   }) : (tensor<256xi32>) -> (tensor<256xi64>)
@@ -593,7 +593,7 @@ tt.func @map_elementwise_arg_mismatch() {
 
 tt.func @map_elementwise_return_mismatch() {
   %cst = arith.constant dense<0> : tensor<256xi32>
-  "tt.map_elementwise" (%cst) ({
+  "tt.map_elementwise" (%cst) <{pack = 1 : i32}> ({
   ^bb0(%arg0: i32):
      // expected-error @below {{region return does not match map_elementwise result}}
      tt.map_elementwise.return %arg0 : i32
@@ -605,7 +605,7 @@ tt.func @map_elementwise_return_mismatch() {
 
 tt.func @map_elementwise_store(%ptr: tensor<256x!tt.ptr<i32>>) {
   %cst = arith.constant dense<0> : tensor<256xi32>
-  "tt.map_elementwise" (%ptr, %cst) ({
+  "tt.map_elementwise" (%ptr, %cst) <{pack = 1 : i32}> ({
   ^bb0(%arg0: !tt.ptr<i32>, %arg1: i32):
      // expected-error @below {{Stores are not supported inside map_elementwise}}
      tt.store %arg0, %arg1 : !tt.ptr<i32>
