@@ -896,9 +896,9 @@ void multibufferTensorMemory(scf::ForOp forOp, CoarseSchedule &schedule,
       forOp.getLoc(), builder.getType<AsyncTokenType>());
   for (auto user : allocUsers) {
     if (auto store = dyn_cast<ttng::TMEMStoreOp>(user)) {
+      store.getDepMutable().clear();
+      store.getToken().replaceAllUsesWith(replTok);
       if (forOp->isAncestor(store)) {
-        store.getDepMutable().clear();
-        store.getToken().replaceAllUsesWith(replTok);
         // We can multibuffer, since the store is a point where we can
         // change the buffer index
         multibufferingIsValid = true;
@@ -926,9 +926,9 @@ void multibufferTensorMemory(scf::ForOp forOp, CoarseSchedule &schedule,
         store.getDstMutable().assign(tmemSlice);
       }
     } else if (auto load = dyn_cast<ttng::TMEMLoadOp>(user)) {
+      load.getDepMutable().clear();
+      load.getToken().replaceAllUsesWith(replTok);
       if (forOp->isAncestor(load)) {
-        load.getDepMutable().clear();
-        load.getToken().replaceAllUsesWith(replTok);
         builder.setStageCluster(schedule[load]);
         builder.setInsertionPoint(load);
         Value curBufIdx = getCurrBufIdx(load);
