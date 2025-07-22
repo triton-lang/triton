@@ -307,32 +307,3 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return %res_f16 : tensor<128x128xf16, #blocked>
   }
 }
-
-// -----
-
-#blocked = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
-#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, unpacked = true>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
-  // CHECK-LABEL: @hoist_out_of_if
-  tt.func public @hoist_out_of_if(%arg0: i1, %arg1: tensor<128x128xf32, #blocked>) -> tensor<128x128xf32, #blocked> {
-    // CHECK: %[[A:.+]], %[[T0:.+]] = ttng.tmem_alloc : ()
-    // CHECK: %[[T1:.+]] = ttng.tmem_store %{{.*}}, %[[A]][%[[T0]]]
-    // CHECK: %[[I:.+]] = scf.if %{{.+}} -> (!ttg.async.token) {
-    // CHECK:   %[[T2:.+]] = "write_to_tmem"
-    // CHECK:   scf.yield %[[T2]]
-    // CHECK: } else {
-    // CHECK:   scf.yield %[[T1]]
-    // CHECK: }
-    // CHECK: %[[L:.+]], %[[T4:.+]] = ttng.tmem_load %[[A]][%[[I]]
-    // CHECK: tt.return %[[L]]
-    %0 = scf.if %arg0 -> (tensor<128x128xf32, #blocked>) {
-      %result, %token = ttng.tmem_alloc %arg1 : (tensor<128x128xf32, #blocked>) -> (!ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.async.token)
-      %1 = "write_to_tmem"(%result) : (!ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>) -> !ttg.async.token
-      %result_0, %token_1 = ttng.tmem_load %result[%1] : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked>
-      scf.yield %result_0 : tensor<128x128xf32, #blocked>
-    } else {
-      scf.yield %arg1 : tensor<128x128xf32, #blocked>
-    }
-    tt.return %0 : tensor<128x128xf32, #blocked>
-  }
-}

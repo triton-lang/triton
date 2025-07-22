@@ -35,7 +35,7 @@ module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-w
     %0 = nvws.aref.create %d, %e : !nvws.aref<[!ttg.memdesc<1x64x16xf16, #shared0, #smem>, !ttg.memdesc<1x16x32xf16, #shared0, #smem>]>
     %c0_i32 = arith.constant 0 : i32
     // expected-error @below {{Aref has different number of arguments than enter}}
-    %1 = nvws.aref.put.enter %0[%c0_i32] :
+    %1 = nvws.aref.put.enter %0[%c0_i32, %c0_i32] :
       !nvws.aref<[!ttg.memdesc<1x64x16xf16, #shared0, #smem>, !ttg.memdesc<1x16x32xf16, #shared0, #smem>]>
       -> !ttg.memdesc<64x16xf16, #shared0, #smem>
     tt.return
@@ -51,7 +51,7 @@ module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-w
     %c0_i32 = arith.constant 0 : i32
     %0 = nvws.aref.create %d, %e : !nvws.aref<[!ttg.memdesc<1x64x16xf16, #shared0, #smem>, !ttg.memdesc<1x16x32xf16, #shared0, #smem>]>
     // expected-error @below {{Dimensions don't match}}
-    %1:2 = nvws.aref.put.enter %0[%c0_i32] :
+    %1:2 = nvws.aref.put.enter %0[%c0_i32, %c0_i32] :
       !nvws.aref<[!ttg.memdesc<1x64x16xf16, #shared0, #smem>, !ttg.memdesc<1x16x32xf16, #shared0, #smem>]>
       -> !ttg.memdesc<64x16xf16, #shared0, #smem>, !ttg.memdesc<32x32xf16, #shared0, #smem>
     tt.return
@@ -67,7 +67,7 @@ module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-w
     %c0_i32 = arith.constant 0 : i32
     %0 = nvws.aref.create %d, %e : !nvws.aref<[!ttg.memdesc<1x64x16xf16, #shared0, #smem>, !ttg.memdesc<1x16x32xf16, #shared0, #smem>]>
     // expected-error @below {{MLIR Types don't match}}
-    nvws.aref.get.enter %0[%c0_i32] :
+    nvws.aref.get.enter %0[%c0_i32, %c0_i32] :
       !nvws.aref<[!ttg.memdesc<1x64x16xf16, #shared0, #smem>, !ttg.memdesc<1x16x32xf16, #shared0, #smem>]>
       -> !ttg.memdesc<64x16xf16, #shared0, #smem>, tensor<16x32xf16>
     tt.return

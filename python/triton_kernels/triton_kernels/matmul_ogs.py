@@ -482,6 +482,8 @@ def matmul_ogs(x, w, bias,
     w_scale_strides = w_scale.stride() if has_mx and not w_scale_has_tma else (None, None, None)
     if len(w_scale_strides) == 2:
         w_scale_strides = (0, ) + w_scale_strides
+    # if routing_data.expt_hist is not None:
+    #     print(opt_flags)
     # launch kernel
     kernels = get_kernels(epilogue.specs, fused_activation.specs)
     (kernels._p_matmul_ogs if opt_flags.is_persistent else kernels._matmul_ogs)[(grid,)](
@@ -532,8 +534,8 @@ def matmul_ogs(x, w, bias,
                    **opt_flags.target_kernel_kwargs)
     # post-processing
     out = apply_postprocessing_features(scatter_indx, finalize_scatter_idxs, opt_flags, expt_token_offs_raw,
-                                num_indx, precision_config, routing_data,
-                                postprocessing_features, memory, fused_postprocess_activation, epilogue)
+                                        num_indx, precision_config, routing_data,
+                                        postprocessing_features, memory, fused_postprocess_activation, epilogue)
     # remove split-k
     out = out.squeeze(0)
     if not is_input_batched:
