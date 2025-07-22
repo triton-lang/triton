@@ -765,16 +765,9 @@ struct PipelinePass : impl::TritonAMDGPUStreamPipelineBase<PipelinePass> {
                          useAsyncCopy, waitAtTail);
     }
 
-    if (useAsyncCopy && numStages != 3) {
+    if (useAsyncCopy) {
       llvm::SmallSetVector<ttg::AsyncWaitOp, 8> waitOps;
-      moduleOp.walk([&](ttg::AsyncWaitOp waitOp) {
-        if (auto maybeForOp = dyn_cast<scf::ForOp>(waitOp->getParentOp()))
-          // FIXME: There's potential bug in combinRedundantWaitOps(), it
-          // generate incorrect IR order when numStages==3.
-          if (tt::getNumStagesOrDefault(maybeForOp, numStages) == 3)
-            return;
-        waitOps.insert(waitOp);
-      });
+      moduleOp.walk([&](ttg::AsyncWaitOp waitOp) { waitOps.insert(waitOp); });
       tt::combineRedundantWaitOps(waitOps);
     }
   }
