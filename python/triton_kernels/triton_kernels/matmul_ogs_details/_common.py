@@ -84,7 +84,7 @@ def make_matmul_repr(base_name, order):
         # suffix = "" if not mode else "_o" + (''.join(mode))
         # if base_name.startswith("_p"):
         #     suffix += "_ptma"
-        return f"cutlass_{base_name}_{layouts}_{dtypes}_{blocks}"
+        return f"{base_name}_{layouts}_{dtypes}_{blocks}"
 
     return matmul_repr
 

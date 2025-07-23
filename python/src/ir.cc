@@ -1495,6 +1495,10 @@ void init_triton_ir(py::module &&m) {
            [](TritonOpBuilder &self, Type &retTy, Value &arg) -> Value {
              return self.createOrFold<SplatOp>(retTy, arg);
            })
+      .def("create_unsplat",
+           [](TritonOpBuilder &self, Value &arg) -> Value {
+             return self.createOrFold<UnsplatOp>(arg);
+           })
       // // atomic
       .def("create_atomic_cas",
            [](TritonOpBuilder &self, Value &ptr, Value &cmp, Value &val,
@@ -1645,6 +1649,15 @@ void init_triton_ir(py::module &&m) {
                return_values.push_back(py::cast<Value>(arg));
              }
              return self.create<ScanReturnOp>(return_values);
+           })
+      .def("create_map_elementwise",
+           [](TritonOpBuilder &self, std::vector<Value> inputs,
+              std::vector<Type> returnTys, int pack) -> OpState {
+             return self.create<MapElementwiseOp>(returnTys, inputs, pack);
+           })
+      .def("create_map_elementwise_ret",
+           [](TritonOpBuilder &self, std::vector<Value> returnVals) -> OpState {
+             return self.create<MapElementwiseReturnOp>(returnVals);
            })
       .def("create_ptr_to_int",
            [](TritonOpBuilder &self, Value &val, Type &type) -> Value {

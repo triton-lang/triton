@@ -515,10 +515,13 @@ SmallVector<SmallVector<Value>>
 emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
             Attribute layout, RankedTensorType type, bool withCTAOffset);
 
-// Emits the required padding in elements for the given shared memory offset
+// Emits the required padding given shared memory offset
+// - If `offsetInBytes` is true, smemOffset and padding is assumed in bytes.
+// - If false, smemOffset and padding are assumed to be scaled by element
+// bitwidth, in which case, `bitwidth` is not used.
 Value emitPadding(Location loc, RewriterBase &rewriter,
                   triton::gpu::PaddedSharedEncodingAttr layout,
-                  Value smemOffset);
+                  unsigned bitwidth, Value smemOffset, bool offsetInBytes);
 
 // Emits IR to load data from shared memory into registers, or to store data
 // from registers into shared memory.
@@ -546,39 +549,33 @@ Value emitPadding(Location loc, RewriterBase &rewriter,
     Value laneId, Value warpId,
     std::function<void(VectorType, Value /*shmemAddr*/)> perVectorCallback);
 
-SmallVector<Value> loadSharedToDistributed(triton::gpu::LocalLoadOp localLoadOp,
-                                           Type elemLlvmTy,
-                                           const SharedMemoryObject &smemObj,
-                                           Location loc, RewriterBase &rewriter,
-                                           const TargetInfoBase &target);
-
-void storeDistributedToShared(triton::gpu::MemDescType dstTy,
-                              RankedTensorType srcTy, Type elemLlvmTy,
-                              ArrayRef<Value> srcVals,
-                              const SharedMemoryObject &smemObj, Location loc,
-                              RewriterBase &rewriter,
-                              const TargetInfoBase &target);
-
 // Close cousin of lowerLdStMatrix in MemoryOpToLLVM.cpp
 // We might want to merge them at some point, but having to support
 // ldmatrix.trans makes the code in lowerLdStMatrix a bit specific
 // Lowers to st when valArrays is empty, and to ld when it is not,
 // and returns the output values.
-SmallVector<Value>
-lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout cvt,
-                ArrayRef<Value> valsArray, // Input for store, output for load
-                Type llvmElemTy, Value smemBase, Value affineOffset,
-                uint64_t maskSpanAffineOffset,
-                ConversionPatternRewriter &rewriter,
-                const TargetInfoBase &targetInfo);
+// calcPaddedOffset is a lambda that takes a base offset (mlir::Value)
+// and computes a new offset (mlir::Value) by applying padding based on
+// shared memory layout.
+SmallVector<Value> lowerLdStShared(
+    Location loc, MLIRContext *ctx, LinearLayout cvt,
+    ArrayRef<Value> valsArray, // Input for store, output for load
+    Type llvmElemTy, Value smemBase,
+    std::function<Value(Value)> calcPaddedOffset, Value affineOffset,
+    uint64_t maskSpanAffineOffset, ConversionPatternRewriter &rewriter,
+    const TargetInfoBase &targetInfo, Operation *localLoadOp = nullptr);
 
 // Lower an ld/st-like operation given a layout and a callback that creates the
 // PTX instruction Lowers to st when valArrays is empty, and to ld when it is
 // not, and returns the output values.
+// calcPaddedOffset is a lambda that takes a base offset (mlir::Value)
+// and computes a new offset (mlir::Value) by applying padding based on
+// shared memory layout.
 SmallVector<Value> lowerLdSt(
     Location loc, MLIRContext *ctx, LinearLayout cvt,
     ArrayRef<Value> valsArray, // Input for store, output for load
-    Type llvmElemTy, Value smemBase, Value affineOffset,
+    Type llvmElemTy, Value smemBase,
+    std::function<Value(Value)> calcPaddedOffset, Value affineOffset,
     uint64_t maskSpanAffineOffset, ConversionPatternRewriter &rewriter,
     const TargetInfoBase &targetInfo, std::optional<int> maybeMaxVecElems,
     std::function<SmallVector<Value>(ConversionPatternRewriter &, Location,
@@ -592,7 +589,8 @@ lowerLocalLdSt(Location loc, MLIRContext *ctx,
                ArrayRef<Value> valsArray, // Input for store, empty for load
                Type llvmElemTy, triton::gpu::MemDescType srcTy,
                SharedMemoryObject smemObj, ConversionPatternRewriter &rewriter,
-               const TargetInfoBase &targetInfo);
+               const TargetInfoBase &targetInfo,
+               Operation *localLoadOp = nullptr);
 
 SmallVector<Value> unpackLLElements(Location loc, Value llvmStruct,
                                     RewriterBase &rewriter);
@@ -644,6 +642,19 @@ Value transferWithinBlockPadding(triton::gpu::ConvertLayoutOp op, Value src,
                                  const TargetInfoBase &targetInfo,
                                  const LLVMTypeConverter *typeConverter,
                                  RewriterBase &rewriter);
+
+SmallVector<Value> inlineRegionImpl(RewriterBase &rewriter, Region &region,
+                                    ArrayRef<Value> args,
+                                    mlir::TypeID terminatorTypeId,
+                                    Location loc);
+
+template <typename TerminatorOp>
+SmallVector<Value> inlineRegion(RewriterBase &rewriter, Region &region,
+                                ArrayRef<Value> args, Location loc) {
+  return inlineRegionImpl(rewriter, region, args,
+                          mlir::TypeID::get<TerminatorOp>(), loc);
+}
+
 } // namespace mlir
 
 #endif
