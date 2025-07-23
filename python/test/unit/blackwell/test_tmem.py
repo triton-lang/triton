@@ -224,6 +224,10 @@ def test_block_m_64_mma():
         bar = ttgl.allocate_shared_memory(ttgl.int64, [1], ttgl.constexpr(mbarrier.MBarrierLayout()))
         mbarrier.init(bar, count=1)
 
+        # This is a manually tiled MMA where LHS is in TMEM with blockM=64,
+        # where we circumvent the limitation that LHS and accumulator need to
+        # share the same TMEM rows by storing the LHS twice.
+        #
         # TMEM      al   ar   c
         # [0, 16)   a0   a1   c0
         # [16, 32)  a1   a0   c1
