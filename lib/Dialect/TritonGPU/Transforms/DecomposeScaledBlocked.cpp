@@ -7,6 +7,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -33,7 +34,15 @@ public:
     // TODO: add support for m/n packed formats.
     if (!scaledDotOp.getLhsKPack() || !scaledDotOp.getRhsKPack())
       return failure();
-    // Types
+
+    auto moduleOp = scaledDotOp->getParentOfType<ModuleOp>();
+    if (!moduleOp) {
+      return rewriter.notifyMatchFailure(scaledDotOp, "Could not find parent ModuleOp");
+    }
+    if (getNVIDIAComputeCapability(moduleOp) == 120)
+      return failure();
+
+      // Types
     auto computeType = getComputeType(scaledDotOp.getAElemType(),
                                       scaledDotOp.getBElemType(), rewriter);
     auto loc = scaledDotOp.getLoc();
