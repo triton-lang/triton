@@ -645,6 +645,72 @@ struct BufferLoadOpConversion
   }
 };
 
+struct GlobalLoadTransposeOpConversion
+    : public ConvertOpToLLVMPattern<triton::amdgpu::GlobalLoadTransposeOp>,
+      public LoadStoreConversionBase {
+  using ConvertOpToLLVMPattern<
+      triton::amdgpu::GlobalLoadTransposeOp>::ConvertOpToLLVMPattern;
+
+  GlobalLoadTransposeOpConversion(LLVMTypeConverter &converter,
+                                  const AMD::TargetInfo &targetInfo,
+                                  ModuleAxisInfoAnalysis &axisAnalysisPass,
+                                  PatternBenefit benefit)
+      : ConvertOpToLLVMPattern<triton::amdgpu::GlobalLoadTransposeOp>(converter,
+                                                                      benefit),
+        LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
+
+  LogicalResult
+  matchAndRewrite(triton::amdgpu::GlobalLoadTransposeOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op->getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+
+    // original values
+    Value ptr = op.getPtr();
+
+    // adaptor values
+    assert(!isTensorPointerType(ptr.getType()) &&
+           "Cannot convert load with a tensor pointer into LLVM; "
+           "this case should be transformed to normal load before lowering");
+    Value llPtr = adaptor.getPtr();
+
+    Type valueTy = op.getType();
+    Type valueElemTy =
+        typeConverter->convertType(getElementTypeOrSelf(valueTy));
+    unsigned vecSize = 8;
+    unsigned numElems = getTotalElemsPerThread(ptr.getType());
+
+    // Get the LLVM values for pointers
+    auto ptrElems = unpackLLElements(loc, llPtr, rewriter);
+    assert(ptrElems.size() == numElems);
+
+    VectorType v8i16 = vec_ty(i16_ty, vecSize);
+
+    SmallVector<Value> loadedVals;
+    for (size_t vecStart = 0; vecStart < numElems; vecStart += vecSize) {
+      Value ptr = ptrElems[vecStart];
+      Value transposeLoadV8 =
+          b.bitcast(LLVM::createLLVMIntrinsicCallOp(
+                        rewriter, loc, "llvm.amdgcn.global.load.tr.b128.v4i16",
+                        v8i16, ValueRange{ptr})
+                        ->getResult(0),
+                    vec_ty(valueElemTy, vecSize));
+      for (size_t ii = 0; ii < vecSize; ++ii) {
+        Value vecIdx = createIndexAttrConstant(
+            rewriter, loc, getTypeConverter()->getIndexType(), ii);
+        Value loaded = b.extract_element(valueElemTy, transposeLoadV8, vecIdx);
+        loadedVals.push_back(loaded);
+      }
+    }
+
+    Type llvmResultStructTy = getTypeConverter()->convertType(valueTy);
+    Value resultStruct = packLLElements(loc, getTypeConverter(), loadedVals,
+                                        rewriter, llvmResultStructTy);
+    rewriter.replaceOp(op, {resultStruct});
+    return success();
+  }
+};
+
 struct BufferLoadToLocalOpConversion
     : public ConvertOpToLLVMPattern<triton::amdgpu::BufferLoadToLocalOp>,
       public DirectToLdsLoadConversionBase {
@@ -1804,10 +1870,10 @@ void populateLoadStoreOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                        PatternBenefit benefit) {
   patterns.add<AtomicCASOpConversion, AtomicRMWOpConversion, LoadOpConversion,
                StoreOpConversion, BufferLoadOpConversion,
-               BufferLoadToLocalOpConversion, BufferStoreOpConversion,
-               BufferAtomicRMWOpConversion, AsyncCopyGlobalToLocalOpConversion,
-               BufferAtomicCASOpConversion>(typeConverter, targetInfo,
-                                            axisInfoAnalysis, benefit);
+               GlobalLoadTransposeOpConversion, BufferLoadToLocalOpConversion,
+               BufferStoreOpConversion, BufferAtomicRMWOpConversion,
+               AsyncCopyGlobalToLocalOpConversion, BufferAtomicCASOpConversion>(
+      typeConverter, targetInfo, axisInfoAnalysis, benefit);
   patterns.add<AsyncWaitOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<AsyncCommitGroupOpConversion>(typeConverter, benefit);
 }

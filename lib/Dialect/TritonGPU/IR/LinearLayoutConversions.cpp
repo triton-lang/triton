@@ -757,6 +757,55 @@ LinearLayout chooseDotDsReadB64TrLayout(DotOperandEncodingAttr dotMfmaLayout,
   return combineCtaCgaWithShape(ctaLayout, mfmaLayout.getCTALayout(), shape);
 }
 
+std::pair<LinearLayout, LinearLayout>
+chooseGlobalLoadTrLayout(Attribute enc, ArrayRef<int64_t> shape) {
+  auto dotOpEncoding = cast<DotOperandEncodingAttr>(enc);
+  auto wmmaEncoding = cast<AMDWmmaEncodingAttr>(dotOpEncoding.getParent());
+  StringAttr kRegister =
+      StringAttr::get(dotOpEncoding.getContext(), "register");
+  StringAttr kLane = StringAttr::get(dotOpEncoding.getContext(), "lane");
+  StringAttr kWarp = StringAttr::get(dotOpEncoding.getContext(), "warp");
+  SmallVector<unsigned> order =
+      getOrderForDotOperand(dotOpEncoding.getOpIdx(), 2, /*kContig*/ true);
+  std::array<unsigned, 2> memOrder = {order[1], order[0]};
+  SmallVector<StringAttr> standardOutDims = permuteDimNames(
+      triton::standardOutDimNames(dotOpEncoding.getContext(), 2), order);
+
+  // Each warps loads four 8x8 subtiles which are transposed before storing to
+  // VGPRs
+  auto tileAddrLayout =
+      (LinearLayout::identity1D(8, kRegister, standardOutDims[1]) *
+       LinearLayout::identity1D(8, kLane, standardOutDims[0]))
+          .transposeOuts(standardOutDims);
+  auto tileDataLayout =
+      LinearLayout::identity1D(8, kRegister, standardOutDims[0]) *
+      LinearLayout::identity1D(8, kLane, standardOutDims[1]);
+
+  // Try to place subtiles on the k dimension first
+  std::array<unsigned, 2> numSubtilesPerWarp = {0, 0};
+  numSubtilesPerWarp[0] = std::min((int)shape[memOrder[0]] / 8, 4);
+  numSubtilesPerWarp[1] = 4 / numSubtilesPerWarp[0];
+  LinearLayout subtileLayout = identityStandardND(
+      kLane, {numSubtilesPerWarp[memOrder[1]], numSubtilesPerWarp[memOrder[0]]},
+      memOrder);
+
+  // Try to place warps on the non-k dimension first
+  int64_t numWarps =
+      wmmaEncoding.getWarpsPerCTA()[0] * wmmaEncoding.getWarpsPerCTA()[1];
+  std::array<unsigned, 2> numWarpsPerCTA = {0, 0};
+  numWarpsPerCTA[0] =
+      std::min(shape[memOrder[0]] / (numSubtilesPerWarp[0] * 8), numWarps);
+  numWarpsPerCTA[1] = numWarps / numWarpsPerCTA[0];
+  LinearLayout warpLayout = identityStandardND(
+      kWarp, {numWarpsPerCTA[memOrder[0]], numWarpsPerCTA[memOrder[1]]},
+      memOrder);
+
+  return {combineCtaCgaWithShape(tileAddrLayout * subtileLayout * warpLayout,
+                                 wmmaEncoding.getCTALayout(), shape),
+          combineCtaCgaWithShape(tileDataLayout * subtileLayout * warpLayout,
+                                 wmmaEncoding.getCTALayout(), shape)};
+}
+
 LinearLayout mfmaDotToLinearLayout(DotOperandEncodingAttr dotMfmaLayout,
                                    ArrayRef<int64_t> shape) {
   auto mfmaLayout = llvm::cast<AMDMfmaEncodingAttr>(dotMfmaLayout.getParent());

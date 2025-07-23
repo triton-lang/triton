@@ -272,6 +272,12 @@ LinearLayout chooseLdMatrixLayout(Attribute enc, ArrayRef<int64_t> shape,
 LinearLayout chooseDsReadB64TrLayout(Attribute enc, ArrayRef<int64_t> shape,
                                      int32_t elemBitWidth);
 
+// The primary goal of this function is to efficiently load 2D tiles of a
+// tensor from global memory using the `global_load_tr` instruction for AMD
+// GPUs.
+std::pair<LinearLayout, LinearLayout>
+chooseGlobalLoadTrLayout(Attribute enc, ArrayRef<int64_t> shape);
+
 LinearLayout getScaleTMEMStoreLinearLayout(RankedTensorType scaleType,
                                            int numWarps);
 

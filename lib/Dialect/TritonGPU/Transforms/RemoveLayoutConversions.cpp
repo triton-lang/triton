@@ -186,6 +186,8 @@ bool isLayoutAnchor(Operation *op) {
   if (isa<DotOp, DotScaledOp, nvidia_gpu::WarpGroupDotOp, AtomicRMWOp,
           AtomicCASOp, triton::nvidia_gpu::TMEMLoadOp>(op))
     return true;
+  if (op->hasTrait<OpTrait::LayoutAnchor>())
+    return true;
   if (auto gatherOp = dyn_cast<GatherOp>(op))
     return gatherOp.getEfficientLayout();
 
