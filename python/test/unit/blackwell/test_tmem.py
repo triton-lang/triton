@@ -203,20 +203,42 @@ def test_block_m_64_mma():
 
         a_tmem_layout: ttgl.constexpr = TensorMemoryLayout((BLOCK_M, BLOCK_N), unpacked=False)
         acc_tmem_layout: ttgl.constexpr = TensorMemoryLayout((BLOCK_M, BLOCK_N), unpacked=True)
-        a_tmem = allocate_tensor_memory(ttgl.float16, (BLOCK_M, N), layout=a_tmem_layout)
+        al_tmem = allocate_tensor_memory(ttgl.float16, (BLOCK_M, N), layout=a_tmem_layout)
+        ar_tmem = allocate_tensor_memory(ttgl.float16, (BLOCK_M, N), layout=a_tmem_layout)
         acc_tmem = allocate_tensor_memory(ttgl.float32, (BLOCK_M, N), layout=acc_tmem_layout)
 
-        a_tmem.store(a)
-        acc_tmem.store(c)
+        a0, a1 = a.reshape((BLOCK_M, 2, N // 2)).permute(0, 2, 1).split()
+
+        al = ttgl.join(a0, a1).permute(0, 2, 1).reshape((BLOCK_M, N))
+        ar = ttgl.join(a1, a0).permute(0, 2, 1).reshape((BLOCK_M, N))
+
+        al_tmem.store(ttgl.convert_layout(al, a_layout, assert_trivial=True))
+        ar_tmem.store(ttgl.convert_layout(ar, a_layout, assert_trivial=True))
 
         b_shared_layout: ttgl.constexpr = ttgl.NVMMASharedLayout(swizzle_byte_width=32, element_bitwidth=16, rank=2)
         b_shared = ttgl.allocate_shared_memory(ttgl.float16, [N, N], layout=b_shared_layout)
         b_shared.store(b)
 
+        acc_tmem.store(c)
+
         bar = ttgl.allocate_shared_memory(ttgl.int64, [1], ttgl.constexpr(mbarrier.MBarrierLayout()))
         mbarrier.init(bar, count=1)
 
-        tcgen05_mma(a_tmem, b_shared, acc_tmem)
+        # TMEM      al   ar   c
+        # [0, 16)   a0   a1   c0
+        # [16, 32)  a1   a0   c1
+        #
+        # d0 = a0 @ b00 + a1 @ b10 + c0
+        # d1 = a0 @ b10 + a1 @ b11 + c1
+
+        N2: ttgl.constexpr = N // 2
+        c0 = acc_tmem.slice(0, N2)
+        c1 = acc_tmem.slice(N2, N2)
+
+        tcgen05_mma(al_tmem.slice(0, N2), b_shared.slice(0, N2, dim=0).slice(0, N2, dim=1), c0)
+        tcgen05_mma(ar_tmem.slice(0, N2), b_shared.slice(N2, N2, dim=0).slice(0, N2, dim=1), c0)
+        tcgen05_mma(ar_tmem.slice(N2, N2), b_shared.slice(0, N2, dim=0).slice(N2, N2, dim=1), c1)
+        tcgen05_mma(al_tmem.slice(N2, N2), b_shared.slice(N2, N2, dim=0).slice(N2, N2, dim=1), c1)
 
         tcgen05_commit(bar)
         mbarrier.wait(bar, 0)
@@ -234,15 +256,18 @@ def test_block_m_64_mma():
     compiled = kernel[(1, )](a, b, c, d_tri)
 
     ttgir = compiled.asm["ttgir"]
-    assert ttgir.count("ttng.tmem_alloc") == 2
+    assert ttgir.count("ttng.tmem_alloc") == 3
     assert ttgir.count("ttng.tmem_alloc : () -> !ttg.memdesc<64x128xf32") == 1
-    assert ttgir.count("ttng.tmem_alloc : () -> !ttg.memdesc<64x128xf16") == 1
+    assert ttgir.count("ttng.tmem_alloc : () -> !ttg.memdesc<64x128xf16") == 2
 
     llir = compiled.asm["llir"]
-    assert llir.count("tcgen05.alloc.cta_group::1.sync.aligned.shared::cta.b32 [$1], 256")
+    assert llir.count("tcgen05.alloc.cta_group::1.sync.aligned.shared::cta.b32 [$1], 128")
 
     d_ref = a @ b + c
     torch.testing.assert_close(d_ref, d_tri, rtol=0.08, atol=0)
+
+    print(compiled.asm["ptx"])
+    print(compiled.asm["sass"])
 
 
 test_tmem_subslice_block_m_64()
