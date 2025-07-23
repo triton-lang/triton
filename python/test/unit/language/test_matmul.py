@@ -642,6 +642,8 @@ def _gemm_afp4_wfp4_kernel_preshuffled_scales_amd(
 
 @pytest.mark.parametrize("M, N, K", [(1024, 1024, 1024), [512, 1024, 2048]])
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(256, 256, 256), (128, 128, 256)])
+@pytest.mark.skipif(is_cuda() or not is_hip_cdna4(), reason="AMD specific scale shuffling")
+@pytest.mark.skipif(not is_hip_cdna4(), reason="Requires hardware support for scaled mfma instructions")
 def test_preshuffle_scale_mxfp_amd(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, device):
     x_mxfp4, w_mxfp4, x_scales, w_scales, x_scales_triton, w_scales_triton = generate_gemm_afp4wfp4_inputs(M, N, K)
 
