@@ -47,7 +47,7 @@ def TTI_ExperimentalBufferPointersOp : TTI_Op<"experimental_buffer_pointers", [P
 }
 
 
-def TTI_ExperimentalCheckOutstandingWritesOp : TTI_Op<"experimental_check_outstanding_writes", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+def TTI_ExperimentalCheckWriteStateOp : TTI_Op<"experimental_check_write_state", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
   let summary = "check if there are outstanding writes to a buffer guarded by a mbar";
   let description = [{
     Check if the writeState tensor has non-zero value associated with the buffer.
@@ -76,7 +76,7 @@ def TTI_ExperimentalCheckOutstandingWritesOp : TTI_Op<"experimental_check_outsta
 }
 
 
-def TTI_ExperimentalCheckOutstandingReadsOp : TTI_Op<"experimental_check_outstanding_reads", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+def TTI_ExperimentalCheckReadBarriersOp : TTI_Op<"experimental_check_read_barriers", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
   let summary = "check if there are outstanding reads from a buffer guarded by a mbar";
   let description = [{
     Check if there are outstanding reads from a buffer guarded by a mbar.
@@ -95,8 +95,8 @@ def TTI_ExperimentalCheckOutstandingReadsOp : TTI_Op<"experimental_check_outstan
 }
 
 
-def TTI_ExperimentalMarkAsWriteOp : TTI_Op<"experimental_mark_as_write", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
-  let summary = "mark a buffer as being written to using mbar as a guard";
+def TTI_ExperimentalSetWriteStateOp : TTI_Op<"experimental_set_write_state", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+  let summary = "mark a buffer as being written in writeState tensor";
   let description = [{
     Mark a buffer as being written to. It is not yet tracked by a barrier, until
     `commit_write_with_barrier` is called, at which point all the buffers being written
@@ -226,7 +226,6 @@ def TTI_ExperimentalCheckBarrierWritesClearedOp : TTI_Op<"experimental_check_bar
 }
 
 
-// TODO: Potentially resolve the naming/functionality clash with commit_write_with_barrier
 def TTI_ExperimentalStageAccessForCommitOp : TTI_Op<"experimental_stage_access_for_commit", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
   let summary = "";
   let description = [{
@@ -243,7 +242,7 @@ def TTI_ExperimentalStageAccessForCommitOp : TTI_Op<"experimental_stage_access_f
   let assemblyFormat = [{
     $buf `{` $buffers `,` $outstandingCommits `(` $outstandingCommitsType `)` `}` (`,` $pred^)? attr-dict `:` type($buf) `,` type($buffers) `,` type($outstandingCommits)
   }];
-  // let hasVerifier = 1;
+  let hasVerifier = 1;
 }
 
 def TTI_ExperimentalCommitAccessesOp : TTI_Op<"experimental_commit_accesses", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
@@ -258,7 +257,6 @@ def TTI_ExperimentalCommitAccessesOp : TTI_Op<"experimental_commit_accesses", [M
   let assemblyFormat = [{
     `{` $outstandingCommits `(` $outstandingCommitsType `)` `}` (`,` $pred^)? attr-dict `:` type($outstandingCommits)
   }];
-  // let hasVerifier = 1;
 }
 
 def TTI_ExperimentalClearOutstandingCommitsOp : TTI_Op<"experimental_clear_outstanding_commits", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
@@ -274,7 +272,6 @@ def TTI_ExperimentalClearOutstandingCommitsOp : TTI_Op<"experimental_clear_outst
   let assemblyFormat = [{
     `{` $outstandingCommits `(` $outstandingCommitsType `)` `}` `,` $outstandingNum (`,` $pred^)? attr-dict `:` type($outstandingCommits)
   }];
-  // let hasVerifier = 1;
 }
 
 def TTI_ExperimentalCheckOutstandingCommitsOp : TTI_Op<"experimental_check_outstanding_commits", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
@@ -292,7 +289,7 @@ def TTI_ExperimentalCheckOutstandingCommitsOp : TTI_Op<"experimental_check_outst
   let assemblyFormat = [{
     $buf `{` $buffers `,` $outstandingCommits `(` $outstandingCommitsType `)` `}` `,` $pendingAccessType (`,` $pred^)? attr-dict `:` type($buf) `,` type($buffers) `,` type($outstandingCommits)
   }];
-  // let hasVerifier = 1;
+  let hasVerifier = 1;
 }
 
 #endif // TRITONINSTRUMENT_OPS

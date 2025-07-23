@@ -279,11 +279,11 @@ struct BufferPointersOpConversion
   }
 };
 
-struct CheckOutstandingWritesOpConversion
-    : public ConvertOpToLLVMPattern<tti::ExperimentalCheckOutstandingWritesOp> {
+struct CheckWriteStateOpConversion
+    : public ConvertOpToLLVMPattern<tti::ExperimentalCheckWriteStateOp> {
   using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
 
-  LogicalResult matchAndRewrite(tti::ExperimentalCheckOutstandingWritesOp op,
+  LogicalResult matchAndRewrite(tti::ExperimentalCheckWriteStateOp op,
                                 OpAdaptor adaptor,
                                 ConversionPatternRewriter &b) const override {
     Location loc = op.getLoc();
@@ -327,11 +327,11 @@ struct CheckOutstandingWritesOpConversion
   }
 };
 
-struct CheckOutstandingReadsOpConversion
-    : public ConvertOpToLLVMPattern<tti::ExperimentalCheckOutstandingReadsOp> {
+struct CheckReadBarriersOpConversion
+    : public ConvertOpToLLVMPattern<tti::ExperimentalCheckReadBarriersOp> {
   using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
 
-  LogicalResult matchAndRewrite(tti::ExperimentalCheckOutstandingReadsOp op,
+  LogicalResult matchAndRewrite(tti::ExperimentalCheckReadBarriersOp op,
                                 OpAdaptor adaptor,
                                 ConversionPatternRewriter &b) const override {
     Location loc = op.getLoc();
@@ -375,11 +375,11 @@ struct CheckOutstandingReadsOpConversion
   }
 };
 
-struct MarkAsWriteOpConversion
-    : public ConvertOpToLLVMPattern<tti::ExperimentalMarkAsWriteOp> {
+struct SetWriteStateOpConversion
+    : public ConvertOpToLLVMPattern<tti::ExperimentalSetWriteStateOp> {
   using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
 
-  LogicalResult matchAndRewrite(tti::ExperimentalMarkAsWriteOp op,
+  LogicalResult matchAndRewrite(tti::ExperimentalSetWriteStateOp op,
                                 OpAdaptor adaptor,
                                 ConversionPatternRewriter &b) const override {
     Location loc = op.getLoc();
@@ -473,11 +473,11 @@ struct CommitWriteWithBarrierOpConversion
   }
 };
 
-struct MarkAsReadOpConversion
-    : public ConvertOpToLLVMPattern<tti::ExperimentalMarkAsReadOp> {
+struct SetReadBarrierOpConversion
+    : public ConvertOpToLLVMPattern<tti::ExperimentalSetReadBarrierOp> {
   using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
 
-  LogicalResult matchAndRewrite(tti::ExperimentalMarkAsReadOp op,
+  LogicalResult matchAndRewrite(tti::ExperimentalSetReadBarrierOp op,
                                 OpAdaptor adaptor,
                                 ConversionPatternRewriter &b) const override {
     Location loc = op.getLoc();
@@ -891,11 +891,11 @@ void mlir::triton::populateInstrumentationToLLVMPatterns(
     RewritePatternSet &patterns, PatternBenefit benefit) {
   patterns.add<AssertInThreadOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<BufferPointersOpConversion>(typeConverter);
-  patterns.add<CheckOutstandingWritesOpConversion>(typeConverter);
-  patterns.add<CheckOutstandingReadsOpConversion>(typeConverter);
-  patterns.add<MarkAsWriteOpConversion>(typeConverter);
+  patterns.add<CheckWriteStateOpConversion>(typeConverter);
+  patterns.add<CheckReadBarriersOpConversion>(typeConverter);
+  patterns.add<SetWriteStateOpConversion>(typeConverter);
   patterns.add<CommitWriteWithBarrierOpConversion>(typeConverter);
-  patterns.add<MarkAsReadOpConversion>(typeConverter);
+  patterns.add<SetReadBarrierOpConversion>(typeConverter);
   patterns.add<ClearWriteBarrierOpConversion>(typeConverter);
   patterns.add<ClearReadBarrierOpConversion>(typeConverter);
   patterns.add<CheckBarrierWritesClearedOpConversion>(typeConverter);

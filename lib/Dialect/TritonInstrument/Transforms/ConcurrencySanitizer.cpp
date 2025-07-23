@@ -279,7 +279,7 @@ private:
   void addWriteChecks(ImplicitLocOpBuilder &b, Value buf, Value pred,
                       MemType memType, bool hwPipelined) {
     if (barriers) {
-      b.create<tti::ExperimentalCheckOutstandingWritesOp>(
+      b.create<tti::ExperimentalCheckWriteStateOp>(
           buf, buffersTensor[(int)memType], writeBarriersAlloc[(int)memType],
           writeBarriersType[(int)memType], writeStateAlloc[(int)memType],
           writeStateType[(int)memType], hwPipelined, pred);
@@ -295,7 +295,7 @@ private:
   void addReadChecks(ImplicitLocOpBuilder &b, Value buf, Value pred,
                      MemType memType) {
     if (barriers) {
-      b.create<tti::ExperimentalCheckOutstandingReadsOp>(
+      b.create<tti::ExperimentalCheckReadBarriersOp>(
           buf, buffersTensor[(int)memType], readBarriersAlloc[(int)memType],
           readBarriersType[(int)memType], pred);
     }
@@ -443,7 +443,7 @@ private:
                   if (pred && effect.pred) {
                     pred = b.create<arith::AndIOp>(effect.pred, pred);
                   }
-                  b.create<tti::ExperimentalMarkAsReadOp>(
+                  b.create<tti::ExperimentalSetReadBarrierOp>(
                       buf, barrier, buffersTensor[(int)memType], barriers,
                       readBarriersAlloc[(int)memType],
                       readBarriersType[(int)memType], pred);
@@ -479,7 +479,7 @@ private:
                     buf, buffersTensor[(int)memType], asyncCpCommitsAlloc,
                     asyncCpCommitsType, effect.pred);
               } else {
-                b.create<tti::ExperimentalMarkAsWriteOp>(
+                b.create<tti::ExperimentalSetWriteStateOp>(
                     buf, buffersTensor[(int)memType],
                     writeStateAlloc[(int)memType], writeStateType[(int)memType],
                     effect.hwPipelined, effect.pred);
