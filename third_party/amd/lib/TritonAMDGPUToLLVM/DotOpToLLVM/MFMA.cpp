@@ -439,6 +439,10 @@ struct DotOpMFMAConversionHelper {
           results = b.zext(i32_ty, b.bitcast(vec, i8_ty));
         }
       }
+
+      if (2 == kBase) {
+        results = b.zext(i32_ty, b.bitcast(vec, i16_ty));
+      }
       if (4 == kBase)
         // This is for int8 on pre- CDNA3 GPUs
         results = b.bitcast(vec, i32_ty);
@@ -465,6 +469,11 @@ struct DotOpMFMAConversionHelper {
     auto elems = unpackLLElements(loc, value, rewriter);
     // number of kBase-element vectors
     int numVecInKBase = kRepInKWidth * kWidth / kBase;
+    if (numVecInKBase == 0) {
+      numVecInKBase = 1;
+      nonKRep /= kBase / (kRepInKWidth * kWidth);
+      assert(nonKRep > 0 && "nonKrep too small");
+    }
     ValueTable dotOpVals;
 
     SmallVector<int64_t> strides =
@@ -544,17 +553,19 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
 
   Value generateScaledMFMAOp(StringRef intrinsicName, Value valA, Value valB,
                              Value valC, Value valScaleA, Value valScaleB,
-                             Type elemTypeA, Type elemTypeB) const {
+                             Type elemTypeA, Type elemTypeB, int opSelA,
+                             int opSelB) const {
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto resType = valC.getType();
-    Value zeroFlag = b.i32_val(0);
+    Value valOpSelA = b.i32_val(opSelA);
+    Value valOpSelB = b.i32_val(opSelB);
     OperationState loweredOp(loc, intrinsicName);
     int32_t cbsz = getMfmaF8F6F4MatrixFormat(elemTypeA);
     int32_t blgp = getMfmaF8F6F4MatrixFormat(elemTypeB);
     assert((cbsz != -1) && (blgp != -1));
     loweredOp.addTypes(resType);
     loweredOp.addOperands({valA, valB, valC, b.i32_val(cbsz), b.i32_val(blgp),
-                           zeroFlag, valScaleA, zeroFlag, valScaleB});
+                           valOpSelA, valScaleA, valOpSelB, valScaleB});
     return rewriter.create(loweredOp)->getResult(0);
   }
 
@@ -636,8 +647,6 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
     // better way to get it when adapting other data types. Similar to
     // scaleKBase
     constexpr int scaleKWidth = 1;
-    constexpr int scaleKBase = 1;
-
     Value loadedA = adaptor.getA();
     Value loadedB = adaptor.getB();
     Value loadedAScale = adaptor.getAScale();
@@ -649,6 +658,15 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
     auto numRepK = repA[2];
     auto numRepB = repA[0];
     assert(repA[0] == repB[0]);
+
+    const int scaleAKBase =
+        std::min(4, static_cast<const int>(numRepK * numRepM));
+    const int scaleBKBase =
+        std::min(4, static_cast<const int>(numRepK * numRepN));
+
+    int kPackedVals = std::min(4, static_cast<const int>(numRepK));
+    int nonAKPackedVals = scaleAKBase / kPackedVals;
+    int nonBKPackedVals = scaleBKBase / kPackedVals;
 
     auto operandA = getValuesFromDotOperandLayoutStruct(
         loadedA, numRepB, numRepM, numRepK, aKWidth, aKBase,
@@ -664,13 +682,13 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
     if (existBothScales) {
       auto aScaleTensorTy = cast<RankedTensorType>(aScale.getType());
       operandAScale = getValuesFromDotOperandLayoutStruct(
-          loadedAScale, numRepB, numRepM, numRepK, scaleKWidth, scaleKBase,
+          loadedAScale, numRepB, numRepM, numRepK, scaleKWidth, scaleAKBase,
           aScaleTensorTy.getElementType(), allowXF32, /*preserveBF16=*/false,
           isAScaleConstant);
 
       auto bScaleTensorTy = cast<RankedTensorType>(bScale.getType());
       operandBScale = getValuesFromDotOperandLayoutStruct(
-          loadedBScale, numRepB, numRepN, numRepK, scaleKWidth, scaleKBase,
+          loadedBScale, numRepB, numRepN, numRepK, scaleKWidth, scaleBKBase,
           bScaleTensorTy.getElementType(), allowXF32, /*preserveBF16=*/false,
           isBScaleConstant);
     }
@@ -731,18 +749,28 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
             for (innerK = 0; innerK < innerKBound; innerK++) {
               int k = is2Step ? outerK : innerK;
               if (existBothScales) {
+                int mScale = m;
+                int nScale = n;
+                int kScale = k / kPackedVals;
+                int opSelA = 0, opSelB = 0;
+                mScale /= nonAKPackedVals;
+                opSelA = (m * numRepK + k) % (nonAKPackedVals * kPackedVals);
+                nScale /= nonBKPackedVals;
+                opSelB = (n * numRepK + k) % (nonBKPackedVals * kPackedVals);
                 if (mfmaLayout.getIsTransposed()) {
                   acc = generateScaledMFMAOp(
                       intrinsicName, operandB[{b, n, k}], operandA[{b, m, k}],
-                      acc, operandBScale[{b, n, k}], operandAScale[{b, m, k}],
+                      acc, operandBScale[{b, nScale, kScale}],
+                      operandAScale[{b, mScale, kScale}],
                       maybeMfmaIntrinsic->bElementType,
-                      maybeMfmaIntrinsic->aElementType);
+                      maybeMfmaIntrinsic->aElementType, opSelB, opSelA);
                 } else {
                   acc = generateScaledMFMAOp(
                       intrinsicName, operandA[{b, m, k}], operandB[{b, n, k}],
-                      acc, operandAScale[{b, m, k}], operandBScale[{b, n, k}],
+                      acc, operandAScale[{b, mScale, kScale}],
+                      operandBScale[{b, nScale, kScale}],
                       maybeMfmaIntrinsic->aElementType,
-                      maybeMfmaIntrinsic->bElementType);
+                      maybeMfmaIntrinsic->bElementType, opSelA, opSelB);
                 }
               } else {
                 if (mfmaLayout.getIsTransposed()) {
