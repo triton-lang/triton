@@ -240,10 +240,9 @@ allocateTMem(Operation *parentOp,
       allocs.push_back(alloc);
     }
     if (auto mmaOp = dyn_cast<MMAv5OpInterface>(op)) {
-      if (auto aEnc = dyn_cast<TensorMemoryEncodingAttr>(
-              mmaOp.getA().getType().getEncoding())) {
+      if (isa<TensorMemoryEncodingAttr>(mmaOp.getA().getType().getEncoding())) {
         TMemAllocation allocSize = getTmemAllocSizes(mmaOp.getA().getType());
-        if (aEnc.getBlockM() == 64) {
+        if (allocSize.numRows == 64) {
           // HW restriction, the A alloc and accumulator needs to be in the same
           // rows.
           rowIdConstraints.joinOps(getAlloc(mmaOp.getA()),
