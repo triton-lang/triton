@@ -31,6 +31,21 @@ public:
 
   LogicalResult matchAndRewrite(DotScaledOp scaledDotOp,
                                 PatternRewriter &rewriter) const override {
+    auto resTy = cast<RankedTensorType>(scaledDotOp.getType());
+    if (mlir::isa<NvidiaMmaEncodingAttr>(resTy.getEncoding()))
+      return failure();
+
+    // Early-exit if either scale uses LinearEncodingAttr. This indicates the
+    // DotScaledOp has already been rewritten by an earlier MMAv2 ScaledDotOp
+    // pass; skip decomposition here.
+    auto isLinearEncoding = [](Value v) {
+      return v && mlir::isa<LinearEncodingAttr>(
+                      cast<RankedTensorType>(v.getType()).getEncoding());
+    };
+    if (isLinearEncoding(scaledDotOp.getAScale()) ||
+        isLinearEncoding(scaledDotOp.getBScale()))
+      return failure();
+
     // TODO: add support for m/n packed formats.
     if (!scaledDotOp.getLhsKPack() || !scaledDotOp.getRhsKPack())
       return failure();
@@ -220,7 +235,7 @@ private:
 
     // For some weird reason, we take the scale with shape as if it were coming
     // from the lhs even when it's the rhs. In a normal world, we should accept
-    // this parametre transposed, as we do with the mxfp.
+    // this parameter transposed, as we do with the mxfp.
     if (opIdx == 1) {
       auto order = getTransposeOrder(rank);
       scale = rewriter.create<TransOp>(loc, scale, order);

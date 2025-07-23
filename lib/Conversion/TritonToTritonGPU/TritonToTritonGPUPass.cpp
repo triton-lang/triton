@@ -11,6 +11,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/TritonGPUConversion.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "llvm/Support/LogicalResult.h"
+#include <optional>
 
 namespace mlir::triton {
 #define GEN_PASS_DEF_CONVERTTRITONTOTRITONGPU
@@ -204,6 +205,75 @@ private:
   }
 };
 
+struct DotOperandsResult {
+  RankedTensorType retType;
+  Value a;
+  Value b;
+  Value c;
+};
+
+static std::optional<DotOperandsResult>
+prepareDotOperands(DotOpInterface op, ValueRange operands,
+                   const TritonGPUTypeConverter *typeConverter,
+                   MLIRContext *context, ConversionPatternRewriter &rewriter) {
+  RankedTensorType origType = cast<RankedTensorType>(op.getD().getType());
+  auto origShape = origType.getShape();
+  int numWarps = typeConverter->getNumWarps();
+  int threadsPerWarp = typeConverter->getThreadsPerWarp();
+  int numCTAs = typeConverter->getNumCTAs();
+  auto rank = origShape.size();
+  SmallVector<unsigned> retSizePerThread(rank, 1);
+  auto numElements = product<int64_t>(origShape);
+  if (numElements / (numWarps * threadsPerWarp) >= 4) {
+    retSizePerThread[rank - 1] = 2;
+    retSizePerThread[rank - 2] = 2;
+  }
+  if (numElements / (numWarps * threadsPerWarp) >= 16) {
+    retSizePerThread[rank - 1] = 4;
+    retSizePerThread[rank - 2] = 4;
+  }
+  retSizePerThread[rank - 1] = std::min(
+      retSizePerThread[rank - 1], static_cast<unsigned>(origShape[rank - 1]));
+  retSizePerThread[rank - 2] = std::min(
+      retSizePerThread[rank - 2], static_cast<unsigned>(origShape[rank - 2]));
+
+  SmallVector<unsigned> retOrder(rank);
+  for (unsigned i = 0; i < rank; ++i)
+    retOrder[i] = rank - 1 - i;
+  Attribute dEncoding = triton::gpu::BlockedEncodingAttr::get(
+      context, origShape, retSizePerThread, retOrder, numWarps, threadsPerWarp,
+      numCTAs);
+  RankedTensorType retType = origType.cloneWithEncoding(dEncoding);
+
+  auto aType = cast<RankedTensorType>(operands[0].getType());
+  auto bType = cast<RankedTensorType>(operands[1].getType());
+  Type aEltType = aType.getElementType();
+  Type bEltType = bType.getElementType();
+  Attribute aEncoding = aType.getEncoding();
+  Attribute bEncoding = bType.getEncoding();
+  Value a = operands[0];
+  Value b = operands[1];
+  Value c = operands[2];
+  if (!aEncoding || !bEncoding)
+    return std::nullopt;
+
+  auto ensureDotOperand = [&](Value v, RankedTensorType vTy,
+                              int opIdx) -> Value {
+    if (mlir::isa<triton::gpu::DotOperandEncodingAttr>(vTy.getEncoding()))
+      return v;
+    auto enc = triton::gpu::DotOperandEncodingAttr::get(
+        context, opIdx, dEncoding, vTy.getElementType());
+    auto dstTy = vTy.cloneWithEncoding(enc);
+    return rewriter.create<triton::gpu::ConvertLayoutOp>(v.getLoc(), dstTy, v);
+  };
+
+  a = ensureDotOperand(a, aType, /*opIdx=*/0);
+  b = ensureDotOperand(b, bType, /*opIdx=*/1);
+  c = rewriter.create<triton::gpu::ConvertLayoutOp>(c.getLoc(), retType, c);
+
+  return DotOperandsResult{retType, a, b, c};
+}
+
 struct TritonDotScaledPattern
     : public OpConversionPattern<triton::DotScaledOp> {
   using OpConversionPattern::OpConversionPattern;
@@ -216,80 +286,24 @@ struct TritonDotScaledPattern
       return rewriter.notifyMatchFailure(op, "Could not find parent ModuleOp");
     }
 
-    // TODO: Currently only support FP8 * FP8 variant.
-    if (op.getAElemType() == ScaleDotElemType::E2M1 ||
-        op.getBElemType() == ScaleDotElemType::E2M1) {
-      return rewriter.notifyMatchFailure(op, "E2M1 is not supported");
-    }
-
-    int computeCapability = getNVIDIAComputeCapability(moduleOp);
-    if (computeCapability != 120)
+    auto context = getContext();
+    auto typeConverter = getTypeConverter<TritonGPUTypeConverter>();
+    auto result = prepareDotOperands(op, adaptor.getOperands(), typeConverter,
+                                     context, rewriter);
+    if (!result)
       return failure();
 
-    RankedTensorType origType = op.getType();
-    auto origShape = origType.getShape();
-    auto typeConverter = getTypeConverter<TritonGPUTypeConverter>();
-    int numWarps = typeConverter->getNumWarps();
-    int threadsPerWarp = typeConverter->getThreadsPerWarp();
-    int numCTAs = typeConverter->getNumCTAs();
-    auto rank = origShape.size();
+    auto [retType, a, b, c] = *result;
 
-    SmallVector<unsigned> retSizePerThread(rank, 1);
-    auto numElements = product<int64_t>(origShape);
-    if (numElements / (numWarps * threadsPerWarp) >= 4) {
-      retSizePerThread[rank - 1] = 2;
-      retSizePerThread[rank - 2] = 2;
-    }
-    if (numElements / (numWarps * threadsPerWarp) >= 16) {
-      retSizePerThread[rank - 1] = 4;
-      retSizePerThread[rank - 2] = 4;
-    }
-    retSizePerThread[rank - 1] = std::min(
-        retSizePerThread[rank - 1], static_cast<unsigned>(origShape[rank - 1]));
-    retSizePerThread[rank - 2] = std::min(
-        retSizePerThread[rank - 2], static_cast<unsigned>(origShape[rank - 2]));
-
-    SmallVector<unsigned> retOrder(rank);
-    for (unsigned i = 0; i < rank; ++i)
-      retOrder[i] = rank - 1 - i;
-    Attribute dEncoding = triton::gpu::BlockedEncodingAttr::get(
-        getContext(), origShape, retSizePerThread, retOrder, numWarps,
-        threadsPerWarp, numCTAs);
-    RankedTensorType retType = origType.cloneWithEncoding(dEncoding);
-
-    // Get operands and add appropriate encodings
-    auto aType = cast<RankedTensorType>(adaptor.getA().getType());
-    auto bType = cast<RankedTensorType>(adaptor.getB().getType());
-    Type aEltType = aType.getElementType();
-    Type bEltType = bType.getElementType();
-    Attribute aEncoding = aType.getEncoding();
-    Attribute bEncoding = bType.getEncoding();
-
-    Value a = adaptor.getA();
-    Value b = adaptor.getB();
-    Value c = adaptor.getC();
     Value aScale = adaptor.getAScale();
     Value bScale = adaptor.getBScale();
+    auto aScaleEltType =
+        cast<RankedTensorType>(aScale.getType()).getElementType();
+    auto bScaleEltType =
+        cast<RankedTensorType>(bScale.getType()).getElementType();
 
-    // Convert A operand to DotOperandEncoding if needed
-    if (!aEncoding ||
-        !mlir::isa<triton::gpu::DotOperandEncodingAttr>(aEncoding)) {
-      Attribute encoding = triton::gpu::DotOperandEncodingAttr::get(
-          getContext(), 0, dEncoding, aEltType);
-      auto dstType = aType.cloneWithEncoding(encoding);
-      a = rewriter.create<triton::gpu::ConvertLayoutOp>(a.getLoc(), dstType, a);
-    }
-
-    // Convert B operand to DotOperandEncoding if needed
-    if (!bEncoding ||
-        !mlir::isa<triton::gpu::DotOperandEncodingAttr>(bEncoding)) {
-      Attribute encoding = triton::gpu::DotOperandEncodingAttr::get(
-          getContext(), 1, dEncoding, bEltType);
-      auto dstType = bType.cloneWithEncoding(encoding);
-      b = rewriter.create<triton::gpu::ConvertLayoutOp>(b.getLoc(), dstType, b);
-    }
-
-    c = rewriter.create<triton::gpu::ConvertLayoutOp>(c.getLoc(), retType, c);
+    if (!aScaleEltType.isInteger(8) || !bScaleEltType.isInteger(8))
+      return rewriter.notifyMatchFailure(op, "Scale type is not supported");
 
     addNamedAttrs(rewriter.replaceOpWithNewOp<triton::DotScaledOp>(
                       op, retType, a, b, c, aScale, bScale,
@@ -307,60 +321,14 @@ struct TritonDotPattern : public OpConversionPattern<triton::DotOp> {
   LogicalResult
   matchAndRewrite(triton::DotOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    RankedTensorType origType = op.getType();
-    auto origShape = origType.getShape();
+    auto context = getContext();
     auto typeConverter = getTypeConverter<TritonGPUTypeConverter>();
-    int numWarps = typeConverter->getNumWarps();
-    int threadsPerWarp = typeConverter->getThreadsPerWarp();
-    int numCTAs = typeConverter->getNumCTAs();
-    auto rank = origShape.size();
-    SmallVector<unsigned> retSizePerThread(rank, 1);
-    auto numElements = product<int64_t>(origShape);
-    if (numElements / (numWarps * threadsPerWarp) >= 4) {
-      retSizePerThread[rank - 1] = 2;
-      retSizePerThread[rank - 2] = 2;
-    }
-    if (numElements / (numWarps * threadsPerWarp) >= 16) {
-      retSizePerThread[rank - 1] = 4;
-      retSizePerThread[rank - 2] = 4;
-    }
-    retSizePerThread[rank - 1] = std::min(
-        retSizePerThread[rank - 1], static_cast<unsigned>(origShape[rank - 1]));
-    retSizePerThread[rank - 2] = std::min(
-        retSizePerThread[rank - 2], static_cast<unsigned>(origShape[rank - 2]));
-
-    SmallVector<unsigned> retOrder(rank);
-    for (unsigned i = 0; i < rank; ++i)
-      retOrder[i] = rank - 1 - i;
-    Attribute dEncoding = triton::gpu::BlockedEncodingAttr::get(
-        getContext(), origShape, retSizePerThread, retOrder, numWarps,
-        threadsPerWarp, numCTAs);
-    RankedTensorType retType = origType.cloneWithEncoding(dEncoding);
-    // a & b must be of smem layout
-    auto aType = cast<RankedTensorType>(adaptor.getA().getType());
-    auto bType = cast<RankedTensorType>(adaptor.getB().getType());
-    Type aEltType = aType.getElementType();
-    Type bEltType = bType.getElementType();
-    Attribute aEncoding = aType.getEncoding();
-    Attribute bEncoding = bType.getEncoding();
-    if (!aEncoding || !bEncoding)
+    auto result = prepareDotOperands(op, adaptor.getOperands(), typeConverter,
+                                     context, rewriter);
+    if (!result)
       return failure();
-    Value a = adaptor.getA();
-    Value b = adaptor.getB();
-    Value c = adaptor.getC();
-    if (!mlir::isa<triton::gpu::DotOperandEncodingAttr>(aEncoding)) {
-      Attribute encoding = triton::gpu::DotOperandEncodingAttr::get(
-          getContext(), 0, dEncoding, aEltType);
-      auto dstType = aType.cloneWithEncoding(encoding);
-      a = rewriter.create<triton::gpu::ConvertLayoutOp>(a.getLoc(), dstType, a);
-    }
-    if (!mlir::isa<triton::gpu::DotOperandEncodingAttr>(bEncoding)) {
-      Attribute encoding = triton::gpu::DotOperandEncodingAttr::get(
-          getContext(), 1, dEncoding, bEltType);
-      auto dstType = bType.cloneWithEncoding(encoding);
-      b = rewriter.create<triton::gpu::ConvertLayoutOp>(b.getLoc(), dstType, b);
-    }
-    c = rewriter.create<triton::gpu::ConvertLayoutOp>(c.getLoc(), retType, c);
+
+    auto [retType, a, b, c] = *result;
 
     addNamedAttrs(rewriter.replaceOpWithNewOp<triton::DotOp>(
                       op, retType, a, b, c, adaptor.getInputPrecision(),
@@ -616,11 +584,9 @@ public:
 void populateTritonPatterns(TritonGPUTypeConverter &typeConverter,
                             RewritePatternSet &patterns, unsigned numCTAs) {
   MLIRContext *context = patterns.getContext();
-  patterns.insert<TritonDotScaledPattern>(typeConverter, context, 2);
   patterns.insert< // TODO: view should have custom pattern that views the
                    // layout
       // clang-format off
-
       GenericOpPattern<triton::AdvanceOp>,
       GenericOpPattern<triton::MakeTensorPtrOp>,
       GenericOpPattern<triton::ReshapeOp>,
@@ -647,6 +613,7 @@ void populateTritonPatterns(TritonGPUTypeConverter &typeConverter,
       TritonExpandDimsPattern,
       TritonTransPattern,
       TritonDotPattern,
+      TritonDotScaledPattern,
       GatherScatterOpPattern<DescriptorGatherOp>,
       GatherScatterOpPattern<DescriptorScatterOp>,
       GenericOpPattern<triton::LoadOp>,
@@ -661,8 +628,6 @@ void populateTritonPatterns(TritonGPUTypeConverter &typeConverter,
       GenericOpPattern<triton::DescriptorLoadOp>,
       GenericOpPattern<triton::DescriptorStoreOp>,
       GenericOpPattern<triton::DescriptorReduceOp>,
-      // this assumes the right layout will be set later for dot scaled.
-      GenericOpPattern<triton::DotScaledOp>,
       GenericOpPattern<triton::CallOp>,
       GenericOpPattern<ReturnOp>,
       TritonFuncOpPattern

@@ -1,13 +1,7 @@
 #include "PatternTritonGPUOpToLLVM.h"
 #include "Utility.h"
 
-#include "mlir/Transforms/DialectConversion.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
-#include "triton/Conversion/TritonToTritonGPU/Passes.h"
-#include "triton/Dialect/Triton/IR/Dialect.h"
-#include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonGPU/Transforms/TritonGPUConversion.h"
-#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -15,26 +9,26 @@ using namespace mlir::triton;
 using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
 
-// pass named attrs (e.g., tt.contiguity) from Triton to Triton
-static void addNamedAttrs(Operation *op, DictionaryAttr dictAttrs) {
-  for (const NamedAttribute attr : dictAttrs.getValue())
-    if (!op->hasAttr(attr.getName()))
-      op->setAttr(attr.getName(), attr.getValue());
-}
-template <typename DotOp, typename DotOpAdaptor>
-LogicalResult convertMMA(DotOp op, DotOpAdaptor adaptor,
+LogicalResult convertMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                          const LLVMTypeConverter *typeConverter,
                          ConversionPatternRewriter &rewriter, bool isTuring,
                          bool isHopperF64);
+
+LogicalResult convertMMADotScaled(triton::DotScaledOp op,
+                                  triton::DotScaledOp::Adaptor adaptor,
+                                  const LLVMTypeConverter *typeConverter,
+                                  ConversionPatternRewriter &rewriter);
+
 LogicalResult convertWGMMA(triton::nvidia_gpu::WarpGroupDotOp op,
                            triton::nvidia_gpu::WarpGroupDotOp::Adaptor adaptor,
                            const LLVMTypeConverter *typeConverter,
                            ConversionPatternRewriter &rewriter, Value thread);
+
 namespace {
 struct ScaledDotOpConversion
     : public ConvertOpToLLVMPattern<triton::DotScaledOp> {
   using ConvertOpToLLVMPattern<triton::DotScaledOp>::ConvertOpToLLVMPattern;
-  int computeCapability;
+
   ScaledDotOpConversion(LLVMTypeConverter &converter, int computeCapability,
                         PatternBenefit benefit)
       : ConvertOpToLLVMPattern<triton::DotScaledOp>(converter, benefit),
@@ -43,14 +37,16 @@ struct ScaledDotOpConversion
   LogicalResult
   matchAndRewrite(triton::DotScaledOp op, triton::DotScaledOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    return convertMMA<triton::DotScaledOp, triton::DotScaledOp::Adaptor>(
-        op, adaptor, getTypeConverter(), rewriter, false, false);
+    return convertMMADotScaled(op, adaptor, getTypeConverter(), rewriter);
   }
+
+private:
+  int computeCapability;
 };
 
 struct DotOpConversion : public ConvertOpToLLVMPattern<triton::DotOp> {
   using ConvertOpToLLVMPattern<triton::DotOp>::ConvertOpToLLVMPattern;
-  int computeCapability;
+
   DotOpConversion(LLVMTypeConverter &converter, int computeCapability,
                   PatternBenefit benefit)
       : ConvertOpToLLVMPattern<triton::DotOp>(converter, benefit),
@@ -77,9 +73,8 @@ struct DotOpConversion : public ConvertOpToLLVMPattern<triton::DotOp> {
         bool isHopperF64 =
             computeCapability == 90 &&
             cast<RankedTensorType>(A.getType()).getElementType().isF64();
-        return convertMMA<triton::DotOp, triton::DotOp::Adaptor>(
-            op, adaptor, getTypeConverter(), rewriter, mmaLayout.isTuring(),
-            isHopperF64);
+        return convertMMA(op, adaptor, getTypeConverter(), rewriter,
+                          mmaLayout.isTuring(), isHopperF64);
       }
 
       llvm::report_fatal_error(
@@ -93,6 +88,9 @@ struct DotOpConversion : public ConvertOpToLLVMPattern<triton::DotOp> {
     llvm::report_fatal_error(
         "Unsupported DotOp found when converting TritonGPU to LLVM.");
   }
+
+private:
+  int computeCapability;
 };
 
 struct WarpGroupDotOpConversion
@@ -107,38 +105,6 @@ struct WarpGroupDotOpConversion
     // D = A * B + C
     Value A = op.getA();
     TypedValue<RankedTensorType> D = op.getResult();
-
-    // Check if this is a scaled WGMMA operation
-    if (op->hasAttr("triton.is_scaled")) {
-      llvm::errs() << "Converting scaled WarpGroupDotOp\n";
-
-      // Extract scaling information from attributes
-      auto aElemTypeAttr = op->getAttr("triton.a_elem_type");
-      auto bElemTypeAttr = op->getAttr("triton.b_elem_type");
-      auto lhsKPackAttr = op->getAttr("triton.lhs_k_pack");
-      auto rhsKPackAttr = op->getAttr("triton.rhs_k_pack");
-
-      if (!aElemTypeAttr || !bElemTypeAttr) {
-        return op.emitError(
-            "Scaled WarpGroupDotOp missing element type attributes");
-      }
-
-      // Get element types from attributes
-      int aElemType = cast<IntegerAttr>(aElemTypeAttr).getInt();
-      int bElemType = cast<IntegerAttr>(bElemTypeAttr).getInt();
-      bool lhsKPack =
-          lhsKPackAttr ? cast<BoolAttr>(lhsKPackAttr).getValue() : true;
-      bool rhsKPack =
-          rhsKPackAttr ? cast<BoolAttr>(rhsKPackAttr).getValue() : true;
-
-      llvm::errs() << "Scaled WGMMA: aElemType=" << aElemType
-                   << ", bElemType=" << bElemType << "\n";
-
-      // For now, return an error with detailed info - TODO: implement scaled
-      // WGMMA
-      return op.emitError(
-          "Scaled WarpGroupDotOp conversion not yet implemented");
-    }
 
     // Here we assume the DotOp's operands always comes from shared memory.
     auto AShapePerCTA = getShapePerCTA(A.getType());
