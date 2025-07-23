@@ -104,7 +104,7 @@ LLVM::LLVMFuncOp appendOrGetExternFuncOp(RewriterBase &rewriter, Operation *op,
   return ret;
 }
 
-Value matrixVectorProd(TritonLLVMOpBuilder &b, const LinearLayout &A, Value x) {
+SmallVector<int32_t> layoutToMatrix(const LinearLayout &A) {
   assert(A.getNumInDims() == 1);
   assert(A.getNumOutDims() == 1);
   auto flatten = [](const std::vector<std::vector<int32_t>> &matrix) {
@@ -115,9 +115,34 @@ Value matrixVectorProd(TritonLLVMOpBuilder &b, const LinearLayout &A, Value x) {
     return ret;
   };
   auto nCol = A.getTotalInDimSizeLog2();
-  auto nRow = A.getTotalOutDimSizeLog2();
   SmallVector<int32_t> matrix = flatten(A.getBases().begin()->second);
   assert(matrix.size() == nCol);
+  return matrix;
+}
+
+Value matrixVectorProd(TritonLLVMOpBuilder &b, const LinearLayout &A, Value x) {
+  auto matrix = layoutToMatrix(A);
+  return matrixVectorProd(b, matrix, x);
+}
+
+Value matrixVectorProd(TritonLLVMOpBuilder &b, ArrayRef<int32_t> mat, Value x) {
+
+  // make a copy that we can modify in-place:
+  auto matrix = llvm::to_vector(mat);
+
+  // count the number of rows and columns:
+  int nCol = matrix.size();
+  int nRow = 0;
+  {
+    uint32_t p = 0;
+    for (const auto &q : matrix) {
+      p |= q;
+    }
+    while (p > 0) {
+      nRow += 1;
+      p >>= 1;
+    }
+  }
 
   // We iterate the matrix following the diagonals
   // The idea here is that we want to generate code of the form:
