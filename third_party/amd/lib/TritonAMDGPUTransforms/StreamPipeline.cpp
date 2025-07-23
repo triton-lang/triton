@@ -53,7 +53,7 @@ Operation *streamPredication(RewriterBase &rewriter, Operation *op,
     ifOp.getElseBodyBuilder().create<scf::YieldOp>(loc, dotOp->getOperand(2));
     return ifOp;
   }
-  return tt::predicateOp(rewriter, op, pred);
+  return tt::wrapInMaskOp(rewriter, op, pred);
 }
 
 //===----------------------------------------------------------------------===//
@@ -974,9 +974,9 @@ buildSchedule(scf::ForOp &forOp, int numStages, const LoadToInfoMap &loadToInfo,
 }
 } // namespace ChainedDotSchedule
 
-LogicalResult pipelineLoop(scf::ForOp forOp, int numStages, int globalPrefetch,
-                           int localPrefetch, bool useAsyncCopy,
-                           bool waitAtTail) {
+FailureOr<scf::ForOp> pipelineLoop(scf::ForOp forOp, int numStages,
+                                   int globalPrefetch, int localPrefetch,
+                                   bool useAsyncCopy, bool waitAtTail) {
 
   triton::AMD::ModuleAxisInfoAnalysis axisInfoAnalysis(
       forOp->getParentOfType<ModuleOp>());
@@ -1019,9 +1019,24 @@ LogicalResult pipelineLoop(scf::ForOp forOp, int numStages, int globalPrefetch,
     if (part != tt::PipeliningOption::PipelinerPart::Prologue)
       return;
 
-    if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
+    auto annotateLoad = [](Operation *loadOp) {
       loadOp->setAttr("amd.pipeliner_part",
-                      StringAttr::get(op->getContext(), "prologue"));
+                      StringAttr::get(loadOp->getContext(), "prologue"));
+    };
+
+    if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
+      annotateLoad(loadOp);
+      return;
+    }
+    // loadOp may be wrapped by a MaskOp as predicateFn execution
+    // precedes annotation
+    if (auto maskOp = dyn_cast<ttg::MaskOp>(op)) {
+      for (auto &innerOp : maskOp.getBody()->without_terminator()) {
+        if (auto loadOp = dyn_cast<tt::LoadOp>(&innerOp)) {
+          annotateLoad(loadOp);
+          return;
+        }
+      }
     }
   };
   // Set the final schedule as our scheduling function
@@ -1076,6 +1091,10 @@ struct PipelinePass : impl::TritonAMDGPUStreamPipelineBase<PipelinePass> {
       (void)pipelineLoop(forOp, numStagesThis, globalPrefetch, localPrefetch,
                          useAsyncCopy, waitAtTail);
     }
+
+    // NOTE: Leave empty for now, until we utilize customEpiloguePeeling
+    DenseSet<ttg::MaskOp> peeledMaskOps;
+    tt::resolveMaskOp(moduleOp, peeledMaskOps);
 
     if (useAsyncCopy) {
       llvm::SmallSetVector<ttg::AsyncWaitOp, 8> waitOps;
