@@ -673,30 +673,21 @@ LogicalResult Pingponger::transformChainedDotSchedule(OpBuilder &builder,
                                                       Location loc) {
   assert(dotOps.size() == 2);
 
-  auto comesBefore = [](Operation *op1, Operation *op2) {
-    assert(op1 && op2);
-    auto iter = op1->getNextNode();
-    while (iter && iter != op2) {
-      iter = iter->getNextNode();
+  // Memory clusters start with ttg.async_wait or ttg.local_store so we have to
+  // look for the first one after each dot
+  auto findNextMemoryCluster = [](Operation *op) {
+    while (op && !llvm::isa<ttg::AsyncWaitOp, ttg::LocalStoreOp>(op)) {
+      op = op->getNextNode();
     }
-    return iter == op2;
+    return op;
   };
 
-  // The memory clusters begin with either an async_wait or an local_load so we
-  // need to find the actual cluster start Ops
-  std::array<Operation *, 2> memoryClusters;
-  LDBG("AsyncWaits: " << asyncWaitOps.size());
-  if (asyncWaitOps.size() == 2) {
-    memoryClusters = {asyncWaitOps[0], asyncWaitOps[1]};
-  } else if (lStoreOps.size() == 2) {
-    memoryClusters = {lStoreOps[0], lStoreOps[1]};
-  } else if (lStoreOps.size() == 1 && asyncWaitOps.size() == 1) {
-    if (comesBefore(asyncWaitOps[0], lStoreOps[0])) {
-      memoryClusters = {asyncWaitOps[0], lStoreOps[0]};
-    } else {
-      memoryClusters = {lStoreOps[0], asyncWaitOps[0]};
-    }
-  } else {
+  auto memCluster0StartOp = findNextMemoryCluster(dotOps[0]);
+  auto memCluster1StartOp = findNextMemoryCluster(dotOps[1]);
+
+  if (!memCluster0StartOp || !memCluster1StartOp) {
+    LDBG("ChainedDot pingpong requires memory operations in both memory "
+         "clusters");
     return failure();
   }
 
@@ -705,7 +696,8 @@ LogicalResult Pingponger::transformChainedDotSchedule(OpBuilder &builder,
   prependOp(builder.create<ROCDL::SetPrioOp>(loc, lowPriority), false);
 
   // dot cluster 0 operations here.
-  updateOpInsertion(memoryClusters[0]);
+
+  updateOpInsertion(memCluster0StartOp);
   prependOp(builder.create<ROCDL::SetPrioOp>(loc, highPriority), false);
   appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
 
@@ -719,7 +711,7 @@ LogicalResult Pingponger::transformChainedDotSchedule(OpBuilder &builder,
 
   // dot cluster 1 operations here.
 
-  updateOpInsertion(memoryClusters[1]);
+  updateOpInsertion(memCluster1StartOp);
   prependOp(builder.create<ROCDL::SetPrioOp>(loc, highPriority), false);
   appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
 
