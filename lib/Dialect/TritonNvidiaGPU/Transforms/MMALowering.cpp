@@ -24,7 +24,7 @@ public:
   LogicalResult matchAndRewrite(TCGen5MMAOpTy op,
                                 PatternRewriter &rewriter) const override {
     // If the op doesn't have synchronous semantic skip the pattern.
-    if (op.getIsAsync().has_value())
+    if (op.getIsAsync())
       return failure();
     MLIRContext *ctx = op.getContext();
     Location loc = op.getLoc();
