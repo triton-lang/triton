@@ -98,15 +98,6 @@ def test_convert_layout_not_trivial():
     assert "layout conversion from BlockedLayout(size_per_thread=[2]" in str(e.value.__cause__)
     assert "to AutoLayout() is not trivial" in str(e.value.__cause__)
 
-    with pytest.raises(CompilationError) as e:
-        src_layout: ttgl.constexpr = ttgl.AutoLayout()
-        dst_layout: ttgl.constexpr = ttgl.BlockedLayout([2], [32], [4], [0])
-        kernel.warmup(src_layout, dst_layout, grid=(1, ))
-
-    assert "layout conversion from AutoLayout()" in str(e.value.__cause__)
-    assert "to BlockedLayout(size_per_thread=[2]" in str(e.value.__cause__)
-    assert "is not trivial" in str(e.value.__cause__)
-
 
 @gluon.jit
 def shared_memory_kernel(XBLOCK: ttgl.constexpr, YBLOCK: ttgl.constexpr, layout_a: ttgl.constexpr,

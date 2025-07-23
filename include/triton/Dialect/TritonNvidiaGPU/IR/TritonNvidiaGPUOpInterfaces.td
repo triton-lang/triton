@@ -54,5 +54,9 @@ def MMAv5OpInterface : OpInterface<"MMAv5OpInterface"> {
                     "setIsAsync",
                     (ins "bool":$isAsync)>,
   ];
+
+  let verify = [{
+    return ::mlir::triton::nvidia_gpu::impl::verifyMMAv5Op($_op);
+  }];
 }
 #endif // TRITON_NVIDIAGPU_OP_INTERFACES
