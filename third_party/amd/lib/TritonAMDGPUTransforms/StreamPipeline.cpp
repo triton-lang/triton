@@ -685,23 +685,27 @@ buildSchedule(scf::ForOp &forOp, int numStages, const LoadToInfoMap &loadToInfo,
 // pipeliner is meant to be used in combination with pingpong
 namespace ChainedDotSchedule {
 
+// Defines the order of scheduling clusters. The suffix numbers for memory
+// operations define which dot the operations belongs to. So *_LOAD_1 loads a
+// tensor consumed by the first dot. If a memory operation is used by both dots
+// it has to be be assigned to the *_1 clusters to ensure a valid schedule.
 enum Clusters {
   // ComputeCluster1
-  CLUSTER_DOT1,
-  CLUSTER_AFTER_DOT1,
+  CLUSTER_DOT_1,
+  CLUSTER_AFTER_DOT_1,
   // MemoryCluster1
-  CLUSTER_ASYNC_WAIT2,
-  CLUSTER_LWRITE1,
-  CLUSTER_LLOAD2,
-  CLUSTER_LOAD1,
+  CLUSTER_ASYNC_WAIT_2,
+  CLUSTER_LOCAL_WRITE_1,
+  CLUSTER_LOCAL_LOAD_2,
+  CLUSTER_GLOBAL_LOAD_1,
   // ComputeCluster2
-  CLUSTER_DOT2,
-  CLUSTER_AFTER_DOT2,
+  CLUSTER_DOT_2,
+  CLUSTER_AFTER_DOT_2,
   // MemoryCluster2
-  CLUSTER_ASYNC_WAIT1,
-  CLUSTER_LWRITE2,
-  CLUSTER_LLOAD1,
-  CLUSTER_LOAD2,
+  CLUSTER_ASYNC_WAIT_1,
+  CLUSTER_LOCAL_WRITE_2,
+  CLUSTER_LOCAL_LOAD_1,
+  CLUSTER_GLOBAL_LOAD_2,
 
   CLUSTER_COUNT
 };
@@ -710,16 +714,16 @@ using ChainedDotClusters =
     std::array<tt::CoarseSchedule::Cluster, CLUSTER_COUNT>;
 
 enum Stages {
-  STAGE_DOT1 = 2,
-  STAGE_DOT2 = 3,
+  STAGE_DOT_1 = 2,
+  STAGE_DOT_2 = 3,
 
-  STAGE_LOAD1 = 0,
-  STAGE_LWRITE1 = 1,
-  STAGE_LLOAD1 = 1,
+  STAGE_GLOBAL_LOAD_1 = 0,
+  STAGE_LOCAL_WRITE_1 = 1,
+  STAGE_LOCAL_LOAD_1 = 1,
 
-  STAGE_LOAD2 = 1,
-  STAGE_LWRITE2 = 2,
-  STAGE_LLOAD2 = 3,
+  STAGE_GLOBAL_LOAD_2 = 1,
+  STAGE_LOCAL_WRITE_2 = 2,
+  STAGE_LOCAL_LOAD_2 = 3,
 };
 
 LogicalResult checkPreconditions(scf::ForOp forOp, int numStages,
@@ -757,9 +761,11 @@ scheduleLoads(std::array<tt::DotOp, 2> dotOps,
               tt::CoarseSchedule &schedule) {
   for (auto [loadOp, info] : loadToInfo) {
     if (info.use == dotOps[0]) {
-      schedule.insert(loadOp, STAGE_LOAD1, clusters[CLUSTER_LOAD1]);
+      schedule.insert(loadOp, STAGE_GLOBAL_LOAD_1,
+                      clusters[CLUSTER_GLOBAL_LOAD_1]);
     } else if (info.use == dotOps[1]) {
-      schedule.insert(loadOp, STAGE_LOAD2, clusters[CLUSTER_LOAD2]);
+      schedule.insert(loadOp, STAGE_GLOBAL_LOAD_2,
+                      clusters[CLUSTER_GLOBAL_LOAD_2]);
     } else {
       LDBG(*loadOp << " will not be pipelined because it's not used by a dot");
     }
@@ -805,11 +811,11 @@ LogicalResult scheduleOpsBetweenDots(scf::ForOp forOp,
       if (numUsers > 1) {
         // Schedule this op to interleave with dot2. All its unscheduled
         // dependencies will be scheduled the same by scheduleDependencies
-        schedule.insert(defOp, STAGE_DOT1, clusters[CLUSTER_AFTER_DOT2]);
+        schedule.insert(defOp, STAGE_DOT_1, clusters[CLUSTER_AFTER_DOT_2]);
         // Schedule the dot2 operand to interleave with dot1. Its unscheduled
         // dependencies will be scheduled the same by scheduleDependencies
-        schedule.insertIfAbsent(operandDefOp, STAGE_DOT2,
-                                clusters[CLUSTER_AFTER_DOT1]);
+        schedule.insertIfAbsent(operandDefOp, STAGE_DOT_2,
+                                clusters[CLUSTER_AFTER_DOT_1]);
         continue;
       }
       // Follow def chain
@@ -826,7 +832,7 @@ LogicalResult scheduleOpsBetweenDots(scf::ForOp forOp,
     if (!defOp || !dot0Slice.contains(defOp))
       continue;
 
-    schedule.insertIfAbsent(defOp, STAGE_DOT2, clusters[CLUSTER_AFTER_DOT1]);
+    schedule.insertIfAbsent(defOp, STAGE_DOT_2, clusters[CLUSTER_AFTER_DOT_1]);
   }
 
   return success();
@@ -843,16 +849,16 @@ void scheduleAsyncCopy(const AsyncCopyChainOps &asyncOps, tt::LoadOp loadOp,
   // later UpdateAsyncWaitCount pass can deduce better waitcnts
   schedule.insert(commitOp, loadStage, loadCluster);
 
-  if (loadStage == STAGE_LOAD1) {
-    schedule.insert(waitOp, STAGE_LLOAD1, clusters[CLUSTER_ASYNC_WAIT1]);
+  if (loadStage == STAGE_GLOBAL_LOAD_1) {
+    schedule.insert(waitOp, STAGE_LOCAL_LOAD_1, clusters[CLUSTER_ASYNC_WAIT_1]);
     if (maybeLocalLoadOp)
-      scheduleLocalLoad(maybeLocalLoadOp, schedule, STAGE_LLOAD1,
-                        clusters[CLUSTER_LLOAD1]);
+      scheduleLocalLoad(maybeLocalLoadOp, schedule, STAGE_LOCAL_LOAD_1,
+                        clusters[CLUSTER_LOCAL_LOAD_1]);
   } else {
-    schedule.insert(waitOp, STAGE_LLOAD2, clusters[CLUSTER_ASYNC_WAIT2]);
+    schedule.insert(waitOp, STAGE_LOCAL_LOAD_2, clusters[CLUSTER_ASYNC_WAIT_2]);
     if (maybeLocalLoadOp)
-      scheduleLocalLoad(maybeLocalLoadOp, schedule, STAGE_LLOAD2,
-                        clusters[CLUSTER_LLOAD2]);
+      scheduleLocalLoad(maybeLocalLoadOp, schedule, STAGE_LOCAL_LOAD_2,
+                        clusters[CLUSTER_LOCAL_LOAD_2]);
   }
 }
 
@@ -863,17 +869,23 @@ void scheduleStreamCopy(const StreamCopyChainOps &streamOps, tt::LoadOp loadOp,
   auto [copyOp, subviewOp, localStoreOp, maybeLocalLoadOp] = streamOps;
   schedule.insert(copyOp, loadStage, loadCluster);
 
-  if (loadStage == STAGE_LOAD1) {
-    schedule.insert(subviewOp, STAGE_LWRITE1, clusters[CLUSTER_LWRITE1]);
-    schedule.insert(localStoreOp, STAGE_LWRITE1, clusters[CLUSTER_LWRITE1]);
+  if (loadStage == STAGE_GLOBAL_LOAD_1) {
+    schedule.insert(subviewOp, STAGE_LOCAL_WRITE_1,
+                    clusters[CLUSTER_LOCAL_WRITE_1]);
+    schedule.insert(localStoreOp, STAGE_LOCAL_WRITE_1,
+                    clusters[CLUSTER_LOCAL_WRITE_1]);
 
     if (maybeLocalLoadOp)
-      schedule.insert(maybeLocalLoadOp, STAGE_LLOAD1, clusters[CLUSTER_LLOAD1]);
+      schedule.insert(maybeLocalLoadOp, STAGE_LOCAL_LOAD_1,
+                      clusters[CLUSTER_LOCAL_LOAD_1]);
   } else {
-    schedule.insert(subviewOp, STAGE_LWRITE2, clusters[CLUSTER_LWRITE2]);
-    schedule.insert(localStoreOp, STAGE_LWRITE2, clusters[CLUSTER_LWRITE2]);
+    schedule.insert(subviewOp, STAGE_LOCAL_WRITE_2,
+                    clusters[CLUSTER_LOCAL_WRITE_2]);
+    schedule.insert(localStoreOp, STAGE_LOCAL_WRITE_2,
+                    clusters[CLUSTER_LOCAL_WRITE_2]);
     if (maybeLocalLoadOp)
-      schedule.insert(maybeLocalLoadOp, STAGE_LLOAD2, clusters[CLUSTER_LLOAD2]);
+      schedule.insert(maybeLocalLoadOp, STAGE_LOCAL_LOAD_2,
+                      clusters[CLUSTER_LOCAL_LOAD_2]);
   }
 
   if (maybeLocalLoadOp) {
@@ -922,8 +934,8 @@ buildSchedule(scf::ForOp &forOp, int numStages, const LoadToInfoMap &loadToInfo,
   assert(dotOpsVec.size() == 2); // Ensure precondition
   std::array<tt::DotOp, 2> dotOps = {dotOpsVec[0], dotOpsVec[1]};
 
-  schedule.insert(dotOps[0], STAGE_DOT1, clusters[CLUSTER_DOT1]);
-  schedule.insert(dotOps[1], STAGE_DOT2, clusters[CLUSTER_DOT2]);
+  schedule.insert(dotOps[0], STAGE_DOT_1, clusters[CLUSTER_DOT_1]);
+  schedule.insert(dotOps[1], STAGE_DOT_2, clusters[CLUSTER_DOT_2]);
 
   if (failed(scheduleLoads(dotOps, loadToInfo, clusters, schedule)))
     return {};
