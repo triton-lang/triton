@@ -1019,9 +1019,13 @@ FailureOr<scf::ForOp> pipelineLoop(scf::ForOp forOp, int numStages,
     if (part != tt::PipeliningOption::PipelinerPart::Prologue)
       return;
 
-    if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
+    auto annotateLoad = [](Operation *loadOp) {
       loadOp->setAttr("amd.pipeliner_part",
-                      StringAttr::get(op->getContext(), "prologue"));
+                      StringAttr::get(loadOp->getContext(), "prologue"));
+    };
+
+    if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
+      annotateLoad(loadOp);
       return;
     }
     // loadOp may be wrapped by a MaskOp as predicateFn execution
@@ -1029,8 +1033,7 @@ FailureOr<scf::ForOp> pipelineLoop(scf::ForOp forOp, int numStages,
     if (auto maskOp = dyn_cast<ttg::MaskOp>(op)) {
       for (auto &innerOp : maskOp.getBody()->without_terminator()) {
         if (auto loadOp = dyn_cast<tt::LoadOp>(&innerOp)) {
-          loadOp->setAttr("amd.pipeliner_part",
-                          StringAttr::get(op->getContext(), "prologue"));
+          annotateLoad(loadOp);
           return;
         }
       }
