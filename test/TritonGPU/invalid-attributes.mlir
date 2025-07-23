@@ -69,7 +69,7 @@
 
 // -----
 
-// expected-error@+1 {{(M, N) cases other than (32, 32) or (16, 16) unimplemented}}
+// expected-error@+1 {{invalid (mDim, nDim) combination}}
 #mfma = #ttg.amd_mfma<{version = 2, warpsPerCTA = [1, 1, 1], instrShape = [16, 8], isTransposed = false}>
 
 // -----

@@ -297,7 +297,8 @@ Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
 }
 
 Value llLoad(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,
-             Value pred, Value falseVal, triton::CacheModifier cm) {
+             Value pred, Value falseVal, triton::CacheModifier cm,
+             bool forceNoAliasAsyncLoads) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
   Type funcType = getFunctionType(elemTy, ValueRange({ptr, pred, falseVal}));
@@ -316,10 +317,13 @@ Value llLoad(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,
       return predicatedLoad;
     }
   };
+  std::string funcName = getLoadNameRaw(cm);
+  if (forceNoAliasAsyncLoads)
+    funcName += noAliasAsyncLoads;
 
-  auto funcName = mangleFunc(getLoadNameRaw(cm), funcType);
+  auto mangledName = mangleFunc(funcName, funcType);
   LLVM::LLVMFuncOp funcOp =
-      appendOrGetExternFuncOp(rewriter, parent, funcName, funcType);
+      appendOrGetExternFuncOp(rewriter, parent, mangledName, funcType);
   return LLVM::createLLVMCallOp(rewriter, loc, funcOp,
                                 ValueRange({ptr, pred, falseVal}))
       .getResult();

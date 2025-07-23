@@ -421,14 +421,18 @@ emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
 
 Value emitPadding(Location loc, RewriterBase &rewriter,
                   triton::gpu::PaddedSharedEncodingAttr layout,
-                  Value smemOffset) {
+                  unsigned bitwidth, Value smemOffset, bool offsetInBytes) {
   TritonLLVMOpBuilder b(loc, rewriter);
 
+  assert((bitwidth >= 8) && "Invalid bitwidth for padded shared layout");
   Value padOffset = b.i32_val(0);
+  unsigned offScale = offsetInBytes ? bitwidth / 8 : 1;
   for (auto [interval, padding] :
        llvm::zip_equal(layout.getIntervals(), layout.getPaddings())) {
-    Value iVal = b.i32_val(llvm::Log2_32(interval));
-    Value pVal = b.i32_val(llvm::Log2_32(padding));
+    unsigned intervalScaled = offScale * interval;
+    unsigned paddingScaled = offScale * padding;
+    Value iVal = b.i32_val(llvm::Log2_32(intervalScaled));
+    Value pVal = b.i32_val(llvm::Log2_32(paddingScaled));
     padOffset = b.add(padOffset, b.shl(b.ashr(smemOffset, iVal), pVal));
   }
   return padOffset;
@@ -472,10 +476,11 @@ largestVectorisation(MLIRContext *ctx, const LinearLayout &cvt, int bitwidth,
 SmallVector<Value>
 lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout cvt,
                 ArrayRef<Value> valsArray, // Input for store, output for load
-                Type llvmElemTy, Value smemBase, Value affineOffset,
-                uint64_t maskSpanAffineOffset,
+                Type llvmElemTy, Value smemBase,
+                std::function<Value(Value)> calcPaddedOffset,
+                Value affineOffset, uint64_t maskSpanAffineOffset,
                 ConversionPatternRewriter &rewriter,
-                const TargetInfoBase &targetInfo) {
+                const TargetInfoBase &targetInfo, Operation *localLoadOp) {
 
   bool isStore = !valsArray.empty();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -492,19 +497,22 @@ lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout cvt,
       return {};
     } else {
       assert(vals.empty());
-      Value valsVec = targetInfo.loadDShared(
-          rewriter, loc, shmemAddr, std::nullopt, vecTy, /*pred=*/b.true_val());
+      Value valsVec =
+          targetInfo.loadDShared(rewriter, loc, shmemAddr, std::nullopt, vecTy,
+                                 /*pred=*/b.true_val(), localLoadOp);
       return unpackLLVector(loc, valsVec, rewriter);
     }
   };
-  return lowerLdSt(loc, ctx, cvt, valsArray, llvmElemTy, smemBase, affineOffset,
-                   maskSpanAffineOffset, rewriter, targetInfo, {}, emitLdSt);
+  return lowerLdSt(loc, ctx, cvt, valsArray, llvmElemTy, smemBase,
+                   calcPaddedOffset, affineOffset, maskSpanAffineOffset,
+                   rewriter, targetInfo, {}, emitLdSt);
 }
 
 SmallVector<Value> lowerLdSt(
     Location loc, MLIRContext *ctx, LinearLayout cvt,
     ArrayRef<Value> valsArray, // Input for store, output for load
-    Type llvmElemTy, Value smemBase, Value affineOffset,
+    Type llvmElemTy, Value smemBase,
+    std::function<Value(Value)> calcPaddedOffset, Value affineOffset,
     uint64_t maskSpanAffineOffset, ConversionPatternRewriter &rewriter,
     const TargetInfoBase &targetInfo, std::optional<int> maybeMaxVecElems,
     std::function<SmallVector<Value>(ConversionPatternRewriter &, Location,
@@ -568,8 +576,9 @@ SmallVector<Value> lowerLdSt(
           reps.apply({{kReg, j}, {kLane, 0}, {kWarp, 0}})[0].second;
       auto regIdxAddI8 = regIdxAdd * (bitwidth / 8);
       Value innerOffset = b.add(offset, b.i32_val(regIdxAddI8));
-      auto vecAddr = b.gep(smemPtrTy, i8_ty, smemBase, innerOffset,
-                           LLVM::GEPNoWrapFlags::inbounds);
+      auto vecAddr =
+          b.gep(smemPtrTy, i8_ty, smemBase, calcPaddedOffset(innerOffset),
+                LLVM::GEPNoWrapFlags::inbounds);
       llvm::append_range(outVals,
                          lowerInst(rewriter, loc, vals, vecAddr, i + j, vecTy));
     }
@@ -591,9 +600,21 @@ lowerLocalLdSt(Location loc, MLIRContext *ctx,
                ArrayRef<Value> valsArray, // Input for store, empty for load
                Type llvmElemTy, triton::gpu::MemDescType srcTy,
                SharedMemoryObject smemObj, ConversionPatternRewriter &rewriter,
-               const TargetInfoBase &targetInfo) {
+               const TargetInfoBase &targetInfo, Operation *localLoadOp) {
   assert(cvt.getNumOutDims() == 1);
   assert(*cvt.getOutDimNames().begin() == str_attr("offset"));
+  auto calcPaddedOffset = [&](Value smemOffset) {
+    TritonLLVMOpBuilder b(loc, rewriter);
+    auto bitwidth = llvmElemTy.getIntOrFloatBitWidth();
+    if (auto paddedLayout = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(
+            srcTy.getEncoding())) {
+      // Apply the offset needed for padding.
+      Value padOffset = emitPadding(loc, rewriter, paddedLayout, bitwidth,
+                                    smemOffset, /*offsetInBytes=*/true);
+      smemOffset = b.add(smemOffset, padOffset);
+    }
+    return smemOffset;
+  };
   auto isStore = !valsArray.empty();
   // Remove broadcasting in the registers
   auto removeBroadcastSrc = actionRemoveBroadcastedRegs(cvt);
@@ -604,7 +625,7 @@ lowerLocalLdSt(Location loc, MLIRContext *ctx,
       inVals = removeBroadcastSrc.apply(inVals);
     }
     auto outVals = lowerLocalLdSt(loc, ctx, prmtCvt, inVals, llvmElemTy, srcTy,
-                                  smemObj, rewriter, targetInfo);
+                                  smemObj, rewriter, targetInfo, localLoadOp);
     if (!isStore) {
       outVals = broadcastAs(outVals, cvt);
     }
@@ -612,9 +633,9 @@ lowerLocalLdSt(Location loc, MLIRContext *ctx,
   }
   auto affineOffset = smemObj.getShmemOffset(loc, rewriter, srcTy);
   auto maskSpanAffineOffset = smemObj.getMaskSpanOffsets(srcTy);
-  return lowerLdStShared(loc, ctx, cvt, valsArray, llvmElemTy,
-                         smemObj.getBase(), affineOffset, maskSpanAffineOffset,
-                         rewriter, targetInfo);
+  return lowerLdStShared(
+      loc, ctx, cvt, valsArray, llvmElemTy, smemObj.getBase(), calcPaddedOffset,
+      affineOffset, maskSpanAffineOffset, rewriter, targetInfo, localLoadOp);
 }
 
 bool emitTransferBetweenRegistersAndShared(
@@ -692,7 +713,9 @@ bool emitTransferBetweenRegistersAndShared(
     smemOffset = b.xor_(smemOffset, offset);
     if (paddedLayout) {
       // Apply the offset needed for padding.
-      Value padOffset = emitPadding(loc, rewriter, paddedLayout, smemOffset);
+      auto bitwidth = elemLlvmTy.getIntOrFloatBitWidth();
+      Value padOffset = emitPadding(loc, rewriter, paddedLayout, bitwidth,
+                                    smemOffset, /*offsetInBytes=*/false);
       smemOffset = b.add(smemOffset, padOffset);
     }
     auto vecAddr = b.gep(smemBase.getType(), elemLlvmTy, smemBase, smemOffset,
@@ -717,60 +740,6 @@ bool emitTransferBetweenRegistersAndShared(
   return emitTransferBetweenRegistersAndShared(
       regLayout, sharedTy, elemLlvmTy, maxVecElems, smemObj, loc, rewriter,
       target, laneId, warpId, perVectorCallback);
-}
-
-SmallVector<Value> loadSharedToDistributed(triton::gpu::LocalLoadOp localLoadOp,
-                                           Type elemLlvmTy,
-                                           const SharedMemoryObject &smemObj,
-                                           Location loc, RewriterBase &rewriter,
-                                           const TargetInfoBase &target) {
-  auto srcTy = localLoadOp.getSrc().getType();
-  auto dstTy = localLoadOp.getResult().getType();
-
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  SmallVector<Value> ret;
-  bool success = emitTransferBetweenRegistersAndShared(
-      dstTy, srcTy, elemLlvmTy, /*maxVecElems=*/std::nullopt, smemObj, loc,
-      rewriter, target, [&](VectorType vecTy, Value vecAddr) {
-        auto vecVal = b.load(vecTy, vecAddr);
-        target.localLoadOpAnnotation(localLoadOp, vecVal);
-        vecVal.setAlignment(vecTy.getNumElements() *
-                            elemLlvmTy.getIntOrFloatBitWidth() / 8);
-
-        for (int v = 0; v < vecTy.getNumElements(); v++) {
-          ret.push_back(b.extract_element(elemLlvmTy, vecVal, b.i32_val(v)));
-        }
-      });
-  if (!success)
-    llvm::report_fatal_error("Failed to emit transfer from shared to register");
-
-  return ret;
-}
-
-void storeDistributedToShared(triton::gpu::MemDescType dstTy,
-                              RankedTensorType srcTy, Type elemLlvmTy,
-                              ArrayRef<Value> srcVals,
-                              const SharedMemoryObject &smemObj, Location loc,
-                              RewriterBase &rewriter,
-                              const TargetInfoBase &target) {
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  bool success = emitTransferBetweenRegistersAndShared(
-      srcTy, dstTy, elemLlvmTy, /*maxVecElems=*/std::nullopt, smemObj, loc,
-      rewriter, target, [&](VectorType vecTy, Value vecAddr) {
-        ArrayRef<Value> vals = srcVals.take_front(vecTy.getNumElements());
-        srcVals = srcVals.drop_front(vecTy.getNumElements());
-
-        Value vec = b.undef(vecTy);
-        for (int i = 0; i < vals.size(); i++) {
-          vec = b.insert_element(vec, vals[i], b.i32_val(i));
-        }
-        b.store(vec, vecAddr)
-            .setAlignment(vecTy.getNumElements() *
-                          elemLlvmTy.getIntOrFloatBitWidth() / 8);
-      });
-
-  if (!success)
-    llvm::report_fatal_error("Failed to emit transfer from register to shared");
 }
 
 SmallVector<Value> unpackLLElements(Location loc, Value llvmStruct,
@@ -1825,6 +1794,65 @@ Value transferWithinBlockPadding(triton::gpu::ConvertLayoutOp op, Value src,
   Value result =
       packLLElements(loc, typeConverter, outVals, rewriter, op.getType());
   return result;
+}
+
+SmallVector<Value> inlineRegionImpl(RewriterBase &rewriter, Region &region,
+                                    ArrayRef<Value> args,
+                                    mlir::TypeID terminatorTypeId,
+                                    Location loc) {
+  // Inline regions with multiple blocks
+  //
+  //        Before                                   After
+  //                                              ┌─────────┐
+  //                                              │ op1     │
+  //                    ┌──────────┐              │ cf.br   │
+  //                    │region[0] │              └────┬────┘
+  //                    │cf.cond_br├─┐            ┌────▼─────┐
+  //                    └────┬─────┘ │            │region[0] │
+  //                         │       │            │cf.cond_br├─┐
+  // ┌───────┐          ┌────▼────┐  │            └────┬─────┘ │
+  // │  op1  │  IP      │region[1]│  │            ┌────▼────┐  │
+  // │       │◄───      │yield ...│  │            │region[1]│  │
+  // │  op2  │          └─────────┘  │          ┌─┤cf.br    │  │
+  // └───────┘                       │          │ └─────────┘  │
+  //                    ┌─────────┐  │          │ ┌─────────┐  │
+  //                    │region[2]│◄─┘          │ │region[2]│◄─┘
+  //                    │yield    │             │ │cf.br    │
+  //                    └─────────┘             │ └────┬────┘
+  //                                            │ ┌────▼────┐
+  //                                            └►│op2      │
+  //                                              └─────────┘
+  auto *curBlock = rewriter.getInsertionBlock();
+  auto opPosition = rewriter.getInsertionPoint();
+  auto *remainingOpsBlock = rewriter.splitBlock(curBlock, opPosition);
+
+  IRMapping regionMap;
+  Region &parent = *curBlock->getParent();
+  rewriter.cloneRegionBefore(region, parent, parent.end(), regionMap);
+  rewriter.setInsertionPointToEnd(curBlock);
+  rewriter.create<LLVM::BrOp>(loc, args, regionMap.lookup(&region.front()));
+
+  ValueRange terminatorOperands;
+  for (Block &origBlock : region) {
+    Block *newBlock = regionMap.lookup(&origBlock);
+    rewriter.moveBlockBefore(newBlock, remainingOpsBlock);
+
+    auto terminator = newBlock->getTerminator();
+    if (terminator->getRegisteredInfo()->getTypeID() == terminatorTypeId) {
+      terminatorOperands = terminator->getOperands();
+      rewriter.setInsertionPointAfter(terminator);
+      rewriter.replaceOpWithNewOp<LLVM::BrOp>(terminator, terminatorOperands,
+                                              remainingOpsBlock);
+    }
+  }
+
+  rewriter.setInsertionPointToStart(remainingOpsBlock);
+  SmallVector<Value> vals;
+  for (auto resultTy : terminatorOperands.getType()) {
+    auto val = remainingOpsBlock->addArgument(resultTy, loc);
+    vals.push_back(val);
+  }
+  return vals;
 }
 
 } // namespace mlir

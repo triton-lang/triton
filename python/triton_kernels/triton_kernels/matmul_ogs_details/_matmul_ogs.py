@@ -2,7 +2,7 @@ import triton
 import triton.language as tl
 from triton_kernels.tensor_details.layout_details.blackwell_scale import unswizzle_mx_scale_bw
 from triton_kernels.tensor_details.layout_details.hopper_scale import unswizzle_mxfp4_scale_hopper
-from triton_kernels.tensor_details.layout_details.hopper_value import unswizzle_mxfp4_value_hopper
+from triton_kernels.tensor_details.layout_details.hopper_value import mxfp4_to_bf16_triton
 from triton_kernels.numerics_details.flexpoint import float_to_flex, load_scale
 from triton_kernels.numerics_details.mxfp_details._downcast_to_mxfp import MXFP_BLOCK_SIZE
 from ._common import make_matmul_repr, matmul_launch_metadata, swizzle2d, xcd_swizzle, get_scaled_dot_format_string
@@ -250,18 +250,24 @@ def _matmul_ogs(
                 w_scales = unswizzle_mx_scale_bw(tl.load(MxScalePtrs))
             elif SWIZZLE_MX_SCALE == "HOPPER_SCALE":
                 # Handshake with the swizzling code
-                tl.static_assert(tl.extra.cuda.num_warps() == 8, "Only 8 warps are supported for Hopper swizzling. Got %d" % tl.extra.cuda.num_warps())
-                w_scales = unswizzle_mxfp4_scale_hopper(tl.load(MxScalePtrs), num_warps=8)
+                num_warps: tl.constexpr = tl.extra.cuda.num_warps()
+                w_scales = unswizzle_mxfp4_scale_hopper(tl.load(MxScalePtrs), mx_axis=1, num_warps=num_warps)
             else:
                 w_scales = tl.load(MxScalePtrs, mask=mask_k_scale[None, :], other=0.0)
 
             if SWIZZLE_MX_VALUE == "HOPPER_VALUE":
                 # Handshake with the swizzling code
-                w = unswizzle_mxfp4_value_hopper(w, op_idx=1, mma_version=3)
-                mma_version: tl.constexpr = 3 if w.shape[1] >= 64 else 2
-                tl.static_assert(mma_version == 3, "Only mma_version 3 is supported for Hopper swizzling")
-
-            acc = tl.dot_scaled(x, x_scales, x_format, w, w_scales, mx_format, acc=acc, fast_math=True)
+                tl.static_assert(x_format == "bf16")
+                tl.static_assert(mx_format == "e2m1")
+                w = mxfp4_to_bf16_triton(w.trans(), w_scales, 1)
+                tl.static_assert(w.dtype == tl.bfloat16)
+                acc = acc.trans()
+                x = x.trans()
+                # w = w.trans()
+                acc = tl.dot(w, x, acc, max_num_imprecise_acc=MAX_NUM_IMPRECISE_ACC, allow_tf32=ALLOW_TF32)
+                acc = acc.trans()
+            else:
+                acc = tl.dot_scaled(x, x_scales, x_format, w, w_scales, mx_format, acc=acc, fast_math=True)
             if SWIZZLE_MX_SCALE == "BLACKWELL_SCALE":
                 MxScalePtrs += (MX_SCALE_BLOCK_K // 4 * SPLIT_K) * stride_mx_k
             else:
