@@ -1240,6 +1240,55 @@ Effects: `MemoryEffects::Effect{}`
 | `result` | ptr |
 
 
+### `tt.map_elementwise` (triton::MapElementwiseOp)
+
+_Map a scalar subregion over a tensor_
+
+Traits: `RecursiveMemoryEffects`, `SameOperandsAndResultEncoding`, `SameOperandsAndResultShape`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>pack</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
+</table>
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `srcs` | variadic of ranked tensor of floating-point or integer or ptr values |
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `result` | variadic of ranked tensor of floating-point or integer or ptr values |
+
+
+### `tt.map_elementwise.return` (triton::MapElementwiseReturnOp)
+
+_Terminator for map elementwise operator_
+
+Syntax:
+
+```
+operation ::= `tt.map_elementwise.return` attr-dict ($result^ `:` type($result))?
+```
+
+Traits: `AlwaysSpeculatableImplTrait`, `HasParent<MapElementwiseOp>`, `ReturnLike`, `TensorSizeTrait`, `Terminator`, `VerifyTensorLayoutsTrait`
+
+Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`, `RegionBranchTerminatorOpInterface`
+
+Effects: `MemoryEffects::Effect{}`
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `result` | variadic of any type |
+
+
 ### `tt.mulhiui` (triton::MulhiUIOp)
 
 _Most significant N bits of the 2N-bit product of two integers_
