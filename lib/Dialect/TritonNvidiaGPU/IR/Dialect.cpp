@@ -223,6 +223,22 @@ bool isDistributedLayoutTMemCompatible(Operation *op,
   return areLayoutsEquivalent(tensorType.getShape(), layout, enc);
 }
 
+LogicalResult impl::verifyMMAv5Op(Operation *op) {
+  auto isInterleaved = [](MemDescType memdesc) {
+    auto enc = dyn_cast<TensorMemoryEncodingAttr>(memdesc.getEncoding());
+    return enc && getTmemAllocSizes(memdesc).numRows != 64 &&
+           enc.getBlockM() == 64;
+  };
+
+  auto itf = cast<MMAv5OpInterface>(op);
+  if (isInterleaved(itf.getA().getType()) &&
+      isInterleaved(itf.getAccumulator().getType())) {
+    return op->emitOpError(
+        "does not support blockM=64 with interleaved blocks in TMEM layout");
+  }
+  return success();
+}
+
 } // namespace nvidia_gpu
 } // namespace triton
 } // namespace mlir

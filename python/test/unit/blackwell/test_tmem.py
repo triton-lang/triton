@@ -100,6 +100,7 @@ ttng.wait_barrier %93, %c0_i32 : !ttg.memdesc<1xi64, #shared1, #ttg.shared_memor
             assert torch.equal(x[m * 32:(m + 1) * 32], z_tri[32 * i:32 * (i + 1), col_offset:(col_offset + 4)])
 
 
+@pytest.mark.skipif(torch.cuda.get_device_capability()[0] != 10, reason="Requires compute capability == 10")
 def test_tmem_subslice_block_m_64():
 
     @gluon.jit
