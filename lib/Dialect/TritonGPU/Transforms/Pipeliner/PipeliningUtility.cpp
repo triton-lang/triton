@@ -281,8 +281,6 @@ Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
   return op;
 }
 
-/// Wrap the operation into a MaskOp using the provided predicate, enabling high
-/// level predication abstraction during pipelining.
 Operation *mlir::triton::wrapInMaskOp(RewriterBase &rewriter, Operation *op,
                                       Value pred) {
   auto mask =
@@ -296,8 +294,6 @@ Operation *mlir::triton::wrapInMaskOp(RewriterBase &rewriter, Operation *op,
   return mask;
 }
 
-// Utilize high level predication abstraction to perform optimizations before
-// lowering to predicated operations
 void mlir::triton::resolveMaskOp(ModuleOp moduleOp,
                                  DenseSet<ttg::MaskOp> &peeledMaskOps) {
   IRRewriter rewriter(moduleOp);
