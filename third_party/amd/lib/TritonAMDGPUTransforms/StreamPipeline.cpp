@@ -1022,6 +1022,18 @@ FailureOr<scf::ForOp> pipelineLoop(scf::ForOp forOp, int numStages,
     if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
       loadOp->setAttr("amd.pipeliner_part",
                       StringAttr::get(op->getContext(), "prologue"));
+      return;
+    }
+    // loadOp may be wrapped by a MaskOp as predicateFn execution
+    // precedes annotation
+    if (auto maskOp = dyn_cast<ttg::MaskOp>(op)) {
+      for (auto &innerOp : maskOp.getBody()->without_terminator()) {
+        if (auto loadOp = dyn_cast<tt::LoadOp>(&innerOp)) {
+          loadOp->setAttr("amd.pipeliner_part",
+                          StringAttr::get(op->getContext(), "prologue"));
+          return;
+        }
+      }
     }
   };
   // Set the final schedule as our scheduling function
