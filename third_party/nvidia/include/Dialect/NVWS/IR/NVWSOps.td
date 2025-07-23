@@ -65,12 +65,11 @@ def NVWS_ArefGetEnterOp : NVWS_Op<"aref.get.enter"> {
                       These ArefGet "regions" can span multiple iterations. }];
 
   let arguments = (ins NVWS_ArefType:$aref,
-                       I32:$stage,
-                       I32:$phase);
+                       I32:$index);
   let results = (outs Variadic<AnyType>:$results);
   let hasVerifier=1;
   let assemblyFormat = [{
-    $aref `[` $stage `,` $phase `]` attr-dict
+    $aref `[` $index `]` attr-dict
     `:` type($aref) `->` type($results)
   }];
 }
@@ -81,10 +80,10 @@ def NVWS_ArefGetExitOp : NVWS_Op<"aref.get.exit"> {
                       These ArefGet "regions" can span multiple iterations. }];
 
   let arguments = (ins NVWS_ArefType:$aref,
-                       I32:$stage,
+                       I32:$index,
                        NVWS_AsyncOpArrayAttr:$async_ops);
   let assemblyFormat = [{
-    $aref `[` $stage `]` $async_ops attr-dict
+    $aref `[` $index `]` $async_ops attr-dict
     `:` type($aref)
  }];
 }
@@ -95,12 +94,11 @@ def NVWS_ArefPutEnterOp : NVWS_Op<"aref.put.enter"> {
                       These ArefPut "regions" can span multiple iterations. }];
 
   let arguments = (ins NVWS_ArefType:$aref,
-                       I32:$stage,
-                       I32:$phase);
+                       I32:$index);
   let results = (outs Variadic<AnyType>:$results);
   let hasVerifier=1;
   let assemblyFormat = [{
-    $aref `[` $stage `,` $phase `]` attr-dict
+    $aref `[` $index `]` attr-dict
     `:` type($aref) `->` type($results)
   }];
 }
@@ -111,10 +109,10 @@ def NVWS_ArefPutExitOp : NVWS_Op<"aref.put.exit"> {
                       These ArefPut "regions" can span multiple iterations. }];
 
   let arguments = (ins NVWS_ArefType:$aref,
-                       I32:$stage,
+                       I32:$index,
                        NVWS_AsyncOpArrayAttr:$async_ops);
   let assemblyFormat = [{
-    $aref `[` $stage `]` $async_ops attr-dict
+    $aref `[` $index `]` $async_ops attr-dict
     `:` type($aref)
  }];
 }
@@ -173,6 +171,23 @@ def NVWS_WarpGroupReturnOp : NVWS_Op<"warp_group.return", [
   }];
 
   let assemblyFormat = "attr-dict";
+}
+
+def NVWS_AsyncCompleteOp : NVWS_Op<"async_complete", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
+  let summary = "mbarrier.arrive or tcgen5.commit";
+
+  let description = [{
+    Lowers to mbarrier.arrive.shared.b64, cp.async.mbarrier.arrive.noinc or
+    tcgen05.commit depending on the value of commit.
+     * This op allows all threads to arrive
+     * It has an optional "arrive after a given async op completes" semantics.
+  }];
+
+  let hasVerifier = 1;
+  let arguments = (ins TTG_MemDescType:$alloc, NVWS_AsyncOpEnum:$async_op);
+  let assemblyFormat = [{
+    $alloc `,` `async_op` `=` $async_op attr-dict `:` type($alloc)
+  }];
 }
 
 def NVWS_CreateTokenOp : NVWS_Op<"create_token"> {
