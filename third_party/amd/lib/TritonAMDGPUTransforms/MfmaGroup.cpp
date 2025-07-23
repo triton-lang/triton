@@ -143,19 +143,15 @@ MfmaDatabase::MfmaDatabase(MLIRContext *context) {
       // f64 inputs
       // mfma_f64_16x16x4f64
       TRITON_MFMA_v2to4(16, 16, f64T, f64T, mfma_f64_16x16x4f64, 4, 1),
-      // mfma_f64_4x4x4f64
-      TRITON_MFMA_v2to4(4, 4, f64T, f64T, mfma_f64_4x4x4f64, 16, 1),
-      TRITON_MFMA_v2to4(4, 16, f64T, f64T, mfma_f64_4x4x4f64, 4, 1),
-      TRITON_MFMA_v2to4(16, 4, f64T, f64T, mfma_f64_4x4x4f64, 4, 1),
+
       // f32 inputs
       // mfma_f32_32x32x2f32
       TRITON_MFMA_v1to4(32, 32, f32T, f32T, mfma_f32_32x32x2f32, 2, 1),
       // mfma_f32_16x16x4f32
       TRITON_MFMA_v1to4(16, 16, f32T, f32T, mfma_f32_16x16x4f32, 4, 1),
       // mfma_f32_4x4x1f32 / mfma_f32_4x4x1_16B_f32
-      TRITON_MFMA_v1to4(4, 4, f32T, f32T, mfma_f32_4x4x1f32, 16, 1),
-      TRITON_MFMA_v1to4(4, 64, f32T, f32T, mfma_f32_4x4x1f32, 1, 1),
-      TRITON_MFMA_v1to4(64, 4, f32T, f32T, mfma_f32_4x4x1f32, 1, 1),
+      TRITON_MFMA_v1to4(4, 64, f32T, f32T, mfma_f32_4x4x1f32, 16, 1),
+      TRITON_MFMA_v1to4(64, 4, f32T, f32T, mfma_f32_4x4x1f32, 16, 1),
 
       // xf32
       // mfma.xf32.16x16x8xf32
@@ -175,9 +171,8 @@ MfmaDatabase::MfmaDatabase(MLIRContext *context) {
       // mfma_f32_16x16x16f16
       TRITON_MFMA_v1to3(16, 16, f16T, f16T, mfma_f32_16x16x16f16, 16, 4),
       // mfma_f32_4x4x4f16
-      TRITON_MFMA_v1to4(4, 4, f16T, f16T, mfma_f32_4x4x4f16, 64, 4),
-      TRITON_MFMA_v1to4(4, 64, f16T, f16T, mfma_f32_4x4x4f16, 4, 4),
-      TRITON_MFMA_v1to4(64, 4, f16T, f16T, mfma_f32_4x4x4f16, 4, 4),
+      TRITON_MFMA_v1to4(4, 64, f16T, f16T, mfma_f32_4x4x4f16, 64, 4),
+      TRITON_MFMA_v1to4(64, 4, f16T, f16T, mfma_f32_4x4x4f16, 64, 4),
 
       // bf16 inputs
       // mfma_f32_32x32x16_bf16 & mfma_f32_32x32x8_bf16_1K
@@ -199,11 +194,9 @@ MfmaDatabase::MfmaDatabase(MLIRContext *context) {
       // mfma_f32_16x16x8_bf16
       TRITON_MFMA_v(1, 16, 16, bf16T, bf16T, mfma_f32_16x16x8bf16, 8, 2),
       // mfma_f32_4x4x4_bf16_1K
-      TRITON_MFMA_v2to4(4, 4, bf16T, bf16T, mfma_f32_4x4x4bf16_1k, 64, 4),
-      TRITON_MFMA_v2to4(4, 64, bf16T, bf16T, mfma_f32_4x4x4bf16_1k, 4, 4),
-      TRITON_MFMA_v2to4(64, 4, bf16T, bf16T, mfma_f32_4x4x4bf16_1k, 4, 4),
+      TRITON_MFMA_v2to4(4, 64, bf16T, bf16T, mfma_f32_4x4x4bf16_1k, 64, 4),
+      TRITON_MFMA_v2to4(64, 4, bf16T, bf16T, mfma_f32_4x4x4bf16_1k, 64, 4),
       // mfma_f32_4x4x2_bf16
-      TRITON_MFMA_v(1, 4, 4, bf16T, bf16T, mfma_f32_4x4x2bf16, 32, 2),
       TRITON_MFMA_v(1, 4, 64, bf16T, bf16T, mfma_f32_4x4x2bf16, 2, 2),
       TRITON_MFMA_v(1, 64, 4, bf16T, bf16T, mfma_f32_4x4x2bf16, 2, 2),
 
@@ -263,9 +256,8 @@ MfmaDatabase::MfmaDatabase(MLIRContext *context) {
       // mfma_i32_16x16x16i8
       TRITON_MFMA_v1to2(16, 16, i8T, i8T, mfma_i32_16x16x16i8, 16, 4),
       // mfma_i32_4x4x4i8
-      TRITON_MFMA_v1to4(4, 4, i8T, i8T, mfma_i32_4x4x4i8, 64, 4),
-      TRITON_MFMA_v1to4(4, 64, i8T, i8T, mfma_i32_4x4x4i8, 4, 4),
-      TRITON_MFMA_v1to4(64, 4, i8T, i8T, mfma_i32_4x4x4i8, 4, 4),
+      TRITON_MFMA_v1to4(4, 64, i8T, i8T, mfma_i32_4x4x4i8, 64, 4),
+      TRITON_MFMA_v1to4(64, 4, i8T, i8T, mfma_i32_4x4x4i8, 64, 4),
 
       // Scaled mfma f8f6f4
       // mfma_scale_F32_16x16x128_F8F6F4
