@@ -362,8 +362,8 @@ def warp_specialize_worker1(a, b, e: ttgl.constexpr):
 
 @tl.core._aggregate
 class Pair:
-    first: tl.tensor
-    second: tl.tensor
+    first: ttgl.tensor
+    second: ttgl.tensor
 
     def __init__(self, first, second):
         self.first = first
@@ -948,7 +948,7 @@ def reduce_kernel(out):
     layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 32], [4, 1], [1, 0])
     a = ttgl.full([16, 16], 1, ttgl.float32, layout)
     b = ttgl.full([16, 16], 2, ttgl.float32, layout)
-    s0 = ttgl.sum(a, 0)
+    s0 = a.sum(0)
     ttgl.static_assert(s0.type.layout == ttgl.SliceLayout(0, layout))
     s1 = ttgl.sum(a, 1)
     ttgl.static_assert(s1.type.layout == ttgl.SliceLayout(1, layout))

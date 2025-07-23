@@ -15,9 +15,7 @@ from triton.language.core import (
     constexpr_function,
     base_value,
     base_type,
-    dtype,
-    block_type,  # TODO: block type with layout info
-    pointer_type,
+    base_tensor,
     void,
     int1,
     int8,
@@ -40,7 +38,6 @@ from triton.language.core import (
     _unwrap_if_constexpr,
     _unwrap_shape,
     static_range,
-    tensor,
     tuple,
     tuple_type,
 )
@@ -66,6 +63,7 @@ _IMPORT_FROM_TRITON: List[str] = [
     "static_print",
     "store",
     "to_tensor",
+    "trans",
     "where",
 ]
 
@@ -118,6 +116,64 @@ T = TypeVar("T")
 
 # TODO: split these
 GLUON_BUILTIN = "__triton_builtin__"
+
+
+class dtype(tl_core.dtype):
+
+    def _unflatten_ir(self, handles: List[ir.value], cursor: int) -> Tuple[base_value, int]:
+        return tensor(handles[cursor], self), cursor + 1
+
+
+class pointer_type(tl_core.pointer_type):
+
+    def _unflatten_ir(self, handles: List[ir.value], cursor: int) -> Tuple[base_value, int]:
+        return tensor(handles[cursor], self), cursor + 1
+
+
+class block_type(tl_core.block_type):
+
+    def _unflatten_ir(self, handles: List[ir.value], cursor: int) -> Tuple[base_value, int]:
+        return tensor(handles[cursor], self), cursor + 1
+
+
+def _dtype_to_gluon(ty):
+    if ty.__class__ in (block_type, tl_core.block_type):
+        return block_type(
+            element_ty=_dtype_to_gluon(ty.element_ty),
+            shape=ty.shape,
+        )
+    elif ty.__class__ in (pointer_type, tl_core.pointer_type):
+        return pointer_type(
+            element_ty=_dtype_to_gluon(ty.element_ty),
+            address_space=ty.address_space,
+            const=ty.const,
+        )
+    elif ty.__class__ is tl_core.dtype:
+        return dtype(ty.name)
+    elif ty.__class__ is distributed_type:
+        return distributed_type(
+            element_ty=_dtype_to_gluon(ty.element_ty),
+            shape=ty.shape,
+            layout=ty.layout,
+        )
+
+    assert ty.__class__ is dtype
+    return ty
+
+
+def is_builtin(fn) -> bool:
+    """Is this a registered gluon builtin function?"""
+    return getattr(fn, GLUON_BUILTIN, False)
+
+
+def _tensor_member_fn(fn: T) -> T:
+    return tl_core._tensor_member_fn_impl(fn, tensor_cls=tensor, builtin_name=GLUON_BUILTIN)
+
+
+class tensor(base_tensor):
+
+    def __init__(self, handle, type: tl_core.dtype):
+        super().__init__(handle, _dtype_to_gluon(type))
 
 
 class distributed_type(block_type):
@@ -347,7 +403,11 @@ class shared_memory_descriptor(base_value):
 
 for name in _IMPORT_FROM_TRITON:
     fn = getattr(tl_core, name)
-    globals()[name] = builtin(fn)
+    fn = builtin(fn)
+    globals()[name] = fn
+
+    if hasattr(tl_core.tensor, name):
+        _tensor_member_fn(fn)
 
 
 @builtin
@@ -369,6 +429,7 @@ def arange(start, end, layout=None, _semantic=None):
     return _semantic.arange(start, end, layout)
 
 
+@_tensor_member_fn
 @builtin
 def convert_layout(value, layout, assert_trivial=False, _semantic=None):
     """
@@ -429,6 +490,7 @@ def allocate_shared_memory(element_ty, shape, layout, value=None, _semantic=None
 
 
 @builtin
+@_tensor_member_fn
 def set_auto_layout(value, layout, _semantic=None):
     """
     Set a a tensor with AutoLayout to a concrete layout

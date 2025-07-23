@@ -47,7 +47,7 @@ def builtin(fn: T) -> T:
     return wrapper
 
 
-def _tensor_member_fn(fn: T) -> T:
+def _tensor_member_fn_impl(fn: T, tensor_cls, builtin_name) -> T:
     """Decorator that adds this free function as a member fn on class tensor.
 
     When called as a member function on class tensor, the first argument to `fn`
@@ -73,6 +73,7 @@ def _tensor_member_fn(fn: T) -> T:
     :code:`{fn.__name__}(x{", ..." if has_args else ""})`.
     """
 
+    @wraps(fn)
     def wrapper(*args, **kwargs):
         return fn(*args, **kwargs)
 
@@ -84,11 +85,15 @@ def _tensor_member_fn(fn: T) -> T:
     wrapper.__signature__ = new_sig
     wrapper.__doc__ = f"Forwards to :py:func:`{fn.__name__}` free function"
     # If fn is a builtin, mark the wrapper as a builtin too.
-    if is_builtin(fn):
-        setattr(wrapper, TRITON_BUILTIN, True)
+    if getattr(fn, builtin_name, False):
+        setattr(wrapper, builtin_name, True)
 
-    setattr(tensor, fn.__name__, fn if isinstance(fn, JITFunction) else wrapper)
+    setattr(tensor_cls, fn.__name__, fn if isinstance(fn, JITFunction) else wrapper)
     return fn
+
+
+def _tensor_member_fn(fn: T) -> T:
+    return _tensor_member_fn_impl(fn, tensor_cls=tensor, builtin_name=TRITON_BUILTIN)
 
 
 def _unwrap_iterable(x):
@@ -381,7 +386,7 @@ def _normalize_tuple(t):
 
 
 def check_bit_width(value, shift_value):
-    if isinstance(value, tensor) and isinstance(shift_value, constexpr):
+    if isinstance(value, base_tensor) and isinstance(shift_value, constexpr):
         bitwidth = value.type.scalar.primitive_bitwidth
         if shift_value.value >= bitwidth:
             warn(
@@ -856,25 +861,7 @@ def get_int_dtype(bitwidth: int, signed: bool) -> dtype:
 # -----------------------
 
 
-class tensor(base_value):
-    """Represents an N-dimensional array of values or pointers.
-
-    :code:`tensor` is the fundamental data structure in Triton programs.  Most
-    functions in :py:mod:`triton.language` operate on and return tensors.
-
-    Most of the named member functions here are duplicates of the free functions
-    in :code:`triton.language`.  For example, :code:`triton.language.sqrt(x)` is
-    equivalent to :code:`x.sqrt()`.
-
-    :code:`tensor` also defines most of the magic/dunder methods, so you can
-    write :code:`x+y`, :code:`x << 2`, etc.
-
-    .. rubric:: Constructors
-    ..
-       For some reason Sphinx includes __init__ before printing the full table
-       of methods.  Not what I want, but I can't figure out how to fix it.  Give
-       it its own section so it looks intentional. :)
-    """
+class base_tensor(base_value):
 
     def __init__(self, handle, type: dtype):
         """Not called by user code."""
@@ -1130,6 +1117,27 @@ class tensor(base_value):
         Alias for :py:func:`tensor.cast`.
         """
         return cast(self, dtype, fp_downcast_rounding, bitcast, _semantic=_semantic)
+
+
+class tensor(base_tensor):
+    """Represents an N-dimensional array of values or pointers.
+
+    :code:`tensor` is the fundamental data structure in Triton programs.  Most
+    functions in :py:mod:`triton.language` operate on and return tensors.
+
+    Most of the named member functions here are duplicates of the free functions
+    in :code:`triton.language`.  For example, :code:`triton.language.sqrt(x)` is
+    equivalent to :code:`x.sqrt()`.
+
+    :code:`tensor` also defines most of the magic/dunder methods, so you can
+    write :code:`x+y`, :code:`x << 2`, etc.
+
+    .. rubric:: Constructors
+    ..
+       For some reason Sphinx includes __init__ before printing the full table
+       of methods.  Not what I want, but I can't figure out how to fix it.  Give
+       it its own section so it looks intentional. :)
+    """
 
     # Type stubs for functions added by the _tensor_member_fn decorator.
     # (Unfortunately these can't be created automatically.)
@@ -2610,7 +2618,7 @@ def reduce(input, axis, combine_fn, keep_dims=False, _semantic=None, _generator=
     :type keep_dims: bool
 
     """
-    if isinstance(input, tensor):
+    if isinstance(input, base_tensor):
         return reduce((input, ), axis, combine_fn, keep_dims=keep_dims, _semantic=_semantic, _generator=_generator)[0]
 
     def make_combine_region(reduce_op):
@@ -2620,9 +2628,9 @@ def reduce(input, axis, combine_fn, keep_dims=False, _semantic=None, _generator=
         with _insertion_guard(builder):
             to_ir = lambda T: T.to_ir(builder)
             block = builder.create_block_with_parent(region, list(map(to_ir, param_types)))
-            args = [tensor(block.arg(i), ty) for i, ty in enumerate(param_types)]
+            args = [_semantic.tensor(block.arg(i), ty) for i, ty in enumerate(param_types)]
             results = _generator.call_JitFunction(combine_fn, args, kwargs={})
-            if isinstance(results, tensor):
+            if isinstance(results, base_tensor):
                 handles = [results.handle]
             else:
                 handles = [r.handle for r in results]
@@ -2718,7 +2726,7 @@ def associative_scan(input, axis, combine_fn, reverse=False, _semantic=None, _ge
     :type reverse: bool
 
     """
-    if isinstance(input, tensor):
+    if isinstance(input, base_tensor):
         return associative_scan((input, ), axis, combine_fn, reverse, _semantic=_semantic, _generator=_generator)[0]
 
     def make_combine_region(scan_op):
@@ -2728,9 +2736,9 @@ def associative_scan(input, axis, combine_fn, reverse=False, _semantic=None, _ge
         with _insertion_guard(builder):
             to_ir = lambda T: T.to_ir(builder)
             block = builder.create_block_with_parent(region, list(map(to_ir, param_types)))
-            args = [tensor(block.arg(i), ty) for i, ty in enumerate(param_types)]
+            args = [_semantic.tensor(block.arg(i), ty) for i, ty in enumerate(param_types)]
             results = _generator.call_JitFunction(combine_fn, args, kwargs={})
-            if isinstance(results, tensor):
+            if isinstance(results, base_tensor):
                 handles = [results.handle]
             else:
                 handles = [r.handle for r in results]
@@ -2830,7 +2838,7 @@ def map_elementwise(
         builder.set_insertion_point_to_start(block)
         scalar_results = _generator.call_JitFunction(scalar_fn, scalar_args, kwargs={})
 
-        is_single = isinstance(scalar_results, tensor)
+        is_single = isinstance(scalar_results, base_tensor)
         if is_single:
             scalar_results = scalar_results,
 
@@ -3157,8 +3165,8 @@ def inline_asm_elementwise(asm: str, constraints: str, args: Sequence, dtype: Un
     call = builder.create_inline_asm(asm, constraints, handles, [ty.to_ir(builder) for ty in res_tys], is_pure, pack)
 
     if not has_multiple_outputs:
-        return tensor(call.get_result(0), res_tys[0])
-    return tuple(tensor(call.get_result(i), ty) for i, ty in enumerate(res_tys))
+        return _semantic.tensor(call.get_result(0), res_tys[0])
+    return tuple(_semantic.tensor(call.get_result(i), ty) for i, ty in enumerate(res_tys))
 
 
 # -----------------------
@@ -3300,7 +3308,7 @@ def dispatch(func, lib_name: str, lib_path: str, args: list, arg_type_symbol_dic
     arg_types = []
     arg_list = []
     for arg in args:
-        if isinstance(arg, tensor):
+        if isinstance(arg, base_tensor):
             arg_types.append(arg.dtype)
             arg_list.append(arg.handle)
         else:
@@ -3317,7 +3325,7 @@ def dispatch(func, lib_name: str, lib_path: str, args: list, arg_type_symbol_dic
         if ret_shape:
             ret_type = block_type(ret_type, ret_shape)
         builder = _semantic.builder
-        return tensor(func(lib_name, lib_path, symbol, arg_list, ret_type.to_ir(builder), is_pure), ret_type)
+        return _semantic.tensor(func(lib_name, lib_path, symbol, arg_list, ret_type.to_ir(builder), is_pure), ret_type)
 
 
 @builtin

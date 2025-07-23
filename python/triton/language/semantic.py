@@ -145,10 +145,10 @@ class TritonSemantic(Generic[TensorTy]):
 
         elif isinstance(x, tl.constexpr):
             return self.to_tensor(x.value)
-        elif isinstance(x, self.tensor):
+        elif isinstance(x, tl.base_tensor):
             return x
         if check_type:
-            raise TypeError(f"cannot convert {x} of type {type(x)} to tensor")
+            raise TypeError(f"cannot convert {x} of type {type(x)} to {self.tensor}")
         return x
 
 # ===----------------------------------------------------------------------===//
@@ -599,7 +599,7 @@ class TritonSemantic(Generic[TensorTy]):
         return self.tensor(value, dtype)
 
     def make_scalar(self, value, dtype: tl.dtype) -> TensorTy:
-        if isinstance(value, tl.tensor):
+        if isinstance(value, tl.base_tensor):
             assert value.numel.value == 1, "only accepts size-1 tensor"
             return self.cast(value, dtype)
         # scalar
@@ -1830,7 +1830,7 @@ class TritonSemantic(Generic[TensorTy]):
                 assert -2**31 <= elem.value < 2**31, f"Block pointers only support 32 bit `offsets/block_shape`, " \
                     f"got a value {elem.value} which is out of the range"
                 return self.builder.get_int32(elem.value)
-        elif isinstance(elem, tl.tensor):
+        elif isinstance(elem, tl.base_tensor):
             assert elem.numel.value == 1, "Expected a scalar in shape/strides/offsets"
             assert elem.dtype.is_int(), "Expected an integer scalar type in shape/strides/offsets"
             if elem.dtype != tl.int64 and require_i64:

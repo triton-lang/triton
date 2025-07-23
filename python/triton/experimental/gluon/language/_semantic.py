@@ -163,7 +163,7 @@ class GluonSemantic(TritonSemantic[TensorTy]):
     def convert_layout(self, value, layout, assert_trivial=False):
         ty = value.type
         _check(isinstance(ty, ttgl.distributed_type),
-               lambda: f"expected convert_layout input to be a distributed_type but got: {ty!r}")
+               lambda: f"expected convert_layout input to be a distributed_type but got: {ty.__class__}")
         ret_ty = ttgl.distributed_type(ty.element_ty, ty.shape, layout)
         ret_ty_ir = ret_ty.to_ir(self.builder)
         if assert_trivial and not self.builder.is_convert_layout_trivial(ret_ty_ir, value.handle):

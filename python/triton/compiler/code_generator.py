@@ -12,8 +12,8 @@ from typing import Any, Callable, Dict, Optional, Tuple, Type, Union, Iterable, 
 
 from .. import knobs, language
 from .._C.libtriton import ir, gluon_ir
-from ..language import constexpr, str_to_ty, tensor
-from ..language.core import _unwrap_if_constexpr, base_value, base_type
+from ..language import constexpr, str_to_ty
+from ..language.core import _unwrap_if_constexpr, base_value, base_type, base_tensor, dtype
 from ..runtime.jit import get_jit_fn_file_line, get_full_name
 # ideally we wouldn't need any runtime component
 from ..runtime import JITFunction
@@ -48,7 +48,7 @@ def _is_triton_value(o: Any) -> bool:
 
 
 def _is_triton_tensor(o: Any) -> bool:
-    return isinstance(o, tensor)
+    return isinstance(o, base_tensor)
 
 
 def _is_constexpr(o: Any) -> bool:
@@ -296,9 +296,10 @@ class CodeGenerator(ast.NodeVisitor):
 
     def __init__(self, context, prototype, gscope, function_name, jit_fn: JITFunction, options, codegen_fns, module_map,
                  module=None, is_kernel=False, function_types: Optional[Dict] = None, noinline=False,
-                 caller_context=None, file_name: Optional[str] = None, begin_line=0):
+                 caller_context=None, file_name: Optional[str] = None, begin_line=0, is_gluon=False):
         self.context = context
-        if jit_fn.is_gluon():
+        self.is_gluon = is_gluon
+        if is_gluon:
             from triton.experimental.gluon.language._semantic import GluonSemantic
             self.builder = gluon_ir.GluonOpBuilder(context)
             self.semantic = GluonSemantic(self.builder)
@@ -349,7 +350,7 @@ class CodeGenerator(ast.NodeVisitor):
         self.ret_type = None
         # SSA-construction
         # name => language.tensor
-        self.local_defs: Dict[str, tensor] = {}
+        self.local_defs: Dict[str, base_value] = {}
         self.dereference_name: Callable[[str], Any] = self._define_name_lookup()
         self.fn = None
         # Are we currently visiting an ast.arg's default value?  These have some
@@ -942,7 +943,7 @@ class CodeGenerator(ast.NodeVisitor):
                 if ret_type_ir:
                     self.builder.set_insertion_point_to_end(if_op.get_else_block())
                     self.builder.create_yield_op([else_val.handle])
-                return language.core.tensor(if_op.get_result(0), ret_type) if ret_type_ir else None
+                return self.semantic.tensor(if_op.get_result(0), ret_type) if ret_type_ir else None
         else:
             cond = _unwrap_if_constexpr(cond)
 
@@ -1148,7 +1149,7 @@ class CodeGenerator(ast.NodeVisitor):
         step = self.builder.create_int_cast(step, iv_ir_type, iv_is_signed)
         # Create placeholder for the loop induction variable
         iv = self.builder.create_poison(iv_ir_type)
-        self.set_value(node.target.id, language.core.tensor(iv, iv_type))
+        self.set_value(node.target.id, self.semantic.tensor(iv, iv_type))
 
         with enter_sub_region(self) as sr:
             liveins, insert_block = sr
@@ -1195,7 +1196,7 @@ class CodeGenerator(ast.NodeVisitor):
                 iv = self.builder.create_sub(ub, iv)
                 iv = self.builder.create_add(iv, lb)
             self.lscope[node.target.id].handle.replace_all_uses_with(iv)
-            self.set_value(node.target.id, language.core.tensor(iv, iv_type))
+            self.set_value(node.target.id, self.semantic.tensor(iv, iv_type))
             self._maybe_set_loc_to_name(iv, node.target.id)
 
         # update lscope & local_defs (ForOp defines new values)
@@ -1253,7 +1254,8 @@ class CodeGenerator(ast.NodeVisitor):
                                       function_name=fn_name, function_types=self.function_ret_types,
                                       noinline=fn.noinline, file_name=file_name, begin_line=begin_line,
                                       options=self.builder.options, codegen_fns=self.builder.codegen_fns,
-                                      module_map=self.builder.module_map, caller_context=caller_context)
+                                      module_map=self.builder.module_map, caller_context=caller_context,
+                                      is_gluon=self.is_gluon)
             try:
                 generator.visit(fn.parse())
             except Exception as e:
@@ -1517,6 +1519,11 @@ def ast_to_ttir(fn, src, context, options, codegen_fns, module_map, module=None)
     for k, v in src.signature.items():
         idx = fn.arg_names.index(k)
         arg_types[idx] = str_to_ty(v)
+    if fn.is_gluon():
+        from triton.experimental.gluon.language._core import _dtype_to_gluon
+        for idx, ty in enumerate(arg_types):
+            if isinstance(ty, dtype):
+                arg_types[idx] = _dtype_to_gluon(ty)
     prototype = ASTFunction([], arg_types, src.constants, src.attrs)
     file_name, begin_line = get_jit_fn_file_line(fn)
     # query function representation
@@ -1527,7 +1534,7 @@ def ast_to_ttir(fn, src, context, options, codegen_fns, module_map, module=None)
     proxy = namedtuple("SpecializationProxy", ["constants", "signature"])(constants, signature)
     generator = CodeGenerator(context, prototype, gscope=fn.get_capture_scope(), function_name=fn.repr(proxy),
                               jit_fn=fn, is_kernel=True, file_name=file_name, begin_line=begin_line, options=options,
-                              codegen_fns=codegen_fns, module_map=module_map, module=module)
+                              codegen_fns=codegen_fns, module_map=module_map, module=module, is_gluon=fn.is_gluon())
     generator.visit(fn.parse())
     ret = generator.module
     # module takes ownership of the context

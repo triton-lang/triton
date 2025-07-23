@@ -1,6 +1,7 @@
 # flake8: noqa
 import triton
 import triton.language.standard as tl_standard
+import triton.language.core as tl_core
 from .._runtime import jit
 from triton import knobs
 from . import _core as ttgl
@@ -29,6 +30,9 @@ for name in _IMPORT_FROM_TRITON:
     gluon_fn = jit(fn.fn)
     gluon_fn.__doc__ = fn.__doc__
     globals()[name] = gluon_fn
+
+    if hasattr(tl_core.tensor, name):
+        ttgl._tensor_member_fn(fn)
 
 
 @jit
