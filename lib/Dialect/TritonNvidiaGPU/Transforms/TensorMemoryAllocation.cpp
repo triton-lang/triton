@@ -247,6 +247,16 @@ allocateTMem(Operation *parentOp,
           // rows.
           rowIdConstraints.joinOps(getAlloc(mmaOp.getA()),
                                    getAlloc(mmaOp.getAccumulator()));
+        } else {
+          // TODO: we need to handle cases where the format is blockM and we
+          // have multiple blocks.
+          assert((cast<TensorMemoryEncodingAttr>(
+                      mmaOp.getA().getType().getEncoding())
+                          .getBlockM() != 64 &&
+                  cast<TensorMemoryEncodingAttr>(
+                      mmaOp.getAccumulator().getType().getEncoding())
+                          .getBlockM() != 64) &&
+                 "interleaved layout with TMEM operand is not supported yet.");
         }
       }
     }
