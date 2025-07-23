@@ -389,9 +389,10 @@ Value convertAndCastTensor(PatternRewriter &rewriter, Value value,
     else if (oldElemType.isF32() && newElemType.isF16())
       castedTensor =
           rewriter.create<arith::TruncFOp>(loc, castedType, convertedTensor);
-    else
+    else {
       castedTensor =
           rewriter.create<tt::FpToFpOp>(loc, castedType, convertedTensor);
+    }
   }
   return castedTensor;
 }
@@ -685,6 +686,7 @@ public:
       // Don't need to covert int8 holding mxfp4--the upcast_mxfp op can
       // take int8 tensor as input.
       if (type == ScaleDotElemType::BF16 || type == ScaleDotElemType::FP16 ||
+          type == ScaleDotElemType::E4M3 || type == ScaleDotElemType::E5M2 ||
           type == ScaleDotElemType::E2M1)
         return v;
 
