@@ -4,7 +4,6 @@ import tempfile
 
 import triton
 from triton.backends.compiler import GPUTarget
-from triton._internal_testing import is_blackwell
 
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
@@ -18,7 +17,7 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
 )
 
 
-@pytest.mark.skipif(not is_blackwell(), reason="Requires compute capability == 10")
+@pytest.mark.skipif(torch.cuda.get_device_capability()[0] != 10, reason="Requires compute capability == 10")
 def test_tmem_copy_2d():
     device = "cuda"
 
@@ -180,7 +179,7 @@ def test_tmem_subslice_block_m_64():
     torch.testing.assert_close(out_ref, out_tri, atol=0, rtol=0)
 
 
-@pytest.mark.skipif(not is_blackwell(), reason="Requires compute capability == 10")
+@pytest.mark.skipif(torch.cuda.get_device_capability()[0] != 10, reason="Requires compute capability == 10")
 def test_block_m_64_mma():
 
     @gluon.jit
