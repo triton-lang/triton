@@ -16,7 +16,6 @@ from .matmul_ogs_details._finalize_matmul import _finalize_matmul
 from .matmul_ogs_details.opt_flags import make_opt_flags, update_opt_flags_constraints
 from .specialize import specialize
 from .tensor import Storage, Tensor, FP4, bitwidth, wrap_torch_tensor
-from .tensor_details import layout
 
 
 @dataclass(frozen=True)
@@ -403,9 +402,6 @@ def matmul_ogs(x, w, bias,
     assert K == x.shape[-1]
     if x.ndim == 3 and w.ndim == 3:
         assert x.shape[0] == w.shape[0]
-    if isinstance(w.storage.layout, layout.HopperMXValueLayout):
-        if not (K % 64 == 0 and N % 64 == 0):
-            raise NotImplementedError("MXFP4 weight matrix dimensions must be divisible by 64 on hopper")
     # compute optimization flags
     out_dtype = precision_config.out_dtype or x.dtype
     can_use_tma = x.storage.is_tma_compliant() and \
@@ -486,6 +482,8 @@ def matmul_ogs(x, w, bias,
     w_scale_strides = w_scale.stride() if has_mx and not w_scale_has_tma else (None, None, None)
     if len(w_scale_strides) == 2:
         w_scale_strides = (0, ) + w_scale_strides
+    # if routing_data.expt_hist is not None:
+    #     print(opt_flags)
     # launch kernel
     kernels = get_kernels(epilogue.specs, fused_activation.specs)
     (kernels._p_matmul_ogs if opt_flags.is_persistent else kernels._matmul_ogs)[(grid,)](
@@ -536,8 +534,8 @@ def matmul_ogs(x, w, bias,
                    **opt_flags.target_kernel_kwargs)
     # post-processing
     out = apply_postprocessing_features(scatter_indx, finalize_scatter_idxs, opt_flags, expt_token_offs_raw,
-                                num_indx, precision_config, routing_data,
-                                postprocessing_features, memory, fused_postprocess_activation, epilogue)
+                                        num_indx, precision_config, routing_data,
+                                        postprocessing_features, memory, fused_postprocess_activation, epilogue)
     # remove split-k
     out = out.squeeze(0)
     if not is_input_batched:

@@ -2583,3 +2583,16 @@ tt.func private @arith_constant_array() {
   tt.return
 }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [8], order = [0]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "cuda:75", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: fp16_to_fp32
+  tt.func public @fp16_to_fp32(%arg0 : tensor<256xf16, #blocked>) {
+    // CHECK: llvm.fpext %{{.*}} : f16 to f32
+    %0 = tt.fp_to_fp %arg0 : tensor<256xf16, #blocked> -> tensor<256xf32, #blocked>
+    tt.return
+  }
+}

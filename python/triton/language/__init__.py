@@ -84,6 +84,7 @@ from .core import (
     join,
     load,
     make_block_ptr,
+    map_elementwise,  # noqa
     max_constancy,
     max_contiguous,
     maximum,

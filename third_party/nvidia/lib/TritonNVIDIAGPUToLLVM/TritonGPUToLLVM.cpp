@@ -7,6 +7,7 @@
 #include "mlir/Conversion/MathToLLVM/MathToLLVM.h"
 #include "mlir/Conversion/UBToLLVM/UBToLLVM.h"
 #include "mlir/Dialect/Arith/Transforms/Passes.h"
+#include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Pass/Pass.h"
@@ -52,6 +53,7 @@ public:
       : ConversionTarget(ctx) {
     addLegalDialect<LLVM::LLVMDialect>();
     addLegalDialect<NVVM::NVVMDialect>();
+    addLegalDialect<cf::ControlFlowDialect>();
     addLegalDialect<mlir::triton::nvgpu::NVGPUDialect>();
     addIllegalDialect<triton::TritonDialect>();
     addIllegalDialect<triton::gpu::TritonGPUDialect>();
@@ -170,6 +172,7 @@ struct ConvertTritonGPUToLLVM
                                                         benefit);
     mlir::triton::populateInstrumentationToLLVMPatterns(
         typeConverter, targetInfo, patterns, benefit);
+
     TritonLLVMConversionTarget convTarget(*context);
     if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))
       return signalPassFailure();

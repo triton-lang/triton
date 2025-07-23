@@ -3,7 +3,6 @@ import triton
 from triton_kernels.target_info import get_cdna_version
 import torch
 from .opt_flags_details import opt_flags_amd, opt_flags_nvidia
-from ..tensor import get_layout
 
 # fmt: off
 
@@ -157,12 +156,10 @@ def make_default_opt_flags_nvidia(
     elif enforce_bitwise_invariance:
         block_m = 128
     else:
-        block_m = max(64, min(triton.next_power_of_2(tokens_per_expt), 128))
+        block_m = max(16, min(triton.next_power_of_2(tokens_per_expt), 128))
     # block n
     arch = None
     block_n = opt_flags_nvidia.compute_block_n(n, arch, precision_config)
-    if precision_config.weight_scale is not None and get_layout(precision_config.weight_scale).name == "HOPPER_SCALE":
-        block_n = 256
     # is_persistent
     grid_size = opt_flags_nvidia.compute_grid_size(routing_data, m, n, block_m, block_n)
     n_sms = torch.cuda.get_device_properties(0).multi_processor_count
@@ -177,7 +174,7 @@ def make_default_opt_flags_nvidia(
     if constraints.get("block_k", None) is not None:
         block_k = constraints["block_k"]
     else:
-        block_k = opt_flags_nvidia.compute_block_k(k, is_persistent, lhs_dtype, rhs_dtype, precision_config)
+        block_k = opt_flags_nvidia.compute_block_k(m, k, is_persistent, lhs_dtype, rhs_dtype, precision_config)
     # split_k
     if constraints.get("split_k", None) is not None:
         split_k = constraints["split_k"]
@@ -219,8 +216,7 @@ def make_default_opt_flags_nvidia(
     else:
         fused_scatter = can_use_fused_scatter and split_k == 1
     # Handshake with the HBM swizzling
-    hopper_swizzling = precision_config.weight_scale is not None and get_layout(precision_config.weight_scale).name == "HOPPER_SCALE"
-    num_warps = 8 if hopper_swizzling else opt_flags_nvidia.compute_num_warps(block_m, block_n)
+    num_warps = opt_flags_nvidia.compute_num_warps(block_m, block_n, precision_config)
     ret = OptFlags(
         block_m=block_m,
         block_n=block_n,

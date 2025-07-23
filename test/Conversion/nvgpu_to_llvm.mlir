@@ -2,11 +2,11 @@
 
 // CHECK-LABEL: @cluster_id
 llvm.func @cluster_id() -> i32 {
-  // CHECK:      %cluster_ctaid.x;
-  // CHECK-SAME: %cluster_ctaid.y;
-  // CHECK-SAME: %cluster_ctaid.z;
-  // CHECK-SAME: %cluster_nctaid.x;
-  // CHECK-SAME: %cluster_nctaid.y;
+  // CHECK: nvvm.read.ptx.sreg.cluster.ctaid.x
+  // CHECK: nvvm.read.ptx.sreg.cluster.ctaid.y
+  // CHECK: nvvm.read.ptx.sreg.cluster.ctaid.z
+  // CHECK: nvvm.read.ptx.sreg.cluster.nctaid.x
+  // CHECK: nvvm.read.ptx.sreg.cluster.nctaid.y
   %id = nvgpu.cluster_id
   llvm.return %id : i32
 }

@@ -201,6 +201,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
 
     assert(permutedInVals.size() == tileSize * nReps);
     SmallVector<Value> outVals;
+    auto noPaddingOffset = [](Value v) { return v; };
     auto affineOffset = b.i32_val(0);
     auto maskSpanAffineOffset = 0;
     for (int i = 0; i < nReps; ++i) {
@@ -211,12 +212,13 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
           ArrayRef<Value>(permutedInVals).slice(i * tileSize, tileSize);
       // Store
       lowerLdStShared(loc, ctx, storeCvt, tileInVals, llvmElemTy, smemBase,
-                      affineOffset, maskSpanAffineOffset, rewriter, targetInfo);
+                      noPaddingOffset, affineOffset, maskSpanAffineOffset,
+                      rewriter, targetInfo);
       b.barrier();
       // Load
       SmallVector<Value> tileOutVals = lowerLdStShared(
-          loc, ctx, loadCvt, {}, llvmElemTy, smemBase, affineOffset,
-          maskSpanAffineOffset, rewriter, targetInfo);
+          loc, ctx, loadCvt, {}, llvmElemTy, smemBase, noPaddingOffset,
+          affineOffset, maskSpanAffineOffset, rewriter, targetInfo);
       llvm::append_range(outVals, tileOutVals);
     }
 

@@ -489,6 +489,12 @@ struct FpToFpOpConversion
       }
     }
 
+    if (srcElementType.isF16() && dstElementType.isF32()) {
+      return llvm::to_vector(llvm::map_range(operands[0], [&](Value v) {
+        return convertFp16ToFp32(loc, rewriter, v);
+      }));
+    }
+
     if (srcElementType.isF32() && dstElementType.isF16()) {
       assert(roundingMode.has_value() &&
              "rounding mode must be specified for fp32->fp16 conversion");

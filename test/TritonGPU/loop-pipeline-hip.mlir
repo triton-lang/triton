@@ -481,7 +481,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // -----
 
 // Check that we can pipeline a simple matmul kernel
-// Note: Currently AsyncCopy is only used for the second operand because we do not support (actual) swizzled shared encodings
 
 // COMMON-LABEL: simple_matmul_kernel
 

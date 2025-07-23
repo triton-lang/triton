@@ -172,7 +172,9 @@ class Bitmatrix(Tensor):
         return sum_bitmatrix_rows(self, out_ret, partials_block_size)
 
 
-def get_layout(tensor: torch.Tensor | Tensor):
+def get_layout(tensor: torch.Tensor | Tensor | None):
+    if tensor is None:
+        return None
     if isinstance(tensor, Tensor):
         return tensor.storage.layout
     return StridedLayout
@@ -186,11 +188,11 @@ def wrap_torch_tensor(torch_tensor, dtype=None):
     return Tensor(Storage(torch_tensor), dtype=dtype, shape=shape)
 
 
-def convert_layout(tensor: Tensor, layout_cls: Type[Layout]):
+def convert_layout(tensor: Tensor, layout_cls: Type[Layout], **layout_kwargs):
     assert isinstance(tensor, Tensor)
     old_storage = tensor.storage
     old_data = old_storage.layout.unswizzle_data(old_storage.data)
-    new_layout = layout_cls(old_data.shape)
+    new_layout = layout_cls(old_data.shape, **layout_kwargs)
     new_data = new_layout.swizzle_data(old_data)
     attrs = {k.name: getattr(tensor, k.name) for k in fields(tensor) if k.name != "storage"}
     return Tensor(Storage(new_data, new_layout), **attrs)

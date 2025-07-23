@@ -10,7 +10,7 @@ from typing import Union, Callable, List, Sequence, TypeVar, Optional, Tuple
 from dataclasses import dataclass
 import builtins
 from .. import knobs
-from ..runtime.jit import jit, JITFunction
+from ..runtime.jit import JITFunction
 import inspect
 
 from .._C.libtriton import ir
@@ -1831,11 +1831,6 @@ def join(a, b, _semantic=None):
     return _semantic.join(a, b)
 
 
-@jit
-def _take_first(a, b):
-    return a
-
-
 def _unsplat(x, _semantic=None, _generator=None):
     """
     Convert a single-element tensor to a scalar.
@@ -1846,10 +1841,7 @@ def _unsplat(x, _semantic=None, _generator=None):
     for d in x.shape:
         numel *= d
     assert numel == 1, "can only unsplat single-element tensors"
-    if len(x.shape) >= 2:
-        x = _semantic.reshape(x, [1])
-    x = typing.cast(tensor, reduce(x, 0, _take_first, _semantic=_semantic, _generator=_generator))
-    return x
+    return _semantic.unsplat(x)
 
 
 @_tensor_member_fn
@@ -2785,6 +2777,79 @@ def gather(src, index, axis, _semantic=None):
     """
     axis = _unwrap_if_constexpr(axis)
     return _semantic.gather(src, index, axis)
+
+
+@builtin
+def map_elementwise(
+    scalar_fn: Callable[..., Tuple[tensor, ...]],
+    *args: tensor,
+    pack=1,
+    _semantic=None,
+    _generator=None,
+):
+    '''
+        Map a scalar function over a tensor.
+
+        The input tensors :code:`args` are implicitly broadcasted to the same shape.
+
+        This may be useful in allowing control flow over single elements in a tensor,
+        for example a multi-branch function where one branch is more expensive. With
+        :code:`tl.where` you are forced to calculate both sides of the branch, but
+        with an if we only execute one side.
+
+        .. highlight:: python
+        .. code-block:: python
+
+            @triton.jit
+            def selu_scalar(x, alpha):
+                if x > 0:
+                    return a
+                else:
+                    return alpha * (tl.exp(x) - 1)
+
+            @triton.jit
+            def selu(x, alpha):
+                return tl.map_elementwise(selu_scalar, x, alpha)
+
+        :param scalar_fn: the function to map over.
+        :param pack: the number of elements to be processed by one function call.
+        :return: one tensor or a tuple of tensors, depending on the mapped function.
+    '''
+    # Build the block for the nested region first to discover the return types
+    assert pack >= 1
+    in_scalar_tys = [t.type.scalar for t in args]
+    builder = _semantic.builder
+    block = builder.new_block()
+    scalar_args = []
+    for i, ty in enumerate(in_scalar_tys):
+        for j in builtins.range(pack):
+            block.add_argument(ty.to_ir(builder))
+            scalar_args.append(tensor(block.arg(i * pack + j), ty))
+
+    with _insertion_guard(builder):
+        builder.set_insertion_point_to_start(block)
+        scalar_results = _generator.call_JitFunction(scalar_fn, scalar_args, kwargs={})
+
+        is_single = isinstance(scalar_results, tensor)
+        if is_single:
+            scalar_results = scalar_results,
+
+        handles = [r.handle for r in scalar_results]
+        builder.create_map_elementwise_ret(handles)
+
+    fn_result_types = [x.type for x in scalar_results]
+    scalar_result_types = fn_result_types
+    if pack > 1:
+        scalar_result_types = fn_result_types[::pack]
+        for offset in builtins.range(1, pack):
+            assert scalar_result_types == fn_result_types[offset::pack], "type mismatch in unpacked results"
+
+    def make_elementwise_region(elementwise_op):
+        region = elementwise_op.get_region(0)
+        region.push_back(block)
+
+    result = _semantic.map_elementwise(args, scalar_result_types, pack, make_elementwise_region)
+    return result[0] if is_single else result
 
 
 # -----------------------

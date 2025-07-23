@@ -328,25 +328,24 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
         w_ref = w_ref.squeeze(0).detach().requires_grad_(test_bwd)
 
     if is_mixed_input:
-        capability_major = torch.cuda.get_device_capability()[0]
-        w_layout = layout.StridedLayout
-        w_scale_layout = layout.StridedLayout
+        mx_axis = w_tri.ndim - 2
+        # compute layouts
+        w_layout, w_layout_opts = layout.StridedLayout, dict()
+        w_scale_layout, w_scale_layout_opts = layout.StridedLayout, dict()
         if hbm_swizzling and "float4" in weight_dtype_str:
-            # weight layout
-            w_layouts = {9: layout.HopperMXValueLayout}
-            w_layout = w_layouts.get(capability_major, layout.StridedLayout)
-            # weight scale layout
-            w_scales_layouts = {9: layout.HopperMXScaleLayout, 10: layout.BlackwellMXScaleLayout}
-            w_scale_layout = w_scales_layouts.get(capability_major, layout.StridedLayout)
-        w_tri, mx_scales_tri = downcast_to_mxfp(w_tri, weight_dtype, axis=-2)
-        w_ref = upcast_from_mxfp(w_tri, mx_scales_tri, torch.bfloat16, axis=-2)
+            w_layout, w_layout_opts = layout.make_default_matmul_mxfp4_w_layout(mx_axis=mx_axis)
+            w_scale_layout, w_scale_layout_opts = layout.make_default_matmul_mxfp4_w_scale_layout(
+                mx_axis=mx_axis, num_warps=8)
+        # downcast to mxfp
+        w_tri, w_scale_tri = downcast_to_mxfp(w_tri, weight_dtype, axis=mx_axis)
+        w_ref = upcast_from_mxfp(w_tri, w_scale_tri, torch.bfloat16, axis=mx_axis)
         w_tri_dtype = FP4 if "float4" in weight_dtype_str else weight_dtype
-        w_tri = convert_layout(wrap_torch_tensor(w_tri, w_tri_dtype), w_layout)
-        mx_scales_tri = convert_layout(wrap_torch_tensor(mx_scales_tri), w_scale_layout)
-        precision_opt.weight_scale = mx_scales_tri
-
-    # if not is_persistent and precision_opt.weight_scale is not None:
-    #     pytest.skip("non-persistent not supported with mxfp")
+        w_tri = wrap_torch_tensor(w_tri, w_tri_dtype)
+        w_scale_tri = wrap_torch_tensor(w_scale_tri)
+        # convert layouts
+        w_tri = convert_layout(w_tri, w_layout, **w_layout_opts)
+        w_scale_tri = convert_layout(w_scale_tri, w_scale_layout, **w_scale_layout_opts)
+        precision_opt.weight_scale = w_scale_tri
 
     if test_launch_metadata:
 

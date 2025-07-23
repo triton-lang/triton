@@ -38,13 +38,13 @@ def test_compile_only_dot() -> None:
         triton.compiler.ASTSource(fn=simple_dot, signature={"a_base": "*fp16", "b_base": "*fp16", "out": "*fp16"},
                                   constexprs={}), target=GPUTarget("cuda", 100, 32))
     ttgir = k.asm["ttgir"]
-    pattern = (r"%(?P<A>\d+) = tt\.load"
+    pattern = (r"%(?P<A>\w+) = tt\.load"
                r"(.|\n)*?"
-               r"%(?P<A_SHMEM>\d+) = ttg\.local_alloc %(?P=A)"
+               r"%(?P<A_SHMEM>\w+) = ttg\.local_alloc %(?P=A)"
                r"(.|\n)*?"
-               r"%(?P<B>\d+) = tt\.load"
+               r"%(?P<B>\w+) = tt\.load"
                r"(.|\n)*?"
-               r"%(?P<B_SHMEM>\d+) = ttg\.local_alloc %(?P=B)"
+               r"%(?P<B_SHMEM>\w+) = ttg\.local_alloc %(?P=B)"
                r"(.|\n)*?"
                r"%(?P<TMEM_BASE>\w+) = ttng\.tmem_alloc"
                r"(.|\n)*?"
