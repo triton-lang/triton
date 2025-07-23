@@ -430,7 +430,9 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     Value laneId = getLaneId(rewriter, loc);
     // Perform l_{pLaneInv(j)} ^= r_i and apply pLane.
     Value laneIdPerm;
-    if (!pLaneIsTrivial) {
+    if (pLaneIsTrivial) {
+      laneIdPerm = laneId;
+    } else {
       laneIdPerm = triton::gpu::matrixVectorProd(b, pLaneInv, laneId);
     }
 
