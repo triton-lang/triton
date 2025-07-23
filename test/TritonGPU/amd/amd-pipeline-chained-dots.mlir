@@ -1,19 +1,19 @@
 // RUN: triton-opt %s -split-input-file -tritonamdgpu-stream-pipeline="num_stages=4 use_async_copy=1" -canonicalize | FileCheck %s
 
-#blocked = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [8, 4], warpsPerCTA = [1, 4], order = [0, 1]}>
-#mma = #ttg.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 8]}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 32 : i32} {
+#blocked = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 4], order = [0, 1]}>
+#mma = #ttg.amd_mfma<{version = 4, warpsPerCTA = [4, 1], instrShape = [32, 32], isTransposed = true}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
   // CHECK-LABEL: tt.func @direct_chained_dots
 
   // We have no ops between the dots so we just check that dot and memory ops are in the correct order and check if basic pipelining (prologue, epilogue) is working correctly.
   // CHECK-COUNT-2: ttg.local_load
   // CHECK: scf.for
-  // CHECK:   tt.dot
-  // CHECK:   ttg.async_copy_global_to_local
-  // CHECK:   tt.dot
-  // CHECK:   ttg.async_wait
-  // CHECK:   ttg.local_load
-  // CHECK:   scf.yield
+  // CHECK: tt.dot
+  // CHECK: ttg.async_copy_global_to_local
+  // CHECK: tt.dot
+  // CHECK: ttg.async_wait
+  // CHECK: ttg.local_load
+  // CHECK: scf.yield
   // CHECK: ttg.async_wait
   // CHECK: ttg.local_load
 
@@ -39,9 +39,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
-#blocked = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [8, 4], warpsPerCTA = [1, 4], order = [0, 1]}>
-#mma = #ttg.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 8]}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 32 : i32} {
+#blocked = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 4], order = [0, 1]}>
+#mma = #ttg.amd_mfma<{version = 4, warpsPerCTA = [4, 1], instrShape = [32, 32], isTransposed = true}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
   // CHECK-LABEL: tt.func @chained_dots_with_ops_in_between
 
   // Ops between dots
@@ -51,22 +51,22 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK: scf.for
 
   // CHECK: tt.dot
-  // CHECK:   arith.addf
-  // CHECK:   math.exp2
-  // CHECK:   arith.addf
+  // CHECK: arith.addf
+  // CHECK: math.exp2
+  // CHECK: arith.addf
 
-  // CHECK:   ttg.async_wait
-  // CHECK:   ttg.local_load
-  // CHECK:   ttg.async_copy_global_to_local
+  // CHECK: ttg.async_wait
+  // CHECK: ttg.local_load
+  // CHECK: ttg.async_copy_global_to_local
 
-  // CHECK:   tt.dot
-  // CHECK:   tt.reduce
+  // CHECK: tt.dot
+  // CHECK: tt.reduce
 
-  // CHECK:   ttg.async_wait
-  // CHECK:   ttg.local_load
-  // CHECK:   ttg.async_copy_global_to_local
+  // CHECK: ttg.async_wait
+  // CHECK: ttg.local_load
+  // CHECK: ttg.async_copy_global_to_local
 
-  // CHECK:   scf.yield
+  // CHECK: scf.yield
 
   tt.func @chained_dots_with_ops_in_between(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>, %arg2: i32, %arg3: i32) -> tensor<128x16xf32, #mma> {
     %c0_i32 = arith.constant 0 : i32
@@ -103,9 +103,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
-#blocked = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [8, 4], warpsPerCTA = [1, 4], order = [0, 1]}>
-#mma = #ttg.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 8]}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 32 : i32} {
+#blocked = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 4], order = [0, 1]}>
+#mma = #ttg.amd_mfma<{version = 4, warpsPerCTA = [4, 1], instrShape = [32, 32], isTransposed = true}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
   // CHECK-LABEL: tt.func @chained_dots_with_loop_carried_partial_result
 
   // Similar to the previous test but we take the max of the reduce over all iterations (loop carried) so expect a split after the maximum
@@ -113,21 +113,21 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK: scf.for
 
   // CHECK: tt.dot
-  // CHECK:   arith.mulf
+  // CHECK: arith.mulf
 
-  // CHECK:   ttg.async_wait
-  // CHECK:   ttg.local_load
-  // CHECK:   ttg.async_copy_global_to_local
+  // CHECK: ttg.async_wait
+  // CHECK: ttg.local_load
+  // CHECK: ttg.async_copy_global_to_local
 
-  // CHECK:   tt.dot
-  // CHECK:   tt.reduce
-  // CHECK:   arith.maxnumf
+  // CHECK: tt.dot
+  // CHECK: tt.reduce
+  // CHECK: arith.maxnumf
 
-  // CHECK:   ttg.async_wait
-  // CHECK:   ttg.local_load
-  // CHECK:   ttg.async_copy_global_to_local
+  // CHECK: ttg.async_wait
+  // CHECK: ttg.local_load
+  // CHECK: ttg.async_copy_global_to_local
 
-  // CHECK:   scf.yield
+  // CHECK: scf.yield
 
   tt.func @chained_dots_with_loop_carried_partial_result(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>, %arg2: i32, %arg3: i32, %arg101: tensor<128xf32, #ttg.slice<{dim = 1, parent = #mma}>>) -> tensor<128x16xf32, #mma> {
     %c0_i32 = arith.constant 0 : i32
