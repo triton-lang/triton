@@ -215,8 +215,7 @@ public:
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
-    int numWarps = triton::gpu::lookupNumWarps(op);
-    if (numWarps == 1) {
+    if (triton::gpu::lookupNumWarps(op) == 1) {
       // If there is only one warp, the warp ID is always 0.
       rewriter.replaceOp(op, b.i32_val(0));
       return success();
