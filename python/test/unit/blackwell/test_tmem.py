@@ -265,10 +265,3 @@ def test_block_m_64_mma():
 
     d_ref = a @ b + c
     torch.testing.assert_close(d_ref, d_tri, rtol=0.08, atol=0)
-
-    print(compiled.asm["ptx"])
-    print(compiled.asm["sass"])
-
-
-test_tmem_subslice_block_m_64()
-test_block_m_64_mma()
