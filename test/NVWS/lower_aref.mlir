@@ -24,29 +24,29 @@ module attributes {"ttg.num-warps" = 4 : i32} {
     partition0 num_warps(4) {
       scf.for %arg3 = %arg0 to %arg1 step %arg2  : i32 {
         %2 = "op_a"() : () -> tensor<1xi32, #blocked>
-        %3 = nvws.aref.put.enter %1[%c0_i32, %c0_i32] : <[!ttg.memdesc<2x1xi32, #shared, #smem, mutable>]> -> !ttg.memdesc<1xi32, #shared, #smem, mutable, 2x1>
+        %3 = nvws.aref.put.enter %1[%c0_i32, %c0_i32] {loop.cluster = 1 : i32, loop.stage = 3 : i32}: <[!ttg.memdesc<2x1xi32, #shared, #smem, mutable>]> -> !ttg.memdesc<1xi32, #shared, #smem, mutable, 2x1>
         ttg.local_store %2, %3 : tensor<1xi32, #blocked> -> !ttg.memdesc<1xi32, #shared, #smem, mutable, 2x1>
         // CHECK: op_a
         // CHECK-NEXT: [[EMPTYMBAR:%.*]] = ttg.memdesc_subview [[EMPTY]]
-        // CHECK-NEXT: ttng.wait_barrier [[EMPTYMBAR]]
+        // CHECK-NEXT: ttng.wait_barrier [[EMPTYMBAR]], {{.*}} {loop.cluster = 1 : i32, loop.stage = 3 : i32}
         // CHECK: local_store
         // CHECK-NEXT: [[FULLMBAR:%.*]] = ttg.memdesc_subview [[FULL]]
-        // CHECK-NEXT: ttng.arrive_barrier [[FULLMBAR]], 1
-        nvws.aref.put.exit %1[%c0_i32] [#nvws.async_op<none>] : <[!ttg.memdesc<2x1xi32, #shared, #smem, mutable>]>
+        // CHECK-NEXT: ttng.arrive_barrier [[FULLMBAR]], 1 {loop.cluster = 1 : i32, loop.stage = 3 : i32}
+        nvws.aref.put.exit %1[%c0_i32] [#nvws.async_op<none>] {loop.cluster = 1 : i32, loop.stage = 3 : i32} : <[!ttg.memdesc<2x1xi32, #shared, #smem, mutable>]>
       }
       nvws.warp_group.yield
     }
     partition1 num_warps(4) {
       scf.for %arg3 = %arg0 to %arg1 step %arg2  : i32 {
         // CHECK: [[FULLMBAR:%.*]] = ttg.memdesc_subview [[FULL]]
-        // CHECK-NEXT: ttng.wait_barrier [[FULLMBAR]]
+        // CHECK-NEXT: ttng.wait_barrier [[FULLMBAR]], {{.*}} {loop.cluster = 2 : i32, loop.stage = 3 : i32}
         // CHECK: [[VAL:%.*]] = ttg.local_load
         // CHECK-NEXT: [[EMPTYMBAR:%.*]] = ttg.memdesc_subview [[EMPTY]]
-        // CHECK-NEXT: ttng.arrive_barrier [[EMPTYMBAR]], 1
+        // CHECK-NEXT: ttng.arrive_barrier [[EMPTYMBAR]], 1 {loop.cluster = 2 : i32, loop.stage = 3 : i32}
         // CHECK: "op_b"([[VAL]])
-        %2 = nvws.aref.get.enter %1[%c0_i32, %c0_i32] : <[!ttg.memdesc<2x1xi32, #shared, #smem, mutable>]> -> !ttg.memdesc<1xi32, #shared, #smem, mutable, 2x1>
+        %2 = nvws.aref.get.enter %1[%c0_i32, %c0_i32] {loop.cluster = 2 : i32, loop.stage = 3 : i32}: <[!ttg.memdesc<2x1xi32, #shared, #smem, mutable>]> -> !ttg.memdesc<1xi32, #shared, #smem, mutable, 2x1>
         %3 = ttg.local_load %2 : !ttg.memdesc<1xi32, #shared, #smem, mutable, 2x1> -> tensor<1xi32, #blocked>
-        nvws.aref.get.exit %1[%c0_i32] [#nvws.async_op<none>] : <[!ttg.memdesc<2x1xi32, #shared, #smem, mutable>]>
+        nvws.aref.get.exit %1[%c0_i32] [#nvws.async_op<none>] {loop.cluster = 2 : i32, loop.stage = 3 : i32} : <[!ttg.memdesc<2x1xi32, #shared, #smem, mutable>]>
         "op_b"(%3) : (tensor<1xi32, #blocked>) -> ()
       }
       nvws.warp_group.return
@@ -54,15 +54,15 @@ module attributes {"ttg.num-warps" = 4 : i32} {
     partition2 num_warps(4) {
       scf.for %arg3 = %arg0 to %arg1 step %arg2  : i32 {
         // CHECK: [[FULLMBAR:%.*]] = ttg.memdesc_subview [[FULL]]
-        // CHECK-NEXT: ttng.wait_barrier [[FULLMBAR]]
+        // CHECK-NEXT: ttng.wait_barrier [[FULLMBAR]], {{.*}} {loop.cluster = 3 : i32, loop.stage = 4 : i32}
         // CHECK: [[VAL:%.*]] = ttg.local_load
         // CHECK-NEXT: [[EMPTYMBAR:%.*]] = ttg.memdesc_subview [[EMPTY]]
-        // CHECK-NEXT: ttng.arrive_barrier [[EMPTYMBAR]], 1
+        // CHECK-NEXT: ttng.arrive_barrier [[EMPTYMBAR]], 1 {loop.cluster = 3 : i32, loop.stage = 4 : i32}
         // CHECK: "op_c"([[VAL]])
         // CHECK: "op_d"([[VAL]])
-        %2 = nvws.aref.get.enter %1[%c0_i32, %c0_i32] : <[!ttg.memdesc<2x1xi32, #shared, #smem, mutable>]> -> !ttg.memdesc<1xi32, #shared, #smem, mutable, 2x1>
+        %2 = nvws.aref.get.enter %1[%c0_i32, %c0_i32] {loop.cluster = 3 : i32, loop.stage = 4 : i32}: <[!ttg.memdesc<2x1xi32, #shared, #smem, mutable>]> -> !ttg.memdesc<1xi32, #shared, #smem, mutable, 2x1>
         %3 = ttg.local_load %2 : !ttg.memdesc<1xi32, #shared, #smem, mutable, 2x1> -> tensor<1xi32, #blocked>
-        nvws.aref.get.exit %1[%c0_i32] [#nvws.async_op<none>] : <[!ttg.memdesc<2x1xi32, #shared, #smem, mutable>]>
+        nvws.aref.get.exit %1[%c0_i32] [#nvws.async_op<none>] {loop.cluster = 3 : i32, loop.stage = 4 : i32} : <[!ttg.memdesc<2x1xi32, #shared, #smem, mutable>]>
         "op_c"(%3) : (tensor<1xi32, #blocked>) -> ()
         "op_d"(%3) : (tensor<1xi32, #blocked>) -> ()
       }
@@ -532,5 +532,3 @@ module attributes {"ttg.num-warps" = 4 : i32} {
     tt.return
   }
 }
-
-// -----
