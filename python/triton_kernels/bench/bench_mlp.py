@@ -10,7 +10,7 @@ from triton_kernels.numerics_details.mxfp import downcast_to_mxfp
 from triton_kernels.matmul_ogs import matmul_ogs, PrecisionConfig, FlexCtx, FnSpecs, FusedActivation
 from triton_kernels.numerics import InFlexData
 from triton_kernels.routing import routing
-from triton_kernels.target_info import is_hip, get_cdna_version
+from triton_kernels.target_info import is_cuda, is_hip, get_cdna_version, cuda_capability_geq
 from triton_kernels.tensor import convert_layout
 from triton_kernels.tensor import wrap_torch_tensor, FP4
 from dataclasses import dataclass
@@ -32,6 +32,8 @@ def quantize(w, dtype, **opt):
         fp8e4_dtype = torch.float8_e4m3fn if get_cdna_version() != 3 \
             else torch.float8_e4m3fnuz
         wq = w.to(fp8e4_dtype)
+        if is_cuda() and not cuda_capability_geq(10, 0):
+            wq = wq.transpose(-1, -2).contiguous().transpose(-1, -2)
         return wq, InFlexData(dtype=wq.dtype, scale=w.abs().max().unsqueeze(0)), None
     else:
         assert dtype == "mx4", f"{dtype=}"
