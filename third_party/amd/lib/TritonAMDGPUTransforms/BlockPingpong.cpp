@@ -85,6 +85,7 @@ private:
                                                        Location loc);
   LogicalResult transformTwoClusterWithAsyncAndAll(OpBuilder &builder,
                                                    Location loc);
+  LogicalResult transformChainedDotSchedule(OpBuilder &builder, Location loc);
   void addAsymmetricSyncToLoop(OpBuilder &builder, Location loc);
   void updateOpInsertion(Operation *Op);
   void appendOp(Operation *Op);
@@ -667,6 +668,70 @@ LogicalResult Pingponger::transformTwoClusterWithAsyncAndAll(OpBuilder &builder,
   return success();
 }
 
+// TODO: add doc
+LogicalResult Pingponger::transformChainedDotSchedule(OpBuilder &builder,
+                                                      Location loc) {
+  assert(dotOps.size() == 2);
+
+  auto comesBefore = [](Operation *op1, Operation *op2) {
+    assert(op1 && op2);
+    auto iter = op1->getNextNode();
+    while (iter && iter != op2) {
+      iter = iter->getNextNode();
+    }
+    return iter == op2;
+  };
+
+  // The memory clusters begin with either an async_wait or an local_load so we
+  // need to find the actual cluster start Ops
+  std::array<Operation *, 2> memoryClusters;
+  LDBG("AsyncWaits: " << asyncWaitOps.size());
+  if (asyncWaitOps.size() == 2) {
+    memoryClusters = {asyncWaitOps[0], asyncWaitOps[1]};
+  } else if (lStoreOps.size() == 2) {
+    memoryClusters = {lStoreOps[0], lStoreOps[1]};
+  } else if (lStoreOps.size() == 1 && asyncWaitOps.size() == 1) {
+    if (comesBefore(asyncWaitOps[0], lStoreOps[0])) {
+      memoryClusters = {asyncWaitOps[0], lStoreOps[0]};
+    } else {
+      memoryClusters = {lStoreOps[0], asyncWaitOps[0]};
+    }
+  } else {
+    return failure();
+  }
+
+  builder.setInsertionPointToStart(forOp.getBody());
+  updateOpInsertion(dotOps[0]);
+  prependOp(builder.create<ROCDL::SetPrioOp>(loc, lowPriority), false);
+
+  // dot cluster 0 operations here.
+  updateOpInsertion(memoryClusters[0]);
+  prependOp(builder.create<ROCDL::SetPrioOp>(loc, highPriority), false);
+  appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
+
+  // mem cluster 0 operations here.
+
+  updateOpInsertion(dotOps[1]);
+  // below ops are inserted backward
+  prependOp(builder.create<ROCDL::SetPrioOp>(loc, lowPriority), true);
+  prependOp(builder.create<ROCDL::SBarrierOp>(loc), true);
+  prependOp(builder.create<ROCDL::SchedBarrier>(loc, 0), true);
+
+  // dot cluster 1 operations here.
+
+  updateOpInsertion(memoryClusters[1]);
+  prependOp(builder.create<ROCDL::SetPrioOp>(loc, highPriority), false);
+  appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
+
+  // mem cluster 1 operations here.
+
+  updateOpInsertion(lastInsertedOp->getBlock()->getTerminator());
+  prependOp(builder.create<ROCDL::SBarrierOp>(loc), true);
+  prependOp(builder.create<ROCDL::SchedBarrier>(loc, 0), true);
+
+  return success();
+}
+
 // This pingpong variant tries to construct one memory cluster and one
 // dot cluster. Instead of slice the tile, it is supposed to use half
 // sized tile_K and use num_stages=3 to prefetch and hide the buffer
@@ -810,6 +875,17 @@ void Pingponger::getDotPingponged() {
   // tightly scheduling the latencies.
 
   int64_t numOfDotLikeOps = scaledDotOps.size() + dotOps.size();
+
+  if (numOfDotLikeOps && numStages == 4) {
+    // In this case we used the ChainedDotSchedule
+    if (transformChainedDotSchedule(builder, loc).failed()) {
+      LDBG("Encountered failure when trying the ChainedDot ping pong "
+           "cluster transformation");
+      return;
+    }
+    addAsymmetricSyncToLoop(builder, loc);
+  }
+
   if (numOfDotLikeOps != 1) {
     LDBG("Only handle a single of either dot or dot_scaled op");
     return;
