@@ -24,7 +24,7 @@ else:
     cublas = None
 
 
-def quantize(w, dtype, dev, **opt):
+def quantize(w, dtype, **opt):
     if dtype == "bf16":
         wq = w.to(torch.bfloat16).transpose(-1, -2).contiguous().transpose(-1, -2)
         return wq, InFlexData(), None
@@ -36,8 +36,9 @@ def quantize(w, dtype, dev, **opt):
     else:
         assert dtype == "mx4", f"{dtype=}"
         w, w_scale = downcast_to_mxfp(w.to(torch.bfloat16), torch.uint8, axis=1)
-        w = convert_layout(wrap_torch_tensor(w, dtype=FP4), opt["value_layout"], **opt["value_layout_opts"])
-        w_scale = convert_layout(wrap_torch_tensor(w_scale), opt["scale_layout"], **opt["scale_layout_opts"])
+        if opt:
+            w = convert_layout(wrap_torch_tensor(w, dtype=FP4), opt["value_layout"], **opt["value_layout_opts"])
+            w_scale = convert_layout(wrap_torch_tensor(w_scale), opt["scale_layout"], **opt["scale_layout_opts"])
         return w, InFlexData(), w_scale
 
 
@@ -109,9 +110,9 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP,
         opt1 = {"value_layout": value_layout, "value_layout_opts": value_layout_opts, \
                 "scale_layout": scale_layout, "scale_layout_opts": scale_layout_opts}
         opt2 = deepcopy(opt1)
-    wg, wg_flex, wg_scale = quantize(wg, "bf16", dev, **optg)
-    w1, w1_flex, w1_scale = quantize(w1, w_dtype, dev, **opt1)
-    w2, w2_flex, w2_scale = quantize(w2, w_dtype, dev, **opt2)
+    wg, wg_flex, wg_scale = quantize(wg, "bf16", **optg)
+    w1, w1_flex, w1_scale = quantize(w1, w_dtype, **opt1)
+    w2, w2_flex, w2_scale = quantize(w2, w_dtype, **opt2)
     pcg = PrecisionConfig(flex_ctx=FlexCtx(rhs_data=wg_flex), weight_scale=wg_scale)
     act = FusedActivation(FnSpecs("swiglu", triton_kernels.swiglu.swiglu_fn, ("alpha", "limit")), (1.0, 1.0), 2)
     pc1 = PrecisionConfig(flex_ctx=FlexCtx(rhs_data=w1_flex), weight_scale=w1_scale)
