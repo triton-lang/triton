@@ -755,7 +755,8 @@ void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
     barrierSlice =
         triton::createSingleBufferView(builder, barrierAlloc, barrierIdx);
   }
-  mma.addCompletionBarrier(barrierSlice, vTrue);
+  builder.setInsertionPointAfter(mma);
+  builder.create<ttng::TCGen5CommitOp>(barrierSlice);
   mma.setIsAsync(true);
 
   // List of buffers that may be used until wait completes
@@ -769,7 +770,6 @@ void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
     waitBuffers.push_back(mmaAsScaledDotOp.getBScale());
   }
 
-  builder.setInsertionPointAfter(mma);
   builder.setStageCluster({mainWaitStage, mainWaitCluster});
   builder.create<ttng::WaitBarrierOp>(barrierSlice, phase, waitBuffers);
 

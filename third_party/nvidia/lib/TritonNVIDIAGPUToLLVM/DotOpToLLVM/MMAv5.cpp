@@ -481,12 +481,6 @@ void convertDotImpl(const LLVMTypeConverter &typeConverter,
     }
   }
 
-  for (auto [barrier, barrierPred] : llvm::zip(barriers, barrierPreds)) {
-    Value commitPred = tb.and_(barrierPred, elect);
-    auto smemObj =
-        LLVM::getSharedMemoryObjectFromStruct(loc, barrier, i64_ty, rewriter);
-    createMMACommit(rewriter, loc, smemObj.getBase(), commitPred, twoCTAs);
-  }
   rewriter.create<LLVM::BrOp>(loc, endBlock);
 }
 

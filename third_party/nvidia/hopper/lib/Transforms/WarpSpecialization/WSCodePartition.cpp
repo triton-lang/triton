@@ -828,7 +828,9 @@ desyncTCGen5MMAOp(OpBuilderWithAsyncTaskIds &builder, ttng::TCGen5MMAOp mmaOp,
   assert(mmaOp.getBarriers().empty() && "mmaOp should not have barriers");
   auto pred = builder.createWithAsyncTaskIds<arith::ConstantIntOp>(
       mmaOp->getLoc(), true, 1);
-  mmaOp.addCompletionBarrier(consumerBarrier, pred);
+  builder.setInsertionPointAfter(mmaOp);
+  builder.createWithAsyncTaskIds<ttng::TCGen5CommitOp>(
+      mmaOp->getLoc(), consumerBarrier, pred.getResult());
   mmaOp.setIsAsync(true);
 
   // Create a wait_barrier before the producer.

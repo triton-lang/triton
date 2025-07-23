@@ -412,7 +412,10 @@ LogicalResult PipelinedLoadGroup::lowerLoads(WarpSchedule &schedule,
     distinctAsyncUsers.insert(load.asyncUsers.begin(), load.asyncUsers.end());
   for (Operation *asyncUser : distinctAsyncUsers) {
     if (auto mmaOp = dyn_cast<ttng::MMAv5OpInterface>(asyncUser)) {
-      mmaOp.addCompletionBarrier(curEmptyBar, b.boolCst(true));
+      b.setInsertionPointAfter(mmaOp);
+      b.createInto<ttng::TCGen5CommitOp>(*schedule.getPartition(mmaOp),
+					 getStageCluster(mmaOp),
+					 curEmptyBar);
       mmaOp.setIsAsync(true);
       continue;
     }
@@ -755,7 +758,10 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
       if (mmaOp == node.op) {
         b.setInsertionPoint(mmaOp);
         Value bar = createSingleBufferView(b, node.barNext, node.index);
-        mmaOp.addCompletionBarrier(bar, userPred);
+        b.setInsertionPointAfter(mmaOp);
+        b.createInto<ttng::TCGen5CommitOp>(*schedule.getPartition(mmaOp),
+                                           getStageCluster(mmaOp), bar,
+                                           userPred);
         mmaOp.setIsAsync(true);
       } else {
         b.setInsertionPointAfter(lastOp);
@@ -801,7 +807,10 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
                                       getStageCluster(mmaOp), readyView2,
                                       phase);
     Value emptyView2 = createSingleBufferView(b, emptyBar, index);
-    mmaOp.addCompletionBarrier(emptyView2, b.boolCst(true));
+    auto mmaPartition = schedule.getPartition(mmaOp);
+    b.setInsertionPointAfter(mmaOp);
+    b.createInto<ttng::TCGen5CommitOp>(*mmaPartition,
+				       getStageCluster(mmaOp), emptyView2);
     mmaOp.setIsAsync(true);
   }
 

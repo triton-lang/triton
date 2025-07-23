@@ -40,11 +40,14 @@ public:
     Value barrierAlloc =
         rewriter.create<ttg::LocalAllocOp>(loc, barrierMemDescType, Value());
     rewriter.create<InitBarrierOp>(loc, barrierAlloc, 1);
-    op.addCompletionBarrier(barrierAlloc,
-                            rewriter.create<arith::ConstantIntOp>(loc, 1, 1));
-    op.setIsAsync(true);
+    // op.addCompletionBarrier(barrierAlloc,
+    //                         rewriter.create<arith::ConstantIntOp>(loc, 1, 1));
+
 
     rewriter.setInsertionPointAfter(op);
+    rewriter.create<TCGen5CommitOp>(loc, barrierAlloc);
+    op.setIsAsync(true);
+
     Value phase = rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
     rewriter.create<WaitBarrierOp>(loc, barrierAlloc, phase, op.getPred());
     rewriter.create<InvalBarrierOp>(loc, barrierAlloc);
