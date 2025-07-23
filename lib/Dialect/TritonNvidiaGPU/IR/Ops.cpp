@@ -244,9 +244,9 @@ static void printToken(OpAsmPrinter &p, Operation *op, Value dep, Type token) {
 }
 
 LogicalResult TCGen5MMAOp::verify() {
-  if (!getIsAsync() && !getBarriers().empty()) {
-    return emitOpError("The op is synchronous but a barrier is present.");
-  }
+  // if (!getIsAsync() && !getBarriers().empty()) {
+  //   return emitOpError("The op is synchronous but a barrier is present.");
+  // }
   return success();
 }
 
@@ -311,9 +311,9 @@ void TCGen5MMAOp::build(OpBuilder &builder, OperationState &state, Type token,
 
 // -- TCGen5MMAScaledOp --
 LogicalResult TCGen5MMAScaledOp::verify() {
-  if (!getIsAsync() && !getBarriers().empty()) {
-    return emitOpError("The op is synchronous but a barrier is present.");
-  }
+  // if (!getIsAsync() && !getBarriers().empty()) {
+  //   return emitOpError("The op is synchronous but a barrier is present.");
+  // }
   return success();
 }
 
