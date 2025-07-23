@@ -422,16 +422,15 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     for (auto [r, l] : mixedTranspositions) {
       family_mask |= (1 << r);
     }
-
     uint32_t vector_mask = family_mask ^ (regDim - (1 << nPack));
-    auto pLaneInv = pLane.invert();
-    const auto &pLInvBases = pLaneInv.getBases().lookup(kLane);
+
+    auto pLInvBases = triton::gpu::layoutToMatrix(pLane.invert());
 
     Value laneId = getLaneId(rewriter, loc);
     // Perform l_{pLaneInv(j)} ^= r_i and apply pLane.
     Value laneIdPerm;
     if (!pLaneIsTrivial) {
-      laneIdPerm = triton::gpu::matrixVectorProd(b, pLaneInv, laneId);
+      laneIdPerm = triton::gpu::matrixVectorProd(b, pLInvBases, laneId);
     }
 
     // Iterate over families:
@@ -528,7 +527,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
 
         // Stage 1 (selp)
         for (auto [r, l] : mixedTranspositions) {
-          int l2 = llvm::Log2_32(pLInvBases[l][0]);
+          int l2 = llvm::Log2_32(pLInvBases[l]);
           applyToPairs(r, l2, swapPair);
         }
 
@@ -538,7 +537,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
           uint32_t mask = 0;
           for (auto [r, l] : mixedTranspositions) {
             if ((vi >> r) & 1)
-              mask |= pLInvBases[l][0];
+              mask |= pLInvBases[l];
           }
           if (pLaneIsTrivial) {
             if (mask != 0)
