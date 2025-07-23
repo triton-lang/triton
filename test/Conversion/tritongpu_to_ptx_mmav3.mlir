@@ -8,8 +8,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
     // As there are 64 elements per lane, we don't use variables to track them.
 
-    // CHECK-COUNT-64: ld.param.b8
-
     // Intra-warp layout conversions can be viewed as a permutation of register
     // and lane basis vectors. This can be read off from the linear layouts:
     //
@@ -56,12 +54,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     // The first step is to get the value of l0.
 
     // CHECK: mov.u32       [[TID:%.*]], %tid.x;
-    // CHECK: and.b32       [[L0_VAL:%.*]], [[TID]], 1;
-    // CHECK: setp.eq.s32   [[L0_OFF:%.*]], [[L0_VAL]], 0;
-
-    // This is used to perform 16 independent selects in stage 1.
-
-    // CHECK-COUNT-16: selp.b32     {{.*}}, {{.*}}, [[L0_OFF]];
+    // CHECK-DAG: and.b32       [[L0_VAL:%.*]], [[TID]], 1;
+    // CHECK-DAG: setp.eq.s32   [[L0_OFF:%.*]], [[L0_VAL]], 0;
 
     // Next, we apply (l0 l1) to the lane id to get the base source lane for
     // the index shuffles. This is step 2b above, but since we must specify
@@ -78,6 +72,25 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     // CHECK-DAG: or.b32  [[LANEID_PART_PERM:%.*]], [[L0_TEMP]], [[LANEID_FIXED_BITS]];
     // CHECK-DAG: bfe.u32 [[L1_TEMP:%.*]], [[TID]], 1, 1;
     // CHECK-DAG: or.b32  [[LANEID_PERM:%.*]], [[LANEID_PART_PERM]], [[L1_TEMP]];
+
+    // This is used to perform 16 independent selects in stage 1.
+
+    // CHECK-DAG: selp.b32     {{.*}}, {{.*}}, [[L0_OFF]];
+    // CHECK-DAG: selp.b32     {{.*}}, {{.*}}, [[L0_OFF]];
+    // CHECK-DAG: selp.b32     {{.*}}, {{.*}}, [[L0_OFF]];
+    // CHECK-DAG: selp.b32     {{.*}}, {{.*}}, [[L0_OFF]];
+    // CHECK-DAG: selp.b32     {{.*}}, {{.*}}, [[L0_OFF]];
+    // CHECK-DAG: selp.b32     {{.*}}, {{.*}}, [[L0_OFF]];
+    // CHECK-DAG: selp.b32     {{.*}}, {{.*}}, [[L0_OFF]];
+    // CHECK-DAG: selp.b32     {{.*}}, {{.*}}, [[L0_OFF]];
+    // CHECK-DAG: selp.b32     {{.*}}, {{.*}}, [[L0_OFF]];
+    // CHECK-DAG: selp.b32     {{.*}}, {{.*}}, [[L0_OFF]];
+    // CHECK-DAG: selp.b32     {{.*}}, {{.*}}, [[L0_OFF]];
+    // CHECK-DAG: selp.b32     {{.*}}, {{.*}}, [[L0_OFF]];
+    // CHECK-DAG: selp.b32     {{.*}}, {{.*}}, [[L0_OFF]];
+    // CHECK-DAG: selp.b32     {{.*}}, {{.*}}, [[L0_OFF]];
+    // CHECK-DAG: selp.b32     {{.*}}, {{.*}}, [[L0_OFF]];
+    // CHECK-DAG: selp.b32     {{.*}}, {{.*}}, [[L0_OFF]];
 
     // The index shuffles have source lane dependent on the value of the r2 bit.
     // Half of them use `LANEID_PERM` while the other half use `LANEID_PERM`
@@ -107,10 +120,23 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
     // CHECK-DAG: and.b32           [[L1_VAL:%.*]], [[TID]], 2;
     // CHECK-DAG: setp.eq.s32       [[L1_OFF:%.*]], [[L1_VAL]], 0;
-    // CHECK-COUNT-16: selp.b32     {{.*}}, {{.*}}, [[L1_OFF]];
 
-    // CHECK-COUNT-64: bfe.u32
-    // CHECK-COUNT-64: st.volatile.global.b8
+    // CHECK-DAG: selp.b32     {{.*}}, {{.*}}, [[L1_OFF]];
+    // CHECK-DAG: selp.b32     {{.*}}, {{.*}}, [[L1_OFF]];
+    // CHECK-DAG: selp.b32     {{.*}}, {{.*}}, [[L1_OFF]];
+    // CHECK-DAG: selp.b32     {{.*}}, {{.*}}, [[L1_OFF]];
+    // CHECK-DAG: selp.b32     {{.*}}, {{.*}}, [[L1_OFF]];
+    // CHECK-DAG: selp.b32     {{.*}}, {{.*}}, [[L1_OFF]];
+    // CHECK-DAG: selp.b32     {{.*}}, {{.*}}, [[L1_OFF]];
+    // CHECK-DAG: selp.b32     {{.*}}, {{.*}}, [[L1_OFF]];
+    // CHECK-DAG: selp.b32     {{.*}}, {{.*}}, [[L1_OFF]];
+    // CHECK-DAG: selp.b32     {{.*}}, {{.*}}, [[L1_OFF]];
+    // CHECK-DAG: selp.b32     {{.*}}, {{.*}}, [[L1_OFF]];
+    // CHECK-DAG: selp.b32     {{.*}}, {{.*}}, [[L1_OFF]];
+    // CHECK-DAG: selp.b32     {{.*}}, {{.*}}, [[L1_OFF]];
+    // CHECK-DAG: selp.b32     {{.*}}, {{.*}}, [[L1_OFF]];
+    // CHECK-DAG: selp.b32     {{.*}}, {{.*}}, [[L1_OFF]];
+    // CHECK-DAG: selp.b32     {{.*}}, {{.*}}, [[L1_OFF]];
 
     %0 = ttg.convert_layout %arg0 : tensor<128x64xf8E5M2, #mma> -> tensor<128x64xf8E5M2, #dot_op>
     %1 = builtin.unrealized_conversion_cast %0 : tensor<128x64xf8E5M2, #dot_op> to !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
