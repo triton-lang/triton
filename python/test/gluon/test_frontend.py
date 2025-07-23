@@ -948,7 +948,7 @@ def reduce_kernel(out):
     layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 32], [4, 1], [1, 0])
     a = ttgl.full([16, 16], 1, ttgl.float32, layout)
     b = ttgl.full([16, 16], 2, ttgl.float32, layout)
-    s0 = ttgl.sum(a, 0)
+    s0 = a.sum(0)
     ttgl.static_assert(s0.type.layout == ttgl.SliceLayout(0, layout))
     s1 = ttgl.sum(a, 1)
     ttgl.static_assert(s1.type.layout == ttgl.SliceLayout(1, layout))
