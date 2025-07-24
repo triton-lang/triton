@@ -119,7 +119,7 @@ tt.func @async_wait(%arg: tensor<32x16xf16, #AL>) {
 tt.func @subview() {
   %cst0 = arith.constant dense<0.000000e+00> : tensor<32x16xf16, #AL>
   %a = ttg.local_alloc %cst0 : (tensor<32x16xf16, #AL>) -> !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory>
-  %0 = ttg.memdesc_subslice %a {offsets=array<i32: 0, 0>} : !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory> -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory>
+  %0 = ttg.memdesc_subslice %a [0, 0] : !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory> -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory>
   // CHECK: gpu.barrier
   // CHECK-NEXT: ttg.local_load
   %1 = ttg.local_load %0 : !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory> -> tensor<16x16xf16, #AL>
@@ -878,7 +878,7 @@ tt.func @membar_alias_through_warp_specialize() {
   // CHECK: partition0
   partition0(%arg0: !ttg.memdesc<16x16xf16, #shared, #ttg.shared_memory, mutable>) num_warps(2) {
     %c0 = arith.constant 0 : i32
-    %1 = ttg.memdesc_subslice %arg0 {offsets=array<i32: 0, 0>}  : !ttg.memdesc<16x16xf16, #shared, #ttg.shared_memory, mutable> -> !ttg.memdesc<16x16xf16, #shared, #ttg.shared_memory, mutable>
+    %1 = ttg.memdesc_subslice %arg0 [0, 0]  : !ttg.memdesc<16x16xf16, #shared, #ttg.shared_memory, mutable> -> !ttg.memdesc<16x16xf16, #shared, #ttg.shared_memory, mutable>
     %c = arith.constant dense<0.0> : tensor<16x16xf16>
     // CHECK: local_store
     ttg.local_store %c, %1 : tensor<16x16xf16> -> !ttg.memdesc<16x16xf16, #shared, #ttg.shared_memory, mutable>
@@ -890,7 +890,7 @@ tt.func @membar_alias_through_warp_specialize() {
   // CHECK: partition1
   partition1(%arg0: !ttg.memdesc<16x16xf16, #shared, #ttg.shared_memory, mutable>) num_warps(2) {
     %c0 = arith.constant 0 : i32
-    %1 = ttg.memdesc_subslice %arg0 {offsets=array<i32: 0, 0>}  : !ttg.memdesc<16x16xf16, #shared, #ttg.shared_memory, mutable> -> !ttg.memdesc<16x16xf16, #shared, #ttg.shared_memory, mutable>
+    %1 = ttg.memdesc_subslice %arg0 [0, 0]  : !ttg.memdesc<16x16xf16, #shared, #ttg.shared_memory, mutable> -> !ttg.memdesc<16x16xf16, #shared, #ttg.shared_memory, mutable>
     %c = arith.constant dense<0.0> : tensor<16x16xf16>
     // CHECK: local_store
     ttg.local_store %c, %1 : tensor<16x16xf16> -> !ttg.memdesc<16x16xf16, #shared, #ttg.shared_memory, mutable>

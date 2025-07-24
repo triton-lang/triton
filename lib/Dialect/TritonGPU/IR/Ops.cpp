@@ -13,6 +13,29 @@
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/LogicalResult.h"
 
+// Provide custom directive handlers for declarative assemblyFormat.
+// They must be visible before including the generated op classes.
+static mlir::ParseResult parseOffsets(mlir::OpAsmParser &p,
+                                      mlir::DenseI32ArrayAttr &attr) {
+  llvm::SmallVector<int32_t> values;
+  if (p.parseCommaSeparatedList([&]() {
+        int32_t v;
+        if (p.parseInteger(v))
+          return mlir::failure();
+        values.push_back(v);
+        return mlir::success();
+      }))
+    return mlir::failure();
+  attr = p.getBuilder().getDenseI32ArrayAttr(values);
+  return mlir::success();
+}
+
+static void printOffsets(mlir::OpAsmPrinter &p, mlir::Operation *op,
+                         mlir::DenseI32ArrayAttr attr) {
+  auto vals = attr.asArrayRef();
+  llvm::interleaveComma(vals, p, [&](int32_t v) { p << v; });
+}
+
 #define GET_OP_CLASSES
 #include "triton/Dialect/TritonGPU/IR/Ops.cpp.inc"
 

@@ -168,7 +168,7 @@ tt.func @cf_for(%arg0: index, %arg1: index, %arg2: index, %arg3: !tt.ptr<f16>, %
   // expected-remark @below {{%1 -> %1}}
   %cst_0 = ttg.local_alloc : () -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>
   // expected-remark @below {{%2 -> %0}}
-  %0 = ttg.memdesc_subslice %cst {offsets=array<i32: 0, 0>} : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable> -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  %0 = ttg.memdesc_subslice %cst [0, 0] : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable> -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>
   gpu.barrier
   // expected-remark @below {{%3 -> %3}}
   %cst_1 = ttg.local_alloc : () -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>
@@ -186,7 +186,7 @@ tt.func @cf_for(%arg0: index, %arg1: index, %arg2: index, %arg3: !tt.ptr<f16>, %
 ^bb3:  // pred: ^bb1
   gpu.barrier
   // expected-remark @below {{%10 -> %0}}
-  %9 = ttg.memdesc_subslice %0 {offsets=array<i32: 0, 0>} : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable> -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  %9 = ttg.memdesc_subslice %0 [0, 0] : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable> -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>
   tt.return
 }
 
@@ -199,7 +199,7 @@ tt.func @poison_memdesc(%arg0: i1) {
   cf.br ^bb2(%1 : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>)
 ^bb2(%2: !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>):
   // expected-remark @below {{%3 -> %0}}
-  %3 = ttg.memdesc_subslice %2 {offsets=array<i32: 0, 0>}  : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable> -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  %3 = ttg.memdesc_subslice %2 [0, 0]  : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable> -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>
   tt.return
 }
 

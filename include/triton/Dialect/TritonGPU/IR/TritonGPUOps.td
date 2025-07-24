@@ -244,9 +244,13 @@ def TTG_MemDescSubsliceOp : TTG_Op<"memdesc_subslice", [Pure, MemDescViewTrait]>
     The offsets must be larger or equal to the tile of the tensor (or zero).
   }];
   let arguments = (ins TTG_MemDescType:$src, DenseI32ArrayAttr:$offsets);
-
   // Use qualified() otherwise "!ttg.memdesc<X>" is printed as "<X>".
-  let assemblyFormat = [{$src attr-dict `:` qualified(type($src)) `->` qualified(type($result))}];
+  // Render offsets inline as %src[0, 0] via a custom directive, but keep
+  // the overall parse/print generated from this assemblyFormat.
+  let assemblyFormat = [{
+    $src `[` custom<Offsets>($offsets) `]` attr-dict `:` qualified(type($src))
+    `->` qualified(type($result))
+  }];
 
   let results = (outs TTG_MemDescType:$result);
 
