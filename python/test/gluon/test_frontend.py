@@ -15,9 +15,9 @@ from triton._filecheck import filecheck_test, run_parser
 import triton.language as tl
 from triton._internal_testing import is_cuda, is_ampere_or_newer, is_blackwell, is_hopper, is_hopper_or_newer
 from triton.compiler.errors import CompilationError, CompileTimeAssertionFailure
-from triton._internal_testing import is_hip
+from triton._internal_testing import is_hip_cdna
 
-WARP_SIZE = 64 if is_hip() else 32
+WARP_SIZE = 64 if is_hip_cdna() else 32
 
 TARGET_PAT = (re.compile('ttg.target = "[^"]*"'), 'ttg.target = "..."')
 WARP_SIZE_PAT = (re.compile('"ttg.threads-per-warp" = \\d{2,2}'), '"ttg.threads-per-warp" = ...')
@@ -35,7 +35,7 @@ def convert_layout_kernel(XBLOCK: ttgl.constexpr, layout_a: ttgl.constexpr, layo
     res = ttgl.convert_layout(x, layout_b)  # noqa: F841
 
 
-@pytest.mark.skipif(not is_cuda() and not is_hip(), reason="Requires CUDA or HIP")
+@pytest.mark.skipif(not is_cuda() and not is_hip_cdna(), reason="Requires CUDA or HIP")
 def test_convert_layout(fresh_knobs):
     knobs.compilation.disable_line_info = True
 
@@ -221,7 +221,7 @@ def shared_memory_subview_kernel(XBLOCK: ttgl.constexpr, layout: ttgl.constexpr,
     view.store(value.trans())
 
 
-@pytest.mark.skipif(not is_cuda() and not is_hip(), reason="Requires CUDA or HIP")
+@pytest.mark.skipif(not is_cuda() and not is_hip_cdna(), reason="Requires CUDA or HIP")
 def test_shared_memory_subview(fresh_knobs):
     knobs.compilation.disable_line_info = True
 
@@ -261,7 +261,7 @@ def shared_memory_index_kernel(XBLOCK: ttgl.constexpr, layout: ttgl.constexpr, s
         smem.index(ivar).load(layout)
 
 
-@pytest.mark.skipif(not is_cuda() and not is_hip(), reason="Requires CUDA or HIP")
+@pytest.mark.skipif(not is_cuda() and not is_hip_cdna(), reason="Requires CUDA or HIP")
 def test_shared_memory_index(fresh_knobs):
     knobs.compilation.disable_line_info = True
 
@@ -840,7 +840,7 @@ def broadcast_kernel(m_dim: tl.constexpr, n_dim: tl.constexpr, warp_size: tl.con
     0 + a + b
 
 
-@pytest.mark.skipif(not is_cuda() and not is_hip(), reason="Requires CUDA or HIP")
+@pytest.mark.skipif(not is_cuda() and not is_hip_cdna(), reason="Requires CUDA or HIP")
 def test_broadcast(fresh_knobs):
     knobs.compilation.disable_line_info = True
 
@@ -897,7 +897,7 @@ def math_kernel(warp_size: tl.constexpr):
     ttgl.fma(a, b, c)
 
 
-@pytest.mark.skipif(not is_cuda() and not is_hip(), reason="Requires CUDA or HIP")
+@pytest.mark.skipif(not is_cuda() and not is_hip_cdna(), reason="Requires CUDA or HIP")
 def test_math(fresh_knobs):
     knobs.compilation.disable_line_info = True
 
@@ -968,12 +968,12 @@ def reduce_kernel(out, warp_size: tl.constexpr):
     tl.store(out + ttgl.arange(0, 16, s0.type.layout), result)
 
 
-@pytest.mark.skipif(not is_cuda() and not is_hip(), reason="Requires CUDA or HIP")
+@pytest.mark.skipif(not is_cuda() and not is_hip_cdna(), reason="Requires CUDA or HIP")
 def test_reduce(fresh_knobs):
     knobs.compilation.disable_line_info = True
 
     h = reduce_kernel.warmup(MockTensor(ttgl.float32), warp_size=WARP_SIZE, sanitize_overflow=False, grid=(1, ))
-    TT_PTR_RANGE = ', tt.pointer_range = 32 : i32' if is_hip() else None
+    TT_PTR_RANGE = ', tt.pointer_range = 32 : i32' if is_hip_cdna() else None
     expecttest.assert_expected_inline(
         anonymize_ir(h.asm["ttgir"]), f"""\
 #blocked = #ttg.blocked<{{sizePerThread = [1, 1], threadsPerWarp = [1, {WARP_SIZE}], warpsPerCTA = [4, 1], order = [1, 0]}}>
