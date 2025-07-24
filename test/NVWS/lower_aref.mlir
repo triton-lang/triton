@@ -19,9 +19,9 @@ module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-w
     // CHECK:        [[EMPTY0:%.*]] = ttg.local_alloc
     // CHECK-NEXT:   [[FULL0:%.*]] = ttg.local_alloc
     // CHECK-NEXT:   scf.for
-    // CHECK-NEXT:     [[EMPTYSLICE:%.*]] = ttg.memdesc_subview [[EMPTY0]]
+    // CHECK-NEXT:     [[EMPTYSLICE:%.*]] = ttg.memdesc_index [[EMPTY0]]
     // CHECK-NEXT:     ttng.init_barrier [[EMPTYSLICE]], 1
-    // CHECK-NEXT:     [[FULLSLICE:%.*]] = ttg.memdesc_subview [[FULL0]]
+    // CHECK-NEXT:     [[FULLSLICE:%.*]] = ttg.memdesc_index [[FULL0]]
     // CHECK-NEXT:     ttng.init_barrier [[FULLSLICE]], 129
     // CHECK-NEXT:   }
     %aref0 = nvws.aref.create %d, %e : !nvws.aref<[!ttg.memdesc<3x64x16xf16, #shared0, #tmem>, !ttg.memdesc<3x16x32xf16, #shared0, #smem>]>
@@ -29,9 +29,9 @@ module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-w
     // CHECK:        [[EMPTY1:%.*]] = ttg.local_alloc
     // CHECK-NEXT:   [[FULL1:%.*]] = ttg.local_alloc
     // CHECK-NEXT:   scf.for
-    // CHECK-NEXT:     [[EMPTYSLICE:%.*]] = ttg.memdesc_subview [[EMPTY1]]
+    // CHECK-NEXT:     [[EMPTYSLICE:%.*]] = ttg.memdesc_index [[EMPTY1]]
     // CHECK-NEXT:     ttng.init_barrier [[EMPTYSLICE]], 256
-    // CHECK-NEXT:     [[FULLSLICE:%.*]] = ttg.memdesc_subview [[FULL1]]
+    // CHECK-NEXT:     [[FULLSLICE:%.*]] = ttg.memdesc_index [[FULL1]]
     // CHECK-NEXT:     ttng.init_barrier [[FULLSLICE]], 128
     // CHECK-NEXT:   }
     %aref1 = nvws.aref.create %d, %e : !nvws.aref<[!ttg.memdesc<3x64x16xf16, #shared0, #tmem>, !ttg.memdesc<3x16x32xf16, #shared0, #smem>]>
@@ -42,7 +42,7 @@ module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-w
       scf.for %i = %lb to %ub step %c1_i32 : i32{
 
         // CHECK-NEXT: [[EMPTYIDX:%.*]] = arith.remsi [[IDX0]], [[C3]]
-        // CHECK-NEXT: [[EMPTYMBAR:%.*]] = ttg.memdesc_subview [[EMPTY0]][[[EMPTYIDX]]]
+        // CHECK-NEXT: [[EMPTYMBAR:%.*]] = ttg.memdesc_index [[EMPTY0]], [[EMPTYIDX]]
         // CHECK-NEXT: [[PHASE_DIV:%.*]] = arith.divsi [[IDX0]], [[C3]]
         // CHECK-NEXT: [[PHASE_AND:%.*]] = arith.andi [[PHASE_DIV]], [[C1]]
         // CHECK-NEXT: [[PHASE_XOR:%.*]] = arith.xori [[PHASE_AND]], [[C1]]
@@ -50,10 +50,10 @@ module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-w
         %1:2 = nvws.aref.put.enter %aref0[%c0_i32] {aref_tag = "put0"} : !nvws.aref<[!ttg.memdesc<3x64x16xf16, #shared0, #tmem>, !ttg.memdesc<3x16x32xf16, #shared0, #smem>]> -> !ttg.memdesc<64x16xf16, #shared0, #tmem>, !ttg.memdesc<16x32xf16, #shared0, #smem>
 
         // CHECK-NEXT: [[STAGE:%.*]] = arith.remsi [[IDX0]], [[C3]]
-        // CHECK-NEXT: [[BUFA:%.*]] = ttg.memdesc_subview %arg0[[[STAGE]],{{.*}},{{.*}}]
-        // CHECK-NEXT: [[BUFB:%.*]] = ttg.memdesc_subview %arg1[[[STAGE]],{{.*}},{{.*}}]
+        // CHECK-NEXT: [[BUFA:%.*]] = ttg.memdesc_index %arg0, [[STAGE]]
+        // CHECK-NEXT: [[BUFB:%.*]] = ttg.memdesc_index %arg1, [[STAGE]]
         // CHECK-NEXT: [[FULLIDX:%.*]] = arith.remsi [[IDX2]], [[C3]]
-        // CHECK-NEXT: [[FULLMBAR:%.*]] = ttg.memdesc_subview [[FULL0]][[[FULLIDX]]]
+        // CHECK-NEXT: [[FULLMBAR:%.*]] = ttg.memdesc_index [[FULL0]], [[FULLIDX]]
         // CHECK-NEXT: ttng.barrier_expect [[FULLMBAR]], 0
         // CHECK-NEXT: [[IDX0a:%.*]] = arith.addi [[IDX0]], [[C1]]
         // CHECK-NEXT: "tma_load"([[BUFA]])
@@ -62,7 +62,7 @@ module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-w
         "cp_async"(%1#1) : (!ttg.memdesc<16x32xf16, #shared0, #smem>) -> ()
 
         // CHECK-NEXT: [[FULLIDX:%.*]] = arith.remsi [[IDX2]], [[C3]]
-        // CHECK-NEXT: [[FULLMBAR:%.*]] = ttg.memdesc_subview [[FULL0]][[[FULLIDX]]]
+        // CHECK-NEXT: [[FULLMBAR:%.*]] = ttg.memdesc_index [[FULL0]], [[FULLIDX]]
         // CHECK-NEXT: nvws.async_complete [[FULLMBAR]], async_op = <tma_load>
         // CHECK-NEXT: nvws.async_complete [[FULLMBAR]], async_op = <cp_async>
         // CHECK-NEXT: [[IDX2a:%.*]] = arith.addi [[IDX2]], [[C1]]
@@ -121,21 +121,21 @@ module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-w
       scf.for %i = %lb to %ub step %c1_i32 : i32{
 
         // CHECK-NEXT: [[FULLIDX:%.*]] = arith.remsi [[IDX0]], [[C3]]
-        // CHECK-NEXT: [[FULLMBAR:%.*]] = ttg.memdesc_subview [[FULL0]][[[FULLIDX]]]
+        // CHECK-NEXT: [[FULLMBAR:%.*]] = ttg.memdesc_index [[FULL0]], [[FULLIDX]]
         // CHECK-NEXT: [[PHASE_DIV:%.*]] = arith.divsi [[IDX0]], [[C3]]
         // CHECK-NEXT: [[PHASE_AND:%.*]] = arith.andi [[PHASE_DIV]], [[C1]]
         // CHECK-NEXT: ttng.wait_barrier [[FULLMBAR]], [[PHASE_AND]]
         %2:2 = nvws.aref.get.enter %aref0[%c0_i32] : !nvws.aref<[!ttg.memdesc<3x64x16xf16, #shared0, #tmem>, !ttg.memdesc<3x16x32xf16, #shared0, #smem>]> -> !ttg.memdesc<64x16xf16, #shared0, #tmem>, !ttg.memdesc<16x32xf16, #shared0, #smem>
 
         // CHECK-NEXT: [[STAGE:%.*]] = arith.remsi [[IDX0]], [[C3]]
-        // CHECK-NEXT: [[BUFA:%.*]] = ttg.memdesc_subview %arg0[[[STAGE]],{{.*}},{{.*}}]
-        // CHECK-NEXT: [[BUFB:%.*]] = ttg.memdesc_subview %arg1[[[STAGE]],{{.*}},{{.*}}]
+        // CHECK-NEXT: [[BUFA:%.*]] = ttg.memdesc_index %arg0, [[STAGE]]
+        // CHECK-NEXT: [[BUFB:%.*]] = ttg.memdesc_index %arg1, [[STAGE]]
         // CHECK-NEXT: arith.addi
         // CHECK-NEXT: "tc5mma"([[BUFA]], [[BUFB]])
         "tc5mma"(%2#0, %2#1) : (!ttg.memdesc<64x16xf16, #shared0, #tmem>, !ttg.memdesc<16x32xf16, #shared0, #smem>) -> ()
 
         // CHECK-NEXT: [[EMPTYIDX:%.*]] = arith.remsi [[IDX2]], [[C3]]
-        // CHECK-NEXT: [[EMPTYMBAR:%.*]] = ttg.memdesc_subview [[EMPTY0]][[[EMPTYIDX]]]
+        // CHECK-NEXT: [[EMPTYMBAR:%.*]] = ttg.memdesc_index [[EMPTY0]], [[EMPTYIDX]]
         // CHECK-NEXT: nvws.async_complete [[EMPTYMBAR]], async_op = <tc5mma>
         // CHECK-NEXT: arith.addi
         nvws.aref.get.exit %aref0[%c0_i32] [#nvws.async_op<tc5mma>] : !nvws.aref<[!ttg.memdesc<3x64x16xf16, #shared0, #tmem>, !ttg.memdesc<3x16x32xf16, #shared0, #smem>]>
@@ -150,7 +150,7 @@ module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-w
           "tmem_load"(%3#0, %3#1) : (!ttg.memdesc<64x16xf16, #shared0, #tmem>, !ttg.memdesc<16x32xf16, #shared0, #smem>) -> ()
 
           // CHECK: arith.remsi [[IDX3]], [[C3]]
-          // CHECK-NEXT: ttg.memdesc_subview
+          // CHECK-NEXT: ttg.memdesc_index
           // CHECK-NEXT: nvws.async_complete {{.*}}, async_op = <none>
           nvws.aref.get.exit %aref1[%c0_i32] [#nvws.async_op<none>] : !nvws.aref<[!ttg.memdesc<3x64x16xf16, #shared0, #tmem>, !ttg.memdesc<3x16x32xf16, #shared0, #smem>]>
         }

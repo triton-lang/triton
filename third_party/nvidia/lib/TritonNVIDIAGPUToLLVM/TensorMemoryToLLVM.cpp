@@ -866,13 +866,13 @@ struct TensorMemoryCopyOpConversion
   }
 };
 
-struct MemDescSubviewOpConversion
-    : public ConvertOpToLLVMPattern<triton::gpu::MemDescSubviewOp> {
+struct MemDescIndexOpConversion
+    : public ConvertOpToLLVMPattern<triton::gpu::MemDescIndexOp> {
   using ConvertOpToLLVMPattern<
-      triton::gpu::MemDescSubviewOp>::ConvertOpToLLVMPattern;
+      triton::gpu::MemDescIndexOp>::ConvertOpToLLVMPattern;
 
   LogicalResult
-  matchAndRewrite(triton::gpu::MemDescSubviewOp op, OpAdaptor adaptor,
+  matchAndRewrite(triton::gpu::MemDescIndexOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -887,22 +887,14 @@ struct MemDescSubviewOpConversion
 
     // newBase = base + offset
     auto tmemBase = adaptor.getSrc();
-    SmallVector<Value> opOffsetVals = op.getOffsets();
-    size_t destRank = op.getResult().getType().getRank();
-    SmallVector<Value> offsetVals;
-    int rankReduced = srcTy.getRank() - destRank;
-    for (int i = rankReduced; i < opOffsetVals.size(); i++) {
-      offsetVals.push_back(opOffsetVals[i]);
-    }
-
+    auto idx = op.getIndex();
     triton::nvidia_gpu::TMemAllocation tmemAlloc =
         triton::nvidia_gpu::getTmemAllocSizes(cast<MemDescType>(dstTy));
     int numColOffset = tmemAlloc.numCols;
     Value newBase = b.ptrtoint(rewriter.getI32Type(), tmemBase);
     newBase = rewriter.create<LLVM::AddOp>(
         loc, newBase,
-        rewriter.create<LLVM::MulOp>(loc, opOffsetVals[0],
-                                     b.i32_val(numColOffset)));
+        rewriter.create<LLVM::MulOp>(loc, idx, b.i32_val(numColOffset)));
     auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
     rewriter.replaceOp(op, b.inttoptr(elemPtrTy, newBase));
     return success();
@@ -996,7 +988,7 @@ void mlir::triton::NVIDIA::populateTensorMemoryOpToLLVMPattern(
 void mlir::triton::NVIDIA::populateTensorMemorySubviewOpToLLVMPattern(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     PatternBenefit benefit) {
-  patterns.add<MemDescSubviewOpConversion>(typeConverter, benefit);
+  patterns.add<MemDescIndexOpConversion>(typeConverter, benefit);
   patterns.add<MemDescReinterpretOpConversion>(typeConverter, benefit);
   return;
 }

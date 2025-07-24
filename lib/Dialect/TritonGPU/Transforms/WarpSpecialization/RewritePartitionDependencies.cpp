@@ -226,10 +226,7 @@ int UseInfo::getMaxUseDistance(const Partition &partition) {
 namespace {
 struct AsyncRef {
   Value getValueView(ImplicitLocOpBuilder &b, Value idx) const {
-    Value zero = b.create<arith::ConstantOp>(b.getI32IntegerAttr(0));
-    SmallVector<Value> offsets(allocType.getRank(), zero);
-    offsets.front() = idx;
-    return b.create<MemDescSubviewOp>(viewType, alloc, offsets);
+    return b.create<MemDescIndexOp>(viewType, alloc, idx);
   }
   Value getReadyView(ImplicitLocOpBuilder &b, Value idx) const {
     return createSingleBufferView(b, readyBars, idx);

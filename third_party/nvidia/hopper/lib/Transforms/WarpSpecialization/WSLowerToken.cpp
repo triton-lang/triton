@@ -151,14 +151,14 @@ void lowerTokenOperations(Operation *parentOp, int numCTAs,
     unsigned bufferEmptyCount = THREADS_PER_TASK;
     for (unsigned i = 0; i < createTokenOp.getNumBuffers(); i++) {
       Value idx = builder.create<arith::ConstantIntOp>(loc, i, 32);
-      Value barrierFullView = builder.create<ttg::MemDescSubviewOp>(
+      Value barrierFullView = builder.create<ttg::MemDescIndexOp>(
           loc, singleBarrierMemDescType, bufferFullArray, idx);
       // EmptyView is used for ConsumerRelease and ProducerAcquire.
       // FullView is for ConsumerWait and ProducerCommit.
       builder.create<ttng::InitBarrierOp>(loc, barrierFullView,
                                           bufferFullCount);
 
-      Value barrierEmptyView = builder.create<ttg::MemDescSubviewOp>(
+      Value barrierEmptyView = builder.create<ttg::MemDescIndexOp>(
           loc, singleBarrierMemDescType, bufferEmptyArray, idx);
       builder.create<ttng::InitBarrierOp>(loc, barrierEmptyView,
                                           bufferEmptyCount);
@@ -169,14 +169,14 @@ void lowerTokenOperations(Operation *parentOp, int numCTAs,
 
     // Helper function for extracting one index from bufferFullArray.
     auto extractBufferFull = [&](Location loc, Value idx) -> Value {
-      return builder.create<ttg::MemDescSubviewOp>(
-          loc, singleBarrierMemDescType, bufferFullArray, idx);
+      return builder.create<ttg::MemDescIndexOp>(loc, singleBarrierMemDescType,
+                                                 bufferFullArray, idx);
     };
 
     // Helper function for extracting one index from bufferEmptyArray.
     auto extractBufferEmpty = [&](Location loc, Value idx) -> Value {
-      return builder.create<ttg::MemDescSubviewOp>(
-          loc, singleBarrierMemDescType, bufferEmptyArray, idx);
+      return builder.create<ttg::MemDescIndexOp>(loc, singleBarrierMemDescType,
+                                                 bufferEmptyArray, idx);
     };
     auto handleOneUser = [&](Operation *user) -> bool {
       // Here builder is at the user, make sure usage of values outside of
