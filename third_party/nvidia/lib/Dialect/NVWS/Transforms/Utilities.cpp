@@ -9,19 +9,11 @@ namespace mlir {
 namespace triton {
 namespace nvws {
 
-MemDescType getDataMemDescType(MemDescType memDescType, bool mutableMemory) {
-  auto shape = memDescType.getShape();
-  SmallVector<int64_t> dataShape(shape.begin() + 1, shape.end());
-  return MemDescType::get(dataShape, memDescType.getElementType(),
-                          memDescType.getEncoding(),
-                          memDescType.getMemorySpace(), mutableMemory);
-};
-
 Operation *createAlloc(OpBuilder &builder, Location loc,
                        MemDescType memDescType, Value src) {
-  if (isa<SharedMemorySpaceAttr>(memDescType.getMemorySpace()))
+  if (isa<SharedMemorySpaceAttr>(memDescType.getMemorySpace())) {
     return builder.create<LocalAllocOp>(loc, memDescType, src);
-  else {
+  } else {
     assert(isa<TensorMemorySpaceAttr>(memDescType.getMemorySpace()));
     return builder.create<TMEMAllocOp>(loc, memDescType, src);
   }

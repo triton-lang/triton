@@ -10,9 +10,6 @@ namespace nvws {
 
 static const char *kArefTagAttrName = "aref_tag";
 
-gpu::MemDescType getDataMemDescType(gpu::MemDescType memDescType,
-                                    bool mutableMemory);
-
 Operation *createAlloc(OpBuilder &builder, Location loc,
                        gpu::MemDescType memDescType, Value src);
 

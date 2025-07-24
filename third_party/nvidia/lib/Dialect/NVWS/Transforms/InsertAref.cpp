@@ -167,7 +167,7 @@ SmallVector<Operation *> createArefPut(PartitionBuilder &builder,
   auto loc = producedValue.result.getLoc();
   auto arefBufType = cast<MemDescType>(aref.getOperand(0).getType());
   Value result = producedValue.result;
-  auto dataBufType = getDataMemDescType(arefBufType, true);
+  auto dataBufType = getBufferViewType(arefBufType, true);
   StageCluster stageCluster = getStageClusterForProducer(result);
 
   SmallVector<Type> buffers{dataBufType};
@@ -260,6 +260,21 @@ getConsumerAsyncOpKinds(const SetVector<Operation *> &consumers,
   return kindAttrs;
 }
 
+void propagateAllocShape(Value value, int64_t arefAllocDepth) {
+  for (Operation *user : value.getUsers()) {
+    if (user->hasTrait<OpTrait::MemDescViewTrait>()) {
+      auto type = cast<MemDescType>(user->getResult(0).getType());
+      SmallVector<int64_t> allocShape{type.getShape()};
+      allocShape.insert(allocShape.begin(), arefAllocDepth);
+      auto newType = MemDescType::get(type.getShape(), type.getElementType(),
+                                      type.getEncoding(), type.getMemorySpace(),
+                                      type.getMutableMemory(), allocShape);
+      user->getResult(0).setType(newType);
+      propagateAllocShape(user->getResult(0), arefAllocDepth);
+    }
+  }
+}
+
 void createArefGet(PartitionBuilder &builder, ArefCreateOp aref,
                    std::string arefTag, ProducedValueInfo producedValue,
                    Partition *consumerPartition, WarpSchedule &schedule,
@@ -270,7 +285,7 @@ void createArefGet(PartitionBuilder &builder, ArefCreateOp aref,
   Value result = producedValue.result;
   StageCluster stageCluster = getStageCluster(result.getDefiningOp());
 
-  Type bufferType = getDataMemDescType(arefBufType, false);
+  Type bufferType = getBufferViewType(arefBufType, false);
   auto getEnterOp = builder.createInto<ArefGetEnterOp>(
       *consumerPartition, stageCluster, SmallVector{bufferType}, aref,
       mkConstant(builder, loc, 0, 32, consumerPartition, schedule));
@@ -287,6 +302,7 @@ void createArefGet(PartitionBuilder &builder, ArefCreateOp aref,
     });
     builder.setInsertionPointAfter(insertPoint);
     result.replaceAllUsesWith(dataBuf);
+    propagateAllocShape(dataBuf, arefBufType.getAllocShape()[0]);
   } else if (auto tensorType = dyn_cast<RankedTensorType>(result.getType())) {
     auto localLoadOp = builder.create<LocalLoadOp>(loc, tensorType, dataBuf);
     result.replaceAllUsesWith(localLoadOp.getResult());

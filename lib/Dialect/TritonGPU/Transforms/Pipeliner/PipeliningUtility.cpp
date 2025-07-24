@@ -496,12 +496,11 @@ void mlir::triton::combineRedundantWaitOps(
   }
 }
 
-ttg::MemDescType mlir::triton::getBufferViewType(ttg::MemDescType allocTy) {
-  Attribute sharedMemorySpace =
-      ttg::SharedMemorySpaceAttr::get(allocTy.getContext());
+ttg::MemDescType mlir::triton::getBufferViewType(ttg::MemDescType allocTy,
+                                                 bool mutableMemory) {
   return ttg::MemDescType::get(allocTy.getShape().drop_front(),
                                allocTy.getElementType(), allocTy.getEncoding(),
-                               sharedMemorySpace, /*mutableMemory=*/true,
+                               allocTy.getMemorySpace(), mutableMemory,
                                /*allocShape=*/allocTy.getAllocShape());
 }
 

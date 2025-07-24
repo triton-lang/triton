@@ -123,7 +123,7 @@ void combineRedundantWaitOps(
     llvm::SmallSetVector<gpu::AsyncWaitOp, 8> &waitOps);
 
 // Get the type of the view of a multi-buffered tensor value.
-gpu::MemDescType getBufferViewType(gpu::MemDescType allocTy);
+gpu::MemDescType getBufferViewType(gpu::MemDescType allocTy, bool mutableMemory=true);
 // Get a generic shared encoding for a tensor.
 gpu::SharedEncodingTrait getSharedEncoding(RankedTensorType ty);
 // Get a shared encoding for a tensor based on its uses.
