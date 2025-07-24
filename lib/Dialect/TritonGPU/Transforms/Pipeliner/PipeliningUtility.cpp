@@ -2,10 +2,12 @@
 #include "mlir/Analysis/TopologicalSortUtils.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
+#include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/ImplicitLocOpBuilder.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Support/LLVM.h"
+#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -277,6 +279,69 @@ Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
   op->emitOpError("pipeliner doesn't know how to predicate this op.");
   llvm::report_fatal_error("Fatal pipeliner error");
   return op;
+}
+
+Operation *mlir::triton::wrapInMaskOp(RewriterBase &rewriter, Operation *op,
+                                      Value pred) {
+  auto mask =
+      rewriter.create<ttg::MaskOp>(op->getLoc(), op->getResultTypes(), pred);
+  rewriter.createBlock(&mask->getRegion(0));
+  rewriter.setInsertionPointToStart(&mask->getRegion(0).front());
+  auto newOp = rewriter.clone(*op);
+  rewriter.create<ttg::MaskReturnOp>(op->getLoc(), newOp->getResults());
+  op->replaceAllUsesWith(mask->getResults());
+  rewriter.eraseOp(op);
+  return mask;
+}
+
+void mlir::triton::resolveMaskOp(ModuleOp moduleOp,
+                                 DenseSet<ttg::MaskOp> &peeledMaskOps) {
+  IRRewriter rewriter(moduleOp);
+
+  // Canonicalize the IR to simplify the arithmetic ops defining the mask
+  auto arithDialect =
+      moduleOp.getContext()->getLoadedDialect<arith::ArithDialect>();
+  RewritePatternSet patterns(moduleOp.getContext());
+  arithDialect->getCanonicalizationPatterns(patterns);
+  if (mlir::applyPatternsGreedily(moduleOp, std::move(patterns)).failed())
+    return llvm::report_fatal_error("Failed to canonicalize the IR");
+
+  // Prune all the statically dead mask ops in the epilogue. This is a
+  // hack, ideally we should do it for all the mask ops, but it is incorrect if
+  // we have speculatively executed async cp operations that will store to shmem
+  // even if the mask is false.
+  for (auto maskOp : peeledMaskOps) {
+    rewriter.setInsertionPoint(maskOp);
+    while (&maskOp.getBody()->front() != maskOp.getBody()->getTerminator()) {
+      Operation *op = &maskOp.getBody()->front();
+      if (isConstantIntValue(maskOp.getPred(), 0)) {
+        if (op->getNumResults() > 0) {
+          SmallVector<Value> results;
+          for (auto result : op->getResults()) {
+            auto poisonOp = rewriter.create<mlir::ub::PoisonOp>(
+                op->getLoc(), result.getType());
+            results.push_back(poisonOp);
+          }
+          op->replaceAllUsesWith(results);
+        }
+        op->erase();
+      }
+    }
+  }
+
+  SmallVector<ttg::MaskOp> maskOps;
+  moduleOp->walk([&](ttg::MaskOp maskOp) { maskOps.push_back(maskOp); });
+  for (auto maskOp : maskOps) {
+    rewriter.setInsertionPoint(maskOp);
+    while (&maskOp.getBody()->front() != maskOp.getBody()->getTerminator()) {
+      Operation *op = &maskOp.getBody()->front();
+      rewriter.moveOpBefore(op, maskOp);
+      op = triton::predicateOp(rewriter, op, maskOp.getPred());
+    }
+    maskOp->replaceAllUsesWith(
+        maskOp.getBody()->getTerminator()->getOperands());
+    maskOp->erase();
+  }
 }
 
 // Return true if the given ForOp has the attribute

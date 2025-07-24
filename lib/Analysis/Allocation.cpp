@@ -39,8 +39,8 @@ static unsigned getBitwidth(RankedTensorType ty) {
   return isPtr ? kPtrBitWidth : std::max(ty.getElementTypeBitWidth(), 8u);
 }
 
-static unsigned getNumScratchElemsSwizzledCvt(RankedTensorType srcTy,
-                                              RankedTensorType dstTy) {
+unsigned getNumScratchElemsSwizzledCvt(RankedTensorType srcTy,
+                                       RankedTensorType dstTy) {
   auto *ctx = srcTy.getContext();
   auto srcLayout = gpu::toLinearLayout(srcTy);
   auto dstLayout = gpu::toLinearLayout(dstTy);
@@ -52,8 +52,8 @@ static unsigned getNumScratchElemsSwizzledCvt(RankedTensorType srcTy,
   return smem.getTotalOutDimSize() / reps;
 }
 
-static unsigned getNumScratchElemsPaddedCvt(RankedTensorType srcTy,
-                                            RankedTensorType dstTy) {
+unsigned getNumScratchElemsPaddedCvt(RankedTensorType srcTy,
+                                     RankedTensorType dstTy) {
   auto scratchConfig = getScratchConfigForCvt(srcTy, dstTy);
   return getNumScratchElements(scratchConfig.paddedRepShape);
 }

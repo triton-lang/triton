@@ -814,6 +814,7 @@ void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
         triton::createSingleBufferView(builder, barrierAlloc, barrierIdx);
   }
   mma.addCompletionBarrier(barrierSlice, vTrue);
+  mma.setIsAsync(true);
 
   // List of buffers that may be used until wait completes
   SmallVector<Value> waitBuffers;

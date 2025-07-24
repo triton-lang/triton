@@ -429,12 +429,12 @@ static Value downcastToFp8_RTNE_oneValue(Location loc,
 
   // Get sign and absolute value
   Value intVal = b.bitcast(v, srcIntType);
-  int32_t signMask = 1 << (srcWidth - 1);
+  uint32_t signMask = 1 << (srcWidth - 1);
   Value sign =
       b.trunc(i8_ty, b.lshr(b.and_(intVal, srcFpInfo.toLLVMIntValue(signMask)),
                             srcFpInfo.toLLVMIntValue(srcWidth - 8)));
 
-  int32_t absoluteMask = signMask - 1;
+  uint32_t absoluteMask = signMask - 1;
   intVal = b.and_(intVal, srcFpInfo.toLLVMIntValue(absoluteMask));
 
   // Rounding to nearest even

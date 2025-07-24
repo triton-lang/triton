@@ -243,6 +243,13 @@ static void printToken(OpAsmPrinter &p, Operation *op, Value dep, Type token) {
   p << ']';
 }
 
+LogicalResult TCGen5MMAOp::verify() {
+  if (!getIsAsync() && !getBarriers().empty()) {
+    return emitOpError("The op is synchronous but a barrier is present.");
+  }
+  return success();
+}
+
 void TCGen5MMAOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
@@ -296,12 +303,23 @@ void TCGen5MMAOp::setPredicate(Value pred) { getPredMutable().assign(pred); }
 void TCGen5MMAOp::build(OpBuilder &builder, OperationState &state, Type token,
                         Value a, Value b, Value d, Value accDep, Value useD,
                         Value pred, bool useTwoCTAs, ValueRange barriers,
-                        ValueRange barrierPreds) {
+                        ValueRange barrierPreds, bool isAsync) {
+  if (!barriers.empty()) {
+    isAsync = true;
+  }
   build(builder, state, token, a, b, d, accDep, useD, pred, barriers,
-        barrierPreds, useTwoCTAs ? builder.getUnitAttr() : UnitAttr());
+        barrierPreds, isAsync ? builder.getUnitAttr() : UnitAttr(),
+        useTwoCTAs ? builder.getUnitAttr() : UnitAttr());
 }
 
 // -- TCGen5MMAScaledOp --
+LogicalResult TCGen5MMAScaledOp::verify() {
+  if (!getIsAsync() && !getBarriers().empty()) {
+    return emitOpError("The op is synchronous but a barrier is present.");
+  }
+  return success();
+}
+
 void TCGen5MMAScaledOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
@@ -450,12 +468,15 @@ void TCGen5MMAScaledOp::build(OpBuilder &builder, OperationState &state,
                               Value accDep, Value aScale, Value bScale,
                               ScaleDotElemType aType, ScaleDotElemType bType,
                               Value useD, Value pred, ValueRange barriers,
-                              ValueRange barrierPreds) {
+                              ValueRange barrierPreds, bool isAsync) {
   MLIRContext *ctx = builder.getContext();
+  if (!barriers.empty()) {
+    isAsync = true;
+  }
   build(builder, state, token, a, b, d, accDep, aScale, bScale,
         ScaleDotElemTypeAttr::get(ctx, aType),
         ScaleDotElemTypeAttr::get(ctx, bType), useD, pred, barriers,
-        barrierPreds);
+        barrierPreds, isAsync ? builder.getUnitAttr() : UnitAttr());
 }
 
 // -- TMEMStoreOp --
@@ -554,8 +575,11 @@ LogicalResult TMEMSubSliceOp::verify() {
       srcTy.getEncoding());
   if (!encoding)
     return emitOpError("The source must be a tensor memory buffer.");
-  if (encoding.getBlockM() != 128)
-    return emitOpError("The source must be a 128xN layout.");
+  if (!llvm::is_contained({64, 128}, encoding.getBlockM())) {
+    return emitOpError("The source tensor memory descriptor must have a 128xN "
+                       "or 64xN layout, got block_m=")
+           << encoding.getBlockM();
+  }
   auto dstTy = cast<triton::gpu::MemDescType>(getResult().getType());
   auto dstEncoding = dyn_cast<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
       dstTy.getEncoding());

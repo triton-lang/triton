@@ -5,11 +5,20 @@ import tempfile
 import triton
 from triton.backends.compiler import GPUTarget
 
+from triton.experimental import gluon
+from triton.experimental.gluon import language as ttgl
+from triton.experimental.gluon.language.nvidia.blackwell import (
+    TensorMemoryLayout,
+    allocate_tensor_memory,
+    get_tmem_32x32b_reg_layout,
+    mbarrier,
+    tcgen05_mma,
+    tcgen05_commit,
+)
 
+
+@pytest.mark.skipif(torch.cuda.get_device_capability()[0] != 10, reason="Requires compute capability == 10")
 def test_tmem_copy_2d():
-    if not torch.cuda.is_available() or not torch.cuda.get_device_capability()[0] == 10:
-        pytest.skip("Test requires Blackwell target.")
-
     device = "cuda"
 
     smem_h = 256
@@ -89,3 +98,174 @@ ttng.wait_barrier %93, %c0_i32 : !ttg.memdesc<1xi64, #shared1, #ttg.shared_memor
         for i in range(4):
             # Copied values are duplicated across warps
             assert torch.equal(x[m * 32:(m + 1) * 32], z_tri[32 * i:32 * (i + 1), col_offset:(col_offset + 4)])
+
+
+@pytest.mark.skipif(torch.cuda.get_device_capability()[0] != 10, reason="Requires compute capability == 10")
+def test_tmem_subslice_block_m_64():
+
+    @gluon.jit
+    def kernel(s_ptr, out_ptr):
+        BLOCK_M: ttgl.constexpr = 64
+        N: ttgl.constexpr = 128
+        BLOCK_N: ttgl.constexpr = 64
+
+        tmem_layout: ttgl.constexpr = TensorMemoryLayout((BLOCK_M, BLOCK_N), unpacked=True)
+        s_tmem = allocate_tensor_memory(ttgl.float32, (BLOCK_M, N), layout=tmem_layout)
+        o_tmem = allocate_tensor_memory(ttgl.float32, (BLOCK_M, N), layout=tmem_layout)
+
+        layout: ttgl.constexpr = get_tmem_32x32b_reg_layout(BLOCK_M, BLOCK_N, (BLOCK_M, N), num_warps=4)
+
+        offsets = ttgl.arange(0, BLOCK_M)[:, None] * N + ttgl.arange(0, N)[None, :]
+        offsets = ttgl.convert_layout(offsets, layout)
+        s = ttgl.load(s_ptr + offsets)
+
+        s_tmem.store(s)
+        o_tmem.store(s)
+
+        p_tmem_layout: ttgl.constexpr = TensorMemoryLayout((BLOCK_M, BLOCK_N), unpacked=False)
+        p_tmem = s_tmem.slice(0, N // 2)._reinterpret(ttgl.float16, [BLOCK_M, N], p_tmem_layout)
+        p_tmem.store(ttgl.full((BLOCK_M, N), 0.0, dtype=ttgl.float16, layout=layout))
+
+        d1_tmem_layout: ttgl.constexpr = TensorMemoryLayout((BLOCK_M, 1), unpacked=True)
+        d1_layout: ttgl.constexpr = get_tmem_32x32b_reg_layout(BLOCK_M, 1, (BLOCK_M, 1), num_warps=4)
+
+        m_tmem = s_tmem.slice(N // 4, 1)._reinterpret(ttgl.float32, [BLOCK_M, 1], d1_tmem_layout)
+        m_tmem.store(ttgl.full((BLOCK_M, 1), 2.0, dtype=ttgl.float32, layout=d1_layout))
+        l_tmem = s_tmem.slice(N // 4 + 1, 1)._reinterpret(ttgl.float32, [BLOCK_M, 1], d1_tmem_layout)
+        l_tmem.store(ttgl.full((BLOCK_M, 1), 3.0, dtype=ttgl.float32, layout=d1_layout))
+        a_tmem = s_tmem.slice(N // 4 + 2, 1)._reinterpret(ttgl.float32, [BLOCK_M, 1], d1_tmem_layout)
+        a_tmem.store(ttgl.full((BLOCK_M, 1), 4.0, dtype=ttgl.float32, layout=d1_layout))
+
+        s = s_tmem.load(layout)
+
+        ttgl.store(out_ptr + offsets, s)
+
+    torch.manual_seed(0)
+    s = torch.randn((64, 128), dtype=torch.float32, device="cuda")
+
+    out_tri = torch.empty_like(s)
+    compiled = kernel[(1, )](s, out_tri)
+
+    ttgir = compiled.asm["ttgir"]
+    # Check that we have two 64x128xf32 allocations.
+    assert ttgir.count("ttng.tmem_alloc") == 2
+    assert ttgir.count("ttng.tmem_alloc : () -> !ttg.memdesc<64x128xf32") == 2
+
+    # Check that we allocated only 128 columns of TMEM.
+    llir = compiled.asm["llir"]
+    assert llir.count("tcgen05.alloc.cta_group::1.sync.aligned.shared::cta.b32 [$1], 128")
+
+    # Given TMEM[0:32] is the slice of TMEM for warpgroup 0, the expected layout
+    # of S is
+    #
+    #   TMEM[0:16]  = S[0:16, 0:64]
+    #   TMEM[16:32] = S[0:16, 64:128]
+    #
+    # When slicing S to obtain P, we expect it to overlap with the left half,
+    # i.e. S[0:16, 0:32] and S[0:16, 64:96].
+    out_ref = s
+    out_ref[:, 0:32] = 0.0
+    out_ref[:, 64:96] = 0.0
+
+    # Given S = [s0, s1, s2, s3], they are arranged like
+    #
+    #   TMEM[0:16]  = [s0, s1]
+    #   TMEM[16:32] = [s2, s3]
+    #
+    # Thus slicing S at  N//4 will obtain an offset to the beginning of s1.
+    out_ref[:, 32] = 2.0
+    out_ref[:, 33] = 3.0
+    out_ref[:, 34] = 4.0
+
+    torch.testing.assert_close(out_ref, out_tri, atol=0, rtol=0)
+
+
+@pytest.mark.skipif(torch.cuda.get_device_capability()[0] != 10, reason="Requires compute capability == 10")
+def test_block_m_64_mma():
+
+    @gluon.jit
+    def kernel(a_ptr, b_ptr, c_ptr, d_ptr):
+        BLOCK_M: ttgl.constexpr = 64
+        N: ttgl.constexpr = 128
+        BLOCK_N: ttgl.constexpr = 64
+
+        a_offsets = ttgl.arange(0, BLOCK_M)[:, None] * N + ttgl.arange(0, N)[None, :]
+        b_offsets = ttgl.arange(0, N)[:, None] * N + ttgl.arange(0, N)[None, :]
+
+        a_layout: ttgl.constexpr = get_tmem_32x32b_reg_layout(BLOCK_M, BLOCK_N, (BLOCK_M, N), num_warps=4)
+        b_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 32], [4, 1], [1, 0])
+        a_offsets = ttgl.convert_layout(a_offsets, a_layout)
+        b_offsets = ttgl.convert_layout(b_offsets, b_layout)
+
+        a = ttgl.load(a_ptr + a_offsets)
+        b = ttgl.load(b_ptr + b_offsets)
+        c = ttgl.load(c_ptr + a_offsets)
+
+        a_tmem_layout: ttgl.constexpr = TensorMemoryLayout((BLOCK_M, BLOCK_N), unpacked=False)
+        acc_tmem_layout: ttgl.constexpr = TensorMemoryLayout((BLOCK_M, BLOCK_N), unpacked=True)
+        al_tmem = allocate_tensor_memory(ttgl.float16, (BLOCK_M, N), layout=a_tmem_layout)
+        ar_tmem = allocate_tensor_memory(ttgl.float16, (BLOCK_M, N), layout=a_tmem_layout)
+        acc_tmem = allocate_tensor_memory(ttgl.float32, (BLOCK_M, N), layout=acc_tmem_layout)
+
+        a0, a1 = a.reshape((BLOCK_M, 2, N // 2)).permute(0, 2, 1).split()
+
+        al = ttgl.join(a0, a1).permute(0, 2, 1).reshape((BLOCK_M, N))
+        ar = ttgl.join(a1, a0).permute(0, 2, 1).reshape((BLOCK_M, N))
+
+        al_tmem.store(ttgl.convert_layout(al, a_layout, assert_trivial=True))
+        ar_tmem.store(ttgl.convert_layout(ar, a_layout, assert_trivial=True))
+
+        b_shared_layout: ttgl.constexpr = ttgl.NVMMASharedLayout(swizzle_byte_width=32, element_bitwidth=16, rank=2)
+        b_shared = ttgl.allocate_shared_memory(ttgl.float16, [N, N], layout=b_shared_layout)
+        b_shared.store(b)
+
+        acc_tmem.store(c)
+
+        bar = ttgl.allocate_shared_memory(ttgl.int64, [1], ttgl.constexpr(mbarrier.MBarrierLayout()))
+        mbarrier.init(bar, count=1)
+
+        # This is a manually tiled MMA where LHS is in TMEM with blockM=64,
+        # where we circumvent the limitation that LHS and accumulator need to
+        # share the same TMEM rows by storing the LHS twice.
+        #
+        # TMEM      al   ar   c
+        # [0, 16)   a0   a1   c0
+        # [16, 32)  a1   a0   c1
+        #
+        # d0 = a0 @ b00 + a1 @ b10 + c0
+        # d1 = a0 @ b10 + a1 @ b11 + c1
+
+        N2: ttgl.constexpr = N // 2
+        c0 = acc_tmem.slice(0, N2)
+        c1 = acc_tmem.slice(N2, N2)
+
+        tcgen05_mma(al_tmem.slice(0, N2), b_shared.slice(0, N2, dim=0).slice(0, N2, dim=1), c0)
+        tcgen05_mma(ar_tmem.slice(0, N2), b_shared.slice(N2, N2, dim=0).slice(0, N2, dim=1), c0)
+        tcgen05_mma(ar_tmem.slice(N2, N2), b_shared.slice(0, N2, dim=0).slice(N2, N2, dim=1), c1)
+        tcgen05_mma(al_tmem.slice(N2, N2), b_shared.slice(N2, N2, dim=0).slice(N2, N2, dim=1), c1)
+
+        tcgen05_commit(bar)
+        mbarrier.wait(bar, 0)
+        mbarrier.invalidate(bar)
+
+        d = acc_tmem.load(a_layout)
+        ttgl.store(d_ptr + a_offsets, d)
+
+    torch.manual_seed(0)
+    a = torch.randn((64, 128), dtype=torch.float16, device="cuda")
+    b = torch.randn((128, 128), dtype=torch.float16, device="cuda")
+    c = torch.randn((64, 128), dtype=torch.float32, device="cuda")
+
+    d_tri = torch.empty_like(c)
+    compiled = kernel[(1, )](a, b, c, d_tri)
+
+    ttgir = compiled.asm["ttgir"]
+    assert ttgir.count("ttng.tmem_alloc") == 3
+    assert ttgir.count("ttng.tmem_alloc : () -> !ttg.memdesc<64x128xf32") == 1
+    assert ttgir.count("ttng.tmem_alloc : () -> !ttg.memdesc<64x128xf16") == 2
+
+    llir = compiled.asm["llir"]
+    assert llir.count("tcgen05.alloc.cta_group::1.sync.aligned.shared::cta.b32 [$1], 128")
+
+    d_ref = a @ b + c
+    torch.testing.assert_close(d_ref, d_tri, rtol=0.08, atol=0)

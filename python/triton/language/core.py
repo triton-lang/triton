@@ -351,6 +351,8 @@ def constexpr_function(f):
         res = f(*args, **kwargs)
 
         # convert result back to a Triton constexpr:
+        if knobs.runtime.interpret:
+            return res  # No constexpr in interpreter
         return constexpr(res)
 
     # disguise the function as a Triton builtin to avoid raising an error

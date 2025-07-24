@@ -1194,7 +1194,7 @@ public:
       auto elTy = opTy.getElementType();
       if (elTy != expectedElTy)
         return false;
-      if (!elTy.isF16() && !elTy.isF32())
+      if (!elTy.isF16() && !elTy.isF32() && !elTy.isF64())
         return false;
     }
     return true;

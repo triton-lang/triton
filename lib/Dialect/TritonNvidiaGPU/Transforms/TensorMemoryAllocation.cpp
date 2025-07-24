@@ -187,6 +187,10 @@ static Operation *getAlloc(Value value) {
       value = reinterpOp.getSrc();
       continue;
     }
+    if (auto slice = value.getDefiningOp<TMEMSubSliceOp>()) {
+      value = slice.getSrc();
+      continue;
+    }
     auto arg = dyn_cast<BlockArgument>(value);
     if (!arg || !isa<triton::gpu::WarpSpecializePartitionsOp>(
                     arg.getOwner()->getParentOp()))

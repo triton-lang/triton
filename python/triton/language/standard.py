@@ -7,18 +7,19 @@ from . import math
 # constexpr utilities
 
 
-def _log2(i: core.constexpr):
+@core.constexpr_function
+def _log2(i):
     log2 = 0
-    n = core.constexpr(i).value
+    n = i
     while n > 1:
         n >>= 1
         log2 += 1
-    return core.constexpr(log2)
+    return log2
 
 
-def _is_power_of_two(i: core.constexpr):
-    n = i.value
-    return core.constexpr((n & (n - 1)) == 0 and n != 0)
+@core.constexpr_function
+def _is_power_of_two(i):
+    return (i & (i - 1)) == 0 and i != 0
 
 
 # -----------------------
@@ -263,8 +264,8 @@ def _sum_combine(a, b):
 # sum
 
 
-def _pick_sum_dtype(in_dtype: core.constexpr, dtype: core.constexpr):
-    dtype = core._unwrap_if_constexpr(dtype)
+@core.constexpr_function
+def _pick_sum_dtype(in_dtype, dtype):
     if dtype is not None:
         return dtype
 
@@ -476,14 +477,13 @@ def bitonic_merge(x, dim: core.constexpr = None, descending: core.constexpr = co
     return _bitonic_merge(x, n_dims, descending, n_dims)
 
 
+@core.constexpr_function
 def _get_flip_dim(dim, shape):
-    dim = core._unwrap_if_constexpr(dim)
-    shape = core._unwrap_if_constexpr(shape)
     if dim is None:
         dim = len(shape) - 1
     if dim < 0:  # flip doesn't work if dim < 0 because the xor-swap for loop will start/end at the wrong index
         dim += len(shape)
-    return core.constexpr(dim)
+    return dim
 
 
 @core._tensor_member_fn
