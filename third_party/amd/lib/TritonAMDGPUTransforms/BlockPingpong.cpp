@@ -668,13 +668,16 @@ LogicalResult Pingponger::transformTwoClusterWithAsyncAndAll(OpBuilder &builder,
   return success();
 }
 
-// TODO: add doc
+// For ChainedDots with num_stage==4 the pipeliner already places ops in the
+// correct order to allow for efficient pingpong. The loop contains 2 pairs of
+// compute and memory clusters so we only have to place barriers/sched.barriers
+// at the bounaries and give higher priority to memory clusters
+// See StreamPipeliner.cpp:ChainedDotSchedule for details about the schedule
 LogicalResult Pingponger::transformChainedDotSchedule(OpBuilder &builder,
                                                       Location loc) {
   assert(dotOps.size() == 2);
 
-  // Memory clusters start with ttg.async_wait or ttg.local_store so we have to
-  // look for the first one after each dot
+  // Memory clusters start with either ttg.async_wait or ttg.local_store
   auto findNextMemoryCluster = [](Operation *op) {
     while (op && !llvm::isa<ttg::AsyncWaitOp, ttg::LocalStoreOp>(op)) {
       op = op->getNextNode();
@@ -693,42 +696,38 @@ LogicalResult Pingponger::transformChainedDotSchedule(OpBuilder &builder,
   }
 
   builder.setInsertionPointToStart(forOp.getBody());
+  // ComputeCluster 1
   updateOpInsertion(dotOps[0]);
   prependOp(builder.create<ROCDL::SetPrioOp>(loc, lowPriority), false);
 
-  // dot cluster 0 operations here.
-
+  // MemoryCluster 1
   updateOpInsertion(memoryClusterStartOps[0]);
+  prependOp(builder.create<ROCDL::SetPrioOp>(loc, highPriority), false);
   if (llvm::isa<ttg::AsyncWaitOp>(memoryClusterStartOps[0])) {
-    prependOp(builder.create<ROCDL::SetPrioOp>(loc, highPriority), false);
+    // Only append a sched barrier because membar adds a barrier after asyncwait
     appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
   } else {
-    prependOp(builder.create<ROCDL::SetPrioOp>(loc, highPriority), false);
     prependOp(builder.create<gpu::BarrierOp>(loc), false);
     prependOp(builder.create<ROCDL::SchedBarrier>(loc, 0), false);
   }
 
-  // mem cluster 0 operations here.
-
+  // ComputeCluster2
   updateOpInsertion(dotOps[1]);
   // below ops are inserted backward
   prependOp(builder.create<ROCDL::SetPrioOp>(loc, lowPriority), true);
   prependOp(builder.create<ROCDL::SBarrierOp>(loc), true);
   prependOp(builder.create<ROCDL::SchedBarrier>(loc, 0), true);
 
-  // dot cluster 1 operations here.
-
+  // MemoryCluster2
   updateOpInsertion(memoryClusterStartOps[1]);
+  prependOp(builder.create<ROCDL::SetPrioOp>(loc, highPriority), false);
   if (llvm::isa<ttg::AsyncWaitOp>(memoryClusterStartOps[1])) {
-    prependOp(builder.create<ROCDL::SetPrioOp>(loc, highPriority), false);
+    // Only append a sched barrier because membar adds a barrier after asyncwait
     appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
   } else {
-    prependOp(builder.create<ROCDL::SetPrioOp>(loc, highPriority), false);
     prependOp(builder.create<gpu::BarrierOp>(loc), false);
     prependOp(builder.create<ROCDL::SchedBarrier>(loc, 0), false);
   }
-
-  // mem cluster 1 operations here.
 
   updateOpInsertion(lastInsertedOp->getBlock()->getTerminator());
   prependOp(builder.create<ROCDL::SBarrierOp>(loc), true);
