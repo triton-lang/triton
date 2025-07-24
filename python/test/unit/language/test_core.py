@@ -2052,11 +2052,8 @@ def test_cast(dtype_x, dtype_z, bitcast, size, num_ctas, device):
         x_tri = torch.randn(size, dtype=torch.half, device=device).to(dtype=getattr(torch, dtype_x))
     else:
         x = numpy_random(size, dtype_str=dtype_x, low=-10, high=10) * 10
-        # Triton clamps negative values to zero, while numpy wraps around
-        # intmax, so avoid negatives for now.
-        # TODO: figure out which one should actually be happening, and test it
         if dtype_z in uint_dtypes:
-            x = np.absolute(x)
+            x = np.where(x >= 0, x, 0)
         x_tri = to_triton(x, device=device)
     if 'float' in dtype_z and 'float' in dtype_x:
         # make sure we use values that can be represented in both types
