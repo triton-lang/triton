@@ -814,6 +814,7 @@ void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
         triton::createSingleBufferView(builder, barrierAlloc, barrierIdx);
   }
   mma.addCompletionBarrier(barrierSlice, vTrue);
+  mma.setIsAsync(true);
 
   // List of buffers that may be used until wait completes
   SmallVector<Value> waitBuffers;
@@ -894,11 +895,14 @@ void multibufferTensorMemory(scf::ForOp forOp, CoarseSchedule &schedule,
       llvm::to_vector(alloc.getResult().getUsers());
   Value replTok = OpBuilder(forOp).create<ub::PoisonOp>(
       forOp.getLoc(), builder.getType<AsyncTokenType>());
+  if (newAlloc.getToken()) {
+    newAlloc.getToken().replaceAllUsesWith(replTok);
+  }
   for (auto user : allocUsers) {
     if (auto store = dyn_cast<ttng::TMEMStoreOp>(user)) {
+      store.getDepMutable().clear();
+      store.getToken().replaceAllUsesWith(replTok);
       if (forOp->isAncestor(store)) {
-        store.getDepMutable().clear();
-        store.getToken().replaceAllUsesWith(replTok);
         // We can multibuffer, since the store is a point where we can
         // change the buffer index
         multibufferingIsValid = true;
@@ -926,9 +930,9 @@ void multibufferTensorMemory(scf::ForOp forOp, CoarseSchedule &schedule,
         store.getDstMutable().assign(tmemSlice);
       }
     } else if (auto load = dyn_cast<ttng::TMEMLoadOp>(user)) {
+      load.getDepMutable().clear();
+      load.getToken().replaceAllUsesWith(replTok);
       if (forOp->isAncestor(load)) {
-        load.getDepMutable().clear();
-        load.getToken().replaceAllUsesWith(replTok);
         builder.setStageCluster(schedule[load]);
         builder.setInsertionPoint(load);
         Value curBufIdx = getCurrBufIdx(load);

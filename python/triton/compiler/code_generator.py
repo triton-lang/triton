@@ -294,11 +294,12 @@ class BoundJITMethod:
 
 class CodeGenerator(ast.NodeVisitor):
 
-    def __init__(self, context, prototype, gscope, function_name, jit_fn: JITFunction, options, codegen_fns, module_map,
-                 module=None, is_kernel=False, function_types: Optional[Dict] = None, noinline=False,
-                 caller_context=None, file_name: Optional[str] = None, begin_line=0):
+    def __init__(self, context, prototype, gscope, function_name, jit_fn: JITFunction, *, options, codegen_fns,
+                 module_map, is_gluon, module=None, is_kernel=False, function_types: Optional[Dict] = None,
+                 noinline=False, caller_context=None, file_name: Optional[str] = None, begin_line=0):
         self.context = context
-        if jit_fn.is_gluon():
+        self.is_gluon = is_gluon
+        if is_gluon:
             from triton.experimental.gluon.language._semantic import GluonSemantic
             self.builder = gluon_ir.GluonOpBuilder(context)
             self.semantic = GluonSemantic(self.builder)
@@ -1253,7 +1254,8 @@ class CodeGenerator(ast.NodeVisitor):
                                       function_name=fn_name, function_types=self.function_ret_types,
                                       noinline=fn.noinline, file_name=file_name, begin_line=begin_line,
                                       options=self.builder.options, codegen_fns=self.builder.codegen_fns,
-                                      module_map=self.builder.module_map, caller_context=caller_context)
+                                      module_map=self.builder.module_map, caller_context=caller_context,
+                                      is_gluon=self.is_gluon)
             try:
                 generator.visit(fn.parse())
             except Exception as e:
@@ -1527,7 +1529,7 @@ def ast_to_ttir(fn, src, context, options, codegen_fns, module_map, module=None)
     proxy = namedtuple("SpecializationProxy", ["constants", "signature"])(constants, signature)
     generator = CodeGenerator(context, prototype, gscope=fn.get_capture_scope(), function_name=fn.repr(proxy),
                               jit_fn=fn, is_kernel=True, file_name=file_name, begin_line=begin_line, options=options,
-                              codegen_fns=codegen_fns, module_map=module_map, module=module)
+                              codegen_fns=codegen_fns, module_map=module_map, module=module, is_gluon=fn.is_gluon())
     generator.visit(fn.parse())
     ret = generator.module
     # module takes ownership of the context

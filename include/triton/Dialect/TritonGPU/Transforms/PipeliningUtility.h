@@ -68,6 +68,15 @@ bool isOuterLoop(scf::ForOp forOp);
 /// Function to mask operations during scheduling.
 Operation *predicateOp(RewriterBase &rewriter, Operation *op, Value pred);
 
+/// Wrap the operation into a MaskOp using the provided predicate, enabling high
+/// level predication abstraction during pipelining.
+Operation *wrapInMaskOp(RewriterBase &rewriter, Operation *op, Value pred);
+
+// Utilize high level predication abstraction to perform optimizations before
+// lowering to predicated operations
+void resolveMaskOp(ModuleOp moduleOp,
+                   DenseSet<triton::gpu::MaskOp> &peeledMaskOps);
+
 // Return true if the given ForOp has the attribute
 // `tt.disallow_acc_multi_buffer` set to true.
 bool getDisallowAccMultiBuffer(scf::ForOp forOp);
