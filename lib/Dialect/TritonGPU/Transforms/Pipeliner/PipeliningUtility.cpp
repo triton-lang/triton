@@ -344,6 +344,39 @@ void mlir::triton::resolveMaskOp(ModuleOp moduleOp,
   }
 }
 
+mlir::triton::ProcessPeeledEpilogueOpFn
+mlir::triton::createProcessPeeledEpilogueFn(
+    DenseSet<ttg::MaskOp> &peeledMaskOps) {
+  return [&](RewriterBase &rewriter, Operation *op,
+             bool isEpilogue) -> Operation * {
+    if (auto predOp = dyn_cast<triton::gpu::PredicateStageOp>(op)) {
+      if (isEpilogue) {
+        // Return false for the predicate of the peeled iteration
+        return rewriter.create<mlir::arith::ConstantIntOp>(
+            predOp.getLoc(), 0, predOp.getResult().getType());
+      } else {
+        if (predOp.getStage() == predOp.getMaxStage() - 1) {
+          return rewriter.create<mlir::arith::ConstantIntOp>(
+              predOp.getLoc(), 1, predOp.getResult().getType());
+        } else {
+          OpBuilder::InsertionGuard guard(rewriter);
+          rewriter.setInsertionPoint(op);
+          return triton::emitPredicateForStage(
+                     rewriter, predOp.getIv(), predOp.getUb(), predOp.getStep(),
+                     predOp.getMaxStage(), predOp.getStage())
+              .getDefiningOp();
+        }
+      }
+    }
+    if (auto maskOp = dyn_cast<triton::gpu::MaskOp>(op)) {
+      if (isEpilogue) {
+        peeledMaskOps.insert(maskOp);
+      }
+    }
+    return op;
+  };
+}
+
 // Return true if the given ForOp has the attribute
 // `tt.disallow_acc_multi_buffer` set to true.
 bool mlir::triton::getDisallowAccMultiBuffer(scf::ForOp forOp) {
