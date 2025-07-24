@@ -480,13 +480,13 @@ lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout cvt,
                 Type llvmElemTy, Value smemBase,
                 std::function<Value(Value)> calcPaddedOffset,
                 Value affineOffset, uint64_t maskSpanAffineOffset,
-                ConversionPatternRewriter &rewriter,
-                const TargetInfoBase &targetInfo, Operation *localLoadOp) {
+                RewriterBase &rewriter, const TargetInfoBase &targetInfo,
+                Operation *localLoadOp) {
 
   bool isStore = !valsArray.empty();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
-  auto emitLdSt = [&](ConversionPatternRewriter &rewriter, Location loc,
+  auto emitLdSt = [&](RewriterBase &rewriter, Location loc,
                       ArrayRef<Value> vals, Value shmemAddr, int idx,
                       VectorType vecTy) -> SmallVector<Value> {
     auto length = vecTy.getNumElements();
@@ -514,10 +514,10 @@ SmallVector<Value> lowerLdSt(
     ArrayRef<Value> valsArray, // Input for store, output for load
     Type llvmElemTy, Value smemBase,
     std::function<Value(Value)> calcPaddedOffset, Value affineOffset,
-    uint64_t maskSpanAffineOffset, ConversionPatternRewriter &rewriter,
+    uint64_t maskSpanAffineOffset, RewriterBase &rewriter,
     const TargetInfoBase &targetInfo, std::optional<int> maybeMaxVecElems,
-    std::function<SmallVector<Value>(ConversionPatternRewriter &, Location,
-                                     ArrayRef<Value>, Value, int, VectorType)>
+    std::function<SmallVector<Value>(RewriterBase &, Location, ArrayRef<Value>,
+                                     Value, int, VectorType)>
         lowerInst) {
   auto vals = to_vector(valsArray);
   bool isStore = !vals.empty();
@@ -600,7 +600,7 @@ lowerLocalLdSt(Location loc, MLIRContext *ctx,
                LinearLayout cvt,          // Map from registers to offset
                ArrayRef<Value> valsArray, // Input for store, empty for load
                Type llvmElemTy, triton::gpu::MemDescType srcTy,
-               SharedMemoryObject smemObj, ConversionPatternRewriter &rewriter,
+               SharedMemoryObject smemObj, RewriterBase &rewriter,
                const TargetInfoBase &targetInfo, Operation *localLoadOp) {
   assert(cvt.getNumOutDims() == 1);
   assert(*cvt.getOutDimNames().begin() == str_attr("offset"));
@@ -1797,10 +1797,9 @@ Value transferWithinBlockPadding(triton::gpu::ConvertLayoutOp op, Value src,
   return result;
 }
 SmallVector<Value> transferWithinBlockSwizzlingImpl(
-    Location loc, ConversionPatternRewriter &rewriter,
-    const LinearLayout &srcLayout, const LinearLayout &dstLayout,
-    const TargetInfoBase &targetInfo, ArrayRef<Value> inVals, Type llvmElemTy,
-    Value smemBase) {
+    Location loc, RewriterBase &rewriter, const LinearLayout &srcLayout,
+    const LinearLayout &dstLayout, const TargetInfoBase &targetInfo,
+    ArrayRef<Value> inVals, Type llvmElemTy, Value smemBase) {
   auto *ctx = rewriter.getContext();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   // We handle transformations recursively as they all need a preprocessing
@@ -1920,7 +1919,7 @@ LogicalResult
 transferWithinBlockSwizzling(triton::gpu::ConvertLayoutOp op, Value src,
                              const TargetInfoBase &targetInfo,
                              const LLVMTypeConverter *typeConverter,
-                             ConversionPatternRewriter &rewriter) {
+                             RewriterBase &rewriter) {
   // Fallback for now to standard lowering if it can use stmatrix
   auto scratchConfig =
       getScratchConfigForCvt(op.getSrc().getType(), op.getType());
