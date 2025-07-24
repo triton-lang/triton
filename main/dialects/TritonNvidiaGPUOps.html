@@ -782,8 +782,8 @@ operation on <code class="docutils literal notranslate"><span class="pre">%barri
 </pre></div>
 </div>
 <p>$d += matrix_multiply($a, $b).
-If no barrier is given the op is assumed to be synchronous otherwise the op will trigger a commit/arrive on the given barrier.
-If there is a barrier the result will be safe to read after a barrier wait.
+if is_async is false, the op executes synchronously. The barrier operands must not be present in that case.
+Otherwise, if a barrier is given, the op will trigger a commit/arrive on it. The result will be safe to read after a barrier wait.
 If $two_ctas is set the op will execute a matmul across two contiguous CTAs, it will read the data distributed across the two CTAs.
 and syncronize both CTAs if the op is synchronous.</p>
 <p>This operation takes and produces an optional token to indicate TMEM read
@@ -795,6 +795,7 @@ be used to check aliasing and modref on the accumulator memory.</p>
 <h3>Attributes:<a class="headerlink" href="#id20" title="Link to this heading">¶</a></h3>
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>is_async</code></td><td>::mlir::UnitAttr</td><td>unit attribute</td></tr>
 <tr><td><code>two_ctas</code></td><td>::mlir::UnitAttr</td><td>unit attribute</td></tr>
 </table>
 </section>
@@ -863,8 +864,9 @@ be used to check aliasing and modref on the accumulator memory.</p>
 </pre></div>
 </div>
 <p>$d += matrix_multiply(scale($lhs, $lhs_scale), scale(rlhs, $rhs_scale))
-If no barrier is given the op is assumed to be synchronous otherwise the op will trigger a commit/arrive on the given barrier.
-If there is a barrier the result will be safe to read after a barrier wait.</p>
+if is_async is false, the op executes synchronously. The barrier operands must not be present in that case.
+Otherwise, if a barrier is given, the op will trigger a commit/arrive on it.
+The result will be safe to read after a barrier wait.</p>
 <p>This operation takes and produces an optional token to indicate TMEM read
 and write on its accumulator operand. When the tokens are present, they can
 be used to check aliasing and modref on the accumulator memory.</p>
@@ -876,6 +878,7 @@ be used to check aliasing and modref on the accumulator memory.</p>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
 <tr><td><code>a_type</code></td><td>::mlir::triton::ScaleDotElemTypeAttr</td><td>allowed 32-bit signless integer cases: 0, 1, 2, 3, 4, 5, 6</td></tr>
 <tr><td><code>b_type</code></td><td>::mlir::triton::ScaleDotElemTypeAttr</td><td>allowed 32-bit signless integer cases: 0, 1, 2, 3, 4, 5, 6</td></tr>
+<tr><td><code>is_async</code></td><td>::mlir::UnitAttr</td><td>unit attribute</td></tr>
 </table>
 </section>
 <section id="id24">
