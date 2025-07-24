@@ -1179,10 +1179,11 @@ public:
     ttg::CTALayoutAttr ctaLayout = ttg::getCTALayout(oldRetType.getEncoding());
     int numThreads = ttg::TritonGPUDialect::getThreadsPerWarp(moduleOp);
 
-    // Choose a suitable MFMA instruction for this scaled dot op.
+    // Choose a suitable WMMA instruction for this scaled dot op.
     bool useFp16 = aElemType == ScaleDotElemType::FP16 ||
                    bElemType == ScaleDotElemType::FP16;
 
+    // TODO: Use getOperandTypesForWmmaOp and cast operands to propper types.
     FailureOr<WmmaIntrinsic> wmmaInstr =
         chooseWmmaInstruction(dotOp, wmmaVersion, nonKDim, useFp16);
     if (failed(wmmaInstr))
@@ -1220,6 +1221,10 @@ public:
     // setting the M/N dimension as numWarps.
     SmallVector<unsigned, 2> wmmaWarpsPerCTA(rank, 1);
     wmmaWarpsPerCTA[aScale ? 0 : 1] = numWarps;
+
+    if (wmmaVersion == 1)
+      return rewriter.notifyMatchFailure(
+          dotOp, "Transposed WMMA layout is not supported for gfx11");
 
     // Always use transposed wmma layout. This enables larger vectorization
     // for global store instructions.
@@ -1260,7 +1265,7 @@ public:
     // We need to have "matching" encoding between the main tensor and scale
     // tensor to make sure the scale values needed is in the same warp. So we
     // adopt the same CTA layout and warps per CTA. The warp dimensions needs to
-    // match along M/N dimension too. With in a warp, we have 64 threads. We let
+    // match along M/N dimension too. With in a warp, we have 32 threads. We let
     // each thread read in one scale value. So we need a threadsPerWarp =
     // mDim/nDim along M/N dimension. Note that For MFMA intrinsics, mDim is
     // always the same as nDim. And for scaled dot scale tensor, we always have
