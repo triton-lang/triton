@@ -682,10 +682,11 @@ LogicalResult Pingponger::transformChainedDotSchedule(OpBuilder &builder,
     return op;
   };
 
-  auto memCluster0StartOp = findNextMemoryCluster(dotOps[0]);
-  auto memCluster1StartOp = findNextMemoryCluster(dotOps[1]);
+  std::array memoryClusterStartOps = {findNextMemoryCluster(dotOps[0]),
+                                      findNextMemoryCluster(dotOps[1])};
 
-  if (!memCluster0StartOp || !memCluster1StartOp) {
+  if (llvm::is_contained(memoryClusterStartOps, nullptr) ||
+      memoryClusterStartOps[0] == memoryClusterStartOps[1]) {
     LDBG("ChainedDot pingpong requires memory operations in both memory "
          "clusters");
     return failure();
@@ -697,9 +698,15 @@ LogicalResult Pingponger::transformChainedDotSchedule(OpBuilder &builder,
 
   // dot cluster 0 operations here.
 
-  updateOpInsertion(memCluster0StartOp);
-  prependOp(builder.create<ROCDL::SetPrioOp>(loc, highPriority), false);
-  appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
+  updateOpInsertion(memoryClusterStartOps[0]);
+  if (llvm::isa<ttg::AsyncWaitOp>(memoryClusterStartOps[0])) {
+    prependOp(builder.create<ROCDL::SetPrioOp>(loc, highPriority), false);
+    appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
+  } else {
+    prependOp(builder.create<ROCDL::SetPrioOp>(loc, highPriority), false);
+    prependOp(builder.create<gpu::BarrierOp>(loc), false);
+    prependOp(builder.create<ROCDL::SchedBarrier>(loc, 0), false);
+  }
 
   // mem cluster 0 operations here.
 
@@ -711,9 +718,15 @@ LogicalResult Pingponger::transformChainedDotSchedule(OpBuilder &builder,
 
   // dot cluster 1 operations here.
 
-  updateOpInsertion(memCluster1StartOp);
-  prependOp(builder.create<ROCDL::SetPrioOp>(loc, highPriority), false);
-  appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
+  updateOpInsertion(memoryClusterStartOps[1]);
+  if (llvm::isa<ttg::AsyncWaitOp>(memoryClusterStartOps[1])) {
+    prependOp(builder.create<ROCDL::SetPrioOp>(loc, highPriority), false);
+    appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
+  } else {
+    prependOp(builder.create<ROCDL::SetPrioOp>(loc, highPriority), false);
+    prependOp(builder.create<gpu::BarrierOp>(loc), false);
+    prependOp(builder.create<ROCDL::SchedBarrier>(loc, 0), false);
+  }
 
   // mem cluster 1 operations here.
 
