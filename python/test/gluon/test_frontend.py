@@ -15,12 +15,18 @@ from triton._filecheck import filecheck_test, run_parser
 import triton.language as tl
 from triton._internal_testing import is_cuda, is_ampere_or_newer, is_blackwell, is_hopper, is_hopper_or_newer
 from triton.compiler.errors import CompilationError, CompileTimeAssertionFailure
+from triton._internal_testing import is_hip_cdna3plus
 
-TARGET_PAT = re.compile('ttg.target = "[^"]*"')
+WARP_SIZE = 64 if is_hip_cdna3plus() else 32
+
+TARGET_PAT = (re.compile('ttg.target = "[^"]*"'), 'ttg.target = "..."')
+WARP_SIZE_PAT = (re.compile('"ttg.threads-per-warp" = \\d{2,2}'), '"ttg.threads-per-warp" = ...')
 
 
 def anonymize_ir(ir):
-    return TARGET_PAT.sub('ttg.target = "..."', ir)
+    for pattern, repl in (TARGET_PAT, WARP_SIZE_PAT):
+        ir = pattern.sub(repl, ir)
+    return ir
 
 
 @gluon.jit
@@ -29,30 +35,32 @@ def convert_layout_kernel(XBLOCK: ttgl.constexpr, layout_a: ttgl.constexpr, layo
     res = ttgl.convert_layout(x, layout_b)  # noqa: F841
 
 
-@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
+@pytest.mark.skipif(not is_cuda() and not is_hip_cdna3plus(), reason="Requires CUDA or CDNA")
 def test_convert_layout(fresh_knobs):
     knobs.compilation.disable_line_info = True
 
-    layout_a = ttgl.BlockedLayout(size_per_thread=[1], threads_per_warp=[32], warps_per_cta=[4], order=[0])
+    layout_a = ttgl.BlockedLayout(size_per_thread=[1], threads_per_warp=[WARP_SIZE], warps_per_cta=[4], order=[0])
     layout_b = ttgl.SliceLayout(
-        1, ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[1, 32], warps_per_cta=[1, 4], order=[1, 0]))
+        1,
+        ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[1, WARP_SIZE], warps_per_cta=[1, 4], order=[1, 0]))
     h = convert_layout_kernel.warmup(128, layout_a, layout_b, num_warps=layout_a.warps_per_cta[0], grid=(1, ))
     expecttest.assert_expected_inline(
-        anonymize_ir(h.asm["source"]), """\
-#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
-#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
-  tt.func public @convert_layout_kernel() attributes {noinline = false} {
-    %0 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #blocked> loc(#loc)
-    %1 = ttg.convert_layout %0 : tensor<128xi32, #blocked> -> tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked1}>> loc(#loc)
+        anonymize_ir(h.asm["source"]), f"""\
+#blocked = #ttg.blocked<{{sizePerThread = [1], threadsPerWarp = [{WARP_SIZE}], warpsPerCTA = [4], order = [0]}}>
+#blocked1 = #ttg.blocked<{{sizePerThread = [1, 1], threadsPerWarp = [1, {WARP_SIZE}], warpsPerCTA = [1, 4], order = [1, 0]}}>
+module attributes {{"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = ... : i32}} {{
+  tt.func public @convert_layout_kernel() attributes {{noinline = false}} {{
+    %0 = tt.make_range {{end = 128 : i32, start = 0 : i32}} : tensor<128xi32, #blocked> loc(#loc)
+    %1 = ttg.convert_layout %0 : tensor<128xi32, #blocked> -> tensor<128xi32, #ttg.slice<{{dim = 1, parent = #blocked1}}>> loc(#loc)
     tt.return loc(#loc)
-  } loc(#loc)
-} loc(#loc)
+  }} loc(#loc)
+}} loc(#loc)
 #loc = loc(unknown)
 """)
+
     expecttest.assert_expected_inline(
         anonymize_ir(h.asm["ttgir"]), """\
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = ... : i32} {
   tt.func public @convert_layout_kernel() attributes {noinline = false} {
     tt.return loc(#loc)
   } loc(#loc)
@@ -82,8 +90,8 @@ def test_convert_layout_not_trivial():
         ttgl.convert_layout(value, dst_layout, assert_trivial=True)
 
     with pytest.raises(CompilationError) as e:
-        src_layout = ttgl.BlockedLayout([2], [32], [4], [0])
-        dst_layout = ttgl.BlockedLayout([1], [32], [4], [0])
+        src_layout = ttgl.BlockedLayout([2], [WARP_SIZE], [4], [0])
+        dst_layout = ttgl.BlockedLayout([1], [WARP_SIZE], [4], [0])
         kernel.warmup(src_layout, dst_layout, grid=(1, ))
 
     assert "layout conversion from BlockedLayout(size_per_thread=[2]" in str(e.value.__cause__)
@@ -91,7 +99,7 @@ def test_convert_layout_not_trivial():
     assert "is not trivial" in str(e.value.__cause__)
 
     with pytest.raises(CompilationError) as e:
-        src_layout = ttgl.BlockedLayout([2], [32], [4], [0])
+        src_layout = ttgl.BlockedLayout([2], [WARP_SIZE], [4], [0])
         dst_layout = ttgl.AutoLayout()
         kernel.warmup(src_layout, dst_layout, grid=(1, ))
 
@@ -213,21 +221,22 @@ def shared_memory_subview_kernel(XBLOCK: ttgl.constexpr, layout: ttgl.constexpr,
     view.store(value.trans())
 
 
-@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
+@pytest.mark.skipif(not is_cuda() and not is_hip_cdna3plus(), reason="Requires CUDA or CDNA")
 def test_shared_memory_subview(fresh_knobs):
     knobs.compilation.disable_line_info = True
 
-    layout = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[1, 32], warps_per_cta=[4, 1], order=[1, 0])
+    layout = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[1, WARP_SIZE], warps_per_cta=[4, 1],
+                                order=[1, 0])
     smem_layout = ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0])
     h = shared_memory_subview_kernel.warmup(256, layout, smem_layout, num_warps=4, grid=(1, ))
     expecttest.assert_expected_inline(
-        anonymize_ir(h.asm["source"]), """\
-#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
-#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [0, 1]}>
-#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+        anonymize_ir(h.asm["source"]), f"""\
+#blocked = #ttg.blocked<{{sizePerThread = [1, 1], threadsPerWarp = [1, {WARP_SIZE}], warpsPerCTA = [4, 1], order = [1, 0]}}>
+#blocked1 = #ttg.blocked<{{sizePerThread = [1, 1], threadsPerWarp = [{WARP_SIZE}, 1], warpsPerCTA = [1, 4], order = [0, 1]}}>
+#shared = #ttg.swizzled_shared<{{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}}>
 #smem = #ttg.shared_memory
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
-  tt.func public @shared_memory_subview_kernel() attributes {noinline = false} {
+module attributes {{"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = ... : i32}} {{
+  tt.func public @shared_memory_subview_kernel() attributes {{noinline = false}} {{
     %0 = ttg.local_alloc : () -> !ttg.memdesc<256x256xi32, #shared, #smem, mutable> loc(#loc)
     %c0_i32 = arith.constant 0 : i32 loc(#loc)
     %c128_i32 = arith.constant 128 : i32 loc(#loc)
@@ -236,11 +245,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %c0_i32_0 = arith.constant 0 : i32 loc(#loc)
     %c128_i32_1 = arith.constant 128 : i32 loc(#loc)
     %3 = ttg.memdesc_subview %0[%c128_i32_1, %c0_i32_0] : !ttg.memdesc<256x256xi32, #shared, #smem, mutable> -> !ttg.memdesc<128x256xi32, #shared, #smem, mutable, 256x256> loc(#loc)
-    %4 = tt.trans %2 {order = array<i32: 1, 0>} : tensor<256x128xi32, #blocked> -> tensor<128x256xi32, #blocked1> loc(#loc)
+    %4 = tt.trans %2 {{order = array<i32: 1, 0>}} : tensor<256x128xi32, #blocked> -> tensor<128x256xi32, #blocked1> loc(#loc)
     ttg.local_store %4, %3 : tensor<128x256xi32, #blocked1> -> !ttg.memdesc<128x256xi32, #shared, #smem, mutable, 256x256> loc(#loc)
     tt.return loc(#loc)
-  } loc(#loc)
-} loc(#loc)
+  }} loc(#loc)
+}} loc(#loc)
 #loc = loc(unknown)
 """)
 
@@ -252,20 +261,20 @@ def shared_memory_index_kernel(XBLOCK: ttgl.constexpr, layout: ttgl.constexpr, s
         smem.index(ivar).load(layout)
 
 
-@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
+@pytest.mark.skipif(not is_cuda() and not is_hip_cdna3plus(), reason="Requires CUDA or CDNA")
 def test_shared_memory_index(fresh_knobs):
     knobs.compilation.disable_line_info = True
 
-    layout = ttgl.BlockedLayout(size_per_thread=[1], threads_per_warp=[32], warps_per_cta=[4], order=[0])
+    layout = ttgl.BlockedLayout(size_per_thread=[1], threads_per_warp=[WARP_SIZE], warps_per_cta=[4], order=[0])
     smem_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=32, rank=2)
     h = shared_memory_index_kernel.warmup(256, layout, smem_layout, num_warps=4, grid=(1, ))
     expecttest.assert_expected_inline(
-        anonymize_ir(h.asm["source"]), """\
-#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
-#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
+        anonymize_ir(h.asm["source"]), f"""\
+#blocked = #ttg.blocked<{{sizePerThread = [1], threadsPerWarp = [{WARP_SIZE}], warpsPerCTA = [4], order = [0]}}>
+#shared = #ttg.nvmma_shared<{{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}}>
 #smem = #ttg.shared_memory
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
-  tt.func public @shared_memory_index_kernel() attributes {noinline = false} {
+module attributes {{"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = ... : i32}} {{
+  tt.func public @shared_memory_index_kernel() attributes {{noinline = false}} {{
     %0 = ttg.local_alloc : () -> !ttg.memdesc<4x256xi32, #shared, #smem, mutable> loc(#loc)
     %c0_i32 = arith.constant 0 : i32 loc(#loc)
     %c4_i32 = arith.constant 4 : i32 loc(#loc)
@@ -274,14 +283,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %2 = arith.bitcast %c4_i32 : i32 to i32 loc(#loc)
     %3 = arith.bitcast %c1_i32 : i32 to i32 loc(#loc)
     %4 = ub.poison : i32 loc(#loc)
-    scf.for %ivar = %1 to %2 step %3  : i32 {
+    scf.for %ivar = %1 to %2 step %3  : i32 {{
       %c0_i32_0 = arith.constant 0 : i32 loc(#loc)
       %5 = ttg.memdesc_subview %0[%ivar, %c0_i32_0] : !ttg.memdesc<4x256xi32, #shared, #smem, mutable> -> !ttg.memdesc<256xi32, #shared, #smem, mutable, 4x256> loc(#loc)
       %6 = ttg.local_load %5 : !ttg.memdesc<256xi32, #shared, #smem, mutable, 4x256> -> tensor<256xi32, #blocked> loc(#loc)
-    } loc(#loc)
+    }} loc(#loc)
     tt.return loc(#loc)
-  } loc(#loc)
-} loc(#loc)
+  }} loc(#loc)
+}} loc(#loc)
 #loc = loc(unknown)
 """)
 
@@ -780,7 +789,7 @@ def test_tmem_index_constexpr():
     expecttest.assert_expected_inline(
         anonymize_ir(run_parser(tmem_index_kernel).str_nodebug()), """\
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, unpacked = true>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = ... : i32} {
   tt.func public @tmem_index_kernel() attributes {noinline = false} {
     %result = ttng.tmem_alloc : () -> !ttg.memdesc<2x256x256xi32, #tmem, #ttng.tensor_memory, mutable>
     %c0_i32 = arith.constant 0 : i32
@@ -809,7 +818,7 @@ def test_layout_mangling():
         anonymize_ir(run_parser(kernel).str_nodebug()), """\
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #smem = #ttg.shared_memory
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = ... : i32} {
   tt.func public @kernel() attributes {noinline = false} {
     %0 = ttg.local_alloc : () -> !ttg.memdesc<32x32xi32, #shared, #smem, mutable>
     tt.call @"test_frontend.smem_and_layout_user__MDi32S32_32SLSSS_1_1_1_1_0_1_1_1_1_1_0_SSSLAS[32, 32]ASMD__(1,)cconstexpr_SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=(1 ,0), ctas_per_cga=_1, 1_, cta_split_num=_1, 1_, cta_order=_1, 0_)_"(%0) : (!ttg.memdesc<32x32xi32, #shared, #smem, mutable>) -> ()
@@ -823,27 +832,30 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 
 @gluon.jit
-def broadcast_kernel():
-    layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [2, 16], [4, 1], [1, 0])
+def broadcast_kernel(m_dim: tl.constexpr, n_dim: tl.constexpr, warp_size: tl.constexpr):
+    ttgl.static_assert(m_dim * n_dim == warp_size)
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [m_dim, n_dim], [4, 1], [1, 0])
     a = ttgl.arange(0, 16, layout=ttgl.SliceLayout(0, layout))[None, :]
     b = ttgl.arange(0, 16, layout=ttgl.SliceLayout(1, layout))[:, None]
     0 + a + b
 
 
-@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
+@pytest.mark.skipif(not is_cuda() and not is_hip_cdna3plus(), reason="Requires CUDA")
 def test_broadcast(fresh_knobs):
     knobs.compilation.disable_line_info = True
 
-    h = broadcast_kernel.warmup(sanitize_overflow=False, grid=(1, ))
+    HALF_WARP_SIZE = WARP_SIZE // 2
+    h = broadcast_kernel.warmup(m_dim=2, n_dim=HALF_WARP_SIZE, warp_size=WARP_SIZE, sanitize_overflow=False, grid=(1, ))
+
     expecttest.assert_expected_inline(
-        anonymize_ir(h.asm["source"]), """\
-#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
-  tt.func public @broadcast_kernel() attributes {noinline = false} {
-    %0 = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32, #ttg.slice<{dim = 0, parent = #blocked}>> loc(#loc)
-    %1 = tt.expand_dims %0 {axis = 0 : i32} : tensor<16xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x16xi32, #blocked> loc(#loc)
-    %2 = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32, #ttg.slice<{dim = 1, parent = #blocked}>> loc(#loc)
-    %3 = tt.expand_dims %2 {axis = 1 : i32} : tensor<16xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<16x1xi32, #blocked> loc(#loc)
+        anonymize_ir(h.asm["source"]), f"""\
+#blocked = #ttg.blocked<{{sizePerThread = [1, 1], threadsPerWarp = [2, {HALF_WARP_SIZE}], warpsPerCTA = [4, 1], order = [1, 0]}}>
+module attributes {{"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = ... : i32}} {{
+  tt.func public @broadcast_kernel() attributes {{noinline = false}} {{
+    %0 = tt.make_range {{end = 16 : i32, start = 0 : i32}} : tensor<16xi32, #ttg.slice<{{dim = 0, parent = #blocked}}>> loc(#loc)
+    %1 = tt.expand_dims %0 {{axis = 0 : i32}} : tensor<16xi32, #ttg.slice<{{dim = 0, parent = #blocked}}>> -> tensor<1x16xi32, #blocked> loc(#loc)
+    %2 = tt.make_range {{end = 16 : i32, start = 0 : i32}} : tensor<16xi32, #ttg.slice<{{dim = 1, parent = #blocked}}>> loc(#loc)
+    %3 = tt.expand_dims %2 {{axis = 1 : i32}} : tensor<16xi32, #ttg.slice<{{dim = 1, parent = #blocked}}>> -> tensor<16x1xi32, #blocked> loc(#loc)
     %c0_i32 = arith.constant 0 : i32 loc(#loc)
     %c0_i32_0 = arith.constant 0 : i32 loc(#loc)
     %cst = arith.constant dense<0> : tensor<1x16xi32, #blocked> loc(#loc)
@@ -852,15 +864,15 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %6 = tt.broadcast %3 : tensor<16x1xi32, #blocked> -> tensor<16x16xi32, #blocked> loc(#loc)
     %7 = arith.addi %5, %6 : tensor<16x16xi32, #blocked> loc(#loc)
     tt.return loc(#loc)
-  } loc(#loc)
-} loc(#loc)
+  }} loc(#loc)
+}} loc(#loc)
 #loc = loc(unknown)
 """)
 
 
 @gluon.jit
-def math_kernel():
-    layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 32], [4, 1], [1, 0])
+def math_kernel(warp_size: tl.constexpr):
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, warp_size], [4, 1], [1, 0])
     a = ttgl.full([16, 16], 1, ttgl.float32, layout)
     b = ttgl.full([16, 16], 2, ttgl.float32, layout)
     c = ttgl.full([16, 16], 4, ttgl.float32, layout)
@@ -885,16 +897,16 @@ def math_kernel():
     ttgl.fma(a, b, c)
 
 
-@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
+@pytest.mark.skipif(not is_cuda() and not is_hip_cdna3plus(), reason="Requires CUDA or CDNA")
 def test_math(fresh_knobs):
     knobs.compilation.disable_line_info = True
 
-    h = math_kernel.warmup(sanitize_overflow=False, grid=(1, ))
+    h = math_kernel.warmup(warp_size=WARP_SIZE, sanitize_overflow=False, grid=(1, ))
     expecttest.assert_expected_inline(
-        anonymize_ir(h.asm["source"]), """\
-#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
-  tt.func public @math_kernel() attributes {noinline = false} {
+        anonymize_ir(h.asm["source"]), f"""\
+#blocked = #ttg.blocked<{{sizePerThread = [1, 1], threadsPerWarp = [1, {WARP_SIZE}], warpsPerCTA = [4, 1], order = [1, 0]}}>
+module attributes {{"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = ... : i32}} {{
+  tt.func public @math_kernel() attributes {{noinline = false}} {{
     %cst = arith.constant 1.000000e+00 : f32 loc(#loc)
     %cst_0 = arith.constant dense<1.000000e+00> : tensor<16x16xf32, #blocked> loc(#loc)
     %cst_1 = arith.constant 2.000000e+00 : f32 loc(#loc)
@@ -923,8 +935,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %15 = math.ceil %cst_0 : tensor<16x16xf32, #blocked> loc(#loc)
     %16 = math.fma %cst_0, %cst_2, %cst_4 : tensor<16x16xf32, #blocked> loc(#loc)
     tt.return loc(#loc)
-  } loc(#loc)
-} loc(#loc)
+  }} loc(#loc)
+}} loc(#loc)
 #loc = loc(unknown)
 """)
 
@@ -935,8 +947,8 @@ def pair_add(a0, a1, b0, b1):
 
 
 @gluon.jit
-def reduce_kernel(out):
-    layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 32], [4, 1], [1, 0])
+def reduce_kernel(out, warp_size: tl.constexpr):
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, warp_size], [4, 1], [1, 0])
     a = ttgl.full([16, 16], 1, ttgl.float32, layout)
     b = ttgl.full([16, 16], 2, ttgl.float32, layout)
     s0 = a.sum(0)
@@ -956,53 +968,54 @@ def reduce_kernel(out):
     tl.store(out + ttgl.arange(0, 16, s0.type.layout), result)
 
 
-@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
+@pytest.mark.skipif(not is_cuda() and not is_hip_cdna3plus(), reason="Requires CUDA or CDNA")
 def test_reduce(fresh_knobs):
     knobs.compilation.disable_line_info = True
 
-    h = reduce_kernel.warmup(MockTensor(ttgl.float32), sanitize_overflow=False, grid=(1, ))
+    h = reduce_kernel.warmup(MockTensor(ttgl.float32), warp_size=WARP_SIZE, sanitize_overflow=False, grid=(1, ))
+    TT_PTR_RANGE = ', tt.pointer_range = 32 : i32' if is_hip_cdna3plus() else None
     expecttest.assert_expected_inline(
-        anonymize_ir(h.asm["ttgir"]), """\
-#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+        anonymize_ir(h.asm["ttgir"]), f"""\
+#blocked = #ttg.blocked<{{sizePerThread = [1, 1], threadsPerWarp = [1, {WARP_SIZE}], warpsPerCTA = [4, 1], order = [1, 0]}}>
 #loc = loc(unknown)
 #loc1 = loc("out")
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
-  tt.func public @reduce_kernel(%out: !tt.ptr<f32> {tt.divisibility = 16 : i32} loc("out")) attributes {noinline = false} {
+module attributes {{"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = ... : i32}} {{
+  tt.func public @reduce_kernel(%out: !tt.ptr<f32> {{tt.divisibility = 16 : i32{TT_PTR_RANGE}}} loc("out")) attributes {{noinline = false}} {{
     %cst = arith.constant dense<2.000000e+00> : tensor<16x16xf32, #blocked> loc(#loc)
     %cst_0 = arith.constant dense<1.000000e+00> : tensor<16x16xf32, #blocked> loc(#loc)
-    %0 = "tt.reduce"(%cst_0) <{axis = 0 : i32}> ({
+    %0 = "tt.reduce"(%cst_0) <{{axis = 0 : i32}}> ({{
     ^bb0(%arg1: f32 loc(unknown), %arg2: f32 loc(unknown)):
       %12 = arith.addf %arg1, %arg2 : f32 loc(#loc)
       tt.reduce.return %12 : f32 loc(#loc)
-    }) : (tensor<16x16xf32, #blocked>) -> tensor<16xf32, #ttg.slice<{dim = 0, parent = #blocked}>> loc(#loc)
-    %1 = "tt.reduce"(%cst_0) <{axis = 1 : i32}> ({
+    }}) : (tensor<16x16xf32, #blocked>) -> tensor<16xf32, #ttg.slice<{{dim = 0, parent = #blocked}}>> loc(#loc)
+    %1 = "tt.reduce"(%cst_0) <{{axis = 1 : i32}}> ({{
     ^bb0(%arg1: f32 loc(unknown), %arg2: f32 loc(unknown)):
       %12 = arith.addf %arg1, %arg2 : f32 loc(#loc)
       tt.reduce.return %12 : f32 loc(#loc)
-    }) : (tensor<16x16xf32, #blocked>) -> tensor<16xf32, #ttg.slice<{dim = 1, parent = #blocked}>> loc(#loc)
-    %2 = "tt.reduce"(%0) <{axis = 0 : i32}> ({
+    }}) : (tensor<16x16xf32, #blocked>) -> tensor<16xf32, #ttg.slice<{{dim = 1, parent = #blocked}}>> loc(#loc)
+    %2 = "tt.reduce"(%0) <{{axis = 0 : i32}}> ({{
     ^bb0(%arg1: f32 loc(unknown), %arg2: f32 loc(unknown)):
       %12 = arith.maxnumf %arg1, %arg2 : f32 loc(#loc)
       tt.reduce.return %12 : f32 loc(#loc)
-    }) : (tensor<16xf32, #ttg.slice<{dim = 0, parent = #blocked}>>) -> f32 loc(#loc)
-    %3 = ttg.convert_layout %1 : tensor<16xf32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<16xf32, #ttg.slice<{dim = 0, parent = #blocked}>> loc(#loc)
-    %4:2 = "tt.reduce"(%cst_0, %cst) <{axis = 0 : i32}> ({
+    }}) : (tensor<16xf32, #ttg.slice<{{dim = 0, parent = #blocked}}>>) -> f32 loc(#loc)
+    %3 = ttg.convert_layout %1 : tensor<16xf32, #ttg.slice<{{dim = 1, parent = #blocked}}>> -> tensor<16xf32, #ttg.slice<{{dim = 0, parent = #blocked}}>> loc(#loc)
+    %4:2 = "tt.reduce"(%cst_0, %cst) <{{axis = 0 : i32}}> ({{
     ^bb0(%arg1: f32 loc(unknown), %arg2: f32 loc(unknown), %arg3: f32 loc(unknown), %arg4: f32 loc(unknown)):
       %12 = arith.addf %arg1, %arg3 : f32 loc(#loc)
       %13 = arith.addf %arg2, %arg4 : f32 loc(#loc)
       tt.reduce.return %12, %13 : f32, f32 loc(#loc)
-    }) : (tensor<16x16xf32, #blocked>, tensor<16x16xf32, #blocked>) -> (tensor<16xf32, #ttg.slice<{dim = 0, parent = #blocked}>>, tensor<16xf32, #ttg.slice<{dim = 0, parent = #blocked}>>) loc(#loc)
-    %5 = tt.splat %2 : f32 -> tensor<16xf32, #ttg.slice<{dim = 0, parent = #blocked}>> loc(#loc)
-    %6 = arith.addf %5, %3 : tensor<16xf32, #ttg.slice<{dim = 0, parent = #blocked}>> loc(#loc)
-    %7 = arith.addf %6, %4#0 : tensor<16xf32, #ttg.slice<{dim = 0, parent = #blocked}>> loc(#loc)
-    %8 = arith.addf %7, %4#1 : tensor<16xf32, #ttg.slice<{dim = 0, parent = #blocked}>> loc(#loc)
-    %9 = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32, #ttg.slice<{dim = 0, parent = #blocked}>> loc(#loc)
-    %10 = tt.splat %out : !tt.ptr<f32> -> tensor<16x!tt.ptr<f32>, #ttg.slice<{dim = 0, parent = #blocked}>> loc(#loc)
-    %11 = tt.addptr %10, %9 : tensor<16x!tt.ptr<f32>, #ttg.slice<{dim = 0, parent = #blocked}>>, tensor<16xi32, #ttg.slice<{dim = 0, parent = #blocked}>> loc(#loc)
-    tt.store %11, %8 : tensor<16x!tt.ptr<f32>, #ttg.slice<{dim = 0, parent = #blocked}>> loc(#loc)
+    }}) : (tensor<16x16xf32, #blocked>, tensor<16x16xf32, #blocked>) -> (tensor<16xf32, #ttg.slice<{{dim = 0, parent = #blocked}}>>, tensor<16xf32, #ttg.slice<{{dim = 0, parent = #blocked}}>>) loc(#loc)
+    %5 = tt.splat %2 : f32 -> tensor<16xf32, #ttg.slice<{{dim = 0, parent = #blocked}}>> loc(#loc)
+    %6 = arith.addf %5, %3 : tensor<16xf32, #ttg.slice<{{dim = 0, parent = #blocked}}>> loc(#loc)
+    %7 = arith.addf %6, %4#0 : tensor<16xf32, #ttg.slice<{{dim = 0, parent = #blocked}}>> loc(#loc)
+    %8 = arith.addf %7, %4#1 : tensor<16xf32, #ttg.slice<{{dim = 0, parent = #blocked}}>> loc(#loc)
+    %9 = tt.make_range {{end = 16 : i32, start = 0 : i32}} : tensor<16xi32, #ttg.slice<{{dim = 0, parent = #blocked}}>> loc(#loc)
+    %10 = tt.splat %out : !tt.ptr<f32> -> tensor<16x!tt.ptr<f32>, #ttg.slice<{{dim = 0, parent = #blocked}}>> loc(#loc)
+    %11 = tt.addptr %10, %9 : tensor<16x!tt.ptr<f32>, #ttg.slice<{{dim = 0, parent = #blocked}}>>, tensor<16xi32, #ttg.slice<{{dim = 0, parent = #blocked}}>> loc(#loc)
+    tt.store %11, %8 : tensor<16x!tt.ptr<f32>, #ttg.slice<{{dim = 0, parent = #blocked}}>> loc(#loc)
     tt.return loc(#loc)
-  } loc(#loc)
-} loc(#loc)
+  }} loc(#loc)
+}} loc(#loc)
 """)
 
 
@@ -1225,8 +1238,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 def test_split_join_subtile(fresh_knobs):
 
     @gluon.jit
-    def kernel():
-        layout: ttgl.constexpr = ttgl.BlockedLayout([1, 128], [32, 1], [4, 1], [0, 1])
+    def kernel(warp_size: tl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1, 128], [warp_size, 1], [4, 1], [0, 1])
         x = ttgl.full([128, 128], 1, ttgl.int32, layout=layout)
 
         a, b = x.reshape([128, 2, 64]).permute([0, 2, 1]).split()
@@ -1234,26 +1247,26 @@ def test_split_join_subtile(fresh_knobs):
         _ = x + y
 
     knobs.compilation.disable_line_info = True
-    h = kernel.warmup(grid=(1, ), sanitize_overflow=False)
+    h = kernel.warmup(warp_size=WARP_SIZE, grid=(1, ), sanitize_overflow=False)
     expecttest.assert_expected_inline(
-        anonymize_ir(h.asm["source"]), """\
-#blocked = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
-#blocked1 = #ttg.blocked<{sizePerThread = [1, 2, 64], threadsPerWarp = [32, 1, 1], warpsPerCTA = [4, 1, 1], order = [0, 2, 1]}>
-#blocked2 = #ttg.blocked<{sizePerThread = [1, 64, 2], threadsPerWarp = [32, 1, 1], warpsPerCTA = [4, 1, 1], order = [0, 1, 2]}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
-  tt.func public @kernel() attributes {noinline = false} {
+        anonymize_ir(h.asm["source"]), f"""\
+#blocked = #ttg.blocked<{{sizePerThread = [1, 128], threadsPerWarp = [{WARP_SIZE}, 1], warpsPerCTA = [4, 1], order = [0, 1]}}>
+#blocked1 = #ttg.blocked<{{sizePerThread = [1, 2, 64], threadsPerWarp = [{WARP_SIZE}, 1, 1], warpsPerCTA = [4, 1, 1], order = [0, 2, 1]}}>
+#blocked2 = #ttg.blocked<{{sizePerThread = [1, 64, 2], threadsPerWarp = [{WARP_SIZE}, 1, 1], warpsPerCTA = [4, 1, 1], order = [0, 1, 2]}}>
+module attributes {{"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = ... : i32}} {{
+  tt.func public @kernel() attributes {{noinline = false}} {{
     %c1_i32 = arith.constant 1 : i32 loc(#loc)
     %cst = arith.constant dense<1> : tensor<128x128xi32, #blocked> loc(#loc)
     %0 = tt.reshape %cst : tensor<128x128xi32, #blocked> -> tensor<128x2x64xi32, #blocked1> loc(#loc)
-    %1 = tt.trans %0 {order = array<i32: 0, 2, 1>} : tensor<128x2x64xi32, #blocked1> -> tensor<128x64x2xi32, #blocked2> loc(#loc)
-    %outLHS, %outRHS = tt.split %1 : tensor<128x64x2xi32, #blocked2> -> tensor<128x64xi32, #ttg.slice<{dim = 2, parent = #blocked2}>> loc(#loc)
-    %2 = tt.join %outLHS, %outRHS : tensor<128x64xi32, #ttg.slice<{dim = 2, parent = #blocked2}>> -> tensor<128x64x2xi32, #blocked2> loc(#loc)
-    %3 = tt.trans %2 {order = array<i32: 0, 2, 1>} : tensor<128x64x2xi32, #blocked2> -> tensor<128x2x64xi32, #blocked1> loc(#loc)
+    %1 = tt.trans %0 {{order = array<i32: 0, 2, 1>}} : tensor<128x2x64xi32, #blocked1> -> tensor<128x64x2xi32, #blocked2> loc(#loc)
+    %outLHS, %outRHS = tt.split %1 : tensor<128x64x2xi32, #blocked2> -> tensor<128x64xi32, #ttg.slice<{{dim = 2, parent = #blocked2}}>> loc(#loc)
+    %2 = tt.join %outLHS, %outRHS : tensor<128x64xi32, #ttg.slice<{{dim = 2, parent = #blocked2}}>> -> tensor<128x64x2xi32, #blocked2> loc(#loc)
+    %3 = tt.trans %2 {{order = array<i32: 0, 2, 1>}} : tensor<128x64x2xi32, #blocked2> -> tensor<128x2x64xi32, #blocked1> loc(#loc)
     %4 = tt.reshape %3 : tensor<128x2x64xi32, #blocked1> -> tensor<128x128xi32, #blocked> loc(#loc)
     %5 = arith.addi %cst, %4 : tensor<128x128xi32, #blocked> loc(#loc)
     tt.return loc(#loc)
-  } loc(#loc)
-} loc(#loc)
+  }} loc(#loc)
+}} loc(#loc)
 #loc = loc(unknown)
 """)
 
