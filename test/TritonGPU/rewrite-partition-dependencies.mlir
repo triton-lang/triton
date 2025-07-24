@@ -33,6 +33,7 @@ tt.func @two_consumers(%lb: i32, %ub: i32, %step: i32) {
     // CHECK-NEXT: "op_d"([[VAL]])
     "op_d"(%0) {ttg.partition = 2} : (!ty) -> ()
   } {ttg.partition.stages = [0, 2, 2]}
+  // CHECK: nvws.aref.destroy [[AREF]]
   tt.return
 }
 
@@ -57,6 +58,7 @@ tt.func @distance_one(%lb: i32, %ub: i32, %step: i32) {
 
     scf.yield %0 : !ty
   } {ttg.partition.stages = [0, 0]}
+  // CHECK: nvws.aref.destroy [[AREF]]
   tt.return
 }
 
@@ -105,6 +107,8 @@ tt.func @complex_case(%lb: i32, %ub: i32, %step: i32) {
     "op_d"(%l) {ttg.partition = 2} : (!ty) -> ()
     scf.yield %0, %k : !ty, !ty
   } {ttg.partition.stages = [0, 2, 2]}
+  // CHECK: nvws.aref.destroy [[AREF1]]
+  // CHECK: nvws.aref.destroy [[AREF2]]
   tt.return
 }
 
@@ -191,6 +195,9 @@ tt.func @multiplicity_branch(%lb: i32, %ub: i32, %step: i32) {
 
     scf.yield %0, %a, %a : !ty, !ty, !ty
   } {ttg.partition.stages = [0, 0, 0, 0]}
+  // CHECK: nvws.aref.destroy [[AREF1]]
+  // CHECK: nvws.aref.destroy [[AREF2]]
+  // CHECK: nvws.aref.destroy [[AREF3]]
   tt.return
 }
 

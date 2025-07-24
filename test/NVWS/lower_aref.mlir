@@ -69,6 +69,13 @@ module attributes {"ttg.num-warps" = 4 : i32} {
       nvws.warp_group.return
     }
     ttg.local_dealloc %0 : !ttg.memdesc<2x1xi32, #shared, #smem, mutable>
+    nvws.aref.destroy %1 : <[!ttg.memdesc<2x1xi32, #shared, #smem, mutable>]>
+    // CHECK: ttg.local_dealloc
+    // CHECK-NEXT: scf.for
+    // CHECK-NEXT:   [[EMPTYMBAR:%.*]] = ttg.memdesc_subview [[EMPTY]]
+    // CHECK-NEXT:   ttng.inval_barrier [[EMPTYMBAR]]
+    // CHECK-NEXT:   [[FULLMBAR:%.*]] = ttg.memdesc_subview [[FULL]]
+    // CHECK-NEXT:   ttng.inval_barrier [[FULLMBAR]]
     tt.return
   }
 

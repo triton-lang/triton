@@ -109,6 +109,8 @@ BarrierCount getArrivalCount(ArefCreateOp op) {
   SetVector<int> consumerGroups;
 
   for (auto user : op->getUsers()) {
+    if (isa<ArefDestroyOp>(user))
+      continue;
     auto [wgOp, idx] = getWarpGroupIdx(user);
     auto numWarps = wgOp.getNumWarps()[idx];
 
@@ -362,6 +364,26 @@ LogicalResult rewriteGetExitOp(ArefGetExitOp op, PatternRewriter &rewriter,
                              getStageCluster(op));
 }
 
+LogicalResult rewriteArefDestroyOp(ArefDestroyOp op, PatternRewriter &rewriter,
+                                   ArefValue arefVal) {
+  auto loc = op->getLoc();
+
+  rewriter.setInsertionPointAfter(op);
+  auto lb = rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
+  auto ub = rewriter.create<arith::ConstantIntOp>(loc, arefVal.depth, 32);
+  auto step = rewriter.create<arith::ConstantIntOp>(loc, 1, 32);
+  auto dLoop = rewriter.create<scf::ForOp>(loc, lb, ub, step);
+
+  rewriter.setInsertionPointToStart(dLoop.getBody());
+  auto emptyMbar = createSingleBufferView(rewriter, arefVal.emptyMbars,
+                                          dLoop.getInductionVar());
+  rewriter.create<InvalBarrierOp>(loc, emptyMbar);
+  auto fullMbar = createSingleBufferView(rewriter, arefVal.fullMbars,
+                                         dLoop.getInductionVar());
+  rewriter.create<InvalBarrierOp>(loc, fullMbar);
+  return success();
+}
+
 class LowerArefCreate : public OpRewritePattern<ArefCreateOp> {
 public:
   using OpRewritePattern::OpRewritePattern;
@@ -387,6 +409,10 @@ public:
       } else if (auto user = dyn_cast<ArefGetExitOp>(userOp)) {
         opToDelete.insert(user);
         if (rewriteGetExitOp(user, rewriter, aref).failed())
+          return failure();
+      } else if (auto user = dyn_cast<ArefDestroyOp>(userOp)) {
+        opToDelete.insert(user);
+        if (rewriteArefDestroyOp(user, rewriter, aref).failed())
           return failure();
       } else {
         llvm_unreachable("users of aref can only be ArefPut or ArefGet");
