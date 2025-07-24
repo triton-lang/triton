@@ -658,19 +658,24 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
     auto numRepB = repA[0];
     assert(repA[0] == repB[0]);
 
+    // Scaled MFMA instructions expect scale operands as 32-bit values,
+    // even though each individual scale is only 8 bits. To reduce register
+    // usage, we pack 4 scales into a single 32-bit value and use the opSel
+    // field to select the appropriate byte during execution. Packing is done
+    // along the K dimension first; if there aren’t enough values in K, we
+    // continue along the non-K dimension.
+    // TODO: Support opSel selection for constant scales stored in SGPRs.
     const int scaleAKBase =
-        isAScaleConstant
-            ? 1
-            : std::min(4, static_cast<const int>(numRepK * numRepM));
+        isAScaleConstant ? 1 : std::min(4, static_cast<int>(numRepK * numRepM));
     const int scaleBKBase =
-        isBScaleConstant
-            ? 1
-            : std::min(4, static_cast<const int>(numRepK * numRepN));
+        isBScaleConstant ? 1 : std::min(4, static_cast<int>(numRepK * numRepN));
 
     int akPackedVals =
-        isAScaleConstant ? 1 : std::min(4, static_cast<const int>(numRepK));
+        isAScaleConstant ? 1 : std::min(4, static_cast<int>(numRepK));
     int bkPackedVals =
-        isBScaleConstant ? 1 : std::min(4, static_cast<const int>(numRepK));
+        isBScaleConstant ? 1 : std::min(4, static_cast<int>(numRepK));
+
+    assert(scaleAKBase % akPackedVals == 0 && scaleBKBase % bkPackedVals == 0);
     int nonAKPackedVals = scaleAKBase / akPackedVals;
     int nonBKPackedVals = scaleBKBase / bkPackedVals;
 
@@ -755,15 +760,15 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
             for (innerK = 0; innerK < innerKBound; innerK++) {
               int k = is2Step ? outerK : innerK;
               if (existBothScales) {
-                int mScale = m;
-                int nScale = n;
                 int akScale = k / akPackedVals;
                 int bkScale = k / bkPackedVals;
                 int opSelA = 0, opSelB = 0;
-                mScale /= nonAKPackedVals;
+
+                int mScale = m / nonAKPackedVals;
+                int nScale = n / nonBKPackedVals;
                 opSelA = (m * numRepK + k) % (nonAKPackedVals * akPackedVals);
-                nScale /= nonBKPackedVals;
                 opSelB = (n * numRepK + k) % (nonBKPackedVals * bkPackedVals);
+
                 if (mfmaLayout.getIsTransposed()) {
                   acc = generateScaledMFMAOp(
                       intrinsicName, operandB[{b, n, k}], operandA[{b, m, k}],
