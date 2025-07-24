@@ -1903,13 +1903,15 @@ void finalizeTensorAtomicResults(Operation *op, RankedTensorType tensorTy,
     return unpackLLVector(loc, loadedVec, rewriter);
   };
 
+  auto noPaddingOffset = [](Value v) { return v; };
   lowerLdSt(loc, ctx, dstLayout, resultVals, valueElemTy, smemBase,
-            /*calcPaddedOffset=*/{}, /*affineOffset=*/b.i32_val(0),
+            /*calcPaddedOffset=*/noPaddingOffset, /*affineOffset=*/b.i32_val(0),
             /*maskSpanAffineOffset=*/0, rewriter, targetInfo,
             /*maybeMaxVecElems=*/{}, emitSt);
   b.barrier();
   resultVals = lowerLdSt(loc, ctx, dstLayout, resultVals, valueElemTy, smemBase,
-                         /*calcPaddedOffset=*/{}, /*affineOffset=*/b.i32_val(0),
+                         /*calcPaddedOffset=*/noPaddingOffset,
+                         /*affineOffset=*/b.i32_val(0),
                          /*maskSpanAffineOffset=*/0, rewriter, targetInfo,
                          /*maybeMaxVecElems=*/{}, emitLd);
 
