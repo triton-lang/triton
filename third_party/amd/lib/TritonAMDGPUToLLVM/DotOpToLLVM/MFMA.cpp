@@ -440,9 +440,8 @@ struct DotOpMFMAConversionHelper {
         }
       }
 
-      if (2 == kBase) {
+      if (2 == kBase)
         results = b.zext(i32_ty, b.bitcast(vec, i16_ty));
-      }
       if (4 == kBase)
         // This is for int8 on pre- CDNA3 GPUs
         results = b.bitcast(vec, i32_ty);
@@ -660,13 +659,20 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
     assert(repA[0] == repB[0]);
 
     const int scaleAKBase =
-        std::min(4, static_cast<const int>(numRepK * numRepM));
+        isAScaleConstant
+            ? 1
+            : std::min(4, static_cast<const int>(numRepK * numRepM));
     const int scaleBKBase =
-        std::min(4, static_cast<const int>(numRepK * numRepN));
+        isBScaleConstant
+            ? 1
+            : std::min(4, static_cast<const int>(numRepK * numRepN));
 
-    int kPackedVals = std::min(4, static_cast<const int>(numRepK));
-    int nonAKPackedVals = scaleAKBase / kPackedVals;
-    int nonBKPackedVals = scaleBKBase / kPackedVals;
+    int akPackedVals =
+        isAScaleConstant ? 1 : std::min(4, static_cast<const int>(numRepK));
+    int bkPackedVals =
+        isBScaleConstant ? 1 : std::min(4, static_cast<const int>(numRepK));
+    int nonAKPackedVals = scaleAKBase / akPackedVals;
+    int nonBKPackedVals = scaleBKBase / bkPackedVals;
 
     auto operandA = getValuesFromDotOperandLayoutStruct(
         loadedA, numRepB, numRepM, numRepK, aKWidth, aKBase,
@@ -751,24 +757,25 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
               if (existBothScales) {
                 int mScale = m;
                 int nScale = n;
-                int kScale = k / kPackedVals;
+                int akScale = k / akPackedVals;
+                int bkScale = k / bkPackedVals;
                 int opSelA = 0, opSelB = 0;
                 mScale /= nonAKPackedVals;
-                opSelA = (m * numRepK + k) % (nonAKPackedVals * kPackedVals);
+                opSelA = (m * numRepK + k) % (nonAKPackedVals * akPackedVals);
                 nScale /= nonBKPackedVals;
-                opSelB = (n * numRepK + k) % (nonBKPackedVals * kPackedVals);
+                opSelB = (n * numRepK + k) % (nonBKPackedVals * bkPackedVals);
                 if (mfmaLayout.getIsTransposed()) {
                   acc = generateScaledMFMAOp(
                       intrinsicName, operandB[{b, n, k}], operandA[{b, m, k}],
-                      acc, operandBScale[{b, nScale, kScale}],
-                      operandAScale[{b, mScale, kScale}],
+                      acc, operandBScale[{b, nScale, bkScale}],
+                      operandAScale[{b, mScale, akScale}],
                       maybeMfmaIntrinsic->bElementType,
                       maybeMfmaIntrinsic->aElementType, opSelB, opSelA);
                 } else {
                   acc = generateScaledMFMAOp(
                       intrinsicName, operandA[{b, m, k}], operandB[{b, n, k}],
-                      acc, operandAScale[{b, mScale, kScale}],
-                      operandBScale[{b, nScale, kScale}],
+                      acc, operandAScale[{b, mScale, akScale}],
+                      operandBScale[{b, nScale, bkScale}],
                       maybeMfmaIntrinsic->aElementType,
                       maybeMfmaIntrinsic->bElementType, opSelA, opSelB);
                 }
