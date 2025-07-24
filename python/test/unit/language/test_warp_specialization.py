@@ -4,10 +4,10 @@ import pathlib
 import triton
 import triton.language as tl
 
-from triton._internal_testing import is_hip
+from triton._internal_testing import is_hip, is_hopper, is_blackwell
 from triton.tools.tensor_descriptor import TensorDescriptor
 
-if torch.cuda.is_available() and torch.cuda.get_device_capability()[0] == 10:
+if not is_hip() and torch.cuda.is_available() and torch.cuda.get_device_capability()[0] in [9, 10]:
     from triton._C.libtriton import nvidia
     cublas_workspace = torch.empty(32 * 1024 * 1024, device="cuda", dtype=torch.uint8)
     cublas = nvidia.cublas.CublasLt(cublas_workspace)
@@ -15,8 +15,12 @@ else:
     cublas = None
 
 
+def is_hopper_or_blackwell():
+    return is_hopper() or is_blackwell()
+
+
 @pytest.mark.skipif(is_hip(), reason="warp specialization is not supported on hip devices")
-@pytest.mark.skipif(torch.cuda.get_device_capability()[0] != 10, reason="Requires compute capability == 10")
+@pytest.mark.skipif(not is_hopper_or_blackwell(), reason="Requires Hopper or Blackwell")
 def test_warp_specialize_basic_ir(tmp_path: pathlib.Path):
     ir = """
     tt.func @kernel(%arg0: !tt.ptr<i32>) {
@@ -51,7 +55,7 @@ def test_warp_specialize_basic_ir(tmp_path: pathlib.Path):
 
 
 @pytest.mark.skipif(is_hip(), reason="warp specialization is not supported on hip devices")
-@pytest.mark.skipif(torch.cuda.get_device_capability()[0] != 10, reason="Requires compute capability == 10")
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 def test_warp_specialize_tmem_ir(tmp_path: pathlib.Path):
     ir = """
     #blocked = #ttg.blocked<{sizePerThread = [1, 64], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
@@ -119,7 +123,7 @@ def test_warp_specialize_tmem_ir(tmp_path: pathlib.Path):
 
 
 @pytest.mark.skipif(is_hip(), reason="warp specialization is not supported on hip devices")
-@pytest.mark.skipif(torch.cuda.get_device_capability()[0] != 10, reason="Requires compute capability == 10")
+@pytest.mark.skipif(not is_hopper_or_blackwell(), reason="Requires Hopper or Blackwell")
 def test_warpgroup_reduction(tmp_path: pathlib.Path):
 
     def template(i, num_warps, in_ptr, out_ptr):
@@ -242,11 +246,11 @@ def exceeds_smem_capacity(num_stages, BLOCK_M, BLOCK_N, BLOCK_K, use_fp8):
 @pytest.mark.parametrize("BLOCK_SIZE_M", [128])
 @pytest.mark.parametrize("BLOCK_SIZE_N", [128, 256])
 @pytest.mark.parametrize("BLOCK_SIZE_K", [64, 128])
-@pytest.mark.parametrize("num_stages", [2, 3, 4])
+@pytest.mark.parametrize("num_stages", [2, 3])
 @pytest.mark.parametrize("num_warps", [4, 8])
 @pytest.mark.parametrize("use_fp8", [False, True])
 @pytest.mark.skipif(is_hip(), reason="warp specialization is not supported on hip devices")
-@pytest.mark.skipif(torch.cuda.get_device_capability()[0] != 10, reason="Requires compute capability == 10")
+@pytest.mark.skipif(not is_hopper_or_blackwell(), reason="Requires Hopper or Blackwell")
 def test_warp_specialize_tma_matmul(M, N, K, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, num_stages, num_warps, use_fp8):
     if exceeds_smem_capacity(num_stages, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, use_fp8=use_fp8):
         pytest.skip("uses too much shared memory")
@@ -270,8 +274,16 @@ def test_warp_specialize_tma_matmul(M, N, K, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_S
                                         BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, GROUP_SIZE_M, num_warps=num_warps,
                                         USE_FP8=use_fp8)
     ttgir = kernel.asm["ttgir"]
-    assert "ttng.tc_gen5_mma" in ttgir
-    assert "ttg.warp_specialize" in ttgir
+    if is_blackwell():
+        assert "ttng.tc_gen5_mma" in ttgir
+        assert "ttng.async_tma_copy_global_to_local" in ttgir
+    else:
+        assert "ttng.warp_group_dot" in ttgir
+        assert "ttng.async_tma_copy_global_to_local" in ttgir
+    if is_hopper() and num_warps == 8:
+        assert "ttg.warp_specialize" not in ttgir
+    else:
+        assert "ttg.warp_specialize" in ttgir
 
     ref_out = torch.empty((M, N), dtype=dtype, device=device)
     cublas.matmul(A, B, ref_out)
@@ -326,11 +338,11 @@ def matmul_tma_persistent_ws_kernel(  #
 @pytest.mark.parametrize("BLOCK_SIZE_M", [128])
 @pytest.mark.parametrize("BLOCK_SIZE_N", [128, 256])
 @pytest.mark.parametrize("BLOCK_SIZE_K", [64, 128])
-@pytest.mark.parametrize("num_stages", [2, 3, 4])
+@pytest.mark.parametrize("num_stages", [2, 3])
 @pytest.mark.parametrize("num_warps", [4, 8])
 @pytest.mark.parametrize("use_fp8", [False, True])
 @pytest.mark.skipif(is_hip(), reason="warp specialization is not supported on hip devices")
-@pytest.mark.skipif(torch.cuda.get_device_capability()[0] != 10, reason="Requires compute capability == 10")
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 def test_warp_specialize_tma_matmul_persistent(M, N, K, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, num_stages, num_warps,
                                                use_fp8):
     if exceeds_smem_capacity(num_stages, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, use_fp8):
@@ -413,12 +425,12 @@ def attention_inner_loop_kernel(  #
 @pytest.mark.parametrize("M, N", [(8192, 8192), (1024, 1024)])
 @pytest.mark.parametrize("BLOCK_M", [64, 128])
 @pytest.mark.parametrize("HEAD_DIM", [64, 128])
-@pytest.mark.parametrize("num_stages", [2, 3, 4])
+@pytest.mark.parametrize("num_stages", [2, 3])
 @pytest.mark.parametrize("disable_acc_multibuf", [False, True])
 @pytest.mark.parametrize("num_warps", [4, 8])
 @pytest.mark.parametrize("use_fp8", [False, True])
 @pytest.mark.skipif(is_hip(), reason="warp specialization is not supported on hip devices")
-@pytest.mark.skipif(torch.cuda.get_device_capability()[0] != 10, reason="Requires compute capability == 10")
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 def test_warp_specialize_attention_forward(M, N, BLOCK_M, HEAD_DIM, num_stages, disable_acc_multibuf, num_warps,
                                            use_fp8):
     if BLOCK_M == 128 and HEAD_DIM == 128 and not use_fp8:

@@ -18,7 +18,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
                   %pred: i1,
                   %barrier: !ttg.memdesc<1xi64, #shared2, #ttg.shared_memory, mutable>,
                   %barrierPred: i1) {
-    ttng.tc_gen5_mma %a, %b, %c, %accUse, %pred, %barrier[%barrierPred] :
+    ttng.tc_gen5_mma %a, %b, %c, %accUse, %pred, %barrier[%barrierPred] {is_async} :
        !ttg.memdesc<128x128xf8E5M2, #shared, #ttg.shared_memory>,
        !ttg.memdesc<128x256xf8E5M2, #shared1, #ttg.shared_memory>,
        !ttg.memdesc<128x256xf8E5M2, #shared1, #ttng.tensor_memory, mutable>,

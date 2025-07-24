@@ -19,25 +19,22 @@ unsigned getConvertLayoutScratchInBytes(RankedTensorType srcTy,
     return 0;
   unsigned elems = 0;
   if (usePadding) {
-    auto scratchConfig = getScratchConfigForCvt(srcTy, dstTy);
-    elems = getNumScratchElements(scratchConfig.paddedRepShape);
+    elems = getNumScratchElemsPaddedCvt(srcTy, dstTy);
   } else {
-    assert(false && "General swizzling for convert layout is not suported in "
-                    "AMD backend yet");
-    // TODO use swizzling
+    elems = getNumScratchElemsSwizzledCvt(srcTy, dstTy);
   }
   return elems * getBitwidth(srcTy) / 8;
 }
 
 unsigned AMDAllocationAnalysisScratchSizeFn(Operation *op) {
-  if (op->hasAttr(AttrSharedMemPadded)) {
-    if (auto cvtLayout = dyn_cast<mlir::triton::gpu::ConvertLayoutOp>(op)) {
-      auto srcTy = cvtLayout.getSrc().getType();
-      auto dstTy = cvtLayout.getType();
-      return getConvertLayoutScratchInBytes(srcTy, dstTy,
-                                            op->hasAttr(AttrSharedMemPadded));
-    }
+
+  if (auto cvtLayout = dyn_cast<mlir::triton::gpu::ConvertLayoutOp>(op)) {
+    auto srcTy = cvtLayout.getSrc().getType();
+    auto dstTy = cvtLayout.getType();
+    return getConvertLayoutScratchInBytes(srcTy, dstTy,
+                                          op->hasAttr(AttrSharedMemPadded));
   }
+
   return defaultAllocationAnalysisScratchSizeFn(op);
 }
 

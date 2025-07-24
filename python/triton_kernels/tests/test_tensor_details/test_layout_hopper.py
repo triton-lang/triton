@@ -5,6 +5,7 @@ from triton_kernels.tensor_details.layout import HopperMXScaleLayout, HopperMXVa
 from triton_kernels.numerics_details.mxfp import downcast_to_mxfp, upcast_from_mxfp
 from triton_kernels.tensor_details.layout_details.hopper_value import mxfp4_to_bf16_triton
 from triton_kernels.tensor_details.layout_details.hopper_scale import unswizzle_mxfp4_scale_hopper
+from triton_kernels.target_info import cuda_capability_geq
 import triton.language as tl
 import triton
 import torch
@@ -71,6 +72,7 @@ def _upcast_mxfp4_to_bf16(Y, X, XScale, x_stride_m, x_stride_n, x_scale_stride_m
 
 
 @pytest.mark.skipif(not is_cuda(), reason="Only supported on cuda")
+@pytest.mark.skipif(not cuda_capability_geq(9), reason="Only supported for capability >= 9")
 def test_upcast_mxfp4_to_bf16():
     mx_axis = 0
     num_warps = 4

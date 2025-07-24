@@ -98,15 +98,6 @@ def test_convert_layout_not_trivial():
     assert "layout conversion from BlockedLayout(size_per_thread=[2]" in str(e.value.__cause__)
     assert "to AutoLayout() is not trivial" in str(e.value.__cause__)
 
-    with pytest.raises(CompilationError) as e:
-        src_layout: ttgl.constexpr = ttgl.AutoLayout()
-        dst_layout: ttgl.constexpr = ttgl.BlockedLayout([2], [32], [4], [0])
-        kernel.warmup(src_layout, dst_layout, grid=(1, ))
-
-    assert "layout conversion from AutoLayout()" in str(e.value.__cause__)
-    assert "to BlockedLayout(size_per_thread=[2]" in str(e.value.__cause__)
-    assert "is not trivial" in str(e.value.__cause__)
-
 
 @gluon.jit
 def shared_memory_kernel(XBLOCK: ttgl.constexpr, YBLOCK: ttgl.constexpr, layout_a: ttgl.constexpr,
@@ -567,7 +558,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %true = arith.constant true loc(#loc)
     %true_0 = arith.constant true loc(#loc)
     %true_1 = arith.constant true loc(#loc)
-    %3 = ttng.tc_gen5_mma %0, %1, %result[], %true, %true_0, %2[%true_1] : !ttg.memdesc<128x128xf16, #shared, #smem, mutable>, !ttg.memdesc<128x128xf16, #shared, #smem, mutable>, !ttg.memdesc<128x128xf16, #tmem, #ttng.tensor_memory, mutable>, !ttg.memdesc<1xi64, #shared1, #smem, mutable> loc(#loc)
+    %3 = ttng.tc_gen5_mma %0, %1, %result[], %true, %true_0, %2[%true_1] {is_async} : !ttg.memdesc<128x128xf16, #shared, #smem, mutable>, !ttg.memdesc<128x128xf16, #shared, #smem, mutable>, !ttg.memdesc<128x128xf16, #tmem, #ttng.tensor_memory, mutable>, !ttg.memdesc<1xi64, #shared1, #smem, mutable> loc(#loc)
     tt.return loc(#loc)
   } loc(#loc)
 } loc(#loc)
@@ -948,7 +939,7 @@ def reduce_kernel(out):
     layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 32], [4, 1], [1, 0])
     a = ttgl.full([16, 16], 1, ttgl.float32, layout)
     b = ttgl.full([16, 16], 2, ttgl.float32, layout)
-    s0 = ttgl.sum(a, 0)
+    s0 = a.sum(0)
     ttgl.static_assert(s0.type.layout == ttgl.SliceLayout(0, layout))
     s1 = ttgl.sum(a, 1)
     ttgl.static_assert(s1.type.layout == ttgl.SliceLayout(1, layout))
