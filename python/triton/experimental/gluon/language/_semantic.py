@@ -203,8 +203,8 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         return self.tensor(handle, res_ty)
 
     def memdesc_slice(self, mem_desc, start, length, dim):
-        offsets = [self.builder.get_int32(0)] * mem_desc.rank
-        offsets[dim] = self.to_tensor(start).handle
+        offsets = [0] * mem_desc.rank
+        offsets[dim] = start
         shape = list(mem_desc.shape)
         shape[dim] = length
         layout = mem_desc.layout

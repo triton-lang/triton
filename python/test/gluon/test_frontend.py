@@ -237,13 +237,9 @@ def test_shared_memory_subview(fresh_knobs):
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @shared_memory_subview_kernel() attributes {noinline = false} {
     %0 = ttg.local_alloc : () -> !ttg.memdesc<256x256xi32, #shared, #smem, mutable> loc(#loc)
-    %c0_i32 = arith.constant 0 : i32 loc(#loc)
-    %c128_i32 = arith.constant 128 : i32 loc(#loc)
-    %1 = ttg.memdesc_subslice %0 {{offsets=array<i32: 0, 128>}} : !ttg.memdesc<256x256xi32, #shared, #smem, mutable> -> !ttg.memdesc<256x128xi32, #shared, #smem, mutable, 256x256> loc(#loc)
+    %1 = ttg.memdesc_subslice %0 {offsets = array<i32: 0, 128>} : !ttg.memdesc<256x256xi32, #shared, #smem, mutable> -> !ttg.memdesc<256x128xi32, #shared, #smem, mutable, 256x256> loc(#loc)
     %2 = ttg.local_load %1 : !ttg.memdesc<256x128xi32, #shared, #smem, mutable, 256x256> -> tensor<256x128xi32, #blocked> loc(#loc)
-    %c0_i32_0 = arith.constant 0 : i32 loc(#loc)
-    %c128_i32_1 = arith.constant 128 : i32 loc(#loc)
-    %3 = ttg.memdesc_subslice %0 {{offsets=array<i32: 128, 0>}} : !ttg.memdesc<256x256xi32, #shared, #smem, mutable> -> !ttg.memdesc<128x256xi32, #shared, #smem, mutable, 256x256> loc(#loc)
+    %3 = ttg.memdesc_subslice %0 {offsets = array<i32: 128, 0>} : !ttg.memdesc<256x256xi32, #shared, #smem, mutable> -> !ttg.memdesc<128x256xi32, #shared, #smem, mutable, 256x256> loc(#loc)
     %4 = tt.trans %2 {order = array<i32: 1, 0>} : tensor<256x128xi32, #blocked> -> tensor<128x256xi32, #blocked1> loc(#loc)
     ttg.local_store %4, %3 : tensor<128x256xi32, #blocked1> -> !ttg.memdesc<128x256xi32, #shared, #smem, mutable, 256x256> loc(#loc)
     tt.return loc(#loc)
