@@ -24,14 +24,6 @@ namespace mlir {
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
-static Value createThreadIdOp(OpBuilder &builder, Location loc) {
-  Value threadId = builder.create<::mlir::gpu::ThreadIdOp>(
-      loc, builder.getIndexType(), ::mlir::gpu::Dimension::x);
-  auto cast = builder.create<UnrealizedConversionCastOp>(
-      loc, TypeRange{builder.getIntegerType(32)}, ValueRange{threadId});
-  return cast.getResult(0);
-}
-
 // Lower to use GetCanonicalWarpIdOp.
 // In Hopper, each task is a warpgroup consisting of 4 warps.
 static const int WARPS_PER_TASK = 4;
@@ -73,15 +65,9 @@ void processProducerCommitOp(OpBuilder &builder, ttnvws::ProducerCommitOp op,
   ttng::ArriveBarrierOp arriveOp;
 
   if (loadType == ttnvws::TokenLoadType::TMALoadOp) {
-    // Only thread 0 arrives for TMA load.
-    Value _0 = builder.create<arith::ConstantIntOp>(loc, 0, 32);
-    Value threadId = createThreadIdOp(builder, loc);
-    Value pred = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq,
-                                               threadId, _0);
     // Get the count from the barriers: trace the local_alloc for the barrier
     // then find the count from init_barrier
-    arriveOp =
-        builder.create<ttng::ArriveBarrierOp>(loc, bufferFull, fullCnt, pred);
+    arriveOp = builder.create<ttng::ArriveBarrierOp>(loc, bufferFull, fullCnt);
   } else {
     assert(false);
   }
