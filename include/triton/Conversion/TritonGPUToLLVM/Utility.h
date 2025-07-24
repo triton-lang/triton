@@ -643,6 +643,12 @@ Value transferWithinBlockPadding(triton::gpu::ConvertLayoutOp op, Value src,
                                  const LLVMTypeConverter *typeConverter,
                                  RewriterBase &rewriter);
 
+LogicalResult
+transferWithinBlockSwizzling(triton::gpu::ConvertLayoutOp op, Value src,
+                             const TargetInfoBase &targetInfo,
+                             const LLVMTypeConverter *typeConverter,
+                             ConversionPatternRewriter &rewriter);
+
 SmallVector<Value> inlineRegionImpl(RewriterBase &rewriter, Region &region,
                                     ArrayRef<Value> args,
                                     mlir::TypeID terminatorTypeId,
