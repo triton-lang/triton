@@ -486,8 +486,9 @@ struct MemDescIndexOpConversion
     auto elemPtrTy = base.getType();
     Value stride = smemObj.getStrides(srcTy, loc, rewriter).front();
     Value offset = b.mul(op.getIndex(), stride);
-    auto offsetVals =
-        ArrayRef<Value>(smemObj.getOffsets()).take_back(destTy.getRank());
+    auto prevOffsets = smemObj.getOffsets();
+    SmallVector<Value> offsetVals(prevOffsets.end() - destTy.getRank(),
+                                  prevOffsets.end());
     // Advance the pointer and keep the opOffsets as the new shape
     smemObj = SharedMemoryObject(b.gep(elemPtrTy, llvmElemTy, base, offset),
                                  llvmElemTy, offsetVals);

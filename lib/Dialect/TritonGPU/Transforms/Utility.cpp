@@ -1493,7 +1493,7 @@ void replaceUsesAndPropagateType(OpBuilder &builder, Operation *oldUse,
       bool isMutable = cast<ttg::MemDescType>(val.getType()).getMutableMemory();
       Type newDstType = ttg::MemDescType::get(
           oldType.getShape(), oldType.getElementType(), oldType.getEncoding(),
-          oldType.getMemorySpace(), isMutable);
+          oldType.getMemorySpace(), isMutable, oldType.getAllocShape());
       newVal = builder.create<ttg::MemDescIndexOp>(subview.getLoc(), newDstType,
                                                    val, subview.getIndex());
     } else if (auto subslice = dyn_cast<ttg::MemDescSubsliceOp>(user)) {
@@ -1501,7 +1501,7 @@ void replaceUsesAndPropagateType(OpBuilder &builder, Operation *oldUse,
       bool isMutable = cast<ttg::MemDescType>(val.getType()).getMutableMemory();
       Type newDstType = ttg::MemDescType::get(
           oldType.getShape(), oldType.getElementType(), oldType.getEncoding(),
-          oldType.getMemorySpace(), isMutable);
+          oldType.getMemorySpace(), isMutable, oldType.getAllocShape());
       newVal = builder.create<ttg::MemDescSubsliceOp>(
           subslice.getLoc(), newDstType, val, subslice.getOffsets());
     } else if (auto trans = dyn_cast<ttg::MemDescTransOp>(user)) {
