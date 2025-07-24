@@ -713,10 +713,9 @@ LogicalResult Pingponger::transformChainedDotSchedule(OpBuilder &builder,
 
   // ComputeCluster2
   updateOpInsertion(dotOps[1]);
-  // below ops are inserted backward
-  prependOp(builder.create<ROCDL::SetPrioOp>(loc, lowPriority), true);
-  prependOp(builder.create<ROCDL::SBarrierOp>(loc), true);
-  prependOp(builder.create<ROCDL::SchedBarrier>(loc, 0), true);
+  prependOp(builder.create<ROCDL::SchedBarrier>(loc, 0), false);
+  prependOp(builder.create<ROCDL::SBarrierOp>(loc), false);
+  prependOp(builder.create<ROCDL::SetPrioOp>(loc, lowPriority), false);
 
   // MemoryCluster2
   updateOpInsertion(memoryClusterStartOps[1]);
@@ -730,8 +729,8 @@ LogicalResult Pingponger::transformChainedDotSchedule(OpBuilder &builder,
   }
 
   updateOpInsertion(lastInsertedOp->getBlock()->getTerminator());
-  prependOp(builder.create<ROCDL::SBarrierOp>(loc), true);
-  prependOp(builder.create<ROCDL::SchedBarrier>(loc, 0), true);
+  prependOp(builder.create<ROCDL::SchedBarrier>(loc, 0), false);
+  prependOp(builder.create<ROCDL::SBarrierOp>(loc), false);
 
   return success();
 }
