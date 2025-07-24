@@ -157,34 +157,37 @@ chooseMfmaInstruction(Location loc, int mfmaVersion, RankedTensorType cType,
     if (minSize >= 32) {
       // On CNDA2-4, if the element type is f64, we use 16x16 intrinsic as
       // there's no 32x32 intrinsic.
+      mDim = nDim = 32;
       if (aElemType.isF64() || bElemType.isF64()) {
-        mDim = 16;
-        nDim = 16;
-      } else {
-        mDim = 32;
-        nDim = 32;
+        mDim = nDim = 16;
+      }
+    } else if (minSize >= 16) {
+      mDim = nDim = 16;
+    } else if (minSize >= 4) {
+      if (M >= 64) {
+        mDim = 64;
+        nDim = 4;
+      } else if (N >= 64) {
+        mDim = 4;
+        nDim = 64;
       }
     }
-    if (minSize >= 16 && minSize < 32) {
-      mDim = 16;
-      nDim = 16;
-    }
   }
-  if (mDim == 0 || nDim == 0)
-    return failure();
 
   FailureOr<MfmaIntrinsic> maybeMfmaIntrinsic =
       MfmaIntrinsic::selectFor(loc, mfmaVersion, mDim, nDim, inputKSize,
                                aElemType, bElemType, withScale, allowXF32);
+
+  // Fallback to FMA if the M/N dim is not supported by MFMA.
   if (failed(maybeMfmaIntrinsic))
-    return emitError(loc, "no matching matrix core intrinsic due to "
-                          "unsupported element type");
+    return failure();
 
   kDim = maybeMfmaIntrinsic->kDim;
   assert(kDim != 0);
   assert(enforcedNonKDim != 0 || (M % mDim == 0 && N % nDim == 0));
-  // if inputKSize % kDim != 0 this layout will introduce data duplication,
-  // consider FMA dot is preferred, except cases MFMA layout is enforced.
+  // If inputKSize % kDim != 0 (including the case where inputKSize < kDim),
+  // this layout will introduce data duplication. We will not use MFMA layout
+  // in this case, except MFMA layout is enforced.
   if (enforcedNonKDim == 0 && inputKSize % kDim != 0)
     return failure();
   return maybeMfmaIntrinsic;
@@ -466,12 +469,14 @@ public:
       mfmaAccType = rewriter.getF32Type();
 
     // Use transposed mfma layout to enable larger vectorization for global
-    // store instructions.
+    // store instructions. We can not support transposed mfma 4x64 as it
+    // requires to broadcast the operand A.
+    bool isTransposed = !(mDim == 4 && nDim == 64);
     auto aElemTy = mfmaInstr->aElementType;
     ttg::AMDMfmaEncodingAttr mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
         oldRetType.getContext(),
         /*version*/ mfmaVersion, warpsPerTile,
-        /*instrShape*/ mDim, nDim, /*isTransposed=*/true, CTALayout,
+        /*instrShape*/ mDim, nDim, /*isTransposed=*/isTransposed, CTALayout,
         mfmaAccType);
 
     // convert accumulator
@@ -494,8 +499,7 @@ public:
     // 4. relation between kBase and kDim:
     //    4.1 For mfma_32, kBase = kDim / 2
     //    4.2 For mfma_16, kBase = kDim / 4
-    //    4.3 For mfma_4, it depends on how mfma_4 is used. We'll extend to
-    //        mfma_4 later.
+    //    4.3 For mfma_4, kBase = kDim / 16
     // 5. relation between kWidth and kBase: For now it supports two cases
     //    5.1 kWidth = kBase, i.e. kPack = 1. In this case, each load from
     //        shared memory results in one mfma instruction.
@@ -505,11 +509,6 @@ public:
     //    Note that we cannot have larger kPack since kPack = 2 means
     //    ds_read_b128, which is the largest vector size for shared memory load.
     auto kWidth = kBase;
-    // in mfma 4x4 case argument matrix groups in 16 groups
-    if (mDim == 4 && nDim == 4)
-      kWidth = kDim / 16;
-    if ((mDim == 4 && nDim == 64) || (mDim == 64 && nDim == 4))
-      kWidth = kDim;
 
     // We want to extend kWidth by kPack (kPack=1 means no extension)
     // to increase ds_read vector size
@@ -1306,32 +1305,35 @@ public:
     MLIRContext *context = &getContext();
     ModuleOp m = getOperation();
 
-    RewritePatternSet patterns(context);
+    RewritePatternSet mfmaPatterns(context);
     switch (auto isaFamily = triton::AMD::deduceISAFamily(archGenerationName)) {
     case ISAFamily::CDNA4:
-      patterns.add<::ScaledBlockedToScaledMFMAF8F6F4>(
+      mfmaPatterns.add<::ScaledBlockedToScaledMFMAF8F6F4>(
           context, getMfmaVersion(isaFamily), matrixInstructionSize,
           /*benefit=*/10);
       [[fallthrough]];
     case ISAFamily::CDNA1:
     case ISAFamily::CDNA2:
     case ISAFamily::CDNA3:
-      patterns.add<::BlockedToMFMA, ::ScaledBlockedToMFMA>(
+      mfmaPatterns.add<::BlockedToMFMA, ::ScaledBlockedToMFMA>(
           context, getMfmaVersion(isaFamily), matrixInstructionSize, kPack,
           /*benefit=*/2);
       break;
     case ISAFamily::RDNA3:
-      patterns.add<::BlockedToWMMA>(context, getWmmaVersion(archGenerationName),
-                                    matrixInstructionSize,
-                                    /*benefit=*/2);
+      mfmaPatterns.add<::BlockedToWMMA>(
+          context, getWmmaVersion(archGenerationName), matrixInstructionSize,
+          /*benefit=*/2);
       break;
     default:
       break;
     }
-    patterns.add<AccelerateBlocked>(context, archGenerationName, /*benefit=*/1);
-    if (applyPatternsGreedily(m, std::move(patterns)).failed()) {
+    if (applyPatternsGreedily(m, std::move(mfmaPatterns)).failed())
       signalPassFailure();
-    }
+
+    RewritePatternSet patterns(context);
+    patterns.add<AccelerateBlocked>(context, archGenerationName, /*benefit=*/1);
+    if (applyPatternsGreedily(m, std::move(patterns)).failed())
+      signalPassFailure();
     decomposeMixedModeDotOp(m);
   }
 };

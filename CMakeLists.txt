@@ -97,6 +97,10 @@ if(NOT MLIR_DIR)
   set(MLIR_DIR ${LLVM_LIBRARY_DIR}/cmake/mlir)
 endif()
 
+if(NOT LLD_DIR)
+  set(LLD_DIR ${LLVM_LIBRARY_DIR}/cmake/lld)
+endif()
+
 # MLIR
 find_package(MLIR REQUIRED CONFIG PATHS ${MLIR_DIR})
 

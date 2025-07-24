@@ -3833,9 +3833,11 @@ def get_test_dot_small_k_mfma_cases():
 
 # M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, kpack, mma_nonk_size
 # introduced in #4516
-def get_test_dot_small_mn_fma_cases():
+def get_test_dot_small_mn_mfma_cases():
+    if not is_hip_cdna():
+        return []
     return [(*shape_nw, False, False, epilogue, 'ieee', in_dtype, out_dtype, 1, None)
-            for shape_nw in [(2, 2, 16, 1), (1, 64, 64, 1), (64, 2, 64, 2), (64, 64, 4, 4)]
+            for shape_nw in [(4, 64, 64, 1), (64, 4, 64, 1)]
             for epilogue in ['none', 'trans', 'add-matrix', 'add-rows', 'add-cols']
             for in_dtype, out_dtype in [('float16', 'float16'), ('float32', 'float32')]]
 
@@ -3875,7 +3877,7 @@ def get_test_small_dots_cases():
     get_test_dot_mfma_edge_cases() + \
     get_test_dot_fp8_output_cases() + \
     get_test_dot_small_k_mfma_cases() + \
-    get_test_dot_small_mn_fma_cases() + \
+    get_test_dot_small_mn_mfma_cases() + \
     get_test_dot_softmax() + \
     get_test_small_dots_cases())
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
@@ -4070,13 +4072,15 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
         return
 
     if is_hip_cdna():
-        if M != 4:
-            return
         amdgcn = pgm.asm['amdgcn']
-        if in_dtype == 'float16':
-            assert 'v_dot2c_f32_f16' in amdgcn
-        elif (in_dtype == 'bfloat16') and is_hip_cdna4():
-            assert 'v_dot2c_f32_bf16' in amdgcn
+
+        if (M, N) == (4, 64) or (M, N) == (64, 4):
+            assert 'v_mfma_f32_4x4' in amdgcn
+        elif (M, N) == (4, 32):
+            if in_dtype == 'float16':
+                assert 'v_dot2c_f32_f16' in amdgcn
+            elif (in_dtype == 'bfloat16') and is_hip_cdna4():
+                assert 'v_dot2c_f32_bf16' in amdgcn
         return
 
     # make sure ld/st are vectorized
@@ -5719,6 +5723,110 @@ def test_inline_asm_packed_multiple_outputs(device):
 
     C_ref = A.astype(np.int32)
     D_ref = np.maximum(A.astype(np.float32), B)
+
+    np.testing.assert_equal(C_ref, to_numpy(C_tri))
+    np.testing.assert_equal(D_ref, to_numpy(D_tri))
+
+
+# -----------------------
+# test map elementwise
+# -----------------------
+
+
+@pytest.mark.parametrize("num_ctas", num_ctas_list)
+def test_map_elementwise(num_ctas, device):
+
+    @triton.jit
+    def compare(x, y):
+        if x < y:
+            return -1
+        elif x == y:
+            return 0
+        else:
+            return 1
+
+    @triton.jit
+    def kernel(X, Y, Z, BLOCK: tl.constexpr):
+        x = tl.load(X + tl.arange(0, BLOCK))
+        y = tl.load(Y + tl.arange(0, BLOCK))
+        z = tl.map_elementwise(compare, x, y)
+        tl.store(Z + tl.arange(0, BLOCK), z)
+
+    shape = (128, )
+    rs = RandomState(17)
+    x = numpy_random(shape, dtype_str='int32', rs=rs)
+    y = numpy_random(shape, dtype_str='int32', rs=rs)
+    x_tri = to_triton(x, device=device)
+    y_tri = to_triton(y, device=device)
+    z_tri = to_triton(numpy_random(shape, dtype_str='int32', rs=rs), device=device)
+    kernel[(1, )](x_tri, y_tri, z_tri, BLOCK=shape[0], num_ctas=num_ctas)
+    z_ref = (x > y).astype(int) - (y > x).astype(int)
+    np.testing.assert_equal(z_ref, to_numpy(z_tri))
+
+
+def test_map_elementwise_multiple_outputs(device):
+
+    @triton.jit
+    def divmod(a, b):
+        return a // b, a % b
+
+    @triton.jit
+    def kernel(A, B, C, D, BLOCK: tl.constexpr):
+        a = tl.load(A + tl.arange(0, BLOCK))
+        b = tl.load(B + tl.arange(0, BLOCK))
+
+        c, d = tl.map_elementwise(divmod, a, b)
+
+        tl.store(C + tl.arange(0, BLOCK), c)
+        tl.store(D + tl.arange(0, BLOCK), d)
+
+    shape = (512, )
+    rs = RandomState(17)
+    A = numpy_random(shape, dtype_str='uint32', rs=rs)
+    B = numpy_random(shape, dtype_str='uint32', rs=rs)
+    A_tri = to_triton(A, device=device)
+    B_tri = to_triton(B, device=device)
+    C_tri = to_triton(numpy_random(shape, dtype_str='uint32', rs=rs), device=device)
+    D_tri = to_triton(numpy_random(shape, dtype_str='uint32', rs=rs), device=device)
+    kernel[(1, )](A_tri, B_tri, C_tri, D_tri, BLOCK=shape[0])
+
+    C_ref = A // B
+    D_ref = A % B
+
+    np.testing.assert_equal(C_ref, to_numpy(C_tri))
+    np.testing.assert_equal(D_ref, to_numpy(D_tri))
+
+
+def test_map_elementwise_pack(device):
+
+    @triton.jit
+    def divmod(a0, a1, b0, b1):
+        return a0 // b0, a1 // b1, a0 % b0, a1 % b1
+
+    @triton.jit
+    def kernel(A, B, C, D, BLOCK: tl.constexpr):
+        a = tl.load(A + tl.arange(0, BLOCK))
+        b = tl.load(B + tl.arange(0, BLOCK))
+
+        c, d = tl.map_elementwise(divmod, a, b, pack=2)
+
+        tl.store(C + tl.arange(0, BLOCK), c)
+        tl.store(D + tl.arange(0, BLOCK), d)
+
+    shape = (512, )
+    rs = RandomState(17)
+    A = numpy_random(shape, dtype_str='uint32', rs=rs)
+    B = numpy_random(shape, dtype_str='uint32', rs=rs)
+    A_tri = to_triton(A, device=device)
+    B_tri = to_triton(B, device=device)
+    C_tri = to_triton(numpy_random(shape, dtype_str='uint32', rs=rs), device=device)
+    D_tri = to_triton(numpy_random(shape, dtype_str='uint32', rs=rs), device=device)
+    h = kernel[(1, )](A_tri, B_tri, C_tri, D_tri, BLOCK=shape[0])
+    print(h.asm["llir"])
+    print(h.asm["ttir"])
+
+    C_ref = A // B
+    D_ref = A % B
 
     np.testing.assert_equal(C_ref, to_numpy(C_tri))
     np.testing.assert_equal(D_ref, to_numpy(D_tri))

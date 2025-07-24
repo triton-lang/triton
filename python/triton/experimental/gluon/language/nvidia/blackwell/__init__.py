@@ -77,10 +77,10 @@ def get_tmem_32x32b_reg_layout(M, N, shape, num_warps, ctas_per_cga=None, cta_sp
     if M == 64:
         threads_per_warp = [16, 2]
         if num_blocks == 1:
-            size_per_thread = [1, N // (num_warp_groups * 2)]
+            size_per_thread = [1, triton.cdiv(N, num_warp_groups * 2)]
             warps_per_cta = [4, num_warp_groups]
         else:
-            size_per_thread = [1, N // 2]
+            size_per_thread = [1, triton.cdiv(N, 2)]
             warps_per_cta = [4 * min(blocks_per_tile[0], num_warp_groups)]
             warps_per_cta.append(triton.cdiv(num_warp_groups, warps_per_cta[0] // 4))
     else:
@@ -89,7 +89,7 @@ def get_tmem_32x32b_reg_layout(M, N, shape, num_warps, ctas_per_cga=None, cta_sp
             threads_per_warp = [32, 1]
             warps_per_cta = [4 * num_warp_groups, 1]
         else:
-            size_per_thread = [1, N // num_warp_groups]
+            size_per_thread = [1, triton.cdiv(N, num_warp_groups)]
             threads_per_warp = [32, 1]
             warps_per_cta = [4, num_warp_groups]
     return BlockedLayout(
