@@ -1,4 +1,4 @@
-from triton.backends.compiler import BaseBackend, GPUTarget, Language
+from triton.backends.compiler import BaseBackend, GPUTarget, Language, enable_debug
 from triton._C.libtriton import ir, passes, llvm, nvidia
 from triton import knobs
 from triton.runtime.errors import PTXASError
@@ -219,7 +219,7 @@ class CUDABackend(BaseBackend):
     @staticmethod
     def make_ttir(mod, metadata, opt, capability):
         pm = ir.pass_manager(mod.context)
-        pm.enable_debug()
+        enable_debug(pm)
         passes.common.add_inliner(pm)
         passes.ttir.add_rewrite_tensor_pointer(pm)
         if capability // 10 < 9:
@@ -245,7 +245,7 @@ class CUDABackend(BaseBackend):
             cluster_info.clusterDimY = opt.cluster_dims[1]
             cluster_info.clusterDimZ = opt.cluster_dims[2]
         pm = ir.pass_manager(mod.context)
-        dump_enabled = pm.enable_debug()
+        dump_enabled = enable_debug(pm)
         passes.ttir.add_convert_to_ttgpuir(pm, f"cuda:{capability}", opt.num_warps, 32, opt.num_ctas)
         # optimize TTGIR
         passes.ttgpuir.add_coalesce(pm)
@@ -314,7 +314,7 @@ class CUDABackend(BaseBackend):
     def gluon_to_ttgir(self, src, metadata, options, capability):
         mod = src
         pm = ir.pass_manager(mod.context)
-        pm.enable_debug()
+        enable_debug(pm)
 
         passes.gluon.add_inliner(pm)
         passes.gluon.add_resolve_auto_encodings(pm)
@@ -333,7 +333,7 @@ class CUDABackend(BaseBackend):
         mod = src
         # TritonGPU -> LLVM-IR (MLIR)
         pm = ir.pass_manager(mod.context)
-        pm.enable_debug()
+        enable_debug(pm)
 
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)
         passes.ttgpuir.add_allocate_warp_groups(pm)
