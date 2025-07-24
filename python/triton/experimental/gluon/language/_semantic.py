@@ -202,13 +202,6 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         res_ty = ttgl.distributed_type(src_ty.element_ty, src_ty.shape, layout)
         return self.tensor(handle, res_ty)
 
-    def _memdesc_index(self, mem_desc, index, shape):
-        layout = mem_desc.layout
-        ty = ttgl.shared_memory_descriptor_type(mem_desc.dtype, shape, layout, mem_desc.type.alloc_shape)
-        builder = self.builder
-        handle = builder.create_memdesc_index(ty.to_ir(builder), mem_desc.handle, index)
-        return ttgl.shared_memory_descriptor(handle, **ty.__dict__)
-
     def memdesc_slice(self, mem_desc, start, length, dim):
         offsets = [self.builder.get_int32(0)] * mem_desc.rank
         offsets[dim] = self.to_tensor(start).handle
