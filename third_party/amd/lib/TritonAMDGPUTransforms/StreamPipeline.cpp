@@ -4,6 +4,7 @@
 #include "third_party/amd/include/Analysis/AxisInfoExt.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Dialect/Triton/IR/OpInterfaces.h"
+#include "triton/Dialect/Triton/Transforms/LoopPeeling.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipelineExpander.h"
@@ -1087,6 +1088,11 @@ struct PipelinePass : impl::TritonAMDGPUStreamPipelineBase<PipelinePass> {
         loops.push_back(forOp);
     });
 
+    bool customEpiloguePeeling = false;
+    DenseSet<ttg::MaskOp> peeledMaskOps;
+    auto processPeeledEpilogueOp =
+        tt::createProcessPeeledEpilogueFn(peeledMaskOps);
+
     for (scf::ForOp forOp : loops) {
       if (!triton::gpu::isSafeToPipeline(forOp)) {
         LDBG("Loop not safe to pipeline:\n" << *forOp);
@@ -1096,12 +1102,18 @@ struct PipelinePass : impl::TritonAMDGPUStreamPipelineBase<PipelinePass> {
       // pingpong, which is the only use case of this scheduling variant.
       int numStagesThis = tt::getNumStagesOrDefault(forOp, numStages);
       bool waitAtTail = usePingpong && (numStagesThis == 3) && useAsyncCopy;
-      (void)pipelineLoop(forOp, numStagesThis, globalPrefetch, localPrefetch,
-                         useAsyncCopy, waitAtTail);
+      FailureOr<scf::ForOp> newForOp =
+          pipelineLoop(forOp, numStagesThis, globalPrefetch, localPrefetch,
+                       useAsyncCopy, waitAtTail);
+      if (failed(newForOp)) {
+        continue;
+      }
+      forOp = *newForOp;
+      if (customEpiloguePeeling) {
+        tt::peelLoopEpilogue(forOp, processPeeledEpilogueOp);
+      }
     }
 
-    // NOTE: Leave empty for now, until we utilize customEpiloguePeeling
-    DenseSet<ttg::MaskOp> peeledMaskOps;
     tt::resolveMaskOp(moduleOp, peeledMaskOps);
 
     if (useAsyncCopy) {
