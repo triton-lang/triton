@@ -881,20 +881,22 @@ void Pingponger::getDotPingponged() {
 
   int64_t numOfDotLikeOps = scaledDotOps.size() + dotOps.size();
 
-  if (numOfDotLikeOps && numStages == 4) {
-    // In this case we used the ChainedDotSchedule
+  if (numOfDotLikeOps < 1 || numOfDotLikeOps > 2) {
+    LDBG("Only handle one or two dotlike ops");
+    return;
+  }
+
+  if (numOfDotLikeOps == 2 && numStages == 4) {
     if (transformChainedDotSchedule(builder, loc).failed()) {
       LDBG("Encountered failure when trying the ChainedDot ping pong "
            "cluster transformation");
       return;
     }
     addAsymmetricSyncToLoop(builder, loc);
-  }
-
-  if (numOfDotLikeOps != 1) {
-    LDBG("Only handle a single of either dot or dot_scaled op");
+  } else if (numOfDotLikeOps == 2) {
     return;
   }
+
   useAsyncCopy = (asyncCopyOps.size() > 0);
   int64_t gloadSize = useAsyncCopy ? asyncCopyOps.size() : gLoadOps.size();
   int64_t dotSize =
