@@ -308,14 +308,10 @@ void calculateAddressAndEmitTmemMessage(
 
   TritonLLVMOpBuilder b(loc, rewriter);
   Value warpId = rewriter.create<nvgpu::WarpIdOp>(loc);
-  Value warpIdInGroup, warpGroupId;
-  if (info.numWarpGroups == 1) {
-    warpIdInGroup = warpId;
-    warpGroupId = b.i32_val(0);
-  } else {
-    warpIdInGroup = b.urem(warpId, b.i32_val(4));
-    warpGroupId = b.udiv(warpId, b.i32_val(4));
-  }
+  // Note: optimizing this when we know `info.numWarpGroups` is 1 can result in
+  // performance regressions.
+  Value warpIdInGroup = b.urem(warpId, b.i32_val(4));
+  Value warpGroupId = b.udiv(warpId, b.i32_val(4));
 
   // When split along M, blockM=128 and num_warps=8, and a strided message is
   // selected such that all 8 warps read a 16 rows of a block at a time.
