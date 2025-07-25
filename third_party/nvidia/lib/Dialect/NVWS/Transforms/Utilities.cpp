@@ -19,15 +19,6 @@ Operation *createAlloc(OpBuilder &builder, Location loc,
   }
 }
 
-MemDescType getArefbufMemDescType(MemDescType memDescType, int32_t depth) {
-  auto shape = memDescType.getShape();
-  SmallVector<int64_t> bufferShape(shape.begin(), shape.end());
-  bufferShape.insert(bufferShape.begin(), depth);
-  return MemDescType::get(bufferShape, memDescType.getElementType(),
-                          memDescType.getEncoding(),
-                          memDescType.getMemorySpace(), true);
-}
-
 ArefCreateOp createArefCreateOp(OpBuilder &builder,
                                 const SmallVector<Type> &arefTypes,
                                 const SmallVector<Value> &allocOps,

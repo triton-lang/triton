@@ -70,7 +70,7 @@ ArefCreateOp createAref(OpBuilder &builder, ProducedValueInfo &producedValue) {
   MemDescType arefBufType;
 
   if (auto memDescType = dyn_cast<MemDescType>(result.getType())) {
-    arefBufType = getArefbufMemDescType(memDescType, 1);
+    arefBufType = getMultiBufferedType(memDescType, 1);
   } else if (auto tensorType = dyn_cast<RankedTensorType>(result.getType())) {
     // if result is a value, create memdesctype for location where value will
     // be stored
@@ -89,7 +89,7 @@ ArefCreateOp createAref(OpBuilder &builder, ProducedValueInfo &producedValue) {
     } else {
       llvm_unreachable("Only TMA is expected for now.");
     }
-    arefBufType = getArefbufMemDescType(memDescType, 1);
+    arefBufType = getMultiBufferedType(memDescType, 1);
   } else {
     llvm_unreachable("unsupported type");
   }
@@ -194,13 +194,12 @@ SmallVector<Operation *> createArefPut(PartitionBuilder &builder,
   } else if (isGlobalLoadAndAlloc(result)) {
     llvm_unreachable("cpasync not supported yet");
   } else if (auto tensorType = dyn_cast<RankedTensorType>(result.getType())) {
-    auto op = result.getDefiningOp();
-    if (op && isa<triton::DescriptorOpInterface>(op)) {
-      createNVWSDescriptorLoadOp(builder, op, dataBuf, producerPartition,
+    if (auto descOp = result.getDefiningOp<triton::DescriptorOpInterface>()) {
+      createNVWSDescriptorLoadOp(builder, descOp, dataBuf, producerPartition,
                                  schedule, loc);
       producerKind = AsyncOp::TMALoad;
-      staleOps.push_back(op);
-    } else if (op && isa<triton::LoadOp>(op)) {
+      staleOps.push_back(descOp);
+    } else if (auto loadOp = result.getDefiningOp<triton::LoadOp>()) {
       llvm_unreachable("cpasync not supported yet");
     } else {
       // Create LocalStore of result into dataBuf. This is a value aref, not

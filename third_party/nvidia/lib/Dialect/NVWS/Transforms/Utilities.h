@@ -13,9 +13,6 @@ static const char *kArefTagAttrName = "aref_tag";
 Operation *createAlloc(OpBuilder &builder, Location loc,
                        gpu::MemDescType memDescType, Value src);
 
-gpu::MemDescType getArefbufMemDescType(gpu::MemDescType memDescType,
-                                       int32_t depth);
-
 ArefCreateOp createArefCreateOp(OpBuilder &builder,
                                 const SmallVector<Type> &arefTypes,
                                 const SmallVector<Value> &allocOps,

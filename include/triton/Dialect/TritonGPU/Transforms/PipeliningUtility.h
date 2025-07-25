@@ -124,6 +124,12 @@ void combineRedundantWaitOps(
 
 // Get the type of the view of a multi-buffered tensor value.
 gpu::MemDescType getBufferViewType(gpu::MemDescType allocTy, bool mutableMemory=true);
+
+// Get a mutable, multi-buffered version of the given memdesc type, with
+// multiplicity "depth".
+gpu::MemDescType getMultiBufferedType(gpu::MemDescType memDescType,
+                                      int32_t depth);
+
 // Get a generic shared encoding for a tensor.
 gpu::SharedEncodingTrait getSharedEncoding(RankedTensorType ty);
 // Get a shared encoding for a tensor based on its uses.

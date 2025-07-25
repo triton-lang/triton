@@ -504,6 +504,17 @@ ttg::MemDescType mlir::triton::getBufferViewType(ttg::MemDescType allocTy,
                                /*allocShape=*/allocTy.getAllocShape());
 }
 
+ttg::MemDescType
+mlir::triton::getMultiBufferedType(ttg::MemDescType memDescType,
+                                   int32_t depth) {
+  auto shape = memDescType.getShape();
+  SmallVector<int64_t> bufferShape(shape.begin(), shape.end());
+  bufferShape.insert(bufferShape.begin(), depth);
+  return ttg::MemDescType::get(
+      bufferShape, memDescType.getElementType(), memDescType.getEncoding(),
+      memDescType.getMemorySpace(), /*mutableMemory*/ true);
+}
+
 ttg::SharedEncodingTrait mlir::triton::getSharedEncoding(RankedTensorType ty) {
   auto ctaLayout = ttg::getCTALayout(ty.getEncoding());
   auto order = ttg::getOrder(ty);
