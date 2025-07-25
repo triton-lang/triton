@@ -11,6 +11,8 @@ jobs:
   integration-tests-amd:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
+    # Let other runners continue even if gfx950 fails
+    continue-on-error: ${{ matrix.runner[0] == 'amd-gfx950'}}
     strategy:
       matrix:
         runner: ${{ fromJson(inputs.matrix) }}
