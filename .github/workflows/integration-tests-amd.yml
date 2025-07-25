@@ -33,6 +33,7 @@ jobs:
       # container expect it at /github/home/.triton. So map here to make sure visible in docker.
       options: >-
         --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --user root
+        --env-file /etc/podinfo/gha-gpu-isolation-settings
         --volume /home/runner/.triton:/github/home/.triton
     steps:
       - name: Checkout
