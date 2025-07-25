@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file -allow-unregistered-dialect --tritongpu-hoist-tmem-alloc -tritongpu-partition-scheduling --nvws-insert-aref | FileCheck %s
+// RUN: triton-opt %s -split-input-file -allow-unregistered-dialect --nvws-insert-aref | FileCheck %s
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0]}>
@@ -85,4 +85,49 @@ module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
     } {tt.warp_specialize, ttg.partition.stages = [0 : i32, 1 : i32, 0 : i32]}
     tt.return
   }
+
+  // CHECK-LABEL: @load_used_as_reg_and_smem
+  tt.func @load_used_as_reg_and_smem(%arg0: !tt.tensordesc<tensor<128x64xf16, #shared>>, %arg1: i32) {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    scf.for %arg2 = %c0_i32 to %arg1 step %c1_i32  : i32 {
+      // CHECK: nvws.aref.put.enter
+      // CHECK: nvws.descriptor_load
+      // CHECK: nvws.aref.put.exit
+      %0 = tt.descriptor_load %arg0[%arg2, %arg2] {ttg.partition = 2 : i32} : !tt.tensordesc<tensor<128x64xf16, #shared>> -> tensor<128x64xf16, #blocked1>
+      %alloc = ttg.local_alloc %0 {ttg.partition = 2 : i32} : (tensor<128x64xf16, #blocked1>) -> !ttg.memdesc<128x64xf16, #shared, #smem>
+      // CHECK-DAG: [[GET_BUF1:%.*]] = nvws.aref.get.enter {{.*}} {aref_tag = "aref_0", ttg.partition = 0 : i32}
+      // CHECK-DAG: [[GET_BUF2:%.*]] = nvws.aref.get.enter {{.*}} {aref_tag = "aref_0", ttg.partition = 1 : i32}
+      // CHECK-DAG: [[REG:%.*]] = ttg.local_load [[GET_BUF1]]
+      // CHECK-DAG: nvws.aref.get.exit {{.*}} [#nvws.async_op<none>] {aref_tag = "aref_0", ttg.partition = 0 : i32}
+      // CHECK: "use1"([[REG]])
+      // CHECK: "use2"([[GET_BUF2]])
+      // CHECK: nvws.aref.get.exit {{.*}} [#nvws.async_op<none>] {aref_tag = "aref_0", ttg.partition = 1 : i32}
+      "use1"(%0) {ttg.partition = 0 : i32} : (tensor<128x64xf16, #blocked1>) -> ()
+      "use2"(%alloc) {ttg.partition = 1 : i32} : (!ttg.memdesc<128x64xf16, #shared, #smem>) -> ()
+    } {tt.warp_specialize, ttg.partition.stages = [0 : i32, 1 : i32, 0 : i32]}
+    tt.return
+  }
+
+  // CHECK-LABEL: @load_used_as_reg_and_smem_same_partition
+  tt.func @load_used_as_reg_and_smem_same_partition(%arg0: !tt.tensordesc<tensor<128x64xf16, #shared>>, %arg1: i32) {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    scf.for %arg2 = %c0_i32 to %arg1 step %c1_i32  : i32 {
+      // CHECK: nvws.aref.put.enter
+      // CHECK: nvws.descriptor_load
+      // CHECK: nvws.aref.put.exit
+      %0 = tt.descriptor_load %arg0[%arg2, %arg2] {ttg.partition = 2 : i32} : !tt.tensordesc<tensor<128x64xf16, #shared>> -> tensor<128x64xf16, #blocked1>
+      %alloc = ttg.local_alloc %0 {ttg.partition = 2 : i32} : (tensor<128x64xf16, #blocked1>) -> !ttg.memdesc<128x64xf16, #shared, #smem>
+      // CHECK: [[GET_BUF:%.*]] = nvws.aref.get.enter
+      // CHECK: [[REG:%.*]] = ttg.local_load [[GET_BUF]]
+      // CHECK: "use1"([[REG]])
+      // CHECK: "use2"([[GET_BUF]])
+      // CHECK: nvws.aref.get.exit
+      "use1"(%0) {ttg.partition = 1 : i32} : (tensor<128x64xf16, #blocked1>) -> ()
+      "use2"(%alloc) {ttg.partition = 1 : i32} : (!ttg.memdesc<128x64xf16, #shared, #smem>) -> ()
+    } {tt.warp_specialize, ttg.partition.stages = [0 : i32, 1 : i32, 0 : i32]}
+    tt.return
+  }
+
 }

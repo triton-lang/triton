@@ -48,15 +48,17 @@ bool isGlobalLoadAndAlloc(Value result) {
 }
 
 SmallVector<ProducedValueInfo> getProducedValues(Operation *op, Block *loopBody,
-                                                 WarpSchedule &schedule) {
+                                                 WarpSchedule &schedule,
+                                                 bool allowDescLoadRegUse) {
   SmallVector<ProducedValueInfo> producedValues;
   auto partition = schedule.getPartition(loopBody->findAncestorOpInBlock(*op));
 
   if (partition != schedule.getRootPartition()) {
     for (auto result : op->getResults()) {
       // Only handles load ops for now.
-      if (isa<triton::DescriptorOpInterface>(result.getDefiningOp()) ||
-          isDescLoadAndAlloc(result)) {
+      if (isDescLoadAndAlloc(result) ||
+          (allowDescLoadRegUse &&
+           isa<triton::DescriptorOpInterface>(result.getDefiningOp()))) {
         producedValues.push_back({partition, result});
       }
     }
@@ -162,14 +164,13 @@ StageCluster getStageClusterForProducer(Value producedValue) {
 SmallVector<Operation *> createArefPut(PartitionBuilder &builder,
                                        ArefCreateOp aref, std::string arefTag,
                                        ProducedValueInfo producedValue,
-                                       Partition *producerPartition,
                                        WarpSchedule &schedule) {
   auto loc = producedValue.result.getLoc();
   auto arefBufType = cast<MemDescType>(aref.getBuffers()[0].getType());
   Value result = producedValue.result;
   auto dataBufType = getBufferViewType(arefBufType, true);
   StageCluster stageCluster = getStageClusterForProducer(result);
-
+  Partition *producerPartition = producedValue.partition;
   SmallVector<Type> buffers{dataBufType};
 
   auto putEnterOp = builder.createInto<ArefPutEnterOp>(
@@ -221,20 +222,37 @@ SmallVector<Operation *> createArefPut(PartitionBuilder &builder,
   return staleOps;
 };
 
-SetVector<Operation *> getTransitiveConsumers(Operation *op) {
+SetVector<Operation *> getTransitiveConsumers(Operation *op,
+                                              Partition *consumerPartition,
+                                              const WarpSchedule &schedule) {
   SetVector<Operation *> opConsumers;
   auto isMemDesc = [](auto res) { return isa<MemDescType>(res.getType()); };
   for (auto user : op->getUsers()) {
     if (llvm::count_if(user->getResults(), isMemDesc) > 0) {
       // Recurse into consumers of memdesc ops, since the liveness of the
       // produced value extends beyond such ops.
-      auto consumers = getTransitiveConsumers(user);
+      auto consumers =
+          getTransitiveConsumers(user, consumerPartition, schedule);
       opConsumers.insert(consumers.begin(), consumers.end());
     } else {
-      opConsumers.insert(user);
+      if (schedule.getPartition(user) == consumerPartition) {
+        opConsumers.insert(user);
+      }
     }
   }
   return opConsumers;
+}
+
+SetVector<Operation *> getTransitiveConsumers(const SetVector<Value> &results,
+                                              Partition *consumerPartition,
+                                              const WarpSchedule &schedule) {
+  SetVector<Operation *> ret;
+  for (auto result : results) {
+    auto consumers = getTransitiveConsumers(result.getDefiningOp(),
+                                            consumerPartition, schedule);
+    ret.insert(consumers.begin(), consumers.end());
+  }
+  return ret;
 }
 
 SmallVector<Attribute>
@@ -275,48 +293,65 @@ void propagateAllocShape(Value value, int64_t arefAllocDepth) {
 }
 
 void createArefGet(PartitionBuilder &builder, ArefCreateOp aref,
-                   std::string arefTag, ProducedValueInfo producedValue,
+                   std::string arefTag, const SetVector<Value> &results,
                    Partition *consumerPartition, WarpSchedule &schedule,
                    PostDominanceInfo &postDomInfo) {
-  auto loc = producedValue.result.getLoc();
+  OpBuilder::InsertionGuard g(builder);
+  // The vector "results" contains either
+  // 1. One of local_load(desc_load()) or desc_load()
+  // 2. Both of them
+  // In the second case, we only need to emit one enter / exit since we know
+  // that the two results are used by consumers in the same partition.
+  assert(results.size() == 1 || results.size() == 2);
+  auto loc = results[0].getLoc();
+  StageCluster stageCluster = getStageCluster(results[0].getDefiningOp());
+
   auto arefBufType = cast<MemDescType>(aref.getOperand(0).getType());
-
-  Value result = producedValue.result;
-  StageCluster stageCluster = getStageCluster(result.getDefiningOp());
-
   Type bufferType = getBufferViewType(arefBufType, false);
   auto getEnterOp = builder.createInto<ArefGetEnterOp>(
       *consumerPartition, stageCluster, SmallVector{bufferType}, aref,
       mkConstant(builder, loc, 0, 32, consumerPartition, schedule));
-  Value dataBuf = getEnterOp.getResults()[0];
   schedule.insert(consumerPartition, getEnterOp);
   getEnterOp->setAttr(kArefTagAttrName, builder.getStringAttr(arefTag));
 
-  auto consumers = getTransitiveConsumers(result.getDefiningOp());
+  auto consumers = getTransitiveConsumers(results, consumerPartition, schedule);
   auto asyncKinds = getConsumerAsyncOpKinds(consumers, aref.getContext());
+  Value dataBuf = getEnterOp.getResults()[0];
 
-  if (auto memDescType = dyn_cast<MemDescType>(result.getType())) {
-    auto insertPoint = *llvm::min_element(consumers, [&](auto &lhs, auto &rhs) {
-      return postDomInfo.postDominates(lhs, rhs);
-    });
-    builder.setInsertionPointAfter(insertPoint);
-    result.replaceAllUsesWith(dataBuf);
-    propagateAllocShape(dataBuf, arefBufType.getAllocShape()[0]);
-  } else if (auto tensorType = dyn_cast<RankedTensorType>(result.getType())) {
-    auto localLoadOp = builder.create<LocalLoadOp>(loc, tensorType, dataBuf);
-    result.replaceAllUsesWith(localLoadOp.getResult());
-    schedule.insert(consumerPartition, localLoadOp);
-  } else {
-    llvm_unreachable("unsupported type");
+  Operation *exitInsertPointAfter = nullptr;
+  for (auto result : results) {
+    if (auto memDescType = dyn_cast<MemDescType>(result.getType())) {
+      result.replaceAllUsesWith(dataBuf);
+      propagateAllocShape(dataBuf, arefBufType.getAllocShape()[0]);
+    } else if (auto tensorType = dyn_cast<RankedTensorType>(result.getType())) {
+      auto localLoadOp = builder.create<LocalLoadOp>(loc, tensorType, dataBuf);
+      result.replaceAllUsesWith(localLoadOp.getResult());
+      schedule.insert(consumerPartition, localLoadOp);
+      if (consumers.size() == 1) {
+        // If there is only one consumer and we hit this code path, the empty
+        // barrier can be released after local load.
+        exitInsertPointAfter = localLoadOp;
+      }
+    } else {
+      llvm_unreachable("unsupported type");
+    }
   }
+
+  if (exitInsertPointAfter == nullptr) {
+    exitInsertPointAfter =
+        *llvm::min_element(consumers, [&](auto &lhs, auto &rhs) {
+          return postDomInfo.postDominates(lhs, rhs);
+        });
+  }
+
+  builder.setInsertionPointAfter(exitInsertPointAfter);
 
   auto getExitOp = builder.createInto<ArefGetExitOp>(
       *consumerPartition, stageCluster, aref,
       mkConstant(builder, loc, 0, 32, consumerPartition, schedule),
       builder.getArrayAttr(asyncKinds));
-
-  getExitOp->setAttr(kArefTagAttrName, builder.getStringAttr(arefTag));
   schedule.insert(consumerPartition, getExitOp);
+  getExitOp->setAttr(kArefTagAttrName, builder.getStringAttr(arefTag));
 
   for (auto consumer : consumers) {
     if (auto mmav5 = dyn_cast<MMAv5OpInterface>(consumer)) {
@@ -332,17 +367,27 @@ void createArefGet(PartitionBuilder &builder, ArefCreateOp aref,
 bool insertArefs(PartitionBuilder &builder, scf::ForOp loop,
                  WarpSchedule &schedule, ProducedValueInfo producedValue,
                  int arefTag) {
-  Partition *consumerPartition = nullptr;
-  auto [producerPartition, result] = producedValue;
-  for (auto &use : result.getUses()) {
-    Partition *userPartition = schedule.getPartition((use.getOwner()));
-    if (producerPartition != userPartition) {
-      consumerPartition = userPartition;
-      break;
+  // Collect uses of local_alloc(desc_load()) or desc_load() results by each
+  // partition
+  DenseMap<Partition *, SetVector<Value>> resultsPerPartition;
+  auto processResultUses = [&](Value result) {
+    for (auto user : result.getUsers()) {
+      Partition *userPartition = schedule.getPartition(user);
+      if (producedValue.partition != userPartition) {
+        resultsPerPartition[userPartition].insert(result);
+      }
     }
+  };
+
+  processResultUses(producedValue.result);
+
+  if (isDescLoadAndAlloc(producedValue.result)) {
+    // Process the register use as well
+    auto alloc = producedValue.result.getDefiningOp<LocalAllocOp>();
+    processResultUses(alloc.getSrc());
   }
 
-  if (!consumerPartition) {
+  if (resultsPerPartition.empty()) {
     return false;
   }
 
@@ -354,12 +399,13 @@ bool insertArefs(PartitionBuilder &builder, scf::ForOp loop,
   }
 
   auto tag = "aref_" + std::to_string(arefTag);
-  auto staleOps = createArefPut(builder, aref, tag, producedValue,
-                                producerPartition, schedule);
+  auto staleOps = createArefPut(builder, aref, tag, producedValue, schedule);
 
   PostDominanceInfo postDomInfo(loop);
-  createArefGet(builder, aref, tag, producedValue, consumerPartition, schedule,
-                postDomInfo);
+  for (auto [consumerPartition, results] : resultsPerPartition) {
+    createArefGet(builder, aref, tag, results, consumerPartition, schedule,
+                  postDomInfo);
+  }
 
   for (auto op : staleOps) {
     op->erase();
@@ -384,23 +430,29 @@ public:
       if (failed(schedule))
         continue;
 
-      SmallVector<Operation *> ops;
-      loop.walk([&](Operation *op) {
-        if (!isa<TMEMAllocOp, TMEMLoadOp, TMEMStoreOp, scf::YieldOp,
-                 triton::FuncOp, triton::ReturnOp, scf::ForOp, scf::IfOp>(op)) {
-          ops.push_back(op);
-        }
-      });
-
       int arefTag = 0;
 
-      for (auto op : ops) {
-        auto producedValues = getProducedValues(op, loop.getBody(), *schedule);
-        for (auto producedValue : producedValues) {
-          PartitionBuilder builder(op->getLoc(), op);
-          builder.setInsertionPointAfter(op);
-          if (insertArefs(builder, loop, *schedule, producedValue, arefTag))
-            arefTag++;
+      // Process local_alloc(desc_load()) first, followed by remaining register
+      // uses of desc_load results
+      for (auto allowDescLoadRegUse : {false, true}) {
+        SmallVector<Operation *> ops;
+        loop.walk([&](Operation *op) {
+          if (!isa<TMEMAllocOp, TMEMLoadOp, TMEMStoreOp, scf::YieldOp,
+                   triton::FuncOp, triton::ReturnOp, scf::ForOp, scf::IfOp>(
+                  op)) {
+            ops.push_back(op);
+          }
+        });
+
+        for (auto op : ops) {
+          auto producedValues = getProducedValues(op, loop.getBody(), *schedule,
+                                                  allowDescLoadRegUse);
+          for (auto producedValue : producedValues) {
+            PartitionBuilder builder(op->getLoc(), op);
+            builder.setInsertionPointAfter(op);
+            if (insertArefs(builder, loop, *schedule, producedValue, arefTag))
+              arefTag++;
+          }
         }
       }
 
