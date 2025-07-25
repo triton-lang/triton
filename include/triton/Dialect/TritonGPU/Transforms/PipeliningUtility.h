@@ -123,7 +123,8 @@ void combineRedundantWaitOps(
     llvm::SmallSetVector<gpu::AsyncWaitOp, 8> &waitOps);
 
 // Get the type of the view of a multi-buffered tensor value.
-gpu::MemDescType getBufferViewType(gpu::MemDescType allocTy, bool mutableMemory=true);
+gpu::MemDescType getBufferViewType(gpu::MemDescType allocTy,
+                                   bool mutableMemory = true);
 
 // Get a mutable, multi-buffered version of the given memdesc type, with
 // multiplicity "depth".
