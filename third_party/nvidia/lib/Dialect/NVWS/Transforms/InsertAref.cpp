@@ -304,6 +304,10 @@ void createArefGet(PartitionBuilder &builder, ArefCreateOp aref,
   // that the two results are used by consumers in the same partition.
   assert(results.size() == 1 || results.size() == 2);
   auto loc = results[0].getLoc();
+  // FIXME: What stage cluster should get enter / exit be annotated with, if
+  // there are more than one consumers in the same partition?
+  // For now, it is assumed that this annotation matters only for attention,
+  // for which results[0] is local_alloc(desc_load()).
   StageCluster stageCluster = getStageCluster(results[0].getDefiningOp());
 
   auto arefBufType = cast<MemDescType>(aref.getOperand(0).getType());
@@ -324,7 +328,11 @@ void createArefGet(PartitionBuilder &builder, ArefCreateOp aref,
       result.replaceAllUsesWith(dataBuf);
       propagateAllocShape(dataBuf, arefBufType.getAllocShape()[0]);
     } else if (auto tensorType = dyn_cast<RankedTensorType>(result.getType())) {
-      auto localLoadOp = builder.create<LocalLoadOp>(loc, tensorType, dataBuf);
+      // Assumes that all local_load users in this partition share the same
+      // stage cluster
+      StageCluster stageCluster = getStageCluster(*result.getUsers().begin());
+      auto localLoadOp = builder.createInto<LocalLoadOp>(
+          *consumerPartition, stageCluster, tensorType, dataBuf);
       result.replaceAllUsesWith(localLoadOp.getResult());
       schedule.insert(consumerPartition, localLoadOp);
       if (consumers.size() == 1) {
