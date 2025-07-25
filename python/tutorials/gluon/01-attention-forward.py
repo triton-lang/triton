@@ -610,6 +610,17 @@ def _apply_causal_mask(qk, col_limit_right):
 
 
 @gluon.jit
+def _split_n(x):
+    return x.reshape([x.shape[0], 2, x.shape[1] // 2]).permute(0, 2, 1).split()
+
+
+@gluon.jit
+def _join_n(x0, x1, layout):
+    x = gl.join(x0, x1).permute(0, 2, 1).reshape([x0.shape[0], x0.shape[1] * 2])
+    return gl.convert_layout(x, layout, assert_trivial=True)
+
+
+@gluon.jit
 def _softmax_inner_loop(tile_id: gl.constexpr, config, prog,  #
                         s_consumer, corr_producer, exp_turnstile, corr_bar,  #
                         offs_m, m_i, l_i0, l_i1, STAGE: gl.constexpr):
@@ -635,7 +646,7 @@ def _softmax_inner_loop(tile_id: gl.constexpr, config, prog,  #
         else:
             qk = _mul_f32x2(qk, gl.full_like(qk, config.qk_scale))
             qk = _add_f32x2(qk, -m_ij[:, None])
-        qk0, qk1, = qk.reshape([config.SPLIT_M, 2, config.BLOCK_N // 2]).permute(0, 2, 1).split()
+        qk0, qk1 = _split_n(qk)
 
         p_tmem = _borrow_s_as_p(config, s_tmem)
         BN4: gl.constexpr = config.BLOCK_N // 4
@@ -650,25 +661,23 @@ def _softmax_inner_loop(tile_id: gl.constexpr, config, prog,  #
         # below the register limit in the FADD2, FMUL2, EX2 section. Subtile by
         # 4 to minimize the spilling.
         if config.HEAD_DIM == 64:
-            qk00, qk01 = qk0.reshape([config.SPLIT_M, 2, config.BLOCK_N // 4]).permute(0, 2, 1).split()
+            qk00, qk01 = _split_n(qk0)
             p00 = gl.exp2(qk00)
             p_tmem.slice(0, BN4).store(p00.to(config.dtype))
             p01 = gl.exp2(qk01)
             p_tmem.slice(BN4, BN4).store(p01.to(config.dtype))
-            p0 = gl.join(p00, p01).permute(0, 2, 1).reshape([config.SPLIT_M, config.BLOCK_N // 2])
-            p0 = gl.convert_layout(p0, config.qk_layout)
+            p0 = _join_n(p00, p01, config.qk_layout)
         else:
             p0 = gl.exp2(qk0)
             p_tmem.slice(0, BN2).store(p0.to(config.dtype))
 
         if config.HEAD_DIM == 64:
-            qk10, qk11 = qk1.reshape([config.SPLIT_M, 2, config.BLOCK_N // 4]).permute(0, 2, 1).split()
+            qk10, qk11 = _split_n(qk1)
             p10 = gl.exp2(qk10)
             p_tmem.slice(2 * BN4, BN4).store(p10.to(config.dtype))
             p11 = gl.exp2(qk11)
             p_tmem.slice(3 * BN4, BN4).store(p11.to(config.dtype))
-            p1 = gl.join(p10, p11).permute(0, 2, 1).reshape([config.SPLIT_M, config.BLOCK_N // 2])
-            p1 = gl.convert_layout(p1, config.qk_layout)
+            p1 = _join_n(p10, p11, config.qk_layout)
         else:
             p1 = gl.exp2(qk1)
             p_tmem.slice(BN2, BN2).store(p1.to(config.dtype))
@@ -690,8 +699,7 @@ def _softmax_inner_loop(tile_id: gl.constexpr, config, prog,  #
                 l_i0 = l_i0 * alpha + l_ij0
                 l_i1 = l_i1 * alpha + l_ij1
         else:
-            p = gl.join(p0, p1).permute(0, 2, 1).reshape([config.SPLIT_M, config.BLOCK_N])
-            p = gl.convert_layout(p, config.qk_layout)
+            p = _join_n(p0, p1, config.qk_layout)
             l_ij = gl.sum(p, axis=1)
             l_i0 = l_i0 * alpha + l_ij
 
