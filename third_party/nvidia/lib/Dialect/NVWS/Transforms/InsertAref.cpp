@@ -245,7 +245,7 @@ getConsumerAsyncOpKinds(const SetVector<Operation *> &consumers,
   for (auto consumer : consumers) {
     if (isa<WarpGroupDotOp>(consumer)) {
       kindSet.insert(AsyncOp::WGMMA);
-    } else if (auto mmav5 = dyn_cast<MMAv5OpInterface>(consumer)) {
+    } else if (isa<MMAv5OpInterface>(consumer)) {
       kindSet.insert(AsyncOp::TC5MMA);
     } else {
       kindSet.insert(AsyncOp::NONE);

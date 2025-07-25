@@ -53,7 +53,7 @@ def NVWS_ArefCreateOp : NVWS_Op<"aref.create", [
     and the first axis of the shape should match between all inputs, representing
     multi-buffering of the values.
   }];
-  let arguments = (ins Variadic<AnyType>:$operands);
+  let arguments = (ins Variadic<TTG_MemDescType>:$operands);
 
   let results = (outs NVWS_ArefType:$result);
 
@@ -68,7 +68,7 @@ def NVWS_ArefGetEnterOp : NVWS_Op<"aref.get.enter"> {
 
   let arguments = (ins NVWS_ArefType:$aref,
                        I32:$index);
-  let results = (outs Variadic<AnyType>:$results);
+  let results = (outs Variadic<TTG_MemDescType>:$results);
   let hasVerifier=1;
   let assemblyFormat = [{
     $aref `[` $index `]` attr-dict
@@ -97,7 +97,7 @@ def NVWS_ArefPutEnterOp : NVWS_Op<"aref.put.enter"> {
 
   let arguments = (ins NVWS_ArefType:$aref,
                        I32:$index);
-  let results = (outs Variadic<AnyType>:$results);
+  let results = (outs Variadic<TTG_MemDescType>:$results);
   let hasVerifier=1;
   let assemblyFormat = [{
     $aref `[` $index `]` attr-dict
