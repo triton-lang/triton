@@ -43,7 +43,9 @@ kernels by finely controlling these low-level details.
 # `@gluon.jit` decorator to declare a Gluon kernel, and it can be invoked from
 # Python using the same interface as a `@triton.jit` kernel.
 
+import pytest
 import torch
+import triton
 from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
 
@@ -74,8 +76,94 @@ def copy_scalar(input, output):
 # Let's test the kernel. You can run the test with `pytest 01-intro.py`.
 
 
-def test_kernel():
+def test_copy_scalar():
     input = torch.tensor([42.0], device="cuda")
     output = torch.empty_like(input)
     copy_scalar(input, output)
     torch.testing.assert_close(input, output, atol=0, rtol=0)
+
+
+# %%
+# We can write a kernel with hyperparameters passed as constexpr arguments in
+# much the same way as Triton. This is a trivial memcpy kernel implemented by
+# subtiling the tensors into 1D blocks, where each program processes one block.
+
+
+@gluon.jit
+def memcpy_kernel(in_ptr, out_ptr, xnumel, XBLOCK: gl.constexpr):
+    # Each program processes the addresses [pid, pid + BLOCK_X), clamped into
+    # the range [0, xnumel).
+    pid = gl.program_id(0)
+    start = pid * XBLOCK
+    end = min(start + XBLOCK, xnumel)
+    for i in range(start, end):
+        value = gl.load(in_ptr + i)
+        gl.store(out_ptr + i, value)
+
+
+def memcpy(input, output, XBLOCK=128):
+    xnumel = input.numel()
+    grid = (triton.cdiv(xnumel, XBLOCK), )
+    memcpy_kernel[grid](input, output, xnumel, XBLOCK, num_warps=1)
+
+
+@pytest.mark.parametrize("XBLOCK", [64])
+@pytest.mark.parametrize("xnumel", [40, 500])
+def test_memcpy(XBLOCK, xnumel):
+    torch.manual_seed(0)
+    input = torch.randn(xnumel, device="cuda")
+    output = torch.empty_like(input)
+    memcpy(input, output, XBLOCK)
+    torch.testing.assert_close(input, output, atol=0, rtol=0)
+
+
+# %%
+# Gluon hyperparameters can be autotuned like Triton as well. Let's autotune
+# `XBLOCK` for the memcpy kernel as an example.
+
+
+@triton.autotune(
+    configs=[triton.Config({"XBLOCK": 2**i}, num_warps=1) for i in range(8, 14)],
+    key=["xnumel"],
+)
+@gluon.jit
+def memcpy_kernel_autotune(in_ptr, out_ptr, xnumel, XBLOCK: gl.constexpr):
+    memcpy_kernel(in_ptr, out_ptr, xnumel, XBLOCK)
+
+
+def memcpy_autotune(input, output):
+    xnumel = input.numel()
+
+    def grid(META):
+        return (triton.cdiv(xnumel, META["XBLOCK"]), )
+
+    memcpy_kernel_autotune[grid](input, output, xnumel)
+
+
+# %%
+# Run this with `TRITON_PRINT_AUTOTUNING=1 python 01-intro.py` to see which
+# `XBLOCK` gets selected. On B200, the best `XBLOCK` ends up being 2048 to copy
+# 4 GB of data at about 332 GB/s, far from the 8 TB/s peak bandwidth of the GPU.
+#
+# Since performance is the main motiviation for writing kernels in Gluon, let's
+# spend some time discussing that. First, the obvious problem is we are not
+# fully utilizing the parallelism of the GPU. Each Gluon "program" corresponds
+# to a thread block (CTA) on the GPU, and while the GPU can execute many CTAs
+# at once, our kernel copies 1 scalar element at a time per CTA.
+#
+# In order to copy many elements at once, we need to load and store tiles, but
+# that will require picking a layout and understanding which layouts perform
+# better than others. In the next tutorial, we will cover the basics of layouts
+# in Gluon and how they can affect performance.
+
+if __name__ == "__main__":
+    torch.manual_seed(0)
+    xnumel = 4 << 30
+    input = torch.randn(xnumel, device="cuda")
+    output = torch.empty_like(input)
+
+    fn = lambda: memcpy_autotune(input, output)
+    ms = triton.testing.do_bench(fn)
+    gbytes = xnumel * input.element_size() >> 30
+    print("ms  ", round(ms, 2))
+    print("GB/s", round(gbytes / (ms * 1e-3), 2))
