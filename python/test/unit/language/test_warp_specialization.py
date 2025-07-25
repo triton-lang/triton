@@ -304,6 +304,7 @@ def matmul_tma_persistent_ws_kernel(  #
         GROUP_SIZE_M: tl.constexpr,  #
         NUM_SMS: tl.constexpr,  #
         USE_FP8: tl.constexpr,  #
+        FLATTEN: tl.constexpr,  #
 ):
     a_desc = tl.make_tensor_descriptor(a_ptr, shape=[M, K], strides=[a_stride0, a_stride1],
                                        block_shape=[BLOCK_SIZE_M, BLOCK_SIZE_K])
@@ -318,7 +319,8 @@ def matmul_tma_persistent_ws_kernel(  #
     k_tiles = tl.cdiv(K, BLOCK_SIZE_K)
     num_tiles = num_pid_m * num_pid_n
 
-    for tile_id in tl.range(start_pid, num_tiles, NUM_SMS, flatten=True, warp_specialize=True, num_stages=num_stages):
+    for tile_id in tl.range(start_pid, num_tiles, NUM_SMS, flatten=FLATTEN, warp_specialize=True,
+                            num_stages=num_stages):
         pid_m, pid_n = _compute_pid(tile_id, num_pid_n, num_pid_m, GROUP_SIZE_M)
 
         off_am = pid_m * BLOCK_SIZE_M
@@ -342,7 +344,7 @@ def matmul_tma_persistent_ws_kernel(  #
 @pytest.mark.parametrize("num_warps", [4, 8])
 @pytest.mark.parametrize("use_fp8", [False, True])
 @pytest.mark.skipif(is_hip(), reason="warp specialization is not supported on hip devices")
-@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.skipif(not is_hopper_or_blackwell(), reason="Requires Hopper or Blackwell")
 def test_warp_specialize_tma_matmul_persistent(M, N, K, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, num_stages, num_warps,
                                                use_fp8):
     if exceeds_smem_capacity(num_stages, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, use_fp8):
@@ -371,10 +373,18 @@ def test_warp_specialize_tma_matmul_persistent(M, N, K, BLOCK_SIZE_M, BLOCK_SIZE
 
     kernel = matmul_tma_persistent_ws_kernel[grid](A, B, C, *A.stride(), *B.stride(), *C.stride(), M, N, K, num_stages,
                                                    BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, GROUP_SIZE_M, NUM_SMS,
-                                                   num_warps=num_warps, USE_FP8=use_fp8)
+                                                   num_warps=num_warps, USE_FP8=use_fp8, FLATTEN=is_blackwell())
     ttgir = kernel.asm["ttgir"]
-    assert "ttng.tc_gen5_mma" in ttgir
-    assert "ttg.warp_specialize" in ttgir
+    if is_blackwell():
+        assert "ttng.tc_gen5_mma" in ttgir
+        assert "ttng.async_tma_copy_global_to_local" in ttgir
+    else:
+        assert "ttng.warp_group_dot" in ttgir
+        assert "ttng.async_tma_copy_global_to_local" in ttgir
+    if is_hopper() and num_warps == 8:
+        assert "ttg.warp_specialize" not in ttgir
+    else:
+        assert "ttg.warp_specialize" in ttgir
 
     ref_out = torch.empty((M, N), dtype=dtype, device=device)
     cublas.matmul(A, B, ref_out)

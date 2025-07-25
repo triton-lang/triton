@@ -663,15 +663,8 @@ triton::createSingleBufferView(OpBuilder &builder, Value alloc, Value idx) {
       shape, allocDescType.getElementType(), allocDescType.getEncoding(),
       allocDescType.getMemorySpace(), allocDescType.getMutableMemory(),
       /*allocShape=*/allocDescType.getAllocShape());
-  SmallVector<Value> idxs = {idx};
-  if (allocDescType.getShape().size() > 1) {
-    Value zero = builder.create<arith::ConstantIntOp>(alloc.getLoc(), 0, 32);
-    for (unsigned i = 1; i < allocDescType.getShape().size(); i++) {
-      idxs.push_back(zero);
-    }
-  }
-  return builder.create<ttg::MemDescSubviewOp>(alloc.getLoc(), viewDescType,
-                                               alloc, idxs);
+  return builder.create<ttg::MemDescIndexOp>(alloc.getLoc(), viewDescType,
+                                             alloc, idx);
 }
 
 TypedValue<ttg::MemDescType>

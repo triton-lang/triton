@@ -142,11 +142,11 @@ gpu::SharedEncodingTrait getSharedEncoding(Operation *loadOp);
 // specified.
 int getNumStagesOrDefault(scf::ForOp forOp, int defaultNumStages);
 
-// Given a result of MemDescSubview, or Alloca, create a MemDescSubview with a
+// Given a result of MemDescIndex, or Alloca, create a MemDescIndex with a
 // single buffer slice (leading dimension equal to 1), at the given index.
 TypedValue<triton::gpu::MemDescType>
 createSingleBufferView(OpBuilder &builder, Value alloc, Value idx);
-// Given a result of MemDescSubview, or Alloca, create a MemDescSubview with a
+// Given a result of MemDescIndex, or Alloca, create a MemDescIndex with a
 // single buffer slice (leading dimension equal to 1), at the given index.
 TypedValue<triton::gpu::MemDescType>
 createSingleBufferView(OpBuilder &builder, Value alloc, int idx);

@@ -120,7 +120,7 @@ static Interval<int> getLiveIntervals(Value value, Liveness &liveness,
   SmallVector<Operation *> users(value.getUsers());
   while (!users.empty()) {
     Operation *user = users.pop_back_val();
-    if (!isa<ttg::MemDescSubviewOp, ttg::MemDescReinterpretOp>(user))
+    if (!isa<ttg::MemDescIndexOp, ttg::MemDescReinterpretOp>(user))
       continue;
     auto usersLivness = liveness.resolveLiveness(user->getResult(0));
     liveOperations.insert(liveOperations.end(), usersLivness.begin(),
@@ -179,8 +179,8 @@ static Operation *getAlloc(Value value) {
   while (true) {
     if (auto allocOp = value.getDefiningOp<TMEMAllocOp>())
       return allocOp;
-    if (auto subviewOp = value.getDefiningOp<ttg::MemDescSubviewOp>()) {
-      value = subviewOp.getSrc();
+    if (auto indexOp = value.getDefiningOp<ttg::MemDescIndexOp>()) {
+      value = indexOp.getSrc();
       continue;
     }
     if (auto reinterpOp = value.getDefiningOp<ttg::MemDescReinterpretOp>()) {
