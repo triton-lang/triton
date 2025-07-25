@@ -679,7 +679,7 @@ LogicalResult Pingponger::transformChainedDotSchedule(OpBuilder &builder,
 
   // Memory clusters start with either ttg.async_wait or ttg.local_store
   auto findNextMemoryCluster = [](Operation *op) {
-    while (op && !llvm::isa<ttg::AsyncWaitOp, ttg::LocalStoreOp>(op)) {
+    while (!llvm::isa_and_nonnull<ttg::AsyncWaitOp, ttg::LocalStoreOp>(op)) {
       op = op->getNextNode();
     }
     return op;
@@ -884,15 +884,16 @@ void Pingponger::getDotPingponged() {
     return;
   }
 
-  if (numOfDotLikeOps == 2 && numStages == 4) {
+  if (numOfDotLikeOps == 2) {
+    if (numStages != 4)
+      return;
+
     if (transformChainedDotSchedule(builder, loc).failed()) {
       LDBG("Encountered failure when trying the ChainedDot ping pong "
            "cluster transformation");
       return;
     }
     addAsymmetricSyncToLoop(builder, loc);
-  } else if (numOfDotLikeOps == 2) {
-    return;
   }
 
   useAsyncCopy = (asyncCopyOps.size() > 0);
