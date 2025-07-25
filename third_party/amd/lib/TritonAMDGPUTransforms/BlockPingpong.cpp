@@ -671,7 +671,7 @@ LogicalResult Pingponger::transformTwoClusterWithAsyncAndAll(OpBuilder &builder,
 // correct order to allow for efficient pingpong. The loop contains 2 pairs of
 // compute and memory clusters so we only have to place barriers/sched.barriers
 // at the bounaries and give higher priority to memory clusters
-// See StreamPipeliner.cpp:ChainedDotSchedule for details about the schedule
+// See ScheduleLoops.cpp:ChainedDotSchedule for details about the schedule
 LogicalResult Pingponger::transformChainedDotSchedule(OpBuilder &builder,
                                                       Location loc) {
   assert(dotOps.size() == 2);
