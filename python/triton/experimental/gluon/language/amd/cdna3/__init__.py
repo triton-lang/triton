@@ -10,8 +10,7 @@ __all__ = ["get_amd_mfma_layout"]
 
 
 @builtin
-def get_amd_mfma_layout(version, warps_per_cta, tiles_per_warp, m_dim, n_dim, transposed, ctas_per_cga, cta_split_num,
-                        cta_order, elem_type_width, _semantic: GluonSemantic = None):
-    # TBD
-    return _semantic.builder.get_amd_mfma_layout(version, warps_per_cta, tiles_per_warp, m_dim, n_dim, transposed,
-                                                 ctas_per_cga, cta_split_num, cta_order, elem_type_width)
+def get_amd_mfma_layout(version, tiles_per_warp, warps_per_cta, ctas_per_cga, cta_split_num, cta_order, instr_shape,
+                        transposed, elem_type_width, _semantic: GluonSemantic = None):
+    return _semantic.builder.get_amd_mfma_layout(version, tiles_per_warp, warps_per_cta, ctas_per_cga, cta_split_num,
+                                                 cta_order, instr_shape, transposed, elem_type_width)
