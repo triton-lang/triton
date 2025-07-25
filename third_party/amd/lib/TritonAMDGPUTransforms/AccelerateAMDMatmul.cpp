@@ -614,7 +614,7 @@ public:
              elemType == ScaleDotElemType::FP16;
     };
     if (!supportsTypes(aElemType) || !supportsTypes(bElemType))
-      return rewriter.notifyMatchFailure(dotOp, "NYI: mxfp6 operand");
+      return rewriter.notifyMatchFailure(dotOp, "unknown operand type");
 
     MLIRContext *ctx = dotOp.getContext();
     auto moduleOp = dotOp->getParentOfType<ModuleOp>();
@@ -847,7 +847,7 @@ public:
     };
 
     if (!supportsTypes(aElemType) || !supportsTypes(bElemType)) {
-      return rewriter.notifyMatchFailure(dotOp, "NYI: mxfp6");
+      return rewriter.notifyMatchFailure(dotOp, "unknown operand type");
     }
 
     bool bothScalesAbsent = !aScale && !bScale;

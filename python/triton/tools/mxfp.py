@@ -2,6 +2,7 @@
 Helper classes for working with low precision floating point types that
 align with the opencompute (OCP) microscaling (MX) specification.
   * MXFP4Tensor: 4-bit E2M1 floating point data
+  * MXFP6Tensor: 6-bit E2M3/E3M2 floating point data
   * MXScaleTensor: 8-bit E8M0 floating point data
 Reference: https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-final-pdf
 """
@@ -234,16 +235,17 @@ class MXFP6Tensor:
 
     def __init__(self, data=None, size=None, device=None, e=2):
         """
-        Tensor class for working with six bit E2M3 floating point data as defined by the
+        Tensor class for working with six bit E2M3/E3M2 floating point data as defined by the
         opencompute microscaling specification.
 
 
         Parameters:
-        - data: A torch tensor of float32 numbers to convert to fp6e2m3 microscaling format.
+        - data: A torch tensor of float32 numbers to convert to fp6e2m3/fp6e3m2 microscaling format.
         - size: The size of the tensor to create.
         - device: The device on which to create the tensor.
         """
         self.device = device
+        self.s_shift = 5
         self.e_size = e
         self.m_size = 5 - e
         if data is not None:
@@ -259,15 +261,9 @@ class MXFP6Tensor:
         return self.data.ravel()
 
     def random(self):
-        # need at least
-        S = torch.randint(0, 2, size=self.size, dtype=torch.uint8, device=self.device)
-        E_range = 4 if self.e_size == 2 else 7
-        M_range = 4 if self.m_size == 2 else 7
-        E = torch.randint(0, E_range, size=self.size, dtype=torch.uint8, device=self.device)
-        M = torch.randint(0, M_range, size=self.size, dtype=torch.uint8, device=self.device)
-        E_shift = self.m_size
-
-        self.data = ((S << 5) | (E << E_shift) | M).type(torch.uint8)
+        upper_bound = 7.5 if self.e_size == 2 else 28.0
+        data = upper_bound * torch.rand(self.size, dtype=torch.float32, device=self.device)
+        self.data = self._from_float(data)
         return self
 
     def to(self, dtype):
@@ -277,15 +273,14 @@ class MXFP6Tensor:
         Returns:
         - A torch tensor of type dtype representing the fp6e2m3/fp6e3m2 data.
         """
-        assert dtype == torch.float32, "Currently only float32 is supported for fp4e2m1 to float conversion"
+        assert dtype == torch.float32, "Currently only float32 is supported for fp6e2m3/fp6e3m2 to float conversion"
 
         data = self.data
-        S_shift = 5
         E_shift = self.m_size
         E_mask = 0x3 if self.e_size == 2 else 0x7
         M_mask = 0x3 if self.m_size == 2 else 0x7
 
-        S = ((data >> S_shift) & 0x1).type(dtype)
+        S = ((data >> self.s_shift) & 0x1).type(dtype)
         E = ((data >> E_shift) & E_mask).type(dtype)
         M = (data & M_mask).type(dtype)
 
@@ -301,7 +296,7 @@ class MXFP6Tensor:
             sign = torch.pow(-1, S_nz)
             # Normal and subnormal handling for the exponent and mantissa
             E_bias = 1 if self.e_size == 2 else 3
-            M_factor = 0.125 if self.m_size == 3 else 0.25
+            M_factor = 0.25 if self.m_size == 2 else 0.125
             exponent = torch.where(E_nz == 0, E_nz, E_nz - E_bias)
             mantissa = torch.where(E_nz == 0, M_nz * M_factor, 1.0 + M_nz * M_factor)
             value_nz = sign * torch.pow(2, exponent) * mantissa
@@ -314,7 +309,7 @@ class MXFP6Tensor:
 
     def _from_float(self, values):
         """
-        Convert float32 numbers to mxf6 e2m3 format.
+        Convert float32 numbers to mxf6 e2m3/e3m2 format.
         * No encodings are reserved for Inf or NaN in mxf6.
         * Conversion from float supports roundTiesToEven rounding mode.
         * If a value exceeds the mxf6 representable range after rounding,
@@ -331,16 +326,16 @@ class MXFP6Tensor:
         is_zero = (abs_values == 0)
         is_invalid = torch.isnan(values) | torch.isinf(values)
 
-        # Enumerate all possible E2M3 exponent and mantissa values. We will
+        # Enumerate all possible E2M3/E3M2 exponent and mantissa values. We will
         # use these to compare the distance between float32 and all possible
-        # E2M1 floats to find the nearest E2M3 representable value
-        S_shift = 5
-        E_range = 4 if self.e_size == 2 else 7
-        E_bits = torch.arange(0, E_range, dtype=torch.uint8, device=self.device)
+        # E2M3/E3M2 floats to find the nearest E2M3/E3M2 representable value
         E_shift = self.m_size
-        M_range = 4 if self.m_size == 2 else 7
+        E_range = 4 if self.e_size == 2 else 8
+        E_bits = torch.arange(0, E_range, dtype=torch.uint8, device=self.device)
+        M_range = 4 if self.m_size == 2 else 8
         M_factor = 0.25 if self.m_size == 2 else 0.125
         M_bits = torch.arange(0, M_range, dtype=torch.uint8, device=self.device)
+        E_bias = 1 if self.e_size == 2 else 3
 
         candidate_values = []
         candidate_E = []
@@ -358,7 +353,7 @@ class MXFP6Tensor:
                     candidate_M.append(M)
             else:
                 # Normals
-                exponent = E.item() - 1
+                exponent = E.item() - E_bias
                 for M in M_bits:
                     significand = 1.0 + M * M_factor
                     value = significand * (2**exponent)
@@ -374,8 +369,9 @@ class MXFP6Tensor:
         N = abs_values_flat.shape[0]
         abs_values_expanded = abs_values_flat.unsqueeze(1)
 
-        # Clamp invalid values to the max e2m1 representable value
+        # Clamp invalid values to the max e2m3/e3m2 representable value
         max_candidate_value = candidates.max().item()
+
         abs_values_flat[is_invalid.view(-1)] = max_candidate_value
 
         # Compute distance between all abs_values and candidate e2m1 values
@@ -403,7 +399,7 @@ class MXFP6Tensor:
         E[is_zero] = 0
         M[is_zero] = 0
 
-        return ((S << S_shift) | (E << E_shift) | M).type(torch.uint8)
+        return ((S << self.s_shift) | (E << E_shift) | M).type(torch.uint8)
 
     def to_packed_tensor(self, dim):
         """
@@ -458,7 +454,7 @@ class MXFP6Tensor:
         - A tensor with the original data unpacked into uint8 elements containing one
           fp6e2m3 element in the least significant bits.
         """
-        orig_shape = packed_tensor.shape
+        original_shape = packed_tensor.shape
         size_along_dim = packed_tensor.size(dim)
         assert size_along_dim % 4 == 0, "Dim must be multiple of 4"
         new_size_along_dim = size_along_dim // 4
@@ -476,11 +472,11 @@ class MXFP6Tensor:
 
         out0 = elem0 & 0x3F
         out1 = ((elem1 << 2) & 0x3C) | ((elem0 >> 6) & 0x3)
-        out2 = ((elem2 << 4) & 0x3) | ((elem1 >> 4) & 0xF)
+        out2 = ((elem2 << 4) & 0x30) | ((elem1 >> 4) & 0xF)
         out3 = (elem2 >> 2) & 0x3F
 
         unpacked = torch.stack((out0, out1, out2, out3), dim=dim + 1)
-        unpacked = unpacked.reshape(orig_shape)
+        unpacked = unpacked.reshape(original_shape)
 
         return unpacked.type(torch.uint8)
 
