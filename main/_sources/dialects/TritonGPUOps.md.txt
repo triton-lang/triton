@@ -374,6 +374,49 @@ Effects: `MemoryEffects::Effect{}`
 | `result` | variadic of any type |
 
 
+### `ttg.memdesc_index` (triton::gpu::MemDescIndexOp)
+
+_Take a subview of the descriptor._
+
+Syntax:
+
+```
+operation ::= `ttg.memdesc_index` $src `,` $index attr-dict `:` qualified(type($src)) `->` qualified(type($result))
+```
+
+This operation returns a new descriptor pointing to the `i`-th element of the
+input descriptor along the 0-th dimension.
+
+It doesn't affect the underlying memory.
+
+For example, suppose that
+ - the input shape is 2x4x16xf16,
+ - the output shape is 4x16xf16, and
+ - index = 1.
+Then the output descriptor is equivalent to input[1], where input is the logical tensor.
+
+When the input is of rank 1 (i.e, shape=[k]), the output will have shape=[1].
+
+Traits: `AlwaysSpeculatableImplTrait`, `MemDescViewTrait`, `VerifyTensorLayoutsTrait`
+
+Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`
+
+Effects: `MemoryEffects::Effect{}`
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `src` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
+| `index` | 32-bit signless integer |
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `result` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
+
+
 ### `ttg.memdesc_reinterpret` (triton::gpu::MemDescReinterpretOp)
 
 _Reinterpret a memory descriptor as a different type and shape_
@@ -440,37 +483,28 @@ Effects: `MemoryEffects::Effect{}`
 | `result` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
 
 
-### `ttg.memdesc_subview` (triton::gpu::MemDescSubviewOp)
+### `ttg.memdesc_subslice` (triton::gpu::MemDescSubsliceOp)
 
 _Take a subview of the descriptor._
 
 Syntax:
 
 ```
-operation ::= `ttg.memdesc_subview` $src `[` $offsets `]` attr-dict `:` qualified(type($src)) `->` qualified(type($result))
+operation ::= `ttg.memdesc_subslice` $src `[` custom<Offsets>($offsets) `]` attr-dict `:` qualified(type($src))
+              `->` qualified(type($result))
 ```
 
-This operation returns a new descriptor representing a subview of the buffer.
+This operation returns a new descriptor representing a subview of the logical tensor.
 It doesn't affect the underlying memory.
 
 For example, suppose that
- - the input shape is 2x4x16xf16,
- - the output shape is 4x16xf16, and
- - offsets = [1, 0, 0].
+ - the input shape is 32x16xf16,
+ - the output shape is 8x16xf16, and
+ - offsets = [2, 1].
+Then in Python syntax, the subview covers input[2:8+2, 1:16+1] where input is
+the logical tensor.
 
-Then in Python syntax, the subview covers input[1].
-
-Just one dimension may be split (at most one non-zero offset).
-
-When the input shape and the output shape have different rank:
-Or the output shape is a tensor of 1D tensor of 1 element:
-  - The rank of the output must be 1D smaller than the input.
-  - We assume the input is split along the 0th dimension.
-  - The offset along the 0th dimension may be a runtime value.
-When the input and the output have the same rank:
-  - The offset must be a compile-time constant
-  - Larger or equal to the tile of the tensor (or zero)
-  - That does not split the input along the swizzling pattern (if any)
+The offsets must be larger or equal to the tile of the tensor (or zero).
 
 Traits: `AlwaysSpeculatableImplTrait`, `MemDescViewTrait`, `VerifyTensorLayoutsTrait`
 
@@ -478,12 +512,18 @@ Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterfac
 
 Effects: `MemoryEffects::Effect{}`
 
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>offsets</code></td><td>::mlir::DenseI32ArrayAttr</td><td>i32 dense array attribute</td></tr>
+</table>
+
 #### Operands:
 
 | Operand | Description |
 | :-----: | ----------- |
 | `src` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
-| `offsets` | variadic of 32-bit signless integer |
 
 #### Results:
 

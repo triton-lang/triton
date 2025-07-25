@@ -36,6 +36,25 @@ Effects: `MemoryEffects::Effect{}`
 | `result` | Asynchronous Reference |
 
 
+### `nvws.aref.destroy` (triton::nvws::ArefDestroyOp)
+
+_Destroy an asynchronous reference._
+
+Syntax:
+
+```
+operation ::= `nvws.aref.destroy` $aref attr-dict `:` type($aref)
+```
+
+Destroy an asynchronous reference.
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `aref` | Asynchronous Reference |
+
+
 ### `nvws.aref.get.enter` (triton::nvws::ArefGetEnterOp)
 
 _Enter ArefGet region where the buffer can be used to read data_
@@ -43,7 +62,7 @@ _Enter ArefGet region where the buffer can be used to read data_
 Syntax:
 
 ```
-operation ::= `nvws.aref.get.enter` $aref `[` $index `]` attr-dict
+operation ::= `nvws.aref.get.enter` $aref `[` $stage `,` $phase `]` attr-dict
               `:` type($aref) `->` type($results)
 ```
 
@@ -55,7 +74,8 @@ Enter a "region" where you can freely read from the buffer)
 | Operand | Description |
 | :-----: | ----------- |
 | `aref` | Asynchronous Reference |
-| `index` | 32-bit signless integer |
+| `stage` | 32-bit signless integer |
+| `phase` | 32-bit signless integer |
 
 #### Results:
 
@@ -71,7 +91,7 @@ _Exit ArefGet region, where the buffer should no longer be used_
 Syntax:
 
 ```
-operation ::= `nvws.aref.get.exit` $aref `[` $index `]` $async_ops attr-dict
+operation ::= `nvws.aref.get.exit` $aref `[` $stage `]` $async_ops attr-dict
               `:` type($aref)
 ```
 
@@ -90,7 +110,7 @@ Leave the region where you can freely read from the buffer).
 | Operand | Description |
 | :-----: | ----------- |
 | `aref` | Asynchronous Reference |
-| `index` | 32-bit signless integer |
+| `stage` | 32-bit signless integer |
 
 
 ### `nvws.aref.put.enter` (triton::nvws::ArefPutEnterOp)
@@ -100,7 +120,7 @@ _Enter ArefPut region where the buffer can be used to read data_
 Syntax:
 
 ```
-operation ::= `nvws.aref.put.enter` $aref `[` $index `]` attr-dict
+operation ::= `nvws.aref.put.enter` $aref `[` $stage `,` $phase `]` attr-dict
               `:` type($aref) `->` type($results)
 ```
 
@@ -112,7 +132,8 @@ Enter a "region" where you can freely write to the buffer)
 | Operand | Description |
 | :-----: | ----------- |
 | `aref` | Asynchronous Reference |
-| `index` | 32-bit signless integer |
+| `stage` | 32-bit signless integer |
+| `phase` | 32-bit signless integer |
 
 #### Results:
 
@@ -128,7 +149,7 @@ _Exit ArefPut region, where the buffer should no longer be used_
 Syntax:
 
 ```
-operation ::= `nvws.aref.put.exit` $aref `[` $index `]` $async_ops attr-dict
+operation ::= `nvws.aref.put.exit` $aref `[` $stage `]` $async_ops attr-dict
               `:` type($aref)
 ```
 
@@ -147,38 +168,7 @@ Leave the region where you can freely write to the buffer).
 | Operand | Description |
 | :-----: | ----------- |
 | `aref` | Asynchronous Reference |
-| `index` | 32-bit signless integer |
-
-
-### `nvws.async_complete` (triton::nvws::AsyncCompleteOp)
-
-_Mbarrier.arrive or tcgen5.commit_
-
-Syntax:
-
-```
-operation ::= `nvws.async_complete` $alloc `,` `async_op` `=` $async_op attr-dict `:` type($alloc)
-```
-
-Lowers to mbarrier.arrive.shared.b64, cp.async.mbarrier.arrive.noinc or
-tcgen05.commit depending on the value of commit.
- * This op allows all threads to arrive
- * It has an optional "arrive after a given async op completes" semantics.
-
-Interfaces: `MemoryEffectOpInterface`
-
-#### Attributes:
-
-<table>
-<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
-<tr><td><code>async_op</code></td><td>::mlir::triton::nvws::AsyncOpAttr</td><td>allowed 32-bit signless integer cases: 0, 1, 2, 3, 4, 5</td></tr>
-</table>
-
-#### Operands:
-
-| Operand | Description |
-| :-----: | ----------- |
-| `alloc` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
+| `stage` | 32-bit signless integer |
 
 
 ### `nvws.consumer_release` (triton::nvws::ConsumerReleaseOp)

@@ -1182,8 +1182,8 @@ be used to check aliasing and modref on the TMEM buffer.</p>
 </div>
 <p>This operation takes a subslice of a tensor memory allocation and returns a new descriptor
 containing the address and a view of the subslice.
-This is similar to ttg.memdesc_subview except the offset needs to be static and we can only
-slice alog the inner dimension of a 2D memdesc as this is the only one we can do for TMem.</p>
+This is similar to ttg.memdesc_subslice except we can only slice along the inner dimension
+of a 2D memdesc as this is the only one we can do for TMem.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
 <p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{}</span></code></p>
