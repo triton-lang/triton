@@ -33,7 +33,7 @@ bool canAllocBeInstrumented(Operation *op) {
     return true;
   }
   if (llvm::all_of(op->getUsers(), [](Operation *user) {
-        return isa<ttg::MemDescIndexOp>(user);
+        return isa<ttg::MemDescIndexOp>(user) || isa<ttg::LocalDeallocOp>(user);
       })) {
     return true;
   }
@@ -415,14 +415,20 @@ private:
     }
     if (auto wgmmaOp = dyn_cast<ttng::WarpGroupDotOp>(op)) {
       if (wgmmaOp.getIsAsync() == true) {
-        effects.emplace_back(
-            MemEffects{.rw = MemEffects::RW::Read,
-                       .trackingKind = MemEffects::TrackingKind::wgmmaCommit,
-                       .buf = wgmmaOp.getA()});
-        effects.emplace_back(
-            MemEffects{.rw = MemEffects::RW::Read,
-                       .trackingKind = MemEffects::TrackingKind::wgmmaCommit,
-                       .buf = wgmmaOp.getB()});
+        if (isa<ttg::SharedEncodingTrait>(
+                wgmmaOp.getA().getType().getEncoding())) {
+          effects.emplace_back(
+              MemEffects{.rw = MemEffects::RW::Read,
+                         .trackingKind = MemEffects::TrackingKind::wgmmaCommit,
+                         .buf = wgmmaOp.getA()});
+        }
+        if (isa<ttg::SharedEncodingTrait>(
+                wgmmaOp.getB().getType().getEncoding())) {
+          effects.emplace_back(
+              MemEffects{.rw = MemEffects::RW::Read,
+                         .trackingKind = MemEffects::TrackingKind::wgmmaCommit,
+                         .buf = wgmmaOp.getB()});
+        }
       }
     }
     return effects;
@@ -438,7 +444,7 @@ private:
           Value buf = effect.buf;
           auto bufType = cast<ttg::MemDescType>(buf.getType());
           MemType memType = MemType::TENSOR;
-          if (isa<ttg::NVMMASharedEncodingAttr>(bufType.getEncoding())) {
+          if (isa<ttg::SharedEncodingTrait>(bufType.getEncoding())) {
             memType = MemType::SHARED;
           }
           if (effect.rw == MemEffects::RW::Read) {
@@ -495,6 +501,7 @@ private:
             }
             if (effect.trackingKind ==
                 MemEffects::TrackingKind::asyncCpCommit) {
+              assert(memType == MemType::SHARED);
               b.create<tti::ExperimentalStageAccessForCommitOp>(
                   buf, buffersTensor[(int)memType], asyncCpCommitsAlloc,
                   asyncCpCommitsType, effect.pred);
