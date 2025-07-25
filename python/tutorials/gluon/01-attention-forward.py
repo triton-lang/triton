@@ -196,6 +196,7 @@ class AttentionConfig:
 
     SPLIT_D_FACTOR: gl.constexpr
     SPLIT_EXP_FACTOR: gl.constexpr
+    SPLIT_QK_LOAD_FACTOR: gl.constexpr
     SPLIT_M: gl.constexpr
     SPLIT_D: gl.constexpr
 
@@ -236,6 +237,7 @@ class AttentionConfig:
 
         self.SPLIT_D_FACTOR = gl.constexpr(2)
         self.SPLIT_EXP_FACTOR = 256 // HEAD_DIM
+        self.SPLIT_QK_LOAD_FACTOR = gl.constexpr(2 if STAGE == 1 else 1)
         self.SPLIT_M = gl.constexpr(self.BLOCK_M // 2)
         self.SPLIT_D = gl.constexpr(self.HEAD_DIM // self.SPLIT_D_FACTOR)
 
@@ -492,25 +494,41 @@ def _borrow_s_for_epilogue(config, s_tmem):
 
 
 @gl.constexpr_function
-def _get_split_n_layout(layout):
+def _get_split_n_layout(layout, SPLIT_FACTOR: gl.constexpr = 2):
     layout = copy.deepcopy(layout)
-    layout.size_per_thread[1] //= 2
+    layout.size_per_thread[1] //= SPLIT_FACTOR
     return layout
 
 
 @gluon.jit
-def _split_n(x):
-    layout: gl.constexpr = _get_split_n_layout(x.type.layout)
-    x0, x1 = x.reshape([x.shape[0], 2, x.shape[1] // 2]).permute(0, 2, 1).split()
-    x0 = gl.convert_layout(x0, layout, assert_trivial=True)
-    x1 = gl.convert_layout(x1, layout, assert_trivial=True)
-    return x0, x1
+def _split_n(x, SPLIT_FACTOR: gl.constexpr = 2):
+    if SPLIT_FACTOR == 1:
+        return (x, )
+    else:
+        layout: gl.constexpr = _get_split_n_layout(x.type.layout)
+        x0, x1 = x.reshape([x.shape[0], 2, x.shape[1] // 2]).permute(0, 2, 1).split()
+        x0 = gl.convert_layout(x0, layout, assert_trivial=True)
+        x1 = gl.convert_layout(x1, layout, assert_trivial=True)
+        return _split_n(x0, SPLIT_FACTOR // 2) + _split_n(x1, SPLIT_FACTOR // 2)
+
+
+@gl.constexpr_function
+def _get_join_n_layout(layout, SPLIT_FACTOR: gl.constexpr = 2):
+    layout = copy.deepcopy(layout)
+    layout.size_per_thread[1] *= SPLIT_FACTOR
+    return layout
 
 
 @gluon.jit
-def _join_n(x0, x1, layout):
-    x = gl.join(x0, x1).permute(0, 2, 1).reshape([x0.shape[0], x0.shape[1] * 2])
-    return gl.convert_layout(x, layout, assert_trivial=True)
+def _join_n(xs):
+    if len(xs) == 1:
+        return xs[0]
+    else:
+        x0 = _join_n(xs[:len(xs) // 2])
+        x1 = _join_n(xs[len(xs) // 2:])
+        layout: gl.constexpr = _get_join_n_layout(x0.type.layout)
+        x = gl.join(x0, x1).permute(0, 2, 1).reshape([x0.shape[0], x0.shape[1] * 2])
+        return gl.convert_layout(x, layout, assert_trivial=True)
 
 
 @gluon.jit
@@ -635,17 +653,25 @@ def _apply_causal_mask(qk, col_limit_right):
 
 
 @gluon.jit
-def _compute_and_store_exp2(config, qk, p_tmem, SUBTILE_FACTOR: gl.constexpr):
-    if SUBTILE_FACTOR == 1:
-        p = gl.exp2(qk)
-        p_tmem.store(p.to(config.dtype))
-        return p
-    else:
-        qk0, qk1 = _split_n(qk)
-        BN2: gl.constexpr = p_tmem.shape[1] // 2
-        p0 = _compute_and_store_exp2(config, qk0, p_tmem.slice(0, BN2), SUBTILE_FACTOR // 2)
-        p1 = _compute_and_store_exp2(config, qk1, p_tmem.slice(BN2, BN2), SUBTILE_FACTOR // 2)
-        return _join_n(p0, p1, gl.constexpr(qk.type.layout))
+def _compute_and_store_exp2(config, qk, p_tmem):
+    SIZE: gl.constexpr = p_tmem.shape[1] // config.SPLIT_EXP_FACTOR
+    qks = _split_n(qk, config.SPLIT_EXP_FACTOR)
+    ps = ()
+    for i in gl.static_range(config.SPLIT_EXP_FACTOR):
+        p = gl.exp2(qks[i])
+        p_tmem.slice(i * SIZE, SIZE).store(p.to(config.dtype))
+        ps = ps + (p, )
+    return _join_n(ps)
+
+
+@gluon.jit
+def _subtiled_qk_load(config, s_tmem):
+    SIZE: gl.constexpr = s_tmem.shape[1] // config.SPLIT_QK_LOAD_FACTOR
+    layout: gl.constexpr = _get_split_n_layout(config.qk_layout, config.SPLIT_QK_LOAD_FACTOR)
+    qks = ()
+    for i in gl.static_range(config.SPLIT_QK_LOAD_FACTOR):
+        qks = qks + (s_tmem.slice(i * SIZE, SIZE).load(layout), )
+    return _join_n(qks)
 
 
 @gluon.jit
@@ -656,7 +682,8 @@ def _softmax_inner_loop(tile_id: gl.constexpr, config, prog,  #
 
     for start_n in range(lo, hi, config.BLOCK_N):
         s_tmem, s_bar, s_consumer = s_consumer.acquire()
-        qk = s_tmem.load(config.qk_layout)
+        # qk = s_tmem.load(config.qk_layout)
+        qk = _subtiled_qk_load(config, s_tmem)
 
         if STAGE == 2:
             col_limit_right = (offs_m - start_n + 1)[:, None]
@@ -684,7 +711,7 @@ def _softmax_inner_loop(tile_id: gl.constexpr, config, prog,  #
         # below the register limit in the FADD2, FMUL2, EX2 section. Subtile by
         # 4 to minimize the spilling.
         p_tmem = _borrow_s_as_p(config, s_tmem)
-        p = _compute_and_store_exp2(config, qk, p_tmem, config.SPLIT_EXP_FACTOR)
+        p = _compute_and_store_exp2(config, qk, p_tmem)
 
         mbarrier.arrive(s_bar, count=1)
         _, corr_bar, corr_producer = corr_producer.acquire()
