@@ -146,7 +146,7 @@ def TTI_ExperimentalCommitWriteWithBarrierOp : TTI_Op<"experimental_commit_write
 }
 
 
-def TTI_ExperimentalMarkAsReadOp : TTI_Op<"experimental_mark_as_read", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+def TTI_ExperimentalSetReadBarrierOp : TTI_Op<"experimental_set_read_barrier", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
   let summary = "mark a buffer as being read from using mbar as a guard";
   let description = [{
     Mark a buffer as being read from using mbar as a guard.
