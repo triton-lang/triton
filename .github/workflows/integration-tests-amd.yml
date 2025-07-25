@@ -16,8 +16,24 @@ jobs:
         runner: ${{ fromJson(inputs.matrix) }}
         include:
           - image: rocm/pytorch:rocm6.2.2_ubuntu22.04_py3.10_pytorch_2.5.1_asan
+            runner: ["self-hosted", "gfx90a"]
+            # Cache save/restore is on the host machine at directory /home/runner/.triton, while in the docker
+            # container expect it at /github/home/.triton. So map here to make sure visible in docker.
+            options: >-
+              --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --user root
+              --volume /home/runner/.triton:/github/home/.triton
+          - image: rocm/pytorch:rocm6.2.2_ubuntu22.04_py3.10_pytorch_2.5.1_asan
+            runner: ["amd-gfx942"]
+            options: >-
+              --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --user root
+              --env-file /etc/podinfo/gha-gpu-isolation-settings
+              --volume /home/runner/.triton:/github/home/.triton
           - image: rocm/7.0-preview:rocm7.0_preview_ubuntu22.04_llama2_70b_training_mlperf_mi35X_prealpha
             runner: ["amd-gfx950"]
+            options: >-
+              --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --user root
+              --env-file /etc/podinfo/gha-gpu-isolation-settings
+              --volume /home/runner/.triton:/github/home/.triton
     env:
       RUNNER_TYPE: ${{ matrix.runner[1] }}
       TRITON_BUILD_WITH_CCACHE: "true"
@@ -29,12 +45,7 @@ jobs:
       CCACHE_COMPRESS: "true"
     container:
       image: ${{ matrix.image }}
-      # Cache save/restore is on the host machine at directory /home/runner/.triton, while in the docker
-      # container expect it at /github/home/.triton. So map here to make sure visible in docker.
-      options: >-
-        --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --user root
-        --env-file /etc/podinfo/gha-gpu-isolation-settings
-        --volume /home/runner/.triton:/github/home/.triton
+      options: ${{ matrix.options }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
