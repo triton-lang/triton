@@ -10,6 +10,7 @@ __all__ = [
     "NVMMADistributedLayout",
     "NVMMASharedLayout",
     "SwizzledSharedLayout",
+    "AMDMFMALayout",
 ]
 
 
@@ -396,3 +397,65 @@ class SwizzledSharedLayout(SharedLayout):
             return "_".join(map(str, x))
 
         return f"SSS_{self.vec}_{self.per_phase}_{self.max_phase}_{stringify(self.order)}_{stringify(self.ctas_per_cga)}_{stringify(self.cta_split_num)}_{stringify(self.cta_order)}_SSS"
+
+
+@dataclass(frozen=True)
+class AMDMFMALayout(DistributedLayout):
+    """
+    Represents a layout for AMD MFMA (tensor core) operations.
+
+    Args:
+        version (List[int]): Major and minor identifier for the MFMA instruction.
+        warps_per_cta (List[int]): Number of warps per CTA.
+        tiles_per_warp: List[int]: Number of tiles per WARP.
+        m_dim: indicate the M-dimension of the output of the mfma instruction.
+        n_dim: indicate the N-dimension of the output of the mfma instruction.
+        transposed: indicates the result tensor is transposed so that it can be converted to dotOperand layout
+without going to shared memory. This is used in the case of chained dot (E.g. Flash-Attention kernel)
+        ctas_per_cga (Optional[List[int]]): CTAs per CGA grouping.
+        cta_split_num (Optional[List[int]]): Split factors for CTAs.
+        cta_order (Optional[List[int]]): CTA ordering.
+        elem_type_width: 32 for fp32 and 64 for fp64
+    """
+    version: List[int]
+    warps_per_cta: List[int]
+    tiles_per_warp: List[int]
+    m_dim: int
+    n_dim: int
+    transposed: bool
+    ctas_per_cga: List[int]
+    cta_split_num: List[int]
+    cta_order: List[int]
+    elem_type_width: int
+
+    def __post_init__(self):
+        super().__setattr__("version", _unwrap_if_constexpr(self.version))
+        super().__setattr__("warps_per_cta", _unwrap_if_constexpr(self.warps_per_cta))
+        super().__setattr__("tiles_per_warp", _unwrap_if_constexpr(self.tiles_per_warp))
+        super().__setattr__("m_dim", _unwrap_if_constexpr(self.m_dim))
+        super().__setattr__("n_dim", _unwrap_if_constexpr(self.n_dim))
+        super().__setattr__("transposed", _unwrap_if_constexpr(self.transposed))
+        super().__setattr__("ctas_per_cga", _unwrap_if_constexpr(self.ctas_per_cga))
+        super().__setattr__("cta_split_num", _unwrap_if_constexpr(self.cta_split_num))
+        super().__setattr__("cta_order", _unwrap_if_constexpr(self.cta_order))
+        super().__setattr__("elem_type_width", _unwrap_if_constexpr(self.elem_type_width))
+
+        rank = len(self.cta_order)
+        _realize_cta_layout(self, rank)
+        assert len(self.ctas_per_cga) == rank
+        assert len(self.cta_split_num) == rank
+        assert len(self.cta_order) == rank
+
+    def _to_ir(self, builder):
+        return builder.get_amd_mfma_layout(self.version, self.warps_per_cta, self.tiles_per_warp, self.m_dim,
+                                           self.n_dim, self.transposed, self.ctas_per_cga, self.cta_split_num,
+                                           self.cta_order, self.elem_type_width)
+
+    def mangle(self) -> str:
+
+        def stringify(x):
+            if x is None:
+                return ""
+            return "_".join(map(str, x))
+
+        return f"MFMA_{self.version}_{stringify(self.warps_per_cta)}_{stringify(self.tiles_per_warp)}_{self.m_dim}_{self.n_dim}_{self.transposed}_{stringify(self.ctas_per_cga)}_{stringify(self.cta_split_num)}_{stringify(self.cta_order)}_{self.elem_type_width}_MFMA"

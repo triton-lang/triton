@@ -14,6 +14,11 @@ from triton._filecheck import filecheck_test, run_parser
 from triton.runtime.jit import MockTensor
 import triton.language as tl
 from triton.compiler.errors import CompilationError, CompileTimeAssertionFailure
+from triton._C.libtriton import ir
+from triton.compiler.code_generator import ast_to_ttir
+from triton.compiler import make_backend
+from triton.experimental.gluon._runtime import GluonASTSource
+from triton.backends.compiler import GPUTarget
 
 TARGET_PAT = re.compile('ttg.target = "[^"]*"')
 # HIP backend can add this attribute to function parameters
@@ -1315,3 +1320,36 @@ def test_auto_layout_broadcast():
     # CHECK: [[XBCAST2:%.*]] = tt.broadcast [[XCVT2]]
     # CHECK: arith.muli [[YBCAST2]], [[XBCAST2]] : tensor<16x16xi32, [[BLOCKED]]>
     _ = y * x
+
+
+@gluon.jit
+def amd_mfma_layout_kernel():
+    mfma_layout: ttgl.constexpr = ttgl.AMDMFMALayout(version=4, warps_per_cta=[4, 1], tiles_per_warp=[1, 1],
+                                                     m_dim=32, n_dim=32, transposed=True, ctas_per_cga=[1, 1],
+                                                     cta_split_num=[1, 1], cta_order=[1, 0], elem_type_width=32)
+
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 32], [4, 1], [1, 0])
+
+    x = ttgl.full([128, 32], 0, ttgl.float32, layout)
+    res = ttgl.convert_layout(x, mfma_layout)  # noqa: F841
+
+
+@pytest.mark.parametrize("target", [HIP_TARGET])
+def test_amd_mfma_layout(target):
+    module = run_parser(amd_mfma_layout_kernel,
+                        target=target,
+                        )
+    expecttest.assert_expected_inline(
+        module.str_nodebug(), """\
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 64], warpsPerCTA = [4, 1], order = [1, 0]}>
+#mma = #ttg.amd_mfma<{version = 4, warpsPerCTA = [4, 1], instrShape = [32, 32], isTransposed = false}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @amd_mfma_layout_kernel() attributes {noinline = false} {
+    %cst = arith.constant 0.000000e+00 : f32 loc(#loc)
+    %cst_0 = arith.constant dense<0.000000e+00> : tensor<128x32xf32, #blocked> loc(#loc)
+    %0 = ttg.convert_layout %cst_0 : tensor<128x32xf32, #blocked> -> tensor<128x32xf32, #mma> loc(#loc)
+    tt.return loc(#loc)
+  } loc(#loc)
+} loc(#loc)
+#loc = loc(unknown)
+""")
