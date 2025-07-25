@@ -40,13 +40,17 @@ def is_blackwell():
     return is_cuda() and torch.cuda.get_device_capability()[0] == 10
 
 
+def is_hopper():
+    return is_cuda() and torch.cuda.get_device_capability()[0] == 9
+
+
 @triton.jit
 def _attn_fwd_inner(acc, l_i, m_i, q,  #
                     desc_k, desc_v,  #
                     offset_y, dtype: tl.constexpr, start_m, qk_scale,  #
                     BLOCK_M: tl.constexpr, HEAD_DIM: tl.constexpr, BLOCK_N: tl.constexpr,  #
                     STAGE: tl.constexpr, offs_m: tl.constexpr, offs_n: tl.constexpr,  #
-                    N_CTX: tl.constexpr, warp_specialize: tl.constexpr):
+                    N_CTX: tl.constexpr, warp_specialize: tl.constexpr, SUB_TILING: tl.constexpr):
     # range of values handled by this stage
     if STAGE == 1:
         lo, hi = 0, start_m * BLOCK_M
@@ -80,7 +84,7 @@ def _attn_fwd_inner(acc, l_i, m_i, q,  #
         alpha = tl.math.exp2(m_i - m_ij)
         l_ij = tl.sum(p, 1)
         # -- update output accumulator --
-        if warp_specialize and BLOCK_M == 128 and HEAD_DIM == 128:
+        if warp_specialize and SUB_TILING and BLOCK_M == 128 and HEAD_DIM == 128:
             BM: tl.constexpr = acc.shape[0]
             BN: tl.constexpr = acc.shape[1]
             acc0, acc1 = acc.reshape([BM, 2, BN // 2]).permute(0, 2, 1).split()
@@ -167,15 +171,24 @@ def _maybe_make_tensor_desc(desc_or_ptr, shape, strides, block_shape):
 @triton.autotune(configs=list(filter(keep, configs)), key=["N_CTX", "HEAD_DIM", "FP8_OUTPUT", "warp_specialize"],
                  prune_configs_by={'early_config_prune': prune_invalid_configs})
 @triton.jit
-def _attn_fwd(sm_scale, M,  #
-              Z, H, desc_q, desc_k, desc_v, desc_o, N_CTX,  #
-              HEAD_DIM: tl.constexpr,  #
-              BLOCK_M: tl.constexpr,  #
-              BLOCK_N: tl.constexpr,  #
-              FP8_OUTPUT: tl.constexpr,  #
-              STAGE: tl.constexpr,  #
-              warp_specialize: tl.constexpr,  #
-              ):
+def _attn_fwd(
+    sm_scale,
+    M,  #
+    Z,
+    H,
+    desc_q,
+    desc_k,
+    desc_v,
+    desc_o,
+    N_CTX,  #
+    HEAD_DIM: tl.constexpr,  #
+    BLOCK_M: tl.constexpr,  #
+    BLOCK_N: tl.constexpr,  #
+    FP8_OUTPUT: tl.constexpr,  #
+    STAGE: tl.constexpr,  #
+    warp_specialize: tl.constexpr,  #
+    SUB_TILING: tl.constexpr,
+):
     dtype = tl.float8e5 if FP8_OUTPUT else tl.float16
     tl.static_assert(BLOCK_N <= HEAD_DIM)
     start_m = tl.program_id(0)
@@ -220,7 +233,7 @@ def _attn_fwd(sm_scale, M,  #
                                         offset_y, dtype, start_m, qk_scale,  #
                                         BLOCK_M, HEAD_DIM, BLOCK_N,  #
                                         4 - STAGE, offs_m, offs_n, N_CTX,  #
-                                        warp_specialize)
+                                        warp_specialize, SUB_TILING)
     # stage 2: on-band
     if STAGE & 2:
         acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q,  #
@@ -228,7 +241,7 @@ def _attn_fwd(sm_scale, M,  #
                                         offset_y, dtype, start_m, qk_scale,  #
                                         BLOCK_M, HEAD_DIM, BLOCK_N,  #
                                         2, offs_m, offs_n, N_CTX,  #
-                                        warp_specialize)
+                                        warp_specialize, SUB_TILING)
     # epilogue
     m_i += tl.math.log2(l_i)
     acc = acc / l_i[:, None]
@@ -504,7 +517,8 @@ class _attention(torch.autograd.Function):
             extra_kern_args = {"waves_per_eu": waves_per_eu, "allow_flush_denorm": True}
 
         M = torch.empty((q.shape[0], q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
-        if supports_host_descriptor():
+        # Use device_descriptor for Hopper + warpspec.
+        if supports_host_descriptor() and not (is_hopper() and warp_specialize):
             # Note that on Hopper we cannot perform a FP8 dot with a non-transposed second tensor
             y_dim = q.shape[0] * q.shape[1] * q.shape[2]
 
@@ -533,7 +547,8 @@ class _attention(torch.autograd.Function):
             return (triton.cdiv(q.shape[2], META["BLOCK_M"]), q.shape[0] * q.shape[1], 1)
 
         ctx.grid = grid
-        if is_cuda() and warp_specialize:
+        SUB_TILING = False if is_hopper() and warp_specialize else True
+        if is_blackwell() and warp_specialize:
             if HEAD_DIM_K == 128 and q.dtype == torch.float16:
                 extra_kern_args["maxnreg"] = 168
             else:
@@ -547,7 +562,7 @@ class _attention(torch.autograd.Function):
             FP8_OUTPUT=q.dtype == torch.float8_e5m2,  #
             STAGE=stage,  #
             warp_specialize=warp_specialize,  #
-            **extra_kern_args)
+            SUB_TILING=SUB_TILING, **extra_kern_args)
 
         ctx.save_for_backward(q, k, v, o, M)
         ctx.sm_scale = sm_scale
@@ -678,21 +693,25 @@ except BaseException:
     HAS_FLASH = False
 
 TORCH_HAS_FP8 = hasattr(torch, 'float8_e5m2')
-BATCH, N_HEADS = 4, 32
+BATCH, N_HEADS = 8, 16  #4, 32
 # vary seq length for fixed head and batch=4
 configs = []
 for HEAD_DIM in [64, 128]:
     for mode in ["fwd", "bwd"]:
         for causal in [True, False]:
-            for warp_specialize in [False, True] if is_blackwell() else [False]:
+            # Enable warpspec for causal fwd on Hopper
+            for warp_specialize in [False, True] if (is_blackwell() or
+                                                     (is_hopper() and mode == "fwd" and not causal)) else [False]:
+                # Disable warpspec for fp8 on Hopper
+                RUN_FP8 = TORCH_HAS_FP8 and not (is_hopper() and warp_specialize)
                 configs.append(
                     triton.testing.Benchmark(
                         x_names=["N_CTX"],
                         x_vals=[2**i for i in range(10, 15)],
                         line_arg="provider",
-                        line_vals=["triton-fp16"] + (["triton-fp8"] if TORCH_HAS_FP8 else []) +
+                        line_vals=["triton-fp16"] + (["triton-fp8"] if RUN_FP8 else []) +
                         (["flash"] if HAS_FLASH else []),
-                        line_names=["Triton [FP16]"] + (["Triton [FP8]"] if TORCH_HAS_FP8 else []) +
+                        line_names=["Triton [FP16]"] + (["Triton [FP8]"] if RUN_FP8 else []) +
                         (["Flash-2"] if HAS_FLASH else []),
                         styles=[("red", "-"), ("blue", "-"), ("green", "-")],
                         ylabel="TFLOPS",
