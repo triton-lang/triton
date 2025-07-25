@@ -693,7 +693,7 @@ except BaseException:
     HAS_FLASH = False
 
 TORCH_HAS_FP8 = hasattr(torch, 'float8_e5m2')
-BATCH, N_HEADS = 8, 16  #4, 32
+BATCH, N_HEADS = 4, 32
 # vary seq length for fixed head and batch=4
 configs = []
 for HEAD_DIM in [64, 128]:
@@ -702,16 +702,14 @@ for HEAD_DIM in [64, 128]:
             # Enable warpspec for causal fwd on Hopper
             for warp_specialize in [False, True] if (is_blackwell() or
                                                      (is_hopper() and mode == "fwd" and not causal)) else [False]:
-                # Disable warpspec for fp8 on Hopper
-                RUN_FP8 = TORCH_HAS_FP8 and not (is_hopper() and warp_specialize)
                 configs.append(
                     triton.testing.Benchmark(
                         x_names=["N_CTX"],
                         x_vals=[2**i for i in range(10, 15)],
                         line_arg="provider",
-                        line_vals=["triton-fp16"] + (["triton-fp8"] if RUN_FP8 else []) +
+                        line_vals=["triton-fp16"] + (["triton-fp8"] if TORCH_HAS_FP8 else []) +
                         (["flash"] if HAS_FLASH else []),
-                        line_names=["Triton [FP16]"] + (["Triton [FP8]"] if RUN_FP8 else []) +
+                        line_names=["Triton [FP16]"] + (["Triton [FP8]"] if TORCH_HAS_FP8 else []) +
                         (["Flash-2"] if HAS_FLASH else []),
                         styles=[("red", "-"), ("blue", "-"), ("green", "-")],
                         ylabel="TFLOPS",
