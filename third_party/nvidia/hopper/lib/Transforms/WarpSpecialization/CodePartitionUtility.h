@@ -21,9 +21,9 @@ public:
   using Relation = std::pair<int, SmallVector<int>>;
 
   Channel(int producer, SmallVector<int> &consumers, Operation *op,
-          unsigned operandIdx, unsigned numBuffers)
+          unsigned operandIdx, unsigned numBuffers, unsigned ID)
       : relation(producer, consumers), op(op), operandIdx(operandIdx),
-        numBuffers(numBuffers) {}
+        numBuffers(numBuffers), uniqID(ID) {}
 
   bool operator==(const Channel &c) {
     return relation == c.relation && operandIdx == c.operandIdx && op == c.op;
@@ -40,6 +40,22 @@ public:
   unsigned operandIdx;
   unsigned numBuffers;
   DataChannelKind channelKind = DataChannelKind::SMEM;
+  unsigned uniqID;
+};
+
+struct ReuseGroup {
+  std::vector<unsigned> channelIDs;
+  std::vector<Channel *> channels;
+};
+
+struct ReuseConfig {
+  // Each ReuseGroup
+  std::vector<ReuseGroup> groups;
+  unsigned getGroupSize() { return groups.size(); }
+  ReuseGroup *getGroup(unsigned idx) {
+    assert(idx < groups.size());
+    return &groups[idx];
+  }
 };
 
 struct CommChannel {
@@ -63,8 +79,9 @@ struct TmemDataChannel : Channel {
   TmemDataChannel(int producer, SmallVector<int> &consumers,
                   ttng::TMEMAllocOp tmemAllocOp, ttng::TCGen5MMAOp tmemMmaOp,
                   Operation *tmemLoadOp, unsigned operandIdx,
-                  unsigned numBuffers)
-      : Channel(producer, consumers, tmemLoadOp, operandIdx, numBuffers),
+                  unsigned numBuffers, unsigned uniqID)
+      : Channel(producer, consumers, tmemLoadOp, operandIdx, numBuffers,
+                uniqID),
         tmemAllocOp(tmemAllocOp), tmemProducerOp(tmemAllocOp),
         tmemMmaOp(tmemMmaOp) {
     assert(consumers.size() == 1 &&
@@ -82,21 +99,34 @@ struct TmemDataChannel : Channel {
 bool enclosing(scf::IfOp ifOp, Operation *op);
 bool enclosing(scf::ForOp forOp, Operation *op);
 
-// Return number of AccumCnts for the given ctrlOp. Add a single
-// AccumCnt for all channels under opsWithBufferReuse and it will be the
-// last AccumCnt.
+// Return number of AccumCnts for the given ctrlOp. AccumCnts due to reuses
+// will be at the end, we go through all ReuseGroups and if any channel in
+// the group is nested under ctrlOp, we add one accumCnt for this group.
 unsigned getAccumCnts(Operation *ctrlOp,
-                      const DenseSet<Operation *> &regionsWithChannels);
+                      const DenseSet<Operation *> &regionsWithChannels,
+                      ReuseConfig *config);
 
+// We pass in groupIdx, if it is -1, we are getting accumCnt for a channel
+// not in a reuse group, directly in ctrlOp. ctrlOp can be null if
+// reuseGroupIdx >= 0.
 unsigned getAccumArgIdx(scf::ForOp parentForOp, Operation *ctrlOp,
-                        const DenseSet<Operation *> &regionsWithChannels);
+                        const DenseSet<Operation *> &regionsWithChannels,
+                        ReuseConfig *config, int reuseGroupIdx);
+
+void getReuseChannels(ReuseGroup *gruop, Operation *regionOp,
+                      SmallVector<Operation *> &chList);
+// Skip the accumCnt for unique channels.
+unsigned getReuseAccumArgIdx(Operation *regionOp,
+                             const DenseSet<Operation *> &regionsWithChannels,
+                             ReuseConfig *config, int reuseGroupIdx);
 
 SmallVector<Operation *>
 getTaskTopRegion(triton::FuncOp funcOp, const SmallVector<Channel *> &channels);
 
 void appendAccumCntsForOps(SmallVector<Operation *> &taskTopOps,
                            const SmallVector<Channel *> &channels,
-                           DenseSet<Operation *> &regionsWithChannels);
+                           DenseSet<Operation *> &regionsWithChannels,
+                           ReuseConfig *config);
 
 void collectRegionsWithChannels(const SmallVector<Channel *> &channels,
                                 DenseSet<Operation *> &regionsWithChannels);
@@ -106,17 +136,19 @@ void insertAsyncCopy(
         &channelsGroupedByProducers,
     const DenseMap<Channel *, Value> &bufferMap,
     DenseMap<Channel *, std::pair<Operation *, Operation *>> &copyOpMap,
-    DenseSet<Operation *> &regionsWithChannels);
+    DenseSet<Operation *> &regionsWithChannels, ReuseConfig *config);
 
 Value getAccumCount(OpBuilderWithAsyncTaskIds &builder, Operation *op,
-                    const DenseSet<Operation *> &regionsWithChannels);
+                    const DenseSet<Operation *> &regionsWithChannels,
+                    ReuseConfig *config, int reuseGroupIdx);
 std::pair<Value, Value> getBufferIdxAndPhase(OpBuilderWithAsyncTaskIds &builder,
                                              Location loc, Value accumCnt,
                                              unsigned numBuffers);
 void getBufferIdxAndPhase(OpBuilderWithAsyncTaskIds &builder, Operation *op,
                           unsigned numBuffers,
                           const DenseSet<Operation *> &regionsWithChannels,
-                          Value &bufferIdx, Value &phase);
+                          Value &bufferIdx, Value &phase, ReuseConfig *config,
+                          int reuseGroupIdx = -1);
 
 Value getBarrierForPipelineStage(OpBuilderWithAsyncTaskIds &builder,
                                  Value barrierAlloc, Value bufferIdx);
