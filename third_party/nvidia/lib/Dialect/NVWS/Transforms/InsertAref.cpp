@@ -144,13 +144,6 @@ void createNVWSDescriptorLoadOp(OpBuilder &builder, Operation *ttDescLoadOp,
   }
 }
 
-Value mkConstant(OpBuilder &builder, Location loc, int value, int width,
-                 Partition *partition, WarpSchedule &schedule) {
-  auto constValue = builder.create<arith::ConstantIntOp>(loc, value, width);
-  schedule.insert(partition, constValue);
-  return constValue;
-}
-
 StageCluster getStageClusterForProducer(Value producedValue) {
   if (isDescLoadAndAlloc(producedValue) ||
       isGlobalLoadAndAlloc(producedValue)) {
@@ -173,10 +166,11 @@ SmallVector<Operation *> createArefPut(PartitionBuilder &builder,
   Partition *producerPartition = producedValue.partition;
   SmallVector<Type> buffers{dataBufType};
 
+  auto c0Enter = builder.intCst(0, 32);
   auto putEnterOp = builder.createInto<ArefPutEnterOp>(
-      *producerPartition, stageCluster, buffers, aref,
-      mkConstant(builder, loc, 0, 32, producerPartition, schedule));
+      *producerPartition, stageCluster, buffers, aref, c0Enter);
   schedule.insert(producerPartition, putEnterOp);
+  schedule.insert(producerPartition, c0Enter.getDefiningOp());
   // Attach a "tag" to each put enter / exit pair, to easily identify them
   // as a matching pair in later analysis.
   putEnterOp->setAttr(kArefTagAttrName, builder.getStringAttr(arefTag));
@@ -211,13 +205,14 @@ SmallVector<Operation *> createArefPut(PartitionBuilder &builder,
     llvm_unreachable("unsupported type");
   }
 
+  auto c0Exit = builder.intCst(0, 32);
   auto putExitOp = builder.createInto<ArefPutExitOp>(
-      *producerPartition, stageCluster, aref,
-      mkConstant(builder, loc, 0, 32, producerPartition, schedule),
+      *producerPartition, stageCluster, aref, c0Exit,
       builder.getArrayAttr(SmallVector<Attribute>{
           AsyncOpAttr::get(aref.getContext(), producerKind)}));
   putExitOp->setAttr(kArefTagAttrName, builder.getStringAttr(arefTag));
   schedule.insert(producerPartition, putExitOp);
+  schedule.insert(producerPartition, c0Exit.getDefiningOp());
 
   return staleOps;
 };
@@ -308,13 +303,15 @@ void createArefGet(PartitionBuilder &builder, ArefCreateOp aref,
 
   auto arefBufType = cast<MemDescType>(aref.getOperand(0).getType());
   Type bufferType = getBufferViewType(arefBufType, false);
+  auto c0Enter = builder.intCst(0, 32);
   auto getEnterOp = builder.createInto<ArefGetEnterOp>(
-      *consumerPartition, stageCluster, SmallVector{bufferType}, aref,
-      mkConstant(builder, loc, 0, 32, consumerPartition, schedule));
+      *consumerPartition, stageCluster, SmallVector{bufferType}, aref, c0Enter);
   schedule.insert(consumerPartition, getEnterOp);
+  schedule.insert(consumerPartition, c0Enter.getDefiningOp());
   getEnterOp->setAttr(kArefTagAttrName, builder.getStringAttr(arefTag));
 
   auto consumers = getTransitiveConsumers(results, consumerPartition, schedule);
+  assert(consumers.size() > 0);
   auto asyncKinds = getConsumerAsyncOpKinds(consumers, aref.getContext());
   Value dataBuf = getEnterOp.getResults()[0];
 
@@ -346,11 +343,12 @@ void createArefGet(PartitionBuilder &builder, ArefCreateOp aref,
 
   builder.setInsertionPointAfter(exitInsertPointAfter);
 
+  auto c0Exit = builder.intCst(0, 32);
   auto getExitOp = builder.createInto<ArefGetExitOp>(
-      *consumerPartition, stageCluster, aref,
-      mkConstant(builder, loc, 0, 32, consumerPartition, schedule),
+      *consumerPartition, stageCluster, aref, c0Exit,
       builder.getArrayAttr(asyncKinds));
   schedule.insert(consumerPartition, getExitOp);
+  schedule.insert(consumerPartition, c0Exit.getDefiningOp());
   getExitOp->setAttr(kArefTagAttrName, builder.getStringAttr(arefTag));
 
   for (auto consumer : consumers) {
