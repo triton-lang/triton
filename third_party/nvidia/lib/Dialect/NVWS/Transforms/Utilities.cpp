@@ -1,5 +1,4 @@
 #include "Utilities.h"
-#include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
 using namespace mlir::triton;
@@ -23,16 +22,6 @@ ArefCreateOp createArefCreateOp(OpBuilder &builder, ArrayRef<Type> arefTypes,
   auto ctx = builder.getContext();
   auto arefTy = ArefType::get(ctx, TypeArrayAttr::get(ctx, arefTypes));
   return builder.create<ArefCreateOp>(loc, arefTy, allocOps);
-}
-
-void assignStageCluster(Operation *op, StageCluster stageCluster,
-                        OpBuilder &builder) {
-  if (stageCluster) {
-    op->setAttr(triton::kLoopStageAttrName,
-                builder.getI32IntegerAttr(stageCluster->first));
-    op->setAttr(triton::kLoopClusterAttrName,
-                builder.getI32IntegerAttr(stageCluster->second));
-  }
 }
 
 } // namespace mlir::triton::nvws
