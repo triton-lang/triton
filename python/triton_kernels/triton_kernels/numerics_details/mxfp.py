@@ -5,7 +5,7 @@ import triton
 import torch
 import torch.nn.functional as F
 from .mxfp_details._upcast_from_mxfp import _upcast_from_mxfp
-from .mxfp_details._downcast_to_mxfp import _downcast_to_mxfp, MXFP_BLOCK_SIZE
+from .mxfp_details._downcast_to_mxfp import _downcast_to_mxfp, _dequantize_mxfp8_fn, MXFP_BLOCK_SIZE
 
 # -----------------------------------------------------------------------------
 #                      Dequantization / Quantization Utilities
@@ -298,3 +298,6 @@ def upcast_from_mxfp_torch(tensor: torch.Tensor, scale: torch.Tensor, target_dty
     out_tensor = out_tensor.transpose(axis, tensor.ndim - 1)
 
     return out_tensor
+
+
+dequantize_mxfp8_fn = _dequantize_mxfp8_fn

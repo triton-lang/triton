@@ -575,8 +575,11 @@ LogicalResult TMEMSubSliceOp::verify() {
       srcTy.getEncoding());
   if (!encoding)
     return emitOpError("The source must be a tensor memory buffer.");
-  if (encoding.getBlockM() != 128)
-    return emitOpError("The source must be a 128xN layout.");
+  if (!llvm::is_contained({64, 128}, encoding.getBlockM())) {
+    return emitOpError("The source tensor memory descriptor must have a 128xN "
+                       "or 64xN layout, got block_m=")
+           << encoding.getBlockM();
+  }
   auto dstTy = cast<triton::gpu::MemDescType>(getResult().getType());
   auto dstEncoding = dyn_cast<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
       dstTy.getEncoding());

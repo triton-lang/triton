@@ -2003,6 +2003,36 @@ def test_atomic_unsupported_type(dtype_str, device):
         kernel[(1, )](I, O)
 
 
+@pytest.mark.interpreter
+@pytest.mark.parametrize("dtype_str", ["int32", "float16"])
+@pytest.mark.parametrize("size", [1, 4, 16])
+@pytest.mark.parametrize("op", ["add", "cas"])
+def test_tensor_atomic_use_result(dtype_str, size, op, device):
+    if is_hip():
+        pytest.skip(
+            "HIP is broken because (1) it doesn't support thread predicate in atomic cas, and (2) it doesn't support"
+            " atomic rmw with float16")
+
+    @triton.jit
+    def kernel(index_ptr, out_ptr, size: tl.constexpr, op: tl.constexpr):
+        if op == "add":
+            write_index = tl.atomic_add(index_ptr + tl.arange(0, size)[:, None], val=tl.arange(0, size)[:, None],
+                                        sem="relaxed")
+        elif op == "cas":
+            write_index = tl.atomic_cas(
+                index_ptr + tl.arange(0, size)[:, None],
+                cmp=tl.zeros((size, ), dtype=index_ptr.dtype.element_ty)[:, None],
+                val=tl.arange(0, size).to(index_ptr.dtype.element_ty)[:, None],
+                sem="relaxed",
+            )
+        tl.store(out_ptr + write_index.to(tl.uint32) * size + tl.arange(0, size)[None, :], 5)
+
+    index = torch.arange(0, size, device=device).to(dtype=getattr(torch, dtype_str))
+    out = torch.zeros((size, size), device=device, dtype=getattr(torch, dtype_str))
+    kernel[(1, )](index, out, size, op)
+    assert (out == 5).all()
+
+
 # ---------------
 # test cast
 # ---------------
@@ -6514,7 +6544,7 @@ def test_split_subview(M, N, M_tile_size, N_tile_size, device='cuda'):
         %c0_i32 = arith.constant 0 : i32
 
         %12 = ttg.local_alloc : () -> !ttg.memdesc<1x{M}x{N}xf16, #shared, #smem, mutable>
-        %13 = ttg.memdesc_subview %12[%c0_i32, %c0_i32, %c0_i32] : !ttg.memdesc<1x{M}x{N}xf16, #shared, #smem, mutable> -> !ttg.memdesc<{M}x{N}xf16, #shared, #smem, mutable>
+        %13 = ttg.memdesc_index %12, %c0_i32 : !ttg.memdesc<1x{M}x{N}xf16, #shared, #smem, mutable> -> !ttg.memdesc<{M}x{N}xf16, #shared, #smem, mutable>
         ttg.local_store %11, %13 : tensor<{M}x{N}xf16, #blocked> -> !ttg.memdesc<{M}x{N}xf16, #shared, #smem, mutable>
 
     """
@@ -6525,10 +6555,7 @@ def test_split_subview(M, N, M_tile_size, N_tile_size, device='cuda'):
             m_offset = m * M_tile_size
             n_offset = n * N_tile_size
             ir += f"""
-        %off0_{m}_{n} = arith.constant {m_offset} : i32
-        %off1_{m}_{n} = arith.constant {n_offset} : i32
-
-        %view{linear_idx} = ttg.memdesc_subview %13[%off0_{m}_{n}, %off1_{m}_{n}] : !ttg.memdesc<{M}x{N}xf16, #shared, #smem, mutable> -> !ttg.memdesc<{M_tile_size}x{N_tile_size}xf16, #shared, #smem, mutable, {M}x{N}>
+        %view{linear_idx} = ttg.memdesc_subslice %13[{m_offset}, {n_offset}] : !ttg.memdesc<{M}x{N}xf16, #shared, #smem, mutable> -> !ttg.memdesc<{M_tile_size}x{N_tile_size}xf16, #shared, #smem, mutable, {M}x{N}>
         %data{linear_idx} = ttg.local_load %view{linear_idx} : !ttg.memdesc<{M_tile_size}x{N_tile_size}xf16, #shared, #smem, mutable, {M}x{N}> -> tensor<{M_tile_size}x{N_tile_size}xf16, #blocked>
         %inc{linear_idx} = arith.constant dense<{linear_idx}.0> : tensor<{M_tile_size}x{N_tile_size}xf16, #blocked>
 

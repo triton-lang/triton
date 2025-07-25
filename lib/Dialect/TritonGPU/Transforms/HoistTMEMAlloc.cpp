@@ -141,7 +141,13 @@ public:
           return postDomInfo.properlyPostDominates(use->getOwner(), domOp);
         }))
       return failure();
-    if (domOp == load->getNextNode()) {
+    // In order to not re-ordering multiple tmem load in a loop, don't sink if
+    // all the ops between the load and the domOp are tmem loads.
+    Operation *nextNode = load->getNextNode();
+    while (auto tmemLoad = dyn_cast<ttng::TMEMLoadOp>(nextNode)) {
+      nextNode = tmemLoad->getNextNode();
+    }
+    if (domOp == nextNode) {
       // The load wasn't moved.
       return failure();
     }

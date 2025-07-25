@@ -1,10 +1,12 @@
 import triton
 import triton.language as tl
 from triton_kernels.numerics_details.flexpoint import float_to_flex, load_scale, update_scale
+from triton_kernels.numerics_details.mxfp_details._downcast_to_mxfp import MXFP_BLOCK_SIZE
 from triton_kernels.target_info import cuda_capability_geq as _cuda_capability_geq
 from triton_kernels.target_info import is_hip as _is_hip
 
 
+# fmt: off
 @tl.constexpr_function
 def is_hip():
     return _is_hip()
@@ -189,10 +191,13 @@ def _finalize_matmul(
     OutExpectedScale,
     OutActualScale,
     OutChecksumScale,
+    stride_out_mx_m, stride_out_mx_n,
     A,
     stride_a_k,
     stride_a_m,
     AScale,
+    stride_a_mx_k,
+    stride_a_mx_m,
     ScatterSrcIndx,
     FinalizeScatterIdxs,
     K: tl.constexpr,
@@ -212,6 +217,8 @@ def _finalize_matmul(
     STAGES: tl.constexpr,
     HAS_FUSED_SCRATCHPAD: tl.constexpr,
 ):
+    IN_MXFP8: tl.constexpr = stride_a_mx_k is not None
+    OUT_MXFP8: tl.constexpr = stride_out_mx_m is not None
     if HAS_FUSED_SCRATCHPAD:
         # Bump A to the scratchpad region.
         A += tl.cast(M, tl.int64) * stride_a_m
@@ -278,6 +285,11 @@ def _finalize_matmul(
             for off_n in tl.range(tl.program_id(1) * BLOCK_N, N, tl.num_programs(1) * BLOCK_N, num_stages=STAGES):
                 offs_n = off_n + tl.arange(0, BLOCK_N)
                 n_mask = offs_n < N
+                if IN_MXFP8:
+                    MX_SCALE_BLOCK_N: tl.constexpr = BLOCK_N // MXFP_BLOCK_SIZE
+                    N_MX_BLOCK: tl.constexpr = tl.cdiv(N, MXFP_BLOCK_SIZE)
+                    offs_n_scale = off_n // BLOCK_N * MX_SCALE_BLOCK_N + tl.arange(0, MX_SCALE_BLOCK_N)[None, :]
+                    n_mask_scale = offs_n_scale < N_MX_BLOCK
 
                 acc = tl.zeros([BLOCK_N], dtype=tl.float32)
                 if is_hip():
@@ -295,16 +307,27 @@ def _finalize_matmul(
                                 As += stride_a_k
                 else:
                     As = A + src_idxs.to(tl.int64)[:, None] * stride_a_m + offs_n[None, :]
+                    if IN_MXFP8:
+                        AScales = AScale + src_idxs.to(tl.int64)[:, None] * stride_a_mx_m + offs_n_scale[None, :]
                     for ki in tl.static_range(K):
                         a = tl.load(As, mask=(src_idxs != -1)[:, None] & n_mask[None, :], other=0.0)
                         As += stride_a_k
-                        if USE_FUSED_MIXED_PREC_ACC:
+                        if IN_MXFP8:
+                            a_mx_scale = tl.load(AScales, mask=(src_idxs != -1)[:, None] & n_mask_scale[None, :])
+                            AScales += stride_a_mx_k
+                            a_mx_scale = (a_mx_scale.to(tl.uint32) << 23).to(tl.float32, bitcast=True)
+                            a_mx_scale = a_mx_scale.reshape([EXPT_PER_TOK, MX_SCALE_BLOCK_N, 1])
+                            a = a.to(tl.float32).reshape([EXPT_PER_TOK, MX_SCALE_BLOCK_N, MXFP_BLOCK_SIZE])
+                            a = (a_mx_scale * a).reshape([EXPT_PER_TOK, BLOCK_N])
+                            acc += tl.sum(a, dtype=tl.float32, axis=0)
+                        elif USE_FUSED_MIXED_PREC_ACC:
                             acc = _mixed_precision_accumulate_and_track_absmax(
                                 acc, a, axis=0,
                                 absmax_reg_name="my_abs_max" if USE_FUSED_ABSMAX and ki == K - 1 else None)
                         else:
                             acc += tl.sum(a, dtype=tl.float32, axis=0)
-                acc = acc * a_scale
+                if not IN_MXFP8:
+                    acc = acc * a_scale
                 if ACTIVATION_FN is not None:
                     out = ACTIVATION_FN(tl.reshape(acc, (1, BLOCK_N)), *activation_fn_args)
                     out = tl.reshape(out, (OUT_BLOCK_N, ))
@@ -314,14 +337,25 @@ def _finalize_matmul(
                     out = acc
                 if not USE_FUSED_ABSMAX and OutActualScale is not None:
                     local_max = tl.maximum(local_max, thread_local_absmax(out))
-                out = float_to_flex(out, out_scale if OutExpectedScale is not None else None, None, OutChecksumScale,
-                                    None, Out, flexpoint_saturate_inf)
-                if EPILOGUE_FN is not None:
-                    out = EPILOGUE_FN(out, *epilogue_fn_args, target_dtype=Out.dtype.element_ty,
-                                      pid=row * tl.num_programs(1) + tl.program_id(1))
-                offs_n = off_n // ACTIVATION_REDUCTION_N + tl.arange(0, OUT_BLOCK_N)
-                n_mask = offs_n < outN
-                tl.store(Out + row * outN + offs_n, out, mask=n_mask)
+                if OUT_MXFP8:
+                    OUT_MX_SCALE_BLOCK_N: tl.constexpr = OUT_BLOCK_N // MXFP_BLOCK_SIZE
+                    OUT_N_MX_BLOCK: tl.constexpr = (outN + MXFP_BLOCK_SIZE - 1) // MXFP_BLOCK_SIZE
+                    offs_n_scale = off_n // BLOCK_N * OUT_MX_SCALE_BLOCK_N + tl.arange(0, OUT_MX_SCALE_BLOCK_N)[None, :]
+                    n_mask_scale = offs_n_scale < OUT_N_MX_BLOCK
+                    acc, acc_scale = EPILOGUE_FN(acc[None, :], n_mask[None, :], *epilogue_fn_args,
+                                                 pid=row * tl.num_programs(1) + tl.program_id(1))
+                    tl.static_assert(OUT_BLOCK_N % OUT_MX_SCALE_BLOCK_N == 0, "")
+                    tl.store(OutActualScale + row * stride_out_mx_m + offs_n_scale * stride_out_mx_n, acc_scale, mask=n_mask_scale)
+                    tl.store(Out + row * outN + offs_n[None, :], acc, mask=n_mask[None, :])
+                else:
+                    out = float_to_flex(out, out_scale if OutExpectedScale is not None else None, None, OutChecksumScale,
+                                        None, Out, flexpoint_saturate_inf)
+                    if EPILOGUE_FN is not None:
+                        out = EPILOGUE_FN(out, *epilogue_fn_args, target_dtype=Out.dtype.element_ty,
+                                          pid=row * tl.num_programs(1) + tl.program_id(1))
+                    offs_n = off_n // ACTIVATION_REDUCTION_N + tl.arange(0, OUT_BLOCK_N)
+                    n_mask = offs_n < outN
+                    tl.store(Out + row * outN + offs_n, out, mask=n_mask)
 
     persisent_m = tl.num_programs(0) < MBound
     if not persisent_m and n_active_experts == 0:
@@ -339,4 +373,5 @@ def _finalize_matmul(
             pack=1,
         )
         local_max *= a_scale
-    update_scale(local_max, OutActualScale, Out)
+    if not OUT_MXFP8:
+        update_scale(local_max, OutActualScale, Out)

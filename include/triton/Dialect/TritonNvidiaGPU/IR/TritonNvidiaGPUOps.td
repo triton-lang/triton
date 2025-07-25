@@ -674,8 +674,8 @@ def TTNG_TMEMSubSliceOp : TTNG_Op<"tmem_subslice", [Pure]> {
   let description = [{
     This operation takes a subslice of a tensor memory allocation and returns a new descriptor
     containing the address and a view of the subslice.
-    This is similar to ttg.memdesc_subview except the offset needs to be static and we can only
-    slice alog the inner dimension of a 2D memdesc as this is the only one we can do for TMem.
+    This is similar to ttg.memdesc_subslice except we can only slice along the inner dimension
+    of a 2D memdesc as this is the only one we can do for TMem.
   }];
   let arguments = (ins TTG_MemDescType:$src, I32Attr:$N);
 

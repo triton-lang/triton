@@ -16,7 +16,7 @@ namespace mlir::triton::AMD {
 // gpu.barrier between the LocalLoad and the prefetches. However the pipeliner
 // will always use at least 2 buffers so this IR cannot be produced. Example
 // membar input IR to produce incorrect results:
-//   %tile_a = ttg.memdesc_subview
+//   %tile_a = ttg.memdesc_index
 //   %1 = AsyncCopyGlobalToLocal %ptr %tile_a
 //   scf.for
 //     %2 = AsyncWait %1

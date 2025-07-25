@@ -28,16 +28,12 @@ bool canAllocBeInstrumented(triton::gpu::LocalAllocOp op) {
     return false;
   }
   if (llvm::all_of(op->getUsers(), [](Operation *user) {
-        return !isa<ttg::MemDescSubviewOp>(user);
+        return !isa<ttg::MemDescIndexOp>(user);
       })) {
     return true;
   }
   if (llvm::all_of(op->getUsers(), [](Operation *user) {
-        auto subview = dyn_cast<ttg::MemDescSubviewOp>(user);
-        return subview && llvm::all_of(subview.getOffsets().drop_front(),
-                                       [](Value offset) {
-                                         return isConstantIntValue(offset, 0);
-                                       });
+        return isa<ttg::MemDescIndexOp>(user);
       })) {
     return true;
   }
@@ -46,10 +42,10 @@ bool canAllocBeInstrumented(triton::gpu::LocalAllocOp op) {
   return false;
 }
 
-// Interpret local_allocs that are used in ttg.memdesc_subview as multibuffered
+// Interpret local_allocs that are used in ttg.memdesc_index as multibuffered
 bool isMultiBuffered(triton::gpu::LocalAllocOp op) {
   return llvm::any_of(op->getUsers(), [](Operation *user) {
-    return isa<ttg::MemDescSubviewOp>(user);
+    return isa<ttg::MemDescIndexOp>(user);
   });
 }
 

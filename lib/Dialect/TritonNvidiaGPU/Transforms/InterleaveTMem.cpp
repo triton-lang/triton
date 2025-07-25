@@ -58,6 +58,63 @@ struct AccessRange {
   unsigned rankOffset = 0;
 };
 
+std::pair<Value, AccessRange> findBufferAccess(Value a);
+
+std::pair<Value, AccessRange>
+findBufferAccessMemdescSubview(Operation *subview) {
+  OpBuilder builder(subview->getContext());
+  Location loc = subview->getLoc();
+  TypedValue<ttg::MemDescType> src;
+  SmallVector<int64_t> shape;
+  SmallVector<Value> offsets;
+  if (auto indexOp = dyn_cast<ttg::MemDescIndexOp>(subview)) {
+    src = indexOp.getSrc();
+    shape = to_vector(indexOp.getType().getShape());
+    offsets = {indexOp.getIndex()};
+    for (auto i : llvm::seq(std::max<int>(0, shape.size() - 1)))
+      offsets.push_back(builder.create<arith::ConstantIntOp>(loc, 0, 32));
+  } else {
+    auto subsliceOp = cast<ttg::MemDescSubsliceOp>(subview);
+    src = subsliceOp.getSrc();
+    shape = to_vector(subsliceOp.getType().getShape());
+    for (auto offset : subsliceOp.getOffsets())
+      offsets.push_back(builder.create<arith::ConstantIntOp>(loc, offset, 32));
+  }
+  auto [alloc, parentAccess] = findBufferAccess(src);
+  if (!alloc)
+    return {};
+  // Handle subview of a subview. The first `rankOffset` access sizes are
+  // the same as in the parent access.
+  AccessRange childAccess;
+  for (auto i : llvm::seq(parentAccess.rankOffset))
+    childAccess.ranges.push_back(parentAccess.ranges[i]);
+
+  // The subview may have a smaller rank, in which case its access size is
+  // just 1 for the higher dims.
+  childAccess.rankOffset = src.getType().getRank() - shape.size();
+  for (auto [i, offset] : llvm::enumerate(offsets)) {
+    auto parentRange = parentAccess.ranges[i + parentAccess.rankOffset];
+    if (!parentRange) {
+      childAccess.ranges.push_back({});
+      continue;
+    }
+
+    // If the offset is not known, then the entire dim may be accessed.
+    APInt value;
+    if (!matchPattern(offset, m_ConstantInt(&value))) {
+      childAccess.ranges.push_back({});
+      continue;
+    }
+
+    uint64_t accessStart = parentRange->start() + value.getSExtValue();
+    uint64_t accessSize = 1;
+    if (i >= childAccess.rankOffset)
+      accessSize = shape[i - childAccess.rankOffset];
+    childAccess.ranges.push_back({{accessStart, accessStart + accessSize}});
+  }
+  return {alloc, std::move(childAccess)};
+}
+
 // Simple local alias analysis that looks for a single underlying allocation and
 // an access subrange.
 std::pair<Value, AccessRange> findBufferAccess(Value a) {
@@ -90,41 +147,8 @@ std::pair<Value, AccessRange> findBufferAccess(Value a) {
   }
 
   // Subviews can reduce the access sizes.
-  if (auto subview = dyn_cast<ttg::MemDescSubviewOp>(defOp)) {
-    auto [alloc, parentAccess] = findBufferAccess(subview.getSrc());
-    if (!alloc)
-      return {};
-    // Handle subview of a subview. The first `rankOffset` access sizes are
-    // the same as in the parent access.
-    AccessRange childAccess;
-    for (auto i : llvm::seq(parentAccess.rankOffset))
-      childAccess.ranges.push_back(parentAccess.ranges[i]);
-
-    // The subview may have a smaller rank, in which case its access size is
-    // just 1 for the higher dims.
-    childAccess.rankOffset =
-        subview.getSrc().getType().getRank() - subview.getType().getRank();
-    for (auto [i, offset] : llvm::enumerate(subview.getOffsets())) {
-      auto parentRange = parentAccess.ranges[i + parentAccess.rankOffset];
-      if (!parentRange) {
-        childAccess.ranges.push_back({});
-        continue;
-      }
-
-      // If the offset is not known, then the entire dim may be accessed.
-      APInt value;
-      if (!matchPattern(offset, m_ConstantInt(&value))) {
-        childAccess.ranges.push_back({});
-        continue;
-      }
-
-      uint64_t accessStart = parentRange->start() + value.getSExtValue();
-      uint64_t accessSize = 1;
-      if (i >= childAccess.rankOffset)
-        accessSize = subview.getType().getShape()[i - childAccess.rankOffset];
-      childAccess.ranges.push_back({{accessStart, accessStart + accessSize}});
-    }
-    return {alloc, std::move(childAccess)};
+  if (isa<ttg::MemDescIndexOp, ttg::MemDescSubsliceOp>(defOp)) {
+    return findBufferAccessMemdescSubview(defOp);
   }
 
   // Subslice is a subview only on the N dimension.

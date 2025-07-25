@@ -252,8 +252,6 @@ bool cvtNeedsWarpShuffle(RankedTensorType srcTy, RankedTensorType dstTy);
 // warps, and possibly blocks.
 bool cvtNeedsSharedMemory(RankedTensorType srcTy, RankedTensorType dstTy);
 
-bool atomicNeedsSharedMemory(Value result);
-
 // Check if MFMA layout can be converted to the dot operand
 // layout using warp shuffle.
 bool matchMFMAAndDotOperandShuffleCase(RankedTensorType srcTy,

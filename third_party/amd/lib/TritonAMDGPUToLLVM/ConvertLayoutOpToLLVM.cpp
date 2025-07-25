@@ -6,6 +6,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
 using ::mlir::transferWithinBlockPadding;
+using ::mlir::transferWithinBlockSwizzling;
 using ::mlir::triton::gpu::AMDMfmaEncodingAttr;
 using ::mlir::triton::gpu::ConvertLayoutOp;
 using ::triton::gpu::LinearEncodingAttr;
@@ -301,6 +302,37 @@ protected:
   const TargetInfoBase &targetInfo;
 };
 
+struct ConvertLayoutForcedSwizzling
+    : public ConvertOpToLLVMPattern<ConvertLayoutOp> {
+
+  explicit ConvertLayoutForcedSwizzling(LLVMTypeConverter &typeConverter,
+                                        const TargetInfoBase &targetInfo,
+                                        PatternBenefit benefit)
+      : ConvertOpToLLVMPattern<ConvertLayoutOp>(typeConverter, benefit),
+        targetInfo(targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(ConvertLayoutOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    if (op->hasAttr(mlir::triton::AMD::AttrSharedMemPadded))
+      return failure();
+
+    auto srcType = op.getSrc().getType();
+    auto dstType = op.getType();
+    if (!cvtNeedsSharedMemory(srcType, dstType))
+      return failure();
+
+    if (failed(transferWithinBlockSwizzling(op, adaptor.getSrc(), targetInfo,
+                                            getTypeConverter(), rewriter)))
+      return failure();
+
+    return success();
+  }
+
+protected:
+  const TargetInfoBase &targetInfo;
+};
+
 } // namespace
 
 void mlir::triton::AMD::populateConvertLayoutOpToLLVMPatterns(
@@ -311,4 +343,6 @@ void mlir::triton::AMD::populateConvertLayoutOpToLLVMPatterns(
   patterns.add<ConvertLayoutOpMFMAToLinearConversion>(typeConverter, targetInfo,
                                                       benefit);
   patterns.add<ConvertLayoutForcedPadding>(typeConverter, targetInfo, benefit);
+  patterns.add<ConvertLayoutForcedSwizzling>(typeConverter, targetInfo,
+                                             benefit);
 }

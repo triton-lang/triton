@@ -797,13 +797,6 @@ bool cvtNeedsSharedMemory(RankedTensorType srcTy, RankedTensorType dstTy) {
          !matchMFMAAndDotOperandShuffleCase(srcTy, dstTy);
 }
 
-bool atomicNeedsSharedMemory(Value value) {
-  auto type = value.getType();
-  if (isa<RankedTensorType>(type) || value.use_empty())
-    return false;
-  return true;
-}
-
 namespace {
 
 /// A data structure similar to SetVector but maintains

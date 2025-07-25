@@ -202,25 +202,25 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         res_ty = ttgl.distributed_type(src_ty.element_ty, src_ty.shape, layout)
         return self.tensor(handle, res_ty)
 
-    def _memdesc_subview(self, mem_desc, offsets, shape):
+    def memdesc_slice(self, mem_desc, start, length, dim):
+        offsets = [0] * mem_desc.rank
+        offsets[dim] = start
+        shape = list(mem_desc.shape)
+        shape[dim] = length
         layout = mem_desc.layout
         ty = ttgl.shared_memory_descriptor_type(mem_desc.dtype, shape, layout, mem_desc.type.alloc_shape)
         builder = self.builder
-        handle = builder.create_memdesc_subview(ty.to_ir(builder), mem_desc.handle, offsets)
+        handle = builder.create_memdesc_subslice(ty.to_ir(builder), mem_desc.handle, offsets)
         return ttgl.shared_memory_descriptor(handle, **ty.__dict__)
-
-    def memdesc_slice(self, mem_desc, start, length, dim):
-        offsets = [self.builder.get_int32(0)] * mem_desc.rank
-        offsets[dim] = self.to_tensor(start).handle
-        shape = list(mem_desc.shape)
-        shape[dim] = length
-        return self._memdesc_subview(mem_desc, offsets, shape)
 
     def memdesc_index(self, mem_desc, index):
         shape = mem_desc.shape[1:]
-        offsets = [self.builder.get_int32(0)] * mem_desc.rank
-        offsets[0] = self.to_tensor(index).handle
-        return self._memdesc_subview(mem_desc, offsets, shape)
+        index = self.to_tensor(index).handle
+        layout = mem_desc.layout
+        ty = ttgl.shared_memory_descriptor_type(mem_desc.dtype, shape, layout, mem_desc.type.alloc_shape)
+        builder = self.builder
+        handle = builder.create_memdesc_index(ty.to_ir(builder), mem_desc.handle, index)
+        return ttgl.shared_memory_descriptor(handle, **ty.__dict__)
 
     def memdesc_trans(self, mem_desc, order):
         assert len(order) == len(

@@ -48,7 +48,7 @@ class Pingponger {
   SmallVector<SmallVector<Operation *>> subViewOps;
   SmallVector<SmallVector<Operation *>> loadSliceOps;
   SmallVector<Operation *> dotSliceOps;
-  SmallVector<Value> constOffsets;
+  SmallVector<int64_t> constOffsets;
   Operation *lastInsertedOp;
 
   // rocdl.s.setprio will be mapped to `s_setprio` instruction which set the
@@ -353,10 +353,10 @@ void Pingponger::determineDotMemoryOps(
   // Determine the local stores from the local loads.
   // With pipelining we expect this to be a single local
   // store within the loop based on a block argument after routing through
-  // a ttg.MemDescSubviewOp.
-  DenseSet<ttg::MemDescSubviewOp> subviews;
+  // a ttg.MemDescIndexOp.
+  DenseSet<ttg::MemDescIndexOp> subviews;
   for (auto &&localLoad : dotLocalLoads)
-    findClosestPredOps<ttg::MemDescSubviewOp>(localLoad.getSrc(), subviews);
+    findClosestPredOps<ttg::MemDescIndexOp>(localLoad.getSrc(), subviews);
 
   for (auto &&subview : subviews)
     for (auto &&user : subview->getUsers())
@@ -409,8 +409,7 @@ void Pingponger::genOffsetConstants(Location loc, OpBuilder &builder,
                                     unsigned numSlices, int64_t sliceWidth) {
   for (int i = 0; i < numSlices; i++) {
     int64_t offset = sliceWidth * i;
-    constOffsets.push_back(
-        builder.create<arith::ConstantIntOp>(loc, offset, 32));
+    constOffsets.push_back(offset);
   }
 }
 
@@ -442,14 +441,14 @@ LogicalResult Pingponger::genLocalSlice(OpBuilder &builder, Value v,
       shape, elementType, type.getEncoding(), type.getMemorySpace(),
       type.getMutableMemory(), type.getAllocShape());
   for (int i = 0; i < numSlices; i++) {
-    SmallVector<Value> offsetsVal;
+    SmallVector<int32_t> logicalOffsets;
     SmallVector<int64_t> offsets = {0, 0};
     offsets[kIdx] = i;
     for (int64_t off : offsets) {
-      offsetsVal.push_back(constOffsets[off]);
+      logicalOffsets.push_back(constOffsets[off]);
     }
-    Value newSmem = builder.create<ttg::MemDescSubviewOp>(
-        v.getLoc(), subviewDescType, memDesc, offsetsVal);
+    Value newSmem = builder.create<ttg::MemDescSubsliceOp>(
+        v.getLoc(), subviewDescType, memDesc, logicalOffsets);
     Value prefetchSlice = builder.create<ttg::LocalLoadOp>(
         v.getLoc(), RankedTensorType::get(shape, elementType, dotOperandEnc),
         newSmem);
