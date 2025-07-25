@@ -165,7 +165,7 @@ SmallVector<Operation *> createArefPut(PartitionBuilder &builder,
                                        Partition *producerPartition,
                                        WarpSchedule &schedule) {
   auto loc = producedValue.result.getLoc();
-  auto arefBufType = cast<MemDescType>(aref.getOperand(0).getType());
+  auto arefBufType = cast<MemDescType>(aref.getBuffers()[0].getType());
   Value result = producedValue.result;
   auto dataBufType = getBufferViewType(arefBufType, true);
   StageCluster stageCluster = getStageClusterForProducer(result);

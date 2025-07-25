@@ -43,21 +43,21 @@ class NVWS_Op<string mnemonic, list<Trait> traits = []> :
 
 def NVWS_ArefCreateOp : NVWS_Op<"aref.create", [
     RangedTypesMatchWith<"input types match Aref output type",
-                        "result", "operands", "::llvm::cast<ArefType>($_self).getBaseType()">, Pure]> {
+                        "result", "buffers", "::llvm::cast<ArefType>($_self).getBaseType()">, Pure]> {
   let summary = "Create an asynchronous reference.";
   let description = [{
     Create an asynchronous reference.
 
-    Takes as inputs a variadic number of operands, and returns an ARef.
+    Takes as inputs a variadic number of buffers, and returns an ARef.
     The inputs are expected to be array-like (i.e., Tensor, MemDesc, etc)
     and the first axis of the shape should match between all inputs, representing
     multi-buffering of the values.
   }];
-  let arguments = (ins Variadic<TTG_MemDescType>:$operands);
+  let arguments = (ins Variadic<TTG_MemDescType>:$buffers);
 
   let results = (outs NVWS_ArefType:$result);
 
-  let assemblyFormat = [{$operands attr-dict `:` type($result)}];
+  let assemblyFormat = [{$buffers attr-dict `:` type($result)}];
   let hasVerifier = 1;
 }
 
