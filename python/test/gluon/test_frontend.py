@@ -13,8 +13,13 @@ from triton.experimental.gluon.language.nvidia.blackwell import mbarrier, tma, T
 from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
 from triton._filecheck import filecheck_test, run_parser
 import triton.language as tl
-from triton._internal_testing import is_cuda, is_ampere_or_newer, is_blackwell, is_hopper, is_hopper_or_newer
+from triton._internal_testing import is_cuda, is_ampere_or_newer, is_blackwell, is_hopper, is_hopper_or_newer, is_hip_cdna
 from triton.compiler.errors import CompilationError, CompileTimeAssertionFailure
+from triton._C.libtriton import ir
+from triton.compiler.code_generator import ast_to_ttir
+from triton.compiler import make_backend
+from triton.experimental.gluon._runtime import GluonASTSource
+from triton.backends.compiler import GPUTarget
 
 TARGET_PAT = re.compile('ttg.target = "[^"]*"')
 
@@ -1290,3 +1295,60 @@ def test_auto_layout_broadcast():
     # CHECK: [[XBCAST2:%.*]] = tt.broadcast [[XCVT2]]
     # CHECK: arith.muli [[YBCAST2]], [[XBCAST2]] : tensor<16x16xi32, [[BLOCKED]]>
     _ = y * x
+
+
+@gluon.jit
+def amd_mfma_layout_kernel():
+    mfma_layout: ttgl.constexpr = ttgl.AMDMFMALayout(version=[4, 0], warps_per_cta=[4, 1], tiles_per_warp=[1, 1],
+                                                     m_dim=32, n_dim=32, transposed=False, ctas_per_cga=[1, 1],
+                                                     cta_split_num=[1, 1], cta_order=[1, 0], elem_type_width=32)
+
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 64], [4, 1], [1, 0])
+
+    x = ttgl.full([128, 32], 0, ttgl.float32, layout)
+    res = ttgl.convert_layout(x, mfma_layout)  # noqa: F841
+
+
+def from_ast_to_module(kernel, num_ctas, num_warps, warp_size):
+    knobs.compilation.disable_line_info = True
+
+    context = ir.context()
+    ir.load_dialects(context)
+    options = dict(sanitize_overflow=False)
+    stub_target = GPUTarget("hip", 'gfx950', 64)
+    stub_backend = make_backend(stub_target)
+    stub_backend.load_dialects(context)
+    options = stub_backend.parse_options(options)
+    codegen_fns = stub_backend.get_codegen_implementation(options)
+    signature = {}
+    src = GluonASTSource(fn=kernel, signature=signature)
+    builder = ir.builder(context)
+    module = builder.create_module()
+    module.set_attr("ttg.threads-per-warp", builder.get_int32_attr(warp_size))
+    module.set_attr("ttg.num-warps", builder.get_int32_attr(num_warps))
+    module.set_attr("ttg.num-ctas", builder.get_int32_attr(num_ctas))
+    module = ast_to_ttir(kernel, src, context=context, options=options, codegen_fns=codegen_fns, module_map=dict(),
+                         module=module)
+    assert module.verify()
+    return module
+
+
+@pytest.mark.skipif(not is_hip_cdna(), reason="Requires CDNA")
+def test_amd_mfma_layout(fresh_knobs):
+    knobs.compilation.disable_line_info = True
+
+    module = from_ast_to_module(amd_mfma_layout_kernel, 1, 4, 64)
+    expecttest.assert_expected_inline(
+        module.str(), """\
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 64], warpsPerCTA = [4, 1], order = [1, 0]}>
+#mma = #ttg.amd_mfma<{version = 4, warpsPerCTA = [4, 1], instrShape = [32, 32], isTransposed = false}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @amd_mfma_layout_kernel() attributes {noinline = false} {
+    %cst = arith.constant 0.000000e+00 : f32 loc(#loc)
+    %cst_0 = arith.constant dense<0.000000e+00> : tensor<128x32xf32, #blocked> loc(#loc)
+    %0 = ttg.convert_layout %cst_0 : tensor<128x32xf32, #blocked> -> tensor<128x32xf32, #mma> loc(#loc)
+    tt.return loc(#loc)
+  } loc(#loc)
+} loc(#loc)
+#loc = loc(unknown)
+""")
