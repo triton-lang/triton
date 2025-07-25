@@ -43,6 +43,7 @@
 #include "nvidia/include/Dialect/NVWS/IR/Types.h.inc"
 
 #define GET_OP_CLASSES
+#include "nvidia/include/Dialect/NVWS/IR/NVWSOpInterfaces.h.inc"
 #include "nvidia/include/Dialect/NVWS/IR/Ops.h.inc"
 
 namespace mlir {

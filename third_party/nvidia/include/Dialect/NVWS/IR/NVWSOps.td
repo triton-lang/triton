@@ -31,31 +31,33 @@ include "mlir/Interfaces/InferTypeOpInterface.td"  // SameOperandsAndResultType
 include "mlir/Interfaces/SideEffectInterfaces.td"  // Pure
 include "mlir/Interfaces/ViewLikeInterface.td"
 include "triton/Dialect/Triton/IR/TritonTypes.td"
+include "triton/Dialect/Triton/IR/TritonAttrDefs.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUTypes.td"
 include "NVWSDialect.td"
 include "NVWSTypes.td"
 include "NVWSAttrDefs.td"
+include "NVWSOpInterfaces.td"
 
 class NVWS_Op<string mnemonic, list<Trait> traits = []> :
     Op<NVWS_Dialect, mnemonic, traits>;
 
 def NVWS_ArefCreateOp : NVWS_Op<"aref.create", [
     RangedTypesMatchWith<"input types match Aref output type",
-                        "result", "operands", "::llvm::cast<ArefType>($_self).getBaseType()">, Pure]> {
+                        "result", "buffers", "::llvm::cast<ArefType>($_self).getBaseType()">, Pure]> {
   let summary = "Create an asynchronous reference.";
   let description = [{
     Create an asynchronous reference.
 
-    Takes as inputs a variadic number of operands, and returns an ARef.
+    Takes as inputs a variadic number of buffers, and returns an ARef.
     The inputs are expected to be array-like (i.e., Tensor, MemDesc, etc)
     and the first axis of the shape should match between all inputs, representing
     multi-buffering of the values.
   }];
-  let arguments = (ins Variadic<AnyType>:$operands);
+  let arguments = (ins Variadic<TTG_MemDescType>:$buffers);
 
   let results = (outs NVWS_ArefType:$result);
 
-  let assemblyFormat = [{$operands attr-dict `:` type($result)}];
+  let assemblyFormat = [{$buffers attr-dict `:` type($result)}];
   let hasVerifier = 1;
 }
 
@@ -78,7 +80,7 @@ def NVWS_ArefGetEnterOp : NVWS_Op<"aref.get.enter"> {
   let arguments = (ins NVWS_ArefType:$aref,
                        I32:$stage,
                        I32:$phase);
-  let results = (outs Variadic<AnyType>:$results);
+  let results = (outs Variadic<TTG_MemDescType>:$results);
   let hasVerifier=1;
   let assemblyFormat = [{
     $aref `[` $stage `,` $phase `]` attr-dict
@@ -108,7 +110,7 @@ def NVWS_ArefPutEnterOp : NVWS_Op<"aref.put.enter"> {
   let arguments = (ins NVWS_ArefType:$aref,
                        I32:$stage,
                        I32:$phase);
-  let results = (outs Variadic<AnyType>:$results);
+  let results = (outs Variadic<TTG_MemDescType>:$results);
   let hasVerifier=1;
   let assemblyFormat = [{
     $aref `[` $stage `,` $phase `]` attr-dict
@@ -250,6 +252,55 @@ def NVWS_ConsumerReleaseOp : NVWS_Op<"consumer_release"> {
   let arguments = (ins TensorOf<[NVWS_TokenType]>:$token, I32:$idx);
 
   let assemblyFormat = "$token `,` $idx attr-dict `:` type(operands)";
+}
+
+def GlobalMemory : Resource<"::mlir::triton::GlobalMemory">;
+def SharedMemory : Resource<"::mlir::triton::gpu::SharedMemory">;
+
+def NVWS_DescriptorLoadOp : NVWS_Op<"descriptor_load", [NVWS_DescriptorLoadOpInterface]> {
+  let summary = "Load from descriptor and store into shared memory";
+  let description = [{
+    This op behaves exactly like the op with the same name in Triton Dialect, but the result of the load is stored into shared memory.
+    The execution is still synchronous.
+  }];
+  let arguments = (ins
+    Arg<TT_TensorDescType, "", [MemRead<GlobalMemory>]>:$desc,
+    Variadic<I32>:$indices,
+    I32Attr:$txCount,
+    Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$result,
+    DefaultValuedAttr<TT_CacheModifierAttr, "::mlir::triton::CacheModifier::NONE">:$cache,
+    DefaultValuedAttr<TT_EvictionPolicyAttr, "::mlir::triton::EvictionPolicy::NORMAL">:$evict
+  );
+
+  let assemblyFormat = [{
+    $desc `[` $indices `]` $txCount $result
+    oilist(
+      `cacheModifier` `=` $cache |
+      `evictionPolicy` `=` $evict
+    )
+    attr-dict `:` type(operands)
+  }];
+}
+
+def NVWS_DescriptorGatherOp : NVWS_Op<"descriptor_gather", [NVWS_DescriptorLoadOpInterface]> {
+  let summary = "gather multiple rows from a descriptor into shared memory";
+  let description = [{
+    This op behaves exactly like the op with the same name in Triton Dialect, but the result of the load is stored into shared memory.
+    The execution is still synchronous.
+  }];
+
+  let arguments = (ins
+    Arg<TT_TensorDescType, "", [MemRead<GlobalMemory>]>:$desc,
+    RankedTensorOf<[I32]>:$x_offsets,
+    I32:$y_offset,
+    I32Attr:$txCount,
+    Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$result
+  );
+
+  let assemblyFormat = [{
+    $desc `[` $x_offsets `,` $y_offset `]` $txCount $result
+    attr-dict `:` type(operands)
+  }];
 }
 
 #endif

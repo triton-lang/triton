@@ -561,13 +561,23 @@ void mlir::triton::combineRedundantWaitOps(
   }
 }
 
-ttg::MemDescType mlir::triton::getBufferViewType(ttg::MemDescType allocTy) {
-  Attribute sharedMemorySpace =
-      ttg::SharedMemorySpaceAttr::get(allocTy.getContext());
+ttg::MemDescType mlir::triton::getBufferViewType(ttg::MemDescType allocTy,
+                                                 bool mutableMemory) {
   return ttg::MemDescType::get(allocTy.getShape().drop_front(),
                                allocTy.getElementType(), allocTy.getEncoding(),
-                               sharedMemorySpace, /*mutableMemory=*/true,
+                               allocTy.getMemorySpace(), mutableMemory,
                                /*allocShape=*/allocTy.getAllocShape());
+}
+
+ttg::MemDescType
+mlir::triton::getMultiBufferedType(ttg::MemDescType memDescType,
+                                   int32_t depth) {
+  auto shape = memDescType.getShape();
+  SmallVector<int64_t> bufferShape(shape.begin(), shape.end());
+  bufferShape.insert(bufferShape.begin(), depth);
+  return ttg::MemDescType::get(
+      bufferShape, memDescType.getElementType(), memDescType.getEncoding(),
+      memDescType.getMemorySpace(), /*mutableMemory*/ true);
 }
 
 ttg::SharedEncodingTrait mlir::triton::getSharedEncoding(RankedTensorType ty) {
