@@ -2049,8 +2049,8 @@ void finalizeTensorAtomicResults(Operation *op, RankedTensorType tensorTy,
       {{str_attr("offset"), dstLayout.getTotalOutDimSize()}});
   auto smemBase = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op);
 
-  auto emitSt = [&](ConversionPatternRewriter &rewriter, Location loc,
-                    ArrayRef<Value> vals, Value shmemAddr, int idx,
+  auto emitSt = [&](RewriterBase &rewriter, Location loc, ArrayRef<Value> vals,
+                    Value shmemAddr, int idx,
                     VectorType vecTy) -> SmallVector<Value> {
     auto length = vecTy.getNumElements();
     Value valsVec =
@@ -2060,8 +2060,8 @@ void finalizeTensorAtomicResults(Operation *op, RankedTensorType tensorTy,
     return {};
   };
 
-  auto emitLd = [&](ConversionPatternRewriter &rewriter, Location loc,
-                    ArrayRef<Value> vals, Value shmemAddr, int idx,
+  auto emitLd = [&](RewriterBase &rewriter, Location loc, ArrayRef<Value> vals,
+                    Value shmemAddr, int idx,
                     VectorType vecTy) -> SmallVector<Value> {
     Value loadedVec = targetInfo.loadDShared(rewriter, loc, shmemAddr,
                                              std::nullopt, vecTy, b.true_val());
