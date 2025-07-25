@@ -11,6 +11,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Partition.h"
 #include "triton/Dialect/TritonGPU/Transforms/PartitionBuilder.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 
@@ -334,10 +335,8 @@ void createArefGet(PartitionBuilder &builder, ArefCreateOp aref,
   }
 
   if (exitInsertPointAfter == nullptr) {
-    exitInsertPointAfter =
-        *llvm::min_element(consumers, [&](auto &lhs, auto &rhs) {
-          return postDomInfo.postDominates(lhs, rhs);
-        });
+    exitInsertPointAfter = findNearestCommonPostDominator(
+        ArrayRef<Operation *>{consumers.begin(), consumers.end()}, postDomInfo);
   }
 
   builder.setInsertionPointAfter(exitInsertPointAfter);
