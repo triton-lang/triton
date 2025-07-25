@@ -36,15 +36,14 @@ bool isDescLoadAndAlloc(Value result) {
   auto alloc = result.getDefiningOp<LocalAllocOp>();
   if (!alloc)
     return false;
-  return alloc.getSrc().getDefiningOp<triton::DescriptorOpInterface>() !=
-         nullptr;
+  return alloc.getSrc().getDefiningOp<triton::DescriptorOpInterface>();
 }
 
 bool isGlobalLoadAndAlloc(Value result) {
   auto alloc = result.getDefiningOp<LocalAllocOp>();
   if (!alloc)
     return false;
-  return alloc.getSrc().getDefiningOp<triton::LoadOp>() != nullptr;
+  return alloc.getSrc().getDefiningOp<triton::LoadOp>();
 }
 
 SmallVector<ProducedValueInfo> getProducedValues(Operation *op, Block *loopBody,
@@ -93,14 +92,14 @@ ArefCreateOp createAref(OpBuilder &builder, ProducedValueInfo &producedValue) {
     }
     arefBufType = getMultiBufferedType(memDescType, 1);
   } else {
-    llvm_unreachable("unsupported type");
+    result.getType().dump();
+    llvm::report_fatal_error("Unsupported produced value type.");
   }
 
   assert(arefBufType &&
          (isa<SharedMemorySpaceAttr>(arefBufType.getMemorySpace())));
   auto loc = result.getLoc();
   auto alloc = triton::nvws::createAlloc(builder, loc, arefBufType, Value());
-  alloc->setAttr("aref_buffer", builder.getUnitAttr());
   return createArefCreateOp(builder, {arefBufType}, {alloc->getResult(0)}, loc);
 }
 
@@ -166,7 +165,7 @@ SmallVector<Operation *> createArefPut(PartitionBuilder &builder,
   Partition *producerPartition = producedValue.partition;
   SmallVector<Type> buffers{dataBufType};
 
-  auto c0Enter = builder.intCst(0, 32);
+  auto c0Enter = builder.intCst(0);
   auto putEnterOp = builder.createInto<ArefPutEnterOp>(
       *producerPartition, stageCluster, buffers, aref, c0Enter);
   schedule.insert(producerPartition, putEnterOp);
@@ -205,7 +204,7 @@ SmallVector<Operation *> createArefPut(PartitionBuilder &builder,
     llvm_unreachable("unsupported type");
   }
 
-  auto c0Exit = builder.intCst(0, 32);
+  auto c0Exit = builder.intCst(0);
   auto putExitOp = builder.createInto<ArefPutExitOp>(
       *producerPartition, stageCluster, aref, c0Exit,
       builder.getArrayAttr(SmallVector<Attribute>{
@@ -303,7 +302,7 @@ void createArefGet(PartitionBuilder &builder, ArefCreateOp aref,
 
   auto arefBufType = cast<MemDescType>(aref.getOperand(0).getType());
   Type bufferType = getBufferViewType(arefBufType, false);
-  auto c0Enter = builder.intCst(0, 32);
+  auto c0Enter = builder.intCst(0);
   auto getEnterOp = builder.createInto<ArefGetEnterOp>(
       *consumerPartition, stageCluster, SmallVector{bufferType}, aref, c0Enter);
   schedule.insert(consumerPartition, getEnterOp);
@@ -343,23 +342,13 @@ void createArefGet(PartitionBuilder &builder, ArefCreateOp aref,
 
   builder.setInsertionPointAfter(exitInsertPointAfter);
 
-  auto c0Exit = builder.intCst(0, 32);
+  auto c0Exit = builder.intCst(0);
   auto getExitOp = builder.createInto<ArefGetExitOp>(
       *consumerPartition, stageCluster, aref, c0Exit,
       builder.getArrayAttr(asyncKinds));
   schedule.insert(consumerPartition, getExitOp);
   schedule.insert(consumerPartition, c0Exit.getDefiningOp());
   getExitOp->setAttr(kArefTagAttrName, builder.getStringAttr(arefTag));
-
-  for (auto consumer : consumers) {
-    if (auto mmav5 = dyn_cast<MMAv5OpInterface>(consumer)) {
-      // MMAv5 now works with SMEM buffers obtained locally from ArefGeterOp. It
-      // can be now considered as asynchronous - it starts executing when the
-      // SMEM buffers are ready, and when it finishes, ArefGetExitOp will
-      // release the empty barrier, which unblocks the load partition.
-      mmav5.setIsAsync(true);
-    }
-  }
 };
 
 bool insertArefs(PartitionBuilder &builder, scf::ForOp loop,

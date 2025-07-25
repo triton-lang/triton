@@ -44,7 +44,7 @@ module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
 
       // CHECK:  [[RHS:%.*]] = ttg.memdesc_trans [[GET_BUF2]]
       %7 = ttg.memdesc_trans %6 {order = array<i32: 1, 0>, ttg.partition = 1 : i32} : !ttg.memdesc<128x64xf16, #shared, #smem> -> !ttg.memdesc<64x128xf16, #shared1, #smem>
-      // CHECK: ttng.tc_gen5_mma [[GET_BUF1]], [[RHS]], {{.*}}, {{.*}}, {{.*}} {is_async
+      // CHECK: ttng.tc_gen5_mma [[GET_BUF1]], [[RHS]], {{.*}}, {{.*}}, {{.*}}
       %8 = ttng.tc_gen5_mma %5, %7, %result[%arg6], %true, %true {ttg.partition = 1 : i32} : !ttg.memdesc<128x64xf16, #shared, #smem>, !ttg.memdesc<64x128xf16, #shared1, #smem>, !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
       // CHECK: nvws.aref.get.exit [[AREF2]]
       // CHECK: [[C_ZERO4:%.*]] = arith.constant {ttg.partition = 1 : i32} 0

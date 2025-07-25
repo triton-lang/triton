@@ -5,9 +5,7 @@ using namespace mlir::triton;
 using namespace mlir::triton::gpu;
 using namespace mlir::triton::nvidia_gpu;
 
-namespace mlir {
-namespace triton {
-namespace nvws {
+namespace mlir::triton::nvws {
 
 Operation *createAlloc(OpBuilder &builder, Location loc,
                        MemDescType memDescType, Value src) {
@@ -19,15 +17,11 @@ Operation *createAlloc(OpBuilder &builder, Location loc,
   }
 }
 
-ArefCreateOp createArefCreateOp(OpBuilder &builder,
-                                const SmallVector<Type> &arefTypes,
-                                const SmallVector<Value> &allocOps,
-                                Location loc) {
+ArefCreateOp createArefCreateOp(OpBuilder &builder, ArrayRef<Type> arefTypes,
+                                ValueRange allocOps, Location loc) {
   auto ctx = builder.getContext();
   auto arefTy = ArefType::get(ctx, TypeArrayAttr::get(ctx, arefTypes));
   return builder.create<ArefCreateOp>(loc, arefTy, allocOps);
 }
 
-} // namespace nvws
-} // namespace triton
-} // namespace mlir
+} // namespace mlir::triton::nvws
