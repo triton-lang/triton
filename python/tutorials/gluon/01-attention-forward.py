@@ -682,7 +682,6 @@ def _softmax_inner_loop(tile_id: gl.constexpr, config, prog,  #
 
     for start_n in range(lo, hi, config.BLOCK_N):
         s_tmem, s_bar, s_consumer = s_consumer.acquire()
-        # qk = s_tmem.load(config.qk_layout)
         qk = _subtiled_qk_load(config, s_tmem)
 
         if STAGE == 2:
