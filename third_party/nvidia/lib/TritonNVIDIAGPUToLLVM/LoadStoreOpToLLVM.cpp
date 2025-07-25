@@ -680,7 +680,7 @@ struct AtomicCASOpConversion
         }
       } else {
         auto old = ptxBuilderAtomicCAS.launch(rewriter, loc, valueElemTy);
-        if (!atomicNeedsSharedMemory(op.getResult())) {
+        if (op.getResult().use_empty()) {
           rewriter.eraseOp(op);
           return success();
         }
@@ -699,15 +699,12 @@ struct AtomicCASOpConversion
         createBarrier(rewriter, loc, numCTAs);
         Value ret = b.load(valueElemTy, atomPtr);
         rewriter.replaceOp(op, {ret});
+        return success();
       }
     }
 
-    if (tensorTy) {
-      Type structTy = getTypeConverter()->convertType(tensorTy);
-      Value resultStruct = packLLElements(loc, getTypeConverter(), resultVals,
-                                          rewriter, structTy);
-      rewriter.replaceOp(op, {resultStruct});
-    }
+    finalizeTensorAtomicResults(op, tensorTy, rewriter, resultVals, valueElemTy,
+                                b, threadPred, targetInfo, getTypeConverter());
     return success();
   }
 };
@@ -776,6 +773,7 @@ struct AtomicRMWOpConversion
     return true;
   }
 
+public:
   LogicalResult
   matchAndRewrite(triton::AtomicRMWOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
@@ -884,7 +882,7 @@ struct AtomicRMWOpConversion
             ScopeMap[op.getScope()]);
 
         auto ASMReturnTy = void_ty(ctx);
-        if (!atomicNeedsSharedMemory(op.getResult())) {
+        if (op.getResult().use_empty()) {
           rewriter.eraseOp(op);
           return success();
         }
@@ -896,7 +894,7 @@ struct AtomicRMWOpConversion
         createBarrier(rewriter, loc, numCTAs);
         Value ret = b.load(valueElemTy, atomPtr);
         rewriter.replaceOp(op, {ret});
-        continue;
+        return success();
       }
 
       // Let LLVM handle compare+swap loop; branch-based pred should be fine
@@ -919,7 +917,7 @@ struct AtomicRMWOpConversion
 
         // Enter into predicate block
         rewriter.setInsertionPointToEnd(curBlock);
-        bool doesAtomicNeedMEM = atomicNeedsSharedMemory(op.getResult());
+        bool doesAtomicNeedMEM = !op.getResult().use_empty();
 
         // Setup for SMEM Sync case
         Value atomPtr = tensorTy || !doesAtomicNeedMEM
@@ -990,6 +988,7 @@ struct AtomicRMWOpConversion
           b.barrier();
           Value ret = b.load(valueElemTy, atomPtr);
           rewriter.replaceOp(op, {ret});
+          return success();
         }
         continue;
       }
@@ -1090,7 +1089,7 @@ struct AtomicRMWOpConversion
           retType = valueElemTy;
         }
 
-        auto ret = ptxBuilderAtomicRMW.launch(rewriter, loc, retType);
+        Value ret = ptxBuilderAtomicRMW.launch(rewriter, loc, retType);
 
         if (vec > 1) {
           for (unsigned ii = 0; ii < vec; ++ii) {
@@ -1104,12 +1103,11 @@ struct AtomicRMWOpConversion
         } else {
           resultVals[i] = ret;
         }
-
       } else {
         auto ASMReturnTy = void_ty(ctx);
         atom(dstOpr, ptrOpr, valOpr).maybePredicate(pred);
         auto old = ptxBuilderAtomicRMW.launch(rewriter, loc, valueElemTy);
-        if (!atomicNeedsSharedMemory(op.getResult())) {
+        if (op.getResult().use_empty()) {
           rewriter.eraseOp(op);
           return success();
         }
@@ -1121,14 +1119,11 @@ struct AtomicRMWOpConversion
         createBarrier(rewriter, loc, numCTAs);
         Value ret = b.load(valueElemTy, atomPtr);
         rewriter.replaceOp(op, {ret});
+        return success();
       }
     }
-    if (tensorTy) {
-      Type structTy = getTypeConverter()->convertType(tensorTy);
-      Value resultStruct = packLLElements(loc, getTypeConverter(), resultVals,
-                                          rewriter, structTy);
-      rewriter.replaceOp(op, {resultStruct});
-    }
+    finalizeTensorAtomicResults(op, tensorTy, rewriter, resultVals, valueElemTy,
+                                b, threadPred, targetInfo, getTypeConverter());
     return success();
   }
 };

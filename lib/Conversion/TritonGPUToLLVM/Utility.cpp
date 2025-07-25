@@ -470,7 +470,7 @@ largestVectorisation(MLIRContext *ctx, const LinearLayout &cvt, int bitwidth,
     }
     return {v, permutation};
   }
-  llvm_unreachable("No vectorisation found");
+  llvm_unreachable("Vectorization < 1 is not valid");
 }
 } // namespace
 
@@ -538,8 +538,9 @@ SmallVector<Value> lowerLdSt(
   }
 
   auto tile = LinearLayout::identity1D(elemsPerVec, kReg, kOffset);
-  auto quot = *divideLeft(cvt, tile);
-  LinearLayout reps = zerosLike(tile) * quot;
+  auto quot = divideLeft(cvt, tile);
+  assert(quot.has_value() && "cvt must be divisible by tile");
+  LinearLayout reps = zerosLike(tile) * *quot;
 
   auto [nAdditive, permStrides] =
       actionAdditiveStrides(reps, maskSpanAffineOffset);
@@ -2018,6 +2019,71 @@ SmallVector<Value> inlineRegionImpl(RewriterBase &rewriter, Region &region,
     vals.push_back(val);
   }
   return vals;
+}
+
+void finalizeTensorAtomicResults(Operation *op, RankedTensorType tensorTy,
+                                 ConversionPatternRewriter &rewriter,
+                                 SmallVector<Value> &resultVals,
+                                 Type valueElemTy, TritonLLVMOpBuilder &b,
+                                 Value threadPred,
+                                 const TargetInfoBase &targetInfo,
+                                 const LLVMTypeConverter *typeConverter) {
+  auto *ctx = rewriter.getContext();
+  auto loc = op->getLoc();
+  Type structTy = typeConverter->convertType(tensorTy);
+  if (!op->hasAttr("allocation.offset")) {
+    // No broadcasting, just pack the values into a struct
+    Value resultStruct =
+        packLLElements(loc, typeConverter, resultVals, rewriter, structTy);
+    rewriter.replaceOp(op, {resultStruct});
+    return;
+  }
+
+  auto dstLayout = triton::gpu::toLinearLayout(tensorTy);
+  auto kReg = str_attr("register");
+  auto kLane = str_attr("lane");
+  auto kWarp = str_attr("warp");
+  dstLayout = dstLayout.sublayout({kReg, kLane, kWarp},
+                                  llvm::to_vector(dstLayout.getOutDimNames()));
+  dstLayout = dstLayout.reshapeOuts(
+      {{str_attr("offset"), dstLayout.getTotalOutDimSize()}});
+  auto smemBase = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op);
+
+  auto emitSt = [&](ConversionPatternRewriter &rewriter, Location loc,
+                    ArrayRef<Value> vals, Value shmemAddr, int idx,
+                    VectorType vecTy) -> SmallVector<Value> {
+    auto length = vecTy.getNumElements();
+    Value valsVec =
+        packLLVector(loc, ArrayRef<Value>(vals).slice(idx, length), rewriter);
+    targetInfo.storeDShared(rewriter, loc, shmemAddr, std::nullopt, valsVec,
+                            threadPred);
+    return {};
+  };
+
+  auto emitLd = [&](ConversionPatternRewriter &rewriter, Location loc,
+                    ArrayRef<Value> vals, Value shmemAddr, int idx,
+                    VectorType vecTy) -> SmallVector<Value> {
+    Value loadedVec = targetInfo.loadDShared(rewriter, loc, shmemAddr,
+                                             std::nullopt, vecTy, b.true_val());
+    return unpackLLVector(loc, loadedVec, rewriter);
+  };
+
+  auto noPaddingOffset = [](Value v) { return v; };
+  lowerLdSt(loc, ctx, dstLayout, resultVals, valueElemTy, smemBase,
+            /*calcPaddedOffset=*/noPaddingOffset, /*affineOffset=*/b.i32_val(0),
+            /*maskSpanAffineOffset=*/0, rewriter, targetInfo,
+            /*maybeMaxVecElems=*/{}, emitSt);
+  b.barrier();
+  resultVals = lowerLdSt(loc, ctx, dstLayout, resultVals, valueElemTy, smemBase,
+                         /*calcPaddedOffset=*/noPaddingOffset,
+                         /*affineOffset=*/b.i32_val(0),
+                         /*maskSpanAffineOffset=*/0, rewriter, targetInfo,
+                         /*maybeMaxVecElems=*/{}, emitLd);
+
+  // Create the result struct and replace the operation
+  Value resultStruct =
+      packLLElements(loc, typeConverter, resultVals, rewriter, structTy);
+  rewriter.replaceOp(op, {resultStruct});
 }
 
 } // namespace mlir

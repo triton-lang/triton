@@ -2003,6 +2003,36 @@ def test_atomic_unsupported_type(dtype_str, device):
         kernel[(1, )](I, O)
 
 
+@pytest.mark.interpreter
+@pytest.mark.parametrize("dtype_str", ["int32", "float16"])
+@pytest.mark.parametrize("size", [1, 4, 16])
+@pytest.mark.parametrize("op", ["add", "cas"])
+def test_tensor_atomic_use_result(dtype_str, size, op, device):
+    if is_hip():
+        pytest.skip(
+            "HIP is broken because (1) it doesn't support thread predicate in atomic cas, and (2) it doesn't support"
+            " atomic rmw with float16")
+
+    @triton.jit
+    def kernel(index_ptr, out_ptr, size: tl.constexpr, op: tl.constexpr):
+        if op == "add":
+            write_index = tl.atomic_add(index_ptr + tl.arange(0, size)[:, None], val=tl.arange(0, size)[:, None],
+                                        sem="relaxed")
+        elif op == "cas":
+            write_index = tl.atomic_cas(
+                index_ptr + tl.arange(0, size)[:, None],
+                cmp=tl.zeros((size, ), dtype=index_ptr.dtype.element_ty)[:, None],
+                val=tl.arange(0, size).to(index_ptr.dtype.element_ty)[:, None],
+                sem="relaxed",
+            )
+        tl.store(out_ptr + write_index.to(tl.uint32) * size + tl.arange(0, size)[None, :], 5)
+
+    index = torch.arange(0, size, device=device).to(dtype=getattr(torch, dtype_str))
+    out = torch.zeros((size, size), device=device, dtype=getattr(torch, dtype_str))
+    kernel[(1, )](index, out, size, op)
+    assert (out == 5).all()
+
+
 # ---------------
 # test cast
 # ---------------
