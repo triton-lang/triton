@@ -264,7 +264,8 @@ def SharedMemory : Resource<"::mlir::triton::gpu::SharedMemory">;
 def NVWS_DescriptorLoadOp : NVWS_Op<"descriptor_load", [NVWS_DescriptorLoadOpInterface]> {
   let summary = "Load from descriptor and store into shared memory";
   let description = [{
-    Similar to the op with the same name in Triton Dialect, but the result of the load is stored into shared memory.
+    This op behaves exactly like the op with the same name in Triton Dialect, but the result of the load is stored into shared memory.
+    The execution is still synchronous.
   }];
   let arguments = (ins
     Arg<TT_TensorDescType, "", [MemRead<GlobalMemory>]>:$desc,
@@ -288,7 +289,8 @@ def NVWS_DescriptorLoadOp : NVWS_Op<"descriptor_load", [NVWS_DescriptorLoadOpInt
 def NVWS_DescriptorGatherOp : NVWS_Op<"descriptor_gather", [NVWS_DescriptorLoadOpInterface]> {
   let summary = "gather multiple rows from a descriptor into shared memory";
   let description = [{
-    Similar to the op with the same name in Triton Dialect, but the result of the load is stored into shared memory.
+    This op behaves exactly like the op with the same name in Triton Dialect, but the result of the load is stored into shared memory.
+    The execution is still synchronous.
   }];
 
   let arguments = (ins
