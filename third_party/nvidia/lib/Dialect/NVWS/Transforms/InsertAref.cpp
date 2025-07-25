@@ -2,6 +2,7 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Dominance.h"
+#include "mlir/Support/DebugStringHelper.h"
 #include "mlir/Transforms/Passes.h"
 #include "nvidia/include/Dialect/NVWS/IR/Dialect.h"
 #include "nvidia/include/Dialect/NVWS/Transforms/Passes.h"
@@ -93,8 +94,9 @@ ArefCreateOp createAref(OpBuilder &builder, ProducedValueInfo &producedValue) {
     }
     arefBufType = getMultiBufferedType(memDescType, 1);
   } else {
-    result.getType().dump();
-    llvm::report_fatal_error("Unsupported produced value type.");
+    std::string msg = "unsupported produced value type: " +
+                      mlir::debugString(result.getType());
+    llvm::report_fatal_error(msg.c_str());
   }
 
   assert(arefBufType &&

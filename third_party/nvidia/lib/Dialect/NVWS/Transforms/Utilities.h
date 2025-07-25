@@ -3,6 +3,7 @@
 
 #include "nvidia/include/Dialect/NVWS/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/Transforms/PartitionBuilder.h"
 
 namespace mlir::triton::nvws {
 
@@ -13,6 +14,9 @@ Operation *createAlloc(OpBuilder &builder, Location loc,
 
 ArefCreateOp createArefCreateOp(OpBuilder &builder, ArrayRef<Type> arefTypes,
                                 ValueRange allocOps, Location loc);
+
+void assignStageCluster(Operation *op, gpu::StageCluster stageCluster,
+                        OpBuilder &builder);
 
 } // namespace mlir::triton::nvws
 
