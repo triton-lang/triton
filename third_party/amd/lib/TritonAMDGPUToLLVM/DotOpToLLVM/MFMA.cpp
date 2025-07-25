@@ -445,15 +445,13 @@ struct DotOpMFMAConversionHelper {
         } else {
           results = b.zext(i32_ty, b.bitcast(vec, i8_ty));
         }
-      }
-
-      if (2 == vecSize) {
+      } else if (vecSize == 2) {
         // This case can occur during scale tensor packing when there aren't
         // enough elements to fill all 4 opSel slots. For example, with an A
         // tensor of size 16x256 and using 16x16x128 block sizes, we end up with
         // only 2 elements to pack,  resulting in a kBase of 2.
         results = b.zext(i32_ty, b.bitcast(vec, i16_ty));
-      } else if (4 == vecSize) {
+      } else if (vecSize == 4) {
         // This is for int8 on pre- CDNA3 GPUs and scale tensors on CDNA4 GPUs
         results = b.bitcast(vec, i32_ty);
       } else if (vecSize == 8) {

@@ -657,8 +657,15 @@ public:
 
     ScaleDotElemType aElemType = dotOp.getAElemType();
     ScaleDotElemType bElemType = dotOp.getBElemType();
-    if (!isF16F8F4(aElemType) || !isF16F8F4(bElemType))
-      return rewriter.notifyMatchFailure(dotOp, "NYI: mxfp6 operand");
+    auto supportsTypes = [](ScaleDotElemType elemType) {
+      return elemType == ScaleDotElemType::E2M1 ||
+             elemType == ScaleDotElemType::E4M3 ||
+             elemType == ScaleDotElemType::E5M2 ||
+             elemType == ScaleDotElemType::BF16 ||
+             elemType == ScaleDotElemType::FP16;
+    };
+    if (!supportsTypes(aElemType) || !supportsTypes(bElemType))
+      return rewriter.notifyMatchFailure(dotOp, "unknown operand type");
 
     MLIRContext *ctx = dotOp.getContext();
     auto moduleOp = dotOp->getParentOfType<ModuleOp>();
@@ -891,7 +898,7 @@ public:
     };
 
     if (!supportsTypes(aElemType) || !supportsTypes(bElemType)) {
-      return rewriter.notifyMatchFailure(dotOp, "NYI: mxfp6");
+      return rewriter.notifyMatchFailure(dotOp, "unknown operand type");
     }
 
     bool bothScalesAbsent = !aScale && !bScale;

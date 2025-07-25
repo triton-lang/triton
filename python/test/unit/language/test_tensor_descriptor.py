@@ -12,6 +12,7 @@ from triton.tools.tensor_descriptor import TensorDescriptor
 from triton import CompilationError
 from triton._internal_testing import is_hip_cdna4
 
+
 @pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_str", tma_dtypes)
 @pytest.mark.parametrize("num_ctas", [1, 2])
@@ -1361,8 +1362,8 @@ def mxfp6_matmul(  #
         stride_am, stride_ak,  #
         stride_bk, stride_bn,  #
         stride_cm, stride_cn,  #
-        FP_FLAG: tl.constexpr, #
-        SCALE_BLOCK: tl.constexpr, #
+        FP_FLAG: tl.constexpr,  #
+        SCALE_BLOCK: tl.constexpr,  #
         BLOCK_M: tl.constexpr,  #
         BLOCK_N: tl.constexpr,  #
         BLOCK_K: tl.constexpr,  #
@@ -1415,11 +1416,11 @@ def test_mxfp6(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, dtype, device):
         pytest.skip('supported only by cdna4')
 
     if dtype == "float6_e2m3":
-        a = MXFP6Tensor(data = torch.randint(1, 5, (M, K)), e=2)
-        b = MXFP6Tensor(data = torch.randint(1, 5, (K, N)), e=2)
+        a = MXFP6Tensor(data=torch.randint(1, 5, (M, K)), e=2)
+        b = MXFP6Tensor(data=torch.randint(1, 5, (K, N)), e=2)
     elif dtype == "float6_e3m2":
-        a = MXFP6Tensor(data = torch.randint(1, 5, (M, K)), e=3)
-        b = MXFP6Tensor(data = torch.randint(1, 5, (K, N)), e=3)
+        a = MXFP6Tensor(data=torch.randint(1, 5, (M, K)), e=3)
+        b = MXFP6Tensor(data=torch.randint(1, 5, (K, N)), e=3)
 
     a_ref = a.to(torch.float32)
     b_ref = b.to(torch.float32)
@@ -1458,20 +1459,20 @@ def test_mxfp6(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, dtype, device):
 
     triton.set_allocator(alloc_fn)
 
-    mxfp6_matmul[grid](a, b, triton_output, #
-                       a_scale, b_scale, #
-                       M, N, K, #
-                       a_scale.stride(0), #
-                       a.stride(0), a.stride(1), #
-                       b.stride(0), b.stride(1), #
-                       triton_output.stride(0),
-                       triton_output.stride(1), #
-                       FP_FLAG=FP_FLAG, #
-                       SCALE_BLOCK=SCALE_BLOCK, #
-                       BLOCK_M=BLOCK_M, #
-                       BLOCK_N=BLOCK_N, #
-                       BLOCK_K=BLOCK_K, #
-                       NUM_STAGES=NUM_STAGES)
+    mxfp6_matmul[grid](
+        a, b, triton_output,  #
+        a_scale, b_scale,  #
+        M, N, K,  #
+        a_scale.stride(0),  #
+        a.stride(0), a.stride(1),  #
+        b.stride(0), b.stride(1),  #
+        triton_output.stride(0), triton_output.stride(1),  #
+        FP_FLAG=FP_FLAG,  #
+        SCALE_BLOCK=SCALE_BLOCK,  #
+        BLOCK_M=BLOCK_M,  #
+        BLOCK_N=BLOCK_N,  #
+        BLOCK_K=BLOCK_K,  #
+        NUM_STAGES=NUM_STAGES)
 
     a_ref = a_ref * a_scale_ref
     b_ref = b_ref * b_scale_ref
