@@ -1299,9 +1299,9 @@ def test_auto_layout_broadcast():
 
 @gluon.jit
 def amd_mfma_layout_kernel():
-    mfma_layout: ttgl.constexpr = ttgl.AMDMFMALayout(version=[4, 0], warps_per_cta=[4, 1], tiles_per_warp=[1, 1],
-                                                     m_dim=32, n_dim=32, transposed=False, ctas_per_cga=[1, 1],
-                                                     cta_split_num=[1, 1], cta_order=[1, 0], elem_type_width=32)
+    mfma_layout: ttgl.constexpr = ttgl.AMDMFMALayout(version=4, instr_shape=[32, 32], transposed=True,
+                                                     warps_per_cta=[4, 1], tiles_per_warp=[4, 1], ctas_per_cga=[1, 1],
+                                                     cta_split_num=[1, 1], cta_order=[1, 0])
 
     layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 64], [4, 1], [1, 0])
 
@@ -1309,7 +1309,8 @@ def amd_mfma_layout_kernel():
     res = ttgl.convert_layout(x, mfma_layout)  # noqa: F841
 
 
-def from_ast_to_module(kernel, num_ctas, num_warps, warp_size):
+@pytest.mark.skipif(not is_hip_cdna(), reason="Requires CDNA")
+def test_amd_mfma_layout(fresh_knobs):
     knobs.compilation.disable_line_info = True
 
     context = ir.context()
@@ -1321,27 +1322,20 @@ def from_ast_to_module(kernel, num_ctas, num_warps, warp_size):
     options = stub_backend.parse_options(options)
     codegen_fns = stub_backend.get_codegen_implementation(options)
     signature = {}
-    src = GluonASTSource(fn=kernel, signature=signature)
+    src = GluonASTSource(fn=amd_mfma_layout_kernel, signature=signature)
     builder = ir.builder(context)
     module = builder.create_module()
-    module.set_attr("ttg.threads-per-warp", builder.get_int32_attr(warp_size))
-    module.set_attr("ttg.num-warps", builder.get_int32_attr(num_warps))
-    module.set_attr("ttg.num-ctas", builder.get_int32_attr(num_ctas))
-    module = ast_to_ttir(kernel, src, context=context, options=options, codegen_fns=codegen_fns, module_map=dict(),
-                         module=module)
+    module.set_attr("ttg.threads-per-warp", builder.get_int32_attr(64))
+    module.set_attr("ttg.num-warps", builder.get_int32_attr(4))
+    module.set_attr("ttg.num-ctas", builder.get_int32_attr(1))
+    module = ast_to_ttir(amd_mfma_layout_kernel, src, context=context, options=options, codegen_fns=codegen_fns,
+                         module_map=dict(), module=module)
     assert module.verify()
-    return module
 
-
-@pytest.mark.skipif(not is_hip_cdna(), reason="Requires CDNA")
-def test_amd_mfma_layout(fresh_knobs):
-    knobs.compilation.disable_line_info = True
-
-    module = from_ast_to_module(amd_mfma_layout_kernel, 1, 4, 64)
     expecttest.assert_expected_inline(
         module.str(), """\
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 64], warpsPerCTA = [4, 1], order = [1, 0]}>
-#mma = #ttg.amd_mfma<{version = 4, warpsPerCTA = [4, 1], instrShape = [32, 32], isTransposed = false}>
+#mma = #ttg.amd_mfma<{version = 4, warpsPerCTA = [4, 1], tilesPerWarp = [4, 1], instrShape = [32, 32], isTransposed = true}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
   tt.func public @amd_mfma_layout_kernel() attributes {noinline = false} {
     %cst = arith.constant 0.000000e+00 : f32 loc(#loc)
