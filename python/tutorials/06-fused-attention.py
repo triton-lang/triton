@@ -50,7 +50,7 @@ def _attn_fwd_inner(acc, l_i, m_i, q,  #
                     offset_y, dtype: tl.constexpr, start_m, qk_scale,  #
                     BLOCK_M: tl.constexpr, HEAD_DIM: tl.constexpr, BLOCK_N: tl.constexpr,  #
                     STAGE: tl.constexpr, offs_m: tl.constexpr, offs_n: tl.constexpr,  #
-                    N_CTX: tl.constexpr, warp_specialize: tl.constexpr, SUB_TILING: tl.constexpr):
+                    N_CTX: tl.constexpr, warp_specialize: tl.constexpr, SUBTILE_EPILOGUE: tl.constexpr):
     # range of values handled by this stage
     if STAGE == 1:
         lo, hi = 0, start_m * BLOCK_M
@@ -84,7 +84,7 @@ def _attn_fwd_inner(acc, l_i, m_i, q,  #
         alpha = tl.math.exp2(m_i - m_ij)
         l_ij = tl.sum(p, 1)
         # -- update output accumulator --
-        if warp_specialize and SUB_TILING and BLOCK_M == 128 and HEAD_DIM == 128:
+        if SUBTILE_EPILOGUE:
             BM: tl.constexpr = acc.shape[0]
             BN: tl.constexpr = acc.shape[1]
             acc0, acc1 = acc.reshape([BM, 2, BN // 2]).permute(0, 2, 1).split()
@@ -171,24 +171,16 @@ def _maybe_make_tensor_desc(desc_or_ptr, shape, strides, block_shape):
 @triton.autotune(configs=list(filter(keep, configs)), key=["N_CTX", "HEAD_DIM", "FP8_OUTPUT", "warp_specialize"],
                  prune_configs_by={'early_config_prune': prune_invalid_configs})
 @triton.jit
-def _attn_fwd(
-    sm_scale,
-    M,  #
-    Z,
-    H,
-    desc_q,
-    desc_k,
-    desc_v,
-    desc_o,
-    N_CTX,  #
-    HEAD_DIM: tl.constexpr,  #
-    BLOCK_M: tl.constexpr,  #
-    BLOCK_N: tl.constexpr,  #
-    FP8_OUTPUT: tl.constexpr,  #
-    STAGE: tl.constexpr,  #
-    warp_specialize: tl.constexpr,  #
-    SUB_TILING: tl.constexpr,
-):
+def _attn_fwd(sm_scale, M,  #
+              Z, H, desc_q, desc_k, desc_v, desc_o, N_CTX,  #
+              HEAD_DIM: tl.constexpr,  #
+              BLOCK_M: tl.constexpr,  #
+              BLOCK_N: tl.constexpr,  #
+              FP8_OUTPUT: tl.constexpr,  #
+              STAGE: tl.constexpr,  #
+              warp_specialize: tl.constexpr,  #
+              SUBTILE_EPILOGUE: tl.constexpr,  #
+              ):
     dtype = tl.float8e5 if FP8_OUTPUT else tl.float16
     tl.static_assert(BLOCK_N <= HEAD_DIM)
     start_m = tl.program_id(0)
@@ -233,7 +225,7 @@ def _attn_fwd(
                                         offset_y, dtype, start_m, qk_scale,  #
                                         BLOCK_M, HEAD_DIM, BLOCK_N,  #
                                         4 - STAGE, offs_m, offs_n, N_CTX,  #
-                                        warp_specialize, SUB_TILING)
+                                        warp_specialize, SUBTILE_EPILOGUE)
     # stage 2: on-band
     if STAGE & 2:
         acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q,  #
@@ -241,7 +233,7 @@ def _attn_fwd(
                                         offset_y, dtype, start_m, qk_scale,  #
                                         BLOCK_M, HEAD_DIM, BLOCK_N,  #
                                         2, offs_m, offs_n, N_CTX,  #
-                                        warp_specialize, SUB_TILING)
+                                        warp_specialize, SUBTILE_EPILOGUE)
     # epilogue
     m_i += tl.math.log2(l_i)
     acc = acc / l_i[:, None]
@@ -547,7 +539,7 @@ class _attention(torch.autograd.Function):
             return (triton.cdiv(q.shape[2], META["BLOCK_M"]), q.shape[0] * q.shape[1], 1)
 
         ctx.grid = grid
-        SUB_TILING = False if is_hopper() and warp_specialize else True
+        SUBTILE_EPILOGUE = False if is_hopper() and warp_specialize else True
         if is_blackwell() and warp_specialize:
             if HEAD_DIM_K == 128 and q.dtype == torch.float16:
                 extra_kern_args["maxnreg"] = 168
@@ -562,7 +554,7 @@ class _attention(torch.autograd.Function):
             FP8_OUTPUT=q.dtype == torch.float8_e5m2,  #
             STAGE=stage,  #
             warp_specialize=warp_specialize,  #
-            SUB_TILING=SUB_TILING, **extra_kern_args)
+            SUBTILE_EPILOGUE=SUBTILE_EPILOGUE, **extra_kern_args)
 
         ctx.save_for_backward(q, k, v, o, M)
         ctx.sm_scale = sm_scale
