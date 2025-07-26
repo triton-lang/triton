@@ -44,7 +44,7 @@ class HIPOptions:
     supported_fp8_dtypes: Tuple[str] = ("fp8e4nv", "fp8e5", "fp8e5b16", "fp8e4b8")
     deprecated_fp8_dot_operand_dtypes: Tuple[str] = ()
     default_dot_input_precision: str = "ieee"
-    allowed_dot_input_precisions: Tuple[str] = ("ieee", )
+    allowed_dot_input_precisions: Tuple[str] = ("ieee", 'bf16x3')
     enable_fp_fusion: bool = True
     launch_cooperative_grid: bool = False
     matrix_instr_nonkdim: int = 0
