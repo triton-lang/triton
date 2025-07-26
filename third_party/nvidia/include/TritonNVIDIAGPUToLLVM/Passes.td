@@ -41,4 +41,13 @@ def ConvertWarpSpecializeToLLVM : Pass<"convert-warp-specialize-to-llvm", "mlir:
   let dependentDialects = ["mlir::LLVM::LLVMDialect", "mlir::NVVM::NVVMDialect"];
 }
 
+def InsertRandomDelays : Pass<"insert-random-delays", "mlir::ModuleOp"> {
+  let summary = "Insert random delays";
+  let description = [{
+    This pass is to insert random delays before or after asynchronous
+    operations to expose race conditions.
+  }];
+  let dependentDialects = ["mlir::LLVM::LLVMDialect", "mlir::NVVM::NVVMDialect"];
+}
+
 #endif // TRITONGPU_CONVERSION_PASSES

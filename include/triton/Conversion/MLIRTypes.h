@@ -10,6 +10,7 @@ namespace triton {
 namespace type {
 
 // Integer types
+inline Type i64Ty(MLIRContext *ctx) { return IntegerType::get(ctx, 64); }
 inline Type i32Ty(MLIRContext *ctx) { return IntegerType::get(ctx, 32); }
 inline Type i16Ty(MLIRContext *ctx) { return IntegerType::get(ctx, 16); }
 inline Type i8Ty(MLIRContext *ctx) { return IntegerType::get(ctx, 8); }
