@@ -1054,8 +1054,7 @@ FailureOr<scf::ForOp> pipelineLoop(scf::ForOp forOp, int numStages,
 } // namespace
 
 struct PipelinePass : impl::TritonAMDGPUStreamPipelineBase<PipelinePass> {
-  using impl::TritonAMDGPUStreamPipelineBase<
-      PipelinePass>::TritonAMDGPUStreamPipelineBase;
+  using Base::Base;
 
   void runOnOperation() override {
     ModuleOp moduleOp = getOperation();
