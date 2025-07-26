@@ -7,4 +7,5 @@ add_triton_library(TritonInstrumentToLLVM
     TritonIR
     TritonGPUIR
     TritonInstrumentIR
+    TritonNvidiaGPUIR
 )
