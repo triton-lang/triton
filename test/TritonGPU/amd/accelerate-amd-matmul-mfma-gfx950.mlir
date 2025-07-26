@@ -223,3 +223,74 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 64], warpsPerCTA = [2, 2], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [16, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 4], order = [0, 1]}>
+// CHECK{LITERAL}: #shared = #ttg.swizzled_shared<{vec = 16, perPhase = 4, maxPhase = 4, order = [1, 0]}>
+// CHECK-LABEL: mfma_dot_scaled_mxfp4_b_packed_mn
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @mfma_dot_scaled_mxfp4_b_packed_mn(
+      %a: tensor<128x128xf8E5M2, #blocked>,
+      %b: tensor<128x64xi8, #blocked1>,
+      %c: tensor<128x128xf32, #blocked>,
+      %arg4: tensor<128x128x!tt.ptr<f32>, #blocked>
+      ) {
+    %b1 = ttg.convert_layout %b : tensor<128x64xi8, #blocked1> -> tensor<128x64xi8, #blocked>
+    // CHECK: %[[ALLOCB:.+]] = ttg.local_alloc {{.*}} : (tensor<128x64xi8, #blocked>) -> !ttg.memdesc<128x64xi8, #shared, #smem>
+    // CHECK: %[[B:.+]] = amdgpu.local_load_packed_tranposed  %[[ALLOCB]] : !ttg.memdesc<128x64xi8, #shared, #smem> -> tensor<64x128xi8, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 16}>>
+    // CHECK: tt.dot_scaled %{{.*}}, %[[B]], %{{.*}} lhs = e5m2 rhs = e2m1 {fastMath = false}
+    %accumulator_52 = tt.dot_scaled %a, %b1, %c lhs = e5m2 rhs = e2m1 {fastMath = false, rhs_k_pack = false} : tensor<128x128xf8E5M2, #blocked> * tensor<128x64xi8, #blocked> -> tensor<128x128xf32, #blocked>
+    tt.store %arg4, %accumulator_52 : tensor<128x128x!tt.ptr<f32>, #blocked>
+    tt.return
+  }
+}
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 64], warpsPerCTA = [2, 2], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [16, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 4], order = [0, 1]}>
+// CHECK{LITERAL}: #shared = #ttg.swizzled_shared<{vec = 16, perPhase = 4, maxPhase = 4, order = [0, 1]}>
+// CHECK-LABEL: mfma_dot_scaled_mxfp4_a_packed_mn
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @mfma_dot_scaled_mxfp4_a_packed_mn(
+      %a: tensor<64x128xi8, #blocked>,
+      %b: tensor<128x128xf8E5M2, #blocked1>,
+      %c: tensor<128x128xf32, #blocked>,
+      %arg4: tensor<128x128x!tt.ptr<f32>, #blocked>
+      ) {
+    %b1 = ttg.convert_layout %b : tensor<128x128xf8E5M2, #blocked1> -> tensor<128x128xf8E5M2, #blocked>
+    // CHECK: %[[ALLOCA:.+]] = ttg.local_alloc {{.*}} : (tensor<64x128xi8, #blocked>) -> !ttg.memdesc<64x128xi8, #shared, #smem>
+    // CHECK: %[[A:.+]] = amdgpu.local_load_packed_tranposed  %[[ALLOCA]] : !ttg.memdesc<64x128xi8, #shared, #smem> -> tensor<128x64xi8, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 16}>>
+    // CHECK: tt.dot_scaled %[[A]], %{{.*}}, %{{.*}} lhs = e2m1 rhs = e5m2 {fastMath = false}
+    %accumulator_52 = tt.dot_scaled %a, %b1, %c lhs = e2m1 rhs = e5m2 {fastMath = false, lhs_k_pack = false} : tensor<64x128xi8, #blocked> * tensor<128x128xf8E5M2, #blocked> -> tensor<128x128xf32, #blocked>
+    tt.store %arg4, %accumulator_52 : tensor<128x128x!tt.ptr<f32>, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 64], warpsPerCTA = [2, 2], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [16, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 4], order = [0, 1]}>
+// CHECK{LITERAL}: #shared = #ttg.swizzled_shared<{vec = 16, perPhase = 4, maxPhase = 4, order = [0, 1]}>
+// CHECK{LITERAL}: #shared1 = #ttg.swizzled_shared<{vec = 16, perPhase = 4, maxPhase = 4, order = [1, 0]}>
+// CHECK-LABEL: mfma_dot_scaled_mxfp4_ab_packed_mn
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @mfma_dot_scaled_mxfp4_ab_packed_mn(
+      %a: tensor<64x128xi8, #blocked>,
+      %b: tensor<128x64xi8, #blocked1>,
+      %c: tensor<128x128xf32, #blocked>,
+      %arg4: tensor<128x128x!tt.ptr<f32>, #blocked>
+      ) {
+    %b1 = ttg.convert_layout %b : tensor<128x64xi8, #blocked1> -> tensor<128x64xi8, #blocked>
+    // CHECK: %[[ALLOCA:.+]] = ttg.local_alloc {{.*}} : (tensor<64x128xi8, #blocked>) -> !ttg.memdesc<64x128xi8, #shared, #smem>
+    // CHECK: %[[A:.+]] = amdgpu.local_load_packed_tranposed  %[[ALLOCA]] : !ttg.memdesc<64x128xi8, #shared, #smem> -> tensor<128x64xi8, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 16}>>
+    // CHECK: %[[ALLOCB:.+]] = ttg.local_alloc {{.*}} : (tensor<128x64xi8, #blocked>) -> !ttg.memdesc<128x64xi8, #shared1, #smem>
+    // CHECK: %[[B:.+]] = amdgpu.local_load_packed_tranposed  %[[ALLOCB]] : !ttg.memdesc<128x64xi8, #shared1, #smem> -> tensor<64x128xi8, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 16}>>
+    // CHECK: tt.dot_scaled %[[A]], %[[B]], %{{.*}} lhs = e2m1 rhs = e2m1 {fastMath = false}
+    %accumulator_52 = tt.dot_scaled %a, %b1, %c lhs = e2m1 rhs = e2m1 {fastMath = false, lhs_k_pack = false, rhs_k_pack = false} : tensor<64x128xi8, #blocked> * tensor<128x64xi8, #blocked> -> tensor<128x128xf32, #blocked>
+    tt.store %arg4, %accumulator_52 : tensor<128x128x!tt.ptr<f32>, #blocked>
+    tt.return
+  }
+}
