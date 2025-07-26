@@ -262,7 +262,7 @@ public:
     LDBG("scale: " << scaleVals.size() << " x " << scaleVals.front().getType());
 
     // When we lower scaled dot op, we made sure to distribute K only on one
-    // warp. MXFP spec mandates 1 scale value for every 32 onsecutive values
+    // warp. MXFP spec mandates 1 scale value for every 32 consecutive values
     // along the K dimension. So in total each thread should read 32x main
     // element values.
     if (xVals.size() != scaleVals.size() * (isPacked ? 16 : 32))
@@ -270,16 +270,24 @@ public:
 
     auto dotEncoding =
         cast<DotOperandEncodingAttr>(op.getSrc().getType().getEncoding());
-    auto mfmaEncoding = dyn_cast<AMDMfmaEncodingAttr>(dotEncoding.getParent());
-    if (!mfmaEncoding)
+    int mDim;
+    if (auto mfmaEncoding =
+            dyn_cast<AMDMfmaEncodingAttr>(dotEncoding.getParent())) {
+      LDBG("mfma: " << mfmaEncoding);
+      mDim = mfmaEncoding.getMDim();
+    } else if (auto wmmaEncoding =
+                   dyn_cast<AMDWmmaEncodingAttr>(dotEncoding.getParent())) {
+      LDBG("wmma: " << wmmaEncoding);
+      mDim = wmmaEncoding.getMNKDimPerInstr()[0];
+    } else {
       return rewriter.notifyMatchFailure(op, "NYI: non-mfma dot operand");
-    LDBG("mfma: " << mfmaEncoding);
-
-    int mDim = mfmaEncoding.getMDim();
+    }
     if (mDim != 32 && mDim != 16)
       return rewriter.notifyMatchFailure(op, "NYI: non-mfma32/16 intrinsics");
 
     int numThreads = lookupThreadsPerWarp(rewriter);
+    int numKThreads = numThreads / mDim;
+
     auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
 
     bool useFp16 = op.getType().getElementType().isF16();
@@ -290,61 +298,34 @@ public:
     // Given that MFMA layout for the A tensor arranges thread in a column-major
     // manner, for the current tid, it's at row (tid % mDim). When we set up
     // blocked layout for the A scale tensor, we made sure that it has a
-    // threadsPerWarp = [M=mDim, K=64/mDim]. So the threads holding scale values
-    // for the current thread starts at ((tid % mDim) * (64 / mDim)).
+    // threadsPerWarp = [M=mDim, K=WarpSize/mDim]. So the threads holding scale
+    // values for the current thread starts at ((tid % mDim) * (WarpSize /
+    // mDim)).
     Value offset =
         b.mul(b.urem(laneId, b.i32_val(mDim)), b.i32_val(numThreads / mDim));
 
-    if (mDim == 32) {
-      // One mfma32 intrinsic processes a 32x8 A tensor slice. Due to how we
-      // tile, the same warp owns the whole K dim. Inside a warp, each thread
-      // only holds 4 consecutive elements along K--a 1x4 vector. We need to
-      // tile the warp 4 times to cover 32 values along K. So for a thread, the
-      // first 4 1x4 vectors it holds shares the first scale value at row (tid %
-      // mDim). the second 4 1x4 vectors shares the second scale value at row
-      // (tid % mDim); and so forth.
-      std::array<Value, 2> scaleThreads = {offset, b.add(offset, b.i32_val(1))};
+    // One mfma32 intrinsic processes a 32x8 A tensor slice. Due to how we tile,
+    // the same warp owns the whole K dim. Inside a warp, each thread only holds
+    // 4 consecutive elements along K--a 1x4 vector. We need to tile the warp 4
+    // times to cover 32 values along K. So for a thread, the first 4 1x4
+    // vectors it holds shares the first scale value at row (tid % mDim).
+    // The second 4 1x4 vectors shares the second scale value at row
+    // (tid % mDim); and so forth.
+    int mxfpConsValNum = 32;
+    for (auto [i, scaleVal] : llvm::enumerate(scaleVals)) {
+      SmallVector<Value, 4> si;
+      for (int idx = 0; idx < numKThreads; ++idx)
+        si.push_back(targetInfo.shuffleIdx(rewriter, loc, scaleVal,
+                                           b.add(offset, b.i32_val(idx))));
 
-      for (auto [i, scaleVal] : llvm::enumerate(scaleVals)) {
-        std::array<Value, 2> si = {
-            targetInfo.shuffleIdx(rewriter, loc, scaleVal, scaleThreads[0]),
-            targetInfo.shuffleIdx(rewriter, loc, scaleVal, scaleThreads[1]),
-        };
-
-        for (int j = 0; j < 32; ++j) {
-          int index = 32 * i + j;
-          xVals[index] =
-              useFp16 ? mxfpScaleFp16(rewriter, loc, xVals[index], si[j / 16],
-                                      op.getFastMath())
-                      : mxfpScaleBf16ViaF32(rewriter, loc, xVals[index],
-                                            si[j / 16], op.getFastMath());
-        }
-      }
-    } else {
-      assert(mDim == 16);
-      // One mfma16 intrinsic processes a 16x16 A tensor slice. Similarly, we
-      // need to tile the warp 2 times to cover 32 values. So for a thread, the
-      // first 2 1x4 vectors shares the first scale value at row (tid % mDim).
-      std::array<Value, 4> scaleThreads = {offset, b.add(offset, b.i32_val(1)),
-                                           b.add(offset, b.i32_val(2)),
-                                           b.add(offset, b.i32_val(3))};
-
-      for (auto [i, scaleVal] : llvm::enumerate(scaleVals)) {
-        auto si = std::array<Value, 4>{
-            targetInfo.shuffleIdx(rewriter, loc, scaleVal, scaleThreads[0]),
-            targetInfo.shuffleIdx(rewriter, loc, scaleVal, scaleThreads[1]),
-            targetInfo.shuffleIdx(rewriter, loc, scaleVal, scaleThreads[2]),
-            targetInfo.shuffleIdx(rewriter, loc, scaleVal, scaleThreads[3]),
-        };
-
-        for (int j = 0; j < 32; ++j) {
-          int index = 32 * i + j;
-          xVals[index] = useFp16
-                             ? mxfpScaleFp16(rewriter, loc, xVals[index],
-                                             si[j / 8], op.getFastMath())
-                             : mxfpScaleBf16ViaF32(rewriter, loc, xVals[index],
-                                                   si[j / 8], op.getFastMath());
-        }
+      for (int j = 0; j < mxfpConsValNum; ++j) {
+        int kThread = j / (mxfpConsValNum / numKThreads);
+        int index = mxfpConsValNum * i + j;
+        xVals[index] = useFp16
+                           ? mxfpScaleFp16(rewriter, loc, xVals[index],
+                                           si[kThread], op.getFastMath())
+                           : mxfpScaleBf16ViaF32(rewriter, loc, xVals[index],
+                                                 si[kThread], op.getFastMath());
       }
     }
 
