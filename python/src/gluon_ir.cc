@@ -272,6 +272,25 @@ void init_gluon_ir(py::module &&m) {
                  ctx, version[0], version[1], warpsPerCta, ctaLayout,
                  instrShape);
            })
+      .def("get_amd_mfma_layout",
+           [](GluonOpBuilder &self, unsigned version,
+              std::vector<unsigned> &tilesPerWarp,
+              std::vector<unsigned> &warpsPerCta,
+              std::vector<unsigned> &ctasPerCga,
+              std::vector<unsigned> &ctaSplitNum,
+              std::vector<unsigned> &ctaOrder,
+              std::vector<unsigned> &instrShape, bool transposed,
+              unsigned elemTypeWidth) -> Attribute {
+             assert(elemTypeWidth == 32 &&
+                    "Only float32 type is supported for now");
+             auto ctx = self.getContext();
+             auto ctaLayout = self.getChecked<ttg::CTALayoutAttr>(
+                 ctx, ctasPerCga, ctaSplitNum, ctaOrder);
+             return ttg::AMDMfmaEncodingAttr::get(
+                 ctx, version, warpsPerCta, tilesPerWarp, instrShape[0],
+                 instrShape[1], transposed, ctaLayout,
+                 mlir::Float32Type::get(ctx));
+           })
       .def("get_nvmma_shared_layout",
            [](GluonOpBuilder &self, unsigned swizzleByteWidth,
               unsigned elementBitwidth, bool transposed, bool fp4Padded,
