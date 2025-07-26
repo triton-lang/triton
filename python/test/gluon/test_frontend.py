@@ -13,8 +13,15 @@ from triton.experimental.gluon.language.nvidia.blackwell import mbarrier, tma, T
 from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
 from triton._filecheck import filecheck_test, run_parser
 import triton.language as tl
-from triton._internal_testing import is_cuda, is_ampere_or_newer, is_blackwell, is_hopper, is_hopper_or_newer
+from triton._internal_testing import is_cuda, is_ampere_or_newer, is_blackwell, is_hopper, is_hopper_or_newer, is_hip_gfx12
 from triton.compiler.errors import CompilationError, CompileTimeAssertionFailure
+
+from triton._C.libtriton import ir
+from triton.compiler.code_generator import ast_to_ttir
+from triton.compiler import make_backend
+from triton.experimental.gluon._runtime import GluonASTSource
+from triton.backends.compiler import GPUTarget
+global WARP_SIZE
 
 TARGET_PAT = re.compile('ttg.target = "[^"]*"')
 
@@ -1214,6 +1221,31 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 """)
 
 
+def from_ast_to_module(fn, device, num_warps, num_ctas):
+    assert device == 'cuda' or device == 'hip', "device should be hip or cuda"
+
+    context = ir.context()
+    ir.load_dialects(context)
+    options = dict(sanitize_overflow=False)
+    stub_target = GPUTarget("hip", 'gfx1200', 32) if device == 'hip' else GPUTarget('cuda', 100, 32)
+    stub_backend = make_backend(stub_target)
+    stub_backend.load_dialects(context)
+    options = stub_backend.parse_options(options)
+    codegen_fns = stub_backend.get_codegen_implementation(options)
+    signature = {}
+    src = GluonASTSource(fn=fn, signature=signature)
+    builder = ir.builder(context)
+    module = builder.create_module()
+    module.set_attr("ttg.threads-per-warp", builder.get_int32_attr(stub_target.warp_size))
+    module.set_attr("ttg.num-warps", builder.get_int32_attr(num_warps))
+    module.set_attr("ttg.num-ctas", builder.get_int32_attr(num_ctas))
+    module = ast_to_ttir(fn, src, context=context, options=options, codegen_fns=codegen_fns, module_map=dict(),
+                         module=module)
+    assert module.verify()
+    return module
+
+
+@pytest.mark.skipif(not is_cuda() and not is_hip_gfx12(), reason="Requires CUDA or HIP")
 def test_split_join_subtile(fresh_knobs):
 
     @gluon.jit
@@ -1226,9 +1258,10 @@ def test_split_join_subtile(fresh_knobs):
         _ = x + y
 
     knobs.compilation.disable_line_info = True
-    h = kernel.warmup(grid=(1, ), sanitize_overflow=False)
+    device = 'hip' if is_hip_gfx12() else 'cuda'
+    module = from_ast_to_module(kernel, device, 4, 1)
     expecttest.assert_expected_inline(
-        anonymize_ir(h.asm["source"]), """\
+        anonymize_ir(module.str()), """\
 #blocked = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 2, 64], threadsPerWarp = [32, 1, 1], warpsPerCTA = [4, 1, 1], order = [0, 2, 1]}>
 #blocked2 = #ttg.blocked<{sizePerThread = [1, 64, 2], threadsPerWarp = [32, 1, 1], warpsPerCTA = [4, 1, 1], order = [0, 1, 2]}>
