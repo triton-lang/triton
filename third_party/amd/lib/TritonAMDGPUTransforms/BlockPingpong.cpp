@@ -1124,12 +1124,9 @@ void Pingponger::getDotPingponged() {
 
 } // anonymous namespace
 
-class TritonAMDGPUBlockPingpongPass
-    : public impl::TritonAMDGPUBlockPingpongBase<
-          TritonAMDGPUBlockPingpongPass> {
-public:
-  using impl::TritonAMDGPUBlockPingpongBase<
-      TritonAMDGPUBlockPingpongPass>::TritonAMDGPUBlockPingpongBase;
+struct TritonAMDGPUBlockPingpongPass
+    : impl::TritonAMDGPUBlockPingpongBase<TritonAMDGPUBlockPingpongPass> {
+  using Base::Base;
 
   void runOnOperation() override {
     ModuleOp m = getOperation();

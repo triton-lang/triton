@@ -465,13 +465,11 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
 
 struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
                           public LoadStoreConversionBase {
-  using ConvertOpToLLVMPattern<triton::LoadOp>::ConvertOpToLLVMPattern;
-
   LoadOpConversion(LLVMTypeConverter &converter,
                    const AMD::TargetInfo &targetInfo,
                    ModuleAxisInfoAnalysis &axisAnalysisPass,
                    PatternBenefit benefit)
-      : ConvertOpToLLVMPattern<triton::LoadOp>(converter, benefit),
+      : ConvertOpToLLVMPattern(converter, benefit),
         LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
 
   LogicalResult
@@ -562,15 +560,11 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
 struct BufferLoadOpConversion
     : public ConvertOpToLLVMPattern<triton::amdgpu::BufferLoadOp>,
       public LoadStoreConversionBase {
-  using ConvertOpToLLVMPattern<
-      triton::amdgpu::BufferLoadOp>::ConvertOpToLLVMPattern;
-
   BufferLoadOpConversion(LLVMTypeConverter &converter,
                          const AMD::TargetInfo &targetInfo,
                          ModuleAxisInfoAnalysis &axisAnalysisPass,
                          PatternBenefit benefit)
-      : ConvertOpToLLVMPattern<triton::amdgpu::BufferLoadOp>(converter,
-                                                             benefit),
+      : ConvertOpToLLVMPattern(converter, benefit),
         LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
 
   LogicalResult
@@ -952,13 +946,11 @@ struct AsyncCopyGlobalToLocalOpConversion
 
 struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
                            public LoadStoreConversionBase {
-  using ConvertOpToLLVMPattern<triton::StoreOp>::ConvertOpToLLVMPattern;
-
   StoreOpConversion(LLVMTypeConverter &converter,
                     const AMD::TargetInfo &targetInfo,
                     ModuleAxisInfoAnalysis &axisAnalysisPass,
                     PatternBenefit benefit)
-      : ConvertOpToLLVMPattern<triton::StoreOp>(converter, benefit),
+      : ConvertOpToLLVMPattern(converter, benefit),
         LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
 
   LogicalResult
@@ -1038,15 +1030,11 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
 struct BufferAtomicRMWOpConversion
     : public ConvertOpToLLVMPattern<triton::amdgpu::BufferAtomicRMWOp>,
       public LoadStoreConversionBase {
-  using ConvertOpToLLVMPattern<
-      triton::amdgpu::BufferAtomicRMWOp>::ConvertOpToLLVMPattern;
-
   BufferAtomicRMWOpConversion(LLVMTypeConverter &converter,
                               const AMD::TargetInfo &targetInfo,
                               ModuleAxisInfoAnalysis &axisAnalysisPass,
                               PatternBenefit benefit)
-      : ConvertOpToLLVMPattern<triton::amdgpu::BufferAtomicRMWOp>(converter,
-                                                                  benefit),
+      : ConvertOpToLLVMPattern(converter, benefit),
         LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
 
   LogicalResult
@@ -1176,15 +1164,11 @@ struct BufferAtomicRMWOpConversion
 struct BufferAtomicCASOpConversion
     : public ConvertOpToLLVMPattern<triton::amdgpu::BufferAtomicCASOp>,
       public LoadStoreConversionBase {
-  using ConvertOpToLLVMPattern<
-      triton::amdgpu::BufferAtomicCASOp>::ConvertOpToLLVMPattern;
-
   BufferAtomicCASOpConversion(LLVMTypeConverter &converter,
                               const AMD::TargetInfo &targetInfo,
                               ModuleAxisInfoAnalysis &axisAnalysisPass,
                               PatternBenefit benefit)
-      : ConvertOpToLLVMPattern<triton::amdgpu::BufferAtomicCASOp>(converter,
-                                                                  benefit),
+      : ConvertOpToLLVMPattern(converter, benefit),
         LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
 
   LogicalResult
@@ -1290,15 +1274,11 @@ struct BufferAtomicCASOpConversion
 struct BufferStoreOpConversion
     : public ConvertOpToLLVMPattern<triton::amdgpu::BufferStoreOp>,
       public LoadStoreConversionBase {
-  using ConvertOpToLLVMPattern<
-      triton::amdgpu::BufferStoreOp>::ConvertOpToLLVMPattern;
-
   BufferStoreOpConversion(LLVMTypeConverter &converter,
                           const AMD::TargetInfo &targetInfo,
                           ModuleAxisInfoAnalysis &axisAnalysisPass,
                           PatternBenefit benefit)
-      : ConvertOpToLLVMPattern<triton::amdgpu::BufferStoreOp>(converter,
-                                                              benefit),
+      : ConvertOpToLLVMPattern(converter, benefit),
         LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
 
   LogicalResult
@@ -1371,13 +1351,11 @@ struct BufferStoreOpConversion
 struct AtomicCASOpConversion
     : public ConvertOpToLLVMPattern<triton::AtomicCASOp>,
       public LoadStoreConversionBase {
-  using ConvertOpToLLVMPattern<triton::AtomicCASOp>::ConvertOpToLLVMPattern;
-
   AtomicCASOpConversion(LLVMTypeConverter &converter,
                         const AMD::TargetInfo &targetInfo,
                         ModuleAxisInfoAnalysis &axisAnalysisPass,
                         PatternBenefit benefit)
-      : ConvertOpToLLVMPattern<triton::AtomicCASOp>(converter, benefit),
+      : ConvertOpToLLVMPattern(converter, benefit),
         LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
 
   LogicalResult
@@ -1533,13 +1511,11 @@ bool supportsGlobalAtomicF16PackedAndDpp(ISAFamily isaFamily) {
 struct AtomicRMWOpConversion
     : public ConvertOpToLLVMPattern<triton::AtomicRMWOp>,
       public LoadStoreConversionBase {
-  using ConvertOpToLLVMPattern<triton::AtomicRMWOp>::ConvertOpToLLVMPattern;
-
   AtomicRMWOpConversion(LLVMTypeConverter &converter,
                         const AMD::TargetInfo &targetInfo,
                         ModuleAxisInfoAnalysis &axisAnalysisPass,
                         PatternBenefit benefit)
-      : ConvertOpToLLVMPattern<triton::AtomicRMWOp>(converter, benefit),
+      : ConvertOpToLLVMPattern(converter, benefit),
         LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
 
   LogicalResult
@@ -1772,7 +1748,7 @@ private:
 
 struct AsyncCommitGroupOpConversion
     : public ConvertOpToLLVMPattern<AsyncCommitGroupOp> {
-  using ConvertOpToLLVMPattern<AsyncCommitGroupOp>::ConvertOpToLLVMPattern;
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
 
   LogicalResult
   matchAndRewrite(AsyncCommitGroupOp op, OpAdaptor adaptor,

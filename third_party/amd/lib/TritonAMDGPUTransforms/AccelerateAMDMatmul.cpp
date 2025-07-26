@@ -1293,12 +1293,9 @@ public:
 #define GEN_PASS_DEF_TRITONAMDGPUACCELERATEMATMUL
 #include "TritonAMDGPUTransforms/Passes.h.inc"
 
-class TritonAMDGPUAccelerateMatmulPass
-    : public impl::TritonAMDGPUAccelerateMatmulBase<
-          TritonAMDGPUAccelerateMatmulPass> {
-public:
-  using impl::TritonAMDGPUAccelerateMatmulBase<
-      TritonAMDGPUAccelerateMatmulPass>::TritonAMDGPUAccelerateMatmulBase;
+struct TritonAMDGPUAccelerateMatmulPass
+    : impl::TritonAMDGPUAccelerateMatmulBase<TritonAMDGPUAccelerateMatmulPass> {
+  using Base::Base;
 
   void runOnOperation() override {
 
