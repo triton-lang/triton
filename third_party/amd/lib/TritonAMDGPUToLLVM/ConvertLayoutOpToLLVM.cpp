@@ -1,12 +1,8 @@
 #include "Analysis/AMDGPUAllocation.h"
 #include "PatternTritonGPUOpToLLVM.h"
-#include "Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
-#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
-using ::mlir::transferWithinBlockPadding;
-using ::mlir::transferWithinBlockSwizzling;
 using ::mlir::triton::gpu::AMDMfmaEncodingAttr;
 using ::mlir::triton::gpu::ConvertLayoutOp;
 using ::triton::gpu::LinearEncodingAttr;
@@ -27,15 +23,14 @@ static bool matchMFMAAndLinearLayoutCase(RankedTensorType srcTy,
          storeLL.value_or(LinearLayout::empty());
 };
 
-struct ConvertLayoutOpMFMAToLinearConversion
+class ConvertLayoutOpMFMAToLinearConversion
     : public ConvertOpToLLVMPattern<triton::gpu::ConvertLayoutOp> {
 public:
-  explicit ConvertLayoutOpMFMAToLinearConversion(
-      LLVMTypeConverter &typeConverter, const TargetInfoBase &targetInfo,
-      PatternBenefit benefit)
-      : ConvertOpToLLVMPattern<triton::gpu::ConvertLayoutOp>(typeConverter,
-                                                             benefit),
-        targetInfo(targetInfo) {}
+  ConvertLayoutOpMFMAToLinearConversion(LLVMTypeConverter &typeConverter,
+                                        const TargetInfoBase &targetInfo,
+                                        PatternBenefit benefit)
+      : ConvertOpToLLVMPattern(typeConverter, benefit), targetInfo(targetInfo) {
+  }
 
   LogicalResult
   matchAndRewrite(triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
@@ -116,18 +111,18 @@ public:
     return success();
   }
 
-protected:
+private:
   const TargetInfoBase &targetInfo;
 };
 
-struct ConvertLayoutForcedPadding
+class ConvertLayoutForcedPadding
     : public ConvertOpToLLVMPattern<ConvertLayoutOp> {
-
-  explicit ConvertLayoutForcedPadding(LLVMTypeConverter &typeConverter,
-                                      const TargetInfoBase &targetInfo,
-                                      PatternBenefit benefit)
-      : ConvertOpToLLVMPattern<ConvertLayoutOp>(typeConverter, benefit),
-        targetInfo(targetInfo) {}
+public:
+  ConvertLayoutForcedPadding(LLVMTypeConverter &typeConverter,
+                             const TargetInfoBase &targetInfo,
+                             PatternBenefit benefit)
+      : ConvertOpToLLVMPattern(typeConverter, benefit), targetInfo(targetInfo) {
+  }
 
   LogicalResult
   matchAndRewrite(ConvertLayoutOp op, OpAdaptor adaptor,
@@ -145,18 +140,18 @@ struct ConvertLayoutForcedPadding
     return success();
   }
 
-protected:
+private:
   const TargetInfoBase &targetInfo;
 };
 
-struct ConvertLayoutForcedSwizzling
+class ConvertLayoutForcedSwizzling
     : public ConvertOpToLLVMPattern<ConvertLayoutOp> {
-
-  explicit ConvertLayoutForcedSwizzling(LLVMTypeConverter &typeConverter,
-                                        const TargetInfoBase &targetInfo,
-                                        PatternBenefit benefit)
-      : ConvertOpToLLVMPattern<ConvertLayoutOp>(typeConverter, benefit),
-        targetInfo(targetInfo) {}
+public:
+  ConvertLayoutForcedSwizzling(LLVMTypeConverter &typeConverter,
+                               const TargetInfoBase &targetInfo,
+                               PatternBenefit benefit)
+      : ConvertOpToLLVMPattern(typeConverter, benefit), targetInfo(targetInfo) {
+  }
 
   LogicalResult
   matchAndRewrite(ConvertLayoutOp op, OpAdaptor adaptor,
@@ -176,7 +171,7 @@ struct ConvertLayoutForcedSwizzling
     return success();
   }
 
-protected:
+private:
   const TargetInfoBase &targetInfo;
 };
 
