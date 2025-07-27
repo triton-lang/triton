@@ -420,8 +420,8 @@ void dumpKernelMetricTrace(
       uint64_t endTimeNs =
           std::get<uint64_t>(kernelMetrics->getValue(KernelMetric::EndTime));
       // Convert nanoseconds to microseconds for Chrome trace format
-      double ts = (double)(startTimeNs - minTimeStamp) / 1000;
-      double dur = (double)(endTimeNs - startTimeNs) / 1000;
+      double ts = static_cast<double>(startTimeNs - minTimeStamp) / 1000;
+      double dur = static_cast<double>(endTimeNs - startTimeNs) / 1000;
 
       auto contextId = event.contextId;
       auto contexts = trace->getContexts(contextId);
