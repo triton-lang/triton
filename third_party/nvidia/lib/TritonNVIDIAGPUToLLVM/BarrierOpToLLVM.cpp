@@ -261,6 +261,59 @@ struct ArriveBarrierOpConversion
     return success();
   }
 };
+
+struct NamedBarrierArriveOpConversion
+    : public ConvertOpToLLVMPattern<triton::nvidia_gpu::NamedBarrierArriveOp> {
+  using ConvertOpToLLVMPattern<
+      triton::nvidia_gpu::NamedBarrierArriveOp>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::nvidia_gpu::NamedBarrierArriveOp op,
+                  OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op->getLoc();
+    std::string ptxAsm = "bar.arrive $0, $1;";
+
+    PTXBuilder ptxBuilder;
+    SmallVector<PTXBuilder::Operand *, 2> operands = {
+        ptxBuilder.newOperand(adaptor.getBar(), "r"),
+        ptxBuilder.newOperand(adaptor.getNumThreads(), "r")};
+
+    auto arriveOp = *ptxBuilder.create<>(ptxAsm);
+    arriveOp(operands, /*onlyAttachMLIRArgs=*/true);
+    auto voidTy = void_ty(getContext());
+    ptxBuilder.launch(rewriter, op.getLoc(), voidTy);
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+struct NamedBarrierWaitOpConversion
+    : public ConvertOpToLLVMPattern<triton::nvidia_gpu::NamedBarrierWaitOp> {
+  using ConvertOpToLLVMPattern<
+      triton::nvidia_gpu::NamedBarrierWaitOp>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::nvidia_gpu::NamedBarrierWaitOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op->getLoc();
+    std::string ptxAsm = "bar.sync $0, $1;";
+
+    PTXBuilder ptxBuilder;
+    SmallVector<PTXBuilder::Operand *, 2> operands = {
+        ptxBuilder.newOperand(adaptor.getBar(), "r"),
+        ptxBuilder.newOperand(adaptor.getNumThreads(), "r")};
+
+    auto waitOp = *ptxBuilder.create<>(ptxAsm);
+    waitOp(operands, /*onlyAttachMLIRArgs=*/true);
+    auto voidTy = void_ty(getContext());
+    ptxBuilder.launch(rewriter, op.getLoc(), voidTy);
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
 } // namespace
 
 void mlir::triton::NVIDIA::populateBarrierOpToLLVMPatterns(
@@ -272,4 +325,6 @@ void mlir::triton::NVIDIA::populateBarrierOpToLLVMPatterns(
   patterns.add<WaitBarrierOpConversion>(typeConverter, benefit, targetInfo);
   patterns.add<BarrierExpectConversion>(typeConverter, benefit);
   patterns.add<ArriveBarrierOpConversion>(typeConverter, benefit);
+  patterns.add<NamedBarrierArriveOpConversion>(typeConverter, benefit);
+  patterns.add<NamedBarrierWaitOpConversion>(typeConverter, benefit);
 }
