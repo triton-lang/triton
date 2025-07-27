@@ -1,20 +1,29 @@
 import expecttest
-from triton.runtime.jit import MockTensor
 import torch
 import pytest
 import re
+import triton
+
+import triton.language as tl
+
+from typing import List
 
 from triton import knobs
+from triton.backends.compiler import GPUTarget
+from triton.compiler import CompiledKernel, CompilationError
+from triton.compiler.errors import CompileTimeAssertionFailure
+from triton.runtime.jit import MockTensor
+
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
 from triton.experimental.gluon.language.nvidia import blackwell
 from triton.experimental.gluon.language.nvidia import hopper
 from triton.experimental.gluon.language.nvidia.blackwell import mbarrier, tma, TensorMemoryLayout, async_copy
+from triton.experimental.gluon._runtime import GluonASTSource
 from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
+
 from triton._filecheck import filecheck_test, run_parser
-import triton.language as tl
-from triton._internal_testing import is_cuda, is_ampere_or_newer, is_blackwell, is_hopper, is_hopper_or_newer
-from triton.compiler.errors import CompilationError, CompileTimeAssertionFailure
+from triton._internal_testing import is_cuda, is_ampere_or_newer, is_blackwell, is_hopper, is_hopper_or_newer, is_hip
 
 TARGET_PAT = re.compile('ttg.target = "[^"]*"')
 
@@ -23,20 +32,56 @@ def anonymize_ir(ir):
     return TARGET_PAT.sub('ttg.target = "..."', ir)
 
 
+def get_common_test_aot_target() -> GPUTarget:
+    """Returns a common test suitable AOT target from the current runtime."""
+    if is_hip():
+        # We use gfx1200 as the target for testing's purpose given it has warp size == 32
+        # and is easier to write common expecttest checks.
+        return GPUTarget("hip", "gfx1200", 32)
+    # For others, use the current runtime's target.
+    return triton.runtime.driver.active.get_current_target()
+
+
+def aot_compile_gluon(fn, target: GPUTarget, constexprs: dict = {}, signature: dict = {}, attrs: dict = {},
+                      **kwargs) -> CompiledKernel:
+    """AOT compiles the given Gluon kernel and returns the compiled kernel."""
+    src = GluonASTSource(fn=fn, constexprs=constexprs, signature=signature, attrs=attrs)
+    backend = triton.compiler.make_backend(target)
+    options = backend.parse_options(kwargs)
+    result = triton.compile(src, target=target, options=options.__dict__)
+    return result
+
+
+def build_constexpr_dict(**kwargs):
+    """Builds the constexpr dict needed for kernel AOT compilation."""
+    return kwargs
+
+
+def build_signature_dict(**kwargs):
+    """Builds the signature dict needed for kernel AOT compilation."""
+    return {k: triton.runtime.jit.mangle_type(v) for k, v in kwargs.items()}
+
+
+def get_divisibility_16_attr_for_args(indices: List[int]):
+    """Returns a dict setting tt.divisibility==16 attributes for arguments at given indices."""
+    return {(i, ): [["tt.divisibility", 16]] for i in indices}
+
+
 @gluon.jit
 def convert_layout_kernel(XBLOCK: ttgl.constexpr, layout_a: ttgl.constexpr, layout_b: ttgl.constexpr):
     x = ttgl.arange(0, XBLOCK, layout=layout_a)
     res = ttgl.convert_layout(x, layout_b)  # noqa: F841
 
 
-@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
 def test_convert_layout(fresh_knobs):
     knobs.compilation.disable_line_info = True
 
     layout_a = ttgl.BlockedLayout(size_per_thread=[1], threads_per_warp=[32], warps_per_cta=[4], order=[0])
     layout_b = ttgl.SliceLayout(
         1, ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[1, 32], warps_per_cta=[1, 4], order=[1, 0]))
-    h = convert_layout_kernel.warmup(128, layout_a, layout_b, num_warps=layout_a.warps_per_cta[0], grid=(1, ))
+    target = get_common_test_aot_target()
+    constexprs = build_constexpr_dict(XBLOCK=128, layout_a=layout_a, layout_b=layout_b)
+    h = aot_compile_gluon(convert_layout_kernel, target, constexprs, num_warps=layout_a.warps_per_cta[0], grid=(1, ))
     expecttest.assert_expected_inline(
         anonymize_ir(h.asm["source"]), """\
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
@@ -112,15 +157,16 @@ def shared_memory_kernel(XBLOCK: ttgl.constexpr, YBLOCK: ttgl.constexpr, layout_
     unused._keep_alive()
 
 
-@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
 def test_shared_memory(fresh_knobs):
     knobs.compilation.disable_line_info = True
 
     layout_a = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[1, 32], warps_per_cta=[4, 1], order=[1, 0])
     layout_b = ttgl.BlockedLayout(size_per_thread=[1, 4], threads_per_warp=[1, 32], warps_per_cta=[4, 1], order=[1, 0])
     smem_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=32, rank=2)
-    h = shared_memory_kernel.warmup(8, 32, layout_a, layout_b, smem_layout, num_warps=layout_a.warps_per_cta[0],
-                                    grid=(1, ))
+    target = get_common_test_aot_target()
+    constexprs = build_constexpr_dict(XBLOCK=8, YBLOCK=32, layout_a=layout_a, layout_b=layout_b,
+                                      smem_layout=smem_layout)
+    h = aot_compile_gluon(shared_memory_kernel, target, constexprs, num_warps=layout_a.warps_per_cta[0], grid=(1, ))
     expecttest.assert_expected_inline(
         anonymize_ir(h.asm["source"]), """\
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
@@ -160,13 +206,14 @@ def tensor_memory_kernel(layout: ttgl.constexpr, tmem_layout: ttgl.constexpr):
         buffers.index(ivar).load(layout)
 
 
-@pytest.mark.skipif(not is_blackwell(), reason="Requires blackwell tensor cores")
 def test_tensor_memory(fresh_knobs):
     knobs.compilation.disable_line_info = True
 
     layout = ttgl.BlockedLayout(size_per_thread=[1, 64], threads_per_warp=[32, 1], warps_per_cta=[4, 1], order=[0, 1])
     tmem_layout = TensorMemoryLayout(block=[128, 128], unpacked=True)
-    h = tensor_memory_kernel.warmup(layout, tmem_layout, num_warps=4, grid=(1, ))
+    target = GPUTarget("cuda", 100, 32)  # Blackwell
+    constexprs = build_constexpr_dict(layout=layout, tmem_layout=tmem_layout)
+    h = aot_compile_gluon(tensor_memory_kernel, target, constexprs, num_warps=4, grid=(1, ))
     expecttest.assert_expected_inline(
         anonymize_ir(h.asm["source"]), """\
 #blocked = #ttg.blocked<{sizePerThread = [1, 64], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
@@ -212,13 +259,14 @@ def shared_memory_subview_kernel(XBLOCK: ttgl.constexpr, layout: ttgl.constexpr,
     view.store(value.trans())
 
 
-@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
 def test_shared_memory_subview(fresh_knobs):
     knobs.compilation.disable_line_info = True
 
     layout = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[1, 32], warps_per_cta=[4, 1], order=[1, 0])
     smem_layout = ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0])
-    h = shared_memory_subview_kernel.warmup(256, layout, smem_layout, num_warps=4, grid=(1, ))
+    target = get_common_test_aot_target()
+    constexprs = build_constexpr_dict(XBLOCK=256, layout=layout, smem_layout=smem_layout)
+    h = aot_compile_gluon(shared_memory_subview_kernel, target, constexprs, num_warps=4, grid=(1, ))
     expecttest.assert_expected_inline(
         anonymize_ir(h.asm["source"]), """\
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
@@ -247,13 +295,14 @@ def shared_memory_index_kernel(XBLOCK: ttgl.constexpr, layout: ttgl.constexpr, s
         smem.index(ivar).load(layout)
 
 
-@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
 def test_shared_memory_index(fresh_knobs):
     knobs.compilation.disable_line_info = True
 
     layout = ttgl.BlockedLayout(size_per_thread=[1], threads_per_warp=[32], warps_per_cta=[4], order=[0])
     smem_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=32, rank=2)
-    h = shared_memory_index_kernel.warmup(256, layout, smem_layout, num_warps=4, grid=(1, ))
+    target = GPUTarget("cuda", 80, 32)  # A100+
+    constexprs = build_constexpr_dict(XBLOCK=256, layout=layout, smem_layout=smem_layout)
+    h = aot_compile_gluon(shared_memory_index_kernel, target, constexprs, num_warps=4, grid=(1, ))
     expecttest.assert_expected_inline(
         anonymize_ir(h.asm["source"]), """\
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
@@ -300,7 +349,6 @@ def shared_memory_cast_kernel():
     smem._reinterpret(ttgl.int8, [1024], ttgl.SwizzledSharedLayout(1, 1, 1, [0, 1]))
 
 
-@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
 def test_shared_memory_cast(fresh_knobs):
     expecttest.assert_expected_inline(
         anonymize_ir(run_parser(shared_memory_cast_kernel).str_nodebug()), """\
@@ -455,11 +503,11 @@ def mbarrier_kernel():
     mbarrier.invalidate(bar)
 
 
-@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires hopper or newer")
 def test_mbarrier(fresh_knobs):
     knobs.compilation.disable_line_info = True
 
-    h = mbarrier_kernel.warmup(grid=(1, ))
+    target = GPUTarget("cuda", 90, 32)  # Hopper
+    h = aot_compile_gluon(mbarrier_kernel, target, grid=(1, ))
     expecttest.assert_expected_inline(
         anonymize_ir(h.asm["source"]), """\
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
@@ -491,14 +539,15 @@ def tcgen05_mma_kernel(nvmma_layout: ttgl.constexpr, acc_layout: ttgl.constexpr)
     blackwell.tcgen05_mma(a, b, acc)
 
 
-@pytest.mark.skipif(not is_blackwell(), reason="Requires blackwell tensor core")
 def test_tcgen05_mma(fresh_knobs):
     knobs.compilation.disable_line_info = True
 
     nvmma_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2)
     acc_layout = TensorMemoryLayout([128, 128], unpacked=True)
 
-    h = tcgen05_mma_kernel.warmup(nvmma_layout, acc_layout, grid=(1, ))
+    target = GPUTarget("cuda", 100, 32)  # Blackwell tensor core
+    constexprs = build_constexpr_dict(nvmma_layout=nvmma_layout, acc_layout=acc_layout)
+    h = aot_compile_gluon(tcgen05_mma_kernel, target, constexprs, grid=(1, ))
     expecttest.assert_expected_inline(
         anonymize_ir(h.asm["source"]), """\
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
@@ -528,14 +577,15 @@ def tcgen05_mma_mbar_kernel(nvmma_layout: ttgl.constexpr, acc_layout: ttgl.const
     blackwell.tcgen05_mma(a, b, acc, mbarriers=[bar])
 
 
-@pytest.mark.skipif(not is_blackwell(), reason="Requires blackwell tensor core")
 def test_tcgen05_mma_mbar(fresh_knobs):
     knobs.compilation.disable_line_info = True
 
     nvmma_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2)
     acc_layout = TensorMemoryLayout([128, 128], unpacked=True)
 
-    h = tcgen05_mma_mbar_kernel.warmup(nvmma_layout, acc_layout, grid=(1, ))
+    target = GPUTarget("cuda", 100, 32)  # Blackwell tensor core
+    constexprs = build_constexpr_dict(nvmma_layout=nvmma_layout, acc_layout=acc_layout)
+    h = aot_compile_gluon(tcgen05_mma_mbar_kernel, target, constexprs, grid=(1, ))
     expecttest.assert_expected_inline(
         anonymize_ir(h.asm["source"]), """\
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
@@ -577,13 +627,14 @@ def warpgroup_mma_kernel(nvmma_layout: ttgl.constexpr, acc_layout: ttgl.constexp
     hopper.warpgroup_mma(a, b, acc)
 
 
-@pytest.mark.skipif(not is_hopper(), reason="Requires Hopper WGMMA")
 def test_warpgroup_mma(fresh_knobs):
     knobs.compilation.disable_line_info = True
 
     nvmma_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2)
     mma_layout = ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1], instr_shape=[16, 32, 16])
-    h = warpgroup_mma_kernel.warmup(nvmma_layout, mma_layout, grid=(1, ))
+    target = GPUTarget("cuda", 90, 32)  # Hopper WGMMA
+    constexprs = build_constexpr_dict(nvmma_layout=nvmma_layout, acc_layout=mma_layout)
+    h = aot_compile_gluon(warpgroup_mma_kernel, target, constexprs, grid=(1, ))
     expecttest.assert_expected_inline(
         anonymize_ir(h.asm["source"]), """\
 #mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 32, 16]}>
@@ -611,11 +662,11 @@ def warpgroup_mma_wait_kernel():
     hopper.warpgroup_mma_wait(num_outstanding=1, deps=[acc])
 
 
-@pytest.mark.skipif(not is_hopper(), reason="Requires Hopper WGMMA")
 def test_warpgroup_mma_wait(fresh_knobs):
     knobs.compilation.disable_line_info = True
 
-    h = warpgroup_mma_wait_kernel.warmup(grid=(1, ))
+    target = GPUTarget("cuda", 90, 32)  # Hopper WGMMA
+    h = aot_compile_gluon(warpgroup_mma_wait_kernel, target, grid=(1, ))
     expecttest.assert_expected_inline(
         anonymize_ir(h.asm["source"]), """\
 #mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 32, 16]}>
@@ -648,7 +699,6 @@ def async_tma_kernel(input_desc, XBLOCK: ttgl.constexpr):
     tma.store_wait(0)
 
 
-@pytest.mark.skipif(not is_hopper_or_newer(), reason="TMA requires at least Hopper")
 def test_async_tma(fresh_knobs):
     knobs.compilation.disable_line_info = True
 
@@ -657,7 +707,10 @@ def test_async_tma(fresh_knobs):
     shared_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2)
     input_desc = TensorDescriptor.from_tensor(input, [XBLOCK, XBLOCK], shared_layout)
 
-    h = async_tma_kernel.warmup(input_desc, XBLOCK, grid=(1, ), num_warps=4)
+    target = GPUTarget("cuda", 90, 32)  # Hopper TMA
+    constexprs = build_constexpr_dict(XBLOCK=XBLOCK)
+    signature = build_signature_dict(input_desc=input_desc)
+    h = aot_compile_gluon(async_tma_kernel, target, constexprs, signature, num_warps=4, grid=(1, ))
     expecttest.assert_expected_inline(
         anonymize_ir(h.asm["source"]), """\
 #loc1 = loc("input_desc")
@@ -708,7 +761,6 @@ def async_tma_blackwell_kernel(input_desc, XBLOCK: ttgl.constexpr):
     tma.store_wait(0)
 
 
-@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 def test_async_tma_blackwell(fresh_knobs):
     knobs.compilation.disable_line_info = True
 
@@ -717,7 +769,10 @@ def test_async_tma_blackwell(fresh_knobs):
     shared_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2)
     input_desc = TensorDescriptor.from_tensor(input, [1, XBLOCK], shared_layout)
 
-    h = async_tma_blackwell_kernel.warmup(input_desc, XBLOCK, grid=(1, ), num_warps=4)
+    target = GPUTarget("cuda", 100, 32)  # Blackwell TMA
+    constexprs = build_constexpr_dict(XBLOCK=XBLOCK)
+    signature = build_signature_dict(input_desc=input_desc)
+    h = aot_compile_gluon(async_tma_blackwell_kernel, target, constexprs, signature, num_warps=4, grid=(1, ))
     expecttest.assert_expected_inline(
         anonymize_ir(h.asm["source"]), """\
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [1, 0]}>
@@ -822,11 +877,11 @@ def broadcast_kernel():
     0 + a + b
 
 
-@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
 def test_broadcast(fresh_knobs):
     knobs.compilation.disable_line_info = True
 
-    h = broadcast_kernel.warmup(sanitize_overflow=False, grid=(1, ))
+    target = get_common_test_aot_target()
+    h = aot_compile_gluon(broadcast_kernel, target, sanitize_overflow=False, grid=(1, ))
     expecttest.assert_expected_inline(
         anonymize_ir(h.asm["source"]), """\
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
@@ -877,11 +932,11 @@ def math_kernel():
     ttgl.fma(a, b, c)
 
 
-@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
 def test_math(fresh_knobs):
     knobs.compilation.disable_line_info = True
 
-    h = math_kernel.warmup(sanitize_overflow=False, grid=(1, ))
+    target = get_common_test_aot_target()
+    h = aot_compile_gluon(math_kernel, target, sanitize_overflow=False, grid=(1, ))
     expecttest.assert_expected_inline(
         anonymize_ir(h.asm["source"]), """\
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
@@ -948,11 +1003,13 @@ def reduce_kernel(out):
     tl.store(out + ttgl.arange(0, 16, s0.type.layout), result)
 
 
-@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
 def test_reduce(fresh_knobs):
     knobs.compilation.disable_line_info = True
 
-    h = reduce_kernel.warmup(MockTensor(ttgl.float32), sanitize_overflow=False, grid=(1, ))
+    target = get_common_test_aot_target()
+    signature = build_signature_dict(out=MockTensor(ttgl.float32))
+    attrs = get_divisibility_16_attr_for_args([0])
+    h = aot_compile_gluon(reduce_kernel, target, {}, signature, attrs, sanitize_overflow=False, grid=(1, ))
     expecttest.assert_expected_inline(
         anonymize_ir(h.asm["ttgir"]), """\
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
@@ -998,7 +1055,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 """)
 
 
-@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
 @filecheck_test
 @gluon.jit
 def test_elementwise_core():
@@ -1026,10 +1082,10 @@ def linear_layout_kernel():
     ttgl.arange(0, 256, layout=ll)
 
 
-@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
 def test_linear_layout(fresh_knobs):
     knobs.compilation.disable_line_info = True
-    h = linear_layout_kernel.warmup(grid=(1, ))
+    target = get_common_test_aot_target()
+    h = aot_compile_gluon(linear_layout_kernel, target, grid=(1, ))
     expecttest.assert_expected_inline(
         anonymize_ir(h.asm["source"]), """\
 #linear = #ttg.linear<{register = [[1]], lane = [[2], [4], [8], [16], [32]], warp = [[64], [128]], block = []}>
@@ -1180,11 +1236,14 @@ def async_copy_kernel(inp, xnumel, XBLOCK: ttgl.constexpr):
     async_copy.wait_group(0)
 
 
-@pytest.mark.skipif(not is_ampere_or_newer(), reason="Requires ampere")
 def test_async_copy(fresh_knobs):
     knobs.compilation.disable_line_info = True
 
-    h = async_copy_kernel.warmup(MockTensor(ttgl.float16), xnumel=100, XBLOCK=128, sanitize_overflow=False, grid=(1, ))
+    target = GPUTarget("cuda", 80, 32)  # Ampere
+    constexprs = build_constexpr_dict(XBLOCK=128)
+    signature = build_signature_dict(inp=MockTensor(ttgl.float16), xnumel=100)
+    attrs = get_divisibility_16_attr_for_args([0])
+    h = aot_compile_gluon(async_copy_kernel, target, constexprs, signature, attrs, sanitize_overflow=False, grid=(1, ))
     expecttest.assert_expected_inline(
         anonymize_ir(h.asm["ttgir"]), """\
 #blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
@@ -1226,7 +1285,8 @@ def test_split_join_subtile(fresh_knobs):
         _ = x + y
 
     knobs.compilation.disable_line_info = True
-    h = kernel.warmup(grid=(1, ), sanitize_overflow=False)
+    target = get_common_test_aot_target()
+    h = aot_compile_gluon(kernel, target, sanitize_overflow=False)
     expecttest.assert_expected_inline(
         anonymize_ir(h.asm["source"]), """\
 #blocked = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
