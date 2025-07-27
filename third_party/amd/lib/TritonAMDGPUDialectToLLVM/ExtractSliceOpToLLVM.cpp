@@ -21,10 +21,7 @@ namespace {
 
 struct ExtractSliceOpConversion
     : public ConvertOpToLLVMPattern<amdgpu::ExtractSliceOp> {
-  explicit ExtractSliceOpConversion(LLVMTypeConverter &typeConverter,
-                                    PatternBenefit benefit = 1)
-      : ConvertOpToLLVMPattern<amdgpu::ExtractSliceOp>(typeConverter, benefit) {
-  }
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
 
   LogicalResult processLayout(amdgpu::ExtractSliceOp op, OpAdaptor adaptor,
                               ConversionPatternRewriter &rewriter) const {
