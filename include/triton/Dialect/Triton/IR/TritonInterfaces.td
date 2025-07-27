@@ -13,6 +13,7 @@ def SameLoadStoreOperandsAndResultShape : NativeOpTrait<"SameLoadStoreOperandsAn
 def SameLoadStoreOperandsEncoding : NativeOpTrait<"SameLoadStoreOperandsEncoding">;
 def SameLoadStoreOperandsAndResultEncoding : NativeOpTrait<"SameLoadStoreOperandsAndResultEncoding">;
 def AsyncRegions : NativeOpTrait<"AsyncRegions">;
+def LayoutAnchor : NativeOpTrait<"LayoutAnchor">;
 
 // A trait equivalent to InferTypeOpAdaptor, but that checks for structural
 // equivalence of the layouts of the result rather than just layout equality.

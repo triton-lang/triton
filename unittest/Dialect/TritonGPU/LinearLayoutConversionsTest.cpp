@@ -2428,6 +2428,54 @@ TEST_F(LinearLayoutConversionsTest, mfma32_dot_op_rhs_tran_fp4_mn_packeds) {
                                     /*elemBitWidth=*/4));
 }
 
+TEST_F(LinearLayoutConversionsTest, WMMA_NonK_op0) {
+  auto dot = wmma(/*warps=*/{4, 1}, /*version=*/2, /*transposed=*/false);
+  auto wmmaOperand = wmmaDotOp(dot, 0, 8);
+
+  auto [layoutAddr, layoutData] =
+      triton::gpu::chooseGlobalLoadTrLayout(wmmaOperand, {128, 64});
+  EXPECT_EQ(
+      layoutAddr,
+      LinearLayout(
+          {{S("register"), {{1, 0}, {2, 0}, {4, 0}, {0, 32}, {32, 0}, {64, 0}}},
+           {S("lane"), {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 16}}},
+           {S("warp"), {{8, 0}, {16, 0}}},
+           {S("block"), {}}},
+          {S("dim0"), S("dim1")}));
+  EXPECT_EQ(
+      layoutData,
+      LinearLayout(
+          {{S("register"), {{0, 1}, {0, 2}, {0, 4}, {0, 32}, {32, 0}, {64, 0}}},
+           {S("lane"), {{1, 0}, {2, 0}, {4, 0}, {0, 8}, {0, 16}}},
+           {S("warp"), {{8, 0}, {16, 0}}},
+           {S("block"), {}}},
+          {S("dim0"), S("dim1")}));
+}
+
+TEST_F(LinearLayoutConversionsTest, WMMA_NonK_op1) {
+  auto dot = wmma(/*warps=*/{4, 1}, /*version=*/2, /*transposed=*/false);
+  auto wmmaOperand = wmmaDotOp(dot, 1, 8);
+
+  auto [layoutAddr, layoutData] =
+      triton::gpu::chooseGlobalLoadTrLayout(wmmaOperand, {128, 64});
+  EXPECT_EQ(
+      layoutAddr,
+      LinearLayout(
+          {{S("register"), {{0, 1}, {0, 2}, {0, 4}, {64, 0}, {0, 16}, {0, 32}}},
+           {S("lane"), {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {16, 0}}},
+           {S("warp"), {{0, 8}, {32, 0}}},
+           {S("block"), {}}},
+          {S("dim0"), S("dim1")}));
+  EXPECT_EQ(
+      layoutData,
+      LinearLayout(
+          {{S("register"), {{1, 0}, {2, 0}, {4, 0}, {64, 0}, {0, 16}, {0, 32}}},
+           {S("lane"), {{0, 1}, {0, 2}, {0, 4}, {8, 0}, {16, 0}}},
+           {S("warp"), {{0, 8}, {32, 0}}},
+           {S("block"), {}}},
+          {S("dim0"), S("dim1")}));
+}
+
 TEST_F(LinearLayoutConversionsTest, WMMA_v1_2x4Warps) {
   auto legacy = wmma(/*warps=*/{2, 4}, /*version=*/1, /*transposed=*/false);
 
