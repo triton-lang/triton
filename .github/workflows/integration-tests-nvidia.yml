@@ -90,6 +90,9 @@ jobs:
             source /venv/bin/activate
           fi
           make NUM_PROCS=24 test-unit
+      - name: Run distributed tests
+        run: |
+          make test-distributed
       - name: Run interpreter tests
         if: ${{ matrix.runner[0] == 'nvidia-h100' }}
         run: make test-interpret
