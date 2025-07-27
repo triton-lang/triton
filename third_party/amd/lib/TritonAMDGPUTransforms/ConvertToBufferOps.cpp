@@ -606,13 +606,10 @@ private:
 
 } // anonymous namespace
 
-class TritonAMDGPUConvertToBufferOpsPass
-    : public impl::TritonAMDGPUConvertToBufferOpsBase<
+struct TritonAMDGPUConvertToBufferOpsPass
+    : impl::TritonAMDGPUConvertToBufferOpsBase<
           TritonAMDGPUConvertToBufferOpsPass> {
-
-public:
-  using impl::TritonAMDGPUConvertToBufferOpsBase<
-      TritonAMDGPUConvertToBufferOpsPass>::TritonAMDGPUConvertToBufferOpsBase;
+  using Base::Base;
 
   void runOnOperation() override {
     MLIRContext *context = &getContext();

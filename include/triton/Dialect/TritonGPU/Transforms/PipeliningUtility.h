@@ -68,6 +68,15 @@ bool isOuterLoop(scf::ForOp forOp);
 /// Function to mask operations during scheduling.
 Operation *predicateOp(RewriterBase &rewriter, Operation *op, Value pred);
 
+/// Wrap the operation into a MaskOp using the provided predicate, enabling high
+/// level predication abstraction during pipelining.
+Operation *wrapInMaskOp(RewriterBase &rewriter, Operation *op, Value pred);
+
+// Utilize high level predication abstraction to perform optimizations before
+// lowering to predicated operations
+void resolveMaskOp(ModuleOp moduleOp,
+                   DenseSet<triton::gpu::MaskOp> &peeledMaskOps);
+
 // Return true if the given ForOp has the attribute
 // `tt.disallow_acc_multi_buffer` set to true.
 bool getDisallowAccMultiBuffer(scf::ForOp forOp);
@@ -133,11 +142,11 @@ gpu::SharedEncodingTrait getSharedEncoding(Operation *loadOp);
 // specified.
 int getNumStagesOrDefault(scf::ForOp forOp, int defaultNumStages);
 
-// Given a result of MemDescSubview, or Alloca, create a MemDescSubview with a
+// Given a result of MemDescIndex, or Alloca, create a MemDescIndex with a
 // single buffer slice (leading dimension equal to 1), at the given index.
 TypedValue<triton::gpu::MemDescType>
 createSingleBufferView(OpBuilder &builder, Value alloc, Value idx);
-// Given a result of MemDescSubview, or Alloca, create a MemDescSubview with a
+// Given a result of MemDescIndex, or Alloca, create a MemDescIndex with a
 // single buffer slice (leading dimension equal to 1), at the given index.
 TypedValue<triton::gpu::MemDescType>
 createSingleBufferView(OpBuilder &builder, Value alloc, int idx);

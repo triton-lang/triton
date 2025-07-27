@@ -152,6 +152,7 @@ ReproducerStreamFactory makeConsoleReproducer() {
 OpPrintingFlags getOpPrintingFlags() {
   auto printingFlags = OpPrintingFlags();
   printingFlags.enableDebugInfo();
+  printingFlags.printNameLocAsPrefix(true);
   return printingFlags;
 }
 
@@ -372,11 +373,15 @@ void init_triton_ir(py::module &&m) {
              self.replaceAllUsesWith(newValue);
            })
       .def("get_type", &Value::getType)
-      .def("id", [](Value &self) {
-        // The Value is identified by and compared with
-        // other Values via the underlying ValueImpl
-        return (uint64_t)self.getImpl();
-      });
+      .def("id",
+           [](Value &self) {
+             // The Value is identified by and compared with
+             // other Values via the underlying ValueImpl
+             return (uint64_t)self.getImpl();
+           })
+      .def("set_loc",
+           [](Value &self, Location loc) { return self.setLoc(loc); })
+      .def("get_loc", [](Value &self) { return self.getLoc(); });
 
   py::class_<OpResult, Value>(m, "op_result", py::module_local());
 
@@ -930,6 +935,28 @@ void init_triton_ir(py::module &&m) {
       .def("set_loc",
            [](TritonOpBuilder &self, Location loc) { self.setLastLoc(loc); })
       .def("set_loc",
+           [](TritonOpBuilder &self, std::string name) {
+             auto nameAttr = StringAttr::get(self.getContext(), name);
+             auto loc = NameLoc::get(nameAttr);
+             self.setLastLoc(loc);
+           })
+      .def("create_loc",
+           [](TritonOpBuilder &self, const std::string &fileName, int line,
+              int column) -> Location {
+             return mlir::FileLineColLoc::get(self.getContext(), fileName, line,
+                                              column);
+           })
+      .def(
+          "create_name_loc",
+          [](TritonOpBuilder &self, std::string name,
+             std::optional<Location> childLoc) -> Location {
+            auto nameAttr = StringAttr::get(self.getContext(), name);
+            if (childLoc)
+              return NameLoc::get(nameAttr, *childLoc);
+            return NameLoc::get(nameAttr);
+          },
+          py::arg("name"), py::arg("child_loc") = py::none())
+      .def("set_loc",
            [](TritonOpBuilder &self, const std::string &fileName, int line,
               int column) { self.setLastLoc(fileName, line, column); })
       .def("get_loc",
@@ -1468,6 +1495,10 @@ void init_triton_ir(py::module &&m) {
            [](TritonOpBuilder &self, Type &retTy, Value &arg) -> Value {
              return self.createOrFold<SplatOp>(retTy, arg);
            })
+      .def("create_unsplat",
+           [](TritonOpBuilder &self, Value &arg) -> Value {
+             return self.createOrFold<UnsplatOp>(arg);
+           })
       // // atomic
       .def("create_atomic_cas",
            [](TritonOpBuilder &self, Value &ptr, Value &cmp, Value &val,
@@ -1618,6 +1649,15 @@ void init_triton_ir(py::module &&m) {
                return_values.push_back(py::cast<Value>(arg));
              }
              return self.create<ScanReturnOp>(return_values);
+           })
+      .def("create_map_elementwise",
+           [](TritonOpBuilder &self, std::vector<Value> inputs,
+              std::vector<Type> returnTys, int pack) -> OpState {
+             return self.create<MapElementwiseOp>(returnTys, inputs, pack);
+           })
+      .def("create_map_elementwise_ret",
+           [](TritonOpBuilder &self, std::vector<Value> returnVals) -> OpState {
+             return self.create<MapElementwiseReturnOp>(returnVals);
            })
       .def("create_ptr_to_int",
            [](TritonOpBuilder &self, Value &val, Type &type) -> Value {

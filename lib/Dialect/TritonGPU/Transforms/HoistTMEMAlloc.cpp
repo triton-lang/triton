@@ -38,12 +38,14 @@ using TMEMTokenLoadOp = HasToken<ttng::TMEMLoadOp>;
 using TMEMTokenStoreOp = HasToken<ttng::TMEMStoreOp>;
 using TMEMTokenAllocOp = HasToken<ttng::TMEMAllocOp>;
 
-class CombineTMEMStoreAndSelect : public OpRewritePattern<TMEMTokenStoreOp> {
+class CombineTMEMStoreAndSelect : public OpRewritePattern<ttng::TMEMStoreOp> {
 public:
   using OpRewritePattern::OpRewritePattern;
 
-  LogicalResult matchAndRewrite(TMEMTokenStoreOp store,
+  LogicalResult matchAndRewrite(ttng::TMEMStoreOp store,
                                 PatternRewriter &rewriter) const override {
+    if (!store.getDep())
+      return failure();
     Value src = store.getSrc();
     auto select = src.getDefiningOp<arith::SelectOp>();
     if (!select) {
@@ -79,12 +81,14 @@ public:
   }
 };
 
-class RemoveUnusedTMEMLoad : public OpRewritePattern<TMEMTokenLoadOp> {
+class RemoveUnusedTMEMLoad : public OpRewritePattern<ttng::TMEMLoadOp> {
 public:
   using OpRewritePattern::OpRewritePattern;
 
-  LogicalResult matchAndRewrite(TMEMTokenLoadOp load,
+  LogicalResult matchAndRewrite(ttng::TMEMLoadOp load,
                                 PatternRewriter &rewriter) const override {
+    if (!load.getDep())
+      return failure();
     if (!load.getResult().use_empty())
       return failure();
     rewriter.replaceAllUsesWith(load.getToken(), load.getDep());
@@ -93,12 +97,14 @@ public:
 };
 
 // Load-store forwarding pattern.
-class CombineTMEMLoadAndStore : public OpRewritePattern<TMEMTokenStoreOp> {
+class CombineTMEMLoadAndStore : public OpRewritePattern<ttng::TMEMStoreOp> {
 public:
   using OpRewritePattern::OpRewritePattern;
 
-  LogicalResult matchAndRewrite(TMEMTokenStoreOp store,
+  LogicalResult matchAndRewrite(ttng::TMEMStoreOp store,
                                 PatternRewriter &rewriter) const override {
+    if (!store.getDep())
+      return failure();
     auto load = store.getDep().getDefiningOp<HasToken<ttng::TMEMLoadOp>>();
     if (!load || load.getResult() != store.getSrc() ||
         load.getSrc() != store.getDst())
@@ -108,12 +114,14 @@ public:
   }
 };
 
-class SinkTMEMLoad : public OpRewritePattern<TMEMTokenLoadOp> {
+class SinkTMEMLoad : public OpRewritePattern<ttng::TMEMLoadOp> {
 public:
   using OpRewritePattern::OpRewritePattern;
 
-  LogicalResult matchAndRewrite(TMEMTokenLoadOp load,
+  LogicalResult matchAndRewrite(ttng::TMEMLoadOp load,
                                 PatternRewriter &rewriter) const override {
+    if (!load.getDep())
+      return failure();
     auto forOp = load->getParentOfType<scf::ForOp>();
     if (!forOp) {
       return failure();
@@ -133,7 +141,13 @@ public:
           return postDomInfo.properlyPostDominates(use->getOwner(), domOp);
         }))
       return failure();
-    if (domOp == load->getNextNode()) {
+    // In order to not re-ordering multiple tmem load in a loop, don't sink if
+    // all the ops between the load and the domOp are tmem loads.
+    Operation *nextNode = load->getNextNode();
+    while (auto tmemLoad = dyn_cast<ttng::TMEMLoadOp>(nextNode)) {
+      nextNode = tmemLoad->getNextNode();
+    }
+    if (domOp == nextNode) {
       // The load wasn't moved.
       return failure();
     }
@@ -148,14 +162,130 @@ public:
   }
 };
 
-// Remove loop-carried tensor dependencies if they are fed immediately into a
-// TMEM store by pulling the store into the previous iteration.
-class RotateTMEMStoreInLoop : public OpRewritePattern<TMEMTokenStoreOp> {
+// Combine back TMEM alloc and store. This is equivalent but gives us a more
+// canonical form to do further optimizations.
+class CombineTMEMStoreAndAlloc : public OpRewritePattern<ttng::TMEMStoreOp> {
 public:
   using OpRewritePattern::OpRewritePattern;
 
-  LogicalResult matchAndRewrite(TMEMTokenStoreOp store,
+  LogicalResult matchAndRewrite(ttng::TMEMStoreOp store,
                                 PatternRewriter &rewriter) const override {
+    if (!store.getDep())
+      return failure();
+    if (!matchPattern(store.getPred(), m_One()))
+      return failure();
+    auto alloc = store.getDep().getDefiningOp<TMEMTokenAllocOp>();
+    if (!alloc)
+      return failure();
+    if (store.getSrc() != alloc.getResult())
+      return failure();
+    if (alloc->getBlock() != store->getBlock())
+      return failure();
+    alloc.getSrcMutable().assign(store.getSrc());
+    rewriter.replaceOp(store, alloc.getToken());
+    return success();
+  }
+};
+
+// Hoists a tmem alloc outside an if op like this:
+// %0 = scf.if {
+//   %1, %token0 = tmem.alloc %init
+//   ...
+//   %2 = tmem.load %1, %token1
+//   scf.yield %2
+// } else {
+//   scf.yield %init
+// }
+// ->
+// %a, %token0 = tmem.alloc %init
+// %token2 = scf.if {
+//
+//   ...
+//   scf.yield %token1
+// } else {
+//   scf.yield %token0
+// }
+// %2 = tmem.load %a, %token2
+class HoistTMEMAllocOutOfIf : public OpRewritePattern<ttng::TMEMAllocOp> {
+public:
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(ttng::TMEMAllocOp alloc,
+                                PatternRewriter &rewriter) const override {
+    if (!alloc.getToken())
+      return failure();
+    Value init = alloc.getSrc();
+    if (!init)
+      return failure();
+    auto ifOp = dyn_cast<scf::IfOp>(alloc->getParentOp());
+    if (!ifOp || !ifOp.elseBlock())
+      return failure();
+    auto thenOp = ifOp.thenBlock()->getTerminator();
+    auto elseOp = ifOp.elseBlock()->getTerminator();
+    SmallVector<int> yieldArgs;
+    for (auto [thenOperand, elseOperand] :
+         llvm::zip(thenOp->getOpOperands(), elseOp->getOpOperands())) {
+      auto load = thenOperand.get().getDefiningOp<TMEMTokenLoadOp>();
+      if (!load || load.getSrc() != alloc.getResult())
+        continue;
+      if (elseOperand.get() != init)
+        continue;
+      yieldArgs.push_back(thenOperand.getOperandNumber());
+    }
+    if (yieldArgs.empty())
+      return failure();
+    // Since init is used in the else terminator we know that it dominates the
+    // if op.
+    alloc->moveBefore(ifOp);
+    rewriter.setInsertionPointAfter(ifOp);
+    for (int argNo : yieldArgs) {
+      auto load =
+          cast<TMEMTokenLoadOp>(thenOp->getOperand(argNo).getDefiningOp());
+      auto newLoad = cast<TMEMTokenLoadOp>(rewriter.clone(*load));
+      rewriter.modifyOpInPlace(ifOp, [&] {
+        ifOp->getResult(argNo).replaceAllUsesWith(newLoad.getResult());
+        newLoad.getDepMutable().assign(ifOp->getResult(argNo));
+        thenOp->setOperand(argNo, load.getToken());
+        elseOp->setOperand(argNo, alloc.getToken());
+        ifOp->getResult(argNo).setType(newLoad.getToken().getType());
+      });
+    }
+    return success();
+  }
+};
+
+// Forward a TMEM load into the user allocation.
+class TMEMLoadForwarding : public OpRewritePattern<ttng::TMEMAllocOp> {
+public:
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(ttng::TMEMAllocOp alloc,
+                                PatternRewriter &rewriter) const override {
+    if (!alloc.getToken())
+      return failure();
+    Value init = alloc.getSrc();
+    if (!init)
+      return failure();
+    auto load = init.getDefiningOp<TMEMTokenLoadOp>();
+    if (!load || !load->hasOneUse() || !load.getDep().hasOneUse())
+      return failure();
+    if (alloc.getType() != load.getSrc().getType())
+      return failure();
+    rewriter.replaceOp(alloc, {load.getSrc(), load.getDep()});
+    return success();
+  }
+};
+
+// Remove loop-carried tensor dependencies if they are fed immediately into a
+// TMEM store by pulling the store into the previous iteration.
+class RotateTMEMStoreInLoop : public OpRewritePattern<ttng::TMEMStoreOp> {
+public:
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(ttng::TMEMStoreOp store,
+                                PatternRewriter &rewriter) const override {
+    if (!store.getDep())
+      return failure();
     // Pattern match stores whose source comes from a loop region argument and
     // whose predicate is loop-invariant.
     scf::ForOp forOp = dyn_cast<scf::ForOp>(store->getParentOp());
@@ -215,12 +345,14 @@ public:
 
 // Remove loop-carried tensor dependencies if they are the result of TMEM loads
 // at the end of the loop by pushing the load into the next iteration.
-class RotateTMEMLoadInLoop : public OpRewritePattern<TMEMTokenLoadOp> {
+class RotateTMEMLoadInLoop : public OpRewritePattern<ttng::TMEMLoadOp> {
 public:
   using OpRewritePattern::OpRewritePattern;
 
-  LogicalResult matchAndRewrite(TMEMTokenLoadOp load,
+  LogicalResult matchAndRewrite(ttng::TMEMLoadOp load,
                                 PatternRewriter &rewriter) const override {
+    if (!load.getDep())
+      return failure();
     // Pattern match loads whose results are only passed into the next iteration
     // of a loop.
     scf::ForOp forOp = dyn_cast<scf::ForOp>(load->getParentOp());
@@ -391,32 +523,55 @@ struct HoistTMEMAlloc
 
   void runOnOperation() override {
     ModuleOp m = getOperation();
-    SmallVector<ttng::MMAv5OpInterface> mmaOps;
-    m.walk([&](ttng::MMAv5OpInterface mmaOp) { mmaOps.push_back(mmaOp); });
-    for (auto mmaOp : mmaOps) {
-      auto forOp = dyn_cast<scf::ForOp>(mmaOp->getParentOp());
-      if (!forOp) {
-        continue;
-      }
-      hoistInvariantInputs(mmaOp, forOp);
+    if (!hoistOutOfIf) {
+      SmallVector<ttng::MMAv5OpInterface> mmaOps;
+      m.walk([&](ttng::MMAv5OpInterface mmaOp) { mmaOps.push_back(mmaOp); });
+      for (auto mmaOp : mmaOps) {
+        auto forOp = dyn_cast<scf::ForOp>(mmaOp->getParentOp());
+        if (!forOp) {
+          continue;
+        }
+        hoistInvariantInputs(mmaOp, forOp);
 
-      // Only hoist the TMEM alloc feeding into the accumulator. Leave the ones
-      // for the scales in the loop.
-      auto alloc = mmaOp.getAccumulator().getDefiningOp<TMEMTokenAllocOp>();
-      if (!alloc || alloc->getParentRegion() != mmaOp->getParentRegion()) {
-        continue;
+        // Only hoist the TMEM alloc feeding into the accumulator. Leave the
+        // ones for the scales in the loop.
+        auto alloc = mmaOp.getAccumulator().getDefiningOp<TMEMTokenAllocOp>();
+        if (!alloc || alloc->getParentRegion() != mmaOp->getParentRegion()) {
+          continue;
+        }
+        hoistTMEMAlloc(alloc, forOp);
       }
-      hoistTMEMAlloc(alloc, forOp);
     }
 
     mlir::RewritePatternSet patterns(&getContext());
     patterns.add<RotateTMEMStoreInLoop, RotateTMEMLoadInLoop,
                  CombineTMEMLoadAndStore, CombineTMEMStoreAndSelect,
                  SinkTMEMLoad, RemoveUnusedTMEMLoad>(&getContext());
+    if (hoistOutOfIf) {
+      patterns.add<CombineTMEMStoreAndAlloc, HoistTMEMAllocOutOfIf,
+                   TMEMLoadForwarding>(&getContext());
+    }
     scf::ForOp::getCanonicalizationPatterns(patterns, &getContext());
     if (failed(applyPatternsGreedily(getOperation(), std::move(patterns)))) {
       llvm_unreachable("Failed to hoist tmem_store");
     }
+
+    // TODO: currently some code assumes that a mutable tmem alloc doesn't have
+    // an initial value. As a workaround we break up the op in order to keep
+    // this form for the downstream passes. We should remove this once the
+    // downstread passes are fixed.
+    m.walk([&](ttng::TMEMAllocOp alloc) {
+      if (alloc.getType().getMutableMemory() && alloc.getSrc()) {
+        OpBuilder builder(alloc);
+        builder.setInsertionPointAfter(alloc);
+        auto store = builder.create<ttng::TMEMStoreOp>(
+            alloc.getLoc(), builder.getType<AsyncTokenType>(),
+            alloc.getResult(), alloc.getToken(), alloc.getSrc(),
+            builder.create<arith::ConstantIntOp>(alloc.getLoc(), 1, 1));
+        alloc.getToken().replaceAllUsesExcept(store.getToken(), store);
+        alloc.getSrcMutable().clear();
+      }
+    });
   }
 };
 

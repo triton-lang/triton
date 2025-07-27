@@ -292,34 +292,22 @@ SmallVector<unsigned> getCTAOrder(Attribute layout) {
 SmallVector<int64_t> getShapePerCTA(ArrayRef<unsigned> CTASplitNum,
                                     ArrayRef<int64_t> shape) {
   unsigned rank = shape.size();
+  auto splitNum = llvm::to_vector(CTASplitNum);
+  if (splitNum.size() <= rank) { // pipelining
+    splitNum.insert(splitNum.begin(), rank - splitNum.size(), 1);
+  } else { // memory slicing
+    splitNum =
+        llvm::to_vector(llvm::drop_begin(splitNum, splitNum.size() - rank));
+  }
   SmallVector<int64_t> shapePerCTA(rank);
   for (unsigned i = 0; i < rank; ++i) {
-    unsigned splitNum = std::min<unsigned>(shape[i], CTASplitNum[i]);
-    shapePerCTA[i] = shape[i] / splitNum;
+    shapePerCTA[i] = shape[i] / std::min<unsigned>(shape[i], splitNum[i]);
   }
   return shapePerCTA;
 }
 
 SmallVector<int64_t> getShapePerCTA(Attribute layout, ArrayRef<int64_t> shape) {
-  if (mlir::isa<SharedEncodingTrait>(layout)) {
-    // Special logic for pipeline pass, where shape is 3D and CTALayout is 2D.
-    // The first dim of shape is numStages. This is a work around, otherwise
-    // too many places would have to be modified in pipeline pass. Maybe we
-    // need to refactor this logic in the future.
-    auto CTASplitNum = cast<LayoutEncodingTrait>(layout).getCTASplitNum();
-    if (shape.size() == CTASplitNum.size() + 1) {
-      auto res = getShapePerCTA(CTASplitNum, shape.drop_front());
-      res.insert(res.begin(), shape.front());
-      return res;
-    }
-  }
-  SmallVector<unsigned> splitNum = getCTASplitNum(layout);
-  if (auto tmem = dyn_cast<nvidia_gpu::TensorMemoryEncodingAttr>(layout)) {
-    if (shape.size() > splitNum.size()) {
-      splitNum.insert(splitNum.begin(), shape.size() - splitNum.size(), 1);
-    }
-  }
-  return getShapePerCTA(splitNum, shape);
+  return getShapePerCTA(getCTASplitNum(layout), shape);
 }
 
 SmallVector<int64_t> getAllocationShapePerCTA(Attribute layout,
@@ -1433,9 +1421,12 @@ LogicalResult AMDMfmaEncodingAttr::verify(
   if (!(version >= 0 && version <= 4)) {
     return emitError() << "version must be in the [0, 4] range";
   }
-  if (!((mDim == 32 && nDim == 32) || (mDim == 16 && nDim == 16))) {
-    return emitError()
-           << "(M, N) cases other than (32, 32) or (16, 16) unimplemented";
+
+  const std::array<std::pair<unsigned, unsigned>, 4> validDims = {
+      {{32, 32}, {16, 16}, {64, 4}, {4, 64}}};
+  if (!llvm::is_contained(validDims, std::make_pair(mDim, nDim))) {
+    return emitError() << "invalid (mDim, nDim) combination: (" << mDim << ", "
+                       << nDim << ")";
   }
   if (elementType && !(elementType->isF64() || elementType->isF32() ||
                        elementType->isInteger(32))) {
@@ -1780,6 +1771,9 @@ int64_t PaddedSharedEncodingAttr::getPaddedSize(ArrayRef<int64_t> shape) const {
        llvm::zip_equal(getIntervals(), getPaddings())) {
     paddingSize += (unpaddedSize >> llvm::Log2_32(interval))
                    << llvm::Log2_32(padding);
+    // There is no need for padding after the last element
+    if (unpaddedSize % interval == 0)
+      paddingSize -= padding;
   }
   return unpaddedSize + paddingSize;
 }
@@ -1938,13 +1932,12 @@ AMDMfmaEncodingAttr::getInstrShapeForOperand(int kWidth, int opIdx) const {
   unsigned nDim = getNDim();
   assert((mDim == nDim) && (mDim == 32 || mDim == 16 || mDim == 4) ||
          (mDim == 64 && nDim == 4) || (mDim == 4 && nDim == 64));
+
   constexpr int warpSize = 64; // MFMA is always based on the 64-wide warps.
-  int kGroups = -1;
-  if (mDim == nDim)
-    kGroups = warpSize / mDim;
-  if (mDim == 64 && nDim == 4 || mDim == 4 && nDim == 64)
-    kGroups = 1;
+  int kGroups = warpSize / std::min(mDim, nDim); // for 64x4 and 4x64,
+                                                 // kGroups = 16
   int64_t kDim = kWidth * kGroups;
+
   if (opIdx == 0)
     return {mDim, kDim};
   else
@@ -1996,6 +1989,13 @@ SwizzledSharedEncodingAttr AMDMfmaEncodingAttr::composeSharedLayoutForOperand(
     ArrayRef<unsigned> sharedOrder, unsigned vectorSize, unsigned elemBitWidth,
     bool needTrans) const {
   int kDimIndex = operandIdx == 0 ? 1 : 0;
+
+  // Disable swizzling for scales
+  if (operandIdx >= 2) {
+    return SwizzledSharedEncodingAttr::get(getContext(), 1, 1, 1, sharedOrder,
+                                           ctaLayout);
+  }
+
   if (needTrans)
     kDimIndex = 1 - kDimIndex;
 

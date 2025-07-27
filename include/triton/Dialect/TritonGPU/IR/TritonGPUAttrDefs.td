@@ -17,6 +17,7 @@ def TritonGPU_AttrTrait : AttrInterface<"TritonGPU_AttrTrait"> {
 
 def MemDescViewTrait : NativeOpTrait<"MemDescViewTrait">;
 
+def LocalLoadTrait : NativeOpTrait<"LocalLoadTrait">;
 
 class TritonGPU_Attr<string name, string attrMnemonic, list<Trait> traits = [],
                      Dialect dialect = TritonGPU_Dialect,
@@ -369,7 +370,7 @@ When vec=2, elements are swizzled in pairs of 2.  In other words, the element at
   let genVerifyDecl = 1;
 }
 
-def PaddeddSharedEncodingAttr
+def PaddedSharedEncodingAttr
     : TritonGPU_Attr<"PaddedSharedEncoding", "padded_shared_encoding",
                      [SharedEncodingTrait, LayoutEncodingTrait]> {
   let mnemonic = "padded_shared";

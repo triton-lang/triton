@@ -60,6 +60,11 @@ def TritonGPUHoistTMEMAlloc : Pass<"tritongpu-hoist-tmem-alloc", "mlir::ModuleOp
                            "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect",
                            "mlir::scf::SCFDialect",
                            "mlir::arith::ArithDialect"];
+  let options = [
+    Option<"hoistOutOfIf", "hoist-out-of-if",
+           "bool", /*default*/"false",
+           "Hoist TMEM allocations out of if statements">
+  ];
 }
 
 def TritonGPUTestPipelineLowerLoop : Pass<"tritongpu-test-pipeline-lower-loop", "mlir::ModuleOp"> {
@@ -130,7 +135,8 @@ def TritonGPURewritePartitionDependencies : Pass<"tritongpu-rewrite-partition-de
     "mlir::triton::gpu::TritonGPUDialect",
     "mlir::scf::SCFDialect",
     "mlir::arith::ArithDialect",
-    "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
+    "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect",
+    "mlir::triton::nvws::NVWSDialect"
   ];
 }
 

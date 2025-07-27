@@ -18,14 +18,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK: %[[ACC1:.+]] = ttng.tmem_load %[[TMEM_BUF]]
   // CHECK: %[[ACC2:.+]] = arith.mulf %[[ACC1]]
   // CHECK: ttng.tmem_store %[[ACC2]], %[[TMEM_BUF]]
-  // CHECK: %[[BAR_SLICE:.+]] = ttg.memdesc_subview %[[BAR_BUF]][%[[C0]]]
+  // CHECK: %[[BAR_SLICE:.+]] = ttg.memdesc_index %[[BAR_BUF]], %[[C0]]
   // CHECK: ttng.tc_gen5_mma %[[A_OP:.*]], %[[B_OP:.*]], %[[TMEM_BUF]], {{.*}}, %[[BAR_SLICE]]
   // CHECK: scf.for {{.*}} iter_args(%[[PHASE:.+]] = %[[C0]], %[[BAR_IDX:.+]] = %[[C1]], {{.*}}, %[[BAR_PREV:.*]] = %[[BAR_SLICE]], %[[PHASE_PREV:.+]] = %[[C0]], %[[A_DEP:.+]] = %[[A_OP]], %[[B_DEP:.+]] = %[[B_OP]]
   // CHECK:   ttng.wait_barrier %[[BAR_PREV]], %[[PHASE_PREV]] deps %[[A_DEP]], %[[B_DEP]]
   // CHECK:   %[[ACC1:.+]] = ttng.tmem_load %[[TMEM_BUF]]
   // CHECK:   %[[ACC2:.+]] = arith.mulf %[[ACC1]]
   // CHECK:   ttng.tmem_store %[[ACC2]], %[[TMEM_BUF]]
-  // CHECK:   %[[BAR_SLICE:.+]] = ttg.memdesc_subview %[[BAR_BUF]][%[[BAR_IDX]]]
+  // CHECK:   %[[BAR_SLICE:.+]] = ttg.memdesc_index %[[BAR_BUF]], %[[BAR_IDX]]
   // CHECK:   ttng.tc_gen5_mma %[[A_OP:.*]], %[[B_OP:.*]], %[[TMEM_BUF]], %[[TRUE]], {{.*}}, %[[BAR_SLICE]]
   // CHECK:   %[[PHASE_NEG:.+]] = arith.xori %[[PHASE]], %[[C1]]
   // CHECK:   %[[BAR_IDX_P1:.+]] = arith.addi %[[BAR_IDX]], %[[C1]]
@@ -199,26 +199,26 @@ tt.func private @pipelined_gather(
 
   // CHECK-COUNT-2: ttng.init_barrier
 
-  // CHECK: [[BAR0:%.*]] = ttg.memdesc_subview [[BARS]][%c0_i32]
+  // CHECK: [[BAR0:%.*]] = ttg.memdesc_index [[BARS]], %c0_i32
   // CHECK: ttng.barrier_expect [[BAR0]], 16384
-  // CHECK: [[LHS_BUF0:%.*]] = ttg.memdesc_subview [[LHS_BUFS]][%c0_i32,
+  // CHECK: [[LHS_BUF0:%.*]] = ttg.memdesc_index [[LHS_BUFS]], %c0_i32
   // CHECK: ttng.async_tma_gather [[LHS_DESC]][[[LHS_X]], %c0_i32] [[LHS_BUF0]], [[BAR0]], %true
-  // CHECK: [[RHS_BUF0:%.*]] = ttg.memdesc_subview [[RHS_BUFS]][%c0_i32,
+  // CHECK: [[RHS_BUF0:%.*]] = ttg.memdesc_index [[RHS_BUFS]], %c0_i32
   // CHECK: ttng.async_tma_gather [[RHS_DESC]][[[RHS_X]], %c0_i32] [[RHS_BUF0]], [[BAR0]], %true
 
-  // CHECK: [[BAR1:%.*]] = ttg.memdesc_subview [[BARS]][%c1_i32]
+  // CHECK: [[BAR1:%.*]] = ttg.memdesc_index [[BARS]], %c1_i32
   // CHECK: ttng.barrier_expect [[BAR1]], 16384
-  // CHECK: [[LHS_BUF1:%.*]] = ttg.memdesc_subview [[LHS_BUFS]][%c1_i32,
+  // CHECK: [[LHS_BUF1:%.*]] = ttg.memdesc_index [[LHS_BUFS]], %c1_i32
   // CHECK: ttng.async_tma_gather [[LHS_DESC]][[[LHS_X]], %c128_i32] [[LHS_BUF1]], [[BAR1]], %true
-  // CHECK: [[RHS_BUF1:%.*]] = ttg.memdesc_subview [[RHS_BUFS]][%c1_i32,
+  // CHECK: [[RHS_BUF1:%.*]] = ttg.memdesc_index [[RHS_BUFS]], %c1_i32
   // CHECK: ttng.async_tma_gather [[RHS_DESC]][[[RHS_X]], %c128_i32] [[RHS_BUF1]], [[BAR1]], %true
 
   // CHECK: scf.for
   %out = scf.for %y = %c0_i32 to %c1024_i32 step %c128_i32 iter_args(%acc = %c0) -> (tensor<32x32xf32, #mma>)  : i32 {
     // CHECK: ttng.wait_barrier
-    // CHECK: [[RHS_VIEW:%.*]] = ttg.memdesc_subview [[RHS_BUFS]]
+    // CHECK: [[RHS_VIEW:%.*]] = ttg.memdesc_index [[RHS_BUFS]]
     // CHECK: [[RHS:%.*]] = ttg.local_load [[RHS_VIEW]]
-    // CHECK: [[LHS_VIEW:%.*]] = ttg.memdesc_subview [[LHS_BUFS]]
+    // CHECK: [[LHS_VIEW:%.*]] = ttg.memdesc_index [[LHS_BUFS]]
     // CHECK: [[LHS:%.*]] = ttg.local_load [[LHS_VIEW]]
     // CHECK: tt.dot [[LHS]], [[RHS]]
     %lhs = tt.descriptor_gather %lhs_desc[%lhs_x_offsets, %y] : (!tt.tensordesc<tensor<1x128xbf16, #nvmma_128>>, tensor<32xi32, #blocked1>, i32) -> tensor<32x128xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
@@ -445,7 +445,7 @@ tt.func public @load_into_async_mma(
     %scales = tt.load %scales_ptrs_i : tensor<128x8x!tt.ptr<i8>, #load_blocked>
     %scales_tmem = ttng.tmem_alloc %scales : (tensor<128x8xi8, #load_blocked>) -> !ttg.memdesc<128x8xi8, #ttng.tensor_memory_scales_encoding<>, #ttng.tensor_memory>
 
-    ttng.tc_gen5_mma_scaled %lhs_shared, %rhs_shared, %tmem, %scales_tmem, %rhs_scales, %true, %true lhs = e4m3 rhs = e4m3, %barrier[%true] :
+    ttng.tc_gen5_mma_scaled %lhs_shared, %rhs_shared, %tmem, %scales_tmem, %rhs_scales, %true, %true lhs = e4m3 rhs = e4m3, %barrier[%true] {is_async} :
       !ttg.memdesc<128x64xf8E4M3FN, #shared, #smem>,
       !ttg.memdesc<64x64xf8E4M3FN, #shared, #smem>,
       !ttg.memdesc<128x64xf32, #tmem_acc, #ttng.tensor_memory, mutable>,

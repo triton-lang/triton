@@ -260,7 +260,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
   // CHECK-LABEL: atomic_runtime_lds_reduction
   tt.func @atomic_runtime_lds_reduction(%arg0 : tensor<64x!tt.ptr<f32>, #blocked5>, %arg2 : tensor<64xf32, #blocked5>) {
 
-    // CHECK: llvm.zext
     // CHECK-COUNT-7: rocdl.update.dpp
     // CHECK: llvm.bitcast
     // CHECK-COUNT: llvm.amdgcqn.ds.permute
@@ -373,7 +372,7 @@ module attributes {"ttg.target" = "hip:gfx942", "ttg.num-ctas" = 1 : i32, "ttg.n
     %c16_i32 = arith.constant 16 : i32
     // CHECK-COUNT-16: llvm.store {{.*}} : vector<1xf16>, !llvm.ptr<3>
     %0 = ttg.local_alloc %arg0 : (tensor<64x64xf16, #blocked>) -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
-    %1 = ttg.memdesc_subview %0[%c0_i32, %c16_i32] : !ttg.memdesc<64x64xf16, #shared, #smem, mutable> -> !ttg.memdesc<64x16xf16, #shared, #smem, mutable, 64x64>
+    %1 = ttg.memdesc_subslice %0 [0, 16]  : !ttg.memdesc<64x64xf16, #shared, #smem, mutable> -> !ttg.memdesc<64x16xf16, #shared, #smem, mutable, 64x64>
     // CHECK-COUNT-4: llvm.load {{.*}} : !llvm.ptr<3> -> vector<1xf16>
     %2 = ttg.local_load %1 : !ttg.memdesc<64x16xf16, #shared, #smem, mutable, 64x64> -> tensor<64x16xf16, #blocked>
     // CHECK-COUNT-4: llvm.store {{.*}} : vector<1xf16>, !llvm.ptr<3>
@@ -391,18 +390,18 @@ module attributes {"ttg.target" = "hip:gfx942", "ttg.num-ctas" = 1 : i32, "ttg.n
 module attributes {"ttg.target" = "hip:gfx942", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
   tt.func @padded_shared_layout(%arg0: tensor<64x64xf16, #blocked>) {
     // CHECK-DAG: %[[CST0:.+]] = llvm.mlir.constant(0 : i32)
-    // CHECK-DAG: %[[CST2:.+]] = llvm.mlir.constant(2 : i32)
     // CHECK-DAG: %[[CST3:.+]] = llvm.mlir.constant(3 : i32)
-    // CHECK-DAG: %[[CST7:.+]] = llvm.mlir.constant(7 : i32)
+    // CHECK-DAG: %[[CST4:.+]] = llvm.mlir.constant(4 : i32)
     // CHECK-DAG: %[[CST8:.+]] = llvm.mlir.constant(8 : i32)
+    // CHECK-DAG: %[[CST9:.+]] = llvm.mlir.constant(9 : i32)
 
-    //      CHECK: %[[SHR0:.+]] = llvm.ashr %[[XOR:.+]], %[[CST7]] : i32
-    // CHECK-NEXT: %[[SHL0:.+]] = llvm.shl %[[SHR0]], %[[CST2]] : i32
+    //      CHECK: %[[SHR0:.+]] = llvm.ashr %[[ADD:.+]], %[[CST8]] : i32
+    // CHECK-NEXT: %[[SHL0:.+]] = llvm.shl %[[SHR0]], %[[CST3]] : i32
     // CHECK-NEXT: %[[ADD0:.+]] = llvm.add %[[SHL0]], %[[CST0]] : i32
-    // CHECK-NEXT: %[[SHR1:.+]] = llvm.ashr %[[XOR]], %[[CST8]] : i32
-    // CHECK-NEXT: %[[SHL1:.+]] = llvm.shl %[[SHR1]], %[[CST3]] : i32
+    // CHECK-NEXT: %[[SHR1:.+]] = llvm.ashr %[[ADD]], %[[CST9]] : i32
+    // CHECK-NEXT: %[[SHL1:.+]] = llvm.shl %[[SHR1]], %[[CST4]] : i32
     // CHECK-NEXT: %[[ADD1:.+]] = llvm.add %[[ADD0]], %[[SHL1]] : i32
-    // CHECK-NEXT: %[[ADD2:.+]] = llvm.add %[[XOR]], %[[ADD1]] : i32
+    // CHECK-NEXT: %[[ADD2:.+]] = llvm.add %[[ADD]], %[[ADD1]] : i32
     // CHECK: llvm.getelementptr inbounds %{{.+}}[%[[ADD2]]]
 
     // CHECK-COUNT-16: llvm.store {{.*}} : vector<1xf16>, !llvm.ptr<3>
@@ -424,21 +423,21 @@ module attributes {"ttg.target" = "hip:gfx942", "ttg.num-ctas" = 1 : i32, "ttg.n
     // Skip two constants from the stride calculation
 
     // CHECK-DAG: %[[CST0:.+]] = llvm.mlir.constant(0 : i32)
-    // CHECK-DAG: %[[CST2:.+]] = llvm.mlir.constant(2 : i32)
-    // CHECK-DAG: %[[CST7:.+]] = llvm.mlir.constant(7 : i32)
-    // CHECK-DAG: %[[CST8:.+]] = llvm.mlir.constant(8 : i32)
     // CHECK-DAG: %[[CST3:.+]] = llvm.mlir.constant(3 : i32)
+    // CHECK-DAG: %[[CST4:.+]] = llvm.mlir.constant(4 : i32)
+    // CHECK-DAG: %[[CST8:.+]] = llvm.mlir.constant(8 : i32)
+    // CHECK-DAG: %[[CST9:.+]] = llvm.mlir.constant(9 : i32)
 
-    //  CHECK: %[[SHR0:.+]] = llvm.ashr %[[XOR:.+]], %[[CST7]] : i32
-    // CHECK-NEXT: %[[SHL0:.+]] = llvm.shl %[[SHR0]], %[[CST2]] : i32
+    //  CHECK: %[[SHR0:.+]] = llvm.ashr %[[ADD:.+]], %[[CST8]] : i32
+    // CHECK-NEXT: %[[SHL0:.+]] = llvm.shl %[[SHR0]], %[[CST3]] : i32
     // CHECK-NEXT: %[[ADD0:.+]] = llvm.add %[[SHL0]], %[[CST0]] : i32
-    // CHECK-NEXT: %[[SHR1:.+]] = llvm.ashr %[[XOR]], %[[CST8]] : i32
-    // CHECK-NEXT: %[[SHL1:.+]] = llvm.shl %[[SHR1]], %[[CST3]] : i32
+    // CHECK-NEXT: %[[SHR1:.+]] = llvm.ashr %[[ADD]], %[[CST9]] : i32
+    // CHECK-NEXT: %[[SHL1:.+]] = llvm.shl %[[SHR1]], %[[CST4]] : i32
     // CHECK-NEXT: %[[ADD1:.+]] = llvm.add %[[ADD0]], %[[SHL1]] : i32
-    // CHECK-NEXT: %[[ADD2:.+]] = llvm.add %[[XOR]], %[[ADD1]] : i32
+    // CHECK-NEXT: %[[ADD2:.+]] = llvm.add %[[ADD]], %[[ADD1]] : i32
     // CHECK: llvm.getelementptr inbounds %{{.+}}[%[[ADD2]]]
 
-    %1 = ttg.memdesc_subview %arg0[%c1_i32, %c0_i32, %c0_i32] : !ttg.memdesc<2x64x64xf16, #shared, #smem, mutable> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
+    %1 = ttg.memdesc_index %arg0, %c1_i32 : !ttg.memdesc<2x64x64xf16, #shared, #smem, mutable> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
     %2 = ttg.local_load %1 : !ttg.memdesc<64x64xf16, #shared, #smem, mutable> -> tensor<64x64xf16, #blocked>
     ttg.local_store %2, %1 : tensor<64x64xf16, #blocked> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
     tt.return
