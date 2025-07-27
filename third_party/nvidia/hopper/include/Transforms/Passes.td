@@ -89,4 +89,17 @@ def NVGPUTestWSCodePartition: Pass<"nvgpu-test-ws-code-partition", "mlir::Module
   ];
 }
 
+def NVGPUTestPingPongSync : Pass<"nvgpu-test-ping-pong-sync", "mlir::ModuleOp"> {
+  let summary = "test ping pong sync";
+
+  let description = "This pass inserts named barriers to enforce ping pong around critical resources";
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect"];
+  let options = [
+    Option<"numWarpGroups", "num-warp-groups",
+           "int32_t", /*default*/"0",
+           "number of warp groups for warp specialization">
+  ];
+}
+
 #endif // NV_TRANSFORMS_PASSES
