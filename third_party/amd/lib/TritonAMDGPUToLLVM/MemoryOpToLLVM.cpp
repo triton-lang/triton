@@ -1,6 +1,7 @@
 #include "AsyncUtility.h"
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "PatternTritonGPUOpToLLVM.h"
+#include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
