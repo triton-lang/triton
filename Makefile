@@ -65,6 +65,7 @@ test-interpret: all
 
 .PHONY: test-proton
 test-proton: all
+	pip install triton_kernels
 	$(PYTEST) -s -n 8 third_party/proton/test
 
 .PHONY: test-python
