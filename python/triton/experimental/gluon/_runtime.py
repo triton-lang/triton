@@ -1,5 +1,4 @@
 from __future__ import annotations
-import triton
 from triton.compiler.compiler import ASTSource
 from triton.backends.compiler import Language
 from triton.runtime.jit import JITFunction
