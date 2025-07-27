@@ -121,13 +121,20 @@ if __name__ == "__main__":
         warnings.warn("Running in non-distributed mode, which may not be optimal for performance measurements.")
     # Running all workloads at once may cause OOM on some GPUs such as H100 80GB.
     # Thus we request users to run each workload separately.
-    # For example, to run the dense workload with 4 TP and 2 EP, use:
-    # e.g., torchrun --nproc-per-node=4 ./bench_mlp.py --tp 2 --ep 2 --name llama4-maverick
+    # For example, all eligible combinations of options are listed below when four GPUs are used:
+    # torchrun --nproc-per-node=4 ./bench_mlp_distributed.py --tp 2 --ep 2 --name llama4-maverick
+    # torchrun --nproc-per-node=4 ./bench_mlp_distributed.py --tp 1 --ep 4 --name llama4-maverick
+    # torchrun --nproc-per-node=4 ./bench_mlp_distributed.py --tp 4 --ep 1 --name llama4-maverick
+    # torchrun --nproc-per-node=4 ./bench_mlp_distributed.py --tp 4 --ep 1 --name dense
+    # torchrun --nproc-per-node=4 ./bench_mlp_distributed.py --tp 2 --ep 2 --name llama4-maverick --quantized
+    # torchrun --nproc-per-node=4 ./bench_mlp_distributed.py --tp 1 --ep 4 --name llama4-maverick --quantized
+    # torchrun --nproc-per-node=4 ./bench_mlp_distributed.py --tp 4 --ep 1 --name llama4-maverick --quantized
+    # torchrun --nproc-per-node=4 ./bench_mlp_distributed.py --tp 4 --ep 1 --name dense --quantized
     argparse = argparse.ArgumentParser()
     argparse.add_argument("--tp", type=int, default=1)
     argparse.add_argument("--ep", type=int, default=1)
     argparse.add_argument("--name", type=str, choices=["dense", "llama4-maverick"])
-    argparse.add_argument("--quantized", type=bool, default=False)
+    argparse.add_argument("--quantized", type=bool, action="store_true", default=False)
     args = argparse.parse_args()
     dtypes = dense_dtypes if args.quantized else quantized_dtypes
     if args.name == "dense":
