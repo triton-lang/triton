@@ -1299,15 +1299,13 @@ struct InitFuncPtrArgs : OpRewritePattern<tt::FuncOp> {
     if (newOp->hasAttr(kInitFuncArgsRewritten))
       return failure();
 
-    int64_t bitness = 64;
+    // Default to 32 and assume we will cast if needed.
+    int64_t bitness = 32;
     rewriter.setInsertionPointToStart(&newOp.getBody().front());
     for (auto [idx, arg] : llvm::enumerate(newOp.getArguments())) {
       // The pointer argument needs to be a scalar
       if (!isa<tt::PointerType>(arg.getType()))
         continue;
-      if (auto pointerRangeAttr =
-              newOp.getArgAttrOfType<IntegerAttr>(idx, "tt.pointer_range"))
-        bitness = pointerRangeAttr.getInt();
       Value zeroOffset =
           rewriter.create<arith::ConstantIntOp>(newOp.getLoc(), 0, bitness);
       auto dummyCast = rewriter.create<UnrealizedConversionCastOp>(
