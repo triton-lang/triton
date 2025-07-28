@@ -32,23 +32,12 @@ def anonymize_ir(ir):
     return TARGET_PAT.sub('ttg.target = "..."', ir)
 
 
-def get_common_test_aot_target() -> GPUTarget:
-    """Returns a common test suitable AOT target from the current runtime."""
-    if is_hip():
-        # We use gfx1200 as the target for testing's purpose given it has warp size == 32
-        # and is easier to write common expecttest checks.
-        return GPUTarget("hip", "gfx1200", 32)
-    # For others, use the current runtime's target.
-    return triton.runtime.driver.active.get_current_target()
-
-
-def get_cuda_test_aot_target(min_sm) -> GPUTarget:
-    """Returns a cuda-specific test suitable AOT target from the current runtime."""
-    if not is_cuda():
-        # Use the minimal CUDA target need for the test on non-CUDA platforms.
-        return GPUTarget("cuda", min_sm, 32)
-    runtime_sm = triton.runtime.driver.active.get_current_target().arch
-    return GPUTarget("cuda", max(runtime_sm, min_sm), 32)
+def structurize_target(target: str) -> GPUTarget:
+    """Turns the given target string into a GPUTarget struct."""
+    backend, arch = target.split(":")
+    if backend == "cuda":
+        arch = int(arch.removeprefix("sm"))
+    return GPUTarget(backend, arch, 32)
 
 
 def aot_compile_gluon(fn, target: GPUTarget, constexprs: dict = {}, signature: dict = {}, attrs: dict = {},
@@ -82,13 +71,14 @@ def convert_layout_kernel(XBLOCK: ttgl.constexpr, layout_a: ttgl.constexpr, layo
     res = ttgl.convert_layout(x, layout_b)  # noqa: F841
 
 
-def test_convert_layout(fresh_knobs):
+@pytest.mark.parametrize("target", ["cuda:sm80", "cuda:sm90", "cuda:sm100", "hip:gfx1200"])
+def test_convert_layout(target, fresh_knobs):
     knobs.compilation.disable_line_info = True
 
     layout_a = ttgl.BlockedLayout(size_per_thread=[1], threads_per_warp=[32], warps_per_cta=[4], order=[0])
     layout_b = ttgl.SliceLayout(
         1, ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[1, 32], warps_per_cta=[1, 4], order=[1, 0]))
-    target = get_common_test_aot_target()
+    target = structurize_target(target)
     constexprs = build_constexpr_dict(XBLOCK=128, layout_a=layout_a, layout_b=layout_b)
     h = aot_compile_gluon(convert_layout_kernel, target, constexprs, num_warps=layout_a.warps_per_cta[0], grid=(1, ))
     expecttest.assert_expected_inline(
@@ -166,13 +156,14 @@ def shared_memory_kernel(XBLOCK: ttgl.constexpr, YBLOCK: ttgl.constexpr, layout_
     unused._keep_alive()
 
 
-def test_shared_memory(fresh_knobs):
+@pytest.mark.parametrize("target", ["cuda:sm80", "cuda:sm90", "cuda:sm100", "hip:gfx1200"])
+def test_shared_memory(target, fresh_knobs):
     knobs.compilation.disable_line_info = True
 
     layout_a = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[1, 32], warps_per_cta=[4, 1], order=[1, 0])
     layout_b = ttgl.BlockedLayout(size_per_thread=[1, 4], threads_per_warp=[1, 32], warps_per_cta=[4, 1], order=[1, 0])
     smem_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=32, rank=2)
-    target = get_common_test_aot_target()
+    target = structurize_target(target)
     constexprs = build_constexpr_dict(XBLOCK=8, YBLOCK=32, layout_a=layout_a, layout_b=layout_b,
                                       smem_layout=smem_layout)
     h = aot_compile_gluon(shared_memory_kernel, target, constexprs, num_warps=layout_a.warps_per_cta[0], grid=(1, ))
@@ -215,12 +206,13 @@ def tensor_memory_kernel(layout: ttgl.constexpr, tmem_layout: ttgl.constexpr):
         buffers.index(ivar).load(layout)
 
 
-def test_tensor_memory(fresh_knobs):
+@pytest.mark.parametrize("target", ["cuda:sm100"])  # Blackwell
+def test_tensor_memory(target, fresh_knobs):
     knobs.compilation.disable_line_info = True
 
     layout = ttgl.BlockedLayout(size_per_thread=[1, 64], threads_per_warp=[32, 1], warps_per_cta=[4, 1], order=[0, 1])
     tmem_layout = TensorMemoryLayout(block=[128, 128], unpacked=True)
-    target = get_cuda_test_aot_target(100)  # Blackwell
+    target = structurize_target(target)
     constexprs = build_constexpr_dict(layout=layout, tmem_layout=tmem_layout)
     h = aot_compile_gluon(tensor_memory_kernel, target, constexprs, num_warps=4, grid=(1, ))
     expecttest.assert_expected_inline(
@@ -268,12 +260,13 @@ def shared_memory_subview_kernel(XBLOCK: ttgl.constexpr, layout: ttgl.constexpr,
     view.store(value.trans())
 
 
-def test_shared_memory_subview(fresh_knobs):
+@pytest.mark.parametrize("target", ["cuda:sm80", "cuda:sm90", "cuda:sm100", "hip:gfx1200"])
+def test_shared_memory_subview(target, fresh_knobs):
     knobs.compilation.disable_line_info = True
 
     layout = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[1, 32], warps_per_cta=[4, 1], order=[1, 0])
     smem_layout = ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0])
-    target = get_common_test_aot_target()
+    target = structurize_target(target)
     constexprs = build_constexpr_dict(XBLOCK=256, layout=layout, smem_layout=smem_layout)
     h = aot_compile_gluon(shared_memory_subview_kernel, target, constexprs, num_warps=4, grid=(1, ))
     expecttest.assert_expected_inline(
@@ -304,12 +297,13 @@ def shared_memory_index_kernel(XBLOCK: ttgl.constexpr, layout: ttgl.constexpr, s
         smem.index(ivar).load(layout)
 
 
-def test_shared_memory_index(fresh_knobs):
+@pytest.mark.parametrize("target", ["cuda:sm80", "cuda:sm90", "cuda:sm100"])  # Ampere+
+def test_shared_memory_index(target, fresh_knobs):
     knobs.compilation.disable_line_info = True
 
     layout = ttgl.BlockedLayout(size_per_thread=[1], threads_per_warp=[32], warps_per_cta=[4], order=[0])
     smem_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=32, rank=2)
-    target = get_cuda_test_aot_target(80)  # A100+
+    target = structurize_target(target)
     constexprs = build_constexpr_dict(XBLOCK=256, layout=layout, smem_layout=smem_layout)
     h = aot_compile_gluon(shared_memory_index_kernel, target, constexprs, num_warps=4, grid=(1, ))
     expecttest.assert_expected_inline(
@@ -512,10 +506,11 @@ def mbarrier_kernel():
     mbarrier.invalidate(bar)
 
 
-def test_mbarrier(fresh_knobs):
+@pytest.mark.parametrize("target", ["cuda:sm90", "cuda:sm100"])  # Hopper+
+def test_mbarrier(target, fresh_knobs):
     knobs.compilation.disable_line_info = True
 
-    target = get_cuda_test_aot_target(90)  # Hopper
+    target = structurize_target(target)
     h = aot_compile_gluon(mbarrier_kernel, target, grid=(1, ))
     expecttest.assert_expected_inline(
         anonymize_ir(h.asm["source"]), """\
@@ -548,13 +543,14 @@ def tcgen05_mma_kernel(nvmma_layout: ttgl.constexpr, acc_layout: ttgl.constexpr)
     blackwell.tcgen05_mma(a, b, acc)
 
 
-def test_tcgen05_mma(fresh_knobs):
+@pytest.mark.parametrize("target", ["cuda:sm100"])  # Blackwell tensor core
+def test_tcgen05_mma(target, fresh_knobs):
     knobs.compilation.disable_line_info = True
 
     nvmma_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2)
     acc_layout = TensorMemoryLayout([128, 128], unpacked=True)
 
-    target = get_cuda_test_aot_target(100)  # Blackwell tensor core
+    target = structurize_target(target)
     constexprs = build_constexpr_dict(nvmma_layout=nvmma_layout, acc_layout=acc_layout)
     h = aot_compile_gluon(tcgen05_mma_kernel, target, constexprs, grid=(1, ))
     expecttest.assert_expected_inline(
@@ -586,13 +582,14 @@ def tcgen05_mma_mbar_kernel(nvmma_layout: ttgl.constexpr, acc_layout: ttgl.const
     blackwell.tcgen05_mma(a, b, acc, mbarriers=[bar])
 
 
-def test_tcgen05_mma_mbar(fresh_knobs):
+@pytest.mark.parametrize("target", ["cuda:sm100"])  # Blackwell tensor core
+def test_tcgen05_mma_mbar(target, fresh_knobs):
     knobs.compilation.disable_line_info = True
 
     nvmma_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2)
     acc_layout = TensorMemoryLayout([128, 128], unpacked=True)
 
-    target = get_cuda_test_aot_target(100)  # Blackwell tensor core
+    target = structurize_target(target)
     constexprs = build_constexpr_dict(nvmma_layout=nvmma_layout, acc_layout=acc_layout)
     h = aot_compile_gluon(tcgen05_mma_mbar_kernel, target, constexprs, grid=(1, ))
     expecttest.assert_expected_inline(
@@ -636,12 +633,13 @@ def warpgroup_mma_kernel(nvmma_layout: ttgl.constexpr, acc_layout: ttgl.constexp
     hopper.warpgroup_mma(a, b, acc)
 
 
-def test_warpgroup_mma(fresh_knobs):
+@pytest.mark.parametrize("target", ["cuda:sm90", "cuda:sm100"])  # Hopper WGMMA
+def test_warpgroup_mma(target, fresh_knobs):
     knobs.compilation.disable_line_info = True
 
     nvmma_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2)
     mma_layout = ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1], instr_shape=[16, 32, 16])
-    target = get_cuda_test_aot_target(90)  # Hopper WGMMA
+    target = structurize_target(target)
     constexprs = build_constexpr_dict(nvmma_layout=nvmma_layout, acc_layout=mma_layout)
     h = aot_compile_gluon(warpgroup_mma_kernel, target, constexprs, grid=(1, ))
     expecttest.assert_expected_inline(
@@ -671,10 +669,11 @@ def warpgroup_mma_wait_kernel():
     hopper.warpgroup_mma_wait(num_outstanding=1, deps=[acc])
 
 
-def test_warpgroup_mma_wait(fresh_knobs):
+@pytest.mark.parametrize("target", ["cuda:sm90"])  # Hopper WGMMA
+def test_warpgroup_mma_wait(target, fresh_knobs):
     knobs.compilation.disable_line_info = True
 
-    target = get_cuda_test_aot_target(90)  # Hopper WGMMA
+    target = structurize_target(target)
     h = aot_compile_gluon(warpgroup_mma_wait_kernel, target, grid=(1, ))
     expecttest.assert_expected_inline(
         anonymize_ir(h.asm["source"]), """\
@@ -708,7 +707,8 @@ def async_tma_kernel(input_desc, XBLOCK: ttgl.constexpr):
     tma.store_wait(0)
 
 
-def test_async_tma(fresh_knobs):
+@pytest.mark.parametrize("target", ["cuda:sm90", "cuda:sm100"])  # Hopper TMA
+def test_async_tma(target, fresh_knobs):
     knobs.compilation.disable_line_info = True
 
     input = torch.randn((1024, 1024), device="cuda", dtype=torch.float16)
@@ -716,7 +716,7 @@ def test_async_tma(fresh_knobs):
     shared_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2)
     input_desc = TensorDescriptor.from_tensor(input, [XBLOCK, XBLOCK], shared_layout)
 
-    target = get_cuda_test_aot_target(90)  # Hopper TMA
+    target = structurize_target(target)
     constexprs = build_constexpr_dict(XBLOCK=XBLOCK)
     signature = build_signature_dict(input_desc=input_desc)
     h = aot_compile_gluon(async_tma_kernel, target, constexprs, signature, num_warps=4, grid=(1, ))
@@ -770,7 +770,8 @@ def async_tma_blackwell_kernel(input_desc, XBLOCK: ttgl.constexpr):
     tma.store_wait(0)
 
 
-def test_async_tma_blackwell(fresh_knobs):
+@pytest.mark.parametrize("target", ["cuda:sm100"])  # Blackwell TMA
+def test_async_tma_blackwell(target, fresh_knobs):
     knobs.compilation.disable_line_info = True
 
     input = torch.randn((1024, 1024), device="cuda", dtype=torch.float16)
@@ -778,7 +779,7 @@ def test_async_tma_blackwell(fresh_knobs):
     shared_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2)
     input_desc = TensorDescriptor.from_tensor(input, [1, XBLOCK], shared_layout)
 
-    target = get_cuda_test_aot_target(100)  # Blackwell TMA
+    target = structurize_target(target)
     constexprs = build_constexpr_dict(XBLOCK=XBLOCK)
     signature = build_signature_dict(input_desc=input_desc)
     h = aot_compile_gluon(async_tma_blackwell_kernel, target, constexprs, signature, num_warps=4, grid=(1, ))
@@ -886,10 +887,11 @@ def broadcast_kernel():
     0 + a + b
 
 
-def test_broadcast(fresh_knobs):
+@pytest.mark.parametrize("target", ["cuda:sm80", "cuda:sm90", "cuda:sm100", "hip:gfx1200"])
+def test_broadcast(target, fresh_knobs):
     knobs.compilation.disable_line_info = True
 
-    target = get_common_test_aot_target()
+    target = structurize_target(target)
     h = aot_compile_gluon(broadcast_kernel, target, sanitize_overflow=False, grid=(1, ))
     expecttest.assert_expected_inline(
         anonymize_ir(h.asm["source"]), """\
@@ -941,10 +943,11 @@ def math_kernel():
     ttgl.fma(a, b, c)
 
 
-def test_math(fresh_knobs):
+@pytest.mark.parametrize("target", ["cuda:sm80", "cuda:sm90", "cuda:sm100", "hip:gfx1200"])
+def test_math(target, fresh_knobs):
     knobs.compilation.disable_line_info = True
 
-    target = get_common_test_aot_target()
+    target = structurize_target(target)
     h = aot_compile_gluon(math_kernel, target, sanitize_overflow=False, grid=(1, ))
     expecttest.assert_expected_inline(
         anonymize_ir(h.asm["source"]), """\
@@ -1012,10 +1015,11 @@ def reduce_kernel(out):
     tl.store(out + ttgl.arange(0, 16, s0.type.layout), result)
 
 
-def test_reduce(fresh_knobs):
+@pytest.mark.parametrize("target", ["cuda:sm80", "cuda:sm90", "cuda:sm100", "hip:gfx1200"])
+def test_reduce(target, fresh_knobs):
     knobs.compilation.disable_line_info = True
 
-    target = get_common_test_aot_target()
+    target = structurize_target(target)
     signature = build_signature_dict(out=MockTensor(ttgl.float32))
     attrs = get_divisibility_16_attr_for_args([0])
     h = aot_compile_gluon(reduce_kernel, target, {}, signature, attrs, sanitize_overflow=False, grid=(1, ))
@@ -1091,9 +1095,10 @@ def linear_layout_kernel():
     ttgl.arange(0, 256, layout=ll)
 
 
-def test_linear_layout(fresh_knobs):
+@pytest.mark.parametrize("target", ["cuda:sm80", "cuda:sm90", "cuda:sm100", "hip:gfx1200"])
+def test_linear_layout(target, fresh_knobs):
     knobs.compilation.disable_line_info = True
-    target = get_common_test_aot_target()
+    target = structurize_target(target)
     h = aot_compile_gluon(linear_layout_kernel, target, grid=(1, ))
     expecttest.assert_expected_inline(
         anonymize_ir(h.asm["source"]), """\
@@ -1245,10 +1250,11 @@ def async_copy_kernel(inp, xnumel, XBLOCK: ttgl.constexpr):
     async_copy.wait_group(0)
 
 
-def test_async_copy(fresh_knobs):
+@pytest.mark.parametrize("target", ["cuda:sm80", "cuda:sm90", "cuda:sm100"])  # Ampere+
+def test_async_copy(target, fresh_knobs):
     knobs.compilation.disable_line_info = True
 
-    target = get_cuda_test_aot_target(80)  # Ampere
+    target = structurize_target(target)
     constexprs = build_constexpr_dict(XBLOCK=128)
     signature = build_signature_dict(inp=MockTensor(ttgl.float16), xnumel=100)
     attrs = get_divisibility_16_attr_for_args([0])
@@ -1282,7 +1288,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 """)
 
 
-def test_split_join_subtile(fresh_knobs):
+@pytest.mark.parametrize("target", ["cuda:sm80", "cuda:sm90", "cuda:sm100", "hip:gfx1200"])
+def test_split_join_subtile(target, fresh_knobs):
 
     @gluon.jit
     def kernel():
@@ -1294,7 +1301,7 @@ def test_split_join_subtile(fresh_knobs):
         _ = x + y
 
     knobs.compilation.disable_line_info = True
-    target = get_common_test_aot_target()
+    target = structurize_target(target)
     h = aot_compile_gluon(kernel, target, sanitize_overflow=False)
     expecttest.assert_expected_inline(
         anonymize_ir(h.asm["source"]), """\
