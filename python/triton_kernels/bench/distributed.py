@@ -9,6 +9,7 @@ from typing import Tuple
 
 import triton_kernels
 import triton_kernels.routing
+import triton_kernels.swiglu
 from triton_kernels.routing import RoutingData, GatherIndx, ScatterIndx, compute_expt_data
 from triton_kernels.topk import topk
 from triton_kernels.matmul_ogs import matmul_ogs, PrecisionConfig, FlexCtx, FnSpecs, FusedActivation
