@@ -5,6 +5,7 @@ import pytest
 import re
 
 from triton import knobs
+from triton.backends.compiler import GPUTarget
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
 from triton.experimental.gluon.language.nvidia import blackwell
@@ -13,8 +14,10 @@ from triton.experimental.gluon.language.nvidia.blackwell import mbarrier, tma, T
 from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
 from triton._filecheck import filecheck_test, run_parser
 import triton.language as tl
-from triton._internal_testing import is_cuda, is_ampere_or_newer, is_blackwell, is_hopper, is_hopper_or_newer
+from triton._internal_testing import is_cuda, is_ampere_or_newer, is_blackwell, is_hopper, is_hopper_or_newer, is_hip_gfx12
 from triton.compiler.errors import CompilationError, CompileTimeAssertionFailure
+
+from test_utils import from_ast_to_module
 
 TARGET_PAT = re.compile('ttg.target = "[^"]*"')
 
@@ -37,6 +40,7 @@ def test_convert_layout(fresh_knobs):
     layout_b = ttgl.SliceLayout(
         1, ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[1, 32], warps_per_cta=[1, 4], order=[1, 0]))
     h = convert_layout_kernel.warmup(128, layout_a, layout_b, num_warps=layout_a.warps_per_cta[0], grid=(1, ))
+    # module = from_ast_to_module(convert_layout_kernel, 'cuda', 4, 1, layout_a, layout_b)
     expecttest.assert_expected_inline(
         anonymize_ir(h.asm["source"]), """\
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
@@ -116,13 +120,17 @@ def shared_memory_kernel(XBLOCK: ttgl.constexpr, YBLOCK: ttgl.constexpr, layout_
 def test_shared_memory(fresh_knobs):
     knobs.compilation.disable_line_info = True
 
+    stub_target = GPUTarget("hip", 'gfx1200', 32) if is_hip_gfx12() else GPUTarget('cuda', 100, 32)
     layout_a = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[1, 32], warps_per_cta=[4, 1], order=[1, 0])
     layout_b = ttgl.BlockedLayout(size_per_thread=[1, 4], threads_per_warp=[1, 32], warps_per_cta=[4, 1], order=[1, 0])
     smem_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=32, rank=2)
-    h = shared_memory_kernel.warmup(8, 32, layout_a, layout_b, smem_layout, num_warps=layout_a.warps_per_cta[0],
-                                    grid=(1, ))
+
+    module = from_ast_to_module(shared_memory_kernel, stub_target, 8, 32, layout_a, layout_b, smem_layout,
+                                num_warps=layout_a.warps_per_cta[0], grid=(1, ))
+    # the following commented line is to usage difference
+    # h = shared_memory_kernel.warmup(8, 32, layout_a, layout_b, smem_layout, num_warps=layout_a.warps_per_cta[0], grid=(1, ))
     expecttest.assert_expected_inline(
-        anonymize_ir(h.asm["source"]), """\
+        anonymize_ir(module.str()), """\
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
@@ -141,6 +149,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 } loc(#loc)
 #loc = loc(unknown)
 """)
+
+    # h = shared_memory_kernel.warmup(8, 32, layout_a, layout_b, smem_layout, num_warps=layout_a.warps_per_cta[0], grid=(1, ))
 
 
 @gluon.jit
@@ -952,6 +962,104 @@ def reduce_kernel(out):
 def test_reduce(fresh_knobs):
     knobs.compilation.disable_line_info = True
 
+    stub_target = GPUTarget("hip", 'gfx1200', 32) if is_hip_gfx12() else GPUTarget('cuda', 100, 32)
+    module = from_ast_to_module(reduce_kernel, stub_target, MockTensor(ttgl.float32), sanitize_overflow=False,
+                                grid=(1, ))
+    expecttest.assert_expected_inline(
+        module.str(), """\
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+#loc = loc(unknown)
+#loc1 = loc("out")
+#loc2 = loc("input")
+#loc3 = loc("a")
+#loc4 = loc("b")
+#loc5 = loc("a0")
+#loc6 = loc("a1")
+#loc7 = loc("b0")
+#loc8 = loc("b1")
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @reduce_kernel(%out: !tt.ptr<f32> loc("out")) attributes {noinline = false} {
+    %cst = arith.constant 1.000000e+00 : f32 loc(#loc)
+    %cst_0 = arith.constant dense<1.000000e+00> : tensor<16x16xf32, #blocked> loc(#loc)
+    %cst_1 = arith.constant 2.000000e+00 : f32 loc(#loc)
+    %cst_2 = arith.constant dense<2.000000e+00> : tensor<16x16xf32, #blocked> loc(#loc)
+    %0 = tt.call @"triton.language.standard.sum__fp32S16_16SLB1_1B1_32B4_1B1_0B1_1B1_1B1_0BL__(1,)cconstexpr_0__(2,)cconstexpr_False__(3,)cNone"(%cst_0) : (tensor<16x16xf32, #blocked>) -> tensor<16xf32, #ttg.slice<{dim = 0, parent = #blocked}>> loc(#loc)
+    %1 = tt.call @"triton.language.standard.sum__fp32S16_16SLB1_1B1_32B4_1B1_0B1_1B1_1B1_0BL__(1,)cconstexpr_1__(2,)cconstexpr_False__(3,)cNone"(%cst_0) : (tensor<16x16xf32, #blocked>) -> tensor<16xf32, #ttg.slice<{dim = 1, parent = #blocked}>> loc(#loc)
+    %2 = tt.call @"triton.language.standard.max__fp32S16SLSL0_B1_1B1_32B4_1B1_0B1_1B1_1B1_0BSLL__(1,)cconstexpr_0__(2,)cconstexpr_False__(3,)cconstexpr_True__(4,)cconstexpr_False_"(%0) : (tensor<16xf32, #ttg.slice<{dim = 0, parent = #blocked}>>) -> f32 loc(#loc)
+    %3 = ttg.convert_layout %1 : tensor<16xf32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<16xf32, #ttg.slice<{dim = 0, parent = #blocked}>> loc(#loc)
+    %4:2 = "tt.reduce"(%cst_0, %cst_2) <{axis = 0 : i32}> ({
+    ^bb0(%arg1: f32 loc(unknown), %arg2: f32 loc(unknown), %arg3: f32 loc(unknown), %arg4: f32 loc(unknown)):
+      %12:2 = tt.call @test_frontend.pair_add__fp32_fp32_fp32_fp32__(%arg1, %arg2, %arg3, %arg4) : (f32, f32, f32, f32) -> (f32, f32) loc(#loc)
+      tt.reduce.return %12#0, %12#1 : f32, f32 loc(#loc)
+    }) : (tensor<16x16xf32, #blocked>, tensor<16x16xf32, #blocked>) -> (tensor<16xf32, #ttg.slice<{dim = 0, parent = #blocked}>>, tensor<16xf32, #ttg.slice<{dim = 0, parent = #blocked}>>) loc(#loc)
+    %5 = tt.splat %2 : f32 -> tensor<16xf32, #ttg.slice<{dim = 0, parent = #blocked}>> loc(#loc)
+    %6 = arith.addf %5, %3 : tensor<16xf32, #ttg.slice<{dim = 0, parent = #blocked}>> loc(#loc)
+    %7 = arith.addf %6, %4#0 : tensor<16xf32, #ttg.slice<{dim = 0, parent = #blocked}>> loc(#loc)
+    %8 = arith.addf %7, %4#1 : tensor<16xf32, #ttg.slice<{dim = 0, parent = #blocked}>> loc(#loc)
+    %9 = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32, #ttg.slice<{dim = 0, parent = #blocked}>> loc(#loc)
+    %10 = tt.splat %out : !tt.ptr<f32> -> tensor<16x!tt.ptr<f32>, #ttg.slice<{dim = 0, parent = #blocked}>> loc(#loc)
+    %11 = tt.addptr %10, %9 : tensor<16x!tt.ptr<f32>, #ttg.slice<{dim = 0, parent = #blocked}>>, tensor<16xi32, #ttg.slice<{dim = 0, parent = #blocked}>> loc(#loc)
+    tt.store %11, %8 : tensor<16x!tt.ptr<f32>, #ttg.slice<{dim = 0, parent = #blocked}>> loc(#loc)
+    tt.return loc(#loc)
+  } loc(#loc)
+  tt.func private @"triton.language.standard.sum__fp32S16_16SLB1_1B1_32B4_1B1_0B1_1B1_1B1_0BL__(1,)cconstexpr_0__(2,)cconstexpr_False__(3,)cNone"(%input: tensor<16x16xf32, #blocked> loc("input")) -> tensor<16xf32, #ttg.slice<{dim = 0, parent = #blocked}>> attributes {noinline = false} {
+    %0 = "tt.reduce"(%input) <{axis = 0 : i32}> ({
+    ^bb0(%arg1: f32 loc(unknown), %arg2: f32 loc(unknown)):
+      %2 = tt.call @triton.language.standard._sum_combine__fp32_fp32__(%arg1, %arg2) : (f32, f32) -> f32 loc(#loc)
+      tt.reduce.return %2 : f32 loc(#loc)
+    }) : (tensor<16x16xf32, #blocked>) -> tensor<16xf32, #ttg.slice<{dim = 0, parent = #blocked}>> loc(#loc)
+    tt.return %0 : tensor<16xf32, #ttg.slice<{dim = 0, parent = #blocked}>> loc(#loc)
+  ^bb1:  // no predecessors
+    %1 = ub.poison : tensor<16xf32, #ttg.slice<{dim = 0, parent = #blocked}>> loc(#loc)
+    tt.return %1 : tensor<16xf32, #ttg.slice<{dim = 0, parent = #blocked}>> loc(#loc)
+  } loc(#loc)
+  tt.func private @triton.language.standard._sum_combine__fp32_fp32__(%a: f32 loc("a"), %b: f32 loc("b")) -> f32 attributes {noinline = false} {
+    %0 = arith.addf %a, %b : f32 loc(#loc)
+    tt.return %0 : f32 loc(#loc)
+  ^bb1:  // no predecessors
+    %1 = ub.poison : f32 loc(#loc)
+    tt.return %1 : f32 loc(#loc)
+  } loc(#loc)
+  tt.func private @"triton.language.standard.sum__fp32S16_16SLB1_1B1_32B4_1B1_0B1_1B1_1B1_0BL__(1,)cconstexpr_1__(2,)cconstexpr_False__(3,)cNone"(%input: tensor<16x16xf32, #blocked> loc("input")) -> tensor<16xf32, #ttg.slice<{dim = 1, parent = #blocked}>> attributes {noinline = false} {
+    %0 = "tt.reduce"(%input) <{axis = 1 : i32}> ({
+    ^bb0(%arg1: f32 loc(unknown), %arg2: f32 loc(unknown)):
+      %2 = tt.call @triton.language.standard._sum_combine__fp32_fp32__(%arg1, %arg2) : (f32, f32) -> f32 loc(#loc)
+      tt.reduce.return %2 : f32 loc(#loc)
+    }) : (tensor<16x16xf32, #blocked>) -> tensor<16xf32, #ttg.slice<{dim = 1, parent = #blocked}>> loc(#loc)
+    tt.return %0 : tensor<16xf32, #ttg.slice<{dim = 1, parent = #blocked}>> loc(#loc)
+  ^bb1:  // no predecessors
+    %1 = ub.poison : tensor<16xf32, #ttg.slice<{dim = 1, parent = #blocked}>> loc(#loc)
+    tt.return %1 : tensor<16xf32, #ttg.slice<{dim = 1, parent = #blocked}>> loc(#loc)
+  } loc(#loc)
+  tt.func private @"triton.language.standard.max__fp32S16SLSL0_B1_1B1_32B4_1B1_0B1_1B1_1B1_0BSLL__(1,)cconstexpr_0__(2,)cconstexpr_False__(3,)cconstexpr_True__(4,)cconstexpr_False_"(%input: tensor<16xf32, #ttg.slice<{dim = 0, parent = #blocked}>> loc("input")) -> f32 attributes {noinline = false} {
+    %0 = "tt.reduce"(%input) <{axis = 0 : i32}> ({
+    ^bb0(%arg1: f32 loc(unknown), %arg2: f32 loc(unknown)):
+      %2 = tt.call @triton.language.standard._elementwise_max__fp32_fp32__(%arg1, %arg2) : (f32, f32) -> f32 loc(#loc)
+      tt.reduce.return %2 : f32 loc(#loc)
+    }) : (tensor<16xf32, #ttg.slice<{dim = 0, parent = #blocked}>>) -> f32 loc(#loc)
+    tt.return %0 : f32 loc(#loc)
+  ^bb1:  // no predecessors
+    %1 = ub.poison : f32 loc(#loc)
+    tt.return %1 : f32 loc(#loc)
+  } loc(#loc)
+  tt.func private @triton.language.standard._elementwise_max__fp32_fp32__(%a: f32 loc("a"), %b: f32 loc("b")) -> f32 attributes {noinline = false} {
+    %0 = arith.maxnumf %a, %b : f32 loc(#loc)
+    tt.return %0 : f32 loc(#loc)
+  ^bb1:  // no predecessors
+    %1 = ub.poison : f32 loc(#loc)
+    tt.return %1 : f32 loc(#loc)
+  } loc(#loc)
+  tt.func private @test_frontend.pair_add__fp32_fp32_fp32_fp32__(%a0: f32 loc("a0"), %a1: f32 loc("a1"), %b0: f32 loc("b0"), %b1: f32 loc("b1")) -> (f32, f32) attributes {noinline = false} {
+    %0 = arith.addf %a0, %b0 : f32 loc(#loc)
+    %1 = arith.addf %a1, %b1 : f32 loc(#loc)
+    tt.return %0, %1 : f32, f32 loc(#loc)
+  ^bb1:  // no predecessors
+    %2 = ub.poison : f32 loc(#loc)
+    %3 = ub.poison : f32 loc(#loc)
+    tt.return %2, %3 : f32, f32 loc(#loc)
+  } loc(#loc)
+} loc(#loc)
+""")
     h = reduce_kernel.warmup(MockTensor(ttgl.float32), sanitize_overflow=False, grid=(1, ))
     expecttest.assert_expected_inline(
         anonymize_ir(h.asm["ttgir"]), """\
@@ -1214,6 +1322,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 """)
 
 
+@pytest.mark.skipif(not is_cuda() and not is_hip_gfx12(), reason="Requires CUDA or HIP")
 def test_split_join_subtile(fresh_knobs):
 
     @gluon.jit
