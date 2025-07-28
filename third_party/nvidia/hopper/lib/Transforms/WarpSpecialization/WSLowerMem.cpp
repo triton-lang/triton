@@ -268,7 +268,7 @@ void insertAsyncCopy(
         &channelsGroupedByProducers,
     const DenseMap<Channel *, Value> &bufferMap,
     DenseMap<Channel *, std::pair<Operation *, Operation *>> &copyOpMap,
-    DenseSet<Operation *> &regionsWithChannels) {
+    DenseSet<Operation *> &regionsWithChannels, ReuseConfig *config) {
   // For each producer op, create a async_copy or local_store from the producer
   // to the buffer. Create a local_load from the buffer at the dominating
   // consumer.
@@ -333,7 +333,7 @@ void insertAsyncCopy(
         srcOp->dump();
       });
       getBufferIdxAndPhase(builder, srcOp, kv.getFirst()->numBuffers,
-                           regionsWithChannels, bufferIdx, phase);
+                           regionsWithChannels, bufferIdx, phase, config);
     } else {
       // Producer is not in a ForOp, create phase and bufferIdx here which will
       // be used by both producer and consumers.
