@@ -151,12 +151,10 @@ static Value createBufferView(OpBuilderWithAsyncTaskIds &builder, Value alloc,
          "Expected MemDescType");
   auto allocDescType = cast<triton::gpu::MemDescType>(alloc.getType());
   SmallVector<int64_t> shape;
-  if (allocDescType.getShape().size() > 1) {
-    shape.insert(shape.end(), allocDescType.getShape().begin() + 1,
-                 allocDescType.getShape().end());
-  } else {
-    shape.push_back(1);
-  }
+  assert(allocDescType.getShape().size() > 1 &&
+         "Expected multi-dimensional memdesc (e.g., Nx...) for subview");
+  shape.insert(shape.end(), allocDescType.getShape().begin() + 1,
+               allocDescType.getShape().end());
   auto viewDescType = triton::gpu::MemDescType::get(
       shape, allocDescType.getElementType(), allocDescType.getEncoding(),
       allocDescType.getMemorySpace(), allocDescType.getMutableMemory(),
