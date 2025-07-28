@@ -1,6 +1,7 @@
 #include "AsyncUtility.h"
 
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
+#include "TargetInfo.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
 namespace mlir::triton::AMD {
@@ -126,6 +127,16 @@ void addLocalLoadNoAliasScope(LLVM::AliasAnalysisOpInterface llLoadOp) {
   // Add to different scope as ops without any scope alias with everything
   auto aliasScopes = ArrayAttr::get(ctx, getLoadCopyScope(ctx));
   llLoadOp.setAliasScopes(aliasScopes);
+}
+
+unsigned
+fitToValidDirectToLdsVecSize(unsigned maxVecSize, unsigned elemBitwidth,
+                             const triton::AMD::TargetInfo &targetInfo) {
+  while (maxVecSize > 0 && !targetInfo.supportsDirectToLdsLoadBitWidth(
+                               maxVecSize * elemBitwidth)) {
+    maxVecSize /= 2;
+  }
+  return maxVecSize;
 }
 
 } // namespace mlir::triton::AMD
