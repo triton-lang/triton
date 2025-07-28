@@ -93,6 +93,7 @@ dev-install-torch:
 
 .PHONY: dev-install-triton
 dev-install-triton:
+	$(PYTHON) -m pip install --upgrade pip
 	$(PYTHON) -m pip install -e . --no-build-isolation -v
 
 .PHONY: dev-install
