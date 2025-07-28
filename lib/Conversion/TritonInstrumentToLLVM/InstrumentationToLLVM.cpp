@@ -41,20 +41,17 @@ Value createCmpIntTensorScalar(
 Value createMemDescToI64(RewriterBase &rewriter, Location loc,
                          const LLVMTypeConverter *typeConverter,
                          ttg::MemDescType memDescTy, Value sharedMemStruct) {
+  TritonLLVMOpBuilder b(loc, rewriter);
   if (isa<ttng::TensorMemoryEncodingAttr>(memDescTy.getEncoding())) {
-    TritonLLVMOpBuilder b(loc, rewriter);
     return b.ptrtoint(rewriter.getIntegerType(64), sharedMemStruct);
   }
   assert(isa<ttg::SharedEncodingTrait>(memDescTy.getEncoding()) &&
          "Unsupported memory encoding");
   Type srcElemTy = typeConverter->convertType(memDescTy.getElementType());
-  int elemSize = srcElemTy.getIntOrFloatBitWidth() / 8;
   auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, sharedMemStruct,
                                                        srcElemTy, rewriter);
-  auto offsets = smemObj.getOffsets();
-  auto strides = smemObj.getStrides(memDescTy, loc, rewriter);
-  Value offset = dot(rewriter, loc, offsets, strides);
-  TritonLLVMOpBuilder b(loc, rewriter);
+  auto offset = smemObj.getShmemOffset(loc, rewriter, memDescTy);
+  auto elemSize = srcElemTy.getIntOrFloatBitWidth() / 8;
   offset = b.mul(offset, b.i32_val(elemSize));
   auto i64Ty = rewriter.getIntegerType(64);
   offset = b.zext(i64Ty, offset);
