@@ -37,7 +37,6 @@
 #include "nvidia/include/Dialect/NVWS/IR/Dialect.h"
 #include "nvidia/include/Dialect/NVWS/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonGPU/Transforms/PartitionBuilder.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
@@ -61,16 +60,6 @@ namespace triton {
 namespace {
 
 // ----------------------------------------------------------------------------
-
-void assignStageCluster(Operation *op, StageCluster stageCluster,
-                        OpBuilder &builder) {
-  if (stageCluster) {
-    op->setAttr(triton::kLoopStageAttrName,
-                builder.getI32IntegerAttr(stageCluster->first));
-    op->setAttr(triton::kLoopClusterAttrName,
-                builder.getI32IntegerAttr(stageCluster->second));
-  }
-}
 
 struct ArefValue {
   Value emptyMbars;
@@ -277,9 +266,7 @@ LogicalResult rewritePutEnterOp(ArefCreateOp arefOp, ArefPutEnterOp op,
   // get empty barrier at a given stage
   Value emptyBarrier = getEmptyBarrier(rewriter, loc, arefVal, op.getStage());
 
-  auto waitOp =
-      rewriter.create<WaitBarrierOp>(loc, emptyBarrier, op.getPhase());
-  assignStageCluster(waitOp, getStageCluster(op), rewriter);
+  rewriter.create<WaitBarrierOp>(loc, emptyBarrier, op.getPhase());
   auto views = getSubViews(arefVal, op.getStage(), loc, rewriter);
   assert(views.size() == op.getResults().size());
 
@@ -300,8 +287,7 @@ LogicalResult rewriteGetEnterOp(ArefCreateOp arefOp, ArefGetEnterOp op,
   rewriter.setInsertionPointAfter(op);
 
   Value fullBarrier = getFullBarrier(rewriter, loc, arefVal, op.getStage());
-  auto waitOp = rewriter.create<WaitBarrierOp>(loc, fullBarrier, op.getPhase());
-  assignStageCluster(waitOp, getStageCluster(op), rewriter);
+  rewriter.create<WaitBarrierOp>(loc, fullBarrier, op.getPhase());
   auto views = getSubViews(arefVal, op.getStage(), loc, rewriter);
   assert(views.size() == op.getResults().size());
 
@@ -312,19 +298,17 @@ LogicalResult rewriteGetEnterOp(ArefCreateOp arefOp, ArefGetEnterOp op,
 }
 
 LogicalResult insertArriveBarrier(Location loc, ArrayAttr asyncOps,
-                                  PatternRewriter &rewriter, Value mbar,
-                                  StageCluster stageCluster) {
+                                  PatternRewriter &rewriter, Value mbar) {
   for (auto asyncOp : asyncOps) {
     auto asyncOpEnum = cast<AsyncOpAttr>(asyncOp).getValue();
-    Operation *arriveOp = {};
     switch (asyncOpEnum) {
     case AsyncOp::NONE:
     case AsyncOp::WGMMA:
-      arriveOp = rewriter.create<nvidia_gpu::ArriveBarrierOp>(loc, mbar, 1);
+      rewriter.create<nvidia_gpu::ArriveBarrierOp>(loc, mbar, 1);
       break;
     case AsyncOp::TC5MMA:
     case AsyncOp::TMEMCopy:
-      arriveOp = rewriter.create<nvidia_gpu::TCGen5CommitOp>(loc, mbar);
+      rewriter.create<nvidia_gpu::TCGen5CommitOp>(loc, mbar);
       break;
 
     case AsyncOp::TMALoad:
@@ -334,8 +318,6 @@ LogicalResult insertArriveBarrier(Location loc, ArrayAttr asyncOps,
     default:
       llvm_unreachable("unknown async op");
     }
-    if (arriveOp)
-      assignStageCluster(arriveOp, stageCluster, rewriter);
   }
 
   return success();
@@ -346,8 +328,7 @@ LogicalResult rewritePutExitOp(ArefPutExitOp op, PatternRewriter &rewriter,
   auto loc = op->getLoc();
   rewriter.setInsertionPointAfter(op);
   Value fullBarrier = getFullBarrier(rewriter, loc, arefVal, op.getStage());
-  return insertArriveBarrier(loc, op.getAsyncOps(), rewriter, fullBarrier,
-                             getStageCluster(op));
+  return insertArriveBarrier(loc, op.getAsyncOps(), rewriter, fullBarrier);
 }
 
 LogicalResult rewriteGetExitOp(ArefGetExitOp op, PatternRewriter &rewriter,
@@ -355,8 +336,7 @@ LogicalResult rewriteGetExitOp(ArefGetExitOp op, PatternRewriter &rewriter,
   auto loc = op->getLoc();
   rewriter.setInsertionPointAfter(op);
   Value emptyBarrier = getEmptyBarrier(rewriter, loc, arefVal, op.getStage());
-  return insertArriveBarrier(loc, op.getAsyncOps(), rewriter, emptyBarrier,
-                             getStageCluster(op));
+  return insertArriveBarrier(loc, op.getAsyncOps(), rewriter, emptyBarrier);
 }
 
 LogicalResult rewriteArefDestroyOp(ArefDestroyOp op, PatternRewriter &rewriter,
