@@ -19,7 +19,7 @@ namespace {
 class CallOpConversion : public OpRewritePattern<LLVM::CallOp> {
 public:
   CallOpConversion(mlir::MLIRContext *context, bool ftz)
-      : OpRewritePattern<LLVM::CallOp>(context, 1), ftz(ftz) {}
+      : OpRewritePattern(context, 1), ftz(ftz) {}
 
   LogicalResult
   matchAndRewrite(LLVM::CallOp callOp,

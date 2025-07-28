@@ -171,7 +171,7 @@ LogicalResult emitFence(Operation *op, ConversionPatternRewriter &rewriter,
 // Return a predicate that is true only if the current thread holds unique data,
 // according to freeVarsMask.
 Value emitRedundantThreadPredicate(
-    ModuleOp moduleOp, const llvm::MapVector<StringAttr, int32_t> &freeVarMasks,
+    const llvm::MapVector<StringAttr, int32_t> &freeVarMasks,
     ConversionPatternRewriter &rewriter, Location loc,
     const AMD::TargetInfo &targetInfo) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -465,13 +465,11 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
 
 struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
                           public LoadStoreConversionBase {
-  using ConvertOpToLLVMPattern<triton::LoadOp>::ConvertOpToLLVMPattern;
-
   LoadOpConversion(LLVMTypeConverter &converter,
                    const AMD::TargetInfo &targetInfo,
                    ModuleAxisInfoAnalysis &axisAnalysisPass,
                    PatternBenefit benefit)
-      : ConvertOpToLLVMPattern<triton::LoadOp>(converter, benefit),
+      : ConvertOpToLLVMPattern(converter, benefit),
         LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
 
   LogicalResult
@@ -562,15 +560,11 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
 struct BufferLoadOpConversion
     : public ConvertOpToLLVMPattern<triton::amdgpu::BufferLoadOp>,
       public LoadStoreConversionBase {
-  using ConvertOpToLLVMPattern<
-      triton::amdgpu::BufferLoadOp>::ConvertOpToLLVMPattern;
-
   BufferLoadOpConversion(LLVMTypeConverter &converter,
                          const AMD::TargetInfo &targetInfo,
                          ModuleAxisInfoAnalysis &axisAnalysisPass,
                          PatternBenefit benefit)
-      : ConvertOpToLLVMPattern<triton::amdgpu::BufferLoadOp>(converter,
-                                                             benefit),
+      : ConvertOpToLLVMPattern(converter, benefit),
         LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
 
   LogicalResult
@@ -952,13 +946,11 @@ struct AsyncCopyGlobalToLocalOpConversion
 
 struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
                            public LoadStoreConversionBase {
-  using ConvertOpToLLVMPattern<triton::StoreOp>::ConvertOpToLLVMPattern;
-
   StoreOpConversion(LLVMTypeConverter &converter,
                     const AMD::TargetInfo &targetInfo,
                     ModuleAxisInfoAnalysis &axisAnalysisPass,
                     PatternBenefit benefit)
-      : ConvertOpToLLVMPattern<triton::StoreOp>(converter, benefit),
+      : ConvertOpToLLVMPattern(converter, benefit),
         LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
 
   LogicalResult
@@ -999,8 +991,8 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
     auto cacheMod = op.getCache();
     const int numVecs = elemsPerThread / vec;
     auto freeVarMasks = getFreeVariableMasks(valueTy);
-    Value threadPred = emitRedundantThreadPredicate(moduleOp, freeVarMasks,
-                                                    rewriter, loc, targetInfo);
+    Value threadPred =
+        emitRedundantThreadPredicate(freeVarMasks, rewriter, loc, targetInfo);
     uint32_t regMask = freeVarMasks[str_attr("reg")];
     for (size_t vecStart = 0; vecStart < elemsPerThread; vecStart += vec) {
       if (!isCanonicalIndex(vecStart, regMask)) {
@@ -1038,15 +1030,11 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
 struct BufferAtomicRMWOpConversion
     : public ConvertOpToLLVMPattern<triton::amdgpu::BufferAtomicRMWOp>,
       public LoadStoreConversionBase {
-  using ConvertOpToLLVMPattern<
-      triton::amdgpu::BufferAtomicRMWOp>::ConvertOpToLLVMPattern;
-
   BufferAtomicRMWOpConversion(LLVMTypeConverter &converter,
                               const AMD::TargetInfo &targetInfo,
                               ModuleAxisInfoAnalysis &axisAnalysisPass,
                               PatternBenefit benefit)
-      : ConvertOpToLLVMPattern<triton::amdgpu::BufferAtomicRMWOp>(converter,
-                                                                  benefit),
+      : ConvertOpToLLVMPattern(converter, benefit),
         LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
 
   LogicalResult
@@ -1127,8 +1115,8 @@ struct BufferAtomicRMWOpConversion
     auto moduleOp = op->getParentOfType<ModuleOp>();
 
     auto freeVarMasks = getFreeVariableMasks(valueTy);
-    Value threadPred = emitRedundantThreadPredicate(moduleOp, freeVarMasks,
-                                                    rewriter, loc, targetInfo);
+    Value threadPred =
+        emitRedundantThreadPredicate(freeVarMasks, rewriter, loc, targetInfo);
     uint32_t regMask = freeVarMasks[str_attr("reg")];
     for (size_t vecStart = 0; vecStart < numElems; vecStart += vec) {
       if (!isCanonicalIndex(vecStart, regMask)) {
@@ -1166,11 +1154,9 @@ struct BufferAtomicRMWOpConversion
       return failure();
     }
 
-    Type llvmResultStructTy = getTypeConverter()->convertType(valueTy);
-    Value resultStruct = packLLElements(loc, getTypeConverter(), loadedVals,
-                                        rewriter, llvmResultStructTy);
-
-    rewriter.replaceOp(op, {resultStruct});
+    finalizeTensorAtomicResults(op, dyn_cast<RankedTensorType>(valueTy),
+                                rewriter, loadedVals, valueElemTy, b,
+                                threadPred, targetInfo, getTypeConverter());
     return success();
   }
 };
@@ -1178,15 +1164,11 @@ struct BufferAtomicRMWOpConversion
 struct BufferAtomicCASOpConversion
     : public ConvertOpToLLVMPattern<triton::amdgpu::BufferAtomicCASOp>,
       public LoadStoreConversionBase {
-  using ConvertOpToLLVMPattern<
-      triton::amdgpu::BufferAtomicCASOp>::ConvertOpToLLVMPattern;
-
   BufferAtomicCASOpConversion(LLVMTypeConverter &converter,
                               const AMD::TargetInfo &targetInfo,
                               ModuleAxisInfoAnalysis &axisAnalysisPass,
                               PatternBenefit benefit)
-      : ConvertOpToLLVMPattern<triton::amdgpu::BufferAtomicCASOp>(converter,
-                                                                  benefit),
+      : ConvertOpToLLVMPattern(converter, benefit),
         LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
 
   LogicalResult
@@ -1247,8 +1229,8 @@ struct BufferAtomicCASOpConversion
     auto hasUsers = !op.getResult().getUsers().empty();
     auto moduleOp = op->getParentOfType<ModuleOp>();
     auto freeVarMasks = getFreeVariableMasks(valueTy);
-    Value threadPred = emitRedundantThreadPredicate(moduleOp, freeVarMasks,
-                                                    rewriter, loc, targetInfo);
+    Value threadPred =
+        emitRedundantThreadPredicate(freeVarMasks, rewriter, loc, targetInfo);
 
     for (size_t vecStart = 0; vecStart < numElems; vecStart += vec) {
       Type vecTy = LLVM::getVectorType(valueElemTy, vec);
@@ -1282,11 +1264,9 @@ struct BufferAtomicCASOpConversion
       return failure();
     }
 
-    Type llvmResultStructTy = getTypeConverter()->convertType(valueTy);
-    Value resultStruct = packLLElements(loc, getTypeConverter(), loadedVals,
-                                        rewriter, llvmResultStructTy);
-
-    rewriter.replaceOp(op, {resultStruct});
+    finalizeTensorAtomicResults(op, dyn_cast<RankedTensorType>(valueTy),
+                                rewriter, loadedVals, valueElemTy, b,
+                                threadPred, targetInfo, getTypeConverter());
     return success();
   }
 };
@@ -1294,15 +1274,11 @@ struct BufferAtomicCASOpConversion
 struct BufferStoreOpConversion
     : public ConvertOpToLLVMPattern<triton::amdgpu::BufferStoreOp>,
       public LoadStoreConversionBase {
-  using ConvertOpToLLVMPattern<
-      triton::amdgpu::BufferStoreOp>::ConvertOpToLLVMPattern;
-
   BufferStoreOpConversion(LLVMTypeConverter &converter,
                           const AMD::TargetInfo &targetInfo,
                           ModuleAxisInfoAnalysis &axisAnalysisPass,
                           PatternBenefit benefit)
-      : ConvertOpToLLVMPattern<triton::amdgpu::BufferStoreOp>(converter,
-                                                              benefit),
+      : ConvertOpToLLVMPattern(converter, benefit),
         LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
 
   LogicalResult
@@ -1346,8 +1322,8 @@ struct BufferStoreOpConversion
     MLIRContext *ctx = rewriter.getContext();
     auto moduleOp = op->getParentOfType<ModuleOp>();
     auto freeVarMasks = getFreeVariableMasks(valueTy);
-    Value threadPred = emitRedundantThreadPredicate(moduleOp, freeVarMasks,
-                                                    rewriter, loc, targetInfo);
+    Value threadPred =
+        emitRedundantThreadPredicate(freeVarMasks, rewriter, loc, targetInfo);
     uint32_t regMask = freeVarMasks[str_attr("reg")];
     for (size_t vecStart = 0; vecStart < numElems; vecStart += vec) {
       if (!isCanonicalIndex(vecStart, regMask)) {
@@ -1375,13 +1351,11 @@ struct BufferStoreOpConversion
 struct AtomicCASOpConversion
     : public ConvertOpToLLVMPattern<triton::AtomicCASOp>,
       public LoadStoreConversionBase {
-  using ConvertOpToLLVMPattern<triton::AtomicCASOp>::ConvertOpToLLVMPattern;
-
   AtomicCASOpConversion(LLVMTypeConverter &converter,
                         const AMD::TargetInfo &targetInfo,
                         ModuleAxisInfoAnalysis &axisAnalysisPass,
                         PatternBenefit benefit)
-      : ConvertOpToLLVMPattern<triton::AtomicCASOp>(converter, benefit),
+      : ConvertOpToLLVMPattern(converter, benefit),
         LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
 
   LogicalResult
@@ -1413,16 +1387,16 @@ struct AtomicCASOpConversion
 
     // deal with tensor or scalar
     auto valueTy = op.getResult().getType();
-    auto TensorTy = dyn_cast<RankedTensorType>(valueTy);
+    auto tensorTy = dyn_cast<RankedTensorType>(valueTy);
     Type valueElemTy =
-        TensorTy ? getTypeConverter()->convertType(TensorTy.getElementType())
+        tensorTy ? getTypeConverter()->convertType(tensorTy.getElementType())
                  : valueTy;
     auto valueElemNBits = valueElemTy.getIntOrFloatBitWidth();
     auto elemsPerThread = getTotalElemsPerThread(op.getVal().getType());
     // vec = 1 for scalar
     auto vec = getVectorSize(op.getPtr(), axisAnalysisPass);
     // tensor
-    if (TensorTy) {
+    if (tensorTy) {
       auto valTy = cast<RankedTensorType>(op.getVal().getType());
       vec = std::min<unsigned>(vec, valTy.getElementType().isF16() ? 2 : 1);
     }
@@ -1444,7 +1418,7 @@ struct AtomicCASOpConversion
       casVal = valElements[i];
 
       // use op
-      if (TensorTy) { // for tensor
+      if (tensorTy) { // for tensor
         auto retType = vec == 1 ? valueElemTy : vecTy;
         // TODO: USE ATOMIC CAS OP on Tensor
         auto successOrdering = *atomicMemOrdering;
@@ -1483,7 +1457,7 @@ struct AtomicCASOpConversion
             loc, casPtr, casCmp, casVal, successOrdering, failureOrdering,
             StringRef("agent"));
 
-        if (atomicNeedsSharedMemory(op.getResult())) {
+        if (!op.getResult().use_empty()) {
           // Extract the new_loaded value from the pair.
           Value newLoaded = b.extract_val(valueElemTy, cmpxchg, 0);
           Value atomPtr =
@@ -1496,7 +1470,7 @@ struct AtomicCASOpConversion
         // Build the last block: synced load from shared memory, exit.
         rewriter.setInsertionPointToStart(endBlock);
 
-        if (!atomicNeedsSharedMemory(op.getResult())) {
+        if (op.getResult().use_empty()) {
           rewriter.eraseOp(op);
           return success();
         }
@@ -1509,16 +1483,14 @@ struct AtomicCASOpConversion
             getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
         Value ret = b.load(valueElemTy, atomPtr);
         rewriter.replaceOp(op, {ret});
+        return success();
       }
     }
 
-    // replace op
-    if (TensorTy) {
-      Type structTy = getTypeConverter()->convertType(TensorTy);
-      Value resultStruct = packLLElements(loc, getTypeConverter(), resultVals,
-                                          rewriter, structTy);
-      rewriter.replaceOp(op, {resultStruct});
-    }
+    // FIXME: threadPred = b.true_val() is buggy
+    finalizeTensorAtomicResults(op, tensorTy, rewriter, resultVals, valueElemTy,
+                                b, b.true_val(), targetInfo,
+                                getTypeConverter());
     return success();
   }
 };
@@ -1539,13 +1511,11 @@ bool supportsGlobalAtomicF16PackedAndDpp(ISAFamily isaFamily) {
 struct AtomicRMWOpConversion
     : public ConvertOpToLLVMPattern<triton::AtomicRMWOp>,
       public LoadStoreConversionBase {
-  using ConvertOpToLLVMPattern<triton::AtomicRMWOp>::ConvertOpToLLVMPattern;
-
   AtomicRMWOpConversion(LLVMTypeConverter &converter,
                         const AMD::TargetInfo &targetInfo,
                         ModuleAxisInfoAnalysis &axisAnalysisPass,
                         PatternBenefit benefit)
-      : ConvertOpToLLVMPattern<triton::AtomicRMWOp>(converter, benefit),
+      : ConvertOpToLLVMPattern(converter, benefit),
         LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
 
   LogicalResult
@@ -1641,13 +1611,13 @@ struct AtomicRMWOpConversion
     auto vecTy = vec_ty(valueElemTy, vec);
     auto elemsPerThread = getTotalElemsPerThread(val.getType());
 
-    Value mask = b.true_val();
+    auto freeVarMasks = getFreeVariableMasks(op.getPtr().getType());
+    Value threadPred =
+        emitRedundantThreadPredicate(freeVarMasks, rewriter, loc, targetInfo);
     auto tid = getThreadId(rewriter, loc);
-    mask = b.and_(mask, b.icmp_slt(b.mul(tid, b.i32_val(elemsPerThread)),
-                                   b.i32_val(numElems)));
 
     std::optional<Value> atomicSharedMemBase =
-        atomicNeedsSharedMemory(opResult)
+        op->hasAttr("allocation.offset")
             ? std::optional<Value>(getSharedMemoryBase(
                   loc, rewriter, targetInfo, op.getOperation()))
             : std::nullopt;
@@ -1656,7 +1626,7 @@ struct AtomicRMWOpConversion
     for (size_t i = 0; i < elemsPerThread; i += vec) {
       // TODO: in case llMask is zero we can create only one branch for all
       // elemsPerThread.
-      Value rmwMask = llMask ? b.and_(mask, maskElements[i]) : mask;
+      Value rmwMask = llMask ? b.and_(threadPred, maskElements[i]) : threadPred;
       if (applyPackingF16) {
         resultVals[i] = emitter.emitPairedAtomicForEvenTID(
             rewriter, ptrElements[i], valElements[i], rmwMask);
@@ -1709,22 +1679,19 @@ struct AtomicRMWOpConversion
         } else {
           if (!atomicSharedMemBase.has_value()) {
             rewriter.eraseOp(op);
-            continue;
+            return success();
           }
           Value atomPtr = *atomicSharedMemBase;
           b.barrier();
           Value ret = b.load(valueElemTy, atomPtr);
 
           rewriter.replaceOp(op, {ret});
+          return success();
         }
       }
     }
-    if (tensorTy) {
-      Type structTy = getTypeConverter()->convertType(tensorTy);
-      Value resultStruct = packLLElements(loc, getTypeConverter(), resultVals,
-                                          rewriter, structTy);
-      rewriter.replaceOp(op, {resultStruct});
-    }
+    finalizeTensorAtomicResults(op, tensorTy, rewriter, resultVals, valueElemTy,
+                                b, threadPred, targetInfo, getTypeConverter());
     return success();
   }
 };
@@ -1781,7 +1748,7 @@ private:
 
 struct AsyncCommitGroupOpConversion
     : public ConvertOpToLLVMPattern<AsyncCommitGroupOp> {
-  using ConvertOpToLLVMPattern<AsyncCommitGroupOp>::ConvertOpToLLVMPattern;
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
 
   LogicalResult
   matchAndRewrite(AsyncCommitGroupOp op, OpAdaptor adaptor,

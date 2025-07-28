@@ -56,14 +56,6 @@ struct DotOpConversion : public ConvertOpToLLVMPattern<triton::DotOp> {
 struct ScaledDotOpConversion
     : public ConvertOpToLLVMPattern<triton::DotScaledOp> {
   using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
-  int mfmaVersion;
-  int nonKDim;
-  int kPack;
-
-  ScaledDotOpConversion(LLVMTypeConverter &typeConverter, int mfmaVersion,
-                        int nonKDim, int kPack, PatternBenefit benefit = 1)
-      : ConvertOpToLLVMPattern(typeConverter, benefit),
-        mfmaVersion(mfmaVersion), nonKDim(nonKDim), kPack(kPack) {}
 
   LogicalResult
   matchAndRewrite(triton::DotScaledOp op, OpAdaptor adaptor,

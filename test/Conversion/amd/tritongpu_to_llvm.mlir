@@ -260,7 +260,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
   // CHECK-LABEL: atomic_runtime_lds_reduction
   tt.func @atomic_runtime_lds_reduction(%arg0 : tensor<64x!tt.ptr<f32>, #blocked5>, %arg2 : tensor<64xf32, #blocked5>) {
 
-    // CHECK: llvm.zext
     // CHECK-COUNT-7: rocdl.update.dpp
     // CHECK: llvm.bitcast
     // CHECK-COUNT: llvm.amdgcqn.ds.permute

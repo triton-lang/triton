@@ -1,10 +1,11 @@
+# isort: off
+# fmt: off
 from dataclasses import dataclass
 import triton
 from triton_kernels.target_info import get_cdna_version
 import torch
 from .opt_flags_details import opt_flags_amd, opt_flags_nvidia
 
-# fmt: off
 
 @dataclass
 class OptFlags:
@@ -156,7 +157,8 @@ def make_default_opt_flags_nvidia(
     elif enforce_bitwise_invariance:
         block_m = 128
     else:
-        block_m = max(16, min(triton.next_power_of_2(tokens_per_expt), 128))
+        min_block_m = 64 if torch.cuda.get_device_capability()[0] == 10 else 16
+        block_m = max(min_block_m, min(triton.next_power_of_2(tokens_per_expt), 128))
     # block n
     arch = None
     block_n = opt_flags_nvidia.compute_block_n(n, arch, precision_config)
@@ -170,6 +172,9 @@ def make_default_opt_flags_nvidia(
     else:
         has_simple_epilogue = precision_config.max_num_imprecise_acc is None
         is_persistent = supports_persistent and has_simple_epilogue and (tiles_per_sm >= 2.0 or lhs_dtype.itemsize <= 1) and out_dtype.itemsize < 4
+        # TEMP CHANGE
+        if precision_config.act_scale is not None or precision_config.out_scale is not None:
+            is_persistent = False
     # block k
     if constraints.get("block_k", None) is not None:
         block_k = constraints["block_k"]
@@ -178,7 +183,7 @@ def make_default_opt_flags_nvidia(
     # split_k
     if constraints.get("split_k", None) is not None:
         split_k = constraints["split_k"]
-    elif is_persistent or enforce_bitwise_invariance:
+    elif is_persistent or enforce_bitwise_invariance or precision_config.act_scale is not None or precision_config.out_scale is not None:
         split_k = 1
     else:
         estimated_actual_grid_size = opt_flags_nvidia.compute_grid_size(None, m, n, block_m, block_n)

@@ -92,14 +92,26 @@ static SmallVector<unsigned> getRepShapeForCvt(RankedTensorType srcTy,
   return repShape;
 }
 
-// Both `atomic_cas` and `atomic_rmw need a single scratch element if returning
-// a scalar value because Triton's block-based programming model ensures that
-// all threads in each block see the same return value, even those threads that
-// do not participate in the atomic operation
+// Both `atomic_cas` and `atomic_rmw` may need scratch memory to store values
+// because Triton's block-based programming model ensures that
+// all threads sharing the same partition of the tensor see the same values,
+// even for threads that do not participate in the atomic operation
 static SmallVector<unsigned> getRepShapeForAtomic(Value result) {
   SmallVector<unsigned> smemShape;
-  if (atomicNeedsSharedMemory(result)) {
-    smemShape.push_back(1);
+  if (!result.use_empty()) {
+    if (auto tensorTy = dyn_cast<RankedTensorType>(result.getType())) {
+      auto freeVariableMasks =
+          gpu::toLinearLayout(tensorTy).getFreeVariableMasks();
+      if (llvm::any_of(freeVariableMasks, [](auto variableMask) {
+            return variableMask.second != 0;
+          })) {
+        // The tensor has broadcasted dimensions
+        smemShape = gpu::getShapePerCTATile(tensorTy);
+      }
+    } else {
+      // If the result is a scalar, we need to allocate a single element.
+      smemShape.push_back(1);
+    }
   }
   return smemShape;
 }
@@ -211,15 +223,11 @@ unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
   }
   if (isa<AtomicRMWOp, AtomicCASOp>(op)) {
     auto value = op->getOperand(0);
-    // only scalar requires scratch memory
-    // make it explicit for readability
-    if (dyn_cast<RankedTensorType>(value.getType())) {
-      return 0;
-    }
     auto smemShape = getRepShapeForAtomic(op->getResult(0));
     auto elems = getNumScratchElements(smemShape);
-    auto elemTy = cast<PointerType>(value.getType()).getPointeeType();
-    assert(!isa<PointerType>(elemTy) && "unexpected pointer type");
+    if (elems == 0)
+      return 0;
+    auto elemTy = getElementTypeOrSelf(getPointeeType(value.getType()));
     return elems * std::max<int>(8, elemTy.getIntOrFloatBitWidth()) / 8;
   }
   if (isa<ttng::TensormapCreateOp>(op)) {

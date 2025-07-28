@@ -47,15 +47,13 @@ tt.func private @convert_layout_blocked_blocked_vec(%arg0: tensor<16x16xi32, #bl
   // `(x//2*4 + x%2)%16 + (x>=16)*2`
 
   // CHECK-DAG: [[X_MOD_2:%.*]] = and i32 [[TID]], 1
-  // CHECK-DAG: [[X_2_4_LOWER:%.*]] = shl {{.*}} i32 [[IS_UPPER_HALF]], 1
-  // CHECK-DAG: [[X_2_4_UPPER0:%.*]] = shl {{.*}} i32 [[TID]], 1
-  // CHECK-DAG: [[X_2_4_UPPER1:%.*]] = and i32 [[X_2_4_UPPER0]], 24
+  // CHECK-DAG: [[SHL:%.*]] = shl {{.*}}
+  // CHECK-DAG: [[MASKED:%.*]] = and i32 [[SHL]], 28
+  // CHECK-DAG: [[IDX0:%.*]] = or disjoint i32 [[MASKED]], [[X_MOD_2]]
   // CHECK-DAG: [[X_GE_16:%.*]] = and i32 [[TID]], 16
+  // CHECK-DAG: [[SWAP_RESULTS:%.*]] = icmp eq i32 [[X_GE_16]], 0
   // CHECK-DAG: [[X_GE_16_2:%.*]] = lshr exact i32 [[X_GE_16]], 3
-
-  // CHECK-DAG: [[IDX0:%.*]] = or disjoint i32 [[X_2_4_LOWER]], [[X_MOD_2]]
-  // CHECK-DAG: [[IDX1:%.*]] = or disjoint i32 [[IDX0]], [[X_2_4_UPPER1]]
-  // CHECK-DAG: [[IDX2:%.*]] = or disjoint i32 [[IDX1]], [[X_GE_16_2]]
+  // CHECK-DAG: [[IDX2:%.*]] = or disjoint i32 [[IDX0]], [[X_GE_16_2]]
 
   // CHECK-DAG: [[SHFLSRC0:%.*]] = select i1 [[IS_LOWER_HALF]], i32 [[SRC0]], i32 [[SRC4]]
   // CHECK-DAG: [[SHFLSRC1:%.*]] = select i1 [[IS_LOWER_HALF]], i32 [[SRC1]], i32 [[SRC5]]
@@ -73,8 +71,7 @@ tt.func private @convert_layout_blocked_blocked_vec(%arg0: tensor<16x16xi32, #bl
 
   // For register [4, 8), the upper and lower halves swap.
 
-  // CHECK-DAG: [[IDX3:%.*]] = or disjoint i32 [[IDX1]], 2
-  // CHECK-DAG: [[IDX4:%.*]] = xor i32 [[IDX3]], [[X_GE_16_2]]
+  // CHECK-DAG: [[IDX4:%.*]] = xor i32 [[IDX2]], 2
 
   // CHECK-DAG: [[SHFLOUT4:%.*]] = tail call i32 @llvm.nvvm.shfl.sync.idx.i32(i32 -1, i32 [[SHFLSRC4]], i32 [[IDX4]], i32 31)
   // CHECK-DAG: [[SHFLOUT5:%.*]] = tail call i32 @llvm.nvvm.shfl.sync.idx.i32(i32 -1, i32 [[SHFLSRC5]], i32 [[IDX4]], i32 31)
@@ -83,15 +80,13 @@ tt.func private @convert_layout_blocked_blocked_vec(%arg0: tensor<16x16xi32, #bl
 
   // For lanes [16, 32), swap the two results.
 
-  // CHECK-DAG: [[SWAP_RESULTS:%.*]] = icmp eq i32 [[X_GE_16]], 0
-
   // CHECK: [[DST0:%.*]] = select i1 [[SWAP_RESULTS]], i32 [[SHFLOUT0]], i32 [[SHFLOUT4]]
-  // CHECK: [[DST1:%.*]] = select i1 [[SWAP_RESULTS]], i32 [[SHFLOUT1]], i32 [[SHFLOUT5]]
-  // CHECK: [[DST2:%.*]] = select i1 [[SWAP_RESULTS]], i32 [[SHFLOUT2]], i32 [[SHFLOUT6]]
-  // CHECK: [[DST3:%.*]] = select i1 [[SWAP_RESULTS]], i32 [[SHFLOUT3]], i32 [[SHFLOUT7]]
   // CHECK: [[DST4:%.*]] = select i1 [[SWAP_RESULTS]], i32 [[SHFLOUT4]], i32 [[SHFLOUT0]]
+  // CHECK: [[DST1:%.*]] = select i1 [[SWAP_RESULTS]], i32 [[SHFLOUT1]], i32 [[SHFLOUT5]]
   // CHECK: [[DST5:%.*]] = select i1 [[SWAP_RESULTS]], i32 [[SHFLOUT5]], i32 [[SHFLOUT1]]
+  // CHECK: [[DST2:%.*]] = select i1 [[SWAP_RESULTS]], i32 [[SHFLOUT2]], i32 [[SHFLOUT6]]
   // CHECK: [[DST6:%.*]] = select i1 [[SWAP_RESULTS]], i32 [[SHFLOUT6]], i32 [[SHFLOUT2]]
+  // CHECK: [[DST3:%.*]] = select i1 [[SWAP_RESULTS]], i32 [[SHFLOUT3]], i32 [[SHFLOUT7]]
   // CHECK: [[DST7:%.*]] = select i1 [[SWAP_RESULTS]], i32 [[SHFLOUT7]], i32 [[SHFLOUT3]]
 
   // CHECK: insertvalue {{.*}}, i32 [[DST0]], 0

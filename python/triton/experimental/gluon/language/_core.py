@@ -389,7 +389,7 @@ def convert_layout(value, layout, assert_trivial=False, _semantic=None):
 
 
 @builtin
-def full(shape, value, dtype, layout, _semantic=None):
+def full(shape, value, dtype, layout=None, _semantic=None):
     """
     Create a tensor filled with a scalar value, with specified shape, dtype, and layout.
 

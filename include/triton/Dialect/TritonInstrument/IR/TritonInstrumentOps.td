@@ -6,6 +6,7 @@ include "triton/Dialect/TritonGPU/IR/TritonGPUTypes.td"
 include "triton/Dialect/Triton/IR/TritonTypes.td"
 include "mlir/IR/OpBase.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
+include "triton/Dialect/TritonInstrument/IR/TritonInstrumentAttrDefs.td"
 
 //
 // Interfaces
@@ -33,15 +34,15 @@ def TTI_ExperimentalAssertInThreadOp : TTI_Op<"experimental_assert_in_thread", [
 }
 
 
-def TTI_ExperimentalSharedBufferPointersOp : TTI_Op<"experimental_shared_buffer_pointers", [Pure]> {
+def TTI_ExperimentalBufferPointersOp : TTI_Op<"experimental_buffer_pointers", [Pure]> {
   let summary = "definte an array of pointers to shared memory buffers";
   let description = [{
     Create a tensor of pointers to shared memory buffers.
   }];
-  let arguments = (ins DenseI32ArrayAttr:$offsets);
+  let arguments = (ins DenseI32ArrayAttr:$offsets, TT_MemTypeAttr:$memType);
   let results = (outs TT_Tensor:$result);
   let assemblyFormat = [{
-    attr-dict `:` type($result)
+    $offsets `,` $memType attr-dict `:` type($result)
   }];
 }
 
@@ -49,17 +50,27 @@ def TTI_ExperimentalSharedBufferPointersOp : TTI_Op<"experimental_shared_buffer_
 def TTI_ExperimentalCheckOutstandingWritesOp : TTI_Op<"experimental_check_outstanding_writes", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
   let summary = "check if there are outstanding writes to a buffer guarded by a mbar";
   let description = [{
-    Check if there are outstanding writes to a buffer guarded by a mbar.
+    Check if the writeState tensor has non-zero value associated with the buffer.
+
+    `writeState` is a tensor of 8b bitfields, where:
+    - bit 0: 1 if the buffer is being written to
+    - bit 1: 1 if the write is *not* hwPipelined
+
+    If hwPipelined is true, shift the bitfield by 1 to check the second bit - this
+    means that the error won't be triggered if another pipelined write is outstanding.
   }];
   let arguments = (ins
     TTG_MemDescType:$buf,
     TT_Tensor:$buffers,
     TT_PtrLike:$writeBars,
     TypeAttr:$writeBarsType,
+    TT_PtrLike:$writeState,
+    TypeAttr:$writeStateType,
+    I1Attr:$hwPipelined,
     Optional<I1>:$pred
   );
   let assemblyFormat = [{
-    $buf `{` $buffers `,` $writeBars `(` $writeBarsType `)` `}` (`,` $pred^)? attr-dict `:` type($buf) `,` type($buffers) `,` type($writeBars)
+    $buf `{` $buffers `,` $writeBars `(` $writeBarsType `)` `,` $writeState `(` $writeStateType `)` `}` (`,` $pred^)? `pipelined` $hwPipelined attr-dict `:` type($buf) `,` type($buffers) `,` type($writeBars) `,` type($writeState)
   }];
   let hasVerifier = 1;
 }
@@ -87,18 +98,49 @@ def TTI_ExperimentalCheckOutstandingReadsOp : TTI_Op<"experimental_check_outstan
 def TTI_ExperimentalMarkAsWriteOp : TTI_Op<"experimental_mark_as_write", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
   let summary = "mark a buffer as being written to using mbar as a guard";
   let description = [{
-    Mark a buffer as being written to using mbar as a guard.
+    Mark a buffer as being written to. It is not yet tracked by a barrier, until
+    `commit_write_with_barrier` is called, at which point all the buffers being written
+    to are marked as tracked by the barrier.
+
+    `writeState` is a tensor of 8b bitfields, where:
+    - bit 0: 1 if the buffer is being written to
+    - bit 1: 1 if the write is *not* hwPipelined
+
+    If hwPipelined is true, the write won't trigger an error if another pipelined
+    write is executed later without waiting for the barrier.
   }];
   let arguments = (ins
     TTG_MemDescType:$buf,
-    TTG_MemDescType:$mbar,
     TT_Tensor:$buffers,
-    TT_PtrLike:$writeBars,
-    TypeAttr:$writeBarsType,
+    TT_PtrLike:$writeState,
+    TypeAttr:$writeStateType,
+    I1Attr:$hwPipelined,
     Optional<I1>:$pred
   );
   let assemblyFormat = [{
-    $buf `,` $mbar `{` $buffers `,` $writeBars `(` $writeBarsType `)` `}` (`,` $pred^)? attr-dict `:` type($buf) `,` type($mbar) `,` type($buffers) `,` type($writeBars)
+    $buf `{` $buffers `,` $writeState `(` $writeStateType `)` `}` (`,` $pred^)? `pipelined` $hwPipelined attr-dict `:` type($buf) `,` type($buffers) `,` type($writeState)
+  }];
+  let hasVerifier = 1;
+}
+
+
+def TTI_ExperimentalCommitWriteWithBarrierOp : TTI_Op<"experimental_commit_write_with_barrier", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+  let summary = "Mark all buffers being currently written as tracked by the barrier.";
+  let description = [{
+    For all buffers currently marked in writeState tensor, mark them as tracked by the mbar in
+    writeBars tensor.
+  }];
+  let arguments = (ins
+    TTG_MemDescType:$mbar,
+    TT_Tensor:$barriers,
+    TT_PtrLike:$writeBars,
+    TypeAttr:$writeBarsType,
+    TT_PtrLike:$writeState,
+    TypeAttr:$writeStateType,
+    Optional<I1>:$pred
+  );
+  let assemblyFormat = [{
+    $mbar `{` $barriers `,` $writeBars `(` $writeBarsType `)` `,` $writeState `(` $writeStateType `)` `}` (`,` $pred^)? attr-dict `:` type($mbar) `,` type($barriers) `,` type($writeBars) `,` type($writeState)
   }];
   let hasVerifier = 1;
 }
@@ -132,13 +174,17 @@ def TTI_ExperimentalClearWriteBarrierOp : TTI_Op<"experimental_clear_write_barri
   }];
   let arguments = (ins
     TTG_MemDescType:$mbar,
+    TT_Tensor:$barriers,
     TT_PtrLike:$writeBars,
     TypeAttr:$writeBarsType,
+    TT_PtrLike:$writeState,
+    TypeAttr:$writeStateType,
     Optional<I1>:$pred
   );
   let assemblyFormat = [{
-    $mbar `{` $writeBars `(` $writeBarsType `)` `}` (`,` $pred^)? attr-dict `:` type($mbar) `,` type($writeBars)
+    $mbar `{` $barriers `,` $writeBars `(` $writeBarsType `)` `,` $writeState `(` $writeStateType `)` `}` (`,` $pred^)? attr-dict `:` type($mbar) `,` type($barriers) `,` type($writeBars) `,` type($writeState)
   }];
+  let hasVerifier = 1;
 }
 
 
@@ -160,6 +206,27 @@ def TTI_ExperimentalClearReadBarrierOp : TTI_Op<"experimental_clear_read_barrier
   let hasVerifier = 1;
 }
 
+
+def TTI_ExperimentalCheckBarrierWritesClearedOp : TTI_Op<"experimental_check_barrier_writes_cleared", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+  let summary = "verify that the barrier is not used to track any writes";
+  let description = [{
+    Verify that the barrier is not used to track any writes.
+  }];
+  let arguments = (ins
+    TTG_MemDescType:$mbar,
+    TT_Tensor:$barriers,
+    TT_PtrLike:$writeBars,
+    TypeAttr:$writeBarsType,
+    Optional<I1>:$pred
+  );
+  let assemblyFormat = [{
+    $mbar `{` $barriers `,` $writeBars `(` $writeBarsType `)` `}` (`,` $pred^)? attr-dict `:` type($mbar) `,` type($barriers) `,` type($writeBars)
+  }];
+  let hasVerifier = 1;
+}
+
+
+// TODO: Potentially resolve the naming/functionality clash with commit_write_with_barrier
 def TTI_ExperimentalStageWriteForCommitOp : TTI_Op<"experimental_stage_write_for_commit", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
   let summary = "Preapre to an async copy of a buffer. Staged until commit_group is called.";
   let description = [{

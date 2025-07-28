@@ -118,8 +118,8 @@ void lowerTokenOperations(Operation *parentOp, int numCTAs,
     auto barrierEncoding = ttg::SwizzledSharedEncodingAttr::get(
         context, 1, 1, 1, {0}, barrierCTALayout);
     Type barrierMemDescType = ttg::MemDescType::get(
-        {createTokenOp.getNumBuffers()}, builder.getI64Type(), barrierEncoding,
-        sharedMemorySpace,
+        {createTokenOp.getNumBuffers(), 1}, builder.getI64Type(),
+        barrierEncoding, sharedMemorySpace,
         /*mutableMemory=*/true);
     Type singleBarrierMemDescType =
         ttg::MemDescType::get({1}, builder.getI64Type(), barrierEncoding,

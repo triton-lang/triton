@@ -158,6 +158,8 @@ class GluonSemantic(TritonSemantic[TensorTy]):
 
     def full(self, shape, value, dtype, layout):
         scalar = self.make_scalar(value, dtype)
+        if layout is None:
+            layout = AutoLayout()
         return self.splat(scalar, shape, layout)
 
     def convert_layout(self, value, layout, assert_trivial=False):

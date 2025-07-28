@@ -85,6 +85,7 @@ private:
                                                        Location loc);
   LogicalResult transformTwoClusterWithAsyncAndAll(OpBuilder &builder,
                                                    Location loc);
+  LogicalResult transformChainedDotSchedule(OpBuilder &builder, Location loc);
   void addAsymmetricSyncToLoop(OpBuilder &builder, Location loc);
   void updateOpInsertion(Operation *Op);
   void appendOp(Operation *Op);
@@ -666,6 +667,73 @@ LogicalResult Pingponger::transformTwoClusterWithAsyncAndAll(OpBuilder &builder,
   return success();
 }
 
+// For ChainedDots with num_stage==4 the pipeliner already places ops in the
+// correct order to allow for efficient pingpong. The loop contains 2 pairs of
+// compute and memory clusters so we only have to place barriers/sched.barriers
+// at the bounaries and give higher priority to memory clusters
+// See StreamPipeliner.cpp:ChainedDotSchedule for details about the schedule
+LogicalResult Pingponger::transformChainedDotSchedule(OpBuilder &builder,
+                                                      Location loc) {
+  assert(dotOps.size() == 2);
+
+  // Memory clusters start with either ttg.async_wait or ttg.local_store
+  auto findNextMemoryCluster = [](Operation *op) {
+    while (!llvm::isa_and_nonnull<ttg::AsyncWaitOp, ttg::LocalStoreOp>(op)) {
+      op = op->getNextNode();
+    }
+    return op;
+  };
+
+  std::array memoryClusterStartOps = {findNextMemoryCluster(dotOps[0]),
+                                      findNextMemoryCluster(dotOps[1])};
+
+  if (llvm::is_contained(memoryClusterStartOps, nullptr) ||
+      memoryClusterStartOps[0] == memoryClusterStartOps[1]) {
+    LDBG("ChainedDot pingpong requires memory operations in both memory "
+         "clusters");
+    return failure();
+  }
+
+  builder.setInsertionPointToStart(forOp.getBody());
+  // ComputeCluster 1
+  updateOpInsertion(dotOps[0]);
+  prependOp(builder.create<ROCDL::SetPrioOp>(loc, lowPriority), false);
+
+  // MemoryCluster 1
+  updateOpInsertion(memoryClusterStartOps[0]);
+  prependOp(builder.create<ROCDL::SetPrioOp>(loc, highPriority), false);
+  if (llvm::isa<ttg::AsyncWaitOp>(memoryClusterStartOps[0])) {
+    // Only append a sched barrier because membar adds a barrier after asyncwait
+    appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
+  } else {
+    prependOp(builder.create<gpu::BarrierOp>(loc), false);
+    prependOp(builder.create<ROCDL::SchedBarrier>(loc, 0), false);
+  }
+
+  // ComputeCluster2
+  updateOpInsertion(dotOps[1]);
+  prependOp(builder.create<ROCDL::SchedBarrier>(loc, 0), false);
+  prependOp(builder.create<ROCDL::SBarrierOp>(loc), false);
+  prependOp(builder.create<ROCDL::SetPrioOp>(loc, lowPriority), false);
+
+  // MemoryCluster2
+  updateOpInsertion(memoryClusterStartOps[1]);
+  prependOp(builder.create<ROCDL::SetPrioOp>(loc, highPriority), false);
+  if (llvm::isa<ttg::AsyncWaitOp>(memoryClusterStartOps[1])) {
+    // Only append a sched barrier because membar adds a barrier after asyncwait
+    appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
+  } else {
+    prependOp(builder.create<gpu::BarrierOp>(loc), false);
+    prependOp(builder.create<ROCDL::SchedBarrier>(loc, 0), false);
+  }
+
+  updateOpInsertion(lastInsertedOp->getBlock()->getTerminator());
+  prependOp(builder.create<ROCDL::SchedBarrier>(loc, 0), false);
+  prependOp(builder.create<ROCDL::SBarrierOp>(loc), false);
+
+  return success();
+}
+
 // This pingpong variant tries to construct one memory cluster and one
 // dot cluster. Instead of slice the tile, it is supposed to use half
 // sized tile_K and use num_stages=3 to prefetch and hide the buffer
@@ -809,10 +877,24 @@ void Pingponger::getDotPingponged() {
   // tightly scheduling the latencies.
 
   int64_t numOfDotLikeOps = scaledDotOps.size() + dotOps.size();
-  if (numOfDotLikeOps != 1) {
-    LDBG("Only handle a single of either dot or dot_scaled op");
+
+  if (numOfDotLikeOps < 1 || numOfDotLikeOps > 2) {
+    LDBG("Only handle one or two dotlike ops");
     return;
   }
+
+  if (numOfDotLikeOps == 2) {
+    if (numStages != 4)
+      return;
+
+    if (transformChainedDotSchedule(builder, loc).failed()) {
+      LDBG("Encountered failure when trying the ChainedDot ping pong "
+           "cluster transformation");
+      return;
+    }
+    addAsymmetricSyncToLoop(builder, loc);
+  }
+
   useAsyncCopy = (asyncCopyOps.size() > 0);
   int64_t gloadSize = useAsyncCopy ? asyncCopyOps.size() : gLoadOps.size();
   int64_t dotSize =
@@ -1042,12 +1124,9 @@ void Pingponger::getDotPingponged() {
 
 } // anonymous namespace
 
-class TritonAMDGPUBlockPingpongPass
-    : public impl::TritonAMDGPUBlockPingpongBase<
-          TritonAMDGPUBlockPingpongPass> {
-public:
-  using impl::TritonAMDGPUBlockPingpongBase<
-      TritonAMDGPUBlockPingpongPass>::TritonAMDGPUBlockPingpongBase;
+struct TritonAMDGPUBlockPingpongPass
+    : impl::TritonAMDGPUBlockPingpongBase<TritonAMDGPUBlockPingpongPass> {
+  using Base::Base;
 
   void runOnOperation() override {
     ModuleOp m = getOperation();
