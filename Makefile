@@ -46,6 +46,7 @@ test-unit: all
 
 .PHONY: test-distributed
 test-distributed: all
+	$(PYTHON) -m pip install --upgrade pip
 	$(PYTHON) -m pip install python/triton_kernels -v
 	$(PYTEST) -s python/triton_kernels/bench/distributed.py
 
@@ -93,7 +94,6 @@ dev-install-torch:
 
 .PHONY: dev-install-triton
 dev-install-triton:
-	$(PYTHON) -m pip install --upgrade pip
 	$(PYTHON) -m pip install -e . --no-build-isolation -v
 
 .PHONY: dev-install
