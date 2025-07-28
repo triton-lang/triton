@@ -46,7 +46,7 @@ test-unit: all
 
 .PHONY: test-distributed
 test-distributed: all
-	$(PYTHON) -m pip install -e python/triton_kernels -v
+	$(PYTHON) -m pip install python/triton_kernels -v
 	$(PYTEST) -s python/triton_kernels/bench/distributed.py
 
 .PHONY: test-gluon
