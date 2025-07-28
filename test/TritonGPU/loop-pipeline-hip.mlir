@@ -775,7 +775,7 @@ tt.func @reject_fp64_pipelining_with_async_copy_gfx942(
 #smem = #ttg.shared_memory
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
-// On GFX950 we can use AsyncCopy if sizePerThread > 2 and it's contiguous because we can load 2 fp64 with one direct to lds instruction
+// On GFX950 we can use AsyncCopy if sizePerThread >= 2 and it's contiguous because we can load 2 fp64 with one direct to lds instruction
 // COMMON-LABEL: @pipeline_fp64_with_async_copy_gfx950
 // ASYNC: ttg.async_copy_global_to_local
 // ASYNC: tt.load
