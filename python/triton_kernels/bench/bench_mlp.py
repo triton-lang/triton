@@ -190,7 +190,7 @@ def roofline_mlp(batch_ranges, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_
     opints = [p.opint for p in perfs]
     knee = bisect_left(opints, max_tflops / max_tbps)
     if knee > 0:  # has a bandwidth-bound knee
-        x_bw = [xs[0], xs[knee]]
+        x_bw = [xs[0], xs[knee - 1]]
         y_bw = [opints[0] * max_tbps, max_tflops]
     else:  # no knee found, compute-bound only
         x_bw = y_bw = []
