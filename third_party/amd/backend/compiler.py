@@ -71,7 +71,7 @@ class HIPOptions:
         warp_size = 32 if gfx_major >= 10 else 64
         object.__setattr__(self, 'warp_size', warp_size)
         assert self.num_warps > 0 and (self.num_warps & (self.num_warps - 1)) == 0, \
-               "num_warps must be a power of 2"
+            "num_warps must be a power of 2"
 
         if (self.arch == 'gfx950') and (self.kpack != 1):
             warnings.warn(
@@ -123,8 +123,7 @@ class HIPBackend(BaseBackend):
 
         if "enable_fp_fusion" not in opts:
             args["enable_fp_fusion"] = knobs.language.default_fp_fusion
-        args.update({k: opts[k] for k in HIPOptions.__dataclass_fields__.keys() \
-                     if k in opts and opts[k] is not None})
+        args.update({k: opts[k] for k in HIPOptions.__dataclass_fields__.keys() if k in opts and opts[k] is not None})
         return HIPOptions(**args)
 
     def pack_metadata(self, metadata):
@@ -220,8 +219,9 @@ class HIPBackend(BaseBackend):
         use_async_copy = knobs.amd.use_async_copy
         use_block_pingpong = is_pingpong_schedule_enabled(options.arch)
 
-        amd.passes.ttgpuir.add_stream_pipeline(pm, options.num_stages, global_prefetch, local_prefetch, use_async_copy,
-                                               use_block_pingpong)
+        amd.passes.ttgpuir.add_schedule_loops(pm, options.num_stages, global_prefetch, local_prefetch, use_async_copy,
+                                              use_block_pingpong)
+        amd.passes.ttgpuir.add_stream_pipeline(pm, use_async_copy)
         if use_async_copy:
             amd.passes.ttgpuir.add_coalesce_async_copy(pm, options.arch)
         passes.common.add_canonicalizer(pm)
@@ -284,13 +284,13 @@ class HIPBackend(BaseBackend):
         passes.convert.add_index_to_llvmir(pm)
 
         amd.passes.ttgpuir.add_allocate_shared_memory(pm)
-        ## __HIP_FTZ is used to control the denorm flushing behavior of exp2 op as follows:
-        ## 1. If __HIP_FTZ = 1, exp2 flushes denorms in input and output regardless
-        ##    of the value of kernel arg `allow_flush_denorm`.
-        ## 2. If __HIP_FTZ = 0, whether exp2 flushes denorms in input and output
-        ##    depends on the value of kernel arg `allow_flush_denorm`.
-        ## 3. __HIP_FTZ is default to 1 and not exposed as a kernel argument.
-        ##    For now it is used as a controller for developers only.
+        # __HIP_FTZ is used to control the denorm flushing behavior of exp2 op as follows:
+        # 1. If __HIP_FTZ = 1, exp2 flushes denorms in input and output regardless
+        # of the value of kernel arg `allow_flush_denorm`.
+        # 2. If __HIP_FTZ = 0, whether exp2 flushes denorms in input and output
+        # depends on the value of kernel arg `allow_flush_denorm`.
+        # 3. __HIP_FTZ is default to 1 and not exposed as a kernel argument.
+        # For now it is used as a controller for developers only.
         __HIP_FTZ = True
         amd.passes.ttgpuir.add_to_llvmir(pm, options.arch, __HIP_FTZ)
         passes.common.add_canonicalizer(pm)

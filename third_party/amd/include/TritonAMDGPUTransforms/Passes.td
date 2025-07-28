@@ -3,12 +3,13 @@
 
 include "mlir/Pass/PassBase.td"
 
-def TritonAMDGPUStreamPipeline : Pass<"tritonamdgpu-stream-pipeline", "mlir::ModuleOp"> {
-  let summary = "pipeline";
+
+def TritonAMDGPUScheduleLoops : Pass<"tritonamdgpu-schedule-loops", "mlir::ModuleOp"> {
+  let summary = "software pipeline loop scheduling";
 
   let description = [{
-    Pipeline global loads through registers to shared memory while computing on previous
-    tile
+    The `tritonamdgpu-schedule-loops` pass performs scheduling for loop pipelining
+    for loops with latency ops.
   }];
 
   let dependentDialects = ["mlir::triton::amdgpu::TritonAMDGPUDialect"];
@@ -29,6 +30,24 @@ def TritonAMDGPUStreamPipeline : Pass<"tritonamdgpu-stream-pipeline", "mlir::Mod
     Option<"usePingpong", "use_pingpong",
            "bool", /*default*/"false",
            "Use schedules to enable block ping-pong">,
+  ];
+}
+
+
+def TritonAMDGPUStreamPipeline : Pass<"tritonamdgpu-stream-pipeline", "mlir::ModuleOp"> {
+  let summary = "pipeline";
+
+  let description = [{
+    Pipeline global loads through registers to shared memory while computing on previous
+    tile
+  }];
+
+  let dependentDialects = ["mlir::triton::amdgpu::TritonAMDGPUDialect"];
+
+  let options = [
+    Option<"useAsyncCopy", "use_async_copy",
+           "bool", /*default*/"false",
+           "Use AsyncCopyGlobalToLocal to directly load to shared memory">
   ];
 }
 
