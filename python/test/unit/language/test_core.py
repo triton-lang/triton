@@ -7177,6 +7177,7 @@ def test_override_arch(arch, env_var_override, device):
         assert int(ttgir_warp.group(1)) == (32 if arch == "gfx1200" else 64)
         assert amdgcn_gfx.group(1) == arch
 
+
 # -----------------------
 # test propagate_nan
 # -----------------------
