@@ -101,7 +101,7 @@ def memcpy_kernel(in_ptr, out_ptr, xnumel, XBLOCK: gl.constexpr):
         gl.store(out_ptr + i, value)
 
 
-def memcpy(input, output, XBLOCK=128):
+def memcpy(input, output, XBLOCK):
     xnumel = input.numel()
     grid = (triton.cdiv(xnumel, XBLOCK), )
     memcpy_kernel[grid](input, output, xnumel, XBLOCK, num_warps=1)
@@ -143,7 +143,24 @@ def memcpy_autotune(input, output):
 # %%
 # Run this with `TRITON_PRINT_AUTOTUNING=1 python 01-intro.py` to see which
 # `XBLOCK` gets selected. On B200, the best `XBLOCK` ends up being 2048 to copy
-# 4 GB of data at about 332 GB/s, far from the 8 TB/s peak bandwidth of the GPU.
+# 8 GB of data at about 333 GB/s, far from the 8 TB/s peak bandwidth of the GPU.
+#
+# The full output is:
+#
+# ```
+# Autotuning kernel memcpy_kernel_autotune with config XBLOCK: 256, num_warps: 1, num_ctas: 1, num_stages: 3, maxnreg: None
+# Autotuning kernel memcpy_kernel_autotune with config XBLOCK: 512, num_warps: 1, num_ctas: 1, num_stages: 3, maxnreg: None
+# Autotuning kernel memcpy_kernel_autotune with config XBLOCK: 1024, num_warps: 1, num_ctas: 1, num_stages: 3, maxnreg: None
+# Autotuning kernel memcpy_kernel_autotune with config XBLOCK: 2048, num_warps: 1, num_ctas: 1, num_stages: 3, maxnreg: None
+# Autotuning kernel memcpy_kernel_autotune with config XBLOCK: 4096, num_warps: 1, num_ctas: 1, num_stages: 3, maxnreg: None
+# Autotuning kernel memcpy_kernel_autotune with config XBLOCK: 8192, num_warps: 1, num_ctas: 1, num_stages: 3, maxnreg: None
+# Triton autotuning for function memcpy_kernel_autotune,
+# with key as (2147483648, 'torch.float32', 'torch.float32'),
+# finished after 2.06s,
+# best config selected: XBLOCK: 2048, num_warps: 1, num_ctas: 1, num_stages: 3, maxnreg: None;
+# 24.00 ms
+# 333.34 GB/s
+# ```
 #
 # Since performance is the main motiviation for writing kernels in Gluon, let's
 # spend some time discussing that. First, the obvious problem is we are not
@@ -158,12 +175,12 @@ def memcpy_autotune(input, output):
 
 if __name__ == "__main__":
     torch.manual_seed(0)
-    xnumel = 4 << 30
+    xnumel = 2 << 30
     input = torch.randn(xnumel, device="cuda")
     output = torch.empty_like(input)
 
     fn = lambda: memcpy_autotune(input, output)
     ms = triton.testing.do_bench(fn)
     gbytes = xnumel * input.element_size() >> 30
-    print("ms  ", round(ms, 2))
-    print("GB/s", round(gbytes / (ms * 1e-3), 2))
+    print(f"{ms:.2f} ms")
+    print(f"{gbytes / (ms * 1e-3):.2f} GB/s")

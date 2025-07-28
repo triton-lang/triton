@@ -174,7 +174,9 @@ def memcpy_1d_kernel(in_ptr, out_ptr, xnumel, XBLOCK: gl.constexpr, layout: gl.c
 def memcpy_1d_impl(input, output, XBLOCK, layout, num_warps):
     xnumel = input.numel()
     grid = (triton.cdiv(xnumel, XBLOCK), )
-    memcpy_1d_kernel[grid](input, output, xnumel, XBLOCK, layout, num_warps=num_warps)
+    # Return the compiled kernel so we can inspect it later.
+    compiled_kernel = memcpy_1d_kernel[grid](input, output, xnumel, XBLOCK, layout, num_warps=num_warps)
+    return compiled_kernel
 
 
 # %%
@@ -198,22 +200,92 @@ def memcpy_1d_impl(input, output, XBLOCK, layout, num_warps):
 
 def bench_memcpy(impl):
     torch.manual_seed(0)
-    xnumel = 4 << 30
+    xnumel = 2 << 30
     input = torch.randn(xnumel, device="cuda")
     output = torch.empty_like(input)
 
+    compiled_kernel = impl(input, output)
     fn = lambda: impl(input, output)
     ms = triton.testing.do_bench(fn)
-    tbytes = xnumel * input.element_size() >> 40
-    print("TB/s", round(tbytes / (ms * 1e-3), 2))
+    tbytes = (xnumel * input.element_size() >> 30) / 1024
+    throughput = tbytes / (ms * 1e-3)
+    return compiled_kernel, throughput
 
+
+# %%
+# By choosing `XBLOCK=2048`, the largest value we can pick for `R` without
+# adding broadcasting is `R=16`.
 
 if __name__ == "__main__":
+    print("R vs. Throughput")
+    print("================")
     XBLOCK = 2048
     num_warps = 4
     kernel = partial(memcpy_1d_impl, XBLOCK=XBLOCK, num_warps=num_warps)
-    for i in range(0, 3):
+    compiled_kernels = []
+    for i in range(0, 5):
         R = 2**i
         layout = gl.BlockedLayout([R], [32], [num_warps], [0])
         impl = partial(kernel, layout=layout)
-        bench_memcpy(impl)
+        compiled_kernel, throughput = bench_memcpy(impl)
+        compiled_kernels.append((R, compiled_kernel))
+        print(f"R={R:<3} {throughput:.3f} TB/s")
+    print()
+
+# %%
+# Running this on B200, we obtain
+#
+# ```
+# R vs. Throughput
+# ================
+# R=1   3.287 TB/s
+# R=2   3.238 TB/s
+# R=4   3.237 TB/s
+# R=8   3.251 TB/s
+# R=16  3.107 TB/s
+# ```
+#
+# We can see that the layout does affect performance (and that this is 10x
+# faster than copying one scalar at a time). Let's dig deeper into why the
+# layout affects performance by examining the SASS for the kernels.
+
+if __name__ == "__main__":
+    print("LDG instructions")
+    print("================")
+    for R, compiled_kernel in compiled_kernels:
+        print(f"R={R}")
+        sass = compiled_kernel.asm["sass"]
+        for line in sass.split("\n"):
+            if "LDG.E" in line:
+                print(line)
+    print()
+
+# %%
+# The output shows that for `R=1`, we get 16 `LDG.E` instructions, each 512
+# bytes apart, which exactly corresponds to 128 elements.
+#
+# Going up to `R=2` then `R=4`, we observe vectorization to 8 `LDG.E.64` and
+# then 4 `LDG.E.128` instructions, respectively.
+
+if __name__ == "__main__":
+    print("(XBLOCK, R) vs. Throughput")
+    print("==========================")
+    num_warps = 4
+
+    print("XBLOCK   ", end=" ")
+    for i in range(0, 5):
+        print(f"R={2**i:<3}", end=" ")
+    print()
+
+    for j in range(10, 15):
+        XBLOCK = 2**j
+        print(f"{XBLOCK:<8}", end=" ")
+        kernel = partial(memcpy_1d_impl, XBLOCK=XBLOCK, num_warps=num_warps)
+        for i in range(0, 5):
+            R = 2**i
+            layout = gl.BlockedLayout([R], [32], [num_warps], [0])
+            impl = partial(kernel, layout=layout)
+            compiled_kernel, throughput = bench_memcpy(impl)
+            print(f"{throughput:.3f}", end=" ")
+        print()
+    print()
