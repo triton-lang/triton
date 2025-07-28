@@ -274,21 +274,6 @@ getConsumerAsyncOpKinds(const SetVector<Operation *> &consumers,
   return kindAttrs;
 }
 
-void propagateAllocShape(Value value, int64_t arefAllocDepth) {
-  for (Operation *user : value.getUsers()) {
-    if (user->hasTrait<OpTrait::MemDescViewTrait>()) {
-      auto type = cast<MemDescType>(user->getResult(0).getType());
-      SmallVector<int64_t> allocShape{type.getShape()};
-      allocShape.insert(allocShape.begin(), arefAllocDepth);
-      auto newType = MemDescType::get(type.getShape(), type.getElementType(),
-                                      type.getEncoding(), type.getMemorySpace(),
-                                      type.getMutableMemory(), allocShape);
-      user->getResult(0).setType(newType);
-      propagateAllocShape(user->getResult(0), arefAllocDepth);
-    }
-  }
-}
-
 void createArefGet(PartitionBuilder &builder, ArefCreateOp aref,
                    std::string arefTag, const SetVector<Value> &results,
                    Partition *consumerPartition, WarpSchedule &schedule,
@@ -321,8 +306,7 @@ void createArefGet(PartitionBuilder &builder, ArefCreateOp aref,
   Operation *exitInsertPointAfter = nullptr;
   for (auto result : results) {
     if (auto memDescType = dyn_cast<MemDescType>(result.getType())) {
-      result.replaceAllUsesWith(dataBuf);
-      propagateAllocShape(dataBuf, arefBufType.getAllocShape()[0]);
+      replaceUsesAndPropagateType(builder, result.getDefiningOp(), dataBuf);
     } else if (auto tensorType = dyn_cast<RankedTensorType>(result.getType())) {
       auto localLoadOp = builder.create<LocalLoadOp>(loc, tensorType, dataBuf);
       result.replaceAllUsesWith(localLoadOp.getResult());
@@ -427,9 +411,7 @@ public:
       for (auto allowDescLoadRegUse : {false, true}) {
         SmallVector<Operation *> ops;
         loop.walk([&](Operation *op) {
-          if (!isa<TMEMAllocOp, TMEMLoadOp, TMEMStoreOp, scf::YieldOp,
-                   triton::FuncOp, triton::ReturnOp, scf::ForOp, scf::IfOp>(
-                  op)) {
+          if (isa<LocalAllocOp, triton::DescriptorLoadOp>(op)) {
             ops.push_back(op);
           }
         });
