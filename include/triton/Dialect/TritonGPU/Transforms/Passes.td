@@ -135,8 +135,7 @@ def TritonGPURewritePartitionDependencies : Pass<"tritongpu-rewrite-partition-de
     "mlir::triton::gpu::TritonGPUDialect",
     "mlir::scf::SCFDialect",
     "mlir::arith::ArithDialect",
-    "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect",
-    "mlir::triton::nvws::NVWSDialect"
+    "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
   ];
 }
 
