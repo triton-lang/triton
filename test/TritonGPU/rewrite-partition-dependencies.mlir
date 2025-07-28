@@ -337,7 +337,7 @@ tt.func @no_def_op(%lb: i32, %ub: i32, %step: i32) {
 module attributes {"ttg.num-warps" = 4 : i32} {
 
 tt.func @invalid_attribute(%lb: i32, %ub: i32, %step: i32) {
-  // expected-warning @below {{partition stages attribute 'ttg.partition.stages' has invalid element "a"}}
+  // expected-error @below {{partition stages attribute 'ttg.partition.stages' has invalid element "a"}}
   scf.for %i = %lb to %ub step %step : i32 {
     scf.yield
   } {ttg.partition.stages = ["a"]}
@@ -359,7 +359,7 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 
 tt.func @invalid_attribute(%lb: i32, %ub: i32, %step: i32) {
   scf.for %k = %lb to %ub step %step : i32 {
-    // expected-warning @below {{invalid partition index -1}}
+    // expected-error @below {{invalid partition index -1}}
     "op"() {ttg.partition = -1} : () -> ()
     scf.yield
   } {ttg.partition.stages = [2, 2]}
