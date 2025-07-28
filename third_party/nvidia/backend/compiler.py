@@ -458,9 +458,20 @@ class CUDABackend(BaseBackend):
                 else:
                     error = f'`ptxas` failed with error code {e.returncode}'
 
-                raise PTXASError(f"{error}\n"
-                                 f"`ptxas` stderr:\n{log}\n"
-                                 f'Repro command: {" ".join(ptxas_cmd)}\n')
+                error = (f"{error}\n"
+                         f"`ptxas` stderr:\n{log}\n"
+                         f'Repro command: {" ".join(ptxas_cmd)}\n')
+
+                print(f"""
+================================================================
+{error}
+
+{src}
+================================================================
+please share the reproducer above with Triton project.
+""")
+                
+                raise PTXASError(error)
 
             with open(fbin, 'rb') as f:
                 cubin = f.read()
