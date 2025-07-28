@@ -71,8 +71,8 @@ struct CoalesceAsyncCopyWrites
 
     // Select the largest supported load width equal or smaller than loadContig
     auto elemBitWidth = dstTy.getElementTypeBitWidth();
-    loadContig = AMD::getNextValidDirectToLdsVecSize(loadContig, elemBitWidth,
-                                                     targetInfo);
+    loadContig =
+        fitToValidDirectToLdsVecSize(loadContig, elemBitWidth, targetInfo);
 
     if (loadContig == 0) {
       return rewriter.notifyMatchFailure(

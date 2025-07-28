@@ -44,8 +44,8 @@ void addAsyncCopyAliasScope(LLVM::AliasAnalysisOpInterface llLoadDirectToLdsOp);
 // Finds the largest supported vecSize smaller than maxVecSize. Returns 0 if
 // there is none
 unsigned
-getNextValidDirectToLdsVecSize(unsigned maxVecSize, unsigned elemBitwidth,
-                               const triton::AMD::TargetInfo &targetInfo);
+fitToValidDirectToLdsVecSize(unsigned maxVecSize, unsigned elemBitwidth,
+                             const triton::AMD::TargetInfo &targetInfo);
 
 } // namespace mlir::triton::AMD
 

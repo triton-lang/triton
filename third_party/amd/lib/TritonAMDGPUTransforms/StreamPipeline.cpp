@@ -306,7 +306,7 @@ bool canBeConvertedToAsyncLoad(unsigned numBuffers, tt::LoadOp loadOp,
   unsigned vecSize = regToSharedLayout.getNumConsecutiveInOut();
   unsigned elemBitWidth = dstTy.getElementTypeBitWidth();
 
-  if (getNextValidDirectToLdsVecSize(vecSize, elemBitWidth, targetInfo) == 0)
+  if (fitToValidDirectToLdsVecSize(vecSize, elemBitWidth, targetInfo) == 0)
     return false;
 
   // Checks whether the global pointer's contiguity and mask alignment allows
