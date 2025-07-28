@@ -292,7 +292,8 @@ bool canBeConvertedToAsyncLoad(unsigned numBuffers, tt::LoadOp loadOp,
 
   // Compute the final vecSize we can use for the combination of sourceEncoding
   // and sharedEncoding. We can only use AsyncCopy if the target supports the
-  // requested or a smaller vecSize in one instruction
+  // requested or a smaller vecSize because we cannot stride when loading
+  // directly to lds
   auto srcTy = cast<RankedTensorType>(loadOp.getPtr().getType());
   auto dstTy = cast<ttg::MemDescType>(alloc.getType());
   auto regLayout = triton::gpu::toLinearLayout(srcTy);

@@ -132,7 +132,6 @@ void addLocalLoadNoAliasScope(LLVM::AliasAnalysisOpInterface llLoadOp) {
 unsigned
 getNextValidDirectToLdsVecSize(unsigned maxVecSize, unsigned elemBitwidth,
                                const triton::AMD::TargetInfo &targetInfo) {
-  // Select the largest supported load width equal or smaller than loadContig
   while (maxVecSize > 0 && !targetInfo.supportsDirectToLdsLoadBitWidth(
                                maxVecSize * elemBitwidth)) {
     maxVecSize /= 2;
