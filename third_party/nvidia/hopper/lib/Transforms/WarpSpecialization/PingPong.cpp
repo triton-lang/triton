@@ -5,6 +5,7 @@
 #include "mlir/Transforms/Passes.h"
 #include "nvidia/hopper/include/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include <unordered_set>
 
 #define DEBUG_TYPE "nvgpu-ping-pong-sync"
@@ -33,11 +34,6 @@ static bool isExpensiveComp(Operation *op) {
   return tensorTy && tensorTy.getRank() >= 1;
 }
 
-static Value createGetAsyncTaskId(OpBuilder &builder, Operation *op) {
-  auto loc = op->getLoc();
-  return builder.create<ttng::GetAsyncTaskIdOp>(loc);
-}
-
 static bool isInnermostLoop(scf::ForOp forOp) {
   for (Operation &nestedOp : forOp.getBody()->getOperations()) {
     if (isa<scf::ForOp>(nestedOp)) {
@@ -47,14 +43,16 @@ static bool isInnermostLoop(scf::ForOp forOp) {
   return true;
 }
 
+// Ideally we should have GEMM, SFU, and OtherComp
 enum class ResourceType {
   Gemm,
   OtherComp,
 };
+// FIXME: hard-coded named barriers.
 const int PING_BARRIER = 9;
 const int PONG_BARRIER = 10;
 
-unsigned getLoopDepth(Operation *op) {
+static unsigned getLoopDepth(Operation *op) {
   unsigned depth = 0;
   auto pOp = op->getParentOfType<scf::ForOp>();
   while (pOp) {
@@ -121,7 +119,7 @@ bool categorizeIf(scf::IfOp ifOp, bool &hasDot, bool &hasExpCudaOp) {
 void doPingPongSync(triton::FuncOp &funcOp, unsigned numWarpGroups) {
   // Insert sync points in ForOp for consumer warp groups. Enable this pass
   // when number of consumer warp groups == 2.
-  if (numConsumerGroups != 2)
+  if (numWarpGroups < 3)
     return;
 
   SmallVector<scf::ForOp> loops;
