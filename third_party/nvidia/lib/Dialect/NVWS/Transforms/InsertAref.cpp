@@ -34,34 +34,14 @@ struct ProducedValueInfo {
   Value result;
 };
 
-bool isDescLoadAndAlloc(Value result) {
-  auto alloc = result.getDefiningOp<LocalAllocOp>();
-  if (!alloc)
-    return false;
-  return alloc.getSrc().getDefiningOp<triton::DescriptorOpInterface>();
-}
-
-bool isGlobalLoadAndAlloc(Value result) {
-  auto alloc = result.getDefiningOp<LocalAllocOp>();
-  if (!alloc)
-    return false;
-  return alloc.getSrc().getDefiningOp<triton::LoadOp>();
-}
-
 SmallVector<ProducedValueInfo> getProducedValues(Operation *op, Block *loopBody,
-                                                 WarpSchedule &schedule,
-                                                 bool allowDescLoadRegUse) {
+                                                 WarpSchedule &schedule) {
   SmallVector<ProducedValueInfo> producedValues;
   auto partition = schedule.getPartition(loopBody->findAncestorOpInBlock(*op));
 
   if (partition != schedule.getRootPartition()) {
     for (auto result : op->getResults()) {
-      // Only handles load ops for now.
-      if (isDescLoadAndAlloc(result) ||
-          (allowDescLoadRegUse &&
-           isa<triton::DescriptorOpInterface>(result.getDefiningOp()))) {
-        producedValues.push_back({partition, result});
-      }
+      producedValues.push_back({partition, result});
     }
   }
 
@@ -144,6 +124,20 @@ void createNVWSDescriptorLoadOp(OpBuilder &builder, Operation *ttDescLoadOp,
   } else {
     llvm_unreachable("unknown descriptor op.");
   }
+}
+
+bool isDescLoadAndAlloc(Value result) {
+  auto alloc = result.getDefiningOp<LocalAllocOp>();
+  if (!alloc)
+    return false;
+  return alloc.getSrc().getDefiningOp<triton::DescriptorOpInterface>();
+}
+
+bool isGlobalLoadAndAlloc(Value result) {
+  auto alloc = result.getDefiningOp<LocalAllocOp>();
+  if (!alloc)
+    return false;
+  return alloc.getSrc().getDefiningOp<triton::LoadOp>();
 }
 
 StageCluster getStageClusterForProducer(Value producedValue) {
@@ -406,19 +400,28 @@ public:
 
       int arefTag = 0;
 
-      // Process local_alloc(desc_load()) first, followed by remaining register
-      // uses of desc_load results
+      // To handle cases where desc_load result in registers is used as is in
+      // addition to being consumed by local_alloc op, we process
+      // local_alloc(desc_load()) first, followed by remaining register uses of
+      // desc_load results.
       for (auto allowDescLoadRegUse : {false, true}) {
         SmallVector<Operation *> ops;
         loop.walk([&](Operation *op) {
-          if (isa<LocalAllocOp, triton::DescriptorLoadOp>(op)) {
+          if (op->getNumResults() == 0) {
+            return WalkResult::advance();
+          }
+          // Only handles load ops for now.
+          if (isDescLoadAndAlloc(op->getResult(0)) ||
+              (allowDescLoadRegUse &&
+               (isa<triton::DescriptorOpInterface>(op)))) {
             ops.push_back(op);
           }
+          return WalkResult::advance();
         });
 
         for (auto op : ops) {
-          auto producedValues = getProducedValues(op, loop.getBody(), *schedule,
-                                                  allowDescLoadRegUse);
+          auto producedValues =
+              getProducedValues(op, loop.getBody(), *schedule);
           for (auto producedValue : producedValues) {
             PartitionBuilder builder(op->getLoc(), op);
             builder.setInsertionPointAfter(op);
