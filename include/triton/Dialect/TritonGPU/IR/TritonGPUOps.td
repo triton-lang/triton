@@ -214,8 +214,6 @@ def TTG_MemDescIndexOp : TTG_Op<"memdesc_index", [Pure, MemDescViewTrait]> {
      - the output shape is 4x16xf16, and
      - index = 1.
     Then the output descriptor is equivalent to input[1], where input is the logical tensor.
-
-    When the input is of rank 1 (i.e, shape=[k]), the output will have shape=[1].
   }];
 
   let arguments = (ins TTG_MemDescType:$src, I32:$index);

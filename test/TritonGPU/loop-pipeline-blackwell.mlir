@@ -14,7 +14,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK-DAG: %[[C2:.+]] = arith.constant 2 : i32
   // CHECK: %[[TMEM_BUF:.+]] = ttng.tmem_alloc : () -> !ttg.memdesc<128x128xf32
   // CHECK: ttng.tmem_store %[[C0_F]], %[[TMEM_BUF]], %[[TRUE]]
-  // CHECK: %[[BAR_BUF:.+]] = ttg.local_alloc : () -> !ttg.memdesc<2xi64
+  // CHECK: %[[BAR_BUF:.+]] = ttg.local_alloc : () -> !ttg.memdesc<2x1xi64
   // CHECK: %[[ACC1:.+]] = ttng.tmem_load %[[TMEM_BUF]]
   // CHECK: %[[ACC2:.+]] = arith.mulf %[[ACC1]]
   // CHECK: ttng.tmem_store %[[ACC2]], %[[TMEM_BUF]]
@@ -195,7 +195,7 @@ tt.func private @pipelined_gather(
 
   // CHECK: [[LHS_BUFS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2x32x128xbf16,
   // CHECK: [[RHS_BUFS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2x128x32xbf16,
-  // CHECK: [[BARS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2xi64,
+  // CHECK: [[BARS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2x1xi64,
 
   // CHECK-COUNT-2: ttng.init_barrier
 
