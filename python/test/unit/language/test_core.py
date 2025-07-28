@@ -7138,9 +7138,9 @@ def test_enable_fp_fusion(enable_fp_fusion, default_override, device):
 @pytest.mark.parametrize("env_var_override", [False, True])
 def test_override_arch(arch, env_var_override, device):
     if arch.startswith("sm") and not is_cuda():
-        pytest.skip('sm* arch only for CUDA')
+        pytest.skip(f"{arch} arch only for CUDA")
     elif arch.startswith("gfx") and not is_hip():
-        pytest.skip('gfx* arch only for CUDA')
+        pytest.skip(f"{arch} arch only for HIP")
 
     @triton.jit
     def simple(data, out):
