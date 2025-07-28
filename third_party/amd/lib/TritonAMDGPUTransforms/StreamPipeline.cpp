@@ -1,4 +1,5 @@
 #include "TritonAMDGPUTransforms/Passes.h"
+#include "amd/lib/TritonAMDGPUToLLVM/AsyncUtility.h"
 #include "amd/lib/TritonAMDGPUToLLVM/TargetInfo.h"
 #include "third_party/amd/include/Analysis/AxisInfoExt.h"
 #include "triton/Analysis/AxisInfo.h"
@@ -280,7 +281,8 @@ getSharedEncIfAllUsersAreDotEnc(Value loadedValue) {
 
 bool canBeConvertedToAsyncLoad(unsigned numBuffers, tt::LoadOp loadOp,
                                Value alloc,
-                               tt::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
+                               tt::ModuleAxisInfoAnalysis &axisInfoAnalysis,
+                               const tt::AMD::TargetInfo &targetInfo) {
   // If we have a single buffer we would require another barrier after the
   // local_reads so instead we fall back to pipeline with registers
   // Removing this check will create incorrect IR, see
@@ -289,7 +291,9 @@ bool canBeConvertedToAsyncLoad(unsigned numBuffers, tt::LoadOp loadOp,
     return false;
 
   // Compute the final vecSize we can use for the combination of sourceEncoding
-  // and sharedEncoding. We can only use AsyncCopy if the width is >= 32 bit
+  // and sharedEncoding. We can only use AsyncCopy if the target supports the
+  // requested or a smaller vecSize because we cannot stride when loading
+  // directly to lds
   auto srcTy = cast<RankedTensorType>(loadOp.getPtr().getType());
   auto dstTy = cast<ttg::MemDescType>(alloc.getType());
   auto regLayout = triton::gpu::toLinearLayout(srcTy);
@@ -298,9 +302,11 @@ bool canBeConvertedToAsyncLoad(unsigned numBuffers, tt::LoadOp loadOp,
   auto sharedLayout =
       triton::gpu::toLinearLayout(srcShape, dstTy.getEncoding(), srcShape);
   auto regToSharedLayout = regLayout.invertAndCompose(sharedLayout);
-  unsigned loadContig = regToSharedLayout.getNumConsecutiveInOut();
-  unsigned width = loadContig * dstTy.getElementTypeBitWidth();
-  if (width < 32)
+
+  unsigned vecSize = regToSharedLayout.getNumConsecutiveInOut();
+  unsigned elemBitWidth = dstTy.getElementTypeBitWidth();
+
+  if (fitToValidDirectToLdsVecSize(vecSize, elemBitWidth, targetInfo) == 0)
     return false;
 
   // Checks whether the global pointer's contiguity and mask alignment allows
@@ -354,10 +360,13 @@ createStreamOps(const LoadToInfoMap &loadToInfo, scf::ForOp &forOp,
     Value alloc = triton::createAlloc(forOp, ty, loadOp->getLoc(),
                                       info.sharedEncoding, numBuffers);
     assert(alloc && "Failed to create alloc for the async load.");
+    auto arch = getAMDArch(loadOp->getParentOfType<ModuleOp>());
+    triton::AMD::TargetInfo targetInfo(arch ? arch->str() : "");
 
     // Replace the old load with multi-buffered loads
-    if (useAsyncCopy && canBeConvertedToAsyncLoad(numBuffers, loadOp, alloc,
-                                                  axisInfoAnalysis)) {
+    if (useAsyncCopy &&
+        canBeConvertedToAsyncLoad(numBuffers, loadOp, alloc, axisInfoAnalysis,
+                                  targetInfo)) {
       loadToStreamOp[loadOp] = createAsyncCopy(loadOp, alloc, extractIdx);
     } else {
       loadToStreamOp[loadOp] = createStreamCopy(loadOp, alloc, extractIdx);
@@ -1054,8 +1063,7 @@ FailureOr<scf::ForOp> pipelineLoop(scf::ForOp forOp, int numStages,
 } // namespace
 
 struct PipelinePass : impl::TritonAMDGPUStreamPipelineBase<PipelinePass> {
-  using impl::TritonAMDGPUStreamPipelineBase<
-      PipelinePass>::TritonAMDGPUStreamPipelineBase;
+  using Base::Base;
 
   void runOnOperation() override {
     ModuleOp moduleOp = getOperation();
