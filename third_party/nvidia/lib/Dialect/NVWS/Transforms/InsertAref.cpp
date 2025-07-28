@@ -405,7 +405,8 @@ bool insertArefs(PartitionBuilder &builder, scf::ForOp loop,
 
 } // namespace
 
-class NVWSArefInsertion : public triton::impl::NVWSInsertArefBase<NVWSArefInsertion> {
+class NVWSArefInsertion
+    : public triton::impl::NVWSInsertArefBase<NVWSArefInsertion> {
 public:
   void runOnOperation() override {
     SmallVector<scf::ForOp> loops;
