@@ -480,8 +480,7 @@ struct MemDescIndexOpConversion
     auto dstTy = op.getResult().getType();
     auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
 
-    auto stride =
-        dstTy.getNumElements() / product(getCTASplitNum(dstTy.getEncoding()));
+    auto stride = product(getShapePerCTA(dstTy));
     Value offset = b.mul(op.getIndex(), b.i32_val(stride));
     auto smemObj = getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
                                                    llvmElemTy, rewriter);
