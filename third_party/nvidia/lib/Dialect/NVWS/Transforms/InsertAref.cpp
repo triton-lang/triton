@@ -170,7 +170,7 @@ SmallVector<Operation *> createArefPut(PartitionBuilder &builder,
 
   auto c0Enter = builder.intCst(0);
   auto putEnterOp = builder.createInto<ArefPutEnterOp>(
-      *producerPartition, stageCluster, buffers, aref, c0Enter);
+      *producerPartition, stageCluster, buffers, aref, c0Enter, c0Enter);
   schedule.insert(producerPartition, putEnterOp);
   schedule.insert(producerPartition, c0Enter.getDefiningOp());
   // Attach a "tag" to each put enter / exit pair, to easily identify them
@@ -307,7 +307,8 @@ void createArefGet(PartitionBuilder &builder, ArefCreateOp aref,
   Type bufferType = getBufferViewType(arefBufType, false);
   auto c0Enter = builder.intCst(0);
   auto getEnterOp = builder.createInto<ArefGetEnterOp>(
-      *consumerPartition, stageCluster, SmallVector{bufferType}, aref, c0Enter);
+      *consumerPartition, stageCluster, SmallVector{bufferType}, aref, c0Enter,
+      c0Enter);
   schedule.insert(consumerPartition, getEnterOp);
   schedule.insert(consumerPartition, c0Enter.getDefiningOp());
   getEnterOp->setAttr(kArefTagAttrName, builder.getStringAttr(arefTag));
@@ -404,7 +405,7 @@ bool insertArefs(PartitionBuilder &builder, scf::ForOp loop,
 
 } // namespace
 
-class NVWSArefInsertion : public impl::NVWSInsertArefBase<NVWSArefInsertion> {
+class NVWSArefInsertion : public triton::impl::NVWSInsertArefBase<NVWSArefInsertion> {
 public:
   void runOnOperation() override {
     SmallVector<scf::ForOp> loops;

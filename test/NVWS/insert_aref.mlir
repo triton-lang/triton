@@ -26,12 +26,12 @@ module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
     %1 = scf.for %arg5 = %c0_i32 to %arg0 step %c1_i32 iter_args(%arg6 = %0) -> (!ttg.async.token)  : i32 {
       %2 = arith.muli %arg5, %c64_i32 : i32
       // CHECK: [[C_ZERO1:%.*]] = arith.constant {ttg.partition = 2 : i32} 0
-      // CHECK: [[PUT_BUF1:%.*]] = nvws.aref.put.enter [[AREF1]][[[C_ZERO1]]] {aref_tag = "aref_0", ttg.partition = 2 : i32}
+      // CHECK: [[PUT_BUF1:%.*]] = nvws.aref.put.enter [[AREF1]][[[C_ZERO1]], [[C_ZERO1]]] {aref_tag = "aref_0", ttg.partition = 2 : i32}
       // CHECK-NEXT: nvws.descriptor_load {{.*}} 16384 [[PUT_BUF1]]
       // CHECK: [[C_ZERO2:%.*]] = arith.constant {ttg.partition = 2 : i32} 0
       // CHECK: nvws.aref.put.exit [[AREF1]][[[C_ZERO2]]] [#nvws.async_op<tma_load>] {aref_tag = "aref_0", ttg.partition = 2 : i32}
       // CHECK: [[C_ZERO3:%.*]] = arith.constant {ttg.partition = 1 : i32} 0
-      // CHECK: [[GET_BUF1:%.*]] = nvws.aref.get.enter [[AREF1]][[[C_ZERO3]]] {aref_tag = "aref_0", ttg.partition = 1 : i32}
+      // CHECK: [[GET_BUF1:%.*]] = nvws.aref.get.enter [[AREF1]][[[C_ZERO3]], [[C_ZERO3]]] {aref_tag = "aref_0", ttg.partition = 1 : i32}
       %3 = tt.descriptor_load %arg3[%arg1, %2] {ttg.partition = 2 : i32} : !tt.tensordesc<tensor<128x64xf16, #shared>> -> tensor<128x64xf16, #blocked1>
       // CHECK: [[PUT_BUF2:%.*]] = nvws.aref.put.enter [[AREF2]]
       // CHECK-NEXT: nvws.descriptor_load {{.*}} 16384 [[PUT_BUF2]]
