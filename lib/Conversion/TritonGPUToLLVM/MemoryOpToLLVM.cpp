@@ -5,6 +5,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Tools/LayoutUtils.h"
 
 namespace {
 
@@ -30,7 +31,10 @@ LogicalResult lowerLocalStore(Location loc, MLIRContext *ctx, Value regVal,
       dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(memDescTy.getEncoding());
   LinearLayout cvt = LinearLayout::empty();
   if (paddedLayout) {
-    cvt = regLayout.reshapeOuts({{kOffset, regLayout.getTotalOutDimSize()}});
+    auto shape = llvm::to_vector_of<unsigned>(regTy.getShape());
+    LinearLayout mappingWithoutPadding = mlir::triton::identityStandardND(
+        kOffset, shape, paddedLayout.getOrder());
+    cvt = regLayout.invertAndCompose(mappingWithoutPadding);
   } else {
     auto sharedLayout = toLinearLayout(memDescTy);
     cvt = regLayout.invertAndCompose(sharedLayout);
@@ -167,7 +171,10 @@ public:
         dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(sharedEnc);
     LinearLayout cvt = LinearLayout::empty();
     if (paddedLayout) {
-      cvt = regLayout.reshapeOuts({{kOffset, regLayout.getTotalOutDimSize()}});
+      auto shape = llvm::to_vector_of<unsigned>(regTy.getShape());
+      LinearLayout mappingWithoutPadding = mlir::triton::identityStandardND(
+          kOffset, shape, paddedLayout.getOrder());
+      cvt = regLayout.invertAndCompose(mappingWithoutPadding);
     } else {
       auto sharedLayout = toLinearLayout(memDescTy);
       cvt = regLayout.invertAndCompose(sharedLayout);
