@@ -60,6 +60,8 @@ class AMDFMAVectorMultiplier : public FMAVectorMultiplier {
            dElemTy);
     chosenOp.vectorSize = 1;
     chosenOp.outElemTy = aElemTy;
+    if (aElemTy.isF64())
+      chosenOp.intrinsicName = "llvm.fmuladd.f64";
     if (aElemTy.isF32())
       chosenOp.intrinsicName = "llvm.fmuladd.f32";
     if (aElemTy.isF16())

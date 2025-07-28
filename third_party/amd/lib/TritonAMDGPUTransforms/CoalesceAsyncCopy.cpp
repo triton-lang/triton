@@ -144,8 +144,7 @@ class TritonAMDGPUCoalesceAsyncCopyPass
     : public impl::TritonAMDGPUCoalesceAsyncCopyBase<
           TritonAMDGPUCoalesceAsyncCopyPass> {
 public:
-  using impl::TritonAMDGPUCoalesceAsyncCopyBase<
-      TritonAMDGPUCoalesceAsyncCopyPass>::TritonAMDGPUCoalesceAsyncCopyBase;
+  using Base::Base;
 
   void runOnOperation() override {
     ModuleOp m = getOperation();

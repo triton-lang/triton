@@ -1194,7 +1194,7 @@ public:
       auto elTy = opTy.getElementType();
       if (elTy != expectedElTy)
         return false;
-      if (!elTy.isF16() && !elTy.isF32())
+      if (!elTy.isF16() && !elTy.isF32() && !elTy.isF64())
         return false;
     }
     return true;
@@ -1293,12 +1293,9 @@ public:
 #define GEN_PASS_DEF_TRITONAMDGPUACCELERATEMATMUL
 #include "TritonAMDGPUTransforms/Passes.h.inc"
 
-class TritonAMDGPUAccelerateMatmulPass
-    : public impl::TritonAMDGPUAccelerateMatmulBase<
-          TritonAMDGPUAccelerateMatmulPass> {
-public:
-  using impl::TritonAMDGPUAccelerateMatmulBase<
-      TritonAMDGPUAccelerateMatmulPass>::TritonAMDGPUAccelerateMatmulBase;
+struct TritonAMDGPUAccelerateMatmulPass
+    : impl::TritonAMDGPUAccelerateMatmulBase<TritonAMDGPUAccelerateMatmulPass> {
+  using Base::Base;
 
   void runOnOperation() override {
 

@@ -271,6 +271,7 @@ void RoctracerProfiler::RoctracerProfilerPimpl::apiCallback(
         uint32_t StreamCaptureCount = pImpl->StreamToCaptureCount[Stream];
         pImpl->GraphToNumInstances[Graph] = StreamCaptureCount;
         pImpl->StreamToCapture.erase(Stream);
+        break;
       }
       case HIP_API_ID_hipLaunchKernel: {
         hipStream_t Stream = data->args.hipLaunchKernel.stream;

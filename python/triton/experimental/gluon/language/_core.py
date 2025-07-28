@@ -7,7 +7,7 @@ if TYPE_CHECKING:
     from triton._C.libtriton.gluon_ir import GluonOpBuilder
     from ._semantic import GluonSemantic
 
-from ._layouts import SharedLayout, DistributedLayout
+from ._layouts import SharedLayout, DistributedLayout, AutoLayout
 from triton._C.libtriton import ir
 import triton.language.core as tl_core
 from triton.language.core import (
@@ -383,11 +383,13 @@ def convert_layout(value, layout, assert_trivial=False, _semantic=None):
         tensor: The tensor with the new layout.
     """
     layout = _unwrap_if_constexpr(layout)
+    if isinstance(value.type.layout, AutoLayout):
+        return set_auto_layout(value, layout, _semantic=_semantic)
     return _semantic.convert_layout(value, layout, assert_trivial)
 
 
 @builtin
-def full(shape, value, dtype, layout, _semantic=None):
+def full(shape, value, dtype, layout=None, _semantic=None):
     """
     Create a tensor filled with a scalar value, with specified shape, dtype, and layout.
 

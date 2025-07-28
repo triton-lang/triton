@@ -20,39 +20,39 @@ tt.func public @matmul_kernel_tma_persistent(%arg0: !tt.tensordesc<tensor<128x64
   // CHECK: [[RHS_BUFFERS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<4x256x64xf16,
 
   // CHECK: [[LHS_BARS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2xi64,
-  // CHECK-NEXT: [[LHS_BAR0:%.*]] = ttg.memdesc_subview [[LHS_BARS]][%c0_i32]
+  // CHECK-NEXT: [[LHS_BAR0:%.*]] = ttg.memdesc_index [[LHS_BARS]], %c0_i32
   // CHECK-NEXT: ttng.init_barrier [[LHS_BAR0]]
-  // CHECK-NEXT: [[LHS_BAR1:%.*]] = ttg.memdesc_subview [[LHS_BARS]][%c1_i32]
+  // CHECK-NEXT: [[LHS_BAR1:%.*]] = ttg.memdesc_index [[LHS_BARS]], %c1_i32
   // CHECK-NEXT: ttng.init_barrier [[LHS_BAR1]]
 
   // CHECK: [[RHS_BARS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<4xi64,
-  // CHECK-NEXT: [[RHS_BAR0:%.*]] = ttg.memdesc_subview [[RHS_BARS]][%c0_i32]
+  // CHECK-NEXT: [[RHS_BAR0:%.*]] = ttg.memdesc_index [[RHS_BARS]], %c0_i32
   // CHECK-NEXT: ttng.init_barrier [[RHS_BAR0]]
-  // CHECK-NEXT: [[RHS_BAR1:%.*]] = ttg.memdesc_subview [[RHS_BARS]][%c1_i32]
+  // CHECK-NEXT: [[RHS_BAR1:%.*]] = ttg.memdesc_index [[RHS_BARS]], %c1_i32
   // CHECK-NEXT: ttng.init_barrier [[RHS_BAR1]]
-  // CHECK-NEXT: [[RHS_BAR2:%.*]] = ttg.memdesc_subview [[RHS_BARS]][%c2_i32]
+  // CHECK-NEXT: [[RHS_BAR2:%.*]] = ttg.memdesc_index [[RHS_BARS]], %c2_i32
   // CHECK-NEXT: ttng.init_barrier [[RHS_BAR2]]
-  // CHECK-NEXT: [[RHS_BAR3:%.*]] = ttg.memdesc_subview [[RHS_BARS]][%c3_i32]
+  // CHECK-NEXT: [[RHS_BAR3:%.*]] = ttg.memdesc_index [[RHS_BARS]], %c3_i32
   // CHECK-NEXT: ttng.init_barrier [[RHS_BAR3]]
 
   // CHECK: [[MASK0:%.*]] = arith.cmpi sgt, %arg3, %c0_i32
   // CHECK-NEXT: ttng.barrier_expect [[RHS_BAR0]], 32768, [[MASK0]]
-  // CHECK-NEXT: [[RHS_BUF0:%.*]] = ttg.memdesc_subview [[RHS_BUFFERS]][%c0_i32, %c0_i32, %c0_i32]
+  // CHECK-NEXT: [[RHS_BUF0:%.*]] = ttg.memdesc_index [[RHS_BUFFERS]], %c0_i32
   // CHECK-NEXT: ttng.async_tma_copy_global_to_local %arg1[%c0_i32, %c0_i32] [[RHS_BUF0]], [[RHS_BAR0]], [[MASK0]]
 
   // CHECK: [[MASK1:%.*]] = arith.cmpi sgt, %arg3, %c1_i32
   // CHECK-NEXT: ttng.barrier_expect [[RHS_BAR1]], 32768, [[MASK1]]
-  // CHECK-NEXT: [[RHS_BUF1:%.*]] = ttg.memdesc_subview [[RHS_BUFFERS]][%c1_i32, %c0_i32, %c0_i32]
+  // CHECK-NEXT: [[RHS_BUF1:%.*]] = ttg.memdesc_index [[RHS_BUFFERS]], %c1_i32
   // CHECK-NEXT: ttng.async_tma_copy_global_to_local %arg1[%c0_i32, %c1_i32] [[RHS_BUF1]], [[RHS_BAR1]], [[MASK1]]
 
   // CHECK: [[MASK2:%.*]] = arith.cmpi sgt, %arg3, %c2_i32
 
   // CHECK-NEXT: ttng.barrier_expect [[LHS_BAR0]], 16384, [[MASK0]]
-  // CHECK-NEXT: [[LHS_BUF0:%.*]] = ttg.memdesc_subview [[LHS_BUFFERS]][%c0_i32, %c0_i32, %c0_i32]
+  // CHECK-NEXT: [[LHS_BUF0:%.*]] = ttg.memdesc_index [[LHS_BUFFERS]], %c0_i32
   // CHECK-NEXT: ttng.async_tma_copy_global_to_local %arg0[%c0_i32, %c0_i32] [[LHS_BUF0]], [[LHS_BAR0]], [[MASK0]]
 
   // CHECK: ttng.barrier_expect [[RHS_BAR2]], 32768, [[MASK2]]
-  // CHECK-NEXT: [[RHS_BUF2:%.*]] = ttg.memdesc_subview [[RHS_BUFFERS]][%c2_i32, %c0_i32, %c0_i32]
+  // CHECK-NEXT: [[RHS_BUF2:%.*]] = ttg.memdesc_index [[RHS_BUFFERS]], %c2_i32
   // CHECK-NEXT: ttng.async_tma_copy_global_to_local %arg1[%c0_i32, %c2_i32] [[RHS_BUF2]], [[RHS_BAR2]], [[MASK2]]
 
   %true = arith.constant true
@@ -92,10 +92,10 @@ tt.func public @matmul_kernel_tma_persistent(%arg0: !tt.tensordesc<tensor<128x64
     // CHECK: [[V0:%.*]] = arith.xori [[LHS_PHASE_ARG]], %c1_i32
     // CHECK-NEXT: [[LHS_PHASE:%.*]] = arith.select [[V1]], [[V0]], [[LHS_PHASE_ARG]]
 
-    // CHECK: [[LHS_MBAR:%.*]] = ttg.memdesc_subview [[LHS_BARS]][[[LHS_BUF_IDX]]]
+    // CHECK: [[LHS_MBAR:%.*]] = ttg.memdesc_index [[LHS_BARS]], [[LHS_BUF_IDX]]
     // CHECK-NEXT: ttng.wait_barrier [[LHS_MBAR]], [[LHS_PHASE]]
 
-    // CHECK: [[RHS_MBAR:%.*]] = ttg.memdesc_subview [[RHS_BARS]][[[RHS_BUF_IDX]]]
+    // CHECK: [[RHS_MBAR:%.*]] = ttg.memdesc_index [[RHS_BARS]], [[RHS_BUF_IDX]]
     // CHECK-NEXT: ttng.wait_barrier [[RHS_MBAR]], [[RHS_PHASE]]
 
     %4 = tt.descriptor_load %arg0[%c0_i32, %arg6] {tt.latency = 1 : i32} : !tt.tensordesc<tensor<128x64xf16, #shared>> -> tensor<128x64xf16, #blocked>
@@ -108,20 +108,20 @@ tt.func public @matmul_kernel_tma_persistent(%arg0: !tt.tensordesc<tensor<128x64
     // CHECK: [[V0:%.*]] = arith.addi [[NEXT_LHS_BUF_IDX]], %c1_i32
     // CHECK-NEXT: [[V1:%.*]] = arith.cmpi sge, [[V0]], %c2_i32
     // CHECK-NEXT: [[NEXT_LHS_BUF_IDX:%.*]] = arith.select [[V1]], %c0_i32, [[V0]]
-    // CHECK-NEXT: [[NEXT_LHS_BAR:%.*]] = ttg.memdesc_subview [[LHS_BARS]][[[NEXT_LHS_BUF_IDX]]]
+    // CHECK-NEXT: [[NEXT_LHS_BAR:%.*]] = ttg.memdesc_index [[LHS_BARS]], [[NEXT_LHS_BUF_IDX]]
     // CHECK-NEXT: ttng.barrier_expect [[NEXT_LHS_BAR]], 16384, [[LHS_MASK]]
 
-    // CHECK-NEXT: [[NEXT_LHS_BUF:%.*]] = ttg.memdesc_subview [[LHS_BUFFERS]][[[NEXT_LHS_BUF_IDX]], %c0_i32, %c0_i32]
+    // CHECK-NEXT: [[NEXT_LHS_BUF:%.*]] = ttg.memdesc_index [[LHS_BUFFERS]], [[NEXT_LHS_BUF_IDX]]
     // CHECK-NEXT: [[NEXT_LHS_IDX:%.*]] = arith.addi [[I]], %c1_i32
     // CHECK-NEXT: ttng.async_tma_copy_global_to_local %arg0[%c0_i32, [[NEXT_LHS_IDX]]] [[NEXT_LHS_BUF]], [[NEXT_LHS_BAR]], [[LHS_MASK]]
 
     // CHECK: [[V0:%.*]] = arith.addi [[NEXT_RHS_BUF_IDX]], %c1_i32
     // CHECK-NEXT: [[V1:%.*]] = arith.cmpi sge, [[V0]], %c4_i32
     // CHECK-NEXT: [[NEXT_RHS_BUF_IDX:%.*]] = arith.select [[V1]], %c0_i32, [[V0]]
-    // CHECK-NEXT: [[NEXT_RHS_BAR:%.*]] = ttg.memdesc_subview [[RHS_BARS]][[[NEXT_RHS_BUF_IDX]]]
+    // CHECK-NEXT: [[NEXT_RHS_BAR:%.*]] = ttg.memdesc_index [[RHS_BARS]], [[NEXT_RHS_BUF_IDX]]
     // CHECK-NEXT: ttng.barrier_expect [[NEXT_RHS_BAR]], 32768, [[RHS_MASK]]
 
-    // CHECK-NEXT: [[NEXT_RHS_BUF:%.*]] = ttg.memdesc_subview [[RHS_BUFFERS]][[[NEXT_RHS_BUF_IDX]], %c0_i32, %c0_i32]
+    // CHECK-NEXT: [[NEXT_RHS_BUF:%.*]] = ttg.memdesc_index [[RHS_BUFFERS]], [[NEXT_RHS_BUF_IDX]]
     // CHECK-NEXT: [[NEXT_RHS_IDX:%.*]] = arith.addi [[I]], %c3_i32
     // CHECK-NEXT: ttng.async_tma_copy_global_to_local %arg1[%c0_i32, [[NEXT_RHS_IDX]]] [[NEXT_RHS_BUF]], [[NEXT_RHS_BAR]], [[RHS_MASK]]
 
