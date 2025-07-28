@@ -197,7 +197,7 @@ def roofline_mlp(batch_ranges, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_
     x_comp = xs[knee:]
     y_comp = [max_tflops] * len(x_comp)
     ax.plot(x_bw, y_bw, "--", label=f"BW-bound  ({max_tbps:.1f} TB/s)", color="blue")
-    ax.plot(x_comp, y_comp, "--", label=f"Compute-bound  ({max_tflops:.0f} TFLOP/s)", color="yellow")
+    ax.plot(x_comp, y_comp, "--", label=f"Compute-bound  ({max_tflops:.0f} TFLOP/s)", color="orange")
     x_bw, x_comp = xs[:knee], xs[knee:]
     x_bw = [x_bw[0], x_comp[0]]
     y_bw = [opints[0] * max_tbps, max_tflops]
