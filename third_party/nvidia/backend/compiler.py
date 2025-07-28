@@ -463,6 +463,7 @@ class CUDABackend(BaseBackend):
                          f'Repro command: {" ".join(ptxas_cmd)}\n')
 
                 print(f"""
+
 ================================================================
 {error}
 
@@ -470,7 +471,6 @@ class CUDABackend(BaseBackend):
 ================================================================
 please share the reproducer above with Triton project.
 """)
-                
                 raise PTXASError(error)
 
             with open(fbin, 'rb') as f:
