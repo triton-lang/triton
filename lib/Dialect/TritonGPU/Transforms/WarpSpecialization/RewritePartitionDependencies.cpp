@@ -48,7 +48,7 @@ struct UseInfo {
 int UseInfo::getMaxUseDistance(const Partition &partition) {
   int maxDistance = 0;
   for (auto [usePartition, distance] : llvm::make_first_range(consumers)) {
-    int dist = 2 + distance;
+    int dist = 1 + distance;
     maxDistance = std::max(maxDistance, dist);
   }
   return maxDistance;

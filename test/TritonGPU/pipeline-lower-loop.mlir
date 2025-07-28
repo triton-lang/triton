@@ -629,7 +629,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK-DAG: %[[NUM_BUFS:.*]] = arith.constant{{.*}}3 : i32
   // CHECK: %[[ACC_TM:.*]], %[[ACC_TOK:.*]] = ttng.tmem_alloc : ()
   // CHECK: %[[INIT_TOK:.*]] = ttng.tmem_store %[[INIT]], %[[ACC_TM]][%[[ACC_TOK]]]
-  // CHECK: %[[BAR:.*]] = ttg.local_alloc  : () -> !ttg.memdesc<2xi64
+  // CHECK: %[[BAR:.*]] = ttg.local_alloc  : () -> !ttg.memdesc<2x1xi64
   // CHECK: %[[BAR_SUB1:.*]] = ttg.memdesc_index %[[BAR]], %[[ZERO]]
   // CHECK: ttng.init_barrier %[[BAR_SUB1]], 1
   // CHECK: %[[BAR_SUB2:.*]] = ttg.memdesc_index %[[BAR]], %[[ONE]]
@@ -705,7 +705,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
 // CHECK-DAG: %[[ONE:.*]] = arith.constant 1 : i32
 // CHECK-DAG: %[[NUM_BUFS:.*]] = arith.constant {{.*}} 2 : i32
 // CHECK-DAG: %[[A:.*]] = ttg.local_alloc : () -> !ttg.memdesc<2x128x32
-// CHECK-DAG: %[[BARRIER:.*]] = ttg.local_alloc : () -> !ttg.memdesc<2xi64
+// CHECK-DAG: %[[BARRIER:.*]] = ttg.local_alloc : () -> !ttg.memdesc<2x1xi64
 // CHECK: %[[BAR1_VIEW:.*]] = ttg.memdesc_index %[[BARRIER]], %[[ZERO]]
 // CHECK: ttng.init_barrier %[[BAR1_VIEW]], 1
 // CHECK: %[[BAR2_VIEW:.*]] = ttg.memdesc_index %[[BARRIER]], %[[ONE]]
@@ -760,7 +760,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
 // CHECK-DAG: %[[ONE:.*]] = arith.constant 1 : i32
 // CHECK-DAG: %[[NUM_BUFS:.*]] = arith.constant {{.*}} 2 : i32
 // CHECK-DAG: %[[A:.*]] = ttg.local_alloc : () -> !ttg.memdesc<2x32x128
-// CHECK-DAG: %[[BARRIER:.*]] = ttg.local_alloc : () -> !ttg.memdesc<2xi64
+// CHECK-DAG: %[[BARRIER:.*]] = ttg.local_alloc : () -> !ttg.memdesc<2x1xi64
 // CHECK: %[[BAR1_VIEW:.*]] = ttg.memdesc_index %[[BARRIER]], %[[ZERO]]
 // CHECK: ttng.init_barrier %[[BAR1_VIEW]], 1
 // CHECK: %[[BAR2_VIEW:.*]] = ttg.memdesc_index %[[BARRIER]], %[[ONE]]
@@ -848,7 +848,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK-LABEL: @tma_pipelining_mmav3
   // CHECK: ttg.local_alloc : () -> !ttg.memdesc<3x128x128
   // CHECK: ttg.local_alloc : () -> !ttg.memdesc<3x128x128
-  // CHECK: ttg.local_alloc : () -> !ttg.memdesc<3xi64
+  // CHECK: ttg.local_alloc : () -> !ttg.memdesc<3x1xi64
   // CHECK: scf.for
   // CHECK:   ttng.barrier_expect
   // CHECK:   ttng.async_tma_copy_global_to_local
@@ -1013,7 +1013,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK: %[[ACC_TM:.*]], %[[ACC_TOK:.*]] = ttng.tmem_alloc  : () -> (!ttg.memdesc<2x128x128xf32
   // CHECK: %[[ACC_TM_SLICE:.*]] = ttg.memdesc_index %[[ACC_TM]], %[[C_0]]
   // CHECK: %[[INIT_TOK:.*]] = ttng.tmem_store %[[INIT_ACC]], %[[ACC_TM_SLICE]][], %[[TRUE]]
-  // CHECK: %[[BAR:.*]] = ttg.local_alloc  : () -> !ttg.memdesc<2xi64
+  // CHECK: %[[BAR:.*]] = ttg.local_alloc  : () -> !ttg.memdesc<2x1xi64
   // CHECK: %[[BAR_SLICE:.*]] = ttg.memdesc_index %[[BAR]], %[[C_0]]
   // CHECK: ttng.init_barrier %[[BAR_SLICE]], 1
   // CHECK: %[[BAR_SLICE_2:.*]] = ttg.memdesc_index %[[BAR]], %[[C_1]]
@@ -1095,7 +1095,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK: %[[ACC_TM:.*]], %[[ACC_TOK:.*]] = ttng.tmem_alloc : () -> (!ttg.memdesc<2x128x128xf32
   // CHECK: %[[ACC_TM_SLICE:.*]] = ttg.memdesc_index %[[ACC_TM]], %[[C_0]]
   // CHECK: %[[INIT_TOK:.*]] = ttng.tmem_store %[[INIT_ACC]], %[[ACC_TM_SLICE]][], %[[TRUE]]
-  // CHECK: %[[BAR:.*]] = ttg.local_alloc  : () -> !ttg.memdesc<2xi64
+  // CHECK: %[[BAR:.*]] = ttg.local_alloc  : () -> !ttg.memdesc<2x1xi64
   // CHECK: %[[BAR_SLICE:.*]] = ttg.memdesc_index %[[BAR]], %[[C_0]]
   // CHECK: ttng.init_barrier %[[BAR_SLICE]], 1
   // CHECK: %[[BAR_SLICE_2:.*]] = ttg.memdesc_index %[[BAR]], %[[C_1]]
@@ -1207,7 +1207,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK-DAG: %[[C2:.+]] = arith.constant{{.*}} 2 : i32
   // CHECK: %[[TMEM_BUF:.+]], %[[ACC_TOK:.+]] = ttng.tmem_alloc : () -> (!ttg.memdesc<128x128xf32
   // CHECK: %[[INIT_TOK:.+]] = ttng.tmem_store %[[C0_F]], %[[TMEM_BUF]][%[[ACC_TOK]]]
-  // CHECK: %[[BAR_BUF:.+]] = ttg.local_alloc : () -> !ttg.memdesc<2xi64
+  // CHECK: %[[BAR_BUF:.+]] = ttg.local_alloc : () -> !ttg.memdesc<2x1xi64
   // CHECK: %[[BAR_SLICE0:.+]] = ttg.memdesc_index %[[BAR_BUF]], %[[C0]]
   // CHECK: ttng.init_barrier %[[BAR_SLICE0]], 1
   // CHECK: %[[BAR_SLICE1:.+]] = ttg.memdesc_index %[[BAR_BUF]], %[[C1]]
@@ -1455,7 +1455,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK-LABEL: @changed_acc_before_mma
   // CHECK-DAG: %[[TRUE:.+]] = arith.constant true
   // CHECK: %[[TMEM_BUF:.+]], %[[ACC_TOK:.+]] = ttng.tmem_alloc : () -> (!ttg.memdesc<128x128xf32
-  // CHECK: %[[BAR_BUF:.+]] = ttg.local_alloc : () -> !ttg.memdesc<2xi64
+  // CHECK: %[[BAR_BUF:.+]] = ttg.local_alloc : () -> !ttg.memdesc<2x1xi64
   // CHECK: %[[A_BUF:.+]] = ttg.local_alloc : () -> !ttg.memdesc<3x128x128xf16
   // CHECK: %[[B_BUF:.+]] = ttg.local_alloc : () -> !ttg.memdesc<3x128x128xf16
   // CHECK: scf.for
