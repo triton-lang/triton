@@ -88,14 +88,8 @@ std::pair<WarpGroupOp, int> getWarpGroupIdx(Operation *op) {
   return getWarpGroupIdx(op->getParentOp());
 }
 
-struct BarrierCount {
-  int producerPendingCount;
-  int consumerPendingCount;
-};
-
-BarrierCount getArrivalCount(ArefCreateOp op) {
-  std::optional<int> producerPendingCount, consumerPendingCount;
-  SetVector<int> consumerGroups;
+std::pair<int, int> getArrivalCount(ArefCreateOp op) {
+  std::optional<int> producerArrivalCount, consumerArrivalCount;
 
   for (auto user : op->getUsers()) {
     if (isa<ArefDestroyOp>(user))
@@ -104,60 +98,69 @@ BarrierCount getArrivalCount(ArefCreateOp op) {
     auto numWarps = wgOp.getNumWarps()[idx];
 
     if (auto putExitOp = dyn_cast<ArefPutExitOp>(user)) {
-      int pendingCount = 0;
+      int count = 0;
       for (auto prod : putExitOp.getAsyncOps()) {
         auto kind = dyn_cast<AsyncOpAttr>(prod).getValue();
         switch (kind) {
         case AsyncOp::TC5MMA:
         case AsyncOp::TMALoad:
+          count += 1;
+          break;
+        case AsyncOp::CpAsync:
+          count += numWarps * 32;
+          break;
         case AsyncOp::NONE:
-          pendingCount += 1;
+          // TODO: this should be 'numWarps * 32' when we transition to
+          //       multi-threaded arrive
+          count += 1;
           break;
         default:
-          llvm_unreachable("unsupported producer kind");
+          llvm_unreachable("unknown producer kind");
         }
       }
 
-      if (consumerPendingCount) {
-        assert(*consumerPendingCount == pendingCount &&
-               "inconsistent consumer pending count");
+      if (producerArrivalCount) {
+        assert(*producerArrivalCount == count &&
+               "inconsistent producer arrival count");
       } else {
-        consumerPendingCount = pendingCount;
+        producerArrivalCount = count;
       }
     } else if (auto getExitOp = dyn_cast<ArefGetExitOp>(user)) {
-      int pendingCount = 0;
+      int count = 0;
       for (auto consumer : getExitOp.getAsyncOps()) {
         auto kind = dyn_cast<AsyncOpAttr>(consumer).getValue();
         switch (kind) {
         case AsyncOp::TC5MMA:
-        case AsyncOp::WGMMA:
+          count += 1;
+          break;
         case AsyncOp::NONE:
-          pendingCount += 1;
+        case AsyncOp::WGMMA:
+          // TODO: this should be 'numWarps * 32' when we transition to
+          //       multi-threaded arrive
+          count += 1;
           break;
         default:
-          llvm_unreachable("unsupported consumer kind");
+          llvm_unreachable("unknown consumer kind");
         }
       }
 
-      if (producerPendingCount) {
-        assert(*producerPendingCount == pendingCount &&
-               "inconsistent producer pending count");
+      if (consumerArrivalCount) {
+        assert(*consumerArrivalCount == count &&
+               "inconsistent consumer arrival count");
+      } else {
+        consumerArrivalCount = count;
       }
-      producerPendingCount = pendingCount;
-      consumerGroups.insert(idx);
     }
   }
 
-  assert(producerPendingCount);
-  assert(consumerPendingCount);
-  int numGroupConsumers = consumerGroups.size();
-  *producerPendingCount *= numGroupConsumers;
+  assert(producerArrivalCount);
+  assert(consumerArrivalCount);
 
-  return {*producerPendingCount, *consumerPendingCount};
+  return {*producerArrivalCount, *consumerArrivalCount};
 }
 
 ArefValue createAndInitMbar(ArefCreateOp op, PatternRewriter &rewriter) {
-  BarrierCount count = getArrivalCount(op);
+  auto [producerArrivalCount, consumerArrivalCount] = getArrivalCount(op);
 
   MLIRContext *ctx = op.getContext();
   auto loc = op.getLoc();
@@ -178,13 +181,11 @@ ArefValue createAndInitMbar(ArefCreateOp op, PatternRewriter &rewriter) {
   rewriter.setInsertionPointToStart(dLoop.getBody());
 
   for (int i = 0; i < 2; ++i) {
-    bool isProducer = i == 0;
-    auto mbars = isProducer ? emptyMbars : fullMbars;
+    auto mbars = i == 0 ? emptyMbars : fullMbars;
     auto singleBarrier =
         createSingleBufferView(rewriter, mbars, dLoop.getInductionVar());
-    int pendingCount =
-        isProducer ? count.producerPendingCount : count.consumerPendingCount;
-    rewriter.create<InitBarrierOp>(loc, singleBarrier, pendingCount);
+    int arrivalCount = i == 0 ? consumerArrivalCount : producerArrivalCount;
+    rewriter.create<InitBarrierOp>(loc, singleBarrier, arrivalCount);
   }
 
   return ArefValue{emptyMbars, fullMbars, static_cast<int>(depth),
@@ -592,6 +593,27 @@ template <class T> struct ArefIndex<T> {
   }
 
   static LogicalResult run(WarpGroupOp wgOp, std::string opName) {
+    // Verify that all puts and gets are in the same group; otherwise, the stage
+    // would need to be communicated across groups, not currently supported.
+    Region *opRegion = {};
+
+    SetVector<Value> arefs;
+    wgOp.walk([&](T op) { arefs.insert(op.getAref()); });
+    for (auto aref : arefs) {
+      for (auto user : aref.getUsers()) {
+        if (isa<T>(user)) {
+          auto [wg, idx] = getWarpGroupIdx(user);
+          auto region = &wg.getPartitionRegions()[idx];
+          if (opRegion && opRegion != region) {
+            return mlir::emitWarning(user->getLoc(),
+                                     "All " + opName +
+                                         " must be in the same warp-group");
+          }
+          opRegion = region;
+        }
+      }
+    }
+
     ArefUseSet arefUse;
     for (auto region : wgOp.getRegions()) {
       auto block = &region->getBlocks().front();

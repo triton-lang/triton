@@ -60,8 +60,7 @@ def NVWSLowerAref : Pass<"nvws-lower-aref", "mlir::ModuleOp"> {
   let dependentDialects = [
     "mlir::triton::nvws::NVWSDialect",
     "mlir::triton::TritonDialect",
-    "mlir::triton::gpu::TritonGPUDialect",
-    "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
+    "mlir::triton::gpu::TritonGPUDialect"
   ];
 }
 
