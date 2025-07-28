@@ -23,7 +23,6 @@ from triton.experimental.gluon._runtime import GluonASTSource
 from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
 
 from triton._filecheck import filecheck_test, run_parser
-from triton._internal_testing import is_cuda, is_hip
 
 TARGET_PAT = re.compile('ttg.target = "[^"]*"')
 
