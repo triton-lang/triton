@@ -4,6 +4,7 @@
 
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Types.h"
+#include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Gluon/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
@@ -211,6 +212,14 @@ py::object layoutToGluon(Attribute layout) {
   }
 
   throw py::value_error("Unhandled encoding encountered");
+}
+
+static Value toConstantValue(OpBuilder &builder, mlir::Location loc,
+                             int stride) {
+  auto i32Type = builder.getI32Type();
+  auto strideAttr = builder.getIntegerAttr(i32Type, 1);
+  return builder.create<mlir::arith::ConstantOp>(loc, i32Type, strideAttr)
+      .getResult();
 }
 
 void init_gluon_ir(py::module &&m) {
@@ -599,13 +608,45 @@ void init_gluon_ir(py::module &&m) {
            [](GluonOpBuilder &self, int numPartitions) -> Operation * {
              return self.create<ttg::WarpSpecializePartitionsOp>(numPartitions);
            })
-      .def("create_warp_specialize", [](GluonOpBuilder &self,
-                                        std::vector<Type> &resultTypes,
-                                        std::vector<Value> &explicitCaptures,
-                                        std::vector<int> &partitionNumWarps) {
-        return self.create<ttg::WarpSpecializeOp>(resultTypes, explicitCaptures,
-                                                  partitionNumWarps);
-      });
+      .def("create_warp_specialize",
+           [](GluonOpBuilder &self, std::vector<Type> &resultTypes,
+              std::vector<Value> &explicitCaptures,
+              std::vector<int> &partitionNumWarps) {
+             return self.create<ttg::WarpSpecializeOp>(
+                 resultTypes, explicitCaptures, partitionNumWarps);
+           })
+      .def("get_amd_mfma_layout",
+           [](GluonOpBuilder &self, std::vector<unsigned> version,
+              std::vector<unsigned> &warpsPerCta,
+              std::vector<unsigned> &tilesPerWarp, unsigned mDim, unsigned nDim,
+              bool transposed, std::vector<unsigned> &ctasPerCga,
+              std::vector<unsigned> &ctaSplitNum,
+              std::vector<unsigned> &ctaOrder,
+              unsigned elemTypeWidth) -> Attribute {
+             auto ctx = self.getContext();
+             auto ctaLayout = self.getChecked<ttg::CTALayoutAttr>(
+                 ctx, ctasPerCga, ctaSplitNum, ctaOrder);
+             return ttg::AMDMfmaEncodingAttr::get(
+                 ctx, version[0], warpsPerCta, tilesPerWarp, mDim, nDim, false,
+                 ctaLayout, mlir::Float32Type::get(ctx));
+           })
+      .def("create_buffer_load",
+           [](GluonOpBuilder &self, Type resultType, Value &ptr, Value &offsets,
+              mlir::triton::CacheModifier cache, Value &mask,
+              Value &other) -> Value {
+             return self.create<triton::amdgpu::BufferLoadOp>(
+                 resultType, ptr, offsets,
+                 toConstantValue(self.getBuilder(), self.getLastLoc(), 1),
+                 cache, mask, other);
+           })
+      .def("create_buffer_store",
+           [](GluonOpBuilder &self, Value &storedValue, Value &ptr,
+              Value &offsets, mlir::triton::CacheModifier cache, Value &mask) {
+             self.create<triton::amdgpu::BufferStoreOp>(
+                 storedValue, ptr, offsets,
+                 toConstantValue(self.getBuilder(), self.getLastLoc(), 1),
+                 cache, mask);
+           });
 
   py::class_<ttg::WarpSpecializeOp, OpState>(m, "WarpSpecializeOp",
                                              py::module_local())
