@@ -1,8 +1,11 @@
+#include "Analysis/AMDGPUAllocation.h"
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "TritonAMDGPUTransforms/Passes.h"
+#include "amd/lib/TritonAMDGPUToLLVM/TargetInfo.h"
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/WalkPatternRewriteDriver.h"
+#include "triton/Analysis/Allocation.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
@@ -106,8 +109,35 @@ void transposeInRegsitersBeforeStoreInLocalMemory(
   rewriter.finalizeOpModification(memStoreOp);
 }
 
-Attribute createNewSharedEncoding(ttg::BlockedEncodingAttr globalLoadEnc,
-                                  RankedTensorType operandType) {
+Attribute createRotatingSharedEncoding(ttg::BlockedEncodingAttr globalLoadEnc,
+                                       RankedTensorType operandType) {
+  auto ctx = operandType.getContext();
+  auto dotOperandEnc =
+      cast<ttg::DotOperandEncodingAttr>(operandType.getEncoding());
+  auto ctaLayout = ttg::getCTALayout(dotOperandEnc);
+  auto bitWidth = operandType.getElementTypeBitWidth();
+  auto shape = operandType.getShape();
+  int rank = operandType.getRank();
+  SmallVector<unsigned> order(rank);
+  std::iota(order.rbegin(), order.rend(), 0);
+  if (dotOperandEnc.getOpIdx() == 1)
+    std::swap(order[0], order[1]);
+
+  auto tempAttr = ttg::SwizzledSharedEncodingAttr::get(
+      ctx, dotOperandEnc, operandType.getShape(), order, ctaLayout, bitWidth,
+      /*needTrans=*/false);
+
+  auto sharedVec = tempAttr.getVec();
+  auto perPhase = tempAttr.getPerPhase();
+  auto maxPhase = tempAttr.getMaxPhase();
+
+  auto newSharedEnc = ttg::AMDRotatingSharedEncodingAttr::get(
+      ctx, sharedVec, perPhase, maxPhase, order, ctaLayout);
+  return newSharedEnc;
+}
+
+Attribute createPaddedSharedEncoding(ttg::BlockedEncodingAttr globalLoadEnc,
+                                     RankedTensorType operandType) {
   auto ctx = operandType.getContext();
   auto dotOperandEnc =
       cast<ttg::DotOperandEncodingAttr>(operandType.getEncoding());
@@ -155,15 +185,21 @@ Attribute createNewSharedEncoding(ttg::BlockedEncodingAttr globalLoadEnc,
   return newSharedEnc;
 }
 
+bool isEnoughLDS(ModuleOp mod, int totalSharedMemSize) {
+  // Padded layout requires more shared memory than other layout types.
+  // If LDS memory is not enough, skip this pattern.
+  mlir::ModuleAllocation allocAnalysis(
+      mod, mlir::triton::AMD::AMDAllocationAnalysisScratchSizeFn);
+  if (allocAnalysis.getSharedMemorySize() > totalSharedMemSize) {
+    LDBG("Not enough LDS memory, skip transposing ITT patter");
+    return false;
+  }
+  return true;
+}
+
 void changeSharedEncoding(PatternRewriter &rewriter, Value memVal,
                           Attribute newEncoding) {
   auto originalType = cast<ttg::MemDescType>(memVal.getType());
-  auto sharedEnc =
-      dyn_cast<ttg::SwizzledSharedEncodingAttr>(originalType.getEncoding());
-  // Already transformed this value
-  if (!sharedEnc)
-    return;
-
   auto newType = ttg::MemDescType::get(
       originalType.getShape(), originalType.getElementType(), newEncoding,
       originalType.getMemorySpace(), originalType.getMutableMemory());
@@ -759,9 +795,12 @@ ttg::BlockedEncodingAttr getTransposableBlockedEnc(int dotOperandIdx,
 }
 
 class InThreadTransposePattern : public OpRewritePattern<ttg::LocalLoadOp> {
+  int totalSharedMemSize;
+
 public:
-  InThreadTransposePattern(MLIRContext *context, PatternBenefit benefit = 1)
-      : OpRewritePattern(context, benefit) {}
+  InThreadTransposePattern(MLIRContext *context, int sharedMemSize,
+                           PatternBenefit benefit = 1)
+      : OpRewritePattern(context, benefit), totalSharedMemSize(sharedMemSize) {}
 
   LogicalResult matchAndRewrite(ttg::LocalLoadOp localLoad,
                                 PatternRewriter &rewriter) const override {
@@ -796,10 +835,21 @@ public:
                                                    newBlockedEnc);
 
     LDBG("Adjust shared encoding");
-    auto newSharedEncoding = createNewSharedEncoding(
+    auto paddedSharedEncoding = createPaddedSharedEncoding(
         newBlockedEnc, cast<RankedTensorType>(localLoad.getType()));
     for (auto memVal : pattern.sharedMemVals)
-      changeSharedEncoding(rewriter, memVal, newSharedEncoding);
+      changeSharedEncoding(rewriter, memVal, paddedSharedEncoding);
+
+    auto mod = localLoad->getParentOfType<ModuleOp>();
+    if (!isEnoughLDS(mod, totalSharedMemSize)) {
+      // rotating encoding do not increase LDS consumption,
+      // use it in case we are tight on shared memory.
+      auto rotatingSharedEncoding = createRotatingSharedEncoding(
+          newBlockedEnc, cast<RankedTensorType>(localLoad.getType()));
+      for (auto memVal : pattern.sharedMemVals)
+        changeSharedEncoding(rewriter, memVal, rotatingSharedEncoding);
+    }
+
     return success();
   }
 };
@@ -813,10 +863,31 @@ class TritonAMDGPUInThreadTransposePass
 public:
   void runOnOperation() override {
     tt::FuncOp f = getOperation();
+    mlir::ModuleOp mod = f->getParentOfType<mlir::ModuleOp>();
+    auto targetAttr =
+        mod->getAttrOfType<StringAttr>(triton::gpu::AttrTargetName);
+    if (!targetAttr) {
+      mlir::emitError(mod.getLoc(), llvm::Twine("No ") +
+                                        triton::gpu::AttrTargetName +
+                                        "attribute in Module");
+      return signalPassFailure();
+    }
+    auto targetStr = targetAttr.str();
+    auto delimiterPos = targetStr.find(':');
+    if (delimiterPos == std::string::npos) {
+      mlir::emitError(mod.getLoc(), llvm::Twine("Wrong format of ") +
+                                        triton::gpu::AttrTargetName +
+                                        "attribute in Module");
+      return signalPassFailure();
+    }
+    auto targetArchStr = targetStr.substr(delimiterPos + 1);
+
+    triton::AMD::TargetInfo targetInfo(targetArchStr);
+    auto sharedMemSize = targetInfo.getSharedMemorySize();
 
     auto ctx = f.getContext();
     RewritePatternSet patterns(ctx);
-    patterns.add<InThreadTransposePattern>(ctx, /*benefit=*/1);
+    patterns.add<InThreadTransposePattern>(ctx, sharedMemSize, /*benefit=*/1);
     walkAndApplyPatterns(f, std::move(patterns));
   }
 };
