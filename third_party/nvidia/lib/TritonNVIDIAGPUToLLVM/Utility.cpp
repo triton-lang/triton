@@ -382,7 +382,6 @@ LogicalResult lowerLdStMatrix(
   }
   return success();
 }
-
 } // namespace NVIDIA
 } // namespace LLVM
 } // namespace mlir

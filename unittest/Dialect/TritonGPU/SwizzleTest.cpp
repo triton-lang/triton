@@ -1,4 +1,3 @@
-#include "third_party/nvidia/lib/TritonNVIDIAGPUToLLVM/TargetInfo.h"
 #include "triton/Tools/GenericSwizzling.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/LinearLayout.h"
@@ -32,9 +31,6 @@ public:
 
 protected:
   MLIRContext ctx;
-  // Ensure ldmatrix/stmatrix are not used
-  NVIDIA::TargetInfo targetInfo =
-      NVIDIA::TargetInfo(/*computeCapability=*/70, /*ptxVersion=*/64);
 };
 
 // ——— Tests ———

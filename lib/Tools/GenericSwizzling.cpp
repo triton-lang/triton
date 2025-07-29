@@ -556,91 +556,59 @@ LinearLayout optimalSwizzlingLdSt(const LinearLayout &src,
   return smem;
 }
 
-std::pair<LinearLayout, std::pair<InstrType, InstrType>>
+std::pair<LinearLayout, std::pair<int32_t, int32_t>>
 optimalSwizzling(const LinearLayout &src, const LinearLayout &dst,
-                 int32_t bitwidth, const TargetInfoBase &targetInfo) {
+                 ArrayRef<LocalMemOpTile> srcTiles,
+                 ArrayRef<LocalMemOpTile> dstTiles, int32_t bitwidth) {
   assert(bitwidth <= 128 && "bitwidth must be <= 128");
   auto srcFlat = src.flattenOuts();
   auto dstFlat = dst.flattenOuts();
   // Number of total bases needed to cover the necessary contiguous tile
   // We assume using ld.shared.b32.v4 in the case of ld/st ops
   const auto totalBases = llvm::Log2_32(128 / bitwidth);
-  llvm::MapVector<InstrType, SmallVector<int32_t>> laneIdTiles;
-  // ld/st.shared.b32.v4
-  laneIdTiles[InstrType::Vec] = {};
-
-  // ldmatrix/stmatrix
-  if (bitwidth <= 32) {
-    laneIdTiles[InstrType::Matrix] = SmallVector{0, 1};
-  }
-
-  // ldmatrix/stmatrix.trans
-  if (bitwidth == 16) {
-    laneIdTiles[InstrType::MatrixTrans] = SmallVector{2, 3, 4};
-  }
 
   auto *ctx = src.getInDimNames().begin()->getContext();
   auto kReg = StringAttr::get(ctx, "register");
-  // TODO before landing need to generalise the ldmatrix.trans lowering a little
-  // bit
-  auto isCompatible = [kReg, bitwidth, &targetInfo](
-                          const LinearLayout &ll, InstrType instr, bool isLd) {
-    if (instr == InstrType::Vec) {
-      return true;
-    }
-    auto ok = (isLd && targetInfo.supportLdMatrix()) ||
-              (!isLd && targetInfo.supportStMatrix());
-    if (!ok) {
-      return false;
-    }
-    if (instr == InstrType::MatrixTrans) {
-      // Need at least 32 bits worth of registers
-      return ll.getInDimSize(kReg) >= 32 / bitwidth;
-    }
-    return true;
-  };
 
   // Find the pairs of instructions that we can use to lower this converet
-  // TODO Turn this into local types
-  SmallVector<std::tuple<std::pair<InstrType, InstrType>, SmallVector<int32_t>>>
+  SmallVector<std::tuple<std::pair<int32_t, int32_t>, SmallVector<int32_t>>>
       instr;
-  for (auto instrSt : laneIdTiles) {
-    if (!isCompatible(src, instrSt.first, /*isLd=*/false)) {
-      continue;
-    }
-    for (auto instrLd : laneIdTiles) {
-      if (!isCompatible(dst, instrLd.first, /*isLd=*/true)) {
-        continue;
-      }
-      auto maybeTile = optimalSwizzlingTile(
-          srcFlat, dstFlat, totalBases - instrSt.second.size(),
-          totalBases - instrLd.second.size(), instrSt.second, instrLd.second);
+  for (const auto &[idxSrc, instrSrc] : llvm::enumerate(srcTiles)) {
+    auto logRegSrc = totalBases - instrSrc.laneContig.size();
+    for (const auto &[idxDst, instrDst] : llvm::enumerate(dstTiles)) {
+      auto logRegDst = totalBases - instrDst.laneContig.size();
+      auto maybeTile =
+          optimalSwizzlingTile(srcFlat, dstFlat, logRegSrc, logRegDst,
+                               instrSrc.laneContig, instrDst.laneContig);
       if (maybeTile.has_value()) {
-        instr.push_back(
-            {{instrSt.first, instrLd.first}, std::move(*maybeTile)});
+        instr.push_back({{idxSrc, idxDst}, std::move(*maybeTile)});
       }
     }
   }
-  auto getTile = [](InstrType instr, ArrayRef<int32_t> regs,
-                    ArrayRef<int32_t> lane, ArrayRef<int32_t> vbasis) {
-    if (instr == InstrType::Vec) {
-      return to_vector(lane.take_front(3));
-    } else if (instr == InstrType::Matrix) {
-      return to_vector(lane.take_back(3));
-    } else {
-      assert(instr == InstrType::MatrixTrans);
-      // Pick the first register in regs that is not in vbasis
-      SmallVector<int32_t> tile;
-      for (int32_t r : regs) {
-        if (!llvm::is_contained(vbasis, r)) {
-          tile.push_back(r);
-          break;
-        }
+  auto getTile =
+      [](const LocalMemOpTile &instr, ArrayRef<int32_t> regs,
+         ArrayRef<int32_t> lane,
+         ArrayRef<int32_t> vbasis) -> std::optional<SmallVector<int32_t>> {
+    // pick the first laneAddr.size() - 3 registers that are not in vbasis
+    SmallVector<int32_t> tile;
+    auto regNeeded = instr.laneAddr.size() - 3;
+    for (int32_t r : regs) {
+      if (regNeeded == 0) {
+        break;
       }
-      assert(!tile.empty() && "No register found");
-      tile.append(lane.begin(), lane.begin() + 2);
-      return tile;
+      if (!llvm::is_contained(vbasis, r)) {
+        tile.push_back(r);
+        regNeeded--;
+      }
     }
+    // Not enough registers to fill in the tile
+    if (regNeeded > 0) {
+      return std::nullopt;
+    }
+    for (auto i : instr.laneAddr) {
+      tile.push_back(lane[i]);
+    }
+    return tile;
   };
 
   auto kLane = StringAttr::get(ctx, "lane");
@@ -649,22 +617,36 @@ optimalSwizzling(const LinearLayout &src, const LinearLayout &dst,
   auto laneSrc = flatten(srcFlat, kLane);
   auto laneDst = flatten(dstFlat, kLane);
 
-  if (instr.empty()) {
+  // Get the associated src/dst tiles for each instruction if they exist
+  SmallVector<std::tuple<std::pair<int32_t, int32_t>, SmallVector<int32_t>,
+                         SmallVector<int32_t>, SmallVector<int32_t>>>
+      tiles;
+  for (auto [instrs, vbasis] : instr) {
+    auto maybeTileSrc =
+        getTile(srcTiles[instrs.first], regSrc, laneSrc, vbasis);
+    auto maybeTileDst =
+        getTile(dstTiles[instrs.second], regDst, laneDst, vbasis);
+    if (!maybeTileSrc.has_value() || !maybeTileDst.has_value()) {
+      continue;
+    }
+    tiles.push_back({instrs, std::move(vbasis), std::move(*maybeTileSrc),
+                     std::move(*maybeTileDst)});
+  }
+
+  if (tiles.empty()) {
     // We lower to an ld / st, but can't use LDS128/STS128
     auto smem = optimalSwizzlingLdSt(src, dst, bitwidth);
-    return {smem, {InstrType::Vec, InstrType::Vec}};
+    return {smem, {0, 0}};
   } else {
     // We choose the pair of instructions that minimises the total bank
     // conflicts
-    SmallVector<std::tuple<int, LinearLayout, std::pair<InstrType, InstrType>>>
+    SmallVector<std::tuple<int, LinearLayout, std::pair<int32_t, int32_t>>>
         smems;
-    for (auto [instrs, vbasis] : instr) {
-      auto tileSrc = getTile(instrs.first, regSrc, laneSrc, vbasis);
-      auto tileDst = getTile(instrs.second, regDst, laneDst, vbasis);
+    for (auto [instrs, vbasis, tileSrc, tileDst] : tiles) {
       auto smem = optimalSwizzling(srcFlat, dstFlat, bitwidth, vbasis, tileSrc,
                                    tileDst, src.getOutDims());
       auto [read, write] = logBankConflicts(tileSrc, tileDst, smem, bitwidth);
-      smems.push_back({read + write, smem, instrs});
+      smems.push_back({read + write, smem, {instrs.first, instrs.second}});
     }
     // Current heuristic: Minimise total bank conflicts
     // We break ties looking at the number of rounds we do to move the data

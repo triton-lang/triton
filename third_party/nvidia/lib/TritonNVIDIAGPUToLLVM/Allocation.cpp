@@ -5,6 +5,7 @@
 #include "TritonNVIDIAGPUToLLVM/Passes.h"
 #include "triton/Analysis/Allocation.h"
 #include "triton/Conversion/TritonGPUToLLVM/AllocateSharedMemoryUtility.h"
+#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Tools/GenericSwizzling.h"
 #include "triton/Tools/LayoutUtils.h"
@@ -50,8 +51,9 @@ static unsigned getNumScratchElemsSwizzledCvt(RankedTensorType srcTy,
   srcLayout = actionRemoveBroadcastedRegs(srcLayout).apply(srcLayout);
   dstLayout = actionRemoveBroadcastedRegs(dstLayout).apply(dstLayout);
   auto bitwidth = getBitwidth(srcTy);
-  auto [smem, _] =
-      triton::gpu::optimalSwizzling(srcLayout, dstLayout, bitwidth, targetInfo);
+  auto [srcTiles, dstTiles] = gpu::getSrcDstTiles(targetInfo, bitwidth);
+  auto [smem, _] = triton::gpu::optimalSwizzling(srcLayout, dstLayout, srcTiles,
+                                                 dstTiles, bitwidth);
   auto reps = smem.getInDimSize(StringAttr::get(ctx, "reps"));
   return smem.getTotalOutDimSize() / reps;
 }

@@ -134,9 +134,10 @@ struct ConvertLayoutOpSwizzlingConversion
     // At this point we have a type that's at least 8-bit
     // and we don't have broadcasting in the registers
     auto bitwidth = llvmElemTy.getIntOrFloatBitWidth();
+    auto [srcTiles, dstTiles] = getSrcDstTiles(targetInfo, bitwidth);
     auto [smem, instr] =
-        optimalSwizzling(srcLayout, dstLayout, bitwidth, targetInfo);
-    auto [instrSt, instrLd] = instr;
+        optimalSwizzling(srcLayout, dstLayout, srcTiles, dstTiles, bitwidth);
+    auto [idxSrc, idxDst] = instr;
 
     // Extract reps from smem
     auto kReg = str_attr("register");
@@ -178,14 +179,14 @@ struct ConvertLayoutOpSwizzlingConversion
       auto tileInVals =
           to_vector(ArrayRef(permutedInVals).slice(i * tileSize, tileSize));
       // Store
-      if (instrSt == InstrType::Vec) {
+      // idxSrc 0: st.shared, idxSrc 1: stmatrix, idxSrc 2: stmatrix.trans
+      if (idxSrc == 0) {
         lowerLdStShared(loc, ctx, storeCvt, tileInVals, llvmElemTy, smemBase,
                         noPaddingOffset, affineOffset, maskSpanAffineOffset,
                         rewriter, targetInfo);
       } else {
-        assert(instrSt == InstrType::MatrixTrans ||
-               instrSt == InstrType::Matrix);
-        bool transpose = instrSt == InstrType::MatrixTrans;
+        assert(idxSrc == 1 || idxSrc == 2);
+        bool transpose = idxSrc == 2;
         auto result = lowerLdStMatrix(
             loc, storeCvt, transpose, tileInVals, smemBase, affineOffset,
             maskSpanAffineOffset, llvmElemTy, rewriter, targetInfo);
@@ -194,14 +195,14 @@ struct ConvertLayoutOpSwizzlingConversion
       b.barrier();
       // Load
       SmallVector<Value> tileOutVals;
-      if (instrLd == InstrType::Vec) {
+      // idxDst 0: ld.shared, idxDst 1: ldmatrix, idxDst 2: ldmatrix.trans
+      if (idxDst == 0) {
         tileOutVals = lowerLdStShared(
             loc, ctx, loadCvt, {}, llvmElemTy, smemBase, noPaddingOffset,
             affineOffset, maskSpanAffineOffset, rewriter, targetInfo);
       } else {
-        assert(instrLd == InstrType::MatrixTrans ||
-               instrLd == InstrType::Matrix);
-        bool transpose = instrLd == InstrType::MatrixTrans;
+        assert(idxDst == 1 || idxDst == 2);
+        bool transpose = idxDst == 2;
         auto result = lowerLdStMatrix(
             loc, loadCvt, transpose, tileOutVals, smemBase, affineOffset,
             maskSpanAffineOffset, llvmElemTy, rewriter, targetInfo);

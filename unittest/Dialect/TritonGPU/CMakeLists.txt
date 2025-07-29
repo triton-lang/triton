@@ -5,7 +5,6 @@ add_triton_ut(
     TritonTools
     LLVMSupport
     MLIRSupport
-    TritonNVIDIAGPUToLLVM
 )
 add_triton_ut(
   NAME Dialect
