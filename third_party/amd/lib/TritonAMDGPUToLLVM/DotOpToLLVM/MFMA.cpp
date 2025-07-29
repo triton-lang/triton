@@ -441,9 +441,13 @@ struct DotOpMFMAConversionHelper {
       }
 
       if (2 == kBase)
+        // This case can occur during scale tensor packing when there aren't
+        // enough elements to fill all 4 opSel slots. For example, with an A
+        // tensor of size 16x256 and using 16x16x128 block sizes, we end up with
+        // only 2 elements to pack,  resulting in a kBase of 2.
         results = b.zext(i32_ty, b.bitcast(vec, i16_ty));
       if (4 == kBase)
-        // This is for int8 on pre- CDNA3 GPUs
+        // This is for int8 on pre- CDNA3 GPUs and scale tensors on CDNA4 GPUs
         results = b.bitcast(vec, i32_ty);
       if (8 == kBase)
         results = b.bitcast(vec, i64_ty);
@@ -676,8 +680,8 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
         isBScaleConstant ? 1 : std::min(4, static_cast<int>(numRepK));
 
     assert(scaleAKBase % akPackedVals == 0 && scaleBKBase % bkPackedVals == 0);
-    int nonAKPackedVals = scaleAKBase / akPackedVals;
-    int nonBKPackedVals = scaleBKBase / bkPackedVals;
+    int aNonKPackedVals = scaleAKBase / akPackedVals;
+    int bNonKPackedVals = scaleBKBase / bkPackedVals;
 
     auto operandA = getValuesFromDotOperandLayoutStruct(
         loadedA, numRepB, numRepM, numRepK, aKWidth, aKBase,
@@ -764,10 +768,10 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
                 int bkScale = k / bkPackedVals;
                 int opSelA = 0, opSelB = 0;
 
-                int mScale = m / nonAKPackedVals;
-                int nScale = n / nonBKPackedVals;
-                opSelA = (m * numRepK + k) % (nonAKPackedVals * akPackedVals);
-                opSelB = (n * numRepK + k) % (nonBKPackedVals * bkPackedVals);
+                int mScale = m / aNonKPackedVals;
+                int nScale = n / bNonKPackedVals;
+                opSelA = (m * numRepK + k) % (aNonKPackedVals * akPackedVals);
+                opSelB = (n * numRepK + k) % (bNonKPackedVals * bkPackedVals);
 
                 if (mfmaLayout.getIsTransposed()) {
                   acc = generateScaledMFMAOp(
