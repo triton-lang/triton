@@ -389,10 +389,9 @@ Value convertAndCastTensor(PatternRewriter &rewriter, Value value,
     else if (oldElemType.isF32() && newElemType.isF16())
       castedTensor =
           rewriter.create<arith::TruncFOp>(loc, castedType, convertedTensor);
-    else {
+    else
       castedTensor =
           rewriter.create<tt::FpToFpOp>(loc, castedType, convertedTensor);
-    }
   }
   return castedTensor;
 }
