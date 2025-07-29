@@ -59,8 +59,11 @@ a single thread are tiled to obtain the elements owned by a single warp. For
 `order=[1, 0]`, the warp tile of threads looks like:
 
 ```
-[[ T0,  T1,  T2, ..., T15],
- [T16, T17, T18, ..., T31]]
+[[ T0,  T1],
+ [ T2,  T3],
+ ...
+ [T28, T29],
+ [T30, T31]]
 ```
 
 Note that the size of the warp tile must match the number of threads per warp,
@@ -68,11 +71,15 @@ which for NVIDIA hardware is 32. If we substitute each thread with its thread
 tile, we obtain the warp tile over the elements of the tensor:
 
 ```
-[[ T0:0,  T0:1,  T0:2,  T0:3, ..., T15:0, T15:1, T15:2, T15:3],
- [ T0:4,  T0:5,  T0:6,  T0:7, ..., T15:4, T15:5, T15:6, T15:7],
+[[ T0:0,  T0:1,  T0:2,  T0:3,  T1:0,  T1:1,  T1:2,  T1:3],
+ [ T0:4,  T0:5,  T0:6,  T0:7,  T1:4,  T1:5,  T1:6,  T1:7],
+ [ T2:0,  T2:1,  T2:2,  T2:3,  T3:0,  T3:1,  T3:2,  T3:3],
+ [ T2:4,  T2:5,  T2:6,  T2:7,  T3:4,  T3:5,  T3:6,  T3:7],
  ...
- [T16:0, T16:1, T16:2, T16:3, ..., T31:0, T31:1, T31:2, T31:3],
- [T16:4, T16:5, T16:6, T16:7, ..., T31:4, T31:5, T31:6, T31:7]]
+ [T28:0, T28:1, T28:2, T28:3, T29:0, T29:1, T29:2, T29:3],
+ [T28:4, T28:5, T28:6, T28:7, T29:4, T29:5, T29:6, T29:7],
+ [T30:0, T30:1, T30:2, T30:3, T31:0, T31:1, T31:2, T31:3],
+ [T30:4, T30:5, T30:6, T30:7, T31:4, T31:5, T31:6, T31:7]]
 ```
 
 We can again repeat this process for `warps_per_cta=[2, 2]` to obtain a full
@@ -105,11 +112,11 @@ the tensor, mapped to its lanes in the same way. From the perspective of the
 tensor, this looks like:
 
 ```
-[[ T0:0|T32:0|T64:0|T96:0,  ..., T15:3|T47:3|T79:3|T111:3],
- [ T0:4|T32:4|T64:4|T96:4,  ..., T15:7|T47:7|T79:7|T111:7],
+[[  T0:0| T32:0| T64:0| T96:0, ...,   T1:3| T33:3| T65:3| T97:3],
+ [  T0:4| T32:4| T64:4| T96:4, ...,   T1:7| T33:7| T65:7| T97:7],
  ...
- [T16:0|T48:0|T80:0|T112:0, ..., T31:3|T63:3|T95:3|T127:3],
- [T16:4|T48:4|T80:4|T112:4, ..., T31:7|T63:7|T95:7|T127:7]]
+ [ T30:0| T62:0| T94:0|T126:0, ...,  T31:3| T63:3| T95:3|T127:3]
+ [ T30:4| T62:4| T94:4|T126:4, ...,  T31:7| T63:7| T95:7|T127:7]]
 ```
 
 There are many different kinds of layouts in Gluon. Many of them are specialized
@@ -128,6 +135,7 @@ the `memcpy` example from the previous tutorial. Using a `BlockedLayout`, we
 will have each program load and store a whole tile rather than one scalar.
 """
 
+import pytest
 import torch
 import triton
 from functools import partial
@@ -212,9 +220,22 @@ def bench_memcpy(impl):
     return compiled_kernel, throughput
 
 
+@pytest.mark.parametrize("XBLOCK", [128, 256])
+@pytest.mark.parametrize("xnumel", [200, 1000])
+@pytest.mark.parametrize("num_warps", [4])
+def test_memcpy_1d(XBLOCK, xnumel, num_warps):
+    torch.manual_seed(0)
+    input = torch.randn(xnumel, device="cuda")
+    output = torch.empty_like(input)
+    layout = gl.BlockedLayout([1], [32], [num_warps], [0])
+    memcpy_1d_impl(input, output, XBLOCK, layout, num_warps=num_warps)
+    torch.testing.assert_close(input, output, atol=0, rtol=0)
+
+
 # %%
 # By choosing `XBLOCK=2048`, the largest value we can pick for `R` without
-# adding broadcasting is `R=16`.
+# incurring redundant values via broadcasting is `R=16`. For smaller values,
+# the layout is tiled to fill the tensor.
 
 if __name__ == "__main__":
     print("R vs. Throughput")
@@ -245,27 +266,73 @@ if __name__ == "__main__":
 # R=16  3.107 TB/s
 # ```
 #
-# We can see that the layout does affect performance (and that this is 10x
-# faster than copying one scalar at a time). Let's dig deeper into why the
-# layout affects performance by examining the SASS for the kernels.
+# We can see that the our selected layout does affect performance (and that this
+# is 10x faster than copying one scalar at a time). Let's dig deeper into why
+# the layout affects performance by examining the SASS for the kernels.
 
 if __name__ == "__main__":
-    print("LDG instructions")
-    print("================")
+    print("LDG/STG instructions")
+    print("====================")
     for R, compiled_kernel in compiled_kernels:
-        print(f"R={R}")
+        print(f"\nR={R}")
+        print("==========")
         sass = compiled_kernel.asm["sass"]
         for line in sass.split("\n"):
-            if "LDG.E" in line:
+            if "LDG.E" in line or "STG.E" in line:
                 print(line)
     print()
 
 # %%
-# The output shows that for `R=1`, we get 16 `LDG.E` instructions, each 512
-# bytes apart, which exactly corresponds to 128 elements.
+# The output shows that the layout affects the vectorization of the loads and
+# striding when multiple loads are emitted. We can summarize this in a table:
 #
-# Going up to `R=2` then `R=4`, we observe vectorization to 8 `LDG.E.64` and
-# then 4 `LDG.E.128` instructions, respectively.
+# | R  | width | vec_len | n_loads | stride |
+# |----|-------|---------|---------|--------|
+# | 1  | 32    | 32      | 1       | 0x00   |
+# | 2  | 64    | 64      | 1       | 0x00   |
+# | 4  | 128   | 128     | 1       | 0x00   |
+# | 8  | 256   | 128     | 2       | 0x10   |
+# | 16 | 512   | 128     | 4       | 0x10   |
+#
+# Modern NVIDIA GPUs have 128-byte cache lines, divided into 32-byte sectors.
+# The 32B sectors are the granularity at which global memory is accessed by a
+# processor. Thus, the GPU hardware attempts to minimize the number of 32B
+# sector accesses by grouping contiguous memory accesses within a warp.
+#
+# When R=1, each `LDG.E` at the warp level reads exactly 128 contiguous bytes of
+# global memory, which fits into a cache line. Note that PyTorch allocates
+# tensors aligned to 256 bytes by default.
+#
+# Increasing `R` to 2 or 4 widens each `LGD.E` instruction but slows down the
+# kernel, despite the number of 32B sector reads remaining unchanged. This can
+# be due to a variety of obscure hardware factors, but if you look at the
+# annotations to the left of the printed instructions you can see one potential
+# factor:
+#
+# ```
+# 16:1:2:-:1	@!P0 LDG.E R0, desc[UR4][R8.64];
+# --:-:3:-:1	@!P0 LDG.E R15, desc[UR4][R4.64];
+# --:-:4:-:1	@!P0 LDG.E R17, desc[UR4][R4.64+0x200];
+# ...
+# 08:0:-:-:1	@!P0 STG.E desc[UR4][R6.64], R15;
+# 16:0:-:-:1	@!P0 STG.E desc[UR4][R6.64+0x200], R17;
+# 04:0:-:-:1	@!P0 STG.E desc[UR4][R6.64+0x400], R19;
+# ```
+#
+# These annotations are
+#
+# ```
+# wait_mask : read_barrier : write_barrier : yield : stall
+# ```
+#
+# The load instructions set a `write_barrier` because they are writing to
+# registers. Subsequent `STG.E` instructions have a `wait_mask` that block until
+# the barrier is cleared. By issuing smaller granularity loads, the store
+# instructions can start executing earlier.
+#
+# The fact that `R=8` is faster than `R=2` and `R=4` despite having strided
+# loads is perhaps due two independent transactions, but it's hard to know for
+# sure without using a profiler.
 
 if __name__ == "__main__":
     print("(XBLOCK, R) vs. Throughput")
@@ -289,3 +356,164 @@ if __name__ == "__main__":
             print(f"{throughput:.3f}", end=" ")
         print()
     print()
+
+# %%
+# If we run this experiment with a variety of `XBLOCK`, we see that `R=8` is
+# not always faster than `R=2` and `R=4`.
+#
+# ```
+# (XBLOCK, R) vs. Throughput
+# ==========================
+# XBLOCK    R=1   R=2   R=4   R=8   R=16
+# 1024     3.283 3.274 3.271 3.275 2.613
+# 2048     3.286 3.237 3.237 3.252 3.109
+# 4096     3.277 3.246 3.227 3.198 3.091
+# 8192     3.303 3.266 3.241 3.239 3.088
+# 16384    3.261 3.278 3.243 3.255 3.073
+# ```
+#
+# We can also conclude that `R=1` is the best layout for 1D load, and that we
+# should be using `XBLOCK=8192` instead.
+#
+# With higher-dimensional tensors, picking the right layout is a lot less
+# forgiving, because the tensors can be accessed in non-contiguous ways. Let's
+# look at a 2D memcpy kernel to illustrate this.
+#
+# In order to index into a strided 2D tensor, we need to generate 2D offsets by
+# broadcasting two 1D offsets and adding them together. The final layout of the
+# 2D offsets will be a `BlockedLayout`, but we need a `SliceLayout` to represent
+# the layout of the 1D offsets:
+#
+# ```python
+# gl.SliceLayout(dim=1, parent=layout)
+# ```
+#
+# A slice layout is defined relative to a parent layout. It is the layout that
+# results from dropping the `dim` dimension from the parent layout. For example,
+# let's use the blocked layout we discussed at the beginning of this tutorial.
+#
+# ```python
+# layout = gl.BlockedLayout(
+#     size_per_thread=[2, 4],
+#     threads_per_warp=[16, 2],
+#     warps_per_cta=[2, 2],
+#     order=[1, 0],
+# )
+# ```
+#
+# Recall the mapping of tensor elements to registers in a warp is:
+#
+# ```
+# [[ T0:0,  T0:1,  T0:2,  T0:3,  T1:0,  T1:1,  T1:2,  T1:3],
+#  [ T0:4,  T0:5,  T0:6,  T0:7,  T1:4,  T1:5,  T1:6,  T1:7],
+#  [ T2:0,  T2:1,  T2:2,  T2:3,  T3:0,  T3:1,  T3:2,  T3:3],
+#  [ T2:4,  T2:5,  T2:6,  T2:7,  T3:4,  T3:5,  T3:6,  T3:7],
+#  ...
+#  [T28:0, T28:1, T28:2, T28:3, T29:0, T29:1, T29:2, T29:3],
+#  [T28:4, T28:5, T28:6, T28:7, T29:4, T29:5, T29:6, T29:7],
+#  [T30:0, T30:1, T30:2, T30:3, T31:0, T31:1, T31:2, T31:3],
+#  [T30:4, T30:5, T30:6, T30:7, T31:4, T31:5, T31:6, T31:7]]
+# ```
+#
+# To form the slice layout along `dim=1`, first collapse the mappings in each
+# row together:
+#
+# ```
+# [  T0:0| T0:1| T0:2| T0:3| T1:0| T1:1| T1:2| T1:3,
+#    T0:4| T0:5| T0:6| T0:7| T1:4| T1:5| T1:6| T1:7,
+#    T2:0| T2:1| T2:2| T2:3| T3:0| T3:1| T3:2| T3:3,
+#    T2:4| T2:5| T2:6| T2:7| T3:4| T3:5| T3:6| T3:7,
+#  ...
+#   T28:0|T28:1|T28:2|T28:3|T29:0|T29:1|T29:2|T29:3,
+#   T28:4|T28:5|T28:6|T28:7|T29:4|T29:5|T29:6|T29:7,
+#   T30:0|T30:1|T30:2|T30:3|T31:0|T31:1|T31:2|T31:3,
+#   T30:4|T30:5|T30:6|T30:7|T31:4|T31:5|T31:6|T31:7]
+# ```
+#
+# Then remove redundant register mappings within each thread:
+#
+# ```
+# [  T0:0| T1:0,
+#    T0:1| T1:1,
+#    T2:0| T3:0,
+#    T2:1| T3:1,
+#  ...
+#   T28:0|T29:0,
+#   T28:1|T29:1,
+#   T30:0|T31:0,
+#   T30:1|T31:1]
+# ```
+#
+# Such a layout would result from a reduction of a 2D tensor along `dim=1`. You
+# can see that each element in the reduction result would be broadcasted to two
+# threads pairwise.
+#
+# Likewise, to expand a 1D tensor to 2D, we start with the tensor in slice
+# layout and perform the reverse transformation by broadcasting duplicate each
+# element of the 1D tensor until it fills the rows to the desired size.
+#
+# You can see that broadcasting is a zero-cost operation because it does not
+# compute any new values nor does it require any data movement: each thread
+# already has the value that will be broadcasted, and the values are lazily
+# materialized into physical registers by the compiler when needed.
+
+
+@gluon.jit
+def memcpy_2d_kernel(in_ptr, out_ptr,  #
+                     xnumel, ynumel, xstride_in, ystride_in, xstride_out, ystride_out,  #
+                     layout: gl.constexpr, XBLOCK: gl.constexpr, YBLOCK: gl.constexpr):
+    pid_x = gl.program_id(0)
+    pid_y = gl.program_id(1)
+
+    start_x = pid_x * XBLOCK
+    start_y = pid_y * YBLOCK
+    indices_x = start_x + gl.arange(0, XBLOCK, layout=gl.SliceLayout(dim=1, parent=layout))
+    indices_y = start_y + gl.arange(0, YBLOCK, layout=gl.SliceLayout(dim=0, parent=layout))
+
+    # Multiply the x and y offsets by the strides of the input tensor in each
+    # dimension to translate tensor indices to memory offsets.
+    #
+    # `indices_x[:, None]` expands the tensor by appending a size 1 dimension
+    # to its shape, thus yielding a [XBLOCK, 1] tensor. When combined with a
+    # [1, YBLOCK] tensor, each is broadcasted to a [XBLOCK, YBLOCK] tensor.
+    in_offsets = xstride_in * indices_x[:, None] + ystride_in * indices_y[None, :]
+    out_offsets = xstride_out * indices_x[:, None] + ystride_out * indices_y[None, :]
+
+    # Compute the mask in the same way, by selecting for indices along each
+    # dimension that are in bounds and broadcasting them together.
+    mask = (indices_x[:, None] < xnumel) & (indices_y[None, :] < ynumel)
+
+    value = gl.load(in_ptr + in_offsets, mask=mask)
+    gl.store(out_ptr + out_offsets, value, mask=mask)
+
+
+def memcpy_2d_impl(input, output, XBLOCK, YBLOCK, layout, num_warps):
+    xnumel, ynumel = input.shape
+    grid = (triton.cdiv(xnumel, XBLOCK), triton.cdiv(ynumel, YBLOCK))
+    # Pass the strides of the input and output tensors into the kernel. The
+    # compiler will specialize the kernel if any of the strides are 1, which is
+    # common for the inner dimension of tensors.
+    compiled_kernel = memcpy_2d_kernel[grid](  #
+        input, output, xnumel, ynumel,  #
+        *input.stride(), *output.stride(),  #
+        layout, XBLOCK, YBLOCK, num_warps=num_warps)
+    return compiled_kernel
+
+
+# %%
+# Let's test our kernel, focusing especially on cases where the tensor elements
+# are not contiguous in memory.
+
+
+@pytest.mark.parametrize("XBLOCK, YBLOCK", [(128, 256), (256, 128)])
+@pytest.mark.parametrize("xnumel, ynumel", [(100, 2000), (1000, 200)])
+@pytest.mark.parametrize("transpose", [(False, True), (True, False)])
+@pytest.mark.parametrize("num_warps", [4])
+def test_memcpy_2d(XBLOCK, YBLOCK, xnumel, ynumel, transpose, num_warps):
+    torch.manual_seed(0)
+    input = torch.randn((xnumel, ynumel), device="cuda")
+    input = input.T if transpose else input
+    output = torch.empty_like(input)
+    layout = gl.BlockedLayout([1, 2], [1, 32], [1, num_warps], [1, 0])
+    memcpy_2d_impl(input, output, XBLOCK, YBLOCK, layout, num_warps=num_warps)
+    torch.testing.assert_close(input, output, atol=0, rtol=0)
