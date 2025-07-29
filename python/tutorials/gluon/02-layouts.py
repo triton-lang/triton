@@ -842,4 +842,27 @@ if __name__ == "__main__" and _enabled("memcpy_2d_inout"):
 #
 # Reductions, scans, gathers, or in general any operation that may require
 # communication across threads and/or warps, can be more efficient if the layout
-# of the inputs is selected to reduce the amount of communication.
+# of the inputs is selected to reduce the amount of communication. This includes
+# layout conversions themselves.
+#
+# Suppose the we have a `128x128xf32` tensor that we want to reduce along the
+# inner dimension. If the layout is:
+#
+# ```python
+# gl.BlockedLayout([1, 1], [1, 32], [1, 4], [1, 0])
+# ```
+#
+# Which is a layout we might use to load the tensor from global memory, then
+# every elements in a row is owned by a different thread. The compiler will
+# generate butterfly shuffles to reduce within each warp, then pick a leader
+# warp to reduce the remaining 4 values per row through shared memory.
+#
+# If instead the layout is
+#
+# ```python
+# gl.BlockedLayout([1, 128], [32, 1], [4, 1], [0, 1])
+# ```
+#
+# Then each thread owns exactly one row of the tensor. Thus, the reduction
+# requires no inter-thread communication and the compiler can just emit a pile
+# of `fadd` instructions.
