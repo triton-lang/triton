@@ -30,7 +30,7 @@ Extra Credits:
 * Original flash attention paper (https://arxiv.org/abs/2205.14135)
 * Rabe and Staats (https://arxiv.org/pdf/2112.05682v2.pdf)
 
-.. GENERATED FROM PYTHON SOURCE LINES 15-754
+.. GENERATED FROM PYTHON SOURCE LINES 15-763
 
 
 
@@ -100,60 +100,60 @@ Extra Credits:
 
     fused-attention-batch4-head32-d64-fwd-causal=True-warp_specialize=False:
          N_CTX  Triton [FP16]  Triton [FP8]
-    0   1024.0     112.445978    105.141028
-    1   2048.0     139.917820    129.077763
-    2   4096.0     154.643566    145.093710
-    3   8192.0     160.346129    152.360326
-    4  16384.0     167.735031    156.265865
+    0   1024.0     112.902794    105.109779
+    1   2048.0     139.399803    128.892572
+    2   4096.0     153.492393    145.131300
+    3   8192.0     162.004138    153.621278
+    4  16384.0     169.415580    155.718195
     fused-attention-batch4-head32-d64-fwd-causal=False-warp_specialize=False:
          N_CTX  Triton [FP16]  Triton [FP8]
-    0   1024.0     153.039154    135.148628
-    1   2048.0     170.648927    163.320431
-    2   4096.0     170.546774    162.177051
-    3   8192.0     166.794848    166.850387
-    4  16384.0     169.667669    164.428981
+    0   1024.0     153.476342    135.600278
+    1   2048.0     169.073168    163.204924
+    2   4096.0     164.532920    163.329672
+    3   8192.0     166.752291    165.405229
+    4  16384.0     176.373829    167.615024
     fused-attention-batch4-head32-d64-bwd-causal=True-warp_specialize=False:
          N_CTX  Triton [FP16]  Triton [FP8]
-    0   1024.0      57.536538     56.993509
-    1   2048.0      73.199801     73.320420
-    2   4096.0      85.609870     85.811476
-    3   8192.0      92.276515     92.509720
-    4  16384.0      96.330816     96.400873
+    0   1024.0      57.641703     56.802600
+    1   2048.0      73.102541     73.296601
+    2   4096.0      85.639003     85.542576
+    3   8192.0      91.800005     92.566079
+    4  16384.0      96.020697     96.007820
     fused-attention-batch4-head32-d64-bwd-causal=False-warp_specialize=False:
          N_CTX  Triton [FP16]  Triton [FP8]
-    0   1024.0     115.236766    114.134995
-    1   2048.0     146.960690    146.681233
-    2   4096.0     171.504164    169.447215
-    3   8192.0     185.792056    185.794196
-    4  16384.0     192.276962    192.786167
+    0   1024.0     114.611640    114.093002
+    1   2048.0     146.264033    146.453751
+    2   4096.0     171.219738    171.454865
+    3   8192.0     185.817780    185.509579
+    4  16384.0     192.024224    191.967568
     fused-attention-batch4-head32-d128-fwd-causal=True-warp_specialize=False:
          N_CTX  Triton [FP16]  Triton [FP8]
-    0   1024.0     117.884580    108.176350
-    1   2048.0     139.579788    131.187615
-    2   4096.0     156.230286    145.701957
-    3   8192.0     163.646301    153.820188
-    4  16384.0     168.433390    158.115387
+    0   1024.0     117.705217    108.085884
+    1   2048.0     140.100387    131.215580
+    2   4096.0     156.390413    145.676658
+    3   8192.0     164.549128    153.794484
+    4  16384.0     168.525914    158.103743
     fused-attention-batch4-head32-d128-fwd-causal=False-warp_specialize=False:
          N_CTX  Triton [FP16]  Triton [FP8]
-    0   1024.0     154.153054    138.044838
-    1   2048.0     163.222337    148.519155
-    2   4096.0     167.345628    154.140371
-    3   8192.0     172.018875    158.042658
-    4  16384.0     167.556171    159.261615
+    0   1024.0     154.808125    138.015925
+    1   2048.0     164.883269    149.816563
+    2   4096.0     167.451648    154.485965
+    3   8192.0     172.016578    158.411837
+    4  16384.0     165.824055    159.254234
     fused-attention-batch4-head32-d128-bwd-causal=True-warp_specialize=False:
          N_CTX  Triton [FP16]  Triton [FP8]
-    0   1024.0       2.237320      2.235055
-    1   2048.0       2.359997      2.361242
-    2   4096.0       2.424133      2.425040
-    3   8192.0       2.457359      2.457620
-    4  16384.0       2.476547      2.476378
+    0   1024.0       2.236724      2.236545
+    1   2048.0       2.362406      2.361192
+    2   4096.0       2.425150      2.425465
+    3   8192.0       2.457011      2.457145
+    4  16384.0       2.476495      2.477044
     fused-attention-batch4-head32-d128-bwd-causal=False-warp_specialize=False:
          N_CTX  Triton [FP16]  Triton [FP8]
-    0   1024.0       4.471301      4.476312
-    1   2048.0       4.721787      4.720724
-    2   4096.0       4.848976      4.848153
-    3   8192.0       4.912583      4.914119
-    4  16384.0       4.953345      4.952868
+    0   1024.0       4.467015      4.477446
+    1   2048.0       4.726376      4.725777
+    2   4096.0       4.848302      4.850720
+    3   8192.0       4.916209      4.914944
+    4  16384.0       4.953640      4.953422
 
 
 
@@ -192,13 +192,17 @@ Extra Credits:
         return is_cuda() and torch.cuda.get_device_capability()[0] == 10
 
 
+    def is_hopper():
+        return is_cuda() and torch.cuda.get_device_capability()[0] == 9
+
+
     @triton.jit
     def _attn_fwd_inner(acc, l_i, m_i, q,  #
                         desc_k, desc_v,  #
                         offset_y, dtype: tl.constexpr, start_m, qk_scale,  #
                         BLOCK_M: tl.constexpr, HEAD_DIM: tl.constexpr, BLOCK_N: tl.constexpr,  #
                         STAGE: tl.constexpr, offs_m: tl.constexpr, offs_n: tl.constexpr,  #
-                        N_CTX: tl.constexpr, warp_specialize: tl.constexpr):
+                        N_CTX: tl.constexpr, warp_specialize: tl.constexpr, IS_HOPPER: tl.constexpr):
         # range of values handled by this stage
         if STAGE == 1:
             lo, hi = 0, start_m * BLOCK_M
@@ -232,7 +236,7 @@ Extra Credits:
             alpha = tl.math.exp2(m_i - m_ij)
             l_ij = tl.sum(p, 1)
             # -- update output accumulator --
-            if warp_specialize and BLOCK_M == 128 and HEAD_DIM == 128:
+            if not IS_HOPPER and warp_specialize and BLOCK_M == 128 and HEAD_DIM == 128:
                 BM: tl.constexpr = acc.shape[0]
                 BN: tl.constexpr = acc.shape[1]
                 acc0, acc1 = acc.reshape([BM, 2, BN // 2]).permute(0, 2, 1).split()
@@ -327,6 +331,7 @@ Extra Credits:
                   FP8_OUTPUT: tl.constexpr,  #
                   STAGE: tl.constexpr,  #
                   warp_specialize: tl.constexpr,  #
+                  IS_HOPPER: tl.constexpr,  #
                   ):
         dtype = tl.float8e5 if FP8_OUTPUT else tl.float16
         tl.static_assert(BLOCK_N <= HEAD_DIM)
@@ -372,7 +377,7 @@ Extra Credits:
                                             offset_y, dtype, start_m, qk_scale,  #
                                             BLOCK_M, HEAD_DIM, BLOCK_N,  #
                                             4 - STAGE, offs_m, offs_n, N_CTX,  #
-                                            warp_specialize)
+                                            warp_specialize, IS_HOPPER)
         # stage 2: on-band
         if STAGE & 2:
             acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q,  #
@@ -380,7 +385,7 @@ Extra Credits:
                                             offset_y, dtype, start_m, qk_scale,  #
                                             BLOCK_M, HEAD_DIM, BLOCK_N,  #
                                             2, offs_m, offs_n, N_CTX,  #
-                                            warp_specialize)
+                                            warp_specialize, IS_HOPPER)
         # epilogue
         m_i += tl.math.log2(l_i)
         acc = acc / l_i[:, None]
@@ -656,7 +661,8 @@ Extra Credits:
                 extra_kern_args = {"waves_per_eu": waves_per_eu, "allow_flush_denorm": True}
 
             M = torch.empty((q.shape[0], q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
-            if supports_host_descriptor():
+            # Use device_descriptor for Hopper + warpspec.
+            if supports_host_descriptor() and not (is_hopper() and warp_specialize):
                 # Note that on Hopper we cannot perform a FP8 dot with a non-transposed second tensor
                 y_dim = q.shape[0] * q.shape[1] * q.shape[2]
 
@@ -685,7 +691,7 @@ Extra Credits:
                 return (triton.cdiv(q.shape[2], META["BLOCK_M"]), q.shape[0] * q.shape[1], 1)
 
             ctx.grid = grid
-            if is_cuda() and warp_specialize:
+            if is_blackwell() and warp_specialize:
                 if HEAD_DIM_K == 128 and q.dtype == torch.float16:
                     extra_kern_args["maxnreg"] = 168
                 else:
@@ -699,6 +705,7 @@ Extra Credits:
                 FP8_OUTPUT=q.dtype == torch.float8_e5m2,  #
                 STAGE=stage,  #
                 warp_specialize=warp_specialize,  #
+                IS_HOPPER=is_hopper(),  #
                 **extra_kern_args)
 
             ctx.save_for_backward(q, k, v, o, M)
@@ -836,7 +843,9 @@ Extra Credits:
     for HEAD_DIM in [64, 128]:
         for mode in ["fwd", "bwd"]:
             for causal in [True, False]:
-                for warp_specialize in [False, True] if is_blackwell() else [False]:
+                # Enable warpspec for causal fwd on Hopper
+                enable_ws = mode == "fwd" and (is_blackwell() or (is_hopper() and not causal))
+                for warp_specialize in [False, True] if enable_ws else [False]:
                     configs.append(
                         triton.testing.Benchmark(
                             x_names=["N_CTX"],
@@ -907,7 +916,7 @@ Extra Credits:
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (13 minutes 7.159 seconds)
+   **Total running time of the script:** (13 minutes 8.063 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_06-fused-attention.py:

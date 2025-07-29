@@ -34,6 +34,72 @@ Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::GlobalMe
 | `condition` | tensor of 1-bit signless integer values |
 
 
+### `tti.experimental_buffer_pointers` (triton::instrument::ExperimentalBufferPointersOp)
+
+_Definte an array of pointers to shared memory buffers_
+
+Syntax:
+
+```
+operation ::= `tti.experimental_buffer_pointers` $offsets `,` $memType attr-dict `:` type($result)
+```
+
+Create a tensor of pointers to shared memory buffers.
+
+Traits: `AlwaysSpeculatableImplTrait`
+
+Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`
+
+Effects: `MemoryEffects::Effect{}`
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>offsets</code></td><td>::mlir::DenseI32ArrayAttr</td><td>i32 dense array attribute</td></tr>
+<tr><td><code>memType</code></td><td>::mlir::triton::instrument::MemTypeAttr</td><td>allowed 32-bit signless integer cases: 0, 1</td></tr>
+</table>
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `result` | ranked tensor of floating-point or integer or ptr values |
+
+
+### `tti.experimental_check_barrier_writes_cleared` (triton::instrument::ExperimentalCheckBarrierWritesClearedOp)
+
+_Verify that the barrier is not used to track any writes_
+
+Syntax:
+
+```
+operation ::= `tti.experimental_check_barrier_writes_cleared` $mbar `{` $barriers `,` $writeBars `(` $writeBarsType `)` `}` (`,` $pred^)? attr-dict `:` type($mbar) `,` type($barriers) `,` type($writeBars)
+```
+
+Verify that the barrier is not used to track any writes.
+
+Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
+
+Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::GlobalMemory}`
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>writeBarsType</code></td><td>::mlir::TypeAttr</td><td>any type attribute</td></tr>
+</table>
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `mbar` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
+| `barriers` | ranked tensor of floating-point or integer or ptr values |
+| `writeBars` | ptr or ranked tensor of ptr values |
+| `pred` | 1-bit signless integer |
+
+
 ### `tti.experimental_check_outstanding_reads` (triton::instrument::ExperimentalCheckOutstandingReadsOp)
 
 _Check if there are outstanding reads from a buffer guarded by a mbar_
@@ -74,10 +140,17 @@ _Check if there are outstanding writes to a buffer guarded by a mbar_
 Syntax:
 
 ```
-operation ::= `tti.experimental_check_outstanding_writes` $buf `{` $buffers `,` $writeBars `(` $writeBarsType `)` `}` (`,` $pred^)? attr-dict `:` type($buf) `,` type($buffers) `,` type($writeBars)
+operation ::= `tti.experimental_check_outstanding_writes` $buf `{` $buffers `,` $writeBars `(` $writeBarsType `)` `,` $writeState `(` $writeStateType `)` `}` (`,` $pred^)? `pipelined` $hwPipelined attr-dict `:` type($buf) `,` type($buffers) `,` type($writeBars) `,` type($writeState)
 ```
 
-Check if there are outstanding writes to a buffer guarded by a mbar.
+Check if the writeState tensor has non-zero value associated with the buffer.
+
+`writeState` is a tensor of 8b bitfields, where:
+- bit 0: 1 if the buffer is being written to
+- bit 1: 1 if the write is *not* hwPipelined
+
+If hwPipelined is true, shift the bitfield by 1 to check the second bit - this
+means that the error won't be triggered if another pipelined write is outstanding.
 
 Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
 
@@ -88,6 +161,8 @@ Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::GlobalMe
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
 <tr><td><code>writeBarsType</code></td><td>::mlir::TypeAttr</td><td>any type attribute</td></tr>
+<tr><td><code>writeStateType</code></td><td>::mlir::TypeAttr</td><td>any type attribute</td></tr>
+<tr><td><code>hwPipelined</code></td><td>::mlir::IntegerAttr</td><td>1-bit signless integer attribute</td></tr>
 </table>
 
 #### Operands:
@@ -97,6 +172,7 @@ Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::GlobalMe
 | `buf` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
 | `buffers` | ranked tensor of floating-point or integer or ptr values |
 | `writeBars` | ptr or ranked tensor of ptr values |
+| `writeState` | ptr or ranked tensor of ptr values |
 | `pred` | 1-bit signless integer |
 
 
@@ -173,7 +249,7 @@ _Clear the write state for buffers being guarded by an mbar_
 Syntax:
 
 ```
-operation ::= `tti.experimental_clear_write_barrier` $mbar `{` $writeBars `(` $writeBarsType `)` `}` (`,` $pred^)? attr-dict `:` type($mbar) `,` type($writeBars)
+operation ::= `tti.experimental_clear_write_barrier` $mbar `{` $barriers `,` $writeBars `(` $writeBarsType `)` `,` $writeState `(` $writeStateType `)` `}` (`,` $pred^)? attr-dict `:` type($mbar) `,` type($barriers) `,` type($writeBars) `,` type($writeState)
 ```
 
 Clear the write state for buffers being guarded by an mbar.
@@ -187,6 +263,7 @@ Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::GlobalMe
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
 <tr><td><code>writeBarsType</code></td><td>::mlir::TypeAttr</td><td>any type attribute</td></tr>
+<tr><td><code>writeStateType</code></td><td>::mlir::TypeAttr</td><td>any type attribute</td></tr>
 </table>
 
 #### Operands:
@@ -194,7 +271,9 @@ Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::GlobalMe
 | Operand | Description |
 | :-----: | ----------- |
 | `mbar` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
+| `barriers` | ranked tensor of floating-point or integer or ptr values |
 | `writeBars` | ptr or ranked tensor of ptr values |
+| `writeState` | ptr or ranked tensor of ptr values |
 | `pred` | 1-bit signless integer |
 
 
@@ -227,6 +306,42 @@ Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::GlobalMe
 | Operand | Description |
 | :-----: | ----------- |
 | `writeCommits` | ptr or ranked tensor of ptr values |
+| `pred` | 1-bit signless integer |
+
+
+### `tti.experimental_commit_write_with_barrier` (triton::instrument::ExperimentalCommitWriteWithBarrierOp)
+
+_Mark all buffers being currently written as tracked by the barrier._
+
+Syntax:
+
+```
+operation ::= `tti.experimental_commit_write_with_barrier` $mbar `{` $barriers `,` $writeBars `(` $writeBarsType `)` `,` $writeState `(` $writeStateType `)` `}` (`,` $pred^)? attr-dict `:` type($mbar) `,` type($barriers) `,` type($writeBars) `,` type($writeState)
+```
+
+For all buffers currently marked in writeState tensor, mark them as tracked by the mbar in
+writeBars tensor.
+
+Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
+
+Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::GlobalMemory}`
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>writeBarsType</code></td><td>::mlir::TypeAttr</td><td>any type attribute</td></tr>
+<tr><td><code>writeStateType</code></td><td>::mlir::TypeAttr</td><td>any type attribute</td></tr>
+</table>
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `mbar` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
+| `barriers` | ranked tensor of floating-point or integer or ptr values |
+| `writeBars` | ptr or ranked tensor of ptr values |
+| `writeState` | ptr or ranked tensor of ptr values |
 | `pred` | 1-bit signless integer |
 
 
@@ -303,10 +418,19 @@ _Mark a buffer as being written to using mbar as a guard_
 Syntax:
 
 ```
-operation ::= `tti.experimental_mark_as_write` $buf `,` $mbar `{` $buffers `,` $writeBars `(` $writeBarsType `)` `}` (`,` $pred^)? attr-dict `:` type($buf) `,` type($mbar) `,` type($buffers) `,` type($writeBars)
+operation ::= `tti.experimental_mark_as_write` $buf `{` $buffers `,` $writeState `(` $writeStateType `)` `}` (`,` $pred^)? `pipelined` $hwPipelined attr-dict `:` type($buf) `,` type($buffers) `,` type($writeState)
 ```
 
-Mark a buffer as being written to using mbar as a guard.
+Mark a buffer as being written to. It is not yet tracked by a barrier, until
+`commit_write_with_barrier` is called, at which point all the buffers being written
+to are marked as tracked by the barrier.
+
+`writeState` is a tensor of 8b bitfields, where:
+- bit 0: 1 if the buffer is being written to
+- bit 1: 1 if the write is *not* hwPipelined
+
+If hwPipelined is true, the write won't trigger an error if another pipelined
+write is executed later without waiting for the barrier.
 
 Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
 
@@ -316,7 +440,8 @@ Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::GlobalMe
 
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
-<tr><td><code>writeBarsType</code></td><td>::mlir::TypeAttr</td><td>any type attribute</td></tr>
+<tr><td><code>writeStateType</code></td><td>::mlir::TypeAttr</td><td>any type attribute</td></tr>
+<tr><td><code>hwPipelined</code></td><td>::mlir::IntegerAttr</td><td>1-bit signless integer attribute</td></tr>
 </table>
 
 #### Operands:
@@ -324,42 +449,9 @@ Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::GlobalMe
 | Operand | Description |
 | :-----: | ----------- |
 | `buf` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
-| `mbar` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
 | `buffers` | ranked tensor of floating-point or integer or ptr values |
-| `writeBars` | ptr or ranked tensor of ptr values |
+| `writeState` | ptr or ranked tensor of ptr values |
 | `pred` | 1-bit signless integer |
-
-
-### `tti.experimental_shared_buffer_pointers` (triton::instrument::ExperimentalSharedBufferPointersOp)
-
-_Definte an array of pointers to shared memory buffers_
-
-Syntax:
-
-```
-operation ::= `tti.experimental_shared_buffer_pointers` attr-dict `:` type($result)
-```
-
-Create a tensor of pointers to shared memory buffers.
-
-Traits: `AlwaysSpeculatableImplTrait`
-
-Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`
-
-Effects: `MemoryEffects::Effect{}`
-
-#### Attributes:
-
-<table>
-<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
-<tr><td><code>offsets</code></td><td>::mlir::DenseI32ArrayAttr</td><td>i32 dense array attribute</td></tr>
-</table>
-
-#### Results:
-
-| Result | Description |
-| :----: | ----------- |
-| `result` | ranked tensor of floating-point or integer or ptr values |
 
 
 ### `tti.experimental_stage_write_for_commit` (triton::instrument::ExperimentalStageWriteForCommitOp)
