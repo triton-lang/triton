@@ -189,3 +189,13 @@ if __name__ == "__main__":
     print("===================")
     print(f"Time:        {ms:.2f} ms")
     print(f"Throughput: {gbytes / (ms * 1e-3):.2f} GB/s")
+
+# %%
+# The main things you should take away from this tutorial are:
+#
+# - The high-level aspects of writing Gluon kernels are the same as writing
+#   Triton kernels.
+# - Gluon implements a tile-based SPMD programming model that should be familiar
+#   to those experienced with Triton.
+# - Gluon changes how device code is written, and only changes host-side code
+#   insofar as Gluon kernels may have more hyperparameters.

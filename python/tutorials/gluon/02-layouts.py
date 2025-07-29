@@ -468,8 +468,8 @@ if __name__ == "__main__" and _enabled("XBLOCK_R_vs_throughput"):
 # threads pairwise.
 #
 # Likewise, to expand a 1D tensor to 2D, we start with the tensor in slice
-# layout and perform the reverse transformation by broadcasting duplicate each
-# element of the 1D tensor until it fills the rows to the desired size.
+# layout and perform the reverse transformation by duplicating each element of
+# the 1D tensor until it fills the rows to the desired size.
 #
 # You can see that broadcasting is a zero-cost operation because it does not
 # compute any new values nor does it require any data movement: each thread
@@ -526,14 +526,15 @@ def memcpy_2d_impl(input, output, XBLOCK, YBLOCK, layout, num_warps):
 
 @pytest.mark.parametrize("XBLOCK, YBLOCK", [(128, 256), (256, 128)])
 @pytest.mark.parametrize("xnumel, ynumel", [(100, 2000), (1000, 200)])
-@pytest.mark.parametrize("transpose", [False, True])
+@pytest.mark.parametrize("transposed", [False, True])
 @pytest.mark.parametrize("num_warps", [4])
-def test_memcpy_2d(XBLOCK, YBLOCK, xnumel, ynumel, transpose, num_warps):
+def test_memcpy_2d(XBLOCK, YBLOCK, xnumel, ynumel, transposed, num_warps):
     torch.manual_seed(0)
     input = torch.randn((xnumel, ynumel), device="cuda")
-    # Transposing the tensor makes it non-contiguous along the inner dimension.
-    input = input.T if transpose else input
     output = torch.empty_like(input)
+    # Transposing the tensor makes it non-contiguous along the inner dimension.
+    input = input.T if transposed else input
+    output = output.T if transposed else output
     layout = gl.BlockedLayout([1, 1], [1, 32], [1, num_warps], [1, 0])
     memcpy_2d_impl(input, output, XBLOCK, YBLOCK, layout, num_warps=num_warps)
     torch.testing.assert_close(input, output, atol=0, rtol=0)
@@ -541,9 +542,9 @@ def test_memcpy_2d(XBLOCK, YBLOCK, xnumel, ynumel, transpose, num_warps):
 
 # %%
 # Instead of autotuning, we should just pick the layout we know will work based
-# based on our findings in 1D. Given that a 2D tensor is just a contiguous
-# memory block underneath, we can try to degenerate the 2D memcpy into the same
-# kernel as the 1D memcpy.
+# based on our findings in 1D. Suppose the 2D tensor is just a contiguous memory
+# block underneath, we can try to reduce the 2D memcpy into the same kernel as
+# the 1D memcpy.
 
 
 def bench_memcpy_2d(impl, transposed=False):
@@ -551,9 +552,9 @@ def bench_memcpy_2d(impl, transposed=False):
     xnumel = 32 * 1024
     ynumel = 64 * 1024
     input = torch.randn((xnumel, ynumel), device="cuda")
-    if transposed:
-        input = input.T
     output = torch.empty_like(input)
+    input = input.T if transposed else input
+    output = output.T if transposed else output
     return bench_memcpy_impl(input, output, impl)
 
 
@@ -657,6 +658,7 @@ if __name__ == "__main__" and _enabled("memcpy_2d_contig"):
     impl = partial(memcpy_2d_impl, XBLOCK=2048, YBLOCK=1, layout=layout, num_warps=4)
     _, throughput = bench_memcpy_impl(input.T, output.T, impl)
     print(f"2D memcpy (transposed): {throughput:.3f} TB/s")
+    print()
 
 # %%
 # The results from the benchmark:
@@ -674,3 +676,141 @@ if __name__ == "__main__" and _enabled("memcpy_2d_contig"):
 # of `Tensor.contiguous`. And we also see that applying the transposition
 # "trick" we "learned" through experimentation results in slightly more
 # performance.
+
+# %%
+# We have seen how picking the wrong layouts can crater performance, and that
+# the right layout for global memory accesses depends on the layout of the
+# tensors in global memory. What happens if the input and output tensors have
+# opposite global memory layouts?
+
+if __name__ == "__main__" and _enabled("memcpy_2d_inout"):
+    print("2D memcpy in/out layouts")
+    print("=========================")
+
+    # Input is contiguous along dim 1.
+    input = torch.randn((32 * 1024, 32 * 1024), device="cuda")
+
+    # Output is contiguous along dim 0.
+    output = torch.empty((input.shape[1], input.shape[0]), device="cuda").T
+
+    # order=[1, 0]
+    layout = gl.BlockedLayout([1, 1], [1, 32], [1, 4], [1, 0])
+    impl = partial(memcpy_2d_impl, XBLOCK=1, YBLOCK=2048, layout=layout, num_warps=4)
+    _, throughput = bench_memcpy_impl(input, output, impl)
+    print(f"2D memcpy (order=[1, 0]): {throughput:.3f} TB/s")
+
+    # order=[0, 1]
+    layout = gl.BlockedLayout([1, 1], [32, 1], [4, 1], [0, 1])
+    impl = partial(memcpy_2d_impl, XBLOCK=2048, YBLOCK=1, layout=layout, num_warps=4)
+    _, throughput = bench_memcpy_impl(input, output, impl)
+    print(f"2D memcpy (order=[0, 1]): {throughput:.3f} TB/s")
+
+# %%
+# We can see that performance is terrible regardless of which layout we pick:
+#
+# ```
+# 2D memcpy in/out layouts
+# =========================
+# 2D memcpy (order=[1, 0]): 0.489 TB/s
+# 2D memcpy (order=[0, 1]): 0.837 TB/s
+# ```
+#
+# The solution is we need to use two layouts for `gl.load` and `gl.store` that
+# are derived from the layouts of the global tensors.
+
+
+def get_layout_for_gmem_access(tensor, num_warps):
+    if len(tensor.shape) == 1:
+        return gl.BlockedLayout([1], [32], [num_warps], [0])
+
+    assert len(tensor.shape) == 2, "only 1D and 2D tensors are supported"
+    assert 1 in tensor.stride(), "expected at least 1 contiguous dimension"
+    if tensor.stride(1) == 1:
+        return gl.BlockedLayout([1, 1], [1, 32], [1, num_warps], [1, 0])
+    else:
+        return gl.BlockedLayout([1, 1], [32, 1], [num_warps, 1], [0, 1])
+
+
+# %%
+# However, this means the Gluon tensor that results from the global memory load
+# will have a different layout than what is required for the store. The layout
+# of a tensor is part of its type: tensors with the same shape and dtype but
+# with different layouts are incompatible types; we need to convert the layout
+# of the tensor.
+#
+# Layout conversions are potentially expensive operations, because they often
+# result in data movement across threads and warps. Data movement across warps
+# also requires using shared memory, which is a precious resource on the GPU.
+# Using shared memory for layout conversions can adversely affect performance
+# by reducing occupancy and maximum pipeline depth, which is something we will
+# explore in the next tutorial where we cover software pipelining.
+#
+# However, in our case the cost of the layout conversion is unavoidable, and it
+# is far less than the cost of inefficient global memory accesses. We will also
+# also need to pick a more square-ish block shape, since coalescing will occur
+# along different dimensions for the input and output.
+
+
+@gluon.jit
+def get_mask_and_offsets(start_x, start_y, xnumel, ynumel, xstride, ystride,  #
+                         XBLOCK: gl.constexpr, YBLOCK: gl.constexpr, layout: gl.constexpr):
+    indices_x = start_x + gl.arange(0, XBLOCK, layout=gl.SliceLayout(dim=1, parent=layout))
+    indices_y = start_y + gl.arange(0, YBLOCK, layout=gl.SliceLayout(dim=0, parent=layout))
+
+    mask = (indices_x[:, None] < xnumel) & (indices_y[None, :] < ynumel)
+    offsets = xstride * indices_x[:, None] + ystride * indices_y[None, :]
+    return mask, offsets
+
+
+@gluon.jit
+def memcpy_2d_inout_kernel(in_ptr, out_ptr,  #
+                           xnumel, ynumel, xstride_in, ystride_in, xstride_out, ystride_out,  #
+                           layout_in: gl.constexpr, layout_out: gl.constexpr,  #
+                           XBLOCK: gl.constexpr, YBLOCK: gl.constexpr):
+    pid_x = gl.program_id(0)
+    pid_y = gl.program_id(1)
+
+    start_x = pid_x * XBLOCK
+    start_y = pid_y * YBLOCK
+
+    # We need two sets of indices and masks for each layout. If the layouts
+    # happen to be the same, the compiler will optimize away the extra code and
+    # layout conversion.
+    mask_in, in_offsets = get_mask_and_offsets(start_x, start_y, xnumel, ynumel, xstride_in, ystride_in,  #
+                                               XBLOCK, YBLOCK, layout_in)
+    mask_out, out_offsets = get_mask_and_offsets(start_x, start_y, xnumel, ynumel, xstride_out, ystride_out,  #
+                                                 XBLOCK, YBLOCK, layout_out)
+
+    value = gl.load(in_ptr + in_offsets, mask=mask_in)
+
+    # Use `gl.convert_layout` to perform layout conversions.
+    value = gl.convert_layout(value, layout_out)
+
+    gl.store(out_ptr + out_offsets, value, mask=mask_out)
+
+
+def memcpy_2d_inout(input, output, num_warps=4):
+    assert input.shape == output.shape, "input and output must have the same shape"
+    XBLOCK = 128
+    YBLOCK = 128
+    layout_in = get_layout_for_gmem_access(input, num_warps)
+    layout_out = get_layout_for_gmem_access(output, num_warps)
+    grid = (triton.cdiv(input.shape[0], XBLOCK), triton.cdiv(input.shape[1], YBLOCK))
+    return memcpy_2d_inout_kernel[grid](  #
+        input, output,  #
+        input.shape[0], input.shape[1],  #
+        *input.stride(), *output.stride(),  #
+        layout_in, layout_out,  #
+        XBLOCK, YBLOCK, num_warps=num_warps)
+
+
+if __name__ == "__main__" and _enabled("memcpy_2d_inout"):
+    _, throughput = bench_memcpy_impl(input, output, memcpy_2d_inout)
+    print(f"2D memcpy (in/out layouts): {throughput:.3f} TB/s")
+
+# %%
+# This yields much more reasonable performance:
+#
+# ```
+# 2D memcpy (in/out layouts): 2.407 TB/s
+# ```
