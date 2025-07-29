@@ -29,14 +29,13 @@ namespace mlir {
 //===----------------------------------------------------------------------===//
 namespace triton {
 
-// Bitwidth of pointers
-constexpr int kPtrBitWidth = 64;
 // Max shmem LDS/STS instruction in bits
 constexpr int kMaxShmemVecBitLength = 128;
 
-static unsigned getBitwidth(RankedTensorType ty) {
-  auto isPtr = isa<PointerType>(ty.getElementType());
-  return isPtr ? kPtrBitWidth : std::max(ty.getElementTypeBitWidth(), 8u);
+unsigned getNumScratchElemsPaddedCvt(RankedTensorType srcTy,
+                                     RankedTensorType dstTy) {
+  auto scratchConfig = getScratchConfigForCvt(srcTy, dstTy);
+  return getNumScratchElements(scratchConfig.paddedRepShape);
 }
 
 unsigned getNumScratchElemsSwizzledCvt(RankedTensorType srcTy,
@@ -47,15 +46,9 @@ unsigned getNumScratchElemsSwizzledCvt(RankedTensorType srcTy,
   srcLayout = actionRemoveBroadcastedRegs(srcLayout).apply(srcLayout);
   dstLayout = actionRemoveBroadcastedRegs(dstLayout).apply(dstLayout);
   auto bitwidth = getBitwidth(srcTy);
-  auto smem = gpu::optimalSwizzling(srcLayout, dstLayout, bitwidth);
+  auto smem = gpu::optimalSwizzlingLdSt(srcLayout, dstLayout, bitwidth);
   auto reps = smem.getInDimSize(StringAttr::get(ctx, "reps"));
   return smem.getTotalOutDimSize() / reps;
-}
-
-unsigned getNumScratchElemsPaddedCvt(RankedTensorType srcTy,
-                                     RankedTensorType dstTy) {
-  auto scratchConfig = getScratchConfigForCvt(srcTy, dstTy);
-  return getNumScratchElements(scratchConfig.paddedRepShape);
 }
 
 static SmallVector<unsigned> getRepShapeForCvt(RankedTensorType srcTy,
@@ -215,10 +208,8 @@ unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
     auto dstTy = cvtLayout.getType();
     if (!cvtNeedsSharedMemory(srcTy, dstTy))
       return 0;
-    // Pesimistically take the max. We will revisit later
-    auto elems = std::max(getNumScratchElemsSwizzledCvt(srcTy, dstTy),
-                          getNumScratchElemsPaddedCvt(srcTy, dstTy));
-
+    // The generic pass uses swizzling
+    auto elems = getNumScratchElemsSwizzledCvt(srcTy, dstTy);
     return elems * getBitwidth(srcTy) / 8;
   }
   if (isa<AtomicRMWOp, AtomicCASOp>(op)) {
