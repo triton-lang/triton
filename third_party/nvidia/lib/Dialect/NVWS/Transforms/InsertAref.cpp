@@ -158,7 +158,7 @@ SmallVector<Operation *> createArefPut(PartitionBuilder &builder,
   auto loc = producedValue.result.getLoc();
   auto arefBufType = cast<MemDescType>(aref.getBuffers()[0].getType());
   Value result = producedValue.result;
-  auto dataBufType = getBufferViewType(arefBufType, true);
+  auto dataBufType = getBufferViewType(arefBufType, /*mutable*/ true);
   StageCluster stageCluster = getStageClusterForProducer(result);
   Partition *producerPartition = producedValue.partition;
   SmallVector<Type> buffers{dataBufType};
@@ -312,7 +312,7 @@ void createArefGet(PartitionBuilder &builder, scf::ForOp loop,
       getEnterAndExitStageClustersOfUses(results, filterUse, loop);
 
   auto arefBufType = cast<MemDescType>(aref.getOperand(0).getType());
-  Type bufferType = getBufferViewType(arefBufType, false);
+  Type bufferType = getBufferViewType(arefBufType, /*mutable*/ false);
   auto c0Enter = builder.intCst(0);
   auto getEnterOp = builder.createInto<ArefGetEnterOp>(
       *consumerPartition, stageClusterEnter, SmallVector{bufferType}, aref,
@@ -331,7 +331,8 @@ void createArefGet(PartitionBuilder &builder, scf::ForOp loop,
     if (auto memDescType = dyn_cast<MemDescType>(result.getType())) {
       replaceUsesAndPropagateType(builder, result.getDefiningOp(), dataBuf);
     } else if (auto tensorType = dyn_cast<RankedTensorType>(result.getType())) {
-      auto localLoadOp = builder.create<LocalLoadOp>(loc, tensorType, dataBuf);
+      auto localLoadOp = builder.createInto<LocalLoadOp>(
+          *consumerPartition, stageClusterEnter, tensorType, dataBuf);
       result.replaceAllUsesWith(localLoadOp.getResult());
       schedule.insert(consumerPartition, localLoadOp);
       if (consumers.size() == 1) {
