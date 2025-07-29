@@ -1,6 +1,171 @@
 // RUN: triton-opt %s -split-input-file --allow-unregistered-dialect --nvws-lower-aref | FileCheck %s
 
 #shared0 = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 16}>
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-warps" = 4 : i32} {
+
+  //CHECK-LABEL: @two_consumers
+  tt.func @two_consumers(%arg0: i32, %arg1: i32, %arg2: i32) {
+    %c0_i32 = arith.constant 0 : i32
+    %0 = ttg.local_alloc : () -> !ttg.memdesc<2x1xi32, #shared, #smem, mutable>
+    %1 = nvws.aref.create %0 : <[!ttg.memdesc<2x1xi32, #shared, #smem, mutable>]>
+    // CHECK: [[BUF:%.*]] = ttg.local_alloc
+    // CHECK-NEXT: [[EMPTY:%.*]] = ttg.local_alloc
+    // CHECK-NEXT: [[FULL:%.*]] = ttg.local_alloc
+    // CHECK-NEXT: scf.for
+    // CHECK-NEXT:   [[EMPTYSLICE:%.*]] = ttg.memdesc_index [[EMPTY]]
+    // CHECK-NEXT:   ttng.init_barrier [[EMPTYSLICE]], 2
+    // CHECK-NEXT:   [[FULLSLICE:%.*]] = ttg.memdesc_index [[FULL]]
+    // CHECK-NEXT:   ttng.init_barrier [[FULLSLICE]], 1
+    // CHECK-NEXT: }
+    nvws.warp_group
+    partition0 num_warps(4) {
+      scf.for %arg3 = %arg0 to %arg1 step %arg2  : i32 {
+        %2 = "op_a"() : () -> tensor<1xi32, #blocked>
+        %3 = nvws.aref.put.enter %1[%c0_i32, %c0_i32] {loop.cluster = 1 : i32, loop.stage = 3 : i32}: <[!ttg.memdesc<2x1xi32, #shared, #smem, mutable>]> -> !ttg.memdesc<1xi32, #shared, #smem, mutable, 2x1>
+        ttg.local_store %2, %3 : tensor<1xi32, #blocked> -> !ttg.memdesc<1xi32, #shared, #smem, mutable, 2x1>
+        // CHECK: op_a
+        // CHECK-NEXT: [[EMPTYMBAR:%.*]] = ttg.memdesc_index [[EMPTY]]
+        // CHECK-NEXT: ttng.wait_barrier [[EMPTYMBAR]], {{.*}} {loop.cluster = 1 : i32, loop.stage = 3 : i32}
+        // CHECK: local_store
+        // CHECK-NEXT: [[FULLMBAR:%.*]] = ttg.memdesc_index [[FULL]]
+        // CHECK-NEXT: ttng.arrive_barrier [[FULLMBAR]], 1 {loop.cluster = 1 : i32, loop.stage = 3 : i32}
+        nvws.aref.put.exit %1[%c0_i32] [#nvws.async_op<none>] {loop.cluster = 1 : i32, loop.stage = 3 : i32} : <[!ttg.memdesc<2x1xi32, #shared, #smem, mutable>]>
+      }
+      nvws.warp_group.yield
+    }
+    partition1 num_warps(4) {
+      scf.for %arg3 = %arg0 to %arg1 step %arg2  : i32 {
+        // CHECK: [[FULLMBAR:%.*]] = ttg.memdesc_index [[FULL]]
+        // CHECK-NEXT: ttng.wait_barrier [[FULLMBAR]], {{.*}} {loop.cluster = 2 : i32, loop.stage = 3 : i32}
+        // CHECK: [[VAL:%.*]] = ttg.local_load
+        // CHECK-NEXT: [[EMPTYMBAR:%.*]] = ttg.memdesc_index [[EMPTY]]
+        // CHECK-NEXT: ttng.arrive_barrier [[EMPTYMBAR]], 1 {loop.cluster = 2 : i32, loop.stage = 3 : i32}
+        // CHECK: "op_b"([[VAL]])
+        %2 = nvws.aref.get.enter %1[%c0_i32, %c0_i32] {loop.cluster = 2 : i32, loop.stage = 3 : i32}: <[!ttg.memdesc<2x1xi32, #shared, #smem, mutable>]> -> !ttg.memdesc<1xi32, #shared, #smem, mutable, 2x1>
+        %3 = ttg.local_load %2 : !ttg.memdesc<1xi32, #shared, #smem, mutable, 2x1> -> tensor<1xi32, #blocked>
+        nvws.aref.get.exit %1[%c0_i32] [#nvws.async_op<none>] {loop.cluster = 2 : i32, loop.stage = 3 : i32} : <[!ttg.memdesc<2x1xi32, #shared, #smem, mutable>]>
+        "op_b"(%3) : (tensor<1xi32, #blocked>) -> ()
+      }
+      nvws.warp_group.return
+    }
+    partition2 num_warps(4) {
+      scf.for %arg3 = %arg0 to %arg1 step %arg2  : i32 {
+        // CHECK: [[FULLMBAR:%.*]] = ttg.memdesc_index [[FULL]]
+        // CHECK-NEXT: ttng.wait_barrier [[FULLMBAR]], {{.*}} {loop.cluster = 3 : i32, loop.stage = 4 : i32}
+        // CHECK: [[VAL:%.*]] = ttg.local_load
+        // CHECK-NEXT: [[EMPTYMBAR:%.*]] = ttg.memdesc_index [[EMPTY]]
+        // CHECK-NEXT: ttng.arrive_barrier [[EMPTYMBAR]], 1 {loop.cluster = 3 : i32, loop.stage = 4 : i32}
+        // CHECK: "op_c"([[VAL]])
+        // CHECK: "op_d"([[VAL]])
+        %2 = nvws.aref.get.enter %1[%c0_i32, %c0_i32] {loop.cluster = 3 : i32, loop.stage = 4 : i32}: <[!ttg.memdesc<2x1xi32, #shared, #smem, mutable>]> -> !ttg.memdesc<1xi32, #shared, #smem, mutable, 2x1>
+        %3 = ttg.local_load %2 : !ttg.memdesc<1xi32, #shared, #smem, mutable, 2x1> -> tensor<1xi32, #blocked>
+        nvws.aref.get.exit %1[%c0_i32] [#nvws.async_op<none>] {loop.cluster = 3 : i32, loop.stage = 4 : i32} : <[!ttg.memdesc<2x1xi32, #shared, #smem, mutable>]>
+        "op_c"(%3) : (tensor<1xi32, #blocked>) -> ()
+        "op_d"(%3) : (tensor<1xi32, #blocked>) -> ()
+      }
+      nvws.warp_group.return
+    }
+    ttg.local_dealloc %0 : !ttg.memdesc<2x1xi32, #shared, #smem, mutable>
+    nvws.aref.destroy %1 : <[!ttg.memdesc<2x1xi32, #shared, #smem, mutable>]>
+    // CHECK: ttg.local_dealloc
+    // CHECK-NEXT: scf.for
+    // CHECK-NEXT:   [[EMPTYMBAR:%.*]] = ttg.memdesc_index [[EMPTY]]
+    // CHECK-NEXT:   ttng.inval_barrier [[EMPTYMBAR]]
+    // CHECK-NEXT:   [[FULLMBAR:%.*]] = ttg.memdesc_index [[FULL]]
+    // CHECK-NEXT:   ttng.inval_barrier [[FULLMBAR]]
+    tt.return
+  }
+
+  //CHECK-LABEL: @three_consumers
+  tt.func @three_consumers(%arg0: i32, %arg1: i32, %arg2: i32) {
+    %c0_i32 = arith.constant 0 : i32
+    %0 = ttg.local_alloc : () -> !ttg.memdesc<2x1xi32, #shared, #smem, mutable>
+    %1 = nvws.aref.create %0 : <[!ttg.memdesc<2x1xi32, #shared, #smem, mutable>]>
+    // CHECK: [[BUF:%.*]] = ttg.local_alloc
+    // CHECK-NEXT: [[EMPTY:%.*]] = ttg.local_alloc
+    // CHECK-NEXT: [[FULL:%.*]] = ttg.local_alloc
+    // CHECK-NEXT: scf.for
+    // CHECK-NEXT:   [[EMPTYSLICE:%.*]] = ttg.memdesc_index [[EMPTY]]
+    // CHECK-NEXT:   ttng.init_barrier [[EMPTYSLICE]], 3
+    // CHECK-NEXT:   [[FULLSLICE:%.*]] = ttg.memdesc_index [[FULL]]
+    // CHECK-NEXT:   ttng.init_barrier [[FULLSLICE]], 1
+    // CHECK-NEXT: }
+    nvws.warp_group
+    partition0 num_warps(4) {
+      scf.for %arg3 = %arg0 to %arg1 step %arg2  : i32 {
+        %2 = "op_a"() : () -> tensor<1xi32, #blocked>
+        %3 = nvws.aref.put.enter %1[%c0_i32, %c0_i32] : <[!ttg.memdesc<2x1xi32, #shared, #smem, mutable>]> -> !ttg.memdesc<1xi32, #shared, #smem, mutable, 2x1>
+        ttg.local_store %2, %3 : tensor<1xi32, #blocked> -> !ttg.memdesc<1xi32, #shared, #smem, mutable, 2x1>
+        // CHECK: op_a
+        // CHECK-NEXT: [[EMPTYMBAR:%.*]] = ttg.memdesc_index [[EMPTY]]
+        // CHECK-NEXT: ttng.wait_barrier [[EMPTYMBAR]]
+        // CHECK: local_store
+        // CHECK-NEXT: [[FULLMBAR:%.*]] = ttg.memdesc_index [[FULL]]
+        // CHECK-NEXT: ttng.arrive_barrier [[FULLMBAR]], 1
+        nvws.aref.put.exit %1[%c0_i32] [#nvws.async_op<none>] : <[!ttg.memdesc<2x1xi32, #shared, #smem, mutable>]>
+      }
+      nvws.warp_group.yield
+    }
+    partition1 num_warps(4) {
+      scf.for %arg3 = %arg0 to %arg1 step %arg2  : i32 {
+        // CHECK: [[FULLMBAR:%.*]] = ttg.memdesc_index [[FULL]]
+        // CHECK-NEXT: ttng.wait_barrier [[FULLMBAR]]
+        // CHECK: [[VAL:%.*]] = ttg.local_load
+        // CHECK-NEXT: [[EMPTYMBAR:%.*]] = ttg.memdesc_index [[EMPTY]]
+        // CHECK-NEXT: ttng.arrive_barrier [[EMPTYMBAR]], 1
+        // CHECK: "op_b"([[VAL]])
+        %2 = nvws.aref.get.enter %1[%c0_i32, %c0_i32] : <[!ttg.memdesc<2x1xi32, #shared, #smem, mutable>]> -> !ttg.memdesc<1xi32, #shared, #smem, mutable, 2x1>
+        %3 = ttg.local_load %2 : !ttg.memdesc<1xi32, #shared, #smem, mutable, 2x1> -> tensor<1xi32, #blocked>
+        nvws.aref.get.exit %1[%c0_i32] [#nvws.async_op<none>] : <[!ttg.memdesc<2x1xi32, #shared, #smem, mutable>]>
+        "op_b"(%3) : (tensor<1xi32, #blocked>) -> ()
+      }
+      nvws.warp_group.return
+    }
+    partition2 num_warps(4) {
+      scf.for %arg3 = %arg0 to %arg1 step %arg2  : i32 {
+        // CHECK: [[FULLMBAR:%.*]] = ttg.memdesc_index [[FULL]]
+        // CHECK-NEXT: ttng.wait_barrier [[FULLMBAR]]
+        // CHECK: [[VAL:%.*]] = ttg.local_load
+        // CHECK-NEXT: [[EMPTYMBAR:%.*]] = ttg.memdesc_index [[EMPTY]]
+        // CHECK-NEXT: ttng.arrive_barrier [[EMPTYMBAR]], 1
+        // CHECK: "op_c"([[VAL]])
+        // CHECK: "op_d"([[VAL]])
+        %2 = nvws.aref.get.enter %1[%c0_i32, %c0_i32] : <[!ttg.memdesc<2x1xi32, #shared, #smem, mutable>]> -> !ttg.memdesc<1xi32, #shared, #smem, mutable, 2x1>
+        %3 = ttg.local_load %2 : !ttg.memdesc<1xi32, #shared, #smem, mutable, 2x1> -> tensor<1xi32, #blocked>
+        nvws.aref.get.exit %1[%c0_i32] [#nvws.async_op<none>] : <[!ttg.memdesc<2x1xi32, #shared, #smem, mutable>]>
+        "op_c"(%3) : (tensor<1xi32, #blocked>) -> ()
+        "op_d"(%3) : (tensor<1xi32, #blocked>) -> ()
+      }
+      nvws.warp_group.return
+    }
+    partition3 num_warps(4) {
+      scf.for %arg3 = %arg0 to %arg1 step %arg2  : i32 {
+        // CHECK: [[FULLMBAR:%.*]] = ttg.memdesc_index [[FULL]]
+        // CHECK-NEXT: ttng.wait_barrier [[FULLMBAR]]
+        // CHECK: [[VAL:%.*]] = ttg.local_load
+        // CHECK-NEXT: [[EMPTYMBAR:%.*]] = ttg.memdesc_index [[EMPTY]]
+        // CHECK-NEXT: ttng.arrive_barrier [[EMPTYMBAR]], 1
+        // CHECK: "op_c"([[VAL]])
+        // CHECK: "op_d"([[VAL]])
+        %2 = nvws.aref.get.enter %1[%c0_i32, %c0_i32] : <[!ttg.memdesc<2x1xi32, #shared, #smem, mutable>]> -> !ttg.memdesc<1xi32, #shared, #smem, mutable, 2x1>
+        %3 = ttg.local_load %2 : !ttg.memdesc<1xi32, #shared, #smem, mutable, 2x1> -> tensor<1xi32, #blocked>
+        nvws.aref.get.exit %1[%c0_i32] [#nvws.async_op<none>] : <[!ttg.memdesc<2x1xi32, #shared, #smem, mutable>]>
+        "op_c"(%3) : (tensor<1xi32, #blocked>) -> ()
+        "op_d"(%3) : (tensor<1xi32, #blocked>) -> ()
+      }
+      nvws.warp_group.return
+    }
+    ttg.local_dealloc %0 : !ttg.memdesc<2x1xi32, #shared, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#shared0 = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 16}>
 #smem = #ttg.shared_memory
 #tmem = #ttng.tensor_memory
 module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
@@ -201,3 +366,191 @@ module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-w
     tt.return
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-warps" = 4 : i32} {
+  //CHECK-LABEL: @complex_case
+  tt.func @complex_case(%arg0: i32, %arg1: i32, %arg2: i32) {
+    %c0_i32 = arith.constant 0 : i32
+    %cst = arith.constant dense<0> : tensor<1xi32, #blocked>
+    %0 = ttg.local_alloc : () -> !ttg.memdesc<2x1xi32, #shared, #smem, mutable>
+    %1 = nvws.aref.create %0 : <[!ttg.memdesc<2x1xi32, #shared, #smem, mutable>]>
+    %2 = ttg.local_alloc : () -> !ttg.memdesc<2x1xi32, #shared, #smem, mutable>
+    %3 = nvws.aref.create %2 : <[!ttg.memdesc<2x1xi32, #shared, #smem, mutable>]>
+    // CHECK: ttg.local_alloc
+    // CHECK-NEXT: [[EMPTY1:%.*]] = ttg.local_alloc
+    // CHECK-NEXT: [[FULL1:%.*]] = ttg.local_alloc
+    // CHECK-NEXT: scf.for
+    // CHECK-NEXT:   [[EMPTYBAR1:%.*]] = ttg.memdesc_index [[EMPTY1]]
+    // CHECK-NEXT:   init_barrier [[EMPTYBAR1]], 2
+    // CHECK-NEXT:   [[FULLBAR1:%.*]] = ttg.memdesc_index [[FULL1]]
+    // CHECK-NEXT:   init_barrier [[FULLBAR1]], 1
+
+    // CHECK: ttg.local_alloc
+    // CHECK-NEXT: [[EMPTY2:%.*]] = ttg.local_alloc
+    // CHECK-NEXT: [[FULL2:%.*]] = ttg.local_alloc
+    // CHECK-NEXT: scf.for
+    // CHECK-NEXT:   [[EMPTYBAR2:%.*]] = ttg.memdesc_index [[EMPTY2]]
+    // CHECK-NEXT:   init_barrier [[EMPTYBAR2]], 2
+    // CHECK-NEXT:   [[FULLBAR2:%.*]] = ttg.memdesc_index [[FULL2]]
+    // CHECK-NEXT:   init_barrier [[FULLBAR2]], 1
+    nvws.warp_group
+    partition0 num_warps(4) {
+      %5:2 = scf.for %arg3 = %arg0 to %arg1 step %arg2 iter_args(%arg4 = %cst, %arg5 = %cst) -> (tensor<1xi32, #blocked>, tensor<1xi32, #blocked>)  : i32 {
+        // CHECK: [[EMPTYBAR2:%.*]] = ttg.memdesc_index [[EMPTY2]]
+        // CHECK-NEXT: ttng.wait_barrier [[EMPTYBAR2]]
+        // CHECK: local_store
+        // CHECK-NEXT: [[FULLBAR2:%.*]] = ttg.memdesc_index [[FULL2]]
+        // CHECK-NEXT: ttng.arrive_barrier [[FULLBAR2]], 1
+        %6 = nvws.aref.put.enter %3[%c0_i32, %c0_i32] : <[!ttg.memdesc<2x1xi32, #shared, #smem, mutable>]> -> !ttg.memdesc<1xi32, #shared, #smem, mutable, 2x1>
+        ttg.local_store %arg5, %6 : tensor<1xi32, #blocked> -> !ttg.memdesc<1xi32, #shared, #smem, mutable, 2x1>
+        nvws.aref.put.exit %3[%c0_i32] [#nvws.async_op<none>] : <[!ttg.memdesc<2x1xi32, #shared, #smem, mutable>]>
+        %7 = nvws.aref.put.enter %1[%c0_i32, %c0_i32] : <[!ttg.memdesc<2x1xi32, #shared, #smem, mutable>]> -> !ttg.memdesc<1xi32, #shared, #smem, mutable, 2x1>
+        // CHECK: [[EMPTYBAR1:%.*]] = ttg.memdesc_index [[EMPTY1]]
+        // CHECK-NEXT: ttng.wait_barrier [[EMPTYBAR1]]
+        // CHECK: local_store
+        // CHECK-NEXT: [[FULLBAR1:%.*]] = ttg.memdesc_index [[FULL1]]
+        // CHECK-NEXT: ttng.arrive_barrier [[FULLBAR1]], 1
+        ttg.local_store %arg4, %7 : tensor<1xi32, #blocked> -> !ttg.memdesc<1xi32, #shared, #smem, mutable, 2x1>
+        nvws.aref.put.exit %1[%c0_i32] [#nvws.async_op<none>] : <[!ttg.memdesc<2x1xi32, #shared, #smem, mutable>]>
+        %8 = "op_a"() : () -> tensor<1xi32, #blocked>
+        scf.yield %8, %arg4 : tensor<1xi32, #blocked>, tensor<1xi32, #blocked>
+      }
+      nvws.warp_group.yield %5#0, %5#1 : tensor<1xi32, #blocked>, tensor<1xi32, #blocked>
+    }
+    partition1 num_warps(4) {
+      scf.for %arg3 = %arg0 to %arg1 step %arg2  : i32 {
+        // CHECK: [[FULLBAR1:%.*]] = ttg.memdesc_index [[FULL1]]
+        // CHECK-NEXT: ttng.wait_barrier [[FULLBAR1]]
+        // CHECK: [[VAL:%.*]] = ttg.local_load
+        // CHECK-NEXT: [[EMPTYBAR1:%.*]] = ttg.memdesc_index [[EMPTY1]]
+        // CHECK-NEXT: ttng.arrive_barrier [[EMPTYBAR1]], 1
+        // CHECK: "op_b"([[VAL]])
+        %5 = nvws.aref.get.enter %1[%c0_i32, %c0_i32] : <[!ttg.memdesc<2x1xi32, #shared, #smem, mutable>]> -> !ttg.memdesc<1xi32, #shared, #smem, mutable, 2x1>
+        %6 = ttg.local_load %5 : !ttg.memdesc<1xi32, #shared, #smem, mutable, 2x1> -> tensor<1xi32, #blocked>
+        nvws.aref.get.exit %1[%c0_i32] [#nvws.async_op<none>] : <[!ttg.memdesc<2x1xi32, #shared, #smem, mutable>]>
+        "op_b"(%6) : (tensor<1xi32, #blocked>) -> ()
+        // CHECK: [[FULLBAR2:%.*]] = ttg.memdesc_index [[FULL2]]
+        // CHECK-NEXT: ttng.wait_barrier [[FULLBAR2]]
+        // CHECK: [[VAL:%.*]] = ttg.local_load
+        // CHECK-NEXT: [[EMPTYBAR2:%.*]] = ttg.memdesc_index [[EMPTY2]]
+        // CHECK-NEXT: ttng.arrive_barrier [[EMPTYBAR2]], 1
+        // CHECK: "op_d"([[VAL]])
+        %7 = nvws.aref.get.enter %3[%c0_i32, %c0_i32] : <[!ttg.memdesc<2x1xi32, #shared, #smem, mutable>]> -> !ttg.memdesc<1xi32, #shared, #smem, mutable, 2x1>
+        %8 = ttg.local_load %7 : !ttg.memdesc<1xi32, #shared, #smem, mutable, 2x1> -> tensor<1xi32, #blocked>
+        nvws.aref.get.exit %3[%c0_i32] [#nvws.async_op<none>] : <[!ttg.memdesc<2x1xi32, #shared, #smem, mutable>]>
+        "op_d"(%8) : (tensor<1xi32, #blocked>) -> ()
+      }
+      nvws.warp_group.return
+    }
+    partition2 num_warps(4) {
+      scf.for %arg3 = %arg0 to %arg1 step %arg2  : i32 {
+        // CHECK: [[FULLBAR1:%.*]] = ttg.memdesc_index [[FULL1]]
+        // CHECK-NEXT: ttng.wait_barrier [[FULLBAR1]]
+        // CHECK: [[VAL:%.*]] = ttg.local_load
+        // CHECK-NEXT: [[EMPTYBAR1:%.*]] = ttg.memdesc_index [[EMPTY1]]
+        // CHECK-NEXT: ttng.arrive_barrier [[EMPTYBAR1]], 1
+        // CHECK: "op_c"([[VAL]])
+        // CHECK-NEXT: "op_c"([[VAL]])
+        %5 = nvws.aref.get.enter %1[%c0_i32, %c0_i32] : <[!ttg.memdesc<2x1xi32, #shared, #smem, mutable>]> -> !ttg.memdesc<1xi32, #shared, #smem, mutable, 2x1>
+        %6 = ttg.local_load %5 : !ttg.memdesc<1xi32, #shared, #smem, mutable, 2x1> -> tensor<1xi32, #blocked>
+        nvws.aref.get.exit %1[%c0_i32] [#nvws.async_op<none>] : <[!ttg.memdesc<2x1xi32, #shared, #smem, mutable>]>
+        "op_c"(%6) : (tensor<1xi32, #blocked>) -> ()
+        "op_c"(%6) : (tensor<1xi32, #blocked>) -> ()
+        // CHECK: [[FULLBAR2:%.*]] = ttg.memdesc_index [[FULL2]]
+        // CHECK-NEXT: ttng.wait_barrier [[FULLBAR2]]
+        // CHECK: [[VAL:%.*]] = ttg.local_load
+        // CHECK-NEXT: [[EMPTYBAR2:%.*]] = ttg.memdesc_index [[EMPTY2]]
+        // CHECK-NEXT: ttng.arrive_barrier [[EMPTYBAR2]], 1
+        // CHECK: "op_d"([[VAL]])
+        %7 = nvws.aref.get.enter %3[%c0_i32, %c0_i32] : <[!ttg.memdesc<2x1xi32, #shared, #smem, mutable>]> -> !ttg.memdesc<1xi32, #shared, #smem, mutable, 2x1>
+        %8 = ttg.local_load %7 : !ttg.memdesc<1xi32, #shared, #smem, mutable, 2x1> -> tensor<1xi32, #blocked>
+        nvws.aref.get.exit %3[%c0_i32] [#nvws.async_op<none>] : <[!ttg.memdesc<2x1xi32, #shared, #smem, mutable>]>
+        "op_d"(%8) : (tensor<1xi32, #blocked>) -> ()
+      }
+      nvws.warp_group.return
+    }
+    ttg.local_dealloc %2 : !ttg.memdesc<2x1xi32, #shared, #smem, mutable>
+    ttg.local_dealloc %0 : !ttg.memdesc<2x1xi32, #shared, #smem, mutable>
+    tt.return
+  }
+}
+
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func @reuse_argument(%arg0: i32, %arg1: i32, %arg2: i32) {
+    %c0_i32 = arith.constant 0 : i32
+    %cst = arith.constant dense<0> : tensor<1xi32, #blocked>
+    %cst_0 = arith.constant dense<1> : tensor<1xi32, #blocked>
+    %0 = ttg.local_alloc : () -> !ttg.memdesc<2x1xi32, #shared, #smem, mutable>
+    %1 = nvws.aref.create %0 : <[!ttg.memdesc<2x1xi32, #shared, #smem, mutable>]>
+    // CHECK: ttg.local_alloc
+    // CHECK-NEXT: [[EMPTY1:%.*]] = ttg.local_alloc
+    // CHECK-NEXT: [[FULL1:%.*]] = ttg.local_alloc
+    // CHECK-NEXT: scf.for
+    // CHECK-NEXT:   [[EMPTYBAR1:%.*]] = ttg.memdesc_index [[EMPTY1]]
+    // CHECK-NEXT:   init_barrier [[EMPTYBAR1]], 2
+    // CHECK-NEXT:   [[FULLBAR1:%.*]] = ttg.memdesc_index [[FULL1]]
+    // CHECK-NEXT:   init_barrier [[FULLBAR1]], 1
+    nvws.warp_group
+    partition0 num_warps(4) {
+      %2:2 = scf.for %arg3 = %arg0 to %arg1 step %arg2 iter_args(%arg4 = %cst, %arg5 = %cst_0) -> (tensor<1xi32, #blocked>, tensor<1xi32, #blocked>)  : i32 {
+        // CHECK: [[EMPTYBAR1:%.*]] = ttg.memdesc_index [[EMPTY1]]
+        // CHECK-NEXT: ttng.wait_barrier [[EMPTYBAR1]]
+        // CHECK: local_store
+        // CHECK-NEXT: [[FULLBAR1:%.*]] = ttg.memdesc_index [[FULL1]]
+        // CHECK-NEXT: ttng.arrive_barrier [[FULLBAR1]], 1
+        // CHECK: op_a
+        %3 = nvws.aref.put.enter %1[%c0_i32, %c0_i32] {ttg.partition = 0 : i32} : <[!ttg.memdesc<2x1xi32, #shared, #smem, mutable>]> -> !ttg.memdesc<1xi32, #shared, #smem, mutable, 2x1>
+        ttg.local_store %arg5, %3 {ttg.partition = 0 : i32} : tensor<1xi32, #blocked> -> !ttg.memdesc<1xi32, #shared, #smem, mutable, 2x1>
+        nvws.aref.put.exit %1[%c0_i32] [#nvws.async_op<none>] {ttg.partition = 0 : i32} : <[!ttg.memdesc<2x1xi32, #shared, #smem, mutable>]>
+        %4 = "op_a"() {ttg.partition = 0 : i32} : () -> tensor<1xi32, #blocked>
+        scf.yield %4, %arg4 : tensor<1xi32, #blocked>, tensor<1xi32, #blocked>
+      } {ttg.partition.stages = [1 : i32, 0 : i32, 0 : i32]}
+      nvws.warp_group.yield %2#0, %2#1 : tensor<1xi32, #blocked>, tensor<1xi32, #blocked>
+    }
+    partition1 num_warps(4) {
+      scf.for %arg3 = %arg0 to %arg1 step %arg2  : i32 {
+        // CHECK: [[FULLBAR1:%.*]] = ttg.memdesc_index [[FULL1]]
+        // CHECK-NEXT: ttng.wait_barrier [[FULLBAR1]]
+        // CHECK: [[VAL:%.*]] = ttg.local_load
+        // CHECK-NEXT: [[EMPTYBAR1:%.*]] = ttg.memdesc_index [[EMPTY1]]
+        // CHECK-NEXT: ttng.arrive_barrier [[EMPTYBAR1]], 1
+        // CHECK: "op_d"([[VAL]])
+        %5 = nvws.aref.get.enter %1[%c0_i32, %c0_i32] {ttg.partition = 1 : i32} : <[!ttg.memdesc<2x1xi32, #shared, #smem, mutable>]> -> !ttg.memdesc<1xi32, #shared, #smem, mutable, 2x1>
+        %6 = ttg.local_load %5 {ttg.partition = 1 : i32} : !ttg.memdesc<1xi32, #shared, #smem, mutable, 2x1> -> tensor<1xi32, #blocked>
+        nvws.aref.get.exit %1[%c0_i32] [#nvws.async_op<none>] {ttg.partition = 1 : i32} : <[!ttg.memdesc<2x1xi32, #shared, #smem, mutable>]>
+        "op_d"(%6) {ttg.partition = 1 : i32} : (tensor<1xi32, #blocked>) -> ()
+      } {ttg.partition.stages = [1 : i32, 0 : i32, 0 : i32]}
+      nvws.warp_group.return
+    }
+    partition2 num_warps(4) {
+      scf.for %arg3 = %arg0 to %arg1 step %arg2  : i32 {
+        // CHECK: [[FULLBAR1:%.*]] = ttg.memdesc_index [[FULL1]]
+        // CHECK-NEXT: ttng.wait_barrier [[FULLBAR1]]
+        // CHECK: [[VAL:%.*]] = ttg.local_load
+        // CHECK-NEXT: [[EMPTYBAR1:%.*]] = ttg.memdesc_index [[EMPTY1]]
+        // CHECK-NEXT: ttng.arrive_barrier [[EMPTYBAR1]], 1
+        // CHECK: "op_d"([[VAL]])
+        %7 = nvws.aref.get.enter %1[%c0_i32, %c0_i32] {ttg.partition = 2 : i32} : <[!ttg.memdesc<2x1xi32, #shared, #smem, mutable>]> -> !ttg.memdesc<1xi32, #shared, #smem, mutable, 2x1>
+        %8 = ttg.local_load %7 {ttg.partition = 2 : i32} : !ttg.memdesc<1xi32, #shared, #smem, mutable, 2x1> -> tensor<1xi32, #blocked>
+        nvws.aref.get.exit %1[%c0_i32] [#nvws.async_op<none>] {ttg.partition = 2 : i32} : <[!ttg.memdesc<2x1xi32, #shared, #smem, mutable>]>
+        "op_d"(%8) {ttg.partition = 2 : i32} : (tensor<1xi32, #blocked>) -> ()
+      } {ttg.partition.stages = [1 : i32, 0 : i32, 0 : i32]}
+      nvws.warp_group.return
+    }
+    ttg.local_dealloc %0 : !ttg.memdesc<2x1xi32, #shared, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----

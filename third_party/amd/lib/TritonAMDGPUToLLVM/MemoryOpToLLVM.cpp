@@ -1,19 +1,18 @@
 #include "AsyncUtility.h"
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "PatternTritonGPUOpToLLVM.h"
-#include "Utility.h"
+#include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
-using ::mlir::LLVM::AMD::isUsedByDotScaledOp;
 using ::mlir::triton::gpu::AMDMfmaEncodingAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::MemDescType;
 
 namespace {
 template <typename LocalLoadOpType>
-struct TransLocalLoadOpConversion
+class TransLocalLoadOpConversion
     : public ConvertOpToLLVMPattern<LocalLoadOpType> {
 public:
   TransLocalLoadOpConversion(const LLVMTypeConverter &converter,

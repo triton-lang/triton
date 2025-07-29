@@ -37,6 +37,7 @@
 #include "nvidia/include/Dialect/NVWS/IR/Dialect.h"
 #include "nvidia/include/Dialect/NVWS/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/Transforms/PartitionBuilder.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
@@ -60,6 +61,16 @@ namespace triton {
 namespace {
 
 // ----------------------------------------------------------------------------
+
+void assignStageCluster(Operation *op, StageCluster stageCluster,
+                        OpBuilder &builder) {
+  if (stageCluster) {
+    op->setAttr(triton::kLoopStageAttrName,
+                builder.getI32IntegerAttr(stageCluster->first));
+    op->setAttr(triton::kLoopClusterAttrName,
+                builder.getI32IntegerAttr(stageCluster->second));
+  }
+}
 
 struct ArefValue {
   Value emptyMbars;
@@ -88,8 +99,14 @@ std::pair<WarpGroupOp, int> getWarpGroupIdx(Operation *op) {
   return getWarpGroupIdx(op->getParentOp());
 }
 
-std::pair<int, int> getArrivalCount(ArefCreateOp op) {
-  std::optional<int> producerArrivalCount, consumerArrivalCount;
+struct BarrierCount {
+  int producerPendingCount;
+  int consumerPendingCount;
+};
+
+BarrierCount getArrivalCount(ArefCreateOp op) {
+  std::optional<int> producerPendingCount, consumerPendingCount;
+  SetVector<int> consumerGroups;
 
   for (auto user : op->getUsers()) {
     if (isa<ArefDestroyOp>(user))
@@ -98,69 +115,60 @@ std::pair<int, int> getArrivalCount(ArefCreateOp op) {
     auto numWarps = wgOp.getNumWarps()[idx];
 
     if (auto putExitOp = dyn_cast<ArefPutExitOp>(user)) {
-      int count = 0;
+      int pendingCount = 0;
       for (auto prod : putExitOp.getAsyncOps()) {
         auto kind = dyn_cast<AsyncOpAttr>(prod).getValue();
         switch (kind) {
         case AsyncOp::TC5MMA:
         case AsyncOp::TMALoad:
-          count += 1;
-          break;
-        case AsyncOp::CpAsync:
-          count += numWarps * 32;
-          break;
         case AsyncOp::NONE:
-          // TODO: this should be 'numWarps * 32' when we transition to
-          //       multi-threaded arrive
-          count += 1;
+          pendingCount += 1;
           break;
         default:
-          llvm_unreachable("unknown producer kind");
+          llvm_unreachable("unsupported producer kind");
         }
       }
 
-      if (producerArrivalCount) {
-        assert(*producerArrivalCount == count &&
-               "inconsistent producer arrival count");
+      if (consumerPendingCount) {
+        assert(*consumerPendingCount == pendingCount &&
+               "inconsistent consumer pending count");
       } else {
-        producerArrivalCount = count;
+        consumerPendingCount = pendingCount;
       }
     } else if (auto getExitOp = dyn_cast<ArefGetExitOp>(user)) {
-      int count = 0;
+      int pendingCount = 0;
       for (auto consumer : getExitOp.getAsyncOps()) {
         auto kind = dyn_cast<AsyncOpAttr>(consumer).getValue();
         switch (kind) {
         case AsyncOp::TC5MMA:
-          count += 1;
-          break;
-        case AsyncOp::NONE:
         case AsyncOp::WGMMA:
-          // TODO: this should be 'numWarps * 32' when we transition to
-          //       multi-threaded arrive
-          count += 1;
+        case AsyncOp::NONE:
+          pendingCount += 1;
           break;
         default:
-          llvm_unreachable("unknown consumer kind");
+          llvm_unreachable("unsupported consumer kind");
         }
       }
 
-      if (consumerArrivalCount) {
-        assert(*consumerArrivalCount == count &&
-               "inconsistent consumer arrival count");
-      } else {
-        consumerArrivalCount = count;
+      if (producerPendingCount) {
+        assert(*producerPendingCount == pendingCount &&
+               "inconsistent producer pending count");
       }
+      producerPendingCount = pendingCount;
+      consumerGroups.insert(idx);
     }
   }
 
-  assert(producerArrivalCount);
-  assert(consumerArrivalCount);
+  assert(producerPendingCount);
+  assert(consumerPendingCount);
+  int numGroupConsumers = consumerGroups.size();
+  *producerPendingCount *= numGroupConsumers;
 
-  return {*producerArrivalCount, *consumerArrivalCount};
+  return {*producerPendingCount, *consumerPendingCount};
 }
 
 ArefValue createAndInitMbar(ArefCreateOp op, PatternRewriter &rewriter) {
-  auto [producerArrivalCount, consumerArrivalCount] = getArrivalCount(op);
+  BarrierCount count = getArrivalCount(op);
 
   MLIRContext *ctx = op.getContext();
   auto loc = op.getLoc();
@@ -181,11 +189,13 @@ ArefValue createAndInitMbar(ArefCreateOp op, PatternRewriter &rewriter) {
   rewriter.setInsertionPointToStart(dLoop.getBody());
 
   for (int i = 0; i < 2; ++i) {
-    auto mbars = i == 0 ? emptyMbars : fullMbars;
+    bool isProducer = i == 0;
+    auto mbars = isProducer ? emptyMbars : fullMbars;
     auto singleBarrier =
         createSingleBufferView(rewriter, mbars, dLoop.getInductionVar());
-    int arrivalCount = i == 0 ? consumerArrivalCount : producerArrivalCount;
-    rewriter.create<InitBarrierOp>(loc, singleBarrier, arrivalCount);
+    int pendingCount =
+        isProducer ? count.producerPendingCount : count.consumerPendingCount;
+    rewriter.create<InitBarrierOp>(loc, singleBarrier, pendingCount);
   }
 
   return ArefValue{emptyMbars, fullMbars, static_cast<int>(depth),
@@ -267,7 +277,9 @@ LogicalResult rewritePutEnterOp(ArefCreateOp arefOp, ArefPutEnterOp op,
   // get empty barrier at a given stage
   Value emptyBarrier = getEmptyBarrier(rewriter, loc, arefVal, op.getStage());
 
-  rewriter.create<WaitBarrierOp>(loc, emptyBarrier, op.getPhase());
+  auto waitOp =
+      rewriter.create<WaitBarrierOp>(loc, emptyBarrier, op.getPhase());
+  assignStageCluster(waitOp, getStageCluster(op), rewriter);
   auto views = getSubViews(arefVal, op.getStage(), loc, rewriter);
   assert(views.size() == op.getResults().size());
 
@@ -288,7 +300,8 @@ LogicalResult rewriteGetEnterOp(ArefCreateOp arefOp, ArefGetEnterOp op,
   rewriter.setInsertionPointAfter(op);
 
   Value fullBarrier = getFullBarrier(rewriter, loc, arefVal, op.getStage());
-  rewriter.create<WaitBarrierOp>(loc, fullBarrier, op.getPhase());
+  auto waitOp = rewriter.create<WaitBarrierOp>(loc, fullBarrier, op.getPhase());
+  assignStageCluster(waitOp, getStageCluster(op), rewriter);
   auto views = getSubViews(arefVal, op.getStage(), loc, rewriter);
   assert(views.size() == op.getResults().size());
 
@@ -299,17 +312,19 @@ LogicalResult rewriteGetEnterOp(ArefCreateOp arefOp, ArefGetEnterOp op,
 }
 
 LogicalResult insertArriveBarrier(Location loc, ArrayAttr asyncOps,
-                                  PatternRewriter &rewriter, Value mbar) {
+                                  PatternRewriter &rewriter, Value mbar,
+                                  StageCluster stageCluster) {
   for (auto asyncOp : asyncOps) {
     auto asyncOpEnum = cast<AsyncOpAttr>(asyncOp).getValue();
+    Operation *arriveOp = {};
     switch (asyncOpEnum) {
     case AsyncOp::NONE:
     case AsyncOp::WGMMA:
-      rewriter.create<nvidia_gpu::ArriveBarrierOp>(loc, mbar, 1);
+      arriveOp = rewriter.create<nvidia_gpu::ArriveBarrierOp>(loc, mbar, 1);
       break;
     case AsyncOp::TC5MMA:
     case AsyncOp::TMEMCopy:
-      rewriter.create<nvidia_gpu::TCGen5CommitOp>(loc, mbar);
+      arriveOp = rewriter.create<nvidia_gpu::TCGen5CommitOp>(loc, mbar);
       break;
 
     case AsyncOp::TMALoad:
@@ -319,6 +334,8 @@ LogicalResult insertArriveBarrier(Location loc, ArrayAttr asyncOps,
     default:
       llvm_unreachable("unknown async op");
     }
+    if (arriveOp)
+      assignStageCluster(arriveOp, stageCluster, rewriter);
   }
 
   return success();
@@ -329,7 +346,8 @@ LogicalResult rewritePutExitOp(ArefPutExitOp op, PatternRewriter &rewriter,
   auto loc = op->getLoc();
   rewriter.setInsertionPointAfter(op);
   Value fullBarrier = getFullBarrier(rewriter, loc, arefVal, op.getStage());
-  return insertArriveBarrier(loc, op.getAsyncOps(), rewriter, fullBarrier);
+  return insertArriveBarrier(loc, op.getAsyncOps(), rewriter, fullBarrier,
+                             getStageCluster(op));
 }
 
 LogicalResult rewriteGetExitOp(ArefGetExitOp op, PatternRewriter &rewriter,
@@ -337,7 +355,8 @@ LogicalResult rewriteGetExitOp(ArefGetExitOp op, PatternRewriter &rewriter,
   auto loc = op->getLoc();
   rewriter.setInsertionPointAfter(op);
   Value emptyBarrier = getEmptyBarrier(rewriter, loc, arefVal, op.getStage());
-  return insertArriveBarrier(loc, op.getAsyncOps(), rewriter, emptyBarrier);
+  return insertArriveBarrier(loc, op.getAsyncOps(), rewriter, emptyBarrier,
+                             getStageCluster(op));
 }
 
 LogicalResult rewriteArefDestroyOp(ArefDestroyOp op, PatternRewriter &rewriter,
@@ -593,27 +612,6 @@ template <class T> struct ArefIndex<T> {
   }
 
   static LogicalResult run(WarpGroupOp wgOp, std::string opName) {
-    // Verify that all puts and gets are in the same group; otherwise, the stage
-    // would need to be communicated across groups, not currently supported.
-    Region *opRegion = {};
-
-    SetVector<Value> arefs;
-    wgOp.walk([&](T op) { arefs.insert(op.getAref()); });
-    for (auto aref : arefs) {
-      for (auto user : aref.getUsers()) {
-        if (isa<T>(user)) {
-          auto [wg, idx] = getWarpGroupIdx(user);
-          auto region = &wg.getPartitionRegions()[idx];
-          if (opRegion && opRegion != region) {
-            return mlir::emitWarning(user->getLoc(),
-                                     "All " + opName +
-                                         " must be in the same warp-group");
-          }
-          opRegion = region;
-        }
-      }
-    }
-
     ArefUseSet arefUse;
     for (auto region : wgOp.getRegions()) {
       auto block = &region->getBlocks().front();

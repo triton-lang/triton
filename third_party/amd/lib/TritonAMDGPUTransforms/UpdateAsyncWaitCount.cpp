@@ -109,11 +109,9 @@ void updateWaitCount(ttg::AsyncWaitOp waitOp, RewriterBase &rewriter) {
 } // anonymous namespace
 
 struct TritonAMDGPUUpdateAsyncWaitCountPass
-    : public impl::TritonAMDGPUUpdateAsyncWaitCountBase<
+    : impl::TritonAMDGPUUpdateAsyncWaitCountBase<
           TritonAMDGPUUpdateAsyncWaitCountPass> {
-  using impl::TritonAMDGPUUpdateAsyncWaitCountBase<
-      TritonAMDGPUUpdateAsyncWaitCountPass>::
-      TritonAMDGPUUpdateAsyncWaitCountBase;
+  using Base::Base;
 
   void runOnOperation() override {
     tt::AMD::TargetInfo targetInfo(archGenerationName);

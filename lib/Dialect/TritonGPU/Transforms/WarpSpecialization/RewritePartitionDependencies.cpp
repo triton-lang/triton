@@ -1,10 +1,10 @@
-#include "PartitionBuilder.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/Pass.h"
 #include "nvidia/include/Dialect/NVWS/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Partition.h"
+#include "triton/Dialect/TritonGPU/Transforms/PartitionBuilder.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
@@ -48,7 +48,7 @@ struct UseInfo {
 int UseInfo::getMaxUseDistance(const Partition &partition) {
   int maxDistance = 0;
   for (auto [usePartition, distance] : llvm::make_first_range(consumers)) {
-    int dist = 2 + distance;
+    int dist = 1 + distance;
     maxDistance = std::max(maxDistance, dist);
   }
   return maxDistance;

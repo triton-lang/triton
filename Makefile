@@ -6,7 +6,7 @@ PYTHON ?= python
 BUILD_DIR := $(shell cd python; $(PYTHON) -c 'from build_helpers import get_cmake_dir; print(get_cmake_dir())')
 TRITON_OPT := $(BUILD_DIR)/bin/triton-opt
 PYTEST := $(PYTHON) -m pytest
-LLVM_BUILD_PATH ?= $(realpath .llvm-project/build)
+LLVM_BUILD_PATH ?= "$(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))/.llvm-project/build"
 NUM_PROCS ?= 8
 
 # Incremental builds

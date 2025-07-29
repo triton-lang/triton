@@ -1,17 +1,20 @@
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/IR/ImplicitLocOpBuilder.h"
+#include "third_party/nvidia/include/Dialect/NVGPU/IR/Dialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
 #include "triton/Dialect/TritonInstrument/IR/Utility.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
 namespace {
 
 namespace tt = mlir::triton;
 namespace ttg = tt::gpu;
 namespace tti = mlir::triton::instrument;
+namespace ttng = mlir::triton::nvidia_gpu;
 
 ////////////////////////////////////////////
 // Utility functions
@@ -38,14 +41,17 @@ Value createCmpIntTensorScalar(
 Value createMemDescToI64(RewriterBase &rewriter, Location loc,
                          const LLVMTypeConverter *typeConverter,
                          ttg::MemDescType memDescTy, Value sharedMemStruct) {
+  TritonLLVMOpBuilder b(loc, rewriter);
+  if (isa<ttng::TensorMemoryEncodingAttr>(memDescTy.getEncoding())) {
+    return b.ptrtoint(rewriter.getIntegerType(64), sharedMemStruct);
+  }
+  assert(isa<ttg::SharedEncodingTrait>(memDescTy.getEncoding()) &&
+         "Unsupported memory encoding");
   Type srcElemTy = typeConverter->convertType(memDescTy.getElementType());
-  int elemSize = srcElemTy.getIntOrFloatBitWidth() / 8;
   auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, sharedMemStruct,
                                                        srcElemTy, rewriter);
-  auto offsets = smemObj.getOffsets();
-  auto strides = smemObj.getStrides(memDescTy, loc, rewriter);
-  Value offset = dot(rewriter, loc, offsets, strides);
-  TritonLLVMOpBuilder b(loc, rewriter);
+  auto offset = smemObj.getShmemOffset(loc, rewriter, memDescTy);
+  auto elemSize = srcElemTy.getIntOrFloatBitWidth() / 8;
   offset = b.mul(offset, b.i32_val(elemSize));
   auto i64Ty = rewriter.getIntegerType(64);
   offset = b.zext(i64Ty, offset);
@@ -105,6 +111,24 @@ createIfBlock(ConversionPatternRewriter &b, Location loc, Value cnd) {
   b.setInsertionPointToStart(thenBlock);
 
   return {prevBlock, ifBlock, thenBlock};
+}
+
+Value createMaxReduce(OpBuilder &b, Location loc, Value tensor, int axis) {
+  OpBuilder::InsertionGuard guard(b);
+  auto tensorType = cast<RankedTensorType>(tensor.getType());
+  auto reduceOp = b.create<tt::ReduceOp>(loc, std::vector<Value>{tensor}, axis);
+  auto &region = reduceOp.getRegion();
+  auto &block = region.emplaceBlock();
+  block.addArguments({tensorType.getElementType(), tensorType.getElementType()},
+                     {loc, loc});
+  auto arg0 = block.getArgument(0);
+  auto arg1 = block.getArgument(1);
+  b.setInsertionPointToStart(&block);
+  auto cmpOp =
+      b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::sgt, arg0, arg1);
+  auto result = b.create<arith::SelectOp>(loc, cmpOp, arg0, arg1);
+  auto returnOp = b.create<tt::ReduceReturnOp>(loc, std::vector<Value>{result});
+  return reduceOp->getResult(0);
 }
 
 ////////////////////////////////////////////
@@ -197,26 +221,36 @@ protected:
   const TargetInfoBase &targetInfo;
 };
 
-struct SharedBufferPointersOpConversion
-    : public ConvertOpToLLVMPattern<tti::ExperimentalSharedBufferPointersOp> {
+struct BufferPointersOpConversion
+    : public ConvertOpToLLVMPattern<tti::ExperimentalBufferPointersOp> {
   using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
 
-  LogicalResult matchAndRewrite(tti::ExperimentalSharedBufferPointersOp op,
-                                OpAdaptor adaptor,
-                                ConversionPatternRewriter &b) const override {
+  LogicalResult
+  matchAndRewrite(tti::ExperimentalBufferPointersOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
-    auto *ctx = b.getContext();
+    auto *ctx = rewriter.getContext();
     auto module = op->getParentOfType<ModuleOp>();
     auto values = adaptor.getOffsets();
     auto encoding =
         cast<ttg::BlockedEncodingAttr>(op.getResult().getType().getEncoding());
-    auto shMemBufs = createInitializedIntArrayTensor(b, loc, encoding, values);
-    auto base =
-        getSharedMemoryBase(b, op->getParentOfType<FunctionOpInterface>());
-    shMemBufs = b.create<arith::AddIOp>(
-        loc, shMemBufs,
-        b.create<triton::SplatOp>(loc, shMemBufs.getType(), base));
-    b.replaceOp(op, shMemBufs);
+    auto bufPointers =
+        createInitializedIntArrayTensor(rewriter, loc, encoding, values);
+    Value base = nullptr;
+    if (op.getMemType() == tti::MemType::SHARED) {
+      base = getSharedMemoryBase(rewriter,
+                                 op->getParentOfType<FunctionOpInterface>());
+    } else {
+      assert(op.getMemType() == tti::MemType::TENSOR &&
+             "Unsupported memory type");
+      TritonLLVMOpBuilder b(loc, rewriter);
+      base = rewriter.create<nvgpu::TensorMemoryBaseAddress>(loc);
+      base = b.ptrtoint(i32_ty, base);
+    }
+    bufPointers = rewriter.create<arith::AddIOp>(
+        loc, bufPointers,
+        rewriter.create<triton::SplatOp>(loc, bufPointers.getType(), base));
+    rewriter.replaceOp(op, bufPointers);
     return success();
   }
 
@@ -260,27 +294,32 @@ struct CheckOutstandingWritesOpConversion
       b.setInsertionPointToStart(ifBlock);
     }
     TypedValue<RankedTensorType> buffers = op.getBuffers();
-    RankedTensorType writeBarsType =
-        cast<RankedTensorType>(op.getWriteBarsType());
-    Value writeBars =
-        tti::createLoadScratchMemory(b, loc, op.getWriteBars(), writeBarsType)
+    RankedTensorType writeStateType =
+        cast<RankedTensorType>(op.getWriteStateType());
+    Value writeState =
+        tti::createLoadScratchMemory(b, loc, op.getWriteState(), writeStateType)
             ->getResult(0);
+    int hwPipelined = op.getHwPipelined() ? 1 : 0;
     Value buf = createMemDescToI64(b, loc, getTypeConverter(),
                                    op.getBuf().getType(), adaptor.getBuf());
 
     // Gluon pseudo-code:
-    // curr_buf_bar = tl.where(bufs == buf, write_bars, 0)
-    // tl.device_assert(curr_buf_bar == ttgl.zeros_like(curr_buf_bar), "Buffer
-    // being accessed has outstanding writes")
+    // curr_buf_state = tl.where(bufs == buf, write_state, 0)
+    // curr_buf_state = curr_buf_state >> 1 if hw_pipelined else 0
+    // tl.device_assert(curr_buf_state == ttgl.zeros_like(curr_buf_state),
+    // "Buffer being accessed has outstanding writes")
 
-    Value writeBarsZero = tti::createConstIntTensor(b, loc, 0, writeBarsType);
+    Value writeStateZero = tti::createConstIntTensor(b, loc, 0, writeStateType);
     Value buffersEqBuf = createCmpIntTensorScalar(b, loc, buffers, buf);
-    Value currBufBar =
-        b.create<arith::SelectOp>(loc, buffersEqBuf, writeBars, writeBarsZero);
-    Value currBufBarEqZero = b.create<arith::CmpIOp>(
-        loc, arith::CmpIPredicate::eq, currBufBar, writeBarsZero);
+    Value currBufState = b.create<arith::SelectOp>(loc, buffersEqBuf,
+                                                   writeState, writeStateZero);
+    auto shiftVal =
+        tti::createConstIntTensor(b, loc, hwPipelined, writeStateType);
+    currBufState = b.create<arith::ShRUIOp>(loc, currBufState, shiftVal);
+    Value currBufStateEqZero = b.create<arith::CmpIOp>(
+        loc, arith::CmpIPredicate::eq, currBufState, writeStateZero);
     b.create<tti::ExperimentalAssertInThreadOp>(
-        loc, currBufBarEqZero, "Buffer being accessed has outstanding writes",
+        loc, currBufStateEqZero, "Buffer being accessed has outstanding writes",
         /*check_any=*/false);
     b.eraseOp(op);
 
@@ -312,13 +351,13 @@ struct CheckOutstandingReadsOpConversion
     Value buf = createMemDescToI64(b, loc, getTypeConverter(),
                                    op.getBuf().getType(), adaptor.getBuf());
 
+    // clang-format off
     // Gluon pseudo-code:
     // bufsEqBuf = bufs == buf
-    // bufsEqBuf = ttgl.convert_layout(bufsEqBuf, ttgl.SliceLayout(1,
-    // read_bars_layout))[:, None] curr_buf_bars = tl.where(bufsEqBuf,
-    // read_bars, 0) tl.device_assert(curr_buf_bars ==
-    // ttgl.zeros_like(curr_buf_bars), "Buffer being accessed has outstanding
-    // reads")
+    // bufsEqBuf = ttgl.convert_layout(bufsEqBuf, ttgl.SliceLayout(1, read_bars_layout))[:, None]
+    // curr_buf_bars = tl.where(bufsEqBuf, read_bars, 0)
+    // tl.device_assert(curr_buf_bars == ttgl.zeros_like(curr_buf_bars), "Buffer being accessed has outstanding reads")
+    // clang-format on
     auto buffersEqBuf = createCmpIntTensorScalar(b, loc, buffers, buf);
     buffersEqBuf = convertAndBroadcast(
         b, loc, buffersEqBuf, 1, readBarsType.getShape(),
@@ -352,23 +391,81 @@ struct MarkAsWriteOpConversion
       b.setInsertionPointToStart(ifBlock);
     }
     TypedValue<RankedTensorType> buffers = op.getBuffers();
+    RankedTensorType writeStateType =
+        cast<RankedTensorType>(op.getWriteStateType());
+    Value writeState =
+        tti::createLoadScratchMemory(b, loc, op.getWriteState(), writeStateType)
+            ->getResult(0);
+    int notHwPipelined = op.getHwPipelined() ? 0 : 1;
+    Value buf = createMemDescToI64(b, loc, getTypeConverter(),
+                                   op.getBuf().getType(), adaptor.getBuf());
+
+    // Gluon pseudo-code:
+    // val = 1 | (not_hw_pipelined << 1)
+    // write_state = tl.where(bufs == buf, 1, write_state)
+
+    int val = 1 | (notHwPipelined << 1);
+    auto buffersEqBuf = createCmpIntTensorScalar(b, loc, buffers, buf);
+    writeState = b.create<arith::SelectOp>(
+        loc, buffersEqBuf,
+        tti::createConstIntTensor(b, loc, val, writeStateType), writeState);
+    tti::createStoreScratchMemory(b, loc, op.getWriteState(), writeState,
+                                  writeStateType);
+    b.eraseOp(op);
+    return success();
+  }
+};
+
+struct CommitWriteWithBarrierOpConversion
+    : public ConvertOpToLLVMPattern<tti::ExperimentalCommitWriteWithBarrierOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  LogicalResult matchAndRewrite(tti::ExperimentalCommitWriteWithBarrierOp op,
+                                OpAdaptor adaptor,
+                                ConversionPatternRewriter &b) const override {
+    Location loc = op.getLoc();
+    OpBuilder::InsertionGuard guard(b);
+    b.setInsertionPoint(op);
+    if (op.getPred()) {
+      auto [prevBlock, ifBlock, thenBlock] =
+          createIfBlock(b, loc, op.getPred());
+      b.setInsertionPointToStart(ifBlock);
+    }
+    TypedValue<RankedTensorType> barriers = op.getBarriers();
     RankedTensorType writeBarsType =
         cast<RankedTensorType>(op.getWriteBarsType());
     Value writeBars =
         tti::createLoadScratchMemory(b, loc, op.getWriteBars(), writeBarsType)
             ->getResult(0);
-    Value buf = createMemDescToI64(b, loc, getTypeConverter(),
-                                   op.getBuf().getType(), adaptor.getBuf());
+    RankedTensorType writeStateType =
+        cast<RankedTensorType>(op.getWriteStateType());
+    Value writeState =
+        tti::createLoadScratchMemory(b, loc, op.getWriteState(), writeStateType)
+            ->getResult(0);
     Value mbar = createMemDescToI64(b, loc, getTypeConverter(),
                                     op.getMbar().getType(), adaptor.getMbar());
 
+    // clang-format off
     // Gluon pseudo-code:
-    // write_bars = tl.where(bufs == buf, mbar, write_bars)
+    // write_state = ttgl.convert_layout(write_state, ttgl.SliceLayout(1, write_bars_layout))[:, None]
+    // barsEqMbar = barriers == mbar
+    // barsEqMbar = ttgl.convert_layout(barsEqMbar, ttgl.SliceLayout(0, write_bars_layout))[None, :]
+    // stateAndBar = write_state & barsEqMbar
+    // write_bars = write_bars | stateAndBar
+    // clang-format on
 
-    auto buffersEqBuf = createCmpIntTensorScalar(b, loc, buffers, buf);
-    writeBars = b.create<arith::SelectOp>(
-        loc, buffersEqBuf, createFullLike(b, loc, mbar, writeBarsType),
-        writeBars);
+    writeState = convertAndBroadcast(
+        b, loc, writeState, 1, writeBarsType.getShape(),
+        cast<ttg::BlockedEncodingAttr>(writeBarsType.getEncoding()));
+    auto barriersEqMbar = createCmpIntTensorScalar(b, loc, barriers, mbar);
+    barriersEqMbar = convertAndBroadcast(
+        b, loc, barriersEqMbar, 0, writeBarsType.getShape(),
+        cast<ttg::BlockedEncodingAttr>(writeBarsType.getEncoding()));
+    barriersEqMbar =
+        b.create<arith::ExtUIOp>(loc, writeBarsType, barriersEqMbar);
+    Value stateAndBar =
+        b.create<arith::AndIOp>(loc, writeState, barriersEqMbar);
+    writeBars = b.create<arith::OrIOp>(loc, writeBars, stateAndBar);
     tti::createStoreScratchMemory(b, loc, op.getWriteBars(), writeBars,
                                   writeBarsType);
     b.eraseOp(op);
@@ -403,13 +500,15 @@ struct MarkAsReadOpConversion
     Value mbar = createMemDescToI64(b, loc, getTypeConverter(),
                                     op.getMbar().getType(), adaptor.getMbar());
 
+    // clang-format off
     // Gluon pseudo-code:
     // bufsEqBuf = bufs == buf
-    // bufsEqBuf = ttgl.convert_layout(bufsEqBuf, ttgl.SliceLayout(1,
-    // read_bars_layout))[:, None] barsEqMbar = bars == mbar barsEqMbar =
-    // ttgl.convert_layout(barsEqMbar, ttgl.SliceLayout(0,
-    // read_bars_layout))[None, :] bufAndBar = bufsEqBuf & barsEqMbar read_bars
-    // = read_bars | bufAndBar
+    // bufsEqBuf = ttgl.convert_layout(bufsEqBuf, ttgl.SliceLayout(1, read_bars_layout))[:, None]
+    // barsEqMbar = bars == mbar
+    // barsEqMbar = ttgl.convert_layout(barsEqMbar, ttgl.SliceLayout(0, read_bars_layout))[None, :]
+    // bufAndBar = bufsEqBuf & barsEqMbar
+    // read_bars = read_bars | bufAndBar
+    // clang-format on
 
     auto buffersEqBuf = createCmpIntTensorScalar(b, loc, buffers, buf);
     buffersEqBuf = convertAndBroadcast(
@@ -446,20 +545,50 @@ struct ClearWriteBarrierOpConversion
           createIfBlock(b, loc, op.getPred());
       b.setInsertionPointToStart(ifBlock);
     }
+    TypedValue<RankedTensorType> barriers = op.getBarriers();
     RankedTensorType writeBarsType =
         cast<RankedTensorType>(op.getWriteBarsType());
     Value writeBars =
         tti::createLoadScratchMemory(b, loc, op.getWriteBars(), writeBarsType)
             ->getResult(0);
+    RankedTensorType writeStateType =
+        cast<RankedTensorType>(op.getWriteStateType());
+    Value writeState =
+        tti::createLoadScratchMemory(b, loc, op.getWriteState(), writeStateType)
+            ->getResult(0);
     Value mbar = createMemDescToI64(b, loc, getTypeConverter(),
                                     op.getMbar().getType(), adaptor.getMbar());
 
+    // clang-format off
     // Gluon pseudo-code:
-    // write_bars = tl.where(write_bars == mbar, 0, write_bars)
+    // barsEqMbar = barriers == mbar
+    // barsEqMbar = ttgl.convert_layout(barsEqMbar, ttgl.SliceLayout(0, write_bars_layout))[None, :]
+    // writeBarsForMbar = write_bars & barsEqMbar
+    // writeBarsForMbar = ttgl.reduce(writeBarsForMbar, axis=1, combine_fn=max)
+    // writeBarsForMbar is now a tensor of shape [num_buffers, 1] containing the
+    // non-zero entries where the buffer was being tracked by the barrier.
+    // write_state = tl.where(writeBarsForMbar != 0, 0, write_state)
+    // write_bars = tl.where(barsEqMbar, 0, write_bars)
+    // clang-format on
 
-    auto writeBarsZero = tti::createConstIntTensor(b, loc, 0, writeBarsType);
-    auto writeBarsEqMbar = createCmpIntTensorScalar(b, loc, writeBars, mbar);
-    writeBars = b.create<arith::SelectOp>(loc, writeBarsEqMbar, writeBarsZero,
+    auto barriersEqMbar = createCmpIntTensorScalar(b, loc, barriers, mbar);
+    barriersEqMbar = convertAndBroadcast(
+        b, loc, barriersEqMbar, 0, writeBarsType.getShape(),
+        cast<ttg::BlockedEncodingAttr>(writeBarsType.getEncoding()));
+    Value barriersEqMbarI8 =
+        b.create<arith::ExtUIOp>(loc, writeBarsType, barriersEqMbar);
+    Value writeBarsForMbar =
+        b.create<arith::AndIOp>(loc, writeBars, barriersEqMbarI8);
+    writeBarsForMbar = createMaxReduce(b, loc, writeBarsForMbar, 1);
+    Value writeStateZero = tti::createConstIntTensor(b, loc, 0, writeStateType);
+    Value writeBarsForMbarNonZero = b.create<arith::CmpIOp>(
+        loc, arith::CmpIPredicate::ne, writeBarsForMbar, writeStateZero);
+    writeState = b.create<arith::SelectOp>(loc, writeBarsForMbarNonZero,
+                                           writeStateZero, writeState);
+    tti::createStoreScratchMemory(b, loc, op.getWriteState(), writeState,
+                                  writeStateType);
+    Value writeBarsZero = tti::createConstIntTensor(b, loc, 0, writeBarsType);
+    writeBars = b.create<arith::SelectOp>(loc, barriersEqMbar, writeBarsZero,
                                           writeBars);
     tti::createStoreScratchMemory(b, loc, op.getWriteBars(), writeBars,
                                   writeBarsType);
@@ -492,11 +621,12 @@ struct ClearReadBarrierOpConversion
     Value mbar = createMemDescToI64(b, loc, getTypeConverter(),
                                     op.getMbar().getType(), adaptor.getMbar());
 
+    // clang-format off
     // Gluon pseudo-code:
     // barsEqMbar = bars == mbar
-    // barsEqMbar = ttgl.convert_layout(barsEqMbar, ttgl.SliceLayout(0,
-    // read_bars_layout))[None, :] read_bars = tl.where(barsEqMbar, 0,
-    // read_bars)
+    // barsEqMbar = ttgl.convert_layout(barsEqMbar, ttgl.SliceLayout(0, read_bars_layout))[None, :]
+    // read_bars = tl.where(barsEqMbar, 0, read_bars)
+    // clang format on
 
     auto readBarsZero = tti::createConstIntTensor(b, loc, 0, readBarsType);
     auto readBarsEqMbar = createCmpIntTensorScalar(b, loc, barriers, mbar);
@@ -507,6 +637,55 @@ struct ClearReadBarrierOpConversion
         b.create<arith::SelectOp>(loc, readBarsEqMbar, readBarsZero, readBars);
     tti::createStoreScratchMemory(b, loc, op.getReadBars(), readBars,
                                   readBarsType);
+    b.eraseOp(op);
+    return success();
+  }
+};
+
+struct CheckBarrierWritesClearedOpConversion
+    : public ConvertOpToLLVMPattern<tti::ExperimentalCheckBarrierWritesClearedOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  LogicalResult matchAndRewrite(tti::ExperimentalCheckBarrierWritesClearedOp op,
+                                OpAdaptor adaptor,
+                                ConversionPatternRewriter &b) const override {
+    Location loc = op.getLoc();
+    OpBuilder::InsertionGuard guard(b);
+    b.setInsertionPoint(op);
+    if (op.getPred()) {
+      auto [prevBlock, ifBlock, thenBlock] =
+          createIfBlock(b, loc, op.getPred());
+      b.setInsertionPointToStart(ifBlock);
+    }
+    TypedValue<RankedTensorType> barriers = op.getBarriers();
+    RankedTensorType writeBarsType =
+        cast<RankedTensorType>(op.getWriteBarsType());
+    Value writeBars =
+        tti::createLoadScratchMemory(b, loc, op.getWriteBars(), writeBarsType)
+            ->getResult(0);
+    Value mbar = createMemDescToI64(b, loc, getTypeConverter(),
+                                    op.getMbar().getType(), adaptor.getMbar());
+
+    // clang-format off
+    // Gluon pseudo-code:
+    // barsEqMbar = bars == mbar
+    // barsEqMbar = ttgl.convert_layout(barsEqMbar, ttgl.SliceLayout(0, write_bars_layout))[None, :]
+    // currWriteBars = write_bars & barsEqMbar
+    // tl.device_assert(currWriteBars == 0, "Barrier is being reused while still tracking writes")
+    // clang-format on
+
+    auto writeBarsZero = tti::createConstIntTensor(b, loc, 0, writeBarsType);
+    auto barsEqMbar = createCmpIntTensorScalar(b, loc, barriers, mbar);
+    barsEqMbar = convertAndBroadcast(
+        b, loc, barsEqMbar, 0, writeBarsType.getShape(),
+        cast<ttg::BlockedEncodingAttr>(writeBarsType.getEncoding()));
+    barsEqMbar = b.create<arith::ExtUIOp>(loc, writeBarsType, barsEqMbar);
+    Value currWriteBars = b.create<arith::AndIOp>(loc, writeBars, barsEqMbar);
+    Value currWriteBarsEqZero = b.create<arith::CmpIOp>(
+        loc, arith::CmpIPredicate::eq, currWriteBars, writeBarsZero);
+    b.create<tti::ExperimentalAssertInThreadOp>(
+        loc, currWriteBarsEqZero,
+        "Barrier is being reused while still tracking writes", false);
     b.eraseOp(op);
     return success();
   }
@@ -698,13 +877,15 @@ void mlir::triton::populateInstrumentationToLLVMPatterns(
     LLVMTypeConverter &typeConverter, const TargetInfoBase &targetInfo,
     RewritePatternSet &patterns, PatternBenefit benefit) {
   patterns.add<AssertInThreadOpConversion>(typeConverter, targetInfo, benefit);
-  patterns.add<SharedBufferPointersOpConversion>(typeConverter);
+  patterns.add<BufferPointersOpConversion>(typeConverter);
   patterns.add<CheckOutstandingWritesOpConversion>(typeConverter);
   patterns.add<CheckOutstandingReadsOpConversion>(typeConverter);
   patterns.add<MarkAsWriteOpConversion>(typeConverter);
+  patterns.add<CommitWriteWithBarrierOpConversion>(typeConverter);
   patterns.add<MarkAsReadOpConversion>(typeConverter);
   patterns.add<ClearWriteBarrierOpConversion>(typeConverter);
   patterns.add<ClearReadBarrierOpConversion>(typeConverter);
+  patterns.add<CheckBarrierWritesClearedOpConversion>(typeConverter);
   patterns.add<StageWriteForCommitOpConversion>(typeConverter);
   patterns.add<CommitWritesOpConversion>(typeConverter);
   patterns.add<ClearWriteCommitsOpConversion>(typeConverter);

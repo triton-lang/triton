@@ -6515,7 +6515,7 @@ shared_layouts = [
 
 @pytest.mark.parametrize("M, N, M_tile_size, N_tile_size",
                          [[128, 128, 64, 64], [128, 128, 64, 32], [128, 64, 64, 32], [256, 128, 64, 64]])
-def test_split_subview(M, N, M_tile_size, N_tile_size, device='cuda'):
+def test_split_subview(M, N, M_tile_size, N_tile_size, device):
     num_rows_per_warp = THREADS_PER_WARP // 4
     num_repeats_M = triton.cdiv(M, M_tile_size)
     num_repeats_N = triton.cdiv(N, N_tile_size)
@@ -7134,11 +7134,13 @@ def test_enable_fp_fusion(enable_fp_fusion, default_override, device):
 # -----------------------
 
 
-@pytest.mark.parametrize("arch", ["sm70", "sm80", "sm90"])
+@pytest.mark.parametrize("arch", ["sm70", "sm80", "sm90", "gfx942", "gfx950", "gfx1200"])
 @pytest.mark.parametrize("env_var_override", [False, True])
 def test_override_arch(arch, env_var_override, device):
-    if not is_cuda():
-        pytest.skip('arch only for CUDA')
+    if arch.startswith("sm") and not is_cuda():
+        pytest.skip(f"{arch} arch only for CUDA")
+    elif arch.startswith("gfx") and not is_hip():
+        pytest.skip(f"{arch} arch only for HIP")
 
     @triton.jit
     def simple(data, out):
@@ -7149,15 +7151,31 @@ def test_override_arch(arch, env_var_override, device):
     data = torch.randn((128, ), device=device, dtype=torch.float32)
     out = torch.empty_like(data)
 
-    if env_var_override:
-        os.environ["TRITON_OVERRIDE_ARCH"] = str(arch)
-        h = simple[(1, )](data, out)
-        os.environ.pop("TRITON_OVERRIDE_ARCH")
-    else:
-        h = simple[(1, )](data, out, arch=arch)
-    torch.testing.assert_close(data * 1.5 + 1.0, out)
-    ttgir_cc = re.search(r'cuda:(\d+)', h.asm["ttgir"])
-    assert ttgir_cc.group(1) == arch[2:]
+    if is_cuda():
+        if env_var_override:
+            os.environ["TRITON_OVERRIDE_ARCH"] = str(arch)
+            h = simple[(1, )](data, out)
+            os.environ.pop("TRITON_OVERRIDE_ARCH")
+        else:
+            h = simple[(1, )](data, out, arch=arch)
+        torch.testing.assert_close(data * 1.5 + 1.0, out)
+        ttgir_cc = re.search(r'cuda:(\d+)', h.asm["ttgir"])
+        assert ttgir_cc.group(1) == arch[2:]
+    elif is_hip():
+        # For HIP, the generated kernel is a binary containing the final ISA. So we cannot run
+        # them like CUDA side if the chip doesn't match. Here we just check generated ISA.
+        if env_var_override:
+            os.environ["TRITON_OVERRIDE_ARCH"] = str(arch)
+            h = simple.warmup(data, out, grid=(1, ))
+            os.environ.pop("TRITON_OVERRIDE_ARCH")
+        else:
+            h = simple.warmup(data, out, arch=arch, grid=(1, ))
+        ttgir_gfx = re.search(r'hip:(\w+)', h.asm["ttgir"])
+        ttgir_warp = re.search(r'"ttg.threads-per-warp" = (\d+)', h.asm["ttgir"])
+        amdgcn_gfx = re.search(r'.amdgcn_target "amdgcn-amd-amdhsa--(\w+)"', h.asm["amdgcn"])
+        assert ttgir_gfx.group(1) == arch
+        assert int(ttgir_warp.group(1)) == (32 if arch == "gfx1200" else 64)
+        assert amdgcn_gfx.group(1) == arch
 
 
 # -----------------------

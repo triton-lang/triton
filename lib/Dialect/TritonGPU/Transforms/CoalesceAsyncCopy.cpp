@@ -105,9 +105,10 @@ struct ClipAsyncCopySizePerThread
   }
 };
 
-class CoalesceAsyncCopyPass
-    : public impl::TritonGPUCoalesceAsyncCopyBase<CoalesceAsyncCopyPass> {
-public:
+struct CoalesceAsyncCopyPass
+    : impl::TritonGPUCoalesceAsyncCopyBase<CoalesceAsyncCopyPass> {
+  using Base::Base;
+
   void runOnOperation() override {
     ModuleOp m = getOperation();
     MLIRContext *context = &getContext();
