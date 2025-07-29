@@ -361,12 +361,10 @@ def create_specialize_impl(specialize_extra):
             keys = make_tuple([x[1] for x in spec])
             return (tys, keys)
         elif isinstance(arg, TensorDescriptor):
-            assert hasattr(arg.base, "data_ptr")
-            inner = canonicalize_dtype(arg.base.dtype)
+            inner = canonicalize_dtype(arg.dtype)
             return (f"tensordesc<{inner}{list(arg.block_shape)}>", None)
         elif isinstance(arg, GluonTensorDescriptor):
-            assert hasattr(arg.base, "data_ptr")
-            inner = canonicalize_dtype(arg.base.dtype)
+            inner = canonicalize_dtype(arg.dtype)
             return (f"tensordesc<{inner}{list(arg.block_shape)},{arg.layout!r}>", None)
         else:
             raise TypeError("Unsupported type: %s" % type(arg))

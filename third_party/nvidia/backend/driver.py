@@ -619,7 +619,7 @@ def make_tensordesc_arg(arg, metadata):
         # descriptors which is why we provide our own decomposition
         # above. Sadly this means we have to pass the shape and strides
         # twice.
-        return [arg.base, *arg.shape, *arg.strides, *arg.shape, *arg.strides]
+        return [arg.base_ptr, *arg.shape, *arg.strides, *arg.shape, *arg.strides]
 
     swizzle = metadata["swizzle"]
     elem_size = metadata["elem_size"]
@@ -627,7 +627,7 @@ def make_tensordesc_arg(arg, metadata):
     block_size = metadata["block_size"]
     fp4_padded = metadata["fp4_padded"]
 
-    data_ptr = arg.base.data_ptr()
+    data_ptr = arg.base_ptr
     shape = arg.shape
     strides = arg.strides
     assert strides[-1] == 1
