@@ -487,8 +487,8 @@ please share the reproducer above with Triton project.
         elif language == Language.GLUON:
             stages["ttgir"] = lambda src, metadata: self.gluon_to_ttgir(src, metadata, options, capability)
         stages["llir"] = lambda src, metadata: self.make_llir(src, metadata, options, capability)
-        stages["ptx"] = lambda src, metadata: self.make_ptx(src, metadata, options, self.target.arch)
-        stages["cubin"] = lambda src, metadata: self.make_cubin(src, metadata, options, self.target.arch)
+        stages["ptx"] = lambda src, metadata: self.make_ptx(src, metadata, options, capability)
+        stages["cubin"] = lambda src, metadata: self.make_cubin(src, metadata, options, capability)
 
     @functools.lru_cache()
     def hash(self):
