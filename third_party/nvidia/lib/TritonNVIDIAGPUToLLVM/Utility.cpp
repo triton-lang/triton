@@ -213,19 +213,18 @@ LogicalResult lowerLdStMatrixImpl(
     // it has zeros above it and to its right.
 
     // In particular, offsets lanes 4, 8, 16 map to offsets 1, 2, 4...
-    const auto &laneBases = cvt.getBases().find(kLane)->second;
+    auto bases = cvt.getBases();
+    auto &laneBases = bases[kLane];
     for (int i = 0; i < 3; ++i) {
       if (laneBases[i + 2][0] != (1 << i))
         return failure();
+      laneBases[i + 2][0] = 0;
     }
     // ... and no other basis should depend on 1, 2, 4
     // Note that this gives us the usual alignment condition, but we have
     // translated it to checking that the matrix to the left of A is all zeros
     for (auto dim : cvt.getInDimNames()) {
-      const auto &bases = cvt.getBases().find(dim)->second;
-      for (auto [i, basis] : llvm::enumerate(bases)) {
-        if (dim == kLane && i >= 2)
-          continue;
+      for (auto basis : bases[dim]) {
         if (basis[0] & 0b111)
           return failure();
       }
@@ -233,7 +232,7 @@ LogicalResult lowerLdStMatrixImpl(
 
     // Hack: We are not going to use in the rest of the function reps[kLane][2:]
     // so we don't need to zero them out
-    reps = cvt;
+    reps = LinearLayout(bases, cvt.getOutDims(), false);
   }
 
   // If we are lowering a subslice, the subslice offsets shall not touch the
@@ -251,7 +250,6 @@ LogicalResult lowerLdStMatrixImpl(
   // Map from kReg, kLane, kWarp to beginning of each tile
   assert(reps.getOutDimSize(kOffset) == cvt.getOutDimSize(kOffset));
 
-  auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
   // Compute the addresses for the 0th tile
   // Here we implement the stmatrix.x4 addressing. As per the PTX docs, the
   // threads 0-7 hold the address of the first element of the 8 columns of the
@@ -287,56 +285,87 @@ LogicalResult lowerLdStMatrixImpl(
   LinearLayout addrLayout =
       LinearLayout({{kLane, laneBases}, {kWarp, reps.getBases().lookup(kWarp)}},
                    {{kOffset, reps.getOutDimSize(kOffset)}}, false);
-  auto regBase = applyLinearLayout(loc, rewriter, addrLayout,
-                                   {{kLane, laneId}, {kWarp, warpId}})[0]
-                     .second;
-  regBase = b.xor_(regBase, affineOffset);
-
+  // Compute the bits that are moved by one instruction
+  // Compute elements for which we can swap the xor by an add
+  auto [nAdditive, permStrides] =
+      actionAdditiveStrides(reps, addrLayout, maskSpanAffineOffset);
+  reps = permStrides.apply(reps);
   if (isStore) {
-    assert(vals.size() == cvt.getInDimSize(kReg));
+    vals = permStrides.apply(vals);
   }
+
+  // PTX expects the address increments to be done in bytes
+  // If we don't perform the computations in i8, the compiler would
+  // have to divide the computation by bitwdith / 8 and then lift this
+  // shl, which often it's not able to do.
+  // Adding a kReg dimension is a convenient hack.
+  // We should just multiply all the bases by bitwidth / 8
+  // and then remove the kReg dimension.
+  assert(bitwidth >= 8);
+  auto i8Tile =
+      zerosLike(LinearLayout::identity1D(bitwidth / 8, kReg, kOffset));
+  auto i8AddrLayout = i8Tile * addrLayout;
+
+  auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
+  auto regBase =
+      applyLinearLayout(
+          loc, rewriter, i8AddrLayout,
+          {{kReg, b.i32_val(0)}, {kLane, laneId}, {kWarp, warpId}})[0]
+          .second;
+
+  // It's fine that we don't compute the offset in bytes as affineOffset
+  // will be folded into a constant
+  auto affineOffsetI8 = b.mul(affineOffset, b.i32_val(bitwidth / 8));
+  regBase = b.xor_(regBase, affineOffsetI8);
 
   // Elements per op
   auto nVecs = 1 << vec;
   auto elemsPerVec = 32 / bitwidth;
-  auto step = nVecs * elemsPerVec;
-  for (int i = 0; i < cvt.getInDimSize(kReg); i += step) {
+  auto vecTy = vec_ty(llvmElemTy, elemsPerVec);
+  for (int i = 0; i < cvt.getInDimSize(kReg); i += nAdditive) {
     auto regIdx = reps.apply({{kReg, i}, {kLane, 0}, {kWarp, 0}})[0].second;
-    Value offset = b.xor_(regBase, b.i32_val(regIdx));
-    auto vecAddr = b.gep(smemPtrTy, llvmElemTy, smemBase, offset,
-                         LLVM::GEPNoWrapFlags::inbounds);
-    Type packedTy = vec_ty(llvmElemTy, 32 / bitwidth);
-    auto layout = transpose ? NVVM::MMALayout::col : NVVM::MMALayout::row;
-    if (isStore) {
-      // Pack into vector of i32
-      SmallVector<Value> inputs;
-      for (int j = 0; j < nVecs; j++) {
-        Value input = b.undef(packedTy);
-        for (int k = 0; k < elemsPerVec; k++) {
-          input = b.insert_element(packedTy, input,
-                                   vals[i + j * elemsPerVec + k], b.i32_val(k));
+    auto regIdxI8 = regIdx * (bitwidth / 8);
+    Value offset = b.xor_(regBase, b.i32_val(regIdxI8));
+    for (int i2 = 0; i2 < nAdditive; i2 += elemsPerVec * nVecs) {
+      // all these constants will go as immediate values to LDSM/STSM
+      auto regIdxAdd =
+          reps.apply({{kReg, i2}, {kLane, 0}, {kWarp, 0}})[0].second;
+      auto regIdxAddI8 = regIdxAdd * (bitwidth / 8);
+      Value innerOffset = b.add(offset, b.i32_val(regIdxAddI8));
+      auto vecAddr = b.gep(smemPtrTy, i8_ty, smemBase, innerOffset,
+                           LLVM::GEPNoWrapFlags::inbounds);
+      auto layout = transpose ? NVVM::MMALayout::col : NVVM::MMALayout::row;
+      if (isStore) {
+        // Pack into vector of i32
+        SmallVector<Value> inputs;
+        for (int j = 0; j < nVecs; j++) {
+          Value input = b.undef(vecTy);
+          for (int k = 0; k < elemsPerVec; k++) {
+            input = b.insert_element(
+                vecTy, input, vals[i + i2 + j * elemsPerVec + k], b.i32_val(k));
+          }
+          inputs.push_back(b.bitcast(input, i32_ty));
         }
-        inputs.push_back(b.bitcast(input, i32_ty));
-      }
-      rewriter.create<NVVM::StMatrixOp>(loc, vecAddr, inputs, layout);
-    } else {
-      Type matTy = nVecs == 1
-                       ? i32_ty
-                       : static_cast<Type>(LLVM::LLVMStructType::getLiteral(
-                             ctx, SmallVector<Type>(nVecs, i32_ty)));
-      auto res =
-          rewriter
-              .create<triton::nvgpu::LoadMatrixOp>(
-                  loc, matTy, vecAddr, triton::nvgpu::LoadMatrixShape::m8n8,
-                  /*bitWidth=*/16,
-                  /*needTrans=*/transpose)
-              .getResult();
-      // Extract result into srcVals
-      for (int j = 0; j < nVecs; j++) {
-        Value output = nVecs == 1 ? res : b.extract_val(i32_ty, res, j);
-        output = b.bitcast(output, vec_ty(llvmElemTy, elemsPerVec));
-        for (int k = 0; k < elemsPerVec; k++) {
-          vals.push_back(b.extract_element(llvmElemTy, output, b.i32_val(k)));
+        rewriter.create<NVVM::StMatrixOp>(loc, vecAddr, inputs, layout);
+      } else {
+        Type matTy = nVecs == 1
+                         ? i32_ty
+                         : static_cast<Type>(LLVM::LLVMStructType::getLiteral(
+                               ctx, SmallVector<Type>(nVecs, i32_ty)));
+        auto res =
+            rewriter
+                .create<triton::nvgpu::LoadMatrixOp>(
+                    loc, matTy, vecAddr, triton::nvgpu::LoadMatrixShape::m8n8,
+                    /*bitWidth=*/16,
+                    /*needTrans=*/transpose)
+                .getResult();
+        // Extract result into srcVals
+        for (int j = 0; j < nVecs; j++) {
+          Value output = nVecs == 1 ? res : b.extract_val(i32_ty, res, j);
+          output = b.bitcast(output, vec_ty(llvmElemTy, elemsPerVec));
+          for (int k = 0; k < elemsPerVec; k++) {
+            vals.push_back(b.extract_element(llvmElemTy, output, b.i32_val(k)));
+          }
         }
       }
     }
@@ -344,7 +373,8 @@ LogicalResult lowerLdStMatrixImpl(
 
   if (!isStore) {
     assert(vals.size() == cvt.getInDimSize(kReg));
-    // Undo the permutation and the removeBroadcast
+    auto invPermStrides = permStrides.inverse();
+    vals = invPermStrides.apply(vals);
     if (maybePermutation.has_value()) {
       auto invPerm = maybePermutation.value().inverse();
       vals = invPerm.apply(vals);

@@ -542,8 +542,12 @@ SmallVector<Value> lowerLdSt(
   assert(quot.has_value() && "cvt must be divisible by tile");
   LinearLayout reps = zerosLike(tile) * *quot;
 
+  LinearLayout addrLayout =
+      LinearLayout({{kLane, reps.getBases().lookup(kLane)},
+                    {kWarp, reps.getBases().lookup(kWarp)}},
+                   reps.getOutDims(), false);
   auto [nAdditive, permStrides] =
-      actionAdditiveStrides(reps, maskSpanAffineOffset);
+      actionAdditiveStrides(reps, addrLayout, maskSpanAffineOffset);
   reps = permStrides.apply(reps);
   if (isStore) {
     vals = permStrides.apply(vals);
@@ -555,15 +559,17 @@ SmallVector<Value> lowerLdSt(
   // shl, which often it's not able to do.
   auto i8Tile =
       zerosLike(LinearLayout::identity1D(bitwidth / 8, kReg, kOffset));
-  auto i8Reps = i8Tile * reps;
+  auto i8AddrLayout = i8Tile * addrLayout;
 
   auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
   auto regBaseI8 =
       applyLinearLayout(
-          loc, rewriter, i8Reps,
+          loc, rewriter, i8AddrLayout,
           {{kReg, b.i32_val(0)}, {kLane, laneId}, {kWarp, warpId}})[0]
           .second;
-  // TODO compute the offset already in i8
+
+  // It's fine that we don't compute the offset in bytes as affineOffset
+  // will be folded into a constant
   auto affineOffsetI8 = b.mul(affineOffset, b.i32_val(bitwidth / 8));
   regBaseI8 = b.xor_(regBaseI8, affineOffsetI8);
   SmallVector<Value> outVals;
