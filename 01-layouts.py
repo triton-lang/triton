@@ -16,6 +16,7 @@ from triton.experimental.gluon import language as ttgl
 # - warps_per_cta: [1, 4] - each CTA holds 4 warps, distributed across 1x4 block. Number of total warps per CTA depends on your launch configuration.
 # - order: [1, 0] - defines the order of the distribution over all the other parameters. [1, 0] means the elements/threads/warps are distributed over the second dimension, then the first dimension.
 
+
 # Let's start with a simple kernel that copies a tensor from source to destination, breaking down the problem among GPU blocks, each block copying the SIZE elements.
 @gluon.jit
 def copy_kernel1d(src, dst, block_layout: ttgl.constexpr, BLOCK_SIZE: ttgl.constexpr, SIZE: ttgl.constexpr):
@@ -24,6 +25,7 @@ def copy_kernel1d(src, dst, block_layout: ttgl.constexpr, BLOCK_SIZE: ttgl.const
     offs = pid * BLOCK_SIZE + ttgl.arange(0, BLOCK_SIZE, layout=block_layout)
     data = ttgl.load(src + offs, mask=offs < SIZE)
     ttgl.store(dst + offs, data, mask=offs < SIZE)
+
 
 def test_copy_kernel1d():
     # 4 GB tensor (1G * 4 bytes)
@@ -45,21 +47,27 @@ def test_copy_kernel1d():
     print(f"copy_kernel1: {ms} ms")
     assert torch.equal(src, dst)
 
+
 # 6.23 ms on H100
 test_copy_kernel1d()
 
+
 # Power of blocked layouts starts to show when we start to access the tensor in a potentially
-# non-contiguous way. Let's look at the case of a 2D copy kernel. For example, when copying 
+# non-contiguous way. Let's look at the case of a 2D copy kernel. For example, when copying
 # from a global memory to registers, we want "neighboring" elements to be loaded by neighboring
 # threads so that the memory access pattern is contiguous and reads can be coalesced.
 # NVIDIA GPUs (and Triton and Gluon) assume row-major layout; the fastest-changing index is the right-most dimension.
 # Let's look at the case of a 2D copy kernel.
 @gluon.jit
 def copy_kernel2d(
-    src, dst, block_layout: ttgl.constexpr, 
-    BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr,
-    M: ttgl.constexpr, N: ttgl.constexpr,
-    ):
+    src,
+    dst,
+    block_layout: ttgl.constexpr,
+    BLOCK_M: ttgl.constexpr,
+    BLOCK_N: ttgl.constexpr,
+    M: ttgl.constexpr,
+    N: ttgl.constexpr,
+):
     pid_m = ttgl.program_id(0)
     pid_n = ttgl.program_id(1)
 
@@ -71,6 +79,7 @@ def copy_kernel2d(
     # Note the broadcasting operators along the sliced dimensions.
     data = ttgl.load(src + offs_m[:, None] * N + offs_n[None, :], mask=(offs_m[:, None] < M) & (offs_n[None, :] < N))
     ttgl.store(dst + offs_m[:, None] * N + offs_n[None, :], data, mask=(offs_m[:, None] < M) & (offs_n[None, :] < N))
+
 
 def test_copy_kernel2d(block_layout):
     M = 1024 * 1024
@@ -85,20 +94,25 @@ def test_copy_kernel2d(block_layout):
     assert torch.equal(src, dst)
     return ms
 
+
 def test_copy_kernel2d_v1():
     # This block layout is not optimal for the memory access pattern of the kernel.
     # Two elements from each row are loaded by the same thread, however the subsequent threads
     # in the warp load the elements from the next row.
-    block_layout = ttgl.BlockedLayout(size_per_thread=[1, 2], threads_per_warp=[32, 1], warps_per_cta=[1, 4], order=[1, 0])
+    block_layout = ttgl.BlockedLayout(size_per_thread=[1, 2], threads_per_warp=[32, 1], warps_per_cta=[1, 4],
+                                      order=[1, 0])
     ms = test_copy_kernel2d(block_layout)
     print(f"copy_kernel2d_v1: {ms} ms")
+
 
 def test_copy_kernel2d_v2():
     # This block layout is optimal for the memory access pattern of the kernel.
     # Subsequent threads in the warp load the elements from the same row.
-    block_layout = ttgl.BlockedLayout(size_per_thread=[1, 2], threads_per_warp=[1, 32], warps_per_cta=[1, 4], order=[1, 0])
+    block_layout = ttgl.BlockedLayout(size_per_thread=[1, 2], threads_per_warp=[1, 32], warps_per_cta=[1, 4],
+                                      order=[1, 0])
     ms = test_copy_kernel2d(block_layout)
     print(f"copy_kernel2d_v2: {ms} ms")
+
 
 # 28.63 ms on H100
 test_copy_kernel2d_v1()
