@@ -601,9 +601,10 @@ optimalSwizzling(const LinearLayout &src, const LinearLayout &dst,
       [](const LocalMemOpTile &instr, ArrayRef<int32_t> regs,
          ArrayRef<int32_t> lane,
          ArrayRef<int32_t> vbasis) -> std::optional<SmallVector<int32_t>> {
-    // pick the first laneAddr.size() - 3 registers that are not in vbasis
+    // pick the first 3 - laneAddr.size() registers that are not in vbasis
     SmallVector<int32_t> tile;
     auto regNeeded = 3 - instr.laneAddr.size();
+    assert(regNeeded >= 0 && "laneAddr.size() must be <= 3");
     for (int32_t r : regs) {
       if (regNeeded == 0) {
         break;
