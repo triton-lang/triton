@@ -62,13 +62,16 @@ jobs:
         if: ${{ steps.check-version.outputs.new_commit == 'true' }}
         run: |
           # Make sure cibuildwheel is updated to latest, this will enable latest python builds
-          python3 -m pip install --upgrade pip
-          python3 -m pip install cibuildwheel==3.0.1 --upgrade --user
+          python3 -m pip install cibuildwheel --upgrade --user
           # Pass MAX_JOBS=4 because, at time of writing, the VM "only" has 32GB
           # of RAM and OOMs while building if we give it the default number of
           # workers (2 * NUM_CPUs).
           export CIBW_ENVIRONMENT="MAX_JOBS=4 \
                   TRITON_BUILD_WITH_CLANG_LLD=1"
+
+          # required to build Python 3.14 with cibuildwheel 2.23.3
+          # todo: Need to update system Python to 3.11 and update cibuildwheel to latest
+          export CIBW_ENABLE=cpython-prerelease
 
           # many_linux_2_28 image comes with GCC 12.2.1, but not clang.
           # With this install, it gets clang 16.0.6.
