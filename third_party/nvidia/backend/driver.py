@@ -702,7 +702,8 @@ class CudaLauncher(object):
         if self.global_scratch_size > 0:
             grid_size = gridX * gridY * gridZ
             alloc_size = grid_size * self.num_ctas * self.global_scratch_size
-            global_scratch = _allocation._allocator(alloc_size, self.global_scratch_align, stream)
+            alloc_fn = _allocation._allocator.get()
+            global_scratch = alloc_fn(alloc_size, self.global_scratch_align, stream)
         else:
             global_scratch = None
         self.launch(gridX, gridY, gridZ, stream, function, self.launch_cooperative_grid, self.launch_pdl,

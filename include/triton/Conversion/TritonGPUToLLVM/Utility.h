@@ -10,6 +10,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/IR/Types.h"
+#include "triton/Tools/GenericSwizzling.h"
 #include "triton/Tools/LinearLayout.h"
 #include "triton/Tools/StrUtil.h"
 #include "llvm/ADT/STLExtras.h"
@@ -321,6 +322,10 @@ namespace mlir {
 namespace triton {
 
 namespace gpu {
+
+std::pair<SmallVector<LocalMemOpTile>, SmallVector<LocalMemOpTile>>
+getSrcDstTiles(const TargetInfoBase &targetInfo, int bitwidth);
+
 Type getFunctionType(Type resultType, ValueRange operands);
 
 LLVM::LLVMFuncOp appendOrGetExternFuncOp(RewriterBase &rewriter, Operation *op,
@@ -608,10 +613,6 @@ std::optional<LLVM::AtomicBinOp> matchAtomicOp(RMWOp atomicOp);
 
 std::optional<LLVM::AtomicOrdering> getMemoryOrdering(MemSemantic memOrdering);
 
-bool isSimpleSharedMemoryAccess(ArrayRef<int64_t> shape,
-                                ArrayRef<int64_t> allocShape,
-                                triton::gpu::SharedEncodingTrait sharedEnc);
-
 llvm::MapVector<StringAttr, int32_t> getAllFreeVarMasks(MLIRContext *ctx);
 
 llvm::MapVector<StringAttr, int32_t> getFreeVariableMasks(Type type);
@@ -644,11 +645,10 @@ Value transferWithinBlockPadding(triton::gpu::ConvertLayoutOp op, Value src,
                                  const LLVMTypeConverter *typeConverter,
                                  RewriterBase &rewriter);
 
-LogicalResult
-transferWithinBlockSwizzling(triton::gpu::ConvertLayoutOp op, Value src,
-                             const TargetInfoBase &targetInfo,
-                             const LLVMTypeConverter *typeConverter,
-                             RewriterBase &rewriter);
+void transferWithinBlockSwizzling(triton::gpu::ConvertLayoutOp op, Value src,
+                                  const TargetInfoBase &targetInfo,
+                                  const LLVMTypeConverter *typeConverter,
+                                  RewriterBase &rewriter);
 
 SmallVector<Value> inlineRegionImpl(RewriterBase &rewriter, Region &region,
                                     ArrayRef<Value> args,

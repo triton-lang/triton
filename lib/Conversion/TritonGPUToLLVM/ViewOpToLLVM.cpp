@@ -493,6 +493,15 @@ struct MemDescIndexOpConversion
     auto prevOffsets = smemObj.getOffsets();
     SmallVector<Value> offsetVals(prevOffsets.end() - dstTy.getRank(),
                                   prevOffsets.end());
+
+    // Apply padding based on the amount we move the base ptr
+    if (auto padEnc = dyn_cast<PaddedSharedEncodingAttr>(dstTy.getEncoding())) {
+      auto bitwidth = dstTy.getElementTypeBitWidth();
+      Value padOffset = emitPadding(loc, rewriter, padEnc, bitwidth, offset,
+                                    /*offsetInBytes=*/false);
+      offset = b.add(offset, padOffset);
+    }
+
     // Advance the pointer and keep the opOffsets as the new shape
     smemObj = SharedMemoryObject(b.gep(elemPtrTy, llvmElemTy, base, offset),
                                  llvmElemTy, offsetVals);

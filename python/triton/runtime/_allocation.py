@@ -1,4 +1,5 @@
 from typing import Optional, Protocol
+from contextvars import ContextVar
 
 
 class Buffer(Protocol):
@@ -20,7 +21,7 @@ class NullAllocator:
                            "Use triton.set_allocator to specify an allocator.")
 
 
-_allocator: Allocator = NullAllocator()
+_allocator: ContextVar[Allocator] = ContextVar("_allocator", default=NullAllocator())
 
 
 def set_allocator(allocator: Allocator):
@@ -29,4 +30,4 @@ def set_allocator(allocator: Allocator):
     require additional global memory workspace.
     """
     global _allocator
-    _allocator = allocator
+    _allocator.set(allocator)
