@@ -603,7 +603,7 @@ optimalSwizzling(const LinearLayout &src, const LinearLayout &dst,
          ArrayRef<int32_t> vbasis) -> std::optional<SmallVector<int32_t>> {
     // pick the first laneAddr.size() - 3 registers that are not in vbasis
     SmallVector<int32_t> tile;
-    auto regNeeded = instr.laneAddr.size() - 3;
+    auto regNeeded = 3 - instr.laneAddr.size();
     for (int32_t r : regs) {
       if (regNeeded == 0) {
         break;
