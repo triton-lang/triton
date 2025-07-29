@@ -755,7 +755,12 @@ template <typename Op> Op getNextOp(Value op) {
 }
 
 bool scalePreshuffled(Value scale) {
+  if (!scale) {
+    return false;
+  }
+
   auto shape = cast<RankedTensorType>(scale.getType()).getShape();
+
   int rank = shape.size();
   int blockNonK = shape[rank - 2];
   // 1 scale always scales 32 elements along K dim
@@ -785,7 +790,7 @@ bool scalePreshuffled(Value scale) {
 }
 
 SmallVector<unsigned, 2> getTilesPerWarp(Value aScale, Value bScale) {
-  if (scalePreshuffled(aScale) && scalePreshuffled(bScale)) {
+  if (scalePreshuffled(aScale) || scalePreshuffled(bScale)) {
     return {2, 2};
   }
   return {1, 1};
