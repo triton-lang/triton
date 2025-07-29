@@ -8,8 +8,7 @@ from triton import knobs
 import pytest
 
 from numpy.random import RandomState
-from typing import List, Optional, Union
-from triton.backends.compiler import GPUTarget
+from typing import Optional, Union
 from triton.runtime.jit import TensorWrapper, reinterpret, type_canonicalisation_dict
 
 int_dtypes = ['int8', 'int16', 'int32', 'int64']
@@ -203,26 +202,3 @@ def unwrap_tensor(t: Union[torch.Tensor, triton.runtime.jit.TensorWrapper]) -> t
     if isinstance(t, triton.runtime.jit.TensorWrapper):
         return t.base
     return t
-
-
-def structurize_target(target: str) -> GPUTarget:
-    """Turns the given target string into a GPUTarget struct."""
-    backend, arch = target.split(":")
-    if backend == "cuda":
-        arch = int(arch.removeprefix("sm"))
-    return GPUTarget(backend, arch, 32)
-
-
-def build_constexpr_dict(**kwargs):
-    """Builds the constexpr dict needed for kernel AOT compilation."""
-    return kwargs
-
-
-def build_signature_dict(**kwargs):
-    """Builds the signature dict needed for kernel AOT compilation."""
-    return {k: triton.runtime.jit.mangle_type(v) for k, v in kwargs.items()}
-
-
-def get_divisibility_16_attr_for_args(indices: List[int]):
-    """Returns a dict setting tt.divisibility==16 attributes for arguments at given indices."""
-    return {(i, ): [["tt.divisibility", 16]] for i in indices}
