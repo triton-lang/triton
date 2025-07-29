@@ -867,17 +867,17 @@ public:
     auto targetAttr =
         mod->getAttrOfType<StringAttr>(triton::gpu::AttrTargetName);
     if (!targetAttr) {
-      mlir::emitError(mod.getLoc(), llvm::Twine("No ") +
-                                        triton::gpu::AttrTargetName +
-                                        "attribute in Module");
+      std::string message =
+          std::string("No ") + ttg::AttrTargetName + " attribute in Module";
+      mlir::emitError(mod.getLoc(), message);
       return signalPassFailure();
     }
     auto targetStr = targetAttr.str();
     auto delimiterPos = targetStr.find(':');
     if (delimiterPos == std::string::npos) {
-      mlir::emitError(mod.getLoc(), llvm::Twine("Wrong format of ") +
-                                        triton::gpu::AttrTargetName +
-                                        "attribute in Module");
+      std::string message = std::string("Wrong format of ") +
+                            ttg::AttrTargetName + " attribute in Module";
+      mlir::emitError(mod.getLoc(), message);
       return signalPassFailure();
     }
     auto targetArchStr = targetStr.substr(delimiterPos + 1);
