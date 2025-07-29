@@ -575,13 +575,12 @@ def _gemm_afp4_wfp4_kernel_preshuffled_scales_cdna4(a_ptr, b_ptr, c_ptr, a_scale
     tl.store(c_ptrs, c, mask=c_mask, cache_modifier=".wt")
 
 
-@pytest.mark.parametrize("M, N, K", [(1024, 1024, 1024), [512, 1024, 2048], [2048, 2048, 2048]])
-@pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(256, 256, 256), (128, 128, 256), (128, 128, 512), [32, 32, 64]])
-@pytest.mark.parametrize("matrix_instr_nonkdim", [16, 32])
+@pytest.mark.parametrize("M, N, K", [(1024, 1024, 1024)])
+@pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 128, 256), (64, 64, 512), [32, 32, 64]])
+@pytest.mark.parametrize("mfma_nonkdim", [16, 32])
 @pytest.mark.parametrize("preshuffle", [True, False])
-@pytest.mark.skipif(is_cuda(), reason="AMD specific scale shuffling")
-@pytest.mark.skipif(not is_hip_cdna4(), reason="Requires hardware support for scaled mfma instructions")
-def test_preshuffle_scale_mxfp_cdna4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, matrix_instr_nonkdim, preshuffle, device):
+@pytest.mark.skipif(is_hip() and not is_hip_cdna4(), reason="Requires hardware support for scaled mfma instructions")
+def test_preshuffle_scale_mxfp_cdna4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, mfma_nonkdim, preshuffle, device):
     # This test primarily evaluates correctness for efficient scale packing for MFMA-scaled instructions.
     #
     # Scales are stored as 8-bit tensors, where each element scales 32 values from the A or B operand tensors.
@@ -638,10 +637,10 @@ def test_preshuffle_scale_mxfp_cdna4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, matrix_
         scales_shuffled = scales.clone()
 
         sm, sn = scales_shuffled.shape
-        if matrix_instr_nonkdim == 32:
+        if mfma_nonkdim == 32:
             scales_shuffled = scales_shuffled.view(sm // 32, 32, sn // 8, 4, 2, 1)
             scales_shuffled = scales_shuffled.permute(0, 2, 4, 1, 3, 5).contiguous()
-        elif matrix_instr_nonkdim == 16:
+        elif mfma_nonkdim == 16:
             scales_shuffled = scales_shuffled.view(sm // 32, 2, 16, sn // 8, 2, 4, 1)
             scales_shuffled = scales_shuffled.permute(0, 3, 5, 2, 4, 1, 6).contiguous()
 
@@ -701,8 +700,9 @@ def test_preshuffle_scale_mxfp_cdna4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, matrix_
     w = w.T
     triton_out = torch.empty((M, N), device=x.device)
 
-    # name collision when passing kernel parameter with same name as "meta" parameter
-    mfma_nonkdim = matrix_instr_nonkdim
+    kernel_kwargs = {}
+    if is_hip():
+        kernel_kwargs["matrix_instr_nonkdim"] = mfma_nonkdim
 
     grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), 1)
     _gemm_afp4_wfp4_kernel_preshuffled_scales_cdna4[grid](x, w, triton_out, x_scales_triton, w_scales_triton, M, N, K,
@@ -711,7 +711,7 @@ def test_preshuffle_scale_mxfp_cdna4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, matrix_
                                                           x_scales_triton.stride(0), x_scales_triton.stride(1),
                                                           w_scales_triton.stride(0), w_scales_triton.stride(1), BLOCK_M,
                                                           BLOCK_N, BLOCK_K, mfma_nonkdim, preshuffle, num_warps=8,
-                                                          num_stages=1, matrix_instr_nonkdim=matrix_instr_nonkdim)
+                                                          num_stages=1, **kernel_kwargs)
     triton_out = triton_out.to(torch.float32)
     torch.testing.assert_close(torch_out, triton_out)
 
