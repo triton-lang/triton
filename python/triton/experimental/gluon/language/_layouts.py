@@ -405,11 +405,11 @@ class AMDMFMALayout(DistributedLayout):
     Represents a layout for AMD MFMA (matrix core) operations.
 
     Args:
-        version (List[int]): Major and minor identifier for the MFMA instruction.
-        instr_shape: the first is m_dim for the M-dimension of the output of the mfma instruction and the second is for the N-dimension.
-        warps_per_cta (List[int]): Number of warps per CTA.
-        tiles_per_warp: List[int]: Number of tiles per WARP.
+        version (int): Major and minor identifier for the MFMA instruction.
+        instr_shape: (M, N) dimension for the instrinsic shape.
         transposed: indicates the result tensor is transposed so that each thread holds consecutive elements in the same row instead of column, which is good for chained dot and global write.
+        warps_per_cta (List[int]): Number of warps per CTA.
+        tiles_per_warp: (List[int]): Number of tiles per WARP.
         elem_type_width: 32 for fp32 and 64 for fp64
         ctas_per_cga (Optional[List[int]]): CTAs per CGA grouping.
         cta_split_num (Optional[List[int]]): Split factors for CTAs.
