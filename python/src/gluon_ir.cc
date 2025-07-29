@@ -93,6 +93,7 @@ struct GluonLayouts {
   py::handle NVMMADistributedLayout;
   py::handle NVMMASharedLayout;
   py::handle SwizzledSharedLayout;
+  py::handle AMDMFMALayout;
 
   GluonLayouts() {
     auto layouts =
@@ -181,7 +182,14 @@ py::object layoutToGluon(Attribute layout) {
         toStdVector(ctaLayout.getCTAOrder()));
   } else if (auto autoEnc = dyn_cast<gluon::AutoEncodingAttr>(layout)) {
     return layouts.AutoLayout();
+  } else if (auto amdMfma = dyn_cast<ttg::AMDMfmaEncodingAttr>(layout)) {
+    auto ctaLayout = amdMfma.getCTALayout();
+    return layouts.AMDMFMALayout(amdMfma.getVersion(), amdMfma.getCTAsPerCGA(),
+                                 amdMfma.getTilesPerWarp(), amdMfma.getMDim(),
+                                 amdMfma.getNDim(), amdMfma.getIsTransposed(),
+                                 ctaLayout, amdMfma.getElementType());
   }
+
   throw py::value_error("Unhandled encoding encountered");
 }
 
