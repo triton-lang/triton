@@ -6,8 +6,6 @@ import triton
 
 import triton.language as tl
 
-from typing import List
-
 from triton import knobs
 from triton.backends.compiler import GPUTarget
 from triton.compiler import CompiledKernel, CompilationError
@@ -21,6 +19,7 @@ from triton.experimental.gluon.language.nvidia import hopper
 from triton.experimental.gluon.language.nvidia.blackwell import mbarrier, tma, TensorMemoryLayout, async_copy
 from triton.experimental.gluon._runtime import GluonASTSource
 from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
+from triton._internal_testing import structurize_target, build_constexpr_dict, build_signature_dict, get_divisibility_16_attr_for_args
 
 from triton._filecheck import filecheck_test, run_parser
 
@@ -31,14 +30,6 @@ def anonymize_ir(ir):
     return TARGET_PAT.sub('ttg.target = "..."', ir)
 
 
-def structurize_target(target: str) -> GPUTarget:
-    """Turns the given target string into a GPUTarget struct."""
-    backend, arch = target.split(":")
-    if backend == "cuda":
-        arch = int(arch.removeprefix("sm"))
-    return GPUTarget(backend, arch, 32)
-
-
 def aot_compile_gluon(fn, target: GPUTarget, constexprs: dict = {}, signature: dict = {}, attrs: dict = {},
                       **kwargs) -> CompiledKernel:
     """AOT compiles the given Gluon kernel and returns the compiled kernel."""
@@ -47,21 +38,6 @@ def aot_compile_gluon(fn, target: GPUTarget, constexprs: dict = {}, signature: d
     options = backend.parse_options(kwargs)
     result = triton.compile(src, target=target, options=options.__dict__)
     return result
-
-
-def build_constexpr_dict(**kwargs):
-    """Builds the constexpr dict needed for kernel AOT compilation."""
-    return kwargs
-
-
-def build_signature_dict(**kwargs):
-    """Builds the signature dict needed for kernel AOT compilation."""
-    return {k: triton.runtime.jit.mangle_type(v) for k, v in kwargs.items()}
-
-
-def get_divisibility_16_attr_for_args(indices: List[int]):
-    """Returns a dict setting tt.divisibility==16 attributes for arguments at given indices."""
-    return {(i, ): [["tt.divisibility", 16]] for i in indices}
 
 
 @gluon.jit
