@@ -101,71 +101,54 @@ std::pair<WarpGroupOp, int> getWarpGroupIdx(Operation *op) {
 }
 
 struct BarrierCount {
-  int producerPendingCount;
-  int consumerPendingCount;
+  int producerPendingCount{0};
+  int consumerPendingCount{0};
 };
 
 BarrierCount getArrivalCount(ArefCreateOp op) {
-  std::optional<int> producerPendingCount, consumerPendingCount;
-  SetVector<int> consumerGroups;
+  SetVector<int> producerGroups, consumerGroups;
+  BarrierCount count;
 
   for (auto user : op->getUsers()) {
     if (isa<ArefDestroyOp>(user))
       continue;
-    auto [wgOp, idx] = getWarpGroupIdx(user);
-    auto numWarps = wgOp.getNumWarps()[idx];
-
+    auto idx = getWarpGroupIdx(user).second;
     if (auto putExitOp = dyn_cast<ArefPutExitOp>(user)) {
-      int pendingCount = 0;
+      if (!producerGroups.insert(idx)) {
+	continue;
+      }
       for (auto prod : putExitOp.getAsyncOps()) {
         auto kind = dyn_cast<AsyncOpAttr>(prod).getValue();
         switch (kind) {
         case AsyncOp::TC5MMA:
         case AsyncOp::TMALoad:
         case AsyncOp::NONE:
-          pendingCount += 1;
+          count.consumerPendingCount += 1;
           break;
         default:
           llvm_unreachable("unsupported producer kind");
         }
       }
-
-      if (consumerPendingCount) {
-        assert(*consumerPendingCount == pendingCount &&
-               "inconsistent consumer pending count");
-      } else {
-        consumerPendingCount = pendingCount;
-      }
     } else if (auto getExitOp = dyn_cast<ArefGetExitOp>(user)) {
-      int pendingCount = 0;
+      if (!consumerGroups.insert(idx)) {
+	continue;
+      }
       for (auto consumer : getExitOp.getAsyncOps()) {
         auto kind = dyn_cast<AsyncOpAttr>(consumer).getValue();
         switch (kind) {
         case AsyncOp::TC5MMA:
         case AsyncOp::WGMMA:
         case AsyncOp::NONE:
-          pendingCount += 1;
+          count.producerPendingCount += 1;
           break;
         default:
           llvm_unreachable("unsupported consumer kind");
         }
       }
-
-      if (producerPendingCount) {
-        assert(*producerPendingCount == pendingCount &&
-               "inconsistent producer pending count");
-      }
-      producerPendingCount = pendingCount;
-      consumerGroups.insert(idx);
     }
   }
 
-  assert(producerPendingCount);
-  assert(consumerPendingCount);
-  int numGroupConsumers = consumerGroups.size();
-  *producerPendingCount *= numGroupConsumers;
-
-  return {*producerPendingCount, *consumerPendingCount};
+  return count;
 }
 
 ArefValue createAndInitMbar(ArefCreateOp op, PatternRewriter &rewriter) {
@@ -322,9 +305,8 @@ LogicalResult insertArriveBarrier(Location loc, ArrayAttr asyncOps,
     case AsyncOp::TMEMCopy:
       arriveOp = rewriter.create<nvidia_gpu::TCGen5CommitOp>(loc, mbar);
       break;
-
     case AsyncOp::TMALoad:
-      // nothing to do, TMA load is handled by lowering putEnterOp
+      // nothing to do, the arrive is done by HW
       break;
     case AsyncOp::CpAsync:
     default:
