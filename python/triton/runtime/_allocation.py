@@ -3,19 +3,22 @@ from contextvars import ContextVar
 
 
 class Buffer(Protocol):
-    def data_ptr(self) -> int: ...
+
+    def data_ptr(self) -> int:
+        ...
 
 
 class Allocator(Protocol):
-    def __call__(self, size: int, alignment: int, stream: Optional[int]) -> Buffer: ...
+
+    def __call__(self, size: int, alignment: int, stream: Optional[int]) -> Buffer:
+        ...
 
 
 class NullAllocator:
+
     def __call__(self, size: int, alignment: int, stream: Optional[int]) -> Buffer:
-        raise RuntimeError(
-            "Kernel requires a runtime memory allocation, but no allocator was set. "
-            + "Use triton.set_allocator to specify an allocator."
-        )
+        raise RuntimeError("Kernel requires a runtime memory allocation, but no allocator was set. " +
+                           "Use triton.set_allocator to specify an allocator.")
 
 
 _allocator: ContextVar[Allocator] = ContextVar("_allocator", default=NullAllocator())
