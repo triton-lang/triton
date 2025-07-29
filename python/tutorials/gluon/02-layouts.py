@@ -804,6 +804,22 @@ def memcpy_2d_inout(input, output, num_warps=4):
         XBLOCK, YBLOCK, num_warps=num_warps)
 
 
+@pytest.mark.parametrize("xnumel, ynumel", [(300, 400)])
+@pytest.mark.parametrize("transpose_in, transpose_out", [(True, False), (False, True)])
+def test_memcpy_2d_inout(xnumel, ynumel, transpose_in, transpose_out):
+    torch.manual_seed(0)
+    if transpose_in:
+        input = torch.randn((ynumel, xnumel), device="cuda").T
+    else:
+        input = torch.randn((xnumel, ynumel), device="cuda")
+    if transpose_out:
+        output = torch.empty((ynumel, xnumel), device="cuda").T
+    else:
+        output = torch.empty((xnumel, ynumel), device="cuda")
+    memcpy_2d_inout(input, output)
+    torch.testing.assert_close(input, output, atol=0, rtol=0)
+
+
 if __name__ == "__main__" and _enabled("memcpy_2d_inout"):
     _, throughput = bench_memcpy_impl(input, output, memcpy_2d_inout)
     print(f"2D memcpy (in/out layouts): {throughput:.3f} TB/s")
@@ -814,3 +830,16 @@ if __name__ == "__main__" and _enabled("memcpy_2d_inout"):
 # ```
 # 2D memcpy (in/out layouts): 2.407 TB/s
 # ```
+#
+# Note that the cost of the layout conversion is incurred in our overall
+# throughput. We will see in subsequent tutorials how to hide this cost.
+
+# %%
+# So far in this tutorial, we have covered block layouts, slice layouts, and
+# layout conversions. We have also explored the performance implications of
+# layouts. For completeness, here is a list of things where picking the right
+# layout can affect performance:
+#
+# Reductions, scans, gathers, or in general any operation that may require
+# communication across threads and/or warps, can be more efficient if the layout
+# of the inputs is selected to reduce the amount of communication.
