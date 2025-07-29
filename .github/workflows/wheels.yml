@@ -62,7 +62,7 @@ jobs:
         if: ${{ steps.check-version.outputs.new_commit == 'true' }}
         run: |
           # Make sure cibuildwheel is updated to latest, this will enable latest python builds
-          python3 -m pip install cibuildwheel --upgrade --user --force-reinstall --no-cache-dir
+          python3 -m pip install cibuildwheel==3.0.1 --upgrade --user
           # Pass MAX_JOBS=4 because, at time of writing, the VM "only" has 32GB
           # of RAM and OOMs while building if we give it the default number of
           # workers (2 * NUM_CPUs).
