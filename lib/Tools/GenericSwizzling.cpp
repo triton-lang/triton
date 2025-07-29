@@ -284,7 +284,8 @@ std::pair<int, int> logBankConflictsLdSt(const LinearLayout &src,
 std::optional<SmallVector<int32_t>> optimalSwizzlingTile(
     const LinearLayout &a, const LinearLayout &b, int32_t nRegA, int32_t nRegB,
     ArrayRef<int32_t> laneIdTileA, ArrayRef<int32_t> laneIdTileB) {
-  // NYI. We could support others heuristically
+  // For now se just implement the .v4 variants for all the instructions
+  // We could generalise this in the future
   assert(nRegA + laneIdTileA.size() == nRegB + laneIdTileB.size());
   // normalise nRegA >= nRegB
   if (nRegA < nRegB) {
@@ -296,18 +297,29 @@ std::optional<SmallVector<int32_t>> optimalSwizzlingTile(
   auto kReg = StringAttr::get(ctx, "register");
   auto kLane = StringAttr::get(ctx, "lane");
   auto dim = a.getTotalOutDimSizeLog2();
-  // map from B to A
+  // map from b to a
   LinearLayout cvt = b.invertAndCompose(a);
 
-  // In this functions we do some LinearLayout gymnastics so bear with me
-  // TODO Document
+  // The contiguous tile of ld.shared.b32.v4 for a packed element of size
+  // bitwidth is composed of 128/bitwidth register elements
+  // The contiguous tile of ldmatrix.v4 for a packed element of size bitwidth
+  // is composed of 32/bitwidth register elements and the bases 0, 1st as given
+  // by the laneAddr
+  // The contiguous tile of ldmatrix.v4.trans for a packed element of size 16
+  // is composed of the bases 2, 3, 4th as given by the laneAddr
+
+  // Note that for register elements, we can choose any register basis we want,
+  // but the lane bases are fixed
+
+  // In this function, we compute a tile (set of bases) such that it matches
+  // the tiles of A and B
 
   auto regA = flatten(a, kReg);
   auto regB = flatten(b, kReg);
   auto laneA = flatten(a, kLane);
   auto laneB = flatten(b, kLane);
 
-  // Compute the vectorisation we can use
+  // Compute the number of registers that start the tile
   SmallVector<int32_t> vbasis = intersectionBasis(regA, regB, dim);
   // We need to have at least nRegB vectorisation
   if (vbasis.size() < nRegB) {
