@@ -477,17 +477,21 @@ struct MemDescIndexOpConversion
     auto *ctx = op->getContext();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto srcTy = op.getSrc().getType();
-    auto destTy = op.getResult().getType();
+    auto dstTy = op.getResult().getType();
     auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
 
+    // getAllocationShapePerCTA returns the correct number fp4 elements that we
+    // need to skip when we have fp4Padded=True. getShapePerCTA does not account
+    // for this
+    auto stride = product(
+        getAllocationShapePerCTA(dstTy.getEncoding(), dstTy.getShape()));
+    Value offset = b.mul(op.getIndex(), b.i32_val(stride));
     auto smemObj = getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
                                                    llvmElemTy, rewriter);
     auto base = smemObj.getBase();
     auto elemPtrTy = base.getType();
-    Value stride = smemObj.getStrides(srcTy, loc, rewriter).front();
-    Value offset = b.mul(op.getIndex(), stride);
     auto prevOffsets = smemObj.getOffsets();
-    SmallVector<Value> offsetVals(prevOffsets.end() - destTy.getRank(),
+    SmallVector<Value> offsetVals(prevOffsets.end() - dstTy.getRank(),
                                   prevOffsets.end());
     // Advance the pointer and keep the opOffsets as the new shape
     smemObj = SharedMemoryObject(b.gep(elemPtrTy, llvmElemTy, base, offset),

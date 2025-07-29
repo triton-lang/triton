@@ -64,13 +64,13 @@ tt.func @warp_specialize_tma_matmul(
   // CHECK-NEXT: [[A_BUFS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2x128x64xf16, [[SHARED]]
   // CHECK-NEXT: [[B_BUFS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2x128x64xf16, [[SHARED]]
 
-  // CHECK-NEXT: [[READY_MBARS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2xi64
+  // CHECK-NEXT: [[READY_MBARS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2x1xi64
   // CHECK-NEXT: [[READY_MBAR0:%.*]] = ttg.memdesc_index [[READY_MBARS]], [[C0]]
   // CHECK-NEXT: ttng.init_barrier [[READY_MBAR0]], 1
   // CHECK-NEXT: [[READY_MBAR1:%.*]] = ttg.memdesc_index [[READY_MBARS]], [[C1]]
   // CHECK-NEXT: ttng.init_barrier [[READY_MBAR1]], 1
 
-  // CHECK-NEXT: [[OPER_MBARS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2xi64
+  // CHECK-NEXT: [[OPER_MBARS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2x1xi64
   // CHECK-NEXT: [[OPER_MBAR0:%.*]] = ttg.memdesc_index [[OPER_MBARS]], [[C0]]
   // CHECK-NEXT: ttng.init_barrier [[OPER_MBAR0]], 1
   // CHECK-NEXT: [[OPER_MBAR1:%.*]] = ttg.memdesc_index [[OPER_MBARS]], [[C1]]
@@ -81,7 +81,7 @@ tt.func @warp_specialize_tma_matmul(
 
   // CHECK-NEXT: [[LAST_ITER:%.*]] = arith.subi [[K_TILES]], [[C1]]
 
-  // CHECK-NEXT: [[DONE_MBAR:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<1xi64
+  // CHECK-NEXT: [[DONE_MBAR:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<1x1xi64
   // CHECK-NEXT: [[DONE_MBAR0:%.*]] = ttg.memdesc_index [[DONE_MBAR]], [[C0]]
   // CHECK-NEXT: ttng.init_barrier [[DONE_MBAR0]], 1
 
@@ -169,7 +169,7 @@ tt.func @unsupported_load() {
   // CHECK-NEXT: [[ACC:%.*]] = ttg.memdesc_index [[ACC_ALLOC]], %c0_i32
   // CHECK-NEXT: tmem_store [[ZERO]], [[ACC]]
 
-  // CHECK-NEXT: [[DONE_MBAR:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<1xi64
+  // CHECK-NEXT: [[DONE_MBAR:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<1x1xi64
   // CHECK-NEXT: [[DONE_MBAR0:%.*]] = ttg.memdesc_index [[DONE_MBAR]], %c0_i32
   // CHECK-NEXT: ttng.init_barrier [[DONE_MBAR0]], 1
 
@@ -303,15 +303,15 @@ tt.func @matmul_tma_acc_with_unconditional_user(
   // CHECK-NEXT: [[ACC_BUF0:%.*]] = ttg.memdesc_index [[ACC_BUFS]], %c0_i32
   // CHECK-NEXT: [[INIT_TOK:%.*]] = ttng.tmem_store [[ZERO]], [[ACC_BUF0]][[[ACC_TOK]]]
 
-  // CHECK-COUNT-2: ttg.local_alloc : () -> !ttg.memdesc<2xi64
+  // CHECK-COUNT-2: ttg.local_alloc : () -> !ttg.memdesc<2x1xi64
 
-  // CHECK:      [[ACC_READY_BUFS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2xi64
+  // CHECK:      [[ACC_READY_BUFS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2x1xi64
   // CHECK-NEXT: [[ACC_READY_BUF0:%.*]] = ttg.memdesc_index [[ACC_READY_BUFS]], %c0_i32
   // CHECK-NEXT: ttng.init_barrier [[ACC_READY_BUF0]], 1
   // CHECK-NEXT: [[ACC_READY_BUF1:%.*]] = ttg.memdesc_index [[ACC_READY_BUFS]], %c1_i32
   // CHECK-NEXT: ttng.init_barrier [[ACC_READY_BUF1]], 1
 
-  // CHECK-NEXT: [[ACC_EMPTY_BUFS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2xi64
+  // CHECK-NEXT: [[ACC_EMPTY_BUFS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2x1xi64
   // CHECK-NEXT: [[ACC_EMPTY_BUF0:%.*]] = ttg.memdesc_index [[ACC_EMPTY_BUFS]], %c0_i32
   // CHECK-NEXT: ttng.init_barrier [[ACC_EMPTY_BUF0]], 1
   // CHECK-NEXT: [[ACC_EMPTY_BUF1:%.*]] = ttg.memdesc_index [[ACC_EMPTY_BUFS]], %c1_i32
@@ -404,10 +404,10 @@ tt.func @matmul_tma_acc_with_conditional_user(
   %k_tiles = arith.constant 32 : i32
 
   // CHECK: [[ACC_BUFS:%.*]], [[ACC_TOK:%.*]] = ttng.tmem_alloc
-  // CHECK-COUNT-2: ttg.local_alloc : () -> !ttg.memdesc<2xi64
+  // CHECK-COUNT-2: ttg.local_alloc : () -> !ttg.memdesc<2x1xi64
 
-  // CHECK: [[ACC_READY_BUFS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2xi64
-  // CHECK: [[ACC_EMPTY_BUFS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2xi64
+  // CHECK: [[ACC_READY_BUFS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2x1xi64
+  // CHECK: [[ACC_EMPTY_BUFS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2x1xi64
 
   // CHECK:      {{[0-9]+}}:4 = scf.for [[K:%arg[0-9]+]]
   // CHECK-SAME: [[LOAD_INDEX:%arg[0-9]+]] = %c0_i32
@@ -498,10 +498,10 @@ tt.func @matmul_tma_acc_with_conditional_def(
   %k_tiles = arith.constant 32 : i32
 
   // CHECK: [[ACC_BUFS:%.*]], [[ACC_TOK:%.*]] = ttng.tmem_alloc
-  // CHECK-COUNT-2: ttg.local_alloc : () -> !ttg.memdesc<2xi64
+  // CHECK-COUNT-2: ttg.local_alloc : () -> !ttg.memdesc<2x1xi64
 
-  // CHECK: [[ACC_READY_BUFS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2xi64
-  // CHECK: [[ACC_EMPTY_BUFS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2xi64
+  // CHECK: [[ACC_READY_BUFS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2x1xi64
+  // CHECK: [[ACC_EMPTY_BUFS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2x1xi64
 
   // CHECK:      {{[0-9]+}}:4 = scf.for [[K:%arg[0-9]+]]
   // CHECK-SAME: [[LOAD_INDEX:%arg[0-9]+]] = %c0_i32
@@ -590,10 +590,10 @@ tt.func @matmul_tma_acc_with_conditional_def_and_use(
   %k_tiles = arith.constant 32 : i32
 
   // CHECK: [[ACC_BUFS:%.*]], [[ACC_TOK:%.*]] = ttng.tmem_alloc
-  // CHECK-COUNT-2: ttg.local_alloc : () -> !ttg.memdesc<2xi64
+  // CHECK-COUNT-2: ttg.local_alloc : () -> !ttg.memdesc<2x1xi64
 
-  // CHECK: [[ACC_READY_BUFS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2xi64
-  // CHECK: [[ACC_EMPTY_BUFS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2xi64
+  // CHECK: [[ACC_READY_BUFS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2x1xi64
+  // CHECK: [[ACC_EMPTY_BUFS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2x1xi64
 
   // CHECK:      {{[0-9]+}}:4 = scf.for [[K:%arg[0-9]+]]
   // CHECK-SAME: [[LOAD_INDEX:%arg[0-9]+]] = %c0_i32
@@ -690,13 +690,13 @@ tt.func @matmul_tma_acc_with_conditional_def_and_use_no_multibuf_flag(
   // CHECK-NEXT: [[ACC_BUF:%.*]] = ttg.memdesc_index [[ACC_BUFS]], %c0_i32
   // CHECK-NEXT: [[INIT_TOK:%.*]] = ttng.tmem_store [[ZERO]], [[ACC_BUF]][[[ACC_TOK]]], %true
 
-  // CHECK-COUNT-2: ttg.local_alloc : () -> !ttg.memdesc<2xi64
+  // CHECK-COUNT-2: ttg.local_alloc : () -> !ttg.memdesc<2x1xi64
 
-  // CHECK:      [[ACC_READY_BUFS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<1xi64
+  // CHECK:      [[ACC_READY_BUFS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<1x1xi64
   // CHECK-NEXT: [[ACC_READY_BUF0:%.*]] = ttg.memdesc_index [[ACC_READY_BUFS]], %c0_i32
   // CHECK-NEXT: ttng.init_barrier [[ACC_READY_BUF0]], 1
 
-  // CHECK-NEXT: [[ACC_EMPTY_BUFS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<1xi64
+  // CHECK-NEXT: [[ACC_EMPTY_BUFS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<1x1xi64
   // CHECK-NEXT: [[ACC_EMPTY_BUF0:%.*]] = ttg.memdesc_index [[ACC_EMPTY_BUFS]], %c0_i32
   // CHECK-NEXT: ttng.init_barrier [[ACC_EMPTY_BUF0]], 1
 
@@ -778,8 +778,8 @@ tt.func @matmul_scaled_rhs_scales_tma(
   %a_scales_const = arith.constant dense<127> : tensor<128x8xi8, #oper_layout>
   %a_scales_tmem = ttng.tmem_alloc %a_scales_const : (tensor<128x8xi8, #oper_layout>) -> !ttg.memdesc<128x8xi8, #ttng.tensor_memory_scales_encoding<>, #ttng.tensor_memory>
 
-  // CHECK-COUNT-2: ttg.local_alloc : () -> !ttg.memdesc<3xi64,
-  // CHECK-NOT: ttg.local_alloc : () -> !ttg.memdesc<3xi64,
+  // CHECK-COUNT-2: ttg.local_alloc : () -> !ttg.memdesc<3x1xi64,
+  // CHECK-NOT: ttg.local_alloc : () -> !ttg.memdesc<3x1xi64,
 
   // CHECK: [[LAST_ITER:%.*]] = arith.subi %{{.*}}, %c1_i32
 
@@ -929,16 +929,16 @@ tt.func @matmul_tma_acc_with_conditional_def_and_use_flag(
   // CHECK-NEXT: ttng.tmem_store [[ZERO]], [[ACC_BUF0]]
 
   // CHECK-COUNT-2: ttg.local_alloc : () -> !ttg.memdesc<4x{{.*}}xf16,
-  // CHECK-COUNT-2: ttg.local_alloc : () -> !ttg.memdesc<4xi64
+  // CHECK-COUNT-2: ttg.local_alloc : () -> !ttg.memdesc<4x1xi64
   // CHECK-COUNT-4: ttng.arrive_barrier
 
-  // CHECK:      [[ACC_READY_BUFS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2xi64
+  // CHECK:      [[ACC_READY_BUFS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2x1xi64
   // CHECK-NEXT: [[ACC_READY_BUF0:%.*]] = ttg.memdesc_index [[ACC_READY_BUFS]], %c0_i32
   // CHECK-NEXT: ttng.init_barrier [[ACC_READY_BUF0]], 1
   // CHECK-NEXT: [[ACC_READY_BUF1:%.*]] = ttg.memdesc_index [[ACC_READY_BUFS]], %c1_i32
   // CHECK-NEXT: ttng.init_barrier [[ACC_READY_BUF1]], 1
 
-  // CHECK-NEXT: [[ACC_EMPTY_BUFS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2xi64
+  // CHECK-NEXT: [[ACC_EMPTY_BUFS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2x1xi64
   // CHECK-NEXT: [[ACC_EMPTY_BUF0:%.*]] = ttg.memdesc_index [[ACC_EMPTY_BUFS]], %c0_i32
   // CHECK-NEXT: ttng.init_barrier [[ACC_EMPTY_BUF0]], 1
   // CHECK-NEXT: [[ACC_EMPTY_BUF1:%.*]] = ttg.memdesc_index [[ACC_EMPTY_BUFS]], %c1_i32
@@ -1053,13 +1053,13 @@ tt.func @specialize_mma_only(%rhs_desc: !tt.tensordesc<tensor<64x128xf16, #share
   %true = arith.constant true
   %zero = arith.constant dense<0.0> : tensor<128x128xf32, #acc_layout>
 
-  // CHECK-COUNT-2: local_alloc : () -> !ttg.memdesc<3xi64,
+  // CHECK-COUNT-2: local_alloc : () -> !ttg.memdesc<3x1xi64,
 
-  // CHECK:      [[EMPTY_BARS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<1xi64,
+  // CHECK:      [[EMPTY_BARS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<1x1xi64,
   // CHECK-NEXT: [[EMPTY_BAR0:%.*]] = ttg.memdesc_index [[EMPTY_BARS]], %c0_i32
   // CHECK-NEXT: ttng.init_barrier [[EMPTY_BAR0]], 1
 
-  // CHECK-NEXT: [[READY_BARS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<1xi64,
+  // CHECK-NEXT: [[READY_BARS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<1x1xi64,
   // CHECK-NEXT: [[READY_BAR0:%.*]] = ttg.memdesc_index [[READY_BARS]], %c0_i32
   // CHECK-NEXT: ttng.init_barrier [[READY_BAR0]], 1
 
@@ -1162,17 +1162,17 @@ tt.func @store_mma_load(
   %c1 = arith.constant 1 : i32
   %true = arith.constant true
 
-  // CHECK: [[LHS_EMPTY_BARS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2xi64,
+  // CHECK: [[LHS_EMPTY_BARS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2x1xi64,
   // CHECK: [[LHS_EMPTY_BAR0:%.*]] = ttg.memdesc_index [[LHS_EMPTY_BARS]], %c0_i32
   // CHECK: [[LHS_EMPTY_BAR1:%.*]] = ttg.memdesc_index [[LHS_EMPTY_BARS]], %c1_i32
-  // CHECK: [[LHS_READY_BARS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2xi64,
+  // CHECK: [[LHS_READY_BARS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2x1xi64,
   // CHECK: arrive_barrier [[LHS_EMPTY_BAR0]]
   // CHECK: arrive_barrier [[LHS_EMPTY_BAR1]]
   // CHECK-NOT: arrive_barrier
 
-  // CHECK: [[MMA_ENTRY_BARS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<1xi64,
+  // CHECK: [[MMA_ENTRY_BARS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<1x1xi64,
   // CHECK: [[MMA_ENTRY_BAR:%.*]] = ttg.memdesc_index [[MMA_ENTRY_BARS]], %c0_i32
-  // CHECK: [[MMA_EXIT_BARS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<1xi64,
+  // CHECK: [[MMA_EXIT_BARS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<1x1xi64,
   // CHECK: [[MMA_EXIT_BAR:%.*]] = ttg.memdesc_index [[MMA_EXIT_BARS]], %c0_i32
   // CHECK-NOT: arrive_barrier
 
@@ -1353,7 +1353,7 @@ tt.func public @attention_forward(
 
   // CHECK-NEXT: [[K_BUFS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<3x64x64xf16,
 
-  // CHECK-NEXT: [[K_EMPTY_MBARS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<3xi64
+  // CHECK-NEXT: [[K_EMPTY_MBARS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<3x1xi64
   // CHECK-NEXT: [[K_EMPTY_BAR0:%.*]] = ttg.memdesc_index [[K_EMPTY_MBARS]], %c0_i32
   // CHECK-NEXT: ttng.init_barrier [[K_EMPTY_BAR0]], 1
   // CHECK-NEXT: [[K_EMPTY_BAR1:%.*]] = ttg.memdesc_index [[K_EMPTY_MBARS]], %c1_i32
@@ -1361,7 +1361,7 @@ tt.func public @attention_forward(
   // CHECK-NEXT: [[K_EMPTY_BAR2:%.*]] = ttg.memdesc_index [[K_EMPTY_MBARS]], %c2_i32
   // CHECK-NEXT: ttng.init_barrier [[K_EMPTY_BAR2]], 1
 
-  // CHECK-NEXT: [[K_READY_MBARS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<3xi64
+  // CHECK-NEXT: [[K_READY_MBARS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<3x1xi64
   // CHECK-NEXT: [[K_READY_BAR0:%.*]] = ttg.memdesc_index [[K_READY_MBARS]], %c0_i32
   // CHECK-NEXT: ttng.init_barrier [[K_READY_BAR0]], 1
   // CHECK-NEXT: [[K_READY_BAR1:%.*]] = ttg.memdesc_index [[K_READY_MBARS]], %c1_i32
@@ -1375,7 +1375,7 @@ tt.func public @attention_forward(
 
   // CHECK-NEXT: [[V_BUFS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<3x64x64xf16,
 
-  // CHECK-NEXT: [[V_EMPTY_MBARS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<3xi64
+  // CHECK-NEXT: [[V_EMPTY_MBARS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<3x1xi64
   // CHECK-NEXT: [[V_EMPTY_BAR0:%.*]] = ttg.memdesc_index [[V_EMPTY_MBARS]], %c0_i32
   // CHECK-NEXT: ttng.init_barrier [[V_EMPTY_BAR0]], 1
   // CHECK-NEXT: [[V_EMPTY_BAR1:%.*]] = ttg.memdesc_index [[V_EMPTY_MBARS]], %c1_i32
@@ -1383,7 +1383,7 @@ tt.func public @attention_forward(
   // CHECK-NEXT: [[V_EMPTY_BAR2:%.*]] = ttg.memdesc_index [[V_EMPTY_MBARS]], %c2_i32
   // CHECK-NEXT: ttng.init_barrier [[V_EMPTY_BAR2]], 1
 
-  // CHECK-NEXT: [[V_READY_MBARS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<3xi64
+  // CHECK-NEXT: [[V_READY_MBARS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<3x1xi64
   // CHECK-NEXT: [[V_READY_BAR0:%.*]] = ttg.memdesc_index [[V_READY_MBARS]], %c0_i32
   // CHECK-NEXT: ttng.init_barrier [[V_READY_BAR0]], 1
   // CHECK-NEXT: [[V_READY_BAR1:%.*]] = ttg.memdesc_index [[V_READY_MBARS]], %c1_i32
@@ -1395,13 +1395,13 @@ tt.func public @attention_forward(
   // CHECK-NEXT: ttng.arrive_barrier [[V_EMPTY_BAR1]], 1
   // CHECK-NEXT: ttng.arrive_barrier [[V_EMPTY_BAR2]], 1
 
-  // CHECK-NEXT: [[QK_READY_MBARS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2xi64
+  // CHECK-NEXT: [[QK_READY_MBARS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2x1xi64
   // CHECK-NEXT: [[QK_READY_BAR0:%.*]] = ttg.memdesc_index [[QK_READY_MBARS]], %c0_i32
   // CHECK-NEXT: ttng.init_barrier [[QK_READY_BAR0]], 1
   // CHECK-NEXT: [[QK_READY_BAR1:%.*]] = ttg.memdesc_index [[QK_READY_MBARS]], %c1_i32
   // CHECK-NEXT: ttng.init_barrier [[QK_READY_BAR1]], 1
 
-  // CHECK-NEXT: [[QK_EMPTY_MBARS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2xi64
+  // CHECK-NEXT: [[QK_EMPTY_MBARS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2x1xi64
   // CHECK-NEXT: [[QK_EMPTY_BAR0:%.*]] = ttg.memdesc_index [[QK_EMPTY_MBARS]], %c0_i32
   // CHECK-NEXT: ttng.init_barrier [[QK_EMPTY_BAR0]], 1
   // CHECK-NEXT: [[QK_EMPTY_BAR1:%.*]] = ttg.memdesc_index [[QK_EMPTY_MBARS]], %c1_i32
@@ -1410,11 +1410,11 @@ tt.func public @attention_forward(
   // CHECK-NEXT: ttng.arrive_barrier [[QK_EMPTY_BAR0]], 1
   // CHECK-NEXT: ttng.arrive_barrier [[QK_EMPTY_BAR1]], 1
 
-  // CHECK-NEXT: [[PV_EMPTY_MBARS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<1xi64
+  // CHECK-NEXT: [[PV_EMPTY_MBARS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<1x1xi64
   // CHECK-NEXT: [[PV_EMPTY_BAR0:%.*]] = ttg.memdesc_index [[PV_EMPTY_MBARS]], %c0_i32
   // CHECK-NEXT: ttng.init_barrier [[PV_EMPTY_BAR0]], 1
 
-  // CHECK-NEXT: [[PV_READY_MBARS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<1xi64
+  // CHECK-NEXT: [[PV_READY_MBARS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<1x1xi64
   // CHECK-NEXT: [[PV_READY_BAR0:%.*]] = ttg.memdesc_index [[PV_READY_MBARS]], %c0_i32
   // CHECK-NEXT: ttng.init_barrier [[PV_READY_BAR0]], 1
 
@@ -1423,15 +1423,15 @@ tt.func public @attention_forward(
 
   // CHECK-NEXT: [[P_BUF:%.*]] = ttng.tmem_alloc : () -> !ttg.memdesc<256x64xf16,
 
-  // CHECK-NEXT: [[P_EMPTY_MBARS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<1xi64
+  // CHECK-NEXT: [[P_EMPTY_MBARS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<1x1xi64
   // CHECK-NEXT: [[P_EMPTY_BAR0:%.*]] = ttg.memdesc_index [[P_EMPTY_MBARS]], %c0_i32
   // CHECK-NEXT: ttng.init_barrier [[P_EMPTY_BAR0]], 1
 
-  // CHECK-NEXT: [[P_READY_MBARS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<1xi64
+  // CHECK-NEXT: [[P_READY_MBARS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<1x1xi64
   // CHECK-NEXT: [[P_READY_BAR0:%.*]] = ttg.memdesc_index [[P_READY_MBARS]], %c0_i32
   // CHECK-NEXT: ttng.init_barrier [[P_READY_BAR0]], 1
 
-  // CHECK-NEXT: ttng.arrive_barrier [[P_EMPTY_MBARS]], 1
+  // CHECK-NEXT: ttng.arrive_barrier [[P_EMPTY_BAR0]], 1
 
   // CHECK-NEXT: [[OUTS:%.*]]:11 = scf.for [[I:%.*]] = %c0_i32 to [[N_TILES]] step %c64_i32 iter_args(
   // CHECK-SAME: [[L_I:%arg[0-9]+]] = [[ONE]],
@@ -1534,9 +1534,9 @@ tt.func public @attention_forward(
     %V_shared = ttg.local_alloc %V : (tensor<64x64xf16, #load_blocked>) -> !ttg.memdesc<64x64xf16, #shared, #smem>
 
     // CHECK-NEXT: [[P:%.*]] = arith.truncf [[SOFTMAX]] {ttg.partition = 0 : i32}
-    // CHECK-NEXT: wait_barrier [[P_EMPTY_MBARS]], [[P_PHASE]] {ttg.partition = 0 : i32}
+    // CHECK-NEXT: wait_barrier [[P_EMPTY_BAR0]], [[P_PHASE]] {ttg.partition = 0 : i32}
     // CHECK-NEXT: tmem_store [[P]], [[P_BUF]], %true {ttg.partition = 0 : i32}
-    // CHECK-NEXT: arrive_barrier [[P_READY_MBARS]], 1 {ttg.partition = 0 : i32}
+    // CHECK-NEXT: arrive_barrier [[P_READY_BAR0]], 1 {ttg.partition = 0 : i32}
     %P = arith.truncf %softmax : tensor<256x64xf32, #blocked> to tensor<256x64xf16, #blocked>
 
     // CHECK-NEXT: tmem_store [[ACC_CORRECTED]], [[PV_0]][], %true {ttg.partition = 3 : i32}
@@ -1544,10 +1544,10 @@ tt.func public @attention_forward(
 
     // CHECK-NEXT: wait_barrier [[V_READY_BAR]], [[V_PHASE]] {ttg.partition = 1 : i32}
     // CHECK-NEXT: wait_barrier [[PV_EMPTY_BAR0]], [[NEXT_PV_PHASE]], %true {ttg.partition = 1 : i32}
-    // CHECK-NEXT: wait_barrier [[P_READY_MBARS]], [[P_PHASE]] {ttg.partition = 1 : i32}
+    // CHECK-NEXT: wait_barrier [[P_READY_BAR0]], [[P_PHASE]] {ttg.partition = 1 : i32}
     %P_tmem = ttng.tmem_alloc %P : (tensor<256x64xf16, #blocked>) -> !ttg.memdesc<256x64xf16, #tmem_lhs, #ttng.tensor_memory>
     %acc_tmem, %acc_tok = ttng.tmem_alloc %acc_corrected : (tensor<256x64xf32, #blocked>) -> (!ttg.memdesc<256x64xf32, #tmem_acc, #ttng.tensor_memory, mutable>, !ttg.async.token)
-    // CHECK-NEXT: tc_gen5_mma [[P_BUF]], [[V_BUF]], [[PV_0]][], %true, %true, [[V_EMPTY_BAR]][%true], [[PV_READY_BAR0]][%true], [[P_EMPTY_MBARS]][%true] {is_async, ttg.partition = 1 : i32}
+    // CHECK-NEXT: tc_gen5_mma [[P_BUF]], [[V_BUF]], [[PV_0]][], %true, %true, [[V_EMPTY_BAR]][%true], [[PV_READY_BAR0]][%true], [[P_EMPTY_BAR0]][%true] {is_async, ttg.partition = 1 : i32}
     %PV_mma_tok = ttng.tc_gen5_mma %P_tmem, %V_shared, %acc_tmem[%acc_tok], %true, %true : !ttg.memdesc<256x64xf16, #tmem_lhs, #ttng.tensor_memory>, !ttg.memdesc<64x64xf16, #shared, #smem>, !ttg.memdesc<256x64xf32, #tmem_acc, #ttng.tensor_memory, mutable>
     %O, %O_tok = ttng.tmem_load %acc_tmem[%PV_mma_tok] : !ttg.memdesc<256x64xf32, #tmem_acc, #ttng.tensor_memory, mutable> -> tensor<256x64xf32, #blocked>
 

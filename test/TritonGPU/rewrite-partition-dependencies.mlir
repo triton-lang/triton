@@ -10,7 +10,7 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // CHECK-LABEL: @two_consumers
 tt.func @two_consumers(%lb: i32, %ub: i32, %step: i32) {
   // CHECK: [[C0:%.*]] = arith.constant 0 : i32
-  // CHECK-NEXT: [[ABUF:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2x1xi32, {{.*}}>
+  // CHECK-NEXT: [[ABUF:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<1x1xi32, {{.*}}>
   // CHECK-NEXT: [[AREF:%.*]] = nvws.aref.create [[ABUF]]
   scf.for %i = %lb to %ub step %step iter_args() -> () : i32 {
     %0 = "op_a"() {ttg.partition = 0} : () -> !ty
@@ -40,7 +40,7 @@ tt.func @two_consumers(%lb: i32, %ub: i32, %step: i32) {
 // CHECK-LABEL: @distance_one
 tt.func @distance_one(%lb: i32, %ub: i32, %step: i32) {
   // CHECK: [[C0:%.*]] = arith.constant 0 : i32
-  // CHECK: [[ABUF:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2x1xi32, {{.*}}>
+  // CHECK: [[ABUF:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<1x1xi32, {{.*}}>
   // CHECK-NEXT: [[AREF:%.*]] = nvws.aref.create [[ABUF]]
   %cst = arith.constant dense<0> : !ty
   // CHECK: scf.for [[IV:%.*]] = [[LB:%.*]] to [[UB:%.*]] step [[STEP:%.*]] iter_args([[K:%.*]] = {{.*}})
@@ -63,9 +63,9 @@ tt.func @distance_one(%lb: i32, %ub: i32, %step: i32) {
 }
 
 tt.func @complex_case(%lb: i32, %ub: i32, %step: i32) {
-  // CHECK: [[ABUF1:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2x1xi32, {{.*}}>
+  // CHECK: [[ABUF1:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<1x1xi32, {{.*}}>
   // CHECK-NEXT: [[AREF1:%.*]] = nvws.aref.create [[ABUF1]]
-  // CHECK-NEXT: [[ABUF2:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2x1xi32, {{.*}}>
+  // CHECK-NEXT: [[ABUF2:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<1x1xi32, {{.*}}>
   // CHECK-NEXT: [[AREF2:%.*]] = nvws.aref.create [[ABUF2]]
   %cst = arith.constant dense<0> : !ty
   // CHECK: scf.for [[IV:%.*]] = [[LB:%.*]] to [[UB:%.*]] step [[STEP:%.*]] iter_args([[K:%.*]] = {{.*}}, [[L:%.*]] = {{.*}})
@@ -337,7 +337,7 @@ tt.func @no_def_op(%lb: i32, %ub: i32, %step: i32) {
 module attributes {"ttg.num-warps" = 4 : i32} {
 
 tt.func @invalid_attribute(%lb: i32, %ub: i32, %step: i32) {
-  // expected-warning @below {{partition stages attribute 'ttg.partition.stages' has invalid element "a"}}
+  // expected-error @below {{partition stages attribute 'ttg.partition.stages' has invalid element "a"}}
   scf.for %i = %lb to %ub step %step : i32 {
     scf.yield
   } {ttg.partition.stages = ["a"]}
@@ -359,7 +359,7 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 
 tt.func @invalid_attribute(%lb: i32, %ub: i32, %step: i32) {
   scf.for %k = %lb to %ub step %step : i32 {
-    // expected-warning @below {{invalid partition index -1}}
+    // expected-error @below {{invalid partition index -1}}
     "op"() {ttg.partition = -1} : () -> ()
     scf.yield
   } {ttg.partition.stages = [2, 2]}

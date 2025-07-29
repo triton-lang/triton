@@ -153,12 +153,12 @@ def ty_to_cpp(ty):
     if ty[0] == '*':
         return "hipDeviceptr_t"
     return {
-        "i1": "int32_t",
+        "i1": "int8_t",
         "i8": "int8_t",
         "i16": "int16_t",
         "i32": "int32_t",
         "i64": "int64_t",
-        "u1": "uint32_t",
+        "u1": "uint8_t",
         "u8": "uint8_t",
         "u16": "uint16_t",
         "u32": "uint32_t",
