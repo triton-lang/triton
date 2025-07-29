@@ -164,6 +164,21 @@ Value createIncrementModulo(OpBuilder &builder, Location loc, Value counter,
 
 scf::ForOp lowerTMADescriptors(scf::ForOp forOp, CoarseSchedule &schedule);
 
+namespace gpu {
+
+// Return the "first" op in terms of the stage and cluser ordering
+Operation *
+getFirstUseOfPipelinedOp(ArrayRef<Operation *> ops, scf::ForOp forOp,
+                         CoarseSchedule &schedule,
+                         std::function<bool(Operation *)> filterUse = nullptr);
+
+// Return the "last" op in terms of the stage and cluser ordering
+Operation *
+getLastUseOfPipelinedOp(ArrayRef<Operation *> ops, scf::ForOp forOp,
+                        CoarseSchedule &schedule,
+                        std::function<bool(Operation *)> filterUse = nullptr);
+
+} // namespace gpu
 } // namespace triton
 } // namespace mlir
 

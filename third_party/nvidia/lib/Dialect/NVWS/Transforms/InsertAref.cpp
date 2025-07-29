@@ -12,6 +12,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Partition.h"
 #include "triton/Dialect/TritonGPU/Transforms/PartitionBuilder.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
+#include "triton/Dialect/TritonGPU/Transforms/Schedule.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
@@ -234,21 +235,20 @@ SetVector<Operation *> getTransitiveConsumers(Operation *op,
   return opConsumers;
 }
 
-SetVector<Operation *> getTransitiveConsumers(const SetVector<Value> &results,
-                                              Partition *consumerPartition,
-                                              const WarpSchedule &schedule) {
-  SetVector<Operation *> ret;
+SmallVector<Operation *> getTransitiveConsumers(const SetVector<Value> &results,
+                                                Partition *consumerPartition,
+                                                const WarpSchedule &schedule) {
+  SetVector<Operation *> opSet;
   for (auto result : results) {
     auto consumers = getTransitiveConsumers(result.getDefiningOp(),
                                             consumerPartition, schedule);
-    ret.insert(consumers.begin(), consumers.end());
+    opSet.insert(consumers.begin(), consumers.end());
   }
-  return ret;
+  return SmallVector<Operation *>{opSet.begin(), opSet.end()};
 }
 
-SmallVector<Attribute>
-getConsumerAsyncOpKinds(const SetVector<Operation *> &consumers,
-                        MLIRContext *ctx) {
+SmallVector<Attribute> getConsumerAsyncOpKinds(ArrayRef<Operation *> consumers,
+                                               MLIRContext *ctx) {
   SetVector<AsyncOp> kindSet;
   for (auto consumer : consumers) {
     if (isa<WarpGroupDotOp>(consumer)) {
@@ -268,10 +268,34 @@ getConsumerAsyncOpKinds(const SetVector<Operation *> &consumers,
   return kindAttrs;
 }
 
-void createArefGet(PartitionBuilder &builder, ArefCreateOp aref,
-                   std::string arefTag, const SetVector<Value> &results,
-                   Partition *consumerPartition, WarpSchedule &schedule,
-                   PostDominanceInfo &postDomInfo) {
+std::pair<StageCluster, StageCluster>
+getEnterAndExitStageClustersOfUses(const SetVector<Value> &producedResults,
+                                   std::function<bool(Operation *)> filterUse,
+                                   scf::ForOp forOp) {
+  CoarseSchedule coarseSchedule;
+  if (failed(coarseSchedule.deSerialize(forOp))) {
+    llvm::report_fatal_error(
+        "Failed to deserialze stage and cluster annotations.");
+  }
+
+  SmallVector<Operation *> ops;
+  for (auto res : producedResults) {
+    ops.push_back(res.getDefiningOp());
+  }
+
+  auto firstOp =
+      triton::getFirstUseOfPipelinedOp(ops, forOp, coarseSchedule, filterUse);
+  auto lastOp =
+      triton::getLastUseOfPipelinedOp(ops, forOp, coarseSchedule, filterUse);
+  assert(firstOp && lastOp);
+
+  return std::make_pair(getStageCluster(firstOp), getStageCluster(lastOp));
+}
+
+void createArefGet(PartitionBuilder &builder, scf::ForOp loop,
+                   ArefCreateOp aref, std::string arefTag,
+                   const SetVector<Value> &results,
+                   Partition *consumerPartition, WarpSchedule &schedule) {
   OpBuilder::InsertionGuard g(builder);
   // The vector "results" contains either
   // 1. One of local_load(desc_load()) or desc_load()
@@ -280,14 +304,19 @@ void createArefGet(PartitionBuilder &builder, ArefCreateOp aref,
   // that the two results are used by consumers in the same partition.
   assert(results.size() == 1 || results.size() == 2);
   auto loc = results[0].getLoc();
-  StageCluster stageCluster = getStageCluster(results[0].getDefiningOp());
+
+  auto filterUse = [&](Operation *use) {
+    return schedule.getPartition(use) == consumerPartition;
+  };
+  auto [stageClusterEnter, stageClusterExit] =
+      getEnterAndExitStageClustersOfUses(results, filterUse, loop);
 
   auto arefBufType = cast<MemDescType>(aref.getOperand(0).getType());
   Type bufferType = getBufferViewType(arefBufType, false);
   auto c0Enter = builder.intCst(0);
   auto getEnterOp = builder.createInto<ArefGetEnterOp>(
-      *consumerPartition, stageCluster, SmallVector{bufferType}, aref, c0Enter,
-      c0Enter);
+      *consumerPartition, stageClusterEnter, SmallVector{bufferType}, aref,
+      c0Enter, c0Enter);
   schedule.insert(consumerPartition, getEnterOp);
   schedule.insert(consumerPartition, c0Enter.getDefiningOp());
   getEnterOp->setAttr(kArefTagAttrName, builder.getStringAttr(arefTag));
@@ -316,15 +345,15 @@ void createArefGet(PartitionBuilder &builder, ArefCreateOp aref,
   }
 
   if (exitInsertPointAfter == nullptr) {
-    exitInsertPointAfter = findNearestCommonPostDominator(
-        ArrayRef<Operation *>{consumers.begin(), consumers.end()}, postDomInfo);
+    PostDominanceInfo dom(loop);
+    exitInsertPointAfter = findNearestCommonPostDominator(consumers, dom);
   }
 
   builder.setInsertionPointAfter(exitInsertPointAfter);
 
   auto c0Exit = builder.intCst(0);
   auto getExitOp = builder.createInto<ArefGetExitOp>(
-      *consumerPartition, stageCluster, aref, c0Exit,
+      *consumerPartition, stageClusterExit, aref, c0Exit,
       builder.getArrayAttr(asyncKinds));
   schedule.insert(consumerPartition, getExitOp);
   schedule.insert(consumerPartition, c0Exit.getDefiningOp());
@@ -368,10 +397,9 @@ bool insertArefs(PartitionBuilder &builder, scf::ForOp loop,
   auto tag = "aref_" + std::to_string(arefTag);
   auto staleOps = createArefPut(builder, aref, tag, producedValue, schedule);
 
-  PostDominanceInfo postDomInfo(loop);
   for (auto [consumerPartition, results] : resultsPerPartition) {
-    createArefGet(builder, aref, tag, results, consumerPartition, schedule,
-                  postDomInfo);
+    createArefGet(builder, loop, aref, tag, results, consumerPartition,
+                  schedule);
   }
 
   for (auto op : staleOps) {

@@ -32,25 +32,9 @@ namespace mlir {
 namespace triton {
 namespace gpu {
 
-namespace {
-
-/////////////////////////////
-// UTILS
-/////////////////////////////
-
-int getSelfLatencyFromAttr(Operation *op) {
-  auto module = op->getParentOfType<ModuleOp>();
-  auto helper = TritonDialect::getLoaded(module)->getSelfLatencyAttrHelper();
-  if (!helper.isAttrPresent(op))
-    return 0;
-  int val = helper.getAttr(op).getInt();
-  helper.removeAttr(op);
-  return val;
-}
-
-DenseSet<Operation *>
-getTopLevelUsersInLoop(Operation *op, scf::ForOp forOp,
-                       std::function<bool(Operation *)> filter = nullptr) {
+DenseSet<Operation *> static getTopLevelUsersInLoop(
+    Operation *op, scf::ForOp forOp,
+    std::function<bool(Operation *)> filter = nullptr) {
   DenseSet<Operation *> topLevelUsers;
   SmallVector<OpOperand *> q;
   for (auto &use : op->getUses())
@@ -80,32 +64,77 @@ getTopLevelUsersInLoop(Operation *op, scf::ForOp forOp,
   return topLevelUsers;
 }
 
-Operation *getFirstUseOfPipelinedOp(SmallVector<Operation *> ops,
-                                    scf::ForOp forOp,
-                                    CoarseSchedule &schedule) {
-  Operation *firstUser = nullptr;
+// Helper function that finds an operation based on a comparison predicate
+static Operation *getUseOfPipelinedOp(
+    ArrayRef<Operation *> ops, scf::ForOp forOp, CoarseSchedule &schedule,
+    std::function<bool(Operation *)> filterUse,
+    std::function<bool(Operation *, Operation *)> shouldPrefer) {
   DenseSet<Operation *> topLevelUsers;
+  Operation *selectedUser = nullptr;
   for (Operation *op : ops) {
-    auto users = getTopLevelUsersInLoop(op, forOp);
+    auto users = getTopLevelUsersInLoop(op, forOp, filterUse);
     topLevelUsers.insert(users.begin(), users.end());
   }
   for (Operation *topLevelUser : topLevelUsers) {
     assert(schedule.count(topLevelUser) && "op user not found in the schedule");
-    auto [_useStage, _useCluster] = schedule[topLevelUser];
-    if (!firstUser) {
-      firstUser = topLevelUser;
-    } else {
-      auto [_firstUserStage, _firstUserCluster] = schedule[firstUser];
-      if (_useStage < _firstUserStage ||
-          (_useStage == _firstUserStage &&
-           schedule.clusters.isBefore(_useCluster, _firstUserCluster)) ||
-          (_useStage == _firstUserStage && _useCluster == _firstUserCluster &&
-           topLevelUser->isBeforeInBlock(firstUser))) {
-        firstUser = topLevelUser;
-      }
+    if (!selectedUser || shouldPrefer(topLevelUser, selectedUser)) {
+      selectedUser = topLevelUser;
     }
   }
-  return firstUser;
+  return selectedUser;
+}
+
+Operation *
+getFirstUseOfPipelinedOp(ArrayRef<Operation *> ops, scf::ForOp forOp,
+                         CoarseSchedule &schedule,
+                         std::function<bool(Operation *)> filterUse) {
+  return getUseOfPipelinedOp(
+      ops, forOp, schedule, filterUse,
+      [&](Operation *candidate, Operation *current) {
+        auto [candidateStage, candidateCluster] = schedule[candidate];
+        auto [currentStage, currentCluster] = schedule[current];
+
+        return candidateStage < currentStage ||
+               (candidateStage == currentStage &&
+                schedule.clusters.isBefore(candidateCluster, currentCluster)) ||
+               (candidateStage == currentStage &&
+                candidateCluster == currentCluster &&
+                candidate->isBeforeInBlock(current));
+      });
+}
+
+Operation *getLastUseOfPipelinedOp(ArrayRef<Operation *> ops, scf::ForOp forOp,
+                                   CoarseSchedule &schedule,
+                                   std::function<bool(Operation *)> filterUse) {
+  return getUseOfPipelinedOp(
+      ops, forOp, schedule, filterUse,
+      [&](Operation *candidate, Operation *current) {
+        auto [candidateStage, candidateCluster] = schedule[candidate];
+        auto [currentStage, currentCluster] = schedule[current];
+
+        return candidateStage > currentStage ||
+               (candidateStage == currentStage &&
+                schedule.clusters.isBefore(currentCluster, candidateCluster)) ||
+               (candidateStage == currentStage &&
+                candidateCluster == currentCluster &&
+                current->isBeforeInBlock(candidate));
+      });
+}
+
+namespace {
+
+/////////////////////////////
+// UTILS
+/////////////////////////////
+
+int getSelfLatencyFromAttr(Operation *op) {
+  auto module = op->getParentOfType<ModuleOp>();
+  auto helper = TritonDialect::getLoaded(module)->getSelfLatencyAttrHelper();
+  if (!helper.isAttrPresent(op))
+    return 0;
+  int val = helper.getAttr(op).getInt();
+  helper.removeAttr(op);
+  return val;
 }
 
 // Check if the load can be pipelined entirely in shared memory,
