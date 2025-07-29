@@ -634,7 +634,8 @@ class HIPLauncher(object):
             if size > 0:
                 grid_size = gridX * gridY * gridZ
                 alloc_size = grid_size * size
-                return allocator(alloc_size, align, stream)
+                alloc_fn = allocator.get()
+                return alloc_fn(alloc_size, align, stream)
             return None
 
         profile_scratch = allocate_scratch(self.profile_scratch_size, self.profile_scratch_align,
