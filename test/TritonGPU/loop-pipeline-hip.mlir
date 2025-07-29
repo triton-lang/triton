@@ -738,3 +738,62 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+#AL = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [8, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#C = #ttg.amd_mfma<{version = 4, warpsPerCTA = [4, 1], instrShape = [16, 16], isTransposed = true}>
+#A = #ttg.dot_op<{opIdx = 0, parent = #C, kWidth=2}>
+#B = #ttg.dot_op<{opIdx = 1, parent = #C, kWidth=2}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+// Verify that we do not get AsyncCopies because we cannot lower it on gfx942 since we only have 32bit wide loads to lds
+// COMMON-LABEL: @reject_fp64_pipelining_with_async_copy_gfx942
+// ASYNC-NOT: ttg.async_copy_global_to_local
+tt.func @reject_fp64_pipelining_with_async_copy_gfx942(
+                  %a_ptr : tensor<128x32x!tt.ptr<f64>, #AL> {tt.divisibility = 16 : i32, tt.contiguity = 16 : i32},
+                  %B : tensor<32x128xf64, #B>, %lb: i32, %ub: i32, %step: i32) -> tensor<128x128xf64, #C> {
+  %c_init = arith.constant dense<0.00e+00> : tensor<128x128xf64, #C>
+  %loop = scf.for %iv = %lb to %ub step %step iter_args(%prev_c = %c_init) -> (tensor<128x128xf64, #C>) : i32 {
+    %a_ = tt.load %a_ptr : tensor<128x32x!tt.ptr<f64>, #AL>
+    %a = ttg.convert_layout %a_ : tensor<128x32xf64, #AL> -> tensor<128x32xf64, #A>
+    %c = tt.dot %a, %B, %prev_c : tensor<128x32xf64, #A> * tensor<32x128xf64, #B> -> tensor<128x128xf64, #C>
+    scf.yield %c : tensor<128x128xf64, #C>
+  }
+  tt.return %loop: tensor<128x128xf64, #C>
+}
+}
+
+// -----
+
+#AL = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [8, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#BL = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#C = #ttg.amd_mfma<{version = 4, warpsPerCTA = [4, 1], instrShape = [16, 16], isTransposed = true}>
+#A = #ttg.dot_op<{opIdx = 0, parent = #C, kWidth=2}>
+#B = #ttg.dot_op<{opIdx = 1, parent = #C, kWidth=2}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+// On GFX950 we can use AsyncCopy if sizePerThread >= 2 and it's contiguous because we can load 2 fp64 with one direct to lds instruction
+// COMMON-LABEL: @pipeline_fp64_with_async_copy_gfx950
+// ASYNC: ttg.async_copy_global_to_local
+// ASYNC: tt.load
+// ASYNC: ttg.async_copy_global_to_local
+// ASYNC: tt.load
+tt.func @pipeline_fp64_with_async_copy_gfx950(
+                  %a_ptr : tensor<128x32x!tt.ptr<f64>, #AL> {tt.divisibility = 16 : i32, tt.contiguity = 16 : i32},
+                  %b_ptr : tensor<32x128x!tt.ptr<f64>, #BL> {tt.divisibility = 16 : i32, tt.contiguity = 2 : i32},
+                  %lb: i32, %ub: i32, %step: i32) -> tensor<128x128xf64, #C> {
+  %c_init = arith.constant dense<0.00e+00> : tensor<128x128xf64, #C>
+  %loop = scf.for %iv = %lb to %ub step %step iter_args(%prev_c = %c_init) -> (tensor<128x128xf64, #C>) : i32 {
+    %a_ = tt.load %a_ptr : tensor<128x32x!tt.ptr<f64>, #AL>
+    %a = ttg.convert_layout %a_ : tensor<128x32xf64, #AL> -> tensor<128x32xf64, #A>
+    %b_ = tt.load %b_ptr : tensor<32x128x!tt.ptr<f64>, #BL>
+    %b = ttg.convert_layout %b_ : tensor<32x128xf64, #BL> -> tensor<32x128xf64, #B>
+    %c = tt.dot %a, %b, %prev_c : tensor<128x32xf64, #A> * tensor<32x128xf64, #B> -> tensor<128x128xf64, #C>
+    scf.yield %c : tensor<128x128xf64, #C>
+  }
+  tt.return %loop: tensor<128x128xf64, #C>
+}
+}
