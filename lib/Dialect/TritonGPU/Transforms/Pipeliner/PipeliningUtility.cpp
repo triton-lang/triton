@@ -350,6 +350,8 @@ mlir::triton::createProcessPeeledEpilogueFn(
   return [&](RewriterBase &rewriter, Operation *op,
              bool isEpilogue) -> Operation * {
     if (auto predOp = dyn_cast<triton::gpu::PredicateStageOp>(op)) {
+      OpBuilder::InsertionGuard guard(rewriter);
+      rewriter.setInsertionPoint(op);
       if (isEpilogue) {
         // Return false for the predicate of the peeled iteration
         return rewriter.create<mlir::arith::ConstantIntOp>(
@@ -359,8 +361,6 @@ mlir::triton::createProcessPeeledEpilogueFn(
           return rewriter.create<mlir::arith::ConstantIntOp>(
               predOp.getLoc(), 1, predOp.getResult().getType());
         } else {
-          OpBuilder::InsertionGuard guard(rewriter);
-          rewriter.setInsertionPoint(op);
           return triton::emitPredicateForStage(
                      rewriter, predOp.getIv(), predOp.getUb(), predOp.getStep(),
                      predOp.getMaxStage(), predOp.getStage())
