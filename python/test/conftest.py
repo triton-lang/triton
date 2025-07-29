@@ -1,6 +1,5 @@
 import pytest
 import tempfile
-from triton._internal_testing import _fresh_knobs_impl
 
 
 def pytest_configure(config):
@@ -27,6 +26,7 @@ def fresh_triton_cache():
 
 @pytest.fixture
 def fresh_knobs(monkeypatch):
+    from triton._internal_testing import _fresh_knobs_impl
     fresh_function, reset_function = _fresh_knobs_impl(monkeypatch)
     try:
         yield fresh_function()
@@ -41,6 +41,7 @@ def fresh_knobs_except_libraries(monkeypatch):
     information from the environment as these may be
     needed to successfully compile kernels.
     """
+    from triton._internal_testing import _fresh_knobs_impl
     fresh_function, reset_function = _fresh_knobs_impl(monkeypatch, skipped_attr={"build", "nvidia", "amd"})
     try:
         yield fresh_function()
