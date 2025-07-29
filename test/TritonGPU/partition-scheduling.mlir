@@ -28,7 +28,6 @@ tt.func public @attention_forward(
   %zero = arith.constant dense<0.0> : tensor<256x64xf32, #blocked>
   %one = arith.constant dense<1.0> : tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
 
-  %QK_tmem, %QK_tok = ttng.tmem_alloc : () -> (!ttg.memdesc<256x64xf32, #tmem_acc, #ttng.tensor_memory, mutable>, !ttg.async.token)
 
   %loop_outs:4 = scf.for %i = %c0_i32 to %n_tiles step %c64_i32 iter_args(
     %l_i = %one,
@@ -46,6 +45,7 @@ tt.func public @attention_forward(
     %K_shared = ttg.local_alloc %K : (tensor<64x64xf16, #load_blocked>) -> !ttg.memdesc<64x64xf16, #shared, #smem>
 
     %K_trans = ttg.memdesc_trans %K_shared {order = array<i32: 1, 0>} : !ttg.memdesc<64x64xf16, #shared, #smem> -> !ttg.memdesc<64x64xf16, #shared_T, #smem>
+    %QK_tmem, %QK_tok = ttng.tmem_alloc : () -> (!ttg.memdesc<256x64xf32, #tmem_acc, #ttng.tensor_memory, mutable>, !ttg.async.token)
     %QK_mma_tok = ttng.tc_gen5_mma %Q_shared, %K_trans, %QK_tmem[%QK_tok], %false, %true : !ttg.memdesc<256x64xf16, #shared, #smem>, !ttg.memdesc<64x64xf16, #shared_T, #smem>, !ttg.memdesc<256x64xf32, #tmem_acc, #ttng.tensor_memory, mutable>
 
     %QK, %QK_load_tok = ttng.tmem_load %QK_tmem[%QK_mma_tok] : !ttg.memdesc<256x64xf32, #tmem_acc, #ttng.tensor_memory, mutable> -> tensor<256x64xf32, #blocked>
@@ -135,6 +135,30 @@ tt.func public @mma_operand_view(
     "use"(%x, %QK) : (tensor<64x64xf16, #load_blocked>, tensor<256x64xf32, #blocked>) -> ()
   } {tt.warp_specialize}
 
+  tt.return
+}
+
+// CHECK-LABEL: @optimize_broadcast
+tt.func @optimize_broadcast(%arg0: i32) {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i32 = arith.constant 1 : i32
+  // CHECK: scf.for
+  scf.for %i = %c0_i32 to %arg0 step %c1_i32 : i32 {
+    // CHECK: [[X:%.*]] = "producer"{{.*}}partition = 0
+    %x = "producer"() {ttg.partition = 0 : i32} : () -> tensor<128xf32>
+
+    // CHECK-DAG: [[X0_P0:%.*]] = tt.expand_dims [[X]] {{.*}}partition = 0
+    // CHECK-DAG: [[X0_P1:%.*]] = tt.expand_dims [[X]] {{.*}}partition = 1
+    %x0 = tt.expand_dims %x {axis = 0 : i32} : tensor<128xf32> -> tensor<1x128xf32>
+    // CHECK-DAG: [[X1_P0:%.*]] = tt.broadcast [[X0_P0]] {{.*}}partition = 0
+    // CHECK-DAG: [[X1_P1:%.*]] = tt.broadcast [[X0_P1]] {{.*}}partition = 1
+    %x1 = tt.broadcast %x0 : tensor<1x128xf32> -> tensor<128x128xf32>
+
+    // CHECK: "use"([[X1_P0]]) {{.*}}partition = 0
+    "use"(%x1) {ttg.partition = 0 : i32} : (tensor<128x128xf32>) -> ()
+    // CHECK: "use"([[X1_P1]]) {{.*}}partition = 1
+    "use"(%x1) {ttg.partition = 1 : i32} : (tensor<128x128xf32>) -> ()
+  } {tt.warp_specialize, ttg.partition.stages = [0 : i32, 1 : i32]}
   tt.return
 }
 
