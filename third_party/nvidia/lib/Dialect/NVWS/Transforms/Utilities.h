@@ -6,8 +6,6 @@
 
 namespace mlir::triton::nvws {
 
-static const char *kArefTagAttrName = "aref_tag";
-
 Operation *createAlloc(OpBuilder &builder, Location loc,
                        gpu::MemDescType memDescType, Value src);
 

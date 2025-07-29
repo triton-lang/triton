@@ -80,7 +80,8 @@ std::optional<Twine> static arefEnterVerify(
 }
 
 LogicalResult ArefPutEnterOp::verify() {
-  if (auto result = arefEnterVerify(getAref().getType(), getResultTypes()))
+  if (auto result =
+          arefEnterVerify(getAref().getType(), getBuffers().getType()))
     return emitError(*result);
   return success();
 }

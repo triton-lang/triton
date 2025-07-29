@@ -161,17 +161,16 @@ SmallVector<Operation *> createArefPut(PartitionBuilder &builder,
   auto dataBufType = getBufferViewType(arefBufType, /*mutable*/ true);
   StageCluster stageCluster = getStageClusterForProducer(result);
   Partition *producerPartition = producedValue.partition;
-  SmallVector<Type> buffers{dataBufType};
 
+  SmallVector<Type> bufferTypes{dataBufType};
+  Type token{builder.getType<AsyncTokenType>()};
   auto c0Enter = builder.intCst(0);
   auto putEnterOp = builder.createInto<ArefPutEnterOp>(
-      *producerPartition, stageCluster, buffers, aref, c0Enter, c0Enter);
+      *producerPartition, stageCluster, bufferTypes, token, aref, c0Enter,
+      c0Enter);
   schedule.insert(producerPartition, putEnterOp);
   schedule.insert(producerPartition, c0Enter.getDefiningOp());
-  // Attach a "tag" to each put enter / exit pair, to easily identify them
-  // as a matching pair in later analysis.
-  putEnterOp->setAttr(kArefTagAttrName, builder.getStringAttr(arefTag));
-  auto dataBuf = putEnterOp.getResults()[0];
+  auto dataBuf = putEnterOp.getBuffers()[0];
 
   auto producerKind = AsyncOp::NONE;
   SmallVector<Operation *> staleOps;
@@ -204,10 +203,9 @@ SmallVector<Operation *> createArefPut(PartitionBuilder &builder,
 
   auto c0Exit = builder.intCst(0);
   auto putExitOp = builder.createInto<ArefPutExitOp>(
-      *producerPartition, stageCluster, aref, c0Exit,
+      *producerPartition, stageCluster, aref, putEnterOp.getToken(), c0Exit,
       builder.getArrayAttr(SmallVector<Attribute>{
           AsyncOpAttr::get(aref.getContext(), producerKind)}));
-  putExitOp->setAttr(kArefTagAttrName, builder.getStringAttr(arefTag));
   schedule.insert(producerPartition, putExitOp);
   schedule.insert(producerPartition, c0Exit.getDefiningOp());
 
@@ -319,7 +317,6 @@ void createArefGet(PartitionBuilder &builder, scf::ForOp loop,
       c0Enter, c0Enter);
   schedule.insert(consumerPartition, getEnterOp);
   schedule.insert(consumerPartition, c0Enter.getDefiningOp());
-  getEnterOp->setAttr(kArefTagAttrName, builder.getStringAttr(arefTag));
 
   auto consumers = getTransitiveConsumers(results, consumerPartition, schedule);
   assert(consumers.size() > 0);
@@ -358,7 +355,6 @@ void createArefGet(PartitionBuilder &builder, scf::ForOp loop,
       builder.getArrayAttr(asyncKinds));
   schedule.insert(consumerPartition, getExitOp);
   schedule.insert(consumerPartition, c0Exit.getDefiningOp());
-  getExitOp->setAttr(kArefTagAttrName, builder.getStringAttr(arefTag));
 };
 
 bool insertArefs(PartitionBuilder &builder, scf::ForOp loop,
