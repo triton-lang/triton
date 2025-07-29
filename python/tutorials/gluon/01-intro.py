@@ -3,45 +3,37 @@ Introduction to Gluon
 =====================
 
 Gluon is a GPU programming language based on the same compiler stack as Triton.
-But compared to Triton, Gluon is a lower-level language that gives the user more
+But unlike Triton, Gluon is a lower-level language that gives the user more
 control and responsibility when implementing kernels.
 
-In this tutorial series, we will cover everything from the basics of writing
-GPU kernels in Gluon, modern (NVIDIA) GPU hardware features, to advanced
-performance optimization techniques. And at the end, we will use what we have
-learned to assemble an efficient GEMM (General Matrix Multiply) kernel. These
-tutorials will assume that you already have basic familiarity with Triton.
+This tutorial series covers GPU kernel development in Gluon, from the basics to
+advanced optimization techniques and modern GPU hardware features, culminating
+in building an efficient GEMM kernel. Basic familiarity with Triton is assumed.
 
-At a high level, Gluon and Triton share many similarities. Both implement
-a tile-based SPMD (Single Program Multiple Data) programming model, where a tile
-represents an N-dimensional array whose elements are distributed over a single
-"program". Both represent computations as operations over these tiles. And both
-are embedded Python DSLs that share the same frontend.
+At a high level, Gluon and Triton share many similarities. Both implement a
+tile-based SPMD programming model, where tiles represent N-dimensional arrays
+distributed over a "program". Both are Python DSLs sharing the same frontend
+and JIT infrastructure.
 
-Triton, however, is a high-level language that hides many of the details of
-implementing a GPU kernel from the user. The specific distribution of tile
-elements, i.e. its "layout", is hidden from the user and managed by the
-compiler. Similarly, the Triton compiler manages memory, data movement, and
-scheduling (asynchronity and synchronization), and it abstracts away the
-underlying hardware features.
+Triton, however, abstracts many details of implementing kernels and GPU hardware
+from the user. It defers to the compiler to manage tile layouts, memory
+allocation, data movement, and asynchronity.
 
-Getting these details right is important to the performance of the kernel. While
-the Triton compiler does a fairly good job of generating efficient code for a
-wide range of kernels, it can often fall short. When this happens, there is
-little the user can do to significantly improve performance since all the
-details are hidden.
+Getting these details right is important to kernel performance. While the Triton
+compiler does a good job of generating efficient code for a wide range of
+kernels, it can often fall short. When this happens, there is little the user
+can do to significantly improve performance since all the details are hidden.
 
-In Gluon, all of these details (and more) are exposed to the user. This means
-writing Gluon kernels requires a deeper understanding of GPU hardware and the
-many aspects of GPU programming, but it also enables writing more performant
-kernels by finely controlling these low-level details.
+In Gluon, these details are exposed to the user. This means writing Gluon
+kernels requires a deeper understanding of GPU hardware and the many aspects of
+GPU programming, but it also enables writing more performant kernels by finely
+controlling these low-level details.
 """
 
 # %%
-# We will first go over the basics of defining a Gluon kernel and writing its
-# launcher. It is practically the same as defining a Triton kernel. Use the
-# `@gluon.jit` decorator to declare a Gluon kernel, and it can be invoked from
-# Python using the same interface as a `@triton.jit` kernel.
+# Let's define a Gluon kernel and write its launcher. Use the `@gluon.jit`
+# decorator to declare a Gluon kernel, and it can be invoked from Python with
+# the same interface as a Triton kernel.
 
 import pytest
 import torch
@@ -50,8 +42,7 @@ from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
 
 # %%
-# Let's illustrate this using a trivial kernel. This kernel copies a scalar from
-# one point in global memory to another.
+# We illustrate this with a trivial kernel that copies a scalar.
 
 
 @gluon.jit
@@ -61,9 +52,9 @@ def copy_scalar_kernel(in_ptr, out_ptr):
 
 
 # %%
-# Write the launcher. PyTorch tensors are converted to global memory pointers
-# when passed to Gluon kernels, much like Triton kernels. And the grid is
-# specified in the same way.
+# The launcher is host-side code that invokes the kernel. PyTorch tensors are
+# converted to global memory pointers when passed to Gluon kernels, just like in
+# Triton. And the grid is specified in the same way.
 
 
 def copy_scalar(input, output):
@@ -119,7 +110,7 @@ def test_memcpy(XBLOCK, xnumel):
 
 # %%
 # Gluon hyperparameters can be autotuned like Triton as well. Let's autotune
-# `XBLOCK` for the memcpy kernel as an example.
+# XBLOCK as an example.
 
 
 @triton.autotune(
@@ -142,39 +133,13 @@ def memcpy_autotune(input, output):
 
 # %%
 # Run this with `TRITON_PRINT_AUTOTUNING=1 python 01-intro.py` to see which
-# `XBLOCK` gets selected. On B200, the best `XBLOCK` ends up being 2048 to copy
+# XBLOCK gets selected. On B200, the best XBLOCK ends up being 2048 to copy
 # 8 GB of data at about 333 GB/s, far from the 8 TB/s peak bandwidth of the GPU.
 #
-# The full output is:
-#
 # ```
-# Autotuning kernel memcpy_kernel_autotune with config XBLOCK: 256, num_warps: 1, num_ctas: 1, num_stages: 3, maxnreg: None
-# Autotuning kernel memcpy_kernel_autotune with config XBLOCK: 512, num_warps: 1, num_ctas: 1, num_stages: 3, maxnreg: None
-# Autotuning kernel memcpy_kernel_autotune with config XBLOCK: 1024, num_warps: 1, num_ctas: 1, num_stages: 3, maxnreg: None
-# Autotuning kernel memcpy_kernel_autotune with config XBLOCK: 2048, num_warps: 1, num_ctas: 1, num_stages: 3, maxnreg: None
-# Autotuning kernel memcpy_kernel_autotune with config XBLOCK: 4096, num_warps: 1, num_ctas: 1, num_stages: 3, maxnreg: None
-# Autotuning kernel memcpy_kernel_autotune with config XBLOCK: 8192, num_warps: 1, num_ctas: 1, num_stages: 3, maxnreg: None
-# Triton autotuning for function memcpy_kernel_autotune,
-# with key as (2147483648, 'torch.float32', 'torch.float32'),
-# finished after 2.06s,
-# best config selected: XBLOCK: 2048, num_warps: 1, num_ctas: 1, num_stages: 3, maxnreg: None;
-#
-# Benchmarking memcpy
-# ===================
 # Time:        24.00 ms
 # Throughput: 333.33 GB/s
 # ```
-#
-# Since performance is the main motiviation for writing kernels in Gluon, let's
-# spend some time discussing that. First, the obvious problem is we are not
-# fully utilizing the parallelism of the GPU. Each Gluon "program" corresponds
-# to a thread block (CTA) on the GPU, and while the GPU can execute many CTAs
-# at once, our kernel copies 1 scalar element at a time per CTA.
-#
-# In order to copy many elements at once, we need to load and store tiles, but
-# that will require picking a layout and understanding which layouts perform
-# better than others. In the next tutorial, we will cover the basics of layouts
-# in Gluon and how they can affect performance.
 
 if __name__ == "__main__":
     torch.manual_seed(0)
@@ -191,6 +156,17 @@ if __name__ == "__main__":
     print(f"Throughput: {gbytes / (ms * 1e-3):.2f} GB/s")
 
 # %%
+# Since performance is the main motiviation for writing kernels in Gluon, let's
+# spend explore that. First, we are not fully utilizing the parallelism of the
+# GPU. Each Gluon "program" corresponds to a thread block (CTA) on the GPU, and
+# while the GPU can execute many CTAs at once, in our kernel each CTA copies 1
+# element at a time.
+#
+# In order to copy many elements at once, we need to load and store tiles, but
+# that will require picking a layout and understanding which layouts perform
+# better than others. In the next tutorial, we will cover the basics of layouts
+# in Gluon and how they can affect performance.
+#
 # The main things you should take away from this tutorial are:
 #
 # - The high-level aspects of writing Gluon kernels are the same as writing

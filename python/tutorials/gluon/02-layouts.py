@@ -14,9 +14,7 @@ powers of 2, this means that the number of elements per thread is a power of 2.
 A layout, in general, defines a mapping from a logical tensor index to the warp,
 lane, and register the element lives in. `BlockedLayout` is the most common
 kind of layout in Gluon. A `BlockedLayout` defines how elements are organized
-in a "block" of the same rank as the tensor. If the block is smaller than the
-tensor, it is tiled over the tensor along the registers, and if the block is
-larger, the tensor is broadcasted to fit the block along the registers.
+in a "block" of the same rank as the tensor.
 
 Consider the following example:
 
@@ -29,11 +27,11 @@ gl.BlockedLayout(
 )
 ```
 
-By multiplying `size_per_thread`, `threads_per_warp`, and `warps_per_cta`,
-elementwise we obtain the block shape `[2 * 16 * 2, 4 * 2 * 2] = [64, 16]`.
-Within this block, the layout describes a hierarchy of register, thread, and
-warp tiling over the logical elements of the tensor. The `order` specifies the
-order in which the dimensions of the tensor are tiled.
+We obtain the block shape by multiplying `size_per_thread`, `threads_per_warp`,
+and `warps_per_cta` elementwise: [64, 16]. Within this block, the layout
+describes a hierarchy of register, thread, and warp tiling over the logical
+elements of the tensor. The `order` specifies the order in which the dimensions
+of the tensor are tiled.
 
 In this example, `size_per_thread=[2, 4]` indicates that within each block, each
 thread owns a contiguous `2x4` subtile of the tensor, stored as registers in
@@ -85,11 +83,12 @@ tile, we obtain the warp tile over the elements of the tensor:
 We can again repeat this process for `warps_per_cta=[2, 2]` to obtain a full
 mapping of tensor elements within a block to all the threads in a program.
 
-If the tensor had the same dimensions as the block, then there would be no
-implicit broadcasting needed to fit the block into the tensor. But consider a
-`128x128xf32` tensor. Dividing the block shape into the tensor shape, we obtain
-a `[2, 8]` tiling of the block. The block is tiled according to `order=[1, 0]`
-by adding more registers to each thread:
+If the tensor is the same size as the block, then the elements are distributed
+according to the block layout. If the tensor shape is different, we need to
+either tile the block or broadcast the tensor elements. Consider a `128x128xf32`
+tensor. Dividing the block shape into the tensor shape, we obtain a `[2, 8]`
+tiling of the block. The block is tiled according to `order=[1, 0]` by adding
+more registers to each thread:
 
 ```
 [[B0, B1, B2, B3],
@@ -97,14 +96,14 @@ by adding more registers to each thread:
 ```
 
 In each block, each thread owns 8 registers. Thus over the whole tensor, each
-thread owns `8 * 8 = 64` registers. Knowing how many registers a tensor uses
-is important for managing register pressure and budget in the kernel.
+thread owns `8 * 8 = 64` registers. Knowing how many registers a tensor uses is
+important for managing register pressure and budget in the kernel.
 
-Consider a tensor smaller than the block, say `32x8xf32`. The number of tiles
-at each level of the block does not change, thus even though the tensor has only
-`32 * 8 = 256` elements, it will be stored as `64 * 16 = 1024` physical
-registers in each program. The tensor is broadcasted along each dimension to fit
-the block starting with warps, then threads, then registers.
+Consider a smaller tensor, say `32x8xf32`. The number of tiles at each level of
+the block does not change, thus even though the tensor has only `32 * 8 = 256`
+elements, it will be stored as `64 * 16 = 1024` physical registers in each
+program. The tensor is broadcasted along each dimension to fit the block
+starting with warps, then threads, then registers.
 
 Dividing the tensor shape into the block shape, we obtain `[2, 2]`. Since this
 exactly matches `warps_per_cta=[2, 2]`, this means each warp has a full copy of
@@ -155,37 +154,30 @@ def _enabled(label):
 
 # %%
 # Parameterize the kernel over the layout so we can test different layouts. Each
-# program copies a block of data, but this we will use the layout to distribute
-# the work over all the threads insteead of looping.
+# program copies a block of data, but we will use the layout to distribute
+# the work over all the threads.
 
 
 @gluon.jit
 def memcpy_1d_kernel(in_ptr, out_ptr, xnumel, XBLOCK: gl.constexpr, layout: gl.constexpr):
-    # Compute the start to the block the program will copy like before.
     pid = gl.program_id(0)
     start = pid * XBLOCK
 
     # Create a tensor with the values [0, XBLOCK) using the provided layout.
-    # This tensor collectively represents the elements that will be copied by
-    # this program.
     indices = gl.arange(0, XBLOCK, layout=layout)
-
-    # Obtain the offsets of each element to be copied, which are distriuted
-    # among the threads in the program according to the layout.
     offsets = start + indices
 
-    # Adding the offsets to `in_ptr` yields a tensor of pointers to each element
-    # the program will load.
+    # Obtain a tensor of pointers to each element the program will load,
+    # distributed over the threads in the program.
     in_ptrs = in_ptr + offsets
 
-    # Because some of the pointers may be out-of-bounds, we will need to mask
-    # the global load. For each pointer, mask the load if the offset is greater
-    # than the number of elements.
+    # If XBLOCK does not divide evenly into xnumel, pointers along the edge of
+    # will be out-of-bounds. Mask the load when the offsets are OOB.
     mask = offsets < xnumel
 
     value = gl.load(in_ptrs, mask=mask)
 
-    # We need to mask the store as well to prevent writing out-of-bounds.
+    # Mask the store as well to prevent OOB writes.
     out_ptrs = out_ptr + offsets
     gl.store(out_ptrs, value, mask=mask)
 
@@ -193,18 +185,16 @@ def memcpy_1d_kernel(in_ptr, out_ptr, xnumel, XBLOCK: gl.constexpr, layout: gl.c
 def memcpy_1d_impl(input, output, XBLOCK, layout, num_warps):
     xnumel = input.numel()
     grid = (triton.cdiv(xnumel, XBLOCK), )
-    # Return the compiled kernel so we can inspect it later.
     compiled_kernel = memcpy_1d_kernel[grid](input, output, xnumel, XBLOCK, layout, num_warps=num_warps)
     return compiled_kernel
 
 
 # %%
-# Let's benchmark the kernel with a variety of layouts. Recall that the best
-# `XBLOCK` we obtained in the previous tutorial was 2048, which is what we will
-# use to start.
+# Let's benchmark the kernel a variety of layouts. Start with XBLOCK=2048, which
+# was the best value obtained in the last tutorial.
 #
-# For a 1D tensor, there isn't much choice for the layout. If we use the default
-# `num_warps=4`, the only valid layouts are
+# For 1D tensors, there are few choices for blocked layouts. Assuming
+# num_warps=4, the only valid layouts are
 #
 # ```python
 # gl.BlockedLayout(
@@ -214,7 +204,7 @@ def memcpy_1d_impl(input, output, XBLOCK, layout, num_warps):
 #     order=[0],
 # ```
 #
-# Where `R` must be a power of 2.
+# Where `R` is a power of 2.
 
 
 def get_throughput(input, ms):
@@ -251,9 +241,8 @@ def test_memcpy_1d(XBLOCK, xnumel, num_warps):
 
 
 # %%
-# By choosing `XBLOCK=2048`, the largest value we can pick for `R` without
-# incurring redundant values via broadcasting is `R=16`. For smaller values,
-# the layout is tiled to fill the tensor.
+# By choosing XBLOCK=2048, the largest value we can pick for R without
+# incurring redundant values is R=16.
 
 if __name__ == "__main__" and _enabled("R_vs_throughput"):
     print("R vs. Throughput")
@@ -275,8 +264,6 @@ if __name__ == "__main__" and _enabled("R_vs_throughput"):
 # Running this on B200, we obtain
 #
 # ```
-# R vs. Throughput
-# ================
 # R=1   3.287 TB/s
 # R=2   3.238 TB/s
 # R=4   3.237 TB/s
@@ -284,9 +271,8 @@ if __name__ == "__main__" and _enabled("R_vs_throughput"):
 # R=16  3.107 TB/s
 # ```
 #
-# We can see that the our selected layout does affect performance (and that this
-# is 10x faster than copying one scalar at a time). Let's dig deeper into why
-# the layout affects performance by examining the SASS for the kernels.
+# Observe that the layout does affect performance. Let's dig deeper into why
+# by examining the SASS.
 
 if __name__ == "__main__" and _enabled("LDG_STG_instructions"):
     print("LDG/STG instructions")
@@ -301,8 +287,7 @@ if __name__ == "__main__" and _enabled("LDG_STG_instructions"):
     print()
 
 # %%
-# The output shows that the layout affects the vectorization of the loads and
-# striding when multiple loads are emitted. We can summarize this in a table:
+# We see that the layout affects read/write vectorization and striding:
 #
 # | R  | width | vec_len | n_loads | stride |
 # |----|-------|---------|---------|--------|
@@ -313,18 +298,18 @@ if __name__ == "__main__" and _enabled("LDG_STG_instructions"):
 # | 16 | 512   | 128     | 4       | 0x10   |
 #
 # Modern NVIDIA GPUs have 128-byte cache lines, divided into 32-byte sectors.
-# The 32B sectors are the granularity at which global memory is accessed by a
-# processor. Thus, the GPU hardware attempts to minimize the number of 32B
-# sector accesses by grouping contiguous memory accesses within a warp.
+# These sectors are the granularity at which global memory is accessed. Thus,
+# the GPU attempts to minimize the number of sector accesses by "coalescing"
+# contiguous accesses to the same sectors.
 #
 # When R=1, each `LDG.E` at the warp level reads exactly 128 contiguous bytes of
 # global memory, which fits into a cache line. Note that PyTorch allocates
-# tensors aligned to 256 bytes by default.
+# tensors aligned to 256 bytes.
 #
-# Increasing `R` to 2 or 4 widens each `LGD.E` instruction but slows down the
+# Increasing R to 2 or 4 widens each `LGD.E` instruction but slows down the
 # kernel, despite the number of 32B sector reads remaining unchanged. This can
 # be due to a variety of obscure hardware factors, but if you look at the
-# annotations to the left of the printed instructions you can see one potential
+# annotations printed to the left of the instructions, you can see one potential
 # factor:
 #
 # ```
@@ -348,9 +333,7 @@ if __name__ == "__main__" and _enabled("LDG_STG_instructions"):
 # the barrier is cleared. By issuing smaller granularity loads, the store
 # instructions can start executing earlier.
 #
-# The fact that `R=8` is faster than `R=2` and `R=4` despite having strided
-# loads is perhaps due two independent transactions, but it's hard to know for
-# sure without using a profiler.
+# It is difficult to tell why R=8 is faster than R=2 and R=4 without a profiler.
 
 if __name__ == "__main__" and _enabled("XBLOCK_R_vs_throughput"):
     print("(XBLOCK, R) vs. Throughput")
@@ -376,12 +359,10 @@ if __name__ == "__main__" and _enabled("XBLOCK_R_vs_throughput"):
     print()
 
 # %%
-# If we run this experiment with a variety of `XBLOCK`, we see that `R=8` is
-# not always faster than `R=2` and `R=4`.
+# If we run this experiment with a variety of XBLOCK, we see that R=8 is
+# not always faster than R=2 and R=4.
 #
 # ```
-# (XBLOCK, R) vs. Throughput
-# ==========================
 # XBLOCK    R=1   R=2   R=4   R=8   R=16
 # 1024     3.283 3.274 3.271 3.275 2.613
 # 2048     3.286 3.237 3.237 3.252 3.109
@@ -390,26 +371,25 @@ if __name__ == "__main__" and _enabled("XBLOCK_R_vs_throughput"):
 # 16384    3.261 3.278 3.243 3.255 3.073
 # ```
 #
-# We can also conclude that `R=1` is the best layout for 1D load, and that we
-# should be using `XBLOCK=8192` instead.
+# We also conclude that R=1 is the best 1D layout and that XBLOCK=8192 is
+# faster.
 
 # %%
-# With higher-dimensional tensors, picking the right layout is a lot less
-# forgiving, because the tensors can be accessed in non-contiguous ways. Let's
-# look at a 2D memcpy kernel to illustrate this.
+# Picking the right layout for higher-dimensional tensors is a lot less
+# forgiving because the tensors can be accessed in non-contiguous ways. We will
+# illustrate this with a 2D memcpy.
 #
-# In order to index into a strided 2D tensor, we need to generate 2D offsets by
-# broadcasting two 1D offsets and adding them together. The final layout of the
-# 2D offsets will be a `BlockedLayout`, but we need a `SliceLayout` to represent
-# the layout of the 1D offsets:
+# We index into a strided 2D tensor by computing 1D offsets for the rows and
+# columns, multiplying them by the strides, and broadcasting and adding them
+# together. The offsets will have a 2D BlockedLayout, but we need to use a
+# SliceLayout for the 1D offsets.
 #
 # ```python
 # gl.SliceLayout(dim=1, parent=layout)
 # ```
 #
-# A slice layout is defined relative to a parent layout. It is the layout that
-# results from dropping the `dim` dimension from the parent layout. For example,
-# let's use the blocked layout we discussed at the beginning of this tutorial.
+# A slice layout is obtained from a parent layout by dropping the `dim`
+# dimension. For example, consider this blocked layout
 #
 # ```python
 # layout = gl.BlockedLayout(
@@ -420,7 +400,7 @@ if __name__ == "__main__" and _enabled("XBLOCK_R_vs_throughput"):
 # )
 # ```
 #
-# Recall the mapping of tensor elements to registers in a warp is:
+# The tensor element mapping is:
 #
 # ```
 # [[ T0:0,  T0:1,  T0:2,  T0:3,  T1:0,  T1:1,  T1:2,  T1:3],
@@ -434,8 +414,8 @@ if __name__ == "__main__" and _enabled("XBLOCK_R_vs_throughput"):
 #  [T30:4, T30:5, T30:6, T30:7, T31:4, T31:5, T31:6, T31:7]]
 # ```
 #
-# To form the slice layout along `dim=1`, first collapse the mappings in each
-# row together:
+# To form the slice layout along dim=1, first collapse the mappings in each row
+# together:
 #
 # ```
 # [  T0:0| T0:1| T0:2| T0:3| T1:0| T1:1| T1:2| T1:3,
@@ -463,18 +443,13 @@ if __name__ == "__main__" and _enabled("XBLOCK_R_vs_throughput"):
 #   T30:1|T31:1]
 # ```
 #
-# Such a layout would result from a reduction of a 2D tensor along `dim=1`. You
-# can see that each element in the reduction result would be broadcasted to two
-# threads pairwise.
+# This layout would result from reducing a 2D tensor along dim=1. You can see
+# that each element in the reduction result would be broadcasted to two threads.
 #
 # Likewise, to expand a 1D tensor to 2D, we start with the tensor in slice
 # layout and perform the reverse transformation by duplicating each element of
-# the 1D tensor until it fills the rows to the desired size.
-#
-# You can see that broadcasting is a zero-cost operation because it does not
-# compute any new values nor does it require any data movement: each thread
-# already has the value that will be broadcasted, and the values are lazily
-# materialized into physical registers by the compiler when needed.
+# the 1D tensor until it fills the rows to the desired size. This way,
+# broadcasting is a zero-cost operation.
 
 
 @gluon.jit
@@ -489,17 +464,14 @@ def memcpy_2d_kernel(in_ptr, out_ptr,  #
     indices_x = start_x + gl.arange(0, XBLOCK, layout=gl.SliceLayout(dim=1, parent=layout))
     indices_y = start_y + gl.arange(0, YBLOCK, layout=gl.SliceLayout(dim=0, parent=layout))
 
-    # Multiply the x and y offsets by the strides of the input tensor in each
-    # dimension to translate tensor indices to memory offsets.
-    #
-    # `indices_x[:, None]` expands the tensor by appending a size 1 dimension
-    # to its shape, thus yielding a [XBLOCK, 1] tensor. When combined with a
-    # [1, YBLOCK] tensor, each is broadcasted to a [XBLOCK, YBLOCK] tensor.
+    # `indices_x[:, None]` expands the tensor by appending a size 1 dimension,
+    # yielding [XBLOCK, 1]. When combined with [1, YBLOCK], each is broadcasted
+    # to [XBLOCK, YBLOCK] before being added together.
     in_offsets = xstride_in * indices_x[:, None] + ystride_in * indices_y[None, :]
     out_offsets = xstride_out * indices_x[:, None] + ystride_out * indices_y[None, :]
 
-    # Compute the mask in the same way, by selecting for indices along each
-    # dimension that are in bounds and broadcasting them together.
+    # Compute the mask the same way: select for indices along each dimension
+    # that are in bounds and broadcast them together.
     mask = (indices_x[:, None] < xnumel) & (indices_y[None, :] < ynumel)
 
     value = gl.load(in_ptr + in_offsets, mask=mask)
@@ -517,11 +489,6 @@ def memcpy_2d_impl(input, output, XBLOCK, YBLOCK, layout, num_warps):
         *input.stride(), *output.stride(),  #
         layout, XBLOCK, YBLOCK, num_warps=num_warps)
     return compiled_kernel
-
-
-# %%
-# Let's test our kernel, focusing especially on cases where the tensor elements
-# are not contiguous in memory.
 
 
 @pytest.mark.parametrize("XBLOCK, YBLOCK", [(128, 256), (256, 128)])
@@ -542,9 +509,8 @@ def test_memcpy_2d(XBLOCK, YBLOCK, xnumel, ynumel, transposed, num_warps):
 
 # %%
 # Instead of autotuning, we should just pick the layout we know will work based
-# based on our findings in 1D. Suppose the 2D tensor is just a contiguous memory
-# block underneath, we can try to reduce the 2D memcpy into the same kernel as
-# the 1D memcpy.
+# based on our findings in 1D. Assuming the 2D tensor is just a contiguous
+# memory block underneath, we can try to reduce the 2D memcpy into a 1D memcpy.
 
 
 def bench_memcpy_2d(impl, transposed=False):
@@ -559,9 +525,8 @@ def bench_memcpy_2d(impl, transposed=False):
 
 
 # %%
-# Let's choose `XBLOCK=1`, which means each program will process a row vector,
-# and we can pick a blocked layout that behaves the same over this row vector
-# as the `R=1` does in 1D.
+# Choosing XBLOCK=1 means each program will process a row vector, and we can
+# pick a blocked layout that behaves the same as the R=1 layout does in 1D.
 
 if __name__ == "__main__" and _enabled("memcpy_2d_layout"):
     print("Benchmarking 2D memcpy")
@@ -574,22 +539,21 @@ if __name__ == "__main__" and _enabled("memcpy_2d_layout"):
     print(f"Throughput: {throughput:.3f} TB/s")
 
 # %%
-# Running this yields 3.130 TB/s, which is 5% slower than the 1D memcpy. There
-# may be a variety of reasons, including the more complex 2D indexing
-# arithmetic, but let's examine the performance in more detail first.
+# This yields 3.130 TB/s, which is 5% slower than the 1D memcpy. There are a
+# variety of reasons why, such as more complex 2D arithmetic, but let's dig
+# deeper first.
 #
 # Our 2D memcpy kernel has another problem: the optimal layout depends on the
-# layout of the input tensor. Let's see what happens when the input tensor is
-# transposed:
+# layout of the tensors in global memory. Let's check the throughput when the
+# input tensor is transposed:
 
 if __name__ == "__main__" and _enabled("memcpy_2d_layout"):
     _, throughput = bench_memcpy_2d(impl, transposed=True)
     print(f"Transposed throughput: {throughput:.3f} TB/s")
 
 # %%
-# Performance craters and we get 0.387 TB/s, which is almost as slow as our
-# scalar memcpy from the last tutorial. The reason is obvious: the inner
-# dimension is no longer contiguous. Simply swapping the block sizes and the
+# Performance craters to 0.387 TB/s. Because the inner dimension is no longer
+# contiguous, we get no coalescing. Simply swapping the block sizes and
 # transposing the layout restores performance:
 
 if __name__ == "__main__" and _enabled("memcpy_2d_layout"):
@@ -600,19 +564,20 @@ if __name__ == "__main__" and _enabled("memcpy_2d_layout"):
     print()
 
 # %%
-# This yields 3.295 TB/s, which is actually slightly faster than the 1D memcpy.
-# Each program accesses memory in the same way, which means the only variation
-# could be where the programs are scheduled.
+# This yields 3.295 TB/s, slightly faster than the 1D memcpy!
+#
+# Between the transposed and non-transposed inputs and layouts, each program
+# accesses memory in the same way, meaning the variation in performance must be
+# due to where programs get scheduled.
 #
 # While we know each program accesses unique memory above the cache line size,
-# we can't completely rule out data locality as the GPU cache structure is very
-# complex with many mechanisms to improve performance. For example, the GPU
-# contains TLBs (Translation Lookaside Buffers) which cache virtual address
-# translations. GPU pages are 64KB by default, but with our chosen block sizes,
-# a program copies less than a whole page on its own. This can cause TLB misses
-# when programs that access the same page are scheduled in different SMs.
+# we can't rule out data locality as the GPU cache structure is very complex
+# For example, the GPU contains TLBs which cache virtual address translations.
+# GPU pages are 64KB, which is larger than our chosen block sizes. If programs
+# processing the same GPU page are scheduled on different SMs, the TLB lookup in
+# L1 will cache miss.
 #
-# The L2 cache is also divided into a number of partitions (16 on H100 GPUs),
+# The L2 cache is also divided into partitions (16 on H100 GPUs),
 # which are mapped based on physical addresses. Scheduling can affect whether
 # kernels that access the same L2 partition are scheduled near each other.
 #
@@ -661,27 +626,20 @@ if __name__ == "__main__" and _enabled("memcpy_2d_contig"):
     print()
 
 # %%
-# The results from the benchmark:
-#
 # ```
-# Non-contiguous memcpy
-# =====================
 # 2D memcpy: 3.129 TB/s
 # torch.Tensor.contiguous: 1.473 TB/s
 # 2D memcpy (transposed): 3.199 TB/s
 # ```
 #
-# So our 2D memcpy provides similar performance even when the input tensor has
+# Our 2D memcpy provides similar performance even when the input tensor has
 # an exotic layout. It's already over 2x faster than the PyTorch implementation
-# of `Tensor.contiguous`. And we also see that applying the transposition
-# "trick" we "learned" through experimentation results in slightly more
-# performance.
 
 # %%
-# We have seen how picking the wrong layouts can crater performance, and that
-# the right layout for global memory accesses depends on the layout of the
-# tensors in global memory. What happens if the input and output tensors have
-# opposite global memory layouts?
+# We have seen how picking the wrong layouts for global memory accesses can
+# crater performance and that the right layout depends on the layout of the
+# global tensors. What happens if the input and output tensors have opposite
+# layouts?
 
 if __name__ == "__main__" and _enabled("memcpy_2d_inout"):
     print("2D memcpy in/out layouts")
@@ -706,17 +664,15 @@ if __name__ == "__main__" and _enabled("memcpy_2d_inout"):
     print(f"2D memcpy (order=[0, 1]): {throughput:.3f} TB/s")
 
 # %%
-# We can see that performance is terrible regardless of which layout we pick:
+# Performance is terrible regardless of which layout we pick:
 #
 # ```
-# 2D memcpy in/out layouts
-# =========================
 # 2D memcpy (order=[1, 0]): 0.489 TB/s
 # 2D memcpy (order=[0, 1]): 0.837 TB/s
 # ```
 #
-# The solution is we need to use two layouts for `gl.load` and `gl.store` that
-# are derived from the layouts of the global tensors.
+# The solution is to use two layouts for `gl.load` and `gl.store`, both derived
+# from the layouts of the global tensors.
 
 
 def get_layout_for_gmem_access(tensor, num_warps):
@@ -733,22 +689,21 @@ def get_layout_for_gmem_access(tensor, num_warps):
 
 # %%
 # However, this means the Gluon tensor that results from the global memory load
-# will have a different layout than what is required for the store. The layout
-# of a tensor is part of its type: tensors with the same shape and dtype but
-# with different layouts are incompatible types; we need to convert the layout
-# of the tensor.
+# will have a different layout than what is required for the store. We need to
+# perform a layout conversion.
 #
 # Layout conversions are potentially expensive operations, because they often
 # result in data movement across threads and warps. Data movement across warps
 # also requires using shared memory, which is a precious resource on the GPU.
+#
 # Using shared memory for layout conversions can adversely affect performance
 # by reducing occupancy and maximum pipeline depth, which is something we will
 # explore in the next tutorial where we cover software pipelining.
 #
 # However, in our case the cost of the layout conversion is unavoidable, and it
 # is far less than the cost of inefficient global memory accesses. We will also
-# also need to pick a more square-ish block shape, since coalescing will occur
-# along different dimensions for the input and output.
+# need to pick a more square-ish block shape, since coalescing occurs along
+# different dimensions for the input and output.
 
 
 @gluon.jit
@@ -837,8 +792,7 @@ if __name__ == "__main__" and _enabled("memcpy_2d_inout"):
 # %%
 # So far in this tutorial, we have covered block layouts, slice layouts, and
 # layout conversions. We have also explored the performance implications of
-# layouts. For completeness, here is a list of things where picking the right
-# layout can affect performance:
+# layouts. Here are other of things where layouts can affect performance:
 #
 # Reductions, scans, gathers, or in general any operation that may require
 # communication across threads and/or warps, can be more efficient if the layout
@@ -864,5 +818,60 @@ if __name__ == "__main__" and _enabled("memcpy_2d_inout"):
 # ```
 #
 # Then each thread owns exactly one row of the tensor. Thus, the reduction
-# requires no inter-thread communication and the compiler can just emit a pile
-# of `fadd` instructions.
+# requires no inter-thread communication.
+#
+# Unlike global memory accesses, the compiler does a good job of generating
+# efficient reductions, scans, etc. regardless of the input layout, meaning
+# it is typically more expensive to convert to an efficient layout and then
+# perform the reduction. However, structuring the kernel such that the input
+# ends up with an efficient layout can be important.
+#
+# Reads and writes to shared memory are affected by both the shared memory
+# layout and the register layout of the tensor. This is because shared memory is
+# organized into banks that can only serve one address per cycle per warp. The
+# compiler generates code that minimizes bank conflicts, but the number of bank
+# conflicts is still affected by the layouts.
+
+# %%
+# In Gluon, there is no canonical layout representation. Multiple layouts can
+# represent the same tensor element mapping. For example, the following layouts
+# are equivalent:
+#
+# ```python
+# gl.BlockedLayout([1], [32], [4], [0])
+# gl.SliceLayout(1, gl.BlockedLayout([1, 1], [32, 1], [4, 1], [1, 0]))
+# ```
+#
+# When converting between layouts you know are equivalent, or at most only
+# require reordering registers within a thread (which is free), you can use
+# `gl.convert_layout(x, layout, assert_trivial=True)` to ensure this.
+#
+# While Gluon layouts have no canonical representation, all Gluon layouts can be
+# represented as linear layouts. Linear layouts are the most expressive and
+# powerful layout representation in Gluon: they allow expressing zero-cost
+# splits, joins, reshapes, and permutes. However, they are relatively uncommon
+# and can be difficult to understand.
+#
+# See `include/triton/Tools/LinearLayout.h` for more details on the data
+# structure, and see the associated paper https://arxiv.org/abs/2505.23819 for
+# a deeper dive into linear layouts.
+#
+# The linear layout equivalent to the 2 layouts above is:
+#
+# ```python
+# gl.DistributedLinearLayout(
+#   reg_bases=[],
+#   lane_bases=[[1], [2], [4], [8], [16]],
+#   warp_bases=[[32], [64]],
+#   block_bases=[],
+#   shape=[128],
+# )
+# ```
+#
+# You can see that this linear layout is a 7x7 identity matrix over the bits of
+# the 1D tensor element index, where we interpret the lower 5 bits as the lane
+# and the upper 2 bits as the warp.
+#
+# Linear layouts are extremely poweful, and can be used in conjunction with
+# higher dimensional tensors (e.g. 5D or 7D) and reshapes to perform coalesced
+# loads and efficient transformations of data within the kernel.
