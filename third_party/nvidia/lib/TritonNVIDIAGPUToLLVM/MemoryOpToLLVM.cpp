@@ -59,9 +59,9 @@ LogicalResult lowerLdStMatrix(
   auto maskSpanAffineOffset = smemObj.getMaskSpanOffsets(memDescType);
   auto llvmElemTy = typeConverter->convertType(memDescType.getElementType());
   for (bool transpose : {false, true}) {
-    auto result = lowerLdStMatrixImpl(loc, cvt, transpose, vals, smemBase,
-                                      affineOffset, maskSpanAffineOffset,
-                                      llvmElemTy, rewriter, targetInfo);
+    auto result = LLVM::NVIDIA::lowerLdStMatrix(
+        loc, cvt, transpose, vals, smemBase, affineOffset, maskSpanAffineOffset,
+        llvmElemTy, rewriter, targetInfo);
     if (succeeded(result)) {
       return result;
     }

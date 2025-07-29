@@ -134,7 +134,7 @@ Value createElectPredicateWarp0(Location loc, RewriterBase &rewriter) {
   return b.and_(warp0, createElectPredicate(loc, rewriter));
 }
 
-LogicalResult lowerLdStMatrixImpl(
+LogicalResult lowerLdStMatrix(
     Location loc, LinearLayout cvt, bool transpose,
     SmallVector<Value> &vals, // Input for stmatrix, output for ldmatrix
     Value smemBase, Value affineOffset, uint64_t maskSpanAffineOffset,

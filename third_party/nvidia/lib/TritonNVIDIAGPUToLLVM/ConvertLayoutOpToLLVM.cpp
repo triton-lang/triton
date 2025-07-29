@@ -16,7 +16,7 @@ namespace {
 using namespace mlir;
 using namespace mlir::triton;
 using namespace mlir::triton::gpu;
-using mlir::LLVM::NVIDIA::lowerLdStMatrixImpl;
+using mlir::LLVM::NVIDIA::lowerLdStMatrix;
 
 constexpr int kPtrBitWidth = 64;
 struct ConvertLayoutOpSwizzlingConversion
@@ -186,7 +186,7 @@ struct ConvertLayoutOpSwizzlingConversion
         assert(instrSt == InstrType::MatrixTrans ||
                instrSt == InstrType::Matrix);
         bool transpose = instrSt == InstrType::MatrixTrans;
-        auto result = lowerLdStMatrixImpl(
+        auto result = lowerLdStMatrix(
             loc, storeCvt, transpose, tileInVals, smemBase, affineOffset,
             maskSpanAffineOffset, llvmElemTy, rewriter, targetInfo);
         assert(succeeded(result));
@@ -202,7 +202,7 @@ struct ConvertLayoutOpSwizzlingConversion
         assert(instrLd == InstrType::MatrixTrans ||
                instrLd == InstrType::Matrix);
         bool transpose = instrLd == InstrType::MatrixTrans;
-        auto result = lowerLdStMatrixImpl(
+        auto result = lowerLdStMatrix(
             loc, loadCvt, transpose, tileOutVals, smemBase, affineOffset,
             maskSpanAffineOffset, llvmElemTy, rewriter, targetInfo);
         assert(succeeded(result));
