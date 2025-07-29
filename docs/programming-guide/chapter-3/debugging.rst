@@ -80,3 +80,85 @@ To use it, prepend :code:`compute-sanitizer` to your command to run the Triton p
 For debugging on AMD GPUs, you may want to try the LLVM `AddressSanitizer <https://rocm.docs.amd.com/projects/llvm-project/en/latest/conceptual/using-gpu-sanitizer.html>`_ for ROCm.
 
 For detailed visualization of memory access in Triton programs, consider using the `triton-viz <https://github.com/Deep-Learning-Profiling-Tools/triton-viz>`_ tool, which is agnostic to the underlying GPUs.
+
+------------------------------------
+API Migration and Troubleshooting
+------------------------------------
+
+This section covers common API issues and migration guidance for Triton users.
+
+++++++++++++++++++
+Device API Migration
+++++++++++++++++++
+
+**Issue**: The `triton.runtime.driver.active.get_active_torch_device()` method may not be available in all Triton versions, causing `AttributeError: 'CudaDriver' object has no attribute 'get_active_torch_device'`.
+
+**Solution**: Use the stable PyTorch device API instead:
+
+.. code-block:: python
+
+    # Instead of:
+    # DEVICE = triton.runtime.driver.active.get_active_torch_device()
+    
+    # Use:
+    DEVICE = torch.device("cuda:0")
+
+**Community Validation**: This workaround has been confirmed by multiple community users and works across different environments including Google Colab. For more details, see the `GitHub issue discussion <https://github.com/triton-lang/triton/issues/5388#issuecomment-3063877122>`_.
+
+**Why This Happens**: The Triton driver API has evolved across versions, and the documentation may reference APIs from unreleased versions. The PyTorch device API provides a stable, cross-platform alternative.
+
+++++++++++++++++++
+Common Error Patterns
+++++++++++++++++++
+
+**AttributeError with Driver Methods**
+
+If you encounter errors like:
+:code:`AttributeError: 'CudaDriver' object has no attribute 'method_name'`
+
+This typically indicates a version mismatch between the documentation and your installed Triton version. Check the `Triton GitHub issues <https://github.com/triton-lang/triton/issues>`_ for community solutions and workarounds.
+
+**Device Compatibility Issues**
+
+When working across different environments (local machines, Colab, cloud instances), use stable APIs:
+
+.. code-block:: python
+
+    # Recommended approach for device handling
+    import torch
+    
+    # For single GPU setups
+    DEVICE = torch.device("cuda:0")
+    
+    # For multi-GPU setups, you might want:
+    # DEVICE = torch.device("cuda", torch.cuda.current_device())
+    
+    # Verify device availability
+    if not torch.cuda.is_available():
+        raise RuntimeError("CUDA is not available")
+
+++++++++++++++++++
+Version-Specific Considerations
+++++++++++++++++++
+
+- **Triton 3.1.0+**: The `get_active_torch_device()` method may not be available
+- **Triton 3.2.0+**: Same issue persists
+- **Future versions**: Check the `release notes <https://github.com/triton-lang/triton/releases>`_ for API changes
+
+**Best Practices**:
+
+1. **Use stable APIs**: Prefer PyTorch's device API over Triton's internal driver APIs
+2. **Test across environments**: Verify your code works on different platforms
+3. **Check community resources**: The `Triton GitHub issues <https://github.com/triton-lang/triton/issues>`_ often contain solutions for common problems
+4. **Version documentation**: Consider using version-specific documentation when available
+
+++++++++++++++++++
+Getting Help
+++++++++++++++++++
+
+If you encounter issues not covered here:
+
+1. **Search existing issues**: Check the `Triton GitHub issues <https://github.com/triton-lang/triton/issues>`_
+2. **Community discussions**: Look for solutions in the issue comments
+3. **Reproduce with minimal example**: Create a minimal reproduction case
+4. **Include environment details**: Specify your Triton version, PyTorch version, and GPU setup

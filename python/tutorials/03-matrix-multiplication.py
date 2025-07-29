@@ -154,7 +154,12 @@ import torch
 import triton
 import triton.language as tl
 
-DEVICE = triton.runtime.driver.active.get_active_torch_device()
+# Note: Using torch.device("cuda:0") as workaround for 
+# triton.runtime.driver.active.get_active_torch_device() 
+# which is not available in current Triton versions.
+# This workaround has been confirmed by multiple community users:
+# https://github.com/triton-lang/triton/issues/5388#issuecomment-3063877122
+DEVICE = torch.device("cuda:0")
 
 
 def is_cuda():

@@ -9,6 +9,8 @@ Getting Started
 
 - Follow the :doc:`installation instructions <getting-started/installation>` for your platform of choice.
 - Take a look at the :doc:`tutorials <getting-started/tutorials/index>` to learn how to write your first Triton program.
+- Check the :doc:`troubleshooting guide <getting-started/troubleshooting>` if you encounter common issues.
+- Browse the :doc:`examples <getting-started/examples>` for comprehensive code patterns and best practices.
 
 .. toctree::
    :maxdepth: 1
@@ -17,12 +19,15 @@ Getting Started
 
    getting-started/installation
    getting-started/tutorials/index
+   getting-started/troubleshooting
+   getting-started/examples
 
 
 Python API
 ----------
 
 - :doc:`triton <python-api/triton>`
+- :doc:`triton.runtime <python-api/triton.runtime>` (device management, drivers)
 - :doc:`triton.language <python-api/triton.language>`
 - :doc:`triton.testing <python-api/triton.testing>`
 - :doc:`Triton semantics <python-api/triton-semantics>`
@@ -35,6 +40,7 @@ Python API
    :hidden:
 
    python-api/triton
+   python-api/triton.runtime
    python-api/triton.language
    python-api/triton.testing
    python-api/triton-semantics
@@ -59,7 +65,7 @@ Check out the following documents to learn more about Triton and how it compares
 
 - Chapter 1: :doc:`Introduction <programming-guide/chapter-1/introduction>`
 - Chapter 2: :doc:`Related Work <programming-guide/chapter-2/related-work>`
-- Chapter 3: :doc:`Debugging <programming-guide/chapter-3/debugging>`
+- Chapter 3: :doc:`Debugging <programming-guide/chapter-3/debugging>` (includes API migration and troubleshooting)
 
 .. toctree::
    :maxdepth: 1
