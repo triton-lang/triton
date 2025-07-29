@@ -158,8 +158,11 @@ def memcpy_autotune(input, output):
 # with key as (2147483648, 'torch.float32', 'torch.float32'),
 # finished after 2.06s,
 # best config selected: XBLOCK: 2048, num_warps: 1, num_ctas: 1, num_stages: 3, maxnreg: None;
-# 24.00 ms
-# 333.34 GB/s
+#
+# Benchmarking memcpy
+# ===================
+# Time:        24.00 ms
+# Throughput: 333.33 GB/s
 # ```
 #
 # Since performance is the main motiviation for writing kernels in Gluon, let's
@@ -182,5 +185,7 @@ if __name__ == "__main__":
     fn = lambda: memcpy_autotune(input, output)
     ms = triton.testing.do_bench(fn)
     gbytes = xnumel * input.element_size() >> 30
-    print(f"{ms:.2f} ms")
-    print(f"{gbytes / (ms * 1e-3):.2f} GB/s")
+    print("Benchmarking memcpy")
+    print("===================")
+    print(f"Time:        {ms:.2f} ms")
+    print(f"Throughput: {gbytes / (ms * 1e-3):.2f} GB/s")

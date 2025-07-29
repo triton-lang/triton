@@ -143,6 +143,17 @@ from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
 
 # %%
+# This is a helper for toggling specific parts of the tutorial. Run the tutorial
+# with `python 02-layouts.py` to run everything, but you can select specific
+# parts with `python 02-layouts.py R_vs_throughput,LDG_STG_instructions`.
+
+
+def _enabled(label):
+    from sys import argv
+    return len(argv) == 1 or label in argv[1].split(",")
+
+
+# %%
 # Parameterize the kernel over the layout so we can test different layouts. Each
 # program copies a block of data, but this we will use the layout to distribute
 # the work over all the threads insteead of looping.
@@ -206,18 +217,25 @@ def memcpy_1d_impl(input, output, XBLOCK, layout, num_warps):
 # Where `R` must be a power of 2.
 
 
+def get_throughput(input, ms):
+    tbytes = (input.numel() * input.element_size() >> 30) / 1024
+    return tbytes / (ms * 1e-3)
+
+
+def bench_memcpy_impl(input, output, impl):
+    compiled_kernel = impl(input, output)
+    fn = lambda: impl(input, output)
+    ms = triton.testing.do_bench(fn)
+    return compiled_kernel, get_throughput(input, ms)
+
+
 def bench_memcpy(impl):
     torch.manual_seed(0)
     xnumel = 2 << 30
     input = torch.randn(xnumel, device="cuda")
     output = torch.empty_like(input)
 
-    compiled_kernel = impl(input, output)
-    fn = lambda: impl(input, output)
-    ms = triton.testing.do_bench(fn)
-    tbytes = (xnumel * input.element_size() >> 30) / 1024
-    throughput = tbytes / (ms * 1e-3)
-    return compiled_kernel, throughput
+    return bench_memcpy_impl(input, output, impl)
 
 
 @pytest.mark.parametrize("XBLOCK", [128, 256])
@@ -237,7 +255,7 @@ def test_memcpy_1d(XBLOCK, xnumel, num_warps):
 # incurring redundant values via broadcasting is `R=16`. For smaller values,
 # the layout is tiled to fill the tensor.
 
-if __name__ == "__main__":
+if __name__ == "__main__" and _enabled("R_vs_throughput"):
     print("R vs. Throughput")
     print("================")
     XBLOCK = 2048
@@ -270,7 +288,7 @@ if __name__ == "__main__":
 # is 10x faster than copying one scalar at a time). Let's dig deeper into why
 # the layout affects performance by examining the SASS for the kernels.
 
-if __name__ == "__main__":
+if __name__ == "__main__" and _enabled("LDG_STG_instructions"):
     print("LDG/STG instructions")
     print("====================")
     for R, compiled_kernel in compiled_kernels:
@@ -334,7 +352,7 @@ if __name__ == "__main__":
 # loads is perhaps due two independent transactions, but it's hard to know for
 # sure without using a profiler.
 
-if __name__ == "__main__":
+if __name__ == "__main__" and _enabled("XBLOCK_R_vs_throughput"):
     print("(XBLOCK, R) vs. Throughput")
     print("==========================")
     num_warps = 4
@@ -374,7 +392,8 @@ if __name__ == "__main__":
 #
 # We can also conclude that `R=1` is the best layout for 1D load, and that we
 # should be using `XBLOCK=8192` instead.
-#
+
+# %%
 # With higher-dimensional tensors, picking the right layout is a lot less
 # forgiving, because the tensors can be accessed in non-contiguous ways. Let's
 # look at a 2D memcpy kernel to illustrate this.
@@ -507,13 +526,151 @@ def memcpy_2d_impl(input, output, XBLOCK, YBLOCK, layout, num_warps):
 
 @pytest.mark.parametrize("XBLOCK, YBLOCK", [(128, 256), (256, 128)])
 @pytest.mark.parametrize("xnumel, ynumel", [(100, 2000), (1000, 200)])
-@pytest.mark.parametrize("transpose", [(False, True), (True, False)])
+@pytest.mark.parametrize("transpose", [False, True])
 @pytest.mark.parametrize("num_warps", [4])
 def test_memcpy_2d(XBLOCK, YBLOCK, xnumel, ynumel, transpose, num_warps):
     torch.manual_seed(0)
     input = torch.randn((xnumel, ynumel), device="cuda")
+    # Transposing the tensor makes it non-contiguous along the inner dimension.
     input = input.T if transpose else input
     output = torch.empty_like(input)
-    layout = gl.BlockedLayout([1, 2], [1, 32], [1, num_warps], [1, 0])
+    layout = gl.BlockedLayout([1, 1], [1, 32], [1, num_warps], [1, 0])
     memcpy_2d_impl(input, output, XBLOCK, YBLOCK, layout, num_warps=num_warps)
     torch.testing.assert_close(input, output, atol=0, rtol=0)
+
+
+# %%
+# Instead of autotuning, we should just pick the layout we know will work based
+# based on our findings in 1D. Given that a 2D tensor is just a contiguous
+# memory block underneath, we can try to degenerate the 2D memcpy into the same
+# kernel as the 1D memcpy.
+
+
+def bench_memcpy_2d(impl, transposed=False):
+    # 8 GB tensor, but spread across 2 dimensions.
+    xnumel = 32 * 1024
+    ynumel = 64 * 1024
+    input = torch.randn((xnumel, ynumel), device="cuda")
+    if transposed:
+        input = input.T
+    output = torch.empty_like(input)
+    return bench_memcpy_impl(input, output, impl)
+
+
+# %%
+# Let's choose `XBLOCK=1`, which means each program will process a row vector,
+# and we can pick a blocked layout that behaves the same over this row vector
+# as the `R=1` does in 1D.
+
+if __name__ == "__main__" and _enabled("memcpy_2d_layout"):
+    print("Benchmarking 2D memcpy")
+    print("======================")
+    XBLOCK = 1
+    YBLOCK = 2048
+    layout = gl.BlockedLayout([1, 1], [1, 32], [1, 4], [1, 0])
+    impl = partial(memcpy_2d_impl, XBLOCK=XBLOCK, YBLOCK=YBLOCK, layout=layout, num_warps=4)
+    _, throughput = bench_memcpy_2d(impl)
+    print(f"Throughput: {throughput:.3f} TB/s")
+
+# %%
+# Running this yields 3.130 TB/s, which is 5% slower than the 1D memcpy. There
+# may be a variety of reasons, including the more complex 2D indexing
+# arithmetic, but let's examine the performance in more detail first.
+#
+# Our 2D memcpy kernel has another problem: the optimal layout depends on the
+# layout of the input tensor. Let's see what happens when the input tensor is
+# transposed:
+
+if __name__ == "__main__" and _enabled("memcpy_2d_layout"):
+    _, throughput = bench_memcpy_2d(impl, transposed=True)
+    print(f"Transposed throughput: {throughput:.3f} TB/s")
+
+# %%
+# Performance craters and we get 0.387 TB/s, which is almost as slow as our
+# scalar memcpy from the last tutorial. The reason is obvious: the inner
+# dimension is no longer contiguous. Simply swapping the block sizes and the
+# transposing the layout restores performance:
+
+if __name__ == "__main__" and _enabled("memcpy_2d_layout"):
+    layout = gl.BlockedLayout([1, 1], [32, 1], [4, 1], [0, 1])
+    impl = partial(memcpy_2d_impl, XBLOCK=2048, YBLOCK=1, layout=layout, num_warps=4)
+    _, throughput = bench_memcpy_2d(impl, transposed=True)
+    print(f"Fixed throughput: {throughput:.3f} TB/s")
+    print()
+
+# %%
+# This yields 3.295 TB/s, which is actually slightly faster than the 1D memcpy.
+# Each program accesses memory in the same way, which means the only variation
+# could be where the programs are scheduled.
+#
+# While we know each program accesses unique memory above the cache line size,
+# we can't completely rule out data locality as the GPU cache structure is very
+# complex with many mechanisms to improve performance. For example, the GPU
+# contains TLBs (Translation Lookaside Buffers) which cache virtual address
+# translations. GPU pages are 64KB by default, but with our chosen block sizes,
+# a program copies less than a whole page on its own. This can cause TLB misses
+# when programs that access the same page are scheduled in different SMs.
+#
+# The L2 cache is also divided into a number of partitions (16 on H100 GPUs),
+# which are mapped based on physical addresses. Scheduling can affect whether
+# kernels that access the same L2 partition are scheduled near each other.
+#
+# In a subsequent tutorial, we will explore implementing persistent kernels and
+# how they can be used to better control scheduling, among other benefits, to
+# improve performance.
+#
+# One can conclude that the 1D memcpy provides more consistent performance than
+# the 2D memcpy, but it only works if the input AND output tensors are views
+# over a contiguous memory block. The 2D memcpy shines when either input or
+# output has a more exotic layout.
+#
+# Consider a non-contiguous input tensor, which we can construct by taking a
+# view of every other row of an 8 GB tensor. We can copy this into a contiguous
+# output tensor, which is the same as performing `x.contiguous()` in PyTorch.
+
+if __name__ == "__main__" and _enabled("memcpy_2d_contig"):
+    print("Non-contiguous memcpy")
+    print("=====================")
+    # 8 GB tensor.
+    xnumel = 32 * 1024
+    ynumel = 64 * 1024
+    input = torch.randn((xnumel, ynumel), device="cuda")
+    # Take a view over every other row.
+    input = input[::2]
+    output = torch.empty_like(input)
+    assert not input.is_contiguous() and output.is_contiguous()
+
+    # Benchmark 2D memcpy.
+    layout = gl.BlockedLayout([1, 1], [1, 32], [1, 4], [1, 0])
+    impl = partial(memcpy_2d_impl, XBLOCK=1, YBLOCK=2048, layout=layout, num_warps=4)
+    _, throughput = bench_memcpy_impl(input, output, impl)
+    print(f"2D memcpy: {throughput:.3f} TB/s")
+
+    # Benchmark PyTorch contiguous.
+    fn = lambda: input.contiguous()
+    ms = triton.testing.do_bench(fn)
+    throughput = get_throughput(input, ms)
+    print(f"torch.Tensor.contiguous: {throughput:.3f} TB/s")
+
+    # We can eke out even more performance by using the transposed "trick".
+    layout = gl.BlockedLayout([1, 1], [32, 1], [4, 1], [0, 1])
+    impl = partial(memcpy_2d_impl, XBLOCK=2048, YBLOCK=1, layout=layout, num_warps=4)
+    _, throughput = bench_memcpy_impl(input.T, output.T, impl)
+    print(f"2D memcpy (transposed): {throughput:.3f} TB/s")
+
+# %%
+# The results from the benchmark:
+#
+# ```
+# Non-contiguous memcpy
+# =====================
+# 2D memcpy: 3.129 TB/s
+# torch.Tensor.contiguous: 1.473 TB/s
+# 2D memcpy (transposed): 3.199 TB/s
+# ```
+#
+# So our 2D memcpy provides similar performance even when the input tensor has
+# an exotic layout. It's already over 2x faster than the PyTorch implementation
+# of `Tensor.contiguous`. And we also see that applying the transposition
+# "trick" we "learned" through experimentation results in slightly more
+# performance.
