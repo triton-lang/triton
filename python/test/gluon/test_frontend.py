@@ -20,8 +20,8 @@ TARGET_PAT = re.compile('ttg.target = "[^"]*"')
 PTRRANGE_PAT = re.compile('(, )?tt.pointer_range = 32 : i32')
 
 BLACKWELL_TARGET = GPUTarget("cuda", 100, 32)
-HOPPER_TARGET = GPUTarget("cuda", 100, 32)
-AMPERE_TARGET = GPUTarget("cuda", 100, 32)
+HOPPER_TARGET = GPUTarget("cuda", 90, 32)
+AMPERE_TARGET = GPUTarget("cuda", 80, 32)
 HIP_TARGET = GPUTarget("hip", "gfx1200", 32)
 
 ALL_TARGETS = [AMPERE_TARGET, HOPPER_TARGET, BLACKWELL_TARGET, HIP_TARGET]
