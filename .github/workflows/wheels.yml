@@ -89,36 +89,8 @@ jobs:
           name: cibw-wheels-manylinux_2_28_${{ matrix.config.arch }}-wheels-upload
           path: ./wheelhouse/*.whl
 
-      - name: Install Azure CLI
-        if: ${{ steps.check-version.outputs.new_commit == 'true' }}
+      - name: Upload wheels to PyPI
+        if: ${{ matrix.config.arch == 'x86_64' }}
         run: |
-          curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
-
-      - name: Azure login
-        if: ${{ steps.check-version.outputs.new_commit == 'true' }}
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-      - id: generate-token
-        name: Generate token
-        if: ${{ steps.check-version.outputs.new_commit == 'true' }}
-        run: |
-          AZ_TOKEN=$(az account get-access-token --query accessToken)
-          echo "::add-mask::$AZ_TOKEN"
-          echo "access_token=$AZ_TOKEN" >> "$GITHUB_OUTPUT"
-
-      - name: Publish wheels to Azure DevOps
-        if: ${{ steps.check-version.outputs.new_commit == 'true' }}
-        run: |
-          python3 -m pip install twine
-          python3 -m twine upload -r Triton-Nightly -u TritonArtifactsSP -p ${{ steps.generate-token.outputs.access_token }} --config-file utils/nightly.pypirc --non-interactive --verbose wheelhouse/*
-
-      - name: Azure Logout
-        if: ${{ steps.check-version.outputs.new_commit == 'true' && (success() || failure()) }}
-        run: |
-          az logout
-          az cache purge
-          az account clear
+          python3 -m pip install twine --upgrade --user
+          python3 -m twine upload wheelhouse/* -u __token__ -p ${{ secrets.PYPY_API_TOKEN }}
