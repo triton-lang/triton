@@ -118,15 +118,6 @@ private:
     return false;
   }
 
-  static SmallVector<int> getEqualIndices(ArrayRef<int64_t> x,
-                                          ArrayRef<int64_t> y) {
-    SmallVector<int> res;
-    for (int i = 0; i < x.size(); ++i)
-      if (x[i] == y[i])
-        res.push_back(i);
-    return res;
-  }
-
 public:
   CombineBroadcastMulReducePattern(MLIRContext *context)
       : RewritePattern(ReduceOp::getOperationName(), 1, context) {}
