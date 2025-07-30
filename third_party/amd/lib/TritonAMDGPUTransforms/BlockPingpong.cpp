@@ -919,9 +919,9 @@ void Pingponger::getDotPingponged() {
     auto aShape = aType.getShape();
     auto elemWidth = aType.getElementTypeBitWidth();
 
-    // 256x256x256 (128xi8)
+    // MxN = 256x256
     if (scaledDotShape[0] == 256 && scaledDotShape[1] == 256 &&
-        aShape[1] == 128 && elemWidth == 8) {
+        elemWidth == 8) {
       if (transformTwoClusterWithAsyncAndAll(builder, scaledDotOps[0]->getLoc())
               .failed()) {
         LDBG("Encountered failure when trying to execute the"
@@ -966,7 +966,7 @@ void Pingponger::getDotPingponged() {
       return;
     }
     if (numStages > 2 && dotOps.size() == 1 && dotShape[0] > 64 &&
-        dotShape[1] > 64 && elemWidth == 16) {
+        dotShape[1] > 64 && (elemWidth == 16 || elemWidth == 8)) {
       if (transformTwoClusterWithLocalLoadAndAll(builder, loc).failed()) {
         LDBG("Encountered failure when trying to execute the "
              "TwoClusterWithLocalLoadAndAll transformation");
