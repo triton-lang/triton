@@ -261,7 +261,7 @@ if __name__ == "__main__" and _enabled("R_vs_throughput"):
     print()
 
 # %%
-# Running this on B200, we obtain
+# Running this on GB200, we obtain
 #
 # ```
 # R=1   3.287 TB/s
