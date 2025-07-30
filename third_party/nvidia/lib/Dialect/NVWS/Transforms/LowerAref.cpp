@@ -643,6 +643,8 @@ template <> struct ArefIndex<> {
 } // anonymous namespace
 
 class NVWSLowerAref : public impl::NVWSLowerArefBase<NVWSLowerAref> {
+   using impl::NVWSLowerArefBase<NVWSLowerAref>::NVWSLowerArefBase;
+
 public:
   void runOnOperation() override {
     MLIRContext *context = &getContext();
