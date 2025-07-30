@@ -747,14 +747,14 @@ public:
   }
 };
 
-template <typename Op> Op getNextOp(Value op) {
+template <typename Op> Op getDefOpBeforeConvertLayout(Value op) {
   while (auto cvtOp = op.getDefiningOp<ttg::ConvertLayoutOp>()) {
     op = cvtOp.getSrc();
   }
   return op.getDefiningOp<Op>();
 }
 
-bool scalePreshuffled(Value scale) {
+bool isScaleShuffled(Value scale) {
   if (!scale) {
     return false;
   }
@@ -766,23 +766,25 @@ bool scalePreshuffled(Value scale) {
   // 1 scale always scales 32 elements along K dim
   int blockK = shape[rank - 1] * 32;
 
-  auto reshapeOp2D = getNextOp<triton::ReshapeOp>(scale);
-  if (!reshapeOp2D || reshapeOp2D.getResult().getType().getShape() != shape) {
+  auto reshapeOp2D = getDefOpBeforeConvertLayout<triton::ReshapeOp>(scale);
+  if (!reshapeOp2D || reshapeOp2D.getType().getShape() != shape) {
     return false;
   }
 
-  const SmallVector<int> transposeOrder{0, 5, 3, 1, 4, 2, 6};
-  auto transOp = getNextOp<triton::TransOp>(reshapeOp2D.getSrc());
+  const std::array<int, 7> transposeOrder{0, 5, 3, 1, 4, 2, 6};
+  auto transOp =
+      getDefOpBeforeConvertLayout<triton::TransOp>(reshapeOp2D.getSrc());
   if (!transOp || transOp.getOrder() != ArrayRef<int>(transposeOrder)) {
     return false;
   }
 
-  const SmallVector<int64_t> reshape7DShape{
+  const std::array<int64_t, 7> reshape7DShape{
       blockNonK / 32, blockK / 32 / 8, 4, 16, 2, 2, 1};
-  auto reshapeOp7D = getNextOp<triton::ReshapeOp>(transOp.getSrc());
+  auto reshapeOp7D =
+      getDefOpBeforeConvertLayout<triton::ReshapeOp>(transOp.getSrc());
 
-  if (!reshapeOp7D || reshapeOp7D.getResult().getType().getShape() !=
-                          ArrayRef<int64_t>(reshape7DShape)) {
+  if (!reshapeOp7D ||
+      reshapeOp7D.getType().getShape() != ArrayRef<int64_t>(reshape7DShape)) {
     return false;
   }
 
@@ -790,7 +792,7 @@ bool scalePreshuffled(Value scale) {
 }
 
 SmallVector<unsigned, 2> getTilesPerWarp(Value aScale, Value bScale) {
-  if (scalePreshuffled(aScale) || scalePreshuffled(bScale)) {
+  if (isScaleShuffled(aScale) || isScaleShuffled(bScale)) {
     return {2, 2};
   }
   return {1, 1};

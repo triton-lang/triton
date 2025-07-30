@@ -579,7 +579,8 @@ def _gemm_afp4_wfp4_kernel_preshuffled_scales_cdna4(a_ptr, b_ptr, c_ptr, a_scale
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 128, 256), (64, 64, 512), [32, 32, 64]])
 @pytest.mark.parametrize("mfma_nonkdim", [16, 32])
 @pytest.mark.parametrize("preshuffle", [True, False])
-@pytest.mark.skipif(is_hip() and not is_hip_cdna4(), reason="Requires hardware support for scaled mfma instructions")
+@pytest.mark.skipif(is_cuda() and torch.cuda.get_device_capability()[0] == 10, reason="Compilation bug for GB200.")
+@pytest.mark.skipif(is_hip() and not is_hip_cdna4(), reason="Scaled dot is not emulated on other archs yet.")
 def test_preshuffle_scale_mxfp_cdna4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, mfma_nonkdim, preshuffle, device):
     # This test primarily evaluates correctness for efficient scale packing for MFMA-scaled instructions.
     #
