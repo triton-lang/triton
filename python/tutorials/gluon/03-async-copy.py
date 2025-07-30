@@ -338,4 +338,13 @@ if __name__ == "__main__":
     print(f"elementwise_add_pipelined: {ms:.2f} ms")
 
 # %%
-# This yields a modest speedup, resulting in 2.79 ms.
+# This yields a modest speedup, resulting in 2.79 ms. Pipelining becomes more
+# important when the compute in the inner loop starts to become more expensive.
+#
+# One of the major issues getting in the way of more performance is register
+# pressure. For each element, we need to store the 32B result, compute a 64B
+# address, and the mask. With two inputs, this results in a lot of registers,
+# we the maximum registers per thread is 256. This is why we used a small
+# [32, 64] block size for the kernel. In the next tutorial, we will cover
+# tensor descriptors and TMAs, and how they can help reduce register pressure
+# at the cost of addressing flexibility.
