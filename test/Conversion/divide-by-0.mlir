@@ -1,4 +1,4 @@
-// RUN: triton-opt %s --allocate-shared-memory --convert-triton-gpu-to-llvm --cse | FileCheck %s
+// RUN: triton-opt %s --allocate-shared-memory-nv --convert-triton-gpu-to-llvm --cse | FileCheck %s
 
 // CHECK-LABEL: dont_divide_0
 // CHECK: %[[C0:.*]] = llvm.mlir.constant(0 : i32) : i32

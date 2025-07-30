@@ -338,7 +338,7 @@ class CUDABackend(BaseBackend):
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)
         passes.ttgpuir.add_allocate_warp_groups(pm)
         passes.convert.add_scf_to_cf(pm)
-        passes.ttgpuir.add_allocate_shared_memory(pm)
+        nvidia.passes.ttgpuir.add_allocate_shared_memory_nv(pm, capability, ptx_version)
         nvidia.passes.ttnvgpuir.add_allocate_tensor_memory(pm)
         if knobs.compilation.enable_experimental_consan:
             # Call ConcurrencySanitizerPass here, before allocating global scratch memory but after allocating tensor and shared

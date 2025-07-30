@@ -143,7 +143,9 @@ jobs:
             cd ../../triton_kernels/
             python3 -m pytest -s -n 12 tests/
           fi
-
+      - name: Run distributed tests
+        run: |
+          make test-distributed
       - name: Run asan tests on AMD
         if: false
         run: |
