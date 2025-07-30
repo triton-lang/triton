@@ -644,14 +644,15 @@ struct AtomicCASOpConversion
       }
 
       Value casVal = b.undef(vecTy);
+      Value cmpVal = b.undef(vecTy);
       for (int ii = 0; ii < vec; ++ii) {
         Value iiVal = createIndexAttrConstant(
             rewriter, loc, getTypeConverter()->getIndexType(), ii);
         casVal = b.insert_element(vecTy, casVal, valElements[i + ii], iiVal);
+        cmpVal = b.insert_element(vecTy, cmpVal, cmpElements[i + ii], iiVal);
       }
 
       Value casPtr = ptrElements[i];
-      Value casCmp = cmpElements[i];
       PTXBuilder ptxBuilderAtomicCAS;
       std::string tyId = valueElemNBits * vec == 64
                              ? "l"
