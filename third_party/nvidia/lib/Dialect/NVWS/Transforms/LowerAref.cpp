@@ -463,7 +463,7 @@ bool isProducerLoad(ArefCreateOp arefOp) {
     if (auto putOp = dyn_cast<ArefPutEnterOp>(user)) {
       auto loop = putOp->getParentOfType<scf::ForOp>();
       if (!loop) {
-	continue;
+        continue;
       }
       if (loop.getOps<nvws::DescriptorLoadOpInterface>().empty()) {
         return true;
@@ -501,7 +501,6 @@ void multiBufferAref(const SmallVector<ArefCreateOp> &arefOps, int numStages) {
           getMultiBufferedType(getBufferViewType(arefBufType, true), numStages);
       Operation *newAlloc = triton::nvws::createAlloc(
           builder, oldAlloc->getLoc(), arefBufType, Value());
-      newAlloc->setAttr("aref_buffer", builder.getUnitAttr());
       allocOps.push_back(newAlloc->getResult(0));
       arefTypes.push_back(arefBufType);
       oldAlloc->replaceAllUsesWith(newAlloc);
@@ -784,7 +783,8 @@ void createCombinedArefOps(SmallVector<EnterOp> &enterOps,
 
   builder.setInsertionPoint(firstEnter);
   auto enter = builder.create<EnterOp>(firstEnter.getLoc(), arefEnterBuffers,
-                                       aref, zero, zero);
+                                       builder.getType<AsyncTokenType>(), aref,
+                                       zero, zero);
   assignStageCluster(enter, getStageCluster(firstEnter), builder);
 
   builder.setInsertionPoint(lastExit);
@@ -890,14 +890,14 @@ void combineArefs(scf::ForOp loop) {
     createCombinedArefOps(putEnterOps, putExitOps, aref, builder);
     createCombinedArefOps(getEnterOps, getExitOps, aref, builder);
 
-    for (auto putEnterOp : putEnterOps)
-      putEnterOp->erase();
     for (auto putExitOp : putExitOps)
       putExitOp->erase();
-    for (auto getEnterOp : getEnterOps)
-      getEnterOp->erase();
+    for (auto putEnterOp : putEnterOps)
+      putEnterOp->erase();
     for (auto getExitOp : getExitOps)
       getExitOp->erase();
+    for (auto getEnterOp : getEnterOps)
+      getEnterOp->erase();
     for (auto aref : arefs)
       aref->erase();
   }
