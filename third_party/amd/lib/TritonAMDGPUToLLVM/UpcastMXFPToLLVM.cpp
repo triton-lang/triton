@@ -183,8 +183,8 @@ SmallVector<Value, 8> upcastMxfp4_SW(RewriterBase &rewriter,
       upcast8xMxfp4_SW(rewriter, upcastOp, toFp16, packedVec);
   for (int j = 0; j < 4; j++) {
     Value elements = b.bitcast(v4i32[j], vec_ty(elemType, 2));
-    results[2 * j] = b.extract_element(elements, b.i32_val(0));
-    results[2 * j + 1] = b.extract_element(elements, b.i32_val(1));
+    results.push_back(b.extract_element(elements, b.i32_val(0)));
+    results.push_back(b.extract_element(elements, b.i32_val(1)));
   }
   return results;
 }
@@ -364,10 +364,10 @@ static void upcast4xMxfp8(RewriterBase &rewriter, Location loc,
     }
   } else {
     for (int i = 0; i < 4; i++) {
-      auto result =
-          useFp16
-              ? mxfpScaleFp16(rewriter, loc, xVals[i], scale, fastMath)
-              : mxfpScaleBf16ViaF32(rewriter, loc, xVals[i], scale, fastMath);
+      auto result = useFp16 ? mxfpScaleFp16(rewriter, loc, xVals[idx + i],
+                                            scale, fastMath)
+                            : mxfpScaleBf16ViaF32(rewriter, loc, xVals[idx + i],
+                                                  scale, fastMath);
       yVals.push_back(result);
     }
   }
