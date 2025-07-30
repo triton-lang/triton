@@ -33,6 +33,9 @@ def LayoutEncodingTrait : AttrInterface<"LayoutEncodingTrait"> {
                     "getCTASplitNum", (ins), [{}], [{
       return llvm::to_vector($_attr.getCTALayout().getCTASplitNum());
     }]>,
+    InterfaceMethod<"Get the rank of the layout.", "unsigned", "getRank", (ins), [{}], [{
+      return $_attr.getCTAOrder().size();
+    }]>
   ];
 }
 def DeclareLayoutEncodingMethods : DeclareAttrInterfaceMethods<
@@ -158,9 +161,7 @@ addition, if there's only one CTA per CGA, then Triton canonicalizes CTAOrder to
         CTAOrder.push_back(i);
       return get(context, CTAsPerCGA, CTASplitNum, CTAOrder);
     }
-    unsigned getRank() const {
-      return getCTAOrder().size();
-    }
+    unsigned getRank() const { return getCTAOrder().size(); }
   }];
 
   let genVerifyDecl = 1;
@@ -362,9 +363,6 @@ When vec=2, elements are swizzled in pairs of 2.  In other words, the element at
     }]>,
   ];
 
-  let extraClassDeclaration = extraBaseClassDeclaration # [{
-    unsigned getRank() const { return getCTAOrder().size(); }
-  }];
   let hasCustomAssemblyFormat = 1;
   let genVerifyDecl = 1;
 }
@@ -432,8 +430,6 @@ attributes too, for example,
   ];
 
   let extraClassDeclaration = extraBaseClassDeclaration # [{
-    unsigned getRank() const { return getOrder().size(); }
-
     unsigned getMinInterval() const {
       return *llvm::min_element(getIntervals());
     }
@@ -506,7 +502,6 @@ def NVMMASharedEncodingAttr : TritonGPU_Attr<"NVMMASharedEncoding", "nvmma_share
   ];
 
   let extraClassDeclaration = extraBaseClassDeclaration # [{
-    unsigned getRank() const { return getCTAOrder().size(); }
     int getPerPhase() const;
     int getMaxPhase() const;
     int getVec() const;
@@ -608,9 +603,6 @@ Swizzling examples (matrix is filled with numbers 0, 1, 2, .. columns*rows-1):
     "CTALayoutAttr":$CTALayout
   );
 
-  let extraClassDeclaration = extraBaseClassDeclaration # [{
-    unsigned getRank() const { return getCTAOrder().size(); }
-  }];
   let hasCustomAssemblyFormat = 1;
 }
 
@@ -704,7 +696,6 @@ L(T) = [ {0,8} , {1,9} , {2,10}, {3,11}, {0,8} , {1, 9} , {2, 10}, {3, 11},
   }];
 
   code extraDistributedDeclaration  = extraBaseClassDeclaration # [{
-    unsigned getRank() const { return getCTAOrder().size(); }
     // Implemented in subclasses
     SmallVector<unsigned> getRepOrder() const;
 
