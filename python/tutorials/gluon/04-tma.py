@@ -107,8 +107,10 @@ def memcpy_1d_tma_kernel(in_desc, out_desc, XBLOCK: gl.constexpr):
     tma.async_copy_shared_to_global(out_desc, [pid * XBLOCK], smem)
 
     # Unlike TMA reads, the completion of TMA stores is tracked by commit
-    # groups, much like async copy. Async TMA stores are implicitly committed to
-    # a group, thus we wait by waiting until there are 0 pending TMA stores.
+    # groups, just like async copies. Each async TMA store is implicitly
+    # committed to an async store group. We can wait until there are at most
+    # `pendings` outstanding TMA stores using `store_wait`. Note that the commit
+    # groups for async copy and async TMA stores are separate.
     tma.store_wait(pendings=0)
 
 
@@ -273,25 +275,21 @@ if __name__ == "__main__":
 
     XBLOCK = 32
     YBLOCK = 64
+    num_buffers = 2
 
-    ms = triton.testing.do_bench(lambda: t3.elementwise_add_pipelined(A, B, C, XBLOCK, YBLOCK))
+    ms = triton.testing.do_bench(lambda: t3.elementwise_add_pipelined(A, B, C, XBLOCK, YBLOCK, num_buffers))
     print(f"elementwise_add_pipelined: {ms:.2f} ms")
 
-    ms = triton.testing.do_bench(lambda: elementwise_add_tma(A, B, C, XBLOCK, YBLOCK, num_buffers=2))
-    print(f"elementwise_add_tma (double buffer): {ms:.2f} ms")
-    ms = triton.testing.do_bench(lambda: elementwise_add_tma(A, B, C, XBLOCK, YBLOCK, num_buffers=3))
-    print(f"elementwise_add_tma (triple buffer): {ms:.2f} ms")
+    ms = triton.testing.do_bench(lambda: elementwise_add_tma(A, B, C, XBLOCK, YBLOCK, num_buffers))
+    print(f"elementwise_add_tma: {ms:.2f} ms")
 
 # %%
 # ```
 # elementwise_add_pipelined: 2.79 ms
-# elementwise_add_tma (double buffer): 2.13 ms
-# elementwise_add_tma (triple buffer): 2.04 ms
+# elementwise_add_tma: 2.13 ms
 # ```
 #
-# Switching to TMAs already yields a large performance boost. We also observe
-# modest speedups by increasing the pipeline depth, which is not something we
-# observed with the async copy kernel.
+# Switching to TMAs already yields a large performance boost.
 #
 # Since our kernel has more register room, we can increase the block size. In
 # practice, peak register usage will remain low, because the compiler will
@@ -314,5 +312,15 @@ if __name__ == "__main__":
 # elementwise_add_tma (64x128x3): 2.04 ms
 # ```
 #
-# It does not get any faster, suggesting performance has bottomed out for this
-# implementation.
+# We get another modest speedup by increasing the block size and pipeline depth.
+#
+# Main takeaways:
+#
+# - TMAs use a separate, often faster, hardware path for transferring between
+#   shared and global memory.
+# - TMA instructions are asynchronous; we use mbarriers to track completion of
+#   reads and commit groups to track completion of stores.
+# - TMAs reduce register pressure but restrict addressing flexibility. Depending
+#   on the layout of global tensors, it may not be possible to use TMAs.
+# - TMA instructions can be pipelined, but require explicit synchronization
+#   between the async proxy and generic proxy.

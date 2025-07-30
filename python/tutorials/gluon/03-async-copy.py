@@ -369,3 +369,14 @@ if __name__ == "__main__":
 # [32, 64] block size for the kernel. In the next tutorial, we will cover
 # tensor descriptors and TMAs, and how they can help reduce register pressure
 # at the cost of addressing flexibility.
+#
+# Main takeaways:
+#
+# - Asynchronous instructions allow overlapping memory operations with compute.
+# - Async copies enable asynchronous global memory reads, and are tracked with
+#   commit groups.
+# - Software pipelining is a loop optimization technique that is used to overlap
+#   async operations.
+# - Shared memory layouts affect performance just like tensor layouts. It is
+#   important to choose a layout that minimizes bank conflicts, which is also a
+#   function of the register layout.

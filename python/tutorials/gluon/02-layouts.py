@@ -875,3 +875,12 @@ if __name__ == "__main__" and _enabled("memcpy_2d_inout"):
 # Linear layouts are extremely poweful, and can be used in conjunction with
 # higher dimensional tensors (e.g. 5D or 7D) and reshapes to perform coalesced
 # loads and efficient transformations of data within the kernel.
+#
+# Main takeaways:
+#
+# - Gluon requires explicit layout management, and there many kinds of layouts
+#   in Gluon that serve different purposes.
+# - Layouts affect performance, sometimes dramatically. Layouts affect
+#   performance of global memory accesses, operations that may reuquire
+#   inter-thread communication, among other things.
+# - Layouts are powerful tools for writing flexible yet performant kernels.
