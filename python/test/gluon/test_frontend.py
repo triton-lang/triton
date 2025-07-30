@@ -1205,7 +1205,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %8 = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared, #smem, mutable> loc(#loc)
     ttng.async_copy_mbarrier_arrive %8 : !ttg.memdesc<1xi64, #shared, #smem, mutable> loc(#loc)
     ttng.async_copy_mbarrier_arrive %8 {noIncrement} : !ttg.memdesc<1xi64, #shared, #smem, mutable> loc(#loc)
-    %9 = ttg.async_commit_group  loc(#loc)
+    %9 = ttg.async_commit_group loc(#loc)
     %10 = ttg.async_wait  {num = 0 : i32} loc(#loc)
     tt.return loc(#loc)
   } loc(#loc)
