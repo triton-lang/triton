@@ -39,7 +39,7 @@ test-unit: all
 	TRITON_DISABLE_LINE_INFO=0 $(PYTEST) -s python/test/unit/language/test_line_info.py
 	# Run attention separately to avoid out of gpu memory
 	$(PYTEST) -vs python/tutorials/06-fused-attention.py
-	$(PYTEST) -vs python/tutorials/gluon/01-intro.py python/tutorials/gluon/02-layouts.py
+	$(PYTEST) -vs python/tutorials/gluon/01-intro.py python/tutorials/gluon/02-layouts.py python/tutorials/gluon/03-persistence.py
 	$(PYTEST) -vs python/examples/gluon/01-attention-forward.py
 	TRITON_ALWAYS_COMPILE=1 TRITON_DISABLE_LINE_INFO=0 LLVM_PASS_PLUGIN_PATH=python/triton/instrumentation/libGPUInstrumentationTestLib.so \
 		$(PYTEST) --capture=tee-sys -rfs -vvv python/test/unit/instrumentation/test_gpuhello.py
