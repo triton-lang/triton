@@ -71,7 +71,7 @@ jobs:
 
           # required to build Python 3.14 with cibuildwheel 2.23.3
           # todo: Need to update system Python to 3.11 and update cibuildwheel to latest
-          export CIBW_ENABLE=cpython-prerelease
+
 
           # many_linux_2_28 image comes with GCC 12.2.1, but not clang.
           # With this install, it gets clang 16.0.6.
@@ -86,6 +86,7 @@ jobs:
           export CIBW_BUILD="cp3{9,10,11,12,13,13t,14,14t}-manylinux_${{ matrix.config.arch }}"
           export CIBW_SKIP="cp{35,36,37,38}-*"
           export CIBW_FREE_THREADED_SUPPORT=1
+          export CIBW_PRERELEASE_PYTHONS=1
           python3 -m cibuildwheel . --output-dir wheelhouse
 
       - uses: actions/upload-artifact@v4
