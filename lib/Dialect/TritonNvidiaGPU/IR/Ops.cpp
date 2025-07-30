@@ -480,6 +480,18 @@ void TCGen5MMAScaledOp::build(OpBuilder &builder, OperationState &state,
 }
 
 // -- TMEMStoreOp --
+static LogicalResult verifyTMEMShape(Operation *op, RankedTensorType type,
+                                     MemDescType memdesc, StringRef regName) {
+  if (type.getRank() != 2)
+    return op->emitOpError(regName) << " must be a 2D tensor";
+  if (isa<TensorMemoryScalesEncodingAttr>(memdesc.getEncoding()) &&
+      !type.getElementType().isInteger(8)) {
+    return op->emitOpError(regName)
+           << " expected to be a tensor of i8 for MMA scales encoding";
+  }
+  return success();
+}
+
 LogicalResult TMEMStoreOp::verify() {
   if (!isa<triton::nvidia_gpu::TensorMemorySpaceAttr>(
           getDst().getType().getMemorySpace()))
@@ -490,6 +502,9 @@ LogicalResult TMEMStoreOp::verify() {
   if (!getDst().getType().getMutableMemory()) {
     return emitOpError("Cannot store into an immutable alloc");
   }
+  if (failed(verifyTMEMShape(*this, getSrc().getType(), getDst().getType(),
+                             "source")))
+    return failure();
   return triton::gpu::verifyMemoryOpTypes(*this, getSrc().getType(),
                                           getDst().getType());
 }
@@ -502,6 +517,8 @@ LogicalResult TMEMLoadOp::verify() {
   if (!isa<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
           getSrc().getType().getEncoding()))
     return emitOpError("should use tensor memory encoding.");
+  if (failed(verifyTMEMShape(*this, getType(), getSrc().getType(), "result")))
+    return failure();
   return triton::gpu::verifyMemoryOpTypes(*this, getSrc().getType(), getType());
 }
 
@@ -512,6 +529,9 @@ LogicalResult TMEMAllocOp::verify() {
   if (!isa<TensorMemoryEncodingAttr, TensorMemoryScalesEncodingAttr>(
           getType().getEncoding()))
     return emitOpError("should use tensor memory encoding");
+  if (getSrc() &&
+      failed(verifyTMEMShape(*this, getSrc().getType(), getType(), "source")))
+    return failure();
   return triton::gpu::verifyAllocOp(*this, getSrc(), getType());
 }
 
