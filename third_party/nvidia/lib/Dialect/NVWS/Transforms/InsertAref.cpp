@@ -329,7 +329,12 @@ void createArefGet(PartitionBuilder &builder, scf::ForOp loop,
   Operation *exitInsertPointAfter = nullptr;
   for (auto result : results) {
     if (auto memDescType = dyn_cast<MemDescType>(result.getType())) {
-      replaceUsesAndPropagateType(builder, result.getDefiningOp(), dataBuf);
+      auto callback = [&](Operation *oldOp, Operation *newOp) {
+        assert(schedule.getPartition(oldOp) == consumerPartition);
+        schedule.insert(consumerPartition, newOp);
+      };
+      replaceUsesAndPropagateType(builder, result.getDefiningOp(), dataBuf,
+                                  callback);
     } else if (auto tensorType = dyn_cast<RankedTensorType>(result.getType())) {
       auto localLoadOp = builder.createInto<LocalLoadOp>(
           *consumerPartition, stageClusterEnter, tensorType, dataBuf);
