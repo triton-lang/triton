@@ -197,7 +197,9 @@ SmallVector<Operation *> createArefPut(PartitionBuilder &builder,
       llvm_unreachable("Aref for values not supported yet");
     }
   } else {
-    llvm_unreachable("unsupported type");
+    std::string msg = "unsupported produced value type: " +
+                      mlir::debugString(result.getType());
+    llvm::report_fatal_error(msg.c_str());
   }
 
   auto c0Exit = builder.intCst(0);
@@ -339,7 +341,9 @@ void createArefGet(PartitionBuilder &builder, scf::ForOp loop,
         exitInsertPointAfter = localLoadOp;
       }
     } else {
-      llvm_unreachable("unsupported type");
+      std::string msg = "unsupported produced value type: " +
+                        mlir::debugString(result.getType());
+      llvm::report_fatal_error(msg.c_str());
     }
   }
 
