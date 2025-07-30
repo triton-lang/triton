@@ -519,13 +519,11 @@ LogicalResult GlobalLoadTransposeOp::verify() {
   auto srcShape = srcTy.getShape();
   auto dstShape = dstTy.getShape();
   if (srcShape.size() != 2)
-    return emitOpError("src needs to be two dimensional");
-  if (dstShape.size() != 2)
-    return emitOpError("dst needs to be two dimensional");
+    return emitOpError("shape needs to be two dimensional");
 
   auto dstElemTy = dstTy.getElementType();
   if (!dstElemTy.isIntOrFloat() || dstElemTy.getIntOrFloatBitWidth() != 16) {
-    emitOpError("Datatype needs to be 16bit");
+    emitOpError("datatype needs to be 16bit");
   }
   if (getPointeeType(srcTy.getElementType()) != dstTy.getElementType()) {
     emitOpError("result element type needs to match the pointed type of ptr");
@@ -534,26 +532,33 @@ LogicalResult GlobalLoadTransposeOp::verify() {
   MLIRContext *ctx = srcTy.getContext();
   auto kReg = StringAttr::get(ctx, "register");
   auto kLane = StringAttr::get(ctx, "lane");
+
   SmallVector<StringAttr> outDims = standardOutDimNames(ctx, 2);
   LinearLayout srcLayout =
       triton::gpu::toLinearLayout(srcTy).transposeOuts(outDims);
   LinearLayout dstLayout =
       triton::gpu::toLinearLayout(dstTy).transposeOuts(outDims);
-  std::array<LinearLayout, 2> tile = {
+  // Create an 8x8 subtile across the register and lane dimension and its
+  // transpose
+  std::array<LinearLayout, 2> subtile = {
       LinearLayout::identity1D(8, kReg, outDims[0]) *
           LinearLayout::identity1D(8, kLane, outDims[1]),
       (LinearLayout::identity1D(8, kReg, outDims[1]) *
        LinearLayout::identity1D(8, kLane, outDims[0]))
           .transposeOuts(outDims)};
 
+  // We need to check that the address layout tiles the tensor with 8x8 subtiles
+  // and that the data layout is identical, apart from each subtile being
+  // transposed. This check succeeds if one of the two subtiles successfully
+  // divides srcLayout and the other successfully divides dstLayout.
   auto valid_and_equal = [](std::optional<LinearLayout> a,
                             std::optional<LinearLayout> b) {
     return a.has_value() && a == b;
   };
-  if (!valid_and_equal(divideLeft(srcLayout, tile[0]),
-                       divideLeft(dstLayout, tile[1])) &&
-      !valid_and_equal(divideLeft(srcLayout, tile[1]),
-                       divideLeft(dstLayout, tile[0]))) {
+  if (!valid_and_equal(divideLeft(srcLayout, subtile[0]),
+                       divideLeft(dstLayout, subtile[1])) &&
+      !valid_and_equal(divideLeft(srcLayout, subtile[1]),
+                       divideLeft(dstLayout, subtile[0]))) {
     return emitOpError("src and dst layout need to be equal apart from "
                        "transposing each 8x8 register/lane block");
   }

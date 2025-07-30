@@ -146,11 +146,12 @@ def TritonAMDGPUConvertToBufferOps : Pass<"tritonamdgpu-convert-buffer-ops", "ml
   ];
 }
 
-def TritonAMDGPUConvertToTransposeLoads : Pass<"tritonamdgpu-convert-transpose-loads", "mlir::ModuleOp"> {
-  let summary = "Replace tt.load operations with amdgpu.load_warp_transpose when possible";
+def TritonAMDGPUConvertToTransposeLoads : Pass<"tritonamdgpu-convert-transpose-loads", "mlir::triton::FuncOp"> {
+  let summary = "Replace tt.load operations with amdgpu.global_load_transpose when possible";
 
-  let description = [{This pass analyses tt.load operations and, depending on the layout conversions to dot_op, determines
-  if it would be beneficial to use transpose loads to improve vectorization.}];
+  let description = [{This pass analyzes tt.load --> ttg.convert_layout chains and replaces the load with
+    amdgpu.global_load_transpose if it improves vectorization of shared memory operations
+  }];
 
   let dependentDialects = ["mlir::triton::amdgpu::TritonAMDGPUDialect"];
 }

@@ -759,51 +759,74 @@ LinearLayout chooseDotDsReadB64TrLayout(DotOperandEncodingAttr dotMfmaLayout,
 
 std::pair<LinearLayout, LinearLayout>
 chooseGlobalLoadTrLayout(Attribute enc, ArrayRef<int64_t> shape) {
-  auto dotOpEncoding = cast<DotOperandEncodingAttr>(enc);
-  auto wmmaEncoding = cast<AMDWmmaEncodingAttr>(dotOpEncoding.getParent());
-  StringAttr kRegister =
-      StringAttr::get(dotOpEncoding.getContext(), "register");
-  StringAttr kLane = StringAttr::get(dotOpEncoding.getContext(), "lane");
-  StringAttr kWarp = StringAttr::get(dotOpEncoding.getContext(), "warp");
-  SmallVector<unsigned> order =
-      getOrderForDotOperand(dotOpEncoding.getOpIdx(), 2, /*kContig*/ true);
-  std::array<unsigned, 2> memOrder = {order[1], order[0]};
-  SmallVector<StringAttr> standardOutDims = permuteDimNames(
-      triton::standardOutDimNames(dotOpEncoding.getContext(), 2), order);
+  // Try to find an address, data layout pair for a global_load_tr instruction
+  // so that the current data encoding is transposed. Eight lanes load an 8x8
+  // block of values and transpose them before storing into registers. For
+  // details on this instruction and layout, see 11.6.2. in
+  // https://www.amd.com/content/dam/amd/en/documents/radeon-tech-docs/instruction-set-architectures/rdna4-instruction-set-architecture.pdf
+  // We use a simplified version here that is more similar to the wmma layout
+  // used in triton
+  auto currentEncoding = cast<BlockedEncodingAttr>(enc);
+  MLIRContext *ctx = currentEncoding.getContext();
+  StringAttr kRegister = S("register");
+  StringAttr kLane = S("lane");
+  StringAttr kWarp = S("warp");
 
-  // Each warps loads four 8x8 subtiles which are transposed before storing to
-  // VGPRs
+  // We have to create two layouts. One for the address and one for the data in
+  // registers. Before storing to registers, every 8x8 block of values is
+  // transposed, so the address and data layouts are identical apart from the
+  // first three basis vectors of the register and lane dimension.
+
+  // The global load layout is assumed to be optimized for vectorized loads, but
+  // later needs to be transposed by a convert_layout. With global_load_tr we
+  // can keep the memory order, but transpose the subtiles before storing them
+  // into registers to reduce the overhead of the convert_layout.
+  SmallVector<unsigned> memOrder(currentEncoding.getOrder());
+  SmallVector<StringAttr> memDims = permuteDimNames(
+      triton::standardOutDimNames(currentEncoding.getContext(), 2), memOrder);
+
+  // Each subtile is stored in 8 lanes and 4 VGPRs
+  const int tileSize = 8;
+  const int tilesPerWarp = /*WARP_SIZE*/ 32 / tileSize;
   auto tileAddrLayout =
-      (LinearLayout::identity1D(8, kRegister, standardOutDims[1]) *
-       LinearLayout::identity1D(8, kLane, standardOutDims[0]))
-          .transposeOuts(standardOutDims);
+      LinearLayout::identity1D(tileSize, kRegister, memDims[0]) *
+      LinearLayout::identity1D(tileSize, kLane, memDims[1]);
   auto tileDataLayout =
-      LinearLayout::identity1D(8, kRegister, standardOutDims[0]) *
-      LinearLayout::identity1D(8, kLane, standardOutDims[1]);
+      (LinearLayout::identity1D(tileSize, kRegister, memDims[1]) *
+       LinearLayout::identity1D(tileSize, kLane, memDims[0]))
+          .transposeOuts(memDims);
 
-  // Try to place subtiles on the k dimension first
-  std::array<unsigned, 2> numSubtilesPerWarp = {0, 0};
-  numSubtilesPerWarp[0] = std::min((int)shape[memOrder[0]] / 8, 4);
-  numSubtilesPerWarp[1] = 4 / numSubtilesPerWarp[0];
+  // Try to place the four subtiles of a single global_load_tr instruction on
+  // the non-contiguous memory dimension first
+  std::array<unsigned, 2> numSubtilesPerWarp = {/*contiguous*/ 0,
+                                                /*non-contiguous*/ 0};
+  numSubtilesPerWarp[1] =
+      std::min((int)shape[memOrder[1]] / tileSize, tilesPerWarp);
+  numSubtilesPerWarp[0] = tilesPerWarp / numSubtilesPerWarp[1];
   LinearLayout subtileLayout = identityStandardND(
-      kLane, {numSubtilesPerWarp[memOrder[1]], numSubtilesPerWarp[memOrder[0]]},
+      kLane, {numSubtilesPerWarp[memOrder[0]], numSubtilesPerWarp[memOrder[1]]},
       memOrder);
 
-  // Try to place warps on the non-k dimension first
+  // Try to place warps in a thread block on the contiguous memory dimension
+  // first
   int64_t numWarps =
-      wmmaEncoding.getWarpsPerCTA()[0] * wmmaEncoding.getWarpsPerCTA()[1];
-  std::array<unsigned, 2> numWarpsPerCTA = {0, 0};
-  numWarpsPerCTA[0] =
-      std::min(shape[memOrder[0]] / (numSubtilesPerWarp[0] * 8), numWarps);
+      currentEncoding.getWarpsPerCTA()[0] * currentEncoding.getWarpsPerCTA()[1];
+  std::array<unsigned, 2> numWarpsPerCTA = {/*contiguous*/ 0,
+                                            /*non-contiguous*/ 0};
+  numWarpsPerCTA[0] = std::min(
+      shape[memOrder[0]] / (numSubtilesPerWarp[0] * tileSize), numWarps);
   numWarpsPerCTA[1] = numWarps / numWarpsPerCTA[0];
   LinearLayout warpLayout = identityStandardND(
       kWarp, {numWarpsPerCTA[memOrder[0]], numWarpsPerCTA[memOrder[1]]},
       memOrder);
 
+  // Combine the subtile, warp and thread block layouts and tile the whole
+  // tensor
+  auto ctaLayout = currentEncoding.getCTALayout();
   return {combineCtaCgaWithShape(tileAddrLayout * subtileLayout * warpLayout,
-                                 wmmaEncoding.getCTALayout(), shape),
+                                 ctaLayout, shape),
           combineCtaCgaWithShape(tileDataLayout * subtileLayout * warpLayout,
-                                 wmmaEncoding.getCTALayout(), shape)};
+                                 ctaLayout, shape)};
 }
 
 LinearLayout mfmaDotToLinearLayout(DotOperandEncodingAttr dotMfmaLayout,

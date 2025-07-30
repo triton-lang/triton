@@ -648,15 +648,12 @@ struct BufferLoadOpConversion
 struct GlobalLoadTransposeOpConversion
     : public ConvertOpToLLVMPattern<triton::amdgpu::GlobalLoadTransposeOp>,
       public LoadStoreConversionBase {
-  using ConvertOpToLLVMPattern<
-      triton::amdgpu::GlobalLoadTransposeOp>::ConvertOpToLLVMPattern;
 
   GlobalLoadTransposeOpConversion(LLVMTypeConverter &converter,
                                   const AMD::TargetInfo &targetInfo,
                                   ModuleAxisInfoAnalysis &axisAnalysisPass,
                                   PatternBenefit benefit)
-      : ConvertOpToLLVMPattern<triton::amdgpu::GlobalLoadTransposeOp>(converter,
-                                                                      benefit),
+      : ConvertOpToLLVMPattern(converter, benefit),
         LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
 
   LogicalResult
@@ -677,28 +674,35 @@ struct GlobalLoadTransposeOpConversion
     Type valueTy = op.getType();
     Type valueElemTy =
         typeConverter->convertType(getElementTypeOrSelf(valueTy));
-    unsigned vecSize = 8;
     unsigned numElems = getTotalElemsPerThread(ptr.getType());
+
+    // For each global_load_tr_b128 instruction we load four 8x8 subtiles per
+    // warp, so 8 elements per thread
+    unsigned vecSize = 8;
+    assert(numElems % vecSize == 0);
+    assert(getElementTypeOrSelf(valueTy).getIntOrFloatBitWidth() == 16 &&
+           "Only transposed loads with 16bit values are supported");
 
     // Get the LLVM values for pointers
     auto ptrElems = unpackLLElements(loc, llPtr, rewriter);
     assert(ptrElems.size() == numElems);
 
     VectorType v8i16 = vec_ty(i16_ty, vecSize);
+    VectorType v8T = vec_ty(valueElemTy, vecSize);
 
     SmallVector<Value> loadedVals;
     for (size_t vecStart = 0; vecStart < numElems; vecStart += vecSize) {
       Value ptr = ptrElems[vecStart];
-      Value transposeLoadV8 =
-          b.bitcast(LLVM::createLLVMIntrinsicCallOp(
-                        rewriter, loc, "llvm.amdgcn.global.load.tr.b128.v4i16",
-                        v8i16, ValueRange{ptr})
-                        ->getResult(0),
-                    vec_ty(valueElemTy, vecSize));
+      Value globalLoadTr =
+          LLVM::createLLVMIntrinsicCallOp(
+              rewriter, loc, "llvm.amdgcn.global.load.tr.b128.v4i16", v8i16,
+              ValueRange{ptr})
+              ->getResult(0);
+      Value globalLoadTrVec = b.bitcast(globalLoadTr, v8T);
       for (size_t ii = 0; ii < vecSize; ++ii) {
         Value vecIdx = createIndexAttrConstant(
             rewriter, loc, getTypeConverter()->getIndexType(), ii);
-        Value loaded = b.extract_element(valueElemTy, transposeLoadV8, vecIdx);
+        Value loaded = b.extract_element(valueElemTy, globalLoadTrVec, vecIdx);
         loadedVals.push_back(loaded);
       }
     }

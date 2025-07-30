@@ -5,6 +5,7 @@
 namespace ttg = mlir::triton::gpu;
 namespace tt = mlir::triton;
 
+#include "mlir/Transforms/WalkPatternRewriteDriver.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
@@ -15,91 +16,95 @@ namespace mlir {
 
 namespace {
 
-static void loadTranspose(tt::LoadOp loadOp) {
-  IRRewriter b(loadOp);
-  OpResult loadedData = loadOp->getResult(0);
-  // We only use this instruction for load<#blocked> -> convert_layout ->
-  // dot_op<#wmma> chains for now
-  if (loadOp.getMask())
-    return;
-  auto loadedTensorType = dyn_cast<RankedTensorType>(loadedData.getType());
-  if (!loadedTensorType || !loadedTensorType.getElementType().isFloat(16) ||
-      !isa<triton::gpu::BlockedEncodingAttr>(loadedTensorType.getEncoding()))
-    return;
-  auto shape = loadedTensorType.getShape();
-  if (shape.size() != 2 || shape[0] % 16 != 0 || shape[1] % 16 != 0)
-    return;
-  auto convertLayout =
-      dyn_cast<ttg::ConvertLayoutOp>(*loadedData.getUsers().begin());
-  if (!convertLayout || !loadedData.hasOneUse())
-    return;
+class ConvertToTransposeLoadsPattern : public OpRewritePattern<tt::LoadOp> {
+public:
+  ConvertToTransposeLoadsPattern(MLIRContext *context, PatternBenefit benefit)
+      : OpRewritePattern(context, benefit) {}
 
-  auto convertLayoutResultType =
-      dyn_cast<RankedTensorType>(convertLayout->getResult(0).getType());
-  if (!convertLayoutResultType)
-    return;
-  triton::gpu::DotOperandEncodingAttr resultLayout =
-      dyn_cast<triton::gpu::DotOperandEncodingAttr>(
-          convertLayoutResultType.getEncoding());
-  if (!resultLayout)
-    return;
-  ttg::AMDWmmaEncodingAttr wmmaEncoding =
-      dyn_cast<triton::gpu::AMDWmmaEncodingAttr>(resultLayout.getParent());
-  if (!wmmaEncoding || wmmaEncoding.getVersion() != 2)
-    return;
+  LogicalResult matchAndRewrite(tt::LoadOp loadOp,
+                                PatternRewriter &rewriter) const override {
+    // We check tt.load --> ttg.convert_layout chains if they introduce any
+    // shared memory transposing and replace the global_load with
+    // amdgpu.global_load_transpose to improve the efficiency of the
+    // convert_layout.
 
-  auto loadedEncoding =
-      cast<triton::gpu::BlockedEncodingAttr>(loadedTensorType.getEncoding());
-  if (resultLayout.getOpIdx() == 0 && loadedEncoding.getOrder()[0] == 1 ||
-      resultLayout.getOpIdx() == 1 && loadedEncoding.getOrder()[0] == 0)
-    // k is the contiguous dimension -> No need to transpose
-    return;
+    // Check if the tensor loaded by this tt.load can support global_load_tr
+    if (loadOp.getMask())
+      return failure();
+    auto dataType = dyn_cast<RankedTensorType>(loadOp.getType());
+    if (!dataType)
+      return failure();
+    auto elementType = dataType.getElementType();
+    if (!elementType.isIntOrFloat() ||
+        elementType.getIntOrFloatBitWidth() != 16)
+      return failure();
+    auto shape = dataType.getShape();
+    // Each global_load_tr loads four 8x8 blocks, so we cannot load tensors with
+    // smaller dimensions
+    if (shape.size() != 2 || shape[0] % 8 != 0 || shape[1] % 8 != 0 ||
+        shape[0] * shape[1] < 256)
+      return failure();
 
-  // Found a suboptimal load that would require shared memory transposing
-  auto wmmaLayoutBases =
-      wmmaEncoding.toLinearLayout(convertLayoutResultType.getShape())
-          .getBases();
-  auto [layoutAddr, layoutData] = triton::gpu::chooseGlobalLoadTrLayout(
-      resultLayout, convertLayoutResultType.getShape());
-  // Eight lanes load an 8x8 block of values and transpose them before storing
-  // into registers. For details on this instruction and layout, see 11.6.2. in
-  // https://www.amd.com/content/dam/amd/en/documents/radeon-tech-docs/instruction-set-architectures/rdna4-instruction-set-architecture.pdf
-  // We use a simplified version here that is more similar to the wmma layout
-  // used in triton
-  auto transposedLoadEncodingAddr = triton::gpu::LinearEncodingAttr::get(
-      loadedEncoding.getContext(), layoutAddr);
-  auto transposedLoadEncodingData = triton::gpu::LinearEncodingAttr::get(
-      loadedEncoding.getContext(), layoutData);
-  auto newAddrType = cast<RankedTensorType>(loadOp.getPtr().getType())
-                         .cloneWithEncoding(transposedLoadEncodingAddr);
-  auto newLoadedTensorType =
-      loadedTensorType.cloneWithEncoding(transposedLoadEncodingData);
-  // We first need to convert the addresses to the wmma format
-  b.setInsertionPoint(loadOp);
-  auto newPtr = b.create<ttg::ConvertLayoutOp>(loadOp->getLoc(), newAddrType,
-                                               loadOp.getPtr());
-  b.replaceOpWithNewOp<triton::amdgpu::GlobalLoadTransposeOp>(
-      loadOp, newLoadedTensorType, newPtr);
-}
+    // find a single convert_layout user of this tensor
+    if (!loadOp->hasOneUse())
+      return failure();
+    ttg::ConvertLayoutOp convertOp =
+        dyn_cast<ttg::ConvertLayoutOp>(*loadOp->getUsers().begin());
+    if (!convertOp)
+      return failure();
+
+    // Found a convert_layout. Check the order of input and output layout if it
+    // makes sense to use transposed global loads.
+    auto convertResType = dyn_cast<RankedTensorType>(convertOp.getType());
+    auto dataEncoding =
+        dyn_cast<ttg::BlockedEncodingAttr>(dataType.getEncoding());
+    if (!convertResType || !dataEncoding)
+      return failure();
+    auto convertResEncoding = ttg::LinearEncodingAttr::get(
+        loadOp.getContext(), ttg::toLinearLayout(convertResType));
+    if (dataEncoding.getOrder()[0] == convertResEncoding.getOrder()[0] &&
+        dataEncoding.getOrder()[1] == convertResEncoding.getOrder()[1])
+      // Order is not changed by convert_layout -> No need to transpose
+      return failure();
+
+    // Found a suboptimal load that would require shared memory transposing
+    // Replace the tt.load with amdgpu.global_load_transpose and insert
+    // convert_layout operations for the new layout
+    auto [layoutAddr, layoutData] =
+        ttg::chooseGlobalLoadTrLayout(dataEncoding, convertResType.getShape());
+    auto transposedLoadEncodingAddr =
+        ttg::LinearEncodingAttr::get(dataEncoding.getContext(), layoutAddr);
+    auto transposedLoadEncodingData =
+        ttg::LinearEncodingAttr::get(dataEncoding.getContext(), layoutData);
+    auto newAddrType = cast<RankedTensorType>(loadOp.getPtr().getType())
+                           .cloneWithEncoding(transposedLoadEncodingAddr);
+    auto newDataType = dataType.cloneWithEncoding(transposedLoadEncodingData);
+
+    rewriter.setInsertionPoint(loadOp);
+    auto newPtr = rewriter.create<ttg::ConvertLayoutOp>(
+        loadOp->getLoc(), newAddrType, loadOp.getPtr());
+    auto loadTrOp = rewriter.create<tt::amdgpu::GlobalLoadTransposeOp>(
+        loadOp->getLoc(), newDataType, newPtr);
+    rewriter.replaceOpWithNewOp<ttg::ConvertLayoutOp>(loadOp, dataType,
+                                                      loadTrOp);
+    return success();
+  }
+};
 
 } // anonymous namespace
 
 struct TritonAMDGPUConvertToTransposeLoadsPass
     : public impl::TritonAMDGPUConvertToTransposeLoadsBase<
           TritonAMDGPUConvertToTransposeLoadsPass> {
+
 public:
-  using impl::TritonAMDGPUConvertToTransposeLoadsBase<
-      TritonAMDGPUConvertToTransposeLoadsPass>::
-      TritonAMDGPUConvertToTransposeLoadsBase;
-
   void runOnOperation() override {
-    mlir::ModuleOp moduleOp = getOperation();
+    tt::FuncOp f = getOperation();
 
-    SmallVector<tt::LoadOp> loadOps;
-    moduleOp.walk([&](tt::LoadOp loadOp) { loadOps.push_back(loadOp); });
-
-    for (auto loadOp : loadOps)
-      loadTranspose(loadOp);
+    auto ctx = f.getContext();
+    RewritePatternSet patterns(ctx);
+    patterns.add<ConvertToTransposeLoadsPattern>(ctx, /*benefit=*/1);
+    walkAndApplyPatterns(f, std::move(patterns));
   }
 };
 

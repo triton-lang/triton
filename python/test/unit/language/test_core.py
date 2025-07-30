@@ -4050,7 +4050,15 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
         # added atol, to loose precision for float16xfloat16->float32 case
         np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0.01, atol=1e-3)
 
-    if not (is_cuda() or is_hip_cdna()):
+    if not (is_cuda() or is_hip_cdna() or is_hip_gfx12()):
+        return
+
+    if is_hip_gfx12():
+        amdgcn = pgm.asm['amdgcn']
+        # We need at least four 8x8 tiles in the tensor for a global_load_tr
+        use_global_load_tr = (col_a and M >= 8 and K >= 8 and M * K >= 256 or not col_b and N >= 8 and K >= 8
+                              and N * K >= 256) and in_dtype in ['float16', 'bfloat16']
+        assert ('global_load_tr' in amdgcn) == use_global_load_tr
         return
 
     if is_hip_cdna():
