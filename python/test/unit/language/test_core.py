@@ -1911,8 +1911,8 @@ def test_atomic_cas(sem, num_ctas, device):
 @pytest.mark.parametrize("sem", [None, "acquire", "release", "acq_rel", "relaxed"])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 @pytest.mark.parametrize("size", [4, 128, 512])
-@pytest.mark.parametrize("dtype", [torch.float16, torch.float32, torch.int64])
-def test_tensor_atomic_cas(sem, size, dtype, num_ctas, device):
+@pytest.mark.parametrize("dtype_str", ['bfloat16', 'float16', 'float32', 'uint64', 'int64', 'float64'])
+def test_tensor_atomic_cas(sem, size, dtype_str, num_ctas, device):
 
     @triton.jit
     def change_value(X, BLOCK_SIZE: tl.constexpr, sem: tl.constexpr, dtype: tl.constexpr):
@@ -1923,12 +1923,13 @@ def test_tensor_atomic_cas(sem, size, dtype, num_ctas, device):
         t2 = tl.full((BLOCK_SIZE, ), 2, dtype=dtype)
         tl.atomic_cas(X + offsets, t1, t2, sem=sem)
 
-    X = torch.zeros((size, ), device=device, dtype=dtype)
+    torch_dtype = getattr(torch, dtype_str)
+    X = torch.zeros((size, ), device=device, dtype=torch_dtype)
     X[1::2] = 1
     Y = X.clone()
     Y[0::2] = 2
 
-    tl_dtype = getattr(tl, dtype)
+    tl_dtype = getattr(tl, dtype_str)
     change_value[(2, )](X, BLOCK_SIZE=size // 2, sem=sem, dtype=tl_dtype)
     assert torch.equal(X, Y)
 
