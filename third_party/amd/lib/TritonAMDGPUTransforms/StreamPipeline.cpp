@@ -1127,6 +1127,8 @@ struct PipelinePass : impl::TritonAMDGPUStreamPipelineBase<PipelinePass> {
       }
     }
 
+    assert(moduleOp.getOps<ttg::PredicateStageOp>().empty() &&
+           "PredicateStageOp should be resolved after the pipeline expansion");
     tt::resolveMaskOp(moduleOp, peeledMaskOps);
 
     if (useAsyncCopy) {
