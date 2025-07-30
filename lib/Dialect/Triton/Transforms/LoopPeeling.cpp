@@ -71,6 +71,7 @@ void peelLoopEpilogue(
       Operation *newOp = processPeeledOp(rewriter, &op, /*isEpilogue=*/false);
       if (newOp && newOp != &op) {
         op.replaceAllUsesWith(newOp);
+        op.erase();
       }
     }
     for (auto &op : llvm::make_early_inc_range(
@@ -78,6 +79,7 @@ void peelLoopEpilogue(
       Operation *newOp = processPeeledOp(rewriter, &op, /*isEpilogue=*/true);
       if (newOp && newOp != &op) {
         op.replaceAllUsesWith(newOp);
+        op.erase();
       }
     }
   }
