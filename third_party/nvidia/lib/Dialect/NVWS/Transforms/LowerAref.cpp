@@ -21,12 +21,11 @@
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
+#include "Utilities.h"
 #include "mlir/Analysis/TopologicalSortUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
-#include "mlir/IR/AttrTypeSubElements.h"
-#include "mlir/IR/BuiltinOps.h"
-#include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/Dominance.h"
 #include "mlir/IR/ImplicitLocOpBuilder.h"
 #include "mlir/IR/Location.h"
 #include "mlir/IR/PatternMatch.h"
@@ -42,6 +41,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 #include "llvm/Support/ErrorHandling.h"
 
 using namespace mlir::triton;
@@ -115,7 +115,7 @@ BarrierCount getArrivalCount(ArefCreateOp op) {
     auto idx = getWarpGroupIdx(user).second;
     if (auto putExitOp = dyn_cast<ArefPutExitOp>(user)) {
       if (!producerGroups.insert(idx)) {
-	continue;
+        continue;
       }
       for (auto prod : putExitOp.getAsyncOps()) {
         auto kind = dyn_cast<AsyncOpAttr>(prod).getValue();
@@ -131,7 +131,7 @@ BarrierCount getArrivalCount(ArefCreateOp op) {
       }
     } else if (auto getExitOp = dyn_cast<ArefGetExitOp>(user)) {
       if (!consumerGroups.insert(idx)) {
-	continue;
+        continue;
       }
       for (auto consumer : getExitOp.getAsyncOps()) {
         auto kind = dyn_cast<AsyncOpAttr>(consumer).getValue();
@@ -206,17 +206,40 @@ SmallVector<Value> getSubViews(ArefValue arefVal, Value stage, Location loc,
   return views;
 }
 
-void lowerAsyncLoads(ArefPutEnterOp op, PatternRewriter &rewriter,
-                     ArefValue arefVal) {
+void createTMALoad(triton::nvws::DescriptorLoadOp op, PatternRewriter &rewriter,
+                   Value barrierAlloc, Value pred) {
+  auto indices = translateTMAIndices(
+      rewriter, op.getLoc(),
+      op.getDesc().getType().getBlockType().getEncoding(), op.getIndices());
+  auto newLoadOp =
+      rewriter.create<triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp>(
+          op.getLoc(), op.getDesc(), indices, barrierAlloc, op.getResult(),
+          pred);
+  assignStageCluster(newLoadOp, getStageCluster(op), rewriter);
+};
+
+void createTMAGather(triton::nvws::DescriptorGatherOp op,
+                     PatternRewriter &rewriter, Value barrierAlloc,
+                     Value pred) {
+  auto newGatherOp = rewriter.create<triton::nvidia_gpu::AsyncTMAGatherOp>(
+      op.getLoc(), op.getDesc(), op.getXOffsets(), op.getYOffset(),
+      barrierAlloc, op.getResult(), pred);
+  assignStageCluster(newGatherOp, getStageCluster(op), rewriter);
+}
+
+void lowerTMALoad(ArefPutEnterOp op, PatternRewriter &rewriter,
+                  ArefValue arefVal) {
   auto loc = op.getLoc();
+  int txCount = 0;
   // for now handle TMA loads in PutEnterOp
   SmallVector<Operation *> loadOps;
   for (auto result : op.getResults()) {
     for (auto user : result.getUsers()) {
-      // Temporary workaround for lit testing: handle TMA loads here until a
-      // dedicated tma_load op is added to the NVWS dialect
-      if (user->getName().getStringRef() == "tma_load")
-        loadOps.push_back(user);
+      if (auto loadOp =
+              dyn_cast<triton::nvws::DescriptorLoadOpInterface>(user)) {
+        loadOps.push_back(loadOp);
+        txCount += loadOp.getTxCount();
+      }
     }
   }
   assert(loadOps.size() <= op.getResults().size());
@@ -243,9 +266,21 @@ void lowerAsyncLoads(ArefPutEnterOp op, PatternRewriter &rewriter,
   Value fullBarrier =
       getFullBarrier(rewriter, loc, arefVal, arefPutExitOp.getStage());
   Value pred = rewriter.create<arith::ConstantIntOp>(loc, 1, 1);
-  rewriter.create<triton::nvidia_gpu::BarrierExpectOp>(loc, fullBarrier, 0,
-                                                       pred);
-  return;
+  auto expectOp = rewriter.create<triton::nvidia_gpu::BarrierExpectOp>(
+      loc, fullBarrier, txCount, pred);
+  assignStageCluster(expectOp, getStageCluster(op), rewriter);
+
+  for (auto loadOp : loadOps) {
+    if (auto descLoad = dyn_cast<triton::nvws::DescriptorLoadOp>(loadOp)) {
+      createTMALoad(descLoad, rewriter, fullBarrier, pred);
+    } else if (auto descGather =
+                   dyn_cast<triton::nvws::DescriptorGatherOp>(loadOp)) {
+      createTMAGather(descGather, rewriter, fullBarrier, pred);
+    } else {
+      llvm_unreachable("Unknown load op");
+    }
+    loadOp->erase();
+  }
 }
 
 LogicalResult rewritePutEnterOp(ArefCreateOp arefOp, ArefPutEnterOp op,
@@ -264,13 +299,29 @@ LogicalResult rewritePutEnterOp(ArefCreateOp arefOp, ArefPutEnterOp op,
 
   // TMA load need special handling as it requires fullMbarrier that
   // we need to get from matching ArefPutExitOp
-  lowerAsyncLoads(op, rewriter, arefVal);
+  lowerTMALoad(op, rewriter, arefVal);
 
   // replaces uses with views
   for (int i = 0; i < arefVal.buffers.size(); ++i)
     op.getBuffers()[i].replaceAllUsesWith(views[i]);
 
   return success();
+}
+
+static MemDescType getAsMutable(MemDescType type) {
+  return MemDescType::get(type.getShape(), type.getElementType(),
+                          type.getEncoding(), type.getMemorySpace(),
+                          /*mutableMemory=*/true);
+}
+
+static void propagateMutability(Value value) {
+  for (Operation *user : value.getUsers()) {
+    if (user->hasTrait<OpTrait::MemDescViewTrait>()) {
+      user->getResult(0).setType(
+          getAsMutable(cast<MemDescType>(user->getResult(0).getType())));
+      propagateMutability(user->getResult(0));
+    }
+  }
 }
 
 LogicalResult rewriteGetEnterOp(ArefCreateOp arefOp, ArefGetEnterOp op,
@@ -284,8 +335,14 @@ LogicalResult rewriteGetEnterOp(ArefCreateOp arefOp, ArefGetEnterOp op,
   auto views = getSubViews(arefVal, op.getStage(), loc, rewriter);
   assert(views.size() == op.getBuffers().size());
 
-  for (int i = 0; i < arefVal.buffers.size(); ++i)
+  for (int i = 0; i < arefVal.buffers.size(); ++i) {
     op.getBuffers()[i].replaceAllUsesWith(views[i]);
+    // Before aref lowering, memdesc_trans consumes an immutable buffer from
+    // a get enter op. After lowering, all buffers are mutable.
+    propagateMutability(views[i]);
+    //    replaceUsesAndPropagateType(rewriter,
+    //    op.getBuffers()[i].getDefiningOp(), views[i]);
+  }
 
   return success();
 }
@@ -401,7 +458,67 @@ public:
   }
 };
 
-// ----------------------------------------------------------------------------
+bool isProducerLoad(ArefCreateOp arefOp) {
+  for (auto user : arefOp.getResult().getUsers()) {
+    if (auto putOp = dyn_cast<ArefPutEnterOp>(user)) {
+      auto loop = putOp->getParentOfType<scf::ForOp>();
+      if (!loop) {
+	continue;
+      }
+      if (loop.getOps<nvws::DescriptorLoadOpInterface>().empty()) {
+        return true;
+      }
+      if (loop.getOps<AsyncCopyGlobalToLocalOp>().empty()) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+void multiBufferAref(const SmallVector<ArefCreateOp> &arefOps, int numStages) {
+  SmallVector<Operation *> allocsToErase;
+  for (auto arefOp : arefOps) {
+    SmallVector<Value> allocOps;
+    SmallVector<Type> arefTypes;
+
+    bool eligible = true;
+    for (auto opnd : arefOp.getOperands()) {
+      if (!opnd.getDefiningOp()) {
+        eligible = false;
+      }
+    }
+
+    if (!eligible) {
+      continue;
+    }
+
+    OpBuilder builder(arefOp);
+    for (auto opnd : arefOp.getOperands()) {
+      auto oldAlloc = opnd.getDefiningOp();
+      auto arefBufType = cast<MemDescType>(opnd.getType());
+      arefBufType =
+          getMultiBufferedType(getBufferViewType(arefBufType, true), numStages);
+      Operation *newAlloc = triton::nvws::createAlloc(
+          builder, oldAlloc->getLoc(), arefBufType, Value());
+      newAlloc->setAttr("aref_buffer", builder.getUnitAttr());
+      allocOps.push_back(newAlloc->getResult(0));
+      arefTypes.push_back(arefBufType);
+      oldAlloc->replaceAllUsesWith(newAlloc);
+      allocsToErase.push_back(oldAlloc);
+    }
+
+    auto newAref =
+        createArefCreateOp(builder, arefTypes, allocOps, arefOp.getLoc());
+
+    arefOp.getResult().replaceAllUsesWith(newAref.getResult());
+    arefOp.erase();
+  }
+
+  for (auto alloc : allocsToErase) {
+    alloc->erase();
+  }
+}
 
 template <class... Ts> struct ArefIndex;
 template <class T> struct ArefIndex<T> {
@@ -638,17 +755,172 @@ template <> struct ArefIndex<> {
   }
 };
 
-// ----------------------------------------------------------------------------
+template <typename EnterOp, typename ExitOp>
+void createCombinedArefOps(SmallVector<EnterOp> &enterOps,
+                           SmallVector<ExitOp> &exitOps, ArefCreateOp aref,
+                           OpBuilder &builder) {
+  auto firstEnter = *llvm::min_element(enterOps, [](EnterOp a, EnterOp b) {
+    assert(a->getBlock() == b->getBlock());
+    return a->isBeforeInBlock(b);
+  });
+
+  auto lastExit = *llvm::max_element(exitOps, [](ExitOp a, ExitOp b) {
+    assert(a->getBlock() == b->getBlock());
+    return a->isBeforeInBlock(b);
+  });
+
+  SmallVector<Type> arefEnterBuffers;
+  for (auto enterOp : enterOps) {
+    arefEnterBuffers.push_back(enterOp.getResult(0).getType());
+  }
+
+  llvm::SmallSetVector<Attribute, 5> opAttrsSet;
+  for (ExitOp exitOp : exitOps) {
+    opAttrsSet.insert(exitOp.getAsyncOps().begin(), exitOp.getAsyncOps().end());
+  }
+
+  builder.setInsertionPointAfter(aref);
+  auto zero = builder.create<arith::ConstantIntOp>(aref.getLoc(), 0, 32);
+
+  builder.setInsertionPoint(firstEnter);
+  auto enter = builder.create<EnterOp>(firstEnter.getLoc(), arefEnterBuffers,
+                                       aref, zero, zero);
+  assignStageCluster(enter, getStageCluster(firstEnter), builder);
+
+  builder.setInsertionPoint(lastExit);
+  llvm::SmallVector<Attribute> AsyncOpAttrs(opAttrsSet.begin(),
+                                            opAttrsSet.end());
+  auto exit =
+      builder.create<ExitOp>(firstEnter.getLoc(), aref, enter.getToken(), zero,
+                             builder.getArrayAttr(AsyncOpAttrs));
+  assignStageCluster(exit, getStageCluster(lastExit), builder);
+
+  for (auto [idx, enterOp] : llvm::enumerate(enterOps)) {
+    enterOp.getResult(0).replaceAllUsesWith(enter.getResult(idx));
+  }
+}
+
+SmallVector<Operation *> findSharedMemorySinkOps(Value value) {
+  SmallVector<Operation *> sinkOps;
+  for (Operation *user : value.getUsers()) {
+    if (isa<MMAv5OpInterface, LocalLoadOp>(user)) {
+      sinkOps.push_back(user);
+    } else if (user->hasTrait<OpTrait::MemDescViewTrait>()) {
+      auto rec = findSharedMemorySinkOps(user->getResult(0));
+      sinkOps.insert(sinkOps.end(), rec.begin(), rec.end());
+    }
+  }
+  return sinkOps;
+}
+
+Operation *getDominantConsumer(ArefGetEnterOp getEnterOp, Block &container,
+                               DominanceInfo &domInfo) {
+  assert(getEnterOp->getNumResults() && "Expect a single-result ArefGenterOp");
+  auto buf = getEnterOp->getResult(0);
+  SmallVector<Operation *> sinkOps = findSharedMemorySinkOps(buf);
+  Operation *liveBeforeOp = findNearestCommonDominator(sinkOps, domInfo);
+  return container.findAncestorOpInBlock(*liveBeforeOp);
+}
+
+// This is an optimization to combine arefs for TMA load into one, so that
+// barrier arrive and wait are coalesced.
+void combineArefs(scf::ForOp loop) {
+  SmallVector<ArefGetEnterOp> getEnterOps;
+  loop.walk([&](ArefGetEnterOp op) { getEnterOps.push_back(op); });
+
+  // Arefs whose get-enter ops share the same dominant consumer can be combined
+  DominanceInfo domInfo(loop);
+  llvm::DenseMap<Operation *, SmallVector<ArefGetEnterOp>> liveBeforeGroups;
+  for (auto getEnterOp : getEnterOps) {
+    auto liveBeforeOp =
+        getDominantConsumer(getEnterOp, *loop.getBody(), domInfo);
+    liveBeforeGroups[liveBeforeOp].push_back(getEnterOp);
+  }
+
+  SmallVector<SmallVector<ArefCreateOp>> arefsToFuse;
+  for (auto getEnterOps : llvm::make_second_range(liveBeforeGroups)) {
+    if (getEnterOps.size() == 1) {
+      continue;
+    }
+
+    SmallVector<ArefCreateOp> arefs;
+    for (auto getEnterOp : getEnterOps) {
+      arefs.push_back(cast<ArefCreateOp>(getEnterOp.getAref().getDefiningOp()));
+    }
+
+    arefsToFuse.push_back(arefs);
+  }
+
+  for (auto arefs : arefsToFuse) {
+    SmallVector<ArefPutEnterOp> putEnterOps;
+    SmallVector<ArefPutExitOp> putExitOps;
+    SmallVector<ArefGetEnterOp> getEnterOps;
+    SmallVector<ArefGetExitOp> getExitOps;
+    for (auto aref : arefs) {
+      for (auto user : aref->getUsers()) {
+        if (auto putEnterOp = dyn_cast<ArefPutEnterOp>(user)) {
+          putEnterOps.push_back(putEnterOp);
+        } else if (auto putExitOp = dyn_cast<ArefPutExitOp>(user)) {
+          putExitOps.push_back(putExitOp);
+        } else if (auto getEnterOp = dyn_cast<ArefGetEnterOp>(user)) {
+          getEnterOps.push_back(getEnterOp);
+        } else if (auto getExitOp = dyn_cast<ArefGetExitOp>(user)) {
+          getExitOps.push_back(getExitOp);
+        }
+      }
+    }
+
+    SmallVector<Type> arefBufTypes;
+    SmallVector<Value> arefBufs;
+    for (auto aref : arefs) {
+      arefBufTypes.push_back(aref.getOperands()[0].getType());
+      arefBufs.push_back(aref.getOperands()[0]);
+    }
+
+    // set insertion point at the last aref_create
+    auto lastAref = *llvm::max_element(arefs, [](auto a, auto b) {
+      assert(a->getBlock() == b->getBlock());
+      return a->isBeforeInBlock(b);
+    });
+
+    OpBuilder builder(lastAref);
+    auto aref =
+        createArefCreateOp(builder, arefBufTypes, arefBufs, lastAref->getLoc());
+
+    createCombinedArefOps(putEnterOps, putExitOps, aref, builder);
+    createCombinedArefOps(getEnterOps, getExitOps, aref, builder);
+
+    for (auto putEnterOp : putEnterOps)
+      putEnterOp->erase();
+    for (auto putExitOp : putExitOps)
+      putExitOp->erase();
+    for (auto getEnterOp : getEnterOps)
+      getEnterOp->erase();
+    for (auto getExitOp : getExitOps)
+      getExitOp->erase();
+    for (auto aref : arefs)
+      aref->erase();
+  }
+}
 
 } // anonymous namespace
 
 class NVWSLowerAref : public impl::NVWSLowerArefBase<NVWSLowerAref> {
-   using impl::NVWSLowerArefBase<NVWSLowerAref>::NVWSLowerArefBase;
+  using impl::NVWSLowerArefBase<NVWSLowerAref>::NVWSLowerArefBase;
 
 public:
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     mlir::ModuleOp m = getOperation();
+
+    SmallVector<scf::ForOp> loops;
+    m.walk([&](scf::ForOp loop) {
+      if (loop->hasAttr(triton::kWarpSpecializeAttrName))
+        loops.push_back(loop);
+    });
+    for (scf::ForOp loop : loops) {
+      combineArefs(loop);
+    }
 
     SmallVector<WarpGroupOp> wgOps;
     m.walk([&](WarpGroupOp wgOp) { wgOps.push_back(wgOp); });
@@ -657,6 +929,16 @@ public:
         signalPassFailure();
     }
     LLVM_DEBUG(llvm::dbgs() << "After arefIndexAssignment\n" << m << "\n");
+
+    SmallVector<ArefCreateOp> arefOps;
+    m.walk([&](ArefCreateOp arefOp) {
+      // Only handles arefs whose producer (a partition with PutEnter / Exit)
+      // does load from global to shared memory.
+      if (isProducerLoad(arefOp)) {
+        arefOps.push_back(arefOp);
+      }
+    });
+    multiBufferAref(arefOps, numStages);
 
     mlir::RewritePatternSet patterns(context);
     patterns.add<LowerArefCreate>(context);
