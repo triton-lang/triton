@@ -237,11 +237,11 @@ struct BufferPointersOpConversion
     auto bufPointers =
         createInitializedIntArrayTensor(rewriter, loc, encoding, values);
     Value base = nullptr;
-    if (op.getMemType() == tti::MemType::SHARED) {
+    if (op.getMemType() == tti::MemType::SHARED_MEM) {
       base = getSharedMemoryBase(rewriter,
                                  op->getParentOfType<FunctionOpInterface>());
     } else {
-      assert(op.getMemType() == tti::MemType::TENSOR &&
+      assert(op.getMemType() == tti::MemType::TENSOR_MEM &&
              "Unsupported memory type");
       TritonLLVMOpBuilder b(loc, rewriter);
       base = rewriter.create<nvgpu::TensorMemoryBaseAddress>(loc);
