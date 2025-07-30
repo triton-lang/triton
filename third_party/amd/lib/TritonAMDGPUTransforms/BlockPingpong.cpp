@@ -678,7 +678,7 @@ LogicalResult Pingponger::transformChainedDotSchedule(OpBuilder &builder,
 
   // Memory clusters start with either ttg.async_wait or ttg.local_store
   auto findNextMemoryCluster = [](Operation *op) {
-    while (!llvm::isa_and_nonnull<ttg::AsyncWaitOp, ttg::LocalStoreOp>(op)) {
+    while (op && !llvm::isa<ttg::AsyncWaitOp, ttg::LocalStoreOp>(op)) {
       op = op->getNextNode();
     }
     return op;
