@@ -8,6 +8,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
+#include "llvm/ADT/STLExtras.h"
 
 namespace tt = mlir::triton;
 using mlir::triton::ModuleAxisInfoAnalysis;
@@ -666,11 +667,9 @@ bool isUsedByDotScaledOp(Operation *op) {
   SetVector<mlir::Operation *> forwardSliceSet;
   getForwardSlice(op, &forwardSliceSet, fwdOpt);
 
-  return std::any_of(
-      forwardSliceSet.begin(), forwardSliceSet.end(), [](auto *operation) {
-        return isa<triton::DotScaledOp, triton::amdgpu::UpcastMXFPOp>(
-            operation);
-      });
+  return llvm::any_of(forwardSliceSet, [](auto *operation) {
+    return isa<triton::DotScaledOp>(operation);
+  });
 }
 
 bool isChainDotHead(tt::DotOpInterface dotOp) {
