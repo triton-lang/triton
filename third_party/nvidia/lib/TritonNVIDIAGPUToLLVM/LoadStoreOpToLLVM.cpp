@@ -611,58 +611,33 @@ struct AtomicCASOpConversion
                  : valueTy;
     auto valueElemNBits = valueElemTy.getIntOrFloatBitWidth();
     auto elemsPerThread = getTotalElemsPerThread(op.getVal().getType());
-    // vec = 1 for scalar
-    auto vec = getVectorSize(op.getPtr());
-    auto vecOrig = vec;
-    // tensor
-    if (tensorTy) {
-      auto valTy = cast<RankedTensorType>(op.getVal().getType());
-      vec = std::min<unsigned>(vec, valTy.getElementType().isF16() ? 2 : 1);
-    }
-
-    if (vec == 1 && elemsPerThread > 1)
-      op->emitRemark() << "Warning: vectorization fails vec = " << vec
-                       << " origin vec = " << vecOrig
-                       << " elemsPerThread = " << elemsPerThread << "\n";
-
     auto freeVarMasks = getFreeVariableMasks(op.getPtr().getType());
     Value threadPred =
         emitRedundantThreadPredicate(freeVarMasks, rewriter, loc, targetInfo);
     uint32_t regMask = freeVarMasks[str_attr("reg")];
 
-    auto vecTy = vec_ty(valueElemTy, vec);
     SmallVector<Value> resultVals(elemsPerThread);
 
-    for (size_t i = 0; i < elemsPerThread; i += vec) {
-      if (auto canonicalVecStart = getCanonicalIndex(i, regMask);
-          canonicalVecStart != i) {
+    for (size_t i = 0; i < elemsPerThread; i += 1) {
+      if (auto canonicalStart = getCanonicalIndex(i, regMask);
+          canonicalStart != i) {
         // For redundant registers, refer back to the canonical result
-        for (auto iVec = 0; iVec < vec; ++iVec) {
-          resultVals[i + iVec] = resultVals[canonicalVecStart + iVec];
-        }
+        resultVals[i] = resultVals[canonicalStart];
         continue;
       }
 
-      Value casVal = b.undef(vecTy);
-      Value casCmp = b.undef(vecTy);
-      for (int ii = 0; ii < vec; ++ii) {
-        Value iiVal = createIndexAttrConstant(
-            rewriter, loc, getTypeConverter()->getIndexType(), ii);
-        casVal = b.insert_element(vecTy, casVal, valElements[i + ii], iiVal);
-        casCmp = b.insert_element(vecTy, casCmp, cmpElements[i + ii], iiVal);
-      }
-
+      Value casVal = valElements[i];
+      Value casCmp = cmpElements[i];
       Value casPtr = ptrElements[i];
       PTXBuilder ptxBuilderAtomicCAS;
-      std::string tyId = valueElemNBits * vec == 64
-                             ? "l"
-                             : (valueElemNBits * vec == 32 ? "r" : "h");
+      std::string tyId =
+          valueElemNBits == 64 ? "l" : (valueElemNBits == 32 ? "r" : "h");
       auto *dstOpr = ptxBuilderAtomicCAS.newOperand("=" + tyId, /*init=*/true);
       auto *ptrOpr = ptxBuilderAtomicCAS.newAddrOperand(casPtr, "l");
       auto *cmpOpr = ptxBuilderAtomicCAS.newOperand(casCmp, tyId);
       auto *valOpr = ptxBuilderAtomicCAS.newOperand(casVal, tyId);
       auto &atom = *ptxBuilderAtomicCAS.create<PTXInstr>("atom");
-      auto sTy = "b" + std::to_string(valueElemNBits * vec);
+      auto sTy = "b" + std::to_string(valueElemNBits);
       std::string semStr;
       llvm::raw_string_ostream os(semStr);
       os << op.getSem();
@@ -671,13 +646,9 @@ struct AtomicCASOpConversion
       atom(dstOpr, ptrOpr, cmpOpr, valOpr).maybePredicate(threadPred);
 
       if (tensorTy) {
-        auto retType = vec == 1 ? valueElemTy : vecTy;
+        auto retType = valueElemTy;
         auto ret = ptxBuilderAtomicCAS.launch(rewriter, loc, retType);
-        for (int ii = 0; ii < vec; ++ii) {
-          resultVals[i + ii] =
-              vec == 1 ? ret
-                       : b.extract_element(valueElemTy, ret, b.i32_val(ii));
-        }
+        resultVals[i] = ret;
       } else {
         auto old = ptxBuilderAtomicCAS.launch(rewriter, loc, valueElemTy);
         if (op.getResult().use_empty()) {
