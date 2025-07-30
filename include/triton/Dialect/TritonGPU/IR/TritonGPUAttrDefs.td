@@ -38,8 +38,7 @@ def SharedEncodingTrait : AttrInterface<"SharedEncodingTrait"> {
   }];
   let methods = [
     InterfaceMethod<"Return the default alignment for the layout.",
-                    "int32_t",
-                    "getAlignment">,
+                    "int32_t", "getAlignment", (ins), [{}], [{ return 16; }]>,
   ];
 }
 
@@ -355,7 +354,6 @@ When vec=2, elements are swizzled in pairs of 2.  In other words, the element at
 
   let extraClassDeclaration = extraBaseClassDeclaration # [{
     unsigned getRank() const { return getCTAOrder().size(); }
-    int32_t getAlignment() const;
     SmallVector<unsigned> getCTAsPerCGA() const;
     SmallVector<unsigned> getCTAOrder() const;
     SmallVector<unsigned> getCTASplitNum() const;
@@ -428,7 +426,6 @@ attributes too, for example,
 
   let extraClassDeclaration = extraBaseClassDeclaration # [{
     unsigned getRank() const { return getOrder().size(); }
-    int32_t getAlignment() const { return 16; }
 
     unsigned getMinInterval() const {
       return *llvm::min_element(getIntervals());
@@ -446,8 +443,10 @@ attributes too, for example,
   let genVerifyDecl = 1;
 }
 
-def NVMMASharedEncodingAttr :
-  TritonGPU_Attr<"NVMMASharedEncoding", "nvmma_shared_encoding", [SharedEncodingTrait, LayoutEncodingTrait]> {
+def NVMMASharedEncodingAttr : TritonGPU_Attr<"NVMMASharedEncoding", "nvmma_shared_encoding", [
+    DeclareAttrInterfaceMethods<SharedEncodingTrait, ["getAlignment"]>,
+    LayoutEncodingTrait
+]> {
   let mnemonic = "nvmma_shared";
 
   let description = [{
@@ -508,7 +507,6 @@ def NVMMASharedEncodingAttr :
 
   let extraClassDeclaration = extraBaseClassDeclaration # [{
     unsigned getRank() const { return getCTAOrder().size(); }
-    int32_t getAlignment() const;
     SmallVector<unsigned> getCTAsPerCGA() const;
     SmallVector<unsigned> getCTAOrder() const;
     SmallVector<unsigned> getCTASplitNum() const;
@@ -615,7 +613,6 @@ Swizzling examples (matrix is filled with numbers 0, 1, 2, .. columns*rows-1):
 
   let extraClassDeclaration = extraBaseClassDeclaration # [{
     unsigned getRank() const { return getCTAOrder().size(); }
-    int32_t getAlignment() const;
     SmallVector<unsigned> getCTAsPerCGA() const;
     SmallVector<unsigned> getCTAOrder() const;
     SmallVector<unsigned> getCTASplitNum() const;

@@ -617,6 +617,7 @@ template SmallVector<unsigned>
 SliceEncodingAttr::paddedShape<unsigned>(ArrayRef<unsigned> shape) const;
 template SmallVector<int64_t>
 SliceEncodingAttr::paddedShape<int64_t>(ArrayRef<int64_t> shape) const;
+
 SmallVector<unsigned> SliceEncodingAttr::getRepOrder() const {
   auto parentRepOrder = getParent().getRepOrder();
   return eraseOrder(parentRepOrder, getDim());
@@ -656,8 +657,6 @@ SmallVector<unsigned> SliceEncodingAttr::getCTAsPerCGA() const {
 
 // Wmma encoding
 
-int32_t SwizzledSharedEncodingAttr::getAlignment() const { return 16; }
-
 SmallVector<unsigned> SwizzledSharedEncodingAttr::getCTAsPerCGA() const {
   return SmallVector<unsigned>(getCTALayout().getCTAsPerCGA());
 }
@@ -677,8 +676,6 @@ SmallVector<unsigned> PaddedSharedEncodingAttr::getCTAOrder() const {
 SmallVector<unsigned> PaddedSharedEncodingAttr::getCTASplitNum() const {
   return llvm::to_vector(getCTALayout().getCTASplitNum());
 }
-
-int32_t AMDRotatingSharedEncodingAttr::getAlignment() const { return 16; }
 
 SmallVector<unsigned> AMDRotatingSharedEncodingAttr::getCTAsPerCGA() const {
   return SmallVector<unsigned>(getCTALayout().getCTAsPerCGA());
