@@ -279,7 +279,7 @@ static bool getBackwardSliceToPartition(Value v,
         if (!getBackwardSliceToPartition(operand, partitionScheme, currentDim))
           return false;
     } else if (auto dotOp = dyn_cast<nvidia_gpu::WarpGroupDotOp>(op)) {
-      if (!getBackwardSliceToPartition(currentDim == 0 ? dotOp.getA()
+      if (!getBackwardSliceToPartition(currentDim == 0 ? Value(dotOp.getA())
                                                        : dotOp.getB(),
                                        partitionScheme, currentDim))
         return false;
