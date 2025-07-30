@@ -425,7 +425,7 @@ class CUDABackend(BaseBackend):
             if knobs.compilation.disable_line_info:
                 # This option is ignored if used without -lineinfo
                 debug_info += ["-lineinfo", "-suppress-debug-info"]
-            elif knobs.compilation.disable_ptxas_opt:
+            elif knobs.nvidia.disable_ptxas_opt:
                 # Synthesize complete debug info
                 debug_info += ["-g"]
             else:
