@@ -24,6 +24,15 @@ from triton.experimental.gluon.language.nvidia.ampere import async_copy as cp
 # Re-use utilities from the previous tutorial.
 t2 = importlib.import_module("02-layouts")
 
+
+def is_ampere_or_newer():
+    target = triton.runtime.driver.active.get_current_target()
+    return target.backend == "cuda" and torch.cuda.get_device_capability()[0] >= 8
+
+
+if __name__ == "__main__" and not is_ampere_or_newer():
+    raise RuntimeError("This tutorial requires Ampere or newer NVIDIA GPU")
+
 # %%
 # Let's reimplement the 1D memcpy using `cp.async` to demonstrate the basics.
 # Shared memory is represented using a descriptor type. Shared memory has a
@@ -59,10 +68,11 @@ def memcpy_1d_cpasync_kernel(in_ptr, out_ptr, xnumel, XBLOCK: gl.constexpr):
 
 def memcpy_1d_cpasync(input, output, XBLOCK=8192, num_warps=4):
     grid = (triton.cdiv(input.numel(), XBLOCK), )
-    memcpy_1d_cpasync_kernel[grid](input, output, input.numel(), XBLOCK)
+    memcpy_1d_cpasync_kernel[grid](input, output, input.numel(), XBLOCK, num_warps=num_warps)
 
 
 @pytest.mark.parametrize("xnumel, XBLOCK", [(200, 128), (1000, 256)])
+@pytest.mark.skipif(not is_ampere_or_newer(), reason="Requires Ampere or newer")
 def test_memcpy_1d_cpasync(xnumel, XBLOCK):
     input = torch.randn(xnumel, device="cuda")
     output = torch.empty_like(input)
@@ -187,6 +197,7 @@ def elementwise_add_cpasync(A, B, C, smem_layout, XBLOCK=32, YBLOCK=64):
 
 @pytest.mark.parametrize("xnumel, ynumel", [(1000, 2000)])
 @pytest.mark.parametrize("XBLOCK, YBLOCK", [(32, 32), (128, 128)])
+@pytest.mark.skipif(not is_ampere_or_newer(), reason="Requires Ampere or newer")
 def test_elementwise_add_cpasync(xnumel, ynumel, XBLOCK, YBLOCK):
     a = torch.randn(xnumel, ynumel, device="cuda")
     b = torch.randn(xnumel, ynumel, device="cuda")
@@ -325,6 +336,7 @@ def elementwise_add_pipelined(A, B, C, XBLOCK=32, YBLOCK=64, num_buffers=2):
 @pytest.mark.parametrize("xnumel, ynumel", [(1000, 2000), (4000, 120)])
 @pytest.mark.parametrize("XBLOCK, YBLOCK", [(32, 64)])
 @pytest.mark.parametrize("num_buffers", [1, 2, 3])
+@pytest.mark.skipif(not is_ampere_or_newer(), reason="Requires Ampere or newer")
 def test_elementwise_add_pipelined(xnumel, ynumel, XBLOCK, YBLOCK, num_buffers):
     a = torch.randn(xnumel, ynumel, device="cuda")
     b = torch.randn(xnumel, ynumel, device="cuda")
