@@ -35,19 +35,6 @@ bool squareSublayoutIsIdentity(const LinearLayout &ll,
       ll, dimNames, [](int b, int32_t basis) { return basis == (1 << b); });
 }
 
-bool squareSublayoutIsPermutation(const LinearLayout &ll,
-                                  ArrayRef<StringAttr> dimNames) {
-  int32_t mask = 0;
-  return checkSquareSublayout(ll, dimNames, [&](int b, int32_t basis) {
-    if (!llvm::isPowerOf2_32(basis))
-      return false;
-    if (mask & basis)
-      return false; // check if this bit is already set
-    mask |= basis;
-    return true;
-  });
-}
-
 LinearLayout
 ensureLayoutNotLargerThan(const LinearLayout &layout,
                           const llvm::SmallDenseMap<StringAttr, int64_t> &shape,

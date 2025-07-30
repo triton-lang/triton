@@ -446,21 +446,6 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
     auto bitMask = b.lshr(warpMask, b.zext(rewriter.getI64Type(), selectLane));
     return b.trunc(i1_ty, bitMask);
   }
-
-  // For direct-to-lds the order of the shared encoding decides the order we
-  // load elements from global memory. This function returns true if the fastest
-  // dim for the sharedEnc is contiguous for the global ptrs/offsets
-  bool isFastedLoadDimContiguous(Value srcPtrOrOffset,
-                                 MemDescType sharedTy) const {
-    auto fastestDim = triton::gpu::getOrder(sharedTy)[0];
-    AxisInfo *axisInfo = axisAnalysisPass.getAxisInfo(srcPtrOrOffset);
-
-    // This can happen if axis analysis fails (e.g. lit tests).
-    if (axisInfo->getRank() <= fastestDim)
-      return false;
-
-    return axisInfo->getContiguity(fastestDim) > 1;
-  }
 };
 
 struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
@@ -732,18 +717,9 @@ struct BufferLoadToLocalOpConversion
         // laneId + swizzleOffset will always stay inside the warp [0,
         // threadsPerWarp) because we only swizzle inside a warp
         Value swizzledLaneId = b.add(laneId, swizzleLaneOffset);
-        if (isFastedLoadDimContiguous(offset, cast<MemDescType>(dstTy))) {
-          // Because rows are contiguous and we only swizzle inside rows by
-          // swapping elements between lanes we can add laneOffset * vecSize to
-          // the offset to apply the swizzling
-          offsetIn = b.add(offsetIn, b.mul(swizzleLaneOffset,
-                                           b.i32_val(vecTy.getNumElements())));
-        } else {
-          // If rows are not contiguous in memory we need to shuffle the
-          // pointers to apply the swizzling to the src pointers
-          offsetIn =
-              targetInfo.shuffleIdx(rewriter, loc, offsetIn, swizzledLaneId);
-        }
+        // Shuffle based on swizzleLaneId to apply the swizzling
+        offsetIn =
+            targetInfo.shuffleIdx(rewriter, loc, offsetIn, swizzledLaneId);
 
         if (mask) {
           pred =
@@ -877,17 +853,9 @@ struct AsyncCopyGlobalToLocalOpConversion
         Value swizzledLaneId =
             b.add(getLaneId(rewriter, loc), swizzledLaneOffsets[i]);
 
-        if (isFastedLoadDimContiguous(op.getSrc(), cast<MemDescType>(dstTy))) {
-          // Because rows are contiguous and we only swizzle inside rows by
-          // swapping elements between lanes we can move the vecTy typed src
-          // pointer by laneOffset elements to apply the swizzling.
-          srcPtr =
-              b.gep(srcPtr.getType(), vecTy, srcPtr, swizzledLaneOffsets[i]);
-        } else {
-          // If rows are not contiguous in memory we need to shuffle the
-          // pointers to apply the swizzling to the src pointers
-          srcPtr = targetInfo.shuffleIdx(rewriter, loc, srcPtr, swizzledLaneId);
-        }
+        // Shuffle based on swizzleLaneId to apply the swizzling
+        srcPtr = targetInfo.shuffleIdx(rewriter, loc, srcPtr, swizzledLaneId);
+
         if (!maskElements.empty()) {
           pred =
               shuffleMask(rewriter, b, loc, targetInfo, swizzledLaneId, pred);

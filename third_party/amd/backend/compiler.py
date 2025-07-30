@@ -18,8 +18,9 @@ def get_min_dot_size(target: GPUTarget):
     return lambda lhs_type, rhs_type: (1, 1, 1)
 
 
-def is_pingpong_schedule_enabled(arch):
-    return (arch == "gfx942") if knobs.amd.use_block_pingpong is None else knobs.amd.use_block_pingpong
+def is_pingpong_schedule_enabled(arch, use_async_copy):
+    return (arch == "gfx942" or (arch == "gfx950" and use_async_copy is True)
+            ) if knobs.amd.use_block_pingpong is None else knobs.amd.use_block_pingpong
 
 
 def is_in_thread_transpose_enabled(arch):
@@ -218,7 +219,7 @@ class HIPBackend(BaseBackend):
         global_prefetch = knobs.amd.global_prefetch
         local_prefetch = knobs.amd.local_prefetch
         use_async_copy = knobs.amd.use_async_copy
-        use_block_pingpong = is_pingpong_schedule_enabled(options.arch)
+        use_block_pingpong = is_pingpong_schedule_enabled(options.arch, use_async_copy)
 
         amd.passes.ttgpuir.add_stream_pipeline(pm, options.num_stages, global_prefetch, local_prefetch, use_async_copy,
                                                use_block_pingpong)

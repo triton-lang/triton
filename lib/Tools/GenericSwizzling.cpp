@@ -1,5 +1,4 @@
 #include "triton/Tools/GenericSwizzling.h"
-#include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 
 #include "third_party/f2reduce/f2reduce.h"
 #include "triton/Tools/LayoutUtils.h"

@@ -13,6 +13,7 @@
 #include "Dialect/NVWS/IR/NVWSAttrEnums.cpp.inc"
 
 #define GET_OP_CLASSES
+#include "Dialect/NVWS/IR/NVWSOpInterfaces.cpp.inc"
 #include "Dialect/NVWS/IR/Ops.cpp.inc"
 
 namespace mlir::triton::nvws {
@@ -79,13 +80,15 @@ std::optional<Twine> static arefEnterVerify(
 }
 
 LogicalResult ArefPutEnterOp::verify() {
-  if (auto result = arefEnterVerify(getAref().getType(), getResultTypes()))
+  if (auto result =
+          arefEnterVerify(getAref().getType(), getBuffers().getType()))
     return emitError(*result);
   return success();
 }
 
 LogicalResult ArefGetEnterOp::verify() {
-  if (auto result = arefEnterVerify(getAref().getType(), getResultTypes()))
+  if (auto result =
+          arefEnterVerify(getAref().getType(), getBuffers().getType()))
     return emitError(*result);
   return success();
 }

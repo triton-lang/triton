@@ -747,6 +747,57 @@ public:
   }
 };
 
+template <typename Op> Op getDefOpBeforeConvertLayout(Value op) {
+  while (auto cvtOp = op.getDefiningOp<ttg::ConvertLayoutOp>()) {
+    op = cvtOp.getSrc();
+  }
+  return op.getDefiningOp<Op>();
+}
+
+bool isScaleShuffled(Value scale) {
+  if (!scale) {
+    return false;
+  }
+
+  auto shape = cast<RankedTensorType>(scale.getType()).getShape();
+
+  int rank = shape.size();
+  int blockNonK = shape[rank - 2];
+  // 1 scale always scales 32 elements along K dim
+  int blockK = shape[rank - 1] * 32;
+
+  auto reshapeOp2D = getDefOpBeforeConvertLayout<triton::ReshapeOp>(scale);
+  if (!reshapeOp2D || reshapeOp2D.getType().getShape() != shape) {
+    return false;
+  }
+
+  const std::array<int, 7> transposeOrder{0, 5, 3, 1, 4, 2, 6};
+  auto transOp =
+      getDefOpBeforeConvertLayout<triton::TransOp>(reshapeOp2D.getSrc());
+  if (!transOp || transOp.getOrder() != ArrayRef<int>(transposeOrder)) {
+    return false;
+  }
+
+  const std::array<int64_t, 7> reshape7DShape{
+      blockNonK / 32, blockK / 32 / 8, 4, 16, 2, 2, 1};
+  auto reshapeOp7D =
+      getDefOpBeforeConvertLayout<triton::ReshapeOp>(transOp.getSrc());
+
+  if (!reshapeOp7D ||
+      reshapeOp7D.getType().getShape() != ArrayRef<int64_t>(reshape7DShape)) {
+    return false;
+  }
+
+  return true;
+}
+
+SmallVector<unsigned, 2> getTilesPerWarp(Value aScale, Value bScale) {
+  if (isScaleShuffled(aScale) || isScaleShuffled(bScale)) {
+    return {2, 2};
+  }
+  return {1, 1};
+}
+
 class ScaledBlockedToScaledMFMAF8F6F4 final
     : public OpRewritePattern<triton::DotScaledOp> {
   int mfmaVersion;
@@ -820,12 +871,34 @@ public:
     auto warpsPerTile =
         warpsPerTileMFMA(dotOp, oldShape, numWarps, {mDim, nDim});
 
+    // For scale tensor preshuffling, the minimum block size is 32x32x256.
+    // When using MFMA16 instructions, each warp should compute two MFMA ops
+    // along the non-K dimension. To support this, we must set tilesPerWarp to
+    // {2, 2}. Failing to do so won't break correctness, but it will prevent
+    // vectorized local_loads, as the data each thread needs won't be contiguous
+    // due to the shuffle pattern. This requirement doesn’t apply to MFMA32
+    // instructions, since only one MFMA op spans the non-K dimension at the
+    // minimal shuffling size.
+    SmallVector<unsigned> tilesPerWarp = getTilesPerWarp(aScale, bScale);
+
+    if (rank == 3) {
+      tilesPerWarp.insert(tilesPerWarp.begin(), 1);
+    }
+
     // Always use transposed mfma layout. This enables larger vectorization
     // for global store instructions.
-    auto mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
-        ctx, /*verison=*/mfmaVersion, warpsPerTile,
-        /*instrShape=*/mDim, nDim, /*isTransposed=*/true, ctaLayout,
-        oldRetType.getElementType());
+    mlir::Attribute mfmaEnc;
+    if (llvm::any_of(tilesPerWarp, [](int x) { return x != 1; })) {
+      mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
+          ctx, /*verison=*/mfmaVersion, warpsPerTile, tilesPerWarp,
+          /*instrShape=*/mDim, nDim, /*isTransposed=*/true, ctaLayout,
+          oldRetType.getElementType());
+    } else {
+      mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
+          ctx, /*verison=*/mfmaVersion, warpsPerTile,
+          /*instrShape=*/mDim, nDim, /*isTransposed=*/true, ctaLayout,
+          oldRetType.getElementType());
+    }
 
     auto newRetType =
         RankedTensorType::get(oldShape, oldRetType.getElementType(), mfmaEnc);
@@ -882,7 +955,6 @@ public:
         shape = llvm::to_vector(scale.getType().getShape());
       }
 
-      SmallVector<unsigned> tilesPerWarp(warpsPerTile.size(), 1);
       LinearLayout newLL = chooseScaledMfmaScaleLayout(
           ctx, idx, shape, mDim, tilesPerWarp, warpsPerTile);
 
