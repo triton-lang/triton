@@ -146,6 +146,14 @@ def all_to_all(input_list: list[torch.Tensor], dim: int = 0) -> list[torch.Tenso
         return input_list
 
 
+def routing_torch():
+    pass
+
+
+def routing_triton():
+    pass
+
+
 def routing(x, logits, n_expts_act, sm_first=False, expt_indx=None, n_rows=None, EP=1,
             TP=1) -> Tuple[RoutingData, GatherIndx, ScatterIndx, ReduceScatterMetadata]:
     if _is_distributed_launch():
