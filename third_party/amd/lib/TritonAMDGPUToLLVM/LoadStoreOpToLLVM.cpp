@@ -1407,15 +1407,15 @@ struct AtomicCASOpConversion
     // atomic ops
     for (size_t i = 0; i < elemsPerThread; i += vec) {
       Value casVal = b.undef(vecTy);
+      Value casCmp = b.undef(vecTy);
       for (int ii = 0; ii < vec; ++ii) {
         Value iiVal = createIndexAttrConstant(
             rewriter, loc, getTypeConverter()->getIndexType(), ii);
         casVal = b.insert_element(vecTy, casVal, valElements[i + ii], iiVal);
+        casCmp = b.insert_element(vecTy, casCmp, cmpElements[i + ii], iiVal);
       }
 
       Value casPtr = ptrElements[i];
-      Value casCmp = cmpElements[i];
-      casVal = valElements[i];
 
       // use op
       if (tensorTy) { // for tensor
