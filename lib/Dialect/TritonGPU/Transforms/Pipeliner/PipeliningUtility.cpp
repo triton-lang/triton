@@ -820,3 +820,94 @@ scf::ForOp triton::lowerTMADescriptors(scf::ForOp forOp,
   }
   return forOp;
 }
+
+DenseSet<Operation *>
+triton::getTopLevelUsersInLoop(Operation *op, scf::ForOp forOp,
+                               std::function<bool(Operation *)> filter) {
+  DenseSet<Operation *> topLevelUsers;
+  SmallVector<OpOperand *> q;
+  for (auto &use : op->getUses())
+    q.push_back(&use);
+  while (!q.empty()) {
+    auto use = q.pop_back_val();
+    auto yieldOp = dyn_cast<scf::YieldOp>(use->getOwner());
+    if (yieldOp && yieldOp->getParentOp() == forOp) {
+      for (auto &use :
+           forOp.getRegionIterArgs()[use->getOperandNumber()].getUses())
+        q.push_back(&use);
+      continue;
+    }
+    // Don't count view operations as uses. Follow them through to their
+    // users.
+    if (use->getOwner()->hasTrait<OpTrait::MemDescViewTrait>()) {
+      for (auto &use : use->getOwner()->getUses())
+        q.push_back(&use);
+      continue;
+    }
+    if (filter && !filter(use->getOwner()))
+      continue;
+    Operation *topLevelUser =
+        forOp.getBody()->findAncestorOpInBlock(*use->getOwner());
+    topLevelUsers.insert(topLevelUser);
+  }
+  return topLevelUsers;
+}
+
+// Helper function that finds an operation based on a comparison predicate
+static Operation *getUseOfPipelinedOp(
+    ArrayRef<Operation *> ops, scf::ForOp forOp,
+    triton::CoarseSchedule &schedule,
+    std::function<bool(Operation *)> filterUse,
+    std::function<bool(Operation *, Operation *)> shouldPrefer) {
+  DenseSet<Operation *> topLevelUsers;
+  Operation *selectedUser = nullptr;
+  for (Operation *op : ops) {
+    auto users = triton::getTopLevelUsersInLoop(op, forOp, filterUse);
+    topLevelUsers.insert(users.begin(), users.end());
+  }
+  for (Operation *topLevelUser : topLevelUsers) {
+    assert(schedule.count(topLevelUser) && "op user not found in the schedule");
+    if (!selectedUser || shouldPrefer(topLevelUser, selectedUser)) {
+      selectedUser = topLevelUser;
+    }
+  }
+  return selectedUser;
+}
+
+Operation *
+triton::getFirstUseOfPipelinedOp(ArrayRef<Operation *> ops, scf::ForOp forOp,
+                                 triton::CoarseSchedule &schedule,
+                                 std::function<bool(Operation *)> filterUse) {
+  return getUseOfPipelinedOp(
+      ops, forOp, schedule, filterUse,
+      [&](Operation *candidate, Operation *current) {
+        auto [candidateStage, candidateCluster] = schedule[candidate];
+        auto [currentStage, currentCluster] = schedule[current];
+
+        return candidateStage < currentStage ||
+               (candidateStage == currentStage &&
+                schedule.clusters.isBefore(candidateCluster, currentCluster)) ||
+               (candidateStage == currentStage &&
+                candidateCluster == currentCluster &&
+                candidate->isBeforeInBlock(current));
+      });
+}
+
+Operation *
+triton::getLastUseOfPipelinedOp(ArrayRef<Operation *> ops, scf::ForOp forOp,
+                                triton::CoarseSchedule &schedule,
+                                std::function<bool(Operation *)> filterUse) {
+  return getUseOfPipelinedOp(
+      ops, forOp, schedule, filterUse,
+      [&](Operation *candidate, Operation *current) {
+        auto [candidateStage, candidateCluster] = schedule[candidate];
+        auto [currentStage, currentCluster] = schedule[current];
+
+        return candidateStage > currentStage ||
+               (candidateStage == currentStage &&
+                schedule.clusters.isBefore(currentCluster, candidateCluster)) ||
+               (candidateStage == currentStage &&
+                candidateCluster == currentCluster &&
+                current->isBeforeInBlock(candidate));
+      });
+}

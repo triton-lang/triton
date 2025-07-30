@@ -164,7 +164,9 @@ Value createIncrementModulo(OpBuilder &builder, Location loc, Value counter,
 
 scf::ForOp lowerTMADescriptors(scf::ForOp forOp, CoarseSchedule &schedule);
 
-namespace gpu {
+DenseSet<Operation *>
+getTopLevelUsersInLoop(Operation *op, scf::ForOp forOp,
+                       std::function<bool(Operation *)> filter = nullptr);
 
 // Return the "first" op in terms of the stage and cluser ordering
 Operation *
@@ -178,7 +180,6 @@ getLastUseOfPipelinedOp(ArrayRef<Operation *> ops, scf::ForOp forOp,
                         CoarseSchedule &schedule,
                         std::function<bool(Operation *)> filterUse = nullptr);
 
-} // namespace gpu
 } // namespace triton
 } // namespace mlir
 

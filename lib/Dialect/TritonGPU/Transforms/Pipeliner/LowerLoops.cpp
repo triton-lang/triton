@@ -32,95 +32,6 @@ namespace mlir {
 namespace triton {
 namespace gpu {
 
-DenseSet<Operation *> static getTopLevelUsersInLoop(
-    Operation *op, scf::ForOp forOp,
-    std::function<bool(Operation *)> filter = nullptr) {
-  DenseSet<Operation *> topLevelUsers;
-  SmallVector<OpOperand *> q;
-  for (auto &use : op->getUses())
-    q.push_back(&use);
-  while (!q.empty()) {
-    auto use = q.pop_back_val();
-    auto yieldOp = dyn_cast<scf::YieldOp>(use->getOwner());
-    if (yieldOp && yieldOp->getParentOp() == forOp) {
-      for (auto &use :
-           forOp.getRegionIterArgs()[use->getOperandNumber()].getUses())
-        q.push_back(&use);
-      continue;
-    }
-    // Don't count view operations as uses. Follow them through to their
-    // users.
-    if (use->getOwner()->hasTrait<OpTrait::MemDescViewTrait>()) {
-      for (auto &use : use->getOwner()->getUses())
-        q.push_back(&use);
-      continue;
-    }
-    if (filter && !filter(use->getOwner()))
-      continue;
-    Operation *topLevelUser =
-        forOp.getBody()->findAncestorOpInBlock(*use->getOwner());
-    topLevelUsers.insert(topLevelUser);
-  }
-  return topLevelUsers;
-}
-
-// Helper function that finds an operation based on a comparison predicate
-static Operation *getUseOfPipelinedOp(
-    ArrayRef<Operation *> ops, scf::ForOp forOp, CoarseSchedule &schedule,
-    std::function<bool(Operation *)> filterUse,
-    std::function<bool(Operation *, Operation *)> shouldPrefer) {
-  DenseSet<Operation *> topLevelUsers;
-  Operation *selectedUser = nullptr;
-  for (Operation *op : ops) {
-    auto users = getTopLevelUsersInLoop(op, forOp, filterUse);
-    topLevelUsers.insert(users.begin(), users.end());
-  }
-  for (Operation *topLevelUser : topLevelUsers) {
-    assert(schedule.count(topLevelUser) && "op user not found in the schedule");
-    if (!selectedUser || shouldPrefer(topLevelUser, selectedUser)) {
-      selectedUser = topLevelUser;
-    }
-  }
-  return selectedUser;
-}
-
-Operation *
-getFirstUseOfPipelinedOp(ArrayRef<Operation *> ops, scf::ForOp forOp,
-                         CoarseSchedule &schedule,
-                         std::function<bool(Operation *)> filterUse) {
-  return getUseOfPipelinedOp(
-      ops, forOp, schedule, filterUse,
-      [&](Operation *candidate, Operation *current) {
-        auto [candidateStage, candidateCluster] = schedule[candidate];
-        auto [currentStage, currentCluster] = schedule[current];
-
-        return candidateStage < currentStage ||
-               (candidateStage == currentStage &&
-                schedule.clusters.isBefore(candidateCluster, currentCluster)) ||
-               (candidateStage == currentStage &&
-                candidateCluster == currentCluster &&
-                candidate->isBeforeInBlock(current));
-      });
-}
-
-Operation *getLastUseOfPipelinedOp(ArrayRef<Operation *> ops, scf::ForOp forOp,
-                                   CoarseSchedule &schedule,
-                                   std::function<bool(Operation *)> filterUse) {
-  return getUseOfPipelinedOp(
-      ops, forOp, schedule, filterUse,
-      [&](Operation *candidate, Operation *current) {
-        auto [candidateStage, candidateCluster] = schedule[candidate];
-        auto [currentStage, currentCluster] = schedule[current];
-
-        return candidateStage > currentStage ||
-               (candidateStage == currentStage &&
-                schedule.clusters.isBefore(currentCluster, candidateCluster)) ||
-               (candidateStage == currentStage &&
-                candidateCluster == currentCluster &&
-                current->isBeforeInBlock(candidate));
-      });
-}
-
 namespace {
 
 /////////////////////////////
@@ -171,7 +82,8 @@ int getDefUseStageDiff(Operation *op, scf::ForOp forOp,
   assert(schedule.count(op) && "Op not found in the schedule");
   int defStage = schedule[op].first;
   std::optional<int> useStage;
-  DenseSet<Operation *> topLevelUsers = getTopLevelUsersInLoop(op, forOp);
+  DenseSet<Operation *> topLevelUsers =
+      triton::getTopLevelUsersInLoop(op, forOp);
   // Special case for loads used by local_alloc:
   // we must consider the uses of the local_alloc, as it may be removed and its
   // uses will become direct uses of the async load.
@@ -181,7 +93,8 @@ int getDefUseStageDiff(Operation *op, scf::ForOp forOp,
     DenseSet<Operation *> allocUsers;
     for (Operation *topLevelUser : topLevelUsers) {
       if (auto localAlloc = dyn_cast<ttg::LocalAllocOp>(topLevelUser)) {
-        DenseSet<Operation *> users = getTopLevelUsersInLoop(localAlloc, forOp);
+        DenseSet<Operation *> users =
+            triton::getTopLevelUsersInLoop(localAlloc, forOp);
         allocUsers.insert(users.begin(), users.end());
       }
     }
