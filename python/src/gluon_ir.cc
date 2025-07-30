@@ -98,6 +98,8 @@ struct GluonLayouts {
   GluonLayouts() {
     auto layouts =
         py::module::import("triton.experimental.gluon.language._layouts");
+    auto amdMfmaLayouts =
+        py::module::import("triton.experimental.gluon.language.amd.cdna3");
     AutoLayout = py::object(layouts.attr("AutoLayout")).release();
     BlockedLayout = py::object(layouts.attr("BlockedLayout")).release();
     SliceLayout = py::object(layouts.attr("SliceLayout")).release();
@@ -108,6 +110,7 @@ struct GluonLayouts {
     NVMMASharedLayout = py::object(layouts.attr("NVMMASharedLayout")).release();
     SwizzledSharedLayout =
         py::object(layouts.attr("SwizzledSharedLayout")).release();
+    AMDMFMALayout = py::object(amdMfmaLayouts.attr("AMDMFMALayout")).release();
   }
 };
 
@@ -183,11 +186,17 @@ py::object layoutToGluon(Attribute layout) {
   } else if (auto autoEnc = dyn_cast<gluon::AutoEncodingAttr>(layout)) {
     return layouts.AutoLayout();
   } else if (auto amdMfma = dyn_cast<ttg::AMDMfmaEncodingAttr>(layout)) {
+    auto elemType = amdMfma.getElementType();
+    bool isFp32 =
+        !elemType.has_value() || isa<mlir::Float32Type>(elemType.value());
+    assert(isFp32 && "Only float32 is supported for now in AMF MFMA encoding");
     auto ctaLayout = amdMfma.getCTALayout();
-    return layouts.AMDMFMALayout(amdMfma.getVersion(), amdMfma.getCTAsPerCGA(),
-                                 amdMfma.getTilesPerWarp(), amdMfma.getMDim(),
-                                 amdMfma.getNDim(), amdMfma.getIsTransposed(),
-                                 ctaLayout, amdMfma.getElementType());
+    std::vector<unsigned> instrShape{amdMfma.getMDim(), amdMfma.getNDim()};
+    return layouts.AMDMFMALayout(
+        amdMfma.getVersion(), instrShape, amdMfma.getIsTransposed(),
+        amdMfma.getWarpsPerCTA(), amdMfma.getTilesPerWarp(),
+        ctaLayout.getCTAsPerCGA(), ctaLayout.getCTASplitNum(),
+        ctaLayout.getCTAOrder());
   }
 
   throw py::value_error("Unhandled encoding encountered");

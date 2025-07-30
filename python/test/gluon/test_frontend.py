@@ -24,6 +24,7 @@ BLACKWELL_TARGET = GPUTarget("cuda", 100, 32)
 HOPPER_TARGET = GPUTarget("cuda", 90, 32)
 AMPERE_TARGET = GPUTarget("cuda", 80, 32)
 HIP_TARGET = GPUTarget("hip", "gfx1200", 32)
+HIP_TARGET_CDNA3 = GPUTarget("hip", "gfx950", 64)
 
 ALL_TARGETS = [AMPERE_TARGET, HOPPER_TARGET, BLACKWELL_TARGET, HIP_TARGET]
 
@@ -1324,29 +1325,26 @@ def amd_mfma_layout_kernel():
                                                       warps_per_cta=[4, 1], tiles_per_warp=[4, 1], ctas_per_cga=[1, 1],
                                                       cta_split_num=[1, 1], cta_order=[1, 0])
 
-    layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 32], [4, 1], [1, 0])
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 64], [4, 1], [1, 0])
 
     x = ttgl.full([128, 32], 0, ttgl.float32, layout)
     res = ttgl.convert_layout(x, mfma_layout)  # noqa: F841
 
 
-@pytest.mark.skipif(not is_hip_cdna(), reason="Requires CDNA")
-def test_amd_mfma_layout(fresh_knobs):
-    knobs.compilation.disable_line_info = True
+@pytest.mark.parametrize("target", [HIP_TARGET_CDNA3])
+def test_amd_mfma_layout(target):
 
-    h = amd_mfma_layout_kernel.warmup(sanitize_overflow=False, grid=(1, ))
-
+    module = run_parser(amd_mfma_layout_kernel, target=target)
     expecttest.assert_expected_inline(
-        anonymize_ir(h.asm['source']), """\
+        anonymize_ir(module.str_nodebug()), """\
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 64], warpsPerCTA = [4, 1], order = [1, 0]}>
 #mma = #ttg.amd_mfma<{version = 4, warpsPerCTA = [4, 1], tilesPerWarp = [4, 1], instrShape = [32, 32], isTransposed = true}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 64 : i32} {
   tt.func public @amd_mfma_layout_kernel() attributes {noinline = false} {
-    %cst = arith.constant 0.000000e+00 : f32 loc(#loc)
-    %cst_0 = arith.constant dense<0.000000e+00> : tensor<128x32xf32, #blocked> loc(#loc)
-    %0 = ttg.convert_layout %cst_0 : tensor<128x32xf32, #blocked> -> tensor<128x32xf32, #mma> loc(#loc)
-    tt.return loc(#loc)
-  } loc(#loc)
-} loc(#loc)
-#loc = loc(unknown)
+    %cst = arith.constant 0.000000e+00 : f32
+    %cst_0 = arith.constant dense<0.000000e+00> : tensor<128x32xf32, #blocked>
+    %0 = ttg.convert_layout %cst_0 : tensor<128x32xf32, #blocked> -> tensor<128x32xf32, #mma>
+    tt.return
+  }
+}
 """)
