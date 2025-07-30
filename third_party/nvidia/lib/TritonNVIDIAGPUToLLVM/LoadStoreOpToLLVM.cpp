@@ -661,7 +661,7 @@ struct AtomicCASOpConversion
       auto *cmpOpr = ptxBuilderAtomicCAS.newOperand(casCmp, tyId);
       auto *valOpr = ptxBuilderAtomicCAS.newOperand(casVal, tyId);
       auto &atom = *ptxBuilderAtomicCAS.create<PTXInstr>("atom");
-      auto sTy = "b" + std::to_string(valueElemNBits);
+      auto sTy = "b" + std::to_string(valueElemNBits * vec);
       std::string semStr;
       llvm::raw_string_ostream os(semStr);
       os << op.getSem();
