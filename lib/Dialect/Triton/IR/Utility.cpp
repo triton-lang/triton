@@ -95,10 +95,11 @@ tt::MakeTensorPtrOp tt::getMakeTensorPtrOp(Value v) {
 Value tt::getLastInductionValue(OpBuilder &b, scf::ForOp loop) {
   Location loc = loop.getLoc();
   // (ub - lb -1) // step * step + lb
+  auto type = loop.getUpperBound().getType();
   Value diff =
       b.create<arith::SubIOp>(loc, loop.getUpperBound(), loop.getLowerBound());
   diff = b.create<arith::SubIOp>(
-      loc, diff, b.create<arith::ConstantOp>(loc, b.getI32IntegerAttr(1)));
+      loc, diff, b.create<arith::ConstantOp>(loc, b.getIntegerAttr(type, 1)));
   Value ceilStep = b.create<arith::MulIOp>(
       loc, b.create<arith::DivSIOp>(loc, diff, loop.getStep()), loop.getStep());
   return b.create<arith::AddIOp>(loc, ceilStep, loop.getLowerBound());
