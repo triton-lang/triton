@@ -820,13 +820,6 @@ int32_t LocalAllocOp::getAlignmentOrDefault() {
 
 // -- WarpSpecializeOp --
 
-static Type removeEncodingIfTensor(Type type) {
-  if (auto tensorType = dyn_cast<RankedTensorType>(type)) {
-    return tensorType.cloneWithEncoding({});
-  }
-  return type;
-}
-
 RegionRange WarpSpecializeOp::getPartitionRegions() {
   return cast<WarpSpecializePartitionsOp>(
              getPartitionOpHolder().front().front())
