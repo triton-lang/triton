@@ -1,87 +1,25 @@
-#include <algorithm>
-#include <alloca.h>
-#include <dlfcn.h>
-#include <map>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <pybind11/stl_bind.h>
+
+#include <alloca.h>
+#include <cstdint>
+#include <cstdlib>
+#include <dlfcn.h>
+#include <iterator>
+#include <limits>
+#include <map>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <tuple>
 #include <vector>
 
-#include <cstdint>
-#include <cstdlib>
-#include <iterator>
-#include <limits>
-#include <optional>
-
-#include "cuda.h"
+#include "cuda_declarations.h"
 
 namespace py = pybind11;
 
 namespace {
-
-// Raise a python exception if the CUDA result code is not CUDA_SUCCESS.
-inline void gpuAssert(CUresult code, const char *file, int line) {
-  if (code == CUDA_SUCCESS)
-    return;
-  const char *errorPtr = nullptr;
-  cuGetErrorString(code, &errorPtr);
-  std::string errorStr = errorPtr ? errorPtr : "Unknown CUDA error";
-  std::string errorMessage = "Triton Error [CUDA]: " + errorStr;
-  throw py::cast_error(errorMessage);
-}
-
-#define CUDA_CHECK(ans) gpuAssert((ans), __FILE__, __LINE__);
-
-// Used to check if functions exist in old CUDA driver versions.
-#define INITIALIZE_FUNCTION_POINTER_IF_NULL(funcPointer, initializerFunction)  \
-  do {                                                                         \
-    if ((funcPointer) == nullptr) {                                            \
-      (funcPointer) = (initializerFunction)();                                 \
-    }                                                                          \
-  } while (0)
-
-#define GET_FUNCTION_HANDLE(name, symbolName)                                  \
-  static symbolName##_t name() {                                               \
-    /* Open the shared library */                                              \
-    void *libHandle = dlopen("libcuda.so.1", RTLD_LAZY);                       \
-    /* Check for errors */                                                     \
-    if (dlerror()) {                                                           \
-      throw py::value_error("Failed to open libcuda.so.1");                    \
-      return nullptr;                                                          \
-    }                                                                          \
-    symbolName##_t funcHandle =                                                \
-        reinterpret_cast<symbolName##_t>(dlsym(libHandle, #symbolName));       \
-    /* Check for errors */                                                     \
-    if (dlerror()) {                                                           \
-      dlclose(libHandle);                                                      \
-      throw py::value_error("Failed to retrieve " #symbolName                  \
-                            " from libcuda.so.1");                             \
-      return nullptr;                                                          \
-    }                                                                          \
-    return funcHandle;                                                         \
-  }
-
-typedef CUresult (*cuOccupancyMaxActiveClusters_t)(
-    int *numClusters, CUfunction func, const CUlaunchConfig *config);
-GET_FUNCTION_HANDLE(getCuOccupancyMaxActiveClustersHandle,
-                    cuOccupancyMaxActiveClusters);
-
-typedef CUresult (*cuTensorMapEncodeTiled_t)(
-    CUtensorMap *tensorMap, CUtensorMapDataType tensorDataType,
-    cuuint32_t tensorRank, void *globalAddress, const cuuint64_t *globalDim,
-    const cuuint64_t *globalStrides, const cuuint32_t *boxDim,
-    const cuuint32_t *elementStrides, CUtensorMapInterleave interleave,
-    CUtensorMapSwizzle swizzle, CUtensorMapL2promotion l2Promotion,
-    CUtensorMapFloatOOBfill oobFill);
-GET_FUNCTION_HANDLE(getCuTensorMapEncodeTiledHandle, cuTensorMapEncodeTiled);
-
-typedef CUresult (*cuLaunchKernelEx_t)(const CUlaunchConfig *config,
-                                       CUfunction f, void **kernelParams,
-                                       void **extra);
-GET_FUNCTION_HANDLE(getLaunchKernelExHandle, cuLaunchKernelEx);
 
 // Configuration with all the information necessary to launch a compiled
 // Triton kernel using the CUDA driver API.
@@ -149,13 +87,8 @@ void launchKernel(const TritonLaunchConfig &config) {
         .value = {.clusterSchedulingPolicyPreference =
                       CU_CLUSTER_SCHEDULING_POLICY_SPREAD}};
   }
-  // cuLaunchKernelEx was added in CUDA 12, so load it dynamically to be
-  // able to link on CUDA 11 and earlier.
-  static cuLaunchKernelEx_t cuLaunchKernelEx = nullptr;
-  INITIALIZE_FUNCTION_POINTER_IF_NULL(cuLaunchKernelEx,
-                                      getLaunchKernelExHandle);
 
-  CUDA_CHECK(cuLaunchKernelEx(&cuConfig, config.function, config.params, 0));
+  CUDA_CHECK(launchKernelEx(&cuConfig, config.function, config.params, 0));
 }
 
 // Interface used by various py::object extractors to extract obj into a memory
@@ -192,8 +125,8 @@ void extractPointer(py::handle obj, void *ptr) {
     return; // valid nullptr
   }
 
-  CUresult status = cuPointerGetAttribute(
-      devPtr, CU_POINTER_ATTRIBUTE_DEVICE_POINTER, *devPtr);
+  CUresult status =
+      pointerGetAttribute(devPtr, CU_POINTER_ATTRIBUTE_DEVICE_POINTER, *devPtr);
   if (status == CUDA_ERROR_INVALID_VALUE) {
     throw py::value_error(
         "Pointer argument cannot be accessed from Triton (cpu tensor?)");
@@ -354,12 +287,12 @@ void launchHook(py::object hook, py::object metadata) {
 
 void ensureCudaContext(CUdevice *device) {
   CUcontext pctx;
-  CUDA_CHECK(cuCtxGetCurrent(&pctx));
+  CUDA_CHECK(ctxGetCurrent(&pctx));
   if (!pctx) {
     // Ensure device context.
-    CUDA_CHECK(cuDeviceGet(device, 0));
-    CUDA_CHECK(cuDevicePrimaryCtxRetain(&pctx, *device));
-    CUDA_CHECK(cuCtxSetCurrent(pctx));
+    CUDA_CHECK(deviceGet(device, 0));
+    CUDA_CHECK(devicePrimaryCtxRetain(&pctx, *device));
+    CUDA_CHECK(ctxSetCurrent(pctx));
   }
 }
 
@@ -430,29 +363,29 @@ void launch(
 std::map<std::string, int32_t> getDeviceProperties(int32_t deviceId) {
   // Get device handle
   CUdevice device;
-  cuDeviceGet(&device, deviceId);
+  deviceGet(&device, deviceId);
 
   int32_t maxSharedMem;
-  CUDA_CHECK(cuDeviceGetAttribute(
+  CUDA_CHECK(deviceGetAttribute(
       &maxSharedMem, CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN,
       device));
   int32_t maxNumRegs;
-  CUDA_CHECK(cuDeviceGetAttribute(
+  CUDA_CHECK(deviceGetAttribute(
       &maxNumRegs, CU_DEVICE_ATTRIBUTE_MAX_REGISTERS_PER_BLOCK, device));
   int32_t multiprocessorCount;
-  CUDA_CHECK(cuDeviceGetAttribute(
+  CUDA_CHECK(deviceGetAttribute(
       &multiprocessorCount, CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT, device));
   int32_t warpSize;
   CUDA_CHECK(
-      cuDeviceGetAttribute(&warpSize, CU_DEVICE_ATTRIBUTE_WARP_SIZE, device));
+      deviceGetAttribute(&warpSize, CU_DEVICE_ATTRIBUTE_WARP_SIZE, device));
   int32_t smClockRate;
-  CUDA_CHECK(cuDeviceGetAttribute(&smClockRate, CU_DEVICE_ATTRIBUTE_CLOCK_RATE,
-                                  device));
+  CUDA_CHECK(
+      deviceGetAttribute(&smClockRate, CU_DEVICE_ATTRIBUTE_CLOCK_RATE, device));
   int32_t memClockRate;
-  CUDA_CHECK(cuDeviceGetAttribute(
-      &memClockRate, CU_DEVICE_ATTRIBUTE_MEMORY_CLOCK_RATE, device));
+  CUDA_CHECK(deviceGetAttribute(&memClockRate,
+                                CU_DEVICE_ATTRIBUTE_MEMORY_CLOCK_RATE, device));
   int32_t memBusWidth;
-  CUDA_CHECK(cuDeviceGetAttribute(
+  CUDA_CHECK(deviceGetAttribute(
       &memBusWidth, CU_DEVICE_ATTRIBUTE_GLOBAL_MEMORY_BUS_WIDTH, device));
 
   std::map<std::string, int32_t> properties = {
@@ -473,49 +406,50 @@ loadBinary(char *name, char *data, int shared, CUdevice device) {
   ensureCudaContext(&device);
 
   CUmodule mod;
-  CUDA_CHECK(cuModuleLoadData(&mod, data));
+  CUDA_CHECK(moduleLoadData(&mod, data));
   CUfunction fun;
-  CUDA_CHECK(cuModuleGetFunction(&fun, mod, name));
+  CUDA_CHECK(moduleGetFunction(&fun, mod, name));
   // Get allocated registers and spilled registers from the function.
   int32_t nRegs = 0;
-  CUDA_CHECK(cuFuncGetAttribute(&nRegs, CU_FUNC_ATTRIBUTE_NUM_REGS, fun));
+  CUDA_CHECK(funcGetAttribute(&nRegs, CU_FUNC_ATTRIBUTE_NUM_REGS, fun));
   int32_t nSpills = 0;
   CUDA_CHECK(
-      cuFuncGetAttribute(&nSpills, CU_FUNC_ATTRIBUTE_LOCAL_SIZE_BYTES, fun));
+      funcGetAttribute(&nSpills, CU_FUNC_ATTRIBUTE_LOCAL_SIZE_BYTES, fun));
   nSpills /= 4;
   int32_t nMaxThreads = 0;
-  CUDA_CHECK(cuFuncGetAttribute(&nMaxThreads,
-                                CU_FUNC_ATTRIBUTE_MAX_THREADS_PER_BLOCK, fun));
+  CUDA_CHECK(funcGetAttribute(&nMaxThreads,
+                              CU_FUNC_ATTRIBUTE_MAX_THREADS_PER_BLOCK, fun));
 
   int32_t sharedOptin;
-  CUDA_CHECK(cuDeviceGetAttribute(
+  CUDA_CHECK(deviceGetAttribute(
       &sharedOptin, CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN,
       device));
   // If the amount of shared memory is higher than the static shared memory
   // limit, then set dynamic shared memory to the difference.
   constexpr int32_t kStaticSharedMemLim = 49152;
   if (shared > kStaticSharedMemLim && sharedOptin > kStaticSharedMemLim) {
-    CUDA_CHECK(cuFuncSetCacheConfig(fun, CU_FUNC_CACHE_PREFER_SHARED));
+    CUDA_CHECK(funcSetCacheConfig(fun, CU_FUNC_CACHE_PREFER_SHARED));
     int32_t sharedStatic;
-    CUDA_CHECK(cuFuncGetAttribute(&sharedStatic,
-                                  CU_FUNC_ATTRIBUTE_SHARED_SIZE_BYTES, fun));
-    CUDA_CHECK(
-        cuFuncSetAttribute(fun, CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES,
-                           sharedOptin - sharedStatic));
+    CUDA_CHECK(funcGetAttribute(&sharedStatic,
+                                CU_FUNC_ATTRIBUTE_SHARED_SIZE_BYTES, fun));
+    CUDA_CHECK(funcSetAttribute(fun,
+                                CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES,
+                                sharedOptin - sharedStatic));
   }
 
   return {reinterpret_cast<uint64_t>(mod), reinterpret_cast<uint64_t>(fun),
           nRegs, nSpills, nMaxThreads};
 }
 
-int32_t occupancyMaxActiveClusters(uint64_t func, uint32_t shared,
-                                   uint32_t clusterDimX, uint32_t clusterDimY,
-                                   uint32_t clusterDimZ) {
+int32_t occupancyMaxActiveClustersCall(uint64_t func, uint32_t shared,
+                                       uint32_t clusterDimX,
+                                       uint32_t clusterDimY,
+                                       uint32_t clusterDimZ) {
   CUfunction cuFunc = (CUfunction)func;
 
   // Let each SM have one block
   py::gil_scoped_release release;
-  CUDA_CHECK(cuFuncSetAttribute(
+  CUDA_CHECK(funcSetAttribute(
       cuFunc, CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, shared));
 
   CUlaunchAttribute launchAttr{
@@ -536,14 +470,10 @@ int32_t occupancyMaxActiveClusters(uint64_t func, uint32_t shared,
   config.numAttrs = 1;
   config.attrs = &launchAttr;
 
-  static cuOccupancyMaxActiveClusters_t cuOccupancyMaxActiveClusters = nullptr;
-  INITIALIZE_FUNCTION_POINTER_IF_NULL(cuOccupancyMaxActiveClusters,
-                                      getCuOccupancyMaxActiveClustersHandle);
-
-  CUDA_CHECK(cuFuncSetAttribute(
+  CUDA_CHECK(funcSetAttribute(
       cuFunc, CU_FUNC_ATTRIBUTE_NON_PORTABLE_CLUSTER_SIZE_ALLOWED, 1));
   int32_t maxActiveClusters = -1;
-  CUDA_CHECK(cuOccupancyMaxActiveClusters(&maxActiveClusters, cuFunc, &config));
+  CUDA_CHECK(occupancyMaxActiveClusters(&maxActiveClusters, cuFunc, &config));
   return maxActiveClusters;
 }
 
@@ -565,9 +495,9 @@ void setPrintfFifoSize(int32_t size) {
   // This is unfriendly, so check if the old size matches the new size, and skip
   // the set() call if so.
   size_t oldSize = 0;
-  CUDA_CHECK(cuCtxGetLimit(&oldSize, CU_LIMIT_PRINTF_FIFO_SIZE));
+  CUDA_CHECK(ctxGetLimit(&oldSize, CU_LIMIT_PRINTF_FIFO_SIZE));
   if (oldSize != size) {
-    CUDA_CHECK(cuCtxSetLimit(CU_LIMIT_PRINTF_FIFO_SIZE, size));
+    CUDA_CHECK(ctxSetLimit(CU_LIMIT_PRINTF_FIFO_SIZE, size));
   }
 }
 
@@ -608,10 +538,7 @@ void fillTMADescriptor(uint64_t descAddress, uint64_t globalAddress,
       shapeInt[rank - 1] * (rank == 1 ? elemSize : stridesLL[rank - 2]);
 
   uint32_t elementStrides[kMaxRank] = {1, 1, 1, 1, 1};
-  static cuTensorMapEncodeTiled_t cuTensorMapEncodeTiled = nullptr;
-  INITIALIZE_FUNCTION_POINTER_IF_NULL(cuTensorMapEncodeTiled,
-                                      getCuTensorMapEncodeTiledHandle);
-  CUDA_CHECK(cuTensorMapEncodeTiled(
+  CUDA_CHECK(tensorMapEncodeTiled(
       (CUtensorMap *)descAddress, (CUtensorMapDataType)elemType, rank,
       (void *)globalAddress, shapeInt, stridesLL, blockSizeInt, elementStrides,
       CU_TENSOR_MAP_INTERLEAVE_NONE, (CUtensorMapSwizzle)swizzle,
@@ -625,7 +552,7 @@ void fillTMADescriptor(uint64_t descAddress, uint64_t globalAddress,
 void init_triton_cuda_utils(py::module &&m) {
   m.def("load_binary", &loadBinary);
   m.def("get_device_properties", &getDeviceProperties);
-  m.def("cuOccupancyMaxActiveClusters", &occupancyMaxActiveClusters);
+  m.def("cuOccupancyMaxActiveClusters", &occupancyMaxActiveClustersCall);
   m.def("set_printf_fifo_size", &setPrintfFifoSize);
   m.def("fill_tma_descriptor", &fillTMADescriptor);
   m.def("build_signature_metadata", &buildSignatureMetadata);
