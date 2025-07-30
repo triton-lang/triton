@@ -87,7 +87,8 @@ LogicalResult ArefPutEnterOp::verify() {
 }
 
 LogicalResult ArefGetEnterOp::verify() {
-  if (auto result = arefEnterVerify(getAref().getType(), getResultTypes()))
+  if (auto result =
+          arefEnterVerify(getAref().getType(), getBuffers().getType()))
     return emitError(*result);
   return success();
 }

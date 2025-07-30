@@ -81,12 +81,14 @@ struct AsyncRef {
                StageCluster srcStageCluster) {
     auto zero = b.create<arith::ConstantOp>(b.getI32IntegerAttr(0));
     auto enterOp = b.createInto<triton::nvws::ArefGetEnterOp>(
-        partition, srcStageCluster, viewType, aref, zero, zero);
+        partition, srcStageCluster, viewType, tokenType, aref, zero, zero);
+    auto token = enterOp.getToken();
 
-    auto exitOp = [this, &partition, srcStageCluster](PartitionBuilder &b) {
+    auto exitOp = [this, &partition, srcStageCluster,
+                   token](PartitionBuilder &b) {
       auto zero = b.create<arith::ConstantOp>(b.getI32IntegerAttr(0));
       auto exitOp = b.createInto<triton::nvws::ArefGetExitOp>(
-          partition, srcStageCluster, aref, zero,
+          partition, srcStageCluster, aref, token, zero,
           b.getArrayAttr(SmallVector<Attribute>{triton::nvws::AsyncOpAttr::get(
               aref.getContext(), triton::nvws::AsyncOp::NONE)}));
     };

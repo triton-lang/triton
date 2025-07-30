@@ -31,12 +31,12 @@ module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
       // CHECK: [[C_ZERO2:%.*]] = arith.constant {ttg.partition = 2 : i32} 0
       // CHECK: nvws.aref.put.exit [[AREF1]][[[C_ZERO2]]], [[TOKEN1]] [#nvws.async_op<tma_load>] {loop.cluster = 1 : i32, loop.stage = 0 : i32, ttg.partition = 2 : i32}
       // CHECK: [[C_ZERO3:%.*]] = arith.constant {ttg.partition = 1 : i32} 0
-      // CHECK: [[GET_BUF1:%.*]] = nvws.aref.get.enter [[AREF1]][[[C_ZERO3]], [[C_ZERO3]]] {loop.cluster = 0 : i32, loop.stage = 1 : i32, ttg.partition = 1 : i32}
+      // CHECK: [[GET_BUF1:%.*]], [[GET_TOKEN1:%.*]] = nvws.aref.get.enter [[AREF1]][[[C_ZERO3]], [[C_ZERO3]]] {loop.cluster = 0 : i32, loop.stage = 1 : i32, ttg.partition = 1 : i32}
       %3 = tt.descriptor_load %arg3[%arg1, %2] {loop.cluster = 1 : i32, loop.stage = 0 : i32, ttg.partition = 2 : i32} : !tt.tensordesc<tensor<128x64xf16, #shared>> -> tensor<128x64xf16, #blocked1>
       // CHECK: [[PUT_BUF2:%.*]], [[TOKEN2:%.*]] = nvws.aref.put.enter [[AREF2]]
       // CHECK-NEXT: nvws.descriptor_load {{.*}} 16384 [[PUT_BUF2]]
       // CHECK: nvws.aref.put.exit [[AREF2]]
-      // CHECK: [[GET_BUF2:%.*]] = nvws.aref.get.enter [[AREF2]]
+      // CHECK: [[GET_BUF2:%.*]], [[GET_TOKEN2:%.*]] = nvws.aref.get.enter [[AREF2]]
       %4 = tt.descriptor_load %arg4[%arg2, %2] {loop.cluster = 1 : i32, loop.stage = 0 : i32, ttg.partition = 2 : i32} : !tt.tensordesc<tensor<128x64xf16, #shared>> -> tensor<128x64xf16, #blocked1>
 
       %5 = ttg.local_alloc %3 {loop.cluster = 0 : i32, loop.stage = 1 : i32, ttg.partition = 2 : i32} : (tensor<128x64xf16, #blocked1>) -> !ttg.memdesc<128x64xf16, #shared, #smem>
@@ -46,9 +46,9 @@ module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
       %7 = ttg.memdesc_trans %6 {loop.cluster = 0 : i32, loop.stage = 1 : i32, order = array<i32: 1, 0>, ttg.partition = 1 : i32} : !ttg.memdesc<128x64xf16, #shared, #smem> -> !ttg.memdesc<64x128xf16, #shared1, #smem>
       // CHECK: ttng.tc_gen5_mma [[GET_BUF1]], [[RHS]], {{.*}}, {{.*}}, {{.*}}
       %8 = ttng.tc_gen5_mma %5, %7, %result[%arg6], %true, %true {loop.cluster = 0 : i32, loop.stage = 1 : i32, ttg.partition = 1 : i32} : !ttg.memdesc<128x64xf16, #shared, #smem>, !ttg.memdesc<64x128xf16, #shared1, #smem>, !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
-      // CHECK: nvws.aref.get.exit [[AREF2]]
+      // CHECK: nvws.aref.get.exit [[AREF2]][{{.*}}], [[GET_TOKEN2]]
       // CHECK: [[C_ZERO4:%.*]] = arith.constant {ttg.partition = 1 : i32} 0
-      // CHECK: nvws.aref.get.exit [[AREF1]][[[C_ZERO4]]] [#nvws.async_op<tc5mma>] {loop.cluster = 0 : i32, loop.stage = 1 : i32, ttg.partition = 1 : i32}
+      // CHECK: nvws.aref.get.exit [[AREF1]][[[C_ZERO4]]], [[GET_TOKEN1]] [#nvws.async_op<tc5mma>] {loop.cluster = 0 : i32, loop.stage = 1 : i32, ttg.partition = 1 : i32}
       scf.yield %8 : !ttg.async.token
     } {tt.num_stages = 2 : i32, tt.scheduled_max_stage = 1 : i32, tt.warp_specialize, ttg.partition.stages = [0 : i32, 1 : i32, 0 : i32]}
     %result_0, %token_1 = ttng.tmem_load %result[%1] : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked>
@@ -65,9 +65,9 @@ module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
       // CHECK: nvws.descriptor_load
       // CHECK: nvws.aref.put.exit
       %0 = tt.descriptor_load %arg0[%arg2, %arg2] {loop.cluster = 1 : i32, loop.stage = 0, ttg.partition = 2 : i32} : !tt.tensordesc<tensor<128x64xf16, #shared>> -> tensor<128x64xf16, #blocked1>
-      // CHECK: nvws.aref.get.enter
+      // CHECK: {{.*}}, [[GET_TOKEN:%.*]] = nvws.aref.get.enter
       // CHECK: [[REG:%.*]] = ttg.local_load
-      // CHECK: nvws.aref.get.exit {{.*}} [#nvws.async_op<none>]
+      // CHECK: nvws.aref.get.exit {{.*}}, [[GET_TOKEN]] [#nvws.async_op<none>]
       // CHECK: "use"([[REG]])
       "use"(%0) {loop.cluster = 0 : i32, loop.stage = 1 : i32, ttg.partition = 0 : i32} : (tensor<128x64xf16, #blocked1>) -> ()
     } {tt.num_stages = 2 : i32, tt.scheduled_max_stage = 1 : i32, tt.warp_specialize, ttg.partition.stages = [0 : i32, 1 : i32, 0 : i32]}
@@ -96,13 +96,13 @@ module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
       // CHECK: nvws.aref.put.exit
       %0 = tt.descriptor_load %arg0[%arg2, %arg2] {loop.cluster = 2 : i32, loop.stage = 0 : i32, ttg.partition = 2 : i32} : !tt.tensordesc<tensor<128x64xf16, #shared>> -> tensor<128x64xf16, #blocked1>
       %alloc = ttg.local_alloc %0 {loop.cluster = 0 : i32, loop.stage = 1 : i32, ttg.partition = 2 : i32} : (tensor<128x64xf16, #blocked1>) -> !ttg.memdesc<128x64xf16, #shared, #smem>
-      // CHECK-DAG: [[GET_BUF1:%.*]] = nvws.aref.get.enter {{.*}} {loop.cluster = 1 : i32, loop.stage = 1 : i32, ttg.partition = 0 : i32}
-      // CHECK-DAG: [[GET_BUF2:%.*]] = nvws.aref.get.enter {{.*}} {loop.cluster = 0 : i32, loop.stage = 1 : i32, ttg.partition = 1 : i32}
+      // CHECK-DAG: [[GET_BUF1:%.*]], [[GET_TOKEN1:%.*]] = nvws.aref.get.enter {{.*}} {loop.cluster = 1 : i32, loop.stage = 1 : i32, ttg.partition = 0 : i32}
+      // CHECK-DAG: [[GET_BUF2:%.*]], [[GET_TOKEN2:%.*]] = nvws.aref.get.enter {{.*}} {loop.cluster = 0 : i32, loop.stage = 1 : i32, ttg.partition = 1 : i32}
       // CHECK-DAG: [[REG:%.*]] = ttg.local_load [[GET_BUF1]] {loop.cluster = 1 : i32, loop.stage = 1 : i32, ttg.partition = 0 : i32}
-      // CHECK-DAG: nvws.aref.get.exit {{.*}} [#nvws.async_op<none>] {loop.cluster = 1 : i32, loop.stage = 1 : i32, ttg.partition = 0 : i32}
+      // CHECK-DAG: nvws.aref.get.exit {{.*}}, [[GET_TOKEN1]] [#nvws.async_op<none>] {loop.cluster = 1 : i32, loop.stage = 1 : i32, ttg.partition = 0 : i32}
       // CHECK: "use1"([[REG]])
       // CHECK: "use2"([[GET_BUF2]])
-      // CHECK: nvws.aref.get.exit {{.*}} [#nvws.async_op<none>] {loop.cluster = 0 : i32, loop.stage = 1 : i32, ttg.partition = 1 : i32}
+      // CHECK: nvws.aref.get.exit {{.*}}, [[GET_TOKEN2]] [#nvws.async_op<none>] {loop.cluster = 0 : i32, loop.stage = 1 : i32, ttg.partition = 1 : i32}
       "use1"(%0) {loop.cluster = 1 : i32, loop.stage = 1 : i32, ttg.partition = 0 : i32} : (tensor<128x64xf16, #blocked1>) -> ()
       "use2"(%alloc) {loop.cluster = 0 : i32, loop.stage = 1 : i32, ttg.partition = 1 : i32} : (!ttg.memdesc<128x64xf16, #shared, #smem>) -> ()
     } {tt.num_stages = 2 : i32, tt.scheduled_max_stage = 1 : i32, tt.warp_specialize, ttg.partition.stages = [0 : i32, 1 : i32, 0 : i32]}
@@ -119,11 +119,11 @@ module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
       // CHECK: nvws.aref.put.exit
       %0 = tt.descriptor_load %arg0[%arg2, %arg2] {loop.cluster = 2 : i32, loop.stage = 0 : i32, ttg.partition = 1 : i32} : !tt.tensordesc<tensor<128x64xf16, #shared>> -> tensor<128x64xf16, #blocked1>
       %alloc = ttg.local_alloc %0 {loop.cluster = 0 : i32, loop.stage = 1 : i32, ttg.partition = 1 : i32} : (tensor<128x64xf16, #blocked1>) -> !ttg.memdesc<128x64xf16, #shared, #smem>
-      // CHECK: [[GET_BUF:%.*]] = nvws.aref.get.enter {{.*}} {loop.cluster = 0 : i32, loop.stage = 1
+      // CHECK: [[GET_BUF:%.*]], [[GET_TOKEN:%.*]] = nvws.aref.get.enter {{.*}} {loop.cluster = 0 : i32, loop.stage = 1
       // CHECK: [[REG:%.*]] = ttg.local_load [[GET_BUF]] {loop.cluster = 0 : i32, loop.stage = 1 : i32, ttg.partition = 0 : i32}
       // CHECK: "use1"([[REG]])
       // CHECK: "use2"([[GET_BUF]])
-      // CHECK: nvws.aref.get.exit {{.*}} {loop.cluster = 1 : i32, loop.stage = 1
+      // CHECK: nvws.aref.get.exit {{.*}}, [[GET_TOKEN]] {{.*}} {loop.cluster = 1 : i32, loop.stage = 1
       "use1"(%0) {loop.cluster = 1 : i32, loop.stage = 1 : i32, ttg.partition = 0 : i32} : (tensor<128x64xf16, #blocked1>) -> ()
       "use2"(%alloc) {loop.cluster = 0 : i32, loop.stage = 1 : i32, ttg.partition = 0 : i32} : (!ttg.memdesc<128x64xf16, #shared, #smem>) -> ()
     } {tt.num_stages = 2 : i32, tt.scheduled_max_stage = 1 : i32, tt.warp_specialize, ttg.partition.stages = [0 : i32, 1 : i32, 0 : i32]}

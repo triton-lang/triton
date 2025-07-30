@@ -80,11 +80,12 @@ def NVWS_ArefGetEnterOp : NVWS_Op<"aref.get.enter"> {
   let arguments = (ins NVWS_ArefType:$aref,
                        I32:$stage,
                        I32:$phase);
-  let results = (outs Variadic<TTG_MemDescType>:$buffers);
+  let results = (outs Variadic<TTG_MemDescType>:$buffers,
+                      TTG_AsyncToken:$token);
   let hasVerifier=1;
   let assemblyFormat = [{
     $aref `[` $stage `,` $phase `]` attr-dict
-    `:` type($aref) `->` type($buffers)
+    `:` type($aref) `->` type(results)
   }];
 }
 
@@ -94,11 +95,12 @@ def NVWS_ArefGetExitOp : NVWS_Op<"aref.get.exit"> {
                       These ArefGet "regions" can span multiple iterations. }];
 
   let arguments = (ins NVWS_ArefType:$aref,
+                       TTG_AsyncToken:$token,
                        I32:$stage,
                        NVWS_AsyncOpArrayAttr:$async_ops);
   let assemblyFormat = [{
-    $aref `[` $stage `]` $async_ops attr-dict
-    `:` type($aref)
+    $aref `[` $stage `]` `,` $token $async_ops attr-dict
+    `:` type($aref) `,` type($token)
  }];
 }
 
