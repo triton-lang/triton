@@ -1392,6 +1392,7 @@ def SliceEncodingAttr : DistributedEncoding<"SliceEncoding", "slice_encoding", [
   }];
 
   let hasCustomAssemblyFormat = 1;
+  let genVerifyDecl = 1;
 }
 
 def DotOperandEncodingAttr : DistributedEncoding<"DotOperandEncoding", "dot_operand_encoding", [DeclareLayoutEncodingMethods]> {

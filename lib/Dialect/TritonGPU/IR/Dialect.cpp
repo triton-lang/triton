@@ -1389,6 +1389,19 @@ void SliceEncodingAttr::print(mlir::AsmPrinter &printer) const {
           << "parent = " << getParent() << "}>";
 }
 
+LogicalResult
+SliceEncodingAttr::verify(function_ref<InFlightDiagnostic()> emitError,
+                          unsigned dim, DistributedEncodingTrait parent) {
+  unsigned rank = cast<LayoutEncodingTrait>(parent).getRank();
+  if (rank <= 1)
+    return emitError() << "parent layout must have at least rank >= 2";
+  if (dim >= rank) {
+    return emitError() << "slice dim=" << dim
+                       << " must be less than the parent rank=" << rank;
+  }
+  return success();
+}
+
 SmallVector<unsigned> SliceEncodingAttr::getRepOrder() const {
   auto parentRepOrder = getParent().getRepOrder();
   return eraseOrder(parentRepOrder, getDim());
