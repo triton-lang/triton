@@ -30,6 +30,9 @@ from triton.experimental.gluon import language as gl
 from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
 from triton.experimental.gluon.language.nvidia.hopper import tma, mbarrier, fence_async_shared
 
+# Re-use utilities from the previous tutorial.
+t3 = importlib.import_module("03-async-copy")
+
 
 def is_hopper_or_newer():
     target = triton.runtime.driver.active.get_current_target()
@@ -254,3 +257,62 @@ def test_elementwise_add_pipelined(xnumel, ynumel, XBLOCK, YBLOCK, num_buffers):
     c = torch.empty_like(a, device="cuda")
     elementwise_add_tma(a, b, c, XBLOCK, YBLOCK, num_buffers)
     torch.testing.assert_close(a + b, c, atol=0, rtol=0)
+
+
+# %%
+# Let's compare the pipelined TMA kernel against the pipelined async copy kernel
+# from the previous tutorial.
+
+if __name__ == "__main__":
+    print("Benchmarking elementwise_add")
+    print("============================")
+    xnumel, ynumel = 32 * 1024, 32 * 1024
+    A = torch.randn(xnumel, ynumel, device="cuda")
+    B = torch.randn(xnumel, ynumel, device="cuda")
+    C = torch.empty_like(A, device="cuda")
+
+    XBLOCK = 32
+    YBLOCK = 64
+
+    ms = triton.testing.do_bench(lambda: t3.elementwise_add_pipelined(A, B, C, XBLOCK, YBLOCK))
+    print(f"elementwise_add_pipelined: {ms:.2f} ms")
+
+    ms = triton.testing.do_bench(lambda: elementwise_add_tma(A, B, C, XBLOCK, YBLOCK, num_buffers=2))
+    print(f"elementwise_add_tma (double buffer): {ms:.2f} ms")
+    ms = triton.testing.do_bench(lambda: elementwise_add_tma(A, B, C, XBLOCK, YBLOCK, num_buffers=3))
+    print(f"elementwise_add_tma (triple buffer): {ms:.2f} ms")
+
+# %%
+# ```
+# elementwise_add_pipelined: 2.79 ms
+# elementwise_add_tma (double buffer): 2.13 ms
+# elementwise_add_tma (triple buffer): 2.04 ms
+# ```
+#
+# Switching to TMAs already yields a large performance boost. We also observe
+# modest speedups by increasing the pipeline depth, which is not something we
+# observed with the async copy kernel.
+#
+# Since our kernel has more register room, we can increase the block size. In
+# practice, peak register usage will remain low, because the compiler will
+# interleave the smem load, add, and smem store in the inner loop. The main
+# limitation to block size is the amount of shared memory.
+#
+# Each SM has 228 KB of shared memory. If we use 128x128xf32 blocks, we don't
+# have enough shared memory to double buffer the inputs. If we use 64x128xf32
+# triple buffering uses 224 KB, just barely fitting.
+
+if __name__ == "__main__":
+    XBLOCK = 64
+    YBLOCK = 128
+    num_buffers = 3
+    ms = triton.testing.do_bench(lambda: elementwise_add_tma(A, B, C, XBLOCK, YBLOCK, num_buffers))
+    print(f"elementwise_add_tma (64x128x3): {ms:.2f} ms")
+
+# %%
+# ```
+# elementwise_add_tma (64x128x3): 2.04 ms
+# ```
+#
+# It does not get any faster, suggesting performance has bottomed out for this
+# implementation.

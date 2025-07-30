@@ -346,12 +346,21 @@ def test_elementwise_add_pipelined(xnumel, ynumel, XBLOCK, YBLOCK, num_buffers):
 
 
 if __name__ == "__main__":
-    ms = triton.testing.do_bench(lambda: elementwise_add_pipelined(A, B, C))
-    print(f"elementwise_add_pipelined: {ms:.2f} ms")
+    ms = triton.testing.do_bench(lambda: elementwise_add_pipelined(A, B, C, num_buffers=2))
+    print(f"elementwise_add_pipelined (double buffer): {ms:.2f} ms")
+    ms = triton.testing.do_bench(lambda: elementwise_add_pipelined(A, B, C, num_buffers=3))
+    print(f"elementwise_add_pipelined (triple buffer): {ms:.2f} ms")
 
 # %%
-# This yields a modest speedup, resulting in 2.79 ms. Pipelining becomes more
-# important when the compute in the inner loop starts to become more expensive.
+# ```
+# elementwise_add_pipelined (double buffer): 2.79 ms
+# elementwise_add_pipelined (triple buffer): 2.79 ms
+# ```
+#
+# Pipelining with async copy yields a modest speedup. But notice that increasing
+# the number of buffers does not change the result, suggesting that there is a
+# bottleneck somewhere else. Pipelining becomes more important when the compute
+# in the inner loop is more expensive.
 #
 # One of the major issues getting in the way of more performance is register
 # pressure. For each element, we need to store the 32B result, compute a 64B
