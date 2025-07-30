@@ -652,7 +652,6 @@ struct AtomicCASOpConversion
 
       Value casPtr = ptrElements[i];
       Value casCmp = cmpElements[i];
-      casVal = valElements[i];
       PTXBuilder ptxBuilderAtomicCAS;
       std::string tyId = valueElemNBits * vec == 64
                              ? "l"
