@@ -6,23 +6,49 @@ include "triton/Dialect/Triton/IR/TritonInterfaces.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUDialect.td"
 
 //===----------------------------------------------------------------------===//
-// TritonGPU Attribute Definitions
+// Traits and Interfaces
 //===----------------------------------------------------------------------===//
-def TritonGPU_AttrTrait : AttrInterface<"TritonGPU_AttrTrait"> {
-  let cppNamespace = "::mlir::triton::gpu";
 
+def MemDescViewTrait : NativeOpTrait<"MemDescViewTrait">;
+def LocalLoadTrait : NativeOpTrait<"LocalLoadTrait">;
+
+def LayoutEncodingTrait : AttrInterface<"LayoutEncodingTrait"> {
+  let cppNamespace = "::mlir::triton::gpu";
+  let description = [{
+    Common trait for all TTGIR layouts.
+  }];
   let methods = [
+    InterfaceMethod<"Get the shape of the CTAs per CGA.",
+                    "SmallVector<unsigned>",
+                    "getCTAsPerCGA">,
+    InterfaceMethod<"Get the order of the CTAs per CGA. The fastest-changing axis first",
+                    "SmallVector<unsigned>",
+                    "getCTAOrder">,
+    InterfaceMethod<"Each CTA processes 1/CTASplitNum of the tensor.",
+                    "SmallVector<unsigned>",
+                    "getCTASplitNum">,
   ];
 }
 
-def MemDescViewTrait : NativeOpTrait<"MemDescViewTrait">;
+def SharedEncodingTrait : AttrInterface<"SharedEncodingTrait"> {
+  let cppNamespace = "::mlir::triton::gpu";
 
-def LocalLoadTrait : NativeOpTrait<"LocalLoadTrait">;
+  let description = [{
+    Common trait describing shared memory.
+  }];
+  let methods = [
+    InterfaceMethod<"Return the default alignment for the layout.",
+                    "int32_t",
+                    "getAlignment">,
+  ];
+}
 
-class TritonGPU_Attr<string name, string attrMnemonic, list<Trait> traits = [],
-                     Dialect dialect = TritonGPU_Dialect,
-                     string baseCppClass = "::mlir::Attribute">
-  : AttrDef<dialect, name, !listconcat([TritonGPU_AttrTrait], traits), baseCppClass> {
+//===----------------------------------------------------------------------===//
+// Base Attribute
+//===----------------------------------------------------------------------===//
+
+class TritonGPU_Attr<string name, string attrMnemonic, list<Trait> traits = []>
+  : AttrDef<TritonGPU_Dialect, name, traits> {
 
   let description = [{
 TritonGPU tensors differ from usual tensors in that they contain a _layout_ attribute which determines
@@ -132,41 +158,9 @@ addition, if there's only one CTA per CGA, then Triton canonicalizes CTAOrder to
   let skipDefaultBuilders = 1;
 }
 
-
-def LayoutEncodingTrait : AttrInterface<"LayoutEncodingTrait"> {
-  let cppNamespace = "::mlir::triton::gpu";
-  let description = [{
-    Common trait for all TTGIR layouts.
-  }];
-  let methods = [
-    InterfaceMethod<"Get the shape of the CTAs per CGA.",
-                    "SmallVector<unsigned>",
-                    "getCTAsPerCGA">,
-    InterfaceMethod<"Get the order of the CTAs per CGA. The fastest-changing axis first",
-                    "SmallVector<unsigned>",
-                    "getCTAOrder">,
-    InterfaceMethod<"Each CTA processes 1/CTASplitNum of the tensor.",
-                    "SmallVector<unsigned>",
-                    "getCTASplitNum">,
-  ];
-}
-
 //===----------------------------------------------------------------------===//
 // Shared Layout Encoding
 //===----------------------------------------------------------------------===//
-
-def SharedEncodingTrait : AttrInterface<"SharedEncodingTrait"> {
-  let cppNamespace = "::mlir::triton::gpu";
-
-  let description = [{
-    Common trait describing shared memory.
-  }];
-  let methods = [
-    InterfaceMethod<"Return the default alignment for the layout.",
-                    "int32_t",
-                    "getAlignment">,
-  ];
-}
 
 def SwizzledSharedEncodingAttr
     : TritonGPU_Attr<"SwizzledSharedEncoding", "swizzled_shared_encoding",
@@ -681,9 +675,8 @@ We call each individual tile "rep".
   ];
 }
 
-class DistributedEncoding<string name, string attrMnemonic, list<Trait> traits = [],
-                     Dialect dialect = TritonGPU_Dialect>
-  : TritonGPU_Attr<name, attrMnemonic, !listconcat([DistributedEncodingTrait, LayoutEncodingTrait], traits), dialect> {
+class DistributedEncoding<string name, string attrMnemonic, list<Trait> traits = []>
+  : TritonGPU_Attr<name, attrMnemonic, !listconcat([DistributedEncodingTrait, LayoutEncodingTrait], traits)> {
 
   let description = [{
 Distributed encodings have a layout function L that is entirely characterized
