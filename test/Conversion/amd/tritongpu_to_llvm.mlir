@@ -412,34 +412,30 @@ module attributes {"ttg.target" = "hip:gfx942", "ttg.num-ctas" = 1 : i32, "ttg.n
 
 // -----
 
-// CHECK-LABEL: padded_shared_layout_subview
+// GFX950-LABEL: padded_shared_layout_subview
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 8], warpsPerCTA = [2, 2], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
-#shared = #ttg.padded_shared<[128:+4, 256:+8] {order = [1, 0]}>
+#shared = #ttg.padded_shared<[128:+4] {order = [1, 0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.target" = "hip:gfx942", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
   tt.func @padded_shared_layout_subview(%arg0: !ttg.memdesc<2x64x64xf16, #shared, #smem, mutable>) {
     %c0_i32 = arith.constant 0 : i32
     %c1_i32 = arith.constant 1 : i32
-    // Skip two constants from the stride calculation
+    // Skip three constants from the stride calculation
+    // GFX950: llvm.mlir.constant
+    // GFX950: llvm.mlir.constant
+    // GFX950: llvm.mlir.constant
 
-    // CHECK-DAG: %[[CST0:.+]] = llvm.mlir.constant(0 : i32)
-    // CHECK-DAG: %[[CST3:.+]] = llvm.mlir.constant(3 : i32)
-    // CHECK-DAG: %[[CST4:.+]] = llvm.mlir.constant(4 : i32)
-    // CHECK-DAG: %[[CST8:.+]] = llvm.mlir.constant(8 : i32)
-    // CHECK-DAG: %[[CST9:.+]] = llvm.mlir.constant(9 : i32)
+    // GFX950-DAG: %[[CST0:.+]] = llvm.mlir.constant(0 : i32)
+    // GFX950-DAG: %[[CST7:.+]] = llvm.mlir.constant(7 : i32)
+    // GFX950-DAG: %[[CST2:.+]] = llvm.mlir.constant(2 : i32)
 
-    //  CHECK: %[[SHR0:.+]] = llvm.ashr %[[ADD:.+]], %[[CST8]] : i32
-    // CHECK-NEXT: %[[SHL0:.+]] = llvm.shl %[[SHR0]], %[[CST3]] : i32
-    // CHECK-NEXT: %[[ADD0:.+]] = llvm.add %[[SHL0]], %[[CST0]] : i32
-    // CHECK-NEXT: %[[SHR1:.+]] = llvm.ashr %[[ADD]], %[[CST9]] : i32
-    // CHECK-NEXT: %[[SHL1:.+]] = llvm.shl %[[SHR1]], %[[CST4]] : i32
-    // CHECK-NEXT: %[[ADD1:.+]] = llvm.add %[[ADD0]], %[[SHL1]] : i32
-    // CHECK-NEXT: %[[ADD2:.+]] = llvm.add %[[ADD]], %[[ADD1]] : i32
-    // CHECK: llvm.getelementptr inbounds %{{.+}}[%[[ADD2]]]
+    // GFX950: %[[SHR0:.+]] = llvm.ashr %[[ADD:.+]], %[[CST7]] : i32
+    // GFX950-NEXT: %[[SHL0:.+]] = llvm.shl %[[SHR0]], %[[CST2]] : i32
+    // GFX950-NEXT: %[[ADD1:.+]] = llvm.add %[[CST0]], %[[SHL0]] : i32
+    // GFX950-NEXT: %[[ADD2:.+]] = llvm.add %[[ADD]], %[[ADD1]] : i32
+    // GFX950: llvm.getelementptr %{{.+}}[%[[ADD2]]]
 
     %1 = ttg.memdesc_index %arg0, %c1_i32 : !ttg.memdesc<2x64x64xf16, #shared, #smem, mutable> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
-    %2 = ttg.local_load %1 : !ttg.memdesc<64x64xf16, #shared, #smem, mutable> -> tensor<64x64xf16, #blocked>
-    ttg.local_store %2, %1 : tensor<64x64xf16, #blocked> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
     tt.return
   }
 }

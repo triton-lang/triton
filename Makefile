@@ -44,6 +44,12 @@ test-unit: all
 		$(PYTEST) --capture=tee-sys -rfs -vvv python/test/unit/instrumentation/test_gpuhello.py
 	$(PYTEST) -s -n $(NUM_PROCS) python/test/gluon
 
+.PHONY: test-distributed
+test-distributed: all
+	$(PYTHON) -m pip install --upgrade pip
+	$(PYTHON) -m pip install python/triton_kernels -v
+	$(PYTEST) -s python/triton_kernels/bench/distributed.py
+
 .PHONY: test-gluon
 test-gluon: all
 	$(PYTEST) -s -n $(NUM_PROCS) python/test/gluon

@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=81' | FileCheck %s
+// RUN: triton-opt %s -split-input-file --allocate-shared-memory-nv='compute-capability=90 ptx-version=81' --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=81' | FileCheck %s
 
 #mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [8, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0], instrShape = [16, 256, 32]}>
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 8}>
@@ -198,14 +198,47 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
 
 // -----
 
-#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [1, 32], warpsPerCTA = [8, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
-#mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [8, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0], instrShape = [16, 256, 16]}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [1, 32], warpsPerCTA = [8, 1], order = [0, 1]}>
+#mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [8, 1], instrShape = [16, 256, 16]}>
 // CHECK-LABEL: convert_mma_to_blocked
 module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 32 : i32} {
   tt.func @convert_mma_to_blocked(%a: tensor<128x256xf16, #mma>) {
-    // CHECK-COUNT-16: nvvm.stmatrix
+    // CHECK-COUNT-8: llvm.store
     //          CHECK: nvvm.barrier0
+    // CHECK-COUNT-8: nvgpu.ldmatrix
+    //          CHECK: nvvm.barrier0
+    // CHECK-COUNT-8: llvm.store
+    //          CHECK: nvvm.barrier0
+    // CHECK-COUNT-8: nvgpu.ldmatrix
     %c = ttg.convert_layout %a : tensor<128x256xf16, #mma> -> tensor<128x256xf16, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
+#mma = #ttg.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 8]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // There are x4 the ldmatrix as there is broadcasting at a warp level
+  // CHECK-LABEL: convert_blocked_to_dot_rhs
+  tt.func @convert_blocked_to_dot_rhs(%a: tensor<64x64xf16, #blocked>) {
+    // CHECK-COUNT-1: llvm.store
+    //          CHECK: nvvm.barrier0
+    // CHECK-COUNT-4: nvgpu.ldmatrix
+    //          CHECK: nvvm.barrier0
+    // CHECK-COUNT-1: llvm.store
+    //          CHECK: nvvm.barrier0
+    // CHECK-COUNT-4: nvgpu.ldmatrix
+    //          CHECK: nvvm.barrier0
+    // CHECK-COUNT-1: llvm.store
+    //          CHECK: nvvm.barrier0
+    // CHECK-COUNT-4: nvgpu.ldmatrix
+    //          CHECK: nvvm.barrier0
+    // CHECK-COUNT-1: llvm.store
+    //          CHECK: nvvm.barrier0
+    // CHECK-COUNT-4: nvgpu.ldmatrix
+    %b = ttg.convert_layout %a  : tensor<64x64xf16, #blocked> -> tensor<64x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
     tt.return
   }
 }

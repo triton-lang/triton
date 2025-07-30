@@ -98,23 +98,9 @@ void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
   mlir::LLVM::AMD::llStore(rewriter, loc, ptr, val, pred);
 }
 
-bool TargetInfo::canUseStMatrix(RankedTensorType tensorTy,
-                                ArrayRef<unsigned> repShape,
-                                ArrayRef<unsigned> paddedRepShape,
-                                ArrayRef<unsigned> order,
-                                int swizzleByteSize) const {
-  // AMD does not support stmatrix
-  return false;
-}
-
 bool TargetInfo::canUseLDSTransLoad(int bitwidth) const {
   return getISAFamily() == ISAFamily::CDNA4 &&
          llvm::is_contained({16, 8, 4, 6}, bitwidth);
-}
-
-void TargetInfo::storeMatrixShared(RewriterBase &rewriter, Location loc,
-                                   Value ptr, Value val) const {
-  llvm::report_fatal_error("AMDGPU does not support stmatrix");
 }
 
 Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,

@@ -757,7 +757,7 @@ class JITFunction(KernelInterface[T]):
             return None
         src = self.ASTSource(self, signature, constexprs, attrs)
 
-        async_mode = _async_compile.active_mode
+        async_mode = _async_compile.active_mode.get()
         if async_mode is not None:
 
             env_vars = get_cache_invalidating_env_vars()

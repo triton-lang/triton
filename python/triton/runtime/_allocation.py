@@ -29,7 +29,6 @@ def set_allocator(allocator: Allocator):
     The allocator function is called during kernel launch for kernels that
     require additional global memory workspace.
     """
-    global _allocator
     _allocator.set(allocator)
 
 
