@@ -272,8 +272,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, ttg.sha
 
     // Each thread needs to load 8 elements and we load 8 (sizePerThread) per buffer load instruction
     // GFX950: rocdl.make.buffer.rsrc
-    // Src ptrs are contiguous so we do expect to bypass the ds_bpermute (see lowering to LLVM)
-    // GFX950-NOT: rocdl.ds_bpermute
     // GFX950: rocdl.raw.ptr.buffer.load.lds
     // GFX950-NOT: rocdl.raw.ptr.buffer.load.lds
 
