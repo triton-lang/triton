@@ -338,7 +338,7 @@ class CUDABackend(BaseBackend):
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)
         passes.ttgpuir.add_allocate_warp_groups(pm)
         passes.convert.add_scf_to_cf(pm)
-        passes.ttgpuir.add_allocate_shared_memory(pm)
+        nvidia.passes.ttgpuir.add_allocate_shared_memory_nv(pm, capability, ptx_version)
         nvidia.passes.ttnvgpuir.add_allocate_tensor_memory(pm)
         if knobs.compilation.enable_experimental_consan:
             # Call ConcurrencySanitizerPass here, before allocating global scratch memory but after allocating tensor and shared
@@ -458,9 +458,20 @@ class CUDABackend(BaseBackend):
                 else:
                     error = f'`ptxas` failed with error code {e.returncode}'
 
-                raise PTXASError(f"{error}\n"
-                                 f"`ptxas` stderr:\n{log}\n"
-                                 f'Repro command: {" ".join(ptxas_cmd)}\n')
+                error = (f"{error}\n"
+                         f"`ptxas` stderr:\n{log}\n"
+                         f'Repro command: {" ".join(ptxas_cmd)}\n')
+
+                print(f"""
+
+================================================================
+{error}
+
+{src}
+================================================================
+please share the reproducer above with Triton project.
+""")
+                raise PTXASError(error)
 
             with open(fbin, 'rb') as f:
                 cubin = f.read()

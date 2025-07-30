@@ -6,7 +6,7 @@ PYTHON ?= python
 BUILD_DIR := $(shell cd python; $(PYTHON) -c 'from build_helpers import get_cmake_dir; print(get_cmake_dir())')
 TRITON_OPT := $(BUILD_DIR)/bin/triton-opt
 PYTEST := $(PYTHON) -m pytest
-LLVM_BUILD_PATH ?= $(realpath .llvm-project/build)
+LLVM_BUILD_PATH ?= "$(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))/.llvm-project/build"
 NUM_PROCS ?= 8
 
 # Incremental builds
@@ -43,6 +43,12 @@ test-unit: all
 	TRITON_ALWAYS_COMPILE=1 TRITON_DISABLE_LINE_INFO=0 LLVM_PASS_PLUGIN_PATH=python/triton/instrumentation/libGPUInstrumentationTestLib.so \
 		$(PYTEST) --capture=tee-sys -rfs -vvv python/test/unit/instrumentation/test_gpuhello.py
 	$(PYTEST) -s -n $(NUM_PROCS) python/test/gluon
+
+.PHONY: test-distributed
+test-distributed: all
+	$(PYTHON) -m pip install --upgrade pip
+	$(PYTHON) -m pip install python/triton_kernels -v
+	$(PYTEST) -s python/triton_kernels/bench/distributed.py
 
 .PHONY: test-gluon
 test-gluon: all

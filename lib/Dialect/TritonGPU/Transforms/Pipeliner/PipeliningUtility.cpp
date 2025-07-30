@@ -459,7 +459,7 @@ Value mlir::triton::createScalarAlloc(ImplicitLocOpBuilder &rewriter, Type type,
   auto barrierEncoding =
       ttg::SwizzledSharedEncodingAttr::get(ctx, 1, 1, 1, {0}, barrierCTALayout);
   ttg::MemDescType memDescType = ttg::MemDescType::get(
-      {numBuffers}, type, barrierEncoding, sharedMemorySpace,
+      {numBuffers, 1}, type, barrierEncoding, sharedMemorySpace,
       /*mutableMemory=*/true);
   return rewriter.create<ttg::LocalAllocOp>(memDescType, Value());
 }
@@ -653,25 +653,16 @@ triton::createSingleBufferView(OpBuilder &builder, Value alloc, Value idx) {
   assert(isa<ttg::MemDescType>(alloc.getType()) && "Expected MemDescType");
   auto allocDescType = cast<ttg::MemDescType>(alloc.getType());
   SmallVector<int64_t> shape;
-  if (allocDescType.getShape().size() > 1) {
-    shape.insert(shape.end(), allocDescType.getShape().begin() + 1,
-                 allocDescType.getShape().end());
-  } else {
-    shape.push_back(1);
-  }
+  assert(allocDescType.getShape().size() > 1 &&
+         "Expected multi-dimensional memdesc (e.g., Nx...) for subview");
+  shape.insert(shape.end(), allocDescType.getShape().begin() + 1,
+               allocDescType.getShape().end());
   auto viewDescType = ttg::MemDescType::get(
       shape, allocDescType.getElementType(), allocDescType.getEncoding(),
       allocDescType.getMemorySpace(), allocDescType.getMutableMemory(),
       /*allocShape=*/allocDescType.getAllocShape());
-  SmallVector<Value> idxs = {idx};
-  if (allocDescType.getShape().size() > 1) {
-    Value zero = builder.create<arith::ConstantIntOp>(alloc.getLoc(), 0, 32);
-    for (unsigned i = 1; i < allocDescType.getShape().size(); i++) {
-      idxs.push_back(zero);
-    }
-  }
-  return builder.create<ttg::MemDescSubviewOp>(alloc.getLoc(), viewDescType,
-                                               alloc, idxs);
+  return builder.create<ttg::MemDescIndexOp>(alloc.getLoc(), viewDescType,
+                                             alloc, idx);
 }
 
 TypedValue<ttg::MemDescType>

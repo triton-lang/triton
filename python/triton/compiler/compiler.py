@@ -77,7 +77,7 @@ class ASTSource:
         key = f"{self.fn.cache_key}-{str(self.attrs)}-{sorted_sig}-{constants_key}"
         return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
-    def make_ir(self, options, codegen_fns, module_map, context):
+    def make_ir(self, target: GPUTarget, options, codegen_fns, module_map, context):
         from .code_generator import ast_to_ttir
         return ast_to_ttir(self.fn, self, context=context, options=options, codegen_fns=codegen_fns,
                            module_map=module_map)
@@ -116,7 +116,7 @@ class IRSource:
     def hash(self):
         return hashlib.sha256(self.src.encode("utf-8")).hexdigest()
 
-    def make_ir(self, options, codegen_fns, module_map, context):
+    def make_ir(self, target: GPUTarget, options, codegen_fns, module_map, context):
         self.module.context = context
         return self.module
 
@@ -299,7 +299,7 @@ def compile(src, target=None, options=None, _env_vars=None):
     codegen_fns = backend.get_codegen_implementation(options)
     module_map = backend.get_module_map()
     try:
-        module = src.make_ir(options, codegen_fns, module_map, context)
+        module = src.make_ir(target, options, codegen_fns, module_map, context)
     except Exception as e:
         filter_traceback(e)
         raise

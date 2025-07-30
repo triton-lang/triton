@@ -68,7 +68,7 @@ def run_parser(kernel_fn):
     options = stub_backend.parse_options(options)
     codegen_fns = stub_backend.get_codegen_implementation(options)
     module_map = stub_backend.get_module_map()
-    module = src.make_ir(options, codegen_fns, module_map, context)
+    module = src.make_ir(stub_target, options, codegen_fns, module_map, context)
     assert module.verify()
     return module
 

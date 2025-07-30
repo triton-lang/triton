@@ -28,7 +28,7 @@ tt.func public @matmul_kernel_tma_persistent(%arg0: !tt.ptr<i8, 0>, %arg1: !tt.p
 
   // BLACKWELL: [[ACC_BUFS:%.*]] = ttng.tmem_alloc : () -> !ttg.memdesc<2x128x128xf32, #tmem,
   // BLACKWELL: ttg.memdesc_trans
-  // BLACKWELL: [[ACC_BUF:%.*]] = ttg.memdesc_subview [[ACC_BUFS]]
+  // BLACKWELL: [[ACC_BUF:%.*]] = ttg.memdesc_index [[ACC_BUFS]]
   // BLACKWELL: ttng.tc_gen5_mma {{%[0-9]+}}, {{%[0-9]+}}, [[ACC_BUF]], %false
 
   // BLACKWELL: scf.for
@@ -50,7 +50,7 @@ tt.func public @matmul_kernel_tma_persistent(%arg0: !tt.ptr<i8, 0>, %arg1: !tt.p
       %38 = ttng.reinterpret_tensor_descriptor %arg1 : !tt.ptr<i8, 0> to !tt.tensordesc<tensor<128x64xf16, #shared>>
       %39 = tt.descriptor_load %38[%20, %35] : !tt.tensordesc<tensor<128x64xf16, #shared>> -> tensor<128x64xf16>
       // BLACKWELL: ttg.memdesc_trans
-      // BLACKWELL: [[ACC_BUF:%.*]] = ttg.memdesc_subview [[ACC_BUFS]]
+      // BLACKWELL: [[ACC_BUF:%.*]] = ttg.memdesc_index [[ACC_BUFS]]
       // BLACKWELL: ttng.tc_gen5_mma {{%[0-9]+}}, {{%[0-9]+}}, [[ACC_BUF]]
 
       // HOPPER: [[RESULT:%.*]] = ttng.warp_group_dot {{.*}} isAsync = true

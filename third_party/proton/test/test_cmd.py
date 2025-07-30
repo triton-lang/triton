@@ -58,6 +58,5 @@ def test_instrument_exec():
         assert result[5] == ['5', 'matmul_kernel', 'instrument.py:33:20', 'SHARED', 'LOAD']
         assert result[6] == ['6', 'matmul_kernel', 'instrument.py:42:21', 'GLOBAL', 'STORE']
     else:
-        assert len(result) == 2
+        assert len(result) == 1
         assert result[0] == ['0', 'matmul_kernel', 'instrument.py:42:21', 'SHARED', 'STORE']
-        assert result[1] == ['1', 'matmul_kernel', 'instrument.py:42:21', 'SHARED', 'LOAD']

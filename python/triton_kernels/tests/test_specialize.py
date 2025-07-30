@@ -38,7 +38,7 @@ def cacheable_kernel():
     return get_specialized_kernel()
 
 
-def test_cacheable(device):
+def test_cacheable(device, fresh_knobs):
     specialized_kernel = get_specialized_kernel()
 
     specialization_data = None

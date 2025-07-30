@@ -293,10 +293,15 @@ ColumnAction actionRemoveBroadcastedRegs(const LinearLayout &layout) {
   return ColumnAction(permOrder, kReg, bases.size());
 }
 std::pair<int64_t, ColumnAction>
-actionAdditiveStrides(const LinearLayout &layout, uint64_t maskSpanOffsets) {
+actionAdditiveStrides(const LinearLayout &layout, const LinearLayout addrLayout,
+                      uint64_t maskSpanOffsets) {
   // We are looking to put at the front (after any zeros) any basis that does
   // not intersect with any bit moved by any basis in kLane / kWarp
   // and that is not moved by any affine offset
+
+  // Note this function assumes that if any registers are used in the addrLayout
+  // of the layout (as in ldmatrix/stmatrix) they will be the first non-zero
+  // registers within `layout`
   assert(layout.getNumInDims() != 0);
   auto kReg = *layout.getInDimNames().begin();
   assert(kReg.str() == "register");
@@ -304,15 +309,16 @@ actionAdditiveStrides(const LinearLayout &layout, uint64_t maskSpanOffsets) {
   auto kWarp = StringAttr::get(kReg.getContext(), "warp");
   assert(layout.getNumOutDims() == 1);
   uint32_t bits = maskSpanOffsets;
-  for (auto dim : {kLane, kWarp}) {
-    const auto &bases = layout.getBases().lookup(dim);
+  llvm::SetVector<uint32_t> tileBases;
+  for (auto bases : llvm::make_second_range(addrLayout.getBases())) {
     for (auto basis : bases) {
       bits |= basis[0];
+      tileBases.insert(basis[0]);
     }
   }
   SmallVector<size_t> front, back;
   for (auto [idx, basis] : llvm::enumerate(layout.getBases().lookup(kReg))) {
-    if ((basis[0] & bits) == 0) {
+    if ((basis[0] & bits) == 0 || tileBases.contains(basis[0])) {
       front.push_back(idx);
     } else {
       back.push_back(idx);

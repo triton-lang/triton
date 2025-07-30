@@ -2003,6 +2003,36 @@ def test_atomic_unsupported_type(dtype_str, device):
         kernel[(1, )](I, O)
 
 
+@pytest.mark.interpreter
+@pytest.mark.parametrize("dtype_str", ["int32", "float16"])
+@pytest.mark.parametrize("size", [1, 4, 16])
+@pytest.mark.parametrize("op", ["add", "cas"])
+def test_tensor_atomic_use_result(dtype_str, size, op, device):
+    if is_hip():
+        pytest.skip(
+            "HIP is broken because (1) it doesn't support thread predicate in atomic cas, and (2) it doesn't support"
+            " atomic rmw with float16")
+
+    @triton.jit
+    def kernel(index_ptr, out_ptr, size: tl.constexpr, op: tl.constexpr):
+        if op == "add":
+            write_index = tl.atomic_add(index_ptr + tl.arange(0, size)[:, None], val=tl.arange(0, size)[:, None],
+                                        sem="relaxed")
+        elif op == "cas":
+            write_index = tl.atomic_cas(
+                index_ptr + tl.arange(0, size)[:, None],
+                cmp=tl.zeros((size, ), dtype=index_ptr.dtype.element_ty)[:, None],
+                val=tl.arange(0, size).to(index_ptr.dtype.element_ty)[:, None],
+                sem="relaxed",
+            )
+        tl.store(out_ptr + write_index.to(tl.uint32) * size + tl.arange(0, size)[None, :], 5)
+
+    index = torch.arange(0, size, device=device).to(dtype=getattr(torch, dtype_str))
+    out = torch.zeros((size, size), device=device, dtype=getattr(torch, dtype_str))
+    kernel[(1, )](index, out, size, op)
+    assert (out == 5).all()
+
+
 # ---------------
 # test cast
 # ---------------
@@ -6485,7 +6515,7 @@ shared_layouts = [
 
 @pytest.mark.parametrize("M, N, M_tile_size, N_tile_size",
                          [[128, 128, 64, 64], [128, 128, 64, 32], [128, 64, 64, 32], [256, 128, 64, 64]])
-def test_split_subview(M, N, M_tile_size, N_tile_size, device='cuda'):
+def test_split_subview(M, N, M_tile_size, N_tile_size, device):
     num_rows_per_warp = THREADS_PER_WARP // 4
     num_repeats_M = triton.cdiv(M, M_tile_size)
     num_repeats_N = triton.cdiv(N, N_tile_size)
@@ -6514,7 +6544,7 @@ def test_split_subview(M, N, M_tile_size, N_tile_size, device='cuda'):
         %c0_i32 = arith.constant 0 : i32
 
         %12 = ttg.local_alloc : () -> !ttg.memdesc<1x{M}x{N}xf16, #shared, #smem, mutable>
-        %13 = ttg.memdesc_subview %12[%c0_i32, %c0_i32, %c0_i32] : !ttg.memdesc<1x{M}x{N}xf16, #shared, #smem, mutable> -> !ttg.memdesc<{M}x{N}xf16, #shared, #smem, mutable>
+        %13 = ttg.memdesc_index %12, %c0_i32 : !ttg.memdesc<1x{M}x{N}xf16, #shared, #smem, mutable> -> !ttg.memdesc<{M}x{N}xf16, #shared, #smem, mutable>
         ttg.local_store %11, %13 : tensor<{M}x{N}xf16, #blocked> -> !ttg.memdesc<{M}x{N}xf16, #shared, #smem, mutable>
 
     """
@@ -6525,10 +6555,7 @@ def test_split_subview(M, N, M_tile_size, N_tile_size, device='cuda'):
             m_offset = m * M_tile_size
             n_offset = n * N_tile_size
             ir += f"""
-        %off0_{m}_{n} = arith.constant {m_offset} : i32
-        %off1_{m}_{n} = arith.constant {n_offset} : i32
-
-        %view{linear_idx} = ttg.memdesc_subview %13[%off0_{m}_{n}, %off1_{m}_{n}] : !ttg.memdesc<{M}x{N}xf16, #shared, #smem, mutable> -> !ttg.memdesc<{M_tile_size}x{N_tile_size}xf16, #shared, #smem, mutable, {M}x{N}>
+        %view{linear_idx} = ttg.memdesc_subslice %13[{m_offset}, {n_offset}] : !ttg.memdesc<{M}x{N}xf16, #shared, #smem, mutable> -> !ttg.memdesc<{M_tile_size}x{N_tile_size}xf16, #shared, #smem, mutable, {M}x{N}>
         %data{linear_idx} = ttg.local_load %view{linear_idx} : !ttg.memdesc<{M_tile_size}x{N_tile_size}xf16, #shared, #smem, mutable, {M}x{N}> -> tensor<{M_tile_size}x{N_tile_size}xf16, #blocked>
         %inc{linear_idx} = arith.constant dense<{linear_idx}.0> : tensor<{M_tile_size}x{N_tile_size}xf16, #blocked>
 
@@ -7107,11 +7134,13 @@ def test_enable_fp_fusion(enable_fp_fusion, default_override, device):
 # -----------------------
 
 
-@pytest.mark.parametrize("arch", ["sm70", "sm80", "sm90"])
+@pytest.mark.parametrize("arch", ["sm70", "sm80", "sm90", "gfx942", "gfx950", "gfx1200"])
 @pytest.mark.parametrize("env_var_override", [False, True])
 def test_override_arch(arch, env_var_override, device):
-    if not is_cuda():
-        pytest.skip('arch only for CUDA')
+    if arch.startswith("sm") and not is_cuda():
+        pytest.skip(f"{arch} arch only for CUDA")
+    elif arch.startswith("gfx") and not is_hip():
+        pytest.skip(f"{arch} arch only for HIP")
 
     @triton.jit
     def simple(data, out):
@@ -7122,15 +7151,31 @@ def test_override_arch(arch, env_var_override, device):
     data = torch.randn((128, ), device=device, dtype=torch.float32)
     out = torch.empty_like(data)
 
-    if env_var_override:
-        os.environ["TRITON_OVERRIDE_ARCH"] = str(arch)
-        h = simple[(1, )](data, out)
-        os.environ.pop("TRITON_OVERRIDE_ARCH")
-    else:
-        h = simple[(1, )](data, out, arch=arch)
-    torch.testing.assert_close(data * 1.5 + 1.0, out)
-    ttgir_cc = re.search(r'cuda:(\d+)', h.asm["ttgir"])
-    assert ttgir_cc.group(1) == arch[2:]
+    if is_cuda():
+        if env_var_override:
+            os.environ["TRITON_OVERRIDE_ARCH"] = str(arch)
+            h = simple[(1, )](data, out)
+            os.environ.pop("TRITON_OVERRIDE_ARCH")
+        else:
+            h = simple[(1, )](data, out, arch=arch)
+        torch.testing.assert_close(data * 1.5 + 1.0, out)
+        ttgir_cc = re.search(r'cuda:(\d+)', h.asm["ttgir"])
+        assert ttgir_cc.group(1) == arch[2:]
+    elif is_hip():
+        # For HIP, the generated kernel is a binary containing the final ISA. So we cannot run
+        # them like CUDA side if the chip doesn't match. Here we just check generated ISA.
+        if env_var_override:
+            os.environ["TRITON_OVERRIDE_ARCH"] = str(arch)
+            h = simple.warmup(data, out, grid=(1, ))
+            os.environ.pop("TRITON_OVERRIDE_ARCH")
+        else:
+            h = simple.warmup(data, out, arch=arch, grid=(1, ))
+        ttgir_gfx = re.search(r'hip:(\w+)', h.asm["ttgir"])
+        ttgir_warp = re.search(r'"ttg.threads-per-warp" = (\d+)', h.asm["ttgir"])
+        amdgcn_gfx = re.search(r'.amdgcn_target "amdgcn-amd-amdhsa--(\w+)"', h.asm["amdgcn"])
+        assert ttgir_gfx.group(1) == arch
+        assert int(ttgir_warp.group(1)) == (32 if arch == "gfx1200" else 64)
+        assert amdgcn_gfx.group(1) == arch
 
 
 # -----------------------
