@@ -465,10 +465,7 @@ bool isProducerLoad(ArefCreateOp arefOp) {
       if (!loop) {
         continue;
       }
-      if (loop.getOps<nvws::DescriptorLoadOpInterface>().empty()) {
-        return true;
-      }
-      if (loop.getOps<AsyncCopyGlobalToLocalOp>().empty()) {
+      if (!loop.getOps<nvws::DescriptorLoadOpInterface>().empty()) {
         return true;
       }
     }
@@ -796,7 +793,7 @@ void createCombinedArefOps(SmallVector<EnterOp> &enterOps,
   assignStageCluster(exit, getStageCluster(lastExit), builder);
 
   for (auto [idx, enterOp] : llvm::enumerate(enterOps)) {
-    enterOp.getResult(0).replaceAllUsesWith(enter.getResult(idx));
+    enterOp.getBuffers()[0].replaceAllUsesWith(enter.getBuffers()[idx]);
   }
 }
 

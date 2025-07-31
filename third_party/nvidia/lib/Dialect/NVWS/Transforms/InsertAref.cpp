@@ -296,8 +296,9 @@ getEnterAndExitStageClustersOfUses(const SetVector<Value> &producedResults,
                                    scf::ForOp forOp) {
   CoarseSchedule coarseSchedule;
   if (failed(coarseSchedule.deSerialize(forOp))) {
-    llvm::report_fatal_error(
-        "Failed to deserialze stage and cluster annotations.");
+    // llvm::report_fatal_error(
+    //     "Failed to deserialze stage and cluster annotations.");
+    return std::make_pair(std::nullopt, std::nullopt);
   }
 
   SmallVector<Operation *> ops;
