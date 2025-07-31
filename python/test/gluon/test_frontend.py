@@ -257,7 +257,7 @@ def shared_memory_index_kernel(XBLOCK: ttgl.constexpr, layout: ttgl.constexpr, s
 @pytest.mark.parametrize("target", ALL_TARGETS)
 def test_shared_memory_index(target):
     layout = ttgl.BlockedLayout(size_per_thread=[1], threads_per_warp=[32], warps_per_cta=[4], order=[0])
-    smem_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=32, rank=2)
+    smem_layout = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[0])
     mod = run_parser(
         shared_memory_index_kernel,
         *make_args(256, layout, smem_layout, num_warps=4),
@@ -266,7 +266,7 @@ def test_shared_memory_index(target):
     expecttest.assert_expected_inline(
         anonymize_ir(mod.str_nodebug()), """\
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
-#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @shared_memory_index_kernel() attributes {noinline = false} {
