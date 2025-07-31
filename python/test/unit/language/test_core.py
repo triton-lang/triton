@@ -1908,24 +1908,33 @@ def test_atomic_cas(sem, num_ctas, device):
 
 
 @pytest.mark.interpreter
-@pytest.mark.parametrize("sem", [None, 'acquire', 'release', 'acq_rel', 'relaxed'])
+@pytest.mark.parametrize("sem", [None, "acquire", "release", "acq_rel", "relaxed"])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
-def test_tensor_atomic_cas(sem, num_ctas, device):
+@pytest.mark.parametrize("size", [4, 128, 512])
+@pytest.mark.parametrize("dtype_str", ['bfloat16', 'float16', 'float32', 'uint64', 'int64', 'float64'])
+def test_tensor_atomic_cas(sem, size, dtype_str, num_ctas, device):
+    check_type_supported(dtype_str, device)
+    if "float" in dtype_str and is_hip():
+        pytest.skip("HIP does not support atomic cas with float types")
 
     @triton.jit
-    def change_value(X, BLOCK_SIZE: tl.constexpr, sem: tl.constexpr):
+    def change_value(X, BLOCK_SIZE: tl.constexpr, sem: tl.constexpr, dtype: tl.constexpr):
         pid = tl.program_id(axis=0)
         block_start = pid * BLOCK_SIZE
         offsets = block_start + tl.arange(0, BLOCK_SIZE)
-        t1 = tl.full((BLOCK_SIZE, ), 0, dtype=tl.int64)
-        t2 = tl.full((BLOCK_SIZE, ), 2, dtype=tl.int64)
+        t1 = tl.full((BLOCK_SIZE, ), 0, dtype=dtype)
+        t2 = tl.full((BLOCK_SIZE, ), 2, dtype=dtype)
         tl.atomic_cas(X + offsets, t1, t2, sem=sem)
 
-    X = torch.tensor([0, 1, 0, 1, 0, 1, 0, 1], device=device, dtype=torch.int64)
-    Y = torch.tensor([2, 1, 2, 1, 2, 1, 2, 1], device=device, dtype=torch.int64)
+    torch_dtype = getattr(torch, dtype_str)
+    X = torch.zeros((size, ), device=device, dtype=torch_dtype)
+    X[1::2] = 1
+    Y = X.clone()
+    Y[0::2] = 2
 
-    change_value[(2, )](X, 4, sem)
-    assert (torch.equal(X, Y))
+    tl_dtype = getattr(tl, dtype_str)
+    change_value[(2, )](X, BLOCK_SIZE=size // 2, sem=sem, dtype=tl_dtype)
+    assert torch.equal(X, Y)
 
 
 @pytest.mark.interpreter
@@ -7136,11 +7145,13 @@ def test_enable_fp_fusion(enable_fp_fusion, default_override, device):
 # -----------------------
 
 
-@pytest.mark.parametrize("arch", ["sm70", "sm80", "sm90"])
+@pytest.mark.parametrize("arch", ["sm70", "sm80", "sm90", "gfx942", "gfx950", "gfx1200"])
 @pytest.mark.parametrize("env_var_override", [False, True])
 def test_override_arch(arch, env_var_override, device):
-    if not is_cuda():
-        pytest.skip('arch only for CUDA')
+    if arch.startswith("sm") and not is_cuda():
+        pytest.skip(f"{arch} arch only for CUDA")
+    elif arch.startswith("gfx") and not is_hip():
+        pytest.skip(f"{arch} arch only for HIP")
 
     @triton.jit
     def simple(data, out):
@@ -7151,15 +7162,31 @@ def test_override_arch(arch, env_var_override, device):
     data = torch.randn((128, ), device=device, dtype=torch.float32)
     out = torch.empty_like(data)
 
-    if env_var_override:
-        os.environ["TRITON_OVERRIDE_ARCH"] = str(arch)
-        h = simple[(1, )](data, out)
-        os.environ.pop("TRITON_OVERRIDE_ARCH")
-    else:
-        h = simple[(1, )](data, out, arch=arch)
-    torch.testing.assert_close(data * 1.5 + 1.0, out)
-    ttgir_cc = re.search(r'cuda:(\d+)', h.asm["ttgir"])
-    assert ttgir_cc.group(1) == arch[2:]
+    if is_cuda():
+        if env_var_override:
+            os.environ["TRITON_OVERRIDE_ARCH"] = str(arch)
+            h = simple[(1, )](data, out)
+            os.environ.pop("TRITON_OVERRIDE_ARCH")
+        else:
+            h = simple[(1, )](data, out, arch=arch)
+        torch.testing.assert_close(data * 1.5 + 1.0, out)
+        ttgir_cc = re.search(r'cuda:(\d+)', h.asm["ttgir"])
+        assert ttgir_cc.group(1) == arch[2:]
+    elif is_hip():
+        # For HIP, the generated kernel is a binary containing the final ISA. So we cannot run
+        # them like CUDA side if the chip doesn't match. Here we just check generated ISA.
+        if env_var_override:
+            os.environ["TRITON_OVERRIDE_ARCH"] = str(arch)
+            h = simple.warmup(data, out, grid=(1, ))
+            os.environ.pop("TRITON_OVERRIDE_ARCH")
+        else:
+            h = simple.warmup(data, out, arch=arch, grid=(1, ))
+        ttgir_gfx = re.search(r'hip:(\w+)', h.asm["ttgir"])
+        ttgir_warp = re.search(r'"ttg.threads-per-warp" = (\d+)', h.asm["ttgir"])
+        amdgcn_gfx = re.search(r'.amdgcn_target "amdgcn-amd-amdhsa--(\w+)"', h.asm["amdgcn"])
+        assert ttgir_gfx.group(1) == arch
+        assert int(ttgir_warp.group(1)) == (32 if arch == "gfx1200" else 64)
+        assert amdgcn_gfx.group(1) == arch
 
 
 # -----------------------

@@ -10,6 +10,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/IR/Types.h"
+#include "triton/Tools/GenericSwizzling.h"
 #include "triton/Tools/LinearLayout.h"
 #include "triton/Tools/StrUtil.h"
 #include "llvm/ADT/STLExtras.h"
@@ -318,9 +319,19 @@ public:
 #define str_attr(str) ::mlir::StringAttr::get(ctx, (str))
 
 namespace mlir {
+
+// See FuncOpToLLVM.cpp for details about Triton's function calling conventions
+constexpr int kProfileScratchBufferOffset = -1;
+constexpr int kGlobalScratchBufferOffset = -2;
+constexpr int kSharedMemoryOffset = -3;
+
 namespace triton {
 
 namespace gpu {
+
+std::pair<SmallVector<LocalMemOpTile>, SmallVector<LocalMemOpTile>>
+getSrcDstTiles(const TargetInfoBase &targetInfo, int bitwidth);
+
 Type getFunctionType(Type resultType, ValueRange operands);
 
 LLVM::LLVMFuncOp appendOrGetExternFuncOp(RewriterBase &rewriter, Operation *op,
@@ -352,9 +363,6 @@ public:
 
   SmallVector<Type> getTypes() const;
 
-  SmallVector<Value> getStrides(triton::gpu::MemDescType memDesc, Location loc,
-                                RewriterBase &rewriter) const;
-
   // Returns a mask representing all the bits of the memdesc offsets that
   // may be modified by an affine offset coming from a memdesc_subslice.
   // The offsets are considered to be in the type of the memdesc.
@@ -380,14 +388,6 @@ public:
   Value getBaseBeforeSlice(int dim, Location loc, RewriterBase &rewriter) const;
 
 private:
-  static SmallVector<unsigned> getOrderForShape(ArrayRef<int64_t> shape,
-                                                ArrayRef<unsigned> layoutOrder);
-
-  static SmallVector<Value> getStridesForShape(ArrayRef<int64_t> shape,
-                                               ArrayRef<unsigned> layoutOrder,
-                                               Location loc,
-                                               RewriterBase &rewriter);
-
   Value base; // i32 ptr. The start address of the shared memory object.
   Type baseElemType;
   SmallVector<Value>
@@ -444,6 +444,9 @@ Value getStackPointer(RewriterBase &rewriter, FunctionOpInterface funcOp);
 Value getGlobalScratchPtr(Location loc, RewriterBase &rewriter,
                           const TargetInfoBase &targetInfo,
                           FunctionOpInterface funcOp, Value allocOffset);
+
+Value getProfileScratchPtr(Location loc, RewriterBase &rewriter,
+                           FunctionOpInterface funcOp);
 
 Value getSharedMemoryBase(Location loc, RewriterBase &rewriter,
                           const TargetInfoBase &target, Operation *op);
@@ -608,10 +611,6 @@ std::optional<LLVM::AtomicBinOp> matchAtomicOp(RMWOp atomicOp);
 
 std::optional<LLVM::AtomicOrdering> getMemoryOrdering(MemSemantic memOrdering);
 
-bool isSimpleSharedMemoryAccess(ArrayRef<int64_t> shape,
-                                ArrayRef<int64_t> allocShape,
-                                triton::gpu::SharedEncodingTrait sharedEnc);
-
 llvm::MapVector<StringAttr, int32_t> getAllFreeVarMasks(MLIRContext *ctx);
 
 llvm::MapVector<StringAttr, int32_t> getFreeVariableMasks(Type type);
@@ -644,11 +643,10 @@ Value transferWithinBlockPadding(triton::gpu::ConvertLayoutOp op, Value src,
                                  const LLVMTypeConverter *typeConverter,
                                  RewriterBase &rewriter);
 
-LogicalResult
-transferWithinBlockSwizzling(triton::gpu::ConvertLayoutOp op, Value src,
-                             const TargetInfoBase &targetInfo,
-                             const LLVMTypeConverter *typeConverter,
-                             RewriterBase &rewriter);
+void transferWithinBlockSwizzling(triton::gpu::ConvertLayoutOp op, Value src,
+                                  const TargetInfoBase &targetInfo,
+                                  const LLVMTypeConverter *typeConverter,
+                                  RewriterBase &rewriter);
 
 SmallVector<Value> inlineRegionImpl(RewriterBase &rewriter, Region &region,
                                     ArrayRef<Value> args,

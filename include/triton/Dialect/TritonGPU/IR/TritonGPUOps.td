@@ -64,9 +64,7 @@ def TTG_AsyncCommitGroupOp : TTG_Op<"async_commit_group"> {
   let results = (outs TTG_AsyncToken:$asyncToken);
   let arguments = (ins Variadic<TTG_AsyncToken>:$inputTokens);
 
-  let assemblyFormat = [{
-    $inputTokens attr-dict
-  }];
+  let assemblyFormat = [{($inputTokens ^)?attr-dict}];
 
   let extraClassDeclaration = [{
     static bool isSupported(int computeCapability) {

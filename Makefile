@@ -6,7 +6,7 @@ PYTHON ?= python
 BUILD_DIR := $(shell cd python; $(PYTHON) -c 'from build_helpers import get_cmake_dir; print(get_cmake_dir())')
 TRITON_OPT := $(BUILD_DIR)/bin/triton-opt
 PYTEST := $(PYTHON) -m pytest
-LLVM_BUILD_PATH ?= $(realpath .llvm-project/build)
+LLVM_BUILD_PATH ?= "$(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))/.llvm-project/build"
 NUM_PROCS ?= 8
 
 # Incremental builds
@@ -44,6 +44,12 @@ test-unit: all
 		$(PYTEST) --capture=tee-sys -rfs -vvv python/test/unit/instrumentation/test_gpuhello.py
 	$(PYTEST) -s -n $(NUM_PROCS) python/test/gluon
 
+.PHONY: test-distributed
+test-distributed: all
+	$(PYTHON) -m pip install --upgrade pip
+	$(PYTHON) -m pip install python/triton_kernels -v
+	$(PYTEST) -s python/triton_kernels/bench/distributed.py
+
 .PHONY: test-gluon
 test-gluon: all
 	$(PYTEST) -s -n $(NUM_PROCS) python/test/gluon
@@ -61,7 +67,8 @@ test-interpret: all
 
 .PHONY: test-proton
 test-proton: all
-	$(PYTEST) -s -n 8 third_party/proton/test
+	$(PYTEST) -s -n 8 third_party/proton/test --ignore=third_party/proton/test/test_override.py
+	$(PYTEST) -s third_party/proton/test/test_override.py
 
 .PHONY: test-python
 test-python: test-unit test-regression test-interpret test-proton
