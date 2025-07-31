@@ -553,11 +553,9 @@ LogicalResult TMEMAllocOp::verify() {
   if (!isa<TensorMemoryEncodingAttr, TensorMemoryScalesEncodingAttr>(
           getType().getEncoding()))
     return emitOpError("should use tensor memory encoding");
-  if (getSrc()) {
-    if (failed(
-            verifyTMEMOperand(*this, getSrc().getType(), getType(), "source")))
-      return failure();
-  }
+  if (getSrc() &&
+      failed(verifyTMEMOperand(*this, getSrc().getType(), getType(), "source")))
+    return failure();
   return triton::gpu::verifyAllocOp(*this, getSrc(), getType());
 }
 
