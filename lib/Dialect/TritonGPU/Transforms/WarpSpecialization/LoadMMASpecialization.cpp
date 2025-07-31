@@ -1,4 +1,3 @@
-#include "PartitionBuilder.h"
 #include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Dominance.h"
@@ -9,6 +8,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/MMAv5PipelineUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Partition.h"
+#include "triton/Dialect/TritonGPU/Transforms/PartitionBuilder.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
@@ -84,15 +84,6 @@ getPartitionScheme(scf::ForOp loop, const WarpSchedule &schedule) {
 //===----------------------------------------------------------------------===//
 // Utilities
 //===----------------------------------------------------------------------===//
-
-static void replaceAllUsesDominatedBy(Operation *domOp, Value newValue,
-                                      Value oldValue, DominanceInfo &domInfo) {
-  if (newValue == oldValue)
-    return;
-  oldValue.replaceUsesWithIf(newValue, [&](OpOperand &use) {
-    return domInfo.properlyDominates(domOp, use.getOwner());
-  });
-}
 
 static std::pair<Value, Value> postIncrementModulo(ImplicitLocOpBuilder &b,
                                                    Value index, Value phase,
@@ -785,7 +776,9 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
     Value emptyBar = createBarrierAlloc(loop, /*numBarriers=*/1);
     Value readyBar = createBarrierAlloc(loop, /*numBarriers=*/1);
     PartitionBuilder b(defs.front()->getLoc(), loop);
-    b.create<ttng::ArriveBarrierOp>(emptyBar, /*arriveCount=*/1);
+    // For Nx1 barrier allocations, pass a 1D view into barrier ops.
+    Value emptyView0 = createSingleBufferView(b, emptyBar, b.intCst(0));
+    b.create<ttng::ArriveBarrierOp>(emptyView0, /*arriveCount=*/1);
 
     Operation *domOp = findNearestCommonDominator(defs, domInfo);
     Operation *lastOp = findNearestCommonPostDominator(defs, postDomInfo);
@@ -793,17 +786,22 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
     auto [index, phase] = addIndexAndPhase(b, loop, /*numStages=*/1);
     StageCluster srcStageCluster = getStageCluster(domOp);
     b.setInsertionPoint(domOp);
-    b.createInto<ttng::WaitBarrierOp>(*partition, srcStageCluster, emptyBar,
+    Value emptyView = createSingleBufferView(b, emptyBar, index);
+    b.createInto<ttng::WaitBarrierOp>(*partition, srcStageCluster, emptyView,
                                       phase);
 
     b.setInsertionPointAfter(lastOp);
-    b.createInto<ttng::ArriveBarrierOp>(*partition, srcStageCluster, readyBar,
+    Value readyView = createSingleBufferView(b, readyBar, index);
+    b.createInto<ttng::ArriveBarrierOp>(*partition, srcStageCluster, readyView,
                                         1);
 
     b.setInsertionPoint(mmaOp);
+    Value readyView2 = createSingleBufferView(b, readyBar, index);
     b.createInto<ttng::WaitBarrierOp>(*schedule.getPartition(mmaOp),
-                                      getStageCluster(mmaOp), readyBar, phase);
-    mmaOp.addCompletionBarrier(emptyBar, b.boolCst(true));
+                                      getStageCluster(mmaOp), readyView2,
+                                      phase);
+    Value emptyView2 = createSingleBufferView(b, emptyBar, index);
+    mmaOp.addCompletionBarrier(emptyView2, b.boolCst(true));
     mmaOp.setIsAsync(true);
   }
 

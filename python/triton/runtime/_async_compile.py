@@ -1,8 +1,9 @@
 from __future__ import annotations
 from typing import Callable, Optional
 from concurrent.futures import Executor, as_completed, Future
+from contextvars import ContextVar
 
-active_mode: Optional[AsyncCompileMode] = None
+active_mode: ContextVar[Optional[AsyncCompileMode]] = ContextVar("async_compile_active_mode", default=None)
 
 
 class FutureKernel:
@@ -42,14 +43,13 @@ class AsyncCompileMode:
         return future_kernel
 
     def __enter__(self):
-        global active_mode
-        if active_mode is not None:
+        if active_mode.get() is not None:
             raise RuntimeError("Another AsyncCompileMode is already active")
-        active_mode = self
+        active_mode.set(self)
+        return self
 
     def __exit__(self, exc_type, exc_value, traceback):
-        global active_mode
         # Finalize any outstanding compiles
         for future in as_completed(self.raw_futures):
             self.future_kernels[future._key].result()
-        active_mode = None
+        active_mode.set(None)

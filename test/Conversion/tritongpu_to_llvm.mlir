@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-gpu-to-llvm 2>/dev/null | FileCheck %s --dump-input-context 20
+// RUN: triton-opt %s -split-input-file --allocate-shared-memory-nv --convert-triton-gpu-to-llvm 2>/dev/null | FileCheck %s --dump-input-context 20
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK: llvm.func @test_empty_kernel(%arg0: i32, %arg1: !llvm.ptr<1>, %arg2: !llvm.ptr<1>)
@@ -552,27 +552,17 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: rank_reducing_subview
   tt.func @rank_reducing_subview() {
     // CHECK: llvm.mlir.addressof @global_smem
-    // CHECK: llvm.extractvalue
+    // CHECK: llvm.mlir.constant(512 : i32) : i32
+    // CHECK-NEXT: llvm.mul
     // CHECK-NEXT: llvm.extractvalue
     // CHECK-NEXT: llvm.extractvalue
     // CHECK-NEXT: llvm.extractvalue
-    // CHECK-NEXT: llvm.mlir.constant(1 : i32) : i32
-    // CHECK-NEXT: llvm.mlir.constant(32 : i32) : i32
-    // CHECK-NEXT: llvm.mlir.constant(512 : i32) : i32
-    // CHECK-NEXT: llvm.mlir.constant(0 : i32) : i32
-    // CHECK-NEXT: llvm.mul
-    // CHECK-NEXT: llvm.add
-    // CHECK-NEXT: llvm.mul
-    // CHECK-NEXT: llvm.add
-    // CHECK-NEXT: llvm.mul
-    // CHECK-NEXT: llvm.add
-    // CHECK-NEXT: llvm.add
-    // CHECK-NEXT: llvm.add
+    // CHECK-NEXT: llvm.extractvalue
     // CHECK-NEXT: llvm.getelementptr
     %index = arith.constant 1 : i32
     %zero = arith.constant 0 : i32
     %0 = ttg.local_alloc : () -> !ttg.memdesc<128x16x32xf32, #shared0, #smem, mutable>
-    %1 = ttg.memdesc_subview %0[%index, %zero, %zero] : !ttg.memdesc<128x16x32xf32, #shared0, #smem, mutable> -> !ttg.memdesc<16x32xf32, #shared0, #smem, mutable>
+    %1 = ttg.memdesc_index %0, %index : !ttg.memdesc<128x16x32xf32, #shared0, #smem, mutable> -> !ttg.memdesc<16x32xf32, #shared0, #smem, mutable>
     tt.return
   }
 }
@@ -605,7 +595,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32} {
     %59 = tt.addptr %58, %24 : tensor<64x!tt.ptr<i64>, #slice1d0>, tensor<64xi32, #slice1d0>
     %66 = tt.addptr %59, %cst_2 : tensor<64x!tt.ptr<i64>, #slice1d0>, tensor<64xi32, #slice1d0>
     %71 = ttg.local_alloc : () -> !ttg.memdesc<2x64xi64, #shared2D, #smem, mutable>
-    %subview = ttg.memdesc_subview %71[%c0_i32, %c0_i32] :
+    %subview = ttg.memdesc_index %71, %c0_i32 :
       !ttg.memdesc<2x64xi64, #shared2D, #smem, mutable> ->
       !ttg.memdesc<64xi64, #shared1D, #smem, mutable>
     // CHECK: llvm.inline_asm has_side_effects asm_dialect = att
@@ -881,13 +871,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
   // CHECK-LABEL: convert_layout_blocked_blocked_multi_rep
   tt.func @convert_layout_blocked_blocked_multi_rep(%arg0: tensor<32x32xf32, #blocked0>) {
     // CHECK: llvm.mlir.addressof @global_smem
-    // CHECK-COUNT-4: llvm.store
+    // CHECK: llvm.store {{.*}} vector<4xi32>
     // CHECK: nvvm.barrier0
-    // CHECK-COUNT-4: llvm.load
+    // CHECK: nvgpu.ldmatrix %{{.*}} : (!llvm.ptr<3>) -> !llvm.struct<(i32, i32, i32, i32)>
     // CHECK: nvvm.barrier0
-    // CHECK-COUNT-4: llvm.store
+    // CHECK: llvm.store {{.*}} vector<4xi32>
     // CHECK: nvvm.barrier0
-    // CHECK-COUNT-4: llvm.load
+    // CHECK: nvgpu.ldmatrix %{{.*}} : (!llvm.ptr<3>) -> !llvm.struct<(i32, i32, i32, i32)>
     %0 = ttg.convert_layout %arg0 : tensor<32x32xf32, #blocked0> -> tensor<32x32xf32, #blocked1>
     tt.return
   }
@@ -1457,9 +1447,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.target" = "cuda:80"} {
   // CHECK-LABEL: atomic_add_f32
   tt.func @atomic_add_f32(%arg0 : tensor<256x!tt.ptr<f32>, #blocked0>, %arg1 : tensor<256xi1, #blocked0>, %arg2 : tensor<256xf32, #blocked0>) {
-    // CHECK: llvm.inline_asm
+    // CHECK: llvm.inline_asm has_side_effects asm_dialect = att operand_attrs = [] "mov.u32 $0, 0x0;
     // CHECK-SAME: @$3 atom.global.gpu.relaxed.add.f32
-    // CHECK: llvm.inline_asm
+    // CHECK: llvm.inline_asm has_side_effects asm_dialect = att operand_attrs = [] "mov.u32 $0, 0x0;
     // CHECK-SAME: @$3 atom.global.gpu.relaxed.add.f32
     %0 = tt.atomic_rmw fadd, relaxed, gpu, %arg0, %arg2, %arg1 : (tensor<256x!tt.ptr<f32>, #blocked0>, tensor<256xf32, #blocked0>, tensor<256xi1, #blocked0>) -> tensor<256xf32, #blocked0>
     tt.return
@@ -1490,6 +1480,36 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.tar
     // CHECK: llvm.inline_asm
     // CHECK-SAME: @$3 atom.global.sys.relaxed.add.f32
     %0 = tt.atomic_rmw fadd, relaxed, sys, %arg0, %arg2, %arg1 : (tensor<256x!tt.ptr<f32>, #blocked0>, tensor<256xf32, #blocked0>, tensor<256xi1, #blocked0>) -> tensor<256xf32, #blocked0>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked0 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.target" = "cuda:80"} {
+  // CHECK-LABEL: atomic_add_use_result_broadcasting
+  tt.func @atomic_add_use_result_broadcasting(%arg0 : tensor<16x!tt.ptr<f32>, #blocked0>, %arg1 : tensor<16xi1, #blocked0>, %arg2 : tensor<16xf32, #blocked0>) {
+    %0 = tt.atomic_rmw fadd, relaxed, sys, %arg0, %arg2, %arg1 : (tensor<16x!tt.ptr<f32>, #blocked0>, tensor<16xf32, #blocked0>, tensor<16xi1, #blocked0>) -> tensor<16xf32, #blocked0>
+    // CHECK: st.shared
+    // CHECK: nvvm.barrier0
+    // CHECK: llvm.load
+    tt.store %arg0, %0 : tensor<16x!tt.ptr<f32>, #blocked0>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked0 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.target" = "cuda:80"} {
+  // CHECK-LABEL: atomic_add_use_result_no_broadcasting
+  tt.func @atomic_add_use_result_no_broadcasting(%arg0 : tensor<128x!tt.ptr<f32>, #blocked0>, %arg1 : tensor<128xi1, #blocked0>, %arg2 : tensor<128xf32, #blocked0>) {
+    %0 = tt.atomic_rmw fadd, relaxed, sys, %arg0, %arg2, %arg1 : (tensor<128x!tt.ptr<f32>, #blocked0>, tensor<128xf32, #blocked0>, tensor<128xi1, #blocked0>) -> tensor<128xf32, #blocked0>
+    // CHECK-NOT: st.shared
+    // CHECK-NOT: nvvm.barrier0
+    // CHECK-NOT: llvm.load
+    tt.store %arg0, %0 : tensor<128x!tt.ptr<f32>, #blocked0>
     tt.return
   }
 }
@@ -2039,7 +2059,7 @@ module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-
   tt.func public @test_local_load_bf16() {
     %c0_i32 = arith.constant 0 : i32
     %19 = ttg.local_alloc : () -> !ttg.memdesc<1x1x2048xbf16, #shared, #smem, mutable>
-    %22 = ttg.memdesc_subview %19[%c0_i32, %c0_i32, %c0_i32] : !ttg.memdesc<1x1x2048xbf16, #shared, #smem, mutable> -> !ttg.memdesc<1x2048xbf16, #shared, #smem, mutable>
+    %22 = ttg.memdesc_index %19, %c0_i32 : !ttg.memdesc<1x1x2048xbf16, #shared, #smem, mutable> -> !ttg.memdesc<1x2048xbf16, #shared, #smem, mutable>
     %39 = ttg.local_load %22 : !ttg.memdesc<1x2048xbf16, #shared, #smem, mutable> -> tensor<1x2048xbf16, #blocked>
     %40 = arith.extf %39 : tensor<1x2048xbf16, #blocked> to tensor<1x2048xf32, #blocked>
     tt.return
@@ -2089,8 +2109,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK: llvm.store
   tt.func public @test_local_store_subview(%arg0: tensor<1xf32, #blocked>) {
     %c0_i32 = arith.constant 0 : i32
-    %0 = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<1xf32, #shared, #smem, mutable>
-    %sv = ttg.memdesc_subview %0[%c0_i32] : !ttg.memdesc<1xf32, #shared, #smem, mutable> -> !ttg.memdesc<1xf32, #shared, #smem, mutable>
+    %0 = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<1x1xf32, #shared, #smem, mutable>
+    %sv = ttg.memdesc_index %0, %c0_i32 : !ttg.memdesc<1x1xf32, #shared, #smem, mutable> -> !ttg.memdesc<1xf32, #shared, #smem, mutable>
     ttg.local_store %arg0, %sv : tensor<1xf32, #blocked> -> !ttg.memdesc<1xf32, #shared, #smem, mutable>
     tt.return
   }

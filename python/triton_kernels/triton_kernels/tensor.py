@@ -1,15 +1,16 @@
-import torch
-from typing import Type
-from .reduction_details.reduce_bitmatrix import clear_sums, sum_bitmatrix_rows
 from dataclasses import dataclass, fields
+from typing import Type
+
+import torch
 from triton.tools.tensor_descriptor import TensorDescriptor
-from .tensor_details.layout import Layout, StridedLayout
+
+from .reduction_details.reduce_bitmatrix import clear_sums, sum_bitmatrix_rows
 from .target_info import cuda_capability_geq
+from .tensor_details.layout import Layout, StridedLayout
 
 
 @dataclass
 class Storage:
-
     data: torch.Tensor
     layout: Layout = None
 
@@ -90,7 +91,6 @@ def bitwidth(type: IntegerType | FloatType | torch.dtype):
 
 @dataclass
 class Tensor:
-
     storage: Storage | torch.Tensor
     dtype: IntegerType | FloatType | torch.dtype = None
     shape: list[int] | None = None
@@ -143,6 +143,11 @@ class Tensor:
 
     def element_size(self):
         return bitwidth(self.dtype) // 8
+
+    @property
+    def data(self):
+        t = self.storage
+        return t.data if isinstance(t, Storage) else t
 
 
 @dataclass

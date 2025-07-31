@@ -120,8 +120,8 @@ class CublasLtInstance {
   }
 
   // Simple wrapper around the cublasLtMatmul function
-  void matmul_impl(int m, int n, int k, uint64_t A, uint64_t B, uint64_t D,
-                   cudaDataType_t dtype) {
+  void gemm_impl(int m, int n, int k, uint64_t A, uint64_t B, uint64_t C,
+                 uint64_t D, cudaDataType_t dtype, float alpha, float beta) {
     cublasLtMatmulDesc_t matmulDesc = NULL;
 
     cublasOperation_t transa = CUBLAS_OP_T;
@@ -160,10 +160,8 @@ class CublasLtInstance {
           "No valid algorithm found by cublasLtMatmulAlgoGetHeuristic");
     }
 
-    float alpha = 1.0f;
-    float beta = 0.0f;
     successOrExit(cublasLtMatmul(ltHandle, matmulDesc, &alpha, (void *)A, Adesc,
-                                 (void *)B, Bdesc, &beta, nullptr, Cdesc,
+                                 (void *)B, Bdesc, &beta, (void *)C, Cdesc,
                                  (void *)D, Ddesc, &heuristicResult.algo,
                                  (void *)workspace, workspaceSize, 0));
     if (Ddesc)
@@ -206,7 +204,12 @@ public:
               cudaDataType_t dtype) {
     // CUDA is column-major, while triton is row-major, therefore we need to
     // reverse the order of the matrices ( A * B = (B^T * A^T)^T ).
-    matmul_impl(n, m, k, B, A, C, dtype);
+    gemm_impl(n, m, k, B, A, 0, C, dtype, 1.0f, 0.0f);
+  }
+
+  void gemm(int m, int n, int k, uint64_t A, uint64_t B, uint64_t C, uint64_t D,
+            cudaDataType_t dtype, float alpha, float beta) {
+    gemm_impl(n, m, k, B, A, C, D, dtype, alpha, beta);
   }
 };
 

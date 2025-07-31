@@ -10,6 +10,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/IR/Types.h"
+#include "triton/Tools/GenericSwizzling.h"
 #include "triton/Tools/LinearLayout.h"
 #include "triton/Tools/StrUtil.h"
 #include "llvm/ADT/STLExtras.h"
@@ -321,6 +322,10 @@ namespace mlir {
 namespace triton {
 
 namespace gpu {
+
+std::pair<SmallVector<LocalMemOpTile>, SmallVector<LocalMemOpTile>>
+getSrcDstTiles(const TargetInfoBase &targetInfo, int bitwidth);
+
 Type getFunctionType(Type resultType, ValueRange operands);
 
 LLVM::LLVMFuncOp appendOrGetExternFuncOp(RewriterBase &rewriter, Operation *op,
@@ -352,16 +357,13 @@ public:
 
   SmallVector<Type> getTypes() const;
 
-  SmallVector<Value> getStrides(triton::gpu::MemDescType memDesc, Location loc,
-                                RewriterBase &rewriter) const;
-
   // Returns a mask representing all the bits of the memdesc offsets that
-  // may be modified by an affine offset coming from a memdesc_subview.
+  // may be modified by an affine offset coming from a memdesc_subslice.
   // The offsets are considered to be in the type of the memdesc.
   // For padded layouts, we return the offsets without padding.
   static uint64_t getMaskSpanOffsets(triton::gpu::MemDescType srcTy);
 
-  // Returns whether the shared memory access had a memdesc_subview
+  // Returns whether the shared memory access had a memdesc_subslice
   // that is rank-preserving (soon to be called memdesc_slice)
   static bool isAffineSharedMemoryAccess(triton::gpu::MemDescType srcTy) {
     return getMaskSpanOffsets(srcTy) != 0;
@@ -380,14 +382,6 @@ public:
   Value getBaseBeforeSlice(int dim, Location loc, RewriterBase &rewriter) const;
 
 private:
-  static SmallVector<unsigned> getOrderForShape(ArrayRef<int64_t> shape,
-                                                ArrayRef<unsigned> layoutOrder);
-
-  static SmallVector<Value> getStridesForShape(ArrayRef<int64_t> shape,
-                                               ArrayRef<unsigned> layoutOrder,
-                                               Location loc,
-                                               RewriterBase &rewriter);
-
   Value base; // i32 ptr. The start address of the shared memory object.
   Type baseElemType;
   SmallVector<Value>
@@ -557,13 +551,14 @@ Value emitPadding(Location loc, RewriterBase &rewriter,
 // calcPaddedOffset is a lambda that takes a base offset (mlir::Value)
 // and computes a new offset (mlir::Value) by applying padding based on
 // shared memory layout.
-SmallVector<Value> lowerLdStShared(
-    Location loc, MLIRContext *ctx, LinearLayout cvt,
-    ArrayRef<Value> valsArray, // Input for store, output for load
-    Type llvmElemTy, Value smemBase,
-    std::function<Value(Value)> calcPaddedOffset, Value affineOffset,
-    uint64_t maskSpanAffineOffset, ConversionPatternRewriter &rewriter,
-    const TargetInfoBase &targetInfo, Operation *localLoadOp = nullptr);
+SmallVector<Value>
+lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout cvt,
+                ArrayRef<Value> valsArray, // Input for store, output for load
+                Type llvmElemTy, Value smemBase,
+                std::function<Value(Value)> calcPaddedOffset,
+                Value affineOffset, uint64_t maskSpanAffineOffset,
+                RewriterBase &rewriter, const TargetInfoBase &targetInfo,
+                Operation *localLoadOp = nullptr);
 
 // Lower an ld/st-like operation given a layout and a callback that creates the
 // PTX instruction Lowers to st when valArrays is empty, and to ld when it is
@@ -576,10 +571,10 @@ SmallVector<Value> lowerLdSt(
     ArrayRef<Value> valsArray, // Input for store, output for load
     Type llvmElemTy, Value smemBase,
     std::function<Value(Value)> calcPaddedOffset, Value affineOffset,
-    uint64_t maskSpanAffineOffset, ConversionPatternRewriter &rewriter,
+    uint64_t maskSpanAffineOffset, RewriterBase &rewriter,
     const TargetInfoBase &targetInfo, std::optional<int> maybeMaxVecElems,
-    std::function<SmallVector<Value>(ConversionPatternRewriter &, Location,
-                                     ArrayRef<Value>, Value, int, VectorType)>
+    std::function<SmallVector<Value>(RewriterBase &, Location, ArrayRef<Value>,
+                                     Value, int, VectorType)>
         lowerInst);
 
 // Lower local_load/local_store via ld.shared/st.shared
@@ -588,7 +583,7 @@ lowerLocalLdSt(Location loc, MLIRContext *ctx,
                LinearLayout cvt,          // Map from registers to offset
                ArrayRef<Value> valsArray, // Input for store, empty for load
                Type llvmElemTy, triton::gpu::MemDescType srcTy,
-               SharedMemoryObject smemObj, ConversionPatternRewriter &rewriter,
+               SharedMemoryObject smemObj, RewriterBase &rewriter,
                const TargetInfoBase &targetInfo,
                Operation *localLoadOp = nullptr);
 
@@ -606,10 +601,6 @@ Value packLLVector(Location loc, ValueRange vals, RewriterBase &rewriter);
 std::optional<LLVM::AtomicBinOp> matchAtomicOp(RMWOp atomicOp);
 
 std::optional<LLVM::AtomicOrdering> getMemoryOrdering(MemSemantic memOrdering);
-
-bool isSimpleSharedMemoryAccess(ArrayRef<int64_t> shape,
-                                ArrayRef<int64_t> allocShape,
-                                triton::gpu::SharedEncodingTrait sharedEnc);
 
 llvm::MapVector<StringAttr, int32_t> getAllFreeVarMasks(MLIRContext *ctx);
 
@@ -643,6 +634,11 @@ Value transferWithinBlockPadding(triton::gpu::ConvertLayoutOp op, Value src,
                                  const LLVMTypeConverter *typeConverter,
                                  RewriterBase &rewriter);
 
+void transferWithinBlockSwizzling(triton::gpu::ConvertLayoutOp op, Value src,
+                                  const TargetInfoBase &targetInfo,
+                                  const LLVMTypeConverter *typeConverter,
+                                  RewriterBase &rewriter);
+
 SmallVector<Value> inlineRegionImpl(RewriterBase &rewriter, Region &region,
                                     ArrayRef<Value> args,
                                     mlir::TypeID terminatorTypeId,
@@ -655,6 +651,13 @@ SmallVector<Value> inlineRegion(RewriterBase &rewriter, Region &region,
                           mlir::TypeID::get<TerminatorOp>(), loc);
 }
 
+void finalizeTensorAtomicResults(Operation *op, RankedTensorType tensorTy,
+                                 ConversionPatternRewriter &rewriter,
+                                 SmallVector<Value> &resultVals,
+                                 Type valueElemTy, TritonLLVMOpBuilder &b,
+                                 Value threadPred,
+                                 const TargetInfoBase &targetInfo,
+                                 const LLVMTypeConverter *typeConverter);
 } // namespace mlir
 
 #endif
