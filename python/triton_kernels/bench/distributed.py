@@ -10,8 +10,7 @@ from typing import Tuple
 import triton_kernels
 import triton_kernels.routing
 import triton_kernels.swiglu
-from triton_kernels.routing import RoutingData, GatherIndx, ScatterIndx, compute_expt_data
-from triton_kernels.topk import topk
+from triton_kernels.routing import RoutingData, GatherIndx, ScatterIndx, compute_expt_data_torch, topk_torch
 from triton_kernels.matmul_ogs import matmul_ogs, PrecisionConfig, FlexCtx, FnSpecs, FusedActivation
 from triton_kernels.target_info import get_cdna_version, is_hip, is_cuda, cuda_capability_geq
 from triton_kernels.tensor_details import layout
@@ -146,13 +145,10 @@ def all_to_all(input_list: list[torch.Tensor], dim: int = 0) -> list[torch.Tenso
         return input_list
 
 
-def routing_torch(x, logits, n_expts_act, sm_first=False, n_rows=None, EP=1, TP=1):
+def routing_torch(x, logits, n_expts_act, expt_indx=None, n_rows=None, EP=1, TP=1):
     _, n_expts_tot = logits.shape
 
-    # Use the same topk as triton_kernels for consistent tie-breaking behavior
-    if sm_first:
-        logits = torch.softmax(logits, dim=-1)
-    expt_scal, expt_indx, _ = topk(logits, n_expts_act, apply_softmax=sm_first, n_rows=n_rows)
+    expt_scal, expt_indx, _ = topk_torch(logits, n_expts_act, expt_indx, has_user_provided_indx=expt_indx is not None)
     expt_indx = expt_indx.int()
 
     # Sort each token's selections by expert
@@ -223,7 +219,7 @@ def routing_torch(x, logits, n_expts_act, sm_first=False, n_rows=None, EP=1, TP=
     gather_indx = GatherIndx(src_indx=topk_indx.int(), dst_indx=gate_indx.int())
     scatter_indx = ScatterIndx(src_indx=gate_indx.int(), dst_indx=topk_indx.int())
     n_gates = mask.sum().item()
-    expt_data = compute_expt_data(hist, chunk_size, n_gates)
+    expt_data = compute_expt_data_torch(hist, chunk_size, n_gates)
 
     return (
         x,
@@ -241,12 +237,14 @@ def routing_triton(x, logits, n_expts_act, sm_first=False, n_rows=None, EP=1, TP
 def routing(x, logits, n_expts_act, sm_first=False, expt_indx=None, n_rows=None, EP=1, TP=1,
             backend="torch") -> Tuple[RoutingData, GatherIndx, ScatterIndx, ReduceScatterMetadata]:
     if _is_distributed_launch():
-        assert expt_indx is None, "expt_indx should be None for distributed routing"
         assert backend in ["torch", "triton"], "backend must be either 'torch' or 'triton'"
+        if sm_first:
+            logits[:n_rows] = torch.softmax(logits[:n_rows], dim=-1)
+
         if backend == "torch":
-            return routing_torch(x, logits, n_expts_act, sm_first, n_rows, EP, TP)
+            return routing_torch(x, logits, n_expts_act, expt_indx, n_rows, EP, TP)
         elif backend == "triton":
-            return routing_triton(x, logits, n_expts_act, sm_first, n_rows, EP, TP)
+            return routing_triton(x, logits, n_expts_act, expt_indx, n_rows, EP, TP)
     else:
         return x, *triton_kernels.routing.routing(logits, n_expts_act, sm_first, expt_indx, EP, n_rows), None
 
