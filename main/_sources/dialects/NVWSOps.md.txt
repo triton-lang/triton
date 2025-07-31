@@ -7,12 +7,12 @@ _Create an asynchronous reference._
 Syntax:
 
 ```
-operation ::= `nvws.aref.create` $operands attr-dict `:` type($result)
+operation ::= `nvws.aref.create` $buffers attr-dict `:` type($result)
 ```
 
 Create an asynchronous reference.
 
-Takes as inputs a variadic number of operands, and returns an ARef.
+Takes as inputs a variadic number of buffers, and returns an ARef.
 The inputs are expected to be array-like (i.e., Tensor, MemDesc, etc)
 and the first axis of the shape should match between all inputs, representing
 multi-buffering of the values.
@@ -27,7 +27,7 @@ Effects: `MemoryEffects::Effect{}`
 
 | Operand | Description |
 | :-----: | ----------- |
-| `operands` | variadic of any type |
+| `buffers` | variadic of memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
 
 #### Results:
 
@@ -63,7 +63,7 @@ Syntax:
 
 ```
 operation ::= `nvws.aref.get.enter` $aref `[` $stage `,` $phase `]` attr-dict
-              `:` type($aref) `->` type($results)
+              `:` type($aref) `->` type(results)
 ```
 
 Enter a "region" where you can freely read from the buffer)
@@ -81,7 +81,8 @@ Enter a "region" where you can freely read from the buffer)
 
 | Result | Description |
 | :----: | ----------- |
-| `results` | variadic of any type |
+| `buffers` | variadic of memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
+| `token` | async token type |
 
 
 ### `nvws.aref.get.exit` (triton::nvws::ArefGetExitOp)
@@ -91,8 +92,8 @@ _Exit ArefGet region, where the buffer should no longer be used_
 Syntax:
 
 ```
-operation ::= `nvws.aref.get.exit` $aref `[` $stage `]` $async_ops attr-dict
-              `:` type($aref)
+operation ::= `nvws.aref.get.exit` $aref `[` $stage `]` `,` $token $async_ops attr-dict
+              `:` type($aref) `,` type($token)
 ```
 
 Leave the region where you can freely read from the buffer).
@@ -110,6 +111,7 @@ Leave the region where you can freely read from the buffer).
 | Operand | Description |
 | :-----: | ----------- |
 | `aref` | Asynchronous Reference |
+| `token` | async token type |
 | `stage` | 32-bit signless integer |
 
 
@@ -121,7 +123,7 @@ Syntax:
 
 ```
 operation ::= `nvws.aref.put.enter` $aref `[` $stage `,` $phase `]` attr-dict
-              `:` type($aref) `->` type($results)
+              `:` type($aref) `->` type(results)
 ```
 
 Enter a "region" where you can freely write to the buffer)
@@ -139,7 +141,8 @@ Enter a "region" where you can freely write to the buffer)
 
 | Result | Description |
 | :----: | ----------- |
-| `results` | variadic of any type |
+| `buffers` | variadic of memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
+| `token` | async token type |
 
 
 ### `nvws.aref.put.exit` (triton::nvws::ArefPutExitOp)
@@ -149,8 +152,8 @@ _Exit ArefPut region, where the buffer should no longer be used_
 Syntax:
 
 ```
-operation ::= `nvws.aref.put.exit` $aref `[` $stage `]` $async_ops attr-dict
-              `:` type($aref)
+operation ::= `nvws.aref.put.exit` $aref`[` $stage `]` `,` $token  $async_ops attr-dict
+              `:` type($aref) `,` type($token)
 ```
 
 Leave the region where you can freely write to the buffer).
@@ -168,6 +171,7 @@ Leave the region where you can freely write to the buffer).
 | Operand | Description |
 | :-----: | ----------- |
 | `aref` | Asynchronous Reference |
+| `token` | async token type |
 | `stage` | 32-bit signless integer |
 
 
@@ -245,6 +249,77 @@ A token will be used by the producer and consumer to synchronize.
 | Result | Description |
 | :----: | ----------- |
 | `result` | tensor of  values |
+
+
+### `nvws.descriptor_gather` (triton::nvws::DescriptorGatherOp)
+
+_Gather multiple rows from a descriptor into shared memory_
+
+Syntax:
+
+```
+operation ::= `nvws.descriptor_gather` $desc `[` $x_offsets `,` $y_offset `]` $txCount $result
+              attr-dict `:` type(operands)
+```
+
+This op behaves exactly like the op with the same name in Triton Dialect, but the result of the load is stored into shared memory.
+The execution is still synchronous.
+
+Interfaces: `NVWS_DescriptorLoadOpInterface`, `TT_DescriptorOpInterface`
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>txCount</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
+</table>
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `desc` | Tensor descriptor type (`::mlir::triton::TensorDescType`) in Triton IR type system |
+| `x_offsets` | ranked tensor of 32-bit signless integer values |
+| `y_offset` | 32-bit signless integer |
+| `result` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
+
+
+### `nvws.descriptor_load` (triton::nvws::DescriptorLoadOp)
+
+_Load from descriptor and store into shared memory_
+
+Syntax:
+
+```
+operation ::= `nvws.descriptor_load` $desc `[` $indices `]` $txCount $result
+              oilist(
+              `cacheModifier` `=` $cache |
+              `evictionPolicy` `=` $evict
+              )
+              attr-dict `:` type(operands)
+```
+
+This op behaves exactly like the op with the same name in Triton Dialect, but the result of the load is stored into shared memory.
+The execution is still synchronous.
+
+Interfaces: `NVWS_DescriptorLoadOpInterface`, `TT_DescriptorOpInterface`
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>txCount</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
+<tr><td><code>cache</code></td><td>::mlir::triton::CacheModifierAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3, 4, 5, 6, 7</td></tr>
+<tr><td><code>evict</code></td><td>::mlir::triton::EvictionPolicyAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3</td></tr>
+</table>
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `desc` | Tensor descriptor type (`::mlir::triton::TensorDescType`) in Triton IR type system |
+| `indices` | variadic of 32-bit signless integer |
+| `result` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
 
 
 ### `nvws.producer_acquire` (triton::nvws::ProducerAcquireOp)

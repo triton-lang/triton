@@ -121,22 +121,32 @@
 <li class="toctree-l4"><a class="reference internal" href="#id12">Results:</a></li>
 </ul>
 </li>
-<li class="toctree-l3"><a class="reference internal" href="#nvws-producer-acquire-triton-nvws-produceracquireop"><code class="docutils literal notranslate"><span class="pre">nvws.producer_acquire</span></code> (triton::nvws::ProducerAcquireOp)</a><ul>
-<li class="toctree-l4"><a class="reference internal" href="#id13">Operands:</a></li>
-</ul>
-</li>
-<li class="toctree-l3"><a class="reference internal" href="#nvws-producer-commit-triton-nvws-producercommitop"><code class="docutils literal notranslate"><span class="pre">nvws.producer_commit</span></code> (triton::nvws::ProducerCommitOp)</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#nvws-descriptor-gather-triton-nvws-descriptorgatherop"><code class="docutils literal notranslate"><span class="pre">nvws.descriptor_gather</span></code> (triton::nvws::DescriptorGatherOp)</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#id13">Attributes:</a></li>
 <li class="toctree-l4"><a class="reference internal" href="#id14">Operands:</a></li>
 </ul>
 </li>
-<li class="toctree-l3"><a class="reference internal" href="#nvws-warp-group-triton-nvws-warpgroupop"><code class="docutils literal notranslate"><span class="pre">nvws.warp_group</span></code> (triton::nvws::WarpGroupOp)</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#nvws-descriptor-load-triton-nvws-descriptorloadop"><code class="docutils literal notranslate"><span class="pre">nvws.descriptor_load</span></code> (triton::nvws::DescriptorLoadOp)</a><ul>
 <li class="toctree-l4"><a class="reference internal" href="#id15">Attributes:</a></li>
-<li class="toctree-l4"><a class="reference internal" href="#id16">Results:</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id16">Operands:</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#nvws-producer-acquire-triton-nvws-produceracquireop"><code class="docutils literal notranslate"><span class="pre">nvws.producer_acquire</span></code> (triton::nvws::ProducerAcquireOp)</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#id17">Operands:</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#nvws-producer-commit-triton-nvws-producercommitop"><code class="docutils literal notranslate"><span class="pre">nvws.producer_commit</span></code> (triton::nvws::ProducerCommitOp)</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#id18">Operands:</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#nvws-warp-group-triton-nvws-warpgroupop"><code class="docutils literal notranslate"><span class="pre">nvws.warp_group</span></code> (triton::nvws::WarpGroupOp)</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#id19">Attributes:</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id20">Results:</a></li>
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="#nvws-warp-group-return-triton-nvws-warpgroupreturnop"><code class="docutils literal notranslate"><span class="pre">nvws.warp_group.return</span></code> (triton::nvws::WarpGroupReturnOp)</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#nvws-warp-group-yield-triton-nvws-warpgroupyieldop"><code class="docutils literal notranslate"><span class="pre">nvws.warp_group.yield</span></code> (triton::nvws::WarpGroupYieldOp)</a><ul>
-<li class="toctree-l4"><a class="reference internal" href="#id17">Operands:</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id21">Operands:</a></li>
 </ul>
 </li>
 </ul>
@@ -182,11 +192,11 @@
 <h2><code class="docutils literal notranslate"><span class="pre">nvws.aref.create</span></code> (triton::nvws::ArefCreateOp)<a class="headerlink" href="#nvws-aref-create-triton-nvws-arefcreateop" title="Link to this heading">¶</a></h2>
 <p><em>Create an asynchronous reference.</em></p>
 <p>Syntax:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `nvws.aref.create` $operands attr-dict `:` type($result)
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `nvws.aref.create` $buffers attr-dict `:` type($result)
 </pre></div>
 </div>
 <p>Create an asynchronous reference.</p>
-<p>Takes as inputs a variadic number of operands, and returns an ARef.
+<p>Takes as inputs a variadic number of buffers, and returns an ARef.
 The inputs are expected to be array-like (i.e., Tensor, MemDesc, etc)
 and the first axis of the shape should match between all inputs, representing
 multi-buffering of the values.</p>
@@ -202,8 +212,8 @@ multi-buffering of the values.</p>
 </tr>
 </thead>
 <tbody>
-<tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">operands</span></code></p></td>
-<td><p>variadic of any type</p></td>
+<tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">buffers</span></code></p></td>
+<td><p>variadic of memory descriptor type (<code class="docutils literal notranslate"><span class="pre">::mlir::triton::gpu::MemDescType</span></code>) in Triton IR type system</p></td>
 </tr>
 </tbody>
 </table>
@@ -253,7 +263,7 @@ multi-buffering of the values.</p>
 <p><em>Enter ArefGet region where the buffer can be used to read data</em></p>
 <p>Syntax:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `nvws.aref.get.enter` $aref `[` $stage `,` $phase `]` attr-dict
-              `:` type($aref) `-&gt;` type($results)
+              `:` type($aref) `-&gt;` type(results)
 </pre></div>
 </div>
 <p>Enter a “region” where you can freely read from the buffer)
@@ -288,8 +298,11 @@ These ArefGet “regions” can span multiple iterations.</p>
 </tr>
 </thead>
 <tbody>
-<tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">results</span></code></p></td>
-<td><p>variadic of any type</p></td>
+<tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">buffers</span></code></p></td>
+<td><p>variadic of memory descriptor type (<code class="docutils literal notranslate"><span class="pre">::mlir::triton::gpu::MemDescType</span></code>) in Triton IR type system</p></td>
+</tr>
+<tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">token</span></code></p></td>
+<td><p>async token type</p></td>
 </tr>
 </tbody>
 </table>
@@ -299,8 +312,8 @@ These ArefGet “regions” can span multiple iterations.</p>
 <h2><code class="docutils literal notranslate"><span class="pre">nvws.aref.get.exit</span></code> (triton::nvws::ArefGetExitOp)<a class="headerlink" href="#nvws-aref-get-exit-triton-nvws-arefgetexitop" title="Link to this heading">¶</a></h2>
 <p><em>Exit ArefGet region, where the buffer should no longer be used</em></p>
 <p>Syntax:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `nvws.aref.get.exit` $aref `[` $stage `]` $async_ops attr-dict
-              `:` type($aref)
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `nvws.aref.get.exit` $aref `[` $stage `]` `,` $token $async_ops attr-dict
+              `:` type($aref) `,` type($token)
 </pre></div>
 </div>
 <p>Leave the region where you can freely read from the buffer).
@@ -324,7 +337,10 @@ These ArefGet “regions” can span multiple iterations.</p>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">aref</span></code></p></td>
 <td><p>Asynchronous Reference</p></td>
 </tr>
-<tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">stage</span></code></p></td>
+<tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">token</span></code></p></td>
+<td><p>async token type</p></td>
+</tr>
+<tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">stage</span></code></p></td>
 <td><p>32-bit signless integer</p></td>
 </tr>
 </tbody>
@@ -336,7 +352,7 @@ These ArefGet “regions” can span multiple iterations.</p>
 <p><em>Enter ArefPut region where the buffer can be used to read data</em></p>
 <p>Syntax:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `nvws.aref.put.enter` $aref `[` $stage `,` $phase `]` attr-dict
-              `:` type($aref) `-&gt;` type($results)
+              `:` type($aref) `-&gt;` type(results)
 </pre></div>
 </div>
 <p>Enter a “region” where you can freely write to the buffer)
@@ -371,8 +387,11 @@ These ArefPut “regions” can span multiple iterations.</p>
 </tr>
 </thead>
 <tbody>
-<tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">results</span></code></p></td>
-<td><p>variadic of any type</p></td>
+<tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">buffers</span></code></p></td>
+<td><p>variadic of memory descriptor type (<code class="docutils literal notranslate"><span class="pre">::mlir::triton::gpu::MemDescType</span></code>) in Triton IR type system</p></td>
+</tr>
+<tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">token</span></code></p></td>
+<td><p>async token type</p></td>
 </tr>
 </tbody>
 </table>
@@ -382,8 +401,8 @@ These ArefPut “regions” can span multiple iterations.</p>
 <h2><code class="docutils literal notranslate"><span class="pre">nvws.aref.put.exit</span></code> (triton::nvws::ArefPutExitOp)<a class="headerlink" href="#nvws-aref-put-exit-triton-nvws-arefputexitop" title="Link to this heading">¶</a></h2>
 <p><em>Exit ArefPut region, where the buffer should no longer be used</em></p>
 <p>Syntax:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `nvws.aref.put.exit` $aref `[` $stage `]` $async_ops attr-dict
-              `:` type($aref)
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `nvws.aref.put.exit` $aref`[` $stage `]` `,` $token  $async_ops attr-dict
+              `:` type($aref) `,` type($token)
 </pre></div>
 </div>
 <p>Leave the region where you can freely write to the buffer).
@@ -407,7 +426,10 @@ These ArefPut “regions” can span multiple iterations.</p>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">aref</span></code></p></td>
 <td><p>Asynchronous Reference</p></td>
 </tr>
-<tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">stage</span></code></p></td>
+<tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">token</span></code></p></td>
+<td><p>async token type</p></td>
+</tr>
+<tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">stage</span></code></p></td>
 <td><p>32-bit signless integer</p></td>
 </tr>
 </tbody>
@@ -511,6 +533,95 @@ and will signal the waiting producer trying to acquire the token.</p>
 </table>
 </section>
 </section>
+<section id="nvws-descriptor-gather-triton-nvws-descriptorgatherop">
+<h2><code class="docutils literal notranslate"><span class="pre">nvws.descriptor_gather</span></code> (triton::nvws::DescriptorGatherOp)<a class="headerlink" href="#nvws-descriptor-gather-triton-nvws-descriptorgatherop" title="Link to this heading">¶</a></h2>
+<p><em>Gather multiple rows from a descriptor into shared memory</em></p>
+<p>Syntax:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `nvws.descriptor_gather` $desc `[` $x_offsets `,` $y_offset `]` $txCount $result
+              attr-dict `:` type(operands)
+</pre></div>
+</div>
+<p>This op behaves exactly like the op with the same name in Triton Dialect, but the result of the load is stored into shared memory.
+The execution is still synchronous.</p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">NVWS_DescriptorLoadOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">TT_DescriptorOpInterface</span></code></p>
+<section id="id13">
+<h3>Attributes:<a class="headerlink" href="#id13" title="Link to this heading">¶</a></h3>
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>txCount</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
+</table>
+</section>
+<section id="id14">
+<h3>Operands:<a class="headerlink" href="#id14" title="Link to this heading">¶</a></h3>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head text-center"><p>Operand</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">desc</span></code></p></td>
+<td><p>Tensor descriptor type (<code class="docutils literal notranslate"><span class="pre">::mlir::triton::TensorDescType</span></code>) in Triton IR type system</p></td>
+</tr>
+<tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">x_offsets</span></code></p></td>
+<td><p>ranked tensor of 32-bit signless integer values</p></td>
+</tr>
+<tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">y_offset</span></code></p></td>
+<td><p>32-bit signless integer</p></td>
+</tr>
+<tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">result</span></code></p></td>
+<td><p>memory descriptor type (<code class="docutils literal notranslate"><span class="pre">::mlir::triton::gpu::MemDescType</span></code>) in Triton IR type system</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+</section>
+<section id="nvws-descriptor-load-triton-nvws-descriptorloadop">
+<h2><code class="docutils literal notranslate"><span class="pre">nvws.descriptor_load</span></code> (triton::nvws::DescriptorLoadOp)<a class="headerlink" href="#nvws-descriptor-load-triton-nvws-descriptorloadop" title="Link to this heading">¶</a></h2>
+<p><em>Load from descriptor and store into shared memory</em></p>
+<p>Syntax:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `nvws.descriptor_load` $desc `[` $indices `]` $txCount $result
+              oilist(
+              `cacheModifier` `=` $cache |
+              `evictionPolicy` `=` $evict
+              )
+              attr-dict `:` type(operands)
+</pre></div>
+</div>
+<p>This op behaves exactly like the op with the same name in Triton Dialect, but the result of the load is stored into shared memory.
+The execution is still synchronous.</p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">NVWS_DescriptorLoadOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">TT_DescriptorOpInterface</span></code></p>
+<section id="id15">
+<h3>Attributes:<a class="headerlink" href="#id15" title="Link to this heading">¶</a></h3>
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>txCount</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
+<tr><td><code>cache</code></td><td>::mlir::triton::CacheModifierAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3, 4, 5, 6, 7</td></tr>
+<tr><td><code>evict</code></td><td>::mlir::triton::EvictionPolicyAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3</td></tr>
+</table>
+</section>
+<section id="id16">
+<h3>Operands:<a class="headerlink" href="#id16" title="Link to this heading">¶</a></h3>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head text-center"><p>Operand</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">desc</span></code></p></td>
+<td><p>Tensor descriptor type (<code class="docutils literal notranslate"><span class="pre">::mlir::triton::TensorDescType</span></code>) in Triton IR type system</p></td>
+</tr>
+<tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">indices</span></code></p></td>
+<td><p>variadic of 32-bit signless integer</p></td>
+</tr>
+<tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">result</span></code></p></td>
+<td><p>memory descriptor type (<code class="docutils literal notranslate"><span class="pre">::mlir::triton::gpu::MemDescType</span></code>) in Triton IR type system</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+</section>
 <section id="nvws-producer-acquire-triton-nvws-produceracquireop">
 <h2><code class="docutils literal notranslate"><span class="pre">nvws.producer_acquire</span></code> (triton::nvws::ProducerAcquireOp)<a class="headerlink" href="#nvws-producer-acquire-triton-nvws-produceracquireop" title="Link to this heading">¶</a></h2>
 <p><em>Producer acquires a token to fill buffers</em></p>
@@ -522,8 +633,8 @@ and will signal the waiting producer trying to acquire the token.</p>
 the buffers. If the buffers are not ready to be filled, the producer will wait to be
 signalled by the consumer which finishes consuming the buffers and
 releases the token.</p>
-<section id="id13">
-<h3>Operands:<a class="headerlink" href="#id13" title="Link to this heading">¶</a></h3>
+<section id="id17">
+<h3>Operands:<a class="headerlink" href="#id17" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head text-center"><p>Operand</p></th>
@@ -553,8 +664,8 @@ releases the token.</p>
 </div>
 <p>The producer will release the token and signal the consumer
 that the buffers are ready to be consumed.</p>
-<section id="id14">
-<h3>Operands:<a class="headerlink" href="#id14" title="Link to this heading">¶</a></h3>
+<section id="id18">
+<h3>Operands:<a class="headerlink" href="#id18" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head text-center"><p>Operand</p></th>
@@ -585,15 +696,15 @@ nvws.warp_group.yield op.</p>
 before execution.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">RecursiveMemoryEffects</span></code>, <code class="docutils literal notranslate"><span class="pre">RecursivelySpeculatableImplTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code></p>
-<section id="id15">
-<h3>Attributes:<a class="headerlink" href="#id15" title="Link to this heading">¶</a></h3>
+<section id="id19">
+<h3>Attributes:<a class="headerlink" href="#id19" title="Link to this heading">¶</a></h3>
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
 <tr><td><code>numWarps</code></td><td>::mlir::DenseI32ArrayAttr</td><td>i32 dense array attribute</td></tr>
 </table>
 </section>
-<section id="id16">
-<h3>Results:<a class="headerlink" href="#id16" title="Link to this heading">¶</a></h3>
+<section id="id20">
+<h3>Results:<a class="headerlink" href="#id20" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head text-center"><p>Result</p></th>
@@ -636,8 +747,8 @@ The latter one involves a circular dependency between TritonGPU and NVWS.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">HasParent&lt;WarpGroupOp&gt;</span></code>, <code class="docutils literal notranslate"><span class="pre">ReturnLike</span></code>, <code class="docutils literal notranslate"><span class="pre">Terminator</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code>, <code class="docutils literal notranslate"><span class="pre">RegionBranchTerminatorOpInterface</span></code></p>
 <p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{}</span></code></p>
-<section id="id17">
-<h3>Operands:<a class="headerlink" href="#id17" title="Link to this heading">¶</a></h3>
+<section id="id21">
+<h3>Operands:<a class="headerlink" href="#id21" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head text-center"><p>Operand</p></th>
