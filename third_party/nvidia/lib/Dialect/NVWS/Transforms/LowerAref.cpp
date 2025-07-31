@@ -21,6 +21,7 @@
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
+#include "mlir/Analysis/TopologicalSortUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/AttrTypeSubElements.h"
@@ -227,34 +228,29 @@ void lowerAsyncLoads(ArefPutEnterOp op, PatternRewriter &rewriter,
   auto loc = op.getLoc();
   // for now handle TMA loads in PutEnterOp
   SmallVector<Operation *> loadOps;
-  for (auto result : op.getResults())
+  for (auto result : op.getResults()) {
     for (auto user : result.getUsers()) {
       // Temporary workaround for lit testing: handle TMA loads here until a
       // dedicated tma_load op is added to the NVWS dialect
       if (user->getName().getStringRef() == "tma_load")
         loadOps.push_back(user);
     }
+  }
   assert(loadOps.size() <= op.getResults().size());
   if (loadOps.empty())
     return;
 
-  // matching ArefPutExitOp is with ArefPutEnterOp
-  // we use aref_tag to match the two
-  //   %bufs:n = aref_put.enter %aref[%enter_idx] {aref_tag = tag}
+  // Use the token to find the matching enter / exit pair
+  //   %bufs:n, %token = aref_put.enter %aref[%enter_idx]
   //   tma_load %bufs[0]
   //   ..
   //   tma_load %bufs[n-1]
-  //   aref_put.exit %aref[%exit_idx] {aref_tag = tag}
-
-  // locate the matching aref_put.exit with the same tag, to get full barrier
+  //   aref_put.exit %aref[%exit_idx], %token
   ArefPutExitOp arefPutExitOp;
-  auto arefTag = op->getAttrOfType<StringAttr>("aref_tag").str();
-  for (auto user : op.getAref().getUsers()) {
+  for (auto user : op.getToken().getUsers()) {
     if (auto exitOp = dyn_cast<ArefPutExitOp>(user)) {
-      if (exitOp->getAttrOfType<StringAttr>("aref_tag").str() == arefTag) {
-        arefPutExitOp = exitOp;
-        break;
-      }
+      arefPutExitOp = exitOp;
+      break;
     }
   }
   assert(arefPutExitOp);
@@ -281,7 +277,7 @@ LogicalResult rewritePutEnterOp(ArefCreateOp arefOp, ArefPutEnterOp op,
       rewriter.create<WaitBarrierOp>(loc, emptyBarrier, op.getPhase());
   assignStageCluster(waitOp, getStageCluster(op), rewriter);
   auto views = getSubViews(arefVal, op.getStage(), loc, rewriter);
-  assert(views.size() == op.getResults().size());
+  assert(views.size() == op.getBuffers().size());
 
   // TMA load need special handling as it requires fullMbarrier that
   // we need to get from matching ArefPutExitOp
@@ -289,7 +285,7 @@ LogicalResult rewritePutEnterOp(ArefCreateOp arefOp, ArefPutEnterOp op,
 
   // replaces uses with views
   for (int i = 0; i < arefVal.buffers.size(); ++i)
-    op.getResult(i).replaceAllUsesWith(views[i]);
+    op.getBuffers()[i].replaceAllUsesWith(views[i]);
 
   return success();
 }
@@ -303,10 +299,10 @@ LogicalResult rewriteGetEnterOp(ArefCreateOp arefOp, ArefGetEnterOp op,
   auto waitOp = rewriter.create<WaitBarrierOp>(loc, fullBarrier, op.getPhase());
   assignStageCluster(waitOp, getStageCluster(op), rewriter);
   auto views = getSubViews(arefVal, op.getStage(), loc, rewriter);
-  assert(views.size() == op.getResults().size());
+  assert(views.size() == op.getBuffers().size());
 
   for (int i = 0; i < arefVal.buffers.size(); ++i)
-    op.getResult(i).replaceAllUsesWith(views[i]);
+    op.getBuffers()[i].replaceAllUsesWith(views[i]);
 
   return success();
 }
@@ -386,7 +382,7 @@ public:
   LogicalResult matchAndRewrite(ArefCreateOp op,
                                 PatternRewriter &rewriter) const override {
     auto aref = createAndInitMbar(op, rewriter);
-    llvm::SmallSetVector<Operation *, 10> opToDelete;
+    SetVector<Operation *> opToDelete;
     opToDelete.insert(op.getOperation());
     for (auto userOp : op->getUsers()) {
       if (auto user = dyn_cast<ArefPutEnterOp>(userOp)) {
@@ -414,8 +410,10 @@ public:
       }
     }
 
-    for (auto it = opToDelete.rbegin(); it != opToDelete.rend(); ++it)
+    auto sorted = topologicalSort(opToDelete);
+    for (auto it = sorted.rbegin(); it != sorted.rend(); ++it) {
       rewriter.eraseOp(*it);
+    }
 
     return success();
   }
