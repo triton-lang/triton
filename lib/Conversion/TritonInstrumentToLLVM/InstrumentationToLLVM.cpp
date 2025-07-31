@@ -196,6 +196,9 @@ struct AssertInThreadOpConversion
     while (auto callLoc = dyn_cast<CallSiteLoc>(loc))
       loc = callLoc.getCallee();
 
+    while (auto nameLoc = dyn_cast<NameLoc>(loc))
+      loc = nameLoc.getChildLoc();
+
     if (auto fileLineColLoc = dyn_cast<FileLineColLoc>(loc)) {
       file = fileLineColLoc.getFilename();
       line = fileLineColLoc.getLine();
