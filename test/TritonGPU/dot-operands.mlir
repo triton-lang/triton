@@ -119,7 +119,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %A_sh: !ttg.memdesc<128x128xf8E5M2, #shared, #ttg.shared_memory>,
     %B_sh: !ttg.memdesc<128x128xf8E5M2, #shared, #ttg.shared_memory>,
     %acc_tm: !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory>
-    ) attributes {noinline = false} {
+    ) {
       %true = arith.constant true
       %A_la = ttg.local_alloc : () -> !ttg.memdesc<2x512xi8, #shared1, #smem, mutable>
       %B_la = ttg.local_alloc : () -> !ttg.memdesc<2x512xi8, #shared1, #smem, mutable>
