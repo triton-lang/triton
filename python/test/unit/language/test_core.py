@@ -1908,24 +1908,33 @@ def test_atomic_cas(sem, num_ctas, device):
 
 
 @pytest.mark.interpreter
-@pytest.mark.parametrize("sem", [None, 'acquire', 'release', 'acq_rel', 'relaxed'])
+@pytest.mark.parametrize("sem", [None, "acquire", "release", "acq_rel", "relaxed"])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
-def test_tensor_atomic_cas(sem, num_ctas, device):
+@pytest.mark.parametrize("size", [4, 128, 512])
+@pytest.mark.parametrize("dtype_str", ['bfloat16', 'float16', 'float32', 'uint64', 'int64', 'float64'])
+def test_tensor_atomic_cas(sem, size, dtype_str, num_ctas, device):
+    check_type_supported(dtype_str, device)
+    if "float" in dtype_str and is_hip():
+        pytest.skip("HIP does not support atomic cas with float types")
 
     @triton.jit
-    def change_value(X, BLOCK_SIZE: tl.constexpr, sem: tl.constexpr):
+    def change_value(X, BLOCK_SIZE: tl.constexpr, sem: tl.constexpr, dtype: tl.constexpr):
         pid = tl.program_id(axis=0)
         block_start = pid * BLOCK_SIZE
         offsets = block_start + tl.arange(0, BLOCK_SIZE)
-        t1 = tl.full((BLOCK_SIZE, ), 0, dtype=tl.int64)
-        t2 = tl.full((BLOCK_SIZE, ), 2, dtype=tl.int64)
+        t1 = tl.full((BLOCK_SIZE, ), 0, dtype=dtype)
+        t2 = tl.full((BLOCK_SIZE, ), 2, dtype=dtype)
         tl.atomic_cas(X + offsets, t1, t2, sem=sem)
 
-    X = torch.tensor([0, 1, 0, 1, 0, 1, 0, 1], device=device, dtype=torch.int64)
-    Y = torch.tensor([2, 1, 2, 1, 2, 1, 2, 1], device=device, dtype=torch.int64)
+    torch_dtype = getattr(torch, dtype_str)
+    X = torch.zeros((size, ), device=device, dtype=torch_dtype)
+    X[1::2] = 1
+    Y = X.clone()
+    Y[0::2] = 2
 
-    change_value[(2, )](X, 4, sem)
-    assert (torch.equal(X, Y))
+    tl_dtype = getattr(tl, dtype_str)
+    change_value[(2, )](X, BLOCK_SIZE=size // 2, sem=sem, dtype=tl_dtype)
+    assert torch.equal(X, Y)
 
 
 @pytest.mark.interpreter

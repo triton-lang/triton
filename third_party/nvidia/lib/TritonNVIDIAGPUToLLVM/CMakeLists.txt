@@ -28,7 +28,6 @@ add_triton_library(TritonNVIDIAGPUToLLVM
     LINK_LIBS PUBLIC
     TritonAnalysis
     TritonGPUToLLVM
-    TritonProtonToLLVM
     TritonInstrumentToLLVM
     MLIRReconcileUnrealizedCasts
     NVGPUIR

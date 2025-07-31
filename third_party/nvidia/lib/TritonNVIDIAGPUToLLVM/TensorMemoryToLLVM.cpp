@@ -488,16 +488,15 @@ static int getContextualMaxNReg(Operation *op) {
   return maxnreg;
 }
 
-static void lowerStoreToTensorMemory(Location loc, Operation *op, Value src,
-                                     Value dest, Value llSrc, Value pred,
-                                     Value tmemBase,
+static void lowerStoreToTensorMemory(Location loc, Operation *op,
+                                     TypedValue<RankedTensorType> src,
+                                     TypedValue<MemDescType> dest, Value llSrc,
+                                     Value pred, Value tmemBase,
                                      ConversionPatternRewriter &rewriter) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   SmallVector<Value> srcValues = unpackLLElements(loc, llSrc, rewriter);
   srcValues = packToI32(srcValues, loc, rewriter);
-  auto dstType = cast<MemDescType>(dest.getType());
-  auto info = getTMemRuntimeInfo(op, cast<RankedTensorType>(src.getType()),
-                                 cast<MemDescType>(dest.getType()));
+  auto info = getTMemRuntimeInfo(op, src.getType(), dest.getType());
   const TMemMessageTraits message =
       selectTMemMessage(info, getContextualMaxNReg(op));
   int regIdx = 0;
