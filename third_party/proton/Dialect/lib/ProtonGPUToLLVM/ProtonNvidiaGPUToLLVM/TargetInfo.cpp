@@ -39,7 +39,7 @@ Value TargetInfo::clock(ConversionPatternRewriter &rewriter, Location loc,
 
 Value TargetInfo::processorId(ConversionPatternRewriter &rewriter,
                               Location loc) const {
-  return LLVM::NVIDIA::getSRegValue(rewriter, loc, "smid");
+  return rewriter.create<NVVM::SmIdOp>(loc, i32_ty);
 }
 
 int TargetInfo::getAddressSpace(Attribute addressSpace) const {
