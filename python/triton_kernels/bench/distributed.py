@@ -146,103 +146,107 @@ def all_to_all(input_list: list[torch.Tensor], dim: int = 0) -> list[torch.Tenso
         return input_list
 
 
-def routing_torch():
+def routing_torch(x, logits, n_expts_act, sm_first=False, n_rows=None, EP=1, TP=1):
+    _, n_expts_tot = logits.shape
+
+    # Use the same topk as triton_kernels for consistent tie-breaking behavior
+    if sm_first:
+        logits = torch.softmax(logits, dim=-1)
+    expt_scal, expt_indx, _ = topk(logits, n_expts_act, apply_softmax=sm_first, n_rows=n_rows)
+    expt_indx = expt_indx.int()
+
+    # Sort each token's selections by expert
+    expt_indx, sort_indices = torch.sort(expt_indx, dim=1, stable=True)
+    expt_scal = torch.gather(expt_scal, 1, sort_indices)
+
+    chunk_size = n_expts_tot // EP
+    output_split_sizes = None
+    ep_indx = None
+
+    if EP > 1:
+        # Distributed Expert Parallelism
+        ep_rank = dist.get_rank() // TP
+        ep_indx = expt_indx // chunk_size
+
+        # Partition tokens by expert parallelism rank
+        expt_scal_list = []
+        expt_indx_list = []
+        x_list = []
+
+        for i in range(EP):
+            mask = torch.any(ep_indx == i, dim=1)
+            expt_scal_masked = expt_scal[mask]
+            expt_indx_masked = expt_indx[mask]
+            x_masked = x[mask]
+
+            for _ in range(TP):
+                expt_scal_list.append(expt_scal_masked)
+                expt_indx_list.append(expt_indx_masked)
+                x_list.append(x_masked)
+
+        # Exchange data across processes
+        expt_scal_list = all_to_all(expt_scal_list, dim=0)
+        expt_indx_list = all_to_all(expt_indx_list, dim=0)
+        x_list = all_to_all(x_list, dim=0)
+
+        output_split_sizes = [x.size(0) for x in expt_scal_list]
+        expt_scal = torch.cat(expt_scal_list, dim=0)
+        expt_indx = torch.cat(expt_indx_list, dim=0)
+        x = torch.cat(x_list, dim=0)
+
+        # Filter for local experts only
+        mask = (expt_indx // chunk_size) == ep_rank
+        expt_indx -= ep_rank * chunk_size
+        expt_scal = expt_scal.masked_fill(~mask, 0)
+        expt_indx = expt_indx.masked_fill(~mask, n_expts_tot)
+    else:
+        # Distributed Data Parallelism
+        x = all_gather(x, dim=0)
+        expt_scal = all_gather(expt_scal, dim=0)
+        expt_indx = all_gather(expt_indx, dim=0)
+
+    # Flatten topk data
+    expt_scal = expt_scal.reshape(-1)
+    expt_indx = expt_indx.reshape(-1).to(torch.int32)
+
+    # Sort by expert_id for contiguous experts in matmul
+    expt_indx, topk_indx = torch.sort(expt_indx, stable=True)
+    gate_indx = torch.argsort(topk_indx, stable=True)
+
+    mask = expt_indx != n_expts_tot
+    topk_indx[~mask] = -1
+    gate_indx[gate_indx >= mask.sum()] = -1
+    gate_scal = expt_scal[topk_indx]
+    hist = torch.histc(expt_indx[mask], bins=chunk_size, min=0, max=chunk_size - 1)
+
+    # Pack the matmul data structures
+    gather_indx = GatherIndx(src_indx=topk_indx.int(), dst_indx=gate_indx.int())
+    scatter_indx = ScatterIndx(src_indx=gate_indx.int(), dst_indx=topk_indx.int())
+    n_gates = mask.sum().item()
+    expt_data = compute_expt_data(hist, chunk_size, n_gates)
+
+    return (
+        x,
+        RoutingData(gate_scal, hist, chunk_size, n_expts_act, expt_data=expt_data),
+        gather_indx,
+        scatter_indx,
+        ReduceScatterMetadata(input_split_sizes=output_split_sizes, ep_indx=ep_indx, EP=EP, TP=TP),
+    )
+
+
+def routing_triton(x, logits, n_expts_act, sm_first=False, n_rows=None, EP=1, TP=1):
     pass
 
 
-def routing_triton():
-    pass
-
-
-def routing(x, logits, n_expts_act, sm_first=False, expt_indx=None, n_rows=None, EP=1,
-            TP=1) -> Tuple[RoutingData, GatherIndx, ScatterIndx, ReduceScatterMetadata]:
+def routing(x, logits, n_expts_act, sm_first=False, expt_indx=None, n_rows=None, EP=1, TP=1,
+            backend="torch") -> Tuple[RoutingData, GatherIndx, ScatterIndx, ReduceScatterMetadata]:
     if _is_distributed_launch():
         assert expt_indx is None, "expt_indx should be None for distributed routing"
-        _, n_expts_tot = logits.shape
-
-        # Use the same topk as triton_kernels for consistent tie-breaking behavior
-        if sm_first:
-            logits = torch.softmax(logits, dim=-1)
-        expt_scal, expt_indx, _ = topk(logits, n_expts_act, apply_softmax=sm_first, n_rows=n_rows)
-        expt_indx = expt_indx.int()
-
-        # Sort each token's selections by expert
-        expt_indx, sort_indices = torch.sort(expt_indx, dim=1, stable=True)
-        expt_scal = torch.gather(expt_scal, 1, sort_indices)
-
-        chunk_size = n_expts_tot // EP
-        output_split_sizes = None
-        ep_indx = None
-
-        if EP > 1:
-            # Distributed Expert Parallelism
-            ep_rank = dist.get_rank() // TP
-            ep_indx = expt_indx // chunk_size
-
-            # Partition tokens by expert parallelism rank
-            expt_scal_list = []
-            expt_indx_list = []
-            x_list = []
-
-            for i in range(EP):
-                mask = torch.any(ep_indx == i, dim=1)
-                expt_scal_masked = expt_scal[mask]
-                expt_indx_masked = expt_indx[mask]
-                x_masked = x[mask]
-
-                for _ in range(TP):
-                    expt_scal_list.append(expt_scal_masked)
-                    expt_indx_list.append(expt_indx_masked)
-                    x_list.append(x_masked)
-
-            # Exchange data across processes
-            expt_scal_list = all_to_all(expt_scal_list, dim=0)
-            expt_indx_list = all_to_all(expt_indx_list, dim=0)
-            x_list = all_to_all(x_list, dim=0)
-
-            output_split_sizes = [x.size(0) for x in expt_scal_list]
-            expt_scal = torch.cat(expt_scal_list, dim=0)
-            expt_indx = torch.cat(expt_indx_list, dim=0)
-            x = torch.cat(x_list, dim=0)
-
-            # Filter for local experts only
-            mask = (expt_indx // chunk_size) == ep_rank
-            expt_indx -= ep_rank * chunk_size
-            expt_scal = expt_scal.masked_fill(~mask, 0)
-            expt_indx = expt_indx.masked_fill(~mask, n_expts_tot)
-        else:
-            # Distributed Data Parallelism
-            x = all_gather(x, dim=0)
-            expt_scal = all_gather(expt_scal, dim=0)
-            expt_indx = all_gather(expt_indx, dim=0)
-
-        # Flatten topk data
-        expt_scal = expt_scal.reshape(-1)
-        expt_indx = expt_indx.reshape(-1).to(torch.int32)
-
-        # Sort by expert_id for contiguous experts in matmul
-        expt_indx, topk_indx = torch.sort(expt_indx, stable=True)
-        gate_indx = torch.argsort(topk_indx, stable=True)
-
-        mask = expt_indx != n_expts_tot
-        topk_indx[~mask] = -1
-        gate_indx[gate_indx >= mask.sum()] = -1
-        gate_scal = expt_scal[topk_indx]
-        hist = torch.histc(expt_indx[mask], bins=chunk_size, min=0, max=chunk_size - 1)
-
-        # Pack the matmul data structures
-        gather_indx = GatherIndx(src_indx=topk_indx.int(), dst_indx=gate_indx.int())
-        scatter_indx = ScatterIndx(src_indx=gate_indx.int(), dst_indx=topk_indx.int())
-        n_gates = mask.sum().item()
-        expt_data = compute_expt_data(hist, chunk_size, n_gates)
-
-        return (
-            x,
-            RoutingData(gate_scal, hist, chunk_size, n_expts_act, expt_data=expt_data),
-            gather_indx,
-            scatter_indx,
-            ReduceScatterMetadata(input_split_sizes=output_split_sizes, ep_indx=ep_indx, EP=EP, TP=TP),
-        )
+        assert backend in ["torch", "triton"], "backend must be either 'torch' or 'triton'"
+        if backend == "torch":
+            return routing_torch(x, logits, n_expts_act, sm_first, n_rows, EP, TP)
+        elif backend == "triton":
+            return routing_triton(x, logits, n_expts_act, sm_first, n_rows, EP, TP)
     else:
         return x, *triton_kernels.routing.routing(logits, n_expts_act, sm_first, expt_indx, EP, n_rows), None
 
