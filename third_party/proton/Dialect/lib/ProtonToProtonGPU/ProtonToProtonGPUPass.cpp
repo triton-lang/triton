@@ -304,6 +304,7 @@ public:
     Value profileMem = builder.create<gpu::GlobalScratchAllocOp>(
         loc, triton::getPointerType(builder.getI32Type()),
         allocProfileScratchSize, profileScratchAlignment);
+    builder.create<gpu::InitializeOp>(loc, profileMem);
 
     if (hasOperator<Operation, triton::gpu::WarpSpecializeOp>(
             func.getOperation()))
