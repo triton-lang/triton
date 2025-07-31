@@ -1,7 +1,6 @@
 #include "Utility.h"
 #include "Dialect/NVGPU/IR/Dialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
-#include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/LinearLayout.h"
@@ -82,9 +81,7 @@ Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, Value i) {
 }
 
 Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
-               int axis) {
-  assert(axis >= 0);
-  assert(axis < 3);
+               ProgramIDDim axis) {
   assert(moduleOp);
 
   // It is not easy to get the compute capability here, so we use numCTAs to
@@ -93,17 +90,26 @@ Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
   // "%clusterid".
   int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(moduleOp);
 
-  std::string sreg = numCTAs == 1 ? "ctaid." : "clusterid.";
-  sreg.append(1, 'x' + axis); // 0 -> 'x', 1 -> 'y', 2 -> 'z'
-  return getSRegValue(rewriter, loc, sreg);
-}
-
-Value getSRegValue(OpBuilder &rewriter, Location loc, StringRef sRegStr) {
-  ValueRange args;
-  auto intrName = Twine("llvm.nvvm.read.ptx.sreg.") + sRegStr;
-  auto callOp =
-      createLLVMIntrinsicCallOp(rewriter, loc, intrName.str(), i32_ty, args);
-  return callOp.getResult(0);
+  if (numCTAs == 1) {
+    switch (axis) {
+    case ProgramIDDim::X:
+      return rewriter.create<NVVM::BlockIdXOp>(loc, i32_ty);
+    case ProgramIDDim::Y:
+      return rewriter.create<NVVM::BlockIdYOp>(loc, i32_ty);
+    case ProgramIDDim::Z:
+      return rewriter.create<NVVM::BlockIdZOp>(loc, i32_ty);
+    }
+  } else {
+    switch (axis) {
+    case ProgramIDDim::X:
+      return rewriter.create<NVVM::ClusterIdXOp>(loc, i32_ty);
+    case ProgramIDDim::Y:
+      return rewriter.create<NVVM::ClusterIdYOp>(loc, i32_ty);
+    case ProgramIDDim::Z:
+      return rewriter.create<NVVM::ClusterIdZOp>(loc, i32_ty);
+    }
+  }
+  llvm_unreachable("invalid axis");
 }
 
 Value permute(Location loc, RewriterBase &rewriter, Value a, Value b,
@@ -121,10 +127,7 @@ Value createElectPredicate(Location loc, RewriterBase &rewriter) {
 
 void createSyncWarp(Location loc, OpBuilder &rewriter) {
   TritonLLVMOpBuilder b(loc, rewriter);
-  Type resultTy = void_ty(rewriter.getContext());
-  Value args[] = {b.i32_val(0xffffffff)};
-  createLLVMIntrinsicCallOp(rewriter, loc, "llvm.nvvm.bar.warp.sync", resultTy,
-                            args);
+  rewriter.create<NVVM::SyncWarpOp>(loc, b.i32_val(0xffffffff));
 }
 
 Value createElectPredicateWarp0(Location loc, RewriterBase &rewriter) {
