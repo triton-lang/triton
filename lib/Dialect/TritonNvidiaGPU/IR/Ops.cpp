@@ -516,6 +516,7 @@ static LogicalResult verifyTMEMOperand(Operation *op, RankedTensorType type,
                                 << " layout is not TMEM compatible";
       for (Attribute layout : layouts)
         diag.attachNote() << "potential TMEM layout: " << layout;
+      return diag;
     }
   }
   return success();
