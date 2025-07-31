@@ -271,6 +271,7 @@ void lowerTMALoad(ArefPutEnterOp op, PatternRewriter &rewriter,
   assignStageCluster(expectOp, getStageCluster(op), rewriter);
 
   for (auto loadOp : loadOps) {
+    rewriter.setInsertionPoint(loadOp);
     if (auto descLoad = dyn_cast<triton::nvws::DescriptorLoadOp>(loadOp)) {
       createTMALoad(descLoad, rewriter, fullBarrier, pred);
     } else if (auto descGather =
