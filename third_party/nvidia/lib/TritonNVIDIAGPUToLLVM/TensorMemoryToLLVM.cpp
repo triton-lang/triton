@@ -4,6 +4,7 @@
 #include "TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
 #include "Utility.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
+#include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
@@ -416,14 +417,6 @@ void createTensorMemoryStore(Location loc, Value address, int colOffset,
   ptxBuilder.launch(rewriter, loc, voidTy);
 }
 
-void createWaitOpSt(Location loc, ConversionPatternRewriter &rewriter) {
-  PTXBuilder ptxBuilder;
-  std::string opcode = "tcgen05.wait::st.sync.aligned;";
-  auto &wait = *ptxBuilder.create<PTXInstr>(opcode);
-  wait({}, /*onlyAttachMLIRArgs=*/true);
-  ptxBuilder.launch(rewriter, loc, void_ty(rewriter.getContext()));
-}
-
 TMemMessageTraits selectTMemMessage(const TMemRuntimeInfo &info, int maxnreg) {
   auto atom = info.layoutAtom;
 
@@ -521,7 +514,7 @@ static void lowerStoreToTensorMemory(Location loc, Operation *op, Value src,
                                 secondHalfColOffset, pred, unpackedb16,
                                 message.atom, rewriter);
       });
-  createWaitOpSt(loc, rewriter);
+  rewriter.create<NVVM::Tcgen05WaitOp>(loc, NVVM::Tcgen05WaitKind::STORE);
 
   // Emit a barrier to ensure all threads have finished writing to tensor memory
   // before any use of the tensor memory.
@@ -641,14 +634,6 @@ static SmallVector<Value> unpackResults(Value packedValues, Type elemTy,
   return resultVals;
 }
 
-static void createWaitOpLd(Location loc, ConversionPatternRewriter &rewriter) {
-  PTXBuilder ptxBuilder;
-  std::string opcode = "tcgen05.wait::ld.sync.aligned;";
-  auto &wait = *ptxBuilder.create<PTXInstr>(opcode);
-  wait({}, /*onlyAttachMLIRArgs=*/true);
-  ptxBuilder.launch(rewriter, loc, void_ty(rewriter.getContext()));
-}
-
 struct TensorMemoryLoadOpConversion
     : public ConvertOpToLLVMPattern<triton::nvidia_gpu::TMEMLoadOp> {
   using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
@@ -683,7 +668,7 @@ struct TensorMemoryLoadOpConversion
     Value resultStruct =
         packLLElements(loc, getTypeConverter(), resultVals, rewriter, structTy);
     // Wait insertion could be moved to the TTGIR level if needed.
-    createWaitOpLd(loc, rewriter);
+    rewriter.create<NVVM::Tcgen05WaitOp>(loc, NVVM::Tcgen05WaitKind::LOAD);
     rewriter.replaceOp(op, {resultStruct});
     return success();
   }
