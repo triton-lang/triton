@@ -30,17 +30,17 @@ _matmul_ogs_repr = make_matmul_repr("_matmul_ogs", [0, 1, 2])
 @triton.jit(do_not_specialize=["TOKENS_PER_EXPT_FOR_ANNOTATION"],
             repr=_matmul_ogs_repr, launch_metadata=matmul_launch_metadata)
 def _matmul_ogs(
-             Y, Out, stride_y_k, stride_y_z, stride_y_m, stride_y_n,
+             Y, YPtr, YDescPtrOff, stride_y_k, stride_y_z, stride_y_m, stride_y_n,
              YExpectedScale, YActualScale, YChecksumScale,
              stride_y_mx_z, stride_y_mx_m, stride_y_mx_n,
-             X, XPtr, stride_x_z, stride_x_m, stride_x_k,
+             X, XPtr, XDescPtrOff, stride_x_z, stride_x_m, stride_x_k,
              XScale,
              XMxScale, stride_x_mx_z, stride_x_mx_m, stride_x_mx_k,
-             W, stride_w_e, stride_w_k, stride_w_n, W_TRANSPOSE: tl.constexpr,
+             W, WPtr, stride_w_e, stride_w_k, stride_w_n, W_TRANSPOSE: tl.constexpr,
              WScale,
              WMxScale, stride_w_mx_e, stride_w_mx_k, stride_w_mx_n,
              B, stride_b_e, # Bias
-             NRows, M, N, K, # shapes
+             NRowsY, NRowsX, NRows, M, N, K, # shapes
              # expt data
              Betas, Gammas,
              GatherIndx,
@@ -55,6 +55,9 @@ def _matmul_ogs(
              ACTIVATION_FN: tl.constexpr, activation_fn_args, ACTIVATION_REDUCTION_N: tl.constexpr,
              # epilogue transform
              EPILOGUE_FN: tl.constexpr, epilogue_fn_args,
+             # TMA modes (ignored)
+             X_TMA_MODE: tl.constexpr,
+             Y_TMA_MODE: tl.constexpr,
              # MoE config
              N_EXPTS_TOT: tl.constexpr, N_EXPTS_ACT: tl.constexpr,
              # precision config
@@ -78,7 +81,6 @@ def _matmul_ogs(
              SWAP_XW: tl.constexpr = False,
              IS_EPILOGUE_DEQUANT_MXFP8: tl.constexpr = False):
 
-    Y = Out  # Y is passed for the purposes of annotation; replace it with Out
     is_w_microscaled: tl.constexpr = WMxScale is not None
     MX_PACK_DIVISOR: tl.constexpr = MXFP_BLOCK_SIZE
     if is_w_microscaled:
@@ -124,7 +126,7 @@ def _matmul_ogs(
 
             # set masked out rows to 0
             if HAS_FUSED_SCATTER and N_EXPTS_ACT == 1:
-                _zero_masked_rows(pid_m, pid_n, Y, stride_y_m, stride_y_n, yN, ScatterSrcIndx, num_idxs, BLOCK_M, OUT_BLOCK_N)
+                _zero_masked_rows(pid_m, pid_n, YPtr, stride_y_m, stride_y_n, yN, ScatterSrcIndx, num_idxs, BLOCK_M, OUT_BLOCK_N)
         return
 
     # swizzle program ids
@@ -138,12 +140,12 @@ def _matmul_ogs(
     pid_m, pid_n = swizzle2d(pid_mn, (grid_m - padding_m), grid_n, GROUP_M)
     # For split-k, advance to the output k slice
     if SPLIT_K > 1:
-        Y += pid_k.to( index_type) * stride_y_k
+        YPtr += pid_k.to( index_type) * stride_y_k
         if is_out_microscaled:
             YActualScale += pid_k.to(index_type) * stride_x_mx_k
     # set masked out rows to 0
     if HAS_FUSED_SCATTER and N_EXPTS_ACT == 1:
-        _zero_masked_rows(pid_m, pid_n, Y, stride_y_m, stride_y_n, yN, ScatterSrcIndx, num_idxs, BLOCK_M, OUT_BLOCK_N)
+        _zero_masked_rows(pid_m, pid_n, YPtr, stride_y_m, stride_y_n, yN, ScatterSrcIndx, num_idxs, BLOCK_M, OUT_BLOCK_N)
     # unpack expert data
     if ExptData is None:
         tl.static_assert(M is not None)
@@ -348,17 +350,17 @@ def _matmul_ogs(
         out = acc
     out *= gammas[:, None]
     # write-back
-    Y += start_z.to(index_type) * stride_y_z
+    YPtr += start_z.to(index_type) * stride_y_z
     if WriteBackIndx is not None:
         WriteBackIndx += start_m
         dst_idx = tl.load(WriteBackIndx + offs_m, mask=start_m + offs_m < writeback_size, other=-1)
         mask_m = mask_m & (dst_idx != -1)
         offs_y_m = dst_idx
     else:
-        Y += start_m * stride_y_m
+        YPtr += start_m * stride_y_m
         offs_y_m = offs_m
 
-    YPtrs = Y + offs_y_m.to(index_type)[:, None] * stride_y_m + offs_y_n.to(index_type)[None, :] * stride_y_n
+    YPtrs = YPtr + offs_y_m.to(index_type)[:, None] * stride_y_m + offs_y_n.to(index_type)[None, :] * stride_y_n
     mask = mask_m[:, None] & mask_n[None, :]
     if is_out_microscaled:
         MX_SCALE_BLOCK_N: tl.constexpr = BLOCK_N // MXFP_BLOCK_SIZE
@@ -376,7 +378,7 @@ def _matmul_ogs(
             YActualScalePtrs = YActualScale + (offs_y_m - NRows).to(index_type)[:, None] * stride_y_mx_m + offs_y_n_scale.to(index_type)[None, :] * stride_y_mx_n
         tl.store(YActualScalePtrs, out_scale, mask=mask_m[:, None] & mask_n_scale[None, :])
     else:
-        out = float_to_flex(out, YExpectedScale, YActualScale, YChecksumScale, mask, Y, FLEXPOINT_SATURATE_INF)
+        out = float_to_flex(out, YExpectedScale, YActualScale, YChecksumScale, mask, YPtr, FLEXPOINT_SATURATE_INF)
         if EPILOGUE_FN is not None and not IS_EPILOGUE_DEQUANT_MXFP8:
             out = EPILOGUE_FN(out, *epilogue_fn_args, target_dtype=YPtrs.dtype.element_ty)
     tl.store(YPtrs, out, mask=mask)

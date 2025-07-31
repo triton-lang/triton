@@ -9,6 +9,16 @@ from .target_info import cuda_capability_geq
 from .tensor_details.layout import Layout, StridedLayout
 
 
+class TensorDescriptorPtr:
+
+    def __init__(self, data_ptr: int, dtype: torch.dtype):
+        self._data_ptr = data_ptr
+        self.dtype = dtype
+
+    def data_ptr(self) -> int:
+        return self._data_ptr
+
+
 @dataclass
 class Storage:
     data: torch.Tensor
@@ -61,7 +71,17 @@ class Storage:
             pad = 128
             shape[-1] = (shape[-1] + pad - 1) // pad * pad
         block_shape = self.layout.swizzle_block_shape(block_shape)
-        return TensorDescriptor(self.data, shape, strides, block_shape)
+        return TensorDescriptor(TensorDescriptorPtr(self.data.data_ptr(), self.data.dtype), shape, strides, block_shape)
+
+    def make_ragged_tma(self, block_shape):
+        assert self.data.is_contiguous()
+        N, d = self.data.shape[-2:]
+        shape = list(self.data.shape[:-2]) + [N + 1, N, d]
+        strides = list(self.data.stride()[:-2]) + [d, d, 1]
+        data_ptr = self.data.data_ptr() - N * d * self.data.element_size()
+        assert data_ptr > 0
+        block_shape = [1] * (len(shape) - 2) + block_shape
+        return TensorDescriptor(TensorDescriptorPtr(data_ptr, self.data.dtype), shape, strides, block_shape)
 
 
 @dataclass

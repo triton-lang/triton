@@ -440,7 +440,7 @@ def matmul_ogs(x, w, bias,
                  (w_scale is None or w_scale.storage.is_tma_compliant())
     # hopper w/ mxfp4 doesn't support TMA
     can_use_tma = can_use_tma and (torch.cuda.get_device_capability()[0] > 9 or bitwidth(w.dtype) != 4)
-    can_use_fused_scatter = scatter_indx is not None and fused_activation.specs.fn is None
+    can_use_fused_scatter = scatter_indx is not None and fused_activation.specs.fn is None and routing_data.n_expts_act == 1
     opt_flags = make_opt_flags(out_dtype, x.dtype, w.dtype, precision_config,
         M, N, K, routing_data, can_use_tma, can_use_fused_scatter, epilogue.effective_itemsize,
     )
@@ -473,7 +473,6 @@ def matmul_ogs(x, w, bias,
             assert out_scale is not None
             out_scale = memory["scratchpad"]["mx_out_scale"]
         out0_flex = OutFlexData() if out0.dtype == torch.float32 else precision_config.flex_ctx.out_data
-
         fused_activation, fused_postprocess_activation = fused_postprocess_activation, fused_activation
     out_has_mx = out_scale is not None and out0.element_size() == 1
     if out_has_mx:
@@ -505,12 +504,34 @@ def matmul_ogs(x, w, bias,
     grid = min(target_info.num_sms() - opt_flags.idle_sms, max_grid) if opt_flags.is_persistent else max_grid
     # canonicalize storage
     has_gather = gather_indx is not None
+    has_scatter_tma = writeback_idxs is not None
+    y = wrap_torch_tensor(out0.view(-1, out0.shape[-1]) if has_scatter_tma else out0)
     x_storage = _canonicalize_storage(x.storage, 2 if has_gather else 3, flex.lhs_data)
     w_storage = _canonicalize_storage(w.storage, 3, flex.rhs_data)
+    y_storage = _canonicalize_storage(y.storage, 2 if has_scatter_tma else 4, flex.out_data)
     # create tma descriptor for x
-    x_has_tma = ((not has_gather) or (has_gather and target_info.has_tma_gather())) and opt_flags.is_persistent
-    x_block_tma = ([1] if has_gather else [1, opt_flags.block_m]) + [opt_flags.block_k]
-    x_tensor_or_tma = x_storage.make_tma(x_block_tma) if x_has_tma else x_storage.data
+    x_tma_mode = None
+    if has_gather and target_info.has_tma_gather() and opt_flags.is_persistent:
+        x_tma_mode = "gather"
+    elif opt_flags.is_persistent and routing_data.expt_hist is not None:
+        x_tma_mode = "ragged"
+    elif opt_flags.is_persistent:
+        x_tma_mode = "plain"
+    #
+    x_desc_ptr_off = 0
+    if x_tma_mode == "gather":
+        x_tensor_or_tma = x_storage.make_tma([1, opt_flags.block_k])
+    elif x_tma_mode == "plain":
+        x_tensor_or_tma = x_storage.make_tma([1, opt_flags.block_m, opt_flags.block_k])
+    elif x_tma_mode == "ragged":
+        x_tensor_or_tma = x_storage.make_ragged_tma([opt_flags.block_m, opt_flags.block_k])
+        x_desc_ptr_off = -x_storage.data.shape[-2] * x_storage.data.shape[-1]
+    else:
+        x_tensor_or_tma = x_storage.data
+    #
+    # x_has_tma = ((not has_gather) or (has_gather and target_info.has_tma_gather())) and opt_flags.is_persistent
+    # x_block_tma = ([1] if has_gather else [1, opt_flags.block_m]) + [opt_flags.block_k]
+    # x_tensor_or_tma = x_storage.make_tma(x_block_tma) if x_has_tma else x_storage.data
     # create tma descriptor for w
     w_has_tma = opt_flags.is_persistent
     w_tensor_or_tma = w_storage.make_tma([1, opt_flags.block_k, opt_flags.block_n]) if w_has_tma else w_storage.data
@@ -518,6 +539,26 @@ def matmul_ogs(x, w, bias,
     w_scale_tensor_or_tma = w_scale
     w_scale_has_tma = opt_flags.is_persistent and w_scale is not None
     w_scale_tensor_or_tma =  w_scale.storage.make_tma([opt_flags.block_n, opt_flags.block_k]) if w_scale_has_tma else w_scale
+    # create tma descriptor for y
+    y_tma_mode = None
+    if has_scatter_tma and target_info.has_tma_gather() and opt_flags.is_persistent:
+        y_tma_mode = "scatter"
+    elif opt_flags.is_persistent and routing_data.expt_hist is not None:
+        y_tma_mode = "ragged"
+    elif opt_flags.is_persistent:
+        y_tma_mode = "plain"
+    #
+    block_n = opt_flags.block_n // opt_flags.epilogue_subtile // fused_activation.reduction_n
+    y_desc_ptr_off = 0
+    if y_tma_mode == "scatter":
+        y_tensor_or_tma = y_storage.make_tma([1, block_n])
+    elif y_tma_mode == "plain":
+        y_tensor_or_tma = y_storage.make_tma([1, 1, opt_flags.block_m, block_n])
+    elif y_tma_mode == "ragged":
+        y_tensor_or_tma = y_storage.make_ragged_tma([opt_flags.block_m, block_n])
+        y_desc_ptr_off = -y_storage.data.shape[-2] * y_storage.data.shape[-1]
+    else:
+        y_tensor_or_tma = y_storage.data
     # canonicalize strides
     x_strides = [0]*(3 - x_storage.data.ndim) + list(x_storage.data.stride())
     x_scale_strides = x_scale.stride() if x_has_mx else (None, None, None)
@@ -529,17 +570,18 @@ def matmul_ogs(x, w, bias,
     # launch kernel
     kernels = get_kernels(epilogue.specs, fused_activation.specs)
     (kernels._p_matmul_ogs if opt_flags.is_persistent else kernels._matmul_ogs)[(grid,)](
-                   flex.out_data.reinterpret(memory["output"]),
-                   flex.out_data.reinterpret(out0), *out0.stride(),
+                   y_tensor_or_tma, y_storage.data, y_desc_ptr_off, *out0.stride(),
                    *((None, out_scale, None) if out_has_mx else out0_flex),
                    *out_scale_strides[-3:],
-                   x_tensor_or_tma, x_storage.data, *x_strides,
+                   x_tensor_or_tma, x_storage.data, x_desc_ptr_off, *x_strides,
                    flex.lhs_data.scale,
                    None if x_scale is None else x_scale.data.view(torch.uint8), *x_scale_strides,
-                   w_tensor_or_tma, *w_storage.data.stride(), w_storage.data.stride()[-1] != 1,
+                   w_tensor_or_tma, w_storage.data, *w_storage.data.stride(), w_storage.data.stride()[-1] != 1,
                    flex.rhs_data.scale,
                    w_scale_tensor_or_tma, *w_scale_strides,
                    bias, bias_stride,
+                   y_storage.data.shape[-2],
+                   x_storage.data.shape[-2],
                    x.shape[-2],
                    x.shape[-2] if routing_data.expt_hist is None else None,
                    N, K,
@@ -553,6 +595,8 @@ def matmul_ogs(x, w, bias,
                    out_alpha,
                    *fused_activation.fn_args, fused_activation.reduction_n,
                    *epilogue.fn_arg_values_matmul,
+                   x_tma_mode,
+                   y_tma_mode,
                    routing_data.n_expts_tot, routing_data.n_expts_act,
                    precision_config.max_num_imprecise_acc,
                    precision_config.allow_tf32,
@@ -574,7 +618,7 @@ def matmul_ogs(x, w, bias,
                    num_stages=opt_flags.num_stages,
                    arch=opt_flags.arch,
                    UPCAST_INDICES=should_upcast_indices(x, w, out0),
-                   DISABLE_Y_TMA=out0.stride(-2) * out0.dtype.itemsize % 16 != 0,
+                   DISABLE_Y_TMA=False,
                    SWAP_XW=preprocessing_features.swap_xw,
                    IS_EPILOGUE_DEQUANT_MXFP8=epilogue.specs.name == FnName.DEQUANTIZE_MXFP8.name,
                    NUM_SMS = grid if opt_flags.is_persistent else 0,
