@@ -431,3 +431,13 @@ tt.func @memdesc_reinterpret(%arg0: !ttg.memdesc<1xi64, #shared, #ttg.shared_mem
   %0 = ttg.memdesc_reinterpret %arg0 : !ttg.memdesc<1xi64, #shared, #ttg.shared_memory> -> !ttg.memdesc<1xi32, #shared, #ttng.tensor_memory>
   tt.return
 }
+
+// -----
+
+// expected-error @below {{parent layout must have at least rank >= 2}}
+#slice = #ttg.slice<{dim = 0, parent = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>}>
+
+// -----
+
+// expected-error @below {{slice dim=2 must be less than the parent rank=2}}
+#slice = #ttg.slice<{dim = 2, parent = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [0, 1]}>}>

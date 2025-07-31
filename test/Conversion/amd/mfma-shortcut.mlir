@@ -55,7 +55,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 #mma = #ttg.amd_mfma<{version = 4, warpsPerCTA = [4, 1], instrShape = [32, 32], isTransposed = true}>
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
   // GFX950-LABEL: mfma_linear_permlane_swap
-  tt.func public @mfma_linear_permlane_swap(%arg0: tensor<128x128xf16, #mma>) attributes {noinline = false} {
+  tt.func public @mfma_linear_permlane_swap(%arg0: tensor<128x128xf16, #mma>) {
   // GFX950-COUNT-16: llvm.call_intrinsic "llvm.amdgcn.permlane32.swap"
     %1 = ttg.convert_layout %arg0: tensor<128x128xf16, #mma> -> tensor<128x128xf16, #linear>
     tt.return

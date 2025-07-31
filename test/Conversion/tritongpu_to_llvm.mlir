@@ -1,7 +1,7 @@
 // RUN: triton-opt %s -split-input-file --allocate-shared-memory-nv --convert-triton-gpu-to-llvm 2>/dev/null | FileCheck %s --dump-input-context 20
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
-  // CHECK: llvm.func @test_empty_kernel(%arg0: i32, %arg1: !llvm.ptr<1>, %arg2: !llvm.ptr<1>)
+  // CHECK: llvm.func @test_empty_kernel(%arg0: i32, %arg1: !llvm.ptr<1>, %arg2: !llvm.ptr<1>, %arg3: !llvm.ptr<1>)
   // Here the 128 comes from the 4 in module attribute multiples 32
   // CHECK: nvvm.kernel = 1 : ui1, nvvm.reqntid = array<i32: 128>
   tt.func @test_empty_kernel(%lb : index, %A : !tt.ptr<f16>) {
@@ -1518,7 +1518,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.tar
 
 #blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [2], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, ttg.target = "cuda:80", "ttg.threads-per-warp" = 32 : i32} {
-  tt.func public @atomic_add_f16_nomask(%dest_ptrs: tensor<256x!tt.ptr<f16>, #blocked> {tt.divisibility = 16 : i32, tt.contiguity = 16 : i32}, %data: tensor<256xf16, #blocked>) attributes {noinline = false} {
+  tt.func public @atomic_add_f16_nomask(%dest_ptrs: tensor<256x!tt.ptr<f16>, #blocked> {tt.divisibility = 16 : i32, tt.contiguity = 16 : i32}, %data: tensor<256xf16, #blocked>) {
     // CHECK-LABEL: atomic_add_f16_nomask
     // CHECK: atom.global.gpu.acq_rel.add.noftz.f16x2
     // CHECK: atom.global.gpu.acq_rel.add.noftz.f16x2
@@ -1531,7 +1531,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, ttg.targ
 
 #blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [2], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, ttg.target = "cuda:80", "ttg.threads-per-warp" = 32 : i32} {
-  tt.func public @atomic_add_f16_withmask(%dest_ptrs: tensor<256x!tt.ptr<f16>, #blocked> {tt.divisibility = 16 : i32, tt.contiguity = 16 : i32}, %data: tensor<256xf16, #blocked>, %mask: tensor<256xi1, #blocked>) attributes {noinline = false} {
+  tt.func public @atomic_add_f16_withmask(%dest_ptrs: tensor<256x!tt.ptr<f16>, #blocked> {tt.divisibility = 16 : i32, tt.contiguity = 16 : i32}, %data: tensor<256xf16, #blocked>, %mask: tensor<256xi1, #blocked>) {
     // CHECK-LABEL: atomic_add_f16_withmask
     // CHECK: atom.global.gpu.acq_rel.add.noftz.f16
     // CHECK: atom.global.gpu.acq_rel.add.noftz.f16
@@ -1730,7 +1730,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 #mma = #ttg.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [2, 2], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1], instrShape = [16, 8]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: matmul_f16_cst_operands
-  tt.func public @matmul_f16_cst_operands(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+  tt.func public @matmul_f16_cst_operands(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
     %cst = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #mma>
   // CHECK: %[[U:.+]] = llvm.mlir.undef : vector<2xf16>
   // CHECK: %[[C0:.+]] = llvm.mlir.constant(0 : i32) : i32
@@ -1833,7 +1833,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32} {
 #blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
 module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: inline_asm
-  tt.func public @inline_asm(%arg0: !tt.ptr<i8> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<i8> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+  tt.func public @inline_asm(%arg0: !tt.ptr<i8> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<i8> {tt.divisibility = 16 : i32}) {
     %0 = tt.make_range {end = 512 : i32, start = 0 : i32} : tensor<512xi32, #blocked>
     %1 = tt.splat %arg0 : !tt.ptr<i8> -> tensor<512x!tt.ptr<i8>, #blocked>
     %2 = tt.addptr %1, %0 : tensor<512x!tt.ptr<i8>, #blocked>, tensor<512xi32, #blocked>
@@ -1852,7 +1852,7 @@ module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-
 #blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
 module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: inline_asm_pack_16bit
-  tt.func public @inline_asm_pack_16bit(%arg0: !tt.ptr<i8> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<i8> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+  tt.func public @inline_asm_pack_16bit(%arg0: !tt.ptr<i8> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<i8> {tt.divisibility = 16 : i32}) {
     %0 = tt.make_range {end = 512 : i32, start = 0 : i32} : tensor<512xi32, #blocked>
     %1 = tt.splat %arg0 : !tt.ptr<i8> -> tensor<512x!tt.ptr<i8>, #blocked>
     %2 = tt.addptr %1, %0 : tensor<512x!tt.ptr<i8>, #blocked>, tensor<512xi32, #blocked>
@@ -1874,7 +1874,7 @@ module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-
 #blocked = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [4, 4, 2], warpsPerCTA = [2, 4, 2], order = [2, 0, 1], CTAsPerCGA = [1, 1, 1], CTASplitNum = [1, 1, 1], CTAOrder = [0, 1, 2]}>
 #sliced2 = #ttg.slice<{dim = 2, parent = #blocked}>
 module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 16 : i32, "ttg.threads-per-warp" = 32 : i32} {
-  tt.func public @reduce_slice() attributes {noinline = false} {
+  tt.func public @reduce_slice() {
     %cst = arith.constant dense<true> : tensor<4x1xi1, #sliced2>
     %0 = "tt.reduce"(%cst) <{axis = 1 : i32}> ({
     ^bb0(%arg0: i1, %arg1: i1):
@@ -1895,7 +1895,7 @@ module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-
 #blocked = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [1, 1, 32], warpsPerCTA = [1, 2, 2], order = [2, 1, 0]}>
 #sliced = #ttg.slice<{dim = 2, parent = #blocked}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:80", "ttg.threads-per-warp" = 32 : i32} {
-  tt.func public @reduce_md_slice(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+  tt.func public @reduce_md_slice(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}) {
     %cst = arith.constant dense<0.000000e+00> : tensor<2x128xf32, #ttg.slice<{dim = 2, parent = #blocked}>>
     %0 = "tt.reduce"(%cst) <{axis = 1 : i32}> ({
     ^bb0(%arg1: f32, %arg2: f32):
@@ -1981,7 +1981,7 @@ module attributes {"ttg.target" = "cuda:75", "ttg.num-ctas" = 1 : i32, "ttg.num-
   // CHECK-NOT: llvm.store
   // CHECK-NOT: llvm.load
   // CHECK: llvm.return
-  tt.func public @convert_single_element() attributes {noinline = false} {
+  tt.func public @convert_single_element() {
     %cst = arith.constant dense<1.000000e+03> : tensor<1xf32, #blocked1>
     %0 = ttg.convert_layout %cst : tensor<1xf32, #blocked1> -> tensor<1xf32, #blocked>
     tt.return
@@ -1998,7 +1998,7 @@ module attributes {"ttg.target" = "cuda:75", "ttg.num-ctas" = 1 : i32, "ttg.num-
   // CHECK-NOT: llvm.load
   // CHECK: llvm.insertvalue
   // CHECK: llvm.extractvalue
-  tt.func public @convert_single_element_and_add() attributes {noinline = false} {
+  tt.func public @convert_single_element_and_add() {
     %cst = arith.constant dense<1.000000e+03> : tensor<1xf32, #blocked1>
     %cst2 = arith.constant dense<1.000000e+03> : tensor<1xf32, #blocked>
     %0 = ttg.convert_layout %cst : tensor<1xf32, #blocked1> -> tensor<1xf32, #blocked>
@@ -2158,7 +2158,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
-  tt.func @int32_to_bf16(%arg0: tensor<256xi32, #blocked>) attributes {noinline = false} {
+  tt.func @int32_to_bf16(%arg0: tensor<256xi32, #blocked>) {
     // CHECK-LABEL: @int32_to_bf16
     // CHECK: llvm.sitofp %{{.*}} : i32 to bf16
     %a = arith.sitofp %arg0 : tensor<256xi32, #blocked> to tensor<256xbf16, #blocked>
@@ -2170,7 +2170,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
-  tt.func @bf16_to_int32(%arg0: tensor<256xbf16, #blocked>) attributes {noinline = false} {
+  tt.func @bf16_to_int32(%arg0: tensor<256xbf16, #blocked>) {
     // CHECK-LABEL: @bf16_to_int32
     // CHECK: llvm.fptosi %{{.*}} : bf16 to i32
     %a = arith.fptosi %arg0 : tensor<256xbf16, #blocked> to tensor<256xi32, #blocked>
@@ -2202,7 +2202,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [0, 1]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
-  tt.func public @log1pf_scan(%39: tensor<32x16xf32, #blocked>) attributes {noinline = false} {
+  tt.func public @log1pf_scan(%39: tensor<32x16xf32, #blocked>) {
     // CHECK: log1pf_scan
     // non-speculatable ops will introduce a cond_br; extern_elementwise with pure = true should be considered speculatable.
     // CHECK-NOT: llvm.cond_br
@@ -2222,7 +2222,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #blocked = #ttg.blocked<{sizePerThread = [16, 1], threadsPerWarp = [4, 8], warpsPerCTA = [1, 4], order = [0, 1]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
   // check specifically for the case where asm has two results, pack > 1, and the result bitwidth is < 32
-  tt.func public @inline_asm_pack(%80: tensor<64x64xi8, #blocked>) attributes {noinline = false} {
+  tt.func public @inline_asm_pack(%80: tensor<64x64xi8, #blocked>) {
     // CHECK: llvm.inline_asm asm_dialect {{.*}} (vector<4xi8>) -> !llvm.struct<(vector<2xbf16>, vector<2xbf16>, vector<2xbf16>, vector<2xbf16>)>
     %83:2 = tt.elementwise_inline_asm "" {constraints = "=r,=r,=r,=r,r", packed_element = 4 : i32, pure = true} %80 : tensor<64x64xi8, #blocked> -> tensor<64x64xbf16, #blocked>, tensor<64x64xbf16, #blocked>
     tt.return
@@ -2304,7 +2304,7 @@ tt.func @gather_in_shared_dot_input(%arg0: tensor<16x4xi32, #blocked>, %arg1: te
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 3072 : i32, ttg.target = "cuda:80", "ttg.threads-per-warp" = 32 : i32} {
 
-  tt.func public @ampere_s8_to_fp16_conversion_opIdx1(%1 : tensor<16x32xi8, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>>) attributes {noinline = false} {
+  tt.func public @ampere_s8_to_fp16_conversion_opIdx1(%1 : tensor<16x32xi8, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>>) {
     // CHECK-LABEL: ampere_s8_to_fp16_conversion_opIdx1
     // CHECK: llvm.sitofp %{{.*}} : i8 to f16
     %2 = arith.sitofp %1 : tensor<16x32xi8, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>> to tensor<16x32xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>>
@@ -2318,7 +2318,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 #mma = #ttg.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [2, 2], instrShape = [16, 8]}>
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 3072 : i32, ttg.target = "cuda:80", "ttg.threads-per-warp" = 32 : i32} {
-  tt.func public @ampere_s8_to_fp16_conversion_opIdx0(%1 : tensor<32x16xi8, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>>) attributes {noinline = false} {
+  tt.func public @ampere_s8_to_fp16_conversion_opIdx0(%1 : tensor<32x16xi8, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>>) {
     // CHECK-LABEL: @ampere_s8_to_fp16_conversion_opIdx0
     // CHECK: llvm.sitofp %{{.*}} : i8 to f16
     %2 = arith.sitofp %1 : tensor<32x16xi8, #ttg.dot_op<{opIdx = 0 , parent = #mma, kWidth = 4}>> to tensor<32x16xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>>
@@ -2494,12 +2494,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %cst = arith.constant dense<0.000000e+00> : tensor<1xf32, #blocked>
     %0 = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<1xf32, #shared, #smem, mutable>
     ttg.local_store %cst, %0 : tensor<1xf32, #blocked> -> !ttg.memdesc<1xf32, #shared, #smem, mutable>
-    // CHECK: llvm.call @call_no_smem_usage(%{{.+}}, %{{.+}}) : (!llvm.ptr<3>, !llvm.ptr<1>) -> ()
+    // CHECK: llvm.call @call_no_smem_usage(%{{.+}}, %{{.+}}, %{{.+}}) : (!llvm.ptr<3>, !llvm.ptr<1>, !llvm.ptr<1>) -> ()
     tt.call @call_no_smem_usage() : () -> ()
     tt.return
   }
-  // CHECK: llvm.func internal @call_no_smem_usage(%arg0: !llvm.ptr<3>, %arg1: !llvm.ptr<1>)
-  tt.func private @call_no_smem_usage() attributes {noinline = false} {
+  // CHECK: llvm.func internal @call_no_smem_usage(%arg0: !llvm.ptr<3>, %arg1: !llvm.ptr<1>, %arg2: !llvm.ptr<1>)
+  tt.func private @call_no_smem_usage() {
     tt.return
   }
 }

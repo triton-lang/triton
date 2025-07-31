@@ -729,7 +729,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 
 // -----
 
-#layout = #ttg.swizzled_shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>
+#layout = #ttg.swizzled_shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [0]}>
 #smem = #ttg.shared_memory
 
 // CHECK-LABEL: @warp_specialize_isolated_regions
