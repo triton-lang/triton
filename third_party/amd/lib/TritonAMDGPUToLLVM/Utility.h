@@ -38,7 +38,7 @@ Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, Value i,
                      mlir::triton::AMD::ISAFamily::Unknown);
 
 Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
-               int axis);
+               ProgramIDDim axis);
 
 // Loads from shared or global memory with predication.
 // `otherElems` is used to mask out the elements that are not loaded
