@@ -1,3 +1,4 @@
+#include "mlir/IR/Attributes.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/Visitors.h"
 #include "mlir/Support/LLVM.h"
@@ -28,6 +29,39 @@ bool isAutoEncodingTensorType(Type ty) {
   return tensorTy && isa<gluon::AutoEncodingAttr>(tensorTy.getEncoding());
 }
 
+struct LayoutInfo {
+  Attribute encoding;
+  /* Some operations can infer one of many encodings,
+   * we model this by setting the mayVary flag on encodings
+   * derived from these ops.
+   * If "may vary" is set then we allow conflicts, and when
+   * resolving conflicts we prefer encodings that are not allowed to vary.
+   */
+  bool mayVary = false;
+
+  operator bool() { return bool(encoding); }
+};
+
+LayoutInfo combineInfo(LayoutInfo lhs, LayoutInfo rhs, Operation *op) {
+  // Sort by hash so combinations are commutative
+  if (mlir::hash_value(lhs.encoding) > mlir::hash_value(rhs.encoding)) {
+    std::swap(lhs, rhs);
+  }
+  if (lhs.mayVary)
+    return rhs;
+  if (rhs.mayVary)
+    return lhs;
+  if (lhs.encoding == rhs.encoding)
+    return lhs;
+  op->emitOpError("Found conflicting encodings for value");
+  return {};
+}
+
+bool encodingsMayVary(Operation *op) {
+  return isa<triton::JoinOp, triton::SplitOp, triton::ReshapeOp, triton::CatOp,
+             triton::TransOp>(op);
+}
+
 LogicalResult inferAutoLayouts(FuncOp func) {
   // Disallow auto encoding accross function call boundaries
   for (auto argTy : func.getArgumentTypes()) {
@@ -42,33 +76,36 @@ LogicalResult inferAutoLayouts(FuncOp func) {
           "Functions returning auto encoding must be fully inlined");
   }
 
-  llvm::MapVector<Value, Attribute> valueToEncoding;
+  llvm::MapVector<Value, LayoutInfo> valueToEncoding;
   llvm::PriorityWorklist<Value> worklist;
 
   auto updateEncoding = [&](ArrayRef<Value> values,
-                            Attribute enc) -> LogicalResult {
+                            LayoutInfo info) -> LogicalResult {
     for (auto value : values) {
-      auto [it, inserted] = valueToEncoding.insert({value, enc});
+      auto [it, inserted] = valueToEncoding.insert({value, info});
       if (!inserted) {
-        if (it->second != enc) {
-          auto defOp = value.getDefiningOp();
-          auto op = defOp ? defOp : func;
-          return op->emitOpError("Found conflicting encodings for value");
-        }
-      } else {
-        LLVM_DEBUG({
-          DBGS() << "Setting value:\n\t" << value << "\nto encoding:\n\t" << enc
-                 << "\n";
-        });
-        worklist.insert(value);
+        auto defOp = value.getDefiningOp();
+        auto op = defOp ? defOp : func;
+        auto combine = combineInfo(it->second, info, op);
+        if (!combine)
+          return failure();
+        if (combine == it->second)
+          continue;
+        it->second = combine;
       }
+      LLVM_DEBUG({
+        DBGS() << "Setting value:\n\t" << value << "\nto encoding:\n\t"
+               << it->second << "\n";
+      });
+      worklist.insert(value);
     }
     return success();
   };
 
   // 1. Set seed values from set_auto_layout ops
   auto res = func.walk([&](gluon::SetAutoLayoutOp op) -> WalkResult {
-    return updateEncoding({op.getSrc()}, op.getType().getEncoding());
+    return updateEncoding({op.getSrc()},
+                          LayoutInfo{op.getType().getEncoding()});
   });
 
   if (res.wasInterrupted())
@@ -77,8 +114,8 @@ LogicalResult inferAutoLayouts(FuncOp func) {
   // 2. Propagate encodings through the graph until fixed point, or conflict
   while (!worklist.empty()) {
     auto val = worklist.pop_back_val();
-    auto enc = valueToEncoding[val];
-    assert(enc);
+    auto info = valueToEncoding[val];
+    assert(info);
 
     // Propagate to users
     for (OpOperand &use : val.getUses()) {
@@ -86,17 +123,19 @@ LogicalResult inferAutoLayouts(FuncOp func) {
       if (isa<scf::ForOp, scf::WhileOp>(op)) {
         auto offset = 3 * isa<scf::ForOp>(op);
         auto tiedArgs = getTiedArgs(op, use.getOperandNumber() - offset);
-        if (failed(updateEncoding(tiedArgs, enc)))
+        if (failed(updateEncoding(tiedArgs, info)))
           return failure();
       } else if (isa<scf::YieldOp>(op)) {
         auto tiedArgs = getTiedArgs(op, use.getOperandNumber());
-        if (failed(updateEncoding(tiedArgs, enc)))
+        if (failed(updateEncoding(tiedArgs, info)))
           return failure();
       } else {
-        auto dstEnc = inferDstEncoding(op, enc);
+        auto dstEnc = inferDstEncoding(op, info.encoding);
         if (dstEnc) {
+          bool mayVary = info.mayVary || encodingsMayVary(op);
+          LayoutInfo dstInfo{dstEnc, mayVary};
           if (failed(updateEncoding(llvm::to_vector_of<Value>(op->getResults()),
-                                    dstEnc)))
+                                    dstInfo)))
             return failure();
         }
       }
@@ -107,17 +146,19 @@ LogicalResult inferAutoLayouts(FuncOp func) {
       auto definingOp = opResult.getOwner();
       if (isa<scf::ForOp, scf::WhileOp, scf::IfOp>(definingOp)) {
         auto tiedArgs = getTiedArgs(definingOp, opResult.getResultNumber());
-        if (failed(updateEncoding(tiedArgs, enc)))
+        if (failed(updateEncoding(tiedArgs, info)))
           return failure();
       } else {
-        auto srcEncoding = inferSrcEncoding(definingOp, enc);
+        auto srcEncoding = inferSrcEncoding(definingOp, info.encoding);
         if (srcEncoding) {
+          bool mayVary = info.mayVary || encodingsMayVary(definingOp);
+          LayoutInfo srcInfo{srcEncoding, mayVary};
           llvm::SmallVector<Value> tensorOperands;
           for (auto operand : definingOp->getOperands())
             if (isa<RankedTensorType>(operand.getType()))
               tensorOperands.push_back(operand);
 
-          if (failed(updateEncoding(tensorOperands, srcEncoding)))
+          if (failed(updateEncoding(tensorOperands, srcInfo)))
             return failure();
         }
       }
@@ -126,7 +167,7 @@ LogicalResult inferAutoLayouts(FuncOp func) {
       if (isa<scf::ForOp, scf::WhileOp>(parentOp)) {
         auto offset = isa<scf::ForOp>(parentOp);
         auto tiedArgs = getTiedArgs(parentOp, blockArg.getArgNumber() - offset);
-        if (failed(updateEncoding(tiedArgs, enc)))
+        if (failed(updateEncoding(tiedArgs, info)))
           return failure();
       }
     }
@@ -134,10 +175,10 @@ LogicalResult inferAutoLayouts(FuncOp func) {
 
   // 3. Transfer propagated encodings into the graph
   auto ctx = func.getContext();
-  for (auto &[val, enc] : valueToEncoding) {
+  for (auto &[val, info] : valueToEncoding) {
     auto existingTy = cast<RankedTensorType>(val.getType());
     assert(isa<gluon::AutoEncodingAttr>(existingTy.getEncoding()));
-    auto ty = existingTy.cloneWithEncoding(enc);
+    auto ty = existingTy.cloneWithEncoding(info.encoding);
     val.setType(ty);
 
     if (auto opResult = dyn_cast<OpResult>(val)) {
