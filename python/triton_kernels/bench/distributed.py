@@ -17,10 +17,6 @@ from triton_kernels.tensor_details import layout
 
 from bench_utils import quantize_weight
 
-# The following dummy methods simulate the behavior of distributed operations
-# in a non-distributed environment for testing purposes.
-# Assuming each rank has the same data for simplicity.
-
 
 @dataclass
 class ReduceScatterMetadata:
