@@ -243,10 +243,6 @@ def routing_triton(x, logits, n_expts_act, sm_first=False, expt_indx=None, n_row
     expt_scal, expt_indx, _ = topk(logits, n_expts_act, apply_softmax=not sm_first, y_indx=expt_indx, n_rows=n_rows)
     expt_indx = expt_indx.int()
 
-    # Sort each token's selections by expert
-    expt_indx, sort_indices = torch.sort(expt_indx, dim=1, stable=True)
-    expt_scal = torch.gather(expt_scal, 1, sort_indices)
-
     chunk_size = n_expts_tot // EP
     output_split_sizes = None
     ep_indx = None
