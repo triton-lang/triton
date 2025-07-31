@@ -421,8 +421,18 @@ class CUDABackend(BaseBackend):
             fsrc.flush()
             fbin = fsrc.name + '.o'
 
-            line_info = ["-lineinfo", "-suppress-debug-info"] if knobs.compilation.disable_line_info else ["-lineinfo"]
-            fmad = [] if opt.enable_fp_fusion else ['--fmad=false']
+            debug_info = []
+            if knobs.compilation.disable_line_info:
+                # This option is ignored if used without -lineinfo
+                debug_info += ["-lineinfo", "-suppress-debug-info"]
+            elif knobs.nvidia.disable_ptxas_opt:
+                # Synthesize complete debug info
+                debug_info += ["-g"]
+            else:
+                # Only emit line info
+                debug_info += ["-lineinfo"]
+
+            fmad = [] if opt.enable_fp_fusion else ["--fmad=false"]
             arch = sm_arch_from_capability(capability)
 
             # Disable ptxas optimizations if requested
@@ -432,8 +442,8 @@ class CUDABackend(BaseBackend):
             ptx_extra_options = opt.ptx_options.split(" ") if opt.ptx_options else []
 
             ptxas_cmd = [
-                ptxas, *line_info, *fmad, '-v', *disable_opt, *ptx_extra_options, f'--gpu-name={arch}', fsrc.name, '-o',
-                fbin
+                ptxas, *debug_info, *fmad, '-v', *disable_opt, *ptx_extra_options, f'--gpu-name={arch}', fsrc.name,
+                '-o', fbin
             ]
             try:
                 subprocess.run(ptxas_cmd, check=True, close_fds=False, stderr=flog)
