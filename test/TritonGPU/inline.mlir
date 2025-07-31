@@ -20,7 +20,7 @@ tt.func public @inline_in_warp_specialize(%arg0: !ttg.memdesc<1xi32, #shared, #s
   tt.return
 }
 
-tt.func private @store_1(%arg0: !ttg.memdesc<1xi32, #shared, #smem, mutable>) attributes {noinline = false} {
+tt.func private @store_1(%arg0: !ttg.memdesc<1xi32, #shared, #smem, mutable>) {
   %cst = arith.constant dense<1> : tensor<1xi32>
   ttg.local_store %cst, %arg0 : tensor<1xi32> -> !ttg.memdesc<1xi32, #shared, #smem, mutable>
   tt.return
