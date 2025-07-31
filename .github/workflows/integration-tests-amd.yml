@@ -115,9 +115,10 @@ jobs:
           if [ ! -d "${INSTRUMENTATION_LIB_DIR}" ]; then
             echo "Could not find '${INSTRUMENTATION_LIB_DIR}'" ; exit -1
           fi
-          pytest -rfs python/test/gluon/test_frontend.py
-          pytest -rfs python/test/gluon/test_core.py
-          pytest -rfs python/test/gluon/test_consan.py
+
+          # Test gluon
+          pytest --capture=tee-sys -rfs -n 8 python/test/gluon/
+
           pytest --capture=tee-sys -rfs python/tutorials/06-fused-attention.py
           pytest --capture=tee-sys -rfs third_party/amd/python/test/test_extract_slice_concat_op.py
           TRITON_ALWAYS_COMPILE=1 pytest --capture=tee-sys -rfs third_party/amd/python/test/test_scalarize_packed_fops.py

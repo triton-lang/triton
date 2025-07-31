@@ -8,9 +8,9 @@ from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
 from triton.experimental.gluon.language.nvidia import blackwell
 from triton.experimental.gluon.language.nvidia import hopper
-from triton.experimental.gluon.language.amd import cdna3
 from triton.experimental.gluon.language.nvidia.blackwell import mbarrier, tma, TensorMemoryLayout, async_copy
 from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
+from triton.experimental.gluon.language.amd import _layouts as amd_layouts
 from triton._filecheck import filecheck_test, run_parser
 from triton.runtime.jit import MockTensor
 import triton.language as tl
@@ -24,7 +24,8 @@ BLACKWELL_TARGET = GPUTarget("cuda", 100, 32)
 HOPPER_TARGET = GPUTarget("cuda", 90, 32)
 AMPERE_TARGET = GPUTarget("cuda", 80, 32)
 HIP_TARGET = GPUTarget("hip", "gfx1200", 32)
-HIP_TARGET_CDNA3 = GPUTarget("hip", "gfx950", 64)
+HIP_TARGET_CDNA3 = GPUTarget("hip", "gfx942", 64)
+HIP_TARGET_CDNA4 = GPUTarget("hip", "gfx950", 64)
 
 ALL_TARGETS = [AMPERE_TARGET, HOPPER_TARGET, BLACKWELL_TARGET, HIP_TARGET]
 
@@ -1321,17 +1322,27 @@ def test_auto_layout_broadcast():
 
 @gluon.jit
 def amd_mfma_layout_kernel():
-    mfma_layout: ttgl.constexpr = cdna3.AMDMFMALayout(version=4, instr_shape=[32, 32], transposed=True,
-                                                      warps_per_cta=[4, 1], tiles_per_warp=[4, 1], ctas_per_cga=[1, 1],
-                                                      cta_split_num=[1, 1], cta_order=[1, 0])
+    mfma_layout_fp32: ttgl.constexpr = amd_layouts.AMDMFMALayout(version=4, instr_shape=[32, 32], transposed=True,
+                                                                 warps_per_cta=[4, 1], tiles_per_warp=[4, 1],
+                                                                 ctas_per_cga=[1,
+                                                                               1], cta_split_num=[1,
+                                                                                                  1], cta_order=[1, 0])
+
+    mfma_layout_fp64: ttgl.constexpr = amd_layouts.AMDMFMALayout(version=4, instr_shape=[32, 32], transposed=True,
+                                                                 warps_per_cta=[4, 1], tiles_per_warp=[4, 1],
+                                                                 elem_type=ttgl.float64, ctas_per_cga=[1, 1],
+                                                                 cta_split_num=[1, 1], cta_order=[1, 0])
 
     layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 64], [4, 1], [1, 0])
 
-    x = ttgl.full([128, 32], 0, ttgl.float32, layout)
-    res = ttgl.convert_layout(x, mfma_layout)  # noqa: F841
+    x_fp32 = ttgl.full([128, 32], 0, ttgl.float32, layout)
+    x_fp64 = ttgl.full([128, 32], 0, ttgl.float64, layout)
+
+    ttgl.convert_layout(x_fp32, mfma_layout_fp32)
+    ttgl.convert_layout(x_fp64, mfma_layout_fp64)
 
 
-@pytest.mark.parametrize("target", [HIP_TARGET_CDNA3])
+@pytest.mark.parametrize("target", [HIP_TARGET_CDNA3, HIP_TARGET_CDNA4])
 def test_amd_mfma_layout(target):
 
     module = run_parser(amd_mfma_layout_kernel, target=target)
@@ -1339,11 +1350,15 @@ def test_amd_mfma_layout(target):
         anonymize_ir(module.str_nodebug()), """\
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 64], warpsPerCTA = [4, 1], order = [1, 0]}>
 #mma = #ttg.amd_mfma<{version = 4, warpsPerCTA = [4, 1], tilesPerWarp = [4, 1], instrShape = [32, 32], isTransposed = true}>
+#mma1 = #ttg.amd_mfma<{version = 4, warpsPerCTA = [4, 1], tilesPerWarp = [4, 1], instrShape = [32, 32], isTransposed = true, elementType = f64}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 64 : i32} {
   tt.func public @amd_mfma_layout_kernel() attributes {noinline = false} {
     %cst = arith.constant 0.000000e+00 : f32
     %cst_0 = arith.constant dense<0.000000e+00> : tensor<128x32xf32, #blocked>
+    %cst_1 = arith.constant 0.000000e+00 : f64
+    %cst_2 = arith.constant dense<0.000000e+00> : tensor<128x32xf64, #blocked>
     %0 = ttg.convert_layout %cst_0 : tensor<128x32xf32, #blocked> -> tensor<128x32xf32, #mma>
+    %1 = ttg.convert_layout %cst_2 : tensor<128x32xf64, #blocked> -> tensor<128x32xf64, #mma1>
     tt.return
   }
 }

@@ -98,8 +98,8 @@ struct GluonLayouts {
   GluonLayouts() {
     auto layouts =
         py::module::import("triton.experimental.gluon.language._layouts");
-    auto amdMfmaLayouts =
-        py::module::import("triton.experimental.gluon.language.amd.cdna3");
+    auto amdLayouts =
+        py::module::import("triton.experimental.gluon.language.amd._layouts");
     AutoLayout = py::object(layouts.attr("AutoLayout")).release();
     BlockedLayout = py::object(layouts.attr("BlockedLayout")).release();
     SliceLayout = py::object(layouts.attr("SliceLayout")).release();
@@ -110,7 +110,7 @@ struct GluonLayouts {
     NVMMASharedLayout = py::object(layouts.attr("NVMMASharedLayout")).release();
     SwizzledSharedLayout =
         py::object(layouts.attr("SwizzledSharedLayout")).release();
-    AMDMFMALayout = py::object(amdMfmaLayouts.attr("AMDMFMALayout")).release();
+    AMDMFMALayout = py::object(amdLayouts.attr("AMDMFMALayout")).release();
   }
 };
 
@@ -186,17 +186,13 @@ py::object layoutToGluon(Attribute layout) {
   } else if (auto autoEnc = dyn_cast<gluon::AutoEncodingAttr>(layout)) {
     return layouts.AutoLayout();
   } else if (auto amdMfma = dyn_cast<ttg::AMDMfmaEncodingAttr>(layout)) {
-    auto elemType = amdMfma.getElementType();
-    bool isFp32 =
-        !elemType.has_value() || isa<mlir::Float32Type>(elemType.value());
-    assert(isFp32 && "Only float32 is supported for now in AMF MFMA encoding");
     auto ctaLayout = amdMfma.getCTALayout();
     std::vector<unsigned> instrShape{amdMfma.getMDim(), amdMfma.getNDim()};
     return layouts.AMDMFMALayout(
         amdMfma.getVersion(), instrShape, amdMfma.getIsTransposed(),
         amdMfma.getWarpsPerCTA(), amdMfma.getTilesPerWarp(),
-        ctaLayout.getCTAsPerCGA(), ctaLayout.getCTASplitNum(),
-        ctaLayout.getCTAOrder());
+        amdMfma.getElementType(), ctaLayout.getCTAsPerCGA(),
+        ctaLayout.getCTASplitNum(), ctaLayout.getCTAOrder());
   }
 
   throw py::value_error("Unhandled encoding encountered");
@@ -297,16 +293,13 @@ void init_gluon_ir(py::module &&m) {
               std::vector<unsigned> &ctaSplitNum,
               std::vector<unsigned> &ctaOrder,
               std::vector<unsigned> &instrShape, bool transposed,
-              unsigned elemTypeWidth) -> Attribute {
-             assert(elemTypeWidth == 32 &&
-                    "Only float32 type is supported for now");
+              mlir::Type elemType) -> Attribute {
              auto ctx = self.getContext();
              auto ctaLayout = self.getChecked<ttg::CTALayoutAttr>(
                  ctx, ctasPerCga, ctaSplitNum, ctaOrder);
              return ttg::AMDMfmaEncodingAttr::get(
                  ctx, version, warpsPerCta, tilesPerWarp, instrShape[0],
-                 instrShape[1], transposed, ctaLayout,
-                 mlir::Float32Type::get(ctx));
+                 instrShape[1], transposed, ctaLayout, elemType);
            })
       .def("get_nvmma_shared_layout",
            [](GluonOpBuilder &self, unsigned swizzleByteWidth,
