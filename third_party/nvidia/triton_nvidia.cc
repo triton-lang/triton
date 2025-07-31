@@ -22,6 +22,11 @@ void init_triton_nvidia_passes_ttgpuir(py::module &&m) {
   using namespace mlir::triton;
   // TODO: it is weird to pass mlir::triton::NVVM here since the conversion is
   // nvidia-specificontext
+  m.def("add_allocate_shared_memory_nv",
+        [](mlir::PassManager &pm, int32_t capability, int32_t ptxVersion) {
+          pm.addPass(mlir::triton::createAllocateSharedMemoryNvPass(
+              capability, ptxVersion));
+        });
   m.def("add_to_llvmir",
         [](mlir::PassManager &pm, int32_t capability, int32_t ptxVersion) {
           pm.addPass(mlir::triton::createConvertTritonGPUToLLVMPass(
@@ -158,8 +163,7 @@ void init_triton_nvidia(py::module &&m) {
   m.def("load_dialects", [](mlir::MLIRContext &context) {
     mlir::DialectRegistry registry;
     registry.insert<mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect,
-                    mlir::triton::nvgpu::NVGPUDialect>();
-    registry.insert<mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect,
+                    mlir::triton::nvgpu::NVGPUDialect,
                     mlir::triton::nvws::NVWSDialect>();
     mlir::registerNVVMDialectTranslation(registry);
     context.appendDialectRegistry(registry);

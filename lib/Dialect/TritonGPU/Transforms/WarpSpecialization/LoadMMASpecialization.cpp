@@ -85,15 +85,6 @@ getPartitionScheme(scf::ForOp loop, const WarpSchedule &schedule) {
 // Utilities
 //===----------------------------------------------------------------------===//
 
-static void replaceAllUsesDominatedBy(Operation *domOp, Value newValue,
-                                      Value oldValue, DominanceInfo &domInfo) {
-  if (newValue == oldValue)
-    return;
-  oldValue.replaceUsesWithIf(newValue, [&](OpOperand &use) {
-    return domInfo.properlyDominates(domOp, use.getOwner());
-  });
-}
-
 static std::pair<Value, Value> postIncrementModulo(ImplicitLocOpBuilder &b,
                                                    Value index, Value phase,
                                                    unsigned numStages) {

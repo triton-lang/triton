@@ -23,6 +23,7 @@
 
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
+#include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
 
 #include <numeric>
@@ -99,9 +100,9 @@ TMemAllocation getTmemAllocSizes(MemDescType memDescType) {
   return TMemAllocation(numColumn, numRows);
 }
 
-Attribute getTmemLoadStoreLayout32x32b(unsigned M, unsigned N,
-                                       RankedTensorType oldType,
-                                       unsigned numWarps) {
+DistributedEncodingTrait getTmemLoadStoreLayout32x32b(unsigned M, unsigned N,
+                                                      RankedTensorType oldType,
+                                                      unsigned numWarps) {
   assert(numWarps == 4 || numWarps == 8);
   auto shape = getShapePerCTA(oldType);
   assert(shape.size() == 2);
@@ -150,8 +151,9 @@ Attribute getTmemLoadStoreLayout32x32b(unsigned M, unsigned N,
                                                warpsPerCTA, order, ctaLayout);
 }
 
-Attribute getTmemCompatibleLayout(unsigned M, unsigned N,
-                                  RankedTensorType oldType, unsigned numWarps) {
+DistributedEncodingTrait getTmemCompatibleLayout(unsigned M, unsigned N,
+                                                 RankedTensorType oldType,
+                                                 unsigned numWarps) {
   bool prefer16x256 =
       triton::tools::getBoolEnv("TRITON_PREFER_TMEM_16x256_LAYOUT");
   if (prefer16x256) {
@@ -164,63 +166,85 @@ Attribute getTmemCompatibleLayout(unsigned M, unsigned N,
   return getTmemLoadStoreLayout32x32b(M, N, oldType, numWarps);
 }
 
-bool isDistributedLayoutSplitMTmemLoadStore(RankedTensorType tensorType,
-                                            MemDescType memType, int numWarps) {
+DistributedEncodingTrait
+getTmemLoadLayoutSplitLongM(RankedTensorType tensorType, MemDescType memType,
+                            int numWarps) {
   auto tmemEnc = dyn_cast<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
       memType.getEncoding());
   if (!tmemEnc || tmemEnc.getBlockM() != 128)
-    return false;
+    return {};
   int M = tmemEnc.getBlockM();
   int N = tmemEnc.getBlockN();
   auto llEncoding = dyn_cast<LinearEncodingAttr>(tensorType.getEncoding());
   if (!llEncoding)
-    return false;
+    return {};
   auto CTALayout = getCTALayout(tensorType.getEncoding());
   auto shapePerCTA = mlir::triton::gpu::getShapePerCTA(tensorType);
   if (numWarps != 8)
-    return false;
+    return {};
   LinearLayout llLayout =
-      getTmemLoadLayoutSplitLongM(M, N, tensorType, numWarps);
-  return llEncoding.getLinearLayout() == llLayout;
+      gpu::getTmemLoadLayoutSplitLongM(M, N, tensorType, numWarps);
+  return LinearEncodingAttr::get(tensorType.getContext(), llLayout);
+}
+
+bool isDistributedLayoutSplitMTmemLoadStore(RankedTensorType tensorType,
+                                            MemDescType memType, int numWarps) {
+  auto layout = getTmemLoadLayoutSplitLongM(tensorType, memType, numWarps);
+  if (!layout)
+    return false;
+  return areLayoutsEquivalent(
+      tensorType.getShape(), cast<DistributedEncodingTrait>(layout),
+      cast<DistributedEncodingTrait>(tensorType.getEncoding()));
+}
+
+SmallVector<DistributedEncodingTrait>
+getTmemCompatibleLayouts(Operation *op, RankedTensorType tensorType,
+                         MemDescType memType) {
+  int numWarps = lookupNumWarps(op);
+  assert(numWarps % 4 == 0);
+
+  if (isa<triton::nvidia_gpu::TensorMemoryScalesEncodingAttr>(
+          memType.getEncoding())) {
+    return {triton::gpu::LinearEncodingAttr::get(
+        tensorType.getContext(),
+        getScaleTMEMStoreLinearLayout(tensorType, numWarps))};
+  }
+
+  SmallVector<DistributedEncodingTrait> layouts;
+  auto attr =
+      cast<triton::nvidia_gpu::TensorMemoryEncodingAttr>(memType.getEncoding());
+  int blockM = attr.getBlockM();
+  int blockN = attr.getBlockN();
+
+  if (DistributedEncodingTrait splitMLayout =
+          getTmemLoadLayoutSplitLongM(tensorType, memType, numWarps))
+    layouts.push_back(splitMLayout);
+
+  if (auto ll16x256 =
+          getTmemLoadStoreLayout16x256(blockM, blockN, tensorType, numWarps)) {
+    layouts.push_back(
+        LinearEncodingAttr::get(tensorType.getContext(), ll16x256.value()));
+  }
+
+  layouts.push_back(nvidia_gpu::getTmemLoadStoreLayout32x32b(
+      blockM, blockN, tensorType, numWarps));
+
+  // TODO: Add support for more layout compatible with tmem load/store. There
+  // will only be a discret set of layout possible due to the limiations of
+  // tmem_load/store.
+  return layouts;
 }
 
 // Verify if the distributed layout can be mapped onto tensor memory.
 bool isDistributedLayoutTMemCompatible(Operation *op,
                                        RankedTensorType tensorType,
-                                       MemDescType memType) {
-  int numWarps = lookupNumWarps(op);
-  assert(numWarps % 4 == 0);
-  if (isa<triton::nvidia_gpu::TensorMemoryScalesEncodingAttr>(
-          memType.getEncoding())) {
-    return tensorType.getEncoding() ==
-           triton::gpu::LinearEncodingAttr::get(
-               tensorType.getContext(),
-               getScaleTMEMStoreLinearLayout(tensorType, numWarps));
-  }
-  auto attr =
-      cast<triton::nvidia_gpu::TensorMemoryEncodingAttr>(memType.getEncoding());
-  int blockM = attr.getBlockM();
-  int blockN = attr.getBlockN();
-  if (isDistributedLayoutSplitMTmemLoadStore(tensorType, memType, numWarps))
-    return true;
-
-  auto ll16x256 =
-      getTmemLoadStoreLayout16x256(blockM, blockN, tensorType, numWarps);
-  auto enc =
-      cast<triton::gpu::DistributedEncodingTrait>(tensorType.getEncoding());
-  if (ll16x256.has_value() &&
-      areLayoutsEquivalent(
-          tensorType.getShape(),
-          LinearEncodingAttr::get(tensorType.getContext(), ll16x256.value()),
-          enc))
-    return true;
-  auto layout = cast<triton::gpu::DistributedEncodingTrait>(
-      nvidia_gpu::getTmemLoadStoreLayout32x32b(blockM, blockN, tensorType,
-                                               numWarps));
-  // TODO: Add support for more layout compatible with tmem load/store. There
-  // will only be a discret set of layout possible due to the limiations of
-  // tmem_load/store.
-  return areLayoutsEquivalent(tensorType.getShape(), layout, enc);
+                                       gpu::MemDescType memType) {
+  SmallVector<DistributedEncodingTrait> layouts =
+      getTmemCompatibleLayouts(op, tensorType, memType);
+  auto enc = cast<DistributedEncodingTrait>(tensorType.getEncoding());
+  return llvm::any_of(layouts, [&](DistributedEncodingTrait layout) {
+    return areLayoutsEquivalent(tensorType.getShape(), layout, enc);
+  });
 }
 
 LogicalResult impl::verifyMMAv5Op(Operation *op) {

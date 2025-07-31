@@ -38,7 +38,7 @@ def cacheable_kernel():
     return get_specialized_kernel()
 
 
-def test_cacheable(device):
+def test_cacheable(device, fresh_knobs):
     specialized_kernel = get_specialized_kernel()
 
     specialization_data = None
@@ -53,36 +53,32 @@ def test_cacheable(device):
         fn_name = kwargs["fn"].name
         module_name = kwargs["fn"].module
 
-    prev_hook = triton.knobs.runtime.jit_cache_hook
-    try:
-        triton.knobs.runtime.jit_cache_hook = cache_hook
-        o = torch.empty((1, ), dtype=torch.float32, device=device)
-        k = specialized_kernel[(1, )](o, )
-        hash = k.hash
-        assert o.item() == 1.0
-        assert module_name == "tests.test_specialize"
-        assert fn_name == "cacheable_kernel"
+    triton.knobs.runtime.jit_cache_hook = cache_hook
+    o = torch.empty((1, ), dtype=torch.float32, device=device)
+    k = specialized_kernel[(1, )](o, )
+    hash = k.hash
+    assert o.item() == 1.0
+    assert module_name == "tests.test_specialize"
+    assert fn_name == "cacheable_kernel"
 
-        compile_count = 0
+    compile_count = 0
 
-        def count_hook(*args, **kwargs):
-            nonlocal compile_count
-            compile_count += 1
+    def count_hook(*args, **kwargs):
+        nonlocal compile_count
+        compile_count += 1
 
-        triton.knobs.runtime.jit_cache_hook = count_hook
-        # clear the cache
-        specialized_kernel.device_caches.clear()
+    triton.knobs.runtime.jit_cache_hook = count_hook
+    # clear the cache
+    specialized_kernel.device_caches.clear()
 
-        # retrieve the kernel from name and preload it.
-        fn = retrieve_fn(module_name, fn_name)
-        assert fn == specialized_kernel
-        preload = fn.preload(specialization_data)
-        assert compile_count == 1
-        assert preload.hash == hash
+    # retrieve the kernel from name and preload it.
+    fn = retrieve_fn(module_name, fn_name)
+    assert fn == specialized_kernel
+    preload = fn.preload(specialization_data)
+    assert compile_count == 1
+    assert preload.hash == hash
 
-        # verify that we hit the cache.
-        compile_count = 0
-        specialized_kernel[(1, )](o, )
-        assert compile_count == 0
-    finally:
-        triton.knobs.runtime.jit_cache_hook = prev_hook
+    # verify that we hit the cache.
+    compile_count = 0
+    specialized_kernel[(1, )](o, )
+    assert compile_count == 0

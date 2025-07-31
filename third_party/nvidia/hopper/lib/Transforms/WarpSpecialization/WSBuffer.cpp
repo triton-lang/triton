@@ -60,20 +60,6 @@ unsigned getLoopDepth(Operation *op) {
   return depth;
 }
 
-static unsigned getNumChannelsInOp(Operation *op,
-                                   const SmallVector<Channel *> &channels,
-                                   SmallVector<Channel *> &channelsInOp) {
-  unsigned num = 0;
-  for (auto *ch : channels) {
-    // Get the immediate parent.
-    auto srcParent = ch->getSrcOp()->getParentOp();
-    auto dstParent = ch->getDstOp()->getParentOp();
-    if (srcParent == op && dstParent == op)
-      channelsInOp.push_back(ch);
-  }
-  return channelsInOp.size();
-}
-
 // Update preOrderOps with a list of region Ops nested under ctrlOp that will
 // need accumCnt. The list is in pre-order.
 void getAccumCntsPreOrder(Operation *ctrlOp,
@@ -596,42 +582,6 @@ void appendAccumCntsForOps(SmallVector<Operation *> &taskTopOps,
   // tmpAccumLoopCount is the current accumCnt;
   updateAccumLoopCount(opList, taskTopOps, regionsWithChannels,
                        tmpAccumLoopCount);
-}
-
-// As an example, suppose we have 4 channels with the following control flow.
-// We have 4 regions that immediately enclosing a channel:
-//   ForA for channel D, IfA for channel A, ForB for channel B and
-//   IfB for channel C
-// All 4 regions are nested under ForA, thus we will have 4 accumCnts. And the
-// counts are ordered in pre-order traversal.
-// accumForA is the execution count for ForA, accumIfA is the execution count
-// for IfA, etc. Barriers for channel A will use the corresponding value from
-// the immedate enclosing region which is IfA.
-// ForA (accumForA, accumIfA, accumForB, accumIfB)
-//   IfA (accumIfA, accumForB)
-//     Channel A --> uses ForA.arg[accumIfA] to calculate (bufIdx, phase)
-//     ForB (accumForB)
-//       Channel B --> uses ForB.arg[accumForB]
-//   ThenYield ForA.arg[accumIfA] + 1, ForB.result[accumForB]
-//   ElseYield ForA.arg[accumIfA], ForA.arg[accumForB]
-//   ForC (accumForC, accumIfB)
-//     IfB
-//       Channel C --> uses ForC.arg[accumIfB]
-//     ThenYield ForC.arg[accumIfB] + 1
-//     ElseYield ForC.arg[accumIfB]
-//   Channel D --> uses ForA.arg[accumForA]
-// Design this as a generic module that goes through a function op, together
-// with a list of channels. Separate the buffer-reuse logic.
-void addAccumCountForRegion(triton::FuncOp funcOp,
-                            const SmallVector<Channel *> &channels) {
-  // Get top-level region ops that contain channels.
-  SmallVector<Operation *> taskTopOps = getTaskTopRegion(funcOp, channels);
-
-  // Get immediately enclosing region ops that contain channels.
-  DenseSet<Operation *> regionsWithChannels;
-  collectRegionsWithChannels(channels, regionsWithChannels);
-
-  appendAccumCntsForOps(taskTopOps, channels, regionsWithChannels);
 }
 
 } // namespace mlir

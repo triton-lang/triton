@@ -375,6 +375,12 @@ class LaunchHook(Protocol):
         ...
 
 
+class InitHandleHook(Protocol):
+
+    def __call__(self, function: Optional[Callable], module: Optional[object], metadata_group: dict[str, str]) -> None:
+        ...
+
+
 # This is of the form [attr_name, attr_val]
 # TODO: Use tuple instead of list for better typing.
 KernelAttr = list[Union[str, int]]
@@ -410,6 +416,7 @@ class runtime_knobs(base_knobs):
 
     launch_enter_hook: Optional[LaunchHook] = None
     launch_exit_hook: Optional[LaunchHook] = None
+    init_handle_hook: Optional[InitHandleHook] = None
 
     # Hook for inspecting compiled functions and modules
     jit_cache_hook: Optional[JITHook] = None
@@ -443,7 +450,6 @@ class amd_knobs(base_knobs):
     use_buffer_atomics: env_bool = env_bool("AMDGCN_USE_BUFFER_ATOMICS", True)
     dump_amdgcn: env_bool = env_bool("AMDGCN_ENABLE_DUMP")
     libhip_path: env_opt_str = env_opt_str("TRITON_LIBHIP_PATH")
-    lld_path: env_opt_str = env_opt_str("TRITON_HIP_LLD_PATH")
 
     # We use strs so that we can have a default value based on other runtime info
     use_block_pingpong: env_opt_bool = env_opt_bool("TRITON_HIP_USE_BLOCK_PINGPONG")
