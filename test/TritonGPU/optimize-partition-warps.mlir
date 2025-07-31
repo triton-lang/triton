@@ -6,6 +6,7 @@
 #blocked2d_4 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [2, 2], order = [0, 1]}>
 #blocked2d_8 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 2], order = [0, 1]}>
 #blocked2d_16 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 4], order = [0, 1]}>
+#blocked_tmem = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [16, 2], warpsPerCTA = [4, 2], order = [0, 1]}>
 #shared_1d = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 8}>
 #bar_layout = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
@@ -143,21 +144,21 @@ tt.func @tmem_min_4_warps(%tensor_desc: !ttg.memdesc<64x64xf32, #tmem, #ttng.ten
   }
   // CHECK: partition0{{.*}} num_warps(4)
   partition0(%desc: !ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable>) num_warps(8) {
-    %result = ttng.tmem_load %desc : !ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<64x64xf32, #blocked2d_8>
-    "use"(%result) : (tensor<64x64xf32, #blocked2d_8>) -> ()
+    %result = ttng.tmem_load %desc : !ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<64x64xf32, #blocked_tmem>
+    "use"(%result) : (tensor<64x64xf32, #blocked_tmem>) -> ()
     ttg.warp_return
   }
   // CHECK: partition1{{.*}} num_warps(4)
   partition1(%desc: !ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable>) num_warps(8) {
-    %cst = arith.constant dense<0.0> : tensor<64x64xf32, #blocked2d_8>
+    %cst = arith.constant dense<0.0> : tensor<64x64xf32, #blocked_tmem>
     %true = arith.constant true
-    ttng.tmem_store %cst, %desc, %true : tensor<64x64xf32, #blocked2d_8> -> !ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable>
+    ttng.tmem_store %cst, %desc, %true : tensor<64x64xf32, #blocked_tmem> -> !ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable>
     ttg.warp_return
   }
   // CHECK: partition2{{.*}} num_warps(4)
   partition2(%desc: !ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable>) num_warps(8) {
-    %cst = arith.constant dense<0.0> : tensor<64x64xf32, #blocked2d_8>
-    %result = ttng.tmem_alloc %cst : (tensor<64x64xf32, #blocked2d_8>) -> !ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory>
+    %cst = arith.constant dense<0.0> : tensor<64x64xf32, #blocked_tmem>
+    %result = ttng.tmem_alloc %cst : (tensor<64x64xf32, #blocked_tmem>) -> !ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory>
     "use"(%result) : (!ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory>) -> ()
     ttg.warp_return
   } : (!ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable>) -> ()
