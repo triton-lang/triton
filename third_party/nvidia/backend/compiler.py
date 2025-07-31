@@ -249,73 +249,70 @@ class CUDABackend(BaseBackend):
             cluster_info.clusterDimX = cluster_dims[0]
             cluster_info.clusterDimY = cluster_dims[1]
             cluster_info.clusterDimZ = cluster_dims[2]
-
-        pass_config = [
-            [passes.ttir.add_convert_to_ttgpuir, [f"cuda:{capability}", num_warps, 32, num_ctas]],
-        ]
-
+        pass_config = dict()
+        pass_config["ttir.add_convert_to_ttgpuir"] = [passes.ttir.add_convert_to_ttgpuir, [f"cuda:{capability}", num_warps, 32, num_ctas]]
         # optimize TTGIR
-        pass_config.append([passes.ttgpuir.add_coalesce, []])
+        pass_config["ttgpuir.add_coalesce"] = [passes.ttgpuir.add_coalesce, []]
 
         if capability // 10 >= 8:
-            pass_config.append([passes.ttgpuir.add_f32_dot_tc, []])
+            pass_config["ttgpuir.add_f32_dot_tc"] = [passes.ttgpuir.add_f32_dot_tc, []]
 
         # TODO(Qingyi): Move PlanCTAPass to the front of CoalescePass
-        pass_config.append([nvidia.passes.ttnvgpuir.add_plan_cta, [cluster_info]])
-        pass_config.append([passes.ttgpuir.add_remove_layout_conversions, []])
-        pass_config.append([passes.ttgpuir.add_optimize_thread_locality, []])
-        pass_config.append([passes.ttgpuir.add_accelerate_matmul, []])
-        pass_config.append([passes.ttgpuir.add_remove_layout_conversions, []])
-        pass_config.append([passes.ttgpuir.add_optimize_dot_operands, [capability >= 80]])
-        pass_config.append([nvidia.passes.ttnvgpuir.add_optimize_descriptor_encoding, []])
-        pass_config.append([passes.ttir.add_loop_aware_cse, []])
+        pass_config["ttnvgpuir.add_plan_cta"] = [nvidia.passes.ttnvgpuir.add_plan_cta, [cluster_info]]
+        pass_config["ttgpuir.add_remove_layout_conversions"] = [passes.ttgpuir.add_remove_layout_conversions, []]
+        pass_config["ttgpuir.add_optimize_thread_locality"] = [passes.ttgpuir.add_optimize_thread_locality, []]
+        pass_config["ttgpuir.add_accelerate_matmul"] = [passes.ttgpuir.add_accelerate_matmul, []]
+        pass_config["ttgpuir.add_remove_layout_conversions"] = [passes.ttgpuir.add_remove_layout_conversions, []]
+        pass_config["ttgpuir.add_optimize_dot_operands"] = [passes.ttgpuir.add_optimize_dot_operands, [capability >= 80]]
+        pass_config["ttnvgpuir.add_optimize_descriptor_encoding"] = [nvidia.passes.ttnvgpuir.add_optimize_descriptor_encoding, []]
+        pass_config["ttir.add_loop_aware_cse"] = [passes.ttir.add_loop_aware_cse, []]
 
         if capability // 10 in [8, 9]:
-            pass_config.append([passes.ttgpuir.add_fuse_nested_loops, []])
-            pass_config.append([passes.common.add_canonicalizer, []])
-            pass_config.append([passes.ttir.add_triton_licm, []])
-            pass_config.append([passes.common.add_canonicalizer, []])
-            pass_config.append([passes.ttgpuir.add_combine_tensor_select_and_if, []])
-            pass_config.append([nvidia.passes.hopper.add_hopper_warpspec, [num_stages, dump_enabled]])
-            pass_config.append([passes.ttgpuir.add_assign_latencies, [num_stages]])
-            pass_config.append([passes.ttgpuir.add_schedule_loops, []])
-            pass_config.append([passes.ttgpuir.add_pipeline, [num_stages, dump_enabled]])
+            pass_config["ttgpuir.add_fuse_nested_loops"] = [passes.ttgpuir.add_fuse_nested_loops, []]
+            pass_config["common.add_canonicalizer"] = [passes.common.add_canonicalizer, []]
+            pass_config["ttir.add_triton_licm"] = [passes.ttir.add_triton_licm, []]
+            pass_config["common.add_canonicalizer"] = [passes.common.add_canonicalizer, []]
+            pass_config["ttgpuir.add_combine_tensor_select_and_if"] = [passes.ttgpuir.add_combine_tensor_select_and_if, []]
+            pass_config["nvidia.hopper.add_hopper_warpspec"] = [nvidia.passes.hopper.add_hopper_warpspec, [num_stages, dump_enabled]]
+            pass_config["ttgpuir.add_assign_latencies"] = [passes.ttgpuir.add_assign_latencies, [num_stages]]
+            pass_config["ttgpuir.add_schedule_loops"] = [passes.ttgpuir.add_schedule_loops, []]
+            pass_config["ttgpuir.add_pipeline"] = [passes.ttgpuir.add_pipeline, [num_stages, dump_enabled]]
         elif capability // 10 >= 10:
-            pass_config.append([passes.ttgpuir.add_fuse_nested_loops, []])
-            pass_config.append([passes.common.add_canonicalizer, []])
-            pass_config.append([passes.ttir.add_triton_licm, []])
-            pass_config.append([passes.ttgpuir.add_optimize_accumulator_init, []])
-            pass_config.append([passes.ttgpuir.add_hoist_tmem_alloc, [False]])
-            pass_config.append([nvidia.passes.ttnvgpuir.add_promote_lhs_to_tmem, []])
-            pass_config.append([passes.ttgpuir.add_assign_latencies, [num_stages]])
-            pass_config.append([passes.ttgpuir.add_schedule_loops, []])
-            pass_config.append([passes.ttgpuir.add_warp_specialize, [num_stages]])
-            pass_config.append([passes.ttgpuir.add_pipeline, [num_stages, dump_enabled]])
-            pass_config.append([passes.ttgpuir.add_combine_tensor_select_and_if, []])
+            pass_config["ttgpuir.add_fuse_nested_loops"] = [passes.ttgpuir.add_fuse_nested_loops, []]
+            pass_config["common.add_canonicalizer"] = [passes.common.add_canonicalizer, []]
+            pass_config["ttir.add_triton_licm"] = [passes.ttir.add_triton_licm, []]
+            pass_config["ttgpuir.add_optimize_accumulator_init"] = [passes.ttgpuir.add_optimize_accumulator_init, []]
+            pass_config["ttgpuir.add_hoist_tmem_alloc"] = [passes.ttgpuir.add_hoist_tmem_alloc, [False]]
+            pass_config["ttnvgpuir.add_promote_lhs_to_tmem"] = [nvidia.passes.ttnvgpuir.add_promote_lhs_to_tmem, []]
+            pass_config["ttgpuir.add_assign_latencies"] = [passes.ttgpuir.add_assign_latencies, [num_stages]]
+            pass_config["ttgpuir.add_schedule_loops"] = [passes.ttgpuir.add_schedule_loops, []]
+            pass_config["ttgpuir.add_warp_specialize"] = [passes.ttgpuir.add_warp_specialize, [num_stages]]
+            pass_config["ttgpuir.add_pipeline"] = [passes.ttgpuir.add_pipeline, [num_stages, dump_enabled]]
+            pass_config["ttgpuir.add_combine_tensor_select_and_if"] = [passes.ttgpuir.add_combine_tensor_select_and_if, []]
             # hoist again and allow hoisting out of if statements
-            pass_config.append([passes.ttgpuir.add_hoist_tmem_alloc, [True]])
-            pass_config.append([nvidia.passes.ttnvgpuir.add_remove_tmem_tokens, []])
+            pass_config["ttgpuir.add_hoist_tmem_alloc"] = [passes.ttgpuir.add_hoist_tmem_alloc, [True]]
+            pass_config["ttnvgpuir.add_remove_tmem_tokens"] = [nvidia.passes.ttnvgpuir.add_remove_tmem_tokens, []]
         else:
-            pass_config.append([passes.ttir.add_triton_licm, []])
-        pass_config.append([passes.common.add_canonicalizer, []])
-        pass_config.append([passes.ttir.add_loop_aware_cse, []])
-        pass_config.append([passes.ttgpuir.add_prefetch, []])
-        pass_config.append([passes.ttgpuir.add_optimize_dot_operands, [capability >= 80]])
-        pass_config.append([passes.ttgpuir.add_coalesce_async_copy, []])
-        pass_config.append([nvidia.passes.ttnvgpuir.add_optimize_tmem_layouts, []])
-        pass_config.append([passes.ttgpuir.add_remove_layout_conversions, []])
-        pass_config.append([nvidia.passes.ttnvgpuir.add_interleave_tmem, []])
-        pass_config.append([passes.ttgpuir.add_reduce_data_duplication, []])
-        pass_config.append([passes.ttgpuir.add_reorder_instructions, []])
-        pass_config.append([passes.ttir.add_loop_aware_cse, []])
-        pass_config.append([passes.common.add_symbol_dce, []])
+            pass_config["ttir.add_triton_licm"] = [passes.ttir.add_triton_licm, []]
+        pass_config["common.add_canonicalizer"] = [passes.common.add_canonicalizer, []]
+        pass_config["ttir.add_loop_aware_cse"] = [passes.ttir.add_loop_aware_cse, []]
+        pass_config["ttgpuir.add_prefetch"] = [passes.ttgpuir.add_prefetch, []]
+        pass_config["ttgpuir.add_optimize_dot_operands"] = [passes.ttgpuir.add_optimize_dot_operands, [capability >= 80]]
+        pass_config["ttgpuir.add_coalesce_async_copy"] = [passes.ttgpuir.add_coalesce_async_copy, []]
+        pass_config["ttnvgpuir.add_optimize_tmem_layouts"] = [nvidia.passes.ttnvgpuir.add_optimize_tmem_layouts, []]
+        pass_config["ttgpuir.add_remove_layout_conversions"] = [passes.ttgpuir.add_remove_layout_conversions, []]
+        pass_config["ttnvgpuir.add_interleave_tmem"] = [nvidia.passes.ttnvgpuir.add_interleave_tmem, []]
+        pass_config["ttgpuir.add_reduce_data_duplication"] = [passes.ttgpuir.add_reduce_data_duplication, []]
+        pass_config["ttgpuir.add_reorder_instructions"] = [passes.ttgpuir.add_reorder_instructions, []]
+        pass_config["ttir.add_loop_aware_cse"] = [passes.ttir.add_loop_aware_cse, []]
+        pass_config["common.add_symbol_dce"] = [passes.common.add_symbol_dce, []]
         if capability // 10 >= 9:
-            pass_config.append([nvidia.passes.ttnvgpuir.add_tma_lowering, []])
-        pass_config.append([nvidia.passes.ttnvgpuir.add_fence_insertion, [capability]])
-        pass_config.append([nvidia.passes.ttnvgpuir.add_lower_mma, []])
-        pass_config.append([passes.common.add_sccp, []])
-        pass_config.append([passes.common.add_cse, []])
-        pass_config.append([passes.common.add_canonicalizer, []])
+            pass_config["ttnvgpuir.add_tma_lowering"] = [nvidia.passes.ttnvgpuir.add_tma_lowering, []]
+        pass_config["ttnvgpuir.add_fence_insertion"] = [nvidia.passes.ttnvgpuir.add_fence_insertion, [capability]]
+        pass_config["ttnvgpuir.add_lower_mma"] = [nvidia.passes.ttnvgpuir.add_lower_mma, []]
+        pass_config["common.add_sccp"] = [passes.common.add_sccp, []]
+        pass_config["common.add_cse"] = [passes.common.add_cse, []]
+        pass_config["common.add_canonicalizer"] = [passes.common.add_canonicalizer, []]
 
         return [pass_config, cluster_info]
 
@@ -330,7 +327,7 @@ class CUDABackend(BaseBackend):
         pass_entries = pass_config[0]
         cluster_info = pass_config[1]
 
-        for e in pass_entries:
+        for e in pass_entries.values():
             p = e[0]
             args = e[1]
             if len(args) == 0:
