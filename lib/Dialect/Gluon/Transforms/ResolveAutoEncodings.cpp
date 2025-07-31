@@ -10,6 +10,8 @@
 #include "llvm/ADT/PriorityWorklist.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/LogicalResult.h"
+#include "llvm/Support/raw_ostream.h"
+#include "llvm/Support/xxhash.h"
 
 namespace ttg = mlir::triton::gpu;
 
@@ -31,20 +33,45 @@ bool isAutoEncodingTensorType(Type ty) {
 
 struct LayoutInfo {
   Attribute encoding;
-  /* Some operations can infer one of many encodings,
-   * we model this by setting the mayVary flag on encodings
-   * derived from these ops.
-   * If "may vary" is set then we allow conflicts, and when
-   * resolving conflicts we prefer encodings that are not allowed to vary.
-   */
+  // Some operations can infer one of many encodings,
+  // we model this by setting the mayVary flag on encodings
+  // derived from these ops.
+  // If "may vary" is set then we allow conflicts, and when
+  // resolving conflicts we prefer encodings that are not allowed to vary.
   bool mayVary = false;
 
   operator bool() { return bool(encoding); }
 };
 
-LayoutInfo combineInfo(LayoutInfo lhs, LayoutInfo rhs, Operation *op) {
-  // Sort by hash so combinations are commutative
-  if (mlir::hash_value(lhs.encoding) > mlir::hash_value(rhs.encoding)) {
+uint64_t hashWithMemo(Attribute attr,
+                      llvm::MapVector<Attribute, uint64_t> &hashMemo) {
+  auto it = hashMemo.find(attr);
+  if (it != hashMemo.end()) {
+    return it->second;
+  }
+
+  // llvm::hash_value is not stable, so instead we hash the string repr of the
+  // attribute
+  std::string str;
+  llvm::raw_string_ostream os(str);
+  attr.print(os);
+  auto hash = llvm::xxh3_64bits(str);
+  hashMemo.try_emplace(attr, hash);
+  return hash;
+}
+
+bool compare(Attribute a, Attribute b,
+             llvm::MapVector<Attribute, uint64_t> &hashMemo) {
+  if (a == b)
+    return false;
+
+  return hashWithMemo(a, hashMemo) > hashWithMemo(b, hashMemo);
+}
+
+LayoutInfo combineInfo(LayoutInfo lhs, LayoutInfo rhs, Operation *op,
+                       llvm::MapVector<Attribute, uint64_t> &hashMemo) {
+  // Sort inputs so this operation is commutative
+  if (compare(lhs.encoding, rhs.encoding, hashMemo)) {
     std::swap(lhs, rhs);
   }
   if (lhs.mayVary)
@@ -53,7 +80,8 @@ LayoutInfo combineInfo(LayoutInfo lhs, LayoutInfo rhs, Operation *op) {
     return lhs;
   if (lhs.encoding == rhs.encoding)
     return lhs;
-  op->emitOpError("Found conflicting encodings for value");
+  op->emitOpError("found conflicting encodings for value:\n  ")
+      << lhs.encoding << "\nand\n  " << rhs.encoding;
   return {};
 }
 
@@ -78,6 +106,7 @@ LogicalResult inferAutoLayouts(FuncOp func) {
 
   llvm::MapVector<Value, LayoutInfo> valueToEncoding;
   llvm::PriorityWorklist<Value> worklist;
+  llvm::MapVector<Attribute, uint64_t> hashMemo;
 
   auto updateEncoding = [&](ArrayRef<Value> values,
                             LayoutInfo info) -> LogicalResult {
@@ -86,7 +115,7 @@ LogicalResult inferAutoLayouts(FuncOp func) {
       if (!inserted) {
         auto defOp = value.getDefiningOp();
         auto op = defOp ? defOp : func;
-        auto combine = combineInfo(it->second, info, op);
+        auto combine = combineInfo(it->second, info, op, hashMemo);
         if (!combine)
           return failure();
         if (combine == it->second)
