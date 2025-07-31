@@ -497,11 +497,6 @@ static LogicalResult verifyTMEMOperand(Operation *op, RankedTensorType type,
                                        MemDescType memdesc, StringRef regName) {
   if (type.getRank() != 2)
     return op->emitOpError(regName) << " must be a 2D tensor";
-  if (isa<TensorMemoryScalesEncodingAttr>(memdesc.getEncoding()) &&
-      !type.getElementType().isInteger(8)) {
-    return op->emitOpError(regName)
-           << " expected to be a tensor of i8 for MMA scales encoding";
-  }
   if (type.getEncoding()) {
     auto enc = dyn_cast<DistributedEncodingTrait>(type.getEncoding());
     if (!enc) {
