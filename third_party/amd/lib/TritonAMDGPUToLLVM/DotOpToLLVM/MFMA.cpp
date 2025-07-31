@@ -77,36 +77,29 @@ struct DotOpMFMAConversionHelper {
         typeConverter(typeConverter), loc(loc), ctx(mfmaLayout.getContext()) {}
 
   Value generateMFMAOp(StringRef intrinsicName, Value valA, Value valB,
-                       Value valC) const {
+                       Value valC, int cbsz = 0, int abid = 0,
+                       int blgp = 0) const {
+    assert(cbsz >= 0 && cbsz <= 4);
+    assert(abid >= 0 && abid <= 15);
+    assert(blgp >= 0 && blgp <= 7);
+
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    auto resType = valC.getType();
     Value zeroFlag = b.i32_val(0);
+    Value cbszFlag = cbsz != 0 ? b.i32_val(cbsz) : zeroFlag;
+    Value abidFlag = abid != 0 ? b.i32_val(abid) : zeroFlag;
+    Value blgpFlag = blgp != 0 ? b.i32_val(blgp) : zeroFlag;
+
+    auto resType = valC.getType();
     OperationState loweredOp(loc, intrinsicName);
     loweredOp.addTypes(resType);
-    loweredOp.addOperands({valA, valB, valC, zeroFlag, zeroFlag, zeroFlag});
+    loweredOp.addOperands({valA, valB, valC, cbszFlag, abidFlag, blgpFlag});
     return rewriter.create(loweredOp)->getResult(0);
   }
 
   int getNumSubmatrices(Type elementType, int mDim, int nDim) const {
-    if ((mDim == 64 && nDim == 4) || (mDim == 4 && nDim == 64))
-      return 1;
-    assert(mDim == nDim);
-    switch (mDim) {
-    case 32:
-    case 16:
-      return 1;
-      break;
-    case 4:
-      assert(elementType.getIntOrFloatBitWidth() <= 32 &&
-             "fp64 is not supported yet");
-      assert(elementType.getIntOrFloatBitWidth() != 8 ||
-             elementType.isInteger(8) && "fp8 is not supported yet");
+    if (mDim == 4 || nDim == 4)
       return 16;
-      break;
-    default:
-      llvm::report_fatal_error("unsupported nonKDim in MFMA dot");
-    }
-    return -1;
+    return 1;
   }
 
   Value processSubBlocks(int numSubBlocks, Value acc, bool reduceSubBlocks,
@@ -251,7 +244,7 @@ struct DotOpMFMAConversionHelper {
     auto mDim = mfmaLayout.getMDim();
     auto nDim = mfmaLayout.getNDim();
     auto mfmaVersion = mfmaLayout.getVersion();
-    assert((mDim == nDim && (mDim == 32 || mDim == 16 || mDim == 4)) ||
+    assert((mDim == nDim && (mDim == 32 || mDim == 16)) ||
            (mDim == 64 && nDim == 4) || (mDim == 4 && nDim == 64));
 
     Value a = op.getA();
@@ -304,24 +297,37 @@ struct DotOpMFMAConversionHelper {
     auto numRepB = repA[0];
     assert(repA[0] == repB[0]);
 
+    int numBroadcastA = 1;
+    int numBroadcastB = 1;
+    int numRepKA = numRepK;
+    int numRepKB = numRepK;
+    if ((mDim == 64 && nDim == 4)) {
+      numBroadcastB = 16;
+      numRepKA *= 16;
+    }
+    if ((mDim == 4 && nDim == 64)) {
+      numBroadcastA = 16;
+      numRepKB *= 16;
+    }
+    numRepK = std::max(numRepKA, numRepKB);
+    int numBroadcast = std::max(numBroadcastA, numBroadcastB);
+
     bool preserveBF16 = intrinsicName.contains(".bf16") && mfmaVersion >= 4;
     auto operandA = getValuesFromDotOperandLayoutStruct(
-        loadedA, numRepB, numRepM, numRepK, kWidth, kBase,
+        loadedA, numRepB, numRepM, numRepKA, kWidth, kBase,
         aTensorTy.getElementType(), allowXF32, preserveBF16);
     auto operandB = getValuesFromDotOperandLayoutStruct(
-        loadedB, numRepB, numRepN, numRepK, kWidth, kBase,
+        loadedB, numRepB, numRepN, numRepKB, kWidth, kBase,
         aTensorTy.getElementType(), allowXF32, preserveBF16);
+
+    int warpSize = triton::gpu::lookupThreadsPerWarp(rewriter);
+    int elemsPerVec = mDim * nDim / warpSize;
+    int numVecInKBase = numRepK * kWidth / kBase;
 
     auto dstElemTy = dTensorTy.getElementType();
     auto fc = unpackLLElements(loc, loadedC, rewriter);
-
-    unsigned warpSize = triton::gpu::lookupThreadsPerWarp(rewriter);
-    // compute number of output elements that each thread holds for one MFMA
-    // instruction.
-    const int subBlocks =
-        getNumSubmatrices(aTensorTy.getElementType(), mDim, nDim);
-    auto elemsPerVec = mDim * nDim * subBlocks / warpSize;
-    int numVecInKBase = numRepK * kWidth / kBase;
+    SmallVector<int64_t> fcStrides =
+        computeStrides({numRepB, numRepM, numRepN, elemsPerVec});
 
     Value firstMfma;
     auto vecTy = vec_ty(dstElemTy, elemsPerVec);
@@ -329,24 +335,43 @@ struct DotOpMFMAConversionHelper {
       for (int m = 0; m < numRepM; ++m) {
         for (int n = 0; n < numRepN; ++n) {
           Value acc = tb.undef(vecTy);
-          for (unsigned v = 0; v < elemsPerVec; ++v) {
-            acc = tb.insert_element(
-                vecTy, acc,
-                fc[b * numRepM * numRepN * elemsPerVec +
-                   m * numRepN * elemsPerVec + n * elemsPerVec + v],
-                tb.i32_val(v));
+
+          for (int v = 0; v < elemsPerVec; ++v) {
+            int linearIdx = linearize({b, m, n, v}, fcStrides);
+            Value c = fc[linearIdx];
+            acc = tb.insert_element(vecTy, acc, c, tb.i32_val(v));
           }
-          acc = zeroAuxiliarBlocks(subBlocks, acc);
-          for (int k = 0; k < numVecInKBase; k++) {
-            acc = mfmaLayout.getIsTransposed()
-                      ? generateMFMAOp(intrinsicName, operandB[{b, n, k}],
-                                       operandA[{b, m, k}], acc)
-                      : generateMFMAOp(intrinsicName, operandA[{b, m, k}],
-                                       operandB[{b, n, k}], acc);
+
+          for (int k = 0; k < numVecInKBase; ++k) {
+            Value op1 = operandA[{b, m, k}];
+            Value op2 = operandB[{b, n, k}];
+            int cbsz = 0;
+            int abid = 0;
+
+            if (numBroadcastA > 1) {
+              assert(!mfmaLayout.getIsTransposed());
+              cbsz = llvm::Log2_32(numBroadcastA);
+              abid = k % numBroadcastA;
+              op1 = operandA[{b, m, k / numBroadcastA}];
+            }
+
+            if (numBroadcastB > 1) {
+              assert(numBroadcastA == 1);
+              assert(mfmaLayout.getIsTransposed());
+              cbsz = llvm::Log2_32(numBroadcastB);
+              abid = k % numBroadcastB;
+              op2 = operandB[{b, n, k / numBroadcastB}];
+            }
+
+            if (mfmaLayout.getIsTransposed())
+              std::swap(op1, op2);
+
+            acc = generateMFMAOp(intrinsicName, op1, op2, acc, cbsz, abid);
+
             if (!firstMfma)
               firstMfma = acc;
           }
-          acc = reduceSubBlocks(subBlocks, acc);
+
           adjustAccForSmallKDim(fc, acc, dstElemTy, b, m, n, numRepM, numRepN,
                                 kDimInstrSize, kDimOperandSize, elemsPerVec);
         }
@@ -362,8 +387,7 @@ struct DotOpMFMAConversionHelper {
     if (setPrioOp && firstMfma)
       setPrioOp->moveAfter(firstMfma.getDefiningOp());
 
-    const size_t mmaCount =
-        numRepB * numRepM * numRepN * numRepK * kWidth / kBase;
+    const size_t mmaCount = numRepB * numRepM * numRepN * numVecInKBase;
     packAndReplaceResult(op, fc, maybeMfmaIntrinsic, dstElemTy, elemTyA,
                          mmaCount);
 
@@ -415,8 +439,15 @@ struct DotOpMFMAConversionHelper {
           results = b.zext(i32_ty, b.bitcast(vec, i8_ty));
         }
       }
+
+      if (2 == kBase)
+        // This case can occur during scale tensor packing when there aren't
+        // enough elements to fill all 4 opSel slots. For example, with an A
+        // tensor of size 16x256 and using 16x16x128 block sizes, we end up with
+        // only 2 elements to pack,  resulting in a kBase of 2.
+        results = b.zext(i32_ty, b.bitcast(vec, i16_ty));
       if (4 == kBase)
-        // This is for int8 on pre- CDNA3 GPUs
+        // This is for int8 on pre- CDNA3 GPUs and scale tensors on CDNA4 GPUs
         results = b.bitcast(vec, i32_ty);
       if (8 == kBase)
         results = b.bitcast(vec, i64_ty);
@@ -441,10 +472,15 @@ struct DotOpMFMAConversionHelper {
     auto elems = unpackLLElements(loc, value, rewriter);
     // number of kBase-element vectors
     int numVecInKBase = kRepInKWidth * kWidth / kBase;
+    if (numVecInKBase == 0) {
+      numVecInKBase = 1;
+      nonKRep /= kBase / (kRepInKWidth * kWidth);
+      assert(nonKRep > 0 && "nonKrep too small");
+    }
     ValueTable dotOpVals;
 
-    SmallVector<int64_t> bounds = {batch, nonKRep, numVecInKBase, kBase};
-    SmallVector<int64_t> strides = computeStrides(bounds);
+    SmallVector<int64_t> strides =
+        computeStrides({batch, nonKRep, numVecInKBase, kBase});
     for (int b = 0; b < batch; ++b) {
       for (int nonK = 0; nonK < nonKRep; nonK++) {
         for (int kBaseVec = 0; kBaseVec < numVecInKBase; kBaseVec++) {
@@ -520,17 +556,19 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
 
   Value generateScaledMFMAOp(StringRef intrinsicName, Value valA, Value valB,
                              Value valC, Value valScaleA, Value valScaleB,
-                             Type elemTypeA, Type elemTypeB) const {
+                             Type elemTypeA, Type elemTypeB, int opSelA,
+                             int opSelB) const {
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto resType = valC.getType();
-    Value zeroFlag = b.i32_val(0);
+    Value valOpSelA = b.i32_val(opSelA);
+    Value valOpSelB = b.i32_val(opSelB);
     OperationState loweredOp(loc, intrinsicName);
     int32_t cbsz = getMfmaF8F6F4MatrixFormat(elemTypeA);
     int32_t blgp = getMfmaF8F6F4MatrixFormat(elemTypeB);
     assert((cbsz != -1) && (blgp != -1));
     loweredOp.addTypes(resType);
     loweredOp.addOperands({valA, valB, valC, b.i32_val(cbsz), b.i32_val(blgp),
-                           zeroFlag, valScaleA, zeroFlag, valScaleB});
+                           valOpSelA, valScaleA, valOpSelB, valScaleB});
     return rewriter.create(loweredOp)->getResult(0);
   }
 
@@ -612,8 +650,6 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
     // better way to get it when adapting other data types. Similar to
     // scaleKBase
     constexpr int scaleKWidth = 1;
-    constexpr int scaleKBase = 1;
-
     Value loadedA = adaptor.getA();
     Value loadedB = adaptor.getB();
     Value loadedAScale = adaptor.getAScale();
@@ -625,6 +661,27 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
     auto numRepK = repA[2];
     auto numRepB = repA[0];
     assert(repA[0] == repB[0]);
+
+    // Scaled MFMA instructions expect scale operands as 32-bit values,
+    // even though each individual scale is only 8 bits. To reduce register
+    // usage, we pack 4 scales into a single 32-bit value and use the opSel
+    // field to select the appropriate byte during execution. Packing is done
+    // along the K dimension first; if there aren’t enough values in K, we
+    // continue along the non-K dimension.
+    // TODO: Support opSel selection for constant scales stored in SGPRs.
+    const int scaleAKBase =
+        isAScaleConstant ? 1 : std::min(4, static_cast<int>(numRepK * numRepM));
+    const int scaleBKBase =
+        isBScaleConstant ? 1 : std::min(4, static_cast<int>(numRepK * numRepN));
+
+    int akPackedVals =
+        isAScaleConstant ? 1 : std::min(4, static_cast<int>(numRepK));
+    int bkPackedVals =
+        isBScaleConstant ? 1 : std::min(4, static_cast<int>(numRepK));
+
+    assert(scaleAKBase % akPackedVals == 0 && scaleBKBase % bkPackedVals == 0);
+    int aNonKPackedVals = scaleAKBase / akPackedVals;
+    int bNonKPackedVals = scaleBKBase / bkPackedVals;
 
     auto operandA = getValuesFromDotOperandLayoutStruct(
         loadedA, numRepB, numRepM, numRepK, aKWidth, aKBase,
@@ -640,13 +697,13 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
     if (existBothScales) {
       auto aScaleTensorTy = cast<RankedTensorType>(aScale.getType());
       operandAScale = getValuesFromDotOperandLayoutStruct(
-          loadedAScale, numRepB, numRepM, numRepK, scaleKWidth, scaleKBase,
+          loadedAScale, numRepB, numRepM, numRepK, scaleKWidth, scaleAKBase,
           aScaleTensorTy.getElementType(), allowXF32, /*preserveBF16=*/false,
           isAScaleConstant);
 
       auto bScaleTensorTy = cast<RankedTensorType>(bScale.getType());
       operandBScale = getValuesFromDotOperandLayoutStruct(
-          loadedBScale, numRepB, numRepN, numRepK, scaleKWidth, scaleKBase,
+          loadedBScale, numRepB, numRepN, numRepK, scaleKWidth, scaleBKBase,
           bScaleTensorTy.getElementType(), allowXF32, /*preserveBF16=*/false,
           isBScaleConstant);
     }
@@ -665,52 +722,92 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
     Value firstMfma;
     auto tb = TritonLLVMOpBuilder(loc, rewriter);
     auto vecTy = vec_ty(dstElemTy, elemsPerVec);
-    for (int b = 0; b < numRepB; ++b) {
-      for (int m = 0; m < numRepM; ++m) {
-        for (int n = 0; n < numRepN; ++n) {
-          Value acc = tb.undef(vecTy);
-          for (unsigned v = 0; v < elemsPerVec; ++v) {
-            acc = tb.insert_element(
-                vecTy, acc,
-                fc[b * numRepM * numRepN * elemsPerVec +
-                   m * numRepN * elemsPerVec + n * elemsPerVec + v],
-                tb.i32_val(v));
-          }
-          acc = zeroAuxiliarBlocks(subBlocks, acc);
-          for (int k = 0; k < numVecInKBase; k++) {
-            if (existBothScales) {
-              if (mfmaLayout.getIsTransposed()) {
-                acc = generateScaledMFMAOp(
-                    intrinsicName, operandB[{b, n, k}], operandA[{b, m, k}],
-                    acc, operandBScale[{b, n, k}], operandAScale[{b, m, k}],
-                    maybeMfmaIntrinsic->bElementType,
-                    maybeMfmaIntrinsic->aElementType);
-              } else {
-                acc = generateScaledMFMAOp(
-                    intrinsicName, operandA[{b, m, k}], operandB[{b, n, k}],
-                    acc, operandAScale[{b, m, k}], operandBScale[{b, n, k}],
-                    maybeMfmaIntrinsic->aElementType,
-                    maybeMfmaIntrinsic->bElementType);
-              }
-            } else {
-              if (mfmaLayout.getIsTransposed()) {
-                acc = generateScaledMFMAOp(intrinsicName, operandB[{b, n, k}],
-                                           operandA[{b, m, k}], acc,
-                                           maybeMfmaIntrinsic->bElementType,
-                                           maybeMfmaIntrinsic->aElementType);
-              } else {
-                acc = generateScaledMFMAOp(intrinsicName, operandA[{b, m, k}],
-                                           operandB[{b, n, k}], acc,
-                                           maybeMfmaIntrinsic->aElementType,
-                                           maybeMfmaIntrinsic->bElementType);
-              }
+
+    // 2-step pingpong got local_loads + dot_scaled in the dot cluster
+    // from the first step in the transform pingpong pass.
+    // Here, in the second step, it splits operations into two clusters
+    // The first cluster has local_load with mfma from the first half of K
+    // and the second cluster with the other half K of mfma.
+    // By splitting in K dim, we can retire registers used by the
+    // first half of mfma, backend compiler is supposed to schedule it.
+    int halfPoint = numVecInKBase * numRepB * numRepM * numRepN / 2;
+    int currIter = 0;
+    bool is2Step = false;
+    int innerK = 0, outerK = 0, innerKBound = 1, outerKBound = 1;
+    // In order to split mfma by K, change the outermost loop iterates
+    // over the K in emitting the mfma operations.
+    if (auto pingpongUnitAttr = op->getAttr("pingpong_2step")) {
+      is2Step = true;
+      outerKBound = numVecInKBase;
+    } else
+      innerKBound = numVecInKBase;
+
+    for (outerK = 0; outerK < outerKBound; outerK++) {
+      for (int b = 0; b < numRepB; ++b) {
+        for (int m = 0; m < numRepM; ++m) {
+          for (int n = 0; n < numRepN; ++n) {
+            // Insert pingpong cluster barrier when needed.
+            if (is2Step && currIter++ == halfPoint) {
+              rewriter.create<ROCDL::SchedBarrier>(loc, 0);
+              rewriter.create<ROCDL::SBarrierOp>(loc);
+              rewriter.create<ROCDL::SchedBarrier>(loc, 0);
             }
-            if (!firstMfma)
-              firstMfma = acc;
+            Value acc = tb.undef(vecTy);
+            for (unsigned v = 0; v < elemsPerVec; ++v) {
+              acc = tb.insert_element(
+                  vecTy, acc,
+                  fc[b * numRepM * numRepN * elemsPerVec +
+                     m * numRepN * elemsPerVec + n * elemsPerVec + v],
+                  tb.i32_val(v));
+            }
+            acc = zeroAuxiliarBlocks(subBlocks, acc);
+            for (innerK = 0; innerK < innerKBound; innerK++) {
+              int k = is2Step ? outerK : innerK;
+              if (existBothScales) {
+                int akScale = k / akPackedVals;
+                int bkScale = k / bkPackedVals;
+                int opSelA = 0, opSelB = 0;
+
+                int mScale = m / aNonKPackedVals;
+                int nScale = n / bNonKPackedVals;
+                opSelA = (m * numRepK + k) % (aNonKPackedVals * akPackedVals);
+                opSelB = (n * numRepK + k) % (bNonKPackedVals * bkPackedVals);
+
+                if (mfmaLayout.getIsTransposed()) {
+                  acc = generateScaledMFMAOp(
+                      intrinsicName, operandB[{b, n, k}], operandA[{b, m, k}],
+                      acc, operandBScale[{b, nScale, bkScale}],
+                      operandAScale[{b, mScale, akScale}],
+                      maybeMfmaIntrinsic->bElementType,
+                      maybeMfmaIntrinsic->aElementType, opSelB, opSelA);
+                } else {
+                  acc = generateScaledMFMAOp(
+                      intrinsicName, operandA[{b, m, k}], operandB[{b, n, k}],
+                      acc, operandAScale[{b, mScale, akScale}],
+                      operandBScale[{b, nScale, bkScale}],
+                      maybeMfmaIntrinsic->aElementType,
+                      maybeMfmaIntrinsic->bElementType, opSelA, opSelB);
+                }
+              } else {
+                if (mfmaLayout.getIsTransposed()) {
+                  acc = generateScaledMFMAOp(intrinsicName, operandB[{b, n, k}],
+                                             operandA[{b, m, k}], acc,
+                                             maybeMfmaIntrinsic->bElementType,
+                                             maybeMfmaIntrinsic->aElementType);
+                } else {
+                  acc = generateScaledMFMAOp(intrinsicName, operandA[{b, m, k}],
+                                             operandB[{b, n, k}], acc,
+                                             maybeMfmaIntrinsic->aElementType,
+                                             maybeMfmaIntrinsic->bElementType);
+                }
+              }
+              if (!firstMfma)
+                firstMfma = acc;
+            }
+            acc = reduceSubBlocks(subBlocks, acc);
+            adjustAccForSmallKDim(fc, acc, dstElemTy, b, m, n, numRepM, numRepN,
+                                  kDimInstrSize, kDimOperandSize, elemsPerVec);
           }
-          acc = reduceSubBlocks(subBlocks, acc);
-          adjustAccForSmallKDim(fc, acc, dstElemTy, b, m, n, numRepM, numRepN,
-                                kDimInstrSize, kDimOperandSize, elemsPerVec);
         }
       }
     }

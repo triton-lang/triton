@@ -547,6 +547,30 @@ class JITFunction(KernelInterface[T]):
         binder = create_function_from_signature(self.signature, self.params, backend)
         return {}, target, backend, binder
 
+    def _pack_args(self, backend, kwargs, bound_args, specialization, options):
+        # options
+        options = backend.parse_options(kwargs)
+        # signature
+        sigkeys = [x.name for x in self.params]
+        sigvals = [x[0] for x in specialization]
+        signature = {k: v for (k, v) in zip(sigkeys, sigvals)}
+        # check arguments
+        assert "device_type" not in kwargs, "device_type option is deprecated; current target will be used"
+        assert "device" not in kwargs, "device option is deprecated; current device will be used"
+        assert "stream" not in kwargs, "stream option is deprecated; current stream will be used"
+        for k in kwargs:
+            if k not in options.__dict__ and k not in sigkeys:
+                raise KeyError("Keyword argument %s was specified but unrecognised" % k)
+        # constexprs
+        constexprs = find_paths_if(sigvals, lambda _, val: val == "constexpr")
+        constexprs = {path: get_iterable_path(list(bound_args.values()), path) for path in constexprs}
+        # attributes
+        attrvals = [x[1] for x in specialization]
+        attrs = find_paths_if(attrvals, lambda _, x: isinstance(x, str))
+        attrs = {k: backend.parse_attr(get_iterable_path(attrvals, k)) for k in attrs}
+
+        return options, signature, constexprs, attrs
+
     def run(self, *args, grid, warmup, **kwargs):
         kwargs["debug"] = kwargs.get("debug", self.debug) or knobs.runtime.debug
 
@@ -569,26 +593,8 @@ class JITFunction(KernelInterface[T]):
 
         # Kernel is not cached; we have to compile.
         if kernel is None:
-            # options
-            options = backend.parse_options(kwargs)
-            # signature
-            sigkeys = [x.name for x in self.params]
-            sigvals = [x[0] for x in specialization]
-            signature = {k: v for (k, v) in zip(sigkeys, sigvals)}
-            # check arguments
-            assert "device_type" not in kwargs, "device_type option is deprecated; current target will be used"
-            assert "device" not in kwargs, "device option is deprecated; current device will be used"
-            assert "stream" not in kwargs, "stream option is deprecated; current stream will be used"
-            for k in kwargs:
-                if k not in options.__dict__ and k not in sigkeys:
-                    raise KeyError("Keyword argument %s was specified but unrecognised" % k)
-            # constexprs
-            constexprs = find_paths_if(sigvals, lambda _, val: val == "constexpr")
-            constexprs = {path: get_iterable_path(list(bound_args.values()), path) for path in constexprs}
-            # attributes
-            attrvals = [x[1] for x in specialization]
-            attrs = find_paths_if(attrvals, lambda _, x: isinstance(x, str))
-            attrs = {k: backend.parse_attr(get_iterable_path(attrvals, k)) for k in attrs}
+            options, signature, constexprs, attrs = self._pack_args(backend, kwargs, bound_args, specialization,
+                                                                    options)
 
             kernel = self._do_compile(key, signature, device, constexprs, options, attrs, warmup)
             if kernel is None:
@@ -632,7 +638,7 @@ class JITFunction(KernelInterface[T]):
         self.signature = inspect.signature(fn)
         self.do_not_specialize = do_not_specialize
         self.do_not_specialize_on_alignment = do_not_specialize_on_alignment
-        self.starting_line_number = inspect.getsourcelines(fn)[1]
+        self.raw_src, self.starting_line_number = inspect.getsourcelines(fn)
         self._repr = repr
         self._fn_name = get_full_name(fn)
         self.launch_metadata = launch_metadata
@@ -644,7 +650,7 @@ class JITFunction(KernelInterface[T]):
             self.params.append(KernelParam(i, param, dns, dns_oa))
 
         # function source code (without decorators)
-        src = textwrap.dedent(inspect.getsource(fn))
+        src = textwrap.dedent("".join(self.raw_src))
         src = src[re.search(r"^def\s+\w+\s*\(", src, re.MULTILINE).start():]
         self._unsafe_update_src(src)
         # cache of just-in-time compiled kernels
@@ -757,7 +763,7 @@ class JITFunction(KernelInterface[T]):
             return None
         src = self.ASTSource(self, signature, constexprs, attrs)
 
-        async_mode = _async_compile.active_mode
+        async_mode = _async_compile.active_mode.get()
         if async_mode is not None:
 
             env_vars = get_cache_invalidating_env_vars()
@@ -977,13 +983,13 @@ def get_jit_fn_file_line(fn):
     while not isinstance(base_fn, JITFunction):
         base_fn = base_fn.fn
     file_name = base_fn.fn.__code__.co_filename
-    lines, begin_line = inspect.getsourcelines(base_fn.fn)
+    begin_line = base_fn.starting_line_number
     # Match the following pattern:
     # @triton.autotune(...) <- foo.__code__.co_firstlineno
     # @triton.heuristics(...)
     # @triton.jit
     # def foo(...): <- this line is the first line
-    for idx, line in enumerate(lines):
+    for idx, line in enumerate(base_fn.raw_src):
         if line.strip().startswith("def "):
             begin_line += idx
             break

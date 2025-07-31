@@ -383,8 +383,14 @@ def TT_AtomicRMWOp : TT_Op<"atomic_rmw", [
     }];
 }
 
-def TT_AtomicCASOp : TT_Op<"atomic_cas", [SameOperandsAndResultShape,
-                                          SameOperandsAndResultEncoding]> {
+def TT_AtomicCASOp : TT_Op<"atomic_cas", [
+  SameOperandsAndResultShape,
+  SameOperandsAndResultEncoding,
+  TypesMatchWith<"ptr type matches cmp type", "cmp", "ptr",
+                  "getPointerTypeSameShape($_self)">,
+  TypesMatchWith<"ptr type matches value type", "val", "ptr",
+                  "getPointerTypeSameShape($_self)">
+]> {
     let summary = "atomic cas";
 
     let description = [{
@@ -791,6 +797,26 @@ def TT_ScanReturnOp: TT_Op<"scan.return",
     let assemblyFormat = "$result attr-dict `:` type($result)";
 }
 
+//
+// Map Elementwise op
+//
+def TT_MapElementwiseOp: TT_Op<"map_elementwise", [SameOperandsAndResultEncoding,
+                                                   SameOperandsAndResultShape,
+                                                   RecursiveMemoryEffects]> {
+    let summary = "Map a scalar subregion over a tensor";
+    let arguments = (ins Variadic<TT_Tensor>:$srcs, I32Attr:$pack);
+    let results = (outs Variadic<TT_Tensor>:$result);
+    let regions = (region AnyRegion:$scalarOp);
+    let hasVerifier = 1;
+    let hasRegionVerifier = 1;
+}
+
+def TT_MapElementwiseReturnOp: TT_Op<"map_elementwise.return",
+                               [HasParent<"MapElementwiseOp">, Pure, Terminator, ReturnLike]> {
+    let summary = "terminator for map elementwise operator";
+    let arguments = (ins Variadic<AnyType>:$result);
+    let assemblyFormat = "attr-dict ($result^ `:` type($result))?";
+}
 
 //
 // External Elementwise op
@@ -1249,7 +1275,7 @@ def ReturnOp : TT_Op<"return", [Pure, HasParent<"FuncOp">, /*MemRefsNormalizable
   let arguments = (ins Variadic<AnyType>:$srcs);
 
   let builders = [OpBuilder<(ins), [{
-    build($_builder, $_state, std::nullopt);
+    build($_builder, $_state, mlir::ValueRange());
   }]>];
 
   let assemblyFormat = "attr-dict ($srcs^ `:` type($srcs))?";

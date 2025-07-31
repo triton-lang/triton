@@ -611,52 +611,27 @@ struct AtomicCASOpConversion
                  : valueTy;
     auto valueElemNBits = valueElemTy.getIntOrFloatBitWidth();
     auto elemsPerThread = getTotalElemsPerThread(op.getVal().getType());
-    // vec = 1 for scalar
-    auto vec = getVectorSize(op.getPtr());
-    auto vecOrig = vec;
-    // tensor
-    if (tensorTy) {
-      auto valTy = cast<RankedTensorType>(op.getVal().getType());
-      vec = std::min<unsigned>(vec, valTy.getElementType().isF16() ? 2 : 1);
-    }
-
-    if (vec == 1 && elemsPerThread > 1)
-      op->emitRemark() << "Warning: vectorization fails vec = " << vec
-                       << " origin vec = " << vecOrig
-                       << " elemsPerThread = " << elemsPerThread << "\n";
-
     auto freeVarMasks = getFreeVariableMasks(op.getPtr().getType());
     Value threadPred =
         emitRedundantThreadPredicate(freeVarMasks, rewriter, loc, targetInfo);
     uint32_t regMask = freeVarMasks[str_attr("reg")];
 
-    auto vecTy = vec_ty(valueElemTy, vec);
     SmallVector<Value> resultVals(elemsPerThread);
 
-    for (size_t i = 0; i < elemsPerThread; i += vec) {
-      if (auto canonicalVecStart = getCanonicalIndex(i, regMask);
-          canonicalVecStart != i) {
+    for (size_t i = 0; i < elemsPerThread; i += 1) {
+      if (auto canonicalStart = getCanonicalIndex(i, regMask);
+          canonicalStart != i) {
         // For redundant registers, refer back to the canonical result
-        for (auto iVec = 0; iVec < vec; ++iVec) {
-          resultVals[i + iVec] = resultVals[canonicalVecStart + iVec];
-        }
+        resultVals[i] = resultVals[canonicalStart];
         continue;
       }
 
-      Value casVal = b.undef(vecTy);
-      for (int ii = 0; ii < vec; ++ii) {
-        Value iiVal = createIndexAttrConstant(
-            rewriter, loc, getTypeConverter()->getIndexType(), ii);
-        casVal = b.insert_element(vecTy, casVal, valElements[i + ii], iiVal);
-      }
-
-      Value casPtr = ptrElements[i];
+      Value casVal = valElements[i];
       Value casCmp = cmpElements[i];
-      casVal = valElements[i];
+      Value casPtr = ptrElements[i];
       PTXBuilder ptxBuilderAtomicCAS;
-      std::string tyId = valueElemNBits * vec == 64
-                             ? "l"
-                             : (valueElemNBits * vec == 32 ? "r" : "h");
+      std::string tyId =
+          valueElemNBits == 64 ? "l" : (valueElemNBits == 32 ? "r" : "h");
       auto *dstOpr = ptxBuilderAtomicCAS.newOperand("=" + tyId, /*init=*/true);
       auto *ptrOpr = ptxBuilderAtomicCAS.newAddrOperand(casPtr, "l");
       auto *cmpOpr = ptxBuilderAtomicCAS.newOperand(casCmp, tyId);
@@ -671,16 +646,12 @@ struct AtomicCASOpConversion
       atom(dstOpr, ptrOpr, cmpOpr, valOpr).maybePredicate(threadPred);
 
       if (tensorTy) {
-        auto retType = vec == 1 ? valueElemTy : vecTy;
+        auto retType = valueElemTy;
         auto ret = ptxBuilderAtomicCAS.launch(rewriter, loc, retType);
-        for (int ii = 0; ii < vec; ++ii) {
-          resultVals[i + ii] =
-              vec == 1 ? ret
-                       : b.extract_element(valueElemTy, ret, b.i32_val(ii));
-        }
+        resultVals[i] = ret;
       } else {
         auto old = ptxBuilderAtomicCAS.launch(rewriter, loc, valueElemTy);
-        if (!atomicNeedsSharedMemory(op.getResult())) {
+        if (op.getResult().use_empty()) {
           rewriter.eraseOp(op);
           return success();
         }
@@ -699,15 +670,12 @@ struct AtomicCASOpConversion
         createBarrier(rewriter, loc, numCTAs);
         Value ret = b.load(valueElemTy, atomPtr);
         rewriter.replaceOp(op, {ret});
+        return success();
       }
     }
 
-    if (tensorTy) {
-      Type structTy = getTypeConverter()->convertType(tensorTy);
-      Value resultStruct = packLLElements(loc, getTypeConverter(), resultVals,
-                                          rewriter, structTy);
-      rewriter.replaceOp(op, {resultStruct});
-    }
+    finalizeTensorAtomicResults(op, tensorTy, rewriter, resultVals, valueElemTy,
+                                b, threadPred, targetInfo, getTypeConverter());
     return success();
   }
 };
@@ -776,6 +744,7 @@ struct AtomicRMWOpConversion
     return true;
   }
 
+public:
   LogicalResult
   matchAndRewrite(triton::AtomicRMWOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
@@ -884,7 +853,7 @@ struct AtomicRMWOpConversion
             ScopeMap[op.getScope()]);
 
         auto ASMReturnTy = void_ty(ctx);
-        if (!atomicNeedsSharedMemory(op.getResult())) {
+        if (op.getResult().use_empty()) {
           rewriter.eraseOp(op);
           return success();
         }
@@ -896,7 +865,7 @@ struct AtomicRMWOpConversion
         createBarrier(rewriter, loc, numCTAs);
         Value ret = b.load(valueElemTy, atomPtr);
         rewriter.replaceOp(op, {ret});
-        continue;
+        return success();
       }
 
       // Let LLVM handle compare+swap loop; branch-based pred should be fine
@@ -919,7 +888,7 @@ struct AtomicRMWOpConversion
 
         // Enter into predicate block
         rewriter.setInsertionPointToEnd(curBlock);
-        bool doesAtomicNeedMEM = atomicNeedsSharedMemory(op.getResult());
+        bool doesAtomicNeedMEM = !op.getResult().use_empty();
 
         // Setup for SMEM Sync case
         Value atomPtr = tensorTy || !doesAtomicNeedMEM
@@ -990,6 +959,7 @@ struct AtomicRMWOpConversion
           b.barrier();
           Value ret = b.load(valueElemTy, atomPtr);
           rewriter.replaceOp(op, {ret});
+          return success();
         }
         continue;
       }
@@ -1090,7 +1060,7 @@ struct AtomicRMWOpConversion
           retType = valueElemTy;
         }
 
-        auto ret = ptxBuilderAtomicRMW.launch(rewriter, loc, retType);
+        Value ret = ptxBuilderAtomicRMW.launch(rewriter, loc, retType);
 
         if (vec > 1) {
           for (unsigned ii = 0; ii < vec; ++ii) {
@@ -1104,12 +1074,11 @@ struct AtomicRMWOpConversion
         } else {
           resultVals[i] = ret;
         }
-
       } else {
         auto ASMReturnTy = void_ty(ctx);
         atom(dstOpr, ptrOpr, valOpr).maybePredicate(pred);
         auto old = ptxBuilderAtomicRMW.launch(rewriter, loc, valueElemTy);
-        if (!atomicNeedsSharedMemory(op.getResult())) {
+        if (op.getResult().use_empty()) {
           rewriter.eraseOp(op);
           return success();
         }
@@ -1121,14 +1090,11 @@ struct AtomicRMWOpConversion
         createBarrier(rewriter, loc, numCTAs);
         Value ret = b.load(valueElemTy, atomPtr);
         rewriter.replaceOp(op, {ret});
+        return success();
       }
     }
-    if (tensorTy) {
-      Type structTy = getTypeConverter()->convertType(tensorTy);
-      Value resultStruct = packLLElements(loc, getTypeConverter(), resultVals,
-                                          rewriter, structTy);
-      rewriter.replaceOp(op, {resultStruct});
-    }
+    finalizeTensorAtomicResults(op, tensorTy, rewriter, resultVals, valueElemTy,
+                                b, threadPred, targetInfo, getTypeConverter());
     return success();
   }
 };
@@ -1230,7 +1196,7 @@ struct AsyncCopyGlobalToLocalOpConversion
         emitRedundantThreadPredicate(freeVarMasks, rewriter, loc, targetInfo);
 
     auto emitCpAsync = [&b, threadPred, ptrTy, hasMask = bool(llMask)](
-                           ConversionPatternRewriter &rewriter, Location loc,
+                           RewriterBase &rewriter, Location loc,
                            ArrayRef<Value> vals, Value shmemAddr, int startIdx,
                            VectorType vecTy) -> SmallVector<Value> {
       assert(isa<VectorType>(vecTy));
@@ -1284,8 +1250,10 @@ struct AsyncCopyGlobalToLocalOpConversion
         {str_attr("offset")});
     auto affineOffset = smemObj.getShmemOffset(loc, rewriter, dstTy);
     auto maskSpanAffineOffset = SharedMemoryObject::getMaskSpanOffsets(dstTy);
-    lowerLdSt(loc, ctx, cvt, vals, resElemTy, smemObj.getBase(), affineOffset,
-              maskSpanAffineOffset, rewriter, targetInfo, maxVec, emitCpAsync);
+    lowerLdSt(
+        loc, ctx, cvt, vals, resElemTy, smemObj.getBase(),
+        [](Value v) { return v; }, affineOffset, maskSpanAffineOffset, rewriter,
+        targetInfo, maxVec, emitCpAsync);
 
     // Drop the result token.
     Value zero = rewriter.create<LLVM::ConstantOp>(

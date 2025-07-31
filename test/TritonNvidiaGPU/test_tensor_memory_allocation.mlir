@@ -98,7 +98,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 
     // CHECK: ttng.tmem_alloc {tensor_memory_col_offset = 128 : i32, tensor_memory_row_offset = 0 : i32}
     %6 = ttng.tmem_alloc : () -> !ttg.memdesc<2x128x128xf32, #tmem, #ttng.tensor_memory, mutable>
-    %s = ttg.memdesc_subview %6[%c1, %c0, %c0] : !ttg.memdesc<2x128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    %s = ttg.memdesc_index %6, %c1 : !ttg.memdesc<2x128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
 
     // CHECK: ttng.tmem_alloc %{{.+}} {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32}
     %7 = ttng.tmem_alloc %cst2 : (tensor<128x64xf32, #blocked>) -> !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory, mutable>
@@ -254,7 +254,7 @@ tt.func @mma_lhs_tmem(
   // CHECK-NOT: tensor_memory_row_offset
   %a = ttng.tmem_alloc : () -> !ttg.memdesc<64x64xf16, #tmem, #ttng.tensor_memory, mutable>
   %c = ttng.tmem_alloc : () -> !ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable>
-  ttng.tc_gen5_mma %a, %b, %c, %useAcc, %pred, %barrier[%barrierPred] :
+  ttng.tc_gen5_mma %a, %b, %c, %useAcc, %pred, %barrier[%barrierPred] {is_async} :
     !ttg.memdesc<64x64xf16, #tmem, #ttng.tensor_memory, mutable>,
     !ttg.memdesc<64x64xf16, #shared1, #ttg.shared_memory>,
     !ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable>,
@@ -276,7 +276,7 @@ tt.func @mma_scaled_lhs_tmem(
   // CHECK-NOT: tensor_memory_row_offset
   %a = ttng.tmem_alloc : () -> !ttg.memdesc<64x64xf16, #tmem, #ttng.tensor_memory, mutable>
   %c = ttng.tmem_alloc : () -> !ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable>
-  ttng.tc_gen5_mma_scaled %a, %b, %c, %scale_a, %scale_b, %useAcc, %pred lhs = e2m1 rhs = e2m1, %barrier[%barrierPred] :
+  ttng.tc_gen5_mma_scaled %a, %b, %c, %scale_a, %scale_b, %useAcc, %pred lhs = e2m1 rhs = e2m1, %barrier[%barrierPred] {is_async} :
     !ttg.memdesc<64x64xf16, #tmem, #ttng.tensor_memory, mutable>,
     !ttg.memdesc<64x64xf16, #shared1, #ttg.shared_memory>,
     !ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable>,
@@ -300,7 +300,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, ttg.shar
 // CHECK-LABEL: @alloc_warp_specialize_explicit_capture_subview
 tt.func @alloc_warp_specialize_explicit_capture_subview() {
   // CHECK: ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32}
-  %0 = ttg.local_alloc {allocation.offset = 196880 : i32} : () -> !ttg.memdesc<2xi64, #shared, #smem, mutable>
+  %0 = ttg.local_alloc {allocation.offset = 196880 : i32} : () -> !ttg.memdesc<2x1xi64, #shared, #smem, mutable>
   %1 = ttng.tmem_alloc : () -> !ttg.memdesc<1x64x128xbf16, #tmem1, #ttng.tensor_memory, mutable>
   %2 = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<2x128x128xbf16, #shared1, #smem, mutable>
   // CHECK: ttng.tmem_alloc {tensor_memory_col_offset = 64 : i32, tensor_memory_row_offset = 0 : i32}
@@ -309,25 +309,25 @@ tt.func @alloc_warp_specialize_explicit_capture_subview() {
   default {
     ttg.warp_yield
   }
-  partition0(%arg0: !ttg.memdesc<2x128x128xbf16, #shared1, #smem, mutable>, %arg1: !ttg.memdesc<1x64x128xbf16, #tmem1, #ttng.tensor_memory, mutable>, %arg2: !ttg.memdesc<1x64x128xf32, #tmem, #ttng.tensor_memory, mutable>, %arg3: !ttg.memdesc<2xi64, #shared, #smem, mutable>) num_warps(1) {
+  partition0(%arg0: !ttg.memdesc<2x128x128xbf16, #shared1, #smem, mutable>, %arg1: !ttg.memdesc<1x64x128xbf16, #tmem1, #ttng.tensor_memory, mutable>, %arg2: !ttg.memdesc<1x64x128xf32, #tmem, #ttng.tensor_memory, mutable>, %arg3: !ttg.memdesc<2x1xi64, #shared, #smem, mutable>) num_warps(1) {
     %true = arith.constant true
     %c0_i32 = arith.constant 0 : i32
 
-    %b = ttg.memdesc_subview %arg0[%c0_i32, %c0_i32, %c0_i32] : !ttg.memdesc<2x128x128xbf16, #shared1, #smem, mutable> -> !ttg.memdesc<128x128xbf16, #shared1, #smem>
-    %a = ttg.memdesc_subview %arg1[%c0_i32, %c0_i32, %c0_i32] : !ttg.memdesc<1x64x128xbf16, #tmem1, #ttng.tensor_memory, mutable> -> !ttg.memdesc<64x128xbf16, #tmem1, #ttng.tensor_memory, mutable, 1x64x128>
-    %d = ttg.memdesc_subview %arg2[%c0_i32, %c0_i32, %c0_i32] : !ttg.memdesc<1x64x128xf32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<64x128xf32, #tmem, #ttng.tensor_memory, mutable, 1x64x128>
-    %barrier = ttg.memdesc_subview %arg3[%c0_i32] : !ttg.memdesc<2xi64, #shared, #smem, mutable> -> !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    %b = ttg.memdesc_index %arg0, %c0_i32 : !ttg.memdesc<2x128x128xbf16, #shared1, #smem, mutable> -> !ttg.memdesc<128x128xbf16, #shared1, #smem>
+    %a = ttg.memdesc_index %arg1, %c0_i32 : !ttg.memdesc<1x64x128xbf16, #tmem1, #ttng.tensor_memory, mutable> -> !ttg.memdesc<64x128xbf16, #tmem1, #ttng.tensor_memory, mutable, 1x64x128>
+    %d = ttg.memdesc_index %arg2, %c0_i32 : !ttg.memdesc<1x64x128xf32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<64x128xf32, #tmem, #ttng.tensor_memory, mutable, 1x64x128>
+    %barrier = ttg.memdesc_index %arg3, %c0_i32 : !ttg.memdesc<2x1xi64, #shared, #smem, mutable> -> !ttg.memdesc<1xi64, #shared, #smem, mutable>
 
-    ttng.tc_gen5_mma %a, %b, %d, %true, %true, %barrier[%true] : !ttg.memdesc<64x128xbf16, #tmem1, #ttng.tensor_memory, mutable, 1x64x128>, !ttg.memdesc<128x128xbf16, #shared1, #smem>, !ttg.memdesc<64x128xf32, #tmem, #ttng.tensor_memory, mutable, 1x64x128>, !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.tc_gen5_mma %a, %b, %d, %true, %true, %barrier[%true] {is_async} : !ttg.memdesc<64x128xbf16, #tmem1, #ttng.tensor_memory, mutable, 1x64x128>, !ttg.memdesc<128x128xbf16, #shared1, #smem>, !ttg.memdesc<64x128xf32, #tmem, #ttng.tensor_memory, mutable, 1x64x128>, !ttg.memdesc<1xi64, #shared, #smem, mutable>
     ttg.warp_return
-  } : (!ttg.memdesc<2x128x128xbf16, #shared1, #smem, mutable>, !ttg.memdesc<1x64x128xbf16, #tmem1, #ttng.tensor_memory, mutable>, !ttg.memdesc<1x64x128xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.memdesc<2xi64, #shared, #smem, mutable>) -> ()
+  } : (!ttg.memdesc<2x128x128xbf16, #shared1, #smem, mutable>, !ttg.memdesc<1x64x128xbf16, #tmem1, #ttng.tensor_memory, mutable>, !ttg.memdesc<1x64x128xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.memdesc<2x1xi64, #shared, #smem, mutable>) -> ()
   tt.return
 }
 
 // CHECK-LABEL: @alloc_warp_specialize_explicit_capture
 tt.func @alloc_warp_specialize_explicit_capture() {
   // CHECK: ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32}
-  %0 = ttg.local_alloc {allocation.offset = 196880 : i32} : () -> !ttg.memdesc<2xi64, #shared, #smem, mutable>
+  %0 = ttg.local_alloc {allocation.offset = 196880 : i32} : () -> !ttg.memdesc<2x1xi64, #shared, #smem, mutable>
   %1 = ttng.tmem_alloc : () -> !ttg.memdesc<64x128xbf16, #tmem1, #ttng.tensor_memory, mutable>
   %2 = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<2x128x128xbf16, #shared1, #smem, mutable>
   // CHECK: ttng.tmem_alloc {tensor_memory_col_offset = 64 : i32, tensor_memory_row_offset = 0 : i32}
@@ -336,16 +336,59 @@ tt.func @alloc_warp_specialize_explicit_capture() {
   default {
     ttg.warp_yield
   }
-  partition0(%arg0: !ttg.memdesc<2x128x128xbf16, #shared1, #smem, mutable>, %arg1: !ttg.memdesc<64x128xbf16, #tmem1, #ttng.tensor_memory, mutable>, %arg2: !ttg.memdesc<64x128xf32, #tmem, #ttng.tensor_memory, mutable>, %arg3: !ttg.memdesc<2xi64, #shared, #smem, mutable>) num_warps(1) {
+  partition0(%arg0: !ttg.memdesc<2x128x128xbf16, #shared1, #smem, mutable>, %arg1: !ttg.memdesc<64x128xbf16, #tmem1, #ttng.tensor_memory, mutable>, %arg2: !ttg.memdesc<64x128xf32, #tmem, #ttng.tensor_memory, mutable>, %arg3: !ttg.memdesc<2x1xi64, #shared, #smem, mutable>) num_warps(1) {
     %true = arith.constant true
     %c0_i32 = arith.constant 0 : i32
 
-    %b = ttg.memdesc_subview %arg0[%c0_i32, %c0_i32, %c0_i32] : !ttg.memdesc<2x128x128xbf16, #shared1, #smem, mutable> -> !ttg.memdesc<128x128xbf16, #shared1, #smem>
-    %barrier = ttg.memdesc_subview %arg3[%c0_i32] : !ttg.memdesc<2xi64, #shared, #smem, mutable> -> !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    %b = ttg.memdesc_index %arg0, %c0_i32 : !ttg.memdesc<2x128x128xbf16, #shared1, #smem, mutable> -> !ttg.memdesc<128x128xbf16, #shared1, #smem>
+    %barrier = ttg.memdesc_index %arg3, %c0_i32 : !ttg.memdesc<2x1xi64, #shared, #smem, mutable> -> !ttg.memdesc<1xi64, #shared, #smem, mutable>
 
-    ttng.tc_gen5_mma %arg1, %b, %arg2, %true, %true, %barrier[%true] : !ttg.memdesc<64x128xbf16, #tmem1, #ttng.tensor_memory, mutable>, !ttg.memdesc<128x128xbf16, #shared1, #smem>, !ttg.memdesc<64x128xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.tc_gen5_mma %arg1, %b, %arg2, %true, %true, %barrier[%true] {is_async} : !ttg.memdesc<64x128xbf16, #tmem1, #ttng.tensor_memory, mutable>, !ttg.memdesc<128x128xbf16, #shared1, #smem>, !ttg.memdesc<64x128xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.memdesc<1xi64, #shared, #smem, mutable>
     ttg.warp_return
-  } : (!ttg.memdesc<2x128x128xbf16, #shared1, #smem, mutable>, !ttg.memdesc<64x128xbf16, #tmem1, #ttng.tensor_memory, mutable>, !ttg.memdesc<64x128xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.memdesc<2xi64, #shared, #smem, mutable>) -> ()
+  } : (!ttg.memdesc<2x128x128xbf16, #shared1, #smem, mutable>, !ttg.memdesc<64x128xbf16, #tmem1, #ttng.tensor_memory, mutable>, !ttg.memdesc<64x128xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.memdesc<2x1xi64, #shared, #smem, mutable>) -> ()
+  tt.return
+}
+
+}
+
+// -----
+
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 8}>
+#shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = true, elementBitWidth = 8}>
+#shared2 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#tmem = #ttng.tensor_memory_encoding<blockM = 64, blockN = 64, unpacked = true>
+#tmem_scales = #ttng.tensor_memory_scales_encoding<>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65536 : i32} {
+
+// CHECK-LABEL: @mma_lhs_tmem
+tt.func @mma_lhs_tmem(
+  %b: !ttg.memdesc<64x64xf16, #shared1, #ttg.shared_memory>,
+  %useAcc: i1,
+  %pred: i1,
+  %barrier: !ttg.memdesc<1xi64, #shared2, #ttg.shared_memory>,
+  %barrierPred: i1
+) {
+  // CHECK-COUNT-4: ttng.tmem_alloc {{.*}} tensor_memory_row_offset = 0 : i32
+  // CHECK-NOT: tensor_memory_row_offset
+  %a0 = ttng.tmem_alloc : () -> !ttg.memdesc<64x64xf16, #tmem, #ttng.tensor_memory, mutable>
+  %a1 = ttng.tmem_alloc : () -> !ttg.memdesc<64x64xf16, #tmem, #ttng.tensor_memory, mutable>
+  %a2 = ttng.tmem_alloc : () -> !ttg.memdesc<64x64xf16, #tmem, #ttng.tensor_memory, mutable>
+  %c = ttng.tmem_alloc : () -> !ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable>
+
+  %a = arith.select %barrierPred, %a0, %a1 : !ttg.memdesc<64x64xf16, #tmem, #ttng.tensor_memory, mutable>
+
+  cf.cond_br %barrierPred, ^switch, ^bb1(%a : !ttg.memdesc<64x64xf16, #tmem, #ttng.tensor_memory, mutable>)
+
+^switch:
+  cf.br ^bb1(%a2 : !ttg.memdesc<64x64xf16, #tmem, #ttng.tensor_memory, mutable>)
+
+^bb1(%lhs: !ttg.memdesc<64x64xf16, #tmem, #ttng.tensor_memory, mutable>):
+  ttng.tc_gen5_mma %lhs, %b, %c, %useAcc, %pred, %barrier[%barrierPred] {is_async} :
+    !ttg.memdesc<64x64xf16, #tmem, #ttng.tensor_memory, mutable>,
+    !ttg.memdesc<64x64xf16, #shared1, #ttg.shared_memory>,
+    !ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable>,
+    !ttg.memdesc<1xi64, #shared2, #ttg.shared_memory>
   tt.return
 }
 

@@ -1,12 +1,19 @@
+# isort: off
+# fmt: off
 import torch
 import triton
 import triton.language as tl
 from triton_kernels import target_info
 from triton_kernels.tensor_details.layout_details.blackwell_scale import unswizzle_mx_scale_bw
-from triton_kernels.numerics_details.flexpoint import float_to_flex, load_scale, nan_propagating_absmax_reduce, compute_scale
+from triton_kernels.numerics_details.flexpoint import (
+    float_to_flex,
+    load_scale,
+    nan_propagating_absmax_reduce,
+    compute_scale,
+)
+from triton_kernels.numerics_details.mxfp_details._downcast_to_mxfp import MXFP_BLOCK_SIZE
 from ._common import make_matmul_repr, matmul_launch_metadata, swizzle2d, xcd_swizzle, get_scaled_dot_format_string
 
-# fmt: off
 
 @tl.constexpr_function
 def cuda_capability_geq(major, minor):
@@ -101,13 +108,15 @@ _matmul_ogs_repr = make_matmul_repr("_p_matmul_ogs", [0, 1, 2])
 def _p_matmul_ogs(
              Y, Out, stride_y_k, stride_y_z, stride_y_m, stride_y_n,
              YExpectedScale, YActualScale, YChecksumScale,
+             stride_y_mx_z, stride_y_mx_m, stride_y_mx_n,
              X, XPtr, stride_x_z, stride_x_m, stride_x_k,
              XScale,
+             XMxScale, stride_x_mx_z, stride_x_mx_m, stride_x_mx_k,
              W, stride_w_e, stride_w_k, stride_w_n, W_TRANSPOSE: tl.constexpr,
              WScale,
              MxScale, stride_mx_e, stride_mx_k, stride_mx_n,
              B, stride_b_e, # Bias
-             M, N, K, # shapes
+             NRows, M, N, K, # shapes
              # expt data
              Betas, Gammas,
              GatherIndx,
@@ -142,12 +151,13 @@ def _p_matmul_ogs(
              TOKENS_PER_EXPT_FOR_ANNOTATION=None,
              UPCAST_INDICES:tl.constexpr=False,
              DISABLE_Y_TMA: tl.constexpr=False,
-             SWAP_XW: tl.constexpr = False):
+             SWAP_XW: tl.constexpr = False,
+             IS_EPILOGUE_DEQUANT_MXFP8: tl.constexpr = False):
     tl.static_assert(SWIZZLE_MX_VALUE is None, "NYI. Value swizzling")
     Y = Out  # Y is passed for the purposes of annotation; replace it with Out
 
     is_microscaled_format: tl.constexpr = MxScale is not None
-    MX_PACK_DIVISOR: tl.constexpr = 32
+    MX_PACK_DIVISOR: tl.constexpr = MXFP_BLOCK_SIZE
     if is_microscaled_format:
         w_type: tl.constexpr = get_dtype(W)
         tl.static_assert(w_type == tl.uint8 or (w_type == tl.float8e4nv or w_type == tl.float8e5),

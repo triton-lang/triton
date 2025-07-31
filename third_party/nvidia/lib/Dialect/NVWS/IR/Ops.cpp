@@ -13,6 +13,7 @@
 #include "Dialect/NVWS/IR/NVWSAttrEnums.cpp.inc"
 
 #define GET_OP_CLASSES
+#include "Dialect/NVWS/IR/NVWSOpInterfaces.cpp.inc"
 #include "Dialect/NVWS/IR/Ops.cpp.inc"
 
 namespace mlir::triton::nvws {
@@ -21,8 +22,9 @@ LogicalResult ArefCreateOp::verify() {
   SmallVector<int> dims;
   for (auto operand : getOperands()) {
     SmallVector<Operation *> users(operand.user_begin(), operand.user_end());
-    if (!llvm::all_of(users,
-                      [](Operation *op) { return isa<ArefCreateOp>(op); }))
+    if (!llvm::all_of(users, [](Operation *op) {
+          return isa<ArefCreateOp, gpu::LocalDeallocOp>(op);
+        }))
       return emitError("Aref buffer is used elsewhere, Aref cannot guarantee "
                        "async safety");
     auto type = operand.getType();
@@ -60,7 +62,7 @@ std::optional<Twine> static arefEnterVerify(
   auto typeArray = aref.getBaseType();
   if (typeArray.size() != resultTypes.size())
     return "Aref has different number of arguments than enter";
-  // This should probably rely on the memdescSubviewOp verifier?
+  // This should probably rely on the memdescSubsliceOp verifier?
   for (auto [orig, arg] : llvm::zip(typeArray, resultTypes)) {
     if (auto origT = dyn_cast<RankedTensorType>(orig)) {
       auto argT = dyn_cast<RankedTensorType>(arg);
@@ -78,13 +80,15 @@ std::optional<Twine> static arefEnterVerify(
 }
 
 LogicalResult ArefPutEnterOp::verify() {
-  if (auto result = arefEnterVerify(getAref().getType(), getResultTypes()))
+  if (auto result =
+          arefEnterVerify(getAref().getType(), getBuffers().getType()))
     return emitError(*result);
   return success();
 }
 
 LogicalResult ArefGetEnterOp::verify() {
-  if (auto result = arefEnterVerify(getAref().getType(), getResultTypes()))
+  if (auto result =
+          arefEnterVerify(getAref().getType(), getBuffers().getType()))
     return emitError(*result);
   return success();
 }
@@ -157,24 +161,6 @@ void CreateTokenOp::build(::mlir::OpBuilder &builder,
   auto tokenType = TokenType::get(builder.getContext());
   auto resultType = RankedTensorType::get({num}, tokenType);
   build(builder, state, resultType, num, loadType);
-}
-
-// -- AsyncCompleteOp --
-LogicalResult AsyncCompleteOp::verify() {
-  if (failed(nvidia_gpu::verifyBarrierType(*this, getAlloc().getType())))
-    return failure();
-  return success();
-}
-
-void AsyncCompleteOp::getEffects(
-    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
-        &effects) {
-  effects.emplace_back(MemoryEffects::Read::get(), &getAllocMutable(),
-                       mlir::triton::gpu::SharedMemory::get());
-  // Need a side effect to prevent compiler from reordering and removing
-  // the arrive operation.
-  effects.emplace_back(MemoryEffects::Write::get(),
-                       mlir::SideEffects::DefaultResource::get());
 }
 
 } // namespace mlir::triton::nvws

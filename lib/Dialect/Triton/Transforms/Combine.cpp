@@ -118,15 +118,6 @@ private:
     return false;
   }
 
-  static SmallVector<int> getEqualIndices(ArrayRef<int64_t> x,
-                                          ArrayRef<int64_t> y) {
-    SmallVector<int> res;
-    for (int i = 0; i < x.size(); ++i)
-      if (x[i] == y[i])
-        res.push_back(i);
-    return res;
-  }
-
 public:
   CombineBroadcastMulReducePattern(MLIRContext *context)
       : RewritePattern(ReduceOp::getOperationName(), 1, context) {}
@@ -240,6 +231,43 @@ public:
   }
 };
 
+template <typename OpTy>
+class CombineDotAddPattern : public mlir::OpRewritePattern<OpTy> {
+public:
+  using OpRewritePattern<OpTy>::OpRewritePattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(OpTy addOp, mlir::PatternRewriter &rewriter) const override {
+    auto dotOp = addOp.getRhs().template getDefiningOp<DotOp>();
+    bool isDotLHS = false;
+    if (!dotOp) {
+      dotOp = addOp.getLhs().template getDefiningOp<DotOp>();
+      if (!dotOp) {
+        return failure();
+      }
+      isDotLHS = true;
+    }
+    if (!dotOp->hasOneUse()) {
+      return failure();
+    }
+    if (!isZero(dotOp.getC()))
+      return failure();
+    rewriter.modifyOpInPlace(dotOp, [&] {
+      dotOp.getCMutable().assign(isDotLHS ? addOp.getRhs() : addOp.getLhs());
+      dotOp->moveBefore(addOp);
+    });
+    rewriter.replaceAllUsesWith(addOp, dotOp.getResult());
+    return success();
+  }
+};
+
+// AddIOp(DotOp(a, b, c), d) and c==0 => DotOp(a, b, d)
+// AddFOp(DotOp(a, b, c), d) and c==0 => DotOp(a, b, d)
+// AddIOp(d, DotOp(a, b, c)) and c==0 => DotOp(a, b, d)
+// AddFOp(d, DotOp(a, b, c)) and c==0 => DotOp(a, b, d)
+using CombineDotAddIPattern = CombineDotAddPattern<arith::AddIOp>;
+using CombineDotAddFPattern = CombineDotAddPattern<arith::AddFOp>;
+
 } // anonymous namespace
 
 class CombineOpsPass : public impl::TritonCombineOpsBase<CombineOpsPass> {
@@ -249,12 +277,8 @@ public:
     RewritePatternSet patterns(context);
     ModuleOp m = getOperation();
 
-    // Dot Add %{
     patterns.add<CombineDotAddIPattern>(context);
     patterns.add<CombineDotAddFPattern>(context);
-    patterns.add<CombineDotAddIRevPattern>(context);
-    patterns.add<CombineDotAddFRevPattern>(context);
-    // %}
     patterns.add<CombineSelectMaskedLoadPattern>(context);
     patterns.add<CombineAddPtrPattern>(context);
     patterns.add<CombineBroadcastMulReducePattern>(context);

@@ -1,9 +1,13 @@
 #include "mlir/Analysis/Liveness.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Interfaces/ControlFlowInterfaces.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/Passes.h"
 #include "triton/Analysis/Allocation.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/Traits.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 #include "llvm/ADT/EquivalenceClasses.h"
@@ -120,7 +124,7 @@ static Interval<int> getLiveIntervals(Value value, Liveness &liveness,
   SmallVector<Operation *> users(value.getUsers());
   while (!users.empty()) {
     Operation *user = users.pop_back_val();
-    if (!isa<ttg::MemDescSubviewOp, ttg::MemDescReinterpretOp>(user))
+    if (!isa<ttg::MemDescIndexOp, ttg::MemDescReinterpretOp>(user))
       continue;
     auto usersLivness = liveness.resolveLiveness(user->getResult(0));
     liveOperations.insert(liveOperations.end(), usersLivness.begin(),
@@ -175,26 +179,92 @@ static TMemChunk allocFirstFit(MemoryBitMap &memoryMap,
   return chunk;
 }
 
-static Operation *getAlloc(Value value) {
-  while (true) {
-    if (auto allocOp = value.getDefiningOp<TMEMAllocOp>())
-      return allocOp;
-    if (auto subviewOp = value.getDefiningOp<ttg::MemDescSubviewOp>()) {
-      value = subviewOp.getSrc();
+static SmallVector<Operation *> getAlloc(Value value) {
+  SmallVector<Operation *> allocs;
+  DenseSet<Value> seen;
+  SmallVector<Value> worklist{value};
+
+  while (!worklist.empty()) {
+    Value v = worklist.pop_back_val();
+    if (!seen.insert(v).second)
+      continue;
+
+    // Handle block arguments.
+    if (auto arg = dyn_cast<BlockArgument>(v)) {
+      Block *block = arg.getOwner();
+      Operation *parentOp = block->getParentOp();
+
+      // Handle block with predecessors.
+      if (!block->isEntryBlock()) {
+        for (Block *pred : block->getPredecessors()) {
+          Operation *predOp = pred->getTerminator();
+          auto br = dyn_cast<BranchOpInterface>(predOp);
+          if (!br) {
+            llvm::report_fatal_error("unhandled branch op: " +
+                                     predOp->getName().getStringRef());
+          }
+          SmallVector<Attribute> operands(br->getNumOperands());
+          auto it = llvm::find(br->getSuccessors(), block);
+          unsigned idx = std::distance(br->getSuccessors().begin(), it);
+          SuccessorOperands args = br.getSuccessorOperands(idx);
+          Value operand =
+              args.getForwardedOperands()[arg.getArgNumber() -
+                                          args.getProducedOperandCount()];
+          worklist.push_back(operand);
+        }
+        continue;
+      }
+
+      // Handle region entry arguments.
+      if (auto wsOp = dyn_cast<ttg::WarpSpecializePartitionsOp>(parentOp)) {
+        worklist.push_back(
+            wsOp.getParentOp().getExplicitCaptures()[arg.getArgNumber()]);
+      } else if (auto forOp = dyn_cast<scf::ForOp>(parentOp)) {
+        unsigned idx = arg.getArgNumber() - 1;
+        worklist.push_back(forOp.getYieldedValues()[idx]);
+        worklist.push_back(forOp.getInits()[idx]);
+      } else if (auto whileOp = dyn_cast<scf::WhileOp>(parentOp)) {
+        unsigned idx = arg.getArgNumber();
+        if (arg.getParentRegion() == &whileOp.getAfter()) {
+          worklist.push_back(whileOp.getConditionOp().getArgs()[idx]);
+        } else {
+          worklist.push_back(whileOp.getYieldedValues()[idx]);
+          worklist.push_back(whileOp.getInits()[idx]);
+        }
+      } else {
+        llvm::report_fatal_error(
+            "unhandled parent op when looking for TMEM alloc: " +
+            parentOp->getName().getStringRef());
+      }
       continue;
     }
-    if (auto reinterpOp = value.getDefiningOp<ttg::MemDescReinterpretOp>()) {
-      value = reinterpOp.getSrc();
-      continue;
+
+    Operation *defOp = v.getDefiningOp();
+    unsigned idx = cast<OpResult>(v).getResultNumber();
+    if (isa<TMEMAllocOp>(defOp)) {
+      allocs.push_back(defOp);
+    } else if (defOp->hasTrait<OpTrait::MemDescViewTrait>()) {
+      worklist.push_back(defOp->getOperand(0));
+    } else if (auto sliceOp = dyn_cast<TMEMSubSliceOp>(defOp)) {
+      worklist.push_back(sliceOp.getSrc());
+    } else if (auto selectOp = dyn_cast<arith::SelectOp>(defOp)) {
+      worklist.push_back(selectOp.getTrueValue());
+      worklist.push_back(selectOp.getFalseValue());
+    } else if (auto ifOp = dyn_cast<scf::IfOp>(defOp)) {
+      worklist.push_back(ifOp.thenYield().getOperand(idx));
+      worklist.push_back(ifOp.elseYield().getOperand(idx));
+    } else if (auto forOp = dyn_cast<scf::ForOp>(defOp)) {
+      worklist.push_back(forOp.getYieldedValues()[idx]);
+      worklist.push_back(forOp.getInits()[idx]);
+    } else if (auto whileOp = dyn_cast<scf::WhileOp>(defOp)) {
+      worklist.push_back(whileOp.getConditionOp().getArgs()[idx]);
+    } else {
+      llvm::report_fatal_error("unhandled op when looking for TMEM alloc: " +
+                               defOp->getName().getStringRef());
     }
-    auto arg = dyn_cast<BlockArgument>(value);
-    if (!arg || !isa<triton::gpu::WarpSpecializePartitionsOp>(
-                    arg.getOwner()->getParentOp()))
-      llvm::report_fatal_error("expected to find a TMEM alloc op");
-    auto partitions = cast<triton::gpu::WarpSpecializePartitionsOp>(
-        arg.getOwner()->getParentOp());
-    value = partitions.getParentOp().getExplicitCaptures()[arg.getArgNumber()];
   }
+
+  return allocs;
 }
 
 class RowIdConstraints {
@@ -241,8 +311,11 @@ allocateTMem(Operation *parentOp,
         if (allocSize.numRows == 64) {
           // HW restriction, the A alloc and accumulator needs to be in the same
           // rows.
-          rowIdConstraints.joinOps(getAlloc(mmaOp.getA()),
-                                   getAlloc(mmaOp.getAccumulator()));
+          SmallVector<Operation *> lhsAllocs = getAlloc(mmaOp.getA());
+          SmallVector<Operation *> accAllocs = getAlloc(mmaOp.getAccumulator());
+          for (Operation *lhsAlloc : lhsAllocs)
+            for (Operation *accAlloc : accAllocs)
+              rowIdConstraints.joinOps(lhsAlloc, accAlloc);
         } else {
           // TODO: we need to handle cases where the format is blockM and we
           // have multiple blocks.

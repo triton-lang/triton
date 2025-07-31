@@ -191,6 +191,7 @@ void init_gluon_ir(py::module &&m) {
   py::class_<GluonOpBuilder, TritonOpBuilder>(
       m, "GluonOpBuilder", py::module_local(), py::dynamic_attr())
       .def(py::init<MLIRContext *>())
+      .def("get_op_builder", &GluonOpBuilder::getBuilder, ret::reference)
       .def("get_distributed_ty",
            [](GluonOpBuilder &self, Type &elementType,
               std::vector<int64_t> &shape, Attribute layout) -> Type {
@@ -383,11 +384,16 @@ void init_gluon_ir(py::module &&m) {
              return self.create<ttg::LocalDeallocOp>(memDesc);
            })
 
-      .def("create_memdesc_subview",
+      .def("create_memdesc_index",
            [](GluonOpBuilder &self, Type resultType, Value src,
-              std::vector<Value> &offsets) -> Value {
-             return self.create<ttg::MemDescSubviewOp>(resultType, src,
-                                                       offsets);
+              Value index) -> Value {
+             return self.create<ttg::MemDescIndexOp>(resultType, src, index);
+           })
+      .def("create_memdesc_subslice",
+           [](GluonOpBuilder &self, Type resultType, Value src,
+              std::vector<int32_t> &offsets) -> Value {
+             return self.create<ttg::MemDescSubsliceOp>(resultType, src,
+                                                        offsets);
            })
       .def("create_memdesc_trans",
            [](GluonOpBuilder &self, Value src,

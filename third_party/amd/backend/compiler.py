@@ -7,7 +7,6 @@ from types import ModuleType
 import hashlib
 import tempfile
 import re
-import subprocess
 import functools
 import warnings
 from pathlib import Path
@@ -19,8 +18,9 @@ def get_min_dot_size(target: GPUTarget):
     return lambda lhs_type, rhs_type: (1, 1, 1)
 
 
-def is_pingpong_schedule_enabled(arch):
-    return (arch == "gfx942") if knobs.amd.use_block_pingpong is None else knobs.amd.use_block_pingpong
+def is_pingpong_schedule_enabled(arch, use_async_copy):
+    return (arch == "gfx942" or (arch == "gfx950" and use_async_copy is True)
+            ) if knobs.amd.use_block_pingpong is None else knobs.amd.use_block_pingpong
 
 
 def is_in_thread_transpose_enabled(arch):
@@ -53,6 +53,7 @@ class HIPOptions:
     allow_flush_denorm: bool = False
     max_num_imprecise_acc_default: int = 0
     backend_name: str = 'hip'
+    instrumentation_mode: str = ""
 
     # The following option provides hints to the AMDGPU backend regarding instruction scheduling
     # for all `tt.dot` operations in a kernel. The "none" variant preserves the default
@@ -92,6 +93,7 @@ class HIPOptions:
 
 
 class HIPBackend(BaseBackend):
+    instrumentation = None
 
     @staticmethod
     def supports_target(target: GPUTarget):
@@ -148,6 +150,8 @@ class HIPBackend(BaseBackend):
 
     def load_dialects(self, ctx):
         amd.load_dialects(ctx)
+        if HIPBackend.instrumentation:
+            HIPBackend.instrumentation.load_dialects(ctx)
 
     @staticmethod
     def is_within_2gb(arg):
@@ -175,26 +179,6 @@ class HIPBackend(BaseBackend):
         if knobs.amd.use_buffer_ops and ty == "tensor" and HIPBackend.is_within_2gb(arg):
             ret += "S"
         return ret
-
-    @staticmethod
-    def path_to_rocm_lld():
-        # Check env path for ld.lld
-        lld_env_path = knobs.amd.lld_path
-        if lld_env_path is not None:
-            lld = Path(lld_env_path)
-            if lld.is_file():
-                return lld
-        # Check backend for ld.lld (used for pytorch wheels)
-        lld = Path(__file__).parent / "llvm/bin/ld.lld"
-        if lld.is_file():
-            return lld
-        lld = Path("/opt/rocm/llvm/bin/ld.lld")
-        if lld.is_file():
-            return lld
-        lld = Path("/usr/bin/ld.lld")
-        if lld.is_file():
-            return lld
-        raise Exception("ROCm linker /opt/rocm/llvm/bin/ld.lld not found. Set 'TRITON_HIP_LLD_PATH' to its path.")
 
     @staticmethod
     def make_ttir(mod, metadata, options):
@@ -239,8 +223,10 @@ class HIPBackend(BaseBackend):
         global_prefetch = knobs.amd.global_prefetch
         local_prefetch = knobs.amd.local_prefetch
         use_async_copy = knobs.amd.use_async_copy
+        use_block_pingpong = is_pingpong_schedule_enabled(options.arch, use_async_copy)
 
-        amd.passes.ttgpuir.add_stream_pipeline(pm, options.num_stages, global_prefetch, local_prefetch, use_async_copy)
+        amd.passes.ttgpuir.add_stream_pipeline(pm, options.num_stages, global_prefetch, local_prefetch, use_async_copy,
+                                               use_block_pingpong)
         if use_async_copy:
             amd.passes.ttgpuir.add_coalesce_async_copy(pm, options.arch)
         passes.common.add_canonicalizer(pm)
@@ -253,8 +239,7 @@ class HIPBackend(BaseBackend):
             amd.passes.ttgpuir.add_in_thread_transpose(pm)
             passes.ttgpuir.add_remove_layout_conversions(pm)
         amd.passes.ttgpuir.add_reorder_instructions(pm)
-        use_block_pingpong = is_pingpong_schedule_enabled(options.arch)
-        if use_block_pingpong and options.num_stages == 2:
+        if use_block_pingpong and options.num_stages > 1:
             amd.passes.ttgpuir.add_block_pingpong(pm, options.num_stages)
 
         if knobs.amd.use_buffer_ops:
@@ -304,6 +289,9 @@ class HIPBackend(BaseBackend):
         passes.convert.add_index_to_llvmir(pm)
 
         amd.passes.ttgpuir.add_allocate_shared_memory(pm)
+        # instrumentation point here so we can override IRs above (e.g., ttir and ttgir)
+        if HIPBackend.instrumentation:
+            HIPBackend.instrumentation.patch("ttgpuir_to_llvmir", pm, mod.context)
         ## __HIP_FTZ is used to control the denorm flushing behavior of exp2 op as follows:
         ## 1. If __HIP_FTZ = 1, exp2 flushes denorms in input and output regardless
         ##    of the value of kernel arg `allow_flush_denorm`.
@@ -321,10 +309,17 @@ class HIPBackend(BaseBackend):
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
+
         if options.schedule_hint.lower() != "none":
             amd.passes.ttgpuir.lower_instruction_sched_hints(pm, options.arch, options.num_stages)
+
+        # This can not be moved below the di_scope pass
+        if HIPBackend.instrumentation:
+            HIPBackend.instrumentation.patch("llvmir_to_llvm", pm, mod.context)
+
         if not knobs.compilation.disable_line_info:
             passes.llvmir.add_di_scope(pm)
+
         amd.passes.ttgpuir.add_builtin_func_to_llvmir(pm, __HIP_FTZ)
         pm.run(mod)
 
@@ -399,6 +394,8 @@ class HIPBackend(BaseBackend):
 
         # Get some metadata
         metadata["shared"] = src.get_int_attr("ttg.shared")
+        metadata["profile_scratch_size"] = src.get_int_attr("ttg.profile_scratch_memory_size") or 0
+        metadata["profile_scratch_align"] = src.get_int_attr("ttg.profile_scratch_memory_alignment") or 1
 
         amd.cleanup_bitcode_metadata(llvm_mod)
         # Disable inlining of print related functions,
@@ -434,14 +431,12 @@ class HIPBackend(BaseBackend):
         if knobs.compilation.enable_asan:
             target_features = '+xnack'
         hsaco = amd.assemble_amdgcn(src, options.arch, target_features)
-
-        rocm_path = HIPBackend.path_to_rocm_lld()
         with tempfile.NamedTemporaryFile() as tmp_out:
             with tempfile.NamedTemporaryFile() as tmp_in:
-                with open(tmp_in.name, 'wb') as fd_in:
+                with open(tmp_in.name, "wb") as fd_in:
                     fd_in.write(hsaco)
-                subprocess.check_call([rocm_path, '-flavor', 'gnu', '-shared', tmp_in.name, '-o', tmp_out.name])
-            with open(tmp_out.name, 'rb') as fd_out:
+                amd.link_hsaco(tmp_in.name, tmp_out.name)
+            with open(tmp_out.name, "rb") as fd_out:
                 ret = fd_out.read()
         return ret
 
@@ -457,5 +452,4 @@ class HIPBackend(BaseBackend):
 
     @functools.lru_cache()
     def hash(self):
-        version = subprocess.check_output([HIPBackend.path_to_rocm_lld(), "--version"], encoding='utf-8')
-        return f'{version}-{self.target}'
+        return f'{self.target}'

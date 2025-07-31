@@ -1,6 +1,7 @@
 #include "AsyncUtility.h"
 
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
+#include "TargetInfo.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
 namespace mlir::triton::AMD {
@@ -63,12 +64,14 @@ void annotateLocalLoadsSyncedViaAsyncWait(ModuleOp mod) {
   }
 }
 
-bool isSyncedViaAsyncWait(triton::gpu::LocalLoadOp localLoadOp) {
-  auto attr = localLoadOp->getAttr(syncedViaAsyncWaitAttrName);
+bool isSyncedViaAsyncWait(Operation *op) {
+  assert(op);
+
+  auto attr = op->getAttr(syncedViaAsyncWaitAttrName);
   if (!attr) {
-    localLoadOp.emitRemark("has no async sync information attached to it which "
-                           "might negatively affect performance. Run "
-                           "annotateLocalLoadSyncedViaAsyncWait first");
+    op->emitRemark("has no async sync information attached to it which "
+                   "might negatively affect performance. Run "
+                   "annotateLocalLoadSyncedViaAsyncWait first");
     return false;
   }
   return cast<BoolAttr>(attr).getValue();
@@ -124,6 +127,16 @@ void addLocalLoadNoAliasScope(LLVM::AliasAnalysisOpInterface llLoadOp) {
   // Add to different scope as ops without any scope alias with everything
   auto aliasScopes = ArrayAttr::get(ctx, getLoadCopyScope(ctx));
   llLoadOp.setAliasScopes(aliasScopes);
+}
+
+unsigned
+fitToValidDirectToLdsVecSize(unsigned maxVecSize, unsigned elemBitwidth,
+                             const triton::AMD::TargetInfo &targetInfo) {
+  while (maxVecSize > 0 && !targetInfo.supportsDirectToLdsLoadBitWidth(
+                               maxVecSize * elemBitwidth)) {
+    maxVecSize /= 2;
+  }
+  return maxVecSize;
 }
 
 } // namespace mlir::triton::AMD

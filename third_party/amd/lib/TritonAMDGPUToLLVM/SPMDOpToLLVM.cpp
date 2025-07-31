@@ -9,8 +9,7 @@ namespace {
 
 struct GetNumProgramsOpConversion
     : public ConvertOpToLLVMPattern<triton::GetNumProgramsOp> {
-  using ConvertOpToLLVMPattern<
-      triton::GetNumProgramsOp>::ConvertOpToLLVMPattern;
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
 
   LogicalResult
   matchAndRewrite(triton::GetNumProgramsOp op, OpAdaptor adaptor,

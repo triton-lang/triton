@@ -26,7 +26,7 @@ def warpgroup_mma(a, b, acc, *, use_acc=True, precision=None, max_num_imprecise_
 
     Args:
         a (tensor or shared_memory_descriptor): Left hand side operand.
-        b (tensor or shared_memory_descriptor): Right hand side operand.
+        b (shared_memory_descriptor): Right hand side operand.
         acc (tensor): Accumulator tensor.
         use_acc (bool): Whether to use the initial value of the accumulator. Defaults to True.
         precision (str, optional): Dot input precision. Defaults to builder default.

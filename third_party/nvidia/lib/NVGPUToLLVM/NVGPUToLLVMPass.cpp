@@ -23,17 +23,6 @@ namespace triton {
 
 namespace {
 
-const std::string kClusterCtaIdOp = "{\n"
-                                    ".reg .u32 a<5>;              \n"
-                                    "mov.u32 a0, %cluster_ctaid.x;\n"  // x
-                                    "mov.u32 a1, %cluster_ctaid.y;\n"  // y
-                                    "mov.u32 a2, %cluster_ctaid.z;\n"  // z
-                                    "mov.u32 a3, %cluster_nctaid.x;\n" // nx
-                                    "mov.u32 a4, %cluster_nctaid.y;\n" // ny
-                                    "mad.lo.u32 a1, a2, a4, a1;     \n"
-                                    "mad.lo.u32 $0, a1, a3, a0;     \n"
-                                    "}";
-
 bool isNumber(const std::string &s) {
   return !s.empty() && std::find_if(s.begin(), s.end(), [](unsigned char c) {
                          return !std::isdigit(c);
@@ -234,6 +223,26 @@ public:
     // this value, it can be proven to be non-divergent.
     warpId = LLVM::NVIDIA::shuffleIdx(loc, rewriter, warpId, 0);
     rewriter.replaceOp(op, warpId);
+    return success();
+  }
+};
+
+class ClusterCTAIdOpPattern : public OpRewritePattern<ttn::ClusterCTAIdOp> {
+  using OpRewritePattern<ttn::ClusterCTAIdOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(ttn::ClusterCTAIdOp op,
+                                PatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto a0 = rewriter.create<NVVM::BlockInClusterIdXOp>(loc, i32_ty);
+    auto a1 = rewriter.create<NVVM::BlockInClusterIdYOp>(loc, i32_ty);
+    auto a2 = rewriter.create<NVVM::BlockInClusterIdZOp>(loc, i32_ty);
+    auto a3 = rewriter.create<NVVM::ClusterDimBlocksXOp>(loc, i32_ty);
+    auto a4 = rewriter.create<NVVM::ClusterDimBlocksYOp>(loc, i32_ty);
+    auto p1 = rewriter.create<LLVM::MulOp>(loc, a2, a4);
+    auto s1 = rewriter.create<LLVM::AddOp>(loc, a1, p1);
+    auto p2 = rewriter.create<LLVM::MulOp>(loc, s1, a3);
+    auto res = rewriter.create<LLVM::AddOp>(loc, a0, p2);
+    rewriter.replaceOp(op, res);
     return success();
   }
 };
@@ -736,11 +745,10 @@ public:
     ModuleOp mod = getOperation();
     RewritePatternSet patterns(context);
 
-    patterns.add<NVGPUOpGenericPattern<ttn::ClusterCTAIdOp>>(
-        context, kClusterCtaIdOp, Constraints({"=r"}), Constraints());
-
-    patterns.add<LoadMatrixOpPattern, WGMMAOpPattern, LoadAcquireOpPattern,
-                 WGMMAWaitGroupOpPattern, WarpIdOpPattern>(context);
+    patterns
+        .add<ClusterCTAIdOpPattern, LoadMatrixOpPattern, WGMMAOpPattern,
+             LoadAcquireOpPattern, WGMMAWaitGroupOpPattern, WarpIdOpPattern>(
+            context);
 
     if (applyPatternsGreedily(mod, std::move(patterns)).failed())
       signalPassFailure();
