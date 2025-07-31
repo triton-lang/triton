@@ -84,7 +84,7 @@ from .core import (
     join,
     load,
     make_block_ptr,
-    map_elementwise,  # noqa
+    map_elementwise,
     max_constancy,
     max_contiguous,
     maximum,
@@ -209,6 +209,7 @@ __all__ = [
     "log",
     "log2",
     "make_block_ptr",
+    "map_elementwise",
     "math",
     "max",
     "max_constancy",
