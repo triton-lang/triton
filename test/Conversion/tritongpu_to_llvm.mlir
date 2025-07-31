@@ -508,7 +508,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: basic_program_id
   tt.func @basic_program_id() {
-    // CHECK: llvm.call_intrinsic "llvm.nvvm.read.ptx.sreg.ctaid.x"() : () -> i32
+    // CHECK: nvvm.read.ptx.sreg.ctaid.x : i32
     %0 = tt.get_program_id x : i32
     tt.return
   }

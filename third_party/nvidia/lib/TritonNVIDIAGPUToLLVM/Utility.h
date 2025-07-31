@@ -31,7 +31,6 @@ namespace LLVM {
 namespace NVIDIA {
 class TargetInfo;
 
-Value getSRegValue(OpBuilder &b, Location loc, StringRef sRegStr);
 Value shuffleXor(Location loc, RewriterBase &rewriter, Value val, int i);
 Value shuffleUp(Location loc, RewriterBase &rewriter, Value val, int i);
 Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, int i);
@@ -40,7 +39,7 @@ Value permute(Location loc, RewriterBase &rewriter, Value a, Value b,
               Value mask);
 
 Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
-               int axis);
+               ProgramIDDim axis);
 
 /// Create a predicate with just single active thread.
 Value createElectPredicate(Location loc, RewriterBase &rewriter);

@@ -26,11 +26,13 @@ struct PrintOpConversion : public ConvertOpToLLVMPattern<triton::PrintOp> {
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op->getLoc();
 
-    auto getPid = [&](int axis) {
+    auto getPid = [&](ProgramIDDim axis) {
       return targetInfo.programId(rewriter, loc,
                                   op->getParentOfType<ModuleOp>(), axis);
     };
-    std::array<Value, 3> pid = {getPid(0), getPid(1), getPid(2)};
+    std::array<Value, 3> pid = {getPid(ProgramIDDim::X),
+                                getPid(ProgramIDDim::Y),
+                                getPid(ProgramIDDim::Z)};
 
     // Simple printf of a string without any tensors.
     if (op.getNumOperands() == 0) {
