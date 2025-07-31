@@ -32,14 +32,14 @@ for name in _IMPORT_FROM_TRITON:
 
 
 @jit
-def zeros(shape, dtype, layout):
+def zeros(shape, dtype, layout=None):
     """
     Create a tensor filled with zeros.
 
     Args:
         shape (Sequence[int]): The shape of the tensor.
         dtype (dtype): The data type for the tensor.
-        layout (DistributedLayout): The distributed layout of the tensor.
+        layout (Optional[DistributedLayout]): The distributed layout of the tensor, defaults to AutoLayout().
 
     Returns:
         tensor: A tensor where every element is zero.
