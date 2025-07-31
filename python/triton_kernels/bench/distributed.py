@@ -148,7 +148,7 @@ def all_to_all(input_list: list[torch.Tensor], dim: int = 0) -> list[torch.Tenso
 def routing_torch(x, logits, n_expts_act, expt_indx=None, n_rows=None, EP=1, TP=1):
     _, n_expts_tot = logits.shape
 
-    expt_scal, expt_indx, _ = topk_torch(logits, n_expts_act, expt_indx, has_user_provided_indx=expt_indx is not None)
+    expt_scal, expt_indx = topk_torch(logits, n_expts_act, expt_indx, has_user_provided_indx=expt_indx is not None)
     expt_indx = expt_indx.int()
 
     # Sort each token's selections by expert
