@@ -100,9 +100,9 @@ TMemAllocation getTmemAllocSizes(MemDescType memDescType) {
   return TMemAllocation(numColumn, numRows);
 }
 
-Attribute getTmemLoadStoreLayout32x32b(unsigned M, unsigned N,
-                                       RankedTensorType oldType,
-                                       unsigned numWarps) {
+DistributedEncodingTrait getTmemLoadStoreLayout32x32b(unsigned M, unsigned N,
+                                                      RankedTensorType oldType,
+                                                      unsigned numWarps) {
   assert(numWarps == 4 || numWarps == 8);
   auto shape = getShapePerCTA(oldType);
   assert(shape.size() == 2);
@@ -151,8 +151,9 @@ Attribute getTmemLoadStoreLayout32x32b(unsigned M, unsigned N,
                                                warpsPerCTA, order, ctaLayout);
 }
 
-Attribute getTmemCompatibleLayout(unsigned M, unsigned N,
-                                  RankedTensorType oldType, unsigned numWarps) {
+DistributedEncodingTrait getTmemCompatibleLayout(unsigned M, unsigned N,
+                                                 RankedTensorType oldType,
+                                                 unsigned numWarps) {
   bool prefer16x256 =
       triton::tools::getBoolEnv("TRITON_PREFER_TMEM_16x256_LAYOUT");
   if (prefer16x256) {
