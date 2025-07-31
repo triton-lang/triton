@@ -172,8 +172,9 @@ class HIPBackend(BaseBackend):
         ret = BaseBackend.get_arg_specialization(arg, ty, **kwargs)
         # Only attempt to do buffer ops specialization if buffer ops are enabled.
         # Otherwise the is_within_2gb check is unnecessary overhead.
-        if knobs.amd.use_buffer_ops and ty == "tensor" and HIPBackend.is_within_2gb(arg):
-            ret += "S"
+        if knobs.amd.use_buffer_ops and ty == "tensor":
+            if not knobs.amd.do_check_is_within_2gb or HIPBackend.is_within_2gb(arg):
+                ret += "S"
         return ret
 
     @staticmethod

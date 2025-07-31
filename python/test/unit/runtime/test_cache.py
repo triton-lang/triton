@@ -599,13 +599,17 @@ def test_hooks(device, fresh_triton_cache) -> None:
 @pytest.mark.skipif(reason="within_2g is a HIP specific optimization", condition=not is_hip())
 def test_within_2gb(device, fresh_triton_cache) -> None:
     default_buffer_ops = os.environ.get("AMDGCN_USE_BUFFER_OPS", "0")
+    default_do_check_is_within_2gb = os.environ.get("AMDGCN_DO_CHECK_IS_WITHIN_2GB", "0")
     try:
         use_buffer_ops_opts = ["1", "0"]
+        do_check_is_within_2gb = ["1", "0"]
         # The ranges should only be available when buffer ops are enabled
         pointer_ranges = [[(0, )], []]
-        for use_buffer_ops, pointer_range in zip(use_buffer_ops_opts, pointer_ranges):
+        for use_buffer_ops, pointer_range, check_is_within_2gb in zip(use_buffer_ops_opts, pointer_ranges,
+                                                                      do_check_is_within_2gb):
             # Set AMDGCN_USE_BUFFER_OPS
             os.environ["AMDGCN_USE_BUFFER_OPS"] = use_buffer_ops
+            os.environ["AMDGCN_DO_CHECK_IS_WITHIN_2GB"] = check_is_within_2gb
 
             @triton.jit
             def kernel_add(a):
@@ -632,6 +636,7 @@ def test_within_2gb(device, fresh_triton_cache) -> None:
             assert pointer_range_32 == pointer_range
     finally:
         os.environ["AMDGCN_USE_BUFFER_OPS"] = default_buffer_ops
+        os.environ["AMDGCN_DO_CHECK_IS_WITHIN_2GB"] = default_do_check_is_within_2gb
 
 
 def test_function_arguments(device):
