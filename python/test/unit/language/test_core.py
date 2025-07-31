@@ -4446,6 +4446,7 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
         amdgcn = pgm.asm['amdgcn']
         assert (re.search(r"v_cvt_scalef32_pk_.*?(fp4|fp8|bf8).*?op_sel", amdgcn))
 
+
 @pytest.mark.interpreter
 @pytest.mark.parametrize(
     "B, num_warps, M, N, K, BLOCK_M, BLOCK_N, in_dtype_str, out_dtype_str",
