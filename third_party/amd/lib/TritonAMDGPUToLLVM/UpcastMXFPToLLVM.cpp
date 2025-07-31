@@ -170,10 +170,6 @@ SmallVector<Value, 8> upcastMxfp4_SW(RewriterBase &rewriter,
 
   SmallVector<Value, 8> results;
   Type elemType = toFp16 ? f16_ty : bf16_ty;
-  Value v0 = values[idx];
-  Value v1 = values[idx + 1];
-  Value v2 = values[idx + 2];
-  Value v3 = values[idx + 3];
   Value packedVec = b.undef(vec_ty(i8_ty, 4));
   for (int i : llvm::seq(4))
     packedVec = b.insert_element(packedVec, values[idx + i], b.i32_val(i));
@@ -230,18 +226,12 @@ Value mxfpScaleBf16ViaF32(RewriterBase &rewriter, Location loc, Value v,
 
 template <typename ConvertOp>
 SmallVector<Value, 4> upcast8xMxfp4_HW(RewriterBase &rewriter, Location loc,
-                                       const ArrayRef<Value> &xVals, int idx,
+                                       ArrayRef<Value> xVals, int idx,
                                        Value scale) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  Value v0 = xVals[idx];
-  Value v1 = xVals[idx + 1];
-  Value v2 = xVals[idx + 2];
-  Value v3 = xVals[idx + 3];
   Value packedVec = b.undef(vec_ty(i8_ty, 4));
-  packedVec = b.insert_element(packedVec, v0, b.i32_val(0));
-  packedVec = b.insert_element(packedVec, v1, b.i32_val(1));
-  packedVec = b.insert_element(packedVec, v2, b.i32_val(2));
-  packedVec = b.insert_element(packedVec, v3, b.i32_val(3));
+  for (int i : llvm::seq(4))
+    packedVec = b.insert_element(packedVec, xVals[idx + i], b.i32_val(i));
   packedVec = b.bitcast(packedVec, i32_ty);
   Type retElemType = bf16_ty;
   if constexpr (std::is_same_v<ConvertOp, ROCDL::CvtScaleF32PkF16Fp4Op>)
@@ -260,13 +250,9 @@ SmallVector<Value, 4> upcast8xMxfp4_HW(RewriterBase &rewriter, Location loc,
 
 template <typename ConvertOp>
 SmallVector<Value, 2> upcast4xMxfp8_HW(RewriterBase &rewriter, Location loc,
-                                       const ArrayRef<Value> &xVals, int idx,
+                                       ArrayRef<Value> xVals, int idx,
                                        Value scale) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  Value v0 = xVals[idx];
-  Value v1 = xVals[idx + 1];
-  Value v2 = xVals[idx + 2];
-  Value v3 = xVals[idx + 3];
   Value packedVec = b.undef(vec_ty(i8_ty, 4));
   for (int i : llvm::seq(4))
     packedVec = b.insert_element(packedVec, xVals[idx + i], b.i32_val(i));
@@ -292,7 +278,7 @@ SmallVector<Value, 2> upcast4xMxfp8_HW(RewriterBase &rewriter, Location loc,
 // factor, and store the results into yVals
 static void upcast8xMxfp4(RewriterBase &rewriter, Location loc,
                           AMD::ISAFamily isaFamily, amdgpu::UpcastMXFPOp op,
-                          const ArrayRef<Value> &xVals, bool useFp16, int idx,
+                          ArrayRef<Value> xVals, bool useFp16, int idx,
                           Value scale, SmallVector<Value> &yVals) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   if (isaFamily == AMD::ISAFamily::CDNA4) {
@@ -325,10 +311,10 @@ static void upcast8xMxfp4(RewriterBase &rewriter, Location loc,
 // Upcast 4 mxfp8 values from xVals starting at idx using the given scale
 // factor, and store the results into yVals
 static void upcast4xMxfp8(RewriterBase &rewriter, Location loc,
-                          AMD::ISAFamily isaFamily,
-                          const ArrayRef<Value> &xVals, bool useFp16,
-                          ScaleDotElemType fpType, int idx, Value scale,
-                          bool fastMath, SmallVector<Value> &yVals) {
+                          AMD::ISAFamily isaFamily, ArrayRef<Value> xVals,
+                          bool useFp16, ScaleDotElemType fpType, int idx,
+                          Value scale, bool fastMath,
+                          SmallVector<Value> &yVals) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
   if (isaFamily == AMD::ISAFamily::CDNA4) {
