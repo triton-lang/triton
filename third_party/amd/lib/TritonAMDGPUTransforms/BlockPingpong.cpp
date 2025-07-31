@@ -763,6 +763,7 @@ Pingponger::transformTwoClusterWithLocalLoadAndAll(OpBuilder &builder,
       asyncWaitOp->erase();
     }
   }
+  assert(newAsyncWaitOp != nullptr);
 
   moveOpAndPredecessorsUpSameBlock(lLoadOps[0]);
   moveOpAndPredecessorsUpSameBlock(lLoadOps[1]);
@@ -917,21 +918,18 @@ void Pingponger::getDotPingponged() {
     auto aType = scaledDotOps[0].getA().getType();
     auto aShape = aType.getShape();
     auto elemWidth = aType.getElementTypeBitWidth();
-    int64_t tileSize = scaledDotShape[0] * scaledDotShape[1] * aShape[1];
 
-    // 256x256x256 (128xi8)
-    if (tileSize == 8388608 && aShape[0] == 256 && aShape[1] == 128 &&
+    // MxN = 256x256
+    if (scaledDotShape[0] == 256 && scaledDotShape[1] == 256 &&
         elemWidth == 8) {
-      kWidth = 16;
       if (transformTwoClusterWithAsyncAndAll(builder, scaledDotOps[0]->getLoc())
               .failed()) {
-        LDBG(
-            "Encountered failure when trying to execute the two-step ping pong "
-            "cluster transformation");
+        LDBG("Encountered failure when trying to execute the"
+             "TwoClusterWithAsyncAndAll transformation");
         return;
       }
+      addAsymmetricSyncToLoop(builder, loc);
     }
-    addAsymmetricSyncToLoop(builder, loc);
     return;
   } else if (scaledDotOps.size() == 1)
     return;
@@ -941,7 +939,6 @@ void Pingponger::getDotPingponged() {
   // Determine if we have a persistent GEMM. This will decide how we interpret
   // any memory operations that we find in conditionals.
   auto assumeNotTaken = isPersistentGemm(dotOps.size());
-
   // Compute tile size, kWidth, and mfma type.
   auto dotType = dotOps[0].getType();
   auto dotShape = dotType.getShape();
@@ -968,11 +965,11 @@ void Pingponger::getDotPingponged() {
       LDBG("Currently only support num_warp=8 for async PP");
       return;
     }
-    if (numStages > 2 && dotOps.size() == 1 && tileSize == mediumTile &&
-        aShape[1] == 32 && elemWidth == 16) {
+    if (numStages > 2 && dotOps.size() == 1 && dotShape[0] > 64 &&
+        dotShape[1] > 64 && (elemWidth == 16 || elemWidth == 8)) {
       if (transformTwoClusterWithLocalLoadAndAll(builder, loc).failed()) {
-        LDBG("Encountered failure when trying to execute the NS3 ping pong "
-             "cluster transformation");
+        LDBG("Encountered failure when trying to execute the "
+             "TwoClusterWithLocalLoadAndAll transformation");
         return;
       }
       addAsymmetricSyncToLoop(builder, loc);

@@ -10,14 +10,6 @@ namespace mlir::triton {
 bool squareSublayoutIsIdentity(const LinearLayout &ll,
                                ArrayRef<StringAttr> dimNames);
 
-// Is the sublayout defined from dimNames to dimNames a subpermutation matrix?
-// I.e. the layout matrix is formed by selecting unique columns from the
-// identity matrix and adding zero columns. A zero column in the layout means
-// that changing a bit in the inputs does not change the bits of the outputs
-// (broadcasting).
-bool squareSublayoutIsPermutation(const LinearLayout &ll,
-                                  ArrayRef<StringAttr> dimNames);
-
 // For each output dimension d, ensure that the layout's output size (i.e., its
 // codomain) does not exceed shape[d]. Do this without changing the size of the
 // layout's inputs (i.e., leave its domain unchanged).
