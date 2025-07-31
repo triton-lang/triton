@@ -209,7 +209,7 @@ FailureOr<MfmaIntrinsic> chooseMfmaInstruction(tt::DotScaledOp dot,
                                                int mfmaVersion, int nonKDim) {
   auto ctx = dot.getContext();
   int64_t inputKDim = dot.getA().getType().getShape().back();
-  if (dot.getAElemType() == ScaleDotElemType::E2M1) {
+  if (dot.getAElemType() == ScaleDotElemType::E2M1 && dot.getLhsKPack()) {
     // Since two fp4 are packed into int8, to get the correct K dim size, we
     // need to multiply it by 2.
     inputKDim *= 2;
@@ -928,11 +928,56 @@ public:
       auto newEnc =
           DotOperandEncodingAttr::get(ctx, opIdx, mfmaEnc, kWidth / 2);
 
-      (opIdx == 0 ? aEncLL : bEncLL) *=
-          newEnc.toLinearLayout(opIdx == 0 ? aShape : bShape);
-      auto newVType = RankedTensorType::get(vType.getShape(),
-                                            vType.getElementType(), newEnc);
-      return rewriter.create<ttg::ConvertLayoutOp>(v.getLoc(), newVType, v);
+      bool kPacked = opIdx == 0 ? dotOp.getLhsKPack() : dotOp.getRhsKPack();
+      if (kPacked == false) {
+        // This is FP4 with M/N packing. Create local alloc + local load here
+        // so we have control of the shared layout
+        // A, M packed: tensor<16x64xi8> --> 32x32
+        // B, N packed: tensor<64x16xi8> --> 32x32
+        SmallVector<int64_t> newShape(vType.getShape());
+        newShape[opIdx == 0 ? 0 : 1] = newShape[opIdx == 0 ? 0 : 1] * 2;
+        newShape[opIdx == 0 ? 1 : 0] = newShape[opIdx == 0 ? 1 : 0] / 2;
+        auto newVType =
+            RankedTensorType::get(newShape, vType.getElementType(), newEnc);
+        OpBuilder builder(dotOp);
+        auto srcEncoding = vType.getEncoding();
+        auto originalOrder = triton::gpu::getOrderForMemory(vType);
+        SmallVector<unsigned> newOrder = originalOrder;
+        if (opIdx == 1) {
+          newOrder = {1, 0};
+        } else {
+          newOrder = {0, 1};
+        }
+        auto sharedMemorySpace =
+            triton::gpu::SharedMemorySpaceAttr::get(vType.getContext());
+        auto tmpType = triton::gpu::MemDescType::get(
+            vType.getShape(), vType.getElementType(),
+            triton::gpu::SwizzledSharedEncodingAttr::get(
+                v.getContext(), newEnc, vType.getShape(), newOrder,
+                triton::gpu::getCTALayout(srcEncoding), vType.getElementType()),
+            sharedMemorySpace);
+        auto tmp = builder.create<triton::gpu::LocalAllocOp>(dotOp.getLoc(),
+                                                             tmpType, v);
+        auto newConvert =
+            builder.create<triton::amdgpu::LocalLoadPackedTransposedOp>(
+                dotOp.getLoc(), newVType, tmp);
+        if (opIdx == 0) {
+          aShape = newConvert.getType().getShape();
+          aEncLL *= newEnc.toLinearLayout(aShape);
+        } else {
+          bShape = newConvert.getType().getShape();
+          bEncLL *= newEnc.toLinearLayout(bShape);
+        }
+        return newConvert;
+      } else {
+        if (opIdx == 0)
+          aEncLL *= newEnc.toLinearLayout(aShape);
+        else
+          bEncLL *= newEnc.toLinearLayout(bShape);
+        auto newVType = RankedTensorType::get(vType.getShape(),
+                                              vType.getElementType(), newEnc);
+        return rewriter.create<ttg::ConvertLayoutOp>(v.getLoc(), newVType, v);
+      }
     };
     a = convertInputLayout(a, 0);
     b = convertInputLayout(b, 1);
