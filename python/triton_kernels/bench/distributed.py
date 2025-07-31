@@ -13,7 +13,7 @@ import triton_kernels.swiglu
 from triton_kernels.routing import RoutingData, GatherIndx, ScatterIndx, compute_expt_data
 from triton_kernels.topk import topk
 from triton_kernels.matmul_ogs import matmul_ogs, PrecisionConfig, FlexCtx, FnSpecs, FusedActivation
-from triton_kernels.target_info import get_cdna_version, is_hip, cuda_capability_geq
+from triton_kernels.target_info import get_cdna_version, is_hip, is_cuda, cuda_capability_geq
 from triton_kernels.tensor_details import layout
 
 from bench_utils import quantize_weight
@@ -544,9 +544,9 @@ def test_mlp_mp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, T
     parallelism = TP * EP
     if torch.cuda.device_count() < parallelism:
         pytest.skip(f"Test requires at least {parallelism} GPUs.")
-    if not cuda_capability_geq(9, 0):
+    if is_cuda() and not cuda_capability_geq(9, 0):
         pytest.skip("Test requires CUDA compute capability >= 9.0.")
-    if get_cdna_version() == 4 and EP > 1:
+    if is_hip() and get_cdna_version() == 4 and EP > 1:
         pytest.skip("[TODO] Unknown issue with CDNA 4 and EP > 1")
     if TP > 1 and x_dtype == "fp8":
         pytest.skip("[TODO] Testing FP8 is not supported for TP > 1.")
