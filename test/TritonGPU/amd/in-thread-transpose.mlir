@@ -14,8 +14,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // CHECK-DAG: [[$TRANSPOSABLE_LAYOUT2:#.*]] = #ttg.blocked<{sizePerThread = [4, 8], threadsPerWarp = [4, 16], warpsPerCTA = [8, 1], order = [1, 0]}>
 // CHECK-DAG: [[$LINEAR1:#.*]] = #ttg.linear<{register = {{\[\[}}0, 1], [0, 2], [1, 0], [2, 0], [4, 0{{]]}}, lane = {{\[\[}}8, 0], [16, 0], [32, 0], [64, 0], [128, 0], [0, 4{{]]}}, warp = {{\[\[}}0, 8], [0, 16], [0, 0{{]]}}, block = []}>
 // CHECK-DAG: [[$LINEAR2:#.*]] = #ttg.linear<{register = {{\[\[}}1, 0], [2, 0], [0, 1], [0, 2], [0, 4{{]]}}, lane = {{\[\[}}0, 8], [0, 16], [0, 32], [0, 64], [4, 0], [8, 0{{]]}}, warp = {{\[\[}}16, 0], [0, 0], [0, 0{{]]}}, block = []}>
-// CHECK-DAG: [[$SHARED1:#.*]] = #ttg.padded_shared<[32:+4, 512:+4] {order = [1, 0]}>
-// CHECK-DAG: [[$SHARED2:#.*]] = #ttg.padded_shared<[32:+4, 512:+4] {order = [0, 1]}>
+// CHECK-DAG: [[$SHARED1:#.*]] = #ttg.amd_rotating_shared<{vec = 4, perPhase = 2, maxPhase = 8, order = [1, 0]}>
+// CHECK-DAG: [[$SHARED2:#.*]] = #ttg.amd_rotating_shared<{vec = 4, perPhase = 2, maxPhase = 8, order = [0, 1]}>
 
 // CHECK-LABEL: inThreadTranspose_simple
 
@@ -549,7 +549,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 
 // -----
 
-// CHECK: #ttg.padded_shared<[64:+4, 1024:+4] {order = [0, 1]}>
+// CHECK: #ttg.amd_rotating_shared<{vec = 4, perPhase = 1, maxPhase = 16, order = [0, 1]}>
 // CHECK-LABEL: inThreadTranspose_64_128_fp16
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 16], warpsPerCTA = [1, 1], order = [1, 0]}>
@@ -579,7 +579,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
   tt.func public @inThreadTranspose_lds_limited(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) {
     %0 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<256x128x!tt.ptr<f16>, #blocked>
-    %1 = tt.load %0 : tensor<256x128x!tt.ptr<f16>, #blocked>
+    %cst_1 = arith.constant dense<true> : tensor<256x128xi1, #blocked>
+    %1 = tt.load %0, %cst_1 : tensor<256x128x!tt.ptr<f16>, #blocked>
 
     %2 = ttg.local_alloc %1 : (tensor<256x128xf16, #blocked>) -> !ttg.memdesc<256x128xf16, #shared, #smem>
     %3 = ttg.local_load %2 : !ttg.memdesc<256x128xf16, #shared, #smem> -> tensor<256x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>>
