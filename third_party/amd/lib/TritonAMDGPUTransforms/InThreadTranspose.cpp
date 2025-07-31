@@ -794,6 +794,34 @@ ttg::BlockedEncodingAttr getTransposableBlockedEnc(int dotOperandIdx,
                                        numWarps, threadsPerWarp, numCTAs);
 }
 
+/// Generate a list of candidates for new shared layout.
+/// First goes more beneficial case.
+/// Return multiple cases, because some could be skipped due to LDS overflow.
+SmallVector<Attribute>
+createSharedLayoutCandidates(const GlobalToSharedMemoryOpChain &pattern,
+                             ttg::LocalLoadOp localLoad,
+                             ttg::BlockedEncodingAttr newBlockedEnc) {
+  SmallVector<Attribute> candidates;
+
+  // Padded encoding in general lowers register consumption,
+  // which is very beneficial in case of register spills.
+  // Currently it is hard to estimate register pressure in general case,
+  // heuristic covers FA cases with register spills because of masked loads.
+  bool maskedLoad = llvm::any_of(pattern.globalLoads,
+                                 [](tt::LoadOp l) { return l.getMask(); });
+
+  if (maskedLoad) {
+    auto paddedCandidate =
+        createPaddedSharedEncoding(newBlockedEnc, localLoad.getType());
+    candidates.push_back(paddedCandidate);
+  }
+
+  auto rotatingCandidate =
+      createRotatingSharedEncoding(newBlockedEnc, localLoad.getType());
+  candidates.push_back(rotatingCandidate);
+  return candidates;
+}
+
 class InThreadTransposePattern : public OpRewritePattern<ttg::LocalLoadOp> {
   int totalSharedMemSize;
 
@@ -816,7 +844,6 @@ public:
     auto dotOpEnc =
         cast<ttg::DotOperandEncodingAttr>(localLoad.getType().getEncoding());
 
-    LDBG("Adjusting global loads");
     auto firstLoadOp = pattern.globalLoads.front();
     RankedTensorType loadResultType =
         cast<RankedTensorType>(firstLoadOp.getResult().getType());
@@ -824,6 +851,12 @@ public:
         getTransposableBlockedEnc(dotOpEnc.getOpIdx(), loadResultType);
     auto loadShape = loadResultType.getShape();
 
+    // Call this analysis here, before all actual transformations,
+    // so operations stored in "pattern" still exist.
+    auto sharedLayoutCandidates =
+        createSharedLayoutCandidates(pattern, localLoad, newBlockedEnc);
+
+    LDBG("Adjusting global loads");
     for (auto gLoad : pattern.globalLoads) {
       LDBG("operand newBlockedEnc = " << newBlockedEnc);
       refineGlobalLoadLayout(rewriter, newBlockedEnc, gLoad);
@@ -835,21 +868,16 @@ public:
                                                    newBlockedEnc);
 
     LDBG("Adjust shared encoding");
-    auto paddedSharedEncoding = createPaddedSharedEncoding(
-        newBlockedEnc, cast<RankedTensorType>(localLoad.getType()));
-    for (auto memVal : pattern.sharedMemVals)
-      changeSharedEncoding(rewriter, memVal, paddedSharedEncoding);
-
-    auto mod = localLoad->getParentOfType<ModuleOp>();
-    if (!isEnoughLDS(mod, totalSharedMemSize)) {
-      // rotating encoding do not increase LDS consumption,
-      // use it in case we are tight on shared memory.
-      auto rotatingSharedEncoding = createRotatingSharedEncoding(
-          newBlockedEnc, cast<RankedTensorType>(localLoad.getType()));
+    for (Attribute encodingCandidate : sharedLayoutCandidates) {
       for (auto memVal : pattern.sharedMemVals)
-        changeSharedEncoding(rewriter, memVal, rotatingSharedEncoding);
+        changeSharedEncoding(rewriter, memVal, encodingCandidate);
+      auto mod = localLoad->getParentOfType<ModuleOp>();
+      // If current encoding fits into LDS, stop here,
+      // otherwise, try next one
+      if (isEnoughLDS(mod, totalSharedMemSize)) {
+        break;
+      }
     }
-
     return success();
   }
 };
