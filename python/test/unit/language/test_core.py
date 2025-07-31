@@ -4433,7 +4433,9 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
             assert 'st.global.v4' in ptx
         assert (re.search(r'(mma|wgmma.mma_async).sync.aligned.m\d+n\d+k16(?:.row.col)?.f32.(f|bf)16.(f|bf)16', ptx)
                 or "tcgen05.mma.cta_group::1.kind::f16" in ptx)
-
+    if is_hip_cdna4() and normal_type in ["bf16", "fp16"]:
+        amdgcn = pgm.asm['amdgcn']
+        assert (re.search(r"v_cvt_scalef32_pk_.*?(fp4|fp8|bf8).*?op_sel", amdgcn))
 
 @pytest.mark.interpreter
 @pytest.mark.parametrize(
