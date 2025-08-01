@@ -52,7 +52,6 @@ jobs:
           fi
 
       - uses: actions/setup-python@v5
-        if: ${{ matrix.config.arch }} == 'aarch64'
         with:
           python-version: '3.11' 
     
@@ -91,8 +90,7 @@ jobs:
 
           export CIBW_BUILD="cp3{9,10,11,12,13,13t,14,14t}-manylinux_${{ matrix.config.arch }}"
           export CIBW_SKIP="cp{35,36,37,38}-*"
-          export CIBW_FREE_THREADED_SUPPORT=1
-          export CIBW_PRERELEASE_PYTHONS=1
+          export CIBW_ENABLE=cpython-freethreading
           python3 -m cibuildwheel . --output-dir wheelhouse
 
       - uses: actions/upload-artifact@v4
