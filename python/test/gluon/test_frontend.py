@@ -618,7 +618,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 def warpgroup_mma_wait_kernel():
     layout: ttgl.constexpr = ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1], instr_shape=[16, 32, 16])
     acc = ttgl.full([128, 128], 0, dtype=ttgl.float16, layout=layout)
-    hopper.warpgroup_mma_wait(num_outstanding=1, deps=[acc])
+    acc = hopper.warpgroup_mma_wait(num_outstanding=1, deps=[acc])
 
 
 def test_warpgroup_mma_wait():
