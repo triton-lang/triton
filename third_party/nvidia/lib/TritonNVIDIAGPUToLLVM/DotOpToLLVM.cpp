@@ -1,8 +1,6 @@
-#include "NVGPUToLLVM/NVGPUToLLVMPass.h"
 #include "PatternTritonGPUOpToLLVM.h"
 #include "Utility.h"
 
-#include "mlir/Dialect/LLVMIR/LLVMTypes.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 
 using namespace mlir;
