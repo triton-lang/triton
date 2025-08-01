@@ -135,18 +135,13 @@ bool WarpGroupDotOp::verifyDims() {
 
 // -- WarpGroupDotWaitOp --
 LogicalResult WarpGroupDotWaitOp::inferReturnTypes(
-    MLIRContext *context, std::optional<Location> location, ValueRange operands,
-    DictionaryAttr attributes, OpaqueProperties properties, RegionRange regions,
-    SmallVectorImpl<Type> &inferredReturnTypes) {
+    ::mlir::MLIRContext *context, ::std::optional<::mlir::Location> location,
+    ::mlir::ValueRange operands, ::mlir::DictionaryAttr attributes,
+    ::mlir::OpaqueProperties properties, ::mlir::RegionRange regions,
+    ::llvm::SmallVectorImpl<::mlir::Type> &inferredReturnTypes) {
   for (Value operand : operands)
     inferredReturnTypes.push_back(operand.getType());
-  return success();
-}
-
-LogicalResult WarpGroupDotWaitOp::verify() {
-  if (getOperands().empty())
-    return emitOpError("expected to be waiting on at least one dependency");
-  return success();
+  return mlir::success();
 }
 
 // -- InitBarrierOp --
