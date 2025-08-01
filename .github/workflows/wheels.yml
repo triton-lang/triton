@@ -51,6 +51,11 @@ jobs:
             echo "new_commit=true" >> "$GITHUB_OUTPUT"
           fi
 
+      - uses: actions/setup-python@v5
+        if: ${{ matrix.config.arch }} == 'aarch64'
+        with:
+          python-version: '3.11' 
+    
       - name: Patch setup.py
         if: ${{ steps.check-version.outputs.new_commit == 'true' }}
         run: |
@@ -61,6 +66,7 @@ jobs:
       - name: Build wheels
         if: ${{ steps.check-version.outputs.new_commit == 'true' }}
         run: |
+          python --version
           # Make sure cibuildwheel is updated to latest, this will enable latest python builds
           python3 -m pip install cibuildwheel --upgrade --user
           # Pass MAX_JOBS=4 because, at time of writing, the VM "only" has 32GB
