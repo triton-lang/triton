@@ -127,9 +127,14 @@ def test_hook_manager(tmp_path: pathlib.Path):
     assert isinstance(HookManager.active_hooks[0], LaunchHook)
     assert HookManager.session_hooks[0][HookManager.active_hooks[0]] is True
 
+    # Only unregister one hook
+    HookManager.register(LaunchHook(), 1)
     HookManager.unregister(0)
+    assert len(HookManager.active_hooks) == 1
+    HookManager.unregister(1)
     assert len(HookManager.active_hooks) == 0
 
+    # Heterogenous hooks
     HookManager.register(InstrumentationHook(""), 2)
     HookManager.register(LaunchHook(), 1)
     assert len(HookManager.active_hooks) == 2
