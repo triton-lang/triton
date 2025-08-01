@@ -321,8 +321,9 @@ LogicalResult rewritePutEnterOp(ArefPutEnterOp op, PatternRewriter &rewriter,
     }
   }
 
-  for (int i = 0; i < arefVal.buffers.size(); ++i)
-    op.getBuffers()[i].replaceAllUsesWith(views[i]);
+  for (auto [oldBuffer, view] : llvm::zip(op.getBuffers(), views)) {
+    oldBuffer.replaceAllUsesWith(view);
+  }
 
   return success();
 }
@@ -354,11 +355,11 @@ LogicalResult rewriteGetEnterOp(ArefGetEnterOp op, PatternRewriter &rewriter,
   auto views = getSubViews(arefVal, op.getStage(), loc, rewriter);
   assert(views.size() == op.getBuffers().size());
 
-  for (int i = 0; i < arefVal.buffers.size(); ++i) {
-    op.getBuffers()[i].replaceAllUsesWith(views[i]);
+  for (auto [oldBuffer, view] : llvm::zip(op.getBuffers(), views)) {
+    oldBuffer.replaceAllUsesWith(view);
     // Before aref lowering, memdesc_trans consumes an immutable buffer from
     // a get enter op. After lowering, all buffers are mutable.
-    propagateMutability(views[i]);
+    propagateMutability(view);
   }
 
   return success();
