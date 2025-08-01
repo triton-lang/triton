@@ -1402,7 +1402,7 @@ def test_atomic_cas():
     ttgl.atomic_cas(offset + ptr, old, new, sem="relaxed")
     ttgl.atomic_cas(offset + ptr, old, new)
 
-    
+
 @gluon.jit
 def amd_mfma_layout_kernel():
     mfma_layout_fp32: ttgl.constexpr = amd_layouts.AMDMFMALayout(version=3, instr_shape=[32, 32], transposed=True,
