@@ -127,3 +127,54 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   }
 
 }
+
+// -----
+
+#linear0 = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0]], warp = [[0, 0]], block = []}>
+#linear1 = #ttg.linear<{register = [[1, 0], [2, 0], [4, 0], [0, 8], [0, 16]], lane = [[0, 1], [0, 2], [0, 4], [8, 0], [16, 0]], warp = [[0, 0]], block = []}>
+#linear2 = #ttg.linear<{register = [[0, 1], [2, 0], [0, 4], [0, 8], [0, 16]], lane = [[1, 0], [0, 2], [4, 0], [8, 0], [16, 0]], warp = [[0, 0]], block = []}>
+#linear3 = #ttg.linear<{register = [[1, 0], [2, 0], [0, 4], [0, 8], [0, 16]], lane = [[0, 1], [0, 2], [4, 0], [8, 0], [16, 0]], warp = [[0, 0]], block = []}>
+#mma = #ttg.amd_wmma<{version = 2, isTranspose = false, warpsPerCTA = [1, 2]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: global_load_transpose_not_16_bits
+  tt.func @global_load_transpose_not_2d(%arg0: tensor<32x32x32x!tt.ptr<i8>, #linear0>) {
+// expected-error @+1 {{op shape needs to be two dimensional}}
+    %0 = amdgpu.global_load_transpose %arg0 : tensor<32x32x32x!tt.ptr<i8>, #linear0> -> tensor<32x32x32xi8, #linear1>
+    tt.return
+  }
+
+  // CHECK-LABEL: global_load_transpose_not_same_shape
+  tt.func @global_load_transpose_not_same_shape(%arg0: tensor<32x32x32x!tt.ptr<i8>, #linear0>) {
+// expected-error @+1 {{op requires the same shape for all operands and results}}
+    %0 = amdgpu.global_load_transpose %arg0 : tensor<32x32x32x!tt.ptr<i8>, #linear0> -> tensor<32x32xi8, #linear1>
+    tt.return
+  }
+
+  // CHECK-LABEL: global_load_transpose_not_16_bits
+  tt.func @global_load_transpose_not_16_bits(%arg0: tensor<32x32x!tt.ptr<i8>, #linear0>) {
+// expected-error @+1 {{op datatype needs to be 16bit}}
+    %0 = amdgpu.global_load_transpose %arg0 : tensor<32x32x!tt.ptr<i8>, #linear0> -> tensor<32x32xi8, #linear1>
+    tt.return
+  }
+
+  // CHECK-LABEL: global_load_transpose_wrong_ptr_type
+  tt.func @global_load_transpose_wrong_ptr_type(%arg0: tensor<32x32x!tt.ptr<f16>, #linear0>) {
+// expected-error @+1 {{result element type needs to match the pointed type of ptr}}
+    %0 = amdgpu.global_load_transpose %arg0 : tensor<32x32x!tt.ptr<f16>, #linear0> -> tensor<32x32xbf16, #linear1>
+    tt.return
+  }
+
+  // CHECK-LABEL: global_load_transpose_layouts_do_not_transpose
+  tt.func @global_load_transpose_layouts_do_not_transpose(%arg0: tensor<32x32x!tt.ptr<bf16>, #linear2>) {
+// expected-error @+1 {{src and dst layout need to be equal apart from transposing each 8x8 register/lane block}}
+    %0 = amdgpu.global_load_transpose %arg0 : tensor<32x32x!tt.ptr<bf16>, #linear2> -> tensor<32x32xbf16, #linear3>
+    tt.return
+  }
+
+  // CHECK-LABEL: global_load_transpose_layouts_same
+  tt.func @global_load_transpose_layouts_same(%arg0: tensor<32x32x!tt.ptr<bf16>, #linear0>) {
+// expected-error @+1 {{src and dst layout need to be equal apart from transposing each 8x8 register/lane block}}
+    %0 = amdgpu.global_load_transpose %arg0 : tensor<32x32x!tt.ptr<bf16>, #linear0> -> tensor<32x32xbf16, #linear0>
+    tt.return
+  }
+}
