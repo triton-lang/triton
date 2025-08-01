@@ -330,10 +330,13 @@ class CUDABackend(BaseBackend):
         cluster_info = pass_config[1]
 
         new_pass_entries = dict()
+        if(global_config == None):
+            new_pass_entries = pass_entries
+        else:
+            for e in config_pass_entries:
+                if(e in list(pass_entries.keys())):
+                    new_pass_entries[e] = [pass_entries[e][0], pass_entries[e][1]]
 
-        for e in config_pass_entries:
-            if(e in list(pass_entries.keys())):
-                new_pass_entries[e] = [pass_entries[e][0], pass_entries[e][1]]
         for e in new_pass_entries.values():
             p = e[0]
             args = e[1]
