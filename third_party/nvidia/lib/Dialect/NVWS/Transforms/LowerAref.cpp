@@ -105,6 +105,14 @@ struct BarrierCount {
   int consumerPendingCount{0};
 };
 
+SmallVector<AsyncOp> castAsyncOpAttrs(ArrayAttr opAttrs) {
+  SmallVector<AsyncOp> kinds;
+  for (auto asyncKind : opAttrs) {
+    kinds.push_back(cast<AsyncOpAttr>(asyncKind).getValue());
+  }
+  return kinds;
+}
+
 BarrierCount getArrivalCount(ArefCreateOp op) {
   SetVector<int> producerGroups, consumerGroups;
   BarrierCount count;
@@ -117,8 +125,7 @@ BarrierCount getArrivalCount(ArefCreateOp op) {
       if (!producerGroups.insert(idx)) {
         continue;
       }
-      for (auto prod : putExitOp.getAsyncOps()) {
-        auto kind = dyn_cast<AsyncOpAttr>(prod).getValue();
+      for (auto kind : castAsyncOpAttrs(putExitOp.getAsyncOps())) {
         switch (kind) {
         case AsyncOp::TC5MMA:
         case AsyncOp::TMALoad:
@@ -133,8 +140,7 @@ BarrierCount getArrivalCount(ArefCreateOp op) {
       if (!consumerGroups.insert(idx)) {
         continue;
       }
-      for (auto consumer : getExitOp.getAsyncOps()) {
-        auto kind = dyn_cast<AsyncOpAttr>(consumer).getValue();
+      for (auto kind : castAsyncOpAttrs(getExitOp.getAsyncOps())) {
         switch (kind) {
         case AsyncOp::TC5MMA:
         case AsyncOp::WGMMA:
@@ -348,11 +354,10 @@ LogicalResult rewriteGetEnterOp(ArefCreateOp arefOp, ArefGetEnterOp op,
   return success();
 }
 
-LogicalResult insertArriveBarrier(Location loc, ArrayAttr asyncOps,
+LogicalResult insertArriveBarrier(Location loc, ArrayRef<AsyncOp> asyncOps,
                                   PatternRewriter &rewriter, Value mbar,
                                   StageCluster stageCluster) {
-  for (auto asyncOp : asyncOps) {
-    auto asyncOpEnum = cast<AsyncOpAttr>(asyncOp).getValue();
+  for (auto asyncOpEnum : asyncOps) {
     Operation *arriveOp = {};
     switch (asyncOpEnum) {
     case AsyncOp::NONE:
@@ -382,17 +387,44 @@ LogicalResult rewritePutExitOp(ArefPutExitOp op, PatternRewriter &rewriter,
   auto loc = op->getLoc();
   rewriter.setInsertionPointAfter(op);
   Value fullBarrier = getFullBarrier(rewriter, loc, arefVal, op.getStage());
-  return insertArriveBarrier(loc, op.getAsyncOps(), rewriter, fullBarrier,
-                             getStageCluster(op));
+  return insertArriveBarrier(loc, castAsyncOpAttrs(op.getAsyncOps()), rewriter,
+                             fullBarrier, getStageCluster(op));
 }
 
 LogicalResult rewriteGetExitOp(ArefGetExitOp op, PatternRewriter &rewriter,
                                ArefValue arefVal) {
   auto loc = op->getLoc();
+  auto stageCluster = getStageCluster(op);
+  auto asyncKinds = castAsyncOpAttrs(op.getAsyncOps());
   rewriter.setInsertionPointAfter(op);
+
+  bool needFence = [&]() {
+    bool isGenericProxy = llvm::any_of(
+        asyncKinds, [](AsyncOp kind) { return kind == AsyncOp::NONE; });
+    if (!isGenericProxy) {
+      return false;
+    }
+    for (auto arefUser : op.getAref().getUsers()) {
+      if (auto putExit = dyn_cast<ArefPutExitOp>(arefUser)) {
+        bool isProducerTMA =
+            llvm::any_of(castAsyncOpAttrs(putExit.getAsyncOps()),
+                         [](AsyncOp kind) { return kind == AsyncOp::TMALoad; });
+        if (isProducerTMA) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }();
+
+  if (needFence) {
+    auto fence = rewriter.create<FenceAsyncSharedOp>(loc, /*bCluster=*/false);
+    assignStageCluster(fence, stageCluster, rewriter);
+  }
+
   Value emptyBarrier = getEmptyBarrier(rewriter, loc, arefVal, op.getStage());
-  return insertArriveBarrier(loc, op.getAsyncOps(), rewriter, emptyBarrier,
-                             getStageCluster(op));
+  return insertArriveBarrier(loc, asyncKinds, rewriter, emptyBarrier,
+                             stageCluster);
 }
 
 LogicalResult rewriteArefDestroyOp(ArefDestroyOp op, PatternRewriter &rewriter,
