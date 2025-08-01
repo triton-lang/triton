@@ -1429,3 +1429,103 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   }
 }
 """)
+
+
+@pytest.mark.parametrize("target", [HIP_TARGET_CDNA3])
+def test_buffer_load_to_local(target):
+    @gluon.jit
+    def kernel(ptr):
+        blocked: ttgl.constexpr = ttgl.BlockedLayout([1], [64], [4], [0])
+        shared: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, order=[0])
+
+        dest = ttgl.allocate_shared_memory(ptr.dtype.element_ty, [256], shared)
+        offsets = ttgl.arange(0, 256, layout=blocked)
+
+        ttgl.amd.cdna3.create_buffer_load_to_local(dest, ptr, offsets)
+
+    ptr = MockTensor(ttgl.float32)
+    mod = run_parser(kernel, *make_args(ptr), target=target)
+    expecttest.assert_expected_inline(
+        anonymize_ir(mod.str_nodebug()), """\
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @kernel(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+    %0 = ttg.local_alloc : () -> !ttg.memdesc<256xf32, #shared, #smem, mutable>
+    %1 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #blocked>
+    %2 = amdgpu.buffer_load_to_local %arg0[%1] into %0 : <f32>[tensor<256xi32, #blocked>]  -> <256xf32, #shared, #smem, mutable>
+    tt.return
+  }
+}
+""")
+
+
+@pytest.mark.parametrize("target", [HIP_TARGET_CDNA3])
+def test_buffer_load_to_local_mask_other(target):
+    @gluon.jit
+    def kernel(ptr):
+        blocked: ttgl.constexpr = ttgl.BlockedLayout([1], [64], [4], [0])
+        shared: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, order=[0])
+
+        dest = ttgl.allocate_shared_memory(ptr.dtype.element_ty, [256], shared)
+        offsets = ttgl.arange(0, 256, layout=blocked)
+
+        mask = ttgl.full([256], 1, ttgl.int1, layout=blocked)
+        other = ttgl.full([256], 0, ptr.dtype.element_ty, layout=blocked)
+        ttgl.amd.cdna3.create_buffer_load_to_local(dest, ptr, offsets, mask, other)
+
+    ptr = MockTensor(ttgl.float32)
+    mod = run_parser(kernel, *make_args(ptr), target=target)
+    expecttest.assert_expected_inline(
+        anonymize_ir(mod.str_nodebug()), """\
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @kernel(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+    %0 = ttg.local_alloc : () -> !ttg.memdesc<256xf32, #shared, #smem, mutable>
+    %1 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #blocked>
+    %true = arith.constant true
+    %cst = arith.constant dense<true> : tensor<256xi1, #blocked>
+    %cst_0 = arith.constant 0.000000e+00 : f32
+    %cst_1 = arith.constant dense<0.000000e+00> : tensor<256xf32, #blocked>
+    %2 = amdgpu.buffer_load_to_local %arg0[%1] mask = %cst other = %cst_1 into %0 : <f32>[tensor<256xi32, #blocked>] tensor<256xf32, #blocked> -> <256xf32, #shared, #smem, mutable>
+    tt.return
+  }
+}
+""")
+
+
+@pytest.mark.parametrize("target", [HIP_TARGET_CDNA3])
+def test_buffer_load_to_local_cache_mods(target):
+    @gluon.jit
+    def kernel(ptr):
+        blocked: ttgl.constexpr = ttgl.BlockedLayout([1], [64], [4], [0])
+        shared: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, order=[0])
+
+        dest = ttgl.allocate_shared_memory(ptr.dtype.element_ty, [256], shared)
+        offsets = ttgl.arange(0, 256, layout=blocked)
+
+        ttgl.amd.cdna3.create_buffer_load_to_local(dest, ptr, offsets, cache_modifier=".ca")
+        ttgl.amd.cdna3.create_buffer_load_to_local(dest, ptr, offsets, cache_modifier=".cg")
+        ttgl.amd.cdna3.create_buffer_load_to_local(dest, ptr, offsets, cache_modifier=".cv")
+
+    ptr = MockTensor(ttgl.float32)
+    mod = run_parser(kernel, *make_args(ptr), target=target)
+    expecttest.assert_expected_inline(
+        anonymize_ir(mod.str_nodebug()), """\
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @kernel(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+    %0 = ttg.local_alloc : () -> !ttg.memdesc<256xf32, #shared, #smem, mutable>
+    %1 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #blocked>
+    %2 = amdgpu.buffer_load_to_local %arg0[%1] cacheModifier = ca into %0 : <f32>[tensor<256xi32, #blocked>]  -> <256xf32, #shared, #smem, mutable>
+    %3 = amdgpu.buffer_load_to_local %arg0[%1] cacheModifier = cg into %0 : <f32>[tensor<256xi32, #blocked>]  -> <256xf32, #shared, #smem, mutable>
+    %4 = amdgpu.buffer_load_to_local %arg0[%1] cacheModifier = cv into %0 : <f32>[tensor<256xi32, #blocked>]  -> <256xf32, #shared, #smem, mutable>
+    tt.return
+  }
+}
+""")
