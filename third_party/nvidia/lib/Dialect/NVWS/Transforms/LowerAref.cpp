@@ -896,6 +896,9 @@ Operation *getDominantConsumer(ArefGetEnterOp getEnterOp, Block &container,
   assert(getEnterOp->getNumResults() && "Expect a single-result ArefGenterOp");
   auto buf = getEnterOp->getResult(0);
   SmallVector<Operation *> sinkOps = findSharedMemorySinkOps(buf);
+  if (sinkOps.empty()) {
+    return nullptr;
+  }
   Operation *liveBeforeOp = findNearestCommonDominator(sinkOps, domInfo);
   return container.findAncestorOpInBlock(*liveBeforeOp);
 }
@@ -910,9 +913,10 @@ void combineArefs(scf::ForOp loop) {
   DominanceInfo domInfo(loop);
   llvm::DenseMap<Operation *, SmallVector<ArefGetEnterOp>> liveBeforeGroups;
   for (auto getEnterOp : getEnterOps) {
-    auto liveBeforeOp =
-        getDominantConsumer(getEnterOp, *loop.getBody(), domInfo);
-    liveBeforeGroups[liveBeforeOp].push_back(getEnterOp);
+    if (auto liveBeforeOp =
+            getDominantConsumer(getEnterOp, *loop.getBody(), domInfo)) {
+      liveBeforeGroups[liveBeforeOp].push_back(getEnterOp);
+    }
   }
 
   SmallVector<SmallVector<ArefCreateOp>> arefsToFuse;
