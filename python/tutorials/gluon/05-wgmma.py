@@ -269,7 +269,7 @@ def get_instr_shape_n(BLOCK_M, BLOCK_N, num_warps):
 
 @gluon.jit
 def blocked_mma_kernel(a_desc, b_desc, c_desc,  #
-                       TRANSPOSE_B: gl.constexpr, OVERLAP_MMA: gl.constexpr, num_warps: gl.constexpr):
+                       TRANSPOSE_B: gl.constexpr, num_warps: gl.constexpr):
     BLOCK_M: gl.constexpr = c_desc.block_type.shape[0]
     BLOCK_N: gl.constexpr = c_desc.block_type.shape[1]
     BLOCK_K: gl.constexpr = a_desc.block_type.shape[1]
@@ -320,15 +320,7 @@ def blocked_mma_kernel(a_desc, b_desc, c_desc,  #
         else:
             b = b_smem
 
-        # We can overlap the WGMMA with the loads by launching the MMA without
-        # waiting for it until the next iteration.
-        if OVERLAP_MMA:
-            acc = warpgroup_mma_wait(num_outstanding=0, deps=(acc, ))
-
-        acc = warpgroup_mma(a_smem, b, acc, is_async=OVERLAP_MMA)
-
-    # Make sure to wait for the last WGMMA.
-    if OVERLAP_MMA:
+        acc = warpgroup_mma(a_smem, b, acc, is_async=True)
         acc = warpgroup_mma_wait(num_outstanding=0, deps=(acc, ))
 
     mbarrier.invalidate(bar)
@@ -341,7 +333,7 @@ def blocked_mma_kernel(a_desc, b_desc, c_desc,  #
     tma.store_wait(pendings=0)
 
 
-def blocked_mma(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B, OVERLAP_MMA, num_warps):
+def blocked_mma(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B, num_warps):
     M, N = C.shape
 
     a_layout = gl.NVMMASharedLayout.get_default_for([BLOCK_M, BLOCK_K], gl.float16)
@@ -355,20 +347,19 @@ def blocked_mma(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B, OVERLAP_MMA, nu
     c_desc = TensorDescriptor(C, C.shape, C.stride(), [BLOCK_M, BLOCK_N], c_layout)
 
     grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
-    blocked_mma_kernel[grid](a_desc, b_desc, c_desc, TRANSPOSE_B, OVERLAP_MMA, num_warps=num_warps)
+    blocked_mma_kernel[grid](a_desc, b_desc, c_desc, TRANSPOSE_B, num_warps=num_warps)
 
 
 @pytest.mark.parametrize("M, N, K", [(208, 416, 304), (2000, 1000, 2000)])
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(64, 64, 64), (128, 128, 128)])
 @pytest.mark.parametrize("TRANSPOSE_B", [False, True])
-@pytest.mark.parametrize("OVERLAP_MMA", [False, True])
 @pytest.mark.parametrize("num_warps", [4, 8])
-def test_blocked_mma(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B, OVERLAP_MMA, num_warps):
+def test_blocked_mma(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B, num_warps):
     A = torch.randn(M, K, device="cuda", dtype=torch.float16)
     B = torch.randn((N, K) if TRANSPOSE_B else (K, N), device="cuda", dtype=torch.float16)
     C = torch.empty(M, N, device="cuda", dtype=torch.float32)
 
-    blocked_mma(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B, OVERLAP_MMA, num_warps)
+    blocked_mma(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B, num_warps)
 
     C_ref = A @ (B.T if TRANSPOSE_B else B)
     torch.testing.assert_close(C_ref.to(torch.float32), C, rtol=1e-3, atol=1e-1)
