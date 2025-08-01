@@ -920,14 +920,6 @@ public:
       combineArefs(loop);
     }
 
-    SmallVector<WarpGroupOp> wgOps;
-    m.walk([&](WarpGroupOp wgOp) { wgOps.push_back(wgOp); });
-    for (auto wgOp : wgOps) {
-      if (failed(ArefIndex<>::run(wgOp)))
-        signalPassFailure();
-    }
-    LLVM_DEBUG(llvm::dbgs() << "After arefIndexAssignment\n" << m << "\n");
-
     SmallVector<ArefCreateOp> arefOps;
     m.walk([&](ArefCreateOp arefOp) {
       // Only handles arefs whose producer (a partition with PutEnter / Exit)
@@ -937,6 +929,14 @@ public:
       }
     });
     multiBufferAref(arefOps, numStages);
+
+    SmallVector<WarpGroupOp> wgOps;
+    m.walk([&](WarpGroupOp wgOp) { wgOps.push_back(wgOp); });
+    for (auto wgOp : wgOps) {
+      if (failed(ArefIndex<>::run(wgOp)))
+        signalPassFailure();
+    }
+    LLVM_DEBUG(llvm::dbgs() << "After arefIndexAssignment\n" << m << "\n");
 
     mlir::RewritePatternSet patterns(context);
     patterns.add<LowerArefCreate>(context);
