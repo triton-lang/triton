@@ -67,6 +67,14 @@ _IMPORT_FROM_TRITON: List[str] = [
     "store",
     "to_tensor",
     "where",
+    "atomic_min",
+    "atomic_max",
+    "atomic_add",
+    "atomic_and",
+    "atomic_or",
+    "atomic_xor",
+    "atomic_xchg",
+    "atomic_cas",
 ]
 
 __all__ = [
