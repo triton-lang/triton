@@ -435,7 +435,10 @@ void init_gluon_ir(py::module &&m) {
            })
       .def("create_warpgroup_mma_wait",
            [](GluonOpBuilder &self, std::vector<Value> &deps, int pendings) {
-             self.create<ttng::WarpGroupDotWaitOp>(deps, pendings);
+             std::vector<Value> results;
+             auto wait = self.create<ttng::WarpGroupDotWaitOp>(deps, pendings);
+             llvm::append_range(results, wait.getResults());
+             return results;
            })
       .def("create_tmem_alloc",
            [](GluonOpBuilder &self, Type resultTy, Value value) -> Value {
