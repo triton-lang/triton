@@ -7377,6 +7377,37 @@ def test_tl_range_option_none():
     assert "loop_unroll_factor" not in compiled_kernel.asm["ttir"]
 
 
+def test_disable_licm():
+
+    @triton.jit
+    def while_no_licm(n):
+        i = 0
+        while tl.condition(i < n, disable_licm=True):
+            i = i + 1
+            print("i", i)
+
+    @triton.jit
+    def while_default(n):
+        i = 0
+        while tl.condition(i < n):
+            i = i + 1
+            print("i", i)
+
+    @triton.jit
+    def for_no_licm(n):
+        for i in tl.range(0, n, disable_licm=True):
+            print("i", i)
+
+    compiled_kernel1 = while_no_licm.warmup(10, grid=(1, ))
+    assert "llvm.licm.disable" in compiled_kernel1.asm["llir"]
+
+    compiled_kernel2 = while_default.warmup(10, grid=(1, ))
+    assert "llvm.licm.disable" not in compiled_kernel2.asm["llir"]
+
+    compiled_kernel3 = for_no_licm.warmup(10, grid=(1, ))
+    assert "llvm.licm.disable" in compiled_kernel3.asm["llir"]
+
+
 @triton.jit(noinline=True)
 def maxnreg_noinline1(X):
     tl.store(X, 0)
