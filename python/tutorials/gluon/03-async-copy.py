@@ -230,10 +230,10 @@ if __name__ == "__main__":
 #
 # Surprisingly, the cpasync version is already significantly faster. We picked
 # a non-swizzled shared memory layout. Shared memory is organized such that
-# consecutive 32B elements are stored in separate banks, up to 32 banks. On
-# newer GPUs, banks are dual-ported, allowing them to service two 32B requests
-# per cycle per warp. Any more than that causes the bank to serialize the shared
-# memory accesses.
+# consecutive 32-bit elements are stored in separate banks, up to 32 banks. On
+# newer GPUs, banks are dual-ported, allowing them to service two 32-bit
+# requests per cycle per warp. Any more than that causes the bank to serialize
+# the shared memory accesses.
 #
 # Our register layout maps 32 threads per warp to consecutive elements, meaning
 # even without swizzling, the shared memory load will not have bank conflicts.
@@ -363,12 +363,12 @@ if __name__ == "__main__":
 # in the inner loop is more expensive.
 #
 # One of the major issues getting in the way of more performance is register
-# pressure. For each element, we need to store the 32B result, compute a 64B
-# address, and the mask. With two inputs, this results in a lot of registers,
-# we the maximum registers per thread is 256. This is why we used a small
-# [32, 64] block size for the kernel. In the next tutorial, we will cover
-# tensor descriptors and TMAs, and how they can help reduce register pressure
-# at the cost of addressing flexibility.
+# pressure. For each element, we need to store the 32-bit result, compute a
+# 64-bit address, and the mask. With two inputs, this results in a lot of
+# registers, where the maximum registers per thread is 256. This is why we used
+# a small [32, 64] block size for the kernel. In the next tutorial, we will
+# convert tensor descriptors and TMAs, and how they can help reduce register
+# pressure at the cost of addressing flexibility.
 #
 # Main takeaways:
 #
