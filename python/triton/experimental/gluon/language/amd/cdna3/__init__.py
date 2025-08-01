@@ -5,8 +5,8 @@ __all__ = ["create_buffer_load_to_local"]
 
 
 @builtin
-def create_buffer_load_to_local(dest, ptr, offsets, mask=None, other=None, stride=None,
-                                cache_modifier="", _semantic=None):
+def create_buffer_load_to_local(dest, ptr, offsets, mask=None, other=None, stride=None, cache_modifier="",
+                                _semantic=None):
     """
     AMD Buffer load operation. Similar to amdgpu.buffer_load op but directly writes to shared memory instead of into registers.
 
@@ -26,5 +26,4 @@ def create_buffer_load_to_local(dest, ptr, offsets, mask=None, other=None, strid
     stride = stride.handle if stride is not None else ir.value()
     cache_modifier = _semantic._str_to_load_cache_modifier(cache_modifier)
 
-    builder.create_buffer_load_to_local(dest.handle, ptr.handle, offsets.handle,
-                                        mask, other, stride, cache_modifier)
+    builder.create_buffer_load_to_local(dest.handle, ptr.handle, offsets.handle, mask, other, stride, cache_modifier)

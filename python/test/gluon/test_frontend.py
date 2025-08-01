@@ -1433,6 +1433,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 @pytest.mark.parametrize("target", [HIP_TARGET_CDNA3])
 def test_buffer_load_to_local(target):
+
     @gluon.jit
     def kernel(ptr):
         blocked: ttgl.constexpr = ttgl.BlockedLayout([1], [64], [4], [0])
@@ -1463,6 +1464,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 @pytest.mark.parametrize("target", [HIP_TARGET_CDNA3])
 def test_buffer_load_to_local_mask_other(target):
+
     @gluon.jit
     def kernel(ptr):
         blocked: ttgl.constexpr = ttgl.BlockedLayout([1], [64], [4], [0])
@@ -1499,6 +1501,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 @pytest.mark.parametrize("target", [HIP_TARGET_CDNA3])
 def test_buffer_load_to_local_cache_mods(target):
+
     @gluon.jit
     def kernel(ptr):
         blocked: ttgl.constexpr = ttgl.BlockedLayout([1], [64], [4], [0])
