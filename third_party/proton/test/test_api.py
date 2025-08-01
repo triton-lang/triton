@@ -107,9 +107,9 @@ def test_hook(tmp_path: pathlib.Path):
     proton.activate(session_id0)
     assert len(
         HookManager.active_hooks) == 1, ("Activate a session multiple times should maintain a single instance of hook")
-    assert list(HookManager.session_hooks[session_id0])[0] is True
+    assert list(HookManager.session_hooks[session_id0].values())[0] is True
     proton.deactivate(session_id0)
-    assert list(HookManager.session_hooks[session_id0])[0] is False
+    assert list(HookManager.session_hooks[session_id0].values())[0] is False
     assert len(HookManager.active_hooks) == 0
     # Deactivate a session multiple times should not raise an error
     proton.deactivate(session_id0)
