@@ -110,8 +110,8 @@ def shared_memory_kernel(XBLOCK: ttgl.constexpr, YBLOCK: ttgl.constexpr, layout_
                          layout_b: ttgl.constexpr, smem_layout: ttgl.constexpr):
     unused = ttgl.allocate_shared_memory(ttgl.int32, [XBLOCK, YBLOCK], smem_layout)
     a = ttgl.full([XBLOCK, YBLOCK], 0, ttgl.int32, layout_a)
-    tl.static_assert(a.numel == unused.numel)
-    tl.static_assert(unused.numel == XBLOCK * YBLOCK)
+    ttgl.static_assert(a.numel == unused.numel)
+    ttgl.static_assert(unused.numel == XBLOCK * YBLOCK)
     mem = ttgl.allocate_shared_memory(ttgl.int32, a.shape, smem_layout, a)
     b = mem.load(layout_b)  # noqa: F841
     mem.store(a)
@@ -632,7 +632,7 @@ def async_tma_kernel(input_desc, XBLOCK: ttgl.constexpr):
     mbarrier.init(bar, count=1)
 
     tma.async_copy_global_to_shared(input_desc, [0, 0], bar, smem)
-    tl.static_assert(input_desc.block_type.nbytes == XBLOCK * XBLOCK * 2)
+    ttgl.static_assert(input_desc.block_type.nbytes == XBLOCK * XBLOCK * 2)
     mbarrier.expect(bar, input_desc.block_type.nbytes)
     mbarrier.wait(bar, 0)
 
@@ -932,7 +932,7 @@ def reduce_kernel(out):
     ttgl.static_assert(pairs[0].type.layout == ttgl.SliceLayout(0, layout))
     ttgl.static_assert(pairs[1].type.layout == ttgl.SliceLayout(0, layout))
     result = scalar + s1 + pairs[0] + pairs[1]
-    tl.store(out + ttgl.arange(0, 16, s0.type.layout), result)
+    ttgl.store(out + ttgl.arange(0, 16, s0.type.layout), result)
 
 
 @pytest.mark.parametrize("target", ALL_TARGETS)
@@ -1048,8 +1048,8 @@ def test_elementwise_core():
 
 @gluon.jit
 def linear_layout_kernel():
-    ll: tl.constexpr = ttgl.DistributedLinearLayout(reg_bases=[[1]], lane_bases=[[2], [4], [8], [16], [32]],
-                                                    warp_bases=[[64], [128]], block_bases=[], shape=[256])
+    ll: ttgl.constexpr = ttgl.DistributedLinearLayout(reg_bases=[[1]], lane_bases=[[2], [4], [8], [16], [32]],
+                                                      warp_bases=[[64], [128]], block_bases=[], shape=[256])
     ttgl.arange(0, 256, layout=ll)
 
 
@@ -1066,6 +1066,20 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   }
 }
 """)
+
+
+@filecheck_test
+@gluon.jit
+def test_dot_operand_layout():
+    # CHECK: [[NVMMA:#.*]] = #ttg.nvidia_mma
+    # CHECK: test_dot_operand_layout
+    mma_layout: ttgl.constexpr = ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1],
+                                                             instr_shape=[16, 32, 16])
+    layout: ttgl.constexpr = ttgl.DotOperandLayout(operand_index=0, parent=mma_layout, k_width=2)
+    # CHECK: arith.constant {{.*}} tensor<256x128xf16, #ttg.dot_op<{opIdx = 0, parent = [[NVMMA]], kWidth = 2}>>
+    x = ttgl.full([256, 128], 0.0, ttgl.float16, layout)
+    y = x.sum(axis=1)
+    ttgl.static_assert(y.type.layout.parent == layout)
 
 
 @filecheck_test
@@ -1192,7 +1206,7 @@ def async_copy_kernel(inp, xnumel, XBLOCK: ttgl.constexpr):
     smem = ttgl.allocate_shared_memory(inp.dtype.element_ty, [XBLOCK], ttgl.SwizzledSharedLayout(1, 1, 1, order=[0]))
     block_layout: ttgl.constexpr = ttgl.BlockedLayout([2], [32], [4], [0])
     xindex = ttgl.arange(0, XBLOCK, block_layout)
-    mask = tl.max_constancy(xindex < xnumel, 2)
+    mask = ttgl.max_constancy(xindex < xnumel, 2)
 
     async_copy.async_copy_global_to_shared(smem, inp + xindex)
     async_copy.async_copy_global_to_shared(smem, inp + xindex, mask, cache_modifier=".ca", eviction_policy="evict_last",
