@@ -26,7 +26,7 @@ bool verifyBarsEncoding(RankedTensorType readBarsType) {
 
 namespace mlir::triton::instrument {
 
-LogicalResult ExperimentalCheckOutstandingWritesOp::verify() {
+LogicalResult ExperimentalCheckWriteStateOp::verify() {
   auto writeStateType = cast<RankedTensorType>(getWriteStateType());
   auto buffersType = getBuffers().getType();
   if (writeStateType.getShape() != buffersType.getShape() ||
@@ -44,7 +44,7 @@ LogicalResult ExperimentalCheckOutstandingWritesOp::verify() {
   return success();
 }
 
-LogicalResult ExperimentalCheckOutstandingReadsOp::verify() {
+LogicalResult ExperimentalCheckReadBarriersOp::verify() {
   auto readBarsType = cast<RankedTensorType>(getReadBarsType());
   auto buffersType = getBuffers().getType();
   // readBars is 2D tensor of shape [num_buffers, num_barriers]
@@ -57,7 +57,7 @@ LogicalResult ExperimentalCheckOutstandingReadsOp::verify() {
   return success();
 }
 
-LogicalResult ExperimentalMarkAsWriteOp::verify() {
+LogicalResult ExperimentalSetWriteStateOp::verify() {
   auto buffersType = getBuffers().getType();
   auto writeStateType = cast<RankedTensorType>(getWriteStateType());
   if (writeStateType.getShape() != buffersType.getShape() ||
@@ -82,7 +82,7 @@ LogicalResult ExperimentalCommitWriteWithBarrierOp::verify() {
   return success();
 }
 
-LogicalResult ExperimentalMarkAsReadOp::verify() {
+LogicalResult ExperimentalSetReadBarrierOp::verify() {
   auto buffersType = getBuffers().getType();
   auto barriersType = getBarriers().getType();
   auto readBarsType = cast<RankedTensorType>(getReadBarsType());
@@ -129,6 +129,26 @@ LogicalResult ExperimentalCheckBarrierWritesClearedOp::verify() {
   auto barriersType = getBarriers().getType();
   if (writeBarsType.getShape()[1] != barriersType.getShape()[0])
     return emitError() << "writeBars dim 1 must match number of barriers";
+  return success();
+}
+
+LogicalResult ExperimentalStageAccessForCommitOp::verify() {
+  auto buffersType = getBuffers().getType();
+  auto outstandingCommitsType =
+      cast<RankedTensorType>(getOutstandingCommitsType());
+  if (buffersType.getShape()[0] != outstandingCommitsType.getShape()[0])
+    return emitError()
+           << "buffers and outstandingCommits must have the same size";
+  return success();
+}
+
+LogicalResult ExperimentalCheckOutstandingCommitsOp::verify() {
+  auto buffersType = getBuffers().getType();
+  auto outstandingCommitsType =
+      cast<RankedTensorType>(getOutstandingCommitsType());
+  if (buffersType.getShape()[0] != outstandingCommitsType.getShape()[0])
+    return emitError()
+           << "buffers and outstandingCommits must have the same size";
   return success();
 }
 
