@@ -49,19 +49,37 @@ SmallVector<ProducedValueInfo> getProducedValues(Operation *op, Block *loopBody,
   return producedValues;
 };
 
+template <typename AllocOp, typename LoadOp>
+std::optional<std::pair<AllocOp, LoadOp>> isLoadAndAlloc(Value result) {
+  auto alloc = result.getDefiningOp<AllocOp>();
+  if (!alloc)
+    return std::nullopt;
+  if (auto load = alloc.getSrc().template getDefiningOp<LoadOp>()) {
+    return std::make_pair(alloc, load);
+  }
+  return std::nullopt;
+}
+
+// if result is defined by descriptor_load followed by alloc, return the alloc
+// and the load ops as a pair.
+template <typename AllocOp> auto isDescLoadAndAlloc(Value result) {
+  return isLoadAndAlloc<AllocOp, triton::DescriptorOpInterface>(result);
+}
+
+template <typename AllocOp> auto isGlobalLoadAndAlloc(Value result) {
+  return isLoadAndAlloc<AllocOp, triton::LoadOp>(result);
+}
+
 ArefCreateOp createAref(OpBuilder &builder, ProducedValueInfo &producedValue) {
   auto result = producedValue.result;
-  MemDescType arefBufType;
 
-  if (auto memDescType = dyn_cast<MemDescType>(result.getType())) {
-    arefBufType = getMultiBufferedType(memDescType, 1);
-  } else if (auto tensorType = dyn_cast<RankedTensorType>(result.getType())) {
-    // if result is a value, create memdesctype for location where value will
-    // be stored
+  auto getSmemDescType = [](Value tensorResult) {
+    auto tensorType = cast<RankedTensorType>(tensorResult.getType());
     MemDescType memDescType;
     Attribute SharedMemorySpace =
         SharedMemorySpaceAttr::get(tensorType.getContext());
-    if (auto load = result.getDefiningOp<triton::DescriptorOpInterface>()) {
+    if (auto load =
+            tensorResult.getDefiningOp<triton::DescriptorOpInterface>()) {
       // A use of TMA which is not immediately consumed by LocalAlloc
       // This case applies, for example, when TMA is followed by SIMT ops
       // or MMAv2 is used.
@@ -73,15 +91,25 @@ ArefCreateOp createAref(OpBuilder &builder, ProducedValueInfo &producedValue) {
     } else {
       llvm_unreachable("Only TMA is expected for now.");
     }
-    arefBufType = getMultiBufferedType(memDescType, 1);
+    return memDescType;
+  };
+
+  MemDescType memDescType;
+  if (isDescLoadAndAlloc<LocalAllocOp>(result)) {
+    memDescType = dyn_cast<MemDescType>(result.getType());
+  } else if (auto opt = isDescLoadAndAlloc<TMEMAllocOp>(result)) {
+    auto descLoadResult = opt->first.getSrc();
+    memDescType = getSmemDescType(descLoadResult);
+  } else if (isa<RankedTensorType>(result.getType())) {
+    memDescType = getSmemDescType(result);
   } else {
-    std::string msg = "unsupported produced value type: " +
+    std::string msg = "createAref: unsupported produced value type: " +
                       mlir::debugString(result.getType());
     llvm::report_fatal_error(msg.c_str());
   }
 
-  assert(arefBufType &&
-         (isa<SharedMemorySpaceAttr>(arefBufType.getMemorySpace())));
+  MemDescType arefBufType = getMultiBufferedType(memDescType, 1);
+  assert(isa<SharedMemorySpaceAttr>(arefBufType.getMemorySpace()));
   auto loc = result.getLoc();
   auto alloc = triton::nvws::createAlloc(builder, loc, arefBufType, Value());
   return createArefCreateOp(builder, {arefBufType}, {alloc->getResult(0)}, loc);
@@ -127,26 +155,15 @@ void createNVWSDescriptorLoadOp(OpBuilder &builder, Operation *ttDescLoadOp,
   }
 }
 
-bool isDescLoadAndAlloc(Value result) {
-  auto alloc = result.getDefiningOp<LocalAllocOp>();
-  if (!alloc)
-    return false;
-  return alloc.getSrc().getDefiningOp<triton::DescriptorOpInterface>();
-}
-
-bool isGlobalLoadAndAlloc(Value result) {
-  auto alloc = result.getDefiningOp<LocalAllocOp>();
-  if (!alloc)
-    return false;
-  return alloc.getSrc().getDefiningOp<triton::LoadOp>();
-}
-
 StageCluster getStageClusterForProducer(Value producedValue) {
-  if (isDescLoadAndAlloc(producedValue) ||
-      isGlobalLoadAndAlloc(producedValue)) {
-    auto alloc = producedValue.getDefiningOp<LocalAllocOp>();
-    auto loadOp = alloc.getSrc().getDefiningOp();
-    return getStageCluster(loadOp);
+  if (auto opt = isDescLoadAndAlloc<LocalAllocOp>(producedValue)) {
+    return getStageCluster(opt->second);
+  } else if (auto opt = isDescLoadAndAlloc<TMEMAllocOp>(producedValue)) {
+    return getStageCluster(opt->second);
+  } else if (auto opt = isGlobalLoadAndAlloc<LocalAllocOp>(producedValue)) {
+    return getStageCluster(opt->second);
+  } else if (auto opt = isGlobalLoadAndAlloc<TMEMAllocOp>(producedValue)) {
+    return getStageCluster(opt->second);
   }
   return getStageCluster(producedValue.getDefiningOp());
 }
@@ -173,15 +190,21 @@ SmallVector<Operation *> createArefPut(PartitionBuilder &builder,
 
   auto producerKind = AsyncOp::NONE;
   SmallVector<Operation *> staleOps;
-  if (isDescLoadAndAlloc(result)) {
-    auto alloc = result.getDefiningOp<LocalAllocOp>();
-    auto descOp = alloc.getSrc().getDefiningOp();
+  if (auto opt = isDescLoadAndAlloc<LocalAllocOp>(result)) {
+    auto [alloc, descOp] = *opt;
     createNVWSDescriptorLoadOp(builder, descOp, dataBuf, producerPartition,
                                schedule, loc);
     producerKind = AsyncOp::TMALoad;
     staleOps.push_back(alloc);
     staleOps.push_back(descOp);
-  } else if (isGlobalLoadAndAlloc(result)) {
+  } else if (auto opt = isDescLoadAndAlloc<TMEMAllocOp>(result)) {
+    auto descOp = opt->second;
+    createNVWSDescriptorLoadOp(builder, descOp, dataBuf, producerPartition,
+                               schedule, loc);
+    producerKind = AsyncOp::TMALoad;
+    staleOps.push_back(descOp);
+  } else if (isGlobalLoadAndAlloc<LocalAllocOp>(result) ||
+             isGlobalLoadAndAlloc<TMEMAllocOp>(result)) {
     llvm_unreachable("cpasync not supported yet");
   } else if (auto tensorType = dyn_cast<RankedTensorType>(result.getType())) {
     if (auto descOp = result.getDefiningOp<triton::DescriptorOpInterface>()) {
@@ -197,7 +220,7 @@ SmallVector<Operation *> createArefPut(PartitionBuilder &builder,
       llvm_unreachable("Aref for values not supported yet");
     }
   } else {
-    std::string msg = "unsupported produced value type: " +
+    std::string msg = "createArefPut: unsupported produced value type: " +
                       mlir::debugString(result.getType());
     llvm::report_fatal_error(msg.c_str());
   }
@@ -327,26 +350,34 @@ void createArefGet(PartitionBuilder &builder, scf::ForOp loop,
   Value token = getEnterOp.getToken();
 
   Operation *exitInsertPointAfter = nullptr;
+
+  auto replaceUsesWithLocalLoad = [&](Value result, StageCluster stageCluster) {
+    auto localLoadOp = builder.createInto<LocalLoadOp>(
+        *consumerPartition, stageCluster, result.getType(), dataBuf);
+    result.replaceAllUsesWith(localLoadOp.getResult());
+    schedule.insert(consumerPartition, localLoadOp);
+    if (consumers.size() == 1) {
+      // If there is only one consumer and we hit this code path, the empty
+      // barrier can be released after local load.
+      exitInsertPointAfter = localLoadOp;
+    }
+  };
+
   for (auto result : results) {
-    if (auto memDescType = dyn_cast<MemDescType>(result.getType())) {
+    if (auto localAlloc = result.getDefiningOp<LocalAllocOp>()) {
+      auto memDescType = cast<MemDescType>(result.getType());
       auto callback = [&](Operation *oldOp, Operation *newOp) {
         assert(schedule.getPartition(oldOp) == consumerPartition);
         schedule.insert(consumerPartition, newOp);
       };
-      replaceUsesAndPropagateType(builder, result.getDefiningOp(), dataBuf,
-                                  callback);
-    } else if (auto tensorType = dyn_cast<RankedTensorType>(result.getType())) {
-      auto localLoadOp = builder.createInto<LocalLoadOp>(
-          *consumerPartition, stageClusterEnter, tensorType, dataBuf);
-      result.replaceAllUsesWith(localLoadOp.getResult());
-      schedule.insert(consumerPartition, localLoadOp);
-      if (consumers.size() == 1) {
-        // If there is only one consumer and we hit this code path, the empty
-        // barrier can be released after local load.
-        exitInsertPointAfter = localLoadOp;
-      }
+      replaceUsesAndPropagateType(builder, localAlloc, dataBuf, callback);
+    } else if (auto tmemAlloc = result.getDefiningOp<TMEMAllocOp>()) {
+      builder.setInsertionPoint(tmemAlloc);
+      replaceUsesWithLocalLoad(tmemAlloc.getSrc(), stageClusterEnter);
+    } else if (isa<RankedTensorType>(result.getType())) {
+      replaceUsesWithLocalLoad(result, stageClusterEnter);
     } else {
-      std::string msg = "unsupported produced value type: " +
+      std::string msg = "createArefGet: unsupported produced value type: " +
                         mlir::debugString(result.getType());
       llvm::report_fatal_error(msg.c_str());
     }
@@ -384,9 +415,12 @@ bool insertArefs(PartitionBuilder &builder, scf::ForOp loop,
 
   processResultUses(producedValue.result);
 
-  if (isDescLoadAndAlloc(producedValue.result)) {
+  if (auto opt = isDescLoadAndAlloc<LocalAllocOp>(producedValue.result)) {
     // Process the register use as well
-    auto alloc = producedValue.result.getDefiningOp<LocalAllocOp>();
+    auto alloc = opt->first;
+    processResultUses(alloc.getSrc());
+  } else if (auto opt = isDescLoadAndAlloc<TMEMAllocOp>(producedValue.result)) {
+    auto alloc = opt->first;
     processResultUses(alloc.getSrc());
   }
 
@@ -446,7 +480,8 @@ public:
             return WalkResult::advance();
           }
           // Only handles load ops for now.
-          if (isDescLoadAndAlloc(op->getResult(0)) ||
+          if (isDescLoadAndAlloc<LocalAllocOp>(op->getResult(0)) ||
+              isDescLoadAndAlloc<TMEMAllocOp>(op->getResult(0)) ||
               (allowDescLoadRegUse &&
                (isa<triton::DescriptorOpInterface>(op)))) {
             ops.push_back(op);
@@ -459,7 +494,7 @@ public:
               getProducedValues(op, loop.getBody(), *schedule);
           for (auto producedValue : producedValues) {
             PartitionBuilder builder(op->getLoc(), op);
-            builder.setInsertionPointAfter(op);
+            builder.setInsertionPoint(op);
             if (insertArefs(builder, loop, *schedule, producedValue, arefTag))
               arefTag++;
           }
