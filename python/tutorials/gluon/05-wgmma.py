@@ -134,7 +134,9 @@ def small_mma_kernel(a_desc, b_desc, c_desc, d_desc,  #
 
     # WGMMA is an asynchronous operation. Until the operation is complete, we
     # cannot access the result, even though it is in registers, and we cannot
-    # write to any of the shared memory inputs.
+    # write to any of the shared memory inputs. To ensure a correct ordering
+    # between `warpgroup_mma`, the wait, and uses of the result, we must pass
+    # the accumulator to the wait as one of its `deps` arguments.
     #
     # WGMMA accesses shared memory through the async proxy, like TMAs. This
     # means `fence_async_shared` is sometimes required to prevent hazards.
@@ -143,7 +145,7 @@ def small_mma_kernel(a_desc, b_desc, c_desc, d_desc,  #
     # async copies and TMA stores. Issuing a WGMMA operation implicitly commits
     # it to a WGMMA group. Thus, we can wait for the completion of the operation
     # by waiting until there are 0 outstanding operations.
-    warpgroup_mma_wait(num_outstanding=0)
+    warpgroup_mma_wait(num_outstanding=0, deps=(d, ))
 
     # Note that `is_async=False` is the default value, and all this does is
     # immediately wait for 0 outstanding operations. In this tutorial, we will
