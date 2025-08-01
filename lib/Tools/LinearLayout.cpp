@@ -1055,6 +1055,7 @@ LinearLayout LinearLayout::invertAndCompose(const LinearLayout &outer) const {
   assertDimsEqualIgnoringOrder(outDims, outer.getOutDimNames());
   const auto &B = *this;
   const auto A = outer.transposeOuts(outDims);
+#ifndef NDEBUG
   for (auto dim : outDims) {
     assert(A.getOutDimSize(dim) >= B.getOutDimSize(dim) &&
            ("A.invertAndCompose(B) called with incompatible output shapes in " +
@@ -1062,6 +1063,7 @@ LinearLayout LinearLayout::invertAndCompose(const LinearLayout &outer) const {
             " >= " + std::to_string(B.getOutDimSize(dim)))
                .c_str());
   }
+#endif
 
   // Broadcasting heuristic
   // Imagine we have two layouts with `warps = [[0, 0],  [0, 0]]`

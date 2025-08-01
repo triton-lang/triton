@@ -907,6 +907,8 @@ struct TMEMSubSliceOpConversion
     auto encoding = dyn_cast<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
         srcTy.getEncoding());
     auto shapePerCTA = getShapePerCTA(srcTy);
+    int blockN = encoding.getBlockN();
+    int blockM = encoding.getBlockM();
     int offsetCol = 0;
     int offsetRow = 0;
     assert(llvm::is_contained({64, 128}, blockM) && "checked by the verifier");

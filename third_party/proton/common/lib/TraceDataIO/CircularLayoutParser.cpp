@@ -17,9 +17,11 @@ std::shared_ptr<CircularLayoutParserResult> CircularLayoutParser::getResult() {
 }
 
 void CircularLayoutParser::parse() {
+#ifndef NDEBUG
   auto &uidVec = getConfig().uidVec;
   assert(uidVec.size());
   assert(std::is_sorted(uidVec.begin(), uidVec.end()));
+#endif
 
   int numBlocks = getConfig().numBlocks;
   const int scratchMemSize = getConfig().scratchMemSize;
@@ -85,7 +87,6 @@ void CircularLayoutParser::parseProfileEvents() {
 void CircularLayoutParser::parseSegment(
     int segmentByteSize, CircularLayoutParserResult::Trace &trace) {
 
-  auto state = ParseState::INIT;
   int idealSize = trace.count * kWordSize;
   int byteSize = std::min(idealSize, segmentByteSize);
   const int maxNumEntries = byteSize / (kWordSize * kWordsPerEntry);
@@ -186,11 +187,9 @@ std::shared_ptr<CircularLayoutParserResult>
 proton::readCircularLayoutTrace(ByteSpan &buffer, bool applyTimeShift) {
   CircularLayoutParserConfig config;
   auto decoder = EntryDecoder(buffer);
-  uint32_t version = decoder.decode<I32Entry>()->value;
-  assert(version == 1 && "Version mismatch");
+  assert(decoder.decode<I32Entry>()->value == 1 && "Version mismatch");
   buffer.skip(8);
   uint32_t payloadOffset = decoder.decode<I32Entry>()->value;
-  uint32_t payloadSize = decoder.decode<I32Entry>()->value;
   uint32_t device = decoder.decode<I32Entry>()->value;
   config.device = decodeDevice(device);
   config.numBlocks = decoder.decode<I32Entry>()->value;

@@ -54,7 +54,6 @@ private:
       return false;
     }
 
-    auto tilesPerWarp = mfmaEnc.getTilesPerWarp();
     if (!mfmaEnc.hasUnitTilesPerWarp()) {
       return false;
     }

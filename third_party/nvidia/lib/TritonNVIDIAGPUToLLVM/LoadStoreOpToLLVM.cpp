@@ -852,7 +852,6 @@ public:
                 : triton::nvgpu::MemSemantic::RELAXED,
             ScopeMap[op.getScope()]);
 
-        auto ASMReturnTy = void_ty(ctx);
         if (op.getResult().use_empty()) {
           rewriter.eraseOp(op);
           return success();
@@ -1123,7 +1122,6 @@ struct AsyncCopyGlobalToLocalOpConversion
     Value llDst = adaptor.getResult();
     Value llSrc = adaptor.getSrc();
     Value llMask = adaptor.getMask();
-    Value llOther = adaptor.getOther();
 
     // %src
     auto srcElems = unpackLLElements(loc, llSrc, rewriter);
@@ -1339,7 +1337,6 @@ struct AsyncTMACopyGlobalToLocalOpConversion
     pred = b.and_(pred, LLVM::NVIDIA::createElectPredicate(loc, rewriter));
 
     auto smemTy = op.getResult().getType();
-    Attribute encoding = smemTy.getEncoding();
 
     auto shapePerCTA = ttg::getShapePerCTA(smemTy);
     int rank = op.getCoord().size();
@@ -1433,7 +1430,6 @@ LogicalResult convertTMAStoreLikeOp(Operation *op,
   auto shapePerCTA = ttg::getShapePerCTA(srcTy);
 
   auto rank = coords.size();
-  auto encoding = srcTy.getEncoding();
 
   auto msgToPackedOffset = getMsgToPackedOffsetLayout(srcTy);
   auto smemLayout = ttg::toLinearLayout(srcTy);

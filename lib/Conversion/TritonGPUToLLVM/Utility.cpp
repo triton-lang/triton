@@ -445,11 +445,10 @@ emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
   auto vecIndices =
       applyLinearLayoutVec(loc, rewriter, ll, commonIndices, registerIndices);
 
-  unsigned rank = shape.size();
   SmallVector<SmallVector<Value>> ret;
   for (auto &indices : vecIndices) {
     SmallVector<Value> vals;
-    assert(indices.size() == rank);
+    assert(indices.size() == shape.size());
     for (auto &idx : indices)
       vals.push_back(idx.second);
     ret.push_back(vals);
@@ -699,7 +698,6 @@ bool emitTransferBetweenRegistersAndShared(
   StringAttr kWarp = str_attr("warp");
   StringAttr kOffset = str_attr("offset");
 
-  auto shape = sharedTy.getShape();
   auto paddedLayout =
       dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(sharedTy.getEncoding());
   LinearLayout regToSharedLayout = LinearLayout::empty();
@@ -1524,10 +1522,12 @@ namespace {
 SmallVector<SmallVector<int> /*registers*/>
 collectRegsForIter(MLIRContext *ctx, const LinearLayout &layout) {
   StringAttr kRegister = str_attr("register");
+  StringAttr kIteration = str_attr("iteration");
+#ifndef NDEBUG
   StringAttr kLane = str_attr("lane");
   StringAttr kWarp = str_attr("warp");
   StringAttr kBlock = str_attr("block");
-  StringAttr kIteration = str_attr("iteration");
+#endif
 
   // The choice of iteration should be determined only by the register.  That
   // is, it should be correct to split the register dimension into iterations.
@@ -1556,7 +1556,6 @@ SmallVector<Value> transferWithinBlockImpl(ArrayRef<Value> inVals,
   StringAttr kLane = str_attr("lane");
   StringAttr kWarp = str_attr("warp");
   StringAttr kBlock = str_attr("block");
-  StringAttr kOffset = str_attr("offset");
   StringAttr kIteration = str_attr("iteration");
 
   auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
@@ -1581,9 +1580,12 @@ SmallVector<Value> transferWithinBlockImpl(ArrayRef<Value> inVals,
   // Output dims: [offset, iteration]
   LinearLayout shmemStoreLayout = srcLayout.invertAndCompose(sharedLayout);
 
+#ifndef NDEBUG
+  StringAttr kOffset = str_attr("offset");
   const int shmemAllocatedNumElems =
       getNumScratchElements(scratchConfig.paddedRepShape);
   assert(shmemStoreLayout.getOutDimSize(kOffset) <= shmemAllocatedNumElems);
+#endif
 
   // Layout for the load from shmem to registers.
   LinearLayout shmemLoadLayout = dstLayout.invertAndCompose(sharedLayout);
@@ -1715,7 +1717,6 @@ Value transferWithinBlockPadding(triton::gpu::ConvertLayoutOp op, Value src,
                                  const TargetInfoBase &targetInfo,
                                  const LLVMTypeConverter *typeConverter,
                                  RewriterBase &rewriter) {
-  MLIRContext *ctx = op.getContext();
   auto loc = op.getLoc();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto srcTy = op.getSrc().getType();

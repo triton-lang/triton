@@ -137,8 +137,8 @@ LogicalResult replaceProtonRecordOp(OpBuilder &builder, FuncOp func,
 int getAllocSharedMemSize(int maxSharedMemSize, int sharedMemUsed,
                           int segmentNum) {
   const int bytesPerEntry = gpu::getBytesPerClockEntry();
-  const int wordsPerEntry = bytesPerEntry / 4; // 1 word = 4 bytes
-  const int circularHeaderSize = gpu::getCircularHeaderSize(); // byte size
+  [[maybe_unused]] const int wordsPerEntry = bytesPerEntry / 4; // 1 word = 4 bytes
+  [[maybe_unused]] const int circularHeaderSize = gpu::getCircularHeaderSize(); // byte size
   sharedMemUsed = llvm::alignTo(sharedMemUsed, bytesPerEntry);
   if (sharedMemUsed >= maxSharedMemSize) {
     // We just assume there's enough shared memory and error out if not during

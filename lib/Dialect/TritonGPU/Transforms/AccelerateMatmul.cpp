@@ -329,6 +329,7 @@ public:
     Value a = dotOp.getA();
     Value b = dotOp.getB();
     auto oldAType = cast<RankedTensorType>(a.getType());
+    auto oldBType = cast<RankedTensorType>(b.getType());
     auto oldRetType = cast<RankedTensorType>(dotOp.getType());
 
     // Enable F64 MMA only on SM80/SM90 with high performance F64 tensorcore.

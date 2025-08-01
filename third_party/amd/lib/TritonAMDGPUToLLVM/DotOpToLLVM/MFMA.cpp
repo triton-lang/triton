@@ -308,7 +308,6 @@ struct DotOpMFMAConversionHelper {
       numRepKB *= 16;
     }
     numRepK = std::max(numRepKA, numRepKB);
-    int numBroadcast = std::max(numBroadcastA, numBroadcastB);
 
     bool preserveBF16 = intrinsicName.contains(".bf16") && mfmaVersion >= 4;
     auto operandA = getValuesFromDotOperandLayoutStruct(

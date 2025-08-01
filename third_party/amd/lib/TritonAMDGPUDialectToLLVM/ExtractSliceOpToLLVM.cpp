@@ -38,8 +38,6 @@ struct ExtractSliceOpConversion
     auto dstCTAShape = LLVM::AMD::multiDimElementwise<int64_t, unsigned>(
         dstShape, shapePerCTATile, std::divides<unsigned>());
 
-    auto numCTATiles = std::accumulate(dstCTAShape.begin(), dstCTAShape.end(),
-                                       1, std::multiplies<>());
     auto offsets = op.getStaticOffsets();
     auto firstTileCoordinate =
         LLVM::AMD::multiDimElementwise<int64_t, unsigned>(
@@ -56,11 +54,6 @@ struct ExtractSliceOpConversion
         LLVM::AMD::getCTATileOrder(srcTy.getContext(), linearLayoutSrc);
     auto dstCTAOrder =
         LLVM::AMD::getCTATileOrder(srcTy.getContext(), linearLayoutDst);
-
-    unsigned elemsPerThreadPerCTA =
-        triton::gpu::getTotalElemsPerThread(srcTy) /
-        std::accumulate(srcCTAShape.begin(), srcCTAShape.end(), 1,
-                        std::multiplies<>());
 
     // Algorithm:
     // 1. for every src element

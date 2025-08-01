@@ -496,7 +496,6 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
       otherElems = unpackLLElements(loc, llOther, rewriter);
 
     // vectorized iteration through all the pointer/mask/other elements
-    const int numVecs = numElems / vec;
 
     auto cacheMod = op.getCache();
     SmallVector<Value> loadedVals;
@@ -504,6 +503,7 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
     for (size_t vecStart = 0; vecStart < numElems; vecStart += vec) {
 
 #ifndef NDEBUG
+      const int numVecs = numElems / vec;
       const int valueElemNBits =
           std::max(8u, valueElemTy.getIntOrFloatBitWidth());
       const size_t maxWordWidth = std::max<size_t>(32, valueElemNBits);
@@ -934,7 +934,6 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
     auto loc = op->getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     MLIRContext *ctx = rewriter.getContext();
-    auto moduleOp = op->getParentOfType<ModuleOp>();
 
     auto valueTy = value.getType();
     Type valueElemTy =
@@ -1078,7 +1077,6 @@ struct BufferAtomicRMWOpConversion
     // Check if the op has users, if it does we set GLC=1, otherwise GLC=0
     auto opUsers = op.getResult().getUsers();
     auto hasUsers = std::distance(opUsers.begin(), opUsers.end()) > 0;
-    auto moduleOp = op->getParentOfType<ModuleOp>();
 
     auto freeVarMasks = getFreeVariableMasks(valueTy);
     Value threadPred =
@@ -1148,7 +1146,6 @@ struct BufferAtomicCASOpConversion
     // original values
     Value ptr = op.getPtr();
     Value offset = op.getOffsets();
-    Value cmp = op.getCmp();
     Value val = op.getVal();
 
     Value llPtr = adaptor.getPtr();
@@ -1188,13 +1185,10 @@ struct BufferAtomicCASOpConversion
     }
 
     mlir::Operation *lastCASOp;
-    MLIRContext *ctx = rewriter.getContext();
     GCNBuilder waitcntBuilder;
 
     // Check if the op has users, if it does we set GLC=1, otherwise GLC=0
-    auto opUsers = op.getResult().getUsers();
     auto hasUsers = !op.getResult().getUsers().empty();
-    auto moduleOp = op->getParentOfType<ModuleOp>();
     auto freeVarMasks = getFreeVariableMasks(valueTy);
     Value threadPred =
         emitRedundantThreadPredicate(freeVarMasks, rewriter, loc, targetInfo);
@@ -1287,7 +1281,6 @@ struct BufferStoreOpConversion
 
     Value rsrcDesc = bufferEmitter.createResourceDescriptor(llPtr, llStride);
     MLIRContext *ctx = rewriter.getContext();
-    auto moduleOp = op->getParentOfType<ModuleOp>();
     auto freeVarMasks = getFreeVariableMasks(valueTy);
     Value threadPred =
         emitRedundantThreadPredicate(freeVarMasks, rewriter, loc, targetInfo);
@@ -1367,7 +1360,6 @@ struct AtomicCASOpConversion
       Value casPtr = ptrElements[i];
       // use op
       if (tensorTy) { // for tensor
-        auto retType = valueElemTy;
         // TODO: USE ATOMIC CAS OP on Tensor
         auto successOrdering = *atomicMemOrdering;
         auto failureOrdering = LLVM::AtomicOrdering::monotonic;
@@ -1557,7 +1549,7 @@ struct AtomicRMWOpConversion
     auto freeVarMasks = getFreeVariableMasks(op.getPtr().getType());
     Value threadPred =
         emitRedundantThreadPredicate(freeVarMasks, rewriter, loc, targetInfo);
-    auto tid = getThreadId(rewriter, loc);
+    [[maybe_unused]] auto tid = getThreadId(rewriter, loc);
 
     std::optional<Value> atomicSharedMemBase =
         op->hasAttr("allocation.offset")

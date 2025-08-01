@@ -611,7 +611,6 @@ struct MapElementwiseOpConversion
     }
 
     auto &scalarOp = op.getScalarOp();
-    Region &parent = *rewriter.getBlock()->getParent();
 
     auto nOutputs = op.getNumResults();
     SmallVector<Value> scalarOutputs(nOutputs * nElems);

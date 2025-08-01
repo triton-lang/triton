@@ -24,12 +24,10 @@ struct ConcatOpConversion : public ConvertOpToLLVMPattern<amdgpu::ConcatOp> {
         cast<RankedTensorType>(op.getResult().getType());
 
     ArrayRef<int64_t> dstShape = resultType.getShape();
-    Attribute dstEncoding = resultType.getEncoding();
 
     Value srcVal = op.getSources()[0];
     RankedTensorType srcType = cast<RankedTensorType>(srcVal.getType());
     ArrayRef<int64_t> srcShape = srcType.getShape();
-    Attribute srcEncoding = srcType.getEncoding();
 
     MLIRContext *context = resultType.getContext();
     auto linearLayoutSrc = triton::gpu::toLinearLayout(srcType);
@@ -45,10 +43,6 @@ struct ConcatOpConversion : public ConvertOpToLLVMPattern<amdgpu::ConcatOp> {
     auto shapePerCTATile = triton::gpu::getShapePerCTATile(resultType);
     auto sources = adaptor.getSources();
 
-    unsigned totalElems = ::getNumElements<int64_t>(dstShape);
-    unsigned elemsPerTile = ::getNumElements<unsigned>(shapePerCTATile);
-    unsigned numCTATiles = totalElems / elemsPerTile;
-
     // Default order is fastest to slowest varying dimension.
     std::vector<unsigned> defaultOrder(rank);
     std::iota(defaultOrder.rbegin(), defaultOrder.rend(), 0);
@@ -59,10 +53,6 @@ struct ConcatOpConversion : public ConvertOpToLLVMPattern<amdgpu::ConcatOp> {
         srcShape, shapePerCTATile, std::divides<unsigned>());
     auto srcToDstShape = LLVM::AMD::multiDimElementwise<int64_t, int64_t>(
         dstShape, srcShape, std::divides<unsigned>());
-
-    unsigned elemsPerThreadPerCTA =
-        triton::gpu::getTotalElemsPerThread(srcType) /
-        ::getNumElements<unsigned>(srcCTAShape);
 
     llvm::SmallVector<Value> resultVals;
     llvm::SmallVector<SmallVector<Value>> unpackedSources;

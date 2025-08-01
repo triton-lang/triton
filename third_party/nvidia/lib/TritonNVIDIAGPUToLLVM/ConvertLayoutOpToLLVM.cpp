@@ -18,7 +18,6 @@ using namespace mlir::triton;
 using namespace mlir::triton::gpu;
 using mlir::LLVM::NVIDIA::lowerLdStMatrix;
 
-constexpr int kPtrBitWidth = 64;
 struct ConvertLayoutOpSwizzlingConversion
     : public ConvertOpToLLVMPattern<triton::gpu::ConvertLayoutOp> {
   const NVIDIA::TargetInfo &targetInfo;
@@ -34,7 +33,6 @@ struct ConvertLayoutOpSwizzlingConversion
                   ConversionPatternRewriter &rewriter) const override {
     MLIRContext *ctx = op.getContext();
 
-    const auto &shape = op.getType().getShape();
     auto srcTy = op.getSrc().getType();
     auto dstTy = op.getType();
 
@@ -187,7 +185,7 @@ struct ConvertLayoutOpSwizzlingConversion
       } else {
         assert(idxSrc == 1 || idxSrc == 2);
         bool transpose = idxSrc == 2;
-        auto result = lowerLdStMatrix(
+        [[maybe_unused]] auto result = lowerLdStMatrix(
             loc, storeCvt, transpose, tileInVals, smemBase, affineOffset,
             maskSpanAffineOffset, llvmElemTy, rewriter, targetInfo);
         assert(succeeded(result));
@@ -203,7 +201,7 @@ struct ConvertLayoutOpSwizzlingConversion
       } else {
         assert(idxDst == 1 || idxDst == 2);
         bool transpose = idxDst == 2;
-        auto result = lowerLdStMatrix(
+        [[maybe_unused]] auto result = lowerLdStMatrix(
             loc, loadCvt, transpose, tileOutVals, smemBase, affineOffset,
             maskSpanAffineOffset, llvmElemTy, rewriter, targetInfo);
         assert(succeeded(result));
@@ -283,7 +281,6 @@ private:
                               OpAdaptor adaptor,
                               ConversionPatternRewriter &rewriter,
                               const NVIDIA::TargetInfo &targetInfo) const {
-    MLIRContext *ctx = rewriter.getContext();
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto typeConverter = getTypeConverter();

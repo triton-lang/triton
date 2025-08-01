@@ -113,7 +113,6 @@ BarrierCount getArrivalCount(ArefCreateOp op) {
     if (isa<ArefDestroyOp>(user))
       continue;
     auto [wgOp, idx] = getWarpGroupIdx(user);
-    auto numWarps = wgOp.getNumWarps()[idx];
 
     if (auto putExitOp = dyn_cast<ArefPutExitOp>(user)) {
       int pendingCount = 0;
@@ -171,10 +170,8 @@ BarrierCount getArrivalCount(ArefCreateOp op) {
 ArefValue createAndInitMbar(ArefCreateOp op, PatternRewriter &rewriter) {
   BarrierCount count = getArrivalCount(op);
 
-  MLIRContext *ctx = op.getContext();
   auto loc = op.getLoc();
   auto arefTy = op.getType();
-  auto baseType = arefTy.getBaseType();
   auto arefBufTypes = llvm::to_vector(llvm::map_range(
       arefTy.getBaseType(), [](Type type) { return cast<MemDescType>(type); }));
   auto shape = arefBufTypes[0].getShape();
@@ -209,7 +206,6 @@ SmallVector<Value> getSubViews(ArefValue arefVal, Value stage, Location loc,
   for (auto buffer : arefVal.buffers) {
     auto memDescType = cast<MemDescType>(buffer.getType());
     auto shape = memDescType.getShape();
-    auto rank = shape.size() - 1;
 
     SmallVector<int64_t> tensorShape(shape.begin() + 1, shape.end());
     auto memDescTypeNew = MemDescType::get(

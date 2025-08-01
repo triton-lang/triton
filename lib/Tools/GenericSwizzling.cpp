@@ -241,7 +241,6 @@ std::pair<int, int> logBankConflicts(ArrayRef<int32_t> tileSrc,
                                      int32_t bitwidth) {
   auto *ctx = smem.getOutDimNames().begin()->getContext();
   auto smemFlat = smem.flattenOuts();
-  auto inDim = *smem.getInDimNames().begin();
   // Take all the bases in the first bank (32 bits)
   auto smemBases =
       flatten(smemFlat.flattenIns(), *smemFlat.getInDimNames().begin());
@@ -369,8 +368,9 @@ optimalSwizzling(const LinearLayout &src, const LinearLayout &dst,
 
   const int32_t dim = src.getTotalOutDimSizeLog2();
   auto *ctx = src.getInDimNames().begin()->getContext();
+  
+  #ifndef NDEBUG
   auto kReg = StringAttr::get(ctx, "register");
-
   auto regsNotZero = [kReg](const LinearLayout &ll) {
     return llvm::all_of(
         ll.getBases().lookup(kReg),

@@ -454,7 +454,6 @@ public:
 
     auto mDim = mfmaInstr->mDim;
     auto nDim = mfmaInstr->nDim;
-    auto kDim = mfmaInstr->kDim;
     auto kBase = mfmaInstr->kBase;
 
     auto warpsPerTile =
@@ -982,7 +981,6 @@ public:
     a = convertInputLayout(a, 0);
     b = convertInputLayout(b, 1);
 
-    StringAttr kWarp = StringAttr::get(ctx, "warp");
     auto convertScaleLayout = [&](TensorValue scale,
                                   llvm::ArrayRef<int64_t> valShape,
                                   LinearLayout dotLL, int idx) -> Value {

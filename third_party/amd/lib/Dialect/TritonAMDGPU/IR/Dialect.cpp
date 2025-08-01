@@ -67,7 +67,6 @@ bool hasMatchingCTATileLayoutForSliceConcat(
     RankedTensorType srcTy, RankedTensorType dstTy,
     std::function<void(const Twine &)> emitError) {
   auto srcShape = srcTy.getShape();
-  auto dstShape = dstTy.getShape();
   auto srcLL = triton::gpu::toLinearLayout(srcTy);
   auto dstLL = triton::gpu::toLinearLayout(dstTy);
 

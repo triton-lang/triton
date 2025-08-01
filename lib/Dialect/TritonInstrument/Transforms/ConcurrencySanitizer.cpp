@@ -471,7 +471,6 @@ private:
         {size}, elType, getThreadLocalBlockedEncoding(size));
     SmallVector<APInt> apInts = llvm::to_vector(
         llvm::map_range(values, [](int64_t v) { return APInt(64, v); }));
-    auto denseAttr = DenseElementsAttr::get(tensorType, apInts);
     auto op = builder.create<tti::ExperimentalBufferPointersOp>(
         tensorType, values, memType);
     return op;
@@ -493,7 +492,6 @@ private:
 
   Value createInitializedScratchMemory(ImplicitLocOpBuilder &b,
                                        TypedValue<RankedTensorType> tensor) {
-    auto encoding = tensor.getType().getEncoding();
     Type elType = tensor.getType().getElementType();
     int elSize = elType.getIntOrFloatBitWidth() / 8;
     int numEls = product(tensor.getType().getShape());

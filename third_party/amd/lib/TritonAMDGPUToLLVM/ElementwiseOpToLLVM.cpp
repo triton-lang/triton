@@ -251,7 +251,6 @@ cvtScalePkDowncastToFp8(Location loc, ConversionPatternRewriter &rewriter,
   Value v2I16Vec = b.undef(v2I16Ty);
   Value scale = b.f32_val(1);
 
-  Value result;
   if constexpr (std::is_same_v<ConvertOp, ROCDL::CvtScaleF32PkFp8F32Op> ||
                 std::is_same_v<ConvertOp, ROCDL::CvtScaleF32PkBf8F32Op>) {
     v2I16Vec =
@@ -623,7 +622,6 @@ static SmallVector<Value> cvtPkFp32ToF8(Location loc,
                                         const SmallVector<Value> &v) {
   assert(v.size() == 4);
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  Type v2I16Ty = vec_ty(i16_ty, 2);
   Value result = b.undef(i32_ty);
 
   result = rewriter.create<ConvertOp>(loc, i32_ty, v[0], v[1], result,

@@ -914,7 +914,6 @@ void Pingponger::getDotPingponged() {
     auto scaledDotType = scaledDotOps[0].getType();
     auto scaledDotShape = scaledDotType.getShape();
     auto aType = scaledDotOps[0].getA().getType();
-    auto aShape = aType.getShape();
     auto elemWidth = aType.getElementTypeBitWidth();
 
     // MxN = 256x256

@@ -291,8 +291,6 @@ actionAdditiveStrides(const LinearLayout &layout, const LinearLayout addrLayout,
   assert(layout.getNumInDims() != 0);
   auto kReg = *layout.getInDimNames().begin();
   assert(kReg.str() == "register");
-  auto kLane = StringAttr::get(kReg.getContext(), "lane");
-  auto kWarp = StringAttr::get(kReg.getContext(), "warp");
   assert(layout.getNumOutDims() == 1);
   uint32_t bits = maskSpanOffsets;
   llvm::SetVector<uint32_t> tileBases;

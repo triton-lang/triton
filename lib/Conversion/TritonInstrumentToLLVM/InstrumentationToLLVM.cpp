@@ -22,9 +22,7 @@ namespace ttng = mlir::triton::nvidia_gpu;
 
 Value createFullLike(OpBuilder &builder, Location loc, Value scalar,
                      RankedTensorType tensorTy) {
-  auto scalarTy = scalar.getType();
-  auto elemTy = tensorTy.getElementType();
-  assert(scalarTy == elemTy &&
+  assert(scalar.getType() == tensorTy.getElementType() &&
          "Expected scalar to be of the same type as the tensor elements");
   return builder.create<triton::SplatOp>(loc, tensorTy, scalar);
 }
@@ -127,7 +125,7 @@ Value createMaxReduce(OpBuilder &b, Location loc, Value tensor, int axis) {
   auto cmpOp =
       b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::sgt, arg0, arg1);
   auto result = b.create<arith::SelectOp>(loc, cmpOp, arg0, arg1);
-  auto returnOp = b.create<tt::ReduceReturnOp>(loc, std::vector<Value>{result});
+  b.create<tt::ReduceReturnOp>(loc, std::vector<Value>{result});
   return reduceOp->getResult(0);
 }
 
@@ -148,7 +146,6 @@ struct AssertInThreadOpConversion
   matchAndRewrite(tti::ExperimentalAssertInThreadOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
-    auto tensorTy = cast<RankedTensorType>(op.getCondition().getType());
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     SmallVector<Value> condElems =
         unpackLLElements(loc, adaptor.getCondition(), rewriter);
@@ -163,7 +160,7 @@ struct AssertInThreadOpConversion
     assert(condTy.isSignedInteger() ||
            condTy.isSignlessInteger() &&
                "Unsupported type for assert_in_thread");
-    Value zero = rewriter.create<LLVM::ConstantOp>(
+    rewriter.create<LLVM::ConstantOp>(
         loc, condTy, rewriter.getZeroAttr(condTy));
     for (auto elem : condElems) {
       if (check_any) {
@@ -229,8 +226,6 @@ struct BufferPointersOpConversion
   matchAndRewrite(tti::ExperimentalBufferPointersOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
-    auto *ctx = rewriter.getContext();
-    auto module = op->getParentOfType<ModuleOp>();
     auto values = adaptor.getOffsets();
     auto encoding =
         cast<ttg::BlockedEncodingAttr>(op.getResult().getType().getEncoding());
