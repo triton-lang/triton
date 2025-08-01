@@ -43,7 +43,6 @@ if __name__ == "__main__" and not is_hopper():
 
 @gluon.jit
 def small_mma_kernel(a_desc, b_desc, c_desc, d_desc,  #
-                     M: gl.constexpr, N: gl.constexpr, K: gl.constexpr,  #
                      LHS_IN_REG: gl.constexpr, INSTR_SHAPE_N: gl.constexpr, num_warps: gl.constexpr):
     # Load A, B, and C tiles.
     bar = gl.allocate_shared_memory(gl.int64, [1], mbarrier.MBarrierLayout())
@@ -101,14 +100,92 @@ def small_mma_kernel(a_desc, b_desc, c_desc, d_desc,  #
     # Let's parameterize the kernel over LHS_IN_REG and INSTR_SHAPE_N to see how
     # it can affect performance.
     m: gl.constexpr = 16
-    k: gl.constexpr = 256 / a_desc.dtype.primitive_bitwidth
+    k: gl.constexpr = 256 // a_desc.dtype.primitive_bitwidth
     n: gl.constexpr = INSTR_SHAPE_N
     warps_per_cta: gl.constexpr = [num_warps, 1]
 
     # The MMA shape is passed through the layout of `c`, which must always have
     # an NVMMADistributedLayout.
-    c_layout: gl.NVMMADistributedLayout(
+    c_layout: gl.constexpr = gl.NVMMADistributedLayout(
         version=[3, 0],
         warps_per_cta=warps_per_cta,
         instr_shape=[m, n, k],
     )
+
+    # When A is passed through registers, it must have the following layout:
+    a_reg_layout: gl.constexpr = gl.DotOperandLayout(
+        operand_index=0,
+        parent=c_layout,
+        k_width=32 // a_desc.dtype.primitive_bitwidth,
+    )
+
+    # When an operand is passed through shared memory, it must have an
+    # NVMMASharedLayout. TMA requires using an NVMMASharedLayout.
+    gl.static_assert(isinstance(a_smem.type.layout, gl.NVMMASharedLayout))
+    gl.static_assert(isinstance(b_smem.type.layout, gl.NVMMASharedLayout))
+
+    if LHS_IN_REG:
+        a = a_smem.load(a_reg_layout)
+    else:
+        a = a_smem
+
+    c = c_smem.load(c_layout)
+    d = warpgroup_mma(a, b_smem, c, is_async=True)
+
+    # WGMMA is an asynchronous operation. Until the operation is complete, we
+    # cannot access the result, even though it is in registers, and we cannot
+    # write to any of the shared memory inputs.
+    #
+    # WGMMA accesses shared memory through the async proxy, like TMAs. This
+    # means `fence_async_shared` is sometimes required to prevent hazards.
+    #
+    # The completion of WGMMA operations is tracked by commit groups, like
+    # async copies and TMA stores. Issuing a WGMMA operation implicitly commits
+    # it to a WGMMA group. Thus, we can wait for the completion of the operation
+    # by waiting until there are 0 outstanding operations.
+    warpgroup_mma_wait(num_outstanding=0)
+
+    # Note that `is_async=False` is the default value, and all this does is
+    # immediately wait for 0 outstanding operations. In this tutorial, we will
+    # always use `is_async=True`.
+    #
+    # Another important flag to consider is `use_acc`. When `use_acc=False`, the
+    # `c` input is ignored and the accumulator is zero-initialized. This can be
+    # an efficient way to zero the accumulator.
+
+    d_smem = gl.allocate_shared_memory(d_desc.dtype, d_desc.block_type.shape, d_desc.layout)
+    d_smem.store(d)
+    tma.async_copy_shared_to_global(c_desc, [0, 0], d_smem)
+    tma.store_wait(pendings=0)
+
+
+def small_mma(A, B, C, D, INSTR_SHAPE_N, LHS_IN_REG=False, num_warps=4):
+    a_layout = gl.NVMMASharedLayout.get_default_for(A.shape, gl.float16)
+    b_layout = gl.NVMMASharedLayout.get_default_for(B.shape, gl.float16)
+    cd_layout = gl.NVMMASharedLayout.get_default_for(C.shape, gl.float32)
+
+    a_desc = TensorDescriptor(A, A.shape, A.stride(), A.shape, a_layout)
+    b_desc = TensorDescriptor(B, B.shape, B.stride(), B.shape, b_layout)
+    c_desc = TensorDescriptor(C, C.shape, C.stride(), C.shape, cd_layout)
+    d_desc = TensorDescriptor(D, D.shape, D.stride(), D.shape, cd_layout)
+
+    small_mma_kernel[(1, )](
+        a_desc, b_desc, c_desc, d_desc,  #
+        LHS_IN_REG, INSTR_SHAPE_N, num_warps=num_warps)
+
+
+@pytest.mark.parametrize("M, N, K", [(32, 32, 32), (64, 256, 128)])
+@pytest.mark.parametrize("LHS_IN_REG", [False, True])
+@pytest.mark.parametrize("INSTR_SHAPE_N", [16, 64, 128])
+@pytest.mark.parametrize("num_warps", [4, 8])
+def test_small_mma(M, N, K, LHS_IN_REG, INSTR_SHAPE_N, num_warps):
+    maxN = max(N // triton.cdiv(num_warps, triton.cdiv(M, 16)), 8)
+    if INSTR_SHAPE_N > maxN:
+        pytest.skip(f"INSTR_SHAPE_N={INSTR_SHAPE_N} is too large for M={M}, N={N}, num_warps={num_warps}")
+
+    A = torch.randn(M, K, device="cuda", dtype=torch.float16)
+    B = torch.randn(K, N, device="cuda", dtype=torch.float16)
+    C = torch.randn(M, N, device="cuda")
+    D = torch.empty_like(C)
+    small_mma(A, B, C, D, INSTR_SHAPE_N, LHS_IN_REG, num_warps)
+    torch.testing.assert_close(A @ B + C, D, atol=0, rtol=0)
