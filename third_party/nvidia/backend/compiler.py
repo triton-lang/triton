@@ -14,6 +14,7 @@ import signal
 import os
 import subprocess
 from pathlib import Path
+import json
 
 
 def min_dot_size(target: GPUTarget):
@@ -317,7 +318,7 @@ class CUDABackend(BaseBackend):
         return [pass_config, cluster_info]
 
     @staticmethod
-    def make_ttgir(mod, metadata, opt, capability, pass_config):
+    def make_ttgir(mod, metadata, opt, capability, pass_config, global_config):
         # Set maxnreg on all kernels, if it was provided.
         if opt.maxnreg is not None:
             mod.set_attr("ttg.maxnreg", ir.builder(mod.context).get_int32_attr(opt.maxnreg))
@@ -325,9 +326,15 @@ class CUDABackend(BaseBackend):
         dump_enabled = pm.enable_debug()
 
         pass_entries = pass_config[0]
+        config_pass_entries = global_config["ttgir"]["passes"]
         cluster_info = pass_config[1]
 
-        for e in pass_entries.values():
+        new_pass_entries = dict()
+
+        for e in config_pass_entries:
+            if(e in list(pass_entries.keys())):
+                new_pass_entries[e] = [pass_entries[e][0], pass_entries[e][1]]
+        for e in new_pass_entries.values():
             p = e[0]
             args = e[1]
             if len(args) == 0:
@@ -536,11 +543,17 @@ please share the reproducer above with Triton project.
         return cubin
 
     def add_stages(self, stages, options, language):
+        global_config = None
+        if os.path.isfile("default.config") and os.access("default.config", os.R_OK):
+            with open("default.config", "r") as f:
+                global_config = json.load(f)
+        # if global_config is not None:
+        #     print(global_config["ttgir"]["passes"])
         capability = self._parse_arch(options.arch)
         if language == Language.TRITON:
             ttgir_pass_config = self.make_ttgir_pass_config(options.num_warps, options.num_ctas, options.num_stages, capability, options.cluster_dims, dump_enabled=False)
             stages["ttir"] = lambda src, metadata: self.make_ttir(src, metadata, options, capability)
-            stages["ttgir"] = lambda src, metadata: self.make_ttgir(src, metadata, options, capability, ttgir_pass_config)
+            stages["ttgir"] = lambda src, metadata: self.make_ttgir(src, metadata, options, capability, ttgir_pass_config, global_config)
         elif language == Language.GLUON:
             stages["ttgir"] = lambda src, metadata: self.gluon_to_ttgir(src, metadata, options, capability)
         stages["llir"] = lambda src, metadata: self.make_llir(src, metadata, options, capability)
