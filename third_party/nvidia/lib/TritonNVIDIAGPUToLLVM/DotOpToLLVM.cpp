@@ -114,7 +114,7 @@ struct WarpGroupDotWaitOpConversion
     if (inputs.empty()) {
       PTXBuilder ptxBuilder;
       (*ptxBuilder.create<>("wgmma.wait_group.sync.aligned " +
-                            std::to_string(pendings) + ";"))();
+                            std::to_string(pendings)))();
       ptxBuilder.launch(rewriter, loc, void_ty(getContext()));
       rewriter.eraseOp(op);
       return success();
