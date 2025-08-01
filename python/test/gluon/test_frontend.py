@@ -1432,7 +1432,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 
 @pytest.mark.parametrize("target", [HIP_TARGET_CDNA3])
-def test_buffer_load_to_local(target):
+def test_buffer_load_to_shared(target):
 
     @gluon.jit
     def kernel(ptr):
@@ -1442,7 +1442,7 @@ def test_buffer_load_to_local(target):
         dest = ttgl.allocate_shared_memory(ptr.dtype.element_ty, [256], shared)
         offsets = ttgl.arange(0, 256, layout=blocked)
 
-        ttgl.amd.cdna3.buffer_load_to_local(dest, ptr, offsets)
+        ttgl.amd.cdna3.buffer_load_to_shared(dest, ptr, offsets)
 
     ptr = MockTensor(ttgl.float32)
     mod = run_parser(kernel, *make_args(ptr), target=target)
@@ -1475,7 +1475,7 @@ def test_buffer_load_to_local_mask_other(target):
 
         mask = ttgl.full([256], 1, ttgl.int1, layout=blocked)
         other = ttgl.full([256], 0, ptr.dtype.element_ty, layout=blocked)
-        ttgl.amd.cdna3.buffer_load_to_local(dest, ptr, offsets, mask, other)
+        ttgl.amd.cdna3.buffer_load_to_shared(dest, ptr, offsets, mask, other)
 
     ptr = MockTensor(ttgl.float32)
     mod = run_parser(kernel, *make_args(ptr), target=target)
@@ -1500,7 +1500,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 
 @pytest.mark.parametrize("target", [HIP_TARGET_CDNA3])
-def test_buffer_load_to_local_cache_mods(target):
+def test_buffer_load_to_shared_cache_mods(target):
 
     @gluon.jit
     def kernel(ptr):
@@ -1510,9 +1510,9 @@ def test_buffer_load_to_local_cache_mods(target):
         dest = ttgl.allocate_shared_memory(ptr.dtype.element_ty, [256], shared)
         offsets = ttgl.arange(0, 256, layout=blocked)
 
-        ttgl.amd.cdna3.buffer_load_to_local(dest, ptr, offsets, cache_modifier=".ca")
-        ttgl.amd.cdna3.buffer_load_to_local(dest, ptr, offsets, cache_modifier=".cg")
-        ttgl.amd.cdna3.buffer_load_to_local(dest, ptr, offsets, cache_modifier=".cv")
+        ttgl.amd.cdna3.buffer_load_to_shared(dest, ptr, offsets, cache_modifier=".ca")
+        ttgl.amd.cdna3.buffer_load_to_shared(dest, ptr, offsets, cache_modifier=".cg")
+        ttgl.amd.cdna3.buffer_load_to_shared(dest, ptr, offsets, cache_modifier=".cv")
 
     ptr = MockTensor(ttgl.float32)
     mod = run_parser(kernel, *make_args(ptr), target=target)

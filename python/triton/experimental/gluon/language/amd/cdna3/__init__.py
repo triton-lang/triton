@@ -1,11 +1,11 @@
 from ..._core import builtin
 from triton._C.libtriton import ir
 
-__all__ = ["buffer_load_to_local"]
+__all__ = ["buffer_load_to_shared"]
 
 
 @builtin
-def buffer_load_to_local(dest, ptr, offsets, mask=None, other=None, stride=None, cache_modifier="", _semantic=None):
+def buffer_load_to_shared(dest, ptr, offsets, mask=None, other=None, stride=None, cache_modifier="", _semantic=None):
     """
     AMD Buffer load operation. Similar to amdgpu.buffer_load op but directly writes to shared memory instead of into registers.
 
