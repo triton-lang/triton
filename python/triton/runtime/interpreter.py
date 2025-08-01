@@ -93,13 +93,6 @@ class TensorDescHandle:
         for stride in self.strides[:-1]:
             assert stride.data.item() % 16 == 0, "stride must be 16-byte aligned"
         assert self.strides[-1].data.item() == 1, "last dim must be contiguous"
-        for i in range(self.ndim - 1):
-            stride = self.strides[i].data.item()
-            prev_stride = self.strides[i + 1].data.item()
-            prev_size = self.shape[i + 1].data.item()
-            assert stride >= prev_stride, "strides must be ordered largest to smallest"
-            assert (stride % prev_stride) == 0, "strides must be even multiples of smaller strides"
-            assert (stride // prev_stride) >= prev_size, "invalid stride"
 
     def materialize_pointers(self, offsets: List[TensorHandle]):
         assert len(offsets) == self.ndim

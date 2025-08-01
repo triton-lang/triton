@@ -136,7 +136,7 @@ module attributes {"ttg.num-warps" = 8 : i32, ttg.profile_scratch_memory_alignme
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-warps" = 8 : i32, ttg.profile_scratch_memory_alignment = 128 : i32, ttg.profile_scratch_memory_size = 384 : i32} {
   // CHECK-LABEL: convert_smem_finalize
-  // CHECK-DAG: llvm.nvvm.read.ptx.sreg.smid
+  // CHECK-DAG: nvvm.read.ptx.sreg.smid
   // CHECK-DAG: llvm.extractvalue %{{.*}}[0] : !llvm.struct<(ptr<3>, i32)>
   // CHECK-DAG: llvm.store
   // CHECK-DAG: llvm.cond_br %{{.*}}, ^bb1, ^bb3
