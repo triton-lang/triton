@@ -130,7 +130,7 @@ def test_hook_manager(tmp_path: pathlib.Path):
     HookManager.unregister(0)
     assert len(HookManager.active_hooks) == 0
 
-    HookManager.register(InstrumentationHook(), 2)
+    HookManager.register(InstrumentationHook(""), 2)
     HookManager.register(LaunchHook(), 1)
     assert len(HookManager.active_hooks) == 2
     # Launch hook has a higher priority
