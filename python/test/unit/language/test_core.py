@@ -6527,7 +6527,7 @@ shared_layouts = [
 
 @pytest.mark.parametrize("M, N, M_tile_size, N_tile_size",
                          [[128, 128, 64, 64], [128, 128, 64, 32], [128, 64, 64, 32], [256, 128, 64, 64]])
-def test_split_subview(M, N, M_tile_size, N_tile_size, device):
+def test_split_subview(M, N, M_tile_size, N_tile_size, device, tmp_path: pathlib.Path):
     num_rows_per_warp = THREADS_PER_WARP // 4
     num_repeats_M = triton.cdiv(M, M_tile_size)
     num_repeats_N = triton.cdiv(N, N_tile_size)
@@ -6583,11 +6583,9 @@ def test_split_subview(M, N, M_tile_size, N_tile_size, device):
     }}
     """
 
-    import tempfile
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
-        f.write(ir)
-        f.flush()
-        kernel = triton.compile(f.name)
+    temp_file = tmp_path / "test_split_subview.ttgir"
+    temp_file.write_text(ir)
+    kernel = triton.compile(str(temp_file))
 
     triton_result = torch.zeros((M, N), device=device, dtype=torch.float16)
     kernel[(1, 1, 1)](triton_result.data_ptr())
