@@ -158,14 +158,14 @@ def small_mma_kernel(a_desc, b_desc, c_desc, d_desc,  #
     d_smem = gl.allocate_shared_memory(d_desc.dtype, d_desc.block_type.shape, d_desc.layout)
     d_smem.store(d)
     fence_async_shared()
-    tma.async_copy_shared_to_global(c_desc, [0, 0], d_smem)
+    tma.async_copy_shared_to_global(d_desc, [0, 0], d_smem)
     tma.store_wait(pendings=0)
 
 
 def small_mma(A, B, C, D, INSTR_SHAPE_N, LHS_IN_REG=False, num_warps=4):
     a_layout = gl.NVMMASharedLayout.get_default_for(A.shape, gl.float16)
     b_layout = gl.NVMMASharedLayout.get_default_for(B.shape, gl.float16)
-    cd_layout = gl.NVMMASharedLayout.get_default_for(C.shape, gl.float16)
+    cd_layout = gl.NVMMASharedLayout.get_default_for(C.shape, gl.float32)
 
     a_desc = TensorDescriptor(A, A.shape, A.stride(), A.shape, a_layout)
     b_desc = TensorDescriptor(B, B.shape, B.stride(), B.shape, b_layout)
@@ -188,7 +188,7 @@ def test_small_mma(M, N, K, LHS_IN_REG, INSTR_SHAPE_N, num_warps):
 
     A = torch.randn(M, K, device="cuda", dtype=torch.float16)
     B = torch.randn(K, N, device="cuda", dtype=torch.float16)
-    C = torch.randn(M, N, device="cuda", dtype=torch.float16)
+    C = torch.randn(M, N, device="cuda", dtype=torch.float32)
     D = torch.empty_like(C)
     small_mma(A, B, C, D, INSTR_SHAPE_N, LHS_IN_REG, num_warps)
-    torch.testing.assert_close(A @ B + C, D, atol=0, rtol=0)
+    torch.testing.assert_close(A @ B + C, D, atol=1e-3, rtol=1e-1)
