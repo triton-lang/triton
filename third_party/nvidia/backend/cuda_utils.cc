@@ -305,7 +305,7 @@ void launch(
     std::tuple<int, int, int, unsigned, unsigned, unsigned> packedMetadata,
     py::object hookArgs, py::object launchEnterHook, py::object launchExitHook,
     py::iterable signatureMetadata, py::object globalScratch,
-    py::iterable kernelArgs) {
+    py::object profileScratch, py::iterable kernelArgs) {
   CUdevice device;
   ensureCudaContext(&device);
   auto &[numWarps, /*numCtas*/ _, bytesShared, clusterX, clusterY, clusterZ] =
@@ -351,7 +351,11 @@ void launch(
     ++paramsIdx;
   }
   config.params[paramsIdx] = alloca(sizeof(void *));
-  extractPointer(globalScratch, config.params[paramsIdx]);
+  extractPointer(globalScratch, config.params[paramsIdx++]);
+  if (!profileScratch.is_none()) {
+    config.params[paramsIdx] = alloca(sizeof(void *));
+    extractPointer(profileScratch, config.params[paramsIdx]);
+  }
 
   launchHook(launchEnterHook, hookArgs);
 
