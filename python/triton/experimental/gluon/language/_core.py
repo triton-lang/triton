@@ -46,15 +46,23 @@ from triton.language.core import (
 )
 
 _IMPORT_FROM_TRITON: List[str] = [
+    "atomic_add",
+    "atomic_and",
+    "atomic_cas",
+    "atomic_max",
+    "atomic_min",
+    "atomic_or",
+    "atomic_xchg",
+    "atomic_xor",
     "broadcast",
     "expand_dims",
     "inline_asm_elementwise",
     "join",
     "load",
     "map_elementwise",
-    "maximum",
     "max_constancy",
     "max_contiguous",
+    "maximum",
     "minimum",
     "multiple_of",
     "permute",
@@ -67,14 +75,6 @@ _IMPORT_FROM_TRITON: List[str] = [
     "store",
     "to_tensor",
     "where",
-    "atomic_min",
-    "atomic_max",
-    "atomic_add",
-    "atomic_and",
-    "atomic_or",
-    "atomic_xor",
-    "atomic_xchg",
-    "atomic_cas",
 ]
 
 __all__ = [
