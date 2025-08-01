@@ -127,7 +127,7 @@ def test_hook_manager(tmp_path: pathlib.Path):
     assert isinstance(HookManager.active_hooks[0], LaunchHook)
     assert HookManager.session_hooks[0][HookManager.active_hooks[0]] is True
 
-    # Only unregister one hook
+    # Only unregister one session
     HookManager.register(LaunchHook(), 1)
     HookManager.unregister(0)
     assert len(HookManager.active_hooks) == 1
@@ -136,12 +136,12 @@ def test_hook_manager(tmp_path: pathlib.Path):
 
     # Heterogenous hooks
     HookManager.register(InstrumentationHook(""), 2)
-    HookManager.register(LaunchHook(), 1)
+    HookManager.register(LaunchHook(), 2)
     assert len(HookManager.active_hooks) == 2
     # Launch hook has a higher priority
     assert isinstance(HookManager.active_hooks[0], LaunchHook)
     assert isinstance(HookManager.active_hooks[1], InstrumentationHook)
-    assert HookManager.session_hooks[1][HookManager.active_hooks[0]] is True
+    assert HookManager.session_hooks[2][HookManager.active_hooks[0]] is True
     assert HookManager.session_hooks[2][HookManager.active_hooks[1]] is True
     HookManager.unregister()
     assert len(HookManager.active_hooks) == 0
