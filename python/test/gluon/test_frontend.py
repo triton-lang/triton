@@ -1363,3 +1363,45 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   }
 }
 """)
+
+
+@gluon.jit
+def add_fp(a, b):
+    return a + b
+
+
+@gluon.jit
+def infer_layout_for_amd_mfma_kernel():
+    layout: ttgl.constexpr = amd_layouts.AMDMFMALayout(version=3, instr_shape=[32, 32], transposed=True,
+                                                       warps_per_cta=[4, 1], tiles_per_warp=[4, 1], ctas_per_cga=[1, 1],
+                                                       cta_split_num=[1, 1], cta_order=[1, 0])
+    a = ttgl.full([128, 32], 1.0, ttgl.float32, layout)
+    ttgl.reduce(a, 1, add_fp)
+
+
+@pytest.mark.parametrize("target", [HIP_TARGET_CDNA3, HIP_TARGET_CDNA4])
+def test_infer_layout_for_amd_mfma(target):
+    module = run_parser(infer_layout_for_amd_mfma_kernel, target=target)
+    expecttest.assert_expected_inline(
+        anonymize_ir(module.str_nodebug()), """\
+#mma = #ttg.amd_mfma<{version = 3, warpsPerCTA = [4, 1], tilesPerWarp = [4, 1], instrShape = [32, 32], isTransposed = true}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @infer_layout_for_amd_mfma_kernel() attributes {noinline = false} {
+    %cst = arith.constant 1.000000e+00 : f32
+    %cst_0 = arith.constant dense<1.000000e+00> : tensor<128x32xf32, #mma>
+    %0 = "tt.reduce"(%cst_0) <{axis = 1 : i32}> ({
+    ^bb0(%arg0: f32, %arg1: f32):
+      %1 = tt.call @test_frontend.add_fp__fp32_fp32__(%arg0, %arg1) : (f32, f32) -> f32
+      tt.reduce.return %1 : f32
+    }) : (tensor<128x32xf32, #mma>) -> tensor<128xf32, #ttg.slice<{dim = 1, parent = #mma}>>
+    tt.return
+  }
+  tt.func private @test_frontend.add_fp__fp32_fp32__(%arg0: f32, %arg1: f32) -> f32 attributes {noinline = false} {
+    %0 = arith.addf %arg0, %arg1 : f32
+    tt.return %0 : f32
+  ^bb1:  // no predecessors
+    %1 = ub.poison : f32
+    tt.return %1 : f32
+  }
+}
+""")

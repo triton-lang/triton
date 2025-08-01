@@ -94,6 +94,7 @@ struct GluonLayouts {
   py::handle NVMMASharedLayout;
   py::handle SwizzledSharedLayout;
   py::handle AMDMFMALayout;
+  py::handle GluonDType;
 
   GluonLayouts() {
     auto layouts =
@@ -111,6 +112,9 @@ struct GluonLayouts {
     SwizzledSharedLayout =
         py::object(layouts.attr("SwizzledSharedLayout")).release();
     AMDMFMALayout = py::object(amdLayouts.attr("AMDMFMALayout")).release();
+
+    auto core = py::module::import("triton.language.core");
+    GluonDType = py::object(core.attr("dtype")).release();
   }
 };
 
@@ -188,11 +192,17 @@ py::object layoutToGluon(Attribute layout) {
   } else if (auto amdMfma = dyn_cast<ttg::AMDMfmaEncodingAttr>(layout)) {
     auto ctaLayout = amdMfma.getCTALayout();
     std::vector<unsigned> instrShape{amdMfma.getMDim(), amdMfma.getNDim()};
-    return layouts.AMDMFMALayout(
-        amdMfma.getVersion(), instrShape, amdMfma.getIsTransposed(),
-        amdMfma.getWarpsPerCTA(), amdMfma.getTilesPerWarp(),
-        amdMfma.getElementType(), ctaLayout.getCTAsPerCGA(),
-        ctaLayout.getCTASplitNum(), ctaLayout.getCTAOrder());
+    auto isFP32 = !amdMfma.getElementType().has_value() ||
+                  amdMfma.getElementType().value().isF32();
+
+    return layouts.AMDMFMALayout(amdMfma.getVersion(), instrShape,
+                                 amdMfma.getIsTransposed(),
+                                 toStdVector(amdMfma.getWarpsPerCTA()),
+                                 toStdVector(amdMfma.getTilesPerWarp()),
+                                 layouts.GluonDType(isFP32 ? "fp32" : "fp64"),
+                                 toStdVector(ctaLayout.getCTAsPerCGA()),
+                                 toStdVector(ctaLayout.getCTASplitNum()),
+                                 toStdVector(ctaLayout.getCTAOrder()));
   }
 
   throw py::value_error("Unhandled encoding encountered");

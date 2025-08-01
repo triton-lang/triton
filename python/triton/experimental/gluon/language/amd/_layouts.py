@@ -49,7 +49,9 @@ class AMDMFMALayout(DistributedLayout):
         super().__setattr__("cta_split_num", _unwrap_if_constexpr(self.cta_split_num))
         super().__setattr__("cta_order", _unwrap_if_constexpr(self.cta_order))
 
-        assert self.elem_type is ttgl.float32 or self.elem_type is ttgl.float64, "The element type in AMDMFMALayout should be float16 or float64 type"
+        assert self.elem_type.is_fp32() or self.elem_type.is_fp64(
+        ), "The element type in AMDMFMALayout should be float32 or float64 type"
+
         rank = len(self.cta_order)
         _realize_cta_layout(self, rank)
         assert len(self.ctas_per_cga) == rank
