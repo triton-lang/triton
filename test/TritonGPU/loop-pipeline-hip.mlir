@@ -819,9 +819,9 @@ tt.func @pipeline_fp64_with_async_copy_gfx950(
 //         COMMON:   scf.yield
 
 // Epilogue
-//         COMMON:   ttg.local_load
-//         COMMON: amdgpu.local_load_packed_tranposed
 //         COMMON: scf.if
+//         COMMON:   ttg.local_load
+//         COMMON:   amdgpu.local_load_packed_tranposed
 //         COMMON:   tt.dot_scaled
 // COMMON-COUNT-2:   scf.yield
 // COMMON-COUNT-2: ttg.local_dealloc
