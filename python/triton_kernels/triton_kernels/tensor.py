@@ -149,6 +149,14 @@ class Tensor:
         t = self.storage
         return t.data if isinstance(t, Storage) else t
 
+    def dim(self):
+        return self.ndim
+
+    def size(self, i=None):
+        if i is None:
+            return self.shape
+        return self.shape[i]
+
 
 @dataclass
 class Bitmatrix(Tensor):

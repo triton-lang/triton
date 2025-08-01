@@ -973,8 +973,6 @@ def test_block_scale_fp4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, VEC_SIZE, with_a_sc
         if not (with_a_scale and with_b_scale):
             pytest.skip("None aScale/bScale is only tested on AMD backend for now")
     elif is_hip():
-        if not pack_along_k:
-            pytest.skip("Packing along M/N not implemented yet on AMD.")
         if not is_hip_cdna4():
             pytest.skip("Scaled fp4 matmul is only natively supported on CDNA4")
         if scale_type != 'float8_e8m0fnu':
@@ -1129,8 +1127,6 @@ def test_mxfp8_mxfp4_matmul(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, B_TR
         if not (A_DATA_TYPE == "float8e5" and B_DATA_TYPE == "float4"):
             pytest.skip(f"(A: {A_DATA_TYPE}, B: {B_DATA_TYPE}) has not been tested on NV backend")
     elif is_hip():
-        if not PACK_B_ALONG_K:
-            pytest.skip("Pack along M/N is not enabled on AMD backend")
         if not is_hip_cdna4():
             pytest.skip("Scaled mxfp4 & mxfp8 matmul is only natively supported on CDNA4")
         if (nonKDim == 16 and BLOCK_K < 128) or (nonKDim == 32 and BLOCK_K < 64):
