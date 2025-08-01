@@ -112,9 +112,12 @@ struct WarpGroupDotWaitOpConversion
     Location loc = op.getLoc();
     ValueRange inputs = adaptor.getInputs();
     if (inputs.empty()) {
-      std::string ptxAsm =
-          "wgmma.wait_group.sync.aligned " + std::to_string(pendings) + ";";
-      return nvgpu::rewriteAsPtxAsm(op, rewriter, ptxAsm);
+      PTXBuilder ptxBuilder;
+      (*ptxBuilder.create<>("wgmma.wait_group.sync.aligned " +
+                            std::to_string(pendings) + ";"))();
+      ptxBuilder.launch(rewriter, loc, void_ty(getContext()));
+      rewriter.eraseOp(op);
+      return success();
     }
     if (inputs.size() == 1) {
       rewriter.replaceOpWithNewOp<triton::nvgpu::WGMMAWaitGroupOp>(
