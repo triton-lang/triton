@@ -38,31 +38,14 @@ struct ConcatOpConversion : public ConvertOpToLLVMPattern<amdgpu::ConcatOp> {
     // element coordinates are compatible on stage 8 in algorithm below.
     auto linearLayoutDst =
         triton::gpu::toLinearLayout(resultType).transposeOuts(outDimNames);
-    auto srcCTAOrder = LLVM::AMD::getCTATileOrder(context, linearLayoutSrc);
-    auto dstCTAOrder = LLVM::AMD::getCTATileOrder(context, linearLayoutSrc);
-
     auto rank = srcShape.size();
-    auto shapePerCTATile = triton::gpu::getShapePerCTATile(resultType);
-    auto sources = adaptor.getSources();
-
-    unsigned totalElems = ::getNumElements<int64_t>(dstShape);
-    unsigned elemsPerTile = ::getNumElements<unsigned>(shapePerCTATile);
-    unsigned numCTATiles = totalElems / elemsPerTile;
-
     // Default order is fastest to slowest varying dimension.
     std::vector<unsigned> defaultOrder(rank);
     std::iota(defaultOrder.rbegin(), defaultOrder.rend(), 0);
-
-    auto dstCTAShape = LLVM::AMD::multiDimElementwise<int64_t, unsigned>(
-        dstShape, shapePerCTATile, std::divides<unsigned>());
-    auto srcCTAShape = LLVM::AMD::multiDimElementwise<int64_t, unsigned>(
-        srcShape, shapePerCTATile, std::divides<unsigned>());
     auto srcToDstShape = LLVM::AMD::multiDimElementwise<int64_t, int64_t>(
         dstShape, srcShape, std::divides<unsigned>());
 
-    unsigned elemsPerThreadPerCTA =
-        triton::gpu::getTotalElemsPerThread(srcType) /
-        ::getNumElements<unsigned>(srcCTAShape);
+    auto sources = adaptor.getSources();
 
     llvm::SmallVector<Value> resultVals;
     llvm::SmallVector<SmallVector<Value>> unpackedSources;
