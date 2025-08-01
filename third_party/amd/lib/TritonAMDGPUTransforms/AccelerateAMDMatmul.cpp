@@ -685,7 +685,9 @@ public:
       // Don't need to covert int8 holding mxfp4--the upcast_mxfp op can
       // take int8 tensor as input.
       if (type == ScaleDotElemType::BF16 || type == ScaleDotElemType::FP16 ||
-          type == ScaleDotElemType::E2M1)
+          type == ScaleDotElemType::E2M1 ||
+          (mfmaVersion == 4 &&
+           (type == ScaleDotElemType::E4M3 || type == ScaleDotElemType::E5M2)))
         return v;
 
       auto upcastedType = RankedTensorType::get(

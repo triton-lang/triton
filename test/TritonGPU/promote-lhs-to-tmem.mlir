@@ -13,7 +13,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK: %[[A:.+]] = tt.load
   // CHECK: %[[A_TMEM:.+]] = ttng.tmem_alloc %[[A]]
   // CHECK: ttng.tc_gen5_mma %[[A_TMEM]]
-  tt.func public @promote_lhs(%A_ptr: tensor<128x128x!tt.ptr<f16>, #blocked1>, %B_ptr: tensor<128x128x!tt.ptr<f16>, #blocked1>, %arg3: i32) -> tensor<128x128xf16, #blocked1> attributes {noinline = false} {
+  tt.func public @promote_lhs(%A_ptr: tensor<128x128x!tt.ptr<f16>, #blocked1>, %B_ptr: tensor<128x128x!tt.ptr<f16>, #blocked1>, %arg3: i32) -> tensor<128x128xf16, #blocked1> {
     %true = arith.constant true
     %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked1>
     %c0_i32 = arith.constant 0 : i32
@@ -38,7 +38,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK: %[[A:.+]] = tt.load
   // CHECK: %[[A_TMEM:.+]] = ttng.tmem_alloc %[[A]]
   // CHECK: ttng.tc_gen5_mma_scaled %[[A_TMEM]]
-  tt.func public @promote_lhs_mxfp(%A_ptr: tensor<128x128x!tt.ptr<f16>, #blocked1>, %B_ptr: tensor<128x128x!tt.ptr<f16>, #blocked1>, %arg3: i32, %a_scale: tensor<128x1xi8, #blocked2>, %b_scale: tensor<64x1xi8, #blocked2>) -> tensor<128x128xf16, #blocked1> attributes {noinline = false} {
+  tt.func public @promote_lhs_mxfp(%A_ptr: tensor<128x128x!tt.ptr<f16>, #blocked1>, %B_ptr: tensor<128x128x!tt.ptr<f16>, #blocked1>, %arg3: i32, %a_scale: tensor<128x1xi8, #blocked2>, %b_scale: tensor<64x1xi8, #blocked2>) -> tensor<128x128xf16, #blocked1> {
     %true = arith.constant true
     %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked1>
     %c0_i32 = arith.constant 0 : i32
@@ -65,7 +65,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK: %[[B:.+]] = tt.load
   // CHECK: %[[B_TMEM:.+]] = ttg.local_alloc %[[B]]
   // CHECK: ttng.tc_gen5_mma %{{.+}}, %[[B_TMEM]], %{{.+}}, {{.+}}
-  tt.func public @dont_promote_rhs(%A_ptr: tensor<128x128x!tt.ptr<f16>, #blocked1>, %B_ptr: tensor<128x128x!tt.ptr<f16>, #blocked1>, %arg3: i32) -> tensor<128x128xf16, #blocked1> attributes {noinline = false} {
+  tt.func public @dont_promote_rhs(%A_ptr: tensor<128x128x!tt.ptr<f16>, #blocked1>, %B_ptr: tensor<128x128x!tt.ptr<f16>, #blocked1>, %arg3: i32) -> tensor<128x128xf16, #blocked1> {
     %true = arith.constant true
     %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked1>
     %c0_i32 = arith.constant 0 : i32
@@ -90,7 +90,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK: %[[A_SMEM:.+]] = ttg.local_alloc %[[A]]
   // CHECK: scf.for
   // CHECK: ttng.tc_gen5_mma %[[A_SMEM]]
-  tt.func public @dont_promote_long_lr(%A_ptr: tensor<128x128x!tt.ptr<f16>, #blocked1>, %B_ptr: tensor<128x128x!tt.ptr<f16>, #blocked1>, %arg3: i32) -> tensor<128x128xf16, #blocked1> attributes {noinline = false} {
+  tt.func public @dont_promote_long_lr(%A_ptr: tensor<128x128x!tt.ptr<f16>, #blocked1>, %B_ptr: tensor<128x128x!tt.ptr<f16>, #blocked1>, %arg3: i32) -> tensor<128x128xf16, #blocked1> {
     %true = arith.constant true
     %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked1>
     %c0_i32 = arith.constant 0 : i32
@@ -115,7 +115,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK: %[[A:.+]] = tt.load
   // CHECK: %[[A_SMEM:.+]] = ttg.local_alloc %[[A]]
   // CHECK: ttng.tc_gen5_mma %[[A_SMEM]]
-  tt.func public @dont_convert_layout(%A_ptr: tensor<128x128x!tt.ptr<f16>, #blocked2>, %B_ptr: tensor<128x128x!tt.ptr<f16>, #blocked1>, %arg3: i32) -> tensor<128x128xf16, #blocked1> attributes {noinline = false} {
+  tt.func public @dont_convert_layout(%A_ptr: tensor<128x128x!tt.ptr<f16>, #blocked2>, %B_ptr: tensor<128x128x!tt.ptr<f16>, #blocked1>, %arg3: i32) -> tensor<128x128xf16, #blocked1> {
     %true = arith.constant true
     %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked1>
     %c0_i32 = arith.constant 0 : i32

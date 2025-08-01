@@ -6,7 +6,7 @@
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
   // CHECK-LABEL: memdesc_subslice_spliting
-  tt.func public @memdesc_subslice_spliting() attributes {noinline = false} {
+  tt.func public @memdesc_subslice_spliting() {
     %c0_i32 = arith.constant 0 : i32
     %0 = ttg.local_alloc : () -> !ttg.memdesc<1x256x128xf16, #shared, #smem, mutable>
     %1 = ttg.memdesc_index %0, %c0_i32 : !ttg.memdesc<1x256x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<256x128xf16, #shared, #smem, mutable>

@@ -44,7 +44,7 @@ public:
                    Value i) const override;
 
   Value programId(RewriterBase &rewriter, Location loc, ModuleOp moduleOp,
-                  int axis) const override;
+                  ProgramIDDim axis) const override;
 
   bool warpReduce(RewriterBase &rewriter, Location loc, SmallVector<Value> &acc,
                   triton::ReduceOp op, unsigned numLaneToReduce,

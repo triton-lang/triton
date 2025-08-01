@@ -4,6 +4,7 @@
 #include "triton/Conversion/MLIRTypes.h"
 
 namespace mlir::triton {
+enum class ProgramIDDim : uint32_t;
 
 class TargetInfoBase {
 public:
@@ -48,7 +49,7 @@ public:
                            Value i) const = 0;
 
   virtual Value programId(RewriterBase &rewriter, Location loc,
-                          ModuleOp moduleOp, int axis) const = 0;
+                          ModuleOp moduleOp, ProgramIDDim axis) const = 0;
 
   virtual bool warpReduce(RewriterBase &rewriter, Location loc,
                           SmallVector<Value> &acc, triton::ReduceOp op,

@@ -253,9 +253,11 @@ LogicalResult UpcastMXFPOp::verify() {
   Builder b(getContext());
   if (xTy.getElementType() != b.getBF16Type() &&
       xTy.getElementType() != b.getF16Type() &&
-      xTy.getElementType() != b.getI8Type()) {
-    return emitOpError(
-        "element type of the first operand must be bf16/fp16 or i8");
+      xTy.getElementType() != b.getI8Type() &&
+      xTy.getElementType() != b.getType<Float8E4M3FNType>() &&
+      xTy.getElementType() != b.getType<Float8E5M2Type>()) {
+    return emitOpError("element type of the first operand must be bf16/fp16, "
+                       "OCP fp8/bf8 or i8");
   }
 
   if (scaleTy.getElementType() != b.getI8Type()) {
@@ -328,27 +330,30 @@ UpcastMXFPOp::deduceOutputType(TypedValue<RankedTensorType> inputTensor,
                                Type outputElemType) {
   MLIRContext *ctx = inputTensor.getContext();
   auto xTy = inputTensor.getType();
-  if (inputElemType != ScaleDotElemType::E2M1)
+  if (!(inputElemType == ScaleDotElemType::E2M1 ||
+        inputElemType == ScaleDotElemType::E4M3 ||
+        inputElemType == ScaleDotElemType::E5M2))
     return xTy;
 
+  auto factor = inputElemType == ScaleDotElemType::E2M1 ? 2 : 1;
   auto xShape = xTy.getShape();
   auto newShape = llvm::to_vector(xShape);
   auto encoding = xTy.getEncoding();
   if (!encoding) {
-    newShape.back() *= 2;
+    newShape.back() *= factor;
     return RankedTensorType::get(xShape, outputElemType);
   }
 
   auto oldEncoding = cast<DotOperandEncodingAttr>(encoding);
-  auto newVEncoding = DotOperandEncodingAttr::get(ctx, oldEncoding.getOpIdx(),
-                                                  oldEncoding.getParent(),
-                                                  oldEncoding.getKWidth() * 2);
+  auto newVEncoding = DotOperandEncodingAttr::get(
+      ctx, oldEncoding.getOpIdx(), oldEncoding.getParent(),
+      oldEncoding.getKWidth() * factor);
   // Figure out the K dimension for the input A/B, given that the return
   // type is upcasted A/B type so we need to update the proper dim size.
   const int opIdx = oldEncoding.getOpIdx();
   const bool hasBatch = xShape.size() == 3;
   const int kIdx = (opIdx == 0 ? 1 : 0) + hasBatch;
-  newShape[kIdx] *= 2;
+  newShape[kIdx] *= factor;
   return RankedTensorType::get(newShape, outputElemType, newVEncoding);
 }
 

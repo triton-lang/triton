@@ -285,14 +285,9 @@ Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, Value i,
 }
 
 Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
-               int axis) {
-  assert(axis >= 0);
-  assert(axis < 3);
-  assert(moduleOp);
-  static constexpr mlir::gpu::Dimension dims[] = {mlir::gpu::Dimension::x,
-                                                  mlir::gpu::Dimension::y,
-                                                  mlir::gpu::Dimension::z};
-  Value blockId = rewriter.create<::mlir::gpu::BlockIdOp>(loc, dims[axis]);
+               ProgramIDDim axis) {
+  Value blockId =
+      rewriter.create<::mlir::gpu::BlockIdOp>(loc, mlir::gpu::Dimension(axis));
   return rewriter.create<arith::IndexCastOp>(loc, i32_ty, blockId);
 }
 
