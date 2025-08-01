@@ -32,7 +32,7 @@ tt.func @two_consumers(%lb: i32, %ub: i32, %step: i32) {
     // CHECK-NEXT: "op_c"([[VAL]])
     // CHECK-NEXT: "op_d"([[VAL]])
     "op_d"(%0) {ttg.partition = 2} : (!ty) -> ()
-  } {ttg.partition.stages = [0, 2, 2]}
+  } {ttg.partition.stages = [0, 2, 2], ttg.warp_specialize.tag = 0 : i32}
   // CHECK: nvws.aref.destroy [[AREF]]
   tt.return
 }
@@ -57,7 +57,7 @@ tt.func @distance_one(%lb: i32, %ub: i32, %step: i32) {
     "op_b"(%k) {ttg.partition = 1} : (!ty) -> ()
 
     scf.yield %0 : !ty
-  } {ttg.partition.stages = [0, 0]}
+  } {ttg.partition.stages = [0, 0], ttg.warp_specialize.tag = 0 : i32}
   // CHECK: nvws.aref.destroy [[AREF]]
   tt.return
 }
@@ -106,7 +106,7 @@ tt.func @complex_case(%lb: i32, %ub: i32, %step: i32) {
     // CHECK-NEXT: "op_d"([[L2]])
     "op_d"(%l) {ttg.partition = 2} : (!ty) -> ()
     scf.yield %0, %k : !ty, !ty
-  } {ttg.partition.stages = [0, 2, 2]}
+  } {ttg.partition.stages = [0, 2, 2], ttg.warp_specialize.tag = 0 : i32}
   // CHECK: nvws.aref.destroy [[AREF1]]
   // CHECK: nvws.aref.destroy [[AREF2]]
   tt.return
@@ -141,7 +141,7 @@ tt.func @reuse_argument(%lb: i32, %ub: i32, %step: i32) {
     // CHECK-NEXT: op_d
     "op_d"(%l) {ttg.partition = 2} : (!ty) -> ()
     scf.yield %0, %k : !ty, !ty
-  } {ttg.partition.stages = [1, 0, 0]}
+  } {ttg.partition.stages = [1, 0, 0], ttg.warp_specialize.tag = 0 : i32}
   tt.return
 }
 
@@ -194,7 +194,7 @@ tt.func @multiplicity_branch(%lb: i32, %ub: i32, %step: i32) {
     "op_d"(%c) {ttg.partition = 3}: (!ty) -> ()
 
     scf.yield %0, %a, %a : !ty, !ty, !ty
-  } {ttg.partition.stages = [0, 0, 0, 0]}
+  } {ttg.partition.stages = [0, 0, 0, 0], ttg.warp_specialize.tag = 0 : i32}
   // CHECK: nvws.aref.destroy [[AREF1]]
   // CHECK: nvws.aref.destroy [[AREF2]]
   // CHECK: nvws.aref.destroy [[AREF3]]
@@ -250,7 +250,7 @@ tt.func @multiplicity_branch2(%lb: i32, %ub: i32, %step: i32) {
     "op_d"(%c) {ttg.partition = 3}: (!ty) -> ()
 
     scf.yield %0, %d, %e : !ty, !ty, !ty
-  } {ttg.partition.stages = [0, 0, 0, 0]}
+  } {ttg.partition.stages = [0, 0, 0, 0], ttg.warp_specialize.tag = 0 : i32}
   tt.return
 }
 
@@ -264,7 +264,7 @@ tt.func @self_recursion(%lb: i32, %ub: i32, %step: i32) {
     %0 = "op_a"(%k) {ttg.partition = 0} : (!ty) -> !ty
     // CHECK: yield [[OUT]]
     scf.yield %0 : !ty
-  } {ttg.partition.stages = [0]}
+  } {ttg.partition.stages = [0], ttg.warp_specialize.tag = 0 : i32}
   tt.return
 }
 
@@ -285,7 +285,7 @@ tt.func @self_recursion_and_use(%lb: i32, %ub: i32, %step: i32) {
     // CHECK-NEXT: "op_b"
 
     scf.yield %0 : !ty
-  } {ttg.partition.stages = [0, 1]}
+  } {ttg.partition.stages = [0, 1], ttg.warp_specialize.tag = 0 : i32}
   tt.return
 }
 
@@ -313,7 +313,7 @@ tt.func @conditional_consumer(%lb: i32, %ub: i32, %step: i32) {
       scf.yield %2 : !ty
     } {ttg.partition = 1}
     "keep"(%1) {ttg.partition = 1} : (!ty) -> ()
-  } {ttg.partition.stages = [0, 2]}
+  } {ttg.partition.stages = [0, 2], ttg.warp_specialize.tag = 0 : i32}
   tt.return
 }
 
@@ -340,7 +340,7 @@ tt.func @invalid_attribute(%lb: i32, %ub: i32, %step: i32) {
   // expected-error @below {{partition stages attribute 'ttg.partition.stages' has invalid element "a"}}
   scf.for %i = %lb to %ub step %step : i32 {
     scf.yield
-  } {ttg.partition.stages = ["a"]}
+  } {ttg.partition.stages = ["a"], ttg.warp_specialize.tag = 0 : i32}
   scf.for %j = %lb to %ub step %step : i32 {
     scf.yield
   }
@@ -362,7 +362,7 @@ tt.func @invalid_attribute(%lb: i32, %ub: i32, %step: i32) {
     // expected-error @below {{invalid partition index -1}}
     "op"() {ttg.partition = -1} : () -> ()
     scf.yield
-  } {ttg.partition.stages = [2, 2]}
+  } {ttg.partition.stages = [2, 2], ttg.warp_specialize.tag = 0 : i32}
   tt.return
 }
 
@@ -396,7 +396,7 @@ tt.func @cycle_in_partition(%lb: i32, %ub: i32, %step: i32) {
 
     "op_c"(%1) {ttg.partition = 0} : (!ty) -> ()
     scf.yield
-  } {ttg.partition.stages = [0, 2]}
+  } {ttg.partition.stages = [0, 2], ttg.warp_specialize.tag = 0 : i32}
   tt.return
 }
 
@@ -436,7 +436,7 @@ tt.func @cycle_in_partition(%lb: i32, %ub: i32, %step: i32) {
     // CHECK: nvws.aref.get.exit [[AREF3]][[[C0]]], {{.*}} [#nvws.async_op<none>] {ttg.partition = 0 : i32}
     // CHECK: "op_c"
     scf.yield
-  } {ttg.partition.stages = [0, 2, 3]}
+  } {ttg.partition.stages = [0, 2, 3], ttg.warp_specialize.tag = 0 : i32}
   tt.return
 }
 
@@ -456,7 +456,7 @@ tt.func @invalid_root_partition(%lb: i32, %ub: i32, %step: i32) {
     // expected-warning @below {{operation in the root partition depends on a value that originates from a non-root partition through operand #0}}
     "root"(%0) : (index) -> ()
     scf.yield
-  } {ttg.partition.stages = [0, 2]}
+  } {ttg.partition.stages = [0, 2], ttg.warp_specialize.tag = 0 : i32}
   tt.return
 }
 
@@ -477,7 +477,7 @@ tt.func @invalid_root_partition(%lb: i32, %ub: i32, %step: i32) {
     // expected-note @below {{operand defined here in partition #0 at distance 1}}
     %0 = "partition"() {ttg.partition = 0} : () -> index
     scf.yield %0 : index
-  } {ttg.partition.stages = [0, 2]}
+  } {ttg.partition.stages = [0, 2], ttg.warp_specialize.tag = 0 : i32}
   tt.return
 }
 

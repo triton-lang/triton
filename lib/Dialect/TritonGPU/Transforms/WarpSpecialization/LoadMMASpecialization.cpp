@@ -811,7 +811,17 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
     Value lastIndex = loop.getResult(index.getArgNumber() - 1);
     Value lastPhase = loop.getResult(phase.getArgNumber() - 1);
     Value lastBar = createSingleBufferView(b, nodes.back().barNext, lastIndex);
-    b.create<ttng::WaitBarrierOp>(lastBar, lastPhase);
+    auto waitBarrierOp = b.create<ttng::WaitBarrierOp>(lastBar, lastPhase);
+    auto node_front = nodes.front();
+    auto partition = schedule.getPartition(inBody(node_front.op));
+    lastBar.getDefiningOp()->setAttr(kWarpSpecializeTagAttrName,
+                                     b.getI32IntegerAttr(schedule.getTag()));
+    lastBar.getDefiningOp()->setAttr(
+        kPartitionAttrName, b.getI32IntegerAttr(partition->getIndex()));
+    waitBarrierOp->setAttr(kWarpSpecializeTagAttrName,
+                           b.getI32IntegerAttr(schedule.getTag()));
+    waitBarrierOp->setAttr(kPartitionAttrName,
+                           b.getI32IntegerAttr(partition->getIndex()));
   }
 
   llvm::SetVector<Operation *> predOps;

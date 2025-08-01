@@ -143,46 +143,6 @@ const Partition *getPartition(Operation *op, const WarpSchedule &schedule) {
   return nullptr;
 }
 
-void cloneOpsInBlock(Block *block, SmallVector<WarpGroupBuilder> &builders,
-                     const WarpSchedule &schedule);
-
-void cloneForOp(scf::ForOp forOp, SmallVector<WarpGroupBuilder> &builders,
-                const WarpSchedule &schedule) {
-  SmallVector<scf::ForOp> newForOps;
-  for (auto [b, partition] : llvm::zip(builders, schedule.getPartitions())) {
-    auto [newLoopIndices, _] =
-        getLoopVarIndicesToKeep(forOp, &partition, schedule);
-    auto lb = b.mapping.lookupOrDefault(forOp.getLowerBound());
-    auto ub = b.mapping.lookupOrDefault(forOp.getUpperBound());
-    auto step = b.mapping.lookupOrDefault(forOp.getStep());
-    SmallVector<Value> initArgs;
-    for (auto idx : newLoopIndices) {
-      initArgs.push_back(forOp.getInitArgs()[idx]);
-    }
-    auto newForOp =
-        b.create<scf::ForOp>(forOp.getLoc(), lb, ub, step, initArgs);
-    newForOp->setAttrs(forOp->getAttrs());
-    newForOps.push_back(newForOp);
-
-    b.mapping.map(forOp.getInductionVar(), newForOp.getInductionVar());
-
-    auto oldIterArgs = forOp.getRegionIterArgs();
-    auto newIterArgs = newForOp.getRegionIterArgs();
-    for (auto [newIdx, oldIdx] : llvm::enumerate(newLoopIndices)) {
-      b.mapping.map(oldIterArgs[oldIdx], newIterArgs[newIdx]);
-      b.mapping.map(forOp.getResult(oldIdx), newForOp.getResult(newIdx));
-    }
-
-    b.setInsertionPointToStart(newForOp.getBody());
-  }
-
-  cloneOpsInBlock(forOp.getBody(), builders, schedule);
-
-  for (auto newForOp : newForOps) {
-    WarpSchedule::eraseFrom(newForOp);
-  }
-}
-
 void mapRange(ValueRange fromRange, ValueRange toRange, IRMapping &mapping) {
   for (auto [from, to] : llvm::zip(fromRange, toRange)) {
     mapping.map(from, to);
@@ -203,6 +163,47 @@ getPartitionIndicesToCloneInto(const Partition *partition,
   }
 
   return partitionIndices;
+}
+
+void cloneOpsInBlock(Block *block, SmallVector<WarpGroupBuilder> &builders,
+                     const WarpSchedule &schedule);
+
+void cloneForOp(scf::ForOp forOp, SmallVector<WarpGroupBuilder> &builders,
+                const WarpSchedule &schedule) {
+  SmallVector<std::pair<int, scf::ForOp>> newForOps;
+  for (auto [b, partition] : llvm::zip(builders, schedule.getPartitions())) {
+    auto [newLoopIndices, _] =
+        getLoopVarIndicesToKeep(forOp, &partition, schedule);
+    auto lb = b.mapping.lookupOrDefault(forOp.getLowerBound());
+    auto ub = b.mapping.lookupOrDefault(forOp.getUpperBound());
+    auto step = b.mapping.lookupOrDefault(forOp.getStep());
+    SmallVector<Value> initArgs;
+    for (auto idx : newLoopIndices) {
+      initArgs.push_back(forOp.getInitArgs()[idx]);
+    }
+    auto newForOp =
+        b.create<scf::ForOp>(forOp.getLoc(), lb, ub, step, initArgs);
+    newForOp->setAttrs(forOp->getAttrs());
+    newForOps.push_back(std::make_pair(partition.getIndex(), newForOp));
+
+    b.mapping.map(forOp.getInductionVar(), newForOp.getInductionVar());
+
+    auto oldIterArgs = forOp.getRegionIterArgs();
+    auto newIterArgs = newForOp.getRegionIterArgs();
+    for (auto [newIdx, oldIdx] : llvm::enumerate(newLoopIndices)) {
+      b.mapping.map(oldIterArgs[oldIdx], newIterArgs[newIdx]);
+      b.mapping.map(forOp.getResult(oldIdx), newForOp.getResult(newIdx));
+    }
+
+    b.setInsertionPointToStart(newForOp.getBody());
+  }
+
+  cloneOpsInBlock(forOp.getBody(), builders, schedule);
+
+  for (auto [partitionIdx, newForOp] : newForOps) {
+    builders[partitionIdx].setInsertionPointAfter(newForOp);
+    WarpSchedule::eraseFrom(newForOp);
+  }
 }
 
 void cloneIfOp(scf::IfOp ifOp, SmallVector<WarpGroupBuilder> &builders,
@@ -284,6 +285,20 @@ void cloneReduceOp(triton::ReduceOp reduceOp,
   }
 }
 
+void cloneOp(Operation *op, SmallVector<WarpGroupBuilder> &builders,
+             SmallVector<size_t> const &partitionIndices) {
+  if (op->getNumRegions() != 0) {
+    llvm::report_fatal_error(
+        "Ops are expected to be regionless at this point.");
+  }
+
+  for (size_t idx : partitionIndices) {
+    auto &builder = builders[idx];
+    auto newOp = builder.clone(*op, builder.mapping);
+    mapRange(op->getResults(), newOp->getResults(), builder.mapping);
+  }
+}
+
 void cloneOpsInBlock(Block *block, SmallVector<WarpGroupBuilder> &builders,
                      const WarpSchedule &schedule) {
   for (auto &op_ : *block) {
@@ -327,16 +342,7 @@ void cloneOpsInBlock(Block *block, SmallVector<WarpGroupBuilder> &builders,
         }
       }
     } else {
-      if (op->getNumRegions() != 0) {
-        llvm::report_fatal_error(
-            "Ops are expected to be regionless at this point.");
-      }
-
-      for (size_t idx : partitionIndices) {
-        auto &builder = builders[idx];
-        auto newOp = builder.clone(*op, builder.mapping);
-        mapRange(op->getResults(), newOp->getResults(), builder.mapping);
-      }
+      cloneOp(op, builders, partitionIndices);
     }
   }
 }
@@ -411,13 +417,26 @@ LogicalResult triton::gpu::partitionLoop(scf::ForOp loop) {
     builders.push_back(WarpGroupBuilder(&block, block.end(), partitionId));
   }
 
-  cloneForOp(loop, builders, schedule);
+  SmallVector<Operation *> opsToErase;
+  for (auto &op_ : *loop->getBlock()) {
+    auto op = &op_;
+    auto wsTag = op->getAttrOfType<IntegerAttr>(kWarpSpecializeTagAttrName);
+    if (!wsTag || wsTag.getInt() != schedule.getTag())
+      continue;
+    if (auto partitionId = op->getAttrOfType<IntegerAttr>(kPartitionAttrName)) {
+      cloneOp(op, builders, {static_cast<size_t>(partitionId.getInt())});
+      opsToErase.push_back(op);
+    } else {
+      assert(loop.getOperation() == op && "Unexpected op");
+      cloneForOp(loop, builders, schedule);
+      opsToErase.push_back(loop);
+    }
+  }
 
   for (auto [b, region, partition] : llvm::zip(
            builders, wgOp.getPartitionRegions(), schedule.getPartitions())) {
-    auto newForOp = cast<scf::ForOp>(region.front().front());
+    auto newForOp = *region.front().getOps<scf::ForOp>().begin();
     auto outputs = newForOp.getResults();
-    b.setInsertionPointAfter(newForOp);
 
     if (b.partitionId == 0) {
       b.create<nvws::WarpGroupYieldOp>(wgOp.getLoc(), outputs);
@@ -463,7 +482,8 @@ LogicalResult triton::gpu::partitionLoop(scf::ForOp loop) {
     }
   }
 
-  loop->erase();
+  for (auto op : llvm::reverse(opsToErase))
+    op->erase();
 
   return success();
 }
