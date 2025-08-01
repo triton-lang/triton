@@ -233,14 +233,14 @@ void createTMAGather(triton::nvws::DescriptorGatherOp op,
   assignStageCluster(newGatherOp, getStageCluster(op), rewriter);
 }
 
-void lowerTMALoad(ArefPutEnterOp op, PatternRewriter &rewriter,
-                  ArefValue arefVal) {
+void lowerTMALoad(ArefPutEnterOp op, Value fullBarrier,
+                  PatternRewriter &rewriter, ArefValue arefVal) {
   auto loc = op.getLoc();
   int txCount = 0;
   // for now handle TMA loads in PutEnterOp
   SmallVector<Operation *> loadOps;
-  for (auto result : op.getResults()) {
-    for (auto user : result.getUsers()) {
+  for (auto buffer : op.getBuffers()) {
+    for (auto user : buffer.getUsers()) {
       if (auto loadOp =
               dyn_cast<triton::nvws::DescriptorLoadOpInterface>(user)) {
         loadOps.push_back(loadOp);
@@ -248,29 +248,10 @@ void lowerTMALoad(ArefPutEnterOp op, PatternRewriter &rewriter,
       }
     }
   }
-  assert(loadOps.size() <= op.getResults().size());
+  assert(loadOps.size() <= op.getBuffers().size());
   if (loadOps.empty())
     return;
 
-  // Use the token to find the matching enter / exit pair
-  //   %bufs:n, %token = aref_put.enter %aref[%enter_idx]
-  //   tma_load %bufs[0]
-  //   ..
-  //   tma_load %bufs[n-1]
-  //   aref_put.exit %aref[%exit_idx], %token
-  ArefPutExitOp arefPutExitOp;
-  for (auto user : op.getToken().getUsers()) {
-    if (auto exitOp = dyn_cast<ArefPutExitOp>(user)) {
-      arefPutExitOp = exitOp;
-      break;
-    }
-  }
-  assert(arefPutExitOp);
-  assert(arefPutExitOp.getAref() == op.getAref() &&
-         "Expecting matching Aref on the ArefPutExitOp");
-
-  Value fullBarrier =
-      getFullBarrier(rewriter, loc, arefVal, arefPutExitOp.getStage());
   Value pred = rewriter.create<arith::ConstantIntOp>(loc, 1, 1);
   auto expectOp = rewriter.create<triton::nvidia_gpu::BarrierExpectOp>(
       loc, fullBarrier, txCount, pred);
@@ -290,8 +271,9 @@ void lowerTMALoad(ArefPutEnterOp op, PatternRewriter &rewriter,
   }
 }
 
-LogicalResult rewritePutEnterOp(ArefCreateOp arefOp, ArefPutEnterOp op,
-                                PatternRewriter &rewriter, ArefValue arefVal) {
+LogicalResult rewritePutEnterOp(ArefPutEnterOp op, PatternRewriter &rewriter,
+                                ArefValue arefVal,
+                                const DenseSet<MMAv5OpInterface> &mmav5Ops) {
   auto loc = op.getLoc();
   rewriter.setInsertionPointAfter(op);
 
@@ -304,11 +286,41 @@ LogicalResult rewritePutEnterOp(ArefCreateOp arefOp, ArefPutEnterOp op,
   auto views = getSubViews(arefVal, op.getStage(), loc, rewriter);
   assert(views.size() == op.getBuffers().size());
 
-  // TMA load need special handling as it requires fullMbarrier that
-  // we need to get from matching ArefPutExitOp
-  lowerTMALoad(op, rewriter, arefVal);
+  // Use the token to find the matching enter / exit pair
+  //   %bufs:n, %token = aref_put.enter %aref[%enter_idx]
+  //   tma_load %bufs[0]
+  //   ..
+  //   tma_load %bufs[n-1]
+  //   aref_put.exit %aref[%exit_idx], %token
+  ArefPutExitOp exitOp;
+  for (auto user : op.getToken().getUsers()) {
+    if (auto op = dyn_cast<ArefPutExitOp>(user)) {
+      exitOp = op;
+      break;
+    }
+  }
+  assert(exitOp);
+  assert(exitOp.getAref() == op.getAref() &&
+         "Expecting matching Aref on the ArefPutExitOp");
 
-  // replaces uses with views
+  auto asyncKinds = castAsyncOpAttrs(exitOp.getAsyncOps());
+  auto hasAsyncLoad = [](AsyncOp kind) {
+    return kind == AsyncOp::TMALoad || kind == AsyncOp::CpAsync;
+  };
+  auto hasTMA = [](AsyncOp kind) { return kind == AsyncOp::TMALoad; };
+
+  if (llvm::any_of(asyncKinds, hasTMA)) {
+    Value fullBarrier =
+        getFullBarrier(rewriter, loc, arefVal, exitOp.getStage());
+    lowerTMALoad(op, fullBarrier, rewriter, arefVal);
+  }
+
+  if (llvm::any_of(asyncKinds, hasAsyncLoad)) {
+    for (auto mmav5 : mmav5Ops) {
+      mmav5.setIsAsync(true);
+    }
+  }
+
   for (int i = 0; i < arefVal.buffers.size(); ++i)
     op.getBuffers()[i].replaceAllUsesWith(views[i]);
 
@@ -331,8 +343,8 @@ static void propagateMutability(Value value) {
   }
 }
 
-LogicalResult rewriteGetEnterOp(ArefCreateOp arefOp, ArefGetEnterOp op,
-                                PatternRewriter &rewriter, ArefValue arefVal) {
+LogicalResult rewriteGetEnterOp(ArefGetEnterOp op, PatternRewriter &rewriter,
+                                ArefValue arefVal) {
   auto loc = op.getLoc();
   rewriter.setInsertionPointAfter(op);
 
@@ -347,8 +359,6 @@ LogicalResult rewriteGetEnterOp(ArefCreateOp arefOp, ArefGetEnterOp op,
     // Before aref lowering, memdesc_trans consumes an immutable buffer from
     // a get enter op. After lowering, all buffers are mutable.
     propagateMutability(views[i]);
-    //    replaceUsesAndPropagateType(rewriter,
-    //    op.getBuffers()[i].getDefiningOp(), views[i]);
   }
 
   return success();
@@ -447,6 +457,36 @@ LogicalResult rewriteArefDestroyOp(ArefDestroyOp op, PatternRewriter &rewriter,
   return success();
 }
 
+DenseSet<MMAv5OpInterface> getAsyncMMAv5Consumers(Value aref) {
+  DenseSet<MMAv5OpInterface> mmav5Ops;
+  for (auto arefUser : aref.getUsers()) {
+    if (auto getEnter = dyn_cast<ArefGetEnterOp>(arefUser)) {
+      if (getWarpGroupIdx(getEnter).second == 0) {
+        // Ignore mmav5 ops in the default partition. They are not warp
+        // specialized.
+        continue;
+      }
+
+      for (auto buffer : getEnter.getBuffers()) {
+        for (auto consumer : buffer.getUsers()) {
+          if (auto mmav5 = dyn_cast<MMAv5OpInterface>(consumer)) {
+            mmav5Ops.insert(mmav5);
+          } else if (auto forOp = consumer->getParentOfType<scf::ForOp>()) {
+            auto users =
+                getTopLevelUsersInLoop(consumer, forOp, [](Operation *user) {
+                  return isa<MMAv5OpInterface>(user);
+                });
+            for (auto user : users) {
+              mmav5Ops.insert(cast<MMAv5OpInterface>(user));
+            }
+          }
+        }
+      }
+    }
+  }
+  return mmav5Ops;
+}
+
 class LowerArefCreate : public OpRewritePattern<ArefCreateOp> {
 public:
   using OpRewritePattern::OpRewritePattern;
@@ -456,14 +496,21 @@ public:
     auto aref = createAndInitMbar(op, rewriter);
     SetVector<Operation *> opToDelete;
     opToDelete.insert(op.getOperation());
+
+    // setIsAsync(true) will be invoked on these mmav5 ops during
+    // rewritePutEnterOp when the producer is async loads. Since collecting
+    // consumer mmav5 ops requires the corresponding get enter op to be still
+    // used in the IR, collect them here.
+    auto mmav5Ops = getAsyncMMAv5Consumers(op.getResult());
+
     for (auto userOp : op->getUsers()) {
       if (auto user = dyn_cast<ArefPutEnterOp>(userOp)) {
         opToDelete.insert(user);
-        if (rewritePutEnterOp(op, user, rewriter, aref).failed())
+        if (rewritePutEnterOp(user, rewriter, aref, mmav5Ops).failed())
           return failure();
       } else if (auto user = dyn_cast<ArefGetEnterOp>(userOp)) {
         opToDelete.insert(user);
-        if (rewriteGetEnterOp(op, user, rewriter, aref).failed())
+        if (rewriteGetEnterOp(user, rewriter, aref).failed())
           return failure();
       } else if (auto user = dyn_cast<ArefPutExitOp>(userOp)) {
         opToDelete.insert(user);
