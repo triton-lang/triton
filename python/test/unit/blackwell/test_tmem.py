@@ -116,7 +116,7 @@ def test_tmem_subslice_block_m_64():
         layout: ttgl.constexpr = get_tmem_32x32b_reg_layout(BLOCK_M, BLOCK_N, (BLOCK_M, N), num_warps=4)
 
         offsets = ttgl.arange(0, BLOCK_M)[:, None] * N + ttgl.arange(0, N)[None, :]
-        offsets = ttgl.convert_layout(offsets, layout)
+        offsets = ttgl.set_auto_layout(offsets, layout)
         s = ttgl.load(s_ptr + offsets)
 
         s_tmem.store(s)
