@@ -2,7 +2,6 @@
 # fmt: off
 from dataclasses import dataclass
 import triton
-from triton_kernels.target_info import get_cdna_version
 import torch
 from .opt_flags_details import opt_flags_amd, opt_flags_nvidia
 
@@ -56,7 +55,7 @@ def make_default_opt_flags_amd(
     else:
         tokens_per_expt = routing_data.expected_tokens_per_expt
 
-    is_cdna4 = get_cdna_version() == 4
+    is_cdna4 = False # TODO get_cdna_version() == 4
     # block_m
     if constraints.get("block_m", None):
         block_m = constraints["block_m"]
@@ -67,7 +66,7 @@ def make_default_opt_flags_amd(
     elif is_cdna4 and m >= 512:
         block_m = 128
     else:
-        block_m = max(32, min(triton.next_power_of_2(tokens_per_expt), 64))
+        block_m = max(16, min(triton.next_power_of_2(tokens_per_expt), 128))
 
     if routing_data is not None:
         grid_m = routing_data.n_blocks(m, block_m)
@@ -97,7 +96,7 @@ def make_default_opt_flags_amd(
         n_cu = torch.cuda.get_device_properties(0).multi_processor_count
         split_k = max(1, n_cu // grid_size)
     # w_cache_modifier:
-    w_cache_modifier = ".cg" if block_m <= 32 else None
+    w_cache_modifier = ".cg" if (m is not None and m <= 16) else None
     # num_warps, num_stages
     num_warps = 2 if (m is not None and m <= 16) else 8
     num_stages = 2
@@ -105,9 +104,9 @@ def make_default_opt_flags_amd(
     target_kernel_kwargs = {"waves_per_eu": 0, "matrix_instr_nonkdim": 16, "kpack": 1}
     ret = OptFlags(
         block_m=block_m,
-        block_n=block_n,
-        block_k=block_k,
-        num_warps=num_warps,
+        block_n=128, #block_n,
+        block_k=128, #block_k,
+        num_warps=8, #num_warps,
         num_stages=num_stages,
         group_m=group_m,
         xcd_swizzle=xcd_swizzle,
