@@ -14,7 +14,6 @@ where WGMMAs can be pipelined for better performance.
 import pytest
 import torch
 import triton
-import importlib
 from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
 
@@ -92,7 +91,8 @@ def small_mma_kernel(a_desc, b_desc, c_desc, d_desc,  #
     # smallest indivisible unit of `warps_per_cta` is `[4, 1]`. Note that this
     # means WGMMA requires at least 4 warps. To choose the right
     # `warps_per_cta`, start from the atom `[4, 1]` and simply double it along
-    # any dimension until it matches the number of warps.
+    # any dimension until it matches the number of warps. Note that since `m=16`
+    # and must be at least 4 wraps along M, the M dimension must be at least 64.
     #
     # Note when `num_warps=8`, we can choose `[4, 2]` or `[8, 1]`, but recall
     # from 02-layouts that this can affect the performance of, e.g., reductions.
@@ -136,7 +136,7 @@ def small_mma_kernel(a_desc, b_desc, c_desc, d_desc,  #
     # cannot access the result, even though it is in registers, and we cannot
     # write to any of the shared memory inputs. To ensure a correct ordering
     # between `warpgroup_mma`, the wait, and uses of the result, we must pass
-    # the accumulator to the wait as one of its `deps` arguments.
+    # the result through the wait as one of its `deps` arguments.
     #
     # WGMMA accesses shared memory through the async proxy, like TMAs. This
     # means `fence_async_shared` is sometimes required to prevent hazards.
@@ -145,7 +145,7 @@ def small_mma_kernel(a_desc, b_desc, c_desc, d_desc,  #
     # async copies and TMA stores. Issuing a WGMMA operation implicitly commits
     # it to a WGMMA group. Thus, we can wait for the completion of the operation
     # by waiting until there are 0 outstanding operations.
-    warpgroup_mma_wait(num_outstanding=0, deps=(d, ))
+    d = warpgroup_mma_wait(num_outstanding=0, deps=(d, ))
 
     # Note that `is_async=False` is the default value, and all this does is
     # immediately wait for 0 outstanding operations. In this tutorial, we will
@@ -157,6 +157,7 @@ def small_mma_kernel(a_desc, b_desc, c_desc, d_desc,  #
 
     d_smem = gl.allocate_shared_memory(d_desc.dtype, d_desc.block_type.shape, d_desc.layout)
     d_smem.store(d)
+    fence_async_shared()
     tma.async_copy_shared_to_global(c_desc, [0, 0], d_smem)
     tma.store_wait(pendings=0)
 
@@ -164,7 +165,7 @@ def small_mma_kernel(a_desc, b_desc, c_desc, d_desc,  #
 def small_mma(A, B, C, D, INSTR_SHAPE_N, LHS_IN_REG=False, num_warps=4):
     a_layout = gl.NVMMASharedLayout.get_default_for(A.shape, gl.float16)
     b_layout = gl.NVMMASharedLayout.get_default_for(B.shape, gl.float16)
-    cd_layout = gl.NVMMASharedLayout.get_default_for(C.shape, gl.float32)
+    cd_layout = gl.NVMMASharedLayout.get_default_for(C.shape, gl.float16)
 
     a_desc = TensorDescriptor(A, A.shape, A.stride(), A.shape, a_layout)
     b_desc = TensorDescriptor(B, B.shape, B.stride(), B.shape, b_layout)
@@ -176,9 +177,9 @@ def small_mma(A, B, C, D, INSTR_SHAPE_N, LHS_IN_REG=False, num_warps=4):
         LHS_IN_REG, INSTR_SHAPE_N, num_warps=num_warps)
 
 
-@pytest.mark.parametrize("M, N, K", [(32, 32, 32), (64, 256, 128)])
+@pytest.mark.parametrize("M, N, K", [(64, 32, 32), (64, 256, 128)])
 @pytest.mark.parametrize("LHS_IN_REG", [False, True])
-@pytest.mark.parametrize("INSTR_SHAPE_N", [16, 64, 128])
+@pytest.mark.parametrize("INSTR_SHAPE_N", [16, 32, 64, 128])
 @pytest.mark.parametrize("num_warps", [4, 8])
 def test_small_mma(M, N, K, LHS_IN_REG, INSTR_SHAPE_N, num_warps):
     maxN = max(N // triton.cdiv(num_warps, triton.cdiv(M, 16)), 8)
@@ -187,7 +188,7 @@ def test_small_mma(M, N, K, LHS_IN_REG, INSTR_SHAPE_N, num_warps):
 
     A = torch.randn(M, K, device="cuda", dtype=torch.float16)
     B = torch.randn(K, N, device="cuda", dtype=torch.float16)
-    C = torch.randn(M, N, device="cuda")
+    C = torch.randn(M, N, device="cuda", dtype=torch.float16)
     D = torch.empty_like(C)
     small_mma(A, B, C, D, INSTR_SHAPE_N, LHS_IN_REG, num_warps)
     torch.testing.assert_close(A @ B + C, D, atol=0, rtol=0)
