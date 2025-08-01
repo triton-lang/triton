@@ -122,7 +122,8 @@ def TTNG_WarpGroupDotWaitOp : TTNG_Op<"warp_group_dot_wait", [DeclareOpInterface
     `warp_group_dot_wait 1`, then $inputs must be the result of the first dot op.
   }];
 
-  let assemblyFormat = "$inputs attr-dict (`:` type($inputs)^)?";
+  let assemblyFormat = "$inputs attr-dict `:` type($inputs)";
+  let hasVerifier = 1;
 }
 
 def TTNG_InitBarrierOp : TTNG_Op<"init_barrier"> {

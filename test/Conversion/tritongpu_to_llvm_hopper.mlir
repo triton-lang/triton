@@ -558,10 +558,4 @@ tt.func @warpgroup_dot_wait_2_inputs(%arg0: tensor<128xf32, #blocked>, %arg1: te
   tt.return
 }
 
-tt.func @warpgroup_dot_wait_0_inputs() {
-  // CHECK: wgmma.wait_group.sync.aligned 0;
-  ttng.warp_group_dot_wait {pendings = 0 : i32}
-  tt.return
-}
-
 }
