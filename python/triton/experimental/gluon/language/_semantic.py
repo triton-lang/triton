@@ -1,6 +1,5 @@
 from typing import Sequence, List, TypeVar, Tuple, Callable
 import math
-
 from triton.language.semantic import TritonSemantic
 from . import _core as ttgl
 from ._layouts import AutoLayout, DistributedLayout, SliceLayout
