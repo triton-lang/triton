@@ -563,3 +563,12 @@ def test_return_in_while():
         kernel.warmup(grid=(1, ))
 
     assert "Cannot have `return` statements inside `while` or `for` statements in triton" in str(e.value)
+
+
+def test_no_constexpr_function():
+
+    def foo():
+        pass
+
+    with pytest.raises(TypeError, match="constexpr must not be a function"):
+        foo = tl.constexpr(foo)
