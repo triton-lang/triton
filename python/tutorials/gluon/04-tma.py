@@ -243,6 +243,8 @@ def elementwise_add_tma(a, b, c, XBLOCK=32, YBLOCK=64, num_buffers=2):
 
     block_shape = [XBLOCK, YBLOCK]
     layout = gl.NVMMASharedLayout.get_default_for(block_shape, gl.float32)
+
+    # The strides of TMA descriptors must be 16-byte aligned.
     a_desc = TensorDescriptor(a, a.shape, a.stride(), block_shape, layout)
     b_desc = TensorDescriptor(b, b.shape, b.stride(), block_shape, layout)
     c_desc = TensorDescriptor(c, c.shape, c.stride(), block_shape, layout)

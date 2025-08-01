@@ -14,6 +14,7 @@ where WGMMAs can be pipelined for better performance.
 import pytest
 import torch
 import triton
+import itertools
 from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
 
@@ -179,7 +180,7 @@ def small_mma(A, B, C, D, INSTR_SHAPE_N, LHS_IN_REG=False, num_warps=4):
 
 @pytest.mark.parametrize("M, N, K", [(64, 32, 32), (64, 256, 128)])
 @pytest.mark.parametrize("LHS_IN_REG", [False, True])
-@pytest.mark.parametrize("INSTR_SHAPE_N", [16, 32, 64, 128])
+@pytest.mark.parametrize("INSTR_SHAPE_N", [16, 64])
 @pytest.mark.parametrize("num_warps", [4, 8])
 def test_small_mma(M, N, K, LHS_IN_REG, INSTR_SHAPE_N, num_warps):
     maxN = max(N // triton.cdiv(num_warps, triton.cdiv(M, 16)), 8)
@@ -192,3 +193,182 @@ def test_small_mma(M, N, K, LHS_IN_REG, INSTR_SHAPE_N, num_warps):
     D = torch.empty_like(C)
     small_mma(A, B, C, D, INSTR_SHAPE_N, LHS_IN_REG, num_warps)
     torch.testing.assert_close(A @ B + C, D, atol=1e-3, rtol=1e-1)
+
+
+# %%
+# Let's study the performance impact of our knobs on WGMMA.
+
+if __name__ == "__main__":
+    M, N, K = 64, 128, 128
+    num_warps = 4
+    A = torch.randn(M, K, device="cuda", dtype=torch.float16)
+    B = torch.randn(K, N, device="cuda", dtype=torch.float16)
+    C = torch.randn(M, N, device="cuda", dtype=torch.float32)
+    D = torch.empty_like(C)
+
+    print("LHS_IN_REG INSTR_SHAPE_N time (us)")
+    for LHS_IN_REG, INSTR_SHAPE_N in itertools.product([False, True], [16, 32, 64, 128]):
+        fn = lambda: small_mma(A, B, C, D, INSTR_SHAPE_N, LHS_IN_REG, num_warps)
+        ms = triton.testing.do_bench(fn)
+        print(f"{LHS_IN_REG!s:>10} {INSTR_SHAPE_N:>13} {ms*1000:>9.2f}")
+
+# %%
+# ```
+# LHS_IN_REG INSTR_SHAPE_N time (us)
+#      False            16      9.47
+#      False            32      8.48
+#      False            64      8.32
+#      False           128      8.32
+#       True            16      9.32
+#       True            32      8.60
+#       True            64      8.37
+#       True           128      8.36
+# ```
+#
+# Picking the largest N results in the best performance, because each
+# `wgmma.mma_async` instruction will process more data. In our case, placing LHS
+# in registers is slower because we had to load the data out of shared memory.
+# However, if the data was already in registers, it would be faster to use it in
+# registers instead of placing it in shared memory.
+
+# %%
+# Just like `warpgroup_mma` is composed of multiple `wgmma.mma_async`
+# instructions tiled to cover our block size, we can also tile `warpgroup_mma`
+# to cover a much larger matmul. We can tile along K within each kernel and span
+# (M, N) with multiple programs. This leads to the classic blocked matmul
+# implementation. Let's implement a basic version to demonstrate WGMMA.
+
+
+# This decorator allows us to invoke the function from a Gluon constexpr.
+@gl.constexpr_function
+def get_warps_per_cta(BLOCK_M, BLOCK_N, num_warps):
+    warps_per_cta = [4, 1]
+    m = 16
+    # Tile the atom until we have enough warps.
+    while warps_per_cta[0] * warps_per_cta[1] != num_warps:
+        # Tile along M only if it would not cause broadcasting.
+        if BLOCK_M > m * warps_per_cta[0]:
+            warps_per_cta[0] *= 2
+        else:
+            warps_per_cta[1] *= 2
+    return warps_per_cta
+
+
+@gl.constexpr_function
+def get_instr_shape_n(BLOCK_M, BLOCK_N, num_warps):
+    m = 16
+    mReps = triton.cdiv(BLOCK_M, m)
+    nReps = triton.cdiv(num_warps, mReps)
+    maxN = max(BLOCK_N // nReps, 8)
+    n = 256
+    while n > maxN or BLOCK_N % n != 0:
+        n -= 8
+    assert n >= 8, "expected to find a valid n"
+    return n
+
+
+@gluon.jit
+def blocked_mma_kernel(a_desc, b_desc, c_desc,  #
+                       TRANSPOSE_B: gl.constexpr, OVERLAP_MMA: gl.constexpr, num_warps: gl.constexpr):
+    BLOCK_M: gl.constexpr = c_desc.block_type.shape[0]
+    BLOCK_N: gl.constexpr = c_desc.block_type.shape[1]
+    BLOCK_K: gl.constexpr = a_desc.block_type.shape[1]
+    K = a_desc.shape[1]
+
+    a_smem = gl.allocate_shared_memory(a_desc.dtype, a_desc.block_type.shape, a_desc.layout)
+    b_smem = gl.allocate_shared_memory(b_desc.dtype, b_desc.block_type.shape, b_desc.layout)
+
+    # The block of C this program is processing is (pid_m, pid_n).
+    pid_m = gl.program_id(axis=0)
+    pid_n = gl.program_id(axis=1)
+    off_m = pid_m * BLOCK_M
+    off_n = pid_n * BLOCK_N
+
+    # Determine the WGMMA layout.
+    m: gl.constexpr = 16
+    k: gl.constexpr = 256 // a_desc.dtype.primitive_bitwidth
+    n: gl.constexpr = get_instr_shape_n(BLOCK_M, BLOCK_N, num_warps)
+    warps_per_cta: gl.constexpr = get_warps_per_cta(BLOCK_M, BLOCK_N, num_warps)
+
+    mma_layout: gl.constexpr = gl.NVMMADistributedLayout(
+        version=[3, 0],
+        warps_per_cta=warps_per_cta,
+        instr_shape=[m, n, k],
+    )
+    acc = gl.zeros((BLOCK_M, BLOCK_N), dtype=c_desc.dtype, layout=mma_layout)
+
+    bar = gl.allocate_shared_memory(gl.int64, [1], mbarrier.MBarrierLayout())
+    mbarrier.init(bar, count=1)
+    phase = 0
+
+    for k in range(0, K, BLOCK_K):
+        # Load tiles of A and B.
+        mbarrier.expect(bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes)
+        tma.async_copy_global_to_shared(a_desc, [off_m, k], bar, a_smem)
+        if TRANSPOSE_B:
+            tma.async_copy_global_to_shared(b_desc, [off_n, k], bar, b_smem)
+        else:
+            tma.async_copy_global_to_shared(b_desc, [k, off_n], bar, b_smem)
+        mbarrier.wait(bar, phase=phase)
+        phase ^= 1  # toggle the parity phase between 0 and 1
+
+        # We can transpose B by creating a transposed view over tile of B in
+        # shared memory. This forwards the transposition to WGMMA, which handles
+        # it for us.
+        if TRANSPOSE_B:
+            b = b_smem.permute((1, 0))
+        else:
+            b = b_smem
+
+        # We can overlap the WGMMA with the loads by launching the MMA without
+        # waiting for it until the next iteration.
+        if OVERLAP_MMA:
+            acc = warpgroup_mma_wait(num_outstanding=0, deps=(acc, ))
+
+        acc = warpgroup_mma(a_smem, b, acc, is_async=OVERLAP_MMA)
+
+    # Make sure to wait for the last WGMMA.
+    if OVERLAP_MMA:
+        acc = warpgroup_mma_wait(num_outstanding=0, deps=(acc, ))
+
+    mbarrier.invalidate(bar)
+
+    # Store tile of C.
+    c_smem = gl.allocate_shared_memory(c_desc.dtype, c_desc.block_type.shape, c_desc.layout)
+    c_smem.store(acc)
+    fence_async_shared()
+    tma.async_copy_shared_to_global(c_desc, [off_m, off_n], c_smem)
+    tma.store_wait(pendings=0)
+
+
+def blocked_mma(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B, OVERLAP_MMA, num_warps):
+    M, N = C.shape
+
+    a_layout = gl.NVMMASharedLayout.get_default_for([BLOCK_M, BLOCK_K], gl.float16)
+    a_desc = TensorDescriptor(A, A.shape, A.stride(), [BLOCK_M, BLOCK_K], a_layout)
+
+    B_BLOCK_SHAPE = [BLOCK_N, BLOCK_K] if TRANSPOSE_B else [BLOCK_K, BLOCK_N]
+    b_layout = gl.NVMMASharedLayout.get_default_for(B_BLOCK_SHAPE, gl.float16)
+    b_desc = TensorDescriptor(B, B.shape, B.stride(), B_BLOCK_SHAPE, b_layout)
+
+    c_layout = gl.NVMMASharedLayout.get_default_for([BLOCK_M, BLOCK_N], gl.float32)
+    c_desc = TensorDescriptor(C, C.shape, C.stride(), [BLOCK_M, BLOCK_N], c_layout)
+
+    grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
+    blocked_mma_kernel[grid](a_desc, b_desc, c_desc, TRANSPOSE_B, OVERLAP_MMA, num_warps=num_warps)
+
+
+@pytest.mark.parametrize("M, N, K", [(208, 416, 304), (2000, 1000, 2000)])
+@pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(64, 64, 64), (128, 128, 128)])
+@pytest.mark.parametrize("TRANSPOSE_B", [False, True])
+@pytest.mark.parametrize("OVERLAP_MMA", [False, True])
+@pytest.mark.parametrize("num_warps", [4, 8])
+def test_blocked_mma(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B, OVERLAP_MMA, num_warps):
+    A = torch.randn(M, K, device="cuda", dtype=torch.float16)
+    B = torch.randn((N, K) if TRANSPOSE_B else (K, N), device="cuda", dtype=torch.float16)
+    C = torch.empty(M, N, device="cuda", dtype=torch.float32)
+
+    blocked_mma(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B, OVERLAP_MMA, num_warps)
+
+    C_ref = A @ (B.T if TRANSPOSE_B else B)
+    torch.testing.assert_close(C_ref.to(torch.float32), C, rtol=1e-3, atol=1e-1)
