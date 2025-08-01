@@ -27,12 +27,18 @@
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Dialect.h"
 
 // TritonNvidiaGPU depends on Triton
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h.inc"
+
+namespace mlir::triton::nvidia_gpu::impl {
+LogicalResult verifyMMAv5Op(Operation *op);
+} // namespace mlir::triton::nvidia_gpu::impl
 
 #define GET_ATTRDEF_CLASSES
 #include "triton/Dialect/TritonNvidiaGPU/IR/TritonNvidiaGPUAttrDefs.h.inc"
@@ -51,19 +57,25 @@ struct TensorMemory : public SideEffects::Resource::Base<TensorMemory> {
 struct TMemAllocation {
   TMemAllocation(int numCols, int numRows)
       : numCols(numCols), numRows(numRows) {}
-  int numRows;
   int numCols;
+  int numRows;
 };
 
 TMemAllocation getTmemAllocSizes(gpu::MemDescType memDescType);
 
-Attribute getTmemCompatibleLayout(unsigned M, unsigned N,
-                                  RankedTensorType oltType, unsigned numWarps);
+gpu::DistributedEncodingTrait getTmemCompatibleLayout(unsigned M, unsigned N,
+                                                      RankedTensorType oltType,
+                                                      unsigned numWarps);
+gpu::DistributedEncodingTrait
+getTmemLoadLayoutSplitLongM(RankedTensorType tensorType,
+                            gpu::MemDescType memType, int numWarps);
+SmallVector<gpu::DistributedEncodingTrait>
+getTmemCompatibleLayouts(Operation *op, RankedTensorType tensorType,
+                         gpu::MemDescType memType);
 
 bool isDistributedLayoutTMemCompatible(Operation *op,
                                        RankedTensorType tensorType,
                                        gpu::MemDescType memType);
-
 bool isDistributedLayoutSplitMTmemLoadStore(RankedTensorType tensorType,
                                             gpu::MemDescType memType,
                                             int numWarps);

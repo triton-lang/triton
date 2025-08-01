@@ -23,6 +23,7 @@
 
 #include "MMAHelpers.h"
 #include "Utility.h"
+#include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Support/LLVM.h"
 
 using namespace mlir;
@@ -348,7 +349,7 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
                          uint32_t maxNumImpreciseAcc, bool sync, Value thread) {
   auto tb = TritonLLVMOpBuilder(loc, rewriter);
   auto aTensorTy = cast<triton::gpu::TensorOrMemDesc>(a.getType());
-  auto bTensorTy = cast<triton::gpu::TensorOrMemDesc>(b.getType());
+  auto bTensorTy = cast<triton::gpu::MemDescType>(b.getType());
   auto dTensorTy = cast<RankedTensorType>(d.getType());
   auto aSharedLayout =
       dyn_cast<NVMMASharedEncodingAttr>(aTensorTy.getEncoding());
@@ -358,15 +359,9 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
   Value baseA;
   Value baseB;
   if (aSharedLayout)
-    baseA =
-        getSharedMemoryObjectFromStruct(
-            loc, loadedA,
-            typeConverter->convertType(aTensorTy.getElementType()), rewriter)
-            .getBase();
-  baseB = getSharedMemoryObjectFromStruct(
-              loc, loadedB,
-              typeConverter->convertType(bTensorTy.getElementType()), rewriter)
-              .getBase();
+    baseA = getOffsetedBase(loadedA, cast<MemDescType>(aTensorTy),
+                            typeConverter, rewriter, loc);
+  baseB = getOffsetedBase(loadedB, bTensorTy, typeConverter, rewriter, loc);
   if (aSharedLayout) {
     transA = aSharedLayout.getTransposed();
   }
@@ -407,7 +402,8 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
   triton::nvgpu::WGMMALayout layoutB = transB ? triton::nvgpu::WGMMALayout::row
                                               : triton::nvgpu::WGMMALayout::col;
 
-  Operation *startSequence = rewriter.create<triton::nvgpu::WGMMAFenceOp>(loc);
+  auto func = op->getParentOfType<LLVM::LLVMFuncOp>();
+  Operation *startSequence = rewriter.create<NVVM::WgmmaFenceAlignedOp>(loc);
   SmallVector<Value> mmaResults;
   for (int m = 0; m < numRepM; ++m) {
     for (int n = 0; n < numRepN; ++n) {
@@ -478,7 +474,7 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
       }
     }
   }
-  rewriter.create<triton::nvgpu::WGMMACommitGroupOp>(loc);
+  rewriter.create<NVVM::WgmmaGroupSyncAlignedOp>(loc);
 
   if (sync)
     mmaResults = emitWait(rewriter, loc, mmaResults, 0);
@@ -502,12 +498,6 @@ LogicalResult convertWGMMA(triton::nvidia_gpu::WarpGroupDotOp op,
 #ifndef NDEBUG
   auto AEnc = op.getA().getType().getEncoding();
   auto BEnc = op.getB().getType().getEncoding();
-  assert(mlir::isa<NVMMASharedEncodingAttr>(AEnc) ||
-         mlir::isa<DotOperandEncodingAttr>(AEnc));
-  assert(mlir::isa<NVMMASharedEncodingAttr>(BEnc) &&
-         "Operand B should use Shared layout.");
-#endif
-
   return convertDot(typeConverter, rewriter, op.getLoc(), op.getOperation(),  //
                     op.getA(), op.getB(), op.getC(), op.getD(), op.getUseC(), //
                     adaptor.getA(), adaptor.getB(), adaptor.getC(),           //

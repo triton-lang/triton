@@ -1,4 +1,4 @@
-﻿#include "mlir/IR/BuiltinOps.h" // mlir::ModuleOp
+#include "mlir/IR/BuiltinOps.h" // mlir::ModuleOp
 #include "mlir/Target/LLVMIR/LLVMTranslationInterface.h"
 #include "mlir/Target/LLVMIR/ModuleTranslation.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
@@ -27,6 +27,7 @@
 #include "llvm/Transforms/Instrumentation/AddressSanitizerOptions.h"
 #include <csignal>
 #include <memory>
+#include <pybind11/gil.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <stdexcept>
@@ -219,6 +220,8 @@ void init_triton_llvm(py::module &&m) {
       .def("set_calling_conv", &llvm::Function::setCallingConv)
       .def("add_fn_attr", [](llvm::Function *fn, std::string &name,
                              std::string &val) { fn->addFnAttr(name, val); })
+      .def("remove_fn_attr", [](llvm::Function *fn,
+                                std::string &name) { fn->removeFnAttr(name); })
       .def("add_fn_asan_attr",
            [](llvm::Function *fn) {
              fn->addFnAttr(llvm::Attribute::SanitizeAddress);
@@ -269,7 +272,7 @@ void init_triton_llvm(py::module &&m) {
         }
         return llvmMod;
       },
-      py::keep_alive<0, 2>());
+      py::keep_alive<0, 2>(), py::call_guard<py::gil_scoped_release>());
 
   m.def("attach_datalayout", [](llvm::Module *mod, const std::string triple,
                                 const std::string proc,
@@ -414,7 +417,8 @@ void init_triton_llvm(py::module &&m) {
       // (optional) parameters
       py::arg("arch") = "", py::arg("features") = "",
       py::arg("flags") = std::vector<std::string>{},
-      py::arg("enable_fp_fusion") = false);
+      py::arg("enable_fp_fusion") = false,
+      py::call_guard<py::gil_scoped_release>());
 
   m.def(
       "translate_to_asm",

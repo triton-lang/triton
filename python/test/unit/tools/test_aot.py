@@ -1,5 +1,7 @@
 import glob
 import os
+import pytest
+import re
 import subprocess
 import sys
 import tempfile
@@ -9,6 +11,7 @@ import numpy as np
 import triton
 from triton.backends.compiler import GPUTarget
 from triton.backends.nvidia.driver import include_dirs, library_dirs
+from triton._internal_testing import is_cuda, is_hip
 
 kernel_utils_src = """
 import triton
@@ -273,6 +276,20 @@ def generate_matmul_test_data(dir, M, N, K):
     return a, b, a_path, b_path, c_path
 
 
+def check_hasco_binary_str(tmp_dir: str, dtype: str):
+    # Linking is not yet enabled on HIP backend so just check compilation for now.
+    h_files = glob.glob(f"matmul_{dtype}.*.h", root_dir=tmp_dir)
+    cpp_files = glob.glob(f"matmul_{dtype}.*.cpp", root_dir=tmp_dir)
+    assert len(h_files) == 1, "Expected one .h file"
+    assert len(cpp_files) == 1, "Expected one .cpp file"
+    pattern = re.compile(r'HSACO_NAME\[(\d+)\]')
+    with open(os.path.join(tmp_dir, cpp_files[0]), "r") as cpp_file:
+        content = cpp_file.read()
+        matches = pattern.findall(content)
+        assert len(matches) == 1, "Expected one HSACO_NAME definition"
+        assert int(matches[0]) > 16, "Expected valid HSACO object binary string"
+
+
 # Test edge case where the provided kernel signature has no specializations
 def test_compile_link_matmul_no_specialization():
     np.random.seed(3)
@@ -283,6 +300,10 @@ def test_compile_link_matmul_no_specialization():
 
         kernel_path = write_triton_kernels(tmp_dir, kernel_src, kernel_utils_src)
         compile_aot_kernel_no_specialization(tmp_dir, kernel_path, dtype, BM, BN, BK)
+        if is_hip():
+            check_hasco_binary_str(tmp_dir, dtype)
+            return
+
         link_aot_kernels(tmp_dir)
 
         # compile test case
@@ -314,6 +335,9 @@ def test_compile_link_matmul():
 
         kernel_path = write_triton_kernels(tmp_dir, kernel_src, kernel_utils_src)
         compile_aot_kernels(tmp_dir, kernel_path, dtype, BM, BN, BK, ha_hb_hints=[(":16", ":16")])
+        if is_hip():
+            check_hasco_binary_str(tmp_dir, dtype)
+            return
         link_aot_kernels(tmp_dir)
 
         # compile test case
@@ -345,6 +369,10 @@ def test_launcher_has_no_available_kernel():
 
         kernel_path = write_triton_kernels(tmp_dir, kernel_src, kernel_utils_src)
         compile_aot_kernels(tmp_dir, kernel_path, dtype, BM, BN, BK, ha_hb_hints=[(":1", ":1")])
+        if is_hip():
+            check_hasco_binary_str(tmp_dir, dtype)
+            return
+
         link_aot_kernels(tmp_dir)
 
         # compile test case
@@ -371,6 +399,7 @@ def test_launcher_has_no_available_kernel():
         assert "kernel launch failed" in result.stderr
 
 
+@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
 def test_compile_link_autotune_matmul():
     np.random.seed(3)
 
@@ -419,19 +448,25 @@ def test_compile_link_autotune_matmul():
             np.testing.assert_allclose(c_tri, c_ref * c_ref, atol=1e-4, rtol=1e-4)
 
 
-def test_ttgir_to_ptx():
+def test_ttgir_to_asm():
     src = """
-module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.num-ctas" = 1 : i32} {
-  tt.func public @sum_kernel_0d1d(%arg0: !tt.ptr<i32>, %arg1: !tt.ptr<i32>) {
+module attributes {{"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = {warp_size} : i32, "ttg.num-ctas" = 1 : i32}} {{
+  tt.func public @sum_kernel_0d1d(%arg0: !tt.ptr<i32>, %arg1: !tt.ptr<i32>) {{
     tt.return
-  }
-}
+  }}
+}}
 """
+    target = GPUTarget("hip", "gfx942", 64) if is_hip() else GPUTarget("cuda", 80, 32)
     with tempfile.TemporaryDirectory() as tmp_dir:
         kernel_path = os.path.join(tmp_dir, "empty_kernel.ttgir")
         with open(kernel_path, "w") as fp:
-            fp.write(src)
-        k = triton.compile(kernel_path, target=GPUTarget("cuda", 80, 32))
-        ptx = k.asm["ptx"]
-        assert ".target sm_80" in ptx
-        assert ".address_size 64" in ptx
+            fp.write(src.format(warp_size=target.warp_size))
+        k = triton.compile(kernel_path, target=target)
+        if is_cuda():
+            ptx = k.asm["ptx"]
+            assert ".target sm_80" in ptx
+            assert ".address_size 64" in ptx
+        elif is_hip():
+            amdgcn = k.asm["amdgcn"]
+            assert '.amdgcn_target "amdgcn-amd-amdhsa--gfx942"' in amdgcn
+            assert '.wavefront_size: 64' in amdgcn

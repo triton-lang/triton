@@ -207,8 +207,7 @@ Value AtomicRMWEmitter::emitAtomicRMW(RewriterBase &rewriter, Value rmwPtr,
 
 Value AtomicRMWEmitter::emitPairedAtomicForEvenTID(RewriterBase &rewriter,
                                                    Value rmwPtr, Value valElem,
-                                                   Value rmwMask,
-                                                   bool checkPairs) const {
+                                                   Value rmwMask) const {
   auto loc = rmwPtr.getLoc();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   Value i64Ones = b.i64_val(~uint64_t(0));
@@ -231,44 +230,34 @@ Value AtomicRMWEmitter::emitPairedAtomicForEvenTID(RewriterBase &rewriter,
   Value dppMoveRes = shiftLeftI32ByDpp(rewriter, packedVal);
   Value operand = b.bitcast(b.or_(packedVal, dppMoveRes), packF16Ty);
 
-  // If a runtime check is unnecessary (`checkPairs` is `false`),
-  // `rightNeighbourPtr` is irrelevant.
-  // Set the conditional value `enablePackedOpt` to `true` to enable DCE on the
-  // runtime check branch.
-  Value rightNeighbourPtr = rmwPtr;
-  Value enablePackedOpt = b.true_val();
-  if (checkPairs) {
-    Value rightNeighbourAddr =
-        genI32TiledOp(rewriter, shiftLeftI32ByDpp, castedAddr);
+  Value rightNeighbourAddr =
+      genI32TiledOp(rewriter, shiftLeftI32ByDpp, castedAddr);
 
-    // Packing optimization only supported if following conditions are true:
-    // 1. address is aligned by 4 bytes
-    // 2. right neighbour has adjacent address
-    // 3. both threads are active
-    Value isAligned = b.icmp_eq(b.urem(castedAddr, b.i64_val(4)), b.i64_val(0));
-    Value neighbourAddrAdjacent = b.icmp_eq(
-        rightNeighbourAddr,
-        b.add(castedAddr, b.i64_val(valueElemTy.getIntOrFloatBitWidth() / 8)));
-    Value neighbourEnabled = b.icmp_ne(i64Ones, rightNeighbourAddr);
-    Value bothEnabled = b.and_(neighbourEnabled, rmwMask);
-    enablePackedOpt =
-        b.and_(b.and_(isAligned, bothEnabled), neighbourAddrAdjacent);
+  // Packing optimization only supported if following conditions are true:
+  // 1. address is aligned by 4 bytes
+  // 2. right neighbour has adjacent address
+  // 3. both threads are active
+  Value isAligned = b.icmp_eq(b.urem(castedAddr, b.i64_val(4)), b.i64_val(0));
+  Value neighbourAddrAdjacent = b.icmp_eq(
+      rightNeighbourAddr,
+      b.add(castedAddr, b.i64_val(valueElemTy.getIntOrFloatBitWidth() / 8)));
+  Value neighbourEnabled = b.icmp_ne(i64Ones, rightNeighbourAddr);
+  Value bothEnabled = b.and_(neighbourEnabled, rmwMask);
+  Value enablePackedOpt =
+      b.and_(b.and_(isAligned, bothEnabled), neighbourAddrAdjacent);
 
-    // Enable only the even threads.
-    Value anyEnabled = b.or_(neighbourEnabled, rmwMask);
-    // If one of the threads is disabled, use the neighbour's addr.
-    rightNeighbourAddr =
-        b.select(neighbourEnabled, rightNeighbourAddr, castedAddr);
-    castedAddr = b.select(rmwMask, castedAddr, rightNeighbourAddr);
+  // Enable only the even threads.
+  Value anyEnabled = b.or_(neighbourEnabled, rmwMask);
+  // If one of the threads is disabled, use the neighbour's addr.
+  rightNeighbourAddr =
+      b.select(neighbourEnabled, rightNeighbourAddr, castedAddr);
+  castedAddr = b.select(rmwMask, castedAddr, rightNeighbourAddr);
 
-    rmwMask = b.and_(anyEnabled, b.icmp_eq(isOddI32, b.i32_val(0)));
+  rmwMask = b.and_(anyEnabled, b.icmp_eq(isOddI32, b.i32_val(0)));
 
-    // Unpack results back
-    rightNeighbourPtr = b.inttoptr(rmwPtr.getType(), rightNeighbourAddr);
-    rmwPtr = b.inttoptr(rmwPtr.getType(), castedAddr);
-  } else {
-    rmwMask = b.and_(rmwMask, b.icmp_eq(isOddI32, b.i32_val(0)));
-  }
+  // Unpack results back
+  Value rightNeighbourPtr = b.inttoptr(rmwPtr.getType(), rightNeighbourAddr);
+  rmwPtr = b.inttoptr(rmwPtr.getType(), castedAddr);
 
   Value undefVal = b.undef(packF16Ty);
   // Build blocks to bypass the atomic instruction for ~rmwMask.

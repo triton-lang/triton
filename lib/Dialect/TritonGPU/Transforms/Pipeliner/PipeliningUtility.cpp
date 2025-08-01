@@ -2,10 +2,12 @@
 #include "mlir/Analysis/TopologicalSortUtils.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
+#include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/ImplicitLocOpBuilder.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Support/LLVM.h"
+#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -173,7 +175,9 @@ Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
     return op;
   if (isa<ttg::AsyncCommitGroupOp, ttg::AsyncWaitOp>(op))
     return op;
-  if (isa<ttg::LocalLoadOp, ttg::LocalStoreOp>(op))
+  if (op->hasTrait<OpTrait::LocalLoadTrait>())
+    return op;
+  if (isa<ttg::LocalStoreOp>(op))
     return op;
   if (isa<ttng::TMEMAllocOp, ttng::TMEMLoadOp>(op))
     return op;
@@ -277,6 +281,69 @@ Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
   return op;
 }
 
+Operation *mlir::triton::wrapInMaskOp(RewriterBase &rewriter, Operation *op,
+                                      Value pred) {
+  auto mask =
+      rewriter.create<ttg::MaskOp>(op->getLoc(), op->getResultTypes(), pred);
+  rewriter.createBlock(&mask->getRegion(0));
+  rewriter.setInsertionPointToStart(&mask->getRegion(0).front());
+  auto newOp = rewriter.clone(*op);
+  rewriter.create<ttg::MaskReturnOp>(op->getLoc(), newOp->getResults());
+  op->replaceAllUsesWith(mask->getResults());
+  rewriter.eraseOp(op);
+  return mask;
+}
+
+void mlir::triton::resolveMaskOp(ModuleOp moduleOp,
+                                 DenseSet<ttg::MaskOp> &peeledMaskOps) {
+  IRRewriter rewriter(moduleOp);
+
+  // Canonicalize the IR to simplify the arithmetic ops defining the mask
+  auto arithDialect =
+      moduleOp.getContext()->getLoadedDialect<arith::ArithDialect>();
+  RewritePatternSet patterns(moduleOp.getContext());
+  arithDialect->getCanonicalizationPatterns(patterns);
+  if (mlir::applyPatternsGreedily(moduleOp, std::move(patterns)).failed())
+    return llvm::report_fatal_error("Failed to canonicalize the IR");
+
+  // Prune all the statically dead mask ops in the epilogue. This is a
+  // hack, ideally we should do it for all the mask ops, but it is incorrect if
+  // we have speculatively executed async cp operations that will store to shmem
+  // even if the mask is false.
+  for (auto maskOp : peeledMaskOps) {
+    rewriter.setInsertionPoint(maskOp);
+    while (&maskOp.getBody()->front() != maskOp.getBody()->getTerminator()) {
+      Operation *op = &maskOp.getBody()->front();
+      if (isConstantIntValue(maskOp.getPred(), 0)) {
+        if (op->getNumResults() > 0) {
+          SmallVector<Value> results;
+          for (auto result : op->getResults()) {
+            auto poisonOp = rewriter.create<mlir::ub::PoisonOp>(
+                op->getLoc(), result.getType());
+            results.push_back(poisonOp);
+          }
+          op->replaceAllUsesWith(results);
+        }
+        op->erase();
+      }
+    }
+  }
+
+  SmallVector<ttg::MaskOp> maskOps;
+  moduleOp->walk([&](ttg::MaskOp maskOp) { maskOps.push_back(maskOp); });
+  for (auto maskOp : maskOps) {
+    rewriter.setInsertionPoint(maskOp);
+    while (&maskOp.getBody()->front() != maskOp.getBody()->getTerminator()) {
+      Operation *op = &maskOp.getBody()->front();
+      rewriter.moveOpBefore(op, maskOp);
+      op = triton::predicateOp(rewriter, op, maskOp.getPred());
+    }
+    maskOp->replaceAllUsesWith(
+        maskOp.getBody()->getTerminator()->getOperands());
+    maskOp->erase();
+  }
+}
+
 // Return true if the given ForOp has the attribute
 // `tt.disallow_acc_multi_buffer` set to true.
 bool mlir::triton::getDisallowAccMultiBuffer(scf::ForOp forOp) {
@@ -310,10 +377,11 @@ mlir::triton::getDefiningOpAndDistance(scf::ForOp forOp, Value value) {
 
 int mlir::triton::getCopyVecBytes(RankedTensorType registerTy,
                                   ttg::SharedEncodingTrait sharedEnc) {
-  auto regLayout = triton::gpu::toLinearLayout(registerTy.getShape(),
-                                               registerTy.getEncoding());
-  auto sharedLayout =
-      triton::gpu::toLinearLayout(registerTy.getShape(), sharedEnc);
+  auto shape = registerTy.getShape();
+  auto regLayout =
+      triton::gpu::toLinearLayout(shape, registerTy.getEncoding(), {});
+  // FIXME: Here we should pass a MemDescType instead of a SharedEncodingTrait!!
+  auto sharedLayout = triton::gpu::toLinearLayout(shape, sharedEnc, shape);
   auto regToSharedLayout = regLayout.invertAndCompose(sharedLayout);
   const int vecElems = regToSharedLayout.getNumConsecutiveInOut();
   return vecElems * registerTy.getElementTypeBitWidth() / 8;
@@ -329,10 +397,15 @@ bool mlir::triton::canBeConvertedToAsyncLoad(
     vec = std::min<unsigned>(vec, axisInfoAnalysis.getMaskAlignment(mask));
 
   auto tensorTy = dyn_cast<RankedTensorType>(ptr.getType());
-  if (!tensorTy)
-    return false;
-  auto ty = cast<tt::PointerType>(tensorTy.getElementType()).getPointeeType();
-  unsigned width = vec * ty.getIntOrFloatBitWidth();
+  unsigned width = 0;
+  if (tensorTy) {
+    auto ty = cast<tt::PointerType>(tensorTy.getElementType()).getPointeeType();
+    width = vec * ty.getIntOrFloatBitWidth();
+  } else {
+    width = cast<tt::PointerType>(ptr.getType())
+                .getPointeeType()
+                .getIntOrFloatBitWidth();
+  }
 
   // We do not pipeline all loads for the following reasons:
   // 1. On nvidia GPUs, cp.async's cp-size can only be 4, 8, or 16.
@@ -386,7 +459,7 @@ Value mlir::triton::createScalarAlloc(ImplicitLocOpBuilder &rewriter, Type type,
   auto barrierEncoding =
       ttg::SwizzledSharedEncodingAttr::get(ctx, 1, 1, 1, {0}, barrierCTALayout);
   ttg::MemDescType memDescType = ttg::MemDescType::get(
-      {numBuffers}, type, barrierEncoding, sharedMemorySpace,
+      {numBuffers, 1}, type, barrierEncoding, sharedMemorySpace,
       /*mutableMemory=*/true);
   return rewriter.create<ttg::LocalAllocOp>(memDescType, Value());
 }
@@ -461,7 +534,10 @@ void mlir::triton::combineRedundantWaitOps(
     SmallVector<Value> depTokens = waitOp.getOperands();
     unsigned minWaitNumber = waitOp.getNum();
     Operation *next = waitOp->getNextNode();
-    while (next && !isa<ttg::AsyncCommitGroupOp>(next)) {
+    // Stop if we reach the end of the block or if there is another commit group
+    // or a branching op (forOp, ifOp, whileOp) in between the waits
+    while (next &&
+           !isa<ttg::AsyncCommitGroupOp, RegionBranchOpInterface>(next)) {
       if (auto nextWait = dyn_cast<ttg::AsyncWaitOp>(next)) {
         waitGroup.push_back(nextWait);
         minWaitNumber = std::min(minWaitNumber, nextWait.getNum());
@@ -485,13 +561,23 @@ void mlir::triton::combineRedundantWaitOps(
   }
 }
 
-ttg::MemDescType mlir::triton::getBufferViewType(ttg::MemDescType allocTy) {
-  Attribute sharedMemorySpace =
-      ttg::SharedMemorySpaceAttr::get(allocTy.getContext());
+ttg::MemDescType mlir::triton::getBufferViewType(ttg::MemDescType allocTy,
+                                                 bool mutableMemory) {
   return ttg::MemDescType::get(allocTy.getShape().drop_front(),
                                allocTy.getElementType(), allocTy.getEncoding(),
-                               sharedMemorySpace, /*mutableMemory=*/true,
+                               allocTy.getMemorySpace(), mutableMemory,
                                /*allocShape=*/allocTy.getAllocShape());
+}
+
+ttg::MemDescType
+mlir::triton::getMultiBufferedType(ttg::MemDescType memDescType,
+                                   int32_t depth) {
+  auto shape = memDescType.getShape();
+  SmallVector<int64_t> bufferShape(shape.begin(), shape.end());
+  bufferShape.insert(bufferShape.begin(), depth);
+  return ttg::MemDescType::get(
+      bufferShape, memDescType.getElementType(), memDescType.getEncoding(),
+      memDescType.getMemorySpace(), /*mutableMemory*/ true);
 }
 
 ttg::SharedEncodingTrait mlir::triton::getSharedEncoding(RankedTensorType ty) {
@@ -577,25 +663,16 @@ triton::createSingleBufferView(OpBuilder &builder, Value alloc, Value idx) {
   assert(isa<ttg::MemDescType>(alloc.getType()) && "Expected MemDescType");
   auto allocDescType = cast<ttg::MemDescType>(alloc.getType());
   SmallVector<int64_t> shape;
-  if (allocDescType.getShape().size() > 1) {
-    shape.insert(shape.end(), allocDescType.getShape().begin() + 1,
-                 allocDescType.getShape().end());
-  } else {
-    shape.push_back(1);
-  }
+  assert(allocDescType.getShape().size() > 1 &&
+         "Expected multi-dimensional memdesc (e.g., Nx...) for subview");
+  shape.insert(shape.end(), allocDescType.getShape().begin() + 1,
+               allocDescType.getShape().end());
   auto viewDescType = ttg::MemDescType::get(
       shape, allocDescType.getElementType(), allocDescType.getEncoding(),
       allocDescType.getMemorySpace(), allocDescType.getMutableMemory(),
       /*allocShape=*/allocDescType.getAllocShape());
-  SmallVector<Value> idxs = {idx};
-  if (allocDescType.getShape().size() > 1) {
-    Value zero = builder.create<arith::ConstantIntOp>(alloc.getLoc(), 0, 32);
-    for (unsigned i = 1; i < allocDescType.getShape().size(); i++) {
-      idxs.push_back(zero);
-    }
-  }
-  return builder.create<ttg::MemDescSubviewOp>(alloc.getLoc(), viewDescType,
-                                               alloc, idxs);
+  return builder.create<ttg::MemDescIndexOp>(alloc.getLoc(), viewDescType,
+                                             alloc, idx);
 }
 
 TypedValue<ttg::MemDescType>
@@ -742,4 +819,95 @@ scf::ForOp triton::lowerTMADescriptors(scf::ForOp forOp,
     llvm_unreachable("Failed to rewrite TMA ops");
   }
   return forOp;
+}
+
+DenseSet<Operation *>
+triton::getTopLevelUsersInLoop(Operation *op, scf::ForOp forOp,
+                               std::function<bool(Operation *)> filter) {
+  DenseSet<Operation *> topLevelUsers;
+  SmallVector<OpOperand *> q;
+  for (auto &use : op->getUses())
+    q.push_back(&use);
+  while (!q.empty()) {
+    auto use = q.pop_back_val();
+    auto yieldOp = dyn_cast<scf::YieldOp>(use->getOwner());
+    if (yieldOp && yieldOp->getParentOp() == forOp) {
+      for (auto &use :
+           forOp.getRegionIterArgs()[use->getOperandNumber()].getUses())
+        q.push_back(&use);
+      continue;
+    }
+    // Don't count view operations as uses. Follow them through to their
+    // users.
+    if (use->getOwner()->hasTrait<OpTrait::MemDescViewTrait>()) {
+      for (auto &use : use->getOwner()->getUses())
+        q.push_back(&use);
+      continue;
+    }
+    if (filter && !filter(use->getOwner()))
+      continue;
+    Operation *topLevelUser =
+        forOp.getBody()->findAncestorOpInBlock(*use->getOwner());
+    topLevelUsers.insert(topLevelUser);
+  }
+  return topLevelUsers;
+}
+
+// Helper function that finds an operation based on a comparison predicate
+static Operation *getUseOfPipelinedOp(
+    ArrayRef<Operation *> ops, scf::ForOp forOp,
+    triton::CoarseSchedule &schedule,
+    std::function<bool(Operation *)> filterUse,
+    std::function<bool(Operation *, Operation *)> shouldPrefer) {
+  DenseSet<Operation *> topLevelUsers;
+  Operation *selectedUser = nullptr;
+  for (Operation *op : ops) {
+    auto users = triton::getTopLevelUsersInLoop(op, forOp, filterUse);
+    topLevelUsers.insert(users.begin(), users.end());
+  }
+  for (Operation *topLevelUser : topLevelUsers) {
+    assert(schedule.count(topLevelUser) && "op user not found in the schedule");
+    if (!selectedUser || shouldPrefer(topLevelUser, selectedUser)) {
+      selectedUser = topLevelUser;
+    }
+  }
+  return selectedUser;
+}
+
+Operation *
+triton::getFirstUseOfPipelinedOp(ArrayRef<Operation *> ops, scf::ForOp forOp,
+                                 triton::CoarseSchedule &schedule,
+                                 std::function<bool(Operation *)> filterUse) {
+  return getUseOfPipelinedOp(
+      ops, forOp, schedule, filterUse,
+      [&](Operation *candidate, Operation *current) {
+        auto [candidateStage, candidateCluster] = schedule[candidate];
+        auto [currentStage, currentCluster] = schedule[current];
+
+        return candidateStage < currentStage ||
+               (candidateStage == currentStage &&
+                schedule.clusters.isBefore(candidateCluster, currentCluster)) ||
+               (candidateStage == currentStage &&
+                candidateCluster == currentCluster &&
+                candidate->isBeforeInBlock(current));
+      });
+}
+
+Operation *
+triton::getLastUseOfPipelinedOp(ArrayRef<Operation *> ops, scf::ForOp forOp,
+                                triton::CoarseSchedule &schedule,
+                                std::function<bool(Operation *)> filterUse) {
+  return getUseOfPipelinedOp(
+      ops, forOp, schedule, filterUse,
+      [&](Operation *candidate, Operation *current) {
+        auto [candidateStage, candidateCluster] = schedule[candidate];
+        auto [currentStage, currentCluster] = schedule[current];
+
+        return candidateStage > currentStage ||
+               (candidateStage == currentStage &&
+                schedule.clusters.isBefore(currentCluster, candidateCluster)) ||
+               (candidateStage == currentStage &&
+                candidateCluster == currentCluster &&
+                current->isBeforeInBlock(candidate));
+      });
 }

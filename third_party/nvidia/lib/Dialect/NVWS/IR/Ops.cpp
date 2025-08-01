@@ -5,6 +5,7 @@
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Types.h"
+#include "triton/Dialect/TritonNvidiaGPU/Transforms/Utility.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVectorExtras.h"
 
@@ -12,6 +13,7 @@
 #include "Dialect/NVWS/IR/NVWSAttrEnums.cpp.inc"
 
 #define GET_OP_CLASSES
+#include "Dialect/NVWS/IR/NVWSOpInterfaces.cpp.inc"
 #include "Dialect/NVWS/IR/Ops.cpp.inc"
 
 namespace mlir::triton::nvws {
@@ -20,7 +22,9 @@ LogicalResult ArefCreateOp::verify() {
   SmallVector<int> dims;
   for (auto operand : getOperands()) {
     SmallVector<Operation *> users(operand.user_begin(), operand.user_end());
-    if (users.size() != 1)
+    if (!llvm::all_of(users, [](Operation *op) {
+          return isa<ArefCreateOp, gpu::LocalDeallocOp>(op);
+        }))
       return emitError("Aref buffer is used elsewhere, Aref cannot guarantee "
                        "async safety");
     auto type = operand.getType();
@@ -58,7 +62,7 @@ std::optional<Twine> static arefEnterVerify(
   auto typeArray = aref.getBaseType();
   if (typeArray.size() != resultTypes.size())
     return "Aref has different number of arguments than enter";
-  // This should probably rely on the memdescSubviewOp verifier?
+  // This should probably rely on the memdescSubsliceOp verifier?
   for (auto [orig, arg] : llvm::zip(typeArray, resultTypes)) {
     if (auto origT = dyn_cast<RankedTensorType>(orig)) {
       auto argT = dyn_cast<RankedTensorType>(arg);
@@ -76,13 +80,15 @@ std::optional<Twine> static arefEnterVerify(
 }
 
 LogicalResult ArefPutEnterOp::verify() {
-  if (auto result = arefEnterVerify(getAref().getType(), getResultTypes()))
+  if (auto result =
+          arefEnterVerify(getAref().getType(), getBuffers().getType()))
     return emitError(*result);
   return success();
 }
 
 LogicalResult ArefGetEnterOp::verify() {
-  if (auto result = arefEnterVerify(getAref().getType(), getResultTypes()))
+  if (auto result =
+          arefEnterVerify(getAref().getType(), getBuffers().getType()))
     return emitError(*result);
   return success();
 }
@@ -91,7 +97,25 @@ LogicalResult WarpGroupOp::verify() {
   auto numWarps = getNumWarps();
   auto regions = getRegions();
   if (numWarps.size() != regions.size())
-    return emitError("Must supply numWarps for each Warp Group");
+    return emitError("Must supply numWarps for each Warp Group.");
+  if (getResults().size() > 0) {
+    if (regions.size() == 0) {
+      return emitError("Must have at least one region when there are results.");
+    }
+    if (!isa<nvws::WarpGroupYieldOp>(
+            regions.front()->front().getTerminator())) {
+      return emitError("When nvws.warp_group op has results, the first region "
+                       "should be terminated by nvws.warp_group.yield op.");
+    }
+    auto yieldOp =
+        cast<nvws::WarpGroupYieldOp>(regions.front()->front().getTerminator());
+    if (getResults().size() != yieldOp.getNumOperands()) {
+      return emitError(
+          "Mismatch in the number of results returned by nvws.warp_group op "
+          "and the number of the operands of the corresponding "
+          "nvws.warp_group.yield op in the first region.");
+    }
+  }
   return success();
 }
 

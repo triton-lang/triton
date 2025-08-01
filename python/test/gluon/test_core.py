@@ -100,7 +100,7 @@ def test_async_copy_mbarrier():
 
 
 @gluon.jit
-def warpgroup_mma_kernel(a, b, out, M: ttgl.constexpr, N: ttgl.constexpr, K: ttgl.constexpr):
+def warpgroup_mma_kernel(a, b, out, M: ttgl.constexpr, N: ttgl.constexpr, K: ttgl.constexpr, ASYNC: ttgl.constexpr):
     block_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 32], [4, 1], [1, 0])
     mma_layout: ttgl.constexpr = ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1],
                                                              instr_shape=[16, 32, 16])
@@ -121,19 +121,23 @@ def warpgroup_mma_kernel(a, b, out, M: ttgl.constexpr, N: ttgl.constexpr, K: ttg
     a_shmem = ttgl.allocate_shared_memory(ttgl.float16, [M, K], nvmma_layout, A)
     b_shmem = ttgl.allocate_shared_memory(ttgl.float16, [K, N], nvmma_layout, B)
 
-    acc = hopper.warpgroup_mma(a_shmem, b_shmem, acc)
+    acc = hopper.warpgroup_mma(a_shmem, b_shmem, acc, is_async=ASYNC)
+
+    if ASYNC:
+        hopper.warpgroup_mma_wait(num_outstanding=1, deps=[acc])
 
     ttgl.store(out + out_offs_m * N + out_offs_n, acc)
 
 
 @pytest.mark.skipif(not is_hopper(), reason="Requires Hopper")
-def test_warpgroup_mma():
+@pytest.mark.parametrize("ASYNC", [True, False])
+def test_warpgroup_mma(ASYNC):
     torch.manual_seed(0)
     M, N, K = 64, 32, 32
     a = torch.randn((M, K), device="cuda", dtype=torch.float16)
     b = torch.randn((K, N), device="cuda", dtype=torch.float16)
     out = torch.zeros((M, N), device="cuda", dtype=torch.float16)
-    warpgroup_mma_kernel[(1, )](a, b, out, M, N, K)
+    warpgroup_mma_kernel[(1, )](a, b, out, M, N, K, ASYNC)
 
     ref = torch.matmul(a, b)
 

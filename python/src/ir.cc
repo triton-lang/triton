@@ -27,6 +27,7 @@
 #include "mlir/Transforms/LocationSnapshot.h"
 
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Dialect/Gluon/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
@@ -36,8 +37,6 @@
 #include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/SourceMgr.h"
-
-#include "third_party/proton/dialect/include/Dialect/Proton/IR/Dialect.h"
 
 namespace {
 
@@ -151,6 +150,7 @@ ReproducerStreamFactory makeConsoleReproducer() {
 OpPrintingFlags getOpPrintingFlags() {
   auto printingFlags = OpPrintingFlags();
   printingFlags.enableDebugInfo();
+  printingFlags.printNameLocAsPrefix(true);
   return printingFlags;
 }
 
@@ -173,7 +173,7 @@ py::list getTensorDescMetadata(ModuleOp &mod) {
 
     auto blockType = descTy.getBlockType();
     auto encoding = blockType.getEncoding();
-    auto mmaEncoding = dyn_cast<triton::gpu::NVMMASharedEncodingAttr>(encoding);
+    auto mmaEncoding = dyn_cast<ttg::NVMMASharedEncodingAttr>(encoding);
     auto swizzle = ttng::getTMASwizzleMode(nullptr, descTy);
     auto elemType = ttng::getTMAElementType(nullptr, descTy);
     assert(swizzle.has_value());
@@ -303,8 +303,8 @@ void init_triton_ir(py::module &&m) {
                     ::mlir::triton::instrument::TritonInstrumentDialect,
                     math::MathDialect, arith::ArithDialect, scf::SCFDialect,
                     ::mlir::gpu::GPUDialect, cf::ControlFlowDialect,
-                    ::mlir::triton::proton::ProtonDialect, LLVM::LLVMDialect,
-                    mlir::ub::UBDialect>();
+                    LLVM::LLVMDialect, mlir::ub::UBDialect,
+                    mlir::triton::gluon::GluonDialect>();
     mlir::LLVM::registerInlinerInterface(registry);
     registerBuiltinDialectTranslation(registry);
     registerLLVMDialectTranslation(registry);
@@ -349,6 +349,7 @@ void init_triton_ir(py::module &&m) {
       });
 
   py::class_<Value>(m, "value", py::module_local())
+      .def(py::init<>())
       .def("set_attr",
            [](Value &self, std::string &name, Attribute &attr) -> void {
              if (Operation *definingOp = self.getDefiningOp())
@@ -370,11 +371,15 @@ void init_triton_ir(py::module &&m) {
              self.replaceAllUsesWith(newValue);
            })
       .def("get_type", &Value::getType)
-      .def("id", [](Value &self) {
-        // The Value is identified by and compared with
-        // other Values via the underlying ValueImpl
-        return (uint64_t)self.getImpl();
-      });
+      .def("id",
+           [](Value &self) {
+             // The Value is identified by and compared with
+             // other Values via the underlying ValueImpl
+             return (uint64_t)self.getImpl();
+           })
+      .def("set_loc",
+           [](Value &self, Location loc) { return self.setLoc(loc); })
+      .def("get_loc", [](Value &self) { return self.getLoc(); });
 
   py::class_<OpResult, Value>(m, "op_result", py::module_local());
 
@@ -709,11 +714,16 @@ void init_triton_ir(py::module &&m) {
       .def_property_readonly("type", &FuncOp::getFunctionType)
       .def("reset_type", &FuncOp::setType);
 
+  py::class_<mlir::OpBuilder>(m, "op_builder", py::module_local(),
+                              py::dynamic_attr())
+      .def(py::init<MLIRContext *>());
+
   py::class_<OpBuilder::InsertPoint>(m, "InsertPoint", py::module_local());
 
   py::class_<TritonOpBuilder>(m, "builder", py::module_local(),
                               py::dynamic_attr())
       .def(py::init<MLIRContext *>())
+      .def("get_op_builder", &TritonOpBuilder::getBuilder, ret::reference)
       // getters
       .def("create_module",
            [](TritonOpBuilder &self) -> ModuleOp {
@@ -927,6 +937,28 @@ void init_triton_ir(py::module &&m) {
       // locs
       .def("set_loc",
            [](TritonOpBuilder &self, Location loc) { self.setLastLoc(loc); })
+      .def("set_loc",
+           [](TritonOpBuilder &self, std::string name) {
+             auto nameAttr = StringAttr::get(self.getContext(), name);
+             auto loc = NameLoc::get(nameAttr);
+             self.setLastLoc(loc);
+           })
+      .def("create_loc",
+           [](TritonOpBuilder &self, const std::string &fileName, int line,
+              int column) -> Location {
+             return mlir::FileLineColLoc::get(self.getContext(), fileName, line,
+                                              column);
+           })
+      .def(
+          "create_name_loc",
+          [](TritonOpBuilder &self, std::string name,
+             std::optional<Location> childLoc) -> Location {
+            auto nameAttr = StringAttr::get(self.getContext(), name);
+            if (childLoc)
+              return NameLoc::get(nameAttr, *childLoc);
+            return NameLoc::get(nameAttr);
+          },
+          py::arg("name"), py::arg("child_loc") = py::none())
       .def("set_loc",
            [](TritonOpBuilder &self, const std::string &fileName, int line,
               int column) { self.setLastLoc(fileName, line, column); })
@@ -1439,9 +1471,7 @@ void init_triton_ir(py::module &&m) {
                    "shape not supported by cat. Expecting rank-1 inputs");
              std::vector<int64_t> shape{lhsType.getShape()[0] +
                                         rhsType.getShape()[0]};
-             return self.create<CatOp>(
-                 RankedTensorType::get(shape, lhsType.getElementType()), lhs,
-                 rhs);
+             return self.create<CatOp>(lhsType.clone(shape), lhs, rhs);
            })
       .def("create_join",
            [](TritonOpBuilder &self, Value &a, Value &b) -> Value {
@@ -1460,14 +1490,17 @@ void init_triton_ir(py::module &&m) {
            [](TritonOpBuilder &self, Value &arg,
               std::vector<int64_t> &shape) -> Value {
              if (auto argType = dyn_cast<RankedTensorType>(arg.getType()))
-               return self.createOrFold<BroadcastOp>(
-                   RankedTensorType::get(shape, argType.getElementType()), arg);
+               return self.createOrFold<BroadcastOp>(argType.clone(shape), arg);
              throw std::invalid_argument(
                  "arg is not of RankedTensorType, use create_splat");
            })
       .def("create_splat",
            [](TritonOpBuilder &self, Type &retTy, Value &arg) -> Value {
              return self.createOrFold<SplatOp>(retTy, arg);
+           })
+      .def("create_unsplat",
+           [](TritonOpBuilder &self, Value &arg) -> Value {
+             return self.createOrFold<UnsplatOp>(arg);
            })
       // // atomic
       .def("create_atomic_cas",
@@ -1479,8 +1512,7 @@ void init_triton_ir(py::module &&m) {
                Type dstElemType =
                    cast<PointerType>(srcTensorType.getElementType())
                        .getPointeeType();
-               dstType =
-                   RankedTensorType::get(srcTensorType.getShape(), dstElemType);
+               dstType = srcTensorType.clone(dstElemType);
              } else {
                auto ptrType = cast<PointerType>(getElementTypeOrSelf(ptr));
                dstType = ptrType.getPointeeType();
@@ -1497,8 +1529,7 @@ void init_triton_ir(py::module &&m) {
                Type dstElemType =
                    cast<PointerType>(srcTensorType.getElementType())
                        .getPointeeType();
-               dstType =
-                   RankedTensorType::get(srcTensorType.getShape(), dstElemType);
+               dstType = srcTensorType.clone(dstElemType);
              } else {
                auto ptrType = cast<PointerType>(getElementTypeOrSelf(ptr));
                dstType = ptrType.getPointeeType();
@@ -1622,6 +1653,15 @@ void init_triton_ir(py::module &&m) {
              }
              return self.create<ScanReturnOp>(return_values);
            })
+      .def("create_map_elementwise",
+           [](TritonOpBuilder &self, std::vector<Value> inputs,
+              std::vector<Type> returnTys, int pack) -> OpState {
+             return self.create<MapElementwiseOp>(returnTys, inputs, pack);
+           })
+      .def("create_map_elementwise_ret",
+           [](TritonOpBuilder &self, std::vector<Value> returnVals) -> OpState {
+             return self.create<MapElementwiseReturnOp>(returnVals);
+           })
       .def("create_ptr_to_int",
            [](TritonOpBuilder &self, Value &val, Type &type) -> Value {
              return self.create<PtrToIntOp>(type, val);
@@ -1712,11 +1752,6 @@ void init_triton_ir(py::module &&m) {
               bool isSignedInteger) -> Value {
              return self.create<MakeTensorDescOp>(base, shape, strides,
                                                   tensorShape, isSignedInteger);
-           })
-      // Proton Ops
-      .def("create_proton_record",
-           [](TritonOpBuilder &self, bool isStart, int32_t regionId) -> void {
-             self.create<mlir::triton::proton::RecordOp>(isStart, regionId);
            });
 
   py::class_<PassManager>(m, "pass_manager", py::module_local())
@@ -1766,89 +1801,94 @@ void init_triton_ir(py::module &&m) {
              self.printAsTextualPipeline(os);
              return str;
            })
-      .def("run", [](PassManager &self, ModuleOp &mod) {
-        // TODO: maybe dump module to file and print error for better
-        // diagnostics
+      .def(
+          "run",
+          [](PassManager &self, ModuleOp &mod) {
+            // TODO: maybe dump module to file and print error for better
+            // diagnostics
 
-        auto *context = mod.getContext();
-        if (::triton::tools::getBoolEnv("MLIR_DISABLE_MULTITHREADING"))
-          context->disableMultithreading();
+            auto *context = mod.getContext();
+            if (::triton::tools::getBoolEnv("MLIR_DISABLE_MULTITHREADING"))
+              context->disableMultithreading();
 
-        auto reproducerPath =
-            triton::tools::getStrEnv("TRITON_REPRODUCER_PATH");
-        if (!reproducerPath.empty()) {
-          auto anchorName = self.getOpAnchorName();
-          auto passes = self.getPasses();
-          Operation *op = mod.getOperation();
-          // Save a reproducer for the current pass manager invocation
-          // immediately.
-          makeReproducer(anchorName, passes, op, reproducerPath);
-          // But if the pass manager crashes, attempt to generate a local
-          // reproducer instead.
-          context->disableMultithreading();
-          self.enableCrashReproducerGeneration(reproducerPath,
-                                               /*genLocalReproducer=*/true);
-        } else {
-          self.enableCrashReproducerGeneration(makeConsoleReproducer());
-        }
-
-        if (triton::tools::getBoolEnv("TRITON_ENABLE_LLVM_DEBUG")) {
-          ::llvm::DebugFlag = true;
-        }
-
-        if (auto debugOnly = triton::tools::getStrEnv("TRITON_LLVM_DEBUG_ONLY");
-            !debugOnly.empty()) {
-          llvm::SmallVector<std::string, 3> storage;
-          llvm::SmallVector<const char *, 3> debugTypes =
-              parseCommaSeparatedValues(debugOnly, storage);
-          ::llvm::DebugFlag = true;
-          using namespace llvm;
-          setCurrentDebugTypes(debugTypes.data(), debugTypes.size());
-        }
-
-        bool haveTiming = ::triton::tools::getBoolEnv("MLIR_ENABLE_TIMING");
-        if (haveTiming) {
-          self.enableTiming();
-        }
-
-        // setting up diagnostics
-        bool showOperations = false, showStacktraces = false,
-             showRemarks = false, showWarnings = false;
-
-        if (auto enableDiagnostics =
-                triton::tools::getStrEnv("MLIR_ENABLE_DIAGNOSTICS");
-            !enableDiagnostics.empty()) {
-          llvm::SmallVector<std::string, 3> storage;
-          parseCommaSeparatedValues(enableDiagnostics, storage);
-          for (auto &str : storage) {
-            if (str == "warnings") {
-              showWarnings = true;
-            } else if (str == "remarks") {
-              showRemarks = true;
-            } else if (str == "stacktraces") {
-              showStacktraces = true;
-            } else if (str == "operations") {
-              showOperations = true;
+            auto reproducerPath =
+                triton::tools::getStrEnv("TRITON_REPRODUCER_PATH");
+            if (!reproducerPath.empty()) {
+              auto anchorName = self.getOpAnchorName();
+              auto passes = self.getPasses();
+              Operation *op = mod.getOperation();
+              // Save a reproducer for the current pass manager invocation
+              // immediately.
+              makeReproducer(anchorName, passes, op, reproducerPath);
+              // But if the pass manager crashes, attempt to generate a local
+              // reproducer instead.
+              context->disableMultithreading();
+              self.enableCrashReproducerGeneration(reproducerPath,
+                                                   /*genLocalReproducer=*/true);
+            } else {
+              self.enableCrashReproducerGeneration(makeConsoleReproducer());
             }
-            // we show errors by default, so no need to set it
-          }
-        }
 
-        DiagnosticSeverity minSeverity = showWarnings
-                                             ? DiagnosticSeverity::Warning
-                                             : DiagnosticSeverity::Error;
-        minSeverity = showRemarks ? DiagnosticSeverity::Remark : minSeverity;
+            if (triton::tools::getBoolEnv("TRITON_ENABLE_LLVM_DEBUG")) {
+              ::llvm::DebugFlag = true;
+            }
 
-        TritonSourceMgrDiagnosticHandler diagHandler(context, minSeverity);
+            if (auto debugOnly =
+                    triton::tools::getStrEnv("TRITON_LLVM_DEBUG_ONLY");
+                !debugOnly.empty()) {
+              llvm::SmallVector<std::string, 3> storage;
+              llvm::SmallVector<const char *, 3> debugTypes =
+                  parseCommaSeparatedValues(debugOnly, storage);
+              ::llvm::DebugFlag = true;
+              using namespace llvm;
+              setCurrentDebugTypes(debugTypes.data(), debugTypes.size());
+            }
 
-        context->printOpOnDiagnostic(showOperations);
-        context->printStackTraceOnDiagnostic(showStacktraces);
-        if (showStacktraces) {
-          context->disableMultithreading();
-        }
-        if (failed(self.run(mod.getOperation())))
-          throw std::runtime_error("PassManager::run failed");
-      });
+            bool haveTiming = ::triton::tools::getBoolEnv("MLIR_ENABLE_TIMING");
+            if (haveTiming) {
+              self.enableTiming();
+            }
+
+            // setting up diagnostics
+            bool showOperations = false, showStacktraces = false,
+                 showRemarks = false, showWarnings = false;
+
+            if (auto enableDiagnostics =
+                    triton::tools::getStrEnv("MLIR_ENABLE_DIAGNOSTICS");
+                !enableDiagnostics.empty()) {
+              llvm::SmallVector<std::string, 3> storage;
+              parseCommaSeparatedValues(enableDiagnostics, storage);
+              for (auto &str : storage) {
+                if (str == "warnings") {
+                  showWarnings = true;
+                } else if (str == "remarks") {
+                  showRemarks = true;
+                } else if (str == "stacktraces") {
+                  showStacktraces = true;
+                } else if (str == "operations") {
+                  showOperations = true;
+                }
+                // we show errors by default, so no need to set it
+              }
+            }
+
+            DiagnosticSeverity minSeverity = showWarnings
+                                                 ? DiagnosticSeverity::Warning
+                                                 : DiagnosticSeverity::Error;
+            minSeverity =
+                showRemarks ? DiagnosticSeverity::Remark : minSeverity;
+
+            TritonSourceMgrDiagnosticHandler diagHandler(context, minSeverity);
+
+            context->printOpOnDiagnostic(showOperations);
+            context->printStackTraceOnDiagnostic(showStacktraces);
+            if (showStacktraces) {
+              context->disableMultithreading();
+            }
+            if (failed(self.run(mod.getOperation())))
+              throw std::runtime_error("PassManager::run failed");
+          },
+          py::call_guard<py::gil_scoped_release>());
 }
 
 void init_triton_env_vars(py::module &m) {

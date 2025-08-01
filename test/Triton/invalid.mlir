@@ -504,7 +504,7 @@ tt.func @invalid_tma_gather(%arg0: !tt.tensordesc<tensor<1x128xbf16>>, %arg1: te
 #shared = #ttg.swizzled_shared<{vec = 8, perPhase = 1, maxPhase = 4, order = [0, 1]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
-  tt.func public @invalid_dot(%arg0: tensor<32x32x!tt.ptr<f32>, #blocked>, %arg1: tensor<16x32x!tt.ptr<f32>, #blocked>) attributes {noinline = false} {
+  tt.func public @invalid_dot(%arg0: tensor<32x32x!tt.ptr<f32>, #blocked>, %arg1: tensor<16x32x!tt.ptr<f32>, #blocked>) {
     %9 = tt.load %arg0 : tensor<32x32x!tt.ptr<f32>, #blocked>
     %10 = tt.load %arg1 : tensor<16x32x!tt.ptr<f32>, #blocked>
     %11 = ttg.local_alloc %9 : (tensor<32x32xf32, #blocked>) -> !ttg.memdesc<32x32xf32, #shared, #smem>
@@ -537,4 +537,79 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32}
     %result = tt.dot_scaled %a scale %scale, %b_fp8, %cst lhs = e2m1 rhs = e4m3 {fastMath = true} : tensor<128x32xi8, #blocked2>, tensor<128x2xi8, #blocked1> * tensor<128x128xf8E4M3FN, #blocked> -> tensor<128x128xf32, #blocked>
     tt.return %result : tensor<128x128xf32, #blocked>
   }
+}
+
+// -----
+
+tt.func @unsplat_invalid(%arg0: tensor<128xf32>) {
+  // expected-error @below {{source tensor must have exactly one element}}
+  %0 = tt.unsplat %arg0 : tensor<128xf32>
+  tt.return
+}
+
+// -----
+
+tt.func @atomic_cas_different_elem_types(%arg0: tensor<128x!tt.ptr<f32>>, %arg1: tensor<128xi32>) {
+  %cmp = arith.constant dense<0> : tensor<128xi32>
+  // expected-error @below {{'tt.atomic_cas' op failed to verify that ptr type matches cmp type}}
+  %0 = tt.atomic_cas relaxed, gpu, %arg0, %cmp, %arg1 : (tensor<128x!tt.ptr<f32>>, tensor<128xi32>, tensor<128xi32>) -> tensor<128xi32>
+  tt.return
+}
+
+// -----
+
+tt.func @atomic_cas_different_elem_types(%arg0: tensor<128x!tt.ptr<f32>>, %arg1: tensor<128xi32>) {
+  %cmp = arith.constant dense<0.0> : tensor<128xf32>
+  // expected-error @below {{'tt.atomic_cas' op failed to verify that ptr type matches value type}}
+  %0 = tt.atomic_cas relaxed, gpu, %arg0, %cmp, %arg1 : (tensor<128x!tt.ptr<f32>>, tensor<128xf32>, tensor<128xi32>) -> tensor<128xi32>
+  tt.return
+}
+
+// -----
+
+tt.func @map_elementwise_arg_num_mismatch() {
+  %cst = arith.constant dense<0> : tensor<256xi32>
+  // expected-error @below {{region has wrong number of arguments}}
+  "tt.map_elementwise" (%cst) <{pack = 1 : i32}> ({
+  ^bb0(%arg0: i64, %arg1 : i32):
+     tt.map_elementwise.return %arg1 : i32
+  }) : (tensor<256xi32>) -> (tensor<256xi32>)
+  tt.return
+}
+
+// -----
+
+tt.func @map_elementwise_arg_mismatch() {
+  %cst = arith.constant dense<0> : tensor<256xi32>
+  // expected-error @below {{argument types did not match}}
+  "tt.map_elementwise" (%cst) <{pack = 1 : i32}> ({
+  ^bb0(%arg0: i64):
+     tt.map_elementwise.return %arg0 : i64
+  }) : (tensor<256xi32>) -> (tensor<256xi64>)
+  tt.return
+}
+
+// -----
+
+tt.func @map_elementwise_return_mismatch() {
+  %cst = arith.constant dense<0> : tensor<256xi32>
+  "tt.map_elementwise" (%cst) <{pack = 1 : i32}> ({
+  ^bb0(%arg0: i32):
+     // expected-error @below {{region return does not match map_elementwise result}}
+     tt.map_elementwise.return %arg0 : i32
+  }) : (tensor<256xi32>) -> (tensor<256xi64>)
+  tt.return
+}
+
+// -----
+
+tt.func @map_elementwise_store(%ptr: tensor<256x!tt.ptr<i32>>) {
+  %cst = arith.constant dense<0> : tensor<256xi32>
+  "tt.map_elementwise" (%ptr, %cst) <{pack = 1 : i32}> ({
+  ^bb0(%arg0: !tt.ptr<i32>, %arg1: i32):
+     // expected-error @below {{Stores are not supported inside map_elementwise}}
+     tt.store %arg0, %arg1 : !tt.ptr<i32>
+     tt.map_elementwise.return %arg1 : i32
+  }) : (tensor<256x!tt.ptr<i32>>, tensor<256xi32>) -> (tensor<256xi32>)
+  tt.return
 }

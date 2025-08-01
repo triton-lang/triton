@@ -11,7 +11,6 @@ using namespace mlir::triton::gpu;
 using namespace mlir::triton::NVIDIA;
 namespace ttng = mlir::triton::nvidia_gpu;
 
-using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::triton::gpu::NVMMASharedEncodingAttr;
 
 //===----------------------------------------------------------------------===//
@@ -412,16 +411,10 @@ void convertDotImpl(const LLVMTypeConverter &typeConverter,
 
   Value baseA = loadedA;
   if (!aInTmem) {
-    baseA = getSharedMemoryObjectFromStruct(
-                loc, loadedA,
-                typeConverter.convertType(aTensorTy.getElementType()), rewriter)
-                .getBase();
+    baseA = getOffsetedBase(loadedA, aTensorTy, &typeConverter, rewriter, loc);
   }
   Value baseB =
-      getSharedMemoryObjectFromStruct(
-          loc, loadedB, typeConverter.convertType(bTensorTy.getElementType()),
-          rewriter)
-          .getBase();
+      getOffsetedBase(loadedB, bTensorTy, &typeConverter, rewriter, loc);
 
   auto [M, N, K] = op.shape;
 
@@ -503,7 +496,7 @@ void convertDot(const LLVMTypeConverter &typeConverter,
   MemDescType aTensorTy = op.getA().getType();
   MemDescType bTensorTy = op.getB().getType();
   MemDescType dTensorTy = op.getD().getType();
-  bool twoCTAs = op.getTwoCtas().has_value();
+  bool twoCTAs = op.getTwoCtas();
 
   DotConversion dot;
 
@@ -680,8 +673,6 @@ struct TCGen5MMAOpConversion
         "Operand A should use Shared or Tensor memory layout.");
     assert(isa<NVMMASharedEncodingAttr>(BEnc) &&
            "Operand B should use Shared layout.");
-    assert(!op.getBarriers().empty() &&
-           "tensorcore op should have a barrier at this point.");
     convertDot(*getTypeConverter(), rewriter, op.getLoc(), op, adaptor);
     rewriter.eraseOp(op);
     return success();
@@ -695,9 +686,31 @@ struct TCGen5MMAScaledOpConversion
   LogicalResult
   matchAndRewrite(ttng::TCGen5MMAScaledOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    assert(!op.getBarriers().empty() &&
-           "tensorcore op should have a barrier at this point.");
     convertScaledDot(*getTypeConverter(), rewriter, op.getLoc(), op, adaptor);
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+struct TCGen5CommitOpConversion
+    : public ConvertOpToLLVMPattern<ttng::TCGen5CommitOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(ttng::TCGen5CommitOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    TritonLLVMOpBuilder b(loc, rewriter);
+
+    auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
+        loc, adaptor.getBarrier(), rewriter.getI64Type(), rewriter);
+    Value pred = LLVM::NVIDIA::createElectPredicateWarp0(loc, rewriter);
+
+    if (adaptor.getPred())
+      pred = b.and_(adaptor.getPred(), pred);
+
+    createMMACommit(rewriter, op.getLoc(), smemObj.getBase(), pred,
+                    op.getTwoCtas());
     rewriter.eraseOp(op);
     return success();
   }
@@ -712,8 +725,8 @@ namespace NVIDIA {
 void populateTCGen5MMAOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                       RewritePatternSet &patterns,
                                       PatternBenefit benefit) {
-  patterns.add<TCGen5MMAOpConversion, TCGen5MMAScaledOpConversion>(
-      typeConverter, benefit);
+  patterns.add<TCGen5MMAOpConversion, TCGen5MMAScaledOpConversion,
+               TCGen5CommitOpConversion>(typeConverter, benefit);
 }
 
 } // namespace NVIDIA

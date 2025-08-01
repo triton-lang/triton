@@ -255,16 +255,20 @@ namespace mlir::triton {
 /// Replace all uses of `oldUse` with `val` and propagate the type if needed.
 /// This is useful when we need to change a memory descriptor from immutable to
 /// mutable.
-void replaceUsesAndPropagateType(OpBuilder &builder, Operation *oldUse,
-                                 Value val);
+/// The callback is invoked for each pair of an old and a cloned memdesc op
+/// as the type is propagated.
+void replaceUsesAndPropagateType(
+    OpBuilder &builder, Operation *oldUse, Value val,
+    std::function<void(Operation *, Operation *)> callback = nullptr);
 
 /// Replace all uses of `old` with a local load from `alloc` unless the use is a
 /// `ttg.local_alloc` with a matching shared encoding, in which case the shared
-/// memory is forwarded directly into the use.
-void replaceUsesWithLocalLoad(
-    OpBuilder &builder, OpResult old,
-    TypedValue<triton::gpu::MemDescType> alloc,
-    TypedValue<triton::gpu::AsyncTokenType> token = {});
+/// memory is forwarded directly into the use. Returns the `ttg.local_load` if
+/// it created one.
+triton::gpu::LocalLoadOp
+replaceUsesWithLocalLoad(OpBuilder &builder, OpResult old,
+                         TypedValue<triton::gpu::MemDescType> alloc,
+                         TypedValue<triton::gpu::AsyncTokenType> token = {});
 
 // Return true if the value comes from a load or a block argument.
 // This will skip convert layouts and memdesc views.

@@ -122,7 +122,7 @@ Value Prefetcher::generatePrefetch(Value v, unsigned opIdx, bool isPrologue,
   auto type = cast<triton::gpu::MemDescType>(v.getType());
   SmallVector<int64_t> shape{type.getShape().begin(), type.getShape().end()};
   auto rank = shape.size();
-  SmallVector<int64_t> offset(rank, 0);
+  SmallVector<int32_t> offset(rank, 0);
   Type elementType = type.getElementType();
 
   // k => (prefetchWidth, k - prefetchWidth)
@@ -136,16 +136,12 @@ Value Prefetcher::generatePrefetch(Value v, unsigned opIdx, bool isPrologue,
   if (offsetK)
     offset[kIdx] = *offsetK;
 
-  SmallVector<Value> offsetsVal;
-  for (int64_t off : offset)
-    offsetsVal.push_back(
-        builder.create<arith::ConstantIntOp>(v.getLoc(), off, 32));
-  Value newSmem = builder.create<triton::gpu::MemDescSubviewOp>(
+  Value newSmem = builder.create<triton::gpu::MemDescSubsliceOp>(
       v.getLoc(),
       triton::gpu::MemDescType::get(
           shape, elementType, type.getEncoding(), type.getMemorySpace(),
           type.getMutableMemory(), type.getAllocShape()),
-      v, offsetsVal);
+      v, offset);
 
   auto dotOperandEnc = triton::gpu::DotOperandEncodingAttr::get(
       builder.getContext(), opIdx, dotEncoding, prefetchWidth / 8);

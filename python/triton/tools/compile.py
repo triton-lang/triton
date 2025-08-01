@@ -3,12 +3,29 @@ import hashlib
 import importlib.util
 import sys
 from argparse import ArgumentParser
+from dataclasses import dataclass
 from pathlib import Path
 from typing import List
 
 import triton
 import triton.backends
-from triton.backends.nvidia.driver import ty_to_cpp
+
+
+@dataclass
+class CompileArgs:
+    '''
+    A class to contain arguments from command-line parser.
+    '''
+    path: str = ''
+    kernel_name: str = ''
+    signature: str = ''
+    grid: str = ''
+    target: str | None = None
+    num_warps: int = 1
+    num_stages: int = 3
+    out_name: str | None = None
+    out_path: Path | None = None
+
 
 desc = """
 Triton ahead-of-time compiler:
@@ -36,14 +53,18 @@ NOTE: when resolving the scope of /path/to/kernel.py, the file will be executed 
 used to run this `compile.py` script
 """
 
-if __name__ == "__main__":
 
+def main():
     # command-line arguments
     parser = ArgumentParser(description=desc)
     parser.add_argument("path",
                         help="Path to Python source containing desired kernel in its scope. File will be executed.")
     parser.add_argument("--kernel-name", "-n", type=str, default="", help="Name of the kernel to compile",
                         required=True)
+    parser.add_argument(
+        "--target", "-t", type=str, default=None,
+        help="The target to compile towards, in format of '<backend>:<arch>:<warp-size>'; "
+        "e.g., 'cuda:80:32', 'hip:gfx942:64'. Default to None, which means using current machine's GPU target")
     parser.add_argument("--num-warps", "-w", type=int, default=1, help="Number of warps to launch the kernel")
     parser.add_argument("--num-stages", "-ns", type=int, default=3,
                         help="Number of stages (meta-parameter of the kernel)")
@@ -51,8 +72,12 @@ if __name__ == "__main__":
     parser.add_argument("--out-path", "-o", type=Path, default=None, help="Out filename")
     parser.add_argument("--signature", "-s", type=str, help="Signature of the kernel", required=True)
     parser.add_argument("--grid", "-g", type=str, help="Launch grid of the kernel", required=True)
-    args = parser.parse_args()
+    cli_args = parser.parse_args()
+    args = CompileArgs(**vars(cli_args))  # A sanity check to ensure class CompileArgs is updated as well.
+    compile_kernel(args)
 
+
+def compile_kernel(args: CompileArgs):
     out_name = args.out_name if args.out_name else args.kernel_name
     out_path = args.out_path if args.out_path else Path(out_name)
 
@@ -108,10 +133,18 @@ if __name__ == "__main__":
         assert h in [1, 16], f"Only 1 and 16 are valid hints, got {h}"
     attrs = {k: [["tt.divisibility", 16]] for k, v in hints.items() if v == 16}
     src = triton.compiler.ASTSource(fn=kernel, constexprs=constants, signature=signature, attrs=attrs)
-    opts = {"num_warps": args.num_warps, "num_stages": args.num_stages}
-    ccinfo = triton.compile(src, options=opts)
-    if ccinfo.metadata.global_scratch_size > 0:
+
+    target = triton.backends.compiler.GPUTarget(*args.target.split(":")) \
+        if args.target else triton.runtime.driver.active.get_current_target()
+    backend = triton.compiler.make_backend(target)
+    kwargs = {"num_warps": args.num_warps, "num_stages": args.num_stages}
+    options = backend.parse_options(kwargs)
+    ccinfo = triton.compile(src, target=target, options=options.__dict__)
+
+    if getattr(ccinfo.metadata, "global_scratch_size", 0) > 0:
         raise RuntimeError("AOT compiling kernels with global scratch requirements is not yet implemented")
+    if ccinfo.metadata.profile_scratch_size > 0:
+        raise RuntimeError("AOT compiling kernels with profile scratch requirements is not yet implemented")
 
     arg_names = []
     arg_types = []
@@ -136,8 +169,12 @@ if __name__ == "__main__":
         if hints.get((i, ), None) == 16:
             suffix += 'd'
     func_name = '_'.join([out_name, sig_hash, suffix])
-    asm = ccinfo.asm["cubin"]  # store binary data once
+    asm = ccinfo.asm[backend.binary_ext]  # store binary data once
+
     hex_ = str(binascii.hexlify(asm))[2:-1]
+
+    ty_to_cpp = triton.runtime.driver.active.map_python_to_cpp_type
+
     params = {
         "kernel_name": func_name,
         "triton_kernel_name": args.kernel_name,
@@ -145,18 +182,29 @@ if __name__ == "__main__":
         "bin_data": ", ".join([f"0x{x}{y}" for x, y in zip(hex_[::2], hex_[1::2])]),
         "signature": ", ".join([f"{ty_to_cpp(ty)} {name}" for name, ty in zip(arg_names_not_1, arg_types_not_1)]),
         "full_signature": ", ".join([f"{ty_to_cpp(ty)} {name}" for name, ty in zip(arg_names, arg_types)]),
-        "arg_pointers": ", ".join([f"&{arg}" for arg in arg_names_not_1] + ["&global_scratch"]),
-        "num_args": len(arg_names_not_1) + 1,
+        "arg_pointers": ", ".join([f"&{arg}" for arg in arg_names_not_1] + ["&global_scratch"] + ["&profile_scratch"]),
+        "num_args": len(arg_names_not_1) + 2,  # +2 for global and profile scratch
         "kernel_docstring": doc_string,
         "shared": ccinfo.metadata.shared,
         "num_warps": args.num_warps,
-        "algo_info": '_'.join([const_sig, meta_sig]),
+        "algo_info": "_".join([const_sig, meta_sig]),
         "gridX": grid[0],
         "gridY": grid[1],
         "gridZ": grid[2],
         "_placeholder": "",
     }
-    for ext in ['h', 'c']:
-        template_path = Path(__file__).parent / "extra" / "cuda" / f"compile.{ext}"
-        with out_path.with_suffix(f".{sig_hash}_{suffix}.{ext}").open("w") as fp:
-            fp.write(Path(template_path).read_text().format(**params))
+    output_files = []
+    backend_name = target.backend
+    template_dir = Path(__file__).parent / "extra" / backend_name
+    for template_path in template_dir.glob('compile.*'):
+        ext = template_path.suffix
+        output_file = out_path.with_suffix(f".{sig_hash}_{suffix}{ext}")
+        with output_file.open("w") as fp:
+            fp.write(template_path.read_text().format(**params))
+        output_files.append(output_file)
+
+    return func_name, output_files
+
+
+if __name__ == "__main__":
+    main()

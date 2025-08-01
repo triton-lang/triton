@@ -48,66 +48,6 @@ int getSelfLatencyFromAttr(Operation *op) {
   return val;
 }
 
-DenseSet<Operation *>
-getTopLevelUsersInLoop(Operation *op, scf::ForOp forOp,
-                       std::function<bool(Operation *)> filter = nullptr) {
-  DenseSet<Operation *> topLevelUsers;
-  SmallVector<OpOperand *> q;
-  for (auto &use : op->getUses())
-    q.push_back(&use);
-  while (!q.empty()) {
-    auto use = q.pop_back_val();
-    auto yieldOp = dyn_cast<scf::YieldOp>(use->getOwner());
-    if (yieldOp && yieldOp->getParentOp() == forOp) {
-      for (auto &use :
-           forOp.getRegionIterArgs()[use->getOperandNumber()].getUses())
-        q.push_back(&use);
-      continue;
-    }
-    // Don't count view operations as uses. Follow them through to their
-    // users.
-    if (use->getOwner()->hasTrait<OpTrait::MemDescViewTrait>()) {
-      for (auto &use : use->getOwner()->getUses())
-        q.push_back(&use);
-      continue;
-    }
-    if (filter && !filter(use->getOwner()))
-      continue;
-    Operation *topLevelUser =
-        forOp.getBody()->findAncestorOpInBlock(*use->getOwner());
-    topLevelUsers.insert(topLevelUser);
-  }
-  return topLevelUsers;
-}
-
-Operation *getFirstUseOfPipelinedOp(SmallVector<Operation *> ops,
-                                    scf::ForOp forOp,
-                                    CoarseSchedule &schedule) {
-  Operation *firstUser = nullptr;
-  DenseSet<Operation *> topLevelUsers;
-  for (Operation *op : ops) {
-    auto users = getTopLevelUsersInLoop(op, forOp);
-    topLevelUsers.insert(users.begin(), users.end());
-  }
-  for (Operation *topLevelUser : topLevelUsers) {
-    assert(schedule.count(topLevelUser) && "op user not found in the schedule");
-    auto [_useStage, _useCluster] = schedule[topLevelUser];
-    if (!firstUser) {
-      firstUser = topLevelUser;
-    } else {
-      auto [_firstUserStage, _firstUserCluster] = schedule[firstUser];
-      if (_useStage < _firstUserStage ||
-          (_useStage == _firstUserStage &&
-           schedule.clusters.isBefore(_useCluster, _firstUserCluster)) ||
-          (_useStage == _firstUserStage && _useCluster == _firstUserCluster &&
-           topLevelUser->isBeforeInBlock(firstUser))) {
-        firstUser = topLevelUser;
-      }
-    }
-  }
-  return firstUser;
-}
-
 // Check if the load can be pipelined entirely in shared memory,
 // or if we need to load to registers.
 bool mustLoadToRegisters(Operation *op) {
@@ -142,7 +82,8 @@ int getDefUseStageDiff(Operation *op, scf::ForOp forOp,
   assert(schedule.count(op) && "Op not found in the schedule");
   int defStage = schedule[op].first;
   std::optional<int> useStage;
-  DenseSet<Operation *> topLevelUsers = getTopLevelUsersInLoop(op, forOp);
+  DenseSet<Operation *> topLevelUsers =
+      triton::getTopLevelUsersInLoop(op, forOp);
   // Special case for loads used by local_alloc:
   // we must consider the uses of the local_alloc, as it may be removed and its
   // uses will become direct uses of the async load.
@@ -152,7 +93,8 @@ int getDefUseStageDiff(Operation *op, scf::ForOp forOp,
     DenseSet<Operation *> allocUsers;
     for (Operation *topLevelUser : topLevelUsers) {
       if (auto localAlloc = dyn_cast<ttg::LocalAllocOp>(topLevelUser)) {
-        DenseSet<Operation *> users = getTopLevelUsersInLoop(localAlloc, forOp);
+        DenseSet<Operation *> users =
+            triton::getTopLevelUsersInLoop(localAlloc, forOp);
         allocUsers.insert(users.begin(), users.end());
       }
     }
@@ -330,6 +272,49 @@ struct LoadGroupInfo {
   bool hasTMALoad = false;
 };
 
+// Convert a scalar load to a load of a tensor of shape <1>.
+void convertScalarToTensorLoad(Operation *op, CoarseSchedule &schedule,
+                               scf::ForOp forOp) {
+  auto scalarLoad = cast<tt::LoadOp>(op);
+  Type scalarTy = scalarLoad.getType();
+  OpBuilderForStage builder(op->getLoc(), op, schedule);
+  builder.setInsertionPoint(op);
+  MLIRContext *ctx = op->getContext();
+  auto nWarps = lookupNumWarps(op);
+  ModuleOp mod = forOp->getParentOfType<ModuleOp>();
+  auto threadsPerWarp = TritonGPUDialect::getThreadsPerWarp(mod);
+  auto numCTAs = TritonGPUDialect::getNumCTAs(mod);
+  auto blockedEnc =
+      getDefaultBlockedEncoding(ctx, {1}, nWarps, threadsPerWarp, numCTAs);
+  auto newPtrTy =
+      RankedTensorType::get({1}, scalarLoad.getPtr().getType(), blockedEnc);
+  auto newPtr =
+      builder.create<tt::SplatOp>(op->getLoc(), newPtrTy, scalarLoad.getPtr());
+  scalarLoad.getPtrMutable().assign(newPtr);
+  if (scalarLoad.getMask()) {
+    auto newMaskTy =
+        RankedTensorType::get({1}, scalarLoad.getMask().getType(), blockedEnc);
+    auto newMask = builder.create<tt::SplatOp>(op->getLoc(), newMaskTy,
+                                               scalarLoad.getMask());
+    scalarLoad.getMaskMutable().assign(newMask);
+  }
+  if (scalarLoad.getOther()) {
+    auto newOtherTy =
+        RankedTensorType::get({1}, scalarLoad.getOther().getType(), blockedEnc);
+    auto newOther = builder.create<tt::SplatOp>(op->getLoc(), newOtherTy,
+                                                scalarLoad.getOther());
+    scalarLoad.getOtherMutable().assign(newOther);
+  }
+  auto newDstTy = RankedTensorType::get({1}, scalarLoad.getType(), blockedEnc);
+  scalarLoad.getResult().setType(newDstTy);
+  builder.setInsertionPointAfter(op);
+  Operation *firstUse = getFirstUseOfPipelinedOp({op}, forOp, schedule);
+  builder.setStageCluster(schedule[firstUse]);
+  Operation *unsplat = builder.create<tt::UnsplatOp>(op->getLoc(), scalarTy,
+                                                     scalarLoad.getResult());
+  scalarLoad.getResult().replaceAllUsesExcept(unsplat->getResult(0), unsplat);
+}
+
 void createTMABarrierAndWait(
     scf::ForOp forOp, llvm::MapVector<Operation *, AsyncLoad> &asyncLoads,
     const llvm::MapVector<int, LoadGroupInfo> &loadGroups,
@@ -442,25 +427,39 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule,
                       triton::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
   llvm::MapVector<Operation *, AsyncLoad> asyncLoads;
   llvm::MapVector<int, LoadGroupInfo> loadGroups;
+  llvm::SmallVector<Operation *> scalarLoads;
   // Only visit the top level ops, we do not support pipelining conditional
   // loads for now
   for (auto &op : forOp.getBody()->without_terminator()) {
     if (isa<tt::LoadOp, tt::DescriptorLoadOp, tt::DescriptorGatherOp>(op)) {
       int stageDiff = getDefUseStageDiff(&op, forOp, schedule);
-      if (stageDiff == 0 || !isa<RankedTensorType>(op.getResultTypes()[0])) {
-        // Don't care about non-pipelined loads. Don't use async loads for
-        // scalar values.
+      if (stageDiff == 0) {
+        // Don't care about non-pipelined loads. Scalar loads will be converted
+        // to tensor loads if they are pipelined.
         continue;
       }
-      SharedEncodingTrait sharedEncoding = getSharedEncoding(&op);
-      // Do not create async loads for small loads (cp.async requires at least 4
-      // bytes)
-      bool canUseAsyncCp =
-          isa<tt::LoadOp>(op) &&
-          canBeConvertedToAsyncLoad(cast<tt::LoadOp>(op), axisInfoAnalysis);
-      int copyVecBytes = getCopyVecBytes(
-          cast<RankedTensorType>(op.getResultTypes()[0]), sharedEncoding);
-      canUseAsyncCp &= copyVecBytes >= 4;
+      SharedEncodingTrait sharedEncoding;
+      bool canUseAsyncCp = false;
+      if (!isa<RankedTensorType>(op.getResultTypes()[0])) {
+        canUseAsyncCp = op.getResultTypes()[0].getIntOrFloatBitWidth() >= 32;
+        sharedEncoding = ttg::SwizzledSharedEncodingAttr::get(
+            forOp.getContext(), 1, 1, 1, {0},
+            ttg::CTALayoutAttr::get(forOp.getContext(), {1}, {1}, {0}));
+        if (canUseAsyncCp) {
+          scalarLoads.push_back(&op);
+        }
+      } else {
+        sharedEncoding = getSharedEncoding(&op);
+        // Do not create async loads for small loads (cp.async requires at least
+        // 4 bytes)
+        canUseAsyncCp =
+            isa<tt::LoadOp>(op) &&
+            canBeConvertedToAsyncLoad(cast<tt::LoadOp>(op), axisInfoAnalysis);
+        int copyVecBytes = getCopyVecBytes(
+            cast<RankedTensorType>(op.getResultTypes()[0]), sharedEncoding);
+
+        canUseAsyncCp &= copyVecBytes >= 4;
+      }
       if (canUseAsyncCp || isTMALoad(&op)) {
         if (loadRequiresAdditionalBuffer(&op)) {
           // Allocate additional buffer required by the wgmma pipelining.
@@ -480,6 +479,11 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule,
                            "performance degradation.";
       }
     }
+  }
+
+  // Convert scalar loads to be able to use async copy.
+  for (auto op : scalarLoads) {
+    convertScalarToTensorLoad(op, schedule, forOp);
   }
 
   if (asyncLoads.empty())
@@ -751,6 +755,7 @@ void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
         triton::createSingleBufferView(builder, barrierAlloc, barrierIdx);
   }
   mma.addCompletionBarrier(barrierSlice, vTrue);
+  mma.setIsAsync(true);
 
   // List of buffers that may be used until wait completes
   SmallVector<Value> waitBuffers;
@@ -831,11 +836,14 @@ void multibufferTensorMemory(scf::ForOp forOp, CoarseSchedule &schedule,
       llvm::to_vector(alloc.getResult().getUsers());
   Value replTok = OpBuilder(forOp).create<ub::PoisonOp>(
       forOp.getLoc(), builder.getType<AsyncTokenType>());
+  if (newAlloc.getToken()) {
+    newAlloc.getToken().replaceAllUsesWith(replTok);
+  }
   for (auto user : allocUsers) {
     if (auto store = dyn_cast<ttng::TMEMStoreOp>(user)) {
+      store.getDepMutable().clear();
+      store.getToken().replaceAllUsesWith(replTok);
       if (forOp->isAncestor(store)) {
-        store.getDepMutable().clear();
-        store.getToken().replaceAllUsesWith(replTok);
         // We can multibuffer, since the store is a point where we can
         // change the buffer index
         multibufferingIsValid = true;
@@ -863,9 +871,9 @@ void multibufferTensorMemory(scf::ForOp forOp, CoarseSchedule &schedule,
         store.getDstMutable().assign(tmemSlice);
       }
     } else if (auto load = dyn_cast<ttng::TMEMLoadOp>(user)) {
+      load.getDepMutable().clear();
+      load.getToken().replaceAllUsesWith(replTok);
       if (forOp->isAncestor(load)) {
-        load.getDepMutable().clear();
-        load.getToken().replaceAllUsesWith(replTok);
         builder.setStageCluster(schedule[load]);
         builder.setInsertionPoint(load);
         Value curBufIdx = getCurrBufIdx(load);

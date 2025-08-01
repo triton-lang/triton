@@ -64,9 +64,7 @@ def TTG_AsyncCommitGroupOp : TTG_Op<"async_commit_group"> {
   let results = (outs TTG_AsyncToken:$asyncToken);
   let arguments = (ins Variadic<TTG_AsyncToken>:$inputTokens);
 
-  let assemblyFormat = [{
-    $inputTokens attr-dict
-  }];
+  let assemblyFormat = [{($inputTokens ^)?attr-dict}];
 
   let extraClassDeclaration = [{
     static bool isSupported(int computeCapability) {
@@ -200,38 +198,55 @@ def TTG_LocalDeallocOp : TTG_Op<"local_dealloc"> {
   // Use qualified() otherwise "!ttg.memdesc<X>" is printed as "<X>".
   let assemblyFormat = [{$src attr-dict `:` qualified(type($src))}];
 }
-
-def TTG_MemDescSubviewOp : TTG_Op<"memdesc_subview", [Pure, MemDescViewTrait]> {
+def TTG_MemDescIndexOp : TTG_Op<"memdesc_index", [Pure, MemDescViewTrait]> {
   let summary = "take a subview of the descriptor.";
 
   let description = [{
-    This operation returns a new descriptor representing a subview of the buffer.
+    This operation returns a new descriptor pointing to the `i`-th element of the
+    input descriptor along the 0-th dimension.
+
     It doesn't affect the underlying memory.
 
     For example, suppose that
      - the input shape is 2x4x16xf16,
      - the output shape is 4x16xf16, and
-     - offsets = [1, 0, 0].
-
-    Then in Python syntax, the subview covers input[1].
-
-    Just one dimension may be split (at most one non-zero offset).
-
-    When the input shape and the output shape have different rank:
-    Or the output shape is a tensor of 1D tensor of 1 element:
-      - The rank of the output must be 1D smaller than the input.
-      - We assume the input is split along the 0th dimension.
-      - The offset along the 0th dimension may be a runtime value.
-    When the input and the output have the same rank:
-      - The offset must be a compile-time constant
-      - Larger or equal to the tile of the tensor (or zero)
-      - That does not split the input along the swizzling pattern (if any)
+     - index = 1.
+    Then the output descriptor is equivalent to input[1], where input is the logical tensor.
   }];
-  let arguments = (
-    ins TTG_MemDescType:$src, Variadic<I32>:$offsets);
 
+  let arguments = (ins TTG_MemDescType:$src, I32:$index);
+
+  let results = (outs TTG_MemDescType:$result);
+
+  let assemblyFormat = [{$src `,` $index attr-dict `:` qualified(type($src)) `->` qualified(type($result))}];
+
+  let hasVerifier = 1;
+}
+
+def TTG_MemDescSubsliceOp : TTG_Op<"memdesc_subslice", [Pure, MemDescViewTrait]> {
+  let summary = "take a subview of the descriptor.";
+
+  let description = [{
+    This operation returns a new descriptor representing a subview of the logical tensor.
+    It doesn't affect the underlying memory.
+
+    For example, suppose that
+     - the input shape is 32x16xf16,
+     - the output shape is 8x16xf16, and
+     - offsets = [2, 1].
+    Then in Python syntax, the subview covers input[2:8+2, 1:16+1] where input is
+    the logical tensor.
+
+    The offsets must be larger or equal to the tile of the tensor (or zero).
+  }];
+  let arguments = (ins TTG_MemDescType:$src, DenseI32ArrayAttr:$offsets);
   // Use qualified() otherwise "!ttg.memdesc<X>" is printed as "<X>".
-  let assemblyFormat = [{$src `[` $offsets `]` attr-dict `:` qualified(type($src)) `->` qualified(type($result))}];
+  // Render offsets inline as %src[0, 0] via a custom directive, but keep
+  // the overall parse/print generated from this assemblyFormat.
+  let assemblyFormat = [{
+    $src `[` custom<Offsets>($offsets) `]` attr-dict `:` qualified(type($src))
+    `->` qualified(type($result))
+  }];
 
   let results = (outs TTG_MemDescType:$result);
 
@@ -273,6 +288,27 @@ def TTG_MemDescReshapeOp : TTG_Op<"memdesc_reshape", [Pure,
   }];
 
   let arguments = (ins TTG_MemDescType:$src);
+
+  let builders = [
+    OpBuilder<(ins "Value":$src, "ArrayRef<int64_t>":$shape),
+              [{
+                MemDescType dstTy;
+                auto srcTy = cast<MemDescType>(src.getType());
+                auto result = inferReturnTypes($_builder.getContext(),
+                                           $_builder.getUnknownLoc(),
+                                           srcTy, shape, dstTy);
+                assert(succeeded(result) && "failed to infer return types");
+                build($_builder, $_state, dstTy, src);
+              }]>
+  ];
+  let extraClassDeclaration = [{
+      static LogicalResult inferReturnTypes(MLIRContext *context,
+                                        std::optional<Location> loc,
+                                        MemDescType srcTy,
+                                        ArrayRef<int64_t> dstShape,
+                                        MemDescType &inferredReturnType);
+  }];
+
   let results = (outs TTG_MemDescType:$result);
 
   let assemblyFormat = "$src attr-dict `:` qualified(type($src)) `->` qualified(type($result))";
@@ -301,7 +337,7 @@ def TTG_MemDescReinterpretOp : TTG_Op<"memdesc_reinterpret", [Pure, MemDescViewT
   let hasFolder = 1;
 }
 
-def TTG_LocalLoadOp : TTG_Op<"local_load"> {
+def TTG_LocalLoadOp : TTG_Op<"local_load", [LocalLoadTrait]> {
   let summary = "Load a buffer from local memory into a distributed tensor";
 
   let description = [{
@@ -410,12 +446,6 @@ def TTG_GlobalScratchAllocOp : TTG_Op<"global_scratch_alloc"> {
     I32Attr:$alignment
   );
   let results = (outs Arg<TT_Ptr, "", [MemAlloc<GlobalMemory>]>:$result);
-
-  let builders = [
-    OpBuilder<(ins "Type":$result, "int32_t":$nbytes, "int32_t":$alignment),
-              [{ build($_builder, $_state, result,
-                       $_builder.getI32IntegerAttr(nbytes), $_builder.getI32IntegerAttr(alignment)); }]>
-  ];
 
   let assemblyFormat = [{attr-dict `:` qualified(type($result))}];
 }

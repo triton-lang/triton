@@ -22,10 +22,11 @@ def min_dot_size(target: GPUTarget):
         lhs_bitwidth = lhs_type.scalar.primitive_bitwidth
         rhs_bitwidth = rhs_type.scalar.primitive_bitwidth
         assert lhs_bitwidth == rhs_bitwidth, "lhs and rhs bitwidth must be the same"
+        # For small M/N the input we can still use tensorcores with padding.
         if lhs_bitwidth == 8:
-            return (16, 16, 32)
+            return (1, 1, 32)
         else:
-            return (16, 16, 16)
+            return (1, 1, 16)
 
     return check_dot_compatibility
 
@@ -59,6 +60,11 @@ def ptx_get_version(cuda_version) -> int:
         return 70 + minor
     if major == 10:
         return 63 + minor
+
+    if major >= 13:
+        base_ptx = 90
+        return base_ptx + (major - 13) * 10 + minor
+
     raise RuntimeError("Triton only support CUDA 10.0 or higher, but got CUDA version: " + cuda_version)
 
 
@@ -122,6 +128,7 @@ class CUDAOptions:
     backend_name: str = 'cuda'
     sanitize_overflow: bool = True
     arch: str = None
+    instrumentation_mode: str = ""
 
     def __post_init__(self):
         default_libdir = Path(__file__).parent / 'lib'
@@ -141,6 +148,7 @@ class CUDAOptions:
 
 
 class CUDABackend(BaseBackend):
+    instrumentation = None
 
     @staticmethod
     def supports_target(target: GPUTarget):
@@ -209,6 +217,8 @@ class CUDABackend(BaseBackend):
 
     def load_dialects(self, ctx):
         nvidia.load_dialects(ctx)
+        if CUDABackend.instrumentation:
+            CUDABackend.instrumentation.load_dialects(ctx)
 
     @staticmethod
     def make_ttir(mod, metadata, opt, capability):
@@ -269,13 +279,15 @@ class CUDABackend(BaseBackend):
             passes.common.add_canonicalizer(pm)
             passes.ttir.add_triton_licm(pm)
             passes.ttgpuir.add_optimize_accumulator_init(pm)
-            passes.ttgpuir.add_hoist_tmem_alloc(pm)
+            passes.ttgpuir.add_hoist_tmem_alloc(pm, False)
             nvidia.passes.ttnvgpuir.add_promote_lhs_to_tmem(pm)
             passes.ttgpuir.add_assign_latencies(pm, opt.num_stages)
             passes.ttgpuir.add_schedule_loops(pm)
             passes.ttgpuir.add_warp_specialize(pm, opt.num_stages)
             passes.ttgpuir.add_pipeline(pm, opt.num_stages, dump_enabled)
             passes.ttgpuir.add_combine_tensor_select_and_if(pm)
+            # hoist again and allow hoisting out of if statements
+            passes.ttgpuir.add_hoist_tmem_alloc(pm, True)
             nvidia.passes.ttnvgpuir.add_remove_tmem_tokens(pm)
         else:
             passes.ttir.add_triton_licm(pm)
@@ -294,23 +306,26 @@ class CUDABackend(BaseBackend):
         if capability // 10 >= 9:
             nvidia.passes.ttnvgpuir.add_tma_lowering(pm)
         nvidia.passes.ttnvgpuir.add_fence_insertion(pm, capability)
+        nvidia.passes.ttnvgpuir.add_lower_mma(pm)
         passes.common.add_sccp(pm)
         passes.common.add_canonicalizer(pm)
+
         pm.run(mod)
         metadata["cluster_dims"] = (cluster_info.clusterDimX, cluster_info.clusterDimY, cluster_info.clusterDimZ)
         tensordesc_meta = mod.get_tensordesc_metadata()
         metadata["tensordesc_meta"] = tensordesc_meta
         return mod
 
-    def ttgir_opt(self, src, metadata, options, capability):
+    def gluon_to_ttgir(self, src, metadata, options, capability):
         mod = src
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
 
-        passes.ttgpuir.add_inliner(pm)
+        passes.gluon.add_inliner(pm)
+        passes.gluon.add_resolve_auto_encodings(pm)
         passes.common.add_sccp(pm)
         passes.ttir.add_loop_aware_cse(pm)
-        passes.ttgpuir.add_canonicalizer(pm)
+        passes.gluon.add_canonicalizer(pm)
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)
 
         pm.run(mod)
@@ -325,17 +340,19 @@ class CUDABackend(BaseBackend):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
 
-        nvidia.passes.ttnvgpuir.add_lower_mma(pm)
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)
         passes.ttgpuir.add_allocate_warp_groups(pm)
         passes.convert.add_scf_to_cf(pm)
-        passes.ttgpuir.add_allocate_shared_memory(pm)
+        nvidia.passes.ttgpuir.add_allocate_shared_memory_nv(pm, capability, ptx_version)
         nvidia.passes.ttnvgpuir.add_allocate_tensor_memory(pm)
         if knobs.compilation.enable_experimental_consan:
             # Call ConcurrencySanitizerPass here, before allocating global scratch memory but after allocating tensor and shared
             passes.ttgpuir.add_concurrency_sanitizer(pm)
         passes.ttgpuir.add_allocate_global_scratch_memory(pm)
         nvidia.passes.ttnvgpuir.add_proxy_fence_insertion(pm, capability)
+        # instrumentation point here so we can override IRs above (e.g., ttir and ttgir)
+        if CUDABackend.instrumentation:
+            CUDABackend.instrumentation.patch("ttgpuir_to_llvmir", pm, mod.context)
         nvidia.passes.ttgpuir.add_to_llvmir(pm, capability, ptx_version)
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
@@ -344,8 +361,12 @@ class CUDABackend(BaseBackend):
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
+        passes.convert.add_nvvm_to_llvm(pm)
         if not knobs.compilation.disable_line_info:
             passes.llvmir.add_di_scope(pm)
+        if CUDABackend.instrumentation:
+            CUDABackend.instrumentation.patch("llvmir_to_llvm", pm, mod.context)
+
         pm.run(mod)
         # LLVM-IR (MLIR) -> LLVM-IR (LLVM)
         llvm.init_targets()
@@ -376,6 +397,8 @@ class CUDABackend(BaseBackend):
         metadata["tmem_size"] = src.get_int_attr("ttg.tensor_memory_size")
         metadata["global_scratch_size"] = src.get_int_attr("ttg.global_scratch_memory_size")
         metadata["global_scratch_align"] = src.get_int_attr("ttg.global_scratch_memory_alignment")
+        metadata["profile_scratch_size"] = src.get_int_attr("ttg.profile_scratch_memory_size") or 0
+        metadata["profile_scratch_align"] = src.get_int_attr("ttg.profile_scratch_memory_alignment") or 1
         ret = str(llvm_mod)
         del llvm_mod
         del context
@@ -411,8 +434,18 @@ class CUDABackend(BaseBackend):
             fsrc.flush()
             fbin = fsrc.name + '.o'
 
-            line_info = ["-lineinfo", "-suppress-debug-info"] if knobs.compilation.disable_line_info else ["-lineinfo"]
-            fmad = [] if opt.enable_fp_fusion else ['--fmad=false']
+            debug_info = []
+            if knobs.compilation.disable_line_info:
+                # This option is ignored if used without -lineinfo
+                debug_info += ["-lineinfo", "-suppress-debug-info"]
+            elif knobs.nvidia.disable_ptxas_opt:
+                # Synthesize complete debug info
+                debug_info += ["-g"]
+            else:
+                # Only emit line info
+                debug_info += ["-lineinfo"]
+
+            fmad = [] if opt.enable_fp_fusion else ["--fmad=false"]
             arch = sm_arch_from_capability(capability)
 
             # Disable ptxas optimizations if requested
@@ -422,11 +455,15 @@ class CUDABackend(BaseBackend):
             ptx_extra_options = opt.ptx_options.split(" ") if opt.ptx_options else []
 
             ptxas_cmd = [
-                ptxas, *line_info, *fmad, '-v', *disable_opt, *ptx_extra_options, f'--gpu-name={arch}', fsrc.name, '-o',
-                fbin
+                ptxas, *debug_info, *fmad, '-v', *disable_opt, *ptx_extra_options, f'--gpu-name={arch}', fsrc.name,
+                '-o', fbin
             ]
             try:
                 subprocess.run(ptxas_cmd, check=True, close_fds=False, stderr=flog)
+                if knobs.nvidia.dump_ptxas_log:
+                    with open(flog.name) as log_file:
+                        print(log_file.read())
+
                 if os.path.exists(fsrc.name):
                     os.remove(fsrc.name)
                 if os.path.exists(flog.name):
@@ -444,9 +481,20 @@ class CUDABackend(BaseBackend):
                 else:
                     error = f'`ptxas` failed with error code {e.returncode}'
 
-                raise PTXASError(f"{error}\n"
-                                 f"`ptxas` stderr:\n{log}\n"
-                                 f'Repro command: {" ".join(ptxas_cmd)}\n')
+                error = (f"{error}\n"
+                         f"`ptxas` stderr:\n{log}\n"
+                         f'Repro command: {" ".join(ptxas_cmd)}\n')
+
+                print(f"""
+
+================================================================
+{error}
+
+{src}
+================================================================
+please share the reproducer above with Triton project.
+""")
+                raise PTXASError(error)
 
             with open(fbin, 'rb') as f:
                 cubin = f.read()
@@ -460,7 +508,7 @@ class CUDABackend(BaseBackend):
             stages["ttir"] = lambda src, metadata: self.make_ttir(src, metadata, options, capability)
             stages["ttgir"] = lambda src, metadata: self.make_ttgir(src, metadata, options, capability)
         elif language == Language.GLUON:
-            stages["ttgir"] = lambda src, metadata: self.ttgir_opt(src, metadata, options, capability)
+            stages["ttgir"] = lambda src, metadata: self.gluon_to_ttgir(src, metadata, options, capability)
         stages["llir"] = lambda src, metadata: self.make_llir(src, metadata, options, capability)
         stages["ptx"] = lambda src, metadata: self.make_ptx(src, metadata, options, self.target.arch)
         stages["cubin"] = lambda src, metadata: self.make_cubin(src, metadata, options, self.target.arch)

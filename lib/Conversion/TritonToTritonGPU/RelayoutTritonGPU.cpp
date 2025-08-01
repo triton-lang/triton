@@ -31,8 +31,7 @@ RankedTensorType getTMEMTensorLayout(const TypeConverter *tc,
     encoding = ttng::getTmemCompatibleLayout(
         tmemEnc.getBlockM(), tmemEnc.getBlockN(), type, numWarps);
   }
-  return RankedTensorType::get(type.getShape(), type.getElementType(),
-                               encoding);
+  return type.cloneWithEncoding(encoding);
 }
 
 struct TMEMLoadOpPattern : public OpConversionPattern<ttng::TMEMLoadOp> {

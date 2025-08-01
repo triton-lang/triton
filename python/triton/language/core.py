@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from warnings import warn
 from contextlib import contextmanager
 from enum import Enum
@@ -9,7 +10,7 @@ from typing import Union, Callable, List, Sequence, TypeVar, Optional, Tuple
 from dataclasses import dataclass
 import builtins
 from .. import knobs
-from ..runtime.jit import jit, JITFunction
+from ..runtime.jit import JITFunction
 import inspect
 
 from .._C.libtriton import ir
@@ -178,10 +179,10 @@ class constexpr_type(base_type):
         self.value = value
 
     def __eq__(self, other):
-        return self.value == other.value
+        return isinstance(other, constexpr_type) and self.value == other.value
 
     def __repr__(self) -> str:
-        return f"constexpr[{self.value}]"
+        return f"constexpr_type[{self.value}]"
 
     def mangle(self) -> str:
         return repr(self)
@@ -199,10 +200,9 @@ class constexpr(base_value):
     """
 
     def __init__(self, value):
-        if isinstance(value, constexpr):
-            self.value = value.value
-        else:
-            self.value = value
+        while isinstance(value, constexpr):
+            value = value.value
+        self.value = value
         self.type = constexpr_type(value)
 
     def __repr__(self) -> str:
@@ -351,6 +351,8 @@ def constexpr_function(f):
         res = f(*args, **kwargs)
 
         # convert result back to a Triton constexpr:
+        if knobs.runtime.interpret:
+            return res  # No constexpr in interpreter
         return constexpr(res)
 
     # disguise the function as a Triton builtin to avoid raising an error
@@ -753,6 +755,10 @@ class block_type(dtype):
     def scalar(self):
         return self.element_ty
 
+    @property
+    def nbytes(self):
+        return self.numel * (self.element_ty.primitive_bitwidth // 8)
+
     def mangle(self) -> str:
         elt = self.scalar.mangle()
         shape = '_'.join(map(str, self.shape))
@@ -879,10 +885,7 @@ class tensor(base_value):
         self.handle = handle
         # Block shape
         self.shape = type.shape if type.is_block() else ()
-        self.numel = 1
-        for s in self.shape:
-            self.numel *= s
-        self.numel = constexpr(self.numel)
+        self.numel = constexpr(math.prod(self.shape))
         self.type = type  # Tensor type (can be block_type)
         # Following the practice in pytorch, dtype is scalar type
         self.dtype = type.scalar
@@ -1268,19 +1271,20 @@ class tensor(base_value):
         ...
 
 
+def _type_for_tuple_values(values, fields=None):
+    return tuple_type([constexpr_type(x) if isinstance(x, (int, float, dtype)) else x.type for x in values], fields)
+
+
 class tuple(base_value):
 
     def __init__(self, args: Sequence, type: tuple_type = None):
         self.values = [i for i in args]
-
-        def get_type(x):
-            if isinstance(x, dtype):
-                return dtype
-            if isinstance(x, (int, float)):
-                return constexpr
-            return x.type
-
-        self.type = type or tuple_type([get_type(x) for x in self.values])
+        if isinstance(type, tuple_type):
+            self.type = type
+        elif type is not None:  # make_template in ASTFunction.deserialize may pass us a list/tuple
+            self.type = tuple_type(type)
+        else:
+            self.type = _type_for_tuple_values(self.values)
 
     def __getitem__(self, idx: constexpr):
         if isinstance(idx, int):
@@ -1300,6 +1304,7 @@ class tuple(base_value):
             idx = constexpr(idx)
         assert isinstance(idx, constexpr)
         self.values[idx] = value
+        self.type = _type_for_tuple_values(self.values, self.type.fields)
 
     def __add__(self, other):
         other = _normalize_tuple(other)
@@ -1828,11 +1833,6 @@ def join(a, b, _semantic=None):
     return _semantic.join(a, b)
 
 
-@jit
-def _take_first(a, b):
-    return a
-
-
 def _unsplat(x, _semantic=None, _generator=None):
     """
     Convert a single-element tensor to a scalar.
@@ -1843,10 +1843,7 @@ def _unsplat(x, _semantic=None, _generator=None):
     for d in x.shape:
         numel *= d
     assert numel == 1, "can only unsplat single-element tensors"
-    if len(x.shape) >= 2:
-        x = _semantic.reshape(x, [1])
-    x = typing.cast(tensor, reduce(x, 0, _take_first, _semantic=_semantic, _generator=_generator))
-    return x
+    return _semantic.unsplat(x)
 
 
 @_tensor_member_fn
@@ -2782,6 +2779,79 @@ def gather(src, index, axis, _semantic=None):
     """
     axis = _unwrap_if_constexpr(axis)
     return _semantic.gather(src, index, axis)
+
+
+@builtin
+def map_elementwise(
+    scalar_fn: Callable[..., Tuple[tensor, ...]],
+    *args: tensor,
+    pack=1,
+    _semantic=None,
+    _generator=None,
+):
+    '''
+        Map a scalar function over a tensor.
+
+        The input tensors :code:`args` are implicitly broadcasted to the same shape.
+
+        This may be useful in allowing control flow over single elements in a tensor,
+        for example a multi-branch function where one branch is more expensive. With
+        :code:`tl.where` you are forced to calculate both sides of the branch, but
+        with an if we only execute one side.
+
+        .. highlight:: python
+        .. code-block:: python
+
+            @triton.jit
+            def selu_scalar(x, alpha):
+                if x > 0:
+                    return a
+                else:
+                    return alpha * (tl.exp(x) - 1)
+
+            @triton.jit
+            def selu(x, alpha):
+                return tl.map_elementwise(selu_scalar, x, alpha)
+
+        :param scalar_fn: the function to map over.
+        :param pack: the number of elements to be processed by one function call.
+        :return: one tensor or a tuple of tensors, depending on the mapped function.
+    '''
+    # Build the block for the nested region first to discover the return types
+    assert pack >= 1
+    in_scalar_tys = [t.type.scalar for t in args]
+    builder = _semantic.builder
+    block = builder.new_block()
+    scalar_args = []
+    for i, ty in enumerate(in_scalar_tys):
+        for j in builtins.range(pack):
+            block.add_argument(ty.to_ir(builder))
+            scalar_args.append(tensor(block.arg(i * pack + j), ty))
+
+    with _insertion_guard(builder):
+        builder.set_insertion_point_to_start(block)
+        scalar_results = _generator.call_JitFunction(scalar_fn, scalar_args, kwargs={})
+
+        is_single = isinstance(scalar_results, tensor)
+        if is_single:
+            scalar_results = scalar_results,
+
+        handles = [r.handle for r in scalar_results]
+        builder.create_map_elementwise_ret(handles)
+
+    fn_result_types = [x.type for x in scalar_results]
+    scalar_result_types = fn_result_types
+    if pack > 1:
+        scalar_result_types = fn_result_types[::pack]
+        for offset in builtins.range(1, pack):
+            assert scalar_result_types == fn_result_types[offset::pack], "type mismatch in unpacked results"
+
+    def make_elementwise_region(elementwise_op):
+        region = elementwise_op.get_region(0)
+        region.push_back(block)
+
+    result = _semantic.map_elementwise(args, scalar_result_types, pack, make_elementwise_region)
+    return result[0] if is_single else result
 
 
 # -----------------------

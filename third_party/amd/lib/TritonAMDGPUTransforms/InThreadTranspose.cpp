@@ -154,7 +154,7 @@ struct GlobalToSharedMemoryOpChain {
   SetVector<tt::LoadOp> globalLoads;
   // list of localAllocOp and localStoreOp operations
   SetVector<Operation *> localAllocStores;
-  // list of MemDescSubviewOp, control flow results and block operands
+  // list of MemDescIndexOp, control flow results and block operands
   SmallVector<Value> sharedMemVals;
 };
 
@@ -475,7 +475,7 @@ FailureOr<SmallVector<Op>> findAllDefiningOps(Value val) {
 ///
 /// ttg.local_alloc -----x-------------------------> ttg.local_dealloc
 ///                      V
-/// tt.load -> ttg.local_store -> ttg.mem_subview -> ttg.local_load
+/// tt.load -> ttg.local_store -> ttg.memdesc_index -> ttg.local_load
 ///
 /// \returns partially filled GlobalToSharedMemoryOpChain structure of failure.
 FailureOr<GlobalToSharedMemoryOpChain>
@@ -508,7 +508,7 @@ findReachableSMemOps(ttg::LocalLoadOp root) {
       } else if (isa<ttg::LocalStoreOp>(candidate)) {
         foundNetwork.localAllocStores.insert(candidate);
         smemOperand = candidate->getOperand(1);
-      } else if (isa<ttg::MemDescSubviewOp>(candidate)) {
+      } else if (isa<ttg::MemDescIndexOp>(candidate)) {
         smemOutput = candidate->getResult(0);
         smemOperand = candidate->getOperand(0);
       } else if (isa<ttg::LocalLoadOp, ttg::LocalDeallocOp>(candidate)) {
@@ -537,7 +537,7 @@ findReachableSMemOps(ttg::LocalLoadOp root) {
           foundNetwork.sharedMemVals.push_back(def);
           if (Operation *op = def.getDefiningOp()) {
             // additional check, to ignore control flow operations
-            if (isa<ttg::MemDescSubviewOp, ttg::LocalAllocOp>(op))
+            if (isa<ttg::MemDescIndexOp, ttg::LocalAllocOp>(op))
               nextTraversalStep.push_back(op);
           }
         }
@@ -574,10 +574,10 @@ unsigned getMaxSizePerThread(RankedTensorType type, int dimIdx) {
 // ttg.local_alloc ---x
 //                    |
 //                    V
-// tt.load --> ttg.local_store --> ttg.memdesc_subview --> ttg.local_load
+// tt.load --> ttg.local_store --> ttg.memdesc_index --> ttg.local_load
 //
 // Actual network could vary, because of different control flow,
-// optional ttg.memdesc_subview and ttg.local_store operations.
+// optional ttg.memdesc_index and ttg.local_store operations.
 //
 // If data flow pattern match, check applicability
 // of inThreadTrasnpose optimization and return found pattern.
@@ -597,7 +597,7 @@ matchInThreadTransposePattern(ttg::LocalLoadOp lLoad) {
     return failure();
   }
 
-  // find local_alloc, local_store, local_load and ttg.memdesc_subview
+  // find local_alloc, local_store, local_load and ttg.memdesc_index
   // operations
   auto sharedMemSearch = findReachableSMemOps(lLoad);
   if (failed(sharedMemSearch)) {

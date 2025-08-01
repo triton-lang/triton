@@ -619,6 +619,9 @@ class TritonSemantic(Generic[TensorTy]):
         ret_ty = tl.block_type(value.dtype, shape)
         return self.tensor(self.builder.create_splat(ret_ty.to_ir(self.builder), value.handle), ret_ty)
 
+    def unsplat(self, value: TensorTy) -> TensorTy:
+        return self.tensor(self.builder.create_unsplat(value.handle), value.dtype)
+
     def reshape(self, input: TensorTy, dst_shape: List[int], can_reorder: bool) -> TensorTy:
         numel = 1
         for s in dst_shape:
@@ -1472,10 +1475,10 @@ class TritonSemantic(Generic[TensorTy]):
             # All combinations of supported fp8 x fp8 are permitted
             pass
         else:
-            assert lhs.dtype in (tl.int8, tl.uint8, tl.float16, tl.bfloat16,
-                                 tl.float32), f"Unsupported lhs dtype {lhs.dtype}"
-            assert rhs.dtype in (tl.int8, tl.uint8, tl.float16, tl.bfloat16,
-                                 tl.float32), f"Unsupported rhs dtype {rhs.dtype}"
+            assert lhs.dtype in (tl.int8, tl.uint8, tl.float16, tl.bfloat16, tl.float32,
+                                 tl.float64), f"Unsupported lhs dtype {lhs.dtype}"
+            assert rhs.dtype in (tl.int8, tl.uint8, tl.float16, tl.bfloat16, tl.float32,
+                                 tl.float64), f"Unsupported rhs dtype {rhs.dtype}"
             assert lhs.dtype == rhs.dtype, f"Both operands must be same dtype. Got {lhs.dtype} and {rhs.dtype}"
 
         if lhs.dtype.is_fp8e4b15() or rhs.dtype.is_fp8e4b15():
@@ -1486,6 +1489,18 @@ class TritonSemantic(Generic[TensorTy]):
             # We upcast because there's no fp8e4b15 type in MLIR
             lhs = self.cast(lhs, tl.float16)
             rhs = self.cast(rhs, tl.float16)
+
+        uses_fp8e4b8 = lhs.dtype.is_fp8e4b8() or rhs.dtype.is_fp8e4b8()
+        uses_fp8e5b16 = lhs.dtype.is_fp8e5b16() or rhs.dtype.is_fp8e5b16()
+        if uses_fp8e4b8 or uses_fp8e5b16:
+            type_name = "fp8e4b8" if uses_fp8e4b8 else "fp8e5b16"
+            if type_name in self.builder.options.deprecated_fp8_dot_operand_dtypes:
+                arch = self.builder.options.arch
+                warnings.warn(
+                    f"{type_name} is AMD gfx942 specific and not supported on {arch} so it's upcasted to fp16 and can cause significant slow down. "
+                    f"Please use OCP fp8 variants on {arch} for performance")
+                lhs = self.cast(lhs, tl.float16)
+                rhs = self.cast(rhs, tl.float16)
 
         if input_precision is None:
             input_precision = self.builder.options.default_dot_input_precision
@@ -1514,6 +1529,9 @@ class TritonSemantic(Generic[TensorTy]):
         elif lhs.type.scalar.is_fp32() or lhs.type.scalar.is_bf16():
             _0 = self.builder.get_fp32(0)
             ret_scalar_ty = tl.float32
+        elif lhs.type.scalar.is_fp64():
+            _0 = self.builder.get_fp64(0)
+            ret_scalar_ty = tl.float64
         else:
             _0 = self.builder.get_fp16(0) if out_dtype.is_fp16() else self.builder.get_fp32(0)
             ret_scalar_ty = out_dtype
@@ -1709,6 +1727,36 @@ class TritonSemantic(Generic[TensorTy]):
         gather = self.builder.create_gather(src.handle, index.handle, axis)
         return self.wrap_tensor(gather, src.type.scalar, index.type.shape)
 
+# ===----------------------------------------------------------------------===
+#                               Map Elementwise
+# ===----------------------------------------------------------------------===
+
+    def broadcast_tensors(self, *inputs):
+        if not inputs:
+            return ()
+        head, *tail = inputs
+        for i in range(len(tail)):
+            head, tail[i] = self.broadcast_impl_value(head, tail[i])
+        for i in range(len(tail)):
+            head, tail[i] = self.broadcast_impl_value(head, tail[i])
+        return (head, *tail)
+
+    def map_elementwise(self, inputs: Sequence[tl.tensor], result_types: Sequence[tl.dtype], pack: int,
+                        region_builder_fn) -> Tuple[tl.tensor, ...]:
+        inputs = self.broadcast_tensors(*inputs)
+
+        assert len(inputs) > 0, "map_elementwise must have at least 1 input tensor"
+        result_types = [inputs[0].type.with_element_ty(ty.scalar) for ty in result_types]
+        elementwise_op = self.builder.create_map_elementwise(
+            [t.handle for t in inputs],
+            [ty.to_ir(self.builder) for ty in result_types],
+            pack,
+        )
+        region_builder_fn(elementwise_op)
+        # assert elementwise_op.verify()
+
+        return tuple(self.tensor(elementwise_op.get_result(i), ty) for i, ty in enumerate(result_types))
+
 
 # ===----------------------------------------------------------------------===
 #                               Histogram
@@ -1788,7 +1836,7 @@ class TritonSemantic(Generic[TensorTy]):
             if elem.dtype != tl.int64 and require_i64:
                 return self.builder.create_int_cast(elem.handle, self.builder.get_int64_ty(),
                                                     elem.dtype.is_int_signed())
-            elif elem.dtype != tl.int32 and not require_i64:
+            elif elem.dtype == tl.int64 and not require_i64:
                 assert False, "Block pointers only support 32 bit `offsets/block_shape`, " \
                     "add a `.to(tl.int32)` or use regular indexing for 64 bit support"
             return elem.handle
@@ -1866,12 +1914,12 @@ class TritonSemantic(Generic[TensorTy]):
                 f"Descriptor block shape must have at least 16 bytes in the last dimension, but got {contig_dim_size} * {elem_size} = {contig_dim_size * elem_size} bytes"
             )
 
-        strides[-1] = tl._unwrap_if_constexpr(strides[-1])
-        if strides[-1] != 1:
-            raise ValueError(f"Tensor descriptor last dim must be 1 but got {strides[-1]}")
+        last_stride = tl._unwrap_if_constexpr(strides[-1])
+        if last_stride != 1:
+            raise ValueError(f"Tensor descriptor last dim must be 1 but got {last_stride}")
 
         shape = [self.make_scalar(x, tl.int32) for x in shape]
-        strides = [self.make_scalar(x, tl.int64) for x in strides]
+        strides = [self.make_scalar(tl._unwrap_if_constexpr(x), tl.int64) for x in strides]
 
         # Check whether `block_shape` is static
         block_shape = tl._unwrap_shape(block_shape)

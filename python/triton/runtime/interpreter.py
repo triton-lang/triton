@@ -88,6 +88,7 @@ class TensorDescHandle:
         assert self.base.data.item() % 16 == 0, "base must be 16-byte aligned"
         assert len(self.strides) == self.ndim
         assert len(self.block_shape) == self.ndim
+        assert self.ndim >= 1, "descriptor cannot be 0 dimensional"
 
         for stride in self.strides[:-1]:
             assert stride.data.item() % 16 == 0, "stride must be 16-byte aligned"
@@ -663,6 +664,9 @@ class InterpreterBuilder:
         else:  # scalar
             return TensorHandle(np.full(shape, arg.data, dtype=_get_np_dtype(arg.dtype)), arg.dtype.scalar)
 
+    def create_unsplat(self, arg):
+        return TensorHandle(np.full((1, ), arg.data[0], dtype=_get_np_dtype(arg.dtype)), arg.dtype.scalar)
+
     def create_atomic_cas(self, ptr, cmp, val, sem, scope):
         if sem not in self.ir_sem_to_interpreter_sem:
             raise ValueError(f"unsupported semantic {sem}")
@@ -934,9 +938,9 @@ class ReduceOps(ReduceScanOpInterface):
         elif self.combine_fn == tl.standard._argmax_combine_tie_break_left:
             return self.min_max(input[0], val_reduce_op=np.max, idx_reduce_op=np.argmax)
         elif self.combine_fn == tl.standard._elementwise_max:
-            return self.min_max(input[0], val_reduce_op=np.max, idx_reduce_op=None)
+            return self.min_max(input[0], val_reduce_op=np.nanmax, idx_reduce_op=None)
         elif self.combine_fn == tl.standard._elementwise_min:
-            return self.min_max(input[0], val_reduce_op=np.min, idx_reduce_op=None)
+            return self.min_max(input[0], val_reduce_op=np.nanmin, idx_reduce_op=None)
         elif self.combine_fn == tl.standard._sum_combine:
             return self.sum(input[0])
         else:

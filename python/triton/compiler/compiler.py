@@ -7,14 +7,13 @@ from ..backends.compiler import Language
 from ..backends.compiler import BaseBackend, GPUTarget
 from .. import __version__, knobs
 from ..runtime.autotuner import OutOfResources
-from ..runtime.cache import get_cache_manager, get_dump_manager, get_override_manager
+from ..runtime.cache import get_cache_manager, get_dump_manager, get_override_manager, get_cache_key
 from ..runtime.driver import driver
 from ..tools.disasm import get_sass
 from pathlib import Path
 import re
 import functools
 import os
-import sysconfig
 import time
 
 # - ^\s*tt\.func\s+ : match the start of the string, any leading whitespace, the keyword func,
@@ -78,7 +77,7 @@ class ASTSource:
         key = f"{self.fn.cache_key}-{str(self.attrs)}-{sorted_sig}-{constants_key}"
         return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
-    def make_ir(self, options, codegen_fns, module_map, context):
+    def make_ir(self, target: GPUTarget, options, codegen_fns, module_map, context):
         from .code_generator import ast_to_ttir
         return ast_to_ttir(self.fn, self, context=context, options=options, codegen_fns=codegen_fns,
                            module_map=module_map)
@@ -117,7 +116,7 @@ class IRSource:
     def hash(self):
         return hashlib.sha256(self.src.encode("utf-8")).hexdigest()
 
-    def make_ir(self, options, codegen_fns, module_map, context):
+    def make_ir(self, target: GPUTarget, options, codegen_fns, module_map, context):
         self.module.context = context
         return self.module
 
@@ -127,42 +126,6 @@ class IRSource:
             assert num_warps is not None, "Unable to parse ttg.num-warps attribute"
             return {'num_warps': num_warps}
         return dict()
-
-
-@functools.lru_cache()
-def triton_key():
-    import pkgutil
-    TRITON_PATH = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    contents = []
-    # frontend
-    with open(__file__, "rb") as f:
-        contents += [hashlib.sha256(f.read()).hexdigest()]
-    # compiler
-    path_prefixes = [
-        (os.path.join(TRITON_PATH, "compiler"), "triton.compiler."),
-        (os.path.join(TRITON_PATH, "backends"), "triton.backends."),
-    ]
-    for path, prefix in path_prefixes:
-        for lib in pkgutil.walk_packages([path], prefix=prefix):
-            with open(lib.module_finder.find_spec(lib.name).origin, "rb") as f:
-                contents += [hashlib.sha256(f.read()).hexdigest()]
-
-    # backend
-    libtriton_hash = hashlib.sha256()
-    ext = sysconfig.get_config_var("EXT_SUFFIX").split(".")[-1]
-    with open(os.path.join(TRITON_PATH, "_C", f"libtriton.{ext}"), "rb") as f:
-        while True:
-            chunk = f.read(1024**2)
-            if not chunk:
-                break
-            libtriton_hash.update(chunk)
-    contents.append(libtriton_hash.hexdigest())
-    # language
-    language_path = os.path.join(TRITON_PATH, 'language')
-    for lib in pkgutil.walk_packages([language_path], prefix="triton.language."):
-        with open(lib.module_finder.find_spec(lib.name).origin, "rb") as f:
-            contents += [hashlib.sha256(f.read()).hexdigest()]
-    return f'{__version__}' + '-'.join(contents)
 
 
 @functools.lru_cache()
@@ -258,7 +221,7 @@ class CompileTimer:
         )
 
 
-def compile(src, target=None, options=None):
+def compile(src, target=None, options=None, _env_vars=None):
     compilation_listener = knobs.compilation.listener
     if compilation_listener:
         timer = CompileTimer()
@@ -277,8 +240,8 @@ def compile(src, target=None, options=None):
     extra_options = src.parse_options()
     options = backend.parse_options(dict(options or dict(), **extra_options))
     # create cache manager
-    env_vars = get_cache_invalidating_env_vars()
-    key = f"{triton_key()}-{src.hash()}-{backend.hash()}-{options.hash()}-{str(sorted(env_vars.items()))}"
+    env_vars = get_cache_invalidating_env_vars() if _env_vars is None else _env_vars
+    key = get_cache_key(src, backend, options, env_vars=env_vars)
     hash = hashlib.sha256(key.encode("utf-8")).hexdigest()
     fn_cache_manager = get_cache_manager(hash)
     # For dumping/overriding only hash the source as we want it to be independent of triton
@@ -336,7 +299,7 @@ def compile(src, target=None, options=None):
     codegen_fns = backend.get_codegen_implementation(options)
     module_map = backend.get_module_map()
     try:
-        module = src.make_ir(options, codegen_fns, module_map, context)
+        module = src.make_ir(target, options, codegen_fns, module_map, context)
     except Exception as e:
         filter_traceback(e)
         raise
@@ -467,6 +430,7 @@ class CompiledKernel:
             file.suffix[1:]: file.read_bytes() if file.suffix[1:] == binary_ext else file.read_text()
             for file in asm_files
         })
+        self.metadata_group = metadata_group
         self.kernel = self.asm[binary_ext]
         # binaries are lazily initialized
         # because it involves doing runtime things
@@ -495,6 +459,8 @@ class CompiledKernel:
         warp_size = driver.active.get_current_target().warp_size
         if self.metadata.num_warps * warp_size > self.n_max_threads:
             raise OutOfResources(self.metadata.num_warps * warp_size, self.n_max_threads, "threads")
+        if knobs.runtime.init_handle_hook is not None:
+            knobs.runtime.init_handle_hook(self.module, self.function, self.name, self.metadata_group)
 
     def __getattribute__(self, name):
         if name == 'run':
@@ -504,14 +470,11 @@ class CompiledKernel:
     def launch_metadata(self, grid, stream, *args):
         if knobs.runtime.launch_enter_hook is None:
             return None
+        self._init_handles()
         ret = LazyDict({"name": self.name, "function": self.function, "stream": stream})
         if not isinstance(self.src, ASTSource) or self.src.fn.launch_metadata is None:
             return ret
-        arg_dict = {}
-        arg_idx = 0
-        for i, arg_name in enumerate(self.src.fn.arg_names):
-            arg_dict[arg_name] = args[arg_idx]
-            arg_idx += 1
+        arg_dict = {name: arg for name, arg in zip(self.src.fn.arg_names, args)}
         ret.add(self.src.fn.launch_metadata, (grid, self.metadata, arg_dict))
         return ret
 

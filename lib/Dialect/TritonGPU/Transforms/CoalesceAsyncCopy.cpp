@@ -53,10 +53,8 @@ struct ClipAsyncCopySizePerThread
     // Note this can be further optimized, as copyContigSize can be even
     // smaller when lowering, depending on contiguity and mask alignment
     // (see AsyncCopyGlobalToLocalOpConversion)
-    LinearLayout regLayout =
-        triton::gpu::toLinearLayout(srcTy.getShape(), blockedEnc);
-    LinearLayout sharedLayout =
-        triton::gpu::toLinearLayout(srcTy.getShape(), sharedEnc);
+    LinearLayout regLayout = triton::gpu::toLinearLayout(srcTy);
+    LinearLayout sharedLayout = triton::gpu::toLinearLayout(dstTy);
     auto copyContigSize =
         regLayout.invertAndCompose(sharedLayout).getNumConsecutiveInOut();
 
@@ -83,9 +81,8 @@ struct ClipAsyncCopySizePerThread
 
     // insert cvt's after src, mask, and other
     auto convertBlockLayout = [&](Value src, BlockedEncodingAttr enc) {
-      auto ty = cast<TensorType>(src.getType());
-      auto newTy =
-          RankedTensorType::get(ty.getShape(), ty.getElementType(), enc);
+      auto ty = cast<RankedTensorType>(src.getType());
+      auto newTy = ty.cloneWithEncoding(enc);
       auto cvt = rewriter.create<ConvertLayoutOp>(copyOp->getLoc(), newTy, src);
       return cvt.getResult();
     };
@@ -107,9 +104,10 @@ struct ClipAsyncCopySizePerThread
   }
 };
 
-class CoalesceAsyncCopyPass
-    : public impl::TritonGPUCoalesceAsyncCopyBase<CoalesceAsyncCopyPass> {
-public:
+struct CoalesceAsyncCopyPass
+    : impl::TritonGPUCoalesceAsyncCopyBase<CoalesceAsyncCopyPass> {
+  using Base::Base;
+
   void runOnOperation() override {
     ModuleOp m = getOperation();
     MLIRContext *context = &getContext();

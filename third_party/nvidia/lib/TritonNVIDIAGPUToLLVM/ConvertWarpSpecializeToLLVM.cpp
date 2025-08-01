@@ -1,5 +1,6 @@
 #include "TargetInfo.h"
 #include "TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
+#include "Utility.h"
 #include "mlir/Analysis/TopologicalSortUtils.h"
 #include "mlir/Conversion/Passes.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
@@ -84,21 +85,20 @@ enum BarrierIndex {
 };
 
 static void createBarrier(TritonLLVMIRRewriter &b, unsigned barIdx,
-                          std::optional<unsigned> numThreads, bool aligned) {
-  assert(barIdx < 16 && "not enough barriers");
+                          unsigned numThreads) {
+  assert(barIdx < kNumBarriers && "not enough barriers");
+  // If a partition has only 1 warp, use `bar.warp.sync`.
+  if (numThreads == 32)
+    LLVM::NVIDIA::createSyncWarp(b.getLoc(), b);
+  else
+    b.create<NVVM::BarrierOp>(b.i32_val(barIdx), b.i32_val(numThreads));
+}
 
-  PTXBuilder ptxBuilder;
-  std::string ptxString;
-  llvm::raw_string_ostream os(ptxString);
-  os << "barrier.sync";
-  if (aligned)
-    os << ".aligned";
-  os << ' ' << barIdx;
-  if (numThreads)
-    os << ", " << *numThreads;
-
-  (*ptxBuilder.create<>(ptxString))();
-  ptxBuilder.launch(b, b.getLoc(), void_ty(b.getContext()));
+static void createAllBarrier(TritonLLVMIRRewriter &b, unsigned barIdx) {
+  assert(barIdx < kNumBarriers && "not enough barriers");
+  LLVM::createLLVMIntrinsicCallOp(b, b.getLoc(),
+                                  "llvm.nvvm.barrier.cta.sync.all",
+                                  void_ty(b.getContext()), b.i32_val(barIdx));
 }
 
 //===----------------------------------------------------------------------===//
@@ -203,7 +203,7 @@ static LogicalResult rewriteWarpGroupBarriers(LLVM::LLVMFuncOp func,
 
     if (auto bar = dyn_cast<NVVM::Barrier0Op>(op)) {
       TritonLLVMIRRewriter b(bar.getLoc(), bar);
-      createBarrier(b, /*barIdx=*/0, defaultWarpGroupSize, /*aligned=*/true);
+      createBarrier(b, kDefaultWarpGroupBarrierIdx, defaultWarpGroupSize);
       bar.erase();
       return WalkResult::skip();
     }
@@ -223,7 +223,7 @@ static LogicalResult rewriteWarpGroupBarriers(LLVM::LLVMFuncOp func,
       unsigned warpGroupSize = threadsPerWarp * op.getPartitionNumWarps()[idx];
       partition->walk([&](NVVM::Barrier0Op bar) {
         TritonLLVMIRRewriter b(bar.getLoc(), bar);
-        createBarrier(b, barIdx, warpGroupSize, /*aligned=*/true);
+        createBarrier(b, barIdx, warpGroupSize);
         bar.erase();
       });
     }
@@ -268,14 +268,12 @@ static void rewritePartitionRegions(WarpSpecializeOp ws, Block *switchLoop,
 
     // The shared memory is only live for the entry into the region, so put
     // another barrier here.
-    createBarrier(b, kSwitchLoopBarrierIdx, /*numThreads=*/std::nullopt,
-                  /*aligned=*/false);
+    createAllBarrier(b, kSwitchLoopBarrierIdx);
 
     // Rewrite all warp returns.
     partition->walk([&](WarpReturnOp op) {
       TritonLLVMIRRewriter b(op.getLoc(), op);
-      createBarrier(b, kSwitchLoopBarrierIdx, /*numThreads=*/std::nullopt,
-                    /*aligned=*/false);
+      createAllBarrier(b, kSwitchLoopBarrierIdx);
       if (auto actRegs = ws.getActualRegisters()) {
         createRegRealloc(b, (*actRegs)[partition->getRegionNumber() + 1],
                          lowRegs);
@@ -392,8 +390,7 @@ static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func,
   b.setInsertionPointToStart(switchLoop);
   if (maxnreg)
     createRegRealloc(b, maxnreg.getInt(), lowRegs);
-  createBarrier(b, kSwitchLoopBarrierIdx, /*numThreads=*/std::nullopt,
-                /*aligned=*/false);
+  createAllBarrier(b, kSwitchLoopBarrierIdx);
   Value statePtr = LLVM::getSharedMemoryBase(b.getLoc(), b, targetInfo, func);
   Value relWid = b.sub(wid, b.i32_val(defaultNumWarps));
 
@@ -447,10 +444,8 @@ static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func,
   Block *defaultBlock = new Block;
   funcBlocks.insert(std::next(switchLoop->getIterator()), defaultBlock);
   b.setInsertionPointToStart(defaultBlock);
-  createBarrier(b, kSwitchLoopBarrierIdx, /*numThreads=*/std::nullopt,
-                /*aligned=*/false);
-  createBarrier(b, kSwitchLoopBarrierIdx, /*numThreads=*/std::nullopt,
-                /*aligned=*/false);
+  createAllBarrier(b, kSwitchLoopBarrierIdx);
+  createAllBarrier(b, kSwitchLoopBarrierIdx);
   auto latchBr = b.create<LLVM::BrOp>(switchLoop);
   disableLICM(latchBr);
 
@@ -497,18 +492,15 @@ static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func,
 
     // First barrier releases the waiting warpgroups. The second barrier ensures
     // they have read the captures before the memory is released upon entry.
-    createBarrier(b, kSwitchLoopBarrierIdx, /*numThreads=*/std::nullopt,
-                  /*aligned=*/false);
+    createAllBarrier(b, kSwitchLoopBarrierIdx);
     if (auto actRegs = ws.getActualRegisters())
       createRegRealloc(b, defRegs, actRegs->front());
-    createBarrier(b, kSwitchLoopBarrierIdx, /*numThreads=*/std::nullopt,
-                  /*aligned=*/false);
+    createAllBarrier(b, kSwitchLoopBarrierIdx);
     b.create<LLVM::BrOp>(&ws.getDefaultRegion().front());
 
     ws.getDefaultRegion().walk([&, ws = ws](WarpYieldOp op) mutable {
       TritonLLVMIRRewriter b(op.getLoc(), op);
-      createBarrier(b, kSwitchLoopBarrierIdx, /*numThreads=*/std::nullopt,
-                    /*aligned=*/false);
+      createAllBarrier(b, kSwitchLoopBarrierIdx);
       if (auto actRegs = ws.getActualRegisters())
         createRegRealloc(b, actRegs->front(), defRegs);
       b.replaceOpWithNewOp<LLVM::BrOp>(op, op.getOperands(), after);
@@ -531,8 +523,7 @@ static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func,
     Value cst = b.i8_val(partitionStateCounter);
     for (int32_t i : llvm::seq(maxNumWarps))
       b.store(cst, b.gep(ptrTy, i8_ty, statePtr, LLVM::GEPArg(i)));
-    createBarrier(b, kSwitchLoopBarrierIdx, /*numThreads=*/std::nullopt,
-                  /*aligned=*/false);
+    createAllBarrier(b, kSwitchLoopBarrierIdx);
   });
   b.setInsertionPointToStart(switchExit);
   b.create<LLVM::ReturnOp>(ValueRange());

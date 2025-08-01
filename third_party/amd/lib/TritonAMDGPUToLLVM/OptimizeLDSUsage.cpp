@@ -20,6 +20,7 @@
  * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
+#include "Analysis/AMDGPUAllocation.h"
 #include "OptimizeLDSUtility.h"
 #include "TargetInfo.h"
 #include "TritonAMDGPUToLLVM/Passes.h"
@@ -93,15 +94,26 @@ class OptimizeAMDLDSUsage
     LDBG("Trying fit " << cvtOp << " into " << targetLDSSize << " bytes");
     OpBuilder builder(cvtOp);
 
+    auto ctx = builder.getContext();
     auto srcType = cvtOp.getSrc().getType();
     auto dstType = cvtOp.getType();
+
+    if (!cvtOp->hasAttr(triton::AMD::AttrSharedMemPadded)) {
+      auto emptyAttribute = UnitAttr::get(ctx);
+      // Padded conversion seems more friendly with this optimization
+      // use it instead of general swizzling.
+      cvtOp->setAttr(triton::AMD::AttrSharedMemPadded, emptyAttribute);
+      // if padded layout drops LDS usage on itself, we are done, return
+      if (triton::AMD::getConvertLayoutScratchInBytes(
+              srcType, dstType, /*usePadding*/ true) <= targetLDSSize)
+        return;
+    }
 
     auto srcEnc =
         cast<triton::gpu::DistributedEncodingTrait>(srcType.getEncoding());
     auto dstEnc =
         cast<triton::gpu::DistributedEncodingTrait>(dstType.getEncoding());
 
-    auto ctx = srcEnc.getContext();
     auto rank = srcType.getRank();
 
     unsigned numWarps = triton::gpu::lookupNumWarps(cvtOp);
@@ -242,7 +254,8 @@ public:
       LDSLimit = targetInfo.getSharedMemorySize();
     }
 
-    ModuleAllocation allocAnalysis(mod);
+    ModuleAllocation allocAnalysis(
+        mod, mlir::triton::AMD::AMDAllocationAnalysisScratchSizeFn);
     if (allocAnalysis.getSharedMemorySize() <= LDSLimit)
       return;
 

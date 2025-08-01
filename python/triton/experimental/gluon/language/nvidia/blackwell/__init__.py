@@ -2,8 +2,10 @@ from __future__ import annotations
 from typing import Optional, Tuple, List, TYPE_CHECKING
 
 from dataclasses import dataclass
+import triton
 from triton.experimental.gluon.language import _core as ttgl
-from triton.experimental.gluon.language._core import builtin, base_type, base_value, _unwrap_if_constexpr
+from triton.experimental.gluon.language._core import builtin, base_type, base_value, _unwrap_if_constexpr, constexpr_function
+from triton.experimental.gluon.language._layouts import BlockedLayout, _get_shape_per_cta
 from triton.experimental.gluon.language._semantic import _check
 
 from . import tma
@@ -19,6 +21,7 @@ __all__ = [
     "allocate_tensor_memory",
     "async_copy",
     "fence_async_shared",
+    "get_tmem_32x32b_reg_layout",
     "mbarrier",
     "tensor_memory_descriptor",
     "TensorMemoryLayout",
@@ -28,6 +31,14 @@ __all__ = [
 
 @dataclass(frozen=True, eq=True)
 class TensorMemoryLayout:
+    """
+    Describes the layout for tensor memory in Blackwell architecture.
+
+    Args:
+        block (Tuple[int, int]): Tiling block dimensions (M/rows, N/cols).
+        unpacked (bool): For sub-32 bit elements, whether they are unpacked to 32 bits.
+        cta_split_num (Optional[Tuple[int, int]]): CTA split factors. Defaults to None.
+    """
     block: Tuple[int, int]
     unpacked: bool
     cta_split_num: Optional[Tuple[int, int]] = None
@@ -49,6 +60,47 @@ class TensorMemoryLayout:
         unpacked_str = "U" if self.unpacked else "P"
         cta_split_str = f"CS{self.cta_split_num[0]}x{self.cta_split_num[1]}" if self.cta_split_num else ""
         return f"TL{block_str}{unpacked_str}{cta_split_str}TL"
+
+
+@constexpr_function
+def get_tmem_32x32b_reg_layout(M, N, shape, num_warps, ctas_per_cga=None, cta_split_num=None, cta_order=None):
+    """Returns a BlockedLayout compatible with load/store on tensor memory with the 32x32b instruction variant.
+    """
+    assert len(shape) == 2, "expected a 2D tensor"
+    assert num_warps in [4, 8], "expected 4 or 8 warps"
+
+    shape_per_cta = _get_shape_per_cta(shape, cta_split_num)
+    blocks_per_tile = [shape_per_cta[0] // M, shape_per_cta[1] // N]
+    num_blocks = blocks_per_tile[0] * blocks_per_tile[1]
+
+    num_warp_groups = num_warps // 4
+    if M == 64:
+        threads_per_warp = [16, 2]
+        if num_blocks == 1:
+            size_per_thread = [1, triton.cdiv(N, num_warp_groups * 2)]
+            warps_per_cta = [4, num_warp_groups]
+        else:
+            size_per_thread = [1, triton.cdiv(N, 2)]
+            warps_per_cta = [4 * min(blocks_per_tile[0], num_warp_groups)]
+            warps_per_cta.append(triton.cdiv(num_warp_groups, warps_per_cta[0] // 4))
+    else:
+        if shape[0] > 128:
+            size_per_thread = [1, N]
+            threads_per_warp = [32, 1]
+            warps_per_cta = [4 * num_warp_groups, 1]
+        else:
+            size_per_thread = [1, triton.cdiv(N, num_warp_groups)]
+            threads_per_warp = [32, 1]
+            warps_per_cta = [4, num_warp_groups]
+    return BlockedLayout(
+        size_per_thread=size_per_thread,
+        threads_per_warp=threads_per_warp,
+        warps_per_cta=warps_per_cta,
+        order=[0, 1],
+        ctas_per_cga=ctas_per_cga,
+        cta_split_num=cta_split_num,
+        cta_order=cta_order,
+    )
 
 
 class tensor_memory_descriptor_type(base_type):
@@ -91,6 +143,9 @@ class tensor_memory_descriptor_type(base_type):
 
 
 class tensor_memory_descriptor(base_value):
+    """
+    Represents a tensor memory descriptor handle for Tensor Core Gen5 operations.
+    """
 
     def __init__(self, handle, element_ty, shape, layout, alloc_shape):
         self.handle = handle
@@ -120,6 +175,15 @@ class tensor_memory_descriptor(base_value):
 
     @builtin
     def load(self, layout, _semantic: GluonSemantic) -> ttgl.tensor:
+        """
+        Load a tensor from tensor memory.
+
+        Args:
+            layout (DistributedLayout): Destination layout of the tensor.
+
+        Returns:
+            tensor: A distributed tensor containing the loaded data.
+        """
         layout = _unwrap_if_constexpr(layout)
         ret_ty = ttgl.distributed_type(self.dtype, self.shape, layout)
         builder = _semantic.builder
@@ -128,6 +192,13 @@ class tensor_memory_descriptor(base_value):
 
     @builtin
     def store(self, value, pred=True, _semantic: GluonSemantic = None) -> None:
+        """
+        Store a tensor into tensor memory.
+
+        Args:
+            value (tensor): The tensor to store.
+            pred (bool): Scalar predicate. Operation is skipped if predicate is False. Defaults to True.
+        """
         pred = _unwrap_if_constexpr(pred)
         pred = _semantic.to_tensor(pred)
         assert value.shape == self.shape, f"source shape {value.shape} does not match destination shape {self.shape}"
@@ -136,6 +207,16 @@ class tensor_memory_descriptor(base_value):
 
     @builtin
     def slice(self, start, length, _semantic: GluonSemantic) -> None:
+        """
+        Create a slice of the tensor memory descriptor along the last dimension.
+
+        Args:
+            start (int): The starting index for subslice.
+            length (int): The length of the subslice.
+
+        Returns:
+            tensor_memory_descriptor: Descriptor for the subslice.
+        """
         start = _unwrap_if_constexpr(start)
         length = _unwrap_if_constexpr(length)
         _check(isinstance(start, int), lambda: "start must be a constant int")
@@ -151,18 +232,36 @@ class tensor_memory_descriptor(base_value):
 
     @builtin
     def index(self, index, _semantic: GluonSemantic = None) -> tensor_memory_descriptor:
+        """
+        Create a subview of tensor memory by indexing the first dimension.
+
+        Args:
+            index (tensor): The index tensor for the subview.
+
+        Returns:
+            tensor_memory_descriptor: Descriptor for the indexed subview.
+        """
         index = _semantic.to_tensor(index)
         builder = _semantic.builder
-        offsets = [builder.get_int32(0)] * self.rank
-        offsets[0] = index.handle
         shape = self.shape[1:]
         layout = self.layout
         ret = tensor_memory_descriptor(None, self.dtype, shape, layout, self.type.alloc_shape)
-        ret.handle = builder.create_memdesc_subview(ret.type.to_ir(builder), self.handle, offsets)
+        ret.handle = builder.create_memdesc_index(ret.type.to_ir(builder), self.handle, index.handle)
         return ret
 
     @builtin
     def _reinterpret(self, dtype, shape, layout, _semantic: GluonSemantic = None) -> tensor_memory_descriptor:
+        """
+        Reinterpret tensor memory descriptor with a new dtype, shape, and layout.
+
+        Args:
+            dtype (dtype): The new data type.
+            shape (Sequence[int]): The new shape.
+            layout (TensorMemoryLayout): The new layout.
+
+        Returns:
+            tensor_memory_descriptor: Descriptor with updated type and layout.
+        """
         dtype = _unwrap_if_constexpr(dtype)
         shape = [_unwrap_if_constexpr(s) for s in shape]
         layout = _unwrap_if_constexpr(layout)
@@ -174,6 +273,18 @@ class tensor_memory_descriptor(base_value):
 
 @builtin
 def allocate_tensor_memory(element_ty, shape, layout, value=None, _semantic=None):
+    """
+    Allocate tensor memory.
+
+    Args:
+        element_ty (dtype): The element data type.
+        shape (Sequence[int]): The descriptor shape.
+        layout (TensorMemoryLayout): The layout of the tensor memory.
+        value (tensor, optional): Initial tensor to copy. Defaults to None.
+
+    Returns:
+        tensor_memory_descriptor: Descriptor for the allocated memory.
+    """
     element_ty = _unwrap_if_constexpr(element_ty)
     shape = _unwrap_if_constexpr(shape)
     layout = _unwrap_if_constexpr(layout)
@@ -187,6 +298,19 @@ def allocate_tensor_memory(element_ty, shape, layout, value=None, _semantic=None
 
 @builtin
 def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, mbarriers=None, mbarrier_preds=None, _semantic=None):
+    """
+    Emit a 5th generation TensorCore MMA instruction.
+    acc = a * b + (acc if use_acc else 0)
+
+    Args:
+        a (shared_memory_descriptor): Left hand side operand in shared memory.
+        b (shared_memory_descriptor or tensor_memory_descriptor): Right hand side operand in shared or tensor memory.
+        acc (tensor_memory_descriptor): Accumulator value in tensor memory (mutated).
+        use_acc (bool): Whether to use the initial value of the accumulator. Defaults to True.
+        pred (bool): Scalar predicate. Operation is skipped if predicate is False. Defaults to True.
+        mbarriers (Sequence[shared_memory_descriptor], optional): Barriers to signal when the operation is complete. If None, mma is synchronous. Defaults to None.
+        mbarrier_preds (Sequence[bool], optional): Predicates for barriers. Defaults to None.
+    """
     use_acc = _semantic.to_tensor(use_acc)
     pred = _semantic.to_tensor(pred)
 
@@ -198,9 +322,14 @@ def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, mbarriers=None, mbarrier_
         mbarriers = [bar.handle for bar in mbarriers]
         if mbarrier_preds is None:
             true = _semantic.to_tensor(True)
-            mbarrier_preds = [true] * len(mbarriers)
+            mbarrier_preds = [true.handle] * len(mbarriers)
         else:
             mbarrier_preds = _semantic._convert_to_ir_values(mbarrier_preds, require_i64=False)
 
     _semantic.builder.create_tcgen05_mma(a.handle, b.handle, acc.handle, use_acc.handle, pred.handle, mbarriers,
                                          mbarrier_preds)
+
+
+@builtin
+def tcgen05_commit(barrier, _semantic=None):
+    _semantic.builder.create_tcgen05_commit(barrier.handle)

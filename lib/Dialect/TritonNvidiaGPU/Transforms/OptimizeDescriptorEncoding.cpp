@@ -218,8 +218,7 @@ TensorDescType getTensorDescTypeWithEncoding(Operation *op,
                                              Attribute encoding) {
   auto sharedEnc = cast<triton::gpu::SharedEncodingTrait>(encoding);
   encoding = updateEncodingForShape(op, sharedEnc, existingTy);
-  auto blockTy = RankedTensorType::get(existingTy.getShape(),
-                                       existingTy.getElementType(), encoding);
+  auto blockTy = existingTy.cloneWithEncoding(encoding);
   return TensorDescType::get(existingTy.getContext(), blockTy);
 }
 

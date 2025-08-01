@@ -1,8 +1,6 @@
 from dataclasses import dataclass
 from typing import List, Any
 from triton._utils import validate_block_shape
-from torch._subclasses.fake_tensor import FakeTensor
-from torch._subclasses.functional_tensor import FunctionalTensor
 
 
 @dataclass
@@ -18,7 +16,8 @@ class TensorDescriptor:
         assert len(self.block_shape) == rank, f"rank mismatch: {self}"
         assert rank > 0, "rank must not be zero"
         assert rank <= 5, "rank cannot be more than 5"
-        if not isinstance(self.base, (FakeTensor, FunctionalTensor)):
+        ty = type(self.base)
+        if ty.__name__ not in ("FakeTensor", "FunctionalTensor"):
             assert self.base.data_ptr() % 16 == 0, "base must be 16-byte aligned"
         validate_block_shape(self.block_shape)
         elem_bytes = self.base.dtype.itemsize

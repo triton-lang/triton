@@ -7,12 +7,14 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
 namespace mlir::triton::AMD {
+class TargetInfo;
+
 // Annotates LocalLoadOps with ttg.amdgpu.syncedByAsyncWait=true if they are
 // synced by an AsyncWait.
 void annotateLocalLoadsSyncedViaAsyncWait(ModuleOp mod);
 
 // Getter for the annotation applied by annotateLocalLoadsSyncedViaAsyncWait
-bool isSyncedViaAsyncWait(triton::gpu::LocalLoadOp localLoadOp);
+bool isSyncedViaAsyncWait(Operation *localLoadOp);
 
 // LLVM is unable to deduce dependencies across warps and loop iterations for
 // AsyncCopy and LocalLoad and will emit conservative wait counts. In triton the
@@ -38,6 +40,12 @@ void addLocalLoadNoAliasScope(triton::gpu::LocalLoadOp localLoadOp,
 void addLocalLoadNoAliasScope(LLVM::AliasAnalysisOpInterface llLoadOp);
 // Attaches the "AsyncCopies" alias scope to llLoadDirectToLdsOp
 void addAsyncCopyAliasScope(LLVM::AliasAnalysisOpInterface llLoadDirectToLdsOp);
+
+// Finds the largest supported vecSize smaller than maxVecSize. Returns 0 if
+// there is none
+unsigned
+fitToValidDirectToLdsVecSize(unsigned maxVecSize, unsigned elemBitwidth,
+                             const triton::AMD::TargetInfo &targetInfo);
 
 } // namespace mlir::triton::AMD
 

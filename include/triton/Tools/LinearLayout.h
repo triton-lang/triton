@@ -325,7 +325,7 @@ private:
       bases;
 
   llvm::MapVector<StringAttr, int32_t /*size*/> outDims;
-  bool surjective = true;
+  int32_t rank = 0;
 
 public:
   using BasesT = decltype(bases);
@@ -425,10 +425,11 @@ public:
       ArrayRef<std::pair<StringAttr, std::vector<std::vector<int32_t>>>> bases,
       ArrayRef<std::pair<StringAttr, int32_t>> outDims, bool requireSurjective);
 
-  bool isSurjective() const { return surjective; }
+  bool isSurjective() const { return rank == getTotalOutDimSizeLog2(); }
+  bool isInjective() const { return rank == getTotalInDimSizeLog2(); }
 
   bool isInvertible() const {
-    return surjective && getTotalInDimSize() == getTotalOutDimSize();
+    return isSurjective() && getTotalInDimSize() == getTotalOutDimSize();
   }
 
   const BasesT &getBases() const { return bases; }
@@ -839,6 +840,11 @@ public:
 
   // Inverse of the action
   ColumnAction inverse() const;
+
+  static ColumnAction identity(StringAttr inDim, size_t inSizeLog2) {
+    return ColumnAction(llvm::to_vector(llvm::seq<size_t>(inSizeLog2)), inDim,
+                        inSizeLog2);
+  }
 
   // Returns true if the action is the identity
   bool isIdentity() const { return m_isIdentity; }

@@ -6,6 +6,7 @@ from pathlib import Path
 from triton import knobs
 from triton.backends.compiler import GPUTarget
 from triton.backends.driver import GPUDriver
+from triton.runtime import _allocation
 from triton.runtime.build import compile_module_from_src
 from triton.tools.tensor_descriptor import TensorDescriptor
 
@@ -110,7 +111,7 @@ def _get_path_to_hip_runtime_dylib():
             paths.append(f)
 
     # Afterwards try to search the loader dynamic library resolution paths.
-    libs = subprocess.check_output(["/sbin/ldconfig", "-p"]).decode()
+    libs = subprocess.check_output(["/sbin/ldconfig", "-p"]).decode(errors="ignore")
     # each line looks like the following:
     # libamdhip64.so.6 (libc6,x86-64) => /opt/rocm-6.0.2/lib/libamdhip64.so.6
     # libamdhip64.so (libc6,x86-64) => /opt/rocm-6.0.2/lib/libamdhip64.so
@@ -153,25 +154,40 @@ def ty_to_cpp(ty):
     if ty[0] == '*':
         return "hipDeviceptr_t"
     return {
-        "i1": "int32_t",
+        "i1": "int8_t",
         "i8": "int8_t",
         "i16": "int16_t",
         "i32": "int32_t",
         "i64": "int64_t",
-        "u1": "uint32_t",
+        "u1": "uint8_t",
         "u8": "uint8_t",
         "u16": "uint16_t",
         "u32": "uint32_t",
         "u64": "uint64_t",
-        "fp16": "float",
-        "bf16": "float",
-        "fp32": "float",
-        "f32": "float",
+        "fp16": "double",
+        "bf16": "double",
+        "fp32": "double",
+        "f32": "double",
         "fp64": "double",
     }[ty]
 
 
-_BASE_ARGS_FORMAT = "piiiKKOOOO"
+FLOAT_STORAGE_TYPE = {
+    "fp16": "uint16_t",
+    "bf16": "uint16_t",
+    "fp32": "uint32_t",
+    "f32": "uint32_t",
+    "fp64": "uint64_t",
+}
+FLOAT_PACK_FUNCTION = {
+    "fp16": "pack_fp16",
+    "bf16": "pack_bf16",
+    "fp32": "pack_fp32",
+    "f32": "pack_fp32",
+    "fp64": "pack_fp64",
+}
+
+_BASE_ARGS_FORMAT = "piiiKKOOOOO"
 
 
 def make_launcher(constants, signature, warp_size):
@@ -226,7 +242,6 @@ def make_launcher(constants, signature, warp_size):
         if ty == "constexpr":
             return "O"
         return {
-            "float": "f",
             "double": "d",
             "long": "l",
             "int8_t": "b",
@@ -249,22 +264,41 @@ def make_launcher(constants, signature, warp_size):
     args_list = ', ' + ', '.join(f"&_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''
     # Record the end of regular arguments;
     # subsequent arguments are architecture-specific descriptors, such as tensor descriptors for CUDA.
-    arg_decls = ', '.join(f"{ty_to_cpp(ty)} arg{i}" for i, ty in signature.items() if ty != "constexpr")
+    arg_decl_list = []
+    for i, ty in signature.items():
+        if ty == "constexpr":
+            continue
+        if ty in FLOAT_STORAGE_TYPE:
+            arg_decl_list.append(f"{FLOAT_STORAGE_TYPE[ty]} arg{i}")
+        else:
+            arg_decl_list.append(f"{ty_to_cpp(ty)} arg{i}")
+    arg_decls = ', '.join(arg_decl_list)
     internal_args_list = []
     for i, ty in signature.items():
         if ty[0] == "*":
             internal_args_list.append(f"ptr_info{i}.dev_ptr")
+        elif ty in FLOAT_STORAGE_TYPE:
+            internal_args_list.append(f"_arg{i}_storage")
         elif ty != "constexpr":
             internal_args_list.append(f"_arg{i}")
+
+    float_storage_decls = [
+        f"{FLOAT_STORAGE_TYPE[ty]} _arg{i}_storage = {FLOAT_PACK_FUNCTION[ty]}(_arg{i});"
+        for i, ty in signature.items()
+        if ty in FLOAT_STORAGE_TYPE
+    ]
+
     libhip_path = _get_path_to_hip_runtime_dylib()
 
     # generate glue code
     params = list(range(len(signature)))
     params = [f"&arg{i}" for i, ty in signature.items() if ty != "constexpr"]
     params.append("&global_scratch")
+    params.append("&profile_scratch")
     src = f"""
 #define __HIP_PLATFORM_AMD__
 #include <hip/hip_runtime.h>
+#include <hip/hip_runtime_api.h>
 #include <Python.h>
 #include <dlfcn.h>
 #include <stdbool.h>
@@ -308,9 +342,6 @@ static struct HIPSymbolTable hipSymbolTable;
 bool initSymbolTable() {{
   // Use the HIP runtime library loaded into the existing process if it exits.
   void *lib = dlopen("libamdhip64.so", RTLD_NOLOAD);
-  if (lib) {{
-    // printf("[triton] chosen loaded libamdhip64.so in the process\\n");
-  }}
 
   // Otherwise, go through the list of search paths to dlopen the first HIP
   // driver library.
@@ -320,7 +351,6 @@ bool initSymbolTable() {{
       void *handle = dlopen(hipLibSearchPaths[i], RTLD_LAZY | RTLD_LOCAL);
       if (handle) {{
         lib = handle;
-        // printf("[triton] chosen %s\\n", hipLibSearchPaths[i]);
       }}
     }}
   }}
@@ -329,17 +359,36 @@ bool initSymbolTable() {{
     return false;
   }}
 
-  // Resolve all symbols we are interested in.
+  typedef hipError_t (*hipGetProcAddress_fn)(
+      const char *symbol, void **pfn, int hipVersion, uint64_t hipFlags,
+      hipDriverProcAddressQueryResult *symbolStatus);
+  hipGetProcAddress_fn hipGetProcAddress;
   dlerror(); // Clear existing errors
   const char *error = NULL;
-#define QUERY_EACH_FN(hipSymbolName, ...)                                     \\
-  *(void **)&hipSymbolTable.hipSymbolName = dlsym(lib, #hipSymbolName);       \\
-  error = dlerror();                                                          \\
-  if (error) {{                                                               \\
-    PyErr_SetString(PyExc_RuntimeError,                                       \\
-                    "cannot query " #hipSymbolName " from libamdhip64.so");   \\
-    dlclose(lib);                                                             \\
-    return false;                                                             \\
+  *(void **)&hipGetProcAddress = dlsym(lib, "hipGetProcAddress");
+  error = dlerror();
+  if (error) {{
+    PyErr_SetString(PyExc_RuntimeError,
+                    "cannot query 'hipGetProcAddress' from libamdhip64.so");
+    dlclose(lib);
+    return false;
+  }}
+
+  // Resolve all symbols we are interested in.
+  int hipVersion = HIP_VERSION;
+  uint64_t hipFlags = 0;
+  hipDriverProcAddressQueryResult symbolStatus;
+  hipError_t status = hipSuccess;
+#define QUERY_EACH_FN(hipSymbolName, ...)                                      \
+  status = hipGetProcAddress(#hipSymbolName,                                   \
+                             (void **)&hipSymbolTable.hipSymbolName,           \
+                             hipVersion, hipFlags, &symbolStatus);             \
+  if (status != hipSuccess) {{                                                 \
+    PyErr_SetString(PyExc_RuntimeError,                                        \
+                    "cannot get address for '" #hipSymbolName                  \
+                    "' from libamdhip64.so");                                  \
+    dlclose(lib);                                                              \
+    return false;                                                              \
   }}
 
   HIP_SYMBOL_LIST(QUERY_EACH_FN, QUERY_EACH_FN)
@@ -361,8 +410,7 @@ static inline void gpuAssert(hipError_t code, const char *file, int line)
 
 #define HIP_CHECK(ans) {{ gpuAssert((ans), __FILE__, __LINE__); }}
 
-static void _launch(int gridX, int gridY, int gridZ, int num_warps, int num_ctas, int launch_cooperative_grid, int clusterDimX, int clusterDimY, int clusterDimZ, int shared_memory, hipStream_t stream, hipFunction_t function{', ' + arg_decls if len(arg_decls) > 0 else ''}) {{
-  // printf("_launch hip kernel\\n");
+static void _launch(int gridX, int gridY, int gridZ, int num_warps, int num_ctas, int launch_cooperative_grid, int clusterDimX, int clusterDimY, int clusterDimZ, int shared_memory, hipStream_t stream, hipFunction_t function, hipDeviceptr_t profile_scratch{', ' + arg_decls if len(arg_decls) > 0 else ''}) {{
   hipDeviceptr_t global_scratch = 0;
   void *params[] = {{ {', '.join(params)} }};
   if (gridX*gridY*gridZ > 0 && launch_cooperative_grid) {{
@@ -420,23 +468,51 @@ static inline DevicePtrInfo getPointer(PyObject *obj, int idx) {{
   return ptr_info;
 }}
 
+static uint16_t pack_fp16(double f) {{
+    uint16_t result;
+    // from https://github.com/python/pythoncapi-compat
+#if 0x030600B1 <= PY_VERSION_HEX && PY_VERSION_HEX <= 0x030B00A1 && !defined(PYPY_VERSION)
+    _PyFloat_Pack2(f, (unsigned char*)&result, 1);
+#else
+    PyFloat_Pack2(f, (unsigned char*)&result, 1);
+#endif
+    return result;
+}}
+
+static uint16_t pack_bf16(double f) {{
+    float f32 = (float)f;
+    uint32_t u32 = *(uint32_t*)&f32;
+    return (uint16_t)(u32 >> 16);
+}}
+
+static uint32_t pack_fp32(double f) {{
+    float f32 = (float)f;
+    return *(uint32_t*)&f32;
+}}
+
+static uint64_t pack_fp64(double f) {{
+    return *(uint64_t*)&f;
+}}
+
 static PyObject* launch(PyObject* self, PyObject* args) {{
-   // printf("launch\\n");
   int gridX, gridY, gridZ;
   uint64_t _stream;
   uint64_t _function;
   int launch_cooperative_grid;
+  PyObject *profile_scratch_obj = NULL;
   PyObject *launch_enter_hook = NULL;
   PyObject *launch_exit_hook = NULL;
   PyObject *kernel_metadata = NULL;
   PyObject *launch_metadata = NULL;
   {' '.join([f"{_extracted_type(ty)} _arg{i}; " for i, ty in signature.items()])}
   if(!PyArg_ParseTuple(args, \"{format}\", &launch_cooperative_grid,
-                                           &gridX, &gridY, &gridZ, &_stream, &_function,
+                                           &gridX, &gridY, &gridZ, &_stream, &_function, &profile_scratch_obj,
                                            &kernel_metadata, &launch_metadata,
                                            &launch_enter_hook, &launch_exit_hook {args_list})) {{
     return NULL;
   }}
+
+  {' '.join(float_storage_decls)}
 
   // extract kernel metadata
   int num_warps, num_ctas, shared_memory, clusterDimX, clusterDimY, clusterDimZ;
@@ -453,10 +529,18 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
     Py_DECREF(ret);
   }}
 
+  hipDeviceptr_t profile_scratch = 0;
+  if (profile_scratch_obj != Py_None) {{
+    DevicePtrInfo profile_scratch_info = getPointer(profile_scratch_obj, -1);
+    if (!profile_scratch_info.valid) {{
+      return NULL;
+    }}
+    profile_scratch = profile_scratch_info.dev_ptr;
+  }}
 
   // raise exception asap
   {"; ".join([f"DevicePtrInfo ptr_info{i} = getPointer(_arg{i}, {i}); if (!ptr_info{i}.valid) return NULL;" if ty[0] == "*" else "" for i, ty in signature.items()])};
-  _launch(gridX, gridY, gridZ, num_warps, num_ctas, launch_cooperative_grid, clusterDimX, clusterDimY, clusterDimZ, shared_memory, (hipStream_t)_stream, (hipFunction_t)_function{', ' + ', '.join(internal_args_list) if len(internal_args_list) > 0 else ''});
+  _launch(gridX, gridY, gridZ, num_warps, num_ctas, launch_cooperative_grid, clusterDimX, clusterDimY, clusterDimZ, shared_memory, (hipStream_t)_stream, (hipFunction_t)_function, (hipDeviceptr_t)profile_scratch{', ' + ', '.join(internal_args_list) if len(internal_args_list) > 0 else ''});
 
   if(launch_exit_hook != Py_None){{
     PyObject* args = Py_BuildValue("(O)", launch_metadata);
@@ -541,9 +625,23 @@ class HIPLauncher(object):
 
         self.launch = wrap_handle_tensor_descriptor(mod.launch) if has_tensor_desc_arg else mod.launch
         self.launch_cooperative_grid = metadata.launch_cooperative_grid
+        self.profile_scratch_size = metadata.profile_scratch_size
+        self.profile_scratch_align = metadata.profile_scratch_align
 
-    def __call__(self, *args):
-        self.launch(self.launch_cooperative_grid, *args)
+    def __call__(self, gridX, gridY, gridZ, stream, function, *args):
+
+        def allocate_scratch(size, align, allocator):
+            if size > 0:
+                grid_size = gridX * gridY * gridZ
+                alloc_size = grid_size * size
+                alloc_fn = allocator.get()
+                return alloc_fn(alloc_size, align, stream)
+            return None
+
+        profile_scratch = allocate_scratch(self.profile_scratch_size, self.profile_scratch_align,
+                                           _allocation._profile_allocator)
+
+        self.launch(self.launch_cooperative_grid, gridX, gridY, gridZ, stream, function, profile_scratch, *args)
 
 
 class HIPDriver(GPUDriver):
@@ -564,6 +662,9 @@ class HIPDriver(GPUDriver):
             return torch.cuda.is_available() and (torch.version.hip is not None)
         except ImportError:
             return False
+
+    def map_python_to_cpp_type(self, ty: str) -> str:
+        return ty_to_cpp(ty)
 
     def get_current_target(self):
         device = self.get_current_device()

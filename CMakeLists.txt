@@ -97,6 +97,10 @@ if(NOT MLIR_DIR)
   set(MLIR_DIR ${LLVM_LIBRARY_DIR}/cmake/mlir)
 endif()
 
+if(NOT LLD_DIR)
+  set(LLD_DIR ${LLVM_LIBRARY_DIR}/cmake/lld)
+endif()
+
 # MLIR
 find_package(MLIR REQUIRED CONFIG PATHS ${MLIR_DIR})
 
@@ -204,7 +208,7 @@ if(TRITON_BUILD_PYTHON_MODULE)
   endif()
   # We always build proton dialect
   list(APPEND TRITON_PLUGIN_NAMES "proton")
-  add_subdirectory(third_party/proton/dialect)
+  add_subdirectory(third_party/proton/Dialect)
 
   get_property(triton_libs GLOBAL PROPERTY TRITON_LIBS)
   get_property(triton_plugins GLOBAL PROPERTY TRITON_PLUGINS)
@@ -330,7 +334,7 @@ if(NOT TRITON_BUILD_PYTHON_MODULE)
   foreach(CODEGEN_BACKEND ${TRITON_CODEGEN_BACKENDS})
     add_subdirectory(third_party/${CODEGEN_BACKEND})
   endforeach()
-  add_subdirectory(third_party/proton/dialect)
+  add_subdirectory(third_party/proton/Dialect)
 endif()
 
 find_package(Threads REQUIRED)

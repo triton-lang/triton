@@ -9,6 +9,18 @@ from triton.tools.tensor_descriptor import TensorDescriptor
 # -----------------------------------------------------------------------------
 
 
+@tl.constexpr_function
+def get_scaled_dot_format_string(dtype: tl.dtype):
+    mapping = {
+        tl.float16: "fp16",
+        tl.bfloat16: "bf16",
+        tl.uint8: "e2m1",
+        tl.float8e4nv: "e4m3",
+        tl.float8e5: "e5m2",
+    }
+    return mapping[dtype]
+
+
 @triton.jit
 def xcd_swizzle(pid, domain_size, XCD_SWIZZLE: tl.constexpr):
     """
@@ -78,17 +90,37 @@ def make_matmul_repr(base_name, order):
 
 
 def matmul_launch_metadata(grid, kernel, args):
+    from ..proton_opts import launch_metadata_allow_sync
+
     ret = dict()
     M, N, K = args["M"], args["N"], args["K"]
     Y, X, W = [t.base if isinstance(t, TensorDescriptor) else t for t in [args["Y"], args["X"], args["W"]]]
+    tokens_per_expt = args.get("TOKENS_PER_EXPT_FOR_ANNOTATION")
     hist = args["ExptHist"]
     if hist is not None:
-        n_tokens = float(hist.sum())
-        n_w_bytes = (W.numel() * W.element_size() // hist.numel()) * (hist > 0).sum()
+        # If annotation is given, use that to generate name for profiling.
+        if tokens_per_expt is not None:
+            n_rows = f"{tokens_per_expt}*"
+        elif launch_metadata_allow_sync():
+            n_rows = int(hist.float().mean())
+        else:
+            n_rows = "unknown"
+
+        if launch_metadata_allow_sync():
+            n_tokens = float(hist.sum())
+            n_w_bytes = (W.numel() * W.element_size() // hist.numel()) * (hist > 0).sum()
+        elif tokens_per_expt is not None:
+            n_tokens = tokens_per_expt * args["N_EXPTS_TOT"]
+            # This may not be totally correct (e.g., we might not be using all experts)
+            # but it's better than nothing.
+            n_w_bytes = W.numel() * W.element_size()
+        else:
+            n_tokens = None
+            n_w_bytes = 0
 
         # If annotation is given, use that to generate name for profiling.
         tokens_per_expt = args.get("TOKENS_PER_EXPT_FOR_ANNOTATION")
-        n_rows = f"{tokens_per_expt}*" if tokens_per_expt is not None else int(hist.float().mean())
+        n_rows = f"{tokens_per_expt}*" if tokens_per_expt is not None else n_rows
     else:
         n_tokens = None
         n_w_bytes = W.numel() * W.element_size()
@@ -101,6 +133,10 @@ def matmul_launch_metadata(grid, kernel, args):
     ep_subtile = args["EPILOGUE_SUBTILE"]
     if ep_subtile is not None and ep_subtile > 1:
         ret["name"] += f" ep/{ep_subtile}"
+
+    if hist is not None and n_tokens is None:
+        return ret  # Don't fill metadata because we can't compute them properly.
+
     fM = M if M is not None else n_tokens
     fK = K if K is not None else n_tokens
     ret[f"flops{nbits}"] = 2.0 * fM * N * fK
@@ -110,12 +146,10 @@ def matmul_launch_metadata(grid, kernel, args):
     n_x_bytes = X.numel() * X.element_size()
     n_y_bytes = Y.numel() * Y.element_size()
     if hist is not None:
-        if not isinstance(args["X"], TensorDescriptor):
-            assert X.shape[0] == Y.shape[0] == 1, "batched mode not supported"
         assert n_tokens is not None
         n_expts_act = args["N_EXPTS_ACT"]
 
-        if gindx is not None:
+        if (gindx is not None) and launch_metadata_allow_sync():
             # recreate inverse GatherIndx.
             dst = torch.full_like(gindx, -1)
             idx = torch.arange(len(gindx), device=gindx.device, dtype=torch.int32)

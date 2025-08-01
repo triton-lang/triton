@@ -15,10 +15,6 @@ public:
 
   llvm::AMDGPU::GPUKind getGPUKind() const;
 
-  bool isCDNA() const;
-
-  bool isRDNA() const;
-
   int getWarpSize() const;
 
   int getSharedMemorySize() const;
@@ -34,16 +30,9 @@ public:
                     std::optional<Value> ctaId, Value val,
                     Value pred) const override;
   Value loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
-                    std::optional<Value> ctaId, Type elemTy,
-                    Value pred) const override;
+                    std::optional<Value> ctaId, Type elemTy, Value pred,
+                    Operation *localLoadOp = nullptr) const override;
   bool canUseLDSTransLoad(int bitwidth) const;
-
-  bool canUseStMatrix(RankedTensorType tensorTy, ArrayRef<unsigned> repShape,
-                      ArrayRef<unsigned> paddedRepShape,
-                      ArrayRef<unsigned> order,
-                      int swizzleByteSize) const override;
-  void storeMatrixShared(RewriterBase &rewriter, Location loc, Value ptr,
-                         Value val) const override;
 
   Value shuffleXor(RewriterBase &rewriter, Location loc, Value val,
                    int i) const override;
@@ -55,7 +44,7 @@ public:
                    Value i) const override;
 
   Value programId(RewriterBase &rewriter, Location loc, ModuleOp moduleOp,
-                  int axis) const override;
+                  ProgramIDDim axis) const override;
 
   bool warpReduce(RewriterBase &rewriter, Location loc, SmallVector<Value> &acc,
                   triton::ReduceOp op, unsigned numLaneToReduce,
@@ -78,10 +67,6 @@ public:
   int getAddressSpace(Attribute addressSpace) const override;
 
   bool supportVectorizedAtomics() const override;
-
-  void localStoreOpAnnotation(triton::gpu::LocalStoreOp op,
-                              size_t localStoreOpCount,
-                              Type type) const override;
 
   bool supportsDirectToLdsLoadBitWidth(int bitWidth) const;
 
