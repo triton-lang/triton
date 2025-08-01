@@ -90,6 +90,7 @@ struct GluonLayouts {
   py::handle BlockedLayout;
   py::handle SliceLayout;
   py::handle DistributedLinearLayout;
+  py::handle DotOperandLayout;
   py::handle NVMMADistributedLayout;
   py::handle NVMMASharedLayout;
   py::handle SwizzledSharedLayout;
@@ -106,6 +107,7 @@ struct GluonLayouts {
     SliceLayout = py::object(layouts.attr("SliceLayout")).release();
     DistributedLinearLayout =
         py::object(layouts.attr("DistributedLinearLayout")).release();
+    DotOperandLayout = py::object(layouts.attr("DotOperandLayout")).release();
     NVMMADistributedLayout =
         py::object(layouts.attr("NVMMADistributedLayout")).release();
     NVMMASharedLayout = py::object(layouts.attr("NVMMASharedLayout")).release();
@@ -163,6 +165,9 @@ py::object layoutToGluon(Attribute layout) {
         ll.getBases().lookup(kReg), ll.getBases().lookup(kLane),
         ll.getBases().lookup(kWarp), ll.getBases().lookup(kBlock),
         toStdVector(ArrayRef(llvm::to_vector(ll.getOutDimSizes()))));
+  } else if (auto dotOp = dyn_cast<ttg::DotOperandEncodingAttr>(layout)) {
+    return layouts.DotOperandLayout(
+        dotOp.getOpIdx(), layoutToGluon(dotOp.getParent()), dotOp.getKWidth());
   } else if (auto mma = dyn_cast<ttg::NvidiaMmaEncodingAttr>(layout)) {
     auto ctaLayout = mma.getCTALayout();
     return layouts.NVMMADistributedLayout(
@@ -281,6 +286,12 @@ void init_gluon_ir(py::module &&m) {
                                         outDims,
                                         /*requiresSurjective=*/true);
              return ttg::LinearEncodingAttr::get(ctx, ll);
+           })
+      .def("get_dot_operand_layout",
+           [](GluonOpBuilder &self, unsigned opIdx, Attribute parent,
+              unsigned kWidth) -> Attribute {
+             return self.getChecked<ttg::DotOperandEncodingAttr>(
+                 self.getContext(), opIdx, parent, kWidth);
            })
       .def("get_mma_layout",
            [](GluonOpBuilder &self, std::vector<unsigned> &version,
