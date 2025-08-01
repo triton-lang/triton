@@ -11,6 +11,7 @@ Triton MLIR Dialects and Ops
    ./TritonGPUDialect.md
    ./ProtonDialect.md
    ./NVGPUDialect.md
+   ./ProtonGPUDialect.md
    ./NVWSDialect.md
    ./TritonDialect.md
    ./TritonInstrumentDialect.md
@@ -23,6 +24,7 @@ Triton MLIR Dialects and Ops
    ./TritonInstrumentOps.md
    ./TritonAMDGPUOps.md
    ./TritonGPUOps.md
+   ./ProtonGPUOps.md
    ./ProtonOps.md
    ./GluonOps.md
    ./TritonOps.md

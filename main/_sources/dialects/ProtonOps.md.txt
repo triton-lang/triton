@@ -2,38 +2,38 @@
 
 ### `proton.record` (triton::proton::RecordOp)
 
-_Record a GPU hardware event_
+_Record an event_
 
 Syntax:
 
 ```
-operation ::= `proton.record` `(` operands `)` attr-dict
+operation ::= `proton.record` (`start` $isStart^):(`end`)? $name attr-dict
 ```
 
-The operator records GPU events from performance counters.
-Currently only cycle counter is supported.
+This operation annotates a region of IR where events are recorded.
+Events can be classified as hardware or software events.
+Hardware events are provided by the hardware performance counters obtained in later passes that convert Triton to target-specific IR.
+Software events are provided by the user or the compiler.
 
 Example:
 
 ```mlir
-proton.record() {isStart = true, regionId = 4 : i32}
+proton.record start "name0"
 ...
-proton.record() {isStart = false, regionId = 4 : i32}
-...
-proton.record() {isStart = true, regionId = 1 : i32, granularity = 1 : i32}
-...
-proton.record() {isStart = false, regionId = 1 : i32, granularity = 1 : i32}
+proton.record end "name0"
 ```
 
-Interfaces: `MemoryEffectOpInterface`
+Scope names cannot be reused within the same function.
+
+Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
+
+Effects: `MemoryEffects::Effect{MemoryEffects::Read on ::mlir::SideEffects::DefaultResource, MemoryEffects::Write on ::mlir::SideEffects::DefaultResource}`
 
 #### Attributes:
 
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
-<tr><td><code>isStart</code></td><td>::mlir::BoolAttr</td><td>bool attribute</td></tr>
-<tr><td><code>regionId</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute whose value is non-negative</td></tr>
-<tr><td><code>metric</code></td><td>::mlir::triton::proton::MetricAttr</td><td>allowed 32-bit signless integer cases: 0</td></tr>
-<tr><td><code>granularity</code></td><td>::mlir::triton::proton::GranularityAttr</td><td>allowed 32-bit signless integer cases: 0, 1</td></tr>
+<tr><td><code>isStart</code></td><td>::mlir::UnitAttr</td><td>unit attribute</td></tr>
+<tr><td><code>name</code></td><td>::mlir::StringAttr</td><td>string attribute</td></tr>
 </table>
 

@@ -901,7 +901,7 @@ Syntax:
 
 ```
 operation ::= `ttng.warp_group_dot` $a`,` $b`,` $c (`,` $useC^)? attr-dict
-              `:` type($a) `*` type($b) `->` type($d)
+              `:` type($a) `*` qualified(type($b)) `->` type($d)
 ```
 
 $d = matrix_multiply($a, $b) + $c. For docs on InputPrecisionAttr, see TT_DotOp
@@ -924,7 +924,7 @@ Interfaces: `DotOpInterface`, `InferTypeOpInterface`, `MemoryEffectOpInterface`
 | Operand | Description |
 | :-----: | ----------- |
 | `a` | TensorOrMemDesc instance |
-| `b` | TensorOrMemDesc instance |
+| `b` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
 | `c` | ranked tensor of floating-point or integer values |
 | `useC` | 1-bit signless integer |
 
