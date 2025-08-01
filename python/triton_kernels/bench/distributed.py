@@ -7,10 +7,20 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Tuple
 
+import triton
+import triton.language as tl
 import triton_kernels
 import triton_kernels.routing
 import triton_kernels.swiglu
-from triton_kernels.routing import RoutingData, GatherIndx, ScatterIndx, compute_expt_data_torch, topk_torch
+from triton_kernels.routing import (
+    RoutingData,
+    GatherIndx,
+    ScatterIndx,
+    compute_expt_data_torch,
+    topk_torch,
+    prune_routing,
+    routing_from_bitmatrix,
+)
 from triton_kernels.topk import topk
 from triton_kernels.matmul_ogs import matmul_ogs, PrecisionConfig, FlexCtx, FnSpecs, FusedActivation
 from triton_kernels.target_info import get_cdna_version, is_hip, is_cuda, cuda_capability_geq
@@ -142,31 +152,19 @@ def all_to_all(input_list: list[torch.Tensor], dim: int = 0) -> list[torch.Tenso
         return input_list
 
 
-def routing_torch(x, logits, n_expts_act, sm_first=False, expt_indx=None, n_rows=None, EP=1, TP=1):
-    _, n_expts_tot = logits.shape
-
-    if n_rows:
-        logits = logits[:n_rows]
-    if sm_first:
-        logits = torch.softmax(logits, dim=-1)
-
-    expt_scal, expt_indx = topk_torch(logits, n_expts_act, expt_indx, has_user_provided_indx=expt_indx is not None)
-    expt_indx = expt_indx.int()
-    if not sm_first:
-        expt_scal = torch.softmax(expt_scal, dim=-1)
-
-    # Sort each token's selections by expert
-    expt_indx, sort_indices = torch.sort(expt_indx, dim=1, stable=True)
-    expt_scal = torch.gather(expt_scal, 1, sort_indices)
-
-    chunk_size = n_expts_tot // EP
-    output_split_sizes = None
-    ep_indx = None
-
+def _apply_parallelism(
+    expt_scal: torch.Tensor,
+    expt_indx: torch.Tensor,
+    x: torch.Tensor,
+    n_expts_tot: int,
+    chunk_size: int,
+    EP: int = 1,
+    TP: int = 1,
+):
     if EP > 1:
         # Distributed Expert Parallelism
-        ep_rank = dist.get_rank() // TP
         ep_indx = expt_indx // chunk_size
+        ep_rank = dist.get_rank() // TP
 
         # Partition tokens by expert parallelism rank
         expt_scal_list = []
@@ -204,6 +202,31 @@ def routing_torch(x, logits, n_expts_act, sm_first=False, expt_indx=None, n_rows
         x = all_gather(x, dim=0)
         expt_scal = all_gather(expt_scal, dim=0)
         expt_indx = all_gather(expt_indx, dim=0)
+
+    return expt_scal, expt_indx, x, output_split_sizes
+
+
+def routing_torch(x, logits, n_expts_act, sm_first=False, expt_indx=None, n_rows=None, EP=1, TP=1):
+    _, n_expts_tot = logits.shape
+
+    if n_rows:
+        logits = logits[:n_rows]
+    if sm_first:
+        logits = torch.softmax(logits, dim=-1)
+
+    expt_scal, expt_indx = topk_torch(logits, n_expts_act, expt_indx, has_user_provided_indx=expt_indx is not None)
+    expt_indx = expt_indx.int()
+    if not sm_first:
+        expt_scal = torch.softmax(expt_scal, dim=-1)
+
+    # Sort each token's selections by expert
+    expt_indx, sort_indices = torch.sort(expt_indx, dim=1, stable=True)
+    expt_scal = torch.gather(expt_scal, 1, sort_indices)
+
+    chunk_size = n_expts_tot // EP
+
+    ep_indx, expt_indx, x, output_split_sizes = _apply_parallelism(expt_scal, expt_indx, x, n_expts_tot, chunk_size,
+                                                                   EP=EP, TP=TP)
 
     # Flatten topk data
     expt_scal = expt_scal.reshape(-1)
@@ -234,84 +257,65 @@ def routing_torch(x, logits, n_expts_act, sm_first=False, expt_indx=None, n_rows
     )
 
 
+@triton.jit
+def pack_bitmatrix(bitmatrix, expt_indx, n_rows, n_cols, BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_K: tl.constexpr,
+                   sentinel: tl.constexpr):
+    """
+    Packs expt_indx into a bitmatrix.
+    """
+    pid_m = tl.program_id(0)
+    pid_n = tl.program_id(1)
+    offsets_m = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
+    offsets_n = pid_n * BLOCK_SIZE_K + tl.arange(0, BLOCK_SIZE_K)
+    offsets = offsets_m[:, None] * n_cols + offsets_n[None, :]
+    mask = (offsets_m < n_rows)[:, None] and (offsets_n < n_cols)[None, :]
+    indices = tl.load(expt_indx + offsets, mask=mask, other=sentinel)
+    div = indices // 32
+    rem = indices % 32
+    iters = tl.cdiv(n_cols, BLOCK_SIZE_K)
+    for i in range(iters):
+        offs = tl.arange(0, BLOCK_SIZE_K // 32) + i * (BLOCK_SIZE_K // 32)
+        x = tl.where(div[:, :, None] == offs[None, None, :], (1 << rem)[:, :, None], 0)
+        y = tl.reduce_or(x, axis=1)
+        bitmatrix_ptrs = bitmatrix + offsets_m[:, None] * iters + offs[None, :]
+        tl.store(bitmatrix_ptrs, y, mask=offsets_m[:, None] < n_rows)
+
+
 def routing_triton(x, logits, n_expts_act, sm_first=False, expt_indx=None, n_rows=None, EP=1, TP=1):
     _, n_expts_tot = logits.shape
 
     if sm_first:
         logits = torch.softmax(logits, dim=-1)
 
-    expt_scal, expt_indx, _ = topk(logits, n_expts_act, apply_softmax=not sm_first, y_indx=expt_indx, n_rows=n_rows)
+    expt_scal, expt_indx, _ = topk(logits, n_expts_act, apply_softmax=not sm_first, y_indx=expt_indx, n_rows=n_rows,
+                                   return_bitmatrix=False)
     expt_indx = expt_indx.int()
 
     chunk_size = n_expts_tot // EP
-    output_split_sizes = None
-    ep_indx = None
 
-    if EP > 1:
-        # Distributed Expert Parallelism
-        ep_rank = dist.get_rank() // TP
-        ep_indx = expt_indx // chunk_size
+    ep_indx, expt_indx, x, output_split_sizes = _apply_parallelism(expt_scal, expt_indx, x, n_expts_tot, chunk_size,
+                                                                   EP=EP, TP=TP)
 
-        # Partition tokens by expert parallelism rank
-        expt_scal_list = []
-        expt_indx_list = []
-        x_list = []
-
-        for i in range(EP):
-            mask = torch.any(ep_indx == i, dim=1)
-            expt_scal_masked = expt_scal[mask]
-            expt_indx_masked = expt_indx[mask]
-            x_masked = x[mask]
-
-            for _ in range(TP):
-                expt_scal_list.append(expt_scal_masked)
-                expt_indx_list.append(expt_indx_masked)
-                x_list.append(x_masked)
-
-        # Exchange data across processes
-        expt_scal_list = all_to_all(expt_scal_list, dim=0)
-        expt_indx_list = all_to_all(expt_indx_list, dim=0)
-        x_list = all_to_all(x_list, dim=0)
-
-        output_split_sizes = [x.size(0) for x in expt_scal_list]
-        expt_scal = torch.cat(expt_scal_list, dim=0)
-        expt_indx = torch.cat(expt_indx_list, dim=0)
-        x = torch.cat(x_list, dim=0)
-
-        # Filter for local experts only
-        mask = (expt_indx // chunk_size) == ep_rank
-        expt_indx -= ep_rank * chunk_size
-        expt_scal = expt_scal.masked_fill(~mask, 0)
-        expt_indx = expt_indx.masked_fill(~mask, n_expts_tot)
-    else:
-        # Distributed Data Parallelism
-        x = all_gather(x, dim=0)
-        expt_scal = all_gather(expt_scal, dim=0)
-        expt_indx = all_gather(expt_indx, dim=0)
-
-    # Flatten topk data
-    expt_scal = expt_scal.reshape(-1)
-    expt_indx = expt_indx.reshape(-1).to(torch.int32)
-
-    # Sort by expert_id for contiguous experts in matmul
-    expt_indx, topk_indx = torch.sort(expt_indx, stable=True)
-    gate_indx = torch.argsort(topk_indx, stable=True)
-
-    mask = expt_indx != n_expts_tot
-    topk_indx[~mask] = -1
-    gate_indx[gate_indx >= mask.sum()] = -1
-    gate_scal = expt_scal[topk_indx]
-    hist = torch.histc(expt_indx[mask], bins=chunk_size, min=0, max=chunk_size - 1)
-
-    # Pack the matmul data structures
-    gather_indx = GatherIndx(src_indx=topk_indx.int(), dst_indx=gate_indx.int())
-    scatter_indx = ScatterIndx(src_indx=gate_indx.int(), dst_indx=topk_indx.int())
-    n_gates = mask.sum().item()
-    expt_data = compute_expt_data_torch(hist, chunk_size, n_gates)
+    # Recover bitmask for local experts
+    n_cols = triton.cdiv(n_expts_tot, 32)
+    n_rows = expt_indx.size(0)
+    bitmask = torch.zeros((n_rows, n_cols), dtype=torch.int32, device=expt_indx.device)
+    pack_bitmatrix[(n_rows, n_cols)](
+        bitmask,
+        expt_indx,
+        n_rows,
+        n_cols,
+        BLOCK_SIZE_M=triton.next_power_of_2(n_rows),
+        BLOCK_SIZE_K=triton.next_power_of_2(n_cols),
+        sentinel=n_cols,
+    )
+    expt_scal, expt_indx, bitmatrix = prune_routing(expt_scal, expt_indx, bitmask, n_expts_tot, EP)
+    routing_data, gather_indx, scatter_indx = routing_from_bitmatrix(bitmatrix, expt_scal, expt_indx, n_expts_tot,
+                                                                     n_expts_act)
 
     return (
         x,
-        RoutingData(gate_scal, hist, chunk_size, n_expts_act, expt_data=expt_data),
+        routing_data,
         gather_indx,
         scatter_indx,
         ReduceScatterMetadata(input_split_sizes=output_split_sizes, ep_indx=ep_indx, EP=EP, TP=TP),
@@ -449,6 +453,44 @@ def test_all_to_all(monkeypatch):
     assert torch.equal(output_list[0], torch.tensor([1, 2], dtype=torch.float32))
     assert torch.equal(output_list[1], torch.tensor([1, 2], dtype=torch.float32))
     assert len(output_list) == 2
+
+
+def test_pack_bitmatrix():
+    # Test parameters
+    n_rows, n_cols = 4, 3
+    BLOCK_SIZE_M, BLOCK_SIZE_K = 4, 4
+    sentinel = 63  # We have experts 0-62, and 63 is a dummy value
+
+    expt_indx = torch.tensor([[0, 33, 63], [31, 32, 33], [5, 10, 15], [0, 63, 62]], dtype=torch.int32, device="cuda")
+    bitmatrix_cols = triton.cdiv(sentinel, 32)
+    bitmatrix = torch.zeros((n_rows, bitmatrix_cols), dtype=torch.int32, device="cuda")
+
+    grid = (triton.cdiv(n_rows, BLOCK_SIZE_M), triton.cdiv(bitmatrix_cols, BLOCK_SIZE_K))
+    pack_bitmatrix[grid](bitmatrix, expt_indx, n_rows, n_cols, BLOCK_SIZE_M=BLOCK_SIZE_M, BLOCK_SIZE_K=BLOCK_SIZE_K,
+                         sentinel=sentinel)
+
+    # Verify bit packing
+    def is_bit_set(row, expert_id):
+        word_idx, bit_idx = expert_id // 32, expert_id % 32
+        return (bitmatrix[row, word_idx] & (1 << bit_idx)) != 0
+
+    def is_bit_not_set(row, skip_expert_ids):
+        for expert_id in skip_expert_ids:
+            if is_bit_set(row, expert_id):
+                return False
+        return True
+
+    # Check specific cases
+    assert is_bit_set(0, 0) and is_bit_set(0, 33) and not is_bit_set(0, 63)  # Token 0
+    assert is_bit_set(1, 31) and is_bit_set(1, 32) and is_bit_set(1, 33)  # Token 1
+    assert is_bit_set(2, 5) and is_bit_set(2, 10) and is_bit_set(2, 15)  # Token 2
+    assert is_bit_set(3, 0) and not is_bit_set(3, 63) and is_bit_set(3, 62)  # Token 3
+
+    # Check unset bits
+    assert is_bit_not_set(0, [1, 2, 3])
+    assert is_bit_not_set(1, [0, 2, 3])
+    assert is_bit_not_set(2, [0, 1, 3])
+    assert is_bit_not_set(3, [0, 1, 2])
 
 
 def gather_ep(rank, world_size, param, TP, EP):
