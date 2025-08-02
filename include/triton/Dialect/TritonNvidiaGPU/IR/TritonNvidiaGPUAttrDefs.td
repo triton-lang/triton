@@ -13,21 +13,21 @@ def TTG_TensorMemorySpace : AttrDef<TritonNvidiaGPU_Dialect, "TensorMemorySpace"
     across TMEM 128 rows.
 
     Blocks are distributed along M dimension first and then N dimension. This is an arbitrary
-    convention that need to be followed operations reading/writing to TMEM.
+    convention that needs to be followed by operations reading/writing to TMEM.
 
-    a tensor <128x128xf32> with blockM = 64 and blockN = 64 will be distributed as follows:
+    a tensor <128x128xf32> with blockM = 64 and blockN = 32 will be distributed as follows:
 
-        \ col    0        1           31       32            64             96           127
-    rows: 0  ( 0,  0) ( 0,  1) ... ( 0, 31)  (64,  0) ...   (0, 64) ...  (64, 64) ...  (64, 96)
+        \ col    0        1            31         32            64            96           127
+    rows: 0  ( 0,  0) ( 0,  1) ... ( 0,  31)  ( 0,  32) ... ( 0,  64) ... ( 0,  96) ... ( 0,  127)
           1
          ...
-          15 (15,  0) (15,  1) ... (15, 31)  (79,  0) ...   (15, 64) ... (79, 64) ...  (79, 96)
-          16 ( 0, 32) ( 0, 33) ... ( 0, 63)  (64, 32) ...   ( 0, 96) ... (64, 96) ...  (64, 127)
+          15 (15,  0) (15,  1) ... (15,  31)  (15,  32) ... (15,  64) ... (15,  96) ... (15,  127)
+          16 (64,  0) (64,  1) ... (64,  31)  (64,  32) ... (64,  64) ... (64,  96) ... (64,  127)
          ...
-          31 (15, 32) (15, 33) ... (15, 63)  (79, 32) ...   (15, 96) ... (79, 96) ...  (79, 127)
-          32 (16,  0) (16,  1) ... (16, 31)  (80,  0) ...   (16, 64) ... (80, 64) ...  (80, 96)
-         ...
-         127 (63, 32) (63, 33) ... (63, 63)  (127, 32) ...  (63, 96) ... (127, 96)...  (127, 127)
+          31 (79,  0) (79,  1) ... (79,  31)  (79,  32) ... (79,  64) ... (79,  96) ... (79,  127)
+          32 (16,  0) (16,  1) ... (16,  31)  (16,  32) ... (16,  64) ... (16,  96) ... (16,  127)
+         ..
+         127 (127, 0) (127, 1) ... (127, 31) (127, 32) ... (127, 64) ... (127, 96) ... (127, 127)
   }];
 }
 
@@ -47,6 +47,7 @@ def TTG_TensorMemoryEncodingAttr : AttrDef<TritonNvidiaGPU_Dialect, "TensorMemor
     DefaultValuedParameter<"unsigned", "1">:$CTASplitM,
     DefaultValuedParameter<"unsigned", "1">:$CTASplitN
   );
+  let genVerifyDecl = 1;
   let assemblyFormat = "`<` struct(params) `>`";
 }
 
