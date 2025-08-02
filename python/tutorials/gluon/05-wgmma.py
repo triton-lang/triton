@@ -182,6 +182,7 @@ def small_mma(A, B, C, D, INSTR_SHAPE_N, LHS_IN_REG=False, num_warps=4):
 @pytest.mark.parametrize("LHS_IN_REG", [False, True])
 @pytest.mark.parametrize("INSTR_SHAPE_N", [16, 64])
 @pytest.mark.parametrize("num_warps", [4, 8])
+@pytest.mark.skipif(not is_hopper(), reason="Requires Hopper")
 def test_small_mma(M, N, K, LHS_IN_REG, INSTR_SHAPE_N, num_warps):
     maxN = max(N // triton.cdiv(num_warps, triton.cdiv(M, 16)), 8)
     if INSTR_SHAPE_N > maxN:
@@ -361,6 +362,7 @@ def blocked_matmul(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B, num_warps):
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(64, 64, 64), (128, 128, 128)])
 @pytest.mark.parametrize("TRANSPOSE_B", [False, True])
 @pytest.mark.parametrize("num_warps", [4, 8])
+@pytest.mark.skipif(not is_hopper(), reason="Requires Hopper")
 def test_blocked_matmul(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B, num_warps):
     A = torch.randn(M, K, device="cuda", dtype=torch.float16)
     B = torch.randn((N, K) if TRANSPOSE_B else (K, N), device="cuda", dtype=torch.float16)
@@ -556,6 +558,7 @@ def blocked_matmul_pipelined(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, num_warps):
 @pytest.mark.parametrize("M, N, K", [(208, 416, 304), (2000, 1000, 2000)])
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(64, 64, 64), (128, 128, 128)])
 @pytest.mark.parametrize("num_warps", [4, 8])
+@pytest.mark.skipif(not is_hopper(), reason="Requires Hopper")
 def test_blocked_matmul_pipelined(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, num_warps):
 
     A = torch.randn(M, K, device="cuda", dtype=torch.float16)
