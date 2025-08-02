@@ -1,5 +1,6 @@
 import pytest
 import torch
+import pathlib
 
 import triton
 
@@ -79,7 +80,7 @@ blocked_layout = [
 @pytest.mark.parametrize("extract_layout", extract_layout)
 @pytest.mark.parametrize("blocked_layout", blocked_layout)
 def test_extract_slice(dtype, M, N, M_tile_size, N_tile_size, M_tile_offset, N_tile_offset, blocked_layout,
-                       extract_layout, device='cuda'):
+                       extract_layout, device, tmp_path: pathlib.Path):
     if not is_hip():
         pytest.skip("extract_slice is AMD specific instruction.")
 
@@ -120,14 +121,13 @@ def test_extract_slice(dtype, M, N, M_tile_size, N_tile_size, M_tile_offset, N_t
     }}
     }}
     """
-    x = torch.randn((M, N), device=device, dtype=torch.float16)
-    import tempfile
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
-        f.write(ir)
-        f.flush()
-        kernel = triton.compile(f.name)
+    x = torch.randn((M, N), device=device, dtype=dtype)
 
-    extract_slice = torch.empty((M_tile_size, N_tile_size), device=device, dtype=torch.float16)
+    temp_file = tmp_path / "test_extract_slice.ttgir"
+    temp_file.write_text(ir)
+    kernel = triton.compile(str(temp_file))
+
+    extract_slice = torch.empty((M_tile_size, N_tile_size), device=device, dtype=dtype)
 
     kernel[(1, 1, 1)](x.data_ptr(), extract_slice)
     test_result = torch.equal(x[M_tile_offset:M_tile_size + M_tile_offset, N_tile_offset:N_tile_offset + N_tile_size],
@@ -168,7 +168,7 @@ dst_layout = [
     [[src_layout[0], dst_layout[0], 128, 128, 256, 256], [src_layout[1], dst_layout[1], 32, 32, 64, 64],
      [broadcasted_32x32, blocked_32x32, 32, 32, 64, 64], [blocked_32x32, broadcasted_32x32, 32, 32, 64, 64]])
 @pytest.mark.parametrize("dtype", [torch.float16])
-def test_concat_op(dtype, M, N, M_tile_size, N_tile_size, src_layout, dst_layout, device='cuda'):
+def test_concat_op(dtype, M, N, M_tile_size, N_tile_size, src_layout, dst_layout, device, tmp_path: pathlib.Path):
     if not is_hip():
         pytest.skip("concat op is AMD specific instruction.")
 
@@ -224,18 +224,16 @@ def test_concat_op(dtype, M, N, M_tile_size, N_tile_size, src_layout, dst_layout
     }}
     }}
     """
-    x1 = torch.randn((M, N), device=device, dtype=torch.float16)
-    x2 = torch.randn((M, N), device=device, dtype=torch.float16)
-    x3 = torch.randn((M, N), device=device, dtype=torch.float16)
-    x4 = torch.randn((M, N), device=device, dtype=torch.float16)
+    x1 = torch.randn((M, N), device=device, dtype=dtype)
+    x2 = torch.randn((M, N), device=device, dtype=dtype)
+    x3 = torch.randn((M, N), device=device, dtype=dtype)
+    x4 = torch.randn((M, N), device=device, dtype=dtype)
 
-    import tempfile
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
-        f.write(ir)
-        f.flush()
-        kernel = triton.compile(f.name)
+    temp_file = tmp_path / "test_concat_op.ttgir"
+    temp_file.write_text(ir)
+    kernel = triton.compile(str(temp_file))
 
-    concat = torch.empty((M_tile_size, N_tile_size), device=device, dtype=torch.float16)
+    concat = torch.empty((M_tile_size, N_tile_size), device=device, dtype=dtype)
     kernel[(1, 1, 1)](x1.data_ptr(), x2.data_ptr(), x3.data_ptr(), x4.data_ptr(), concat)
 
     top = torch.cat([x1, x2], dim=1)

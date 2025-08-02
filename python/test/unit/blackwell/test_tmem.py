@@ -1,6 +1,6 @@
 import pytest
 import torch
-import tempfile
+import pathlib
 
 import triton
 from triton.backends.compiler import GPUTarget
@@ -18,7 +18,7 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
 
 
 @pytest.mark.skipif(torch.cuda.get_device_capability()[0] != 10, reason="Requires compute capability == 10")
-def test_tmem_copy_2d():
+def test_tmem_copy_2d(tmp_path: pathlib.Path):
     device = "cuda"
 
     smem_h = 256
@@ -82,10 +82,10 @@ ttng.wait_barrier %93, %c0_i32 : !ttg.memdesc<1xi64, #shared1, #ttg.shared_memor
     }
     }
     """
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
-        f.write(ir)
-        f.flush()
-        kernel = triton.compile(f.name, target=GPUTarget("cuda", 100, 32))
+
+    temp_file = tmp_path / "test_tmem_copy_2d.ttgir"
+    temp_file.write_text(ir)
+    kernel = triton.compile(str(temp_file), target=GPUTarget("cuda", 100, 32))
 
     x = torch.randint(size=(smem_h, 4), low=-100, high=100, dtype=torch.int32).to(device)
     z_tri = torch.zeros(size=(128, num_cols), dtype=torch.int32).to(device)
