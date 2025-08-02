@@ -1416,13 +1416,20 @@ def amd_mfma_layout_kernel():
                                                                  elem_type=ttgl.float64, ctas_per_cga=[1, 1],
                                                                  cta_split_num=[1, 1], cta_order=[1, 0])
 
+    mfma_layout_int32: ttgl.constexpr = amd_layouts.AMDMFMALayout(version=3, instr_shape=[16, 16], transposed=True,
+                                                                  warps_per_cta=[4, 1], tiles_per_warp=[4, 1],
+                                                                  elem_type=ttgl.int32, ctas_per_cga=[1, 1],
+                                                                  cta_split_num=[1, 1], cta_order=[1, 0])
+
     layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 64], [4, 1], [1, 0])
 
     x_fp32 = ttgl.full([128, 32], 0, ttgl.float32, layout)
     x_fp64 = ttgl.full([128, 32], 0, ttgl.float64, layout)
+    x_int32 = ttgl.full([128, 32], 0, ttgl.int32, layout)
 
     ttgl.convert_layout(x_fp32, mfma_layout_fp32)
     ttgl.convert_layout(x_fp64, mfma_layout_fp64)
+    ttgl.convert_layout(x_int32, mfma_layout_int32)
 
 
 @pytest.mark.parametrize("target", [HIP_TARGET_CDNA3, HIP_TARGET_CDNA4])
@@ -1434,14 +1441,18 @@ def test_amd_mfma_layout(target):
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 64], warpsPerCTA = [4, 1], order = [1, 0]}>
 #mma = #ttg.amd_mfma<{version = 3, warpsPerCTA = [4, 1], tilesPerWarp = [4, 1], instrShape = [32, 32], isTransposed = true}>
 #mma1 = #ttg.amd_mfma<{version = 3, warpsPerCTA = [4, 1], tilesPerWarp = [4, 1], instrShape = [16, 16], isTransposed = true, elementType = f64}>
+#mma2 = #ttg.amd_mfma<{version = 3, warpsPerCTA = [4, 1], tilesPerWarp = [4, 1], instrShape = [16, 16], isTransposed = true, elementType = i32}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 64 : i32} {
   tt.func public @amd_mfma_layout_kernel() attributes {noinline = false} {
     %cst = arith.constant 0.000000e+00 : f32
     %cst_0 = arith.constant dense<0.000000e+00> : tensor<128x32xf32, #blocked>
     %cst_1 = arith.constant 0.000000e+00 : f64
     %cst_2 = arith.constant dense<0.000000e+00> : tensor<128x32xf64, #blocked>
+    %c0_i32 = arith.constant 0 : i32
+    %cst_3 = arith.constant dense<0> : tensor<128x32xi32, #blocked>
     %0 = ttg.convert_layout %cst_0 : tensor<128x32xf32, #blocked> -> tensor<128x32xf32, #mma>
     %1 = ttg.convert_layout %cst_2 : tensor<128x32xf64, #blocked> -> tensor<128x32xf64, #mma1>
+    %2 = ttg.convert_layout %cst_3 : tensor<128x32xi32, #blocked> -> tensor<128x32xi32, #mma2>
     tt.return
   }
 }
@@ -1456,8 +1467,9 @@ def add_fp(a, b):
 @gluon.jit
 def infer_layout_for_amd_mfma_kernel():
     layout: ttgl.constexpr = amd_layouts.AMDMFMALayout(version=3, instr_shape=[32, 32], transposed=True,
-                                                       warps_per_cta=[4, 1], tiles_per_warp=[4, 1], ctas_per_cga=[1, 1],
-                                                       cta_split_num=[1, 1], cta_order=[1, 0])
+                                                       elem_type=ttgl.int32, warps_per_cta=[4,
+                                                                                            1], tiles_per_warp=[4, 1],
+                                                       ctas_per_cga=[1, 1], cta_split_num=[1, 1], cta_order=[1, 0])
     a = ttgl.full([128, 32], 1.0, ttgl.float32, layout)
     b = ttgl.reduce(a, 1, add_fp)
     ttgl.static_assert(b.type.layout == ttgl.SliceLayout(1, layout))
@@ -1468,7 +1480,7 @@ def test_infer_layout_for_amd_mfma(target):
     module = run_parser(infer_layout_for_amd_mfma_kernel, target=target)
     expecttest.assert_expected_inline(
         anonymize_ir(module.str_nodebug()), """\
-#mma = #ttg.amd_mfma<{version = 3, warpsPerCTA = [4, 1], tilesPerWarp = [4, 1], instrShape = [32, 32], isTransposed = true}>
+#mma = #ttg.amd_mfma<{version = 3, warpsPerCTA = [4, 1], tilesPerWarp = [4, 1], instrShape = [32, 32], isTransposed = true, elementType = i32}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 64 : i32} {
   tt.func public @infer_layout_for_amd_mfma_kernel() attributes {noinline = false} {
     %cst = arith.constant 1.000000e+00 : f32
