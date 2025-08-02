@@ -23,6 +23,7 @@ from triton_kernels.routing import (
 )
 from triton_kernels.topk import topk
 from triton_kernels.matmul_ogs import matmul_ogs, PrecisionConfig, FlexCtx, FnSpecs, FusedActivation
+from triton_kernels.routing_details._routing_compute import _routing_clear_bitmatrix
 from triton_kernels.target_info import get_cdna_version, is_hip, is_cuda, cuda_capability_geq
 from triton_kernels.tensor_details import layout
 
@@ -464,17 +465,25 @@ def test_pack_bitmatrix():
     n_rows, n_cols = 4, 3
     sentinel = 63  # We have experts 0-62, and 63 is a dummy value
 
-    expt_indx = torch.tensor([[0, 33, 63], [31, 32, 33], [5, 10, 15], [0, 63, 62]], dtype=torch.int32, device="cuda")
+    expt_indx = torch.tensor([[0, 33, 63], [31, 32, 33], [5, 10, 15], [0, 62, 63]], dtype=torch.int32, device="cuda")
     bitmatrix_cols = triton.cdiv(sentinel, 32)
     bitmatrix = torch.zeros((n_rows, bitmatrix_cols), dtype=torch.int32, device="cuda")
 
     BLOCK_SIZE_M = 128
     BLOCK_SIZE_K = max(triton.next_power_of_2(n_cols), 32)
-    sentinel = triton.cdiv(sentinel, BLOCK_SIZE_K) * BLOCK_SIZE_K  # Adjust sentinel to be a multiple of BLOCK_SIZE_K
     grid = (triton.cdiv(n_rows, BLOCK_SIZE_M), triton.cdiv(bitmatrix_cols, BLOCK_SIZE_K))
 
     pack_bitmatrix[grid](bitmatrix, expt_indx, n_rows, n_cols, BLOCK_SIZE_M=BLOCK_SIZE_M, BLOCK_SIZE_K=BLOCK_SIZE_K,
                          sentinel=sentinel)
+    # prune the bitmatrix to remove dummy values
+    _routing_clear_bitmatrix[(n_rows, )](
+        bitmatrix,
+        bitmatrix.stride(0),
+        bitmatrix.stride(1),
+        bitmatrix.shape[1],
+        sentinel,
+        BLOCK_N=128,
+    )
 
     # Verify bit packing
     def is_bit_set(row, expert_id):
