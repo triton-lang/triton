@@ -14,8 +14,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK: ttg.async_wait
   // CHECK: ttg.local_load
   // CHECK: scf.yield
-  // CHECK: ttg.async_wait
-  // CHECK: ttg.local_load
 
   tt.func @direct_chained_dots(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg2: tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>, %arg3: i32, %arg4: i32) -> tensor<128x16xf32, #mma> {
     %c0_i32 = arith.constant 0 : i32

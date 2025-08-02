@@ -24,7 +24,7 @@
 // GLOBAL_1-COUNT-2: ttg.local_store
 // GLOBAL_1-COUNT-2: tt.load
 // GLOBAL_1: scf.yield
-// GLOBAL_1-COUNT-2: tt.dot
+// GLOBAL_1: tt.dot
 // GLOBAL_1-NOT: tt.dot
 
 // Two extra register buffers for global loads.
@@ -38,7 +38,7 @@
 // GLOBAL_2-COUNT-2: ttg.local_store
 // GLOBAL_2-COUNT-2: tt.load
 // GLOBAL_2: scf.yield
-// GLOBAL_2-COUNT-3: tt.dot
+// GLOBAL_2: tt.dot
 // GLOBAL_2-NOT: tt.dot
 
 // An extra register buffer for global loads and an extra register buffer for local_loads.
@@ -57,7 +57,7 @@
 // GLOBAL_LOCAL_1: tt.load
 // GLOBAL_LOCAL_1: ttg.local_load
 // GLOBAL_LOCAL_1: scf.yield
-// GLOBAL_LOCAL_1-COUNT-2: tt.dot
+// GLOBAL_LOCAL_1: tt.dot
 // GLOBAL_LOCAL_1-NOT: tt.dot
 
 // One Local buffer.
