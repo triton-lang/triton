@@ -320,7 +320,7 @@ void init_triton_llvm(py::module &&m) {
         ModuleAnalysisManager mam;
 
         if (arch.empty()) {
-          llvm::TargetLibraryInfoImpl TLII;
+          llvm::TargetLibraryInfoImpl TLII(mod->getTargetTriple());
           TLII.disableAllFunctions();
           fam.registerPass([TLII = std::move(TLII)] {
             return llvm::TargetLibraryAnalysis(TLII);
