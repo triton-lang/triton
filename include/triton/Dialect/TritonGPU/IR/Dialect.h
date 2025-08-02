@@ -211,16 +211,6 @@ SmallVector<unsigned> getCTASplitNum(Attribute layout);
 
 SmallVector<unsigned> getCTAOrder(Attribute layout);
 
-/* The difference between ShapePerCTATile and ShapePerCTA:
- * (1) ShapePerCTATile is defined by SizePerThread * ThreadsPerWarp *
- *     WarpsPerCTA in each dimension and is independent from the tensor shape.
- * (2) ShapePerCTA is defined by shape / CTASplitNum in each dimension.
- * (3) In the implementation of emitIndices, ShapePerCTATile will
- *     be replicated or wrapped to fit ShapePerCTA.
- */
-// [FIXME LL] Kill this function
-SmallVector<unsigned> getShapePerCTATile(RankedTensorType layout);
-
 // Returns the "logical" shape per CTA.
 // When shape and CTASplitNum have different number of dimensions, we assume
 // only the last N between common dimensions are split.
