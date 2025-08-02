@@ -462,7 +462,6 @@ def test_all_to_all(monkeypatch):
 def test_pack_bitmatrix():
     # Test parameters
     n_rows, n_cols = 4, 3
-    BLOCK_SIZE_M, BLOCK_SIZE_K = 4, 4
     sentinel = 63  # We have experts 0-62, and 63 is a dummy value
 
     expt_indx = torch.tensor([[0, 33, 63], [31, 32, 33], [5, 10, 15], [0, 63, 62]], dtype=torch.int32, device="cuda")
@@ -471,6 +470,7 @@ def test_pack_bitmatrix():
 
     BLOCK_SIZE_M = 128
     BLOCK_SIZE_K = max(triton.next_power_of_2(n_cols), 32)
+    sentinel = triton.cdiv(sentinel, BLOCK_SIZE_K) * BLOCK_SIZE_K  # Adjust sentinel to be a multiple of BLOCK_SIZE_K
     grid = (triton.cdiv(n_rows, BLOCK_SIZE_M), triton.cdiv(bitmatrix_cols, BLOCK_SIZE_K))
 
     pack_bitmatrix[grid](bitmatrix, expt_indx, n_rows, n_cols, BLOCK_SIZE_M=BLOCK_SIZE_M, BLOCK_SIZE_K=BLOCK_SIZE_K,
