@@ -40,7 +40,7 @@ def _matmul_ogs(
              WScale,
              WMxScale, stride_w_mx_e, stride_w_mx_k, stride_w_mx_n,
              B, stride_b_e, # Bias
-             NRows, M, N, K, # shapes
+             M, N, K, # shapes
              # expt data
              Betas, Gammas,
              GatherIndx,
@@ -361,7 +361,7 @@ def _matmul_ogs(
     YPtrs = Y + offs_y_m.to(index_type)[:, None] * stride_y_m + offs_y_n.to(index_type)[None, :] * stride_y_n
     mask = mask_m[:, None] & mask_n[None, :]
     if is_out_microscaled:
-        MX_SCALE_BLOCK_N: tl.constexpr = BLOCK_N // MXFP_BLOCK_SIZE
+        MX_SCALE_BLOCK_N: tl.constexpr = OUT_BLOCK_N // MXFP_BLOCK_SIZE
         N_MX_BLOCK: tl.constexpr = tl.cdiv(N, MXFP_BLOCK_SIZE)
         tl.static_assert(EPILOGUE_FN is not None)
         out, out_scale = EPILOGUE_FN(out, mask, *epilogue_fn_args)
@@ -373,7 +373,7 @@ def _matmul_ogs(
             YActualScale += start_m * stride_y_mx_m
             YActualScalePtrs = YActualScale + offs_y_m.to(index_type)[:, None] * stride_y_mx_m + offs_y_n_scale.to(index_type)[None, :] * stride_y_mx_n
         else:
-            YActualScalePtrs = YActualScale + (offs_y_m - NRows).to(index_type)[:, None] * stride_y_mx_m + offs_y_n_scale.to(index_type)[None, :] * stride_y_mx_n
+            YActualScalePtrs = YActualScale + (offs_y_m - num_idxs // N_EXPTS_ACT).to(index_type)[:, None] * stride_y_mx_m + offs_y_n_scale.to(index_type)[None, :] * stride_y_mx_n
         tl.store(YActualScalePtrs, out_scale, mask=mask_m[:, None] & mask_n_scale[None, :])
     else:
         out = float_to_flex(out, YExpectedScale, YActualScale, YChecksumScale, mask, Y, FLEXPOINT_SATURATE_INF)
