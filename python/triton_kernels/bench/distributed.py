@@ -301,7 +301,7 @@ def routing_triton(x, logits, n_expts_act, sm_first=False, expt_indx=None, n_row
     n_rows = expt_indx.size(0)
     bitmask = torch.zeros((n_rows, n_cols), dtype=torch.int32, device=expt_indx.device)
     BLOCK_SIZE_M = 128
-    BLOCK_SIZE_K = min(triton.next_power_of_2(n_cols), 512)
+    BLOCK_SIZE_K = max(triton.next_power_of_2(n_cols), 32)
 
     def grid():
         return (triton.cdiv(n_rows, BLOCK_SIZE_M), triton.cdiv(n_cols, BLOCK_SIZE_K))
