@@ -4,10 +4,10 @@
 
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Types.h"
+#include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Gluon/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
-#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Types.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Tools/LayoutUtils.h"
@@ -602,13 +602,36 @@ void init_gluon_ir(py::module &&m) {
            [](GluonOpBuilder &self, int numPartitions) -> Operation * {
              return self.create<ttg::WarpSpecializePartitionsOp>(numPartitions);
            })
-      .def("create_warp_specialize", [](GluonOpBuilder &self,
-                                        std::vector<Type> &resultTypes,
-                                        std::vector<Value> &explicitCaptures,
-                                        std::vector<int> &partitionNumWarps) {
-        return self.create<ttg::WarpSpecializeOp>(resultTypes, explicitCaptures,
-                                                  partitionNumWarps);
-      });
+      .def("create_warp_specialize",
+           [](GluonOpBuilder &self, std::vector<Type> &resultTypes,
+              std::vector<Value> &explicitCaptures,
+              std::vector<int> &partitionNumWarps) {
+             return self.create<ttg::WarpSpecializeOp>(
+                 resultTypes, explicitCaptures, partitionNumWarps);
+           })
+      .def("create_buffer_load",
+           [](GluonOpBuilder &self, Type resultType, Value &ptr, Value &offsets,
+              mlir::triton::CacheModifier cache, Value &mask,
+              Value &other) -> Value {
+             /*stride is set to 1 for now and it might be removed in the
+              * future*/
+             auto stride = self.create<arith::ConstantIntOp>(
+                 1, self.getBuilder().getI32Type());
+
+             return self.create<triton::amdgpu::BufferLoadOp>(
+                 resultType, ptr, offsets, stride, cache, mask, other);
+           })
+      .def("create_buffer_store",
+           [](GluonOpBuilder &self, Value &storedValue, Value &ptr,
+              Value &offsets, mlir::triton::CacheModifier cache, Value &mask) {
+             /*stride is set to 1 for now and it might be removed in the
+              * future*/
+             auto stride = self.create<arith::ConstantIntOp>(
+                 1, self.getBuilder().getI32Type());
+
+             self.create<triton::amdgpu::BufferStoreOp>(
+                 storedValue, ptr, offsets, stride, cache, mask);
+           });
 
   py::class_<ttg::WarpSpecializeOp, OpState>(m, "WarpSpecializeOp",
                                              py::module_local())
