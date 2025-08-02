@@ -108,9 +108,16 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
     if (shape != allocShape) {
       return emitError() << "shape must be equal to allocShape";
     }
+    auto bitwidth = elementType.getIntOrFloatBitWidth();
+    if (!enc.getUnpacked() && bitwidth != 16) {
+      return emitError() << "bitwidth must be 16 for packed tensor memory";
+    }
+    if (bitwidth != 16 && bitwidth != 32) {
+      return emitError() << "bitwidth must be 16 or 32";
+    }
     if (shape[0] < enc.getBlockM() * enc.getCTASplitM() ||
-        shape[1] < enc.getBlockN() * enc.getCTASplitN() *
-                       (enc.getUnpacked() ? 1 : 2)) {
+        shape[1] / (32 / bitwidth) < enc.getBlockN() * enc.getCTASplitN() *
+                                         (enc.getUnpacked() ? 1 : 2)) {
       return emitError() << "shape must be at least "
                          << enc.getBlockM() * enc.getCTASplitM() << "x"
                          << enc.getBlockN() * enc.getCTASplitN() *
@@ -126,6 +133,15 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
     }
   } else if (auto enc = dyn_cast<SharedEncodingTrait>(encoding)) {
     // TODO Add verifier
+  } else if (auto enc = dyn_cast<nvidia_gpu::TensorMemoryScalesEncodingAttr>(
+                 encoding)) {
+    if (memorySpace != nvidia_gpu::TensorMemorySpaceAttr::get(ctx)) {
+      return emitError() << "memorySpace must be TensorMemorySpace";
+    }
+    if (shape.size() != 2) {
+      return emitError() << "shape must be a 2-element array";
+    }
+    // TODO Add rest of verifier
   } else {
     return emitError() << "unsupported encoding";
   }
