@@ -199,6 +199,8 @@ def test_small_mma(M, N, K, LHS_IN_REG, INSTR_SHAPE_N, num_warps):
 # Let's study the performance impact of our knobs on WGMMA.
 
 if __name__ == "__main__":
+    print("Benchmarking WGMMA")
+    print("==================")
     M, N, K = 64, 128, 128
     num_warps = 4
     A = torch.randn(M, K, device="cuda", dtype=torch.float16)
@@ -211,6 +213,7 @@ if __name__ == "__main__":
         fn = lambda: small_mma(A, B, C, D, INSTR_SHAPE_N, LHS_IN_REG, num_warps)
         ms = triton.testing.do_bench(fn)
         print(f"{LHS_IN_REG!s:>10} {INSTR_SHAPE_N:>13} {ms*1000:>9.2f}")
+    print()
 
 # %%
 # ```
@@ -267,9 +270,14 @@ def get_instr_shape_n(BLOCK_M, BLOCK_N, num_warps):
     return n
 
 
+@gl.constexpr_function
+def int_log2(x):
+    return x.bit_length() - 1
+
+
 @gluon.jit
 def blocked_mma_kernel(a_desc, b_desc, c_desc,  #
-                       TRANSPOSE_B: gl.constexpr, num_warps: gl.constexpr):
+                       TRANSPOSE_B: gl.constexpr, EPILOGUE_SUBTILE_FACTOR: gl.constexpr, num_warps: gl.constexpr):
     BLOCK_M: gl.constexpr = c_desc.block_type.shape[0]
     BLOCK_N: gl.constexpr = c_desc.block_type.shape[1]
     BLOCK_K: gl.constexpr = a_desc.block_type.shape[1]
@@ -326,14 +334,47 @@ def blocked_mma_kernel(a_desc, b_desc, c_desc,  #
     mbarrier.invalidate(bar)
 
     # Store tile of C.
-    c_smem = gl.allocate_shared_memory(c_desc.dtype, c_desc.block_type.shape, c_desc.layout)
-    c_smem.store(acc)
-    fence_async_shared()
-    tma.async_copy_shared_to_global(c_desc, [off_m, off_n], c_smem)
-    tma.store_wait(pendings=0)
+    if EPILOGUE_SUBTILE_FACTOR == 1:
+        c_smem = gl.allocate_shared_memory(c_desc.dtype, c_desc.block_type.shape, c_desc.layout)
+        c_smem.store(acc)
+        fence_async_shared()
+        tma.async_copy_shared_to_global(c_desc, [off_m, off_n], c_smem)
+        tma.store_wait(pendings=0)
+    else:
+        # Epilogue subtiling is a technique to reduce shared memory usage by
+        # splitting up the TMA store of the accumulator. We subtile by
+        # EPILOGUE_SUBTILE_FACTOR along N. However, there are restrictions to
+        # subtiling:
+        #
+        # - Swizzled shared memory can only be split down to the swizzle tile.
+        #   This depends on the shared memory layout.
+        # - We can only split along the contiguous dimension, otherwise we can't
+        #   store the tiles correctly.
+        # - There must be at least EPILOGUE_SUBTILE_FACTOR contiguous elements
+        #   per thread along N in the register layout.
+        contig_dim_size: gl.constexpr = c_desc.type.layout.swizzle_byte_width * 8 / c_desc.dtype.primitive_bitwidth
+        TILE_SIZE_N: gl.constexpr = BLOCK_N // EPILOGUE_SUBTILE_FACTOR
+        gl.static_assert(TILE_SIZE_N >= contig_dim_size, "C descriptor layout cannot be subtiled this much")
+
+        # Split the accumulator into subtiles.
+        cs = (acc, )
+        for i in gl.static_range(int_log2(EPILOGUE_SUBTILE_FACTOR)):
+            next_cs = ()
+            for j in gl.static_range(len(cs)):
+                c = cs[j]
+                next_cs += cs[j].reshape([c.shape[0], 2, c.shape[1] // 2]).permute(0, 2, 1).split()
+            cs = next_cs
+
+        # Store each subtile sequentially.
+        c_subtile_smem = gl.allocate_shared_memory(c_desc.dtype, [BLOCK_M, TILE_SIZE_N], c_desc.layout)
+        for i in gl.static_range(len(cs)):
+            c_subtile_smem.store(cs[i])
+            fence_async_shared()
+            tma.async_copy_shared_to_global(c_desc, [off_m, off_n + i * TILE_SIZE_N], c_subtile_smem)
+            tma.store_wait(pendings=0)
 
 
-def blocked_mma(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B, num_warps):
+def blocked_mma(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B, EPILOGUE_SUBTILE_FACTOR, num_warps):
     M, N = C.shape
 
     a_layout = gl.NVMMASharedLayout.get_default_for([BLOCK_M, BLOCK_K], gl.float16)
@@ -343,23 +384,128 @@ def blocked_mma(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B, num_warps):
     b_layout = gl.NVMMASharedLayout.get_default_for(B_BLOCK_SHAPE, gl.float16)
     b_desc = TensorDescriptor(B, B.shape, B.stride(), B_BLOCK_SHAPE, b_layout)
 
-    c_layout = gl.NVMMASharedLayout.get_default_for([BLOCK_M, BLOCK_N], gl.float32)
+    c_layout = gl.NVMMASharedLayout.get_default_for([BLOCK_M, BLOCK_N // EPILOGUE_SUBTILE_FACTOR], gl.float32)
     c_desc = TensorDescriptor(C, C.shape, C.stride(), [BLOCK_M, BLOCK_N], c_layout)
 
     grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
-    blocked_mma_kernel[grid](a_desc, b_desc, c_desc, TRANSPOSE_B, num_warps=num_warps)
+    blocked_mma_kernel[grid](a_desc, b_desc, c_desc, TRANSPOSE_B, EPILOGUE_SUBTILE_FACTOR, num_warps=num_warps)
 
 
 @pytest.mark.parametrize("M, N, K", [(208, 416, 304), (2000, 1000, 2000)])
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(64, 64, 64), (128, 128, 128)])
 @pytest.mark.parametrize("TRANSPOSE_B", [False, True])
+@pytest.mark.parametrize("EPILOGUE_SUBTILE_FACTOR", [1, 2, 4])
 @pytest.mark.parametrize("num_warps", [4, 8])
-def test_blocked_mma(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B, num_warps):
+def test_blocked_mma(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B, EPILOGUE_SUBTILE_FACTOR, num_warps):
+    if BLOCK_N < 128 and num_warps == 8 and EPILOGUE_SUBTILE_FACTOR > 1:
+        pytest.skip("not enough elements per thread along N to subtile")
+
     A = torch.randn(M, K, device="cuda", dtype=torch.float16)
     B = torch.randn((N, K) if TRANSPOSE_B else (K, N), device="cuda", dtype=torch.float16)
     C = torch.empty(M, N, device="cuda", dtype=torch.float32)
 
-    blocked_mma(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B, num_warps)
+    blocked_mma(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B, EPILOGUE_SUBTILE_FACTOR, num_warps)
 
     C_ref = A @ (B.T if TRANSPOSE_B else B)
     torch.testing.assert_close(C_ref.to(torch.float32), C, rtol=1e-3, atol=1e-1)
+
+
+# %%
+# We can benchmark this kernel as a baseline, but we need to pick the best block
+# sizes. Rather than autotuning over all possibilities, we can apply some
+# principles to narrow down the search space.
+#
+# We should try to pick the largest `n` for the WGMMA layout. Based on the
+# formula for `maxN` this requires `BLOCK_N>=256`. Because our kernel does not
+# overlap the TMA loads with WGMMA, we will need at least 2 occupancy so SMs
+# have work to switch to while waiting.
+#
+# Based on register and smem constraints, we can filter configs for the desired
+# occupancy. Keep in mind that these are rules of thumb. It's hard to know for
+# sure if these lead to the best block sizes.
+
+
+def find_configs(occupancy, in_dtype, acc_dtype):
+    in_dtype_bytes = torch.tensor([], dtype=in_dtype).element_size()
+    acc_dtype_bytes = torch.tensor([], dtype=acc_dtype).element_size()
+
+    # Assume ~1 KB of smem used by mbarriers, compiler-generated code, etc.
+    smem = 228 * 1024 // occupancy - 1024
+
+    configs = []
+    for BLOCK_M, BLOCK_N, BLOCK_K, num_warps, EPILOGUE_SUBTILE_FACTOR in itertools.product([64, 128, 256],
+                                                                                           [64, 128, 256],
+                                                                                           [64, 128, 256], [4, 8],
+                                                                                           [1, 2, 4]):
+        # Assume ~16 regs per thread of baseline usage.
+        regs = 64 * 1024 // occupancy - 16 * num_warps * 32
+
+        a_smem = BLOCK_M * BLOCK_K * in_dtype_bytes
+        b_smem = BLOCK_N * BLOCK_K * in_dtype_bytes
+        acc_smem = BLOCK_M * BLOCK_N * acc_dtype_bytes // EPILOGUE_SUBTILE_FACTOR
+        # SMEM for A and B does not coexist with C.
+        if max(a_smem + b_smem, acc_smem) > smem:
+            continue
+
+        # The accumulator is the only in-memory tensor.
+        acc_regs = BLOCK_M * BLOCK_N * acc_dtype_bytes // 4
+        # Max regs per thread is 256. Being near this can also cause spills.
+        if acc_regs // num_warps // 32 >= 256:
+            continue
+        if acc_regs > regs:
+            continue
+
+        instr_shape_n = get_instr_shape_n(BLOCK_M, BLOCK_N, num_warps).value
+        configs.append((BLOCK_M, BLOCK_N, BLOCK_K, num_warps, EPILOGUE_SUBTILE_FACTOR, instr_shape_n))
+
+    def filter_configs(configs, instr_shape_n):
+        max_n_configs = [cfg for cfg in configs if cfg[5] == instr_shape_n]
+
+        # Filter for configs with the largest BLOCK_M * BLOCK_K.
+        max_block_mk = max(cfg[0] * cfg[2] for cfg in max_n_configs)
+        final_configs = [cfg for cfg in max_n_configs if cfg[0] * cfg[2] == max_block_mk]
+
+        # Remove identical configs except for larger EPILOGUE_SUBTILE_FACTOR.
+        grouped = {}
+        for cfg in final_configs:
+            key = (cfg[0], cfg[1], cfg[2], cfg[3], cfg[5])
+            if key not in grouped or cfg[4] < grouped[key][4]:
+                grouped[key] = cfg
+        final_configs = list(grouped.values())
+
+        return final_configs
+
+    top_instr_shape_n = sorted({cfg[5] for cfg in configs}, reverse=True)
+    result_configs = filter_configs(configs, top_instr_shape_n[0])
+    if len(top_instr_shape_n) > 1:
+        result_configs += filter_configs(configs, top_instr_shape_n[1])
+    return result_configs
+
+
+if __name__ == "__main__":
+    print("Finding possible configs")
+    print("========================")
+    # Just in case, check occupancy 1 configs.
+    configs = find_configs(occupancy=1, in_dtype=torch.float16, acc_dtype=torch.float32)
+    configs += find_configs(occupancy=2, in_dtype=torch.float16, acc_dtype=torch.float32)
+    # Benchmark the configs over a large matmul. Keep in mind that the best
+    # hyperparameters can depend on the matmul shapes.
+    M, N, K = 8192, 8192, 16 * 1024
+    A = torch.randn(M, K, device="cuda", dtype=torch.float16)
+    B = torch.randn(K, N, device="cuda", dtype=torch.float16)
+    C = torch.empty(M, N, device="cuda", dtype=torch.float32)
+    print("BLOCK_M BLOCK_N BLOCK_K num_warps EPILOGUE_SUBTILE_FACTOR instr_shape_n time (ms) tflops/s")
+    for BLOCK_M, BLOCK_N, BLOCK_K, num_warps, EPILOGUE_SUBTILE_FACTOR, instr_shape_n in configs:
+        fn = lambda: blocked_mma(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, False, EPILOGUE_SUBTILE_FACTOR, num_warps)
+        ms = triton.testing.do_bench(fn)
+        flops = 2 * M * N * K
+        tflops_per_sec = flops * 1e-12 / (ms * 1e-3)
+        print(
+            f"{BLOCK_M:>7} {BLOCK_N:>7} {BLOCK_K:>7} {num_warps:>9} {EPILOGUE_SUBTILE_FACTOR:>23} {instr_shape_n:>13} "
+            f"{ms:>9.2f} {tflops_per_sec:>8.2f}")
+
+# %%
+# Key takeaways from this example:
+#
+# - Inputs can be transposed by creating permuted views over shared memory.
+# -
