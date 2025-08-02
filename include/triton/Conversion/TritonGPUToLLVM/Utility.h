@@ -623,6 +623,9 @@ inline bool isCanonicalIndex(unsigned index, unsigned freeVarMask) {
 // group code isolated from above by invoking this function.
 void makeAllWarpGroupsIsolatedFromAbove(Operation *op);
 
+// Set the correct loop annotation on LLVM branch ops.
+void fixUpLoopAnnotation(ModuleOp mod);
+
 void transferWithinBlockSwizzling(triton::gpu::ConvertLayoutOp op, Value src,
                                   const TargetInfoBase &targetInfo,
                                   const LLVMTypeConverter *typeConverter,

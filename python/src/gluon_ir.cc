@@ -90,23 +90,33 @@ struct GluonLayouts {
   py::handle BlockedLayout;
   py::handle SliceLayout;
   py::handle DistributedLinearLayout;
+  py::handle DotOperandLayout;
   py::handle NVMMADistributedLayout;
   py::handle NVMMASharedLayout;
   py::handle SwizzledSharedLayout;
+  py::handle AMDMFMALayout;
+  py::handle GluonDType;
 
   GluonLayouts() {
     auto layouts =
         py::module::import("triton.experimental.gluon.language._layouts");
+    auto amdLayouts =
+        py::module::import("triton.experimental.gluon.language.amd._layouts");
     AutoLayout = py::object(layouts.attr("AutoLayout")).release();
     BlockedLayout = py::object(layouts.attr("BlockedLayout")).release();
     SliceLayout = py::object(layouts.attr("SliceLayout")).release();
     DistributedLinearLayout =
         py::object(layouts.attr("DistributedLinearLayout")).release();
+    DotOperandLayout = py::object(layouts.attr("DotOperandLayout")).release();
     NVMMADistributedLayout =
         py::object(layouts.attr("NVMMADistributedLayout")).release();
     NVMMASharedLayout = py::object(layouts.attr("NVMMASharedLayout")).release();
     SwizzledSharedLayout =
         py::object(layouts.attr("SwizzledSharedLayout")).release();
+    AMDMFMALayout = py::object(amdLayouts.attr("AMDMFMALayout")).release();
+
+    auto core = py::module::import("triton.language.core");
+    GluonDType = py::object(core.attr("dtype")).release();
   }
 };
 
@@ -155,6 +165,9 @@ py::object layoutToGluon(Attribute layout) {
         ll.getBases().lookup(kReg), ll.getBases().lookup(kLane),
         ll.getBases().lookup(kWarp), ll.getBases().lookup(kBlock),
         toStdVector(ArrayRef(llvm::to_vector(ll.getOutDimSizes()))));
+  } else if (auto dotOp = dyn_cast<ttg::DotOperandEncodingAttr>(layout)) {
+    return layouts.DotOperandLayout(
+        dotOp.getOpIdx(), layoutToGluon(dotOp.getParent()), dotOp.getKWidth());
   } else if (auto mma = dyn_cast<ttg::NvidiaMmaEncodingAttr>(layout)) {
     auto ctaLayout = mma.getCTALayout();
     return layouts.NVMMADistributedLayout(
@@ -181,7 +194,22 @@ py::object layoutToGluon(Attribute layout) {
         toStdVector(ctaLayout.getCTAOrder()));
   } else if (auto autoEnc = dyn_cast<gluon::AutoEncodingAttr>(layout)) {
     return layouts.AutoLayout();
+  } else if (auto amdMfma = dyn_cast<ttg::AMDMfmaEncodingAttr>(layout)) {
+    auto ctaLayout = amdMfma.getCTALayout();
+    std::vector<unsigned> instrShape{amdMfma.getMDim(), amdMfma.getNDim()};
+    auto isFP32 = !amdMfma.getElementType().has_value() ||
+                  amdMfma.getElementType().value().isF32();
+
+    return layouts.AMDMFMALayout(amdMfma.getVersion(), instrShape,
+                                 amdMfma.getIsTransposed(),
+                                 toStdVector(amdMfma.getWarpsPerCTA()),
+                                 toStdVector(amdMfma.getTilesPerWarp()),
+                                 layouts.GluonDType(isFP32 ? "fp32" : "fp64"),
+                                 toStdVector(ctaLayout.getCTAsPerCGA()),
+                                 toStdVector(ctaLayout.getCTASplitNum()),
+                                 toStdVector(ctaLayout.getCTAOrder()));
   }
+
   throw py::value_error("Unhandled encoding encountered");
 }
 
@@ -259,6 +287,12 @@ void init_gluon_ir(py::module &&m) {
                                         /*requiresSurjective=*/true);
              return ttg::LinearEncodingAttr::get(ctx, ll);
            })
+      .def("get_dot_operand_layout",
+           [](GluonOpBuilder &self, unsigned opIdx, Attribute parent,
+              unsigned kWidth) -> Attribute {
+             return self.getChecked<ttg::DotOperandEncodingAttr>(
+                 self.getContext(), opIdx, parent, kWidth);
+           })
       .def("get_mma_layout",
            [](GluonOpBuilder &self, std::vector<unsigned> &version,
               std::vector<unsigned> &warpsPerCta,
@@ -272,6 +306,22 @@ void init_gluon_ir(py::module &&m) {
              return self.getChecked<ttg::NvidiaMmaEncodingAttr>(
                  ctx, version[0], version[1], warpsPerCta, ctaLayout,
                  instrShape);
+           })
+      .def("get_amd_mfma_layout",
+           [](GluonOpBuilder &self, unsigned version,
+              std::vector<unsigned> &tilesPerWarp,
+              std::vector<unsigned> &warpsPerCta,
+              std::vector<unsigned> &ctasPerCga,
+              std::vector<unsigned> &ctaSplitNum,
+              std::vector<unsigned> &ctaOrder,
+              std::vector<unsigned> &instrShape, bool transposed,
+              mlir::Type elemType) -> Attribute {
+             auto ctx = self.getContext();
+             auto ctaLayout = self.getChecked<ttg::CTALayoutAttr>(
+                 ctx, ctasPerCga, ctaSplitNum, ctaOrder);
+             return ttg::AMDMfmaEncodingAttr::get(
+                 ctx, version, warpsPerCta, tilesPerWarp, instrShape[0],
+                 instrShape[1], transposed, ctaLayout, elemType);
            })
       .def("get_nvmma_shared_layout",
            [](GluonOpBuilder &self, unsigned swizzleByteWidth,
@@ -435,7 +485,10 @@ void init_gluon_ir(py::module &&m) {
            })
       .def("create_warpgroup_mma_wait",
            [](GluonOpBuilder &self, std::vector<Value> &deps, int pendings) {
-             self.create<ttng::WarpGroupDotWaitOp>(deps, pendings);
+             std::vector<Value> results;
+             auto wait = self.create<ttng::WarpGroupDotWaitOp>(deps, pendings);
+             llvm::append_range(results, wait.getResults());
+             return results;
            })
       .def("create_tmem_alloc",
            [](GluonOpBuilder &self, Type resultTy, Value value) -> Value {

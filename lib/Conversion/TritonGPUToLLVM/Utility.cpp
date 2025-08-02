@@ -1517,6 +1517,25 @@ void makeAllWarpGroupsIsolatedFromAbove(Operation *op) {
   });
 }
 
+// TODO: Is there a better way to do this? This needs to be fixed upstream.
+void fixUpLoopAnnotation(ModuleOp mod) {
+  mod->walk([](Operation *op) {
+    if (isa<LLVM::BrOp, LLVM::CondBrOp>(op)) {
+      if (op->hasAttr("llvm.loop_annotation")) {
+        auto loopMD = dyn_cast<LLVM::LoopAnnotationAttr>(
+            op->getAttr("llvm.loop_annotation"));
+        if (loopMD) {
+          if (auto brOp = dyn_cast<LLVM::BrOp>(op)) {
+            brOp.setLoopAnnotationAttr(loopMD);
+          } else if (auto condBrOp = dyn_cast<LLVM::CondBrOp>(op)) {
+            condBrOp.setLoopAnnotationAttr(loopMD);
+          }
+        }
+      }
+    }
+  });
+}
+
 SmallVector<Value> inlineRegionImpl(RewriterBase &rewriter, Region &region,
                                     ArrayRef<Value> args,
                                     mlir::TypeID terminatorTypeId,

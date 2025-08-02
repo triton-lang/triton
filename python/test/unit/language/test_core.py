@@ -80,6 +80,8 @@ elif is_hip():
     # 0 is a special value for automatic heuristic
     if is_hip_cdna():
         mma_nonk_sizes = [0, 16, 32]
+    elif is_hip_gfx12():
+        mma_nonk_sizes = [16]
 else:
     THREADS_PER_WARP = 32
 
@@ -4196,12 +4198,12 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
         if cc < (8, 9):
             pytest.skip("float8e4nv not supported on CUDA < 8.9")
     if is_hip():
-        if not is_hip_cdna():
-            pytest.skip("scaled_dot only implemented for HIP CDNA")
+        if not (is_hip_cdna() or is_hip_gfx12()):
+            pytest.skip("scaled_dot only implemented for HIP CDNA and gfx12")
         if "e4m3" in (mxfp_type, normal_type):
-            if not (is_hip_cdna3() or is_hip_cdna4()):
-                pytest.skip(f"scaled_dot({mxfp_type}, {normal_type}) only implemented for CDNA3 and CDNA4")
-        if mma == 16 and K == 64:
+            if not (is_hip_cdna3() or is_hip_cdna4() or is_hip_gfx12()):
+                pytest.skip(f"scaled_dot({mxfp_type}, {normal_type}) only implemented for CDNA3, CDNA4, gfx12")
+        if mma == 16 and K == 64 and not is_hip_gfx12():
             pytest.skip(f"K == {K} too small for mfma {mma} in scaled_dot")
 
     @triton.jit
@@ -7375,6 +7377,37 @@ def test_tl_range_option_none():
     compiled_kernel = kernel.warmup(10, grid=(1, ))
     assert "num_stages" not in compiled_kernel.asm["ttir"]
     assert "loop_unroll_factor" not in compiled_kernel.asm["ttir"]
+
+
+def test_disable_licm():
+
+    @triton.jit
+    def while_no_licm(n):
+        i = 0
+        while tl.condition(i < n, disable_licm=True):
+            i = i + 1
+            print("i", i)
+
+    @triton.jit
+    def while_default(n):
+        i = 0
+        while tl.condition(i < n):
+            i = i + 1
+            print("i", i)
+
+    @triton.jit
+    def for_no_licm(n):
+        for i in tl.range(0, n, disable_licm=True):
+            print("i", i)
+
+    compiled_kernel1 = while_no_licm.warmup(10, grid=(1, ))
+    assert "llvm.licm.disable" in compiled_kernel1.asm["llir"]
+
+    compiled_kernel2 = while_default.warmup(10, grid=(1, ))
+    assert "llvm.licm.disable" not in compiled_kernel2.asm["llir"]
+
+    compiled_kernel3 = for_no_licm.warmup(10, grid=(1, ))
+    assert "llvm.licm.disable" in compiled_kernel3.asm["llir"]
 
 
 @triton.jit(noinline=True)
