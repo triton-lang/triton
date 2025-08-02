@@ -506,7 +506,7 @@ def test_pack_bitmatrix():
     assert is_bit_not_set(0, [1, 2, 3])
     assert is_bit_not_set(1, [0, 2, 3])
     assert is_bit_not_set(2, [0, 1, 3])
-    assert is_bit_not_set(3, [0, 1, 2])
+    assert is_bit_not_set(3, [0, 1, 3])
 
 
 def gather_ep(rank, world_size, param, TP, EP):
