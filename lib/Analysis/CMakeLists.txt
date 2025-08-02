@@ -1,7 +1,9 @@
 add_triton_library(TritonAnalysis
   AxisInfo.cpp
   Allocation.cpp
+  LiveBuffers.cpp
   Membar.cpp
+  RegionPredecessor.cpp
   Alias.cpp
   Utility.cpp
 
