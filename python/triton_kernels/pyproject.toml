@@ -1,7 +1,7 @@
 [project]
 name = "triton_kernels"
 version = "1.0.0"
-dependencies = ["numpy", "pytest"]
+dependencies = ["torch", "numpy", "pytest"]
 
 [build-system]
 requires = ["setuptools>=64.0"]
