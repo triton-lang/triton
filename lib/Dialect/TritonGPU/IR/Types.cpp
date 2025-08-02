@@ -113,9 +113,6 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
     if (memorySpace != nvidia_gpu::TensorMemorySpaceAttr::get(ctx)) {
       return emitError() << "memorySpace must be TensorMemorySpace";
     }
-    if (shape != allocShape) {
-      return emitError() << "shape must be equal to allocShape";
-    }
     auto bitwidth = elementType.getIntOrFloatBitWidth();
     if (!enc.getUnpacked() && bitwidth != 16) {
       return emitError() << "bitwidth must be 16 for packed tensor memory";
