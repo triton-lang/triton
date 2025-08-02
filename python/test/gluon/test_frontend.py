@@ -1343,6 +1343,66 @@ def test_auto_layout_broadcast():
     _ = y * x
 
 
+@filecheck_test
+@gluon.jit
+def test_atomic_rmw():
+    x0 = ttgl.full([1], 1, ttgl.int64, layout=ttgl.AutoLayout())
+    ptr0 = x0.cast(ttgl.pointer_type(ttgl.int32), bitcast=True).item()
+    # CHECK: [[c1:%.*]] = arith.constant 1 : i32
+    # CHECK: {{.*}} = tt.atomic_rmw exch, acq_rel, gpu, %{{.*}}, [[c1]], %true : (!tt.ptr<i32>, i32, i1) -> i32
+    ttgl.atomic_xchg(ptr0, 1)
+
+    BLOCK: ttgl.constexpr = 128
+    x = ttgl.full([BLOCK], 0, ttgl.int64, layout=ttgl.AutoLayout())
+    ptr = x.cast(ttgl.pointer_type(ttgl.int32), bitcast=True)
+    val = ttgl.full([BLOCK], 1, ttgl.int32, layout=ttgl.AutoLayout())
+    mask = ttgl.full([BLOCK], True, ttgl.int1, layout=ttgl.AutoLayout())
+    offset = ttgl.arange(0, BLOCK, layout=ttgl.AutoLayout())
+    # CHECK: [[val:%.*]] = arith.constant dense<1> : tensor<128xi32, #gluon.auto_encoding>
+    # CHECK: {{.*}} = tt.atomic_rmw min, acq_rel, gpu, %{{.*}}, [[val]], %{{.*}} : (tensor<128x!tt.ptr<i32>, #gluon.auto_encoding>, tensor<128xi32, #gluon.auto_encoding>, tensor<128xi1, #gluon.auto_encoding>) -> tensor<128xi32, #gluon.auto_encoding>
+    # CHECK: {{.*}} = tt.atomic_rmw max, acq_rel, gpu, %{{.*}}, [[val]], %{{.*}} : (tensor<128x!tt.ptr<i32>, #gluon.auto_encoding>, tensor<128xi32, #gluon.auto_encoding>, tensor<128xi1, #gluon.auto_encoding>) -> tensor<128xi32, #gluon.auto_encoding>
+    # CHECK: {{.*}} = tt.atomic_rmw add, acq_rel, gpu, %{{.*}}, [[val]], %{{.*}} : (tensor<128x!tt.ptr<i32>, #gluon.auto_encoding>, tensor<128xi32, #gluon.auto_encoding>, tensor<128xi1, #gluon.auto_encoding>) -> tensor<128xi32, #gluon.auto_encoding>
+    # CHECK: {{.*}} = tt.atomic_rmw and, acq_rel, gpu, %{{.*}}, [[val]], %{{.*}} : (tensor<128x!tt.ptr<i32>, #gluon.auto_encoding>, tensor<128xi32, #gluon.auto_encoding>, tensor<128xi1, #gluon.auto_encoding>) -> tensor<128xi32, #gluon.auto_encoding>
+    # CHECK: {{.*}} = tt.atomic_rmw or, acq_rel, gpu, %{{.*}}, [[val]], %{{.*}} : (tensor<128x!tt.ptr<i32>, #gluon.auto_encoding>, tensor<128xi32, #gluon.auto_encoding>, tensor<128xi1, #gluon.auto_encoding>) -> tensor<128xi32, #gluon.auto_encoding>
+    # CHECK: {{.*}} = tt.atomic_rmw xor, acq_rel, gpu, %{{.*}}, [[val]], %{{.*}} : (tensor<128x!tt.ptr<i32>, #gluon.auto_encoding>, tensor<128xi32, #gluon.auto_encoding>, tensor<128xi1, #gluon.auto_encoding>) -> tensor<128xi32, #gluon.auto_encoding>
+    # CHECK: {{.*}} = tt.atomic_rmw max, acq_rel, gpu, %{{.*}}, [[val]], %{{.*}} : (tensor<128x!tt.ptr<i32>, #gluon.auto_encoding>, tensor<128xi32, #gluon.auto_encoding>, tensor<128xi1, #gluon.auto_encoding>) -> tensor<128xi32, #gluon.auto_encoding>
+    # CHECK: {{.*}} = tt.atomic_rmw add, relaxed, gpu, %{{.*}}, [[val]], %{{.*}} : (tensor<128x!tt.ptr<i32>, #gluon.auto_encoding>, tensor<128xi32, #gluon.auto_encoding>, tensor<128xi1, #gluon.auto_encoding>) -> tensor<128xi32, #gluon.auto_encoding>
+    ttgl.atomic_min(offset + ptr, val)
+    ttgl.atomic_max(offset + ptr, val)
+    ttgl.atomic_add(offset + ptr, val)
+    ttgl.atomic_and(offset + ptr, val)
+    ttgl.atomic_or(offset + ptr, val)
+    ttgl.atomic_xor(offset + ptr, val)
+    ttgl.atomic_max(offset + ptr, val, mask=mask)
+    ttgl.atomic_add(offset + ptr, val, mask=mask, sem="relaxed")
+
+
+@filecheck_test
+@gluon.jit
+def test_atomic_cas():
+    # CHECK: {{.*}} = arith.constant dense<1> : tensor<1xi64, #gluon.auto_encoding>
+    x0 = ttgl.full([1], 1, ttgl.int64, layout=ttgl.AutoLayout())
+    ptr0 = x0.cast(ttgl.pointer_type(ttgl.int32), bitcast=True).item()
+    # CHECK: [[c0:%.*]] = arith.constant 0 : i32
+    # CHECK: [[c1:%.*]] = arith.constant 1 : i32
+    # CHECK: {{.*}} = tt.atomic_cas acq_rel, gpu, %{{.*}}, [[c0]], [[c1]] : (!tt.ptr<i32>, i32, i32) -> i32
+    ttgl.atomic_cas(ptr0, 0, 1)
+
+    BLOCK: ttgl.constexpr = 128
+    x = ttgl.full([BLOCK], 0, ttgl.int64, layout=ttgl.AutoLayout())
+    ptr = x.cast(ttgl.pointer_type(ttgl.int32), bitcast=True)
+    # CHECK: {{.*}} = arith.constant dense<0> : tensor<128xi64, #gluon.auto_encoding>
+    offset = ttgl.arange(0, BLOCK, layout=ttgl.AutoLayout())
+    old = ttgl.full([BLOCK], 0, ttgl.int32, layout=ttgl.AutoLayout())
+    new = ttgl.full([BLOCK], 1, ttgl.int32, layout=ttgl.AutoLayout())
+    # CHECK: [[old:%.*]] = arith.constant dense<0> : tensor<128xi32, #gluon.auto_encoding>
+    # CHECK: [[new:%.*]] = arith.constant dense<1> : tensor<128xi32, #gluon.auto_encoding>
+    # CHECK: {{.*}} = tt.atomic_cas relaxed, gpu, %{{.*}}, [[old]], [[new]] : (tensor<128x!tt.ptr<i32>, #gluon.auto_encoding>, tensor<128xi32, #gluon.auto_encoding>, tensor<128xi32, #gluon.auto_encoding>) -> tensor<128xi32, #gluon.auto_encoding>
+    # CHECK: {{.*}} = tt.atomic_cas acq_rel, gpu, %{{.*}}, [[old]], [[new]] : (tensor<128x!tt.ptr<i32>, #gluon.auto_encoding>, tensor<128xi32, #gluon.auto_encoding>, tensor<128xi32, #gluon.auto_encoding>) -> tensor<128xi32, #gluon.auto_encoding>
+    ttgl.atomic_cas(offset + ptr, old, new, sem="relaxed")
+    ttgl.atomic_cas(offset + ptr, old, new)
+
+
 @gluon.jit
 def amd_mfma_layout_kernel():
     mfma_layout_fp32: ttgl.constexpr = amd_layouts.AMDMFMALayout(version=3, instr_shape=[32, 32], transposed=True,
