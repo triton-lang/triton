@@ -470,8 +470,12 @@ def test_pack_bitmatrix():
     expt_indx = torch.tensor([[0, 33, 63], [31, 32, 33], [5, 10, 15], [0, 63, 62]], dtype=torch.int32, device="cuda")
     bitmatrix_cols = triton.cdiv(sentinel, 32)
     bitmatrix = torch.zeros((n_rows, bitmatrix_cols), dtype=torch.int32, device="cuda")
+    BLOCK_SIZE_M = 128
+    BLOCK_SIZE_K = max(triton.next_power_of_2(n_cols), 32)
 
-    grid = (triton.cdiv(n_rows, BLOCK_SIZE_M), triton.cdiv(bitmatrix_cols, BLOCK_SIZE_K))
+    def grid():
+        return (triton.cdiv(n_rows, BLOCK_SIZE_M), triton.cdiv(n_cols, BLOCK_SIZE_K))
+
     pack_bitmatrix[grid](bitmatrix, expt_indx, n_rows, n_cols, BLOCK_SIZE_M=BLOCK_SIZE_M, BLOCK_SIZE_K=BLOCK_SIZE_K,
                          sentinel=sentinel)
 
