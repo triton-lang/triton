@@ -89,15 +89,20 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
                                   Attribute encoding, Attribute memorySpace,
                                   bool mutableMemory,
                                   ArrayRef<int64_t> allocShape) {
+  if (!isa<PaddedSharedEncodingAttr>(encoding) &&
+      llvm::any_of(shape,
+                   [](int64_t dim) { return !llvm::isPowerOf2_64(dim); }))
+    return emitError() << "shape must have power-of-2 dimensions; got "
+                       << shape;
   if (allocShape.size() < shape.size())
     return emitError()
            << "alloc shape must have at least as many dimensions as shape";
-  if (llvm::any_of(shape, [](int64_t dim) { return dim < 0; }))
-    return emitError() << "shape must have non-negative dimensions";
-  if (llvm::any_of(llvm::zip(shape, allocShape), [](auto pair) {
-        return std::get<0>(pair) > std::get<1>(pair);
-      }))
-    return emitError() << "shape must be less than or equal to allocShape";
+  if (llvm::any_of(
+          llvm::zip(shape, allocShape.take_back(shape.size())),
+          [](auto pair) { return std::get<0>(pair) > std::get<1>(pair); }))
+    return emitError() << "shape must be less than or equal to allocShape. "
+                       << "shape = " << shape
+                       << ", allocShape = " << allocShape;
   auto ctx = encoding.getContext();
   if (auto enc = dyn_cast<nvidia_gpu::TensorMemoryEncodingAttr>(encoding)) {
     if (shape.size() != 2) {
@@ -144,7 +149,7 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
     }
     // TODO Add rest of verifier
   } else {
-    return emitError() << "unsupported encoding";
+    return emitError() << encoding << " is not a valid encoding";
   }
   return success();
 }
