@@ -5,7 +5,7 @@ from triton._internal_testing import is_cuda, is_ampere_or_newer, is_hopper_or_n
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
 from triton.experimental.gluon.language.nvidia.ampere import async_copy, mbarrier
-from triton.experimental.gluon.language.nvidia.hopper import tma
+from triton.experimental.gluon.language.nvidia.hopper import tma, fence_async_shared
 from triton.experimental.gluon.language.nvidia import hopper
 
 
@@ -121,6 +121,7 @@ def warpgroup_mma_kernel(a, b, out, M: ttgl.constexpr, N: ttgl.constexpr, K: ttg
     a_shmem = ttgl.allocate_shared_memory(ttgl.float16, [M, K], nvmma_layout, A)
     b_shmem = ttgl.allocate_shared_memory(ttgl.float16, [K, N], nvmma_layout, B)
 
+    fence_async_shared()
     acc = hopper.warpgroup_mma(a_shmem, b_shmem, acc, is_async=ASYNC)
 
     if ASYNC:
