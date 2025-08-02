@@ -30,7 +30,7 @@ from triton.experimental.gluon.language.nvidia.hopper import (
 
 def is_hopper():
     target = triton.runtime.driver.active.get_current_target()
-    return target.backend == "cuda" and torch.cuda.get_device_capability()[0] >= 9
+    return target.backend == "cuda" and torch.cuda.get_device_capability()[0] == 9
 
 
 if __name__ == "__main__" and not is_hopper():
