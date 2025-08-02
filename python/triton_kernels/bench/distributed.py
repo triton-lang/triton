@@ -300,13 +300,19 @@ def routing_triton(x, logits, n_expts_act, sm_first=False, expt_indx=None, n_row
     n_cols = triton.cdiv(n_expts_tot, 32)
     n_rows = expt_indx.size(0)
     bitmask = torch.zeros((n_rows, n_cols), dtype=torch.int32, device=expt_indx.device)
-    pack_bitmatrix[(n_rows, n_cols)](
+    BLOCK_SIZE_M = 128
+    BLOCK_SIZE_K = min(triton.next_power_of_2(n_cols), 512)
+
+    def grid():
+        return (triton.cdiv(n_rows, BLOCK_SIZE_M), triton.cdiv(n_cols, BLOCK_SIZE_K))
+
+    pack_bitmatrix[grid](
         bitmask,
         expt_indx,
         n_rows,
         n_cols,
-        BLOCK_SIZE_M=triton.next_power_of_2(n_rows),
-        BLOCK_SIZE_K=triton.next_power_of_2(n_cols),
+        BLOCK_SIZE_M=BLOCK_SIZE_M,
+        BLOCK_SIZE_K=BLOCK_SIZE_K,
         sentinel=n_cols,
     )
     expt_scal, expt_indx, bitmatrix = prune_routing(expt_scal, expt_indx, bitmask, n_expts_tot, EP)
