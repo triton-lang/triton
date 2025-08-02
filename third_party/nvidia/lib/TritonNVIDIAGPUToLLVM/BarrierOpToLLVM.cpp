@@ -271,20 +271,8 @@ struct NamedBarrierArriveOpConversion
   matchAndRewrite(triton::nvidia_gpu::NamedBarrierArriveOp op,
                   OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    Location loc = op->getLoc();
-    std::string ptxAsm = "bar.arrive $0, $1;";
-
-    PTXBuilder ptxBuilder;
-    SmallVector<PTXBuilder::Operand *, 2> operands = {
-        ptxBuilder.newOperand(adaptor.getBar(), "r"),
-        ptxBuilder.newOperand(adaptor.getNumThreads(), "r")};
-
-    auto arriveOp = *ptxBuilder.create<>(ptxAsm);
-    arriveOp(operands, /*onlyAttachMLIRArgs=*/true);
-    auto voidTy = void_ty(getContext());
-    ptxBuilder.launch(rewriter, op.getLoc(), voidTy);
-
-    rewriter.eraseOp(op);
+    rewriter.replaceOpWithNewOp<NVVM::BarrierArriveOp>(op, adaptor.getBar(),
+                                                       adaptor.getNumThreads());
     return success();
   }
 };
@@ -297,20 +285,8 @@ struct NamedBarrierWaitOpConversion
   LogicalResult
   matchAndRewrite(triton::nvidia_gpu::NamedBarrierWaitOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    Location loc = op->getLoc();
-    std::string ptxAsm = "bar.sync $0, $1;";
-
-    PTXBuilder ptxBuilder;
-    SmallVector<PTXBuilder::Operand *, 2> operands = {
-        ptxBuilder.newOperand(adaptor.getBar(), "r"),
-        ptxBuilder.newOperand(adaptor.getNumThreads(), "r")};
-
-    auto waitOp = *ptxBuilder.create<>(ptxAsm);
-    waitOp(operands, /*onlyAttachMLIRArgs=*/true);
-    auto voidTy = void_ty(getContext());
-    ptxBuilder.launch(rewriter, op.getLoc(), voidTy);
-
-    rewriter.eraseOp(op);
+    rewriter.replaceOpWithNewOp<NVVM::BarrierOp>(op, adaptor.getBar(),
+                                                 adaptor.getNumThreads());
     return success();
   }
 };
