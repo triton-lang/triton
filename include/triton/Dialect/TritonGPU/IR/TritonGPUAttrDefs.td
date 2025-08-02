@@ -750,7 +750,6 @@ def LinearEncodingAttr : DistributedEncoding<"LinearEncoding", "linear_encoding"
     SmallVector<unsigned> getWarpsPerCTA() const;
 
     // [FIXME LL] Supports legacy behaviour. We should remove these functions
-    SmallVector<unsigned> getShapePerCTATile() const;
     SmallVector<unsigned> getSizePerThread() const;
   }];
 
