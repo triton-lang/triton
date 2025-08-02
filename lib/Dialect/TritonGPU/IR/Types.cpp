@@ -124,12 +124,12 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
       return emitError() << "bitwidth must be 16 or 32";
     }
     if (shape[0] < enc.getBlockM() * enc.getCTASplitM() ||
-        shape[1] / (32 / bitwidth) < enc.getBlockN() * enc.getCTASplitN() *
-                                         (enc.getUnpacked() ? 1 : 2)) {
+        shape[1] < enc.getBlockN() * enc.getCTASplitN() *
+                       (enc.getUnpacked() ? 1 : 2) * (32 / bitwidth)) {
       return emitError() << "shape must be at least "
                          << enc.getBlockM() * enc.getCTASplitM() << "x"
                          << enc.getBlockN() * enc.getCTASplitN() *
-                                (enc.getUnpacked() ? 2 : 1);
+                                (enc.getUnpacked() ? 1 : 2) * (32 / bitwidth);
     }
     auto ll = toLinearLayout(shape, enc, {});
     auto dims = standardOutDimNames(ctx, 2);
