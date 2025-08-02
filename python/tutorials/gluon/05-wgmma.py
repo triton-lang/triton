@@ -271,13 +271,21 @@ def get_instr_shape_n(BLOCK_M, BLOCK_N, num_warps):
 
 
 @gl.constexpr_function
-def int_log2(x):
-    return x.bit_length() - 1
+def pick_wgmma_layout(dtype, BLOCK_M, BLOCK_N, num_warps):
+    m = 16
+    k = 256 // dtype.primitive_bitwidth
+    n = get_instr_shape_n(BLOCK_M, BLOCK_N, num_warps)
+    warps_per_cta = get_warps_per_cta(BLOCK_M, BLOCK_N, num_warps)
+    return gl.NVMMADistributedLayout(
+        version=[3, 0],
+        warps_per_cta=warps_per_cta,
+        instr_shape=[m, n, k],
+    )
 
 
 @gluon.jit
-def blocked_mma_kernel(a_desc, b_desc, c_desc,  #
-                       TRANSPOSE_B: gl.constexpr, num_warps: gl.constexpr):
+def blocked_matmul_kernel(a_desc, b_desc, c_desc,  #
+                          TRANSPOSE_B: gl.constexpr, num_warps: gl.constexpr):
     BLOCK_M: gl.constexpr = c_desc.block_type.shape[0]
     BLOCK_N: gl.constexpr = c_desc.block_type.shape[1]
     BLOCK_K: gl.constexpr = a_desc.block_type.shape[1]
@@ -293,16 +301,7 @@ def blocked_mma_kernel(a_desc, b_desc, c_desc,  #
     off_n = pid_n * BLOCK_N
 
     # Determine the WGMMA layout.
-    m: gl.constexpr = 16
-    k: gl.constexpr = 256 // a_desc.dtype.primitive_bitwidth
-    n: gl.constexpr = get_instr_shape_n(BLOCK_M, BLOCK_N, num_warps)
-    warps_per_cta: gl.constexpr = get_warps_per_cta(BLOCK_M, BLOCK_N, num_warps)
-
-    mma_layout: gl.constexpr = gl.NVMMADistributedLayout(
-        version=[3, 0],
-        warps_per_cta=warps_per_cta,
-        instr_shape=[m, n, k],
-    )
+    mma_layout: gl.constexpr = pick_wgmma_layout(a_desc.dtype, BLOCK_M, BLOCK_N, num_warps)
     acc = gl.zeros((BLOCK_M, BLOCK_N), dtype=c_desc.dtype, layout=mma_layout)
 
     bar = gl.allocate_shared_memory(gl.int64, [1], mbarrier.MBarrierLayout())
@@ -341,7 +340,7 @@ def blocked_mma_kernel(a_desc, b_desc, c_desc,  #
     tma.store_wait(pendings=0)
 
 
-def blocked_mma(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B, num_warps):
+def blocked_matmul(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B, num_warps):
     M, N = C.shape
 
     a_layout = gl.NVMMASharedLayout.get_default_for([BLOCK_M, BLOCK_K], gl.float16)
@@ -355,19 +354,19 @@ def blocked_mma(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B, num_warps):
     c_desc = TensorDescriptor(C, C.shape, C.stride(), [BLOCK_M, BLOCK_N], c_layout)
 
     grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
-    blocked_mma_kernel[grid](a_desc, b_desc, c_desc, TRANSPOSE_B, num_warps=num_warps)
+    blocked_matmul_kernel[grid](a_desc, b_desc, c_desc, TRANSPOSE_B, num_warps=num_warps)
 
 
 @pytest.mark.parametrize("M, N, K", [(208, 416, 304), (2000, 1000, 2000)])
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(64, 64, 64), (128, 128, 128)])
 @pytest.mark.parametrize("TRANSPOSE_B", [False, True])
 @pytest.mark.parametrize("num_warps", [4, 8])
-def test_blocked_mma(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B, num_warps):
+def test_blocked_matmul(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B, num_warps):
     A = torch.randn(M, K, device="cuda", dtype=torch.float16)
     B = torch.randn((N, K) if TRANSPOSE_B else (K, N), device="cuda", dtype=torch.float16)
     C = torch.empty(M, N, device="cuda", dtype=torch.float32)
 
-    blocked_mma(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B, num_warps)
+    blocked_matmul(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B, num_warps)
 
     C_ref = A @ (B.T if TRANSPOSE_B else B)
     torch.testing.assert_close(C_ref.to(torch.float32), C, rtol=1e-3, atol=1e-1)
@@ -388,7 +387,7 @@ def test_blocked_mma(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B, num_warps)
 # sure if these lead to the best block sizes.
 
 
-def find_configs(occupancy, in_dtype, acc_dtype):
+def find_configs(occupancy, in_dtype, acc_dtype, num_buffers=1):
     in_dtype_bytes = torch.tensor([], dtype=in_dtype).element_size()
     acc_dtype_bytes = torch.tensor([], dtype=acc_dtype).element_size()
 
@@ -396,8 +395,8 @@ def find_configs(occupancy, in_dtype, acc_dtype):
     smem = 228 * 1024 // occupancy - 1024
 
     configs = []
-    for BLOCK_M, BLOCK_N, BLOCK_K, num_warps in itertools.product([64, 128, 256], [64, 128, 256], [64, 128, 256],
-                                                                  [4, 8]):
+    BLOCK_MNK = [32, 64, 128, 256]
+    for BLOCK_M, BLOCK_N, BLOCK_K, num_warps in itertools.product(BLOCK_MNK, BLOCK_MNK, BLOCK_MNK, [4, 8]):
         # Assume ~16 regs per thread of baseline usage.
         regs = 64 * 1024 // occupancy - 16 * num_warps * 32
 
@@ -405,7 +404,7 @@ def find_configs(occupancy, in_dtype, acc_dtype):
         b_smem = BLOCK_N * BLOCK_K * in_dtype_bytes
         acc_smem = BLOCK_M * BLOCK_N * acc_dtype_bytes
         # SMEM for A and B does not coexist with C.
-        if max(a_smem + b_smem, acc_smem) > smem:
+        if max((a_smem + b_smem) * num_buffers, acc_smem) > smem:
             continue
 
         # The accumulator is the only in-memory tensor.
@@ -433,8 +432,8 @@ def find_configs(occupancy, in_dtype, acc_dtype):
 
 
 if __name__ == "__main__":
-    print("Finding possible configs")
-    print("========================")
+    print("Benchmarking selected configs")
+    print("=============================")
     # Just in case, check occupancy 1 configs.
     configs = find_configs(occupancy=1, in_dtype=torch.float16, acc_dtype=torch.float32)
     configs += find_configs(occupancy=2, in_dtype=torch.float16, acc_dtype=torch.float32)
@@ -446,12 +445,13 @@ if __name__ == "__main__":
     C = torch.empty(M, N, device="cuda", dtype=torch.float32)
     print("BLOCK_M BLOCK_N BLOCK_K num_warps instr_shape_n time (ms) tflops/s")
     for BLOCK_M, BLOCK_N, BLOCK_K, num_warps, instr_shape_n in configs:
-        fn = lambda: blocked_mma(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, False, num_warps)
+        fn = lambda: blocked_matmul(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, False, num_warps)
         ms = triton.testing.do_bench(fn)
         flops = 2 * M * N * K
         tflops_per_sec = flops * 1e-12 / (ms * 1e-3)
         print(f"{BLOCK_M:>7} {BLOCK_N:>7} {BLOCK_K:>7} {num_warps:>9} {instr_shape_n:>13} "
               f"{ms:>9.2f} {tflops_per_sec:>8.2f}")
+    print()
 
 # %%
 # ```
@@ -464,39 +464,163 @@ if __name__ == "__main__":
 #     128     128     128         8           128      5.76   381.51
 # ```
 #
-# Key takeaways from this example:
+# The hypothesis that having occupancy 2 with `BLOCK_N=256` would be the best
+# has held over our limited sample of hyperparameters. Autotuning over all
+# hyperparameters is an exercise for the reader.
+
+# %%
+# 466 TFLOPS is not a bad start. However, we aren't using the fact that WGMMA is
+# asynchronous, and we aren't pipelining the TMA loads as shown in previous
+# tutorials.
 #
-# - Inputs can be transposed by creating permuted views over shared memory.
-# -
+# For now, let's keep the loads synchronous and focus on pipelining the WGMMA.
+# This requires us to double-buffer the operands, since we will be loading into
+# the next set of buffers while WGMMA reads from the previous.
 
-# # Epilogue subtiling is a technique to reduce shared memory usage by
-# # splitting up the TMA store of the accumulator. We subtile by
-# # EPILOGUE_SUBTILE_FACTOR along N. However, there are restrictions to
-# # subtiling:
-# #
-# # - Swizzled shared memory can only be split down to the swizzle tile.
-# #   This depends on the shared memory layout.
-# # - We can only split along the contiguous dimension, otherwise we can't
-# #   store the tiles correctly.
-# # - There must be at least EPILOGUE_SUBTILE_FACTOR contiguous elements
-# #   per thread along N in the register layout.
-# contig_dim_size: gl.constexpr = c_desc.type.layout.swizzle_byte_width * 8 / c_desc.dtype.primitive_bitwidth
-# TILE_SIZE_N: gl.constexpr = BLOCK_N // EPILOGUE_SUBTILE_FACTOR
-# gl.static_assert(TILE_SIZE_N >= contig_dim_size, "C descriptor layout cannot be subtiled this much")
 
-# # Split the accumulator into subtiles.
-# cs = (acc, )
-# for i in gl.static_range(int_log2(EPILOGUE_SUBTILE_FACTOR)):
-#     next_cs = ()
-#     for j in gl.static_range(len(cs)):
-#         c = cs[j]
-#         next_cs += cs[j].reshape([c.shape[0], 2, c.shape[1] // 2]).permute(0, 2, 1).split()
-#     cs = next_cs
+@gl.constexpr_function
+def int_log2(x):
+    return x.bit_length() - 1
 
-# # Store each subtile sequentially.
-# c_subtile_smem = gl.allocate_shared_memory(c_desc.dtype, [BLOCK_M, TILE_SIZE_N], c_desc.layout)
-# for i in gl.static_range(len(cs)):
-#     c_subtile_smem.store(cs[i])
-#     fence_async_shared()
-#     tma.async_copy_shared_to_global(c_desc, [off_m, off_n + i * TILE_SIZE_N], c_subtile_smem)
-#     tma.store_wait(pendings=0)
+
+@gluon.jit
+def blocked_matmul_pipelined_kernel(a_desc, b_desc, c_desc, num_warps: gl.constexpr):
+    BLOCK_M: gl.constexpr = c_desc.block_type.shape[0]
+    BLOCK_N: gl.constexpr = c_desc.block_type.shape[1]
+    BLOCK_K: gl.constexpr = a_desc.block_type.shape[1]
+    K = a_desc.shape[1]
+
+    # Allocate 2 buffers for each A and B.
+    a_smem = gl.allocate_shared_memory(a_desc.dtype, [2] + a_desc.block_type.shape, a_desc.layout)
+    b_smem = gl.allocate_shared_memory(b_desc.dtype, [2] + b_desc.block_type.shape, b_desc.layout)
+    index = 0
+
+    pid_m = gl.program_id(axis=0)
+    pid_n = gl.program_id(axis=1)
+    off_m = pid_m * BLOCK_M
+    off_n = pid_n * BLOCK_N
+
+    mma_layout: gl.constexpr = pick_wgmma_layout(a_desc.dtype, BLOCK_M, BLOCK_N, num_warps)
+    acc = gl.zeros((BLOCK_M, BLOCK_N), dtype=c_desc.dtype, layout=mma_layout)
+
+    bar = gl.allocate_shared_memory(gl.int64, [1], mbarrier.MBarrierLayout())
+    mbarrier.init(bar, count=1)
+    phase = 0
+
+    for k in range(0, K, BLOCK_K):
+        a = a_smem.index(index)
+        b = b_smem.index(index)
+
+        mbarrier.expect(bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes)
+        tma.async_copy_global_to_shared(a_desc, [off_m, k], bar, a)
+        tma.async_copy_global_to_shared(b_desc, [k, off_n], bar, b)
+        mbarrier.wait(bar, phase=phase)
+        phase ^= 1
+
+        # Since `warpgroup_mma_wait` is a no-op when there are no WGMMAs in
+        # flight, we can overlap the WGMMA by waiting first, then issuing the
+        # async WGMMA.
+        acc = warpgroup_mma_wait(num_outstanding=0, deps=(acc, ))
+        acc = warpgroup_mma(a, b, acc, is_async=True)
+
+        # Move to the next buffer. The TMA load will start while the WGMMA is
+        # still running.
+        index ^= 1
+
+    # Wait for the last WGMMA to complete.
+    acc = warpgroup_mma_wait(num_outstanding=0, deps=(acc, ))
+
+    mbarrier.invalidate(bar)
+
+    c_smem = gl.allocate_shared_memory(c_desc.dtype, c_desc.block_type.shape, c_desc.layout)
+    c_smem.store(acc)
+    fence_async_shared()
+    tma.async_copy_shared_to_global(c_desc, [off_m, off_n], c_smem)
+    tma.store_wait(pendings=0)
+
+
+def blocked_matmul_pipelined(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, num_warps):
+    M, N = C.shape
+
+    a_layout = gl.NVMMASharedLayout.get_default_for([BLOCK_M, BLOCK_K], gl.float16)
+    b_layout = gl.NVMMASharedLayout.get_default_for([BLOCK_K, BLOCK_N], gl.float16)
+    c_layout = gl.NVMMASharedLayout.get_default_for([BLOCK_M, BLOCK_N], gl.float32)
+    a_desc = TensorDescriptor(A, A.shape, A.stride(), [BLOCK_M, BLOCK_K], a_layout)
+    b_desc = TensorDescriptor(B, B.shape, B.stride(), [BLOCK_K, BLOCK_N], b_layout)
+    c_desc = TensorDescriptor(C, C.shape, C.stride(), [BLOCK_M, BLOCK_N], c_layout)
+
+    grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
+    blocked_matmul_pipelined_kernel[grid](a_desc, b_desc, c_desc, num_warps=num_warps)
+
+
+@pytest.mark.parametrize("M, N, K", [(208, 416, 304), (2000, 1000, 2000)])
+@pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(64, 64, 64), (128, 128, 128)])
+@pytest.mark.parametrize("num_warps", [4, 8])
+def test_blocked_matmul_pipelined(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, num_warps):
+
+    A = torch.randn(M, K, device="cuda", dtype=torch.float16)
+    B = torch.randn(K, N, device="cuda", dtype=torch.float16)
+    C = torch.empty(M, N, device="cuda", dtype=torch.float32)
+
+    blocked_matmul_pipelined(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, num_warps)
+    torch.testing.assert_close((A @ B).to(torch.float32), C, rtol=1e-3, atol=1e-1)
+
+
+# %%
+# Search for another set of configs. Apply simiar principles to prune down the
+# potential configs. Our previous best block config will 160 KB of smem, too
+# much for 2 occupancy, but leaves performance on the table by not using the
+# remaining 68 KB. It's likely the best kernel reduces BLOCK_N in favour of
+# keeping 2 occupancy.
+
+if __name__ == "__main__":
+    print("Benchmarking pipelined matmul")
+    print("=============================")
+    configs = find_configs(occupancy=1, in_dtype=torch.float16, acc_dtype=torch.float32, num_buffers=2)
+    configs += find_configs(occupancy=2, in_dtype=torch.float16, acc_dtype=torch.float32, num_buffers=2)
+    # Add our previous best config since it doesn't get selected.
+    configs.append([64, 256, 128, 4, 256])
+
+    M, N, K = 8192, 8192, 16 * 1024
+    A = torch.randn(M, K, device="cuda", dtype=torch.float16)
+    B = torch.randn(K, N, device="cuda", dtype=torch.float16)
+    C = torch.empty(M, N, device="cuda", dtype=torch.float32)
+    print("BLOCK_M BLOCK_N BLOCK_K num_warps instr_shape_n time (ms) tflops/s")
+    for BLOCK_M, BLOCK_N, BLOCK_K, num_warps, instr_shape_n in configs:
+        fn = lambda: blocked_matmul_pipelined(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, num_warps)
+        ms = triton.testing.do_bench(fn)
+        flops = 2 * M * N * K
+        tflops_per_sec = flops * 1e-12 / (ms * 1e-3)
+        print(f"{BLOCK_M:>7} {BLOCK_N:>7} {BLOCK_K:>7} {num_warps:>9} {instr_shape_n:>13} "
+              f"{ms:>9.2f} {tflops_per_sec:>8.2f}")
+    print()
+
+# %%
+# ```
+# BLOCK_M BLOCK_N BLOCK_K num_warps instr_shape_n time (ms) tflops/s
+#     128     256     128         8           256      4.87   451.78
+#     256     128     128         8           128      5.75   382.42
+#      64     256      64         4           256      5.52   398.08
+#      64     128     128         4           128      5.45   403.28
+#     128     128      64         4           128      4.47   491.71
+#     128     128      64         8           128      5.10   431.17
+#      64     256     128         4           256      6.22   353.66
+# ```
+#
+# We see indeed that the best config ends up with instr_shape_n=128. Note that
+# our previous best config is over 100 TFLOPS slower now! Pipelining the WGMMA
+# delivers a modest 5% speedup overall, but we had to re-tune the
+# hyperparameters.
+#
+# Pipelining both the async TMA loads and the WGMMA is left as an exercise to
+# the reader.
+#
+# Main takeaways:
+#
+# - WGMMA is a Hopper-specific instruction that performs block-level MMA.
+# - WGMMA is asynchronous and can be overlapped with other operations.
+# - WGMMA has a bunch of restrictions on its layout.
+# - LHS operand can be in shared memory or registers.
+# - WGMMA can handle transposed inputs, and we can create transposed views.
+# - Pipelining the WGMMA leads to better performance by enabling overlap.
+# - Hyperparameter tuning is critical for performance.
