@@ -100,14 +100,48 @@ Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::GlobalMe
 | `pred` | 1-bit signless integer |
 
 
-### `tti.experimental_check_outstanding_reads` (triton::instrument::ExperimentalCheckOutstandingReadsOp)
+### `tti.experimental_check_outstanding_commits` (triton::instrument::ExperimentalCheckOutstandingCommitsOp)
+
+_Check if the buffer has an outstanding commit._
+
+Syntax:
+
+```
+operation ::= `tti.experimental_check_outstanding_commits` $buf `{` $buffers `,` $outstandingCommits `(` $outstandingCommitsType `)` `}` `,` $pendingAccessType (`,` $pred^)? attr-dict `:` type($buf) `,` type($buffers) `,` type($outstandingCommits)
+```
+
+Check if the buffer has an outstanding commit.
+
+Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
+
+Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::GlobalMemory}`
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>outstandingCommitsType</code></td><td>::mlir::TypeAttr</td><td>any type attribute</td></tr>
+<tr><td><code>pendingAccessType</code></td><td>::mlir::StringAttr</td><td>string attribute</td></tr>
+</table>
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `buf` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
+| `buffers` | ranked tensor of floating-point or integer or ptr values |
+| `outstandingCommits` | ptr or ranked tensor of ptr values |
+| `pred` | 1-bit signless integer |
+
+
+### `tti.experimental_check_read_barriers` (triton::instrument::ExperimentalCheckReadBarriersOp)
 
 _Check if there are outstanding reads from a buffer guarded by a mbar_
 
 Syntax:
 
 ```
-operation ::= `tti.experimental_check_outstanding_reads` $buf `{` $buffers `,` $readBars `(` $readBarsType `)` `}` (`,` $pred^)? attr-dict `:` type($buf) `,` type($buffers) `,` type($readBars)
+operation ::= `tti.experimental_check_read_barriers` $buf `{` $buffers `,` $readBars `(` $readBarsType `)` `}` (`,` $pred^)? attr-dict `:` type($buf) `,` type($buffers) `,` type($readBars)
 ```
 
 Check if there are outstanding reads from a buffer guarded by a mbar.
@@ -133,14 +167,14 @@ Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::GlobalMe
 | `pred` | 1-bit signless integer |
 
 
-### `tti.experimental_check_outstanding_writes` (triton::instrument::ExperimentalCheckOutstandingWritesOp)
+### `tti.experimental_check_write_state` (triton::instrument::ExperimentalCheckWriteStateOp)
 
 _Check if there are outstanding writes to a buffer guarded by a mbar_
 
 Syntax:
 
 ```
-operation ::= `tti.experimental_check_outstanding_writes` $buf `{` $buffers `,` $writeBars `(` $writeBarsType `)` `,` $writeState `(` $writeStateType `)` `}` (`,` $pred^)? `pipelined` $hwPipelined attr-dict `:` type($buf) `,` type($buffers) `,` type($writeBars) `,` type($writeState)
+operation ::= `tti.experimental_check_write_state` $buf `{` $buffers `,` $writeBars `(` $writeBarsType `)` `,` $writeState `(` $writeStateType `)` `}` (`,` $pred^)? `pipelined` $hwPipelined attr-dict `:` type($buf) `,` type($buffers) `,` type($writeBars) `,` type($writeState)
 ```
 
 Check if the writeState tensor has non-zero value associated with the buffer.
@@ -176,17 +210,17 @@ Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::GlobalMe
 | `pred` | 1-bit signless integer |
 
 
-### `tti.experimental_check_write_commit` (triton::instrument::ExperimentalCheckWriteCommitOp)
+### `tti.experimental_clear_outstanding_commits` (triton::instrument::ExperimentalClearOutstandingCommitsOp)
 
-_Check if the buffer has an outstanding write commit._
+_Clear all the outstanding commits more distant than `outstandingNum._
 
 Syntax:
 
 ```
-operation ::= `tti.experimental_check_write_commit` $buf `{` $buffers `,` $writeCommits `(` $writeCommitsType `)` `}` (`,` $pred^)? attr-dict `:` type($buf) `,` type($buffers) `,` type($writeCommits)
+operation ::= `tti.experimental_clear_outstanding_commits` `{` $outstandingCommits `(` $outstandingCommitsType `)` `}` `,` $outstandingNum (`,` $pred^)? attr-dict `:` type($outstandingCommits)
 ```
 
-Check if the buffer has an outstanding write commit.
+Clear all the outstanding commits more distant than `outstandingNum` from the current thread.
 
 Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
 
@@ -196,16 +230,15 @@ Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::GlobalMe
 
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
-<tr><td><code>writeCommitsType</code></td><td>::mlir::TypeAttr</td><td>any type attribute</td></tr>
+<tr><td><code>outstandingCommitsType</code></td><td>::mlir::TypeAttr</td><td>any type attribute</td></tr>
+<tr><td><code>outstandingNum</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
 </table>
 
 #### Operands:
 
 | Operand | Description |
 | :-----: | ----------- |
-| `buf` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
-| `buffers` | ranked tensor of floating-point or integer or ptr values |
-| `writeCommits` | ptr or ranked tensor of ptr values |
+| `outstandingCommits` | ptr or ranked tensor of ptr values |
 | `pred` | 1-bit signless integer |
 
 
@@ -277,17 +310,17 @@ Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::GlobalMe
 | `pred` | 1-bit signless integer |
 
 
-### `tti.experimental_clear_write_commits` (triton::instrument::ExperimentalClearWriteCommitsOp)
+### `tti.experimental_commit_accesses` (triton::instrument::ExperimentalCommitAccessesOp)
 
-_Clear all the write commits more distant than `outstandingNum._
+_Commit all the staged accesses for all the buffers._
 
 Syntax:
 
 ```
-operation ::= `tti.experimental_clear_write_commits` `{` $writeCommits `(` $writeCommitsType `)` `}` `,` $outstandingNum (`,` $pred^)? attr-dict `:` type($writeCommits)
+operation ::= `tti.experimental_commit_accesses` `{` $outstandingCommits `(` $outstandingCommitsType `)` `}` (`,` $pred^)? attr-dict `:` type($outstandingCommits)
 ```
 
-Clear all the write commits more distant than `outstandingNum` from the current thread.
+Commit all the staged accesses for all the buffers.
 
 Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
 
@@ -297,15 +330,14 @@ Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::GlobalMe
 
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
-<tr><td><code>writeCommitsType</code></td><td>::mlir::TypeAttr</td><td>any type attribute</td></tr>
-<tr><td><code>outstandingNum</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
+<tr><td><code>outstandingCommitsType</code></td><td>::mlir::TypeAttr</td><td>any type attribute</td></tr>
 </table>
 
 #### Operands:
 
 | Operand | Description |
 | :-----: | ----------- |
-| `writeCommits` | ptr or ranked tensor of ptr values |
+| `outstandingCommits` | ptr or ranked tensor of ptr values |
 | `pred` | 1-bit signless integer |
 
 
@@ -345,45 +377,14 @@ Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::GlobalMe
 | `pred` | 1-bit signless integer |
 
 
-### `tti.experimental_commit_writes` (triton::instrument::ExperimentalCommitWritesOp)
-
-_Commit all the staged writes for all the buffers._
-
-Syntax:
-
-```
-operation ::= `tti.experimental_commit_writes` `{` $writeCommits `(` $writeCommitsType `)` `}` (`,` $pred^)? attr-dict `:` type($writeCommits)
-```
-
-Commit all the staged writes for all the buffers.
-
-Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
-
-Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::GlobalMemory}`
-
-#### Attributes:
-
-<table>
-<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
-<tr><td><code>writeCommitsType</code></td><td>::mlir::TypeAttr</td><td>any type attribute</td></tr>
-</table>
-
-#### Operands:
-
-| Operand | Description |
-| :-----: | ----------- |
-| `writeCommits` | ptr or ranked tensor of ptr values |
-| `pred` | 1-bit signless integer |
-
-
-### `tti.experimental_mark_as_read` (triton::instrument::ExperimentalMarkAsReadOp)
+### `tti.experimental_set_read_barrier` (triton::instrument::ExperimentalSetReadBarrierOp)
 
 _Mark a buffer as being read from using mbar as a guard_
 
 Syntax:
 
 ```
-operation ::= `tti.experimental_mark_as_read` $buf `,` $mbar `{` $buffers `,` $barriers `,` $readBars `(` $readBarsType `)` `}` (`,` $pred^)? attr-dict `:` type($buf) `,` type($mbar) `,` type($buffers) `,` type($barriers) `,` type($readBars)
+operation ::= `tti.experimental_set_read_barrier` $buf `,` $mbar `{` $buffers `,` $barriers `,` $readBars `(` $readBarsType `)` `}` (`,` $pred^)? attr-dict `:` type($buf) `,` type($mbar) `,` type($buffers) `,` type($barriers) `,` type($readBars)
 ```
 
 Mark a buffer as being read from using mbar as a guard.
@@ -411,14 +412,14 @@ Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::GlobalMe
 | `pred` | 1-bit signless integer |
 
 
-### `tti.experimental_mark_as_write` (triton::instrument::ExperimentalMarkAsWriteOp)
+### `tti.experimental_set_write_state` (triton::instrument::ExperimentalSetWriteStateOp)
 
-_Mark a buffer as being written to using mbar as a guard_
+_Mark a buffer as being written in writeState tensor_
 
 Syntax:
 
 ```
-operation ::= `tti.experimental_mark_as_write` $buf `{` $buffers `,` $writeState `(` $writeStateType `)` `}` (`,` $pred^)? `pipelined` $hwPipelined attr-dict `:` type($buf) `,` type($buffers) `,` type($writeState)
+operation ::= `tti.experimental_set_write_state` $buf `{` $buffers `,` $writeState `(` $writeStateType `)` `}` (`,` $pred^)? `pipelined` $hwPipelined attr-dict `:` type($buf) `,` type($buffers) `,` type($writeState)
 ```
 
 Mark a buffer as being written to. It is not yet tracked by a barrier, until
@@ -454,18 +455,16 @@ Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::GlobalMe
 | `pred` | 1-bit signless integer |
 
 
-### `tti.experimental_stage_write_for_commit` (triton::instrument::ExperimentalStageWriteForCommitOp)
-
-_Preapre to an async copy of a buffer. Staged until commit_group is called._
+### `tti.experimental_stage_access_for_commit` (triton::instrument::ExperimentalStageAccessForCommitOp)
 
 Syntax:
 
 ```
-operation ::= `tti.experimental_stage_write_for_commit` $buf `{` $buffers `,` $writeCommits `(` $writeCommitsType `)` `}` (`,` $pred^)? attr-dict `:` type($buf) `,` type($buffers) `,` type($writeCommits)
+operation ::= `tti.experimental_stage_access_for_commit` $buf `{` $buffers `,` $outstandingCommits `(` $outstandingCommitsType `)` `}` (`,` $pred^)? attr-dict `:` type($buf) `,` type($buffers) `,` type($outstandingCommits)
 ```
 
-Preapre to an async copy of a buffer. Staged until commit_group is called. The implementation will write `-1` to the
-`write_commits` tensor under the indices corresponding to the buffer.
+For operations that use `outstanding` to track the number of outstanding commits (rather than mbarriers),
+mark the buffer as being accessed, but not commited yet, by marking it with `-1`.
 
 Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
 
@@ -475,7 +474,7 @@ Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::GlobalMe
 
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
-<tr><td><code>writeCommitsType</code></td><td>::mlir::TypeAttr</td><td>any type attribute</td></tr>
+<tr><td><code>outstandingCommitsType</code></td><td>::mlir::TypeAttr</td><td>any type attribute</td></tr>
 </table>
 
 #### Operands:
@@ -484,6 +483,6 @@ Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::GlobalMe
 | :-----: | ----------- |
 | `buf` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
 | `buffers` | ranked tensor of floating-point or integer or ptr values |
-| `writeCommits` | ptr or ranked tensor of ptr values |
+| `outstandingCommits` | ptr or ranked tensor of ptr values |
 | `pred` | 1-bit signless integer |
 
