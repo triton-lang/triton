@@ -623,6 +623,9 @@ inline bool isCanonicalIndex(unsigned index, unsigned freeVarMask) {
 // group code isolated from above by invoking this function.
 void makeAllWarpGroupsIsolatedFromAbove(Operation *op);
 
+// Set the correct loop annotation on LLVM branch ops.
+void fixUpLoopAnnotation(ModuleOp mod);
+
 /// Converts ConverLayoutOp to llvm using padded pattern.
 /// This pattern adds unused memory locations after every rows of tensor fastest
 /// changing dimension:
