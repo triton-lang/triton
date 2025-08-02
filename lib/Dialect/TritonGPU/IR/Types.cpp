@@ -90,13 +90,14 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
                                   bool mutableMemory,
                                   ArrayRef<int64_t> allocShape) {
   if (allocShape.size() < shape.size())
-    emitError() << "alloc shape must have at least as many dimensions as shape";
+    return emitError()
+           << "alloc shape must have at least as many dimensions as shape";
   if (llvm::any_of(shape, [](int64_t dim) { return dim < 0; }))
-    emitError() << "shape must have non-negative dimensions";
+    return emitError() << "shape must have non-negative dimensions";
   if (llvm::any_of(llvm::zip(shape, allocShape), [](auto pair) {
         return std::get<0>(pair) > std::get<1>(pair);
       }))
-    emitError() << "shape must be less than or equal to allocShape";
+    return emitError() << "shape must be less than or equal to allocShape";
   auto ctx = encoding.getContext();
   if (auto enc = dyn_cast<nvidia_gpu::TensorMemoryEncodingAttr>(encoding)) {
     if (shape.size() != 2) {

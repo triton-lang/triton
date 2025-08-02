@@ -8,6 +8,7 @@
 // CHECK-DAG: [[BLOCKN64:#.*]] = #ttg.blocked<{sizePerThread = [1, 64]
 // CHECK-DAG: [[BLOCKN128:#.*]] = #ttg.blocked<{sizePerThread = [1, 128]
 // CHECK-DAG: [[SCALES:#.*]] = #ttg.linear<{register = {{\[\[}}0, 1], [0, 2], [32, 0], [64, 0], [0, 4], [0, 8], [0, 16], [0, 32], [0, 64{{]]}}, lane = {{\[\[}}1, 0], [2, 0], [4, 0], [8, 0], [16, 0{{]]}}, warp = {{\[\[}}0, 0], [0, 0{{]]}}, block = []}>
+// CHECK-DAG: [[BLOCK64_SPLIT:#.*]] = #ttg.blocked<{sizePerThread = [1, 32]
 
 // CHECK: @tmem_alloc
 tt.func @tmem_alloc() {
@@ -28,7 +29,7 @@ tt.func @tmem_load(%desc: !ttg.memdesc<128x64xf32, #tmem1, #ttng.tensor_memory>)
 tt.func @tmem_store(%desc: !ttg.memdesc<64x64xf32, #tmem2, #ttng.tensor_memory, mutable>) {
   %cst = arith.constant dense<1.0> : tensor<64x64xf32>
   %true = arith.constant true
-  // CHECK: ttng.tmem_store {{.*}} tensor<64x64xf32, [[BLOCKN64]]> ->
+  // CHECK: ttng.tmem_store {{.*}} tensor<64x64xf32, [[BLOCK64_SPLIT]]> ->
   ttng.tmem_store %cst, %desc, %true : tensor<64x64xf32> -> !ttg.memdesc<64x64xf32, #tmem2, #ttng.tensor_memory, mutable>
   tt.return
 }
