@@ -197,17 +197,29 @@ py::object layoutToGluon(Attribute layout) {
   } else if (auto amdMfma = dyn_cast<ttg::AMDMfmaEncodingAttr>(layout)) {
     auto ctaLayout = amdMfma.getCTALayout();
     std::vector<unsigned> instrShape{amdMfma.getMDim(), amdMfma.getNDim()};
-    auto isFP32 = !amdMfma.getElementType().has_value() ||
-                  amdMfma.getElementType().value().isF32();
 
-    return layouts.AMDMFMALayout(amdMfma.getVersion(), instrShape,
-                                 amdMfma.getIsTransposed(),
-                                 toStdVector(amdMfma.getWarpsPerCTA()),
-                                 toStdVector(amdMfma.getTilesPerWarp()),
-                                 layouts.GluonDType(isFP32 ? "fp32" : "fp64"),
-                                 toStdVector(ctaLayout.getCTAsPerCGA()),
-                                 toStdVector(ctaLayout.getCTASplitNum()),
-                                 toStdVector(ctaLayout.getCTAOrder()));
+    auto elemTypeOpt = amdMfma.getElementType();
+    const char *typeName = "fp32";
+    if (elemTypeOpt.has_value()) {
+      auto elemType = elemTypeOpt.value();
+      if (elemType.isF64()) {
+        typeName = "fp64";
+      } else if (elemType.isF32()) {
+        typeName = "fp32";
+      } else {
+        // The layout is valid or else, the AMDMfmaEncodingAttr will
+        // fail in verification, which means elem_type is int32.
+        typeName = "int32";
+      }
+    }
+
+    return layouts.AMDMFMALayout(
+        amdMfma.getVersion(), instrShape, amdMfma.getIsTransposed(),
+        toStdVector(amdMfma.getWarpsPerCTA()),
+        toStdVector(amdMfma.getTilesPerWarp()), layouts.GluonDType(typeName),
+        toStdVector(ctaLayout.getCTAsPerCGA()),
+        toStdVector(ctaLayout.getCTASplitNum()),
+        toStdVector(ctaLayout.getCTAOrder()));
   }
 
   throw py::value_error("Unhandled encoding encountered");
