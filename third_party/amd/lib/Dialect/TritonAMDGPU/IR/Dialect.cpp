@@ -539,17 +539,4 @@ void ConcatOp::getCanonicalizationPatterns(mlir::RewritePatternSet &patterns,
   patterns.add(foldConcatOpFromSingleSource);
 }
 
-SmallVector<unsigned> getShapePerCTATile(RankedTensorType layout) {
-  auto llEnc = triton::gpu::toLinearEncoding(layout);
-  auto sizePerThread = llEnc.getSizePerThread();
-  auto threadsPerWarp = llEnc.getThreadsPerWarp();
-  auto warpsPerCTA = llEnc.getWarpsPerCTA();
-  SmallVector<unsigned> shape;
-  for (auto [size, thread, warp] :
-       llvm::zip(sizePerThread, threadsPerWarp, warpsPerCTA)) {
-    shape.push_back(size * thread * warp);
-  }
-  return shape;
-}
-
 } // namespace mlir::triton::amdgpu
