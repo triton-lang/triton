@@ -165,7 +165,6 @@ def _apply_parallelism(
     if EP > 1:
         # Distributed Expert Parallelism
         ep_indx = expt_indx // chunk_size
-        ep_rank = dist.get_rank() // TP
 
         # Partition tokens by expert parallelism rank
         expt_scal_list = []
@@ -192,12 +191,6 @@ def _apply_parallelism(
         expt_scal = torch.cat(expt_scal_list, dim=0)
         expt_indx = torch.cat(expt_indx_list, dim=0)
         x = torch.cat(x_list, dim=0)
-
-        # Filter for local experts only
-        mask = (expt_indx // chunk_size) == ep_rank
-        expt_indx -= ep_rank * chunk_size
-        expt_scal = expt_scal.masked_fill(~mask, 0)
-        expt_indx = expt_indx.masked_fill(~mask, n_expts_tot)
     else:
         # Distributed Data Parallelism
         x = all_gather(x, dim=0)
@@ -228,6 +221,13 @@ def routing_torch(x, logits, n_expts_act, sm_first=False, expt_indx=None, n_rows
 
     ep_indx, expt_indx, x, output_split_sizes = _apply_parallelism(expt_scal, expt_indx, x, n_expts_tot, chunk_size,
                                                                    EP=EP, TP=TP)
+
+    # Filter for local experts only
+    ep_rank = dist.get_rank() // TP
+    expt_indx -= ep_rank * chunk_size
+    mask = (expt_indx // chunk_size) == ep_rank
+    expt_scal = expt_scal.masked_fill(~mask, 0)
+    expt_indx = expt_indx.masked_fill(~mask, n_expts_tot)
 
     # Flatten topk data
     expt_scal = expt_scal.reshape(-1)
@@ -297,8 +297,12 @@ def routing_triton(x, logits, n_expts_act, sm_first=False, expt_indx=None, n_row
     ep_indx, expt_indx, x, output_split_sizes = _apply_parallelism(expt_scal, expt_indx, x, n_expts_tot, chunk_size,
                                                                    EP=EP, TP=TP)
 
+    # Filter for local experts only
+    ep_rank = dist.get_rank() // TP
+    expt_indx -= ep_rank * chunk_size
+
     # Recover bitmask for local experts
-    n_cols = triton.cdiv(n_expts_tot, 32)
+    n_cols = triton.cdiv(chunk_size, 32)
     n_rows = expt_indx.size(0)
     bitmask = torch.zeros((n_rows, n_cols), dtype=torch.int32, device=expt_indx.device)
     BLOCK_SIZE_M = 128
@@ -312,7 +316,7 @@ def routing_triton(x, logits, n_expts_act, sm_first=False, expt_indx=None, n_row
         n_cols,
         BLOCK_SIZE_M=BLOCK_SIZE_M,
         BLOCK_SIZE_K=BLOCK_SIZE_K,
-        sentinel=n_cols,
+        sentinel=chunk_size,
     )
     expt_scal, expt_indx, bitmatrix = prune_routing(expt_scal, expt_indx, bitmask, n_expts_tot, EP)
     routing_data, gather_indx, scatter_indx = routing_from_bitmatrix(bitmatrix, expt_scal, expt_indx, n_expts_tot,
