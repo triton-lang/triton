@@ -4,6 +4,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/LinearLayout.h"
@@ -12,6 +13,8 @@
 #include "llvm/ADT/Twine.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
+
+using mlir::triton::nvidia_gpu::TensorMemoryEncodingAttr;
 
 namespace mlir::triton::gpu {
 namespace {
@@ -1185,6 +1188,95 @@ LinearLayout SliceEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
                       llvm::to_vector(sliceLL.getOutDimNames()));
 }
 
+LinearLayout tensorMemoryToLinearLayout(ArrayRef<int64_t> shape,
+                                        TensorMemoryEncodingAttr encoding) {
+  // We model tensorMemory as a 2D layout. Interestingly enough, we craft the
+  // map as going from the matrix into the tensorMemory, rather than the other
+  // way around. We do this because of the following reasons:
+  // - When packed=True, the coordinate (0, 0) would have to map to BOTH
+  // elements (0, 0) and (0, 1)
+  // - For blockM=64, when we have a tensor of shape 64xblockN, we leave every
+  // other 16 rows empty.
+  //   This cannot be modelled as a map from TMEM into the tensor as you don't
+  //   have an element to map row 16 to
+  // - Whenever we use TMEM or SHMEM layouts, we always first invert them
+  // - We never want to have broadcasting in TMEM, so the map from Tensor to
+  // TMEM is always well-defined
+  assert(shape.size() == 2);
+  auto *ctx = encoding.getContext();
+  auto rows = S("rows");
+  auto cols = S("cols");
+  auto dims = standardOutDimNames(ctx, 2);
+  if (!encoding.getUnpacked()) {
+    auto packing = LinearLayout::zeros1D(2, dims[1], cols);
+    auto newEncoding = TensorMemoryEncodingAttr::get(
+        ctx, encoding.getBlockM(), encoding.getBlockN(), /*unpacked=*/true,
+        encoding.getCTASplitM(), encoding.getCTASplitN());
+    return packing *
+           tensorMemoryToLinearLayout({shape[0], shape[1] / 2}, newEncoding);
+  }
+  // The CTAOrder = [0, 1] so se start by N so that it ends up as ((tile *
+  // splitM) * splitN) We append them to the cols dimension
+  if (encoding.getCTASplitN() > 1) {
+    auto split =
+        LinearLayout::identity1D(encoding.getCTASplitN(), dims[1], cols);
+    auto newEncoding = TensorMemoryEncodingAttr::get(
+        ctx, encoding.getBlockM(), encoding.getBlockN(), encoding.getUnpacked(),
+        encoding.getCTASplitM(), 1);
+    return tensorMemoryToLinearLayout(
+               {shape[0], shape[1] / encoding.getCTASplitN()}, newEncoding) *
+           split;
+  }
+  if (encoding.getCTASplitM() > 1) {
+    auto split =
+        LinearLayout::identity1D(encoding.getCTASplitM(), dims[0], cols);
+    auto newEncoding = TensorMemoryEncodingAttr::get(
+        ctx, encoding.getBlockM(), encoding.getBlockN(), encoding.getUnpacked(),
+        1, encoding.getCTASplitN());
+    return tensorMemoryToLinearLayout(
+               {shape[0] / encoding.getCTASplitM(), shape[1]}, newEncoding) *
+           split;
+  }
+  assert(encoding.getCTASplitM() == 1 && encoding.getCTASplitN() == 1 &&
+         encoding.getUnpacked());
+
+  auto left = to_vector(shape);
+  auto blockM = encoding.getBlockM();
+  auto blockN = encoding.getBlockN();
+  assert(blockM == 64 || blockM == 128);
+  LinearLayout tile;
+  if (blockM == 64) {
+    tile = LinearLayout::identity1D(16, dims[0], rows) *
+           LinearLayout::identity1D(blockN, dims[1], cols);
+    auto bases = tile.getBases();
+    bases[dims[0]].push_back({32, 0});
+    bases[dims[0]].push_back({64, 0});
+    left[0] /= blockM;
+    left[1] /= blockN;
+    // order = [0, 1] so we start by dim0
+    if (left[0] > 1) {
+      bases[dims[0]].push_back({16, 0});
+      left[0] /= 2;
+    } else if (left[1] > 1) {
+      bases[dims[1]].push_back({16, 0});
+      left[1] /= 2;
+    }
+    tile = LinearLayout(bases, {{rows, 128}, {cols, blockN}},
+                        /*requireSurjective*/ false);
+
+  } else {
+    tile = LinearLayout::identity1D(blockM, dims[0], rows) *
+           LinearLayout::identity1D(blockN, dims[1], cols);
+    left[0] /= blockM;
+    left[1] /= blockN;
+  }
+  assert(left[0] >= 1 && left[1] >= 1);
+  // Broadcast the remaining dimensions in order [0, 1]
+  tile = tile * LinearLayout::identity1D(left[0], dims[0], cols) *
+         LinearLayout::identity1D(left[1], dims[1], cols);
+  return tile;
+}
+
 LinearLayout
 TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
                                  ArrayRef<int64_t> allocationShape) {
@@ -1202,7 +1294,7 @@ TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
     assert(allocationShape.empty() &&
            "allocationShape not supported for distributed layout");
     result = distributed.toLinearLayout(shape);
-  } else {
+  } else if (isa<SharedEncodingTrait>(layout)) {
     assert(!allocationShape.empty() &&
            "allocationShape not supported for shared layout");
     allocationShape = allocationShape.take_back(shape.size());
@@ -1226,6 +1318,9 @@ TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
     } else {
       assert(0 && "unknown layout");
     }
+  } else {
+    auto tensorMemoryEncoding = cast<TensorMemoryEncodingAttr>(layout);
+    result = tensorMemoryToLinearLayout(shape, tensorMemoryEncoding);
   }
 
   llCache.set(std::move(key), result);

@@ -3,6 +3,7 @@
 #include "mlir/IR/MLIRContext.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Tools/StrUtil.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/Support/Signals.h"
@@ -16,13 +17,16 @@ std::ostream &operator<<(std::ostream &os, StringAttr str) {
 }
 } // namespace mlir
 
+using mlir::triton::nvidia_gpu::TensorMemoryEncodingAttr;
 namespace mlir::triton::gpu {
 
 static LinearLayout toLinearLayout(ArrayRef<int64_t> shape, Attribute layout) {
-  if (isa<DistributedEncodingTrait>(layout)) {
+  if (isa<DistributedEncodingTrait>(layout))
     return toLinearLayout(shape, layout, {});
-  } else {
-    assert(isa<SharedEncodingTrait>(layout));
+  else if (isa<SharedEncodingTrait>(layout))
+    return toLinearLayout(shape, layout, shape);
+  else {
+    assert(isa<TensorMemoryEncodingAttr>(layout));
     return toLinearLayout(shape, layout, shape);
   }
 }
@@ -30,7 +34,14 @@ namespace {
 
 class LinearLayoutConversionsTest : public ::testing::Test {
 public:
-  void SetUp() { ctx.getOrLoadDialect<TritonGPUDialect>(); }
+  void SetUp() {
+    mlir::DialectRegistry registry;
+    registry.insert<TritonGPUDialect,
+                    mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect>();
+    ctx.appendDialectRegistry(registry);
+    ctx.getOrLoadDialect<TritonGPUDialect>();
+    ctx.getOrLoadDialect<mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect>();
+  }
 
   BlockedEncodingAttr blocked(ArrayRef<unsigned> spt, ArrayRef<unsigned> tpw,
                               ArrayRef<unsigned> wpb, ArrayRef<unsigned> cpg,
@@ -136,6 +147,12 @@ public:
     return AMDRotatingSharedEncodingAttr::get(
         &ctx, vec, perPhase, maxPhase, ord,
         CTALayoutAttr::get(&ctx, cpg, cSplit, cOrd));
+  }
+
+  TensorMemoryEncodingAttr tmem(unsigned blockM, unsigned blockN, bool unpacked,
+                                unsigned ctaSplitM, unsigned ctaSplitN) {
+    return TensorMemoryEncodingAttr::get(&ctx, blockM, blockN, unpacked,
+                                         ctaSplitM, ctaSplitN);
   }
 
   StringAttr S(StringRef str) { return StringAttr::get(&ctx, str); }
@@ -3505,6 +3522,104 @@ TEST_F(LinearLayoutConversionsTest, MMAv5Fp4Padded) {
                        {16, 0}}},
                      {S("block"), {}}},
                     {S("dim0"), S("dim1")}));
+}
+
+TEST_F(LinearLayoutConversionsTest, TensorMemory_blockM_64) {
+  auto enc = tmem(64, 64, /*unpacked=*/true, 1, 1);
+  auto d0 = S("dim0");
+  auto d1 = S("dim1");
+  auto rows = S("rows");
+  auto cols = S("cols");
+  LinearLayout expected1 = LinearLayout(
+      {{d0, {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {32, 0}, {64, 0}, {16, 0}}},
+       {d1, {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 16}, {0, 32}}}},
+      {{rows, 128}, {cols, 64}}, /*requireSurjective=*/true);
+  EXPECT_EQ(toLinearLayout({128, 64}, enc), expected1);
+  // Tensor just fits blockMxblockN -> the layout is not surjective (does not
+  // cover basis {16, 0})
+  LinearLayout expected2 =
+      LinearLayout({{d0, {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {32, 0}, {64, 0}}},
+                    {d1, {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 16}, {0, 32}}}},
+                   {{rows, 128}, {cols, 64}}, /*requireSurjective=*/false);
+  EXPECT_EQ(toLinearLayout({64, 64}, enc), expected2);
+  // Broadcasts M then N
+  LinearLayout expected3 = LinearLayout(
+      {{d0,
+        {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {32, 0}, {64, 0}, {16, 0}, {0, 64}}},
+       {d1, {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 16}, {0, 32}, {0, 128}}}},
+      {{rows, 128}, {cols, 256}}, /*requireSurjective=*/true);
+  EXPECT_EQ(toLinearLayout({256, 128}, enc), expected3);
+  // Fits N in basis {16, 0} if there's not enough blockM
+  LinearLayout expected4 = LinearLayout(
+      {{d0, {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {32, 0}, {64, 0}}},
+       {d1,
+        {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 16}, {0, 32}, {16, 0}, {0, 64}}}},
+      {{rows, 128}, {cols, 128}}, /*requireSurjective=*/true);
+  EXPECT_EQ(toLinearLayout({64, 256}, enc), expected4);
+}
+
+TEST_F(LinearLayoutConversionsTest, TensorMemory_blockM_128) {
+  auto enc = tmem(128, 128, /*unpacked=*/true, 1, 1);
+  auto d0 = S("dim0");
+  auto d1 = S("dim1");
+  auto rows = S("rows");
+  auto cols = S("cols");
+  LinearLayout tile = LinearLayout::identity1D(128, d0, rows) *
+                      LinearLayout::identity1D(128, d1, cols);
+  EXPECT_EQ(toLinearLayout({128, 128}, enc), tile);
+  EXPECT_EQ(toLinearLayout({256, 128}, enc),
+            tile * LinearLayout::identity1D(2, d0, cols));
+  EXPECT_EQ(toLinearLayout({256, 256}, enc),
+            tile * LinearLayout::identity1D(2, d0, cols) *
+                LinearLayout::identity1D(2, d1, cols));
+}
+
+TEST_F(LinearLayoutConversionsTest, TensorMemory_Packed) {
+  auto d0 = S("dim0");
+  auto d1 = S("dim1");
+  auto rows = S("rows");
+  auto cols = S("cols");
+  auto enc = tmem(128, 128, /*unpacked*/ false, 1, 1);
+  auto encUnpacked = tmem(128, 128, /*unpacked*/ true, 1, 1);
+  auto padding = LinearLayout::zeros1D(2, d1, cols);
+  EXPECT_EQ(toLinearLayout({128, 256}, enc),
+            padding * toLinearLayout({128, 128}, encUnpacked));
+  EXPECT_EQ(toLinearLayout({256, 256}, enc),
+            padding * toLinearLayout({256, 128}, encUnpacked));
+  EXPECT_EQ(toLinearLayout({128, 512}, enc),
+            padding * toLinearLayout({128, 256}, encUnpacked));
+  EXPECT_EQ(toLinearLayout({256, 512}, enc),
+            padding * toLinearLayout({256, 256}, encUnpacked));
+}
+
+TEST_F(LinearLayoutConversionsTest, TensorMemory_CTASplit) {
+  auto d0 = S("dim0");
+  auto d1 = S("dim1");
+  auto rows = S("rows");
+  auto cols = S("cols");
+  auto enc = tmem(64, 128, /*unpacked*/ true, 2, 1);
+  auto enc1 = tmem(64, 128, /*unpacked*/ true, 1, 1);
+  EXPECT_EQ(toLinearLayout({128, 128}, enc),
+            toLinearLayout({64, 128}, enc1) *
+                LinearLayout::identity1D(2, d0, cols));
+  enc = tmem(128, 64, /*unpacked*/ true, 1, 2);
+  enc1 = tmem(128, 64, /*unpacked*/ true, 1, 1);
+  EXPECT_EQ(toLinearLayout({128, 128}, enc),
+            toLinearLayout({128, 64}, enc1) *
+                LinearLayout::identity1D(2, d1, cols));
+  enc = tmem(64, 64, /*unpacked*/ true, 2, 2);
+  enc1 = tmem(64, 64, /*unpacked*/ true, 1, 1);
+  EXPECT_EQ(toLinearLayout({128, 128}, enc),
+            toLinearLayout({64, 64}, enc1) *
+                LinearLayout::identity1D(2, d0, cols) *
+                LinearLayout::identity1D(2, d1, cols));
+  // The non-contiguous tile stays non-contiguous even in the multiCTA setup
+  auto noncontigTile =
+      toLinearLayout({64, 64}, tmem(64, 64, /*unpacked*/ true, 1, 1));
+  auto noncontigEnc = tmem(64, 64, /*unpacked*/ true, 2, 2);
+  EXPECT_EQ(toLinearLayout({128, 128}, enc),
+            noncontigTile * LinearLayout::identity1D(2, d0, cols) *
+                LinearLayout::identity1D(2, d1, cols));
 }
 
 } // anonymous namespace

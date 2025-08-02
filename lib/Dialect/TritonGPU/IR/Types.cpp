@@ -1,6 +1,8 @@
 #include "triton/Dialect/TritonGPU/IR/Types.h"
 #include "mlir/IR/DialectImplementation.h" // required by `Types.cpp.inc`
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "triton/Tools/LayoutUtils.h"
 #include "llvm/ADT/TypeSwitch.h" // required by `Types.cpp.inc`
 
 using namespace mlir;
@@ -87,8 +89,67 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
                                   Attribute encoding, Attribute memorySpace,
                                   bool mutableMemory,
                                   ArrayRef<int64_t> allocShape) {
+  // Every dimension but the first (to allow for pipelining) must be a power of
+  // 2
+  if (!isa<PaddedSharedEncodingAttr>(encoding) &&
+      llvm::any_of(shape.drop_front(1),
+                   [](int64_t dim) { return !llvm::isPowerOf2_64(dim); }))
+    return emitError() << "shape must have power-of-2 dimensions; got "
+                       << shape;
   if (allocShape.size() < shape.size())
-    emitError() << "alloc shape must have at least as many dimensions as shape";
+    return emitError()
+           << "alloc shape must have at least as many dimensions as shape";
+  if (llvm::any_of(
+          llvm::zip(shape, allocShape.take_back(shape.size())),
+          [](auto pair) { return std::get<0>(pair) > std::get<1>(pair); }))
+    return emitError() << "shape must be less than or equal to allocShape. "
+                       << "shape = " << shape
+                       << ", allocShape = " << allocShape;
+  auto ctx = encoding.getContext();
+  if (auto enc = dyn_cast<nvidia_gpu::TensorMemoryEncodingAttr>(encoding)) {
+    if (shape.size() != 2) {
+      return emitError() << "shape must be a 2-element array";
+    }
+    if (memorySpace != nvidia_gpu::TensorMemorySpaceAttr::get(ctx)) {
+      return emitError() << "memorySpace must be TensorMemorySpace";
+    }
+    auto bitwidth = elementType.getIntOrFloatBitWidth();
+    if (!enc.getUnpacked() && bitwidth != 16) {
+      return emitError() << "bitwidth must be 16 for packed tensor memory";
+    }
+    if (bitwidth != 16 && bitwidth != 32) {
+      return emitError() << "bitwidth must be 16 or 32";
+    }
+    if (shape[0] < enc.getBlockM() * enc.getCTASplitM() ||
+        shape[1] < enc.getBlockN() * enc.getCTASplitN() *
+                       (enc.getUnpacked() ? 1 : 32 / bitwidth)) {
+      return emitError() << "shape must be at least "
+                         << enc.getBlockM() * enc.getCTASplitM() << "x"
+                         << enc.getBlockN() * enc.getCTASplitN() *
+                                (enc.getUnpacked() ? 1 : 32 / bitwidth);
+    }
+    auto ll = toLinearLayout(shape, enc, {});
+    auto dims = standardOutDimNames(ctx, 2);
+    if (ll.getInDimSize(dims[0]) != shape[0] ||
+        ll.getInDimSize(dims[1]) != shape[1]) {
+      return emitError() << "shape must be equal to "
+                         << ll.getInDimSize(dims[0]) << "x"
+                         << ll.getInDimSize(dims[1]);
+    }
+  } else if (auto enc = dyn_cast<SharedEncodingTrait>(encoding)) {
+    // TODO Add verifier
+  } else if (auto enc = dyn_cast<nvidia_gpu::TensorMemoryScalesEncodingAttr>(
+                 encoding)) {
+    if (memorySpace != nvidia_gpu::TensorMemorySpaceAttr::get(ctx)) {
+      return emitError() << "memorySpace must be TensorMemorySpace";
+    }
+    if (shape.size() != 2) {
+      return emitError() << "shape must be a 2-element array";
+    }
+    // TODO Add rest of verifier
+  } else {
+    return emitError() << encoding << " is not a valid encoding";
+  }
   return success();
 }
 
