@@ -2,23 +2,15 @@
 
 #include "Utility.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
-#include "mlir/Dialect/LLVMIR/LLVMTypes.h"
-#include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/IR/ValueRange.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
-#include "triton/Dialect/Triton/IR/Dialect.h"
-#include "triton/Dialect/TritonGPU/IR/Attributes.h"
-#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/Support/Debug.h"
-#include <array>
 
 using namespace mlir;
 using namespace mlir::triton;
 using namespace mlir::triton::gpu;
-using ::mlir::LLVM::AMD::upcast8xMxfp4_SW;
 
 namespace {
 
@@ -49,7 +41,7 @@ public:
         packedVec = b.insert_element(packedVec, v, b.i32_val(j));
       }
       SmallVector<Value, 4> v4i32 =
-          upcast8xMxfp4_SW(rewriter, op, toFp16, packedVec);
+          ::mlir::LLVM::AMD::upcast8xMxfp4_SW(rewriter, op, toFp16, packedVec);
       for (int j = 0; j < 4; j++) {
         Value elements = b.bitcast(v4i32[j], vec_ty(elemType, 2));
         results.push_back(b.extract_element(elements, b.i32_val(0)));
