@@ -3568,47 +3568,58 @@ TEST_F(LinearLayoutConversionsTest, TensorMemory_blockM_128) {
                       LinearLayout::identity1D(128, d1, cols);
   EXPECT_EQ(toLinearLayout({128, 128}, enc), tile);
   EXPECT_EQ(toLinearLayout({256, 128}, enc),
-            tile * LinearLayout::identity1D(2, d0, rows));
+            tile * LinearLayout::identity1D(2, d0, cols));
   EXPECT_EQ(toLinearLayout({256, 256}, enc),
-            tile * LinearLayout::identity1D(2, d0, rows) *
+            tile * LinearLayout::identity1D(2, d0, cols) *
                 LinearLayout::identity1D(2, d1, cols));
 }
 
 TEST_F(LinearLayoutConversionsTest, TensorMemory_Packed) {
+  auto d0 = S("dim0");
+  auto d1 = S("dim1");
+  auto rows = S("rows");
+  auto cols = S("cols");
   auto enc = tmem(128, 128, /*unpacked*/ false, 1, 1);
-  auto padding = LinearLayout::zeros1D(2, S("dim1"), S("cols"));
-  EXPECT_EQ(toLinearLayout({128, 128}, enc),
-            padding * toLinearLayout({64, 128}, enc));
-  enc = tmem(64, 128, /*unpacked*/ false, 1, 2);
-  EXPECT_EQ(toLinearLayout({128, 128}, enc),
-            padding * toLinearLayout({64, 128}, enc));
-  enc = tmem(64, 128, /*unpacked*/ false, 2, 1);
-  EXPECT_EQ(toLinearLayout({128, 128}, enc),
-            padding * toLinearLayout({64, 128}, enc));
-  enc = tmem(64, 128, /*unpacked*/ false, 2, 2);
-  EXPECT_EQ(toLinearLayout({128, 128}, enc),
-            padding * toLinearLayout({64, 128}, enc));
+  auto encUnpacked = tmem(128, 128, /*unpacked*/ true, 1, 1);
+  auto padding = LinearLayout::zeros1D(2, d1, cols);
+  EXPECT_EQ(toLinearLayout({128, 256}, enc),
+            padding * toLinearLayout({128, 128}, encUnpacked));
+  EXPECT_EQ(toLinearLayout({256, 256}, enc),
+            padding * toLinearLayout({256, 128}, encUnpacked));
+  EXPECT_EQ(toLinearLayout({128, 512}, enc),
+            padding * toLinearLayout({128, 256}, encUnpacked));
+  EXPECT_EQ(toLinearLayout({256, 512}, enc),
+            padding * toLinearLayout({256, 256}, encUnpacked));
 }
 
 TEST_F(LinearLayoutConversionsTest, TensorMemory_CTASplit) {
-  auto tile = toLinearLayout({64, 128}, tmem(64, 64, /*unpacked*/ true, 1, 1));
+  auto d0 = S("dim0");
+  auto d1 = S("dim1");
+  auto rows = S("rows");
+  auto cols = S("cols");
   auto enc = tmem(64, 128, /*unpacked*/ true, 2, 1);
+  auto enc1 = tmem(64, 128, /*unpacked*/ true, 1, 1);
   EXPECT_EQ(toLinearLayout({128, 128}, enc),
-            tile * LinearLayout::identity1D(2, S("dim0"), S("cols")));
-  enc = tmem(64, 64, /*unpacked*/ true, 1, 2);
+            toLinearLayout({64, 128}, enc1) *
+                LinearLayout::identity1D(2, d0, cols));
+  enc = tmem(128, 64, /*unpacked*/ true, 1, 2);
+  enc1 = tmem(128, 64, /*unpacked*/ true, 1, 1);
   EXPECT_EQ(toLinearLayout({128, 128}, enc),
-            tile * LinearLayout::identity1D(2, S("dim1"), S("cols")));
+            toLinearLayout({128, 64}, enc1) *
+                LinearLayout::identity1D(2, d1, cols));
   enc = tmem(64, 64, /*unpacked*/ true, 2, 2);
-  EXPECT_EQ(toLinearLayout({128, 256}, enc),
-            tile * LinearLayout::identity1D(2, S("dim0"), S("cols")) *
-                LinearLayout::identity1D(2, S("dim1"), S("cols")));
+  enc1 = tmem(64, 64, /*unpacked*/ true, 1, 1);
+  EXPECT_EQ(toLinearLayout({128, 128}, enc),
+            toLinearLayout({64, 64}, enc1) *
+                LinearLayout::identity1D(2, d0, cols) *
+                LinearLayout::identity1D(2, d1, cols));
   // The non-contiguous tile stays non-contiguous even in the multiCTA setup
   auto noncontigTile =
       toLinearLayout({64, 64}, tmem(64, 64, /*unpacked*/ true, 1, 1));
   auto noncontigEnc = tmem(64, 64, /*unpacked*/ true, 2, 2);
   EXPECT_EQ(toLinearLayout({128, 128}, enc),
-            noncontigTile * LinearLayout::identity1D(2, S("dim0"), S("cols")) *
-                LinearLayout::identity1D(2, S("dim1"), S("cols")));
+            noncontigTile * LinearLayout::identity1D(2, d0, cols) *
+                LinearLayout::identity1D(2, d1, cols));
 }
 
 } // anonymous namespace
