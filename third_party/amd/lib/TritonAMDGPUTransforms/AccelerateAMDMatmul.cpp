@@ -1043,7 +1043,7 @@ static Value promoteOperand(OpBuilder &builder, Location loc, Value operand,
   return builder.create<triton::FpToFpOp>(loc, tensorPromotedType, operand);
 }
 
-// promote operands of dot op if the existing combination is not natively
+// Promote operands of dot op if the existing combination is not natively
 // supported.
 static void decomposeMixedModeDotOp(ModuleOp mod) {
   mod.walk([](triton::DotOp dotOp) -> void {
@@ -1427,11 +1427,15 @@ struct TritonAMDGPUAccelerateMatmulPass
     case ISAFamily::CDNA4:
       mfmaPatterns.add<::ScaledBlockedToScaledMFMAF8F6F4>(
           context, getMfmaVersion(isaFamily), matrixInstructionSize,
-          /*benefit=*/10);
-      [[fallthrough]];
-    case ISAFamily::CDNA1:
-    case ISAFamily::CDNA2:
+          /*benefit=*/4);
+      ttg::populateDecomposeScaledBlockedPatterns(mfmaPatterns, /*benefit=*/3);
+      mfmaPatterns.add<::BlockedToMFMA, ::ScaledBlockedToMFMA>(
+          context, getMfmaVersion(isaFamily), matrixInstructionSize, kPack,
+          /*benefit=*/2);
+      break;
     case ISAFamily::CDNA3:
+    case ISAFamily::CDNA2:
+    case ISAFamily::CDNA1:
       mfmaPatterns.add<::BlockedToMFMA, ::ScaledBlockedToMFMA>(
           context, getMfmaVersion(isaFamily), matrixInstructionSize, kPack,
           /*benefit=*/2);

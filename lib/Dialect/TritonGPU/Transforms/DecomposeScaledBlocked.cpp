@@ -34,6 +34,14 @@ public:
             scaledDotOp.getResult().getType().getEncoding()))
       return failure();
 
+    // Hack to support BF16 * FP4 only
+    if (scaledDotOp.getAElemType() != ScaleDotElemType::E2M1 &&
+        scaledDotOp.getAElemType() != ScaleDotElemType::BF16)
+      return failure();
+    if (scaledDotOp.getBElemType() != ScaleDotElemType::E2M1 &&
+        scaledDotOp.getBElemType() != ScaleDotElemType::BF16)
+      return failure();
+
     // TODO: add support for m/n packed formats.
     if (!scaledDotOp.getLhsKPack() || !scaledDotOp.getRhsKPack())
       return failure();
