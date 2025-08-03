@@ -35,4 +35,4 @@ from triton.experimental.gluon.language.nvidia.hopper import (
 )
 
 # %%
-# Let's illustrate persistent
+#
