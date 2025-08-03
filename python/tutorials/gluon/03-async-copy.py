@@ -297,7 +297,7 @@ def elementwise_add_pipelined_kernel(  #
         cp.commit_group()
         copy_idx += 1
 
-        # Wait for `num_stages-1` copies to complete, which is the last issued
+        # Wait for `num_buffers-1` copies to complete, which is the last issued
         # copy. We can process that buffer.
         cp.wait_group(num_buffers - 1)
 

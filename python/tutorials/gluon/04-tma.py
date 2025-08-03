@@ -213,6 +213,7 @@ def elementwise_add_tma_kernel(  #
         tma.store_wait(pendings=0)
         c_smem.store(c_val)
         fence_async_shared()
+        # Issue the store without waiting for it.
         tma.async_copy_shared_to_global(c_desc, [xoff, yoff], c_smem)
         read_index += 1
 
