@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 from copy import deepcopy
 import matplotlib.pyplot as plt
@@ -12,7 +13,7 @@ from triton_kernels.numerics import InFlexData
 from triton_kernels.routing import routing
 from triton_kernels.target_info import is_hip, get_cdna_version
 from triton_kernels.tensor import convert_layout
-from triton_kernels.tensor_details.layout import StridedLayout, BlackwellMXScaleLayout, HopperMXScaleLayout, HopperMXValueLayout
+from triton_kernels.tensor_details.layout import StridedLayout, BlackwellMXScaleLayout, HopperMXScaleLayout, HopperMXValueLayout, GFX950MXScaleLayout
 from triton_kernels.tensor import wrap_torch_tensor, FP4
 from dataclasses import dataclass
 
@@ -110,6 +111,10 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP,
                 scale_layout = HopperMXScaleLayout
             if torch.cuda.get_device_capability()[0] == 10:
                 scale_layout = BlackwellMXScaleLayout
+        else:
+            use_scale_preshuffling = os.environ.get("TRITON_HIP_PRESHUFFLE_SCALES", "0") == "1"
+            if use_scale_preshuffling:
+                scale_layout = GFX950MXScaleLayout
         opt1 = {"value_layout": value_layout, "scale_layout": scale_layout}
         opt2 = deepcopy(opt1)
     wg, wg_flex, wg_scale = quantize(wg, "bf16", dev, **optg)
@@ -217,8 +222,10 @@ if __name__ == "__main__":
     # roofline_mlp(batch_ranges_moe, 5120, 8192, 128, 4, *dense_dtypes, TP=1, EP=1, name="llama4-maverick")
     # roofline_mlp(batch_ranges_moe, 5120, 8192, 128, 4, *quantized_dtypes, TP=1, EP=1, name="llama4-maverick")
 
-    batch_ranges_moe = [(1024, 4100, 1024), (8192, 8200, 32)]
+    batch_ranges_moe = [(1, 2, 1), (2, 5, 2), (8, 18, 8), (32, 65, 32), (128, 257, 128), (1024, 4100, 1024), (8192, 8200, 32)]
+    # batch_ranges_moe = [(1024, 4100, 1024), (8192, 8200, 32)]
+    # batch_ranges_moe = [(8192, 8200, 32)]
 
     quantized_dtypes = ["bf16", "mx4"]
-    roofline_mlp(batch_ranges_moe, 5888, 3072, 128, 4, *quantized_dtypes, TP=1, EP=1, name="oai")
-
+    roofline_mlp(batch_ranges_moe, 6144, 3072, 128, 4, *quantized_dtypes, TP=1, EP=1, name="oai")
+    # roofline_mlp(batch_ranges_moe, 5888, 3072, 128, 4, *quantized_dtypes, TP=1, EP=1, name="oai")

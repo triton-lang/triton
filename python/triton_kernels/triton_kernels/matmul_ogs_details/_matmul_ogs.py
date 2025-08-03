@@ -3,6 +3,7 @@ import triton.language as tl
 from triton_kernels.tensor_details.layout_details.blackwell_scale import unswizzle_mx_scale_bw
 from triton_kernels.tensor_details.layout_details.hopper_scale import unswizzle_mxfp4_scale_hopper
 from triton_kernels.tensor_details.layout_details.hopper_value import unswizzle_mxfp4_value_hopper
+from triton_kernels.tensor_details.layout_details.gfx950_scale import unswizzle_mx_scale_gfx950
 from triton_kernels.numerics_details.flexpoint import float_to_flex, load_scale
 from ._common import make_matmul_repr, matmul_launch_metadata, swizzle2d, xcd_swizzle, get_scaled_dot_format_string
 
@@ -218,6 +219,14 @@ def _matmul_ogs(
             PACKED_MX_BLOCK: tl.constexpr = MX_SCALE_BLOCK_K * 32
             SCALE_BLOCK_N: tl.constexpr = BLOCK_N // 32
             stride_scale_k = stride_mx_k
+        elif SWIZZLE_MX_SCALE == "GFX950_SCALE":
+            tl.static_assert(SPLIT_K == 1)
+            tl.static_assert(stride_mx_k is not None)
+            tl.static_assert(stride_mx_n is not None)
+            NON_K_PRESHUFFLE_BLOCK_SIZE: tl.constexpr = 32
+            PACKED_MX_BLOCK: tl.constexpr = MX_SCALE_BLOCK_K * NON_K_PRESHUFFLE_BLOCK_SIZE
+            SCALE_BLOCK_N: tl.constexpr = BLOCK_N // NON_K_PRESHUFFLE_BLOCK_SIZE
+            stride_scale_k = stride_mx_k
         else:
             PACKED_MX_BLOCK: tl.constexpr = MX_SCALE_BLOCK_K
             SCALE_BLOCK_N: tl.constexpr = BLOCK_N
@@ -274,6 +283,8 @@ def _matmul_ogs(
                 # Handshake with the swizzling code
                 tl.static_assert(tl.extra.cuda.num_warps() == 8, "Only 8 warps are supported for Hopper swizzling. Got %d" % tl.extra.cuda.num_warps())
                 w_scales = unswizzle_mxfp4_scale_hopper(tl.load(MxScalePtrs), num_warps=8)
+            elif SWIZZLE_MX_SCALE == "GFX950_SCALE":
+                w_scales = unswizzle_mx_scale_gfx950(tl.load(MxScalePtrs), BLOCK_N, MX_SCALE_BLOCK_K)
             else:
                 w_scales = tl.load(MxScalePtrs, mask=mask_k_scale[None, :], other=0.0)
 
@@ -282,6 +293,15 @@ def _matmul_ogs(
                 w = unswizzle_mxfp4_value_hopper(w, op_idx=1, mma_version=3)
                 mma_version: tl.constexpr = 3 if w.shape[1] >= 64 else 2
                 tl.static_assert(mma_version == 3, "Only mma_version 3 is supported for Hopper swizzling")
+
+            # if x_format == "bf16":
+            #     x0, x1 = x.reshape(BLOCK_M, 2, BLOCK_K // 2).trans(0, 2, 1).split()
+            #     w0, w1 = w.reshape(2, PACKED_BLOCK_K_W // 2, PACKED_BLOCK_N_W).trans(1, 2, 0).split()
+            #     w_scales0, w_scales1 = w_scales.reshape(SCALE_BLOCK_N, 2, PACKED_MX_BLOCK // 2).trans(0, 2, 1).split()
+            #     acc0 = tl.dot_scaled(x0, None, x_format, w0, w_scales0, mx_format, acc=acc, fast_math=True)
+            #     acc = tl.dot_scaled(x1, None, x_format, w1, w_scales1, mx_format, acc=acc0, fast_math=True)
+            # else:
+            #     acc = tl.dot_scaled(x, x_scales, x_format, w, w_scales, mx_format, acc=acc, fast_math=True)
 
             acc = tl.dot_scaled(x, x_scales, x_format, w, w_scales, mx_format, acc=acc, fast_math=True)
             if SWIZZLE_MX_SCALE == "BLACKWELL_SCALE":
