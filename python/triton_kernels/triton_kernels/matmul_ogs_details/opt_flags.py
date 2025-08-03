@@ -49,7 +49,7 @@ def make_default_opt_flags_amd(
     epilogue_effective_itemsize,
     constraints,
 ):
-    constraints_supported = ["block_m", "block_k", "split_k", "fused_scatter", "is_persistent", "epilogue_subtile"]
+    constraints_supported = ["block_m", "block_k", "block_n", "split_k", "fused_scatter", "is_persistent", "epilogue_subtile"]
     assert not any([c not in constraints_supported for c in constraints]), constraints.keys()
     # tokens per expert
     if routing_data is None:
@@ -91,6 +91,8 @@ def make_default_opt_flags_amd(
     # TODO: Does opt_flags_amd.compute_block_nk need to be refactored?
     if constraints.get("block_k", None) is not None:
         block_k = constraints["block_k"]
+    if constraints.get("block_n", None) is not None:
+        block_n = constraints["block_n"]
     is_persistent = constraints.get("is_persistent", False)
     # split_k:
     if constraints.get("split_k", None) is not None:
@@ -117,6 +119,10 @@ def make_default_opt_flags_amd(
 
     use_scale_preshuffling = os.environ.get("TRITON_HIP_PRESHUFFLE_SCALES", "0") == "1"
     if use_scale_preshuffling and precision_config.weight_scale is not None and bitwidth(lhs_dtype) == 16 and bitwidth(rhs_dtype) == 4:
+        # block_m = 256
+        # block_n = 256
+        # block_k = 64
+
         # for scale preshuffling
         block_m = 64
         block_n = 512
@@ -124,10 +130,17 @@ def make_default_opt_flags_amd(
         num_warps = 8
         split_k = 1
 
+    def replace_with_valid_constraint(k: str, v):
+        if constraints.get(k, None) is not None:
+            return constraints[k]
+        else:
+            return v
+
+    # XXX: Hacked to make unit test happy and keep the tuned parameters at the same time
     ret = OptFlags(
-        block_m=block_m,
-        block_n=block_n,
-        block_k=block_k,
+        block_m=replace_with_valid_constraint('block_m', block_m),
+        block_n=replace_with_valid_constraint('block_n', block_n),
+        block_k=replace_with_valid_constraint('block_k', block_k),
         num_warps=num_warps,
         num_stages=num_stages,
         group_m=group_m,
@@ -140,7 +153,7 @@ def make_default_opt_flags_amd(
         epilogue_subtile=constraints.get('epilogue_subtile', None),
         arch=None,
         target_kernel_kwargs=target_kernel_kwargs,
-    )
+    )    
     # check constraints
     assert all(getattr(ret, ck) == cv for ck, cv in constraints.items() if cv is not None), f"{ret} != {constraints}"
     return ret
