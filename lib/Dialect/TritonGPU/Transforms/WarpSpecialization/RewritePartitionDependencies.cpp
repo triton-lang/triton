@@ -140,8 +140,6 @@ AsyncRef DependencyRewriter::allocateAsyncValue(RankedTensorType tensorType,
       triton::nvws::TypeArrayAttr::get(b.getContext(), alloc.getType()));
   auto aref = b.create<triton::nvws::ArefCreateOp>(b.getLoc(), arefTy, alloc);
 
-  endBuilder.create<nvws::ArefDestroyOp>(aref);
-
   return AsyncRef{aref, getBufferViewType(allocType),
                   b.getType<AsyncTokenType>()};
 }

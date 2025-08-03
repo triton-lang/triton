@@ -68,14 +68,14 @@ module attributes {"ttg.num-warps" = 4 : i32} {
       }
       nvws.warp_group.return
     }
-    ttg.local_dealloc %0 : !ttg.memdesc<2x1xi32, #shared, #smem, mutable>
-    nvws.aref.destroy %1 : <[!ttg.memdesc<2x1xi32, #shared, #smem, mutable>]>
-    // CHECK: ttg.local_dealloc
+    // CHECK: nvws.warp_group.return
+    // CHECK-NEXT: }
     // CHECK-NEXT: scf.for
     // CHECK-NEXT:   [[EMPTYMBAR:%.*]] = ttg.memdesc_index [[EMPTY]]
     // CHECK-NEXT:   ttng.inval_barrier [[EMPTYMBAR]]
     // CHECK-NEXT:   [[FULLMBAR:%.*]] = ttg.memdesc_index [[FULL]]
     // CHECK-NEXT:   ttng.inval_barrier [[FULLMBAR]]
+    ttg.local_dealloc %0 : !ttg.memdesc<2x1xi32, #shared, #smem, mutable>
     tt.return
   }
 
@@ -350,14 +350,12 @@ module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-w
       nvws.aref.get.exit %aref1[%c0_i32], %2#2 [#nvws.async_op<none>] : !nvws.aref<[!ttg.memdesc<3x64x16xf16, #shared0, #smem>, !ttg.memdesc<3x16x32xf16, #shared0, #smem>]>, !ttg.async.token
       nvws.warp_group.return
     }
-    nvws.aref.destroy %aref0 : !nvws.aref<[!ttg.memdesc<3x64x16xf16, #shared0, #smem>, !ttg.memdesc<3x16x32xf16, #shared0, #smem>]>
     // CHECK: scf.for
     // CHECK-NEXT:   [[EMPTYMBAR:%.*]] = ttg.memdesc_index [[EMPTY0]]
     // CHECK-NEXT:   ttng.inval_barrier [[EMPTYMBAR]]
     // CHECK-NEXT:   [[FULLMBAR:%.*]] = ttg.memdesc_index [[FULL0]]
     // CHECK-NEXT:   ttng.inval_barrier [[FULLMBAR]]
     // CHECK-NEXT: }
-    nvws.aref.destroy %aref1 : !nvws.aref<[!ttg.memdesc<3x64x16xf16, #shared0, #smem>, !ttg.memdesc<3x16x32xf16, #shared0, #smem>]>
     // CHECK-NEXT: scf.for
     // CHECK-NEXT:   [[EMPTYMBAR:%.*]] = ttg.memdesc_index [[EMPTY1]]
     // CHECK-NEXT:   ttng.inval_barrier [[EMPTYMBAR]]
@@ -552,5 +550,3 @@ module attributes {"ttg.num-warps" = 4 : i32} {
     tt.return
   }
 }
-
-// -----
