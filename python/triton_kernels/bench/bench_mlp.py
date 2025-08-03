@@ -177,7 +177,9 @@ def roofline_mlp(batch_ranges, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_
         perfs += [bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP, EP, name)]
         if verbose:
             # print(f"Batch: {batch}; Util: {perfs[-1].util}; TFLOPS: {perfs[-1].tflops}; TBPS: {perfs[-1].tbps}")
-            print(f"Batch: {batch}; Kernel Latency (us): {perfs[-1].time * 1e-3 * 1e-2}; Util: {perfs[-1].util}; TFLOPS: {perfs[-1].tflops}; TBPS: {perfs[-1].tbps}")
+            print(
+                f"Batch: {batch}; Kernel Latency (us): {perfs[-1].time * 1e-3 * 1e-2}; Util: {perfs[-1].util}; TFLOPS: {perfs[-1].tflops}; TBPS: {perfs[-1].tbps}"
+            )
     print("===============================================================")
     # machine limits
     max_tbps = perfs[0].max_tbps
@@ -222,7 +224,8 @@ if __name__ == "__main__":
     # roofline_mlp(batch_ranges_moe, 5120, 8192, 128, 4, *dense_dtypes, TP=1, EP=1, name="llama4-maverick")
     # roofline_mlp(batch_ranges_moe, 5120, 8192, 128, 4, *quantized_dtypes, TP=1, EP=1, name="llama4-maverick")
 
-    batch_ranges_moe = [(1, 2, 1), (2, 5, 2), (8, 18, 8), (32, 65, 32), (128, 257, 128), (1024, 4100, 1024), (8192, 8200, 32)]
+    batch_ranges_moe = [(1, 2, 1), (2, 5, 2), (8, 18, 8), (32, 65, 32), (128, 257, 128), (1024, 4100, 1024),
+                        (8192, 8200, 32)]
     # batch_ranges_moe = [(1024, 4100, 1024), (8192, 8200, 32)]
     # batch_ranges_moe = [(8192, 8200, 32)]
 
