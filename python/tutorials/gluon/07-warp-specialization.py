@@ -322,3 +322,19 @@ if __name__ == "__main__":
 # The warp specialized implementation ekes out another performance gain over
 # the software pipelined kernel from 04-tma.py by relying on the warp scheduler
 # to hide latencies.
+
+# %%
+# Recall in previous tutorials we sometimes designed kernels to run with
+# occupancy greater than 1. This is typical of kernels that we expect to stall
+# or otherwise cannot exhaustively use the SM's resources. In doing so, we
+# relied on the warp scheduler to overlap kernel instances and hide latencies.
+#
+# However, because programs cannot see what other programs on the SM are doing,
+# they cannot coordinate usage of SM compute units or share resources. Warp
+# specialization is especially powerful when use it to build intricate schedules
+# that minimize the critical path and maximize hardware utilization. In other
+# words, warp specialization allows us to fuse multiple programs into
+# one kernel.
+#
+# In the next tutorial, we will explore implement an efficient persistent GEMM
+# and demonstrate more advanced warp-specialized kernels.
