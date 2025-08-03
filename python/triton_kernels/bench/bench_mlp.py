@@ -1,6 +1,5 @@
 from pathlib import Path
 from copy import deepcopy
-import matplotlib.pyplot as plt
 import triton.profiler as proton
 from triton.profiler import viewer
 import torch
@@ -13,6 +12,7 @@ from dataclasses import dataclass
 import distributed as triton_dist
 from triton_kernels.tensor_details import layout
 from bench_utils import quantize_weight
+import roofline
 
 if torch.cuda.is_available() and not is_hip():
     from triton._C.libtriton import nvidia
@@ -28,9 +28,6 @@ class PerfData:
     time: float
     flops: float
     bytes: float
-    bitwidth: int
-    device_type: str
-    device_info: dict
 
     @property
     def tflops(self):
@@ -39,38 +36,6 @@ class PerfData:
     @property
     def tbps(self):
         return self.bytes / self.time * 1e-3
-
-    @property
-    def opint(self):
-        # operational intensity
-        assert self.bytes > 0
-        return self.flops / self.bytes
-
-    @property
-    def max_tbps(self):
-        return (proton.specs.max_bps(
-            self.device_type,
-            self.device_info["arch"],
-            self.device_info["bus_width"],
-            self.device_info["memory_clock_rate"],
-        ) * 1e-12)
-
-    @property
-    def max_tflops(self):
-        return (proton.specs.max_flops(
-            self.device_type,
-            self.device_info["arch"],
-            self.bitwidth,
-            self.device_info["num_sms"],
-            self.device_info["clock_rate"],
-        ) * 1e-12)
-
-    @property
-    def util(self) -> float:
-        assert self.bitwidth in (8, 16)
-        min_t_flop = self.flops / self.max_tflops * 1e-3
-        min_t_bw = self.bytes / self.max_tbps * 1e-3
-        return max(min_t_flop, min_t_bw) / self.time
 
 
 def get_bench_path(name, rank, x_dtype, w_dtype, TP, EP):
@@ -153,30 +118,18 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP,
     proton.finalize()
 
     # -- analyze --
-    gf, _, _, info = viewer.read(fpath)
+    gf, _, _, _ = viewer.read(fpath)
     # Now the dataframe only contains leave nodes (i.e., kernels) that perform matmuls
     matmuls = gf.filter("MATCH ('*', c) WHERE c.'name' =~ '.*matmul.*' AND c IS LEAF").dataframe
     bytes = matmuls["bytes"].sum()
     flops = sum(matmuls[[c for c in ["flops8", "flops16"] if c in matmuls.columns]].sum())
     time = matmuls["time (ns)"].sum()
-    device_type = matmuls["device_type"].iloc[0]
-    device_id = matmuls["device_id"].iloc[0]
-    device_info = info[device_type][device_id]
-    return PerfData(
-        time=time,
-        flops=flops,
-        bytes=bytes,
-        bitwidth=x.dtype.itemsize * 8,
-        device_type=device_type,
-        device_info=device_info,
-    )
+    return PerfData(time=time, flops=flops, bytes=bytes)
 
 
-def roofline_mlp(batch_ranges, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP=1, EP=1, name="",
-                 verbose=True):
+def roofline_mlp(batch_ranges, dim1, dim2, n_expts_tot, n_expts_act, \
+                 x_dtype, w_dtype, TP=1, EP=1, name="", verbose=True):
     from itertools import chain
-    from bisect import bisect_left
-
     batches = list(chain(*[range(*r) for r in batch_ranges]))
     # collect performance data
     perfs = []
@@ -186,48 +139,19 @@ def roofline_mlp(batch_ranges, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_
     for batch in batches:
         perfs += [bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP, EP, name)]
         if verbose:
-            print(f"Batch: {batch}; Util: {perfs[-1].util}; TFLOPS: {perfs[-1].tflops}; TBPS: {perfs[-1].tbps}")
+            print(f"Batch: {batch}; TFLOPS: {perfs[-1].tflops}; TBPS: {perfs[-1].tbps}")
     print("===============================================================")
-    # machine limits
-    max_tbps = perfs[0].max_tbps
-    max_tflops = perfs[0].max_tflops
-    fig, ax = plt.subplots(figsize=(7, 5), dpi=120)
-    ax.set_xlabel("batch size (toks/expt)")
-    ax.set_ylabel("performance  [TFLOP/s]")
-    ax.set_title(f"{bench_case} roofline")
-    # add a tiny margin so points are not flush with the frame
-    xs = [batch * n_expts_act / n_expts_tot for batch in batches]
-    perf = [p.tflops for p in perfs]
-    xmin, xmax = min(xs), max(xs)
-    dx = 0.05 * (xmax - xmin) if xmax > xmin else 1.0
-    ax.set_xlim(xmin - dx, xmax + dx)
-    ax.set_ylim(100, max_tflops + 500)
-    # plot roofline
-    opints = [p.opint for p in perfs]
-    knee = bisect_left(opints, max_tflops / max_tbps)
-    if knee > 0:  # has a bandwidth-bound knee
-        x_bw = [xs[0], xs[knee - 1]]
-        y_bw = [opints[0] * max_tbps, max_tflops]
-    else:  # no knee found, compute-bound only
-        x_bw = y_bw = []
-    x_comp = xs[knee:]
-    y_comp = [max_tflops] * len(x_comp)
-    ax.plot(x_bw, y_bw, "--", label=f"BW-bound  ({max_tbps:.1f} TB/s)", color="blue")
-    ax.plot(x_comp, y_comp, "--", label=f"Compute-bound  ({max_tflops:.0f} TFLOP/s)", color="orange")
-    # plot data
-    ax.scatter(xs, perf, marker="+")
-    ax.legend(frameon=False, loc="lower right")
-    ax.grid(True, which="both", ls=":", lw=0.5)
-    fig.tight_layout()
     rank, _ = triton_dist.setup()
-    fpath = get_bench_path(name, rank, x_dtype, w_dtype, TP, EP) / "roofline.png"
-    plt.savefig(fpath)
+    roofline.roofline(xs=[batch * n_expts_act / n_expts_tot for batch in batches], xlabel="batch size (toks/expt)",
+                      perfs=perfs, dtype=x_dtype, title=bench_case,
+                      fpath=get_bench_path(name, rank, x_dtype, w_dtype, TP, EP) / "roofline.png")
 
 
 if __name__ == "__main__":
     has_native_mx4 = torch.cuda.get_device_capability(0)[0] >= 10 or get_cdna_version() == 4
-    batch_ranges_dense = [(1024, 32768, 1024)]
-    batch_ranges_moe = [(128, 512, 32), (512, 32000, 128)]
+    batch_ranges_dense = [(128, 8192, 128)]
+    batch_ranges_dense = [(2**(7 + k), 2**(8 + k), min(2**(5 + k), 256)) for k in range(6)]
+    batch_ranges_moe = [(2**(7 + k), 2**(8 + k), min(2**(5 + k), 1024)) for k in range(8)]
     dense_dtypes = ["fp8", "fp8"]
     quantized_dtypes = ["fp8", "mx4"] if has_native_mx4 else ["bf16", "mx4"]
     rank, world_size = triton_dist.setup()
@@ -258,6 +182,6 @@ if __name__ == "__main__":
         triton_dist.cleanup()
     else:
         roofline_mlp(batch_ranges_dense, 8192, 8192, 1, 1, *dense_dtypes, TP=1, EP=1, name="dense")
-        roofline_mlp(batch_ranges_dense, 8192, 8192, 1, 1, *quantized_dtypes, TP=1, EP=1, name="dense")
-        roofline_mlp(batch_ranges_moe, 5120, 8192, 128, 4, *dense_dtypes, TP=1, EP=1, name="llama4-maverick")
+        # roofline_mlp(batch_ranges_dense, 8192, 8192, 1, 1, *quantized_dtypes, TP=1, EP=1, name="dense")
+        # roofline_mlp(batch_ranges_moe, 5120, 8192, 128, 4, *dense_dtypes, TP=1, EP=1, name="llama4-maverick")
         roofline_mlp(batch_ranges_moe, 5120, 8192, 128, 4, *quantized_dtypes, TP=1, EP=1, name="llama4-maverick")
