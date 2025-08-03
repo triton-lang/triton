@@ -1431,7 +1431,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 """)
 
 
-@pytest.mark.parametrize("target", [HIP_TARGET_CDNA3])
+@pytest.mark.parametrize("target", [HIP_TARGET_CDNA3, HIP_TARGET_CDNA4])
 def test_buffer_load_to_shared(target):
 
     @gluon.jit
@@ -1462,8 +1462,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 """)
 
 
-@pytest.mark.parametrize("target", [HIP_TARGET_CDNA3])
-def test_buffer_load_to_local_mask_other(target):
+@pytest.mark.parametrize("target", [HIP_TARGET_CDNA3, HIP_TARGET_CDNA4])
+def test_buffer_load_to_shared_mask_other(target):
 
     @gluon.jit
     def kernel(ptr):
@@ -1499,7 +1499,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 """)
 
 
-@pytest.mark.parametrize("target", [HIP_TARGET_CDNA3])
+@pytest.mark.parametrize("target", [HIP_TARGET_CDNA3, HIP_TARGET_CDNA4])
 def test_buffer_load_to_shared_cache_mods(target):
 
     @gluon.jit
