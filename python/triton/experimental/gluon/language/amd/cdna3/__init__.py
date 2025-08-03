@@ -1,6 +1,5 @@
 from ..._core import builtin, int32
 from ..._semantic import _check
-# from triton.experimental.gluon.language import _core as ttgl
 from triton._C.libtriton import ir
 
 __all__ = ["buffer_load_to_shared"]
