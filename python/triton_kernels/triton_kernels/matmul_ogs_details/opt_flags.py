@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 import triton
 from triton_kernels.target_info import get_cdna_version
+from triton_kernels.tensor import bitwidth
 import torch
 from .opt_flags_details import opt_flags_amd, opt_flags_nvidia
 
