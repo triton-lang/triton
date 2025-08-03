@@ -2,6 +2,7 @@
 #include "TritonAMDGPUTransforms/MfmaGroup.h"
 #include "TritonAMDGPUTransforms/Passes.h"
 #include "TritonAMDGPUTransforms/WmmaGroup.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
@@ -397,6 +398,90 @@ Value convertAndCastTensor(PatternRewriter &rewriter, Value value,
   return castedTensor;
 }
 
+template <typename Op> Op getDefOpBeforeConvertLayout(Value op) {
+  while (auto cvtOp = op.getDefiningOp<ttg::ConvertLayoutOp>()) {
+    op = cvtOp.getSrc();
+  }
+  return op.getDefiningOp<Op>();
+}
+
+Value goThruScaleDecomposition(arith::MulFOp mulOp) {
+  Value scale = mulOp.getRhs();
+  auto scaleTy = dyn_cast<RankedTensorType>(scale.getType());
+  if (!scaleTy)
+    return {};
+
+  // First check whether the scale is encoded as a BF16 value.
+  if (!scaleTy.getElementType().isBF16())
+    return {};
+
+  // Go through various shape manipulation ops.
+  tt::BitcastOp bitcastOp = nullptr;
+  while (scale) {
+    llvm::TypeSwitch<Operation *>(scale.getDefiningOp())
+        .Case<tt::BroadcastOp, tt::ExpandDimsOp, tt::ReshapeOp, tt::TransOp,
+              ttg::ConvertLayoutOp>([&](auto op) { scale = op.getSrc(); })
+        .Case<tt::BitcastOp>([&](auto op) { bitcastOp = op, scale = nullptr; })
+        .Default([&](auto op) { scale = nullptr; });
+  }
+  if (!bitcastOp)
+    return {};
+  auto shlOp = bitcastOp.getSrc().getDefiningOp<arith::ShLIOp>();
+  if (!shlOp)
+    return {};
+  auto extOp = shlOp.getLhs().getDefiningOp<arith::ExtUIOp>();
+  if (!extOp)
+    return {};
+  auto transOp = extOp.getIn().getDefiningOp<tt::TransOp>();
+  if (!transOp)
+    return {};
+  return transOp.getSrc();
+}
+} // namespace
+
+bool hasShuffledDotScale(Value scale) {
+  if (!scale) {
+    return false;
+  }
+
+  if (auto mulOp = getDefOpBeforeConvertLayout<arith::MulFOp>(scale))
+    scale = goThruScaleDecomposition(mulOp);
+  if (!scale)
+    return false;
+
+  auto shape = cast<RankedTensorType>(scale.getType()).getShape();
+
+  int rank = shape.size();
+  int blockNonK = shape[rank - 2];
+  // 1 scale always scales 32 elements along K dim
+  int blockK = shape[rank - 1] * 32;
+
+  auto reshapeOp2D = getDefOpBeforeConvertLayout<triton::ReshapeOp>(scale);
+  if (!reshapeOp2D || reshapeOp2D.getType().getShape() != shape) {
+    return false;
+  }
+
+  const std::array<int, 7> transposeOrder{0, 5, 3, 1, 4, 2, 6};
+  auto transOp =
+      getDefOpBeforeConvertLayout<triton::TransOp>(reshapeOp2D.getSrc());
+  if (!transOp || transOp.getOrder() != ArrayRef<int>(transposeOrder)) {
+    return false;
+  }
+
+  const std::array<int64_t, 7> reshape7DShape{
+      blockNonK / 32, blockK / 32 / 8, 4, 16, 2, 2, 1};
+  auto reshapeOp7D =
+      getDefOpBeforeConvertLayout<triton::ReshapeOp>(transOp.getSrc());
+
+  if (!reshapeOp7D ||
+      reshapeOp7D.getType().getShape() != ArrayRef<int64_t>(reshape7DShape)) {
+    return false;
+  }
+
+  return true;
+}
+
+namespace {
 class BlockedToMFMA : public OpRewritePattern<tt::DotOp> {
   int mfmaVersion;
   int nonKDim;
@@ -474,11 +559,13 @@ public:
     // requires to broadcast the operand A.
     bool isTransposed = !(mDim == 4 && nDim == 64);
     auto aElemTy = mfmaInstr->aElementType;
+    SmallVector<unsigned> tilesPerWarp = {1, 1};
+    if (hasShuffledDotScale(dotOp.getB()))
+      tilesPerWarp = {2, 2};
     ttg::AMDMfmaEncodingAttr mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
-        oldRetType.getContext(),
-        /*version*/ mfmaVersion, warpsPerTile,
-        /*instrShape*/ mDim, nDim, /*isTransposed=*/isTransposed, CTALayout,
-        mfmaAccType);
+        oldRetType.getContext(), /*version*/ mfmaVersion, warpsPerTile,
+        tilesPerWarp, /*instrShape*/ mDim, nDim, /*isTransposed=*/isTransposed,
+        CTALayout, mfmaAccType);
 
     // convert accumulator
     auto oldAcc = dotOp.getC();
@@ -750,52 +837,8 @@ public:
   }
 };
 
-template <typename Op> Op getDefOpBeforeConvertLayout(Value op) {
-  while (auto cvtOp = op.getDefiningOp<ttg::ConvertLayoutOp>()) {
-    op = cvtOp.getSrc();
-  }
-  return op.getDefiningOp<Op>();
-}
-
-bool isScaleShuffled(Value scale) {
-  if (!scale) {
-    return false;
-  }
-
-  auto shape = cast<RankedTensorType>(scale.getType()).getShape();
-
-  int rank = shape.size();
-  int blockNonK = shape[rank - 2];
-  // 1 scale always scales 32 elements along K dim
-  int blockK = shape[rank - 1] * 32;
-
-  auto reshapeOp2D = getDefOpBeforeConvertLayout<triton::ReshapeOp>(scale);
-  if (!reshapeOp2D || reshapeOp2D.getType().getShape() != shape) {
-    return false;
-  }
-
-  const std::array<int, 7> transposeOrder{0, 5, 3, 1, 4, 2, 6};
-  auto transOp =
-      getDefOpBeforeConvertLayout<triton::TransOp>(reshapeOp2D.getSrc());
-  if (!transOp || transOp.getOrder() != ArrayRef<int>(transposeOrder)) {
-    return false;
-  }
-
-  const std::array<int64_t, 7> reshape7DShape{
-      blockNonK / 32, blockK / 32 / 8, 4, 16, 2, 2, 1};
-  auto reshapeOp7D =
-      getDefOpBeforeConvertLayout<triton::ReshapeOp>(transOp.getSrc());
-
-  if (!reshapeOp7D ||
-      reshapeOp7D.getType().getShape() != ArrayRef<int64_t>(reshape7DShape)) {
-    return false;
-  }
-
-  return true;
-}
-
 SmallVector<unsigned, 2> getTilesPerWarp(Value aScale, Value bScale) {
-  if (isScaleShuffled(aScale) || isScaleShuffled(bScale)) {
+  if (hasShuffledDotScale(aScale) || hasShuffledDotScale(bScale)) {
     return {2, 2};
   }
   return {1, 1};

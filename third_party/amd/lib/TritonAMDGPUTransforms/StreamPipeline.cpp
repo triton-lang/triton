@@ -3,6 +3,7 @@
 #include "amd/lib/TritonAMDGPUToLLVM/TargetInfo.h"
 #include "third_party/amd/include/Analysis/AxisInfoExt.h"
 #include "triton/Analysis/AxisInfo.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/OpInterfaces.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -32,6 +33,8 @@ namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 
 namespace mlir {
+
+bool hasShuffledDotScale(Value scale);
 
 #define GEN_PASS_DEF_TRITONAMDGPUSTREAMPIPELINE
 #include "TritonAMDGPUTransforms/Passes.h.inc"
@@ -185,7 +188,8 @@ StreamCopyChainOps createStreamCopy(tt::LoadOp loadOp, Value alloc,
 
 // Returns the given |inputValue|'s dot user result encoding and updates |opIdx|
 // with which dot operand |inputValue| is fed into if possible.
-ttg::AMDMfmaEncodingAttr getDotEncoding(Value inputValue, unsigned *opIdx) {
+ttg::AMDMfmaEncodingAttr getDotEncoding(Value inputValue, unsigned *opIdx,
+                                        tt::DotOpInterface *ifxOp) {
   if (!inputValue.hasOneUse())
     return nullptr;
 
@@ -197,10 +201,11 @@ ttg::AMDMfmaEncodingAttr getDotEncoding(Value inputValue, unsigned *opIdx) {
   if (auto dotOp = dyn_cast<tt::DotOpInterface>(user)) {
     OpOperand &use = *inputValue.getUses().begin();
     *opIdx = use.getOperandNumber();
+    *ifxOp = dotOp;
     auto dotType = cast<RankedTensorType>(dotOp->getResult(0).getType());
     return dyn_cast<ttg::AMDMfmaEncodingAttr>(dotType.getEncoding());
   }
-  return getDotEncoding(user->getResult(0), opIdx);
+  return getDotEncoding(user->getResult(0), opIdx, ifxOp);
 }
 
 // Adapted from
@@ -262,8 +267,12 @@ getSharedEncIfAllUsersAreDotEnc(Value loadedValue) {
         // cases, we need to look further down the def-use chain to find the dot
         // op for the mfma layout to deduce operand index and other information.
         unsigned opIdx;
-        if (auto dotEnc = getDotEncoding(userResult, &opIdx)) {
+        tt::DotOpInterface ifxOp;
+        if (auto dotEnc = getDotEncoding(userResult, &opIdx, &ifxOp)) {
           unsigned vecSize = llEnc.getLinearLayout().getNumConsecutiveInOut();
+          // HACK to enable vecSize = 4 for dot scale operand
+          if (hasShuffledDotScale(ifxOp.getB()))
+            vecSize = std::max(4u, vecSize);
           LDBG("deduced opIdx: " << opIdx << "; deduced vecSize: " << vecSize);
           tempAttr = dotEnc.composeSharedLayoutForOperand(
               ctaLayout, opIdx, srcTy.getShape(), order, vecSize, bitWidth,
