@@ -17,22 +17,3 @@ each program, and the programs "persist" on the GPU until all the work is
 complete. The work assignment is typically static, although dynamic scheduling
 is still possible with more advanced techniques or hardware features like CLC.
 """
-
-import pytest
-import torch
-import triton
-import itertools
-from triton.experimental import gluon
-from triton.experimental.gluon import language as gl
-
-from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
-from triton.experimental.gluon.language.nvidia.hopper import (
-    tma,
-    mbarrier,
-    fence_async_shared,
-    warpgroup_mma,
-    warpgroup_mma_wait,
-)
-
-# %%
-#
