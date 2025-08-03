@@ -8,7 +8,10 @@ __all__ = ["buffer_load_to_shared"]
 @builtin
 def buffer_load_to_shared(dest, ptr, offsets, mask=None, other=None, stride=None, cache_modifier="", _semantic=None):
     """
-    AMD Buffer load operation. Load from a scalar base pointer and a tensor offset directly to shared memory.
+    AMD Buffer load to shared operation. Buffer load is similar to normal load
+    but it accesses global memory via a scalar base pointer and a tensor of
+    offsets instead of a tensor of pointers. This operation will load data
+    directly into shared memory instead of registers.
 
     Args:
         dest (shared_memory_descriptor): Destination shared memory descriptor.
