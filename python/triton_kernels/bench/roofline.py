@@ -3,6 +3,7 @@ import matplotlib.pyplot as plt
 import triton
 from triton._C.libtriton import nvidia
 import torch
+import csv
 
 
 def get_memset_tbps():
@@ -41,36 +42,84 @@ def get_cublas_tflops(dtype):
     return 2 * M * N * K / time_ms * 1e-9
 
 
-def roofline(xs, perfs, dtype, fpath, title="", xlabel="", device_id=None):
+# Load CSV series: expect columns x, flops, bytes, time_ns (or time)
+def load_perf_csv(path):
+    xs, flops, bytes_, times = [], [], [], []
+    with open(path, "r", newline="") as f:
+        reader = csv.DictReader(f)
+        # Support both time_ns and time as column names
+        has_time_ns = "time_ns" in reader.fieldnames
+        has_time = "time" in reader.fieldnames
+        if not (has_time_ns or has_time):
+            raise ValueError(f"CSV {path} missing time_ns/time column")
+        for row in reader:
+            xs.append(int(row["x"]))
+            flops.append(int(row["flops"]))
+            bytes_.append(int(row["bytes"]))
+            tval = row["time_ns"] if has_time_ns else row["time"]
+            times.append(int(float(tval)))
+    return xs, flops, bytes_, times
+
+
+def validate_perfs(perfs):
+    xs_ref, flops_ref, bytes_ref, _ = perfs[0]
+    for _, (xs, flops, bytes, _) in enumerate(perfs[1:], start=1):
+        for i in range(len(xs)):
+            if xs[i] != xs_ref[i]:
+                raise ValueError(f"x mismatch between series[0] and series[{i}]")
+            if flops[i] * bytes_ref[i] != flops_ref[i] * bytes[i]:
+                raise ValueError(f"flops/bytes mismatch at x={xs_ref[i]} between series[0] and series[{i}]")
+
+
+def roofline(series, dtype, out_path, title="", xlabel=""):
     from bisect import bisect_left
-    # roofline limits
+    from pathlib import Path
+    perfs = [load_perf_csv(p) for p in series]
+    validate_perfs(perfs)
+    xs, flops_ref, bytes_ref, _ = perfs[0]
+
+    # set up plot
     max_tbps = get_memset_tbps()
     max_tflops = get_cublas_tflops(dtype)
     fig, ax = plt.subplots(figsize=(7, 5), dpi=120)
     ax.set_xlabel(xlabel)
     ax.set_ylabel("performance  [TFLOP/s]")
     ax.set_title(title)
-    # add a tiny margin so points are not flush with the frame
-    perf = [p.tflops for p in perfs]
     xmin, xmax = min(xs), max(xs)
     dx = 0.05 * (xmax - xmin) if xmax > xmin else 1.0
     ax.set_xlim(xmin - dx, xmax + dx)
     ax.set_ylim(100, max_tflops + 500)
-    # plot roofline
-    opints = [p.flops / p.bytes for p in perfs]
+
+    # Roofline from operational intensity (identical across series)
+    opints = [f / b for f, b in zip(flops_ref, bytes_ref)]
     knee = bisect_left(opints, max_tflops / max_tbps)
-    if knee > 0:  # has a bandwidth-bound knee
+    if knee > 0:
         x_bw = [xs[0], xs[knee - 1]]
         y_bw = [opints[0] * max_tbps, max_tflops]
-    else:  # no knee found, compute-bound only
+    else:
         x_bw = y_bw = []
     x_comp = xs[max(knee - 1, 0):]
     y_comp = [max_tflops] * len(x_comp)
     ax.plot(x_bw, y_bw, "--", label=f"BW-bound  (memset @ {max_tbps:.1f} TB/s)", color="blue")
     ax.plot(x_comp, y_comp, "--", label=f"Compute-bound  (cuBLAS @ {max_tflops:.0f} TFLOP/s)", color="orange")
-    # plot data
-    ax.scatter(xs, perf, marker="+")
+
+    # Plot each series as a scatter of TFLOP/s points
+    for pth, (_, f, b, t) in zip(series, perfs):
+        perf_tflops = [ff / tt * 1e-3 if tt > 0 else 0.0 for ff, tt in zip(f, t)]
+        label = Path(pth).stem
+        ax.scatter(xs, perf_tflops, marker="+", label=label)
+
     ax.legend(frameon=False, loc="lower right")
     ax.grid(True, which="both", ls=":", lw=0.5)
     fig.tight_layout()
-    plt.savefig(fpath)
+    plt.savefig(out_path)
+
+
+if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--series", type=str, nargs="+", required=True)
+    parser.add_argument("--dtype", type=str, required=True)
+    parser.add_argument("--out_path", type=str, required=True)
+    args = parser.parse_args()
+    roofline(args.series, args.dtype, args.out_path)

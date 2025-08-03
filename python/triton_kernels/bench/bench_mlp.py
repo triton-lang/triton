@@ -13,6 +13,8 @@ import distributed as triton_dist
 from triton_kernels.tensor_details import layout
 from bench_utils import quantize_weight
 import roofline
+import shutil
+import csv
 
 if torch.cuda.is_available() and not is_hip():
     from triton._C.libtriton import nvidia
@@ -39,7 +41,7 @@ class PerfData:
 
 
 def get_bench_path(name, rank, x_dtype, w_dtype, TP, EP):
-    return Path(f"logs/{name}/{rank}/{x_dtype}-{w_dtype}-TP{TP}-EP{EP}/")
+    return Path(f"logs/{name}/{x_dtype}x-{w_dtype}w-TP{TP}-EP{EP}-{rank}/")
 
 
 def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP, EP, name):
@@ -116,35 +118,48 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP,
                            precision_config=pc2)
         x = triton_dist.reduce_scatter(x, metadata=metadata, dim=0)
     proton.finalize()
-
-    # -- analyze --
+    # -- process profile --
     gf, _, _, _ = viewer.read(fpath)
     # Now the dataframe only contains leave nodes (i.e., kernels) that perform matmuls
     matmuls = gf.filter("MATCH ('*', c) WHERE c.'name' =~ '.*matmul.*' AND c IS LEAF").dataframe
-    bytes = matmuls["bytes"].sum()
-    flops = sum(matmuls[[c for c in ["flops8", "flops16"] if c in matmuls.columns]].sum())
+    bytes = int(matmuls["bytes"].sum())
+    flops = int(sum(matmuls[[c for c in ["flops8", "flops16"] if c in matmuls.columns]].sum()))
     time = matmuls["time (ns)"].sum()
+    # delete profile if requested
     return PerfData(time=time, flops=flops, bytes=bytes)
 
 
 def roofline_mlp(batch_ranges, dim1, dim2, n_expts_tot, n_expts_act, \
-                 x_dtype, w_dtype, TP=1, EP=1, name="", verbose=True):
+                 x_dtype, w_dtype, TP=1, EP=1, name="", verbose=True,
+                 discard_profiles=True):
     from itertools import chain
     batches = list(chain(*[range(*r) for r in batch_ranges]))
     # collect performance data
     perfs = []
     bench_case = f"{name} ({x_dtype}x{w_dtype}, TP={TP}, EP={EP})"
-    print(f"Benchmarking {bench_case}...")
-    print("===============================================================")
+    print("=========================================")
+    print(f"{bench_case}...")
+    print("=========================================")
     for batch in batches:
         perfs += [bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP, EP, name)]
         if verbose:
-            print(f"Batch: {batch}; TFLOPS: {perfs[-1].tflops}; TBPS: {perfs[-1].tbps}")
-    print("===============================================================")
+            print(f"Batch: {batch:5d} | TFLOPS: {perfs[-1].tflops:#.4g} | TBPS: {perfs[-1].tbps:.2f}")
     rank, _ = triton_dist.setup()
-    roofline.roofline(xs=[batch * n_expts_act / n_expts_tot for batch in batches], xlabel="batch size (toks/expt)",
-                      perfs=perfs, dtype=x_dtype, title=bench_case,
-                      fpath=get_bench_path(name, rank, x_dtype, w_dtype, TP, EP) / "roofline.png")
+    bench_path = get_bench_path(name, rank, x_dtype, w_dtype, TP, EP)
+    if discard_profiles:
+        shutil.rmtree(bench_path, ignore_errors=True)
+    # write perfs to CSV with columns: x, flops, bytes, time_ns
+    xs = [batch * n_expts_act // n_expts_tot for batch in batches]
+    bench_path.mkdir(parents=True, exist_ok=True)
+    csv_path = bench_path.with_suffix(".csv")
+    with csv_path.open("w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["x", "flops", "bytes", "time_ns"])
+        for x, p in zip(xs, perfs):
+            writer.writerow([x, p.flops, p.bytes, p.time])
+
+    roofline.roofline(series=[csv_path], xlabel="batch size (toks/expt)", dtype=x_dtype, title=bench_case,
+                      out_path=bench_path.with_suffix(".png"))
 
 
 if __name__ == "__main__":
