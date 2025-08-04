@@ -6,6 +6,8 @@
 #include <vector>
 namespace mlir::LLVM::AMD {
 
+using llvm::ArrayRef;
+
 template <typename T, typename U, typename BinaryOp>
 std::vector<unsigned> multiDimElementwise(const ArrayRef<T> &lhs,
                                           const ArrayRef<U> &rhs, BinaryOp op) {
