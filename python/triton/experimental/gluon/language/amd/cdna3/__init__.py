@@ -15,7 +15,7 @@ def buffer_load_to_shared(dest, ptr, offsets, mask=None, other=None, cache_modif
 
     Args:
         dest (shared_memory_descriptor): Destination shared memory descriptor.
-        ptr (scalar): Global memory scalar base pointer to load from.
+        ptr (pointer to scalar): Global memory scalar base pointer to load from.
         offsets (tensor): Offsets tensor for the load operation.
         mask (tensor, optional): Mask tensor for predicated loads. Defaults to None.
         other (tensor, optional): Tensor providing default values for masked elements. Defaults to None.
