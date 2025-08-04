@@ -18,24 +18,25 @@ import triton
 from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
 
+from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
 from triton.experimental.gluon.language.nvidia.blackwell import (
     TensorMemoryLayout,
     allocate_tensor_memory,
     get_tmem_32x32b_reg_layout,
-    tensor_memory_descriptor,
     tma,
     mbarrier,
     tcgen05_mma,
     tcgen05_commit,
+    fence_async_shared,
 )
 
 
-def is_hopper():
+def is_blackwell():
     target = triton.runtime.driver.active.get_current_target()
     return target.backend == "cuda" and torch.cuda.get_device_capability()[0] == 10
 
 
-if __name__ == "__main__" and not is_hopper():
+if __name__ == "__main__" and not is_blackwell():
     raise RuntimeError("This tutorial requires a Blackwell NVIDIA GPU")
 
 # %%
@@ -133,9 +134,134 @@ def tmem_example_kernel(in_ptr, out_ptr, M: gl.constexpr, N: gl.constexpr, num_w
 @pytest.mark.parametrize("M", [64, 128, 256])
 @pytest.mark.parametrize("N", [64, 128])
 @pytest.mark.parametrize("num_warps", [4, 8])
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 def test_tmem_example_kernel(M, N, num_warps):
     input = torch.randn(M, N, dtype=torch.float32, device="cuda")
     output = torch.empty_like(input)
 
     tmem_example_kernel[(1, )](input, output, M, N, num_warps=num_warps)
     torch.testing.assert_close(input, output, atol=0, rtol=0)
+
+
+# %%
+# Now let's illustrate how TMEM how is used to do MMA operations with a trivial
+# kernel launched with grid size (1, ) that performs MMA on a small tensor.
+
+
+@gluon.jit
+def small_mma_kernel(a_desc, b_desc, c_desc, d_desc,  #
+                     LHS_IN_TMEM: gl.constexpr, USE_COMMIT: gl.constexpr,  #
+                     tmem_block: gl.constexpr, num_warps: gl.constexpr):
+    # Load A, B, and C tiles.
+    bar = gl.allocate_shared_memory(gl.int64, [1], mbarrier.MBarrierLayout())
+    mbarrier.init(bar, count=1)
+
+    # A has shape [M, K].
+    a_smem = gl.allocate_shared_memory(a_desc.dtype, a_desc.block_type.shape, a_desc.layout)
+    # B has shape [K, N].
+    b_smem = gl.allocate_shared_memory(b_desc.dtype, b_desc.block_type.shape, b_desc.layout)
+    # C has shape [M, N].
+    c_smem = gl.allocate_shared_memory(c_desc.dtype, c_desc.block_type.shape, c_desc.layout)
+
+    mbarrier.expect(bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes + c_desc.block_type.nbytes)
+    tma.async_copy_global_to_shared(a_desc, [0, 0], bar, a_smem)
+    tma.async_copy_global_to_shared(b_desc, [0, 0], bar, b_smem)
+    tma.async_copy_global_to_shared(c_desc, [0, 0], bar, c_smem)
+    mbarrier.wait(bar, phase=0)
+
+    # The accumulator operand must be provided in TMEM. The LHS operand can be
+    # provided in either SMEM or TMEM. The RHS operand must be provided in SMEM.
+    # SMEM operands must have an NVMMASharedLayout.
+    M: gl.constexpr = d_desc.block_type.shape[0]
+    N: gl.constexpr = d_desc.block_type.shape[1]
+    K: gl.constexpr = a_desc.block_type.shape[1]
+    reg_layout: gl.constexpr = get_tmem_32x32b_reg_layout(M, N, tmem_block, num_warps)
+
+    acc_tmem_layout: gl.constexpr = TensorMemoryLayout(tmem_block.value, unpacked=True)
+    acc_tmem = allocate_tensor_memory(d_desc.dtype, [M, N], acc_tmem_layout)
+    if LHS_IN_TMEM:
+        # When the LHS operand is fp16 or fp8, it is packed in TMEM.
+        lhs_packed: gl.constexpr = a_desc.dtype.primitive_bitwidth < 32
+        lhs_tmem_layout: gl.constexpr = TensorMemoryLayout(tmem_block.value, unpacked=not lhs_packed)
+        lhs_tmem = allocate_tensor_memory(a_desc.dtype, [M, K], lhs_tmem_layout)
+
+    # Copy operands into TMEM.
+    # TODO: Use `tcgen05.cp` when it is exposed in Gluon.
+    acc = c_smem.load(reg_layout)
+    acc_tmem.store(acc)
+    if LHS_IN_TMEM:
+        lhs = a_smem.load(reg_layout)
+        lhs_tmem.store(lhs)
+        a = lhs_tmem
+    else:
+        a = a_smem
+
+    # tcgen05_mma is an asynchronous operation. Until the operation is complete,
+    # we cannot read or write to the accumulator memory and we cannot write to
+    # the operand memory.
+    #
+    # Completion of tcgen05_mma operations is tracked with mbarriers. Invoking
+    # tcgen05_commit on an mbarrier causes the mbarrier to be arrived on when
+    # all previously issued tcgen05_mma operations have been completed. See
+    # 04-tma.py for more details on how mbarriers work.
+    #
+    # To commit on an mbarrier, we can either explicitly invoke tcgen05_commit
+    # or pass the mbarrier directly to tcgen05_mma. We can also conditionally
+    # commit an mbarrier if necessary.
+    #
+    # tcgen05_mma is comprised of multiple async MMA instructions. The shape of
+    # each instruction is determined by the TMEM layout. Selecting larger
+    # instruction shapes generally results in better performance.
+    #
+    # Note that tcgen05_mma accesses shared memory through the async proxy, like
+    # TMAs. This means `fence_async_shared` is required to prevent hazards if
+    # the shared memory is accessed through different proxies.
+    if USE_COMMIT:
+        tcgen05_mma(a, b_smem, acc_tmem)
+        tcgen05_commit(bar)
+    else:
+        tcgen05_mma(a, b_smem, acc_tmem, mbarriers=[bar], mbarrier_preds=[True])
+
+    # Wait for the completion of the MMA.
+    mbarrier.wait(bar, phase=1)
+
+    # Another important flag to consider is `use_acc`. When `use_acc=False`, the
+    # current value of the accumulator in TMEM is ignored and the accumulator.
+    # This is an efficient way to zero the accumulator.
+
+    d_smem = gl.allocate_shared_memory(d_desc.dtype, d_desc.block_type.shape, d_desc.layout)
+    acc = acc_tmem.load(reg_layout)
+    d_smem.store(acc)
+    fence_async_shared()
+    tma.async_copy_shared_to_global(d_desc, [0, 0], d_smem)
+    tma.store_wait(pendings=0)
+
+
+def small_mma(A, B, C, D, LHS_IN_TMEM, USE_COMMIT, TMEM_BLOCK, num_warps):
+    a_layout = gl.NVMMASharedLayout.get_default_for(A.shape, gl.float16)
+    b_layout = gl.NVMMASharedLayout.get_default_for(B.shape, gl.float16)
+    cd_layout = gl.NVMMASharedLayout.get_default_for(C.shape, gl.float32)
+
+    a_desc = TensorDescriptor(A, A.shape, A.stride(), A.shape, a_layout)
+    b_desc = TensorDescriptor(B, B.shape, B.stride(), B.shape, b_layout)
+    c_desc = TensorDescriptor(C, C.shape, C.stride(), C.shape, cd_layout)
+    d_desc = TensorDescriptor(D, D.shape, D.stride(), D.shape, cd_layout)
+
+    small_mma_kernel[(1, )](
+        a_desc, b_desc, c_desc, d_desc,  #
+        LHS_IN_TMEM, USE_COMMIT, TMEM_BLOCK, num_warps=num_warps)
+
+
+@pytest.mark.parametrize("M, N, K", [(128, 256, 64)])
+@pytest.mark.parametrize("LHS_IN_TMEM", [False, True])
+@pytest.mark.parametrize("USE_COMMIT", [False, True])
+@pytest.mark.parametrize("TMEM_BLOCK", [(64, 64), (128, 128)])
+@pytest.mark.parametrize("num_warps", [4, 8])
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+def test_small_mma(M, N, K, LHS_IN_TMEM, USE_COMMIT, TMEM_BLOCK, num_warps):
+    A = torch.randn(M, K, device="cuda", dtype=torch.float16)
+    B = torch.randn(K, N, device="cuda", dtype=torch.float16)
+    C = torch.randn(M, N, device="cuda", dtype=torch.float32)
+    D = torch.empty_like(C)
+    small_mma(A, B, C, D, LHS_IN_TMEM, USE_COMMIT, TMEM_BLOCK, num_warps)
+    torch.testing.assert_close(A @ B + C, D, atol=1e-3, rtol=1e-1)
