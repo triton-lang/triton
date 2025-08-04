@@ -4,6 +4,7 @@
 
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Types.h"
+#include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Gluon/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
@@ -602,13 +603,20 @@ void init_gluon_ir(py::module &&m) {
            [](GluonOpBuilder &self, int numPartitions) -> Operation * {
              return self.create<ttg::WarpSpecializePartitionsOp>(numPartitions);
            })
-      .def("create_warp_specialize", [](GluonOpBuilder &self,
-                                        std::vector<Type> &resultTypes,
-                                        std::vector<Value> &explicitCaptures,
-                                        std::vector<int> &partitionNumWarps) {
-        return self.create<ttg::WarpSpecializeOp>(resultTypes, explicitCaptures,
-                                                  partitionNumWarps);
-      });
+      .def("create_warp_specialize",
+           [](GluonOpBuilder &self, std::vector<Type> &resultTypes,
+              std::vector<Value> &explicitCaptures,
+              std::vector<int> &partitionNumWarps) {
+             return self.create<ttg::WarpSpecializeOp>(
+                 resultTypes, explicitCaptures, partitionNumWarps);
+           })
+      .def("create_buffer_load_to_local",
+           [](GluonOpBuilder &self, Value dest, Value ptr, Value offsets,
+              Value mask, Value other, Value stride,
+              tt::CacheModifier cacheModifier) {
+             self.create<triton::amdgpu::BufferLoadToLocalOp>(
+                 dest, ptr, offsets, mask, other, stride, cacheModifier);
+           });
 
   py::class_<ttg::WarpSpecializeOp, OpState>(m, "WarpSpecializeOp",
                                              py::module_local())
