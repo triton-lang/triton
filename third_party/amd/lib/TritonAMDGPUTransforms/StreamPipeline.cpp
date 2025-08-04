@@ -297,10 +297,7 @@ bool canBeConvertedToAsyncLoad(unsigned numBuffers, tt::LoadOp loadOp,
   auto srcTy = cast<RankedTensorType>(loadOp.getPtr().getType());
   auto dstTy = cast<ttg::MemDescType>(alloc.getType());
   auto regLayout = triton::gpu::toLinearLayout(srcTy);
-  // It's the allocation so we can pass the srcTy shape
-  auto srcShape = srcTy.getShape();
-  auto sharedLayout =
-      triton::gpu::toLinearLayout(srcShape, dstTy.getEncoding(), srcShape);
+  auto sharedLayout = triton::gpu::toLinearLayout(dstTy);
   auto regToSharedLayout = regLayout.invertAndCompose(sharedLayout);
 
   unsigned vecSize = regToSharedLayout.getNumConsecutiveInOut();
