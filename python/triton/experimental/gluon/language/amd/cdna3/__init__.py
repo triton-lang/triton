@@ -1,4 +1,4 @@
-from ..._core import builtin, int32
+from ..._core import builtin, int32, uint32
 from ..._semantic import _check
 from triton._C.libtriton import ir
 
@@ -6,7 +6,7 @@ __all__ = ["buffer_load_to_shared"]
 
 
 @builtin
-def buffer_load_to_shared(dest, ptr, offsets, mask=None, other=None, stride=None, cache_modifier="", _semantic=None):
+def buffer_load_to_shared(dest, ptr, offsets, mask=None, other=None, cache_modifier="", _semantic=None):
     """
     AMD Buffer load to shared operation. Buffer load is similar to normal load
     but it accesses global memory via a scalar base pointer and a tensor of
@@ -15,7 +15,7 @@ def buffer_load_to_shared(dest, ptr, offsets, mask=None, other=None, stride=None
 
     Args:
         dest (shared_memory_descriptor): Destination shared memory descriptor.
-        ptr (tensor): Global memory scalar base pointer to load from.
+        ptr (scalar): Global memory scalar base pointer to load from.
         offsets (tensor): Offsets tensor for the load operation.
         mask (tensor, optional): Mask tensor for predicated loads. Defaults to None.
         other (tensor, optional): Tensor providing default values for masked elements. Defaults to None.
@@ -23,7 +23,7 @@ def buffer_load_to_shared(dest, ptr, offsets, mask=None, other=None, stride=None
     """
     builder = _semantic.builder
 
-    _check(offsets.dtype == int32, lambda: f"expected offsets dtype to be int32 but got {offsets.dtype}")
+    _check(offsets.dtype in (int32, uint32), lambda: f"expected offsets dtype to be int32 or uint32 but got {offsets.dtype}")
 
     mask = mask.handle if mask is not None else ir.value()
     other = other.handle if other is not None else ir.value()
