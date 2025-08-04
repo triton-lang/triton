@@ -1,6 +1,6 @@
 import pytest
 import torch
-import tempfile
+import pathlib
 
 import triton
 from triton.backends.compiler import GPUTarget
@@ -18,7 +18,7 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
 
 
 @pytest.mark.skipif(torch.cuda.get_device_capability()[0] != 10, reason="Requires compute capability == 10")
-def test_tmem_copy_2d():
+def test_tmem_copy_2d(tmp_path: pathlib.Path):
     device = "cuda"
 
     smem_h = 256
@@ -75,17 +75,17 @@ ttng.wait_barrier %93, %c0_i32 : !ttg.memdesc<1xi64, #shared1, #ttg.shared_memor
     #blocked = #ttg.blocked<{sizePerThread=[1, 4], threadsPerWarp=[32, 1], warpsPerCTA=[4, 1], order=[0, 1]}>
     #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = false, elementBitWidth = 8}>
     #shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
-    #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 32, unpacked = false>
+    #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 32, unpacked = true>
     module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
     tt.func public @kernel_0d1d(%arg0: !tt.ptr<i32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<i32> {tt.divisibility = 16 : i32}) {
     """ + ir_body + """
     }
     }
     """
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
-        f.write(ir)
-        f.flush()
-        kernel = triton.compile(f.name, target=GPUTarget("cuda", 100, 32))
+
+    temp_file = tmp_path / "test_tmem_copy_2d.ttgir"
+    temp_file.write_text(ir)
+    kernel = triton.compile(str(temp_file), target=GPUTarget("cuda", 100, 32))
 
     x = torch.randint(size=(smem_h, 4), low=-100, high=100, dtype=torch.int32).to(device)
     z_tri = torch.zeros(size=(128, num_cols), dtype=torch.int32).to(device)
