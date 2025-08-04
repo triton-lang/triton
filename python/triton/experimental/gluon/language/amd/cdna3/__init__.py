@@ -23,7 +23,8 @@ def buffer_load_to_shared(dest, ptr, offsets, mask=None, other=None, cache_modif
     """
     builder = _semantic.builder
 
-    _check(offsets.dtype in (int32, uint32), lambda: f"expected offsets dtype to be int32 or uint32 but got {offsets.dtype}")
+    _check(offsets.dtype in (int32, uint32),
+           lambda: f"expected offsets dtype to be int32 or uint32 but got {offsets.dtype}")
 
     mask = mask.handle if mask is not None else ir.value()
     other = other.handle if other is not None else ir.value()
