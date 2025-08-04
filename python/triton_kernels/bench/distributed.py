@@ -157,7 +157,6 @@ def _apply_parallelism(
     expt_scal: torch.Tensor,
     expt_indx: torch.Tensor,
     x: torch.Tensor,
-    n_expts_tot: int,
     chunk_size: int,
     EP: int = 1,
     TP: int = 1,
@@ -193,6 +192,7 @@ def _apply_parallelism(
         x = torch.cat(x_list, dim=0)
     else:
         # Distributed Data Parallelism
+        output_split_sizes = None
         x = all_gather(x, dim=0)
         expt_scal = all_gather(expt_scal, dim=0)
         expt_indx = all_gather(expt_indx, dim=0)
@@ -219,8 +219,7 @@ def routing_torch(x, logits, n_expts_act, sm_first=False, expt_indx=None, n_rows
 
     chunk_size = n_expts_tot // EP
 
-    ep_indx, expt_indx, x, output_split_sizes = _apply_parallelism(expt_scal, expt_indx, x, n_expts_tot, chunk_size,
-                                                                   EP=EP, TP=TP)
+    ep_indx, expt_indx, x, output_split_sizes = _apply_parallelism(expt_scal, expt_indx, x, chunk_size, EP=EP, TP=TP)
 
     # Filter for local experts only
     ep_rank = dist.get_rank() // TP
@@ -288,14 +287,12 @@ def routing_triton(x, logits, n_expts_act, sm_first=False, expt_indx=None, n_row
     if sm_first:
         logits = torch.softmax(logits, dim=-1)
 
-    expt_scal, expt_indx, _ = topk(logits, n_expts_act, apply_softmax=not sm_first, y_indx=expt_indx, n_rows=n_rows,
-                                   return_bitmatrix=False)
+    expt_scal, expt_indx, _ = topk(logits, n_expts_act, apply_softmax=not sm_first, y_indx=expt_indx, n_rows=n_rows)
     expt_indx = expt_indx.int()
 
     chunk_size = n_expts_tot // EP
 
-    ep_indx, expt_indx, x, output_split_sizes = _apply_parallelism(expt_scal, expt_indx, x, n_expts_tot, chunk_size,
-                                                                   EP=EP, TP=TP)
+    ep_indx, expt_indx, x, output_split_sizes = _apply_parallelism(expt_scal, expt_indx, x, chunk_size, EP=EP, TP=TP)
 
     # Filter for local experts only
     ep_rank = dist.get_rank() // TP
@@ -339,6 +336,8 @@ def routing(x, logits, n_expts_act, sm_first=False, expt_indx=None, n_rows=None,
             return routing_torch(x, logits, n_expts_act, sm_first, expt_indx, n_rows, EP, TP)
         elif backend == "triton":
             return routing_triton(x, logits, n_expts_act, sm_first, expt_indx, n_rows, EP, TP)
+        else:
+            raise ValueError(f"Unknown backend: {backend}")
     else:
         return x, *triton_kernels.routing.routing(logits, n_expts_act, sm_first, expt_indx, EP, n_rows), None
 
