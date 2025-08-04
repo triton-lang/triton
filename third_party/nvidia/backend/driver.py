@@ -384,9 +384,6 @@ static inline DevicePtrInfo getPointer(PyObject *obj, int idx) {{
     // valid nullptr
     return ptr_info;
   }}
-  if (!data_ptr_str) {{
-    data_ptr_str = PyUnicode_FromString("data_ptr");
-  }}
   PyObject* ptr = PyObject_GetAttr(obj, data_ptr_str);
   if(ptr){{
     PyObject *empty_tuple = PyTuple_New(0);
@@ -424,9 +421,6 @@ static inline CUtensorMap* getTmaDesc(PyObject *obj) {{
   if (sizeof(CUtensorMap*) != 8) {{
     PyErr_SetString(PyExc_SystemError, "getTmaDesc() requires 64-bit compilation");
     return NULL;
-  }}
-  if (!tma_desc_cpu_ptr_str) {{
-    tma_desc_cpu_ptr_str = PyUnicode_FromString("tma_desc_cpu_ptr");
   }}
   PyObject *method_handle = PyObject_GetAttr(obj, tma_desc_cpu_ptr_str);
   if (!method_handle) {{
@@ -602,6 +596,14 @@ static struct PyModuleDef ModuleDef = {{
 PyMODINIT_FUNC PyInit___triton_launcher(void) {{
   PyObject *m = PyModule_Create(&ModuleDef);
   if(m == NULL) {{
+    return NULL;
+  }}
+  data_ptr_str = PyUnicode_InternFromString("data_ptr");
+  if(data_ptr_str == NULL) {{
+    return NULL;
+  }}
+  tma_desc_cpu_ptr_str = PyUnicode_FromString("tma_desc_cpu_ptr");
+  if(tma_desc_cpu_ptr_str == NULL) {{
     return NULL;
   }}
   PyModule_AddFunctions(m, ModuleMethods);
