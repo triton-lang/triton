@@ -4,6 +4,8 @@ import triton
 from triton._C.libtriton import nvidia
 import torch
 import csv
+from dataclasses import dataclass
+import inspect
 
 
 def get_memset_tbps():
@@ -67,11 +69,37 @@ def validate_perfs(perfs):
         for i in range(len(xs)):
             if xs[i] != xs_ref[i]:
                 raise ValueError(f"x mismatch between series[0] and series[{i}]")
-            if flops[i] * bytes_ref[i] != flops_ref[i] * bytes[i]:
-                raise ValueError(f"flops/bytes mismatch at x={xs_ref[i]} between series[0] and series[{i}]")
 
 
-def roofline(series, dtype, out_path, title="", xlabel=""):
+@dataclass
+class PerfData:
+    time: float
+    flops: float
+    bytes: float
+
+    @property
+    def tflops(self):
+        return self.flops / self.time * 1e-3
+
+    @property
+    def tbps(self):
+        return self.bytes / self.time * 1e-3
+
+
+def parse_profile(fpath, useful_op_regex):
+    from triton.profiler import viewer
+    gf, _, _, _ = viewer.read(fpath)
+    # aggregate "useful" flops + bytes
+    useful = gf.filter(f"MATCH ('*', c) WHERE c.'name' =~ '{useful_op_regex}' AND c IS LEAF").dataframe
+    bytes = int(useful["bytes"].sum())
+    flops = int(sum(useful[[c for c in ["flops8", "flops16"] if c in useful.columns]].sum()))
+    # take all ops (incl. "not useful" ones) when computing total time
+    allops = gf.filter("MATCH ('*', c) WHERE c IS LEAF").dataframe
+    time = allops["time (ns)"].sum()
+    return PerfData(time=time, flops=flops, bytes=bytes)
+
+
+def plot_roofline(series, flops_dtype, out_path, title="", xlabel="", labels=None):
     from bisect import bisect_left
     from pathlib import Path
     perfs = [load_perf_csv(p) for p in series]
@@ -80,7 +108,7 @@ def roofline(series, dtype, out_path, title="", xlabel=""):
 
     # set up plot
     max_tbps = get_memset_tbps()
-    max_tflops = get_cublas_tflops(dtype)
+    max_tflops = get_cublas_tflops(flops_dtype)
     fig, ax = plt.subplots(figsize=(7, 5), dpi=120)
     ax.set_xlabel(xlabel)
     ax.set_ylabel("performance  [TFLOP/s]")
@@ -90,7 +118,7 @@ def roofline(series, dtype, out_path, title="", xlabel=""):
     ax.set_xlim(xmin - dx, xmax + dx)
     ax.set_ylim(100, max_tflops + 500)
 
-    # Roofline from operational intensity (identical across series)
+    # roofline from operational intensity (identical across series)
     opints = [f / b for f, b in zip(flops_ref, bytes_ref)]
     knee = bisect_left(opints, max_tflops / max_tbps)
     if knee > 0:
@@ -100,14 +128,16 @@ def roofline(series, dtype, out_path, title="", xlabel=""):
         x_bw = y_bw = []
     x_comp = xs[max(knee - 1, 0):]
     y_comp = [max_tflops] * len(x_comp)
-    ax.plot(x_bw, y_bw, "--", label=f"BW-bound  (memset @ {max_tbps:.1f} TB/s)", color="blue")
-    ax.plot(x_comp, y_comp, "--", label=f"Compute-bound  (cuBLAS @ {max_tflops:.0f} TFLOP/s)", color="orange")
+    grey = "#7f7f7f"
+    ax.plot(x_bw, y_bw, linestyle="--", color=grey, label=f"BW-bound - {max_tbps:.1f} TB/s [memset]", zorder=1)
+    ax.plot(x_comp, y_comp, linestyle=":", color=grey, label=f"Compute-bound  - {max_tflops:.0f} TFLOP/s [cuBLAS]",
+            zorder=1)
 
-    # Plot each series as a scatter of TFLOP/s points
-    for pth, (_, f, b, t) in zip(series, perfs):
+    # Plot each series as a lineplot of TFLOP/s
+    for idx, (pth, (_, f, b, t)) in enumerate(zip(series, perfs)):
         perf_tflops = [ff / tt * 1e-3 if tt > 0 else 0.0 for ff, tt in zip(f, t)]
-        label = Path(pth).stem
-        ax.scatter(xs, perf_tflops, marker="+", label=label)
+        label = (labels[idx] if labels and idx < len(labels) else Path(pth).stem)
+        ax.plot(xs, perf_tflops, label=label, linewidth=1.8, zorder=2)
 
     ax.legend(frameon=False, loc="lower right")
     ax.grid(True, which="both", ls=":", lw=0.5)
@@ -115,11 +145,68 @@ def roofline(series, dtype, out_path, title="", xlabel=""):
     plt.savefig(out_path)
 
 
+def make_benchmark(target_fn, intensity_proxy, *, verbose=True, name=""):
+    if not isinstance(intensity_proxy, str):
+        raise TypeError("intensity_proxy must be a string naming a parameter in target_fn")
+    # determine position of intensity_proxy in target_fn signature
+    sig = inspect.signature(target_fn)
+    params = list(sig.parameters.values())
+    if intensity_proxy not in sig.parameters:
+        raise ValueError(f"Parameter '{intensity_proxy}' not found in {target_fn.__name__} signature")
+    pos_index = [p.name for p in params].index(intensity_proxy)
+
+    # wrapper for target_fn
+    def inject_proxy_and_call(val, args, kwargs):
+        args_list = list(args)
+        args_list.insert(pos_index, val)
+        return target_fn(*args_list, **kwargs)
+
+    def _benchmark(values, *target_args, **target_kwargs):
+        perfs = []
+        if verbose:
+            print("=========================================")
+            print(f"{name}...")
+            print("=========================================")
+        for val in values:
+            perf = inject_proxy_and_call(val, target_args, target_kwargs)
+            perfs.append(perf)
+            if verbose:
+                print(f"{intensity_proxy}: {val:5d} | TFLOPS: {perfs[-1].tflops:#.4g} | TBPS: {perfs[-1].tbps:.2f}")
+        return perfs
+
+    return _benchmark
+
+
+def write_csv(xs, perfs, fpath):
+    csv_path = fpath.with_suffix(".csv")
+    with csv_path.open("w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["x", "flops", "bytes", "time_ns"])
+        for x, p in zip(xs, perfs):
+            writer.writerow([x, p.flops, p.bytes, p.time])
+    return csv_path
+
+def compute_roofline(*args, \
+                  bench_fn, intensity_proxy_name, intensity_proxy_values, out_path, verbose, \
+                  **kwargs):
+    benchmark = make_benchmark(bench_fn, intensity_proxy_name, verbose=verbose, name=out_path)
+    perfs = benchmark(intensity_proxy_values, *args, **kwargs)
+    return write_csv(intensity_proxy_values, perfs, out_path)
+
+
 if __name__ == "__main__":
     import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--series", type=str, nargs="+", required=True)
-    parser.add_argument("--dtype", type=str, required=True)
-    parser.add_argument("--out_path", type=str, required=True)
+    parser = argparse.ArgumentParser(description="Plot roofline(s) from perf CSV series")
+    parser.add_argument("--series", type=str, nargs="+", required=True,
+                        help="list of .csv files; columns must be `x`, `flops`, `bytes`, `time_ns`")
+    parser.add_argument("--dtype", type=str, required=True, choices=["fp16", "bf16", "fp8"],
+                        help="data type used for compute-bound roof")
+    parser.add_argument("--out_path", type=str, required=True, help="path to write the output image")
+    parser.add_argument("--title", type=str, default="", help="plot title")
+    parser.add_argument("--xlabel", type=str, default="", help="x-axis label")
+    parser.add_argument("--labels", type=str, nargs="+", default=None,
+                        help="optional list of names for each series, in order; must match number of --series")
     args = parser.parse_args()
-    roofline(args.series, args.dtype, args.out_path)
+    if args.labels is not None and len(args.labels) != len(args.series):
+        parser.error("--labels must have the same number of entries as --series")
+    plot_roofline(args.series, args.dtype, args.out_path, title=args.title, xlabel=args.xlabel, labels=args.labels)
