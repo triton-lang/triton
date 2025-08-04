@@ -1238,8 +1238,8 @@ LogicalResult AMDMfmaEncodingAttr::verify(
     llvm::ArrayRef<unsigned int> tilesPerWarp, unsigned mDim, unsigned nDim,
     bool isTransposed, mlir::triton::gpu::CTALayoutAttr,
     std::optional<Type> elementType) {
-  if (!(version >= 0 && version <= 4)) {
-    return emitError() << "version must be in the [0, 4] range";
+  if (!(version > 0 && version <= 4)) {
+    return emitError() << "version must be in the [1, 4] range";
   }
 
   const std::array<std::pair<unsigned, unsigned>, 4> validDims = {
