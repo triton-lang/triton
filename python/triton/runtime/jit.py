@@ -477,19 +477,23 @@ def _generate_inline_specialization(name, kp, list_pos):
     # specialize_impl: elif isinstance(arg, tuple)
     code_lines.append(f"elif isinstance({name}, tuple):")
     code_lines.append(f"{INDENT}_spec = [_specialize_tuple_elem(x) for x in {name}]")
-    code_lines.append(f"{INDENT}_make_tuple = lambda vals: type({name})(*vals) if hasattr({name}, '_fields') else tuple(vals)")
+    code_lines.append(
+        f"{INDENT}_make_tuple = lambda vals: type({name})(*vals) if hasattr({name}, '_fields') else tuple(vals)")
     code_lines.append(f"{INDENT}_tys = _make_tuple([x[0] for x in _spec])")
     code_lines.append(f"{INDENT}_keys = _make_tuple([x[1] for x in _spec])")
     code_lines.append(f"{INDENT}specialization[{list_pos}] = (_tys, _keys)")
     # specialize_impl: elif isinstance(arg, TensorDescriptor)
     code_lines.append(f"elif isinstance({name}, TensorDescriptor):")
     code_lines.append(f"{INDENT}_inner = canonicalize_dtype({name}.base.dtype)")
-    code_lines.append(f"{INDENT}specialization[{list_pos}] = (f'tensordesc<{{_inner}}{{list({name}.block_shape)}}>', None)")
+    code_lines.append(
+        f"{INDENT}specialization[{list_pos}] = (f'tensordesc<{{_inner}}{{list({name}.block_shape)}}>', None)")
     # specialize_impl: elif isinstance(arg, GluonTensorDescriptor)
     code_lines.append(f"elif isinstance({name}, GluonTensorDescriptor):")
     code_lines.append(f"{INDENT}_inner = canonicalize_dtype({name}.base.dtype)")
-    code_lines.append(f"{INDENT}specialization[{list_pos}] = (f'tensordesc<{{_inner}}{{list({name}.block_shape)}},{{repr({name}.layout)}}>', None)")
-    code_lines.append(f"else:")
+    code_lines.append(
+        f"{INDENT}specialization[{list_pos}] = (f'tensordesc<{{_inner}}{{list({name}.block_shape)}},{{repr({name}.layout)}}>', None)"
+    )
+    code_lines.append("else:")
     code_lines.append(f"{INDENT}raise TypeError(f'Unsupported type: {{type({name})}}')")
     code_lines.append("")
 

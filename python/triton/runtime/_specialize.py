@@ -1,8 +1,6 @@
-import os
 import functools
 from triton.runtime.build import compile_module_from_src
 from triton.backends.nvidia.driver import library_dirs, include_dirs
-
 
 ARG_SPECIALIZE_SRC = '''
 #include <Python.h>
@@ -29,12 +27,12 @@ static int init_common_objects(void) {
     int_1 = PyLong_FromLong(1);
     // Pre-build the constexpr tuple for value=1
     tuple_constexpr_1 = PyTuple_New(2);
-    
+
     Py_INCREF(str_constexpr);
     Py_INCREF(int_1);
     PyTuple_SET_ITEM(tuple_constexpr_1, 0, str_constexpr);
     PyTuple_SET_ITEM(tuple_constexpr_1, 1, int_1);
-    
+
     return 0;
 }
 // integer specialization with type determination and alignment check
@@ -43,10 +41,10 @@ static PyObject* specialize_int(PyObject* self, PyObject* args) {
     PyObject* value_obj = PyTuple_GET_ITEM(args, 0);
     PyObject* specialize_value_obj = PyTuple_GET_ITEM(args, 1);
     PyObject* align_obj = PyTuple_GET_ITEM(args, 2);
-    
+
     int specialize_value = PyObject_IsTrue(specialize_value_obj);
     int align = PyObject_IsTrue(align_obj);
-        
+
     int overflow_i32 = 0;
     int overflow_i64 = 0;
     long val = 0;
@@ -58,7 +56,7 @@ static PyObject* specialize_int(PyObject* self, PyObject* args) {
         Py_INCREF(tuple_constexpr_1);
         return tuple_constexpr_1;
     }
-    
+
     PyObject* type_str = NULL;
     if (!overflow_i32) {
         type_str = str_i32;
@@ -69,12 +67,12 @@ static PyObject* specialize_int(PyObject* self, PyObject* args) {
             type_str = str_u64;
         }
     }
-            
+
     PyObject* result = PyTuple_New(2);
     if (!result) return NULL;
     Py_INCREF(type_str);
     PyTuple_SET_ITEM(result, 0, type_str);
-    
+
     if (!specialize_value) {
         Py_INCREF(Py_None);
         PyTuple_SET_ITEM(result, 1, Py_None);
@@ -101,11 +99,11 @@ static PyObject* specialize_int(PyObject* self, PyObject* args) {
         Py_INCREF(str_empty);
         PyTuple_SET_ITEM(result, 1, str_empty);
     }
-    
+
     return result;
 }
 static PyObject* specialize_tensor(PyObject* self, PyObject* args) {
-    // expects (data_ptr, align)    
+    // expects (data_ptr, align)
     PyObject* data_ptr_obj = PyTuple_GET_ITEM(args, 0);
     PyObject* align_obj = PyTuple_GET_ITEM(args, 1);
     uint64_t data_ptr = PyLong_AsUnsignedLongLong(data_ptr_obj);
@@ -135,16 +133,17 @@ PyMODINIT_FUNC PyInit_triton_specialize(void) {
     if (!module) {
         return NULL;
     }
-    
+
     // Initialize common objects for performance
     if (init_common_objects() < 0) {
         Py_DECREF(module);
         return NULL;
     }
-    
+
     return module;
 }
 '''
+
 
 @functools.lru_cache()
 def get_specialize_module():
@@ -159,7 +158,8 @@ def get_specialize_module():
     return mod
 
 
-class ArgSpecializer:    
+class ArgSpecializer:
+
     def __init__(self, specialize_extra):
         self.module = get_specialize_module()
 
