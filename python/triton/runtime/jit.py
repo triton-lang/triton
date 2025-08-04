@@ -321,6 +321,10 @@ def create_specialize_impl(specialize_extra):
 
     from ..language import constexpr
     from triton.experimental.gluon.nvidia.hopper import TensorDescriptor as GluonTensorDescriptor
+    from ._specialize import ArgSpecializer
+    specializer = ArgSpecializer(specialize_extra)
+    specialize_int = specializer.specialize_int
+    specialize_tensor = specializer.specialize_tensor
 
     def specialize_impl(arg, is_const=False, specialize_value=True, align=True):
         if arg is None:
@@ -328,15 +332,7 @@ def create_specialize_impl(specialize_extra):
         elif isinstance(arg, bool):
             return ("u1", None)
         elif isinstance(arg, int):
-            key = specialize_extra(arg, "int", align=align) if specialize_value else None
-            if arg == 1 and specialize_value:
-                return ("constexpr", 1)
-            elif -(2**31) <= arg and arg <= 2**31 - 1:
-                return ("i32", key)
-            elif 2**63 <= arg and arg <= 2**64 - 1:
-                return ("u64", key)
-            else:
-                return ("i64", key)
+            return specialize_int(arg, specialize_value, align)
         elif isinstance(arg, float):
             return ("fp32", None)
         elif hasattr(arg, "data_ptr"):
@@ -346,7 +342,7 @@ def create_specialize_impl(specialize_extra):
             if res is None:
                 res = ("*k" if dsk[1] else "*") + canonicalize_dtype(dsk[0])
                 dtype2str[dsk] = res
-            key = specialize_extra(arg, "tensor", align=align) if specialize_value else None
+            key = specialize_tensor(arg, specialize_value, align)
             return (res, key)
         elif isinstance(arg, JITFunction):
             return ("constexpr", arg.cache_key)
