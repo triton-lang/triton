@@ -105,7 +105,7 @@ struct TritonAMDGPULowerInstructionSchedHints
 
   explicit TritonAMDGPULowerInstructionSchedHints(StringRef arch,
                                                   int32_t numStages) {
-    this->arch = std::move(arch.str());
+    this->arch = arch.str();
     this->numStages = numStages;
   }
 
@@ -138,7 +138,7 @@ struct TritonAMDGPUInsertInstructionSchedHints
           TritonAMDGPUInsertInstructionSchedHints> {
 
   explicit TritonAMDGPUInsertInstructionSchedHints(StringRef variant) {
-    this->variant = std::move(variant.str());
+    this->variant = variant.str();
   }
 
   void runOnOperation() override {
