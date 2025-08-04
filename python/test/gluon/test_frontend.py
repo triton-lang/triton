@@ -584,7 +584,13 @@ def warpgroup_mma_kernel(nvmma_layout: ttgl.constexpr, acc_layout: ttgl.constexp
     a = ttgl.allocate_shared_memory(ttgl.float16, [128, 128], nvmma_layout)
     b = ttgl.allocate_shared_memory(ttgl.float16, [128, 128], nvmma_layout)
     acc = ttgl.full([128, 128], 0, dtype=ttgl.float16, layout=acc_layout)
-    hopper.warpgroup_mma(a, b, acc)
+    acc = hopper.warpgroup_mma(a, b, acc)
+    ttgl.static_assert(isinstance(acc, ttgl.tensor))
+
+    acc = hopper.warpgroup_mma(a, b, acc, is_async=True)
+    ttgl.static_assert(isinstance(acc, hopper.warpgroup_mma_accumulator))
+    x = acc.load()
+    _ = x + x
 
 
 def test_warpgroup_mma():
@@ -608,6 +614,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %cst_0 = arith.constant dense<0.000000e+00> : tensor<128x128xf16, #mma>
     %true = arith.constant true
     %2 = ttng.warp_group_dot %0, %1, %cst_0, %true {inputPrecision = 0 : i32} : !ttg.memdesc<128x128xf16, #shared, #smem, mutable> * !ttg.memdesc<128x128xf16, #shared, #smem, mutable> -> tensor<128x128xf16, #mma>
+    %true_1 = arith.constant true
+    %3 = ttng.warp_group_dot %0, %1, %2, %true_1 {inputPrecision = 0 : i32, isAsync = true} : !ttg.memdesc<128x128xf16, #shared, #smem, mutable> * !ttg.memdesc<128x128xf16, #shared, #smem, mutable> -> tensor<128x128xf16, #mma>
+    %4 = arith.addf %3, %3 : tensor<128x128xf16, #mma>
     tt.return
   }
 }
@@ -617,8 +626,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 @gluon.jit
 def warpgroup_mma_wait_kernel():
     layout: ttgl.constexpr = ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1], instr_shape=[16, 32, 16])
-    acc = ttgl.full([128, 128], 0, dtype=ttgl.float16, layout=layout)
+    acc = hopper.warpgroup_mma_init(ttgl.full([128, 128], 0, dtype=ttgl.float16, layout=layout))
     acc = hopper.warpgroup_mma_wait(num_outstanding=1, deps=[acc])
+    _ = acc.load() + acc.load()
 
 
 def test_warpgroup_mma_wait():
@@ -631,6 +641,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %cst = arith.constant 0.000000e+00 : f16
     %cst_0 = arith.constant dense<0.000000e+00> : tensor<128x128xf16, #mma>
     %0 = ttng.warp_group_dot_wait %cst_0 {pendings = 1 : i32} : tensor<128x128xf16, #mma>
+    %1 = arith.addf %0, %0 : tensor<128x128xf16, #mma>
     tt.return
   }
 }

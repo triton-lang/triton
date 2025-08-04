@@ -562,7 +562,7 @@ def multibuffered_loop_wgmma_kernel(input_desc, XBLOCK: ttgl.constexpr, FAILURE:
 
     mma_layout: ttgl.constexpr = ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1],
                                                              instr_shape=[16, 32, 16])
-    acc = ttgl.zeros([XBLOCK, XBLOCK], ttgl.float32, mma_layout)
+    acc = hopper.warpgroup_mma_init(ttgl.zeros([XBLOCK, XBLOCK], ttgl.float32, mma_layout))
 
     smemA = ttgl.allocate_shared_memory(ttgl.float16, [num_buffers, XBLOCK, XBLOCK], input_desc.layout)
     smemB = ttgl.allocate_shared_memory(ttgl.float16, [num_buffers, XBLOCK, XBLOCK], input_desc.layout)
@@ -599,7 +599,7 @@ def multibuffered_loop_wgmma_kernel(input_desc, XBLOCK: ttgl.constexpr, FAILURE:
         mbarrier.wait(barLoadB.index(ext_id), phase)
 
         acc = hopper.warpgroup_mma(smemA.index(ext_id), smemB.index(ext_id), acc, is_async=True)
-        hopper.warpgroup_mma_wait(num_outstanding=1, deps=[acc])
+        acc = hopper.warpgroup_mma_wait(num_outstanding=1, deps=[acc])
         ext_id = inc_mod(ext_id, num_buffers)
         if ext_id == 0:
             phase = (phase + 1) % 2
