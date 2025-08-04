@@ -30,13 +30,16 @@ int64_t gcdImpl(int64_t a, int64_t b, int64_t *x, int64_t *y) {
   return gcd;
 }
 
-int64_t gcd(int64_t a, int64_t b) {
+template <typename... Args> int64_t gcd(int64_t a, int64_t b, Args... args) {
   if (a == 0)
     return b;
   if (b == 0)
     return a;
   int64_t x, y;
-  return gcdImpl(a, b, &x, &y);
+  if constexpr (sizeof...(args) == 0)
+    return gcdImpl(a, b, &x, &y);
+  else
+    return gcd(gcdImpl(a, b, &x, &y), args...);
 }
 
 constexpr int log2Int(int64_t num) {
@@ -289,7 +292,7 @@ private:
       // [16, 20, 24, 28] : !ptr<i32>
       // with element locations:
       // [4, 5, 6, 7]
-      // It is "strided contiguous" with a divisilibity of 16 bytes
+      // It is "strided contiguous" with a divisibility of 16 bytes
       auto rank = lhs.getRank();
       auto elemSize = std::max<int64_t>(
           1, triton::getPointeeBitWidth(op.getPtr().getType()) / 8);
@@ -410,9 +413,9 @@ private:
     // we need to use another gcd to get the actual constancy.
     if (AxisInfoVisitor::isContiguousDim(lhs, shape, dim) &&
         AxisInfoVisitor::isConstantDim(rhs, shape, dim)) {
-      constancy = std::max(constancy, gcd(lhs.getContiguity(dim),
-                                          gcd(lhs.getDivisibility(dim),
-                                              rhs.getDivisibility(dim))));
+      constancy = std::max(constancy,
+                           gcd(lhs.getContiguity(dim), lhs.getDivisibility(dim),
+                               rhs.getDivisibility(dim)));
     }
     return constancy;
   }
@@ -471,9 +474,8 @@ private:
     // we need to use another gcd to get the actual contiguity.
     if (AxisInfoVisitor::isContiguousDim(lhs, shape, dim) &&
         AxisInfoVisitor::isConstantDim(rhs, shape, dim)) {
-      contiguity = std::max(contiguity, gcd(lhs.getContiguity(dim),
-                                            gcd(lhs.getDivisibility(dim),
-                                                rhs.getDivisibility(dim))));
+      contiguity = gcd(lhs.getContiguity(dim), lhs.getDivisibility(dim),
+                       rhs.getDivisibility(dim));
     }
     return contiguity;
   }
@@ -682,8 +684,8 @@ public:
           // lhs ge rhs: 1, 0, 0, 0
           // lhs gt rhs: 0, 0, 0, 0
           constHint = std::max(constHint, gcd(rhsInfo.getContiguity(d),
-                                              gcd(lhsInfo.getDivisibility(d),
-                                                  rhsInfo.getDivisibility(d))));
+                                              lhsInfo.getDivisibility(d),
+                                              rhsInfo.getDivisibility(d)));
         } else if ((ltPredicate(getPredicate(op)) ||
                     gePredicate(getPredicate(op))) &&
                    AxisInfoVisitor::isConstantDim(rhsInfo, shape, d)) {
@@ -698,8 +700,8 @@ public:
           // lhs gt rhs: 0, 1, 1, 1
           // lhs ge rhs: 1, 1, 1, 1
           constHint = std::max(constHint, gcd(lhsInfo.getContiguity(d),
-                                              gcd(lhsInfo.getDivisibility(d),
-                                                  rhsInfo.getDivisibility(d))));
+                                              lhsInfo.getDivisibility(d),
+                                              rhsInfo.getDivisibility(d)));
         }
       }
 
@@ -801,18 +803,23 @@ public:
       for (auto d = 0; d < rank; ++d) {
         if (i1Cond) {
           constancy.push_back(
-              std::min(lhsInfo.getConstancy(d), rhsInfo.getConstancy(d)));
-          divisibility.push_back(
-              std::min(lhsInfo.getDivisibility(d), rhsInfo.getDivisibility(d)));
+              gcd(lhsInfo.getConstancy(d), rhsInfo.getConstancy(d)));
+          if (lhsInfo.getContiguity(d) == rhsInfo.getContiguity(d)) {
+            divisibility.push_back(
+                gcd(lhsInfo.getDivisibility(d), rhsInfo.getDivisibility(d)));
+          } else {
+            // Contiguity changed, we cannot use only divisibility.
+            divisibility.push_back(
+                gcd(lhsInfo.getDivisibility(d), rhsInfo.getDivisibility(d),
+                    lhsInfo.getContiguity(d), rhsInfo.getContiguity(d)));
+          }
           contiguity.push_back(
-              std::min(lhsInfo.getContiguity(d), rhsInfo.getContiguity(d)));
+              gcd(lhsInfo.getContiguity(d), rhsInfo.getContiguity(d)));
         } else {
-          constancy.push_back(
-              std::min(gcd(lhsInfo.getConstancy(d), condConstancy[d]),
-                       gcd(rhsInfo.getConstancy(d), condConstancy[d])));
-          contiguity.push_back(
-              std::min(gcd(lhsInfo.getContiguity(d), condConstancy[d]),
-                       gcd(rhsInfo.getContiguity(d), condConstancy[d])));
+          constancy.push_back(gcd(lhsInfo.getConstancy(d),
+                                  rhsInfo.getConstancy(d), condConstancy[d]));
+          contiguity.push_back(gcd(lhsInfo.getContiguity(d),
+                                   rhsInfo.getContiguity(d), condConstancy[d]));
           if (contiguity.back() == lhsInfo.getContiguity(d) &&
               contiguity.back() == rhsInfo.getContiguity(d)) {
             // Contiguity not changed
@@ -824,9 +831,9 @@ public:
             // divisibility 2
             // [[0, 1], [4, 5]]
             // [[16, 17, 18, 19]]
-            divisibility.push_back(
-                std::min(gcd(lhsInfo.getDivisibility(d), contiguity.back()),
-                         gcd(rhsInfo.getDivisibility(d), contiguity.back())));
+            divisibility.push_back(gcd(lhsInfo.getDivisibility(d),
+                                       rhsInfo.getDivisibility(d),
+                                       contiguity.back()));
           }
         }
       }
@@ -983,11 +990,17 @@ public:
       AxisInfo::DimVectorT contiguity, divisibility, constancy;
       for (auto d = 0; d < rank; ++d) {
         constancy.push_back(
-            std::min(lhsInfo.getConstancy(d), rhsInfo.getConstancy(d)));
-        divisibility.push_back(
-            std::min(lhsInfo.getDivisibility(d), rhsInfo.getDivisibility(d)));
+            gcd(lhsInfo.getConstancy(d), rhsInfo.getConstancy(d)));
+        if (lhsInfo.getContiguity(d) == rhsInfo.getContiguity(d)) {
+          divisibility.push_back(
+              gcd(lhsInfo.getDivisibility(d), rhsInfo.getDivisibility(d)));
+        } else {
+          divisibility.push_back(
+              gcd(lhsInfo.getDivisibility(d), rhsInfo.getDivisibility(d),
+                  lhsInfo.getContiguity(d), rhsInfo.getContiguity(d)));
+        }
         contiguity.push_back(
-            std::min(lhsInfo.getContiguity(d), rhsInfo.getContiguity(d)));
+            gcd(lhsInfo.getContiguity(d), rhsInfo.getContiguity(d)));
       }
       return AxisInfo(contiguity, divisibility, constancy, std::nullopt);
     }
@@ -1203,7 +1216,13 @@ void AxisInfo::initPessimisticStateFromFunc(int argNumber, T funcOp,
   DimVectorT constancy;
   for (auto d = 0; d < lhs.getRank(); ++d) {
     contiguity.push_back(gcd(lhs.getContiguity(d), rhs.getContiguity(d)));
-    divisibility.push_back(gcd(lhs.getDivisibility(d), rhs.getDivisibility(d)));
+    if (lhs.getContiguity(d) == rhs.getContiguity(d)) {
+      divisibility.push_back(
+          gcd(lhs.getDivisibility(d), rhs.getDivisibility(d)));
+    } else {
+      divisibility.push_back(gcd(lhs.getDivisibility(d), rhs.getDivisibility(d),
+                                 lhs.getContiguity(d), rhs.getContiguity(d)));
+    }
     constancy.push_back(gcd(lhs.getConstancy(d), rhs.getConstancy(d)));
   }
   std::optional<int64_t> constantValue;
