@@ -19,6 +19,7 @@ namespace tt = triton;
 namespace ttg = triton::gpu;
 namespace ttng = triton::nvidia_gpu;
 namespace gluon = mlir::triton::gluon;
+namespace ttag = mlir::triton::amdgpu;
 
 // Helper to check if an MLIR type or attribute has a verifier method.
 template <typename AttrOrType>
@@ -608,16 +609,16 @@ void init_gluon_ir(py::module &&m) {
            })
       .def("create_buffer_load",
            [](GluonOpBuilder &self, Type resultType, Value ptr, Value offsets,
-              Value stride, Value mask, Value other,
-              mlir::triton::CacheModifier cache) -> Value {
-             return self.create<triton::amdgpu::BufferLoadOp>(
-                 resultType, ptr, offsets, stride, cache, mask, other);
+              Value mask, Value other, tt::CacheModifier cache) -> Value {
+             return self.create<ttag::BufferLoadOp>(resultType, ptr, offsets,
+                                                    Value() /*stride*/, cache,
+                                                    mask, other);
            })
       .def("create_buffer_store",
            [](GluonOpBuilder &self, Value storedValue, Value ptr, Value offsets,
-              Value stride, Value mask, mlir::triton::CacheModifier cache) {
-             self.create<triton::amdgpu::BufferStoreOp>(
-                 storedValue, ptr, offsets, stride, cache, mask);
+              Value mask, tt::CacheModifier cache) {
+             self.create<ttag::BufferStoreOp>(storedValue, ptr, offsets,
+                                              Value() /*stride*/, cache, mask);
            });
 
   py::class_<ttg::WarpSpecializeOp, OpState>(m, "WarpSpecializeOp",
