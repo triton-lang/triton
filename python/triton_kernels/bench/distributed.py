@@ -26,6 +26,7 @@ from triton_kernels.matmul_ogs import matmul_ogs, PrecisionConfig, FlexCtx, FnSp
 from triton_kernels.routing_details._routing_compute import _routing_clear_bitmatrix
 from triton_kernels.target_info import get_cdna_version, is_hip, is_cuda, cuda_capability_geq
 from triton_kernels.tensor_details import layout
+from triton_kernels.tensor import Bitmatrix
 
 from bench_utils import quantize_weight
 
@@ -298,16 +299,16 @@ def routing_triton(x, logits, n_expts_act, sm_first=False, expt_indx=None, n_row
     ep_rank = dist.get_rank() // TP
     expt_indx -= ep_rank * chunk_size
 
-    # Recover bitmask for local experts
+    # Recover bitmatrix for local experts
     n_cols = triton.cdiv(chunk_size, 32)
     n_rows = expt_indx.size(0)
-    bitmask = torch.zeros((n_rows, n_cols), dtype=torch.int32, device=expt_indx.device)
+    bitmatrix = torch.zeros((n_rows, n_cols), dtype=torch.int32, device=expt_indx.device)
     BLOCK_SIZE_M = 128
     BLOCK_SIZE_K = max(triton.next_power_of_2(n_cols), 32)
     grid = (triton.cdiv(n_rows, BLOCK_SIZE_M), triton.cdiv(n_cols, BLOCK_SIZE_K))
 
     pack_bitmatrix[grid](
-        bitmask,
+        bitmatrix,
         expt_indx,
         n_rows,
         n_cols,
@@ -315,7 +316,8 @@ def routing_triton(x, logits, n_expts_act, sm_first=False, expt_indx=None, n_row
         BLOCK_SIZE_K=BLOCK_SIZE_K,
         sentinel=chunk_size,
     )
-    expt_scal, expt_indx, bitmatrix = prune_routing(expt_scal, expt_indx, bitmask, n_expts_tot, EP)
+    bitmatrix = Bitmatrix(bitmatrix, shape=bitmatrix.shape, shape_max=bitmatrix.shape, scratchpad=None)
+    expt_scal, expt_indx, bitmatrix = prune_routing(expt_scal, expt_indx, bitmatrix, n_expts_tot, EP)
     routing_data, gather_indx, scatter_indx = routing_from_bitmatrix(bitmatrix, expt_scal, expt_indx, n_expts_tot,
                                                                      n_expts_act)
 
