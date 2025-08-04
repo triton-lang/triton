@@ -680,13 +680,7 @@ optimalSwizzling(const LinearLayout &src, const LinearLayout &dst,
       int a3 = dstTiles[std::get<2>(a).second].laneContig.size();
       int b2 = srcTiles[std::get<2>(b).first].laneContig.size();
       int b3 = dstTiles[std::get<2>(b).second].laneContig.size();
-      if ((a2 + a3) < (b2 + b3))
-        return true;
-      if ((a2 + a3) > (b2 + b3))
-        return false;
-
-      // prefer ldmatrix over stmatrix:
-      return a2 < b2;
+      return (a2 + a3) < (b2 + b3);
     });
     return {std::get<1>(*it), std::get<2>(*it)};
   }
