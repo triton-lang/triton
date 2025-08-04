@@ -462,6 +462,9 @@ class CompiledKernel:
         if knobs.runtime.init_handle_hook is not None:
             knobs.runtime.init_handle_hook(self.module, self.function, self.name, self.metadata_group)
 
+    def result(self):
+        return self
+
     def __getattribute__(self, name):
         if name == 'run':
             self._init_handles()
