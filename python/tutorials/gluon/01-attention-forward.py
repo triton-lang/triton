@@ -479,7 +479,7 @@ def _borrow_s_as_p(config, s_tmem):
 @gluon.jit
 def _borrow_s_as_alpha(config, s_tmem):
     alpha_tmem = s_tmem.slice(config.BLOCK_N // 2, 1)
-    alpha_layout: gl.constexpr = TensorMemoryLayout([config.SPLIT_M, 1], unpacked=False)
+    alpha_layout: gl.constexpr = TensorMemoryLayout([config.SPLIT_M, 1], unpacked=True)
     return alpha_tmem._reinterpret(gl.float32, [config.SPLIT_M, 1], alpha_layout)
 
 
@@ -487,7 +487,7 @@ def _borrow_s_as_alpha(config, s_tmem):
 def _borrow_s_for_epilogue(config, s_tmem):
     m_i_tmem = s_tmem.slice(config.BLOCK_N // 2 + 1, 1)
     l_i_tmem = s_tmem.slice(config.BLOCK_N // 2 + 2, 1)
-    layout: gl.constexpr = TensorMemoryLayout([config.SPLIT_M, 1], unpacked=False)
+    layout: gl.constexpr = TensorMemoryLayout([config.SPLIT_M, 1], unpacked=True)
     m_i_tmem = m_i_tmem._reinterpret(gl.float32, [config.SPLIT_M, 1], layout)
     l_i_tmem = l_i_tmem._reinterpret(gl.float32, [config.SPLIT_M, 1], layout)
     return m_i_tmem, l_i_tmem
