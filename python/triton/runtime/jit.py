@@ -327,14 +327,27 @@ def create_specialize_impl(specialize_extra):
     specialize_tensor = specializer.specialize_tensor
 
     def specialize_impl(arg, is_const=False, specialize_value=True, align=True):
-        if arg is None:
+        # should be faster than hasattr(arg, "data_ptr")
+        if type(arg).__name__ == "Tensor":
+            # dtypes are hashable so we can memoize this mapping:
+            dsk = (arg.dtype, is_const)
+            res = dtype2str.get(dsk, None)
+            if res is None:
+                res = ("*k" if dsk[1] else "*") + canonicalize_dtype(dsk[0])
+                dtype2str[dsk] = res
+            key = specialize_tensor(arg, specialize_value, align)
+            return (res, key)
+        elif isinstance(arg, int):
+            return specialize_int(arg, specialize_value, align)
+        elif arg is None:
             return ("constexpr", None)
         elif isinstance(arg, bool):
             return ("u1", None)
-        elif isinstance(arg, int):
-            return specialize_int(arg, specialize_value, align)
         elif isinstance(arg, float):
             return ("fp32", None)
+        elif isinstance(arg, constexpr):
+            return ("constexpr", arg)
+        # fallback for non-tensor types with data_ptr attributes/methods
         elif hasattr(arg, "data_ptr"):
             # dtypes are hashable so we can memoize this mapping:
             dsk = (arg.dtype, is_const)
@@ -346,8 +359,6 @@ def create_specialize_impl(specialize_extra):
             return (res, key)
         elif isinstance(arg, JITFunction):
             return ("constexpr", arg.cache_key)
-        elif isinstance(arg, constexpr):
-            return ("constexpr", arg)
         elif hasattr(arg, "tma_desc_cpu_ptr"):
             return ("nvTmaDesc", None)
         elif isinstance(arg, tuple):
