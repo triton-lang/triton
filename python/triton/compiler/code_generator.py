@@ -1052,6 +1052,10 @@ class CodeGenerator(ast.NodeVisitor):
                 self.local_defs[name] = val
                 self._maybe_set_loc_to_name(val, name)
             cond = self.visit(node.test)
+            if isinstance(cond, language.condition):
+                if cond.disable_licm:
+                    while_op.set_attr("llvm.loop_annotation", self.builder.get_disable_loop_licm_attr())
+                cond = cond.condition
             self.builder.set_insertion_point_to_end(before_block)
             # create ConditionOp: e.g., scf.condition(%cond) %arg0, %arg1, ...
             self.builder.create_condition_op(cond.handle, block_args)
@@ -1123,6 +1127,7 @@ class CodeGenerator(ast.NodeVisitor):
         disallow_acc_multi_buffer = False
         flatten = False
         warp_specialize = False
+        disable_licm = False
         if IteratorClass is language.range:
             iterator = IteratorClass(*iter_args, **iter_kwargs)
             # visit iterator arguments
@@ -1136,6 +1141,7 @@ class CodeGenerator(ast.NodeVisitor):
             disallow_acc_multi_buffer = iterator.disallow_acc_multi_buffer
             flatten = iterator.flatten
             warp_specialize = iterator.warp_specialize
+            disable_licm = iterator.disable_licm
         elif IteratorClass is range:
             # visit iterator arguments
             # note: only `range` iterator is supported now
@@ -1192,6 +1198,8 @@ class CodeGenerator(ast.NodeVisitor):
                 for_op.set_attr("tt.flatten", self.builder.get_unit_attr())
             if warp_specialize:
                 for_op.set_attr("tt.warp_specialize", self.builder.get_unit_attr())
+            if disable_licm:
+                for_op.set_attr("llvm.loop_annotation", self.builder.get_disable_loop_licm_attr())
 
             self.scf_stack.append(node)
             for_op_body = for_op.get_body(0)

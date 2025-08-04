@@ -108,31 +108,28 @@ struct WarpGroupDotWaitOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     auto pendings = op.getPendings();
     Location loc = op.getLoc();
-    if (adaptor.getInputs().size() <= 1) {
-      Value input =
-          adaptor.getInputs().size() == 1 ? adaptor.getInputs()[0] : Value();
-      rewriter.replaceOpWithNewOp<triton::nvgpu::WGMMAWaitGroupOp>(op, input,
-                                                                   pendings);
+    ValueRange inputs = adaptor.getInputs();
+    if (inputs.size() == 1) {
+      rewriter.replaceOpWithNewOp<triton::nvgpu::WGMMAWaitGroupOp>(
+          op, inputs.front(), pendings);
       return success();
     }
-    std::vector<Type> types;
+    SmallVector<Type> types;
     // Pack the inputs into a single struct.
-    for (Value input : adaptor.getInputs()) {
-      auto structType = dyn_cast<LLVM::LLVMStructType>(input.getType());
+    for (Type type : inputs.getTypes()) {
+      auto structType = dyn_cast<LLVM::LLVMStructType>(type);
       if (!structType)
         return failure();
-      for (Type type : structType.getBody())
-        types.push_back(type);
+      llvm::append_range(types, structType.getBody());
     }
     auto packedType =
         LLVM::LLVMStructType::getLiteral(rewriter.getContext(), types);
     Value packed = rewriter.create<LLVM::UndefOp>(loc, packedType);
     unsigned outputStructIndex = 0;
-    for (Value input : adaptor.getInputs()) {
-      auto structType = dyn_cast<LLVM::LLVMStructType>(input.getType());
-      for (unsigned i = 0; i < structType.getBody().size(); ++i) {
-        Value value = rewriter.create<LLVM::ExtractValueOp>(
-            loc, structType.getBody()[i], input, i);
+    for (Value input : inputs) {
+      for (auto [i, type] : llvm::enumerate(
+               cast<LLVM::LLVMStructType>(input.getType()).getBody())) {
+        Value value = rewriter.create<LLVM::ExtractValueOp>(loc, input, i);
         packed = rewriter.create<LLVM::InsertValueOp>(
             loc, packedType, packed, value, outputStructIndex++);
       }
@@ -142,14 +139,12 @@ struct WarpGroupDotWaitOpConversion
     // Unpack the output into the original struct types.
     SmallVector<Value> outputs;
     outputStructIndex = 0;
-    for (Value input : adaptor.getInputs()) {
-      auto structType = cast<LLVM::LLVMStructType>(input.getType());
+    for (Type type : inputs.getTypes()) {
+      auto structType = cast<LLVM::LLVMStructType>(type);
       Value unpacked = rewriter.create<LLVM::UndefOp>(loc, structType);
-      for (unsigned i = 0; i < structType.getBody().size(); ++i) {
+      for (auto [i, type] : llvm::enumerate(structType.getBody())) {
         Value value = rewriter.create<LLVM::ExtractValueOp>(
-            loc, packedType.getBody()[outputStructIndex], packedOutput,
-            outputStructIndex);
-        outputStructIndex++;
+            loc, packedOutput, outputStructIndex++);
         unpacked = rewriter.create<LLVM::InsertValueOp>(loc, structType,
                                                         unpacked, value, i);
       }

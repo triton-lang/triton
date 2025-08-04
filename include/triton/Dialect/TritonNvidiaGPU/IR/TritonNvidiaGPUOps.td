@@ -123,6 +123,7 @@ def TTNG_WarpGroupDotWaitOp : TTNG_Op<"warp_group_dot_wait", [DeclareOpInterface
   }];
 
   let assemblyFormat = "$inputs attr-dict `:` type($inputs)";
+  let hasVerifier = 1;
 }
 
 def TTNG_InitBarrierOp : TTNG_Op<"init_barrier"> {

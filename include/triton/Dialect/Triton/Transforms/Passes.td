@@ -90,4 +90,15 @@ def TritonLoopAwareCSE : Pass<"triton-loop-aware-cse", "mlir::ModuleOp"> {
   }];
 }
 
+def TritonSCFToCF : Pass</*cli-arg*/"triton-scf-to-cf", /*Op*/"mlir::ModuleOp"> {
+  let summary = "MLIR's SCF To CF plus some extra attributes propagation.";
+  let description = [{
+    This pass uses MLIR's SCF To CF pass as base. Additionally, it propagates
+    some extra attributes to the converted CFG.
+    TODO: upstream the llvm loop attribute propagation and remove this pass.
+  }];
+
+  let dependentDialects = [];
+}
+
 #endif

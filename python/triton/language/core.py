@@ -3243,6 +3243,9 @@ class range:
         The compiler will attempt to partition memory, MMA, and vector
         operations in the loop into separate async partitions. This will
         increase the total number of warps required by the kernel.
+    :param disable_licm: Tells the compiler it shouldn't hoist loop invariant
+        code outside the loop. This is often useful to avoid creating long liveranges
+        within a loop.
 
         Note that warp specialization is only supported on Blackwell GPUs and
         only works on simple matmul loops. Support for arbitrary loops will be
@@ -3250,7 +3253,7 @@ class range:
     """
 
     def __init__(self, arg1, arg2=None, step=None, num_stages=None, loop_unroll_factor=None,
-                 disallow_acc_multi_buffer=False, flatten=False, warp_specialize=False):
+                 disallow_acc_multi_buffer=False, flatten=False, warp_specialize=False, disable_licm=False):
         if step is None:
             self.step = constexpr(1)
         else:
@@ -3266,12 +3269,36 @@ class range:
         self.disallow_acc_multi_buffer = disallow_acc_multi_buffer
         self.flatten = flatten
         self.warp_specialize = warp_specialize
+        self.disable_licm = disable_licm
 
     def __iter__(self):
         raise RuntimeError("tl.range can only be used in @triton.jit'd functions")
 
     def __next__(self):
         raise RuntimeError("tl.range can only be used in @triton.jit'd functions")
+
+
+class condition:
+    """
+    While loop condition wrapper.
+
+    .. highlight:: python
+    .. code-block:: python
+
+        @triton.jit
+        def kernel(...):
+            while tl.condition(c, disable_licm)
+                ...
+    :note: This is a special wrapper used to annotate while loops in the context of
+        :code:`triton.jit` functions. It allows user to pass extra attributes to the compiler.
+    :param disable_licm: Tells the compiler it shouldn't hoist loop invariant
+        code outside the loop. This is often useful to avoid creating long liveranges
+        within a loop.
+    """
+
+    def __init__(self, arg1, disable_licm=False):
+        self.condition = arg1
+        self.disable_licm = disable_licm
 
 
 # -----------------------

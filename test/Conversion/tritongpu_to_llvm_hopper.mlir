@@ -538,3 +538,24 @@ module attributes {ttg.global_scratch_memory_alignment = 1 : i32, ttg.global_scr
     tt.return
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+
+module attributes {"ttg.target" = "cuda:90", "ttg.num-warps" = 4 : i32} {
+
+// CHECK-LABEL: @warpgroup_dot_wait_1_input
+tt.func @warpgroup_dot_wait_1_input(%arg0: tensor<128xf32, #blocked>) {
+  // CHECK: nvgpu.wgmma_wait_group
+  ttng.warp_group_dot_wait %arg0 {pendings = 0 : i32} : tensor<128xf32, #blocked>
+  tt.return
+}
+
+tt.func @warpgroup_dot_wait_2_inputs(%arg0: tensor<128xf32, #blocked>, %arg1: tensor<128xf32, #blocked>) {
+  // CHECK: nvgpu.wgmma_wait_group
+  ttng.warp_group_dot_wait %arg0, %arg1 {pendings = 0 : i32} : tensor<128xf32, #blocked>, tensor<128xf32, #blocked>
+  tt.return
+}
+
+}

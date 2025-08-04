@@ -1,3 +1,4 @@
+from triton.compiler.code_generator import unflatten_ir_values
 from ..ampere import async_copy
 from . import mbarrier, tma
 from ... import _core
@@ -70,6 +71,10 @@ def warpgroup_mma_wait(num_outstanding=0, deps=None, _semantic=None):
         num_outstanding (int): Number of outstanding warpgroup MMA operations to wait for. Defaults to 0.
         deps (Sequence[tensor]): List of dependencies that need to be kept alive while the mma is unfinished.
     """
-    deps = [x.handle for x in deps] if deps is not None else []
+    deps_handles = [x.handle for x in deps] if deps is not None else []
     num_outstanding = _core._unwrap_if_constexpr(num_outstanding)
-    _semantic.builder.create_warpgroup_mma_wait(deps, num_outstanding)
+    results = _semantic.builder.create_warpgroup_mma_wait(deps_handles, num_outstanding)
+    results = tuple(unflatten_ir_values(results, [dep.type for dep in deps]))
+    if len(results) == 1:
+        return results[0]
+    return tuple(results)
