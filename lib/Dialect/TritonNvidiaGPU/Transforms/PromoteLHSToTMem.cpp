@@ -59,7 +59,11 @@ public:
     // bitwidth=16
     unsigned elemBitWidth =
         lhs.getType().getElementType().getIntOrFloatBitWidth();
-    bool unpacked = (elemBitWidth == 32);
+    // We don't currently support fp8 (not sure if we can)
+    if (elemBitWidth != 16 && elemBitWidth != 32) {
+      return failure();
+    }
+    bool unpacked = elemBitWidth != 16;
     auto aTMemEncoding = TensorMemoryEncodingAttr::get(
         context, accTMemEncoding.getBlockM(), lhs.getType().getShape()[1],
         /*unpacked=*/unpacked, CTASplitNum[0], CTASplitNum[1]);
