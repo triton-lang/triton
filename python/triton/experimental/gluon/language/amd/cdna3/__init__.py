@@ -1,9 +1,9 @@
 from __future__ import annotations
 from typing import TYPE_CHECKING
 
+from triton.experimental.gluon.language import _core as ttgl
 from triton.experimental.gluon.language._core import builtin
 from triton._C.libtriton import ir
-from triton.experimental.gluon import language as ttgl
 
 if TYPE_CHECKING:
     from ..._semantic import GluonSemantic
@@ -11,7 +11,6 @@ if TYPE_CHECKING:
 __all__ = ["buffer_load", "buffer_store"]
 
 
-#
 @builtin
 def buffer_load(ptr, offsets, mask=None, other=None, stride=None, cache=None, _semantic=None):
     """
@@ -25,7 +24,6 @@ def buffer_load(ptr, offsets, mask=None, other=None, stride=None, cache=None, _s
       other: (Optional) Similiar with mask in a normal load.
       mask: (Optional) A tensor of boolean that determines if a given element should be read from memory, and `other` is the element that should be returned on lane `i` when `mask[i] == 0`.
     """
-
     verify_buffer_ldstr(ptr, offsets, mask, other)
 
     mask = mask.handle if mask is not None else ir.value()
@@ -33,8 +31,14 @@ def buffer_load(ptr, offsets, mask=None, other=None, stride=None, cache=None, _s
     stride = stride.handle if stride is not None else ir.value()
     cache_modifier = _semantic._str_to_load_cache_modifier(cache) if cache is not None else ir.CACHE_MODIFIER.NONE
 
-    return _semantic.create_buffer_load(ptr.handle, offsets.shape, ptr.type.scalar.element_ty, offsets.handle, stride,
-                                        mask, other, offsets.type.layout, cache_modifier)
+    shape = ttgl._unwrap_if_constexpr(offsets.shape)
+    layout = ttgl._unwrap_if_constexpr(offsets.type.layout)
+
+    ret_ty = ttgl.distributed_type(ptr.type.scalar.element_ty, shape, layout)
+    builder = _semantic.builder
+    handle = builder.create_buffer_load(ret_ty.to_ir(builder), ptr.handle, offsets.handle, stride, mask, other,
+                                        cache_modifier)
+    return ttgl.tensor(handle, ret_ty)
 
 
 @builtin
@@ -45,14 +49,13 @@ def buffer_store(stored_value, ptr, offsets, mask, stride=None, cache=None, _sem
 
       Params share the semantic as in buffer_load.
     """
-
     verify_buffer_ldstr(ptr, offsets, mask)
 
     mask = mask.handle if mask is not None else ir.value()
     stride = stride.handle if stride is not None else ir.value()
     cache_modifier = _semantic._str_to_load_cache_modifier(cache) if cache is not None else ir.CACHE_MODIFIER.NONE
 
-    return _semantic.create_buffer_store(stored_value.handle, ptr.handle, offsets.handle, stride, mask, cache_modifier)
+    _semantic.builder.create_buffer_store(stored_value.handle, ptr.handle, offsets.handle, stride, mask, cache_modifier)
 
 
 def verify_buffer_ldstr(ptr, offsets, mask, other=None):

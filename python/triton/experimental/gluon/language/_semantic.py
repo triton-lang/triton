@@ -345,15 +345,3 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         if default_results is None:
             return
         return tuple(unflatten_ir_values(mlir_results, [r.type for r in default_results]))
-
-    def create_buffer_load(self, ptr, shape, element_type, offsets, stride, mask, other, layout, cache_modifier):
-        shape = ttgl._unwrap_if_constexpr(shape)
-        layout = ttgl._unwrap_if_constexpr(layout)
-
-        ret_ty = ttgl.distributed_type(element_type, shape, layout)
-        handle = self.builder.create_buffer_load(ret_ty.to_ir(self.builder), ptr, offsets, stride, mask, other,
-                                                 cache_modifier)
-        return ttgl.tensor(handle, ret_ty)
-
-    def create_buffer_store(self, stored_value, ptr, offsets, stride, mask, cache_modifier):
-        self.builder.create_buffer_store(stored_value, ptr, offsets, stride, mask, cache_modifier)
