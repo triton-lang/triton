@@ -656,14 +656,27 @@ optimalSwizzling(const LinearLayout &src, const LinearLayout &dst,
       auto [read, write] = logBankConflicts(tileSrc, tileDst, smem, bitwidth);
       smems.push_back({read + write, smem, {instrs.first, instrs.second}});
     }
-    // Current heuristic: Minimise total bank conflicts
-    // We break ties looking at the number of rounds we do to move the data
+
     auto kReps = StringAttr::get(ctx, "reps");
-    auto it = llvm::min_element(smems, [kReps](const auto &a, const auto &b) {
-      return std::get<0>(a) < std::get<0>(b) ||
-             (std::get<0>(a) == std::get<0>(b) &&
-              std::get<1>(a).getInDimSize(kReps) >
-                  std::get<1>(b).getInDimSize(kReps));
+    auto it = llvm::min_element(smems, [&](const auto &a, const auto &b) {
+      // minimise total bank conflicts:
+      int a0 = std::get<0>(a);
+      int b0 = std::get<0>(b);
+      if (a0 < b0) return true;
+      if (a0 > b0) return false;
+
+      // minimise number of rounds to move the data:
+      int a1 = std::get<1>(a).getInDimSize(kReps);
+      int b1 = std::get<1>(b).getInDimSize(kReps);
+      if (a1 < b1) return true;
+      if (a1 > b1) return false;
+
+      // prefer {ld,st}.shared > {ld,st}matrix > {ld,st}matrix.trans:
+      int a2 = srcTiles[std::get<2>(a).first].laneContig.size();
+      int a3 = dstTiles[std::get<2>(a).second].laneContig.size();
+      int b2 = srcTiles[std::get<2>(b).first].laneContig.size();
+      int b3 = dstTiles[std::get<2>(b).second].laneContig.size();
+      return (a2 + a3) < (b2 + b3);
     });
     return {std::get<1>(*it), std::get<2>(*it)};
   }
