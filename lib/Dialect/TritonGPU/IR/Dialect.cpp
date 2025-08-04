@@ -109,10 +109,6 @@ SmallVector<unsigned> getContigPerThread(RankedTensorType type) {
   return toLinearEncoding(type).getContigPerThread();
 }
 
-SmallVector<unsigned> getShapePerCTATile(RankedTensorType type) {
-  return toLinearEncoding(type).getShapePerCTATile();
-}
-
 bool isExpensiveView(Type srcType, Type dstType) {
   auto tensorSrcType = cast<RankedTensorType>(srcType);
   auto tensorDstType = cast<RankedTensorType>(dstType);
@@ -975,18 +971,6 @@ SmallVector<unsigned> LinearEncodingAttr::getSizePerThread() const {
     registers.pop_back();
   }
   return basesPerDimImpl(bases, kRegister, rank);
-}
-
-SmallVector<unsigned> LinearEncodingAttr::getShapePerCTATile() const {
-  auto sizePerThread = getSizePerThread();
-  auto threadsPerWarp = getThreadsPerWarp();
-  auto warpsPerCTA = getWarpsPerCTA();
-  SmallVector<unsigned> shape;
-  for (auto [size, thread, warp] :
-       llvm::zip(sizePerThread, threadsPerWarp, warpsPerCTA)) {
-    shape.push_back(size * thread * warp);
-  }
-  return shape;
 }
 
 SmallVector<unsigned> LinearEncodingAttr::getOrder() const {
