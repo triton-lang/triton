@@ -24,6 +24,7 @@ class Env:
 env = Env()
 
 propagate_env: bool = True
+cache_env: bool = True
 
 
 def getenv(key: str) -> Optional[str]:
@@ -80,6 +81,11 @@ class env_base(Generic[SetType, GetType]):
         if self.name in obj.__dict__:
             return self.transform(obj.__dict__[self.name])
         else:
+            if cache_env:
+                env = self.env_val
+                raw_val = self.default() if env is None else self.from_env(env)
+                obj.__dict__[self.name] = raw_val
+                return self.transform(raw_val)
             return self.get()
 
     @property
