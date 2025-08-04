@@ -443,7 +443,7 @@ class CompiledKernel:
             return
         device = driver.active.get_current_device()
         # create launcher
-        self.run = driver.active.launcher_cls(self.src, self.metadata)
+        self._run = driver.active.launcher_cls(self.src, self.metadata)
         # not enough shared memory to run the kernel
         max_shared = max_shared_mem(device)
         if self.metadata.shared > max_shared:
@@ -465,10 +465,10 @@ class CompiledKernel:
     def result(self):
         return self
 
-    def __getattribute__(self, name):
-        if name == 'run':
-            self._init_handles()
-        return super().__getattribute__(name)
+    @property
+    def run(self):
+        self._init_handles()
+        return self._run
 
     def launch_metadata(self, grid, stream, *args):
         if knobs.runtime.launch_enter_hook is None:
