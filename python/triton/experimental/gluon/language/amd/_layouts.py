@@ -52,12 +52,7 @@ class AMDMFMALayout(DistributedLayout):
         self.verify()
 
     def _to_ir(self, builder):
-        type = builder.get_float_ty()
-        if self.elem_type is ttgl.float64:
-            type = builder.get_double_ty()
-        elif self.elem_type is ttgl.int32:
-            type = builder.get_int32_ty()
-
+        type = self.elem_type.to_ir(builder)
         return builder.get_amd_mfma_layout(self.version, self.tiles_per_warp, self.warps_per_cta, self.ctas_per_cga,
                                            self.cta_split_num, self.cta_order, self.instr_shape, self.transposed, type)
 
@@ -71,7 +66,7 @@ class AMDMFMALayout(DistributedLayout):
         return f"MFMA_{self.version}_{stringify(self.instr_shape)}_{self.transposed}_{stringify(self.warps_per_cta)}_{stringify(self.tiles_per_warp)}_{self.elem_type}_{stringify(self.ctas_per_cga)}_{stringify(self.cta_split_num)}_{stringify(self.cta_order)}_MFMA"
 
     def verify(self):
-        assert self.version > 0 and self.version <= 4, "version must be in the [0, 4] range"
+        assert self.version >= 1 and self.version <= 4, "version must be in the [1, 4] range"
         valid_shapes = [[32, 32], [16, 16], [64, 4], [4, 64]]
         assert self.instr_shape in valid_shapes, "Invalid instr shape, valid shapes are " + str(valid_shapes)
 
