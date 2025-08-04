@@ -71,12 +71,12 @@ class AMDMFMALayout(DistributedLayout):
         return f"MFMA_{self.version}_{stringify(self.instr_shape)}_{self.transposed}_{stringify(self.warps_per_cta)}_{stringify(self.tiles_per_warp)}_{self.elem_type}_{stringify(self.ctas_per_cga)}_{stringify(self.cta_split_num)}_{stringify(self.cta_order)}_MFMA"
 
     def verify(self):
-        assert self.version >= 0 and self.version <= 4, "version must be in the [0, 4] range"
+        assert self.version > 0 and self.version <= 4, "version must be in the [0, 4] range"
         valid_shapes = [[32, 32], [16, 16], [64, 4], [4, 64]]
-        assert self.instr_shape in valid_shapes, "Invalid instr_shape, valid_shapres are " + str(valid_shapes)
+        assert self.instr_shape in valid_shapes, "Invalid instr shape, valid shapes are " + str(valid_shapes)
 
-        assert self.elem_type.is_fp32() or self.elem_type.is_fp64() or self.elem_type.is_int32(
-        ), "The element type in AMDMFMALayout should be float32 or float64 type"
+        assert self.elem_type.is_fp32() or self.elem_type.is_fp64() \
+          or self.elem_type.is_int32() , "The element type in AMDMFMALayout should be float32 or float64 type"
 
         rank = len(self.cta_order)
         _realize_cta_layout(self, rank)
