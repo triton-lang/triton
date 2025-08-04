@@ -873,11 +873,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
     // CHECK: llvm.mlir.addressof @global_smem
     // CHECK: llvm.store {{.*}} vector<4xi32>
     // CHECK: nvvm.barrier0
-    // CHECK: nvgpu.ldmatrix %{{.*}} : (!llvm.ptr<3>) -> !llvm.struct<(i32, i32, i32, i32)>
+    // CHECK: llvm.load {{.*}} vector<4xi32>
     // CHECK: nvvm.barrier0
     // CHECK: llvm.store {{.*}} vector<4xi32>
     // CHECK: nvvm.barrier0
-    // CHECK: nvgpu.ldmatrix %{{.*}} : (!llvm.ptr<3>) -> !llvm.struct<(i32, i32, i32, i32)>
+    // CHECK: llvm.load {{.*}} vector<4xi32>
     %0 = ttg.convert_layout %arg0 : tensor<32x32xf32, #blocked0> -> tensor<32x32xf32, #blocked1>
     tt.return
   }

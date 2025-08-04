@@ -225,19 +225,19 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   tt.func @convert_blocked_to_dot_rhs(%a: tensor<64x64xf16, #blocked>) {
     // CHECK-COUNT-1: llvm.store
     //          CHECK: nvvm.barrier0
-    // CHECK-COUNT-4: nvgpu.ldmatrix
+    // CHECK-COUNT-4: llvm.load
     //          CHECK: nvvm.barrier0
     // CHECK-COUNT-1: llvm.store
     //          CHECK: nvvm.barrier0
-    // CHECK-COUNT-4: nvgpu.ldmatrix
+    // CHECK-COUNT-4: llvm.load
     //          CHECK: nvvm.barrier0
     // CHECK-COUNT-1: llvm.store
     //          CHECK: nvvm.barrier0
-    // CHECK-COUNT-4: nvgpu.ldmatrix
+    // CHECK-COUNT-4: llvm.load
     //          CHECK: nvvm.barrier0
     // CHECK-COUNT-1: llvm.store
     //          CHECK: nvvm.barrier0
-    // CHECK-COUNT-4: nvgpu.ldmatrix
+    // CHECK-COUNT-4: llvm.load
     %b = ttg.convert_layout %a  : tensor<64x64xf16, #blocked> -> tensor<64x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
     tt.return
   }
