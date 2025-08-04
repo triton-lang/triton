@@ -207,9 +207,8 @@ py::object layoutToGluon(Attribute layout) {
       } else if (elemType.isF32()) {
         typeName = "fp32";
       } else {
-        // The parameter layout is a valid AMDMfmaEncodingAttr obj and the
-        // verification make sure the elemType is fp64, fp32 or int32, so, the
-        // typeName here must be int32.
+        // The AMDMfmaEncodingAttr mlir attribute has already verified element
+        // type is fp64, fp32 or int32; so, the typeName here must be int32.
         typeName = "int32";
       }
     }
