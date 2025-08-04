@@ -369,6 +369,9 @@ typedef struct _DevicePtrInfo {{
     bool valid;
 }} DevicePtrInfo;
 
+static PyObject* data_ptr_str = NULL;
+static PyObject* tma_desc_cpu_ptr_str = NULL;
+
 static inline DevicePtrInfo getPointer(PyObject *obj, int idx) {{
   DevicePtrInfo ptr_info;
   ptr_info.dev_ptr = 0;
@@ -381,7 +384,10 @@ static inline DevicePtrInfo getPointer(PyObject *obj, int idx) {{
     // valid nullptr
     return ptr_info;
   }}
-  PyObject *ptr = PyObject_GetAttrString(obj, "data_ptr");
+  if (!data_ptr_str) {{
+    data_ptr_str = PyUnicode_FromString("data_ptr");
+  }}
+  PyObject* ptr = PyObject_GetAttr(obj, data_ptr_str);
   if(ptr){{
     PyObject *empty_tuple = PyTuple_New(0);
     PyObject *ret = PyObject_Call(ptr, empty_tuple, NULL);
@@ -419,8 +425,10 @@ static inline CUtensorMap* getTmaDesc(PyObject *obj) {{
     PyErr_SetString(PyExc_SystemError, "getTmaDesc() requires 64-bit compilation");
     return NULL;
   }}
-
-  PyObject *method_handle = PyObject_GetAttrString(obj, "tma_desc_cpu_ptr");
+  if (!tma_desc_cpu_ptr_str) {{
+    tma_desc_cpu_ptr_str = PyUnicode_FromString("tma_desc_cpu_ptr");
+  }}
+  PyObject *method_handle = PyObject_GetAttr(obj, tma_desc_cpu_ptr_str);
   if (!method_handle) {{
     PyErr_SetString(PyExc_TypeError, "tma_desc_cpu_ptr() method does not exist");
     return NULL;
