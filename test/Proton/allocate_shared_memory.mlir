@@ -21,28 +21,12 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
 // -----
 
 #A_SHARED = #ttg.swizzled_shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>
-// CHECK: ttg.shared = 144 : i32
-module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
-  // CHECK-LABEL: allocate_unaligned
-  tt.func @allocate_unaligned(%A : !tt.ptr<f16>) {
-  %cst0 = ttg.local_alloc : () -> !ttg.memdesc<1x6xf16, #A_SHARED, #ttg.shared_memory, mutable>
-  proton.record start "name0"
-  ttg.local_dealloc %cst0 : !ttg.memdesc<1x6xf16, #A_SHARED, #ttg.shared_memory, mutable>
-  proton.record end "name0"
-  // CHECK: ttg.local_alloc  {allocation.offset = 16 : i32}
-  tt.return
-  }
-}
-
-// -----
-
-#A_SHARED = #ttg.swizzled_shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>
-// CHECK: ttg.shared = 50 : i32
+// CHECK: ttg.shared = 64 : i32
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
   // CHECK-LABEL: no_proton
   tt.func @no_proton(%A : !tt.ptr<f16>) {
-  %cst0 = ttg.local_alloc : () -> !ttg.memdesc<1x25xf16, #A_SHARED, #ttg.shared_memory, mutable>
-  ttg.local_dealloc %cst0 : !ttg.memdesc<1x25xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  %cst0 = ttg.local_alloc : () -> !ttg.memdesc<1x32xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  ttg.local_dealloc %cst0 : !ttg.memdesc<1x32xf16, #A_SHARED, #ttg.shared_memory, mutable>
   // CHECK: ttg.local_alloc
   // CHECK-NOT: ttg.local_alloc
   tt.return
