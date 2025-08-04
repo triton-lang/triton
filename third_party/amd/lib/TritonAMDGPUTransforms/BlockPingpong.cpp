@@ -85,6 +85,8 @@ private:
                                                        Location loc);
   LogicalResult transformTwoClusterWithAsyncAndAll(OpBuilder &builder,
                                                    Location loc);
+  LogicalResult transformTwoClusterWithMemAndCompute(OpBuilder &builder,
+                                                     Location loc);
   LogicalResult transformChainedDotSchedule(OpBuilder &builder, Location loc);
   void addAsymmetricSyncToLoop(OpBuilder &builder, Location loc);
   void updateOpInsertion(Operation *Op);
@@ -667,6 +669,30 @@ LogicalResult Pingponger::transformTwoClusterWithAsyncAndAll(OpBuilder &builder,
   return success();
 }
 
+LogicalResult
+Pingponger::transformTwoClusterWithMemAndCompute(OpBuilder &builder,
+                                                 Location loc) {
+  LDBG("Enter bf16xmx4 pingpong");
+  if (asyncCopyOps.size() == 0)
+    return failure();
+  builder.setInsertionPointAfter(asyncWaitOps[0]);
+  updateOpInsertion(asyncWaitOps[0]);
+
+  // mem cluster contains async_copies and tt.load if LDS bypassed.
+  for (auto cop : asyncCommitOps)
+    moveOpAndPredecessorsUpSameBlock(cop);
+  // for (auto glop : gLoadOps)
+  //   moveOpAndPredecessorsUpSameBlock(glop);
+  for (auto llop : lLoadOps)
+    moveOpAndPredecessorsUpSameBlock(llop);
+
+  appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
+  appendOp(builder.create<ROCDL::SBarrierOp>(loc));
+  appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
+
+  return success();
+}
+
 // For ChainedDots with num_stage==4 the pipeliner already places ops in the
 // correct order to allow for efficient pingpong. The loop contains 2 pairs of
 // compute and memory clusters so we only have to place barriers/sched.barriers
@@ -965,8 +991,8 @@ void Pingponger::getDotPingponged() {
       LDBG("Currently only support num_warp=8 for async PP");
       return;
     }
-    if (numStages > 2 && dotOps.size() == 1 && dotShape[0] > 64 &&
-        dotShape[1] > 64 && (elemWidth == 16 || elemWidth == 8)) {
+    if (numStages > 2 && dotShape[0] > 64 && dotShape[1] > 64 &&
+        (elemWidth == 16 || elemWidth == 8)) {
       if (transformTwoClusterWithLocalLoadAndAll(builder, loc).failed()) {
         LDBG("Encountered failure when trying to execute the "
              "TwoClusterWithLocalLoadAndAll transformation");
@@ -975,6 +1001,20 @@ void Pingponger::getDotPingponged() {
       addAsymmetricSyncToLoop(builder, loc);
       return;
     }
+  }
+
+  // 64x512x256x16 = 134217728
+  // 64x256x256x16 = 67108864
+  // 32x256x256x16 = 33554432
+  if (dotOps.size() == 1 &&
+      (tileSize == 67108864 || tileSize == 134217728 || tileSize == 33554432) &&
+      numStages == 2 && elemWidth == 16) {
+    if (transformTwoClusterWithMemAndCompute(builder, loc).failed()) {
+      LDBG("Failed bf16xmx4 pingpong");
+      return;
+    }
+    addAsymmetricSyncToLoop(builder, loc);
+    return;
   }
   // The existing code depends on the loads being targeted being safe to move,
   // which will not hold if we do not properly have a GEMM. As a result, we

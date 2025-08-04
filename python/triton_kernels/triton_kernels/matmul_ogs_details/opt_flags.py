@@ -118,10 +118,15 @@ def make_default_opt_flags_amd(
         num_warps=4
         split_k = 1
     elif use_scale_preshuffling and precision_config.weight_scale is not None and bitwidth(lhs_dtype) == 16 and bitwidth(rhs_dtype) == 4:
-        # for scale preshuffling
+        # preshuffling + async copy + pingpong
         block_m = 64
-        block_n = 512
+        block_n = 256
         block_k = 256
+
+        # for scale preshuffling
+        # block_m = 64
+        # block_n = 512
+        # block_k = 256
         num_warps = 8
         split_k = 1
     else:

@@ -259,9 +259,18 @@ getSharedEncIfAllUsersAreDotEnc(Value loadedValue) {
 
       auto userResEnc = cast<ttg::TensorOrMemDesc>(userResType).getEncoding();
       if (auto dotOpEnc = dyn_cast<ttg::DotOperandEncodingAttr>(userResEnc)) {
-        tempAttr = ttg::SwizzledSharedEncodingAttr::get(
-            loadedValue.getContext(), dotOpEnc, srcTy.getShape(), sharedOrder,
-            ctaLayout, bitWidth, /*needTrans=*/false);
+        if (dotOpEnc.getOpIdx() == 0) {
+          tempAttr = ttg::SwizzledSharedEncodingAttr::get(
+              loadedValue.getContext(), dotOpEnc, srcTy.getShape(), sharedOrder,
+              ctaLayout, bitWidth, /*needTrans=*/false);
+        } else {
+          auto mfmaEnc =
+              mlir::dyn_cast<ttg::AMDMfmaEncodingAttr>(dotOpEnc.getParent());
+          tempAttr = mfmaEnc.composeSharedLayoutForOperand(
+              ctaLayout, dotOpEnc.getOpIdx(), srcTy.getShape(), sharedOrder,
+              std::max(16u, dotOpEnc.getKWidth()), bitWidth,
+              /*needTrans=*/false);
+        }
       } else if (auto llEnc = dyn_cast<ttg::LinearEncodingAttr>(userResEnc)) {
         // We use linear layout directly for scaled dot fp8 operands. For such
         // cases, we need to look further down the def-use chain to find the dot
