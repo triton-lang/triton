@@ -51,10 +51,7 @@ class LazyProxy(Generic[T]):
 class DriverConfig:
 
     def __init__(self) -> None:
-        if lazy_driver_init:
-            self.default: LazyProxy[DriverBase] = LazyProxy(_create_driver)
-        else:
-            self.default: DriverBase = _create_driver()
+        self.default = Union[LazyProxy[DriverBase], DriverBase] = LazyProxy(_create_driver) if lazy_driver_init else _create_driver()
         self.active: Union[LazyProxy[DriverBase], DriverBase] = self.default
 
     def set_active(self, driver: DriverBase) -> None:
