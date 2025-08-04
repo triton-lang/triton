@@ -17,7 +17,7 @@ std::ostream &operator<<(std::ostream &os, StringAttr str) {
 }
 } // namespace mlir
 
-using mlir::triton::nvidia_gpu::TensorMemoryEncodingAttr;
+using namespace mlir::triton::nvidia_gpu;
 namespace mlir::triton::gpu {
 
 static LinearLayout toLinearLayout(ArrayRef<int64_t> shape, Attribute layout) {
@@ -35,12 +35,8 @@ namespace {
 class LinearLayoutConversionsTest : public ::testing::Test {
 public:
   void SetUp() {
-    mlir::DialectRegistry registry;
-    registry.insert<TritonGPUDialect,
-                    mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect>();
-    ctx.appendDialectRegistry(registry);
     ctx.getOrLoadDialect<TritonGPUDialect>();
-    ctx.getOrLoadDialect<mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect>();
+    ctx.getOrLoadDialect<TritonNvidiaGPUDialect>();
   }
 
   BlockedEncodingAttr blocked(ArrayRef<unsigned> spt, ArrayRef<unsigned> tpw,

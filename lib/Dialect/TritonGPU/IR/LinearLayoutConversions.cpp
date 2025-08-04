@@ -1286,20 +1286,18 @@ TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
                           return std::get<0>(dims) >= std::get<1>(dims);
                         }) &&
            "allocationShape must be at least as large as shape");
-    if (isa<SharedEncodingTrait>(layout)) {
-      if (auto shared = dyn_cast<SwizzledSharedEncodingAttr>(layout)) {
-        result = swizzledSharedToLinearLayout(allocationShape, shared);
-      } else if (auto shared = dyn_cast<NVMMASharedEncodingAttr>(layout)) {
-        result = nvmmaSharedToLinearLayout(allocationShape, shared);
-      } else if (auto sbl = dyn_cast<AMDRotatingSharedEncodingAttr>(layout)) {
-        result = sharedToLinearLayoutAMDRotating(allocationShape, sbl);
-      } else {
-        assert(0 && "unknown layout");
-      }
-    } else {
-      auto tensorMemoryEncoding = cast<TensorMemoryEncodingAttr>(layout);
+    if (auto shared = dyn_cast<SwizzledSharedEncodingAttr>(layout)) {
+      result = swizzledSharedToLinearLayout(allocationShape, shared);
+    } else if (auto shared = dyn_cast<NVMMASharedEncodingAttr>(layout)) {
+      result = nvmmaSharedToLinearLayout(allocationShape, shared);
+    } else if (auto sbl = dyn_cast<AMDRotatingSharedEncodingAttr>(layout)) {
+      result = sharedToLinearLayoutAMDRotating(allocationShape, sbl);
+    } else if (auto tensorMemoryEncoding =
+                   dyn_cast<TensorMemoryEncodingAttr>(layout)) {
       result =
           tensorMemoryToLinearLayout(allocationShape, tensorMemoryEncoding);
+    } else {
+      assert(0 && "unknown layout");
     }
   }
 
