@@ -56,3 +56,9 @@ python/test/gluon @peterbell10
 test/Gluon @peterbell10
 include/triton/Dialect/Gluon @peterbell10
 lib/Dialect/Gluon @peterbell10
+
+# -----------
+# Linear Layouts
+# -----------
+lib/Tools/ @lezcano
+lib/Dialect/TritonGPU/IR/LinearLayoutConversions.cpp @lezcano
