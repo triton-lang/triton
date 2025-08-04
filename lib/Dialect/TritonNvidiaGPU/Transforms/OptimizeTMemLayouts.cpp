@@ -116,9 +116,16 @@ public:
       Value subSlice = rewriter.create<TMEMSubSliceOp>(tmemLoad.getLoc(), tmem,
                                                        nOffset, splitNSize);
 
+      // FIXME: This does not seem right. It might be hiding a different bug
       // Choose a layout compatible with the slice size.
+      // Use the TMEM memdesc block size for N when selecting a compatible
+      // layout. The compatibility checker is defined with respect to the
+      // memdesc encoding, not the slice width.
+      auto tmemEnc = cast<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
+          tmemLoad.getSrc().getType().getEncoding());
+      int blockN = tmemEnc.getBlockN();
       Attribute distLayout = getTmemCompatibleLayout(
-          mDim, splitNSize, splitOp.getOutLHS().getType(), numWarps);
+          mDim, blockN, splitOp.getOutLHS().getType(), numWarps);
 
       RankedTensorType newLoadType =
           splitOp.getOutLHS().getType().cloneWithEncoding(distLayout);
@@ -180,8 +187,14 @@ public:
     int numWarps = ttg::lookupNumWarps(storeOp);
     Value truePred = b.create<arith::ConstantOp>(loc, b.getBoolAttr(true));
 
+    // TODO FIXME
+    // Use the TMEM memdesc block size for N when selecting a compatible
+    // layout for stores as well.
+    auto tmemEnc = cast<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
+        storeOp.getDst().getType().getEncoding());
+    int blockN = tmemEnc.getBlockN();
     Attribute distLayout = getTmemCompatibleLayout(
-        mDim, splitNSize, joinOp.getLhs().getType(), numWarps);
+        mDim, blockN, joinOp.getLhs().getType(), numWarps);
     auto newStoreType = joinOp.getLhs().getType().cloneWithEncoding(distLayout);
 
     // First slice.

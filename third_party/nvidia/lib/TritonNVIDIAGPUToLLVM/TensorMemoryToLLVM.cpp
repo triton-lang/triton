@@ -846,41 +846,6 @@ struct TensorMemoryCopyOpConversion
   }
 };
 
-struct MemDescIndexOpConversion
-    : public ConvertOpToLLVMPattern<triton::gpu::MemDescIndexOp> {
-  using ConvertOpToLLVMPattern<
-      triton::gpu::MemDescIndexOp>::ConvertOpToLLVMPattern;
-
-  LogicalResult
-  matchAndRewrite(triton::gpu::MemDescIndexOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    Location loc = op->getLoc();
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
-    auto srcTy = op.getSrc().getType();
-    auto dstTy = op.getResult().getType();
-    auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
-
-    if (!isa<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
-            srcTy.getEncoding())) {
-      return failure();
-    }
-
-    // newBase = base + offset
-    auto tmemBase = adaptor.getSrc();
-    auto idx = op.getIndex();
-    triton::nvidia_gpu::TMemAllocation tmemAlloc =
-        triton::nvidia_gpu::getTmemAllocSizes(cast<MemDescType>(dstTy));
-    int numColOffset = tmemAlloc.numCols;
-    Value newBase = b.ptrtoint(rewriter.getI32Type(), tmemBase);
-    newBase = rewriter.create<LLVM::AddOp>(
-        loc, newBase,
-        rewriter.create<LLVM::MulOp>(loc, idx, b.i32_val(numColOffset)));
-    auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
-    rewriter.replaceOp(op, b.inttoptr(elemPtrTy, newBase));
-    return success();
-  }
-};
-
 class MemDescReinterpretOpConversion
     : public ConvertOpToLLVMPattern<MemDescReinterpretOp> {
 public:
@@ -908,42 +873,23 @@ struct TMEMSubSliceOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    auto srcTy = op.getSrc().getType();
-    auto dstTy = op.getResult().getType();
-    auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
-
-    auto encoding = dyn_cast<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
-        srcTy.getEncoding());
-    auto shapePerCTA = getShapePerCTA(srcTy);
-    int blockN = encoding.getBlockN();
-    int blockM = encoding.getBlockM();
-    int offsetCol = 0;
-    int offsetRow = 0;
-    assert(llvm::is_contained({64, 128}, blockM) && "checked by the verifier");
-    offsetCol = op.getN();
-
-    if (blockM == 64) {
-      // The layout interleaves blocks along the N dimension with the rows, such
-      // that the odd numbered blocks are in lanes [16, 32), below the previous
-      // even-numbered block.
-      int blockOffset = op.getN() / blockN;
-      if (blockOffset % 2) {
-        // Offset into rows [16, 32).
-        offsetRow = 16;
-        // Normalize column offset to the even block.
-        offsetCol -= blockN;
-      }
-      offsetCol -= blockN * (blockOffset / 2);
+    auto *ctx = op.getContext();
+    auto dstTy = cast<MemDescType>(op.getResult().getType());
+    auto enc =
+        cast<triton::nvidia_gpu::TensorMemoryEncodingAttr>(dstTy.getEncoding());
+    auto rowColMap = triton::nvidia_gpu::getOffsetMap(dstTy, op.getN());
+    auto kCol = str_attr("col");
+    auto kRow = str_attr("row");
+    auto offsetCol = rowColMap[kCol];
+    auto offsetRow = rowColMap[kRow];
+    auto isPacked = !enc.getUnpacked();
+    if (isPacked) {
+      auto elemsPerReg = 32 / dstTy.getElementTypeBitWidth();
+      offsetCol /= elemsPerReg;
     }
 
-    if (!encoding.getUnpacked()) {
-      // Adjust the column offset based on the element size.
-      int numElementsPer32B = 32 / srcTy.getElementTypeBitWidth();
-      if (offsetCol % numElementsPer32B != 0) {
-        return failure();
-      }
-      offsetCol /= numElementsPer32B;
-    }
+    // enforced in the validator
+    assert(rowColMap[str_attr("block")] == 0);
 
     Value tmemBase = adaptor.getSrc();
     Value offsetVal = b.i32_val(offsetCol | offsetRow << 16);
@@ -968,7 +914,6 @@ void mlir::triton::NVIDIA::populateTensorMemoryOpToLLVMPattern(
 void mlir::triton::NVIDIA::populateTensorMemorySubviewOpToLLVMPattern(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     PatternBenefit benefit) {
-  patterns.add<MemDescIndexOpConversion>(typeConverter, benefit);
   patterns.add<MemDescReinterpretOpConversion>(typeConverter, benefit);
   return;
 }

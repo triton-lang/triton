@@ -520,14 +520,9 @@ struct MemDescSubsliceOpConversion
   matchAndRewrite(triton::gpu::MemDescSubsliceOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
-    auto *ctx = op->getContext();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    auto srcTy = op.getSrc().getType();
-    auto destTy = op.getResult().getType();
-    auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
-    auto layoutOrder = getOrder(srcTy);
-    auto enc = srcTy.getEncoding();
-
+    auto llvmElemTy =
+        getTypeConverter()->convertType(op.getType().getElementType());
     auto smemObj = getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
                                                    llvmElemTy, rewriter);
     auto opOffsetVals = op.getOffsets();
