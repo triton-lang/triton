@@ -158,12 +158,15 @@ dst_layout = [
     LinearLayout(register=[[0, 1], [0, 2], [0, 8], [0, 16], [0, 64], [0, 128], [64, 0], [128, 0]],
                  lane=[[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [0, 4]], warp=[[0, 32], [32, 0]], block=[]),
     LinearLayout(register=[[1, 0], [2, 0], [4, 0], [32, 0], [0, 32]], lane=[[0, 1], [0, 2], [0, 4], [0, 8], [8, 0],
-                                                                            [16, 0]], warp=[[0, 16]], block=[]),
+                                                                            [16, 0]], warp=[[0, 16], [0, 64]],
+                 block=[]),
 ]
 
 
-@pytest.mark.parametrize("src_layout, dst_layout, M, N, M_tile_size, N_tile_size",
-                         [[src_layout[1], dst_layout[1], 32, 32, 64, 64]])
+@pytest.mark.parametrize(
+    "src_layout, dst_layout, M, N, M_tile_size, N_tile_size",
+    [[src_layout[0], dst_layout[0], 128, 128, 256, 256], [src_layout[1], dst_layout[1], 32, 32, 64, 64],
+     [broadcasted_32x32, blocked_32x32, 32, 32, 64, 64], [blocked_32x32, broadcasted_32x32, 32, 32, 64, 64]])
 @pytest.mark.parametrize("dtype", [torch.float16])
 def test_concat_op(dtype, M, N, M_tile_size, N_tile_size, src_layout, dst_layout, device='cuda'):
     if not is_hip():

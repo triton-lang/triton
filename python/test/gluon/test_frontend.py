@@ -1439,13 +1439,15 @@ def buffer_ldst_kernel(x, y):
     input_offsets = ttgl.arange(0, 64 * 64).reshape(64, 64)
     input_offsets = ttgl.convert_layout(input_offsets, layout)
     mask = ttgl.full((64, 64), 1, tl.int1, layout=layout)
-    other = ttgl.full((64, 64), 1.0, tl.float32, layout=layout)
-    a = ttgl.amd.cdna3.create_buffer_load(ptr=x, element_type=tl.float32, offsets=input_offsets, cache='.ca', mask=mask,
-                                          other=other, layout=layout)
+    a = ttgl.amd.cdna3.buffer_load(ptr=x, offsets=input_offsets)
 
     output_offsets = ttgl.arange(0, 64 * 64).reshape(64, 64)
     output_offsets = ttgl.convert_layout(output_offsets, layout)
-    ttgl.amd.cdna3.create_buffer_store(stored_value=a, ptr=y, offsets=output_offsets, cache='.ca', mask=mask)
+    ttgl.amd.cdna3.buffer_store(stored_value=a, ptr=y, offsets=output_offsets, mask=mask, cache='.ca')
+
+    other = ttgl.full((64, 64), 1.0, tl.float32, layout=layout)
+    a = ttgl.amd.cdna3.buffer_load(ptr=x, offsets=input_offsets, mask=mask, other=other)
+    ttgl.amd.cdna3.buffer_store(stored_value=a, ptr=y, offsets=output_offsets, mask=mask, cache='.ca')
 
 
 @pytest.mark.parametrize("target", [HIP_TARGET_CDNA3, HIP_TARGET_CDNA4])
@@ -1464,15 +1466,15 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %2 = ttg.convert_layout %1 : tensor<64x64xi32, #gluon.auto_encoding> -> tensor<64x64xi32, #blocked>
     %true = arith.constant true
     %cst = arith.constant dense<true> : tensor<64x64xi1, #blocked>
-    %cst_0 = arith.constant 1.000000e+00 : f32
-    %cst_1 = arith.constant dense<1.000000e+00> : tensor<64x64xf32, #blocked>
-    %c1_i32 = arith.constant 1 : i32
-    %3 = amdgpu.buffer_load %arg0[%2], %cst, %cst_1 cacheModifier = ca stride = %c1_i32 : tensor<64x64xf32, #blocked>
+    %3 = amdgpu.buffer_load %arg0[%2] : tensor<64x64xf32, #blocked>
     %4 = tt.make_range {end = 4096 : i32, start = 0 : i32} : tensor<4096xi32, #gluon.auto_encoding>
     %5 = tt.reshape %4 : tensor<4096xi32, #gluon.auto_encoding> -> tensor<64x64xi32, #gluon.auto_encoding>
     %6 = ttg.convert_layout %5 : tensor<64x64xi32, #gluon.auto_encoding> -> tensor<64x64xi32, #blocked>
-    %c1_i32_2 = arith.constant 1 : i32
-    amdgpu.buffer_store %3, %arg1[%6], %cst cacheModifier = ca stride = %c1_i32_2 : tensor<64x64xf32, #blocked>
+    amdgpu.buffer_store %3, %arg1[%6], %cst cacheModifier = ca : tensor<64x64xf32, #blocked>
+    %cst_0 = arith.constant 1.000000e+00 : f32
+    %cst_1 = arith.constant dense<1.000000e+00> : tensor<64x64xf32, #blocked>
+    %7 = amdgpu.buffer_load %arg0[%2], %cst, %cst_1 : tensor<64x64xf32, #blocked>
+    amdgpu.buffer_store %7, %arg1[%6], %cst cacheModifier = ca : tensor<64x64xf32, #blocked>
     tt.return
   }
 }

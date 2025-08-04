@@ -607,25 +607,15 @@ void init_gluon_ir(py::module &&m) {
                  resultTypes, explicitCaptures, partitionNumWarps);
            })
       .def("create_buffer_load",
-           [](GluonOpBuilder &self, Type resultType, Value &ptr, Value &offsets,
-              mlir::triton::CacheModifier cache, Value &mask,
-              Value &other) -> Value {
-             /*stride is set to 1 for now and it might be removed in the
-              * future*/
-             auto stride = self.create<arith::ConstantIntOp>(
-                 1, self.getBuilder().getI32Type());
-
+           [](GluonOpBuilder &self, Type resultType, Value ptr, Value offsets,
+              Value stride, Value mask, Value other,
+              mlir::triton::CacheModifier cache) -> Value {
              return self.create<triton::amdgpu::BufferLoadOp>(
                  resultType, ptr, offsets, stride, cache, mask, other);
            })
       .def("create_buffer_store",
-           [](GluonOpBuilder &self, Value &storedValue, Value &ptr,
-              Value &offsets, mlir::triton::CacheModifier cache, Value &mask) {
-             /*stride is set to 1 for now and it might be removed in the
-              * future*/
-             auto stride = self.create<arith::ConstantIntOp>(
-                 1, self.getBuilder().getI32Type());
-
+           [](GluonOpBuilder &self, Value storedValue, Value ptr, Value offsets,
+              Value stride, Value mask, mlir::triton::CacheModifier cache) {
              self.create<triton::amdgpu::BufferStoreOp>(
                  storedValue, ptr, offsets, stride, cache, mask);
            });
