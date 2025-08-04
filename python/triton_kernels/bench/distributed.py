@@ -193,12 +193,13 @@ def _apply_parallelism(
         x = torch.cat(x_list, dim=0)
     else:
         # Distributed Data Parallelism
+        ep_indx = None
         output_split_sizes = None
         x = all_gather(x, dim=0)
         expt_scal = all_gather(expt_scal, dim=0)
         expt_indx = all_gather(expt_indx, dim=0)
 
-    return expt_scal, expt_indx, x, output_split_sizes
+    return expt_scal, expt_indx, ep_indx, x, output_split_sizes
 
 
 def routing_torch(x, logits, n_expts_act, sm_first=False, expt_indx=None, n_rows=None, EP=1, TP=1):
@@ -220,7 +221,8 @@ def routing_torch(x, logits, n_expts_act, sm_first=False, expt_indx=None, n_rows
 
     chunk_size = n_expts_tot // EP
 
-    ep_indx, expt_indx, x, output_split_sizes = _apply_parallelism(expt_scal, expt_indx, x, chunk_size, EP=EP, TP=TP)
+    expt_scal, expt_indx, ep_indx, x, output_split_sizes = _apply_parallelism(expt_scal, expt_indx, x, chunk_size,
+                                                                              EP=EP, TP=TP)
 
     # Filter for local experts only
     ep_rank = dist.get_rank() // TP
@@ -293,7 +295,8 @@ def routing_triton(x, logits, n_expts_act, sm_first=False, expt_indx=None, n_row
 
     chunk_size = n_expts_tot // EP
 
-    ep_indx, expt_indx, x, output_split_sizes = _apply_parallelism(expt_scal, expt_indx, x, chunk_size, EP=EP, TP=TP)
+    expt_scal, expt_indx, ep_indx, x, output_split_sizes = _apply_parallelism(expt_scal, expt_indx, x, chunk_size,
+                                                                              EP=EP, TP=TP)
 
     # Filter for local experts only
     ep_rank = dist.get_rank() // TP
