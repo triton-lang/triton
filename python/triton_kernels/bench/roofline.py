@@ -8,6 +8,80 @@ from dataclasses import dataclass
 import inspect
 
 
+@dataclass
+class PerfRecord:
+    time_ns: float
+    flops: float
+    bytes: float
+
+
+def parse_profile(profile_path, useful_op_regex):
+    """
+    construct a PerfRecord from a (proton) profile path and a regex for useful operations
+    """
+    from triton.profiler import viewer
+    gf, _, _, _ = viewer.read(profile_path)
+    # aggregate "useful" flops + bytes
+    useful = gf.filter(f"MATCH ('*', c) WHERE c.'name' =~ '{useful_op_regex}' AND c IS LEAF").dataframe
+    bytes = int(useful["bytes"].sum())
+    flops = int(sum(useful[[c for c in ["flops8", "flops16"] if c in useful.columns]].sum()))
+    # take all ops (incl. "not useful" ones) when computing total time
+    allops = gf.filter("MATCH ('*', c) WHERE c IS LEAF").dataframe
+    time_ns = allops["time (ns)"].sum()
+    return PerfRecord(time_ns=time_ns, flops=flops, bytes=bytes)
+
+
+# -- compute roofline --
+
+
+def write_csv(xs, perfs, fpath):
+    csv_path = fpath.with_suffix(".csv")
+    with csv_path.open("w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["x", "flops", "bytes", "time_ns"])
+        for x, p in zip(xs, perfs):
+            writer.writerow([x, p.flops, p.bytes, p.time_ns])
+    return csv_path
+
+def compute_roofline(*args, \
+                  bench_fn, intensity_proxy_name, intensity_proxy_values, out_path, verbose, \
+                  **kwargs):
+    # validate input args
+    if not isinstance(intensity_proxy_name, str):
+        raise TypeError("intensity_proxy must be a string naming a parameter in target_fn")
+    # determine position of intensity_proxy in target_fn signature
+    sig = inspect.signature(bench_fn)
+    params = list(sig.parameters.values())
+    if intensity_proxy_name not in sig.parameters:
+        raise ValueError(f"Parameter '{intensity_proxy_name}' not found in {bench_fn.__name__} signature")
+    pos_index = [p.name for p in params].index(intensity_proxy_name)
+
+    # wrapper to inject intensity proxy into target_fn and call it
+    def inject_proxy_and_call(val, args, kwargs):
+        args_list = list(args)
+        args_list.insert(pos_index, val)
+        return bench_fn(*args_list, **kwargs)
+
+    # collect performance data
+    perfs = []
+    if verbose:
+        print("=========================================")
+        print(f"{out_path   }...")
+        print("=========================================")
+    for val in intensity_proxy_values:
+        perf = inject_proxy_and_call(val, args, kwargs)
+        perfs.append(perf)
+        if verbose:
+            tflops = perfs[-1].flops / perfs[-1].time_ns * 1e-3
+            tbps = perfs[-1].flops / perfs[-1].time_ns * 1e-3
+            print(f"{intensity_proxy_name}: {val:5d} | TFLOPS: {tflops:#.4g} | TBPS: {tbps:.2f}")
+    # write to csv
+    return write_csv(intensity_proxy_values, perfs, out_path)
+
+
+# -- plot roofline --
+
+
 def get_memset_tbps():
     # Measure device memory set bandwidth using CUDA driver API (cuMemsetD8Async)
     if torch.version.cuda is None:
@@ -71,34 +145,6 @@ def validate_perfs(perfs):
                 raise ValueError(f"x mismatch between series[0] and series[{i}]")
 
 
-@dataclass
-class PerfData:
-    time: float
-    flops: float
-    bytes: float
-
-    @property
-    def tflops(self):
-        return self.flops / self.time * 1e-3
-
-    @property
-    def tbps(self):
-        return self.bytes / self.time * 1e-3
-
-
-def parse_profile(fpath, useful_op_regex):
-    from triton.profiler import viewer
-    gf, _, _, _ = viewer.read(fpath)
-    # aggregate "useful" flops + bytes
-    useful = gf.filter(f"MATCH ('*', c) WHERE c.'name' =~ '{useful_op_regex}' AND c IS LEAF").dataframe
-    bytes = int(useful["bytes"].sum())
-    flops = int(sum(useful[[c for c in ["flops8", "flops16"] if c in useful.columns]].sum()))
-    # take all ops (incl. "not useful" ones) when computing total time
-    allops = gf.filter("MATCH ('*', c) WHERE c IS LEAF").dataframe
-    time = allops["time (ns)"].sum()
-    return PerfData(time=time, flops=flops, bytes=bytes)
-
-
 def plot_roofline(series, flops_dtype, out_path, title="", xlabel="", labels=None):
     from bisect import bisect_left
     from pathlib import Path
@@ -143,55 +189,6 @@ def plot_roofline(series, flops_dtype, out_path, title="", xlabel="", labels=Non
     ax.grid(True, which="both", ls=":", lw=0.5)
     fig.tight_layout()
     plt.savefig(out_path)
-
-
-def make_benchmark(target_fn, intensity_proxy, *, verbose=True, name=""):
-    if not isinstance(intensity_proxy, str):
-        raise TypeError("intensity_proxy must be a string naming a parameter in target_fn")
-    # determine position of intensity_proxy in target_fn signature
-    sig = inspect.signature(target_fn)
-    params = list(sig.parameters.values())
-    if intensity_proxy not in sig.parameters:
-        raise ValueError(f"Parameter '{intensity_proxy}' not found in {target_fn.__name__} signature")
-    pos_index = [p.name for p in params].index(intensity_proxy)
-
-    # wrapper for target_fn
-    def inject_proxy_and_call(val, args, kwargs):
-        args_list = list(args)
-        args_list.insert(pos_index, val)
-        return target_fn(*args_list, **kwargs)
-
-    def _benchmark(values, *target_args, **target_kwargs):
-        perfs = []
-        if verbose:
-            print("=========================================")
-            print(f"{name}...")
-            print("=========================================")
-        for val in values:
-            perf = inject_proxy_and_call(val, target_args, target_kwargs)
-            perfs.append(perf)
-            if verbose:
-                print(f"{intensity_proxy}: {val:5d} | TFLOPS: {perfs[-1].tflops:#.4g} | TBPS: {perfs[-1].tbps:.2f}")
-        return perfs
-
-    return _benchmark
-
-
-def write_csv(xs, perfs, fpath):
-    csv_path = fpath.with_suffix(".csv")
-    with csv_path.open("w", newline="") as f:
-        writer = csv.writer(f)
-        writer.writerow(["x", "flops", "bytes", "time_ns"])
-        for x, p in zip(xs, perfs):
-            writer.writerow([x, p.flops, p.bytes, p.time])
-    return csv_path
-
-def compute_roofline(*args, \
-                  bench_fn, intensity_proxy_name, intensity_proxy_values, out_path, verbose, \
-                  **kwargs):
-    benchmark = make_benchmark(bench_fn, intensity_proxy_name, verbose=verbose, name=out_path)
-    perfs = benchmark(intensity_proxy_values, *args, **kwargs)
-    return write_csv(intensity_proxy_values, perfs, out_path)
 
 
 if __name__ == "__main__":
