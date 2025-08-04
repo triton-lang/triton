@@ -145,16 +145,18 @@ def validate_perfs(perfs):
                 raise ValueError(f"x mismatch between series[0] and series[{i}]")
 
 
-def plot_roofline(series, flops_dtype, out_path, title="", xlabel="", labels=None):
+def plot_roofline(series, flops_dtype, out_path, max_tbps, max_tflops, title="", xlabel="", labels=None):
     from bisect import bisect_left
     from pathlib import Path
     perfs = [load_perf_csv(p) for p in series]
     validate_perfs(perfs)
     xs, flops_ref, bytes_ref, _ = perfs[0]
-
-    # set up plot
-    max_tbps = get_memset_tbps()
-    max_tflops = get_cublas_tflops(flops_dtype)
+    if not isinstance(max_tbps, int):
+        assert max_tbps == "memset"
+        max_tbps = get_memset_tbps()
+    if not isinstance(max_tflops, int):
+        assert max_tflops == "cublas"
+        max_tflops = get_cublas_tflops(flops_dtype)
     fig, ax = plt.subplots(figsize=(7, 5), dpi=120)
     ax.set_xlabel(xlabel)
     ax.set_ylabel("performance  [TFLOP/s]")

@@ -107,7 +107,8 @@ def roofline_mlp(batch_sizes, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_d
     png_path = roofline.plot_roofline(series=[csv_path],  # roofline data to plot
                                       flops_dtype=x_dtype,  # dtype to use for FLOPS roof
                                       xlabel=intensity_proxy, title=out_path,  # plot option
-                                      out_path=out_path.with_suffix(".png")  # output path
+                                      out_path=out_path.with_suffix(".png"),  # output path
+                                      max_tbps="memset", max_tflops="cublas"  # hardware limits
                                       )
     return png_path
 
