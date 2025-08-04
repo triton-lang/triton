@@ -684,16 +684,16 @@ try:
 except BaseException:
     HAS_FLASH = False
 
-TORCH_HAS_FP8 = False  #hasattr(torch, 'float8_e5m2')
+TORCH_HAS_FP8 = hasattr(torch, 'float8_e5m2')
 BATCH, N_HEADS = 4, 32
 # vary seq length for fixed head and batch=4
 configs = []
-for HEAD_DIM in [128]:  #[64, 128]:
-    for mode in ["fwd"]:  #, "bwd"]:
-        for causal in [False]:  #True, False]:
+for HEAD_DIM in [64, 128]:
+    for mode in ["fwd", "bwd"]:
+        for causal in [True, False]:
             # Enable warpspec for causal fwd on Hopper
             enable_ws = mode == "fwd" and (is_blackwell() or (is_hopper() and not causal))
-            for warp_specialize in [True] if enable_ws else [False]:
+            for warp_specialize in [False, True] if enable_ws else [False]:
                 configs.append(
                     triton.testing.Benchmark(
                         x_names=["N_CTX"],
