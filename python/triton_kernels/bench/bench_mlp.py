@@ -96,20 +96,18 @@ def roofline_mlp(batch_sizes, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_d
     out_path = Path(f"logs/{name}/{x_dtype}x-{w_dtype}w-TP{TP}-EP{EP}/")
     out_path.mkdir(parents=True, exist_ok=True)
     intensity_proxy = "batch_per_expt"
-    csv_path = roofline.compute_roofline(dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP,
-                                         EP,  # bench_mlp args (minus batch_per_expt)
+    csv_path = roofline.compute_roofline(dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP, EP,  # args
                                          bench_fn=bench_mlp,  # function to benchmark
-                                         intensity_proxy_name=intensity_proxy,
-                                         intensity_proxy_values=batch_sizes,  # intensity proxy to sweep
+                                         intensity_proxy_name=intensity_proxy,  # intensity proxy name
+                                         intensity_proxy_values=batch_sizes,  # intensity proxy values to sweep
                                          verbose=verbose,  # options
-                                         out_path=out_path.with_suffix(".csv"),  # output path
-                                         )
+                                         out_path=out_path.with_suffix(".csv"))  # output path
     png_path = roofline.plot_roofline(series=[csv_path],  # roofline data to plot
                                       flops_dtype=x_dtype,  # dtype to use for FLOPS roof
                                       xlabel=intensity_proxy, title=out_path,  # plot option
                                       out_path=out_path.with_suffix(".png"),  # output path
-                                      max_tbps="memset", max_tflops="cublas"  # hardware limits
-                                      )
+                                      max_tbps="memset", max_tflops="cublas")  # hardware limits
+
     return png_path
 
 
