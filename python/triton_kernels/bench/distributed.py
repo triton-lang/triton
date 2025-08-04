@@ -302,7 +302,7 @@ def routing_triton(x, logits, n_expts_act, sm_first=False, expt_indx=None, n_row
     # Recover bitmatrix for local experts
     n_cols = triton.cdiv(chunk_size, 32)
     n_rows = expt_indx.size(0)
-    bitmatrix = torch.zeros((n_rows, n_cols), dtype=torch.int32, device=expt_indx.device)
+    bitmatrix = torch.zeros((n_rows, n_cols), dtype=torch.uint32, device=expt_indx.device)
     BLOCK_SIZE_M = 128
     BLOCK_SIZE_K = max(triton.next_power_of_2(n_cols), 32)
     grid = (triton.cdiv(n_rows, BLOCK_SIZE_M), triton.cdiv(n_cols, BLOCK_SIZE_K))
@@ -474,7 +474,7 @@ def test_pack_bitmatrix():
 
     expt_indx = torch.tensor([[0, 33, 63], [31, 32, 33], [5, 10, 15], [0, 62, 63]], dtype=torch.int32, device="cuda")
     bitmatrix_cols = triton.cdiv(sentinel, 32)
-    bitmatrix = torch.zeros((n_rows, bitmatrix_cols), dtype=torch.int32, device="cuda")
+    bitmatrix = torch.zeros((n_rows, bitmatrix_cols), dtype=torch.uint32, device="cuda")
 
     BLOCK_SIZE_M = 128
     BLOCK_SIZE_K = max(triton.next_power_of_2(n_cols), 32)
