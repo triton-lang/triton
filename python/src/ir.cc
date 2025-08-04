@@ -929,7 +929,7 @@ void init_triton_ir(py::module &&m) {
       .def("get_int1_ty",
            [](TritonOpBuilder &self) -> Type {
              return self.getBuilder().getI1Type();
-           }) // or ret::copy?
+           })  // or ret::copy?
       .def("get_int8_ty",
            [](TritonOpBuilder &self) -> Type {
              return self.getBuilder().getI8Type();
