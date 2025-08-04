@@ -602,7 +602,7 @@ PyMODINIT_FUNC PyInit___triton_launcher(void) {{
   if(data_ptr_str == NULL) {{
     return NULL;
   }}
-  tma_desc_cpu_ptr_str = PyUnicode_FromString("tma_desc_cpu_ptr");
+  tma_desc_cpu_ptr_str = PyUnicode_InternFromString("tma_desc_cpu_ptr");
   if(tma_desc_cpu_ptr_str == NULL) {{
     return NULL;
   }}
