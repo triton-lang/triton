@@ -286,8 +286,8 @@ def test_small_mma(M, N, K, LHS_IN_TMEM, USE_COMMIT, num_warps):
 
 
 # %%
-# Let's use tcgen05_mma to build a simple blocked matmul kernel. Each program
-# will process one block of the accumulator.
+# Let's use tcgen05_mma to build a blocked matmul kernel. Each program will
+# process one block of the accumulator, and we will pipeline the TMA loads.
 
 
 @gluon.jit
@@ -320,6 +320,7 @@ def blocked_matmul_kernel(a_desc, b_desc, c_desc,  #
     mbarrier.init(mma_bar, count=1)
     phase = 0
 
+    # Prefetch iters.
     for _ in gl.static_range(num_buffers - 1):
         tma_index = tma_i % num_buffers
         k = tma_i * BLOCK_K
@@ -327,7 +328,7 @@ def blocked_matmul_kernel(a_desc, b_desc, c_desc,  #
         tma_bar = tma_bars.index(tma_index)
         mbarrier.expect(tma_bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes)
         tma.async_copy_global_to_shared(a_desc, [off_m, k], tma_bar, a_bufs.index(tma_index))
-        tma.async_copy_global_to_shared(b_desc, [off_n, k], tma_bar, b_bufs.index(tma_index))
+        tma.async_copy_global_to_shared(b_desc, [off_n, k] if TRANSPOSE_B else [k, off_n], tma_bar, b_bufs.index(tma_index))
 
     # We can zero-initialize the accumulator by setting `use_acc=False` on the
     # first iteration.
@@ -341,7 +342,7 @@ def blocked_matmul_kernel(a_desc, b_desc, c_desc,  #
         tma_bar = tma_bars.index(tma_index)
         mbarrier.expect(tma_bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes)
         tma.async_copy_global_to_shared(a_desc, [off_m, k], tma_bar, a_bufs.index(tma_index))
-        tma.async_copy_global_to_shared(b_desc, [off_n, k], tma_bar, b_bufs.index(tma_index))
+        tma.async_copy_global_to_shared(b_desc, [off_n, k] if TRANSPOSE_B else [k, off_n], tma_bar, b_bufs.index(tma_index))
 
         mma_index = mma_i % num_buffers
         mma_phase = mma_i // num_buffers & 1
@@ -362,12 +363,12 @@ def blocked_matmul_kernel(a_desc, b_desc, c_desc,  #
         mbarrier.wait(mma_bar, phase=phase)
         phase ^= 1  # toggle the parity phase between 0 and 1
 
+    # Pipeline drain iters.
     for _ in gl.static_range(num_buffers - 1):
         mma_index = mma_i % num_buffers
         mma_phase = mma_i // num_buffers & 1
         mma_i += 1
         mbarrier.wait(tma_bars.index(mma_index), phase=mma_phase)
-
         if TRANSPOSE_B:
             b = b_bufs.index(mma_index).permute((1, 0))
         else:
