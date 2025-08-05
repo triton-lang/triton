@@ -21,9 +21,6 @@ def _verify_buffer_load_store(ptr, offsets, mask, other=None):
     shape = offsets.shape
     element_type = ptr.type.scalar.element_ty
 
-    if mask is not None:
-        assert mask.shape == shape, "mask must have the same shape as offsets"
-
     if other is not None:
         assert mask is not None, "when other is not None, mask should not be None"
         assert other.shape == shape, "other must have the same shape as offsets"
@@ -73,10 +70,13 @@ def buffer_load(ptr, offsets, mask=None, other=None, cache=None, _semantic=None)
         other (tensor, optional): Tensor providing default values for masked elements. Defaults to None.
         cache_modifier (str): Cache modifier specifier. Defaults to "".
     """
+    if mask is not None:
+        offsets, mask = _semantic.broadcast_impl_value(offsets, mask)
+
     _verify_buffer_load_store(ptr, offsets, mask, other)
 
-    mask = mask.handle if mask is not None else ir.value()
     other = other.handle if other is not None else ir.value()
+    mask = mask.handle if mask is not None else ir.value()
     cache_modifier = _semantic._str_to_load_cache_modifier(cache) if cache is not None else ir.CACHE_MODIFIER.NONE
 
     ret_ty = offsets.type.with_element_ty(ptr.type.scalar.element_ty)
@@ -97,6 +97,9 @@ def buffer_store(stored_value, ptr, offsets, mask, cache=None, _semantic: GluonS
         mask (tensor, optional): Mask tensor for predicated store. Defaults to None.
         cache_modifier (str): Cache modifier specifier. Defaults to "".
     """
+    if mask is not None:
+        offsets, mask = _semantic.broadcast_impl_value(offsets, mask)
+
     _verify_buffer_load_store(ptr, offsets, mask)
 
     mask = mask.handle if mask is not None else ir.value()

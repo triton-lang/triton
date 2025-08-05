@@ -1649,3 +1649,53 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   }
 }
 """)
+
+
+@gluon.jit
+def buffer_load_store_with_broadcast_kernel(x, y):
+    layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[1, 64], warps_per_cta=[4, 1],
+                                                order=[1, 0])
+
+    offsets = ttgl.arange(0, 64 * 64).reshape(64, 64)
+    offsets = ttgl.convert_layout(offsets, layout=layout)
+    other = ttgl.full((64, 64), 1.0, tl.float32, layout=layout)
+
+    mask = ttgl.full((64, 1), 1, tl.int1, layout=layout)
+    a = ttgl.amd.cdna3.buffer_load(ptr=x, offsets=offsets, mask=mask, other=other, cache='.ca')
+    ttgl.amd.cdna3.buffer_store(stored_value=a, ptr=y, offsets=offsets, mask=mask, cache='.ca')
+
+    mask = ttgl.full((32, 32), 1, tl.int1, layout=layout)
+    a = ttgl.amd.cdna3.buffer_load(ptr=x, offsets=offsets, mask=mask, other=other, cache='.ca')
+    ttgl.amd.cdna3.buffer_store(stored_value=a, ptr=y, offsets=offsets, mask=mask, cache='.ca')
+
+    mask = ttgl.full((1, 64), 1, tl.int1, layout=layout)
+    a = ttgl.amd.cdna3.buffer_load(ptr=x, offsets=offsets, mask=mask, other=other, cache='.ca')
+    ttgl.amd.cdna3.buffer_store(stored_value=a, ptr=y, offsets=offsets, mask=mask, cache='.ca')
+
+
+@pytest.mark.parametrize("target", [HIP_TARGET_CDNA3, HIP_TARGET_CDNA4])
+def test_buffer_load_store_with_broadcast(target):
+    x = MockTensor(ttgl.float32)
+    y = MockTensor(ttgl.float32)
+    module = run_parser(buffer_load_store_kernel, *make_args(x, y), target=target)
+
+    expecttest.assert_expected_inline(
+        anonymize_ir(module.str_nodebug()), """\
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 64], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @buffer_load_store_kernel(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+    %0 = tt.make_range {end = 4096 : i32, start = 0 : i32} : tensor<4096xi32, #gluon.auto_encoding>
+    %1 = tt.reshape %0 : tensor<4096xi32, #gluon.auto_encoding> -> tensor<64x64xi32, #gluon.auto_encoding>
+    %2 = ttg.convert_layout %1 : tensor<64x64xi32, #gluon.auto_encoding> -> tensor<64x64xi32, #blocked>
+    %true = arith.constant true
+    %cst = arith.constant dense<true> : tensor<64x64xi1, #blocked>
+    %cst_0 = arith.constant 1.000000e+00 : f32
+    %cst_1 = arith.constant dense<1.000000e+00> : tensor<64x64xf32, #blocked>
+    %3 = amdgpu.buffer_load %arg0[%2], %cst, %cst_1 cacheModifier = ca : tensor<64x64xf32, #blocked>
+    amdgpu.buffer_store %3, %arg1[%2], %cst cacheModifier = ca : tensor<64x64xf32, #blocked>
+    %4 = amdgpu.buffer_load %arg0[%2], %cst, %cst_1 cacheModifier = ca : tensor<64x64xf32, #blocked>
+    amdgpu.buffer_store %4, %arg1[%2], %cst cacheModifier = ca : tensor<64x64xf32, #blocked>
+    tt.return
+  }
+}
+""")
