@@ -460,6 +460,12 @@ tt.func @max_min() {
   %5 = arith.constant dense<4> : tensor<128xi32>
   // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = 8}}
   %6 = arith.maxsi %4, %5 : tensor<128xi32>
+  %7 = tt.make_range { end = 8 : i32, start = 0 : i32 } : tensor<8xi32>
+  %8 = arith.constant dense<8> : tensor<8xi32>
+  %9 = arith.constant dense<2> : tensor<8xi32>
+  %10 = arith.remsi %7, %9 : tensor<8xi32>
+  %11 = arith.maxsi %10, %8 : tensor<8xi32>
+  %12 = arith.minsi %10, %8 : tensor<8xi32>
   tt.return
 }
 
