@@ -4,6 +4,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/LinearLayout.h"
@@ -12,6 +13,8 @@
 #include "llvm/ADT/Twine.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
+
+using mlir::triton::nvidia_gpu::TensorMemoryEncodingAttr;
 
 namespace mlir::triton::gpu {
 namespace {
@@ -1184,6 +1187,72 @@ LinearLayout SliceEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
                       llvm::to_vector(sliceLL.getOutDimNames()));
 }
 
+LinearLayout tensorMemoryToLinearLayout(ArrayRef<int64_t> shape,
+                                        TensorMemoryEncodingAttr encoding) {
+  // We model packed layouts as having the rows/cols dimensions of bitwidth=16
+  // This means that a layout with unpacked=True is the same as one with
+  // unpacked=False
+  assert(shape.size() == 2);
+  auto *ctx = encoding.getContext();
+  auto kRow = S("row");
+  auto kCol = S("col");
+  auto dims = standardOutDimNames(ctx, 2);
+  // The CTAOrder = [0, 1] so se start by N so that it ends up as
+  // ((tile * splitM) * splitN)
+  if (encoding.getCTASplitN() > 1) {
+    auto split =
+        LinearLayout::identity1D(encoding.getCTASplitN(), kCol, dims[1]);
+    auto newEncoding = TensorMemoryEncodingAttr::get(
+        ctx, encoding.getBlockM(), encoding.getBlockN(), encoding.getUnpacked(),
+        encoding.getCTASplitM(), 1);
+    return tensorMemoryToLinearLayout(
+               {shape[0], shape[1] / encoding.getCTASplitN()}, newEncoding) *
+           split;
+  }
+  if (encoding.getCTASplitM() > 1) {
+    auto split =
+        LinearLayout::identity1D(encoding.getCTASplitM(), kCol, dims[0]);
+    auto newEncoding = TensorMemoryEncodingAttr::get(
+        ctx, encoding.getBlockM(), encoding.getBlockN(), encoding.getUnpacked(),
+        1, encoding.getCTASplitN());
+    return tensorMemoryToLinearLayout(
+               {shape[0] / encoding.getCTASplitM(), shape[1]}, newEncoding) *
+           split;
+  }
+  assert(encoding.getCTASplitM() == 1 && encoding.getCTASplitN() == 1);
+
+  auto blockM = encoding.getBlockM();
+  auto blockN = encoding.getBlockN();
+  assert(blockM == 64 || blockM == 128);
+  LinearLayout tile;
+  if (blockM == 64) {
+    tile = LinearLayout::identity1D(16, kRow, dims[0]) *
+           LinearLayout::identity1D(blockN, kCol, dims[1]);
+    auto bases = tile.getBases();
+    if (shape[0] > blockM) {
+      bases[kRow].push_back({64, 0});
+    } else if (shape[1] > blockN) {
+      bases[kRow].push_back({0, static_cast<int32_t>(blockN)});
+    } else {
+      // Empty. This is modelled as broadcasting, same as for TMA(fp4)
+      bases[kRow].push_back({0, 0});
+    }
+    bases[kRow].push_back({16, 0});
+    bases[kRow].push_back({32, 0});
+    tile = LinearLayout(bases, dims);
+  } else {
+    tile = LinearLayout::identity1D(blockM, kRow, dims[0]) *
+           LinearLayout::identity1D(blockN, kCol, dims[1]);
+  }
+  auto repsM = shape[0] / tile.getOutDimSize(dims[0]);
+  auto repsN = shape[1] / tile.getOutDimSize(dims[1]);
+  assert(repsM >= 1 && repsN >= 1);
+  // Broadcast the remaining dimensions in order [0, 1]
+  tile = tile * LinearLayout::identity1D(repsM, kCol, dims[0]) *
+         LinearLayout::identity1D(repsN, kCol, dims[1]);
+  return tile;
+}
+
 LinearLayout TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape,
                                               Attribute layout) {
   CacheKey key{std::vector<int64_t>(shape.begin(), shape.end()), layout};
@@ -1208,6 +1277,9 @@ LinearLayout TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape,
       result = nvmmaSharedToLinearLayout(shape, shared);
     } else if (auto sbl = dyn_cast<AMDRotatingSharedEncodingAttr>(layout)) {
       result = sharedToLinearLayoutAMDRotating(shape, sbl);
+    } else if (auto tensorMemoryEncoding =
+                   dyn_cast<TensorMemoryEncodingAttr>(layout)) {
+      result = tensorMemoryToLinearLayout(shape, tensorMemoryEncoding);
     } else {
       assert(0 && "unknown layout");
     }

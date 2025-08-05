@@ -333,7 +333,6 @@ def TTG_MemDescReinterpretOp : TTG_Op<"memdesc_reinterpret", [Pure, MemDescViewT
     $src attr-dict `:` qualified(type($src)) `->` qualified(type($result))
   }];
 
-  let hasVerifier = 1;
   let hasFolder = 1;
 }
 
