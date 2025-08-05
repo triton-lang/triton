@@ -19,17 +19,6 @@ std::ostream &operator<<(std::ostream &os, StringAttr str) {
 
 using namespace mlir::triton::nvidia_gpu;
 namespace mlir::triton::gpu {
-
-static LinearLayout toLinearLayout(ArrayRef<int64_t> shape, Attribute layout) {
-  if (isa<DistributedEncodingTrait>(layout))
-    return toLinearLayout(shape, layout, {});
-  else if (isa<SharedEncodingTrait>(layout))
-    return toLinearLayout(shape, layout, shape);
-  else {
-    assert(isa<TensorMemoryEncodingAttr>(layout));
-    return toLinearLayout(shape, layout, shape);
-  }
-}
 namespace {
 
 class LinearLayoutConversionsTest : public ::testing::Test {
