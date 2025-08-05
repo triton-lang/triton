@@ -98,7 +98,6 @@ class Storage:
         assert data_ptr > 0
         assert self.can_use_ragged_tma(mode)
         block_shape = [1] * (len(shape) - 2) + block_shape
-        print(self.data.shape)
         return TensorDescriptor(TensorDescriptorPtr(data_ptr, self.data.dtype), shape, strides, block_shape)
 
     def make_tma(self, block_shape, mode, transpose=False):

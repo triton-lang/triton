@@ -513,7 +513,7 @@ def matmul_ogs(x, w, bias,
     w_storage = _canonicalize_storage(w.storage, 3, flex.rhs_data)
     y_storage = _canonicalize_storage(y.storage, 2 if has_scatter else 4, flex.out_data)
     # create tma descriptor for x
-    x_tma_mode = "ragged_load" if is_ragged and x_storage.can_use_ragged_tma("load") else "gather" if has_gather_tma else "dense"
+    x_tma_mode = "gather" if has_gather_tma else "ragged_load" if is_ragged and x_storage.can_use_ragged_tma("load") else "dense"
     x_tma_block_size = {
         "ragged_load": [opt_flags.block_m, opt_flags.block_k],
         "gather": [1, opt_flags.block_k],
@@ -522,7 +522,7 @@ def matmul_ogs(x, w, bias,
     x_tensor_or_tma = x_storage.make_tma(x_tma_block_size, x_tma_mode) if opt_flags.is_persistent else x_storage.data
     # create tma descriptor for y
     block_n = opt_flags.block_n // opt_flags.epilogue_subtile // fused_activation.reduction_n
-    y_tma_mode = "ragged_store" if is_ragged and y_storage.can_use_ragged_tma("store") else "scatter" if has_scatter_tma else "dense"
+    y_tma_mode = "scatter" if has_scatter_tma else "ragged_store" if is_ragged and y_storage.can_use_ragged_tma("store") else "dense"
     y_tma_block_size = {
         "ragged_store": [opt_flags.block_m, block_n],
         "scatter": [1, block_n],
@@ -530,6 +530,7 @@ def matmul_ogs(x, w, bias,
     }[y_tma_mode]
     y_tensor_or_tma = y_storage.make_tma(y_tma_block_size, y_tma_mode) if opt_flags.is_persistent else y_storage.data
     y_desc_ptr_off = -y_storage.data.shape[-2] * y_storage.data.shape[-1] if is_ragged else 0
+    print(y_tensor_or_tma, x_tensor_or_tma)
     # create tma descriptor for w
     w_has_tma = opt_flags.is_persistent
     w_tensor_or_tma = w_storage.make_tma([1, opt_flags.block_k, opt_flags.block_n], "dense") if w_has_tma else w_storage.data
