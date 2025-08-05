@@ -115,8 +115,7 @@ DenseMap<Operation *, int> deserializeLatencies(Operation *op);
 Value createScalarAlloc(ImplicitLocOpBuilder &rewriter, Type type,
                         unsigned numBuffers);
 // Create an allocation and init the mbarriers.
-Value createBarrierAlloc(scf::ForOp forOp, int numBarriers,
-                         int arriveCount = 1);
+Value createBarrierAlloc(Operation *op, int numBarriers, int arriveCount = 1);
 // Create an allocation that can hold distance number of tensor shapes.
 Value createAlloc(Operation *insertBefore, RankedTensorType ty, Location loc,
                   gpu::SharedEncodingTrait sharedEnc, unsigned distance);

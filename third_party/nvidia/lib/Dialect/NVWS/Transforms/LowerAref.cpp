@@ -169,45 +169,17 @@ BarrierCount getArrivalCount(ArefCreateOp op) {
 ArefValue createAndInitMbar(ArefCreateOp op, PatternRewriter &rewriter) {
   BarrierCount count = getArrivalCount(op);
 
-  MLIRContext *ctx = op.getContext();
-  auto loc = op.getLoc();
   auto arefTy = op.getType();
-  auto baseType = arefTy.getBaseType();
   auto arefBufTypes = llvm::to_vector(llvm::map_range(
       arefTy.getBaseType(), [](Type type) { return cast<MemDescType>(type); }));
   auto shape = arefBufTypes[0].getShape();
   auto depth = shape[0];
 
-  ImplicitLocOpBuilder builder(op.getLoc(), rewriter);
-  auto emptyMbars = createScalarAlloc(builder, rewriter.getI64Type(), depth);
-  auto fullMbars = createScalarAlloc(builder, rewriter.getI64Type(), depth);
-  auto lb = rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
-  auto ub = rewriter.create<arith::ConstantIntOp>(loc, depth, 32);
-  auto step = rewriter.create<arith::ConstantIntOp>(loc, 1, 32);
-  auto dLoop = rewriter.create<scf::ForOp>(loc, lb, ub, step);
-  rewriter.setInsertionPointToStart(dLoop.getBody());
-
-  for (int i = 0; i < 2; ++i) {
-    bool isProducer = i == 0;
-    auto mbars = isProducer ? emptyMbars : fullMbars;
-    auto singleBarrier =
-        createSingleBufferView(rewriter, mbars, dLoop.getInductionVar());
-    int pendingCount =
-        isProducer ? count.producerPendingCount : count.consumerPendingCount;
-    rewriter.create<InitBarrierOp>(loc, singleBarrier, pendingCount);
-  }
-
-  // insert inval_barrier right after WarpGroupOp
-  WarpGroupOp wgOp = getWarpGroupIdx(*op->getUsers().begin()).first;
-  rewriter.setInsertionPointAfter(wgOp);
-  auto invalLoop = rewriter.create<scf::ForOp>(loc, lb, ub, step);
-  rewriter.setInsertionPointToStart(invalLoop.getBody());
-
-  for (int i = 0; i < 2; ++i) {
-    auto mbar = createSingleBufferView(
-        rewriter, i == 0 ? emptyMbars : fullMbars, invalLoop.getInductionVar());
-    rewriter.create<InvalBarrierOp>(loc, mbar);
-  }
+  auto wgOp = getWarpGroupIdx(*op->getUsers().begin()).first;
+  auto emptyMbars =
+      triton::createBarrierAlloc(wgOp, depth, count.producerPendingCount);
+  auto fullMbars =
+      triton::createBarrierAlloc(wgOp, depth, count.consumerPendingCount);
 
   return ArefValue{emptyMbars, fullMbars, static_cast<int>(depth),
                    op.getOperands()};
