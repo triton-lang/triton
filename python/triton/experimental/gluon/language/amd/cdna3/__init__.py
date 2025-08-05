@@ -22,7 +22,7 @@ def _verify_buffer_load_store(ptr, offsets, mask, other=None):
     element_type = ptr.type.scalar.element_ty
 
     if mask is not None:
-        assert mask.shape == shape, "offsets must have the same shape as offsets"
+        assert mask.shape == shape, "mask must have the same shape as offsets"
 
     if other is not None:
         assert mask is not None, "when other is not None, mask should not be None"
