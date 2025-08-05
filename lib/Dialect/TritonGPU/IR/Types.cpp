@@ -132,7 +132,7 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
                          << enc.getBlockN() * enc.getCTASplitN() << ". Got "
                          << allocShape;
     }
-    auto ll = toLinearLayout(shape, enc, allocShape);
+    auto ll = toLinearLayout(allocShape, enc);
     auto dims = standardOutDimNames(ctx, 2);
     if (ll.getOutDimSize(dims[0]) != allocShape[0] ||
         ll.getOutDimSize(dims[1]) != allocShape[1]) {

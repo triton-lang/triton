@@ -48,7 +48,7 @@ LinearLayout getRegToSharedLayout(MLIRContext *ctx, ArrayRef<int64_t> shape,
   int rank = shape.size();
 
   LinearLayout sharedLayout =
-      triton::gpu::toLinearLayout(shape, dstEnc, allocShape);
+      triton::gpu::toLinearLayout(allocShape.take_back(rank), dstEnc);
   auto sharedOrder = triton::gpu::getOrder(dstEnc, shape);
 
   // sharedLayout's in-dims are currently (offset, block).  Reshape to
@@ -420,7 +420,7 @@ emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
   MLIRContext *ctx = rewriter.getContext();
   auto shape = type.getShape();
 
-  LinearLayout ll = triton::gpu::toLinearLayout(shape, layout, {});
+  LinearLayout ll = triton::gpu::toLinearLayout(shape, layout);
 
   StringAttr kRegister = str_attr("register");
   StringAttr kLane = str_attr("lane");
@@ -1101,8 +1101,7 @@ SharedMemoryObject::getMaskSpanOffsets(triton::gpu::MemDescType srcTy) {
   if (allocShape == shape) {
     return 0;
   }
-  auto totalLl =
-      triton::gpu::toLinearLayout(allocShape, srcTy.getEncoding(), allocShape);
+  auto totalLl = triton::gpu::toLinearLayout(allocShape, srcTy.getEncoding());
   auto dimNames = standardOutDimNames(ctx, shape.size());
   // Remove the kBlock dimension
   auto kOffset = StringAttr::get(ctx, "offset");
@@ -1330,7 +1329,7 @@ delinearize(RewriterBase &rewriter, Location loc,
             triton::gpu::DistributedEncodingTrait layout,
             ArrayRef<int64_t> shape, StringAttr dimName, Value linear) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  auto ll = triton::gpu::toLinearLayout(shape, layout, {});
+  auto ll = triton::gpu::toLinearLayout(shape, layout);
   auto linearLayout =
       triton::gpu::LinearEncodingAttr::get(rewriter.getContext(), ll);
   assert(ll.hasInDim(dimName));
