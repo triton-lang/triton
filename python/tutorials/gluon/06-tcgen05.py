@@ -292,7 +292,7 @@ def test_small_mma(M, N, K, LHS_IN_TMEM, USE_COMMIT, num_warps):
 
 @gluon.jit
 def blocked_matmul_kernel(a_desc, b_desc, c_desc,  #
-                          TRANSPOSE_B: gl.constexpr, num_warps: gl.constexpr, num_buffers: gl.constexpr):
+                          TRANSPOSE_B: gl.constexpr, num_buffers: gl.constexpr, num_warps: gl.constexpr):
     BLOCK_M: gl.constexpr = c_desc.block_type.shape[0]
     BLOCK_N: gl.constexpr = c_desc.block_type.shape[1]
     BLOCK_K: gl.constexpr = a_desc.block_type.shape[1]
@@ -328,7 +328,8 @@ def blocked_matmul_kernel(a_desc, b_desc, c_desc,  #
         tma_bar = tma_bars.index(tma_index)
         mbarrier.expect(tma_bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes)
         tma.async_copy_global_to_shared(a_desc, [off_m, k], tma_bar, a_bufs.index(tma_index))
-        tma.async_copy_global_to_shared(b_desc, [off_n, k] if TRANSPOSE_B else [k, off_n], tma_bar, b_bufs.index(tma_index))
+        tma.async_copy_global_to_shared(b_desc, [off_n, k] if TRANSPOSE_B else [k, off_n], tma_bar,
+                                        b_bufs.index(tma_index))
 
     # We can zero-initialize the accumulator by setting `use_acc=False` on the
     # first iteration.
@@ -342,7 +343,8 @@ def blocked_matmul_kernel(a_desc, b_desc, c_desc,  #
         tma_bar = tma_bars.index(tma_index)
         mbarrier.expect(tma_bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes)
         tma.async_copy_global_to_shared(a_desc, [off_m, k], tma_bar, a_bufs.index(tma_index))
-        tma.async_copy_global_to_shared(b_desc, [off_n, k] if TRANSPOSE_B else [k, off_n], tma_bar, b_bufs.index(tma_index))
+        tma.async_copy_global_to_shared(b_desc, [off_n, k] if TRANSPOSE_B else [k, off_n], tma_bar,
+                                        b_bufs.index(tma_index))
 
         mma_index = mma_i % num_buffers
         mma_phase = mma_i // num_buffers & 1
@@ -393,7 +395,7 @@ def blocked_matmul_kernel(a_desc, b_desc, c_desc,  #
     tma.store_wait(pendings=0)
 
 
-def blocked_matmul(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B, num_warps):
+def blocked_matmul(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B, num_buffers, num_warps):
     M, N = C.shape
 
     a_layout = gl.NVMMASharedLayout.get_default_for([BLOCK_M, BLOCK_K], gl.float16)
@@ -407,20 +409,21 @@ def blocked_matmul(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B, num_warps):
     c_desc = TensorDescriptor(C, C.shape, C.stride(), [BLOCK_M, BLOCK_N], c_layout)
 
     grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
-    blocked_matmul_kernel[grid](a_desc, b_desc, c_desc, TRANSPOSE_B, num_warps=num_warps, num_buffers=2)
+    blocked_matmul_kernel[grid](a_desc, b_desc, c_desc, TRANSPOSE_B, num_buffers, num_warps=num_warps)
 
 
 @pytest.mark.parametrize("M, N, K", [(208, 416, 304), (2000, 1000, 2000)])
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(64, 64, 64), (128, 128, 128)])
 @pytest.mark.parametrize("TRANSPOSE_B", [False, True])
+@pytest.mark.parametrize("num_buffers", [1, 2, 3])
 @pytest.mark.parametrize("num_warps", [4, 8])
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
-def test_blocked_matmul(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B, num_warps):
+def test_blocked_matmul(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B, num_buffers, num_warps):
     A = torch.randn(M, K, device="cuda", dtype=torch.float16)
     B = torch.randn((N, K) if TRANSPOSE_B else (K, N), device="cuda", dtype=torch.float16)
     C = torch.empty(M, N, device="cuda", dtype=torch.float16)
 
-    blocked_matmul(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B, num_warps)
+    blocked_matmul(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B, num_buffers, num_warps)
 
     C_ref = A @ (B.T if TRANSPOSE_B else B)
     torch.testing.assert_close(C_ref, C, rtol=1e-3, atol=1e-1)
@@ -443,36 +446,48 @@ if __name__ == "__main__":
     B = torch.randn(K, N, device="cuda", dtype=torch.float16)
     C = torch.empty(M, N, device="cuda", dtype=torch.float16)
 
-    print("BLOCK_M BLOCK_N BLOCK_K num_warps time (ms) tflops/s")
+    print("BLOCK_M BLOCK_N BLOCK_K num_stages num_warps time (ms) tflops/s")
     configs = []
-    for BLOCK_M, BLOCK_N, BLOCK_K, num_warps in itertools.product([64, 128], [128], [64, 128], [4, 8]):
-        if BLOCK_M * BLOCK_N // num_warps // 32 >= 256:  # guaranteed spilling
+    # Some rationale on hyperparameter selection:
+    #
+    # - BLOCK_K=256 uses too much memory and increases the latency of the loads,
+    #   requiring more buffers for which we lack SMEM.
+    # - BLOCK_M != BLOCK_N causes the loads to have different latencies. This
+    #   is OK we pipeline the loads separately, but in our kernel, we pipelned
+    #   them together.
+    # - num_warps=8 provides no benefit since only 1 warp is doing anything for
+    #   most of the kernel.
+    # - BLOCK_MN=64 is too small to saturate the tensor core.
+    for BLOCK_MN, BLOCK_K, num_warps, num_stages in itertools.product([128], [64, 128, 256], [4], [1, 2, 3]):
+        if (BLOCK_MN * BLOCK_K) * 4 * num_stages // 1024 > 224:  # too much SMEM
             continue
-        configs.append((BLOCK_M, BLOCK_N, BLOCK_K, num_warps))
+        configs.append((BLOCK_MN, BLOCK_K, num_warps, num_stages))
 
-        fn = lambda: blocked_matmul(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, False, num_warps)
-        ms = triton.testing.do_bench(fn)
+        fn = lambda: blocked_matmul(A, B, C, BLOCK_MN, BLOCK_MN, BLOCK_K, False, num_stages, num_warps)
+        # Increase warmup and rep to get more stable results.
+        ms = triton.testing.do_bench(fn, warmup=100, rep=500)
         flops = 2 * M * N * K
         tflops_per_sec = flops * 1e-12 / (ms * 1e-3)
-        print(f"{BLOCK_M:>7} {BLOCK_N:>7} {BLOCK_K:>7} {num_warps:>9} {ms:>9.2f} {tflops_per_sec:>8.2f}")
+        print(
+            f"{BLOCK_MN:>7} {BLOCK_MN:>7} {BLOCK_K:>7} {num_stages:>10} {num_warps:>9} {ms:>9.2f} {tflops_per_sec:>8.2f}"
+        )
     print()
 
 # %%
 # ```
-# BLOCK_M BLOCK_N BLOCK_K num_warps time (ms) tflops/s
-#      64     128      64         4      3.48   631.45
-#      64     128      64         8      3.56   617.47
-#      64     128     128         4      2.61   843.98
-#      64     128     128         8      2.72   808.47
-#     128     128      64         4      2.55   863.75
-#     128     128      64         8      2.47   889.52
-#     128     128     128         4      1.82  1209.98
-#     128     128     128         8      2.16  1015.96
+# BLOCK_M BLOCK_N BLOCK_K num_stages num_warps time (ms) tflops/s
+#     128     128      64          1         4      2.39   919.93
+#     128     128      64          2         4      1.98  1110.19
+#     128     128      64          3         4      2.91   756.52
+#     128     128     128          1         4      2.09  1049.77
+#     128     128     128          2         4      2.85   772.57
+#     128     128     128          3         4      2.74   801.36
+#     128     128     256          1         4      3.89   565.80
 # ```
 #
-# Our first attempt yields 1210 TFLOPS. Since tcgen05_mma is asynchronous, we
-# can overlap it with the TMA loads to reduce SM idle time. Let's keep the loads
-# synchronous and overlap the MMAs.
+# Our first attempt yields 1110 TFLOPS with double-buffered operands. Since
+# tcgen05_mma is asynchronous, we can overlap it with the TMA loads to reduce
+# SM idle time.
 #
 # Note that while tcgen05_mma is asynchronous, certain tcgen05 instructions are
 # implicitly pipelined, meaning their execution order is guaranteed:
@@ -580,7 +595,7 @@ if __name__ == "__main__":
     print("Benchmarking pipelined matmul")
     print("=============================")
     print("BLOCK_M BLOCK_N BLOCK_K num_warps time (ms) tflops/s")
-    for BLOCK_M, BLOCK_N, BLOCK_K, num_warps in configs:
+    for BLOCK_M, BLOCK_N, BLOCK_K, num_warps, num_stages in configs:
         fn = lambda: blocked_matmul_pipelined(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, num_warps)
         ms = triton.testing.do_bench(fn)
         flops = 2 * M * N * K
