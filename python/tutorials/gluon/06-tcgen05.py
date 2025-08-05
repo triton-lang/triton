@@ -286,13 +286,12 @@ def test_small_mma(M, N, K, LHS_IN_TMEM, USE_COMMIT, num_warps):
 
 
 # %%
-# Let's use tcgen05_mma to build a blocked matmul kernel. Each program will
-# process one block of the accumulator, and we will pipeline the TMA loads.
+# Let's use tcgen05_mma to build a simple blocked matmul kernel. Each program
+# will process one block of the accumulator.
 
 
 @gluon.jit
-def blocked_matmul_kernel(a_desc, b_desc, c_desc,  #
-                          TRANSPOSE_B: gl.constexpr, num_buffers: gl.constexpr, num_warps: gl.constexpr):
+def blocked_matmul_kernel(a_desc, b_desc, c_desc, TRANSPOSE_B: gl.constexpr, num_warps: gl.constexpr):
     BLOCK_M: gl.constexpr = c_desc.block_type.shape[0]
     BLOCK_N: gl.constexpr = c_desc.block_type.shape[1]
     BLOCK_K: gl.constexpr = a_desc.block_type.shape[1]
@@ -305,82 +304,45 @@ def blocked_matmul_kernel(a_desc, b_desc, c_desc,  #
     off_m = pid_m * BLOCK_M
     off_n = pid_n * BLOCK_N
 
-    a_bufs = gl.allocate_shared_memory(dtype, [num_buffers] + a_desc.block_type.shape, a_desc.layout)
-    b_bufs = gl.allocate_shared_memory(dtype, [num_buffers] + b_desc.block_type.shape, b_desc.layout)
-    tma_bars = gl.allocate_shared_memory(gl.int64, [num_buffers, 1], mbarrier.MBarrierLayout())
-    for i in gl.static_range(num_buffers):
-        mbarrier.init(tma_bars.index(i), count=1)
-    tma_producer_i = 0
-    tma_consumer_i = 0
+    a_smem = gl.allocate_shared_memory(dtype, a_desc.block_type.shape, a_desc.layout)
+    b_smem = gl.allocate_shared_memory(dtype, b_desc.block_type.shape, b_desc.layout)
 
+    tma_bar = gl.allocate_shared_memory(gl.int64, [1], mbarrier.MBarrierLayout())
+    mbarrier.init(tma_bar, count=1)
     mma_bar = gl.allocate_shared_memory(gl.int64, [1], mbarrier.MBarrierLayout())
     mbarrier.init(mma_bar, count=1)
-    mma_phase = 0
+    phase = 0
 
     # Determine the TMEM layout.
     tmem_layout: gl.constexpr = TensorMemoryLayout([BLOCK_M, BLOCK_N], unpacked=True)
     acc_tmem = allocate_tensor_memory(gl.float32, [BLOCK_M, BLOCK_N], tmem_layout)
 
-    # Prefetch iters.
-    for _ in gl.static_range(num_buffers - 1):
-        tma_producer_index = tma_producer_i % num_buffers
-        k = tma_producer_i * BLOCK_K
-        tma_producer_i += 1
-        tma_bar = tma_bars.index(tma_producer_index)
-        mbarrier.expect(tma_bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes)
-        tma.async_copy_global_to_shared(a_desc, [off_m, k], tma_bar, a_bufs.index(tma_producer_index))
-        tma.async_copy_global_to_shared(b_desc, [off_n, k] if TRANSPOSE_B else [k, off_n], tma_bar,
-                                        b_bufs.index(tma_producer_index))
-
     # We can zero-initialize the accumulator by setting `use_acc=False` on the
     # first iteration.
     use_acc = False
-    for _ in range(gl.cdiv(K, BLOCK_K) - (num_buffers - 1)):
-        tma_producer_index = tma_producer_i % num_buffers
-        k = tma_producer_i * BLOCK_K
-        tma_producer_i += 1
-        tma_bar = tma_bars.index(tma_producer_index)
+    for k in range(0, K, BLOCK_K):
         mbarrier.expect(tma_bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes)
-        tma.async_copy_global_to_shared(a_desc, [off_m, k], tma_bar, a_bufs.index(tma_producer_index))
-        tma.async_copy_global_to_shared(b_desc, [off_n, k] if TRANSPOSE_B else [k, off_n], tma_bar,
-                                        b_bufs.index(tma_producer_index))
-
-        tma_consumer_index = tma_consumer_i % num_buffers
-        tma_consumer_phase = tma_consumer_i // num_buffers & 1
-        tma_consumer_i += 1
-        mbarrier.wait(tma_bars.index(tma_consumer_index), phase=tma_consumer_phase)
+        tma.async_copy_global_to_shared(a_desc, [off_m, k], tma_bar, a_smem)
+        tma.async_copy_global_to_shared(b_desc, [off_n, k] if TRANSPOSE_B else [k, off_n], tma_bar, b_smem)
+        mbarrier.wait(tma_bar, phase=phase)
 
         # We can transpose B by creating a transposed view over tile of B in
         # shared memory. This forwards the transposition to tcgen05_mma, which
         # handles it for us.
         if TRANSPOSE_B:
-            b = b_bufs.index(tma_consumer_index).permute((1, 0))
+            b = b_smem.permute((1, 0))
         else:
-            b = b_bufs.index(tma_consumer_index)
+            b = b_smem
 
         # Issue and wait on the tcgen05_mma.
-        tcgen05_mma(a_bufs.index(tma_consumer_index), b, acc_tmem, use_acc=use_acc, mbarriers=[mma_bar])
+        tcgen05_mma(a_smem, b, acc_tmem, use_acc=use_acc)
+        tcgen05_commit(mma_bar)
+        mbarrier.wait(mma_bar, phase=phase)
         use_acc = True
-        mbarrier.wait(mma_bar, phase=mma_phase)
-        mma_phase ^= 1  # toggle the parity phase between 0 and 1
 
-    # Pipeline drain iters.
-    for _ in gl.static_range(num_buffers - 1):
-        tma_consumer_index = tma_consumer_i % num_buffers
-        tma_consumer_phase = tma_consumer_i // num_buffers & 1
-        tma_consumer_i += 1
-        mbarrier.wait(tma_bars.index(tma_consumer_index), phase=tma_consumer_phase)
-        if TRANSPOSE_B:
-            b = b_bufs.index(tma_consumer_index).permute((1, 0))
-        else:
-            b = b_bufs.index(tma_consumer_index)
-        tcgen05_mma(a_bufs.index(tma_consumer_index), b, acc_tmem, use_acc=use_acc, mbarriers=[mma_bar])
-        use_acc = True
-        mbarrier.wait(mma_bar, phase=mma_phase)
-        mma_phase ^= 1
+        phase ^= 1  # toggle the parity phase between 0 and 1
 
-    for i in gl.static_range(num_buffers):
-        mbarrier.invalidate(tma_bars.index(i))
+    mbarrier.invalidate(tma_bar)
     mbarrier.invalidate(mma_bar)
 
     acc_reg_layout: gl.constexpr = get_tmem_32x32b_reg_layout(BLOCK_M, BLOCK_N, [BLOCK_M, BLOCK_N], num_warps)
@@ -394,7 +356,7 @@ def blocked_matmul_kernel(a_desc, b_desc, c_desc,  #
     tma.store_wait(pendings=0)
 
 
-def blocked_matmul(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B, num_buffers, num_warps):
+def blocked_matmul(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B, num_warps):
     M, N = C.shape
 
     a_layout = gl.NVMMASharedLayout.get_default_for([BLOCK_M, BLOCK_K], gl.float16)
@@ -408,21 +370,20 @@ def blocked_matmul(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B, num_buffers,
     c_desc = TensorDescriptor(C, C.shape, C.stride(), [BLOCK_M, BLOCK_N], c_layout)
 
     grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
-    blocked_matmul_kernel[grid](a_desc, b_desc, c_desc, TRANSPOSE_B, num_buffers, num_warps=num_warps)
+    blocked_matmul_kernel[grid](a_desc, b_desc, c_desc, TRANSPOSE_B, num_warps=num_warps)
 
 
 @pytest.mark.parametrize("M, N, K", [(208, 416, 304), (2000, 1000, 2000)])
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(64, 64, 64), (128, 128, 128)])
 @pytest.mark.parametrize("TRANSPOSE_B", [False, True])
-@pytest.mark.parametrize("num_buffers", [1, 2, 3])
 @pytest.mark.parametrize("num_warps", [4, 8])
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
-def test_blocked_matmul(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B, num_buffers, num_warps):
+def test_blocked_matmul(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B, num_warps):
     A = torch.randn(M, K, device="cuda", dtype=torch.float16)
     B = torch.randn((N, K) if TRANSPOSE_B else (K, N), device="cuda", dtype=torch.float16)
     C = torch.empty(M, N, device="cuda", dtype=torch.float16)
 
-    blocked_matmul(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B, num_buffers, num_warps)
+    blocked_matmul(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B, num_warps)
 
     C_ref = A @ (B.T if TRANSPOSE_B else B)
     torch.testing.assert_close(C_ref, C, rtol=1e-3, atol=1e-1)
@@ -445,47 +406,36 @@ if __name__ == "__main__":
     B = torch.randn(K, N, device="cuda", dtype=torch.float16)
     C = torch.empty(M, N, device="cuda", dtype=torch.float16)
 
-    print("BLOCK_M BLOCK_N BLOCK_K num_buffers num_warps time (ms) tflops/s")
+    print("BLOCK_M BLOCK_N BLOCK_K num_warps time (ms) tflops/s")
     configs = []
-    # Some rationale on hyperparameter selection:
-    #
-    # - BLOCK_K=256 uses too much memory and increases the latency of the loads,
-    #   requiring more buffers for which we lack SMEM.
-    # - BLOCK_M != BLOCK_N causes the loads to have different latencies. This
-    #   is OK we pipeline the loads separately, but in our kernel, we pipelned
-    #   them together.
-    # - num_warps=8 provides no benefit since only 1 warp is doing anything for
-    #   most of the kernel.
-    # - BLOCK_MN=64 is too small to saturate the tensor core.
-    for BLOCK_MN, BLOCK_K, num_warps, num_buffers in itertools.product([128], [64, 128, 256], [4], [1, 2, 3]):
-        if (BLOCK_MN * BLOCK_K) * 4 * num_buffers // 1024 > 224:  # too much SMEM
+    # Picking BLOCK_M != BLOCK_N makes the latency of one load longer than the
+    # other. This would be OK if we pipelined them separately, but in our kernel
+    # we pipelined them together.
+    for BLOCK_MN, BLOCK_K, num_warps in itertools.product([64, 128], [64, 128, 256], [4]):
+        if (BLOCK_MN * BLOCK_K) * 4 // 1024 > 224:  # too much SMEM
             continue
-        configs.append((BLOCK_MN, BLOCK_K, num_warps, num_buffers))
+        configs.append((BLOCK_MN, BLOCK_K, num_warps))
 
-        fn = lambda: blocked_matmul(A, B, C, BLOCK_MN, BLOCK_MN, BLOCK_K, False, num_buffers, num_warps)
+        fn = lambda: blocked_matmul(A, B, C, BLOCK_MN, BLOCK_MN, BLOCK_K, False, num_warps)
         # Increase warmup and rep to get more stable results.
         ms = triton.testing.do_bench(fn, warmup=100, rep=500)
         flops = 2 * M * N * K
         tflops_per_sec = flops * 1e-12 / (ms * 1e-3)
-        print(
-            f"{BLOCK_MN:>7} {BLOCK_MN:>7} {BLOCK_K:>7} {num_buffers:>11} {num_warps:>9} {ms:>9.2f} {tflops_per_sec:>8.2f}"
-        )
+        print(f"{BLOCK_MN:>7} {BLOCK_MN:>7} {BLOCK_K:>7} {num_warps:>9} {ms:>9.2f} {tflops_per_sec:>8.2f}")
     print()
 
 # %%
 # ```
-# BLOCK_M BLOCK_N BLOCK_K num_buffers num_warps time (ms) tflops/s
-#     128     128      64           1         4      2.39   919.93
-#     128     128      64           2         4      1.98  1110.19
-#     128     128      64           3         4      2.91   756.52
-#     128     128     128           1         4      2.09  1049.77
-#     128     128     128           2         4      2.85   772.57
-#     128     128     128           3         4      2.74   801.36
-#     128     128     256           1         4      3.89   565.80
+# BLOCK_M BLOCK_N BLOCK_K num_warps time (ms) tflops/s
+#      64      64      64         4      3.27   671.77
+#      64      64     128         4      3.33   660.93
+#      64      64     256         4      4.18   526.10
+#     128     128      64         4      2.45   898.61
+#     128     128     128         4      2.16  1019.46
+#     128     128     256         4      3.91   563.13
 # ```
 #
-# Our first attempt yields 1110 TFLOPS with double-buffered operands. We can see
-# the best single-buffered solution is 1050 TFLOPS.
+# Our first attempt yields 1020 TFLOPS with no pipelining.
 #
 # Since tcgen05_mma is asynchronous, we can overlap it with the TMA loads to
 # reduce SM idle time. Even though the instruction is asynchronous, tcgen05
@@ -496,11 +446,22 @@ if __name__ == "__main__":
 # - tcgen05_mma followed by tcgen05_commit
 # - tcgen05_cp followed by tcgen05_mma, and vice versa
 #
-# Thus, we don't need to explicitly synchronize two async MMAs.
+# Thus, we don't need to explicitly synchronize two async MMAs. Combined with
+# an mbarrier completion mechanism, it is possible to precisely track MMA
+# completion. We can use this to build a fine-grained pipelining schedule.
 
 
 @gluon.jit
-def blocked_matmul_pipelined_kernel(a_desc, b_desc, c_desc, num_stages: gl.constexpr, num_warps: gl.constexpr):
+def get_and_increment(counter):
+    return counter % 2, counter // 2 & 1, counter + 1
+
+
+# This pipelined kernel implements pingpong with software pipelining by
+# processing two blocks at the same time. The kernel partitions along M. The
+# kernel expects BLOCK_M = BLOCK_N = 128 and double-buffers all inputs. If
+# BLOCK_K is 128, this kernel will use 192 KB of SMEM.
+@gluon.jit
+def blocked_matmul_pipelined_kernel(a_desc, b_desc, c_desc, num_warps: gl.constexpr):
     BLOCK_M: gl.constexpr = c_desc.block_type.shape[0]
     BLOCK_N: gl.constexpr = c_desc.block_type.shape[1]
     BLOCK_K: gl.constexpr = a_desc.block_type.shape[1]
@@ -509,112 +470,141 @@ def blocked_matmul_pipelined_kernel(a_desc, b_desc, c_desc, num_stages: gl.const
 
     pid_m = gl.program_id(axis=0)
     pid_n = gl.program_id(axis=1)
-    off_m = pid_m * BLOCK_M
+    off_m = pid_m * (2 * BLOCK_M)
     off_n = pid_n * BLOCK_N
 
-    # Pipelining scheme:
-    # num_stages = 1:                     load0, mma0, wait0
-    # num_stages = 2:        load0, mma0, load1, mma1, wait0, wait1
-    # num_stages = 3: load0, load1, mma0, load2, mma1, wait0, mma2, wait1, wait2
+    # u := upper tile, v := lower tile
+    u_bufs = gl.allocate_shared_memory(dtype, [2] + a_desc.block_type.shape, a_desc.layout)
+    v_bufs = gl.allocate_shared_memory(dtype, [2] + a_desc.block_type.shape, a_desc.layout)
+    b_bufs = gl.allocate_shared_memory(dtype, [2] + b_desc.block_type.shape, b_desc.layout)
 
-    a_bufs = gl.allocate_shared_memory(dtype, [num_stages] + a_desc.block_type.shape, a_desc.layout)
-    b_bufs = gl.allocate_shared_memory(dtype, [num_stages] + b_desc.block_type.shape, b_desc.layout)
-    tma_bars = gl.allocate_shared_memory(gl.int64, [num_stages, 1], mbarrier.MBarrierLayout())
-    for i in gl.static_range(num_stages):
-        mbarrier.init(tma_bars.index(i), count=1)
-    tma_producer_i = 0
-    tma_consumer_i = 0
-
-    mma_bars = gl.allocate_shared_memory(gl.int64, [num_stages, 1], mbarrier.MBarrierLayout())
-    for i in gl.static_range(num_stages):
-        mbarrier.init(mma_bars.index(i), count=1)
-    mma_producer_i = 0
-    mma_consumer_i = 0
-
+    # Use two accumulators!
     tmem_layout: gl.constexpr = TensorMemoryLayout([BLOCK_M, BLOCK_N], unpacked=True)
-    acc_tmem = allocate_tensor_memory(gl.float32, [BLOCK_M, BLOCK_N], tmem_layout)
-    use_acc = False
+    ub_tmem = allocate_tensor_memory(gl.float32, [BLOCK_M, BLOCK_N], tmem_layout)
+    vb_tmem = allocate_tensor_memory(gl.float32, [BLOCK_M, BLOCK_N], tmem_layout)
 
-    clamp: gl.constexpr = num_stages - 2 if num_stages > 2 else 0
-    for _ in gl.static_range(0, clamp):
-        tma_producer_index = tma_producer_i % num_stages
-        k = tma_producer_i * BLOCK_K
-        tma_producer_i += 1
-        tma_bar = tma_bars.index(tma_producer_index)
-        mbarrier.expect(tma_bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes)
-        tma.async_copy_global_to_shared(a_desc, [off_m, k], tma_bar, a_bufs.index(tma_producer_index))
-        tma.async_copy_global_to_shared(b_desc, [k, off_n], tma_bar, b_bufs.index(tma_producer_index))
+    # The schedule the kernel uses is:
+    #
+    #     U1, B1, V1,
+    #     U2, B2, V2,
+    #     UB1, U3, VB1, B3, V3, ..., UB(N-2), UN, VB(N-2), BN, VN
+    #     UB(N-1), VB(N-1)
+    #     UBN, VBN,
+    #     UB epilogue, VB epilogue
+    #
+    # This yields a 3:2 ratio of loads to MMAs. We can use the mbarrier to track
+    # U and B loads.
+    mma_ub_bars = gl.allocate_shared_memory(gl.int64, [2, 1], mbarrier.MBarrierLayout())
+    mma_vb_bars = gl.allocate_shared_memory(gl.int64, [2, 1], mbarrier.MBarrierLayout())
+    load_ub_bars = gl.allocate_shared_memory(gl.int64, [2, 1], mbarrier.MBarrierLayout())
+    load_v_bars = gl.allocate_shared_memory(gl.int64, [2, 1], mbarrier.MBarrierLayout())
+    for i in gl.static_range(2):
+        mbarrier.init(mma_ub_bars.index(i), count=1)
+        mbarrier.init(mma_vb_bars.index(i), count=1)
+        mbarrier.init(load_ub_bars.index(i), count=1)
+        mbarrier.init(load_v_bars.index(i), count=1)
 
-    for _ in gl.static_range(clamp, num_stages - 1):
-        tma_producer_index = tma_producer_i % num_stages
-        k = tma_producer_i * BLOCK_K
-        tma_producer_i += 1
-        tma_bar = tma_bars.index(tma_producer_index)
-        mbarrier.expect(tma_bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes)
-        tma.async_copy_global_to_shared(a_desc, [off_m, k], tma_bar, a_bufs.index(tma_producer_index))
-        tma.async_copy_global_to_shared(b_desc, [k, off_n], tma_bar, b_bufs.index(tma_producer_index))
+    load_counter = 0
+    mma_counter = 0
+    k = 0
+    ub_acc = False
+    vb_acc = False
 
-        tma_consumer_index = tma_consumer_i % num_stages
-        tma_consumer_phase = tma_consumer_i // num_stages & 1
-        tma_consumer_i += 1
-        mbarrier.wait(tma_bars.index(tma_consumer_index), phase=tma_consumer_phase)
-        tcgen05_mma(a_bufs.index(tma_consumer_index), b_bufs.index(tma_consumer_index), acc_tmem, use_acc=use_acc)
-        use_acc = True
-        tcgen05_commit(mma_bars.index(mma_producer_i % num_stages))
-        mma_producer_i += 1
+    # U1, B1
+    load_index, load_phase, load_counter = get_and_increment(load_counter)
+    load_ub_bar = load_ub_bars.index(load_index)
+    mbarrier.expect(load_ub_bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes)
+    tma.async_copy_global_to_shared(a_desc, [off_m, k], load_ub_bar, u_bufs.index(load_index))
+    tma.async_copy_global_to_shared(b_desc, [k, off_n], load_ub_bar, b_bufs.index(load_index))
+    # V1
+    load_v_bar = load_v_bars.index(load_index)
+    mbarrier.expect(load_v_bar, a_desc.block_type.nbytes)
+    tma.async_copy_global_to_shared(a_desc, [off_m + BLOCK_M, k], load_v_bar, v_bufs.index(load_index))
+    k += BLOCK_K
 
-    for _ in range(gl.cdiv(K, BLOCK_K) - max(num_stages - 2, num_stages - 1)):
-        tma_producer_index = tma_producer_i % num_stages
-        k = tma_producer_i * BLOCK_K
-        tma_producer_i += 1
-        tma_bar = tma_bars.index(tma_producer_index)
-        mbarrier.expect(tma_bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes)
-        tma.async_copy_global_to_shared(a_desc, [off_m, k], tma_bar, a_bufs.index(tma_producer_index))
-        tma.async_copy_global_to_shared(b_desc, [k, off_n], tma_bar, b_bufs.index(tma_producer_index))
+    # U2, B2
+    load_index, load_phase, load_counter = get_and_increment(load_counter)
+    load_ub_bar = load_ub_bars.index(load_index)
+    mbarrier.expect(load_ub_bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes)
+    tma.async_copy_global_to_shared(a_desc, [off_m, k], load_ub_bar, u_bufs.index(load_index))
+    tma.async_copy_global_to_shared(b_desc, [k, off_n], load_ub_bar, b_bufs.index(load_index))
+    # V2
+    load_v_bar = load_v_bars.index(load_index)
+    mbarrier.expect(load_v_bar, a_desc.block_type.nbytes)
+    tma.async_copy_global_to_shared(a_desc, [off_m + BLOCK_M, k], load_v_bar, v_bufs.index(load_index))
+    k += BLOCK_K
 
-        tma_consumer_index = tma_consumer_i % num_stages
-        tma_consumer_phase = tma_consumer_i // num_stages & 1
-        tma_consumer_i += 1
-        mbarrier.wait(tma_bars.index(tma_consumer_index), phase=tma_consumer_phase)
-        tcgen05_mma(a_bufs.index(tma_consumer_index), b_bufs.index(tma_consumer_index), acc_tmem, use_acc=use_acc)
-        use_acc = True
-        tcgen05_commit(mma_bars.index(mma_producer_i % num_stages))
-        mma_producer_i += 1
+    for _ in range(gl.cdiv(K, BLOCK_K) - 2):
+        # wait Ui and Bi, UBi
+        mma_index, mma_phase, mma_counter = get_and_increment(mma_counter)
+        mbarrier.wait(load_ub_bars.index(mma_index), mma_phase)
+        tcgen05_mma(u_bufs.index(mma_index), b_bufs.index(mma_index), ub_tmem, use_acc=ub_acc)
+        tcgen05_commit(mma_ub_bars.index(mma_index))
+        ub_acc = True
+        # wait Vi, VBi
+        mbarrier.wait(load_v_bars.index(mma_index), mma_phase)
+        tcgen05_mma(v_bufs.index(mma_index), b_bufs.index(mma_index), vb_tmem, use_acc=vb_acc)
+        tcgen05_commit(mma_vb_bars.index(mma_index))
+        vb_acc = True
 
-        mbarrier.wait(mma_bars.index(mma_consumer_i % num_stages), phase=mma_consumer_i // num_stages & 1)
-        mma_consumer_i += 1
+        # wait UBi, U(i+2)
+        load_index, load_phase, load_counter = get_and_increment(load_counter)
+        mbarrier.wait(mma_ub_bars.index(mma_index), mma_phase)
+        load_ub_bar = load_ub_bars.index(load_index)
+        mbarrier.expect(load_ub_bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes)
+        tma.async_copy_global_to_shared(a_desc, [off_m, k], load_ub_bar, u_bufs.index(load_index))
 
-    for _ in gl.static_range(0, clamp):
-        tma_consumer_index = tma_consumer_i % num_stages
-        tma_consumer_phase = tma_consumer_i // num_stages & 1
-        tma_consumer_i += 1
-        mbarrier.wait(tma_bars.index(tma_consumer_index), phase=tma_consumer_phase)
-        tcgen05_mma(a_bufs.index(tma_consumer_index), b_bufs.index(tma_consumer_index), acc_tmem, use_acc=use_acc)
-        use_acc = True
-        tcgen05_commit(mma_bars.index(mma_producer_i % num_stages))
-        mma_producer_i += 1
-
-        mbarrier.wait(mma_bars.index(mma_consumer_i % num_stages), phase=mma_consumer_i // num_stages & 1)
-        mma_consumer_i += 1
-
-    for _ in gl.static_range(clamp, num_stages - 1):
-        mbarrier.wait(mma_bars.index(mma_consumer_i % num_stages), phase=mma_consumer_i // num_stages & 1)
-        mma_consumer_i += 1
-
-    for i in gl.static_range(num_stages):
-        mbarrier.invalidate(tma_bars.index(i))
-        mbarrier.invalidate(mma_bars.index(i))
+        # wait VBi, B(i+2), V(i+2)
+        mbarrier.wait(mma_vb_bars.index(mma_index), mma_phase)
+        tma.async_copy_global_to_shared(b_desc, [k, off_n], load_ub_bar, b_bufs.index(load_index))
+        load_v_bar = load_v_bars.index(load_index)
+        mbarrier.expect(load_v_bar, a_desc.block_type.nbytes)
+        tma.async_copy_global_to_shared(a_desc, [off_m + BLOCK_M, k], load_v_bar, v_bufs.index(load_index))
+        k += BLOCK_K
 
     acc_reg_layout: gl.constexpr = get_tmem_32x32b_reg_layout(BLOCK_M, BLOCK_N, [BLOCK_M, BLOCK_N], num_warps)
-    acc = acc_tmem.load(acc_reg_layout)
+
+    mma_index, mma_phase, mma_counter = get_and_increment(mma_counter)
+    ub_bar = mma_ub_bars.index(mma_index)
+    vb_bar = mma_vb_bars.index(mma_index)
+    epilogue_phase = mma_phase
+
+    # wait U(N-1) and B(N-1), UB(N-1)
+    mbarrier.wait(load_ub_bars.index(mma_index), mma_phase)
+    tcgen05_mma(u_bufs.index(mma_index), b_bufs.index(mma_index), ub_tmem, use_acc=True)
+    # wait V(N-1), VB(N-1)
+    mbarrier.wait(load_v_bars.index(mma_index), mma_phase)
+    tcgen05_mma(v_bufs.index(mma_index), b_bufs.index(mma_index), vb_tmem, use_acc=True)
+
+    # Wait UN and BN, UBN
+    mma_index, mma_phase, mma_counter = get_and_increment(mma_counter)
+    mbarrier.wait(load_ub_bars.index(mma_index), mma_phase)
+    tcgen05_mma(u_bufs.index(mma_index), b_bufs.index(mma_index), ub_tmem, use_acc=True)
+    tcgen05_commit(ub_bar)
+    # Wait VN and VBN
+    mbarrier.wait(load_v_bars.index(mma_index), mma_phase)
+    tcgen05_mma(v_bufs.index(mma_index), b_bufs.index(mma_index), vb_tmem, use_acc=True)
+    tcgen05_commit(vb_bar)
+
+    # Wait UBN, UB epilogue
+    mbarrier.wait(ub_bar, epilogue_phase)
     c_smem = gl.allocate_shared_memory(dtype, c_desc.block_type.shape, c_desc.layout)
-    c_smem.store(acc.to(dtype))
+    ub = ub_tmem.load(acc_reg_layout)
+    c_smem.store(ub.to(dtype))
     fence_async_shared()
     tma.async_copy_shared_to_global(c_desc, [off_m, off_n], c_smem)
+
+    # Wait VBN, VB epilogue
+    mbarrier.wait(vb_bar, epilogue_phase)
+    vb = vb_tmem.load(acc_reg_layout)
+    tma.store_wait(pendings=0)
+    c_smem.store(vb.to(dtype))
+    fence_async_shared()
+    tma.async_copy_shared_to_global(c_desc, [off_m + BLOCK_M, off_n], c_smem)
     tma.store_wait(pendings=0)
 
 
-def blocked_matmul_pipelined(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, num_stages, num_warps):
+def blocked_matmul_pipelined(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, num_warps):
     M, N = C.shape
 
     a_layout = gl.NVMMASharedLayout.get_default_for([BLOCK_M, BLOCK_K], gl.float16)
@@ -624,35 +614,52 @@ def blocked_matmul_pipelined(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, num_stages, num
     b_desc = TensorDescriptor(B, B.shape, B.stride(), [BLOCK_K, BLOCK_N], b_layout)
     c_desc = TensorDescriptor(C, C.shape, C.stride(), [BLOCK_M, BLOCK_N], c_layout)
 
-    grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
-    blocked_matmul_pipelined_kernel[grid](a_desc, b_desc, c_desc, num_stages, num_warps=num_warps)
+    grid = (triton.cdiv(M, 2 * BLOCK_M), triton.cdiv(N, BLOCK_N))
+    blocked_matmul_pipelined_kernel[grid](a_desc, b_desc, c_desc, num_warps=num_warps)
 
 
 @pytest.mark.parametrize("M, N, K", [(208, 416, 304), (2000, 1000, 2000)])
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(64, 64, 64), (128, 128, 128)])
-@pytest.mark.parametrize("num_stages", [1, 2, 3])
 @pytest.mark.parametrize("num_warps", [4, 8])
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
-def test_blocked_matmul_pipelined(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, num_stages, num_warps):
+def test_blocked_matmul_pipelined(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, num_warps):
 
     A = torch.randn(M, K, device="cuda", dtype=torch.float16)
     B = torch.randn(K, N, device="cuda", dtype=torch.float16)
     C = torch.empty(M, N, device="cuda", dtype=torch.float16)
 
-    blocked_matmul_pipelined(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, num_stages, num_warps)
+    blocked_matmul_pipelined(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, num_warps)
     torch.testing.assert_close(A @ B, C, rtol=1e-3, atol=1e-1)
 
 
 if __name__ == "__main__":
     print("Benchmarking pipelined matmul")
     print("=============================")
-    print("BLOCK_M BLOCK_N BLOCK_K num_stages num_warps time (ms) tflops/s")
-    for BLOCK_MN, BLOCK_K, num_warps, num_stages in configs:
-        fn = lambda: blocked_matmul_pipelined(A, B, C, BLOCK_MN, BLOCK_MN, BLOCK_K, num_stages, num_warps)
-        ms = triton.testing.do_bench(fn, warmup=100, rep=500)
+    print("BLOCK_M BLOCK_N BLOCK_K num_warps time (ms) tflops/s")
+    # Since the kernel was designed with specific hyperparameters in mind, we
+    # will only benchmark those.
+    for BLOCK_M, BLOCK_N, BLOCK_K, num_warps in itertools.product([128], [128], [64, 128], [4, 8]):
+        fn = lambda: blocked_matmul_pipelined(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, num_warps)
+        ms = triton.testing.do_bench(fn, warmup=200, rep=1000)
         flops = 2 * M * N * K
         tflops_per_sec = flops * 1e-12 / (ms * 1e-3)
-        print(
-            f"{BLOCK_MN:>7} {BLOCK_MN:>7} {BLOCK_K:>7} {num_stages:>10} {num_warps:>9} {ms:>9.2f} {tflops_per_sec:>8.2f}"
-        )
+        print(f"{BLOCK_M:>7} {BLOCK_N:>7} {BLOCK_K:>7} {num_warps:>9} {ms:>9.2f} {tflops_per_sec:>8.2f}")
     print()
+
+# %%
+# ```
+# BLOCK_M BLOCK_N BLOCK_K num_warps time (ms) tflops/s
+# 128     128      64         4      2.20  1000.51
+# 128     128      64         8      1.97  1113.49
+# 128     128     128         4      2.21  1040.27
+# 128     128     128         8      2.17  1011.47
+# ```
+#
+# Although we deliver a modest speedup on the same hyperparameters from the
+# non-pipelined kernel, it turns out that BLOCK_K=64 yields much better
+# performance. When BLOCK_K=64 we get 2x occupancy, suggesting that the pipeline
+# schedule can be improved.
+#
+# Interestingly, num_warps=8 matters significantly for BLOCK_K=64, and this is
+# likely due to the longer epilogue. After we introduce warp specialization, we
+# will see that it can be a much more efficient way to finely pipeline a kernel.
