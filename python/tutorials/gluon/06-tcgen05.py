@@ -12,6 +12,7 @@ simple matmul kernel to demonstrate practical uses of the APIs and show an
 example of how to pipeline MMA instructions.
 """
 
+import itertools
 import pytest
 import torch
 import triton
@@ -166,7 +167,19 @@ def small_mma_kernel(a_desc, b_desc, c_desc, d_desc,  #
     tma.async_copy_global_to_shared(a_desc, [0, 0], bar, a_smem)
     tma.async_copy_global_to_shared(b_desc, [0, 0], bar, b_smem)
     tma.async_copy_global_to_shared(c_desc, [0, 0], bar, c_smem)
+
+    # Note that we don't need `fence_async_shared()` even though the TMA load
+    # is through the async proxy and the subsequent load from shared memory is
+    # via the generic proxy. This is because there is a special rule that
+    # waiting on the mbarrier for the competion of the TMA load implicitly
+    # synchronizes the async and generic proxies. This only applies to TMA load
+    # then an mbarrier wait.
     mbarrier.wait(bar, phase=0)
+
+    # Re-using an mbarrier for TMAs and tcgen05_mma can lead to undefined
+    # behaviour. Make sure to use a separate mbarrier or re-initialize it.
+    mbarrier.invalidate(bar)
+    mbarrier.init(bar, count=1)
 
     # The accumulator operand must be provided in TMEM. The LHS operand can be
     # provided in either SMEM or TMEM. The RHS operand must be provided in SMEM.
@@ -223,7 +236,7 @@ def small_mma_kernel(a_desc, b_desc, c_desc, d_desc,  #
         tcgen05_mma(a, b_smem, acc_tmem, mbarriers=[bar], mbarrier_preds=[True])
 
     # Wait for the completion of the MMA.
-    mbarrier.wait(bar, phase=1)
+    mbarrier.wait(bar, phase=0)
     mbarrier.invalidate(bar)
 
     # Another important flag to consider is `use_acc`. When `use_acc=False`, the
@@ -253,7 +266,7 @@ def small_mma(A, B, C, D, LHS_IN_TMEM, USE_COMMIT, num_warps):
         LHS_IN_TMEM, USE_COMMIT, num_warps=num_warps)
 
 
-@pytest.mark.parametrize("M, N, K", [(128, 128, 128), (64, 128, 128)])
+@pytest.mark.parametrize("M, N, K", [(128, 128, 128), (64, 128, 128), (64, 256, 128)])
 @pytest.mark.parametrize("LHS_IN_TMEM", [False, True])
 @pytest.mark.parametrize("USE_COMMIT", [False, True])
 @pytest.mark.parametrize("num_warps", [4, 8])
@@ -266,3 +279,132 @@ def test_small_mma(M, N, K, LHS_IN_TMEM, USE_COMMIT, num_warps):
     D = torch.empty_like(C)
     small_mma(A, B, C, D, LHS_IN_TMEM, USE_COMMIT, num_warps)
     torch.testing.assert_close(A @ B + C, D, atol=1e-3, rtol=1e-1)
+
+
+# %%
+# Let's use tcgen05_mma to build a simple blocked matmul kernel. Each program
+# will process one block of the accumulator.
+
+
+@gluon.jit
+def blocked_matmul_kernel(a_desc, b_desc, c_desc,  #
+                          TRANSPOSE_B: gl.constexpr, num_warps: gl.constexpr):
+    BLOCK_M: gl.constexpr = c_desc.block_type.shape[0]
+    BLOCK_N: gl.constexpr = c_desc.block_type.shape[1]
+    BLOCK_K: gl.constexpr = a_desc.block_type.shape[1]
+    K = a_desc.shape[1]
+
+    a_smem = gl.allocate_shared_memory(a_desc.dtype, a_desc.block_type.shape, a_desc.layout)
+    b_smem = gl.allocate_shared_memory(b_desc.dtype, b_desc.block_type.shape, b_desc.layout)
+
+    # The block of C this program is processing is (pid_m, pid_n).
+    pid_m = gl.program_id(axis=0)
+    pid_n = gl.program_id(axis=1)
+    off_m = pid_m * BLOCK_M
+    off_n = pid_n * BLOCK_N
+
+    # Determine the TMEM layout.
+    tmem_layout: gl.constexpr = TensorMemoryLayout([BLOCK_M, BLOCK_N], unpacked=True)
+    acc_tmem = allocate_tensor_memory(c_desc.dtype, [BLOCK_M, BLOCK_N], tmem_layout)
+
+    tma_bar = gl.allocate_shared_memory(gl.int64, [1], mbarrier.MBarrierLayout())
+    mma_bar = gl.allocate_shared_memory(gl.int64, [1], mbarrier.MBarrierLayout())
+    mbarrier.init(tma_bar, count=1)
+    mbarrier.init(mma_bar, count=1)
+    phase = 0
+
+    # We can zero-initialize the accumulator by setting `use_acc=False` on the
+    # first iteration.
+    use_acc = False
+    for k in range(0, K, BLOCK_K):
+        # Load tiles of A and B.
+        mbarrier.expect(tma_bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes)
+        tma.async_copy_global_to_shared(a_desc, [off_m, k], tma_bar, a_smem)
+        if TRANSPOSE_B:
+            tma.async_copy_global_to_shared(b_desc, [off_n, k], tma_bar, b_smem)
+        else:
+            tma.async_copy_global_to_shared(b_desc, [k, off_n], tma_bar, b_smem)
+        mbarrier.wait(tma_bar, phase=phase)
+
+        # We can transpose B by creating a transposed view over tile of B in
+        # shared memory. This forwards the transposition to tcgen05_mma, which
+        # handles it for us.
+        if TRANSPOSE_B:
+            b = b_smem.permute((1, 0))
+        else:
+            b = b_smem
+
+        # Issue and wait on the tcgen05_mma. Re-use the mbarrier.
+        tcgen05_mma(a_smem, b, acc_tmem, use_acc=use_acc, mbarriers=[mma_bar])
+        use_acc = True
+        mbarrier.wait(mma_bar, phase=phase)
+
+        phase ^= 1  # toggle the parity phase between 0 and 1
+
+    mbarrier.invalidate(tma_bar)
+    mbarrier.invalidate(mma_bar)
+
+    acc_reg_layout: gl.constexpr = get_tmem_32x32b_reg_layout(BLOCK_M, BLOCK_N, [BLOCK_M, BLOCK_N], num_warps)
+    acc = acc_tmem.load(acc_reg_layout)
+
+    # Store tile of C.
+    c_smem = gl.allocate_shared_memory(c_desc.dtype, c_desc.block_type.shape, c_desc.layout)
+    c_smem.store(acc)
+    fence_async_shared()
+    tma.async_copy_shared_to_global(c_desc, [off_m, off_n], c_smem)
+    tma.store_wait(pendings=0)
+
+
+def blocked_matmul(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B, num_warps):
+    M, N = C.shape
+
+    a_layout = gl.NVMMASharedLayout.get_default_for([BLOCK_M, BLOCK_K], gl.float16)
+    a_desc = TensorDescriptor(A, A.shape, A.stride(), [BLOCK_M, BLOCK_K], a_layout)
+
+    B_BLOCK_SHAPE = [BLOCK_N, BLOCK_K] if TRANSPOSE_B else [BLOCK_K, BLOCK_N]
+    b_layout = gl.NVMMASharedLayout.get_default_for(B_BLOCK_SHAPE, gl.float16)
+    b_desc = TensorDescriptor(B, B.shape, B.stride(), B_BLOCK_SHAPE, b_layout)
+
+    c_layout = gl.NVMMASharedLayout.get_default_for([BLOCK_M, BLOCK_N], gl.float32)
+    c_desc = TensorDescriptor(C, C.shape, C.stride(), [BLOCK_M, BLOCK_N], c_layout)
+
+    grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
+    blocked_matmul_kernel[grid](a_desc, b_desc, c_desc, TRANSPOSE_B, num_warps=num_warps)
+
+
+@pytest.mark.parametrize("M, N, K", [(208, 416, 304), (2000, 1000, 2000)])
+@pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(64, 64, 64), (128, 128, 128)])
+@pytest.mark.parametrize("TRANSPOSE_B", [False, True])
+@pytest.mark.parametrize("num_warps", [4, 8])
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+def test_blocked_matmul(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B, num_warps):
+    A = torch.randn(M, K, device="cuda", dtype=torch.float16)
+    B = torch.randn((N, K) if TRANSPOSE_B else (K, N), device="cuda", dtype=torch.float16)
+    C = torch.empty(M, N, device="cuda", dtype=torch.float32)
+
+    blocked_matmul(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B, num_warps)
+
+    C_ref = A @ (B.T if TRANSPOSE_B else B)
+    torch.testing.assert_close(C_ref.to(torch.float32), C, rtol=1e-3, atol=1e-1)
+
+
+# %%
+# Let's benchmark our blocked matmul kernel. See the previous tutorial
+# 05-wgmma.py for more information on hyperparameter selection.
+
+if __name__ == "__main__":
+    print("Benchmarking selected configs")
+    print("=============================")
+    M, N, K = 8192, 8192, 16 * 1024
+    A = torch.randn(M, K, device="cuda", dtype=torch.float16)
+    B = torch.randn(K, N, device="cuda", dtype=torch.float16)
+    C = torch.empty(M, N, device="cuda", dtype=torch.float32)
+
+    print("BLOCK_M BLOCK_N BLOCK_K num_warps time (ms) tflops/s")
+    for BLOCK_M, BLOCK_N, BLOCK_K, num_warps in itertools.product([64, 128], [64, 128, 256], [64, 128, 256], [4, 8]):
+        fn = lambda: blocked_matmul(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, False, num_warps)
+        ms = triton.testing.do_bench(fn)
+        flops = 2 * M * N * K
+        tflops_per_sec = flops * 1e-12 / (ms * 1e-3)
+        print(f"{BLOCK_M:>7} {BLOCK_N:>7} {BLOCK_K:>7} {num_warps:>9} {ms:>9.2f} {tflops_per_sec:>8.2f}")
+    print()

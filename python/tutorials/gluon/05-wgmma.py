@@ -480,10 +480,6 @@ if __name__ == "__main__":
 # the next set of buffers while WGMMA reads from the previous.
 
 
-@gl.constexpr_function
-def int_log2(x):
-    return x.bit_length() - 1
-
 
 @gluon.jit
 def blocked_matmul_pipelined_kernel(a_desc, b_desc, c_desc, num_warps: gl.constexpr):
