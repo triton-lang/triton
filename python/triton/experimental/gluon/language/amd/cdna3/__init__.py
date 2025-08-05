@@ -94,7 +94,7 @@ def buffer_store(stored_value, ptr, offsets, mask, cache=None, _semantic: GluonS
     AMD buffer store a tensor directly to global memory via a scalar base pointer and a tensor of
     offsets instead of a tensor of pointers.
     Args:
-        stored_value (shared_memory_descriptor): The tensor to be stored to global memory.
+        stored_value (tensor to be stored): The tensor to be stored to global memory.
         ptr (pointer to scalar): Global memory scalar base pointer to store to.
         offsets (tensor): Offsets tensor for the store operation.
         mask (tensor, optional): Mask tensor for predicated store. Defaults to None.
