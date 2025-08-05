@@ -261,17 +261,23 @@ def routing_torch(x, logits, n_expts_act, sm_first=False, expt_indx=None, n_rows
 
 
 @triton.jit
-def pack_bitmatrix(bitmatrix, expt_indx, n_rows, n_cols, BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_K: tl.constexpr,
-                   sentinel: tl.constexpr):
+def pack_bitmatrix(
+    bitmatrix,
+    expt_indx,
+    n_rows,
+    n_cols,
+    n_expts_act,
+    BLOCK_SIZE_M: tl.constexpr,
+    BLOCK_SIZE_K: tl.constexpr,
+    sentinel: tl.constexpr,
+):
     """
     Packs expt_indx into a bitmatrix.
     """
     pid_m = tl.program_id(0)
-    pid_n = tl.program_id(1)
     offsets_m = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
-    offsets_n = pid_n * BLOCK_SIZE_K + tl.arange(0, BLOCK_SIZE_K)
-    offsets = offsets_m[:, None] * n_cols + offsets_n[None, :]
-    mask = (offsets_m < n_rows)[:, None] & (offsets_n < n_cols)[None, :]
+    offsets = offsets_m[:, None] * n_expts_act
+    mask = (offsets_m < n_rows)[:, None]
     indices = tl.load(expt_indx + offsets, mask=mask, other=sentinel)
     div = indices // 32
     rem = indices % 32
@@ -280,7 +286,7 @@ def pack_bitmatrix(bitmatrix, expt_indx, n_rows, n_cols, BLOCK_SIZE_M: tl.conste
         offs = tl.arange(0, BLOCK_SIZE_K // 32) + i * (BLOCK_SIZE_K // 32)
         x = tl.where(div[:, :, None] == offs[None, None, :], (1 << rem)[:, :, None], 0)
         y = tl.reduce_or(x, axis=1)
-        bitmatrix_ptrs = bitmatrix + offsets_m[:, None] * iters + offs[None, :]
+        bitmatrix_ptrs = bitmatrix + offsets_m[:, None] * n_cols + offs[None, :]
         tl.store(bitmatrix_ptrs, y, mask=offsets_m[:, None] < n_rows)
 
 
@@ -303,18 +309,19 @@ def routing_triton(x, logits, n_expts_act, sm_first=False, expt_indx=None, n_row
     expt_indx -= ep_rank * chunk_size
 
     # Recover bitmatrix for local experts
-    n_cols = triton.cdiv(chunk_size, 32)
+    BLOCK_SIZE_M = 512
+    BLOCK_SIZE_K = 32
+    n_cols = triton.cdiv(chunk_size, BLOCK_SIZE_K)
     n_rows = expt_indx.size(0)
     bitmatrix = torch.zeros((n_rows, n_cols), dtype=torch.uint32, device=expt_indx.device)
-    BLOCK_SIZE_M = 128
-    BLOCK_SIZE_K = max(triton.next_power_of_2(n_cols), 32)
-    grid = (triton.cdiv(n_rows, BLOCK_SIZE_M), triton.cdiv(n_cols, BLOCK_SIZE_K))
+    grid = triton.cdiv(n_rows, BLOCK_SIZE_M)
 
     pack_bitmatrix[grid](
         bitmatrix,
         expt_indx,
         n_rows,
         n_cols,
+        n_expts_act,
         BLOCK_SIZE_M=BLOCK_SIZE_M,
         BLOCK_SIZE_K=BLOCK_SIZE_K,
         sentinel=chunk_size,
@@ -472,19 +479,19 @@ def test_all_to_all(monkeypatch):
 
 def test_pack_bitmatrix():
     # Test parameters
-    n_rows, n_cols = 4, 3
+    n_rows, n_expts_act = 4, 3
     sentinel = 63  # We have experts 0-62, and 63 is a dummy value
 
     expt_indx = torch.tensor([[0, 33, 63], [31, 32, 33], [5, 10, 15], [0, 62, 63]], dtype=torch.int32, device="cuda")
-    bitmatrix_cols = triton.cdiv(sentinel, 32)
-    bitmatrix = torch.zeros((n_rows, bitmatrix_cols), dtype=torch.uint32, device="cuda")
+    n_cols = triton.cdiv(sentinel, 32)
+    bitmatrix = torch.zeros((n_rows, n_cols), dtype=torch.uint32, device="cuda")
 
     BLOCK_SIZE_M = 128
-    BLOCK_SIZE_K = max(triton.next_power_of_2(n_cols), 32)
-    grid = (triton.cdiv(n_rows, BLOCK_SIZE_M), triton.cdiv(bitmatrix_cols, BLOCK_SIZE_K))
+    BLOCK_SIZE_K = 32
+    grid = triton.cdiv(n_rows, BLOCK_SIZE_M)
 
-    pack_bitmatrix[grid](bitmatrix, expt_indx, n_rows, n_cols, BLOCK_SIZE_M=BLOCK_SIZE_M, BLOCK_SIZE_K=BLOCK_SIZE_K,
-                         sentinel=sentinel)
+    pack_bitmatrix[grid](bitmatrix, expt_indx, n_rows, n_cols, n_expts_act, BLOCK_SIZE_M=BLOCK_SIZE_M,
+                         BLOCK_SIZE_K=BLOCK_SIZE_K, sentinel=sentinel)
     # prune the bitmatrix to remove dummy values
     _routing_clear_bitmatrix[(n_rows, )](
         bitmatrix,
