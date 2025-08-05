@@ -1129,6 +1129,28 @@ LinearLayout LinearLayout::pseudoinvert() const {
   return identity.invertAndCompose(*this);
 }
 
+LinearLayout LinearLayout::unsqueezeIn(StringAttr dim) const {
+  assert(getInDimSize(dim) == 1);
+  SmallVector<std::pair<StringAttr, int32_t>> newInDims;
+  for (auto inDim : getInDimNames()) {
+    if (inDim != dim) {
+      newInDims.push_back({inDim, getInDimSize(inDim)});
+    }
+  }
+  return reshapeIns(newInDims);
+}
+
+LinearLayout LinearLayout::unsqueezeOut(StringAttr dim) const {
+  assert(getOutDimSize(dim) == 1);
+  SmallVector<std::pair<StringAttr, int32_t>> newOutDims;
+  for (auto [outDim, outDimSize] : getOutDims()) {
+    if (outDim != dim) {
+      newOutDims.push_back({outDim, outDimSize});
+    }
+  }
+  return LinearLayout(bases, newOutDims, isSurjective());
+}
+
 llvm::MapVector<StringAttr, int32_t>
 LinearLayout::getFreeVariableMasks() const {
   std::unique_ptr<uint64_t[]> mat = getMatrix(*this);

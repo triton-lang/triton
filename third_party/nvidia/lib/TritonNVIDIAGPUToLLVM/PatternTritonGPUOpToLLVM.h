@@ -78,7 +78,8 @@ void populateTCGen5MMAOpToLLVMPattern(LLVMTypeConverter &typeConverter,
 
 void populateTensorMemoryOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                          RewritePatternSet &patterns,
-                                         PatternBenefit benefit);
+                                         PatternBenefit benefit,
+                                         TargetInfo &target);
 
 void populateTensorMemorySubviewOpToLLVMPattern(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
