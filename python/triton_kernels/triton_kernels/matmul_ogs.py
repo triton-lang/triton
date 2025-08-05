@@ -147,8 +147,6 @@ def init_preprocessing_features(w, gather_indx, precision_config, opt_flags):
     return PreprocessingFeatures(swap_xw, unfuse_gather)
 
 def apply_preprocessing_features(x, w, gather_indx, scatter_indx, routing_data, opt_flags, preprocessing_features):
-    # preprocess routing information and ptr lookup table
-    M = x.shape[1] if gather_indx is None else gather_indx.src_indx.shape[0]
     # fused scatter scratchpad
     has_fused_scatter_scratchpad = opt_flags.fused_scatter and routing_data.n_expts_act > 1
     if has_fused_scatter_scratchpad:
@@ -175,6 +173,7 @@ def apply_preprocessing_features(x, w, gather_indx, scatter_indx, routing_data, 
         writeback_idxs, writeback_size, finalize_scatter_idxs = None, None, None
     # preprocess gather if cannot be fused
     if preprocessing_features.unfuse_gather:
+        M = gather_indx.src_indx.shape[0]
         x_gather = torch.empty((M, x.shape[1]), dtype=x.dtype, device=x.device)
         GATHER_BLOCK_M = 128
         GATHER_BLOCK_N = 128
@@ -185,8 +184,11 @@ def apply_preprocessing_features(x, w, gather_indx, scatter_indx, routing_data, 
             gather_indx.src_indx,
             BLOCK_M=GATHER_BLOCK_M,
             BLOCK_N=GATHER_BLOCK_N,
+            INDX_DIV=routing_data.n_expts_act,
             num_warps=8)
         x = wrap_torch_tensor(x_gather)
+    # preprocess routing information and ptr lookup table
+    M = x.shape[1] if gather_indx is None else gather_indx.src_indx.shape[0]
     return x, w, writeback_idxs, writeback_size, finalize_scatter_idxs
 
 
@@ -527,9 +529,9 @@ def matmul_ogs(x, w, bias,
     has_gather_tma = has_gather and target_info.has_tma_gather()
     has_scatter_tma = has_scatter and target_info.has_tma_gather()
     y = wrap_torch_tensor(out0.view(-1, out0.shape[-1]) if has_scatter else out0)
-    x_storage = _canonicalize_storage(x.storage, 2 if has_gather else 3, flex.lhs_data)
+    x_storage = _canonicalize_storage(x.storage, 2 if has_gather_tma else 3, flex.lhs_data)
     w_storage = _canonicalize_storage(w.storage, 3, flex.rhs_data)
-    y_storage = _canonicalize_storage(y.storage, 2 if has_scatter else 4, flex.out_data)
+    y_storage = _canonicalize_storage(y.storage, 2 if has_scatter_tma else 4, flex.out_data)
     # create tma descriptor for x
     x_tma_mode = "gather" if has_gather_tma else "ragged_load" if is_ragged and x_storage.can_use_ragged_tma("load") else "dense"
     x_tma_block_size = {

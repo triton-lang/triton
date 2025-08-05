@@ -4,7 +4,7 @@ import triton.language as tl
 
 @triton.jit
 def _gather_indx(X, shape_xm, shape_xn, stride_xm, stride_xn, Y, shape_ym, shape_yn, stride_ym, stride_yn, SrcIndx,
-                 BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr):
+                 BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, INDX_DIV: tl.constexpr):
     # 2D program ids
     pid_m = tl.program_id(0)
     pid_n = tl.program_id(1)
@@ -16,13 +16,13 @@ def _gather_indx(X, shape_xm, shape_xn, stride_xm, stride_xn, Y, shape_ym, shape
     mask_cols = off_n < shape_xn
     # Load source indices for the block of rows (one per output row)
     # SrcIndx is assumed 1D with length == shape_ym
-    srcs = tl.load(SrcIndx + off_m, mask=mask_rows, other=-1)
+    srcs = tl.load(SrcIndx + off_m, mask=mask_rows, other=-INDX_DIV) // INDX_DIV
     # Validate src indices (they must be within [0, shape_xm))
     srcs_valid = mask_rows & (srcs >= 0) & (srcs < shape_xm)
     x_offs = srcs[:, None] * stride_xm + off_n[None, :] * stride_xn
     y_offs = off_m[:, None] * stride_ym + off_n[None, :] * stride_yn
     # load
     load_mask = srcs_valid[:, None] & mask_cols[None, :]
-    vals = tl.load(X + x_offs, mask=load_mask, other=0.0)
+    vals = tl.load(X + x_offs, mask=load_mask)
     # store
     tl.store(Y + y_offs, vals, mask=load_mask)
