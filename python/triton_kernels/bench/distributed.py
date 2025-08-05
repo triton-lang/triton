@@ -314,7 +314,7 @@ def routing_triton(x, logits, n_expts_act, sm_first=False, expt_indx=None, n_row
     n_cols = triton.cdiv(chunk_size, BLOCK_SIZE_K)
     n_rows = expt_indx.size(0)
     bitmatrix = torch.zeros((n_rows, n_cols), dtype=torch.uint32, device=expt_indx.device)
-    grid = triton.cdiv(n_rows, BLOCK_SIZE_M)
+    grid = (triton.cdiv(n_rows, BLOCK_SIZE_M), )
 
     pack_bitmatrix[grid](
         bitmatrix,
@@ -488,7 +488,7 @@ def test_pack_bitmatrix():
 
     BLOCK_SIZE_M = 128
     BLOCK_SIZE_K = 32
-    grid = triton.cdiv(n_rows, BLOCK_SIZE_M)
+    grid = (triton.cdiv(n_rows, BLOCK_SIZE_M), )
 
     pack_bitmatrix[grid](bitmatrix, expt_indx, n_rows, n_cols, n_expts_act, BLOCK_SIZE_M=BLOCK_SIZE_M,
                          BLOCK_SIZE_K=BLOCK_SIZE_K, sentinel=sentinel)
