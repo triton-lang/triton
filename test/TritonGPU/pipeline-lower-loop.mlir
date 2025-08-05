@@ -38,7 +38,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
 // CHECK:   %[[EXT_NEXT:.*]] = arith.select %[[EXT_CMP]], %[[ZERO]], %[[EXT_P1]] {loop.cluster = 0 : i32, loop.stage = 2 : i32}  : i32
 // CHECK:   %[[A_INS:.*]] = ttg.memdesc_index %[[A]], %[[INS_NEXT]] {loop.cluster = 2 : i32, loop.stage = 0 : i32}
 // CHECK:   %[[A_TOK:.*]] = ttg.async_copy_global_to_local %{{.*}}, %[[A_INS]] {loop.cluster = 2 : i32, loop.stage = 0 : i32}
-// CHECK:   %[[A_TOK2:.*]] = ttg.async_commit_group %[[A_TOK]] {loop.cluster = 2 : i32, loop.stage = 0 : i32}
+// CHECK:   %[[A_TOK2:.*]] = ttg.async_commit_group tokens %[[A_TOK]] {loop.cluster = 2 : i32, loop.stage = 0 : i32}
 // CHECK:   %[[A_TOK3:.*]] = ttg.async_wait %[[A_TOK2]] {loop.cluster = 0 : i32, loop.stage = 2 : i32, num = 0 : i32}
 // CHECK:   %[[A_EXT:.*]] = ttg.memdesc_index %[[A]], %[[EXT_NEXT]] {loop.cluster = 0 : i32, loop.stage = 2 : i32}
 // CHECK:   %[[A_VAL:.*]] = ttg.local_load %[[A_EXT]] token %[[A_TOK3]] {loop.cluster = 0 : i32, loop.stage = 2 : i32}
@@ -138,7 +138,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
 // CHECK-DAG: %[[A:.*]] = ttg.local_alloc : () -> !ttg.memdesc<2x128x32
 // CHECK: scf.for
 // CHECK:   %[[A_TOK:.*]] = ttg.async_copy_global_to_local %{{.*}} {loop.cluster = 2 : i32, loop.stage = 0 : i32}
-// CHECK:   %[[A_TOK2:.*]] = ttg.async_commit_group %[[A_TOK]] {loop.cluster = 2 : i32, loop.stage = 0 : i32}
+// CHECK:   %[[A_TOK2:.*]] = ttg.async_commit_group tokens %[[A_TOK]] {loop.cluster = 2 : i32, loop.stage = 0 : i32}
 // CHECK:   %[[A_TOK3:.*]] = ttg.async_wait %[[A_TOK2]] {loop.cluster = 0 : i32, loop.stage = 2 : i32, num = 0 : i32}
 // CHECK:   ttg.local_load {{.*}} token %[[A_TOK3]] {loop.cluster = 0 : i32, loop.stage = 2 : i32}
 // CHECK:   "use"{{.*}} {loop.cluster = 0 : i32, loop.stage = 3 : i32}
@@ -217,7 +217,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
 // CHECK:   %[[EXT_NEXT:.*]] = arith.select %[[EXT_CMP]], %[[ZERO]], %[[EXT_P1]] {loop.cluster = 0 : i32, loop.stage = 2 : i32}  : i32
 // CHECK:   %[[A_INS:.*]] = ttg.memdesc_index %[[A]], %[[INS_NEXT]] {loop.cluster = 2 : i32, loop.stage = 0 : i32}
 // CHECK:   %[[A_TOK:.*]] = ttg.async_copy_global_to_local %{{.*}}, %[[A_INS]] {loop.cluster = 2 : i32, loop.stage = 0 : i32}
-// CHECK:   %[[A_TOK2:.*]] = ttg.async_commit_group %[[A_TOK]] {loop.cluster = 2 : i32, loop.stage = 0 : i32}
+// CHECK:   %[[A_TOK2:.*]] = ttg.async_commit_group tokens %[[A_TOK]] {loop.cluster = 2 : i32, loop.stage = 0 : i32}
 // CHECK:   %[[A_TOK3:.*]] = ttg.async_wait %[[A_TOK2]] {loop.cluster = 0 : i32, loop.stage = 2 : i32, num = 0 : i32}
 // CHECK:   %[[A_EXT:.*]] = ttg.memdesc_index %[[A]], %[[EXT_NEXT]] {loop.cluster = 0 : i32, loop.stage = 2 : i32}
 // CHECK:   %[[A_VAL:.*]] = ttg.local_load %[[A_EXT]] {loop.cluster = 0 : i32, loop.stage = 2 : i32} : !ttg.memdesc<128x32xf16, #[[SHARED]], #
@@ -332,14 +332,14 @@ tt.func @dependent_loads(%lb : index, %ub : index, %step : index,
   // CHECK: %[[EXT_NEXT:.*]] = arith.select %[[EXT_CMP]], %[[ZERO]], %[[EXT_P1]] {loop.cluster = 2 : i32, loop.stage = 2 : i32}
   // CHECK: %[[A_INS:.*]] = ttg.memdesc_index %[[A]], %[[INS_NEXT]] {loop.cluster = 4 : i32, loop.stage = 0 : i32}
   // CHECK: %[[A_TOK:.*]] = ttg.async_copy_global_to_local %{{.*}}, %[[A_INS]] {loop.cluster = 4 : i32, loop.stage = 0 : i32}
-  // CHECK: %[[A_TOK2:.*]] = ttg.async_commit_group %[[A_TOK]] {loop.cluster = 4 : i32, loop.stage = 0 : i32}
+  // CHECK: %[[A_TOK2:.*]] = ttg.async_commit_group tokens %[[A_TOK]] {loop.cluster = 4 : i32, loop.stage = 0 : i32}
   // CHECK: %[[A_TOK3:.*]] = ttg.async_wait %[[A_TOK2]] {loop.cluster = 2 : i32, loop.stage = 2 : i32, num = 0 : i32}
   // CHECK: %[[A_EXT:.*]] = ttg.memdesc_index %[[A]], %[[EXT_NEXT]] {loop.cluster = 2 : i32, loop.stage = 2 : i32}
   // CHECK: %[[A_VAL:.*]] = ttg.local_load %[[A_EXT]] token %[[A_TOK3]] {loop.cluster = 2 : i32, loop.stage = 2 : i32}
   // CHECK: %[[B:.*]] = "pointerize"(%[[A_VAL]]) {loop.cluster = 2 : i32, loop.stage = 2 : i32}
   // CHECK: %[[C_INS:.*]] = ttg.memdesc_index %[[C]], %[[INS_NEXT]] {loop.cluster = 2 : i32, loop.stage = 2 : i32}
   // CHECK: %[[C_TOK:.*]] = ttg.async_copy_global_to_local %[[B]], %[[C_INS]] {loop.cluster = 2 : i32, loop.stage = 2 : i32}
-  // CHECK: %[[C_TOK2:.*]] = ttg.async_commit_group %[[C_TOK]] {loop.cluster = 2 : i32, loop.stage = 2 : i32}
+  // CHECK: %[[C_TOK2:.*]] = ttg.async_commit_group tokens %[[C_TOK]] {loop.cluster = 2 : i32, loop.stage = 2 : i32}
   // CHECK: %[[C_TOK3:.*]] = ttg.async_wait %[[C_TOK2]] {loop.cluster = 0 : i32, loop.stage = 4 : i32, num = 0 : i32}
   // CHECK: %[[C_EXT:.*]] = ttg.memdesc_index %[[C]], %[[EXT_NEXT]] {loop.cluster = 0 : i32, loop.stage = 4 : i32}
   // CHECK: %[[C_VAL:.*]] = ttg.local_load %[[C_EXT]] token %[[C_TOK3]] {loop.cluster = 0 : i32, loop.stage = 4 : i32}
@@ -389,14 +389,14 @@ tt.func @dependent_loads_asymmetric(%lb : index, %ub : index, %step : index,
   // CHECK-DAG: %[[EXT2_NEXT:.*]] = arith.select %[[EXT2_CMP]], %[[ZERO]], %[[EXT2_P1]] {loop.cluster = 2 : i32, loop.stage = 2 : i32}
   // CHECK: %[[A_INS:.*]] = ttg.memdesc_index %[[A]], %[[INS2_NEXT]] {loop.cluster = 4 : i32, loop.stage = 0 : i32}
   // CHECK: %[[A_TOK:.*]] = ttg.async_copy_global_to_local %{{.*}}, %[[A_INS]] {loop.cluster = 4 : i32, loop.stage = 0 : i32}
-  // CHECK: %[[A_TOK2:.*]] = ttg.async_commit_group %[[A_TOK]] {loop.cluster = 4 : i32, loop.stage = 0 : i32}
+  // CHECK: %[[A_TOK2:.*]] = ttg.async_commit_group tokens %[[A_TOK]] {loop.cluster = 4 : i32, loop.stage = 0 : i32}
   // CHECK: %[[A_TOK3:.*]] = ttg.async_wait %[[A_TOK2]] {loop.cluster = 2 : i32, loop.stage = 2 : i32, num = 0 : i32}
   // CHECK: %[[A_EXT:.*]] = ttg.memdesc_index %[[A]], %[[EXT2_NEXT]] {loop.cluster = 2 : i32, loop.stage = 2 : i32}
   // CHECK: %[[A_VAL:.*]] = ttg.local_load %[[A_EXT]] token %[[A_TOK3]] {loop.cluster = 2 : i32, loop.stage = 2 : i32}
   // CHECK: %[[B:.*]] = "pointerize"(%[[A_VAL]]) {loop.cluster = 2 : i32, loop.stage = 2 : i32}
   // CHECK: %[[C_INS:.*]] = ttg.memdesc_index
   // CHECK: %[[C_TOK:.*]] = ttg.async_copy_global_to_local %[[B]], %[[C_INS]] {loop.cluster = 2 : i32, loop.stage = 2 : i32}
-  // CHECK: %[[C_TOK2:.*]] = ttg.async_commit_group %[[C_TOK]] {loop.cluster = 2 : i32, loop.stage = 2 : i32}
+  // CHECK: %[[C_TOK2:.*]] = ttg.async_commit_group tokens %[[C_TOK]] {loop.cluster = 2 : i32, loop.stage = 2 : i32}
   // CHECK: %[[C_TOK3:.*]] = ttg.async_wait %[[C_TOK2]] {loop.cluster = 0 : i32, loop.stage = 5 : i32, num = 0 : i32}
   // CHECK: %[[C_EXT:.*]] = ttg.memdesc_index %[[C]], %[[EXT3_NEXT]] {loop.cluster = 0 : i32, loop.stage = 5 : i32}
   // CHECK: %[[C_VAL:.*]] = ttg.local_load %[[C_EXT]] token %[[C_TOK3]] {loop.cluster = 0 : i32, loop.stage = 5 : i32}
@@ -457,12 +457,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK:   %[[EXT_NEXT:.*]] = arith.select %[[EXT_CMP]], %[[ZERO]], %[[EXT_P1]] {loop.cluster = 0 : i32, loop.stage = 2 : i32}  : i32
   // CHECK:   %[[A_INS:.*]] = ttg.memdesc_index %[[A]], %[[INS_NEXT]] {loop.cluster = 2 : i32, loop.stage = 0 : i32}
   // CHECK:   %[[A_TOK:.*]] = ttg.async_copy_global_to_local %{{.*}}, %[[A_INS]] {loop.cluster = 2 : i32, loop.stage = 0 : i32}
-  // CHECK:   %[[A_TOK2:.*]] = ttg.async_commit_group %[[A_TOK]] {loop.cluster = 2 : i32, loop.stage = 0 : i32}
+  // CHECK:   %[[A_TOK2:.*]] = ttg.async_commit_group tokens %[[A_TOK]] {loop.cluster = 2 : i32, loop.stage = 0 : i32}
   // CHECK:   %[[A_TOK3:.*]] = ttg.async_wait %[[A_TOK2]] {loop.cluster = 0 : i32, loop.stage = 2 : i32, num = 0 : i32}
   // CHECK:   %[[A_EXT:.*]] = ttg.memdesc_index %[[A]], %[[EXT_NEXT]]{{.*}} {loop.cluster = 0 : i32, loop.stage = 2 : i32}
   // CHECK:   %[[B_INS:.*]] = ttg.memdesc_index %[[B]], %[[INS_NEXT]]{{.*}} {loop.cluster = 2 : i32, loop.stage = 0 : i32}
   // CHECK:   %[[B_TOK:.*]] = ttg.async_copy_global_to_local %{{.*}}, %[[B_INS]] {loop.cluster = 2 : i32, loop.stage = 0 : i32}
-  // CHECK:   %[[B_TOK2:.*]] = ttg.async_commit_group %[[B_TOK]] {loop.cluster = 2 : i32, loop.stage = 0 : i32}
+  // CHECK:   %[[B_TOK2:.*]] = ttg.async_commit_group tokens %[[B_TOK]] {loop.cluster = 2 : i32, loop.stage = 0 : i32}
   // CHECK:   %[[B_TOK3:.*]] = ttg.async_wait %[[B_TOK2]] {loop.cluster = 0 : i32, loop.stage = 2 : i32, num = 0 : i32}
   // CHECK:   %[[B_EXT:.*]] = ttg.memdesc_index %[[B]], %[[EXT_NEXT]]{{.*}} {loop.cluster = 0 : i32, loop.stage = 2 : i32}
   // CHECK:   %[[A_EXT_TRANSP:.*]] = ttg.memdesc_trans %[[A_EXT]] {loop.cluster = 0 : i32, loop.stage = 2 : i32, order = array<i32: 1, 0>}
@@ -517,7 +517,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK:   %[[EXT_NEXT:.*]] = arith.select %[[EXT_CMP]], %[[ZERO]], %[[EXT_P1]] {loop.cluster = 0 : i32, loop.stage = 2 : i32}  : i32
   // CHECK:   %[[A_INS:.*]] = ttg.memdesc_index %[[A]], %[[INS_NEXT]] {loop.cluster = 2 : i32, loop.stage = 0 : i32}
   // CHECK:   %[[A_TOK:.*]] = ttg.async_copy_global_to_local %{{.*}}, %[[A_INS]] {loop.cluster = 2 : i32, loop.stage = 0 : i32}
-  // CHECK:   %[[A_TOK2:.*]] = ttg.async_commit_group %[[A_TOK]] {loop.cluster = 2 : i32, loop.stage = 0 : i32}
+  // CHECK:   %[[A_TOK2:.*]] = ttg.async_commit_group tokens %[[A_TOK]] {loop.cluster = 2 : i32, loop.stage = 0 : i32}
   // CHECK:   %[[A_TOK3:.*]] = ttg.async_wait %[[A_TOK2]] {loop.cluster = 0 : i32, loop.stage = 2 : i32, num = 0 : i32}
   // CHECK:   %[[A_EXT:.*]] = ttg.memdesc_index %[[A]], %[[EXT_NEXT]] {loop.cluster = 0 : i32, loop.stage = 2 : i32}
   // CHECK:   %[[B:.*]] = tt.load {{.*}} {loop.cluster = 2 : i32, loop.stage = 0 : i32}
@@ -571,14 +571,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK:   %[[EXT_NEXT:.*]] = arith.select %[[EXT_CMP]], %[[ZERO]], %[[EXT_P1]] {loop.cluster = 0 : i32, loop.stage = 2 : i32}  : i32
   // CHECK:   %[[A_INS:.*]] = ttg.memdesc_index %[[A]], %[[INS_NEXT]] {loop.cluster = 2 : i32, loop.stage = 0 : i32}
   // CHECK:   %[[A_TOK:.*]] = ttg.async_copy_global_to_local %{{.*}}, %[[A_INS]] {{.*}} {loop.cluster = 2 : i32, loop.stage = 0 : i32}
-  // CHECK:   %[[A_TOK2:.*]] = ttg.async_commit_group %[[A_TOK]] {loop.cluster = 2 : i32, loop.stage = 0 : i32}
+  // CHECK:   %[[A_TOK2:.*]] = ttg.async_commit_group tokens %[[A_TOK]] {loop.cluster = 2 : i32, loop.stage = 0 : i32}
   // CHECK:   %[[A_TOK3:.*]] = ttg.async_wait %[[A_TOK2]] {loop.cluster = 0 : i32, loop.stage = 2 : i32, num = 0 : i32}
   // CHECK:   %[[A_EXT:.*]] = ttg.memdesc_index %[[A]], %[[EXT_NEXT]] {loop.cluster = 0 : i32, loop.stage = 2 : i32}
   // CHECK:   %[[A_LOAD:.*]] = ttg.local_load %[[A_EXT]] {{.*}} {loop.cluster = 0 : i32, loop.stage = 2 : i32}
   // CHECK:   %[[A_MASKED:.*]] = arith.select {{.*}}, %[[A_LOAD]], {{.*}} {loop.cluster = 0 : i32, loop.stage = 2 : i32}
   // CHECK:   %[[B_INS:.*]] = ttg.memdesc_index %[[B]], %[[INS_NEXT]] {loop.cluster = 2 : i32, loop.stage = 0 : i32}
   // CHECK:   %[[B_TOK:.*]] = ttg.async_copy_global_to_local %{{.*}}, %[[B_INS]] {{.*}} {loop.cluster = 2 : i32, loop.stage = 0 : i32}
-  // CHECK:   %[[B_TOK2:.*]] = ttg.async_commit_group %[[B_TOK]] {loop.cluster = 2 : i32, loop.stage = 0 : i32}
+  // CHECK:   %[[B_TOK2:.*]] = ttg.async_commit_group tokens %[[B_TOK]] {loop.cluster = 2 : i32, loop.stage = 0 : i32}
   // CHECK:   %[[B_TOK3:.*]] = ttg.async_wait %[[B_TOK2]] {loop.cluster = 0 : i32, loop.stage = 2 : i32, num = 0 : i32}
   // CHECK:   %[[B_EXT:.*]] = ttg.memdesc_index %[[B]], %[[EXT_NEXT]] {loop.cluster = 0 : i32, loop.stage = 2 : i32}
   // CHECK:   %[[B_LOAD:.*]] = ttg.local_load %[[B_EXT]] {{.*}} {loop.cluster = 0 : i32, loop.stage = 2 : i32}
@@ -644,12 +644,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK:   %[[EXT_NEXT:.*]] = arith.select %[[EXT_CMP]], %[[ZERO]], %[[EXT_P1]] {loop.cluster = 0 : i32, loop.stage = 2 : i32}  : i32
   // CHECK:   %[[A_INS:.*]] = ttg.memdesc_index %[[A]], %[[INS_NEXT]] {loop.cluster = 2 : i32, loop.stage = 0 : i32}
   // CHECK:   %[[A_TOK:.*]] = ttg.async_copy_global_to_local %{{.*}}, %[[A_INS]] {loop.cluster = 2 : i32, loop.stage = 0 : i32}
-  // CHECK:   %[[A_TOK2:.*]] = ttg.async_commit_group %[[A_TOK]] {loop.cluster = 2 : i32, loop.stage = 0 : i32}
+  // CHECK:   %[[A_TOK2:.*]] = ttg.async_commit_group tokens %[[A_TOK]] {loop.cluster = 2 : i32, loop.stage = 0 : i32}
   // CHECK:   %[[A_TOK3:.*]] = ttg.async_wait %[[A_TOK2]] {loop.cluster = 0 : i32, loop.stage = 2 : i32, num = 0 : i32}
   // CHECK:   %[[A_EXT:.*]] = ttg.memdesc_index %[[A]], %[[EXT_NEXT]] {loop.cluster = 0 : i32, loop.stage = 2 : i32}
   // CHECK:   %[[B_INS:.*]] = ttg.memdesc_index %[[B]], %[[INS_NEXT]] {loop.cluster = 2 : i32, loop.stage = 0 : i32}
   // CHECK:   %[[B_TOK:.*]] = ttg.async_copy_global_to_local %{{.*}}, %[[B_INS]] {loop.cluster = 2 : i32, loop.stage = 0 : i32}
-  // CHECK:   %[[B_TOK2:.*]] = ttg.async_commit_group %[[B_TOK]] {loop.cluster = 2 : i32, loop.stage = 0 : i32}
+  // CHECK:   %[[B_TOK2:.*]] = ttg.async_commit_group tokens %[[B_TOK]] {loop.cluster = 2 : i32, loop.stage = 0 : i32}
   // CHECK:   %[[B_TOK3:.*]] = ttg.async_wait %[[B_TOK2]] {loop.cluster = 0 : i32, loop.stage = 2 : i32, num = 0 : i32}
   // CHECK:   %[[B_EXT:.*]] = ttg.memdesc_index %[[B]], %[[EXT_NEXT]] {loop.cluster = 0 : i32, loop.stage = 2 : i32}
   // CHECK:   %[[BAR_SUB:.*]] = ttg.memdesc_index %[[BAR]], %[[BAR_IDX]] {loop.cluster = 0 : i32, loop.stage = 2 : i32}
@@ -1636,7 +1636,7 @@ tt.func @scalar_load(%lb : index, %ub : index, %step : index,
   scf.for %iv = %lb to %ub step %step : index {
     // CHECK: %[[PTR:.+]] = tt.splat %{{.*}} {loop.cluster = 0 : i32, loop.stage = 0 : i32} : !tt.ptr<i32>
     // CHECK: %[[CP:.+]] = ttg.async_copy_global_to_local %[[PTR]], %{{.+}} {loop.cluster = 0 : i32, loop.stage = 0 : i32}
-    // CHECK: %[[T0:.+]] = ttg.async_commit_group %[[CP]] {loop.cluster = 0 : i32, loop.stage = 0 : i32}
+    // CHECK: %[[T0:.+]] = ttg.async_commit_group tokens %[[CP]] {loop.cluster = 0 : i32, loop.stage = 0 : i32}
     // CHECK: %[[T1:.+]] = ttg.async_wait %[[T0]] {loop.cluster = 1 : i32, loop.stage = 3 : i32, num = 0 : i32}
     // CHECK: %[[L:.+]] = ttg.local_load %{{.+}} token %[[T1]] {loop.cluster = 1 : i32, loop.stage = 3 : i32}
     // CHECK: %[[R:.+]] = tt.unsplat %[[L]] {loop.cluster = 1 : i32, loop.stage = 3 : i32}
