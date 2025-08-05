@@ -53,9 +53,6 @@ class warpgroup_mma_accumulator(_core.base_value):
     def _flatten_ir(self, handles: List[ir.value]) -> None:
         handles.append(self.handle)
 
-    def load(self) -> _core.tensor:
-        return _core.tensor(self.handle, self.type.tensor_type)
-
 
 @_core.builtin
 def warpgroup_mma_init(value, _semantic):
@@ -120,10 +117,13 @@ def warpgroup_mma_wait(num_outstanding=0, deps=None, _semantic=None):
         num_outstanding (int): Number of outstanding warpgroup MMA operations to wait for. Defaults to 0.
         deps (Sequence[tensor]): List of dependencies that need to be kept alive while the mma is unfinished.
     """
+    if deps is None:
+        raise ValueError("warpgroup_mma_wait deps must be given")
     deps_handles = [x.handle for x in deps] if deps is not None else []
     num_outstanding = _core._unwrap_if_constexpr(num_outstanding)
     results = _semantic.builder.create_warpgroup_mma_wait(deps_handles, num_outstanding)
-    results = tuple(unflatten_ir_values(results, [dep.type for dep in deps]))
-    if len(results) == 1:
-        return results[0]
+    result_types = [dep.type.tensor_type if isinstance(dep, warpgroup_mma_accumulator) else dep.type for dep in deps]
+    results = unflatten_ir_values(results, result_types)
+    if len(deps) == 1:
+        return next(results)
     return tuple(results)

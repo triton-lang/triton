@@ -125,7 +125,6 @@ def warpgroup_mma_kernel(a, b, out, M: ttgl.constexpr, N: ttgl.constexpr, K: ttg
 
     if ASYNC:
         acc = hopper.warpgroup_mma_wait(num_outstanding=0, deps=[acc])
-        acc = acc.load()
 
     ttgl.store(out + out_offs_m * N + out_offs_n, acc)
 

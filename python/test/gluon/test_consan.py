@@ -599,7 +599,7 @@ def multibuffered_loop_wgmma_kernel(input_desc, XBLOCK: ttgl.constexpr, FAILURE:
         mbarrier.wait(barLoadB.index(ext_id), phase)
 
         acc = hopper.warpgroup_mma(smemA.index(ext_id), smemB.index(ext_id), acc, is_async=True)
-        acc = hopper.warpgroup_mma_wait(num_outstanding=1, deps=[acc])
+        hopper.warpgroup_mma_wait(num_outstanding=1, deps=[acc])
         ext_id = inc_mod(ext_id, num_buffers)
         if ext_id == 0:
             phase = (phase + 1) % 2
