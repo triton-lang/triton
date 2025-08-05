@@ -1,5 +1,5 @@
 import torch
-import math
+
 import triton
 import triton.language as tl
 
@@ -94,9 +94,6 @@ def matmul_launch_metadata(grid, kernel, args):
     ret = dict()
     M, N, K = args["M"], args["N"], args["K"]
     Y, X, W = args["YPtr"], args["XPtr"], args["WPtr"]
-    Y_numel, Y_itemsize = math.prod(Y.shape), Y.dtype.itemsize
-    W_numel, W_itemsize = math.prod(W.shape), W.dtype.itemsize
-    X_numel, X_itemsize = math.prod(X.shape), X.dtype.itemsize
     tokens_per_expt = args.get("TOKENS_PER_EXPT_FOR_ANNOTATION")
     hist = args["ExptHist"]
     if hist is not None:
@@ -110,12 +107,12 @@ def matmul_launch_metadata(grid, kernel, args):
 
         if launch_metadata_allow_sync():
             n_tokens = float(hist.sum())
-            n_w_bytes = (W_numel * W_itemsize // hist.numel()) * (hist > 0).sum()
+            n_w_bytes = (W.numel() * W.element_size() // hist.numel()) * (hist > 0).sum()
         elif tokens_per_expt is not None:
             n_tokens = tokens_per_expt * args["N_EXPTS_TOT"]
             # This may not be totally correct (e.g., we might not be using all experts)
             # but it's better than nothing.
-            n_w_bytes = W_numel * W_itemsize
+            n_w_bytes = W.numel() * W.element_size()
         else:
             n_tokens = None
             n_w_bytes = 0
@@ -125,7 +122,7 @@ def matmul_launch_metadata(grid, kernel, args):
         n_rows = f"{tokens_per_expt}*" if tokens_per_expt is not None else n_rows
     else:
         n_tokens = None
-        n_w_bytes = W_numel * W_itemsize
+        n_w_bytes = W.numel() * W.element_size()
     repr = lambda s, x: f"{s} = {x}" if x is not None else f"E_{len(hist)}({s}) = {n_rows}"
     nbits = X.dtype.itemsize * 8
     batch_repr = ""
@@ -145,8 +142,8 @@ def matmul_launch_metadata(grid, kernel, args):
 
     gindx = args.get("GatherIndx", None)
     # sindx = args.get("WriteBackIndx", None)
-    n_x_bytes = X_numel * X_itemsize
-    n_y_bytes = Y_numel * Y_itemsize
+    n_x_bytes = X.numel() * X.element_size()
+    n_y_bytes = Y.numel() * Y.element_size()
     if hist is not None:
         assert n_tokens is not None
         n_expts_act = args["N_EXPTS_ACT"]
@@ -160,8 +157,8 @@ def matmul_launch_metadata(grid, kernel, args):
             n_read_rows = (dst.view((-1, n_expts_act)) != -1).any(dim=1).sum()
         else:
             n_read_rows = n_tokens
-        n_x_bytes = n_read_rows * X.shape[-1] * X_itemsize
-        n_y_bytes = n_tokens * Y.shape[-1] * Y_itemsize
+        n_x_bytes = n_read_rows * X.shape[-1] * X.element_size()
+        n_y_bytes = n_tokens * Y.shape[-1] * Y.element_size()
     ret["bytes"] = int(n_x_bytes + n_y_bytes + n_w_bytes)
 
     return ret
