@@ -24,7 +24,7 @@ class Env:
 env = Env()
 
 propagate_env: bool = True
-cache_env: bool = True
+cache_env: bool = False
 
 
 def getenv(key: str) -> Optional[str]:
