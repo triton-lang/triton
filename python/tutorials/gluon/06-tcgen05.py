@@ -292,15 +292,19 @@ def test_small_mma(M, N, K, LHS_IN_TMEM, USE_COMMIT, num_warps):
 
 @gluon.jit
 def blocked_matmul_kernel(a_desc, b_desc, c_desc,  #
-                          TRANSPOSE_B: gl.constexpr, num_warps: gl.constexpr):
+                          TRANSPOSE_B: gl.constexpr, num_warps: gl.constexpr, num_buffers: gl.constexpr):
     BLOCK_M: gl.constexpr = c_desc.block_type.shape[0]
     BLOCK_N: gl.constexpr = c_desc.block_type.shape[1]
     BLOCK_K: gl.constexpr = a_desc.block_type.shape[1]
     dtype: gl.constexpr = a_desc.dtype
     K = a_desc.shape[1]
 
-    a_smem = gl.allocate_shared_memory(dtype, a_desc.block_type.shape, a_desc.layout)
-    b_smem = gl.allocate_shared_memory(dtype, b_desc.block_type.shape, b_desc.layout)
+    a_bufs = gl.allocate_shared_memory(dtype, [num_buffers] + a_desc.block_type.shape, a_desc.layout)
+    b_bufs = gl.allocate_shared_memory(dtype, [num_buffers] + b_desc.block_type.shape, b_desc.layout)
+    tma_bars = gl.allocate_shared_memory(gl.int64, [num_buffers, 1], mbarrier.MBarrierLayout())
+    for i in gl.static_range(num_buffers):
+        mbarrier.init(tma_bars.index(i), count=1)
+    tma_i = 0
 
     # The block of C this program is processing is (pid_m, pid_n).
     pid_m = gl.program_id(axis=0)
@@ -312,41 +316,69 @@ def blocked_matmul_kernel(a_desc, b_desc, c_desc,  #
     tmem_layout: gl.constexpr = TensorMemoryLayout([BLOCK_M, BLOCK_N], unpacked=True)
     acc_tmem = allocate_tensor_memory(gl.float32, [BLOCK_M, BLOCK_N], tmem_layout)
 
-    tma_bar = gl.allocate_shared_memory(gl.int64, [1], mbarrier.MBarrierLayout())
     mma_bar = gl.allocate_shared_memory(gl.int64, [1], mbarrier.MBarrierLayout())
-    mbarrier.init(tma_bar, count=1)
     mbarrier.init(mma_bar, count=1)
     phase = 0
+
+    for _ in gl.static_range(num_buffers - 1):
+        tma_index = tma_i % num_buffers
+        k = tma_i * BLOCK_K
+        tma_i += 1
+        tma_bar = tma_bars.index(tma_index)
+        mbarrier.expect(tma_bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes)
+        tma.async_copy_global_to_shared(a_desc, [off_m, k], tma_bar, a_bufs.index(tma_index))
+        tma.async_copy_global_to_shared(b_desc, [off_n, k], tma_bar, b_bufs.index(tma_index))
 
     # We can zero-initialize the accumulator by setting `use_acc=False` on the
     # first iteration.
     use_acc = False
-    for k in range(0, K, BLOCK_K):
-        # Load tiles of A and B.
+    mma_i = 0
+    phase = 0
+    for _ in range(gl.cdiv(K, BLOCK_K) - (num_buffers - 1)):
+        tma_index = tma_i % num_buffers
+        k = tma_i * BLOCK_K
+        tma_i += 1
+        tma_bar = tma_bars.index(tma_index)
         mbarrier.expect(tma_bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes)
-        tma.async_copy_global_to_shared(a_desc, [off_m, k], tma_bar, a_smem)
-        if TRANSPOSE_B:
-            tma.async_copy_global_to_shared(b_desc, [off_n, k], tma_bar, b_smem)
-        else:
-            tma.async_copy_global_to_shared(b_desc, [k, off_n], tma_bar, b_smem)
-        mbarrier.wait(tma_bar, phase=phase)
+        tma.async_copy_global_to_shared(a_desc, [off_m, k], tma_bar, a_bufs.index(tma_index))
+        tma.async_copy_global_to_shared(b_desc, [off_n, k], tma_bar, b_bufs.index(tma_index))
+
+        mma_index = mma_i % num_buffers
+        mma_phase = mma_i // num_buffers & 1
+        mma_i += 1
+        mbarrier.wait(tma_bars.index(mma_index), phase=mma_phase)
 
         # We can transpose B by creating a transposed view over tile of B in
         # shared memory. This forwards the transposition to tcgen05_mma, which
         # handles it for us.
         if TRANSPOSE_B:
-            b = b_smem.permute((1, 0))
+            b = b_bufs.index(mma_index).permute((1, 0))
         else:
-            b = b_smem
+            b = b_bufs.index(mma_index)
 
-        # Issue and wait on the tcgen05_mma. Re-use the mbarrier.
-        tcgen05_mma(a_smem, b, acc_tmem, use_acc=use_acc, mbarriers=[mma_bar])
+        # Issue and wait on the tcgen05_mma.
+        tcgen05_mma(a_bufs.index(mma_index), b, acc_tmem, use_acc=use_acc, mbarriers=[mma_bar])
         use_acc = True
         mbarrier.wait(mma_bar, phase=phase)
-
         phase ^= 1  # toggle the parity phase between 0 and 1
 
-    mbarrier.invalidate(tma_bar)
+    for _ in gl.static_range(num_buffers - 1):
+        mma_index = mma_i % num_buffers
+        mma_phase = mma_i // num_buffers & 1
+        mma_i += 1
+        mbarrier.wait(tma_bars.index(mma_index), phase=mma_phase)
+
+        if TRANSPOSE_B:
+            b = b_bufs.index(mma_index).permute((1, 0))
+        else:
+            b = b_bufs.index(mma_index)
+        tcgen05_mma(a_bufs.index(mma_index), b, acc_tmem, use_acc=use_acc, mbarriers=[mma_bar])
+        use_acc = True
+        mbarrier.wait(mma_bar, phase=phase)
+        phase ^= 1
+
+    for i in gl.static_range(num_buffers):
+        mbarrier.invalidate(tma_bars.index(i))
     mbarrier.invalidate(mma_bar)
 
     acc_reg_layout: gl.constexpr = get_tmem_32x32b_reg_layout(BLOCK_M, BLOCK_N, [BLOCK_M, BLOCK_N], num_warps)
@@ -374,7 +406,7 @@ def blocked_matmul(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B, num_warps):
     c_desc = TensorDescriptor(C, C.shape, C.stride(), [BLOCK_M, BLOCK_N], c_layout)
 
     grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
-    blocked_matmul_kernel[grid](a_desc, b_desc, c_desc, TRANSPOSE_B, num_warps=num_warps)
+    blocked_matmul_kernel[grid](a_desc, b_desc, c_desc, TRANSPOSE_B, num_warps=num_warps, num_buffers=2)
 
 
 @pytest.mark.parametrize("M, N, K", [(208, 416, 304), (2000, 1000, 2000)])
@@ -526,8 +558,6 @@ def blocked_matmul_pipelined(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, num_warps):
     c_desc = TensorDescriptor(C, C.shape, C.stride(), [BLOCK_M, BLOCK_N], c_layout)
 
     grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
-    k = blocked_matmul_pipelined_kernel.warmup(a_desc, b_desc, c_desc, num_warps=num_warps, grid=grid)
-    print(k.asm["ptx"])
     blocked_matmul_pipelined_kernel[grid](a_desc, b_desc, c_desc, num_warps=num_warps)
 
 
