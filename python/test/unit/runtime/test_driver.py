@@ -10,7 +10,6 @@ def test_is_lazy():
     from importlib import reload
     reload(sys.modules["triton.runtime.driver"])
     reload(sys.modules["triton.runtime"])
-    mod = sys.modules[triton.runtime.driver.__module__]
     assert triton.runtime.driver._active is None
     assert triton.runtime.driver._default is None
     assert isinstance(triton.runtime.driver.active, getattr(triton.backends.driver, "DriverBase"))

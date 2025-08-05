@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from ..backends import backends, DriverBase
 
-from typing import Any, Callable, Generic, TypeVar, Union
-
 
 def _create_driver() -> DriverBase:
     active_drivers = [x.driver for x in backends.values() if x.driver.is_active()]
