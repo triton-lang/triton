@@ -460,22 +460,22 @@ tt.func @max_min() {
   %5 = arith.constant dense<4> : tensor<128xi32>
   // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = 8}}
   %6 = arith.maxsi %4, %5 : tensor<128xi32>
-  // expected-remark @below {{contiguity = [8], divisibility = [4], constancy = [1], constant_value = <none>}}
-  %7 = tt.make_range { end = 12 : i32, start = 4 : i32 } : tensor<8xi32>
-  // expected-remark @below {{contiguity = [8], divisibility = [1073741824], constancy = [1], constant_value = <none>}}
-  %8 = tt.make_range { end = 8 : i32, start = 0 : i32 } : tensor<8xi32>
-  // expected-remark @below {{contiguity = [1], divisibility = [8], constancy = [8], constant_value = 8}}
-  %9 = arith.constant dense<8> : tensor<8xi32>
-  // expected-remark @below {{contiguity = [1], divisibility = [2], constancy = [8], constant_value = 2}}
-  %10 = arith.constant dense<2> : tensor<8xi32>
+  tt.return
+}
+
+// -----
+
+// A complicated example with different contiguity and divisibility in lhs and rhs.
+// To simplify construction of the test we just pass attributes from the arguments
+tt.func @contiguity_dependent_divisibility(%arg0: tensor<8xi32> {tt.contiguity = 8 : i32, tt.divisibility = 4 : i32, tt.constancy = 1 : i32}, %arg1: tensor<8xi32> {tt.contiguity = 2 : i32, tt.divisibility = 8 : i32, tt.constancy = 1 : i32}) {
   // expected-remark @below {{contiguity = [2], divisibility = [2], constancy = [1], constant_value = <none>}}
-  %11 = arith.remsi %8, %10 : tensor<8xi32>
+  %0 = arith.maxsi %arg0, %arg1 : tensor<8xi32>
   // expected-remark @below {{contiguity = [2], divisibility = [2], constancy = [1], constant_value = <none>}}
-  %12 = arith.addi %11, %9 : tensor<8xi32>
-  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>}}
-  %13 = arith.maxsi %12, %7 : tensor<8xi32>
-  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>}}
-  %14 = arith.minsi %12, %7 : tensor<8xi32>
+  %1 = arith.minsi %arg0, %arg1 : tensor<8xi32>
+  // expected-remark @below {{contiguity = [1], divisibility = [4611686018427387904], constancy = [1], constant_value = 0}}
+  %2 = arith.constant 0 : i1
+  // expected-remark @below {{contiguity = [2], divisibility = [2], constancy = [1], constant_value = <none>}}
+  %3 = arith.select %2, %0, %1 : tensor<8xi32>
   tt.return
 }
 
