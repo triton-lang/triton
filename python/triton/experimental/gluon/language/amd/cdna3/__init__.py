@@ -3,7 +3,7 @@ from typing import TYPE_CHECKING
 
 from triton.experimental.gluon.language import _core as ttgl
 from triton._C.libtriton import ir
-from ..._core import builtin, int32, uint32
+from ..._core import builtin, int32, uint32, _unwrap_if_constexpr
 from ..._semantic import _check
 
 if TYPE_CHECKING:
@@ -18,12 +18,11 @@ def _verify_buffer_load_store(ptr, offsets, mask, other=None):
     assert isinstance(offsets.type, ttgl.distributed_type), "expected offsets type to be a distributed_type"
     assert offsets.dtype.is_int32() or offsets.dtype.is_uint32(), "offsets element type must be int32 or uint32"
 
-    shape = offsets.shape
     element_type = ptr.type.scalar.element_ty
 
     if other is not None:
         assert mask is not None, "when other is not None, mask should not be None"
-        assert other.shape == shape, "other must have the same shape as offsets"
+        assert other.shape == offsets.shape, "other shape must match the offsets shape"
         assert other.dtype == element_type, "other must have the same data type as ptr scalar type"
 
 
@@ -70,8 +69,13 @@ def buffer_load(ptr, offsets, mask=None, other=None, cache=None, _semantic=None)
         other (tensor, optional): Tensor providing default values for masked elements. Defaults to None.
         cache_modifier (str): Cache modifier specifier. Defaults to "".
     """
+    mask = _unwrap_if_constexpr(mask)
     if mask is not None:
         offsets, mask = _semantic.broadcast_impl_value(offsets, mask)
+
+    other = _unwrap_if_constexpr(other)
+    if other is not None:
+        offsets, other = _semantic.broadcast_impl_value(offsets, other)
 
     _verify_buffer_load_store(ptr, offsets, mask, other)
 
