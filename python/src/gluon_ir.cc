@@ -117,7 +117,7 @@ struct GluonLayouts {
         py::object(layouts.attr("SwizzledSharedLayout")).release();
     AMDMFMALayout = py::object(amdLayouts.attr("AMDMFMALayout")).release();
     PaddedSharedLayout =
-        py::object(amdLayouts.attr("PaddedSharedLayout")).release();
+        py::object(layouts.attr("PaddedSharedLayout")).release();
 
     auto core = py::module::import("triton.language.core");
     GluonDType = py::object(core.attr("dtype")).release();
@@ -225,9 +225,13 @@ py::object layoutToGluon(Attribute layout) {
         toStdVector(ctaLayout.getCTAOrder()));
   } else if (auto paddedShared =
                  dyn_cast<ttg::PaddedSharedEncodingAttr>(layout)) {
-    auto ctaLayout = amdMfma.getCTALayout();
-    return layouts.PaddedSharedLayout(toStdVector(paddedShared.getIntervals()),
-                                      toStdVector(paddedShared.getPaddings()),
+    auto ctaLayout = paddedShared.getCTALayout();
+    std::vector<std::pair<unsigned, unsigned>> intervalPaddingPairs;
+    for (auto [interval, padding] :
+         llvm::zip(paddedShared.getIntervals(), paddedShared.getPaddings())) {
+      intervalPaddingPairs.push_back({interval, padding});
+    }
+    return layouts.PaddedSharedLayout(intervalPaddingPairs,
                                       toStdVector(paddedShared.getOrder()),
                                       toStdVector(ctaLayout.getCTAsPerCGA()),
                                       toStdVector(ctaLayout.getCTASplitNum()),
