@@ -1233,10 +1233,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 // CHECK:   %[[BUFFER_1:.*]] = ttg.local_alloc : ()
 // CHECK:   %[[SUBVIEW_1:.*]] = ttg.memdesc_index %[[BUFFER_1]]
 // CHECK:   %[[ASYNC_COPY_1:.*]] = ttg.async_copy_global_to_local %[[NEXT_BUFFER_1]], %[[SUBVIEW_1]]
-// CHECK:   ttg.async_commit_group %[[ASYNC_COPY_1]]
+// CHECK:   ttg.async_commit_group tokens %[[ASYNC_COPY_1]]
 // CHECK:   %[[SUBVIEW_2:.*]] = ttg.memdesc_index %[[BUFFER_1]]
 // CHECK:   %[[ASYNC_COPY_2:.*]] = ttg.async_copy_global_to_local %[[NEXT_BUFFER_1]], %[[SUBVIEW_2]]
-// CHECK:   ttg.async_commit_group %[[ASYNC_COPY_2]]
+// CHECK:   ttg.async_commit_group tokens %[[ASYNC_COPY_2]]
 // CHECK:   scf.for
 // CHECK:     ttg.async_wait
 // CHECK:     ttg.memdesc_index %[[BUFFER_1]]
@@ -1245,7 +1245,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 // CHECK:     %[[CONVERT_LAYOUT_3:.*]] = ttg.convert_layout %[[DOT]]
 // CHECK:     %[[SUBVIEW_4:.*]] = ttg.memdesc_index %[[BUFFER_1]]
 // CHECK:     %[[ASYNC_COPY_3:.*]] = ttg.async_copy_global_to_local %[[NEXT_BUFFER_1]], %[[SUBVIEW_4]]
-// CHECK:     ttg.async_commit_group %[[ASYNC_COPY_3]]
+// CHECK:     ttg.async_commit_group tokens %[[ASYNC_COPY_3]]
 // CHECK: ttg.local_dealloc %[[BUFFER_1]]
 
 // AMD-LABEL:  tt.func public @nested_loops
