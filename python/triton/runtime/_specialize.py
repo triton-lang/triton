@@ -2,7 +2,7 @@ import functools
 from triton.runtime.build import compile_module_from_src
 from triton.backends.nvidia.driver import library_dirs, include_dirs
 
-ARG_SPECIALIZE_SRC = '''
+ARG_SPECIALIZE_SRC = """
 #include <Python.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -123,12 +123,12 @@ static PyMethodDef SpecializeMethods[] = {
 };
 static struct PyModuleDef SpecializeModule = {
     PyModuleDef_HEAD_INIT,
-    "triton_specialize",
+    "__triton_specialize",
     "Fast alignment checks and type determination for Triton specialization",
     -1,
     SpecializeMethods
 };
-PyMODINIT_FUNC PyInit_triton_specialize(void) {
+PyMODINIT_FUNC PyInit___triton_specialize(void) {
     PyObject* module = PyModule_Create(&SpecializeModule);
     if (!module) {
         return NULL;
@@ -142,26 +142,19 @@ PyMODINIT_FUNC PyInit_triton_specialize(void) {
 
     return module;
 }
-'''
-
-
-@functools.lru_cache()
-def get_specialize_module():
-    mod = compile_module_from_src(
-        src=ARG_SPECIALIZE_SRC,
-        name="triton_specialize",
-        library_dirs=library_dirs(),
-        include_dirs=include_dirs,
-        libraries=[],
-    )
-
-    return mod
+"""
 
 
 class ArgSpecializer:
 
     def __init__(self, specialize_extra):
-        self.module = get_specialize_module()
+        mod = compile_module_from_src(
+            src=ARG_SPECIALIZE_SRC,
+            name="__triton_specialize",
+            library_dirs=library_dirs(),
+            include_dirs=include_dirs,
+            libraries=[],
+        )
 
         use_fallback = "HIP" in specialize_extra.__qualname__
 
@@ -180,11 +173,11 @@ class ArgSpecializer:
             return specialize_extra(arg, "tensor", align=align) if specialize_value else None
 
         def _specialize_tensor(arg, specialize_value, align):
-            return self.module.specialize_tensor(arg.data_ptr(), specialize_value, align)
+            return mod.specialize_tensor(arg.data_ptr(), specialize_value, align)
 
         if use_fallback:
             self.specialize_int = _specialize_int_fallback
             self.specialize_tensor = _specialize_tensor_fallback
         else:
-            self.specialize_int = self.module.specialize_int
+            self.specialize_int = mod.specialize_int
             self.specialize_tensor = _specialize_tensor
