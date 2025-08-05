@@ -667,12 +667,12 @@ optimalSwizzling(const LinearLayout &src, const LinearLayout &dst,
       if (a0 > b0)
         return false;
 
-      // minimise number of rounds to move the data:
+      // maximise number of rounds to move the data:
       int a1 = std::get<1>(a).getInDimSize(kReps);
       int b1 = std::get<1>(b).getInDimSize(kReps);
-      if (a1 < b1)
-        return true;
       if (a1 > b1)
+        return true;
+      if (a1 < b1)
         return false;
 
       // prefer {ld,st}.shared > {ld,st}matrix > {ld,st}matrix.trans:
