@@ -299,6 +299,12 @@ def blocked_matmul_kernel(a_desc, b_desc, c_desc,  #
     dtype: gl.constexpr = a_desc.dtype
     K = a_desc.shape[1]
 
+    # The block of C this program is processing is (pid_m, pid_n).
+    pid_m = gl.program_id(axis=0)
+    pid_n = gl.program_id(axis=1)
+    off_m = pid_m * BLOCK_M
+    off_n = pid_n * BLOCK_N
+
     a_bufs = gl.allocate_shared_memory(dtype, [num_buffers] + a_desc.block_type.shape, a_desc.layout)
     b_bufs = gl.allocate_shared_memory(dtype, [num_buffers] + b_desc.block_type.shape, b_desc.layout)
     tma_bars = gl.allocate_shared_memory(gl.int64, [num_buffers, 1], mbarrier.MBarrierLayout())
@@ -307,19 +313,13 @@ def blocked_matmul_kernel(a_desc, b_desc, c_desc,  #
     tma_producer_i = 0
     tma_consumer_i = 0
 
-    # The block of C this program is processing is (pid_m, pid_n).
-    pid_m = gl.program_id(axis=0)
-    pid_n = gl.program_id(axis=1)
-    off_m = pid_m * BLOCK_M
-    off_n = pid_n * BLOCK_N
+    mma_bar = gl.allocate_shared_memory(gl.int64, [1], mbarrier.MBarrierLayout())
+    mbarrier.init(mma_bar, count=1)
+    mma_phase = 0
 
     # Determine the TMEM layout.
     tmem_layout: gl.constexpr = TensorMemoryLayout([BLOCK_M, BLOCK_N], unpacked=True)
     acc_tmem = allocate_tensor_memory(gl.float32, [BLOCK_M, BLOCK_N], tmem_layout)
-
-    mma_bar = gl.allocate_shared_memory(gl.int64, [1], mbarrier.MBarrierLayout())
-    mbarrier.init(mma_bar, count=1)
-    mma_phase = 0
 
     # Prefetch iters.
     for _ in gl.static_range(num_buffers - 1):
@@ -445,7 +445,7 @@ if __name__ == "__main__":
     B = torch.randn(K, N, device="cuda", dtype=torch.float16)
     C = torch.empty(M, N, device="cuda", dtype=torch.float16)
 
-    print("BLOCK_M BLOCK_N BLOCK_K num_stages num_warps time (ms) tflops/s")
+    print("BLOCK_M BLOCK_N BLOCK_K num_buffers num_warps time (ms) tflops/s")
     configs = []
     # Some rationale on hyperparameter selection:
     #
@@ -457,31 +457,31 @@ if __name__ == "__main__":
     # - num_warps=8 provides no benefit since only 1 warp is doing anything for
     #   most of the kernel.
     # - BLOCK_MN=64 is too small to saturate the tensor core.
-    for BLOCK_MN, BLOCK_K, num_warps, num_stages in itertools.product([128], [64, 128, 256], [4], [1, 2, 3]):
-        if (BLOCK_MN * BLOCK_K) * 4 * num_stages // 1024 > 224:  # too much SMEM
+    for BLOCK_MN, BLOCK_K, num_warps, num_buffers in itertools.product([128], [64, 128, 256], [4], [1, 2, 3]):
+        if (BLOCK_MN * BLOCK_K) * 4 * num_buffers // 1024 > 224:  # too much SMEM
             continue
-        configs.append((BLOCK_MN, BLOCK_K, num_warps, num_stages))
+        configs.append((BLOCK_MN, BLOCK_K, num_warps, num_buffers))
 
-        fn = lambda: blocked_matmul(A, B, C, BLOCK_MN, BLOCK_MN, BLOCK_K, False, num_stages, num_warps)
+        fn = lambda: blocked_matmul(A, B, C, BLOCK_MN, BLOCK_MN, BLOCK_K, False, num_buffers, num_warps)
         # Increase warmup and rep to get more stable results.
         ms = triton.testing.do_bench(fn, warmup=100, rep=500)
         flops = 2 * M * N * K
         tflops_per_sec = flops * 1e-12 / (ms * 1e-3)
         print(
-            f"{BLOCK_MN:>7} {BLOCK_MN:>7} {BLOCK_K:>7} {num_stages:>10} {num_warps:>9} {ms:>9.2f} {tflops_per_sec:>8.2f}"
+            f"{BLOCK_MN:>7} {BLOCK_MN:>7} {BLOCK_K:>7} {num_buffers:>11} {num_warps:>9} {ms:>9.2f} {tflops_per_sec:>8.2f}"
         )
     print()
 
 # %%
 # ```
-# BLOCK_M BLOCK_N BLOCK_K num_stages num_warps time (ms) tflops/s
-#     128     128      64          1         4      2.39   919.93
-#     128     128      64          2         4      1.98  1110.19
-#     128     128      64          3         4      2.91   756.52
-#     128     128     128          1         4      2.09  1049.77
-#     128     128     128          2         4      2.85   772.57
-#     128     128     128          3         4      2.74   801.36
-#     128     128     256          1         4      3.89   565.80
+# BLOCK_M BLOCK_N BLOCK_K num_buffers num_warps time (ms) tflops/s
+#     128     128      64           1         4      2.39   919.93
+#     128     128      64           2         4      1.98  1110.19
+#     128     128      64           3         4      2.91   756.52
+#     128     128     128           1         4      2.09  1049.77
+#     128     128     128           2         4      2.85   772.57
+#     128     128     128           3         4      2.74   801.36
+#     128     128     256           1         4      3.89   565.80
 # ```
 #
 # Our first attempt yields 1110 TFLOPS with double-buffered operands. We can see
@@ -500,62 +500,110 @@ if __name__ == "__main__":
 
 
 @gluon.jit
-def blocked_matmul_pipelined_kernel(a_desc, b_desc, c_desc, num_buffers: gl.constexpr, num_warps: gl.constexpr):
+def blocked_matmul_pipelined_kernel(a_desc, b_desc, c_desc, num_stages: gl.constexpr, num_warps: gl.constexpr):
     BLOCK_M: gl.constexpr = c_desc.block_type.shape[0]
     BLOCK_N: gl.constexpr = c_desc.block_type.shape[1]
     BLOCK_K: gl.constexpr = a_desc.block_type.shape[1]
     dtype: gl.constexpr = a_desc.dtype
     K = a_desc.shape[1]
 
-    a_bufs = gl.allocate_shared_memory(dtype, [num_buffers] + a_desc.block_type.shape, a_desc.layout)
-    b_bufs = gl.allocate_shared_memory(dtype, [num_buffers] + b_desc.block_type.shape, b_desc.layout)
-    tma_bars = gl.allocate_shared_memory(gl.int64, [num_buffers, 1], mbarrier.MBarrierLayout())
-    for i in gl.static_range(num_buffers):
-        mbarrier.init(tma_bars.index(i), count=1)
-    tma_producer_i = 0
-    tma_consumer_i = 0
-
     pid_m = gl.program_id(axis=0)
     pid_n = gl.program_id(axis=1)
     off_m = pid_m * BLOCK_M
     off_n = pid_n * BLOCK_N
 
+    # Pipelining scheme:
+    # num_stages = 1:                     load0, mma0, wait0
+    # num_stages = 2:        load0, mma0, load1, mma1, wait0, wait1
+    # num_stages = 3: load0, load1, mma0, load2, mma1, wait0, mma2, wait1, wait2
+
+    a_bufs = gl.allocate_shared_memory(dtype, [num_stages] + a_desc.block_type.shape, a_desc.layout)
+    b_bufs = gl.allocate_shared_memory(dtype, [num_stages] + b_desc.block_type.shape, b_desc.layout)
+    tma_bars = gl.allocate_shared_memory(gl.int64, [num_stages, 1], mbarrier.MBarrierLayout())
+    for i in gl.static_range(num_stages):
+        mbarrier.init(tma_bars.index(i), count=1)
+    tma_producer_i = 0
+    tma_consumer_i = 0
+
+    mma_bars = gl.allocate_shared_memory(gl.int64, [num_stages, 1], mbarrier.MBarrierLayout())
+    for i in gl.static_range(num_stages):
+        mbarrier.init(mma_bars.index(i), count=1)
+    mma_producer_i = 0
+    mma_consumer_i = 0
+
     tmem_layout: gl.constexpr = TensorMemoryLayout([BLOCK_M, BLOCK_N], unpacked=True)
     acc_tmem = allocate_tensor_memory(gl.float32, [BLOCK_M, BLOCK_N], tmem_layout)
-
-    tma_bar = gl.allocate_shared_memory(gl.int64, [1], mbarrier.MBarrierLayout())
-    mma_bar = gl.allocate_shared_memory(gl.int64, [1], mbarrier.MBarrierLayout())
-    mbarrier.init(tma_bar, count=1)
-    mbarrier.init(mma_bar, count=1)
-    phase = 0
-
     use_acc = False
-    for k in range(0, K, BLOCK_K):
-        a = a_smem.index(index)
-        b = b_smem.index(index)
 
+    clamp: gl.constexpr = num_stages - 2 if num_stages > 2 else 0
+    for _ in gl.static_range(0, clamp):
+        tma_producer_index = tma_producer_i % num_stages
+        k = tma_producer_i * BLOCK_K
+        tma_producer_i += 1
+        tma_bar = tma_bars.index(tma_producer_index)
         mbarrier.expect(tma_bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes)
-        tma.async_copy_global_to_shared(a_desc, [off_m, k], tma_bar, a)
-        tma.async_copy_global_to_shared(b_desc, [k, off_n], tma_bar, b)
-        mbarrier.wait(tma_bar, phase=phase)
+        tma.async_copy_global_to_shared(a_desc, [off_m, k], tma_bar, a_bufs.index(tma_producer_index))
+        tma.async_copy_global_to_shared(b_desc, [k, off_n], tma_bar, b_bufs.index(tma_producer_index))
 
-        # Recall that mbarriers are initialized to phase 1 complete. We can use
-        # that fact to rotate the mbarrier wait with respect to the MMA.
-        mbarrier.wait(mma_bar, phase=phase ^ 1)
-        tcgen05_mma(a, b, acc_tmem, use_acc=use_acc)
-        tcgen05_commit(mma_bar)
+    for _ in gl.static_range(clamp, num_stages - 1):
+        tma_producer_index = tma_producer_i % num_stages
+        k = tma_producer_i * BLOCK_K
+        tma_producer_i += 1
+        tma_bar = tma_bars.index(tma_producer_index)
+        mbarrier.expect(tma_bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes)
+        tma.async_copy_global_to_shared(a_desc, [off_m, k], tma_bar, a_bufs.index(tma_producer_index))
+        tma.async_copy_global_to_shared(b_desc, [k, off_n], tma_bar, b_bufs.index(tma_producer_index))
+
+        tma_consumer_index = tma_consumer_i % num_stages
+        tma_consumer_phase = tma_consumer_i // num_stages & 1
+        tma_consumer_i += 1
+        mbarrier.wait(tma_bars.index(tma_consumer_index), phase=tma_consumer_phase)
+        tcgen05_mma(a_bufs.index(tma_consumer_index), b_bufs.index(tma_consumer_index), acc_tmem, use_acc=use_acc)
         use_acc = True
+        tcgen05_commit(mma_bars.index(mma_producer_i % num_stages))
+        mma_producer_i += 1
 
-        phase ^= 1
-        # Move to the next buffer. The TMA load will start while the WGMMA is
-        # still running.
-        index ^= 1
+    for _ in range(gl.cdiv(K, BLOCK_K) - max(num_stages - 2, num_stages - 1)):
+        tma_producer_index = tma_producer_i % num_stages
+        k = tma_producer_i * BLOCK_K
+        tma_producer_i += 1
+        tma_bar = tma_bars.index(tma_producer_index)
+        mbarrier.expect(tma_bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes)
+        tma.async_copy_global_to_shared(a_desc, [off_m, k], tma_bar, a_bufs.index(tma_producer_index))
+        tma.async_copy_global_to_shared(b_desc, [k, off_n], tma_bar, b_bufs.index(tma_producer_index))
 
-    # Wait for the last MMA.
-    mbarrier.wait(mma_bar, phase=phase ^ 1)
+        tma_consumer_index = tma_consumer_i % num_stages
+        tma_consumer_phase = tma_consumer_i // num_stages & 1
+        tma_consumer_i += 1
+        mbarrier.wait(tma_bars.index(tma_consumer_index), phase=tma_consumer_phase)
+        tcgen05_mma(a_bufs.index(tma_consumer_index), b_bufs.index(tma_consumer_index), acc_tmem, use_acc=use_acc)
+        use_acc = True
+        tcgen05_commit(mma_bars.index(mma_producer_i % num_stages))
+        mma_producer_i += 1
 
-    mbarrier.invalidate(tma_bar)
-    mbarrier.invalidate(mma_bar)
+        mbarrier.wait(mma_bars.index(mma_consumer_i % num_stages), phase=mma_consumer_i // num_stages & 1)
+        mma_consumer_i += 1
+
+    for _ in gl.static_range(0, clamp):
+        tma_consumer_index = tma_consumer_i % num_stages
+        tma_consumer_phase = tma_consumer_i // num_stages & 1
+        tma_consumer_i += 1
+        mbarrier.wait(tma_bars.index(tma_consumer_index), phase=tma_consumer_phase)
+        tcgen05_mma(a_bufs.index(tma_consumer_index), b_bufs.index(tma_consumer_index), acc_tmem, use_acc=use_acc)
+        use_acc = True
+        tcgen05_commit(mma_bars.index(mma_producer_i % num_stages))
+        mma_producer_i += 1
+
+        mbarrier.wait(mma_bars.index(mma_consumer_i % num_stages), phase=mma_consumer_i // num_stages & 1)
+        mma_consumer_i += 1
+
+    for _ in gl.static_range(clamp, num_stages - 1):
+        mbarrier.wait(mma_bars.index(mma_consumer_i % num_stages), phase=mma_consumer_i // num_stages & 1)
+        mma_consumer_i += 1
+
+    for i in gl.static_range(num_stages):
+        mbarrier.invalidate(tma_bars.index(i))
+        mbarrier.invalidate(mma_bars.index(i))
 
     acc_reg_layout: gl.constexpr = get_tmem_32x32b_reg_layout(BLOCK_M, BLOCK_N, [BLOCK_M, BLOCK_N], num_warps)
     acc = acc_tmem.load(acc_reg_layout)
@@ -566,7 +614,7 @@ def blocked_matmul_pipelined_kernel(a_desc, b_desc, c_desc, num_buffers: gl.cons
     tma.store_wait(pendings=0)
 
 
-def blocked_matmul_pipelined(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, num_warps):
+def blocked_matmul_pipelined(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, num_stages, num_warps):
     M, N = C.shape
 
     a_layout = gl.NVMMASharedLayout.get_default_for([BLOCK_M, BLOCK_K], gl.float16)
@@ -577,31 +625,34 @@ def blocked_matmul_pipelined(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, num_warps):
     c_desc = TensorDescriptor(C, C.shape, C.stride(), [BLOCK_M, BLOCK_N], c_layout)
 
     grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
-    blocked_matmul_pipelined_kernel[grid](a_desc, b_desc, c_desc, num_warps=num_warps)
+    blocked_matmul_pipelined_kernel[grid](a_desc, b_desc, c_desc, num_stages, num_warps=num_warps)
 
 
 @pytest.mark.parametrize("M, N, K", [(208, 416, 304), (2000, 1000, 2000)])
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(64, 64, 64), (128, 128, 128)])
+@pytest.mark.parametrize("num_stages", [1, 2, 3])
 @pytest.mark.parametrize("num_warps", [4, 8])
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
-def test_blocked_matmul_pipelined(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, num_warps):
+def test_blocked_matmul_pipelined(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, num_stages, num_warps):
 
     A = torch.randn(M, K, device="cuda", dtype=torch.float16)
     B = torch.randn(K, N, device="cuda", dtype=torch.float16)
     C = torch.empty(M, N, device="cuda", dtype=torch.float16)
 
-    blocked_matmul_pipelined(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, num_warps)
+    blocked_matmul_pipelined(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, num_stages, num_warps)
     torch.testing.assert_close(A @ B, C, rtol=1e-3, atol=1e-1)
 
 
 if __name__ == "__main__":
     print("Benchmarking pipelined matmul")
     print("=============================")
-    print("BLOCK_M BLOCK_N BLOCK_K num_warps time (ms) tflops/s")
-    for BLOCK_M, BLOCK_N, BLOCK_K, num_warps, num_stages in configs:
-        fn = lambda: blocked_matmul_pipelined(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, num_warps)
-        ms = triton.testing.do_bench(fn)
+    print("BLOCK_M BLOCK_N BLOCK_K num_stages num_warps time (ms) tflops/s")
+    for BLOCK_MN, BLOCK_K, num_warps, num_stages in configs:
+        fn = lambda: blocked_matmul_pipelined(A, B, C, BLOCK_MN, BLOCK_MN, BLOCK_K, num_stages, num_warps)
+        ms = triton.testing.do_bench(fn, warmup=100, rep=500)
         flops = 2 * M * N * K
         tflops_per_sec = flops * 1e-12 / (ms * 1e-3)
-        print(f"{BLOCK_M:>7} {BLOCK_N:>7} {BLOCK_K:>7} {num_warps:>9} {ms:>9.2f} {tflops_per_sec:>8.2f}")
+        print(
+            f"{BLOCK_MN:>7} {BLOCK_MN:>7} {BLOCK_K:>7} {num_stages:>10} {num_warps:>9} {ms:>9.2f} {tflops_per_sec:>8.2f}"
+        )
     print()
