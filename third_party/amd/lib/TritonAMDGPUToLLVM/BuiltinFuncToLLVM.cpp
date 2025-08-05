@@ -188,6 +188,39 @@ private:
 
       replacementOp = LLVM::createLLVMIntrinsicCallOp(
           rewriter, loc, intrinsic, returnType, mulOp->getResult(0));
+    } else if (calleeName == "__triton_hip_fast_tanhf") {
+      assert(operands.size() == 1);
+      assert(operands[0].getType().getIntOrFloatBitWidth() == 32);
+      LLVM::FastmathFlagsAttr defaultFlags{};
+
+      // Calculate 2*x
+      auto twoX = rewriter.create<LLVM::FMulOp>(
+          loc, rewriter.getF32Type(), operands[0],
+          LLVM::createConstantF32(loc, rewriter, 2.0), defaultFlags);
+
+      // Calculate fast_expf(2*x) using the same logic as __triton_hip_fast_expf
+      const double log2e = 1.4426950408889634;
+      auto mulOp = rewriter.create<LLVM::FMulOp>(
+          loc, rewriter.getF32Type(), twoX->getResult(0),
+          LLVM::createConstantF32(loc, rewriter, log2e), defaultFlags);
+      const char *intrinsic = ftz ? "llvm.amdgcn.exp2.f32" : "llvm.exp2.f32";
+      auto exp2X = LLVM::createLLVMIntrinsicCallOp(
+          rewriter, loc, intrinsic, rewriter.getF32Type(), mulOp->getResult(0));
+
+      // Calculate exp2X - 1
+      auto exp2XMinus1 = rewriter.create<LLVM::FSubOp>(
+          loc, rewriter.getF32Type(), exp2X->getResult(0),
+          LLVM::createConstantF32(loc, rewriter, 1.0), defaultFlags);
+
+      // Calculate exp2X + 1
+      auto exp2XPlus1 = rewriter.create<LLVM::FAddOp>(
+          loc, rewriter.getF32Type(), exp2X->getResult(0),
+          LLVM::createConstantF32(loc, rewriter, 1.0), defaultFlags);
+
+      // Calculate tanh(X) = (exp2X - 1) / (exp2X + 1)
+      replacementOp = rewriter.create<LLVM::FDivOp>(
+          loc, returnType, exp2XMinus1->getResult(0), exp2XPlus1->getResult(0),
+          defaultFlags);
     }
 
     if (replacementOp) {
