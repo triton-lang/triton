@@ -304,7 +304,8 @@ def blocked_matmul_kernel(a_desc, b_desc, c_desc,  #
     tma_bars = gl.allocate_shared_memory(gl.int64, [num_buffers, 1], mbarrier.MBarrierLayout())
     for i in gl.static_range(num_buffers):
         mbarrier.init(tma_bars.index(i), count=1)
-    tma_i = 0
+    tma_producer_i = 0
+    tma_consumer_i = 0
 
     # The block of C this program is processing is (pid_m, pid_n).
     pid_m = gl.program_id(axis=0)
@@ -318,67 +319,65 @@ def blocked_matmul_kernel(a_desc, b_desc, c_desc,  #
 
     mma_bar = gl.allocate_shared_memory(gl.int64, [1], mbarrier.MBarrierLayout())
     mbarrier.init(mma_bar, count=1)
-    phase = 0
+    mma_phase = 0
 
     # Prefetch iters.
     for _ in gl.static_range(num_buffers - 1):
-        tma_index = tma_i % num_buffers
-        k = tma_i * BLOCK_K
-        tma_i += 1
-        tma_bar = tma_bars.index(tma_index)
+        tma_producer_index = tma_producer_i % num_buffers
+        k = tma_producer_i * BLOCK_K
+        tma_producer_i += 1
+        tma_bar = tma_bars.index(tma_producer_index)
         mbarrier.expect(tma_bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes)
-        tma.async_copy_global_to_shared(a_desc, [off_m, k], tma_bar, a_bufs.index(tma_index))
+        tma.async_copy_global_to_shared(a_desc, [off_m, k], tma_bar, a_bufs.index(tma_producer_index))
         tma.async_copy_global_to_shared(b_desc, [off_n, k] if TRANSPOSE_B else [k, off_n], tma_bar,
-                                        b_bufs.index(tma_index))
+                                        b_bufs.index(tma_producer_index))
 
     # We can zero-initialize the accumulator by setting `use_acc=False` on the
     # first iteration.
     use_acc = False
-    mma_i = 0
-    phase = 0
     for _ in range(gl.cdiv(K, BLOCK_K) - (num_buffers - 1)):
-        tma_index = tma_i % num_buffers
-        k = tma_i * BLOCK_K
-        tma_i += 1
-        tma_bar = tma_bars.index(tma_index)
+        tma_producer_index = tma_producer_i % num_buffers
+        k = tma_producer_i * BLOCK_K
+        tma_producer_i += 1
+        tma_bar = tma_bars.index(tma_producer_index)
         mbarrier.expect(tma_bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes)
-        tma.async_copy_global_to_shared(a_desc, [off_m, k], tma_bar, a_bufs.index(tma_index))
+        tma.async_copy_global_to_shared(a_desc, [off_m, k], tma_bar, a_bufs.index(tma_producer_index))
         tma.async_copy_global_to_shared(b_desc, [off_n, k] if TRANSPOSE_B else [k, off_n], tma_bar,
-                                        b_bufs.index(tma_index))
+                                        b_bufs.index(tma_producer_index))
 
-        mma_index = mma_i % num_buffers
-        mma_phase = mma_i // num_buffers & 1
-        mma_i += 1
-        mbarrier.wait(tma_bars.index(mma_index), phase=mma_phase)
+        tma_consumer_index = tma_consumer_i % num_buffers
+        tma_consumer_phase = tma_consumer_i // num_buffers & 1
+        tma_consumer_i += 1
+        mbarrier.wait(tma_bars.index(tma_consumer_index), phase=tma_consumer_phase)
 
         # We can transpose B by creating a transposed view over tile of B in
         # shared memory. This forwards the transposition to tcgen05_mma, which
         # handles it for us.
         if TRANSPOSE_B:
-            b = b_bufs.index(mma_index).permute((1, 0))
+            b = b_bufs.index(tma_consumer_index).permute((1, 0))
         else:
-            b = b_bufs.index(mma_index)
+            b = b_bufs.index(tma_consumer_index)
 
         # Issue and wait on the tcgen05_mma.
-        tcgen05_mma(a_bufs.index(mma_index), b, acc_tmem, use_acc=use_acc, mbarriers=[mma_bar])
+        tcgen05_mma(a_bufs.index(tma_consumer_index), b, acc_tmem, use_acc=use_acc, mbarriers=[mma_bar])
         use_acc = True
-        mbarrier.wait(mma_bar, phase=phase)
-        phase ^= 1  # toggle the parity phase between 0 and 1
+        mbarrier.wait(mma_bar, phase=mma_phase)
+        mma_phase ^= 1  # toggle the parity phase between 0 and 1
 
     # Pipeline drain iters.
     for _ in gl.static_range(num_buffers - 1):
-        mma_index = mma_i % num_buffers
-        mma_phase = mma_i // num_buffers & 1
-        mma_i += 1
-        mbarrier.wait(tma_bars.index(mma_index), phase=mma_phase)
+        tma_consumer_index = tma_consumer_i % num_buffers
+        tma_consumer_phase = tma_consumer_i // num_buffers & 1
+        tma_consumer_i += 1
+        mbarrier.wait(tma_bars.index(tma_consumer_index), phase=tma_consumer_phase)
         if TRANSPOSE_B:
-            b = b_bufs.index(mma_index).permute((1, 0))
+            b = b_bufs.index(tma_consumer_index).permute((1, 0))
         else:
-            b = b_bufs.index(mma_index)
-        tcgen05_mma(a_bufs.index(mma_index), b, acc_tmem, use_acc=use_acc, mbarriers=[mma_bar])
+            b = b_bufs.index(tma_consumer_index)
+        tcgen05_mma(a_bufs.index(tma_consumer_index), b, acc_tmem, use_acc=use_acc, mbarriers=[mma_bar])
         use_acc = True
-        mbarrier.wait(mma_bar, phase=phase)
-        phase ^= 1
+        mbarrier.wait(mma_bar, phase=mma_phase)
+        mma_phase ^= 1
 
     for i in gl.static_range(num_buffers):
         mbarrier.invalidate(tma_bars.index(i))
@@ -485,12 +484,13 @@ if __name__ == "__main__":
 #     128     128     256          1         4      3.89   565.80
 # ```
 #
-# Our first attempt yields 1110 TFLOPS with double-buffered operands. Since
-# tcgen05_mma is asynchronous, we can overlap it with the TMA loads to reduce
-# SM idle time.
+# Our first attempt yields 1110 TFLOPS with double-buffered operands. We can see
+# the best single-buffered solution is 1050 TFLOPS.
 #
-# Note that while tcgen05_mma is asynchronous, certain tcgen05 instructions are
-# implicitly pipelined, meaning their execution order is guaranteed:
+# Since tcgen05_mma is asynchronous, we can overlap it with the TMA loads to
+# reduce SM idle time. Even though the instruction is asynchronous, tcgen05
+# instructions are implicitly pipelined, meaning their execution order is
+# guaranteed:
 #
 # - tcgen05_mma instructions with the same shape and accumulator dtype
 # - tcgen05_mma followed by tcgen05_commit
@@ -500,17 +500,20 @@ if __name__ == "__main__":
 
 
 @gluon.jit
-def blocked_matmul_pipelined_kernel(a_desc, b_desc, c_desc, num_warps: gl.constexpr):
+def blocked_matmul_pipelined_kernel(a_desc, b_desc, c_desc, num_buffers: gl.constexpr, num_warps: gl.constexpr):
     BLOCK_M: gl.constexpr = c_desc.block_type.shape[0]
     BLOCK_N: gl.constexpr = c_desc.block_type.shape[1]
     BLOCK_K: gl.constexpr = a_desc.block_type.shape[1]
     dtype: gl.constexpr = a_desc.dtype
     K = a_desc.shape[1]
 
-    # Allocate 2 buffers for each A and B.
-    a_smem = gl.allocate_shared_memory(dtype, [2] + a_desc.block_type.shape, a_desc.layout)
-    b_smem = gl.allocate_shared_memory(dtype, [2] + b_desc.block_type.shape, b_desc.layout)
-    index = 0
+    a_bufs = gl.allocate_shared_memory(dtype, [num_buffers] + a_desc.block_type.shape, a_desc.layout)
+    b_bufs = gl.allocate_shared_memory(dtype, [num_buffers] + b_desc.block_type.shape, b_desc.layout)
+    tma_bars = gl.allocate_shared_memory(gl.int64, [num_buffers, 1], mbarrier.MBarrierLayout())
+    for i in gl.static_range(num_buffers):
+        mbarrier.init(tma_bars.index(i), count=1)
+    tma_producer_i = 0
+    tma_consumer_i = 0
 
     pid_m = gl.program_id(axis=0)
     pid_n = gl.program_id(axis=1)
