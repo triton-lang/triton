@@ -334,7 +334,7 @@ def blocked_matmul_kernel(a_desc, b_desc, c_desc,  #
 
     mbarrier.invalidate(bar)
 
-    # Store tile of C.
+    # Downcast accumulator and store tile of C.
     c_smem = gl.allocate_shared_memory(dtype, c_desc.block_type.shape, c_desc.layout)
     c_smem.store(acc.to(dtype))
     fence_async_shared()

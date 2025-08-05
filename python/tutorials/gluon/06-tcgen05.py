@@ -296,10 +296,11 @@ def blocked_matmul_kernel(a_desc, b_desc, c_desc,  #
     BLOCK_M: gl.constexpr = c_desc.block_type.shape[0]
     BLOCK_N: gl.constexpr = c_desc.block_type.shape[1]
     BLOCK_K: gl.constexpr = a_desc.block_type.shape[1]
+    dtype: gl.constexpr = a_desc.dtype
     K = a_desc.shape[1]
 
-    a_smem = gl.allocate_shared_memory(a_desc.dtype, a_desc.block_type.shape, a_desc.layout)
-    b_smem = gl.allocate_shared_memory(b_desc.dtype, b_desc.block_type.shape, b_desc.layout)
+    a_smem = gl.allocate_shared_memory(dtype, a_desc.block_type.shape, a_desc.layout)
+    b_smem = gl.allocate_shared_memory(dtype, b_desc.block_type.shape, b_desc.layout)
 
     # The block of C this program is processing is (pid_m, pid_n).
     pid_m = gl.program_id(axis=0)
@@ -309,7 +310,7 @@ def blocked_matmul_kernel(a_desc, b_desc, c_desc,  #
 
     # Determine the TMEM layout.
     tmem_layout: gl.constexpr = TensorMemoryLayout([BLOCK_M, BLOCK_N], unpacked=True)
-    acc_tmem = allocate_tensor_memory(c_desc.dtype, [BLOCK_M, BLOCK_N], tmem_layout)
+    acc_tmem = allocate_tensor_memory(gl.float32, [BLOCK_M, BLOCK_N], tmem_layout)
 
     tma_bar = gl.allocate_shared_memory(gl.int64, [1], mbarrier.MBarrierLayout())
     mma_bar = gl.allocate_shared_memory(gl.int64, [1], mbarrier.MBarrierLayout())
@@ -351,9 +352,9 @@ def blocked_matmul_kernel(a_desc, b_desc, c_desc,  #
     acc_reg_layout: gl.constexpr = get_tmem_32x32b_reg_layout(BLOCK_M, BLOCK_N, [BLOCK_M, BLOCK_N], num_warps)
     acc = acc_tmem.load(acc_reg_layout)
 
-    # Store tile of C.
-    c_smem = gl.allocate_shared_memory(c_desc.dtype, c_desc.block_type.shape, c_desc.layout)
-    c_smem.store(acc)
+    # Downcast accumulator and store tile of C.
+    c_smem = gl.allocate_shared_memory(dtype, c_desc.block_type.shape, c_desc.layout)
+    c_smem.store(acc.to(dtype))
     fence_async_shared()
     tma.async_copy_shared_to_global(c_desc, [off_m, off_n], c_smem)
     tma.store_wait(pendings=0)
@@ -369,7 +370,7 @@ def blocked_matmul(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B, num_warps):
     b_layout = gl.NVMMASharedLayout.get_default_for(B_BLOCK_SHAPE, gl.float16)
     b_desc = TensorDescriptor(B, B.shape, B.stride(), B_BLOCK_SHAPE, b_layout)
 
-    c_layout = gl.NVMMASharedLayout.get_default_for([BLOCK_M, BLOCK_N], gl.float32)
+    c_layout = gl.NVMMASharedLayout.get_default_for([BLOCK_M, BLOCK_N], gl.float16)
     c_desc = TensorDescriptor(C, C.shape, C.stride(), [BLOCK_M, BLOCK_N], c_layout)
 
     grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
@@ -384,17 +385,22 @@ def blocked_matmul(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B, num_warps):
 def test_blocked_matmul(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B, num_warps):
     A = torch.randn(M, K, device="cuda", dtype=torch.float16)
     B = torch.randn((N, K) if TRANSPOSE_B else (K, N), device="cuda", dtype=torch.float16)
-    C = torch.empty(M, N, device="cuda", dtype=torch.float32)
+    C = torch.empty(M, N, device="cuda", dtype=torch.float16)
 
     blocked_matmul(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B, num_warps)
 
     C_ref = A @ (B.T if TRANSPOSE_B else B)
-    torch.testing.assert_close(C_ref.to(torch.float32), C, rtol=1e-3, atol=1e-1)
+    torch.testing.assert_close(C_ref, C, rtol=1e-3, atol=1e-1)
 
 
 # %%
 # Let's benchmark our blocked matmul kernel. See the previous tutorial
 # 05-wgmma.py for more information on hyperparameter selection.
+#
+# A few tcgen05_mma specific notes:
+#
+# - TMEM utilization affects occupancy
+# - blockN=128 is typically the optimal instruction shape
 
 if __name__ == "__main__":
     print("Benchmarking selected configs")
@@ -402,14 +408,149 @@ if __name__ == "__main__":
     M, N, K = 8192, 8192, 16 * 1024
     A = torch.randn(M, K, device="cuda", dtype=torch.float16)
     B = torch.randn(K, N, device="cuda", dtype=torch.float16)
-    C = torch.empty(M, N, device="cuda", dtype=torch.float32)
+    C = torch.empty(M, N, device="cuda", dtype=torch.float16)
 
     print("BLOCK_M BLOCK_N BLOCK_K num_warps time (ms) tflops/s")
-    for BLOCK_M, BLOCK_N, BLOCK_K, num_warps in itertools.product([64, 128], [64, 128, 256], [64, 128, 256], [4, 8]):
+    configs = []
+    for BLOCK_M, BLOCK_N, BLOCK_K, num_warps in itertools.product([64, 128], [128], [64, 128], [4, 8]):
         if BLOCK_M * BLOCK_N // num_warps // 32 >= 256:  # guaranteed spilling
             continue
+        configs.append((BLOCK_M, BLOCK_N, BLOCK_K, num_warps))
 
         fn = lambda: blocked_matmul(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, False, num_warps)
+        ms = triton.testing.do_bench(fn)
+        flops = 2 * M * N * K
+        tflops_per_sec = flops * 1e-12 / (ms * 1e-3)
+        print(f"{BLOCK_M:>7} {BLOCK_N:>7} {BLOCK_K:>7} {num_warps:>9} {ms:>9.2f} {tflops_per_sec:>8.2f}")
+    print()
+
+# %%
+# ```
+# BLOCK_M BLOCK_N BLOCK_K num_warps time (ms) tflops/s
+#      64     128      64         4      3.48   631.45
+#      64     128      64         8      3.56   617.47
+#      64     128     128         4      2.61   843.98
+#      64     128     128         8      2.72   808.47
+#     128     128      64         4      2.55   863.75
+#     128     128      64         8      2.47   889.52
+#     128     128     128         4      1.82  1209.98
+#     128     128     128         8      2.16  1015.96
+# ```
+#
+# Our first attempt yields 1210 TFLOPS. Since tcgen05_mma is asynchronous, we
+# can overlap it with the TMA loads to reduce SM idle time. Let's keep the loads
+# synchronous and overlap the MMAs.
+#
+# Note that while tcgen05_mma is asynchronous, certain tcgen05 instructions are
+# implicitly pipelined, meaning their execution order is guaranteed:
+#
+# - tcgen05_mma instructions with the same shape and accumulator dtype
+# - tcgen05_mma followed by tcgen05_commit
+# - tcgen05_cp followed by tcgen05_mma, and vice versa
+#
+# Thus, we don't need to explicitly synchronize two async MMAs.
+
+
+@gluon.jit
+def blocked_matmul_pipelined_kernel(a_desc, b_desc, c_desc, num_warps: gl.constexpr):
+    BLOCK_M: gl.constexpr = c_desc.block_type.shape[0]
+    BLOCK_N: gl.constexpr = c_desc.block_type.shape[1]
+    BLOCK_K: gl.constexpr = a_desc.block_type.shape[1]
+    dtype: gl.constexpr = a_desc.dtype
+    K = a_desc.shape[1]
+
+    # Allocate 2 buffers for each A and B.
+    a_smem = gl.allocate_shared_memory(dtype, [2] + a_desc.block_type.shape, a_desc.layout)
+    b_smem = gl.allocate_shared_memory(dtype, [2] + b_desc.block_type.shape, b_desc.layout)
+    index = 0
+
+    pid_m = gl.program_id(axis=0)
+    pid_n = gl.program_id(axis=1)
+    off_m = pid_m * BLOCK_M
+    off_n = pid_n * BLOCK_N
+
+    tmem_layout: gl.constexpr = TensorMemoryLayout([BLOCK_M, BLOCK_N], unpacked=True)
+    acc_tmem = allocate_tensor_memory(gl.float32, [BLOCK_M, BLOCK_N], tmem_layout)
+
+    tma_bar = gl.allocate_shared_memory(gl.int64, [1], mbarrier.MBarrierLayout())
+    mma_bar = gl.allocate_shared_memory(gl.int64, [1], mbarrier.MBarrierLayout())
+    mbarrier.init(tma_bar, count=1)
+    mbarrier.init(mma_bar, count=1)
+    phase = 0
+
+    use_acc = False
+    for k in range(0, K, BLOCK_K):
+        a = a_smem.index(index)
+        b = b_smem.index(index)
+
+        mbarrier.expect(tma_bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes)
+        tma.async_copy_global_to_shared(a_desc, [off_m, k], tma_bar, a)
+        tma.async_copy_global_to_shared(b_desc, [k, off_n], tma_bar, b)
+        mbarrier.wait(tma_bar, phase=phase)
+
+        # Recall that mbarriers are initialized to phase 1 complete. We can use
+        # that fact to rotate the mbarrier wait with respect to the MMA.
+        mbarrier.wait(mma_bar, phase=phase ^ 1)
+        tcgen05_mma(a, b, acc_tmem, use_acc=use_acc)
+        tcgen05_commit(mma_bar)
+        use_acc = True
+
+        phase ^= 1
+        # Move to the next buffer. The TMA load will start while the WGMMA is
+        # still running.
+        index ^= 1
+
+    # Wait for the last MMA.
+    mbarrier.wait(mma_bar, phase=phase ^ 1)
+
+    mbarrier.invalidate(tma_bar)
+    mbarrier.invalidate(mma_bar)
+
+    acc_reg_layout: gl.constexpr = get_tmem_32x32b_reg_layout(BLOCK_M, BLOCK_N, [BLOCK_M, BLOCK_N], num_warps)
+    acc = acc_tmem.load(acc_reg_layout)
+    c_smem = gl.allocate_shared_memory(dtype, c_desc.block_type.shape, c_desc.layout)
+    c_smem.store(acc.to(dtype))
+    fence_async_shared()
+    tma.async_copy_shared_to_global(c_desc, [off_m, off_n], c_smem)
+    tma.store_wait(pendings=0)
+
+
+def blocked_matmul_pipelined(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, num_warps):
+    M, N = C.shape
+
+    a_layout = gl.NVMMASharedLayout.get_default_for([BLOCK_M, BLOCK_K], gl.float16)
+    b_layout = gl.NVMMASharedLayout.get_default_for([BLOCK_K, BLOCK_N], gl.float16)
+    c_layout = gl.NVMMASharedLayout.get_default_for([BLOCK_M, BLOCK_N], gl.float16)
+    a_desc = TensorDescriptor(A, A.shape, A.stride(), [BLOCK_M, BLOCK_K], a_layout)
+    b_desc = TensorDescriptor(B, B.shape, B.stride(), [BLOCK_K, BLOCK_N], b_layout)
+    c_desc = TensorDescriptor(C, C.shape, C.stride(), [BLOCK_M, BLOCK_N], c_layout)
+
+    grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
+    k = blocked_matmul_pipelined_kernel.warmup(a_desc, b_desc, c_desc, num_warps=num_warps, grid=grid)
+    print(k.asm["ptx"])
+    blocked_matmul_pipelined_kernel[grid](a_desc, b_desc, c_desc, num_warps=num_warps)
+
+
+@pytest.mark.parametrize("M, N, K", [(208, 416, 304), (2000, 1000, 2000)])
+@pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(64, 64, 64), (128, 128, 128)])
+@pytest.mark.parametrize("num_warps", [4, 8])
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+def test_blocked_matmul_pipelined(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, num_warps):
+
+    A = torch.randn(M, K, device="cuda", dtype=torch.float16)
+    B = torch.randn(K, N, device="cuda", dtype=torch.float16)
+    C = torch.empty(M, N, device="cuda", dtype=torch.float16)
+
+    blocked_matmul_pipelined(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, num_warps)
+    torch.testing.assert_close(A @ B, C, rtol=1e-3, atol=1e-1)
+
+
+if __name__ == "__main__":
+    print("Benchmarking pipelined matmul")
+    print("=============================")
+    print("BLOCK_M BLOCK_N BLOCK_K num_warps time (ms) tflops/s")
+    for BLOCK_M, BLOCK_N, BLOCK_K, num_warps in configs:
+        fn = lambda: blocked_matmul_pipelined(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, num_warps)
         ms = triton.testing.do_bench(fn)
         flops = 2 * M * N * K
         tflops_per_sec = flops * 1e-12 / (ms * 1e-3)
