@@ -12,7 +12,7 @@ from typing import Any, Callable, Dict, Optional, Tuple, Type, Union, Iterable, 
 
 from .. import knobs, language
 from .._C.libtriton import ir, gluon_ir
-from ..language import constexpr, str_to_ty, tensor
+from ..language import constexpr, str_to_ty, tensor, tuple as tl_tuple
 from ..language.core import _unwrap_if_constexpr, base_value, base_type
 from ..runtime.jit import get_jit_fn_file_line, get_full_name
 # ideally we wouldn't need any runtime component
@@ -528,6 +528,21 @@ class CodeGenerator(ast.NodeVisitor):
         elts = language.tuple([self.visit(elt) for elt in node.elts])
         return elts
 
+    def visit_ListComp(self, node: ast.ListComp):
+        if len(node.generators) != 1:
+            raise ValueError("nested comprehensions are not supported")
+
+        comp = node.generators[0]
+        iter = self.visit(comp.iter)
+        if not isinstance(iter, tl_tuple):
+            raise NotImplementedError("only tuple comprehensions are supported")
+
+        results = []
+        for item in iter:
+            self.set_value(comp.target.id, item)
+            results.append(self.visit(node.elt))
+        return tl_tuple(results)
+
     # By design, only non-kernel functions can return
     def visit_Return(self, node):
         ret_value = self.visit(node.value)
@@ -656,9 +671,7 @@ class CodeGenerator(ast.NodeVisitor):
                 self.assignTarget(target, value.values[i])
             return
         if isinstance(target, ast.Attribute):
-            base = self.visit(target.value)
-            setattr(base, target.attr, value)
-            return
+            raise NotImplementedError("Attribute assignment is not supported in triton")
         assert isinstance(target, ast.Name)
         self.set_value(self.visit(target), value)
 
@@ -1098,10 +1111,7 @@ class CodeGenerator(ast.NodeVisitor):
         return lhs[slices]
 
     def visit_Subscript_Store(self, node, value):
-        assert isinstance(node.ctx, ast.Store)
-        lhs = self.visit(node.value)
-        slices = self.visit(node.slice)
-        self.call_Method(node, lhs.__setitem__, lhs, [slices, value], {})
+        raise NotImplementedError("__setitem__ is not supported in triton")
 
     def visit_Subscript(self, node):
         return self.visit_Subscript_Load(node)

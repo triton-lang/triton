@@ -1277,7 +1277,7 @@ def _type_for_tuple_values(values, fields=None):
 
 class tuple(base_value):
 
-    def __init__(self, args: Sequence, type: tuple_type = None):
+    def __init__(self, args: Sequence, type: Optional[tuple_type] = None):
         self.values = [i for i in args]
         if isinstance(type, tuple_type):
             self.type = type
@@ -1299,10 +1299,9 @@ class tuple(base_value):
         return self.values[self.type.fields.index(name)]
 
     # TODO: remove
-    def __setitem__(self, idx: constexpr, value):
-        if isinstance(idx, int):
-            idx = constexpr(idx)
-        assert isinstance(idx, constexpr)
+    def _setitem(self, idx, value):
+        idx = _unwrap_if_constexpr(idx)
+        assert isinstance(idx, int)
         self.values[idx] = value
         self.type = _type_for_tuple_values(self.values, self.type.fields)
 
