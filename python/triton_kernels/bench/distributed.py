@@ -276,8 +276,9 @@ def pack_bitmatrix(
     """
     pid_m = tl.program_id(0)
     offsets_m = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
-    offsets = offsets_m[:, None] * n_expts_act + tl.arange(0, n_expts_act)[None, :]
-    mask = (offsets_m < n_rows)[:, None]
+    offsets_k = tl.arange(0, BLOCK_SIZE_K)
+    offsets = offsets_m[:, None] * n_expts_act + offsets_k[None, :]
+    mask = (offsets_m < n_rows)[:, None] & (offsets_k < n_expts_act)[None, :]
     indices = tl.load(expt_indx + offsets, mask=mask, other=sentinel)
     div = indices // 32
     rem = indices % 32
