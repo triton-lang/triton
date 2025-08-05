@@ -432,16 +432,27 @@ class PaddedSharedLayout(SharedLayout):
     Represents a layout for the access to shared memory. Compared to SwizzledSharedLayout,
     it uses padding to avoid shared memory bank conflicts.
 
-    One concrete example with `eM` for tensor elements before padding:
-    [e0, e1, e2, e3, e4, e5, e6, e7, ...]
+    In the following example of a tensor,
+    `eM` is used for tensor elements and
+    `pN` is used for the padded element.
 
-    If interval-padding pairs, List[[interval, padding]] is [[2, 1], [4, 3]],
+    Before padding, the tensor looks like:
+    [e0, e1,
+     e2, e3,
+     e4, e5,
+     e6, e7,
+     ...]
+
+    After padding with interval-padding pair list is [[2, 1], [4, 2]],
     the tensor will be
-    [e0, e1, p0, e2, e3, p1, p2, p3, e4, e5, p4, e6, e7, p5, p6, p7, ...]
-    with `pN` is for the padded element.
+    [e0, e1, p0,
+     e2, e3, p1, p2, p3,
+     e4, e5, p4,
+     e6, e7, p5, p6, p7,
+     ...]
 
     Args:
-        interval_padding_pairs (List[Tuple[int, int]]): The first element of pair in the list is interval and the second is padding. For the example above, this argument is [[2, 1], [4, 3]].
+        interval_padding_pairs (List[Tuple[int, int]]): For each pair in the list, the 1st element is interval and the 2nd is padding. For the example above, the list is [[2, 1], [4, 2]].
         order (List[int]): order of logical tensor dimensions; fastest-varying first.
         ctas_per_cga (Optional[List[int]]): CTAs per CGA grouping.
         cta_split_num (Optional[List[int]]): Split factors for CTAs.
@@ -478,19 +489,19 @@ class PaddedSharedLayout(SharedLayout):
 
     def verify(self):
         pairs = self.interval_padding_pairs
-        assert len(pairs) > 0, "must have at least one interval-padding pair"
+        assert len(pairs) > 0, "PaddedSharedLayout interval_padding_pairs must have at least one interval-padding pair"
         intervals, paddings = zip(*pairs)
 
         unique_intervals = list(set(intervals))
         assert len(unique_intervals) == len(intervals)
 
         is_power_of_2 = lambda n: n > 0 and n & (n - 1) == 0
-        assert all(is_power_of_2(n) for n in intervals), "interval values must all be power of two"
-        assert all(is_power_of_2(n) for n in paddings), "padding values must all be power of two"
+        assert all(is_power_of_2(n) for n in intervals), "PaddedSharedLayout interval values must all be power of two"
+        assert all(is_power_of_2(n) for n in paddings), "PaddedSharedLayout padding values must all be power of two"
 
-        assert len(self.order) > 0, "order must not be empty"
+        assert len(self.order) > 0, "PaddedSharedLayout order must not be empty"
         rank = len(self.cta_order)
-        assert len(self.order) == rank, "order size must match must match CTALayout rank"
+        assert len(self.order) == rank, "PaddedSharedLayout order size must match must match CTALayout rank"
 
         _realize_cta_layout(self, rank)
         assert len(self.ctas_per_cga) == rank
