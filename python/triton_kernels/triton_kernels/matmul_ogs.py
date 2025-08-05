@@ -427,8 +427,9 @@ def matmul_ogs(x, w, bias,
     if not isinstance(x, Tensor):
         x = Tensor(x, dtype=x.dtype)
     # determine shapes
+    is_ragged = routing_data.expt_hist is not None
     M = x.shape[-2] if gather_indx is None else gather_indx.src_indx.shape[0]
-    batch_size = w.shape[0] if routing_data.expt_hist is None and w.ndim == 3 else 1
+    batch_size = w.shape[0] if not is_ragged and w.ndim == 3 else 1
     K, N = w.shape[-2:]
     assert K == x.shape[-1]
     if x.ndim == 3 and w.ndim == 3:
@@ -504,61 +505,38 @@ def matmul_ogs(x, w, bias,
     grid = min(target_info.num_sms() - opt_flags.idle_sms, max_grid) if opt_flags.is_persistent else max_grid
     # canonicalize storage
     has_gather = gather_indx is not None
-    has_scatter_tma = writeback_idxs is not None
+    has_scatter = writeback_idxs is not None
+    has_gather_tma = has_gather and target_info.has_tma_gather()
+    has_scatter_tma = has_scatter and target_info.has_tma_gather()
     y = wrap_torch_tensor(out0.view(-1, out0.shape[-1]) if has_scatter_tma else out0)
     x_storage = _canonicalize_storage(x.storage, 2 if has_gather else 3, flex.lhs_data)
     w_storage = _canonicalize_storage(w.storage, 3, flex.rhs_data)
-    y_storage = _canonicalize_storage(y.storage, 2 if has_scatter_tma else 4, flex.out_data)
+    y_storage = _canonicalize_storage(y.storage, 2 if has_scatter else 4, flex.out_data)
     # create tma descriptor for x
-    x_tma_mode = None
-    if has_gather and target_info.has_tma_gather() and opt_flags.is_persistent:
-        x_tma_mode = "gather"
-    elif opt_flags.is_persistent and routing_data.expt_hist is not None:
-        x_tma_mode = "ragged"
-    elif opt_flags.is_persistent:
-        x_tma_mode = "plain"
-    #
-    x_desc_ptr_off = 0
-    if x_tma_mode == "gather":
-        x_tensor_or_tma = x_storage.make_tma([1, opt_flags.block_k])
-    elif x_tma_mode == "plain":
-        x_tensor_or_tma = x_storage.make_tma([1, opt_flags.block_m, opt_flags.block_k])
-    elif x_tma_mode == "ragged":
-        x_tensor_or_tma = x_storage.make_ragged_tma([opt_flags.block_m, opt_flags.block_k])
-        x_desc_ptr_off = -x_storage.data.shape[-2] * x_storage.data.shape[-1]
-    else:
-        x_tensor_or_tma = x_storage.data
-    #
-    # x_has_tma = ((not has_gather) or (has_gather and target_info.has_tma_gather())) and opt_flags.is_persistent
-    # x_block_tma = ([1] if has_gather else [1, opt_flags.block_m]) + [opt_flags.block_k]
-    # x_tensor_or_tma = x_storage.make_tma(x_block_tma) if x_has_tma else x_storage.data
+    x_tma_mode = "ragged_load" if is_ragged and x_storage.can_use_ragged_tma("load") else "gather" if has_gather_tma else "dense"
+    x_tma_block_size = {
+        "ragged_load": [opt_flags.block_m, opt_flags.block_k],
+        "gather": [1, opt_flags.block_k],
+        "dense": [1, opt_flags.block_m, opt_flags.block_k]
+    }[x_tma_mode]
+    x_tensor_or_tma = x_storage.make_tma(x_tma_block_size, x_tma_mode) if opt_flags.is_persistent else x_storage.data
+    # create tma descriptor for y
+    block_n = opt_flags.block_n // opt_flags.epilogue_subtile // fused_activation.reduction_n
+    y_tma_mode = "ragged_store" if is_ragged and y_storage.can_use_ragged_tma("store") else "scatter" if has_scatter_tma else "dense"
+    y_tma_block_size = {
+        "ragged_store": [opt_flags.block_m, block_n],
+        "scatter": [1, block_n],
+        "dense": [1, 1, opt_flags.block_m, block_n]
+    }[y_tma_mode]
+    y_tensor_or_tma = y_storage.make_tma(y_tma_block_size, y_tma_mode) if opt_flags.is_persistent else y_storage.data
+    y_desc_ptr_off = -y_storage.data.shape[-2] * y_storage.data.shape[-1] if is_ragged else 0
     # create tma descriptor for w
     w_has_tma = opt_flags.is_persistent
-    w_tensor_or_tma = w_storage.make_tma([1, opt_flags.block_k, opt_flags.block_n]) if w_has_tma else w_storage.data
+    w_tensor_or_tma = w_storage.make_tma([1, opt_flags.block_k, opt_flags.block_n], "dense") if w_has_tma else w_storage.data
     # create tma descriptor for w_scale
     w_scale_tensor_or_tma = w_scale
     w_scale_has_tma = opt_flags.is_persistent and w_scale is not None
-    w_scale_tensor_or_tma =  w_scale.storage.make_tma([opt_flags.block_n, opt_flags.block_k]) if w_scale_has_tma else w_scale
-    # create tma descriptor for y
-    y_tma_mode = None
-    if has_scatter_tma and target_info.has_tma_gather() and opt_flags.is_persistent:
-        y_tma_mode = "scatter"
-    elif opt_flags.is_persistent and routing_data.expt_hist is not None:
-        y_tma_mode = "ragged"
-    elif opt_flags.is_persistent:
-        y_tma_mode = "plain"
-    #
-    block_n = opt_flags.block_n // opt_flags.epilogue_subtile // fused_activation.reduction_n
-    y_desc_ptr_off = 0
-    if y_tma_mode == "scatter":
-        y_tensor_or_tma = y_storage.make_tma([1, block_n])
-    elif y_tma_mode == "plain":
-        y_tensor_or_tma = y_storage.make_tma([1, 1, opt_flags.block_m, block_n])
-    elif y_tma_mode == "ragged":
-        y_tensor_or_tma = y_storage.make_ragged_tma([opt_flags.block_m, block_n])
-        y_desc_ptr_off = -y_storage.data.shape[-2] * y_storage.data.shape[-1]
-    else:
-        y_tensor_or_tma = y_storage.data
+    w_scale_tensor_or_tma =  w_scale.storage.make_tma([opt_flags.block_n, opt_flags.block_k], "dense") if w_scale_has_tma else w_scale
     # canonicalize strides
     x_strides = [0]*(3 - x_storage.data.ndim) + list(x_storage.data.stride())
     x_scale_strides = x_scale.stride() if x_has_mx else (None, None, None)
@@ -573,7 +551,7 @@ def matmul_ogs(x, w, bias,
                    y_tensor_or_tma, y_storage.data, y_desc_ptr_off, *out0.stride(),
                    *((None, out_scale, None) if out_has_mx else out0_flex),
                    *out_scale_strides[-3:],
-                   x_tensor_or_tma, x_storage.data, x_desc_ptr_off, *x_strides,
+                   x_tensor_or_tma, x_storage.data, 0, *x_strides,
                    flex.lhs_data.scale,
                    None if x_scale is None else x_scale.data.view(torch.uint8), *x_scale_strides,
                    w_tensor_or_tma, w_storage.data, *w_storage.data.stride(), w_storage.data.stride()[-1] != 1,

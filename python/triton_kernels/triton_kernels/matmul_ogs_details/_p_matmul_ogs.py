@@ -209,6 +209,8 @@ def _p_matmul_ogs(
              IS_EPILOGUE_DEQUANT_MXFP8: tl.constexpr = False):
     # validate invariants
     validate_mxfp(W, MxScale, BLOCK_K, SWIZZLE_MX_VALUE, SWIZZLE_MX_SCALE)
+    # this is faster than using host-side TMAs directly ?
+    Y = _make_device_tma_desc_workaround(Y, YPtr + YDescPtrOff)
     # compute static attributes
     is_microscaled_format: tl.constexpr = MxScale is not None
     BLOCK_K_W_SCALES: tl.constexpr = BLOCK_K // MXFP_BLOCK_SIZE
@@ -235,16 +237,11 @@ def _p_matmul_ogs(
     USE_FLEXPOINT_SCALE: tl.constexpr = YActualScale is not None or YChecksumScale is not None
 
     USE_GATHER_TMA: tl.constexpr = GatherIndx is not None and cuda_capability_geq(10, 0)
-    # X_USE_LOAD_TMA: tl.constexpr = GatherIndx is None and isinstance(X, tl.tensor_descriptor)
-    # X_USE_LOAD_TMA: tl.constexpr = True
     USE_SCATTER_TMA: tl.constexpr = (cuda_capability_geq(10, 0) and HAS_FUSED_SCATTER)
 
     k_tiles = tl.cdiv(K, BLOCK_K * SPLIT_K)
     num_tiles = batch_size * grid_m * grid_n * SPLIT_K
 
-    # this is faster than using host-side TMAs directly ?
-    Y = _make_device_tma_desc_workaround(Y, YPtr + YDescPtrOff)
-    # X = _make_device_tma_desc_workaround(X, XPtr + XDescPtrOff)
 
     # If true, do not share loop-carried variables between the prologue and the
     # epilogue to enable better pipelining with mmav5
@@ -269,13 +266,6 @@ def _p_matmul_ogs(
             BLOCK_M, BLOCK_N, SPLIT_K,
             GROUP_M, XCD_SWIZZLE)
 
-        # Base pointers and offsets.
-        # if not USE_GATHER_TMA and not X_USE_LOAD_TMA:
-        #     XBase = X + start_z.to(index_type) * stride_x_z
-        #     offs_x_k = tl.arange(0, BLOCK_K)[None, :] * stride_x_k
-        #     if SPLIT_K > 1:
-        #         offs_x_k += pid_k.to(index_type) * BLOCK_K * stride_x_k
-
         if X_TMA_MODE == "gather":
             offs_m = off_m + tl.arange(0, BLOCK_M)
             mask_m = offs_m < (M if M is not None else eM)
@@ -288,7 +278,6 @@ def _p_matmul_ogs(
                 offs_x_m = tl.load(GatherIndx + start_m.to(index_type) + offs_m,
                                     mask=mask_m, other=-N_EXPTS_ACT) // N_EXPTS_ACT
 
-
         acc = tl.zeros((BLOCK_N, BLOCK_M) if SWAP_XW else (BLOCK_M, BLOCK_N), dtype=tl.float32)
         for ki in tl.range(k_tiles, disallow_acc_multi_buffer=DISALLOW_ACC_MULTI_BUFFER):
             off_k_x = pid_k * BLOCK_K + ki * BLOCK_K * SPLIT_K
@@ -298,31 +287,14 @@ def _p_matmul_ogs(
             if is_microscaled_format:
                 off_k_w_scales = pid_k * BLOCK_K_W_SCALES + ki * BLOCK_K_W_SCALES * SPLIT_K
 
-            if X_TMA_MODE == "gather":
-                x = X.gather(offs_x_m, off_k_x)
-            elif X_TMA_MODE == "ragged":
+            if X_TMA_MODE == "ragged_load":
                 x = X.load([start_z, start_m + eM, NRowsX - eM + off_m, off_k_x])
                 x = x.reshape(BLOCK_M, BLOCK_K)
-            else:
-                tl.static_assert(X_TMA_MODE == "plain", "Invalid TMA mode")
+            if X_TMA_MODE == "gather":
+                x = X.gather(offs_x_m, off_k_x)
+            if X_TMA_MODE == "dense":
                 x = X.load([start_z, start_m + off_m, off_k_x])
                 x = x.reshape(BLOCK_M, BLOCK_K)
-
-            # if USE_GATHER_TMA:
-            # elif X_USE_LOAD_TMA:
-            #     x = _tma_load_2d(X, [start_z, start_m + off_m, off_k_x])
-            # else:
-            #     XPtrs = XBase + offs_x_m + offs_x_k
-            #     XBase += BLOCK_K * SPLIT_K * stride_x_k
-            #     mask_k = tl.arange(0, BLOCK_K) < K - off_k_x
-            #     if EVEN_K:
-            #         if SPLIT_K > 1:
-            #             x = tl.load(XPtrs, mask=mask_k[None, :], other=0.0)
-            #         else:
-            #             x = tl.load(XPtrs)
-            #     else:
-            #         x = tl.load(XPtrs, mask=mask_k[None, :], other=0.0)
-
             w = _tma_load_2d(W, [expt_id, off_k_w, off_n], transpose=W_TRANSPOSE)
 
             if is_microscaled_format:
@@ -466,15 +438,14 @@ def _p_matmul_ogs(
                 out = EPILOGUE_FN(out, *epilogue_fn_args, target_dtype=YPtr.dtype.element_ty, pid=len(accs)*tile_id1 + a_i)
 
             out_off_n = off_n1 // ACTIVATION_REDUCTION_N + a_i * OUT_BLOCK_N
+            if Y_TMA_MODE == "ragged_store":
+                Y.store([pid_k, start_z1, start_m1 + eM1, NRowsY - eM1 + off_m1, out_off_n], tl.reshape(out, [1, 1, 1] + out.shape).to(YPtr.dtype.element_ty))
             if Y_TMA_MODE == "scatter":
                 # Convert -1 offsets to INT_MAX. We do this by clearing the leading bit. Note that
                 # there shouldn't be any other negative values.
                 offs_y_m = (offs_y_m.to(tl.uint32, bitcast=True) & 0x7FFFFFFF).to(tl.int32, bitcast=True)
                 Y.scatter(out.to(YPtr.dtype.element_ty), offs_y_m, out_off_n)
-            elif Y_TMA_MODE == "ragged":
-                Y.store([pid_k, start_z1, start_m1 + eM1, NRowsY - eM1 + off_m1, out_off_n], tl.reshape(out, [1, 1, 1] + out.shape).to(YPtr.dtype.element_ty))
-            else:
-                tl.static_assert(Y_TMA_MODE == "plain", "Invalid TMA mode")
+            if Y_TMA_MODE == "dense":
                 Y.store([pid_k, start_z1, off_m1, out_off_n], tl.reshape(out, [1, 1] + out.shape).to(YPtr.dtype.element_ty))
 
     # Update the flexpoint scales

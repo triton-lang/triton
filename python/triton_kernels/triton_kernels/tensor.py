@@ -1,6 +1,5 @@
 from dataclasses import dataclass, fields
 from typing import Type
-
 import torch
 from triton.tools.tensor_descriptor import TensorDescriptor
 
@@ -52,7 +51,7 @@ class Storage:
         compliant = [strides[i] * bitwidth % 128 == 0 for i in range(ndim) if i != major_dim]
         return all(compliant)
 
-    def make_tma(self, block_shape, transpose=False):
+    def make_dense_tma(self, block_shape, transpose=False):
         strides = list(self.data.stride())
         shape = list(self.data.shape)
         # TODO
@@ -73,15 +72,43 @@ class Storage:
         block_shape = self.layout.swizzle_block_shape(block_shape)
         return TensorDescriptor(TensorDescriptorPtr(self.data.data_ptr(), self.data.dtype), shape, strides, block_shape)
 
-    def make_ragged_tma(self, block_shape):
+    def _ragged_base_offset(self):
+        N, d = self.data.shape[-2:]
+        return N * d * self.data.element_size()
+
+    def can_use_ragged_tma(self, mode):
+        if mode != "load":
+            return True
+        storage_n_bytes = self.data.untyped_storage().nbytes()
+        storage_off = self.data.storage_offset() - self._ragged_base_offset()
+        ret = storage_off >= 0
+        # if descriptor is defined to hold <= 128kB:
+        if storage_n_bytes <= 128 * 1024:
+            ret = ret and storage_n_bytes - storage_off >= 4 * 1024
+        else:
+            ret = ret and storage_n_bytes - storage_off >= 128 * 1024
+        return ret
+
+    def make_ragged_tma(self, block_shape, mode):
         assert self.data.is_contiguous()
         N, d = self.data.shape[-2:]
         shape = list(self.data.shape[:-2]) + [N + 1, N, d]
         strides = list(self.data.stride()[:-2]) + [d, d, 1]
-        data_ptr = self.data.data_ptr() - N * d * self.data.element_size()
+        data_ptr = self.data.data_ptr() - self._ragged_base_offset()
         assert data_ptr > 0
+        assert self.can_use_ragged_tma(mode)
         block_shape = [1] * (len(shape) - 2) + block_shape
+        print(self.data.shape)
         return TensorDescriptor(TensorDescriptorPtr(data_ptr, self.data.dtype), shape, strides, block_shape)
+
+    def make_tma(self, block_shape, mode, transpose=False):
+        if mode in ["dense", "gather", "scatter"]:
+            return self.make_dense_tma(block_shape, transpose)
+        if mode == "ragged_load":
+            return self.make_ragged_tma(block_shape, "load")
+        if mode == "ragged_store":
+            return self.make_ragged_tma(block_shape, "store")
+        raise ValueError(f"invalid mode: {mode}")
 
 
 @dataclass
