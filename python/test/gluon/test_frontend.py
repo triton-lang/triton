@@ -1259,7 +1259,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     ttng.async_copy_mbarrier_arrive %10 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
     ttng.async_copy_mbarrier_arrive %10 {noIncrement} : !ttg.memdesc<1xi64, #shared, #smem, mutable>
     %11 = ttg.async_commit_group
-    %12 = ttg.async_wait  {num = 0 : i32}
+    %12 = ttg.async_wait {num = 0 : i32}
     tt.return
   }
 }
