@@ -150,8 +150,7 @@ def test_tmem_example_kernel(M, N, num_warps):
 
 @gluon.jit
 def small_mma_kernel(a_desc, b_desc, c_desc, d_desc,  #
-                     LHS_IN_TMEM: gl.constexpr, USE_COMMIT: gl.constexpr,  #
-                     tmem_block: gl.constexpr, num_warps: gl.constexpr):
+                     LHS_IN_TMEM: gl.constexpr, USE_COMMIT: gl.constexpr, num_warps: gl.constexpr):
     # Load A, B, and C tiles.
     bar = gl.allocate_shared_memory(gl.int64, [1], mbarrier.MBarrierLayout())
     mbarrier.init(bar, count=1)
@@ -175,22 +174,22 @@ def small_mma_kernel(a_desc, b_desc, c_desc, d_desc,  #
     M: gl.constexpr = d_desc.block_type.shape[0]
     N: gl.constexpr = d_desc.block_type.shape[1]
     K: gl.constexpr = a_desc.block_type.shape[1]
-    reg_layout: gl.constexpr = get_tmem_32x32b_reg_layout(M, N, tmem_block, num_warps)
-
-    acc_tmem_layout: gl.constexpr = TensorMemoryLayout(tmem_block.value, unpacked=True)
-    acc_tmem = allocate_tensor_memory(d_desc.dtype, [M, N], acc_tmem_layout)
-    if LHS_IN_TMEM:
-        # When the LHS operand is fp16 or fp8, it is packed in TMEM.
-        lhs_packed: gl.constexpr = a_desc.dtype.primitive_bitwidth < 32
-        lhs_tmem_layout: gl.constexpr = TensorMemoryLayout(tmem_block.value, unpacked=not lhs_packed)
-        lhs_tmem = allocate_tensor_memory(a_desc.dtype, [M, K], lhs_tmem_layout)
 
     # Copy operands into TMEM.
     # TODO: Use `tcgen05.cp` when it is exposed in Gluon.
-    acc = c_smem.load(reg_layout)
+    acc_tmem_layout: gl.constexpr = TensorMemoryLayout([M, N], unpacked=True)
+    acc_tmem = allocate_tensor_memory(d_desc.dtype, [M, N], acc_tmem_layout)
+    acc_reg_layout: gl.constexpr = get_tmem_32x32b_reg_layout(M, N, [M, N], num_warps)
+    acc = c_smem.load(acc_reg_layout)
     acc_tmem.store(acc)
+
     if LHS_IN_TMEM:
-        lhs = a_smem.load(reg_layout)
+        # When the LHS operand is fp16 or fp8, it is packed in TMEM.
+        lhs_tmem_layout: gl.constexpr = TensorMemoryLayout([M, K], unpacked=False)
+        lhs_tmem = allocate_tensor_memory(a_desc.dtype, [M, K], lhs_tmem_layout)
+
+        lhs_reg_layout: gl.constexpr = get_tmem_32x32b_reg_layout(M, K, [M, K], num_warps)
+        lhs = a_smem.load(lhs_reg_layout)
         lhs_tmem.store(lhs)
         a = lhs_tmem
     else:
@@ -211,7 +210,8 @@ def small_mma_kernel(a_desc, b_desc, c_desc, d_desc,  #
     #
     # tcgen05_mma is comprised of multiple async MMA instructions. The shape of
     # each instruction is determined by the TMEM layout. Selecting larger
-    # instruction shapes generally results in better performance.
+    # instruction shapes generally results in better performance. Note that
+    # tcgen05_mma only supports blockM=64 when there is 1 block.
     #
     # Note that tcgen05_mma accesses shared memory through the async proxy, like
     # TMAs. This means `fence_async_shared` is required to prevent hazards if
@@ -224,20 +224,21 @@ def small_mma_kernel(a_desc, b_desc, c_desc, d_desc,  #
 
     # Wait for the completion of the MMA.
     mbarrier.wait(bar, phase=1)
+    mbarrier.invalidate(bar)
 
     # Another important flag to consider is `use_acc`. When `use_acc=False`, the
     # current value of the accumulator in TMEM is ignored and the accumulator.
     # This is an efficient way to zero the accumulator.
 
     d_smem = gl.allocate_shared_memory(d_desc.dtype, d_desc.block_type.shape, d_desc.layout)
-    acc = acc_tmem.load(reg_layout)
+    acc = acc_tmem.load(acc_reg_layout)
     d_smem.store(acc)
     fence_async_shared()
     tma.async_copy_shared_to_global(d_desc, [0, 0], d_smem)
     tma.store_wait(pendings=0)
 
 
-def small_mma(A, B, C, D, LHS_IN_TMEM, USE_COMMIT, TMEM_BLOCK, num_warps):
+def small_mma(A, B, C, D, LHS_IN_TMEM, USE_COMMIT, num_warps):
     a_layout = gl.NVMMASharedLayout.get_default_for(A.shape, gl.float16)
     b_layout = gl.NVMMASharedLayout.get_default_for(B.shape, gl.float16)
     cd_layout = gl.NVMMASharedLayout.get_default_for(C.shape, gl.float32)
@@ -249,19 +250,19 @@ def small_mma(A, B, C, D, LHS_IN_TMEM, USE_COMMIT, TMEM_BLOCK, num_warps):
 
     small_mma_kernel[(1, )](
         a_desc, b_desc, c_desc, d_desc,  #
-        LHS_IN_TMEM, USE_COMMIT, TMEM_BLOCK, num_warps=num_warps)
+        LHS_IN_TMEM, USE_COMMIT, num_warps=num_warps)
 
 
-@pytest.mark.parametrize("M, N, K", [(128, 256, 64)])
+@pytest.mark.parametrize("M, N, K", [(128, 128, 128), (64, 128, 128)])
 @pytest.mark.parametrize("LHS_IN_TMEM", [False, True])
 @pytest.mark.parametrize("USE_COMMIT", [False, True])
-@pytest.mark.parametrize("TMEM_BLOCK", [(64, 64), (128, 128)])
 @pytest.mark.parametrize("num_warps", [4, 8])
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
-def test_small_mma(M, N, K, LHS_IN_TMEM, USE_COMMIT, TMEM_BLOCK, num_warps):
+def test_small_mma(M, N, K, LHS_IN_TMEM, USE_COMMIT, num_warps):
+    torch.manual_seed(0)
     A = torch.randn(M, K, device="cuda", dtype=torch.float16)
     B = torch.randn(K, N, device="cuda", dtype=torch.float16)
     C = torch.randn(M, N, device="cuda", dtype=torch.float32)
     D = torch.empty_like(C)
-    small_mma(A, B, C, D, LHS_IN_TMEM, USE_COMMIT, TMEM_BLOCK, num_warps)
+    small_mma(A, B, C, D, LHS_IN_TMEM, USE_COMMIT, num_warps)
     torch.testing.assert_close(A @ B + C, D, atol=1e-3, rtol=1e-1)
