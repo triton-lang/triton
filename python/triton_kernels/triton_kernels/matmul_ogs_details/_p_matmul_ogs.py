@@ -286,7 +286,7 @@ def _p_matmul_ogs(
             off_k_w = pid_k * PHYSICAL_BLOCK_K_W + ki * PHYSICAL_BLOCK_K_W * SPLIT_K
             if is_microscaled_format:
                 off_k_w_scales = pid_k * BLOCK_K_W_SCALES + ki * BLOCK_K_W_SCALES * SPLIT_K
-
+            # load x
             if X_TMA_MODE == "ragged_load":
                 x = X.load([start_z, start_m + eM, NRowsX - eM + off_m, off_k_x])
                 x = x.reshape(BLOCK_M, BLOCK_K)
@@ -295,6 +295,7 @@ def _p_matmul_ogs(
             if X_TMA_MODE == "dense":
                 x = X.load([start_z, start_m + off_m, off_k_x])
                 x = x.reshape(BLOCK_M, BLOCK_K)
+            # load w
             w = _tma_load_2d(W, [expt_id, off_k_w, off_n], transpose=W_TRANSPOSE)
 
             if is_microscaled_format:
@@ -437,6 +438,7 @@ def _p_matmul_ogs(
             if EPILOGUE_FN is not None:
                 out = EPILOGUE_FN(out, *epilogue_fn_args, target_dtype=YPtr.dtype.element_ty, pid=len(accs)*tile_id1 + a_i)
 
+            # store y
             out_off_n = off_n1 // ACTIVATION_REDUCTION_N + a_i * OUT_BLOCK_N
             if Y_TMA_MODE == "ragged_store":
                 Y.store([pid_k, start_z1, start_m1 + eM1, NRowsY - eM1 + off_m1, out_off_n], tl.reshape(out, [1, 1, 1] + out.shape).to(YPtr.dtype.element_ty))

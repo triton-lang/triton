@@ -12,6 +12,7 @@ from triton_kernels.numerics import InFlexData, OutFlexData
 from triton_kernels.routing import GatherIndx, RoutingData, ScatterIndx
 from triton_kernels.target_info import is_cuda
 # details
+from .matmul_ogs_details._gather import _gather_indx
 from .matmul_ogs_details._matmul_ogs import _compute_writeback_idx
 from .matmul_ogs_details._matmul_ogs import _matmul_ogs
 from .matmul_ogs_details._p_matmul_ogs import _p_matmul_ogs, get_per_device_per_stream_alloc_fn
@@ -135,15 +136,20 @@ class PrecisionConfig:
 @dataclass(frozen=True)
 class PreprocessingFeatures:
     swap_xw: bool
+    unfuse_gather: bool
 
 
-def init_preprocessing_features(w, precision_config, opt_flags):
+def init_preprocessing_features(w, gather_indx, precision_config, opt_flags):
     swap_xw = False  # Whether or not to swap X and W operands to the tl.dot
+    unfuse_gather = gather_indx is not None and not target_info.cuda_capability_geq(10, 0) and opt_flags.is_persistent
     if target_info.cuda_capability_geq(10, 0):
         swap_xw = precision_config.weight_scale is not None and opt_flags.block_m <= 64 and opt_flags.is_persistent
-    return PreprocessingFeatures(swap_xw)
+    return PreprocessingFeatures(swap_xw, unfuse_gather)
 
 def apply_preprocessing_features(x, w, gather_indx, scatter_indx, routing_data, opt_flags, preprocessing_features):
+    # preprocess routing information and ptr lookup table
+    M = x.shape[1] if gather_indx is None else gather_indx.src_indx.shape[0]
+    # fused scatter scratchpad
     has_fused_scatter_scratchpad = opt_flags.fused_scatter and routing_data.n_expts_act > 1
     if has_fused_scatter_scratchpad:
         M = scatter_indx.src_indx.shape[0]
@@ -167,8 +173,20 @@ def apply_preprocessing_features(x, w, gather_indx, scatter_indx, routing_data, 
         finalize_scatter_idxs = None
     else:
         writeback_idxs, writeback_size, finalize_scatter_idxs = None, None, None
-    # preprocess routing information and ptr lookup table
-    M = x.shape[1] if gather_indx is None else gather_indx.src_indx.shape[0]
+    # preprocess gather if cannot be fused
+    if preprocessing_features.unfuse_gather:
+        x_gather = torch.empty((M, x.shape[1]), dtype=x.dtype, device=x.device)
+        GATHER_BLOCK_M = 128
+        GATHER_BLOCK_N = 128
+        grid = (triton.cdiv(M, GATHER_BLOCK_M), triton.cdiv(x.shape[1], GATHER_BLOCK_N))
+        _gather_indx[grid](
+            x.storage.data, x.storage.data.shape[0], x.storage.data.shape[1], x.storage.data.stride(0), x.storage.data.stride(1),
+            x_gather, x_gather.shape[0], x_gather.shape[1], x_gather.stride(0), x_gather.stride(1),
+            gather_indx.src_indx,
+            BLOCK_M=GATHER_BLOCK_M,
+            BLOCK_N=GATHER_BLOCK_N,
+            num_warps=8)
+        x = wrap_torch_tensor(x_gather)
     return x, w, writeback_idxs, writeback_size, finalize_scatter_idxs
 
 
@@ -450,7 +468,7 @@ def matmul_ogs(x, w, bias,
     if w_scale is not None and w_scale.storage.layout.name is not None and not opt_flags.is_persistent and target_info.has_native_mxfp():
         raise NotImplementedError("Must use persistent kernel and be TMA-compliant for native MXFP")
     # determine necessary pre/post processing
-    preprocessing_features = init_preprocessing_features(w, precision_config, opt_flags)
+    preprocessing_features = init_preprocessing_features(w, gather_indx, precision_config, opt_flags)
     postprocessing_features = init_postprocessing_features(routing_data, scatter_indx, opt_flags)
     # allocate output/scratchpad memory
     allocation = init_allocation(x, w, precision_config, fused_activation,
@@ -504,11 +522,11 @@ def matmul_ogs(x, w, bias,
     max_grid = batch_size * grid_m * grid_n * opt_flags.split_k
     grid = min(target_info.num_sms() - opt_flags.idle_sms, max_grid) if opt_flags.is_persistent else max_grid
     # canonicalize storage
-    has_gather = gather_indx is not None
+    has_gather = gather_indx is not None and not preprocessing_features.unfuse_gather
     has_scatter = writeback_idxs is not None
     has_gather_tma = has_gather and target_info.has_tma_gather()
     has_scatter_tma = has_scatter and target_info.has_tma_gather()
-    y = wrap_torch_tensor(out0.view(-1, out0.shape[-1]) if has_scatter_tma else out0)
+    y = wrap_torch_tensor(out0.view(-1, out0.shape[-1]) if has_scatter else out0)
     x_storage = _canonicalize_storage(x.storage, 2 if has_gather else 3, flex.lhs_data)
     w_storage = _canonicalize_storage(w.storage, 3, flex.rhs_data)
     y_storage = _canonicalize_storage(y.storage, 2 if has_scatter else 4, flex.out_data)
