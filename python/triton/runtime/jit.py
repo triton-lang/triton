@@ -25,7 +25,6 @@ TRITON_MODULE = __name__[:-len(".runtime.jit")]
 T = TypeVar("T")
 use_inline_specialization = True
 use_full_native_specialize_impl = False
-INDENT = "    "  # 4 spaces for indentation
 
 # -----------------------------------------------------------------------------
 # Dependencies Finder
@@ -427,87 +426,70 @@ def _generate_inline_specialization(name, kp, list_pos):
     specialize = not kp.do_not_specialize
     align = not kp.do_not_specialize_on_alignment
 
-    code_lines = []
-
     if kp.is_constexpr:
-        code_lines.append(f'specialization[{list_pos}] = ("constexpr", {name})')
-        return code_lines
+        return f'specialization[{list_pos}] = ("constexpr", {name})\n'
 
     if kp.annotation_type:
         if isinstance(kp.annotation_type == "u1" or kp.annotation_type[:2] in ["fp", "bf"]):
             # we do not specialize non-constexpr floats and bools
             specialize = False
         if not specialize:
-            code_lines.append(f'specialization[{list_pos}] = ("{kp.annotation_type}", None)')
-            return code_lines
+            return f'specialization[{list_pos}] = ("{kp.annotation_type}", None)\n'
 
-    # specialize_impl: if type(arg) is Tensor
-    code_lines.append(f"if type({name}).__name__ ==  'Tensor':")
-    code_lines.append(f"{INDENT}_dsk = ({name}.dtype, {is_const})")
-    code_lines.append(f"{INDENT}_res = dtype2str.get(_dsk, None)")
-    code_lines.append(f"{INDENT}if _res is None:")
-    code_lines.append(f"{INDENT}{INDENT}_res = ('*k' if {is_const} else '*') + canonicalize_dtype({name}.dtype)")
-    code_lines.append(f"{INDENT}{INDENT}dtype2str[_dsk] = _res")
-    code_lines.append(f"{INDENT}_key = specialize_tensor({name}, {specialize}, {align})")
-    code_lines.append(f"{INDENT}specialization[{list_pos}] = (_res, _key)")
-    # specialize_impl: elif isinstance(arg, int)
-    code_lines.append(f"elif isinstance({name}, int):")
-    code_lines.append(f"{INDENT}specialization[{list_pos}] = specialize_int({name}, {specialize}, {align})")
-    # specialize_impl: elif isinstance(arg, bool)
-    code_lines.append(f"elif isinstance({name}, bool):")
-    code_lines.append(f"{INDENT}specialization[{list_pos}] = ('u1', None)")
-    # specialize_impl: elif isinstance(arg, float)
-    code_lines.append(f"elif isinstance({name}, float):")
-    code_lines.append(f"{INDENT}specialization[{list_pos}] = ('fp32', None)")
-    # specialize_impl: elif isinstance(arg, constexpr)
-    code_lines.append(f"elif isinstance({name}, constexpr):")
-    code_lines.append(f"{INDENT}specialization[{list_pos}] = ('constexpr', {name})")
-    # specialize_impl: elif arg is None
-    code_lines.append(f"elif {name} is None:")
-    code_lines.append(f"{INDENT}specialization[{list_pos}] = ('constexpr', None)")
-    # fallback for non-tensor types with data_ptr
-    code_lines.append(f"elif hasattr({name}, 'data_ptr'):")
-    code_lines.append(f"{INDENT}_dsk = ({name}.dtype, {is_const})")
-    code_lines.append(f"{INDENT}_res = dtype2str.get(_dsk, None)")
-    code_lines.append(f"{INDENT}if _res is None:")
-    code_lines.append(f"{INDENT}{INDENT}_res = ('*k' if {is_const} else '*') + canonicalize_dtype({name}.dtype)")
-    code_lines.append(f"{INDENT}{INDENT}dtype2str[_dsk] = _res")
-    code_lines.append(f"{INDENT}_key = specialize_tensor({name}, {specialize}, {align})")
-    code_lines.append(f"{INDENT}specialization[{list_pos}] = (_res, _key)")
-    # specialize_impl: elif isinstance(arg, JITFunction)
-    code_lines.append(f"elif isinstance({name}, JITFunction):")
-    code_lines.append(f"{INDENT}specialization[{list_pos}] = ('constexpr', {name}.cache_key)")
-    # specialize_impl: elif hasattr(arg, "tma_desc_cpu_ptr")
-    code_lines.append(f"elif hasattr({name}, 'tma_desc_cpu_ptr'):")
-    code_lines.append(f"{INDENT}specialization[{list_pos}] = ('nvTmaDesc', None)")
-    # specialize_impl: elif isinstance(arg, tuple)
-    code_lines.append(f"elif isinstance({name}, tuple):")
-    code_lines.append(f"{INDENT}_spec = [_specialize_tuple_elem(x) for x in {name}]")
-    code_lines.append(
-        f"{INDENT}_make_tuple = lambda vals: type({name})(*vals) if hasattr({name}, '_fields') else tuple(vals)")
-    code_lines.append(f"{INDENT}_tys = _make_tuple([x[0] for x in _spec])")
-    code_lines.append(f"{INDENT}_keys = _make_tuple([x[1] for x in _spec])")
-    code_lines.append(f"{INDENT}specialization[{list_pos}] = (_tys, _keys)")
-    # specialize_impl: elif isinstance(arg, TensorDescriptor)
-    code_lines.append(f"elif isinstance({name}, TensorDescriptor):")
-    code_lines.append(f"{INDENT}_inner = canonicalize_dtype({name}.base.dtype)")
-    code_lines.append(
-        f"{INDENT}specialization[{list_pos}] = (f'tensordesc<{{_inner}}{{list({name}.block_shape)}}>', None)")
-    # specialize_impl: elif isinstance(arg, GluonTensorDescriptor)
-    code_lines.append(f"elif isinstance({name}, GluonTensorDescriptor):")
-    code_lines.append(f"{INDENT}_inner = canonicalize_dtype({name}.base.dtype)")
-    code_lines.append(
-        f"{INDENT}specialization[{list_pos}] = (f'tensordesc<{{_inner}}{{list({name}.block_shape)}},{{repr({name}.layout)}}>', None)"
-    )
-    code_lines.append("else:")
-    code_lines.append(f"{INDENT}raise TypeError(f'Unsupported type: {{type({name})}}')")
-    code_lines.append("")
+    src = f"""
+# should be faster than hasattr(arg, "data_ptr")
+if type({name}).__name__ ==  'Tensor':
+    _dsk = ({name}.dtype, {is_const})
+    _res = dtype2str.get(_dsk, None)
+    if _res is None:
+        _res = ('*k' if {is_const} else '*') + canonicalize_dtype({name}.dtype)
+    dtype2str[_dsk] = _res
+    _key = specialize_tensor({name}, {specialize}, {align})
+    specialization[{list_pos}] = (_res, _key)
+elif isinstance({name}, int):
+    specialization[{list_pos}] = specialize_int({name}, {specialize}, {align})
+elif isinstance({name}, bool):
+    specialization[{list_pos}] = ('u1', None)
+elif isinstance({name}, float):
+    specialization[{list_pos}] = ('fp32', None)
+elif isinstance({name}, constexpr):
+    specialization[{list_pos}] = ('constexpr', {name})
+elif {name} is None:
+    specialization[{list_pos}] = ('constexpr', None)
+# fallback for non-tensor types with data_ptr
+elif hasattr({name}, 'data_ptr'):
+    _dsk = ({name}.dtype, {is_const})
+    _res = dtype2str.get(_dsk, None)
+    if _res is None:
+        _res = ('*k' if {is_const} else '*') + canonicalize_dtype({name}.dtype)
+    dtype2str[_dsk] = _res
+    _key = specialize_tensor({name}, {specialize}, {align})
+    specialization[{list_pos}] = (_res, _key)
+elif isinstance({name}, JITFunction):
+    specialization[{list_pos}] = ('constexpr', {name}.cache_key)
+elif hasattr({name}, 'tma_desc_cpu_ptr'):
+    specialization[{list_pos}] = ('nvTmaDesc', None)
+elif isinstance({name}, tuple):
+    _spec = [_specialize_tuple_elem(x) for x in {name}]
+    _make_tuple = lambda vals: type({name})(*vals) if hasattr({name}, '_fields') else tuple(vals)
+    _tys = _make_tuple([x[0] for x in _spec])
+    _keys = _make_tuple([x[1] for x in _spec])
+    specialization[{list_pos}] = (_tys, _keys)
+elif isinstance({name}, TensorDescriptor):
+    _inner = canonicalize_dtype({name}.base.dtype)
+    specialization[{list_pos}] = (f'tensordesc<{{_inner}}{{list({name}.block_shape)}}>', None)
+elif isinstance({name}, GluonTensorDescriptor):
+    _inner = canonicalize_dtype({name}.base.dtype)
+    specialization[{list_pos}] = (f'tensordesc<{{_inner}}{{list({name}.block_shape)}},{{repr({name}.layout)}}>', None)
+else:
+    raise TypeError(f'Unsupported type: {{type({name})}}')
+"""
 
     # override annotated and specialized types
     if kp.annotation_type and specialize:
-        code_lines.append(f"specialization[{list_pos}][0] == '{kp.annotation_type}'")
+        src += f"specialization[{list_pos}][0] == '{kp.annotation_type}'\n"
 
-    return code_lines
+    return src
 
 
 def create_function_from_signature(sig, kparams, backend):
@@ -537,10 +519,11 @@ def create_function_from_signature(sig, kparams, backend):
         specializations = ""
         idx = 0
         for name, kp in zip(sig.parameters.keys(), kparams):
-            code_lines = _generate_inline_specialization(name, kp, idx)
-            for i, cl in enumerate(code_lines):
-                specializations += f"\n{INDENT}{cl}"
+            src = _generate_inline_specialization(name, kp, idx)
+            src = "\n".join("    " + line for line in src.splitlines())
             idx += 1
+            specializations += src
+            specializations += "\n"
 
         # pre-allocate params and specialization (TODO check validity)
         params = {name: None for name in sig.parameters.keys()}
@@ -548,7 +531,7 @@ def create_function_from_signature(sig, kparams, backend):
 
         params_map = ""
         for name in sig.parameters.keys():
-            params_map += f"\n{INDENT}params[{name}]: {name}"
+            params_map += f"\n    params[{name}]: {name}"
 
         # compute argument string for a given parameter
         arg = lambda x: x[0] if x[1].default is inspect.Parameter.empty else f"{x[0]}=default_{x[0]}"
