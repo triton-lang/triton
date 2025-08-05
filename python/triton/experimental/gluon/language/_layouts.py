@@ -433,18 +433,17 @@ class PaddedSharedLayout(SharedLayout):
     it uses padding to avoid shared memory bank conflicts.
 
     In the following example of a tensor,
-    `eM` is used for tensor elements and
-    `pN` is used for the padded element.
+    `eM` represents original elements in the and `pN` represents padded element.
 
-    Before padding, the tensor looks like:
+    Before padding, the shared memory looks like:
     [e0, e1,
      e2, e3,
      e4, e5,
      e6, e7,
      ...]
 
-    After padding with interval-padding pair list is [[2, 1], [4, 2]],
-    the tensor will be
+    After padding with interval-padding pair list is [[2, 1], [4, 2], ..],
+    the shared memory will be
     [e0, e1, p0,
      e2, e3, p1, p2, p3,
      e4, e5, p4,
@@ -452,7 +451,7 @@ class PaddedSharedLayout(SharedLayout):
      ...]
 
     Args:
-        interval_padding_pairs (List[Tuple[int, int]]): For each pair in the list, the 1st element is interval and the 2nd is padding. For the example above, the list is [[2, 1], [4, 2]].
+        interval_padding_pairs (List[Tuple[int, int]]): After every interval tensor elements, the corresponding number of padding elements are inserted. If a position corresponds to multiple intervals, the padding amounts are summed. Both interval and padding must be powers of 2. For the example above, the list is [[2, 1], [4, 2], ..].
         order (List[int]): order of logical tensor dimensions; fastest-varying first.
         ctas_per_cga (Optional[List[int]]): CTAs per CGA grouping.
         cta_split_num (Optional[List[int]]): Split factors for CTAs.
@@ -485,7 +484,7 @@ class PaddedSharedLayout(SharedLayout):
                 return ""
             return "_".join(map(str, x))
 
-        return f"PaddesShared_{stringify(self.interval_padding_pairs)}_{stringify(self.order)}_{stringify(self.ctas_per_cga)}_{stringify(self.cta_split_num)}_{stringify(self.cta_order)}_PaddedShared"
+        return f"PaddedShared_{stringify(self.interval_padding_pairs)}_{stringify(self.order)}_{stringify(self.ctas_per_cga)}_{stringify(self.cta_split_num)}_{stringify(self.cta_order)}_PaddedShared"
 
     def verify(self):
         pairs = self.interval_padding_pairs

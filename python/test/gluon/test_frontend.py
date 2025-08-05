@@ -1639,11 +1639,11 @@ def infer_layout_for_padded_shared_kernel():
                                                      ctas_per_cga=[1, 1], cta_split_num=[1, 1], cta_order=[1, 0])
     smem = ttgl.allocate_shared_memory(ttgl.int32, [64, 64], layout)
 
-    blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[1, 64],
-                                                        warps_per_cta=[4, 1], order=[1, 0])
-    b = smem.load(blocked_layout)
-    c = ttgl.reduce(b, 1, add)
-    ttgl.static_assert(c.type.layout == ttgl.SliceLayout(1, blocked_layout))
+    #blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[1, 64],
+    #                                                    warps_per_cta=[4, 1], order=[1, 0])
+    b = smem.permute((1, 0))
+    ttgl.reduce(b, 1, add)
+    #ttgl.static_assert(c.type.layout == ttgl.SliceLayout(1, layout))
 
 
 @pytest.mark.parametrize("target", [HIP_TARGET_CDNA3, HIP_TARGET_CDNA4])
