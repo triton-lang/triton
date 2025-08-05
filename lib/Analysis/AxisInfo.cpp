@@ -1164,18 +1164,20 @@ void AxisInfo::initPessimisticStateFromFunc(int argNumber, T funcOp,
 
   if (blockArg && blockArg.getOwner()->isEntryBlock()) {
     Operation *op = blockArg.getOwner()->getParentOp();
-    if (auto fun = dyn_cast<FunctionOpInterface>(op)) {
-      initPessimisticStateFromFunc(blockArg.getArgNumber(), fun,
-                                   &knownContiguity, &knownDivisibility,
-                                   &knownConstancy);
-    } else if (isa<RegionBranchOpInterface, gpu::WarpSpecializePartitionsOp>(
-                   op)) {
-      // scf::ForOp, scf::IfOp, scf::WhileOp, gpu::WarpSpecializePartitionsOp
-      // Control flow operations are initialized with "unknown" state:
-      // the maximum possible divisibility, contiguity, and constancy.
+    if (isa<RegionBranchOpInterface, gpu::WarpSpecializePartitionsOp,
+            FunctionOpInterface>(op)) {
+      // funcOp, scf::ForOp, scf::IfOp, scf::WhileOp,
+      // gpu::WarpSpecializePartitionsOp Control flow operations are initialized
+      // with "unknown" state: the maximum possible divisibility, contiguity,
+      // and constancy.
       knownDivisibility = DimVectorT(rank, highestPowOf2Divisor<int64_t>(0));
       knownConstancy = DimVectorT(rank, highestPowOf2Divisor<int64_t>(0));
       knownContiguity = DimVectorT(rank, highestPowOf2Divisor<int64_t>(0));
+      if (auto fun = dyn_cast<FunctionOpInterface>(op)) {
+        initPessimisticStateFromFunc(blockArg.getArgNumber(), fun,
+                                     &knownContiguity, &knownDivisibility,
+                                     &knownConstancy);
+      }
     }
   } else if (Operation *op = value.getDefiningOp()) {
     if (isa<RegionBranchOpInterface>(op)) {
@@ -1216,7 +1218,14 @@ void AxisInfo::initPessimisticStateFromFunc(int argNumber, T funcOp,
   DimVectorT constancy;
   for (auto d = 0; d < lhs.getRank(); ++d) {
     contiguity.push_back(gcd(lhs.getContiguity(d), rhs.getContiguity(d)));
-    divisibility.push_back(gcd(lhs.getDivisibility(d), rhs.getDivisibility(d)));
+    if (lhs.getContiguity(d) == rhs.getContiguity(d)) {
+      divisibility.push_back(
+          gcd(lhs.getDivisibility(d), rhs.getDivisibility(d)));
+    } else {
+      // Contiguity changed, we cannot use only divisibility.
+      divisibility.push_back(gcd(lhs.getDivisibility(d), rhs.getDivisibility(d),
+                                 lhs.getContiguity(d), rhs.getContiguity(d)));
+    }
     constancy.push_back(gcd(lhs.getConstancy(d), rhs.getConstancy(d)));
   }
   std::optional<int64_t> constantValue;
