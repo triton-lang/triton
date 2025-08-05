@@ -76,16 +76,16 @@ def test_ragged_tma(dtype):
     x_size = 17
     y_size = 24
 
-    example_load_store_kernel[(1,)](X, Y, x_off, y_off, x_size, y_size)
+    example_load_store_kernel[(1, )](X, Y, x_off, y_off, x_size, y_size)
 
     # the initial and final segments are unchanged:
-    res0 = torch.equal(dst[: y_off], ref[: y_off])
-    res1 = torch.equal(dst[y_off + y_size :], ref[y_off + y_size :])
+    res0 = torch.equal(dst[:y_off], ref[:y_off])
+    res1 = torch.equal(dst[y_off + y_size:], ref[y_off + y_size:])
 
     # this segment will be copied verbatim from src:
-    res2 = torch.equal(dst[y_off : y_off + x_size], src[x_off : x_off + x_size])
+    res2 = torch.equal(dst[y_off:y_off + x_size], src[x_off:x_off + x_size])
 
     # this segment will have read OOB zeroes and written them here:
-    res3 = torch.all(dst[y_off + x_size : y_off + y_size] == 0.0).item()
+    res3 = torch.all(dst[y_off + x_size:y_off + y_size] == 0.0).item()
 
     assert [res0, res1, res2, res3] == [True, True, True, True]
