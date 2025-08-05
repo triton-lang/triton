@@ -150,7 +150,7 @@ def test_tmem_example_kernel(M, N, num_warps):
 
 
 @gluon.jit
-def small_mma_kernel(a_desc, b_desc, c_desc, d_desc,  #
+def small_mma_kernel(a_desc, b_desc, c_desc, d_desc, tmem_block: gl.constexpr,  #
                      LHS_IN_TMEM: gl.constexpr, USE_COMMIT: gl.constexpr, num_warps: gl.constexpr):
     # Load A, B, and C tiles.
     bar = gl.allocate_shared_memory(gl.int64, [1], mbarrier.MBarrierLayout())
@@ -190,15 +190,15 @@ def small_mma_kernel(a_desc, b_desc, c_desc, d_desc,  #
 
     # Copy operands into TMEM.
     # TODO: Use `tcgen05.cp` when it is exposed in Gluon.
-    acc_tmem_layout: gl.constexpr = TensorMemoryLayout([M, N], unpacked=True)
+    acc_tmem_layout: gl.constexpr = TensorMemoryLayout(tmem_block.value, unpacked=True)
     acc_tmem = allocate_tensor_memory(d_desc.dtype, [M, N], acc_tmem_layout)
-    acc_reg_layout: gl.constexpr = get_tmem_32x32b_reg_layout(M, N, [M, N], num_warps)
+    acc_reg_layout: gl.constexpr = get_tmem_32x32b_reg_layout(tmem_block[0], tmem_block[1], [M, N], num_warps)
     acc = c_smem.load(acc_reg_layout)
     acc_tmem.store(acc)
 
     if LHS_IN_TMEM:
         # When the LHS operand is fp16 or fp8, it is packed in TMEM.
-        lhs_tmem_layout: gl.constexpr = TensorMemoryLayout([M, K], unpacked=False)
+        lhs_tmem_layout: gl.constexpr = TensorMemoryLayout(tmem_block.value, unpacked=False)
         lhs_tmem = allocate_tensor_memory(a_desc.dtype, [M, K], lhs_tmem_layout)
 
         lhs_reg_layout: gl.constexpr = get_tmem_32x32b_reg_layout(M, K, [M, K], num_warps)
@@ -251,7 +251,7 @@ def small_mma_kernel(a_desc, b_desc, c_desc, d_desc,  #
     tma.store_wait(pendings=0)
 
 
-def small_mma(A, B, C, D, LHS_IN_TMEM, USE_COMMIT, num_warps):
+def small_mma(A, B, C, D, tmem_block, LHS_IN_TMEM, USE_COMMIT, num_warps):
     a_layout = gl.NVMMASharedLayout.get_default_for(A.shape, gl.float16)
     b_layout = gl.NVMMASharedLayout.get_default_for(B.shape, gl.float16)
     cd_layout = gl.NVMMASharedLayout.get_default_for(C.shape, gl.float32)
@@ -262,11 +262,11 @@ def small_mma(A, B, C, D, LHS_IN_TMEM, USE_COMMIT, num_warps):
     d_desc = TensorDescriptor(D, D.shape, D.stride(), D.shape, cd_layout)
 
     small_mma_kernel[(1, )](
-        a_desc, b_desc, c_desc, d_desc,  #
+        a_desc, b_desc, c_desc, d_desc, tmem_block,  #
         LHS_IN_TMEM, USE_COMMIT, num_warps=num_warps)
 
 
-@pytest.mark.parametrize("M, N, K", [(128, 128, 128), (64, 128, 128), (64, 256, 128)])
+@pytest.mark.parametrize("M, N, K", [(128, 128, 128), (64, 128, 128), (64, 256, 256), (256, 64, 64)])
 @pytest.mark.parametrize("LHS_IN_TMEM", [False, True])
 @pytest.mark.parametrize("USE_COMMIT", [False, True])
 @pytest.mark.parametrize("num_warps", [4, 8])
@@ -277,7 +277,11 @@ def test_small_mma(M, N, K, LHS_IN_TMEM, USE_COMMIT, num_warps):
     B = torch.randn(K, N, device="cuda", dtype=torch.float16)
     C = torch.randn(M, N, device="cuda", dtype=torch.float32)
     D = torch.empty_like(C)
-    small_mma(A, B, C, D, LHS_IN_TMEM, USE_COMMIT, num_warps)
+
+    blockM = min(128, M)
+    blockN = N
+
+    small_mma(A, B, C, D, (blockM, blockN), LHS_IN_TMEM, USE_COMMIT, num_warps)
     torch.testing.assert_close(A @ B + C, D, atol=1e-3, rtol=1e-1)
 
 
@@ -402,6 +406,9 @@ if __name__ == "__main__":
 
     print("BLOCK_M BLOCK_N BLOCK_K num_warps time (ms) tflops/s")
     for BLOCK_M, BLOCK_N, BLOCK_K, num_warps in itertools.product([64, 128], [64, 128, 256], [64, 128, 256], [4, 8]):
+        if BLOCK_M * BLOCK_N // num_warps // 32 >= 256:  # guaranteed spilling
+            continue
+
         fn = lambda: blocked_matmul(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, False, num_warps)
         ms = triton.testing.do_bench(fn)
         flops = 2 * M * N * K

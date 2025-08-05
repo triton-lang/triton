@@ -290,10 +290,11 @@ def blocked_matmul_kernel(a_desc, b_desc, c_desc,  #
     BLOCK_M: gl.constexpr = c_desc.block_type.shape[0]
     BLOCK_N: gl.constexpr = c_desc.block_type.shape[1]
     BLOCK_K: gl.constexpr = a_desc.block_type.shape[1]
+    dtype: gl.constexpr = a_desc.dtype
     K = a_desc.shape[1]
 
-    a_smem = gl.allocate_shared_memory(a_desc.dtype, a_desc.block_type.shape, a_desc.layout)
-    b_smem = gl.allocate_shared_memory(b_desc.dtype, b_desc.block_type.shape, b_desc.layout)
+    a_smem = gl.allocate_shared_memory(dtype, a_desc.block_type.shape, a_desc.layout)
+    b_smem = gl.allocate_shared_memory(dtype, b_desc.block_type.shape, b_desc.layout)
 
     # The block of C this program is processing is (pid_m, pid_n).
     pid_m = gl.program_id(axis=0)
@@ -302,8 +303,8 @@ def blocked_matmul_kernel(a_desc, b_desc, c_desc,  #
     off_n = pid_n * BLOCK_N
 
     # Determine the WGMMA layout.
-    mma_layout: gl.constexpr = pick_wgmma_layout(a_desc.dtype, BLOCK_M, BLOCK_N, num_warps)
-    acc = gl.zeros((BLOCK_M, BLOCK_N), dtype=c_desc.dtype, layout=mma_layout)
+    mma_layout: gl.constexpr = pick_wgmma_layout(dtype, BLOCK_M, BLOCK_N, num_warps)
+    acc = gl.zeros((BLOCK_M, BLOCK_N), dtype=gl.float32, layout=mma_layout)
 
     bar = gl.allocate_shared_memory(gl.int64, [1], mbarrier.MBarrierLayout())
     mbarrier.init(bar, count=1)
@@ -334,8 +335,8 @@ def blocked_matmul_kernel(a_desc, b_desc, c_desc,  #
     mbarrier.invalidate(bar)
 
     # Store tile of C.
-    c_smem = gl.allocate_shared_memory(c_desc.dtype, c_desc.block_type.shape, c_desc.layout)
-    c_smem.store(acc)
+    c_smem = gl.allocate_shared_memory(dtype, c_desc.block_type.shape, c_desc.layout)
+    c_smem.store(acc.to(dtype))
     fence_async_shared()
     tma.async_copy_shared_to_global(c_desc, [off_m, off_n], c_smem)
     tma.store_wait(pendings=0)
@@ -351,7 +352,7 @@ def blocked_matmul(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B, num_warps):
     b_layout = gl.NVMMASharedLayout.get_default_for(B_BLOCK_SHAPE, gl.float16)
     b_desc = TensorDescriptor(B, B.shape, B.stride(), B_BLOCK_SHAPE, b_layout)
 
-    c_layout = gl.NVMMASharedLayout.get_default_for([BLOCK_M, BLOCK_N], gl.float32)
+    c_layout = gl.NVMMASharedLayout.get_default_for([BLOCK_M, BLOCK_N], gl.float16)
     c_desc = TensorDescriptor(C, C.shape, C.stride(), [BLOCK_M, BLOCK_N], c_layout)
 
     grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
@@ -366,12 +367,12 @@ def blocked_matmul(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B, num_warps):
 def test_blocked_matmul(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B, num_warps):
     A = torch.randn(M, K, device="cuda", dtype=torch.float16)
     B = torch.randn((N, K) if TRANSPOSE_B else (K, N), device="cuda", dtype=torch.float16)
-    C = torch.empty(M, N, device="cuda", dtype=torch.float32)
+    C = torch.empty(M, N, device="cuda", dtype=torch.float16)
 
     blocked_matmul(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B, num_warps)
 
     C_ref = A @ (B.T if TRANSPOSE_B else B)
-    torch.testing.assert_close(C_ref.to(torch.float32), C, rtol=1e-3, atol=1e-1)
+    torch.testing.assert_close(C_ref, C, rtol=1e-3, atol=1e-1)
 
 
 # %%
@@ -389,9 +390,8 @@ def test_blocked_matmul(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B, num_war
 # sure if these lead to the best block sizes.
 
 
-def find_configs(occupancy, in_dtype, acc_dtype, num_buffers=1):
-    in_dtype_bytes = torch.tensor([], dtype=in_dtype).element_size()
-    acc_dtype_bytes = torch.tensor([], dtype=acc_dtype).element_size()
+def find_configs(occupancy, dtype, num_buffers=1):
+    dtype_bytes = torch.tensor([], dtype=dtype).element_size()
 
     # Assume ~1 KB of smem used by mbarriers, compiler-generated code, etc.
     smem = 228 * 1024 // occupancy - 1024
@@ -402,15 +402,15 @@ def find_configs(occupancy, in_dtype, acc_dtype, num_buffers=1):
         # Assume ~16 regs per thread of baseline usage.
         regs = 64 * 1024 // occupancy - 16 * num_warps * 32
 
-        a_smem = BLOCK_M * BLOCK_K * in_dtype_bytes
-        b_smem = BLOCK_N * BLOCK_K * in_dtype_bytes
-        acc_smem = BLOCK_M * BLOCK_N * acc_dtype_bytes
+        a_smem = BLOCK_M * BLOCK_K * dtype_bytes
+        b_smem = BLOCK_N * BLOCK_K * dtype_bytes
+        acc_smem = BLOCK_M * BLOCK_N * dtype_bytes
         # SMEM for A and B does not coexist with C.
         if max((a_smem + b_smem) * num_buffers, acc_smem) > smem:
             continue
 
-        # The accumulator is the only in-memory tensor.
-        acc_regs = BLOCK_M * BLOCK_N * acc_dtype_bytes // 4
+        # The accumulator is the only in-memory tensor in f32.
+        acc_regs = BLOCK_M * BLOCK_N
         # Max regs per thread is 256. Being near this can also cause spills.
         if acc_regs // num_warps // 32 >= 256:
             continue
@@ -437,14 +437,14 @@ if __name__ == "__main__":
     print("Benchmarking selected configs")
     print("=============================")
     # Just in case, check occupancy 1 configs.
-    configs = find_configs(occupancy=1, in_dtype=torch.float16, acc_dtype=torch.float32)
-    configs += find_configs(occupancy=2, in_dtype=torch.float16, acc_dtype=torch.float32)
+    configs = find_configs(occupancy=1, dtype=torch.float16)
+    configs += find_configs(occupancy=2, dtype=torch.float16)
     # Benchmark the configs over a large matmul. Keep in mind that the best
     # hyperparameters can depend on the matmul shapes.
     M, N, K = 8192, 8192, 16 * 1024
     A = torch.randn(M, K, device="cuda", dtype=torch.float16)
     B = torch.randn(K, N, device="cuda", dtype=torch.float16)
-    C = torch.empty(M, N, device="cuda", dtype=torch.float32)
+    C = torch.empty(M, N, device="cuda", dtype=torch.float16)
     print("BLOCK_M BLOCK_N BLOCK_K num_warps instr_shape_n time (ms) tflops/s")
     for BLOCK_M, BLOCK_N, BLOCK_K, num_warps, instr_shape_n in configs:
         fn = lambda: blocked_matmul(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, False, num_warps)
@@ -458,12 +458,12 @@ if __name__ == "__main__":
 # %%
 # ```
 # BLOCK_M BLOCK_N BLOCK_K num_warps instr_shape_n time (ms) tflops/s
-#     128     256     256         8           256      5.36   410.35
-#     256     128     256         8           128      5.77   381.02
-#      64     256     128         4           256      4.72   466.33
-#      64     128     256         4           128      6.34   346.87
-#     128     128     128         4           128      4.97   442.38
-#     128     128     128         8           128      5.76   381.51
+#     128     256     256         8           256      5.34   412.14
+#     256     128     256         8           128      5.67   387.74
+#      64     256     128         4           256      4.64   474.03
+#      64     128     256         4           128      6.18   355.60
+#     128     128     128         4           128      4.98   441.88
+#     128     128     128         8           128      5.79   380.08
 # ```
 #
 # The hypothesis that having occupancy 2 with `BLOCK_N=256` would be the best
@@ -485,11 +485,12 @@ def blocked_matmul_pipelined_kernel(a_desc, b_desc, c_desc, num_warps: gl.conste
     BLOCK_M: gl.constexpr = c_desc.block_type.shape[0]
     BLOCK_N: gl.constexpr = c_desc.block_type.shape[1]
     BLOCK_K: gl.constexpr = a_desc.block_type.shape[1]
+    dtype: gl.constexpr = a_desc.dtype
     K = a_desc.shape[1]
 
     # Allocate 2 buffers for each A and B.
-    a_smem = gl.allocate_shared_memory(a_desc.dtype, [2] + a_desc.block_type.shape, a_desc.layout)
-    b_smem = gl.allocate_shared_memory(b_desc.dtype, [2] + b_desc.block_type.shape, b_desc.layout)
+    a_smem = gl.allocate_shared_memory(dtype, [2] + a_desc.block_type.shape, a_desc.layout)
+    b_smem = gl.allocate_shared_memory(dtype, [2] + b_desc.block_type.shape, b_desc.layout)
     index = 0
 
     pid_m = gl.program_id(axis=0)
@@ -497,8 +498,8 @@ def blocked_matmul_pipelined_kernel(a_desc, b_desc, c_desc, num_warps: gl.conste
     off_m = pid_m * BLOCK_M
     off_n = pid_n * BLOCK_N
 
-    mma_layout: gl.constexpr = pick_wgmma_layout(a_desc.dtype, BLOCK_M, BLOCK_N, num_warps)
-    acc = gl.zeros((BLOCK_M, BLOCK_N), dtype=c_desc.dtype, layout=mma_layout)
+    mma_layout: gl.constexpr = pick_wgmma_layout(dtype, BLOCK_M, BLOCK_N, num_warps)
+    acc = gl.zeros((BLOCK_M, BLOCK_N), dtype=gl.float32, layout=mma_layout)
 
     bar = gl.allocate_shared_memory(gl.int64, [1], mbarrier.MBarrierLayout())
     mbarrier.init(bar, count=1)
@@ -529,8 +530,8 @@ def blocked_matmul_pipelined_kernel(a_desc, b_desc, c_desc, num_warps: gl.conste
 
     mbarrier.invalidate(bar)
 
-    c_smem = gl.allocate_shared_memory(c_desc.dtype, c_desc.block_type.shape, c_desc.layout)
-    c_smem.store(acc)
+    c_smem = gl.allocate_shared_memory(dtype, c_desc.block_type.shape, c_desc.layout)
+    c_smem.store(acc.to(dtype))
     fence_async_shared()
     tma.async_copy_shared_to_global(c_desc, [off_m, off_n], c_smem)
     tma.store_wait(pendings=0)
@@ -541,7 +542,7 @@ def blocked_matmul_pipelined(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, num_warps):
 
     a_layout = gl.NVMMASharedLayout.get_default_for([BLOCK_M, BLOCK_K], gl.float16)
     b_layout = gl.NVMMASharedLayout.get_default_for([BLOCK_K, BLOCK_N], gl.float16)
-    c_layout = gl.NVMMASharedLayout.get_default_for([BLOCK_M, BLOCK_N], gl.float32)
+    c_layout = gl.NVMMASharedLayout.get_default_for([BLOCK_M, BLOCK_N], gl.float16)
     a_desc = TensorDescriptor(A, A.shape, A.stride(), [BLOCK_M, BLOCK_K], a_layout)
     b_desc = TensorDescriptor(B, B.shape, B.stride(), [BLOCK_K, BLOCK_N], b_layout)
     c_desc = TensorDescriptor(C, C.shape, C.stride(), [BLOCK_M, BLOCK_N], c_layout)
@@ -558,10 +559,10 @@ def test_blocked_matmul_pipelined(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, num_warps)
 
     A = torch.randn(M, K, device="cuda", dtype=torch.float16)
     B = torch.randn(K, N, device="cuda", dtype=torch.float16)
-    C = torch.empty(M, N, device="cuda", dtype=torch.float32)
+    C = torch.empty(M, N, device="cuda", dtype=torch.float16)
 
     blocked_matmul_pipelined(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, num_warps)
-    torch.testing.assert_close((A @ B).to(torch.float32), C, rtol=1e-3, atol=1e-1)
+    torch.testing.assert_close(A @ B, C, rtol=1e-3, atol=1e-1)
 
 
 # %%
@@ -574,15 +575,11 @@ def test_blocked_matmul_pipelined(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, num_warps)
 if __name__ == "__main__":
     print("Benchmarking pipelined matmul")
     print("=============================")
-    configs = find_configs(occupancy=1, in_dtype=torch.float16, acc_dtype=torch.float32, num_buffers=2)
-    configs += find_configs(occupancy=2, in_dtype=torch.float16, acc_dtype=torch.float32, num_buffers=2)
+    configs = find_configs(occupancy=1, dtype=torch.float16, num_buffers=2)
+    configs += find_configs(occupancy=2, dtype=torch.float16, num_buffers=2)
     # Add our previous best config since it doesn't get selected.
     configs.append([64, 256, 128, 4, 256])
 
-    M, N, K = 8192, 8192, 16 * 1024
-    A = torch.randn(M, K, device="cuda", dtype=torch.float16)
-    B = torch.randn(K, N, device="cuda", dtype=torch.float16)
-    C = torch.empty(M, N, device="cuda", dtype=torch.float32)
     print("BLOCK_M BLOCK_N BLOCK_K num_warps instr_shape_n time (ms) tflops/s")
     for BLOCK_M, BLOCK_N, BLOCK_K, num_warps, instr_shape_n in configs:
         fn = lambda: blocked_matmul_pipelined(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, num_warps)
@@ -596,13 +593,13 @@ if __name__ == "__main__":
 # %%
 # ```
 # BLOCK_M BLOCK_N BLOCK_K num_warps instr_shape_n time (ms) tflops/s
-#     128     256     128         8           256      4.87   451.78
-#     256     128     128         8           128      5.75   382.42
-#      64     256      64         4           256      5.52   398.08
-#      64     128     128         4           128      5.45   403.28
-#     128     128      64         4           128      4.47   491.71
-#     128     128      64         8           128      5.10   431.17
-#      64     256     128         4           256      6.22   353.66
+#     128     256     128         8           256      5.16   426.06
+#     256     128     128         8           128      5.70   385.85
+#      64     256      64         4           256      5.27   417.50
+#      64     128     128         4           128      5.71   384.98
+#     128     128      64         4           128      4.44   495.31
+#     128     128      64         8           128      4.92   446.81
+#      64     256     128         4           256      6.05   363.36
 # ```
 #
 # We see indeed that the best config ends up with instr_shape_n=128. Note that
