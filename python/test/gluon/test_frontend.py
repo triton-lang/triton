@@ -1618,7 +1618,7 @@ def padded_shared_layout_kernel():
 
 @pytest.mark.parametrize("target", [HIP_TARGET_CDNA3, HIP_TARGET_CDNA4])
 def test_padded_shared_layout(target):
-    # This test is used to test in glun, the construction of PaddedSharedEncodingAttr
+    # This test is used to test the construction of PaddedSharedEncodingAttr in the gluon.
     module = run_parser(padded_shared_layout_kernel, target=target)
     expecttest.assert_expected_inline(
         anonymize_ir(module.str_nodebug()), """\
@@ -1643,13 +1643,12 @@ def infer_layout_for_padded_shared_kernel():
                                                         warps_per_cta=[4, 1], order=[1, 0])
     b = smem.load(blocked_layout)
     c = ttgl.reduce(b, 1, add)
-    #print("1234 c dl is", c.type.layout)
     ttgl.static_assert(c.type.layout == ttgl.SliceLayout(1, blocked_layout))
 
 
 @pytest.mark.parametrize("target", [HIP_TARGET_CDNA3, HIP_TARGET_CDNA4])
 def test_infer_layout_for_padded_shared(target):
-    # This test is used to test the contruction of python object PaddedSharedLayout from PaddedSharedEncodingAttr.
+    # This test is used to test the conversion to gluon object PaddedSharedLayout from PaddedSharedEncodingAttr.
     # This conversion is in layoutToGluon and ttgl.reduce will finally use it.
     module = run_parser(infer_layout_for_padded_shared_kernel, target=target)
     expecttest.assert_expected_inline(
