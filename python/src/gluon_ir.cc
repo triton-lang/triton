@@ -198,17 +198,29 @@ py::object layoutToGluon(Attribute layout) {
   } else if (auto amdMfma = dyn_cast<ttg::AMDMfmaEncodingAttr>(layout)) {
     auto ctaLayout = amdMfma.getCTALayout();
     std::vector<unsigned> instrShape{amdMfma.getMDim(), amdMfma.getNDim()};
-    auto isFP32 = !amdMfma.getElementType().has_value() ||
-                  amdMfma.getElementType().value().isF32();
 
-    return layouts.AMDMFMALayout(amdMfma.getVersion(), instrShape,
-                                 amdMfma.getIsTransposed(),
-                                 toStdVector(amdMfma.getWarpsPerCTA()),
-                                 toStdVector(amdMfma.getTilesPerWarp()),
-                                 layouts.GluonDType(isFP32 ? "fp32" : "fp64"),
-                                 toStdVector(ctaLayout.getCTAsPerCGA()),
-                                 toStdVector(ctaLayout.getCTASplitNum()),
-                                 toStdVector(ctaLayout.getCTAOrder()));
+    auto elemTypeOpt = amdMfma.getElementType();
+    const char *typeName = "fp32";
+    if (elemTypeOpt.has_value()) {
+      auto elemType = elemTypeOpt.value();
+      if (elemType.isF64()) {
+        typeName = "fp64";
+      } else if (elemType.isF32()) {
+        typeName = "fp32";
+      } else {
+        // The AMDMfmaEncodingAttr mlir attribute has already verified element
+        // type is fp64, fp32 or int32; so, the typeName here must be int32.
+        typeName = "int32";
+      }
+    }
+
+    return layouts.AMDMFMALayout(
+        amdMfma.getVersion(), instrShape, amdMfma.getIsTransposed(),
+        toStdVector(amdMfma.getWarpsPerCTA()),
+        toStdVector(amdMfma.getTilesPerWarp()), layouts.GluonDType(typeName),
+        toStdVector(ctaLayout.getCTAsPerCGA()),
+        toStdVector(ctaLayout.getCTASplitNum()),
+        toStdVector(ctaLayout.getCTAOrder()));
   }
 
   throw py::value_error("Unhandled encoding encountered");
@@ -234,7 +246,8 @@ void init_gluon_ir(py::module &&m) {
              auto ctx = self.getContext();
              return self.getChecked<ttg::MemDescType>(
                  shape, elementType, layout,
-                 ttg::SharedMemorySpaceAttr::get(ctx), /*mutableMemory=*/true,
+                 ttg::SharedMemorySpaceAttr::get(ctx),
+                 /*mutableMemory=*/true,
                  /*allocShape=*/allocShape);
            })
       .def("get_tensor_mem_desc_ty",
@@ -244,7 +257,8 @@ void init_gluon_ir(py::module &&m) {
              auto ctx = self.getContext();
              return self.getChecked<ttg::MemDescType>(
                  shape, elementType, layout,
-                 ttng::TensorMemorySpaceAttr::get(ctx), /*mutableMemory=*/true,
+                 ttng::TensorMemorySpaceAttr::get(ctx),
+                 /*mutableMemory=*/true,
                  /*allocShape=*/allocShape);
            })
       .def("get_blocked_layout",
@@ -392,8 +406,8 @@ void init_gluon_ir(py::module &&m) {
               tt::CacheModifier cacheModifier,
               tt::EvictionPolicy evictionPolicy, bool isVolatile) {
              self.create<ttg::AsyncCopyGlobalToLocalOp>(
-                 pointer, smem, mask, /*other*/ Value{}, cacheModifier,
-                 evictionPolicy, isVolatile);
+                 pointer, smem, mask,
+                 /*other*/ Value{}, cacheModifier, evictionPolicy, isVolatile);
            })
       .def("create_async_copy_mbarrier_arrive",
            [](GluonOpBuilder &self, Value mbarrier, bool incrementCount) {
@@ -486,7 +500,10 @@ void init_gluon_ir(py::module &&m) {
            })
       .def("create_warpgroup_mma_wait",
            [](GluonOpBuilder &self, std::vector<Value> &deps, int pendings) {
-             self.create<ttng::WarpGroupDotWaitOp>(deps, pendings);
+             std::vector<Value> results;
+             auto wait = self.create<ttng::WarpGroupDotWaitOp>(deps, pendings);
+             llvm::append_range(results, wait.getResults());
+             return results;
            })
       .def("create_tmem_alloc",
            [](GluonOpBuilder &self, Type resultTy, Value value) -> Value {
@@ -619,6 +636,13 @@ void init_gluon_ir(py::module &&m) {
               Value mask, tt::CacheModifier cache) {
              self.create<ttag::BufferStoreOp>(storedValue, ptr, offsets,
                                               Value() /*stride*/, cache, mask);
+           })
+      .def("create_buffer_load_to_local",
+           [](GluonOpBuilder &self, Value dest, Value ptr, Value offsets,
+              Value mask, Value other, Value stride,
+              tt::CacheModifier cacheModifier) {
+             self.create<ttag::BufferLoadToLocalOp>(
+                 dest, ptr, offsets, mask, other, stride, cacheModifier);
            });
 
   py::class_<ttg::WarpSpecializeOp, OpState>(m, "WarpSpecializeOp",

@@ -135,13 +135,18 @@ bool WarpGroupDotOp::verifyDims() {
 
 // -- WarpGroupDotWaitOp --
 LogicalResult WarpGroupDotWaitOp::inferReturnTypes(
-    ::mlir::MLIRContext *context, ::std::optional<::mlir::Location> location,
-    ::mlir::ValueRange operands, ::mlir::DictionaryAttr attributes,
-    ::mlir::OpaqueProperties properties, ::mlir::RegionRange regions,
-    ::llvm::SmallVectorImpl<::mlir::Type> &inferredReturnTypes) {
+    MLIRContext *context, std::optional<Location> location, ValueRange operands,
+    DictionaryAttr attributes, OpaqueProperties properties, RegionRange regions,
+    SmallVectorImpl<Type> &inferredReturnTypes) {
   for (Value operand : operands)
     inferredReturnTypes.push_back(operand.getType());
-  return mlir::success();
+  return success();
+}
+
+LogicalResult WarpGroupDotWaitOp::verify() {
+  if (getOperands().empty())
+    return emitOpError("expected to be waiting on at least one dependency");
+  return success();
 }
 
 // -- InitBarrierOp --
@@ -523,9 +528,6 @@ static LogicalResult verifyTMEMOperand(Operation *op, RankedTensorType type,
 }
 
 LogicalResult TMEMStoreOp::verify() {
-  if (!isa<triton::nvidia_gpu::TensorMemorySpaceAttr>(
-          getDst().getType().getMemorySpace()))
-    return emitOpError("destination must be a tensor memory buffer.");
   if (!isa<triton::nvidia_gpu::TensorMemoryEncodingAttr,
            TensorMemoryScalesEncodingAttr>(getDst().getType().getEncoding()))
     return emitOpError("should use tensor memory encoding.");
@@ -554,8 +556,6 @@ LogicalResult TMEMLoadOp::verify() {
 
 // -- TMEMAllocOp --
 LogicalResult TMEMAllocOp::verify() {
-  if (!isa<TensorMemorySpaceAttr>(getType().getMemorySpace()))
-    return emitOpError("should create a buffer of tensor memory");
   if (!isa<TensorMemoryEncodingAttr, TensorMemoryScalesEncodingAttr>(
           getType().getEncoding()))
     return emitOpError("should use tensor memory encoding");
@@ -657,7 +657,7 @@ void TMEMSubSliceOp::build(OpBuilder &builder, OperationState &state,
       encoding.getUnpacked(), encoding.getCTASplitM(), encoding.getCTASplitN());
   auto subsliceType = gpu::MemDescType::get(
       shape, allocTy.getElementType(), newEncoding, allocTy.getMemorySpace(),
-      allocTy.getMutableMemory());
+      allocTy.getMutableMemory(), allocTy.getAllocShape());
   build(builder, state, subsliceType, alloc, offset);
 }
 

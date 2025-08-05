@@ -113,17 +113,13 @@ LinearLayout buildReps(MLIRContext *ctx, const LinearLayout &src,
   SetVector<int32_t> srcRegs(llvm::from_range_t{}, flatten(src, kReg));
   SetVector<int32_t> dstRegs(llvm::from_range_t{}, flatten(dst, kReg));
   SetVector<int32_t> smemSegment(llvm::from_range_t{}, flatten(smem, kSegment));
-  SetVector<int32_t> reps;
-  for (int32_t b : srcRegs) {
-    if (dstRegs.contains(b) && smemSegment.contains(b)) {
-      reps.insert(b);
-    }
-  }
-  // Split segment into segment and reps
   SetVector<int32_t> segment;
-  for (int32_t b : flatten(smem, kSegment)) {
-    if (!reps.contains(b)) {
-      segment.insert(b);
+  SetVector<int32_t> reps;
+  for (auto s : smemSegment) {
+    if (srcRegs.contains(s) && dstRegs.contains(s)) {
+      reps.insert(s);
+    } else {
+      segment.insert(s);
     }
   }
 
@@ -662,15 +658,14 @@ optimalSwizzling(const LinearLayout &src, const LinearLayout &dst,
     }
     // Current heuristic: Minimise total bank conflicts
     // We break ties looking at the number of rounds we do to move the data
-    // The lower the dat
     auto kReps = StringAttr::get(ctx, "reps");
-    llvm::sort(smems, [kReps](const auto &a, const auto &b) {
+    auto it = llvm::min_element(smems, [kReps](const auto &a, const auto &b) {
       return std::get<0>(a) < std::get<0>(b) ||
              (std::get<0>(a) == std::get<0>(b) &&
               std::get<1>(a).getInDimSize(kReps) >
                   std::get<1>(b).getInDimSize(kReps));
     });
-    return {std::get<1>(smems.front()), std::get<2>(smems.front())};
+    return {std::get<1>(*it), std::get<2>(*it)};
   }
 }
 

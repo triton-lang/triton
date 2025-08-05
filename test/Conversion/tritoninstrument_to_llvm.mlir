@@ -6,7 +6,7 @@ module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
 // CHECK-LABEL: @experimental_buffer_pointers_tmem
 // CHECK:nvgpu.tensor_memory_base
 tt.func private @experimental_buffer_pointers_tmem() {
-  tti.experimental_buffer_pointers [0, 42], tensor : tensor<2xi64, #blocked>
+  tti.experimental_buffer_pointers [0, 42], tensor_mem : tensor<2xi64, #blocked>
   tt.return
 }
 }
@@ -19,7 +19,7 @@ module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
 // CHECK-LABEL: @experimental_buffer_pointers_shared
 // CHECK: llvm.ptrtoint %arg0
 tt.func private @experimental_buffer_pointers_shared() {
-  tti.experimental_buffer_pointers [0, 42], shared : tensor<2xi64, #blocked>
+  tti.experimental_buffer_pointers [0, 42], shared_mem : tensor<2xi64, #blocked>
   tt.return
 }
 }
@@ -34,9 +34,9 @@ tt.func private @experimental_buffer_pointers_shared() {
 #smem = #ttg.shared_memory
 
 module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
-// CHECK-LABEL: @experimental_check_outstanding_writes
+// CHECK-LABEL: @experimental_check_write_state
 // CHECK: @__assertfail
-tt.func private @experimental_check_outstanding_writes(
+tt.func private @experimental_check_write_state(
   %buf: !ttg.memdesc<32x32xf32, #shared, #smem, mutable>,
   %buffers: tensor<2xi64, #blocked>,
   %barriers: tensor<4xi64, #blocked1>,
@@ -44,7 +44,7 @@ tt.func private @experimental_check_outstanding_writes(
   %writeState: !tt.ptr<i8>,
   %readBars: !tt.ptr<i8>
 ) {
-  tti.experimental_check_outstanding_writes %buf {%buffers, %writeBars(tensor<2x4xi8, #blocked2>), %writeState(tensor<2xi8, #blocked>)} pipelined false : !ttg.memdesc<32x32xf32, #shared, #smem, mutable>, tensor<2xi64, #blocked>, !tt.ptr<i8>, !tt.ptr<i8>
+  tti.experimental_check_write_state %buf {%buffers, %writeBars(tensor<2x4xi8, #blocked2>), %writeState(tensor<2xi8, #blocked>)} pipelined false : !ttg.memdesc<32x32xf32, #shared, #smem, mutable>, tensor<2xi64, #blocked>, !tt.ptr<i8>, !tt.ptr<i8>
   tt.return
 }
 }
@@ -58,14 +58,14 @@ tt.func private @experimental_check_outstanding_writes(
 #smem = #ttg.shared_memory
 
 module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
-// CHECK-LABEL: @experimental_check_outstanding_reads
+// CHECK-LABEL: @experimental_check_read_barriers
 // CHECK: @__assertfail
-tt.func private @experimental_check_outstanding_reads(
+tt.func private @experimental_check_read_barriers(
   %buf: !ttg.memdesc<32x32xf32, #shared, #smem, mutable>,
   %buffers: tensor<2xi64, #blocked>,
   %readBars: !tt.ptr<i8>
 ) {
-  tti.experimental_check_outstanding_reads %buf {%buffers, %readBars(tensor<2x2xi8, #blocked2>)} : !ttg.memdesc<32x32xf32, #shared, #smem, mutable>, tensor<2xi64, #blocked>, !tt.ptr<i8>
+  tti.experimental_check_read_barriers %buf {%buffers, %readBars(tensor<2x2xi8, #blocked2>)} : !ttg.memdesc<32x32xf32, #shared, #smem, mutable>, tensor<2xi64, #blocked>, !tt.ptr<i8>
   tt.return
 }
 }
@@ -79,9 +79,9 @@ tt.func private @experimental_check_outstanding_reads(
 #smem = #ttg.shared_memory
 
 module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
-// CHECK-LABEL: @experimental_mark_as_write
+// CHECK-LABEL: @experimental_set_write_state
 // CHECK: st.global
-tt.func private @experimental_mark_as_write(
+tt.func private @experimental_set_write_state(
   %buf: !ttg.memdesc<32x32xf32, #shared, #smem, mutable>,
   %buffers: tensor<2xi64, #blocked>,
   %barriers: tensor<4xi64, #blocked1>,
@@ -89,7 +89,7 @@ tt.func private @experimental_mark_as_write(
   %writeState: !tt.ptr<i8>,
   %readBars: !tt.ptr<i8>
 ) {
-  tti.experimental_mark_as_write %buf {%buffers, %writeState(tensor<2xi8, #blocked>)} pipelined false : !ttg.memdesc<32x32xf32, #shared, #smem, mutable>, tensor<2xi64, #blocked>, !tt.ptr<i8>
+  tti.experimental_set_write_state %buf {%buffers, %writeState(tensor<2xi8, #blocked>)} pipelined false : !ttg.memdesc<32x32xf32, #shared, #smem, mutable>, tensor<2xi64, #blocked>, !tt.ptr<i8>
   tt.return
 }
 }
@@ -153,16 +153,16 @@ tt.func private @experimental_commit_write_with_barrier(
 #smem = #ttg.shared_memory
 
 module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
-// CHECK-LABEL: @experimental_mark_as_read
+// CHECK-LABEL: @experimental_set_read_barrier
 // CHECK: st.global
-tt.func private @experimental_mark_as_read(
+tt.func private @experimental_set_read_barrier(
   %buf: !ttg.memdesc<32x32xf32, #shared, #smem, mutable>,
   %mbar: !ttg.memdesc<1xi64, #shared1, #smem, mutable>,
   %buffers: tensor<2xi64, #blocked>,
   %barriers: tensor<2xi64, #blocked>,
   %readBars: !tt.ptr<i8>
 ) {
-  tti.experimental_mark_as_read %buf, %mbar {%buffers, %barriers, %readBars(tensor<2x2xi8, #blocked2>)} : !ttg.memdesc<32x32xf32, #shared, #smem, mutable>, !ttg.memdesc<1xi64, #shared1, #smem, mutable>, tensor<2xi64, #blocked>, tensor<2xi64, #blocked>, !tt.ptr<i8>
+  tti.experimental_set_read_barrier %buf, %mbar {%buffers, %barriers, %readBars(tensor<2x2xi8, #blocked2>)} : !ttg.memdesc<32x32xf32, #shared, #smem, mutable>, !ttg.memdesc<1xi64, #shared1, #smem, mutable>, tensor<2xi64, #blocked>, tensor<2xi64, #blocked>, !tt.ptr<i8>
   tt.return
 }
 }
@@ -220,14 +220,14 @@ tt.func private @experimental_clear_read_barrier(
 #smem = #ttg.shared_memory
 
 module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
-// CHECK-LABEL: @experimental_stage_write_for_commit
+// CHECK-LABEL: @experimental_stage_access_for_commit
 // CHECK: st.global
-tt.func private @experimental_stage_write_for_commit(
+tt.func private @experimental_stage_access_for_commit(
   %buf: !ttg.memdesc<32x32xf32, #shared, #smem, mutable>,
   %buffers: tensor<2xi64, #blocked>,
   %writeCommits: !tt.ptr<i8>
 ) {
-  tti.experimental_stage_write_for_commit %buf {%buffers, %writeCommits(tensor<2xi8, #blocked>)} : !ttg.memdesc<32x32xf32, #shared, #smem, mutable>, tensor<2xi64, #blocked>, !tt.ptr<i8>
+  tti.experimental_stage_access_for_commit %buf {%buffers, %writeCommits(tensor<2xi8, #blocked>)} : !ttg.memdesc<32x32xf32, #shared, #smem, mutable>, tensor<2xi64, #blocked>, !tt.ptr<i8>
   tt.return
 }
 }
@@ -239,14 +239,14 @@ tt.func private @experimental_stage_write_for_commit(
 #smem = #ttg.shared_memory
 
 module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
-// CHECK-LABEL: @experimental_check_write_commit
+// CHECK-LABEL: @experimental_check_outstanding_commits
 // CHECK: @__assertfail
-tt.func private @experimental_check_write_commit(
+tt.func private @experimental_check_outstanding_commits(
   %buf: !ttg.memdesc<32x32xf32, #shared, #smem, mutable>,
   %buffers: tensor<2xi64, #blocked>,
   %writeCommits: !tt.ptr<i8>
 ) {
-  tti.experimental_check_write_commit %buf {%buffers, %writeCommits(tensor<2xi8, #blocked>)} : !ttg.memdesc<32x32xf32, #shared, #smem, mutable>, tensor<2xi64, #blocked>, !tt.ptr<i8>
+  tti.experimental_check_outstanding_commits %buf {%buffers, %writeCommits(tensor<2xi8, #blocked>)}, "dummy" : !ttg.memdesc<32x32xf32, #shared, #smem, mutable>, tensor<2xi64, #blocked>, !tt.ptr<i8>
   tt.return
 }
 }
@@ -258,12 +258,12 @@ tt.func private @experimental_check_write_commit(
 #smem = #ttg.shared_memory
 
 module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
-// CHECK-LABEL: @experimental_commit_writes
+// CHECK-LABEL: @experimental_commit_accesses
 // CHECK: st.global
-tt.func private @experimental_commit_writes(
+tt.func private @experimental_commit_accesses(
   %writeCommits: !tt.ptr<i8>
 ) {
-  tti.experimental_commit_writes {%writeCommits(tensor<2xi8, #blocked>)} : !tt.ptr<i8>
+  tti.experimental_commit_accesses {%writeCommits(tensor<2xi8, #blocked>)} : !tt.ptr<i8>
   tt.return
 }
 }
@@ -275,12 +275,12 @@ tt.func private @experimental_commit_writes(
 #smem = #ttg.shared_memory
 
 module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
-// CHECK-LABEL: @experimental_clear_write_commits
+// CHECK-LABEL: @experimental_clear_outstanding_commits
 // CHECK: st.global
-tt.func private @experimental_clear_write_commits(
-  %writeCommits: !tt.ptr<i8>
+tt.func private @experimental_clear_outstanding_commits(
+  %outstandingCommits: !tt.ptr<i8>
 ) {
-  tti.experimental_clear_write_commits {%writeCommits(tensor<2xi8, #blocked>)}, 42 : !tt.ptr<i8>
+  tti.experimental_clear_outstanding_commits {%outstandingCommits(tensor<2xi8, #blocked>)}, 42 : !tt.ptr<i8>
   tt.return
 }
 }
