@@ -4,6 +4,7 @@
 
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Types.h"
+#include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Gluon/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
@@ -200,17 +201,28 @@ py::object layoutToGluon(Attribute layout) {
   } else if (auto amdMfma = dyn_cast<ttg::AMDMfmaEncodingAttr>(layout)) {
     auto ctaLayout = amdMfma.getCTALayout();
     std::vector<unsigned> instrShape{amdMfma.getMDim(), amdMfma.getNDim()};
-    auto isFP32 = !amdMfma.getElementType().has_value() ||
-                  amdMfma.getElementType().value().isF32();
+    auto elemTypeOpt = amdMfma.getElementType();
+    const char *typeName = "fp32";
+    if (elemTypeOpt.has_value()) {
+      auto elemType = elemTypeOpt.value();
+      if (elemType.isF64()) {
+        typeName = "fp64";
+      } else if (elemType.isF32()) {
+        typeName = "fp32";
+      } else {
+        // The AMDMfmaEncodingAttr mlir attribute has already verified element
+        // type is fp64, fp32 or int32; so, the typeName here must be int32.
+        typeName = "int32";
+      }
+    }
 
-    return layouts.AMDMFMALayout(amdMfma.getVersion(), instrShape,
-                                 amdMfma.getIsTransposed(),
-                                 toStdVector(amdMfma.getWarpsPerCTA()),
-                                 toStdVector(amdMfma.getTilesPerWarp()),
-                                 layouts.GluonDType(isFP32 ? "fp32" : "fp64"),
-                                 toStdVector(ctaLayout.getCTAsPerCGA()),
-                                 toStdVector(ctaLayout.getCTASplitNum()),
-                                 toStdVector(ctaLayout.getCTAOrder()));
+    return layouts.AMDMFMALayout(
+        amdMfma.getVersion(), instrShape, amdMfma.getIsTransposed(),
+        toStdVector(amdMfma.getWarpsPerCTA()),
+        toStdVector(amdMfma.getTilesPerWarp()), layouts.GluonDType(typeName),
+        toStdVector(ctaLayout.getCTAsPerCGA()),
+        toStdVector(ctaLayout.getCTASplitNum()),
+        toStdVector(ctaLayout.getCTAOrder()));
   } else if (auto paddedShared =
                  dyn_cast<ttg::PaddedSharedEncodingAttr>(layout)) {
     auto ctaLayout = amdMfma.getCTALayout();
@@ -626,13 +638,20 @@ void init_gluon_ir(py::module &&m) {
            [](GluonOpBuilder &self, int numPartitions) -> Operation * {
              return self.create<ttg::WarpSpecializePartitionsOp>(numPartitions);
            })
-      .def("create_warp_specialize", [](GluonOpBuilder &self,
-                                        std::vector<Type> &resultTypes,
-                                        std::vector<Value> &explicitCaptures,
-                                        std::vector<int> &partitionNumWarps) {
-        return self.create<ttg::WarpSpecializeOp>(resultTypes, explicitCaptures,
-                                                  partitionNumWarps);
-      });
+      .def("create_warp_specialize",
+           [](GluonOpBuilder &self, std::vector<Type> &resultTypes,
+              std::vector<Value> &explicitCaptures,
+              std::vector<int> &partitionNumWarps) {
+             return self.create<ttg::WarpSpecializeOp>(
+                 resultTypes, explicitCaptures, partitionNumWarps);
+           })
+      .def("create_buffer_load_to_local",
+           [](GluonOpBuilder &self, Value dest, Value ptr, Value offsets,
+              Value mask, Value other, Value stride,
+              tt::CacheModifier cacheModifier) {
+             self.create<triton::amdgpu::BufferLoadToLocalOp>(
+                 dest, ptr, offsets, mask, other, stride, cacheModifier);
+           });
 
   py::class_<ttg::WarpSpecializeOp, OpState>(m, "WarpSpecializeOp",
                                              py::module_local())
