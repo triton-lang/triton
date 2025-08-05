@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List, Optional, Tuple
 from triton.language.core import _unwrap_if_constexpr, _unwrap_shape, constexpr_type
 
 __all__ = [
@@ -426,38 +426,35 @@ class SwizzledSharedLayout(SharedLayout):
         return f"SSS_{self.vec}_{self.per_phase}_{self.max_phase}_{stringify(self.order)}_{stringify(self.ctas_per_cga)}_{stringify(self.cta_split_num)}_{stringify(self.cta_order)}_SSS"
 
 
-@dataclass(frozen=True)
-class PaddedSharedLayout(DistributedLayout):
+@dataclass(frozen=True, eq=True)
+class PaddedSharedLayout(SharedLayout):
     """
-    Represents a layout for the access to AMD shared memory. Compared to SwizzledSharedLayout,
+    Represents a layout for the access to shared memory. Compared to SwizzledSharedLayout,
     it uses padding to avoid shared memory bank conflicts.
-    One concrete example, using `eM` to mean tensor elements and `pN` to mean padding and interval-padding pairs are [2:+1, 4:+2]
 
-    #ttg.padded_shared<[2:+1, 4:+2]>
-    [e0, e1, p0,
-     e2, e3, p1, p2, p3,
-     e4, e5, p4,
-     e6, e7, p5, p6, p7,
-     ...]
+    One concrete example with `eM` for tensor elements before padding:
+    [e0, e1, e2, e3, e4, e5, e6, e7, ...]
+
+    If interval-padding pairs, List[[interval, padding]] is [[2, 1], [4, 3]],
+    the tensor will be
+    [e0, e1, p0, e2, e3, p1, p2, p3, e4, e5, p4, e6, e7, p5, p6, p7, ...]
+    with `pN` is for the padded element.
 
     Args:
-        intervals: List[int], list of intervals in the interval-padding pairs, e.g [2, 4] in the exmaple above.
-        paddings: List[int], list of paddings in the interval-padding pairs, e.g [1, 2] in the exmaple above.
-        order: List[int], order of logical tensor dimensions; fastest-varying first.
+        interval_padding_pairs (List[Tuple[int, int]]): The first element of pair in the list is interval and the second is padding. For the example above, this argument is [[2, 1], [4, 3]].
+        order (List[int]): order of logical tensor dimensions; fastest-varying first.
         ctas_per_cga (Optional[List[int]]): CTAs per CGA grouping.
         cta_split_num (Optional[List[int]]): Split factors for CTAs.
         cta_order (Optional[List[int]]): CTA ordering.
     """
-    intervals: List[int]
-    paddings: List[int]
+    interval_padding_pairs: List[Tuple[int, int]]
     order: List[int]
     ctas_per_cga: List[int] | None = None
     cta_split_num: List[int] | None = None
     cta_order: List[int] | None = None
 
     def __post_init__(self):
-        super().__setattr__("intervals", _unwrap_if_constexpr(self.intervals))
-        super().__setattr__("paddings", _unwrap_if_constexpr(self.paddings))
+        super().__setattr__("interval_padding_pairs", _unwrap_if_constexpr(self.interval_padding_pairs))
         super().__setattr__("order", _unwrap_if_constexpr(self.order))
         super().__setattr__("ctas_per_cga", _unwrap_if_constexpr(self.ctas_per_cga))
         super().__setattr__("cta_split_num", _unwrap_if_constexpr(self.cta_split_num))
@@ -466,8 +463,9 @@ class PaddedSharedLayout(DistributedLayout):
         self.verify()
 
     def _to_ir(self, builder):
-        return builder.get_padded_shared_layout(self.intervals, self.paddings, self.order, self.ctas_per_cga,
-                                                self.cta_split_num, self.cta_order)
+        intervals, paddings = zip(*self.interval_padding_pairs)
+        return builder.get_padded_shared_layout(intervals, paddings, self.order, self.ctas_per_cga, self.cta_split_num,
+                                                self.cta_order)
 
     def mangle(self) -> str:
 
@@ -476,17 +474,19 @@ class PaddedSharedLayout(DistributedLayout):
                 return ""
             return "_".join(map(str, x))
 
-        return f"PaddesShared_{stringify(self.intervals)}_{stringify(self.paddings)}_{stringify(self.order)}_{stringify(self.ctas_per_cga)}_{stringify(self.cta_split_num)}_{stringify(self.cta_order)}_PaddedShared"
+        return f"PaddesShared_{stringify(self.interval_padding_pairs)}_{stringify(self.order)}_{stringify(self.ctas_per_cga)}_{stringify(self.cta_split_num)}_{stringify(self.cta_order)}_PaddedShared"
 
     def verify(self):
-        assert len(self.intervals) > 0, "must have at least one interval-padding pair"
-        assert len(self.intervals) == len(self.paddings), "intervals size must match paddings size"
-        unique_intervals = list(set(self.intervals))
-        assert len(unique_intervals) == len(self.intervals)
+        pairs = self.interval_padding_pairs
+        assert len(pairs) > 0, "must have at least one interval-padding pair"
+        intervals, paddings = zip(*pairs)
+
+        unique_intervals = list(set(intervals))
+        assert len(unique_intervals) == len(intervals)
 
         is_power_of_2 = lambda n: n > 0 and n & (n - 1) == 0
-        assert all(is_power_of_2(n) for n in self.intervals), "interval values must all be power of two"
-        assert all(is_power_of_2(n) for n in self.paddings), "padding values must all be power of two"
+        assert all(is_power_of_2(n) for n in intervals), "interval values must all be power of two"
+        assert all(is_power_of_2(n) for n in paddings), "padding values must all be power of two"
 
         assert len(self.order) > 0, "order must not be empty"
         rank = len(self.cta_order)
