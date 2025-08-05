@@ -14,6 +14,8 @@
 namespace mlir::triton {
 namespace {
 
+constexpr int64_t kMaxDivisor = highestPowOf2Divisor<int64_t>(0);
+
 int64_t gcdImpl(int64_t a, int64_t b, int64_t *x, int64_t *y) {
   // Base Case
   if (a == 0) {
@@ -48,10 +50,30 @@ constexpr int log2Int(int64_t num) {
 
 // If lhs * rhs overflows, return max value possible value for the type
 int64_t multiplyDivisor(int64_t lhs, int64_t rhs) {
-  int64_t maxDivisor = highestPowOf2Divisor<int64_t>(0);
-  if (lhs > maxDivisor / rhs)
-    return maxDivisor;
+  if (lhs > kMaxDivisor / rhs)
+    return kMaxDivisor;
   return lhs * rhs;
+}
+
+int64_t getDivisibilityFromContiguity(const AxisInfo &lhs, const AxisInfo &rhs,
+                                      int d) {
+  // For example if we have the following two arrays using the selectOp:
+  // lhs: [[0, 1], [4, 5]]
+  // rhs: [[16, 17, 18, 19]]
+  // The resulting contiguity will be 2, while the divisibility will be 2
+  // because 18 is not divisible by 4.
+  if (lhs.getContiguity(d) == rhs.getContiguity(d) ||
+      lhs.getContiguity(d) == kMaxDivisor ||
+      rhs.getContiguity(d) == kMaxDivisor) {
+    // Contiguity not changed or one of them is unresolved.
+    // If unresolved, we can first perform a loose bound gcd since the unknown
+    // contiguity will be resolved in the end.
+    return gcd(lhs.getDivisibility(d), rhs.getDivisibility(d));
+  } else {
+    // Contiguity changed, we cannot use only divisibility.
+    return gcd(lhs.getDivisibility(d), rhs.getDivisibility(d),
+               lhs.getContiguity(d), rhs.getContiguity(d));
+  }
 }
 
 // Base class for all operations
@@ -167,6 +189,7 @@ public:
   void
   visitForOpInductionVar(scf::ForOp op,
                          ArrayRef<dataflow::Lattice<AxisInfo> *> argLattices);
+
   void visitWarpSpecializeExplicitCaptures(
       gpu::WarpSpecializePartitionsOp ws, const RegionSuccessor &successor,
       ArrayRef<dataflow::Lattice<AxisInfo> *> argLattices);
@@ -250,10 +273,9 @@ public:
       rank = shape.getRank();
 
     // Poison values are never accessed, thus assume optimistic values.
-    return AxisInfo(
-        AxisInfo::DimVectorT(rank, highestPowOf2Divisor<int64_t>(0)),
-        AxisInfo::DimVectorT(rank, highestPowOf2Divisor<int64_t>(0)),
-        AxisInfo::DimVectorT(rank, highestPowOf2Divisor<int64_t>(0)));
+    return AxisInfo(AxisInfo::DimVectorT(rank, kMaxDivisor),
+                    AxisInfo::DimVectorT(rank, kMaxDivisor),
+                    AxisInfo::DimVectorT(rank, kMaxDivisor));
   }
 };
 
@@ -804,15 +826,8 @@ public:
         if (i1Cond) {
           constancy.push_back(
               gcd(lhsInfo.getConstancy(d), rhsInfo.getConstancy(d)));
-          if (lhsInfo.getContiguity(d) == rhsInfo.getContiguity(d)) {
-            divisibility.push_back(
-                gcd(lhsInfo.getDivisibility(d), rhsInfo.getDivisibility(d)));
-          } else {
-            // Contiguity changed, we cannot use only divisibility.
-            divisibility.push_back(
-                gcd(lhsInfo.getDivisibility(d), rhsInfo.getDivisibility(d),
-                    lhsInfo.getContiguity(d), rhsInfo.getContiguity(d)));
-          }
+          divisibility.push_back(
+              getDivisibilityFromContiguity(lhsInfo, rhsInfo, d));
           contiguity.push_back(
               gcd(lhsInfo.getContiguity(d), rhsInfo.getContiguity(d)));
         } else {
@@ -820,21 +835,8 @@ public:
                                   rhsInfo.getConstancy(d), condConstancy[d]));
           contiguity.push_back(gcd(lhsInfo.getContiguity(d),
                                    rhsInfo.getContiguity(d), condConstancy[d]));
-          if (contiguity.back() == lhsInfo.getContiguity(d) &&
-              contiguity.back() == rhsInfo.getContiguity(d)) {
-            // Contiguity not changed
-            divisibility.push_back(
-                gcd(lhsInfo.getDivisibility(d), rhsInfo.getDivisibility(d)));
-          } else {
-            // Contiguity changed, we cannot use only divisibility.
-            // For example, the following example should have contiguity 2 and
-            // divisibility 2
-            // [[0, 1], [4, 5]]
-            // [[16, 17, 18, 19]]
-            divisibility.push_back(gcd(lhsInfo.getDivisibility(d),
-                                       rhsInfo.getDivisibility(d),
-                                       contiguity.back()));
-          }
+          divisibility.push_back(
+              getDivisibilityFromContiguity(lhsInfo, rhsInfo, d));
         }
       }
       if (lhsInfo.getConstantValue().has_value() &&
@@ -991,14 +993,8 @@ public:
       for (auto d = 0; d < rank; ++d) {
         constancy.push_back(
             gcd(lhsInfo.getConstancy(d), rhsInfo.getConstancy(d)));
-        if (lhsInfo.getContiguity(d) == rhsInfo.getContiguity(d)) {
-          divisibility.push_back(
-              gcd(lhsInfo.getDivisibility(d), rhsInfo.getDivisibility(d)));
-        } else {
-          divisibility.push_back(
-              gcd(lhsInfo.getDivisibility(d), rhsInfo.getDivisibility(d),
-                  lhsInfo.getContiguity(d), rhsInfo.getContiguity(d)));
-        }
+        divisibility.push_back(
+            getDivisibilityFromContiguity(lhsInfo, rhsInfo, d));
         contiguity.push_back(
             gcd(lhsInfo.getContiguity(d), rhsInfo.getContiguity(d)));
       }
@@ -1164,29 +1160,27 @@ void AxisInfo::initPessimisticStateFromFunc(int argNumber, T funcOp,
 
   if (blockArg && blockArg.getOwner()->isEntryBlock()) {
     Operation *op = blockArg.getOwner()->getParentOp();
-    if (isa<RegionBranchOpInterface, gpu::WarpSpecializePartitionsOp,
-            FunctionOpInterface>(op)) {
-      // funcOp, scf::ForOp, scf::IfOp, scf::WhileOp,
-      // gpu::WarpSpecializePartitionsOp Control flow operations are initialized
-      // with "unknown" state: the maximum possible divisibility, contiguity,
-      // and constancy.
-      knownDivisibility = DimVectorT(rank, highestPowOf2Divisor<int64_t>(0));
-      knownConstancy = DimVectorT(rank, highestPowOf2Divisor<int64_t>(0));
-      knownContiguity = DimVectorT(rank, highestPowOf2Divisor<int64_t>(0));
-      if (auto fun = dyn_cast<FunctionOpInterface>(op)) {
-        initPessimisticStateFromFunc(blockArg.getArgNumber(), fun,
-                                     &knownContiguity, &knownDivisibility,
-                                     &knownConstancy);
-      }
+    if (auto fun = dyn_cast<FunctionOpInterface>(op)) {
+      initPessimisticStateFromFunc(blockArg.getArgNumber(), fun,
+                                   &knownContiguity, &knownDivisibility,
+                                   &knownConstancy);
+    } else if (isa<RegionBranchOpInterface, gpu::WarpSpecializePartitionsOp>(
+                   op)) {
+      // scf::ForOp, scf::IfOp, scf::WhileOp, gpu::WarpSpecializePartitionsOp
+      // Control flow operations are initialized with "unknown" state:
+      // the maximum possible divisibility, contiguity, and constancy.
+      knownDivisibility = DimVectorT(rank, kMaxDivisor);
+      knownConstancy = DimVectorT(rank, kMaxDivisor);
+      knownContiguity = DimVectorT(rank, kMaxDivisor);
     }
   } else if (Operation *op = value.getDefiningOp()) {
     if (isa<RegionBranchOpInterface>(op)) {
       // scf::ForOp, scf::IfOp, scf::WhileOp
       // Control flow operations are initialized with "unknown" state:
       // the maximum possible divisibility, contiguity, and constancy.
-      knownDivisibility = DimVectorT(rank, highestPowOf2Divisor<int64_t>(0));
-      knownConstancy = DimVectorT(rank, highestPowOf2Divisor<int64_t>(0));
-      knownContiguity = DimVectorT(rank, highestPowOf2Divisor<int64_t>(0));
+      knownDivisibility = DimVectorT(rank, kMaxDivisor);
+      knownConstancy = DimVectorT(rank, kMaxDivisor);
+      knownContiguity = DimVectorT(rank, kMaxDivisor);
     }
     // Other operations are conservatively initialized with the lowest possible
     // divisibility, contiguity, and constancy unless they have specified.
@@ -1218,14 +1212,7 @@ void AxisInfo::initPessimisticStateFromFunc(int argNumber, T funcOp,
   DimVectorT constancy;
   for (auto d = 0; d < lhs.getRank(); ++d) {
     contiguity.push_back(gcd(lhs.getContiguity(d), rhs.getContiguity(d)));
-    if (lhs.getContiguity(d) == rhs.getContiguity(d)) {
-      divisibility.push_back(
-          gcd(lhs.getDivisibility(d), rhs.getDivisibility(d)));
-    } else {
-      // Contiguity changed, we cannot use only divisibility.
-      divisibility.push_back(gcd(lhs.getDivisibility(d), rhs.getDivisibility(d),
-                                 lhs.getContiguity(d), rhs.getContiguity(d)));
-    }
+    divisibility.push_back(getDivisibilityFromContiguity(lhs, rhs, d));
     constancy.push_back(gcd(lhs.getConstancy(d), rhs.getConstancy(d)));
   }
   std::optional<int64_t> constantValue;
@@ -1376,7 +1363,7 @@ void ModuleAxisInfoAnalysis::update(CallOpInterface callOp,
     auto index = entry.index();
     auto value = entry.value();
     auto setAttrFn = [&](StringRef attrName, int64_t prevValue) {
-      auto curValue = highestPowOf2Divisor<int64_t>(0);
+      auto curValue = kMaxDivisor;
       if (callee.getArgAttrOfType<IntegerAttr>(index, attrName)) {
         curValue =
             callee.getArgAttrOfType<IntegerAttr>(index, attrName).getInt();
