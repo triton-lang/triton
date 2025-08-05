@@ -170,7 +170,7 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 #tmem = #ttng.tensor_memory
 module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
   //CHECK-LABEL: @aref_lowering
-  tt.func @aref_lowering(%d : !ttg.memdesc<3x64x16xf16, #shared0, #smem>,
+  tt.func @aref_lowering(%d : !ttg.memdesc<3x64x16xf16, #shared0, #tmem>,
                          %e : !ttg.memdesc<3x16x32xf16, #shared0, #smem>,
                          %cond : i1) {
     %c0_i32 = arith.constant 0 : i32
@@ -189,7 +189,7 @@ module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-w
     // CHECK-NEXT:     [[FULLSLICE:%.*]] = ttg.memdesc_index [[FULL0]]
     // CHECK-NEXT:     ttng.init_barrier [[FULLSLICE]], 2
     // CHECK-NEXT:   }
-    %aref0 = nvws.aref.create %d, %e : !nvws.aref<[!ttg.memdesc<3x64x16xf16, #shared0, #smem>, !ttg.memdesc<3x16x32xf16, #shared0, #smem>]>
+    %aref0 = nvws.aref.create %d, %e : !nvws.aref<[!ttg.memdesc<3x64x16xf16, #shared0, #tmem>, !ttg.memdesc<3x16x32xf16, #shared0, #smem>]>
 
     // CHECK:        [[EMPTY1:%.*]] = ttg.local_alloc
     // CHECK-NEXT:   [[FULL1:%.*]] = ttg.local_alloc
@@ -199,7 +199,7 @@ module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-w
     // CHECK-NEXT:     [[FULLSLICE:%.*]] = ttg.memdesc_index [[FULL1]]
     // CHECK-NEXT:     ttng.init_barrier [[FULLSLICE]], 1
     // CHECK-NEXT:   }
-    %aref1 = nvws.aref.create %d, %e : !nvws.aref<[!ttg.memdesc<3x64x16xf16, #shared0, #smem>, !ttg.memdesc<3x16x32xf16, #shared0, #smem>]>
+    %aref1 = nvws.aref.create %d, %e : !nvws.aref<[!ttg.memdesc<3x64x16xf16, #shared0, #tmem>, !ttg.memdesc<3x16x32xf16, #shared0, #smem>]>
 
     nvws.warp_group
     partition0  num_warps(4) {
@@ -208,7 +208,7 @@ module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-w
 
         // CHECK-NEXT: [[EMPTYMBAR:%.*]] = ttg.memdesc_index [[EMPTY0]], [[S0]]
         // CHECK-NEXT: ttng.wait_barrier [[EMPTYMBAR]], [[P0]]
-        %1:3 = nvws.aref.put.enter %aref0[%c0_i32, %c0_i32] {aref_tag = "put0"} : !nvws.aref<[!ttg.memdesc<3x64x16xf16, #shared0, #smem>, !ttg.memdesc<3x16x32xf16, #shared0, #smem>]> -> !ttg.memdesc<64x16xf16, #shared0, #smem>, !ttg.memdesc<16x32xf16, #shared0, #smem>, !ttg.async.token
+        %1:3 = nvws.aref.put.enter %aref0[%c0_i32, %c0_i32] {aref_tag = "put0"} : !nvws.aref<[!ttg.memdesc<3x64x16xf16, #shared0, #tmem>, !ttg.memdesc<3x16x32xf16, #shared0, #smem>]> -> !ttg.memdesc<64x16xf16, #shared0, #tmem>, !ttg.memdesc<16x32xf16, #shared0, #smem>, !ttg.async.token
 
         // CHECK-NEXT: [[BUFA:%.*]] = ttg.memdesc_index %arg0, [[S0]]
         // CHECK-NEXT: [[BUFB:%.*]] = ttg.memdesc_index %arg1, [[S0]]
@@ -221,7 +221,7 @@ module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-w
         // CHECK-NEXT: [[P0b:%.*]] = arith.select [[CMP]], [[P0a]], [[P0]]
         // CHECK-NEXT: "tma_load"([[BUFA]])
         // CHECK-NEXT: "sts"([[BUFB]])
-        "tma_load"(%1#0) : (!ttg.memdesc<64x16xf16, #shared0, #smem>) -> ()
+        "tma_load"(%1#0) : (!ttg.memdesc<64x16xf16, #shared0, #tmem>) -> ()
         "sts"(%1#1) : (!ttg.memdesc<16x32xf16, #shared0, #smem>) -> ()
 
         // CHECK-NEXT: [[FULLMBAR:%.*]] = ttg.memdesc_index [[FULL0]], [[S2]]
@@ -229,7 +229,7 @@ module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-w
         // CHECK-NEXT: [[S2a:%.*]] = arith.addi [[S2]], [[C1]]
         // CHECK-NEXT: [[CMP:%.*]] = arith.cmpi eq, [[S2a]], [[C3]]
         // CHECK-NEXT: [[S2b:%.*]] = arith.select [[CMP]], [[C0]], [[S2a]]
-        nvws.aref.put.exit %aref0[%c0_i32], %1#2 [#nvws.async_op<tma_load>, #nvws.async_op<none>] {aref_tag = "put0"} : !nvws.aref<[!ttg.memdesc<3x64x16xf16, #shared0, #smem>, !ttg.memdesc<3x16x32xf16, #shared0, #smem>]>, !ttg.async.token
+        nvws.aref.put.exit %aref0[%c0_i32], %1#2 [#nvws.async_op<tma_load>, #nvws.async_op<none>] {aref_tag = "put0"} : !nvws.aref<[!ttg.memdesc<3x64x16xf16, #shared0, #tmem>, !ttg.memdesc<3x16x32xf16, #shared0, #smem>]>, !ttg.async.token
 
         // CHECK-NEXT: [[SP1S3:%.*]]:3 = scf.if
         scf.if %cond {
@@ -242,15 +242,15 @@ module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-w
           // CHECK-NEXT: [[P1a:%.*]] = arith.xori [[P1]], [[C1]]
           // CHECK-NEXT: [[P1b:%.*]] = arith.select [[CMP]], [[P1a]], [[P1]]
 
-          %2:3 = nvws.aref.put.enter %aref1[%c0_i32, %c0_i32] {aref_tag = "put1"} : !nvws.aref<[!ttg.memdesc<3x64x16xf16, #shared0, #smem>, !ttg.memdesc<3x16x32xf16, #shared0, #smem>]> -> !ttg.memdesc<64x16xf16, #shared0, #smem>, !ttg.memdesc<16x32xf16, #shared0, #smem>, !ttg.async.token
-          "tmem_store"(%2#0, %2#1) : (!ttg.memdesc<64x16xf16, #shared0, #smem>, !ttg.memdesc<16x32xf16, #shared0, #smem>) -> ()
+          %2:3 = nvws.aref.put.enter %aref1[%c0_i32, %c0_i32] {aref_tag = "put1"} : !nvws.aref<[!ttg.memdesc<3x64x16xf16, #shared0, #tmem>, !ttg.memdesc<3x16x32xf16, #shared0, #smem>]> -> !ttg.memdesc<64x16xf16, #shared0, #tmem>, !ttg.memdesc<16x32xf16, #shared0, #smem>, !ttg.async.token
+          "tmem_store"(%2#0, %2#1) : (!ttg.memdesc<64x16xf16, #shared0, #tmem>, !ttg.memdesc<16x32xf16, #shared0, #smem>) -> ()
 
           // CHECK: [[BAR:%.*]] = ttg.memdesc_index {{.*}}, [[S3]]
           // CHECK-NEXT: ttng.arrive_barrier [[BAR]], 1
           // CHECK: [[S3a:%.*]] = arith.addi [[S3]], [[C1]]
           // CHECK-NEXT: [[CMP:%.*]] = arith.cmpi eq, [[S3a]], [[C3]]
           // CHECK-NEXT: [[S3b:%.*]] = arith.select [[CMP]], [[C0]], [[S3a]]
-          nvws.aref.put.exit %aref1[%c0_i32], %2#2 [#nvws.async_op<none>] : !nvws.aref<[!ttg.memdesc<3x64x16xf16, #shared0, #smem>, !ttg.memdesc<3x16x32xf16, #shared0, #smem>]>, !ttg.async.token
+          nvws.aref.put.exit %aref1[%c0_i32], %2#2 [#nvws.async_op<none>] : !nvws.aref<[!ttg.memdesc<3x64x16xf16, #shared0, #tmem>, !ttg.memdesc<3x16x32xf16, #shared0, #smem>]>, !ttg.async.token
 
           // CHECK: scf.yield [[S1b]], [[P1b]], [[S3b]]
         }
@@ -267,23 +267,23 @@ module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-w
 
         // CHECK-NEXT: [[BAR:%.*]] = ttg.memdesc_index {{.*}}, [[IDX]]#0
         // CHECK-NEXT: ttng.wait_barrier [[BAR]], [[IDX]]#1
-        %1:3 = nvws.aref.put.enter %aref0[%c0_i32, %c0_i32] {aref_tag = "put1"} : !nvws.aref<[!ttg.memdesc<3x64x16xf16, #shared0, #smem>, !ttg.memdesc<3x16x32xf16, #shared0, #smem>]> -> !ttg.memdesc<64x16xf16, #shared0, #smem>, !ttg.memdesc<16x32xf16, #shared0, #smem>, !ttg.async.token
-        "tma_load"(%1#0) : (!ttg.memdesc<64x16xf16, #shared0, #smem>) -> ()
+        %1:3 = nvws.aref.put.enter %aref0[%c0_i32, %c0_i32] {aref_tag = "put1"} : !nvws.aref<[!ttg.memdesc<3x64x16xf16, #shared0, #tmem>, !ttg.memdesc<3x16x32xf16, #shared0, #smem>]> -> !ttg.memdesc<64x16xf16, #shared0, #tmem>, !ttg.memdesc<16x32xf16, #shared0, #smem>, !ttg.async.token
+        "tma_load"(%1#0) : (!ttg.memdesc<64x16xf16, #shared0, #tmem>) -> ()
         "sts"(%1#1) : (!ttg.memdesc<16x32xf16, #shared0, #smem>) -> ()
         //CHECK: sts
 
         // CHECK: [[BAR:%.*]] = ttg.memdesc_index {{.*}}, [[IDX]]#4
         // CHECK-NEXT: ttng.arrive_barrier [[BAR]]
-        nvws.aref.put.exit %aref0[%c0_i32], %1#2 [#nvws.async_op<tma_load>, #nvws.async_op<none>] {aref_tag = "put1"} : !nvws.aref<[!ttg.memdesc<3x64x16xf16, #shared0, #smem>, !ttg.memdesc<3x16x32xf16, #shared0, #smem>]>, !ttg.async.token
+        nvws.aref.put.exit %aref0[%c0_i32], %1#2 [#nvws.async_op<tma_load>, #nvws.async_op<none>] {aref_tag = "put1"} : !nvws.aref<[!ttg.memdesc<3x64x16xf16, #shared0, #tmem>, !ttg.memdesc<3x16x32xf16, #shared0, #smem>]>, !ttg.async.token
       }
 
       // CHECK: [[BAR:%.*]] = ttg.memdesc_index {{.*}}, [[IDX]]#2
       // CHECK-NEXT: ttng.wait_barrier [[BAR]], [[IDX]]#3
-      %1:3 = nvws.aref.put.enter %aref1[%c0_i32, %c0_i32] : !nvws.aref<[!ttg.memdesc<3x64x16xf16, #shared0, #smem>, !ttg.memdesc<3x16x32xf16, #shared0, #smem>]> -> !ttg.memdesc<64x16xf16, #shared0, #smem>, !ttg.memdesc<16x32xf16, #shared0, #smem>, !ttg.async.token
-      "tmem_store"(%1#0, %1#1) : (!ttg.memdesc<64x16xf16, #shared0, #smem>, !ttg.memdesc<16x32xf16, #shared0, #smem>) -> ()
+      %1:3 = nvws.aref.put.enter %aref1[%c0_i32, %c0_i32] : !nvws.aref<[!ttg.memdesc<3x64x16xf16, #shared0, #tmem>, !ttg.memdesc<3x16x32xf16, #shared0, #smem>]> -> !ttg.memdesc<64x16xf16, #shared0, #tmem>, !ttg.memdesc<16x32xf16, #shared0, #smem>, !ttg.async.token
+      "tmem_store"(%1#0, %1#1) : (!ttg.memdesc<64x16xf16, #shared0, #tmem>, !ttg.memdesc<16x32xf16, #shared0, #smem>) -> ()
       // CHECK: [[BAR:%.*]] = ttg.memdesc_index {{.*}}, [[IDX]]#5
       // CHECK-NEXT: ttng.arrive_barrier [[BAR]], 1
-      nvws.aref.put.exit %aref1[%c0_i32], %1#2 [#nvws.async_op<none>] : !nvws.aref<[!ttg.memdesc<3x64x16xf16, #shared0, #smem>, !ttg.memdesc<3x16x32xf16, #shared0, #smem>]>, !ttg.async.token
+      nvws.aref.put.exit %aref1[%c0_i32], %1#2 [#nvws.async_op<none>] : !nvws.aref<[!ttg.memdesc<3x64x16xf16, #shared0, #tmem>, !ttg.memdesc<3x16x32xf16, #shared0, #smem>]>, !ttg.async.token
       nvws.warp_group.return
     }
     partition1 num_warps(8) {
@@ -292,7 +292,7 @@ module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-w
 
         // CHECK-NEXT: [[FULLMBAR:%.*]] = ttg.memdesc_index [[FULL0]], [[S0]]
         // CHECK-NEXT: ttng.wait_barrier [[FULLMBAR]], [[P0]]
-        %2:3 = nvws.aref.get.enter %aref0[%c0_i32, %c0_i32] : !nvws.aref<[!ttg.memdesc<3x64x16xf16, #shared0, #smem>, !ttg.memdesc<3x16x32xf16, #shared0, #smem>]> -> !ttg.memdesc<64x16xf16, #shared0, #smem>, !ttg.memdesc<16x32xf16, #shared0, #smem>, !ttg.async.token
+        %2:3 = nvws.aref.get.enter %aref0[%c0_i32, %c0_i32] : !nvws.aref<[!ttg.memdesc<3x64x16xf16, #shared0, #tmem>, !ttg.memdesc<3x16x32xf16, #shared0, #smem>]> -> !ttg.memdesc<64x16xf16, #shared0, #tmem>, !ttg.memdesc<16x32xf16, #shared0, #smem>, !ttg.async.token
 
         // CHECK-NEXT: [[BUFA:%.*]] = ttg.memdesc_index %arg0, [[S0]]
         // CHECK-NEXT: [[BUFB:%.*]] = ttg.memdesc_index %arg1, [[S0]]
@@ -302,7 +302,7 @@ module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-w
         // CHECK-NEXT: arith.xori
         // CHECK-NEXT: arith.select
         // CHECK-NEXT: "tc5mma"([[BUFA]], [[BUFB]])
-        "tc5mma"(%2#0, %2#1) : (!ttg.memdesc<64x16xf16, #shared0, #smem>, !ttg.memdesc<16x32xf16, #shared0, #smem>) -> ()
+        "tc5mma"(%2#0, %2#1) : (!ttg.memdesc<64x16xf16, #shared0, #tmem>, !ttg.memdesc<16x32xf16, #shared0, #smem>) -> ()
 
         // CHECK-NEXT: [[EMPTYMBAR:%.*]] = ttg.memdesc_index [[EMPTY0]], [[S2]]
         // CHECK-NEXT: ttng.tc_gen5_commit [[EMPTYMBAR]]
@@ -311,19 +311,19 @@ module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-w
         // CHECK-NEXT: arith.select
         // CHECK-NOT: arith.xori
         // CHECK-NOT: arith.select
-        nvws.aref.get.exit %aref0[%c0_i32], %2#2 [#nvws.async_op<tc5mma>] : !nvws.aref<[!ttg.memdesc<3x64x16xf16, #shared0, #smem>, !ttg.memdesc<3x16x32xf16, #shared0, #smem>]>, !ttg.async.token
+        nvws.aref.get.exit %aref0[%c0_i32], %2#2 [#nvws.async_op<tc5mma>] : !nvws.aref<[!ttg.memdesc<3x64x16xf16, #shared0, #tmem>, !ttg.memdesc<3x16x32xf16, #shared0, #smem>]>, !ttg.async.token
 
         // CHECK: [[IDX13:%.*]]:3 = scf.if
         scf.if %cond {
           // CHECK: [[BAR:%.*]] = ttg.memdesc_index {{.*}}, [[S1]]
           // CHECK-NEXT: ttng.wait_barrier  [[BAR]], [[P1]]
-          %3:3 = nvws.aref.get.enter %aref1[%c0_i32, %c0_i32] : !nvws.aref<[!ttg.memdesc<3x64x16xf16, #shared0, #smem>, !ttg.memdesc<3x16x32xf16, #shared0, #smem>]> -> !ttg.memdesc<64x16xf16, #shared0, #smem>, !ttg.memdesc<16x32xf16, #shared0, #smem>, !ttg.async.token
-          "tmem_load"(%3#0, %3#1) : (!ttg.memdesc<64x16xf16, #shared0, #smem>, !ttg.memdesc<16x32xf16, #shared0, #smem>) -> ()
+          %3:3 = nvws.aref.get.enter %aref1[%c0_i32, %c0_i32] : !nvws.aref<[!ttg.memdesc<3x64x16xf16, #shared0, #tmem>, !ttg.memdesc<3x16x32xf16, #shared0, #smem>]> -> !ttg.memdesc<64x16xf16, #shared0, #tmem>, !ttg.memdesc<16x32xf16, #shared0, #smem>, !ttg.async.token
+          "tmem_load"(%3#0, %3#1) : (!ttg.memdesc<64x16xf16, #shared0, #tmem>, !ttg.memdesc<16x32xf16, #shared0, #smem>) -> ()
           // CHECK: tmem_load
 
           // CHECK-NEXT: [[BAR:%.*]] = ttg.memdesc_index {{.*}}, [[S3]]
           // CHECK-NEXT: ttng.arrive_barrier [[BAR]], 1
-          nvws.aref.get.exit %aref1[%c0_i32], %3#2 [#nvws.async_op<none>] : !nvws.aref<[!ttg.memdesc<3x64x16xf16, #shared0, #smem>, !ttg.memdesc<3x16x32xf16, #shared0, #smem>]>, !ttg.async.token
+          nvws.aref.get.exit %aref1[%c0_i32], %3#2 [#nvws.async_op<none>] : !nvws.aref<[!ttg.memdesc<3x64x16xf16, #shared0, #tmem>, !ttg.memdesc<3x16x32xf16, #shared0, #smem>]>, !ttg.async.token
         }
         // CHECK: } else {
         // CHECK-NEXT:   scf.yield [[S1]], [[P1]], [[S3]]
@@ -334,30 +334,30 @@ module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-w
       scf.if %cond {
         // CHECK: [[BAR:%.*]] = ttg.memdesc_index {{.*}}, [[IDX]]#0
         // CHECK-NEXT: ttng.wait_barrier  [[BAR]], [[IDX]]#1
-        %2:3 = nvws.aref.get.enter %aref0[%c0_i32, %c0_i32] : !nvws.aref<[!ttg.memdesc<3x64x16xf16, #shared0, #smem>, !ttg.memdesc<3x16x32xf16, #shared0, #smem>]> -> !ttg.memdesc<64x16xf16, #shared0, #smem>, !ttg.memdesc<16x32xf16, #shared0, #smem>, !ttg.async.token
-        "tc5mma"(%2#0, %2#1) : (!ttg.memdesc<64x16xf16, #shared0, #smem>, !ttg.memdesc<16x32xf16, #shared0, #smem>) -> ()
+        %2:3 = nvws.aref.get.enter %aref0[%c0_i32, %c0_i32] : !nvws.aref<[!ttg.memdesc<3x64x16xf16, #shared0, #tmem>, !ttg.memdesc<3x16x32xf16, #shared0, #smem>]> -> !ttg.memdesc<64x16xf16, #shared0, #tmem>, !ttg.memdesc<16x32xf16, #shared0, #smem>, !ttg.async.token
+        "tc5mma"(%2#0, %2#1) : (!ttg.memdesc<64x16xf16, #shared0, #tmem>, !ttg.memdesc<16x32xf16, #shared0, #smem>) -> ()
 
         // CHECK: [[BAR:%.*]] = ttg.memdesc_index {{.*}}, [[IDX]]#4
         // CHECK-NEXT: ttng.tc_gen5_commit  [[BAR]]
-        nvws.aref.get.exit %aref0[%c0_i32], %2#2 [#nvws.async_op<tc5mma>] : !nvws.aref<[!ttg.memdesc<3x64x16xf16, #shared0, #smem>, !ttg.memdesc<3x16x32xf16, #shared0, #smem>]>, !ttg.async.token
+        nvws.aref.get.exit %aref0[%c0_i32], %2#2 [#nvws.async_op<tc5mma>] : !nvws.aref<[!ttg.memdesc<3x64x16xf16, #shared0, #tmem>, !ttg.memdesc<3x16x32xf16, #shared0, #smem>]>, !ttg.async.token
       }
       // CHECK: } else {
       // CHECK-NEXT:   scf.yield [[IDX]]#0, [[IDX]]#1, [[IDX]]#4
       // CHECK-NEXT: }
 
-      %2:3 = nvws.aref.get.enter %aref1[%c0_i32, %c0_i32] : !nvws.aref<[!ttg.memdesc<3x64x16xf16, #shared0, #smem>, !ttg.memdesc<3x16x32xf16, #shared0, #smem>]> -> !ttg.memdesc<64x16xf16, #shared0, #smem>, !ttg.memdesc<16x32xf16, #shared0, #smem>, !ttg.async.token
-      "tmem_load"(%2#0, %2#1) : (!ttg.memdesc<64x16xf16, #shared0, #smem>, !ttg.memdesc<16x32xf16, #shared0, #smem>) -> ()
-      nvws.aref.get.exit %aref1[%c0_i32], %2#2 [#nvws.async_op<none>] : !nvws.aref<[!ttg.memdesc<3x64x16xf16, #shared0, #smem>, !ttg.memdesc<3x16x32xf16, #shared0, #smem>]>, !ttg.async.token
+      %2:3 = nvws.aref.get.enter %aref1[%c0_i32, %c0_i32] : !nvws.aref<[!ttg.memdesc<3x64x16xf16, #shared0, #tmem>, !ttg.memdesc<3x16x32xf16, #shared0, #smem>]> -> !ttg.memdesc<64x16xf16, #shared0, #tmem>, !ttg.memdesc<16x32xf16, #shared0, #smem>, !ttg.async.token
+      "tmem_load"(%2#0, %2#1) : (!ttg.memdesc<64x16xf16, #shared0, #tmem>, !ttg.memdesc<16x32xf16, #shared0, #smem>) -> ()
+      nvws.aref.get.exit %aref1[%c0_i32], %2#2 [#nvws.async_op<none>] : !nvws.aref<[!ttg.memdesc<3x64x16xf16, #shared0, #tmem>, !ttg.memdesc<3x16x32xf16, #shared0, #smem>]>, !ttg.async.token
       nvws.warp_group.return
     }
-    nvws.aref.destroy %aref0 : !nvws.aref<[!ttg.memdesc<3x64x16xf16, #shared0, #smem>, !ttg.memdesc<3x16x32xf16, #shared0, #smem>]>
+    nvws.aref.destroy %aref0 : !nvws.aref<[!ttg.memdesc<3x64x16xf16, #shared0, #tmem>, !ttg.memdesc<3x16x32xf16, #shared0, #smem>]>
     // CHECK: scf.for
     // CHECK-NEXT:   [[EMPTYMBAR:%.*]] = ttg.memdesc_index [[EMPTY0]]
     // CHECK-NEXT:   ttng.inval_barrier [[EMPTYMBAR]]
     // CHECK-NEXT:   [[FULLMBAR:%.*]] = ttg.memdesc_index [[FULL0]]
     // CHECK-NEXT:   ttng.inval_barrier [[FULLMBAR]]
     // CHECK-NEXT: }
-    nvws.aref.destroy %aref1 : !nvws.aref<[!ttg.memdesc<3x64x16xf16, #shared0, #smem>, !ttg.memdesc<3x16x32xf16, #shared0, #smem>]>
+    nvws.aref.destroy %aref1 : !nvws.aref<[!ttg.memdesc<3x64x16xf16, #shared0, #tmem>, !ttg.memdesc<3x16x32xf16, #shared0, #smem>]>
     // CHECK-NEXT: scf.for
     // CHECK-NEXT:   [[EMPTYMBAR:%.*]] = ttg.memdesc_index [[EMPTY1]]
     // CHECK-NEXT:   ttng.inval_barrier [[EMPTYMBAR]]
