@@ -209,8 +209,6 @@ def _p_matmul_ogs(
              IS_EPILOGUE_DEQUANT_MXFP8: tl.constexpr = False):
     # validate invariants
     validate_mxfp(W, MxScale, BLOCK_K, SWIZZLE_MX_VALUE, SWIZZLE_MX_SCALE)
-    # this is faster than using host-side TMAs directly ?
-    Y = _make_device_tma_desc_workaround(Y, YPtr + YDescPtrOff)
     # compute static attributes
     is_microscaled_format: tl.constexpr = MxScale is not None
     BLOCK_K_W_SCALES: tl.constexpr = BLOCK_K // MXFP_BLOCK_SIZE
@@ -241,6 +239,8 @@ def _p_matmul_ogs(
 
     k_tiles = tl.cdiv(K, BLOCK_K * SPLIT_K)
     num_tiles = batch_size * grid_m * grid_n * SPLIT_K
+    # this is faster than using host-side TMAs directly ?
+    Y = _make_device_tma_desc_workaround(Y, YPtr + YDescPtrOff)
 
 
     # If true, do not share loop-carried variables between the prologue and the
