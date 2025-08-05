@@ -164,13 +164,18 @@ getPartitionIndicesToCloneInto(const Partition *partition,
 
   return partitionIndices;
 }
+int getPartitionIndex(Operation *op) {
+  if (isa<nvws::WarpGroupOp>(op->getParentOp()))
+    return op->getParentRegion()->getRegionNumber();
+  return getPartitionIndex(op->getParentOp());
+}
 
 void cloneOpsInBlock(Block *block, SmallVector<WarpGroupBuilder> &builders,
                      const WarpSchedule &schedule);
 
 void cloneForOp(scf::ForOp forOp, SmallVector<WarpGroupBuilder> &builders,
                 const WarpSchedule &schedule) {
-  SmallVector<std::pair<int, scf::ForOp>> newForOps;
+  SmallVector<scf::ForOp> newForOps;
   for (auto [b, partition] : llvm::zip(builders, schedule.getPartitions())) {
     auto [newLoopIndices, _] =
         getLoopVarIndicesToKeep(forOp, &partition, schedule);
@@ -184,7 +189,7 @@ void cloneForOp(scf::ForOp forOp, SmallVector<WarpGroupBuilder> &builders,
     auto newForOp =
         b.create<scf::ForOp>(forOp.getLoc(), lb, ub, step, initArgs);
     newForOp->setAttrs(forOp->getAttrs());
-    newForOps.push_back(std::make_pair(partition.getIndex(), newForOp));
+    newForOps.push_back(newForOp);
 
     b.mapping.map(forOp.getInductionVar(), newForOp.getInductionVar());
 
@@ -200,8 +205,8 @@ void cloneForOp(scf::ForOp forOp, SmallVector<WarpGroupBuilder> &builders,
 
   cloneOpsInBlock(forOp.getBody(), builders, schedule);
 
-  for (auto [partitionIdx, newForOp] : newForOps) {
-    builders[partitionIdx].setInsertionPointAfter(newForOp);
+  for (auto newForOp : newForOps) {
+    builders[getPartitionIndex(newForOp)].setInsertionPointAfter(newForOp);
     WarpSchedule::eraseFrom(newForOp);
   }
 }
