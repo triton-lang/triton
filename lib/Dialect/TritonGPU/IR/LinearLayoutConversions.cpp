@@ -1148,8 +1148,7 @@ LinearLayout SliceEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   // First compute the linear layout for this layout's parent.
   SmallVector<int64_t> parentShape(shape);
   parentShape.insert(parentShape.begin() + getDim(), 1);
-  LinearLayout parentLL =
-      triton::gpu::toLinearLayout(parentShape, getParent(), {});
+  LinearLayout parentLL = triton::gpu::toLinearLayout(parentShape, getParent());
 
   // Remove dimension getDim() from the parent layout.
   //
@@ -1254,12 +1253,9 @@ LinearLayout tensorMemoryToLinearLayout(ArrayRef<int64_t> shape,
   return tile;
 }
 
-LinearLayout
-TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
-                                 ArrayRef<int64_t> allocationShape) {
-  CacheKey key{
-      std::vector<int64_t>(shape.begin(), shape.end()), layout,
-      std::vector<int64_t>(allocationShape.begin(), allocationShape.end())};
+LinearLayout TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape,
+                                              Attribute layout) {
+  CacheKey key{std::vector<int64_t>(shape.begin(), shape.end()), layout};
   if (auto result = llCache.get(key)) {
     return *result;
   }
@@ -1268,34 +1264,22 @@ TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
   // To add a new layout add an else-if clause
   LinearLayout result = LinearLayout::empty();
   if (auto distributed = dyn_cast<DistributedEncodingTrait>(layout)) {
-    assert(allocationShape.empty() &&
-           "allocationShape not supported for distributed layout");
     result = distributed.toLinearLayout(shape);
   } else {
-    assert(!allocationShape.empty() &&
-           "allocationShape must be given for SharedMemory and TensorMemory "
-           "encodings");
-    allocationShape = allocationShape.take_back(shape.size());
-    assert(llvm::all_of(allocationShape,
+    assert(llvm::all_of(shape,
                         [](int64_t dim) {
                           return llvm::isPowerOf2_32(dim) && dim >= 1;
                         }) &&
-           "allocationShape must be a postive power of 2");
-    assert(llvm::all_of(llvm::zip(allocationShape, shape),
-                        [](auto dims) {
-                          return std::get<0>(dims) >= std::get<1>(dims);
-                        }) &&
-           "allocationShape must be at least as large as shape");
+           "shape must be a postive power of 2");
     if (auto shared = dyn_cast<SwizzledSharedEncodingAttr>(layout)) {
-      result = swizzledSharedToLinearLayout(allocationShape, shared);
+      result = swizzledSharedToLinearLayout(shape, shared);
     } else if (auto shared = dyn_cast<NVMMASharedEncodingAttr>(layout)) {
-      result = nvmmaSharedToLinearLayout(allocationShape, shared);
+      result = nvmmaSharedToLinearLayout(shape, shared);
     } else if (auto sbl = dyn_cast<AMDRotatingSharedEncodingAttr>(layout)) {
-      result = sharedToLinearLayoutAMDRotating(allocationShape, sbl);
+      result = sharedToLinearLayoutAMDRotating(shape, sbl);
     } else if (auto tensorMemoryEncoding =
                    dyn_cast<TensorMemoryEncodingAttr>(layout)) {
-      result =
-          tensorMemoryToLinearLayout(allocationShape, tensorMemoryEncoding);
+      result = tensorMemoryToLinearLayout(shape, tensorMemoryEncoding);
     } else {
       assert(0 && "unknown layout");
     }
@@ -1306,12 +1290,16 @@ TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
 }
 
 LinearLayout toLinearLayout(RankedTensorType type) {
-  return toLinearLayout(type.getShape(), type.getEncoding(), {});
+  return toLinearLayout(type.getShape(), type.getEncoding());
 }
 
 LinearLayout toLinearLayout(MemDescType type) {
-  return toLinearLayout(type.getShape(), type.getEncoding(),
-                        type.getAllocShape());
+  // Pass in the allocation shape. Then when using invertAndCompose it will
+  // trim the allocationShape to the shape if they are different.
+  // We also remove the first dimension of the allocationShape if there was a
+  // call to memdesc_index
+  auto shape = type.getAllocShape().take_back(type.getRank());
+  return toLinearLayout(shape, type.getEncoding());
 }
 
 LinearLayout toLinearLayout(TensorOrMemDesc type) {
@@ -1323,11 +1311,13 @@ LinearLayout toLinearLayout(TensorOrMemDesc type) {
   }
 }
 
-LinearLayout toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
-                            ArrayRef<int64_t> allocationShape) {
+// UNSAFE OVERLOAD!
+// If you call this with a SharedMemoryEncodingAttr, you should call it
+// with the allocShape as the shape, otherwise the layout will be incorrect!
+LinearLayout toLinearLayout(ArrayRef<int64_t> shape, Attribute layout) {
   auto *ctx = layout.getContext();
-  return ctx->getLoadedDialect<TritonGPUDialect>()->toLinearLayout(
-      shape, layout, allocationShape);
+  return ctx->getLoadedDialect<TritonGPUDialect>()->toLinearLayout(shape,
+                                                                   layout);
 }
 
 LinearLayout getLayoutWithinBlock(const LinearLayout &layout) {

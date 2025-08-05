@@ -7,9 +7,7 @@ import torch
 
 @triton.jit
 def _tuple_increment(values):
-    for i in tl.static_range(len(values)):
-        values[i] = values[i] + 1
-    return values
+    return tl.tuple([v + 1 for v in values])
 
 
 @triton.jit
@@ -249,30 +247,12 @@ def test_passing_tuple_to_make_tensor_descriptor(device, with_allocator):
     torch.testing.assert_close(x, expected_x, rtol=0, atol=0)
 
 
-@pytest.mark.parametrize("init_val, idx, new_val, expected_ty",
-                         [((5, 6, 7), 0, 32.1, tl.float32),  # i32 > fp32
-                          ((5, 6, 7), 2, tl.constexpr(20), tl.int32),  # i32 > constexpr which converts to dtype
-                          ((5, tl.constexpr(6), 7), 1, 32.1, tl.float32),  # constexpr > fp32
-                          ((5, 1, 7), 1, 20, tl.int32),  # constexpr > i32 but with specialization of 1
-                          ])
-def test_modifying_tuples(init_val, idx, new_val, expected_ty):
+def test_modifying_tuples():
 
     @triton.jit
-    def set_tuple_value_at_idx(tuple_value, idx: tl.constexpr, new_value, expected_type: tl.constexpr):
-        before_tuple_type: tl.constexpr = tuple_value.type
-        before_type: tl.constexpr = tuple_value[idx].type
-        tl.static_print(before_type, expected_type)
+    def set_tuple_value_at_idx():
+        t = tl.tuple([5, 6, 7])
+        t[0] = 0
 
-        # Make sure the underlying tuple_type matches the tuple's value's types
-        tl.static_assert(before_type == tuple_value.type[idx])
-        # Update the value to have a different type
-        tuple_value[idx] = new_value
-        # Make sure the tuple's type and the tuple's value's type were updated
-        tl.static_print(new_value, tuple_value[idx].type, expected_type)
-        tl.static_assert(tuple_value[idx].type == expected_type)
-        tl.static_assert(tuple_value.type[idx] == expected_type)
-
-        # Make sure the tuple type updated when the type updated
-        tl.static_assert(before_type == expected_type or before_tuple_type != tuple_value.type)
-
-    set_tuple_value_at_idx[(1, )](init_val, idx, new_val, expected_ty)
+    with pytest.raises(triton.CompilationError):
+        set_tuple_value_at_idx[(1, )]()

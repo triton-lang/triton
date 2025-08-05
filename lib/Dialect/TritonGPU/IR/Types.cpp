@@ -14,6 +14,7 @@ using namespace mlir::triton::gpu;
 static constexpr llvm::StringRef kMutableMemory = "mutable";
 
 Type MemDescType::parse(AsmParser &parser) {
+  Location loc = parser.getEncodedSourceLoc(parser.getCurrentLocation());
   if (failed(parser.parseLess()))
     return Type();
 
@@ -54,7 +55,6 @@ Type MemDescType::parse(AsmParser &parser) {
   if (parser.parseGreater())
     return Type();
 
-  Location loc = parser.getEncodedSourceLoc(parser.getCurrentLocation());
   if (!allocShape.empty())
     return MemDescType::getChecked(loc, parser.getContext(), dimensions,
                                    elementType, encoding, memorySpace,
@@ -92,6 +92,9 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
                                   Attribute encoding, Attribute memorySpace,
                                   bool mutableMemory,
                                   ArrayRef<int64_t> allocShape) {
+  if (shape.empty()) {
+    return emitError() << "rank 0 memdesc is not allowed";
+  }
   // Every dimension but the first (to allow for pipelining) must be a power of
   // 2
   if (!isa<PaddedSharedEncodingAttr>(encoding) &&
@@ -132,7 +135,7 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
                          << enc.getBlockN() * enc.getCTASplitN() << ". Got "
                          << allocShape;
     }
-    auto ll = toLinearLayout(shape, enc, allocShape);
+    auto ll = toLinearLayout(allocShape, enc);
     auto dims = standardOutDimNames(ctx, 2);
     if (ll.getOutDimSize(dims[0]) != allocShape[0] ||
         ll.getOutDimSize(dims[1]) != allocShape[1]) {
