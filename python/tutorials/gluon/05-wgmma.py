@@ -23,6 +23,7 @@ from triton.experimental.gluon.language.nvidia.hopper import (
     tma,
     mbarrier,
     fence_async_shared,
+    warpgroup_mma_init,
     warpgroup_mma,
     warpgroup_mma_wait,
 )
@@ -499,7 +500,7 @@ def blocked_matmul_pipelined_kernel(a_desc, b_desc, c_desc, num_warps: gl.conste
     off_n = pid_n * BLOCK_N
 
     mma_layout: gl.constexpr = pick_wgmma_layout(dtype, BLOCK_M, BLOCK_N, num_warps)
-    acc = gl.zeros((BLOCK_M, BLOCK_N), dtype=gl.float32, layout=mma_layout)
+    acc = warpgroup_mma_init(gl.zeros((BLOCK_M, BLOCK_N), dtype=gl.float32, layout=mma_layout))
 
     bar = gl.allocate_shared_memory(gl.int64, [1], mbarrier.MBarrierLayout())
     mbarrier.init(bar, count=1)
