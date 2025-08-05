@@ -4,7 +4,7 @@
 #include <limits.h>
 
 
-// Pre-allocated common objects to avoid repeated allocation
+// Pre-allocated common objects to avoid repeated interactions with Python
 static PyObject* str_i32 = NULL;
 static PyObject* str_i64 = NULL;
 static PyObject* str_u64 = NULL;
@@ -14,7 +14,6 @@ static PyObject* str_empty = NULL;
 static PyObject* tuple_constexpr_1 = NULL;
 static PyObject* int_1 = NULL;
 
-// Initialize common objects
 static int init_common_objects(void) {
     str_i32 = PyUnicode_InternFromString("i32");
     str_i64 = PyUnicode_InternFromString("i64");
@@ -35,8 +34,8 @@ static int init_common_objects(void) {
 }
 
 // integer specialization with type determination and alignment check
+// expects (value, specialize_value, align)
 static PyObject* specialize_int(PyObject* self, PyObject* args) {
-    // expects (value, specialize_value, align)
     PyObject* value_obj = PyTuple_GET_ITEM(args, 0);
     PyObject* specialize_value_obj = PyTuple_GET_ITEM(args, 1);
     PyObject* align_obj = PyTuple_GET_ITEM(args, 2);
@@ -102,8 +101,9 @@ static PyObject* specialize_int(PyObject* self, PyObject* args) {
     return result;
 }
 
+// tensor specialization with data pointer and alignment check
+// expects (data_ptr, align)
 static PyObject* specialize_tensor(PyObject* self, PyObject* args) {
-    // expects (data_ptr, align)
     PyObject* data_ptr_obj = PyTuple_GET_ITEM(args, 0);
     PyObject* align_obj = PyTuple_GET_ITEM(args, 1);
     uint64_t data_ptr = PyLong_AsUnsignedLongLong(data_ptr_obj);

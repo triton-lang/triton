@@ -5,7 +5,7 @@ from triton.runtime.build import compile_module_from_src
 from triton.backends.nvidia.driver import library_dirs, include_dirs
 
 
-class ArgSpecializer:
+class SimpleArgSpecializer:
     def __init__(self, specialize_extra):
         mod = compile_module_from_src(
             src=Path(os.path.join(os.path.dirname(__file__), "_specialize_simple.c")).read_text(),
@@ -40,3 +40,22 @@ class ArgSpecializer:
         else:
             self.specialize_int = mod.specialize_int
             self.specialize_tensor = _specialize_tensor
+
+
+class AllArgSpecializer:
+    def __init__(self, specialize_extra):
+        mod = compile_module_from_src(
+            src=Path(os.path.join(os.path.dirname(__file__), "_specialize_all.cpp")).read_text(),
+            name="__triton_specialize_all",
+            library_dirs=library_dirs(),
+            include_dirs=include_dirs,
+            libraries=[],
+            ccflags=["-lstdc++", "-std=c++17", "-g"],
+            tmp_suffix=".cpp",
+        )
+
+        self.specialize_impl = mod.specialize_impl
+        self.specialize_extra = specialize_extra
+
+    def specialize(self, arg, is_const, specialize_value, align):
+        return self.specialize_impl(arg, is_const, specialize_value, align)

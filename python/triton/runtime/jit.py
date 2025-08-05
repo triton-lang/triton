@@ -24,6 +24,7 @@ TRITON_MODULE = __name__[:-len(".runtime.jit")]
 
 T = TypeVar("T")
 use_inline_specialization = True
+use_full_native_specialize_impl = False
 INDENT = "    "  # 4 spaces for indentation
 
 # -----------------------------------------------------------------------------
@@ -323,8 +324,13 @@ def create_specialize_impl(specialize_extra):
 
     from ..language import constexpr
     from triton.experimental.gluon.nvidia.hopper import TensorDescriptor as GluonTensorDescriptor
-    from ._specialize import ArgSpecializer
-    specializer = ArgSpecializer(specialize_extra)
+    from ._specialize import SimpleArgSpecializer, AllArgSpecializer
+
+    if use_full_native_specialize_impl:
+        specializer = AllArgSpecializer(specialize_extra)
+        return specializer.specialize_impl
+
+    specializer = SimpleArgSpecializer(specialize_extra)
     specialize_int = specializer.specialize_int
     specialize_tensor = specializer.specialize_tensor
 
@@ -523,8 +529,8 @@ def create_function_from_signature(sig, kparams, backend):
     if use_inline_specialization:
         from ..language import constexpr
         from triton.experimental.gluon.nvidia.hopper import TensorDescriptor as GluonTensorDescriptor
-        from ._specialize import ArgSpecializer
-        specializer = ArgSpecializer(backend.get_arg_specialization)
+        from ._specialize import SimpleArgSpecializer
+        specializer = SimpleArgSpecializer(backend.get_arg_specialization)
         specialize_int = specializer.specialize_int
         specialize_tensor = specializer.specialize_tensor
 
