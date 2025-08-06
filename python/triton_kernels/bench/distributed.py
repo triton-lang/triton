@@ -239,7 +239,7 @@ def routing_torch(x, logits, n_expts_act, sm_first=False, expt_indx=None, n_rows
     expt_indx, topk_indx = torch.sort(expt_indx, stable=True)
     gate_indx = torch.argsort(topk_indx, stable=True)
 
-    mask = expt_indx != n_expts_tot
+    mask = expt_indx != chunk_size
     topk_indx[~mask] = -1
     gate_indx[gate_indx >= mask.sum()] = -1
     gate_scal = expt_scal[topk_indx]
