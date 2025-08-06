@@ -1,12 +1,12 @@
-#### Agenda:
+# Agenda:
 
-##### Items:
+## Items:
 1. Gluon update (Jeff Niu, OpenAI)
 2. Interest and requirements for a nightly performance regression suite (Simon Waters,  kernelize.ai)
 3. Triton developers’ summit update (Ofer Dekel, Microsoft)
 4. Open mic for other topics.
 
-##### Minutes:
+## Minutes:
 Recording link [here](https://youtu.be/zoSY_WXHmF0)
 
 1. Triton developers’ summit update (Ofer Dekel, Microsoft)
@@ -117,3 +117,6 @@ Recording link [here](https://youtu.be/zoSY_WXHmF0)
     - Will post on slack and discord
 4. Open mic for other topics.
     - No additional topics.
+
+## Minutes:
+Recording link [here](https://youtu.be/zoSY_WXHmF0)
