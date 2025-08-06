@@ -554,6 +554,8 @@ static LogicalResult inferMemDescReshapeOpEncoding(ArrayRef<int64_t> srcShape,
     }
     return success();
   }
+
+  printf("2222222222222222222222 inferMemDescReshapeOpEncoding\n");
   return failure();
 }
 
