@@ -191,6 +191,13 @@ def _apply_parallelism(
         expt_scal = torch.cat(expt_scal_list, dim=0)
         expt_indx = torch.cat(expt_indx_list, dim=0)
         x = torch.cat(x_list, dim=0)
+
+        # Filter for local experts only
+        ep_rank = dist.get_rank() // TP
+        expt_indx -= ep_rank * chunk_size
+        mask = (expt_indx // chunk_size) == ep_rank
+        expt_scal = expt_scal.masked_fill(~mask, 0)
+        expt_indx = expt_indx.masked_fill(~mask, chunk_size)
     else:
         # Distributed Data Parallelism
         ep_indx = None
@@ -221,15 +228,8 @@ def routing_torch(x, logits, n_expts_act, sm_first=False, expt_indx=None, n_rows
 
     chunk_size = n_expts_tot // EP
 
-    expt_scal, expt_indx, ep_indx, x, output_split_sizes = _apply_parallelism(expt_scal, expt_indx, x, chunk_size,
+    expt_scal, expt_indx, x, ep_indx, output_split_sizes = _apply_parallelism(expt_scal, expt_indx, x, chunk_size,
                                                                               EP=EP, TP=TP)
-
-    # Filter for local experts only
-    ep_rank = dist.get_rank() // TP
-    expt_indx -= ep_rank * chunk_size
-    mask = (expt_indx // chunk_size) == ep_rank
-    expt_scal = expt_scal.masked_fill(~mask, 0)
-    expt_indx = expt_indx.masked_fill(~mask, n_expts_tot)
 
     # Flatten topk data
     expt_scal = expt_scal.reshape(-1)
@@ -302,12 +302,8 @@ def routing_triton(x, logits, n_expts_act, sm_first=False, expt_indx=None, n_row
 
     chunk_size = n_expts_tot // EP
 
-    expt_scal, expt_indx, ep_indx, x, output_split_sizes = _apply_parallelism(expt_scal, expt_indx, x, chunk_size,
+    expt_scal, expt_indx, x, ep_indx, output_split_sizes = _apply_parallelism(expt_scal, expt_indx, x, chunk_size,
                                                                               EP=EP, TP=TP)
-
-    # Filter for local experts only
-    ep_rank = dist.get_rank() // TP
-    expt_indx -= ep_rank * chunk_size
 
     # Recover bitmatrix for local experts
     BLOCK_SIZE_M = 512
@@ -491,8 +487,16 @@ def test_pack_bitmatrix():
     BLOCK_SIZE_K = 32
     grid = (triton.cdiv(n_rows, BLOCK_SIZE_M), )
 
-    pack_bitmatrix[grid](bitmatrix, expt_indx, n_rows, n_cols, n_expts_act, BLOCK_SIZE_M=BLOCK_SIZE_M,
-                         BLOCK_SIZE_K=BLOCK_SIZE_K, sentinel=sentinel)
+    pack_bitmatrix[grid](
+        bitmatrix,
+        expt_indx,
+        n_rows,
+        n_cols,
+        n_expts_act,
+        BLOCK_SIZE_M=BLOCK_SIZE_M,
+        BLOCK_SIZE_K=BLOCK_SIZE_K,
+        sentinel=sentinel,
+    )
     # prune the bitmatrix to remove dummy values
     _routing_clear_bitmatrix[(n_rows, )](
         bitmatrix,
