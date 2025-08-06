@@ -45,6 +45,29 @@ def get_mma_reg_layout(shape, num_warps, dtype=gl.float32):
 # ===-----------------------------------------------------------------------===#
 
 
+@aggregate
+class BarrierCounter:
+    index: gl.tensor
+    phase: gl.tensor
+    num_barriers: gl.constexpr
+
+    def __init__(self, index, phase, num_barriers):
+        self.index = index
+        self.phase = phase
+        self.num_barriers = num_barriers
+
+    @gluon.must_use_result
+    @gluon.jit
+    def increment(self):
+        if self.num_barriers == 1:
+            return BarrierCounter(gl.to_tensor(0), self.phase ^ 1, self.num_barriers)
+        next_index = self.index + 1
+        rollover = next_index == self.num_barriers
+        index = gl.where(rollover, 0, next_index)
+        phase = gl.where(rollover, self.phase ^ 1, self.phase)
+        return BarrierCounter(index, phase, self.num_barriers)
+
+
 def Channel(T, alloc_fn):
 
     @aggregate
@@ -75,17 +98,8 @@ def Channel(T, alloc_fn):
             return ChannelType(mem, ready_bars, empty_bars, num_buffers, num_consumers)
 
         @gluon.jit
-        def increment(self, index, phase):
-            if self.num_buffers == 1:
-                return gl.to_tensor(0), phase ^ 1
-            next_index = index + 1
-            rollover = next_index == self.num_buffers
-            index = gl.where(rollover, 0, next_index)
-            phase = gl.where(rollover, phase ^ 1, phase)
-            return index, phase
-
-        @gluon.jit
-        def acquire_producer(self, index, phase):
+        def acquire_producer(self, counter):
+            index, phase = counter.index, counter.phase
             mem = self.mem.index(index)
             ready_bar = self.ready_bars.index(index)
             empty_bar = self.empty_bars.index(index)
@@ -94,7 +108,8 @@ def Channel(T, alloc_fn):
             return mem, ready_bar
 
         @gluon.jit
-        def acquire_consumer(self, index, phase):
+        def acquire_consumer(self, counter):
+            index, phase = counter.index, counter.phase
             mem = self.mem.index(index)
             ready_bar = self.ready_bars.index(index)
             empty_bar = self.empty_bars.index(index)
@@ -103,12 +118,16 @@ def Channel(T, alloc_fn):
             return mem, empty_bar
 
         @gluon.jit
+        def create_counter(self):
+            return BarrierCounter(gl.to_tensor(0), gl.to_tensor(0), self.num_buffers)
+
+        @gluon.jit
         def create_producer(self):
-            return Producer(self, gl.to_tensor(0), gl.to_tensor(0))
+            return Producer(self, self.create_counter())
 
         @gluon.jit
         def create_consumer(self):
-            return Consumer(self, gl.to_tensor(0), gl.to_tensor(0))
+            return Consumer(self, self.create_counter())
 
         @gluon.jit
         def release(self):
@@ -121,36 +140,32 @@ def Channel(T, alloc_fn):
     @aggregate
     class Producer:
         channel: ChannelType
-        phase: gl.tensor
-        index: gl.tensor
+        counter: BarrierCounter
 
-        def __init__(self, channel, phase, index):
+        def __init__(self, channel, counter):
             self.channel = channel
-            self.phase = phase
-            self.index = index
+            self.counter = counter
 
         @gluon.jit
         def acquire(self):
-            mem, ready_bar = self.channel.acquire_producer(self.index, self.phase)
-            self.index, self.phase = self.channel.increment(self.index, self.phase)
-            return mem, ready_bar, self
+            mem, ready_bar = self.channel.acquire_producer(self.counter)
+            next = Producer(self.channel, self.counter.increment())
+            return mem, ready_bar, next
 
     @aggregate
     class Consumer:
         channel: ChannelType
-        phase: gl.tensor
-        index: gl.tensor
+        counter: BarrierCounter
 
-        def __init__(self, channel, phase, index):
+        def __init__(self, channel, counter):
             self.channel = channel
-            self.phase = phase
-            self.index = index
+            self.counter = counter
 
         @gluon.jit
         def acquire(self):
-            mem, empty_bar = self.channel.acquire_consumer(self.index, self.phase)
-            self.index, self.phase = self.channel.increment(self.index, self.phase)
-            return mem, empty_bar, self
+            mem, empty_bar = self.channel.acquire_consumer(self.counter)
+            next = Consumer(self.channel, self.counter.increment())
+            return mem, empty_bar, next
 
     return ChannelType, Producer, Consumer
 
@@ -479,7 +494,7 @@ def _borrow_s_as_p(config, s_tmem):
 @gluon.jit
 def _borrow_s_as_alpha(config, s_tmem):
     alpha_tmem = s_tmem.slice(config.BLOCK_N // 2, 1)
-    alpha_layout: gl.constexpr = TensorMemoryLayout([config.SPLIT_M, 1], unpacked=False)
+    alpha_layout: gl.constexpr = TensorMemoryLayout([config.SPLIT_M, 1], unpacked=True)
     return alpha_tmem._reinterpret(gl.float32, [config.SPLIT_M, 1], alpha_layout)
 
 
@@ -487,7 +502,7 @@ def _borrow_s_as_alpha(config, s_tmem):
 def _borrow_s_for_epilogue(config, s_tmem):
     m_i_tmem = s_tmem.slice(config.BLOCK_N // 2 + 1, 1)
     l_i_tmem = s_tmem.slice(config.BLOCK_N // 2 + 2, 1)
-    layout: gl.constexpr = TensorMemoryLayout([config.SPLIT_M, 1], unpacked=False)
+    layout: gl.constexpr = TensorMemoryLayout([config.SPLIT_M, 1], unpacked=True)
     m_i_tmem = m_i_tmem._reinterpret(gl.float32, [config.SPLIT_M, 1], layout)
     l_i_tmem = l_i_tmem._reinterpret(gl.float32, [config.SPLIT_M, 1], layout)
     return m_i_tmem, l_i_tmem

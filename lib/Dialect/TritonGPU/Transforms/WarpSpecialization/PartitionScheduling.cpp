@@ -541,11 +541,14 @@ void PartitionScheduling::runOnOperation() {
     if (loop->hasAttr(kWarpSpecializeAttrName))
       loops.push_back(loop);
   });
-  for (scf::ForOp loop : loops) {
+  for (auto [idx, loop] : llvm::enumerate(loops)) {
     if (std::optional<WarpSchedule> schedule = getInitialSchedule(loop)) {
       propagatePartitions(loop, *schedule);
       optimizeSchedule(loop, *schedule);
       schedule->serialize(loop);
+      loop->setAttr(
+          kWarpSpecializeTagAttrName,
+          IntegerAttr::get(IntegerType::get(loop.getContext(), 32), idx));
     }
   }
 }

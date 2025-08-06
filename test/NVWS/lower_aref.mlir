@@ -13,13 +13,15 @@ module attributes {"ttg.num-warps" = 4 : i32} {
     %1 = nvws.aref.create %0 : <[!ttg.memdesc<2x1xi32, #shared, #smem, mutable>]>
     // CHECK: [[BUF:%.*]] = ttg.local_alloc
     // CHECK-NEXT: [[EMPTY:%.*]] = ttg.local_alloc
+    // CHECK-NEXT: [[EMPTYSLICE:%.*]] = ttg.memdesc_index [[EMPTY]]
+    // CHECK-NEXT: ttng.init_barrier [[EMPTYSLICE]], 2
+    // CHECK-NEXT: [[EMPTYSLICE:%.*]] = ttg.memdesc_index [[EMPTY]]
+    // CHECK-NEXT: ttng.init_barrier [[EMPTYSLICE]], 2
     // CHECK-NEXT: [[FULL:%.*]] = ttg.local_alloc
-    // CHECK-NEXT: scf.for
-    // CHECK-NEXT:   [[EMPTYSLICE:%.*]] = ttg.memdesc_index [[EMPTY]]
-    // CHECK-NEXT:   ttng.init_barrier [[EMPTYSLICE]], 2
-    // CHECK-NEXT:   [[FULLSLICE:%.*]] = ttg.memdesc_index [[FULL]]
-    // CHECK-NEXT:   ttng.init_barrier [[FULLSLICE]], 1
-    // CHECK-NEXT: }
+    // CHECK-NEXT: [[FULLSLICE:%.*]] = ttg.memdesc_index [[FULL]]
+    // CHECK-NEXT: ttng.init_barrier [[FULLSLICE]], 1
+    // CHECK-NEXT: [[FULLSLICE:%.*]] = ttg.memdesc_index [[FULL]]
+    // CHECK-NEXT: ttng.init_barrier [[FULLSLICE]], 1
     nvws.warp_group
     partition0 num_warps(4) {
       scf.for %arg3 = %arg0 to %arg1 step %arg2  : i32 {
@@ -68,14 +70,19 @@ module attributes {"ttg.num-warps" = 4 : i32} {
       }
       nvws.warp_group.return
     }
+    // CHECK: nvws.warp_group.return
+    // CHECK-NEXT: }
+    // CHECK-NEXT: [[FULLMBAR:%.*]] = ttg.memdesc_index [[FULL]]
+    // CHECK-NEXT: ttng.inval_barrier [[FULLMBAR]]
+    // CHECK-NEXT: [[FULLMBAR:%.*]] = ttg.memdesc_index [[FULL]]
+    // CHECK-NEXT: ttng.inval_barrier [[FULLMBAR]]
+    // CHECK-NEXT: ttg.local_dealloc
+    // CHECK-NEXT: [[EMPTYMBAR:%.*]] = ttg.memdesc_index [[EMPTY]]
+    // CHECK-NEXT: ttng.inval_barrier [[EMPTYMBAR]]
+    // CHECK-NEXT: [[EMPTYMBAR:%.*]] = ttg.memdesc_index [[EMPTY]]
+    // CHECK-NEXT: ttng.inval_barrier [[EMPTYMBAR]]
+    // CHECK-NEXT: ttg.local_dealloc
     ttg.local_dealloc %0 : !ttg.memdesc<2x1xi32, #shared, #smem, mutable>
-    nvws.aref.destroy %1 : <[!ttg.memdesc<2x1xi32, #shared, #smem, mutable>]>
-    // CHECK: ttg.local_dealloc
-    // CHECK-NEXT: scf.for
-    // CHECK-NEXT:   [[EMPTYMBAR:%.*]] = ttg.memdesc_index [[EMPTY]]
-    // CHECK-NEXT:   ttng.inval_barrier [[EMPTYMBAR]]
-    // CHECK-NEXT:   [[FULLMBAR:%.*]] = ttg.memdesc_index [[FULL]]
-    // CHECK-NEXT:   ttng.inval_barrier [[FULLMBAR]]
     tt.return
   }
 
@@ -86,13 +93,15 @@ module attributes {"ttg.num-warps" = 4 : i32} {
     %1 = nvws.aref.create %0 : <[!ttg.memdesc<2x1xi32, #shared, #smem, mutable>]>
     // CHECK: [[BUF:%.*]] = ttg.local_alloc
     // CHECK-NEXT: [[EMPTY:%.*]] = ttg.local_alloc
+    // CHECK-NEXT: [[EMPTYSLICE:%.*]] = ttg.memdesc_index [[EMPTY]]
+    // CHECK-NEXT: ttng.init_barrier [[EMPTYSLICE]], 3
+    // CHECK-NEXT: [[EMPTYSLICE:%.*]] = ttg.memdesc_index [[EMPTY]]
+    // CHECK-NEXT: ttng.init_barrier [[EMPTYSLICE]], 3
     // CHECK-NEXT: [[FULL:%.*]] = ttg.local_alloc
-    // CHECK-NEXT: scf.for
-    // CHECK-NEXT:   [[EMPTYSLICE:%.*]] = ttg.memdesc_index [[EMPTY]]
-    // CHECK-NEXT:   ttng.init_barrier [[EMPTYSLICE]], 3
-    // CHECK-NEXT:   [[FULLSLICE:%.*]] = ttg.memdesc_index [[FULL]]
-    // CHECK-NEXT:   ttng.init_barrier [[FULLSLICE]], 1
-    // CHECK-NEXT: }
+    // CHECK-NEXT: [[FULLSLICE:%.*]] = ttg.memdesc_index [[FULL]]
+    // CHECK-NEXT: ttng.init_barrier [[FULLSLICE]], 1
+    // CHECK-NEXT: [[FULLSLICE:%.*]] = ttg.memdesc_index [[FULL]]
+    // CHECK-NEXT: ttng.init_barrier [[FULLSLICE]], 1
     nvws.warp_group
     partition0 num_warps(4) {
       scf.for %arg3 = %arg0 to %arg1 step %arg2  : i32 {
@@ -178,22 +187,28 @@ module attributes {"ttg.num-warps" = 4 : i32} {
     %2 = ttg.local_alloc : () -> !ttg.memdesc<2x1xi32, #shared, #smem, mutable>
     %3 = nvws.aref.create %2 : <[!ttg.memdesc<2x1xi32, #shared, #smem, mutable>]>
     // CHECK: ttg.local_alloc
-    // CHECK-NEXT: [[EMPTY1:%.*]] = ttg.local_alloc
-    // CHECK-NEXT: [[FULL1:%.*]] = ttg.local_alloc
-    // CHECK-NEXT: scf.for
-    // CHECK-NEXT:   [[EMPTYBAR1:%.*]] = ttg.memdesc_index [[EMPTY1]]
-    // CHECK-NEXT:   init_barrier [[EMPTYBAR1]], 2
-    // CHECK-NEXT:   [[FULLBAR1:%.*]] = ttg.memdesc_index [[FULL1]]
-    // CHECK-NEXT:   init_barrier [[FULLBAR1]], 1
-
-    // CHECK: ttg.local_alloc
+    // CHECK-NEXT: ttg.local_alloc
     // CHECK-NEXT: [[EMPTY2:%.*]] = ttg.local_alloc
+    // CHECK-NEXT: memdesc_index
+    // CHECK-NEXT: init_barrier
+    // CHECK-NEXT: memdesc_index
+    // CHECK-NEXT: init_barrier
     // CHECK-NEXT: [[FULL2:%.*]] = ttg.local_alloc
-    // CHECK-NEXT: scf.for
-    // CHECK-NEXT:   [[EMPTYBAR2:%.*]] = ttg.memdesc_index [[EMPTY2]]
-    // CHECK-NEXT:   init_barrier [[EMPTYBAR2]], 2
-    // CHECK-NEXT:   [[FULLBAR2:%.*]] = ttg.memdesc_index [[FULL2]]
-    // CHECK-NEXT:   init_barrier [[FULLBAR2]], 1
+    // CHECK-NEXT: memdesc_index
+    // CHECK-NEXT: init_barrier
+    // CHECK-NEXT: memdesc_index
+    // CHECK-NEXT: init_barrier
+
+    // CHECK-NEXT: [[EMPTY1:%.*]] = ttg.local_alloc
+    // CHECK-NEXT: memdesc_index
+    // CHECK-NEXT: init_barrier
+    // CHECK-NEXT: memdesc_index
+    // CHECK-NEXT: init_barrier
+    // CHECK-NEXT: [[FULL1:%.*]] = ttg.local_alloc
+    // CHECK-NEXT: memdesc_index
+    // CHECK-NEXT: init_barrier
+    // CHECK-NEXT: memdesc_index
+    // CHECK-NEXT: init_barrier
     nvws.warp_group
     partition0 num_warps(4) {
       %5:2 = scf.for %arg3 = %arg0 to %arg1 step %arg2 iter_args(%arg4 = %cst, %arg5 = %cst) -> (tensor<1xi32, #blocked>, tensor<1xi32, #blocked>)  : i32 {
@@ -290,13 +305,8 @@ module attributes {"ttg.num-warps" = 4 : i32} {
     %0 = ttg.local_alloc : () -> !ttg.memdesc<2x1xi32, #shared, #smem, mutable>
     %1 = nvws.aref.create %0 : <[!ttg.memdesc<2x1xi32, #shared, #smem, mutable>]>
     // CHECK: ttg.local_alloc
-    // CHECK-NEXT: [[EMPTY1:%.*]] = ttg.local_alloc
-    // CHECK-NEXT: [[FULL1:%.*]] = ttg.local_alloc
-    // CHECK-NEXT: scf.for
-    // CHECK-NEXT:   [[EMPTYBAR1:%.*]] = ttg.memdesc_index [[EMPTY1]]
-    // CHECK-NEXT:   init_barrier [[EMPTYBAR1]], 2
-    // CHECK-NEXT:   [[FULLBAR1:%.*]] = ttg.memdesc_index [[FULL1]]
-    // CHECK-NEXT:   init_barrier [[FULLBAR1]], 1
+    // CHECK: [[EMPTY1:%.*]] = ttg.local_alloc
+    // CHECK: [[FULL1:%.*]] = ttg.local_alloc
     nvws.warp_group
     partition0 num_warps(4) {
       %2:2 = scf.for %arg3 = %arg0 to %arg1 step %arg2 iter_args(%arg4 = %cst, %arg5 = %cst_0) -> (tensor<1xi32, #blocked>, tensor<1xi32, #blocked>)  : i32 {

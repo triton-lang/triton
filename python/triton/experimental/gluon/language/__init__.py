@@ -15,6 +15,6 @@ __all__ = [
     *__layouts_all,
     *__math_all,
     *__standard_all,
-    "nvidia",
     "amd",
+    "nvidia",
 ]

@@ -49,7 +49,7 @@ def TTG_AsyncWaitOp : TTG_Op<"async_wait"> {
 
   let results = (outs TTG_AsyncToken:$retToken);
 
-  let assemblyFormat = "$asyncToken attr-dict";
+  let assemblyFormat = "($asyncToken^)? attr-dict";
 
   let extraClassDeclaration = [{
     static bool isSupported(int computeCapability) {
@@ -64,7 +64,7 @@ def TTG_AsyncCommitGroupOp : TTG_Op<"async_commit_group"> {
   let results = (outs TTG_AsyncToken:$asyncToken);
   let arguments = (ins Variadic<TTG_AsyncToken>:$inputTokens);
 
-  let assemblyFormat = [{($inputTokens ^)?attr-dict}];
+  let assemblyFormat = "(`tokens` $inputTokens^)? attr-dict";
 
   let extraClassDeclaration = [{
     static bool isSupported(int computeCapability) {
@@ -333,7 +333,6 @@ def TTG_MemDescReinterpretOp : TTG_Op<"memdesc_reinterpret", [Pure, MemDescViewT
     $src attr-dict `:` qualified(type($src)) `->` qualified(type($result))
   }];
 
-  let hasVerifier = 1;
   let hasFolder = 1;
 }
 
