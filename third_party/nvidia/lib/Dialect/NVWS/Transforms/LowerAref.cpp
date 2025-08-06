@@ -110,8 +110,6 @@ BarrierCount getArrivalCount(ArefCreateOp op) {
   SetVector<int> consumerGroups;
 
   for (auto user : op->getUsers()) {
-    if (isa<ArefDestroyOp>(user))
-      continue;
     auto [wgOp, idx] = getWarpGroupIdx(user);
     auto numWarps = wgOp.getNumWarps()[idx];
 
@@ -171,33 +169,17 @@ BarrierCount getArrivalCount(ArefCreateOp op) {
 ArefValue createAndInitMbar(ArefCreateOp op, PatternRewriter &rewriter) {
   BarrierCount count = getArrivalCount(op);
 
-  MLIRContext *ctx = op.getContext();
-  auto loc = op.getLoc();
   auto arefTy = op.getType();
-  auto baseType = arefTy.getBaseType();
   auto arefBufTypes = llvm::to_vector(llvm::map_range(
       arefTy.getBaseType(), [](Type type) { return cast<MemDescType>(type); }));
   auto shape = arefBufTypes[0].getShape();
   auto depth = shape[0];
 
-  ImplicitLocOpBuilder builder(op.getLoc(), rewriter);
-  auto emptyMbars = createScalarAlloc(builder, rewriter.getI64Type(), depth);
-  auto fullMbars = createScalarAlloc(builder, rewriter.getI64Type(), depth);
-  auto lb = rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
-  auto ub = rewriter.create<arith::ConstantIntOp>(loc, depth, 32);
-  auto step = rewriter.create<arith::ConstantIntOp>(loc, 1, 32);
-  auto dLoop = rewriter.create<scf::ForOp>(loc, lb, ub, step);
-  rewriter.setInsertionPointToStart(dLoop.getBody());
-
-  for (int i = 0; i < 2; ++i) {
-    bool isProducer = i == 0;
-    auto mbars = isProducer ? emptyMbars : fullMbars;
-    auto singleBarrier =
-        createSingleBufferView(rewriter, mbars, dLoop.getInductionVar());
-    int pendingCount =
-        isProducer ? count.producerPendingCount : count.consumerPendingCount;
-    rewriter.create<InitBarrierOp>(loc, singleBarrier, pendingCount);
-  }
+  auto wgOp = getWarpGroupIdx(*op->getUsers().begin()).first;
+  auto emptyMbars =
+      triton::createBarrierAlloc(wgOp, depth, count.producerPendingCount);
+  auto fullMbars =
+      triton::createBarrierAlloc(wgOp, depth, count.consumerPendingCount);
 
   return ArefValue{emptyMbars, fullMbars, static_cast<int>(depth),
                    op.getOperands()};
@@ -265,8 +247,8 @@ void lowerAsyncLoads(ArefPutEnterOp op, PatternRewriter &rewriter,
   return;
 }
 
-LogicalResult rewritePutEnterOp(ArefCreateOp arefOp, ArefPutEnterOp op,
-                                PatternRewriter &rewriter, ArefValue arefVal) {
+void rewritePutEnterOp(ArefCreateOp arefOp, ArefPutEnterOp op,
+                       PatternRewriter &rewriter, ArefValue arefVal) {
   auto loc = op.getLoc();
   rewriter.setInsertionPointAfter(op);
 
@@ -286,12 +268,10 @@ LogicalResult rewritePutEnterOp(ArefCreateOp arefOp, ArefPutEnterOp op,
   // replaces uses with views
   for (int i = 0; i < arefVal.buffers.size(); ++i)
     op.getBuffers()[i].replaceAllUsesWith(views[i]);
-
-  return success();
 }
 
-LogicalResult rewriteGetEnterOp(ArefCreateOp arefOp, ArefGetEnterOp op,
-                                PatternRewriter &rewriter, ArefValue arefVal) {
+void rewriteGetEnterOp(ArefCreateOp arefOp, ArefGetEnterOp op,
+                       PatternRewriter &rewriter, ArefValue arefVal) {
   auto loc = op.getLoc();
   rewriter.setInsertionPointAfter(op);
 
@@ -303,13 +283,11 @@ LogicalResult rewriteGetEnterOp(ArefCreateOp arefOp, ArefGetEnterOp op,
 
   for (int i = 0; i < arefVal.buffers.size(); ++i)
     op.getBuffers()[i].replaceAllUsesWith(views[i]);
-
-  return success();
 }
 
-LogicalResult insertArriveBarrier(Location loc, ArrayAttr asyncOps,
-                                  PatternRewriter &rewriter, Value mbar,
-                                  StageCluster stageCluster) {
+void insertArriveBarrier(Location loc, ArrayAttr asyncOps,
+                         PatternRewriter &rewriter, Value mbar,
+                         StageCluster stageCluster) {
   for (auto asyncOp : asyncOps) {
     auto asyncOpEnum = cast<AsyncOpAttr>(asyncOp).getValue();
     Operation *arriveOp = {};
@@ -333,46 +311,24 @@ LogicalResult insertArriveBarrier(Location loc, ArrayAttr asyncOps,
     if (arriveOp)
       assignStageCluster(arriveOp, stageCluster, rewriter);
   }
-
-  return success();
 }
 
-LogicalResult rewritePutExitOp(ArefPutExitOp op, PatternRewriter &rewriter,
-                               ArefValue arefVal) {
+void rewritePutExitOp(ArefPutExitOp op, PatternRewriter &rewriter,
+                      ArefValue arefVal) {
   auto loc = op->getLoc();
   rewriter.setInsertionPointAfter(op);
   Value fullBarrier = getFullBarrier(rewriter, loc, arefVal, op.getStage());
-  return insertArriveBarrier(loc, op.getAsyncOps(), rewriter, fullBarrier,
-                             getStageCluster(op));
+  insertArriveBarrier(loc, op.getAsyncOps(), rewriter, fullBarrier,
+                      getStageCluster(op));
 }
 
-LogicalResult rewriteGetExitOp(ArefGetExitOp op, PatternRewriter &rewriter,
-                               ArefValue arefVal) {
+void rewriteGetExitOp(ArefGetExitOp op, PatternRewriter &rewriter,
+                      ArefValue arefVal) {
   auto loc = op->getLoc();
   rewriter.setInsertionPointAfter(op);
   Value emptyBarrier = getEmptyBarrier(rewriter, loc, arefVal, op.getStage());
-  return insertArriveBarrier(loc, op.getAsyncOps(), rewriter, emptyBarrier,
-                             getStageCluster(op));
-}
-
-LogicalResult rewriteArefDestroyOp(ArefDestroyOp op, PatternRewriter &rewriter,
-                                   ArefValue arefVal) {
-  auto loc = op->getLoc();
-
-  rewriter.setInsertionPointAfter(op);
-  auto lb = rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
-  auto ub = rewriter.create<arith::ConstantIntOp>(loc, arefVal.depth, 32);
-  auto step = rewriter.create<arith::ConstantIntOp>(loc, 1, 32);
-  auto dLoop = rewriter.create<scf::ForOp>(loc, lb, ub, step);
-
-  rewriter.setInsertionPointToStart(dLoop.getBody());
-  auto emptyMbar = createSingleBufferView(rewriter, arefVal.emptyMbars,
-                                          dLoop.getInductionVar());
-  rewriter.create<InvalBarrierOp>(loc, emptyMbar);
-  auto fullMbar = createSingleBufferView(rewriter, arefVal.fullMbars,
-                                         dLoop.getInductionVar());
-  rewriter.create<InvalBarrierOp>(loc, fullMbar);
-  return success();
+  insertArriveBarrier(loc, op.getAsyncOps(), rewriter, emptyBarrier,
+                      getStageCluster(op));
 }
 
 class LowerArefCreate : public OpRewritePattern<ArefCreateOp> {
@@ -385,26 +341,15 @@ public:
     SetVector<Operation *> opToDelete;
     opToDelete.insert(op.getOperation());
     for (auto userOp : op->getUsers()) {
+      opToDelete.insert(userOp);
       if (auto user = dyn_cast<ArefPutEnterOp>(userOp)) {
-        opToDelete.insert(user);
-        if (rewritePutEnterOp(op, user, rewriter, aref).failed())
-          return failure();
+        rewritePutEnterOp(op, user, rewriter, aref);
       } else if (auto user = dyn_cast<ArefGetEnterOp>(userOp)) {
-        opToDelete.insert(user);
-        if (rewriteGetEnterOp(op, user, rewriter, aref).failed())
-          return failure();
+        rewriteGetEnterOp(op, user, rewriter, aref);
       } else if (auto user = dyn_cast<ArefPutExitOp>(userOp)) {
-        opToDelete.insert(user);
-        if (rewritePutExitOp(user, rewriter, aref).failed())
-          return failure();
+        rewritePutExitOp(user, rewriter, aref);
       } else if (auto user = dyn_cast<ArefGetExitOp>(userOp)) {
-        opToDelete.insert(user);
-        if (rewriteGetExitOp(user, rewriter, aref).failed())
-          return failure();
-      } else if (auto user = dyn_cast<ArefDestroyOp>(userOp)) {
-        opToDelete.insert(user);
-        if (rewriteArefDestroyOp(user, rewriter, aref).failed())
-          return failure();
+        rewriteGetExitOp(user, rewriter, aref);
       } else {
         llvm_unreachable("users of aref can only be ArefPut or ArefGet");
       }
