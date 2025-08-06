@@ -424,10 +424,15 @@ tt.func @async_copy_invalid_other_type(%input: tensor<64x64x!tt.ptr<f16>, #block
 
 // -----
 
-#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+// expected-error @below {{parent layout must have at least rank >= 2}}
+#slice = #ttg.slice<{dim = 0, parent = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>}>
 
-tt.func @memdesc_reinterpret(%arg0: !ttg.memdesc<1xi64, #shared, #ttg.shared_memory>) {
-  // expected-error @below {{source and destination memory space must match}}
-  %0 = ttg.memdesc_reinterpret %arg0 : !ttg.memdesc<1xi64, #shared, #ttg.shared_memory> -> !ttg.memdesc<1xi32, #shared, #ttng.tensor_memory>
-  tt.return
-}
+// -----
+
+// expected-error @below {{slice dim=2 must be less than the parent rank=2}}
+#slice = #ttg.slice<{dim = 2, parent = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [0, 1]}>}>
+
+// -----
+
+// expected-error @below {{rank 0 memdesc is not allowed}}
+!memdesc = !ttg.memdesc<i64, #ttng.tensor_memory_scales_encoding<>, #ttng.tensor_memory>

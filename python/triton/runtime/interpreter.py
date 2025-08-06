@@ -88,6 +88,7 @@ class TensorDescHandle:
         assert self.base.data.item() % 16 == 0, "base must be 16-byte aligned"
         assert len(self.strides) == self.ndim
         assert len(self.block_shape) == self.ndim
+        assert self.ndim >= 1, "descriptor cannot be 0 dimensional"
 
         for stride in self.strides[:-1]:
             assert stride.data.item() % 16 == 0, "stride must be 16-byte aligned"

@@ -319,6 +319,12 @@ public:
 #define str_attr(str) ::mlir::StringAttr::get(ctx, (str))
 
 namespace mlir {
+
+// See FuncOpToLLVM.cpp for details about Triton's function calling conventions
+constexpr int kProfileScratchBufferOffset = -1;
+constexpr int kGlobalScratchBufferOffset = -2;
+constexpr int kSharedMemoryOffset = -3;
+
 namespace triton {
 
 namespace gpu {
@@ -357,9 +363,6 @@ public:
 
   SmallVector<Type> getTypes() const;
 
-  SmallVector<Value> getStrides(triton::gpu::MemDescType memDesc, Location loc,
-                                RewriterBase &rewriter) const;
-
   // Returns a mask representing all the bits of the memdesc offsets that
   // may be modified by an affine offset coming from a memdesc_subslice.
   // The offsets are considered to be in the type of the memdesc.
@@ -385,14 +388,6 @@ public:
   Value getBaseBeforeSlice(int dim, Location loc, RewriterBase &rewriter) const;
 
 private:
-  static SmallVector<unsigned> getOrderForShape(ArrayRef<int64_t> shape,
-                                                ArrayRef<unsigned> layoutOrder);
-
-  static SmallVector<Value> getStridesForShape(ArrayRef<int64_t> shape,
-                                               ArrayRef<unsigned> layoutOrder,
-                                               Location loc,
-                                               RewriterBase &rewriter);
-
   Value base; // i32 ptr. The start address of the shared memory object.
   Type baseElemType;
   SmallVector<Value>
@@ -449,6 +444,9 @@ Value getStackPointer(RewriterBase &rewriter, FunctionOpInterface funcOp);
 Value getGlobalScratchPtr(Location loc, RewriterBase &rewriter,
                           const TargetInfoBase &targetInfo,
                           FunctionOpInterface funcOp, Value allocOffset);
+
+Value getProfileScratchPtr(Location loc, RewriterBase &rewriter,
+                           FunctionOpInterface funcOp);
 
 Value getSharedMemoryBase(Location loc, RewriterBase &rewriter,
                           const TargetInfoBase &target, Operation *op);
@@ -625,25 +623,8 @@ inline bool isCanonicalIndex(unsigned index, unsigned freeVarMask) {
 // group code isolated from above by invoking this function.
 void makeAllWarpGroupsIsolatedFromAbove(Operation *op);
 
-/// Converts ConverLayoutOp to llvm using padded pattern.
-/// This pattern adds unused memory locations after every rows of tensor fastest
-/// changing dimension:
-/// e0 e1 e2 e3 p p \
-/// e4 e5 e6 e7 p p \
-/// ...
-/// e e e e p p
-/// Dimension order is chosen in order to use wide output reads.
-///
-/// \param op operation to convert
-/// \param src llvm structure containing operation input
-/// \param targetInfo
-/// \param typeConverter
-/// \param rewriter
-/// \returns llvm structure containing converted output
-Value transferWithinBlockPadding(triton::gpu::ConvertLayoutOp op, Value src,
-                                 const TargetInfoBase &targetInfo,
-                                 const LLVMTypeConverter *typeConverter,
-                                 RewriterBase &rewriter);
+// Set the correct loop annotation on LLVM branch ops.
+void fixUpLoopAnnotation(ModuleOp mod);
 
 void transferWithinBlockSwizzling(triton::gpu::ConvertLayoutOp op, Value src,
                                   const TargetInfoBase &targetInfo,

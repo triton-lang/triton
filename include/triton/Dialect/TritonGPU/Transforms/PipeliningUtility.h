@@ -132,7 +132,14 @@ void combineRedundantWaitOps(
     llvm::SmallSetVector<gpu::AsyncWaitOp, 8> &waitOps);
 
 // Get the type of the view of a multi-buffered tensor value.
-gpu::MemDescType getBufferViewType(gpu::MemDescType allocTy);
+gpu::MemDescType getBufferViewType(gpu::MemDescType allocTy,
+                                   bool mutableMemory = true);
+
+// Get a mutable, multi-buffered version of the given memdesc type, with
+// multiplicity "depth".
+gpu::MemDescType getMultiBufferedType(gpu::MemDescType memDescType,
+                                      int32_t depth);
+
 // Get a generic shared encoding for a tensor.
 gpu::SharedEncodingTrait getSharedEncoding(RankedTensorType ty);
 // Get a shared encoding for a tensor based on its uses.
@@ -156,6 +163,22 @@ Value createIncrementModulo(OpBuilder &builder, Location loc, Value counter,
                             Value *outWrapCond = nullptr);
 
 scf::ForOp lowerTMADescriptors(scf::ForOp forOp, CoarseSchedule &schedule);
+
+DenseSet<Operation *>
+getTopLevelUsersInLoop(Operation *op, scf::ForOp forOp,
+                       std::function<bool(Operation *)> filter = nullptr);
+
+// Return the "first" op in terms of the stage and cluser ordering
+Operation *
+getFirstUseOfPipelinedOp(ArrayRef<Operation *> ops, scf::ForOp forOp,
+                         CoarseSchedule &schedule,
+                         std::function<bool(Operation *)> filterUse = nullptr);
+
+// Return the "last" op in terms of the stage and cluser ordering
+Operation *
+getLastUseOfPipelinedOp(ArrayRef<Operation *> ops, scf::ForOp forOp,
+                        CoarseSchedule &schedule,
+                        std::function<bool(Operation *)> filterUse = nullptr);
 
 } // namespace triton
 } // namespace mlir

@@ -48,66 +48,6 @@ int getSelfLatencyFromAttr(Operation *op) {
   return val;
 }
 
-DenseSet<Operation *>
-getTopLevelUsersInLoop(Operation *op, scf::ForOp forOp,
-                       std::function<bool(Operation *)> filter = nullptr) {
-  DenseSet<Operation *> topLevelUsers;
-  SmallVector<OpOperand *> q;
-  for (auto &use : op->getUses())
-    q.push_back(&use);
-  while (!q.empty()) {
-    auto use = q.pop_back_val();
-    auto yieldOp = dyn_cast<scf::YieldOp>(use->getOwner());
-    if (yieldOp && yieldOp->getParentOp() == forOp) {
-      for (auto &use :
-           forOp.getRegionIterArgs()[use->getOperandNumber()].getUses())
-        q.push_back(&use);
-      continue;
-    }
-    // Don't count view operations as uses. Follow them through to their
-    // users.
-    if (use->getOwner()->hasTrait<OpTrait::MemDescViewTrait>()) {
-      for (auto &use : use->getOwner()->getUses())
-        q.push_back(&use);
-      continue;
-    }
-    if (filter && !filter(use->getOwner()))
-      continue;
-    Operation *topLevelUser =
-        forOp.getBody()->findAncestorOpInBlock(*use->getOwner());
-    topLevelUsers.insert(topLevelUser);
-  }
-  return topLevelUsers;
-}
-
-Operation *getFirstUseOfPipelinedOp(SmallVector<Operation *> ops,
-                                    scf::ForOp forOp,
-                                    CoarseSchedule &schedule) {
-  Operation *firstUser = nullptr;
-  DenseSet<Operation *> topLevelUsers;
-  for (Operation *op : ops) {
-    auto users = getTopLevelUsersInLoop(op, forOp);
-    topLevelUsers.insert(users.begin(), users.end());
-  }
-  for (Operation *topLevelUser : topLevelUsers) {
-    assert(schedule.count(topLevelUser) && "op user not found in the schedule");
-    auto [_useStage, _useCluster] = schedule[topLevelUser];
-    if (!firstUser) {
-      firstUser = topLevelUser;
-    } else {
-      auto [_firstUserStage, _firstUserCluster] = schedule[firstUser];
-      if (_useStage < _firstUserStage ||
-          (_useStage == _firstUserStage &&
-           schedule.clusters.isBefore(_useCluster, _firstUserCluster)) ||
-          (_useStage == _firstUserStage && _useCluster == _firstUserCluster &&
-           topLevelUser->isBeforeInBlock(firstUser))) {
-        firstUser = topLevelUser;
-      }
-    }
-  }
-  return firstUser;
-}
-
 // Check if the load can be pipelined entirely in shared memory,
 // or if we need to load to registers.
 bool mustLoadToRegisters(Operation *op) {
@@ -142,7 +82,8 @@ int getDefUseStageDiff(Operation *op, scf::ForOp forOp,
   assert(schedule.count(op) && "Op not found in the schedule");
   int defStage = schedule[op].first;
   std::optional<int> useStage;
-  DenseSet<Operation *> topLevelUsers = getTopLevelUsersInLoop(op, forOp);
+  DenseSet<Operation *> topLevelUsers =
+      triton::getTopLevelUsersInLoop(op, forOp);
   // Special case for loads used by local_alloc:
   // we must consider the uses of the local_alloc, as it may be removed and its
   // uses will become direct uses of the async load.
@@ -152,7 +93,8 @@ int getDefUseStageDiff(Operation *op, scf::ForOp forOp,
     DenseSet<Operation *> allocUsers;
     for (Operation *topLevelUser : topLevelUsers) {
       if (auto localAlloc = dyn_cast<ttg::LocalAllocOp>(topLevelUser)) {
-        DenseSet<Operation *> users = getTopLevelUsersInLoop(localAlloc, forOp);
+        DenseSet<Operation *> users =
+            triton::getTopLevelUsersInLoop(localAlloc, forOp);
         allocUsers.insert(users.begin(), users.end());
       }
     }
