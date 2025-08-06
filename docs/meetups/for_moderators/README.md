@@ -2,7 +2,7 @@
 
 Contributors:  Bill Yoshimi, Areg Melikadamyan, Whitney Tsang, Ksharma Pawar
 
-Last updated: Aug 6, 2025
+Last updated: July 3, 2025
 
 Community meetups give the on-line community a chance to interact with each other and the Triton developers in a more face-to-face format vs slack chats.  Example topics covered during community meetups include:
 * Developers presenting updates on features they’re working on.
@@ -10,8 +10,6 @@ Community meetups give the on-line community a chance to interact with each othe
 * Questions from community for developers
 * Questions about Triton strategy/direction.
 
-## Latest changes
-- 2025-08-06: Revised youtube upload instructions to use @Triton-openai account. Added section on shared calendar/Google Calendar invites.
 
 ## Some logistics
 
@@ -26,15 +24,18 @@ Only companies that paid for corp Microsoft Teams access can create webinars.  T
 
 Webinars are automatically recorded.  The person with corp access can upload the video to youtube after the webinar is finished.
 
-You must be an editor or manager of the @Triton-openai Youtube channel to upload videos. Bill, Whitney, Cicie or Adnan can grant access.
+Only the person with corp access can open a webinar.  Even if you’re a registered speaker or MC, you’ll see
 
-Only the person with corp access can open a webinar.  Even if you’re a registered speaker or MC, you’ll see the Microsoft Meeting waiting for meeting to start view.
+<div align="center">
+  <img src="https://private-user-images.githubusercontent.com/85795580/459649517-42acf22a-6ae3-4c0f-a585-dffc25fabc33.png?jwt=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTUiLCJleHAiOjE3NTE1NTg1MzEsIm5iZiI6MTc1MTU1ODIzMSwicGF0aCI6Ii84NTc5NTU4MC80NTk2NDk1MTctNDJhY2YyMmEtNmFlMy00YzBmLWE1ODUtZGZmYzI1ZmFiYzMzLnBuZz9YLUFtei1BbGdvcml0aG09QVdTNC1ITUFDLVNIQTI1NiZYLUFtei1DcmVkZW50aWFsPUFLSUFWQ09EWUxTQTUzUFFLNFpBJTJGMjAyNTA3MDMlMkZ1cy1lYXN0LTElMkZzMyUyRmF3czRfcmVxdWVzdCZYLUFtei1EYXRlPTIwMjUwNzAzVDE1NTcxMVomWC1BbXotRXhwaXJlcz0zMDAmWC1BbXotU2lnbmF0dXJlPWZhZWQ2NjQ3MDIxNGVkNThkMGYxZmNjMmI2Yzg5MjMyZTAxZGI5NmFiZDIwYzczMDc0N2YzOTM3MTYwMThiOWEmWC1BbXotU2lnbmVkSGVhZGVycz1ob3N0In0.UwzTbqMIsFw1Ex9t-5HY8A3KHzOnY6eqgqz2eJ0qTbE" alt="Microsoft Meeting waiting for meeting to start view">
+</div>
+
+
+before the meeting owner opens it up.
 
 During the meetup, take notes.
 
 Post the final notes on the Triton-lang website here: https://github.com/triton-lang/triton/tree/main/docs/meetups
-
-Ask Whitney, Cicie or Bill for access to the shared Google calendar ["Triton Community Meetup"](https://calendar.google.com/calendar/u/0?cid=MDVhM2U3NjgwNWEwNTJmNDAwODYyMzJmNzNhNmIxYzk2MWViOTE3YTRjZjIzNDgxMDZhYjcwNmEwOWU2MGE4Y0Bncm91cC5jYWxlbmRhci5nb29nbGUuY29t). people should be able to add this calendar to their calendars so they'll see future events when they're available.
 
 ## How to run a community meetup
 
@@ -52,44 +53,32 @@ Co-organizer: **add organizers**
 
 2. If you don’t have details about the meeting (e.g. meeting ID, passcode, phone number, etc.) you can login to the meeting, click on More -> Meeting Info and get data that way.
 
-3. Create a Google Calendar invite [here](https://calendar.google.com/calendar/u/0?cid=MDVhM2U3NjgwNWEwNTJmNDAwODYyMzJmNzNhNmIxYzk2MWViOTE3YTRjZjIzNDgxMDZhYjcwNmEwOWU2MGE4Y0Bncm91cC5jYWxlbmRhci5nb29nbGUuY29t).
-  * Title: "Triton Community Meetup - Month year"
-  * Calendar: "Triton Community Meetup" (4th item under "Event details)
-  * Guest permissions:
-    * Deselect "Modify event" and "See guest list"
-  * Guests: add current set of moderators.
-  * In the body of the event insert:
-  <pre>
-The next Triton community meetup will be on **date** from 10am-11am PST. The meeting link is below. If anyone has agenda items to add for the meetup please reach out to me.
+<div align="center">
+  <img src="https://private-user-images.githubusercontent.com/85795580/459649518-f9a924df-2020-4dde-b8bb-e901a9298cef.png?jwt=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTUiLCJleHAiOjE3NTE1NTg1MzEsIm5iZiI6MTc1MTU1ODIzMSwicGF0aCI6Ii84NTc5NTU4MC80NTk2NDk1MTgtZjlhOTI0ZGYtMjAyMC00ZGRlLWI4YmItZTkwMWE5Mjk4Y2VmLnBuZz9YLUFtei1BbGdvcml0aG09QVdTNC1ITUFDLVNIQTI1NiZYLUFtei1DcmVkZW50aWFsPUFLSUFWQ09EWUxTQTUzUFFLNFpBJTJGMjAyNTA3MDMlMkZ1cy1lYXN0LTElMkZzMyUyRmF3czRfcmVxdWVzdCZYLUFtei1EYXRlPTIwMjUwNzAzVDE1NTcxMVomWC1BbXotRXhwaXJlcz0zMDAmWC1BbXotU2lnbmF0dXJlPTM0YzI3OGRmMWI1NDk2NjQxOTJhMmJiNTM5ZDg4ZGZjOTk4OGM2YWRkNTk1ZTY4NjNhMjk2ZWZlZDhiZDYzZGEmWC1BbXotU2lnbmVkSGVhZGVycz1ob3N0In0.6bgthh7pHDV-ooMMm1WsgbbLJH39nzk-DPre6GDjZnI" alt="Microsoft Meeting info pane">
+</div>
 
-Google calendar invite: **paste link from tinyurl**
-Shared Google calendar with future invites:  https://tinyurl.com/4nbr4bds
-Invite in iCal format: [link](**Add link**)
-Note: use iCal if your company doesn't use/blocks Google calendar access.
+3. Copy the invite generated from the meeting to [triton #general chat](https://app.slack.com/huddle/T01379XQ9FG/C013E22BPPC) on slack. Example text to use in slack:
+
+<pre>
+The next community meetup will be on <date> from 10am-11am PST. The meeting link is below. If anyone has agenda items to add for the meetup please reach out to me.
 
 Thanks,
-**your name**
+**<your name>**
 ----
 Microsoft Teams Need help?
 Join the meeting now <- **change this**
-Meeting ID: xxx xxx xxx xx <- **change this**
-Passcode: xxxxxx <- **change this**
+Meeting ID: 247 993 489 59 <- **change this**
+Passcode: Dg8TLJ <- **change this**
 Dial in by phone
-+xxxx United States, Los Angeles <- **change this**
++1 323-849-4874,,637393478# United States, Los Angeles <- **change this**
 Find a local number
-Phone conference ID: xxx xxx xxx <- **change this**
+Phone conference ID: 637 393 478# <- **change this**
 </pre>
-  * After creating the meeting, open the invite, click on "More Actions" and select "Publish event".  Copy the link to event.
-  * Open https://tinyurl.com and paste the link to event and click shorten. This should give you a short url to the invite.  Copy this link to the general slack message below.
-  * You shouldn't need to update the URL for "Invite in iCal format".  Users will need to redownload a new iCal file every time we create a new meeting.  If the url doesn't work anymore, you can generate an iCal link by clicking on the three-dot menue for the "Triton Community Meetup" calendar on left under your list of calendars, select "settings and sharing" select "Integrate calendar" and copy the URL from "Public address in iCal format".
 
-4. Copy the invite generated from the meeting to [triton #general chat](https://app.slack.com/huddle/T01379XQ9FG/C013E22BPPC) on slack. Use the same text you used when creating the event.
+4. Post the same invite to the [#triton channel on Discord GPU_MODE](https://discord.com/channels/1189498204333543425/1189607595451895918). You will need to join GPU_MODE to post to it.
 
-5. Post the same invite to the [#triton channel on Discord GPU_MODE](https://discord.com/channels/1189498204333543425/1189607595451895918). You will need to join GPU_MODE to post to it. Also, discord doesn't allow you to use markdown.  Convert the main urls like the calendar invites and the main Microsoft Teams meeting link into short URLs (use https://tinyurl.com).
-
-6. 1-2 Days before the meeting. Verify that someone with corp Microsoft Teams access will open the meeting up for you.
-
-7. Day before meeting, post reminders to slack and discord (reply to your original message):
+5. 1-2 Days before the meeting. Verify that someone with corp Microsoft Teams access will open the meeting up for you.
+6. Day before meeting, post reminders to slack and discord (reply to your original message):
 Reminder, this month's community meetup is tomorrow at 10am PST.
 
 <pre>
@@ -98,21 +87,26 @@ Agenda:
    Topic #2 <who>
 </pre>
 
-8. Day of meeting, login a little early and verify everything is working as expected.
+7. Day of meeting, login a little early and verify everything is working as expected.
 
-9. During the meeting, keep an eye on the comments section. Some folks might post questions for the speaker there and/or issues they're having with Teams.
+8. During the meeting, keep an eye on the comments section. Some folks might post questions for the speaker there and/or issues they're having with Teams.
 
-10. After the meeting has finished, work with the person with corp Microsoft Teams access to upload the recorded video to youtube.  Post the youtube link in [triton #general chat](https://app.slack.com/huddle/T01379XQ9FG/C013E22BPPC).
+9. After the meeting has finished, work with the person with corp Microsoft Teams access to upload the recorded video to youtube.  Post the youtube link in [triton #general chat](https://app.slack.com/huddle/T01379XQ9FG/C013E22BPPC).
 
 If this is your first time using Microsoft Teams, work with the meeting creator to test out the UI (e.g. logging in, verifying your camera, audio work, verifying you can present your screen if using that functionality, play around with hand raising, play around with people/attendees/muting others, log off and log back in again.)
 
 ## How to upload videos to Youtube
 
-1. Request access to the @Triton-openai youtube account. You'll need editor access to upload videos.  You can request access from Bill, Whitney, Cicie or Adnan.
-2. If you already have a studio.youtube.com account, you can switch to the @Triton-openai account by clicking on your user icon at the top left of the screen and selecting "Switch account".
+1. Register to use youtube. That is, the top right symbol when you go to youtube.com should be your login.
+
+<div align="center">
+  <img src="https://private-user-images.githubusercontent.com/85795580/459649516-4bea87d7-1c6b-4331-92c1-e480b2f3d295.png?jwt=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTUiLCJleHAiOjE3NTE1NTg1MzEsIm5iZiI6MTc1MTU1ODIzMSwicGF0aCI6Ii84NTc5NTU4MC80NTk2NDk1MTYtNGJlYTg3ZDctMWM2Yi00MzMxLTkyYzEtZTQ4MGIyZjNkMjk1LnBuZz9YLUFtei1BbGdvcml0aG09QVdTNC1ITUFDLVNIQTI1NiZYLUFtei1DcmVkZW50aWFsPUFLSUFWQ09EWUxTQTUzUFFLNFpBJTJGMjAyNTA3MDMlMkZ1cy1lYXN0LTElMkZzMyUyRmF3czRfcmVxdWVzdCZYLUFtei1EYXRlPTIwMjUwNzAzVDE1NTcxMVomWC1BbXotRXhwaXJlcz0zMDAmWC1BbXotU2lnbmF0dXJlPWVjNWUxMTIzNTA4MGQxMmRkMjQ1NWQzMzFhMTIwNmVhZDNhMmJlMWQwMDQwYmUyNmQ4YTkwNTUxMTI3ZWJjNjAmWC1BbXotU2lnbmVkSGVhZGVycz1ob3N0In0.RUIK1GbqVtC8sfu_2ntb8to9FFQv7MfHrYbvNCfLCh8" alt="Youtube Login">
+</div>
+
+2. Click on https://www.youtube.com/feed/you
 3. Click on “+ Create” on top next to search box.
 4. Select the video you want to upload
-5. For Title use something like “Triton community meetup <date>” like "Triton community meetup 20250503"
+5. For Title use something like “Triton Community Meetup May 2025”
 6. No, it’s not made for kids
 7. No video elements
 8. Save or publish: “public”
@@ -124,4 +118,4 @@ If this is your first time using Microsoft Teams, work with the meeting creator 
  | Date | Meet setup | Agenda & who | Recording |
  | ---- | ---------- | ------------ | --------- |
  | 2025-05-01 | [Link](https://tinyurl.com/mr397f6x) | Topic: what are plans for existing block pointer programming model? (Context: Intel GPU backend relies heavily on it and will need time to fully move to tensor descriptor programming model.) - Jianhui Li, Intel <br/> Topic: infrastructure for Triton performance tests - Sayce, Google<br/>Topic: what talks/tutorials/open discussions would you like to see at the 2025 Triton Developers’ Summit? How can we help? - Adnan Aziz, Meta <br/> Topic: what are plans for existing block pointer programming model? (Context: Intel GPU backend relies heavily on it and will need time to fully move to tensor descriptor programming model.) - Jianhui Li, Intel<br/>Topic: infrastructure for Triton performance tests - Sayce, Google<br/>Topic: what talks/tutorials/open discussions would you like to see at the 2025 Triton Developers’ Summit? How can we help? - Adnan Aziz, Meta </pre> | https://www.youtube.com/watch?v=W16BrXc5BYE |
-| 2025-07-09 |[Link](https://tinyurl.com/mus5wyax) | Topic: Gluon update - Jeff Niu, OpenAI <br/> Topic: Interest and requirements for a nightly performance regression suite - Simon Waters,  kernelize.ai<br/>Triton developer's summit update - Ofer Dekel, Microsoft | https://youtu.be/zoSY_WXHmF0 |
+| 2025-07-09 |[Link](https://tinyurl.com/mus5wyax) | Topic: Gluon update - Jeff Niu, OpenAI <br/> Topic: Interest and requirements for a nightly performance regression suite - Simon Waters,  kernelize.ai<br/>Triton developer's summit update - Ofer Dekel, Microsoft | |
