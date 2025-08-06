@@ -11,7 +11,7 @@ tt.func @no_partitions(%lb: i32, %ub: i32, %step: i32) {
   scf.for %i = %lb to %ub step %step : i32 {
     // CHECK-NEXT: op_a
     "op_a"() : () -> ()
-  } {ttg.partition.stages = []}
+  } {ttg.partition.stages = [], ttg.warp_specialize.tag = 0 : i32}
   tt.return
 }
 
@@ -21,7 +21,7 @@ tt.func @one_partition(%lb: i32, %ub: i32, %step: i32) {
   scf.for %i = %lb to %ub step %step : i32 {
     // CHECK-NEXT: op_a
     "op_a"() {ttg.partition = 0} : () -> ()
-  } {ttg.partition.stages = [0]}
+  } {ttg.partition.stages = [0], ttg.warp_specialize.tag = 0 : i32}
   tt.return
 }
 
@@ -41,7 +41,7 @@ tt.func @two_empty_partitions(%lb: i32, %ub: i32, %step: i32) {
   // CHECK-NEXT:   nvws.warp_group.return
   scf.for %i = %lb to %ub step %step : i32 {
     "op_a"(%i) : (i32) -> ()
-  } {ttg.partition.stages = [0, 0]}
+  } {ttg.partition.stages = [0, 0], ttg.warp_specialize.tag = 0 : i32}
   tt.return
 }
 
@@ -55,7 +55,7 @@ tt.func @empty_partition_fwd_root(%lb: i32, %ub: i32, %step: i32) {
   scf.for %i = %lb to %ub step %step iter_args(%k = %c0_i32) -> i32 : i32 {
     %0 = "op_a"(%i, %k) : (i32, i32) -> i32
     scf.yield %0 : i32
-  } {ttg.partition.stages = [0, 0]}
+  } {ttg.partition.stages = [0, 0], ttg.warp_specialize.tag = 0 : i32}
   tt.return
 }
 
@@ -100,7 +100,122 @@ tt.func @multiple_partitions(%lb: i32, %ub: i32, %step: i32) {
     %2 = "op_a"(%b) {ttg.partition = 2} : (i32) -> i32
     "op_b"(%2) {ttg.partition = 2} : (i32) -> ()
     "op_b"(%2) {ttg.partition = 2} : (i32) -> ()
-  } {ttg.partition.stages = [0, 0, 0]}
+  } {ttg.partition.stages = [0, 0, 0], ttg.warp_specialize.tag = 0 : i32}
+  tt.return
+}
+
+// CHECK-LABEL: @multiple_partitions_two_loops
+tt.func @multiple_partitions_two_loops(%lb: i32, %ub: i32, %step: i32,
+                                       %c0 : i32, %c1 : i32, %c2 : i32) {
+  // CHECK: partition0 num_warps(4)
+  // CHECK-NEXT: op_00b
+  // CHECK-NEXT: [[RET:%.*]]:3 = scf.for [[I:%.*]] = [[LB:%.*]] to [[UB:%.*]] step [[STEP:%.*]] iter_args([[ARG0:%.*]] = {{.*}}, [[ARG1:%.*]] = {{.*}}, [[ARG2:%.*]] = {{.*}}) -> (i32, i32, i32) : i32 {
+  // CHECK-NEXT:   [[X:%.*]] = "op_a"
+  // CHECK-NEXT:   "op_b"([[ARG0]])
+  // CHECK-NEXT:   "op_b"([[X]])
+  // CHECK-NEXT:   arith.addi
+  // CHECK-NEXT:   arith.addi
+  // CHECK-NEXT:   arith.addi
+  // CHECK-NEXT:   scf.yield
+  // CHECK-NEXT: }
+  // CHECK-NEXT: "op_00e"([[RET]]#0)
+
+  // CHECK: partition1
+  // CHECK-NEXT: op_01b
+  // CHECK-NEXT: [[RET:%.*]]:3 = scf.for [[I:%.*]] = [[LB:%.*]] to [[UB:%.*]] step [[STEP:%.*]] iter_args([[ARG0:%.*]] = {{.*}}, [[ARG1:%.*]] = {{.*}}, [[ARG2:%.*]] = {{.*}}) -> (i32, i32, i32) : i32 {
+  // CHECK-NEXT:   [[Y:%.*]] = arith.addi [[I]], [[I]]
+  // CHECK-NEXT:   [[X:%.*]] = "op_a"([[Y]])
+  // CHECK-NEXT:   "op_b"([[ARG1]])
+  // CHECK-NEXT:   "op_b"([[X]])
+  // CHECK-NEXT:   arith.addi
+  // CHECK-NEXT:   arith.addi
+  // CHECK-NEXT:   arith.addi
+  // CHECK-NEXT:   scf.yield
+  // CHECK-NEXT: }
+  // CHECK-NEXT: "op_01e"([[RET]]#1)
+
+  // CHECK: partition2
+  // CHECK-NEXT: op_02b
+  // CHECK-NEXT: [[RET:%.*]]:3 = scf.for [[I:%.*]] = [[LB:%.*]] to [[UB:%.*]] step [[STEP:%.*]] iter_args([[ARG0:%.*]] = {{.*}}, [[ARG1:%.*]] = {{.*}}, [[ARG2:%.*]] = {{.*}}) -> (i32, i32, i32) : i32 {
+  // CHECK-NEXT:   [[Y:%.*]] = arith.addi [[I]], [[I]]
+  // CHECK-NEXT:   [[Z:%.*]] = arith.addi [[I]], [[Y]]
+  // CHECK-NEXT:   [[X:%.*]] = "op_a"([[Z]])
+  // CHECK-NEXT:   "op_b"([[ARG2]])
+  // CHECK-NEXT:   "op_b"([[X]])
+  // CHECK-NEXT:   arith.addi
+  // CHECK-NEXT:   arith.addi
+  // CHECK-NEXT:   arith.addi
+  // CHECK-NEXT:   scf.yield
+  // CHECK-NEXT: }
+  // CHECK-NEXT: "op_02e"([[RET]]#2)
+
+  "op_00b"() {ttg.partition = 0, ttg.warp_specialize.tag = 0} : () -> ()
+  "op_01b"() {ttg.partition = 1, ttg.warp_specialize.tag = 0} : () -> ()
+  "op_02b"() {ttg.partition = 2, ttg.warp_specialize.tag = 0} : () -> ()
+  %ret:3 = scf.for %i = %lb to %ub step %step iter_args(%arg0 = %c0, %arg1 = %c1, %arg2 = %c2) -> (i32, i32, i32) : i32 {
+    %a = arith.addi %i, %i : i32
+    %b = arith.addi %i, %a : i32
+
+    %0 = "op_a"(%i) {ttg.partition = 0} : (i32) -> i32
+    "op_b"(%arg0) {ttg.partition = 0} : (i32) -> ()
+    "op_b"(%0) {ttg.partition = 0} : (i32) -> ()
+
+    %1 = "op_a"(%a) {ttg.partition = 1} : (i32) -> i32
+    "op_b"(%arg1) {ttg.partition = 1} : (i32) -> ()
+    "op_b"(%1) {ttg.partition = 1} : (i32) -> ()
+
+    %2 = "op_a"(%b) {ttg.partition = 2} : (i32) -> i32
+    "op_b"(%arg2) {ttg.partition = 2} : (i32) -> ()
+    "op_b"(%2) {ttg.partition = 2} : (i32) -> ()
+
+    %v0 = arith.addi %arg0, %arg0 : i32
+    %v1 = arith.addi %arg1, %arg1 : i32
+    %v2 = arith.addi %arg2, %arg2 : i32
+    scf.yield %v0, %v1, %v2: i32, i32, i32
+  } {ttg.partition.stages = [0, 0, 0], ttg.warp_specialize.tag = 0 : i32}
+  "op_00e"(%ret#0) {ttg.partition = 0, ttg.warp_specialize.tag = 0} : (i32) -> ()
+  "op_01e"(%ret#1) {ttg.partition = 1, ttg.warp_specialize.tag = 0} : (i32) -> ()
+  "op_02e"(%ret#2) {ttg.partition = 2, ttg.warp_specialize.tag = 0} : (i32) -> ()
+
+  // CHECK: partition0 num_warps(4)
+  // CHECK-NEXT: op_10b
+  // CHECK-NEXT: scf.for
+  // CHECK: } {ttg.warp_specialize.tag = 1
+  // CHECK-NEXT: op_10e
+
+  // CHECK: partition1
+  // CHECK-NEXT: op_11b
+  // CHECK-NEXT: scf.for
+  // CHECK: } {ttg.warp_specialize.tag = 1
+  // CHECK-NEXT: op_11e
+
+  // CHECK: partition2
+  // CHECK-NEXT: op_12b
+  // CHECK-NEXT: scf.for
+  // CHECK: } {ttg.warp_specialize.tag = 1
+  // CHECK-NEXT: op_12e
+  "op_10b"() {ttg.partition = 0, ttg.warp_specialize.tag = 1} : () -> ()
+  "op_11b"() {ttg.partition = 1, ttg.warp_specialize.tag = 1} : () -> ()
+  "op_12b"() {ttg.partition = 2, ttg.warp_specialize.tag = 1} : () -> ()
+  scf.for %i = %lb to %ub step %step : i32 {
+    %a = arith.addi %i, %i : i32
+    %b = arith.addi %i, %a : i32
+
+    %0 = "op_a"(%i) {ttg.partition = 0} : (i32) -> i32
+    "op_b"(%0) {ttg.partition = 0} : (i32) -> ()
+    "op_b"(%0) {ttg.partition = 0} : (i32) -> ()
+
+    %1 = "op_a"(%a) {ttg.partition = 1} : (i32) -> i32
+    "op_b"(%1) {ttg.partition = 1} : (i32) -> ()
+    "op_b"(%1) {ttg.partition = 1} : (i32) -> ()
+
+    %2 = "op_a"(%b) {ttg.partition = 2} : (i32) -> i32
+    "op_b"(%2) {ttg.partition = 2} : (i32) -> ()
+    "op_b"(%2) {ttg.partition = 2} : (i32) -> ()
+  } {ttg.partition.stages = [0, 0, 0], ttg.warp_specialize.tag = 1 : i32}
+  "op_10e"() {ttg.partition = 0, ttg.warp_specialize.tag = 1} : () -> ()
+  "op_11e"() {ttg.partition = 1, ttg.warp_specialize.tag = 1} : () -> ()
+  "op_12e"() {ttg.partition = 2, ttg.warp_specialize.tag = 1} : () -> ()
   tt.return
 }
 
@@ -123,7 +238,7 @@ tt.func @split_block_arguments(%lb: i32, %ub: i32, %step: i32) {
     %0 = "op_a"(%a) {ttg.partition = 0} : (i32) -> i32
     %1 = "op_b"(%b) {ttg.partition = 1} : (i32) -> i32
     scf.yield %0, %1 : i32, i32
-  } {ttg.partition.stages = [0, 0]}
+  } {ttg.partition.stages = [0, 0], ttg.warp_specialize.tag = 0 : i32}
   tt.return
 }
 
@@ -166,7 +281,7 @@ tt.func @partition_outputs(%lb: i32, %ub: i32, %step: i32) -> (!ty, !ty, !ty) {
     %1 = "op_b"(%i, %b) {ttg.partition = 1} : (i32, !ty) -> !ty
     %2 = "op_c"(%i, %c) {ttg.partition = 2} : (i32, !ty) -> !ty
     scf.yield %0, %1, %2 : !ty, !ty, !ty
-  } {ttg.partition.stages = [0, 0, 0]}
+  } {ttg.partition.stages = [0, 0, 0], ttg.warp_specialize.tag = 0 : i32}
 
   // CHECK: [[B_OUT:%.*]] = ttg.local_load [[B_BUF]]
   // CHECK-NEXT: local_dealloc [[B_BUF]]
@@ -186,7 +301,7 @@ tt.func @future_conditional_self_use(%lb: i32, %ub: i32, %step: i32, %cond: i1) 
       "use"(%k) : (i32) -> ()
     } {ttg.partition = 0 : i32}
     scf.yield %0 : i32
-  } {ttg.partition.stages = [0]}
+  } {ttg.partition.stages = [0], ttg.warp_specialize.tag = 0 : i32}
   tt.return
 }
 
@@ -202,7 +317,7 @@ tt.func @trivial_tensor_captures(%arg0: f16, %lb: i32, %ub: i32, %step: i32) {
     // CHECK-NEXT: scf.for
     // CHECK-NEXT: "use"([[RANGE]], [[SPLAT]])
     "use"(%0, %1) {ttg.partition = 1} : (tensor<256xi32>, tensor<32xf16>) -> ()
-  } {ttg.partition.stages = [0, 0]}
+  } {ttg.partition.stages = [0, 0], ttg.warp_specialize.tag = 0 : i32}
   tt.return
 }
 
@@ -216,7 +331,7 @@ tt.func @tensor_captures_over_smem(%lb: i32, %ub: i32, %step: i32) {
     // CHECK-NEXT: scf.for
     // CHECK-NEXT: "use"([[VALUE]])
     "use"(%0) {ttg.partition = 1} : (tensor<32xf16, #blocked>) -> ()
-  } {ttg.partition.stages = [0, 0]}
+  } {ttg.partition.stages = [0, 0], ttg.warp_specialize.tag = 0 : i32}
   tt.return
 }
 
@@ -239,7 +354,7 @@ tt.func @dce_before_warp_allocation(%lb: i32, %ub: i32, %step: i32) {
     "op_b"(%i) {ttg.partition = 1 : i32} : (i32) -> ()
     "op_c"(%0) {ttg.partition = 2 : i32} : (tensor<128xi32, #blocked>) -> ()
     scf.yield %0 : tensor<128xi32, #blocked>
-  } {ttg.partition.stages = [0, 0, 0]}
+  } {ttg.partition.stages = [0, 0, 0], ttg.warp_specialize.tag = 0 : i32}
   tt.return
 }
 
@@ -259,7 +374,7 @@ tt.func @capture_order(%arg0: i32) {
     "use"(%0) : (tensor<4xi32, #blocked>) -> ()
     // CHECK-NEXT: "use"([[EXT]])
     "use"(%1) : (tensor<4xi64, #blocked>) -> ()
-  } {ttg.partition.stages = [1 : i32, 0 : i32]}
+  } {ttg.partition.stages = [1 : i32, 0 : i32], ttg.warp_specialize.tag = 0 : i32}
   tt.return
 }
 
@@ -277,7 +392,7 @@ tt.func @clone_then_capture(%arg0: i32) {
   scf.for %arg1 = %c0_i32 to %arg0 step %c1_i32  : i32 {
     // CHECK: "use"([[V]])
     "use"(%1) {ttg.partition = 1 : i32} : (tensor<4xi32, #blocked>) -> ()
-  } {ttg.partition.stages = [0 : i32, 1 : i32]}
+  } {ttg.partition.stages = [0 : i32, 1 : i32], ttg.warp_specialize.tag = 0 : i32}
   tt.return
 }
 
@@ -296,7 +411,7 @@ tt.func @still_has_ssa_deps(%lb: i32, %ub: i32, %step: i32) {
     %0 = "op_a"() {ttg.partition = 0} : () -> !ty
     // expected-note @below {{use at distance 0 in partition #1 here}}
     "op_b"(%0) {ttg.partition = 1} : (!ty) -> ()
-  } {ttg.partition.stages = [0, 1]}
+  } {ttg.partition.stages = [0, 1], ttg.warp_specialize.tag = 0 : i32}
   tt.return
 }
 
