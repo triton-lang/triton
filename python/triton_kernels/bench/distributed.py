@@ -194,7 +194,6 @@ def _apply_parallelism(
 
         # Filter for local experts only
         ep_rank = dist.get_rank() // TP
-        expt_indx -= ep_rank * chunk_size
         mask = (expt_indx // chunk_size) == ep_rank
         expt_scal = expt_scal.masked_fill(~mask, 0)
         expt_indx = expt_indx.masked_fill(~mask, chunk_size)
