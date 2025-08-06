@@ -77,6 +77,11 @@ Operation *wrapInMaskOp(RewriterBase &rewriter, Operation *op, Value pred);
 void resolveMaskOp(ModuleOp moduleOp,
                    DenseSet<triton::gpu::MaskOp> &peeledMaskOps);
 
+using ProcessPeeledEpilogueOpFn =
+    std::function<Operation *(RewriterBase &, Operation *, bool)>;
+ProcessPeeledEpilogueOpFn
+createProcessPeeledEpilogueFn(DenseSet<triton::gpu::MaskOp> &peeledMaskOps);
+
 // Return true if the given ForOp has the attribute
 // `tt.disallow_acc_multi_buffer` set to true.
 bool getDisallowAccMultiBuffer(scf::ForOp forOp);

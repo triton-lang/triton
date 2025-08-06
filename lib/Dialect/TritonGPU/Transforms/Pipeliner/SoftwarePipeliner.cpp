@@ -61,34 +61,7 @@ static bool hasMMAv5WaitsInLastStage(scf::ForOp forOp,
 
 static void expandLoops(ModuleOp moduleOp) {
   DenseSet<MaskOp> peeledMaskOps;
-  auto processPeeledEpilogueOp = [&](RewriterBase &rewriter, Operation *op,
-                                     bool isEpilogue) -> Operation * {
-    if (auto predOp = dyn_cast<triton::gpu::PredicateStageOp>(op)) {
-      if (isEpilogue) {
-        // Return false for the predicate of the peeled iteration
-        return rewriter.create<mlir::arith::ConstantIntOp>(
-            predOp.getLoc(), 0, predOp.getResult().getType());
-      } else {
-        if (predOp.getStage() == predOp.getMaxStage() - 1) {
-          return rewriter.create<mlir::arith::ConstantIntOp>(
-              predOp.getLoc(), 1, predOp.getResult().getType());
-        } else {
-          OpBuilder::InsertionGuard guard(rewriter);
-          rewriter.setInsertionPoint(op);
-          return triton::emitPredicateForStage(
-                     rewriter, predOp.getIv(), predOp.getUb(), predOp.getStep(),
-                     predOp.getMaxStage(), predOp.getStage())
-              .getDefiningOp();
-        }
-      }
-    }
-    if (auto maskOp = dyn_cast<triton::gpu::MaskOp>(op)) {
-      if (isEpilogue) {
-        peeledMaskOps.insert(maskOp);
-      }
-    }
-    return op;
-  };
+  auto processPeeledEpilogueOp = createProcessPeeledEpilogueFn(peeledMaskOps);
 
   SmallVector<scf::ForOp> loops;
   moduleOp->walk([&](scf::ForOp forOp) { loops.push_back(forOp); });
