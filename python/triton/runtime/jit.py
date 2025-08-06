@@ -588,7 +588,7 @@ class JITFunction(KernelInterface[T]):
         bound_args, specialization, options = binder(*args, **kwargs)
 
         # compute cache key
-        key = tuple(specialization) + tuple(sorted(options.items()))
+        key = (tuple(specialization), tuple(sorted(options.items())))
         kernel = kernel_cache.get(key, None)
 
         # Kernel is not cached; we have to compile.
