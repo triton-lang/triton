@@ -270,7 +270,7 @@ def pack_bitmatrix(
     BLOCK_SIZE_M: tl.constexpr,
     BLOCK_SIZE_K: tl.constexpr,
     sentinel: tl.constexpr,
-    reset_sentinel: tl.constexpr,
+    reset_sentinel: tl.constexpr = False,
 ):
     """
     Packs expt_indx into a bitmatrix.
@@ -325,6 +325,7 @@ def routing_triton(x, logits, n_expts_act, sm_first=False, expt_indx=None, n_row
         BLOCK_SIZE_M=BLOCK_SIZE_M,
         BLOCK_SIZE_K=BLOCK_SIZE_K,
         sentinel=chunk_size,
+        reset_sentinel=True,
     )
     bitmatrix_shape = [n_rows, n_cols * 32]
     bitmatrix_shape_max = [n_rows, None]
