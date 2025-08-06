@@ -4,6 +4,7 @@ import triton.language as tl
 from triton._filecheck import filecheck_test, run_filecheck_test, run_parser
 from triton.compiler.errors import CompilationError
 import pytest
+from typing import NamedTuple
 
 # ===-----------------------------------------------------------------------===#
 # Unit Tests
@@ -509,3 +510,25 @@ def test_return_in_while():
         kernel.warmup(grid=(1, ))
 
     assert "Cannot have `return` statements inside `while` or `for` statements in triton" in str(e.value)
+
+
+class TensorPtr(NamedTuple):
+    test: tl.constexpr
+
+
+class TestTuple(NamedTuple):
+    __test__ = False
+    test: TensorPtr
+
+
+@triton.jit
+def foo(test: TestTuple):
+    x: tl.constexpr = tl.constexpr(1)
+    for i in tl.range(x):
+        # Tests that it compiles and is usable.
+        tl.static_assert(test.test.test == 1)
+
+
+def test_tuple_constexpr():
+    test = TestTuple(test=TensorPtr(tl.constexpr(1)))
+    _ = foo.warmup(test, grid=(1, 0))

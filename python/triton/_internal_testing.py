@@ -147,7 +147,7 @@ def to_triton(x: np.ndarray, device, dst_type=None) -> Union[TensorWrapper, torc
 
 
 def str_to_triton_dtype(x: str) -> tl.dtype:
-    return tl.str_to_ty(type_canonicalisation_dict[x])
+    return tl.str_to_ty(type_canonicalisation_dict[x], None)
 
 
 def torch_dtype_name(dtype) -> str:
