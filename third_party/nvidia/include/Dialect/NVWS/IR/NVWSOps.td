@@ -61,17 +61,6 @@ def NVWS_ArefCreateOp : NVWS_Op<"aref.create", [
   let hasVerifier = 1;
 }
 
-def NVWS_ArefDestroyOp : NVWS_Op<"aref.destroy"> {
-  let summary = "Destroy an asynchronous reference.";
-  let description = [{
-    Destroy an asynchronous reference.
-  }];
-  let arguments = (ins NVWS_ArefType:$aref);
-  let assemblyFormat = [{
-    $aref attr-dict `:` type($aref)
-  }];
-}
-
 def NVWS_ArefGetEnterOp : NVWS_Op<"aref.get.enter"> {
   let summary = "Enter ArefGet region where the buffer can be used to read data";
   let description = [{ Enter a "region" where you can freely read from the buffer)
