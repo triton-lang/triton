@@ -93,13 +93,6 @@ class TensorDescHandle:
         for stride in self.strides[:-1]:
             assert stride.data.item() % 16 == 0, "stride must be 16-byte aligned"
         assert self.strides[-1].data.item() == 1, "last dim must be contiguous"
-        for i in range(self.ndim - 1):
-            stride = self.strides[i].data.item()
-            prev_stride = self.strides[i + 1].data.item()
-            prev_size = self.shape[i + 1].data.item()
-            assert stride >= prev_stride, "strides must be ordered largest to smallest"
-            assert (stride % prev_stride) == 0, "strides must be even multiples of smaller strides"
-            assert (stride // prev_stride) >= prev_size, "invalid stride"
 
     def materialize_pointers(self, offsets: List[TensorHandle]):
         assert len(offsets) == self.ndim
@@ -1136,7 +1129,7 @@ def _tuple_create(arg, contents):
 # TODO: wrap everything in triton tensors
 def _implicit_cvt(arg):
     if isinstance(arg, int):
-        ty = tl.str_to_ty(triton.runtime.jit.mangle_type(arg))
+        ty = tl.str_to_ty(triton.runtime.jit.mangle_type(arg), None)
         dtype = np.int32
         if -2**31 <= arg < 2**31:
             dtype = np.int32
@@ -1151,7 +1144,7 @@ def _implicit_cvt(arg):
         handle = TensorHandle(np.array([arg], dtype=dtype), ty)
         return tl.tensor(handle, ty)
     if hasattr(arg, "data_ptr"):
-        ty = tl.str_to_ty(triton.runtime.jit.mangle_type(arg))
+        ty = tl.str_to_ty(triton.runtime.jit.mangle_type(arg), None)
         handle = TensorHandle(np.array([arg.data_ptr()], dtype=np.uint64), ty)
         return tl.tensor(handle, ty)
     elif isinstance(arg, tuple):

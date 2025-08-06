@@ -22,7 +22,7 @@ def TritonGPU_Dialect : Dialect {
   let extraClassDeclaration = [{
     void registerTypes();
 
-    LinearLayout toLinearLayout(ArrayRef<int64_t> shape, Attribute layout, ArrayRef<int64_t> allocationShape);
+    LinearLayout toLinearLayout(ArrayRef<int64_t> shape, Attribute layout);
     LinearEncodingAttr toLinearEncoding(ArrayRef<int64_t> shape, Attribute layout);
 
     static int getNumCTAs(ModuleOp mod);

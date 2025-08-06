@@ -51,6 +51,10 @@ jobs:
             echo "new_commit=true" >> "$GITHUB_OUTPUT"
           fi
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
       - name: Patch setup.py
         if: ${{ steps.check-version.outputs.new_commit == 'true' }}
         run: |
@@ -61,6 +65,7 @@ jobs:
       - name: Build wheels
         if: ${{ steps.check-version.outputs.new_commit == 'true' }}
         run: |
+          python --version
           # Make sure cibuildwheel is updated to latest, this will enable latest python builds
           python3 -m pip install cibuildwheel --upgrade --user
           # Pass MAX_JOBS=4 because, at time of writing, the VM "only" has 32GB
@@ -68,6 +73,10 @@ jobs:
           # workers (2 * NUM_CPUs).
           export CIBW_ENVIRONMENT="MAX_JOBS=4 \
                   TRITON_BUILD_WITH_CLANG_LLD=1"
+
+          # required to build Python 3.14 with cibuildwheel 2.23.3
+          # todo: Need to update system Python to 3.11 and update cibuildwheel to latest
+
 
           # many_linux_2_28 image comes with GCC 12.2.1, but not clang.
           # With this install, it gets clang 16.0.6.
@@ -79,9 +88,9 @@ jobs:
             export CIBW_MANYLINUX_AARCH64_IMAGE="quay.io/pypa/manylinux_2_28_${{ matrix.config.arch }}:latest"
           fi
 
-          export CIBW_BUILD="cp3{9,10,11,12,13,13t}-manylinux_${{ matrix.config.arch }}"
+          export CIBW_BUILD="cp3{9,10,11,12,13,13t,14,14t}-manylinux_${{ matrix.config.arch }}"
           export CIBW_SKIP="cp{35,36,37,38}-*"
-          export CIBW_FREE_THREADED_SUPPORT=1
+          export CIBW_ENABLE=cpython-freethreading
           python3 -m cibuildwheel . --output-dir wheelhouse
 
       - uses: actions/upload-artifact@v4

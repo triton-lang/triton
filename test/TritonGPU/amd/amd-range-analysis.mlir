@@ -621,7 +621,7 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 
 // CHECK-LABEL:   tt.func public @scalar_pointers
 module attributes {"ttg.num-warps" = 4 : i32} {
-  tt.func public @scalar_pointers(%arg0: !tt.ptr<i64>) attributes {noinline = false} {
+  tt.func public @scalar_pointers(%arg0: !tt.ptr<i64>) {
     %c0_i64 = arith.constant 0 : i64
     %c1_i32 = arith.constant 1 : i32
     %c100_i32 = arith.constant 100 : i32
@@ -1473,7 +1473,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
   // expected-remark@+3 {{arg 7: unsigned : [0, 4294967295] signed : [-2147483648, 2147483647]}}
   // expected-remark@+2 {{arg 8: unsigned : [1, 2147483647] signed : [1, 1023]}}
   // expected-remark@+1 {{arg 9: unsigned : [0, 4294967295] signed : [-2147483648, 2147483647]}}
-  tt.func public @buffer_stride(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f16>, %arg2: !tt.ptr<f16>, %arg3: i32, %arg4: i32, %arg5: i32, %arg6: i32, %arg7: i32, %arg8: i32, %arg9: i32) attributes {noinline = false} {
+  tt.func public @buffer_stride(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f16>, %arg2: !tt.ptr<f16>, %arg3: i32, %arg4: i32, %arg5: i32, %arg6: i32, %arg7: i32, %arg8: i32, %arg9: i32) {
     %c1024_i32 = arith.constant 1024 : i32
     %c48_i32 = arith.constant 48 : i32
     %c32_i32 = arith.constant 32 : i32
@@ -1556,7 +1556,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx90a", "ttg.threads-per-warp" = 64 : i32} {
   // CHECK-LABEL: zero_divisor_for_loop_step
   // expected-remark@+1 {{arg 2: unsigned : [0, 4294967295] signed : [-2147483648, 2147483647]}}
-  tt.func public @zero_divisor_for_loop_step(%arg0: !tt.ptr<f32>, %arg1: !tt.ptr<f32>, %arg2: i32) attributes {noinline = false} {
+  tt.func public @zero_divisor_for_loop_step(%arg0: !tt.ptr<f32>, %arg1: !tt.ptr<f32>, %arg2: i32) {
     %c127_i32 = arith.constant 127 : i32
     %c128_i32 = arith.constant 128 : i32
     %c32_i32 = arith.constant 32 : i32

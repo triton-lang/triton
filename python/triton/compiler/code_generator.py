@@ -12,7 +12,7 @@ from typing import Any, Callable, Dict, Optional, Tuple, Type, Union, Iterable, 
 
 from .. import knobs, language
 from .._C.libtriton import ir, gluon_ir
-from ..language import constexpr, str_to_ty, tensor
+from ..language import constexpr, str_to_ty, tensor, tuple as tl_tuple
 from ..language.core import _unwrap_if_constexpr, base_value, base_type
 from ..runtime.jit import get_jit_fn_file_line, get_full_name
 # ideally we wouldn't need any runtime component
@@ -528,6 +528,21 @@ class CodeGenerator(ast.NodeVisitor):
         elts = language.tuple([self.visit(elt) for elt in node.elts])
         return elts
 
+    def visit_ListComp(self, node: ast.ListComp):
+        if len(node.generators) != 1:
+            raise ValueError("nested comprehensions are not supported")
+
+        comp = node.generators[0]
+        iter = self.visit(comp.iter)
+        if not isinstance(iter, tl_tuple):
+            raise NotImplementedError("only tuple comprehensions are supported")
+
+        results = []
+        for item in iter:
+            self.set_value(comp.target.id, item)
+            results.append(self.visit(node.elt))
+        return tl_tuple(results)
+
     # By design, only non-kernel functions can return
     def visit_Return(self, node):
         ret_value = self.visit(node.value)
@@ -656,9 +671,7 @@ class CodeGenerator(ast.NodeVisitor):
                 self.assignTarget(target, value.values[i])
             return
         if isinstance(target, ast.Attribute):
-            base = self.visit(target.value)
-            setattr(base, target.attr, value)
-            return
+            raise NotImplementedError("Attribute assignment is not supported in triton")
         assert isinstance(target, ast.Name)
         self.set_value(self.visit(target), value)
 
@@ -1052,6 +1065,10 @@ class CodeGenerator(ast.NodeVisitor):
                 self.local_defs[name] = val
                 self._maybe_set_loc_to_name(val, name)
             cond = self.visit(node.test)
+            if isinstance(cond, language.condition):
+                if cond.disable_licm:
+                    while_op.set_attr("llvm.loop_annotation", self.builder.get_disable_loop_licm_attr())
+                cond = cond.condition
             self.builder.set_insertion_point_to_end(before_block)
             # create ConditionOp: e.g., scf.condition(%cond) %arg0, %arg1, ...
             self.builder.create_condition_op(cond.handle, block_args)
@@ -1094,10 +1111,7 @@ class CodeGenerator(ast.NodeVisitor):
         return lhs[slices]
 
     def visit_Subscript_Store(self, node, value):
-        assert isinstance(node.ctx, ast.Store)
-        lhs = self.visit(node.value)
-        slices = self.visit(node.slice)
-        self.call_Method(node, lhs.__setitem__, lhs, [slices, value], {})
+        raise NotImplementedError("__setitem__ is not supported in triton")
 
     def visit_Subscript(self, node):
         return self.visit_Subscript_Load(node)
@@ -1123,6 +1137,7 @@ class CodeGenerator(ast.NodeVisitor):
         disallow_acc_multi_buffer = False
         flatten = False
         warp_specialize = False
+        disable_licm = False
         if IteratorClass is language.range:
             iterator = IteratorClass(*iter_args, **iter_kwargs)
             # visit iterator arguments
@@ -1136,6 +1151,7 @@ class CodeGenerator(ast.NodeVisitor):
             disallow_acc_multi_buffer = iterator.disallow_acc_multi_buffer
             flatten = iterator.flatten
             warp_specialize = iterator.warp_specialize
+            disable_licm = iterator.disable_licm
         elif IteratorClass is range:
             # visit iterator arguments
             # note: only `range` iterator is supported now
@@ -1192,6 +1208,8 @@ class CodeGenerator(ast.NodeVisitor):
                 for_op.set_attr("tt.flatten", self.builder.get_unit_attr())
             if warp_specialize:
                 for_op.set_attr("tt.warp_specialize", self.builder.get_unit_attr())
+            if disable_licm:
+                for_op.set_attr("llvm.loop_annotation", self.builder.get_disable_loop_licm_attr())
 
             self.scf_stack.append(node)
             for_op_body = for_op.get_body(0)
@@ -1538,9 +1556,16 @@ class CodeGenerator(ast.NodeVisitor):
 
 def ast_to_ttir(fn, src, context, options, codegen_fns, module_map, module=None):
     arg_types = [None] * len(fn.arg_names)
-    for k, v in src.signature.items():
-        idx = fn.arg_names.index(k)
-        arg_types[idx] = str_to_ty(v)
+    const_iter = iter(src.constants.items())
+    kc, vc = next(const_iter, (None, None))
+
+    for i, (ks, v) in enumerate(src.signature.items()):
+        idx = fn.arg_names.index(ks)
+        cexpr = None
+        if kc is not None and kc[0] == i:
+            cexpr = vc
+            kc, vc = next(const_iter, (None, None))
+        arg_types[idx] = str_to_ty(v, cexpr)
     prototype = ASTFunction([], arg_types, src.constants, src.attrs)
     file_name, begin_line = get_jit_fn_file_line(fn)
     # query function representation

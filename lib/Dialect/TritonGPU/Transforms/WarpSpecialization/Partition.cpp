@@ -123,7 +123,12 @@ FailureOr<WarpSchedule> WarpSchedule::deserialize(scf::ForOp loop) {
   if (!stages)
     return failure();
 
+  auto tag = loop->getAttrOfType<IntegerAttr>(kWarpSpecializeTagAttrName);
+  if (!tag)
+    return failure();
+
   WarpSchedule result;
+  result.tag = tag.getInt();
   for (auto [idx, attr] : llvm::enumerate(stages)) {
     auto stage = dyn_cast<IntegerAttr>(attr);
     if (!stage || stage.getInt() < 0) {

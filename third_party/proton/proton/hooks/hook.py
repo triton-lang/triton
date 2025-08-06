@@ -77,8 +77,9 @@ class HookManager:
         deactivated_hooks = set()
         for session in sessions:
             for hook in HookManager.session_hooks[session]:
+                if hook in HookManager.active_hooks:
+                    deactivated_hooks.add(hook)
                 HookManager.session_hooks[session][hook] = False
-                deactivated_hooks.add(hook)
 
         # Check if any other sessions rely on this hook
         for hook in deactivated_hooks:
@@ -102,10 +103,10 @@ class HookManager:
 
     @staticmethod
     def unregister(session: Optional[int] = None) -> None:
-        if session and session not in HookManager.session_hooks:
+        if session is not None and session not in HookManager.session_hooks:
             return
 
-        if not session:
+        if session is None:
             for hook in HookManager.active_hooks:
                 hook.deactivate()
             HookManager.active_hooks.clear()

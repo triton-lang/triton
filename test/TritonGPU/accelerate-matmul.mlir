@@ -160,7 +160,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 #blocked3 = #ttg.blocked<{sizePerThread = [1, 2, 2], threadsPerWarp = [1, 4, 8], warpsPerCTA = [2, 2, 1], order = [2, 1, 0]}>
 module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // CHECK: kernel_
-  tt.func public @kernel_() attributes {noinline = false} {
+  tt.func public @kernel_() {
     %cst = arith.constant dense<0.000000e+00> : tensor<2x16x16xf32, #blocked>
     %cst_0 = arith.constant dense<0.000000e+00> : tensor<16x16xf32, #blocked1>
     %0 = ttg.convert_layout %cst_0 : tensor<16x16xf32, #blocked1> -> tensor<16x16xf32, #ttg.dot_op<{opIdx = 0, parent = #blocked1}>>

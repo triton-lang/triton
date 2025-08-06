@@ -9,6 +9,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/Transforms/DecomposeScaledBlocked.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "llvm/ADT/TypeSwitch.h"
 
@@ -685,7 +686,9 @@ public:
       // Don't need to covert int8 holding mxfp4--the upcast_mxfp op can
       // take int8 tensor as input.
       if (type == ScaleDotElemType::BF16 || type == ScaleDotElemType::FP16 ||
-          type == ScaleDotElemType::E2M1)
+          type == ScaleDotElemType::E2M1 ||
+          (mfmaVersion == 4 &&
+           (type == ScaleDotElemType::E4M3 || type == ScaleDotElemType::E5M2)))
         return v;
 
       auto upcastedType = RankedTensorType::get(
@@ -1434,6 +1437,11 @@ struct TritonAMDGPUAccelerateMatmulPass
           /*benefit=*/2);
       break;
     case ISAFamily::RDNA3:
+      // Only gfx12 is supported for now
+      if (getWmmaVersion(archGenerationName) == 2) {
+        ttg::populateDecomposeScaledBlockedPatterns(mfmaPatterns,
+                                                    /*benefit=*/3);
+      }
       mfmaPatterns.add<::BlockedToWMMA>(
           context, getWmmaVersion(archGenerationName), matrixInstructionSize,
           /*benefit=*/2);

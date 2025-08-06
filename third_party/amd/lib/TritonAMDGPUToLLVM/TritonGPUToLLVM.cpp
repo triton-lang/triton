@@ -23,6 +23,7 @@
 #include "triton/Analysis/Membar.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
+#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
@@ -203,6 +204,8 @@ struct ConvertTritonAMDGPUToLLVM
                                                           patterns, AMDBenefit);
     mlir::triton::AMD::populateUpcastMXFPToLLVMPatterns(typeConverter, patterns,
                                                         targetInfo, AMDBenefit);
+    mlir::triton::AMD::populateFp4ToFpToLLVMPatterns(typeConverter, patterns,
+                                                     AMDBenefit);
 
     // TODO(thomas): this should probably be done in a separate step to not
     // interfere with our own lowering of arith ops. Add arith/math's patterns
@@ -230,6 +233,8 @@ struct ConvertTritonAMDGPUToLLVM
     if (failed(applyPartialConversion(mod, convTarget, std::move(patterns)))) {
       return signalPassFailure();
     }
+
+    fixUpLoopAnnotation(mod);
   }
 
 private:
