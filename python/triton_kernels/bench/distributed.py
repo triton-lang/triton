@@ -228,7 +228,7 @@ def routing_torch(x, logits, n_expts_act, sm_first=False, expt_indx=None, n_rows
 
     chunk_size = n_expts_tot // EP
 
-    expt_scal, expt_indx, x, ep_indx, output_split_sizes = _apply_parallelism(expt_scal, expt_indx, x, chunk_size,
+    expt_scal, expt_indx, ep_indx, x, output_split_sizes = _apply_parallelism(expt_scal, expt_indx, x, chunk_size,
                                                                               EP=EP, TP=TP)
 
     # Flatten topk data
@@ -302,7 +302,7 @@ def routing_triton(x, logits, n_expts_act, sm_first=False, expt_indx=None, n_row
 
     chunk_size = n_expts_tot // EP
 
-    expt_scal, expt_indx, x, ep_indx, output_split_sizes = _apply_parallelism(expt_scal, expt_indx, x, chunk_size,
+    expt_scal, expt_indx, ep_indx, x, output_split_sizes = _apply_parallelism(expt_scal, expt_indx, x, chunk_size,
                                                                               EP=EP, TP=TP)
 
     # Recover bitmatrix for local experts
