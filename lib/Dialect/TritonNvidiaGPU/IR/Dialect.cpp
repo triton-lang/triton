@@ -256,9 +256,8 @@ LogicalResult TensorMemoryEncodingAttr::verify(
   if (blockM != 64 && blockM != 128) {
     return emitError() << "blockM must be 64 or 128 but got " << blockM;
   }
-  if (!llvm::isPowerOf2_32(blockN) || blockN > 512) {
-    return emitError() << "blockN must be a power of 2 and <= 512 but got "
-                       << blockN;
+  if (!llvm::isPowerOf2_32(blockN)) {
+    return emitError() << "blockN must be a power of 2 but got " << blockN;
   }
   if (!unpacked && blockN < 2) {
     return emitError() << "blockN must be at least 2 for packed tensor memory";
