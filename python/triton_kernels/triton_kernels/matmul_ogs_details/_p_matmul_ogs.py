@@ -123,7 +123,7 @@ def init_output_rows(ScatterSrcIndx, num_idxs,
                      BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, SPLIT_K: tl.constexpr,
                      GROUP_M: tl.constexpr, NUM_SMS: tl.constexpr,
                      N_EXPTS_ACT: tl.constexpr, ACTIVATION_REDUCTION_N: tl.constexpr):
-    if HAS_FUSED_SCATTER and N_EXPTS_ACT == 1:
+    if HAS_FUSED_SCATTER:# and N_EXPTS_ACT == 1:
         # Iterate with reversed pids so that later pids will get more tiles if the number of
         # tiles isn't evenly divisible by the number of SMs.
         # The main loop after this iterates in the forward direction such that earlier
