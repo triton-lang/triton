@@ -49,8 +49,8 @@ class AllArgSpecializer:
             name="__triton_specialize_all",
             library_dirs=library_dirs(),
             include_dirs=include_dirs,
-            libraries=[],
-            ccflags=["-lstdc++", "-std=c++17", "-g"],
+            libraries=["stdc++"],
+            ccflags=["-std=c++17"],
             tmp_suffix=".cpp",
         )
 

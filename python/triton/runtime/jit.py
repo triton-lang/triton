@@ -23,8 +23,8 @@ from triton._C.libtriton import get_cache_invalidating_env_vars
 TRITON_MODULE = __name__[:-len(".runtime.jit")]
 
 T = TypeVar("T")
-use_inline_specialization = True
-use_full_native_specialize_impl = False
+use_inline_specialization = False
+use_native_specialize_impl = True
 
 # -----------------------------------------------------------------------------
 # Dependencies Finder
@@ -325,7 +325,7 @@ def create_specialize_impl(specialize_extra):
     from triton.experimental.gluon.nvidia.hopper import TensorDescriptor as GluonTensorDescriptor
     from ._specialize import SimpleArgSpecializer, AllArgSpecializer
 
-    if use_full_native_specialize_impl:
+    if use_native_specialize_impl:
         specializer = AllArgSpecializer(specialize_extra)
         return specializer.specialize_impl
 
@@ -525,20 +525,13 @@ def create_function_from_signature(sig, kparams, backend):
             specializations += src
             specializations += "\n"
 
-        # pre-allocate params and specialization (TODO check validity)
-        params = {name: None for name in sig.parameters.keys()}
-        specialization = [None] * len(sig.parameters)
-
-        params_map = ""
-        for name in sig.parameters.keys():
-            params_map += f"\n    params[{name}]: {name}"
-
         # compute argument string for a given parameter
         arg = lambda x: x[0] if x[1].default is inspect.Parameter.empty else f"{x[0]}=default_{x[0]}"
         # Join all arguments into a function definition string
         func_body = f"""
 def dynamic_func({", ".join(list(map(arg, sig.parameters.items())) + ["**options"])}):
-    {params_map}
+    params = {{{', '.join([f"'{name}': {name}" for name in sig.parameters.keys()])}}}
+    specialization = [None] * {len(sig.parameters)}
     {specializations}
     return params, specialization, options
 """
@@ -548,8 +541,6 @@ def dynamic_func({", ".join(list(map(arg, sig.parameters.items())) + ["**options
         func_namespace["specialize_int"] = specialize_int
         func_namespace["specialize_tensor"] = specialize_tensor
         func_namespace["dtype2str"] = dtype2str
-        func_namespace["specialization"] = specialization
-        func_namespace["params"] = params
         func_namespace["canonicalize_dtype"] = canonicalize_dtype
         func_namespace["TensorDescriptor"] = TensorDescriptor
         func_namespace["GluonTensorDescriptor"] = GluonTensorDescriptor
