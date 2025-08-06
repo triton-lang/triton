@@ -20,6 +20,7 @@ namespace tt = triton;
 namespace ttg = triton::gpu;
 namespace ttng = triton::nvidia_gpu;
 namespace gluon = mlir::triton::gluon;
+namespace ttag = mlir::triton::amdgpu;
 
 // Helper to check if an MLIR type or attribute has a verifier method.
 template <typename AttrOrType>
@@ -261,7 +262,8 @@ void init_gluon_ir(py::module &&m) {
              auto ctx = self.getContext();
              return self.getChecked<ttg::MemDescType>(
                  shape, elementType, layout,
-                 ttg::SharedMemorySpaceAttr::get(ctx), /*mutableMemory=*/true,
+                 ttg::SharedMemorySpaceAttr::get(ctx),
+                 /*mutableMemory=*/true,
                  /*allocShape=*/allocShape);
            })
       .def("get_tensor_mem_desc_ty",
@@ -271,7 +273,8 @@ void init_gluon_ir(py::module &&m) {
              auto ctx = self.getContext();
              return self.getChecked<ttg::MemDescType>(
                  shape, elementType, layout,
-                 ttng::TensorMemorySpaceAttr::get(ctx), /*mutableMemory=*/true,
+                 ttng::TensorMemorySpaceAttr::get(ctx),
+                 /*mutableMemory=*/true,
                  /*allocShape=*/allocShape);
            })
       .def("get_blocked_layout",
@@ -431,8 +434,8 @@ void init_gluon_ir(py::module &&m) {
               tt::CacheModifier cacheModifier,
               tt::EvictionPolicy evictionPolicy, bool isVolatile) {
              self.create<ttg::AsyncCopyGlobalToLocalOp>(
-                 pointer, smem, mask, /*other*/ Value{}, cacheModifier,
-                 evictionPolicy, isVolatile);
+                 pointer, smem, mask,
+                 /*other*/ Value{}, cacheModifier, evictionPolicy, isVolatile);
            })
       .def("create_async_copy_mbarrier_arrive",
            [](GluonOpBuilder &self, Value mbarrier, bool incrementCount) {
@@ -649,11 +652,24 @@ void init_gluon_ir(py::module &&m) {
              return self.create<ttg::WarpSpecializeOp>(
                  resultTypes, explicitCaptures, partitionNumWarps);
            })
+      .def("create_buffer_load",
+           [](GluonOpBuilder &self, Type resultType, Value ptr, Value offsets,
+              Value mask, Value other, tt::CacheModifier cache) -> Value {
+             return self.create<ttag::BufferLoadOp>(resultType, ptr, offsets,
+                                                    Value() /*stride*/, cache,
+                                                    mask, other);
+           })
+      .def("create_buffer_store",
+           [](GluonOpBuilder &self, Value storedValue, Value ptr, Value offsets,
+              Value mask, tt::CacheModifier cache) {
+             self.create<ttag::BufferStoreOp>(storedValue, ptr, offsets,
+                                              Value() /*stride*/, cache, mask);
+           })
       .def("create_buffer_load_to_local",
            [](GluonOpBuilder &self, Value dest, Value ptr, Value offsets,
               Value mask, Value other, Value stride,
               tt::CacheModifier cacheModifier) {
-             self.create<triton::amdgpu::BufferLoadToLocalOp>(
+             self.create<ttag::BufferLoadToLocalOp>(
                  dest, ptr, offsets, mask, other, stride, cacheModifier);
            });
 

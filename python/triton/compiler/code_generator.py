@@ -1556,9 +1556,16 @@ class CodeGenerator(ast.NodeVisitor):
 
 def ast_to_ttir(fn, src, context, options, codegen_fns, module_map, module=None):
     arg_types = [None] * len(fn.arg_names)
-    for k, v in src.signature.items():
-        idx = fn.arg_names.index(k)
-        arg_types[idx] = str_to_ty(v)
+    const_iter = iter(src.constants.items())
+    kc, vc = next(const_iter, (None, None))
+
+    for i, (ks, v) in enumerate(src.signature.items()):
+        idx = fn.arg_names.index(ks)
+        cexpr = None
+        if kc is not None and kc[0] == i:
+            cexpr = vc
+            kc, vc = next(const_iter, (None, None))
+        arg_types[idx] = str_to_ty(v, cexpr)
     prototype = ASTFunction([], arg_types, src.constants, src.attrs)
     file_name, begin_line = get_jit_fn_file_line(fn)
     # query function representation
