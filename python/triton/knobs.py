@@ -412,6 +412,7 @@ class JITHook(Protocol):
 class runtime_knobs(base_knobs):
     interpret: env_bool = env_bool("TRITON_INTERPRET")
     debug: env_bool = env_bool("TRITON_DEBUG")
+    legacy_cache_key: env_bool = env_bool("TRITON_LEGACY_CACHE_KEY")
     override_arch: env_opt_str = env_opt_str("TRITON_OVERRIDE_ARCH")
 
     launch_enter_hook: Optional[LaunchHook] = None

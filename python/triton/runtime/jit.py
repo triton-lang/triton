@@ -591,14 +591,22 @@ class JITFunction(KernelInterface[T]):
         key = tuple(specialization) + tuple(sorted(options.items()))
         kernel = kernel_cache.get(key, None)
 
-        # Kernel is not cached; we have to compile.
+        # first fall back to "old" style of computing cache key
+        # if then not found, we have to compile
         if kernel is None:
-            options, signature, constexprs, attrs = self._pack_args(backend, kwargs, bound_args, specialization,
-                                                                    options)
+            legacy_key = str(specialization) + str(options)
+            kernel = kernel_cache.get(legacy_key, None)
 
-            kernel = self._do_compile(key, signature, device, constexprs, options, attrs, warmup)
+            # Kernel is not cached; we have to compile.
             if kernel is None:
-                return None
+                options, signature, constexprs, attrs = self._pack_args(backend, kwargs, bound_args, specialization,
+                                                                        options)
+
+                compile_key = legacy_key if knobs.runtime.legacy_cache_key else key
+
+                kernel = self._do_compile(compile_key, signature, device, constexprs, options, attrs, warmup)
+                if kernel is None:
+                    return None
 
         # Check that used global values have not changed.
         not_present = object()
