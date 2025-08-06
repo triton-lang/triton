@@ -7,7 +7,7 @@ _Async commit group_
 Syntax:
 
 ```
-operation ::= `ttg.async_commit_group` ($inputTokens ^)?attr-dict
+operation ::= `ttg.async_commit_group` (`tokens` $inputTokens^)? attr-dict
 ```
 
 Traits: `VerifyTensorLayoutsTrait`
@@ -80,7 +80,7 @@ _Async wait_
 Syntax:
 
 ```
-operation ::= `ttg.async_wait` $asyncToken attr-dict
+operation ::= `ttg.async_wait` ($asyncToken^)? attr-dict
 ```
 
 Traits: `VerifyTensorLayoutsTrait`

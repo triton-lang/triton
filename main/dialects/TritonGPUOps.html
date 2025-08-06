@@ -230,7 +230,7 @@
 <h2><code class="docutils literal notranslate"><span class="pre">ttg.async_commit_group</span></code> (triton::gpu::AsyncCommitGroupOp)<a class="headerlink" href="#ttg-async-commit-group-triton-gpu-asynccommitgroupop" title="Link to this heading">¶</a></h2>
 <p><em>Async commit group</em></p>
 <p>Syntax:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `ttg.async_commit_group` ($inputTokens ^)?attr-dict
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `ttg.async_commit_group` (`tokens` $inputTokens^)? attr-dict
 </pre></div>
 </div>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
@@ -334,7 +334,7 @@ operands are the same as tt.load.</p>
 <h2><code class="docutils literal notranslate"><span class="pre">ttg.async_wait</span></code> (triton::gpu::AsyncWaitOp)<a class="headerlink" href="#ttg-async-wait-triton-gpu-asyncwaitop" title="Link to this heading">¶</a></h2>
 <p><em>Async wait</em></p>
 <p>Syntax:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `ttg.async_wait` $asyncToken attr-dict
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `ttg.async_wait` ($asyncToken^)? attr-dict
 </pre></div>
 </div>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
