@@ -158,7 +158,8 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP,
     matmuls = gf.filter("MATCH ('*', c) WHERE c.'name' =~ '.*matmul.*' AND c IS LEAF").dataframe
     bytes = matmuls["bytes"].sum()
     flops = sum(matmuls[[c for c in ["flops8", "flops16"] if c in matmuls.columns]].sum())
-    time = matmuls["time (ns)"].sum()
+    # Compute total time (incl. "not useful" work)
+    time = gf.filter("MATCH ('*', c) WHERE c IS LEAF").dataframe["time (ns)"].sum()
     device_type = matmuls["device_type"].iloc[0]
     device_id = matmuls["device_id"].iloc[0]
     device_info = info[device_type][device_id]
