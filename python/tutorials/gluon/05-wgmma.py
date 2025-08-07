@@ -140,8 +140,10 @@ def small_mma_kernel(a_desc, b_desc, c_desc, d_desc,  #
     # between `warpgroup_mma`, the wait, and uses of the result, we must pass
     # the result through the wait as one of its `deps` arguments.
     #
-    # WGMMA accesses shared memory through the async proxy, like TMAs. This
-    # means `fence_async_shared` is sometimes required to prevent hazards.
+    # WGMMA accesses shared memory through the async proxy, like TMAs. Because
+    # WGMMA and TMAs both use the async proxy, we don't need fence_async_shared
+    # to synchronize between them. However, if we do a load or store from
+    # registers to a descriptor also used by WGMMA, we need a fence.
     #
     # The completion of WGMMA operations is tracked by commit groups, like
     # async copies and TMA stores. Issuing a WGMMA operation implicitly commits
