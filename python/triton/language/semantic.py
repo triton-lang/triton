@@ -1,13 +1,14 @@
 from __future__ import annotations  # remove after python 3.11
 import warnings
 
-from typing import List, Optional, Sequence, Tuple, TypeVar, Generic, Type
+from typing import List, Optional, Sequence, Tuple, TypeVar, Generic, Type, Any
 import numbers
 
 from triton.runtime import driver
 
 from .._C.libtriton import ir
 from . import core as tl
+from .. import knobs
 
 T = TypeVar('T')
 TensorTy = TypeVar('TensorTy')
@@ -1467,8 +1468,21 @@ class TritonSemantic(Generic[TensorTy]):
             input_precision = "TF32x3"
         return getattr(ir.INPUT_PRECISION, input_precision)
 
-    def dot(self, lhs: TensorTy, rhs: TensorTy, acc: TensorTy, input_precision: Optional[str],
-            max_num_imprecise_acc: int, out_dtype: tl.dtype) -> TensorTy:
+    def dot_precheck(self, lhs: TensorTy, rhs: TensorTy, acc: TensorTy, input_precision: Optional[str],
+                     allow_tf32: bool, max_num_imprecise_acc: int, out_dtype: tl.dtype) -> Tuple[Any]:
+        input_precision = tl._unwrap_if_constexpr(input_precision)
+        allow_tf32 = tl._unwrap_if_constexpr(allow_tf32)
+        out_dtype = tl._unwrap_if_constexpr(out_dtype)
+        max_num_imprecise_acc = tl._unwrap_if_constexpr(max_num_imprecise_acc)
+        acc = tl._unwrap_if_constexpr(acc)
+
+        assert input_precision is None or allow_tf32 is None, "Only one of input_precision and allow_tf32 can be specified"
+        if input_precision is None:
+            supports_tf32 = "tf32" in self.builder.options.allowed_dot_input_precisions
+            input_precision = knobs.language.fp32_default or ("tf32" if
+                                                              (supports_tf32 and
+                                                               (allow_tf32 or allow_tf32 is None)) else "ieee")
+
         assert lhs.type.is_block() and rhs.type.is_block()
 
         if lhs.dtype.is_fp8() and rhs.dtype.is_fp8():
@@ -1510,13 +1524,14 @@ class TritonSemantic(Generic[TensorTy]):
         lhs_rank = len(lhs.shape)
         rhs_rank = len(rhs.shape)
         assert lhs_rank == rhs_rank == 2 or lhs_rank == rhs_rank == 3, f"Both inputs must be either 2D or 3D; (lhs: {lhs.shape} vs rhs: {rhs.shape})"
-        assert lhs.shape[-1].value == rhs.shape[
-            -2].value, f"First input shape ({lhs.shape}) and second input shape {rhs.shape} are not compatible for matmul (second index of first shape ({lhs.shape[-1].value}) must be equal to first index of second shape ({rhs.shape[-2].value})"
+        assert tl._unwrap_if_constexpr(lhs.shape[-1]) == tl._unwrap_if_constexpr(
+            rhs.shape[-2]
+        ), f"First input shape ({lhs.shape}) and second input shape {rhs.shape} are not compatible for matmul (second index of first shape ({lhs.shape[-1].value}) must be equal to first index of second shape ({rhs.shape[-2].value})"
         assert self.builder.codegen_fns.get(
             "min_dot_size") is not None, "target doesn't provide lower shape bounds for dot."
         min_dot_size = self.builder.codegen_fns["min_dot_size"](lhs.type, rhs.type)
-        assert lhs.shape[-2].value >= min_dot_size[0] and lhs.shape[-1].value >= min_dot_size[2] \
-            and rhs.shape[-1].value >= min_dot_size[1], \
+        assert tl._unwrap_if_constexpr(lhs.shape[-2]) >= min_dot_size[0] and tl._unwrap_if_constexpr(lhs.shape[-1]) >= min_dot_size[2] \
+            and tl._unwrap_if_constexpr(rhs.shape[-1]) >= min_dot_size[1], \
                 f"Input shapes should have M >= {min_dot_size[0]}, N >= {min_dot_size[1]} and K >= {min_dot_size[2]}"
         if lhs.type.scalar.is_int():
             assert lhs.type.scalar == tl.int8, "only int8 supported!"
@@ -1556,6 +1571,12 @@ class TritonSemantic(Generic[TensorTy]):
         else:
             if lhs.dtype.is_fp8() and rhs.dtype.is_fp8() and max_num_imprecise_acc > K:
                 raise ValueError(f"max_num_imprecise_acc ({max_num_imprecise_acc}) must be <= K ({K})")
+        return (lhs, rhs, acc_handle, input_precision, max_num_imprecise_acc, ret_ty)
+
+    def dot(self, lhs: TensorTy, rhs: TensorTy, acc: TensorTy, input_precision: Optional[str], allow_tf32: bool,
+            max_num_imprecise_acc: int, out_dtype: tl.dtype) -> TensorTy:
+        (lhs, rhs, acc_handle, input_precision, max_num_imprecise_acc,
+         ret_ty) = self.dot_precheck(lhs, rhs, acc, input_precision, allow_tf32, max_num_imprecise_acc, out_dtype)
 
         return self.tensor(
             self.builder.create_dot(lhs.handle, rhs.handle, acc_handle, input_precision, max_num_imprecise_acc), ret_ty)
