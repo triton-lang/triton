@@ -28,6 +28,7 @@ import torch
 import triton
 import importlib
 import sys
+from functools import partial
 from typing import Union
 from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
@@ -50,6 +51,13 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
     tcgen05_mma,
     tcgen05_commit,
 )
+
+if torch.cuda.is_available():
+    from triton._C.libtriton import nvidia
+    cublas_workspace = torch.empty(32 * 1024 * 1024, device="cuda", dtype=torch.uint8)
+    cublas = nvidia.cublas.CublasLt(cublas_workspace)
+else:
+    cublas = None
 
 t5 = importlib.import_module("05-wgmma")
 
@@ -614,6 +622,7 @@ def persistent_matmul_pipelined_kernel(a_desc, b_desc, c_desc, MMAImpl: gl.const
     K = a_desc.shape[1]
 
     # All buffers share the same liverange.
+    gl.static_assert(num_buffers >= 3, "expected at least 3 buffers")
     a_bufs = gl.allocate_shared_memory(dtype, [num_buffers] + a_desc.block_type.shape, a_desc.layout)
     b_bufs = gl.allocate_shared_memory(dtype, [num_buffers] + b_desc.block_type.shape, b_desc.layout)
     c_smem = gl.allocate_shared_memory(dtype, c_desc.block_type.shape, c_desc.layout)
@@ -634,9 +643,12 @@ def persistent_matmul_pipelined_kernel(a_desc, b_desc, c_desc, MMAImpl: gl.const
     off_n = pid_n * BLOCK_N
     for ki in gl.static_range(0, BLOCK_K * (num_buffers - 2), BLOCK_K):
         producer = async_load_operands(producer, a_desc, b_desc, off_m, off_n, ki, bars, a_bufs, b_bufs, num_buffers)
+    k = BLOCK_K * (num_buffers - 2)
+    producer = async_load_operands(producer, a_desc, b_desc, off_m, off_n, k, bars, a_bufs, b_bufs, num_buffers)
 
     for outer in range(num_tiles):
-        for k in range(BLOCK_K * (num_buffers - 2), K, BLOCK_K):
+        consumer, mma = async_mma(consumer, mma, bars, a_bufs, b_bufs, num_buffers)
+        for k in range(BLOCK_K * (num_buffers - 1), K, BLOCK_K):
             producer = async_load_operands(producer, a_desc, b_desc, off_m, off_n, k, bars, a_bufs, b_bufs, num_buffers)
             consumer, mma = async_mma(consumer, mma, bars, a_bufs, b_bufs, num_buffers)
 
@@ -654,6 +666,8 @@ def persistent_matmul_pipelined_kernel(a_desc, b_desc, c_desc, MMAImpl: gl.const
             producer = async_load_operands(producer, a_desc, b_desc, off_m, off_n, ki, bars, a_bufs, b_bufs,
                                            num_buffers, pred)
             consumer, mma = async_mma(consumer, mma, bars, a_bufs, b_bufs, num_buffers)
+        k = BLOCK_K * (num_buffers - 2)
+        producer = async_load_operands(producer, a_desc, b_desc, off_m, off_n, k, bars, a_bufs, b_bufs, num_buffers)
 
         mma = mma.wait_num_outstanding(0)
         c, mma = mma.take_result()
@@ -685,14 +699,47 @@ def persistent_matmul_pipelined(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, num_buffers,
 
 @pytest.mark.parametrize("M, N, K", [(208, 416, 304), (2000, 1000, 2000)])
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(64, 64, 64), (128, 256, 64)])
-@pytest.mark.parametrize("num_buffers", [2, 3])
+@pytest.mark.parametrize("num_buffers", [3, 4])
 @pytest.mark.parametrize("num_warps", [4, 8])
 @pytest.mark.parametrize("SchedulerImpl", schedulers)
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
 def test_persistent_matmul_pipelined(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, num_buffers, num_warps, SchedulerImpl):
+    if BLOCK_M == 128 and num_buffers == 4:
+        pytest.skip("Not enough shared memory for 4 buffers")
     torch.manual_seed(0)
     A = torch.randn(M, K, device="cuda", dtype=torch.float16)
     B = torch.randn(K, N, device="cuda", dtype=torch.float16)
     C = torch.empty(M, N, device="cuda", dtype=torch.float16)
     persistent_matmul_pipelined(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, num_buffers, num_warps, SchedulerImpl)
     torch.testing.assert_close(A @ B, C, rtol=1e-3, atol=1e-1)
+
+
+if __name__ == "__main__":
+    nonpersistent = partial(matmul_pipelined, BLOCK_M=128, BLOCK_N=256, BLOCK_K=64, num_buffers=3 if is_hopper else 4,
+                            num_warps=8 if is_hopper else 4)
+
+    persistent = partial(persistent_matmul, BLOCK_M=128, BLOCK_N=256, BLOCK_K=64, num_buffers=3 if is_hopper else 4,
+                         num_warps=8 if is_hopper else 4,
+                         SchedulerImpl=PersistentTileScheduler if is_hopper else GroupedPersistentTileScheduler(8))
+    persistent_pipelined = partial(
+        persistent_matmul_pipelined, BLOCK_M=128, BLOCK_N=256, BLOCK_K=64, num_buffers=3,
+        num_warps=8 if is_hopper else 4,
+        SchedulerImpl=PersistentTileScheduler if is_hopper else GroupedPersistentTileScheduler(8))
+
+    M, N = 8192, 8192
+    C = torch.empty(M, N, device="cuda", dtype=torch.float16)
+    print("K     nonpersistent persistent persistent_pipelined cublas")
+    for K in [2**i for i in range(9, 15)]:
+        A = torch.randn(M, K, device="cuda", dtype=torch.float16)
+        B = torch.randn(K, N, device="cuda", dtype=torch.float16)
+        BT = B.T.contiguous()
+        ms_a = triton.testing.do_bench_cudagraph(lambda: nonpersistent(A, B, C), rep=100)
+        ms_b = triton.testing.do_bench_cudagraph(lambda: persistent(A, B, C), rep=100)
+        ms_c = triton.testing.do_bench_cudagraph(lambda: persistent_pipelined(A, B, C), rep=100)
+        ms_d = triton.testing.do_bench(lambda: cublas.matmul(A, BT, C), rep=100)
+        flops = 2 * M * N * K
+        tflops_per_sec_a = flops * 1e-12 / (ms_a * 1e-3)
+        tflops_per_sec_b = flops * 1e-12 / (ms_b * 1e-3)
+        tflops_per_sec_c = flops * 1e-12 / (ms_c * 1e-3)
+        tflops_per_sec_d = flops * 1e-12 / (ms_d * 1e-3)
+        print(f"{K:>5} {tflops_per_sec_a:>8.2f} {tflops_per_sec_b:>8.2f} {tflops_per_sec_c:>8.2f} {tflops_per_sec_d:>8.2f}")
