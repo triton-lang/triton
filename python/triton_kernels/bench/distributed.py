@@ -501,7 +501,7 @@ def test_pack_bitmatrix():
         BLOCK_SIZE_K=BLOCK_SIZE_K,
         sentinel=sentinel,
     )
-    # prune the bitmatrix to remove dummy values
+    # Prune the bitmatrix to remove dummy values
     _routing_clear_bitmatrix[(n_rows, )](
         bitmatrix,
         bitmatrix.stride(0),
@@ -511,7 +511,8 @@ def test_pack_bitmatrix():
         BLOCK_N=128,
     )
 
-    bitmatrix = bitmatrix.cpu()
+    # Old pytorch version do not have "bitwise_and_cpu" not implemented for 'UInt32'
+    bitmatrix = bitmatrix.cpu().numpy()
 
     # Verify bit packing
     def is_bit_set(row, expert_id):
