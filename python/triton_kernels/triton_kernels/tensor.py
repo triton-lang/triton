@@ -76,37 +76,53 @@ class Storage:
         N, d = self.data.shape[-2:]
         return N * d * self.data.element_size()
 
-    def can_use_ragged_tma(self, mode):
-        if mode != "load":
-            return True
-        storage_n_bytes = self.data.untyped_storage().nbytes()
-        storage_off = self.data.storage_offset() - self._ragged_base_offset()
-        ret = storage_off >= 0
-        # if descriptor is defined to hold <= 128kB:
-        if storage_n_bytes <= 128 * 1024:
-            ret = ret and storage_n_bytes - storage_off >= 4 * 1024
-        else:
-            ret = ret and storage_n_bytes - storage_off >= 128 * 1024
-        return ret
-
-    def make_ragged_tma(self, block_shape, mode):
+    def make_ragged_store_tma(self, block_shape):
         assert self.data.is_contiguous()
         N, d = self.data.shape[-2:]
         shape = list(self.data.shape[:-2]) + [N + 1, N, d]
         strides = list(self.data.stride()[:-2]) + [d, d, 1]
         data_ptr = self.data.data_ptr() - self._ragged_base_offset()
         assert data_ptr > 0
-        assert self.can_use_ragged_tma(mode)
         block_shape = [1] * (len(shape) - 2) + block_shape
         return TensorDescriptor(TensorDescriptorPtr(data_ptr, self.data.dtype), shape, strides, block_shape)
+
+    def make_ragged_load_tma(self, block_shape, ragged_dim):
+        """
+        Given a 2- or 3-dimensional tensor T, this creates a 'ragged descriptor'
+        which behaves like a concatenation (along the first axis) of subarrays
+        of potentially unequal size.
+        The load_ragged and store_ragged device functions can be used to read
+        and write from subarrays T[batch_offset : batch_offset + batch_size]
+        with hardware bounds-checking preventing any sort of leakage outside
+        the subarray.
+        """
+        block_shape = list(block_shape)
+        tensor_shape = list(self.data.shape)
+        assert 2 <= len(tensor_shape) <= 3, "ragged tensors must have dimension 2 or 3"
+        assert len(tensor_shape) == len(block_shape), "block shape must match tensor shape"
+        max_int = 0x7fff0000
+        billion = 0x40000000  # == 2**30
+        assert tensor_shape[0] <= billion, "number of rows may not exceed 2**30"
+        # dims = list(range(len(tensor_shape)))
+        # dims[0], dims[ragged_dim] = dims[ragged_dim], dims[0]
+        # we prepend an extra two dimensions and rely on the fact that pointers
+        # have 64-bit wraparound semantics:
+        rd = ragged_dim
+        tma_stride = [2**34 - self.data.stride(rd), self.data.stride(rd)
+                      ] + [self.data.stride(i) for i in range(len(tensor_shape))]
+        tma_shape = [max_int, max_int] + [tensor_shape[i] for i in range(rd)
+                                          ] + [billion] + [tensor_shape[i] for i in range(rd + 1, len(tensor_shape))]
+        box_shape = [1, 1] + block_shape
+        return TensorDescriptor(self.data, tma_shape, tma_stride, box_shape)
 
     def make_tma(self, block_shape, mode, transpose=False):
         if mode in ["dense", "gather", "scatter"]:
             return self.make_dense_tma(block_shape, transpose)
         if mode == "ragged_load":
-            return self.make_ragged_tma(block_shape, "load")
+            ragged_dim = 1 if len(self.data.shape) == 3 else 0
+            return self.make_ragged_load_tma(block_shape, ragged_dim)
         if mode == "ragged_store":
-            return self.make_ragged_tma(block_shape, "store")
+            return self.make_ragged_store_tma(block_shape)
         raise ValueError(f"invalid mode: {mode}")
 
 

@@ -43,18 +43,6 @@ def _tma_load_2d(desc, offs, transpose: tl.constexpr = False):
     return res
 
 
-# Helper function to recreate a TMA desc with the same fields, but with a new pointer and optional new shape.
-@triton.jit
-def _update_tensor_desc(desc, ptr, shape=None):
-    return tl.make_tensor_descriptor(
-        ptr,
-        shape=shape or desc.shape,
-        # last dim must be constexpr 1; reflecting the old descriptor drops the constexpr
-        strides=desc.strides[:-1] + [tl.constexpr(1)],
-        block_shape=desc.block_shape,
-    )
-
-
 @triton.jit
 def _load_tile_attrs(
     tile_id, num_tiles, grid_n, grid_m,
@@ -152,6 +140,18 @@ def _make_device_tma_desc_workaround(desc, ptr):
         strides=desc.strides[:-1] + (1,),
         block_shape=desc.block_shape
     )
+
+@triton.jit
+def to_ragged_indices(batch_offset, batch_size, row):
+    """
+    Helper function for load_ragged and store_ragged.
+    """
+
+    billion = 0x40000000  # == 2**30
+    x = billion - batch_size + row
+    y = batch_offset + batch_size
+
+    return billion, y, x
 
 _matmul_ogs_repr = make_matmul_repr("_p_matmul_ogs", [0, 1, 2])
 @triton.jit(do_not_specialize=["TOKENS_PER_EXPT_FOR_ANNOTATION"],
@@ -288,7 +288,8 @@ def _p_matmul_ogs(
                 off_k_w_scales = pid_k * BLOCK_K_W_SCALES + ki * BLOCK_K_W_SCALES * SPLIT_K
             # load x
             if X_TMA_MODE == "ragged_load":
-                x = X.load([start_z, start_m + eM, NRowsX - eM + off_m, off_k_x])
+                c0, c1, c2 = to_ragged_indices(start_m, eM, off_m)
+                x = X.load([c0, c1, start_z, c2, off_k_x])
                 x = x.reshape(BLOCK_M, BLOCK_K)
             if X_TMA_MODE == "gather":
                 x = X.gather(offs_x_m, off_k_x)
