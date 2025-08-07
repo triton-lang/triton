@@ -680,7 +680,7 @@ def persistent_matmul_pipelined_kernel(a_desc, b_desc, c_desc, MMAImpl: gl.const
     producer = async_load_operands_stealb(producer, a_desc, b_desc, off_m, off_n, k, bars, a_bufs, b_bufs, STEALB,
                                           num_buffers)
 
-    for outer in range(num_tiles):
+    for _ in range(num_tiles):
         consumer, mma = async_mma_stealb(consumer, mma, bars, a_bufs, b_bufs, STEALB, num_buffers)
         if STEALB:
             # Wait for the epilogue before the first TMA load.
