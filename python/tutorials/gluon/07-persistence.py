@@ -72,6 +72,12 @@ if __name__ == "__main__" and not is_hopper_or_newer():
 
 profiling_with_ncu = len(sys.argv) > 1 and sys.argv[1] == "profile"
 
+
+def get_flops(ms, M, N, K):
+    flops = 2 * M * N * K
+    return flops * 1e-12 / (ms * 1e-3)
+
+
 # %%
 # In the previous two tutorials, we introduced tensor core operations for Hopper
 # and Blackwell NVIDIA GPUs. To make this tutorial more accessible, and to
@@ -304,9 +310,7 @@ if __name__ == "__main__" and not profiling_with_ncu:
         print(f"{BLOCK_K:>7} {num_buffers:>11} {num_warps:>9}", end=" ")
         fn = lambda: matmul_pipelined(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, num_buffers, num_warps)
         ms = triton.testing.do_bench_cudagraph(fn)
-        flops = 2 * M * N * K
-        tflops_per_sec = flops * 1e-12 / (ms * 1e-3)
-        print(f"{tflops_per_sec:8.2f}")
+        print(f"{get_flops(ms, M, N, K):8.2f}")
     print()
 
 # %%
@@ -465,9 +469,7 @@ if __name__ == "__main__" and not profiling_with_ncu:
         fn = lambda: persistent_matmul(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, num_buffers, num_warps,
                                        PersistentTileScheduler)
         ms = triton.testing.do_bench_cudagraph(fn)
-        flops = 2 * M * N * K
-        tflops_per_sec = flops * 1e-12 / (ms * 1e-3)
-        print(f"{tflops_per_sec:8.2f}")
+        print(f"{get_flops(ms, M, N, K):8.2f}")
     print()
 
 # %%
@@ -571,9 +573,7 @@ if __name__ == "__main__" and not profiling_with_ncu:
         fn = lambda: persistent_matmul(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, num_buffers, num_warps,
                                        GroupedPersistentTileScheduler(GROUP_SIZE_M))
         ms = triton.testing.do_bench_cudagraph(fn)
-        flops = 2 * M * N * K
-        tflops_per_sec = flops * 1e-12 / (ms * 1e-3)
-        print(f"{tflops_per_sec:>8.2f}")
+        print(f"{get_flops(ms, M, N, K):8.2f}")
     print()
 
 # %%
@@ -602,19 +602,47 @@ if __name__ == "__main__" and not profiling_with_ncu:
 # with 3 buffers, on Blackwell performance can suffer. There are 3 remedies:
 #
 # 1. Use gl.store which does not require shared memory but it cannot be
-#    pipelined.
+#    pipelined. However, the layout conversion requires shared memory.
 # 2. Break up the TMA store to multiple steps, allowing us to use smaller
 #    buffers, we will only be able to pipeline the last step.
 #    reduces the amount of overlap.
 # 3. Borrow one of the b_bufs.
 #
-# To start, let's just use 3 buffers on Blackwell. We will pipeline the TMA
-# store, loads, and an MMA across the outer loop.
+# For BLOCK_{M,N,K} = (128, 256, 64), one B buffer is half the size of the
+# accumulator, but we have enough memory to use 5 buffers for B just so that we
+# can steal two buffers for the epilogue, even though the inner loop only uses
+# 4 at a time.
+
+
+# Forked versions of async_load_operands and async_mma that support `stealb`.
+@gluon.jit
+def async_load_operands_stealb(producer, a_desc, b_desc, off_m, off_n, k, bars, a_bufs, b_bufs, stealb: gl.constexpr,
+                               num_buffers: gl.constexpr, pred=True):
+    index = producer % num_buffers
+    b_index = producer % (num_buffers + stealb)
+    producer += 1
+    bar = bars.index(index)
+    mbarrier.expect(bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes, pred)
+    tma.async_copy_global_to_shared(a_desc, [off_m, k], bar, a_bufs.index(index), pred)
+    tma.async_copy_global_to_shared(b_desc, [k, off_n], bar, b_bufs.index(b_index), pred)
+    return producer
+
+
+@gluon.jit
+def async_mma_stealb(consumer, mma, bars, a_bufs, b_bufs, stealb: gl.constexpr, num_buffers: gl.constexpr):
+    index = consumer % num_buffers
+    b_index = consumer % (num_buffers + stealb)
+    phase = consumer // num_buffers & 1
+    consumer += 1
+    mbarrier.wait(bars.index(index), phase)
+    mma = mma.wait_num_outstanding(0)
+    mma = mma.issue_async_mma(a_bufs.index(index), b_bufs.index(b_index))
+    return consumer, mma
 
 
 @gluon.jit
 def persistent_matmul_pipelined_kernel(a_desc, b_desc, c_desc, MMAImpl: gl.constexpr, SchedulerImpl: gl.constexpr,
-                                       num_buffers: gl.constexpr, num_warps: gl.constexpr):
+                                       num_buffers: gl.constexpr, STEALB: gl.constexpr, num_warps: gl.constexpr):
     BLOCK_M: gl.constexpr = c_desc.block_type.shape[0]
     BLOCK_N: gl.constexpr = c_desc.block_type.shape[1]
     BLOCK_K: gl.constexpr = a_desc.block_type.shape[1]
@@ -624,8 +652,12 @@ def persistent_matmul_pipelined_kernel(a_desc, b_desc, c_desc, MMAImpl: gl.const
     # All buffers share the same liverange.
     gl.static_assert(num_buffers >= 3, "expected at least 3 buffers")
     a_bufs = gl.allocate_shared_memory(dtype, [num_buffers] + a_desc.block_type.shape, a_desc.layout)
-    b_bufs = gl.allocate_shared_memory(dtype, [num_buffers] + b_desc.block_type.shape, b_desc.layout)
-    c_smem = gl.allocate_shared_memory(dtype, c_desc.block_type.shape, c_desc.layout)
+    # Add an extra B buffer when stealing.
+    b_bufs = gl.allocate_shared_memory(dtype, [num_buffers + STEALB] + b_desc.block_type.shape, b_desc.layout)
+    if not STEALB:
+        c_smem = gl.allocate_shared_memory(dtype, c_desc.block_type.shape, c_desc.layout)
+    else:
+        gl.static_assert(2 * BLOCK_N * BLOCK_K >= BLOCK_M * BLOCK_N, "B tile not large enough to steal")
     bars = gl.allocate_shared_memory(gl.int64, [num_buffers, 1], mbarrier.MBarrierLayout())
     for i in gl.static_range(num_buffers):
         mbarrier.init(bars.index(i), count=1)
@@ -642,15 +674,21 @@ def persistent_matmul_pipelined_kernel(a_desc, b_desc, c_desc, MMAImpl: gl.const
     off_m = pid_m * BLOCK_M
     off_n = pid_n * BLOCK_N
     for ki in gl.static_range(0, BLOCK_K * (num_buffers - 2), BLOCK_K):
-        producer = async_load_operands(producer, a_desc, b_desc, off_m, off_n, ki, bars, a_bufs, b_bufs, num_buffers)
+        producer = async_load_operands_stealb(producer, a_desc, b_desc, off_m, off_n, ki, bars, a_bufs, b_bufs, STEALB,
+                                              num_buffers)
     k = BLOCK_K * (num_buffers - 2)
-    producer = async_load_operands(producer, a_desc, b_desc, off_m, off_n, k, bars, a_bufs, b_bufs, num_buffers)
+    producer = async_load_operands_stealb(producer, a_desc, b_desc, off_m, off_n, k, bars, a_bufs, b_bufs, STEALB,
+                                          num_buffers)
 
     for outer in range(num_tiles):
-        consumer, mma = async_mma(consumer, mma, bars, a_bufs, b_bufs, num_buffers)
+        consumer, mma = async_mma_stealb(consumer, mma, bars, a_bufs, b_bufs, STEALB, num_buffers)
+        if STEALB:
+            # Wait for the epilogue before the first TMA load.
+            tma.store_wait(pendings=0)
         for k in range(BLOCK_K * (num_buffers - 1), K, BLOCK_K):
-            producer = async_load_operands(producer, a_desc, b_desc, off_m, off_n, k, bars, a_bufs, b_bufs, num_buffers)
-            consumer, mma = async_mma(consumer, mma, bars, a_bufs, b_bufs, num_buffers)
+            producer = async_load_operands_stealb(producer, a_desc, b_desc, off_m, off_n, k, bars, a_bufs, b_bufs,
+                                                  STEALB, num_buffers)
+            consumer, mma = async_mma_stealb(consumer, mma, bars, a_bufs, b_bufs, STEALB, num_buffers)
 
         epilogue_off_m = off_m
         epilogue_off_n = off_n
@@ -663,18 +701,26 @@ def persistent_matmul_pipelined_kernel(a_desc, b_desc, c_desc, MMAImpl: gl.const
         # Predicate the peeled prologue instead of using a conditional.
         pred = idx < num_tiles
         for ki in gl.static_range(0, BLOCK_K * (num_buffers - 2), BLOCK_K):
-            producer = async_load_operands(producer, a_desc, b_desc, off_m, off_n, ki, bars, a_bufs, b_bufs,
-                                           num_buffers, pred)
-            consumer, mma = async_mma(consumer, mma, bars, a_bufs, b_bufs, num_buffers)
+            producer = async_load_operands_stealb(producer, a_desc, b_desc, off_m, off_n, ki, bars, a_bufs, b_bufs,
+                                                  STEALB, num_buffers, pred)
+            consumer, mma = async_mma_stealb(consumer, mma, bars, a_bufs, b_bufs, STEALB, num_buffers)
         k = BLOCK_K * (num_buffers - 2)
-        producer = async_load_operands(producer, a_desc, b_desc, off_m, off_n, k, bars, a_bufs, b_bufs, num_buffers)
+        producer = async_load_operands_stealb(producer, a_desc, b_desc, off_m, off_n, k, bars, a_bufs, b_bufs, STEALB,
+                                              num_buffers)
 
         mma = mma.wait_num_outstanding(0)
         c, mma = mma.take_result()
-        tma.store_wait(pendings=0)
-        c_smem.store(c.to(dtype))
+        c = c.to(dtype)
+        if not STEALB:
+            c_buf = c_smem
+            tma.store_wait(pendings=0)
+        else:
+            # Steal the next 2 B buffers for the epilogue.
+            c_buf = b_bufs.index(producer % (num_buffers + STEALB))._reinterpret(dtype, c_desc.block_type.shape,
+                                                                                 c_desc.layout)
+        c_buf.store(c)
         fence_async_shared()
-        tma.async_copy_shared_to_global(c_desc, [epilogue_off_m, epilogue_off_n], c_smem)
+        tma.async_copy_shared_to_global(c_desc, [epilogue_off_m, epilogue_off_n], c_buf)
     tma.store_wait(pendings=0)
 
 
@@ -694,7 +740,7 @@ def persistent_matmul_pipelined(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, num_buffers,
     num_pid = triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N)
     grid = (min(num_sms, num_pid), )
     persistent_matmul_pipelined_kernel[grid](a_desc, b_desc, c_desc, MMAImpl, SchedulerImpl, num_buffers,
-                                             num_warps=num_warps)
+                                             STEALB=num_buffers == 4, num_warps=num_warps)
 
 
 @pytest.mark.parametrize("M, N, K", [(208, 416, 304), (2000, 1000, 2000)])
@@ -704,8 +750,6 @@ def persistent_matmul_pipelined(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, num_buffers,
 @pytest.mark.parametrize("SchedulerImpl", schedulers)
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
 def test_persistent_matmul_pipelined(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, num_buffers, num_warps, SchedulerImpl):
-    if BLOCK_M == 128 and num_buffers == 4:
-        pytest.skip("Not enough shared memory for 4 buffers")
     torch.manual_seed(0)
     A = torch.randn(M, K, device="cuda", dtype=torch.float16)
     B = torch.randn(K, N, device="cuda", dtype=torch.float16)
@@ -715,31 +759,85 @@ def test_persistent_matmul_pipelined(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, num_buf
 
 
 if __name__ == "__main__":
-    nonpersistent = partial(matmul_pipelined, BLOCK_M=128, BLOCK_N=256, BLOCK_K=64, num_buffers=3 if is_hopper else 4,
-                            num_warps=8 if is_hopper else 4)
-
-    persistent = partial(persistent_matmul, BLOCK_M=128, BLOCK_N=256, BLOCK_K=64, num_buffers=3 if is_hopper else 4,
-                         num_warps=8 if is_hopper else 4,
-                         SchedulerImpl=PersistentTileScheduler if is_hopper else GroupedPersistentTileScheduler(8))
-    persistent_pipelined = partial(
-        persistent_matmul_pipelined, BLOCK_M=128, BLOCK_N=256, BLOCK_K=64, num_buffers=3,
-        num_warps=8 if is_hopper else 4,
-        SchedulerImpl=PersistentTileScheduler if is_hopper else GroupedPersistentTileScheduler(8))
+    args = {
+        "BLOCK_M": 128,
+        "BLOCK_N": 256,
+        "BLOCK_K": 64,
+        "num_buffers": 3 if is_hopper else 4,
+        "num_warps": 8 if is_hopper else 4,
+    }
+    scheduler = PersistentTileScheduler if is_hopper else GroupedPersistentTileScheduler(8)
+    nonpersistent = partial(matmul_pipelined, **args)
+    persistent = partial(persistent_matmul, **args, SchedulerImpl=scheduler)
+    persistent_pipelined = partial(persistent_matmul_pipelined, **args, SchedulerImpl=scheduler)
 
     M, N = 8192, 8192
     C = torch.empty(M, N, device="cuda", dtype=torch.float16)
-    print("K     nonpersistent persistent persistent_pipelined cublas")
+    print("Benchmarking pipelined persistent")
+    print("=================================")
+    print("    K     nonpersistent    persistent   pipelined    cublas")
     for K in [2**i for i in range(9, 15)]:
+        as_flops = partial(get_flops, M=M, N=N, K=K)
         A = torch.randn(M, K, device="cuda", dtype=torch.float16)
         B = torch.randn(K, N, device="cuda", dtype=torch.float16)
         BT = B.T.contiguous()
-        ms_a = triton.testing.do_bench_cudagraph(lambda: nonpersistent(A, B, C), rep=100)
-        ms_b = triton.testing.do_bench_cudagraph(lambda: persistent(A, B, C), rep=100)
-        ms_c = triton.testing.do_bench_cudagraph(lambda: persistent_pipelined(A, B, C), rep=100)
-        ms_d = triton.testing.do_bench(lambda: cublas.matmul(A, BT, C), rep=100)
-        flops = 2 * M * N * K
-        tflops_per_sec_a = flops * 1e-12 / (ms_a * 1e-3)
-        tflops_per_sec_b = flops * 1e-12 / (ms_b * 1e-3)
-        tflops_per_sec_c = flops * 1e-12 / (ms_c * 1e-3)
-        tflops_per_sec_d = flops * 1e-12 / (ms_d * 1e-3)
-        print(f"{K:>5} {tflops_per_sec_a:>8.2f} {tflops_per_sec_b:>8.2f} {tflops_per_sec_c:>8.2f} {tflops_per_sec_d:>8.2f}")
+        r0 = as_flops(triton.testing.do_bench_cudagraph(lambda: nonpersistent(A, B, C)))
+        r1 = as_flops(triton.testing.do_bench_cudagraph(lambda: persistent(A, B, C)))
+        r2 = as_flops(triton.testing.do_bench_cudagraph(lambda: persistent_pipelined(A, B, C)))
+        r3 = as_flops(triton.testing.do_bench(lambda: cublas.matmul(A, BT, C)))
+        print(f"{K:>5} {r0:>17.2f} {r1:>13.2f} {r2:>11.2f} {r3:>9.2f}")
+
+# %%
+# Blackwell results:
+#
+#     K     nonpersistent    persistent   pipelined    cublas
+#   512            615.86        828.70      993.50   1108.11
+#  1024            997.16       1077.28     1173.31   1347.44
+#  2048           1152.74       1190.55     1133.37   1435.01
+#  4096           1164.05       1120.92     1143.47   1563.98
+#  8192           1160.93       1074.97     1185.40   1491.84
+# 16384           1185.62       1096.34     1296.93   1548.42
+#
+# Hopper results:
+#
+#     K     nonpersistent    persistent   pipelined    cublas
+#   512            491.74        485.01      539.88    588.15
+#  1024            554.24        575.02      602.52    588.32
+#  2048            573.87        594.72      625.91    615.58
+#  4096            609.36        630.10      640.48    646.30
+#  8192            629.44        646.22      661.57    661.11
+# 16384            653.79        660.29      670.00    665.49
+#
+# Persistent matmul, when pipelined, gains more performance relative to
+# nonpersistent at lower K, as we would expect. Load balancing can be
+# particularly difficult when the number of SMs do not evenly divide the number
+# of blocks, and with 8192x8192, we are smack in the middle with ~13.5 and
+# ~15.5 blocks per SM for Hopper and Blackwell, respectively.
+#
+# On Hopper, our pipelined kernel is competitive with cublas, even pulling ahead
+# for medium-sized K. However, cublas has a definitive advantage at low K. On
+# Blackwell, it's not even close: cublas is significantly faster.
+#
+# Some matmul performance takes:
+#
+# - On Hopper, software pipelining is sufficient to reach peak performance for
+#   medium and large K.
+# - cublas uses 2-CTA matmul, which uses distributed shared memory to perform
+#   achieve 256x256 instruction shape. 2-CTA support in Gluon is very spotty,
+#   but this enables cublas to more efficiently feed the MMA, which matters more
+#   on Blackwell due to the relative increase in MMA throughput vs TMA.
+# - cublas matmul is warp-specialized which is necessary on Hopper to fully
+#   overlap the epilogue at small K.
+# - Our Blackwell implementation is limited by the shared API we designed for
+#   Hopper and Blackwell: we are not double-buffering the accumulator and
+#   leaving 256 columns of TMEM unused.
+# - On Blackwell, we can use `clusterlaunchcontrol` to dynamically schedule
+#   work in conjunction with the GPU, getting the best of both worlds.
+#
+# Main takeaways:
+#
+# - Persistent kernels replace GPU block scheduling with a (typically) static
+#   static schedule. This allows more resource and compute coordination/overlap
+#   between blocks at the cost of losing dynamic scheduling.
+# - Persistent kernels tend to benefit smaller problem sizes, but still deliver
+#   benefits for large problem sizes.
