@@ -122,6 +122,7 @@ There are many different kinds of layouts in Gluon. Many of them are specialized
 layouts required for specific operations, like MMA instructions utilizing tensor
 cores. Some of them are used to represent the results of manipulating the shape
 of tensors via `expand_dims`, `broadcast`, `reshape`, `join`, `split`, etc.
+Please see TritonGPUAttrDefs.td for more information on layouts.
 
 Blocked layouts are typically the most common form of layouts in Gluon. They are
 primarily used to represent coalesced layouts for global memory accesses and to
@@ -306,7 +307,7 @@ if __name__ == "__main__" and _enabled("LDG_STG_instructions"):
 # global memory, which fits into a cache line. Note that PyTorch allocates
 # tensors aligned to 256 bytes.
 #
-# Increasing R to 2 or 4 widens each `LGD.E` instruction but slows down the
+# Increasing R to 2 or 4 widens each `LDG.E` instruction but slows down the
 # kernel, despite the number of 32B sector reads remaining unchanged. This can
 # be due to a variety of obscure hardware factors, but if you look at the
 # annotations printed to the left of the instructions, you can see one potential

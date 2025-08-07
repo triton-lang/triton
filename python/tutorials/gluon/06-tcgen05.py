@@ -460,6 +460,18 @@ def get_and_increment(counter):
 # processing two blocks at the same time. The kernel partitions along M. The
 # kernel expects BLOCK_M = BLOCK_N = 128 and double-buffers all inputs. If
 # BLOCK_K is 128, this kernel will use 192 KB of SMEM.
+#
+# The schedule the kernel uses is:
+#
+#     U1, B1, V1,
+#     U2, B2, V2,
+#     UB1, U3, VB1, B3, V3, ..., UB(N-2), UN, VB(N-2), BN, VN
+#     UB(N-1), VB(N-1)
+#     UBN, VBN,
+#     UB epilogue, VB epilogue
+#
+# This yields a 3:2 ratio of loads to MMAs. We can use the same mbarrier to
+# track U and B loads.
 @gluon.jit
 def blocked_matmul_pipelined_kernel(a_desc, b_desc, c_desc, num_warps: gl.constexpr):
     BLOCK_M: gl.constexpr = c_desc.block_type.shape[0]
@@ -483,17 +495,6 @@ def blocked_matmul_pipelined_kernel(a_desc, b_desc, c_desc, num_warps: gl.conste
     ub_tmem = allocate_tensor_memory(gl.float32, [BLOCK_M, BLOCK_N], tmem_layout)
     vb_tmem = allocate_tensor_memory(gl.float32, [BLOCK_M, BLOCK_N], tmem_layout)
 
-    # The schedule the kernel uses is:
-    #
-    #     U1, B1, V1,
-    #     U2, B2, V2,
-    #     UB1, U3, VB1, B3, V3, ..., UB(N-2), UN, VB(N-2), BN, VN
-    #     UB(N-1), VB(N-1)
-    #     UBN, VBN,
-    #     UB epilogue, VB epilogue
-    #
-    # This yields a 3:2 ratio of loads to MMAs. We can use the mbarrier to track
-    # U and B loads.
     mma_ub_bars = gl.allocate_shared_memory(gl.int64, [2, 1], mbarrier.MBarrierLayout())
     mma_vb_bars = gl.allocate_shared_memory(gl.int64, [2, 1], mbarrier.MBarrierLayout())
     load_ub_bars = gl.allocate_shared_memory(gl.int64, [2, 1], mbarrier.MBarrierLayout())

@@ -157,10 +157,10 @@ if __name__ == "__main__":
 
 # %%
 # Since performance is the main motiviation for writing kernels in Gluon, let's
-# spend explore that. First, we are not fully utilizing the parallelism of the
-# GPU. Each Gluon "program" corresponds to a thread block (CTA) on the GPU, and
-# while the GPU can execute many CTAs at once, in our kernel each CTA copies 1
-# element at a time.
+# spend time exploring that. First, we are not fully utilizing the parallelism
+# of the GPU. Each Gluon "program" corresponds to a thread block (CTA) on the
+# GPU, and while the GPU can execute many CTAs at once, in our kernel each CTA
+# copies 1 element at a time.
 #
 # In order to copy many elements at once, we need to load and store tiles, but
 # that will require picking a layout and understanding which layouts perform
