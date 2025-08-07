@@ -36,25 +36,6 @@ Effects: `MemoryEffects::Effect{}`
 | `result` | Asynchronous Reference |
 
 
-### `nvws.aref.destroy` (triton::nvws::ArefDestroyOp)
-
-_Destroy an asynchronous reference._
-
-Syntax:
-
-```
-operation ::= `nvws.aref.destroy` $aref attr-dict `:` type($aref)
-```
-
-Destroy an asynchronous reference.
-
-#### Operands:
-
-| Operand | Description |
-| :-----: | ----------- |
-| `aref` | Asynchronous Reference |
-
-
 ### `nvws.aref.get.enter` (triton::nvws::ArefGetEnterOp)
 
 _Enter ArefGet region where the buffer can be used to read data_
