@@ -252,7 +252,7 @@ def _finalize_matmul(
         if NumRows.dtype.is_ptr():
             NumRows = tl.load(NumRows)
 
-    if FinalizeScatterIdxs is not None or (ScatterSrcIndx is not None): # and EXPT_PER_TOK > 1):
+    if FinalizeScatterIdxs is not None or ScatterSrcIndx is not None:
         n_active_experts = 0
     else:
         n_active_experts: tl.constexpr = EXPT_PER_TOK
@@ -266,7 +266,7 @@ def _finalize_matmul(
             row = tl.load(FinalizeScatterIdxs + pid_m)
             src_idxs = tl.load(FinalizeScatterIdxs + M + src_offs)
             n_active_experts = tl.sum((src_idxs != -1).to(tl.int32))
-        elif ScatterSrcIndx is not None:# and EXPT_PER_TOK > 1:
+        elif ScatterSrcIndx is not None:
             row = pid_m
             src_idxs = tl.load(ScatterSrcIndx + src_offs)
             n_active_experts = tl.sum((src_idxs != -1).to(tl.int32))

@@ -146,9 +146,9 @@ def init_preprocessing_features(w, gather_indx, precision_config, opt_flags):
         swap_xw = precision_config.weight_scale is not None and opt_flags.block_m <= 64 and opt_flags.is_persistent
     return PreprocessingFeatures(swap_xw, unfuse_gather)
 
-def apply_preprocessing_features(x, w, gather_indx, scatter_indx, routing_data, opt_flags, preprocessing_features):
+def apply_preprocessing_features(x, w, gather_indx, scatter_indx, routing_data, opt_flags, preprocessing_features, postprocessing_features):
     # fused scatter scratchpad
-    has_fused_scatter_scratchpad = opt_flags.fused_scatter # and routing_data.n_expts_act > 1
+    has_fused_scatter_scratchpad = opt_flags.fused_scatter and routing_data.n_expts_act > 1
     if has_fused_scatter_scratchpad:
         M = scatter_indx.src_indx.shape[0]
         writeback_idxs = torch.zeros((M,), dtype=torch.int32, device=x.device)
@@ -165,10 +165,6 @@ def apply_preprocessing_features(x, w, gather_indx, scatter_indx, routing_data, 
             BLOCK_M=BLOCK_M,
             N_EXPTS_ACT=routing_data.n_expts_act,
         )
-    # elif scatter_indx is not None and routing_data.n_expts_act == 1:
-    #     writeback_idxs = scatter_indx.dst_indx
-    #     writeback_size = scatter_indx.dst_indx.shape[0]
-    #     finalize_scatter_idxs = None
     else:
         writeback_idxs, writeback_size, finalize_scatter_idxs = None, None, None
     # preprocess gather if cannot be fused
@@ -199,19 +195,26 @@ def apply_preprocessing_features(x, w, gather_indx, scatter_indx, routing_data, 
 
 @dataclass(frozen=True)
 class PostprocessingFeatures:
-    finalize: bool
+    finalize_split_k: bool
+    finalize_scatter: bool
+
+    @property
+    def finalize(self):
+        return self.finalize_split_k or self.finalize_scatter
 
 def init_postprocessing_features(routing_data, scatter_indx, opt_flags):
-    finalize = (scatter_indx is not None) or opt_flags.split_k > 1
-    # finalize = (scatter_indx is not None and routing_data.n_expts_act > 1) or opt_flags.split_k > 1
-    return PostprocessingFeatures(finalize)
+    finalize_split_k = opt_flags.split_k > 1
+    has_scatter = scatter_indx is not None
+    has_scatter_reduction = not opt_flags.fused_scatter or routing_data.n_expts_act > 1
+    finalize_scatter = has_scatter and has_scatter_reduction
+    return PostprocessingFeatures(finalize_split_k, finalize_scatter)
 
 def apply_postprocessing_features(scatter_indx, finalize_scatter_idxs, opt_flags, expt_offs, num_indx, precision_config, routing_data,
                                   postprocess_features, memory, fused_activation, epilogue):
     out = memory["output"]
     flex_ctx = precision_config.flex_ctx
     if postprocess_features.finalize:
-        has_fused_scatter_scratchpad = opt_flags.fused_scatter # and routing_data.n_expts_act > 1
+        has_fused_scatter_scratchpad = opt_flags.fused_scatter and routing_data.n_expts_act > 1
         if has_fused_scatter_scratchpad:
             inp = memory["output"]
         else:
@@ -462,12 +465,16 @@ def matmul_ogs(x, w, bias,
                  (w_scale is None or w_scale.storage.is_tma_compliant())
     # hopper w/ mxfp4 doesn't support TMA
     can_use_tma = can_use_tma and (torch.cuda.get_device_capability()[0] > 9 or bitwidth(w.dtype) != 4)
-    can_use_fused_scatter = scatter_indx is not None and fused_activation.specs.fn is None and routing_data.n_expts_act == 1
+    can_use_fused_scatter = scatter_indx is not None and fused_activation.specs.fn is None \
+                            and routing_data.n_expts_act == 1 \
+                            and target_info.has_tma_gather()
     opt_flags = make_opt_flags(out_dtype, x.dtype, w.dtype, precision_config,
         M, N, K, routing_data, can_use_tma, can_use_fused_scatter, epilogue.effective_itemsize,
     )
-    if not target_info.has_tma_gather():
-        opt_flags.fused_scatter = False
+    if opt_flags.fused_scatter and scatter_indx is not None:
+        raise NotImplementedError("Fused scatter but there's no scatter to do")
+    if opt_flags.fused_scatter and not target_info.has_tma_gather():
+        raise NotImplementedError("Fused scatter not supported without TMA")
     if w_scale is not None and opt_flags.is_persistent and not target_info.has_native_mxfp():
         raise NotImplementedError("Must use non-persistent kernel for simulated MXFP")
     if w_scale is not None and w_scale.storage.layout.name is not None and not opt_flags.is_persistent and target_info.has_native_mxfp():
@@ -506,7 +513,7 @@ def matmul_ogs(x, w, bias,
         out_scale = None
     # pre-processing
     x, w, writeback_idxs, writeback_size, finalize_scatter_idxs = apply_preprocessing_features(
-        x, w, gather_indx, scatter_indx, routing_data, opt_flags, preprocessing_features
+        x, w, gather_indx, scatter_indx, routing_data, opt_flags, preprocessing_features, postprocessing_features
     )
     # matrix multiplication
     flex = precision_config.flex_ctx
