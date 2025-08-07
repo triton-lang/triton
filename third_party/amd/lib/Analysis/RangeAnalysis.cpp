@@ -87,7 +87,9 @@ triton::AMD::TritonIntegerRangeAnalysis::maybeGetTripCount(
 namespace {
 
 constexpr int64_t kDefaultMaxTripCount = 1024;
-constexpr int64_t kDefaultMaxPrograms = 2 << 15; // 65536
+constexpr int64_t maxXPrograms = 1L << 31; // 2147483648
+constexpr int64_t maxYPrograms = 1L << 16; // 65536
+constexpr int64_t maxZPrograms = 1L << 16; // 65536
 
 void getEnclosingLoops(Operation &op, SmallVector<LoopLikeOpInterface> &ops) {
   Operation *currOp = op.getParentOp();
@@ -385,11 +387,29 @@ LogicalResult TritonIntegerRangeAnalysis::visitOperation(
   if (llvm::isa<GetProgramIdOp, MakeRangeOp, HistogramOp, GetNumProgramsOp>(
           op)) {
     llvm::TypeSwitch<Operation *>(op)
-        .Case<GetProgramIdOp>([&](auto getPIDOp) {
-          inferResultRangesPID(getPIDOp, kDefaultMaxPrograms - 1, joinCallback);
+        .Case<GetProgramIdOp>([&](GetProgramIdOp getPIDOp) {
+          int max_programs;
+          if (getPIDOp.getAxisAsInt() == 0) {
+            max_programs = maxXPrograms;
+          } else if (getPIDOp.getAxisAsInt() == 1) {
+            max_programs = maxYPrograms;
+          } else {
+            assert(getPIDOp.getAxisAsInt() == 2 && "unsupported dim");
+            max_programs = maxZPrograms;
+          }
+          inferResultRangesPID(getPIDOp, max_programs - 1, joinCallback);
         })
-        .Case<GetNumProgramsOp>([&](auto getPIDOp) {
-          inferResultRangesPID(getPIDOp, kDefaultMaxPrograms, joinCallback);
+        .Case<GetNumProgramsOp>([&](GetNumProgramsOp getPIDOp) {
+          int max_programs;
+          if (getPIDOp.getAxisAsInt() == 0) {
+            max_programs = maxXPrograms;
+          } else if (getPIDOp.getAxisAsInt() == 1) {
+            max_programs = maxYPrograms;
+          } else {
+            assert(getPIDOp.getAxisAsInt() == 2 && "unsupported dim");
+            max_programs = maxZPrograms;
+          }
+          inferResultRangesPID(getPIDOp, max_programs, joinCallback);
         })
         .Case<MakeRangeOp>([&](MakeRangeOp makeROp) {
           inferResultRanges(&makeROp, joinCallback);
