@@ -116,7 +116,7 @@ def make_default_opt_flags_amd(
         fused_scatter=constraints.get('fused_scatter', False),
         is_persistent=is_persistent,
         idle_sms=0,
-        epilogue_subtile=constraints.get('epilogue_subtile', None),
+        epilogue_subtile=1,
         arch=None,
         target_kernel_kwargs=target_kernel_kwargs,
     )
