@@ -163,11 +163,8 @@ def select_mma_impl():
 
 
 # %%
-# Let's quickly validate our abstraction by implementing a matmul where we
-# pipeline the MMA with the loads. The structure of this kernel should be
-# familiar.
-#
-# We will sanity check correctness and performance.
+# Let's validate our abstraction by implementing a matmul where we pipeline both
+# the MMA and the loads.
 
 
 @gluon.jit
@@ -704,8 +701,10 @@ if __name__ == "__main__":
 
 # %%
 # To improve performance further, especially for small K, we will pipeline the
-# outer loop and overlap the epilogue. Fully overlapping the epilogue is
-# challenging with only software pipelining.
+# outer loop and overlap the epilogue. We can overlap the epilogue with the
+# first loads and optionally first MMA of the next outer loop iteration. Fully
+# overlapping the epilogue with the MMA is more challenging with only software
+# pipelining.
 
 
 @gluon.jit
@@ -731,19 +730,22 @@ def persistent_matmul_more_pipelined_kernel(a_desc, b_desc, c_desc, MMAImpl: gl.
 
     mma = MMAImpl.initialize(dtype, BLOCK_M, BLOCK_N, 1, num_warps)
     scheduler = SchedulerImpl.initialize(M, N, BLOCK_M, BLOCK_N)
-    for idx in range(scheduler.get_num_tiles()):
-        pid_m, pid_n = scheduler.get_tile(idx)
-        off_m = pid_m * BLOCK_M
-        off_n = pid_n * BLOCK_N
+    num_tiles = scheduler.get_num_tiles()
 
-        for k in gl.static_range(0, BLOCK_K * (num_buffers - 2), BLOCK_K):
-            index = producer % num_buffers
-            producer += 1
-            bar = bars.index(index)
-            mbarrier.expect(bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes)
-            tma.async_copy_global_to_shared(a_desc, [off_m, k], bar, a_bufs.index(index))
-            tma.async_copy_global_to_shared(b_desc, [k, off_n], bar, b_bufs.index(index))
+    # Peel the prologue with the prefetched async loads.
+    idx = 0
+    pid_m, pid_n = scheduler.get_tile(idx)
+    off_m = pid_m * BLOCK_M
+    off_n = pid_n * BLOCK_N
+    for ki in gl.static_range(0, BLOCK_K * (num_buffers - 2), BLOCK_K):
+        index = producer % num_buffers
+        producer += 1
+        bar = bars.index(index)
+        mbarrier.expect(bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes)
+        tma.async_copy_global_to_shared(a_desc, [off_m, ki], bar, a_bufs.index(index))
+        tma.async_copy_global_to_shared(b_desc, [ki, off_n], bar, b_bufs.index(index))
 
+    for outer in range(num_tiles):
         for k in range(BLOCK_K * (num_buffers - 2), K, BLOCK_K):
             index = producer % num_buffers
             producer += 1
@@ -764,16 +766,36 @@ def persistent_matmul_more_pipelined_kernel(a_desc, b_desc, c_desc, MMAImpl: gl.
             phase = consumer // num_buffers & 1
             consumer += 1
             mbarrier.wait(bars.index(index), phase)
+            mma = mma.wait_num_outstanding(0)
             mma = mma.issue_async_mma(a_bufs.index(index), b_bufs.index(index))
-        mma = mma.wait_num_outstanding(0)
+
+        # Peel the next prologue before the current epilogue. This lets us
+        # start the async operations of the next block early.
+        off_m_prev = off_m
+        off_n_prev = off_n
+
+        idx += 1
+        pid_m, pid_n = scheduler.get_tile(idx)
+        off_m = pid_m * BLOCK_M
+        off_n = pid_n * BLOCK_N
+        pred = idx < num_tiles
+        for ki in gl.static_range(0, BLOCK_K * (num_buffers - 2), BLOCK_K):
+            index = producer % num_buffers
+            producer += 1
+            bar = bars.index(index)
+            mbarrier.expect(bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes, pred)
+            tma.async_copy_global_to_shared(a_desc, [off_m, ki], bar, a_bufs.index(index), pred)
+            tma.async_copy_global_to_shared(b_desc, [ki, off_n], bar, b_bufs.index(index), pred)
 
         c_smem = gl.allocate_shared_memory(dtype, c_desc.block_type.shape, c_desc.layout)
+        mma = mma.wait_num_outstanding(0)
         c, mma = mma.take_result()
         # Async launch the TMA store.
         tma.store_wait(pendings=0)
         c_smem.store(c.to(dtype))
         fence_async_shared()
-        tma.async_copy_shared_to_global(c_desc, [off_m, off_n], c_smem)
+        tma.async_copy_shared_to_global(c_desc, [off_m_prev, off_n_prev], c_smem)
+
     tma.store_wait(pendings=0)
 
 
