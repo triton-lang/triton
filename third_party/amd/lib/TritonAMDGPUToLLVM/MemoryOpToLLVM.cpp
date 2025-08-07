@@ -134,6 +134,26 @@ private:
       return false;
     }
 
+    // transposed load can be used only when it's consumed by dot with the
+    // loaded data type.
+    int opIdx = 0;
+    triton::gpu::LocalLoadOp lLoad = cast<triton::gpu::LocalLoadOp>(localLoad);
+    if (auto dotEnc = lLoad.getSrc().getType().getEncoding())
+      opIdx = cast<triton::gpu::DotOperandEncodingAttr>(dotEnc).getOpIdx();
+    else
+      return false;
+
+    SetVector<Operation *> slice;
+    getForwardSlice(localLoad, &slice);
+    for (auto op : slice) {
+      if (auto dotOp = dyn_cast<triton::DotOp>(op)) {
+        auto inputMat = (opIdx == 0) ? dotOp.getA() : dotOp.getB();
+        auto bitwidthMat = inputMat.getType().getElementTypeBitWidth();
+        if (bitwidth != bitwidthMat)
+          return false;
+      }
+    }
+
     return true;
   }
 
