@@ -18,6 +18,7 @@ class ForOp;
 
 static constexpr char kPartitionAttrName[] = "ttg.partition";
 static constexpr char kPartitionStagesAttrName[] = "ttg.partition.stages";
+static constexpr char kWarpSpecializeTagAttrName[] = "ttg.warp_specialize.tag";
 
 //===----------------------------------------------------------------------===//
 // WarpSchedule
@@ -54,6 +55,9 @@ class WarpSchedule {
   static constexpr int kSentinel = -1;
 
 public:
+  // Get WarpSpecialization tag
+  int getTag() const { return tag; }
+
   // Create a new partition with a stage.
   Partition *addPartition(unsigned stage);
 
@@ -123,6 +127,8 @@ public:
   LLVM_DUMP_METHOD void dump() const;
 
 private:
+  // WarpSpecialization tag
+  int tag;
   // Partitions are numbered [0, N).
   SmallVector<std::unique_ptr<Partition>> partitions;
   // A mapping from operation to its partition.

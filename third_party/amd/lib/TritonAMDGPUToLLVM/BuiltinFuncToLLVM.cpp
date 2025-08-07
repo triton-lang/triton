@@ -139,6 +139,22 @@ private:
     return mlir::success();
   }
 
+  // Utility function to create fast exponential operation
+  Operation *createFastExpf(mlir::PatternRewriter &rewriter, Location loc,
+                            Value input, Type returnType, bool ftz) const {
+    assert(input.getType().getIntOrFloatBitWidth() == 32);
+    const double log2e = 1.4426950408889634;
+    LLVM::FastmathFlagsAttr defaultFlags{};
+
+    auto mulOp = rewriter.create<LLVM::FMulOp>(
+        loc, rewriter.getF32Type(), input,
+        LLVM::createConstantF32(loc, rewriter, log2e), defaultFlags);
+
+    const char *intrinsic = ftz ? "llvm.amdgcn.exp2.f32" : "llvm.exp2.f32";
+    return LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsic, returnType,
+                                           mulOp->getResult(0));
+  }
+
   LogicalResult convertToLLVMIntrinsic(LLVM::CallOp callOp,
                                        mlir::PatternRewriter &rewriter) const {
     StringRef calleeName = callOp.getCallee().value();
@@ -179,15 +195,36 @@ private:
     } else if (calleeName == "__triton_hip_fast_expf") {
       assert(operands.size() == 1);
       assert(operands[0].getType().getIntOrFloatBitWidth() == 32);
-      const double log2e = 1.4426950408889634;
+      replacementOp =
+          createFastExpf(rewriter, loc, operands[0], returnType, ftz);
+    } else if (calleeName == "__triton_hip_fast_tanhf") {
+      assert(operands.size() == 1);
+      assert(operands[0].getType().getIntOrFloatBitWidth() == 32);
       LLVM::FastmathFlagsAttr defaultFlags{};
-      auto mulOp = rewriter.create<LLVM::FMulOp>(
-          loc, rewriter.getF32Type(), operands[0],
-          LLVM::createConstantF32(loc, rewriter, log2e), defaultFlags);
-      const char *intrinsic = ftz ? "llvm.amdgcn.exp2.f32" : "llvm.exp2.f32";
 
-      replacementOp = LLVM::createLLVMIntrinsicCallOp(
-          rewriter, loc, intrinsic, returnType, mulOp->getResult(0));
+      // Calculate 2*x
+      auto twoX = rewriter.create<LLVM::FMulOp>(
+          loc, rewriter.getF32Type(), operands[0],
+          LLVM::createConstantF32(loc, rewriter, 2.0), defaultFlags);
+
+      // Calculate fast_expf(2*x) using the utility function
+      auto exp2X = createFastExpf(rewriter, loc, twoX->getResult(0),
+                                  rewriter.getF32Type(), ftz);
+
+      // Calculate exp2X - 1
+      auto exp2XMinus1 = rewriter.create<LLVM::FSubOp>(
+          loc, rewriter.getF32Type(), exp2X->getResult(0),
+          LLVM::createConstantF32(loc, rewriter, 1.0), defaultFlags);
+
+      // Calculate exp2X + 1
+      auto exp2XPlus1 = rewriter.create<LLVM::FAddOp>(
+          loc, rewriter.getF32Type(), exp2X->getResult(0),
+          LLVM::createConstantF32(loc, rewriter, 1.0), defaultFlags);
+
+      // Calculate tanh(X) = (exp2X - 1) / (exp2X + 1)
+      replacementOp = rewriter.create<LLVM::FDivOp>(
+          loc, returnType, exp2XMinus1->getResult(0), exp2XPlus1->getResult(0),
+          defaultFlags);
     }
 
     if (replacementOp) {
