@@ -120,11 +120,12 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
       return emitError() << "rank must be 2 or 3";
     }
     auto bitwidth = elementType.getIntOrFloatBitWidth();
-    if (!enc.getUnpacked() && bitwidth != 16) {
-      return emitError() << "bitwidth must be 16 for packed tensor memory";
+    if (!enc.getUnpacked() && bitwidth > 16) {
+      return emitError() << "bitwidth must be <= 16 for packed tensor memory";
     }
-    if (bitwidth != 16 && bitwidth != 32) {
-      return emitError() << "bitwidth must be 16 or 32";
+    if (enc.getUnpacked() && (16 != bitwidth && 32 != bitwidth)) {
+      return emitError()
+             << "bitwidth must be either 16 or 32 for unpacked tensor memory";
     }
     shape = shape.take_back(2);
     allocShape = allocShape.take_back(2);

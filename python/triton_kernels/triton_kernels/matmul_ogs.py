@@ -435,8 +435,8 @@ def matmul_ogs(x, w, bias,
         assert x.shape[0] == w.shape[0]
     # compute optimization flags
     out_dtype = precision_config.out_dtype or x.dtype
-    can_use_tma = x.storage.is_tma_compliant() and \
-                  w.storage.is_tma_compliant() and \
+    can_use_tma = x.numel() > 0 and x.storage.is_tma_compliant() and \
+                  w.numel() > 0 and w.storage.is_tma_compliant() and \
                  (w_scale is None or w_scale.storage.is_tma_compliant())
     # hopper w/ mxfp4 doesn't support TMA
     can_use_tma = can_use_tma and (torch.cuda.get_device_capability()[0] > 9 or bitwidth(w.dtype) != 4)
