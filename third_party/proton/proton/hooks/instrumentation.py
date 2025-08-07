@@ -40,7 +40,7 @@ class CudaAllocator:
         # FIXME(fywkevin): remove this constraint after we have support for periodic buffer dumping.
         # This matches `DEFAULT_HOST_BUFFER_SIZE` in
         # triton/third_party/proton/csrc/lib/Profiler/Instrumentation/InstrumentationProfiler.cpp
-        DEFAULT_HOST_BUFFER_SIZE = 64 * 1024 * 1024 # 64 MB
+        DEFAULT_HOST_BUFFER_SIZE = 64 * 1024 * 1024  # 64 MB
         if aligned_size > DEFAULT_HOST_BUFFER_SIZE:
             raise RuntimeError(
                 f"Profiler buffer size exceeds the maximum supported size ({DEFAULT_HOST_BUFFER_SIZE} bytes).\n"
