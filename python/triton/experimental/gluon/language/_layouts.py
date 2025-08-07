@@ -430,7 +430,9 @@ class SwizzledSharedLayout(SharedLayout):
 class PaddedSharedLayout(SharedLayout):
     """
     Represents a layout for the access to shared memory. Compared to SwizzledSharedLayout,
-    it uses padding to avoid shared memory bank conflicts.
+    it uses padding to avoid shared memory bank conflicts. After every interval tensor elements,
+    the corresponding number of padding elements are inserted.
+    If a position corresponds to multiple intervals, the padding amounts are summed.
 
     In the following example of a tensor,
     `eM` represents original elements in the and `pN` represents padded element.
@@ -442,7 +444,7 @@ class PaddedSharedLayout(SharedLayout):
      e6, e7,
      ...]
 
-    After padding with interval-padding pair list is [[2, 1], [4, 2], ..],
+    After padding with interval-padding list [[2, 1], [4, 2]],
     the shared memory will be
     [e0, e1, p0,
      e2, e3, p1, p2, p3,
@@ -451,8 +453,8 @@ class PaddedSharedLayout(SharedLayout):
      ...]
 
     Args:
-        interval_padding_pairs (List[Tuple[int, int]]): After every interval tensor elements, the corresponding number of padding elements are inserted. If a position corresponds to multiple intervals, the padding amounts are summed. Both interval and padding must be powers of 2. For the example above, the list is [[2, 1], [4, 2], ..].
-        order (List[int]): order of logical tensor dimensions; fastest-varying first.
+        interval_padding_pairs (List[Tuple[int, int]]): List of [interval, padding] pair and both interval and padding must be powers of 2.
+        order (List[int]): Order of logical tensor dimensions; fastest-varying first.
         ctas_per_cga (Optional[List[int]]): CTAs per CGA grouping.
         cta_split_num (Optional[List[int]]): Split factors for CTAs.
         cta_order (Optional[List[int]]): CTA ordering.
