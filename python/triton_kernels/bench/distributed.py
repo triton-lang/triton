@@ -261,8 +261,16 @@ def routing_torch(x, logits, n_expts_act, sm_first=False, expt_indx=None, n_rows
 
 
 @triton.jit
-def pack_bitmatrix(bitmatrix, expt_indx, n_rows, n_cols, n_expts_act, BLOCK_SIZE_M: tl.constexpr,
-                   BLOCK_SIZE_K: tl.constexpr, sentinel: tl.constexpr):
+def pack_bitmatrix(
+    bitmatrix,
+    expt_indx,
+    n_rows,
+    n_cols,
+    n_expts_act,
+    BLOCK_SIZE_M: tl.constexpr,
+    BLOCK_SIZE_K: tl.constexpr,
+    sentinel: tl.constexpr,
+):
     """
     Packs expt_indx into a bitmatrix.
     """
@@ -297,9 +305,12 @@ def routing_triton(x, logits, n_expts_act, sm_first=False, expt_indx=None, n_row
     expt_scal, expt_indx, ep_indx, x, output_split_sizes = _apply_parallelism(expt_scal, expt_indx, x, chunk_size,
                                                                               EP=EP, TP=TP)
 
+    # TODO: Skip all the following if `EP == 1`
     # Recover bitmatrix for local experts
     BLOCK_SIZE_M = 512
     BLOCK_SIZE_K = 32
+    # The sentinel value is chunk_size + 1 instead of chunk_size to ensure the bitmatrix buffer
+    # doesn't overflow. For example, cdiv(32, 32) is 1, while the 32th bit is on the second column.
     sentinel = chunk_size + 1
     n_cols = triton.cdiv(sentinel, BLOCK_SIZE_K)
     n_rows = expt_indx.size(0)
