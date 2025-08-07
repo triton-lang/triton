@@ -174,13 +174,14 @@ def select_mma_impl():
 
 
 @gluon.jit
-def async_load_operands(producer, a_desc, b_desc, off_m, off_n, k, bars, a_bufs, b_bufs, num_buffers: gl.constexpr):
+def async_load_operands(producer, a_desc, b_desc, off_m, off_n, k, bars, a_bufs, b_bufs, num_buffers: gl.constexpr,
+                        pred=True):
     index = producer % num_buffers
     producer += 1
     bar = bars.index(index)
-    mbarrier.expect(bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes)
-    tma.async_copy_global_to_shared(a_desc, [off_m, k], bar, a_bufs.index(index))
-    tma.async_copy_global_to_shared(b_desc, [k, off_n], bar, b_bufs.index(index))
+    mbarrier.expect(bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes, pred)
+    tma.async_copy_global_to_shared(a_desc, [off_m, k], bar, a_bufs.index(index), pred)
+    tma.async_copy_global_to_shared(b_desc, [k, off_n], bar, b_bufs.index(index), pred)
     return producer
 
 
@@ -612,39 +613,55 @@ def persistent_matmul_pipelined_kernel(a_desc, b_desc, c_desc, MMAImpl: gl.const
     dtype: gl.constexpr = a_desc.dtype
     K = a_desc.shape[1]
 
+    # All buffers share the same liverange.
+    a_bufs = gl.allocate_shared_memory(dtype, [num_buffers] + a_desc.block_type.shape, a_desc.layout)
+    b_bufs = gl.allocate_shared_memory(dtype, [num_buffers] + b_desc.block_type.shape, b_desc.layout)
+    c_smem = gl.allocate_shared_memory(dtype, c_desc.block_type.shape, c_desc.layout)
     bars = gl.allocate_shared_memory(gl.int64, [num_buffers, 1], mbarrier.MBarrierLayout())
     for i in gl.static_range(num_buffers):
         mbarrier.init(bars.index(i), count=1)
-    # Producer and consumer indices.
     producer = 0
     consumer = 0
 
     mma = MMAImpl.initialize(dtype, BLOCK_M, BLOCK_N, num_warps)
     scheduler = SchedulerImpl.initialize(c_desc.shape[0], c_desc.shape[1], BLOCK_M, BLOCK_N)
-    for idx in range(scheduler.get_num_tiles()):
-        pid_m, pid_n = scheduler.get_tile(idx)
-        off_m = pid_m * BLOCK_M
-        off_n = pid_n * BLOCK_N
+    num_tiles = scheduler.get_num_tiles()
 
-        a_bufs = gl.allocate_shared_memory(dtype, [num_buffers] + a_desc.block_type.shape, a_desc.layout)
-        b_bufs = gl.allocate_shared_memory(dtype, [num_buffers] + b_desc.block_type.shape, b_desc.layout)
-        for k in gl.static_range(0, BLOCK_K * (num_buffers - 2), BLOCK_K):
-            producer = async_load_operands(producer, a_desc, b_desc, off_m, off_n, k, bars, a_bufs, b_bufs, num_buffers)
+    # Peeled inner loop prologue.
+    idx = 0
+    pid_m, pid_n = scheduler.get_tile(idx)
+    off_m = pid_m * BLOCK_M
+    off_n = pid_n * BLOCK_N
+    for ki in gl.static_range(0, BLOCK_K * (num_buffers - 2), BLOCK_K):
+        producer = async_load_operands(producer, a_desc, b_desc, off_m, off_n, ki, bars, a_bufs, b_bufs, num_buffers)
 
+    for outer in range(num_tiles):
         for k in range(BLOCK_K * (num_buffers - 2), K, BLOCK_K):
             producer = async_load_operands(producer, a_desc, b_desc, off_m, off_n, k, bars, a_bufs, b_bufs, num_buffers)
             consumer, mma = async_mma(consumer, mma, bars, a_bufs, b_bufs, num_buffers)
 
-        for _ in gl.static_range(num_buffers - 2):
+        epilogue_off_m = off_m
+        epilogue_off_n = off_n
+
+        # Peel the next prologue and fuse it with the pipeline drain loop.
+        idx += 1
+        pid_m, pid_n = scheduler.get_tile(idx)
+        off_m = pid_m * BLOCK_M
+        off_n = pid_n * BLOCK_N
+        # Predicate the peeled prologue instead of using a conditional.
+        pred = idx < num_tiles
+        for ki in gl.static_range(0, BLOCK_K * (num_buffers - 2), BLOCK_K):
+            producer = async_load_operands(producer, a_desc, b_desc, off_m, off_n, ki, bars, a_bufs, b_bufs,
+                                           num_buffers, pred)
             consumer, mma = async_mma(consumer, mma, bars, a_bufs, b_bufs, num_buffers)
 
         mma = mma.wait_num_outstanding(0)
-        c_smem = gl.allocate_shared_memory(dtype, c_desc.block_type.shape, c_desc.layout)
         c, mma = mma.take_result()
+        tma.store_wait(pendings=0)
         c_smem.store(c.to(dtype))
         fence_async_shared()
-        tma.async_copy_shared_to_global(c_desc, [off_m, off_n], c_smem)
-        tma.store_wait(pendings=0)
+        tma.async_copy_shared_to_global(c_desc, [epilogue_off_m, epilogue_off_n], c_smem)
+    tma.store_wait(pendings=0)
 
 
 def persistent_matmul_pipelined(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, num_buffers, num_warps, SchedulerImpl):
@@ -679,4 +696,3 @@ def test_persistent_matmul_pipelined(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, num_buf
     C = torch.empty(M, N, device="cuda", dtype=torch.float16)
     persistent_matmul_pipelined(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, num_buffers, num_warps, SchedulerImpl)
     torch.testing.assert_close(A @ B, C, rtol=1e-3, atol=1e-1)
-
