@@ -293,7 +293,7 @@ void rewritePutEnterOp(ArefPutEnterOp op, PatternRewriter &rewriter,
 
   if (llvm::any_of(asyncKinds, hasTMA)) {
     Value fullBarrier =
-        getFullBarrier(rewriter, loc, arefVal, exitOp.getStage());
+        getFullBarrier(rewriter, loc, arefVal, op.getStage());
     lowerTMALoad(op, fullBarrier, rewriter, arefVal);
   }
 
