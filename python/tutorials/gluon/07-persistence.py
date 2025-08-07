@@ -837,7 +837,7 @@ if __name__ == "__main__":
 # Main takeaways:
 #
 # - Persistent kernels replace GPU block scheduling with a (typically) static
-#   static schedule. This allows more resource and compute coordination/overlap
-#   between blocks at the cost of losing dynamic scheduling.
+#   schedule. This allows more resource and compute coordination/overlap between
+#   blocks at the cost of losing dynamic scheduling.
 # - Persistent kernels tend to benefit smaller problem sizes, but still deliver
 #   benefits for large problem sizes.
