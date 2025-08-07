@@ -1614,7 +1614,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 }
 """)
 
-
+@gluon.jit
 def buffer_load_store_kernel(x, y):
     layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[1, 64], warps_per_cta=[4, 1],
                                                 order=[1, 0])
