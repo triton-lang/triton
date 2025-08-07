@@ -1739,7 +1739,7 @@ def test_padded_shared_layout(target):
         anonymize_ir(module.str_nodebug()), """\
 #shared = #ttg.padded_shared<[2:+1, 4:+2, 8:+4] {order = [1, 0]}>
 #smem = #ttg.shared_memory
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 64 : i32} {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = "..." : i32} {
   tt.func public @padded_shared_layout_kernel() attributes {noinline = false} {
     %0 = ttg.local_alloc : () -> !ttg.memdesc<64x64xi32, #shared, #smem, mutable>
     tt.return
