@@ -261,17 +261,8 @@ def routing_torch(x, logits, n_expts_act, sm_first=False, expt_indx=None, n_rows
 
 
 @triton.jit
-def pack_bitmatrix(
-    bitmatrix,
-    expt_indx,
-    n_rows,
-    n_cols,
-    n_expts_act,
-    BLOCK_SIZE_M: tl.constexpr,
-    BLOCK_SIZE_K: tl.constexpr,
-    sentinel: tl.constexpr,
-    reset_sentinel: tl.constexpr = False,
-):
+def pack_bitmatrix(bitmatrix, expt_indx, n_rows, n_cols, n_expts_act, BLOCK_SIZE_M: tl.constexpr,
+                   BLOCK_SIZE_K: tl.constexpr, sentinel: tl.constexpr):
     """
     Packs expt_indx into a bitmatrix.
     """
@@ -290,8 +281,6 @@ def pack_bitmatrix(
         y = tl.reduce_or(x, axis=1)
         bitmatrix_ptrs = bitmatrix + offsets_m[:, None] * n_cols + offs[None, :]
         tl.store(bitmatrix_ptrs, y, mask=offsets_m[:, None] < n_rows)
-    if reset_sentinel:
-        tl.store(expt_indx + offsets, 0, mask=mask & (indices == sentinel))
 
 
 def routing_triton(x, logits, n_expts_act, sm_first=False, expt_indx=None, n_rows=None, EP=1, TP=1):
@@ -311,7 +300,8 @@ def routing_triton(x, logits, n_expts_act, sm_first=False, expt_indx=None, n_row
     # Recover bitmatrix for local experts
     BLOCK_SIZE_M = 512
     BLOCK_SIZE_K = 32
-    n_cols = triton.cdiv(chunk_size, BLOCK_SIZE_K)
+    sentinel = chunk_size + 1
+    n_cols = triton.cdiv(sentinel, BLOCK_SIZE_K)
     n_rows = expt_indx.size(0)
     bitmatrix = torch.zeros((n_rows, n_cols), dtype=torch.uint32, device=expt_indx.device)
     grid = (triton.cdiv(n_rows, BLOCK_SIZE_M), )
@@ -324,10 +314,9 @@ def routing_triton(x, logits, n_expts_act, sm_first=False, expt_indx=None, n_row
         n_expts_act,
         BLOCK_SIZE_M=BLOCK_SIZE_M,
         BLOCK_SIZE_K=BLOCK_SIZE_K,
-        sentinel=chunk_size,
-        reset_sentinel=True,
+        sentinel=sentinel,
     )
-    bitmatrix_shape = [n_rows, n_cols * 32]
+    bitmatrix_shape = [n_rows, triton.cdiv(chunk_size, BLOCK_SIZE_K) * 32]
     bitmatrix_shape_max = [n_rows, None]
     bitmatrix = Bitmatrix(bitmatrix, shape=bitmatrix_shape, shape_max=bitmatrix_shape_max, scratchpad=None)
     expt_scal, expt_indx, bitmatrix = prune_routing(expt_scal, expt_indx, bitmatrix, n_expts_tot, EP)
