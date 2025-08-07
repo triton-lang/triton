@@ -17,6 +17,7 @@ import triton.language as tl
 from triton.compiler.errors import CompilationError, CompileTimeAssertionFailure
 
 TARGET_PAT = re.compile('ttg.target = "[^"]*"')
+WARP_SIZE_PAT = re.compile(r'"ttg.threads-per-warp" = (\d+)')
 # HIP backend can add this attribute to function parameters
 PTRRANGE_PAT = re.compile('(, )?tt.pointer_range = 32 : i32')
 
@@ -32,6 +33,7 @@ ALL_TARGETS = [AMPERE_TARGET, HOPPER_TARGET, BLACKWELL_TARGET, HIP_TARGET]
 
 def anonymize_ir(ir):
     ir = TARGET_PAT.sub('ttg.target = "..."', ir)
+    ir = WARP_SIZE_PAT.sub('"ttg.threads-per-warp" = "..."', ir)
     return PTRRANGE_PAT.sub('', ir)
 
 
@@ -1757,32 +1759,20 @@ def infer_layout_for_padded_shared_kernel():
     smem.reshape((32, 128))
 
 
-@pytest.mark.parametrize("target", [HIP_TARGET_CDNA3, HIP_TARGET_CDNA4])
+@pytest.mark.parametrize("target", ALL_TARGETS)
 def test_infer_layout_for_padded_shared(target):
     # This test is used to test the conversion to gluon object PaddedSharedLayout from PaddedSharedEncodingAttr.
     # This conversion is in layoutToGluon and ttgl.reduce will finally use it.
     module = run_parser(infer_layout_for_padded_shared_kernel, target=target)
     expecttest.assert_expected_inline(
         anonymize_ir(module.str_nodebug()), """\
-#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 64], warpsPerCTA = [4, 1], order = [1, 0]}>
 #shared = #ttg.padded_shared<[2:+1, 4:+2, 8:+4] {order = [1, 0]}>
 #smem = #ttg.shared_memory
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 64 : i32} {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = "..." : i32} {
   tt.func public @infer_layout_for_padded_shared_kernel() attributes {noinline = false} {
     %0 = ttg.local_alloc : () -> !ttg.memdesc<64x64xi32, #shared, #smem, mutable>
-    %1 = ttg.local_load %0 : !ttg.memdesc<64x64xi32, #shared, #smem, mutable> -> tensor<64x64xi32, #blocked>
-    %2 = "tt.reduce"(%1) <{axis = 1 : i32}> ({
-    ^bb0(%arg0: i32, %arg1: i32):
-      %3 = tt.call @test_frontend.add__i32_i32__(%arg0, %arg1) : (i32, i32) -> i32
-      tt.reduce.return %3 : i32
-    }) : (tensor<64x64xi32, #blocked>) -> tensor<64xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    %1 = ttg.memdesc_reshape %0 : !ttg.memdesc<64x64xi32, #shared, #smem, mutable> -> !ttg.memdesc<32x128xi32, #shared, #smem, mutable>
     tt.return
   }
-  tt.func private @test_frontend.add__i32_i32__(%arg0: i32, %arg1: i32) -> i32 attributes {noinline = false} {
-    %0 = arith.addi %arg0, %arg1 : i32
-    tt.return %0 : i32
-  ^bb1:  // no predecessors
-    %1 = ub.poison : i32
-    tt.return %1 : i32
-  }
+}
 """)

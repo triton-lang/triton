@@ -2297,10 +2297,6 @@ struct TritonGPUInferLayoutInterface
       return success();
     }
 
-    if (auto enc = dyn_cast<PaddedSharedEncodingAttr>(operandEncoding)) {
-      printf("22222222222222222222222222222 inferTransOpEncoding\n");
-    }
-
     auto ll = toLinearLayout(shape, operandEncoding);
     auto transposedLl = transposeLinearLayout(ll, order);
     resultEncoding = LinearEncodingAttr::get(ctx, std::move(transposedLl));
