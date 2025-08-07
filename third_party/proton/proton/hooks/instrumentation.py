@@ -37,7 +37,7 @@ class CudaAllocator:
         # more efficient profiling data processing, rather than relying solely on post-processing.
         aligned_size = max(aligned_size, self.instrumentation_hook.profile_buffer_size)
 
-        # FIXME(fywkevin): remove this constraint after we have support for periodic buffer dumping.
+        # FIXME(fywkevin): remove this constraint after we fix the instrumentation profiler memory copy issue.
         # This matches `DEFAULT_HOST_BUFFER_SIZE` in
         # triton/third_party/proton/csrc/lib/Profiler/Instrumentation/InstrumentationProfiler.cpp
         DEFAULT_HOST_BUFFER_SIZE = 64 * 1024 * 1024  # 64 MB
