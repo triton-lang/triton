@@ -157,6 +157,7 @@ def _p_matmul_ogs(
     Y = Out  # Y is passed for the purposes of annotation; replace it with Out
 
     is_microscaled_format: tl.constexpr = MxScale is not None
+    tl.static_assert(not is_microscaled_format or W_TRANSPOSE, "NYI. Non-transposed mxfp4 weights")
     MX_PACK_DIVISOR: tl.constexpr = MXFP_BLOCK_SIZE
     if is_microscaled_format:
         w_type: tl.constexpr = get_dtype(W)

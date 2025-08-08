@@ -282,6 +282,8 @@ def make_opt_flags(
 ):
     if _opt_flags_constraints.get("is_persistent", False) and not can_use_persistent_tma:
         raise InapplicableConstraint("cannot enforce `is_persistent=True` constraint")
+    if _opt_flags_constraints.get("fused_scatter", False) and not can_use_fused_scatter:
+        raise InapplicableConstraint("cannot enforce `fused_scatter=True` constraint")
     enforce_bitwise_invariance = precision_config.enforce_bitwise_invariance
     if _opt_flags is not None:
         assert not _opt_flags_constraints
