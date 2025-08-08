@@ -1144,7 +1144,8 @@ Value SharedMemoryObject::getShmemOffset(Location loc, RewriterBase &rewriter,
               srcTy.getEncoding())) {
     auto allocShape64 = srcTy.getAllocShape();
     SmallVector<unsigned> allocShape(allocShape64.begin(), allocShape64.end());
-    return LLVM::linearize(rewriter, loc, offsets, allocShape);
+    return LLVM::linearize(rewriter, loc, offsets, allocShape,
+                           paddedSharedEncoding.getOrder());
   }
 
   auto dimNames = standardOutDimNames(ctx, offsets.size());
