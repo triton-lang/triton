@@ -1,4 +1,5 @@
 #include "Utility.h"
+#include "AsyncUtility.h"
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "TritonAMDGPUToLLVM/GCNAsmFormat.h"
 #include "TritonAMDGPUToLLVM/TargetUtils.h"
@@ -8,7 +9,6 @@
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
-
 namespace tt = mlir::triton;
 using mlir::triton::ModuleAxisInfoAnalysis;
 using mlir::triton::AMD::DppCtrl;
@@ -294,9 +294,64 @@ Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
 Value llLoad(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,
              Value pred, Value falseVal, triton::CacheModifier cm,
              bool forceNoAliasAsyncLoads) {
-  return rewriter.create<triton::amdgpu::MaskedLoadOp>(
-        loc, elemTy, ptr, pred, falseVal, cm, forceNoAliasAsyncLoads)
-        .getResult(); // is here okay? 
+  bool isNonMasked = false;
+  if (auto constOp = pred.getDefiningOp<LLVM::ConstantOp>()) {
+    if (auto intAttr = dyn_cast<IntegerAttr>(constOp.getValue())) {
+      isNonMasked = (intAttr.getValue() == 1);
+    }
+  }
+
+  if (isNonMasked) {
+    int alignment = 0;
+    if (auto vecTy = dyn_cast<VectorType>(elemTy)) {
+      auto elemType = vecTy.getElementType();
+      int elemSizeInBits = elemType.getIntOrFloatBitWidth();
+      alignment = (elemSizeInBits / 8) * vecTy.getNumElements();
+    } else if (auto intTy = dyn_cast<IntegerType>(elemTy)) {
+      alignment = intTy.getWidth() / 8;
+    } else if (auto floatTy = dyn_cast<FloatType>(elemTy)) {
+      alignment = floatTy.getWidth() / 8;
+    }
+
+    // Determine cache flags based on cache modifier
+    bool volatileFlag = false;
+    bool nonTmpFlag = false;
+    switch (cm) {
+    case triton::CacheModifier::CA:
+      // ca: volatile=false, nontemporal=false
+      volatileFlag = false;
+      nonTmpFlag = false;
+      break;
+    case triton::CacheModifier::CG:
+      // cg: volatile=false, nontemporal=true
+      volatileFlag = false;
+      nonTmpFlag = true;
+      break;
+    case triton::CacheModifier::CV:
+      // cv: volatile=true, nontemporal=false
+      volatileFlag = true;
+      nonTmpFlag = false;
+      break;
+    default:
+      volatileFlag = false;
+      nonTmpFlag = false;
+      break;
+    }
+
+    auto loadOp = rewriter.create<LLVM::LoadOp>(loc, elemTy, ptr, alignment,
+                                                volatileFlag, nonTmpFlag);
+
+    if (forceNoAliasAsyncLoads) {
+      mlir::triton::AMD::addLocalLoadNoAliasScope(loadOp);
+    }
+
+    return loadOp.getResult();
+  } else {
+    return rewriter
+        .create<triton::amdgpu::MaskedLoadOp>(loc, elemTy, ptr, pred, falseVal,
+                                              cm, forceNoAliasAsyncLoads)
+        .getResult();
+  }
 }
 
 void llStore(RewriterBase &rewriter, Location loc, Value ptr, Value val,

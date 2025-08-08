@@ -96,6 +96,7 @@ private:
     return mlir::success();
   }
 
+  // Can delete this below now? 
   LogicalResult convertPredicatedLoad(LLVM::CallOp callOp,
                                       mlir::PatternRewriter &rewriter) const {
     auto operands = callOp.getOperands();
