@@ -13,6 +13,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "llvm/ADT/STLExtras.h"
 
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
@@ -252,7 +253,7 @@ void lowerTokenOperations(Operation *parentOp, int numCTAs,
     if (auto tokenOp = dyn_cast<ttnvws::CreateTokenOp>(op)) {
       // Check to see if it is used by warpSpec. If yes, eraseOperand and
       // eraseArgument.
-      for (OpOperand &use : tokenOp->getUses()) {
+      for (OpOperand &use : llvm::make_early_inc_range(tokenOp->getUses())) {
         Operation *user = use.getOwner();
         if (auto wsOp = dyn_cast<ttg::WarpSpecializeOp>(user)) {
           unsigned opndNum = use.getOperandNumber();
