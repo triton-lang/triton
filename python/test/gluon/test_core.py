@@ -210,20 +210,20 @@ def test_amd_mfma_scaled(M, N, K, rhs_scale, mxfp_type, normal_type, num_warps, 
         b_scale_layout: ttgl.constexpr = ttgl.DistributedLinearLayout(
             reg_bases=[], lane_bases=[[1, 0], [2, 0], [4, 0], [8, 0], [0, 1], [0, 2]], warp_bases=[[16, 0], [32, 0]],
             block_bases=[], shape=[64, 4])
-        mma: ttgl.constexpr = ttgl.amd.AMDMFMALayout(version=4, warps_per_cta=[1, 4], tiles_per_warp=[1, 1],
-                                                     instr_shape=[16, 16], transposed=True)
+        mfma_layout: ttgl.constexpr = ttgl.amd.AMDMFMALayout(version=4, warps_per_cta=[1, 4], tiles_per_warp=[1, 1],
+                                                             instr_shape=[16, 16], transposed=True)
 
-        zero = ttgl.zeros([BLOCK_M, BLOCK_N], dtype=ttgl.float32, layout=mma)
+        zero = ttgl.zeros([BLOCK_M, BLOCK_N], dtype=ttgl.float32, layout=mfma_layout)
 
         a_offsets = ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, a_layout))[:, None] * stride_a0 + \
                     ttgl.arange(0, PACKED_BLOCK_K_A, layout=ttgl.SliceLayout(0, a_layout))[None, :] * stride_a1
         a = ttgl.amd.cdna4.buffer_load(a_base, a_offsets)
-        a = ttgl.convert_layout(a, ttgl.DotOperandLayout(operand_index=0, parent=mma, k_width=16))
+        a = ttgl.convert_layout(a, ttgl.DotOperandLayout(operand_index=0, parent=mfma_layout, k_width=16))
 
         b_offsets = ttgl.arange(0, PACKED_BLOCK_K_B, layout=ttgl.SliceLayout(1, b_layout))[:, None] * stride_b0 + \
                     ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, b_layout))[None, :] * stride_b1
         b = ttgl.amd.cdna4.buffer_load(b_base, b_offsets)
-        b = ttgl.convert_layout(b, ttgl.DotOperandLayout(operand_index=1, parent=mma, k_width=16))
+        b = ttgl.convert_layout(b, ttgl.DotOperandLayout(operand_index=1, parent=mfma_layout, k_width=16))
 
         SCALE_BLOCK_K: tl.constexpr = BLOCK_K // 32
         if a_scale is not None:
@@ -240,11 +240,11 @@ def test_amd_mfma_scaled(M, N, K, rhs_scale, mxfp_type, normal_type, num_warps, 
                               ttgl.arange(0, SCALE_BLOCK_K, layout=ttgl.SliceLayout(0, b_scale_layout))[None, :]
             b_scale = ttgl.amd.cdna4.buffer_load(b_scale, b_scale_offsets)
 
-        c = ttgl.amd.cdna4.mfma_scaled(a, a_scale, type_a, b, b_scale, type_b, zero, layout=mma)
+        c = ttgl.amd.cdna4.mfma_scaled(a, a_scale, type_a, b, b_scale, type_b, zero, layout=mfma_layout)
         c = c.to(out.dtype.element_ty)
 
-        out_offsets = ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, mma))[:, None] * BLOCK_N + \
-                      ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, mma))[None, :]
+        out_offsets = ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, mfma_layout))[:, None] * BLOCK_N + \
+                      ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, mfma_layout))[None, :]
         ttgl.amd.cdna4.buffer_store(c, out, out_offsets)
 
     comp_dtype = torch.float16 if normal_type == "fp16" else torch.bfloat16
