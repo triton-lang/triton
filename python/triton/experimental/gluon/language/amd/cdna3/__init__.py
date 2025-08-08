@@ -1,7 +1,6 @@
 from __future__ import annotations
 from typing import TYPE_CHECKING
 
-from triton.language.core import knobs
 from triton.experimental.gluon.language import _core as ttgl
 from triton._C.libtriton import ir
 from ..._core import builtin, int32, uint32, float32, _unwrap_if_constexpr
@@ -114,6 +113,6 @@ def buffer_store(stored_value, ptr, offsets, mask=None, cache=None, _semantic: G
 
 
 @builtin
-def mfma(input, other, acc=None, input_precision=None, allow_tf32=None, max_num_imprecise_acc=None,
-         out_dtype=float32, layout=None, _semantic=None):
+def mfma(input, other, acc=None, input_precision=None, allow_tf32=None, max_num_imprecise_acc=None, out_dtype=float32,
+         layout=None, _semantic=None):
     ...
