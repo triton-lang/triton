@@ -402,7 +402,7 @@ class NVMMASharedLayout(SharedLayout):
         return f"NVMMA_{self.swizzle_byte_width}_{self.element_bitwidth}_{self.transposed}_{self.fp4_padded}_NVMMA"
 
     def __hash__(self):
-        return hash((self.swizzle_byte_width, self.element_bitwidth, self.rank, elf.transposed, self.fp4_padded,
+        return hash((self.swizzle_byte_width, self.element_bitwidth, self.rank, self.transposed, self.fp4_padded,
                      tuple(self.ctas_per_cga) if self.ctas_per_cga else None,
                      tuple(self.cta_split_num) if self.cta_split_num else None,
                      tuple(self.cta_order) if self.cta_order else None))
