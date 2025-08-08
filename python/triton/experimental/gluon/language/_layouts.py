@@ -279,8 +279,8 @@ class NVMMADistributedLayout(DistributedLayout):
         return f"MMA_{self.version}_{self.warps_per_cta}_{self.instr_shape}_{self.ctas_per_cga}_{self.cta_split_num}_{self.cta_order}_MMA"
 
     def __hash__(self):
-        return hash((tuple(self.version), tuple(self.warps_per_cta), tuple(self.instr_shape),
-                     tuple(self.ctas_per_cga) if self.ctas_per_cga else None,
+        return hash((tuple(self.version), tuple(self.warps_per_cta),
+                     tuple(self.instr_shape), tuple(self.ctas_per_cga) if self.ctas_per_cga else None,
                      tuple(self.cta_split_num) if self.cta_split_num else None,
                      tuple(self.cta_order) if self.cta_order else None))
 
@@ -466,7 +466,7 @@ class SwizzledSharedLayout(SharedLayout):
         return f"SSS_{self.vec}_{self.per_phase}_{self.max_phase}_{stringify(self.order)}_{stringify(self.ctas_per_cga)}_{stringify(self.cta_split_num)}_{stringify(self.cta_order)}_SSS"
 
     def __hash__(self):
-        return hash((self.vec, self.per_phase, self.max_phase, tuple(self.order),
-                     tuple(self.ctas_per_cga) if self.ctas_per_cga else None,
+        return hash((self.vec, self.per_phase, self.max_phase,
+                     tuple(self.order), tuple(self.ctas_per_cga) if self.ctas_per_cga else None,
                      tuple(self.cta_split_num) if self.cta_split_num else None,
                      tuple(self.cta_order) if self.cta_order else None))
