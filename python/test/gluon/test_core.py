@@ -4,7 +4,7 @@ import pytest
 import triton
 import triton.language as tl
 
-from triton._internal_testing import is_cuda, is_ampere_or_newer, is_hopper_or_newer, is_hopper, is_hip, is_hip_cdna, is_hip_gfx12
+from triton._internal_testing import is_cuda, is_ampere_or_newer, is_hopper_or_newer, is_hopper, is_hip, is_hip_cdna, is_hip_cdna4
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
 from triton.experimental.gluon.language.nvidia.ampere import async_copy, mbarrier
@@ -155,8 +155,8 @@ def test_amd_mfma_scaled(M, N, K, rhs_scale, mxfp_type, normal_type):
     if is_cuda():
         pytest.skip()
     if is_hip():
-        if not (is_hip_cdna() or is_hip_gfx12()):
-            pytest.skip("scaled_dot only implemented for HIP CDNA and gfx12")
+        if not (is_hip_cdna() or is_hip_cdna4()):
+            pytest.skip("scaled_dot only implemented for CDNA4")
 
     device = 'cuda'
 
