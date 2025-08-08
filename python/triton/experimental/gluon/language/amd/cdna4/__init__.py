@@ -1,8 +1,8 @@
 from triton.experimental.gluon.language import _core as ttgl
 from ..._core import builtin, float32, _unwrap_if_constexpr
-from ..cdna3 import buffer_load_to_shared, buffer_load, buffer_store, mfma
+from ..cdna3 import buffer_load_to_shared, buffer_load, buffer_store
 
-__all__ = ["buffer_load_to_shared", "buffer_load", "buffer_store", "mfma", "mfma_scaled"]
+__all__ = ["buffer_load_to_shared", "buffer_load", "buffer_store", "mfma_scaled"]
 
 
 @builtin

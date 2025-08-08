@@ -3,7 +3,7 @@ from typing import TYPE_CHECKING
 
 from triton.experimental.gluon.language import _core as ttgl
 from triton._C.libtriton import ir
-from ..._core import builtin, int32, uint32, float32, _unwrap_if_constexpr
+from ..._core import builtin, int32, uint32, _unwrap_if_constexpr
 from ..._semantic import _check
 
 if TYPE_CHECKING:
@@ -110,9 +110,3 @@ def buffer_store(stored_value, ptr, offsets, mask=None, cache=None, _semantic: G
     cache_modifier = _semantic._str_to_load_cache_modifier(cache) if cache is not None else ir.CACHE_MODIFIER.NONE
 
     _semantic.builder.create_buffer_store(stored_value.handle, ptr.handle, offsets.handle, mask, cache_modifier)
-
-
-@builtin
-def mfma(input, other, acc=None, input_precision=None, allow_tf32=None, max_num_imprecise_acc=None, out_dtype=float32,
-         layout=None, _semantic=None):
-    ...
