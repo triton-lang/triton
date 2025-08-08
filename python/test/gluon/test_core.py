@@ -151,8 +151,7 @@ def test_warpgroup_mma(ASYNC):
                          [(32, 64, 128, False, False, rhs_scale, mxfp_type, normal_type, 4, 16, 1)
                           for rhs_scale in [True, False]
                           for mxfp_type in ["e2m1", "e4m3", "e5m2"]
-                          for normal_type in ["e4m3", "e5m2"]
-                         ])
+                          for normal_type in ["e4m3", "e5m2"]])
 def test_mfma_scaled(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, num_warps, mma, kpack):
     if is_cuda():
         cc = torch.cuda.get_device_capability()
@@ -165,10 +164,9 @@ def test_mfma_scaled(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, n
     device = 'cuda'
 
     @triton.jit
-    def triton_kernel(
-            a_base, stride_a0, stride_a1, a_scale, b_base, stride_b0, stride_b1, b_scale, out,
-            BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr, type_a: tl.constexpr,
-            type_b: tl.constexpr):
+    def triton_kernel(a_base, stride_a0, stride_a1, a_scale, b_base, stride_b0, stride_b1, b_scale, out,
+                      BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr, type_a: tl.constexpr,
+                      type_b: tl.constexpr):
         DIV_FACTOR_A: tl.constexpr = 2 if type_a == "e2m1" else 1
         DIV_FACTOR_B: tl.constexpr = 2 if type_b == "e2m1" else 1
         PACKED_BLOCK_K_A: tl.constexpr = BLOCK_K // DIV_FACTOR_A
@@ -183,75 +181,50 @@ def test_mfma_scaled(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, n
         SCALE_BLOCK_K: tl.constexpr = BLOCK_K // 32
         if a_scale is not None:
             scale_a_ptr = a_scale + tl.arange(0, BLOCK_M)[:, None] * SCALE_BLOCK_K + tl.arange(0,
-                                                                                                SCALE_BLOCK_K)[None, :]
+                                                                                               SCALE_BLOCK_K)[None, :]
             a_scale = tl.load(scale_a_ptr)
         if b_scale is not None:
             scale_b_ptr = b_scale + tl.arange(0, BLOCK_N)[:, None] * SCALE_BLOCK_K + tl.arange(0,
-                                                                                                SCALE_BLOCK_K)[None, :]
+                                                                                               SCALE_BLOCK_K)[None, :]
             b_scale = tl.load(scale_b_ptr)
         c = tl.dot_scaled(a, a_scale, type_a, b, b_scale, type_b)
         out_ptr = out + tl.arange(0, BLOCK_M)[:, None] * BLOCK_N + tl.arange(0, BLOCK_N)[None, :]
         tl.store(out_ptr, c.to(tl.bfloat16))
 
     @gluon.jit
-    def gluon_kernel(
-            a_base, stride_a0, stride_a1, a_scale, b_base, stride_b0, stride_b1, b_scale, out,
-            BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr, type_a: tl.constexpr,
-            type_b: tl.constexpr):
+    def gluon_kernel(a_base, stride_a0, stride_a1, a_scale, b_base, stride_b0, stride_b1, b_scale, out,
+                     BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr, type_a: tl.constexpr,
+                     type_b: tl.constexpr):
         DIV_FACTOR_A: tl.constexpr = 2 if type_a == "e2m1" else 1
         DIV_FACTOR_B: tl.constexpr = 2 if type_b == "e2m1" else 1
         PACKED_BLOCK_K_A: tl.constexpr = BLOCK_K // DIV_FACTOR_A
         PACKED_BLOCK_K_B: tl.constexpr = BLOCK_K // DIV_FACTOR_B
 
         a_layout: ttgl.constexpr = ttgl.DistributedLinearLayout(
-            reg_bases=[[0, 1], [0, 2], [0, 4], [0, 8]],
-            lane_bases=[[0, 16], [0, 32], [0, 64], [1, 0], [2, 0], [4, 0]],
-            warp_bases=[[8, 0], [16, 0]],
-            block_bases=[],
-            shape=[32, 128])
+            reg_bases=[[0, 1], [0, 2], [0, 4], [0, 8]], lane_bases=[[0, 16], [0, 32], [0, 64], [1, 0], [2, 0], [4, 0]],
+            warp_bases=[[8, 0], [16, 0]], block_bases=[], shape=[32, 128])
         a_scale_layout: ttgl.constexpr = ttgl.DistributedLinearLayout(
-            reg_bases=[[16, 0]],
-            lane_bases=[[1, 0], [2, 0], [4, 0], [8, 0], [0, 1], [0, 2]],
-            warp_bases=[[0, 0], [0, 0]],
-            block_bases=[],
-            shape=[32, 4])
+            reg_bases=[[16, 0]], lane_bases=[[1, 0], [2, 0], [4, 0], [8, 0], [0, 1], [0, 2]],
+            warp_bases=[[0, 0], [0, 0]], block_bases=[], shape=[32, 4])
         b_layout: ttgl.constexpr = ttgl.DistributedLinearLayout(
-            reg_bases=[[1, 0], [2, 0], [4, 0], [8, 0]],
-            lane_bases=[[16, 0], [32, 0], [0, 1], [0, 2], [0, 4], [0, 8]],
-            warp_bases=[[0, 16], [0, 32]],
-            block_bases=[],
-            shape=[64, 64])
+            reg_bases=[[1, 0], [2, 0], [4, 0], [8, 0]], lane_bases=[[16, 0], [32, 0], [0, 1], [0, 2], [0, 4], [0, 8]],
+            warp_bases=[[0, 16], [0, 32]], block_bases=[], shape=[64, 64])
         b_scale_layout: ttgl.constexpr = ttgl.DistributedLinearLayout(
-            reg_bases=[],
-            lane_bases=[[1, 0], [2, 0], [4, 0], [8, 0], [0, 1], [0, 2]],
-            warp_bases=[[16, 0], [32, 0]],
-            block_bases=[],
-            shape=[64, 4])
-        b_scale_buffer_layout: ttgl.constexpr = ttgl.DistributedLinearLayout(
-            reg_bases=[],
-            lane_bases=[[0, 1], [0, 2], [1, 0], [2, 0], [4, 0], [8, 0]],
-            warp_bases=[[16, 0], [32, 0]],
-            block_bases=[],
-            shape=[64, 4])
-        mma: ttgl.constexpr = ttgl.amd.AMDMFMALayout(
-            version=4,
-            warps_per_cta=[1, 4],
-            tiles_per_warp=[1, 1],
-            instr_shape=[16, 16],
-            transposed=True)
+            reg_bases=[], lane_bases=[[1, 0], [2, 0], [4, 0], [8, 0], [0, 1], [0, 2]], warp_bases=[[16, 0], [32, 0]],
+            block_bases=[], shape=[64, 4])
+        mma: ttgl.constexpr = ttgl.amd.AMDMFMALayout(version=4, warps_per_cta=[1, 4], tiles_per_warp=[1, 1],
+                                                     instr_shape=[16, 16], transposed=True)
 
         zero = ttgl.zeros([BLOCK_M, BLOCK_N], dtype=ttgl.float32, layout=mma)
 
         a_offsets = ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, a_layout))[:, None] * stride_a0 + \
                     ttgl.arange(0, PACKED_BLOCK_K_A, layout=ttgl.SliceLayout(0, a_layout))[None, :] * stride_a1
-        a_ptrs = a_base + a_offsets
-        a = tl.load(a_ptrs)
+        a = ttgl.amd.cdna4.buffer_load(a_base, a_offsets)
         a = ttgl.convert_layout(a, ttgl.DotOperandLayout(operand_index=0, parent=mma, k_width=16))
 
         b_offsets = ttgl.arange(0, PACKED_BLOCK_K_B, layout=ttgl.SliceLayout(1, b_layout))[:, None] * stride_b0 + \
                     ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, b_layout))[None, :] * stride_b1
-        b_ptrs = b_base + b_offsets
-        b = tl.load(b_ptrs)
+        b = ttgl.amd.cdna4.buffer_load(b_base, b_offsets)
         b = ttgl.convert_layout(b, ttgl.DotOperandLayout(operand_index=1, parent=mma, k_width=16))
 
         SCALE_BLOCK_K: tl.constexpr = BLOCK_K // 32
@@ -265,10 +238,9 @@ def test_mfma_scaled(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, n
             assert b_scale is not None
             a_scale = ttgl.full([BLOCK_M, SCALE_BLOCK_K], 127, dtype=ttgl.int8, layout=a_scale_layout)
 
-            b_scale_offsets = ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(1, b_scale_buffer_layout))[:, None] * SCALE_BLOCK_K + \
-                              ttgl.arange(0, SCALE_BLOCK_K, layout=ttgl.SliceLayout(0, b_scale_buffer_layout))[None, :]
+            b_scale_offsets = ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(1, b_scale_layout))[:, None] * SCALE_BLOCK_K + \
+                              ttgl.arange(0, SCALE_BLOCK_K, layout=ttgl.SliceLayout(0, b_scale_layout))[None, :]
             b_scale = ttgl.amd.cdna4.buffer_load(b_scale, b_scale_offsets)
-            b_scale = ttgl.convert_layout(b_scale, b_scale_layout)
 
         c = ttgl.amd.cdna4.mfma_scaled(a, a_scale, type_a, b, b_scale, type_b, zero, layout=mma)
         c = c.to(out.dtype.element_ty)
@@ -340,8 +312,7 @@ def test_mfma_scaled(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, n
     kernel_kwargs["matrix_instr_nonkdim"] = mma
 
     z = torch.zeros((M, N), dtype=comp_dtype, device=device)
-    gluon_kernel[(1, )](x, *x.stride(), scale_x, y, *y.stride(), scale_y, z, M, N, K, type_a, type_b,
-                        **kernel_kwargs)
+    gluon_kernel[(1, )](x, *x.stride(), scale_x, y, *y.stride(), scale_y, z, M, N, K, type_a, type_b, **kernel_kwargs)
 
     z_ref = torch.zeros((M, N), dtype=comp_dtype, device=device)
     triton_kernel[(1, )](x, *x.stride(), scale_x, y, *y.stride(), scale_y, z_ref, M, N, K, type_a, type_b,
