@@ -87,9 +87,9 @@ triton::AMD::TritonIntegerRangeAnalysis::maybeGetTripCount(
 namespace {
 
 constexpr int64_t kDefaultMaxTripCount = 1024;
-constexpr int64_t maxXPrograms = 1L << 31; // 2147483648
-constexpr int64_t maxYPrograms = 1L << 16; // 65536
-constexpr int64_t maxZPrograms = 1L << 16; // 65536
+constexpr uint64_t maxXPrograms = 1L << 31; // 2147483648
+constexpr uint64_t maxYPrograms = 1L << 16; // 65536
+constexpr uint64_t maxZPrograms = 1L << 16; // 65536
 
 void getEnclosingLoops(Operation &op, SmallVector<LoopLikeOpInterface> &ops) {
   Operation *currOp = op.getParentOp();
@@ -388,7 +388,7 @@ LogicalResult TritonIntegerRangeAnalysis::visitOperation(
           op)) {
     llvm::TypeSwitch<Operation *>(op)
         .Case<GetProgramIdOp>([&](GetProgramIdOp getPIDOp) {
-          int max_programs;
+          uint64_t max_programs;
           if (getPIDOp.getAxisAsInt() == 0) {
             max_programs = maxXPrograms;
           } else if (getPIDOp.getAxisAsInt() == 1) {
@@ -400,7 +400,7 @@ LogicalResult TritonIntegerRangeAnalysis::visitOperation(
           inferResultRangesPID(getPIDOp, max_programs - 1, joinCallback);
         })
         .Case<GetNumProgramsOp>([&](GetNumProgramsOp getPIDOp) {
-          int max_programs;
+          int64_t max_programs;
           if (getPIDOp.getAxisAsInt() == 0) {
             max_programs = maxXPrograms;
           } else if (getPIDOp.getAxisAsInt() == 1) {
