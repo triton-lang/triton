@@ -88,4 +88,14 @@ def TritonAMDGPULowerInstructionSchedHints : Pass<"triton-amdgpu-lower-insert-in
     ];
 }
 
+def ConvertMaskedOpsToLLVM : Pass<"convert-masked-ops-to-llvm", "mlir::ModuleOp"> {
+    let summary = "Convert masked ld/st ops to LLVM";
+    let constructor = "mlir::triton::createConvertMaskedOpsToLLVMPass()";
+
+    let dependentDialects = ["mlir::LLVM::LLVMDialect",
+                             "mlir::triton::amdgpu::TritonAMDGPUDialect"];
+}
+
+
+
 #endif

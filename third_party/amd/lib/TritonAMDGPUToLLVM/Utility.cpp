@@ -294,34 +294,9 @@ Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
 Value llLoad(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,
              Value pred, Value falseVal, triton::CacheModifier cm,
              bool forceNoAliasAsyncLoads) {
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-
-  Type funcType = getFunctionType(elemTy, ValueRange({ptr, pred, falseVal}));
-  auto parent = ptr.getParentRegion()->getParentOfType<LLVM::LLVMFuncOp>();
-  auto getLoadNameRaw = [](triton::CacheModifier cm) {
-    switch (cm) {
-    case triton::CacheModifier::CA:
-      return predicatedLoadCA;
-    case triton::CacheModifier::CG:
-      return predicatedLoadCG;
-    case triton::CacheModifier::CV:
-      return predicatedLoadCV;
-    default:
-      // Do not fail in compile time in the case of unsupported modifier.
-      // Just apply default config.
-      return predicatedLoad;
-    }
-  };
-  std::string funcName = getLoadNameRaw(cm);
-  if (forceNoAliasAsyncLoads)
-    funcName += noAliasAsyncLoads;
-
-  auto mangledName = mangleFunc(funcName, funcType);
-  LLVM::LLVMFuncOp funcOp =
-      appendOrGetExternFuncOp(rewriter, parent, mangledName, funcType);
-  return LLVM::createLLVMCallOp(rewriter, loc, funcOp,
-                                ValueRange({ptr, pred, falseVal}))
-      .getResult();
+  return rewriter.create<triton::amdgpu::MaskedLoadOp>(
+        loc, elemTy, ptr, pred, falseVal, cm, forceNoAliasAsyncLoads)
+        .getResult(); // is here okay? 
 }
 
 void llStore(RewriterBase &rewriter, Location loc, Value ptr, Value val,
