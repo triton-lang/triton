@@ -2675,8 +2675,8 @@ def test_reduce(op, dtype_str, shape, axis, keep_dims, num_ctas, device):
     USE_I1 = dtype_str == 'bool'
     if axis is not None and axis >= len(shape):
         with pytest.raises(triton.TritonError):
-            kernel[(1, )](x_tri, z_tri, BLOCK_M=shape[0], BLOCK_N=shape[1], BLOCK_K=BLOCK_K, IS_3D=IS_3D, AXIS=axis,
-                          KEEP_DIMS=keep_dims, USE_I1=USE_I1, num_ctas=num_ctas)
+            kernel.warmup(x_tri, z_tri, BLOCK_M=shape[0], BLOCK_N=shape[1], BLOCK_K=BLOCK_K, IS_3D=IS_3D, AXIS=axis,
+                          KEEP_DIMS=keep_dims, USE_I1=USE_I1, num_ctas=num_ctas, grid=(1, ))
         return
     else:
         kernel[(1, )](x_tri, z_tri, BLOCK_M=shape[0], BLOCK_N=shape[1], BLOCK_K=BLOCK_K, IS_3D=IS_3D, AXIS=axis,
@@ -3731,7 +3731,7 @@ def convert_fp8_to_fp32(x, device, dtype_str):
         return torch.tensor(x, device=device).view(torch.float8_e4m3fnuz).to(torch.float32)
     elif dtype_str == 'float8e5b16':
         return torch.tensor(x, device=device).view(torch.float8_e5m2fnuz).to(torch.float32)
-    assert "Unsupported float8 dtype"
+    raise AssertionError("Unsupported float8 dtype")
 
 
 # M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, kpack, mma_nonk_size
@@ -4002,7 +4002,7 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
 
     # torch result
     if in_dtype == 'int8':
-        z_ref = np.matmul(x.astype(np.float32), y.astype(np.float32())).astype(np.int32)
+        z_ref = np.matmul(x.astype(np.float32), y.astype(np.float32)).astype(np.int32)
     elif 'float8' in in_dtype:
         x = convert_fp8_to_fp32(x, device, in_dtype)
         y = convert_fp8_to_fp32(y, device, in_dtype)
@@ -4032,7 +4032,7 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
             elif in_dtype == 'float8e5b16':
                 z_fp8 = torch.tensor(z_ref, dtype=torch.float8_e5m2fnuz)
             else:
-                assert "Unsupported float8 dtype"
+                raise AssertionError("Unsupported float8 dtype")
             z_ref = to_numpy(z_fp8.to(torch.float32))
             w = to_numpy(convert_fp8_to_fp32(w, device, in_dtype))
         z_ref = np.matmul(z_ref, w)
@@ -4050,7 +4050,7 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
         return
 
     if is_hip_cdna():
-        amdgcn = pgm.asm['amdgcn']
+        amdgcn = compiled.asm['amdgcn']
 
         if (M, N) == (4, 64) or (M, N) == (64, 4):
             assert 'v_mfma_f32_4x4' in amdgcn
@@ -4062,7 +4062,7 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
         return
 
     # make sure ld/st are vectorized
-    ptx = pgm.asm['ptx']
+    ptx = compiled.asm['ptx']
 
     if (K > 16 or N > 16 or M > 16) and (M * N // (num_warps * 32) >= 4):
         # XXX: skip small sizes because they are not vectorized
@@ -4873,7 +4873,7 @@ def test_load_cache_modifier(cache, device):
         x = tl.load(src + offsets, cache_modifier=CACHE)
         tl.store(dst + offsets, x)
 
-    pgm = _kernel[(1, )](dst, src, CACHE=cache)
+    pgm = _kernel.warmup(dst, src, CACHE=cache, grid=(1, ))
 
     if is_hip():
         target_arch = get_arch()
@@ -4949,7 +4949,7 @@ def test_vectorization_hints(has_hints, device):
         x = tl.load(src + offsets, mask=offsets < N)
         tl.store(dst + offsets, x, mask=offsets < N)
 
-    pgm = _kernel[(1, )](dst, src, off, N=1024, BLOCK_SIZE=src.shape[0], HINT=has_hints)
+    pgm = _kernel.warmup(dst, src, off, N=1024, BLOCK_SIZE=src.shape[0], HINT=has_hints, grid=(1, ))
     if not is_cuda():
         return
 
@@ -4973,7 +4973,7 @@ def test_assume(device):
             tl.store(out_ptr + tl.program_id(0), current_size + 101024)
 
     output = torch.zeros(1024 // 128, device=device)
-    pgm = _kernel[(1024 // 128, )](output, N=1024, BLOCK_N=128)
+    pgm = _kernel.warmup(output, N=1024, BLOCK_N=128, grid=(1024 // 128, ))
 
     if is_interpreter():
         return
@@ -5001,7 +5001,7 @@ def test_store_cache_modifier(cache, device):
         x = tl.load(src + offsets)
         tl.store(dst + offsets, x, cache_modifier=CACHE)
 
-    pgm = _kernel[(1, )](dst, src, CACHE=cache)
+    pgm = _kernel.warmup(dst, src, CACHE=cache, grid=(1, ))
 
     if is_hip():
         target_arch = get_arch()
@@ -5067,7 +5067,7 @@ def test_store_eviction_policy(eviction_policy, device):
 
     if not is_cuda():
         return
-    pgm = _kernel[(1, )](dst, src, POLICY=eviction_policy)
+    pgm = _kernel.warmup(dst, src, POLICY=eviction_policy, grid=(1, ))
     ptx = pgm.asm['ptx']
     if eviction_policy == '':
         assert 'evict_last' not in ptx
@@ -5138,7 +5138,7 @@ def test_pointer_arguments(device):
     x = torch.empty(1024, device=device.split('_')[0], pin_memory=pin_memory)
     if device == "cpu":
         with pytest.raises(ValueError):
-            kernel[(1, )](x)
+            kernel.warmup(x, grid=(1, ))
     else:
         kernel.warmup(x, grid=(1, ))
 
