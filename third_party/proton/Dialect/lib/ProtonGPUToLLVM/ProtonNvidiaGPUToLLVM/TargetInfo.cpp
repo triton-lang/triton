@@ -37,8 +37,8 @@ Value TargetInfo::clock(ConversionPatternRewriter &rewriter, Location loc,
   return clock64;
 }
 
-Value TargetInfo::getGlobalTime(ConversionPatternRewriter &rewriter,
-                                Location loc) const {
+Value TargetInfo::globalTime(ConversionPatternRewriter &rewriter,
+                             Location loc) const {
   // globaltimer is a 64-bit global clock counter in nanoseconds.
   // Reference:
   // https://docs.nvidia.com/cuda/parallel-thread-execution/#special-registers-globaltimer

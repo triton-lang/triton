@@ -27,8 +27,8 @@ Value TargetInfo::clock(ConversionPatternRewriter &rewriter, Location loc,
   return clockVal;
 }
 
-Value TargetInfo::getGlobalTime(ConversionPatternRewriter &rewriter,
-                                Location loc) const {
+Value TargetInfo::globalTime(ConversionPatternRewriter &rewriter,
+                             Location loc) const {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   StringRef globalTimeIntrinsicName = "llvm.amdgcn.s.memrealtime";
   Value globalTimeVal = LLVM::createLLVMIntrinsicCallOp(
