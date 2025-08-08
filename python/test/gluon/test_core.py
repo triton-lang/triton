@@ -200,6 +200,7 @@ def test_amd_mfma_scaled(M, N, K, rhs_scale, mxfp_type, normal_type):
         DIV_FACTOR_B: tl.constexpr = 2 if type_b == "e2m1" else 1
         PACKED_BLOCK_K_A: tl.constexpr = BLOCK_K // DIV_FACTOR_A
         PACKED_BLOCK_K_B: tl.constexpr = BLOCK_K // DIV_FACTOR_B
+        SCALE_BLOCK_K: tl.constexpr = BLOCK_K // 32
 
         a_unpacked_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 16], [8, 8], [4, 1], [1, 0])
         a_packed_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [8, 8], [4, 1], [1, 0])
@@ -232,11 +233,10 @@ def test_amd_mfma_scaled(M, N, K, rhs_scale, mxfp_type, normal_type):
         b = ttgl.amd.cdna4.buffer_load(b_base, b_offsets)
         b = ttgl.convert_layout(b, ttgl.DotOperandLayout(operand_index=1, parent=mfma_layout, k_width=16))
 
-        SCALE_BLOCK_K: tl.constexpr = BLOCK_K // 32
         if a_scale is not None:
-            a_offsets = ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, a_scale_layout))[:, None] * SCALE_BLOCK_K + \
-                        ttgl.arange(0, SCALE_BLOCK_K, layout=ttgl.SliceLayout(0, a_scale_layout))[None, :]
-            a_scale = ttgl.amd.cdna4.buffer_load(a_scale, a_offsets)
+            a_scale_offsets = ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, a_scale_layout))[:, None] * SCALE_BLOCK_K + \
+                              ttgl.arange(0, SCALE_BLOCK_K, layout=ttgl.SliceLayout(0, a_scale_layout))[None, :]
+            a_scale = ttgl.amd.cdna4.buffer_load(a_scale, a_scale_offsets)
         else:
             a_scale = ttgl.full([BLOCK_M, SCALE_BLOCK_K], 127, dtype=ttgl.int8, layout=a_scale_layout)
 
