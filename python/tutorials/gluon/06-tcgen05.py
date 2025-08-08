@@ -63,7 +63,7 @@ if __name__ == "__main__" and not is_blackwell():
 # - Tensor memory is essentially an extra register file. You will notice that
 #   128 * 512 = 64K 32-bit cells, just like the SM register file.
 # - Tensor memory can be used independent of MMA instructions. It can be used
-#   in-place of shared memory to transfer data as permitted by the layout
+#   in-place of shared memory to transfer data, as permitted by the layout
 #   restrictions.
 # - Tensor memory is dynamically allocated on the SM, so while tensor memory
 #   does not directly affect occupancy, the allocation will block if there is
@@ -84,22 +84,22 @@ if __name__ == "__main__" and not is_blackwell():
 # unpacked=False, however blockN must then be at least `32 // bitwidth`.
 #
 # Note that when blockM=64, tensors with multiple blocks are packed in TMEM to
-# use all 128 rows. This can complicate subslicing TMEM descriptors.
+# use all 128 rows. This can complicate slicing TMEM descriptors.
 #
 # The underlying `tcgen05.st` and `tcgen05.ld` instructions are warp-level
 # instructions that access TMEM in specific patterns. Combined with the warp
 # row-addressing restrictions, this gives rise to the register layout
 # restrictions on tensor memory. Certain tensor memory layouts support multiple
 # register layouts, which affect the selected atom. In this tutorial, we will
-# only use the `32x32b` atom: each lane rows 1 row of TMEM.
+# only use the `32x32b` atom: each lane stores and loads 1 row of TMEM.
 
 
 @gluon.jit
 def tmem_example_kernel(in_ptr, out_ptr, M: gl.constexpr, N: gl.constexpr, num_warps: gl.constexpr):
-    ldgstg_layout: gl.constexpr = gl.BlockedLayout([1, 1], [1, 32], [1, num_warps], [1, 0])
+    global_memory_layout: gl.constexpr = gl.BlockedLayout([1, 1], [1, 32], [1, num_warps], [1, 0])
 
-    offs_m = gl.arange(0, M, gl.SliceLayout(1, ldgstg_layout))
-    offs_n = gl.arange(0, N, gl.SliceLayout(0, ldgstg_layout))
+    offs_m = gl.arange(0, M, gl.SliceLayout(1, global_memory_layout))
+    offs_n = gl.arange(0, N, gl.SliceLayout(0, global_memory_layout))
     offs = offs_m[:, None] * N + offs_n[None, :]
 
     input = gl.load(in_ptr + offs)
@@ -127,7 +127,7 @@ def tmem_example_kernel(in_ptr, out_ptr, M: gl.constexpr, N: gl.constexpr, num_w
     input = gl.convert_layout(input, tmem_reg_layout)
     tmem.store(input)
     output = tmem.load(tmem_reg_layout)
-    output = gl.convert_layout(output, ldgstg_layout)
+    output = gl.convert_layout(output, global_memory_layout)
 
     gl.store(out_ptr + offs, output)
 
@@ -241,8 +241,8 @@ def small_mma_kernel(a_desc, b_desc, c_desc, d_desc, tmem_block: gl.constexpr,  
     mbarrier.invalidate(bar)
 
     # Another important flag to consider is `use_acc`. When `use_acc=False`, the
-    # current value of the accumulator in TMEM is ignored and the accumulator.
-    # This is an efficient way to zero the accumulator.
+    # current value of the accumulator in TMEM is ignored. This is an efficient
+    # way to zero the accumulator.
 
     d_smem = gl.allocate_shared_memory(d_desc.dtype, d_desc.block_type.shape, d_desc.layout)
     acc = acc_tmem.load(acc_reg_layout)
@@ -257,10 +257,10 @@ def small_mma(A, B, C, D, tmem_block, LHS_IN_TMEM, USE_COMMIT, num_warps):
     b_layout = gl.NVMMASharedLayout.get_default_for(B.shape, gl.float16)
     cd_layout = gl.NVMMASharedLayout.get_default_for(C.shape, gl.float32)
 
-    a_desc = TensorDescriptor(A, A.shape, A.stride(), A.shape, a_layout)
-    b_desc = TensorDescriptor(B, B.shape, B.stride(), B.shape, b_layout)
-    c_desc = TensorDescriptor(C, C.shape, C.stride(), C.shape, cd_layout)
-    d_desc = TensorDescriptor(D, D.shape, D.stride(), D.shape, cd_layout)
+    a_desc = TensorDescriptor.from_tensor(A, A.shape, a_layout)
+    b_desc = TensorDescriptor.from_tensor(B, B.shape, b_layout)
+    c_desc = TensorDescriptor.from_tensor(C, C.shape, cd_layout)
+    d_desc = TensorDescriptor.from_tensor(D, D.shape, cd_layout)
 
     small_mma_kernel[(1, )](
         a_desc, b_desc, c_desc, d_desc, tmem_block,  #
@@ -361,14 +361,14 @@ def blocked_matmul(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B, num_warps):
     M, N = C.shape
 
     a_layout = gl.NVMMASharedLayout.get_default_for([BLOCK_M, BLOCK_K], gl.float16)
-    a_desc = TensorDescriptor(A, A.shape, A.stride(), [BLOCK_M, BLOCK_K], a_layout)
+    a_desc = TensorDescriptor.from_tensor(A, [BLOCK_M, BLOCK_K], a_layout)
 
     B_BLOCK_SHAPE = [BLOCK_N, BLOCK_K] if TRANSPOSE_B else [BLOCK_K, BLOCK_N]
     b_layout = gl.NVMMASharedLayout.get_default_for(B_BLOCK_SHAPE, gl.float16)
-    b_desc = TensorDescriptor(B, B.shape, B.stride(), B_BLOCK_SHAPE, b_layout)
+    b_desc = TensorDescriptor.from_tensor(B, B_BLOCK_SHAPE, b_layout)
 
     c_layout = gl.NVMMASharedLayout.get_default_for([BLOCK_M, BLOCK_N], gl.float16)
-    c_desc = TensorDescriptor(C, C.shape, C.stride(), [BLOCK_M, BLOCK_N], c_layout)
+    c_desc = TensorDescriptor.from_tensor(C, [BLOCK_M, BLOCK_N], c_layout)
 
     grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
     blocked_matmul_kernel[grid](a_desc, b_desc, c_desc, TRANSPOSE_B, num_warps=num_warps)
@@ -441,11 +441,11 @@ if __name__ == "__main__":
 # Since tcgen05_mma is asynchronous, we can overlap it with the TMA loads to
 # reduce SM idle time. Even though the instruction is asynchronous, tcgen05
 # instructions are implicitly pipelined, meaning their execution order is
-# guaranteed:
+# guaranteed whenever you have:
 #
-# - tcgen05_mma instructions with the same shape and accumulator dtype
-# - tcgen05_mma followed by tcgen05_commit
-# - tcgen05_cp followed by tcgen05_mma, and vice versa
+# - two or more tcgen05_mma instructions with the same shape and accumulator dtype
+# - a tcgen05_mma followed by tcgen05_commit
+# - a tcgen05_cp followed by tcgen05_mma, and vice versa
 #
 # Thus, we don't need to explicitly synchronize two async MMAs. Combined with
 # an mbarrier completion mechanism, it is possible to precisely track MMA
@@ -457,8 +457,8 @@ def get_and_increment(counter):
     return counter % 2, counter // 2 & 1, counter + 1
 
 
-# This pipelined kernel implements pingpong with software pipelining by
-# processing two blocks at the same time. The kernel partitions along M. The
+# This pipelined kernel processes two blocks at the same time with software
+# pipelining by juggling between them. The kernel partitions along M. The
 # kernel expects BLOCK_M = BLOCK_N = 128 and double-buffers all inputs. If
 # BLOCK_K is 128, this kernel will use 192 KB of SMEM.
 #
@@ -612,9 +612,9 @@ def blocked_matmul_pipelined(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, num_warps):
     a_layout = gl.NVMMASharedLayout.get_default_for([BLOCK_M, BLOCK_K], gl.float16)
     b_layout = gl.NVMMASharedLayout.get_default_for([BLOCK_K, BLOCK_N], gl.float16)
     c_layout = gl.NVMMASharedLayout.get_default_for([BLOCK_M, BLOCK_N], gl.float16)
-    a_desc = TensorDescriptor(A, A.shape, A.stride(), [BLOCK_M, BLOCK_K], a_layout)
-    b_desc = TensorDescriptor(B, B.shape, B.stride(), [BLOCK_K, BLOCK_N], b_layout)
-    c_desc = TensorDescriptor(C, C.shape, C.stride(), [BLOCK_M, BLOCK_N], c_layout)
+    a_desc = TensorDescriptor.from_tensor(A, [BLOCK_M, BLOCK_K], a_layout)
+    b_desc = TensorDescriptor.from_tensor(B, [BLOCK_K, BLOCK_N], b_layout)
+    c_desc = TensorDescriptor.from_tensor(C, [BLOCK_M, BLOCK_N], c_layout)
 
     grid = (triton.cdiv(M, 2 * BLOCK_M), triton.cdiv(N, BLOCK_N))
     blocked_matmul_pipelined_kernel[grid](a_desc, b_desc, c_desc, num_warps=num_warps)

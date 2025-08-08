@@ -125,8 +125,8 @@ def memcpy_1d_tma(input, output, XBLOCK=8192):
     layout = gl.NVMMASharedLayout.get_default_for(block_shape, gl.float32)
 
     # Wrap the tensors in tensor descriptors.
-    in_desc = TensorDescriptor(input, input.shape, input.stride(), block_shape, layout)
-    out_desc = TensorDescriptor(output, output.shape, output.stride(), block_shape, layout)
+    in_desc = TensorDescriptor.from_tensor(input, block_shape, layout)
+    out_desc = TensorDescriptor.from_tensor(output, block_shape, layout)
 
     grid = (triton.cdiv(input.numel(), XBLOCK), )
     # Our kernel only uses scalars, so just a single warp is enough.
@@ -256,8 +256,6 @@ def elementwise_add_tma_kernel(  #
 
     for _ in range(gl.cdiv(ynumel, YBLOCK) - (num_buffers - 1)):
         copy_index = issue_loads(copy_index, a_desc, b_desc, a_smem, b_smem, bars, xoff, YBLOCK, num_buffers)
-
-        # Wait for the copy from num_buffers-1 iterations ago to complete.
         read_index = perform_add(read_index, bars, a_smem, b_smem, c_smem, c_desc, xoff, layout, YBLOCK, num_buffers)
 
     for _ in gl.static_range(num_buffers - 1):
@@ -276,12 +274,13 @@ def elementwise_add_tma(a, b, c, XBLOCK=32, YBLOCK=64, num_buffers=2):
     grid = (triton.cdiv(xnumel, XBLOCK), )
 
     block_shape = [XBLOCK, YBLOCK]
+    # TMA descriptors require NVMMASharedLayout.
     layout = gl.NVMMASharedLayout.get_default_for(block_shape, gl.float32)
 
     # The strides of TMA descriptors must be 16-byte aligned.
-    a_desc = TensorDescriptor(a, a.shape, a.stride(), block_shape, layout)
-    b_desc = TensorDescriptor(b, b.shape, b.stride(), block_shape, layout)
-    c_desc = TensorDescriptor(c, c.shape, c.stride(), block_shape, layout)
+    a_desc = TensorDescriptor.from_tensor(a, block_shape, layout)
+    b_desc = TensorDescriptor.from_tensor(b, block_shape, layout)
+    c_desc = TensorDescriptor.from_tensor(c, block_shape, layout)
     elementwise_add_tma_kernel[grid](a_desc, b_desc, c_desc, xnumel, ynumel, XBLOCK, YBLOCK, num_buffers)
 
 

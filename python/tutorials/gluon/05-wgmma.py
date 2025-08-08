@@ -2,9 +2,9 @@
 Warp-Group MMA
 ==============
 
-WGMMA (also known as MMAv3) is a Hopper-specific instruction for performing
-matrix multiply-accumulate operations using the Tensor Cores. WGMMA instructions
-are asynchronous, meaning they can be pipelined.
+Warp-Group MMA (also known as WGMMA or MMAv3) is a Hopper-specific instruction
+for performing matrix multiply-accumulate operations using the Tensor Cores.
+WGMMA instructions are asynchronous, meaning they can be pipelined.
 
 In this tutorial, we will cover how to use WGMMAs in Gluon. We will build a
 simple matmul kernel to demonstrate practical uses of WGMMA, and show an example
@@ -59,8 +59,9 @@ if __name__ == "__main__" and not is_hopper():
 #
 #   224, 208, 192, 176, 160, 144, 128, 112, 96, 80, 64, 48, 32, 24, 16, 8
 #
-# `n` must be chosen such that it evenly divides into `N`, and it must be
-# less than or equal to `maxN`, where `maxN` is computed as:
+# `n` must be chosen such that it evenly divides into `BLOCK_N`, the inner
+# dimension of the MMA tile, and it must be less than or equal to `maxN`, where
+# `maxN` is computed as:
 #
 #     mReps = ceildiv(M, m)
 #     nReps = ceildiv(num_warps, mReps)
@@ -69,10 +70,11 @@ if __name__ == "__main__" and not is_hopper():
 # warpgroup_mma divides the MMA across warps using `warps_per_cta`, in the
 # same way `BlockedLayout.warps_per_cta` tiles a tensor across warps. The
 # smallest indivisible unit of `warps_per_cta` is `[4, 1]`. Note that this
-# means WGMMA requires at least 4 warps. To choose the right `warps_per_cta`,
-# start from the atom `[4, 1]` and simply double it along any dimension until it
-# matches the number of warps. Note that since `m=16` and must be at least 4
-# wraps along M, the M dimension must be at least 64.
+# means WGMMA requires at least 4 warps, which together make up one warp group.
+# To choose the right `warps_per_cta`, start from the atom `[4, 1]` and simply
+# double it along any dimension until it matches the number of warps. Note that
+# since `m=16` and must be at least 4 wraps along M, the M dimension must be at
+# least 64.
 #
 # Note when `num_warps=8`, we can choose `[4, 2]` or `[8, 1]`, but recall from
 # 02-layouts that this can affect the performance of, e.g., reductions.
@@ -117,9 +119,9 @@ if __name__ == "__main__" and not is_hopper():
 # tma.async_copy_global_to_shared(a_desc, [0, 0], bar, a_smem)
 # ```
 
-
 # %%
 # Let's implement a simple matmul kernel that uses WGMMA.
+
 
 @gluon.jit
 def small_mma_kernel(a_desc, b_desc, c_desc, d_desc,  #
@@ -204,10 +206,10 @@ def small_mma(A, B, C, D, INSTR_SHAPE_N, LHS_IN_REG=False, num_warps=4):
     b_layout = gl.NVMMASharedLayout.get_default_for(B.shape, gl.float16)
     cd_layout = gl.NVMMASharedLayout.get_default_for(C.shape, gl.float32)
 
-    a_desc = TensorDescriptor(A, A.shape, A.stride(), A.shape, a_layout)
-    b_desc = TensorDescriptor(B, B.shape, B.stride(), B.shape, b_layout)
-    c_desc = TensorDescriptor(C, C.shape, C.stride(), C.shape, cd_layout)
-    d_desc = TensorDescriptor(D, D.shape, D.stride(), D.shape, cd_layout)
+    a_desc = TensorDescriptor.from_tensor(A, A.shape, a_layout)
+    b_desc = TensorDescriptor.from_tensor(B, B.shape, b_layout)
+    c_desc = TensorDescriptor.from_tensor(C, C.shape, cd_layout)
+    d_desc = TensorDescriptor.from_tensor(D, D.shape, cd_layout)
 
     small_mma_kernel[(1, )](
         a_desc, b_desc, c_desc, d_desc,  #
@@ -382,14 +384,14 @@ def blocked_matmul(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B, num_warps):
     M, N = C.shape
 
     a_layout = gl.NVMMASharedLayout.get_default_for([BLOCK_M, BLOCK_K], gl.float16)
-    a_desc = TensorDescriptor(A, A.shape, A.stride(), [BLOCK_M, BLOCK_K], a_layout)
+    a_desc = TensorDescriptor.from_tensor(A, [BLOCK_M, BLOCK_K], a_layout)
 
     B_BLOCK_SHAPE = [BLOCK_N, BLOCK_K] if TRANSPOSE_B else [BLOCK_K, BLOCK_N]
     b_layout = gl.NVMMASharedLayout.get_default_for(B_BLOCK_SHAPE, gl.float16)
-    b_desc = TensorDescriptor(B, B.shape, B.stride(), B_BLOCK_SHAPE, b_layout)
+    b_desc = TensorDescriptor.from_tensor(B, B_BLOCK_SHAPE, b_layout)
 
     c_layout = gl.NVMMASharedLayout.get_default_for([BLOCK_M, BLOCK_N], gl.float16)
-    c_desc = TensorDescriptor(C, C.shape, C.stride(), [BLOCK_M, BLOCK_N], c_layout)
+    c_desc = TensorDescriptor.from_tensor(C, [BLOCK_M, BLOCK_N], c_layout)
 
     grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
     blocked_matmul_kernel[grid](a_desc, b_desc, c_desc, TRANSPOSE_B, num_warps=num_warps)
@@ -418,8 +420,12 @@ def test_blocked_matmul(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B, num_war
 #
 # We should try to pick the largest `n` for the WGMMA layout. Based on the
 # formula for `maxN` this requires `BLOCK_N>=256`. Because our kernel does not
-# overlap the TMA loads with WGMMA, we will need at least 2 occupancy so SMs
-# have work to switch to while waiting.
+# overlap the TMA loads with WGMMA, we will want more than program resident on
+# each SM so that when one kernel stalls, the SM can switch to the other. This
+# is known as "occupancy". In detail, each SM has limited resources, and the
+# resource usage of a kernel determines its max occupancy. The SM schedules work
+# by warp using its warp scheduler, which can efficiently swap executing warps,
+# almost like hyperthreading.
 #
 # Based on register and smem constraints, we can filter configs for the desired
 # occupancy. Keep in mind that these are rules of thumb. It's hard to know for
@@ -454,7 +460,7 @@ def find_configs(occupancy, dtype, num_buffers=1):
             continue
 
         instr_shape_n = get_instr_shape_n(BLOCK_M, BLOCK_N, num_warps).value
-        configs.append((BLOCK_M, BLOCK_N, BLOCK_K, num_warps, instr_shape_n))
+        configs.append((BLOCK_M, BLOCK_N, BLOCK_K, num_warps, instr_shape_n, occupancy))
 
     def filter_configs(configs, instr_shape_n):
         max_n_configs = [cfg for cfg in configs if cfg[4] == instr_shape_n]
@@ -481,25 +487,25 @@ if __name__ == "__main__":
     A = torch.randn(M, K, device="cuda", dtype=torch.float16)
     B = torch.randn(K, N, device="cuda", dtype=torch.float16)
     C = torch.empty(M, N, device="cuda", dtype=torch.float16)
-    print("BLOCK_M BLOCK_N BLOCK_K num_warps instr_shape_n time (ms) tflops/s")
-    for BLOCK_M, BLOCK_N, BLOCK_K, num_warps, instr_shape_n in configs:
+    print("BLOCK_M BLOCK_N BLOCK_K num_warps instr_shape_n occupancy time (ms) tflops/s")
+    for BLOCK_M, BLOCK_N, BLOCK_K, num_warps, instr_shape_n, occupancy in configs:
         fn = lambda: blocked_matmul(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, False, num_warps)
         ms = triton.testing.do_bench(fn)
         flops = 2 * M * N * K
         tflops_per_sec = flops * 1e-12 / (ms * 1e-3)
         print(f"{BLOCK_M:>7} {BLOCK_N:>7} {BLOCK_K:>7} {num_warps:>9} {instr_shape_n:>13} "
-              f"{ms:>9.2f} {tflops_per_sec:>8.2f}")
+              f"{occupancy:>9} {ms:>9.2f} {tflops_per_sec:>8.2f}")
     print()
 
 # %%
 # ```
-# BLOCK_M BLOCK_N BLOCK_K num_warps instr_shape_n time (ms) tflops/s
-#     128     256     256         8           256      5.34   412.14
-#     256     128     256         8           128      5.67   387.74
-#      64     256     128         4           256      4.64   474.03
-#      64     128     256         4           128      6.18   355.60
-#     128     128     128         4           128      4.98   441.88
-#     128     128     128         8           128      5.79   380.08
+# BLOCK_M BLOCK_N BLOCK_K num_warps instr_shape_n occupancy time (ms) tflops/s
+#     128     256     256         8           256         1      5.34   412.14
+#     256     128     256         8           128         1      5.67   387.74
+#      64     256     128         4           256         2      4.64   474.03
+#      64     128     256         4           128         2      6.18   355.60
+#     128     128     128         4           128         2      4.98   441.88
+#     128     128     128         8           128         2      5.79   380.08
 # ```
 #
 # The hypothesis that having occupancy 2 with `BLOCK_N=256` would be the best
@@ -579,9 +585,9 @@ def blocked_matmul_pipelined(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, num_warps):
     a_layout = gl.NVMMASharedLayout.get_default_for([BLOCK_M, BLOCK_K], gl.float16)
     b_layout = gl.NVMMASharedLayout.get_default_for([BLOCK_K, BLOCK_N], gl.float16)
     c_layout = gl.NVMMASharedLayout.get_default_for([BLOCK_M, BLOCK_N], gl.float16)
-    a_desc = TensorDescriptor(A, A.shape, A.stride(), [BLOCK_M, BLOCK_K], a_layout)
-    b_desc = TensorDescriptor(B, B.shape, B.stride(), [BLOCK_K, BLOCK_N], b_layout)
-    c_desc = TensorDescriptor(C, C.shape, C.stride(), [BLOCK_M, BLOCK_N], c_layout)
+    a_desc = TensorDescriptor.from_tensor(A, [BLOCK_M, BLOCK_K], a_layout)
+    b_desc = TensorDescriptor.from_tensor(B, [BLOCK_K, BLOCK_N], b_layout)
+    c_desc = TensorDescriptor.from_tensor(C, [BLOCK_M, BLOCK_N], c_layout)
 
     grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
     blocked_matmul_pipelined_kernel[grid](a_desc, b_desc, c_desc, num_warps=num_warps)
@@ -603,9 +609,9 @@ def test_blocked_matmul_pipelined(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, num_warps)
 
 # %%
 # Search for another set of configs. Apply simiar principles to prune down the
-# potential configs. Our previous best block config will 160 KB of smem, too
-# much for 2 occupancy, but leaves performance on the table by not using the
-# remaining 68 KB. It's likely the best kernel reduces BLOCK_N in favour of
+# potential configs. Our previous best block config will use 160 KB of smem, too
+# much for an occupancy of 2, but leaves performance on the table by not using
+# the remaining 68 KB. It's likely the best kernel reduces BLOCK_N in favour of
 # keeping 2 occupancy.
 
 if __name__ == "__main__":
@@ -614,28 +620,28 @@ if __name__ == "__main__":
     configs = find_configs(occupancy=1, dtype=torch.float16, num_buffers=2)
     configs += find_configs(occupancy=2, dtype=torch.float16, num_buffers=2)
     # Add our previous best config since it doesn't get selected.
-    configs.append([64, 256, 128, 4, 256])
+    configs.append([64, 256, 128, 4, 256, 2])
 
-    print("BLOCK_M BLOCK_N BLOCK_K num_warps instr_shape_n time (ms) tflops/s")
-    for BLOCK_M, BLOCK_N, BLOCK_K, num_warps, instr_shape_n in configs:
+    print("BLOCK_M BLOCK_N BLOCK_K num_warps instr_shape_n occupancy time (ms) tflops/s")
+    for BLOCK_M, BLOCK_N, BLOCK_K, num_warps, instr_shape_n, occupancy in configs:
         fn = lambda: blocked_matmul_pipelined(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, num_warps)
         ms = triton.testing.do_bench(fn)
         flops = 2 * M * N * K
         tflops_per_sec = flops * 1e-12 / (ms * 1e-3)
         print(f"{BLOCK_M:>7} {BLOCK_N:>7} {BLOCK_K:>7} {num_warps:>9} {instr_shape_n:>13} "
-              f"{ms:>9.2f} {tflops_per_sec:>8.2f}")
+              f"{occupancy:>9} {ms:>9.2f} {tflops_per_sec:>8.2f}")
     print()
 
 # %%
 # ```
-# BLOCK_M BLOCK_N BLOCK_K num_warps instr_shape_n time (ms) tflops/s
-#     128     256     128         8           256      5.16   426.06
-#     256     128     128         8           128      5.70   385.85
-#      64     256      64         4           256      5.27   417.50
-#      64     128     128         4           128      5.71   384.98
-#     128     128      64         4           128      4.44   495.31
-#     128     128      64         8           128      4.92   446.81
-#      64     256     128         4           256      6.05   363.36
+# BLOCK_M BLOCK_N BLOCK_K num_warps instr_shape_n occupancy time (ms) tflops/s
+#     128     256     128         8           256         1      5.16   426.06
+#     256     128     128         8           128         1      5.70   385.85
+#      64     256      64         4           256         2      5.27   417.50
+#      64     128     128         4           128         2      5.71   384.98
+#     128     128      64         4           128         2      4.44   495.31
+#     128     128      64         8           128         2      4.92   446.81
+#      64     256     128         4           256         2      6.05   363.36
 # ```
 #
 # We see indeed that the best config ends up with instr_shape_n=128. Note that

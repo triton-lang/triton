@@ -11,10 +11,10 @@ Tensors are evenly distributed across theads, meaning that all threads own the
 same number of elements. Because Triton requires that all tile dimensions are
 powers of 2, this means that the number of elements per thread is a power of 2.
 
-A layout, in general, defines a mapping from a logical tensor index to the warp,
-lane, and register the element lives in. `BlockedLayout` is the most common
-kind of layout in Gluon. A `BlockedLayout` defines how elements are organized
-in a "block" of the same rank as the tensor.
+A layout, in general, defines a mapping stating the element owned by a given
+register, lane, and warp. `BlockedLayout` is the most common kind of layout in
+Gluon. A `BlockedLayout` defines how elements are organized in a "block" of the
+same rank as the tensor.
 
 Consider the following example:
 
@@ -43,7 +43,9 @@ then the rows, i.e. column-major order. For a thread T, the tile looks like:
  [T:4, T:5, T:6, T:7]]
 ```
 
-Notice that the registers increment over the inner dimension.
+When visualizing layouts, we sometimes represent which warp, lane, and register
+are mapped to which tensor element. Notice that the registers increment over the
+inner dimension.
 
 If `order` was `[0, 1]` (row-major order), the tile would look like:
 

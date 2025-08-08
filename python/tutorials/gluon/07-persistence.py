@@ -15,7 +15,8 @@ fully exited before issuing more work.
 Persistent kernels is a technique where we assign multiple blocks of work to
 each program, and the programs "persist" on the GPU until all the work is
 complete. The work assignment is typically static, although dynamic scheduling
-is still possible with more advanced techniques or hardware features like CLC.
+is still possible with more advanced techniques or hardware features like
+cluster launch control.
 
 In this tutorial, we will explore persistent kernels by implementing a
 persistent matmul. We will then show how we can pipeline across the persistent
@@ -263,9 +264,9 @@ def matmul_pipelined(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, num_buffers, num_warps)
     a_layout = gl.NVMMASharedLayout.get_default_for([BLOCK_M, BLOCK_K], gl.float16)
     b_layout = gl.NVMMASharedLayout.get_default_for([BLOCK_K, BLOCK_N], gl.float16)
     c_layout = gl.NVMMASharedLayout.get_default_for([BLOCK_M, BLOCK_N], gl.float16)
-    a_desc = TensorDescriptor(A, A.shape, A.stride(), [BLOCK_M, BLOCK_K], a_layout)
-    b_desc = TensorDescriptor(B, B.shape, B.stride(), [BLOCK_K, BLOCK_N], b_layout)
-    c_desc = TensorDescriptor(C, C.shape, C.stride(), [BLOCK_M, BLOCK_N], c_layout)
+    a_desc = TensorDescriptor.from_tensor(A, [BLOCK_M, BLOCK_K], a_layout)
+    b_desc = TensorDescriptor.from_tensor(B, [BLOCK_K, BLOCK_N], b_layout)
+    c_desc = TensorDescriptor.from_tensor(C, [BLOCK_M, BLOCK_N], c_layout)
 
     grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
     matmul_pipelined_kernel[grid](a_desc, b_desc, c_desc, MMAImpl, num_buffers, num_warps=num_warps)
@@ -324,13 +325,12 @@ if __name__ == "__main__" and not profiling_with_ncu:
 # Blackwell performance lines up with what we have seen in previous tutorials,
 # but on Hopper we see some wins. On Hopper, performance plateaus at 3 buffers,
 # but on Blackwell we see benefits of 4 buffers. This suggests the throughput
-# ratio has increase in favour of MMAs from Hopper to Blackwell. Noteworthy is
+# ratio has increased in favour of MMAs from Hopper to Blackwell. Noteworthy is
 # our kernels are occupancy 1.
 
 # %%
 # To make the kernel persistent, all we have to do is put an outer loop around
-# the kernel and iterate over the pids assigned to that kernel. We can query the
-# total number of kernels using gl.num_programs.
+# the kernel and iterate over the output tiles assigned to that kernel.
 #
 # Let's define a tile scheduler abstraction that will allow us to change the
 # scheduling strategy, starting with a basic row-major tile scheduler.
@@ -430,9 +430,9 @@ def persistent_matmul(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, num_buffers, num_warps
     a_layout = gl.NVMMASharedLayout.get_default_for([BLOCK_M, BLOCK_K], gl.float16)
     b_layout = gl.NVMMASharedLayout.get_default_for([BLOCK_K, BLOCK_N], gl.float16)
     c_layout = gl.NVMMASharedLayout.get_default_for([BLOCK_M, BLOCK_N], gl.float16)
-    a_desc = TensorDescriptor(A, A.shape, A.stride(), [BLOCK_M, BLOCK_K], a_layout)
-    b_desc = TensorDescriptor(B, B.shape, B.stride(), [BLOCK_K, BLOCK_N], b_layout)
-    c_desc = TensorDescriptor(C, C.shape, C.stride(), [BLOCK_M, BLOCK_N], c_layout)
+    a_desc = TensorDescriptor.from_tensor(A, [BLOCK_M, BLOCK_K], a_layout)
+    b_desc = TensorDescriptor.from_tensor(B, [BLOCK_K, BLOCK_N], b_layout)
+    c_desc = TensorDescriptor.from_tensor(C, [BLOCK_M, BLOCK_N], c_layout)
 
     num_sms = torch.cuda.get_device_properties("cuda").multi_processor_count
     num_pid = triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N)
@@ -493,7 +493,7 @@ if __name__ == "__main__" and profiling_with_ncu:
 # There are many reasons the persistent kernel can be slower. Load imbalance can
 # arise due to inefficient scheduling (work is not evenly distributed). But it
 # can also arise from drift at runtime, such as some TMA accesses taking longer
-# than others, which a static schedule cannot compensate for.
+# than others, which a static tile scheduler cannot compensate for.
 #
 # Another reason we suspect is the global memory access pattern:
 #
@@ -730,9 +730,9 @@ def persistent_matmul_pipelined(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, num_buffers,
     b_layout = gl.NVMMASharedLayout.get_default_for([BLOCK_K, BLOCK_N], gl.float16)
     c_layout = gl.NVMMASharedLayout.get_default_for([BLOCK_M, BLOCK_N], gl.float16)
 
-    a_desc = TensorDescriptor(A, A.shape, A.stride(), [BLOCK_M, BLOCK_K], a_layout)
-    b_desc = TensorDescriptor(B, B.shape, B.stride(), [BLOCK_K, BLOCK_N], b_layout)
-    c_desc = TensorDescriptor(C, C.shape, C.stride(), [BLOCK_M, BLOCK_N], c_layout)
+    a_desc = TensorDescriptor.from_tensor(A, [BLOCK_M, BLOCK_K], a_layout)
+    b_desc = TensorDescriptor.from_tensor(B, [BLOCK_K, BLOCK_N], b_layout)
+    c_desc = TensorDescriptor.from_tensor(C, [BLOCK_M, BLOCK_N], c_layout)
 
     num_sms = torch.cuda.get_device_properties("cuda").multi_processor_count
     num_pid = triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N)
@@ -820,8 +820,8 @@ if __name__ == "__main__":
 #
 # - On Hopper, software pipelining is sufficient to reach peak performance for
 #   medium and large K.
-# - cublas uses 2-CTA matmul, which uses distributed shared memory to perform
-#   achieve 256x256 instruction shape. 2-CTA support in Gluon is very spotty,
+# - cublas uses 2-CTA matmul, which uses distributed shared memory to allow
+#   256x256 instruction shape. 2-CTA support in Gluon is very spotty,
 #   but this enables cublas to more efficiently feed the MMA, which matters more
 #   on Blackwell due to the relative increase in MMA throughput vs TMA.
 # - cublas matmul is warp-specialized which is necessary on Hopper to fully

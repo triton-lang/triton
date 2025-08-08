@@ -2,16 +2,16 @@
 Warp Specialization
 ===================
 
-This tutorial covers warp specialization. In typical GPU kernels, all warps are
-executing cooperatively, meaning they perform parts of the same task. Warp
-specialization, however, is a technique where different warps in the kernel are
-doing completely different tasks.
+This tutorial covers warp specialization. In typical GPU kernels, all the warps
+in the kernel are performing parallel slices of the same. Warp specialization,
+however, is a technique where different warps in the kernel are doing completely
+different tasks.
 
-Warp specialization is typically used to overlap execution of different parts
-of the kernel. This is useful overlapping async operations with finer
-granularity than software pipelining, and we can overlap non-async operations
-that exercise different parts of the hardware without relying on precise
-SASS-level instruction interleaving.
+With warp specialization, we can overlap execution of independent parts of the
+kernel by placing the work in different warps. This minimizes the critical path
+in each warp, and we rely on the warp scheduler to dynamically schedule the
+warps. We can also overlap non-async operations that exercise different parts of
+the hardware without relying on precise SASS-level instruction interleaving.
 
 However, warp specialization comes at the cost of additional synchronization
 overhead, potentially higher shared memory usage for communicating data, and
@@ -72,9 +72,9 @@ if __name__ == "__main__" and not is_hopper_or_newer():
 #
 # First, we need to decide what the partitions will be and how many registers
 # they will get. One of the benefits of warp specialization is that partitions
-# that don't have tensor values only need to use 1 warp and often very few
-# registers. For example, we can have one partition that just issues async TMA
-# loads and one partition that just issues TMA stores, each with 1 warp and 24,
+# that only use scalar values require only 1 warp and often very few registers.
+# For example, we can have one partition that just issues async TMA loads and
+# one partition that just issues TMA stores, each with 1 warp and 24 registers,
 # the minimum number of registers we can assign to a warp.
 #
 # Then we have one compute partition, with either 4 or 8 warps, which performs
@@ -89,7 +89,7 @@ if __name__ == "__main__" and not is_hopper_or_newer():
 # different numbers of warps. The signature of the worker partition functions
 # must all be the same. Only the default partition can accept tensor arguments.
 #
-# Quickly sketch out the partitions: load partition will fetch inputs to smem
+# To quickly sketch out the partitions: load partition will fetch inputs to smem
 # and signal the compute partition. The compute partition will consume the
 # operands and send them to the store partition over smem.
 #
@@ -162,10 +162,10 @@ def store_partition(descs, barriers, buffers, xoff, numel, YBLOCK: gl.constexpr)
     # This partition consumes the addition result, passed over smem, and stores
     # them to global memory.
     num_buffers: gl.constexpr = c_bufs.type.shape[0]
+    # We will keep `num_buffers-1` stores in flight by software pipelining.
+    outstanding_stores: gl.constexpr = num_buffers - 1
 
-    # Because `tma.store_wait` requires `pendings` to be a constexpr, we need to
-    # software pipeline the store loop to overlap the TMA stores.
-    for i in gl.static_range(num_buffers - 1):
+    for i in range(gl.cdiv(ynumel, YBLOCK)):
         index = i % num_buffers
         phase = i // num_buffers & 1
         c_buf = c_bufs.index(index)
@@ -176,24 +176,12 @@ def store_partition(descs, barriers, buffers, xoff, numel, YBLOCK: gl.constexpr)
         yoff = i * YBLOCK
         tma.async_copy_shared_to_global(c_desc, [xoff, yoff], c_buf)
 
-    i = 0
-    for j in range(gl.cdiv(ynumel, YBLOCK) - (num_buffers - 1)):
-        i = j + (num_buffers - 1)
-        index = i % num_buffers
-        phase = i // num_buffers & 1
-        c_buf = c_bufs.index(index)
-        c_ready_bar = c_ready_bars.index(index)
-
-        mbarrier.wait(c_ready_bar, phase)
-        yoff = i * YBLOCK
-        tma.async_copy_shared_to_global(c_desc, [xoff, yoff], c_buf)
-
-        # Wait for the store `num_buffers-1` iterations ago.
-        tma.store_wait(num_buffers - 1)
-        c_empty_bar = c_empty_bars.index(j % num_buffers)
-        # Signal the compute partition that the `num_buffers-1` buffer was
-        # consumed.
-        mbarrier.arrive(c_empty_bar, count=1)
+        tma.store_wait(outstanding_stores)
+        c_empty_bar = c_empty_bars.index((i - outstanding_stores) % num_buffers)
+        # Signal the compute partition that the buffer `outstanding_stores`
+        # iterations ago is consumed, predicated on there having been at least
+        # that many outstanding stores.
+        mbarrier.arrive(c_empty_bar, count=1, pred=i >= outstanding_stores)
 
     # Since we waited for the last value of c, all the other partitions have
     # exited by now. We just need to wait the stores to complete.
@@ -305,9 +293,9 @@ def elementwise_add_warp_specialized(a, b, c, XBLOCK=32, YBLOCK=64,  #
 
     block_shape = [XBLOCK, YBLOCK]
     layout = gl.NVMMASharedLayout.get_default_for(block_shape, gl.float32)
-    a_desc = TensorDescriptor(a, a.shape, a.stride(), block_shape, layout)
-    b_desc = TensorDescriptor(b, b.shape, b.stride(), block_shape, layout)
-    c_desc = TensorDescriptor(c, c.shape, c.stride(), block_shape, layout)
+    a_desc = TensorDescriptor.from_tensor(a, block_shape, layout)
+    b_desc = TensorDescriptor.from_tensor(b, block_shape, layout)
+    c_desc = TensorDescriptor.from_tensor(c, block_shape, layout)
 
     # By default, a warp-specialized kernel assumes maxnreg=256, the maximum
     # allowed per thread, in order to determine how to reallocate registers.
@@ -370,7 +358,9 @@ if __name__ == "__main__":
 #
 # The warp specialized implementation ekes out another performance gain over
 # the software pipelined kernel from 04-tma.py by relying on the warp scheduler
-# to hide latencies.
+# to hide latencies. The gains are modest because the kernel is very bandwidth
+# bound, but this shows how warp specialization can more efficiently issue
+# loads.
 
 # %%
 # Recall in previous tutorials we sometimes designed kernels to run with
@@ -380,7 +370,7 @@ if __name__ == "__main__":
 #
 # However, because programs cannot see what other programs on the SM are doing,
 # they cannot coordinate usage of SM compute units or share resources. Warp
-# specialization is especially powerful when use it to build intricate schedules
+# specialization is especially powerful when used to build intricate schedules
 # that minimize the critical path and maximize hardware utilization. In other
 # words, warp specialization allows us to fuse multiple programs into
 # one kernel.
@@ -504,7 +494,7 @@ def matmul_mma_partition(p, SchedulerImpl: gl.constexpr):
         acc_buf = p.acc_bufs.index(acc_state.index)
         use_acc = False
         for k in range(0, K, BLOCK_K):
-            # Acquire opreands, issue MMA, and complete asynchronously.
+            # Acquire operands, issue MMA, and complete asynchronously.
             mbarrier.wait(load_ready_bars.index(load_state.index), load_state.phase)
             tcgen05_mma(p.a_bufs.index(load_state.index), p.b_bufs.index(load_state.index), acc_buf, use_acc=use_acc)
             tcgen05_commit(load_empty_bars.index(load_state.index))
@@ -515,8 +505,9 @@ def matmul_mma_partition(p, SchedulerImpl: gl.constexpr):
         acc_state = acc_state.next()
 
 
-# Helper for splitting a tensor along N. This only works for certain layouts.
-# For our kernel, this only works for BLOCK_M=128 and num_warps=4.
+# Helper for splitting a tensor along N. For our kernel, this only works for
+# BLOCK_M=128 and num_warps=4, where all BLOCK_N elements are contiguously
+# mapped to the same thread.
 @gluon.jit
 def _split_n(x, SUBTILE_FACTOR: gl.constexpr):
     split_count: gl.constexpr = SUBTILE_FACTOR.bit_length() - 1  # log2
@@ -567,7 +558,8 @@ def matmul_epilogue_partition(p, SchedulerImpl: gl.constexpr):
                 mbarrier.arrive(acc_empty_bars.index(acc_state.index), count=1)
             fence_async_shared()
             tma.async_copy_shared_to_global(p.c_desc, [off_m, off_n + SPLIT_N * i], acc_smem)
-        tma.store_wait(pendings=0)
+    # Overlap the last store with the wait, then wait for the last store here.
+    tma.store_wait(pendings=0)
 
 
 @gluon.jit
@@ -612,9 +604,9 @@ def matmul_warp_specialized(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, num_buffers, SUB
     b_layout = gl.NVMMASharedLayout.get_default_for([BLOCK_K, BLOCK_N], gl.float16)
     c_layout = gl.NVMMASharedLayout.get_default_for([BLOCK_M, BLOCK_N], gl.float16)
 
-    a_desc = TensorDescriptor(A, A.shape, A.stride(), [BLOCK_M, BLOCK_K], a_layout)
-    b_desc = TensorDescriptor(B, B.shape, B.stride(), [BLOCK_K, BLOCK_N], b_layout)
-    c_desc = TensorDescriptor(C, C.shape, C.stride(), [BLOCK_M, BLOCK_N], c_layout)
+    a_desc = TensorDescriptor.from_tensor(A, [BLOCK_M, BLOCK_K], a_layout)
+    b_desc = TensorDescriptor.from_tensor(B, [BLOCK_K, BLOCK_N], b_layout)
+    c_desc = TensorDescriptor.from_tensor(C, [BLOCK_M, BLOCK_N], c_layout)
 
     num_sms = torch.cuda.get_device_properties("cuda").multi_processor_count
     num_pid = triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N)
@@ -677,5 +669,6 @@ if __name__ == "__main__" and is_blackwell():
 #  8192           1350.01   1401.10
 # 16384           1448.14   1508.76
 #
-# Much better! There is still lots of tuning we can do to improve performance.
-# On Blackwell, warp specialization is critical for achieving peak performance.
+# Much better! We are beating cublas on small K, even though there is still lots
+# of tuning we can do to improve performance. On Blackwell, warp specialization
+# is critical for achieving peak performance.
