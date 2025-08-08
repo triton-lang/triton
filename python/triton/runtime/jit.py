@@ -395,6 +395,10 @@ class KernelInterface(Generic[T]):
 
 
 def serialize_specialization_data(name, signature, constants, attrs, options, key):
+    if not isinstance(key, str):
+        # Since not every hashable type might support JSON-serialization, revert to "legacy"-key.
+        assert isinstance(key, tuple) and len(key) == 2
+        key = str(key[0]) + str(key[1])
     constants = {key: str(value) if value.__class__.__name__ == "dtype" else value for key, value in constants.items()}
     import json
     obj = {
@@ -593,12 +597,21 @@ class JITFunction(KernelInterface[T]):
 
         # Kernel is not cached; we have to compile.
         if kernel is None:
-            options, signature, constexprs, attrs = self._pack_args(backend, kwargs, bound_args, specialization,
-                                                                    options)
+            # If kernel not found, first try "legacy-key" that can be used for serialization.
+            legacy_key = str(key[0]) + str(key[1])
+            kernel = kernel_cache.get(legacy_key, None)
 
-            kernel = self._do_compile(key, signature, device, constexprs, options, attrs, warmup)
-            if kernel is None:
-                return None
+            if kernel is not None:
+                # Also include new key in kernel_cache.
+                kernel_cache[key] = kernel
+
+            else:
+                options, signature, constexprs, attrs = self._pack_args(backend, kwargs, bound_args, specialization,
+                                                                        options)
+
+                kernel = self._do_compile(key, signature, device, constexprs, options, attrs, warmup)
+                if kernel is None:
+                    return None
 
         # Check that used global values have not changed.
         not_present = object()
@@ -924,6 +937,9 @@ class MockTensor:
     @staticmethod
     def ptr_range():
         return 0  # optimistically assumes 32 bit pointer range
+
+    def __hash__(self):
+        return hash(self.dtype)
 
 
 class TensorWrapper:
