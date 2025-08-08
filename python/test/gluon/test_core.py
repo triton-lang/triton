@@ -147,12 +147,12 @@ def test_warpgroup_mma(ASYNC):
     torch.testing.assert_close(out, ref, atol=1e-3, rtol=1e-1)
 
 
-@pytest.mark.parametrize("M, N, K, rhs_scale, mxfp_type, normal_type, num_warps, mma, kpack",
-                         [(32, 32, 128, rhs_scale, mxfp_type, normal_type, 4, 16, 1)
+@pytest.mark.parametrize("M, N, K, rhs_scale, mxfp_type, normal_type, num_warps",
+                         [(32, 32, 128, rhs_scale, mxfp_type, normal_type, 4)
                           for rhs_scale in [True, False]
                           for mxfp_type in ["e2m1"]
                           for normal_type in ["e4m3", "e5m2"]])
-def test_amd_mfma_scaled(M, N, K, rhs_scale, mxfp_type, normal_type, num_warps, mma, kpack):
+def test_amd_mfma_scaled(M, N, K, rhs_scale, mxfp_type, normal_type, num_warps):
     if is_cuda():
         pytest.skip()
     if is_hip():
@@ -162,12 +162,11 @@ def test_amd_mfma_scaled(M, N, K, rhs_scale, mxfp_type, normal_type, num_warps, 
     device = 'cuda'
 
     @triton.jit
-    def triton_kernel(
-            a_base, stride_a0, stride_a1, a_scale, #
-            b_base, stride_b0, stride_b1, b_scale, #
-            out, #
-            BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,  #
-            type_a: tl.constexpr, type_b: tl.constexpr):
+    def triton_kernel(a_base, stride_a0, stride_a1, a_scale,  #
+                      b_base, stride_b0, stride_b1, b_scale,  #
+                      out,  #
+                      BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,  #
+                      type_a: tl.constexpr, type_b: tl.constexpr):
         DIV_FACTOR_A: tl.constexpr = 2 if type_a == "e2m1" else 1
         DIV_FACTOR_B: tl.constexpr = 2 if type_b == "e2m1" else 1
         PACKED_BLOCK_K_A: tl.constexpr = BLOCK_K // DIV_FACTOR_A
@@ -193,12 +192,11 @@ def test_amd_mfma_scaled(M, N, K, rhs_scale, mxfp_type, normal_type, num_warps, 
         tl.store(out_ptr, c.to(tl.bfloat16))
 
     @gluon.jit
-    def gluon_kernel(
-            a_base, stride_a0, stride_a1, a_scale, #
-            b_base, stride_b0, stride_b1, b_scale, #
-            out, #
-            BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,  #
-            type_a: tl.constexpr, type_b: tl.constexpr):
+    def gluon_kernel(a_base, stride_a0, stride_a1, a_scale,  #
+                     b_base, stride_b0, stride_b1, b_scale,  #
+                     out,  #
+                     BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,  #
+                     type_a: tl.constexpr, type_b: tl.constexpr):
         DIV_FACTOR_A: tl.constexpr = 2 if type_a == "e2m1" else 1
         DIV_FACTOR_B: tl.constexpr = 2 if type_b == "e2m1" else 1
         PACKED_BLOCK_K_A: tl.constexpr = BLOCK_K // DIV_FACTOR_A
@@ -272,9 +270,7 @@ def test_amd_mfma_scaled(M, N, K, rhs_scale, mxfp_type, normal_type, num_warps, 
 
     torch.manual_seed(0)
 
-    def make_arg(shape, ty, col_major=False):
-        if col_major:
-            shape = shape[:-2] + (shape[-1], shape[-2])
+    def make_arg(shape, ty):
         if ty == "bf16" or ty == "fp16":
             ret = torch.randn(shape, dtype=comp_dtype, device=device)
             # Clamp to avoid relative error issues
@@ -286,9 +282,6 @@ def test_amd_mfma_scaled(M, N, K, rhs_scale, mxfp_type, normal_type, num_warps, 
             # directly calculate matmul on F8F6F4 data. So we need
             # to narrow down the range of input to avoid overflow.
             ret = torch.randint(20, 40, shape, dtype=torch.uint8, device=device)
-
-        if col_major:
-            ret = ret.mT
         return ret
 
     type_a = normal_type if rhs_scale else mxfp_type
@@ -296,8 +289,8 @@ def test_amd_mfma_scaled(M, N, K, rhs_scale, mxfp_type, normal_type, num_warps, 
 
     DIV_FACTOR_A = 2 if type_a == "e2m1" else 1
     DIV_FACTOR_B = 2 if type_b == "e2m1" else 1
-    x = make_arg((M, K // DIV_FACTOR_A), type_a, col_major=False)
-    y = make_arg((K // DIV_FACTOR_B, N), type_b, col_major=False)
+    x = make_arg((M, K // DIV_FACTOR_A), type_a)
+    y = make_arg((K // DIV_FACTOR_B, N), type_b)
 
     min_scale, max_scale = (0, 142) if comp_dtype == torch.bfloat16 else (124, 131)
     scale_x = torch.randint(min_scale, max_scale + 1, (M, K // 32), dtype=torch.uint8, device=device)
@@ -324,8 +317,6 @@ def test_amd_mfma_scaled(M, N, K, rhs_scale, mxfp_type, normal_type, num_warps, 
     y = make_finite(y, type_b)
 
     kernel_kwargs = {"num_warps": num_warps}
-    kernel_kwargs["kpack"] = kpack
-    kernel_kwargs["matrix_instr_nonkdim"] = mma
 
     z = torch.zeros((M, N), dtype=comp_dtype, device=device)
     gluon_kernel[(1, )](x, *x.stride(), scale_x, y, *y.stride(), scale_y, z, M, N, K, type_a, type_b, **kernel_kwargs)
