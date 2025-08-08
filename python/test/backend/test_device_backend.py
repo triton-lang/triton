@@ -176,9 +176,7 @@ class ExtensionBackend(BaseBackend):
             return NULL;
         }
         launch_counter(self, args);
-        // return None
-        Py_INCREF(Py_None);
-        return Py_None;
+        Py_RETURN_NONE;
         }
 
         static PyMethodDef ModuleMethods[] = {

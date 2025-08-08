@@ -55,8 +55,9 @@ def example_load_store_kernel(X, Y, x_off, y_off, x_size, y_size):
     store_ragged(Y, y_off, y_size, [0, 0], data)
 
 
+@pytest.mark.parametrize("write_only", [False, True])
 @pytest.mark.parametrize("dtype", ["float16", "float32", "float64"])
-def test_ragged_tma(dtype):
+def test_ragged_tma(dtype, write_only):
 
     if not torch.cuda.is_available() or not torch.cuda.get_device_capability()[0] >= 9:
         pytest.skip("Test requires Hopper or Blackwell target.")
@@ -69,7 +70,7 @@ def test_ragged_tma(dtype):
     dst = 1.0 * ref
 
     X = create_ragged_descriptor(src, [32, 128])
-    Y = create_ragged_descriptor(dst, [32, 128])
+    Y = create_ragged_descriptor(dst, [32, 128], write_only=write_only)
 
     x_off = 42
     y_off = 51
