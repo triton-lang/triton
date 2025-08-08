@@ -14,12 +14,12 @@ def mfma_scaled(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, acc, fas
     wrapper around the `tl.dot_scaled` operation, with enforced mfma layout.
 
     Args:
-        lhs (tensor): Left-hand side tensor.
-        lhs_scale (tensor): Scale tensor for the left-hand side.
-        lhs_format (str): Format of the left-hand side tensor.
-        rhs (tensor): Right-hand side tensor.
-        rhs_scale (tensor): Scale tensor for the right-hand side.
-        rhs_format (str): Format of the right-hand side tensor.
+        lhs (tensor): The first tensor to be multiplied.
+        lhs_scale (tensor): Scale factor for lhs tensor.
+        lhs_format (str): Format of the lhs tensor.
+        rhs (tensor): The second tensor to be multiplied.
+        rhs_scale (tensor): Scale factor for rhs tensor.
+        rhs_format (str): Format of the rhs tensor.
         acc (tensor): Accumulator tensor.
         fast_math (bool, optional): Enable fast math. Defaults to False.
         layout (ttgl.amd.AMDMFMALayout): Layout for the operation.
