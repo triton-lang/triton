@@ -74,13 +74,7 @@ public:
     rewriter.setInsertionPointToStart(trueBlock);
     auto [volatileFlag, nonTmpFlag] = getCacheModifierFlagsForLoad(loadOp);
 
-    int alignment = 0;
-    if (auto vecTy = dyn_cast<VectorType>(elemTy)) {
-      auto elemType = vecTy.getElementType();
-      auto elemSizeInBits = elemType.getIntOrFloatBitWidth();
-      alignment = (elemSizeInBits / 8) * vecTy.getNumElements();
-    }
-    auto llvmLoadOp = rewriter.create<LLVM::LoadOp>(loc, elemTy, ptr, alignment,
+    auto llvmLoadOp = rewriter.create<LLVM::LoadOp>(loc, elemTy, ptr, /*alignment*/0,
                                                     volatileFlag, nonTmpFlag);
 
     if (loadOp.getForceNoAlias()) {

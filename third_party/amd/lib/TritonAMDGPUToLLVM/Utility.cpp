@@ -302,17 +302,6 @@ Value llLoad(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,
   }
 
   if (isNonMasked) {
-    int alignment = 0;
-    if (auto vecTy = dyn_cast<VectorType>(elemTy)) {
-      auto elemType = vecTy.getElementType();
-      int elemSizeInBits = elemType.getIntOrFloatBitWidth();
-      alignment = (elemSizeInBits / 8) * vecTy.getNumElements();
-    } else if (auto intTy = dyn_cast<IntegerType>(elemTy)) {
-      alignment = intTy.getWidth() / 8;
-    } else if (auto floatTy = dyn_cast<FloatType>(elemTy)) {
-      alignment = floatTy.getWidth() / 8;
-    }
-
     // Determine cache flags based on cache modifier
     bool volatileFlag = false;
     bool nonTmpFlag = false;
@@ -338,7 +327,7 @@ Value llLoad(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,
       break;
     }
 
-    auto loadOp = rewriter.create<LLVM::LoadOp>(loc, elemTy, ptr, alignment,
+    auto loadOp = rewriter.create<LLVM::LoadOp>(loc, elemTy, ptr, /*alignment*/0,
                                                 volatileFlag, nonTmpFlag);
 
     if (forceNoAliasAsyncLoads) {
