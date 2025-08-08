@@ -147,16 +147,14 @@ def test_warpgroup_mma(ASYNC):
     torch.testing.assert_close(out, ref, atol=1e-3, rtol=1e-1)
 
 
-@pytest.mark.parametrize("M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, num_warps, mma, kpack",
-                         [(32, 64, 128, False, False, rhs_scale, mxfp_type, normal_type, 4, 16, 1)
+@pytest.mark.parametrize("M, N, K, rhs_scale, mxfp_type, normal_type, num_warps, mma, kpack",
+                         [(32, 64, 128, rhs_scale, mxfp_type, normal_type, 4, 16, 1)
                           for rhs_scale in [True, False]
                           for mxfp_type in ["e2m1", "e4m3", "e5m2"]
                           for normal_type in ["e4m3", "e5m2"]])
-def test_mfma_scaled(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, num_warps, mma, kpack):
+def test_amd_mfma_scaled(M, N, K, rhs_scale, mxfp_type, normal_type, num_warps, mma, kpack):
     if is_cuda():
-        cc = torch.cuda.get_device_capability()
-        if cc < (8, 9):
-            pytest.skip("float8e4nv not supported on CUDA < 8.9")
+        pytest.skip()
     if is_hip():
         if not (is_hip_cdna() or is_hip_gfx12()):
             pytest.skip("scaled_dot only implemented for HIP CDNA and gfx12")
@@ -280,8 +278,8 @@ def test_mfma_scaled(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, n
 
     DIV_FACTOR_A = 2 if type_a == "e2m1" else 1
     DIV_FACTOR_B = 2 if type_b == "e2m1" else 1
-    x = make_arg((M, K // DIV_FACTOR_A), type_a, col_major=col_a)
-    y = make_arg((K // DIV_FACTOR_B, N), type_b, col_major=col_b)
+    x = make_arg((M, K // DIV_FACTOR_A), type_a, col_major=False)
+    y = make_arg((K // DIV_FACTOR_B, N), type_b, col_major=True)
 
     min_scale, max_scale = (0, 142) if comp_dtype == torch.bfloat16 else (124, 131)
     scale_x = torch.randint(min_scale, max_scale + 1, (M, K // 32), dtype=torch.uint8, device=device)
