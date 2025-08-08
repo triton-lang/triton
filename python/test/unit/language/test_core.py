@@ -5179,9 +5179,9 @@ def test_value_specialization_overflow(value: int, overflow: bool, device) -> No
 
     if overflow:
         with pytest.raises(OverflowError):
-            kernel.warmup(value, x, grid=(1, ))
+            kernel[(1, )](value, x)
     else:
-        kernel.warmup(value, x, grid=(1, ))
+        kernel[(1, )](value, x)
 
 
 # ----------------
@@ -7039,8 +7039,7 @@ def test_enable_fp_fusion(enable_fp_fusion, default_override, device, fresh_knob
 
     data = torch.randn((128, ), device=device, dtype=torch.float32)
     if default_override:
-        fresh_knobs.language_knobs.default_fp_fusion = "1" if enable_fp_fusion else "0"
-        assert triton.knobs.language.default_fp_fusion == enable_fp_fusion
+        fresh_knobs.language_knobs.default_fp_fusion = enable_fp_fusion
         h = mul_add.warmup(data, grid=(1, ))
     else:
         h = mul_add.warmup(data, grid=(1, ), enable_fp_fusion=enable_fp_fusion)
