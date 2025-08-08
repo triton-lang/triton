@@ -3,6 +3,7 @@ from triton.compiler.code_generator import unflatten_ir_values
 from ..ampere import async_copy
 from . import mbarrier, tma
 from ... import _core
+from triton.language.core import must_use_result
 
 from typing import List, Tuple, TYPE_CHECKING
 if TYPE_CHECKING:
@@ -111,6 +112,7 @@ def warpgroup_mma(a, b, acc, *, use_acc=True, precision=None, max_num_imprecise_
         return _core.tensor(handle, tensor_ty)
 
 
+@must_use_result
 @_core.builtin
 def warpgroup_mma_wait(num_outstanding=0, deps=None, _semantic=None):
     """
