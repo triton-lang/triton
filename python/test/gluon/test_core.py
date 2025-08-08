@@ -147,12 +147,11 @@ def test_warpgroup_mma(ASYNC):
     torch.testing.assert_close(out, ref, atol=1e-3, rtol=1e-1)
 
 
-@pytest.mark.parametrize("M, N, K, rhs_scale, mxfp_type, normal_type, num_warps",
-                         [(32, 32, 128, rhs_scale, mxfp_type, normal_type, 4)
-                          for rhs_scale in [True, False]
-                          for mxfp_type in ["e2m1"]
-                          for normal_type in ["e4m3", "e5m2"]])
-def test_amd_mfma_scaled(M, N, K, rhs_scale, mxfp_type, normal_type, num_warps):
+@pytest.mark.parametrize("M, N, K, rhs_scale, mxfp_type, normal_type", [(32, 32, 128, rhs_scale, mxfp_type, normal_type)
+                                                                        for rhs_scale in [True, False]
+                                                                        for mxfp_type in ["e2m1"]
+                                                                        for normal_type in ["e4m3", "e5m2"]])
+def test_amd_mfma_scaled(M, N, K, rhs_scale, mxfp_type, normal_type):
     if is_cuda():
         pytest.skip()
     if is_hip():
@@ -202,24 +201,16 @@ def test_amd_mfma_scaled(M, N, K, rhs_scale, mxfp_type, normal_type, num_warps):
         PACKED_BLOCK_K_A: tl.constexpr = BLOCK_K // DIV_FACTOR_A
         PACKED_BLOCK_K_B: tl.constexpr = BLOCK_K // DIV_FACTOR_B
 
-        a_unpacked_layout: ttgl.constexpr = ttgl.DistributedLinearLayout(
-            reg_bases=[[0, 1], [0, 2], [0, 4], [0, 8]], lane_bases=[[0, 16], [0, 32], [0, 64], [1, 0], [2, 0], [4, 0]],
-            warp_bases=[[8, 0], [16, 0]], block_bases=[], shape=[32, 128])
-        a_packed_layout: ttgl.constexpr = ttgl.DistributedLinearLayout(
-            reg_bases=[[0, 1], [0, 2], [0, 4]], lane_bases=[[0, 8], [0, 16], [0, 32], [1, 0], [2, 0], [4, 0]],
-            warp_bases=[[8, 0], [16, 0]], block_bases=[], shape=[32, 64])
+        a_unpacked_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 16], [8, 8], [4, 1], [1, 0])
+        a_packed_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [8, 8], [4, 1], [1, 0])
         a_layout: ttgl.constexpr = a_packed_layout if type_a == "e2m1" else a_unpacked_layout
 
         a_scale_layout: ttgl.constexpr = ttgl.DistributedLinearLayout(
             reg_bases=[], lane_bases=[[1, 0], [2, 0], [4, 0], [8, 0], [0, 1], [0, 2]], warp_bases=[[0, 0], [16, 0]],
             block_bases=[], shape=[32, 4])
 
-        b_unpacked_layout: ttgl.constexpr = ttgl.DistributedLinearLayout(
-            reg_bases=[[0, 1], [0, 2], [0, 4], [0, 8]], lane_bases=[[0, 16], [1, 0], [2, 0], [4, 0], [8, 0], [16, 0]],
-            warp_bases=[[32, 0], [64, 0]], block_bases=[], shape=[128, 32])
-        b_packed_layout: ttgl.constexpr = ttgl.DistributedLinearLayout(
-            reg_bases=[[0, 1], [0, 2], [0, 4]], lane_bases=[[0, 8], [0, 16], [1, 0], [2, 0], [4, 0], [8, 0]],
-            warp_bases=[[16, 0], [32, 0]], block_bases=[], shape=[64, 32])
+        b_unpacked_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 16], [32, 2], [4, 1], [1, 0])
+        b_packed_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [16, 4], [4, 1], [1, 0])
         b_layout: ttgl.constexpr = b_packed_layout if type_b == "e2m1" else b_unpacked_layout
 
         b_scale_layout: ttgl.constexpr = ttgl.DistributedLinearLayout(
@@ -316,13 +307,10 @@ def test_amd_mfma_scaled(M, N, K, rhs_scale, mxfp_type, normal_type, num_warps):
     x = make_finite(x, type_a)
     y = make_finite(y, type_b)
 
-    kernel_kwargs = {"num_warps": num_warps}
-
     z = torch.zeros((M, N), dtype=comp_dtype, device=device)
-    gluon_kernel[(1, )](x, *x.stride(), scale_x, y, *y.stride(), scale_y, z, M, N, K, type_a, type_b, **kernel_kwargs)
+    gluon_kernel[(1, )](x, *x.stride(), scale_x, y, *y.stride(), scale_y, z, M, N, K, type_a, type_b)
 
     z_ref = torch.zeros((M, N), dtype=comp_dtype, device=device)
-    triton_kernel[(1, )](x, *x.stride(), scale_x, y, *y.stride(), scale_y, z_ref, M, N, K, type_a, type_b,
-                         **kernel_kwargs)
+    triton_kernel[(1, )](x, *x.stride(), scale_x, y, *y.stride(), scale_y, z_ref, M, N, K, type_a, type_b)
 
     torch.testing.assert_close(z, z_ref, rtol=1e-5, atol=1e-5)
