@@ -156,7 +156,7 @@ def test_amd_mfma_scaled(M, N, K, rhs_scale, mxfp_type, normal_type):
         pytest.skip()
     if is_hip():
         if not (is_hip_cdna() or is_hip_cdna4()):
-            pytest.skip("scaled_dot only implemented for CDNA4")
+            pytest.skip("mfma_scaled only implemented for CDNA4")
 
     device = 'cuda'
 
