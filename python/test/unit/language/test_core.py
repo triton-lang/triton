@@ -1131,7 +1131,7 @@ def test_unary_op(dtype_x, expr, num_ctas, device):
 @pytest.mark.parametrize("dtype_x, expr, x",
                          [(dtype_x, expr, x)
                           for dtype_x in ["float32", "float64"]
-                          for expr in ['exp', 'log', 'cos', 'sin', 'exp2', 'log2', 'sqrt', 'floor', 'ceil']
+                          for expr in ['exp', 'log', 'cos', 'sin', 'exp2', 'log2', 'sqrt', 'rsqrt', 'floor', 'ceil']
                           for x in ['x', '3.0']])
 def test_math_op(dtype_x, expr, x, device):
     _test_unary(dtype_x, f'tl.{expr}({x})', f'np.{expr}({x}) ', device=device)
@@ -5479,8 +5479,6 @@ def test_num_warps_pow2(device):
     _kernel.warmup(dst=dst, grid=(1, ), num_warps=2)
     _kernel.warmup(dst=dst, grid=(1, ), num_warps=4)
 
-
-# Note: removed test_unary_math as it duplicates test_math_op coverage.
 
 # -----------------------
 # test inline asm
