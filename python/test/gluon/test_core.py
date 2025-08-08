@@ -147,17 +147,12 @@ def test_warpgroup_mma(ASYNC):
     torch.testing.assert_close(out, ref, atol=1e-3, rtol=1e-1)
 
 
+@pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
 @pytest.mark.parametrize("M, N, K, rhs_scale, mxfp_type, normal_type", [(32, 32, 128, rhs_scale, mxfp_type, normal_type)
                                                                         for rhs_scale in [True, False]
                                                                         for mxfp_type in ["e2m1"]
                                                                         for normal_type in ["e4m3", "e5m2"]])
 def test_amd_mfma_scaled(M, N, K, rhs_scale, mxfp_type, normal_type):
-    if is_cuda():
-        pytest.skip()
-    if is_hip():
-        if not (is_hip_cdna() or is_hip_cdna4()):
-            pytest.skip("mfma_scaled only implemented for CDNA4")
-
     device = 'cuda'
 
     @triton.jit
