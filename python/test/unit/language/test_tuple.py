@@ -217,10 +217,8 @@ def test_passing_tuple_with_constexpr(device):
 
 def test_passing_tuple_to_make_tensor_descriptor(device, with_allocator):
 
-    from triton.language.core import builtin
-
-    @builtin
-    def is_constexpr(v, _semantic=None):
+    @triton.constexpr_function
+    def is_constexpr(v):
         return isinstance(v, tl.constexpr)
 
     @triton.jit

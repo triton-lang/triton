@@ -17,7 +17,7 @@ from .runtime import (
     InterpreterError,
     MockTensor,
 )
-from .runtime.jit import jit
+from .runtime.jit import constexpr_function, jit
 from .runtime._async_compile import AsyncCompileMode, FutureKernel
 from .compiler import compile, CompilationError
 from .errors import TritonError
@@ -36,6 +36,7 @@ __all__ = [
     "CompilationError",
     "compile",
     "Config",
+    "constexpr_function",
     "FutureKernel",
     "heuristics",
     "InterpreterError",

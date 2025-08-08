@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from typing import List, Optional
 from triton.language.core import _unwrap_if_constexpr, _unwrap_shape, constexpr_type
+from triton.experimental.gluon._runtime import constexpr_function
 
 __all__ = [
     "AutoLayout",
@@ -260,6 +261,7 @@ class SharedLayout:
         return constexpr_type(self)
 
 
+@constexpr_function
 def _get_shape_per_cta(shape, cta_split_num):
     shape_per_cta = shape
     if cta_split_num is not None:
