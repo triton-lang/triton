@@ -188,8 +188,7 @@ def select_mma_impl():
 
 
 @gluon.jit
-def async_load_operands(producer, a_desc, b_desc, off_m, off_n, k, bars, a_bufs, b_bufs, num_buffers: gl.constexpr,
-                        pred=True):
+def issue_loads(producer, a_desc, b_desc, off_m, off_n, k, bars, a_bufs, b_bufs, num_buffers: gl.constexpr, pred=True):
     index = producer % num_buffers
     producer += 1
     bar = bars.index(index)
@@ -200,7 +199,7 @@ def async_load_operands(producer, a_desc, b_desc, off_m, off_n, k, bars, a_bufs,
 
 
 @gluon.jit
-def async_mma(consumer, mma, bars, a_bufs, b_bufs, num_buffers: gl.constexpr):
+def issue_mma(consumer, mma, bars, a_bufs, b_bufs, num_buffers: gl.constexpr):
     index = consumer % num_buffers
     phase = consumer // num_buffers & 1
     consumer += 1
@@ -239,14 +238,14 @@ def matmul_pipelined_kernel(a_desc, b_desc, c_desc, MMAImpl: gl.constexpr, num_b
 
     # Prefetch at most num_buffers-2 loads to allow the MMA to overlap.
     for k in gl.static_range(0, BLOCK_K * (num_buffers - 2), BLOCK_K):
-        producer = async_load_operands(producer, a_desc, b_desc, off_m, off_n, k, bars, a_bufs, b_bufs, num_buffers)
+        producer = issue_loads(producer, a_desc, b_desc, off_m, off_n, k, bars, a_bufs, b_bufs, num_buffers)
 
     for k in range(BLOCK_K * (num_buffers - 2), K, BLOCK_K):
-        producer = async_load_operands(producer, a_desc, b_desc, off_m, off_n, k, bars, a_bufs, b_bufs, num_buffers)
-        consumer, mma = async_mma(consumer, mma, bars, a_bufs, b_bufs, num_buffers)
+        producer = issue_loads(producer, a_desc, b_desc, off_m, off_n, k, bars, a_bufs, b_bufs, num_buffers)
+        consumer, mma = issue_mma(consumer, mma, bars, a_bufs, b_bufs, num_buffers)
 
     for _ in gl.static_range(num_buffers - 2):
-        consumer, mma = async_mma(consumer, mma, bars, a_bufs, b_bufs, num_buffers)
+        consumer, mma = issue_mma(consumer, mma, bars, a_bufs, b_bufs, num_buffers)
 
     mma = mma.wait_num_outstanding(0)
     c_smem = gl.allocate_shared_memory(dtype, c_desc.block_type.shape, c_desc.layout)
@@ -406,14 +405,14 @@ def persistent_matmul_kernel(a_desc, b_desc, c_desc, MMAImpl: gl.constexpr, Sche
         a_bufs = gl.allocate_shared_memory(dtype, [num_buffers] + a_desc.block_type.shape, a_desc.layout)
         b_bufs = gl.allocate_shared_memory(dtype, [num_buffers] + b_desc.block_type.shape, b_desc.layout)
         for k in gl.static_range(0, BLOCK_K * (num_buffers - 2), BLOCK_K):
-            producer = async_load_operands(producer, a_desc, b_desc, off_m, off_n, k, bars, a_bufs, b_bufs, num_buffers)
+            producer = issue_loads(producer, a_desc, b_desc, off_m, off_n, k, bars, a_bufs, b_bufs, num_buffers)
 
         for k in range(BLOCK_K * (num_buffers - 2), K, BLOCK_K):
-            producer = async_load_operands(producer, a_desc, b_desc, off_m, off_n, k, bars, a_bufs, b_bufs, num_buffers)
-            consumer, mma = async_mma(consumer, mma, bars, a_bufs, b_bufs, num_buffers)
+            producer = issue_loads(producer, a_desc, b_desc, off_m, off_n, k, bars, a_bufs, b_bufs, num_buffers)
+            consumer, mma = issue_mma(consumer, mma, bars, a_bufs, b_bufs, num_buffers)
 
         for _ in gl.static_range(num_buffers - 2):
-            consumer, mma = async_mma(consumer, mma, bars, a_bufs, b_bufs, num_buffers)
+            consumer, mma = issue_mma(consumer, mma, bars, a_bufs, b_bufs, num_buffers)
 
         mma = mma.wait_num_outstanding(0)
         c_smem = gl.allocate_shared_memory(dtype, c_desc.block_type.shape, c_desc.layout)
@@ -614,10 +613,10 @@ if __name__ == "__main__" and not profiling_with_ncu:
 # 4 at a time.
 
 
-# Forked versions of async_load_operands and async_mma that support `stealb`.
+# Forked versions of issue_loads and issue_mma that support `stealb`.
 @gluon.jit
-def async_load_operands_stealb(producer, a_desc, b_desc, off_m, off_n, k, bars, a_bufs, b_bufs, stealb: gl.constexpr,
-                               num_buffers: gl.constexpr, pred=True):
+def issue_loads_stealb(producer, a_desc, b_desc, off_m, off_n, k, bars, a_bufs, b_bufs, stealb: gl.constexpr,
+                       num_buffers: gl.constexpr, pred=True):
     index = producer % num_buffers
     b_index = producer % (num_buffers + stealb)
     producer += 1
@@ -629,7 +628,7 @@ def async_load_operands_stealb(producer, a_desc, b_desc, off_m, off_n, k, bars, 
 
 
 @gluon.jit
-def async_mma_stealb(consumer, mma, bars, a_bufs, b_bufs, stealb: gl.constexpr, num_buffers: gl.constexpr):
+def issue_mma_stealb(consumer, mma, bars, a_bufs, b_bufs, stealb: gl.constexpr, num_buffers: gl.constexpr):
     index = consumer % num_buffers
     b_index = consumer % (num_buffers + stealb)
     phase = consumer // num_buffers & 1
@@ -674,21 +673,20 @@ def persistent_matmul_pipelined_kernel(a_desc, b_desc, c_desc, MMAImpl: gl.const
     off_m = pid_m * BLOCK_M
     off_n = pid_n * BLOCK_N
     for ki in gl.static_range(0, BLOCK_K * (num_buffers - 2), BLOCK_K):
-        producer = async_load_operands_stealb(producer, a_desc, b_desc, off_m, off_n, ki, bars, a_bufs, b_bufs, STEALB,
-                                              num_buffers)
+        producer = issue_loads_stealb(producer, a_desc, b_desc, off_m, off_n, ki, bars, a_bufs, b_bufs, STEALB,
+                                      num_buffers)
     k = BLOCK_K * (num_buffers - 2)
-    producer = async_load_operands_stealb(producer, a_desc, b_desc, off_m, off_n, k, bars, a_bufs, b_bufs, STEALB,
-                                          num_buffers)
+    producer = issue_loads_stealb(producer, a_desc, b_desc, off_m, off_n, k, bars, a_bufs, b_bufs, STEALB, num_buffers)
 
     for _ in range(num_tiles):
-        consumer, mma = async_mma_stealb(consumer, mma, bars, a_bufs, b_bufs, STEALB, num_buffers)
+        consumer, mma = issue_mma_stealb(consumer, mma, bars, a_bufs, b_bufs, STEALB, num_buffers)
         if STEALB:
             # Wait for the epilogue before the first TMA load.
             tma.store_wait(pendings=0)
         for k in range(BLOCK_K * (num_buffers - 1), K, BLOCK_K):
-            producer = async_load_operands_stealb(producer, a_desc, b_desc, off_m, off_n, k, bars, a_bufs, b_bufs,
-                                                  STEALB, num_buffers)
-            consumer, mma = async_mma_stealb(consumer, mma, bars, a_bufs, b_bufs, STEALB, num_buffers)
+            producer = issue_loads_stealb(producer, a_desc, b_desc, off_m, off_n, k, bars, a_bufs, b_bufs, STEALB,
+                                          num_buffers)
+            consumer, mma = issue_mma_stealb(consumer, mma, bars, a_bufs, b_bufs, STEALB, num_buffers)
 
         epilogue_off_m = off_m
         epilogue_off_n = off_n
@@ -701,12 +699,12 @@ def persistent_matmul_pipelined_kernel(a_desc, b_desc, c_desc, MMAImpl: gl.const
         # Predicate the peeled prologue instead of using a conditional.
         pred = idx < num_tiles
         for ki in gl.static_range(0, BLOCK_K * (num_buffers - 2), BLOCK_K):
-            producer = async_load_operands_stealb(producer, a_desc, b_desc, off_m, off_n, ki, bars, a_bufs, b_bufs,
-                                                  STEALB, num_buffers, pred)
-            consumer, mma = async_mma_stealb(consumer, mma, bars, a_bufs, b_bufs, STEALB, num_buffers)
+            producer = issue_loads_stealb(producer, a_desc, b_desc, off_m, off_n, ki, bars, a_bufs, b_bufs, STEALB,
+                                          num_buffers, pred)
+            consumer, mma = issue_mma_stealb(consumer, mma, bars, a_bufs, b_bufs, STEALB, num_buffers)
         k = BLOCK_K * (num_buffers - 2)
-        producer = async_load_operands_stealb(producer, a_desc, b_desc, off_m, off_n, k, bars, a_bufs, b_bufs, STEALB,
-                                              num_buffers)
+        producer = issue_loads_stealb(producer, a_desc, b_desc, off_m, off_n, k, bars, a_bufs, b_bufs, STEALB,
+                                      num_buffers)
 
         mma = mma.wait_num_outstanding(0)
         c, mma = mma.take_result()

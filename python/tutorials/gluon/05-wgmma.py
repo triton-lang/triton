@@ -40,7 +40,86 @@ if __name__ == "__main__" and not is_hopper():
 # %%
 # Let's illustrate WGMMA with a trivial kernel launched with grid size (1, ).
 # This kernel performs MMA on a small tensor.
+#
+# warpgroup_mma performs d = a * b + c. The `a` operand can be passed as
+# registers or through shared memory. The `b` operand must be passed through
+# shared memory, and the `c` operand must be passed through registers.
+#
+# warpgroup_mma itself is composed of many smaller `wgmma.mma_async` PTX
+# instructions, which supports a limited set of instruction shapes.
+#
+# The instruction shape is specified as [m, n, k], where
+#
+# - `k` is always 256 / A.dtype.primitive_bitwidth
+# - `m` is always 16
+# - `n` can be can chosen as follows:
+#
+# For floating point dtypes, `n` must be a positive multiple of 8, up to and
+# including 256. WGMMA supports 8-bit integers, but `n` must be chosen from:
+#
+#   224, 208, 192, 176, 160, 144, 128, 112, 96, 80, 64, 48, 32, 24, 16, 8
+#
+# `n` must be chosen such that it evenly divides into `N`, and it must be
+# less than or equal to `maxN`, where `maxN` is computed as:
+#
+#     mReps = ceildiv(M, m)
+#     nReps = ceildiv(num_warps, mReps)
+#     maxN = max(N // nReps, 8)
+#
+# warpgroup_mma divides the MMA across warps using `warps_per_cta`, in the
+# same way `BlockedLayout.warps_per_cta` tiles a tensor across warps. The
+# smallest indivisible unit of `warps_per_cta` is `[4, 1]`. Note that this
+# means WGMMA requires at least 4 warps. To choose the right `warps_per_cta`,
+# start from the atom `[4, 1]` and simply double it along any dimension until it
+# matches the number of warps. Note that since `m=16` and must be at least 4
+# wraps along M, the M dimension must be at least 64.
+#
+# Note when `num_warps=8`, we can choose `[4, 2]` or `[8, 1]`, but recall from
+# 02-layouts that this can affect the performance of, e.g., reductions.
+#
+# warpgroup_mma is an asynchronous operation whose completion is tracked by
+# commit groups, like async copies and TMA stores. Issuing a WGMMA operation
+# implicitly commits it to a WGMMA group, and we can wait until there are N
+# outstanding operations.
+#
+# Because warpgroup_mma is an asynchronous, until the operation is complete,
+# we cannot access the result even though it is in registers, and we cannot
+# write to any of the shared memory inputs. WGMMA accesses shared memory through
+# the async proxy. Since TMAs also access shared memory through the async proxy,
+# we don't need fences between TMA and WGMMA instructions.
+#
+# ```python
+# b_smem.store(b)
+# fence_async_shared()
+# warpgroup_mma(a, b_smem, c, is_async=True)
+# ```
+#
+# A fence is needed between the shared store and warpgroup_mma to order their
+# shared memory accesses.
+#
+# Completion of the WGMMA implies its reads from shared memory are complete.
+# Thus, it is safe to write to the shared memory inputs after waiting:
+#
+# ```python
+# d = warpgroup_mma(a, b_smem, c, is_async=True)
+# d = warpgroup_mma_wait(num_outstanding=0, deps=(d, ))
+# b_smem.store(b)
+# ```
+#
+# If the LHS operand is supplied in registers via a shared load, completion of
+# the WGMMA implies the shared load is complete, and subsequent accesses to the
+# buffer via the async proxy do not require a fence:
+#
+# ```python
+# a = a_smem.load(dot_operand_layout)
+# d = warpgroup_mma(a, b_smem, c, is_async=True)
+# d = warpgroup_mma_wait(num_outstanding=0, deps=(d, ))
+# tma.async_copy_global_to_shared(a_desc, [0, 0], bar, a_smem)
+# ```
 
+
+# %%
+# Let's implement a simple matmul kernel that uses WGMMA.
 
 @gluon.jit
 def small_mma_kernel(a_desc, b_desc, c_desc, d_desc,  #
@@ -62,42 +141,6 @@ def small_mma_kernel(a_desc, b_desc, c_desc, d_desc,  #
     tma.async_copy_global_to_shared(c_desc, [0, 0], bar, c_smem)
     mbarrier.wait(bar, phase=0)
     mbarrier.invalidate(bar)
-
-    # `warpgroup_mma` performs d = a * b + c. The `a` operand can be passed as
-    # registers or through shared memory. The `b` operand must be passed through
-    # shared memory, and the `c` operand must be passed through registers.
-    #
-    # `warpgroup_mma` itself is composed of many smaller `wgmma.mma_async` PTX
-    # instructions, which supports a limited set of instruction shapes.
-    #
-    # The instruction shape is specified as [m, n, k], where
-    #
-    # - `k` is always 256 / A.dtype.primitive_bitwidth
-    # - `m` is always 16
-    # - `n` can be can chosen as follows:
-    #
-    # For floating point dtypes, `n` must be a positive multiple of 8, up to and
-    # including 256. WGMMA supports 8-bit integers, but `n` must be chosen from:
-    #
-    #   224, 208, 192, 176, 160, 144, 128, 112, 96, 80, 64, 48, 32, 24, 16, 8
-    #
-    # `n` must be chosen such that it evenly divides into `N`, and it must be
-    # less than or equal to `maxN`, where `maxN` is computed as:
-    #
-    #     mReps = ceildiv(M, m)
-    #     nReps = ceildiv(num_warps, mReps)
-    #     maxN = max(N // nReps, 8)
-    #
-    # `warpgroup_mma` divides the MMA across warps using `warps_per_cta`, in the
-    # same way `BlockedLayout.warps_per_cta` tiles a tensor across warps. The
-    # smallest indivisible unit of `warps_per_cta` is `[4, 1]`. Note that this
-    # means WGMMA requires at least 4 warps. To choose the right
-    # `warps_per_cta`, start from the atom `[4, 1]` and simply double it along
-    # any dimension until it matches the number of warps. Note that since `m=16`
-    # and must be at least 4 wraps along M, the M dimension must be at least 64.
-    #
-    # Note when `num_warps=8`, we can choose `[4, 2]` or `[8, 1]`, but recall
-    # from 02-layouts that this can affect the performance of, e.g., reductions.
 
     # Let's parameterize the kernel over LHS_IN_REG and INSTR_SHAPE_N to see how
     # it can affect performance.
@@ -132,32 +175,22 @@ def small_mma_kernel(a_desc, b_desc, c_desc, d_desc,  #
         a = a_smem
 
     c = c_smem.load(c_layout)
-    d = warpgroup_mma(a, b_smem, c, is_async=True)
-
-    # WGMMA is an asynchronous operation. Until the operation is complete, we
-    # cannot access the result, even though it is in registers, and we cannot
-    # write to any of the shared memory inputs. To ensure a correct ordering
-    # between `warpgroup_mma`, the wait, and uses of the result, we must pass
-    # the result through the wait as one of its `deps` arguments.
-    #
-    # WGMMA accesses shared memory through the async proxy, like TMAs. Because
-    # WGMMA and TMAs both use the async proxy, we don't need fence_async_shared
-    # to synchronize between them. However, if we do a load or store from
-    # registers to a descriptor also used by WGMMA, we need a fence.
-    #
-    # The completion of WGMMA operations is tracked by commit groups, like
-    # async copies and TMA stores. Issuing a WGMMA operation implicitly commits
-    # it to a WGMMA group. Thus, we can wait for the completion of the operation
-    # by waiting until there are 0 outstanding operations.
-    d = warpgroup_mma_wait(num_outstanding=0, deps=(d, ))
-
-    # Note that `is_async=False` is the default value, and all this does is
-    # immediately wait for 0 outstanding operations. In this tutorial, we will
-    # always use `is_async=True`.
+    # Issue the async WGMMA. Note that `is_async=False` is the default value,
+    # and all this does is immediately wait for 0 outstanding operations. In
+    # this tutorial, we will always use `is_async=True`.
     #
     # Another important flag to consider is `use_acc`. When `use_acc=False`, the
     # `c` input is ignored and the accumulator is zero-initialized. This can be
     # an efficient way to zero the accumulator.
+    d = warpgroup_mma(a, b_smem, c, is_async=True, use_acc=True)
+
+    # To ensure correct ordering between `warpgroup_mma`, the wait, and uses of
+    # the result, you must thread the `warpgroup_mma` result through the wait
+    # via the `deps` argument and use the return value of the
+    # `warpgroup_mma_wait`.
+    #
+    # Wait for 0 outstanding operations, so we know the WGMMA is complete.
+    d = warpgroup_mma_wait(num_outstanding=0, deps=(d, ))
 
     d_smem = gl.allocate_shared_memory(d_desc.dtype, d_desc.block_type.shape, d_desc.layout)
     d_smem.store(d)

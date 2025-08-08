@@ -88,13 +88,14 @@ def memcpy_1d_tma_kernel(in_desc, out_desc, XBLOCK: gl.constexpr):
     gl.static_assert(in_desc.layout == out_desc.layout)
 
     # Track completion of the TMA read based on the number of bytes copied.
-    # This sets the tx-count of the mbarrier, which is atomically controlled by
-    # pending TMA transactions using the mbarrier. When the tx-count reaches 0,
-    # the mbarrier is arrived on once.
+    # mbarrier.expect sets the number of outstanding bytes tracked by the
+    # mbarrier. If we pass the barrier to the TMA copy, it will atomically
+    # decrement the number of outstanding bytes as transactions complete. When
+    # it reaches 0, the mbarrier is arrived on once.
     mbarrier.expect(bar, in_desc.block_type.nbytes)
     tma.async_copy_global_to_shared(in_desc, [pid * XBLOCK], bar, smem)
 
-    # Wait for the completion of the read. We query the completion state of the
+    # Wait for completion of the read. We query the completion state of the
     # mbarrier using the parity of the phase, i.e. either 0 or 1. mbarriers are
     # initialized to parity 1 complete, so we wait for parity 0.
     mbarrier.wait(bar, phase=0)
@@ -128,7 +129,7 @@ def memcpy_1d_tma(input, output, XBLOCK=8192):
     out_desc = TensorDescriptor(output, output.shape, output.stride(), block_shape, layout)
 
     grid = (triton.cdiv(input.numel(), XBLOCK), )
-    # Our kernel doesn't even use registers, so just a single warp is enough.
+    # Our kernel only uses scalars, so just a single warp is enough.
     memcpy_1d_tma_kernel[grid](in_desc, out_desc, XBLOCK, num_warps=1)
 
 
@@ -147,6 +148,83 @@ def test_memcpy_1d_tma(XBLOCK, xnumel):
 # of the kernel is almost the same. However, we now need to allocate one
 # mbarrier per buffer to track completion of the reads. We will also use TMA for
 # the store, meaning we need to allocate more shared memory for it.
+#
+# TMAs access shared memory through a different hardware called the "async
+# proxy". However, reading and writing shared memory from registers accesses it
+# through the "generic proxy". Memory operations across proxies are not ordered,
+# so we have to use `fence_async_shared` to establish ordering. Here are some
+# examples of hazards that require fences:
+#
+# ```python
+# value = smem.load()
+# fence_async_shared()
+# tma.async_copy_global_to_shared(desc, [0, 0], bar, smem)
+# ```
+#
+# Without the fence, async_copy_global_to_shared can start copying into `smem`
+# while the shared memory load is still in progress.
+#
+# ```python
+# smem.store(value)
+# fence_async_shared()
+# tma.async_copy_shared_to_global(desc, [0, 0], smem)
+# ```
+#
+# Without the fence, async_copy_shared_to_global can start copying from `smem`
+# before the shared memory store is complete.
+#
+# Note that certain cases imply total completion of a memory transaction and
+# do not require a fence. For example, waiting on the result of a TMA load:
+#
+# ```python
+# tma.async_copy_global_to_shared(desc, [0, 0], bar, smem)
+# mbarrier.wait(bar, phase=0)
+# value = smem.load()
+# ```
+#
+# fence_async_shared is not needed because after the mbarrier.wait on the TMA
+# read barrier, we know it has finished writing into shared memory via the async
+# proxy. Thus the read via the generic proxy will be ordered after. This applies
+# specifically to the TMA read barrier, a fence is still needed in this case:
+#
+# ```python
+# smem.store(value)
+# mbarrier.arrive(bar, count=1)
+# mbarrier.wait(bar, phase=0)
+# fence_async_shared()
+# tma.async_copy_shared_to_global(desc, [0, 0], smem)
+# ```
+
+
+@gluon.jit
+def issue_loads(copy_index, a_desc, b_desc, a_smem, b_smem, bars, xoff, YBLOCK: gl.constexpr,
+                num_buffers: gl.constexpr):
+    # Track completion of both TMA reads with the same mbarrier.
+    yoff = copy_index * YBLOCK
+    bar = bars.index(copy_index % num_buffers)
+    mbarrier.expect(bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes)
+    tma.async_copy_global_to_shared(a_desc, [xoff, yoff], bar, a_smem.index(copy_index % num_buffers))
+    tma.async_copy_global_to_shared(b_desc, [xoff, yoff], bar, b_smem.index(copy_index % num_buffers))
+    return copy_index + 1
+
+
+@gluon.jit
+def perform_add(read_index, bars, a_smem, b_smem, c_smem, c_desc, xoff, layout: gl.constexpr, YBLOCK: gl.constexpr,
+                num_buffers: gl.constexpr):
+    # Wait for the copy from num_buffers-1 iterations ago to complete.
+    read_phase = read_index // num_buffers & 1
+    mbarrier.wait(bars.index(read_index % num_buffers), read_phase)
+    a_val = a_smem.index(read_index % num_buffers).load(layout)
+    b_val = b_smem.index(read_index % num_buffers).load(layout)
+    c_val = a_val + b_val
+    yoff = read_index * YBLOCK
+    # Pipeline the store by rotating the store wait.
+    tma.store_wait(pendings=0)
+    c_smem.store(c_val)
+    fence_async_shared()
+    # Issue the store without waiting for it.
+    tma.async_copy_shared_to_global(c_desc, [xoff, yoff], c_smem)
+    return read_index + 1
 
 
 @gluon.jit
@@ -174,61 +252,16 @@ def elementwise_add_tma_kernel(  #
     read_index = 0
 
     for _ in gl.static_range(num_buffers - 1):
-        # Track completion of both TMA reads with the same mbarrier.
-        yoff = copy_index * YBLOCK
-        bar = bars.index(copy_index % num_buffers)
-        mbarrier.expect(bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes)
-        tma.async_copy_global_to_shared(a_desc, [xoff, yoff], bar, a_smem.index(copy_index % num_buffers))
-        tma.async_copy_global_to_shared(b_desc, [xoff, yoff], bar, b_smem.index(copy_index % num_buffers))
-        copy_index += 1
+        copy_index = issue_loads(copy_index, a_desc, b_desc, a_smem, b_smem, bars, xoff, YBLOCK, num_buffers)
 
     for _ in range(gl.cdiv(ynumel, YBLOCK) - (num_buffers - 1)):
-        yoff = copy_index * YBLOCK
-        bar = bars.index(copy_index % num_buffers)
-        mbarrier.expect(bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes)
-        tma.async_copy_global_to_shared(a_desc, [xoff, yoff], bar, a_smem.index(copy_index % num_buffers))
-        tma.async_copy_global_to_shared(b_desc, [xoff, yoff], bar, b_smem.index(copy_index % num_buffers))
-        copy_index += 1
-
-        # TMAs access shared memory through a different hardware path called the
-        # async proxy. However, reading and writing shared memory from registers
-        # accesses it through the generic proxy. Memory operations across
-        # proxies are not ordered. We need to use `fence_async_shared` to
-        # establish memory ordering between the two proxies.
-        #
-        # Note that this is necessary for both the async TMA reads and shared
-        # memory load as well as the async TMA store and shared memory store.
-        # We need to ensure the shared memory store is visible to the TMA store,
-        # AND we need to ensure the shared memory load completes before the next
-        # TMA read begins.
+        copy_index = issue_loads(copy_index, a_desc, b_desc, a_smem, b_smem, bars, xoff, YBLOCK, num_buffers)
 
         # Wait for the copy from num_buffers-1 iterations ago to complete.
-        read_phase = read_index // num_buffers & 1
-        mbarrier.wait(bars.index(read_index % num_buffers), read_phase)
-        a_val = a_smem.index(read_index % num_buffers).load(layout)
-        b_val = b_smem.index(read_index % num_buffers).load(layout)
-        c_val = a_val + b_val
-        yoff = read_index * YBLOCK
-        # Pipeline the store by waiting for the last store to complete.
-        tma.store_wait(pendings=0)
-        c_smem.store(c_val)
-        fence_async_shared()
-        # Issue the store without waiting for it.
-        tma.async_copy_shared_to_global(c_desc, [xoff, yoff], c_smem)
-        read_index += 1
+        read_index = perform_add(read_index, bars, a_smem, b_smem, c_smem, c_desc, xoff, layout, YBLOCK, num_buffers)
 
     for _ in gl.static_range(num_buffers - 1):
-        read_phase = read_index // num_buffers & 1
-        mbarrier.wait(bars.index(read_index % num_buffers), read_phase)
-        a_val = a_smem.index(read_index % num_buffers).load(layout)
-        b_val = b_smem.index(read_index % num_buffers).load(layout)
-        c_val = a_val + b_val
-        yoff = read_index * YBLOCK
-        tma.store_wait(pendings=0)
-        c_smem.store(c_val)
-        fence_async_shared()
-        tma.async_copy_shared_to_global(c_desc, [xoff, yoff], c_smem)
-        read_index += 1
+        read_index = perform_add(read_index, bars, a_smem, b_smem, c_smem, c_desc, xoff, layout, YBLOCK, num_buffers)
 
     for i in gl.static_range(num_buffers):
         mbarrier.invalidate(bars.index(i))

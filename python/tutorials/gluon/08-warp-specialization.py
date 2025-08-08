@@ -92,6 +92,32 @@ if __name__ == "__main__" and not is_hopper_or_newer():
 # Quickly sketch out the partitions: load partition will fetch inputs to smem
 # and signal the compute partition. The compute partition will consume the
 # operands and send them to the store partition over smem.
+#
+# Recall that we need fence_async_shared to synchronize the async and generic
+# proxies. This also applies if the buffer accesses are initiated in different
+# partitions, even when they are sequenced by mbarrier.arrive:
+#
+# ```python
+# smem.store(value)  # in partition A
+# fence_async_shared()
+# mbarrier.arrive(bar, count=1)
+#
+# mbarrier.wait(bar, phase=0)  # in partition B
+# tma.async_copy_shared_to_global(desc, [0, 0], smem)
+# ```
+#
+# A fence is needed somewhere between the shared memory store and the TMA store.
+#
+# ```python
+# value = smem.load()
+# mbarrier.arrive(bar, count=1)
+#
+# mbarrier.wait(bar, phase=0)
+# fence_async_shared()
+# tma.async_copy_global_to_shared(desc, [0, 0], bar, smem)
+# ```
+#
+# A fence is needed somewhere between the shared memory load and the TMA load.
 
 
 @gluon.jit
