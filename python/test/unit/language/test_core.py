@@ -10,7 +10,6 @@ import pathlib
 import numpy as np
 import pytest
 import torch
-import os
 import inspect
 from numpy.random import RandomState
 
@@ -7030,7 +7029,7 @@ def test_dot_max_num_imprecise_acc(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, in_type_s
 
 @pytest.mark.parametrize("enable_fp_fusion", [False, True])
 @pytest.mark.parametrize("default_override", [False, True])
-def test_enable_fp_fusion(enable_fp_fusion, default_override, device):
+def test_enable_fp_fusion(enable_fp_fusion, default_override, device, fresh_knobs):
     # Sequential multiply add can be fused by backend
     @triton.jit
     def mul_add(data):
@@ -7039,10 +7038,9 @@ def test_enable_fp_fusion(enable_fp_fusion, default_override, device):
 
     data = torch.randn((128, ), device=device, dtype=torch.float32)
     if default_override:
-        os.environ["TRITON_DEFAULT_FP_FUSION"] = "1" if enable_fp_fusion else "0"
+        fresh_knobs.language_knobs.default_fp_fusion = "1" if enable_fp_fusion else "0"
         assert triton.knobs.language.default_fp_fusion == enable_fp_fusion
         h = mul_add.warmup(data, grid=(1, ))
-        os.environ.pop("TRITON_DEFAULT_FP_FUSION")
     else:
         h = mul_add.warmup(data, grid=(1, ), enable_fp_fusion=enable_fp_fusion)
 
@@ -7059,7 +7057,7 @@ def test_enable_fp_fusion(enable_fp_fusion, default_override, device):
 
 @pytest.mark.parametrize("arch", ["sm70", "sm80", "sm90", "gfx942", "gfx950", "gfx1200"])
 @pytest.mark.parametrize("env_var_override", [False, True])
-def test_override_arch(arch, env_var_override, device):
+def test_override_arch(arch, env_var_override, device, fresh_knobs):
     if arch.startswith("sm") and not is_cuda():
         pytest.skip(f"{arch} arch only for CUDA")
     elif arch.startswith("gfx") and not is_hip():
@@ -7076,9 +7074,8 @@ def test_override_arch(arch, env_var_override, device):
 
     if is_cuda():
         if env_var_override:
-            os.environ["TRITON_OVERRIDE_ARCH"] = str(arch)
+            fresh_knobs.runtime_knobs.override_arch = str(arch)
             h = simple.warmup(data, out, grid=(1, ))
-            os.environ.pop("TRITON_OVERRIDE_ARCH")
         else:
             h = simple.warmup(data, out, arch=arch, grid=(1, ))
         ttgir_cc = re.search(r'cuda:(\d+)', h.asm["ttgir"])
@@ -7087,9 +7084,8 @@ def test_override_arch(arch, env_var_override, device):
         # For HIP, the generated kernel is a binary containing the final ISA. So we cannot run
         # them like CUDA side if the chip doesn't match. Here we just check generated ISA.
         if env_var_override:
-            os.environ["TRITON_OVERRIDE_ARCH"] = str(arch)
+            fresh_knobs.runtime_knobs.override_arch = str(arch)
             h = simple.warmup(data, out, grid=(1, ))
-            os.environ.pop("TRITON_OVERRIDE_ARCH")
         else:
             h = simple.warmup(data, out, arch=arch, grid=(1, ))
         ttgir_gfx = re.search(r'hip:(\w+)', h.asm["ttgir"])
