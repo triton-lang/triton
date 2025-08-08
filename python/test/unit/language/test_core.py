@@ -5138,9 +5138,9 @@ def test_pointer_arguments(device):
     x = torch.empty(1024, device=device.split('_')[0], pin_memory=pin_memory)
     if device == "cpu":
         with pytest.raises(ValueError):
-            kernel.warmup(x, grid=(1, ))
+            kernel.run[(1, )](x)
     else:
-        kernel.warmup(x, grid=(1, ))
+        kernel.run[(1, )](x)
 
 
 @pytest.mark.parametrize("value, value_type", [(-1, 'i32'), (0, 'i32'), (-2**31, 'i32'), (2**31 - 1, 'i32'),
