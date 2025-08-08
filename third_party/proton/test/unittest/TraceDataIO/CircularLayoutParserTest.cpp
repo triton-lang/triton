@@ -94,7 +94,7 @@ TEST_F(CircularLayoutParserTest, SingleEvent) {
   EXPECT_EQ(result->blockTraces.size(), 1);
   EXPECT_EQ(result->blockTraces[0].blockId, 1);
   EXPECT_EQ(result->blockTraces[0].procId, 3);
-  EXPECT_EQ(result->blockTraces[0].initialTime, 0x0123456789abcdef);
+  EXPECT_EQ(result->blockTraces[0].initTime, 0x0123456789abcdef);
   EXPECT_EQ(result->blockTraces[0].preFinalTime, 0xfedcba9876543210);
   EXPECT_EQ(result->blockTraces[0].postFinalTime, 0x0102030405060708);
   EXPECT_EQ(result->blockTraces[0].traces[0].count, 255);

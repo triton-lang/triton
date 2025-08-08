@@ -43,7 +43,7 @@ void CircularLayoutParser::parseMetadata() {
   bt.blockId = decoder.decode<I32Entry>()->value;
   bt.procId = decoder.decode<I32Entry>()->value;
   bt.bufSize = decoder.decode<I32Entry>()->value;
-  bt.initialTime = decoder.decode<I64Entry>()->value;
+  bt.initTime = decoder.decode<I64Entry>()->value;
   bt.preFinalTime = decoder.decode<I64Entry>()->value;
   bt.postFinalTime = decoder.decode<I64Entry>()->value;
 

@@ -96,7 +96,7 @@ struct InitializeOpConversion
     //  +-------------------------------+ 3
     //  | buffer size (1 word)          |
     //  +-------------------------------+ 4
-    //  | initial time                  |
+    //  | init time                     |
     //  | (2 words)                     |
     //  +-------------------------------+ 6
     //  | pre-final time                |
@@ -134,12 +134,12 @@ struct InitializeOpConversion
     Value hwid = targetInfo.processorId(rewriter, loc);
     b.store(hwid, gmemHwidPtr);
 
-    // Write back 'initial time'.
-    Value gmemInitialTimeOffset = b.i32_val(4);
-    Value gmemInitialTimePtr =
-        b.gep(scratchPtrTy, i32_ty, scratchPtr, gmemInitialTimeOffset);
-    Value initialTime = targetInfo.getGlobalTime(rewriter, loc);
-    b.store(initialTime, gmemInitialTimePtr);
+    // Write back 'init time'.
+    Value gmemInitTimeOffset = b.i32_val(4);
+    Value gmemInitTimePtr =
+        b.gep(scratchPtrTy, i32_ty, scratchPtr, gmemInitTimeOffset);
+    Value initTime = targetInfo.globalTime(rewriter, loc);
+    b.store(initTime, gmemInitTimePtr);
 
     // Add the 'else' block and the condition.
     Block *thenBlock = rewriter.splitBlock(ifBlock, op->getIterator());
@@ -243,7 +243,7 @@ struct FinalizeOpConversion
     Value gmemPreFinalTimeOffset = b.i32_val(6);
     Value gmemPreFinalTimePtr =
         b.gep(scratchPtrTy, i32_ty, scratchPtr, gmemPreFinalTimeOffset);
-    Value preFinalTime = targetInfo.getGlobalTime(rewriter, loc);
+    Value preFinalTime = targetInfo.globalTime(rewriter, loc);
     b.store(preFinalTime, gmemPreFinalTimePtr);
 
     // Add the 'else' block and the condition.
@@ -289,7 +289,7 @@ struct FinalizeOpConversion
       Value gmemPostFinalTimeOffset = b.i32_val(8);
       Value gmemPostFinalTimePtr =
           b.gep(scratchPtrTy, i32_ty, scratchPtr, gmemPostFinalTimeOffset);
-      Value postFinalTime = targetInfo.getGlobalTime(rewriter, loc);
+      Value postFinalTime = targetInfo.globalTime(rewriter, loc);
       b.store(postFinalTime, gmemPostFinalTimePtr);
 
       // Add the 'else' block and the condition.

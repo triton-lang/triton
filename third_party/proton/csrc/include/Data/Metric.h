@@ -259,7 +259,7 @@ public:
     DeviceId,
     DeviceType,
     TimeShiftCost,
-    InitialTime,
+    InitTime,
     PreFinalTime,
     PostFinalTime,
     Count,
@@ -271,7 +271,7 @@ public:
               double normalizedDuration, uint64_t kernelId,
               const std::string &kernelName, uint64_t blockId,
               uint64_t processorId, uint64_t unitId, uint64_t deviceId,
-              uint64_t deviceType, uint64_t timeShiftCost, uint64_t initialTime,
+              uint64_t deviceType, uint64_t timeShiftCost, uint64_t initTime,
               uint64_t preFinalTime, uint64_t postFinalTime)
       : CycleMetric() {
     this->values[StartCycle] = startCycle;
@@ -286,7 +286,7 @@ public:
     this->values[DeviceId] = deviceId;
     this->values[DeviceType] = deviceType;
     this->values[TimeShiftCost] = timeShiftCost;
-    this->values[InitialTime] = initialTime;
+    this->values[InitTime] = initTime;
     this->values[PreFinalTime] = preFinalTime;
     this->values[PostFinalTime] = postFinalTime;
   }
