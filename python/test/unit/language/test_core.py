@@ -541,7 +541,7 @@ def _test_binary(dtype_x, dtype_y, expr, numpy_expr=None, mode_x='real', mode_y=
         do_test(x, y[:1].reshape(()), kernel_broadcast_rhs)
 
 
-def _min_max_integral_mod_value(dtype_x, dtype_y) -> Optional[int]:
+def _min_max_integral_mod_value(dtype_x, dtype_y) -> tuple[int, int]:
     """
     Limit min/max values for integral types for mod values. Leads to
     overflow/underflow when casting large integral types to floats.
@@ -3934,9 +3934,9 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
             ZCs = Z + off_n * stride_zn
             z += tl.load(ZCs)[None, :]
         if DO_SOFTMAX:
-            max = tl.max(z, 1)
-            z = z - max[:, None]
-            num = tl.exp(z.to(tl.float32)).to(max.dtype)
+            z_max = tl.max(z, 1)
+            z = z - z_max[:, None]
+            num = tl.exp(z.to(tl.float32)).to(z_max.dtype)
             den = tl.sum(num, 1)
             z = num / den[:, None]
         if CHAIN_DOT:
@@ -7149,17 +7149,16 @@ def test_clamp(dtype, device):
 
     @triton.jit
     def kernel(x_ptr, min_ptr, max_ptr, out_ptr, ref_ptr, N, BLOCK_SIZE: tl.constexpr):
-
         off = tl.arange(0, BLOCK_SIZE)
         mask = off < N
         x = tl.load(x_ptr + off, mask=mask)
-        min = tl.load(min_ptr + off, mask=mask)
-        max = tl.load(max_ptr + off, mask=mask)
+        _min = tl.load(min_ptr + off, mask=mask)
+        _max = tl.load(max_ptr + off, mask=mask)
         out = out_ptr + off
         ref = ref_ptr + off
 
-        tl.store(out, tl.clamp(x, min, max), mask=mask)
-        ref_val = tl.minimum(tl.maximum(x, min), max)
+        tl.store(out, tl.clamp(x, _min, _max), mask=mask)
+        ref_val = tl.minimum(tl.maximum(x, _min), _max)
         tl.store(ref, ref_val, mask=mask)
 
     size = 128
@@ -7167,12 +7166,12 @@ def test_clamp(dtype, device):
     x = torch.randn((size, ), device=device, dtype=getattr(torch, dtype))
     a = torch.randn((size, ), device=device, dtype=getattr(torch, dtype))
     b = torch.randn((size, ), device=device, dtype=getattr(torch, dtype))
-    min = torch.min(a, b)
-    max = torch.max(a, b)
+    _min = torch.min(a, b)
+    _max = torch.max(a, b)
     out = torch.zeros_like(x, device=device, dtype=getattr(torch, dtype))
     ref = torch.zeros_like(x, device=device, dtype=getattr(torch, dtype))
 
-    kernel[(size, )](x, min, max, out, ref, x.numel(), BLOCK_SIZE=size)
+    kernel[(size, )](x, _min, _max, out, ref, x.numel(), BLOCK_SIZE=size)
 
     torch.testing.assert_close(out, ref)
 
