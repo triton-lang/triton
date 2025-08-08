@@ -30,12 +30,23 @@ namespace mlir::triton::AMD {
 /// body values). Here we attempt to do better by analysis the loop bounds and
 /// "abstractly interpreting" the loop when loop bounds are statically known.
 /// See visitRegionSuccessors.
+///
+/// We also add a "strict" mode to the analysis. In strict mode, we only
+/// consider ranges that are exact and as they can impact program correctness
+/// (e.g. the max number of programs used for branching). In constrast, without
+/// strict mode we allow assumptions that are "reasonable" for user defined code
+/// under the assumption that it cannot meaningfully impact correctness without
+/// user error.
+
 struct TritonIntegerRangeAnalysis : dataflow::IntegerRangeAnalysis {
   using dataflow::IntegerRangeAnalysis::IntegerRangeAnalysis;
+  const bool strict;
   TritonIntegerRangeAnalysis(
       DataFlowSolver &solver,
-      const DenseMap<Value, SetVector<Operation *>> &assumptions)
-      : dataflow::IntegerRangeAnalysis(solver), assumptions(assumptions) {}
+      const DenseMap<Value, SetVector<Operation *>> &assumptions,
+      const bool strict)
+      : dataflow::IntegerRangeAnalysis(solver), assumptions(assumptions),
+        strict(strict) {}
 
   void setToEntryState(dataflow::IntegerValueRangeLattice *lattice) override;
 

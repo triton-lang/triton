@@ -87,9 +87,10 @@ triton::AMD::TritonIntegerRangeAnalysis::maybeGetTripCount(
 namespace {
 
 constexpr int64_t kDefaultMaxTripCount = 1024;
-constexpr uint64_t maxXPrograms = 1L << 31; // 2147483648
-constexpr uint64_t maxYPrograms = 1L << 16; // 65536
-constexpr uint64_t maxZPrograms = 1L << 16; // 65536
+constexpr uint64_t kDefaultMaxProgramsLoose = 1L << 16; // 65536
+constexpr uint64_t maxXPrograms = 1L << 31;             // 2147483648
+constexpr uint64_t maxYPrograms = 1L << 16;             // 65536
+constexpr uint64_t maxZPrograms = 1L << 16;             // 65536
 
 void getEnclosingLoops(Operation &op, SmallVector<LoopLikeOpInterface> &ops) {
   Operation *currOp = op.getParentOp();
@@ -337,6 +338,19 @@ void TritonIntegerRangeAnalysis::setToEntryState(
   propagateIfChanged(lattice, changed);
 }
 
+uint64_t TritonIntegerRangeAnalysis::getMaxPrograms(int32_t dim, bool strict) {
+  if (strict) {
+    if (dim == 0)
+      return maxXPrograms;
+    else if (dim == 1)
+      return maxYPrograms;
+    else
+      return maxZPrograms;
+  } else {
+    return kDefaultMaxProgramsLoose;
+  }
+}
+
 LogicalResult TritonIntegerRangeAnalysis::visitOperation(
     Operation *op,
     ArrayRef<const dataflow::IntegerValueRangeLattice *> operands,
@@ -387,28 +401,14 @@ LogicalResult TritonIntegerRangeAnalysis::visitOperation(
   if (llvm::isa<GetProgramIdOp, MakeRangeOp, HistogramOp, GetNumProgramsOp>(
           op)) {
     llvm::TypeSwitch<Operation *>(op)
-        .Case<GetProgramIdOp>([&](GetProgramIdOp getPIDOp) {
-          uint64_t max_programs;
-          if (getPIDOp.getAxisAsInt() == 0) {
-            max_programs = maxXPrograms;
-          } else if (getPIDOp.getAxisAsInt() == 1) {
-            max_programs = maxYPrograms;
-          } else {
-            assert(getPIDOp.getAxisAsInt() == 2 && "unsupported dim");
-            max_programs = maxZPrograms;
-          }
+        .Case<GetProgramIdOp>([&](auto getPIDOp) {
+          uint64_t max_programs =
+              getMaxPrograms(getPIDOp.getAxisAsInt(), this->strict);
           inferResultRangesPID(getPIDOp, max_programs - 1, joinCallback);
         })
-        .Case<GetNumProgramsOp>([&](GetNumProgramsOp getPIDOp) {
-          int64_t max_programs;
-          if (getPIDOp.getAxisAsInt() == 0) {
-            max_programs = maxXPrograms;
-          } else if (getPIDOp.getAxisAsInt() == 1) {
-            max_programs = maxYPrograms;
-          } else {
-            assert(getPIDOp.getAxisAsInt() == 2 && "unsupported dim");
-            max_programs = maxZPrograms;
-          }
+        .Case<GetNumProgramsOp>([&](auto getPIDOp) {
+          uint64_t max_programs =
+              getMaxPrograms(getPIDOp.getAxisAsInt(), this->strict);
           inferResultRangesPID(getPIDOp, max_programs, joinCallback);
         })
         .Case<MakeRangeOp>([&](MakeRangeOp makeROp) {
