@@ -442,15 +442,14 @@ def _p_matmul_ogs(
             if MASK_ACC:
                 out = tl.where(mask_m[:, None], out, 0.0)
             # Flexpoint
-            out_view = tl.reshape(
-                out, [out.numel // THREADS_PER_BLOCK, THREADS_PER_BLOCK], can_reorder=True)
+            out_view = tl.reshape(out, [out.numel // THREADS_PER_BLOCK, THREADS_PER_BLOCK], can_reorder=True)
             local_absmax = tl.maximum(local_absmax, nan_propagating_absmax_reduce(out_view, axis=0))
             out = float_to_flex(
                 out, YExpectedScale,
                 None, # ActualScale: local absmax is tracked and updated after the loop
                 YChecksumScale,
                 None, # mask: out is manually masked to 0
-                Y, FLEXPOINT_SATURATE_INF)
+                YPtr, FLEXPOINT_SATURATE_INF)
             if EPILOGUE_FN is not None:
                 out = EPILOGUE_FN(out, *epilogue_fn_args, target_dtype=YPtr.dtype.element_ty, pid=len(accs)*tile_id1 + a_i)
 
