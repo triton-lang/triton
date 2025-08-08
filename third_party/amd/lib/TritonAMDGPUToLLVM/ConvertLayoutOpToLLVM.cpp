@@ -38,7 +38,8 @@ public:
     auto srcType = cast<RankedTensorType>(op.getSrc().getType());
     auto dstType = cast<RankedTensorType>(op.getType());
 
-    if (!matchMFMAAndLinearLayoutCase(srcType, dstType))
+    if (!(matchMFMAAndLinearLayoutCase(srcType, dstType) ||
+          cvtIntraWarp(srcType, dstType)))
       return failure();
 
     auto loc = op.getLoc();

@@ -44,6 +44,8 @@ public:
         return;
       if (!cvtNeedsSharedMemory(srcType, dstType))
         return;
+      if (cvtIntraWarp(srcType, dstType))
+        return;
       auto order = getOrderForMemory(srcType);
       auto sharedMemorySpace =
           triton::gpu::SharedMemorySpaceAttr::get(srcType.getContext());

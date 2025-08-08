@@ -252,6 +252,10 @@ bool cvtNeedsWarpShuffle(RankedTensorType srcTy, RankedTensorType dstTy);
 // warps, and possibly blocks.
 bool cvtNeedsSharedMemory(RankedTensorType srcTy, RankedTensorType dstTy);
 
+// Conversion from `srcTy` to `dstTy` can be done within a warp for
+// AMDMFMAEncoding layout. No data exchange across warps or blocks is needed.
+bool cvtIntraWarp(RankedTensorType srcTy, RankedTensorType dstTy);
+
 // TODO: Move utility functions that belong to ConvertLayoutOp to class
 // ConvertLayoutOpHelper in the future
 bool shouldUseDistSmem(Attribute srcLayout, Attribute dstLayout);
