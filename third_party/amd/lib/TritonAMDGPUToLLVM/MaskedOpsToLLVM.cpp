@@ -15,7 +15,7 @@
 namespace mlir::triton {
 #define GEN_PASS_DEF_CONVERTMASKEDOPSTOLLVM
 #include "TritonAMDGPUToLLVM/Passes.h.inc"
-}
+} // namespace mlir::triton
 
 using namespace mlir;
 using namespace mlir::triton::gpu;
@@ -74,8 +74,8 @@ public:
     rewriter.setInsertionPointToStart(trueBlock);
     auto [volatileFlag, nonTmpFlag] = getCacheModifierFlagsForLoad(loadOp);
 
-    auto llvmLoadOp = rewriter.create<LLVM::LoadOp>(loc, elemTy, ptr, /*alignment*/0,
-                                                    volatileFlag, nonTmpFlag);
+    auto llvmLoadOp = rewriter.create<LLVM::LoadOp>(
+        loc, elemTy, ptr, /*alignment*/ 0, volatileFlag, nonTmpFlag);
 
     if (loadOp.getForceNoAlias()) {
       AMD::addLocalLoadNoAliasScope(llvmLoadOp);

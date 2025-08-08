@@ -327,8 +327,8 @@ Value llLoad(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,
       break;
     }
 
-    auto loadOp = rewriter.create<LLVM::LoadOp>(loc, elemTy, ptr, /*alignment*/0,
-                                                volatileFlag, nonTmpFlag);
+    auto loadOp = rewriter.create<LLVM::LoadOp>(
+        loc, elemTy, ptr, /*alignment*/ 0, volatileFlag, nonTmpFlag);
 
     if (forceNoAliasAsyncLoads) {
       mlir::triton::AMD::addLocalLoadNoAliasScope(loadOp);

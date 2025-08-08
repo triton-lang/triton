@@ -34,7 +34,6 @@ public:
   }
 
 private:
-
   bool isPredicatedStore(LLVM::CallOp callOp) const {
     return callOp.getCallee().value().contains(
         mlir::LLVM::AMD::predicatedStore);

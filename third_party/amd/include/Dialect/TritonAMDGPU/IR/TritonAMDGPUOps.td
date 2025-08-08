@@ -543,7 +543,7 @@ def MaskedLoadOp : TT_AMDGPU_Op<"masked_load", []> {
   );
 
   let results = (outs LLVM_Type:$result);
-  
+
   let assemblyFormat = [{
     $ptr `,` $mask `,` $falseVal
     oilist(`cacheModifier` `=` $cache)
