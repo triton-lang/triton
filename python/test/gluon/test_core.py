@@ -297,7 +297,7 @@ def test_amd_mfma_scaled(M, N, K, rhs_scale, mxfp_type, normal_type, num_warps, 
     DIV_FACTOR_A = 2 if type_a == "e2m1" else 1
     DIV_FACTOR_B = 2 if type_b == "e2m1" else 1
     x = make_arg((M, K // DIV_FACTOR_A), type_a, col_major=False)
-    y = make_arg((K // DIV_FACTOR_B, N), type_b, col_major=True)
+    y = make_arg((K // DIV_FACTOR_B, N), type_b, col_major=False)
 
     min_scale, max_scale = (0, 142) if comp_dtype == torch.bfloat16 else (124, 131)
     scale_x = torch.randint(min_scale, max_scale + 1, (M, K // 32), dtype=torch.uint8, device=device)
