@@ -4,7 +4,7 @@ import pytest
 import triton
 import triton.language as tl
 
-from triton._internal_testing import is_cuda, is_ampere_or_newer, is_hopper_or_newer, is_hopper, is_hip, is_hip_cdna, is_hip_cdna4
+from triton._internal_testing import is_cuda, is_ampere_or_newer, is_hopper_or_newer, is_hopper, is_hip_cdna4
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
 from triton.experimental.gluon.language.nvidia.ampere import async_copy, mbarrier
