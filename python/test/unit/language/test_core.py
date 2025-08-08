@@ -1133,7 +1133,8 @@ def test_unary_op(dtype_x, expr, num_ctas, device):
                           for expr in ['exp', 'log', 'cos', 'sin', 'exp2', 'log2', 'sqrt', 'rsqrt', 'floor', 'ceil']
                           for x in ['x', '3.0']])
 def test_math_op(dtype_x, expr, x, device):
-    _test_unary(dtype_x, f'tl.{expr}({x})', f'np.{expr}({x}) ', device=device)
+    np_expr = f"1.0 / np.{expr}({x})" if expr == "rsqrt" else f"np.{expr}({x})"
+    _test_unary(dtype_x, f'tl.{expr}({x})', np_expr, device=device)
 
 
 @pytest.mark.interpreter
@@ -4049,7 +4050,7 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
         return
 
     if is_hip_cdna():
-        amdgcn = compiled.asm['amdgcn']
+        amdgcn = pgm.asm['amdgcn']
 
         if (M, N) == (4, 64) or (M, N) == (64, 4):
             assert 'v_mfma_f32_4x4' in amdgcn
@@ -4061,7 +4062,7 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
         return
 
     # make sure ld/st are vectorized
-    ptx = compiled.asm['ptx']
+    ptx = pgm.asm['ptx']
 
     if (K > 16 or N > 16 or M > 16) and (M * N // (num_warps * 32) >= 4):
         # XXX: skip small sizes because they are not vectorized
