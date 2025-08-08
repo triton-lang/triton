@@ -151,7 +151,8 @@ class SliceLayout(DistributedLayout):
         return f"SL{self.dim}_{self.parent.mangle()}SL"
 
     def __hash__(self):
-        return hash((dim, parent))
+        return hash((self.dim, self.parent))
+
 
 @dataclass(frozen=True)
 class DistributedLinearLayout(DistributedLayout):
@@ -233,7 +234,7 @@ class DotOperandLayout(DistributedLayout):
         return f"DO{self.operand_index}_{self.parent.mangle()}_{self.k_width}DO"
 
     def __hash__(self):
-        return hash((operand, parent, k_width))
+        return hash((self.operand_index, self.parent, self.k_width))
 
 
 @dataclass(frozen=True)
@@ -278,14 +279,9 @@ class NVMMADistributedLayout(DistributedLayout):
         return f"MMA_{self.version}_{self.warps_per_cta}_{self.instr_shape}_{self.ctas_per_cga}_{self.cta_split_num}_{self.cta_order}_MMA"
 
     def __hash__(self):
-        return hash((
-            tuple(version),
-            tuple(warps_per_cta),
-            tuple(instr_shape),
-            tuple(ctas_per_cga) if ctas_per_cga else None,
-            tuple(cta_split_num) if cta_split_num else None,
-            tuple(cta_order) if cta_order else None
-        ))
+        return hash(
+            (tuple(self.version), tuple(self.warps_per_cta), tuple(self.instr_shape), tuple(self.ctas_per_cga) if self.ctas_per_cga else None,
+             tuple(self.cta_split_num) if self.cta_split_num else None, tuple(self.cta_order) if self.cta_order else None))
 
 
 class SharedLayout:
@@ -361,16 +357,10 @@ class NVMMASharedLayout(SharedLayout):
         )
 
     def __hash__(self):
-        return hash((
-            self.swizzle_byte_width,
-            self.element_bitwidth,
-            self.rank,
-            self.transposed,
-            self.fp4_padded,
-            tuple(self.ctas_per_cga) if self.ctas_per_cga else None,
-            tuple(self.cta_split_num) if self.cta_split_num else None,
-            tuple(self.cta_order) if self.cta_order else None
-        ))
+        return hash((self.swizzle_byte_width, self.element_bitwidth, self.rank, self.transposed, self.fp4_padded,
+                     tuple(self.ctas_per_cga) if self.ctas_per_cga else None,
+                     tuple(self.cta_split_num) if self.cta_split_num else None,
+                     tuple(self.cta_order) if self.cta_order else None))
 
     @staticmethod
     def get_default_for(block_shape, dtype, transposed=False, fp4_padded=False, ctas_per_cga=None, cta_split_num=None,
@@ -417,15 +407,10 @@ class NVMMASharedLayout(SharedLayout):
         return f"NVMMA_{self.swizzle_byte_width}_{self.element_bitwidth}_{self.transposed}_{self.fp4_padded}_NVMMA"
 
     def __hash__(self):
-        return hash((
-            self.swizzle_byte_width,
-            self.element_bitwidth,
-            self.transposed,
-            self.fp4_padded,
-            tuple(self.ctas_per_cga) if self.ctas_per_cga else None,
-            tuple(self.cta_split_num) if self.cta_split_num else None,
-            tuple(self.cta_order) if self.cta_order else None
-        ))
+        return hash((self.swizzle_byte_width, self.element_bitwidth, self.transposed, self.fp4_padded,
+                     tuple(self.ctas_per_cga) if self.ctas_per_cga else None,
+                     tuple(self.cta_split_num) if self.cta_split_num else None,
+                     tuple(self.cta_order) if self.cta_order else None))
 
 
 @dataclass(frozen=True, eq=True)
@@ -486,12 +471,7 @@ class SwizzledSharedLayout(SharedLayout):
         return f"SSS_{self.vec}_{self.per_phase}_{self.max_phase}_{stringify(self.order)}_{stringify(self.ctas_per_cga)}_{stringify(self.cta_split_num)}_{stringify(self.cta_order)}_SSS"
 
     def __hash__(self):
-        return hash((
-            self.vec,
-            self.per_phase,
-            self.max_phase,
-            tuple(self.order) if self.order else None,
-            tuple(self.ctas_per_cga) if self.ctas_per_cga else None,
-            tuple(self.cta_split_num) if self.cta_split_num else None,
-            tuple(self.cta_order) if self.cta_order else None
-        ))
+        return hash((self.vec, self.per_phase, self.max_phase, tuple(self.order) if self.order else None,
+                     tuple(self.ctas_per_cga) if self.ctas_per_cga else None,
+                     tuple(self.cta_split_num) if self.cta_split_num else None,
+                     tuple(self.cta_order) if self.cta_order else None))
