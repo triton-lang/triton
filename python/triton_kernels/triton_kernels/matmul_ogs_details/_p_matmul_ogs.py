@@ -28,20 +28,6 @@ def get_dtype(tensor_or_desc: tl.tensor | tl.tensor_descriptor) -> tl.dtype:
     else:
         raise ValueError(f"Invalid type: {type(tensor_or_desc)}")
 
-
-@triton.jit
-def _tma_load_2d(desc, offs, transpose: tl.constexpr = False):
-    if len(desc.shape) == 2 and len(offs) == 3:
-        tl.device_assert(offs[0] == 0, "2D TMA load requires Z offset to be 0")
-        offs = offs[1:]
-    if transpose:
-        offs = offs[:-2] + [offs[-1], offs[-2]]
-    res = desc.load(offs)
-    res = tl.reshape(res, desc.block_shape[-2:])
-    if transpose:
-        res = tl.trans(res)
-    return res
-
 @triton.jit
 def _load_tile_attrs(
     tile_id, num_tiles, grid_m, grid_n, padding_m,
@@ -96,15 +82,6 @@ def _load_writeback_idx_and_mask(WriteBackIndx, writeback_size, offs, mask):
     offs = tl.load(WriteBackIndx + offs, mask=mask, other=-1)
     mask = offs != -1
     return (offs, mask)
-
-@triton.jit
-def _make_device_tma_desc_workaround(desc, ptr):
-    return tl.make_tensor_descriptor(
-        ptr,
-        shape=desc.shape,
-        strides=desc.strides[:-1] + (1,),
-        block_shape=desc.block_shape
-    )
 
 
 _matmul_ogs_repr = make_matmul_repr("_p_matmul_ogs", [0, 1, 2])
@@ -162,8 +139,9 @@ def _p_matmul_ogs(
              IS_EPILOGUE_DEQUANT_MXFP8: tl.constexpr = False):
     tl.static_assert(SWIZZLE_MX_VALUE is None, "NYI. Value swizzling")
 
+    # why is this faster than using host-side tensor descriptor?!
     if Y_TMA_MODE is not None:
-        Y = _make_device_tma_desc_workaround(Y, YPtr + y_desc_ptr_off)
+        Y = tl.make_tensor_descriptor(YPtr + y_desc_ptr_off, Y.shape, Y.strides[:-1] + (1,), Y.block_shape)
 
     is_microscaled_format: tl.constexpr = MxScale is not None
     MX_PACK_DIVISOR: tl.constexpr = MXFP_BLOCK_SIZE
@@ -246,10 +224,8 @@ def _p_matmul_ogs(
     local_absmax = tl.full([THREADS_PER_BLOCK], 0.0, tl.uint32)
 
     DISALLOW_ACC_MULTI_BUFFER: tl.constexpr = is_microscaled_format and BLOCK_M * BLOCK_N >= 128 * 256
-    # Enable warp specialization when all loads are TMA loads.
-    WARP_SPECIALIZE: tl.constexpr = (USE_GATHER_TMA or X_USE_LOAD_TMA)
 
-    for tile_id in tl.range(tl.program_id(0), num_tiles, NUM_SMS, flatten=True, disallow_acc_multi_buffer=DISALLOW_ACC_MULTI_BUFFER, warp_specialize=WARP_SPECIALIZE):
+    for tile_id in tl.range(tl.program_id(0), num_tiles, NUM_SMS, flatten=True, disallow_acc_multi_buffer=DISALLOW_ACC_MULTI_BUFFER, warp_specialize=True):
         expt_id, start_z, start_m, eM, off_m, off_n, pid_k = _load_tile_attrs(
             tile_id, num_tiles, grid_m, grid_n, padding_m,
             M, ExptData, ExptHist, ExptOffs,
@@ -298,7 +274,8 @@ def _p_matmul_ogs(
                 x = X.load([c0, c1, start_z, c2, off_k])
                 x = x.reshape(BLOCK_M, BLOCK_K)
             elif X_TMA_MODE == "dense":
-                x = _tma_load_2d(X, [start_z, start_m + off_m, off_k])
+                x = X.load([start_z, start_m + off_m, off_k])
+                x = x.reshape(BLOCK_M, BLOCK_K)
             else:
                 tl.static_assert(X_TMA_MODE is None)
                 XPtrs = XBase + offs_x_m + offs_x_k
@@ -312,7 +289,12 @@ def _p_matmul_ogs(
                 else:
                     x = tl.load(XPtrs, mask=mask_k[None, :], other=0.0)
 
-            w = _tma_load_2d(W, [expt_id, off_k_w, off_n], transpose=W_TRANSPOSE)
+            if W_TRANSPOSE:
+                w = tl.trans(W.load([expt_id, off_n, off_k_w]), [0, 2, 1])
+            else:
+                w = W.load([expt_id, off_k_w, off_n])
+            w = tl.reshape(w, *w.shape[1:])
+
 
             if is_microscaled_format:
                 x_format: tl.constexpr = get_scaled_dot_format_string(x.dtype)
@@ -327,7 +309,8 @@ def _p_matmul_ogs(
                     w_scales = w_scales.reshape((w_scales.shape[1], w_scales.shape[2] * w_scales.shape[-2] * w_scales.shape[-1]))
                     w_scales = unswizzle_mx_scale_bw(w_scales)
                 else:
-                    w_scales = _tma_load_2d(MxScale, [expt_id, off_k_mx, off_n]).T
+                    w_scales = MxScale.load([expt_id, off_k_mx, off_n])
+                    w_scales = tl.reshape(w_scales, *w_scales.shape[1:]).T
                 if SWAP_XW:
                     acc = tl.dot_scaled(w.T, w_scales, mx_format, x.T, x_scales, x_format, acc=acc, fast_math=True)
                 else:
