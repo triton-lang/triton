@@ -230,15 +230,15 @@ def test_amd_mfma_scaled(M, N, K, rhs_scale, mxfp_type, normal_type, num_warps, 
             a_offsets = ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, a_scale_layout))[:, None] * SCALE_BLOCK_K + \
                         ttgl.arange(0, SCALE_BLOCK_K, layout=ttgl.SliceLayout(0, a_scale_layout))[None, :]
             a_scale = ttgl.amd.cdna4.buffer_load(a_scale, a_offsets)
-
-            b_scale = ttgl.full([BLOCK_M, SCALE_BLOCK_K], 127, dtype=ttgl.int8, layout=b_scale_layout)
         else:
-            assert b_scale is not None
             a_scale = ttgl.full([BLOCK_M, SCALE_BLOCK_K], 127, dtype=ttgl.int8, layout=a_scale_layout)
 
+        if b_scale is not None:
             b_scale_offsets = ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(1, b_scale_layout))[:, None] * SCALE_BLOCK_K + \
                               ttgl.arange(0, SCALE_BLOCK_K, layout=ttgl.SliceLayout(0, b_scale_layout))[None, :]
             b_scale = ttgl.amd.cdna4.buffer_load(b_scale, b_scale_offsets)
+        else:
+            b_scale = ttgl.full([BLOCK_M, SCALE_BLOCK_K], 127, dtype=ttgl.int8, layout=b_scale_layout)
 
         c = ttgl.amd.cdna4.mfma_scaled(a, a_scale, type_a, b, b_scale, type_b, zero, layout=mfma_layout)
         c = c.to(out.dtype.element_ty)
