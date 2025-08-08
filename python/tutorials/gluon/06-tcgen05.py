@@ -167,13 +167,6 @@ def small_mma_kernel(a_desc, b_desc, c_desc, d_desc, tmem_block: gl.constexpr,  
     tma.async_copy_global_to_shared(a_desc, [0, 0], bar, a_smem)
     tma.async_copy_global_to_shared(b_desc, [0, 0], bar, b_smem)
     tma.async_copy_global_to_shared(c_desc, [0, 0], bar, c_smem)
-
-    # Note that we don't need `fence_async_shared()` even though the TMA load
-    # is through the async proxy and the subsequent load from shared memory is
-    # via the generic proxy. This is because there is a special rule that
-    # waiting on the mbarrier for the competion of the TMA load implicitly
-    # synchronizes the async and generic proxies. This only applies to TMA load
-    # then an mbarrier wait.
     mbarrier.wait(bar, phase=0)
 
     # Re-using an mbarrier for TMAs and tcgen05_mma can lead to undefined
@@ -210,7 +203,19 @@ def small_mma_kernel(a_desc, b_desc, c_desc, d_desc, tmem_block: gl.constexpr,  
 
     # tcgen05_mma is an asynchronous operation. Until the operation is complete,
     # we cannot read or write to the accumulator memory and we cannot write to
-    # the operand memory.
+    # the operand memory. tcgen05_mma accesses shared memory through the async
+    # proxy:
+    #
+    # ```python
+    # b_smem.store(b)
+    # fence_async_shared()
+    # tcgen05_mma(a, b_smem, acc_tmem)
+    # ```
+    #
+    # A fence is required between the shared store and tcgen05_mma to order
+    # their shared memory accesses. Completion of the tcgen05_mma operation
+    # implies its reads from shared memory are complete, thus it would be safe
+    # to write to the shared memory inputs after waiting without a fence.
     #
     # Completion of tcgen05_mma operations is tracked with mbarriers. Invoking
     # tcgen05_commit on an mbarrier causes the mbarrier to be arrived on when
@@ -225,10 +230,6 @@ def small_mma_kernel(a_desc, b_desc, c_desc, d_desc, tmem_block: gl.constexpr,  
     # each instruction is determined by the TMEM layout. Selecting larger
     # instruction shapes generally results in better performance. Note that
     # tcgen05_mma only supports blockM=64 when there is 1 block.
-    #
-    # Note that tcgen05_mma accesses shared memory through the async proxy, like
-    # TMAs. This means `fence_async_shared` is required to prevent hazards if
-    # the shared memory is accessed through different proxies.
     if USE_COMMIT:
         tcgen05_mma(a, b_smem, acc_tmem)
         tcgen05_commit(bar)
