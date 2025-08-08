@@ -292,8 +292,6 @@ def test_amd_mfma_scaled(M, N, K, rhs_scale, mxfp_type, normal_type):
         scale_y = None
 
     def make_finite(x, dtype):
-        # e5m2 has too many non-finite values when sampled uniformly (1 / 32) and
-        # Fp8E5M2_to_Bf16 doesn't preserve NaNs (fixme)
         if dtype not in ("e5m2", "e4m3"):
             return x
         if dtype == "e5m2" and comp_dtype == torch.float16:
