@@ -14,10 +14,6 @@
 
 namespace mlir::LLVM::AMD {
 
-const char predicatedLoad[] = "__triton_hip_predicated_load";
-const char predicatedLoadCA[] = "__triton_hip_predicated_load_CA";
-const char predicatedLoadCG[] = "__triton_hip_predicated_load_CG";
-const char predicatedLoadCV[] = "__triton_hip_predicated_load_CV";
 const char predicatedStore[] = "__triton_hip_predicated_store";
 const char predicatedStoreCG[] = "__triton_hip_predicated_store_CG";
 const char predicatedStoreCS[] = "__triton_hip_predicated_store_CS";

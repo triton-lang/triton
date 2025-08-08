@@ -387,18 +387,6 @@ void llStore(RewriterBase &rewriter, Location loc, Value ptr, Value val,
   LLVM::createLLVMCallOp(rewriter, loc, funcOp, ValueRange({ptr, val, pred}));
 }
 
-static bool isPredicatedLoadCA(LLVM::CallOp callOp) {
-  return callOp.getCallee().value().contains(mlir::LLVM::AMD::predicatedLoadCA);
-}
-
-static bool isPredicatedLoadCG(LLVM::CallOp callOp) {
-  return callOp.getCallee().value().contains(mlir::LLVM::AMD::predicatedLoadCG);
-}
-
-static bool isPredicatedLoadCV(LLVM::CallOp callOp) {
-  return callOp.getCallee().value().contains(mlir::LLVM::AMD::predicatedLoadCV);
-}
-
 static bool isPredicatedStoreCS(LLVM::CallOp callOp) {
   return callOp.getCallee().value().contains(
       mlir::LLVM::AMD::predicatedStoreCS);
@@ -431,13 +419,6 @@ static bool isPredicatedStoreWT(LLVM::CallOp callOp) {
 // -----+-----+----------+---------
 std::pair<bool, bool>
 getCacheModifierFlagsForPredicatedCall(LLVM::CallOp callOp) {
-  if (isPredicatedLoadCA(callOp))
-    return std::make_pair(false, false);
-  if (isPredicatedLoadCG(callOp))
-    return std::make_pair(false, true);
-  if (isPredicatedLoadCV(callOp))
-    return std::make_pair(true, true);
-
   if (isPredicatedStoreCG(callOp))
     return std::make_pair(false, false);
   if (isPredicatedStoreCS(callOp))
