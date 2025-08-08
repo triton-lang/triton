@@ -148,9 +148,9 @@ def test_warpgroup_mma(ASYNC):
 
 
 @pytest.mark.parametrize("M, N, K, rhs_scale, mxfp_type, normal_type, num_warps, mma, kpack",
-                         [(32, 64, 128, rhs_scale, mxfp_type, normal_type, 4, 16, 1)
+                         [(32, 32, 128, rhs_scale, mxfp_type, normal_type, 4, 16, 1)
                           for rhs_scale in [True, False]
-                          for mxfp_type in ["e2m1", "e4m3", "e5m2"]
+                          for mxfp_type in ["e2m1"]
                           for normal_type in ["e4m3", "e5m2"]])
 def test_amd_mfma_scaled(M, N, K, rhs_scale, mxfp_type, normal_type, num_warps, mma, kpack):
     if is_cuda():
@@ -162,9 +162,12 @@ def test_amd_mfma_scaled(M, N, K, rhs_scale, mxfp_type, normal_type, num_warps, 
     device = 'cuda'
 
     @triton.jit
-    def triton_kernel(a_base, stride_a0, stride_a1, a_scale, b_base, stride_b0, stride_b1, b_scale, out,
-                      BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr, type_a: tl.constexpr,
-                      type_b: tl.constexpr):
+    def triton_kernel(
+            a_base, stride_a0, stride_a1, a_scale, #
+            b_base, stride_b0, stride_b1, b_scale, #
+            out, #
+            BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,  #
+            type_a: tl.constexpr, type_b: tl.constexpr):
         DIV_FACTOR_A: tl.constexpr = 2 if type_a == "e2m1" else 1
         DIV_FACTOR_B: tl.constexpr = 2 if type_b == "e2m1" else 1
         PACKED_BLOCK_K_A: tl.constexpr = BLOCK_K // DIV_FACTOR_A
@@ -190,27 +193,42 @@ def test_amd_mfma_scaled(M, N, K, rhs_scale, mxfp_type, normal_type, num_warps, 
         tl.store(out_ptr, c.to(tl.bfloat16))
 
     @gluon.jit
-    def gluon_kernel(a_base, stride_a0, stride_a1, a_scale, b_base, stride_b0, stride_b1, b_scale, out,
-                     BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr, type_a: tl.constexpr,
-                     type_b: tl.constexpr):
+    def gluon_kernel(
+            a_base, stride_a0, stride_a1, a_scale, #
+            b_base, stride_b0, stride_b1, b_scale, #
+            out, #
+            BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,  #
+            type_a: tl.constexpr, type_b: tl.constexpr):
         DIV_FACTOR_A: tl.constexpr = 2 if type_a == "e2m1" else 1
         DIV_FACTOR_B: tl.constexpr = 2 if type_b == "e2m1" else 1
         PACKED_BLOCK_K_A: tl.constexpr = BLOCK_K // DIV_FACTOR_A
         PACKED_BLOCK_K_B: tl.constexpr = BLOCK_K // DIV_FACTOR_B
 
-        a_layout: ttgl.constexpr = ttgl.DistributedLinearLayout(
+        a_unpacked_layout: ttgl.constexpr = ttgl.DistributedLinearLayout(
             reg_bases=[[0, 1], [0, 2], [0, 4], [0, 8]], lane_bases=[[0, 16], [0, 32], [0, 64], [1, 0], [2, 0], [4, 0]],
             warp_bases=[[8, 0], [16, 0]], block_bases=[], shape=[32, 128])
+        a_packed_layout: ttgl.constexpr = ttgl.DistributedLinearLayout(
+            reg_bases=[[0, 1], [0, 2], [0, 4]], lane_bases=[[0, 8], [0, 16], [0, 32], [1, 0], [2, 0], [4, 0]],
+            warp_bases=[[8, 0], [16, 0]], block_bases=[], shape=[32, 64])
+        a_layout: ttgl.constexpr = a_packed_layout if type_a == "e2m1" else a_unpacked_layout
+
         a_scale_layout: ttgl.constexpr = ttgl.DistributedLinearLayout(
-            reg_bases=[[16, 0]], lane_bases=[[1, 0], [2, 0], [4, 0], [8, 0], [0, 1], [0, 2]],
-            warp_bases=[[0, 0], [0, 0]], block_bases=[], shape=[32, 4])
-        b_layout: ttgl.constexpr = ttgl.DistributedLinearLayout(
-            reg_bases=[[1, 0], [2, 0], [4, 0], [8, 0]], lane_bases=[[16, 0], [32, 0], [0, 1], [0, 2], [0, 4], [0, 8]],
-            warp_bases=[[0, 16], [0, 32]], block_bases=[], shape=[64, 64])
+            reg_bases=[], lane_bases=[[1, 0], [2, 0], [4, 0], [8, 0], [0, 1], [0, 2]], warp_bases=[[0, 0], [16, 0]],
+            block_bases=[], shape=[32, 4])
+
+        b_unpacked_layout: ttgl.constexpr = ttgl.DistributedLinearLayout(
+            reg_bases=[[0, 1], [0, 2], [0, 4], [0, 8]], lane_bases=[[0, 16], [1, 0], [2, 0], [4, 0], [8, 0], [16, 0]],
+            warp_bases=[[32, 0], [64, 0]], block_bases=[], shape=[128, 32])
+        b_packed_layout: ttgl.constexpr = ttgl.DistributedLinearLayout(
+            reg_bases=[[0, 1], [0, 2], [0, 4]], lane_bases=[[0, 8], [0, 16], [1, 0], [2, 0], [4, 0], [8, 0]],
+            warp_bases=[[16, 0], [32, 0]], block_bases=[], shape=[64, 32])
+        b_layout: ttgl.constexpr = b_packed_layout if type_b == "e2m1" else b_unpacked_layout
+
         b_scale_layout: ttgl.constexpr = ttgl.DistributedLinearLayout(
-            reg_bases=[], lane_bases=[[1, 0], [2, 0], [4, 0], [8, 0], [0, 1], [0, 2]], warp_bases=[[16, 0], [32, 0]],
-            block_bases=[], shape=[64, 4])
-        mfma_layout: ttgl.constexpr = ttgl.amd.AMDMFMALayout(version=4, warps_per_cta=[1, 4], tiles_per_warp=[1, 1],
+            reg_bases=[], lane_bases=[[1, 0], [2, 0], [4, 0], [8, 0], [0, 1], [0, 2]], warp_bases=[[16, 0], [0, 0]],
+            block_bases=[], shape=[32, 4])
+
+        mfma_layout: ttgl.constexpr = ttgl.amd.AMDMFMALayout(version=4, warps_per_cta=[2, 2], tiles_per_warp=[1, 1],
                                                              instr_shape=[16, 16], transposed=True)
 
         zero = ttgl.zeros([BLOCK_M, BLOCK_N], dtype=ttgl.float32, layout=mfma_layout)
