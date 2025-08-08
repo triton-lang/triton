@@ -48,6 +48,7 @@ else:
     cublas = None
 
 # Re-use utilities from the previous tutorial.
+t3 = importlib.import_module("03-async-copy")
 t4 = importlib.import_module("04-tma")
 
 
@@ -341,19 +342,19 @@ if __name__ == "__main__":
 
     ms = triton.testing.do_bench(lambda: t4.elementwise_add_tma(  #
         A, B, C, XBLOCK, YBLOCK, num_load_buffers))
-    print(f"elementwise_add_tma: {ms:.2f} ms")
+    print(f"elementwise_add_tma: {t3.get_throughput(ms, C):.2f} TB/s")
 
     ms = triton.testing.do_bench(lambda: elementwise_add_warp_specialized(  #
         A, B, C, XBLOCK, YBLOCK, num_load_buffers, num_store_buffers, num_warps))
-    print(f"elementwise_add_warp_specialized: {ms:.2f} ms")
+    print(f"elementwise_add_warp_specialized: {t3.get_throughput(ms, C):.2f} TB/s")
     print()
 
 # %%
 # Results on GB200:
 #
 # ```
-# elementwise_add_tma: 2.02 ms
-# elementwise_add_warp_specialized: 1.96 ms
+# elementwise_add_tma: 5.89 TB/s
+# elementwise_add_warp_specialized: 5.98 TB/s
 # ```
 #
 # The warp specialized implementation ekes out another performance gain over

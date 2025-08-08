@@ -207,7 +207,7 @@ def memcpy_1d_impl(input, output, XBLOCK, layout, num_warps):
 
 
 def get_throughput(input, ms):
-    tbytes = (input.numel() * input.element_size() >> 30) / 1024
+    tbytes = (2 * input.numel() * input.element_size() >> 30) / 1024
     return tbytes / (ms * 1e-3)
 
 
@@ -263,11 +263,11 @@ if __name__ == "__main__" and _enabled("R_vs_throughput"):
 # Running this on GB200, we obtain
 #
 # ```
-# R=1   3.287 TB/s
-# R=2   3.238 TB/s
-# R=4   3.237 TB/s
-# R=8   3.251 TB/s
-# R=16  3.107 TB/s
+# R=1   6.574 TB/s
+# R=2   6.476 TB/s
+# R=4   6.474 TB/s
+# R=8   6.502 TB/s
+# R=16  6.214 TB/s
 # ```
 #
 # Observe that the layout does affect performance. Let's dig deeper into why
@@ -363,11 +363,11 @@ if __name__ == "__main__" and _enabled("XBLOCK_R_vs_throughput"):
 #
 # ```
 # XBLOCK    R=1   R=2   R=4   R=8   R=16
-# 1024     3.283 3.274 3.271 3.275 2.613
-# 2048     3.286 3.237 3.237 3.252 3.109
-# 4096     3.277 3.246 3.227 3.198 3.091
-# 8192     3.303 3.266 3.241 3.239 3.088
-# 16384    3.261 3.278 3.243 3.255 3.073
+# 1024     6.566 6.548 6.542 6.550 5.226
+# 2048     6.572 6.474 6.474 6.504 6.218
+# 4096     6.554 6.492 6.454 6.396 6.182
+# 8192     6.606 6.532 6.482 6.478 6.176
+# 16384    6.522 6.556 6.486 6.510 6.146
 # ```
 #
 # From these tests, R=1 and XBLOCK=8192 give the best throughput. These
@@ -539,7 +539,7 @@ if __name__ == "__main__" and _enabled("memcpy_2d_layout"):
     print(f"Throughput: {throughput:.3f} TB/s")
 
 # %%
-# This yields 3.130 TB/s, which is 5% slower than the 1D memcpy. There are a
+# This yields 6.260 TB/s, which is 5% slower than the 1D memcpy. There are a
 # variety of reasons why, such as more complex 2D arithmetic, but let's dig
 # deeper first.
 #
@@ -552,7 +552,7 @@ if __name__ == "__main__" and _enabled("memcpy_2d_layout"):
     print(f"Transposed throughput: {throughput:.3f} TB/s")
 
 # %%
-# Performance craters to 0.387 TB/s. Because the inner dimension is no longer
+# Performance craters to 0.774 TB/s. Because the inner dimension is no longer
 # contiguous, we get no coalescing. Simply swapping the block sizes and
 # transposing the layout restores performance:
 
@@ -564,7 +564,7 @@ if __name__ == "__main__" and _enabled("memcpy_2d_layout"):
     print()
 
 # %%
-# This yields 3.295 TB/s, slightly faster than the 1D memcpy!
+# This yields 6.590 TB/s, slightly faster than the 1D memcpy!
 #
 # Between the transposed and non-transposed inputs and layouts, each program
 # accesses memory in the same way. The variation in performance is due to where
@@ -620,9 +620,9 @@ if __name__ == "__main__" and _enabled("memcpy_2d_contig"):
 
 # %%
 # ```
-# 2D memcpy: 3.129 TB/s
-# torch.Tensor.contiguous: 1.473 TB/s
-# 2D memcpy (transposed): 3.199 TB/s
+# 2D memcpy: 6.258 TB/s
+# torch.Tensor.contiguous: 2.946 TB/s
+# 2D memcpy (transposed): 6.398 TB/s
 # ```
 #
 # Our 2D memcpy provides similar performance even when the input tensor has
@@ -660,8 +660,8 @@ if __name__ == "__main__" and _enabled("memcpy_2d_inout"):
 # Performance is terrible regardless of which layout we pick:
 #
 # ```
-# 2D memcpy (order=[1, 0]): 0.489 TB/s
-# 2D memcpy (order=[0, 1]): 0.837 TB/s
+# 2D memcpy (order=[1, 0]): 0.978 TB/s
+# 2D memcpy (order=[0, 1]): 1.674 TB/s
 # ```
 #
 # The solution is to use two layouts for `gl.load` and `gl.store`, both derived
@@ -776,7 +776,7 @@ if __name__ == "__main__" and _enabled("memcpy_2d_inout"):
 # This yields much more reasonable performance:
 #
 # ```
-# 2D memcpy (in/out layouts): 2.407 TB/s
+# 2D memcpy (in/out layouts): 4.814 TB/s
 # ```
 #
 # Note that the cost of the layout conversion is incurred in our overall

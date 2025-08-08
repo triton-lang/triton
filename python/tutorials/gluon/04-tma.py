@@ -313,15 +313,15 @@ if __name__ == "__main__":
     num_buffers = 2
 
     ms = triton.testing.do_bench(lambda: t3.elementwise_add_pipelined(A, B, C, XBLOCK, YBLOCK, num_buffers))
-    print(f"elementwise_add_pipelined: {ms:.2f} ms")
+    print(f"elementwise_add_pipelined: {t3.get_throughput(ms, C):.2f} TB/s")
 
     ms = triton.testing.do_bench(lambda: elementwise_add_tma(A, B, C, XBLOCK, YBLOCK, num_buffers))
-    print(f"elementwise_add_tma: {ms:.2f} ms")
+    print(f"elementwise_add_tma: {t3.get_throughput(ms, C):.2f} TB/s")
 
 # %%
 # ```
-# elementwise_add_pipelined: 2.79 ms
-# elementwise_add_tma: 2.13 ms
+# elementwise_add_pipelined: 4.20 TB/s
+# elementwise_add_tma: 5.50 TB/s
 # ```
 #
 # Switching to TMAs already yields a large performance boost.
@@ -340,11 +340,11 @@ if __name__ == "__main__":
     YBLOCK = 128
     num_buffers = 3
     ms = triton.testing.do_bench(lambda: elementwise_add_tma(A, B, C, XBLOCK, YBLOCK, num_buffers))
-    print(f"elementwise_add_tma (64x128x3): {ms:.2f} ms")
+    print(f"elementwise_add_tma (64x128x3): {t3.get_throughput(ms, C):.2f} TB/s")
 
 # %%
 # ```
-# elementwise_add_tma (64x128x3): 2.04 ms
+# elementwise_add_tma (64x128x3): 5.90 TB/s
 # ```
 #
 # We get another modest speedup by increasing the block size and pipeline depth.

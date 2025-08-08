@@ -135,11 +135,11 @@ def memcpy_autotune(input, output):
 # %%
 # Run this with `TRITON_PRINT_AUTOTUNING=1 python 01-intro.py` to see which
 # XBLOCK gets selected. On GB200, the best XBLOCK ends up being 2048 to copy
-# 8 GB of data at about 333 GB/s, far from the 8 TB/s peak bandwidth of the GPU.
+# 8 GB of data at about 666 GB/s, far from the 8 TB/s peak bandwidth of the GPU.
 #
 # ```
 # Time:        24.00 ms
-# Throughput: 333.33 GB/s
+# Throughput: 666.24 GB/s
 # ```
 
 if __name__ == "__main__":
@@ -150,7 +150,7 @@ if __name__ == "__main__":
 
     fn = lambda: memcpy_autotune(input, output)
     ms = triton.testing.do_bench(fn)
-    gbytes = xnumel * input.element_size() >> 30
+    gbytes = 2 * xnumel * input.element_size() >> 30
     print("Benchmarking memcpy")
     print("===================")
     print(f"Time:        {ms:.2f} ms")

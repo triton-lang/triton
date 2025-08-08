@@ -202,6 +202,12 @@ def test_elementwise_add_cpasync(xnumel, ynumel, XBLOCK, YBLOCK):
     torch.testing.assert_close(a + b, c, atol=0, rtol=0)
 
 
+def get_throughput(ms, C):
+    # Because this kernel is memory-bound, we will measure bandwidth.
+    tbytes = (3 * C.numel() * C.element_size() >> 30) / 1024
+    return tbytes / (ms * 1e-3)
+
+
 if __name__ == "__main__":
     print("Benchmarking elementwise_add")
     print("============================")
@@ -211,16 +217,16 @@ if __name__ == "__main__":
     C = torch.empty_like(A, device="cuda")
 
     ms = triton.testing.do_bench(lambda: elementwise_add(A, B, C))
-    print(f"elementwise_add: {ms:.2f} ms")
+    print(f"elementwise_add: {get_throughput(ms, C):.2f} TB/s")
 
     smem_layout = gl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
     ms = triton.testing.do_bench(lambda: elementwise_add_cpasync(A, B, C, smem_layout))
-    print(f"elementwise_add_cpasync: {ms:.2f} ms")
+    print(f"elementwise_add_cpasync: {get_throughput(ms, C):.2f} TB/s")
 
 # %%
 # ```
-# elementwise_add: 7.94 ms
-# elementwise_add_cpasync: 2.95 ms
+# elementwise_add: 1.48 TB/s
+# elementwise_add_cpasync: 3.97 TB/s
 # ```
 #
 # Surprisingly, the cpasync version is already significantly faster. We picked
@@ -351,18 +357,18 @@ def test_elementwise_add_pipelined(xnumel, ynumel, XBLOCK, YBLOCK, num_buffers):
 
 if __name__ == "__main__":
     ms = triton.testing.do_bench(lambda: elementwise_add_pipelined(A, B, C, num_buffers=2))
-    print(f"elementwise_add_pipelined (double buffer): {ms:.2f} ms")
+    print(f"elementwise_add_pipelined (double buffer): {get_throughput(ms, C):.2f} TB/s")
     ms = triton.testing.do_bench(lambda: elementwise_add_pipelined(A, B, C, num_buffers=3))
-    print(f"elementwise_add_pipelined (triple buffer): {ms:.2f} ms")
+    print(f"elementwise_add_pipelined (triple buffer): {get_throughput(ms, C):.2f} TB/s")
 
 # %%
 # ```
-# elementwise_add_pipelined (double buffer): 2.79 ms
-# elementwise_add_pipelined (triple buffer): 2.79 ms
+# elementwise_add_pipelined (double buffer): 4.20 TB/s
+# elementwise_add_pipelined (triple buffer): 4.20 TB/s
 # ```
 #
 # Pipelining with async copy yields a modest speedup. But notice that increasing
-# the number of buffers further does not yield more performance, suggesting that
+# the number of buffers further does not yield more performance, confirming that
 # this kernel is memory-bound.
 #
 # One of the major issues getting in the way of more performance is register
