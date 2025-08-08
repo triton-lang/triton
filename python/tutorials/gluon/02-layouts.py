@@ -5,7 +5,7 @@ Tensor Layouts
 Tensors in Gluon require layouts. Layouts specify how the elements of the tensor
 are distributed among the threads a thread block. Tensors are distributed with
 respect to the hierarchy of the GPU beginning with thread blocks, then warps,
-lanes, and finally individual registers in each lane.
+then lanes, and finally individual registers in each lane.
 
 Tensors are evenly distributed across theads, meaning that all threads own the
 same number of elements. Because Triton requires that all tile dimensions are
@@ -129,7 +129,7 @@ primarily used to represent coalesced layouts for global memory accesses and to
 represent certain register layouts for tensors stored in Tensor Memory on
 NVIDIA Blackwell GPUs.
 
-Now that we have a basic understanding of what blocked layouts, let's look at an
+Now that we have a basic understanding of blocked layouts, let's look at an
 example of how layouts can affect the performance of the kernel by expanding on
 the `memcpy` example from the previous tutorial. Using a `BlockedLayout`, we
 will have each program load and store a whole tile rather than one scalar.
@@ -164,21 +164,17 @@ def memcpy_1d_kernel(in_ptr, out_ptr, xnumel, XBLOCK: gl.constexpr, layout: gl.c
     pid = gl.program_id(0)
     start = pid * XBLOCK
 
-    # Create a tensor with the values [0, XBLOCK) using the provided layout.
+    # The main difference between writing this kernel in Triton and Gluon is
+    # we need to specify the layout of the 1D tensor. Layouts are propagated
+    # forwards through type inference, so we only need to specify the layout for
+    # the indices tensor.
     indices = gl.arange(0, XBLOCK, layout=layout)
+
     offsets = start + indices
-
-    # Obtain a tensor of pointers to each element the program will load,
-    # distributed over the threads in the program.
     in_ptrs = in_ptr + offsets
-
-    # If XBLOCK does not divide evenly into xnumel, pointers along the edge of
-    # will be out-of-bounds. Mask the load when the offsets are OOB.
     mask = offsets < xnumel
 
     value = gl.load(in_ptrs, mask=mask)
-
-    # Mask the store as well to prevent OOB writes.
     out_ptrs = out_ptr + offsets
     gl.store(out_ptrs, value, mask=mask)
 
@@ -191,8 +187,8 @@ def memcpy_1d_impl(input, output, XBLOCK, layout, num_warps):
 
 
 # %%
-# Let's benchmark the kernel a variety of layouts. Start with XBLOCK=2048, which
-# was the best value obtained in the last tutorial.
+# Let's benchmark the kernel with a variety of layouts. Start with XBLOCK=2048,
+# which was the best value obtained in the last tutorial.
 #
 # For 1D tensors, there are few choices for blocked layouts. Assuming
 # num_warps=4, the only valid layouts are
@@ -372,8 +368,8 @@ if __name__ == "__main__" and _enabled("XBLOCK_R_vs_throughput"):
 # 16384    3.261 3.278 3.243 3.255 3.073
 # ```
 #
-# We also conclude that R=1 is the best 1D layout and that XBLOCK=8192 is
-# faster.
+# From these tests, R=1 and XBLOCK=8192 give the best throughput. These
+# parameters can be autotuned over a larger range if needed.
 
 # %%
 # Picking the right layout for higher-dimensional tensors is a lot less
@@ -449,8 +445,8 @@ if __name__ == "__main__" and _enabled("XBLOCK_R_vs_throughput"):
 #
 # Likewise, to expand a 1D tensor to 2D, we start with the tensor in slice
 # layout and perform the reverse transformation by duplicating each element of
-# the 1D tensor until it fills the rows to the desired size. This way,
-# broadcasting is a zero-cost operation.
+# the 1D tensor until it fills the rows to the desired size. Because this
+# happens in virtual registers, broadcasting is a zero-cost operation.
 
 
 @gluon.jit
@@ -462,12 +458,13 @@ def memcpy_2d_kernel(in_ptr, out_ptr,  #
 
     start_x = pid_x * XBLOCK
     start_y = pid_y * YBLOCK
+    # For the 1D indices, use a SliceLayout along the dimensions we will expand.
     indices_x = start_x + gl.arange(0, XBLOCK, layout=gl.SliceLayout(dim=1, parent=layout))
     indices_y = start_y + gl.arange(0, YBLOCK, layout=gl.SliceLayout(dim=0, parent=layout))
 
-    # `indices_x[:, None]` expands the tensor by appending a size 1 dimension,
-    # yielding [XBLOCK, 1]. When combined with [1, YBLOCK], each is broadcasted
-    # to [XBLOCK, YBLOCK] before being added together.
+    # expand_dims along the slice dimension returns a tensor with the parent
+    # layout, so this yields [XBLOCK, 1] and [1, YBLOCK] tensors with the same
+    # layout which can be broadcasted together to [XBLOCK, YBLOCK].
     in_offsets = xstride_in * indices_x[:, None] + ystride_in * indices_y[None, :]
     out_offsets = xstride_out * indices_x[:, None] + ystride_out * indices_y[None, :]
 
@@ -568,19 +565,12 @@ if __name__ == "__main__" and _enabled("memcpy_2d_layout"):
 # This yields 3.295 TB/s, slightly faster than the 1D memcpy!
 #
 # Between the transposed and non-transposed inputs and layouts, each program
-# accesses memory in the same way, meaning the variation in performance must be
-# due to where programs get scheduled.
-#
-# While we know each program accesses unique memory above the cache line size,
-# we can't rule out data locality as the GPU cache structure is very complex
-# For example, the GPU contains TLBs which cache virtual address translations.
-# GPU pages are 64KB, which is larger than our chosen block sizes. If programs
-# processing the same GPU page are scheduled on different SMs, the TLB lookup in
-# L1 will cache miss.
-#
-# The L2 cache is also divided into partitions (16 on H100 GPUs),
-# which are mapped based on physical addresses. Scheduling can affect whether
-# kernels that access the same L2 partition are scheduled near each other.
+# accesses memory in the same way. The variation in performance is due to where
+# the programs get scheduled on the GPU, which affects data locality. Even
+# though each program accesses unique data, there are many mechanisms in the GPU
+# cache structure that favour access locality. For example, the GPU caches
+# virtual address translations in TLBs, and on H100 the L2 cache is divided into
+# partitions that communicate with each other.
 #
 # In a subsequent tutorial, we will explore implementing persistent kernels and
 # how they can be used to better control scheduling, among other benefits, to
@@ -592,7 +582,7 @@ if __name__ == "__main__" and _enabled("memcpy_2d_layout"):
 # output has a more exotic layout.
 #
 # Consider a non-contiguous input tensor, which we can construct by taking a
-# view of every other row of an 8 GB tensor. We can copy this into a contiguous
+# view of every second row of an 8 GB tensor. We can copy this into a contiguous
 # output tensor, which is the same as performing `x.contiguous()` in PyTorch.
 
 if __name__ == "__main__" and _enabled("memcpy_2d_contig"):
@@ -800,7 +790,7 @@ if __name__ == "__main__" and _enabled("memcpy_2d_inout"):
 # of the inputs is selected to reduce the amount of communication. This includes
 # layout conversions themselves.
 #
-# Suppose the we have a `128x128xf32` tensor that we want to reduce along the
+# Suppose that we have a `128x128xf32` tensor that we want to reduce along the
 # inner dimension. If the layout is:
 #
 # ```python
@@ -822,10 +812,10 @@ if __name__ == "__main__" and _enabled("memcpy_2d_inout"):
 # requires no inter-thread communication.
 #
 # Unlike global memory accesses, the compiler does a good job of generating
-# efficient reductions, scans, etc. regardless of the input layout, meaning
-# it is typically more expensive to convert to an efficient layout and then
-# perform the reduction. However, structuring the kernel such that the input
-# ends up with an efficient layout can be important.
+# efficient reductions, scans, etc. regardless of the input layout, thus it is
+# typically more expensive to convert_layout to an efficient layout and then
+# perform the reeduction. However, in cases where you can choose between
+# multiple layouts at the same cost, keep in mind efficient reduction layouts.
 #
 # Reads and writes to shared memory are affected by both the shared memory
 # layout and the register layout of the tensor. This is because shared memory is
@@ -882,6 +872,6 @@ if __name__ == "__main__" and _enabled("memcpy_2d_inout"):
 # - Gluon requires explicit layout management, and there many kinds of layouts
 #   in Gluon that serve different purposes.
 # - Layouts affect performance, sometimes dramatically. Layouts affect
-#   performance of global memory accesses, operations that may reuquire
+#   performance of global memory accesses, operations that may require
 #   inter-thread communication, among other things.
 # - Layouts are powerful tools for writing flexible yet performant kernels.

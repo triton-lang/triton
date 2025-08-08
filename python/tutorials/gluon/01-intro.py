@@ -21,8 +21,9 @@ allocation, data movement, and asynchronity.
 
 Getting these details right is important to kernel performance. While the Triton
 compiler does a good job of generating efficient code for a wide range of
-kernels, it can often fall short. When this happens, there is little the user
-can do to significantly improve performance since all the details are hidden.
+kernels, it can be beaten by hand-tuned low-level code. When this happens,
+there is little the user can do to significantly improve performance since all
+the details are hidden.
 
 In Gluon, these details are exposed to the user. This means writing Gluon
 kernels requires a deeper understanding of GPU hardware and the many aspects of

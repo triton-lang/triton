@@ -8,21 +8,17 @@ transactions with compute, also known as "pipelining".
 
 Asynchronous instructions vary by GPU vendor and architecture, so this tutorial
 focuses on NVIDIA GPUs. On NVIDIA GPUs, async copies transfer data between
-global memory and shared memory, unlike `ld.global` and `st.global` which
+global memory and shared memory, unlike `gl.load` and `gl.store` which
 directly write to and read from the register file.
 """
 
 import pytest
 import torch
 import triton
-import importlib
 from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
 
 from triton.experimental.gluon.language.nvidia.ampere import async_copy as cp
-
-# Re-use utilities from the previous tutorial.
-t2 = importlib.import_module("02-layouts")
 
 
 def is_ampere_or_newer():
@@ -82,7 +78,7 @@ def test_memcpy_1d_cpasync(xnumel, XBLOCK):
 
 # %%
 # You can see that we will able to overlap the async copy with compute by
-# issuing the copy and performing compute without waiting on it. Let's use an
+# issuing the copy and performing compute before waiting on it. Let's use an
 # elementwise addition kernel to explore pipelining.
 #
 # First, let's write the kernel such that each program performs additions for
@@ -140,10 +136,9 @@ def test_elementwise_add(xnumel, ynumel, XBLOCK, YBLOCK):
 
 
 # %%
-# Let's rewrite the kernel in-place to use async copies without pipelining,
-# which will make it more obvious how we will pipeline the inner loop. Let's
-# parameterize the kernel over the shared memory layout to see how it can
-# affect performance.
+# Let's rewrite the kernel to use async copies without pipelining, which will
+# make it more obvious how we will pipeline the inner loop. Let's parameterize
+# the kernel over the shared memory layout to see how it can affect performance.
 
 
 @gluon.jit
@@ -235,10 +230,10 @@ if __name__ == "__main__":
 # requests per cycle per warp. Any more than that causes the bank to serialize
 # the shared memory accesses.
 #
-# Our register layout maps 32 threads per warp to consecutive elements, meaning
-# even without swizzling, the shared memory load will not have bank conflicts.
-# However, in other cases, picking the right shared memory layout is important
-# for performance.
+# Our register layout maps 32 threads per warp to consecutive 32-bit elements,
+# meaning even without swizzling, the shared memory load will not have bank
+# conflicts. In other cases, like with 16-bit or 8-bit elements, swizzling and
+# vector length is more important to reduce bank conflicts.
 
 # %%
 # We can pipeline our kernel by double or triple buffering the shared memory.
