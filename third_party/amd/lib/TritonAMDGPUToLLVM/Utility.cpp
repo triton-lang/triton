@@ -1,4 +1,5 @@
 #include "Utility.h"
+#include "AsyncUtility.h"
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "TritonAMDGPUToLLVM/GCNAsmFormat.h"
 #include "TritonAMDGPUToLLVM/TargetUtils.h"
@@ -8,7 +9,6 @@
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
-
 namespace tt = mlir::triton;
 using mlir::triton::ModuleAxisInfoAnalysis;
 using mlir::triton::AMD::DppCtrl;
@@ -294,34 +294,53 @@ Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
 Value llLoad(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,
              Value pred, Value falseVal, triton::CacheModifier cm,
              bool forceNoAliasAsyncLoads) {
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  bool isNonMasked = false;
+  if (auto constOp = pred.getDefiningOp<LLVM::ConstantOp>()) {
+    if (auto intAttr = dyn_cast<IntegerAttr>(constOp.getValue())) {
+      isNonMasked = (intAttr.getValue() == 1);
+    }
+  }
 
-  Type funcType = getFunctionType(elemTy, ValueRange({ptr, pred, falseVal}));
-  auto parent = ptr.getParentRegion()->getParentOfType<LLVM::LLVMFuncOp>();
-  auto getLoadNameRaw = [](triton::CacheModifier cm) {
+  if (isNonMasked) {
+    // Determine cache flags based on cache modifier
+    bool volatileFlag = false;
+    bool nonTmpFlag = false;
     switch (cm) {
     case triton::CacheModifier::CA:
-      return predicatedLoadCA;
+      // ca: volatile=false, nontemporal=false
+      volatileFlag = false;
+      nonTmpFlag = false;
+      break;
     case triton::CacheModifier::CG:
-      return predicatedLoadCG;
+      // cg: volatile=false, nontemporal=true
+      volatileFlag = false;
+      nonTmpFlag = true;
+      break;
     case triton::CacheModifier::CV:
-      return predicatedLoadCV;
+      // cv: volatile=true, nontemporal=false
+      volatileFlag = true;
+      nonTmpFlag = false;
+      break;
     default:
-      // Do not fail in compile time in the case of unsupported modifier.
-      // Just apply default config.
-      return predicatedLoad;
+      volatileFlag = false;
+      nonTmpFlag = false;
+      break;
     }
-  };
-  std::string funcName = getLoadNameRaw(cm);
-  if (forceNoAliasAsyncLoads)
-    funcName += noAliasAsyncLoads;
 
-  auto mangledName = mangleFunc(funcName, funcType);
-  LLVM::LLVMFuncOp funcOp =
-      appendOrGetExternFuncOp(rewriter, parent, mangledName, funcType);
-  return LLVM::createLLVMCallOp(rewriter, loc, funcOp,
-                                ValueRange({ptr, pred, falseVal}))
-      .getResult();
+    auto loadOp = rewriter.create<LLVM::LoadOp>(
+        loc, elemTy, ptr, /*alignment*/ 0, volatileFlag, nonTmpFlag);
+
+    if (forceNoAliasAsyncLoads) {
+      mlir::triton::AMD::addLocalLoadNoAliasScope(loadOp);
+    }
+
+    return loadOp.getResult();
+  } else {
+    return rewriter
+        .create<triton::amdgpu::MaskedLoadOp>(loc, elemTy, ptr, pred, falseVal,
+                                              cm, forceNoAliasAsyncLoads)
+        .getResult();
+  }
 }
 
 void llStore(RewriterBase &rewriter, Location loc, Value ptr, Value val,
@@ -357,18 +376,6 @@ void llStore(RewriterBase &rewriter, Location loc, Value ptr, Value val,
   LLVM::createLLVMCallOp(rewriter, loc, funcOp, ValueRange({ptr, val, pred}));
 }
 
-static bool isPredicatedLoadCA(LLVM::CallOp callOp) {
-  return callOp.getCallee().value().contains(mlir::LLVM::AMD::predicatedLoadCA);
-}
-
-static bool isPredicatedLoadCG(LLVM::CallOp callOp) {
-  return callOp.getCallee().value().contains(mlir::LLVM::AMD::predicatedLoadCG);
-}
-
-static bool isPredicatedLoadCV(LLVM::CallOp callOp) {
-  return callOp.getCallee().value().contains(mlir::LLVM::AMD::predicatedLoadCV);
-}
-
 static bool isPredicatedStoreCS(LLVM::CallOp callOp) {
   return callOp.getCallee().value().contains(
       mlir::LLVM::AMD::predicatedStoreCS);
@@ -401,13 +408,6 @@ static bool isPredicatedStoreWT(LLVM::CallOp callOp) {
 // -----+-----+----------+---------
 std::pair<bool, bool>
 getCacheModifierFlagsForPredicatedCall(LLVM::CallOp callOp) {
-  if (isPredicatedLoadCA(callOp))
-    return std::make_pair(false, false);
-  if (isPredicatedLoadCG(callOp))
-    return std::make_pair(false, true);
-  if (isPredicatedLoadCV(callOp))
-    return std::make_pair(true, true);
-
   if (isPredicatedStoreCG(callOp))
     return std::make_pair(false, false);
   if (isPredicatedStoreCS(callOp))
