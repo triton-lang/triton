@@ -1377,6 +1377,7 @@ class InterpretedFunction:
     def __init__(self, fn, **kwargs) -> None:
         self.fn = fn
         self.rewriter = FunctionRewriter(fn, **kwargs)
+        self.kwargs = kwargs
 
         def run(*args, **kwargs):
             grid = kwargs["grid"]
@@ -1391,6 +1392,9 @@ class InterpretedFunction:
         if self.fn not in self.rewritten_fn:
             self.rewritten_fn[self.fn] = self.rewriter.rewrite_ast()
         return self.rewritten_fn[self.fn]
+
+    def warmup(self, *args, grid, **kwargs):
+        return triton.runtime.JITFunction(self.fn, self.kwargs).warmup(*args, grid=grid, **kwargs)
 
     @property
     def __name__(self):
