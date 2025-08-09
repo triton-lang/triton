@@ -90,7 +90,7 @@ def buffer_load(ptr, offsets, mask=None, other=None, cache=None, _semantic=None)
 
 
 @builtin
-def buffer_store(stored_value, ptr, offsets, mask, cache=None, _semantic: GluonSemantic = None):
+def buffer_store(stored_value, ptr, offsets, mask=None, cache=None, _semantic: GluonSemantic = None):
     """
     AMD buffer store a tensor directly to global memory via a scalar base pointer and a tensor of
     offsets instead of a tensor of pointers.

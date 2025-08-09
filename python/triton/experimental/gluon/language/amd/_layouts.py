@@ -73,7 +73,7 @@ class AMDMFMALayout(DistributedLayout):
         assert self.elem_type.is_fp32() or self.elem_type.is_fp64() \
           or self.elem_type.is_int32() , "element type must be float32, float64, or int32"
 
-        rank = len(self.cta_order)
+        rank = len(self.warps_per_cta)
         _realize_cta_layout(self, rank)
         assert len(self.ctas_per_cga) == rank
         assert len(self.cta_split_num) == rank
