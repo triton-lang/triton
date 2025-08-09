@@ -38,6 +38,9 @@ class warpgroup_mma_accumulator_type(_core.base_type):
     def _flatten_ir_types(self, builder: ir.builder, out: List[ir.type]) -> None:
         self.tensor_type._flatten_ir_types(builder, out)
 
+    def __eq__(self, other) -> bool:
+        return type(self) is type(other) and self.tensor_type == other.tensor_type
+
     def mangle(self) -> str:
         return f"FT{self.tensor_type.mangle()}FT"
 
