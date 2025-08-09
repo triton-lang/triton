@@ -67,6 +67,7 @@ class DependenciesFinder(ast.NodeVisitor):
         self.supported_modules = {
             GLUON_MODULE,
             TRITON_MODULE,
+            "copy",
             "math",
         }
 
