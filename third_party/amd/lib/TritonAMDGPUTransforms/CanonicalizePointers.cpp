@@ -1569,6 +1569,8 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
     return !opsToRewrite.contains(op);
   };
 
+  target.addDynamicallyLegalDialect<mlir::triton::amdgpu::TritonAMDGPUDialect>(
+      isLegal);
   target.addDynamicallyLegalDialect<tt::TritonDialect>(isLegal);
   target.addDynamicallyLegalDialect<triton::gpu::TritonGPUDialect>(isLegal);
   target.addDynamicallyLegalDialect<scf::SCFDialect>(isLegal);
@@ -1591,6 +1593,7 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
       MaterializeFatPointer<tt::AtomicCASOp>,
       MaterializeFatPointer<tt::AtomicRMWOp>,
       MaterializeFatPointer<tt::BitcastOp>, MaterializeFatPointer<tt::LoadOp>,
+      MaterializeFatPointer<mlir::triton::amdgpu::GlobalLoadTransposeOp>,
       MaterializeFatPointer<triton::gpu::AsyncCopyGlobalToLocalOp>,
       MaterializeFatPointer<tt::PtrToIntOp>, MaterializeFatPointer<tt::StoreOp>,
       MaterializeFatPointerVariadic<tt::CallOp>,
