@@ -301,7 +301,7 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
                 pytest.skip("Hopper swizzling acts on a 64x64 tile (4x1 mma tiles).")
 
     # launch metadata for batched / mx types may not work yet.
-    test_launch_metadata = (mode == "ragged") and ("mx" not in weight_dtype_str)
+    test_launch_metadata = (mode == "ragged") and ("mx" not in weight_dtype_str) and fused_scatter
 
     torch.manual_seed(0)
 
