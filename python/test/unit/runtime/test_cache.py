@@ -127,6 +127,42 @@ def test_combine_fn_change():
         seen_keys.add(key)
 
 
+@triton.constexpr_function
+def constexpr_flag_fn():
+    return False
+
+
+@triton.jit
+def constexpr_fn_user(out):
+    a: tl.constexpr = constexpr_flag_fn()
+    tl.store(out, a)
+
+
+def test_constexpr_fn_change():
+    baseline = constexpr_fn_user.cache_key
+
+    orig_src = constexpr_flag_fn.src
+    new_src = orig_src.replace("False", "True")
+    constexpr_flag_fn._unsafe_update_src(new_src)
+    constexpr_fn_user.hash = None
+    updated = constexpr_fn_user.cache_key
+    assert baseline != updated
+
+    constexpr_flag_fn._unsafe_update_src(orig_src)
+    constexpr_fn_user.hash = None
+    assert constexpr_fn_user.cache_key == baseline
+
+
+@triton.constexpr_function
+def invalid_constexpr_fn():
+    return torch.cuda.get_device_capability()
+
+
+def test_invalid_constexpr_fn():
+    with pytest.raises(RuntimeError):
+        invalid_constexpr_fn.cache_key
+
+
 def write_and_load_module(temp_file: pathlib.Path, code, num_extra_lines):
     temp_file.write_text(('# extra line\n' * num_extra_lines) + code)
     spec = importlib.util.spec_from_file_location("module.name", str(temp_file))

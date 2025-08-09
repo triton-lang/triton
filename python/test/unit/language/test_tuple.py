@@ -217,15 +217,9 @@ def test_passing_tuple_with_constexpr(device):
 
 def test_passing_tuple_to_make_tensor_descriptor(device, with_allocator):
 
-    from triton.language.core import builtin
-
-    @builtin
-    def is_constexpr(v, _semantic=None):
-        return isinstance(v, tl.constexpr)
-
     @triton.jit
     def m_to_the_n(X_base, shape, strides, m_n, BLOCK_DIM: tl.constexpr):
-        tl.static_assert(is_constexpr(strides[1]))
+        tl.static_assert(isinstance(strides[1].type, tl.constexpr_type))
         X = tl.make_tensor_descriptor(
             X_base,
             shape=shape,
@@ -233,7 +227,7 @@ def test_passing_tuple_to_make_tensor_descriptor(device, with_allocator):
             block_shape=[BLOCK_DIM, BLOCK_DIM],
         )
         # Make sure tl.make_tensor_descriptor didn't modify strides (i.e. didn't unwrap the constexpr)
-        tl.static_assert(is_constexpr(strides[1]))
+        tl.static_assert(isinstance(strides[1].type, tl.constexpr_type))
         data = X.load([0, 0])
         # Include a for loop to ensure strides[1] is lifted into a constexpr
         # (otherwise cloning the local scope will fail).

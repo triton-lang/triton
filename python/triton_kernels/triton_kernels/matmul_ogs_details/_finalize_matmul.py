@@ -2,27 +2,17 @@ import triton
 import triton.language as tl
 from triton_kernels.numerics_details.flexpoint import float_to_flex, load_scale, update_scale
 from triton_kernels.numerics_details.mxfp_details._downcast_to_mxfp import MXFP_BLOCK_SIZE
-from triton_kernels.target_info import cuda_capability_geq as _cuda_capability_geq
-from triton_kernels.target_info import is_hip as _is_hip
-
+from triton_kernels.target_info import cuda_capability_geq, is_hip
 
 # fmt: off
-@tl.constexpr_function
-def is_hip():
-    return _is_hip()
 
 
-@tl.constexpr_function
-def cuda_capability_geq(x, y):
-    return _cuda_capability_geq(x, y)
-
-
-@tl.constexpr_function
+@triton.constexpr_function
 def log2(n):
     return len(bin(n)) - 3
 
 
-@tl.constexpr_function
+@triton.constexpr_function
 def _permute_to_end_order(n: int, axis: int):
     """
     Returns the order of the axes of a tensor to permute `axis` to the end.
@@ -105,7 +95,7 @@ def _finalize_matmul_launch_metadata(grid, kernel, args):
     return ret
 
 
-@tl.constexpr_function
+@triton.constexpr_function
 def _accumulate_f16_into_f32_and_track_absmax_ptx(n_inputs: int, src_type: str, absmax_reg_name: str | None):
     """
     Generate PTX code to take fp16 inputs and sum them into an f32 accumulator using mixed-precision

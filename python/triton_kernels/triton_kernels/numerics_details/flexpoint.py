@@ -1,7 +1,7 @@
 from ..numerics import MAX_FINITE_FLOAT8E4B8, MAX_FINITE_FLOAT8E4NV, MAX_FINITE_FLOAT8E5
-from triton_kernels import target_info
 import triton
 import triton.language as tl
+from triton_kernels.target_info import cuda_capability_geq
 
 # -------------------------------
 # Kernels stuff
@@ -50,11 +50,6 @@ def rcp_max_finite(dtype):
         return TL_RCP_MAX_FINITE_FLOAT16
     else:
         tl.static_assert(tl.constexpr(False), f"{dtype} not supported in flexpoint")
-
-
-@tl.constexpr_function
-def cuda_capability_geq(major, minor):
-    return target_info.cuda_capability_geq(major, minor)
 
 
 @triton.jit
