@@ -526,7 +526,7 @@ def matmul_ogs(x, w, bias,
     block_n = opt_flags.block_n // opt_flags.epilogue_subtile // fused_activation.reduction_n
     y_tma_mode = "scatter" if has_scatter_tma else None if (has_scatter and not has_scatter_tma) else "ragged_store" if is_ragged else "dense"
     y_tma_block_size = {
-        "ragged_store": [opt_flags.block_m, block_n],
+        "ragged_store": [1, 1, opt_flags.block_m, block_n],
         "scatter": [1, block_n],
         "dense": [1, 1, opt_flags.block_m, block_n],
         None: None

@@ -445,7 +445,7 @@ def _p_matmul_ogs(
                 Y.scatter(out, offs_y_m, out_off_n)
             elif Y_TMA_MODE == "ragged_store":
                 out = tl.reshape(out, [1, 1, 1] + out.shape)
-                Y.store([pid_k, start_z1, start_m1 + eM1, NRowsY - eM1 + off_m1, out_off_n], out)
+                Y.store([start_m1 + eM1, pid_k, start_z1, Y.shape[-2] - eM1 + off_m1, out_off_n], out)
             elif Y_TMA_MODE == "dense":
                 out = tl.reshape(out, [1, 1] + out.shape)
                 Y.store([pid_k, start_z1, off_m1, out_off_n], out)
