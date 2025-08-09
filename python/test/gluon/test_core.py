@@ -156,8 +156,8 @@ def test_amd_mfma_scaled(M, N, K, rhs_scale, mxfp_type, normal_type):
     device = 'cuda'
 
     @triton.jit
-    def triton_kernel(a_base, stride_a0, stride_a1, a_scale,  #
-                      b_base, stride_b0, stride_b1, b_scale,  #
+    def triton_kernel(a_base, stride_am, stride_ak, a_scale,  #
+                      b_base, stride_bk, stride_bn, b_scale,  #
                       out,  #
                       BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,  #
                       type_a: tl.constexpr, type_b: tl.constexpr):
@@ -165,10 +165,10 @@ def test_amd_mfma_scaled(M, N, K, rhs_scale, mxfp_type, normal_type):
         DIV_FACTOR_B: tl.constexpr = 2 if type_b == "e2m1" else 1
         PACKED_BLOCK_K_A: tl.constexpr = BLOCK_K // DIV_FACTOR_A
         PACKED_BLOCK_K_B: tl.constexpr = BLOCK_K // DIV_FACTOR_B
-        a_ptr = a_base + tl.arange(0, BLOCK_M)[:, None] * stride_a0 + \
-                tl.arange(0, PACKED_BLOCK_K_A)[None, :] * stride_a1
-        b_ptr = b_base + tl.arange(0, PACKED_BLOCK_K_B)[:, None] * stride_b0 + \
-                tl.arange(0, BLOCK_N)[None, :] * stride_b1
+        a_ptr = a_base + tl.arange(0, BLOCK_M)[:, None] * stride_am + \
+                tl.arange(0, PACKED_BLOCK_K_A)[None, :] * stride_ak
+        b_ptr = b_base + tl.arange(0, PACKED_BLOCK_K_B)[:, None] * stride_bk + \
+                tl.arange(0, BLOCK_N)[None, :] * stride_bn
 
         a = tl.load(a_ptr)
         b = tl.load(b_ptr)
@@ -186,8 +186,8 @@ def test_amd_mfma_scaled(M, N, K, rhs_scale, mxfp_type, normal_type):
         tl.store(out_ptr, c.to(tl.bfloat16))
 
     @gluon.jit
-    def gluon_kernel(a_base, stride_a0, stride_a1, a_scale,  #
-                     b_base, stride_b0, stride_b1, b_scale,  #
+    def gluon_kernel(a_base, stride_am, stride_ak, a_scale,  #
+                     b_base, stride_bk, stride_bn, b_scale,  #
                      out,  #
                      BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,  #
                      type_a: tl.constexpr, type_b: tl.constexpr):
@@ -218,13 +218,13 @@ def test_amd_mfma_scaled(M, N, K, rhs_scale, mxfp_type, normal_type):
 
         zero = ttgl.zeros([BLOCK_M, BLOCK_N], dtype=ttgl.float32, layout=mfma_layout)
 
-        a_offsets = ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, a_layout))[:, None] * stride_a0 + \
-                    ttgl.arange(0, PACKED_BLOCK_K_A, layout=ttgl.SliceLayout(0, a_layout))[None, :] * stride_a1
+        a_offsets = ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, a_layout))[:, None] * stride_am + \
+                    ttgl.arange(0, PACKED_BLOCK_K_A, layout=ttgl.SliceLayout(0, a_layout))[None, :] * stride_ak
         a = ttgl.amd.cdna4.buffer_load(a_base, a_offsets)
         a = ttgl.convert_layout(a, ttgl.DotOperandLayout(operand_index=0, parent=mfma_layout, k_width=16))
 
-        b_offsets = ttgl.arange(0, PACKED_BLOCK_K_B, layout=ttgl.SliceLayout(1, b_layout))[:, None] * stride_b0 + \
-                    ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, b_layout))[None, :] * stride_b1
+        b_offsets = ttgl.arange(0, PACKED_BLOCK_K_B, layout=ttgl.SliceLayout(1, b_layout))[:, None] * stride_bk + \
+                    ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, b_layout))[None, :] * stride_bn
         b = ttgl.amd.cdna4.buffer_load(b_base, b_offsets)
         b = ttgl.convert_layout(b, ttgl.DotOperandLayout(operand_index=1, parent=mfma_layout, k_width=16))
 
