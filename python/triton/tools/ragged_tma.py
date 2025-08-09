@@ -42,10 +42,11 @@ def create_ragged_descriptor(T, block_shape, ragged_dim=0, write_only=False):
     assert len(block_shape) == rank, "block shape must have same length as tensor shape"
 
     max_int = 0x7fff0000
-    billion = 0x40000000  # == 2**30
 
-    assert tensor_shape[ragged_dim] <= billion, "number of rows may not exceed 2**30"
-    tensor_shape[ragged_dim] = billion
+    if not write_only:
+        billion = 0x40000000  # == 2**30
+        assert tensor_shape[ragged_dim] <= billion, "number of rows may not exceed 2**30"
+        tensor_shape[ragged_dim] = billion
     ragged_stride = T.stride(ragged_dim)
 
     # we prepend an extra two dimensions and rely on the fact that pointers
@@ -59,7 +60,10 @@ def create_ragged_descriptor(T, block_shape, ragged_dim=0, write_only=False):
         tma_stride = tma_stride[1:]
         tma_shape = tma_shape[1:]
         box_shape = box_shape[1:]
-        ptr = (ptr - billion * ragged_stride * T.element_size()) % (2**64)
+        ptr -= tensor_shape[ragged_dim] * ragged_stride * T.element_size()
+        assert ptr >= 0  # this assert should never fire because device memory pointers
+                         # are in the 112 -- 128 TiB range and we'd need allocations
+                         # larger than 112 TiB in order to underflow
 
     return TensorDescriptor(TensorDescriptorPtr(ptr, T.dtype), tma_shape, tma_stride, box_shape)
 
@@ -113,11 +117,12 @@ def store_ragged(TMA, batch_offset, batch_size, coords, data, ragged_dim: tl.con
     else:
         tl.static_assert(False, "TMA must be a ragged descriptor")
 
-    c0, c1, c2 = to_ragged_indices(batch_offset, batch_size, coords[ragged_dim])
-
     if write_only:
+        c2 = TMA.shape[ragged_dim + 1] - batch_size + coords[ragged_dim]
+        c1 = batch_offset + batch_size
         data = tl.reshape(data, [1] + data.shape)
         TMA.store([c1] + coords[:ragged_dim] + [c2] + coords[ragged_dim + 1:], data)
     else:
+        c0, c1, c2 = to_ragged_indices(batch_offset, batch_size, coords[ragged_dim])
         data = tl.reshape(data, [1, 1] + data.shape)
         TMA.store([c0, c1] + coords[:ragged_dim] + [c2] + coords[ragged_dim + 1:], data)

@@ -56,7 +56,10 @@ def example_load_store_kernel(X, Y, x_off, y_off, x_size, y_size):
 
 
 @pytest.mark.parametrize("write_only", [False, True])
-@pytest.mark.parametrize("dtype", ["float16", "float32", "float64"])
+@pytest.mark.parametrize("dtype", ["bfloat16", "float16", "float32", "float64",  # floating-point
+                                   "int8", "int16", "int32", "int64",  # signed integers
+                                   "uint8", "uint16", "uint32", "uint64"  # unsigned integers
+                                  ])
 def test_ragged_tma(dtype, write_only):
 
     if not torch.cuda.is_available() or not torch.cuda.get_device_capability()[0] >= 9:
@@ -65,9 +68,11 @@ def test_ragged_tma(dtype, write_only):
 
     dtype = getattr(torch, dtype)
 
-    src = torch.randn((1024, 80), dtype=torch.float32, device="cuda").to(dtype)
-    ref = torch.randn((1024, 80), dtype=torch.float32, device="cuda").to(dtype)
-    dst = 1.0 * ref
+    src = torch.randn((1024, 262144), dtype=torch.float32, device="cuda").to(dtype)
+    ref = torch.randn((1024, 262144), dtype=torch.float32, device="cuda").to(dtype)
+    dst = ref.clone()
+
+    src, ref, dst = src[:, :80], ref[:, :80], dst[:, :80]
 
     X = create_ragged_descriptor(src, [32, 128])
     Y = create_ragged_descriptor(dst, [32, 128], write_only=write_only)
