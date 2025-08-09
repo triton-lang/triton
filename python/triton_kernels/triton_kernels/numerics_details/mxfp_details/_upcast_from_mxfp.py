@@ -1,5 +1,6 @@
 import triton
 import triton.language as tl
+
 from ._downcast_to_mxfp import MXFP_BLOCK_SIZE
 
 
@@ -14,7 +15,7 @@ def _upcast_from_mxfp(out_ptr, stride_o_outer, stride_o_quant: tl.constexpr, mx_
     # uint8 signifies two fp4 e2m1 values packed into a single byte
     mx_tensor_dtype: tl.constexpr = mx_tensor_ptr.dtype.element_ty
     dst_dtype: tl.constexpr = out_ptr.dtype.element_ty
-    tl.static_assert(dst_dtype == tl.float16 or dst_dtype == tl.bfloat16)
+    tl.static_assert(dst_dtype == tl.float16 or dst_dtype == tl.bfloat16 or dst_dtype == tl.float32)
     tl.static_assert(
         mx_tensor_dtype == tl.uint8
         or ((mx_tensor_dtype == tl.float8e4nv or mx_tensor_dtype == tl.float8e5) or mx_tensor_dtype == dst_dtype),
@@ -69,32 +70,33 @@ def _upcast_from_mxfp(out_ptr, stride_o_outer, stride_o_quant: tl.constexpr, mx_
     if dst_dtype == tl.bfloat16:
         dst_scale = (scale.to(tl.uint16) << 7).to(dst_dtype, bitcast=True)
     else:
-        tl.static_assert(dst_dtype == tl.float16)
         dst_scale = (scale.to(tl.uint32) << 23).to(tl.float32, bitcast=True)
-        dst_scale = dst_scale.to(tl.float16)
+        if dst_dtype == tl.float16:
+            dst_scale = dst_scale.to(tl.float16)
 
     # Now upcast the tensor.
+    intermediate_dtype: tl.constexpr = tl.bfloat16 if dst_dtype == tl.float32 else dst_dtype
     if is_fp8:
-        dst_tensor = tensor.to(dst_dtype)
+        dst_tensor = tensor.to(intermediate_dtype)
         if tensor.dtype == tl.float8e5:
             from_e_bits: tl.constexpr = 5
             from_m_bits: tl.constexpr = 2
-            to_e_bits: tl.constexpr = 8 if dst_dtype == tl.bfloat16 else 5
-            to_m_bits: tl.constexpr = 7 if dst_dtype == tl.bfloat16 else 10
+            to_e_bits: tl.constexpr = 8 if intermediate_dtype == tl.bfloat16 else 5
+            to_m_bits: tl.constexpr = 7 if intermediate_dtype == tl.bfloat16 else 10
 
             # Preserve infs and nans. FIXME Fp8E5M2_to_Bf16 doesn't preserve them!
             non_finite_mask_src: tl.constexpr = ((1 << from_e_bits) - 1) << from_m_bits
             non_finite_mask_dst: tl.constexpr = ((1 << to_e_bits) - 1) << to_m_bits
             dst_tensor = tl.where(
                 (tensor.to(tl.uint8, bitcast=True) & non_finite_mask_src) == non_finite_mask_src,
-                (dst_tensor.to(tl.uint16, bitcast=True) | non_finite_mask_dst).to(dst_dtype, bitcast=True),
+                (dst_tensor.to(tl.uint16, bitcast=True) | non_finite_mask_dst).to(intermediate_dtype, bitcast=True),
                 dst_tensor,
             )
     else:
         assert is_fp4
-        dst_bias: tl.constexpr = 127 if dst_dtype == tl.bfloat16 else 15
-        dst_0p5: tl.constexpr = 16128 if dst_dtype == tl.bfloat16 else 0x3800
-        dst_m_bits: tl.constexpr = 7 if dst_dtype == tl.bfloat16 else 10
+        dst_bias: tl.constexpr = 127 if intermediate_dtype == tl.bfloat16 else 15
+        dst_0p5: tl.constexpr = 16128 if intermediate_dtype == tl.bfloat16 else 0x3800
+        dst_m_bits: tl.constexpr = 7 if intermediate_dtype == tl.bfloat16 else 10
         # e2m1
         em0 = tensor & 0x07
         em1 = tensor & 0x70
@@ -108,7 +110,8 @@ def _upcast_from_mxfp(out_ptr, stride_o_outer, stride_o_quant: tl.constexpr, mx_
         x0 = tl.where(em0 == 0x01, dst_0p5 | (x0 & 0x8000), x0)
         x1 = tl.where(em1 == 0x10, dst_0p5 | (x1 & 0x8000), x1)
         # 3) x is zero, do nothing
-        dst_tensor = tl.interleave(x0, x1).to(dst_dtype, bitcast=True)
+        dst_tensor = tl.interleave(x0, x1).to(intermediate_dtype, bitcast=True)
+    dst_tensor = dst_tensor.to(dst_dtype)
 
     # Reshape for proper broadcasting: the scale was stored with a 32‐sized “inner” grouping.
     dst_tensor = dst_tensor.reshape([BLOCK_SIZE_OUT_DIM, BLOCK_SIZE_QUANT_MX_SCALE, MXFP_BLOCK_SIZE])
