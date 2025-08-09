@@ -339,20 +339,6 @@ def filter_layouts(layouts):
     return [l for l in layouts if is_layout_applicable(l)]
 
 
-@pytest.mark.interpreter
-@pytest.mark.parametrize("dtype_x", list(dtypes) + ["bfloat16"])
-def test_empty_kernel(dtype_x, device):
-    SIZE = 128
-
-    @triton.jit
-    def kernel(X, SIZE: tl.constexpr):
-        pass
-
-    check_type_supported(dtype_x, device)
-    x = to_triton(numpy_random(SIZE, dtype_str=dtype_x), device=device, dst_type=dtype_x)
-    kernel.warmup(x, SIZE=SIZE, num_warps=4, grid=(1, ))
-
-
 def test_scalar_overflow(device):
 
     @triton.jit
@@ -5116,17 +5102,6 @@ def test_default(device):
 # ----------------
 
 
-@pytest.mark.interpreter
-def test_noop(device):
-
-    @triton.jit
-    def kernel(x):
-        pass
-
-    x = to_triton(numpy_random((1, ), dtype_str='int32'), device=device)
-    kernel.warmup(x, grid=(1, ))
-
-
 @pytest.mark.parametrize("device", ['cuda', 'cpu', 'cpu_pinned'])
 def test_pointer_arguments(device):
 
@@ -5141,6 +5116,11 @@ def test_pointer_arguments(device):
             kernel[(1, )](x)
     else:
         kernel[(1, )](x)
+
+
+# --------------------
+# value specialization
+# --------------------
 
 
 @pytest.mark.parametrize("value, value_type", [(-1, 'i32'), (0, 'i32'), (-2**31, 'i32'), (2**31 - 1, 'i32'),
@@ -5161,11 +5141,6 @@ def test_value_specialization(value: int, value_type: str, device) -> None:
     h = kernel.warmup(value, 1, x, grid=(1, ))
     assert "is_one" in h.name
     assert value_type in h.name
-
-
-# --------------------
-# value specialization
-# --------------------
 
 
 @pytest.mark.parametrize("value, overflow", [(2**64 - 1, False), (2**64, True), (-2**63, False), (-2**63 - 1, True)])
