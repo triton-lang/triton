@@ -72,7 +72,6 @@ def _upcast_mxfp4_to_bf16(Y, X, XScale, x_stride_m, x_stride_n, x_scale_stride_m
 
 
 @pytest.mark.skipif(not is_cuda(), reason="Only supported on cuda")
-@pytest.mark.skipif(not cuda_capability_geq(9), reason="Only supported for capability >= 9")
 def test_upcast_mxfp4_to_bf16():
     mx_axis = 0
     num_warps = 4
