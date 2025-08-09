@@ -3627,6 +3627,10 @@ def test_permute(dtype_str, shape, perm, num_ctas, device):
     pgm_contiguous = kernel[(1, 1)](x_tri, x_tri.stride(1),
                                     x_tri.stride(0), z_tri_contiguous, z_tri_contiguous.stride(0),
                                     z_tri_contiguous.stride(1), BLOCK_M=shape[0], BLOCK_N=shape[1], num_ctas=num_ctas)
+    if dtype_str == 'float8e4b15':
+        z_tri = z_tri.base
+        z_tri_contiguous = z_tri_contiguous.base
+    # numpy result
     z_ref = x.transpose(*perm)
     # compare
     np.testing.assert_allclose(to_numpy(z_tri), z_ref)
