@@ -65,13 +65,9 @@ class Storage:
     def make_tma(self, block_shape, mode, transpose=False):
         if mode in ["dense", "gather", "scatter"]:
             return self.make_dense_tma(block_shape, transpose)
-        if "ragged" in mode:
-            ragged_dim = len(self.data.shape) - 2
-            if mode == "ragged_load":
-                return create_ragged_descriptor(self.data, block_shape, ragged_dim=ragged_dim, write_only=False)
-            if mode == "ragged_store":
-                return create_ragged_descriptor(self.data, block_shape, ragged_dim=ragged_dim, write_only=True)
-        raise ValueError(f"invalid mode: {mode}")
+        assert mode == "ragged"
+        ragged_dim = len(self.data.shape) - 2
+        return create_ragged_descriptor(self.data, block_shape, ragged_dim=ragged_dim)
 
 
 @dataclass

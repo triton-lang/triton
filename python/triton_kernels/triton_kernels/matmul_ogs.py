@@ -512,11 +512,13 @@ def matmul_ogs(x, w, bias,
     y = wrap_torch_tensor(out0.view(-1, out0.shape[-1]) if has_scatter else out0)
     x_storage = _canonicalize_storage(x.storage, 2 if has_gather_tma else 3, flex.lhs_data)
     w_storage = _canonicalize_storage(w.storage, 3, flex.rhs_data)
-    y_storage = _canonicalize_storage(y.storage, 2 if has_scatter_tma else 4, flex.out_data)
+    if is_ragged and len(y.storage.data.shape) == 4:
+        y.storage.data = y.storage.data.squeeze(1)
+    y_storage = _canonicalize_storage(y.storage, 2 if has_scatter_tma else 3 if is_ragged else 4, flex.out_data)
     # create tma descriptor for x
-    x_tma_mode = "gather" if has_gather_tma else None if (has_gather and not has_gather_tma) else "ragged_load" if is_ragged else "dense"
+    x_tma_mode = "gather" if has_gather_tma else None if (has_gather and not has_gather_tma) else "ragged" if is_ragged else "dense"
     x_tma_block_size = {
-        "ragged_load": [1, opt_flags.block_m, opt_flags.block_k],
+        "ragged": [1, opt_flags.block_m, opt_flags.block_k],
         "gather": [1, opt_flags.block_k],
         "dense": [1, opt_flags.block_m, opt_flags.block_k],
         None: None
@@ -524,15 +526,15 @@ def matmul_ogs(x, w, bias,
     x_tensor_or_tma = x_storage.make_tma(x_tma_block_size, x_tma_mode) if opt_flags.is_persistent and x_tma_mode is not None else x_storage.data
     # create tma descriptor for y
     block_n = opt_flags.block_n // opt_flags.epilogue_subtile // fused_activation.reduction_n
-    y_tma_mode = "scatter" if has_scatter_tma else None if (has_scatter and not has_scatter_tma) else "ragged_store" if is_ragged else "dense"
+    y_tma_mode = "scatter" if has_scatter_tma else None if (has_scatter and not has_scatter_tma) else "ragged" if is_ragged else "dense"
     y_tma_block_size = {
-        "ragged_store": [1, 1, opt_flags.block_m, block_n],
+        "ragged": [1, opt_flags.block_m, block_n],
         "scatter": [1, block_n],
         "dense": [1, 1, opt_flags.block_m, block_n],
         None: None
     }[y_tma_mode]
     y_tensor_or_tma = y_storage.make_tma(y_tma_block_size, y_tma_mode) if opt_flags.is_persistent and y_tma_mode is not None else y_storage.data
-    y_desc_ptr_off = (y_tensor_or_tma.base.data_ptr() - y_storage.data.data_ptr()) // y_storage.data.element_size() if opt_flags.is_persistent and y_tma_mode == "ragged_store" else 0
+    y_desc_ptr_off = (y_tensor_or_tma.base.data_ptr() - y_storage.data.data_ptr()) // y_storage.data.element_size() if opt_flags.is_persistent and y_tma_mode == "ragged" else 0
 
     # create tma descriptor for w
     w_has_tma = opt_flags.is_persistent

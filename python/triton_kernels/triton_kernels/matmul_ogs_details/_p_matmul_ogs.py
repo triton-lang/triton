@@ -260,7 +260,7 @@ def _p_matmul_ogs(
 
             if X_TMA_MODE == "gather":
                 x = X.gather(offs_x_m, off_k)
-            elif X_TMA_MODE == "ragged_load":
+            elif X_TMA_MODE == "ragged":
                 x = load_ragged(X, start_m, eM, [start_z, off_m, off_k], ragged_dim=1)
                 x = x.reshape(BLOCK_M, BLOCK_K)
             elif X_TMA_MODE == "dense":
@@ -431,9 +431,9 @@ def _p_matmul_ogs(
                 # there shouldn't be any other negative values.
                 offs_y_m = (offs_y_m.to(tl.uint32, bitcast=True) & 0x7FFFFFFF).to(tl.int32, bitcast=True)
                 Y.scatter(out, offs_y_m, out_off_n)
-            elif Y_TMA_MODE == "ragged_store":
-                out = tl.reshape(out, [1, 1] + out.shape)
-                store_ragged(Y, start_m1, eM1, [pid_k, start_z1, off_m1, out_off_n], out, ragged_dim=2)
+            elif Y_TMA_MODE == "ragged":
+                out = tl.reshape(out, [1] + out.shape)
+                store_ragged(Y, start_m1, eM1, [pid_k, off_m1, out_off_n], out, ragged_dim=1)
             elif Y_TMA_MODE == "dense":
                 out = tl.reshape(out, [1, 1] + out.shape)
                 Y.store([pid_k, start_z1, off_m1, out_off_n], out)
