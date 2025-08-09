@@ -1133,7 +1133,7 @@ def test_unary_op(dtype_x, expr, num_ctas, device):
                           for expr in ['exp', 'log', 'cos', 'sin', 'exp2', 'log2', 'sqrt', 'rsqrt', 'floor', 'ceil']
                           for x in ['x', '3.0']])
 def test_math_op(dtype_x, expr, x, device):
-    np_expr = f"1.0 / np.{expr}({x})" if expr == "rsqrt" else f"np.{expr}({x})"
+    np_expr = f"1.0 / np.sqrt({x})" if expr == "rsqrt" else f"np.{expr}({x})"
     _test_unary(dtype_x, f'tl.{expr}({x})', np_expr, device=device)
 
 
@@ -5138,9 +5138,9 @@ def test_pointer_arguments(device):
     x = torch.empty(1024, device=device.split('_')[0], pin_memory=pin_memory)
     if device == "cpu":
         with pytest.raises(ValueError):
-            kernel.run[(1, )](x)
+            kernel[(1, )](x)
     else:
-        kernel.run[(1, )](x)
+        kernel[(1, )](x)
 
 
 @pytest.mark.parametrize("value, value_type", [(-1, 'i32'), (0, 'i32'), (-2**31, 'i32'), (2**31 - 1, 'i32'),
