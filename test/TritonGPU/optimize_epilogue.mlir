@@ -1,6 +1,6 @@
 // RUN: triton-opt %s -split-input-file --tritonamdgpu-optimize-epilogue | FileCheck --check-prefixes=GCN %s
 
-#mfma = #ttg.amd_mfma<{warpsPerCTA=[1,1], instrShape=[32,32], isTranspose=false}>
+#mfma = #ttg.amd_mfma<{version = 3, warpsPerCTA=[1,1], instrShape=[32,32], isTranspose=false}>
 #blocked = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [4, 16], warpsPerCTA = [1, 1], order = [1, 0]}>
 module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
   // GCN-LABEL: mfma_epilogue_simple
@@ -16,7 +16,7 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32}
 
 // -----
 
-#mfma = #ttg.amd_mfma<{warpsPerCTA=[1,1], instrShape=[32,32], isTranspose=false}>
+#mfma = #ttg.amd_mfma<{version = 3, warpsPerCTA=[1,1], instrShape=[32,32], isTranspose=false}>
 #blocked = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [4, 16], warpsPerCTA = [1, 1], order = [1, 0]}>
 module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
   // GCN-LABEL: mfma_epilogue_chained_elementwise
