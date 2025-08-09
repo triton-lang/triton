@@ -1392,6 +1392,9 @@ class InterpretedFunction:
             self.rewritten_fn[self.fn] = self.rewriter.rewrite_ast()
         return self.rewritten_fn[self.fn]
 
+    def warmup(self, *args, grid, **kwargs):
+        return self.run(*args, grid=grid, warmup=True, **kwargs)
+
     @property
     def __name__(self):
         return self.fn.__name__
