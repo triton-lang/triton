@@ -67,6 +67,7 @@ class DependenciesFinder(ast.NodeVisitor):
         self.supported_modules = {
             GLUON_MODULE,
             TRITON_MODULE,
+            "copy",
             "math",
         }
 
@@ -1051,6 +1052,9 @@ class ConstexprFunction(JITCallable):
 
         # call the raw Python function f:
         res = self.fn(*args, **kwargs)
+
+        if _semantic is None:
+            return res  # Called outside of triton
 
         # convert result back to a Triton constexpr:
         if knobs.runtime.interpret:

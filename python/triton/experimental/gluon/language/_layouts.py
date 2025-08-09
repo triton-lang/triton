@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from typing import List, Optional
 from triton.language.core import _unwrap_if_constexpr, _unwrap_shape, constexpr_type
-from triton.experimental.gluon._runtime import constexpr_function
+from triton.runtime.jit import constexpr_function
 
 __all__ = [
     "AutoLayout",
@@ -325,6 +325,7 @@ class NVMMASharedLayout(SharedLayout):
         )
 
     @staticmethod
+    @constexpr_function
     def get_default_for(block_shape, dtype, transposed=False, fp4_padded=False, ctas_per_cga=None, cta_split_num=None,
                         cta_order=None):
         """Returns an NVMMASharedLayout with default swizzling for a given shape.
