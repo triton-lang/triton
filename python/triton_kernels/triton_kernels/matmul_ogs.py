@@ -532,7 +532,8 @@ def matmul_ogs(x, w, bias,
         None: None
     }[y_tma_mode]
     y_tensor_or_tma = y_storage.make_tma(y_tma_block_size, y_tma_mode) if opt_flags.is_persistent and y_tma_mode is not None else y_storage.data
-    y_desc_ptr_off = -y_storage.data.shape[-2] * y_storage.data.shape[-1] if y_tma_mode == "ragged_store" else 0
+    y_desc_ptr_off = (y_tensor_or_tma.base.data_ptr() - y_storage.data.data_ptr()) // y_storage.data.element_size() if opt_flags.is_persistent and y_tma_mode == "ragged_store" else 0
+
     # create tma descriptor for w
     w_has_tma = opt_flags.is_persistent
     w_tensor_or_tma = w_storage.make_tma([1, opt_flags.block_k, opt_flags.block_n], "dense") if w_has_tma else w_storage.data

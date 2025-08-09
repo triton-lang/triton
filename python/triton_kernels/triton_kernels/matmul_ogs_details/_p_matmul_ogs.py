@@ -3,6 +3,7 @@
 import torch
 import triton
 import triton.language as tl
+from triton.tools.ragged_tma import load_ragged, store_ragged
 from triton_kernels import target_info
 from triton_kernels.tensor_details.layout_details.blackwell_scale import unswizzle_mx_scale_bw
 from triton_kernels.numerics_details.flexpoint import (
@@ -65,16 +66,6 @@ def _load_tile_attrs(
     off_n = BLOCK_N * pid_n
 
     return expt_id, start_z, start_m, eM, off_m, off_n, pid_k
-
-@triton.jit
-def to_ragged_indices(batch_offset, batch_size, row):
-    """
-    Helper function for load_ragged and store_ragged.
-    """
-    billion = 0x40000000  # == 2**30
-    x = billion - batch_size + row
-    y = batch_offset + batch_size
-    return billion, y, x
 
 @triton.jit
 def _load_writeback_idx_and_mask(WriteBackIndx, writeback_size, offs, mask):
@@ -270,8 +261,7 @@ def _p_matmul_ogs(
             if X_TMA_MODE == "gather":
                 x = X.gather(offs_x_m, off_k)
             elif X_TMA_MODE == "ragged_load":
-                c0, c1, c2 = to_ragged_indices(start_m, eM, off_m)
-                x = X.load([c0, c1, start_z, c2, off_k])
+                x = load_ragged(X, start_m, eM, [start_z, off_m, off_k], ragged_dim=1)
                 x = x.reshape(BLOCK_M, BLOCK_K)
             elif X_TMA_MODE == "dense":
                 x = X.load([start_z, start_m + off_m, off_k])
@@ -290,11 +280,9 @@ def _p_matmul_ogs(
                     x = tl.load(XPtrs, mask=mask_k[None, :], other=0.0)
 
             if W_TRANSPOSE:
-                w = tl.trans(W.load([expt_id, off_n, off_k_w]), [0, 2, 1])
+                w = tl.reshape(W.load([expt_id, off_n, off_k_w]), W.block_shape[1:]).T
             else:
-                w = W.load([expt_id, off_k_w, off_n])
-            w = tl.reshape(w, *w.shape[1:])
-
+                w = tl.reshape(W.load([expt_id, off_k_w, off_n]), W.block_shape[1:])
 
             if is_microscaled_format:
                 x_format: tl.constexpr = get_scaled_dot_format_string(x.dtype)
@@ -444,8 +432,8 @@ def _p_matmul_ogs(
                 offs_y_m = (offs_y_m.to(tl.uint32, bitcast=True) & 0x7FFFFFFF).to(tl.int32, bitcast=True)
                 Y.scatter(out, offs_y_m, out_off_n)
             elif Y_TMA_MODE == "ragged_store":
-                out = tl.reshape(out, [1, 1, 1] + out.shape)
-                Y.store([start_m1 + eM1, pid_k, start_z1, Y.shape[-2] - eM1 + off_m1, out_off_n], out)
+                out = tl.reshape(out, [1, 1] + out.shape)
+                store_ragged(Y, start_m1, eM1, [pid_k, start_z1, off_m1, out_off_n], out, ragged_dim=2)
             elif Y_TMA_MODE == "dense":
                 out = tl.reshape(out, [1, 1] + out.shape)
                 Y.store([pid_k, start_z1, off_m1, out_off_n], out)

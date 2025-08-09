@@ -45,8 +45,7 @@ def create_ragged_descriptor(T, block_shape, ragged_dim=0, write_only=False):
     billion = 0x40000000  # == 2**30
 
     assert tensor_shape[ragged_dim] <= billion, "number of rows may not exceed 2**30"
-    if not write_only:
-        tensor_shape[ragged_dim] = billion
+    tensor_shape[ragged_dim] = billion
     ragged_stride = T.stride(ragged_dim)
 
     # we prepend an extra two dimensions and rely on the fact that pointers
@@ -60,7 +59,7 @@ def create_ragged_descriptor(T, block_shape, ragged_dim=0, write_only=False):
         tma_stride = tma_stride[1:]
         tma_shape = tma_shape[1:]
         box_shape = box_shape[1:]
-        ptr = (ptr - tensor_shape[ragged_dim] * ragged_stride * T.element_size()) % (2**64)
+        ptr = (ptr - billion * ragged_stride * T.element_size()) % (2**64)
 
     return TensorDescriptor(TensorDescriptorPtr(ptr, T.dtype), tma_shape, tma_stride, box_shape)
 
