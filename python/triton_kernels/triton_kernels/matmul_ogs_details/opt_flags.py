@@ -103,6 +103,9 @@ def make_default_opt_flags_amd(
     num_stages = 2
     # AMD-specific
     target_kernel_kwargs = {"waves_per_eu": 0, "matrix_instr_nonkdim": 16, "kpack": 1}
+    epilogue_subtile = constraints.get('epilogue_subtile', None)
+    if epilogue_subtile is None:
+        epilogue_subtile = 1
     ret = OptFlags(
         block_m=block_m,
         block_n=block_n,
@@ -116,7 +119,7 @@ def make_default_opt_flags_amd(
         fused_scatter=constraints.get('fused_scatter', False),
         is_persistent=is_persistent,
         idle_sms=0,
-        epilogue_subtile=constraints.get('epilogue_subtile', None),
+        epilogue_subtile=epilogue_subtile,
         arch=None,
         target_kernel_kwargs=target_kernel_kwargs,
     )
