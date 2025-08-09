@@ -123,14 +123,14 @@ of gemms. The scheduling is static and we do it on device.</p>
         N    cuBLAS    Triton
 0   128.0  0.021504  0.012288
 1   256.0  0.023552  0.015360
-2   512.0  0.032768  0.019456
+2   512.0  0.033792  0.019456
 3  1024.0  0.072704  0.071680
 group-gemm-performance-m-8192-k-8192:
         M    cuBLAS    Triton
-0   128.0  0.460800  0.495616
-1   256.0  0.737280  0.860160
-2   512.0  1.717248  1.705984
-3  1024.0  2.640896  3.313664
+0   128.0  0.460800  0.491520
+1   256.0  0.736768  0.852992
+2   512.0  1.707008  1.704960
+3  1024.0  2.707456  3.312640
 </pre></div>
 </div>
 <div class="line-block">
@@ -696,7 +696,7 @@ group-gemm-performance-m-8192-k-8192:
 <span class="n">benchmark_batches</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">show_plots</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">print_data</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </pre></div>
 </div>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 5.873 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 5.911 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-08-grouped-gemm-py">
 <div class="sphx-glr-download sphx-glr-download-jupyter docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/6360f3425f2c39f9f330971830c25ba7/08-grouped-gemm.ipynb"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Jupyter</span> <span class="pre">notebook:</span> <span class="pre">08-grouped-gemm.ipynb</span></code></a></p>
