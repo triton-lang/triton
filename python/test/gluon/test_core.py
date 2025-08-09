@@ -242,43 +242,24 @@ def test_amd_mfma_scaled(M, N, K, rhs_scale, mxfp_type, normal_type):
         else:
             b_scale = ttgl.full([BLOCK_M, SCALE_BLOCK_K], 127, dtype=ttgl.int8, layout=b_scale_layout)
 
-        c = ttgl.amd.cdna4.mfma_scaled(a, a_scale, type_a, b, b_scale, type_b, zero, layout=mfma_layout)
+        c = ttgl.amd.cdna4.mfma_scaled(a, a_scale, type_a, b, b_scale, type_b, zero)
         c = c.to(out.dtype.element_ty)
 
         out_offsets = ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, mfma_layout))[:, None] * BLOCK_N + \
                       ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, mfma_layout))[None, :]
         ttgl.amd.cdna4.buffer_store(c, out, out_offsets)
 
-    comp_dtype = torch.float16 if normal_type == "fp16" else torch.bfloat16
-    # The max exponent we use to initialize data in the x/y and associated scale tensor to avoid
-    # overflow when scaling.
-    comp_dtype_max_exp = 6 if normal_type == "fp16" else 15
-
     torch.manual_seed(0)
-
-    def make_arg(shape, ty):
-        if ty == "bf16" or ty == "fp16":
-            ret = torch.randn(shape, dtype=comp_dtype, device=device)
-            # Clamp to avoid relative error issues
-            ret.clamp_(-2**comp_dtype_max_exp, 2**comp_dtype_max_exp - 1)
-        else:
-            # On other chips, the A/B operands are upcasted to fp16/bf16
-            # before matmul, which has larger range to avoid overflow.
-            # On CDNA4, we use the V_MFMA_*_F8F6F4 instructions to
-            # directly calculate matmul on F8F6F4 data. So we need
-            # to narrow down the range of input to avoid overflow.
-            ret = torch.randint(20, 40, shape, dtype=torch.uint8, device=device)
-        return ret
 
     type_a = normal_type if rhs_scale else mxfp_type
     type_b = mxfp_type if rhs_scale else normal_type
 
     DIV_FACTOR_A = 2 if type_a == "e2m1" else 1
     DIV_FACTOR_B = 2 if type_b == "e2m1" else 1
-    x = make_arg((M, K // DIV_FACTOR_A), type_a)
-    y = make_arg((K // DIV_FACTOR_B, N), type_b)
+    x = torch.randint(20, 40, (M, K // DIV_FACTOR_A), dtype=torch.uint8, device=device)
+    y = torch.randint(20, 40, (K // DIV_FACTOR_B, N), dtype=torch.uint8, device=device)
 
-    min_scale, max_scale = (0, 142) if comp_dtype == torch.bfloat16 else (124, 131)
+    min_scale, max_scale = (0, 142)
     scale_x = torch.randint(min_scale, max_scale + 1, (M, K // 32), dtype=torch.uint8, device=device)
     scale_y = torch.randint(min_scale, max_scale + 1, (N, K // 32), dtype=torch.uint8, device=device)
     if rhs_scale:
@@ -289,8 +270,6 @@ def test_amd_mfma_scaled(M, N, K, rhs_scale, mxfp_type, normal_type):
     def make_finite(x, dtype):
         if dtype not in ("e5m2", "e4m3"):
             return x
-        if dtype == "e5m2" and comp_dtype == torch.float16:
-            x = x & 0xB
         mask = 0x7C if dtype == "e5m2" else 0x7F
         finite = torch.arange(x.numel(), device=device, dtype=torch.uint8).reshape_as(x) % mask
         x_finite = torch.where(x & mask == mask, finite | (0x80 & x), x)
@@ -300,10 +279,11 @@ def test_amd_mfma_scaled(M, N, K, rhs_scale, mxfp_type, normal_type):
     x = make_finite(x, type_a)
     y = make_finite(y, type_b)
 
-    z = torch.zeros((M, N), dtype=comp_dtype, device=device)
-    gluon_kernel[(1, )](x, *x.stride(), scale_x, y, *y.stride(), scale_y, z, M, N, K, type_a, type_b)
+    z = torch.zeros((M, N), dtype=torch.bfloat16, device=device)
+    pgm = gluon_kernel[(1, )](x, *x.stride(), scale_x, y, *y.stride(), scale_y, z, M, N, K, type_a, type_b)
+    assert "v_mfma_scale_f32_16x16x128_f8f6f4" in pgm.asm["amdgcn"]
 
-    z_ref = torch.zeros((M, N), dtype=comp_dtype, device=device)
+    z_ref = torch.zeros((M, N), dtype=torch.bfloat16, device=device)
     triton_kernel[(1, )](x, *x.stride(), scale_x, y, *y.stride(), scale_y, z_ref, M, N, K, type_a, type_b)
 
     torch.testing.assert_close(z, z_ref, rtol=1e-5, atol=1e-5)
