@@ -30,7 +30,7 @@ _matmul_ogs_repr = make_matmul_repr("_matmul_ogs", [0, 1, 2])
 @triton.jit(do_not_specialize=["TOKENS_PER_EXPT_FOR_ANNOTATION"],
             repr=_matmul_ogs_repr, launch_metadata=matmul_launch_metadata)
 def _matmul_ogs(
-             Y, YPtr, y_desc_ptr_off, stride_y_k, stride_y_z, stride_y_m, stride_y_n,
+             Y, YPtr, stride_y_k, stride_y_z, stride_y_m, stride_y_n,
              YExpectedScale, YActualScale, YChecksumScale,
              stride_y_mx_z, stride_y_mx_m, stride_y_mx_n,
              X, XPtr, stride_x_z, stride_x_m, stride_x_k,
@@ -40,7 +40,7 @@ def _matmul_ogs(
              WScale,
              WMxScale, stride_w_mx_e, stride_w_mx_k, stride_w_mx_n,
              B, stride_b_e, # Bias
-             NRowsY, NRows, M, N, K, # shapes
+             NRows, M, N, K, # shapes
              # expt data
              Betas, Gammas,
              GatherIndx,

@@ -509,12 +509,10 @@ def matmul_ogs(x, w, bias,
     has_scatter = writeback_idxs is not None
     has_gather_tma = has_gather and target_info.has_tma_gather()
     has_scatter_tma = has_scatter and target_info.has_tma_gather()
-    y = wrap_torch_tensor(out0.view(-1, out0.shape[-1]) if has_scatter else out0)
+    y = wrap_torch_tensor(out0.view(-1, out0.shape[-1]) if has_scatter else out0.view(-1, *out0.shape[-2:]))
     x_storage = _canonicalize_storage(x.storage, 2 if has_gather_tma else 3, flex.lhs_data)
     w_storage = _canonicalize_storage(w.storage, 3, flex.rhs_data)
-    if is_ragged and len(y.storage.data.shape) == 4:
-        y.storage.data = y.storage.data.squeeze(1)
-    y_storage = _canonicalize_storage(y.storage, 2 if has_scatter_tma else 3 if is_ragged else 4, flex.out_data)
+    y_storage = _canonicalize_storage(y.storage, 2 if has_scatter_tma else 3, flex.out_data)
     # create tma descriptor for x
     x_tma_mode = "gather" if has_gather_tma else None if (has_gather and not has_gather_tma) else "ragged" if is_ragged else "dense"
     x_tma_block_size = {
@@ -530,12 +528,10 @@ def matmul_ogs(x, w, bias,
     y_tma_block_size = {
         "ragged": [1, opt_flags.block_m, block_n],
         "scatter": [1, block_n],
-        "dense": [1, 1, opt_flags.block_m, block_n],
+        "dense": [1, opt_flags.block_m, block_n],
         None: None
     }[y_tma_mode]
     y_tensor_or_tma = y_storage.make_tma(y_tma_block_size, y_tma_mode) if opt_flags.is_persistent and y_tma_mode is not None else y_storage.data
-    y_desc_ptr_off = (y_tensor_or_tma.base.data_ptr() - y_storage.data.data_ptr()) // y_storage.data.element_size() if opt_flags.is_persistent and y_tma_mode == "ragged" else 0
-
     # create tma descriptor for w
     w_has_tma = opt_flags.is_persistent
     w_tensor_or_tma = w_storage.make_tma([1, opt_flags.block_k, opt_flags.block_n], "dense") if w_has_tma else w_storage.data
@@ -554,7 +550,7 @@ def matmul_ogs(x, w, bias,
     # launch kernel
     kernels = get_kernels(epilogue.specs, fused_activation.specs)
     (kernels._p_matmul_ogs if opt_flags.is_persistent else kernels._matmul_ogs)[(grid,)](
-                   y_tensor_or_tma, y_storage.data, y_desc_ptr_off, *out0.stride(),
+                   y_tensor_or_tma, y_storage.data, *out0.stride(),
                    *((None, out_scale, None) if out_has_mx else out0_flex),
                    *out_scale_strides[-3:],
                    x_tensor_or_tma, x_storage.data, *x_strides,
@@ -564,7 +560,6 @@ def matmul_ogs(x, w, bias,
                    flex.rhs_data.scale,
                    w_scale_tensor_or_tma, *w_scale_strides,
                    bias, bias_stride,
-                   y_storage.data.shape[-2],
                    x.shape[-2],
                    x.shape[-2] if routing_data.expt_hist is None else None,
                    N, K,

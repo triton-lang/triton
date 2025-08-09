@@ -79,7 +79,7 @@ _matmul_ogs_repr = make_matmul_repr("_p_matmul_ogs", [0, 1, 2])
 @triton.jit(do_not_specialize=["TOKENS_PER_EXPT_FOR_ANNOTATION"],
             repr=_matmul_ogs_repr, launch_metadata=matmul_launch_metadata)
 def _p_matmul_ogs(
-             Y, YPtr, y_desc_ptr_off, stride_y_k, stride_y_z, stride_y_m, stride_y_n,
+             Y, YPtr, stride_y_k, stride_y_z, stride_y_m, stride_y_n,
              YExpectedScale, YActualScale, YChecksumScale,
              stride_y_mx_z, stride_y_mx_m, stride_y_mx_n,
              X, XPtr, stride_x_z, stride_x_m, stride_x_k,
@@ -89,7 +89,7 @@ def _p_matmul_ogs(
              WScale,
              MxScale, stride_mx_e, stride_mx_k, stride_mx_n,
              B, stride_b_e, # Bias
-             NRowsY, NRows, M, N, K, # shapes
+             NRows, M, N, K, # shapes
              # expt data
              Betas, Gammas,
              GatherIndx,
@@ -132,7 +132,7 @@ def _p_matmul_ogs(
 
     # why is this faster than using host-side tensor descriptor?!
     if Y_TMA_MODE is not None:
-        Y = tl.make_tensor_descriptor(YPtr + y_desc_ptr_off, Y.shape, Y.strides[:-1] + (1,), Y.block_shape)
+        Y = tl.make_tensor_descriptor(YPtr, Y.shape, Y.strides[:-1] + (1,), Y.block_shape)
 
     is_microscaled_format: tl.constexpr = MxScale is not None
     MX_PACK_DIVISOR: tl.constexpr = MXFP_BLOCK_SIZE
@@ -435,8 +435,9 @@ def _p_matmul_ogs(
                 out = tl.reshape(out, [1] + out.shape)
                 store_ragged(Y, start_m1, eM1, [pid_k, off_m1, out_off_n], out, ragged_dim=1)
             elif Y_TMA_MODE == "dense":
-                out = tl.reshape(out, [1, 1] + out.shape)
-                Y.store([pid_k, start_z1, off_m1, out_off_n], out)
+                out = tl.reshape(out, [1] + out.shape)
+                off_kz = pid_k * batch_size + start_z1
+                Y.store([off_kz, off_m1, out_off_n], out)
             else:
                 tl.static_assert(Y_TMA_MODE is None)
                 offs_y_n = out_off_n + tl.arange(0, OUT_BLOCK_N)
