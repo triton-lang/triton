@@ -519,11 +519,11 @@ public:
       kWidth *= kPack;
 
     // For FA kernel with f16 elementTy, we limit the 2nd dot to have
-    // kWidth = 4 so that the coversion from #mma (result of 1st dot)
+    // kWidth = 8 so that the coversion from #mma (result of 1st dot)
     // to #dotOp (operand 0 of 2nd dot) is a no-op.
     // TODO (lixun): relax the condition for 8-bit elementTy.
     if ((aElemTy.isF16() || aElemTy.isBF16()) && isChainDotTail(dotOp))
-      kWidth = 4;
+      kWidth = 8;
 
     Value newDot;
     if (withScale) {

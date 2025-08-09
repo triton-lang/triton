@@ -774,6 +774,30 @@ bool cvtNeedsSharedMemory(RankedTensorType srcTy, RankedTensorType dstTy) {
          !cvtNeedsWarpShuffle(srcTy, dstTy);
 }
 
+// We can transfer data within a warp to convert from a special AMDMFMA layout
+// to a Dot-Operand layout. This is typically useful for FA-like kernels, where
+// the result of the first dot operation is used as input to the second. The
+// conversion requires the data type to be fp16 or bf16, with an AMDMFMA16x16
+// layout, the isTranspose = true, and at least two tiles per warp along the
+// m-dimension.
+bool cvtIntraWarp(RankedTensorType srcTy, RankedTensorType dstTy) {
+  auto srcLayout = dyn_cast<AMDMfmaEncodingAttr>(srcTy.getEncoding());
+  auto dstLayout = dyn_cast<DotOperandEncodingAttr>(dstTy.getEncoding());
+  if (!srcLayout || !dstLayout)
+    return false;
+  auto parentLayout = dyn_cast<AMDMfmaEncodingAttr>(dstLayout.getParent());
+  if (!parentLayout)
+    return false;
+  auto srcShape = srcTy.getShape();
+  Type elemType = srcTy.getElementType();
+  return srcLayout.getVersion() == 4 && srcLayout.getMDim() == 16 &&
+         srcLayout.getNDim() == 16 && (elemType.isF16() || elemType.isBF16()) &&
+         srcTy.getRank() == 2 && srcShape[0] >= 16 * 2 &&
+         srcLayout.getWarpsPerCTA().back() == 1 &&
+         srcLayout.getIsTransposed() && dstLayout.getKWidth() == 8 &&
+         parentLayout.getMDim() == 32 && parentLayout.getNDim() == 32;
+}
+
 namespace {
 
 /// A data structure similar to SetVector but maintains
