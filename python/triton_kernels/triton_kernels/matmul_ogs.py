@@ -514,24 +514,16 @@ def matmul_ogs(x, w, bias,
     w_storage = _canonicalize_storage(w.storage, 3, flex.rhs_data)
     y_storage = _canonicalize_storage(y.storage, 2 if has_scatter_tma else 3, flex.out_data)
     # create tma descriptor for x
-    x_tma_mode = "gather" if has_gather_tma else None if (has_gather and not has_gather_tma) else "ragged" if is_ragged else "dense"
-    x_tma_block_size = {
-        "ragged": [1, opt_flags.block_m, opt_flags.block_k],
-        "gather": [1, opt_flags.block_k],
-        "dense": [1, opt_flags.block_m, opt_flags.block_k],
-        None: None
-    }[x_tma_mode]
-    x_tensor_or_tma = x_storage.make_tma(x_tma_block_size, x_tma_mode) if opt_flags.is_persistent and x_tma_mode is not None else x_storage.data
+    x_has_tma = opt_flags.is_persistent and (has_gather_tma or not has_gather)
+    x_tma_block_size = [1, opt_flags.block_k] if has_gather_tma else [1, opt_flags.block_m, opt_flags.block_k]
+    x_tma_mode = None if not x_has_tma else "ragged" if is_ragged and not has_gather_tma else "dense"
+    x_tensor_or_tma = x_storage.make_tma(x_tma_block_size, x_tma_mode) if x_has_tma else x_storage.data
     # create tma descriptor for y
+    y_has_tma = opt_flags.is_persistent and (has_scatter_tma or not has_scatter)
     block_n = opt_flags.block_n // opt_flags.epilogue_subtile // fused_activation.reduction_n
-    y_tma_mode = "scatter" if has_scatter_tma else None if (has_scatter and not has_scatter_tma) else "ragged" if is_ragged else "dense"
-    y_tma_block_size = {
-        "ragged": [1, opt_flags.block_m, block_n],
-        "scatter": [1, block_n],
-        "dense": [1, opt_flags.block_m, block_n],
-        None: None
-    }[y_tma_mode]
-    y_tensor_or_tma = y_storage.make_tma(y_tma_block_size, y_tma_mode) if opt_flags.is_persistent and y_tma_mode is not None else y_storage.data
+    y_tma_block_size = [1, block_n] if has_scatter_tma else [1, opt_flags.block_m, block_n]
+    y_tma_mode = None if not y_has_tma else "ragged" if is_ragged and not has_scatter_tma else "dense"
+    y_tensor_or_tma = y_storage.make_tma(y_tma_block_size, y_tma_mode) if y_has_tma else y_storage.data
     # create tma descriptor for w
     w_has_tma = opt_flags.is_persistent
     w_tensor_or_tma = w_storage.make_tma([1, opt_flags.block_k, opt_flags.block_n], "dense") if w_has_tma else w_storage.data
@@ -596,7 +588,6 @@ def matmul_ogs(x, w, bias,
                    UPCAST_INDICES=should_upcast_indices(x, w, out0),
                    X_TMA_MODE=x_tma_mode,
                    Y_TMA_MODE=y_tma_mode,
-                   DISABLE_Y_TMA=out0.stride(-2) * out0.dtype.itemsize % 16 != 0,
                    SWAP_XW=preprocessing_features.swap_xw,
                    IS_EPILOGUE_DEQUANT_MXFP8=epilogue.specs.name == FnName.DEQUANTIZE_MXFP8.name,
                    NUM_SMS = grid if opt_flags.is_persistent else 0,

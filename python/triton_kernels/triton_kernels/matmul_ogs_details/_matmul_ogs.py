@@ -76,7 +76,6 @@ def _matmul_ogs(
              Y_TMA_MODE: tl.constexpr,
              TOKENS_PER_EXPT_FOR_ANNOTATION=None,
              UPCAST_INDICES: tl.constexpr = False,
-             DISABLE_Y_TMA: tl.constexpr = True,
              SWAP_XW: tl.constexpr = False,
              IS_EPILOGUE_DEQUANT_MXFP8: tl.constexpr = False):
 
