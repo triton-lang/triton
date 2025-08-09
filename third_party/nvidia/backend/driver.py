@@ -552,7 +552,6 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
 
   if(launch_exit_hook != Py_None){{
     PyObject* ret = PyObject_CallOneArg(launch_exit_hook, launch_metadata);
-    Py_DECREF(args);
     if (!ret)
       return NULL;
     Py_DECREF(ret);
