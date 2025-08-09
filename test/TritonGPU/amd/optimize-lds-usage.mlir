@@ -5,9 +5,9 @@
 // CHECK-LABEL: alloc_convert_load
 // CHECK-32KLIMIT-LABEL: alloc_convert_load
 // CHECK: %0 = ttg.local_alloc %arg0 : {{.*}}#blocked{{.*}}#shared
-// CHECK: %1 = ttg.convert_layout %arg1 {{.*}}: {{.*}}#blocked{{.*}}#blocked1
-// CHECK: %2 = ttg.convert_layout %1 {{.*}}: {{.*}}#blocked1{{.*}}#mma
-// CHECK: %3 = ttg.local_load %0 : {{.*}}#shared{{.*}}#ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>>
+// CHECK: %1 = ttg.convert_layout %arg1 {{.*}}: {{.*}}#blocked{{.*}}#mma
+// CHECK: %2 = ttg.convert_layout %1 {{.*}}: {{.*}}#mma{{.*}}#mma1
+// CHECK: %3 = ttg.local_load %0 : {{.*}}#shared{{.*}}#ttg.dot_op<{opIdx = 0, parent = #mma1, kWidth = 4}>>
 #blocked = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [16, 4], warpsPerCTA = [1, 8], order = [0, 1]}>
 #mma = #ttg.amd_mfma<{version = 2, warpsPerCTA = [1, 8], instrShape = [32, 32], isTransposed = false}>
 #shared = #ttg.swizzled_shared<{vec = 4, perPhase = 1, maxPhase = 16, order = [0, 1]}>
@@ -47,16 +47,17 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 64 : i32}
 // -----
 
 // CHECK-DAG: [[$BLOCKED1:#.*]] = #ttg.blocked<{sizePerThread = [1, 8, 1], threadsPerWarp = [1, 16, 4], warpsPerCTA = [1, 1, 8], order = [0, 1, 2]}>
-// CHECK-DAG: [[$BLOCKED2:#.*]] = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [1, 8, 8], warpsPerCTA = [1, 2, 4], order = [1, 2, 0]}>
-// CHECK-DAG: [[$MMA:#.*]] = #ttg.amd_mfma<{version = 2, warpsPerCTA = [1, 1, 8], instrShape = [32, 32], isTransposed = false}>
+// CHECK-DAG: [[$MMA:#.*]] = #ttg.amd_mfma<{version = 2, warpsPerCTA = [2, 4, 1], instrShape = [32, 32], isTransposed = false}>
+// CHECK-DAG: [[$MMA1:#.*]] = #ttg.amd_mfma<{version = 2, warpsPerCTA = [1, 1, 8], instrShape = [32, 32], isTransposed = false}>
+
 // Check that optimization works with 3d tensors
 // in case of relatively small scratch buffer
 // CHECK-LABEL: alloc_convert_3d_load
 // CHECK-32KLIMIT-LABEL: alloc_convert_3d_load
 // CHECK: [[V0:%.*]] = ttg.local_alloc {{.*}}[[$BLOCKED1]]{{.*}}
-// CHECK: [[V1:%.*]] = ttg.convert_layout {{.*}}[[$BLOCKED1]]{{.*}}[[$BLOCKED2]]
-// CHECK: [[V2:%.*]] = ttg.convert_layout [[V1]] {{.*}}: {{.*}}[[$BLOCKED2]]{{.*}}[[$MMA]]
-// CHECK: [[V3:%.*]] = ttg.local_load [[V0]] : {{.*}}#ttg.dot_op<{opIdx = 0, parent = [[$MMA]], kWidth = 4}>>
+// CHECK: [[V1:%.*]] = ttg.convert_layout {{.*}}[[$BLOCKED1]]{{.*}}[[$MMA]]
+// CHECK: [[V2:%.*]] = ttg.convert_layout [[V1]] {{.*}}: {{.*}}[[$MMA]]{{.*}}[[$MMA1]]
+// CHECK: [[V3:%.*]] = ttg.local_load [[V0]] : {{.*}}#ttg.dot_op<{opIdx = 0, parent = [[$MMA1]], kWidth = 4}>>
 #blocked = #ttg.blocked<{sizePerThread = [1, 8, 1], threadsPerWarp = [1, 16, 4], warpsPerCTA = [1, 1, 8], order = [0, 1, 2]}>
 #mma = #ttg.amd_mfma<{version = 2, warpsPerCTA = [1, 1, 8], instrShape = [32, 32], isTransposed = false}>
 #shared = #ttg.swizzled_shared<{vec = 4, perPhase = 1, maxPhase = 16, order = [0, 1, 2]}>
