@@ -57,7 +57,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
     // CHECK: mov.u32       [[TID:%.*]], %tid.x;
     // CHECK: and.b32       [[L0_VAL:%.*]], [[TID]], 1;
-    // CHECK: setp.eq.s32   [[L0_OFF:%.*]], [[L0_VAL]], 0;
+    // CHECK: setp.eq.b32   [[L0_OFF:%.*]], [[L0_VAL]], 0;
 
     // This is used to perform 16 independent selects in stage 1.
 
@@ -106,10 +106,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     // the predicate (step 3).
 
     // CHECK-DAG: and.b32           [[L1_VAL:%.*]], [[TID]], 2;
-    // CHECK-DAG: setp.eq.s32       [[L1_OFF:%.*]], [[L1_VAL]], 0;
+    // CHECK-DAG: setp.eq.b32       [[L1_OFF:%.*]], [[L1_VAL]], 0;
     // CHECK-COUNT-16: selp.b32     {{.*}}, {{.*}}, [[L1_OFF]];
 
-    // CHECK-COUNT-64: bfe.u32
+    // CHECK-COUNT-48: prmt.b32
     // CHECK-COUNT-64: st.volatile.global.b8
 
     %0 = ttg.convert_layout %arg0 : tensor<128x64xf8E5M2, #mma> -> tensor<128x64xf8E5M2, #dot_op>

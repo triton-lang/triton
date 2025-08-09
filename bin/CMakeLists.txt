@@ -1,5 +1,3 @@
-get_property(dialect_libs GLOBAL PROPERTY MLIR_DIALECT_LIBS)
-get_property(conversion_libs GLOBAL PROPERTY MLIR_CONVERSION_LIBS)
 get_property(triton_libs GLOBAL PROPERTY TRITON_LIBS)
 
 add_llvm_executable(triton-opt triton-opt.cpp PARTIAL_SOURCES_INTENDED)
@@ -7,8 +5,6 @@ add_llvm_executable(triton-opt triton-opt.cpp PARTIAL_SOURCES_INTENDED)
 # TODO: what's this?
 llvm_update_compile_flags(triton-opt)
 target_link_libraries(triton-opt PRIVATE
-  ${dialect_libs}
-  ${conversion_libs}
   ${triton_libs}
   # tests
   TritonTestAnalysis
@@ -17,7 +13,7 @@ target_link_libraries(triton-opt PRIVATE
   TritonTestProton
   # MLIR core
   MLIROptLib
-  MLIRPass
+  MLIRRegisterAllPasses
   MLIRTransforms
 )
 
@@ -28,8 +24,6 @@ mlir_check_all_link_libraries(triton-reduce)
 
 llvm_update_compile_flags(triton-reduce)
 target_link_libraries(triton-reduce PRIVATE
-  ${dialect_libs}
-  ${conversion_libs}
   ${triton_libs}
   # tests
   TritonTestAnalysis
@@ -38,7 +32,7 @@ target_link_libraries(triton-reduce PRIVATE
   TritonTestProton
   # MLIR core
   MLIRReduceLib
-  MLIRPass
+  MLIRRegisterAllPasses
   MLIRTransforms
 )
 
@@ -48,8 +42,6 @@ add_llvm_executable(triton-lsp triton-lsp.cpp PARTIAL_SOURCES_INTENDED)
 
 llvm_update_compile_flags(triton-lsp)
 target_link_libraries(triton-lsp PRIVATE
-  ${dialect_libs}
-  ${conversion_libs}
   ${triton_libs}
   # tests
   TritonTestAnalysis
@@ -58,7 +50,7 @@ target_link_libraries(triton-lsp PRIVATE
   TritonTestProton
   # MLIR core
   MLIRLspServerLib
-  MLIRPass
+  MLIRRegisterAllPasses
   MLIRTransforms
 )
 
@@ -88,10 +80,10 @@ export_executable_symbols_for_plugins(triton-llvm-opt)
 add_llvm_executable(triton-tensor-layout triton-tensor-layout.cpp PARTIAL_SOURCES_INTENDED)
 target_link_libraries(triton-tensor-layout PRIVATE
   ${triton_libs}
-  ${conversion_libs}
-  ${dialect_libs}
   TritonTestAnalysis
   TritonTestDialect
   TritonTestProton
   TritonAMDGPUTestAnalysis
+  MLIRRegisterAllPasses
+  MLIRTransforms
   )

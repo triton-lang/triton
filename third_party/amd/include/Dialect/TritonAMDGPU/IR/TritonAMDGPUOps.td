@@ -146,13 +146,6 @@ def ExtractSliceOp : TT_AMDGPU_Op<"extract_slice", [Pure]> {
   );
   let results = (outs AnyRankedTensor:$result);
 
-  let builders = [
-      // Build a ExtractSliceOp with static offsets and the same result type
-      OpBuilder<(ins "RankedTensorType":$resultType,
-          "Value":$source,
-          "ArrayRef<int64_t>": $static_offsets)>,
-  ];
-
   let extraClassDeclaration = [{
     std::array<unsigned, 3> getArrayAttrMaxRanks() {
       unsigned rank = getSource().getType().getRank();

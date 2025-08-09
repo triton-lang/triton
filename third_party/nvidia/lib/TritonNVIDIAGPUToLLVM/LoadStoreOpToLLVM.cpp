@@ -903,7 +903,7 @@ public:
         Value atom = rewriter
                          .create<LLVM::AtomicRMWOp>(
                              loc, *llvmAtomicBinOp, rmwPtr, valElements[i],
-                             *llvmAtomicMemOrdering, StringRef("agent"))
+                             *llvmAtomicMemOrdering, StringRef("device"))
                          .getResult();
         // Handle the 2 bf16 case
         if (packed == 2 && valueElemNBits == 16) {
@@ -911,7 +911,7 @@ public:
                             .create<LLVM::AtomicRMWOp>(
                                 loc, *llvmAtomicBinOp, ptrElements[i + 1],
                                 valElements[i + 1], *llvmAtomicMemOrdering,
-                                StringRef("agent"))
+                                StringRef("device"))
                             .getResult();
           auto vecTy = vec_ty(valueElemTy, vec);
           auto tmp =
