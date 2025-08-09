@@ -621,27 +621,38 @@ LogicalResult TMEMCopyOp::verify() {
 // -- TMEMSubSliceOp --
 LogicalResult TMEMSubSliceOp::verify() {
   auto srcTy = cast<triton::gpu::MemDescType>(getSrc().getType());
+  auto dstTy = cast<triton::gpu::MemDescType>(getResult().getType());
   auto encoding = dyn_cast<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
-      srcTy.getEncoding());
+      dstTy.getEncoding());
   if (!encoding)
     return emitOpError("The source must be a tensor memory buffer.");
-  if (!llvm::is_contained({64, 128}, encoding.getBlockM())) {
-    return emitOpError("The source tensor memory descriptor must have a 128xN "
-                       "or 64xN layout, got block_m=")
-           << encoding.getBlockM();
+  if (srcTy.getElementType() != dstTy.getElementType())
+    return emitOpError(
+        "The source and result must have the same element type.");
+  if (srcTy.getAllocShape() != dstTy.getAllocShape())
+    return emitOpError("The source and result must have the same alloc shape.");
+  if (srcTy.getRank() != 2)
+    return emitOpError("The result must be a 2D tensor memory buffer.");
+  if (dstTy.getRank() != 2)
+    return emitOpError("The result must be a 2D tensor memory buffer.");
+  if (dstTy.getDimSize(0) != srcTy.getDimSize(0))
+    return emitOpError("The result must have the same number of rows as the "
+                       "source.");
+  auto offset = getN();
+  if (offset & (dstTy.getDimSize(1) - 1)) {
+    return emitError("The split offset may not touch the tile");
   }
-  auto dstTy = cast<triton::gpu::MemDescType>(getResult().getType());
-  auto dstEncoding = dyn_cast<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
-      dstTy.getEncoding());
-  if (!dstEncoding)
-    return emitOpError("The destination must be a tensor memory buffer.");
-  if (dstEncoding.getBlockM() != encoding.getBlockM() ||
-      dstEncoding.getCTASplitM() != encoding.getCTASplitM() ||
-      dstEncoding.getCTASplitN() != encoding.getCTASplitN() ||
-      dstEncoding.getUnpacked() != encoding.getUnpacked())
-    return emitOpError("The destination must have the same block size and "
-                       "CTASplit size as the source.");
-  return mlir::success();
+  if (offset >= srcTy.getDimSize(1)) {
+    return emitError("The split offset may not exceed the source shape");
+  }
+
+  auto offsetMap = getOffsetMap(dstTy, getN());
+  auto kBlock = StringAttr::get(getContext(), "block");
+  if (offsetMap[kBlock] != 0) {
+    return emitOpError("The block dimension must be 0.");
+  }
+
+  return success();
 }
 
 void TMEMSubSliceOp::build(OpBuilder &builder, OperationState &state,
@@ -649,15 +660,7 @@ void TMEMSubSliceOp::build(OpBuilder &builder, OperationState &state,
   auto allocTy = cast<triton::gpu::MemDescType>(alloc.getType());
   SmallVector<int64_t> shape(allocTy.getShape());
   shape.back() = size;
-  auto encoding =
-      cast<triton::nvidia_gpu::TensorMemoryEncodingAttr>(allocTy.getEncoding());
-  unsigned newBlockN = std::min<unsigned>(encoding.getBlockN(), size);
-  auto newEncoding = triton::nvidia_gpu::TensorMemoryEncodingAttr::get(
-      builder.getContext(), encoding.getBlockM(), newBlockN,
-      encoding.getUnpacked(), encoding.getCTASplitM(), encoding.getCTASplitN());
-  auto subsliceType = gpu::MemDescType::get(
-      shape, allocTy.getElementType(), newEncoding, allocTy.getMemorySpace(),
-      allocTy.getMutableMemory(), allocTy.getAllocShape());
+  auto subsliceType = allocTy.cloneWith(shape, allocTy.getElementType());
   build(builder, state, subsliceType, alloc, offset);
 }
 

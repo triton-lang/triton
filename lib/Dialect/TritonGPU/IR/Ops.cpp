@@ -803,6 +803,9 @@ LogicalResult MemDescSubsliceOp::verify() {
       if (offset & (dstTy.getDimSize(dim) - 1)) {
         return emitError("The split offset may not touch the tile");
       }
+      if (offset >= srcTy.getDimSize(dim)) {
+        return emitError("The split offset may not exceed the source shape");
+      }
     }
   }
 

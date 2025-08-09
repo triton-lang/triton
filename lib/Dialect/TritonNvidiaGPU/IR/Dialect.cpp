@@ -281,6 +281,21 @@ LogicalResult impl::verifyMMAv5Op(Operation *op) {
   return success();
 }
 
+llvm::MapVector<StringAttr, int32_t> getOffsetMap(gpu::MemDescType memdesc,
+                                                  int32_t n) {
+  auto llInv = toLinearLayout(memdesc).pseudoinvert();
+  auto dimNames = llvm::to_vector(llInv.getInDimNames());
+  llvm::SmallVector<std::pair<StringAttr, int32_t>> logicalOffsets;
+  for (auto dim : dimNames)
+    logicalOffsets.push_back({dim, 0});
+  logicalOffsets.back().second = n;
+  auto rowCol = llInv.apply(logicalOffsets);
+  auto rowColMap = llvm::MapVector<StringAttr, int32_t>();
+  for (auto [dim, offset] : rowCol)
+    rowColMap[dim] = offset;
+  return rowColMap;
+}
+
 } // namespace nvidia_gpu
 } // namespace triton
 } // namespace mlir

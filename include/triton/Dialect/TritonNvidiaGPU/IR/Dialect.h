@@ -29,6 +29,9 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Dialect.h"
+#include "llvm/ADT/MapVector.h"
+
+#include <cstdint>
 
 // TritonNvidiaGPU depends on Triton
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -79,6 +82,9 @@ bool isDistributedLayoutTMemCompatible(Operation *op,
 bool isDistributedLayoutSplitMTmemLoadStore(RankedTensorType tensorType,
                                             gpu::MemDescType memType,
                                             int numWarps);
+
+llvm::MapVector<StringAttr, int32_t> getOffsetMap(gpu::MemDescType memdesc,
+                                                  int32_t n);
 
 } // namespace mlir::triton::nvidia_gpu
 
