@@ -29,8 +29,9 @@ def mfma_scaled(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, acc, _se
             "Expected lhs layout to be a DotOperandLayout with parent matching MFMA layout"
     assert (isinstance(rhs.type.layout, DotOperandLayout) and rhs.type.layout.parent == layout), \
             "Expected rhs layout to be a DotOperandLayout with parent matching MFMA layout"
-    assert lhs_format in {"e2m1", "e4m3", "e5m2"}, f"Unsupported lhs_format: {lhs_format}"
-    assert rhs_format in {"e2m1", "e4m3", "e5m2"}, f"Unsupported rhs_format: {rhs_format}"
+
+    assert lhs_format.value in {"e2m1", "e4m3", "e5m2"}, f"Unsupported lhs_format: {lhs_format.value}"
+    assert rhs_format.value in {"e2m1", "e4m3", "e5m2"}, f"Unsupported rhs_format: {rhs_format.value}"
 
     tensor = _semantic.dot_scaled(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, acc, False, True, True,
                                   float32)
