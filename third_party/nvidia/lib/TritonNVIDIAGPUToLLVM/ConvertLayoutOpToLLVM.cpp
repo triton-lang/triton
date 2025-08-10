@@ -172,9 +172,12 @@ struct ConvertLayoutOpSwizzlingConversion
     auto affineOffset = b.i32_val(0);
     auto maskSpanAffineOffset = 0;
     auto noPaddingOffset = [](Value v) { return v; };
+    auto cvt = srcLayout.invertAndCompose(dstLayout);
+    auto kWarp = str_attr("warp");
+    bool isWarpSync = cvt.isTrivialOver(kWarp);
     for (int i = 0; i < nReps; ++i) {
       if (i > 0)
-        b.barrier();
+        targetInfo.barrier(loc, rewriter, isWarpSync);
 
       auto tileInVals =
           to_vector(ArrayRef(permutedInVals).slice(i * tileSize, tileSize));
@@ -192,7 +195,7 @@ struct ConvertLayoutOpSwizzlingConversion
             maskSpanAffineOffset, llvmElemTy, rewriter, targetInfo);
         assert(succeeded(result));
       }
-      b.barrier();
+      targetInfo.barrier(loc, rewriter, isWarpSync);
       // Load
       SmallVector<Value> tileOutVals;
       // idxDst 0: ld.shared, idxDst 1: ldmatrix, idxDst 2: ldmatrix.trans

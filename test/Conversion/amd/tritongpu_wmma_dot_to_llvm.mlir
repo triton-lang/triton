@@ -207,6 +207,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   tt.func @slice_wmma1_to_blocked(%arg0: tensor<16xi32, #ttg.slice<{dim = 0, parent = #mma1}>>, %arg1: !tt.ptr<i32>) {
     // CHECK-COUNT-1: llvm.extractvalue {{.*}} : !llvm.struct<(i32)>
     // CHECK-COUNT-1: llvm.insertelement {{.*}} : vector<1xi32>
+    // CHECK: llvm.amdgcn.wave.barrier
     %0 = ttg.convert_layout %arg0 {allocation.offset = 0 : i32} : tensor<16xi32, #ttg.slice<{dim = 0, parent = #mma1}>> -> tensor<16xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
     // CHECK-COUNT-16: llvm.insertelement {{.*}} : vector<1xi32>
     %ptr0 = tt.splat %arg1 : !tt.ptr<i32> -> tensor<16x!tt.ptr<i32>, #ttg.slice<{dim = 0, parent = #blocked}>>
@@ -242,6 +243,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   tt.func @slice_wmma2_to_blocked(%arg0: tensor<16xi32, #ttg.slice<{dim = 0, parent = #mma2}>>, %arg1: !tt.ptr<i32>) {
     // CHECK-COUNT-1: llvm.extractvalue {{.*}} : !llvm.struct<(i32)>
     // CHECK-COUNT-1: llvm.insertelement {{.*}} : vector<1xi32>
+    // CHECK: llvm.amdgcn.wave.barrier
     %0 = ttg.convert_layout %arg0 {allocation.offset = 0 : i32} : tensor<16xi32, #ttg.slice<{dim = 0, parent = #mma2}>> -> tensor<16xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
     // CHECK-COUNT-16: llvm.insertelement {{.*}} : vector<1xi32>
     %ptr0 = tt.splat %arg1 : !tt.ptr<i32> -> tensor<16x!tt.ptr<i32>, #ttg.slice<{dim = 0, parent = #blocked}>>
