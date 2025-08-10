@@ -6,6 +6,7 @@ import sys
 import torch
 import triton
 from enum import Enum, auto
+import math
 # utilities
 from triton_kernels import target_info
 from triton_kernels.numerics import InFlexData, OutFlexData
@@ -458,6 +459,11 @@ def matmul_ogs(x, w, bias,
         opt_flags, preprocessing_features, postprocessing_features
     )
     memory = apply_allocation(allocation, y)
+    if batch_size * M * N == 0:
+        ret = memory["output"].squeeze(0)
+        if not is_input_batched:
+            ret = ret.squeeze(0)
+        return ret
     # TMA descriptors require a global memory allocation
     if opt_flags.is_persistent:
         triton.set_allocator(get_per_device_per_stream_alloc_fn(x.device))
@@ -509,7 +515,7 @@ def matmul_ogs(x, w, bias,
     has_scatter = writeback_idxs is not None
     has_gather_tma = has_gather and target_info.has_tma_gather()
     has_scatter_tma = has_scatter and target_info.has_tma_gather()
-    y = wrap_torch_tensor(out0.view(-1, out0.shape[-1]) if has_scatter else out0.view(-1, *out0.shape[-2:]))
+    y = wrap_torch_tensor(out0.view(math.prod(out0.shape[:-1]), out0.shape[-1]) if has_scatter else out0.view(math.prod(out0.shape[:-2]), *out0.shape[-2:]))
     x_storage = _canonicalize_storage(x.storage, 2 if has_gather_tma else 3, flex.lhs_data)
     w_storage = _canonicalize_storage(w.storage, 3, flex.rhs_data)
     y_storage = _canonicalize_storage(y.storage, 2 if has_scatter_tma else 3, flex.out_data)
