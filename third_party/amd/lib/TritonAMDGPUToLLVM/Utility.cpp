@@ -284,6 +284,14 @@ Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, Value i,
                        b.i32_val(0x1f));
 }
 
+Value permute(Location loc, RewriterBase &rewriter, Value a, Value b,
+              Value selector) {
+  Value args[] = {a, b, selector};
+  auto op = createLLVMIntrinsicCallOp(rewriter, loc, "llvm.amdgcn.perm", i32_ty,
+                                      args);
+  return op.getResult(0);
+}
+
 Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
                ProgramIDDim axis) {
   Value blockId =

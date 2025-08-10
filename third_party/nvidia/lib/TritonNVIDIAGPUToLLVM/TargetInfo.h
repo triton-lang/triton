@@ -36,6 +36,9 @@ public:
   Value shuffleIdx(RewriterBase &rewriter, Location loc, Value val,
                    Value i) const override;
 
+  Value permute(RewriterBase &rewriter, Location loc, Value a, Value b,
+                Value selector) const override;
+
   Value programId(RewriterBase &rewriter, Location loc, ModuleOp moduleOp,
                   ProgramIDDim axis) const override;
 

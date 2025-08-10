@@ -12,7 +12,6 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Tools/GenericSwizzling.h"
 #include "triton/Tools/LayoutUtils.h"
-#include "llvm/ADT/SmallSet.h"
 
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 
@@ -20,6 +19,7 @@ namespace {
 
 using namespace mlir;
 using namespace mlir::triton::gpu;
+using TranspositionInfo = DecomposedWarpConversion::TranspositionInfo;
 
 constexpr int kPtrBitWidth = 64;
 struct ConvertLayoutOpConversion
@@ -271,8 +271,11 @@ struct ConvertLayoutOpConversion
     auto dstTy = op.getType();
     StringAttr kReg = str_attr("register");
     StringAttr kLane = str_attr("lane");
+    auto elemTy = getTypeConverter()->convertType(srcTy.getElementType());
+    int bitwidth =
+        elemTy.isIntOrFloat() ? elemTy.getIntOrFloatBitWidth() : kPtrBitWidth;
 
-    auto factors = getWarpLayoutConvertDecomposition(srcTy, dstTy);
+    auto factors = getWarpLayoutConvertDecomposition(srcTy, dstTy, bitwidth);
     auto &[pReg, pLane, mixedTranspositions] = factors;
     int m = mixedTranspositions.size();
     bool pLaneIsTrivial = squareSublayoutIsIdentity(pLane, kLane);
@@ -320,83 +323,53 @@ struct ConvertLayoutOpConversion
       regDim = pRegDim;
     }
 
-    // The `mixedTranspositions` and `pReg` apply to register indices before any
-    // packing (i.e., register indices should be read as element indices). To
-    // ensure that only elements which end up in the same destination lane are
-    // packed into a common register, we swap any 'low' register bits out with
-    // unused higher index register bits in the list of `mixedTranspositions`
-    // and apply their effects to `inVals` before packing.
-    //
     // The fraction of elements in a lane that must be moved to another lane
     // under the layout conversion is 1 - (1/2)^m. The remaining fraction can be
     // packed into 32-bit registers so long as they fit.
-    auto elemTy = getTypeConverter()->convertType(srcTy.getElementType());
-    int bitwidth =
-        elemTy.isIntOrFloat() ? elemTy.getIntOrFloatBitWidth() : kPtrBitWidth;
     int nPackPrelim = llvm::Log2_32(std::clamp(32 / bitwidth, 1, 4));
     int nReg = pReg.getTotalInDimSizeLog2();
     int nPack = std::min(nPackPrelim, nReg - m);
 
-    // Determine any needed register bit conjugations.
-    SmallVector<std::pair<int32_t, int32_t>> regConjugations;
-    llvm::SmallSet<int32_t, 6> usedRegBits;
-    if (nPack > 0) {
-      // Any `regBitIdx` not originally in `mixedTranspositions` and `>= nPack`
-      // can be used to swap out the original 'low' bit index.
-      for (auto [regBitIdx, laneBitIdx] : mixedTranspositions)
-        usedRegBits.insert(regBitIdx);
-      int potentialHighIdx = nPack;
-      for (auto &[regBitIdx, laneBitIdx] : mixedTranspositions) {
-        if (regBitIdx < nPack) {
-          while (usedRegBits.contains(potentialHighIdx))
-            ++potentialHighIdx;
-          regConjugations.emplace_back(regBitIdx, potentialHighIdx);
-          regBitIdx = potentialHighIdx++;
-        }
-      }
-    }
-
-    // Apply pReg and any conjugations.
+    // Apply pReg.
     SmallVector<Value> newInVals(regDim);
-    auto swapBits = [](const auto &p, int num) {
-      int bit0 = (num >> p.first) & 1;
-      int bit1 = (num >> p.second) & 1;
-      if (bit0 != bit1)
-        num ^= ((1 << p.first) | (1 << p.second));
-      return num;
-    };
-    auto applyConj = [&](int idx) {
-      for (const auto &p : regConjugations)
-        idx = swapBits(p, idx);
-      return idx;
-    };
     for (const auto &[i, v] : llvm::enumerate(inVals))
-      newInVals[applyConj(pReg.apply({{kReg, i}})[0].second)] = v;
+      newInVals[pReg.apply({{kReg, i}})[0].second] = v;
     inVals = std::move(newInVals);
 
     // Pack registers if possible.
     int elemsPerVec = 1 << nPack;
-    int bitsPacked = elemsPerVec * std::max(bitwidth, 8);
-    auto packedIntTy = int_ty(bitsPacked);
-    bool padTo32 = bitsPacked < 32;
+    int bitsPerVecElem = 32 / elemsPerVec;
     if (elemsPerVec > 1) {
       SmallVector<Value> packedVals;
       packedVals.reserve(regDim / elemsPerVec);
-      if (bitwidth < 8)
-        llvm::for_each(inVals, [&](Value &v) { v = b.zext(i8_ty, v); });
+      if (bitwidth < bitsPerVecElem) {
+        llvm::for_each(inVals, [&](Value &v) {
+          if (elemTy != int_ty(bitwidth))
+            v = b.bitcast(v, int_ty(bitwidth));
+          v = b.zext(int_ty(bitsPerVecElem), v);
+        });
+      }
       for (int i = 0; i < regDim; i += elemsPerVec) {
         auto slice = ArrayRef<Value>(inVals).slice(i, elemsPerVec);
         Value v = packLLVector(loc, slice, rewriter);
-        v = b.bitcast(v, packedIntTy);
-        if (padTo32)
-          v = b.zext(i32_ty, v);
+        v = b.bitcast(v, i32_ty);
         packedVals.emplace_back(v);
       }
       inVals = std::move(packedVals);
     }
 
+    auto isShippable = [](const TranspositionInfo &t) {
+      // The `Ship` method cannot mix elements from different registers in the
+      // same lane, so we are restricted to cycles like (l0 r1), (l0 r2), and
+      // (l0 r0 r1) which do not use both high and low register bits.
+      return t.topPreSel == t.topPostSel ||
+             (t.topPreSel == 0x5140 && t.topPostSel == 0x6240) ||
+             (t.topPreSel == 0x6420 && t.topPostSel == 0x5410) ||
+             (t.topPreSel == 0x3210 && t.topPostSel == 0x3120);
+    };
+
     SmallVector<Value> outVals;
-    if (m == 1 && pLaneIsTrivial) {
+    if (m == 1 && pLaneIsTrivial && isShippable(mixedTranspositions[0])) {
       outVals = transferWithinWarpShipImpl(loc, rewriter, inVals, nPack,
                                            mixedTranspositions[0]);
     } else {
@@ -408,10 +381,10 @@ struct ConvertLayoutOpConversion
     if (elemsPerVec > 1) {
       SmallVector<Value> unpackedVals;
       unpackedVals.reserve(regDim);
-      auto vecTy = vec_ty(bitwidth < 8 ? i8_ty : elemTy, elemsPerVec);
+      auto packedTy =
+          bitwidth < bitsPerVecElem ? int_ty(bitsPerVecElem) : elemTy;
+      auto vecTy = vec_ty(packedTy, elemsPerVec);
       auto unpackVal = [&](Value v) {
-        if (padTo32)
-          v = b.trunc(packedIntTy, v);
         v = b.bitcast(v, vecTy);
         return unpackLLVector(loc, v, rewriter);
       };
@@ -419,17 +392,14 @@ struct ConvertLayoutOpConversion
         auto unpacked = unpackVal(v);
         unpackedVals.append(unpacked.begin(), unpacked.end());
       }
-      if (bitwidth < 8)
-        llvm::for_each(unpackedVals, [&](Value &v) { v = b.trunc(elemTy, v); });
+      if (bitwidth < bitsPerVecElem) {
+        llvm::for_each(unpackedVals, [&](Value &v) {
+          v = b.trunc(int_ty(bitwidth), v);
+          if (elemTy != int_ty(bitwidth))
+            v = b.bitcast(v, elemTy);
+        });
+      }
       outVals = std::move(unpackedVals);
-    }
-
-    // Perform the second half of any prescribed register bit conjugations.
-    if (!regConjugations.empty()) {
-      SmallVector<Value> newOutVals(regDim);
-      for (const auto &[i, v] : llvm::enumerate(outVals))
-        newOutVals[applyConj(i)] = v;
-      outVals = std::move(newOutVals);
     }
 
     // If `dstLayout` has a smaller `kReg` dimension than `srcLayout` after
@@ -452,7 +422,7 @@ struct ConvertLayoutOpConversion
   SmallVector<Value> transferWithinWarpSwapImpl(
       Location loc, ConversionPatternRewriter &rewriter, ArrayRef<Value> inVals,
       int nPack, const LinearLayout &pLane, bool pLaneIsTrivial,
-      ArrayRef<std::pair<int, int>> mixedTranspositions) const {
+      ArrayRef<TranspositionInfo> mixedTranspositions) const {
     auto *ctx = rewriter.getContext();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     StringAttr kReg = str_attr("register");
@@ -485,95 +455,133 @@ struct ConvertLayoutOpConversion
     // then we can conjugate its effects through the first two stages and fuse
     // it with the second stage, resulting in `numRegs` shuffles instead.
     Value laneId = getLaneId(rewriter, loc);
+    auto pLaneInv = pLane.invert();
+    const auto &pLInvBases = pLaneInv.getBases().lookup(kLane);
 
-    // Implement r_i ^= l_j using `numRegs` independent selects.
-    auto applyConditionalSwap = [&](int rBitIdx, int lBitIdx) {
+    // Implement r_i ^= l_j using `numRegs` independent selects or permutes.
+    auto applySwap = [&](TranspositionInfo t, bool preShuf) {
+      int rIdx = t.transposition.first - nPack;
+      int origLIdx = t.transposition.second;
+      int lIdx = preShuf ? llvm::Log2_32(pLInvBases[origLIdx][0]) : origLIdx;
+      uint16_t topSel = preShuf ? t.topPreSel : t.topPostSel;
+      uint16_t botSel = preShuf ? t.botPreSel : t.botPostSel;
+
       SmallVector<Value> newVals(numRegs);
-      Value lBitVal = b.and_(laneId, b.i32_val(1 << lBitIdx));
+      Value lBitVal = b.and_(laneId, b.i32_val(1 << lIdx));
       Value lBitOff = b.icmp_eq(lBitVal, b.i32_val(0));
 
-      int tileSize = 1 << (rBitIdx + 1);
+      int tileSize = 1 << (rIdx + 1);
       int numTiles = numRegs / tileSize;
       for (int tileIdx = 0; tileIdx < numTiles; ++tileIdx) {
         int baseIdx = tileIdx * tileSize;
         for (int i = 0; i < tileSize / 2; ++i) {
-          int idx = baseIdx + i;
-          int partnerIdx = idx + (1 << rBitIdx);
-          Value val = vals[idx];
-          Value partnerVal = vals[partnerIdx];
-          newVals[idx] = b.select(lBitOff, val, partnerVal);
-          newVals[partnerIdx] = b.select(lBitOff, partnerVal, val);
+          int r0 = baseIdx + i;
+          int r1 = r0 + (1 << rIdx);
+          Value v0 = vals[r0];
+          Value v1 = vals[r1];
+          if (topSel == 0x3210 && botSel == 0x7654) {
+            newVals[r0] = b.select(lBitOff, v0, v1);
+            newVals[r1] = b.select(lBitOff, v1, v0);
+          } else {
+            Value sel00 = b.i32_val(topSel);
+            Value sel01 = b.i32_val(preShuf ? botSel : (topSel ^ 0x4444));
+            Value sel10 = b.i32_val(botSel);
+            Value sel11 = b.i32_val(preShuf ? topSel : (botSel ^ 0x4444));
+            Value sel1 = b.select(lBitOff, sel00, sel01);
+            Value sel2 = b.select(lBitOff, sel10, sel11);
+            newVals[r0] = targetInfo.permute(rewriter, loc, v0, v1, sel1);
+            newVals[r1] = targetInfo.permute(rewriter, loc, v0, v1, sel2);
+          }
         }
       }
       return newVals;
     };
 
-    auto pLaneInv = pLane.invert();
-    const auto &pLInvBases = pLaneInv.getBases().lookup(kLane);
-
-    // Perform r_i ^= l_{pLaneInv(j)}.
-    for (auto [origRBitIdx, origLBitIdx] : mixedTranspositions) {
-      int rBitIdx = origRBitIdx - nPack;
-      int lBitIdx = llvm::Log2_32(pLInvBases[origLBitIdx][0]);
-      vals = applyConditionalSwap(rBitIdx, lBitIdx);
-    }
-    // Perform l_{pLaneInv(j)} ^= r_i and apply pLane.
+    // Stage 1 (selp/prmt)
+    for (const auto &t : mixedTranspositions)
+      vals = applySwap(t, /*preShuf=*/true);
+    // Stage 2 (shfl)
     Value laneIdPerm;
-    if (pLaneIsTrivial) {
-      laneIdPerm = laneId;
-    } else {
+    if (!pLaneIsTrivial)
       laneIdPerm = triton::gpu::matrixVectorProd(b, pLaneInv, laneId);
-    }
     for (int r = 0; r < numRegs; ++r) {
       int mask = 0;
-      for (auto [origRBitIdx, lBitIdx] : mixedTranspositions) {
-        int rBitIdx = origRBitIdx - nPack;
-        if (r & (1 << rBitIdx)) {
-          mask |= pLInvBases[lBitIdx][0];
+      for (const auto &t : mixedTranspositions) {
+        int rIdx = t.transposition.first - nPack;
+        int lIdx = t.transposition.second;
+        if (r & (1 << rIdx)) {
+          mask |= pLInvBases[lIdx][0];
         }
       }
-      if (!pLaneIsTrivial || mask > 0) {
+      if (pLaneIsTrivial) {
+        if (mask != 0)
+          vals[r] = targetInfo.shuffleXor(rewriter, loc, vals[r], mask);
+      } else {
         Value srcIdx = b.xor_(laneIdPerm, b.i32_val(mask));
         vals[r] = targetInfo.shuffleIdx(rewriter, loc, vals[r], srcIdx);
       }
     }
-    // Perform r_i ^= l_j.
-    for (auto [origRBitIdx, lBitIdx] : mixedTranspositions) {
-      int rBitIdx = origRBitIdx - nPack;
-      vals = applyConditionalSwap(rBitIdx, lBitIdx);
-    }
+    // Stage 3 (selp/prmt)
+    for (const auto &t : mixedTranspositions)
+      vals = applySwap(t, /*preShuf=*/false);
     return vals;
   }
 
   SmallVector<Value>
   transferWithinWarpShipImpl(Location loc, ConversionPatternRewriter &rewriter,
                              ArrayRef<Value> inVals, int nPack,
-                             std::pair<int, int> mixedTransposition) const {
+                             TranspositionInfo t) const {
     // Implements the effects of a single mixed transposition as in
     // `transferWithinWarpSwapImpl`, but uses auxiliary registers to hold the
     // values to be shuffled, resulting in fewer emitted instructions.
     int numRegs = inVals.size();
-    auto [origRBitIdx, lBitIdx] = mixedTransposition;
-    int rBitIdx = origRBitIdx - nPack;
-    int tileSize = 1 << (rBitIdx + 1);
+    int rIdx = t.transposition.first - nPack;
+    int lIdx = t.transposition.second;
+    int tileSize = 1 << (rIdx + 1);
     int numTiles = numRegs / tileSize;
 
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     Value laneId = getLaneId(rewriter, loc);
-    Value lBitVal = b.and_(laneId, b.i32_val(1 << lBitIdx));
+    Value lBitVal = b.and_(laneId, b.i32_val(1 << lIdx));
     Value lBitOff = b.icmp_eq(lBitVal, b.i32_val(0));
     SmallVector<Value> outVals(numRegs);
+
+    auto shipDiagSels = [](auto postSel) {
+      if (postSel == 0x3120)
+        return std::pair{0x7564, 0x7564};
+      auto high = (postSel & 0x4444) >> 2;
+      auto sel10 = postSel ^ ((postSel & 0x1000) ? high << 1 : high);
+      return std::pair{sel10, sel10 ^ 0x4444};
+    };
 
     for (int tileIdx = 0; tileIdx < numTiles; ++tileIdx) {
       int baseIdx = tileIdx * tileSize;
       for (int i = 0; i < tileSize / 2; ++i) {
-        int idx = baseIdx + i;
-        int partnerIdx = idx + (1 << rBitIdx);
-        Value valToShip = b.select(lBitOff, inVals[partnerIdx], inVals[idx]);
-        Value shippedVal =
-            targetInfo.shuffleXor(rewriter, loc, valToShip, (1 << lBitIdx));
-        outVals[idx] = b.select(lBitOff, inVals[idx], shippedVal);
-        outVals[partnerIdx] = b.select(lBitOff, shippedVal, inVals[partnerIdx]);
+        int r0 = baseIdx + i;
+        int r1 = r0 + (1 << rIdx);
+        Value v0 = inVals[r0];
+        Value v1 = inVals[r1];
+        if (t.topPreSel == 0x3210 && t.topPostSel == 0x3210) {
+          Value valToShip = b.select(lBitOff, v1, v0);
+          Value shippedVal =
+              targetInfo.shuffleXor(rewriter, loc, valToShip, (1 << lIdx));
+          outVals[r0] = b.select(lBitOff, v0, shippedVal);
+          outVals[r1] = b.select(lBitOff, shippedVal, v1);
+        } else {
+          Value shipSel =
+              b.select(lBitOff, b.i32_val(t.botPreSel), b.i32_val(t.topPreSel));
+          Value valToShip = targetInfo.permute(rewriter, loc, v0, v1, shipSel);
+          Value shippedVal =
+              targetInfo.shuffleXor(rewriter, loc, valToShip, (1 << lIdx));
+          Value sel00 = b.i32_val(t.topPostSel);
+          Value sel01 = b.i32_val(shipDiagSels(t.topPostSel).second);
+          Value sel10 = b.i32_val(shipDiagSels(t.topPostSel).first);
+          Value sel11 = b.i32_val(t.botPostSel ^ 0x4444);
+          Value sel1 = b.select(lBitOff, sel00, sel01);
+          Value sel2 = b.select(lBitOff, sel10, sel11);
+          outVals[r0] = targetInfo.permute(rewriter, loc, v0, shippedVal, sel1);
+          outVals[r1] = targetInfo.permute(rewriter, loc, v1, shippedVal, sel2);
+        }
       }
     }
     return outVals;
