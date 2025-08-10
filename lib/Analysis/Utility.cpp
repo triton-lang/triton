@@ -248,6 +248,11 @@ unsigned ScanLoweringHelper::getScratchSizeInBytes() {
   return elementSizeInBytes * getScratchSizeInElems();
 }
 
+static SmallVector<DecomposedWarpConversion::TranspositionInfo>
+getTranspositionSelectors(SmallVector<std::pair<int, int>> &mixedTranspositions,
+                          std::vector<std::vector<int32_t>> &regBases,
+                          int bitwidth);
+                          
 DecomposedWarpConversion
 getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
                                   RankedTensorType dstTy, int bitwidth) {
@@ -458,13 +463,36 @@ getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
   }
   assert(visited.all() && "Cycle walk incomplete");
 
+  auto processedTranspos = 
+      getTranspositionSelectors(mixedTranspositions, regBases, bitwidth);
+
+  auto pReg = LinearLayout(std::move(pRegBases), {{kReg, 1 << nRegBases}},
+                           /*requireSurjective=*/true);
+  auto pLane = LinearLayout(std::move(pLaneBases), {{kLane, 1 << nLaneBases}},
+                            /*requireSurjective=*/true);
+  return {std::move(pReg), std::move(pLane), std::move(processedTranspos)};
+}
+
+static SmallVector<DecomposedWarpConversion::TranspositionInfo>
+getTranspositionSelectors(SmallVector<std::pair<int, int>> &mixedTranspositions,
+                          std::vector<std::vector<int32_t>> &regBases,
+                          int bitwidth) {
   // When possible, we fuse permutations of 'low' register bits together
   // with a mixed transposition, resulting in byte permute instructions instead
   // of `select` instructions. After processing, no low register bits appear in
   // the returned list of mixed transpositions.
   int m = mixedTranspositions.size();
+  int nRegBases = regBases.size();
   int nPackPrelim = llvm::Log2_32(std::clamp(32 / bitwidth, 1, 4));
   int nPack = std::min(nPackPrelim, nRegBases - m);
+
+  SmallVector<DecomposedWarpConversion::TranspositionInfo> ret;
+  ret.reserve(mixedTranspositions.size());
+  if (nPack == 0) {
+    for (auto &t : mixedTranspositions)
+      ret.push_back(DecomposedWarpConversion::TranspositionInfo{t});
+    return ret;
+  }
   // Consider for example the cycle
   //
   //        (r2 r1 l0 r0 r3) = (r0 l0) * (r2 r1 r0 r3)
@@ -492,6 +520,10 @@ getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
   //
   //    (l0 r0 r1 l1 r2) = (r3 r0)(r3 l0)(r3 r0) * (r2 l1)(r2 r1)(r2 r0).
   //
+  // The `*` is standard composition of permutations. The groupings correspond
+  // to different `TranspositionInfo` objects. For example, the permutation
+  // `(r3 r0)(r3 l0)(r3 r0) = (r0 l0)` has mixed transposition `(r3 l0)` with
+  // pre- and post-shuffle selectors determined by the `r0` bit.
   // Processing of mixed transpositions is performed by determining the `head`
   // and `tail` of an excision of bits in cycles of `pReg` and building lists
   // of low bits acting as selector modifiers. In the noncommutative cases, we
@@ -566,9 +598,6 @@ getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
     pairedRegBits.insert(potentialPartner);
     return potentialPartner;
   };
-
-  SmallVector<DecomposedWarpConversion::TranspositionInfo> ret;
-  ret.reserve(mixedTranspositions.size());
 
   for (auto p : mixedTranspositions) {
     int rBit = p.first;
@@ -661,12 +690,7 @@ getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
     t.topPostSel = 0x3120;
     t.botPostSel = 0x7564;
   }
-
-  auto pReg = LinearLayout(std::move(pRegBases), {{kReg, 1 << nRegBases}},
-                           /*requireSurjective=*/true);
-  auto pLane = LinearLayout(std::move(pLaneBases), {{kLane, 1 << nLaneBases}},
-                            /*requireSurjective=*/true);
-  return {std::move(pReg), std::move(pLane), std::move(ret)};
+  return ret;
 }
 
 SmallVector<std::pair<SmallVector<int64_t>, SmallVector<int64_t>>>
