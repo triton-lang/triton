@@ -290,9 +290,9 @@ Value permute(Location loc, RewriterBase &rewriter, Value x, Value y,
   Value prmt_mask = selector;
   // convert from nybble mask to byte mask:
   prmt_mask = b.or_(b.and_(prmt_mask, b.i32_val(0x000000ff)),
-                    b.shl(b.and_(prmt_mask, b.i32_val(0x0000ff00)), 8));
+                    b.shl(b.and_(prmt_mask, b.i32_val(0x0000ff00)), b.i32_val(8)));
   prmt_mask = b.or_(b.and_(prmt_mask, b.i32_val(0x000f000f)),
-                    b.shl(b.and_(prmt_mask, b.i32_val(0x00f000f0)), 4));
+                    b.shl(b.and_(prmt_mask, b.i32_val(0x00f000f0)), b.i32_val(4)));
   Value args[] = {x, y, prmt_mask};
   auto op = createLLVMIntrinsicCallOp(rewriter, loc, "llvm.amdgcn.perm", i32_ty,
                                       args);
