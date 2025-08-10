@@ -25,9 +25,9 @@ def fresh_triton_cache():
 
 
 @pytest.fixture
-def fresh_knobs(monkeypatch):
+def fresh_knobs():
     from triton._internal_testing import _fresh_knobs_impl
-    fresh_function, reset_function = _fresh_knobs_impl(monkeypatch)
+    fresh_function, reset_function = _fresh_knobs_impl()
     try:
         yield fresh_function()
     finally:
@@ -35,14 +35,14 @@ def fresh_knobs(monkeypatch):
 
 
 @pytest.fixture
-def fresh_knobs_except_libraries(monkeypatch):
+def fresh_knobs_except_libraries():
     """
     A variant of `fresh_knobs` that keeps library path
     information from the environment as these may be
     needed to successfully compile kernels.
     """
     from triton._internal_testing import _fresh_knobs_impl
-    fresh_function, reset_function = _fresh_knobs_impl(monkeypatch, skipped_attr={"build", "nvidia", "amd"})
+    fresh_function, reset_function = _fresh_knobs_impl(skipped_attr={"build", "nvidia", "amd"})
     try:
         yield fresh_function()
     finally:
