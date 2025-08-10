@@ -252,7 +252,7 @@ static SmallVector<DecomposedWarpConversion::TranspositionInfo>
 getTranspositionSelectors(SmallVector<std::pair<int, int>> &mixedTranspositions,
                           std::vector<std::vector<int32_t>> &regBases,
                           int bitwidth);
-                          
+
 DecomposedWarpConversion
 getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
                                   RankedTensorType dstTy, int bitwidth) {
@@ -463,7 +463,7 @@ getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
   }
   assert(visited.all() && "Cycle walk incomplete");
 
-  auto processedTranspos = 
+  auto processedTranspos =
       getTranspositionSelectors(mixedTranspositions, regBases, bitwidth);
 
   auto pReg = LinearLayout(std::move(pRegBases), {{kReg, 1 << nRegBases}},
