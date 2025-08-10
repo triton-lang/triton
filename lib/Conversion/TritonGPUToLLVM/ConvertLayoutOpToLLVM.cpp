@@ -292,11 +292,11 @@ struct ConvertLayoutOpConversion
     // register index bits with lane index bits. Our goal is to implement P
     // using predicated selects and warp-shuffles. We have two tools for this:
     //  - An out-of-place `Ship` method which implements one mixed transposition
-    //    at a time using 1.5 * R selects and .5 * R shuffles each.
+    //    at a time using 1.5 * R selects/permutes and .5 * R shuffles each.
     //  - An in-place `Swap` method which can simultaneously implement P_lane
-    //    and multiple mixed transpositions at a time using 2 * m * R selects
-    //    and either (1 - (1/2)^m) * R shuffles if `pLaneIsTrivial` or R
-    //    shuffles otherwise.
+    //    and multiple mixed transpositions at a time using 2 * m * R selects/
+    //    permutes and either (1 - (1/2)^m) * R shuffles if `pLaneIsTrivial` and
+    //    R shuffles otherwise.
     // Here, R denotes the number of 32-bit registers in use after packing (or
     // splitting, if applied to 64-bit types or pointers), and in the `Swap`
     // method, `m` denotes the number of mixed transpositions passed in.
