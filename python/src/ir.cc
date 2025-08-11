@@ -9,6 +9,7 @@
 #include "mlir/Bytecode/BytecodeWriter.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
+#include "mlir/Dialect/LLVMIR/LLVMAttrs.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/Transforms/InlinerInterfaceImpl.h"
 #include "mlir/Dialect/UB/IR/UBOps.h"
@@ -37,8 +38,6 @@
 #include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/SourceMgr.h"
-
-#include "third_party/proton/dialect/include/Dialect/Proton/IR/Dialect.h"
 
 namespace {
 
@@ -175,7 +174,7 @@ py::list getTensorDescMetadata(ModuleOp &mod) {
 
     auto blockType = descTy.getBlockType();
     auto encoding = blockType.getEncoding();
-    auto mmaEncoding = dyn_cast<triton::gpu::NVMMASharedEncodingAttr>(encoding);
+    auto mmaEncoding = dyn_cast<ttg::NVMMASharedEncodingAttr>(encoding);
     auto swizzle = ttng::getTMASwizzleMode(nullptr, descTy);
     auto elemType = ttng::getTMAElementType(nullptr, descTy);
     assert(swizzle.has_value());
@@ -305,8 +304,8 @@ void init_triton_ir(py::module &&m) {
                     ::mlir::triton::instrument::TritonInstrumentDialect,
                     math::MathDialect, arith::ArithDialect, scf::SCFDialect,
                     ::mlir::gpu::GPUDialect, cf::ControlFlowDialect,
-                    ::mlir::triton::proton::ProtonDialect, LLVM::LLVMDialect,
-                    mlir::ub::UBDialect, mlir::triton::gluon::GluonDialect>();
+                    LLVM::LLVMDialect, mlir::ub::UBDialect,
+                    mlir::triton::gluon::GluonDialect>();
     mlir::LLVM::registerInlinerInterface(registry);
     registerBuiltinDialectTranslation(registry);
     registerLLVMDialectTranslation(registry);
@@ -742,11 +741,16 @@ void init_triton_ir(py::module &&m) {
       .def_property_readonly("type", &FuncOp::getFunctionType)
       .def("reset_type", &FuncOp::setType);
 
+  py::class_<mlir::OpBuilder>(m, "op_builder", py::module_local(),
+                              py::dynamic_attr())
+      .def(py::init<MLIRContext *>());
+
   py::class_<OpBuilder::InsertPoint>(m, "InsertPoint", py::module_local());
 
   py::class_<TritonOpBuilder>(m, "builder", py::module_local(),
                               py::dynamic_attr())
       .def(py::init<MLIRContext *>())
+      .def("get_op_builder", &TritonOpBuilder::getBuilder, ret::reference)
       // getters
       .def("create_module",
            [](TritonOpBuilder &self) -> ModuleOp {
@@ -794,6 +798,18 @@ void init_triton_ir(py::module &&m) {
       .def("get_string_attr",
            [](TritonOpBuilder &self, std::string value) -> Attribute {
              return self.getBuilder().getStringAttr(value);
+           })
+      .def("get_disable_loop_licm_attr",
+           [](TritonOpBuilder &self) -> Attribute {
+             auto licmAttr =
+                 LLVM::LoopLICMAttr::get(self.getBuilder().getContext(),
+                                         self.getBuilder().getBoolAttr(true),
+                                         self.getBuilder().getBoolAttr(true));
+             mlir::LLVM::LoopAnnotationAttr la =
+                 mlir::LLVM::LoopAnnotationAttr::get(
+                     self.getBuilder().getContext(), {}, {}, {}, {}, {},
+                     licmAttr, {}, {}, {}, {}, {}, {}, {}, {}, {});
+             return la;
            })
       // Use arith.ConstantOp to create constants
       // Constants
@@ -1775,11 +1791,6 @@ void init_triton_ir(py::module &&m) {
               bool isSignedInteger) -> Value {
              return self.create<MakeTensorDescOp>(base, shape, strides,
                                                   tensorShape, isSignedInteger);
-           })
-      // Proton Ops
-      .def("create_proton_record",
-           [](TritonOpBuilder &self, bool isStart, int32_t regionId) -> void {
-             self.create<mlir::triton::proton::RecordOp>(isStart, regionId);
            });
 
   py::class_<PassManager>(m, "pass_manager", py::module_local())

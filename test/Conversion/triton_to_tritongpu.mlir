@@ -78,7 +78,7 @@ tt.func @reduce_ops(%ptr: !tt.ptr<f32> {tt.divisibility = 16 : i32}) {
 // -----
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32} {
-tt.func public @select_op(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg2: i1) attributes {noinline = false} {
+tt.func public @select_op(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg2: i1) {
   // CHECK-LABEL: select_op
   %cst = arith.constant dense<0.000000e+00> : tensor<128xf32>
   %0 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32>

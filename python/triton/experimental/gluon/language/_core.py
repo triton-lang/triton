@@ -46,15 +46,23 @@ from triton.language.core import (
 )
 
 _IMPORT_FROM_TRITON: List[str] = [
+    "atomic_add",
+    "atomic_and",
+    "atomic_cas",
+    "atomic_max",
+    "atomic_min",
+    "atomic_or",
+    "atomic_xchg",
+    "atomic_xor",
     "broadcast",
     "expand_dims",
     "inline_asm_elementwise",
     "join",
     "load",
     "map_elementwise",
-    "maximum",
     "max_constancy",
     "max_contiguous",
+    "maximum",
     "minimum",
     "multiple_of",
     "permute",
@@ -387,7 +395,7 @@ def convert_layout(value, layout, assert_trivial=False, _semantic=None):
 
 
 @builtin
-def full(shape, value, dtype, layout, _semantic=None):
+def full(shape, value, dtype, layout=None, _semantic=None):
     """
     Create a tensor filled with a scalar value, with specified shape, dtype, and layout.
 
@@ -395,7 +403,7 @@ def full(shape, value, dtype, layout, _semantic=None):
         shape (Sequence[int]): The shape of the tensor.
         value (int or float): The fill value.
         dtype (dtype): The data type for the tensor.
-        layout (DistributedLayout): The layout of the output tensor.
+        layout (Optional[DistributedLayout]): The layout of the output tensor, defaults to AutoLayout().
 
     Returns:
         tensor: A tensor where every element equals value.

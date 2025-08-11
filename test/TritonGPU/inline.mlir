@@ -1,7 +1,7 @@
 // RUN: triton-opt %s -inline | FileCheck %s
 
 #smem = #ttg.shared_memory
-#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 
 // CHECK-LABEL: @inline_in_warp_specialize
 tt.func public @inline_in_warp_specialize(%arg0: !ttg.memdesc<1xi32, #shared, #smem, mutable>) {
@@ -20,7 +20,7 @@ tt.func public @inline_in_warp_specialize(%arg0: !ttg.memdesc<1xi32, #shared, #s
   tt.return
 }
 
-tt.func private @store_1(%arg0: !ttg.memdesc<1xi32, #shared, #smem, mutable>) attributes {noinline = false} {
+tt.func private @store_1(%arg0: !ttg.memdesc<1xi32, #shared, #smem, mutable>) {
   %cst = arith.constant dense<1> : tensor<1xi32>
   ttg.local_store %cst, %arg0 : tensor<1xi32> -> !ttg.memdesc<1xi32, #shared, #smem, mutable>
   tt.return

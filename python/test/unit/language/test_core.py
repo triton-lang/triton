@@ -80,6 +80,8 @@ elif is_hip():
     # 0 is a special value for automatic heuristic
     if is_hip_cdna():
         mma_nonk_sizes = [0, 16, 32]
+    elif is_hip_gfx12():
+        mma_nonk_sizes = [16]
 else:
     THREADS_PER_WARP = 32
 
@@ -1908,24 +1910,33 @@ def test_atomic_cas(sem, num_ctas, device):
 
 
 @pytest.mark.interpreter
-@pytest.mark.parametrize("sem", [None, 'acquire', 'release', 'acq_rel', 'relaxed'])
+@pytest.mark.parametrize("sem", [None, "acquire", "release", "acq_rel", "relaxed"])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
-def test_tensor_atomic_cas(sem, num_ctas, device):
+@pytest.mark.parametrize("size", [4, 128, 512])
+@pytest.mark.parametrize("dtype_str", ['bfloat16', 'float16', 'float32', 'uint64', 'int64', 'float64'])
+def test_tensor_atomic_cas(sem, size, dtype_str, num_ctas, device):
+    check_type_supported(dtype_str, device)
+    if "float" in dtype_str and is_hip():
+        pytest.skip("HIP does not support atomic cas with float types")
 
     @triton.jit
-    def change_value(X, BLOCK_SIZE: tl.constexpr, sem: tl.constexpr):
+    def change_value(X, BLOCK_SIZE: tl.constexpr, sem: tl.constexpr, dtype: tl.constexpr):
         pid = tl.program_id(axis=0)
         block_start = pid * BLOCK_SIZE
         offsets = block_start + tl.arange(0, BLOCK_SIZE)
-        t1 = tl.full((BLOCK_SIZE, ), 0, dtype=tl.int64)
-        t2 = tl.full((BLOCK_SIZE, ), 2, dtype=tl.int64)
+        t1 = tl.full((BLOCK_SIZE, ), 0, dtype=dtype)
+        t2 = tl.full((BLOCK_SIZE, ), 2, dtype=dtype)
         tl.atomic_cas(X + offsets, t1, t2, sem=sem)
 
-    X = torch.tensor([0, 1, 0, 1, 0, 1, 0, 1], device=device, dtype=torch.int64)
-    Y = torch.tensor([2, 1, 2, 1, 2, 1, 2, 1], device=device, dtype=torch.int64)
+    torch_dtype = getattr(torch, dtype_str)
+    X = torch.zeros((size, ), device=device, dtype=torch_dtype)
+    X[1::2] = 1
+    Y = X.clone()
+    Y[0::2] = 2
 
-    change_value[(2, )](X, 4, sem)
-    assert (torch.equal(X, Y))
+    tl_dtype = getattr(tl, dtype_str)
+    change_value[(2, )](X, BLOCK_SIZE=size // 2, sem=sem, dtype=tl_dtype)
+    assert torch.equal(X, Y)
 
 
 @pytest.mark.interpreter
@@ -2001,6 +2012,36 @@ def test_atomic_unsupported_type(dtype_str, device):
     O = torch.zeros((1, ), device=device, dtype=getattr(torch, dtype_str))
     with pytest.raises(triton.TritonError):
         kernel[(1, )](I, O)
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("dtype_str", ["int32", "float16"])
+@pytest.mark.parametrize("size", [1, 4, 16])
+@pytest.mark.parametrize("op", ["add", "cas"])
+def test_tensor_atomic_use_result(dtype_str, size, op, device):
+    if is_hip():
+        pytest.skip(
+            "HIP is broken because (1) it doesn't support thread predicate in atomic cas, and (2) it doesn't support"
+            " atomic rmw with float16")
+
+    @triton.jit
+    def kernel(index_ptr, out_ptr, size: tl.constexpr, op: tl.constexpr):
+        if op == "add":
+            write_index = tl.atomic_add(index_ptr + tl.arange(0, size)[:, None], val=tl.arange(0, size)[:, None],
+                                        sem="relaxed")
+        elif op == "cas":
+            write_index = tl.atomic_cas(
+                index_ptr + tl.arange(0, size)[:, None],
+                cmp=tl.zeros((size, ), dtype=index_ptr.dtype.element_ty)[:, None],
+                val=tl.arange(0, size).to(index_ptr.dtype.element_ty)[:, None],
+                sem="relaxed",
+            )
+        tl.store(out_ptr + write_index.to(tl.uint32) * size + tl.arange(0, size)[None, :], 5)
+
+    index = torch.arange(0, size, device=device).to(dtype=getattr(torch, dtype_str))
+    out = torch.zeros((size, size), device=device, dtype=getattr(torch, dtype_str))
+    kernel[(1, )](index, out, size, op)
+    assert (out == 5).all()
 
 
 # ---------------
@@ -4157,12 +4198,12 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
         if cc < (8, 9):
             pytest.skip("float8e4nv not supported on CUDA < 8.9")
     if is_hip():
-        if not is_hip_cdna():
-            pytest.skip("scaled_dot only implemented for HIP CDNA")
+        if not (is_hip_cdna() or is_hip_gfx12()):
+            pytest.skip("scaled_dot only implemented for HIP CDNA and gfx12")
         if "e4m3" in (mxfp_type, normal_type):
-            if not (is_hip_cdna3() or is_hip_cdna4()):
-                pytest.skip(f"scaled_dot({mxfp_type}, {normal_type}) only implemented for CDNA3 and CDNA4")
-        if mma == 16 and K == 64:
+            if not (is_hip_cdna3() or is_hip_cdna4() or is_hip_gfx12()):
+                pytest.skip(f"scaled_dot({mxfp_type}, {normal_type}) only implemented for CDNA3, CDNA4, gfx12")
+        if mma == 16 and K == 64 and not is_hip_gfx12():
             pytest.skip(f"K == {K} too small for mfma {mma} in scaled_dot")
 
     @triton.jit
@@ -4403,6 +4444,9 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
             assert 'st.global.v4' in ptx
         assert (re.search(r'(mma|wgmma.mma_async).sync.aligned.m\d+n\d+k16(?:.row.col)?.f32.(f|bf)16.(f|bf)16', ptx)
                 or "tcgen05.mma.cta_group::1.kind::f16" in ptx)
+    if is_hip_cdna4() and normal_type in ["bf16", "fp16"]:
+        amdgcn = pgm.asm['amdgcn']
+        assert (re.search(r"v_cvt_scalef32_pk_.*?(fp4|fp8|bf8).*?op_sel", amdgcn))
 
 
 @pytest.mark.interpreter
@@ -6485,7 +6529,7 @@ shared_layouts = [
 
 @pytest.mark.parametrize("M, N, M_tile_size, N_tile_size",
                          [[128, 128, 64, 64], [128, 128, 64, 32], [128, 64, 64, 32], [256, 128, 64, 64]])
-def test_split_subview(M, N, M_tile_size, N_tile_size, device='cuda'):
+def test_split_subview(M, N, M_tile_size, N_tile_size, device, tmp_path: pathlib.Path):
     num_rows_per_warp = THREADS_PER_WARP // 4
     num_repeats_M = triton.cdiv(M, M_tile_size)
     num_repeats_N = triton.cdiv(N, N_tile_size)
@@ -6514,7 +6558,7 @@ def test_split_subview(M, N, M_tile_size, N_tile_size, device='cuda'):
         %c0_i32 = arith.constant 0 : i32
 
         %12 = ttg.local_alloc : () -> !ttg.memdesc<1x{M}x{N}xf16, #shared, #smem, mutable>
-        %13 = ttg.memdesc_subview %12[%c0_i32, %c0_i32, %c0_i32] : !ttg.memdesc<1x{M}x{N}xf16, #shared, #smem, mutable> -> !ttg.memdesc<{M}x{N}xf16, #shared, #smem, mutable>
+        %13 = ttg.memdesc_index %12, %c0_i32 : !ttg.memdesc<1x{M}x{N}xf16, #shared, #smem, mutable> -> !ttg.memdesc<{M}x{N}xf16, #shared, #smem, mutable>
         ttg.local_store %11, %13 : tensor<{M}x{N}xf16, #blocked> -> !ttg.memdesc<{M}x{N}xf16, #shared, #smem, mutable>
 
     """
@@ -6525,10 +6569,7 @@ def test_split_subview(M, N, M_tile_size, N_tile_size, device='cuda'):
             m_offset = m * M_tile_size
             n_offset = n * N_tile_size
             ir += f"""
-        %off0_{m}_{n} = arith.constant {m_offset} : i32
-        %off1_{m}_{n} = arith.constant {n_offset} : i32
-
-        %view{linear_idx} = ttg.memdesc_subview %13[%off0_{m}_{n}, %off1_{m}_{n}] : !ttg.memdesc<{M}x{N}xf16, #shared, #smem, mutable> -> !ttg.memdesc<{M_tile_size}x{N_tile_size}xf16, #shared, #smem, mutable, {M}x{N}>
+        %view{linear_idx} = ttg.memdesc_subslice %13[{m_offset}, {n_offset}] : !ttg.memdesc<{M}x{N}xf16, #shared, #smem, mutable> -> !ttg.memdesc<{M_tile_size}x{N_tile_size}xf16, #shared, #smem, mutable, {M}x{N}>
         %data{linear_idx} = ttg.local_load %view{linear_idx} : !ttg.memdesc<{M_tile_size}x{N_tile_size}xf16, #shared, #smem, mutable, {M}x{N}> -> tensor<{M_tile_size}x{N_tile_size}xf16, #blocked>
         %inc{linear_idx} = arith.constant dense<{linear_idx}.0> : tensor<{M_tile_size}x{N_tile_size}xf16, #blocked>
 
@@ -6544,11 +6585,9 @@ def test_split_subview(M, N, M_tile_size, N_tile_size, device='cuda'):
     }}
     """
 
-    import tempfile
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
-        f.write(ir)
-        f.flush()
-        kernel = triton.compile(f.name)
+    temp_file = tmp_path / "test_split_subview.ttgir"
+    temp_file.write_text(ir)
+    kernel = triton.compile(str(temp_file))
 
     triton_result = torch.zeros((M, N), device=device, dtype=torch.float16)
     kernel[(1, 1, 1)](triton_result.data_ptr())
@@ -7107,11 +7146,13 @@ def test_enable_fp_fusion(enable_fp_fusion, default_override, device):
 # -----------------------
 
 
-@pytest.mark.parametrize("arch", ["sm70", "sm80", "sm90"])
+@pytest.mark.parametrize("arch", ["sm70", "sm80", "sm90", "gfx942", "gfx950", "gfx1200"])
 @pytest.mark.parametrize("env_var_override", [False, True])
 def test_override_arch(arch, env_var_override, device):
-    if not is_cuda():
-        pytest.skip('arch only for CUDA')
+    if arch.startswith("sm") and not is_cuda():
+        pytest.skip(f"{arch} arch only for CUDA")
+    elif arch.startswith("gfx") and not is_hip():
+        pytest.skip(f"{arch} arch only for HIP")
 
     @triton.jit
     def simple(data, out):
@@ -7122,15 +7163,31 @@ def test_override_arch(arch, env_var_override, device):
     data = torch.randn((128, ), device=device, dtype=torch.float32)
     out = torch.empty_like(data)
 
-    if env_var_override:
-        os.environ["TRITON_OVERRIDE_ARCH"] = str(arch)
-        h = simple[(1, )](data, out)
-        os.environ.pop("TRITON_OVERRIDE_ARCH")
-    else:
-        h = simple[(1, )](data, out, arch=arch)
-    torch.testing.assert_close(data * 1.5 + 1.0, out)
-    ttgir_cc = re.search(r'cuda:(\d+)', h.asm["ttgir"])
-    assert ttgir_cc.group(1) == arch[2:]
+    if is_cuda():
+        if env_var_override:
+            os.environ["TRITON_OVERRIDE_ARCH"] = str(arch)
+            h = simple[(1, )](data, out)
+            os.environ.pop("TRITON_OVERRIDE_ARCH")
+        else:
+            h = simple[(1, )](data, out, arch=arch)
+        torch.testing.assert_close(data * 1.5 + 1.0, out)
+        ttgir_cc = re.search(r'cuda:(\d+)', h.asm["ttgir"])
+        assert ttgir_cc.group(1) == arch[2:]
+    elif is_hip():
+        # For HIP, the generated kernel is a binary containing the final ISA. So we cannot run
+        # them like CUDA side if the chip doesn't match. Here we just check generated ISA.
+        if env_var_override:
+            os.environ["TRITON_OVERRIDE_ARCH"] = str(arch)
+            h = simple.warmup(data, out, grid=(1, ))
+            os.environ.pop("TRITON_OVERRIDE_ARCH")
+        else:
+            h = simple.warmup(data, out, arch=arch, grid=(1, ))
+        ttgir_gfx = re.search(r'hip:(\w+)', h.asm["ttgir"])
+        ttgir_warp = re.search(r'"ttg.threads-per-warp" = (\d+)', h.asm["ttgir"])
+        amdgcn_gfx = re.search(r'.amdgcn_target "amdgcn-amd-amdhsa--(\w+)"', h.asm["amdgcn"])
+        assert ttgir_gfx.group(1) == arch
+        assert int(ttgir_warp.group(1)) == (32 if arch == "gfx1200" else 64)
+        assert amdgcn_gfx.group(1) == arch
 
 
 # -----------------------
@@ -7318,6 +7375,37 @@ def test_tl_range_option_none():
     compiled_kernel = kernel.warmup(10, grid=(1, ))
     assert "num_stages" not in compiled_kernel.asm["ttir"]
     assert "loop_unroll_factor" not in compiled_kernel.asm["ttir"]
+
+
+def test_disable_licm():
+
+    @triton.jit
+    def while_no_licm(n):
+        i = 0
+        while tl.condition(i < n, disable_licm=True):
+            i = i + 1
+            print("i", i)
+
+    @triton.jit
+    def while_default(n):
+        i = 0
+        while tl.condition(i < n):
+            i = i + 1
+            print("i", i)
+
+    @triton.jit
+    def for_no_licm(n):
+        for i in tl.range(0, n, disable_licm=True):
+            print("i", i)
+
+    compiled_kernel1 = while_no_licm.warmup(10, grid=(1, ))
+    assert "llvm.licm.disable" in compiled_kernel1.asm["llir"]
+
+    compiled_kernel2 = while_default.warmup(10, grid=(1, ))
+    assert "llvm.licm.disable" not in compiled_kernel2.asm["llir"]
+
+    compiled_kernel3 = for_no_licm.warmup(10, grid=(1, ))
+    assert "llvm.licm.disable" in compiled_kernel3.asm["llir"]
 
 
 @triton.jit(noinline=True)

@@ -13,6 +13,29 @@
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/LogicalResult.h"
 
+// Provide custom directive handlers for declarative assemblyFormat.
+// They must be visible before including the generated op classes.
+static mlir::ParseResult parseOffsets(mlir::OpAsmParser &p,
+                                      mlir::DenseI32ArrayAttr &attr) {
+  llvm::SmallVector<int32_t> values;
+  if (p.parseCommaSeparatedList([&]() {
+        int32_t v;
+        if (p.parseInteger(v))
+          return mlir::failure();
+        values.push_back(v);
+        return mlir::success();
+      }))
+    return mlir::failure();
+  attr = p.getBuilder().getDenseI32ArrayAttr(values);
+  return mlir::success();
+}
+
+static void printOffsets(mlir::OpAsmPrinter &p, mlir::Operation *op,
+                         mlir::DenseI32ArrayAttr attr) {
+  auto vals = attr.asArrayRef();
+  llvm::interleaveComma(vals, p, [&](int32_t v) { p << v; });
+}
+
 #define GET_OP_CLASSES
 #include "triton/Dialect/TritonGPU/IR/Ops.cpp.inc"
 
@@ -475,7 +498,7 @@ LogicalResult MemDescReshapeOp::verify() {
   }
   auto srcShape = srcType.getShape();
   if (srcType.getAllocShape().take_back(srcShape.size()) != srcShape) {
-    return emitError("NYI: memdesc_reshape of memdesc_subviews");
+    return emitError("NYI: memdesc_reshape of memdesc_subslice");
   }
 
   MemDescType expectedTy;
@@ -522,10 +545,10 @@ static LogicalResult inferMemDescReshapeOpEncoding(ArrayRef<int64_t> srcShape,
         mmaEncoding.getElementBitWidth(), mmaEncoding.getFp4Padded(),
         CTALayout);
     // Big guns, check linear layouts are equivalent
-    // We disallow reshaping memdesc_subviews in the verifier
-    // We disallow reshaping memdesc_subviews in the verifier
-    auto srcLL = toLinearLayout(srcShape, srcEnc, srcShape);
-    auto dstLL = toLinearLayout(dstShape, dstEnc, dstShape);
+    // We disallow reshaping memdesc_subslice in the verifier
+    // so allocShape == shape
+    auto srcLL = toLinearLayout(srcShape, srcEnc);
+    auto dstLL = toLinearLayout(dstShape, dstEnc);
     if (reshapeLayout(ctx, srcLL, dstShape) != dstLL) {
       return failure();
     }
@@ -556,13 +579,6 @@ LogicalResult MemDescReshapeOp::inferReturnTypes(
   inferredReturnType = MemDescType::get(
       dstShape, srcTy.getElementType(), dstEncoding, srcTy.getMemorySpace(),
       srcTy.getMutableMemory(), dstAllocShape);
-  return success();
-}
-
-// MemDescReinterpretOp
-LogicalResult MemDescReinterpretOp::verify() {
-  if (getSrc().getType().getMemorySpace() != getType().getMemorySpace())
-    return emitError("source and destination memory space must match");
   return success();
 }
 
@@ -606,6 +622,17 @@ OpFoldResult LocalAllocOp::fold(FoldAdaptor adaptor) {
   return loadSrc;
 }
 
+int32_t LocalAllocOp::getAlignmentOrDefault() {
+  auto align = getAlignment();
+  if (align) {
+    return *align;
+  }
+
+  auto ty = getType();
+  auto enc = dyn_cast<SharedEncodingTrait>(ty.getEncoding());
+  return enc ? enc.getAlignment() : 16;
+}
+
 LogicalResult verifyMemoryOpTypes(Operation *op, ShapedType srcTy,
                                   ShapedType dstTy) {
   if (srcTy.getElementType() != dstTy.getElementType()) {
@@ -636,10 +663,27 @@ LogicalResult verifyAllocOp(Operation *op, Value src, MemDescType dstTy) {
   return verifyMemoryOpTypes(op, cast<RankedTensorType>(src.getType()), dstTy);
 }
 
+static LogicalResult verifySharedMemoryRank(Operation *op,
+                                            RankedTensorType type,
+                                            MemDescType memdesc,
+                                            StringRef regName) {
+  auto enc = dyn_cast<LayoutEncodingTrait>(memdesc.getEncoding());
+  if (!enc)
+    return op->emitOpError("expected memdesc to have a shared memory encoding");
+  if (type.getRank() != enc.getRank()) {
+    return op->emitOpError(regName)
+           << " has rank " << type.getRank()
+           << " but memdesc encoding has rank " << enc.getRank();
+  }
+  return success();
+}
+
 LogicalResult LocalAllocOp::verify() {
   if (!isa<SharedMemorySpaceAttr>(getType().getMemorySpace()))
     return emitOpError("should create a buffer of shared memory");
-
+  if (getSrc() && failed(verifySharedMemoryRank(*this, getSrc().getType(),
+                                                getType(), "source")))
+    return failure();
   return verifyAllocOp(*this, getSrc(), getType());
 }
 
@@ -647,11 +691,17 @@ LogicalResult LocalAllocOp::verify() {
 LogicalResult LocalStoreOp::verify() {
   if (!getDst().getType().getMutableMemory())
     return emitOpError("Cannot store into immutable memory");
+  if (failed(verifySharedMemoryRank(*this, getSrc().getType(),
+                                    getDst().getType(), "source")))
+    return failure();
   return verifyMemoryOpTypes(*this, getSrc().getType(), getDst().getType());
 }
 
 // LocalLoadOp
 LogicalResult LocalLoadOp::verify() {
+  if (failed(verifySharedMemoryRank(*this, getType(), getSrc().getType(),
+                                    "result")))
+    return failure();
   return verifyMemoryOpTypes(*this, getSrc().getType(), getType());
 }
 
@@ -662,7 +712,53 @@ LogicalResult AsyncCopyGlobalToLocalOp::verify() {
   return success();
 }
 
-LogicalResult MemDescSubviewOp::verify() {
+LogicalResult MemDescIndexOp::verify() {
+  auto srcTy = getSrc().getType();
+  auto dstTy = getType();
+  if (srcTy.getElementType() != dstTy.getElementType()) {
+    return emitError("result element type must match desc element type");
+  }
+  // memdesc_index reduces rank by 1 and preserves the trailing shape.
+  bool correctRank = srcTy.getRank() == dstTy.getRank() + 1;
+  if (!correctRank) {
+    return emitError("result rank must be input rank - 1");
+  }
+  if (srcTy.getAllocShape().size() != srcTy.getRank()) {
+    return emitError("We don't allow taking memdesc_index of a memdesc_index");
+  }
+
+  if (ArrayRef(srcTy.getShape()).take_back(dstTy.getRank()) !=
+      dstTy.getShape()) {
+    return emitError("result shape must equal to srcShape[1:]");
+  }
+
+  bool isSubview = srcTy.getAllocShape() != srcTy.getShape();
+  if (isSubview) {
+    return emitError("We don't support memdesc_index of a subview");
+  }
+
+  auto srcEnc = srcTy.getEncoding();
+  auto dstEnc = dstTy.getEncoding();
+  if (bool(srcEnc) != bool(dstEnc)) {
+    return emitError("src and result must both have or not have an encoding");
+  }
+
+  if (isa<SharedEncodingTrait>(srcEnc) != isa<SharedEncodingTrait>(dstEnc)) {
+    return emitError("src and dst must have the same type of encoding");
+  }
+
+  if (isa<triton::nvidia_gpu::TensorMemoryEncodingAttr>(srcEnc)) {
+    // We support only 3D -> 2D subviews with only first offset being non-zero.
+    if (srcTy.getRank() != 3 || dstTy.getRank() != 2) {
+      return emitError("only 3D -> 2D subviews are supported for "
+                       "TensorMemoryEncodingAttr");
+    }
+    return success();
+  }
+  return success();
+}
+
+LogicalResult MemDescSubsliceOp::verify() {
   auto srcTy = getSrc().getType();
   auto dstTy = getType();
 
@@ -672,102 +768,26 @@ LogicalResult MemDescSubviewOp::verify() {
   if (getOffsets().size() != srcTy.getRank()) {
     return emitError("offsets must have the same rank as input");
   }
-  if (srcTy.getRank() < dstTy.getRank()) {
-    return emitError("result rank must be less than or equal to input rank");
-  }
-  auto rankDiff = srcTy.getRank() - dstTy.getRank();
-  for (int i = 0; i < dstTy.getRank(); i++) {
-    if (dstTy.getDimSize(i) > srcTy.getDimSize(i + rankDiff)) {
-      return emitError(
-                 "result shape cannot be larger than input shape at dimension ")
-             << i;
-    }
+  if (srcTy.getRank() != dstTy.getRank()) {
+    return emitError("result rank must equal to input rank");
   }
 
   auto srcEnc = srcTy.getEncoding();
   auto dstEnc = dstTy.getEncoding();
-  if (!!srcEnc != !!dstEnc) {
+  if (bool(srcEnc) != bool(dstEnc)) {
     return emitError("src and result must both have or not have an encoding");
   }
-
-  if (!isa<SharedEncodingTrait>(srcEnc) &&
-      !isa<triton::nvidia_gpu::TensorMemoryEncodingAttr>(srcEnc)) {
-    return emitError("src encoding must be SharedEncodingTrait");
-  }
-  if (!isa<SharedEncodingTrait>(dstEnc) &&
-      !isa<triton::nvidia_gpu::TensorMemoryEncodingAttr>(srcEnc)) {
-    return emitError("result encoding must be SharedEncodingTrait");
+  if (!isa<SharedEncodingTrait>(srcEnc) || !isa<SharedEncodingTrait>(dstEnc)) {
+    return emitError("src and dst must both be of shared memory encoding");
   }
 
-  if (isa<triton::nvidia_gpu::TensorMemoryEncodingAttr>(srcEnc)) {
-    // We support only 3D -> 2D subviews with only first offset being non-zero.
-    if (srcTy.getRank() != 3 || dstTy.getRank() != 2) {
-      return emitError("only 3D -> 2D subviews are supported for "
-                       "TensorMemoryEncodingAttr");
-    }
-    for (int i = 1; i < srcTy.getRank(); i++) {
-      if (auto constOp = getOffsets()[i].getDefiningOp<arith::ConstantOp>()) {
-        if (!isa<IntegerAttr>(constOp.getValue()) ||
-            cast<IntegerAttr>(constOp.getValue()).getInt() != 0) {
-          return emitError("only first offset can be non-zero for the subview"
-                           "of TensorMemoryEncodingAttr");
-        }
-      } else {
-        return emitError(
-            "offsets other than the first one must be constant zeros");
-      }
-    }
-    return success();
-  }
-
-  assert(isa<SharedEncodingTrait>(srcEnc));
-
-  // corner case: 1D -> 1D into a 1 element tensor (we don't have 0D tensors)
-  if (srcTy.getRank() == 1 && dstTy.getRank() == 1 &&
-      dstTy.getDimSize(0) == 1) {
-    return success();
-  }
-
-  // There are two cases:
-  // 1. The subview is rank-reducing
-  //  - We split along the first dimension. It can be with non-constant offsets
-  if (srcTy.getRank() != dstTy.getRank()) {
-    if (srcTy.getRank() - dstTy.getRank() != 1) {
-      return emitError(
-          "only nD -> (n-1)D rank-reducing subviews are supported");
-    }
-    for (auto offset : getOffsets().take_back(dstTy.getRank())) {
-      APInt value;
-      if (!matchPattern(offset, m_ConstantInt(&value))) {
-        return emitError("only constant values are allowed outside the front "
-                         "dimension in a rank-reducing subview");
-      }
-      if (!value.isZero()) {
-        return emitError(
-            "only first offset can be non-zero for a rank-reducing subview");
-      }
-    }
-    return success();
-  }
-  assert(srcTy.getRank() == dstTy.getRank());
-  // 2. The src is non-rank-reducing
-  //  - We split along at most one dim, but just with constant values
-  //  - The values where the split happens must not be within the swizzling
-  //  pattern
-  // Check which dimensions we are splitting along
   SetVector<int> splitDims{};
   for (int i = 0; i < srcTy.getRank(); i++) {
     if (srcTy.getDimSize(i) != dstTy.getDimSize(i)) {
       splitDims.insert(i);
     }
   }
-  SmallVector<int64_t> offsets;
-  for (auto offset : getOffsets()) {
-    APInt value;
-    if (!matchPattern(offset, m_ConstantInt(&value)))
-      return emitError("only constant values are allowed for the split");
-    offsets.push_back(value.getSExtValue());
-  }
+  SmallVector<int64_t> offsets(getOffsets().begin(), getOffsets().end());
   // Identity subview
   if (splitDims.empty()) {
     return success();
@@ -813,27 +833,7 @@ LogicalResult MemDescSubviewOp::verify() {
   return success();
 }
 
-// -- LocalAllocOp --
-
-int32_t LocalAllocOp::getAlignmentOrDefault() {
-  auto align = getAlignment();
-  if (align) {
-    return *align;
-  }
-
-  auto ty = getType();
-  auto enc = dyn_cast<SharedEncodingTrait>(ty.getEncoding());
-  return enc ? enc.getAlignment() : 16;
-}
-
 // -- WarpSpecializeOp --
-
-static Type removeEncodingIfTensor(Type type) {
-  if (auto tensorType = dyn_cast<RankedTensorType>(type)) {
-    return tensorType.cloneWithEncoding({});
-  }
-  return type;
-}
 
 RegionRange WarpSpecializeOp::getPartitionRegions() {
   return cast<WarpSpecializePartitionsOp>(

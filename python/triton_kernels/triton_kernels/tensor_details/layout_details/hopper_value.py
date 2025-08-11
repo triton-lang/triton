@@ -234,12 +234,17 @@ def _unpack_fp4_to_bf16_triton(x):
         r"""
         {
             .reg .b32 b, c, d<7>, scale;
+            .reg .b32 bias;
+            mov.b32 bias, 0x7e807e80; // 2 ** 126 == 2 ** (bias_bf16 - bias_fp2)
             // We add the missing bias to the scale directly
             and.b32 $0, $4, 0b10000001110000001000000111000000;
+            mul.bf16x2 $0, $0, bias;
             shl.b32 b, $4, 3;
             and.b32 $1, b,  0b10000001110000001000000111000000;
+            mul.bf16x2 $1, $1, bias;
             shl.b32 c, $4, 6;
             and.b32 $2, c,  0b10000001110000001000000111000000;
+            mul.bf16x2 $2, $2, bias;
             // Unpack last two elements
             shl.b32 d0, $4, 1;
             and.b32 d1, d0, 0b10000000000000001000000000000000;
@@ -249,6 +254,7 @@ def _unpack_fp4_to_bf16_triton(x):
             shr.b32 d5, $4, 7;
             and.b32 d6, d5, 0b00000000010000000000000001000000;
             or.b32 $3, d4, d6;
+            mul.bf16x2 $3, $3, bias;
         }
         """,
         constraints="=r,=r,=r,=r,r",
@@ -289,15 +295,12 @@ def mxfp4_to_bf16_triton(x, scale, mx_axis: tl.constexpr):
     # upcast scale to bfloat16
     # Add bias missing from the bf16 upcasting sequence
     # triton / LLVM generates terrible code for this sequence
-    # scale += 126
-    #scale = scale.to(tl.uint16)
-    #scale = scale << 7
-    #scale = scale.to(tl.bfloat16, bitcast=True)
+    # scale = scale.to(tl.uint16)
+    # scale = scale << 7
+    # scale = scale.to(tl.bfloat16, bitcast=True)
     scale = tl.inline_asm_elementwise(
         r"""
         {
-            // Assumes no overflow
-            add.u32 $2, $2, 0x7E7E7E7E;
             prmt.b32 $0, $2, 0, 0x5140;
             shl.b32 $0, $0, 7;
             prmt.b32 $1, $2, 0, 0x7362;

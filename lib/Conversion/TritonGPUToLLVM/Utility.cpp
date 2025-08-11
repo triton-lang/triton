@@ -8,6 +8,7 @@
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "triton/Tools/GenericSwizzling.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/LinearLayout.h"
 #include "llvm/ADT/STLExtras.h"
@@ -47,7 +48,7 @@ LinearLayout getRegToSharedLayout(MLIRContext *ctx, ArrayRef<int64_t> shape,
   int rank = shape.size();
 
   LinearLayout sharedLayout =
-      triton::gpu::toLinearLayout(shape, dstEnc, allocShape);
+      triton::gpu::toLinearLayout(allocShape.take_back(rank), dstEnc);
   auto sharedOrder = triton::gpu::getOrder(dstEnc, shape);
 
   // sharedLayout's in-dims are currently (offset, block).  Reshape to
@@ -76,6 +77,44 @@ LinearLayout getRegToSharedLayout(MLIRContext *ctx, ArrayRef<int64_t> shape,
 namespace mlir {
 
 namespace triton::gpu {
+
+std::pair<SmallVector<LocalMemOpTile>, SmallVector<LocalMemOpTile>>
+getSrcDstTiles(const TargetInfoBase &targetInfo, int bitwidth) {
+  assert(bitwidth <= 128 && "bitwidth must be <= 128");
+  assert(llvm::isPowerOf2_32(bitwidth) && "bitwidth must be a power of two");
+  SmallVector<LocalMemOpTile> src;
+  SmallVector<LocalMemOpTile> dst;
+
+  // ld.shared/st.shared
+  auto ldstshared = LocalMemOpTile{{}, {0, 1, 2}};
+  src.push_back(ldstshared);
+  dst.push_back(ldstshared);
+
+  if (targetInfo.supportLdMatrix() || targetInfo.supportStMatrix()) {
+    // ldmatrix/stmatrix
+    if (bitwidth <= 32) {
+      auto ldstmatrix = LocalMemOpTile{{0, 1}, {2, 3, 4}};
+      if (targetInfo.supportStMatrix()) {
+        src.push_back(ldstmatrix);
+      }
+      if (targetInfo.supportLdMatrix()) {
+        dst.push_back(ldstmatrix);
+      }
+    }
+    // ldmatrix.trans/stmatrix.trans
+    if (bitwidth == 16) {
+      auto ldstmatrixtrans = LocalMemOpTile{{2, 3, 4}, {0, 1}};
+      if (targetInfo.supportStMatrix()) {
+        src.push_back(ldstmatrixtrans);
+      }
+      if (targetInfo.supportLdMatrix()) {
+        dst.push_back(ldstmatrixtrans);
+      }
+    }
+  }
+  return {std::move(src), std::move(dst)};
+}
+
 Type getFunctionType(Type resultType, ValueRange operands) {
   SmallVector<Type> operandTypes(operands.getTypes());
   return LLVM::LLVMFunctionType::get(resultType, operandTypes);
@@ -381,7 +420,7 @@ emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
   MLIRContext *ctx = rewriter.getContext();
   auto shape = type.getShape();
 
-  LinearLayout ll = triton::gpu::toLinearLayout(shape, layout, {});
+  LinearLayout ll = triton::gpu::toLinearLayout(shape, layout);
 
   StringAttr kRegister = str_attr("register");
   StringAttr kLane = str_attr("lane");
@@ -469,7 +508,7 @@ largestVectorisation(MLIRContext *ctx, const LinearLayout &cvt, int bitwidth,
     }
     return {v, permutation};
   }
-  llvm_unreachable("No vectorisation found");
+  llvm_unreachable("Vectorization < 1 is not valid");
 }
 } // namespace
 
@@ -479,13 +518,13 @@ lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout cvt,
                 Type llvmElemTy, Value smemBase,
                 std::function<Value(Value)> calcPaddedOffset,
                 Value affineOffset, uint64_t maskSpanAffineOffset,
-                ConversionPatternRewriter &rewriter,
-                const TargetInfoBase &targetInfo, Operation *localLoadOp) {
+                RewriterBase &rewriter, const TargetInfoBase &targetInfo,
+                Operation *localLoadOp) {
 
   bool isStore = !valsArray.empty();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
-  auto emitLdSt = [&](ConversionPatternRewriter &rewriter, Location loc,
+  auto emitLdSt = [&](RewriterBase &rewriter, Location loc,
                       ArrayRef<Value> vals, Value shmemAddr, int idx,
                       VectorType vecTy) -> SmallVector<Value> {
     auto length = vecTy.getNumElements();
@@ -513,10 +552,10 @@ SmallVector<Value> lowerLdSt(
     ArrayRef<Value> valsArray, // Input for store, output for load
     Type llvmElemTy, Value smemBase,
     std::function<Value(Value)> calcPaddedOffset, Value affineOffset,
-    uint64_t maskSpanAffineOffset, ConversionPatternRewriter &rewriter,
+    uint64_t maskSpanAffineOffset, RewriterBase &rewriter,
     const TargetInfoBase &targetInfo, std::optional<int> maybeMaxVecElems,
-    std::function<SmallVector<Value>(ConversionPatternRewriter &, Location,
-                                     ArrayRef<Value>, Value, int, VectorType)>
+    std::function<SmallVector<Value>(RewriterBase &, Location, ArrayRef<Value>,
+                                     Value, int, VectorType)>
         lowerInst) {
   auto vals = to_vector(valsArray);
   bool isStore = !vals.empty();
@@ -537,11 +576,16 @@ SmallVector<Value> lowerLdSt(
   }
 
   auto tile = LinearLayout::identity1D(elemsPerVec, kReg, kOffset);
-  auto quot = *divideLeft(cvt, tile);
-  LinearLayout reps = zerosLike(tile) * quot;
+  auto quot = divideLeft(cvt, tile);
+  assert(quot.has_value() && "cvt must be divisible by tile");
+  LinearLayout reps = zerosLike(tile) * *quot;
 
+  LinearLayout addrLayout =
+      LinearLayout({{kLane, reps.getBases().lookup(kLane)},
+                    {kWarp, reps.getBases().lookup(kWarp)}},
+                   reps.getOutDims(), false);
   auto [nAdditive, permStrides] =
-      actionAdditiveStrides(reps, maskSpanAffineOffset);
+      actionAdditiveStrides(reps, addrLayout, maskSpanAffineOffset);
   reps = permStrides.apply(reps);
   if (isStore) {
     vals = permStrides.apply(vals);
@@ -553,15 +597,17 @@ SmallVector<Value> lowerLdSt(
   // shl, which often it's not able to do.
   auto i8Tile =
       zerosLike(LinearLayout::identity1D(bitwidth / 8, kReg, kOffset));
-  auto i8Reps = i8Tile * reps;
+  auto i8AddrLayout = i8Tile * addrLayout;
 
   auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
   auto regBaseI8 =
       applyLinearLayout(
-          loc, rewriter, i8Reps,
+          loc, rewriter, i8AddrLayout,
           {{kReg, b.i32_val(0)}, {kLane, laneId}, {kWarp, warpId}})[0]
           .second;
-  // TODO compute the offset already in i8
+
+  // It's fine that we don't compute the offset in bytes as affineOffset
+  // will be folded into a constant
   auto affineOffsetI8 = b.mul(affineOffset, b.i32_val(bitwidth / 8));
   regBaseI8 = b.xor_(regBaseI8, affineOffsetI8);
   SmallVector<Value> outVals;
@@ -599,7 +645,7 @@ lowerLocalLdSt(Location loc, MLIRContext *ctx,
                LinearLayout cvt,          // Map from registers to offset
                ArrayRef<Value> valsArray, // Input for store, empty for load
                Type llvmElemTy, triton::gpu::MemDescType srcTy,
-               SharedMemoryObject smemObj, ConversionPatternRewriter &rewriter,
+               SharedMemoryObject smemObj, RewriterBase &rewriter,
                const TargetInfoBase &targetInfo, Operation *localLoadOp) {
   assert(cvt.getNumOutDims() == 1);
   assert(*cvt.getOutDimNames().begin() == str_attr("offset"));
@@ -705,7 +751,7 @@ bool emitTransferBetweenRegistersAndShared(
                                           {kBlock, blockId}},
                                          regIds);
 
-  // Compute affine offset given by memdesc_subview
+  // Compute affine offset given by memdesc_subslice
   auto offset = smemObj.getShmemOffset(loc, rewriter, sharedTy);
   SmallVector<Value> vecAddrVec;
   for (auto &indices : indicesVec) {
@@ -862,24 +908,6 @@ std::optional<LLVM::AtomicOrdering> getMemoryOrdering(MemSemantic memOrdering) {
   default:
     return {};
   }
-}
-
-bool isSimpleSharedMemoryAccess(ArrayRef<int64_t> shape,
-                                ArrayRef<int64_t> allocShape,
-                                triton::gpu::SharedEncodingTrait sharedEnc) {
-  auto rank = shape.size();
-  auto paddedLayout =
-      dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(sharedEnc);
-  auto swizzledLayout =
-      dyn_cast<triton::gpu::SwizzledSharedEncodingAttr>(sharedEnc);
-  auto nvmmaLayout = dyn_cast<triton::gpu::NVMMASharedEncodingAttr>(sharedEnc);
-  bool noSwizzling = paddedLayout ||
-                     (swizzledLayout && swizzledLayout.getMaxPhase() == 1) ||
-                     (nvmmaLayout && nvmmaLayout.getSwizzlingByteWidth() == 0);
-  return /*no swizzling*/ noSwizzling ||
-         /*swizzling but same shape*/ shape == allocShape ||
-         /*swizzling and rank-reduced and rank >= 2*/
-         (shape == allocShape.take_back(rank) && rank >= 2);
 }
 
 llvm::MapVector<StringAttr, int32_t> getAllFreeVarMasks(MLIRContext *ctx) {
@@ -1051,19 +1079,6 @@ SmallVector<Type> SharedMemoryObject::getTypes() const {
   return types;
 }
 
-SmallVector<Value>
-SharedMemoryObject::getStrides(triton::gpu::MemDescType memDesc, Location loc,
-                               RewriterBase &rewriter) const {
-  auto allocShape = memDesc.getAllocShape();
-  auto allocShapePerCTA =
-      triton::gpu::getAllocationShapePerCTA(memDesc.getEncoding(), allocShape);
-  auto layoutOrder = triton::gpu::getOrder(memDesc);
-  auto allocStrides = SharedMemoryObject::getStridesForShape(
-      allocShapePerCTA, layoutOrder, loc, rewriter);
-  return SmallVector<Value>(allocStrides.end() - offsets.size(),
-                            allocStrides.end());
-}
-
 Value SharedMemoryObject::getBaseBeforeSlice(int dim, Location loc,
                                              RewriterBase &rewriter) const {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -1071,42 +1086,6 @@ Value SharedMemoryObject::getBaseBeforeSlice(int dim, Location loc,
   Value offset = b.sub(b.i32_val(0), cSwizzleOffset);
   Type type = base.getType();
   return b.gep(type, baseElemType, base, offset);
-}
-
-SmallVector<unsigned>
-SharedMemoryObject::getOrderForShape(ArrayRef<int64_t> shape,
-                                     ArrayRef<unsigned> layoutOrder) {
-  SmallVector<unsigned> order(shape.size());
-  // Default minor-to-major order
-  std::iota(order.rbegin(), order.rend(), 0);
-  if (layoutOrder.size() > 0) {
-    // If a layout order is provided, we assume it specifies the order in
-    // which the dimensions are first accessed, and unspecified dimensions
-    // retain the minor-to-major order. For example, if order = [2, 1, 0] and
-    // layoutOrder = [0, 1], we need to shift `layoutOrder`
-    // by -1 (move them right). The resulting order will then be [1, 2, 0].
-    int rankDiff = layoutOrder.size() - shape.size();
-    auto minRank = std::min<size_t>(shape.size(), layoutOrder.size());
-    for (size_t i = 0; i < minRank; ++i)
-      order[i] = layoutOrder[i] - rankDiff;
-    assert(isPermutationOfIota(order) && "Invalid order");
-  }
-  return order;
-}
-
-SmallVector<Value>
-SharedMemoryObject::getStridesForShape(ArrayRef<int64_t> shape,
-                                       ArrayRef<unsigned> layoutOrder,
-                                       Location loc, RewriterBase &rewriter) {
-  SmallVector<Value> strides(shape.size());
-  auto order = SharedMemoryObject::getOrderForShape(shape, layoutOrder);
-  int64_t stride = 1;
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  for (auto idx : order) {
-    strides[idx] = b.i32_val(stride);
-    stride *= shape[idx];
-  }
-  return strides;
 }
 
 uint64_t
@@ -1122,8 +1101,7 @@ SharedMemoryObject::getMaskSpanOffsets(triton::gpu::MemDescType srcTy) {
   if (allocShape == shape) {
     return 0;
   }
-  auto totalLl =
-      triton::gpu::toLinearLayout(allocShape, srcTy.getEncoding(), allocShape);
+  auto totalLl = triton::gpu::toLinearLayout(allocShape, srcTy.getEncoding());
   auto dimNames = standardOutDimNames(ctx, shape.size());
   // Remove the kBlock dimension
   auto kOffset = StringAttr::get(ctx, "offset");
@@ -1153,7 +1131,7 @@ Value SharedMemoryObject::getShmemOffset(Location loc, RewriterBase &rewriter,
   auto ctx = srcTy.getContext();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
-  // If it did not have a memdesc_subview, we don't need to compute the offset
+  // If it did not have a memdesc_subslice we don't need to compute the offset
   // as it is zero
   if (!isAffineSharedMemoryAccess(srcTy)) {
     return b.i32_val(0);
@@ -1219,7 +1197,7 @@ SharedMemoryObject getSharedMemoryObjectFromStruct(Location loc,
 Value getStackPointer(RewriterBase &rewriter, FunctionOpInterface funcOp) {
   // See NOTE: [Additional Function Arguments]
   if (!isKernel(funcOp)) {
-    return funcOp.getArgument(funcOp.getNumArguments() - 2);
+    return funcOp.getArgument(funcOp.getNumArguments() + kSharedMemoryOffset);
   }
 
   auto mod = funcOp->getParentOfType<ModuleOp>();
@@ -1234,7 +1212,8 @@ Value getGlobalScratchPtr(Location loc, RewriterBase &rewriter,
   // See NOTE: [Additional Function Arguments]
   if (!isKernel(funcOp)) {
     // Base for this function
-    auto gmemBase = funcOp.getArgument(funcOp.getNumArguments() - 1);
+    auto gmemBase = funcOp.getArgument(funcOp.getNumArguments() +
+                                       kGlobalScratchBufferOffset);
     if (!allocOffset) {
       return gmemBase;
     }
@@ -1245,7 +1224,8 @@ Value getGlobalScratchPtr(Location loc, RewriterBase &rewriter,
   }
 
   // Base for entire kernel
-  auto gmemBase = funcOp.getArgument(funcOp.getNumArguments() - 1);
+  auto gmemBase =
+      funcOp.getArgument(funcOp.getNumArguments() + kGlobalScratchBufferOffset);
 
   ModuleOp mod = funcOp.getOperation()->getParentOfType<ModuleOp>();
   auto allocSizeAttr = mod.getOperation()->getAttrOfType<mlir::IntegerAttr>(
@@ -1285,6 +1265,15 @@ Value getGlobalScratchPtr(Location loc, RewriterBase &rewriter,
   auto res =
       b.gep(mlir::LLVM::LLVMPointerType::get(ctx, 1), i8_ty, gmemBase, offset);
   return res;
+}
+
+Value getProfileScratchPtr(Location loc, RewriterBase &rewriter,
+                           FunctionOpInterface funcOp) {
+  // See NOTE: [Additional Function Arguments]
+  // FIXME(Keren): This is broken when we have device functions, we
+  // need to implement proper calling convention
+  return funcOp.getArgument(funcOp.getNumArguments() +
+                            kProfileScratchBufferOffset);
 }
 
 Value getSharedMemoryBase(Location loc, RewriterBase &rewriter,
@@ -1340,7 +1329,7 @@ delinearize(RewriterBase &rewriter, Location loc,
             triton::gpu::DistributedEncodingTrait layout,
             ArrayRef<int64_t> shape, StringAttr dimName, Value linear) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  auto ll = triton::gpu::toLinearLayout(shape, layout, {});
+  auto ll = triton::gpu::toLinearLayout(shape, layout);
   auto linearLayout =
       triton::gpu::LinearEncodingAttr::get(rewriter.getContext(), ll);
   assert(ll.hasInDim(dimName));
@@ -1527,273 +1516,23 @@ void makeAllWarpGroupsIsolatedFromAbove(Operation *op) {
   });
 }
 
-namespace {
-
-// Determine which registers are read/written in which iteration of the shmem
-// transfer specified by `layout`.
-SmallVector<SmallVector<int> /*registers*/>
-collectRegsForIter(MLIRContext *ctx, const LinearLayout &layout) {
-  StringAttr kRegister = str_attr("register");
-  StringAttr kLane = str_attr("lane");
-  StringAttr kWarp = str_attr("warp");
-  StringAttr kBlock = str_attr("block");
-  StringAttr kIteration = str_attr("iteration");
-
-  // The choice of iteration should be determined only by the register.  That
-  // is, it should be correct to split the register dimension into iterations.
-  assert(layout.sublayoutIsZero({kLane, kWarp, kBlock}, {kIteration}));
-
-  LinearLayout sublayout = layout.sublayout({kRegister}, {kIteration});
-  SmallVector<SmallVector<int>> ret(sublayout.getOutDimSize(kIteration));
-  for (int reg = 0; reg < sublayout.getInDimSize(kRegister); reg++) {
-    auto idx = sublayout.apply({{kRegister, reg}});
-    ret[idx.begin()->second].push_back(reg);
-  }
-  return ret;
-}
-
-SmallVector<Value> transferWithinBlockImpl(ArrayRef<Value> inVals,
-                                           triton::gpu::ConvertLayoutOp op,
-                                           const LinearLayout &srcLayout,
-                                           const LinearLayout &dstLayout,
-                                           const TargetInfoBase &targetInfo,
-                                           RewriterBase &rewriter) {
-  MLIRContext *ctx = op.getContext();
-  auto loc = op.getLoc();
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-
-  StringAttr kRegister = str_attr("register");
-  StringAttr kLane = str_attr("lane");
-  StringAttr kWarp = str_attr("warp");
-  StringAttr kBlock = str_attr("block");
-  StringAttr kOffset = str_attr("offset");
-  StringAttr kIteration = str_attr("iteration");
-
-  auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
-
-  auto scratchConfig =
-      getScratchConfigForCvt(op.getSrc().getType(), op.getType());
-  auto tensorShapePerCTA =
-      convertType<unsigned, int64_t>(triton::gpu::getShapePerCTA(
-          op.getSrc().getType().getEncoding(), op.getType().getShape()));
-  // Input dims: [offset, iteration, block]
-  // Output dims: dimN-1, dimN-2, ..., dim0, where N is obtained from repShape
-  LinearLayout sharedLayout =
-      triton::gpu::chooseShemLayoutForRegToRegConversion(
-          ctx, tensorShapePerCTA, scratchConfig.repShape, scratchConfig.order);
-
-  // Layout for the store from registers to shared memory.
-  //
-  // Note: If two threads in the same warp write to the same shmem offset, the
-  // hardware resolves that without a stall or a bank conflict.  Therefore we
-  // don't need to avoid duplicate writes.
-  // Input dims: [reg, lane, warp]
-  // Output dims: [offset, iteration]
-  bool isStMatrix = targetInfo.canUseStMatrix(
-      op.getSrc().getType(), scratchConfig.repShape,
-      scratchConfig.paddedRepShape, scratchConfig.order,
-      /*swizzleByteSize=*/0);
-  LinearLayout shmemStoreLayout =
-      isStMatrix ? triton::gpu::chooseStMatrixLayout(ctx, op.getSrc().getType(),
-                                                     /*swizzleByteSize=*/0)
-                 : srcLayout.invertAndCompose(sharedLayout);
-
-  const int shmemAllocatedNumElems =
-      getNumScratchElements(scratchConfig.paddedRepShape);
-  assert(shmemStoreLayout.getOutDimSize(kOffset) <= shmemAllocatedNumElems);
-
-  // Layout for the load from shmem to registers.
-  LinearLayout shmemLoadLayout = dstLayout.invertAndCompose(sharedLayout);
-
-  // Check that the `register` fully determines the `iteration`.  That is,
-  // each thread does exactly the same reads and writes to shmem on each
-  // iteration, just with different input/output registers.
-  assert(
-      shmemStoreLayout.sublayoutIsZero({kLane, kWarp, kBlock}, {kIteration}));
-  assert(shmemLoadLayout.sublayoutIsZero({kLane, kWarp, kBlock}, {kIteration}));
-
-  // iteration -> registers
-  SmallVector<SmallVector<int>> inRegsForIter =
-      collectRegsForIter(ctx, shmemStoreLayout);
-  SmallVector<SmallVector<int>> outRegsForIter =
-      collectRegsForIter(ctx, shmemLoadLayout);
-
-  Value smemBase =
-      LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
-  auto sharedPtrTy = smemBase.getType();
-  Type elemTy = inVals[0].getType();
-  auto outSize = shmemLoadLayout.getInDimSize(kRegister);
-  auto iterations = sharedLayout.getInDimSize(kIteration);
-  assert(scratchConfig.inVec * iterations <= inVals.size());
-  assert(scratchConfig.outVec * iterations <= outSize);
-
-  // Check only one dimension has been padded.
-  // This means the difference between the padded shape and the original shape
-  // should only be in one dimension, specifically in
-  // `scratchConfig.order[0]`.
-  auto rank = scratchConfig.repShape.size();
-  for (auto i = 0; i < rank; i++) {
-    if (i == scratchConfig.order[0]) {
-      continue;
-    }
-    assert(scratchConfig.repShape[i] == scratchConfig.paddedRepShape[i]);
-  }
-  auto paddedStride = scratchConfig.repShape[scratchConfig.order[0]];
-  auto paddedSize =
-      scratchConfig.paddedRepShape[scratchConfig.order[0]] - paddedStride;
-
-  // Linear layout function is split in two parts below:
-  //
-  // L(r, t, w, b) = L(0, t, w, b) xor L(r, 0, 0, 0)
-  //   offset      =    regBase   xor    regIdx
-  //
-  // It is the same hack as what we've done in the emitIndices function to get
-  // around performance issues on AMD GPUs
-  auto getVecAddr = [&](LinearLayout &layout, Value &regBase,
-                        int regSlice) -> Value {
-    auto regIdx =
-        layout
-            .apply(
-                {{kRegister, regSlice}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}})[0]
-            .second;
-    Value offset = b.xor_(regBase, b.i32_val(regIdx));
-    if (paddedSize > 0) {
-      assert(llvm::isPowerOf2_32(paddedStride));
-      assert(llvm::isPowerOf2_32(paddedSize));
-      auto rshiftVal = llvm::Log2_32(paddedStride);
-      auto lshiftVal = llvm::Log2_32(paddedSize);
-      offset = b.add(
-          b.shl(b.lshr(offset, b.i32_val(rshiftVal)), b.i32_val(lshiftVal)),
-          offset);
-    }
-    auto vecAddr = b.gep(sharedPtrTy, elemTy, smemBase, offset,
-                         LLVM::GEPNoWrapFlags::inbounds);
-    return vecAddr;
-  };
-
-  auto storeBase = applyLinearLayout(loc, rewriter, shmemStoreLayout,
-                                     {{kRegister, b.i32_val(0)},
-                                      {kLane, laneId},
-                                      {kWarp, warpId},
-                                      {kBlock, b.i32_val(0)}})[0]
-                       .second;
-  auto loadBase = applyLinearLayout(loc, rewriter, shmemLoadLayout,
-                                    {{kRegister, b.i32_val(0)},
-                                     {kLane, laneId},
-                                     {kWarp, warpId},
-                                     {kBlock, b.i32_val(0)}})[0]
-                      .second;
-  // register idx -> Value
-  llvm::MapVector<int, Value> outVals;
-  for (int i = 0; i < iterations; i++) {
-    if (i != 0)
-      b.barrier();
-
-    auto &inRegs = inRegsForIter[i];
-    auto &outRegs = outRegsForIter[i];
-
-    // When using `stmatrix`, we can store `inVec` elements even if they are
-    // not contiguous
-    auto inVec = isStMatrix ? shmemStoreLayout.getNumConsecutiveInOut()
-                            : scratchConfig.inVec;
-    for (int j = 0; j < inVals.size() / iterations; j += inVec) {
-      auto inRegSlice = inRegs[j];
-      Value vecAddr = getVecAddr(shmemStoreLayout, storeBase, inRegSlice);
-      SmallVector<Value> inValsVec;
-      for (int k = 0; k < inVec; k++)
-        inValsVec.push_back(inVals[inRegSlice + k]);
-      Value valsVec = packLLVector(loc, inValsVec, rewriter);
-      if (isStMatrix) {
-        targetInfo.storeMatrixShared(rewriter, loc, vecAddr, valsVec);
-      } else {
-        targetInfo.storeDShared(rewriter, loc, vecAddr, std::nullopt, valsVec,
-                                /*pred=*/b.true_val());
+// TODO: Is there a better way to do this? This needs to be fixed upstream.
+void fixUpLoopAnnotation(ModuleOp mod) {
+  mod->walk([](Operation *op) {
+    if (isa<LLVM::BrOp, LLVM::CondBrOp>(op)) {
+      if (op->hasAttr("llvm.loop_annotation")) {
+        auto loopMD = dyn_cast<LLVM::LoopAnnotationAttr>(
+            op->getAttr("llvm.loop_annotation"));
+        if (loopMD) {
+          if (auto brOp = dyn_cast<LLVM::BrOp>(op)) {
+            brOp.setLoopAnnotationAttr(loopMD);
+          } else if (auto condBrOp = dyn_cast<LLVM::CondBrOp>(op)) {
+            condBrOp.setLoopAnnotationAttr(loopMD);
+          }
+        }
       }
     }
-
-    b.barrier();
-
-    for (int j = 0; j < outSize / iterations; j += scratchConfig.outVec) {
-      auto outRegSlice = outRegs[j];
-      auto vecAddr = getVecAddr(shmemLoadLayout, loadBase, outRegSlice);
-      Value valsVec =
-          targetInfo.loadDShared(rewriter, loc, vecAddr, std::nullopt,
-                                 vec_ty(elemTy, scratchConfig.outVec),
-                                 /*pred=*/b.true_val());
-      for (Value v : unpackLLVector(loc, valsVec, rewriter))
-        outVals[outRegSlice++] = v;
-    }
-  }
-
-  SmallVector<Value> outValsVec;
-  for (size_t i = 0; i < outVals.size(); i++)
-    outValsVec.push_back(outVals[i]);
-  return outValsVec;
-}
-
-} // namespace
-
-Value transferWithinBlockPadding(triton::gpu::ConvertLayoutOp op, Value src,
-                                 const TargetInfoBase &targetInfo,
-                                 const LLVMTypeConverter *typeConverter,
-                                 RewriterBase &rewriter) {
-  MLIRContext *ctx = op.getContext();
-  auto loc = op.getLoc();
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  auto srcTy = op.getSrc().getType();
-  auto dstTy = op.getType();
-
-  // Remove the kBlock dimension from the layout as it's the identity in the
-  // cvt
-  auto srcLayout = triton::gpu::toLinearLayout(srcTy);
-  auto dstLayout = triton::gpu::toLinearLayout(dstTy);
-
-  SmallVector<Value> inVals = unpackLLElements(loc, src, rewriter);
-  assert(!inVals.empty());
-
-  // We munge the input values by converting i<n> (n<8) elements to i8 and
-  // pointers to i64. This is necessary because TargetInfo::loadDShared and
-  // storeDShared can't handle vectors of pointers or sub-byte elements.
-  auto elemTy = srcTy.getElementType();
-  auto isSubByteInt = elemTy.isInteger() && elemTy.getIntOrFloatBitWidth() < 8;
-  auto isPtr = isa<triton::PointerType>(elemTy);
-  auto llvmElemTyOrig = typeConverter->convertType(elemTy);
-  if (isSubByteInt)
-    elemTy = IntegerType::get(elemTy.getContext(), 8);
-  else if (isPtr)
-    elemTy = IntegerType::get(elemTy.getContext(), 64);
-  auto llvmElemTy = typeConverter->convertType(elemTy);
-
-  // Munge input values
-  for (const auto &it : llvm::enumerate(inVals)) {
-    if (isSubByteInt) {
-      inVals[it.index()] = b.zext(llvmElemTy, it.value());
-    } else if (isPtr) {
-      inVals[it.index()] = b.ptrtoint(llvmElemTy, it.value());
-    }
-  }
-
-  // Pretty sure this is the identity function ATM
-  // It'd be better to simply call `quotient({kBlock})` and
-  // remove kBlock from transferWithinBlockImpl
-  auto srcLayoutWithinBlock = triton::gpu::getLayoutWithinBlock(srcLayout);
-  auto dstLayoutWithinBlock = triton::gpu::getLayoutWithinBlock(dstLayout);
-  SmallVector<Value> outVals =
-      transferWithinBlockImpl(inVals, op, srcLayoutWithinBlock,
-                              dstLayoutWithinBlock, targetInfo, rewriter);
-
-  // Unmunge output values
-  for (const auto &it : llvm::enumerate(outVals)) {
-    if (isSubByteInt) {
-      outVals[it.index()] = b.trunc(llvmElemTyOrig, it.value());
-    } else if (isPtr) {
-      outVals[it.index()] = b.inttoptr(llvmElemTyOrig, it.value());
-    }
-  }
-
-  Value result =
-      packLLElements(loc, typeConverter, outVals, rewriter, op.getType());
-  return result;
+  });
 }
 
 SmallVector<Value> inlineRegionImpl(RewriterBase &rewriter, Region &region,
@@ -1853,6 +1592,71 @@ SmallVector<Value> inlineRegionImpl(RewriterBase &rewriter, Region &region,
     vals.push_back(val);
   }
   return vals;
+}
+
+void finalizeTensorAtomicResults(Operation *op, RankedTensorType tensorTy,
+                                 ConversionPatternRewriter &rewriter,
+                                 SmallVector<Value> &resultVals,
+                                 Type valueElemTy, TritonLLVMOpBuilder &b,
+                                 Value threadPred,
+                                 const TargetInfoBase &targetInfo,
+                                 const LLVMTypeConverter *typeConverter) {
+  auto *ctx = rewriter.getContext();
+  auto loc = op->getLoc();
+  Type structTy = typeConverter->convertType(tensorTy);
+  if (!op->hasAttr("allocation.offset")) {
+    // No broadcasting, just pack the values into a struct
+    Value resultStruct =
+        packLLElements(loc, typeConverter, resultVals, rewriter, structTy);
+    rewriter.replaceOp(op, {resultStruct});
+    return;
+  }
+
+  auto dstLayout = triton::gpu::toLinearLayout(tensorTy);
+  auto kReg = str_attr("register");
+  auto kLane = str_attr("lane");
+  auto kWarp = str_attr("warp");
+  dstLayout = dstLayout.sublayout({kReg, kLane, kWarp},
+                                  llvm::to_vector(dstLayout.getOutDimNames()));
+  dstLayout = dstLayout.reshapeOuts(
+      {{str_attr("offset"), dstLayout.getTotalOutDimSize()}});
+  auto smemBase = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op);
+
+  auto emitSt = [&](RewriterBase &rewriter, Location loc, ArrayRef<Value> vals,
+                    Value shmemAddr, int idx,
+                    VectorType vecTy) -> SmallVector<Value> {
+    auto length = vecTy.getNumElements();
+    Value valsVec =
+        packLLVector(loc, ArrayRef<Value>(vals).slice(idx, length), rewriter);
+    targetInfo.storeDShared(rewriter, loc, shmemAddr, std::nullopt, valsVec,
+                            threadPred);
+    return {};
+  };
+
+  auto emitLd = [&](RewriterBase &rewriter, Location loc, ArrayRef<Value> vals,
+                    Value shmemAddr, int idx,
+                    VectorType vecTy) -> SmallVector<Value> {
+    Value loadedVec = targetInfo.loadDShared(rewriter, loc, shmemAddr,
+                                             std::nullopt, vecTy, b.true_val());
+    return unpackLLVector(loc, loadedVec, rewriter);
+  };
+
+  auto noPaddingOffset = [](Value v) { return v; };
+  lowerLdSt(loc, ctx, dstLayout, resultVals, valueElemTy, smemBase,
+            /*calcPaddedOffset=*/noPaddingOffset, /*affineOffset=*/b.i32_val(0),
+            /*maskSpanAffineOffset=*/0, rewriter, targetInfo,
+            /*maybeMaxVecElems=*/{}, emitSt);
+  b.barrier();
+  resultVals = lowerLdSt(loc, ctx, dstLayout, resultVals, valueElemTy, smemBase,
+                         /*calcPaddedOffset=*/noPaddingOffset,
+                         /*affineOffset=*/b.i32_val(0),
+                         /*maskSpanAffineOffset=*/0, rewriter, targetInfo,
+                         /*maybeMaxVecElems=*/{}, emitLd);
+
+  // Create the result struct and replace the operation
+  Value resultStruct =
+      packLLElements(loc, typeConverter, resultVals, rewriter, structTy);
+  rewriter.replaceOp(op, {resultStruct});
 }
 
 } // namespace mlir

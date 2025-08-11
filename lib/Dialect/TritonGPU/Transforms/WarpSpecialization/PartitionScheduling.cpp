@@ -149,10 +149,14 @@ static void scheduleUsers(scf::ForOp loop, WarpSchedule &schedule,
 // first-order partition assignment to the operations in the scheme and its
 // users and/or dependencies. This sets up the initial partitioning of the ops.
 static std::optional<WarpSchedule> getInitialSchedule(scf::ForOp loop) {
-  WarpSchedule schedule;
+  // Check for an existing schedule.
+  if (FailureOr<WarpSchedule> scheduleOr = WarpSchedule::deserialize(loop);
+      succeeded(scheduleOr))
+    return {std::move(*scheduleOr)};
 
   // Start by creating the default partition, a partition for for all loads, and
   // a partition for all MMAs.
+  WarpSchedule schedule;
   Partition *defaultPartition = schedule.addPartition(0);
   Partition *mmaPartition = schedule.addPartition(1);
   Partition *loadPartition = schedule.addPartition(0);
@@ -479,6 +483,39 @@ void propagatePartitions(scf::ForOp loop, WarpSchedule &schedule) {
   }
 }
 
+// Rematerialize chains of broadcasts where the user is in a different partition
+// than the broadcast to reduce the amount of data that needs to be transferred.
+void rematerializeBroadcasts(WarpSchedule &schedule, OpOperand *use) {
+  static_assert(
+      std::is_base_of_v<OpTrait::OneResult<BroadcastOp>, BroadcastOp> &&
+      std::is_base_of_v<OpTrait::OneResult<ExpandDimsOp>, ExpandDimsOp>);
+
+  Operation *defOp = use->get().getDefiningOp();
+  while (isa_and_nonnull<BroadcastOp, ExpandDimsOp>(defOp)) {
+    Operation *clone = OpBuilder(defOp).clone(*defOp);
+    Partition *userPartition = schedule.getPartition(use->getOwner());
+    assert(userPartition && "user not scheduled");
+    schedule.insert(userPartition, clone);
+    use->set(clone->getResult(0));
+
+    defOp = clone->getOperand(0).getDefiningOp();
+    use = &clone->getOpOperand(0);
+  }
+}
+
+void optimizeSchedule(scf::ForOp loop, WarpSchedule &schedule) {
+  for (Partition &partition : schedule.getPartitions()) {
+    SmallVector<OpOperand *> uses;
+    schedule.iterateOutputs(loop, &partition,
+                            [&](Operation *defOp, OpOperand &use) {
+                              if (!isa<scf::YieldOp>(use.getOwner()))
+                                uses.push_back(&use);
+                            });
+    for (OpOperand *use : uses)
+      rematerializeBroadcasts(schedule, use);
+  }
+}
+
 //===----------------------------------------------------------------------===//
 // Pass Definition
 //===----------------------------------------------------------------------===//
@@ -504,10 +541,14 @@ void PartitionScheduling::runOnOperation() {
     if (loop->hasAttr(kWarpSpecializeAttrName))
       loops.push_back(loop);
   });
-  for (scf::ForOp loop : loops) {
+  for (auto [idx, loop] : llvm::enumerate(loops)) {
     if (std::optional<WarpSchedule> schedule = getInitialSchedule(loop)) {
       propagatePartitions(loop, *schedule);
+      optimizeSchedule(loop, *schedule);
       schedule->serialize(loop);
+      loop->setAttr(
+          kWarpSpecializeTagAttrName,
+          IntegerAttr::get(IntegerType::get(loop.getContext(), 32), idx));
     }
   }
 }

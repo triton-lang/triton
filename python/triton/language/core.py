@@ -351,6 +351,8 @@ def constexpr_function(f):
         res = f(*args, **kwargs)
 
         # convert result back to a Triton constexpr:
+        if knobs.runtime.interpret:
+            return res  # No constexpr in interpreter
         return constexpr(res)
 
     # disguise the function as a Triton builtin to avoid raising an error
@@ -1275,7 +1277,7 @@ def _type_for_tuple_values(values, fields=None):
 
 class tuple(base_value):
 
-    def __init__(self, args: Sequence, type: tuple_type = None):
+    def __init__(self, args: Sequence, type: Optional[tuple_type] = None):
         self.values = [i for i in args]
         if isinstance(type, tuple_type):
             self.type = type
@@ -1297,10 +1299,9 @@ class tuple(base_value):
         return self.values[self.type.fields.index(name)]
 
     # TODO: remove
-    def __setitem__(self, idx: constexpr, value):
-        if isinstance(idx, int):
-            idx = constexpr(idx)
-        assert isinstance(idx, constexpr)
+    def _setitem(self, idx, value):
+        idx = _unwrap_if_constexpr(idx)
+        assert isinstance(idx, int)
         self.values[idx] = value
         self.type = _type_for_tuple_values(self.values, self.type.fields)
 
@@ -3241,6 +3242,9 @@ class range:
         The compiler will attempt to partition memory, MMA, and vector
         operations in the loop into separate async partitions. This will
         increase the total number of warps required by the kernel.
+    :param disable_licm: Tells the compiler it shouldn't hoist loop invariant
+        code outside the loop. This is often useful to avoid creating long liveranges
+        within a loop.
 
         Note that warp specialization is only supported on Blackwell GPUs and
         only works on simple matmul loops. Support for arbitrary loops will be
@@ -3248,7 +3252,7 @@ class range:
     """
 
     def __init__(self, arg1, arg2=None, step=None, num_stages=None, loop_unroll_factor=None,
-                 disallow_acc_multi_buffer=False, flatten=False, warp_specialize=False):
+                 disallow_acc_multi_buffer=False, flatten=False, warp_specialize=False, disable_licm=False):
         if step is None:
             self.step = constexpr(1)
         else:
@@ -3264,12 +3268,36 @@ class range:
         self.disallow_acc_multi_buffer = disallow_acc_multi_buffer
         self.flatten = flatten
         self.warp_specialize = warp_specialize
+        self.disable_licm = disable_licm
 
     def __iter__(self):
         raise RuntimeError("tl.range can only be used in @triton.jit'd functions")
 
     def __next__(self):
         raise RuntimeError("tl.range can only be used in @triton.jit'd functions")
+
+
+class condition:
+    """
+    While loop condition wrapper.
+
+    .. highlight:: python
+    .. code-block:: python
+
+        @triton.jit
+        def kernel(...):
+            while tl.condition(c, disable_licm)
+                ...
+    :note: This is a special wrapper used to annotate while loops in the context of
+        :code:`triton.jit` functions. It allows user to pass extra attributes to the compiler.
+    :param disable_licm: Tells the compiler it shouldn't hoist loop invariant
+        code outside the loop. This is often useful to avoid creating long liveranges
+        within a loop.
+    """
+
+    def __init__(self, arg1, disable_licm=False):
+        self.condition = arg1
+        self.disable_licm = disable_licm
 
 
 # -----------------------

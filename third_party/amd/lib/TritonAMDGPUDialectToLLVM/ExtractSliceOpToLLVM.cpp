@@ -21,32 +21,15 @@ namespace {
 
 struct ExtractSliceOpConversion
     : public ConvertOpToLLVMPattern<amdgpu::ExtractSliceOp> {
-  explicit ExtractSliceOpConversion(LLVMTypeConverter &typeConverter,
-                                    PatternBenefit benefit = 1)
-      : ConvertOpToLLVMPattern<amdgpu::ExtractSliceOp>(typeConverter, benefit) {
-  }
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
 
   LogicalResult processLayout(amdgpu::ExtractSliceOp op, OpAdaptor adaptor,
                               ConversionPatternRewriter &rewriter) const {
     Location loc = op->getLoc();
     auto srcTy = cast<RankedTensorType>(op.getSource().getType());
     auto dstTy = cast<RankedTensorType>(op.getType());
-    auto srcShape = srcTy.getShape();
-    auto dstShape = dstTy.getShape();
-
     auto vals = unpackLLElements(loc, adaptor.getSource(), rewriter);
-    auto shapePerCTATile = triton::gpu::getShapePerCTATile(srcTy);
-    auto srcCTAShape = LLVM::AMD::multiDimElementwise<int64_t, unsigned>(
-        srcShape, shapePerCTATile, std::divides<unsigned>());
-    auto dstCTAShape = LLVM::AMD::multiDimElementwise<int64_t, unsigned>(
-        dstShape, shapePerCTATile, std::divides<unsigned>());
-
-    auto numCTATiles = std::accumulate(dstCTAShape.begin(), dstCTAShape.end(),
-                                       1, std::multiplies<>());
     auto offsets = op.getStaticOffsets();
-    auto firstTileCoordinate =
-        LLVM::AMD::multiDimElementwise<int64_t, unsigned>(
-            offsets, shapePerCTATile, std::divides<unsigned>());
 
     auto linearLayoutSrc = triton::gpu::toLinearLayout(srcTy);
     auto outDimNames = llvm::to_vector(linearLayoutSrc.getOutDimNames());
@@ -54,16 +37,6 @@ struct ExtractSliceOpConversion
     // element coordinates are compatible on stage 7 in algorithm below.
     auto linearLayoutDst =
         triton::gpu::toLinearLayout(dstTy).transposeOuts(outDimNames);
-
-    auto srcCTAOrder =
-        LLVM::AMD::getCTATileOrder(srcTy.getContext(), linearLayoutSrc);
-    auto dstCTAOrder =
-        LLVM::AMD::getCTATileOrder(srcTy.getContext(), linearLayoutDst);
-
-    unsigned elemsPerThreadPerCTA =
-        triton::gpu::getTotalElemsPerThread(srcTy) /
-        std::accumulate(srcCTAShape.begin(), srcCTAShape.end(), 1,
-                        std::multiplies<>());
 
     // Algorithm:
     // 1. for every src element

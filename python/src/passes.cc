@@ -59,7 +59,8 @@ void init_triton_passes_ttgpuir(py::module &&m) {
   ADD_PASS_WRAPPER_0("add_coalesce", createTritonGPUCoalesce);
   ADD_PASS_WRAPPER_0("add_optimize_thread_locality",
                      createTritonGPUOptimizeThreadLocality);
-  ADD_PASS_WRAPPER_0("add_hoist_tmem_alloc", createTritonGPUHoistTMEMAlloc);
+  ADD_PASS_OPTION_WRAPPER_1("add_hoist_tmem_alloc",
+                            createTritonGPUHoistTMEMAlloc, bool);
   ADD_PASS_OPTION_WRAPPER_1("add_assign_latencies",
                             createTritonGPUAssignLatencies, int);
   ADD_PASS_WRAPPER_0("add_schedule_loops", createTritonGPUScheduleLoops);
@@ -95,6 +96,7 @@ void init_triton_passes_ttgpuir(py::module &&m) {
 
 void init_triton_passes_convert(py::module &&m) {
   using namespace mlir;
+  ADD_PASS_WRAPPER_0("add_triton_scf_to_cf", mlir::triton::createTritonSCFToCF);
   ADD_PASS_WRAPPER_0("add_scf_to_cf", createSCFToControlFlowPass);
   ADD_PASS_WRAPPER_0("add_cf_to_llvmir", createConvertControlFlowToLLVMPass);
   ADD_PASS_WRAPPER_0("add_index_to_llvmir", createConvertIndexToLLVMPass);

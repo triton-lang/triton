@@ -276,8 +276,7 @@ static PyObject *setPrintfFifoSize(PyObject *self, PyObject *args) {
   }
 
   Py_END_ALLOW_THREADS;
-  Py_INCREF(Py_None);
-  return Py_None;
+  Py_RETURN_NONE;
 }
 
 static PyObject *fillTMADescriptor(PyObject *self, PyObject *args) {

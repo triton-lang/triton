@@ -22,15 +22,15 @@ using namespace mlir;
 using namespace mlir::triton::gpu;
 
 constexpr int kPtrBitWidth = 64;
-struct ConvertLayoutOpUsingLinearLayoutsConversion
+struct ConvertLayoutOpConversion
     : public ConvertOpToLLVMPattern<ConvertLayoutOp> {
   const TargetInfoBase &targetInfo;
 
   // Set benefit to 2 so that this pattern applies before other convert-layout
   // conversions.  TODO(jlebar): Eventually we want this to be the only pattern.
-  explicit ConvertLayoutOpUsingLinearLayoutsConversion(
-      LLVMTypeConverter &typeConverter, const TargetInfoBase &targetInfo,
-      PatternBenefit benefit = 1)
+  explicit ConvertLayoutOpConversion(LLVMTypeConverter &typeConverter,
+                                     const TargetInfoBase &targetInfo,
+                                     PatternBenefit benefit = 1)
       : ConvertOpToLLVMPattern(typeConverter, benefit), targetInfo(targetInfo) {
   }
 
@@ -63,7 +63,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     } else if (llvm::is_contained(dims, kWarp)) {
       // Case 2: Transfer between values in the same CTA, in which case we move
       //         values through shared memory.
-      return transferWithinBlock(op, srcLayout, dstLayout, adaptor, rewriter);
+      transferWithinBlockSwizzling(op, adaptor.getSrc(), rewriter);
+      return success();
     } else if (llvm::is_contained(dims, kLane)) {
       // Case 3. Transfer between values in the same warp, in which case we try
       //         to move values using warp shuffles, though if the pattern is
@@ -74,7 +75,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       // TODO: Since data is only transferred within a warp over shared memory,
       // we should use `bar.warp.sync` instead of `barrier`, which will improve
       // latency when warps issue barriers on different cycles.
-      return transferWithinBlock(op, srcLayout, dstLayout, adaptor, rewriter);
+      transferWithinBlockSwizzling(op, adaptor.getSrc(), rewriter);
+      return success();
     } else if (llvm::is_contained(dims, kRegister)) {
       // Case 4. Transfer between values in the same thread, in which case we
       //         simply reorder the elements of adaptor.getSrc().
@@ -169,7 +171,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     // At this point we have a type that's at least 8-bit
     // and we don't have broadcasting in the registers
     auto bitwidth = llvmElemTy.getIntOrFloatBitWidth();
-    auto smem = optimalSwizzling(srcLayout, dstLayout, bitwidth);
+    auto smem = optimalSwizzlingLdSt(srcLayout, dstLayout, bitwidth);
 
     // Extract reps from smem
     auto kReg = str_attr("register");
@@ -201,9 +203,9 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
 
     assert(permutedInVals.size() == tileSize * nReps);
     SmallVector<Value> outVals;
-    auto noPaddingOffset = [](Value v) { return v; };
     auto affineOffset = b.i32_val(0);
     auto maskSpanAffineOffset = 0;
+    auto noPaddingOffset = [](Value v) { return v; };
     for (int i = 0; i < nReps; ++i) {
       if (i > 0)
         b.barrier();
@@ -227,20 +229,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     return outVals;
   }
 
-  LogicalResult
-  transferWithinBlockSwizzling(ConvertLayoutOp op, Value src,
-                               ConversionPatternRewriter &rewriter) const {
-    // Fallback for now to standard lowering if it can use stmatrix
-    auto scratchConfig =
-        getScratchConfigForCvt(op.getSrc().getType(), op.getType());
-    bool isStMatrix = targetInfo.canUseStMatrix(
-        op.getSrc().getType(), scratchConfig.repShape,
-        scratchConfig.paddedRepShape, scratchConfig.order,
-        /*swizzleByteSize=*/0);
-    if (isStMatrix) {
-      return failure();
-    }
-
+  void transferWithinBlockSwizzling(ConvertLayoutOp op, Value src,
+                                    ConversionPatternRewriter &rewriter) const {
     auto loc = op.getLoc();
     auto *ctx = op.getContext();
     auto srcTy = op.getSrc().getType();
@@ -268,27 +258,6 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     Value result =
         packLLElements(loc, getTypeConverter(), outVals, rewriter, dstTy);
     rewriter.replaceOp(op, result);
-    return success();
-  }
-
-  LogicalResult transferWithinBlock(ConvertLayoutOp op,
-                                    const LinearLayout &srcLayout,
-                                    const LinearLayout &dstLayout,
-                                    OpAdaptor adaptor,
-                                    ConversionPatternRewriter &rewriter) const {
-    assert(cvtNeedsSharedMemory(op.getSrc().getType(), op.getType()));
-
-    // Try to use swizzling to implement the conversion
-    if (succeeded(
-            transferWithinBlockSwizzling(op, adaptor.getSrc(), rewriter))) {
-      return success();
-    }
-
-    Value result = transferWithinBlockPadding(op, adaptor.getSrc(), targetInfo,
-                                              getTypeConverter(), rewriter);
-
-    rewriter.replaceOp(op, result);
-    return success();
   }
 
   // Use warp shuffles to implement a layout conversion where data only needs to
@@ -616,6 +585,5 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
 void mlir::triton::populateConvertLayoutOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, const TargetInfoBase &targetInfo,
     RewritePatternSet &patterns, PatternBenefit benefit) {
-  patterns.add<ConvertLayoutOpUsingLinearLayoutsConversion>(
-      typeConverter, targetInfo, benefit);
+  patterns.add<ConvertLayoutOpConversion>(typeConverter, targetInfo, benefit);
 }

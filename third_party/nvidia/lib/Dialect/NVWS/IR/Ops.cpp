@@ -13,6 +13,7 @@
 #include "Dialect/NVWS/IR/NVWSAttrEnums.cpp.inc"
 
 #define GET_OP_CLASSES
+#include "Dialect/NVWS/IR/NVWSOpInterfaces.cpp.inc"
 #include "Dialect/NVWS/IR/Ops.cpp.inc"
 
 namespace mlir::triton::nvws {
@@ -61,7 +62,7 @@ std::optional<Twine> static arefEnterVerify(
   auto typeArray = aref.getBaseType();
   if (typeArray.size() != resultTypes.size())
     return "Aref has different number of arguments than enter";
-  // This should probably rely on the memdescSubviewOp verifier?
+  // This should probably rely on the memdescSubsliceOp verifier?
   for (auto [orig, arg] : llvm::zip(typeArray, resultTypes)) {
     if (auto origT = dyn_cast<RankedTensorType>(orig)) {
       auto argT = dyn_cast<RankedTensorType>(arg);
@@ -79,13 +80,15 @@ std::optional<Twine> static arefEnterVerify(
 }
 
 LogicalResult ArefPutEnterOp::verify() {
-  if (auto result = arefEnterVerify(getAref().getType(), getResultTypes()))
+  if (auto result =
+          arefEnterVerify(getAref().getType(), getBuffers().getType()))
     return emitError(*result);
   return success();
 }
 
 LogicalResult ArefGetEnterOp::verify() {
-  if (auto result = arefEnterVerify(getAref().getType(), getResultTypes()))
+  if (auto result =
+          arefEnterVerify(getAref().getType(), getBuffers().getType()))
     return emitError(*result);
   return success();
 }

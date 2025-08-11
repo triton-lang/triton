@@ -109,7 +109,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
 
     // COMMON: rocdl.global.load.lds {{.*}} {alias_scopes = [[[$ASYNC_COPY_SCOPE]]]
     %0 = ttg.async_copy_global_to_local %ptr, %arg1 : tensor<64x1x!tt.ptr<f32>, #blocked> -> <64x1xf32, #shared, #smem, mutable>
-    %1 = ttg.async_commit_group %0
+    %1 = ttg.async_commit_group tokens %0
 
     %3 = ttg.async_wait %1 {num = 1 : i32}
 

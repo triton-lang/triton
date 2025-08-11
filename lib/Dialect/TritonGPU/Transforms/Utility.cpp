@@ -1307,11 +1307,11 @@ void populateForOpDeadArgumentElimination(RewritePatternSet &patterns) {
 
 ttg::LocalAllocOp findShmemAlloc(Value operand) {
   // If it's a shmem operand, it must either be defined outside the loop, or
-  // come from an MemDescSubview op. Only ConvertLayout and Trans ops are
+  // come from an MemDescIndex op. Only ConvertLayout and MemdescView ops are
   // allowed in between.
   Value transitiveOperand = operand;
   while (isa_and_nonnull<ttg::ConvertLayoutOp, tt::TransOp, ttg::MemDescTransOp,
-                         ttg::MemDescReshapeOp>(
+                         ttg::MemDescReshapeOp, ttg::MemDescSubsliceOp>(
              transitiveOperand.getDefiningOp()) ||
          isa<BlockArgument>(transitiveOperand)) {
     if (auto blockArg = dyn_cast<BlockArgument>(transitiveOperand)) {
@@ -1324,7 +1324,7 @@ ttg::LocalAllocOp findShmemAlloc(Value operand) {
       transitiveOperand = transitiveOperand.getDefiningOp()->getOperand(0);
     }
   }
-  if (auto subView = dyn_cast_or_null<ttg::MemDescSubviewOp>(
+  if (auto subView = dyn_cast_or_null<ttg::MemDescIndexOp>(
           transitiveOperand.getDefiningOp())) {
     // Multi-buffered operand
     return dyn_cast_or_null<ttg::LocalAllocOp>(
@@ -1463,8 +1463,10 @@ void eraseLoopCarriedValues(scf::ForOp &loop, llvm::BitVector indices) {
 } // namespace mlir
 
 namespace mlir::triton {
-void replaceUsesAndPropagateType(OpBuilder &builder, Operation *oldUse,
-                                 Value val) {
+
+void replaceUsesAndPropagateType(
+    OpBuilder &builder, Operation *oldUse, Value val,
+    std::function<void(Operation *, Operation *)> callback) {
   OpBuilder::InsertionGuard guard(builder);
   SmallVector<Operation *> opsToDelete;
   SmallVector<OpOperand *> operandsToReplace;
@@ -1488,14 +1490,22 @@ void replaceUsesAndPropagateType(OpBuilder &builder, Operation *oldUse,
     // `subview(old_op)` is replaced by a new `subview(val)`.
     builder.setInsertionPoint(user);
     Value newVal;
-    if (auto subview = dyn_cast<ttg::MemDescSubviewOp>(user)) {
+    if (auto subview = dyn_cast<ttg::MemDescIndexOp>(user)) {
       ttg::MemDescType oldType = subview.getType();
       bool isMutable = cast<ttg::MemDescType>(val.getType()).getMutableMemory();
       Type newDstType = ttg::MemDescType::get(
           oldType.getShape(), oldType.getElementType(), oldType.getEncoding(),
-          oldType.getMemorySpace(), isMutable);
-      newVal = builder.create<ttg::MemDescSubviewOp>(
-          subview.getLoc(), newDstType, val, subview.getOffsets());
+          oldType.getMemorySpace(), isMutable, oldType.getAllocShape());
+      newVal = builder.create<ttg::MemDescIndexOp>(subview.getLoc(), newDstType,
+                                                   val, subview.getIndex());
+    } else if (auto subslice = dyn_cast<ttg::MemDescSubsliceOp>(user)) {
+      ttg::MemDescType oldType = subslice.getType();
+      bool isMutable = cast<ttg::MemDescType>(val.getType()).getMutableMemory();
+      Type newDstType = ttg::MemDescType::get(
+          oldType.getShape(), oldType.getElementType(), oldType.getEncoding(),
+          oldType.getMemorySpace(), isMutable, oldType.getAllocShape());
+      newVal = builder.create<ttg::MemDescSubsliceOp>(
+          subslice.getLoc(), newDstType, val, subslice.getOffsets());
     } else if (auto trans = dyn_cast<ttg::MemDescTransOp>(user)) {
       newVal = builder.create<ttg::MemDescTransOp>(trans.getLoc(), val,
                                                    trans.getOrder());
@@ -1507,7 +1517,10 @@ void replaceUsesAndPropagateType(OpBuilder &builder, Operation *oldUse,
     assert(newVal && "unhandled memdesc view");
     newVal.getDefiningOp()->setAttrs(user->getAttrs());
     replaceUsesAndPropagateType(builder, user, newVal);
-    opsToDelete.push_back(use.getOwner());
+    opsToDelete.push_back(user);
+    if (callback) {
+      callback(user, newVal.getDefiningOp());
+    }
   }
 
   // Perform late replacement.
@@ -1522,7 +1535,6 @@ void replaceUsesAndPropagateType(OpBuilder &builder, Operation *oldUse,
       wait.replaceAllUsesWith(newWait.getResults());
       wait.erase();
     } else {
-      Operation *op = operand->getOwner();
       operand->set(val);
     }
   }

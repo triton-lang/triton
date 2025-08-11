@@ -5,7 +5,12 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 
 namespace mlir::triton::AMD {
+
 SmallVector<scf::ForOp> getLeafForOps(triton::FuncOp funcOp);
+
+// [FIXME LL] Kill this function
+SmallVector<unsigned> getShapePerCTATile(RankedTensorType tensorTy);
+
 } // namespace mlir::triton::AMD
 
 #endif // TRITON_THIRD_PARTY_AMD_INCLUDE_DIALECT_TRITONAMDGPU_UTILITY_COMMONUTILS_H_

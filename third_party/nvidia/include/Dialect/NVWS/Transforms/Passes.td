@@ -60,8 +60,35 @@ def NVWSLowerAref : Pass<"nvws-lower-aref", "mlir::ModuleOp"> {
   let dependentDialects = [
     "mlir::triton::nvws::NVWSDialect",
     "mlir::triton::TritonDialect",
-    "mlir::triton::gpu::TritonGPUDialect"
+    "mlir::triton::gpu::TritonGPUDialect",
+    "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
   ];
+}
+
+def NVWSInsertAref: Pass<"nvws-insert-aref", "mlir::ModuleOp"> {
+  let summary = "Insert arefs between producer and consumer partitions.";
+
+  let description = [{
+    To automate barrier synchronizations between producer and consumer
+    partitions, arefs are introduced in the IR. Currently, this pass handles
+    only SMEM producers and consumers.
+
+    Specifically, for producer partitions, a producing operation is
+    wrapped in an ArefPutEnterOp and ArefPutExitOp pair. A descriptor load
+    op is replaced with the corresponding NVWS op, to store its result
+    into the SMEM buffer owned by an aref. For consumer partitions, a reference
+    to the original SMEM buffer is replaced with an indirection via ArefGetEnterOp on
+    the SMEM buffer owned by an aref. ArefGetExitOp is placed after the post-dominant
+    consumer operation.
+  }];
+
+  let dependentDialects = [
+    "mlir::triton::nvws::NVWSDialect",
+    "mlir::triton::TritonDialect",
+    "mlir::triton::gpu::TritonGPUDialect",
+    "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
+  ];
+
 }
 
 #endif // NVWS_PASSES
