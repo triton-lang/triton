@@ -1237,8 +1237,6 @@ def test_abs_fp8(in_dtype, device):
         cc = torch.cuda.get_device_capability()
         if in_dtype == tl.float8e4b15 and cc >= (9, 0):
             pytest.skip("float8e4b15 not supported on CUDA >= 9.0")
-        if in_dtype == tl.float8e4nv and cc < (8, 9):
-            pytest.skip("float8e4nv not supported on CUDA < 8.9")
 
     @triton.jit
     def abs_kernel(X, Z, SIZE: tl.constexpr):

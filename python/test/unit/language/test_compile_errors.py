@@ -355,14 +355,12 @@ def test_where_warning(fresh_triton_cache):
 @pytest.mark.parametrize("dtype", [tl.float8e5, tl.float8e5b16, tl.float8e4nv, tl.float8e4b8, tl.float8e4b15])
 def test_fp8_support(fresh_triton_cache, dtype):
     warning_dtypes = []
-    supported_dtypes = [tl.float8e5]
+    supported_dtypes = [tl.float8e5, tl.float8e4nv]
     if is_cuda():
         cc = torch.cuda.get_device_capability(0)
         supported_dtypes.append(tl.float8e4b15)
         if cc >= (9, 0):
             warning_dtypes.append(tl.float8e4b15)
-        if cc >= (8, 9):
-            supported_dtypes.append(tl.float8e4nv)
     elif is_hip():
         supported_dtypes += [tl.float8e4nv, tl.float8e4b8, tl.float8e5b16]
         if is_hip_cdna4():

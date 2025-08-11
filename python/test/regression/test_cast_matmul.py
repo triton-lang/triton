@@ -15,10 +15,7 @@ from triton._internal_testing import is_hip_cdna3, is_cuda, is_hip
 
 input_dtypes = ["bfloat16", "float16", "float32"]
 if is_cuda():
-    input_dtypes += ["int8", "float8_e5m2"]
-    cc = torch.cuda.get_device_capability(0)
-    if cc >= (8, 9):
-        input_dtypes += ["float8_e4m3fn"]
+    input_dtypes += ["int8", "float8_e5m2", "float8_e4m3fn"]
 elif is_hip_cdna3():
     input_dtypes += [
         "int8",
