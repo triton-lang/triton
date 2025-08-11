@@ -335,6 +335,11 @@ void init_gluon_ir(py::module &&m) {
              auto ctx = self.getContext();
              auto ctaLayout = self.getChecked<ttg::CTALayoutAttr>(
                  ctx, ctasPerCga, ctaSplitNum, ctaOrder);
+
+             if (tilesPerWarp.empty()) {
+               tilesPerWarp = std::vector<unsigned>(warpsPerCta.size(), 1);
+             }
+
              return ttg::AMDMfmaEncodingAttr::get(
                  ctx, version, warpsPerCta, tilesPerWarp, instrShape[0],
                  instrShape[1], transposed, ctaLayout, elemType);
