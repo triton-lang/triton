@@ -200,14 +200,14 @@ Value matrixVectorProd(TritonLLVMOpBuilder &b, const LinearLayout &A, Value x) {
   }
 
   // handle any diagonals that have survived
-  Value ret = b.i32_val(0);
+  SmallVector<Value> terms;
   for (int i = -nRow + 1; i < nCol; i++) {
     auto mask = getMask(i) & ~explicitCols;
     if (mask == 0)
       continue;
     auto masked = b.and_(x, b.i32_val(mask));
-    ret = b.xor_(ret, i >= 0 ? Value(b.lshr(masked, b.i32_val(i)))
-                             : Value(b.shl(masked, b.i32_val(-i))));
+    terms.push_back(i >= 0 ? Value(b.lshr(masked, b.i32_val(i)))
+                           : Value(b.shl(masked, b.i32_val(-i))));
   }
 
   // handle any explicit columns:
@@ -219,10 +219,22 @@ Value matrixVectorProd(TritonLLVMOpBuilder &b, const LinearLayout &A, Value x) {
       int32_t basis = matrix[i];
       if (basis == 0)
         continue;
-      ret = b.xor_(ret, b.select(bit_is_zero, zero, b.i32_val(basis)));
+      terms.push_back(b.select(bit_is_zero, zero, b.i32_val(basis)));
     }
   }
-  return ret;
+
+  // Tree reduce the xor terms
+  if (terms.empty())
+    return b.i32_val(0);
+  while (terms.size() > 1) {
+    SmallVector<Value> next;
+    for (size_t i = 0; i + 1 < terms.size(); i += 2)
+      next.push_back(b.xor_(terms[i], terms[i + 1]));
+    if (terms.size() % 2 == 1)
+      next.push_back(terms.back());
+    terms = std::move(next);
+  }
+  return terms[0];
 }
 
 } // namespace triton::gpu
