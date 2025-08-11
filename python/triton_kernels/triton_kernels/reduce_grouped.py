@@ -44,7 +44,7 @@ def reduce_grouped(x: torch.Tensor, indx: torch.Tensor, inplace: bool = True, sa
     - indx: Tensor[Int] of shape [num_groups, K]
     - inplace: only True is supported; the function overwrites the first valid
       row per group with the per-group sum (fp32 accumulate).
-    - sanitize: when True, runs a light pre-check that all non-negative entries
+    - sanitize: when True, runs an expensive pre-check that all non-negative entries
       in `indx` are unique (no duplicates). This prevents in-place write
       aliasing across groups. Useful for debugging/tests; adds overhead.
 
@@ -55,9 +55,8 @@ def reduce_grouped(x: torch.Tensor, indx: torch.Tensor, inplace: bool = True, sa
     assert inplace, "only inplace=True is supported for now"
     assert x.shape[0] == indx.numel()
     if sanitize:
-        vals = indx[indx >= 0].to(torch.long)
-        if vals.numel() > 0 and torch.unique(vals).numel() != vals.numel():
-            raise ValueError("reduce_grouped: sanitize failed — duplicate indices detected across groups.")
+        if torch.unique(indx[indx >= 0]).numel() != indx[indx >= 0].numel():
+            raise ValueError("reduce_grouped: duplicate indices detected across groups.")
     num_groups = indx.shape[0]
     overwritten = torch.empty((num_groups, ), dtype=torch.int32, device=x.device)
     BLOCK_N = 512
