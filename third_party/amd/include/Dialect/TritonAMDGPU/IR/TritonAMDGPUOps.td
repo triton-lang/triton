@@ -552,6 +552,32 @@ def MaskedLoadOp : TT_AMDGPU_Op<"masked_load", []> {
   }];
 }
 
+
+//===----------------------------------------------------------------------===//
+// MaskedStoreOp
+//===----------------------------------------------------------------------===//
+def MaskedStoreOp : TT_AMDGPU_Op<"masked_store", []> {
+  let summary = "Masked load operation";
+  let description = [{
+    Load operation with masked support. When the mask is existing, loads from the given pointer. WOrks with LLVM types.
+  }];
+  let arguments = (ins
+    LLVM_AnyPointer:$ptr,
+    LLVM_Type:$value,
+    I1:$mask,
+    DefaultValuedAttr<TT_CacheModifierAttr, "::mlir::triton::CacheModifier::NONE">:$cache,
+    DefaultValuedAttr<BoolAttr, "false">:$forceNoAlias
+  );
+
+  let assemblyFormat = [{
+    $ptr `,` $value `,` $mask
+    oilist(`cacheModifier` `=` $cache)
+    (`forceNoAlias` $forceNoAlias^)?
+    attr-dict `:` type(operands)
+  }];
+}
+
+
 //===----------------------------------------------------------------------===//
 // InThreadTransposeOp
 //===----------------------------------------------------------------------===//

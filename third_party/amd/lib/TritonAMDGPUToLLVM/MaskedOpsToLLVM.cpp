@@ -48,6 +48,30 @@ getCacheModifierFlagsForLoad(triton::amdgpu::MaskedLoadOp loadOp) {
   return std::make_pair(isVolatile, isNonTemporal);
 }
 
+static std::pair<bool, bool>
+getCacheModifierFlagsForStore(triton::amdgpu::MaskedStoreOp storeOp) {
+  auto cm = storeOp.getCache();
+  bool isVolatile = false;
+  bool isNonTemporal = false;
+
+  switch (cm) {
+  case triton::CacheModifier::WT:
+    isVolatile = true;
+    break;
+  case triton::CacheModifier::CG:
+    isNonTemporal = true;
+    break;
+  case triton::CacheModifier::CS:
+    isNonTemporal = true;
+    break;
+  default:
+    // Default: no special flags
+    break;
+  }
+
+  return std::make_pair(isVolatile, isNonTemporal);
+}
+
 class ConvertMaskedLoadOp
     : public OpRewritePattern<triton::amdgpu::MaskedLoadOp> {
 public:
@@ -90,6 +114,55 @@ public:
   }
 };
 
+class ConvertMaskedStoreOp
+    : public OpRewritePattern<triton::amdgpu::MaskedStoreOp> {
+public:
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(triton::amdgpu::MaskedStoreOp storeOp,
+                                PatternRewriter &rewriter) const override {
+
+    //    auto falseVal = loadOp.getFalseVal();
+
+    auto loc = storeOp.getLoc();
+    auto val = storeOp.getValue();
+    auto elemTy = storeOp.getValue().getType();
+    auto ptr = storeOp.getPtr();
+    auto mask = storeOp.getMask();
+    llvm::errs() << "Creating LLVM store:\n";
+    llvm::errs() << "  ptr type: " << ptr.getType() << "\n";
+    llvm::errs() << "  val type: " << val.getType() << "\n";
+    Block *currentBlock = rewriter.getInsertionBlock();
+    Block *afterStore =
+        rewriter.splitBlock(currentBlock, rewriter.getInsertionPoint());
+    Block *trueBlock = rewriter.createBlock(afterStore);
+    rewriter.setInsertionPointToEnd(currentBlock);
+    rewriter.create<LLVM::CondBrOp>(loc, mask, trueBlock, afterStore);
+    rewriter.setInsertionPointToStart(trueBlock);
+    //               | vialatile | non-tmp | gcn instr gfx94
+    // LLVM::StoreOp | 0         | 0       | (cg) global store
+    //               | 0         | 1       | (cs) global store nt
+    //               | 1         | 0/1     | (wt) global store sc0 sc1
+    auto [volatileFlag, nonTmpFlag] = getCacheModifierFlagsForStore(storeOp);
+    int alignment = 0;
+    if (auto vecTy = dyn_cast<VectorType>(elemTy)) {
+      auto elemTy = vecTy.getElementType();
+      auto elemSizeInBytes = elemTy.getIntOrFloatBitWidth() / 8;
+      alignment = elemSizeInBytes * vecTy.getNumElements();
+    }
+
+    auto llvmStoreOp = rewriter.create<LLVM::StoreOp>(loc, val, ptr, alignment,
+                                                      volatileFlag, nonTmpFlag);
+    if (storeOp.getForceNoAlias()) {
+      AMD::addLocalLoadNoAliasScope(llvmStoreOp);
+    }
+    rewriter.create<LLVM::BrOp>(loc, afterStore);
+    rewriter.setInsertionPointToStart(afterStore);
+    rewriter.eraseOp(storeOp);
+    return success();
+  }
+};
+
 struct ConvertMaskedOpsToLLVM
     : public triton::impl::ConvertMaskedOpsToLLVMBase<ConvertMaskedOpsToLLVM> {
   void runOnOperation() override {
@@ -101,6 +174,7 @@ struct ConvertMaskedOpsToLLVM
 
     RewritePatternSet patterns(context);
     patterns.add<ConvertMaskedLoadOp>(context);
+    patterns.add<ConvertMaskedStoreOp>(context);
 
     if (applyPatternsGreedily(mod, std::move(patterns), config)
             .failed()) { // is it okay to fail?

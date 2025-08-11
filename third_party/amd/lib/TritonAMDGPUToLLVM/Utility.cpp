@@ -346,76 +346,43 @@ Value llLoad(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,
 void llStore(RewriterBase &rewriter, Location loc, Value ptr, Value val,
              Value pred, triton::CacheModifier cm,
              bool forceNoAliasAsyncLoads) {
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  bool isNonMasked = false;
+  if (auto constOp = pred.getDefiningOp<LLVM::ConstantOp>()) {
+    if (auto intAttr = dyn_cast<IntegerAttr>(constOp.getValue())) {
+      isNonMasked = (intAttr.getValue() == 1);
+    }
+  }
 
-  auto ctx = ptr.getContext();
-  Type funcType = getFunctionType(void_ty(ctx), ValueRange({ptr, val, pred}));
-  auto parent = ptr.getParentRegion()->getParentOfType<LLVM::LLVMFuncOp>();
-
-  auto getStoreNameWithCacheMod = [](triton::CacheModifier cm) {
+  if (isNonMasked) {
+    // Determine cache flags based on cache modifier
+    bool isVolatile = false;
+    bool isNonTemporal = false;
     switch (cm) {
     case triton::CacheModifier::WT:
-      return predicatedStoreWT;
+      isVolatile = true;
+      break;
     case triton::CacheModifier::CG:
-      return predicatedStoreCG;
+      isNonTemporal = true;
+      break;
     case triton::CacheModifier::CS:
-      return predicatedStoreCS;
+      isNonTemporal = true;
+      break;
     default:
-      // Do not fail in compile time in the case of unsupported modifier.
-      // Just apply default config.
-      return predicatedStore;
+      // Default: no special flags
+      break;
     }
-  };
-  std::string funcName = getStoreNameWithCacheMod(cm);
-  if (forceNoAliasAsyncLoads)
-    funcName += noAliasAsyncLoads;
 
-  auto mangledName = mangleFunc(funcName, funcType);
-  LLVM::LLVMFuncOp funcOp =
-      appendOrGetExternFuncOp(rewriter, parent, mangledName, funcType);
-  LLVM::createLLVMCallOp(rewriter, loc, funcOp, ValueRange({ptr, val, pred}));
-}
+    auto storeOp = rewriter.create<LLVM::StoreOp>(
+        loc, val, ptr, /*alignment*/ 0, isVolatile, isNonTemporal);
 
-static bool isPredicatedStoreCS(LLVM::CallOp callOp) {
-  return callOp.getCallee().value().contains(
-      mlir::LLVM::AMD::predicatedStoreCS);
-}
+    if (forceNoAliasAsyncLoads) {
+      mlir::triton::AMD::addLocalLoadNoAliasScope(storeOp);
+    }
 
-static bool isPredicatedStoreCG(LLVM::CallOp callOp) {
-  return callOp.getCallee().value().contains(
-      mlir::LLVM::AMD::predicatedStoreCG);
-}
-
-static bool isPredicatedStoreWT(LLVM::CallOp callOp) {
-  return callOp.getCallee().value().contains(
-      mlir::LLVM::AMD::predicatedStoreWT);
-}
-
-// Utility function that returns flags <volatile, nontemporal> for a predicated
-// Load or Store
-// ---------------------------------
-// Op   | cm  | volatile | NT
-// -----+-----+---------------------
-// Load | .ca |   F      | F
-//      | .cg |   F      | T
-//      | .cs |   F      | T
-//      | .cv |   T      | X
-// -----+-----+----------+---------
-// Store| .wb |   F      | F
-//      | .cg |   F      | F
-//      | .cs |   F      | T
-//      | .wt |   T      | X
-// -----+-----+----------+---------
-std::pair<bool, bool>
-getCacheModifierFlagsForPredicatedCall(LLVM::CallOp callOp) {
-  if (isPredicatedStoreCG(callOp))
-    return std::make_pair(false, false);
-  if (isPredicatedStoreCS(callOp))
-    return std::make_pair(false, true);
-  if (isPredicatedStoreWT(callOp))
-    return std::make_pair(true, true);
-  // unsupported modifier
-  return std::make_pair(false, false);
+  } else {
+    rewriter.create<triton::amdgpu::MaskedStoreOp>(loc, ptr, val, pred, cm,
+                                                   forceNoAliasAsyncLoads);
+  }
 }
 
 // Create the auxiliary/cachepolicy value of ROCDL::RawPtrBufferLoad/StoreOp

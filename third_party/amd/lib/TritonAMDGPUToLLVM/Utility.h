@@ -14,12 +14,6 @@
 
 namespace mlir::LLVM::AMD {
 
-const char predicatedStore[] = "__triton_hip_predicated_store";
-const char predicatedStoreCG[] = "__triton_hip_predicated_store_CG";
-const char predicatedStoreCS[] = "__triton_hip_predicated_store_CS";
-const char predicatedStoreWT[] = "__triton_hip_predicated_store_WT";
-const char noAliasAsyncLoads[] = "__no_alias_async_loads";
-
 Value shuffleXor(Location loc, RewriterBase &rewriter, Value val, int i,
                  mlir::triton::AMD::ISAFamily isaFamily =
                      mlir::triton::AMD::ISAFamily::Unknown);
