@@ -7190,6 +7190,20 @@ def test_override_arch(arch, env_var_override, device):
         assert amdgcn_gfx.group(1) == arch
 
 
+def test_num_ctas_pre_sm90(device):
+    if not is_cuda():
+        pytest.skip("CUDA-only test")
+
+    @triton.jit
+    def _kernel(src):
+        pass
+
+    src = torch.empty(1, device=device)
+
+    with pytest.raises(ValueError, match=r"num_ctas > 1 requires NVIDIA SM90\+ \(Hopper\)"):
+        _kernel.warmup(src, grid=(1, ), num_ctas=2, arch="sm80")
+
+
 # -----------------------
 # test propagate_nan
 # -----------------------

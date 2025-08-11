@@ -174,6 +174,12 @@ class CUDABackend(BaseBackend):
         args.update({k: opts[k] for k in CUDAOptions.__dataclass_fields__.keys() if k in opts if opts[k] is not None})
         capability = int(self._parse_arch(args["arch"]))
 
+        # Friendly warning for unsupported num_ctas on pre-SM90 GPUs.
+        if args.get("num_ctas", 1) > 1 and capability < 90:
+            raise ValueError((f"num_ctas > 1 requires NVIDIA SM90+ (Hopper). "
+                              f"Current target is sm_{capability}. This configuration will fail. "
+                              f"Please set num_ctas=1 or target an SM90+ GPU."))
+
         if "supported_fp8_dtypes" not in args:
             supported_fp8_dtypes = set(CUDAOptions.supported_fp8_dtypes)
             if capability >= 89:
