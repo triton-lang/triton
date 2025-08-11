@@ -938,9 +938,6 @@ class MockTensor:
     def ptr_range():
         return 0  # optimistically assumes 32 bit pointer range
 
-    def __hash__(self):
-        return hash(self.dtype)
-
 
 class TensorWrapper:
 

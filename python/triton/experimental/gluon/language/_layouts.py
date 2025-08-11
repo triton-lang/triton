@@ -42,9 +42,6 @@ class AutoLayout(DistributedLayout):
     def mangle(self):
         return "AL"
 
-    def __hash__(self):
-        return hash("AL")
-
 
 @dataclass(frozen=True)
 class BlockedLayout(DistributedLayout):
