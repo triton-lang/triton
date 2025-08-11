@@ -25,10 +25,6 @@ def add_one_indirect(x_ptr, SQRT: tl.constexpr) -> None:
 @pytest.mark.parametrize("use_libdevice", (False, True))
 @pytest.mark.parametrize("kernel", (add_one, add_one_indirect))
 def test_link_extern_libs(use_libdevice, kernel):
-    if not torch.cuda.is_available():
-        pytest.skip("Test only applies to the Nvidia backend.")
-        return
-
     link_called: bool = False
 
     def callback(frame, event, arg):
