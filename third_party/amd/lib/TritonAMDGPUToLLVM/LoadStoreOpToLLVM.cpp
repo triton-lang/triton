@@ -725,7 +725,8 @@ struct BufferLoadToLocalOpConversion
     }
 
     SmallVector<Value> swizzledLaneOffsets;
-    // To compute the warp addresses we need the non swizzled encoding
+    // For swizzled layouts we need to use the non swizzled layout to compute
+    // the LDS addresses since we gather into LDS
     auto flatDstTy = dstTy;
 
     if (hasSwizzling) {
@@ -746,6 +747,7 @@ struct BufferLoadToLocalOpConversion
 
     auto offsetTy = offsetElems[0].getType();
     auto otherTy = otherElems.empty() ? i1_ty : otherElems[0].getType();
+    // Zip buffer_offset, mask, other, swizzleOffsets for lowerLdSt
     auto loadValues =
         zipLoadValues(rewriter, b, loc, vec, offsetElems, offsetTy, maskElems,
                       otherElems, otherTy, swizzledLaneOffsets);
@@ -784,7 +786,6 @@ struct BufferLoadToLocalOpConversion
       Value vecBytesVal = b.i32_val(vecBytes);
 
       Value maybeSwizzledMaskElem = maskElem;
-
       if (hasSwizzling) {
         applySwizzling(rewriter, loc, offsetElem, maybeSwizzledMaskElem, laneId,
                        swizzleLaneOffset);
@@ -805,6 +806,8 @@ struct BufferLoadToLocalOpConversion
         op->emitRemark()
             << " other values require to wait on the load from HBM to LDS. "
                "Consider moving the other values to the local_load";
+        // We do not alias with async loads or otherwise we would need to have a
+        // branch around the buffer_load_lds
         llStore(rewriter, loc, ldsAddr, storeVal,
                 b.icmp_ne(maskElem, b.true_val()), cacheMod,
                 /*forceNoAliasAsyncLoads=*/false);
@@ -891,6 +894,8 @@ struct AsyncCopyGlobalToLocalOpConversion
       assert(srcElems.size() == otherElems.size());
     }
 
+    // For swizzled layouts we need to use the non swizzled layout to compute
+    // the LDS addresses since we gather into LDS
     auto flatDstTy = dstTy;
     SmallVector<Value> swizzledLaneOffsets;
     if (hasSwizzling) {
@@ -907,6 +912,7 @@ struct AsyncCopyGlobalToLocalOpConversion
 
     Type srcPtrTy = srcElems[0].getType();
     Type otherTy = otherElems.empty() ? i1_ty : otherElems[0].getType();
+    // Zip buffer_offset, mask, other, swizzleOffsets for lowerLdSt
     SmallVector<Value> loadValues =
         zipLoadValues(rewriter, b, loc, vec, srcElems, srcPtrTy, maskElements,
                       otherElems, otherTy, swizzledLaneOffsets);
@@ -930,7 +936,6 @@ struct AsyncCopyGlobalToLocalOpConversion
       int vecBytes =
           (vecTy.getNumElements() * vecTy.getElementTypeBitWidth()) / 8;
       assert(llvm::isPowerOf2_32(vecBytes));
-
       Value maybeSwizzledMaskElem = maskElem;
 
       if (hasSwizzling) {
@@ -938,6 +943,7 @@ struct AsyncCopyGlobalToLocalOpConversion
                        swizzleLaneOffset);
       }
 
+      // Predicate load based on threadPred && swizzledMask
       auto pred = b.and_(threadPred, maybeSwizzledMaskElem);
       Block *currentBlock = rewriter.getInsertionBlock();
       Block *afterLoad =
