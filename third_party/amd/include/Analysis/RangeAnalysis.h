@@ -32,7 +32,6 @@ namespace mlir::triton::AMD {
 /// See visitRegionSuccessors.
 struct TritonIntegerRangeAnalysis : dataflow::IntegerRangeAnalysis {
   using dataflow::IntegerRangeAnalysis::IntegerRangeAnalysis;
-  const bool strict;
   TritonIntegerRangeAnalysis(
       DataFlowSolver &solver,
       const DenseMap<Value, SetVector<Operation *>> &assumptions)
