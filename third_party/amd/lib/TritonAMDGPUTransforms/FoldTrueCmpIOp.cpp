@@ -19,8 +19,7 @@ struct TritonAMDFoldTrueCmpIOpPass
     ModuleOp mod = getOperation();
     std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
     AMD::TritonIntegerRangeAnalysis *rangeAnalysis =
-        solver->load<AMD::TritonIntegerRangeAnalysis>(assumptions,
-                                                      /* strict */ true);
+        solver->load<AMD::TritonIntegerRangeAnalysis>(assumptions);
     AMD::initializeFuncOps(mod, rangeAnalysis);
     if (failed(solver->initializeAndRun(getOperation())))
       return signalPassFailure();

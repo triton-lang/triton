@@ -31,8 +31,7 @@ struct TestAMDRangeAnalysisPass
         AMD::TritonIntegerRangeAnalysis::collectAssumptions(getOperation());
     std::shared_ptr<DataFlowSolver> solver = createDataFlowSolver();
     AMD::TritonIntegerRangeAnalysis *rangeAnalysis =
-        solver->load<AMD::TritonIntegerRangeAnalysis>(assumptions,
-                                                      /* strict */ false);
+        solver->load<AMD::TritonIntegerRangeAnalysis>(assumptions);
     AMD::initializeFuncOps(mod, rangeAnalysis);
     if (failed(solver->initializeAndRun(getOperation())))
       return signalPassFailure();

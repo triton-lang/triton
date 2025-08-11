@@ -87,10 +87,7 @@ triton::AMD::TritonIntegerRangeAnalysis::maybeGetTripCount(
 namespace {
 
 constexpr int64_t kDefaultMaxTripCount = 1024;
-constexpr uint64_t kDefaultMaxProgramsLoose = 1L << 16; // 65536
-constexpr uint64_t maxXPrograms = 1L << 31;             // 2147483648
-constexpr uint64_t maxYPrograms = 1L << 16;             // 65536
-constexpr uint64_t maxZPrograms = 1L << 16;             // 65536
+constexpr uint64_t kDefaultMaxPrograms = 1L << 32; // 4294967296
 
 void getEnclosingLoops(Operation &op, SmallVector<LoopLikeOpInterface> &ops) {
   Operation *currOp = op.getParentOp();
@@ -338,19 +335,6 @@ void TritonIntegerRangeAnalysis::setToEntryState(
   propagateIfChanged(lattice, changed);
 }
 
-uint64_t TritonIntegerRangeAnalysis::getMaxPrograms(int32_t dim, bool strict) {
-  if (strict) {
-    if (dim == 0)
-      return maxXPrograms;
-    else if (dim == 1)
-      return maxYPrograms;
-    else
-      return maxZPrograms;
-  } else {
-    return kDefaultMaxProgramsLoose;
-  }
-}
-
 LogicalResult TritonIntegerRangeAnalysis::visitOperation(
     Operation *op,
     ArrayRef<const dataflow::IntegerValueRangeLattice *> operands,
@@ -402,14 +386,10 @@ LogicalResult TritonIntegerRangeAnalysis::visitOperation(
           op)) {
     llvm::TypeSwitch<Operation *>(op)
         .Case<GetProgramIdOp>([&](auto getPIDOp) {
-          uint64_t max_programs =
-              getMaxPrograms(getPIDOp.getAxisAsInt(), this->strict);
-          inferResultRangesPID(getPIDOp, max_programs - 1, joinCallback);
+          inferResultRangesPID(getPIDOp, kDefaultMaxPrograms - 1, joinCallback);
         })
         .Case<GetNumProgramsOp>([&](auto getPIDOp) {
-          uint64_t max_programs =
-              getMaxPrograms(getPIDOp.getAxisAsInt(), this->strict);
-          inferResultRangesPID(getPIDOp, max_programs, joinCallback);
+          inferResultRangesPID(getPIDOp, kDefaultMaxPrograms, joinCallback);
         })
         .Case<MakeRangeOp>([&](MakeRangeOp makeROp) {
           inferResultRanges(&makeROp, joinCallback);
