@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import List
+from dataclasses import dataclass, field
+from typing import List, Tuple
 from triton.language.core import _unwrap_if_constexpr
 
 from triton.experimental.gluon.language._layouts import _realize_cta_layout, DistributedLayout
@@ -32,11 +32,11 @@ class AMDMFMALayout(DistributedLayout):
     instr_shape: List[int]
     transposed: bool
     warps_per_cta: List[int]
-    tiles_per_warp: List[int]
+    tiles_per_warp: List[int] = field(default_factory=list)
     elem_type: ttgl.dtype = ttgl.float32
-    ctas_per_cga: List[int] | None = None
-    cta_split_num: List[int] | None = None
-    cta_order: List[int] | None = None
+    ctas_per_cga: List[int] = field(default_factory=list)
+    cta_split_num: List[int] = field(default_factory=list)
+    cta_order: Tuple[int, ...] = (1, 0)
 
     def __post_init__(self):
         super().__setattr__("version", _unwrap_if_constexpr(self.version))
