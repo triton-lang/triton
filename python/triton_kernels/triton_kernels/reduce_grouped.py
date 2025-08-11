@@ -36,7 +36,7 @@ def _reduce_grouped(X, stride_xm, stride_xn,  #
         ColPtrs += BLOCK_N * stride_xn
 
 
-def reduce_grouped(x: torch.Tensor, indx: torch.Tensor, inplace: bool = True):
+def reduce_grouped(x: torch.Tensor, indx: torch.Tensor, inplace: bool = True, sanitize: bool = False):
     """
     In-place grouped row reduction.
 
@@ -44,6 +44,9 @@ def reduce_grouped(x: torch.Tensor, indx: torch.Tensor, inplace: bool = True):
     - indx: Tensor[Int] of shape [num_groups, K]
     - inplace: only True is supported; the function overwrites the first valid
       row per group with the per-group sum (fp32 accumulate).
+    - sanitize: when True, runs a light pre-check that all non-negative entries
+      in `indx` are unique (no duplicates). This prevents in-place write
+      aliasing across groups. Useful for debugging/tests; adds overhead.
 
     Returns (x, overwritten_idx):
     - x: the input tensor modified in-place
@@ -51,6 +54,10 @@ def reduce_grouped(x: torch.Tensor, indx: torch.Tensor, inplace: bool = True):
     """
     assert inplace, "only inplace=True is supported for now"
     assert x.shape[0] == indx.numel()
+    if sanitize:
+        vals = indx[indx >= 0].to(torch.long)
+        if vals.numel() > 0 and torch.unique(vals).numel() != vals.numel():
+            raise ValueError("reduce_grouped: sanitize failed — duplicate indices detected across groups.")
     num_groups = indx.shape[0]
     overwritten = torch.empty((num_groups, ), dtype=torch.int32, device=x.device)
     BLOCK_N = 512
@@ -69,6 +76,11 @@ def reduce_grouped_torch(x: torch.Tensor, indx: torch.Tensor):
     - x: [(num_groups*K), N]
     - indx: [num_groups, K] with -1 marking invalid entries
     Returns (x_out, overwritten_idx)
+
+    Note: Because this reference is sequential and writes after summation,
+    it will deterministically resolve overlapping indices across groups.
+    The Triton in-place kernel does not protect against cross-group write
+    conflicts; provide disjoint per-group indices to match behavior.
     """
     assert indx.ndim == 2
     num_groups, k = indx.shape
