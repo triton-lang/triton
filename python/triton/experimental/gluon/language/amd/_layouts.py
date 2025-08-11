@@ -32,8 +32,8 @@ class AMDMFMALayout(DistributedLayout):
     instr_shape: List[int]
     transposed: bool
     warps_per_cta: List[int]
-    tiles_per_warp: List[int] = field(default_factory=list)
     elem_type: ttgl.dtype = ttgl.float32
+    tiles_per_warp: List[int] = field(default_factory=list)
     ctas_per_cga: List[int] = field(default_factory=list)
     cta_split_num: List[int] = field(default_factory=list)
     cta_order: Tuple[int, ...] = (1, 0)
