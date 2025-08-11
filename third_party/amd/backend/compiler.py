@@ -110,7 +110,7 @@ class HIPBackend(BaseBackend):
     def parse_options(self, opts) -> Any:
         args = {'arch': knobs.runtime.override_arch or self.target.arch}
 
-        if args.get("num_ctas", 1) > 1:
+        if opts.get("num_ctas", 1) > 1:
             raise ValueError("num_ctas > 1 not supported for AMD GPUs")
 
         # Enable XF32 (TF32) for CDNA3 GPUs
