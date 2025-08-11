@@ -276,7 +276,7 @@ struct ConvertLayoutOpConversion
         elemTy.isIntOrFloat() ? elemTy.getIntOrFloatBitWidth() : kPtrBitWidth;
 
     auto factors = getWarpLayoutConvertDecomposition(srcTy, dstTy, bitwidth);
-    auto &[pReg, pLane, mixedTranspositions] = factors;
+    auto &[pReg, pLane, mixedTranspositions, nPack] = factors;
     int m = mixedTranspositions.size();
     bool pLaneIsTrivial = squareSublayoutIsIdentity(pLane, kLane);
     assert((m > 0 || !pLaneIsTrivial) && "Shuffles not needed for conversion");
@@ -322,13 +322,6 @@ struct ConvertLayoutOpConversion
         inVals.append(original.begin(), original.end());
       regDim = pRegDim;
     }
-
-    // The fraction of elements in a lane that must be moved to another lane
-    // under the layout conversion is 1 - (1/2)^m. The remaining fraction can be
-    // packed into 32-bit registers so long as they fit.
-    int nPackPrelim = llvm::Log2_32(std::clamp(32 / bitwidth, 1, 4));
-    int nReg = pReg.getTotalInDimSizeLog2();
-    int nPack = std::min(nPackPrelim, nReg - m);
 
     // Apply pReg.
     SmallVector<Value> newInVals(regDim);
