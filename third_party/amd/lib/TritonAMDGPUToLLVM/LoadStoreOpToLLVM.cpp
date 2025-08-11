@@ -805,10 +805,11 @@ struct BufferLoadToLocalOpConversion
       return {};
     };
 
+    auto [_, warpId] = getLaneAndWarpId(rewriter, loc);
     lowerLdSt(
         loc, ctx, cvt, vals, resElemTy, smemObj.getBase(),
-        [](Value v) { return v; }, affineOffset, maskSpanAffineOffset, rewriter,
-        targetInfo, vec, emitBufferLoadLds, true);
+        [](Value v) { return v; }, affineOffset, maskSpanAffineOffset, laneId,
+        warpId, rewriter, targetInfo, vec, emitBufferLoadLds);
 
     // Drop the result token.
     Value zero = rewriter.create<LLVM::ConstantOp>(
@@ -987,10 +988,11 @@ struct AsyncCopyGlobalToLocalOpConversion
       return {};
     };
 
+    auto [_, warpId] = getLaneAndWarpId(rewriter, loc);
     lowerLdSt(
         loc, ctx, cvt, vals, resElemTy, smemObj.getBase(),
-        [](Value v) { return v; }, affineOffset, maskSpanAffineOffset, rewriter,
-        targetInfo, maxVec, emitGlobalLoadLds, true);
+        [](Value v) { return v; }, affineOffset, maskSpanAffineOffset, laneId,
+        warpId, rewriter, targetInfo, maxVec, emitGlobalLoadLds);
 
     // Drop the result token.
     Value zero = rewriter.create<LLVM::ConstantOp>(
