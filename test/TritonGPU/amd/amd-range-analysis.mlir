@@ -65,6 +65,9 @@ module attributes {"ttg.num-warps" = 4 : i32} {
     // expected-remark@+2 {{unsigned : [0, 65535] signed : [0, 65535]}}
     // expected-remark@+1 {{non-neg}}
     %0 = tt.get_program_id x : i32
+    %c65535_i32 = arith.constant 65535 : i32
+    %cmpule_pid = arith.cmpi ule, %0, %c65535_i32 : i32
+    llvm.intr.assume %cmpule_pid : i1
     // expected-remark@+2 {{unsigned : [0, 67107840] signed : [0, 67107840]}}
     // expected-remark@+1 {{non-neg}}
     %1 = arith.muli %0, %c1024_i32 : i32
@@ -86,6 +89,9 @@ module attributes {"ttg.num-warps" = 4 : i32} {
     // expected-remark@+2 {{unsigned : [0, 65535] signed : [0, 65535]}}
     // expected-remark@+1 {{non-neg}}
     %0 = tt.get_program_id x : i32
+    %c65535_i32 = arith.constant 65535 : i32
+    %cmpule_pid = arith.cmpi ule, %0, %c65535_i32 : i32
+    llvm.intr.assume %cmpule_pid : i1
     // expected-remark@+2 {{unsigned : [0, 67107840] signed : [0, 67107840]}}
     // expected-remark@+1 {{non-neg}}
     %1 = arith.muli %0, %c1024_i32 : i32
@@ -117,6 +123,9 @@ module attributes {"ttg.num-warps" = 4 : i32} {
     // expected-remark@+2 {{unsigned : [0, 65535] signed : [0, 65535]}}
     // expected-remark@+1 {{non-neg}}
     %0 = tt.get_program_id x : i32
+    %c65535_i32 = arith.constant 65535 : i32
+    %cmpule_pid = arith.cmpi ule, %0, %c65535_i32 : i32
+    llvm.intr.assume %cmpule_pid : i1
     // expected-remark@+2 {{unsigned : [0, 67107840] signed : [0, 67107840]}}
     // expected-remark@+1 {{non-neg}}
     %1 = arith.muli %0, %c1024_i32 : i32
@@ -145,6 +154,9 @@ module attributes {"ttg.num-warps" = 4 : i32} {
     // expected-remark@+2 {{unsigned : [0, 65535] signed : [0, 65535]}}
     // expected-remark@+1 {{non-neg}}
     %0 = tt.get_program_id x : i32
+    %c65535_i32 = arith.constant 65535 : i32
+    %cmpule_pid = arith.cmpi ule, %0, %c65535_i32 : i32
+    llvm.intr.assume %cmpule_pid : i1
     // expected-remark@+2 {{unsigned : [0, 67107840] signed : [0, 67107840]}}
     // expected-remark@+1 {{non-neg}}
     %1 = arith.muli %0, %c1024_i32 : i32
@@ -197,6 +209,9 @@ module attributes {"ttg.num-warps" = 4 : i32} {
     // expected-remark@+2 {{unsigned : [0, 65535] signed : [0, 65535]}}
     // expected-remark@+1 {{non-neg}}
     %0 = tt.get_program_id x : i32
+    %c65535_i32 = arith.constant 65535 : i32
+    %cmpule_pid = arith.cmpi ule, %0, %c65535_i32 : i32
+    llvm.intr.assume %cmpule_pid : i1
     // expected-remark@+2 {{unsigned : [0, 67107840] signed : [0, 67107840]}}
     // expected-remark@+1 {{non-neg}}
     %1 = arith.muli %0, %c1024_i32 : i32
@@ -245,6 +260,9 @@ module attributes {"ttg.num-warps" = 4 : i32} {
     // expected-remark@+2 {{unsigned : [0, 65535] signed : [0, 65535]}}
     // expected-remark@+1 {{non-neg}}
     %0 = tt.get_program_id x : i32
+    %c65535_i32 = arith.constant 65535 : i32
+    %cmpule_pid = arith.cmpi ule, %0, %c65535_i32 : i32
+    llvm.intr.assume %cmpule_pid : i1
     // expected-remark@+2 {{unsigned : [0, 67107840] signed : [0, 67107840]}}
     // expected-remark@+1 {{non-neg}}
     %1 = arith.muli %0, %c1024_i32 : i32
@@ -299,6 +317,9 @@ module attributes {"ttg.num-warps" = 4 : i32} {
     // expected-remark@+2 {{unsigned : [0, 65535] signed : [0, 65535]}}
     // expected-remark@+1 {{non-neg}}
     %0 = tt.get_program_id x : i32
+    %c65535_i32 = arith.constant 65535 : i32
+    %cmpule_pid = arith.cmpi ule, %0, %c65535_i32 : i32
+    llvm.intr.assume %cmpule_pid : i1
     // expected-remark@+2 {{unsigned : [0, 67107840] signed : [0, 67107840]}}
     // expected-remark@+1 {{non-neg}}
     %1 = arith.muli %0, %c1024_i32 : i32
@@ -347,6 +368,9 @@ module attributes {"ttg.num-warps" = 4 : i32} {
     // expected-remark@+2 {{unsigned : [0, 65535] signed : [0, 65535]}}
     // expected-remark@+1 {{non-neg}}
     %0 = tt.get_program_id x : i32
+    %c65535_i32 = arith.constant 65535 : i32
+    %cmpule_pid = arith.cmpi ule, %0, %c65535_i32 : i32
+    llvm.intr.assume %cmpule_pid : i1
     // expected-remark@+2 {{unsigned : [0, 67107840] signed : [0, 67107840]}}
     // expected-remark@+1 {{non-neg}}
     %1 = arith.muli %0, %c1024_i32 : i32
@@ -384,6 +408,9 @@ module attributes {"ttg.num-warps" = 4 : i32} {
     // expected-remark@+2 {{unsigned : [0, 65535] signed : [0, 65535]}}
     // expected-remark@+1 {{non-neg}}
     %0 = tt.get_program_id x : i32
+    %c65535_i32 = arith.constant 65535 : i32
+    %cmpule_pid = arith.cmpi ule, %0, %c65535_i32 : i32
+    llvm.intr.assume %cmpule_pid : i1
     // expected-remark@+2 {{unsigned : [0, 67107840] signed : [0, 67107840]}}
     // expected-remark@+1 {{non-neg}}
     %1 = arith.muli %0, %c1024_i32 : i32
@@ -422,6 +449,9 @@ module attributes {"ttg.num-warps" = 4 : i32} {
     // expected-remark@+2 {{unsigned : [0, 65535] signed : [0, 65535]}}
     // expected-remark@+1 {{non-neg}}
     %0 = tt.get_program_id x : i32
+    %c65535_i32 = arith.constant 65535 : i32
+    %cmpule_pid = arith.cmpi ule, %0, %c65535_i32 : i32
+    llvm.intr.assume %cmpule_pid : i1
     // expected-remark@+2 {{unsigned : [0, 67107840] signed : [0, 67107840]}}
     // expected-remark@+1 {{non-neg}}
     %1 = arith.muli %0, %c1024_i32 : i32
@@ -445,6 +475,9 @@ module attributes {"ttg.num-warps" = 4 : i32} {
     // expected-remark@+2 {{unsigned : [0, 65535] signed : [0, 65535]}}
     // expected-remark@+1 {{non-neg}}
     %0 = tt.get_program_id x : i32
+    %c65535_i32 = arith.constant 65535 : i32
+    %cmpule_pid = arith.cmpi ule, %0, %c65535_i32 : i32
+    llvm.intr.assume %cmpule_pid : i1
     // expected-remark@+2 {{unsigned : [0, 16776960] signed : [0, 16776960]}}
     // expected-remark@+1 {{non-neg}}
     %1 = arith.muli %0, %c256_i32 : i32
@@ -485,6 +518,9 @@ module attributes {"ttg.num-warps" = 4 : i32} {
     // expected-remark@+2 {{unsigned : [0, 65535] signed : [0, 65535]}}
     // expected-remark@+1 {{non-neg}}
     %0 = tt.get_program_id x : i32
+    %c65535_i32 = arith.constant 65535 : i32
+    %cmpule_pid = arith.cmpi ule, %0, %c65535_i32 : i32
+    llvm.intr.assume %cmpule_pid : i1
     // expected-remark@+2 {{unsigned : [0, 8388480] signed : [0, 8388480]}}
     // expected-remark@+1 {{non-neg}}
     %1 = arith.muli %0, %c128_i32 : i32
@@ -523,6 +559,9 @@ module attributes {"ttg.num-warps" = 4 : i32} {
     // expected-remark@+2 {{unsigned : [0, 65535] signed : [0, 65535]}}
     // expected-remark@+1 {{non-neg}}
     %0 = tt.get_program_id x : i32
+    %c65535_i32 = arith.constant 65535 : i32
+    %cmpule_pid = arith.cmpi ule, %0, %c65535_i32 : i32
+    llvm.intr.assume %cmpule_pid : i1
     // expected-remark@+2 {{unsigned : [0, 67107840] signed : [0, 67107840]}}
     // expected-remark@+1 {{non-neg}}
     %1 = arith.muli %0, %c1024_i32 : i32
@@ -556,6 +595,9 @@ module attributes {"ttg.num-ctas" = 1 : i32} {
     // expected-remark@+2 {{unsigned : [0, 65535] signed : [0, 65535]}}
     // expected-remark@+1 {{non-neg}}
     %0 = tt.get_program_id x : i32
+    %c65535_i32 = arith.constant 65535 : i32
+    %cmpule_pid = arith.cmpi ule, %0, %c65535_i32 : i32
+    llvm.intr.assume %cmpule_pid : i1
     // expected-remark@+2 {{unsigned : [0, 67107840] signed : [0, 67107840]}}
     // expected-remark@+1 {{non-neg}}
     %1 = arith.muli %0, %c1024_i32 : i32
@@ -583,6 +625,9 @@ module attributes {"ttg.num-warps" = 4 : i32} {
     // expected-remark@+2 {{unsigned : [0, 65535] signed : [0, 65535]}}
     // expected-remark@+1 {{non-neg}}
     %0 = tt.get_program_id x : i32
+    %c65535_i32 = arith.constant 65535 : i32
+    %cmpule_pid = arith.cmpi ule, %0, %c65535_i32 : i32
+    llvm.intr.assume %cmpule_pid : i1
     %1 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32>
     %2 = tt.addptr %arg0, %0 : !tt.ptr<f32>, i32
     // expected-remark@+2 {{unsigned : [0, 1024] signed : [0, 1024]}}
@@ -691,6 +736,9 @@ module attributes {"ttg.num-warps" = 4 : i32} {
     // expected-remark@+2 {{unsigned : [0, 65535] signed : [0, 65535]}}
     // expected-remark@+1 {{non-neg}}
     %0 = tt.get_program_id x : i32
+    %c65535_i32 = arith.constant 65535 : i32
+    %cmpule_pid = arith.cmpi ule, %0, %c65535_i32 : i32
+    llvm.intr.assume %cmpule_pid : i1
     // expected-remark@+2 {{unsigned : [0, 67107840] signed : [0, 67107840]}}
     // expected-remark@+1 {{non-neg}}
     %1 = arith.muli %0, %c1024_i32 : i32
@@ -748,6 +796,9 @@ module attributes {"ttg.num-warps" = 4 : i32} {
     // expected-remark@+2 {{unsigned : [0, 65535] signed : [0, 65535]}}
     // expected-remark@+1 {{non-neg}}
     %0 = tt.get_program_id x : i32
+    %c65535_i32 = arith.constant 65535 : i32
+    %cmpule_pid = arith.cmpi ule, %0, %c65535_i32 : i32
+    llvm.intr.assume %cmpule_pid : i1
     // expected-remark@+2 {{unsigned : [0, 67107840] signed : [0, 67107840]}}
     // expected-remark@+1 {{non-neg}}
     %1 = arith.muli %0, %c1024_i32 : i32
@@ -827,6 +878,9 @@ module attributes {"ttg.num-warps" = 4 : i32} {
     // expected-remark@+2 {{unsigned : [0, 65535] signed : [0, 65535]}}
     // expected-remark@+1 {{non-neg}}
     %0 = tt.get_program_id x : i32
+    %c65535_i32 = arith.constant 65535 : i32
+    %cmpule_pid = arith.cmpi ule, %0, %c65535_i32 : i32
+    llvm.intr.assume %cmpule_pid : i1
     // expected-remark@+2 {{unsigned : [0, 67107840] signed : [0, 67107840]}}
     // expected-remark@+1 {{non-neg}}
     %1 = arith.muli %0, %c1024_i32 : i32
@@ -1236,12 +1290,19 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     // expected-remark@+2 {{unsigned : [0, 65536] signed : [0, 65536]}}
     // expected-remark@+1 {{non-neg}}
     %0 = tt.get_num_programs x : i32
+    %c65536_i32 = arith.constant 65536 : i32
+    %cmpule_num_program0 = arith.cmpi ule, %0, %c65536_i32 : i32
+    llvm.intr.assume %cmpule_num_program0 : i1
     // expected-remark@+2 {{unsigned : [0, 65536] signed : [0, 65536]}}
     // expected-remark@+1 {{non-neg}}
     %1 = tt.get_num_programs y : i32
+    %cmpule_num_program1 = arith.cmpi ule, %1, %c65536_i32 : i32
+    llvm.intr.assume %cmpule_num_program1 : i1
     // expected-remark@+2 {{unsigned : [0, 65536] signed : [0, 65536]}}
     // expected-remark@+1 {{non-neg}}
     %2 = tt.get_num_programs z : i32
+    %cmpule_num_program2 = arith.cmpi ule, %2, %c65536_i32 : i32
+    llvm.intr.assume %cmpule_num_program2 : i1
     // expected-remark@+2 {{unsigned : [0, 65536] signed : [0, 65536]}}
     // expected-remark@+1 {{non-neg}}
     %3 = arith.minsi %0, %1 : i32
@@ -1570,12 +1631,20 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     // expected-remark@+2 {{unsigned : [0, 65535] signed : [0, 65535]}}
     // expected-remark@+1 {{non-neg}}
     %0 = tt.get_program_id x : i32
+    %c65535_i32 = arith.constant 65535 : i32
+    %cmpule_pid0 = arith.cmpi ule, %0, %c65535_i32 : i32
+    llvm.intr.assume %cmpule_pid0 : i1
     // expected-remark@+2 {{unsigned : [0, 65535] signed : [0, 65535]}}
     // expected-remark@+1 {{non-neg}}
     %1 = tt.get_program_id y : i32
+    %cmpule_pid1 = arith.cmpi ule, %1, %c65535_i32 : i32
+    llvm.intr.assume %cmpule_pid1 : i1
     // expected-remark@+2 {{unsigned : [0, 65536] signed : [0, 65536]}}
     // expected-remark@+1 {{non-neg}}
     %2 = tt.get_num_programs y : i32
+    %c65536_i32 = arith.constant 65536 : i32
+    %cmpule_num_program1 = arith.cmpi ule, %2, %c65536_i32 : i32
+    llvm.intr.assume %cmpule_num_program1 : i1
     // expected-remark@+2 {{unsigned : [0, 2097120] signed : [0, 2097120]}}
     // expected-remark@+1 {{non-neg}}
     %3 = arith.muli %0, %c32_i32 : i32
