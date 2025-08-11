@@ -9,12 +9,18 @@ module attributes {"ttg.num-warps" = 4 : i32} {
     // expected-remark@+2 {{unsigned : [0, 65535] signed : [0, 65535]}}
     // expected-remark@+1 {{non-neg}}
     %0 = tt.get_program_id x : i32
+    %c65535_i32 = arith.constant 65535 : i32
+    %cmpule_pid = arith.cmpi ule, %0, %c65535_i32 : i32
+    llvm.intr.assume %cmpule_pid : i1
     // expected-remark@+2 {{unsigned : [0, 67107840] signed : [0, 67107840]}}
     // expected-remark@+1 {{non-neg}}
     %1 = arith.muli %0, %c1024_i32 : i32
     // expected-remark@+2 {{unsigned : [0, 65536] signed : [0, 65536]}}
     // expected-remark@+1 {{non-neg}}
     %numps = tt.get_num_programs x : i32
+    %c65536_i32 = arith.constant 65536 : i32
+    %cmpule_programs = arith.cmpi ule, %numps, %c65536_i32 : i32
+    llvm.intr.assume %cmpule_programs : i1
     %2 = tt.addptr %arg0, %1 : !tt.ptr<f32>, i32
     %3 = tt.splat %2 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>>
     %4 = tt.load %3 : tensor<1024x!tt.ptr<f32>>
