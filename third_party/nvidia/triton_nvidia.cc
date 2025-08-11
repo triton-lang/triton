@@ -276,4 +276,19 @@ void init_triton_nvidia(py::module &&m) {
         self.gemm(A_shape[0], B_shape[0], A_shape[1], A_ptr, B_ptr, C_ptr,
                   D_ptr, dtype, alpha, beta);
       });
+
+  m.def("has_extern_deps", [](llvm::Module *dstMod) -> bool {
+    // `global_smem` is special cased in Triton, so we ignore it here.
+    for (const auto& g : dstMod->globals()) {
+      if (g.hasExternalLinkage() && g.getName() != "global_smem") {
+        return true;
+      }
+    }
+    for (const auto& f : *dstMod) {
+      if (f.hasExternalLinkage() && !f.hasExactDefinition() && !f.isIntrinsic()) {
+        return true;
+      }
+    }
+    return false;
+  });
 }

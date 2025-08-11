@@ -374,7 +374,7 @@ class HIPBackend(BaseBackend):
                 str(default_libdir / "ockl.bc")
             ]
             llvm.link_extern_libs(llvm_mod, paths)
-        elif mod.has_call_op() and options.extern_libs:
+        elif options.extern_libs:
             paths = [path for (name, path) in options.extern_libs if amd.need_extern_lib(llvm_mod, name)]
             llvm.link_extern_libs(llvm_mod, paths)
 
