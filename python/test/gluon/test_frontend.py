@@ -1482,8 +1482,8 @@ def add_int(a, b):
 @gluon.jit
 def infer_layout_for_amd_mfma_kernel():
     layout: ttgl.constexpr = amd_layouts.AMDMFMALayout(version=3, instr_shape=[32, 32], transposed=True,
-                                                       elem_type=ttgl.int32, warps_per_cta=[4,
-                                                                                            1], tiles_per_warp=[1, 1],
+                                                       warps_per_cta=[4,
+                                                                      1], elem_type=ttgl.int32, tiles_per_warp=[1, 1],
                                                        ctas_per_cga=[1, 1], cta_split_num=[1, 1], cta_order=[1, 0])
     a = ttgl.full([128, 32], 1, ttgl.int32, layout)
     b = ttgl.reduce(a, 1, add_int)
