@@ -1,6 +1,7 @@
 from __future__ import annotations
 from typing import TYPE_CHECKING
 
+from triton import knobs
 from triton.experimental.gluon.language import _core as ttgl
 from triton._C.libtriton import ir
 from ..._core import builtin, int32, uint32, _unwrap_if_constexpr
@@ -110,3 +111,18 @@ def buffer_store(stored_value, ptr, offsets, mask=None, cache=None, _semantic: G
     cache_modifier = _semantic._str_to_load_cache_modifier(cache) if cache is not None else ir.CACHE_MODIFIER.NONE
 
     _semantic.builder.create_buffer_store(stored_value.handle, ptr.handle, offsets.handle, mask, cache_modifier)
+
+
+@builtin
+def mfma(input, other, acc, out_dtype=ttgl.float32, _semantic: GluonSemantic = None):
+    assert acc is not None, "acc is required"
+
+    if out_dtype is None:
+        out_dtype = acc.dtype
+
+    ret_type = acc.type
+    acc = ttgl._unwrap_if_constexpr(acc)
+
+    handle = _semantic.dot(input, other, acc, input_precision=knobs.language.fp32_default, max_num_imprecise_acc=None,
+                           out_dtype=out_dtype).handle
+    return ttgl.tensor(handle, ret_type)

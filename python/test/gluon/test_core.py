@@ -1,12 +1,13 @@
 import torch
 import pytest
 
-from triton._internal_testing import is_cuda, is_ampere_or_newer, is_hopper_or_newer, is_hopper
+from triton._internal_testing import is_cuda, is_ampere_or_newer, is_hip_cdna4, is_hopper_or_newer, is_hopper
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
 from triton.experimental.gluon.language.nvidia.ampere import async_copy, mbarrier
 from triton.experimental.gluon.language.nvidia.hopper import tma
 from triton.experimental.gluon.language.nvidia import hopper
+from triton._internal_testing import is_hip_cdna3
 
 
 @gluon.jit
@@ -142,3 +143,57 @@ def test_warpgroup_mma(ASYNC):
     ref = torch.matmul(a, b)
 
     torch.testing.assert_close(out, ref, atol=1e-3, rtol=1e-1)
+
+
+@pytest.mark.parametrize("M, N, K, num_warps, nonkdim", [(64, 64, 32, 4, 32), (32, 32, 32, 4, 16), (64, 64, 64, 4, 16)])
+def test_amd_mfma(M, N, K, num_warps, nonkdim):
+
+    @gluon.jit
+    def kernel(a_ptr, b_ptr, c_ptr, stride_am, stride_ak,  #
+               stride_bk, stride_bn,  #
+               stride_cm, stride_cn, BLOCK_SIZE_M: ttgl.constexpr, BLOCK_SIZE_N: ttgl.constexpr,
+               BLOCK_SIZE_K: ttgl.constexpr, blocked: ttgl.constexpr, mfma_layout: ttgl.constexpr):
+        dot_a_layout: ttgl.constexpr = ttgl.DotOperandLayout(operand_index=0, parent=mfma_layout, k_width=8)
+        dot_b_layout: ttgl.constexpr = ttgl.DotOperandLayout(operand_index=1, parent=mfma_layout, k_width=8)
+
+        offs_am = ttgl.arange(0, BLOCK_SIZE_M, layout=ttgl.SliceLayout(1, blocked))
+        offs_bn = ttgl.arange(0, BLOCK_SIZE_N, layout=ttgl.SliceLayout(0, blocked))
+
+        offs_ak = ttgl.arange(0, BLOCK_SIZE_K, layout=ttgl.SliceLayout(0, blocked))
+        offs_bk = ttgl.arange(0, BLOCK_SIZE_K, layout=ttgl.SliceLayout(1, blocked))
+        offs_a = offs_am[:, None] * stride_am + offs_ak[None, :] * stride_ak
+        offs_b = offs_bk[:, None] * stride_bk + offs_bn[None, :] * stride_bn
+
+        a = ttgl.amd.cdna3.buffer_load(ptr=a_ptr, offsets=offs_a)
+        b = ttgl.amd.cdna3.buffer_load(ptr=b_ptr, offsets=offs_b)
+        a1 = ttgl.convert_layout(a, layout=dot_a_layout)
+        b1 = ttgl.convert_layout(b, layout=dot_b_layout)
+        acc = ttgl.zeros([BLOCK_SIZE_M, BLOCK_SIZE_N], ttgl.float32, mfma_layout)
+        c = ttgl.amd.cdna3.mfma(a1, b1, acc)
+        c = ttgl.convert_layout(c, layout=blocked)
+        c = c.to(a_ptr.dtype.element_ty)
+
+        offs_cm = ttgl.arange(0, BLOCK_SIZE_M, layout=ttgl.SliceLayout(1, blocked))
+        offs_cn = ttgl.arange(0, BLOCK_SIZE_N, layout=ttgl.SliceLayout(0, blocked))
+        offs_c = offs_cm[:, None] * stride_cm + offs_cn[None, :] * stride_cn
+        ttgl.amd.cdna3.buffer_store(stored_value=c, ptr=c_ptr, offsets=offs_c)
+
+    if not is_hip_cdna3() and not is_hip_cdna4():
+        return []
+
+    elem_type = torch.float16
+    a = torch.randn((M, K), device='cuda', dtype=elem_type) - 0.5
+    b = torch.randn((K, N), device='cuda', dtype=elem_type) - 0.5
+    c = torch.empty((M, N), device=a.device, dtype=elem_type)
+    blocked: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[4, 4], threads_per_warp=[4, 16],
+                                                 warps_per_cta=[num_warps, 1], order=[1, 0])
+    mfma_layout: ttgl.constexpr = ttgl.amd.AMDMFMALayout(version=4, instr_shape=[nonkdim, nonkdim], transposed=True,
+                                                         warps_per_cta=[num_warps, 1])
+
+    kernel[
+        1,
+    ](a, b, c, a.stride(0), a.stride(1), b.stride(0), b.stride(1), c.stride(0), c.stride(1), BLOCK_SIZE_M=M,
+      BLOCK_SIZE_N=N, BLOCK_SIZE_K=K, blocked=blocked, mfma_layout=mfma_layout)
+    ref = torch.matmul(a, b)
+    triton_output = c
+    torch.testing.assert_close(ref, triton_output)
