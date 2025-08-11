@@ -155,7 +155,8 @@ private:
       const auto &key = groupEntry.first;
       auto &entries = groupEntry.second;
 
-      // Sort by the axis coordinate to ensure deterministic pairing order.
+      // Sort by the axis coordinate to ensure deterministic pairing
+      // This is not strictly necessary, but putting it for good measure
       llvm::sort(entries, [](const std::pair<unsigned, int> &a,
                              const std::pair<unsigned, int> &b) {
         return a.first < b.first;
