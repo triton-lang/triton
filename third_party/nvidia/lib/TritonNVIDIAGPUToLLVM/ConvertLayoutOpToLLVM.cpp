@@ -172,9 +172,13 @@ struct ConvertLayoutOpSwizzlingConversion
     auto affineOffset = b.i32_val(0);
     auto maskSpanAffineOffset = 0;
     auto noPaddingOffset = [](Value v) { return v; };
+    // We can use warp.sync when the warp dimension in the convert is trival
+    // and there is no broadcasting at a warp level (otherwise reads may be
+    // wrong) This could be fixed if we predicated the stores
     auto cvt = srcLayout.invertAndCompose(dstLayout);
     auto kWarp = str_attr("warp");
-    bool isWarpSync = cvt.isTrivialOver(kWarp);
+    bool isWarpSync = cvt.isTrivialOver(kWarp) &&
+                      srcLayout.getFreeVariableMasks()[kWarp] == 0;
     for (int i = 0; i < nReps; ++i) {
       if (i > 0)
         targetInfo.barrier(loc, rewriter, isWarpSync);
