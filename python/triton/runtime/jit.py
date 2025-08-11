@@ -395,10 +395,6 @@ class KernelInterface(Generic[T]):
 
 
 def serialize_specialization_data(name, signature, constants, attrs, options, key):
-    if not isinstance(key, str):
-        # Since not every hashable type might support JSON-serialization, revert to "legacy"-key.
-        assert isinstance(key, tuple) and len(key) == 2
-        key = str(key[0]) + str(key[1])
     constants = {key: str(value) if value.__class__.__name__ == "dtype" else value for key, value in constants.items()}
     import json
     obj = {
@@ -479,6 +475,17 @@ class JitFunctionInfo:
     jit_function: JITFunction
 
 
+def compute_cache_key(kernel_key_cache, specialization, options):
+    key = (tuple(specialization), tuple(options.items()))
+    cache_key = kernel_key_cache.get(key, None)
+    if cache_key is not None:
+        return cache_key
+
+    cache_key = str(specialization) + str(options)
+    kernel_key_cache[key] = cache_key
+    return cache_key
+
+
 class JITFunction(KernelInterface[T]):
 
     def is_gluon(self):
@@ -549,7 +556,7 @@ class JITFunction(KernelInterface[T]):
         self.compile = compile
         self.ASTSource = ASTSource
         binder = create_function_from_signature(self.signature, self.params, backend)
-        return {}, target, backend, binder
+        return {}, {}, target, backend, binder
 
     def _pack_args(self, backend, kwargs, bound_args, specialization, options):
         # options
@@ -586,32 +593,24 @@ class JITFunction(KernelInterface[T]):
         for hook in self.pre_run_hooks:
             hook(*args, **kwargs)
 
-        kernel_cache, target, backend, binder = self.device_caches[device]
+        kernel_cache, kernel_key_cache, target, backend, binder = self.device_caches[device]
         # specialization is list[tuple[str, Any]], where first element of tuple is
         # the type and the second parameter is the 'specialization' value.
         bound_args, specialization, options = binder(*args, **kwargs)
 
         # compute cache key
-        key = (tuple(specialization), tuple(sorted(options.items())))
-        kernel = kernel_cache.get(key, None)
+        cache_key = compute_cache_key(kernel_key_cache, specialization, options)
+        kernel = kernel_cache.get(cache_key, None)
 
         # Kernel is not cached; we have to compile.
         if kernel is None:
-            # If kernel not found, first try "legacy-key" that can be used for serialization.
-            legacy_key = str(key[0]) + str(key[1])
-            kernel = kernel_cache.get(legacy_key, None)
+            key = str(specialization) + str(options)
+            options, signature, constexprs, attrs = self._pack_args(backend, kwargs, bound_args, specialization,
+                                                                    options)
 
-            if kernel is not None:
-                # Also include new key in kernel_cache.
-                kernel_cache[key] = kernel
-
-            else:
-                options, signature, constexprs, attrs = self._pack_args(backend, kwargs, bound_args, specialization,
-                                                                        options)
-
-                kernel = self._do_compile(key, signature, device, constexprs, options, attrs, warmup)
-                if kernel is None:
-                    return None
+            kernel = self._do_compile(key, signature, device, constexprs, options, attrs, warmup)
+            if kernel is None:
+                return None
 
         # Check that used global values have not changed.
         not_present = object()
@@ -757,7 +756,7 @@ class JITFunction(KernelInterface[T]):
             for key, value in deserialized_obj['options'].items()
         }
         key = deserialized_obj['key']
-        _, _, backend, _ = self.device_caches[device]
+        _, _, _, backend, _ = self.device_caches[device]
         options = backend.parse_options(options)
         return self._do_compile(
             key,
@@ -770,7 +769,7 @@ class JITFunction(KernelInterface[T]):
         )
 
     def _do_compile(self, key, signature, device, constexprs, options, attrs, warmup):
-        kernel_cache, target, backend, _ = self.device_caches[device]
+        kernel_cache, _, target, backend, _ = self.device_caches[device]
 
         if self._call_hook(knobs.runtime.jit_cache_hook, key, signature, device, constexprs, options, [attrs], warmup):
             return None
