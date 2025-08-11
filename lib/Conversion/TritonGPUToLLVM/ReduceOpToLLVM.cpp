@@ -139,14 +139,51 @@ private:
     auto *combineOp = &op.getCombineOp();
     auto srcIndices = emitIndices(op.getLoc(), rewriter, targetInfo,
                                   helper.getSrcLayout(), operandType, true);
-    // reduce within threads
+
+    // Group unique elements by all non-axis coordinates
+    unsigned axis = op.getAxis();
+    std::map<SmallVector<unsigned>, SmallVector<std::pair<unsigned, int>>>
+        groups;
     for (const auto &[_, i] : uniqueOffsets) {
       SmallVector<unsigned> key = offsets[i];
-      key[op.getAxis()] = 0;
-      bool isFirst = accs.find(key) == accs.end();
-      accumulate(op.getLoc(), rewriter, *combineOp, accs[key], srcValues[i]);
-      if (isFirst)
-        indices[key] = srcIndices[i];
+      unsigned axisCoord = key[axis];
+      key[axis] = 0;
+      groups[key].push_back({axisCoord, i});
+    }
+
+    for (auto &groupEntry : groups) {
+      const auto &key = groupEntry.first;
+      auto &entries = groupEntry.second;
+
+      // Sort by the axis coordinate to ensure deterministic pairing order.
+      llvm::sort(entries, [](const std::pair<unsigned, int> &a,
+                             const std::pair<unsigned, int> &b) {
+        return a.first < b.first;
+      });
+
+      auto numElems = entries.size();
+      assert(llvm::isPowerOf2_64(numElems) &&
+             "reduceWithinThreads expects a power-of-two number of elements "
+             "per group");
+
+      // Slice srcValues
+      SmallVector<SmallVector<Value>> tuples(numElems);
+      for (unsigned j = 0; j < numElems; ++j) {
+        int idx = entries[j].second;
+        tuples[j] = srcValues[idx];
+      }
+
+      // Tree reduce
+      for (unsigned stride = numElems / 2; stride > 0; stride >>= 1) {
+        for (unsigned j = 0; j < stride; ++j) {
+          accumulate(op.getLoc(), rewriter, *combineOp, tuples[j],
+                     tuples[j + stride]);
+        }
+      }
+
+      // Store the result and the index
+      accs[key] = tuples[0];
+      indices[key] = srcIndices[entries[0].second];
     }
   }
 
