@@ -564,6 +564,32 @@ def InThreadTransposeOp : TT_AMDGPU_Op<"in_thread_transpose", [Pure]> {
 }
 
 //===----------------------------------------------------------------------===//
+// LocalLoadTransposedOp
+//===----------------------------------------------------------------------===//
+
+def LocalLoadTransposedOp : TT_AMDGPU_Op<"local_load_tranposed", [LocalLoadTrait]> {
+    let summary = "Load a transposed tensor from shared memory into a distributed tensor";
+    let description = [{
+      Requires a K contiguous tensor in shared memory and will yield the transposed tensor in registers.
+    }];
+  let arguments = (ins
+    Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$src,
+    Optional<TTG_AsyncToken>:$token
+  );
+  let results = (outs TT_Tensor:$result);
+
+  let builders = [
+      OpBuilder<(ins "Type":$retType, "Value":$src),
+      [{
+      build($_builder, $_state, retType, src, /*token=*/static_cast<mlir::Value>(nullptr));
+      }]>];
+
+  // Use qualified() otherwise "!ttg.memdesc<X>" is printed as "<X>".
+  let assemblyFormat = [{$src (`token` $token^)? attr-dict `:` qualified(type($src)) `->` type($result)}];
+  let hasVerifier = 1;
+}
+
+//===----------------------------------------------------------------------===//
 // LocalLoadPackedTransposedOp
 //===----------------------------------------------------------------------===//
 

@@ -31,8 +31,8 @@ namespace {
 //   load -> cvt -> .. -> dot1
 //        -> cvt -> .. -> trans -> cvt -> .. -> dot2
 // Rewrite to:
-//  load -> local_alloc -> local_load -> dot1
-//                                    -> trans -> cvt -> dot2
+//  load -> local_alloc -> local_load           -> dot1
+//                      -> local_load_tranposed -> dot2
 class ReuseShmemForDirectAndTransposedUse : public OpRewritePattern<LoadOp> {
 public:
   using OpRewritePattern::OpRewritePattern;
@@ -155,12 +155,11 @@ public:
     LDBG("Created local load op:" << *localLoad);
     directDot.setOperand(opIdx, localLoad);
     LDBG("Updated Direct dot: " << *directDot);
-    auto newTransOp = rewriter.create<tt::TransOp>(loc, localLoad, transOrder);
-    auto cvtOp = rewriter.create<ttg::ConvertLayoutOp>(loc, transOperandType,
-                                                       newTransOp);
-    LDBG("Created transpose op: " << *newTransOp);
-    LDBG("Created convert layout op: " << *cvtOp);
-    transDot.setOperand(opIdx, cvtOp);
+    auto transposedLocalLoad =
+        rewriter.create<triton::amdgpu::LocalLoadTransposedOp>(
+            loc, transOperandType, alloc);
+    LDBG("Created transposed local load op:" << *transposedLocalLoad);
+    transDot.setOperand(opIdx, transposedLocalLoad);
     LDBG("Updated Trans dot: " << *transDot);
 
     return success();

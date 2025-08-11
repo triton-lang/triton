@@ -465,6 +465,24 @@ LogicalResult ConcatOp::verify() {
   return success();
 }
 
+LogicalResult LocalLoadTransposedOp::verify() {
+  auto srcTy = getSrc().getType();
+  auto dstTy = getType();
+  auto srcShape = srcTy.getShape();
+
+  auto dotEnc = dyn_cast<DotOperandEncodingAttr>(dstTy.getEncoding());
+  if (!dotEnc)
+    return emitOpError("only works with DotOperandEncodingAttr dst encoding");
+
+  auto sharedEnc =
+      dyn_cast<triton::gpu::SwizzledSharedEncodingAttr>(srcTy.getEncoding());
+  if (!sharedEnc)
+    return emitOpError(
+        "only works with SwizzledSharedEncodingAttr src encoding");
+
+  return success();
+}
+
 LogicalResult LocalLoadPackedTransposedOp::verify() {
   auto srcTy = getSrc().getType();
   auto dstTy = getType();
