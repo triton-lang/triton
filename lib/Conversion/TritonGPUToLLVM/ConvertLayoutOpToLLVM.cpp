@@ -206,7 +206,11 @@ struct ConvertLayoutOpConversion
 
     auto cvt = srcLayout.invertAndCompose(dstLayout);
     auto kWarp = str_attr("warp");
-    bool isWarpSync = cvt.isTrivialOver(kWarp);
+    // We can use warp.sync when the warp dimension in the convert is trival
+    // and there is no broadcasting at a warp level (otherwise reads may be
+    // wrong) This could be fixed if we predicated the stores
+    bool isWarpSync = cvt.isTrivialOver(kWarp) &&
+                      srcLayout.getFreeVariableMasks()[kWarp] == 0;
     for (int i = 0; i < nReps; ++i) {
       if (i > 0)
         targetInfo.barrier(loc, rewriter, isWarpSync);
