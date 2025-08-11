@@ -13,14 +13,13 @@ def _create_driver() -> DriverBase:
 class DriverConfig:
 
     def __init__(self) -> None:
-        self._init_fn = _create_driver
         self._default: DriverBase | None = None
         self._active: DriverBase | None = None
 
     @property
     def default(self) -> DriverBase:
         if self._default is None:
-            self._default = self._init_fn()
+            self._default = _create_driver()
         return self._default
 
     @property
