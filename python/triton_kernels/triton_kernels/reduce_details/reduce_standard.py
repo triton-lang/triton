@@ -6,7 +6,7 @@ import triton.language as tl
 @triton.jit
 def _reduce_standard(X, stride_xb, stride_xm, stride_xn,  #
                      Y, stride_ym, stride_yn,  #
-                     B: tl.constexpr, M, N,  #
+                     B, M, N,  #
                      BLOCK_MN: tl.constexpr,  #
                      ):
     pid = tl.program_id(0)
@@ -41,23 +41,16 @@ def reduce_standard(x: torch.Tensor, dim: int = 0):
     # Require last two dims to be contiguous so [M, N] can be linearly indexed
     if not (x.stride(2) == 1 and x.stride(1) == N):
         raise NotImplementedError("reduce_standard requires contiguous last two dims to collapse [M, N]")
-    y = torch.zeros((M, N), device=x.device, dtype=x.dtype)
-    BLOCK_MN = 8192
+    y = torch.empty((M, N), device=x.device, dtype=x.dtype)
+    BLOCK_MN = 32768
     grid0 = min(256, triton.cdiv(M * N, BLOCK_MN))
     grid = (grid0, )
     _reduce_standard[grid](
-        x,
-        x.stride(0),
-        x.stride(1),
-        x.stride(2),  #
-        y,
-        y.stride(0),
-        y.stride(1),  #
-        B,
-        M,
-        N,  #
+        x, x.stride(0), x.stride(1), x.stride(2),  #
+        y, y.stride(0), y.stride(1),  #
+        B, M, N,  #
         BLOCK_MN=BLOCK_MN,  #
-        num_warps=4,
+        num_warps=16,  #
     )
     return y
 

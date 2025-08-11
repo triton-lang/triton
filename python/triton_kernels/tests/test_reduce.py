@@ -69,7 +69,7 @@ def bench_op_grouped(num_tokens: int = 16384, k: int = 4, n_cols: int = 4096, dt
     print(f"grouped: tokens={num_tokens}, k={k}, N={n_cols}, dtype={str(dtype).split('.')[-1]} -> {gbps:.2f} GB/s")
 
 
-def bench_op_standard(B: int = 4, M: int = 16384, N: int = 4096, dtype: torch.dtype = torch.float16, iters: int = 200):
+def bench_op_standard(B: int = 4, M: int = 4096, N: int = 4096, dtype: torch.dtype = torch.float16, iters: int = 200):
     torch.manual_seed(0)
     device = "cuda"
     x = torch.randn((B, M, N), device=device, dtype=torch.float32).to(dtype)
