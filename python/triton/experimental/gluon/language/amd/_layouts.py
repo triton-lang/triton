@@ -22,8 +22,8 @@ class AMDMFMALayout(DistributedLayout):
         instr_shape: (M, N) dimension for the instrinsic shape.
         transposed: indicates the result tensor is transposed so that each thread holds consecutive elements in the same row instead of column, which is good for chained dot and global write.
         warps_per_cta (List[int]): Number of warps per CTA.
-        tiles_per_warp: Optional(List[int]): Number of tiles per WARP. For mfma, every element is one.
-        elem_type Optinal(int32, fp32 or fp64): Default is fp32.
+        tiles_per_warp Optional(List[int]): Number of tiles per WARP. For mfma, every element is one.
+        elem_type Optional: Supported types are int32, fp32 and fp64. Default is fp32.
         ctas_per_cga (Optional[List[int]]): CTAs per CGA grouping.
         cta_split_num (Optional[List[int]]): Split factors for CTAs.
         cta_order (Optional[List[int]]): CTA ordering.
