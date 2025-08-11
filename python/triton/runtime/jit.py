@@ -598,13 +598,11 @@ class JITFunction(KernelInterface[T]):
         # the type and the second parameter is the 'specialization' value.
         bound_args, specialization, options = binder(*args, **kwargs)
 
-        # compute cache key
-        cache_key = compute_cache_key(kernel_key_cache, specialization, options)
-        kernel = kernel_cache.get(cache_key, None)
+        key = compute_cache_key(kernel_key_cache, specialization, options)
+        kernel = kernel_cache.get(key, None)
 
         # Kernel is not cached; we have to compile.
         if kernel is None:
-            key = str(specialization) + str(options)
             options, signature, constexprs, attrs = self._pack_args(backend, kwargs, bound_args, specialization,
                                                                     options)
 
