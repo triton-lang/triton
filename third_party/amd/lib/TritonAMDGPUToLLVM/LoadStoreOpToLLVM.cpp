@@ -746,7 +746,7 @@ struct BufferLoadToLocalOpConversion
 
     auto offsetTy = offsetElems[0].getType();
     auto otherTy = otherElems.empty() ? i1_ty : otherElems[0].getType();
-    auto vals =
+    auto loadValues =
         zipLoadValues(rewriter, b, loc, vec, offsetElems, offsetTy, maskElems,
                       otherElems, otherTy, swizzledLaneOffsets);
 
@@ -764,7 +764,7 @@ struct BufferLoadToLocalOpConversion
         [this, op, &b, &bufferEmitter, &rsrcDesc, laneId = laneId, threadPred,
          offsetTy, otherTy, hasOther = !otherElems.empty(), hasSwizzling,
          cacheMod = op.getCache()](RewriterBase &rewriter, Location loc,
-                                   ArrayRef<Value> vals, Value shmemAddr,
+                                   ArrayRef<Value> loadVals, Value shmemAddr,
                                    int startIdx,
                                    VectorType vecTy) -> SmallVector<Value> {
       Block *currentBlock = rewriter.getInsertionBlock();
@@ -776,7 +776,7 @@ struct BufferLoadToLocalOpConversion
       rewriter.setInsertionPointToStart(loadBlock);
 
       auto [offsetElem, maskElem, otherElems, swizzleLaneOffset] =
-          unzipLoadValues(rewriter, b, startIdx, vals, offsetTy, otherTy,
+          unzipLoadValues(rewriter, b, startIdx, loadVals, offsetTy, otherTy,
                           hasOther, vecTy.getNumElements());
       int vecBytes =
           (vecTy.getNumElements() * vecTy.getElementTypeBitWidth()) / 8;
@@ -816,7 +816,7 @@ struct BufferLoadToLocalOpConversion
       return {};
     };
 
-    lowerDirectToLDSLoad(rewriter, loc, ptrType, flatDstTy, vals, llDst,
+    lowerDirectToLDSLoad(rewriter, loc, ptrType, flatDstTy, loadValues, llDst,
                          resElemTy, vec, emitBufferLoadLds);
 
     // Drop the result token.
@@ -868,13 +868,13 @@ struct AsyncCopyGlobalToLocalOpConversion
     //  2. The mask (if present) has "alignment" N, meaning that each group of N
     //     mask bits are the same.  For example if N=2, the mask must be
     //     [x, x, y, y, ...].
-    unsigned maxVec = getVectorSize(op.getSrc(), axisAnalysisPass);
+    unsigned vec = getVectorSize(op.getSrc(), axisAnalysisPass);
     auto maskElements = getMaskElemsAndUpdateVeclen(
-        rewriter, loc, adaptor.getMask(), op.getMask(), maxVec);
+        rewriter, loc, adaptor.getMask(), op.getMask(), vec);
 
     bool hasSwizzling = sharedEnc.getMaxPhase() != 1;
-    if (failed(canWriteCoalesced(rewriter, op, srcTy, dstTy, maxVec,
-                                 hasSwizzling))) {
+    if (failed(
+            canWriteCoalesced(rewriter, op, srcTy, dstTy, vec, hasSwizzling))) {
       return failure();
     }
 
@@ -902,14 +902,14 @@ struct AsyncCopyGlobalToLocalOpConversion
                                    flatSharedEnc, dstTy.getMemorySpace());
       swizzledLaneOffsets =
           emitSwizzledLaneOffsets(rewriter, op, srcTy, dstTy, flatDstTy,
-                                  hasSwizzling, llDst, resElemTy, maxVec);
+                                  hasSwizzling, llDst, resElemTy, vec);
     }
 
     Type srcPtrTy = srcElems[0].getType();
     Type otherTy = otherElems.empty() ? i1_ty : otherElems[0].getType();
-    SmallVector<Value> vals =
-        zipLoadValues(rewriter, b, loc, maxVec, srcElems, srcPtrTy,
-                      maskElements, otherElems, otherTy, swizzledLaneOffsets);
+    SmallVector<Value> loadValues =
+        zipLoadValues(rewriter, b, loc, vec, srcElems, srcPtrTy, maskElements,
+                      otherElems, otherTy, swizzledLaneOffsets);
 
     auto freeVarMasks = getFreeVariableMasks(srcTy);
     freeVarMasks[str_attr("block")] = 0;
@@ -921,11 +921,11 @@ struct AsyncCopyGlobalToLocalOpConversion
         [this, op, &b, laneId = laneId, threadPred, srcPtrTy, otherTy,
          hasOther = !otherElems.empty(), hasSwizzling,
          cacheMod = op.getCache()](RewriterBase &rewriter, Location loc,
-                                   ArrayRef<Value> vals, Value shmemAddr,
+                                   ArrayRef<Value> loadValues, Value shmemAddr,
                                    int startIdx,
                                    VectorType vecTy) -> SmallVector<Value> {
       auto [srcElem, maskElem, otherElems, swizzleLaneOffset] =
-          unzipLoadValues(rewriter, b, startIdx, vals, srcPtrTy, otherTy,
+          unzipLoadValues(rewriter, b, startIdx, loadValues, srcPtrTy, otherTy,
                           hasOther, vecTy.getNumElements());
       int vecBytes =
           (vecTy.getNumElements() * vecTy.getElementTypeBitWidth()) / 8;
@@ -974,8 +974,8 @@ struct AsyncCopyGlobalToLocalOpConversion
       return {};
     };
 
-    lowerDirectToLDSLoad(rewriter, loc, srcTy, flatDstTy, vals, llDst,
-                         resElemTy, maxVec, emitGlobalLoadLds);
+    lowerDirectToLDSLoad(rewriter, loc, srcTy, flatDstTy, loadValues, llDst,
+                         resElemTy, vec, emitGlobalLoadLds);
 
     // Drop the result token.
     Value zero = rewriter.create<LLVM::ConstantOp>(
