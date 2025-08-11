@@ -589,9 +589,10 @@ lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout cvt,
       return unpackLLVector(loc, valsVec, rewriter);
     }
   };
+  auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
   return lowerLdSt(loc, ctx, cvt, valsArray, llvmElemTy, smemBase,
-                   calcPaddedOffset, affineOffset, maskSpanAffineOffset,
-                   rewriter, targetInfo, {}, emitLdSt);
+                   calcPaddedOffset, affineOffset, maskSpanAffineOffset, laneId,
+                   warpId, rewriter, targetInfo, {}, emitLdSt);
 }
 
 SmallVector<Value> lowerLdSt(
@@ -599,8 +600,9 @@ SmallVector<Value> lowerLdSt(
     ArrayRef<Value> valsArray, // Input for store, output for load
     Type llvmElemTy, Value smemBase,
     std::function<Value(Value)> calcPaddedOffset, Value affineOffset,
-    uint64_t maskSpanAffineOffset, RewriterBase &rewriter,
-    const TargetInfoBase &targetInfo, std::optional<int> maybeMaxVecElems,
+    uint64_t maskSpanAffineOffset, Value laneId, Value warpId,
+    RewriterBase &rewriter, const TargetInfoBase &targetInfo,
+    std::optional<int> maybeMaxVecElems,
     std::function<SmallVector<Value>(RewriterBase &, Location, ArrayRef<Value>,
                                      Value, int, VectorType)>
         lowerInst) {
@@ -646,7 +648,6 @@ SmallVector<Value> lowerLdSt(
       zerosLike(LinearLayout::identity1D(bitwidth / 8, kReg, kOffset));
   auto i8AddrLayout = i8Tile * addrLayout;
 
-  auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
   auto regBaseI8 =
       applyLinearLayout(
           loc, rewriter, i8AddrLayout,
@@ -1689,16 +1690,17 @@ void finalizeTensorAtomicResults(Operation *op, RankedTensorType tensorTy,
   };
 
   auto noPaddingOffset = [](Value v) { return v; };
+  auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
   lowerLdSt(loc, ctx, dstLayout, resultVals, valueElemTy, smemBase,
             /*calcPaddedOffset=*/noPaddingOffset, /*affineOffset=*/b.i32_val(0),
-            /*maskSpanAffineOffset=*/0, rewriter, targetInfo,
+            /*maskSpanAffineOffset=*/0, laneId, warpId, rewriter, targetInfo,
             /*maybeMaxVecElems=*/{}, emitSt);
   b.barrier();
   resultVals = lowerLdSt(loc, ctx, dstLayout, resultVals, valueElemTy, smemBase,
                          /*calcPaddedOffset=*/noPaddingOffset,
                          /*affineOffset=*/b.i32_val(0),
-                         /*maskSpanAffineOffset=*/0, rewriter, targetInfo,
-                         /*maybeMaxVecElems=*/{}, emitLd);
+                         /*maskSpanAffineOffset=*/0, laneId, warpId, rewriter,
+                         targetInfo, /*maybeMaxVecElems=*/{}, emitLd);
 
   // Create the result struct and replace the operation
   Value resultStruct =
