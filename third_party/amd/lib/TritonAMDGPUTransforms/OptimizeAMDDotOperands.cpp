@@ -32,7 +32,7 @@ namespace {
 //        -> cvt -> .. -> trans -> cvt -> .. -> dot2
 // Rewrite to:
 //  load -> local_alloc -> local_load           -> dot1
-//                      -> local_load_tranposed -> dot2
+//                      -> local_load_transposed -> dot2
 class ReuseShmemForDirectAndTransposedUse : public OpRewritePattern<LoadOp> {
 public:
   using OpRewritePattern::OpRewritePattern;

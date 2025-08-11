@@ -567,7 +567,7 @@ def InThreadTransposeOp : TT_AMDGPU_Op<"in_thread_transpose", [Pure]> {
 // LocalLoadTransposedOp
 //===----------------------------------------------------------------------===//
 
-def LocalLoadTransposedOp : TT_AMDGPU_Op<"local_load_tranposed", [LocalLoadTrait]> {
+def LocalLoadTransposedOp : TT_AMDGPU_Op<"local_load_transposed", [LocalLoadTrait]> {
     let summary = "Load a transposed tensor from shared memory into a distributed tensor";
     let description = [{
       Requires a K contiguous tensor in shared memory and will yield the transposed tensor in registers.
