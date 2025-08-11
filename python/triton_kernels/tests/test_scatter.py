@@ -1,7 +1,6 @@
 import pytest
 import torch
 from triton.testing import do_bench
-
 from triton_kernels.scatter import scatter, scatter_torch
 
 
