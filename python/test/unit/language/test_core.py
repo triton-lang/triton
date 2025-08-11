@@ -7191,8 +7191,6 @@ def test_override_arch(arch, env_var_override, device):
 
 
 def test_num_ctas_pre_sm90(device):
-    if not is_cuda():
-        pytest.skip("CUDA-only test")
 
     @triton.jit
     def _kernel(src):
