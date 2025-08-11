@@ -161,6 +161,13 @@ class Case:
     ", ".join(f.name for f in fields(Case)),
     [
         tuple(getattr(case, f.name) for f in fields(Case)) for case in [
+            # Zero-sized args:
+            Case(0, 5, 7, "ragged", "float16", "float16"),
+            Case(5, 0, 7, "ragged", "float16", "float16"),
+            Case(5, 7, 0, "ragged", "float16", "float16"),
+            Case(0, 5, 7, "batched", "float16", "float16"),
+            Case(5, 0, 7, "batched", "float16", "float16"),
+            Case(5, 7, 0, "batched", "float16", "float16"),
             # Non-mx types:
             Case(16, 256, 256, "ragged", "float16", "float16", 128, 4),
             Case(16, 256, 256, "ragged", "float16", "float16", 128, 4, n_expt_shards=2),
@@ -301,7 +308,7 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
                 pytest.skip("Hopper swizzling acts on a 64x64 tile (4x1 mma tiles).")
 
     # launch metadata for batched / mx types may not work yet.
-    test_launch_metadata = (mode == "ragged") and ("mx" not in weight_dtype_str)
+    test_launch_metadata = (mode == "ragged") and ("mx" not in weight_dtype_str) and fused_scatter and m*n*k != 0
 
     torch.manual_seed(0)
 
@@ -349,7 +356,7 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
                                                                  has_y_gammas, requires_grad=test_bwd, device=device)
     x_ref, w_ref, bias_ref, gs0_ref, gs1_ref = apply_precision(x_tri, w_tri, bias_tri, gs0_tri, gs1_tri, precision_opt)
 
-    if w_tri.shape[0] == 1:
+    if w_tri.shape[0] == 1 and mode != "batched":
         # Test the case when weight has dim 2, i.e., shape (K, N).
         w_tri = w_tri.squeeze(0).detach().requires_grad_(test_bwd)
         w_ref = w_ref.squeeze(0).detach().requires_grad_(test_bwd)
@@ -567,3 +574,28 @@ def test_fused_act(m, n, k, mode, split_k, do_gather, do_scatter, fused_scatter,
     except opt_flags.InapplicableConstraint:
         pytest.skip("inapplicable constraint")
     assert_close(a, b)
+
+
+@pytest.mark.parametrize("m, n, k", [
+    (320, 2**19, 0),
+    (4096, 4096, 0),
+])
+@pytest.mark.parametrize("view_x_as_zero_cols", [False, True])
+def test_zero_reduction_dim(m, n, k, view_x_as_zero_cols):
+    torch.manual_seed(0)
+
+    if view_x_as_zero_cols:
+        x = torch.randn(m, m, device="cuda", dtype=torch.bfloat16)
+        x = x[:0, :].transpose(-1, -2)
+    else:
+        x = torch.randn(m, k, device="cuda", dtype=torch.bfloat16)
+    w = torch.randn(k, n, device="cuda", dtype=torch.bfloat16)
+    bias = torch.randn(n, device="cuda", dtype=torch.float32)
+
+    try:
+        tri_y = matmul_ogs(x, w, bias)
+    except opt_flags.InapplicableConstraint:
+        pytest.skip("inapplicable constraint")
+    ref_y = matmul_ogs_torch(x, w, bias, round_x=lambda x, idx: x, round_y=lambda y: y)
+
+    assert_close(ref_y, tri_y)

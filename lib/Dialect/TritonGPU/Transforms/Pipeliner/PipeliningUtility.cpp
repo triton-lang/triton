@@ -465,9 +465,9 @@ Value mlir::triton::createScalarAlloc(ImplicitLocOpBuilder &rewriter, Type type,
 }
 
 // Create an allocation and init the mbarriers.
-Value mlir::triton::createBarrierAlloc(scf::ForOp forOp, int numBarriers,
+Value mlir::triton::createBarrierAlloc(Operation *op, int numBarriers,
                                        int arriveCount) {
-  ImplicitLocOpBuilder rewriter(forOp.getLoc(), forOp);
+  ImplicitLocOpBuilder rewriter(op->getLoc(), op);
 
   Value barrierAlloc =
       createScalarAlloc(rewriter, rewriter.getI64Type(), numBarriers);
@@ -476,7 +476,7 @@ Value mlir::triton::createBarrierAlloc(scf::ForOp forOp, int numBarriers,
     rewriter.create<ttng::InitBarrierOp>(barrierView, arriveCount);
   }
   // Invalidate and deallocate the barriers.
-  rewriter.setInsertionPointAfter(forOp);
+  rewriter.setInsertionPointAfter(op);
   for (unsigned i = 0; i < numBarriers; i++) {
     Value barrierView = createSingleBufferView(rewriter, barrierAlloc, i);
     rewriter.create<ttng::InvalBarrierOp>(barrierView);
