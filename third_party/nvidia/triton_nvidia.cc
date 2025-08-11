@@ -279,13 +279,14 @@ void init_triton_nvidia(py::module &&m) {
 
   m.def("has_extern_deps", [](llvm::Module *dstMod) -> bool {
     // `global_smem` is special cased in Triton, so we ignore it here.
-    for (const auto& g : dstMod->globals()) {
+    for (const auto &g : dstMod->globals()) {
       if (g.hasExternalLinkage() && g.getName() != "global_smem") {
         return true;
       }
     }
-    for (const auto& f : *dstMod) {
-      if (f.hasExternalLinkage() && !f.hasExactDefinition() && !f.isIntrinsic()) {
+    for (const auto &f : *dstMod) {
+      if (f.hasExternalLinkage() && !f.hasExactDefinition() &&
+          !f.isIntrinsic()) {
         return true;
       }
     }
