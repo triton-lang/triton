@@ -7,7 +7,6 @@ from triton.experimental.gluon import language as ttgl
 from triton.experimental.gluon.language.nvidia.ampere import async_copy, mbarrier
 from triton.experimental.gluon.language.nvidia.hopper import tma
 from triton.experimental.gluon.language.nvidia import hopper
-from triton._internal_testing import is_hip_cdna3
 
 
 @gluon.jit
@@ -186,7 +185,7 @@ def test_amd_mfma(M, N, K, in_dtype, num_warps, nonkdim):
         offs_c = offs_cm[:, None] * stride_cm + offs_cn[None, :] * stride_cn
         ttgl.amd.cdna3.buffer_store(stored_value=c, ptr=c_ptr, offsets=offs_c)
 
-    if not is_hip_cdna3() and not is_hip_cdna4():
+    if not is_hip_cdna4():
         return []
 
     assert in_dtype == 'float16' or in_dtype == 'bfloat16'
