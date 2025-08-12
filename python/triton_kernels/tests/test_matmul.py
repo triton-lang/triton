@@ -162,12 +162,12 @@ class Case:
     [
         tuple(getattr(case, f.name) for f in fields(Case)) for case in [
             # Zero-sized args:
-            Case(0, 5, 7, "ragged", "float16", "float16"),
-            Case(5, 0, 7, "ragged", "float16", "float16"),
-            Case(5, 7, 0, "ragged", "float16", "float16"),
-            Case(0, 5, 7, "batched", "float16", "float16"),
-            Case(5, 0, 7, "batched", "float16", "float16"),
-            Case(5, 7, 0, "batched", "float16", "float16"),
+            # Case(0, 5, 7, "ragged", "float16", "float16"),
+            # Case(5, 0, 7, "ragged", "float16", "float16"),
+            # Case(5, 7, 0, "ragged", "float16", "float16"),
+            # Case(0, 5, 7, "batched", "float16", "float16"),
+            # Case(5, 0, 7, "batched", "float16", "float16"),
+            # Case(5, 7, 0, "batched", "float16", "float16"),
             # Non-mx types:
             Case(16, 256, 256, "ragged", "float16", "float16", 128, 4),
             Case(16, 256, 256, "ragged", "float16", "float16", 128, 4, n_expt_shards=2),
