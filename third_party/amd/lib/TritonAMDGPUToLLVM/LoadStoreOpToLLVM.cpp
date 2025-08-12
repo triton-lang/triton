@@ -499,11 +499,11 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
         warpId, rewriter, targetInfo, vec, lowerInst);
   }
 
-  void emitOtherStores(RewriterBase &rewriter, Location loc,
-                       const LLVMTypeConverter *typeConverter, VectorType vecTy,
-                       Value mask, ArrayRef<Value> otherElems, Value shmemAddr,
-                       Value laneId, bool hasSwizzling,
-                       Value swizzleLaneOffset) const {
+  void emitOtherStore(RewriterBase &rewriter, Location loc,
+                      const LLVMTypeConverter *typeConverter, VectorType vecTy,
+                      Value mask, ArrayRef<Value> otherElems, Value shmemAddr,
+                      Value laneId, bool hasSwizzling,
+                      Value swizzleLaneOffset) const {
     TritonLLVMOpBuilder b(loc, rewriter);
     Value storeVal = packElementRangeIntoVector(rewriter, typeConverter, loc,
                                                 vecTy, otherElems, 0);
@@ -820,9 +820,9 @@ struct BufferLoadToLocalOpConversion
       AMD::addAsyncCopyAliasScope(bufferLoadToLds);
 
       if (hasOther) {
-        emitOtherStores(rewriter, loc, this->getTypeConverter(), vecTy,
-                        maskElem, otherElems, shmemAddr, laneId, hasSwizzling,
-                        swizzleLaneOffset);
+        emitOtherStore(rewriter, loc, this->getTypeConverter(), vecTy, maskElem,
+                       otherElems, shmemAddr, laneId, hasSwizzling,
+                       swizzleLaneOffset);
       }
 
       rewriter.setInsertionPointToStart(afterLoadBlock);
@@ -954,9 +954,9 @@ struct AsyncCopyGlobalToLocalOpConversion
       rewriter.setInsertionPointToStart(afterLoadBlock);
 
       if (hasOther) {
-        emitOtherStores(rewriter, loc, this->getTypeConverter(), vecTy,
-                        maskElem, otherElems, shmemAddr, laneId, hasSwizzling,
-                        swizzleLaneOffset);
+        emitOtherStore(rewriter, loc, this->getTypeConverter(), vecTy, maskElem,
+                       otherElems, shmemAddr, laneId, hasSwizzling,
+                       swizzleLaneOffset);
       }
 
       return {};
