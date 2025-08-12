@@ -2,7 +2,6 @@ import torch
 
 import triton
 import triton.language as tl
-from triton.tools.tensor_descriptor import TensorDescriptor
 
 # -----------------------------------------------------------------------------
 #                                  Utilities
@@ -94,7 +93,7 @@ def matmul_launch_metadata(grid, kernel, args):
 
     ret = dict()
     M, N, K = args["M"], args["N"], args["K"]
-    Y, X, W = [t.base if isinstance(t, TensorDescriptor) else t for t in [args["Y"], args["X"], args["W"]]]
+    Y, X, W = args["YPtr"], args["XPtr"], args["WPtr"]
     tokens_per_expt = args.get("TOKENS_PER_EXPT_FOR_ANNOTATION")
     hist = args["ExptHist"]
     if hist is not None:
