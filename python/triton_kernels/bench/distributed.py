@@ -282,7 +282,7 @@ def pack_bitmatrix(
     indices = tl.load(expt_indx + offsets, mask=mask, other=sentinel)
     div = indices // 32
     rem = indices % 32
-    iters = triton.cdiv(sentinel, BLOCK_SIZE_K)
+    iters = tl.cdiv(sentinel, BLOCK_SIZE_K)
     for i in range(iters):
         offs = tl.arange(0, BLOCK_SIZE_K // 32) + i * (BLOCK_SIZE_K // 32)
         x = tl.where(div[:, :, None] == offs[None, None, :], (1 << rem)[:, :, None], 0)
