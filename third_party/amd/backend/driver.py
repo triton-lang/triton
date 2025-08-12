@@ -311,6 +311,7 @@ static const char *hipLibSearchPaths[] = {{"{libhip_path}"}};
 // The list of HIP dynamic library symbols and their signature we are interested
 // in this file.
 #define HIP_SYMBOL_LIST(FOR_EACH_ERR_FN, FOR_EACH_STR_FN)                     \\
+  FOR_EACH_STR_FN(hipGetLastError)                                            \\
   FOR_EACH_STR_FN(hipGetErrorString, hipError_t hipError)                     \\
   FOR_EACH_ERR_FN(hipModuleLaunchKernel, hipFunction_t f,                     \\
                   unsigned int gridDimX, unsigned int gridDimY,               \\
