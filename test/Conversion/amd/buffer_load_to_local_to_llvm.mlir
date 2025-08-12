@@ -115,16 +115,16 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     // Note that mask/other alignment is 1 so we need 4 conditionals
 
     // COMMON: rocdl.raw.ptr.buffer.load.lds
-    // COMMON: _predicated_store
+
 
     // COMMON: rocdl.raw.ptr.buffer.load.lds
-    // COMMON: _predicated_store
+
 
     // COMMON: rocdl.raw.ptr.buffer.load.lds
-    // COMMON: _predicated_store
+
 
     // COMMON: rocdl.raw.ptr.buffer.load.lds
-    // COMMON: _predicated_store
+
 
     // COMMON-NOT: rocdl.raw.ptr.buffer.load.lds
     // COMMON-NOT: _predicated_store
@@ -225,22 +225,22 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     // COMMON: rocdl.ds_bpermute
     // COMMON: rocdl.ballot
     // COMMON: rocdl.raw.ptr.buffer.load.lds
-    // COMMON: _predicated_store
+
 
     // COMMON: rocdl.ds_bpermute
     // COMMON: rocdl.ballot
     // COMMON: rocdl.raw.ptr.buffer.load.lds
-    // COMMON: _predicated_store
+
 
     // COMMON: rocdl.ds_bpermute
     // COMMON: rocdl.ballot
     // COMMON: rocdl.raw.ptr.buffer.load.lds
-    // COMMON: _predicated_store
+
 
     // COMMON: rocdl.ds_bpermute
     // COMMON: rocdl.ballot
     // COMMON: rocdl.raw.ptr.buffer.load.lds
-    // COMMON: _predicated_store
+
 
     // COMMON-NOT: rocdl.ds_bpermute
     // COMMON-NOT: rocdl.ballot

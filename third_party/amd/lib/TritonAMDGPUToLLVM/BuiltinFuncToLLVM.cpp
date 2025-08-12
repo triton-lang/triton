@@ -2,11 +2,12 @@
 
 #include "AsyncUtility.h"
 #include "Utility.h"
+#include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
+#include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
-
 namespace mlir::triton {
 #define GEN_PASS_DEF_CONVERTBUILTINFUNCTOLLVM
 #include "TritonAMDGPUToLLVM/Passes.h.inc"
@@ -155,7 +156,9 @@ struct ConvertBuiltinFuncToLLVM
 
     RewritePatternSet patterns(context);
     patterns.add<CallOpConversion>(context, this->ftz);
-
+    LLVMTypeConverter typeConverter(context);
+    mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
+                                                          patterns);
     if (mlir::applyPatternsGreedily(mod, std::move(patterns), config)
             .failed()) {
       signalPassFailure();

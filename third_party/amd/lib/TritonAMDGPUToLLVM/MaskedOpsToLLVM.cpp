@@ -1,3 +1,4 @@
+#include "PatternTritonGPUOpToLLVM.h"
 #include "TritonAMDGPUToLLVM/Passes.h"
 #include "Utility.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
@@ -84,7 +85,6 @@ public:
     auto ptr = loadOp.getPtr();
     auto mask = loadOp.getMask();
     auto falseVal = loadOp.getFalseVal();
-
     Block *currentBlock = rewriter.getInsertionBlock();
     Block *afterLoad =
         rewriter.splitBlock(currentBlock, rewriter.getInsertionPoint());
@@ -121,17 +121,16 @@ public:
 
   LogicalResult matchAndRewrite(triton::amdgpu::MaskedStoreOp storeOp,
                                 PatternRewriter &rewriter) const override {
-
-    //    auto falseVal = loadOp.getFalseVal();
-
     auto loc = storeOp.getLoc();
     auto val = storeOp.getValue();
     auto elemTy = storeOp.getValue().getType();
     auto ptr = storeOp.getPtr();
+
     auto mask = storeOp.getMask();
-    llvm::errs() << "Creating LLVM store:\n";
-    llvm::errs() << "  ptr type: " << ptr.getType() << "\n";
-    llvm::errs() << "  val type: " << val.getType() << "\n";
+
+    llvm::errs() << "DEBUG INFO==========================\n";
+    llvm::errs() << mask << "\n";
+    llvm::errs() << mask.getType() << "\n";
     Block *currentBlock = rewriter.getInsertionBlock();
     Block *afterStore =
         rewriter.splitBlock(currentBlock, rewriter.getInsertionPoint());
@@ -146,8 +145,8 @@ public:
     auto [volatileFlag, nonTmpFlag] = getCacheModifierFlagsForStore(storeOp);
     int alignment = 0;
     if (auto vecTy = dyn_cast<VectorType>(elemTy)) {
-      auto elemTy = vecTy.getElementType();
-      auto elemSizeInBytes = elemTy.getIntOrFloatBitWidth() / 8;
+      auto vecElemTy = vecTy.getElementType();
+      auto elemSizeInBytes = vecElemTy.getIntOrFloatBitWidth() / 8;
       alignment = elemSizeInBytes * vecTy.getNumElements();
     }
 
@@ -192,3 +191,13 @@ std::unique_ptr<OperationPass<ModuleOp>> createConvertMaskedOpsToLLVMPass() {
 }
 
 } // namespace mlir::triton
+
+namespace mlir::triton::AMD {
+
+void populateMaskedOpsToLLVMPatterns(RewritePatternSet &patterns) {
+  patterns.add<ConvertMaskedLoadOp>(patterns.getContext());
+  patterns.add<ConvertMaskedStoreOp>(patterns.getContext());
+}
+} // namespace mlir::triton::AMD
+
+// namespace mlir::triton

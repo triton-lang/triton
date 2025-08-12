@@ -51,7 +51,8 @@ def ConvertBuiltinFuncToLLVM : Pass<"convert-builtin-func-to-llvm", "mlir::Modul
     let summary = "Convert Builtin Func to LLVM";
     let constructor = "mlir::triton::createConvertBuiltinFuncToLLVMPass(/*ftz=*/true)";
 
-    let dependentDialects = ["mlir::LLVM::LLVMDialect"];
+    let dependentDialects = ["mlir::LLVM::LLVMDialect",
+                             "mlir::cf::ControlFlowDialect"];
 
     let options = [
         Option<"ftz", "ftz", "bool", /*default*/"true",

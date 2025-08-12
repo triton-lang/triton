@@ -295,12 +295,17 @@ Value llLoad(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,
              Value pred, Value falseVal, triton::CacheModifier cm,
              bool forceNoAliasAsyncLoads) {
   bool isNonMasked = false;
+
   if (auto constOp = pred.getDefiningOp<LLVM::ConstantOp>()) {
     if (auto intAttr = dyn_cast<IntegerAttr>(constOp.getValue())) {
       isNonMasked = (intAttr.getValue() == 1);
     }
   }
 
+  llvm::errs() << "LOAD DEBUG INFO==========================\n";
+  llvm::errs() << "masked:" << isNonMasked << "\n";
+  llvm::errs() << "pred: " << pred << "\n";
+  llvm::errs() << "pred_t: " << pred.getType() << "\n";
   if (isNonMasked) {
     // Determine cache flags based on cache modifier
     bool volatileFlag = false;
@@ -352,8 +357,8 @@ void llStore(RewriterBase &rewriter, Location loc, Value ptr, Value val,
       isNonMasked = (intAttr.getValue() == 1);
     }
   }
-
   if (isNonMasked) {
+    llvm::errs() << "ATTENTION! We are in this conditional STORE\n";
     // Determine cache flags based on cache modifier
     bool isVolatile = false;
     bool isNonTemporal = false;
@@ -371,9 +376,15 @@ void llStore(RewriterBase &rewriter, Location loc, Value ptr, Value val,
       // Default: no special flags
       break;
     }
-
+    int alignmentBytes = 0;
+    if (auto vecTy = dyn_cast<VectorType>(val.getType())) {
+      Type elementType = vecTy.getElementType();
+      unsigned elementBitWidth = elementType.getIntOrFloatBitWidth();
+      unsigned elementBytes = elementBitWidth / 8u;
+      alignmentBytes = static_cast<int>(elementBytes * vecTy.getNumElements());
+    }
     auto storeOp = rewriter.create<LLVM::StoreOp>(
-        loc, val, ptr, /*alignment*/ 0, isVolatile, isNonTemporal);
+        loc, val, ptr, /*alignment*/ alignmentBytes, isVolatile, isNonTemporal);
 
     if (forceNoAliasAsyncLoads) {
       mlir::triton::AMD::addLocalLoadNoAliasScope(storeOp);
