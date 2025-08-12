@@ -297,7 +297,7 @@ def matmul_ogs(x, w, bias,
     # Intermediate tensors and postprocess kernels for each situation
     has_scratchpad = "matmul" in memory["scratchpad"]
     out = memory["scratchpad"]["matmul"] if has_scratchpad else memory["output"]
-    out_flex = precision_config.flex_ctx.out_data if has_scratchpad else OutFlexData()
+    out_flex = OutFlexData() if out.dtype == torch.float32 else precision_config.flex_ctx.out_data
     out_scale = None if precision_config.out_scale is None else precision_config.out_scale.data.view(torch.uint8)
     out_has_mx = out_scale is not None and out.element_size() == 1
     # matrix multiplication
