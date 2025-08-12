@@ -33,7 +33,7 @@ template <typename VecT> auto product(const VecT &vec) {
 template <typename Int> Int ceil(Int m, Int n) { return (m + n - 1) / n; }
 
 /// Get the highest power of 2 divisor of an integer.
-template <typename T> T highestPowOf2Divisor(T n) {
+template <typename T> constexpr T highestPowOf2Divisor(T n) {
   // When n is 0 or min, return the highest power of 2. The min case is handled
   // separately to avoid underflow when T is a signed integer. Technically
   // in that case the correct divisor is -n, but this value is outside the
