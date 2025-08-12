@@ -144,15 +144,10 @@ def test_warpgroup_mma(ASYNC):
     torch.testing.assert_close(out, ref, atol=1e-3, rtol=1e-1)
 
 
-def get_amd_mfma_cases():
-    return [(*shape, in_dtype, num_warps, nonkdim)
-            for num_warps in [4, 8]
-            for shape in [(64, 64, 32), (32, 32, 32)]
-            for in_dtype in ['float16', 'bfloat16']
-            for nonkdim in [32, 16]]
-
-
-@pytest.mark.parametrize("M, N, K, in_dtype, num_warps, nonkdim", get_amd_mfma_cases())
+@pytest.mark.parametrize("M, N, K", [(64, 64, 32), (32, 32, 32)])
+@pytest.mark.parametrize("in_dtype", ['float16', 'bfloat16'])
+@pytest.mark.parametrize("num_warps", [4, 8])
+@pytest.mark.parametrize("nonkdim", [32, 16])
 def test_amd_mfma(M, N, K, in_dtype, num_warps, nonkdim):
 
     @gluon.jit
@@ -186,9 +181,8 @@ def test_amd_mfma(M, N, K, in_dtype, num_warps, nonkdim):
         ttgl.amd.cdna3.buffer_store(stored_value=c, ptr=c_ptr, offsets=offs_c)
 
     if not is_hip_cdna4():
-        return []
+        pytest.skip()
 
-    assert in_dtype == 'float16' or in_dtype == 'bfloat16'
     elem_type = torch.float16 if in_dtype == 'float16' else torch.bfloat16
     a = torch.randn((M, K), device='cuda', dtype=elem_type) - 0.5
     b = torch.randn((K, N), device='cuda', dtype=elem_type) - 0.5
@@ -198,10 +192,8 @@ def test_amd_mfma(M, N, K, in_dtype, num_warps, nonkdim):
     mfma_layout: ttgl.constexpr = ttgl.amd.AMDMFMALayout(version=4, instr_shape=[nonkdim, nonkdim], transposed=True,
                                                          warps_per_cta=[num_warps, 1])
 
-    kernel[
-        1,
-    ](a, b, c, a.stride(0), a.stride(1), b.stride(0), b.stride(1), c.stride(0), c.stride(1), BLOCK_SIZE_M=M,
-      BLOCK_SIZE_N=N, BLOCK_SIZE_K=K, blocked=blocked, mfma_layout=mfma_layout, num_warps=num_warps)
+    kernel[1, 1](a, b, c, a.stride(0), a.stride(1), b.stride(0), b.stride(1), c.stride(0), c.stride(1), BLOCK_SIZE_M=M,
+                 BLOCK_SIZE_N=N, BLOCK_SIZE_K=K, blocked=blocked, mfma_layout=mfma_layout, num_warps=num_warps)
     ref = torch.matmul(a, b)
     triton_output = c
     torch.testing.assert_close(ref, triton_output)

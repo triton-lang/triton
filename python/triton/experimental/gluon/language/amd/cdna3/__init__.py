@@ -10,7 +10,7 @@ from ..._semantic import _check
 if TYPE_CHECKING:
     from ..._semantic import GluonSemantic
 
-__all__ = ["buffer_load_to_shared", "buffer_load", "buffer_store"]
+__all__ = ["buffer_load_to_shared", "buffer_load", "buffer_store", "mfma"]
 
 
 def _verify_buffer_load_store(ptr, offsets, mask, other=None):
@@ -114,15 +114,23 @@ def buffer_store(stored_value, ptr, offsets, mask=None, cache=None, _semantic: G
 
 
 @builtin
-def mfma(input, other, acc, out_dtype=ttgl.float32, _semantic: GluonSemantic = None):
+def mfma(a, b, acc, _semantic: GluonSemantic = None):
+    """
+    Returns the matrix product of two tensors and return value is a tt.dot operation.
+    The layout of the result is the same as that of acc.
+
+    Typically, we need to convert the layout of dot, AMDMFMALayout, into other layouts of gluon.
+    The type of triton.dot is hard coded as tl.block_type, which is not derived from DistributedLayout of gluon,
+    so we need to add a wrapper API.
+    Args:
+        a (tensor): The first operand of mfma.
+        b (tensor): The second operand of mfma.
+        acc (tensor): The accumulator tensor.
+    """
     assert acc is not None, "acc is required"
-
-    if out_dtype is None:
-        out_dtype = acc.dtype
-
     ret_type = acc.type
     acc = ttgl._unwrap_if_constexpr(acc)
 
-    handle = _semantic.dot(input, other, acc, input_precision=knobs.language.fp32_default, max_num_imprecise_acc=None,
-                           out_dtype=out_dtype).handle
+    handle = _semantic.dot(a, b, acc, input_precision=knobs.language.fp32_default, max_num_imprecise_acc=None,
+                           out_dtype=acc.dtype).handle
     return ttgl.tensor(handle, ret_type)

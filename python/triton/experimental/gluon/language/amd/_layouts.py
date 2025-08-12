@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import List, Tuple
+from dataclasses import dataclass
+from typing import List, Optional
 from triton.language.core import _unwrap_if_constexpr
 
 from triton.experimental.gluon.language._layouts import _realize_cta_layout, DistributedLayout
@@ -22,7 +22,7 @@ class AMDMFMALayout(DistributedLayout):
         instr_shape: (M, N) dimension for the instrinsic shape.
         transposed: indicates the result tensor is transposed so that each thread holds consecutive elements in the same row instead of column, which is good for chained dot and global write.
         warps_per_cta (List[int]): Number of warps per CTA.
-        tiles_per_warp Optional(List[int]): Number of tiles per WARP. For mfma, every element is one.
+        tiles_per_warp Optional(List[int]): Number of tiles per WARP. For mfma, if missing, use the default where we have unit tile size on all dimensions.
         elem_type Optional: Supported types are int32, fp32 and fp64. Default is fp32.
         ctas_per_cga (Optional[List[int]]): CTAs per CGA grouping.
         cta_split_num (Optional[List[int]]): Split factors for CTAs.
@@ -32,11 +32,11 @@ class AMDMFMALayout(DistributedLayout):
     instr_shape: List[int]
     transposed: bool
     warps_per_cta: List[int]
-    tiles_per_warp: List[int] = field(default_factory=list)
+    tiles_per_warp: Optional[List[int]] = None
     elem_type: ttgl.dtype = ttgl.float32
-    ctas_per_cga: List[int] = field(default_factory=list)
-    cta_split_num: List[int] = field(default_factory=list)
-    cta_order: Tuple[int, ...] = (1, 0)
+    ctas_per_cga: Optional[List[int]] = None
+    cta_split_num: Optional[List[int]] = None
+    cta_order: Optional[List[int]] = None
 
     def __post_init__(self):
         super().__setattr__("version", _unwrap_if_constexpr(self.version))
@@ -73,7 +73,7 @@ class AMDMFMALayout(DistributedLayout):
         assert self.elem_type.is_fp32() or self.elem_type.is_fp64() \
           or self.elem_type.is_int32() , "element type must be float32, float64, or int32"
 
-        rank = len(self.cta_order)
+        rank = len(self.warps_per_cta)
         _realize_cta_layout(self, rank)
         assert len(self.ctas_per_cga) == rank
         assert len(self.cta_split_num) == rank
