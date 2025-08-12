@@ -702,8 +702,8 @@ tt.func @call_graph_2(%A : !tt.ptr<f16>, %cond : i1) {
 #block1 = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
-  // CHECK-LABEL: @barrier_between_convert_and_read
-  tt.func @barrier_between_convert_and_read(%src: tensor<32x!tt.ptr<f32>, #block0>) {
+  // CHECK-LABEL: @barrier_between_warp_sync_convert_and_read
+  tt.func @barrier_between_warp_sync_convert_and_read(%src: tensor<32x!tt.ptr<f32>, #block0>) {
     %alloc = ttg.local_alloc : () -> !ttg.memdesc<16x16xf16, #shared, #ttg.shared_memory, mutable>
     %c = arith.constant dense<0.0> : tensor<16x16xf16>
     // CHECK: ttg.local_store
