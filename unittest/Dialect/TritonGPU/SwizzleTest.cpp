@@ -107,6 +107,26 @@ TEST_F(SwizzleTest, Test32x16F32Transpose) {
   EXPECT_EQ(r, 0);
   EXPECT_EQ(w, 0);
 }
+
+TEST_F(SwizzleTest, Test128x128F16Transpose) {
+  LinearLayout matrix(
+      {{S("register"), {{1, 0}, {2, 0}, {4, 0}, {0, 32}, {0, 64}}},
+       {S("lane"), {{8, 0}, {16, 0}, {32, 0}, {64, 0}, {0, 1}}},
+       {S("warp"), {{0, 2}, {0, 4}, {0, 8}, {0, 16}}}},
+      {{S("dim0"), 128}, {S("dim1"), 128}},
+      /*requireSurjective=*/true);
+  LinearLayout matrix_t(
+      {{S("register"), {{0, 1}, {0, 2}, {0, 4}, {32, 0}, {64, 0}}},
+       {S("lane"), {{0, 8}, {0, 16}, {0, 32}, {0, 64}, {1, 0}}},
+       {S("warp"), {{2, 0}, {4, 0}, {8, 0}, {16, 0}}}},
+      {{S("dim0"), 128}, {S("dim1"), 128}},
+      /*requireSurjective=*/true);
+  auto smem = optimalSwizzlingLdSt(matrix, matrix_t, /*bitwidth=*/16);
+  auto [r, w] = logBankConflictsLdSt(matrix, matrix_t, smem, /*bitwidth=*/16);
+  EXPECT_EQ(r, 0);
+  EXPECT_EQ(w, 0);
+}
+
 } // namespace
 
 int main(int argc, char *argv[]) {
