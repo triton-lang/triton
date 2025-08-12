@@ -1753,7 +1753,8 @@ def infer_layout_for_padded_shared_kernel():
                                                      ctas_per_cga=[1, 1], cta_split_num=[1, 1], cta_order=[1, 0])
     smem = ttgl.allocate_shared_memory(ttgl.int32, [64, 64], layout)
 
-    smem.reshape((32, 128))
+    reshaped = smem.reshape((32, 128))
+    ttgl.static_assert(reshaped.layout == layout)
 
 
 @pytest.mark.parametrize("target", ALL_TARGETS)

@@ -142,3 +142,42 @@ def test_warpgroup_mma(ASYNC):
     ref = torch.matmul(a, b)
 
     torch.testing.assert_close(out, ref, atol=1e-3, rtol=1e-1)
+
+
+def test_sharedmem_with_padded_layout():
+
+    @gluon.jit
+    def kernel(a_ptr, b_ptr, M: ttgl.constexpr, N: ttgl.constexpr):
+        blocked: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[4, 1], threads_per_warp=[8, 8],
+                                                     warps_per_cta=[4, 1], order=[1, 0])
+        padded: ttgl.constexpr = ttgl.PaddedSharedLayout(interval_padding_pairs=[[32, 32]], order=[1, 0],
+                                                         ctas_per_cga=[1, 1], cta_split_num=[1, 1], cta_order=[1, 0])
+
+        offs_m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, blocked))
+        offs_n = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, blocked))
+        offs = offs_m[:, None] * M + offs_n[None, :]
+        a = ttgl.amd.cdna3.buffer_load(ptr=a_ptr, offsets=offs)
+        smem = ttgl.allocate_shared_memory(a_ptr.dtype.element_ty, [M, N], padded)
+        smem.store(a)
+
+        # temp = smem.load(blocked)
+        #tl.device_print("temp = ", temp)
+        reshaped = smem.reshape((N, M)).load(blocked)
+        #tl.device_print("temp = ", reshaped)
+        offs_n_tr = ttgl.arange(0, N, layout=ttgl.SliceLayout(1, blocked))
+        offs_m_tr = ttgl.arange(0, M, layout=ttgl.SliceLayout(0, blocked))
+        offs_reshaped = offs_n_tr[:, None] * N + offs_m_tr[None, :]
+        ttgl.amd.cdna3.buffer_store(stored_value=reshaped, ptr=b_ptr, offsets=offs_reshaped)
+
+    M, N = 8, 8
+    input = torch.arange(0, M * N, device="cuda", dtype=torch.int32).reshape(M, N)
+
+    output = torch.arange(0, M * N, device="cuda", dtype=torch.int32).reshape(N, M)
+    kernel[1, 1](input, output, M, N)
+
+    output = torch.reshape(output, (M, N))
+    torch.set_printoptions(threshold=float('inf'))
+    print("input = ", input)
+    print("triton output = ", output)
+    ref = torch.arange(0, 64 * 32, device="cuda", dtype=torch.int32).reshape(N, M)
+    torch.testing.assert_close(output, ref)
