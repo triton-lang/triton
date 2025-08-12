@@ -136,7 +136,7 @@ public:
     auto ctx = getContext();
     auto sharedEnc = ttg::SwizzledSharedEncodingAttr::get(
         ctx, directDotEnc, directOperandType.getShape(),
-        /*order=*/ttg::getOrderForMemory(directOperandType),
+        /*order=*/ttg::getOrderForMemory(srcTy),
         ttg::getCTALayout(directDotEnc), directOperandType.getElementType(),
         /*needTrans=*/false);
 
