@@ -234,7 +234,7 @@ def matmul_ogs(x, w, bias,
     if fused_activation is None:
         fused_activation = FusedActivation(FnSpecs.default(), tuple(), 1)
     if epilogue is None:
-        epilogue = Epilogue(FnSpecs.default(), tuple(), tuple(), False)
+        epilogue = Epilogue(FnSpecs.default(), tuple(), False)
     if routing_data is None:
         routing_data = RoutingData(None, None, max(1, w.shape[0]), 1)
     # unpack scales
