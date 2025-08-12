@@ -492,11 +492,12 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
         LLVM::getSharedMemoryObjectFromStruct(loc, llDst, resElemTy, rewriter);
     auto affineOffset = smemObj.getShmemOffset(loc, rewriter, dstTy);
     auto maskSpanAffineOffset = SharedMemoryObject::getMaskSpanOffsets(dstTy);
-    auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
+    auto [_, warpId] = getLaneAndWarpId(rewriter, loc);
+    // We pass laneId==0 because GFX9 requires a scalar base pointer into LDS
     lowerLdSt(
         loc, ctx, cvt, loadVals, resElemTy, smemObj.getBase(),
-        [](Value v) { return v; }, affineOffset, maskSpanAffineOffset, laneId,
-        warpId, rewriter, targetInfo, vec, lowerInst);
+        [](Value v) { return v; }, affineOffset, maskSpanAffineOffset,
+        b.i32_val(0), warpId, rewriter, targetInfo, vec, lowerInst);
   }
 
   void emitOtherStore(RewriterBase &rewriter, Location loc,
