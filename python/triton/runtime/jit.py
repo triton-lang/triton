@@ -475,6 +475,17 @@ class JitFunctionInfo:
     jit_function: JITFunction
 
 
+def compute_cache_key(kernel_key_cache, specialization, options):
+    key = (tuple(specialization), tuple(options.items()))
+    cache_key = kernel_key_cache.get(key, None)
+    if cache_key is not None:
+        return cache_key
+
+    cache_key = str(specialization) + str(options)
+    kernel_key_cache[key] = cache_key
+    return cache_key
+
+
 class JITFunction(KernelInterface[T]):
 
     def is_gluon(self):
@@ -545,7 +556,7 @@ class JITFunction(KernelInterface[T]):
         self.compile = compile
         self.ASTSource = ASTSource
         binder = create_function_from_signature(self.signature, self.params, backend)
-        return {}, target, backend, binder
+        return {}, {}, target, backend, binder
 
     def _pack_args(self, backend, kwargs, bound_args, specialization, options):
         # options
@@ -582,13 +593,12 @@ class JITFunction(KernelInterface[T]):
         for hook in self.pre_run_hooks:
             hook(*args, **kwargs)
 
-        kernel_cache, target, backend, binder = self.device_caches[device]
+        kernel_cache, kernel_key_cache, target, backend, binder = self.device_caches[device]
         # specialization is list[tuple[str, Any]], where first element of tuple is
         # the type and the second parameter is the 'specialization' value.
         bound_args, specialization, options = binder(*args, **kwargs)
 
-        # compute cache key
-        key = str(specialization) + str(options)
+        key = compute_cache_key(kernel_key_cache, specialization, options)
         kernel = kernel_cache.get(key, None)
 
         # Kernel is not cached; we have to compile.
@@ -744,7 +754,7 @@ class JITFunction(KernelInterface[T]):
             for key, value in deserialized_obj['options'].items()
         }
         key = deserialized_obj['key']
-        _, _, backend, _ = self.device_caches[device]
+        _, _, _, backend, _ = self.device_caches[device]
         options = backend.parse_options(options)
         return self._do_compile(
             key,
@@ -757,7 +767,7 @@ class JITFunction(KernelInterface[T]):
         )
 
     def _do_compile(self, key, signature, device, constexprs, options, attrs, warmup):
-        kernel_cache, target, backend, _ = self.device_caches[device]
+        kernel_cache, _, target, backend, _ = self.device_caches[device]
 
         if self._call_hook(knobs.runtime.jit_cache_hook, key, signature, device, constexprs, options, [attrs], warmup):
             return None

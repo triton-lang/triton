@@ -184,6 +184,9 @@ class constexpr_type(base_type):
     def __repr__(self) -> str:
         return f"constexpr_type[{self.value}]"
 
+    def __hash__(self):
+        return hash(self.value)
+
     def mangle(self) -> str:
         return repr(self)
 
@@ -207,6 +210,9 @@ class constexpr(base_value):
 
     def __repr__(self) -> str:
         return f"constexpr[{self.value}]"
+
+    def __hash__(self):
+        return hash((self.value, self.type))
 
     def _flatten_ir(self, handles: List[ir.value]) -> None:
         return
