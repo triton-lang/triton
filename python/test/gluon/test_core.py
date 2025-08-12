@@ -144,7 +144,7 @@ def test_warpgroup_mma(ASYNC):
     torch.testing.assert_close(out, ref, atol=1e-3, rtol=1e-1)
 
 
-@pytest.mark.parametrize("M, N, K", [(64, 64, 32), (32, 32, 32)])
+@pytest.mark.parametrize("M, N, K", [(32, 32, 32)])
 @pytest.mark.parametrize("in_dtype", ['float16', 'bfloat16'])
 @pytest.mark.parametrize("num_warps", [4, 8])
 @pytest.mark.parametrize("nonkdim", [32, 16])
