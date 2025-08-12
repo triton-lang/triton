@@ -12,7 +12,7 @@ def is_cuda():
 
 @triton.constexpr_function
 def is_hip():
-    return tl.target_info.current_target() == "hip"
+    return tl.target_info.current_target().backend == "hip"
 
 
 @triton.constexpr_function
@@ -66,6 +66,5 @@ def has_native_mxfp():
     return cuda_capability_geq(10, 0)
 
 
-@triton.constexpr_function
 def num_sms():
     return torch.cuda.get_device_properties(0).multi_processor_count
