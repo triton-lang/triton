@@ -454,14 +454,16 @@ class CompiledKernel:
             max_tmem_size = 512  # tmem size in number of columns
             if self.metadata.tmem_size > max_tmem_size:
                 raise OutOfResources(self.metadata.tmem_size, max_tmem_size, "tensor memory")
+        if knobs.runtime.kernel_load_start_hook is not None:
+            knobs.runtime.kernel_load_start_hook(self.module, self.function, self.name, self.metadata_group, self.hash)
         # TODO: n_regs, n_spills should be metadata generated when calling `ptxas`
         self.module, self.function, self.n_regs, self.n_spills, self.n_max_threads = driver.active.utils.load_binary(
             self.name, self.kernel, self.metadata.shared, device)
         warp_size = driver.active.get_current_target().warp_size
         if self.metadata.num_warps * warp_size > self.n_max_threads:
             raise OutOfResources(self.metadata.num_warps * warp_size, self.n_max_threads, "threads")
-        if knobs.runtime.init_handle_hook is not None:
-            knobs.runtime.init_handle_hook(self.module, self.function, self.name, self.metadata_group)
+        if knobs.runtime.kernel_load_end_hook is not None:
+            knobs.runtime.kernel_load_end_hook(self.module, self.function, self.name, self.metadata_group, self.hash)
 
     @property
     def run(self):

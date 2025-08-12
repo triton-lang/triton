@@ -232,7 +232,7 @@ class InstrumentationHook(Hook):
         # Reset the buffer reference
         self.buffer = None
 
-    def init_handle(self, module: Any, function: Any, name: str, metadata_group: Dict[str, str]) -> None:
+    def init_handle(self, module: Any, function: Any, name: str, metadata_group: Dict[str, str], hash: str) -> None:
         if not function:
             return
 
