@@ -3,9 +3,9 @@ Warp Specialization
 ===================
 
 This tutorial covers warp specialization. In typical GPU kernels, all the warps
-in the kernel are performing parallel slices of the same. Warp specialization,
-however, is a technique where different warps in the kernel are doing completely
-different tasks.
+in the kernel are performing parallel slices of the same task. Warp
+specialization, however, is a technique where different warps in the kernel are
+doing completely different tasks.
 
 With warp specialization, we can overlap execution of independent parts of the
 kernel by placing the work in different warps. This minimizes the critical path

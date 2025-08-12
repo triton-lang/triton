@@ -3,9 +3,9 @@ Tensor Layouts
 ==============
 
 Tensors in Gluon require layouts. Layouts specify how the elements of the tensor
-are distributed among the threads a thread block. Tensors are distributed with
-respect to the hierarchy of the GPU beginning with thread blocks, then warps,
-then lanes, and finally individual registers in each lane.
+are distributed among the threads in a thread block. Tensors are distributed
+with respect to the hierarchy of the GPU beginning with thread blocks, then
+warps, then lanes, and finally individual registers in each lane.
 
 Tensors are evenly distributed across theads, meaning that all threads own the
 same number of elements. Because Triton requires that all tile dimensions are
