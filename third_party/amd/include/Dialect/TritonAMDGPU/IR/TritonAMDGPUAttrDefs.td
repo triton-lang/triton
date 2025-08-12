@@ -25,11 +25,37 @@
 #define TRITON_AMDGPU_ATTRDEFS
 
 include "mlir/IR/AttrTypeBase.td"
+include "triton/Dialect/Triton/IR/TritonInterfaces.td"
 include "TritonAMDGPUDialect.td"
+include "mlir/IR/EnumAttr.td"
 
 class TritonAMDGPU_Attr<string name, list<Trait> traits = [],
                      string baseCppClass = "::mlir::Attribute">
   : AttrDef<TritonAMDGPU_Dialect, name, traits, baseCppClass> {
 }
+
+class TritonAMDGPU_I32Enum<string name, string description, list<I32EnumAttrCase> cases>
+    : I32EnumAttr<name, description, cases> {
+  let genSpecializedAttr = 0;
+  let cppNamespace = "::mlir::triton::amdgpu";
+}
+
+class TritonAMDGPU_I32EnumAttr<string mnemonic, TritonAMDGPU_I32Enum enumInfo> :
+    EnumAttr<TritonAMDGPU_Dialect, enumInfo, mnemonic> {
+  let assemblyFormat = "`<` $value `>`";
+  let cppNamespace = "::mlir::triton::amdgpu";
+}
+
+def SchedHintCaseNone : I32EnumAttrCase<"none", 0>;
+def SchedHintCaseAttention : I32EnumAttrCase<"attention", 2>;
+
+def TritonAMDGPU_SchedHintsEnum : TritonAMDGPU_I32Enum<
+  "SchedHint", "Instruction Scheduling Hints for AMD GPUs", [
+    SchedHintCaseNone,
+    SchedHintCaseAttention,
+  ]>;
+
+def TritonAMDGPU_SchedHintVariantAttr :
+  TritonAMDGPU_I32EnumAttr<"SchedHintVariant", TritonAMDGPU_SchedHintsEnum>;
 
 #endif

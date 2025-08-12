@@ -1,11 +1,11 @@
+#include "triton/Analysis/AxisInfo.h"
 #include "mlir/Analysis/DataFlowFramework.h"
-#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/Dialect/UB/IR/UBOps.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
-
-#include "triton/Analysis/AxisInfo.h"
-#include "triton/Dialect/Triton/IR/Dialect.h"
-#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
 #define DEBUG_TYPE "axis-info"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
@@ -13,6 +13,8 @@
 
 namespace mlir::triton {
 namespace {
+
+constexpr int64_t kMaxDivisor = highestPowOf2Divisor<int64_t>(0);
 
 int64_t gcdImpl(int64_t a, int64_t b, int64_t *x, int64_t *y) {
   // Base Case
@@ -30,13 +32,16 @@ int64_t gcdImpl(int64_t a, int64_t b, int64_t *x, int64_t *y) {
   return gcd;
 }
 
-int64_t gcd(int64_t a, int64_t b) {
+template <typename... Args> int64_t gcd(int64_t a, int64_t b, Args... args) {
   if (a == 0)
     return b;
   if (b == 0)
     return a;
   int64_t x, y;
-  return gcdImpl(a, b, &x, &y);
+  if constexpr (sizeof...(args) == 0)
+    return gcdImpl(a, b, &x, &y);
+  else
+    return gcd(gcdImpl(a, b, &x, &y), args...);
 }
 
 constexpr int log2Int(int64_t num) {
@@ -45,33 +50,31 @@ constexpr int log2Int(int64_t num) {
 
 // If lhs * rhs overflows, return max value possible value for the type
 int64_t multiplyDivisor(int64_t lhs, int64_t rhs) {
-  int64_t maxDivisor = highestPowOf2Divisor<int64_t>(0);
-  if (lhs > maxDivisor / rhs)
-    return maxDivisor;
+  if (lhs > kMaxDivisor / rhs)
+    return kMaxDivisor;
   return lhs * rhs;
 }
 
-class AxisInfoVisitor {
-public:
-  AxisInfoVisitor() = default;
-  virtual ~AxisInfoVisitor() = default;
-
-  static bool isContiguousDim(const AxisInfo &info, ArrayRef<int64_t> shape,
-                              int dim) {
-    return info.getContiguity(dim) == shape[dim];
+int64_t getDivisibilityFromContiguity(const AxisInfo &lhs, const AxisInfo &rhs,
+                                      int d) {
+  // For example if we have the following two arrays using the selectOp:
+  // lhs: [[0, 1], [4, 5]]
+  // rhs: [[16, 17, 18, 19]]
+  // The resulting contiguity will be 2, while the divisibility will be 2
+  // because 18 is not divisible by 4.
+  if (lhs.getContiguity(d) == rhs.getContiguity(d) ||
+      lhs.getContiguity(d) == kMaxDivisor ||
+      rhs.getContiguity(d) == kMaxDivisor) {
+    // Contiguity not changed or one of them is unresolved.
+    // If unresolved, we can first perform a loose bound gcd since the unknown
+    // contiguity will be resolved in the end.
+    return gcd(lhs.getDivisibility(d), rhs.getDivisibility(d));
+  } else {
+    // Contiguity changed, we cannot use only divisibility.
+    return gcd(lhs.getDivisibility(d), rhs.getDivisibility(d),
+               lhs.getContiguity(d), rhs.getContiguity(d));
   }
-
-  static bool isConstantDim(const AxisInfo &info, ArrayRef<int64_t> shape,
-                            int dim) {
-    return info.getConstancy(dim) == shape[dim];
-  }
-
-  virtual AxisInfo
-  getAxisInfo(Operation *op,
-              ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) = 0;
-
-  virtual bool match(Operation *op) = 0;
-};
+}
 
 // Base class for all operations
 template <typename OpTy> class AxisInfoVisitorImpl : public AxisInfoVisitor {
@@ -146,25 +149,6 @@ protected:
   }
 };
 
-class AxisInfoVisitorList {
-public:
-  template <typename... Ts, typename = std::enable_if_t<sizeof...(Ts) != 0>>
-  void append() {
-    (visitors.emplace_back(std::make_unique<Ts>()), ...);
-  }
-
-  AxisInfo apply(Operation *op,
-                 ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) {
-    for (auto &visitor : visitors)
-      if (visitor->match(op))
-        return visitor->getAxisInfo(op, operands);
-    return AxisInfo();
-  }
-
-private:
-  std::vector<std::unique_ptr<AxisInfoVisitor>> visitors;
-};
-
 class AxisInfoAnalysis : public dataflow::SparseForwardDataFlowAnalysis<
                              dataflow::Lattice<AxisInfo>> {
 private:
@@ -182,6 +166,8 @@ private:
       unsigned firstIndex) override {
     if (auto forOp = dyn_cast<scf::ForOp>(op)) {
       visitForOpInductionVar(forOp, argLattices);
+    } else if (auto ws = dyn_cast<gpu::WarpSpecializePartitionsOp>(op)) {
+      visitWarpSpecializeExplicitCaptures(ws, successor, argLattices);
     } else {
       setAllToEntryStates(argLattices.take_front(firstIndex));
       setAllToEntryStates(argLattices.drop_front(
@@ -190,7 +176,8 @@ private:
   }
 
 public:
-  AxisInfoAnalysis(DataFlowSolver &solver);
+  AxisInfoAnalysis(DataFlowSolver &solver,
+                   axisinfo::CallbackType callback = nullptr);
   using dataflow::SparseForwardDataFlowAnalysis<
       dataflow::Lattice<AxisInfo>>::getLatticeElement;
   using FuncAxisInfoMapT = DenseMap<FunctionOpInterface, AxisInfo>;
@@ -202,6 +189,10 @@ public:
   void
   visitForOpInductionVar(scf::ForOp op,
                          ArrayRef<dataflow::Lattice<AxisInfo> *> argLattices);
+
+  void visitWarpSpecializeExplicitCaptures(
+      gpu::WarpSpecializePartitionsOp ws, const RegionSuccessor &successor,
+      ArrayRef<dataflow::Lattice<AxisInfo> *> argLattices);
 };
 
 template <typename OpTy>
@@ -232,13 +223,13 @@ public:
   }
 };
 
-template <typename OpTy>
-class ConstantOpAxisInfoVisitor final : public AxisInfoVisitorImpl<OpTy> {
+class ConstantOpAxisInfoVisitor final
+    : public AxisInfoVisitorImpl<arith::ConstantOp> {
 public:
-  using AxisInfoVisitorImpl<OpTy>::AxisInfoVisitorImpl;
+  using AxisInfoVisitorImpl::AxisInfoVisitorImpl;
 
   AxisInfo
-  getAxisInfo(OpTy op,
+  getAxisInfo(arith::ConstantOp op,
               ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
     auto intAttr = dyn_cast<IntegerAttr>(op.getValue());
     auto boolAttr = dyn_cast<BoolAttr>(op.getValue());
@@ -267,6 +258,24 @@ public:
           /*knownConstantValue=*/{value});
     }
     return AxisInfo();
+  }
+};
+
+class PoisonOpAxisInfoVisitor final : public AxisInfoVisitorImpl<ub::PoisonOp> {
+public:
+  using AxisInfoVisitorImpl::AxisInfoVisitorImpl;
+
+  AxisInfo
+  getAxisInfo(ub::PoisonOp op,
+              ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
+    unsigned rank = 1;
+    if (auto shape = dyn_cast<mlir::ShapedType>(op.getType()))
+      rank = shape.getRank();
+
+    // Poison values are never accessed, thus assume optimistic values.
+    return AxisInfo(AxisInfo::DimVectorT(rank, kMaxDivisor),
+                    AxisInfo::DimVectorT(rank, kMaxDivisor),
+                    AxisInfo::DimVectorT(rank, kMaxDivisor));
   }
 };
 
@@ -305,7 +314,7 @@ private:
       // [16, 20, 24, 28] : !ptr<i32>
       // with element locations:
       // [4, 5, 6, 7]
-      // It is "strided contiguous" with a divisilibity of 16 bytes
+      // It is "strided contiguous" with a divisibility of 16 bytes
       auto rank = lhs.getRank();
       auto elemSize = std::max<int64_t>(
           1, triton::getPointeeBitWidth(op.getPtr().getType()) / 8);
@@ -323,8 +332,7 @@ private:
                                           const AxisInfo &rhs) override {
     if (lhs.getConstantValue().has_value() &&
         rhs.getConstantValue().has_value()) {
-      if constexpr (std::is_same_v<OpTy, arith::AddIOp> ||
-                    std::is_same_v<OpTy, LLVM::AddOp>) {
+      if constexpr (std::is_same_v<OpTy, arith::AddIOp>) {
         return {lhs.getConstantValue().value() +
                 rhs.getConstantValue().value()};
       } else if constexpr (std::is_same_v<OpTy, arith::SubIOp>) {
@@ -427,9 +435,9 @@ private:
     // we need to use another gcd to get the actual constancy.
     if (AxisInfoVisitor::isContiguousDim(lhs, shape, dim) &&
         AxisInfoVisitor::isConstantDim(rhs, shape, dim)) {
-      constancy = std::max(constancy, gcd(lhs.getContiguity(dim),
-                                          gcd(lhs.getDivisibility(dim),
-                                              rhs.getDivisibility(dim))));
+      constancy = std::max(constancy,
+                           gcd(lhs.getContiguity(dim), lhs.getDivisibility(dim),
+                               rhs.getDivisibility(dim)));
     }
     return constancy;
   }
@@ -444,6 +452,13 @@ private:
     if (rhs.getConstantValue().has_value() &&
         rhs.getConstantValue().value() == 1)
       return lhs.getDivisibility(dim);
+    // Case 3: lhs has contiguity of 1 in this dimension and rhs is a power of 2
+    if (rhs.getConstantValue().has_value() &&
+        llvm::isPowerOf2_64(std::abs(rhs.getConstantValue().value())) &&
+        lhs.getContiguity(dim) == 1) {
+      int64_t absRhs = std::abs(rhs.getConstantValue().value());
+      return std::max<int64_t>(1, lhs.getDivisibility(dim) / absRhs);
+    }
     // otherwise: return 1
     return 1;
   }
@@ -481,20 +496,27 @@ private:
     // we need to use another gcd to get the actual contiguity.
     if (AxisInfoVisitor::isContiguousDim(lhs, shape, dim) &&
         AxisInfoVisitor::isConstantDim(rhs, shape, dim)) {
-      contiguity = std::max(contiguity, gcd(lhs.getContiguity(dim),
-                                            gcd(lhs.getDivisibility(dim),
-                                                rhs.getDivisibility(dim))));
+      contiguity = gcd(lhs.getContiguity(dim), lhs.getDivisibility(dim),
+                       rhs.getDivisibility(dim));
     }
     return contiguity;
   }
 
   int64_t getDivisibility(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
                           int dim) override {
-    // lhs: d_lhs * k = gcd(d_lhs, d_rhs) * k' * k = gcd(d_lhs, d_rhs) * k''
-    // rhs: d_rhs * p = gcd(d_lhs, d_rhs) * p' * p = gcd(d_lhs, d_rhs) * p''
-    // lhs = gcd(d_lhs, d_rhs) * k'' = gcd(d_lhs, d_rhs) * d + r
-    // r must be divisible by gcd(d_lhs, d_rhs)
-    return gcd(lhs.getDivisibility(dim), rhs.getDivisibility(dim));
+    auto resTy = dyn_cast<RankedTensorType>(op.getType());
+    if (rhs.getConstancy(dim) > 1) {
+      // lhs: d_lhs * k = gcd(d_lhs, d_rhs) * k' * k = gcd(d_lhs, d_rhs) * k''
+      // rhs: d_rhs * p = gcd(d_lhs, d_rhs) * p' * p = gcd(d_lhs, d_rhs) * p''
+      // lhs = gcd(d_lhs, d_rhs) * k'' = gcd(d_lhs, d_rhs) * d + r
+      // r must be divisible by gcd(d_lhs, d_rhs)
+      return gcd(lhs.getDivisibility(dim), rhs.getDivisibility(dim));
+    }
+    // Otherwise we shouldn't assume any divisibility.
+    // For example:
+    // lhs: [2, 2, 4, 4], rhs: [0, 1, 2, 3]
+    // lhs % rhs = [0, 0, 0, 1]
+    return 1;
   };
 
   int64_t getConstancy(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
@@ -684,8 +706,8 @@ public:
           // lhs ge rhs: 1, 0, 0, 0
           // lhs gt rhs: 0, 0, 0, 0
           constHint = std::max(constHint, gcd(rhsInfo.getContiguity(d),
-                                              gcd(lhsInfo.getDivisibility(d),
-                                                  rhsInfo.getDivisibility(d))));
+                                              lhsInfo.getDivisibility(d),
+                                              rhsInfo.getDivisibility(d)));
         } else if ((ltPredicate(getPredicate(op)) ||
                     gePredicate(getPredicate(op))) &&
                    AxisInfoVisitor::isConstantDim(rhsInfo, shape, d)) {
@@ -700,8 +722,8 @@ public:
           // lhs gt rhs: 0, 1, 1, 1
           // lhs ge rhs: 1, 1, 1, 1
           constHint = std::max(constHint, gcd(lhsInfo.getContiguity(d),
-                                              gcd(lhsInfo.getDivisibility(d),
-                                                  rhsInfo.getDivisibility(d))));
+                                              lhsInfo.getDivisibility(d),
+                                              rhsInfo.getDivisibility(d)));
         }
       }
 
@@ -803,33 +825,18 @@ public:
       for (auto d = 0; d < rank; ++d) {
         if (i1Cond) {
           constancy.push_back(
-              std::min(lhsInfo.getConstancy(d), rhsInfo.getConstancy(d)));
+              gcd(lhsInfo.getConstancy(d), rhsInfo.getConstancy(d)));
           divisibility.push_back(
-              std::min(lhsInfo.getDivisibility(d), rhsInfo.getDivisibility(d)));
+              getDivisibilityFromContiguity(lhsInfo, rhsInfo, d));
           contiguity.push_back(
-              std::min(lhsInfo.getContiguity(d), rhsInfo.getContiguity(d)));
+              gcd(lhsInfo.getContiguity(d), rhsInfo.getContiguity(d)));
         } else {
-          constancy.push_back(
-              std::min(gcd(lhsInfo.getConstancy(d), condConstancy[d]),
-                       gcd(rhsInfo.getConstancy(d), condConstancy[d])));
-          contiguity.push_back(
-              std::min(gcd(lhsInfo.getContiguity(d), condConstancy[d]),
-                       gcd(rhsInfo.getContiguity(d), condConstancy[d])));
-          if (contiguity.back() == lhsInfo.getContiguity(d) &&
-              contiguity.back() == rhsInfo.getContiguity(d)) {
-            // Contiguity not changed
-            divisibility.push_back(
-                gcd(lhsInfo.getDivisibility(d), rhsInfo.getDivisibility(d)));
-          } else {
-            // Contiguity changed, we cannot use only divisibility.
-            // For example, the following example should have contiguity 2 and
-            // divisibility 2
-            // [[0, 1], [4, 5]]
-            // [[16, 17, 18, 19]]
-            divisibility.push_back(
-                std::min(gcd(lhsInfo.getDivisibility(d), contiguity.back()),
-                         gcd(rhsInfo.getDivisibility(d), contiguity.back())));
-          }
+          constancy.push_back(gcd(lhsInfo.getConstancy(d),
+                                  rhsInfo.getConstancy(d), condConstancy[d]));
+          contiguity.push_back(gcd(lhsInfo.getContiguity(d),
+                                   rhsInfo.getContiguity(d), condConstancy[d]));
+          divisibility.push_back(
+              getDivisibilityFromContiguity(lhsInfo, rhsInfo, d));
         }
       }
       if (lhsInfo.getConstantValue().has_value() &&
@@ -937,7 +944,7 @@ private:
       // Treat [2^n,2^n+1,...]'s divisibility as 1 instead of 2^n
       lhsDivisibility = 1;
     }
-    return std::max<int64_t>(1, lhsDivisibility / (1 << shift));
+    return std::max<int64_t>(1, lhsDivisibility / (int64_t(1) << shift));
   }
 
   int64_t getConstancy(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
@@ -985,11 +992,11 @@ public:
       AxisInfo::DimVectorT contiguity, divisibility, constancy;
       for (auto d = 0; d < rank; ++d) {
         constancy.push_back(
-            std::min(lhsInfo.getConstancy(d), rhsInfo.getConstancy(d)));
+            gcd(lhsInfo.getConstancy(d), rhsInfo.getConstancy(d)));
         divisibility.push_back(
-            std::min(lhsInfo.getDivisibility(d), rhsInfo.getDivisibility(d)));
+            getDivisibilityFromContiguity(lhsInfo, rhsInfo, d));
         contiguity.push_back(
-            std::min(lhsInfo.getContiguity(d), rhsInfo.getContiguity(d)));
+            gcd(lhsInfo.getContiguity(d), rhsInfo.getContiguity(d)));
       }
       return AxisInfo(contiguity, divisibility, constancy, std::nullopt);
     }
@@ -1000,7 +1007,8 @@ public:
 // AxisInfoAnalysis
 //===----------------------------------------------------------------------===//
 
-AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver)
+AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver,
+                                   axisinfo::CallbackType callback)
     : dataflow::SparseForwardDataFlowAnalysis<dataflow::Lattice<AxisInfo>>(
           solver) {
   // UnrealizedConversionCast:
@@ -1010,19 +1018,15 @@ AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver)
   visitors.append<CastOpAxisInfoVisitor<arith::ExtSIOp>,
                   CastOpAxisInfoVisitor<arith::ExtUIOp>,
                   CastOpAxisInfoVisitor<arith::TruncIOp>,
-                  CastOpAxisInfoVisitor<arith::IndexCastOp>,
                   CastOpAxisInfoVisitor<triton::gpu::ConvertLayoutOp>,
                   CastOpAxisInfoVisitor<mlir::UnrealizedConversionCastOp>,
                   CastOpAxisInfoVisitor<triton::BitcastOp>>();
-  // TODO: Remove rules for LLVM::ConstantOp, LLVM::AddOp
-  // when scf.for supports integer induction variables
   visitors.append<MakeRangeOpAxisInfoVisitor>();
-  visitors.append<ConstantOpAxisInfoVisitor<arith::ConstantOp>,
-                  ConstantOpAxisInfoVisitor<LLVM::ConstantOp>>();
+  visitors.append<PoisonOpAxisInfoVisitor>();
+  visitors.append<ConstantOpAxisInfoVisitor>();
   visitors.append<AddSubOpAxisInfoVisitor<triton::AddPtrOp>,
                   AddSubOpAxisInfoVisitor<arith::AddIOp>,
-                  AddSubOpAxisInfoVisitor<arith::SubIOp>,
-                  AddSubOpAxisInfoVisitor<LLVM::AddOp>>();
+                  AddSubOpAxisInfoVisitor<arith::SubIOp>>();
   visitors.append<MulIOpAxisInfoVisitor>();
   visitors.append<DivOpAxisInfoVisitor<arith::DivSIOp>,
                   DivOpAxisInfoVisitor<arith::DivUIOp>>();
@@ -1043,6 +1047,9 @@ AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver)
                   MaxMinOpAxisInfoVisitor<arith::MinSIOp>,
                   MaxMinOpAxisInfoVisitor<arith::MinUIOp>>();
   visitors.append<LoadOpAxisInfoVisitor>();
+
+  if (callback)
+    callback(visitors);
 }
 
 LogicalResult AxisInfoAnalysis::visitOperation(
@@ -1084,9 +1091,11 @@ LogicalResult AxisInfoAnalysis::visitOperation(
 
 void AxisInfoAnalysis::visitForOpInductionVar(
     scf::ForOp op, ArrayRef<dataflow::Lattice<AxisInfo> *> argLattices) {
-  ProgramPoint programPoint(op);
-  auto lb = getLatticeElementFor(&programPoint, op.getLowerBound())->getValue();
-  auto step = getLatticeElementFor(&programPoint, op.getStep())->getValue();
+  ProgramPoint *programPoint = getProgramPointAfter(op);
+  const auto &lb =
+      getLatticeElementFor(programPoint, op.getLowerBound())->getValue();
+  const auto &step =
+      getLatticeElementFor(programPoint, op.getStep())->getValue();
 
   AxisInfo::DimVectorT knownContiguity(1, 1);
   AxisInfo::DimVectorT knownDivisibility(1, 1);
@@ -1095,6 +1104,20 @@ void AxisInfoAnalysis::visitForOpInductionVar(
   auto inductionVar =
       AxisInfo(knownContiguity, knownDivisibility, knownConstancy);
   (void)argLattices[0]->join(inductionVar);
+}
+
+void AxisInfoAnalysis::visitWarpSpecializeExplicitCaptures(
+    gpu::WarpSpecializePartitionsOp ws, const RegionSuccessor &successor,
+    ArrayRef<dataflow::Lattice<AxisInfo> *> argLattices) {
+  assert(!successor.isParent());
+  ProgramPoint *point = getProgramPointAfter(ws);
+
+  for (auto [capture, argLattice] :
+       llvm::zip(ws.getParentOp().getExplicitCaptures(), argLattices)) {
+    propagateIfChanged(
+        argLattice,
+        argLattice->join(getLatticeElementFor(point, capture)->getValue()));
+  }
 }
 
 } // anonymous namespace
@@ -1137,32 +1160,27 @@ void AxisInfo::initPessimisticStateFromFunc(int argNumber, T funcOp,
 
   if (blockArg && blockArg.getOwner()->isEntryBlock()) {
     Operation *op = blockArg.getOwner()->getParentOp();
-    if (auto fun = dyn_cast<FunctionOpInterface>(op))
+    if (auto fun = dyn_cast<FunctionOpInterface>(op)) {
       initPessimisticStateFromFunc(blockArg.getArgNumber(), fun,
                                    &knownContiguity, &knownDivisibility,
                                    &knownConstancy);
-    // llvm codegen check alignment to generate vector load/store
-    // would be nice if this wasn't the case
-    else if (auto fun = dyn_cast<LLVM::LLVMFuncOp>(op))
-      initPessimisticStateFromFunc(blockArg.getArgNumber(), fun,
-                                   &knownContiguity, &knownDivisibility,
-                                   &knownConstancy);
-    else if (isa<RegionBranchOpInterface>(op)) {
-      // scf::ForOp, scf::IfOp, scf::WhileOp
+    } else if (isa<RegionBranchOpInterface, gpu::WarpSpecializePartitionsOp>(
+                   op)) {
+      // scf::ForOp, scf::IfOp, scf::WhileOp, gpu::WarpSpecializePartitionsOp
       // Control flow operations are initialized with "unknown" state:
       // the maximum possible divisibility, contiguity, and constancy.
-      knownDivisibility = DimVectorT(rank, highestPowOf2Divisor<int64_t>(0));
-      knownConstancy = DimVectorT(rank, highestPowOf2Divisor<int64_t>(0));
-      knownContiguity = DimVectorT(rank, highestPowOf2Divisor<int64_t>(0));
+      knownDivisibility = DimVectorT(rank, kMaxDivisor);
+      knownConstancy = DimVectorT(rank, kMaxDivisor);
+      knownContiguity = DimVectorT(rank, kMaxDivisor);
     }
   } else if (Operation *op = value.getDefiningOp()) {
     if (isa<RegionBranchOpInterface>(op)) {
       // scf::ForOp, scf::IfOp, scf::WhileOp
       // Control flow operations are initialized with "unknown" state:
       // the maximum possible divisibility, contiguity, and constancy.
-      knownDivisibility = DimVectorT(rank, highestPowOf2Divisor<int64_t>(0));
-      knownConstancy = DimVectorT(rank, highestPowOf2Divisor<int64_t>(0));
-      knownContiguity = DimVectorT(rank, highestPowOf2Divisor<int64_t>(0));
+      knownDivisibility = DimVectorT(rank, kMaxDivisor);
+      knownConstancy = DimVectorT(rank, kMaxDivisor);
+      knownContiguity = DimVectorT(rank, kMaxDivisor);
     }
     // Other operations are conservatively initialized with the lowest possible
     // divisibility, contiguity, and constancy unless they have specified.
@@ -1194,7 +1212,7 @@ void AxisInfo::initPessimisticStateFromFunc(int argNumber, T funcOp,
   DimVectorT constancy;
   for (auto d = 0; d < lhs.getRank(); ++d) {
     contiguity.push_back(gcd(lhs.getContiguity(d), rhs.getContiguity(d)));
-    divisibility.push_back(gcd(lhs.getDivisibility(d), rhs.getDivisibility(d)));
+    divisibility.push_back(getDivisibilityFromContiguity(lhs, rhs, d));
     constancy.push_back(gcd(lhs.getConstancy(d), rhs.getConstancy(d)));
   }
   std::optional<int64_t> constantValue;
@@ -1205,46 +1223,68 @@ void AxisInfo::initPessimisticStateFromFunc(int argNumber, T funcOp,
   return AxisInfo(contiguity, divisibility, constancy, constantValue);
 }
 
-unsigned ModuleAxisInfoAnalysis::getPtrContiguity(Value ptr) {
-  auto tensorTy = dyn_cast<RankedTensorType>(ptr.getType());
+unsigned ModuleAxisInfoAnalysis::getContiguity(Value value) {
+  auto tensorTy = dyn_cast<RankedTensorType>(value.getType());
   if (!tensorTy)
     return 1;
-  auto layout = tensorTy.getEncoding();
+  auto elemTy = tensorTy.getElementType();
+  // Get the pointee type if we have a tensor of ptrs to compute contiguity for
+  if (auto ptrTy = dyn_cast<PointerType>(elemTy)) {
+    elemTy = ptrTy.getPointeeType();
+  }
+  return getContiguity(value, elemTy.getIntOrFloatBitWidth());
+}
 
-  // Here order should be ordered by contiguous first, so the first element
-  // should have the largest contiguous.
-  auto order = triton::gpu::getOrder(layout);
-  unsigned align = getPtrAlignment(ptr);
+unsigned ModuleAxisInfoAnalysis::getContiguity(Value offsetsValue,
+                                               unsigned elementBitWidth) {
+  // FIXME: This is not as good as it could be, as we don't need to restrict
+  // the analysis to one dimension. We should determine contiguity on the
+  // flattenOuts() layout
+  auto tensorTy = cast<RankedTensorType>(offsetsValue.getType());
+  auto linAttr = gpu::toLinearEncoding(tensorTy);
+  auto order = linAttr.getOrder();
+  unsigned align = getAlignment(offsetsValue, elementBitWidth);
 
-  auto uniqueContigPerThread =
-      triton::gpu::getUniqueContigPerThread(layout, tensorTy.getShape());
+  auto uniqueContigPerThread = linAttr.getContigPerThread();
   assert(order[0] < uniqueContigPerThread.size() &&
          "Unexpected uniqueContigPerThread size");
   unsigned contiguity = uniqueContigPerThread[order[0]];
-  LDBG("getPtrContiguity uniqueContigPerThread = " << contiguity);
+  LDBG("getContiguity uniqueContigPerThread = " << contiguity);
   contiguity = std::min(align, contiguity);
 
   return contiguity;
 }
 
-unsigned ModuleAxisInfoAnalysis::getPtrAlignment(Value ptr) {
-  auto tensorTy = dyn_cast<RankedTensorType>(ptr.getType());
+unsigned ModuleAxisInfoAnalysis::getAlignment(Value value) {
+  auto tensorTy = dyn_cast<RankedTensorType>(value.getType());
   if (!tensorTy)
     return 1;
-  auto *axisInfo = getAxisInfo(ptr);
+
+  auto elemTy = tensorTy.getElementType();
+  // Get the pointee type if we have a tensor of ptrs to compute contiguity for
+  if (auto ptrTy = dyn_cast<PointerType>(elemTy)) {
+    elemTy = ptrTy.getPointeeType();
+  }
+  return getAlignment(value, elemTy.getIntOrFloatBitWidth());
+}
+
+unsigned ModuleAxisInfoAnalysis::getAlignment(Value offsetsValue,
+                                              unsigned elementBitWidth) {
+  auto tensorTy = cast<RankedTensorType>(offsetsValue.getType());
+  auto *axisInfo = getAxisInfo(offsetsValue);
   if (!axisInfo)
     return 1;
-  auto layout = tensorTy.getEncoding();
-  auto order = triton::gpu::getOrder(layout);
+  auto linAttr = gpu::toLinearEncoding(tensorTy);
+  auto order = linAttr.getOrder();
   auto maxMultipleBytes = axisInfo->getDivisibility(order[0]);
   auto maxContig = axisInfo->getContiguity(order[0]);
-  auto elemNumBits = triton::getPointeeBitWidth(tensorTy);
-  auto elemNumBytes = std::max<unsigned>(elemNumBits / 8, 1);
+
+  auto elemNumBytes = std::max<unsigned>(elementBitWidth / 8, 1);
   auto maxMultiple = std::max<int64_t>(maxMultipleBytes / elemNumBytes, 1);
   unsigned alignment = std::min(maxMultiple, maxContig);
-  LDBG("getPtrAlignment order[0] "
+  LDBG("getAlignment order[0] "
        << order[0] << " maxMultipleBytes = " << maxMultipleBytes
-       << " maxContig = " << maxContig << " elemNumBits = " << elemNumBits
+       << " maxContig = " << maxContig << " elemNumBits = " << elementBitWidth
        << " maxMultiple = " << maxMultiple << " alignment " << alignment);
   LLVM_DEBUG({
     std::string axisStr;
@@ -1262,7 +1302,8 @@ unsigned ModuleAxisInfoAnalysis::getMaskAlignment(Value mask) {
   auto *axisInfo = getAxisInfo(mask);
   if (!axisInfo)
     return 1;
-  auto maskOrder = triton::gpu::getOrder(tensorTy.getEncoding());
+  auto linAttr = gpu::toLinearEncoding(tensorTy);
+  auto maskOrder = linAttr.getOrder();
   auto alignment = std::max<unsigned>(axisInfo->getConstancy(maskOrder[0]), 1);
   LDBG("getMaskAlignment maskOrder[0] " << maskOrder[0] << " alignment "
                                         << alignment);
@@ -1275,11 +1316,22 @@ unsigned ModuleAxisInfoAnalysis::getMaskAlignment(Value mask) {
   return alignment;
 }
 
-void ModuleAxisInfoAnalysis::initialize(FunctionOpInterface funcOp) {
+void ModuleAxisInfoAnalysis::initialize(FunctionOpInterface funcOp,
+                                        axisinfo::CallbackType callback) {
   std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
-  AxisInfoAnalysis *analysis = solver->load<AxisInfoAnalysis>();
-  if (failed(solver->initializeAndRun(funcOp)))
+  AxisInfoAnalysis *analysis = solver->load<AxisInfoAnalysis>(callback);
+  // Walk pre-order so analysis results can be propagated into nested isolated
+  // regions.
+  WalkResult result =
+      funcOp.walk<mlir::WalkOrder::PreOrder>([&](Operation *op) {
+        if (op->hasTrait<OpTrait::IsIsolatedFromAbove>() &&
+            failed(solver->initializeAndRun(op)))
+          return WalkResult::interrupt();
+        return WalkResult::advance();
+      });
+  if (result.wasInterrupted())
     return;
+
   auto *axisInfoMap = getFuncData(funcOp);
   auto updateAxisInfoMap = [&](Value value) {
     auto axisInfo = analysis->getLatticeElement(value)->getValue();
@@ -1311,7 +1363,7 @@ void ModuleAxisInfoAnalysis::update(CallOpInterface callOp,
     auto index = entry.index();
     auto value = entry.value();
     auto setAttrFn = [&](StringRef attrName, int64_t prevValue) {
-      auto curValue = highestPowOf2Divisor<int64_t>(0);
+      auto curValue = kMaxDivisor;
       if (callee.getArgAttrOfType<IntegerAttr>(index, attrName)) {
         curValue =
             callee.getArgAttrOfType<IntegerAttr>(index, attrName).getInt();

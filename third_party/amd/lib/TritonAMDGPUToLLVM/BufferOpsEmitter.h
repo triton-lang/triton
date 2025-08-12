@@ -1,5 +1,5 @@
-#ifndef TRITON_CONVERSION_TRITONAMDGPU_TO_LLVM_BUFFER_OPS_EMITTER_H
-#define TRITON_CONVERSION_TRITONAMDGPU_TO_LLVM_BUFFER_OPS_EMITTER_H
+#ifndef TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_BUFFEROPSEMITTER_H_
+#define TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_BUFFEROPSEMITTER_H_
 
 #include "TargetInfo.h"
 #include "TritonAMDGPUToLLVM/GCNAsmFormat.h"
@@ -9,6 +9,7 @@
 #include "triton/Analysis/Utility.h"
 #include "triton/Conversion/MLIRTypes.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include <cstdint>
 
 namespace mlir::LLVM::AMD {
 // Utility class to take care of buffer operation emission. We may add more
@@ -63,24 +64,45 @@ struct BufferEmitter {
 
   // Create a resource descriptor that points to the area of memory we want to
   // load from
-  Value createResourceDescriptor(Value basePtr);
+  Value createResourceDescriptor(Value basePtr, Value inferredStride = nullptr);
 
   // Emit a predicated rocdl.raw.ptr.buffer.load
   Value emitLoad(Type type, Value rsrcDesc, Value offset, Value pred,
-                 Value falseVal);
+                 Value falseVal, CacheModifier cm);
+
+  // Emit a predicated rocdl.raw.ptr.buffer.load.lds
+  ROCDL::RawPtrBufferLoadLdsOp emitLoadToLds(Type type, Value byteWidth,
+                                             Value rsrcDesc, Value offset,
+                                             Value dst, Value pred,
+                                             CacheModifier cm);
+
+  // Emit a predicated rocdl.raw.ptr.buffer.atomic.* RMWOp
+  Value emitAtomicRMW(RMWOp rmwType, Type type, Value rsrcDesc, Value offset,
+                      Value data, Value pred, bool hasUsers);
+
+  // Emit a predicated rocdl.raw.ptr.buffer.atomic.cmpswap
+  Value emitAtomicCAS(Type type, Value rsrcDesc, Value offset, Value casCmpVal,
+                      Value casStoreVal, Value pred, bool hasUsers);
 
   // Emit a predicated rocdl.raw.ptr.buffer.store
-  void emitStore(Value rsrcDesc, Value offset, Value data, Value pred);
+  void emitStore(Value rsrcDesc, Value offset, Value data, Value pred,
+                 CacheModifier cm);
 
 private:
   // Fill common buffer operation arguments.
   void fillCommonArgs(Type type, Value rsrcDesc, Value vOffsetElems, Value pred,
+                      CacheModifier cm, bool isBufferLoad,
                       SmallVector<Value> &args);
+
+  // Fill buffer atomics arguments
+  void fillCommonArgsAtomics(Type type, Value rsrcDesc, Value vOffsetElems,
+                             Value pred, bool hasUsers,
+                             SmallVector<Value> &args);
 
   // Given a type, the buffer type can be either the same type
   // or a packed version. E.g., a vector of 8xfp16 can be bitcasted to
   // a vector of 4xi32. This usually makes the life of the backend easier
-  Type getBufferOpType(Type type);
+  Type getBufferOpType(Type type, bool atomicsOp);
 
   // Rewriter utilities
   RewriterBase &rewriter;
@@ -90,4 +112,4 @@ private:
 
 } // namespace mlir::LLVM::AMD
 
-#endif // TRITON_CONVERSION_TRITONAMDGPU_TO_LLVM_BUFFER_OPS_EMITTER_H
+#endif // TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_BUFFEROPSEMITTER_H_

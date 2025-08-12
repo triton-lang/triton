@@ -1,42 +1,29 @@
-import os
-import shutil
-
-import pytest
-
-import torch
 import triton
 import re
 
 
-@triton.jit
-def triton_():
-    return
+def test_triton_reproducer_path(monkeypatch, tmp_path):
+    # If we get a cache hit there will be no reproducer generated
+    monkeypatch.setenv("TRITON_ALWAYS_COMPILE", "1")
 
+    @triton.jit
+    def triton_():
+        return
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires cuda")
-def test_reproducer():
-    tmpdir = ".tmp"
-    reproducer = 'triton-reproducer.mlir'
-    if os.path.exists(tmpdir):
-        shutil.rmtree(tmpdir, ignore_errors=True)
-    if os.path.exists(reproducer):
-        os.remove(reproducer)
-    os.environ["TRITON_CACHE_DIR"] = tmpdir
-    os.environ["TRITON_REPRODUCER_PATH"] = reproducer
+    # We need an temp empty file for MLIR to write the reproducer to, and then
+    # the TRITON_REPRODUCER_PATH env var enables crash the reproduction
+    # generation in MLIR.
+    repro_path = tmp_path / "repro.mlir"
+    repro_path.touch()
+    monkeypatch.setenv("TRITON_REPRODUCER_PATH", str(repro_path))
+
+    # Run the kernel so MLIR will generate a crash reproducer. It doesn't really
+    # matter what the kernel does, just that the PassManager runs its passes.
     triton_[(1, )]()
-    foundPipeline = ""
-    with open(reproducer, 'r') as f:
-        line = f.read()
-        if 'pipeline:' in line:
-            foundPipeline = line
-    if 0 == len(foundPipeline):
-        raise Exception("Failed to find pipeline info in reproducer file.")
 
-    ttgir_to_llvm_pass = re.compile("convert-triton-{{.*}}gpu-to-llvm")
-    if ttgir_to_llvm_pass.search(foundPipeline):
-        raise Exception("Failed to find triton passes in pipeline")
-    # cleanup
-    if os.path.exists(tmpdir):
-        shutil.rmtree(tmpdir, ignore_errors=True)
-    if os.path.exists(reproducer):
-        os.remove(reproducer)
+    repro = repro_path.read_text()
+    assert "mlir_reproducer" in repro, f"Expected MLIR reproducer in {repro_path}. Got:\n{repro}"
+    m = re.search(r"pipeline: \"(.*)\"", repro)
+    assert m, "Expected to match pass pipeline after \"pipeline:\" in MLIR reproducer"
+    pipeline_str = m.group(1)
+    assert pipeline_str, "Expected non-empty pass pipeline in MLIR reproducer"

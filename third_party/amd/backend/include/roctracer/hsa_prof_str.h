@@ -22,9 +22,9 @@
 
 /* HSA API tracing primitives
  'CoreApi', header 'hsa.h', 125 funcs
- 'AmdExt', header 'hsa_ext_amd.h', 68 funcs
+ 'AmdExt', header 'hsa_ext_amd.h', 70 funcs
  'ImageExt', header 'hsa_ext_image.h', 13 funcs
- 'AmdExt', header 'hsa_api_trace.h', 68 funcs
+ 'AmdExt', header 'hsa_api_trace.h', 70 funcs
  */
 
 #ifndef HSA_PROF_STR_H_
@@ -229,24 +229,26 @@ enum hsa_api_id_t {
   HSA_API_ID_hsa_amd_vmem_retain_alloc_handle = 190,
   HSA_API_ID_hsa_amd_vmem_get_alloc_properties_from_handle = 191,
   HSA_API_ID_hsa_amd_agent_set_async_scratch_limit = 192,
+  HSA_API_ID_hsa_amd_queue_get_info = 193,
+  HSA_API_ID_hsa_amd_vmem_address_reserve_align = 194,
 
   /* block: ImageExt API */
-  HSA_API_ID_hsa_ext_image_get_capability = 193,
-  HSA_API_ID_hsa_ext_image_data_get_info = 194,
-  HSA_API_ID_hsa_ext_image_create = 195,
-  HSA_API_ID_hsa_ext_image_import = 196,
-  HSA_API_ID_hsa_ext_image_export = 197,
-  HSA_API_ID_hsa_ext_image_copy = 198,
-  HSA_API_ID_hsa_ext_image_clear = 199,
-  HSA_API_ID_hsa_ext_image_destroy = 200,
-  HSA_API_ID_hsa_ext_sampler_create = 201,
-  HSA_API_ID_hsa_ext_sampler_destroy = 202,
-  HSA_API_ID_hsa_ext_image_get_capability_with_layout = 203,
-  HSA_API_ID_hsa_ext_image_data_get_info_with_layout = 204,
-  HSA_API_ID_hsa_ext_image_create_with_layout = 205,
+  HSA_API_ID_hsa_ext_image_get_capability = 195,
+  HSA_API_ID_hsa_ext_image_data_get_info = 196,
+  HSA_API_ID_hsa_ext_image_create = 197,
+  HSA_API_ID_hsa_ext_image_import = 198,
+  HSA_API_ID_hsa_ext_image_export = 199,
+  HSA_API_ID_hsa_ext_image_copy = 200,
+  HSA_API_ID_hsa_ext_image_clear = 201,
+  HSA_API_ID_hsa_ext_image_destroy = 202,
+  HSA_API_ID_hsa_ext_sampler_create = 203,
+  HSA_API_ID_hsa_ext_sampler_destroy = 204,
+  HSA_API_ID_hsa_ext_image_get_capability_with_layout = 205,
+  HSA_API_ID_hsa_ext_image_data_get_info_with_layout = 206,
+  HSA_API_ID_hsa_ext_image_create_with_layout = 207,
 
-  HSA_API_ID_DISPATCH = 206,
-  HSA_API_ID_NUMBER = 207,
+  HSA_API_ID_DISPATCH = 208,
+  HSA_API_ID_NUMBER = 209,
 };
 /* Declarations of APIs intended for use only by tools. */
 typedef void (*hsa_amd_queue_intercept_packet_writer)(const void*, uint64_t);
@@ -261,9 +263,9 @@ struct hsa_api_data_t {
   uint32_t phase;
   union {
     uint64_t uint64_t_retval;
-    uint32_t uint32_t_retval;
-    hsa_signal_value_t hsa_signal_value_t_retval;
     hsa_status_t hsa_status_t_retval;
+    hsa_signal_value_t hsa_signal_value_t_retval;
+    uint32_t uint32_t_retval;
   };
   union {
     /* block: CoreApi API */
@@ -1236,6 +1238,18 @@ struct hsa_api_data_t {
       hsa_agent_t agent;
       size_t threshold;
     } hsa_amd_agent_set_async_scratch_limit;
+    struct {
+      hsa_queue_t* queue;
+      hsa_queue_info_attribute_t attribute;
+      void* value;
+    } hsa_amd_queue_get_info;
+    struct {
+      void** va;
+      size_t size;
+      uint64_t address;
+      uint64_t alignment;
+      uint64_t flags;
+    } hsa_amd_vmem_address_reserve_align;
 
     /* block: ImageExt API */
     struct {
@@ -2885,6 +2899,24 @@ inline std::ostream& operator<< (std::ostream& out, const hsa_api_data_pair_t& d
       out << "hsa_amd_agent_set_async_scratch_limit(";
       out << api_data.args.hsa_amd_agent_set_async_scratch_limit.agent << ", ";
       out << api_data.args.hsa_amd_agent_set_async_scratch_limit.threshold;
+      out << ") = " << api_data.hsa_status_t_retval;
+      break;
+    }
+    case HSA_API_ID_hsa_amd_queue_get_info: {
+      out << "hsa_amd_queue_get_info(";
+      out << api_data.args.hsa_amd_queue_get_info.queue << ", ";
+      out << api_data.args.hsa_amd_queue_get_info.attribute << ", ";
+      out << api_data.args.hsa_amd_queue_get_info.value;
+      out << ") = " << api_data.hsa_status_t_retval;
+      break;
+    }
+    case HSA_API_ID_hsa_amd_vmem_address_reserve_align: {
+      out << "hsa_amd_vmem_address_reserve_align(";
+      out << api_data.args.hsa_amd_vmem_address_reserve_align.va << ", ";
+      out << api_data.args.hsa_amd_vmem_address_reserve_align.size << ", ";
+      out << api_data.args.hsa_amd_vmem_address_reserve_align.address << ", ";
+      out << api_data.args.hsa_amd_vmem_address_reserve_align.alignment << ", ";
+      out << api_data.args.hsa_amd_vmem_address_reserve_align.flags;
       out << ") = " << api_data.hsa_status_t_retval;
       break;
     }

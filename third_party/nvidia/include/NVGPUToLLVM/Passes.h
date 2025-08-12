@@ -8,6 +8,9 @@
 namespace mlir {
 namespace triton {
 
+#define GEN_PASS_DECL
+#include "nvidia/include/NVGPUToLLVM/Passes.h.inc"
+
 #define GEN_PASS_REGISTRATION
 #include "nvidia/include/NVGPUToLLVM/Passes.h.inc"
 

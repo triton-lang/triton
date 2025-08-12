@@ -17,9 +17,8 @@ struct GetProgramIdOpConversion
   LogicalResult
   matchAndRewrite(triton::GetProgramIdOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    Value programId = targetInfo.programId(rewriter, op->getLoc(),
-                                           op->getParentOfType<ModuleOp>(),
-                                           op.getAxisAsInt());
+    Value programId = targetInfo.programId(
+        rewriter, op->getLoc(), op->getParentOfType<ModuleOp>(), op.getAxis());
     rewriter.replaceOp(op, programId);
     return success();
   }

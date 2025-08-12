@@ -4,18 +4,14 @@ import subprocess
 import sys
 from collections import Counter
 
+import triton
+from triton._internal_testing import is_interpreter
+
 import pytest
 
 dir_path = os.path.dirname(os.path.realpath(__file__))
 print_path = os.path.join(dir_path, "print_helper.py")
 torch_types = ["int8", "uint8", "int16", "int32", "long", "float16", "float32", "float64"]
-
-
-def is_interpreter():
-    return os.environ.get('TRITON_INTERPRET', '0') == '1'
-
-
-# TODO: Print with multiple operands
 
 
 @pytest.mark.interpreter
@@ -35,6 +31,8 @@ def is_interpreter():
                                                       ("device_print_pointer", "int32"),
                                                       ("device_print_negative", "int32"),
                                                       ("device_print_uint", "uint32"),
+                                                      ("device_print_uint_cast", "uint8"),
+                                                      ("device_print_2d_tensor", "int32"),
                                                   ])
 def test_print(func_type: str, data_type: str, device: str):
     proc = subprocess.run(
@@ -59,9 +57,13 @@ def test_print(func_type: str, data_type: str, device: str):
     # Format is
     #   pid (<x>, <y>, <z>) idx (<i1>, <i2>, ...) <prefix> (operand <n>) <elem>
     expected_lines = Counter()
-    if func_type in ("print", "device_print", "device_print_uint"):
+    if func_type in ("print", "device_print", "device_print_uint", "device_print_uint_cast"):
         for i in range(N):
-            offset = (1 << 31) if data_type == "uint32" else 0
+            offset = 0
+            if func_type == "device_print_uint_cast":
+                offset = 1 << 7
+            elif func_type == "device_print_uint":
+                offset = (1 << 31)
             line = f"pid (0, 0, 0) idx ({i:3}) x: {i + offset}"
             if data_type.startswith("float"):
                 line += ".000000"
@@ -101,6 +103,13 @@ def test_print(func_type: str, data_type: str, device: str):
     elif func_type == "device_print_pointer":
         for i in range(N):
             expected_lines[f"pid (0, 0, 0) idx ({i:3}) ptr: 0x"] = 1
+    elif func_type == "device_print_2d_tensor":
+        warp_size = triton.runtime.driver.active.get_current_target().warp_size
+        x_dim = N // warp_size
+        y_dim = warp_size
+        for x in range(x_dim):
+            for y in range(y_dim):
+                expected_lines[f"pid (0, 0, 0) idx ({x}, {y:2}): {(x * y_dim + y)}"] = 1
 
     actual_lines = Counter()
     for line in outs:

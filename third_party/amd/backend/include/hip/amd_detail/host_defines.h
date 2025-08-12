@@ -127,6 +127,10 @@ template<typename _Tp>
     struct is_trivial
     : public integral_constant<bool, __is_trivial(_Tp)>
     { };
+
+
+template <bool B, class T, class F> struct conditional { using type = T; };
+template <class T, class F> struct conditional<false, T, F> { using type = F; };
 }
 typedef __hip_internal::uint8_t __hip_uint8_t;
 typedef __hip_internal::uint16_t __hip_uint16_t;

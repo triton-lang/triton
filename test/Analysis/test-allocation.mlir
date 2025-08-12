@@ -1,26 +1,44 @@
-// RUN: triton-opt %s -split-input-file --mlir-disable-threading -test-print-allocation 2>&1 | FileCheck %s
+// RUN: triton-opt %s -allow-unregistered-dialect -test-print-allocation -verify-diagnostics -o /dev/null
+// RUN: triton-opt %s -allow-unregistered-dialect -test-print-allocation="get-scratch-size-function=ValidConstant" 2>&1 | FileCheck %s --check-prefix=CHECK-128
 
-#AL = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
-#sliceAd0 = #triton_gpu.slice<{dim = 0, parent = #AL}>
-#BL = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
-#A_SHARED = #triton_gpu.shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>
-#A_SHARED_T = #triton_gpu.shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [0, 1]}>
-#B_SHARED = #triton_gpu.shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>
-#C = #triton_gpu.nvidia_mma<{versionMajor = 2, warpsPerCTA = [4, 1]}>
-#A_DOT = #triton_gpu.dot_op<{opIdx = 0, parent = #C, kWidth = 2}>
-#B_DOT = #triton_gpu.dot_op<{opIdx = 1, parent = #C, kWidth = 2}>
+// Check there are no lines with a size different to 128 and we have at least a line with size 128.
 
-module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.num-ctas" = 1 : i32} {
+// CHECK-128-NOT: scratch offset = {{.*}}, size = {{^(128)}}
+// CHECK-128: scratch offset = {{.*}}, size = 128
+// CHECK-128-NOT: scratch offset = {{.*}}, size = {{^(128)}}
 
-// CHECK-LABEL: empty
+#AL = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#sliceAd0 = #ttg.slice<{dim = 0, parent = #AL}>
+#BL = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+#A_SHARED = #ttg.swizzled_shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>
+#A_SHARED_T = #ttg.swizzled_shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [0, 1]}>
+#B_SHARED = #ttg.swizzled_shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>
+#C = #ttg.nvidia_mma<{versionMajor = 2, warpsPerCTA = [4, 1], instrShape = [16, 8]}>
+#A_DOT = #ttg.dot_op<{opIdx = 0, parent = #C, kWidth = 2}>
+#B_DOT = #ttg.dot_op<{opIdx = 1, parent = #C, kWidth = 2}>
+#NVMMA_SHARED_0 = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = false, elementBitWidth = 16}>
+#NVMMA_SHARED_32 = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 16}>
+#NVMMA_SHARED_64 = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 16}>
+#NVMMA_SHARED_128 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#NVMMA_SHARED_FP4PADDED = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 8, fp4Padded = true}>
+#PADDED_SHARED_0 = #ttg.padded_shared<[256:+8] {order = [1, 0]}>
+#PADDED_SHARED_1 = #ttg.padded_shared<[128:+4, 256:+8] {order = [1, 0]}>
+#PADDED_SHARED_2 = #ttg.padded_shared<[64:+2, 128:+4, 256:+8] {order = [1, 0]}>
+
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
+
+// expected-remark @below {{empty}}
+// expected-remark @below {{size = 0}}
 tt.func @empty(%A : !tt.ptr<f16>) {
   %cst_2 = arith.constant dense<0.000000e+00> : tensor<16x32xf16, #AL>
-  %0 = triton_gpu.convert_layout %cst_2 : tensor<16x32xf16, #AL> -> tensor<16x32xf16, #AL>
+  %0 = ttg.convert_layout %cst_2 : tensor<16x32xf16, #AL> -> tensor<16x32xf16, #AL>
   tt.return
-  // CHECK: size = 0
 }
 
-// CHECK-LABEL: matmul_loop
+// expected-remark @below {{matmul_loop}}
+// expected-remark @below {{size = 8192}}
 tt.func @matmul_loop(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %B : !tt.ptr<f16>) {
   %a_ptr_init = tt.splat %A : !tt.ptr<f16> -> tensor<128x32x!tt.ptr<f16>, #AL>
   %b_ptr_init = tt.splat %B : !tt.ptr<f16> -> tensor<32x128x!tt.ptr<f16>, #BL>
@@ -36,11 +54,11 @@ tt.func @matmul_loop(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>,
 
   scf.for %iv = %lb to %ub step %step iter_args(%a_ptr = %a_ptr_init, %b_ptr = %b_ptr_init, %prev_c = %c_init) -> (tensor<128x32x!tt.ptr<f16>, #AL>, tensor<32x128x!tt.ptr<f16>, #BL>, tensor<128x128xf32, #C>) {
     %a_ = tt.load %a_ptr, %a_mask, %a_other : tensor<128x32x!tt.ptr<f16>, #AL>
-    // CHECK: offset = 0, size = 4608
-    %a = triton_gpu.convert_layout %a_ : tensor<128x32xf16, #AL> -> tensor<128x32xf16, #A_DOT>
+    // expected-remark @below {{scratch offset = 0, size = 8192}}
+    %a = ttg.convert_layout %a_ : tensor<128x32xf16, #AL> -> tensor<128x32xf16, #A_DOT>
     %b_ = tt.load %b_ptr, %b_mask, %b_other : tensor<32x128x!tt.ptr<f16>, #BL>
-    // CHECK-NEXT: offset = 0, size = 4352
-    %b = triton_gpu.convert_layout %b_ : tensor<32x128xf16, #BL> -> tensor<32x128xf16, #B_DOT>
+    // expected-remark @below {{scratch offset = 0, size = 8192}}
+    %b = ttg.convert_layout %b_ : tensor<32x128xf16, #BL> -> tensor<32x128xf16, #B_DOT>
 
     %c = tt.dot %a, %b, %prev_c : tensor<128x32xf16, #A_DOT> * tensor<32x128xf16, #B_DOT> -> tensor<128x128xf32, #C>
 
@@ -49,11 +67,11 @@ tt.func @matmul_loop(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>,
     scf.yield %next_a_ptr, %next_b_ptr, %c : tensor<128x32x!tt.ptr<f16>, #AL>, tensor<32x128x!tt.ptr<f16>, #BL>, tensor<128x128xf32, #C>
   }
   tt.return
-  // CHECK-NEXT: size = 4608
 }
 
 // Shared memory is available after a tensor's liveness range ends
-// CHECK-LABEL: reusable
+// expected-remark @below {{reusable}}
+// expected-remark @below {{size = 8192}}
 tt.func @reusable(%A : !tt.ptr<f16>) {
   %cst1 = arith.constant dense<true> : tensor<128x32xi1, #AL>
   %cst2 = arith.constant dense<0.000000e+00> : tensor<128x32xf16, #AL>
@@ -64,548 +82,922 @@ tt.func @reusable(%A : !tt.ptr<f16>) {
   %a_ptr = tt.splat %A : !tt.ptr<f16> -> tensor<128x32x!tt.ptr<f16>, #AL>
   %b_ptr = tt.splat %A : !tt.ptr<f16> -> tensor<32x128x!tt.ptr<f16>, #AL>
   %a1_ = tt.load %a_ptr, %cst1, %cst2 : tensor<128x32x!tt.ptr<f16>, #AL>
-  // CHECK-NEXT: offset = 0, size = 4608
-  %a1 = triton_gpu.convert_layout %a1_ : tensor<128x32xf16, #AL> -> tensor<128x32xf16, #A_DOT>
+  // expected-remark @below {{scratch offset = 0, size = 8192}}
+  %a1 = ttg.convert_layout %a1_ : tensor<128x32xf16, #AL> -> tensor<128x32xf16, #A_DOT>
   %a2_ = tt.load %b_ptr, %cst3, %cst4 : tensor<32x128x!tt.ptr<f16>, #AL>
-  // CHECK-NEXT: offset = 0, size = 1088
-  %a2 = triton_gpu.convert_layout %a2_ : tensor<32x128xf16, #AL> -> tensor<32x128xf16, #B_DOT>
+  // expected-remark @below {{scratch offset = 0, size = 8192}}
+  %a2 = ttg.convert_layout %a2_ : tensor<32x128xf16, #AL> -> tensor<32x128xf16, #B_DOT>
   %a3_ = tt.load %a_ptr, %cst1, %cst2 : tensor<128x32x!tt.ptr<f16>, #AL>
-  // CHECK-NEXT: offset = 0, size = 4608
-  %a3 = triton_gpu.convert_layout %a3_ : tensor<128x32xf16, #AL> -> tensor<128x32xf16, #A_DOT>
+  // expected-remark @below {{scratch offset = 0, size = 8192}}
+  %a3 = ttg.convert_layout %a3_ : tensor<128x32xf16, #AL> -> tensor<128x32xf16, #A_DOT>
   %c = tt.dot %a1, %a2, %c_init : tensor<128x32xf16, #A_DOT> * tensor<32x128xf16, #B_DOT> -> tensor<128x128xf32, #C>
   %a4_ = tt.load %b_ptr, %cst3, %cst4 : tensor<32x128x!tt.ptr<f16>, #AL>
-  // CHECK-NEXT: offset = 0, size = 1088
-  %a4 = triton_gpu.convert_layout %a4_ : tensor<32x128xf16, #AL> -> tensor<32x128xf16, #B_DOT>
+  // expected-remark @below {{scratch offset = 0, size = 8192}}
+  %a4 = ttg.convert_layout %a4_ : tensor<32x128xf16, #AL> -> tensor<32x128xf16, #B_DOT>
   %c1 = tt.dot %a3, %a4, %c : tensor<128x32xf16, #A_DOT> * tensor<32x128xf16, #B_DOT> -> tensor<128x128xf32, #C>
   tt.return
-  // CHECK-NEXT: size = 4608
 }
 
 // A tensor's shared memory offset is larger than it needs to accommodate further tensors
 // %cst0->%c
 // %cst1->%cst4
 // %cst3->%g->%h->%i
-// CHECK-LABEL: preallocate
+// expected-remark @below {{preallocate}}
+// expected-remark @below {{size = 12288}}
 tt.func @preallocate(%A : !tt.ptr<f16>) {
-  // CHECK: offset = 0, size = 512
-  %cst0 = triton_gpu.local_alloc : () -> !tt.memdesc<1x16x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-  // CHECK-NEXT: offset = 1024, size = 512
-  %cst1 = triton_gpu.local_alloc : () -> !tt.memdesc<1x16x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-  // CHECK-NEXT: offset = 2048, size = 512
-  %cst2 = triton_gpu.local_alloc : () -> !tt.memdesc<1x16x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-  // CHECK-NEXT: offset = 3072, size = 1024
-  %a = triton_gpu.local_alloc : () -> !tt.memdesc<32x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-  // CHECK-NEXT: offset = 4096, size = 1024
-  %b = triton_gpu.local_alloc : () -> !tt.memdesc<32x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
+  // expected-remark @below {{offset = 2048, size = 512}}
+  %cst0 = ttg.local_alloc : () -> !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  // expected-remark @below {{offset = 3072, size = 512}}
+  %cst1 = ttg.local_alloc : () -> !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  // expected-remark @below {{offset = 3584, size = 512}}
+  %cst2 = ttg.local_alloc : () -> !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  // expected-remark @below {{offset = 0, size = 1024}}
+  %a = ttg.local_alloc : () -> !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  // expected-remark @below {{offset = 1024, size = 1024}}
+  %b = ttg.local_alloc : () -> !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
 
-  triton_gpu.local_dealloc %cst0 : !tt.memdesc<1x16x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-  // CHECK-NEXT: offset = 0, size = 1024
-  %c = triton_gpu.local_alloc : () -> !tt.memdesc<32x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
+  ttg.local_dealloc %cst0 : !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  // expected-remark @below {{offset = 2048, size = 1024}}
+  %c = ttg.local_alloc : () -> !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
 
-  triton_gpu.local_dealloc %cst1 : !tt.memdesc<1x16x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-  triton_gpu.local_dealloc %cst2 : !tt.memdesc<1x16x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
+  ttg.local_dealloc %cst1 : !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  ttg.local_dealloc %cst2 : !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
 
-  // CHECK-NEXT: offset = 1024, size = 1024
-  %cst4 = triton_gpu.local_alloc : () -> !tt.memdesc<32x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-  // CHECK-NEXT: offset = 6144, size = 2048
-  %e = triton_gpu.local_alloc : () -> !tt.memdesc<64x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-  triton_gpu.local_dealloc %a : !tt.memdesc<32x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-  // CHECK-NEXT: offset = 8192, size = 2048
-  %d = triton_gpu.local_alloc : () -> !tt.memdesc<64x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-  triton_gpu.local_dealloc %b : !tt.memdesc<32x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-  // CHECK-NEXT: offset = 10240, size = 2048
-  %f = triton_gpu.local_alloc : () -> !tt.memdesc<64x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-  triton_gpu.local_dealloc %cst4 : !tt.memdesc<32x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-  triton_gpu.local_dealloc %c : !tt.memdesc<32x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-  // CHECK-NEXT: offset = 0, size = 2048
-  %cst5 = triton_gpu.local_alloc : () -> !tt.memdesc<64x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-  // CHECK-NEXT: offset = 2048, size = 4096
-  %g = triton_gpu.local_alloc : () -> !tt.memdesc<128x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-  triton_gpu.local_dealloc %e : !tt.memdesc<64x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-  // CHECK-NEXT: offset = 2048, size = 4096
-  %h = triton_gpu.local_alloc : () -> !tt.memdesc<128x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-  triton_gpu.local_dealloc %d : !tt.memdesc<64x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-  // CHECK-NEXT: offset = 2048, size = 4096
-  %i = triton_gpu.local_alloc : () -> !tt.memdesc<128x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-  triton_gpu.local_dealloc %f : !tt.memdesc<64x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-  triton_gpu.local_dealloc %cst5 : !tt.memdesc<64x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
+  // expected-remark @below {{offset = 3072, size = 1024}}
+  %cst4 = ttg.local_alloc : () -> !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  // expected-remark @below {{offset = 4096, size = 2048}}
+  %e = ttg.local_alloc : () -> !ttg.memdesc<64x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  ttg.local_dealloc %a : !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  // expected-remark @below {{offset = 6144, size = 2048}}
+  %d = ttg.local_alloc : () -> !ttg.memdesc<64x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  ttg.local_dealloc %b : !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  // expected-remark @below {{offset = 8192, size = 2048}}
+  %f = ttg.local_alloc : () -> !ttg.memdesc<64x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  ttg.local_dealloc %cst4 : !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  ttg.local_dealloc %c : !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  // expected-remark @below {{offset = 10240, size = 2048}}
+  %cst5 = ttg.local_alloc : () -> !ttg.memdesc<64x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  // expected-remark @below {{offset = 0, size = 4096}}
+  %g = ttg.local_alloc : () -> !ttg.memdesc<128x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  ttg.local_dealloc %e : !ttg.memdesc<64x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  // expected-remark @below {{offset = 0, size = 4096}}
+  %h = ttg.local_alloc : () -> !ttg.memdesc<128x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  ttg.local_dealloc %d : !ttg.memdesc<64x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  // expected-remark @below {{offset = 0, size = 4096}}
+  %i = ttg.local_alloc : () -> !ttg.memdesc<128x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  ttg.local_dealloc %f : !ttg.memdesc<64x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  ttg.local_dealloc %cst5 : !ttg.memdesc<64x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
   tt.return
-  // CHECK-NEXT: size = 12288
 }
 
 // Unused tensors are immediately released
-// CHECK-LABEL: unused
+// expected-remark @below {{unused}}
+// expected-remark @below {{size = 1024}}
 tt.func @unused(%A : !tt.ptr<f16>) {
   %cst = arith.constant dense<0.000000e+00> : tensor<32x16xf16, #AL>
-  // CHECK: offset = 0, size = 1024
-  %cst0 = triton_gpu.local_alloc %cst : (tensor<32x16xf16, #AL>) -> !tt.memdesc<32x16xf16, #A_SHARED, #triton_gpu.shared_memory>
-  // CHECK-NEXT: offset = 0, size = 512
-  %cst1 = triton_gpu.local_alloc : () -> !tt.memdesc<1x16x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-  // CHECK-NEXT: offset = 0, size = 512
-  %cst2 = triton_gpu.local_alloc : () -> !tt.memdesc<1x16x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
+  // expected-remark @below {{0, size = 1024}}
+  %cst0 = ttg.local_alloc %cst : (tensor<32x16xf16, #AL>) -> !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory>
+  // expected-remark @below {{offset = 0, size = 512}}
+  %cst1 = ttg.local_alloc : () -> !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  // expected-remark @below {{offset = 0, size = 512}}
+  %cst2 = ttg.local_alloc : () -> !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
   tt.return
-  // CHECK: size = 1024
 }
 
 // cst0 is alive through the entire function, it cannot be released before the end of the function
-// CHECK-LABEL: longlive
+// expected-remark @below {{longlive}}
+// expected-remark @below {{size = 2560}}
 tt.func @longlive(%A : !tt.ptr<f16>) {
-  // CHECK: offset = 0, size = 512
-  %cst0 = triton_gpu.local_alloc : () -> !tt.memdesc<1x16x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-  // CHECK-NEXT: offset = 1024, size = 512
-  %cst1 = triton_gpu.local_alloc : () -> !tt.memdesc<1x16x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-  // CHECK-NEXT: offset = 2048, size = 512
-  %cst2 = triton_gpu.local_alloc : () -> !tt.memdesc<1x16x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-  // CHECK-NEXT: offset = 3072, size = 1024
-  %a = triton_gpu.local_alloc : () -> !tt.memdesc<32x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-  triton_gpu.local_dealloc %cst1 : !tt.memdesc<1x16x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-  triton_gpu.local_dealloc %cst2 : !tt.memdesc<1x16x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
+  // expected-remark @below {{offset = 2048, size = 512}}
+  %cst0 = ttg.local_alloc : () -> !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  // expected-remark @below {{offset = 1024, size = 512}}
+  %cst1 = ttg.local_alloc : () -> !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  // expected-remark @below {{offset = 1536, size = 512}}
+  %cst2 = ttg.local_alloc : () -> !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  // expected-remark @below {{offset = 0, size = 1024}}
+  %a = ttg.local_alloc : () -> !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  ttg.local_dealloc %cst1 : !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  ttg.local_dealloc %cst2 : !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
 
-  // CHECK-NEXT: offset = 1024, size = 512
-  %cst3 = triton_gpu.local_alloc : () -> !tt.memdesc<1x16x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-  // CHECK-NEXT: offset = 2048, size = 512
-  %cst4 = triton_gpu.local_alloc : () -> !tt.memdesc<1x16x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-  // CHECK-NEXT: offset = 3072, size = 1024
-  %b = triton_gpu.local_alloc : () -> !tt.memdesc<32x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-  // CHECK-NEXT: offset = 3072, size = 512
-  %cst5 = triton_gpu.local_alloc : () -> !tt.memdesc<1x16x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-  // CHECK-NEXT: offset = 3072, size = 512
-  %cst6 = triton_gpu.local_alloc : () -> !tt.memdesc<1x16x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-  // CHECK-NEXT: offset = 3072, size = 1024
-  %c = triton_gpu.local_alloc : () -> !tt.memdesc<32x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-  triton_gpu.local_dealloc %cst3 : !tt.memdesc<1x16x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-  triton_gpu.local_dealloc %cst4 : !tt.memdesc<1x16x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-  // CHECK-NEXT: offset = 1024, size = 1024
-  %d = triton_gpu.local_alloc : () -> !tt.memdesc<32x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-  triton_gpu.local_dealloc %cst0 : !tt.memdesc<1x16x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
+  // expected-remark @below {{offset = 1024, size = 512}}
+  %cst3 = ttg.local_alloc : () -> !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  // expected-remark @below {{offset = 1536, size = 512}}
+  %cst4 = ttg.local_alloc : () -> !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  // expected-remark @below {{offset = 0, size = 1024}}
+  %b = ttg.local_alloc : () -> !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  // expected-remark @below {{offset = 0, size = 512}}
+  %cst5 = ttg.local_alloc : () -> !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  // expected-remark @below {{offset = 0, size = 512}}
+  %cst6 = ttg.local_alloc : () -> !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  // expected-remark @below {{offset = 0, size = 1024}}
+  %c = ttg.local_alloc : () -> !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  ttg.local_dealloc %cst3 : !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  ttg.local_dealloc %cst4 : !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  // expected-remark @below {{offset = 0, size = 1024}}
+  %d = ttg.local_alloc : () -> !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  ttg.local_dealloc %cst0 : !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
   tt.return
-  // CHECK-NEXT: size = 4096
 }
 
 // This example triggers graph coloring with > 1 colors.
-// CHECK-LABEL: multi_color
+// expected-remark @below {{multi_color}}
+// expected-remark @below {{size = 1376}}
 tt.func @multi_color(%A : !tt.ptr<f16>) {
-  // CHECK: offset = 0, size = 64
-  %cst = triton_gpu.local_alloc : () -> !tt.memdesc<4x8xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-  // CHECK-NEXT: offset = 1536, size = 32
-  %cst_0 = triton_gpu.local_alloc : () -> !tt.memdesc<4x4xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-  // CHECK-NEXT: offset = 1664, size = 128
-  %cst_1 = triton_gpu.local_alloc : () -> !tt.memdesc<16x4xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
+  // expected-remark @below {{offset = 1024, size = 64}}
+  %cst = ttg.local_alloc : () -> !ttg.memdesc<4x8xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  // expected-remark @below {{offset = 1344, size = 32}}
+  %cst_0 = ttg.local_alloc : () -> !ttg.memdesc<4x4xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  // expected-remark @below {{offset = 1088, size = 128}}
+  %cst_1 = ttg.local_alloc : () -> !ttg.memdesc<16x4xf16, #A_SHARED, #ttg.shared_memory, mutable>
   %cst_2 = arith.constant dense<0.000000e+00> : tensor<16x32xf16, #AL>
-  // CHECK-NEXT: scratch offset = 128, size = 1152
-  %0 = triton_gpu.convert_layout %cst_2 : tensor<16x32xf16, #AL> -> tensor<16x32xf16, #BL>
-  %1 = triton_gpu.local_load %cst : !tt.memdesc<4x8xf16, #A_SHARED, #triton_gpu.shared_memory, mutable> -> tensor<4x8xf16, #AL>
-  // CHECK-NEXT: offset = 0, size = 128
-  %cst_3 = triton_gpu.local_alloc : () -> !tt.memdesc<4x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-  %2 = triton_gpu.local_load %cst_0 : !tt.memdesc<4x4xf16, #A_SHARED, #triton_gpu.shared_memory, mutable> -> tensor<4x4xf16, #AL>
-  // CHECK-NEXT: scratch offset = 0, size = 1152
-  %3 = triton_gpu.convert_layout %cst_2 : tensor<16x32xf16, #AL> -> tensor<16x32xf16, #BL>
-  // CHECK-NEXT: offset = 0, size = 256
-  %cst_4 = triton_gpu.local_alloc : () -> !tt.memdesc<4x32xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-  // CHECK-NEXT: offset = 256, size = 64
-  %cst_5 = triton_gpu.local_alloc : () -> !tt.memdesc<4x8xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-  %4 = triton_gpu.local_load %cst_5 : !tt.memdesc<4x8xf16, #A_SHARED, #triton_gpu.shared_memory, mutable> -> tensor<4x8xf16, #AL>
-  %5 = triton_gpu.local_load %cst_5 : !tt.memdesc<4x8xf16, #A_SHARED, #triton_gpu.shared_memory, mutable> -> tensor<4x8xf16, #AL>
-  // CHECK-NEXT: offset = 1024, size = 512
-  %cst_6 = triton_gpu.local_alloc : () -> !tt.memdesc<8x32xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-  // CHECK-NEXT: offset = 1792, size = 128
-  %cst_7 = triton_gpu.local_alloc : () -> !tt.memdesc<2x32xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-  %6 = triton_gpu.local_load %cst_0 : !tt.memdesc<4x4xf16, #A_SHARED, #triton_gpu.shared_memory, mutable> -> tensor<4x4xf16, #AL>
-  // CHECK-NEXT: offset = 1024, size = 512
-  %cst_8 = triton_gpu.local_alloc : () -> !tt.memdesc<1x16x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-  // CHECK-NEXT: offset = 256, size = 32
-  %cst_9 = triton_gpu.local_alloc : () -> !tt.memdesc<4x4xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-  // CHECK-NEXT: offset = 1024, size = 512
-  %cst_10 = triton_gpu.local_alloc : () -> !tt.memdesc<1x16x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-  %7 = triton_gpu.local_load %cst_1 : !tt.memdesc<16x4xf16, #A_SHARED, #triton_gpu.shared_memory, mutable> -> tensor<16x4xf16, #AL>
-  %8 = triton_gpu.local_load %cst_4 : !tt.memdesc<4x32xf16, #A_SHARED, #triton_gpu.shared_memory, mutable> -> tensor<4x32xf16, #AL>
-  // CHECK-NEXT: scratch offset = 0, size = 1152
-  %9 = triton_gpu.convert_layout %cst_2 : tensor<16x32xf16, #AL> -> tensor<16x32xf16, #BL>
+  // expected-remark @below {{scratch offset = 0, size = 1024}}
+  %0 = ttg.convert_layout %cst_2 : tensor<16x32xf16, #AL> -> tensor<16x32xf16, #BL>
+  %1 = ttg.local_load %cst : !ttg.memdesc<4x8xf16, #A_SHARED, #ttg.shared_memory, mutable> -> tensor<4x8xf16, #AL>
+  // expected-remark @below {{offset = 0, size = 128}}
+  %cst_3 = ttg.local_alloc : () -> !ttg.memdesc<4x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  %2 = ttg.local_load %cst_0 : !ttg.memdesc<4x4xf16, #A_SHARED, #ttg.shared_memory, mutable> -> tensor<4x4xf16, #AL>
+  // expected-remark @below {{scratch offset = 0, size = 1024}}
+  %3 = ttg.convert_layout %cst_2 : tensor<16x32xf16, #AL> -> tensor<16x32xf16, #BL>
+  // expected-remark @below {{offset = 512, size = 256}}
+  %cst_4 = ttg.local_alloc : () -> !ttg.memdesc<4x32xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  // expected-remark @below {{offset = 0, size = 64}}
+  %cst_5 = ttg.local_alloc : () -> !ttg.memdesc<4x8xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  %4 = ttg.local_load %cst_5 : !ttg.memdesc<4x8xf16, #A_SHARED, #ttg.shared_memory, mutable> -> tensor<4x8xf16, #AL>
+  %5 = ttg.local_load %cst_5 : !ttg.memdesc<4x8xf16, #A_SHARED, #ttg.shared_memory, mutable> -> tensor<4x8xf16, #AL>
+  // expected-remark @below {{offset = 0, size = 512}}
+  %cst_6 = ttg.local_alloc : () -> !ttg.memdesc<8x32xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  // expected-remark @below {{offset = 1216, size = 128}}
+  %cst_7 = ttg.local_alloc : () -> !ttg.memdesc<2x32xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  %6 = ttg.local_load %cst_0 : !ttg.memdesc<4x4xf16, #A_SHARED, #ttg.shared_memory, mutable> -> tensor<4x4xf16, #AL>
+  // expected-remark @below {{offset = 0, size = 512}}
+  %cst_8 = ttg.local_alloc : () -> !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  // expected-remark @below {{offset = 0, size = 32}}
+  %cst_9 = ttg.local_alloc : () -> !ttg.memdesc<4x4xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  // expected-remark @below {{offset = 0, size = 512}}
+  %cst_10 = ttg.local_alloc : () -> !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  %7 = ttg.local_load %cst_1 : !ttg.memdesc<16x4xf16, #A_SHARED, #ttg.shared_memory, mutable> -> tensor<16x4xf16, #AL>
+  %8 = ttg.local_load %cst_4 : !ttg.memdesc<4x32xf16, #A_SHARED, #ttg.shared_memory, mutable> -> tensor<4x32xf16, #AL>
+  // expected-remark @below {{scratch offset = 0, size = 1024}}
+  %9 = ttg.convert_layout %cst_2 : tensor<16x32xf16, #AL> -> tensor<16x32xf16, #BL>
   %cst_11 = arith.constant dense<0.000000e+00> : tensor<4x4xf16, #AL>
-  %10 = triton_gpu.local_load %cst_7 : !tt.memdesc<2x32xf16, #A_SHARED, #triton_gpu.shared_memory, mutable> -> tensor<2x32xf16, #AL>
+  %10 = ttg.local_load %cst_7 : !ttg.memdesc<2x32xf16, #A_SHARED, #ttg.shared_memory, mutable> -> tensor<2x32xf16, #AL>
   %cst_12 = arith.constant dense<0.000000e+00> : tensor<4x16xf16, #AL>
   %cst_13 = arith.constant dense<0.000000e+00> : tensor<8x32xf16, #AL>
-  // CHECK-NEXT: size = 1920
   tt.return
 }
 
 // This example triggers graph coloring with multiple rounds
-// CHECK-LABEL: multi_color_multi_rounds
+// expected-remark @below {{multi_color_multi_rounds}}
+// expected-remark @below {{size = 9376}}
 tt.func @multi_color_multi_rounds(%arg0: !tt.ptr<f16>) {
-  // CHECK: offset = 0, size = 32
-  %cst = triton_gpu.local_alloc : () -> !tt.memdesc<4x4xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-  // CHECK-NEXT: offset = 1280, size = 128
-  %cst_0 = triton_gpu.local_alloc : () -> !tt.memdesc<16x4xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-  // CHECK-NEXT: offset = 2048, size = 8192
-  %cst_1 = triton_gpu.local_alloc : () -> !tt.memdesc<1024x4xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
+  // expected-remark @below {{offset = 9344, size = 32}}
+  %cst = ttg.local_alloc : () -> !ttg.memdesc<4x4xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  // expected-remark @below {{offset = 9216, size = 128}}
+  %cst_0 = ttg.local_alloc : () -> !ttg.memdesc<16x4xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  // expected-remark @below {{offset = 0, size = 8192}}
+  %cst_1 = ttg.local_alloc : () -> !ttg.memdesc<1024x4xf16, #A_SHARED, #ttg.shared_memory, mutable>
   %cst_2 = arith.constant dense<0.000000e+00> : tensor<16x32xf16, #AL>
-  // CHECK-NEXT: scratch offset = 128, size = 1152
-  %0 = triton_gpu.convert_layout %cst_2 : tensor<16x32xf16, #AL> -> tensor<16x32xf16, #BL>
-  %1 = triton_gpu.local_load %cst : !tt.memdesc<4x4xf16, #A_SHARED, #triton_gpu.shared_memory, mutable> -> tensor<4x4xf16, #AL>
-  // CHECK-NEXT: offset = 1152, size = 128
-  %cst_3 = triton_gpu.local_alloc : () -> !tt.memdesc<2x32xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-  %2 = triton_gpu.local_load %cst : !tt.memdesc<4x4xf16, #A_SHARED, #triton_gpu.shared_memory, mutable> -> tensor<4x4xf16, #AL>
-  // CHECK-NEXT: offset = 0, size = 512
-  %cst_4 = triton_gpu.local_alloc : () -> !tt.memdesc<1x16x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-  %3 = triton_gpu.local_load %cst_0 : !tt.memdesc<16x4xf16, #A_SHARED, #triton_gpu.shared_memory, mutable> -> tensor<16x4xf16, #AL>
-  %4 = triton_gpu.local_load %cst_1 : !tt.memdesc<1024x4xf16, #A_SHARED, #triton_gpu.shared_memory, mutable> -> tensor<1024x4xf16, #AL>
-  // CHECK-NEXT: scratch offset = 0, size = 1152
-  %5 = triton_gpu.convert_layout %cst_2 : tensor<16x32xf16, #AL> -> tensor<16x32xf16, #BL>
-  %6 = triton_gpu.local_load %cst_3 : !tt.memdesc<2x32xf16, #A_SHARED, #triton_gpu.shared_memory, mutable> -> tensor<2x32xf16, #AL>
-  // CHECK-NEXT: size = 10240
+  // expected-remark @below {{scratch offset = 8192, size = 1024}}
+  %0 = ttg.convert_layout %cst_2 : tensor<16x32xf16, #AL> -> tensor<16x32xf16, #BL>
+  %1 = ttg.local_load %cst : !ttg.memdesc<4x4xf16, #A_SHARED, #ttg.shared_memory, mutable> -> tensor<4x4xf16, #AL>
+  // expected-remark @below {{offset = 8704, size = 128}}
+  %cst_3 = ttg.local_alloc : () -> !ttg.memdesc<2x32xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  %2 = ttg.local_load %cst : !ttg.memdesc<4x4xf16, #A_SHARED, #ttg.shared_memory, mutable> -> tensor<4x4xf16, #AL>
+  // expected-remark @below {{offset = 8192, size = 512}}
+  %cst_4 = ttg.local_alloc : () -> !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  %3 = ttg.local_load %cst_0 : !ttg.memdesc<16x4xf16, #A_SHARED, #ttg.shared_memory, mutable> -> tensor<16x4xf16, #AL>
+  %4 = ttg.local_load %cst_1 : !ttg.memdesc<1024x4xf16, #A_SHARED, #ttg.shared_memory, mutable> -> tensor<1024x4xf16, #AL>
+  // expected-remark @below {{scratch offset = 0, size = 1024}}
+  %5 = ttg.convert_layout %cst_2 : tensor<16x32xf16, #AL> -> tensor<16x32xf16, #BL>
+  %6 = ttg.local_load %cst_3 : !ttg.memdesc<2x32xf16, #A_SHARED, #ttg.shared_memory, mutable> -> tensor<2x32xf16, #AL>
   tt.return
 }
 
 
-// CHECK-LABEL: alloc
+// expected-remark @below {{alloc}}
+// expected-remark @below {{size = 512}}
 tt.func @alloc(%A : !tt.ptr<f16>) {
-  // CHECK: offset = 0, size = 512
-  %cst0 = triton_gpu.local_alloc : () -> !tt.memdesc<16x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
+  // expected-remark @below {{offset = 0, size = 512}}
+  %cst0 = ttg.local_alloc : () -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
   %cst1 = arith.constant dense<0.000000e+00> : tensor<16x32xf16, #AL>
-  // CHECK-NEXT: offset = 0, size = 512
-  %cst2 = triton_gpu.local_alloc : () -> !tt.memdesc<16x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
+  // expected-remark @below {{offset = 0, size = 512}}
+  %cst2 = ttg.local_alloc : () -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
   tt.return
-  // CHECK-NEXT: size = 512
 }
 
 
-// CHECK-LABEL: dealloc
+// expected-remark @below {{dealloc}}
+// expected-remark @below {{size = 2048}}
 tt.func @dealloc(%A : !tt.ptr<f16>) {
-  // CHECK: offset = 0, size = 1024
-  %cst0 = triton_gpu.local_alloc : () -> !tt.memdesc<32x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-  // CHECK: offset = 1024, size = 1024
-  %cst1 = triton_gpu.local_alloc : () -> !tt.memdesc<32x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-  triton_gpu.local_dealloc %cst0 : !tt.memdesc<32x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
+  // expected-remark @below {{offset = 0, size = 1024}}
+  %cst0 = ttg.local_alloc : () -> !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  // expected-remark @below {{offset = 1024, size = 1024}}
+  %cst1 = ttg.local_alloc : () -> !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  ttg.local_dealloc %cst0 : !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
   tt.return
-  // CHECK-NEXT: size = 2048
 }
 
-// CHECK-LABEL: scratch
+// expected-remark @below {{scratch}}
+// expected-remark @below {{size = 128}}
 tt.func @scratch() {
   %cst0 = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #AL>
-  // CHECK: scratch offset = 0, size = 128
+  // expected-remark @below {{scratch offset = 0, size = 128}}
   %b = "tt.reduce" (%cst0) ({
   ^bb0(%arg0: f16, %arg1: f16):
     %add = arith.addf %arg0, %arg1 : f16
     tt.reduce.return %add : f16
   }) {axis = 0 : i32} : (tensor<16x16xf16, #AL>) -> tensor<16xf16, #sliceAd0>
   tt.return
-  // CHECK-NEXT: size = 128
 }
 
-// CHECK-LABEL: trans
+// expected-remark @below {{trans}}
+// expected-remark @below {{size = 1024}}
 tt.func @trans(%A : !tt.ptr<f16>) {
-  // CHECK: offset = 0, size = 1024
-  %tensor = triton_gpu.local_alloc : () -> !tt.memdesc<16x32xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-  %b = tt.trans %tensor {order=array<i32: 1,0>} : !tt.memdesc<16x32xf16, #A_SHARED, #triton_gpu.shared_memory, mutable> -> !tt.memdesc<32x16xf16, #A_SHARED_T, #triton_gpu.shared_memory, mutable>
+  // expected-remark @below {{offset = 0, size = 1024}}
+  %tensor = ttg.local_alloc : () -> !ttg.memdesc<16x32xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  %b = ttg.memdesc_trans %tensor {order=array<i32: 1,0>} : !ttg.memdesc<16x32xf16, #A_SHARED, #ttg.shared_memory, mutable> -> !ttg.memdesc<32x16xf16, #A_SHARED_T, #ttg.shared_memory, mutable>
   tt.return
 }
 
 
-// CHECK-LABEL: extract_slice
+// expected-remark @below {{extract_slice}}
+// expected-remark @below {{size = 512}}
 tt.func @extract_slice(%A : !tt.ptr<f16>) {
-  // CHECK: offset = 0, size = 512
-  %cst0 = triton_gpu.local_alloc : () -> !tt.memdesc<1x16x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
+  // expected-remark @below {{offset = 0, size = 512}}
+  %cst0 = ttg.local_alloc : () -> !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
   %index = arith.constant 0 : i32
-  %cst1 = triton_gpu.memdesc_subview %cst0[%index, %index, %index] : !tt.memdesc<1x16x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable> -> !tt.memdesc<16x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
+  %cst1 = ttg.memdesc_index %cst0, %index : !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable> -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
   tt.return
-  // CHECK-NEXT: size = 512
 }
 
-// CHECK-LABEL: atomic_scalar
+// expected-remark @below {{atomic_scalar}}
+// expected-remark @below {{size = 8196}}
 tt.func @atomic_scalar(%arg3: !tt.ptr<i32>) -> i32 {
-  // CHECK: offset = 0, size = 8192
-  // CHECK: scratch offset = 8192, size = 4
-  // CHECK: size = 8196
   %c0_i32 = arith.constant 0 : i32
   %1 = arith.constant dense<1.0> : tensor<128x32xf16, #AL>
-  %2 = triton_gpu.local_alloc %1 : (tensor<128x32xf16, #AL>) -> !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory>
+  // expected-remark @below {{offset = 0, size = 8192}}
+  %2 = ttg.local_alloc %1 : (tensor<128x32xf16, #AL>) -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>
+  // expected-remark @below {{scratch offset = 8192, size = 4}}
   %4 = tt.atomic_cas acq_rel, gpu, %arg3, %c0_i32, %c0_i32 : (!tt.ptr<i32>, i32, i32) -> i32
-  %3 = triton_gpu.local_load %2 : !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory> -> tensor<128x32xf16, #AL>
+  %3 = ttg.local_load %2 : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory> -> tensor<128x32xf16, #AL>
   tt.return %4 : i32
 }
 
-// CHECK-LABEL: atomic_scalar_no_use
+// expected-remark @below {{atomic_scalar_no_use}}
+// expected-remark @below {{size = 8192}}
 tt.func @atomic_scalar_no_use(%arg3: !tt.ptr<i32>) {
-  // CHECK: offset = 0, size = 8192
-  // CHECK: size = 8192
   %c0_i32 = arith.constant 0 : i32
   %1 = arith.constant dense<1.0> : tensor<128x32xf16, #AL>
-  %2 = triton_gpu.local_alloc %1 : (tensor<128x32xf16, #AL>) -> !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory>
+  // expected-remark @below {{offset = 0, size = 8192}}
+  %2 = ttg.local_alloc %1 : (tensor<128x32xf16, #AL>) -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>
   %4 = tt.atomic_cas acq_rel, gpu, %arg3, %c0_i32, %c0_i32 : (!tt.ptr<i32>, i32, i32) -> i32
-  %3 = triton_gpu.local_load %2 : !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory> -> tensor<128x32xf16, #AL>
+  %3 = ttg.local_load %2 : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory> -> tensor<128x32xf16, #AL>
   tt.return
 }
 
 // B0 -> (B1) -> B0
 // Memory used by B1 can be reused by B0.
-// CHECK-LABEL: if
+// expected-remark @below {{if}}
+// expected-remark @below {{size = 2048}}
 tt.func @if(%i1 : i1) {
-  // CHECK: offset = 0, size = 512
-  %cst0 = triton_gpu.local_alloc : () -> !tt.memdesc<1x16x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-  // CHECK-NEXT: offset = 1024, size = 512
-  %cst1 = triton_gpu.local_alloc : () -> !tt.memdesc<1x16x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
+  // expected-remark @below {{offset = 1024, size = 512}}
+  %cst0 = ttg.local_alloc : () -> !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  // expected-remark @below {{offset = 1536, size = 512}}
+  %cst1 = ttg.local_alloc : () -> !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
   scf.if %i1 {
-    // CHECK-NEXT: offset = 2048, size = 1024
-    %a = triton_gpu.local_alloc : () -> !tt.memdesc<32x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-    // CHECK-NEXT: offset = 2048, size = 1024
-    %b = triton_gpu.local_alloc : () -> !tt.memdesc<32x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-    triton_gpu.local_dealloc %cst0 : !tt.memdesc<1x16x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-    triton_gpu.local_dealloc %cst1 : !tt.memdesc<1x16x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
+    // expected-remark @below {{offset = 0, size = 1024}}
+    %a = ttg.local_alloc : () -> !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+    // expected-remark @below {{offset = 0, size = 1024}}
+    %b = ttg.local_alloc : () -> !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+    ttg.local_dealloc %cst0 : !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+    ttg.local_dealloc %cst1 : !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
   }
-  // CHECK-NEXT: offset = 0, size = 512
-  %cst2 = triton_gpu.local_alloc : () -> !tt.memdesc<1x16x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-  // CHECK-NEXT: offset = 1024, size = 512
-  %cst3 = triton_gpu.local_alloc : () -> !tt.memdesc<1x16x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-  // CHECK-NEXT: offset = 2048, size = 1024
-  %a = triton_gpu.local_alloc : () -> !tt.memdesc<32x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-  triton_gpu.local_dealloc %cst2 : !tt.memdesc<1x16x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-  triton_gpu.local_dealloc %cst3 : !tt.memdesc<1x16x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
+  // expected-remark @below {{offset = 1024, size = 512}}
+  %cst2 = ttg.local_alloc : () -> !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  // expected-remark @below {{offset = 1536, size = 512}}
+  %cst3 = ttg.local_alloc : () -> !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  // expected-remark @below {{offset = 0, size = 1024}}
+  %a = ttg.local_alloc : () -> !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  ttg.local_dealloc %cst2 : !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  ttg.local_dealloc %cst3 : !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
   tt.return
-  // CHECK-NEXT: size = 3072
 }
 
 // B0 -> (B1) -> (B2) -> B0
 // Memory used by B0 cannot be reused by B1 or B2.
-// CHECK-LABEL: if_else
+// expected-remark @below {{if_else}}
+// expected-remark @below {{size = 3072}}
 tt.func @if_else(%i1 : i1) {
-  // CHECK: offset = 0, size = 512
-  %cst0 = triton_gpu.local_alloc : () -> !tt.memdesc<1x16x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-  // CHECK-NEXT: offset = 1024, size = 512
-  %cst1 = triton_gpu.local_alloc : () -> !tt.memdesc<1x16x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
+  // expected-remark @below {{offset = 1536, size = 512}}
+  %cst0 = ttg.local_alloc : () -> !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  // expected-remark @below {{offset = 2048, size = 512}}
+  %cst1 = ttg.local_alloc : () -> !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
   scf.if %i1 {
-    // CHECK-NEXT: offset = 2048, size = 1024
-    %a = triton_gpu.local_alloc : () -> !tt.memdesc<32x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-    // CHECK-NEXT: offset = 2048, size = 1024
-    %b = triton_gpu.local_alloc : () -> !tt.memdesc<32x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
+    // expected-remark @below {{offset = 0, size = 1024}}
+    %a = ttg.local_alloc : () -> !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+    // expected-remark @below {{offset = 0, size = 1024}}
+    %b = ttg.local_alloc : () -> !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
   } else {
-    // CHECK-NEXT: offset = 2048, size = 512
-    %cst2 = triton_gpu.local_alloc : () -> !tt.memdesc<1x16x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-    // CHECK-NEXT: offset = 3072, size = 512
-    %cst3 = triton_gpu.local_alloc : () -> !tt.memdesc<1x16x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-    // CHECK-NEXT: offset = 4096, size = 1024
-    %a = triton_gpu.local_alloc : () -> !tt.memdesc<32x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-    triton_gpu.local_dealloc %cst2 : !tt.memdesc<1x16x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-    triton_gpu.local_dealloc %cst3 : !tt.memdesc<1x16x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
+    // expected-remark @below {{offset = 1024, size = 512}}
+    %cst2 = ttg.local_alloc : () -> !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+    // expected-remark @below {{offset = 2560, size = 512}}
+    %cst3 = ttg.local_alloc : () -> !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+    // expected-remark @below {{offset = 0, size = 1024}}
+    %a = ttg.local_alloc : () -> !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+    ttg.local_dealloc %cst2 : !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+    ttg.local_dealloc %cst3 : !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
   }
-  // CHECK-NEXT: offset = 2048, size = 1024
-  %a = triton_gpu.local_alloc : () -> !tt.memdesc<32x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-  triton_gpu.local_dealloc %cst0 : !tt.memdesc<1x16x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-  triton_gpu.local_dealloc %cst1 : !tt.memdesc<1x16x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
+  // expected-remark @below {{offset = 0, size = 1024}}
+  %a = ttg.local_alloc : () -> !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  ttg.local_dealloc %cst0 : !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  ttg.local_dealloc %cst1 : !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
   tt.return
-  // CHECK-NEXT: size = 5120
 }
 
 // Block arguments and yields are memory aliases that do not trigger a new
 // allocation.
-// CHECK-LABEL: for
+// expected-remark @below {{for}}
+// expected-remark @below {{size = 24576}}
 tt.func @for(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %B : !tt.ptr<f16>) {
-  // CHECK: offset = 0, size = 8192
-  %a_shared_init = triton_gpu.local_alloc : () -> !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-  // CHECK-NEXT: offset = 8192, size = 8192
-  %b_shared_init = triton_gpu.local_alloc : () -> !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-  // CHECK-NEXT: offset = 16384, size = 8192
-  %c_shared_init = triton_gpu.local_alloc : () -> !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-  %a_shared, %b_shared, %c_shared = scf.for %iv = %lb to %ub step %step iter_args(%a_shared = %a_shared_init, %b_shared = %b_shared_init, %c_shared = %c_shared_init) -> (!tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>, !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>, !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>) {
-    scf.yield %b_shared, %a_shared, %a_shared : !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>, !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>, !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
+  // expected-remark @below {{offset = 0, size = 8192}}
+  %a_shared_init = ttg.local_alloc : () -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  // expected-remark @below {{offset = 8192, size = 8192}}
+  %b_shared_init = ttg.local_alloc : () -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  // expected-remark @below {{offset = 16384, size = 8192}}
+  %c_shared_init = ttg.local_alloc : () -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  %a_shared, %b_shared, %c_shared = scf.for %iv = %lb to %ub step %step iter_args(%a_shared = %a_shared_init, %b_shared = %b_shared_init, %c_shared = %c_shared_init) -> (!ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>, !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>, !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>) {
+    scf.yield %b_shared, %a_shared, %a_shared : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>, !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>, !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>
   }
   tt.return
   // CHECK-NEXT: size = 24576
 }
 
-// CHECK-LABEL: for_if_slice
+// expected-remark @below {{for_if_slice}}
+// expected-remark @below {{size = 24576}}
 tt.func @for_if_slice(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %B : !tt.ptr<f16>, %i1 : i1) {
-  // CHECK: offset = 0, size = 8192
-  %a_shared_init = triton_gpu.local_alloc : () -> !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-  // CHECK-NEXT: offset = 8192, size = 8192
-  %b_shared_init = triton_gpu.local_alloc : () -> !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-  // CHECK-NEXT: offset = 16384, size = 8192
-  %c_shared_init = triton_gpu.local_alloc : () -> !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-  %a_shared, %b_shared, %c_shared = scf.for %iv = %lb to %ub step %step iter_args(%a_shared = %a_shared_init, %b_shared = %b_shared_init, %c_shared = %c_shared_init) -> (!tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>, !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>, !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>) {
+  // expected-remark @below {{offset = 0, size = 8192}}
+  %a_shared_init = ttg.local_alloc : () -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  // expected-remark @below {{offset = 8192, size = 8192}}
+  %b_shared_init = ttg.local_alloc : () -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  // expected-remark @below {{offset = 16384, size = 8192}}
+  %c_shared_init = ttg.local_alloc : () -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  %a_shared, %b_shared, %c_shared = scf.for %iv = %lb to %ub step %step iter_args(%a_shared = %a_shared_init, %b_shared = %b_shared_init, %c_shared = %c_shared_init) -> (!ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>, !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>, !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>) {
     scf.if %i1 {
+      %zero = arith.constant 0 : i32
       %index = arith.constant 8 : i32
-      %cst0 = triton_gpu.memdesc_subview %a_shared[%index, %index] : !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory, mutable> -> !tt.memdesc<32xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
+      %cst0 = ttg.memdesc_index %a_shared, %index : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable> -> !ttg.memdesc<32xf16, #A_SHARED, #ttg.shared_memory, mutable>
       scf.yield
     }
-    scf.yield %b_shared, %a_shared, %a_shared : !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>, !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>, !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
+    scf.yield %b_shared, %a_shared, %a_shared : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>, !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>, !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>
   }
   tt.return
-  // CHECK-NEXT: size = 24576
 }
 
 // c0 cannot be released in the loop
-// CHECK-LABEL: for_use_ancestor
+// expected-remark @below {{for_use_ancestor}}
+// expected-remark @below {{size = 32768}}
 tt.func @for_use_ancestor(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %B : !tt.ptr<f16>, %i1 : i1) {
-  // CHECK: offset = 0, size = 8192
-  %a_shared_init = triton_gpu.local_alloc : () -> !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-  // CHECK-NEXT: offset = 8192, size = 8192
-  %b_shared_init = triton_gpu.local_alloc : () -> !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-  // CHECK-NEXT: offset = 16384, size = 8192
-  %c_shared_init = triton_gpu.local_alloc : () -> !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-  %a_shared, %b_shared = scf.for %iv = %lb to %ub step %step iter_args(%a_shared = %a_shared_init, %b_shared = %b_shared_init) -> (!tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>, !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>) {
-    %c0 = tt.trans %c_shared_init {order=array<i32: 1,0>} : !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory, mutable> -> !tt.memdesc<32x128xf16, #A_SHARED_T, #triton_gpu.shared_memory, mutable>
-    // CHECK-NEXT: offset = 24576, size = 8192
-    %c1 = triton_gpu.local_alloc : () -> !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-    scf.yield %b_shared, %a_shared: !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>, !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
+  // expected-remark @below {{offset = 0, size = 8192}}
+  %a_shared_init = ttg.local_alloc : () -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  // expected-remark @below {{offset = 8192, size = 8192}}
+  %b_shared_init = ttg.local_alloc : () -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  // expected-remark @below {{offset = 16384, size = 8192}}
+  %c_shared_init = ttg.local_alloc : () -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  %a_shared, %b_shared = scf.for %iv = %lb to %ub step %step iter_args(%a_shared = %a_shared_init, %b_shared = %b_shared_init) -> (!ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>, !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>) {
+    %c0 = ttg.memdesc_trans %c_shared_init {order=array<i32: 1,0>} : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable> -> !ttg.memdesc<32x128xf16, #A_SHARED_T, #ttg.shared_memory, mutable>
+    // expected-remark @below {{offset = 24576, size = 8192}}
+    %c1 = ttg.local_alloc : () -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>
+    scf.yield %b_shared, %a_shared: !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>, !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>
   }
   tt.return
-  // CHECK-NEXT: size = 32768
 }
 
 // a_shared_init, b_shared_init, and c_shared_init's liveness ranges are span over the entire function before cst2.
 // So they cannot be reused by cst0 and cst1, but can be reused by cst2.
-// CHECK-LABEL: for_for_if
+// expected-remark @below {{for_for_if}}
+// expected-remark @below {{size = 40960}}
 tt.func @for_for_if(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %B : !tt.ptr<f16>, %i1 : i1) {
-  // CHECK: offset = 0, size = 8192
-  %a_shared_init = triton_gpu.local_alloc : () -> !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-  // CHECK-NEXT: offset = 8192, size = 8192
-  %b_shared_init = triton_gpu.local_alloc : () -> !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-  // CHECK-NEXT: offset = 16384, size = 8192
-  %c_shared_init = triton_gpu.local_alloc : () -> !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-  %a_shared, %b_shared, %c_shared = scf.for %iv = %lb to %ub step %step iter_args(%a_shared = %a_shared_init, %b_shared = %b_shared_init, %c_shared = %c_shared_init) -> (!tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>, !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>, !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>) {
-    %c_shared_next = scf.for %jv = %lb to %ub step %step iter_args(%c_shared_next = %c_shared) -> (!tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>) {
-      %c_shared_next_next = scf.if %i1 -> !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory, mutable> {
-        // CHECK-NEXT: offset = 24576, size = 8192
-        %cst0 = triton_gpu.local_alloc : () -> !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-        scf.yield %cst0 : !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
+  // expected-remark @below {{offset = 0, size = 8192}}
+  %a_shared_init = ttg.local_alloc : () -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  // expected-remark @below {{offset = 8192, size = 8192}}
+  %b_shared_init = ttg.local_alloc : () -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  // expected-remark @below {{offset = 16384, size = 8192}}
+  %c_shared_init = ttg.local_alloc : () -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  %a_shared, %b_shared, %c_shared = scf.for %iv = %lb to %ub step %step iter_args(%a_shared = %a_shared_init, %b_shared = %b_shared_init, %c_shared = %c_shared_init) -> (!ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>, !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>, !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>) {
+    %c_shared_next = scf.for %jv = %lb to %ub step %step iter_args(%c_shared_next = %c_shared) -> (!ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>) {
+      %c_shared_next_next = scf.if %i1 -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable> {
+        // expected-remark @below {{offset = 24576, size = 8192}}
+        %cst0 = ttg.local_alloc : () -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>
+        scf.yield %cst0 : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>
       } else {
-        // CHECK-NEXT: offset = 32768, size = 8192
-        %cst1 = triton_gpu.local_alloc : () -> !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-        scf.yield %cst1 : !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
+        // expected-remark @below {{offset = 32768, size = 8192}}
+        %cst1 = ttg.local_alloc : () -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>
+        scf.yield %cst1 : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>
       }
-      scf.yield %c_shared_next_next : !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
+      scf.yield %c_shared_next_next : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>
     }
-    scf.yield %a_shared, %b_shared, %c_shared_next : !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>, !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>, !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
+    scf.yield %a_shared, %b_shared, %c_shared_next : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>, !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>, !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>
   }
-  // CHECK-NEXT: offset = 0, size = 8192
-  %cst2 = triton_gpu.local_alloc : () -> !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
+  // expected-remark @below {{offset = 0, size = 8192}}
+  %cst2 = ttg.local_alloc : () -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>
   tt.return
-  // CHECK-NEXT: size = 40960
 }
 
-}
-
-module attributes {"triton_gpu.num-warps" = 4 : i32} {
-
-// CHECK-LABEL: alloc1
+// expected-remark @below {{alloc1}}
+// expected-remark @below {{size = 512}}
 tt.func @alloc1(%A : !tt.ptr<f16>) {
-  // CHECK: offset = 0, size = 512
-  %cst0 = triton_gpu.local_alloc : () -> !tt.memdesc<16x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
+  // expected-remark @below {{offset = 0, size = 512}}
+  %cst0 = ttg.local_alloc : () -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
   tt.return
-  // CHECK-NEXT: size = 512
 }
 
-// CHECK-LABEL: alloc2
+// expected-remark @below {{alloc2}}
+// expected-remark @below {{size = 1024}}
 tt.func @alloc2(%A : !tt.ptr<f16>) {
-  // CHECK: offset = 0, size = 1024
-  %cst0 = triton_gpu.local_alloc : () -> !tt.memdesc<32x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
+  // expected-remark @below {{offset = 0, size = 1024}}
+  %cst0 = ttg.local_alloc : () -> !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
   tt.return
-  // CHECK-NEXT: size = 1024
 }
 
-// CHECK-LABEL: alloc3
+// expected-remark @below {{alloc3}}
+// expected-remark @below {{size = 1024}}
 tt.func @alloc3(%cond : i1) {
   scf.if %cond {
-    // CHECK: offset = 0, size = 512
-    %cst0 = triton_gpu.local_alloc : () -> !tt.memdesc<16x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
+    // expected-remark @below {{offset = 0, size = 512}}
+    %cst0 = ttg.local_alloc : () -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
   } else {
-    // CHECK-NEXT: offset = 0, size = 1024
-    %cst0 = triton_gpu.local_alloc : () -> !tt.memdesc<16x32xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
+    // expected-remark @below {{offset = 0, size = 1024}}
+    %cst0 = ttg.local_alloc : () -> !ttg.memdesc<16x32xf16, #A_SHARED, #ttg.shared_memory, mutable>
   }
   tt.return
-  // CHECK-NEXT: size = 1024
 }
 
-// CHECK-LABEL: alloc4
+// expected-remark @below {{alloc4}}
+// expected-remark @below {{size = 1024}}
 tt.func @alloc4(%A : !tt.ptr<f16>, %cond : i1) {
   scf.if %cond {
-    // CHECK: virtual offset = 0, size = 1024
+    // expected-remark @below {{virtual offset = 0, size = 1024}}
     tt.call @alloc3(%cond) : (i1) -> ()
   } else {
-    // CHECK-NEXT: virtual offset = 0, size = 512
+    // expected-remark @below {{virtual offset = 0, size = 512}}
     tt.call @alloc1(%A) : (!tt.ptr<f16>) -> ()
   }
   tt.return
-  // CHECK-NEXT: size = 1024
 }
 
-// CHECK-LABEL: single_call
+// expected-remark @below {{single_call}}
+// expected-remark @below {{size = 512}}
 tt.func @single_call(%A : !tt.ptr<f16>) {
-  // CHECK: offset = 0, size = 512
-  %cst0 = triton_gpu.local_alloc : () -> !tt.memdesc<1x16x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
+  // expected-remark @below {{offset = 0, size = 512}}
+  %cst0 = ttg.local_alloc : () -> !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
   %cst1 = arith.constant dense<0.000000e+00> : tensor<16x32xf16, #AL>
-  // CHECK-NEXT: virtual offset = 0, size = 512
+  // expected-remark @below {{virtual offset = 0, size = 512}}
   tt.call @alloc1(%A) : (!tt.ptr<f16>) -> ()
   tt.return
-  // CHECK-NEXT: size = 512
 }
 
-// CHECK-LABEL: multiple_calls
+// expected-remark @below {{multiple_calls}}
+// expected-remark @below {{size = 1024}}
 tt.func @multiple_calls(%A : !tt.ptr<f16>) {
-  // CHECK: offset = 0, size = 512
-  %cst0 = triton_gpu.local_alloc : () -> !tt.memdesc<1x16x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-  // CHECK-NEXT: virtual offset = 0, size = 512
+  // expected-remark @below {{offset = 0, size = 512}}
+  %cst0 = ttg.local_alloc : () -> !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  // expected-remark @below {{virtual offset = 0, size = 512}}
   tt.call @alloc1(%A) : (!tt.ptr<f16>) -> ()
   %cst1 = arith.constant dense<0.000000e+00> : tensor<16x32xf16, #AL>
-  // CHECK-NEXT: virtual offset = 0, size = 1024
+  // expected-remark @below {{virtual offset = 0, size = 1024}}
   tt.call @alloc2(%A) : (!tt.ptr<f16>) -> ()
   tt.return
-  // CHECK-NEXT: size = 1024
 }
 
-// CHECK-LABEL: if_else_calls
+// expected-remark @below {{if_else_calls}}
+// expected-remark @below {{size = 1024}}
 tt.func @if_else_calls(%A : !tt.ptr<f16>, %cond : i1) {
   %cst = arith.constant dense<0.000000e+00> : tensor<16x32xf16, #AL>
   scf.if %cond {
-    // CHECK: offset = 0, size = 512
-    %cst0 = triton_gpu.local_alloc : () -> !tt.memdesc<1x16x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-    // CHECK-NEXT: offset = 0, size = 1024
-    %cst1 = triton_gpu.local_alloc %cst : (tensor<16x32xf16, #AL>) -> !tt.memdesc<16x32xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-    // CHECK-NEXT: virtual offset = 0, size = 512
+    // expected-remark @below {{offset = 0, size = 512}}
+    %cst0 = ttg.local_alloc : () -> !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+    // expected-remark @below {{offset = 0, size = 1024}}
+    %cst1 = ttg.local_alloc %cst : (tensor<16x32xf16, #AL>) -> !ttg.memdesc<16x32xf16, #A_SHARED, #ttg.shared_memory, mutable>
+    // expected-remark @below {{virtual offset = 0, size = 512}}
     tt.call @alloc1(%A) : (!tt.ptr<f16>) -> ()
   } else {
     %cst0 = arith.constant dense<0.000000e+00> : tensor<16x32xf16, #AL>
-    // CHECK-NEXT: virtual offset = 0, size = 1024
+    // expected-remark @below {{virtual offset = 0, size = 1024}}
     tt.call @alloc2(%A) : (!tt.ptr<f16>) -> ()
   }
   tt.return
-  // CHECK-NEXT: size = 1024
 }
 
-// CHECK-LABEL: for_calls
+// expected-remark @below {{for_calls}}
+// expected-remark @below {{size = 512}}
 tt.func @for_calls(%A : !tt.ptr<f16>, %cond : i1) {
-  // CHECK: offset = 0, size = 512
-  %cst0 = triton_gpu.local_alloc : () -> !tt.memdesc<1x16x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
+  // expected-remark @below {{offset = 0, size = 512}}
+  %cst0 = ttg.local_alloc : () -> !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
   %cst1 = arith.constant dense<0.000000e+00> : tensor<16x32xf16, #AL>
   %lb = arith.constant 0 : index
   %ub = arith.constant 10 : index
   %step = arith.constant 1 : index
   scf.for %iv = %lb to %ub step %step {
-    // CHECK-NEXT: virtual offset = 0, size = 512
+    // expected-remark @below {{virtual offset = 0, size = 512}}
     tt.call @alloc1(%A) : (!tt.ptr<f16>) -> ()
   }
   tt.return
   // CHECK-NEXT: size = 512
 }
 
-// CHECK-LABEL: call_graph_1
+// expected-remark @below {{call_graph_1}}
+// expected-remark @below {{size = 1024}}
 tt.func @call_graph_1(%A : !tt.ptr<f16>, %cond : i1) {
-  // CHECK: offset = 0, size = 512
-  %cst0 = triton_gpu.local_alloc : () -> !tt.memdesc<1x16x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-  // CHECK-NEXT: virtual offset = 0, size = 1024
+  // expected-remark @below {{offset = 0, size = 512}}
+  %cst0 = ttg.local_alloc : () -> !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  // expected-remark @below {{virtual offset = 0, size = 1024}}
   tt.call @alloc3(%cond) : (i1) -> ()
   tt.return
-  // CHECK-NEXT: size = 1024
 }
 
-// CHECK-LABEL: call_graph_2
+// expected-remark @below {{call_graph_2}}
+// expected-remark @below {{size = 1024}}
 tt.func @call_graph_2(%A : !tt.ptr<f16>, %cond : i1) {
-  // CHECK: offset = 0, size = 512
-  %cst0 = triton_gpu.local_alloc : () -> !tt.memdesc<1x16x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-  // CHECK-NEXT: virtual offset = 0, size = 1024
+  // expected-remark @below {{offset = 0, size = 512}}
+  %cst0 = ttg.local_alloc : () -> !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  // expected-remark @below {{virtual offset = 0, size = 1024}}
   tt.call @alloc4(%A, %cond) : (!tt.ptr<f16>, i1) -> ()
   tt.return
-  // CHECK-NEXT: size = 1024
 }
 
+// expected-remark @below {{scan_alloc}}
+// expected-remark @below {{size = 128}}
+tt.func @scan_alloc(%x : tensor<8x16xf32, #AL>) {
+  // expected-remark @below {{offset = 0, size = 128}}
+  %a = "tt.scan"(%x) <{axis = 0 : i32, reverse = false}>({
+  ^bb0(%arg0: f32, %arg1: f32):
+    %add = arith.addf %arg0, %arg1 : f32
+    tt.scan.return %add : f32
+  }) : (tensor<8x16xf32, #AL>) -> tensor<8x16xf32, #AL>
+  tt.return
+}
+
+// expected-remark @below {{warp_specialize_default_region}}
+// expected-remark @below {{size = 33}}
+// expected-remark @below {{offset = 32, size = 1}}
+tt.func @warp_specialize_default_region() {
+  // expected-remark @below {{offset = 0, size = 16}}
+  %0 = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>
+  ttg.warp_specialize()
+  default {
+    // expected-remark @below {{offset = 16, size = 16}}
+    %1 = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>
+    ttg.warp_yield
+  }
+  partition0() num_warps(1) {
+    ttg.warp_return
+  } : () -> ()
+  "use"(%0) : (!ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>) -> ()
+
+  tt.return
+}
+
+// expected-remark @below {{nonoverlapping_liveness_in_default_region}}
+// expected-remark @below {{size = 33}}
+// expected-remark @below {{offset = 32, size = 1}}
+tt.func @nonoverlapping_liveness_in_default_region() {
+  // expected-remark @below {{offset = 0, size = 16}}
+  %0 = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>
+  ttg.warp_specialize()
+  default {
+    // expected-remark @below {{offset = 16, size = 16}}
+    %1 = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>
+    "use"(%1) : (!ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>) -> ()
+    // expected-remark @below {{offset = 16, size = 16}}
+    %2 = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>
+    "use"(%2) : (!ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>) -> ()
+    ttg.warp_yield
+  }
+  partition0() num_warps(1) {
+    ttg.warp_return
+  } : () -> ()
+  "use"(%0) : (!ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>) -> ()
+
+  tt.return
+}
+
+// expected-remark @below {{overlapping_liveness_in_default_region}}
+// expected-remark @below {{size = 49}}
+// expected-remark @below {{offset = 48, size = 1}}
+tt.func @overlapping_liveness_in_default_region() {
+  // expected-remark @below {{offset = 0, size = 16}}
+  %0 = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>
+  ttg.warp_specialize()
+  default {
+    // expected-remark @below {{offset = 16, size = 16}}
+    %1 = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>
+    // expected-remark @below {{offset = 32, size = 16}}
+    %2 = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>
+    "use"(%1) : (!ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>) -> ()
+    "use"(%2) : (!ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>) -> ()
+    ttg.warp_yield
+  }
+  partition0() num_warps(1) {
+    ttg.warp_return
+  } : () -> ()
+  "use"(%0) : (!ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>) -> ()
+
+  tt.return
+}
+
+// expected-remark @below {{alias_through_default_outputs}}
+// expected-remark @below {{size = 33}}
+// expected-remark @below {{offset = 32, size = 1}}
+tt.func @alias_through_default_outputs() {
+  // expected-remark @below {{offset = 0, size = 16}}
+  %0 = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>
+  %1 = ttg.warp_specialize()
+  default {
+    ttg.warp_yield %0 : !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>
+  }
+  partition0() num_warps(1) {
+    ttg.warp_return
+  } : () -> !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>
+  // expected-remark @below {{offset = 16, size = 16}}
+  %2 = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>
+  "use"(%1) : (!ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>) -> ()
+  tt.return
+}
+
+// expected-remark @below {{implicit_capture_liveness}}
+// expected-remark @below {{size = 33}}
+// expected-remark @below {{offset = 32, size = 1}}
+tt.func @implicit_capture_liveness() {
+  // expected-remark @below {{offset = 0, size = 16}}
+  %0 = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>
+  ttg.warp_specialize()
+  default {
+    // expected-remark @below {{offset = 16, size = 16}}
+    %1 = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>
+    "use"(%0) : (!ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>) -> ()
+    ttg.warp_yield
+  }
+  partition0() num_warps(1) {
+    ttg.warp_return
+  } : () -> ()
+  tt.return
+}
+
+// expected-remark @below {{implicit_and_explicit_capture_liveness}}
+// expected-remark @below {{size = 45}}
+// expected-remark @below {{offset = 44, size = 1}}
+tt.func @implicit_and_explicit_capture_liveness() {
+  // expected-remark @below {{offset = 0, size = 16}}
+  %0 = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>
+  // expected-remark @below {{offset = 16, size = 16}}
+  %1 = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>
+  // expected-remark @below {{offset = 32, size = 12}}
+  ttg.warp_specialize(%1)
+  default {
+    "use"(%0) : (!ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>) -> ()
+    ttg.warp_yield
+  }
+  partition0(%arg0: !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>) num_warps(1) {
+    ttg.warp_return
+  } : (!ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>) -> ()
+  tt.return
+}
+
+// expected-remark @below {{explicit_capture_liveness}}
+// expected-remark @below {{size = 33}}
+// expected-remark @below {{offset = 32, size = 1}}
+tt.func @explicit_capture_liveness() {
+  // expected-remark @below {{offset = 0, size = 16}}
+  %0 = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>
+  // expected-remark @below {{offset = 16, size = 12}}
+  ttg.warp_specialize(%0)
+  default {
+    // expected-remark @below {{offset = 16, size = 16}}
+    %1 = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>
+    ttg.warp_yield
+  }
+  partition0(%arg0: !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>) num_warps(1) {
+    ttg.warp_return
+  } : (!ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>) -> ()
+  tt.return
+}
+
+// expected-remark @below {{implicit_capture_liveness_default}}
+// expected-remark @below {{size = 33}}
+// expected-remark @below {{offset = 32, size = 1}}
+tt.func @implicit_capture_liveness_default() {
+  // expected-remark @below {{offset = 0, size = 16}}
+  %0 = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>
+  ttg.warp_specialize()
+  default {
+    // FIXME: This is correct, but not optimal. The memory for `%0` should be
+    // reused for the next allocation. The same problem happens with `scf.if`.
+    "use"(%0) : (!ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>) -> ()
+    // expected-remark @below {{offset = 16, size = 16}}
+    %1 = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>
+    ttg.warp_yield
+  }
+  partition0() num_warps(1) {
+    ttg.warp_return
+  } : () -> ()
+  tt.return
+}
+
+// expected-remark @below {{liveness_in_partition}}
+// expected-remark @below {{size = 36}}
+// expected-remark @below {{offset = 32, size = 4}}
+tt.func @liveness_in_partition() {
+  ttg.warp_specialize()
+  default {
+    ttg.warp_yield
+  }
+  partition0() num_warps(4) {
+    // expected-remark @below {{offset = 0, size = 16}}
+    %0 = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>
+    // expected-remark @below {{offset = 16, size = 16}}
+    %2 = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>
+    "use"(%0) : (!ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>) -> ()
+    ttg.warp_return
+  } : () -> ()
+  tt.return
+}
+
+// expected-remark @below {{aliasing_in_partition}}
+// expected-remark @below {{size = 36}}
+// expected-remark @below {{offset = 32, size = 4}}
+tt.func @aliasing_in_partition() {
+  ttg.warp_specialize()
+  default {
+    ttg.warp_yield
+  }
+  partition0() num_warps(4) {
+    // expected-remark @below {{offset = 0, size = 16}}
+    %0 = ttg.local_alloc : () -> !ttg.memdesc<2x1xi64, #A_SHARED, #smem, mutable>
+    %c0_i32 = arith.constant 0 : i32
+    %1 = ttg.memdesc_index %0, %c0_i32 : !ttg.memdesc<2x1xi64, #A_SHARED, #smem, mutable> -> !ttg.memdesc<1xi64, #A_SHARED, #smem, mutable>
+    // expected-remark @below {{offset = 16, size = 16}}
+    %2 = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>
+    "use"(%1) : (!ttg.memdesc<1xi64, #A_SHARED, #smem, mutable>) -> ()
+    ttg.warp_return
+  } : () -> ()
+  tt.return
+}
+
+// expected-remark @below {{partition_region_interference}}
+// expected-remark @below {{size = 88}}
+// expected-remark @below {{offset = 80, size = 8}}
+tt.func @partition_region_interference() {
+  // expected-remark @below {{offset = 0, size = 16}}
+  %0 = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>
+  ttg.warp_specialize()
+  default {
+    // expected-remark @below {{offset = 16, size = 16}}
+    %1 = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>
+    ttg.warp_yield
+  }
+  partition0() num_warps(4) {
+    // expected-remark @below {{offset = 32, size = 16}}
+    %1 = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>
+    // expected-remark @below {{offset = 48, size = 16}}
+    %2 = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>
+    "use"(%1) : (!ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>) -> ()
+    ttg.warp_return
+  }
+  partition1() num_warps(4) {
+    // expected-remark @below {{offset = 64, size = 16}}
+    %1 = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>
+    // expected-remark @below {{offset = 64, size = 16}}
+    %2 = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>
+    ttg.warp_return
+  } : () -> ()
+  "use"(%0) : (!ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>) -> ()
+  tt.return
+}
+
+// expected-remark @below {{two_different_ws}}
+// expected-remark @below {{size = 17}}
+// expected-remark @below {{offset = 16, size = 1}}
+tt.func @two_different_ws() {
+  ttg.warp_specialize()
+  default {
+    // expected-remark @below {{offset = 0, size = 16}}
+    ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>
+    ttg.warp_yield
+  }
+  partition0() num_warps(1) {
+    ttg.warp_return
+  } : () -> ()
+  ttg.warp_specialize()
+  default {
+    ttg.warp_yield
+  }
+  partition0() num_warps(1) {
+    // expected-remark @below {{offset = 0, size = 16}}
+    ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>
+    ttg.warp_return
+  } : () -> ()
+  tt.return
+}
+
+// expected-remark @below {{ptr_allocation_datalayout}}
+// expected-remark @below {{size = 8}}
+tt.func @ptr_allocation_datalayout(%arg0: !tt.ptr<i32>) {
+  // expected-remark @below {{offset = 0, size = 8}}
+  ttg.warp_specialize(%arg0)
+  default {
+    ttg.warp_yield
+  } : (!tt.ptr<i32>) -> ()
+  tt.return
+}
+
+// expected-remark @below {{tightly_packed_captures}}
+// expected-remark @below {{size = 9}}
+tt.func @tightly_packed_captures(%arg0: i8, %arg1: i64) {
+  // expected-remark @below {{offset = 0, size = 9}}
+  ttg.warp_specialize(%arg0, %arg1)
+  default {
+    ttg.warp_yield
+  } : (i8, i64) -> ()
+  tt.return
+}
+// expected-remark @below {{nvmma_alignment}}
+// expected-remark @below {{size = 1088}}
+tt.func @nvmma_alignment(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %B : !tt.ptr<f16>) {
+  // expected-remark @below {{offset = 0, size = 128}}
+  %fp4 = ttg.local_alloc : () -> !ttg.memdesc<8x8xi8, #NVMMA_SHARED_FP4PADDED, #ttg.shared_memory, mutable>
+  // expected-remark @below {{offset = 0, size = 64}}
+  %a = ttg.local_alloc : () -> !ttg.memdesc<32xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  // expected-remark @below {{offset = 128, size = 64}}
+  %b = ttg.local_alloc : () -> !ttg.memdesc<8x8xi8, #NVMMA_SHARED_0, #ttg.shared_memory, mutable>
+  // expected-remark @below {{offset = 256, size = 64}}
+  %c = ttg.local_alloc : () -> !ttg.memdesc<8x8xi8, #NVMMA_SHARED_32, #ttg.shared_memory, mutable>
+  // expected-remark @below {{offset = 512, size = 64}}
+  %d = ttg.local_alloc : () -> !ttg.memdesc<8x8xi8, #NVMMA_SHARED_64, #ttg.shared_memory, mutable>
+  // expected-remark @below {{offset = 1024, size = 64}}
+  %e = ttg.local_alloc : () -> !ttg.memdesc<8x8xi8, #NVMMA_SHARED_128, #ttg.shared_memory, mutable>
+
+  ttg.local_dealloc %a : !ttg.memdesc<32xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  tt.return
+}
+
+
+// expected-remark @below {{padded_shared_layout_size}}
+// expected-remark @below {{size = 1058}}
+tt.func @padded_shared_layout_size() {
+  // expected-remark @+2 {{offset = 0, size = 510}}
+  // 255 * 2B = 510B
+  %alloc0 = ttg.local_alloc : () -> !ttg.memdesc<1x255xf16, #PADDED_SHARED_0, #ttg.shared_memory, mutable>
+  // expected-remark @+2 {{offset = 0, size = 512}}
+  // 256 * 2B = 512B
+  %alloc1 = ttg.local_alloc : () -> !ttg.memdesc<1x256xf16, #PADDED_SHARED_0, #ttg.shared_memory, mutable>
+  // expected-remark @+2 {{offset = 0, size = 530}}
+  // (257 + 8) * 2B = 530B
+  %alloc2 = ttg.local_alloc : () -> !ttg.memdesc<1x257xf16, #PADDED_SHARED_0, #ttg.shared_memory, mutable>
+  // expected-remark @+2 {{offset = 0, size = 1038}}
+  // (511 + 8) * 2B = 1038B
+  %alloc3 = ttg.local_alloc : () -> !ttg.memdesc<1x511xf16, #PADDED_SHARED_0, #ttg.shared_memory, mutable>
+  // expected-remark @+2 {{offset = 0, size = 1040}}
+  // (512 + 8 * 1) * 2B = 1040B
+  %alloc4 = ttg.local_alloc : () -> !ttg.memdesc<1x512xf16, #PADDED_SHARED_0, #ttg.shared_memory, mutable>
+  // expected-remark @+2 {{offset = 0, size = 1058}}
+  // (513 + 8 * 2) * 2B = 1058B
+  %alloc5 = ttg.local_alloc : () -> !ttg.memdesc<1x513xf16, #PADDED_SHARED_0, #ttg.shared_memory, mutable>
+  // expected-remark @+2 {{offset = 0, size = 512}}
+  // 16 * 16 * 2B = 512B
+  %alloc6 = ttg.local_alloc : () -> !ttg.memdesc<16x16xf16, #PADDED_SHARED_0, #ttg.shared_memory, mutable>
+  // expected-remark @+2 {{offset = 0, size = 1040}}
+  // (16 * 32 + 8 * 1) * 2B = 1040B
+  %alloc7 = ttg.local_alloc : () -> !ttg.memdesc<16x32xf16, #PADDED_SHARED_0, #ttg.shared_memory, mutable>
+  // expected-remark @+2 {{offset = 0, size = 1008}}
+  // (31 * 16 + 8) * 2B = 1008B
+  %alloc8 = ttg.local_alloc : () -> !ttg.memdesc<31x16xf16, #PADDED_SHARED_0, #ttg.shared_memory, mutable>
+  tt.return
+}
+
+// expected-remark @below {{padded_shared_layout_element_type}}
+// expected-remark @below {{size = 16864}}
+tt.func @padded_shared_layout_element_type() {
+  // expected-remark @+2 {{offset = 0, size = 4216}}
+  // (16 * 256 + 8 * 15) * 1B = 4216B
+  %alloc0 = ttg.local_alloc : () -> !ttg.memdesc<16x256xi8, #PADDED_SHARED_0, #ttg.shared_memory, mutable>
+  // expected-remark @+2 {{offset = 0, size = 8432}}
+  // (16 * 256 + 8 * 15) * 2B = 8432B
+  %alloc1 = ttg.local_alloc : () -> !ttg.memdesc<16x256xf16, #PADDED_SHARED_0, #ttg.shared_memory, mutable>
+  // expected-remark @+2 {{offset = 0, size = 16864}}
+  // (16 * 256 + 8 * 15) * 4B = 16864B
+  %alloc2 = ttg.local_alloc : () -> !ttg.memdesc<16x256xf32, #PADDED_SHARED_0, #ttg.shared_memory, mutable>
+  tt.return
+}
+
+// expected-remark @below {{padded_shared_layout_multi_tier}}
+// expected-remark @below {{size = 4466}}
+tt.func @padded_shared_layout_multi_tier() {
+  // expected-remark @+2 {{offset = 0, size = 4340}}
+  // (16 * 256 + 4 * 31 + 8 * 15) * 1B = 4340B
+  %alloc0 = ttg.local_alloc : () -> !ttg.memdesc<16x256xi8, #PADDED_SHARED_1, #ttg.shared_memory, mutable>
+  // expected-remark @+2 {{offset = 0, size = 4466}}
+  // (16 * 256 + 2 * 63 + 4 * 31 + 8 * 15) * 1B = 4466B
+  %alloc1 = ttg.local_alloc : () -> !ttg.memdesc<16x256xi8, #PADDED_SHARED_2, #ttg.shared_memory, mutable>
+  tt.return
+}
 }

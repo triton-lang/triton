@@ -2,17 +2,26 @@
 build/
 build-*/
 
+llvm-project/
+llvm-project-*/
+.llvm-project/
+
 # Triton Python module builds
 python/build/
 python/dist/
 python/triton*.egg-info/
+python/triton_kernels/triton*.egg-info/
 
 python/triton/_C/*.pyd
 python/triton/_C/*.so
 python/triton/_C/*.dylib
+python/triton/_C/*.pdb
+python/triton/_C/*.exe
+python/triton/_C/*.ilk
+python/triton/FileCheck
 
 # Backends copied from submodules
-python/triton/backends/
+python/triton/backends/*
 !python/triton/backends/__init__.py
 !python/triton/backends/compiler.py
 !python/triton/backends/driver.py
@@ -20,8 +29,14 @@ python/triton/backends/
 # Language extras
 python/triton/language/extra
 
+# Tools extras
+python/triton/tools/extra
+
 # Proton
 python/triton/profiler
+
+# Pytest
+pytest.ini
 
 # Instrumentation
 python/triton/instrumentation

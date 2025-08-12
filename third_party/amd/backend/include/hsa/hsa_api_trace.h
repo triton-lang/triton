@@ -44,39 +44,26 @@
 #define HSA_RUNTIME_INC_HSA_API_TRACE_H
 
 #include "hsa.h"
+#include "hsa_api_trace_version.h"
 #ifdef AMD_INTERNAL_BUILD
 #include "hsa_ext_image.h"
 #include "hsa_ext_amd.h"
 #include "hsa_ext_finalize.h"
 #include "hsa_amd_tool.h"
+#include "hsa_ven_amd_pc_sampling.h"
 #else
 #include "inc/hsa_ext_image.h"
 #include "inc/hsa_ext_amd.h"
 #include "inc/hsa_ext_finalize.h"
 #include "inc/hsa_amd_tool.h"
+#include "inc/hsa_ven_amd_pc_sampling.h"
 #endif
 
 #include <string.h>
 #include <assert.h>
 #include <stddef.h>
 
-// Major Ids of the Api tables exported by Hsa Core Runtime
-#define HSA_API_TABLE_MAJOR_VERSION               0x03
-#define HSA_CORE_API_TABLE_MAJOR_VERSION          0x02
-#define HSA_AMD_EXT_API_TABLE_MAJOR_VERSION       0x02
-#define HSA_FINALIZER_API_TABLE_MAJOR_VERSION     0x02
-#define HSA_IMAGE_API_TABLE_MAJOR_VERSION         0x02
-#define HSA_AQLPROFILE_API_TABLE_MAJOR_VERSION    0x01
-#define HSA_TOOLS_API_TABLE_MAJOR_VERSION         0x01
-
-// Step Ids of the Api tables exported by Hsa Core Runtime
-#define HSA_API_TABLE_STEP_VERSION                0x00
-#define HSA_CORE_API_TABLE_STEP_VERSION           0x00
-#define HSA_AMD_EXT_API_TABLE_STEP_VERSION        0x01
-#define HSA_FINALIZER_API_TABLE_STEP_VERSION      0x00
-#define HSA_IMAGE_API_TABLE_STEP_VERSION          0x00
-#define HSA_AQLPROFILE_API_TABLE_STEP_VERSION     0x00
-#define HSA_TOOLS_API_TABLE_STEP_VERSION          0x00
+// Table MAJOR_VERSION and STEP_VERSION defines have moved to hsa_api_trace_version.h
 
 // Min function used to copy Api Tables
 static inline uint32_t Min(const uint32_t a, const uint32_t b) {
@@ -191,6 +178,19 @@ struct ImageExtTable {
   decltype(hsa_ext_image_create_with_layout)* hsa_ext_image_create_with_layout_fn;
 };
 
+// Table to export HSA PC Sampling Extension Apis
+struct PcSamplingExtTable {
+  ApiTableVersion version;
+  decltype(hsa_ven_amd_pcs_iterate_configuration)* hsa_ven_amd_pcs_iterate_configuration_fn;
+  decltype(hsa_ven_amd_pcs_create)* hsa_ven_amd_pcs_create_fn;
+  decltype(hsa_ven_amd_pcs_create_from_id)* hsa_ven_amd_pcs_create_from_id_fn;
+  decltype(hsa_ven_amd_pcs_destroy)* hsa_ven_amd_pcs_destroy_fn;
+  decltype(hsa_ven_amd_pcs_start)* hsa_ven_amd_pcs_start_fn;
+  decltype(hsa_ven_amd_pcs_stop)* hsa_ven_amd_pcs_stop_fn;
+  decltype(hsa_ven_amd_pcs_flush)* hsa_ven_amd_pcs_flush_fn;
+};
+
+
 // Table to export AMD Extension Apis
 struct AmdExtTable {
   ApiTableVersion version;
@@ -263,6 +263,8 @@ struct AmdExtTable {
   decltype(hsa_amd_vmem_get_alloc_properties_from_handle)*
       hsa_amd_vmem_get_alloc_properties_from_handle_fn;
   decltype(hsa_amd_agent_set_async_scratch_limit)* hsa_amd_agent_set_async_scratch_limit_fn;
+  decltype(hsa_amd_queue_get_info)* hsa_amd_queue_get_info_fn;
+  decltype(hsa_amd_vmem_address_reserve_align)* hsa_amd_vmem_address_reserve_align_fn;
 };
 
 // Table to export HSA Core Runtime Apis
@@ -464,6 +466,9 @@ struct HsaApiTable {
 
   // Table of function pointers for tools to use
   ToolsApiTable* tools_;
+
+  // Table of function pointers to AMD PC Sampling Extension
+  PcSamplingExtTable* pc_sampling_ext_;
 };
 
 // Structure containing instances of different api tables
@@ -474,6 +479,7 @@ struct HsaApiTableContainer {
 	FinalizerExtTable finalizer_ext;
 	ImageExtTable image_ext;
 	ToolsApiTable tools;
+  PcSamplingExtTable pc_sampling_ext;
 
   // Default initialization of a container instance
   HsaApiTableContainer() {
@@ -505,6 +511,11 @@ struct HsaApiTableContainer {
     tools.version.minor_id = sizeof(ToolsApiTable);
     tools.version.step_id = HSA_TOOLS_API_TABLE_STEP_VERSION;
     root.tools_ = &tools;
+
+    pc_sampling_ext.version.major_id = HSA_PC_SAMPLING_API_TABLE_MAJOR_VERSION;
+    pc_sampling_ext.version.minor_id = sizeof(PcSamplingExtTable);
+    pc_sampling_ext.version.step_id = HSA_PC_SAMPLING_API_TABLE_STEP_VERSION;
+    root.pc_sampling_ext_ = &pc_sampling_ext;
   }
 };
 
@@ -562,5 +573,7 @@ static void inline copyTables(const HsaApiTable* src, HsaApiTable* dest) {
     copyElement(&dest->image_ext_->version, &src->image_ext_->version);
   if ((offsetof(HsaApiTable, tools_) < dest->version.minor_id))
     copyElement(&dest->tools_->version, &src->tools_->version);
+  if ((offsetof(HsaApiTable, pc_sampling_ext_) < dest->version.minor_id))
+    copyElement(&dest->pc_sampling_ext_->version, &src->pc_sampling_ext_->version);
 }
 #endif

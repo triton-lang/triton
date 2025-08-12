@@ -1,10 +1,10 @@
 #ifndef TRITON_CUBLAS_TYPES_H
 #define TRITON_CUBLAS_TYPES_H
 
-// Forward declarations of cuBLAS types and functions.
+#include <cstddef>
+#include <cstdint>
 
-#include "backend/include/cuda.h"
-#include "backend/include/driver_types.h"
+// Forward declarations of cuBLAS types and functions.
 
 /* CUBLAS status type returns */
 typedef enum {
@@ -148,5 +148,7 @@ struct cublasContext;
 typedef struct cublasLtContext *cublasLtHandle_t;
 struct cublasLtMatmulDescOpaque_t;
 typedef cublasLtMatmulDescOpaque_t *cublasLtMatmulDesc_t;
+struct CUstream_st;
+typedef struct CUstream_st *cudaStream_t;
 
 #endif // TRITON_CUBLAS_TYPES_H

@@ -298,7 +298,16 @@ struct PTXInstrExecution {
 
   // Prefix a predicate to the instruction.
   PTXInstrExecution &predicate(mlir::Value value, StringRef constraint = "b") {
+    assert(value);
     pred = instr->builder->newOperand(value, constraint);
+    return *this;
+  }
+
+  // Prefix a predicate to the instruction, if non-null
+  PTXInstrExecution &maybePredicate(mlir::Value value,
+                                    StringRef constraint = "b") {
+    if (value)
+      predicate(value, constraint);
     return *this;
   }
 

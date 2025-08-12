@@ -4,22 +4,26 @@
 #include "PatternTritonGPUOpToLLVM.h"
 #include "TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
 
-#include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/IR/Value.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
+
+#include "Utility.h"
 
 using namespace mlir;
 using namespace mlir::triton;
+using namespace mlir::triton::nvidia_gpu;
+namespace ttng = mlir::triton::nvidia_gpu;
 
 namespace {
-constexpr int64_t TMA_SIZE_BYTES = 128;
 
 void tensormap_cp_fenceproxy(Location loc, MLIRContext *ctx,
                              ConversionPatternRewriter &rewriter, Value outPtr,
                              Value inPtr) {
   PTXBuilder ptxBuilder;
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
 
   // prepare asm operands
   auto *outAddrOpr = ptxBuilder.newAddrOperand(outPtr, "l");
@@ -34,7 +38,7 @@ void tensormap_cp_fenceproxy(Location loc, MLIRContext *ctx,
   // Execute collectively on first warp in block
   constexpr int kWarpSize = 32;
   Value threadId = getThreadId(rewriter, loc);
-  Value pred = icmp_slt(threadId, i32_val(kWarpSize));
+  Value pred = b.icmp_slt(threadId, b.i32_val(kWarpSize));
   cp(outAddrOpr, inAddrOpr, sizeOpr).predicate(pred);
 
   ptxBuilder.launch(rewriter, loc, void_ty(ctx));
@@ -45,6 +49,7 @@ void tensormap_replace_generic(Location loc, MLIRContext *ctx,
                                std::string fieldName, Value descPtr,
                                int32_t newVal) {
   PTXBuilder ptxBuilder;
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
 
   // prepare asm operands
   auto *descAddrOpr = ptxBuilder.newAddrOperand(descPtr, "l");
@@ -58,7 +63,7 @@ void tensormap_replace_generic(Location loc, MLIRContext *ctx,
                       .o("b32");
 
   Value threadId = getThreadId(rewriter, loc);
-  Value pred = icmp_eq(threadId, i32_val(0));
+  Value pred = b.icmp_eq(threadId, b.i32_val(0));
   replace(descAddrOpr, newValOpr).predicate(pred);
 
   ptxBuilder.launch(rewriter, loc, void_ty(ctx));
@@ -70,6 +75,7 @@ void tensormap_replace_generic(Location loc, MLIRContext *ctx,
                                Value newVal,
                                std::optional<int32_t> ord = std::nullopt) {
   PTXBuilder ptxBuilder;
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
 
   auto newValTy = newVal.getType();
   int width = 0;
@@ -97,7 +103,7 @@ void tensormap_replace_generic(Location loc, MLIRContext *ctx,
                       .o("b64", width == 64);
 
   Value threadId = getThreadId(rewriter, loc);
-  Value pred = icmp_eq(threadId, i32_val(0));
+  Value pred = b.icmp_eq(threadId, b.i32_val(0));
 
   if (ord) {
     replace(descAddrOpr, ordOpr, newValOpr).predicate(pred);
@@ -176,18 +182,17 @@ void tensormap_replace_fill_mode(Location loc, MLIRContext *ctx,
   tensormap_replace_generic(loc, ctx, rewriter, "fill_mode", descPtr, newVal);
 }
 
-struct ExperimentalTensormapFenceproxyAcquireOpConversion
-    : public ConvertOpToLLVMPattern<
-          triton::ExperimentalTensormapFenceproxyAcquireOp> {
+struct TensormapFenceproxyAcquireOpConversion
+    : public ConvertOpToLLVMPattern<ttng::TensormapFenceproxyAcquireOp> {
   using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
 
   LogicalResult
-  matchAndRewrite(triton::ExperimentalTensormapFenceproxyAcquireOp op,
-                  OpAdaptor adaptor,
+  matchAndRewrite(ttng::TensormapFenceproxyAcquireOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
 
     auto loc = op.getLoc();
     PTXBuilder ptxBuilder;
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
 
     // prepare asm operands
     auto *descAddrOpr = ptxBuilder.newAddrOperand(adaptor.getDescPtr(), "l");
@@ -196,17 +201,24 @@ struct ExperimentalTensormapFenceproxyAcquireOpConversion
     // Define the instruction opcode
     constexpr int kWarpSize = 32;
     Value threadId = getThreadId(rewriter, loc);
-    Value pred = icmp_slt(threadId, i32_val(kWarpSize));
+    Value pred = b.icmp_slt(threadId, b.i32_val(kWarpSize));
     auto &fence =
         *ptxBuilder.create<>("fence.proxy.tensormap::generic.acquire.gpu");
     fence(descAddrOpr, sizeOpr).predicate(pred);
+
+    // Workaround for a ptxas bug missing a fence after generic.acquire.gpu.
+    // TODO: remove the workaround once ptxas is fixed.
+    auto &commit = *ptxBuilder.create<>("cp.async.bulk.commit_group");
+    commit().predicate(pred);
+    auto &wait = *ptxBuilder.create<>("cp.async.bulk.wait_group.read 0");
+    wait().predicate(pred);
 
     ptxBuilder.launch(rewriter, loc, getVoidType());
 
     // We run the fence on a single warp, then use a barrier to synchronize the
     // rest. This ends up being faster than running the fence on each warp.
     // TODO: Ideally we only emit one barrier after all fences are issued
-    rewriter.create<NVVM::Barrier0Op>(loc);
+    b.barrier();
 
     rewriter.eraseOp(op);
     return success();
@@ -216,38 +228,36 @@ struct ExperimentalTensormapFenceproxyAcquireOpConversion
 void zero_fill_tma(Location loc, MLIRContext *ctx,
                    ConversionPatternRewriter &rewriter,
                    const NVIDIA::TargetInfo &targetInfo, Value descPtr) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   // Write out zeros
   constexpr int kWarpSize = 32;
   Value threadId = getThreadId(rewriter, loc);
-  Value pred = icmp_slt(threadId, i32_val(kWarpSize));
+  Value pred = b.icmp_slt(threadId, b.i32_val(kWarpSize));
 
-  auto fillVal = i32_val(0);
-  auto writeAddr = gep(descPtr.getType(), fillVal.getType(), descPtr, threadId);
+  auto fillVal = b.i32_val(0);
+  auto writeAddr =
+      b.gep(descPtr.getType(), fillVal.getType(), descPtr, threadId);
   targetInfo.storeShared(rewriter, loc, writeAddr, fillVal, pred);
-
-  // Sync warp
-  PTXBuilder ptxBuilder;
-  auto &bar = *ptxBuilder.create<>("bar.warp.sync");
-  auto *maskOpr = ptxBuilder.newConstantOperand(0xffffffff);
-  bar(maskOpr).predicate(pred);
-  ptxBuilder.launch(rewriter, loc, void_ty(ctx));
+  LLVM::NVIDIA::createSyncWarp(loc, rewriter);
 }
 
-struct ExperimentalTensormapCreateOpConversion
-    : public ConvertOpToLLVMPattern<ExperimentalTensormapCreateOp> {
+struct TensormapCreateOpConversion
+    : public ConvertOpToLLVMPattern<ttng::TensormapCreateOp> {
   const NVIDIA::TargetInfo &targetInfo;
 
-  ExperimentalTensormapCreateOpConversion(LLVMTypeConverter &converter,
-                                          const NVIDIA::TargetInfo &targetInfo,
-                                          PatternBenefit benefit)
+  TensormapCreateOpConversion(LLVMTypeConverter &converter,
+                              const NVIDIA::TargetInfo &targetInfo,
+                              PatternBenefit benefit)
       : ConvertOpToLLVMPattern(converter, benefit), targetInfo(targetInfo) {}
 
   LogicalResult
-  matchAndRewrite(triton::ExperimentalTensormapCreateOp op, OpAdaptor adaptor,
+  matchAndRewrite(ttng::TensormapCreateOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto ctx = getContext();
 
+    bool needsStrideWorkaround = targetInfo.getPtxVersion() <= 85;
     auto smemBase = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op);
 
     zero_fill_tma(loc, ctx, rewriter, targetInfo, smemBase);
@@ -263,8 +273,13 @@ struct ExperimentalTensormapCreateOpConversion
                                    op.getGlobalDim()[i]);
     }
     for (int i = 0; i + 1 < op.getRank(); ++i) {
+      auto strideVal = op.getGlobalStride()[i];
+      if (needsStrideWorkaround) {
+        // Workaround for a ptxas bug
+        strideVal = b.ashr(strideVal, b.i64_val(4));
+      }
       tensormap_replace_global_stride(loc, ctx, rewriter, smemBase, i,
-                                      op.getGlobalStride()[i]);
+                                      strideVal);
     }
     for (int i = 0; i < op.getRank(); ++i) {
       tensormap_replace_element_stride(loc, ctx, rewriter, smemBase, i,
@@ -282,13 +297,29 @@ struct ExperimentalTensormapCreateOpConversion
   }
 };
 
+struct ReinterpretTensorDescOpConversion
+    : public ConvertOpToLLVMPattern<ReinterpretTensorDescOp> {
+
+  ReinterpretTensorDescOpConversion(LLVMTypeConverter &converter,
+                                    PatternBenefit benefit)
+      : ConvertOpToLLVMPattern(converter, benefit) {}
+
+  LogicalResult
+  matchAndRewrite(ttng::ReinterpretTensorDescOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Type resultType = getTypeConverter()->convertType(op.getType());
+    rewriter.replaceOpWithNewOp<LLVM::AddrSpaceCastOp>(op, resultType,
+                                                       adaptor.getRawDesc());
+    return success();
+  }
+};
+
 } // namespace
 
 void mlir::triton::NVIDIA::populateTMAToLLVMPatterns(
     LLVMTypeConverter &typeConverter, const TargetInfo &targetInfo,
     RewritePatternSet &patterns, PatternBenefit benefit) {
-  patterns.add<ExperimentalTensormapCreateOpConversion>(typeConverter,
-                                                        targetInfo, benefit);
-  patterns.add<ExperimentalTensormapFenceproxyAcquireOpConversion>(
-      typeConverter, benefit);
+  patterns.add<TensormapCreateOpConversion>(typeConverter, targetInfo, benefit);
+  patterns.add<TensormapFenceproxyAcquireOpConversion,
+               ReinterpretTensorDescOpConversion>(typeConverter, benefit);
 }

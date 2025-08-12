@@ -1,29 +1,72 @@
-// Copyright (c) 2023 NVIDIA Corporation & Affiliates. All rights reserved.
-//
-// Permission is hereby granted, free of charge, to any person obtaining
-// a copy of this software and associated documentation files
-// (the "Software"), to deal in the Software without restriction,
-// including without limitation the rights to use, copy, modify, merge,
-// publish, distribute, sublicense, and/or sell copies of the Software,
-// and to permit persons to whom the Software is furnished to do so,
-// subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be
-// included in all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
-// EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-// MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
-// IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
-// CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
-// TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
-// SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-
 #ifndef TRITONNVIDIAGPU_ATTRDEFS
 #define TRITONNVIDIAGPU_ATTRDEFS
 
 include "mlir/IR/AttrTypeBase.td"
 include "triton/Dialect/TritonNvidiaGPU/IR/TritonNvidiaGPUDialect.td"
 include "triton/Dialect/Triton/IR/TritonInterfaces.td"
+
+def TTG_TensorMemorySpace : AttrDef<TritonNvidiaGPU_Dialect, "TensorMemorySpace"> {
+  let mnemonic = "tensor_memory";
+  let description = [{
+    Attribute to indicate that the memory descriptor points to tensor memory.
+    The memory is laid out in blocks of size blockM x blockN. Each block is distributed
+    across TMEM 128 rows.
+
+    Blocks are distributed along M dimension first and then N dimension. This is an arbitrary
+    convention that needs to be followed by operations reading/writing to TMEM.
+
+    a tensor <128x128xf32> with blockM = 64 and blockN = 32 will be distributed as follows:
+
+        \ col    0        1            31         32            64            96           127
+    rows: 0  ( 0,  0) ( 0,  1) ... ( 0,  31)  ( 0,  32) ... ( 0,  64) ... ( 0,  96) ... ( 0,  127)
+          1
+         ...
+          15 (15,  0) (15,  1) ... (15,  31)  (15,  32) ... (15,  64) ... (15,  96) ... (15,  127)
+          16 (64,  0) (64,  1) ... (64,  31)  (64,  32) ... (64,  64) ... (64,  96) ... (64,  127)
+         ...
+          31 (79,  0) (79,  1) ... (79,  31)  (79,  32) ... (79,  64) ... (79,  96) ... (79,  127)
+          32 (16,  0) (16,  1) ... (16,  31)  (16,  32) ... (16,  64) ... (16,  96) ... (16,  127)
+         ..
+         127 (127, 0) (127, 1) ... (127, 31) (127, 32) ... (127, 64) ... (127, 96) ... (127, 127)
+  }];
+}
+
+def TTG_TensorMemoryEncodingAttr : AttrDef<TritonNvidiaGPU_Dialect, "TensorMemoryEncoding"> {
+  let mnemonic = "tensor_memory_encoding";
+  let attrName = "triton.gpu.tensor_memory_encoding";
+  let description = [{
+    An encoding to represent the different way the tensor memory is laid out.
+    `unpacked` attributes indicates whether types smaller than 32bits are unpacked (take full 32bits)
+    or are packed (N elements are stored within one 32bits row).
+  }];
+  let parameters = (
+    ins
+    "unsigned":$blockM,
+    "unsigned":$blockN,
+    "bool":$unpacked,
+    DefaultValuedParameter<"unsigned", "1">:$CTASplitM,
+    DefaultValuedParameter<"unsigned", "1">:$CTASplitN
+  );
+  let genVerifyDecl = 1;
+  let assemblyFormat = "`<` struct(params) `>`";
+}
+
+def TTG_TensorMemoryScalesEncodingAttr : AttrDef<TritonNvidiaGPU_Dialect, "TensorMemoryScalesEncoding"> {
+  let mnemonic = "tensor_memory_scales_encoding";
+  let attrName = "triton.gpu.tensor_memory_scales_encoding";
+  let description = [{
+    An encoding to represent the layout of tensor memory scales.
+    As described in the PTX doc, blocked scales in TMEM must be in a special layout. They are organized
+    as a multiple copies of "chunk", each of which having the size 32x4x4B. Moreover, such chunks are duplicated
+    over 4 warps to fill entire 128 rows of TMEM. This encoding indicates that a tensor in TMEM is in such a special
+    layout.
+  }];
+  let parameters = (
+    ins
+    DefaultValuedParameter<"unsigned", "1">:$CTASplitM,
+    DefaultValuedParameter<"unsigned", "1">:$CTASplitN
+  );
+  let assemblyFormat = "`<` struct(params) `>`";
+}
 
 #endif

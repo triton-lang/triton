@@ -85,6 +85,89 @@ with proton.scope("test2", {"bytes": 3000}):
     foo[1,](x, y)
 ```
 
+### Backend and mode
+
+Proton supports three profiling backends: `cupti`, `roctracer`, and `instrumentation`.
+
+- **`cupti`**: Used for NVIDIA GPUs. It supports both the default profiling mode and `pcsampling` (instruction sampling).
+- **`roctracer`**: Used for AMD GPUs. It supports only the default profiling mode.
+- **`instrumentation`**: Available on both NVIDIA and AMD GPUs, this backend enables collection of custom metrics and advanced instrumentation.
+
+By default, Proton automatically selects either `cupti` or `roctracer` as the backend based on your GPU driver. The `instrumentation` backend offers a wide range of mode options for fine-grained profiling, as detailed in the `mode.py` file.
+
+#### Instruction Sampling
+
+Proton supports instruction sampling on NVIDIA GPUs.
+You may experience ~20x end-to-end overhead when using instruction sampling, although the overhead for each individual GPU kernel is negligible.
+The overhead is mostly caused by data transfer and processing on the CPU.
+Additionally, the proton-viewer options `-i <regex> -d <depth> -t <threshold>` can be helpful for filtering out GPU kernels that are not of interest.
+The following example demonstrates how to use instruction sampling:
+
+```python
+import triton.profiler as proton
+
+proton.start(name="profile_name", context="shadow", backend="cupti_pcsampling")
+```
+
+#### Instrumentation
+
+The instrumentation backend allows for detailed, fine-grained profiling of intra-kernel behavior, generating trace or tree views similar to those produced by coarse-grained profiling.
+By default, if no `mode` is specified, Proton profiles kernel cycles, which may require shared memory. If there is insufficient shared memory, profiling will abort and a warning will be displayed. Future releases will introduce additional instrumentation modes.
+
+**Host-side usage:**
+
+```python
+import triton.profiler as proton
+
+proton.start(
+    name="profile_name",
+    backend="instrumentation",
+    mode="<mode0>=<option0>:<mode1>=<option1>:..."
+)
+```
+
+**Kernel-side usage:**
+
+**Caution**: For DSL level instrumentation, **only Gluon** semantic is enabled by default.
+Instrumenting kernels written in Triton DSL is disable because Triton's higher-level IR undergoes
+aggressive compiler rewrites (loop pipelining, instruction re-ordering, IR duplication, etc.).
+These transformations can invalidate naïve instrumentation and lead to misleading results.
+
+```python
+from triton.experimental import gluon
+from triton.experimental.gluon import language as gl
+
+import triton.profiler.language as pl
+
+@gluon.jit
+def kernel(...):
+    pl.enter_scope("scope0")
+    for i in range(iters):
+        gl.load(...)
+    pl.exit_scope("scope0")
+    with pl.scope("scope1"):
+        for i in range(iters):
+            gl.load(...)
+```
+
+Advanced users can instrument either the `ttir` or `ttgir` intermediate representations for even finer-grained measurement. The relevant IR instructions are `proton.record start` and `proton.record end`. This can be combined with the environment variable `TRITON_KERNEL_OVERRIDE=1` for custom kernel overrides. For detailed steps, refer to the Triton [documentation](https://github.com/triton-lang/triton?tab=readme-ov-file#tips-for-hacking) under the **Kernel Override Steps** section. We have also assembled a [tutorial](tutorials/ttgir_override) that demonstrates how to use the IR-based instrumentation.
+
+#### Merging profiles for postmortem analysis
+
+We could use concurrent sessions to profile the same code region using different backends, and then merge the profiles using hatchet for postmortem analysis. In the following example, the `cupti` backend obtains different metrics than the `instrumentation` backend, and thus it makes sense to merge them using `GraphFrame.add` directly. Otherwise, if there are duplicate metrics, we could customize the `merge` logic or manipulate the dataframes.
+
+```python
+
+import triton.profiler as proton
+
+proton.start(name="profile_name0", context="shadow", backend="cupti")
+proton.start(name="profile_name1", context="shadow", backend="instrumentation")
+
+...
+
+proton.finalize()
+```
+
 ### Hook
 
 ```python
@@ -108,7 +191,7 @@ def foo(x, y):
 
 The `metadata_fn` function is called before launching the GPU kernel to provide metadata for the GPU kernel, which returns a dictionary that maps from a string (metadata name) to a value (int or float).
 
-Currently, **only the triton hook is supported**. In the dictionary returned by the `metadata_fn` function, we can supply the following keys:
+Currently, **only the launch hook is supported**. In the dictionary returned by the `metadata_fn` function, we can supply the following keys:
 
 ```python
 name: str  # The name of the kernel
@@ -128,6 +211,7 @@ The following examples demonstrate how to use Proton command-line.
 proton [options] script.py [script_args] [script_options]
 proton [options] pytest [pytest_args] [script_options]
 python -m triton.profiler.proton [options] script.py [script_args] [script_options]
+proton --instrument=[instrumentation pass] script.py
 ```
 
 When profiling in the command line mode, the `proton.start` and `proton.finalize` functions are automatically called before and after the script execution. Any `proton.start` and `proton.finalize` functions in the script are ignored. Also, in the command line mode, only a single *session* is supported. Therefore, `proton.deactivate(session_id=1)` is invalid, while `proton.deactivate(session_id=0)` is valid.
@@ -143,26 +227,103 @@ proton-viewer -m time/s <profile.hatchet>
 
 NOTE: `pip install hatchet` does not work because the API is slightly different.
 
+If you want to dump the entire trace but not just the aggregated data, you should set the data option to `trace` when starting the profiler.
+
+```python
+import triton.profiler as proton
+
+proton.start(name="profile_name", data="trace")
+```
+
+The dumped trace will be in the chrome trace format and can be visualized using the `chrome://tracing` tool in Chrome or the [perfetto](https://perfetto.dev) tool.
+
+### Visualizing sorted profile data
+
+In addition visualizing the profile data on terminal through Hatchet. A sorted list of the kernels by the first metric can be done using the --print-sorted flag with proton-viewer
+
+```bash
+proton-viewer -m time/ns,time/% <profile.hatchet> --print-sorted
+```
+
+prints the sorted kernels by the time/ns since it is the first listed.
+
 More options can be found by running the following command.
 
 ```bash
 proton-viewer -h
 ```
 
-### Instruction sampling (experimental)
+## Advanced features and knowledge
 
-Proton supports instruction sampling on NVIDIA GPUs.
-Please note that this is an experimental feature and may not work on all GPUs.
-You may experience ~20x end-to-end overhead when using instruction sampling, although the overhead for each individual GPU kernel is negligible.
-The overhead is mostly caused by data transfer and processing on the CPU.
-Additionally, the proton-viewer options `-i <regex> -d <depth> -t <threshold>` can be helpful for filtering out GPU kernels that are not of interest.
-The following example demonstrates how to use instruction sampling:
+### Thread management
+
+We guarantee that any call to `libproton.so`, such as `enter_scope`, is synchronized using explicit locks.
+For operations that do not trigger calls to libproton.so—including callbacks to CUDA/HIP APIs—we use separated locks to protect data structures that may be accessed concurrently by multiple threads.
+For example, the `enter_op` method in `OpInterface` can be invoked by the main thread that involves triton operators, as well as by helper threads that invoke torch operators.
+
+### `cpu_timed_scope`
+
+`cpu_timed_scope` is a utility that wraps `scope` to measure the CPU time of a scope along with other metrics.
+The following example demonstrates how to use `cpu_timed_scope`:
 
 ```python
 import triton.profiler as proton
 
-proton.start(name="profile_name", context="shadow", backend="cupti_pcsampling")
+with proton.cpu_timed_scope("test"):
+    foo[1,](x, y)
 ```
+
+The `cpu_timed_scope` output metric is referred to as `cpu_time`, while `time` represents accelerator (e.g., GPU) time.
+The key distinction between `cpu_time` and `time` lies in their inclusivity: `cpu_time` is exclusive, whereas `time` is inclusive.
+This difference arises because the time spent on individual kernels represents the smallest measurable time granularity, and each kernel is mutually exclusive.
+This exclusivity allows time to be accurately accumulated across parent scopes for `time`.
+In contrast, `cpu_time` measures the time within a specific scope.
+Since a parent scope encompasses the time spent in its child scopes, summing `cpu_time` from child scope into parent scope would result in double counting.
+To visualize both the CPU and GPU time, we can use the following command:
+
+```bash
+proton-viewer -m time/ns,cpu_time/ns <proton.hatchet>
+```
+
+### Metrics naming
+
+Custom metrics should follow this format: `metric_name (unit) (type)`.
+We prefer no space within the metric name.
+`unit` and `type` are optional fields.
+
+There are three types of metrics in proton: inclusive, exclusive, and property metrics.
+By default, a metric is inclusive.
+The metric types are distinguished by the suffix of their names.
+The following table shows the suffix for each type and its meaning:
+
+| Suffix | Name | Meaning |
+| --- | --- | --- |
+| (inc) or "" | Inclusive metric | The metric is accumulated at a scope and can be propagated to the parent scope. |
+| (exc) | Exclusive metric | The metric is accumulated at a scope and cannot be propagated to the parent scope. |
+| (pty) | Property metric | The metric is a property of the scope and cannot be accumulated or propagated. |
+
+### State annotation
+
+In addition to `proton.scope`, we can also customize the call path of each GPU operation using `proton.state`.
+
+`state` is different from `scope` in several ways:
+
+1. State is not recursive; each operation can have only a single state. Inner most state will overwrite the outer most state.
+2. A states is a suffix, meaning that the original call path will append a state above the name of each kernel.
+3. State is compatible with both Python and shadow contexts.
+
+The following example demonstrates a basic use of state:
+
+```python
+with proton.scope("test"):
+    with proton.state("state0"):
+        with proton.scope("test0"):
+            foo0[1,](x, y)
+        with proton.scope("test1"):
+            foo1[1,](x, y)
+```
+
+The call path of `foo1` will be `test->test1->state0`.
 
 ## Proton *vs* nsys
 

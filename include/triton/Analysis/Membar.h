@@ -2,7 +2,6 @@
 #define TRITON_ANALYSIS_MEMBAR_H
 
 #include "Allocation.h"
-#include "llvm/ADT/SmallPtrSet.h"
 
 #include <set>
 
@@ -12,7 +11,7 @@ class OpBuilder;
 
 /// Callback to allow backend to provide more information on whether a barrier
 /// is needed between two operations. Even though two operations access the same
-/// shared memory thay may not require a barrier in between them.
+/// shared memory they may not require a barrier in between them.
 using MembarFilterFn = std::function<bool(Operation *, Operation *)>;
 
 struct BlockInfo {
@@ -32,6 +31,25 @@ struct BlockInfo {
       syncWriteIntervals[interval.first].insert(interval.second.begin(),
                                                 interval.second.end());
     return *this;
+  }
+
+  void dump() {
+    auto &err = llvm::errs();
+    err << "Block Interval:\n";
+    err << "  Read Intervals:\n";
+    for (auto &[interval, ops] : syncReadIntervals) {
+      err << "    [" << interval.start() << ", " << interval.end() << "] ";
+      for (auto &op : ops)
+        err << op->getName() << " ";
+      err << "\n";
+    }
+    err << "  Write Intervals:\n";
+    for (auto &[interval, ops] : syncWriteIntervals) {
+      err << "    [" << interval.start() << ", " << interval.end() << "] ";
+      for (auto &op : ops)
+        err << op->getName() << " ";
+      err << "\n";
+    }
   }
 
   /// Returns true if intervals in two BlockInfo objects are intersected.
@@ -77,7 +95,11 @@ private:
 //===----------------------------------------------------------------------===//
 // Shared Memory Barrier Analysis
 //===----------------------------------------------------------------------===//
-class MembarAnalysis {
+
+// Common class to analyze membar and fence placement.
+class MembarOrFenceAnalysis {
+  using VirtualBlock = std::pair<Block *, Block::iterator>;
+
 public:
   using FuncBlockInfoMapT = CallGraph<BlockInfo>::FuncDataMapT;
   /// Creates a new Membar analysis that generates the shared memory barrier
@@ -93,15 +115,17 @@ public:
   /// a shared memory read. If the temporary storage is written but not read,
   /// it is considered as the problem of the operation itself but not the membar
   /// analysis.
-  MembarAnalysis() = default;
-  explicit MembarAnalysis(Allocation *allocation, MembarFilterFn filter)
+  MembarOrFenceAnalysis() = default;
+  explicit MembarOrFenceAnalysis(Allocation *allocation, MembarFilterFn filter)
       : allocation(allocation), filter(filter) {}
+
+  virtual ~MembarOrFenceAnalysis() = default;
 
   /// Runs the membar analysis to the given operation, inserts a barrier if
   /// necessary.
   void run(FuncBlockInfoMapT &funcBlockInfoMap);
 
-private:
+protected:
   /// Applies the barrier analysis based on the SCF dialect, in which each
   /// region has a single basic block only.
   /// Example:
@@ -119,18 +143,34 @@ private:
   void resolve(FunctionOpInterface funcOp, FuncBlockInfoMapT *funcBlockInfoMap,
                OpBuilder *builder);
 
-  /// Updates the BlockInfo operation based on the operation.
-  void update(Operation *operation, BlockInfo *blockInfo,
-              FuncBlockInfoMapT *funcBlockInfoMap, OpBuilder *builder);
-
   /// Collects the successors of the terminator
-  void visitTerminator(Operation *operation, SmallVector<Block *> &successors);
+  void visitTerminator(Operation *operation,
+                       SmallVector<VirtualBlock> &successors);
 
-  void insertBarrier(Operation *operation, OpBuilder *builder);
+  /// Updates the BlockInfo operation based on the operation.
+  virtual void update(Operation *operation, BlockInfo *blockInfo,
+                      FuncBlockInfoMapT *funcBlockInfoMap,
+                      OpBuilder *builder) = 0;
 
-private:
   Allocation *allocation = nullptr;
   MembarFilterFn filter = nullptr;
+};
+
+class MembarAnalysis : public MembarOrFenceAnalysis {
+public:
+  MembarAnalysis() = default;
+  explicit MembarAnalysis(Allocation *allocation, MembarFilterFn filter)
+      : MembarOrFenceAnalysis(allocation, filter) {}
+
+  ~MembarAnalysis() override = default;
+
+private:
+  /// Updates the BlockInfo operation based on the operation.
+  virtual void update(Operation *operation, BlockInfo *blockInfo,
+                      FuncBlockInfoMapT *funcBlockInfoMap,
+                      OpBuilder *builder) override;
+
+  void insertBarrier(Operation *operation, OpBuilder *builder);
 };
 
 /// Postorder traversal on the callgraph to insert membar instructions
@@ -138,10 +178,11 @@ private:
 /// Each function maintains a BlockInfo map that includes all potential buffers
 /// after returning. This way users do not have to explicitly insert membars
 /// before and after function calls, but might be a bit conservative.
-class ModuleMembarAnalysis : public CallGraph<BlockInfo> {
+template <typename AnalysisType>
+class ModuleMembarOrFenceAnalysis : public CallGraph<BlockInfo> {
 public:
-  ModuleMembarAnalysis(ModuleAllocation *moduleAllocation,
-                       MembarFilterFn filter = nullptr)
+  ModuleMembarOrFenceAnalysis(ModuleAllocation *moduleAllocation,
+                              MembarFilterFn filter = nullptr)
       : CallGraph<BlockInfo>(moduleAllocation->getModuleOp()),
         moduleAllocation(moduleAllocation), filter(filter) {}
 
@@ -154,7 +195,7 @@ public:
           auto *allocation = moduleAllocation->getFuncData(funcOp);
           auto [it, inserted] = funcMap.try_emplace(funcOp, BlockInfo());
           if (inserted) {
-            MembarAnalysis analysis(allocation, filter);
+            AnalysisType analysis(allocation, filter);
             analysis.run(funcMap);
           }
         });
@@ -164,6 +205,8 @@ private:
   ModuleAllocation *moduleAllocation;
   MembarFilterFn filter;
 };
+
+typedef ModuleMembarOrFenceAnalysis<MembarAnalysis> ModuleMembarAnalysis;
 
 } // namespace mlir
 

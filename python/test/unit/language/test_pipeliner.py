@@ -4,24 +4,8 @@ import pytest
 import torch
 import triton
 import triton.language as tl
-import triton.tools.experimental_descriptor
 
-
-def is_cuda():
-    return triton.runtime.driver.active.get_current_target().backend == "cuda"
-
-
-def is_hopper():
-    return is_cuda() and torch.cuda.get_device_capability()[0] >= 9
-
-
-def is_hip():
-    return triton.runtime.driver.active.get_current_target().backend == "hip"
-
-
-def is_hip_mi200():
-    target = triton.runtime.driver.active.get_current_target()
-    return target.backend == 'hip' and target.arch == 'gfx90a'
+from triton._internal_testing import is_cuda, is_hopper_or_newer, is_hip_cdna, is_hip_cdna2, is_hip
 
 
 def check_capabilities():
@@ -105,12 +89,12 @@ def matmul_kernel_tma(  #
     offs_k = 0
     accumulator = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
     for _ in tl.range(0, tl.cdiv(K, BLOCK_K), num_stages=NUM_STAGES):
-        a = tl._experimental_descriptor_load(a_ptr, [offs_am, offs_k], [BLOCK_M, BLOCK_K], tl.float16)
-        b = tl._experimental_descriptor_load(b_ptr, [offs_k, offs_bn], [BLOCK_K, BLOCK_N], tl.float16)
+        a = a_ptr.load([offs_am, offs_k])
+        b = b_ptr.load([offs_k, offs_bn])
         accumulator = tl.dot(a, b, acc=accumulator)
         offs_k += BLOCK_K
     accumulator = accumulator.to(tl.float16)
-    tl._experimental_descriptor_store(output_ptr, accumulator, [offs_am, offs_bn])
+    output_ptr.store([offs_am, offs_bn], accumulator)
 
 
 @triton.jit
@@ -175,17 +159,17 @@ def mxfp_to_bf16_kernel(
             x_bf16 = x_f8.to(tl.bfloat16)
     else:
         # e2m1
-        em0 = x & 0x70
-        em1 = x & 0x7
-        x0 = (em0.to(tl.uint16) << 2) | ((x & 0x80).to(tl.uint16) << 8)
-        x1 = (em1.to(tl.uint16) << (2 + 4)) | ((x & 0x8).to(tl.uint16) << (8 + 4))
+        em0 = x & 0x7
+        em1 = x & 0x70
+        x0 = (em0.to(tl.uint16) << 2 + 4) | ((x & 0x8).to(tl.uint16) << 8 + 4)
+        x1 = (em1.to(tl.uint16) << (2)) | ((x & 0x80).to(tl.uint16) << (8))
         # Three cases:
         # 1) x is normal and non-zero: Correct bias
-        x0 = tl.where((em0 & 0x60) != 0, x0 + ((127 - 1) << 7), x0)
-        x1 = tl.where((em1 & 0x6) != 0, x1 + ((127 - 1) << 7), x1)
+        x0 = tl.where((em0 & 0x6) != 0, x0 + ((127 - 1) << 7), x0)
+        x1 = tl.where((em1 & 0x60) != 0, x1 + ((127 - 1) << 7), x1)
         # 2) x is subnormal (x == 0bs001 where s is the sign): Map to +-0.5 in bf16
-        x0 = tl.where(em0 == 0x10, 16128 | (x0 & 0x8000), x0)
-        x1 = tl.where(em1 == 0x1, 16128 | (x1 & 0x8000), x1)
+        x0 = tl.where(em0 == 0x1, 16128 | (x0 & 0x8000), x0)
+        x1 = tl.where(em1 == 0x10, 16128 | (x1 & 0x8000), x1)
         # 3) x is zero, do nothing
         x_bf16 = tl.interleave(x0, x1).to(tl.bfloat16, bitcast=True)
     # Multiplication preserves infs and NaNs in x_bf16
@@ -199,19 +183,20 @@ def mxfp_to_bf16_kernel(
 
 def dot_scale_ref(x, scale, y, type_x, type_y):
     e_bits, m_bits = {"e2m1": (2, 1), "e4m3": (4, 3), "e5m2": (5, 2)}[type_x]
-    type_fp8_y = {"e4m3": torch.float8_e4m3fn, "e5m2": torch.float8_e5m2}[type_y]
+    type_fp8_y = {"e4m3": torch.float8_e4m3fn, "e5m2": torch.float8_e5m2, "bf16": torch.bfloat16}[type_y]
 
-    comp_dtype = torch.float32
     out_dtype = torch.bfloat16
 
     x = x.contiguous()
-    x_upcast = x.new_empty(scale.shape[:-1] + (32 * scale.shape[-1], ), dtype=comp_dtype)
+    x_upcast = x.new_empty(scale.shape[:-1] + (32 * scale.shape[-1], ), dtype=out_dtype)
 
     N = x_upcast.numel()
     BLOCK_SIZE = 512
     grid = ((N + BLOCK_SIZE - 1) // BLOCK_SIZE, )
     mxfp_to_bf16_kernel[grid](x, scale, x_upcast, scale.numel(), e_bits, m_bits, BLOCK_SIZE, num_warps=4)
-    y_upcast = y.view(type_fp8_y)
+    y_upcast = y if type_y == "bf16" else y.view(type_fp8_y).to(out_dtype)
+    assert x_upcast.dtype == out_dtype
+    assert y_upcast.dtype == out_dtype
 
     class AccumulateInFp32:
 
@@ -223,33 +208,38 @@ def dot_scale_ref(x, scale, y, type_x, type_y):
             torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction = self.prev_value
 
     with AccumulateInFp32():
-        return torch.matmul(x_upcast.to(out_dtype), y_upcast.to(out_dtype))
+        return torch.matmul(x_upcast, y_upcast)
 
 
 @pytest.mark.parametrize("scale", [True, False])
 def test_pipeline_matmul(scale, device):
     check_capabilities()
-    if scale and not is_cuda():
-        pytest.skip("NYI: scale_dot just implemented in CUDA")
+    if scale and not (is_cuda() or is_hip_cdna()):
+        pytest.skip("NYI: scale_dot just implemented in CUDA/HIP")
     M, N, K = 512, 512, 128
     BLOCK_M, BLOCK_N, BLOCK_K = 64, 64, 32
-    NUM_STAGES = 4
+    NUM_STAGES = 4 if is_cuda() else 2
 
     if scale:
-        # TODO Use e5m2 for Ampere, as it does not support fp_to_fp conversions for fp8e4m3
-        BLOCK_K = 64  # 32 NYI
+        # Large enough tile to let our heuristics to pipeline small tensor kick in
+        # for the scales
+        BLOCK_M = 256
+        BLOCK_K = 128
         K = BLOCK_K * NUM_STAGES
         a_type = "e2m1"
         DIV_FACTOR = 2 if a_type == "e2m1" else 1
         a = torch.randint(256, (M, K // DIV_FACTOR), device=device, dtype=torch.uint8)
         # Sample small-ish scales to avoid overflow
         scale_a = torch.randint(74, (M, K // 32), device=device, dtype=torch.uint8)
-        # Ampere does not support fp8e4m3
-        b_type = "e4m3" if is_hopper() else "e5m2"
-        b = torch.randint(256, (K, N), device=device, dtype=torch.uint8)
-        # e5m2 has too many non-finite values when sampled uniformly (1 / 32) and
-        # Fp8E5M2_to_Bf16 doesn't preserve NaNs (fixme)
-        if b_type == "e5m2":
+        # Use e5m2 for Ampere, as it does not support fp_to_fp conversions for fp8e4m3
+        # Use bf16 for Hopper as the rhs must come from shmem
+        b_type = "bf16" if is_hopper_or_newer() else "e5m2"
+        if b_type == "bf16":
+            b = torch.randn((K, N), device=device, dtype=torch.bfloat16)
+        else:
+            b = torch.randint(256, (K, N), device=device, dtype=torch.uint8)
+            # e5m2 has too many non-finite values when sampled uniformly (1 / 32) and
+            # Fp8E5M2_to_Bf16 doesn't preserve NaNs (fixme)
             finite = torch.arange(K * N, device=device, dtype=torch.uint8).reshape(K, N) % 0x7C
             b = torch.where(b & 0x7C == 0x7C, finite | (0x80 & b), b)
         output = torch.empty((M, N), dtype=torch.bfloat16, device=device)
@@ -260,15 +250,13 @@ def test_pipeline_matmul(scale, device):
         a_type, b_type = None, None
         output = torch.empty((M, N), dtype=torch.float16, device=device)
     grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), 1)
-    use_tma = not scale and is_hopper()
+    use_tma = not scale and is_hopper_or_newer()
 
     if use_tma:
-        a_tma = triton.tools.experimental_descriptor.create_2d_tma_descriptor(a.data_ptr(), M, K, BLOCK_M, BLOCK_K,
-                                                                              a.element_size())
-        b_tma = triton.tools.experimental_descriptor.create_2d_tma_descriptor(b.data_ptr(), K, N, BLOCK_K, BLOCK_N,
-                                                                              b.element_size())
-        output_tma = triton.tools.experimental_descriptor.create_2d_tma_descriptor(output.data_ptr(), M, N, BLOCK_M,
-                                                                                   BLOCK_N, output.element_size())
+        from triton.tools.tensor_descriptor import TensorDescriptor
+        a_tma = TensorDescriptor.from_tensor(a, block_shape=[BLOCK_M, BLOCK_K])
+        b_tma = TensorDescriptor.from_tensor(b, block_shape=[BLOCK_K, BLOCK_N])
+        output_tma = TensorDescriptor.from_tensor(output, block_shape=[BLOCK_M, BLOCK_N])
         handler = matmul_kernel_tma[grid](a_tma, b_tma, output_tma, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K,
                                           NUM_STAGES=NUM_STAGES)
     else:
@@ -283,35 +271,51 @@ def test_pipeline_matmul(scale, device):
         ref_out = dot_scale_ref(a, scale_a, b, a_type, b_type)
     else:
         ref_out = torch.matmul(a, b)
-    # Bigger tolerance for AMD MI200 devices.
-    # MI200 devices use reduced precision fp16 and bf16 and flush input and
+    # Bigger tolerance for AMD CDNA2 devices.
+    # CDNA2 devices use reduced precision fp16 and bf16 and flush input and
     # output denormal values to zero. Detailed info is at: https://pytorch.org/docs/stable/notes/numerical_accuracy.html#reduced-precision-fp16-and-bf16-gemms-and-convolutions-on-amd-instinct-mi200-devices
-    atol = 1e-2 if is_hip_mi200() or scale else None
-    rtol = 1e-2 if is_hip_mi200() or scale else None
+    atol = 1e-2 if is_hip_cdna2() or scale else None
+    rtol = 1e-2 if is_hip_cdna2() or scale else None
     torch.testing.assert_close(ref_out, output, atol=atol, rtol=rtol, equal_nan=scale)
     if is_cuda():
         ttgir = handler.asm["ttgir"]
         if use_tma:
-            assert ttgir.count("triton_nvidia_gpu.async_tma_copy_global_to_local") != 0, "async tma copy not found"
+            assert ttgir.count("ttng.async_tma_copy_global_to_local") != 0, "async tma copy not found"
             assert ttgir.count(f"num = {NUM_STAGES} : i32") == 0, "num_stages not match"
-            # a_tma, b_tma, output_tma, barriar
-            assert ttgir.count("triton_gpu.local_alloc") == 4, "alloc number not match"
-            assert ttgir.count("triton_nvidia_gpu.barrier_expect") != 0, "barrier_expect not found"
-            assert ttgir.count("triton_nvidia_gpu.wait_barrier") != 0, "wait_barrier not found"
-            assert ttgir.count("triton_nvidia_gpu.warp_group_dot") != 0, "warp_group_dot not found"
+            assert ttgir.count("ttng.barrier_expect") != 0, "barrier_expect not found"
+            assert ttgir.count("ttng.wait_barrier") != 0, "wait_barrier not found"
+
+            if torch.cuda.get_device_capability()[0] == 9:
+                # a_tma, b_tma, output_tma, barriar_tma
+                assert ttgir.count("ttg.local_alloc") == 4, "alloc number not match"
+                assert ttgir.count("ttng.warp_group_dot") != 0, "warp_group_dot not found"
+            elif torch.cuda.get_device_capability()[0] == 10:
+                # a_tma, b_tma, output_tma, barriar_tma, barriar_mma
+                assert ttgir.count("ttg.local_alloc") == 5, "alloc number not match"
+                assert ttgir.count("ttng.tc_gen5_mma") != 0, "warp_group_dot not found"
         else:
             # 1. check async
-            assert ttgir.count("triton_gpu.async_copy_global_to_local") != 0, "async copy not found"
-            # 2. check number of stages
-            assert ttgir.count(f"num = {NUM_STAGES} : i32") != 0, "num_stages not match"
+            assert ttgir.count("ttg.async_copy_global_to_local") != 0, "async copy not found"
+            # 2. check sync point
+            assert ttgir.count("num = 0 : i32") == 1, "only one sync point for the loads after the loop"
             # 3. check alloc
-            assert ttgir.count("triton_gpu.local_alloc") == 2, "alloc number not match"
+            if torch.cuda.get_device_capability()[0] == 10:
+                if scale:
+                    # A, B, scale, decomposed A shmem
+                    count = 4
+                else:
+                    # A, B, MMA barrier
+                    count = 3
+                assert ttgir.count("ttg.local_alloc") == count, "alloc number not match"
+            else:
+                assert ttgir.count("ttg.local_alloc") == (3 if scale else 2), "alloc number not match"
+
             # 4. check dot
             cc = torch.cuda.get_device_capability()
-            if cc[0] >= 9:
-                ttgir.count("triton_nvidia_gpu.warp_group_dot") != 0, "warp_group_dot not found"
-            else:
-                ttgir.count("triton_gpu.dot") != 0, "dot not found"
+            if cc[0] == 9:
+                assert ttgir.count("ttng.warp_group_dot") != 0, "warp_group_dot not found"
+            elif cc[0] < 9:
+                assert ttgir.count("ttg.dot") != 0, "dot not found"
 
 
 def test_pipeline_vecadd(device):
@@ -329,12 +333,10 @@ def test_pipeline_vecadd(device):
     torch.testing.assert_close(ref_out, output)
     if is_cuda():
         ttgir = handler.asm["ttgir"]
-        # 1. check async
-        assert ttgir.count("triton_gpu.async_copy_global_to_local") != 0, "async copy not found"
-        # 2. check number of stages
-        assert ttgir.count(f"num = {NUM_STAGES} : i32") != 0, "num_stages not match"
-        # 3. check alloc
-        assert ttgir.count("triton_gpu.local_alloc") == 2, "alloc number not match"
+        # 1. check number of stages
+        assert ttgir.count("ttg.async_copy_global_to_local") / 2 == NUM_STAGES, "num_stages not match"
+        # 2. check alloc
+        assert ttgir.count("ttg.local_alloc") == 2, "alloc number not match"
 
 
 @pytest.mark.parametrize("ROW_COUNT", [0, 1, 2, 3])
@@ -364,3 +366,179 @@ def test_pipeline_epilogue(ROW_COUNT, NUM_STAGES, device):
     BLOCK_SIZE = triton.next_power_of_2(n_cols)
     kernel_up[(1, )](y0, x, x.stride(0), y0.stride(0), n_rows, n_cols, BLOCK_SIZE, NUM_STAGES)
     assert (y0 == torch.ones_like(x)).all()
+
+
+def random_bfloat16(shape, device):
+    """
+    Creates a random bfloat16 tensor where every element is a multiple of 1/8.
+    This should avoid floating-point errors in downstream calculations, allowing
+    for exact comparisons.
+    """
+
+    X = torch.randn(shape, device=device, dtype=torch.bfloat16)
+    X *= 8.0
+    X = torch.round(X)
+    X *= 0.125
+    return X
+
+
+@triton.jit
+def indirect_matmul_kernel(
+    Out,
+    stride_out1,
+    A,
+    stride_a1,
+    B,
+    stride_b1,
+    Indices,
+    K,
+
+    # output tile size:
+    BLOCK_M: tl.constexpr,
+    BLOCK_K: tl.constexpr,
+    BLOCK_N: tl.constexpr,
+):
+    index_ptrs = Indices + tl.arange(0, BLOCK_K)
+
+    m_offs = tl.arange(0, BLOCK_M)
+    n_offs = tl.arange(0, BLOCK_N)[None, :]
+
+    A_ptrs = A + n_offs
+    B_ptrs = B + m_offs
+
+    acc = tl.zeros([BLOCK_M, BLOCK_N], tl.float32)
+    for k in range(0, K, BLOCK_K):
+        idx = tl.load(index_ptrs)
+
+        a = tl.load(A_ptrs + idx[:, None] * stride_a1)
+        b = tl.load(B_ptrs + idx[:, None] * stride_b1)
+
+        acc = tl.dot(b.T, a, acc=acc)
+        index_ptrs += BLOCK_K
+
+    # now write out the accumulator:
+    Out_ptrs = Out + m_offs[:, None] + n_offs * stride_out1
+    tl.store(Out_ptrs, acc)
+
+
+@pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 128, 128), (128, 128, 64), (128, 64, 128)])
+@pytest.mark.parametrize("num_stages", [1, 3, 5])
+def test_indirect_matmul(BLOCK_M, BLOCK_N, BLOCK_K, num_stages, device):
+    if (num_stages > 3 or (num_stages >= 3 and (BLOCK_M, BLOCK_N, BLOCK_K) == (128, 128, 128))) and is_hip():
+        pytest.skip("Not enough shared memory on HIP.")
+    M = BLOCK_M
+    N = BLOCK_N
+
+    K = BLOCK_K * 2
+    A = random_bfloat16((K, N), device=device)
+    B = random_bfloat16((K, M), device=device)
+
+    # Use arange for indices so it's numerically just a matmul
+    Indices = torch.arange(K, device=device)
+    Out = torch.empty((N, M), device=device, dtype=torch.float32)
+
+    expect = torch.matmul(A.mT.to(torch.float32), B.to(torch.float32))
+
+    indirect_matmul_kernel[(1, )](
+        Out,
+        Out.stride(0),
+        A,
+        A.stride(0),
+        B,
+        B.stride(0),
+        Indices,
+        K,
+        BLOCK_M,
+        BLOCK_K,
+        BLOCK_N,
+        num_warps=4,
+        num_stages=num_stages,
+    )
+    torch.testing.assert_close(expect, Out)
+
+
+@triton.jit
+def matmul_kernel_persistent_scatter(a_ptr, b_ptr, c_ptr,  #
+                                     M, N, K,  #
+                                     BLOCK_SIZE_M: tl.constexpr,  #
+                                     BLOCK_SIZE_N: tl.constexpr,  #
+                                     BLOCK_SIZE_K: tl.constexpr,  #
+                                     GROUP_SIZE_M: tl.constexpr,  #
+                                     NUM_SMS: tl.constexpr):  #
+    # Matmul using TMA and device-side descriptor creation
+    dtype = c_ptr.dtype.element_ty
+    start_pid = tl.program_id(axis=0)
+    num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
+    num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
+    k_tiles = tl.cdiv(K, BLOCK_SIZE_K)
+    num_tiles = num_pid_m * num_pid_n
+    num_pid_in_group = GROUP_SIZE_M * num_pid_n
+
+    a_desc = tl.make_tensor_descriptor(
+        a_ptr,
+        shape=[M, K],
+        strides=[K, 1],
+        block_shape=[BLOCK_SIZE_M, BLOCK_SIZE_K],
+    )
+    b_desc = tl.make_tensor_descriptor(
+        b_ptr,
+        shape=[N, K],
+        strides=[K, 1],
+        block_shape=[BLOCK_SIZE_N, BLOCK_SIZE_K],
+    )
+    c_desc = tl.make_tensor_descriptor(
+        c_ptr,
+        shape=[M, N],
+        strides=[N, 1],
+        block_shape=[1, BLOCK_SIZE_N],
+    )
+
+    for tile_id in range(start_pid, num_tiles, NUM_SMS):
+        group_id = tile_id // num_pid_in_group
+        first_pid_m = group_id * GROUP_SIZE_M
+        group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
+        pid_m = first_pid_m + (tile_id % group_size_m)
+        pid_n = (tile_id % num_pid_in_group) // group_size_m
+
+        offs_am = pid_m * BLOCK_SIZE_M
+        offs_bn = pid_n * BLOCK_SIZE_N
+
+        accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
+        for ki in range(k_tiles):
+            offs_k = ki * BLOCK_SIZE_K
+
+            a = a_desc.load([offs_am, offs_k])
+            b = b_desc.load([offs_bn, offs_k])
+            accumulator = tl.dot(a, b.T, accumulator)
+
+        c = accumulator.to(dtype)
+        c_desc.scatter(c, offs_am + tl.arange(0, BLOCK_SIZE_M), offs_bn)
+
+
+@pytest.mark.skipif(torch.cuda.get_device_capability()[0] != 10,
+                    reason="TMA Scatter only works on cloud Blackwell Chips")
+def test_scatter_pipeline(device):
+
+    def alloc_fn(size, alignment, stream):
+        return torch.empty(size, device="cuda", dtype=torch.int8)
+
+    triton.set_allocator(alloc_fn)
+
+    M, N, K, = 1024, 1024, 1024
+    BLOCK_M, BLOCK_N, BLOCK_K = 64, 64, 32
+    GROUP_SIZE_M = 4
+
+    NUM_SMS = torch.cuda.get_device_properties("cuda").multi_processor_count
+    grid_x = min(NUM_SMS, triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N))
+
+    a = torch.randn(M, K, device=device, dtype=torch.float16)
+    b = torch.randn(N, K, device=device, dtype=torch.float16)
+    c = torch.empty((M, N), device=device, dtype=torch.float16)
+
+    kernel = matmul_kernel_persistent_scatter[(grid_x, )](a, b, c, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, GROUP_SIZE_M,
+                                                          NUM_SMS)
+
+    ref = torch.matmul(a, b.T)
+    torch.testing.assert_close(c, ref)
+
+    assert kernel.asm["ttgir"].count("tma_store_wait") == 2, "expected pipelined TMA scatter"

@@ -4,18 +4,19 @@ on:
   schedule:
     - cron: "0 0 * * *"
 
-permissions: read-all
+permissions:
+  contents: write
 
 jobs:
   Build-Documentation:
-    runs-on: [a100-runner-set]
+    runs-on: [nvidia-a100]
     timeout-minutes: 30
 
     steps:
       - name: Checkout branch
         uses: actions/checkout@v4
         with:
-          token: ${{ secrets.CI_PAT }}
+          token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
 
       - name: Clear docs

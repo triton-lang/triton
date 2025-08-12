@@ -14,11 +14,12 @@ def parse_arguments():
 """, formatter_class=argparse.RawTextHelpFormatter)
     parser.add_argument("-n", "--name", type=str, help="Name of the profiling session")
     parser.add_argument("-b", "--backend", type=str, help="Profiling backend", default=None,
-                        choices=["cupti", "cupti_pcsampling", "roctracer"])
+                        choices=["cupti", "roctracer", "instrumentation"])
     parser.add_argument("-c", "--context", type=str, help="Profiling context", default="shadow",
                         choices=["shadow", "python"])
-    parser.add_argument("-d", "--data", type=str, help="Profiling data", default="tree", choices=["tree"])
-    parser.add_argument("-k", "--hook", type=str, help="Profiling hook", default=None, choices=[None, "triton"])
+    parser.add_argument("-m", "--mode", type=str, help="Profiling mode", default=None)
+    parser.add_argument("-d", "--data", type=str, help="Profiling data", default="tree", choices=["tree", "trace"])
+    parser.add_argument("-k", "--hook", type=str, help="Profiling hook", default=None, choices=[None, "launch"])
     parser.add_argument('target_args', nargs=argparse.REMAINDER, help='Subcommand and its arguments')
     args = parser.parse_args()
     return args, args.target_args
@@ -50,15 +51,12 @@ def execute_as_main(script, args):
         exec(code, clean_globals)
     except Exception as e:
         print(f"An error occurred while executing the script: {e}")
+        sys.exit(1)
     finally:
         sys.argv = original_argv
 
 
-def run_profiling(args, target_args):
-    backend = args.backend if args.backend else _select_backend()
-
-    start(args.name, context=args.context, data=args.data, backend=backend, hook=args.hook)
-
+def do_setup_and_execute(target_args):
     # Set the command line mode to avoid any `start` calls in the script.
     set_command_line()
 
@@ -69,6 +67,14 @@ def run_profiling(args, target_args):
         pytest.main(script_args)
     else:
         execute_as_main(script, script_args)
+
+
+def run_profiling(args, target_args):
+    backend = args.backend if args.backend else _select_backend()
+
+    start(args.name, context=args.context, data=args.data, backend=backend, hook=args.hook)
+
+    do_setup_and_execute(target_args)
 
     finalize()
 

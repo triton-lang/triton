@@ -21,13 +21,14 @@ public:
         &ctx, spt, tpw, wpb, ord, CTALayoutAttr::get(&ctx, cpg, cSplit, cOrd));
   }
 
-  SharedEncodingAttr shared(unsigned vec, unsigned perPhase, unsigned maxPhase,
-                            bool hasLeadingOffset, ArrayRef<unsigned> cpg,
-                            ArrayRef<unsigned> cSplit, ArrayRef<unsigned> ord,
-                            ArrayRef<unsigned> cOrd) {
-    return SharedEncodingAttr::get(&ctx, vec, perPhase, maxPhase, ord,
-                                   CTALayoutAttr::get(&ctx, cpg, cSplit, cOrd),
-                                   hasLeadingOffset);
+  SwizzledSharedEncodingAttr shared(unsigned vec, unsigned perPhase,
+                                    unsigned maxPhase, ArrayRef<unsigned> cpg,
+                                    ArrayRef<unsigned> cSplit,
+                                    ArrayRef<unsigned> ord,
+                                    ArrayRef<unsigned> cOrd) {
+    return SwizzledSharedEncodingAttr::get(
+        &ctx, vec, perPhase, maxPhase, ord,
+        CTALayoutAttr::get(&ctx, cpg, cSplit, cOrd));
   }
 
   void assertSameStr(const std::string &refStr, const std::string &output) {
@@ -173,16 +174,15 @@ TEST_F(DumpLayoutTest, Simple1DShared) {
       "9),(10),(11),(12),(13),(14),(15),(16),(17),(18),(19),(20),(21),(22),(23)"
       ",(24),(25),(26),(27),(28),(29),(30),(31)]\n";
 
-  auto sharedLayout = shared(1,     /* vec */
-                             1,     /* perPhase */
-                             4,     /* maxPhase */
-                             false, /* hasLeadingOffset */
-                             {1},   /* cpg */
-                             {1},   /* csplit */
-                             {1},   /* ord, row-major */
-                             {1});  /* cOrd */
+  auto sharedLayout = shared(1,    /* vec */
+                             1,    /* perPhase */
+                             4,    /* maxPhase */
+                             {1},  /* cpg */
+                             {1},  /* csplit */
+                             {0},  /* ord, row-major */
+                             {0}); /* cOrd */
 
-  auto elemTy = FloatType::getF16(sharedLayout.getContext());
+  auto elemTy = Float16Type::get(sharedLayout.getContext());
   auto tensorType = RankedTensorType::get({32}, elemTy, sharedLayout);
   std::string layout = getLayoutStr(tensorType, /*useHWPointOfView=*/false);
   assertSameStr(refStr, layout);
@@ -231,13 +231,12 @@ TEST_F(DumpLayoutTest, Larger2DShared) {
   auto sharedLayout = shared(8,       /* vec */
                              2,       /* perPhase */
                              8,       /* maxPhase */
-                             false,   /* hasLeadingOffset */
                              {1, 1},  /* cpg */
                              {1, 1},  /* csplit */
                              {1, 0},  /* ord, row-major */
                              {1, 0}); /* cOrd */
 
-  auto elemTy = FloatType::getF16(sharedLayout.getContext());
+  auto elemTy = Float16Type::get(sharedLayout.getContext());
   auto tensorType = RankedTensorType::get({8, 32}, elemTy, sharedLayout);
   std::string layout = getLayoutStr(tensorType, /*useHWPointOfView=*/false);
   assertSameStr(refStr, layout);
@@ -504,13 +503,12 @@ Offset: 255 -> (7,17)
   auto sharedLayoutHW = shared(2,       /* vec */
                                1,       /* perPhase */
                                32,      /* maxPhase */
-                               false,   /* hasLeadingOffset */
                                {1, 1},  /* cpg */
                                {1, 1},  /* csplit */
                                {1, 0},  /* ord, row-major */
                                {1, 0}); /* cOrd */
 
-  auto elemTyHW = FloatType::getF16(sharedLayoutHW.getContext());
+  auto elemTyHW = Float16Type::get(sharedLayoutHW.getContext());
   auto tensorTypeHW = RankedTensorType::get({8, 32}, elemTyHW, sharedLayoutHW);
 
   std::string layoutHW = getLayoutStr(tensorTypeHW, /*useHWPointOfView=*/true);

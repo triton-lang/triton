@@ -2,6 +2,7 @@
 #include "TritonAMDGPUToLLVM/Passes.h"
 #include "TritonAMDGPUToLLVM/TargetUtils.h"
 #include "TritonAMDGPUTransforms/Passes.h"
+#include "lld/Common/Driver.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Target/LLVMIR/Dialect/ROCDL/ROCDLToLLVMIRTranslation.h"
 #include "passes.h"
@@ -27,6 +28,7 @@
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/TargetParser/TargetParser.h"
+#include <array>
 #include <pybind11/pybind11.h>
 #include <stdexcept>
 
@@ -44,34 +46,54 @@ void init_triton_amd_passes_ttgpuir(py::module &&m) {
   m.def("add_builtin_func_to_llvmir", [](mlir::PassManager &pm, bool ftz) {
     pm.addPass(createConvertBuiltinFuncToLLVMPass(ftz));
   });
-  m.def("insert_instruction_sched_hints", [](mlir::PassManager &pm) {
-    pm.addPass(createInsertInstructionSchedHintsPass());
+  m.def("insert_instruction_sched_hints", [](mlir::PassManager &pm,
+                                             const std::string &variant) {
+    pm.addPass(createTritonAMDGPUInsertInstructionSchedHintsPass(variant));
   });
   m.def("lower_instruction_sched_hints",
-        [](mlir::PassManager &pm, std::string variant) {
-          pm.addPass(createLowerInstructionSchedHintsPass(variant));
+        [](mlir::PassManager &pm, const std::string &arch, int32_t numStages) {
+          pm.addPass(createTritonAMDGPULowerInstructionSchedHintsPass(
+              arch, numStages));
         });
-  m.def("add_decompose_unsupported_conversions", [](mlir::PassManager &pm,
-                                                    const std::string &arch) {
-    pm.addPass(
-        mlir::triton::AMD::createDecomposeUnsupportedConversionsPass(arch));
-  });
   ADD_PASS_WRAPPER_2("add_optimize_lds_usage",
                      mlir::triton::AMD::createOptimizeLDSUsagePass,
                      const std::string &, int32_t);
-  ADD_PASS_WRAPPER_3("add_accelerate_matmul",
-                     mlir::createTritonAMDGPUAccelerateMatmulPass,
-                     const std::string, int, int);
+  ADD_PASS_WRAPPER_0("add_allocate_shared_memory",
+                     mlir::triton::createAllocateAMDGPUSharedMemory);
+  ADD_PASS_OPTION_WRAPPER_3("add_accelerate_matmul",
+                            mlir::createTritonAMDGPUAccelerateMatmul,
+                            const std::string, int, int);
   ADD_PASS_WRAPPER_0("add_optimize_epilogue",
-                     mlir::createTritonAMDGPUOptimizeEpiloguePass);
-  ADD_PASS_WRAPPER_0("add_canonicalize_pointers",
-                     mlir::createTritonAMDGPUCanonicalizePointersPass);
-  ADD_PASS_WRAPPER_0("add_convert_to_buffer_ops",
-                     mlir::createTritonAMDGPUConvertToBufferOpsPass);
+                     mlir::createTritonAMDGPUOptimizeEpilogue);
+  m.def("add_hoist_layout_conversions", [](mlir::PassManager &pm) {
+    pm.addNestedPass<mlir::triton::FuncOp>(
+        mlir::createTritonAMDGPUHoistLayoutConversions());
+  });
+  m.def("add_canonicalize_pointers", [](mlir::PassManager &pm) {
+    pm.addNestedPass<mlir::triton::FuncOp>(
+        mlir::createTritonAMDGPUCanonicalizePointers());
+  });
+  ADD_PASS_OPTION_WRAPPER_2("add_convert_to_buffer_ops",
+                            mlir::createTritonAMDGPUConvertToBufferOps,
+                            const std::string &, bool);
   ADD_PASS_WRAPPER_0("add_reorder_instructions",
-                     mlir::createTritonAMDGPUReorderInstructionsPass);
-  ADD_PASS_WRAPPER_1("add_stream_pipelinev2",
-                     mlir::createTritonAMDGPUStreamPipelineV2Pass, int);
+                     mlir::createTritonAMDGPUReorderInstructions);
+  ADD_PASS_WRAPPER_0("add_fold_true_cmpi", mlir::createTritonAMDFoldTrueCmpI);
+  ADD_PASS_OPTION_WRAPPER_1("add_block_pingpong",
+                            mlir::createTritonAMDGPUBlockPingpong, int32_t);
+  ADD_PASS_OPTION_WRAPPER_5("add_stream_pipeline",
+                            mlir::createTritonAMDGPUStreamPipeline, int, int,
+                            int, bool, bool);
+  ADD_PASS_OPTION_WRAPPER_1("add_coalesce_async_copy",
+                            mlir::createTritonAMDGPUCoalesceAsyncCopy,
+                            std::string);
+  ADD_PASS_OPTION_WRAPPER_1("add_update_async_wait_count",
+                            mlir::createTritonAMDGPUUpdateAsyncWaitCount,
+                            std::string);
+  m.def("add_in_thread_transpose", [](mlir::PassManager &pm) {
+    pm.addNestedPass<mlir::triton::FuncOp>(
+        mlir::createTritonAMDGPUInThreadTranspose());
+  });
 }
 
 void addControlConstant(llvm::Module *module, const char *name,
@@ -90,7 +112,30 @@ void addControlConstant(llvm::Module *module, const char *name,
   constant->setUnnamedAddr(GlobalVariable::UnnamedAddr::Local);
   constant->setVisibility(GlobalVariable::VisibilityTypes::ProtectedVisibility);
 }
+
 } // namespace
+
+LLD_HAS_DRIVER(elf)
+
+static std::optional<std::string> lldInvoke(const char *inPath,
+                                            const char *outPath) {
+  // Workaround: Disable parallelism to avoid hangs caused by LLVM's thread pool
+  // when the following code is executed in a forked child process.
+  // Context: lld::elf::LinkerDriver::link uses parallelFor which uses the
+  // LLVM's thread pool. During cleanup at ~TaskGroup() the child process hangs
+  // waiting.
+  std::array args{"ld.lld", "--threads=1", "-shared", inPath, "-o", outPath};
+  std::string errString;
+  llvm::raw_string_ostream errStream(errString);
+  auto lldRes = lld::lldMain(args, llvm::outs(), llvm::errs(),
+                             {{lld::Gnu, &lld::elf::link}});
+  bool noErrors = (!lldRes.retCode && lldRes.canRunAgain);
+  if (!noErrors) {
+    errStream.flush();
+    return errString;
+  }
+  return {};
+}
 
 void init_triton_amd(py::module &&m) {
   m.doc() = "Python bindings to the AMD Triton backend";
@@ -111,8 +156,9 @@ void init_triton_amd(py::module &&m) {
     context.loadAllAvailableDialects();
   });
 
-  m.def("attach_target_triple",
-        [](llvm::Module *module) { module->setTargetTriple(amdTargetTriple); });
+  m.def("attach_target_triple", [](llvm::Module *module) {
+    module->setTargetTriple(llvm::Triple(amdTargetTriple));
+  });
 
   // Set target architecture ISA version
   m.def("set_isa_version", [](llvm::Module *module, const std::string &arch) {
@@ -157,6 +203,24 @@ void init_triton_amd(py::module &&m) {
     // Also various OpenCL version details.
     if (auto *openclVersion = module->getNamedMetadata("opencl.ocl.version"))
       module->eraseNamedMetadata(openclVersion);
+  });
+
+  m.def("disable_print_inline", [](llvm::Module *module) {
+    // List of functions name prefixes we want to forbid inline.
+    std::array<const char *, 2> prefixes = {"__ockl_fprintf", "__ockl_printf"};
+
+    for (llvm::Function &f : module->functions()) {
+      if (!f.hasName())
+        continue;
+      llvm::StringRef name = f.getName();
+
+      auto isNamePrefixed = [&name](const char *prefix) {
+        return name.starts_with(prefix);
+      };
+
+      if (llvm::any_of(prefixes, isNamePrefixed))
+        f.addFnAttr(llvm::Attribute::NoInline);
+    }
   });
 
   m.def(
@@ -222,6 +286,18 @@ void init_triton_amd(py::module &&m) {
       },
       py::return_value_policy::take_ownership);
 
+  m.def("has_architected_sgprs", [](const std::string &arch) {
+    std::string error;
+    llvm::Triple triple(amdTargetTriple);
+    const llvm::Target *target =
+        llvm::TargetRegistry::lookupTarget(triple.normalize(), error);
+    if (!target)
+      throw std::runtime_error("target lookup error: " + error);
+    std::unique_ptr<llvm::MCSubtargetInfo> sti(
+        target->createMCSubtargetInfo(amdTargetTriple, arch, ""));
+    return sti->checkFeatures("+architected-sgprs");
+  });
+
   m.def("need_extern_lib", [](llvm::Module *module, const std::string &lib) {
     for (llvm::Function &f : module->functions()) {
       if (f.hasExternalLinkage() && f.hasName() && !f.hasExactDefinition()) {
@@ -245,19 +321,6 @@ void init_triton_amd(py::module &&m) {
     return false;
   });
 
-  m.def("has_matrix_core_feature", [](const std::string &arch) {
-    using mlir::triton::AMD::ISAFamily;
-    switch (mlir::triton::AMD::deduceISAFamily(arch)) {
-    case ISAFamily::CDNA3:
-    case ISAFamily::CDNA2:
-    case ISAFamily::CDNA1:
-    case ISAFamily::RDNA3:
-      return true;
-    default:
-      return false;
-    }
-  });
-
   m.def("set_all_fn_arg_inreg", [](llvm::Function *fn) {
     for (llvm::Argument &arg : fn->args()) {
       // Check for incompatible attributes.
@@ -265,5 +328,17 @@ void init_triton_amd(py::module &&m) {
         continue;
       arg.addAttr(llvm::Attribute::InReg);
     }
+  });
+
+  m.def("link_hsaco",
+        [](const std::string &inPath, const std::string &outPath) {
+          if (auto errString = lldInvoke(inPath.c_str(), outPath.c_str()))
+            throw std::runtime_error("LLD failed to link hsaco source " +
+                                     inPath + " into object file " + outPath +
+                                     " because " + errString.value());
+        });
+
+  m.def("add_scalarize_packed_fops_llvm_pass", [](llvm::Function *fn) {
+    mlir::triton::AMD::runScalarizePackedFOpsPass(*fn);
   });
 }

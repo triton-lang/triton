@@ -25,7 +25,7 @@
 include "mlir/IR/OpBase.td"
 
 def TritonNvidiaGPU_Dialect : Dialect {
-  let name = "triton_nvidia_gpu";
+  let name = "ttng";
 
   let cppNamespace = "::mlir::triton::nvidia_gpu";
 
@@ -39,29 +39,10 @@ def TritonNvidiaGPU_Dialect : Dialect {
     "triton::TritonDialect",
     "triton::gpu::TritonGPUDialect",
     "mlir::gpu::GPUDialect",
-    "tensor::TensorDialect",
   ];
 
-  let extraClassDeclaration = [{
-    static std::string getNumWarpsAttrName() { return "triton_gpu.num-warps"; }
-    static int getNumWarps(ModuleOp mod) {
-      if(!mod->hasAttr("triton_gpu.num-warps"))
-        llvm::report_fatal_error(
-            "TritonGPU module should contain a triton_gpu.num-warps attribute");
-      return cast<IntegerAttr>(mod->getAttr("triton_gpu.num-warps")).getInt();
-    }
-    static int getNumCTAs(ModuleOp mod) {
-      if(!mod->hasAttr("triton_gpu.num-ctas"))
-        llvm::report_fatal_error(
-            "TritonGPU module should contain a triton_gpu.num-ctas attribute");
-      return cast<IntegerAttr>(mod->getAttr("triton_gpu.num-ctas")).getInt();
-    }
-    void registerTypes();
-  }];
-
-  let useDefaultTypePrinterParser = 1;
+  let useDefaultAttributePrinterParser = 1;
+  let usePropertiesForAttributes = 1;
 }
-
-include "triton/Dialect/TritonNvidiaGPU/IR/TritonNvidiaGPUTypes.td"
 
 #endif

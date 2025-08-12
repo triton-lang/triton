@@ -34,7 +34,10 @@ def TritonAMDGPU_Dialect : Dialect {
     TritonAMDGPU Dialect hosts AMD specific ops at TritonGPU abstraction level.
   }];
 
-  let dependentDialects = [];
+  let dependentDialects = ["triton::TritonDialect"];
+
+  let useDefaultAttributePrinterParser = 1;
+  let usePropertiesForAttributes = 1;
 }
 
 #endif

@@ -59,9 +59,9 @@ bool GpuHello::runOnModule(Module &module) {
   return modifiedCodeGen;
 }
 
-PassPluginLibraryInfo getPassPluginInfo() {
+static PassPluginLibraryInfo getPassPluginInfo() {
   const auto callback = [](PassBuilder &pb) {
-    pb.registerOptimizerLastEPCallback([&](ModulePassManager &mpm, auto) {
+    pb.registerOptimizerLastEPCallback([&](ModulePassManager &mpm, auto, auto) {
       mpm.addPass(GpuHello());
       return true;
     });

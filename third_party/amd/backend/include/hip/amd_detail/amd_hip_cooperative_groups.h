@@ -216,12 +216,18 @@ class thread_block : public thread_group {
     if (!tile_size || (tile_size > __AMDGCN_WAVEFRONT_SIZE) || !pow2) {
       __hip_assert(false && "invalid tile size");
     }
+ 
+    auto block_size = size();
+    auto rank = thread_rank();
+    auto partitions = (block_size + tile_size - 1) / tile_size;
+    auto tail = (partitions * tile_size) - block_size;
+    auto partition_size = tile_size - tail * (rank >= (partitions - 1) * tile_size);
+    thread_group tiledGroup = thread_group(internal::cg_tiled_group, partition_size);
 
-    thread_group tiledGroup = thread_group(internal::cg_tiled_group, tile_size);
     tiledGroup.coalesced_info.tiled_info.size = tile_size;
     tiledGroup.coalesced_info.tiled_info.is_tiled = true;
-    tiledGroup.coalesced_info.tiled_info.meta_group_rank = thread_rank() / tile_size;
-    tiledGroup.coalesced_info.tiled_info.meta_group_size = (size() + tile_size - 1) / tile_size;
+    tiledGroup.coalesced_info.tiled_info.meta_group_rank = rank / tile_size;
+    tiledGroup.coalesced_info.tiled_info.meta_group_size = partitions;
     return tiledGroup;
   }
 

@@ -110,7 +110,7 @@ class CustomPhilox(CustomPhilox4x):
 # Unit Tests
 #####################################
 
-BLOCK: tl.constexpr = 1024
+BLOCK = tl.constexpr(1024)
 
 # test generation of random uint32
 
@@ -125,7 +125,7 @@ def test_randint(size, seed, device, dtype, const_seed):
     size = list(map(int, size.split(',')))
     torch_dtype = getattr(torch, dtype)
     numpy_dtype = getattr(np, f"u{dtype}")
-    config = {'int32': PHILOX_32, 'int64': PHILOX_64}[dtype]
+    config = PHILOX_32
 
     @triton.jit
     def kernel(X, N, seed):
@@ -144,7 +144,7 @@ def test_randint(size, seed, device, dtype, const_seed):
     # triton result
     x = torch.empty(size, dtype=torch_dtype, device=device)
     N = x.numel()
-    grid = (triton.cdiv(N, BLOCK), )
+    grid = (triton.cdiv(N, BLOCK.value), )
     if const_seed:
         const_kernel[grid](x, N, seed=seed)
     else:
@@ -184,13 +184,30 @@ def test_rand(size, seed, dtype, device, const_seed):
     # triton result
     x = torch.empty(size, dtype=torch.float32, device=device)
     N = x.numel()
-    grid = (triton.cdiv(N, BLOCK), )
+    grid = (triton.cdiv(N, BLOCK.value), )
     if const_seed:
         const_kernel[grid](x, N, seed=seed, dtype=getattr(tl, dtype))
     else:
         kernel[grid](x, N, seed, dtype=getattr(tl, dtype))
     assert all((x >= 0) & (x <= 1))
     assert scipy.stats.kstest(x.tolist(), 'uniform', args=(0, 1)).statistic < 0.01
+
+
+def test_seed_is_int(device):
+
+    @triton.jit
+    def kernel(X, seed):
+        offset = tl.arange(0, 1)
+        rand = tl.rand(seed, offset)
+        tl.store(X + offset, rand)
+
+    x = torch.empty(1, dtype=torch.float32, device=device)
+    with pytest.raises(triton.compiler.errors.CompilationError):
+        seed0 = torch.zeros(1, dtype=torch.int32, device=device)
+        kernel[(1, )](x, seed0)
+    with pytest.raises(triton.compiler.errors.CompilationError):
+        seed1 = 2.3
+        kernel[(1, )](x, seed1)
 
 
 # test normal PRNG
@@ -221,7 +238,7 @@ def test_randn(size, seed, dtype, device, const_seed):
     # triton result
     x = torch.empty(size, dtype=torch.float32, device=device)
     N = x.numel()
-    grid = (triton.cdiv(N, BLOCK), )
+    grid = (triton.cdiv(N, BLOCK.value), )
     if const_seed:
         const_kernel[grid](x, N, seed=seed, dtype=getattr(tl, dtype))
     else:

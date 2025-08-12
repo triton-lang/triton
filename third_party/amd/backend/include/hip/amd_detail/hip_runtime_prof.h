@@ -34,6 +34,7 @@ enum HipVdiOpId {
 // Types of ROCclr commands
 enum HipVdiCommandKind {
   kHipVdiCommandKernel            = 0x11F0,
+  kHipVdiCommandTask              = 0x11F1,
   kHipVdiMemcpyDeviceToHost       = 0x11F3,
   kHipHipVdiMemcpyHostToDevice    = 0x11F4,
   kHipVdiMemcpyDeviceToDevice     = 0x11F5,
@@ -41,7 +42,7 @@ enum HipVdiCommandKind {
   kHipVdiMemcpyHostToDeviceRect   = 0x1202,
   kHipVdiMemcpyDeviceToDeviceRect = 0x1203,
   kHipVdiFillMemory               = 0x1207,
-}; 
+};
 
 /**
  * @brief Initializes activity callback

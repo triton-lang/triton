@@ -15,25 +15,36 @@ public:
 
   TreeData(const std::string &path) : TreeData(path, nullptr) {}
 
-  size_t addScope(size_t scopeId, const std::string &name) override;
+  size_t addOp(size_t scopeId, const std::string &name) override;
+
+  size_t addOp(size_t scopeId, const std::vector<Context> &contexts) override;
 
   void addMetric(size_t scopeId, std::shared_ptr<Metric> metric) override;
 
-  void addMetrics(size_t scopeId,
-                  const std::map<std::string, MetricValueType> &metrics,
-                  bool aggregable) override;
+  void
+  addMetrics(size_t scopeId,
+             const std::map<std::string, MetricValueType> &metrics) override;
+
+  void clear() override;
 
 protected:
-  // OpInterface
-  void startOp(const Scope &scope) override;
+  // ScopeInterface
+  void enterScope(const Scope &scope) override;
 
-  void stopOp(const Scope &scope) override;
+  void exitScope(const Scope &scope) override;
 
 private:
-  void init();
   void dumpHatchet(std::ostream &os) const;
+
   void doDump(std::ostream &os, OutputFormat outputFormat) const override;
 
+  OutputFormat getDefaultOutputFormat() const override {
+    return OutputFormat::Hatchet;
+  }
+
+  // `tree` and `scopeIdToContextId` can be accessed by both the user thread and
+  // the background threads concurrently, so methods that access them should be
+  // protected by a (shared) mutex.
   class Tree;
   std::unique_ptr<Tree> tree;
   // ScopeId -> ContextId

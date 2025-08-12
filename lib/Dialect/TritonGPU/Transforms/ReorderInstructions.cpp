@@ -51,10 +51,10 @@ public:
       if (Operation *ancestor = op->getBlock()->findAncestorOpInBlock(*user))
         users.push_back(ancestor);
     }
-    auto minOpIt = std::min_element(users.begin(), users.end(),
-                                    [](mlir::Operation *a, mlir::Operation *b) {
-                                      return a->isBeforeInBlock(b);
-                                    });
+    auto minOpIt =
+        llvm::min_element(users, [](mlir::Operation *a, mlir::Operation *b) {
+          return a->isBeforeInBlock(b);
+        });
     return minOpIt != users.end() ? *minOpIt : nullptr;
   }
 
@@ -65,7 +65,8 @@ public:
     // before the first use ancestor in its block
     m.walk([&](triton::gpu::ConvertLayoutOp op) {
       auto curr = mlir::Block::iterator(op);
-      for (; &*curr != getFirstUse(op); curr++)
+      auto end = op->getBlock()->end();
+      for (; curr != end && &*curr != getFirstUse(op); curr++)
         if (isa<triton::gpu::LocalDeallocOp>(&*curr))
           op->moveAfter(&*curr);
     });
@@ -100,7 +101,7 @@ public:
     });
     // Move transpositions just after their definition
     opToMove.clear();
-    m.walk([&](triton::TransOp op) {
+    m.walk([&](triton::TransposeOpInterface op) {
       Operation *argOp = op.getSrc().getDefiningOp();
       if (!argOp)
         return;

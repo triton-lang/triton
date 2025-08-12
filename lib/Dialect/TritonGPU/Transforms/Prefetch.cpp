@@ -15,12 +15,12 @@
 //
 // %a: tensor<128x32xf16, #enc>
 // %a_tmp = tensor.subview %a[0, 0] [128, 16]
-// %a_prefetch = triton_gpu.local_load %a_tmp
+// %a_prefetch = ttg.local_load %a_tmp
 // scf.for %iv = ... iter_args(%a_buf = %a, ..., %a_prefetch_arg = %a_prefetch)
 // {
 //   %x = tt.dot %a_prefetch_arg, %b, %c
 //   %a_tmp_rem = tensor.subview %a_buf[0, 16] [128, 16]
-//   %a_prefetch_next = triton_gpu.local_load %a_tmp_rem
+//   %a_prefetch_next = ttg.local_load %a_tmp_rem
 //   ...
 //   scf.yield %next_a, ..., %a_prefetch_next
 // }
@@ -31,6 +31,11 @@
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
+#include "llvm/Support/Debug.h"
+
+#define DEBUG_TYPE "tritongpu-prefetch"
+#define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
+#define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
 namespace mlir {
 namespace triton {
@@ -114,13 +119,14 @@ Value Prefetcher::generatePrefetch(Value v, unsigned opIdx, bool isPrologue,
                                    std::optional<int64_t> offsetK,
                                    std::optional<int64_t> shapeK) {
   // opIdx: 0 => a, 1 => b
-  auto type = cast<triton::MemDescType>(v.getType());
+  auto type = cast<triton::gpu::MemDescType>(v.getType());
   SmallVector<int64_t> shape{type.getShape().begin(), type.getShape().end()};
-  SmallVector<int64_t> offset{0, 0};
+  auto rank = shape.size();
+  SmallVector<int32_t> offset(rank, 0);
   Type elementType = type.getElementType();
 
   // k => (prefetchWidth, k - prefetchWidth)
-  int64_t kIdx = opIdx == 0 ? 1 : 0;
+  int64_t kIdx = opIdx == 0 ? rank - 1 : rank - 2;
 
   offset[kIdx] = isPrologue ? 0 : prefetchWidth;
   shape[kIdx] = isPrologue ? prefetchWidth : (shape[kIdx] - prefetchWidth);
@@ -130,15 +136,12 @@ Value Prefetcher::generatePrefetch(Value v, unsigned opIdx, bool isPrologue,
   if (offsetK)
     offset[kIdx] = *offsetK;
 
-  SmallVector<Value> offsetsVal;
-  for (int64_t off : offset)
-    offsetsVal.push_back(
-        builder.create<arith::ConstantIntOp>(v.getLoc(), off, 32));
-  Value newSmem = builder.create<triton::gpu::MemDescSubviewOp>(
+  Value newSmem = builder.create<triton::gpu::MemDescSubsliceOp>(
       v.getLoc(),
-      triton::MemDescType::get(shape, elementType, type.getEncoding(),
-                               type.getMemorySpace()),
-      v, offsetsVal);
+      triton::gpu::MemDescType::get(
+          shape, elementType, type.getEncoding(), type.getMemorySpace(),
+          type.getMutableMemory(), type.getAllocShape()),
+      v, offset);
 
   auto dotOperandEnc = triton::gpu::DotOperandEncodingAttr::get(
       builder.getContext(), opIdx, dotEncoding, prefetchWidth / 8);
@@ -185,6 +188,7 @@ LogicalResult Prefetcher::initialize() {
     bool foundConvertFromShared = false;
     SmallVector<Value> rets;
     rets.push_back(op->getResult(0));
+    LDBG("Prefetch src: " << *op);
     while (op) {
       if (op->getNumOperands() != 1)
         break;
@@ -192,10 +196,15 @@ LogicalResult Prefetcher::initialize() {
         break;
       rets.push_back(op->getOperand(0));
       if (auto cvt = dyn_cast<triton::gpu::LocalLoadOp>(op)) {
-        foundConvertFromShared = true;
+        // NYI for other encodings, for example if we have transpose
+        // in the chain
+        if (isa<DotOperandEncodingAttr>(cvt.getType().getEncoding()))
+          foundConvertFromShared = true;
         break;
       }
       op = op->getOperand(0).getDefiningOp();
+      if (op)
+        LDBG("op: " << *op);
     }
     std::reverse(rets.begin(), rets.end());
 
@@ -228,7 +237,7 @@ LogicalResult Prefetcher::initialize() {
     int bKWidth = bEnc.getKWidth();
     assert(aKWidth == bKWidth);
 
-    auto kSize = aType.getShape()[1];
+    auto kSize = aType.getShape().back();
 
     // works better with nvidia tensor cores
     unsigned elementWidth = aType.getElementTypeBitWidth();
@@ -344,7 +353,7 @@ scf::ForOp Prefetcher::createNewForOp() {
 
       // remaining part
       int64_t kOff = prefetchWidth;
-      int64_t kRem = dot.getA().getType().getShape()[1] - prefetchWidth;
+      int64_t kRem = dot.getA().getType().getShape().back() - prefetchWidth;
       Operation *prevDot = firstDot;
       if (kRem == 0) {
         // There is only one dot while prefetchWidth == kSize so delay issuing
@@ -421,8 +430,7 @@ struct PrefetchPass : public impl::TritonGPUPrefetchBase<PrefetchPass> {
     RewritePatternSet cleanUpPatterns(&getContext());
     triton::gpu::ConvertLayoutOp::getCanonicalizationPatterns(cleanUpPatterns,
                                                               &getContext());
-    if (mlir::applyPatternsAndFoldGreedily(getOperation(),
-                                           std::move(cleanUpPatterns))
+    if (mlir::applyPatternsGreedily(getOperation(), std::move(cleanUpPatterns))
             .failed()) {
       signalPassFailure();
     }

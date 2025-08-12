@@ -1,18 +1,16 @@
 # -*- Python -*-
+# ruff: noqa: F821
 
 import os
-import platform
-import re
-import subprocess
-import tempfile
 
 import lit.formats
 import lit.util
 from lit.llvm import llvm_config
-from lit.llvm.subst import FindTool, ToolSubst
+from lit.llvm.subst import ToolSubst
 
 # Configuration file for the 'lit' test runner
 
+# (config is an instance of TestingConfig created when discovering tests)
 # name: The name of this test suite
 config.name = 'TRITON'
 
@@ -60,6 +58,7 @@ for d in tool_dirs:
 tools = [
     'triton-opt',
     'triton-llvm-opt',
+    'mlir-translate',
     ToolSubst('%PYTHON', config.python_executable, unresolved='ignore'),
 ]
 

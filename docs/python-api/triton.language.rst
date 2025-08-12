@@ -12,6 +12,7 @@ Programming Model
     :nosignatures:
 
     tensor
+    tensor_descriptor
     program_id
     num_programs
 
@@ -59,6 +60,7 @@ Linear Algebra Ops
     :nosignatures:
 
     dot
+    dot_scaled
 
 
 Memory/Pointer Ops
@@ -70,6 +72,9 @@ Memory/Pointer Ops
 
     load
     store
+    make_tensor_descriptor
+    load_tensor_descriptor
+    store_tensor_descriptor
     make_block_ptr
     advance
 
@@ -145,6 +150,7 @@ Scan/Sort Ops
     cumsum
     histogram
     sort
+    gather
 
 Atomic Ops
 ----------
@@ -203,6 +209,7 @@ Compiler Hint Ops
     :toctree: generated
     :nosignatures:
 
+    assume
     debug_barrier
     max_constancy
     max_contiguous

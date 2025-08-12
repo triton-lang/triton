@@ -1,5 +1,7 @@
 import functools
+import math
 import os
+import statistics
 import subprocess
 import sys
 from contextlib import contextmanager
@@ -17,16 +19,42 @@ def nvsmi(attrs):
     return ret
 
 
+# pure Python implementation of np.quantile/torch.quantile
+# to avoid unnecessary runtime dependency on numpy/torch
+
+
+def _quantile(a, q):
+    n = len(a)
+    a = sorted(a)
+
+    def get_quantile(q):
+        if not (0 <= q <= 1):
+            raise ValueError("Quantiles must be in the range [0, 1]")
+        point = q * (n - 1)
+        lower = math.floor(point)
+        upper = math.ceil(point)
+        t = point - lower
+        return (1 - t) * a[lower] + t * a[upper]
+
+    return [get_quantile(q) for q in q]
+
+
 def _summarize_statistics(times, quantiles, return_mode):
-    import torch
     if quantiles is not None:
-        ret = torch.quantile(times, torch.tensor(quantiles, dtype=torch.float)).tolist()
+        ret = _quantile(times, quantiles)
         if len(ret) == 1:
             ret = ret[0]
         return ret
     if return_mode == "all":
-        return times.tolist()
-    return getattr(torch, return_mode)(times).item()
+        return times
+    elif return_mode == "min":
+        return min(times)
+    elif return_mode == "max":
+        return max(times)
+    elif return_mode == "mean":
+        return statistics.mean(times)
+    elif return_mode == "median":
+        return statistics.median(times)
 
 
 def do_bench_cudagraph(fn, rep=20, grad_to_none=None, quantiles=None, return_mode="mean"):
@@ -39,7 +67,7 @@ def do_bench_cudagraph(fn, rep=20, grad_to_none=None, quantiles=None, return_mod
     :type rep: int
     :param grad_to_none: Reset the gradient of the provided tensor to None
     :type grad_to_none: torch.tensor, optional
-    :param return_mode: The statistical measure to return. Options are "min", "max", "mean", "median", or "all" Default is "mean".
+    :param return_mode: The statistical measure to return. Options are "min", "max", "mean", "median", or "all". Default is "mean".
     :type return_mode: str
     """
     import torch
@@ -67,7 +95,11 @@ def do_bench_cudagraph(fn, rep=20, grad_to_none=None, quantiles=None, return_mod
         end_event.record()
         torch.cuda.synchronize()
         estimate_ms = start_event.elapsed_time(end_event) / 5
-        n_repeat = max(1, int(rep / estimate_ms))
+        # Rewrite to avoid possible division by 0 issues with fast benchmarks
+        if estimate_ms == 0:
+            n_repeat = 1000
+        else:
+            n_repeat = max(1, int(rep / estimate_ms))
         # step 2 - construct a cuda graph with `n_repeat` unrolled function calls to minimize
         # host overhead
         g = torch.cuda.CUDAGraph()
@@ -89,7 +121,7 @@ def do_bench_cudagraph(fn, rep=20, grad_to_none=None, quantiles=None, return_mod
             end_event.record()
             torch.cuda.synchronize()
             ret += [start_event.elapsed_time(end_event) / n_repeat]
-        return _summarize_statistics(torch.tensor(ret), quantiles, return_mode)
+        return _summarize_statistics(ret, quantiles, return_mode)
 
 
 def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_mode="mean"):
@@ -107,10 +139,10 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_m
     :type grad_to_none: torch.tensor, optional
     :param quantiles: Performance percentile to return in addition to the median.
     :type quantiles: list[float], optional
-    :param return_mode: The statistical measure to return. Options are "min", "max", "mean", "median", or "all" Default is "mean".    :type return_mode: str
+    :param return_mode: The statistical measure to return. Options are "min", "max", "mean", "median", or "all". Default is "mean".
+    :type return_mode: str
     """
     assert return_mode in ["min", "max", "mean", "median", "all"]
-    import torch
 
     di = runtime.driver.active.get_device_interface()
 
@@ -124,7 +156,7 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_m
     end_event = di.Event(enable_timing=True)
     start_event.record()
     for _ in range(5):
-        cache.zero_()
+        runtime.driver.active.clear_cache(cache)
         fn()
     end_event.record()
     di.synchronize()
@@ -147,14 +179,14 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_m
             for x in grad_to_none:
                 x.grad = None
         # we clear the L2 cache before each run
-        cache.zero_()
+        runtime.driver.active.clear_cache(cache)
         # record time of `fn`
         start_event[i].record()
         fn()
         end_event[i].record()
     # Record clocks
     di.synchronize()
-    times = torch.tensor([s.elapsed_time(e) for s, e in zip(start_event, end_event)], dtype=torch.float)
+    times = [s.elapsed_time(e) for s, e in zip(start_event, end_event)]
     return _summarize_statistics(times, quantiles, return_mode)
 
 
@@ -355,18 +387,18 @@ class Mark:
         has_single_bench = isinstance(self.benchmarks, Benchmark)
         benchmarks = [self.benchmarks] if has_single_bench else self.benchmarks
         result_dfs = []
-        if save_path:
-            # Create directory if it doesn't exist
-            os.makedirs(save_path, exist_ok=True)
-            html = open(os.path.join(save_path, "results.html"), "w")
-            html.write("<html><body>\n")
-        for bench in benchmarks:
-            result_dfs.append(self._run(bench, save_path, show_plots, print_data, **kwargs))
+        try:
+            for bench in benchmarks:
+                result_dfs.append(self._run(bench, save_path, show_plots, print_data, **kwargs))
+        finally:
             if save_path:
-                html.write(f"<image src=\"{bench.plot_name}.png\"/>\n")
-        if save_path:
-            html.write("</body></html>\n")
-            html.close()
+                # Create directory if it doesn't exist
+                os.makedirs(save_path, exist_ok=True)
+                with open(os.path.join(save_path, "results.html"), "w") as html:
+                    html.write("<html><body>\n")
+                    for bench in benchmarks[:len(result_dfs)]:
+                        html.write(f"<image src=\"{bench.plot_name}.png\"/>\n")
+                    html.write("</body></html>\n")
         if return_df:
             if has_single_bench:
                 return result_dfs[0]

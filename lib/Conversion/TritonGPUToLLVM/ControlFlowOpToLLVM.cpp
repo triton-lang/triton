@@ -13,6 +13,8 @@ struct ReturnOpConversion : public ConvertOpToLLVMPattern<triton::ReturnOp> {
   matchAndRewrite(triton::ReturnOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto funcOp = op->getParentOfType<LLVM::LLVMFuncOp>();
+    auto loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
     if (funcOp->hasAttr("nvvm.kernel")) {
       // A GPU kernel
       if (op.getNumOperands() > 0) {
@@ -34,10 +36,9 @@ struct ReturnOpConversion : public ConvertOpToLLVMPattern<triton::ReturnOp> {
             funcOp.getResultTypes());
         Value packedResults =
             rewriter.create<LLVM::UndefOp>(op.getLoc(), packedResultsTy);
-        auto loc = op.getLoc();
         for (auto it : llvm::enumerate(adaptor.getOperands())) {
-          packedResults = insert_val(packedResultsTy, packedResults, it.value(),
-                                     it.index());
+          packedResults = b.insert_val(packedResultsTy, packedResults,
+                                       it.value(), it.index());
         }
         newOp = rewriter.create<LLVM::ReturnOp>(op.getLoc(), packedResults);
       }
@@ -78,17 +79,32 @@ private:
     // Get the last argument of the caller, which is the current stack pointer
     // of shared memory and append it to the operands of the callOp.
     auto loc = callOp.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto caller = callOp->getParentOfType<FunctionOpInterface>();
     auto promotedOperands = this->getTypeConverter()->promoteOperands(
         callOp.getLoc(), /*opOperands=*/callOp->getOperands(),
         adaptor.getOperands(), rewriter);
-    if (!caller->hasAttr("allocation.offset")) {
+    if (!caller->hasAttr("allocation.offset") ||
+        !callOp->hasAttr("allocation.offset")) {
       auto base = LLVM::getStackPointer(rewriter, caller);
       promotedOperands.push_back(base);
-      return promotedOperands;
+    } else {
+      auto base = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, callOp);
+      promotedOperands.push_back(base);
     }
-    promotedOperands.push_back(LLVM::getSharedMemoryBase(
-        callOp->getLoc(), rewriter, targetInfo, callOp));
+
+    auto opOffsetAttr = callOp->getAttrOfType<mlir::IntegerAttr>(
+        "ttg.global_scratch_memory_offset");
+    Value opOffsetVal;
+    if (opOffsetAttr) {
+      auto opOffset = opOffsetAttr.getValue().getZExtValue();
+      opOffsetVal = b.i32_val(opOffset);
+    }
+
+    promotedOperands.push_back(LLVM::getGlobalScratchPtr(
+        loc, rewriter, targetInfo, caller, opOffsetVal));
+    promotedOperands.push_back(
+        LLVM::getProfileScratchPtr(loc, rewriter, caller));
     return promotedOperands;
   }
 

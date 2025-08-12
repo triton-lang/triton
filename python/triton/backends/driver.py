@@ -1,4 +1,4 @@
-from abc import ABCMeta, abstractmethod, abstractclassmethod
+from abc import ABCMeta, abstractmethod
 from typing import Callable, List, Protocol, Sequence
 
 
@@ -10,12 +10,30 @@ class Benchmarker(Protocol):
 
 class DriverBase(metaclass=ABCMeta):
 
-    @abstractclassmethod
+    @classmethod
+    @abstractmethod
     def is_active(self):
         pass
 
     @abstractmethod
+    def map_python_to_cpp_type(self, ty: str) -> str:
+        """
+        Converts a Triton type string to its corresponding C++ type string for this backend.
+
+        Args:
+            ty (str): The Triton type string. e.g., 'i32', '*fp16', 'fp32'.
+
+        Returns:
+            str: The C++ type string.
+        """
+        pass
+
+    @abstractmethod
     def get_current_target(self):
+        pass
+
+    @abstractmethod
+    def get_active_torch_device(self):
         pass
 
     @abstractmethod

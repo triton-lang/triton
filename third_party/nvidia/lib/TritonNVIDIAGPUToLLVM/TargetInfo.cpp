@@ -5,15 +5,12 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMTypes.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
-#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "llvm/Support/MathExtras.h"
 
 using namespace mlir;
 
-using mlir::LLVM::getWrappedMultiDimOffset;
 using ::mlir::LLVM::linearize;
-using ::mlir::triton::gpu::getShapePerCTA;
-using ::mlir::triton::gpu::getShapePerCTATile;
 namespace {
 // declare vprintf(i8*, i8*) as external function
 LLVM::LLVMFuncOp getVprintfDeclaration(RewriterBase &rewriter) {
@@ -37,25 +34,25 @@ LLVM::LLVMFuncOp getVprintfDeclaration(RewriterBase &rewriter) {
 
 // extend integer to int32, extend float to float64
 // this comes from vprintf alignment requirements.
-std::pair<Type, Value> printfPromoteValue(RewriterBase &rewriter, Value value) {
+std::pair<Type, Value> printfPromoteValue(RewriterBase &rewriter, Value value,
+                                          bool isSigned) {
   auto *context = rewriter.getContext();
   auto type = value.getType();
   Value newOp = value;
   Type newType = type;
   auto loc = UnknownLoc::get(context);
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
 
-  bool isUnsigned = type.isUnsignedInteger();
   if (type.isIntOrIndex() && type.getIntOrFloatBitWidth() < 32) {
-    if (isUnsigned) {
-      newType = ui32_ty;
-      newOp = zext(newType, value);
+    newType = i32_ty;
+    if (isSigned) {
+      newOp = b.sext(newType, value);
     } else {
-      newType = i32_ty;
-      newOp = sext(newType, value);
+      newOp = b.zext(newType, value);
     }
   } else if (type.isBF16() || type.isF16() || type.isF32()) {
     newType = f64_ty;
-    newOp = fpext(newType, value);
+    newOp = b.fpext(newType, value);
   }
 
   return {newType, newOp};
@@ -90,22 +87,24 @@ namespace mlir::triton::NVIDIA {
 
 // Check if the reduction can use a redux op and return the kind.
 static std::optional<NVVM::ReduxKind> matchReduxKind(triton::ReduceOp op,
-                                                     int computeCapability) {
+                                                     int computeCapability,
+                                                     bool &useNanQualifier) {
+  useNanQualifier = false;
   if (computeCapability < 80)
     return std::nullopt;
-  if (op.getNumOperands() != 1 || op.getNumResults() != 1)
+  Operation *reduceOp = op.getSingleCombiner();
+  if (!reduceOp)
     return std::nullopt;
-  Block *block = &(*op.getCombineOp().begin());
-  Operation *yield = block->getTerminator();
-  Operation *reduceOp = yield->getOperand(0).getDefiningOp();
-  if (!reduceOp || reduceOp->getNumOperands() != 2 ||
-      reduceOp->getNumResults() != 1)
-    return std::nullopt;
+  if (computeCapability == 100 && reduceOp->getResultTypes()[0].isF32()) {
+    if (isa<arith::MinimumFOp, arith::MaximumFOp>(reduceOp))
+      useNanQualifier = true;
+    if (isa<arith::MaxNumFOp, arith::MaximumFOp>(reduceOp))
+      return NVVM::ReduxKind::FMAX;
+    if (isa<arith::MinNumFOp, arith::MinimumFOp>(reduceOp))
+      return NVVM::ReduxKind::FMIN;
+  }
   auto intType = dyn_cast<IntegerType>(reduceOp->getResultTypes()[0]);
   if (!intType || intType.getWidth() > 32)
-    return std::nullopt;
-  if (reduceOp->getOperand(0) != block->getArgument(0) ||
-      reduceOp->getOperand(1) != block->getArgument(1))
     return std::nullopt;
   if (isa<arith::AddIOp>(reduceOp))
     return NVVM::ReduxKind::ADD;
@@ -137,18 +136,25 @@ Value TargetInfo::getClusterCTAId(RewriterBase &rewriter, Location loc) const {
 
 Value TargetInfo::ballot(RewriterBase &rewriter, Location loc, Type type,
                          Value cmp) const {
-  Value threadMask = int_val(type.getIntOrFloatBitWidth(), -1);
-  return rewriter.create<NVVM::VoteBallotOp>(loc, type, threadMask, cmp);
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Value threadMask = b.int_val(type.getIntOrFloatBitWidth(), -1);
+  return rewriter.create<NVVM::VoteSyncOp>(loc, type, threadMask, cmp,
+                                           NVVM::VoteSyncKind::ballot);
+}
+
+void TargetInfo::barrier(Location loc, RewriterBase &rewriter,
+                         bool isWarpSync) const {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  if (isWarpSync) {
+    rewriter.create<NVVM::SyncWarpOp>(loc, b.i32_val(0xffffffff));
+  } else {
+    b.barrier();
+  }
 }
 
 static Value mapa(RewriterBase &rewriter, Location loc, Value ptr, Value ctaid,
                   Value pred) {
-  PTXBuilder builder;
-  (*builder.create<>("mapa.shared::cluster.u32"))(
-      builder.newOperand("=r"), //
-      builder.newAddrOperand(ptr, "r"), builder.newAddrOperand(ctaid, "r"))
-      .predicate(pred, "b");
-  return builder.launch(rewriter, loc, i32_ty, /*hasSideEffects=*/false);
+  return rewriter.create<NVVM::MapaOp>(loc, ptr.getType(), ptr, ctaid);
 }
 
 static std::string getConstraintForBitwidth(unsigned bitwidth) {
@@ -167,7 +173,7 @@ static std::string getConstraintForBitwidth(unsigned bitwidth) {
 
 static bool isConstantTruePred(Value pred) {
   if (auto constOp = pred.getDefiningOp<LLVM::ConstantOp>()) {
-    return cast<IntegerAttr>(constOp.getValue()).getInt() != 0;
+    return cast<IntegerAttr>(constOp.getValue()).getInt() == -1;
   }
   return false;
 }
@@ -175,6 +181,7 @@ static bool isConstantTruePred(Value pred) {
 void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
                               std::optional<Value> ctaId, Value val,
                               Value pred) const {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   MLIRContext *ctx = rewriter.getContext();
   auto ptrTy = cast<LLVM::LLVMPointerType>(ptr.getType());
   assert(ptrTy.getAddressSpace() == 3 && "Invalid addr space for load_dsmem");
@@ -196,7 +203,7 @@ void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
            "don't know how to load/store vectors of sub-byte elems");
     SmallVector<Value> vals = unpackLLVector(loc, val, rewriter);
     for (Value &v : vals) {
-      v = zext(int_ty(8), bitcast(v, int_ty(elemBitwidth)));
+      v = b.zext(int_ty(8), b.bitcast(v, int_ty(elemBitwidth)));
     }
     storeDShared(rewriter, loc, ptr, ctaId, packLLVector(loc, vals, rewriter),
                  pred);
@@ -206,7 +213,7 @@ void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
   if (!elemTy.isInteger()) {
     SmallVector<Value> vals = unpackLLVector(loc, val, rewriter);
     for (Value &v : vals) {
-      v = bitcast(v, int_ty(elemBitwidth));
+      v = b.bitcast(v, int_ty(elemBitwidth));
     }
     storeDShared(rewriter, loc, ptr, ctaId, packLLVector(loc, vals, rewriter),
                  pred);
@@ -227,7 +234,7 @@ void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
       Value v = packLLVector(
           loc, ArrayRef(oldVals).slice(i * elemsPerPack, elemsPerPack),
           rewriter);
-      newVals.push_back(bitcast(v, i32_ty));
+      newVals.push_back(b.bitcast(v, i32_ty));
     }
     storeDShared(rewriter, loc, ptr, ctaId,
                  packLLVector(loc, newVals, rewriter), pred);
@@ -242,8 +249,8 @@ void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
     auto newVecTy = vec_ty(elemTy, maxVec);
     SmallVector<Value> vals = unpackLLVector(loc, val, rewriter);
     for (int i = 0; i < vec / maxVec; i++) {
-      auto newPtr = gep(ptr.getType(), elemTy, ptr, i32_val(i * maxVec),
-                        /*inbounds=*/true);
+      auto newPtr = b.gep(ptr.getType(), elemTy, ptr, b.i32_val(i * maxVec),
+                          LLVM::GEPNoWrapFlags::inbounds);
       storeDShared(
           rewriter, loc, newPtr, ctaId,
           packLLVector(loc, ArrayRef(vals).slice(i * maxVec, maxVec), rewriter),
@@ -271,24 +278,29 @@ void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
                 .b(elemBitwidth);
   auto *ptrOpr = builder.newAddrOperand(ptr, "r");
 
-  PTXBuilder::Operand *valOpr;
-  std::string constraint = getConstraintForBitwidth(elemBitwidth);
-  if (vec > 1) {
-    SmallVector<std::pair<Value, std::string>> vecVals;
-    for (int i = 0; i < vec; i++) {
-      vecVals.push_back({extract_element(val, i32_val(i)), constraint});
-    }
-    valOpr = builder.newListOperand(vecVals);
+  if (isConstantTruePred(pred)) {
+    b.store(val, ptr, /*align=*/vec * elemBitwidth / 8);
   } else {
-    valOpr = builder.newOperand(val, constraint);
+    PTXBuilder::Operand *valOpr;
+    std::string constraint = getConstraintForBitwidth(elemBitwidth);
+    if (vec > 1) {
+      SmallVector<std::pair<Value, std::string>> vecVals;
+      for (int i = 0; i < vec; i++) {
+        vecVals.push_back({b.extract_element(val, b.i32_val(i)), constraint});
+      }
+      valOpr = builder.newListOperand(vecVals);
+    } else {
+      valOpr = builder.newOperand(val, constraint);
+    }
+    st(ptrOpr, valOpr).predicate(pred, "b");
+    builder.launch(rewriter, loc, void_ty(ctx));
   }
-  st(ptrOpr, valOpr).predicate(pred, "b");
-  builder.launch(rewriter, loc, void_ty(ctx));
 }
 
 Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
                               std::optional<Value> ctaId, Type loadTy,
-                              Value pred) const {
+                              Value pred, Operation *localLoadOp) const {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   MLIRContext *ctx = rewriter.getContext();
   auto ptrTy = cast<LLVM::LLVMPointerType>(ptr.getType());
   assert(ptrTy.getAddressSpace() == 3 && "Invalid addr space for load_dsmem");
@@ -313,7 +325,7 @@ Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
     SmallVector<Value> vals = unpackLLVector(
         loc, loadDShared(rewriter, loc, ptr, ctaId, int_ty(8), pred), rewriter);
     assert(vals.size() == 1);
-    return bitcast(trunc(int_ty(elemBitwidth), vals[0]), elemTy);
+    return b.bitcast(b.trunc(int_ty(elemBitwidth), vals[0]), elemTy);
   }
 
   // We only know how to load integers.
@@ -322,7 +334,7 @@ Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
     SmallVector<Value> vals = unpackLLVector(
         loc, loadDShared(rewriter, loc, ptr, ctaId, newLoadTy, pred), rewriter);
     for (Value &v : vals) {
-      v = bitcast(v, elemTy);
+      v = b.bitcast(v, elemTy);
     }
     return packLLVector(loc, vals, rewriter);
   }
@@ -339,7 +351,7 @@ Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
     // Unpack the b32's into the original vector type.
     SmallVector<Value> vals;
     for (Value v : unpackLLVector(loc, res, rewriter)) {
-      Value vv = bitcast(v, vec_ty(elemTy, 32 / elemBitwidth));
+      Value vv = b.bitcast(v, vec_ty(elemTy, 32 / elemBitwidth));
       for (Value vvv : unpackLLVector(loc, vv, rewriter)) {
         vals.push_back(vvv);
       }
@@ -354,8 +366,8 @@ Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
 
     SmallVector<Value> vals;
     for (int i = 0; i < vec / maxVec; i++) {
-      auto newPtr = gep(ptr.getType(), elemTy, ptr, i32_val(i * maxVec),
-                        /*inbounds=*/true);
+      auto newPtr = b.gep(ptr.getType(), elemTy, ptr, b.i32_val(i * maxVec),
+                          LLVM::GEPNoWrapFlags::inbounds);
       auto newVal = loadDShared(rewriter, loc, newPtr, ctaId,
                                 vec_ty(elemTy, maxVec), pred);
       for (Value v : unpackLLVector(loc, newVal, rewriter)) {
@@ -387,13 +399,13 @@ Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
   if (isConstantTruePred(pred)) {
     Type resultTy = vec == 1 ? Type(int_ty(elemBitwidth))
                              : Type(vec_ty(int_ty(elemBitwidth), vec));
-    load = load(resultTy, ptr);
+    load = b.load(resultTy, ptr, /*align=*/vec * elemBitwidth / 8);
     if (vec > 1) {
       Type structTy = struct_ty(SmallVector<Type>(vec, int_ty(elemBitwidth)));
-      Value structValue = undef(structTy);
+      Value structValue = b.undef(structTy);
       for (int i = 0; i < vec; i++) {
-        structValue = insert_val(structTy, structValue,
-                                 extract_element(load, i32_val(i)), i);
+        structValue = b.insert_val(structTy, structValue,
+                                   b.extract_element(load, b.i32_val(i)), i);
       }
       load = structValue;
     }
@@ -433,69 +445,60 @@ Value TargetInfo::shuffleIdx(RewriterBase &rewriter, Location loc, Value val,
   return LLVM::NVIDIA::shuffleIdx(loc, rewriter, val, i);
 }
 
+Value TargetInfo::permute(RewriterBase &rewriter, Location loc, Value a,
+                          Value b, Value selector) const {
+  return LLVM::NVIDIA::permute(loc, rewriter, a, b, selector);
+}
+
 Value TargetInfo::programId(RewriterBase &rewriter, Location loc,
-                            ModuleOp moduleOp, int axis) const {
+                            ModuleOp moduleOp, ProgramIDDim axis) const {
   return LLVM::NVIDIA::llGetPid(loc, rewriter, moduleOp, axis);
 }
 bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
                             SmallVector<Value> &acc, triton::ReduceOp op,
                             unsigned numLaneToReduce,
                             unsigned interleave) const {
-  if (auto kind = matchReduxKind(op, computeCapability)) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  bool useNanQualifier = false;
+  if (auto kind = matchReduxKind(op, computeCapability, useNanQualifier)) {
     // Based on benchmarking on A100 redux op gives a speed up only when doing
     // a single reduction (not partitioned) and when the mask is static.
     // Therefore we currently only enable it to reduce across all the lanes.
     if (numLaneToReduce == 32) {
       assert(acc.size() == 1);
-      Value mask = i32_val(0xFFFFFFFF);
+      Value mask = b.i32_val(0xFFFFFFFF);
       // Even though we currently don't use redux for partitioned reduction
       // the code below supports it in case we want to tweak the heuristic.
       if (numLaneToReduce < 32) {
         // For partitioned reduction we need to calculate the mask so that
         // each group of numLaneToReduce threads has the correct mask.
         unsigned bitmask = (1 << numLaneToReduce) - 1;
-        Value threadId = getThreadId(rewriter, loc);
-        Value laneId = urem(threadId, i32_val(32));
-        mask = shl(i32_val(bitmask),
-                   and_(laneId, i32_val(~(numLaneToReduce - 1))));
+        Value laneId = getLaneId(rewriter, loc);
+        mask = b.shl(b.i32_val(bitmask),
+                     b.and_(laneId, b.i32_val(~(numLaneToReduce - 1))));
       }
       for (unsigned i = 0; i < acc.size(); ++i) {
-        unsigned bitwidth = cast<IntegerType>(acc[i].getType()).getWidth();
-        if (bitwidth < 32) {
-          if (*kind == NVVM::ReduxKind::MIN || *kind == NVVM::ReduxKind::MAX)
-            acc[i] = sext(i32_ty, acc[i]);
-          else
-            acc[i] = zext(i32_ty, acc[i]);
+        unsigned bitwidth = acc[i].getType().getIntOrFloatBitWidth();
+        if (acc[i].getType().isInteger()) {
+          if (bitwidth < 32) {
+            if (*kind == NVVM::ReduxKind::MIN || *kind == NVVM::ReduxKind::MAX)
+              acc[i] = b.sext(i32_ty, acc[i]);
+            else
+              acc[i] = b.zext(i32_ty, acc[i]);
+          }
         }
         acc[i] = rewriter.create<NVVM::ReduxOp>(loc, acc[i].getType(), acc[0],
-                                                *kind, mask);
-        if (bitwidth < 32)
-          acc[i] = trunc(int_ty(bitwidth), acc[i]);
+                                                *kind, mask, /*abs=*/false,
+                                                /*nan=*/useNanQualifier);
+        if (acc[i].getType().isInteger()) {
+          if (bitwidth < 32)
+            acc[i] = b.trunc(int_ty(bitwidth), acc[i]);
+        }
       }
       return true;
     }
   }
   return false;
-}
-
-void TargetInfo::storeMatrixShared(RewriterBase &rewriter, Location loc,
-                                   Value ptr, Value val) const {
-  auto vals = unpackLLVector(loc, val, rewriter);
-  // Ensure input consists of 4 vectors, each holding 2 elements of 16 bits
-  assert(vals[0].getType().getIntOrFloatBitWidth() == 16 &&
-         "stmatrix requires elements to be 16-bit integers or floats");
-  assert(vals.size() == 8 &&
-         "stmatrix requires exactly 8 elements in the input vector");
-  Type packedTy = vec_ty(vals[0].getType(), 2);
-  SmallVector<Value> inputs;
-  for (int i = 0; i < 4; i++) {
-    Value input = undef(packedTy);
-    for (int j = 0; j < 2; j++) {
-      input = insert_element(packedTy, input, vals[i * 2 + j], i32_val(j));
-    }
-    inputs.push_back(bitcast(input, i32_ty));
-  }
-  rewriter.create<triton::nvgpu::StoreMatrixOp>(loc, ptr, inputs);
 }
 
 std::string TargetInfo::getMulhiFuncName(Type resultElementTy) const {
@@ -505,25 +508,28 @@ std::string TargetInfo::getMulhiFuncName(Type resultElementTy) const {
 }
 
 void TargetInfo::printf(RewriterBase &rewriter, Value formatStrStart,
-                        int /*formatStrByteCount*/, ValueRange args) const {
+                        int /*formatStrByteCount*/, ValueRange args,
+                        ArrayRef<bool> isSigned) const {
   auto *ctx = rewriter.getContext();
   Type ptr = ptr_ty(ctx);
   auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
   auto funcOp = getVprintfDeclaration(rewriter);
   auto loc = UnknownLoc::get(ctx);
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
 
-  Value one = i32_val(1);
-  Value zero = i32_val(0);
+  Value one = b.i32_val(1);
+  Value zero = b.i32_val(0);
 
-  Value bufferPtr = null(ptr);
+  Value bufferPtr = b.null(ptr);
 
   SmallVector<Value, 16> newArgs;
   if (args.size() >= 1) {
     SmallVector<Type> argTypes;
-    for (auto arg : args) {
+    for (auto [i, arg] : llvm::enumerate(args)) {
       Type newType;
       Value newArg;
-      std::tie(newType, newArg) = printfPromoteValue(rewriter, arg);
+      std::tie(newType, newArg) = printfPromoteValue(
+          rewriter, arg, isSigned.empty() ? true : isSigned[i]);
       argTypes.push_back(newType);
       newArgs.push_back(newArg);
     }
@@ -534,20 +540,20 @@ void TargetInfo::printf(RewriterBase &rewriter, Value formatStrStart,
                                         /*alignment=*/0);
 
     for (const auto &entry : llvm::enumerate(newArgs)) {
-      auto index = i32_val(entry.index());
+      auto index = b.i32_val(entry.index());
       auto fieldPtr =
-          gep(ptr_ty(ctx), structTy, allocated, ArrayRef<Value>{zero, index});
-      store(entry.value(), fieldPtr);
+          b.gep(ptr_ty(ctx), structTy, allocated, ArrayRef<Value>{zero, index});
+      b.store(entry.value(), fieldPtr);
     }
-    bufferPtr = bitcast(allocated, ptr);
+    bufferPtr = b.bitcast(allocated, ptr);
   }
 
   SmallVector<Value> operands{formatStrStart, bufferPtr};
-  call(funcOp, operands);
+  b.call(funcOp, operands);
 }
 
-void TargetInfo::printf(RewriterBase &rewriter, StringRef msg,
-                        ValueRange args) const {
+void TargetInfo::printf(RewriterBase &rewriter, StringRef msg, ValueRange args,
+                        ArrayRef<bool> isSigned) const {
   assert(!msg.empty() && "printf with empty string not supported");
   llvm::SmallString<64> msgNewline(msg);
   msgNewline.push_back('\n');
@@ -555,12 +561,13 @@ void TargetInfo::printf(RewriterBase &rewriter, StringRef msg,
   Value msgValue =
       LLVM::addStringToModule(UnknownLoc::get(rewriter.getContext()), rewriter,
                               "printfFormat_", msgNewline);
-  printf(rewriter, msgValue, msgNewline.size_in_bytes(), args);
+  printf(rewriter, msgValue, msgNewline.size_in_bytes(), args, isSigned);
 }
 
 void TargetInfo::assertFail(RewriterBase &rewriter, Location loc,
                             StringRef message, StringRef file, StringRef func,
                             int line) const {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto funcOp = getAssertfailDeclaration(rewriter);
   auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
   llvm::SmallString<64> messageString(message), fileString(file),
@@ -574,14 +581,26 @@ void TargetInfo::assertFail(RewriterBase &rewriter, Location loc,
       LLVM::addStringToModule(loc, rewriter, "assertFile_", fileString);
   Value funcStringVal =
       LLVM::addStringToModule(loc, rewriter, "assertFunc_", funcString);
-  Value lineNumber = i32_val(line);
-  Value charSize = int_val(sizeof(size_t) * 8, sizeof(char));
+  Value lineNumber = b.i32_val(line);
+  Value charSize = b.int_val(sizeof(size_t) * 8, sizeof(char));
   SmallVector<Value> operands = {messageStringVal, fileStringVal, lineNumber,
                                  funcStringVal, charSize};
-  call(funcOp, operands);
+  b.call(funcOp, operands);
 }
 
 int TargetInfo::getSharedAddressSpace() const { return 3; }
+
+int TargetInfo::getAddressSpace(Attribute addressSpace) const {
+  int spaceId = 0;
+  if (isa<triton::gpu::SharedMemorySpaceAttr,
+          triton::nvidia_gpu::TensorMemorySpaceAttr>(addressSpace)) {
+    spaceId = 3;
+  } else {
+    llvm::report_fatal_error(
+        "Only support SharedMemorySpace, TensorMemorySpace for now");
+  }
+  return spaceId;
+}
 
 bool TargetInfo::supportVectorizedAtomics() const {
   return computeCapability >= 90 && ptxVersion >= 81;

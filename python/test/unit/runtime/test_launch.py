@@ -37,9 +37,9 @@ def test_metadata() -> None:
         pass
 
     # launch kernel
-    triton.compiler.CompiledKernel.launch_enter_hook = hook
+    triton.knobs.runtime.launch_enter_hook = hook
     kernel[(1, 3, 2)](6)
-    triton.compiler.CompiledKernel.launch_enter_hook = None
+    triton.knobs.runtime.launch_enter_hook = None
     assert used_hook
 
 

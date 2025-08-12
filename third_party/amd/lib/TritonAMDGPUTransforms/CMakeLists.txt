@@ -1,15 +1,26 @@
 add_triton_library(TritonAMDGPUTransforms
   AccelerateAMDMatmul.cpp
+  BlockPingpong.cpp
   CanonicalizePointers.cpp
+  CoalesceAsyncCopy.cpp
   ConvertToBufferOps.cpp
   OptimizeEpilogue.cpp
+  HoistLayoutConversions.cpp
   ReorderInstructions.cpp
-  StreamPipelineV2.cpp
+  StreamPipeline.cpp
   MfmaGroup.cpp
+  WmmaGroup.cpp
+  InThreadTranspose.cpp
+  FoldTrueCmpIOp.cpp
+  UpdateAsyncWaitCount.cpp
+  Utility.cpp
 
   DEPENDS
+  TritonAMDGPUIR
   TritonAMDGPUTransformsIncGen
   TritonGPUIR
+  TritonAMDUtils
+  TritonAMDAnalysis
 )
 
 target_include_directories(TritonAMDGPUTransforms PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/../../include)

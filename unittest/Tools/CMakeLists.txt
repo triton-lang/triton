@@ -1,5 +1,5 @@
 add_triton_ut(
 	NAME LinearLayout
-	SRCS LinearLayoutTest.cpp
+	SRCS LayoutUtilsTest.cpp LinearLayoutTest.cpp
 	LIBS TritonTools
 )

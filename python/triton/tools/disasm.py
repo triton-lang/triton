@@ -75,14 +75,13 @@ def get_sass(cubin_asm, fun=None):
     return sass
 
 
-@functools.lru_cache()
 def path_to_cuobjdump():
-    from triton.backends.nvidia.compiler import _path_to_binary
-    return _path_to_binary("cuobjdump")
+    from triton import knobs
+    return knobs.nvidia.cuobjdump.path
 
 
 def extract(file_path, fun):
-    cuobjdump, _ = path_to_cuobjdump()
+    cuobjdump = path_to_cuobjdump()
     if fun is None:
         sass_str = subprocess.check_output([cuobjdump, "-sass", file_path])
     else:

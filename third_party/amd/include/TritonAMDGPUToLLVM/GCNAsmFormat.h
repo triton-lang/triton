@@ -20,8 +20,8 @@
  * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
-#ifndef TRITON_CONVERSION_TRITON_GPU_TO_LLVM_GCN_FORMAT_H_
-#define TRITON_CONVERSION_TRITON_GPU_TO_LLVM_GCN_FORMAT_H_
+#ifndef TRITON_THIRD_PARTY_AMD_INCLUDE_TRITONAMDGPUTOLLVM_GCNASMFORMAT_H_
+#define TRITON_THIRD_PARTY_AMD_INCLUDE_TRITONAMDGPUTOLLVM_GCNASMFORMAT_H_
 
 #include "mlir/IR/Value.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -31,10 +31,13 @@
 #include <string>
 
 namespace mlir {
+
 class ConversionPatternRewriter;
 class Location;
 
-namespace triton {
+} // namespace mlir
+
+namespace mlir::triton {
 using llvm::StringRef;
 
 class GCNInstr;
@@ -229,9 +232,8 @@ struct GCNBuilder {
 
   std::string dump() const;
 
-  mlir::Value launch(ConversionPatternRewriter &rewriter, Location loc,
-                     Type resTy, bool hasSideEffect = true,
-                     bool isAlignStack = false,
+  mlir::Value launch(RewriterBase &rewriter, Location loc, Type resTy,
+                     bool hasSideEffect = true, bool isAlignStack = false,
                      ArrayRef<Attribute> attrs = {}) const;
 
 private:
@@ -397,7 +399,6 @@ struct GCNMemInstr : public GCNInstrBase<GCNMemInstr> {
   }
 };
 
-} // namespace triton
-} // namespace mlir
+} // namespace mlir::triton
 
-#endif // TRITON_CONVERSION_TRITON_GPU_TO_LLVM_ASM_FORMAT_H_
+#endif // TRITON_THIRD_PARTY_AMD_INCLUDE_TRITONAMDGPUTOLLVM_GCNASMFORMAT_H_

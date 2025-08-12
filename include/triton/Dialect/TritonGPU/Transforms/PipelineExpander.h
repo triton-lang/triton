@@ -25,7 +25,7 @@ namespace triton {
 
 /// Options to dictate how loops should be pipelined.
 struct PipeliningOption {
-  /// Lambda returning all the operation in the forOp, with their stage, in the
+  /// Lambda returning all the operations in the forOp, with their stage, in the
   /// order picked for the pipelined loop.
   using GetScheduleFnType = std::function<void(
       scf::ForOp, std::vector<std::pair<Operation *, unsigned>> &)>;
@@ -54,8 +54,14 @@ struct PipeliningOption {
   /// Control whether the transformation checks that the number of iterations is
   /// greater or equal to the number of stages and skip the transformation if
   /// this is not the case. If the loop is dynamic and this is set to true the
-  /// pipeliner will have to predicate operations in the the prologue/epilogue.
+  /// pipeliner will have to predicate operations in the prologue/epilogue.
   bool supportDynamicLoops = false;
+
+  /// If set, use this function to emit the predicate stage ops instead of the
+  /// default one.
+  using EmitPredicateStageFnType = std::function<Value(
+      RewriterBase &, Value, Value, Value, uint64_t, uint64_t)>;
+  EmitPredicateStageFnType emitPredicateStageFn = nullptr;
 
   // Callback to predicate operations when the prologue or epilogue are not
   // peeled. This takes the original operation, an i1 predicate value and the
@@ -94,6 +100,10 @@ struct PipeliningOption {
 FailureOr<scf::ForOp> pipelineForLoop(RewriterBase &rewriter, scf::ForOp forOp,
                                       const PipeliningOption &options,
                                       bool *modifiedIR = nullptr);
+
+Value emitPredicateForStage(RewriterBase &rewriter, Value inductionVar,
+                            Value upperBound, Value step, uint64_t maxStage,
+                            uint64_t stage);
 
 } // namespace triton
 } // namespace mlir

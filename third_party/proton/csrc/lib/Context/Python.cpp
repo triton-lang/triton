@@ -71,7 +71,7 @@ std::string unpackPyobject(PyObject *pyObject) {
 
 } // namespace
 
-std::vector<Context> PythonContextSource::getContexts() {
+std::vector<Context> PythonContextSource::getContextsImpl() {
   pybind11::gil_scoped_acquire gil;
 
   PyFrameObject *frame = PyEval_GetFrame();
@@ -93,5 +93,7 @@ std::vector<Context> PythonContextSource::getContexts() {
   std::reverse(contexts.begin(), contexts.end());
   return contexts;
 }
+
+size_t PythonContextSource::getDepth() { return getContextsImpl().size(); }
 
 } // namespace proton

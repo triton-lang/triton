@@ -266,14 +266,14 @@ __device__ static inline int __mul24(int x, int y) {
 }
 
 __device__ static inline long long __mul64hi(long long int x, long long int y) {
-    ulong x0 = (ulong)x & 0xffffffffUL;
-    long x1 = x >> 32;
-    ulong y0 = (ulong)y & 0xffffffffUL;
-    long y1 = y >> 32;
-    ulong z0 = x0*y0;
-    long t = x1*y0 + (z0 >> 32);
-    long z1 = t & 0xffffffffL;
-    long z2 = t >> 32;
+    unsigned long long x0 = (unsigned long long)x & 0xffffffffUL;
+    long long x1 = x >> 32;
+    unsigned long long y0 = (unsigned long long)y & 0xffffffffUL;
+    long long y1 = y >> 32;
+    unsigned long long z0 = x0*y0;
+    long long t = x1*y0 + (z0 >> 32);
+    long long z1 = t & 0xffffffffL;
+    long long z2 = t >> 32;
     z1 = x0*y1 + z1;
     return x1*y1 + z2 + (z1 >> 32);
 }
@@ -300,14 +300,14 @@ __device__ static inline int __umul24(unsigned int x, unsigned int y) {
 
 __device__
 static inline unsigned long long __umul64hi(unsigned long long int x, unsigned long long int y) {
-    ulong x0 = x & 0xffffffffUL;
-    ulong x1 = x >> 32;
-    ulong y0 = y & 0xffffffffUL;
-    ulong y1 = y >> 32;
-    ulong z0 = x0*y0;
-    ulong t = x1*y0 + (z0 >> 32);
-    ulong z1 = t & 0xffffffffUL;
-    ulong z2 = t >> 32;
+    unsigned long long x0 = x & 0xffffffffUL;
+    unsigned long long x1 = x >> 32;
+    unsigned long long y0 = y & 0xffffffffUL;
+    unsigned long long y1 = y >> 32;
+    unsigned long long z0 = x0*y0;
+    unsigned long long t = x1*y0 + (z0 >> 32);
+    unsigned long long z1 = t & 0xffffffffUL;
+    unsigned long long z2 = t >> 32;
     z1 = x0*y1 + z1;
     return x1*y1 + z2 + (z1 >> 32);
 }
@@ -322,11 +322,6 @@ __device__ static inline unsigned int __usad(unsigned int x, unsigned int y, uns
     return __ockl_sadd_u32(x, y, z);
 }
 
-__device__ static inline unsigned int __lane_id() {
-    return  __builtin_amdgcn_mbcnt_hi(
-        -1, __builtin_amdgcn_mbcnt_lo(-1, 0));
-}
-
 __device__
 static inline unsigned int __mbcnt_lo(unsigned int x, unsigned int y) {return __builtin_amdgcn_mbcnt_lo(x,y);};
 
@@ -339,6 +334,7 @@ HIP specific device functions
 
 #if !defined(__HIPCC_RTC__)
 #include "amd_warp_functions.h"
+#include "amd_warp_sync_functions.h"
 #endif
 
 #define MASK1 0x00ff00ff
@@ -687,34 +683,6 @@ void __named_sync() { __builtin_amdgcn_s_barrier(); }
 
 #endif // __HIP_DEVICE_COMPILE__
 
-// warp vote function __all __any __ballot
-__device__
-inline
-int __all(int predicate) {
-    return __ockl_wfall_i32(predicate);
-}
-
-__device__
-inline
-int __any(int predicate) {
-    return __ockl_wfany_i32(predicate);
-}
-
-// XXX from llvm/include/llvm/IR/InstrTypes.h
-#define ICMP_NE 33
-
-__device__
-inline
-unsigned long long int __ballot(int predicate) {
-    return __builtin_amdgcn_uicmp(predicate, 0, ICMP_NE);
-}
-
-__device__
-inline
-unsigned long long int __ballot64(int predicate) {
-    return __builtin_amdgcn_uicmp(predicate, 0, ICMP_NE);
-}
-
 // hip.amdgcn.bc - lanemask
 __device__
 inline
@@ -877,6 +845,10 @@ int __syncthreads_or(int predicate)
 #if (defined(__GFX10__) || defined(__GFX11__))
   #define HW_ID_WGP_ID_SIZE   4
   #define HW_ID_WGP_ID_OFFSET 10
+  #if (defined(__AMDGCN_CUMODE__))
+    #define HW_ID_CU_ID_SIZE    1
+    #define HW_ID_CU_ID_OFFSET  8
+  #endif
 #else
   #define HW_ID_CU_ID_SIZE    4
   #define HW_ID_CU_ID_OFFSET  8
@@ -933,6 +905,10 @@ unsigned __smid(void)
             GETREG_IMMED(HW_ID_WGP_ID_SIZE - 1, HW_ID_WGP_ID_OFFSET, HW_ID));
       unsigned sa_id = __builtin_amdgcn_s_getreg(
             GETREG_IMMED(HW_ID_SA_ID_SIZE - 1, HW_ID_SA_ID_OFFSET, HW_ID));
+      #if (defined(__AMDGCN_CUMODE__))
+        unsigned cu_id = __builtin_amdgcn_s_getreg(
+            GETREG_IMMED(HW_ID_CU_ID_SIZE - 1, HW_ID_CU_ID_OFFSET, HW_ID));
+      #endif
     #else
       #if (defined(__gfx940__) || defined(__gfx941__) || defined(__gfx942__))
       unsigned xcc_id = __builtin_amdgcn_s_getreg(
@@ -945,6 +921,9 @@ unsigned __smid(void)
       unsigned temp = se_id;
       temp = (temp << HW_ID_SA_ID_SIZE) | sa_id;
       temp = (temp << HW_ID_WGP_ID_SIZE) | wgp_id;
+      #if (defined(__AMDGCN_CUMODE__))
+        temp = (temp << HW_ID_CU_ID_SIZE) | cu_id;
+      #endif
       return temp;
       //TODO : CU Mode impl
     #elif (defined(__gfx940__) || defined(__gfx941__) || defined(__gfx942__))

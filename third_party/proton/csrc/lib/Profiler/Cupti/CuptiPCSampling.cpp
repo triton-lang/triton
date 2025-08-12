@@ -15,10 +15,10 @@ namespace {
 
 uint64_t getCubinCrc(const char *cubin, size_t size) {
   CUpti_GetCubinCrcParams cubinCrcParams = {
-      .size = CUpti_GetCubinCrcParamsSize,
-      .cubinSize = size,
-      .cubin = cubin,
-      .cubinCrc = 0,
+      /*size=*/CUpti_GetCubinCrcParamsSize,
+      /*cubinSize=*/size,
+      /*cubin=*/cubin,
+      /*cubinCrc=*/0,
   };
   cupti::getCubinCrc<true>(&cubinCrcParams);
   return cubinCrcParams.cubinCrc;
@@ -27,10 +27,10 @@ uint64_t getCubinCrc(const char *cubin, size_t size) {
 size_t getNumStallReasons(CUcontext context) {
   size_t numStallReasons = 0;
   CUpti_PCSamplingGetNumStallReasonsParams numStallReasonsParams = {
-      .size = CUpti_PCSamplingGetNumStallReasonsParamsSize,
-      .pPriv = NULL,
-      .ctx = context,
-      .numStallReasons = &numStallReasons};
+      /*size=*/CUpti_PCSamplingGetNumStallReasonsParamsSize,
+      /*pPriv=*/NULL,
+      /*ctx=*/context,
+      /*numStallReasons=*/&numStallReasons};
   cupti::pcSamplingGetNumStallReasons<true>(&numStallReasonsParams);
   return numStallReasons;
 }
@@ -39,14 +39,14 @@ std::tuple<uint32_t, std::string, std::string>
 getSassToSourceCorrelation(const char *functionName, uint64_t pcOffset,
                            const char *cubin, size_t cubinSize) {
   CUpti_GetSassToSourceCorrelationParams sassToSourceParams = {
-      .size = CUpti_GetSassToSourceCorrelationParamsSize,
-      .cubin = cubin,
-      .functionName = functionName,
-      .cubinSize = cubinSize,
-      .lineNumber = 0,
-      .pcOffset = pcOffset,
-      .fileName = NULL,
-      .dirName = NULL,
+      /*size=*/CUpti_GetSassToSourceCorrelationParamsSize,
+      /*cubin=*/cubin,
+      /*functionName=*/functionName,
+      /*cubinSize=*/cubinSize,
+      /*lineNumber=*/0,
+      /*pcOffset=*/pcOffset,
+      /*fileName=*/NULL,
+      /*dirName=*/NULL,
   };
   // Get source can fail if the line mapping is not available in the cubin so we
   // don't check the return value
@@ -77,12 +77,12 @@ getStallReasonNamesAndIndices(CUcontext context, size_t numStallReasons) {
       static_cast<uint32_t *>(std::calloc(numStallReasons, sizeof(uint32_t)));
   // Initialize the names with 128 characters to avoid buffer overflow
   CUpti_PCSamplingGetStallReasonsParams stallReasonsParams = {
-      .size = CUpti_PCSamplingGetStallReasonsParamsSize,
-      .pPriv = NULL,
-      .ctx = context,
-      .numStallReasons = numStallReasons,
-      .stallReasonIndex = stallReasonIndices,
-      .stallReasons = stallReasonNames,
+      /*size=*/CUpti_PCSamplingGetStallReasonsParamsSize,
+      /*pPriv=*/NULL,
+      /*ctx=*/context,
+      /*numStallReasons=*/numStallReasons,
+      /*stallReasonIndex=*/stallReasonIndices,
+      /*stallReasons=*/stallReasonNames,
   };
   cupti::pcSamplingGetStallReasons<true>(&stallReasonsParams);
   return std::make_pair(stallReasonNames, stallReasonIndices);
@@ -135,17 +135,31 @@ CUpti_PCSamplingData allocPCSamplingData(size_t collectNumPCs,
   uint32_t libVersion = 0;
   cupti::getVersion<true>(&libVersion);
   size_t pcDataSize = sizeof(CUpti_PCSamplingPCData);
-  // Check cupti api version < 12.4 but cupti header version >= 12.4
-  // If so, we subtract 4 bytes from the size of CUpti_PCSamplingPCData
-  // because it introduces a new field (i.e., correlationId) at the end of the
-  // struct, which is not compatible with the previous versions.
-  if (libVersion < CUPTI_CUDA12_4_VERSION &&
-      CUPTI_API_VERSION >= CUPTI_CUDA12_4_VERSION)
-    pcDataSize -= CUPTI_CUDA12_4_PC_DATA_PADDING_SIZE;
+  // Since CUPTI 12.4, a new field (i.e., correlationId) is added to
+  // CUpti_PCSamplingPCData, which breaks the ABI compatibility.
+  // Instead of using workarounds, we emit an error message and exit the
+  // application.
+  if ((libVersion < CUPTI_CUDA12_4_VERSION &&
+       CUPTI_API_VERSION >= CUPTI_CUDA12_4_VERSION) ||
+      (libVersion >= CUPTI_CUDA12_4_VERSION &&
+       CUPTI_API_VERSION < CUPTI_CUDA12_4_VERSION)) {
+    throw std::runtime_error(
+        "[PROTON] CUPTI API version: " + std::to_string(CUPTI_API_VERSION) +
+        " and CUPTI driver version: " + std::to_string(libVersion) +
+        " are not compatible. Please set the environment variable "
+        " TRITON_CUPTI_INCLUDE_PATH and TRITON_CUPTI_LIB_PATH to resolve the "
+        "problem.");
+  }
   CUpti_PCSamplingData pcSamplingData{
-      .size = pcDataSize,
-      .collectNumPcs = collectNumPCs,
-      .pPcData = static_cast<CUpti_PCSamplingPCData *>(
+      /*size=*/sizeof(CUpti_PCSamplingData),
+      /*collectNumPcs=*/collectNumPCs,
+      /*totalSamples=*/0,
+      /*droppedSamples=*/0,
+      /*totalNumPcs=*/0,
+      /*remainingNumPcs=*/0,
+      /*rangeId=*/0,
+      /*pPcData=*/
+      static_cast<CUpti_PCSamplingPCData *>(
           std::calloc(collectNumPCs, sizeof(CUpti_PCSamplingPCData)))};
   for (size_t i = 0; i < collectNumPCs; ++i) {
     pcSamplingData.pPcData[i].stallReason =
@@ -157,36 +171,36 @@ CUpti_PCSamplingData allocPCSamplingData(size_t collectNumPCs,
 
 void enablePCSampling(CUcontext context) {
   CUpti_PCSamplingEnableParams params = {
-      .size = CUpti_PCSamplingEnableParamsSize,
-      .pPriv = NULL,
-      .ctx = context,
+      /*size=*/CUpti_PCSamplingEnableParamsSize,
+      /*pPriv=*/NULL,
+      /*ctx=*/context,
   };
   cupti::pcSamplingEnable<true>(&params);
 }
 
 void disablePCSampling(CUcontext context) {
   CUpti_PCSamplingDisableParams params = {
-      .size = CUpti_PCSamplingDisableParamsSize,
-      .pPriv = NULL,
-      .ctx = context,
+      /*size=*/CUpti_PCSamplingDisableParamsSize,
+      /*pPriv=*/NULL,
+      /*ctx=*/context,
   };
   cupti::pcSamplingDisable<true>(&params);
 }
 
 void startPCSampling(CUcontext context) {
   CUpti_PCSamplingStartParams params = {
-      .size = CUpti_PCSamplingStartParamsSize,
-      .pPriv = NULL,
-      .ctx = context,
+      /*size=*/CUpti_PCSamplingStartParamsSize,
+      /*pPriv=*/NULL,
+      /*ctx=*/context,
   };
   cupti::pcSamplingStart<true>(&params);
 }
 
 void stopPCSampling(CUcontext context) {
   CUpti_PCSamplingStopParams params = {
-      .size = CUpti_PCSamplingStopParamsSize,
-      .pPriv = NULL,
-      .ctx = context,
+      /*size=*/CUpti_PCSamplingStopParamsSize,
+      /*pPriv=*/NULL,
+      /*ctx=*/context,
   };
   cupti::pcSamplingStop<true>(&params);
 }
@@ -194,10 +208,10 @@ void stopPCSampling(CUcontext context) {
 void getPCSamplingData(CUcontext context,
                        CUpti_PCSamplingData *pcSamplingData) {
   CUpti_PCSamplingGetDataParams params = {
-      .size = CUpti_PCSamplingGetDataParamsSize,
-      .pPriv = NULL,
-      .ctx = context,
-      .pcSamplingData = pcSamplingData,
+      /*size=*/CUpti_PCSamplingGetDataParamsSize,
+      /*pPriv=*/NULL,
+      /*ctx=*/context,
+      /*pcSamplingData=*/pcSamplingData,
   };
   cupti::pcSamplingGetData<true>(&params);
 }
@@ -206,11 +220,11 @@ void setConfigurationAttribute(
     CUcontext context,
     std::vector<CUpti_PCSamplingConfigurationInfo> &configurationInfos) {
   CUpti_PCSamplingConfigurationInfoParams infoParams = {
-      .size = CUpti_PCSamplingConfigurationInfoParamsSize,
-      .pPriv = NULL,
-      .ctx = context,
-      .numAttributes = configurationInfos.size(),
-      .pPCSamplingConfigurationInfo = configurationInfos.data(),
+      /*size=*/CUpti_PCSamplingConfigurationInfoParamsSize,
+      /*pPriv=*/NULL,
+      /*ctx=*/context,
+      /*numAttributes=*/configurationInfos.size(),
+      /*pPCSamplingConfigurationInfo=*/configurationInfos.data(),
   };
   cupti::pcSamplingSetConfigurationAttribute<true>(&infoParams);
 }
@@ -366,16 +380,16 @@ void CuptiPCSampling::processPCSamplingData(ConfigureData *configureData,
         auto *stallReason = &pcData->stallReason[j];
         if (!configureData->stallReasonIndexToMetricIndex.count(
                 stallReason->pcSamplingStallReasonIndex))
-          throw std::runtime_error("Invalid stall reason index");
+          throw std::runtime_error("[PROTON] Invalid stall reason index");
         for (auto *data : dataSet) {
           auto scopeId = externId;
           if (isAPI)
-            scopeId = data->addScope(externId, lineInfo.functionName);
+            scopeId = data->addOp(externId, lineInfo.functionName);
           if (lineInfo.fileName.size())
-            scopeId = data->addScope(
+            scopeId = data->addOp(
                 scopeId, lineInfo.dirName + "/" + lineInfo.fileName + ":" +
-                             lineInfo.functionName + "@" +
-                             std::to_string(lineInfo.lineNumber));
+                             std::to_string(lineInfo.lineNumber) + "@" +
+                             lineInfo.functionName);
           auto metricKind = static_cast<PCSamplingMetric::PCSamplingMetricKind>(
               configureData->stallReasonIndexToMetricIndex
                   [stallReason->pcSamplingStallReasonIndex]);

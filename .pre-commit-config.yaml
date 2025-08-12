@@ -18,29 +18,32 @@ repos:
       - id: debug-statements
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.7.1
+    rev: v0.9.1
     hooks:
       - id: ruff
-        files: '^python/.*'
+        files: '(^python|^third_party/proton|^third_party/amd|^third_party/nvidia|^test)/.*'
         args: ["--fix", "--exit-non-zero-on-fix"]
         exclude: |
           (?x)(
-            ^python/triton/runtime/.*|
-            ^test/|
             ^docs/conf.py$
           )
 
   - repo: https://github.com/google/yapf
-    rev: "7e21823"
+    rev: "v0.43.0"
     hooks:
       - id: yapf
         args: ["-p", "-i"]
-        exclude: "python/test/unit/language/test_line_info.py"
 
   - repo: https://github.com/pre-commit/mirrors-clang-format
-    rev: v19.1.2
+    rev: v19.1.6
     hooks:
       - id: clang-format
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: "v1.15.0"
+    hooks:
+      - id: mypy
+        pass_filenames: false
 
   # Expand YAML anchors in files used by github workflows, because github can't
   # do this itself.  This lets us use anchors, which avoids code duplication.

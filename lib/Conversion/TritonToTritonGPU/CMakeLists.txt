@@ -1,4 +1,5 @@
 add_triton_library(TritonToTritonGPU
+    RelayoutTritonGPU.cpp
     TritonGPUConversion.cpp
     TritonToTritonGPUPass.cpp
 
@@ -10,6 +11,6 @@ add_triton_library(TritonToTritonGPU
     MLIRPass
     MLIRTransforms
     TritonIR
+    ProtonIR
     TritonGPUIR
-    TritonGPUTransforms
 )

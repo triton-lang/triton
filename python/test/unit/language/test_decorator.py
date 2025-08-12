@@ -23,7 +23,7 @@ def test_decorator_with_def(device):
         pass
 
     try:
-        triton.compile(triton.compiler.ASTSource(fn=kernel, signature={}, constants={}))
+        triton.compile(triton.compiler.ASTSource(fn=kernel, signature={}, constexprs={}))
     except Exception as e:
         pytest.fail(f"triton compile failed with error: {e}")
 

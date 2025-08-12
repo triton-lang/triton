@@ -63,15 +63,11 @@ def test_module_walk(device):
     backend = triton.compiler.compiler.make_backend(target)
     src = triton.compiler.compiler.ASTSource(
         fn=kernel,
-        signature={
-            kernel.arg_names[i]: kernel._type_of(kernel._key_of(arg))
-            for i, arg in enumerate(args)
-            if i not in kernel.constexprs
-        },
-        constants={kernel.arg_names[i]: arg
-                   for i, arg in enumerate(args)
-                   if not isinstance(arg, torch.Tensor)},
-        attrs=backend.get_attrs_descriptor(args, kernel.params),
+        signature={kernel.arg_names[i]: triton.runtime.jit.mangle_type(arg)
+                   for i, arg in enumerate(args)},
+        constexprs={kernel.arg_names[i]: arg
+                    for i, arg in enumerate(args)
+                    if not isinstance(arg, torch.Tensor)},
     )
 
     context = triton._C.libtriton.ir.context()
@@ -81,7 +77,7 @@ def test_module_walk(device):
     triton._C.libtriton.ir.load_dialects(context)
     backend.load_dialects(context)
 
-    ttir_module = src.make_ir(options, codegen_fns, module_map, context)
+    ttir_module = src.make_ir(target, options, codegen_fns, module_map, context)
     ttir_module.walk(walk_fn)
 
 

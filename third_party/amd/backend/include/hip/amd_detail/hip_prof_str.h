@@ -385,8 +385,8 @@ enum hip_api_id_t {
   HIP_API_ID_hipChooseDeviceR0600 = 365,
   HIP_API_ID_hipDrvGraphAddMemcpyNode = 366,
   HIP_API_ID_hipDrvGraphAddMemsetNode = 367,
-  HIP_API_ID_hipDrvGraphMemcpyNodeGetParams = 368,
-  HIP_API_ID_hipDrvGraphMemcpyNodeSetParams = 369,
+  HIP_API_ID_RESERVED_368 = 368,
+  HIP_API_ID_RESERVED_369 = 369,
   HIP_API_ID_hipGetDevicePropertiesR0600 = 370,
   HIP_API_ID_hipGraphAddExternalSemaphoresSignalNode = 371,
   HIP_API_ID_hipGraphAddExternalSemaphoresWaitNode = 372,
@@ -397,7 +397,27 @@ enum hip_api_id_t {
   HIP_API_ID_hipGraphExternalSemaphoresWaitNodeGetParams = 377,
   HIP_API_ID_hipGraphExternalSemaphoresWaitNodeSetParams = 378,
   HIP_API_ID_hipExtGetLastError = 379,
-  HIP_API_ID_LAST = 379,
+  HIP_API_ID_hipGraphAddNode = 380,
+  HIP_API_ID_hipGetProcAddress = 381,
+  HIP_API_ID_RESERVED_382 = 382,
+  HIP_API_ID_RESERVED_383 = 383,
+  HIP_API_ID_hipGraphInstantiateWithParams = 384,
+  HIP_API_ID_RESERVED_385 = 385,
+  HIP_API_ID_RESERVED_386 = 386,
+  HIP_API_ID_RESERVED_387 = 387,
+  HIP_API_ID_RESERVED_388 = 388,
+  HIP_API_ID_hipTexRefGetArray = 389,
+  HIP_API_ID_hipTexRefGetBorderColor = 390,
+  HIP_API_ID_hipStreamBeginCaptureToGraph = 391,
+  HIP_API_ID_hipGetFuncBySymbol = 392,
+  HIP_API_ID_hipMemcpy2DArrayToArray = 393,
+  HIP_API_ID_hipMemcpyAtoA = 394,
+  HIP_API_ID_hipMemcpyAtoD = 395,
+  HIP_API_ID_hipMemcpyAtoHAsync = 396,
+  HIP_API_ID_hipMemcpyDtoA = 397,
+  HIP_API_ID_hipMemcpyHtoAAsync = 398,
+  HIP_API_ID_hipSetValidDevices = 399,
+  HIP_API_ID_LAST = 399,
 
   HIP_API_ID_hipChooseDevice = HIP_API_ID_CONCAT(HIP_API_ID_,hipChooseDevice),
   HIP_API_ID_hipGetDeviceProperties = HIP_API_ID_CONCAT(HIP_API_ID_,hipGetDeviceProperties),
@@ -414,24 +434,14 @@ enum hip_api_id_t {
   HIP_API_ID_hipGetTextureObjectResourceViewDesc = HIP_API_ID_NONE,
   HIP_API_ID_hipGetTextureObjectTextureDesc = HIP_API_ID_NONE,
   HIP_API_ID_hipGetTextureReference = HIP_API_ID_NONE,
-  HIP_API_ID_hipMemcpy2DArrayToArray = HIP_API_ID_NONE,
-  HIP_API_ID_hipMemcpyAtoA = HIP_API_ID_NONE,
-  HIP_API_ID_hipMemcpyAtoD = HIP_API_ID_NONE,
-  HIP_API_ID_hipMemcpyAtoHAsync = HIP_API_ID_NONE,
-  HIP_API_ID_hipMemcpyDtoA = HIP_API_ID_NONE,
-  HIP_API_ID_hipMemcpyHtoAAsync = HIP_API_ID_NONE,
-  HIP_API_ID_hipSetValidDevices = HIP_API_ID_NONE,
   HIP_API_ID_hipTexObjectCreate = HIP_API_ID_NONE,
   HIP_API_ID_hipTexObjectDestroy = HIP_API_ID_NONE,
   HIP_API_ID_hipTexObjectGetResourceDesc = HIP_API_ID_NONE,
   HIP_API_ID_hipTexObjectGetResourceViewDesc = HIP_API_ID_NONE,
   HIP_API_ID_hipTexObjectGetTextureDesc = HIP_API_ID_NONE,
   HIP_API_ID_hipTexRefGetAddressMode = HIP_API_ID_NONE,
-  HIP_API_ID_hipTexRefGetArray = HIP_API_ID_NONE,
-  HIP_API_ID_hipTexRefGetBorderColor = HIP_API_ID_NONE,
   HIP_API_ID_hipTexRefGetFilterMode = HIP_API_ID_NONE,
   HIP_API_ID_hipTexRefGetMipmapFilterMode = HIP_API_ID_NONE,
-  HIP_API_ID_hipTexRefGetMipmappedArray = HIP_API_ID_NONE,
   HIP_API_ID_hipTexRefSetAddressMode = HIP_API_ID_NONE,
   HIP_API_ID_hipTexRefSetFilterMode = HIP_API_ID_NONE,
   HIP_API_ID_hipTexRefSetMipmapFilterMode = HIP_API_ID_NONE,
@@ -510,8 +520,6 @@ static inline const char* hip_api_name(const uint32_t id) {
     case HIP_API_ID_hipDriverGetVersion: return "hipDriverGetVersion";
     case HIP_API_ID_hipDrvGraphAddMemcpyNode: return "hipDrvGraphAddMemcpyNode";
     case HIP_API_ID_hipDrvGraphAddMemsetNode: return "hipDrvGraphAddMemsetNode";
-    case HIP_API_ID_hipDrvGraphMemcpyNodeGetParams: return "hipDrvGraphMemcpyNodeGetParams";
-    case HIP_API_ID_hipDrvGraphMemcpyNodeSetParams: return "hipDrvGraphMemcpyNodeSetParams";
     case HIP_API_ID_hipDrvMemcpy2DUnaligned: return "hipDrvMemcpy2DUnaligned";
     case HIP_API_ID_hipDrvMemcpy3D: return "hipDrvMemcpy3D";
     case HIP_API_ID_hipDrvMemcpy3DAsync: return "hipDrvMemcpy3DAsync";
@@ -523,6 +531,7 @@ static inline const char* hip_api_name(const uint32_t id) {
     case HIP_API_ID_hipEventQuery: return "hipEventQuery";
     case HIP_API_ID_hipEventRecord: return "hipEventRecord";
     case HIP_API_ID_hipEventSynchronize: return "hipEventSynchronize";
+    case HIP_API_ID_hipExtGetLastError: return "hipExtGetLastError";
     case HIP_API_ID_hipExtGetLinkTypeAndHopCount: return "hipExtGetLinkTypeAndHopCount";
     case HIP_API_ID_hipExtLaunchKernel: return "hipExtLaunchKernel";
     case HIP_API_ID_hipExtLaunchMultiKernelMultiDevice: return "hipExtLaunchMultiKernelMultiDevice";
@@ -550,8 +559,10 @@ static inline const char* hip_api_name(const uint32_t id) {
     case HIP_API_ID_hipGetDevicePropertiesR0000: return "hipGetDevicePropertiesR0000";
     case HIP_API_ID_hipGetDevicePropertiesR0600: return "hipGetDevicePropertiesR0600";
     case HIP_API_ID_hipGetErrorString: return "hipGetErrorString";
+    case HIP_API_ID_hipGetFuncBySymbol: return "hipGetFuncBySymbol";
     case HIP_API_ID_hipGetLastError: return "hipGetLastError";
     case HIP_API_ID_hipGetMipmappedArrayLevel: return "hipGetMipmappedArrayLevel";
+    case HIP_API_ID_hipGetProcAddress: return "hipGetProcAddress";
     case HIP_API_ID_hipGetSymbolAddress: return "hipGetSymbolAddress";
     case HIP_API_ID_hipGetSymbolSize: return "hipGetSymbolSize";
     case HIP_API_ID_hipGraphAddChildGraphNode: return "hipGraphAddChildGraphNode";
@@ -570,6 +581,7 @@ static inline const char* hip_api_name(const uint32_t id) {
     case HIP_API_ID_hipGraphAddMemcpyNodeFromSymbol: return "hipGraphAddMemcpyNodeFromSymbol";
     case HIP_API_ID_hipGraphAddMemcpyNodeToSymbol: return "hipGraphAddMemcpyNodeToSymbol";
     case HIP_API_ID_hipGraphAddMemsetNode: return "hipGraphAddMemsetNode";
+    case HIP_API_ID_hipGraphAddNode: return "hipGraphAddNode";
     case HIP_API_ID_hipGraphChildGraphNodeGetGraph: return "hipGraphChildGraphNodeGetGraph";
     case HIP_API_ID_hipGraphClone: return "hipGraphClone";
     case HIP_API_ID_hipGraphCreate: return "hipGraphCreate";
@@ -605,6 +617,7 @@ static inline const char* hip_api_name(const uint32_t id) {
     case HIP_API_ID_hipGraphHostNodeSetParams: return "hipGraphHostNodeSetParams";
     case HIP_API_ID_hipGraphInstantiate: return "hipGraphInstantiate";
     case HIP_API_ID_hipGraphInstantiateWithFlags: return "hipGraphInstantiateWithFlags";
+    case HIP_API_ID_hipGraphInstantiateWithParams: return "hipGraphInstantiateWithParams";
     case HIP_API_ID_hipGraphKernelNodeCopyAttributes: return "hipGraphKernelNodeCopyAttributes";
     case HIP_API_ID_hipGraphKernelNodeGetAttribute: return "hipGraphKernelNodeGetAttribute";
     case HIP_API_ID_hipGraphKernelNodeGetParams: return "hipGraphKernelNodeGetParams";
@@ -704,6 +717,7 @@ static inline const char* hip_api_name(const uint32_t id) {
     case HIP_API_ID_hipMemUnmap: return "hipMemUnmap";
     case HIP_API_ID_hipMemcpy: return "hipMemcpy";
     case HIP_API_ID_hipMemcpy2D: return "hipMemcpy2D";
+    case HIP_API_ID_hipMemcpy2DArrayToArray: return "hipMemcpy2DArrayToArray";
     case HIP_API_ID_hipMemcpy2DAsync: return "hipMemcpy2DAsync";
     case HIP_API_ID_hipMemcpy2DFromArray: return "hipMemcpy2DFromArray";
     case HIP_API_ID_hipMemcpy2DFromArrayAsync: return "hipMemcpy2DFromArrayAsync";
@@ -712,7 +726,11 @@ static inline const char* hip_api_name(const uint32_t id) {
     case HIP_API_ID_hipMemcpy3D: return "hipMemcpy3D";
     case HIP_API_ID_hipMemcpy3DAsync: return "hipMemcpy3DAsync";
     case HIP_API_ID_hipMemcpyAsync: return "hipMemcpyAsync";
+    case HIP_API_ID_hipMemcpyAtoA: return "hipMemcpyAtoA";
+    case HIP_API_ID_hipMemcpyAtoD: return "hipMemcpyAtoD";
     case HIP_API_ID_hipMemcpyAtoH: return "hipMemcpyAtoH";
+    case HIP_API_ID_hipMemcpyAtoHAsync: return "hipMemcpyAtoHAsync";
+    case HIP_API_ID_hipMemcpyDtoA: return "hipMemcpyDtoA";
     case HIP_API_ID_hipMemcpyDtoD: return "hipMemcpyDtoD";
     case HIP_API_ID_hipMemcpyDtoDAsync: return "hipMemcpyDtoDAsync";
     case HIP_API_ID_hipMemcpyDtoH: return "hipMemcpyDtoH";
@@ -721,6 +739,7 @@ static inline const char* hip_api_name(const uint32_t id) {
     case HIP_API_ID_hipMemcpyFromSymbol: return "hipMemcpyFromSymbol";
     case HIP_API_ID_hipMemcpyFromSymbolAsync: return "hipMemcpyFromSymbolAsync";
     case HIP_API_ID_hipMemcpyHtoA: return "hipMemcpyHtoA";
+    case HIP_API_ID_hipMemcpyHtoAAsync: return "hipMemcpyHtoAAsync";
     case HIP_API_ID_hipMemcpyHtoD: return "hipMemcpyHtoD";
     case HIP_API_ID_hipMemcpyHtoDAsync: return "hipMemcpyHtoDAsync";
     case HIP_API_ID_hipMemcpyParam2D: return "hipMemcpyParam2D";
@@ -772,11 +791,13 @@ static inline const char* hip_api_name(const uint32_t id) {
     case HIP_API_ID_hipRuntimeGetVersion: return "hipRuntimeGetVersion";
     case HIP_API_ID_hipSetDevice: return "hipSetDevice";
     case HIP_API_ID_hipSetDeviceFlags: return "hipSetDeviceFlags";
+    case HIP_API_ID_hipSetValidDevices: return "hipSetValidDevices";
     case HIP_API_ID_hipSetupArgument: return "hipSetupArgument";
     case HIP_API_ID_hipSignalExternalSemaphoresAsync: return "hipSignalExternalSemaphoresAsync";
     case HIP_API_ID_hipStreamAddCallback: return "hipStreamAddCallback";
     case HIP_API_ID_hipStreamAttachMemAsync: return "hipStreamAttachMemAsync";
     case HIP_API_ID_hipStreamBeginCapture: return "hipStreamBeginCapture";
+    case HIP_API_ID_hipStreamBeginCaptureToGraph: return "hipStreamBeginCaptureToGraph";
     case HIP_API_ID_hipStreamCreate: return "hipStreamCreate";
     case HIP_API_ID_hipStreamCreateWithFlags: return "hipStreamCreateWithFlags";
     case HIP_API_ID_hipStreamCreateWithPriority: return "hipStreamCreateWithPriority";
@@ -797,6 +818,8 @@ static inline const char* hip_api_name(const uint32_t id) {
     case HIP_API_ID_hipStreamWriteValue32: return "hipStreamWriteValue32";
     case HIP_API_ID_hipStreamWriteValue64: return "hipStreamWriteValue64";
     case HIP_API_ID_hipTexRefGetAddress: return "hipTexRefGetAddress";
+    case HIP_API_ID_hipTexRefGetArray: return "hipTexRefGetArray";
+    case HIP_API_ID_hipTexRefGetBorderColor: return "hipTexRefGetBorderColor";
     case HIP_API_ID_hipTexRefGetFlags: return "hipTexRefGetFlags";
     case HIP_API_ID_hipTexRefGetFormat: return "hipTexRefGetFormat";
     case HIP_API_ID_hipTexRefGetMaxAnisotropy: return "hipTexRefGetMaxAnisotropy";
@@ -818,7 +841,6 @@ static inline const char* hip_api_name(const uint32_t id) {
     case HIP_API_ID_hipUserObjectRelease: return "hipUserObjectRelease";
     case HIP_API_ID_hipUserObjectRetain: return "hipUserObjectRetain";
     case HIP_API_ID_hipWaitExternalSemaphoresAsync: return "hipWaitExternalSemaphoresAsync";
-    case HIP_API_ID_hipExtGetLastError: return "hipExtGetLastError";
   };
   return "unknown";
 };
@@ -892,8 +914,6 @@ static inline uint32_t hipApiIdByName(const char* name) {
   if (strcmp("hipDriverGetVersion", name) == 0) return HIP_API_ID_hipDriverGetVersion;
   if (strcmp("hipDrvGraphAddMemcpyNode", name) == 0) return HIP_API_ID_hipDrvGraphAddMemcpyNode;
   if (strcmp("hipDrvGraphAddMemsetNode", name) == 0) return HIP_API_ID_hipDrvGraphAddMemsetNode;
-  if (strcmp("hipDrvGraphMemcpyNodeGetParams", name) == 0) return HIP_API_ID_hipDrvGraphMemcpyNodeGetParams;
-  if (strcmp("hipDrvGraphMemcpyNodeSetParams", name) == 0) return HIP_API_ID_hipDrvGraphMemcpyNodeSetParams;
   if (strcmp("hipDrvMemcpy2DUnaligned", name) == 0) return HIP_API_ID_hipDrvMemcpy2DUnaligned;
   if (strcmp("hipDrvMemcpy3D", name) == 0) return HIP_API_ID_hipDrvMemcpy3D;
   if (strcmp("hipDrvMemcpy3DAsync", name) == 0) return HIP_API_ID_hipDrvMemcpy3DAsync;
@@ -905,6 +925,7 @@ static inline uint32_t hipApiIdByName(const char* name) {
   if (strcmp("hipEventQuery", name) == 0) return HIP_API_ID_hipEventQuery;
   if (strcmp("hipEventRecord", name) == 0) return HIP_API_ID_hipEventRecord;
   if (strcmp("hipEventSynchronize", name) == 0) return HIP_API_ID_hipEventSynchronize;
+  if (strcmp("hipExtGetLastError", name) == 0) return HIP_API_ID_hipExtGetLastError;
   if (strcmp("hipExtGetLinkTypeAndHopCount", name) == 0) return HIP_API_ID_hipExtGetLinkTypeAndHopCount;
   if (strcmp("hipExtLaunchKernel", name) == 0) return HIP_API_ID_hipExtLaunchKernel;
   if (strcmp("hipExtLaunchMultiKernelMultiDevice", name) == 0) return HIP_API_ID_hipExtLaunchMultiKernelMultiDevice;
@@ -932,8 +953,10 @@ static inline uint32_t hipApiIdByName(const char* name) {
   if (strcmp("hipGetDevicePropertiesR0000", name) == 0) return HIP_API_ID_hipGetDevicePropertiesR0000;
   if (strcmp("hipGetDevicePropertiesR0600", name) == 0) return HIP_API_ID_hipGetDevicePropertiesR0600;
   if (strcmp("hipGetErrorString", name) == 0) return HIP_API_ID_hipGetErrorString;
+  if (strcmp("hipGetFuncBySymbol", name) == 0) return HIP_API_ID_hipGetFuncBySymbol;
   if (strcmp("hipGetLastError", name) == 0) return HIP_API_ID_hipGetLastError;
   if (strcmp("hipGetMipmappedArrayLevel", name) == 0) return HIP_API_ID_hipGetMipmappedArrayLevel;
+  if (strcmp("hipGetProcAddress", name) == 0) return HIP_API_ID_hipGetProcAddress;
   if (strcmp("hipGetSymbolAddress", name) == 0) return HIP_API_ID_hipGetSymbolAddress;
   if (strcmp("hipGetSymbolSize", name) == 0) return HIP_API_ID_hipGetSymbolSize;
   if (strcmp("hipGraphAddChildGraphNode", name) == 0) return HIP_API_ID_hipGraphAddChildGraphNode;
@@ -952,6 +975,7 @@ static inline uint32_t hipApiIdByName(const char* name) {
   if (strcmp("hipGraphAddMemcpyNodeFromSymbol", name) == 0) return HIP_API_ID_hipGraphAddMemcpyNodeFromSymbol;
   if (strcmp("hipGraphAddMemcpyNodeToSymbol", name) == 0) return HIP_API_ID_hipGraphAddMemcpyNodeToSymbol;
   if (strcmp("hipGraphAddMemsetNode", name) == 0) return HIP_API_ID_hipGraphAddMemsetNode;
+  if (strcmp("hipGraphAddNode", name) == 0) return HIP_API_ID_hipGraphAddNode;
   if (strcmp("hipGraphChildGraphNodeGetGraph", name) == 0) return HIP_API_ID_hipGraphChildGraphNodeGetGraph;
   if (strcmp("hipGraphClone", name) == 0) return HIP_API_ID_hipGraphClone;
   if (strcmp("hipGraphCreate", name) == 0) return HIP_API_ID_hipGraphCreate;
@@ -987,6 +1011,7 @@ static inline uint32_t hipApiIdByName(const char* name) {
   if (strcmp("hipGraphHostNodeSetParams", name) == 0) return HIP_API_ID_hipGraphHostNodeSetParams;
   if (strcmp("hipGraphInstantiate", name) == 0) return HIP_API_ID_hipGraphInstantiate;
   if (strcmp("hipGraphInstantiateWithFlags", name) == 0) return HIP_API_ID_hipGraphInstantiateWithFlags;
+  if (strcmp("hipGraphInstantiateWithParams", name) == 0) return HIP_API_ID_hipGraphInstantiateWithParams;
   if (strcmp("hipGraphKernelNodeCopyAttributes", name) == 0) return HIP_API_ID_hipGraphKernelNodeCopyAttributes;
   if (strcmp("hipGraphKernelNodeGetAttribute", name) == 0) return HIP_API_ID_hipGraphKernelNodeGetAttribute;
   if (strcmp("hipGraphKernelNodeGetParams", name) == 0) return HIP_API_ID_hipGraphKernelNodeGetParams;
@@ -1086,6 +1111,7 @@ static inline uint32_t hipApiIdByName(const char* name) {
   if (strcmp("hipMemUnmap", name) == 0) return HIP_API_ID_hipMemUnmap;
   if (strcmp("hipMemcpy", name) == 0) return HIP_API_ID_hipMemcpy;
   if (strcmp("hipMemcpy2D", name) == 0) return HIP_API_ID_hipMemcpy2D;
+  if (strcmp("hipMemcpy2DArrayToArray", name) == 0) return HIP_API_ID_hipMemcpy2DArrayToArray;
   if (strcmp("hipMemcpy2DAsync", name) == 0) return HIP_API_ID_hipMemcpy2DAsync;
   if (strcmp("hipMemcpy2DFromArray", name) == 0) return HIP_API_ID_hipMemcpy2DFromArray;
   if (strcmp("hipMemcpy2DFromArrayAsync", name) == 0) return HIP_API_ID_hipMemcpy2DFromArrayAsync;
@@ -1094,7 +1120,11 @@ static inline uint32_t hipApiIdByName(const char* name) {
   if (strcmp("hipMemcpy3D", name) == 0) return HIP_API_ID_hipMemcpy3D;
   if (strcmp("hipMemcpy3DAsync", name) == 0) return HIP_API_ID_hipMemcpy3DAsync;
   if (strcmp("hipMemcpyAsync", name) == 0) return HIP_API_ID_hipMemcpyAsync;
+  if (strcmp("hipMemcpyAtoA", name) == 0) return HIP_API_ID_hipMemcpyAtoA;
+  if (strcmp("hipMemcpyAtoD", name) == 0) return HIP_API_ID_hipMemcpyAtoD;
   if (strcmp("hipMemcpyAtoH", name) == 0) return HIP_API_ID_hipMemcpyAtoH;
+  if (strcmp("hipMemcpyAtoHAsync", name) == 0) return HIP_API_ID_hipMemcpyAtoHAsync;
+  if (strcmp("hipMemcpyDtoA", name) == 0) return HIP_API_ID_hipMemcpyDtoA;
   if (strcmp("hipMemcpyDtoD", name) == 0) return HIP_API_ID_hipMemcpyDtoD;
   if (strcmp("hipMemcpyDtoDAsync", name) == 0) return HIP_API_ID_hipMemcpyDtoDAsync;
   if (strcmp("hipMemcpyDtoH", name) == 0) return HIP_API_ID_hipMemcpyDtoH;
@@ -1103,6 +1133,7 @@ static inline uint32_t hipApiIdByName(const char* name) {
   if (strcmp("hipMemcpyFromSymbol", name) == 0) return HIP_API_ID_hipMemcpyFromSymbol;
   if (strcmp("hipMemcpyFromSymbolAsync", name) == 0) return HIP_API_ID_hipMemcpyFromSymbolAsync;
   if (strcmp("hipMemcpyHtoA", name) == 0) return HIP_API_ID_hipMemcpyHtoA;
+  if (strcmp("hipMemcpyHtoAAsync", name) == 0) return HIP_API_ID_hipMemcpyHtoAAsync;
   if (strcmp("hipMemcpyHtoD", name) == 0) return HIP_API_ID_hipMemcpyHtoD;
   if (strcmp("hipMemcpyHtoDAsync", name) == 0) return HIP_API_ID_hipMemcpyHtoDAsync;
   if (strcmp("hipMemcpyParam2D", name) == 0) return HIP_API_ID_hipMemcpyParam2D;
@@ -1154,11 +1185,13 @@ static inline uint32_t hipApiIdByName(const char* name) {
   if (strcmp("hipRuntimeGetVersion", name) == 0) return HIP_API_ID_hipRuntimeGetVersion;
   if (strcmp("hipSetDevice", name) == 0) return HIP_API_ID_hipSetDevice;
   if (strcmp("hipSetDeviceFlags", name) == 0) return HIP_API_ID_hipSetDeviceFlags;
+  if (strcmp("hipSetValidDevices", name) == 0) return HIP_API_ID_hipSetValidDevices;
   if (strcmp("hipSetupArgument", name) == 0) return HIP_API_ID_hipSetupArgument;
   if (strcmp("hipSignalExternalSemaphoresAsync", name) == 0) return HIP_API_ID_hipSignalExternalSemaphoresAsync;
   if (strcmp("hipStreamAddCallback", name) == 0) return HIP_API_ID_hipStreamAddCallback;
   if (strcmp("hipStreamAttachMemAsync", name) == 0) return HIP_API_ID_hipStreamAttachMemAsync;
   if (strcmp("hipStreamBeginCapture", name) == 0) return HIP_API_ID_hipStreamBeginCapture;
+  if (strcmp("hipStreamBeginCaptureToGraph", name) == 0) return HIP_API_ID_hipStreamBeginCaptureToGraph;
   if (strcmp("hipStreamCreate", name) == 0) return HIP_API_ID_hipStreamCreate;
   if (strcmp("hipStreamCreateWithFlags", name) == 0) return HIP_API_ID_hipStreamCreateWithFlags;
   if (strcmp("hipStreamCreateWithPriority", name) == 0) return HIP_API_ID_hipStreamCreateWithPriority;
@@ -1179,6 +1212,8 @@ static inline uint32_t hipApiIdByName(const char* name) {
   if (strcmp("hipStreamWriteValue32", name) == 0) return HIP_API_ID_hipStreamWriteValue32;
   if (strcmp("hipStreamWriteValue64", name) == 0) return HIP_API_ID_hipStreamWriteValue64;
   if (strcmp("hipTexRefGetAddress", name) == 0) return HIP_API_ID_hipTexRefGetAddress;
+  if (strcmp("hipTexRefGetArray", name) == 0) return HIP_API_ID_hipTexRefGetArray;
+  if (strcmp("hipTexRefGetBorderColor", name) == 0) return HIP_API_ID_hipTexRefGetBorderColor;
   if (strcmp("hipTexRefGetFlags", name) == 0) return HIP_API_ID_hipTexRefGetFlags;
   if (strcmp("hipTexRefGetFormat", name) == 0) return HIP_API_ID_hipTexRefGetFormat;
   if (strcmp("hipTexRefGetMaxAnisotropy", name) == 0) return HIP_API_ID_hipTexRefGetMaxAnisotropy;
@@ -1200,7 +1235,6 @@ static inline uint32_t hipApiIdByName(const char* name) {
   if (strcmp("hipUserObjectRelease", name) == 0) return HIP_API_ID_hipUserObjectRelease;
   if (strcmp("hipUserObjectRetain", name) == 0) return HIP_API_ID_hipUserObjectRetain;
   if (strcmp("hipWaitExternalSemaphoresAsync", name) == 0) return HIP_API_ID_hipWaitExternalSemaphoresAsync;
-  if (strcmp("hipExtGetLastError", name) == 0) return HIP_API_ID_hipExtGetLastError;
   return HIP_API_ID_NONE;
 }
 
@@ -1520,16 +1554,6 @@ typedef struct hip_api_data_s {
       hipCtx_t ctx;
     } hipDrvGraphAddMemsetNode;
     struct {
-      hipGraphNode_t hNode;
-      HIP_MEMCPY3D* nodeParams;
-      HIP_MEMCPY3D nodeParams__val;
-    } hipDrvGraphMemcpyNodeGetParams;
-    struct {
-      hipGraphNode_t hNode;
-      const HIP_MEMCPY3D* nodeParams;
-      HIP_MEMCPY3D nodeParams__val;
-    } hipDrvGraphMemcpyNodeSetParams;
-    struct {
       const hip_Memcpy2D* pCopy;
       hip_Memcpy2D pCopy__val;
     } hipDrvMemcpy2DUnaligned;
@@ -1731,11 +1755,26 @@ typedef struct hip_api_data_s {
       int deviceId;
     } hipGetDevicePropertiesR0600;
     struct {
+      hipFunction_t* functionPtr;
+      hipFunction_t functionPtr__val;
+      const void* symbolPtr;
+    } hipGetFuncBySymbol;
+    struct {
       hipArray_t* levelArray;
       hipArray_t levelArray__val;
       hipMipmappedArray_const_t mipmappedArray;
       unsigned int level;
     } hipGetMipmappedArrayLevel;
+    struct {
+      const char* symbol;
+      char symbol__val;
+      void** pfn;
+      void* pfn__val;
+      int hipVersion;
+      uint64_t flags;
+      hipDriverProcAddressQueryResult* symbolStatus;
+      hipDriverProcAddressQueryResult symbolStatus__val;
+    } hipGetProcAddress;
     struct {
       void** devPtr;
       void* devPtr__val;
@@ -1906,6 +1945,16 @@ typedef struct hip_api_data_s {
       const hipMemsetParams* pMemsetParams;
       hipMemsetParams pMemsetParams__val;
     } hipGraphAddMemsetNode;
+    struct {
+      hipGraphNode_t* pGraphNode;
+      hipGraphNode_t pGraphNode__val;
+      hipGraph_t graph;
+      const hipGraphNode_t* pDependencies;
+      hipGraphNode_t pDependencies__val;
+      size_t numDependencies;
+      hipGraphNodeParams* nodeParams;
+      hipGraphNodeParams nodeParams__val;
+    } hipGraphAddNode;
     struct {
       hipGraphNode_t node;
       hipGraph_t* pGraph;
@@ -2109,14 +2158,21 @@ typedef struct hip_api_data_s {
       unsigned long long flags;
     } hipGraphInstantiateWithFlags;
     struct {
+      hipGraphExec_t* pGraphExec;
+      hipGraphExec_t pGraphExec__val;
+      hipGraph_t graph;
+      hipGraphInstantiateParams* instantiateParams;
+      hipGraphInstantiateParams instantiateParams__val;
+    } hipGraphInstantiateWithParams;
+    struct {
       hipGraphNode_t hSrc;
       hipGraphNode_t hDst;
     } hipGraphKernelNodeCopyAttributes;
     struct {
       hipGraphNode_t hNode;
-      hipKernelNodeAttrID attr;
-      hipKernelNodeAttrValue* value;
-      hipKernelNodeAttrValue value__val;
+      hipLaunchAttributeID attr;
+      hipLaunchAttributeValue* value;
+      hipLaunchAttributeValue value__val;
     } hipGraphKernelNodeGetAttribute;
     struct {
       hipGraphNode_t node;
@@ -2125,9 +2181,9 @@ typedef struct hip_api_data_s {
     } hipGraphKernelNodeGetParams;
     struct {
       hipGraphNode_t hNode;
-      hipKernelNodeAttrID attr;
-      const hipKernelNodeAttrValue* value;
-      hipKernelNodeAttrValue value__val;
+      hipLaunchAttributeID attr;
+      const hipLaunchAttributeValue* value;
+      hipLaunchAttributeValue value__val;
     } hipGraphKernelNodeSetAttribute;
     struct {
       hipGraphNode_t node;
@@ -2703,6 +2759,17 @@ typedef struct hip_api_data_s {
       hipMemcpyKind kind;
     } hipMemcpy2D;
     struct {
+      hipArray_t dst;
+      size_t wOffsetDst;
+      size_t hOffsetDst;
+      hipArray_const_t src;
+      size_t wOffsetSrc;
+      size_t hOffsetSrc;
+      size_t width;
+      size_t height;
+      hipMemcpyKind kind;
+    } hipMemcpy2DArrayToArray;
+    struct {
       void* dst;
       size_t dpitch;
       const void* src;
@@ -2771,11 +2838,37 @@ typedef struct hip_api_data_s {
       hipStream_t stream;
     } hipMemcpyAsync;
     struct {
+      hipArray_t dstArray;
+      size_t dstOffset;
+      hipArray_t srcArray;
+      size_t srcOffset;
+      size_t ByteCount;
+    } hipMemcpyAtoA;
+    struct {
+      hipDeviceptr_t dstDevice;
+      hipArray_t srcArray;
+      size_t srcOffset;
+      size_t ByteCount;
+    } hipMemcpyAtoD;
+    struct {
       void* dst;
       hipArray_t srcArray;
       size_t srcOffset;
       size_t count;
     } hipMemcpyAtoH;
+    struct {
+      void* dstHost;
+      hipArray_t srcArray;
+      size_t srcOffset;
+      size_t ByteCount;
+      hipStream_t stream;
+    } hipMemcpyAtoHAsync;
+    struct {
+      hipArray_t dstArray;
+      size_t dstOffset;
+      hipDeviceptr_t srcDevice;
+      size_t ByteCount;
+    } hipMemcpyDtoA;
     struct {
       hipDeviceptr_t dst;
       hipDeviceptr_t src;
@@ -2827,6 +2920,13 @@ typedef struct hip_api_data_s {
       const void* srcHost;
       size_t count;
     } hipMemcpyHtoA;
+    struct {
+      hipArray_t dstArray;
+      size_t dstOffset;
+      const void* srcHost;
+      size_t ByteCount;
+      hipStream_t stream;
+    } hipMemcpyHtoAAsync;
     struct {
       hipDeviceptr_t dst;
       void* src;
@@ -3143,6 +3243,11 @@ typedef struct hip_api_data_s {
       unsigned int flags;
     } hipSetDeviceFlags;
     struct {
+      int* device_arr;
+      int device_arr__val;
+      int len;
+    } hipSetValidDevices;
+    struct {
       const void* arg;
       size_t size;
       size_t offset;
@@ -3171,6 +3276,16 @@ typedef struct hip_api_data_s {
       hipStream_t stream;
       hipStreamCaptureMode mode;
     } hipStreamBeginCapture;
+    struct {
+      hipStream_t stream;
+      hipGraph_t graph;
+      const hipGraphNode_t* dependencies;
+      hipGraphNode_t dependencies__val;
+      const hipGraphEdgeData* dependencyData;
+      hipGraphEdgeData dependencyData__val;
+      size_t numDependencies;
+      hipStreamCaptureMode mode;
+    } hipStreamBeginCaptureToGraph;
     struct {
       hipStream_t* stream;
       hipStream_t stream__val;
@@ -3284,6 +3399,18 @@ typedef struct hip_api_data_s {
       const textureReference* texRef;
       textureReference texRef__val;
     } hipTexRefGetAddress;
+    struct {
+      hipArray_t* pArray;
+      hipArray_t pArray__val;
+      const textureReference* texRef;
+      textureReference texRef__val;
+    } hipTexRefGetArray;
+    struct {
+      float* pBorderColor;
+      float pBorderColor__val;
+      const textureReference* texRef;
+      textureReference texRef__val;
+    } hipTexRefGetBorderColor;
     struct {
       unsigned int* pFlags;
       unsigned int pFlags__val;
@@ -3729,15 +3856,21 @@ typedef struct hip_api_data_s {
 };
 // hipDrvGraphAddMemcpyNode[('hipGraphNode_t*', 'phGraphNode'), ('hipGraph_t', 'hGraph'), ('const hipGraphNode_t*', 'dependencies'), ('size_t', 'numDependencies'), ('const HIP_MEMCPY3D*', 'copyParams'), ('hipCtx_t', 'ctx')]
 #define INIT_hipDrvGraphAddMemcpyNode_CB_ARGS_DATA(cb_data) { \
+  cb_data.args.hipDrvGraphAddMemcpyNode.phGraphNode = (hipGraphNode_t*)phGraphNode; \
+  cb_data.args.hipDrvGraphAddMemcpyNode.hGraph = (hipGraph_t)hGraph; \
+  cb_data.args.hipDrvGraphAddMemcpyNode.dependencies = (const hipGraphNode_t*)dependencies; \
+  cb_data.args.hipDrvGraphAddMemcpyNode.numDependencies = (size_t)numDependencies; \
+  cb_data.args.hipDrvGraphAddMemcpyNode.copyParams = (const HIP_MEMCPY3D*)copyParams; \
+  cb_data.args.hipDrvGraphAddMemcpyNode.ctx = (hipCtx_t)ctx; \
 };
 // hipDrvGraphAddMemsetNode[('hipGraphNode_t*', 'phGraphNode'), ('hipGraph_t', 'hGraph'), ('const hipGraphNode_t*', 'dependencies'), ('size_t', 'numDependencies'), ('const HIP_MEMSET_NODE_PARAMS*', 'memsetParams'), ('hipCtx_t', 'ctx')]
 #define INIT_hipDrvGraphAddMemsetNode_CB_ARGS_DATA(cb_data) { \
-};
-// hipDrvGraphMemcpyNodeGetParams[('hipGraphNode_t', 'hNode'), ('HIP_MEMCPY3D*', 'nodeParams')]
-#define INIT_hipDrvGraphMemcpyNodeGetParams_CB_ARGS_DATA(cb_data) { \
-};
-// hipDrvGraphMemcpyNodeSetParams[('hipGraphNode_t', 'hNode'), ('const HIP_MEMCPY3D*', 'nodeParams')]
-#define INIT_hipDrvGraphMemcpyNodeSetParams_CB_ARGS_DATA(cb_data) { \
+  cb_data.args.hipDrvGraphAddMemsetNode.phGraphNode = (hipGraphNode_t*)phGraphNode; \
+  cb_data.args.hipDrvGraphAddMemsetNode.hGraph = (hipGraph_t)hGraph; \
+  cb_data.args.hipDrvGraphAddMemsetNode.dependencies = (const hipGraphNode_t*)dependencies; \
+  cb_data.args.hipDrvGraphAddMemsetNode.numDependencies = (size_t)numDependencies; \
+  cb_data.args.hipDrvGraphAddMemsetNode.memsetParams = (const HIP_MEMSET_NODE_PARAMS*)memsetParams; \
+  cb_data.args.hipDrvGraphAddMemsetNode.ctx = (hipCtx_t)ctx; \
 };
 // hipDrvMemcpy2DUnaligned[('const hip_Memcpy2D*', 'pCopy')]
 #define INIT_hipDrvMemcpy2DUnaligned_CB_ARGS_DATA(cb_data) { \
@@ -3790,6 +3923,9 @@ typedef struct hip_api_data_s {
 // hipEventSynchronize[('hipEvent_t', 'event')]
 #define INIT_hipEventSynchronize_CB_ARGS_DATA(cb_data) { \
   cb_data.args.hipEventSynchronize.event = (hipEvent_t)event; \
+};
+// hipExtGetLastError[]
+#define INIT_hipExtGetLastError_CB_ARGS_DATA(cb_data) { \
 };
 // hipExtGetLinkTypeAndHopCount[('int', 'device1'), ('int', 'device2'), ('unsigned int*', 'linktype'), ('unsigned int*', 'hopcount')]
 #define INIT_hipExtGetLinkTypeAndHopCount_CB_ARGS_DATA(cb_data) { \
@@ -3948,6 +4084,11 @@ typedef struct hip_api_data_s {
 // hipGetErrorString[]
 #define INIT_hipGetErrorString_CB_ARGS_DATA(cb_data) { \
 };
+// hipGetFuncBySymbol[('hipFunction_t*', 'functionPtr'), ('const void*', 'symbolPtr')]
+#define INIT_hipGetFuncBySymbol_CB_ARGS_DATA(cb_data) { \
+  cb_data.args.hipGetFuncBySymbol.functionPtr = (hipFunction_t*)functionPtr; \
+  cb_data.args.hipGetFuncBySymbol.symbolPtr = (const void*)symbolPtr; \
+};
 // hipGetLastError[]
 #define INIT_hipGetLastError_CB_ARGS_DATA(cb_data) { \
 };
@@ -3956,6 +4097,14 @@ typedef struct hip_api_data_s {
   cb_data.args.hipGetMipmappedArrayLevel.levelArray = (hipArray_t*)levelArray; \
   cb_data.args.hipGetMipmappedArrayLevel.mipmappedArray = (hipMipmappedArray_const_t)mipmappedArray; \
   cb_data.args.hipGetMipmappedArrayLevel.level = (unsigned int)level; \
+};
+// hipGetProcAddress[('const char*', 'symbol'), ('void**', 'pfn'), ('int', 'hipVersion'), ('uint64_t', 'flags'), ('hipDriverProcAddressQueryResult*', 'symbolStatus')]
+#define INIT_hipGetProcAddress_CB_ARGS_DATA(cb_data) { \
+  cb_data.args.hipGetProcAddress.symbol = (symbol) ? strdup(symbol) : NULL; \
+  cb_data.args.hipGetProcAddress.pfn = (void**)pfn; \
+  cb_data.args.hipGetProcAddress.hipVersion = (int)hipVersion; \
+  cb_data.args.hipGetProcAddress.flags = (uint64_t)flags; \
+  cb_data.args.hipGetProcAddress.symbolStatus = (hipDriverProcAddressQueryResult*)symbolStatus; \
 };
 // hipGetSymbolAddress[('void**', 'devPtr'), ('const void*', 'symbol')]
 #define INIT_hipGetSymbolAddress_CB_ARGS_DATA(cb_data) { \
@@ -4007,9 +4156,19 @@ typedef struct hip_api_data_s {
 };
 // hipGraphAddExternalSemaphoresSignalNode[('hipGraphNode_t*', 'pGraphNode'), ('hipGraph_t', 'graph'), ('const hipGraphNode_t*', 'pDependencies'), ('size_t', 'numDependencies'), ('const hipExternalSemaphoreSignalNodeParams*', 'nodeParams')]
 #define INIT_hipGraphAddExternalSemaphoresSignalNode_CB_ARGS_DATA(cb_data) { \
+  cb_data.args.hipGraphAddExternalSemaphoresSignalNode.pGraphNode = (hipGraphNode_t*)pGraphNode; \
+  cb_data.args.hipGraphAddExternalSemaphoresSignalNode.graph = (hipGraph_t)graph; \
+  cb_data.args.hipGraphAddExternalSemaphoresSignalNode.pDependencies = (const hipGraphNode_t*)pDependencies; \
+  cb_data.args.hipGraphAddExternalSemaphoresSignalNode.numDependencies = (size_t)numDependencies; \
+  cb_data.args.hipGraphAddExternalSemaphoresSignalNode.nodeParams = (const hipExternalSemaphoreSignalNodeParams*)nodeParams; \
 };
 // hipGraphAddExternalSemaphoresWaitNode[('hipGraphNode_t*', 'pGraphNode'), ('hipGraph_t', 'graph'), ('const hipGraphNode_t*', 'pDependencies'), ('size_t', 'numDependencies'), ('const hipExternalSemaphoreWaitNodeParams*', 'nodeParams')]
 #define INIT_hipGraphAddExternalSemaphoresWaitNode_CB_ARGS_DATA(cb_data) { \
+  cb_data.args.hipGraphAddExternalSemaphoresWaitNode.pGraphNode = (hipGraphNode_t*)pGraphNode; \
+  cb_data.args.hipGraphAddExternalSemaphoresWaitNode.graph = (hipGraph_t)graph; \
+  cb_data.args.hipGraphAddExternalSemaphoresWaitNode.pDependencies = (const hipGraphNode_t*)pDependencies; \
+  cb_data.args.hipGraphAddExternalSemaphoresWaitNode.numDependencies = (size_t)numDependencies; \
+  cb_data.args.hipGraphAddExternalSemaphoresWaitNode.nodeParams = (const hipExternalSemaphoreWaitNodeParams*)nodeParams; \
 };
 // hipGraphAddHostNode[('hipGraphNode_t*', 'pGraphNode'), ('hipGraph_t', 'graph'), ('const hipGraphNode_t*', 'pDependencies'), ('size_t', 'numDependencies'), ('const hipHostNodeParams*', 'pNodeParams')]
 #define INIT_hipGraphAddHostNode_CB_ARGS_DATA(cb_data) { \
@@ -4094,6 +4253,14 @@ typedef struct hip_api_data_s {
   cb_data.args.hipGraphAddMemsetNode.numDependencies = (size_t)numDependencies; \
   cb_data.args.hipGraphAddMemsetNode.pMemsetParams = (const hipMemsetParams*)pMemsetParams; \
 };
+// hipGraphAddNode[('hipGraphNode_t*', 'pGraphNode'), ('hipGraph_t', 'graph'), ('const hipGraphNode_t*', 'pDependencies'), ('size_t', 'numDependencies'), ('hipGraphNodeParams*', 'nodeParams')]
+#define INIT_hipGraphAddNode_CB_ARGS_DATA(cb_data) { \
+  cb_data.args.hipGraphAddNode.pGraphNode = (hipGraphNode_t*)pGraphNode; \
+  cb_data.args.hipGraphAddNode.graph = (hipGraph_t)graph; \
+  cb_data.args.hipGraphAddNode.pDependencies = (const hipGraphNode_t*)pDependencies; \
+  cb_data.args.hipGraphAddNode.numDependencies = (size_t)numDependencies; \
+  cb_data.args.hipGraphAddNode.nodeParams = (hipGraphNodeParams*)nodeParams; \
+};
 // hipGraphChildGraphNodeGetGraph[('hipGraphNode_t', 'node'), ('hipGraph_t*', 'pGraph')]
 #define INIT_hipGraphChildGraphNodeGetGraph_CB_ARGS_DATA(cb_data) { \
   cb_data.args.hipGraphChildGraphNodeGetGraph.node = (hipGraphNode_t)node; \
@@ -4167,9 +4334,15 @@ typedef struct hip_api_data_s {
 };
 // hipGraphExecExternalSemaphoresSignalNodeSetParams[('hipGraphExec_t', 'hGraphExec'), ('hipGraphNode_t', 'hNode'), ('const hipExternalSemaphoreSignalNodeParams*', 'nodeParams')]
 #define INIT_hipGraphExecExternalSemaphoresSignalNodeSetParams_CB_ARGS_DATA(cb_data) { \
+  cb_data.args.hipGraphExecExternalSemaphoresSignalNodeSetParams.hGraphExec = (hipGraphExec_t)hGraphExec; \
+  cb_data.args.hipGraphExecExternalSemaphoresSignalNodeSetParams.hNode = (hipGraphNode_t)hNode; \
+  cb_data.args.hipGraphExecExternalSemaphoresSignalNodeSetParams.nodeParams = (const hipExternalSemaphoreSignalNodeParams*)nodeParams; \
 };
 // hipGraphExecExternalSemaphoresWaitNodeSetParams[('hipGraphExec_t', 'hGraphExec'), ('hipGraphNode_t', 'hNode'), ('const hipExternalSemaphoreWaitNodeParams*', 'nodeParams')]
 #define INIT_hipGraphExecExternalSemaphoresWaitNodeSetParams_CB_ARGS_DATA(cb_data) { \
+  cb_data.args.hipGraphExecExternalSemaphoresWaitNodeSetParams.hGraphExec = (hipGraphExec_t)hGraphExec; \
+  cb_data.args.hipGraphExecExternalSemaphoresWaitNodeSetParams.hNode = (hipGraphNode_t)hNode; \
+  cb_data.args.hipGraphExecExternalSemaphoresWaitNodeSetParams.nodeParams = (const hipExternalSemaphoreWaitNodeParams*)nodeParams; \
 };
 // hipGraphExecHostNodeSetParams[('hipGraphExec_t', 'hGraphExec'), ('hipGraphNode_t', 'node'), ('const hipHostNodeParams*', 'pNodeParams')]
 #define INIT_hipGraphExecHostNodeSetParams_CB_ARGS_DATA(cb_data) { \
@@ -4233,15 +4406,23 @@ typedef struct hip_api_data_s {
 };
 // hipGraphExternalSemaphoresSignalNodeGetParams[('hipGraphNode_t', 'hNode'), ('hipExternalSemaphoreSignalNodeParams*', 'params_out')]
 #define INIT_hipGraphExternalSemaphoresSignalNodeGetParams_CB_ARGS_DATA(cb_data) { \
+  cb_data.args.hipGraphExternalSemaphoresSignalNodeGetParams.hNode = (hipGraphNode_t)hNode; \
+  cb_data.args.hipGraphExternalSemaphoresSignalNodeGetParams.params_out = (hipExternalSemaphoreSignalNodeParams*)params_out; \
 };
 // hipGraphExternalSemaphoresSignalNodeSetParams[('hipGraphNode_t', 'hNode'), ('const hipExternalSemaphoreSignalNodeParams*', 'nodeParams')]
 #define INIT_hipGraphExternalSemaphoresSignalNodeSetParams_CB_ARGS_DATA(cb_data) { \
+  cb_data.args.hipGraphExternalSemaphoresSignalNodeSetParams.hNode = (hipGraphNode_t)hNode; \
+  cb_data.args.hipGraphExternalSemaphoresSignalNodeSetParams.nodeParams = (const hipExternalSemaphoreSignalNodeParams*)nodeParams; \
 };
 // hipGraphExternalSemaphoresWaitNodeGetParams[('hipGraphNode_t', 'hNode'), ('hipExternalSemaphoreWaitNodeParams*', 'params_out')]
 #define INIT_hipGraphExternalSemaphoresWaitNodeGetParams_CB_ARGS_DATA(cb_data) { \
+  cb_data.args.hipGraphExternalSemaphoresWaitNodeGetParams.hNode = (hipGraphNode_t)hNode; \
+  cb_data.args.hipGraphExternalSemaphoresWaitNodeGetParams.params_out = (hipExternalSemaphoreWaitNodeParams*)params_out; \
 };
 // hipGraphExternalSemaphoresWaitNodeSetParams[('hipGraphNode_t', 'hNode'), ('const hipExternalSemaphoreWaitNodeParams*', 'nodeParams')]
 #define INIT_hipGraphExternalSemaphoresWaitNodeSetParams_CB_ARGS_DATA(cb_data) { \
+  cb_data.args.hipGraphExternalSemaphoresWaitNodeSetParams.hNode = (hipGraphNode_t)hNode; \
+  cb_data.args.hipGraphExternalSemaphoresWaitNodeSetParams.nodeParams = (const hipExternalSemaphoreWaitNodeParams*)nodeParams; \
 };
 // hipGraphGetEdges[('hipGraph_t', 'graph'), ('hipGraphNode_t*', 'from'), ('hipGraphNode_t*', 'to'), ('size_t*', 'numEdges')]
 #define INIT_hipGraphGetEdges_CB_ARGS_DATA(cb_data) { \
@@ -4286,27 +4467,27 @@ typedef struct hip_api_data_s {
   cb_data.args.hipGraphInstantiateWithFlags.graph = (hipGraph_t)graph; \
   cb_data.args.hipGraphInstantiateWithFlags.flags = (unsigned long long)flags; \
 };
+// hipGraphInstantiateWithParams[('hipGraphExec_t*', 'pGraphExec'), ('hipGraph_t', 'graph'), ('hipGraphInstantiateParams*', 'instantiateParams')]
+#define INIT_hipGraphInstantiateWithParams_CB_ARGS_DATA(cb_data) { \
+  cb_data.args.hipGraphInstantiateWithParams.pGraphExec = (hipGraphExec_t*)pGraphExec; \
+  cb_data.args.hipGraphInstantiateWithParams.graph = (hipGraph_t)graph; \
+  cb_data.args.hipGraphInstantiateWithParams.instantiateParams = (hipGraphInstantiateParams*)instantiateParams; \
+};
 // hipGraphKernelNodeCopyAttributes[('hipGraphNode_t', 'hSrc'), ('hipGraphNode_t', 'hDst')]
 #define INIT_hipGraphKernelNodeCopyAttributes_CB_ARGS_DATA(cb_data) { \
   cb_data.args.hipGraphKernelNodeCopyAttributes.hSrc = (hipGraphNode_t)hSrc; \
   cb_data.args.hipGraphKernelNodeCopyAttributes.hDst = (hipGraphNode_t)hDst; \
 };
-// hipGraphKernelNodeGetAttribute[('hipGraphNode_t', 'hNode'), ('hipKernelNodeAttrID', 'attr'), ('hipKernelNodeAttrValue*', 'value')]
+// hipGraphKernelNodeGetAttribute[('hipGraphNode_t', 'hNode'), ('hipLaunchAttributeID', 'attr'), ('hipLaunchAttributeValue*', 'value')]
 #define INIT_hipGraphKernelNodeGetAttribute_CB_ARGS_DATA(cb_data) { \
-  cb_data.args.hipGraphKernelNodeGetAttribute.hNode = (hipGraphNode_t)hNode; \
-  cb_data.args.hipGraphKernelNodeGetAttribute.attr = (hipKernelNodeAttrID)attr; \
-  cb_data.args.hipGraphKernelNodeGetAttribute.value = (hipKernelNodeAttrValue*)value; \
 };
 // hipGraphKernelNodeGetParams[('hipGraphNode_t', 'node'), ('hipKernelNodeParams*', 'pNodeParams')]
 #define INIT_hipGraphKernelNodeGetParams_CB_ARGS_DATA(cb_data) { \
   cb_data.args.hipGraphKernelNodeGetParams.node = (hipGraphNode_t)node; \
   cb_data.args.hipGraphKernelNodeGetParams.pNodeParams = (hipKernelNodeParams*)pNodeParams; \
 };
-// hipGraphKernelNodeSetAttribute[('hipGraphNode_t', 'hNode'), ('hipKernelNodeAttrID', 'attr'), ('const hipKernelNodeAttrValue*', 'value')]
+// hipGraphKernelNodeSetAttribute[('hipGraphNode_t', 'hNode'), ('hipLaunchAttributeID', 'attr'), ('const hipLaunchAttributeValue*', 'value')]
 #define INIT_hipGraphKernelNodeSetAttribute_CB_ARGS_DATA(cb_data) { \
-  cb_data.args.hipGraphKernelNodeSetAttribute.hNode = (hipGraphNode_t)hNode; \
-  cb_data.args.hipGraphKernelNodeSetAttribute.attr = (hipKernelNodeAttrID)attr; \
-  cb_data.args.hipGraphKernelNodeSetAttribute.value = (const hipKernelNodeAttrValue*)value; \
 };
 // hipGraphKernelNodeSetParams[('hipGraphNode_t', 'node'), ('const hipKernelNodeParams*', 'pNodeParams')]
 #define INIT_hipGraphKernelNodeSetParams_CB_ARGS_DATA(cb_data) { \
@@ -4891,6 +5072,18 @@ typedef struct hip_api_data_s {
   cb_data.args.hipMemcpy2D.height = (size_t)height; \
   cb_data.args.hipMemcpy2D.kind = (hipMemcpyKind)kind; \
 };
+// hipMemcpy2DArrayToArray[('hipArray_t', 'dst'), ('size_t', 'wOffsetDst'), ('size_t', 'hOffsetDst'), ('hipArray_const_t', 'src'), ('size_t', 'wOffsetSrc'), ('size_t', 'hOffsetSrc'), ('size_t', 'width'), ('size_t', 'height'), ('hipMemcpyKind', 'kind')]
+#define INIT_hipMemcpy2DArrayToArray_CB_ARGS_DATA(cb_data) { \
+  cb_data.args.hipMemcpy2DArrayToArray.dst = (hipArray_t)dst; \
+  cb_data.args.hipMemcpy2DArrayToArray.wOffsetDst = (size_t)wOffsetDst; \
+  cb_data.args.hipMemcpy2DArrayToArray.hOffsetDst = (size_t)hOffsetDst; \
+  cb_data.args.hipMemcpy2DArrayToArray.src = (hipArray_const_t)src; \
+  cb_data.args.hipMemcpy2DArrayToArray.wOffsetSrc = (size_t)wOffsetSrc; \
+  cb_data.args.hipMemcpy2DArrayToArray.hOffsetSrc = (size_t)hOffsetSrc; \
+  cb_data.args.hipMemcpy2DArrayToArray.width = (size_t)width; \
+  cb_data.args.hipMemcpy2DArrayToArray.height = (size_t)height; \
+  cb_data.args.hipMemcpy2DArrayToArray.kind = (hipMemcpyKind)kind; \
+};
 // hipMemcpy2DAsync[('void*', 'dst'), ('size_t', 'dpitch'), ('const void*', 'src'), ('size_t', 'spitch'), ('size_t', 'width'), ('size_t', 'height'), ('hipMemcpyKind', 'kind'), ('hipStream_t', 'stream')]
 #define INIT_hipMemcpy2DAsync_CB_ARGS_DATA(cb_data) { \
   cb_data.args.hipMemcpy2DAsync.dst = (void*)dst; \
@@ -4965,12 +5158,42 @@ typedef struct hip_api_data_s {
   cb_data.args.hipMemcpyAsync.kind = (hipMemcpyKind)kind; \
   cb_data.args.hipMemcpyAsync.stream = (hipStream_t)stream; \
 };
+// hipMemcpyAtoA[('hipArray_t', 'dstArray'), ('size_t', 'dstOffset'), ('hipArray_t', 'srcArray'), ('size_t', 'srcOffset'), ('size_t', 'ByteCount')]
+#define INIT_hipMemcpyAtoA_CB_ARGS_DATA(cb_data) { \
+  cb_data.args.hipMemcpyAtoA.dstArray = (hipArray_t)dstArray; \
+  cb_data.args.hipMemcpyAtoA.dstOffset = (size_t)dstOffset; \
+  cb_data.args.hipMemcpyAtoA.srcArray = (hipArray_t)srcArray; \
+  cb_data.args.hipMemcpyAtoA.srcOffset = (size_t)srcOffset; \
+  cb_data.args.hipMemcpyAtoA.ByteCount = (size_t)ByteCount; \
+};
+// hipMemcpyAtoD[('hipDeviceptr_t', 'dstDevice'), ('hipArray_t', 'srcArray'), ('size_t', 'srcOffset'), ('size_t', 'ByteCount')]
+#define INIT_hipMemcpyAtoD_CB_ARGS_DATA(cb_data) { \
+  cb_data.args.hipMemcpyAtoD.dstDevice = (hipDeviceptr_t)dstDevice; \
+  cb_data.args.hipMemcpyAtoD.srcArray = (hipArray_t)srcArray; \
+  cb_data.args.hipMemcpyAtoD.srcOffset = (size_t)srcOffset; \
+  cb_data.args.hipMemcpyAtoD.ByteCount = (size_t)ByteCount; \
+};
 // hipMemcpyAtoH[('void*', 'dst'), ('hipArray_t', 'srcArray'), ('size_t', 'srcOffset'), ('size_t', 'count')]
 #define INIT_hipMemcpyAtoH_CB_ARGS_DATA(cb_data) { \
   cb_data.args.hipMemcpyAtoH.dst = (void*)dstHost; \
   cb_data.args.hipMemcpyAtoH.srcArray = (hipArray_t)srcArray; \
   cb_data.args.hipMemcpyAtoH.srcOffset = (size_t)srcOffset; \
   cb_data.args.hipMemcpyAtoH.count = (size_t)ByteCount; \
+};
+// hipMemcpyAtoHAsync[('void*', 'dstHost'), ('hipArray_t', 'srcArray'), ('size_t', 'srcOffset'), ('size_t', 'ByteCount'), ('hipStream_t', 'stream')]
+#define INIT_hipMemcpyAtoHAsync_CB_ARGS_DATA(cb_data) { \
+  cb_data.args.hipMemcpyAtoHAsync.dstHost = (void*)dstHost; \
+  cb_data.args.hipMemcpyAtoHAsync.srcArray = (hipArray_t)srcArray; \
+  cb_data.args.hipMemcpyAtoHAsync.srcOffset = (size_t)srcOffset; \
+  cb_data.args.hipMemcpyAtoHAsync.ByteCount = (size_t)ByteCount; \
+  cb_data.args.hipMemcpyAtoHAsync.stream = (hipStream_t)stream; \
+};
+// hipMemcpyDtoA[('hipArray_t', 'dstArray'), ('size_t', 'dstOffset'), ('hipDeviceptr_t', 'srcDevice'), ('size_t', 'ByteCount')]
+#define INIT_hipMemcpyDtoA_CB_ARGS_DATA(cb_data) { \
+  cb_data.args.hipMemcpyDtoA.dstArray = (hipArray_t)dstArray; \
+  cb_data.args.hipMemcpyDtoA.dstOffset = (size_t)dstOffset; \
+  cb_data.args.hipMemcpyDtoA.srcDevice = (hipDeviceptr_t)srcDevice; \
+  cb_data.args.hipMemcpyDtoA.ByteCount = (size_t)ByteCount; \
 };
 // hipMemcpyDtoD[('hipDeviceptr_t', 'dst'), ('hipDeviceptr_t', 'src'), ('size_t', 'sizeBytes')]
 #define INIT_hipMemcpyDtoD_CB_ARGS_DATA(cb_data) { \
@@ -5030,6 +5253,14 @@ typedef struct hip_api_data_s {
   cb_data.args.hipMemcpyHtoA.dstOffset = (size_t)dstOffset; \
   cb_data.args.hipMemcpyHtoA.srcHost = (const void*)srcHost; \
   cb_data.args.hipMemcpyHtoA.count = (size_t)ByteCount; \
+};
+// hipMemcpyHtoAAsync[('hipArray_t', 'dstArray'), ('size_t', 'dstOffset'), ('const void*', 'srcHost'), ('size_t', 'ByteCount'), ('hipStream_t', 'stream')]
+#define INIT_hipMemcpyHtoAAsync_CB_ARGS_DATA(cb_data) { \
+  cb_data.args.hipMemcpyHtoAAsync.dstArray = (hipArray_t)dstArray; \
+  cb_data.args.hipMemcpyHtoAAsync.dstOffset = (size_t)dstOffset; \
+  cb_data.args.hipMemcpyHtoAAsync.srcHost = (const void*)srcHost; \
+  cb_data.args.hipMemcpyHtoAAsync.ByteCount = (size_t)ByteCount; \
+  cb_data.args.hipMemcpyHtoAAsync.stream = (hipStream_t)stream; \
 };
 // hipMemcpyHtoD[('hipDeviceptr_t', 'dst'), ('void*', 'src'), ('size_t', 'sizeBytes')]
 #define INIT_hipMemcpyHtoD_CB_ARGS_DATA(cb_data) { \
@@ -5369,6 +5600,11 @@ typedef struct hip_api_data_s {
 #define INIT_hipSetDeviceFlags_CB_ARGS_DATA(cb_data) { \
   cb_data.args.hipSetDeviceFlags.flags = (unsigned int)flags; \
 };
+// hipSetValidDevices[('int*', 'device_arr'), ('int', 'len')]
+#define INIT_hipSetValidDevices_CB_ARGS_DATA(cb_data) { \
+  cb_data.args.hipSetValidDevices.device_arr = (int*)device_arr; \
+  cb_data.args.hipSetValidDevices.len = (int)len; \
+};
 // hipSetupArgument[('const void*', 'arg'), ('size_t', 'size'), ('size_t', 'offset')]
 #define INIT_hipSetupArgument_CB_ARGS_DATA(cb_data) { \
   cb_data.args.hipSetupArgument.arg = (const void*)arg; \
@@ -5400,6 +5636,15 @@ typedef struct hip_api_data_s {
 #define INIT_hipStreamBeginCapture_CB_ARGS_DATA(cb_data) { \
   cb_data.args.hipStreamBeginCapture.stream = (hipStream_t)stream; \
   cb_data.args.hipStreamBeginCapture.mode = (hipStreamCaptureMode)mode; \
+};
+// hipStreamBeginCaptureToGraph[('hipStream_t', 'stream'), ('hipGraph_t', 'graph'), ('const hipGraphNode_t*', 'dependencies'), ('const hipGraphEdgeData*', 'dependencyData'), ('size_t', 'numDependencies'), ('hipStreamCaptureMode', 'mode')]
+#define INIT_hipStreamBeginCaptureToGraph_CB_ARGS_DATA(cb_data) { \
+  cb_data.args.hipStreamBeginCaptureToGraph.stream = (hipStream_t)stream; \
+  cb_data.args.hipStreamBeginCaptureToGraph.graph = (hipGraph_t)graph; \
+  cb_data.args.hipStreamBeginCaptureToGraph.dependencies = (const hipGraphNode_t*)dependencies; \
+  cb_data.args.hipStreamBeginCaptureToGraph.dependencyData = (const hipGraphEdgeData*)dependencyData; \
+  cb_data.args.hipStreamBeginCaptureToGraph.numDependencies = (size_t)numDependencies; \
+  cb_data.args.hipStreamBeginCaptureToGraph.mode = (hipStreamCaptureMode)mode; \
 };
 // hipStreamCreate[('hipStream_t*', 'stream')]
 #define INIT_hipStreamCreate_CB_ARGS_DATA(cb_data) { \
@@ -5516,6 +5761,16 @@ typedef struct hip_api_data_s {
   cb_data.args.hipTexRefGetAddress.dev_ptr = (hipDeviceptr_t*)dptr; \
   cb_data.args.hipTexRefGetAddress.texRef = (const textureReference*)texRef; \
 };
+// hipTexRefGetArray[('hipArray_t*', 'pArray'), ('const textureReference*', 'texRef')]
+#define INIT_hipTexRefGetArray_CB_ARGS_DATA(cb_data) { \
+  cb_data.args.hipTexRefGetArray.pArray = (hipArray_t*)pArray; \
+  cb_data.args.hipTexRefGetArray.texRef = (const textureReference*)texRef; \
+};
+// hipTexRefGetBorderColor[('float*', 'pBorderColor'), ('const textureReference*', 'texRef')]
+#define INIT_hipTexRefGetBorderColor_CB_ARGS_DATA(cb_data) { \
+  cb_data.args.hipTexRefGetBorderColor.pBorderColor = (float*)pBorderColor; \
+  cb_data.args.hipTexRefGetBorderColor.texRef = (const textureReference*)texRef; \
+};
 // hipTexRefGetFlags[('unsigned int*', 'pFlags'), ('const textureReference*', 'texRef')]
 #define INIT_hipTexRefGetFlags_CB_ARGS_DATA(cb_data) { \
   cb_data.args.hipTexRefGetFlags.pFlags = (unsigned int*)pFlags; \
@@ -5534,6 +5789,8 @@ typedef struct hip_api_data_s {
 };
 // hipTexRefGetMipMappedArray[('hipMipmappedArray_t*', 'pArray'), ('const textureReference*', 'texRef')]
 #define INIT_hipTexRefGetMipMappedArray_CB_ARGS_DATA(cb_data) { \
+  cb_data.args.hipTexRefGetMipMappedArray.pArray = (hipMipmappedArray_t*)pArray; \
+  cb_data.args.hipTexRefGetMipMappedArray.texRef = (const textureReference*)texRef; \
 };
 // hipTexRefGetMipmapLevelBias[('float*', 'pbias'), ('const textureReference*', 'texRef')]
 #define INIT_hipTexRefGetMipmapLevelBias_CB_ARGS_DATA(cb_data) { \
@@ -5633,9 +5890,6 @@ typedef struct hip_api_data_s {
   cb_data.args.hipWaitExternalSemaphoresAsync.numExtSems = (unsigned int)numExtSems; \
   cb_data.args.hipWaitExternalSemaphoresAsync.stream = (hipStream_t)stream; \
 };
-// hipExtGetLastError[]
-#define INIT_hipExtGetLastError_CB_ARGS_DATA(cb_data) { \
-};
 #define INIT_CB_ARGS_DATA(cb_id, cb_data) INIT_##cb_id##_CB_ARGS_DATA(cb_data)
 
 // Macros for non-public API primitives
@@ -5663,20 +5917,6 @@ typedef struct hip_api_data_s {
 #define INIT_hipGetTextureObjectTextureDesc_CB_ARGS_DATA(cb_data) {};
 // hipGetTextureReference()
 #define INIT_hipGetTextureReference_CB_ARGS_DATA(cb_data) {};
-// hipMemcpy2DArrayToArray()
-#define INIT_hipMemcpy2DArrayToArray_CB_ARGS_DATA(cb_data) {};
-// hipMemcpyAtoA()
-#define INIT_hipMemcpyAtoA_CB_ARGS_DATA(cb_data) {};
-// hipMemcpyAtoD()
-#define INIT_hipMemcpyAtoD_CB_ARGS_DATA(cb_data) {};
-// hipMemcpyAtoHAsync()
-#define INIT_hipMemcpyAtoHAsync_CB_ARGS_DATA(cb_data) {};
-// hipMemcpyDtoA()
-#define INIT_hipMemcpyDtoA_CB_ARGS_DATA(cb_data) {};
-// hipMemcpyHtoAAsync()
-#define INIT_hipMemcpyHtoAAsync_CB_ARGS_DATA(cb_data) {};
-// hipSetValidDevices()
-#define INIT_hipSetValidDevices_CB_ARGS_DATA(cb_data) {};
 // hipTexObjectCreate()
 #define INIT_hipTexObjectCreate_CB_ARGS_DATA(cb_data) {};
 // hipTexObjectDestroy()
@@ -5689,16 +5929,10 @@ typedef struct hip_api_data_s {
 #define INIT_hipTexObjectGetTextureDesc_CB_ARGS_DATA(cb_data) {};
 // hipTexRefGetAddressMode()
 #define INIT_hipTexRefGetAddressMode_CB_ARGS_DATA(cb_data) {};
-// hipTexRefGetArray()
-#define INIT_hipTexRefGetArray_CB_ARGS_DATA(cb_data) {};
-// hipTexRefGetBorderColor()
-#define INIT_hipTexRefGetBorderColor_CB_ARGS_DATA(cb_data) {};
 // hipTexRefGetFilterMode()
 #define INIT_hipTexRefGetFilterMode_CB_ARGS_DATA(cb_data) {};
 // hipTexRefGetMipmapFilterMode()
 #define INIT_hipTexRefGetMipmapFilterMode_CB_ARGS_DATA(cb_data) {};
-// hipTexRefGetMipmappedArray()
-#define INIT_hipTexRefGetMipmappedArray_CB_ARGS_DATA(cb_data) {};
 // hipTexRefSetAddressMode()
 #define INIT_hipTexRefSetAddressMode_CB_ARGS_DATA(cb_data) {};
 // hipTexRefSetFilterMode()
@@ -5968,14 +6202,6 @@ static inline void hipApiArgsInit(hip_api_id_t id, hip_api_data_t* data) {
       if (data->args.hipDrvGraphAddMemsetNode.dependencies) data->args.hipDrvGraphAddMemsetNode.dependencies__val = *(data->args.hipDrvGraphAddMemsetNode.dependencies);
       if (data->args.hipDrvGraphAddMemsetNode.memsetParams) data->args.hipDrvGraphAddMemsetNode.memsetParams__val = *(data->args.hipDrvGraphAddMemsetNode.memsetParams);
       break;
-// hipDrvGraphMemcpyNodeGetParams[('hipGraphNode_t', 'hNode'), ('HIP_MEMCPY3D*', 'nodeParams')]
-    case HIP_API_ID_hipDrvGraphMemcpyNodeGetParams:
-      if (data->args.hipDrvGraphMemcpyNodeGetParams.nodeParams) data->args.hipDrvGraphMemcpyNodeGetParams.nodeParams__val = *(data->args.hipDrvGraphMemcpyNodeGetParams.nodeParams);
-      break;
-// hipDrvGraphMemcpyNodeSetParams[('hipGraphNode_t', 'hNode'), ('const HIP_MEMCPY3D*', 'nodeParams')]
-    case HIP_API_ID_hipDrvGraphMemcpyNodeSetParams:
-      if (data->args.hipDrvGraphMemcpyNodeSetParams.nodeParams) data->args.hipDrvGraphMemcpyNodeSetParams.nodeParams__val = *(data->args.hipDrvGraphMemcpyNodeSetParams.nodeParams);
-      break;
 // hipDrvMemcpy2DUnaligned[('const hip_Memcpy2D*', 'pCopy')]
     case HIP_API_ID_hipDrvMemcpy2DUnaligned:
       if (data->args.hipDrvMemcpy2DUnaligned.pCopy) data->args.hipDrvMemcpy2DUnaligned.pCopy__val = *(data->args.hipDrvMemcpy2DUnaligned.pCopy);
@@ -6016,6 +6242,9 @@ static inline void hipApiArgsInit(hip_api_id_t id, hip_api_data_t* data) {
       break;
 // hipEventSynchronize[('hipEvent_t', 'event')]
     case HIP_API_ID_hipEventSynchronize:
+      break;
+// hipExtGetLastError[]
+    case HIP_API_ID_hipExtGetLastError:
       break;
 // hipExtGetLinkTypeAndHopCount[('int', 'device1'), ('int', 'device2'), ('unsigned int*', 'linktype'), ('unsigned int*', 'hopcount')]
     case HIP_API_ID_hipExtGetLinkTypeAndHopCount:
@@ -6122,15 +6351,22 @@ static inline void hipApiArgsInit(hip_api_id_t id, hip_api_data_t* data) {
 // hipGetErrorString[]
     case HIP_API_ID_hipGetErrorString:
       break;
+// hipGetFuncBySymbol[('hipFunction_t*', 'functionPtr'), ('const void*', 'symbolPtr')]
+    case HIP_API_ID_hipGetFuncBySymbol:
+      if (data->args.hipGetFuncBySymbol.functionPtr) data->args.hipGetFuncBySymbol.functionPtr__val = *(data->args.hipGetFuncBySymbol.functionPtr);
+      break;
 // hipGetLastError[]
     case HIP_API_ID_hipGetLastError:
-      break;
-// hipExtGetLastError[]
-    case HIP_API_ID_hipExtGetLastError:
       break;
 // hipGetMipmappedArrayLevel[('hipArray_t*', 'levelArray'), ('hipMipmappedArray_const_t', 'mipmappedArray'), ('unsigned int', 'level')]
     case HIP_API_ID_hipGetMipmappedArrayLevel:
       if (data->args.hipGetMipmappedArrayLevel.levelArray) data->args.hipGetMipmappedArrayLevel.levelArray__val = *(data->args.hipGetMipmappedArrayLevel.levelArray);
+      break;
+// hipGetProcAddress[('const char*', 'symbol'), ('void**', 'pfn'), ('int', 'hipVersion'), ('uint64_t', 'flags'), ('hipDriverProcAddressQueryResult*', 'symbolStatus')]
+    case HIP_API_ID_hipGetProcAddress:
+      if (data->args.hipGetProcAddress.symbol) data->args.hipGetProcAddress.symbol__val = *(data->args.hipGetProcAddress.symbol);
+      if (data->args.hipGetProcAddress.pfn) data->args.hipGetProcAddress.pfn__val = *(data->args.hipGetProcAddress.pfn);
+      if (data->args.hipGetProcAddress.symbolStatus) data->args.hipGetProcAddress.symbolStatus__val = *(data->args.hipGetProcAddress.symbolStatus);
       break;
 // hipGetSymbolAddress[('void**', 'devPtr'), ('const void*', 'symbol')]
     case HIP_API_ID_hipGetSymbolAddress:
@@ -6226,6 +6462,12 @@ static inline void hipApiArgsInit(hip_api_id_t id, hip_api_data_t* data) {
       if (data->args.hipGraphAddMemsetNode.pGraphNode) data->args.hipGraphAddMemsetNode.pGraphNode__val = *(data->args.hipGraphAddMemsetNode.pGraphNode);
       if (data->args.hipGraphAddMemsetNode.pDependencies) data->args.hipGraphAddMemsetNode.pDependencies__val = *(data->args.hipGraphAddMemsetNode.pDependencies);
       if (data->args.hipGraphAddMemsetNode.pMemsetParams) data->args.hipGraphAddMemsetNode.pMemsetParams__val = *(data->args.hipGraphAddMemsetNode.pMemsetParams);
+      break;
+// hipGraphAddNode[('hipGraphNode_t*', 'pGraphNode'), ('hipGraph_t', 'graph'), ('const hipGraphNode_t*', 'pDependencies'), ('size_t', 'numDependencies'), ('hipGraphNodeParams*', 'nodeParams')]
+    case HIP_API_ID_hipGraphAddNode:
+      if (data->args.hipGraphAddNode.pGraphNode) data->args.hipGraphAddNode.pGraphNode__val = *(data->args.hipGraphAddNode.pGraphNode);
+      if (data->args.hipGraphAddNode.pDependencies) data->args.hipGraphAddNode.pDependencies__val = *(data->args.hipGraphAddNode.pDependencies);
+      if (data->args.hipGraphAddNode.nodeParams) data->args.hipGraphAddNode.nodeParams__val = *(data->args.hipGraphAddNode.nodeParams);
       break;
 // hipGraphChildGraphNodeGetGraph[('hipGraphNode_t', 'node'), ('hipGraph_t*', 'pGraph')]
     case HIP_API_ID_hipGraphChildGraphNodeGetGraph:
@@ -6363,10 +6605,15 @@ static inline void hipApiArgsInit(hip_api_id_t id, hip_api_data_t* data) {
     case HIP_API_ID_hipGraphInstantiateWithFlags:
       if (data->args.hipGraphInstantiateWithFlags.pGraphExec) data->args.hipGraphInstantiateWithFlags.pGraphExec__val = *(data->args.hipGraphInstantiateWithFlags.pGraphExec);
       break;
+// hipGraphInstantiateWithParams[('hipGraphExec_t*', 'pGraphExec'), ('hipGraph_t', 'graph'), ('hipGraphInstantiateParams*', 'instantiateParams')]
+    case HIP_API_ID_hipGraphInstantiateWithParams:
+      if (data->args.hipGraphInstantiateWithParams.pGraphExec) data->args.hipGraphInstantiateWithParams.pGraphExec__val = *(data->args.hipGraphInstantiateWithParams.pGraphExec);
+      if (data->args.hipGraphInstantiateWithParams.instantiateParams) data->args.hipGraphInstantiateWithParams.instantiateParams__val = *(data->args.hipGraphInstantiateWithParams.instantiateParams);
+      break;
 // hipGraphKernelNodeCopyAttributes[('hipGraphNode_t', 'hSrc'), ('hipGraphNode_t', 'hDst')]
     case HIP_API_ID_hipGraphKernelNodeCopyAttributes:
       break;
-// hipGraphKernelNodeGetAttribute[('hipGraphNode_t', 'hNode'), ('hipKernelNodeAttrID', 'attr'), ('hipKernelNodeAttrValue*', 'value')]
+// hipGraphKernelNodeGetAttribute[('hipGraphNode_t', 'hNode'), ('hipLaunchAttributeID', 'attr'), ('hipLaunchAttributeValue*', 'value')]
     case HIP_API_ID_hipGraphKernelNodeGetAttribute:
       if (data->args.hipGraphKernelNodeGetAttribute.value) data->args.hipGraphKernelNodeGetAttribute.value__val = *(data->args.hipGraphKernelNodeGetAttribute.value);
       break;
@@ -6374,7 +6621,7 @@ static inline void hipApiArgsInit(hip_api_id_t id, hip_api_data_t* data) {
     case HIP_API_ID_hipGraphKernelNodeGetParams:
       if (data->args.hipGraphKernelNodeGetParams.pNodeParams) data->args.hipGraphKernelNodeGetParams.pNodeParams__val = *(data->args.hipGraphKernelNodeGetParams.pNodeParams);
       break;
-// hipGraphKernelNodeSetAttribute[('hipGraphNode_t', 'hNode'), ('hipKernelNodeAttrID', 'attr'), ('const hipKernelNodeAttrValue*', 'value')]
+// hipGraphKernelNodeSetAttribute[('hipGraphNode_t', 'hNode'), ('hipLaunchAttributeID', 'attr'), ('const hipLaunchAttributeValue*', 'value')]
     case HIP_API_ID_hipGraphKernelNodeSetAttribute:
       if (data->args.hipGraphKernelNodeSetAttribute.value) data->args.hipGraphKernelNodeSetAttribute.value__val = *(data->args.hipGraphKernelNodeSetAttribute.value);
       break;
@@ -6748,6 +6995,9 @@ static inline void hipApiArgsInit(hip_api_id_t id, hip_api_data_t* data) {
 // hipMemcpy2D[('void*', 'dst'), ('size_t', 'dpitch'), ('const void*', 'src'), ('size_t', 'spitch'), ('size_t', 'width'), ('size_t', 'height'), ('hipMemcpyKind', 'kind')]
     case HIP_API_ID_hipMemcpy2D:
       break;
+// hipMemcpy2DArrayToArray[('hipArray_t', 'dst'), ('size_t', 'wOffsetDst'), ('size_t', 'hOffsetDst'), ('hipArray_const_t', 'src'), ('size_t', 'wOffsetSrc'), ('size_t', 'hOffsetSrc'), ('size_t', 'width'), ('size_t', 'height'), ('hipMemcpyKind', 'kind')]
+    case HIP_API_ID_hipMemcpy2DArrayToArray:
+      break;
 // hipMemcpy2DAsync[('void*', 'dst'), ('size_t', 'dpitch'), ('const void*', 'src'), ('size_t', 'spitch'), ('size_t', 'width'), ('size_t', 'height'), ('hipMemcpyKind', 'kind'), ('hipStream_t', 'stream')]
     case HIP_API_ID_hipMemcpy2DAsync:
       break;
@@ -6774,8 +7024,20 @@ static inline void hipApiArgsInit(hip_api_id_t id, hip_api_data_t* data) {
 // hipMemcpyAsync[('void*', 'dst'), ('const void*', 'src'), ('size_t', 'sizeBytes'), ('hipMemcpyKind', 'kind'), ('hipStream_t', 'stream')]
     case HIP_API_ID_hipMemcpyAsync:
       break;
+// hipMemcpyAtoA[('hipArray_t', 'dstArray'), ('size_t', 'dstOffset'), ('hipArray_t', 'srcArray'), ('size_t', 'srcOffset'), ('size_t', 'ByteCount')]
+    case HIP_API_ID_hipMemcpyAtoA:
+      break;
+// hipMemcpyAtoD[('hipDeviceptr_t', 'dstDevice'), ('hipArray_t', 'srcArray'), ('size_t', 'srcOffset'), ('size_t', 'ByteCount')]
+    case HIP_API_ID_hipMemcpyAtoD:
+      break;
 // hipMemcpyAtoH[('void*', 'dst'), ('hipArray_t', 'srcArray'), ('size_t', 'srcOffset'), ('size_t', 'count')]
     case HIP_API_ID_hipMemcpyAtoH:
+      break;
+// hipMemcpyAtoHAsync[('void*', 'dstHost'), ('hipArray_t', 'srcArray'), ('size_t', 'srcOffset'), ('size_t', 'ByteCount'), ('hipStream_t', 'stream')]
+    case HIP_API_ID_hipMemcpyAtoHAsync:
+      break;
+// hipMemcpyDtoA[('hipArray_t', 'dstArray'), ('size_t', 'dstOffset'), ('hipDeviceptr_t', 'srcDevice'), ('size_t', 'ByteCount')]
+    case HIP_API_ID_hipMemcpyDtoA:
       break;
 // hipMemcpyDtoD[('hipDeviceptr_t', 'dst'), ('hipDeviceptr_t', 'src'), ('size_t', 'sizeBytes')]
     case HIP_API_ID_hipMemcpyDtoD:
@@ -6800,6 +7062,9 @@ static inline void hipApiArgsInit(hip_api_id_t id, hip_api_data_t* data) {
       break;
 // hipMemcpyHtoA[('hipArray_t', 'dstArray'), ('size_t', 'dstOffset'), ('const void*', 'srcHost'), ('size_t', 'count')]
     case HIP_API_ID_hipMemcpyHtoA:
+      break;
+// hipMemcpyHtoAAsync[('hipArray_t', 'dstArray'), ('size_t', 'dstOffset'), ('const void*', 'srcHost'), ('size_t', 'ByteCount'), ('hipStream_t', 'stream')]
+    case HIP_API_ID_hipMemcpyHtoAAsync:
       break;
 // hipMemcpyHtoD[('hipDeviceptr_t', 'dst'), ('void*', 'src'), ('size_t', 'sizeBytes')]
     case HIP_API_ID_hipMemcpyHtoD:
@@ -6988,6 +7253,10 @@ static inline void hipApiArgsInit(hip_api_id_t id, hip_api_data_t* data) {
 // hipSetDeviceFlags[('unsigned int', 'flags')]
     case HIP_API_ID_hipSetDeviceFlags:
       break;
+// hipSetValidDevices[('int*', 'device_arr'), ('int', 'len')]
+    case HIP_API_ID_hipSetValidDevices:
+      if (data->args.hipSetValidDevices.device_arr) data->args.hipSetValidDevices.device_arr__val = *(data->args.hipSetValidDevices.device_arr);
+      break;
 // hipSetupArgument[('const void*', 'arg'), ('size_t', 'size'), ('size_t', 'offset')]
     case HIP_API_ID_hipSetupArgument:
       break;
@@ -7004,6 +7273,11 @@ static inline void hipApiArgsInit(hip_api_id_t id, hip_api_data_t* data) {
       break;
 // hipStreamBeginCapture[('hipStream_t', 'stream'), ('hipStreamCaptureMode', 'mode')]
     case HIP_API_ID_hipStreamBeginCapture:
+      break;
+// hipStreamBeginCaptureToGraph[('hipStream_t', 'stream'), ('hipGraph_t', 'graph'), ('const hipGraphNode_t*', 'dependencies'), ('const hipGraphEdgeData*', 'dependencyData'), ('size_t', 'numDependencies'), ('hipStreamCaptureMode', 'mode')]
+    case HIP_API_ID_hipStreamBeginCaptureToGraph:
+      if (data->args.hipStreamBeginCaptureToGraph.dependencies) data->args.hipStreamBeginCaptureToGraph.dependencies__val = *(data->args.hipStreamBeginCaptureToGraph.dependencies);
+      if (data->args.hipStreamBeginCaptureToGraph.dependencyData) data->args.hipStreamBeginCaptureToGraph.dependencyData__val = *(data->args.hipStreamBeginCaptureToGraph.dependencyData);
       break;
 // hipStreamCreate[('hipStream_t*', 'stream')]
     case HIP_API_ID_hipStreamCreate:
@@ -7082,6 +7356,16 @@ static inline void hipApiArgsInit(hip_api_id_t id, hip_api_data_t* data) {
     case HIP_API_ID_hipTexRefGetAddress:
       if (data->args.hipTexRefGetAddress.dev_ptr) data->args.hipTexRefGetAddress.dev_ptr__val = *(data->args.hipTexRefGetAddress.dev_ptr);
       if (data->args.hipTexRefGetAddress.texRef) data->args.hipTexRefGetAddress.texRef__val = *(data->args.hipTexRefGetAddress.texRef);
+      break;
+// hipTexRefGetArray[('hipArray_t*', 'pArray'), ('const textureReference*', 'texRef')]
+    case HIP_API_ID_hipTexRefGetArray:
+      if (data->args.hipTexRefGetArray.pArray) data->args.hipTexRefGetArray.pArray__val = *(data->args.hipTexRefGetArray.pArray);
+      if (data->args.hipTexRefGetArray.texRef) data->args.hipTexRefGetArray.texRef__val = *(data->args.hipTexRefGetArray.texRef);
+      break;
+// hipTexRefGetBorderColor[('float*', 'pBorderColor'), ('const textureReference*', 'texRef')]
+    case HIP_API_ID_hipTexRefGetBorderColor:
+      if (data->args.hipTexRefGetBorderColor.pBorderColor) data->args.hipTexRefGetBorderColor.pBorderColor__val = *(data->args.hipTexRefGetBorderColor.pBorderColor);
+      if (data->args.hipTexRefGetBorderColor.texRef) data->args.hipTexRefGetBorderColor.texRef__val = *(data->args.hipTexRefGetBorderColor.texRef);
       break;
 // hipTexRefGetFlags[('unsigned int*', 'pFlags'), ('const textureReference*', 'texRef')]
     case HIP_API_ID_hipTexRefGetFlags:
@@ -7636,20 +7920,6 @@ static inline const char* hipApiString(hip_api_id_t id, const hip_api_data_t* da
       oss << ", ctx="; roctracer::hip_support::detail::operator<<(oss, data->args.hipDrvGraphAddMemsetNode.ctx);
       oss << ")";
     break;
-    case HIP_API_ID_hipDrvGraphMemcpyNodeGetParams:
-      oss << "hipDrvGraphMemcpyNodeGetParams(";
-      oss << "hNode="; roctracer::hip_support::detail::operator<<(oss, data->args.hipDrvGraphMemcpyNodeGetParams.hNode);
-      if (data->args.hipDrvGraphMemcpyNodeGetParams.nodeParams == NULL) oss << ", nodeParams=NULL";
-      else { oss << ", nodeParams="; roctracer::hip_support::detail::operator<<(oss, data->args.hipDrvGraphMemcpyNodeGetParams.nodeParams__val); }
-      oss << ")";
-    break;
-    case HIP_API_ID_hipDrvGraphMemcpyNodeSetParams:
-      oss << "hipDrvGraphMemcpyNodeSetParams(";
-      oss << "hNode="; roctracer::hip_support::detail::operator<<(oss, data->args.hipDrvGraphMemcpyNodeSetParams.hNode);
-      if (data->args.hipDrvGraphMemcpyNodeSetParams.nodeParams == NULL) oss << ", nodeParams=NULL";
-      else { oss << ", nodeParams="; roctracer::hip_support::detail::operator<<(oss, data->args.hipDrvGraphMemcpyNodeSetParams.nodeParams__val); }
-      oss << ")";
-    break;
     case HIP_API_ID_hipDrvMemcpy2DUnaligned:
       oss << "hipDrvMemcpy2DUnaligned(";
       if (data->args.hipDrvMemcpy2DUnaligned.pCopy == NULL) oss << "pCopy=NULL";
@@ -7719,6 +7989,10 @@ static inline const char* hipApiString(hip_api_id_t id, const hip_api_data_t* da
     case HIP_API_ID_hipEventSynchronize:
       oss << "hipEventSynchronize(";
       oss << "event="; roctracer::hip_support::detail::operator<<(oss, data->args.hipEventSynchronize.event);
+      oss << ")";
+    break;
+    case HIP_API_ID_hipExtGetLastError:
+      oss << "hipExtGetLastError(";
       oss << ")";
     break;
     case HIP_API_ID_hipExtGetLinkTypeAndHopCount:
@@ -7929,12 +8203,15 @@ static inline const char* hipApiString(hip_api_id_t id, const hip_api_data_t* da
       oss << "hipGetErrorString(";
       oss << ")";
     break;
-    case HIP_API_ID_hipGetLastError:
-      oss << "hipGetLastError(";
+    case HIP_API_ID_hipGetFuncBySymbol:
+      oss << "hipGetFuncBySymbol(";
+      if (data->args.hipGetFuncBySymbol.functionPtr == NULL) oss << "functionPtr=NULL";
+      else { oss << "functionPtr="; roctracer::hip_support::detail::operator<<(oss, data->args.hipGetFuncBySymbol.functionPtr__val); }
+      oss << ", symbolPtr="; roctracer::hip_support::detail::operator<<(oss, data->args.hipGetFuncBySymbol.symbolPtr);
       oss << ")";
     break;
-    case HIP_API_ID_hipExtGetLastError:
-      oss << "hipExtGetLastError(";
+    case HIP_API_ID_hipGetLastError:
+      oss << "hipGetLastError(";
       oss << ")";
     break;
     case HIP_API_ID_hipGetMipmappedArrayLevel:
@@ -7943,6 +8220,18 @@ static inline const char* hipApiString(hip_api_id_t id, const hip_api_data_t* da
       else { oss << "levelArray="; roctracer::hip_support::detail::operator<<(oss, data->args.hipGetMipmappedArrayLevel.levelArray__val); }
       oss << ", mipmappedArray="; roctracer::hip_support::detail::operator<<(oss, data->args.hipGetMipmappedArrayLevel.mipmappedArray);
       oss << ", level="; roctracer::hip_support::detail::operator<<(oss, data->args.hipGetMipmappedArrayLevel.level);
+      oss << ")";
+    break;
+    case HIP_API_ID_hipGetProcAddress:
+      oss << "hipGetProcAddress(";
+      if (data->args.hipGetProcAddress.symbol == NULL) oss << "symbol=NULL";
+      else { oss << "symbol="; roctracer::hip_support::detail::operator<<(oss, data->args.hipGetProcAddress.symbol__val); }
+      if (data->args.hipGetProcAddress.pfn == NULL) oss << ", pfn=NULL";
+      else { oss << ", pfn="; roctracer::hip_support::detail::operator<<(oss, data->args.hipGetProcAddress.pfn__val); }
+      oss << ", hipVersion="; roctracer::hip_support::detail::operator<<(oss, data->args.hipGetProcAddress.hipVersion);
+      oss << ", flags="; roctracer::hip_support::detail::operator<<(oss, data->args.hipGetProcAddress.flags);
+      if (data->args.hipGetProcAddress.symbolStatus == NULL) oss << ", symbolStatus=NULL";
+      else { oss << ", symbolStatus="; roctracer::hip_support::detail::operator<<(oss, data->args.hipGetProcAddress.symbolStatus__val); }
       oss << ")";
     break;
     case HIP_API_ID_hipGetSymbolAddress:
@@ -8149,6 +8438,18 @@ static inline const char* hipApiString(hip_api_id_t id, const hip_api_data_t* da
       oss << ", numDependencies="; roctracer::hip_support::detail::operator<<(oss, data->args.hipGraphAddMemsetNode.numDependencies);
       if (data->args.hipGraphAddMemsetNode.pMemsetParams == NULL) oss << ", pMemsetParams=NULL";
       else { oss << ", pMemsetParams="; roctracer::hip_support::detail::operator<<(oss, data->args.hipGraphAddMemsetNode.pMemsetParams__val); }
+      oss << ")";
+    break;
+    case HIP_API_ID_hipGraphAddNode:
+      oss << "hipGraphAddNode(";
+      if (data->args.hipGraphAddNode.pGraphNode == NULL) oss << "pGraphNode=NULL";
+      else { oss << "pGraphNode="; roctracer::hip_support::detail::operator<<(oss, data->args.hipGraphAddNode.pGraphNode__val); }
+      oss << ", graph="; roctracer::hip_support::detail::operator<<(oss, data->args.hipGraphAddNode.graph);
+      if (data->args.hipGraphAddNode.pDependencies == NULL) oss << ", pDependencies=NULL";
+      else { oss << ", pDependencies="; roctracer::hip_support::detail::operator<<(oss, data->args.hipGraphAddNode.pDependencies__val); }
+      oss << ", numDependencies="; roctracer::hip_support::detail::operator<<(oss, data->args.hipGraphAddNode.numDependencies);
+      if (data->args.hipGraphAddNode.nodeParams == NULL) oss << ", nodeParams=NULL";
+      else { oss << ", nodeParams="; roctracer::hip_support::detail::operator<<(oss, data->args.hipGraphAddNode.nodeParams__val); }
       oss << ")";
     break;
     case HIP_API_ID_hipGraphChildGraphNodeGetGraph:
@@ -8421,6 +8722,15 @@ static inline const char* hipApiString(hip_api_id_t id, const hip_api_data_t* da
       else { oss << "pGraphExec="; roctracer::hip_support::detail::operator<<(oss, data->args.hipGraphInstantiateWithFlags.pGraphExec__val); }
       oss << ", graph="; roctracer::hip_support::detail::operator<<(oss, data->args.hipGraphInstantiateWithFlags.graph);
       oss << ", flags="; roctracer::hip_support::detail::operator<<(oss, data->args.hipGraphInstantiateWithFlags.flags);
+      oss << ")";
+    break;
+    case HIP_API_ID_hipGraphInstantiateWithParams:
+      oss << "hipGraphInstantiateWithParams(";
+      if (data->args.hipGraphInstantiateWithParams.pGraphExec == NULL) oss << "pGraphExec=NULL";
+      else { oss << "pGraphExec="; roctracer::hip_support::detail::operator<<(oss, data->args.hipGraphInstantiateWithParams.pGraphExec__val); }
+      oss << ", graph="; roctracer::hip_support::detail::operator<<(oss, data->args.hipGraphInstantiateWithParams.graph);
+      if (data->args.hipGraphInstantiateWithParams.instantiateParams == NULL) oss << ", instantiateParams=NULL";
+      else { oss << ", instantiateParams="; roctracer::hip_support::detail::operator<<(oss, data->args.hipGraphInstantiateWithParams.instantiateParams__val); }
       oss << ")";
     break;
     case HIP_API_ID_hipGraphKernelNodeCopyAttributes:
@@ -9215,6 +9525,19 @@ static inline const char* hipApiString(hip_api_id_t id, const hip_api_data_t* da
       oss << ", kind="; roctracer::hip_support::detail::operator<<(oss, data->args.hipMemcpy2D.kind);
       oss << ")";
     break;
+    case HIP_API_ID_hipMemcpy2DArrayToArray:
+      oss << "hipMemcpy2DArrayToArray(";
+      oss << "dst="; roctracer::hip_support::detail::operator<<(oss, data->args.hipMemcpy2DArrayToArray.dst);
+      oss << ", wOffsetDst="; roctracer::hip_support::detail::operator<<(oss, data->args.hipMemcpy2DArrayToArray.wOffsetDst);
+      oss << ", hOffsetDst="; roctracer::hip_support::detail::operator<<(oss, data->args.hipMemcpy2DArrayToArray.hOffsetDst);
+      oss << ", src="; roctracer::hip_support::detail::operator<<(oss, data->args.hipMemcpy2DArrayToArray.src);
+      oss << ", wOffsetSrc="; roctracer::hip_support::detail::operator<<(oss, data->args.hipMemcpy2DArrayToArray.wOffsetSrc);
+      oss << ", hOffsetSrc="; roctracer::hip_support::detail::operator<<(oss, data->args.hipMemcpy2DArrayToArray.hOffsetSrc);
+      oss << ", width="; roctracer::hip_support::detail::operator<<(oss, data->args.hipMemcpy2DArrayToArray.width);
+      oss << ", height="; roctracer::hip_support::detail::operator<<(oss, data->args.hipMemcpy2DArrayToArray.height);
+      oss << ", kind="; roctracer::hip_support::detail::operator<<(oss, data->args.hipMemcpy2DArrayToArray.kind);
+      oss << ")";
+    break;
     case HIP_API_ID_hipMemcpy2DAsync:
       oss << "hipMemcpy2DAsync(";
       oss << "dst="; roctracer::hip_support::detail::operator<<(oss, data->args.hipMemcpy2DAsync.dst);
@@ -9299,12 +9622,46 @@ static inline const char* hipApiString(hip_api_id_t id, const hip_api_data_t* da
       oss << ", stream="; roctracer::hip_support::detail::operator<<(oss, data->args.hipMemcpyAsync.stream);
       oss << ")";
     break;
+    case HIP_API_ID_hipMemcpyAtoA:
+      oss << "hipMemcpyAtoA(";
+      oss << "dstArray="; roctracer::hip_support::detail::operator<<(oss, data->args.hipMemcpyAtoA.dstArray);
+      oss << ", dstOffset="; roctracer::hip_support::detail::operator<<(oss, data->args.hipMemcpyAtoA.dstOffset);
+      oss << ", srcArray="; roctracer::hip_support::detail::operator<<(oss, data->args.hipMemcpyAtoA.srcArray);
+      oss << ", srcOffset="; roctracer::hip_support::detail::operator<<(oss, data->args.hipMemcpyAtoA.srcOffset);
+      oss << ", ByteCount="; roctracer::hip_support::detail::operator<<(oss, data->args.hipMemcpyAtoA.ByteCount);
+      oss << ")";
+    break;
+    case HIP_API_ID_hipMemcpyAtoD:
+      oss << "hipMemcpyAtoD(";
+      oss << "dstDevice="; roctracer::hip_support::detail::operator<<(oss, data->args.hipMemcpyAtoD.dstDevice);
+      oss << ", srcArray="; roctracer::hip_support::detail::operator<<(oss, data->args.hipMemcpyAtoD.srcArray);
+      oss << ", srcOffset="; roctracer::hip_support::detail::operator<<(oss, data->args.hipMemcpyAtoD.srcOffset);
+      oss << ", ByteCount="; roctracer::hip_support::detail::operator<<(oss, data->args.hipMemcpyAtoD.ByteCount);
+      oss << ")";
+    break;
     case HIP_API_ID_hipMemcpyAtoH:
       oss << "hipMemcpyAtoH(";
       oss << "dst="; roctracer::hip_support::detail::operator<<(oss, data->args.hipMemcpyAtoH.dst);
       oss << ", srcArray="; roctracer::hip_support::detail::operator<<(oss, data->args.hipMemcpyAtoH.srcArray);
       oss << ", srcOffset="; roctracer::hip_support::detail::operator<<(oss, data->args.hipMemcpyAtoH.srcOffset);
       oss << ", count="; roctracer::hip_support::detail::operator<<(oss, data->args.hipMemcpyAtoH.count);
+      oss << ")";
+    break;
+    case HIP_API_ID_hipMemcpyAtoHAsync:
+      oss << "hipMemcpyAtoHAsync(";
+      oss << "dstHost="; roctracer::hip_support::detail::operator<<(oss, data->args.hipMemcpyAtoHAsync.dstHost);
+      oss << ", srcArray="; roctracer::hip_support::detail::operator<<(oss, data->args.hipMemcpyAtoHAsync.srcArray);
+      oss << ", srcOffset="; roctracer::hip_support::detail::operator<<(oss, data->args.hipMemcpyAtoHAsync.srcOffset);
+      oss << ", ByteCount="; roctracer::hip_support::detail::operator<<(oss, data->args.hipMemcpyAtoHAsync.ByteCount);
+      oss << ", stream="; roctracer::hip_support::detail::operator<<(oss, data->args.hipMemcpyAtoHAsync.stream);
+      oss << ")";
+    break;
+    case HIP_API_ID_hipMemcpyDtoA:
+      oss << "hipMemcpyDtoA(";
+      oss << "dstArray="; roctracer::hip_support::detail::operator<<(oss, data->args.hipMemcpyDtoA.dstArray);
+      oss << ", dstOffset="; roctracer::hip_support::detail::operator<<(oss, data->args.hipMemcpyDtoA.dstOffset);
+      oss << ", srcDevice="; roctracer::hip_support::detail::operator<<(oss, data->args.hipMemcpyDtoA.srcDevice);
+      oss << ", ByteCount="; roctracer::hip_support::detail::operator<<(oss, data->args.hipMemcpyDtoA.ByteCount);
       oss << ")";
     break;
     case HIP_API_ID_hipMemcpyDtoD:
@@ -9372,6 +9729,15 @@ static inline const char* hipApiString(hip_api_id_t id, const hip_api_data_t* da
       oss << ", dstOffset="; roctracer::hip_support::detail::operator<<(oss, data->args.hipMemcpyHtoA.dstOffset);
       oss << ", srcHost="; roctracer::hip_support::detail::operator<<(oss, data->args.hipMemcpyHtoA.srcHost);
       oss << ", count="; roctracer::hip_support::detail::operator<<(oss, data->args.hipMemcpyHtoA.count);
+      oss << ")";
+    break;
+    case HIP_API_ID_hipMemcpyHtoAAsync:
+      oss << "hipMemcpyHtoAAsync(";
+      oss << "dstArray="; roctracer::hip_support::detail::operator<<(oss, data->args.hipMemcpyHtoAAsync.dstArray);
+      oss << ", dstOffset="; roctracer::hip_support::detail::operator<<(oss, data->args.hipMemcpyHtoAAsync.dstOffset);
+      oss << ", srcHost="; roctracer::hip_support::detail::operator<<(oss, data->args.hipMemcpyHtoAAsync.srcHost);
+      oss << ", ByteCount="; roctracer::hip_support::detail::operator<<(oss, data->args.hipMemcpyHtoAAsync.ByteCount);
+      oss << ", stream="; roctracer::hip_support::detail::operator<<(oss, data->args.hipMemcpyHtoAAsync.stream);
       oss << ")";
     break;
     case HIP_API_ID_hipMemcpyHtoD:
@@ -9797,6 +10163,13 @@ static inline const char* hipApiString(hip_api_id_t id, const hip_api_data_t* da
       oss << "flags="; roctracer::hip_support::detail::operator<<(oss, data->args.hipSetDeviceFlags.flags);
       oss << ")";
     break;
+    case HIP_API_ID_hipSetValidDevices:
+      oss << "hipSetValidDevices(";
+      if (data->args.hipSetValidDevices.device_arr == NULL) oss << "device_arr=NULL";
+      else { oss << "device_arr="; roctracer::hip_support::detail::operator<<(oss, data->args.hipSetValidDevices.device_arr__val); }
+      oss << ", len="; roctracer::hip_support::detail::operator<<(oss, data->args.hipSetValidDevices.len);
+      oss << ")";
+    break;
     case HIP_API_ID_hipSetupArgument:
       oss << "hipSetupArgument(";
       oss << "arg="; roctracer::hip_support::detail::operator<<(oss, data->args.hipSetupArgument.arg);
@@ -9834,6 +10207,18 @@ static inline const char* hipApiString(hip_api_id_t id, const hip_api_data_t* da
       oss << "hipStreamBeginCapture(";
       oss << "stream="; roctracer::hip_support::detail::operator<<(oss, data->args.hipStreamBeginCapture.stream);
       oss << ", mode="; roctracer::hip_support::detail::operator<<(oss, data->args.hipStreamBeginCapture.mode);
+      oss << ")";
+    break;
+    case HIP_API_ID_hipStreamBeginCaptureToGraph:
+      oss << "hipStreamBeginCaptureToGraph(";
+      oss << "stream="; roctracer::hip_support::detail::operator<<(oss, data->args.hipStreamBeginCaptureToGraph.stream);
+      oss << ", graph="; roctracer::hip_support::detail::operator<<(oss, data->args.hipStreamBeginCaptureToGraph.graph);
+      if (data->args.hipStreamBeginCaptureToGraph.dependencies == NULL) oss << ", dependencies=NULL";
+      else { oss << ", dependencies="; roctracer::hip_support::detail::operator<<(oss, data->args.hipStreamBeginCaptureToGraph.dependencies__val); }
+      if (data->args.hipStreamBeginCaptureToGraph.dependencyData == NULL) oss << ", dependencyData=NULL";
+      else { oss << ", dependencyData="; roctracer::hip_support::detail::operator<<(oss, data->args.hipStreamBeginCaptureToGraph.dependencyData__val); }
+      oss << ", numDependencies="; roctracer::hip_support::detail::operator<<(oss, data->args.hipStreamBeginCaptureToGraph.numDependencies);
+      oss << ", mode="; roctracer::hip_support::detail::operator<<(oss, data->args.hipStreamBeginCaptureToGraph.mode);
       oss << ")";
     break;
     case HIP_API_ID_hipStreamCreate:
@@ -9987,6 +10372,22 @@ static inline const char* hipApiString(hip_api_id_t id, const hip_api_data_t* da
       else { oss << "dev_ptr="; roctracer::hip_support::detail::operator<<(oss, data->args.hipTexRefGetAddress.dev_ptr__val); }
       if (data->args.hipTexRefGetAddress.texRef == NULL) oss << ", texRef=NULL";
       else { oss << ", texRef="; roctracer::hip_support::detail::operator<<(oss, data->args.hipTexRefGetAddress.texRef__val); }
+      oss << ")";
+    break;
+    case HIP_API_ID_hipTexRefGetArray:
+      oss << "hipTexRefGetArray(";
+      if (data->args.hipTexRefGetArray.pArray == NULL) oss << "pArray=NULL";
+      else { oss << "pArray="; roctracer::hip_support::detail::operator<<(oss, data->args.hipTexRefGetArray.pArray__val); }
+      if (data->args.hipTexRefGetArray.texRef == NULL) oss << ", texRef=NULL";
+      else { oss << ", texRef="; roctracer::hip_support::detail::operator<<(oss, data->args.hipTexRefGetArray.texRef__val); }
+      oss << ")";
+    break;
+    case HIP_API_ID_hipTexRefGetBorderColor:
+      oss << "hipTexRefGetBorderColor(";
+      if (data->args.hipTexRefGetBorderColor.pBorderColor == NULL) oss << "pBorderColor=NULL";
+      else { oss << "pBorderColor="; roctracer::hip_support::detail::operator<<(oss, data->args.hipTexRefGetBorderColor.pBorderColor__val); }
+      if (data->args.hipTexRefGetBorderColor.texRef == NULL) oss << ", texRef=NULL";
+      else { oss << ", texRef="; roctracer::hip_support::detail::operator<<(oss, data->args.hipTexRefGetBorderColor.texRef__val); }
       oss << ")";
     break;
     case HIP_API_ID_hipTexRefGetFlags:

@@ -67,32 +67,32 @@ typedef enum hiprtcResult {
  */
 
 typedef enum hiprtcJIT_option {
-  HIPRTC_JIT_MAX_REGISTERS = 0,  ///< Maximum registers may be used in a thread, passed to compiler
-  HIPRTC_JIT_THREADS_PER_BLOCK,  ///< Number of thread per block
-  HIPRTC_JIT_WALL_TIME,  ///< Value for total wall clock time
-  HIPRTC_JIT_INFO_LOG_BUFFER,  ///< Pointer to the buffer with logged information
-  HIPRTC_JIT_INFO_LOG_BUFFER_SIZE_BYTES,  ///< Size of the buffer in bytes for logged info
-  HIPRTC_JIT_ERROR_LOG_BUFFER,  ///< Pointer to the buffer with logged error(s)
-  HIPRTC_JIT_ERROR_LOG_BUFFER_SIZE_BYTES,  ///< Size of the buffer in bytes for logged error(s)
-  HIPRTC_JIT_OPTIMIZATION_LEVEL,  ///< Value of optimization level for generated codes
-  HIPRTC_JIT_TARGET_FROM_HIPCONTEXT,  ///< The target context, which is the default
-  HIPRTC_JIT_TARGET,  ///< JIT target
-  HIPRTC_JIT_FALLBACK_STRATEGY,  ///< Fallback strategy
-  HIPRTC_JIT_GENERATE_DEBUG_INFO,  ///< Generate debug information
-  HIPRTC_JIT_LOG_VERBOSE,  ///< Generate log verbose
-  HIPRTC_JIT_GENERATE_LINE_INFO,  ///< Generate line number information
-  HIPRTC_JIT_CACHE_MODE,  ///< Set cache mode
-  HIPRTC_JIT_NEW_SM3X_OPT,  ///< @deprecated  New SM3X option.
-  HIPRTC_JIT_FAST_COMPILE,  ///< Set fast compile
-  HIPRTC_JIT_GLOBAL_SYMBOL_NAMES,  ///< Array of device symbol names to be relocated to the host
-  HIPRTC_JIT_GLOBAL_SYMBOL_ADDRESS,  ///< Array of host addresses to be relocated to the device
-  HIPRTC_JIT_GLOBAL_SYMBOL_COUNT,  ///< Number of symbol count.
-  HIPRTC_JIT_LTO,  ///< @deprecated  Enable link-time optimization for device code
-  HIPRTC_JIT_FTZ,  ///< @deprecated  Set single-precision denormals.
-  HIPRTC_JIT_PREC_DIV,  ///< @deprecated  Set single-precision floating-point division and
+  HIPRTC_JIT_MAX_REGISTERS = 0,  ///< CUDA Only Maximum registers may be used in a thread, passed to compiler
+  HIPRTC_JIT_THREADS_PER_BLOCK,  ///< CUDA Only Number of thread per block
+  HIPRTC_JIT_WALL_TIME,  ///< CUDA Only Value for total wall clock time
+  HIPRTC_JIT_INFO_LOG_BUFFER,  ///< CUDA Only Pointer to the buffer with logged information
+  HIPRTC_JIT_INFO_LOG_BUFFER_SIZE_BYTES,  ///< CUDA Only Size of the buffer in bytes for logged info
+  HIPRTC_JIT_ERROR_LOG_BUFFER,  ///< CUDA Only Pointer to the buffer with logged error(s)
+  HIPRTC_JIT_ERROR_LOG_BUFFER_SIZE_BYTES,  ///< CUDA Only Size of the buffer in bytes for logged error(s)
+  HIPRTC_JIT_OPTIMIZATION_LEVEL,  ///< Value of optimization level for generated codes, acceptable options -O0, -O1, -O2, -O3
+  HIPRTC_JIT_TARGET_FROM_HIPCONTEXT,  ///< CUDA Only The target context, which is the default
+  HIPRTC_JIT_TARGET,  ///< CUDA Only JIT target
+  HIPRTC_JIT_FALLBACK_STRATEGY,  ///< CUDA Only Fallback strategy
+  HIPRTC_JIT_GENERATE_DEBUG_INFO,  ///< CUDA Only Generate debug information
+  HIPRTC_JIT_LOG_VERBOSE,  ///< CUDA Only Generate log verbose
+  HIPRTC_JIT_GENERATE_LINE_INFO,  ///< CUDA Only Generate line number information
+  HIPRTC_JIT_CACHE_MODE,  ///< CUDA Only Set cache mode
+  HIPRTC_JIT_NEW_SM3X_OPT,  ///< @deprecated CUDA Only New SM3X option.
+  HIPRTC_JIT_FAST_COMPILE,  ///< CUDA Only Set fast compile
+  HIPRTC_JIT_GLOBAL_SYMBOL_NAMES,  ///< CUDA Only Array of device symbol names to be relocated to the host
+  HIPRTC_JIT_GLOBAL_SYMBOL_ADDRESS,  ///< CUDA Only Array of host addresses to be relocated to the device
+  HIPRTC_JIT_GLOBAL_SYMBOL_COUNT,  ///< CUDA Only Number of symbol count.
+  HIPRTC_JIT_LTO,  ///< @deprecated CUDA Only Enable link-time optimization for device code
+  HIPRTC_JIT_FTZ,  ///< @deprecated CUDA Only Set single-precision denormals.
+  HIPRTC_JIT_PREC_DIV,  ///< @deprecated CUDA Only Set single-precision floating-point division and
                         ///< reciprocals
-  HIPRTC_JIT_PREC_SQRT,  ///< @deprecated  Set single-precision floating-point square root
-  HIPRTC_JIT_FMA,  ///< @deprecated  Enable floating-point multiplies and adds/subtracts operations
+  HIPRTC_JIT_PREC_SQRT,  ///< @deprecated CUDA Only Set single-precision floating-point square root
+  HIPRTC_JIT_FMA,  ///< @deprecated CUDA Only Enable floating-point multiplies and adds/subtracts operations
   HIPRTC_JIT_NUM_OPTIONS,  ///< Number of options
   HIPRTC_JIT_IR_TO_ISA_OPT_EXT = 10000,  ///< Linker options to be passed on to compiler
                                          /// @note  Only supported for the AMD platform.

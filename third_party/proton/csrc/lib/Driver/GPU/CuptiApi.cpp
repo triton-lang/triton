@@ -1,21 +1,15 @@
 #include "Driver/GPU/CuptiApi.h"
-#include "Driver/Device.h"
+#include "Device.h"
 #include "Driver/Dispatch.h"
 
 namespace proton {
 
 namespace cupti {
 
-#define STRINGIFY(x) #x
-#define TOSTRING(x) STRINGIFY(x)
 struct ExternLibCupti : public ExternLibBase {
   using RetType = CUptiResult;
   static constexpr const char *name = "libcupti.so";
-#ifdef CUPTI_LIB_DIR
-  static constexpr const char *defaultDir = TOSTRING(CUPTI_LIB_DIR);
-#else
-  static constexpr const char *defaultDir = "";
-#endif
+  static inline std::string defaultDir = "";
   static constexpr RetType success = CUPTI_SUCCESS;
   static void *lib;
 };
@@ -115,6 +109,8 @@ DEFINE_DISPATCH(ExternLibCupti, pcSamplingStart, cuptiPCSamplingStart,
 
 DEFINE_DISPATCH(ExternLibCupti, pcSamplingStop, cuptiPCSamplingStop,
                 CUpti_PCSamplingStopParams *);
+
+void setLibPath(const std::string &path) { ExternLibCupti::defaultDir = path; }
 
 } // namespace cupti
 

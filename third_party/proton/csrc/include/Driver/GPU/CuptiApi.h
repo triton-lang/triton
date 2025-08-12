@@ -3,6 +3,7 @@
 
 #include "cupti.h"
 #include "cupti_pcsampling.h"
+#include <string>
 
 namespace proton {
 
@@ -105,6 +106,8 @@ CUptiResult pcSamplingStart(CUpti_PCSamplingStartParams *pParams);
 
 template <bool CheckSuccess>
 CUptiResult pcSamplingStop(CUpti_PCSamplingStopParams *pParams);
+
+void setLibPath(const std::string &path);
 
 } // namespace cupti
 

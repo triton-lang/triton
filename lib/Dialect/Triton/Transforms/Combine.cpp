@@ -1,5 +1,3 @@
-#include <memory>
-
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
@@ -7,46 +5,19 @@
 #include "mlir/Support/LLVM.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
-#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/DiscardableAttributes.h"
 #include "triton/Dialect/Triton/Transforms/Passes.h"
 
-#define GEN_PASS_CLASSES
+namespace mlir::triton {
+
+#define GEN_PASS_DEF_TRITONCOMBINEOPS
 #include "triton/Dialect/Triton/Transforms/Passes.h.inc"
 
-namespace mlir::triton {
 namespace {
 
 bool isZero(Value val) {
-  if (matchPattern(val, m_Zero()) || matchPattern(val, m_AnyZeroFloat()))
-    return true;
-  // broadcast(constant_0)
-  if (auto bc = val.getDefiningOp<BroadcastOp>()) {
-    if (matchPattern(bc.getSrc(), m_Zero()) ||
-        matchPattern(bc.getSrc(), m_AnyZeroFloat()))
-      return true;
-  }
-  return false;
-}
-
-bool isBroadcastConstantCombinable(Attribute value) {
-  if (auto denseValue = dyn_cast<DenseElementsAttr>(value)) {
-    return denseValue.isSplat();
-  }
-  return isa<FloatAttr, IntegerAttr>(value);
-}
-
-DenseElementsAttr getConstantValue(Builder &builder, Attribute value,
-                                   Value bcast_res) {
-  auto resType = cast<ShapedType>(bcast_res.getType());
-  DenseElementsAttr res;
-  if (auto denseValue = dyn_cast<DenseElementsAttr>(value)) {
-    res =
-        DenseElementsAttr::get(resType, denseValue.getSplatValue<Attribute>());
-  } else {
-    res = DenseElementsAttr::get(resType, value);
-  }
-  return res;
+  return (matchPattern(val, m_Zero()) || matchPattern(val, m_AnyZeroFloat()));
 }
 
 bool isAddPtrOffsetCombinable(Value first, Value second) {
@@ -147,15 +118,6 @@ private:
     return false;
   }
 
-  static SmallVector<int> getEqualIndices(ArrayRef<int64_t> x,
-                                          ArrayRef<int64_t> y) {
-    SmallVector<int> res;
-    for (int i = 0; i < x.size(); ++i)
-      if (x[i] == y[i])
-        res.push_back(i);
-    return res;
-  }
-
 public:
   CombineBroadcastMulReducePattern(MLIRContext *context)
       : RewritePattern(ReduceOp::getOperationName(), 1, context) {}
@@ -216,33 +178,116 @@ public:
   }
 };
 
-class CombineOpsPass : public TritonCombineOpsBase<CombineOpsPass> {
+// When reducing a 1D tensor the order of elements of the tensor doesn't matter.
+// Therefore we can relax the reshape to allow it to re-order elements.
+class CombineReshapeReducePatterns : public mlir::OpRewritePattern<ReshapeOp> {
+public:
+  using OpRewritePattern::OpRewritePattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(triton::ReshapeOp reshapeOp,
+                  mlir::PatternRewriter &rewriter) const override {
+    if (reshapeOp.getAllowReorder())
+      return failure();
+    if (reshapeOp.getType().getRank() != 1)
+      return failure();
+    for (Operation *user : reshapeOp->getUsers()) {
+      if (!isa<triton::ReduceOp, triton::HistogramOp>(user))
+        return failure();
+    }
+    rewriter.modifyOpInPlace(reshapeOp,
+                             [&]() { reshapeOp.setAllowReorder(true); });
+    return success();
+  }
+};
+
+class RankedReduceDescriptorLoads : public mlir::OpRewritePattern<ReshapeOp> {
+public:
+  using OpRewritePattern::OpRewritePattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(triton::ReshapeOp reshapeOp,
+                  mlir::PatternRewriter &rewriter) const override {
+    auto loadDef = reshapeOp.getSrc().getDefiningOp<triton::DescriptorLoadOp>();
+    if (!loadDef || !loadDef->hasOneUse())
+      return failure();
+    int loadRank = loadDef.getType().getRank();
+    int reshapeRank = reshapeOp.getType().getRank();
+    if (!(reshapeRank < loadRank))
+      return failure();
+    ArrayRef<int64_t> loadShape = loadDef.getType().getShape();
+    ArrayRef<int64_t> reshapeShape = reshapeOp.getType().getShape();
+    for (int i = 0; i < loadRank - reshapeRank; ++i) {
+      // Only rank reduce unit dims.
+      if (loadShape[i] != 1)
+        return failure();
+    }
+    if (loadShape.take_back(reshapeRank) != reshapeShape)
+      return failure();
+    rewriter.modifyOpInPlace(
+        loadDef, [&]() { loadDef.getResult().setType(reshapeOp.getType()); });
+    rewriter.replaceOp(reshapeOp, loadDef.getResult());
+    return success();
+  }
+};
+
+template <typename OpTy>
+class CombineDotAddPattern : public mlir::OpRewritePattern<OpTy> {
+public:
+  using OpRewritePattern<OpTy>::OpRewritePattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(OpTy addOp, mlir::PatternRewriter &rewriter) const override {
+    auto dotOp = addOp.getRhs().template getDefiningOp<DotOp>();
+    bool isDotLHS = false;
+    if (!dotOp) {
+      dotOp = addOp.getLhs().template getDefiningOp<DotOp>();
+      if (!dotOp) {
+        return failure();
+      }
+      isDotLHS = true;
+    }
+    if (!dotOp->hasOneUse()) {
+      return failure();
+    }
+    if (!isZero(dotOp.getC()))
+      return failure();
+    rewriter.modifyOpInPlace(dotOp, [&] {
+      dotOp.getCMutable().assign(isDotLHS ? addOp.getRhs() : addOp.getLhs());
+      dotOp->moveBefore(addOp);
+    });
+    rewriter.replaceAllUsesWith(addOp, dotOp.getResult());
+    return success();
+  }
+};
+
+// AddIOp(DotOp(a, b, c), d) and c==0 => DotOp(a, b, d)
+// AddFOp(DotOp(a, b, c), d) and c==0 => DotOp(a, b, d)
+// AddIOp(d, DotOp(a, b, c)) and c==0 => DotOp(a, b, d)
+// AddFOp(d, DotOp(a, b, c)) and c==0 => DotOp(a, b, d)
+using CombineDotAddIPattern = CombineDotAddPattern<arith::AddIOp>;
+using CombineDotAddFPattern = CombineDotAddPattern<arith::AddFOp>;
+
+} // anonymous namespace
+
+class CombineOpsPass : public impl::TritonCombineOpsBase<CombineOpsPass> {
 public:
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     RewritePatternSet patterns(context);
     ModuleOp m = getOperation();
 
-    // Dot Add %{
     patterns.add<CombineDotAddIPattern>(context);
     patterns.add<CombineDotAddFPattern>(context);
-    patterns.add<CombineDotAddIRevPattern>(context);
-    patterns.add<CombineDotAddFRevPattern>(context);
-    // %}
     patterns.add<CombineSelectMaskedLoadPattern>(context);
     patterns.add<CombineAddPtrPattern>(context);
-    patterns.add<CombineBroadcastConstantPattern>(context);
     patterns.add<CombineBroadcastMulReducePattern>(context);
+    patterns.add<CombineReshapeReducePatterns>(context);
+    patterns.add<RankedReduceDescriptorLoads>(context);
 
-    if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed())
+    if (applyPatternsGreedily(m, std::move(patterns)).failed())
       signalPassFailure();
   }
 };
-
-} // anonymous namespace
-
-std::unique_ptr<mlir::Pass> createCombineOpsPass() {
-  return std::make_unique<CombineOpsPass>();
-}
 
 } // namespace mlir::triton

@@ -1,24 +1,14 @@
 # fmt: off
 
 
-import os
 import numpy as np
 import torch
 import pytest
 import triton
 import triton.language as tl
 
-def is_interpreter():
-    return os.environ.get('TRITON_INTERPRET', '0') == '1'
+from triton._internal_testing import is_cuda, is_hip, is_hip_cdna2, is_hip_cdna3, is_hip_cdna4
 
-def is_cuda():
-    return not is_interpreter() and triton.runtime.driver.active.get_current_target().backend == "cuda"
-
-def is_hip():
-    return not is_interpreter() and triton.runtime.driver.active.get_current_target().backend == "hip"
-
-def is_on_mi300():
-    return is_hip() and triton.runtime.driver.active.get_current_target().arch in ('gfx940', 'gfx941', 'gfx942')
 
 def matching_int(dtype):
     if dtype.primitive_bitwidth == 8:
@@ -275,19 +265,33 @@ def upcast_test(src_dtype, dst_dtype, exponent_bits, mantissa_bits, exponent_bia
     ('float8e4nv', 'float32'),
 
     ('float8e4b8', 'float32'),
+    ('float8e4b8', 'bfloat16'),
     ('float8e4b8', 'float16'),
 
     ('float8e5b16', 'float32'),
     ('float8e5b16', 'float16'),
 ])
 def test_typeconvert_upcast(src_dtype, dst_dtype, device):
-    if ((src_dtype == 'float8e4nv' and is_cuda() and torch.cuda.get_device_capability(0) < (8, 9))
-       or (src_dtype in ('float8e4nv', 'float8e4b15') and is_hip())
-       or (src_dtype in ('float8e4b8', 'float8e5b16') and (is_cuda() or not is_on_mi300()))):
-        # If the dtype should error out in the given device, we assert that and return
-        with pytest.raises(triton.CompilationError, match="not supported in this architecture"):
-            launch_exhaustive_populate(getattr(tl, src_dtype), 0, 65536, False, 8, 0x7f, device=device)
-        return
+
+    # On HIP, fp8e4nv upcasting to fp32 is only supported on CDNA4, and
+    # fp8e4nv upcasting to bf16 and fp16 is only supported on CDNA3 and CDNA4.
+    if is_cuda():
+        if ((src_dtype == 'float8e4nv' and torch.cuda.get_device_capability(0) < (8, 9))
+            or src_dtype in ('float8e4b8', 'float8e5b16')):
+            # If the dtype should error out in the given device, we assert that and return
+            with pytest.raises(triton.CompilationError, match="not supported in this architecture"):
+                launch_exhaustive_populate(getattr(tl, src_dtype), 0, 65536, False, 8, 0x7f, device=device)
+            return
+    elif is_hip():
+        if  (src_dtype == 'float8e4nv' and not (is_hip_cdna3() or is_hip_cdna4())):
+            pytest.skip(f"upcasting {src_dtype} to {dst_dtype} not supported in this architecture")
+        if  src_dtype == 'float8e4b15':
+            # If the dtype should error out in the given device, we assert that and return
+            with pytest.raises(triton.CompilationError, match="not supported in this architecture"):
+                launch_exhaustive_populate(getattr(tl, src_dtype), 0, 65536, False, 8, 0x7f, device=device)
+            return
+        if src_dtype in ('float8e4b8', 'float8e5b16') and is_hip_cdna2():
+            pytest.skip(f"{src_dtype} is not supported on AMDGPU CDNA2")
 
     # dtype : (exponent_bits, mantissa_bits, exponent_bias, max_repr)
     stuff = {
@@ -328,14 +332,19 @@ def test_typeconvert_upcast(src_dtype, dst_dtype, device):
 ])
 def test_typeconvert_downcast(src_dtype, dst_dtype, rounding, max_repr, device):
 
-    if src_dtype != 'float32' and is_cuda() and torch.cuda.get_device_capability(0) < (9, 0):
-        pytest.skip("non-float32 downcast tests only supported on NVGPU with compute capability 9.0+")
+    if is_cuda():
+        if src_dtype != 'float32' and torch.cuda.get_device_capability(0) < (9, 0):
+            pytest.skip("non-float32 downcast tests only supported on NVGPU with compute capability 9.0+")
 
-    if dst_dtype in ('float8e5', 'float8e4nv') and rounding == 'rtne' and (is_hip() or torch.cuda.get_device_capability(0) < (9, 0)):
-        pytest.skip(f"{dst_dtype} downcast with RTNE rounding tests only supported on NVGPU with compute capability 9.0+")
+        if dst_dtype in ('float8e5', 'float8e4nv') and rounding == 'rtne' and torch.cuda.get_device_capability(0) < (9, 0):
+            pytest.skip(f"{dst_dtype} downcast with RTNE rounding tests only supported on NVGPU with compute capability 9.0+")
 
-    if dst_dtype in ('float8e5b16', 'float8e4b8') and rounding == 'rtne' and (is_cuda() or not is_on_mi300()):
-        pytest.skip(f"{dst_dtype} downcast with RTNE rounding tests only supported on AMDGPU MI300")
+        if dst_dtype in ('float8e5b16', 'float8e4b8') and rounding == 'rtne':
+            pytest.skip(f"{dst_dtype} downcast with RTNE rounding tests only supported on AMDGPU CDNA3")
+
+    if is_hip():
+        if dst_dtype in ('float8e4b8', 'float8e5b16') and is_hip_cdna2():
+            pytest.skip(f"{dst_dtype} is not supported on AMDGPU CDNA2")
 
     # dtype : (exponent_bits, mantissa_bits, exponent_bias)
     stuff = {
@@ -350,3 +359,64 @@ def test_typeconvert_downcast(src_dtype, dst_dtype, rounding, max_repr, device):
 
     for i in range(256):
         downcast_test(getattr(tl, src_dtype), getattr(tl, dst_dtype), rounding, *stuff, max_repr, i, device=device)
+
+@pytest.mark.parametrize("mode", [
+    'max', 'min', 'inf', '-inf', 'nan',
+])
+@pytest.mark.parametrize("dst_dtype", ["float8e4nv", "float8e5"])
+@pytest.mark.parametrize("src_dtype", ["float32", "float16", "bfloat16"])
+def test_typeconvert_downcast_clamping(src_dtype, dst_dtype, mode, device, rounding="rtne"):
+    if is_cuda():
+        if src_dtype != 'float32' and torch.cuda.get_device_capability(0) < (9, 0):
+            pytest.skip("non-float32 downcast tests only supported on NVGPU with compute capability 9.0+")
+
+        if dst_dtype in ('float8e5', 'float8e4nv') and rounding == 'rtne' and torch.cuda.get_device_capability(0) < (9, 0):
+            pytest.skip(f"{dst_dtype} downcast with RTNE rounding tests only supported on NVGPU with compute capability 9.0+")
+
+    converter = {
+        tl.float8e4nv: torch.float8_e4m3fn,
+        tl.float8e5: torch.float8_e5m2,
+        tl.float16: torch.float16,
+        tl.bfloat16: torch.bfloat16,
+        tl.float32: torch.float32
+    }
+
+    tl_src_dtype = getattr(tl, src_dtype)
+    tl_dst_dtype = getattr(tl, dst_dtype)
+
+    torch_src_dtype = converter[tl_src_dtype]
+    torch_dst_dtype = converter[tl_dst_dtype]
+
+    if mode in ('max', 'min'):
+        # Added to input to exceed the representation range to produce NaN
+        exceed_value = 100.0
+        test_value = torch.finfo(torch_dst_dtype).max + exceed_value
+        expected_result = torch.finfo(torch_dst_dtype).max
+    elif mode in ('inf', '-inf'):
+        test_value = torch.inf
+        expected_result = torch.finfo(torch_dst_dtype).max
+    else:
+        assert mode == 'nan'
+        test_value = torch.nan
+        expected_result = torch.nan
+
+    if mode in ('min', '-inf'):
+        test_value *= -1.0
+        expected_result *= -1.0
+
+    BLOCK_SIZE = 1024
+    shape = (BLOCK_SIZE * 2,)
+    src = torch.full(shape, test_value, dtype=torch_src_dtype, device=device)
+    dst = torch.empty(shape, dtype=torch_dst_dtype, device=device)
+
+    type_convert_triton[(src.shape[0] // BLOCK_SIZE,)](
+        triton.reinterpret(src, torch_src_dtype),
+        triton.reinterpret(dst, torch_dst_dtype),
+        rounding,
+        BLOCK_SIZE
+    )
+
+    if mode == 'nan':
+        assert(torch.all(torch.isnan(dst)))
+    else:
+        torch.testing.assert_close(dst, torch.full_like(dst, expected_result))

@@ -2,7 +2,6 @@
 #include "mlir/Pass/Pass.h"
 #include "triton/Analysis/Alias.h"
 #include "triton/Analysis/Utility.h"
-#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
 using namespace mlir;
 
@@ -20,19 +19,19 @@ struct TestAliasPass
     return opName;
   }
 
-  static void print(StringRef name, SmallVector<std::string> &vals,
-                    raw_ostream &os) {
+  static void emit(Location loc, StringRef name,
+                   SmallVector<std::string> &vals) {
     if (vals.empty())
       return;
-    os << name << " -> ";
+    InFlightDiagnostic diag = mlir::emitRemark(loc);
+    diag << name << " -> ";
     size_t i = 0;
     for (auto val : vals) {
       if (i != 0)
-        os << ",";
-      os << val;
+        diag << ",";
+      diag << val;
       ++i;
     }
-    os << "\n";
   }
 
   StringRef getArgument() const final { return "test-print-alias"; }
@@ -42,9 +41,6 @@ struct TestAliasPass
 
   void runOnOperation() override {
     Operation *operation = getOperation();
-    auto &os = llvm::errs();
-    auto opName = SymbolTable::getSymbolName(operation).getValue().str();
-    os << opName << "\n";
 
     std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
     SharedMemoryAliasAnalysis *analysis =
@@ -80,7 +76,7 @@ struct TestAliasPass
             auto operand = block->getArgument(arg.index());
             auto opNames = getLocalAllocOpNames(operand);
             auto argName = getValueOperandName(arg.value(), state);
-            print(argName, opNames, os);
+            emit(op->getLoc(), argName, opNames);
           }
         }
         return;
@@ -90,13 +86,13 @@ struct TestAliasPass
           auto operand = forOp.getTiedLoopInit(arg.value())->get();
           auto opNames = getLocalAllocOpNames(operand);
           auto argName = getValueOperandName(arg.value(), state);
-          print(argName, opNames, os);
+          emit(op->getLoc(), argName, opNames);
         }
       }
       for (auto result : llvm::enumerate(op->getResults())) {
         auto opNames = getLocalAllocOpNames(result.value());
         auto resultName = getValueOperandName(result.value(), state);
-        print(resultName, opNames, os);
+        emit(op->getLoc(), resultName, opNames);
       }
     });
   }

@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file -convert-triton-to-tritongpu=target=cuda:80 -tritongpu-remove-layout-conversions -tritongpu-pipeline=num-stages=3 -canonicalize -test-print-allocation 2>&1 | FileCheck %s
+// RUN: triton-opt %s -convert-triton-to-tritongpu=target=cuda:80 -tritongpu-remove-layout-conversions -tritongpu-assign-latencies -tritongpu-schedule-loops -tritongpu-pipeline=num-stages=3 -canonicalize -test-print-allocation 2>&1 | FileCheck %s
 
 // CHECK: offset = 0, size = 32768
 // CHECK: offset = 32768, size = 32768
@@ -6,8 +6,8 @@
 module {
 tt.func @matmul_kernel__Pfp32_Pfp32_Pfp32_i32_i32_i32_i32_i32_i32_i32_i32_i32__12c64_13c64_14c64_15c8(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg3: i32, %arg4: i32, %arg5: i32, %arg6: i32 {tt.divisibility = 16 : i32}, %arg7: i32, %arg8: i32 {tt.divisibility = 16 : i32}, %arg9: i32, %arg10: i32 {tt.divisibility = 16 : i32}, %arg11: i32) {
     %cst = arith.constant dense<true> : tensor<64x64xi1>
-    %c64 = arith.constant 64 : index
-    %c0 = arith.constant 0 : index
+    %c64 = arith.constant 64 : i32
+    %c0 = arith.constant 0 : i32
     %cst_0 = arith.constant dense<0.000000e+00> : tensor<64x64xf32>
     %c64_i32 = arith.constant 64 : i32
     %c63_i32 = arith.constant 63 : i32
@@ -58,8 +58,7 @@ tt.func @matmul_kernel__Pfp32_Pfp32_Pfp32_i32_i32_i32_i32_i32_i32_i32_i32_i32__1
     %43 = arith.addi %41, %42 : tensor<64x64xi32>
     %44 = tt.splat %arg1 : !tt.ptr<f32> -> tensor<64x64x!tt.ptr<f32>>
     %45 = tt.addptr %44, %43 : tensor<64x64x!tt.ptr<f32>>, tensor<64x64xi32>
-    %46 = arith.index_cast %arg5 : i32 to index
-    %47:3 = scf.for %arg12 = %c0 to %46 step %c64 iter_args(%arg13 = %cst_0, %arg14 = %34, %arg15 = %45) -> (tensor<64x64xf32>, tensor<64x64x!tt.ptr<f32>>, tensor<64x64x!tt.ptr<f32>>) {
+    %47:3 = scf.for %arg12 = %c0 to %arg5 step %c64 iter_args(%arg13 = %cst_0, %arg14 = %34, %arg15 = %45) -> (tensor<64x64xf32>, tensor<64x64x!tt.ptr<f32>>, tensor<64x64x!tt.ptr<f32>>) : i32 {
       %76 = tt.load %arg14, %cst, %cst_0 : tensor<64x64x!tt.ptr<f32>>
       %77 = tt.load %arg15, %cst, %cst_0 : tensor<64x64x!tt.ptr<f32>>
       %78 = tt.dot %76, %77, %cst_0 : tensor<64x64xf32> * tensor<64x64xf32> -> tensor<64x64xf32>

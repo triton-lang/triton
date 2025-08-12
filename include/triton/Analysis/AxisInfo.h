@@ -6,12 +6,8 @@
 
 #include "mlir/Support/LLVM.h"
 #include "triton/Analysis/Utility.h"
-#include "triton/Dialect/Triton/IR/Dialect.h"
-#include "triton/Dialect/Triton/IR/Utility.h"
-#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
 #include <optional>
-#include <type_traits>
 
 namespace mlir::triton {
 
@@ -27,11 +23,12 @@ public:
 public:
   AxisInfo() : AxisInfo({}, {}, {}) {}
 
-  AxisInfo(DimVectorT contiguity, DimVectorT divisibility, DimVectorT constancy)
+  AxisInfo(ArrayRef<int64_t> contiguity, ArrayRef<int64_t> divisibility,
+           ArrayRef<int64_t> constancy)
       : AxisInfo(contiguity, divisibility, constancy, std::nullopt) {}
 
-  AxisInfo(DimVectorT contiguity, DimVectorT divisibility, DimVectorT constancy,
-           std::optional<int64_t> constantValue)
+  AxisInfo(ArrayRef<int64_t> contiguity, ArrayRef<int64_t> divisibility,
+           ArrayRef<int64_t> constancy, std::optional<int64_t> constantValue)
       : contiguity(contiguity), divisibility(divisibility),
         constancy(constancy), constantValue(constantValue) {
     assert(divisibility.size() == contiguity.size());
@@ -152,6 +149,49 @@ private:
   std::optional<int64_t> constantValue;
 };
 
+class AxisInfoVisitor {
+public:
+  AxisInfoVisitor() = default;
+  virtual ~AxisInfoVisitor() = default;
+
+  bool isContiguousDim(const AxisInfo &info, ArrayRef<int64_t> shape, int dim) {
+    return info.getContiguity(dim) == shape[dim];
+  }
+
+  bool isConstantDim(const AxisInfo &info, ArrayRef<int64_t> shape, int dim) {
+    return info.getConstancy(dim) == shape[dim];
+  }
+
+  virtual AxisInfo
+  getAxisInfo(Operation *op,
+              ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) = 0;
+
+  virtual bool match(Operation *op) = 0;
+};
+
+class AxisInfoVisitorList {
+public:
+  template <typename... Ts, typename = std::enable_if_t<sizeof...(Ts) != 0>>
+  void append() {
+    (visitors.emplace_back(std::make_unique<Ts>()), ...);
+  }
+
+  AxisInfo apply(Operation *op,
+                 ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) {
+    for (auto &visitor : visitors)
+      if (visitor->match(op))
+        return visitor->getAxisInfo(op, operands);
+    return AxisInfo();
+  }
+
+private:
+  std::vector<std::unique_ptr<AxisInfoVisitor>> visitors;
+};
+
+namespace axisinfo {
+using CallbackType = std::function<void(AxisInfoVisitorList &)>;
+} // namespace axisinfo
+
 // Module level axis info analysis based on the call graph, assuming that we do
 // not have recursive functions.
 //
@@ -162,7 +202,8 @@ private:
 using AxisInfoMapT = DenseMap<Value, AxisInfo>;
 class ModuleAxisInfoAnalysis : public CallGraph<AxisInfoMapT> {
 public:
-  explicit ModuleAxisInfoAnalysis(ModuleOp moduleOp)
+  explicit ModuleAxisInfoAnalysis(ModuleOp moduleOp,
+                                  axisinfo::CallbackType callback = nullptr)
       : CallGraph<AxisInfoMapT>(moduleOp) {
     SmallVector<FunctionOpInterface> funcs;
     for (auto root : getRoots()) {
@@ -178,7 +219,7 @@ public:
     SetVector<FunctionOpInterface> sortedFuncs(funcs.begin(), funcs.end());
     SymbolTableCollection symbolTable;
     for (auto funcOp : llvm::reverse(sortedFuncs)) {
-      initialize(funcOp);
+      initialize(funcOp, callback);
       funcOp.walk([&](CallOpInterface callOp) {
         auto callee = dyn_cast<FunctionOpInterface>(
             callOp.resolveCallableInTable(&symbolTable));
@@ -201,15 +242,29 @@ public:
     return &(it->second);
   }
 
-  unsigned getPtrContiguity(Value ptr);
-  unsigned getPtrAlignment(Value ptr);
+  unsigned getContiguity(Value value);
+  unsigned getAlignment(Value value);
+
+  // Overloads of the above methods but have separated elementBitWidth to
+  // calculate the contiguity. These are useful for computing axis info when
+  // lowering to hardware intrinsics that require a scalar/warp-uniform base ptr
+  // with separate per lane offsets like AMD buffer operations.
+  //
+  // As a concrete example, instead of a single tensor<128x64x!tt.ptr<f16>>
+  // value, now we have two separate values: !tt.ptr<f16> for the base pointer
+  // and tensor<128x64xi32> for the offset. For such cases, we want to compute
+  // the contiguity on the offsets but use the pointee element type bit width
+  // instead of the offset element type bit width for alignment
+  unsigned getContiguity(Value offsetsValue, unsigned elementBitWidth);
+  unsigned getAlignment(Value offsetsValue, unsigned elementBitWidth);
+
   unsigned getMaskAlignment(Value mask);
 
 private:
-  void initialize(FunctionOpInterface funcOp);
+  void initialize(FunctionOpInterface funcOp,
+                  axisinfo::CallbackType callback = nullptr);
   void update(CallOpInterface callOp, FunctionOpInterface funcOp);
 };
-
 } // namespace mlir::triton
 
 #endif

@@ -15,17 +15,6 @@ namespace mlir::triton {
 
 namespace gpu {
 
-SmallVector<Value> reorderValues(const SmallVector<Value> &values, Type inType,
-                                 Type ouType);
-
-SmallVector<Value> unpackI32(const SmallVector<Value> &inValues, Type srcTy,
-                             ConversionPatternRewriter &rewriter, Location loc,
-                             const LLVMTypeConverter *typeConverter);
-
-SmallVector<Value> packI32(const SmallVector<Value> &inValues, Type srcTy,
-                           ConversionPatternRewriter &rewriter, Location loc,
-                           const LLVMTypeConverter *typeConverter);
-
 Type getElementType(Value value);
 
 class MultipleOperandsRange
@@ -97,7 +86,7 @@ public:
       return resultVals;
     while (auto sliced = dyn_cast<SliceEncodingAttr>(baseEncoding))
       baseEncoding = sliced.getParent();
-    if (isa<NvidiaMmaEncodingAttr, DotOperandEncodingAttr>(baseEncoding)) {
+    if (isa<LinearEncodingAttr, DotOperandEncodingAttr>(baseEncoding)) {
       // TODO: this logic seems incorrect for mma layout. Skip for now.
       // The following test crashes and some other miscompile:
       // test_core::test_fp8_dot_acc
@@ -112,7 +101,7 @@ public:
     if (!axisInfo)
       // axis info (e.g., constancy) not available
       return resultVals;
-    SmallVector<unsigned> contigPerThread = getContigPerThread(encoding);
+    SmallVector<unsigned> contigPerThread = getContigPerThread(rtType);
     if (rank != contigPerThread.size())
       return resultVals;
 
@@ -146,7 +135,7 @@ public:
     if (rank > 1) {
       // reorder the shape and constancy vectors by the axis order:
       // from the fastest-changing to the smallest-changing axis
-      SmallVector<unsigned> order = getOrder(encoding);
+      SmallVector<unsigned> order = getOrder(rtType);
       if (rank != order.size())
         return resultVals;
       elemsPerThread = applyPermutation(elemsPerThread, order);
@@ -187,8 +176,6 @@ public:
     for (auto operand : adaptor.getOperands()) {
       auto argTy = op->getOperand(0).getType();
       auto subOperands = unpackLLElements(loc, operand, rewriter);
-      subOperands = unpackI32(subOperands, argTy, rewriter, loc,
-                              this->getTypeConverter());
       allOperands.resize(subOperands.size());
       for (auto v : llvm::enumerate(subOperands))
         allOperands[v.index()].push_back(v.value());
@@ -209,13 +196,7 @@ public:
       }
       it += curr.size();
     }
-    if (op->getNumOperands() > 0) {
-      auto argTy = op->getOperand(0).getType();
-      resultVals = reorderValues(resultVals, argTy, resultTy);
-    }
     resultVals = maybeDeduplicate(op, resultVals);
-    resultVals =
-        packI32(resultVals, resultTy, rewriter, loc, this->getTypeConverter());
     Value view = packLLElements(loc, this->getTypeConverter(), resultVals,
                                 rewriter, resultTy);
     rewriter.replaceOp(op, view);
@@ -225,6 +206,27 @@ public:
 
 protected:
   ModuleAxisInfoAnalysis &axisAnalysisPass;
+};
+
+// Trivial case where we map elementwise to an existing LLVM operator
+template <typename SourceOp, typename DestOp>
+struct ElementwiseOpConversion
+    : public ElementwiseOpConversionBase<
+          SourceOp, ElementwiseOpConversion<SourceOp, DestOp>> {
+  using Base =
+      ElementwiseOpConversionBase<SourceOp,
+                                  ElementwiseOpConversion<SourceOp, DestOp>>;
+  using Base::Base;
+  using OpAdaptor = typename Base::OpAdaptor;
+
+  // An interface to support variant DestOp builder.
+  SmallVector<DestOp> createDestOps(SourceOp op, OpAdaptor adaptor,
+                                    ConversionPatternRewriter &rewriter,
+                                    Type elemTy, MultipleOperandsRange operands,
+                                    Location loc) const {
+    return {rewriter.create<DestOp>(loc, elemTy, operands[0],
+                                    adaptor.getAttributes().getValue())};
+  }
 };
 
 } // namespace gpu

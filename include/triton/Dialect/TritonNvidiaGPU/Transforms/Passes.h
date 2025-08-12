@@ -38,23 +38,18 @@ struct ClusterInfo {
   int clusterDimZ;
 };
 
-} // namespace nvidia_gpu
-} // namespace triton
-} // namespace mlir
-
-namespace mlir {
-
 std::unique_ptr<Pass> createTritonNvidiaGPUPlanCTAPass(
     mlir::triton::nvidia_gpu::ClusterInfo *clusterInfo = nullptr);
 
-std::unique_ptr<Pass>
-createTritonNvidiaGPUFenceInsertionPass(int computeCapability = 90);
-
-std::unique_ptr<Pass> createTritonNvidiaGPUTMALoweringPass();
+#define GEN_PASS_DECL
+#include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h.inc"
 
 /// Generate the code for registering passes.
 #define GEN_PASS_REGISTRATION
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h.inc"
 
+} // namespace nvidia_gpu
+} // namespace triton
 } // namespace mlir
+
 #endif // TRITON_DIALECT_TRITONNVIDIAGPU_TRANSFORMS_PASSES_H_

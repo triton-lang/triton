@@ -1,6 +1,6 @@
 // RUN: triton-opt --split-input-file %s --verify-diagnostics
 
-#blocked = #triton_gpu.blocked<{
+#blocked = #ttg.blocked<{
     sizePerThread=[1, 1],
     threadsPerWarp=[16, 1],
     warpsPerCTA=[4, 1],
@@ -10,9 +10,9 @@
     CTAOrder=[0, 1]
 }>
 module attributes {
-    "triton_gpu.num-warps" = 4 : i32,
-    "triton_gpu.num-ctas" = 2 : i32,
-    "triton_gpu.threads-per-warp" = 32 : i32
+    "ttg.num-warps" = 4 : i32,
+    "ttg.num-ctas" = 2 : i32,
+    "ttg.threads-per-warp" = 32 : i32
 } {
     tt.func public @fn(%arg0: !tt.ptr<i32>) {
         // expected-error @+1 {{threads per warp}}
@@ -23,7 +23,7 @@ module attributes {
 
 // -----
 
-#blocked = #triton_gpu.blocked<{
+#blocked = #ttg.blocked<{
     sizePerThread=[1, 1],
     threadsPerWarp=[32, 1],
     warpsPerCTA=[4, 2],
@@ -33,9 +33,9 @@ module attributes {
     CTAOrder=[0, 1]
 }>
 module attributes {
-    "triton_gpu.num-warps" = 4 : i32,
-    "triton_gpu.num-ctas" = 2 : i32,
-    "triton_gpu.threads-per-warp" = 32 : i32
+    "ttg.num-warps" = 4 : i32,
+    "ttg.num-ctas" = 2 : i32,
+    "ttg.threads-per-warp" = 32 : i32
 } {
     tt.func public @fn(%arg0: !tt.ptr<i32>) {
         // expected-error @+1 {{warps per CTA}}
@@ -46,7 +46,7 @@ module attributes {
 
 // -----
 
-#blocked = #triton_gpu.blocked<{
+#blocked = #ttg.blocked<{
     sizePerThread=[1, 1],
     threadsPerWarp=[32, 1],
     warpsPerCTA=[4, 1],
@@ -56,9 +56,9 @@ module attributes {
     CTAOrder=[0, 1]
 }>
 module attributes {
-    "triton_gpu.num-warps" = 4 : i32,
-    "triton_gpu.num-ctas" = 2 : i32,
-    "triton_gpu.threads-per-warp" = 32 : i32
+    "ttg.num-warps" = 4 : i32,
+    "ttg.num-ctas" = 2 : i32,
+    "ttg.threads-per-warp" = 32 : i32
 } {
     tt.func public @fn(%arg0: !tt.ptr<i32>) {
         // expected-error @+1 {{CTAs per CGA}}
@@ -69,7 +69,7 @@ module attributes {
 
 // -----
 
-#blocked = #triton_gpu.blocked<{
+#blocked = #ttg.blocked<{
     sizePerThread=[1, 1],
     threadsPerWarp=[32, 1],
     warpsPerCTA=[4, 1],
@@ -79,9 +79,9 @@ module attributes {
     CTAOrder=[0, 1]
 }>
 module attributes {
-    "triton_gpu.num-warps" = 4 : i32,
-    "triton_gpu.num-ctas" = 2 : i32,
-    "triton_gpu.threads-per-warp" = 32 : i32
+    "ttg.num-warps" = 4 : i32,
+    "ttg.num-ctas" = 2 : i32,
+    "ttg.threads-per-warp" = 32 : i32
 } {
     tt.func public @fn(%arg0: !tt.ptr<i32>) {
         // Note it's a 3d tensor here, but #blocked is 2D.
@@ -93,7 +93,7 @@ module attributes {
 
 // -----
 
-#blocked = #triton_gpu.blocked<{
+#blocked = #ttg.blocked<{
     sizePerThread=[1, 1],
     threadsPerWarp=[32, 1],
     warpsPerCTA=[4, 1],
@@ -103,9 +103,9 @@ module attributes {
     CTAOrder=[0, 1]
 }>
 module attributes {
-    "triton_gpu.num-warps" = 4 : i32,
-    "triton_gpu.num-ctas" = 2 : i32,
-    "triton_gpu.threads-per-warp" = 32 : i32
+    "ttg.num-warps" = 4 : i32,
+    "ttg.num-ctas" = 2 : i32,
+    "ttg.threads-per-warp" = 32 : i32
 } {
     tt.func public @fn(%arg0: tensor<8xf32, #blocked>) {
         // expected-error @+1 {{rank}}

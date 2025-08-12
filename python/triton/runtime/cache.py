@@ -1,33 +1,19 @@
-import importlib
 import json
 import os
 import uuid
 from abc import ABC, abstractmethod
-from pathlib import Path
 from typing import Dict, List, Optional
 import base64
 import hashlib
+import functools
+import sysconfig
 
-
-def get_home_dir():
-    return os.getenv("TRITON_HOME", Path.home())
-
-
-def default_cache_dir():
-    return os.path.join(get_home_dir(), ".triton", "cache")
-
-
-def default_override_dir():
-    return os.path.join(get_home_dir(), ".triton", "override")
-
-
-def default_dump_dir():
-    return os.path.join(get_home_dir(), ".triton", "dump")
+from triton import __version__, knobs
 
 
 class CacheManager(ABC):
 
-    def __init__(self, key):
+    def __init__(self, key, override=False, dump=False):
         pass
 
     @abstractmethod
@@ -53,16 +39,16 @@ class FileCacheManager(CacheManager):
         self.key = key
         self.lock_path = None
         if dump:
-            self.cache_dir = os.getenv("TRITON_DUMP_DIR", "").strip() or default_dump_dir()
+            self.cache_dir = knobs.cache.dump_dir
             self.cache_dir = os.path.join(self.cache_dir, self.key)
             self.lock_path = os.path.join(self.cache_dir, "lock")
             os.makedirs(self.cache_dir, exist_ok=True)
         elif override:
-            self.cache_dir = os.getenv("TRITON_OVERRIDE_DIR", "").strip() or default_override_dir()
+            self.cache_dir = knobs.cache.override_dir
             self.cache_dir = os.path.join(self.cache_dir, self.key)
         else:
             # create cache directory if it doesn't exist
-            self.cache_dir = os.getenv("TRITON_CACHE_DIR", "").strip() or default_cache_dir()
+            self.cache_dir = knobs.cache.dir
             if self.cache_dir:
                 self.cache_dir = os.path.join(self.cache_dir, self.key)
                 self.lock_path = os.path.join(self.cache_dir, "lock")
@@ -158,10 +144,10 @@ class RedisRemoteCacheBackend(RemoteCacheBackend):
     def __init__(self, key):
         import redis
         self._key = key
-        self._key_fmt = os.environ.get("TRITON_REDIS_KEY_FORMAT", "triton:{key}:{filename}")
+        self._key_fmt = knobs.cache.redis.key_format
         self._redis = redis.Redis(
-            host=os.environ.get("TRITON_REDIS_HOST", "localhost"),
-            port=int(os.environ.get("TRITON_REDIS_PORT", 6379)),
+            host=knobs.cache.redis.host,
+            port=knobs.cache.redis.port,
         )
 
     def _get_key(self, filename: str) -> str:
@@ -179,10 +165,10 @@ class RemoteCacheManager(CacheManager):
 
     def __init__(self, key, override=False, dump=False):
         # Setup backend pointed too by `TRITON_REMOTE_CACHE_BACKEND`.
-        remote_cache_manager = os.environ["TRITON_REMOTE_CACHE_BACKEND"]
-        module_path, clz_nme = remote_cache_manager.split(":")
-        module = importlib.import_module(module_path)
-        remote_cache_cls = getattr(module, clz_nme)
+        remote_cache_cls = knobs.cache.remote_manager_class
+        if not remote_cache_cls:
+            raise RuntimeError(
+                "Unable to instantiate RemoteCacheManager, TRITON_REMOTE_CACHE_BACKEND doesn't point to a valid class")
         self._backend = remote_cache_cls(key)
 
         self._override = override
@@ -252,37 +238,24 @@ class RemoteCacheManager(CacheManager):
         return self.put(grp_contents, grp_filename)
 
 
-__cache_cls = FileCacheManager
-__cache_cls_nme = "DEFAULT"
-
-
-def _base64(key):
+def _base32(key):
     # Assume key is a hex string.
-    return base64.urlsafe_b64encode(bytes.fromhex(key)).decode("utf-8").rstrip("=")
+    return base64.b32encode(bytes.fromhex(key)).decode("utf-8").rstrip("=")
 
 
 def get_cache_manager(key) -> CacheManager:
-    import os
-
-    user_cache_manager = os.environ.get("TRITON_CACHE_MANAGER", None)
-    global __cache_cls
-    global __cache_cls_nme
-
-    if user_cache_manager is not None and user_cache_manager != __cache_cls_nme:
-        module_path, clz_nme = user_cache_manager.split(":")
-        module = importlib.import_module(module_path)
-        __cache_cls = getattr(module, clz_nme)
-        __cache_cls_nme = user_cache_manager
-
-    return __cache_cls(_base64(key))
+    cls = knobs.cache.manager_class or FileCacheManager
+    return cls(_base32(key))
 
 
 def get_override_manager(key) -> CacheManager:
-    return __cache_cls(_base64(key), override=True)
+    cls = knobs.cache.manager_class or FileCacheManager
+    return cls(_base32(key), override=True)
 
 
 def get_dump_manager(key) -> CacheManager:
-    return __cache_cls(_base64(key), dump=True)
+    cls = knobs.cache.manager_class or FileCacheManager
+    return cls(_base32(key), dump=True)
 
 
 def make_so_cache_key(version_hash, signature, constants, ids, **kwargs):
@@ -292,4 +265,45 @@ def make_so_cache_key(version_hash, signature, constants, ids, **kwargs):
     for kw in kwargs:
         key = f"{key}-{kwargs.get(kw)}"
     key = hashlib.sha256(key.encode("utf-8")).hexdigest()
-    return _base64(key)
+    return _base32(key)
+
+
+@functools.lru_cache()
+def triton_key():
+    import pkgutil
+    TRITON_PATH = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    contents = []
+    # frontend
+    with open(__file__, "rb") as f:
+        contents += [hashlib.sha256(f.read()).hexdigest()]
+    # compiler
+    path_prefixes = [
+        (os.path.join(TRITON_PATH, "compiler"), "triton.compiler."),
+        (os.path.join(TRITON_PATH, "backends"), "triton.backends."),
+    ]
+    for path, prefix in path_prefixes:
+        for lib in pkgutil.walk_packages([path], prefix=prefix):
+            with open(lib.module_finder.find_spec(lib.name).origin, "rb") as f:
+                contents += [hashlib.sha256(f.read()).hexdigest()]
+
+    # backend
+    libtriton_hash = hashlib.sha256()
+    ext = sysconfig.get_config_var("EXT_SUFFIX").split(".")[-1]
+    with open(os.path.join(TRITON_PATH, "_C", f"libtriton.{ext}"), "rb") as f:
+        while True:
+            chunk = f.read(1024**2)
+            if not chunk:
+                break
+            libtriton_hash.update(chunk)
+    contents.append(libtriton_hash.hexdigest())
+    # language
+    language_path = os.path.join(TRITON_PATH, 'language')
+    for lib in pkgutil.walk_packages([language_path], prefix="triton.language."):
+        with open(lib.module_finder.find_spec(lib.name).origin, "rb") as f:
+            contents += [hashlib.sha256(f.read()).hexdigest()]
+    return f'{__version__}' + '-'.join(contents)
+
+
+def get_cache_key(src, backend, backend_options, env_vars):
+    key = f"{triton_key()}-{src.hash()}-{backend.hash()}-{backend_options.hash()}-{str(sorted(env_vars.items()))}"
+    return key

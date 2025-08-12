@@ -1,102 +1,57 @@
-#include "mlir/Support/LLVM.h"
+#include "triton/Conversion/TritonGPUToLLVM/FMADotUtility.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "llvm/ADT/TypeSwitch.h"
 
 using namespace mlir;
 using namespace mlir::triton;
+using namespace ::mlir::triton::gpu;
 
-using ::mlir::triton::gpu::DotOperandEncodingAttr;
-using ::mlir::triton::gpu::getShapePerCTA;
-using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
+namespace {
+class GenericFMAVectorMultiplier : public FMAVectorMultiplier {
+  OpBuilder &builder;
+  Location loc;
 
-using ValueTableFMA = std::map<std::pair<int, int>, Value>;
+public:
+  GenericFMAVectorMultiplier(OpBuilder &builder, Location loc)
+      : builder(builder), loc(loc) {}
 
-static ValueTableFMA
-getValueTableFromStructFMA(Value val, int K, int n0, int shapePerCTATile,
-                           int sizePerThread,
-                           ConversionPatternRewriter &rewriter, Location loc,
-                           const LLVMTypeConverter *typeConverter, Type type) {
-  ValueTableFMA res;
-  auto elems = unpackLLElements(loc, val, rewriter);
-  int index = 0;
-  for (unsigned k = 0; k < K; ++k) {
-    for (unsigned m = 0; m < n0; m += shapePerCTATile)
-      for (unsigned mm = 0; mm < sizePerThread; ++mm) {
-        res[{m + mm, k}] = elems[index++];
-      }
+  Value multiplyVectors(ArrayRef<Value> a, ArrayRef<Value> b,
+                        Value c) override {
+    auto K = a.size();
+    assert(b.size() == K);
+    Value accum = c;
+    Type tgtTy = accum.getType();
+    for (auto it = llvm::zip(a, b).begin(); it != llvm::zip(a, b).end(); ++it) {
+      const auto &aElem = std::get<0>(*it);
+      const auto &bElem = std::get<1>(*it);
+
+      assert(aElem.getType() == tgtTy);
+      assert(bElem.getType() == tgtTy);
+
+      // to avoid: 'llvm.intr.fmuladd' op operand #0 must be floating point LLVM
+      // type or LLVM dialect-compatible vector of floating point LLVM type, but
+      // got 'i32'
+      llvm::TypeSwitch<Type>(tgtTy)
+          .Case<FloatType>([&](auto) {
+            accum = builder.create<LLVM::FMulAddOp>(loc, aElem, bElem, accum);
+          })
+          .Case<IntegerType>([&](auto) {
+            accum = builder.create<LLVM::AddOp>(
+                loc, builder.create<LLVM::MulOp>(loc, aElem, bElem), accum);
+          });
+    }
+    return accum;
   }
-  return res;
-}
+};
 
-LogicalResult convertFMADot(triton::DotOp op, triton::DotOp::Adaptor adaptor,
+} // namespace
+
+LogicalResult convertFMADot(DotOp op, DotOp::Adaptor adaptor,
                             const LLVMTypeConverter *typeConverter,
                             ConversionPatternRewriter &rewriter) {
   auto *ctx = rewriter.getContext();
   auto loc = op.getLoc();
-
-  auto A = op.getA();
-  auto B = op.getB();
-  auto C = op.getC();
-  auto D = op.getResult();
-
-  auto aTensorTy = cast<RankedTensorType>(A.getType());
-  auto bTensorTy = cast<RankedTensorType>(B.getType());
-  auto dTensorTy = cast<RankedTensorType>(D.getType());
-
-  auto aShapePerCTA = getShapePerCTA(aTensorTy);
-  auto bShapePerCTA = getShapePerCTA(bTensorTy);
-
-  BlockedEncodingAttr dLayout =
-      cast<BlockedEncodingAttr>(dTensorTy.getEncoding());
-  auto order = dLayout.getOrder();
-  auto cc = unpackLLElements(loc, adaptor.getC(), rewriter);
-
-  Value llA = adaptor.getA();
-  Value llB = adaptor.getB();
-
-  auto sizePerThread = getSizePerThread(dLayout);
-  auto shapePerCTATile = getShapePerCTATile(dLayout);
-
-  int K = aShapePerCTA[1];
-  int M = aShapePerCTA[0];
-  int N = bShapePerCTA[1];
-
-  int mShapePerCTATile =
-      order[0] == 1 ? shapePerCTATile[order[1]] : shapePerCTATile[order[0]];
-  int mSizePerThread =
-      order[0] == 1 ? sizePerThread[order[1]] : sizePerThread[order[0]];
-  int nShapePerCTATile =
-      order[0] == 0 ? shapePerCTATile[order[1]] : shapePerCTATile[order[0]];
-  int nSizePerThread =
-      order[0] == 0 ? sizePerThread[order[1]] : sizePerThread[order[0]];
-
-  auto has =
-      getValueTableFromStructFMA(llA, K, M, mShapePerCTATile, mSizePerThread,
-                                 rewriter, loc, typeConverter, aTensorTy);
-  auto hbs =
-      getValueTableFromStructFMA(llB, K, N, nShapePerCTATile, nSizePerThread,
-                                 rewriter, loc, typeConverter, bTensorTy);
-
-  SmallVector<Value> ret = cc;
-  bool isCRow = order[0] == 1;
-
-  for (unsigned k = 0; k < K; k++) {
-    for (unsigned m = 0; m < M; m += mShapePerCTATile)
-      for (unsigned n = 0; n < N; n += nShapePerCTATile)
-        for (unsigned mm = 0; mm < mSizePerThread; ++mm)
-          for (unsigned nn = 0; nn < nSizePerThread; ++nn) {
-            int mIdx = m / mShapePerCTATile * mSizePerThread + mm;
-            int nIdx = n / nShapePerCTATile * nSizePerThread + nn;
-
-            int z = isCRow
-                        ? mIdx * N / nShapePerCTATile * mSizePerThread + nIdx
-                        : nIdx * M / mShapePerCTATile * nSizePerThread + mIdx;
-            ret[z] = rewriter.create<LLVM::FMulAddOp>(loc, has[{m + mm, k}],
-                                                      hbs[{n + nn, k}], ret[z]);
-          }
-  }
-
-  auto res = packLLElements(loc, typeConverter, ret, rewriter, dTensorTy);
-  rewriter.replaceOp(op, res);
-
-  return success();
+  GenericFMAVectorMultiplier multiplier(rewriter, loc);
+  return parametricConvertFMADot(op, adaptor, typeConverter, rewriter,
+                                 multiplier);
 }
