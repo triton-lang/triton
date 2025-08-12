@@ -1410,7 +1410,7 @@ class InterpretedFunction:
 
     def __call__(self, *args, **kwargs):
         if self.is_warmup:
-            return fn(*args, **kwargs)
+            return self.fn(*args, **kwargs)
         else:
             # This is a device function call
             _patch_lang(self.fn)
