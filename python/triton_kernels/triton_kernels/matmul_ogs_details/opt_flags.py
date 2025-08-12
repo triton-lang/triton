@@ -47,7 +47,7 @@ def make_default_opt_flags_amd(
     epilogue_effective_itemsize,
     constraints,
 ):
-    constraints_supported = ["block_m", "block_k", "split_k", "fused_scatter", "is_persistent", "epilogue_subtile"]
+    constraints_supported = ["block_m", "block_n", "block_k", "split_k", "fused_scatter", "is_persistent", "epilogue_subtile"]
     assert not any([c not in constraints_supported for c in constraints]), constraints.keys()
     # tokens per expert
     if routing_data is None:
@@ -87,6 +87,8 @@ def make_default_opt_flags_amd(
     # TODO: Does opt_flags_amd.compute_block_nk need to be refactored?
     if constraints.get("block_k", None) is not None:
         block_k = constraints["block_k"]
+    if constraints.get("block_n", None) is not None:
+        block_n = constraints["block_n"]
     is_persistent = constraints.get("is_persistent", False)
     # split_k:
     if constraints.get("split_k", None) is not None:

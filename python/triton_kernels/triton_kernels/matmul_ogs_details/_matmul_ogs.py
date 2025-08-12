@@ -211,7 +211,6 @@ def _matmul_ogs(
             SCALE_BLOCK_N: tl.constexpr = BLOCK_N // 32
             stride_scale_k = stride_w_mx_k
         elif SWIZZLE_MX_SCALE == "GFX950_SCALE":
-            tl.static_assert(SPLIT_K == 1)
             tl.static_assert(stride_w_mx_k is not None)
             tl.static_assert(stride_w_mx_n is not None)
             NON_K_PRESHUFFLE_BLOCK_SIZE: tl.constexpr = 32
@@ -291,7 +290,7 @@ def _matmul_ogs(
                 num_warps: tl.constexpr = tl.extra.cuda.num_warps()
                 w_scales = unswizzle_mxfp4_scale_hopper(tl.load(WMxScalePtrs), mx_axis=1, num_warps=num_warps)
             elif SWIZZLE_MX_SCALE == "GFX950_SCALE":
-                w_scales = unswizzle_mx_scale_gfx950(tl.load(MxScalePtrs), BLOCK_N, MX_SCALE_BLOCK_K)
+                w_scales = unswizzle_mx_scale_gfx950(tl.load(WMxScalePtrs), BLOCK_N, MX_SCALE_BLOCK_K)
             else:
                 w_scales = tl.load(WMxScalePtrs, mask=mask_k_scale[None, :])
 

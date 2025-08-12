@@ -10,20 +10,27 @@ class GFX950MXScaleLayout(Layout):
         super().__init__(shape)
 
     def swizzle_data(self, data):
+        block_shape = data.shape
+        SCALE_K = block_shape[-2]
+        N = block_shape[-1]
         data = data.transpose(-1, -2).contiguous()
-        E, M, SCALE_K = data.shape
-        data = data.view(E, M // 32, 2, 16, SCALE_K // 8, 2, 4, 1)
+        data = data.view(-1, N // 32, 2, 16, SCALE_K // 8, 2, 4, 1)
         data = data.permute(0, 1, 4, 6, 3, 5, 2, 7).contiguous()
-        data = data.reshape(E, M // 32, SCALE_K * 32)
+        if len(block_shape) == 3:
+            E = block_shape[0]
+            data = data.reshape(E, N // 32, SCALE_K * 32)
+        else:
+            assert len(block_shape) == 2
+            data = data.reshape(N // 32, SCALE_K * 32)
         return data.transpose(-1, -2)
 
     def unswizzle_data(self, data):
         raise NotImplementedError()
 
     def swizzle_block_shape(self, block_shape):
-        E, SCALE_K, M = block_shape
-        return [E, M // 32, SCALE_K * 32]
-
+        SCALE_K = block_shape[-2]
+        N = block_shape[-1]
+        return block_shape[:-2] + [N // 32, SCALE_K * 32]
 
 @triton.jit
 def unswizzle_mx_scale_gfx950(x, BLOCK_N: tl.constexpr, MX_SCALE_BLOCK_K: tl.constexpr):

@@ -297,7 +297,12 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
         pytest.skip("fused scatter scratchpad not supported with split_k")
     if hbm_swizzling:
         if is_hip():
-            pytest.skip("NYI. HBM swizzling just implemented for CUDA.")
+            if not is_hip_cdna4():
+                pytest.skip("Scale preshuffling on AMD GPU has not been emulated on other archs yet.")
+            if "mx" not in weight_dtype_str:
+                pytest.skip("Only support scale swizzling on AMD GPU")
+            if n % 32 != 0 or k % (32 * 8) != 0:
+                pytest.skip(f"Shape {m}x{n}x{k} is not supported for scale swizzling on AMD GPU")
         if torch.cuda.get_device_capability()[0] < 9:
             pytest.skip("NYI. Ampere swizzling.")
         if torch.cuda.get_device_capability()[0] < 10:
@@ -319,8 +324,15 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
         # TODO: revisit when Triton is better for H100 + MXFP4
         block_k = 256
 
+    block_n = None
+    if is_hip() and hbm_swizzling and "float4" in weight_dtype_str:
+        block_m = 32
+        block_n = 256
+        block_k = 256
+
     constraints = {
         "block_m": block_m,
+        "block_n": block_n,
         "block_k": block_k,
         "split_k": split_k,
         "fused_scatter": fused_scatter,
