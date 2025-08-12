@@ -22,8 +22,8 @@ class AMDMFMALayout(DistributedLayout):
         instr_shape: (M, N) dimension for the instrinsic shape.
         transposed: indicates the result tensor is transposed so that each thread holds consecutive elements in the same row instead of column, which is good for chained dot and global write.
         warps_per_cta (List[int]): Number of warps per CTA.
-        tiles_per_warp Optional(List[int]): Number of tiles per WARP. For mfma, if missing, use the default where we have unit tile size on all dimensions.
         elem_type Optional: Supported types are int32, fp32 and fp64. Default is fp32.
+        tiles_per_warp Optional(List[int]): Number of tiles per WARP. For mfma, if missing, use the default where we have unit tile size on all dimensions.
         ctas_per_cga (Optional[List[int]]): CTAs per CGA grouping.
         cta_split_num (Optional[List[int]]): Split factors for CTAs.
         cta_order (Optional[List[int]]): CTA ordering.
@@ -32,8 +32,8 @@ class AMDMFMALayout(DistributedLayout):
     instr_shape: List[int]
     transposed: bool
     warps_per_cta: List[int]
-    tiles_per_warp: Optional[List[int]] = None
     elem_type: ttgl.dtype = ttgl.float32
+    tiles_per_warp: Optional[List[int]] = None
     ctas_per_cga: Optional[List[int]] = None
     cta_split_num: Optional[List[int]] = None
     cta_order: Optional[List[int]] = None
@@ -49,12 +49,15 @@ class AMDMFMALayout(DistributedLayout):
         super().__setattr__("cta_split_num", _unwrap_if_constexpr(self.cta_split_num))
         super().__setattr__("cta_order", _unwrap_if_constexpr(self.cta_order))
 
+        if self.tiles_per_warp is None:
+            object.__setattr__(self, "tiles_per_warp", [1] * len(self.warps_per_cta))
+
         self.verify()
 
     def _to_ir(self, builder):
         type = self.elem_type.to_ir(builder)
-        return builder.get_amd_mfma_layout(self.version, self.tiles_per_warp, self.warps_per_cta, self.ctas_per_cga,
-                                           self.cta_split_num, self.cta_order, self.instr_shape, self.transposed, type)
+        return builder.get_amd_mfma_layout(self.version, self.instr_shape, self.transposed, self.warps_per_cta, type,
+                                           self.tiles_per_warp, self.ctas_per_cga, self.cta_split_num, self.cta_order)
 
     def mangle(self) -> str:
 
