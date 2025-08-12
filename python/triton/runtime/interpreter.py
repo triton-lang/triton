@@ -2,7 +2,7 @@ from __future__ import annotations
 import ast
 import textwrap
 import inspect
-from typing import Tuple, List, Dict
+from typing import Tuple, List, Dict, Callable
 
 import math
 import numpy as np
@@ -1372,13 +1372,12 @@ class FunctionRewriter:
 
 class InterpretedFunction:
     # Cache all rewritten functions
-    rewritten_fn = {}
+    rewritten_fn: Dict[Callable, Callable] = {}
 
     def __init__(self, fn, **kwargs) -> None:
         self.fn = fn
         self.rewriter = FunctionRewriter(fn, **kwargs)
         self.kwargs = kwargs
-        self.is_warmup = False
 
         def run(*args, **kwargs):
             grid = kwargs["grid"]
@@ -1394,12 +1393,6 @@ class InterpretedFunction:
             self.rewritten_fn[self.fn] = self.rewriter.rewrite_ast()
         return self.rewritten_fn[self.fn]
 
-    def warmup(self, *args, grid, **kwargs):
-        self.is_warmup = True
-        ret = triton.runtime.JITFunction(self.fn, self.kwargs).warmup(*args, grid=grid, **kwargs)
-        self.is_warmup = False
-        return ret
-
     @property
     def __name__(self):
         return self.fn.__name__
@@ -1409,13 +1402,10 @@ class InterpretedFunction:
         return GridExecutor(fn, self.arg_names, grid)
 
     def __call__(self, *args, **kwargs):
-        if self.is_warmup:
-            return self.fn(*args, **kwargs)
-        else:
-            # This is a device function call
-            _patch_lang(self.fn)
-            fn = self.rewrite()
-            try:
-                return fn(*args, **kwargs)
-            except Exception as e:
-                raise InterpreterError(repr(e)) from e
+        # This is a device function call
+        _patch_lang(self.fn)
+        fn = self.rewrite()
+        try:
+            return fn(*args, **kwargs)
+        except Exception as e:
+            raise InterpreterError(repr(e)) from e

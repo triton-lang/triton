@@ -339,6 +339,7 @@ def filter_layouts(layouts):
     return [l for l in layouts if is_layout_applicable(l)]
 
 
+@pytest.mark.interpreter
 def test_scalar_overflow(device):
 
     @triton.jit
@@ -348,7 +349,7 @@ def test_scalar_overflow(device):
         y = x + huge_int
 
     with pytest.raises(triton.TritonError, match="out of range"):
-        kernel.warmup(grid=(1, ))
+        kernel[(1, )]()
 
 
 # generic test functions
@@ -869,7 +870,7 @@ def test_invalid_slice(device):
         dst[10:]
 
     with pytest.raises(triton.TritonError, match='unsupported tensor index'):
-        _kernel.warmup(dst=dst, grid=(1, ))
+        _kernel[(1, )](dst=dst)
 
 
 # ----------------
@@ -963,23 +964,23 @@ def test_expand_dims_error_cases(device):
     dummy_tensor = torch.empty((), device=device)
 
     with pytest.raises(triton.TritonError) as exc_info:
-        dim_out_of_range1.warmup(dummy_tensor, N, grid=(1, ))
+        dim_out_of_range1[(1, )](dummy_tensor, N)
     assert "invalid axis -3" in str(exc_info.value.__cause__)
 
     with pytest.raises(triton.TritonError) as exc_info:
-        dim_out_of_range2.warmup(dummy_tensor, N, grid=(1, ))
+        dim_out_of_range2[(1, )](dummy_tensor, N)
     assert "invalid axis 2" in str(exc_info.value.__cause__)
 
     with pytest.raises(triton.TritonError) as exc_info:
-        dim_out_of_range3.warmup(dummy_tensor, N, grid=(1, ))
+        dim_out_of_range3[(1, )](dummy_tensor, N)
     assert "invalid axis 1" in str(exc_info.value.__cause__)
 
     with pytest.raises(triton.TritonError) as exc_info:
-        duplicate_dim1.warmup(dummy_tensor, N, grid=(1, ))
+        duplicate_dim1[(1, )](dummy_tensor, N)
     assert re.search(r"duplicate axes, normalized axes = \[0, 0\]", str(exc_info.value.__cause__))
 
     with pytest.raises(triton.TritonError) as exc_info:
-        duplicate_dim2.warmup(dummy_tensor, N, grid=(1, ))
+        duplicate_dim2[(1, )](dummy_tensor, N)
     assert re.search(r"duplicate axes, normalized axes = \[0, 0\]", str(exc_info.value.__cause__))
 
 
@@ -995,7 +996,7 @@ def test_invalid_pid_axis(device):
         pid = tl.program_id(20)
 
     with pytest.raises(triton.TritonError) as exc_info:
-        _kernel.warmup(dst, grid=(1, ))
+        _kernel[(1, )](dst)
     assert re.search(r"program_id axis must be 0, 1, or 2 but got 20", str(exc_info.value.__cause__))
 
 
@@ -1896,8 +1897,8 @@ def test_load_scope_sem_coop_grid_cta_not_one(device):
     block_size = 128
     data = torch.zeros((128, ), device=device, dtype=torch.float32)
 
-    kernel_r.warmup(data, BLOCK_SIZE=block_size, grid=(2, ), num_ctas=4, launch_cooperative_grid=True)
-    kernel_r.warmup(data, BLOCK_SIZE=block_size, grid=(2, ), num_ctas=4, launch_cooperative_grid=False)
+    kernel_r[(2, )](data, BLOCK_SIZE=block_size, num_ctas=4, launch_cooperative_grid=True)
+    kernel_r[(2, )](data, BLOCK_SIZE=block_size, num_ctas=4, launch_cooperative_grid=False)
 
 
 @pytest.mark.interpreter
@@ -1916,8 +1917,8 @@ def test_load_scope_sem_coop_grid_cta_one(device):
     data = torch.zeros((128, ), device=device, dtype=torch.float32)
 
     # Should do nothing different for num_ctas=1 (with coop launch grid)
-    kernel_r.warmup(data, BLOCK_SIZE=block_size, grid=(2, ), num_ctas=1, launch_cooperative_grid=True)
-    kernel_r.warmup(data, BLOCK_SIZE=block_size, grid=(2, ), num_ctas=1, launch_cooperative_grid=False)
+    kernel_r[(2, )](data, BLOCK_SIZE=block_size, num_ctas=1, launch_cooperative_grid=True)
+    kernel_r[(2, )](data, BLOCK_SIZE=block_size, num_ctas=1, launch_cooperative_grid=False)
 
 
 @pytest.mark.interpreter
@@ -1940,6 +1941,7 @@ def test_atomic_min_max_neg_zero(device):
     torch.testing.assert_close(out_max, inp, atol=0, rtol=0)
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_str", ["float8_e4m3fn", "int8", "int16", "uint8", "uint16"])
 def test_atomic_unsupported_type(dtype_str, device):
 
@@ -1951,7 +1953,7 @@ def test_atomic_unsupported_type(dtype_str, device):
     I = torch.zeros((1, ), device=device, dtype=getattr(torch, dtype_str))
     O = torch.zeros((1, ), device=device, dtype=getattr(torch, dtype_str))
     with pytest.raises(triton.TritonError):
-        kernel.warmup(I, O, grid=(1, ))
+        kernel[(1, )](I, O)
 
 
 @pytest.mark.interpreter
@@ -2661,8 +2663,8 @@ def test_reduce(op, dtype_str, shape, axis, keep_dims, num_ctas, device):
     USE_I1 = dtype_str == 'bool'
     if axis is not None and axis >= len(shape):
         with pytest.raises(triton.TritonError):
-            kernel.warmup(x_tri, z_tri, BLOCK_M=shape[0], BLOCK_N=shape[1], BLOCK_K=BLOCK_K, IS_3D=IS_3D, AXIS=axis,
-                          KEEP_DIMS=keep_dims, USE_I1=USE_I1, num_ctas=num_ctas, grid=(1, ))
+            kernel[(1, )](x_tri, z_tri, BLOCK_M=shape[0], BLOCK_N=shape[1], BLOCK_K=BLOCK_K, IS_3D=IS_3D, AXIS=axis,
+                          KEEP_DIMS=keep_dims, USE_I1=USE_I1, num_ctas=num_ctas)
         return
     else:
         kernel[(1, )](x_tri, z_tri, BLOCK_M=shape[0], BLOCK_N=shape[1], BLOCK_K=BLOCK_K, IS_3D=IS_3D, AXIS=axis,
@@ -4863,7 +4865,7 @@ def test_load_cache_modifier(cache, device):
         x = tl.load(src + offsets, cache_modifier=CACHE)
         tl.store(dst + offsets, x)
 
-    pgm = _kernel.warmup(dst, src, CACHE=cache, grid=(1, ))
+    pgm = _kernel[(1, )](dst, src, CACHE=cache)
 
     if is_hip():
         target_arch = get_arch()
@@ -4963,7 +4965,7 @@ def test_assume(device):
             tl.store(out_ptr + tl.program_id(0), current_size + 101024)
 
     output = torch.zeros(1024 // 128, device=device)
-    pgm = _kernel.warmup(output, N=1024, BLOCK_N=128, grid=(1024 // 128, ))
+    pgm = _kernel[(1024 // 128, )](output, N=1024, BLOCK_N=128)
 
     if is_interpreter():
         return
@@ -4991,7 +4993,7 @@ def test_store_cache_modifier(cache, device):
         x = tl.load(src + offsets)
         tl.store(dst + offsets, x, cache_modifier=CACHE)
 
-    pgm = _kernel.warmup(dst, src, CACHE=cache, grid=(1, ))
+    pgm = _kernel[(1, )](dst, src, CACHE=cache)
 
     if is_hip():
         target_arch = get_arch()
@@ -5055,9 +5057,10 @@ def test_store_eviction_policy(eviction_policy, device):
         x = tl.load(src + offsets)
         tl.store(dst + offsets, x, eviction_policy=POLICY)
 
+    pgm = _kernel[(1, )](dst, src, POLICY=eviction_policy)
+
     if not is_cuda():
         return
-    pgm = _kernel.warmup(dst, src, POLICY=eviction_policy, grid=(1, ))
     ptx = pgm.asm['ptx']
     if eviction_policy == '':
         assert 'evict_last' not in ptx
@@ -5286,7 +5289,7 @@ def test_tma_load_block_shape_err(device):
     input = torch.empty((128, 128), dtype=torch.int32, device=device)
     errc = triton.CompilationError if not is_interpreter() else InterpreterError
     with pytest.raises(errc) as e:
-        kernel.warmup(input, grid=(1, ))
+        kernel[(1, )](input)
 
     assert "Descriptor block shape must have at least 16 bytes" in str(e.value.__cause__)
 
@@ -5302,7 +5305,7 @@ def test_tma_store_block_shape_err(device):
     input = torch.empty((128, 128), dtype=torch.int16, device=device)
     errc = triton.CompilationError if not is_interpreter() else InterpreterError
     with pytest.raises(errc) as e:
-        kernel.warmup(input, grid=(1, ))
+        kernel[(1, )](input)
 
     assert "Descriptor block shape must have at least 16 bytes" in str(e.value.__cause__)
 
@@ -7335,7 +7338,7 @@ def test_maxnreg(device):
         maxnreg_noinline2(X)
 
     X = torch.empty(1, dtype=torch.int32, device=device)
-    k = kernel.warmup(X, grid=(1, ), maxnreg=42)
+    k = kernel[(1, )](X, maxnreg=42)
 
     if not is_interpreter():
         # Ensure that .maxnreg is set on the kernel function (marked with .entry)
@@ -7518,6 +7521,7 @@ def test_side_effectful_reduction_2d(device, reduce_dim):
     torch.testing.assert_close(Z, X.sum(reduce_dim).to(torch.int32))
 
 
+@pytest.mark.interpreter
 def test_dtype(device):
 
     @triton.jit
@@ -7528,7 +7532,7 @@ def test_dtype(device):
         tl.static_assert(dtype_x == tl.int8 or (dtype_x == tl.int16 or dtype_x == tl.int32))
 
     X = torch.empty(1, dtype=torch.int32, device=device)
-    kernel.warmup(X, grid=(1, ))
+    kernel[(1, )](X)
 
 
 def test_side_effectful_scan(device):
