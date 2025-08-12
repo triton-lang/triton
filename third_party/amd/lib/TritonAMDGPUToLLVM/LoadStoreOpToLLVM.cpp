@@ -360,7 +360,7 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
 
     // For each load compute the difference between the flat and the swizzled
     // linear offsets into shared memory
-    // TODO (alex): this is only correct as long as the lds view is a contigous
+    // TODO (alex): this is only correct as long as the lds view is a contiguous
     // block. So this can break if we slice along the 2 minor dimensions
     SmallVector<Value> swizzledOffsets;
     swizzledOffsets.reserve(numberOfLoads);
@@ -757,7 +757,7 @@ struct BufferLoadToLocalOpConversion
 
     if (hasSwizzling) {
       // TODO (alex): this is only correct as long as the lds view is a
-      // contigous block. So this can break if we slice along the 2 minor
+      // contiguous block. So this can break if we slice along the 2 minor
       // dimensions.
       auto dstEnc = cast<SwizzledSharedEncodingAttr>(dstTy.getEncoding());
       auto flatSharedEnc = SwizzledSharedEncodingAttr::get(
@@ -765,7 +765,6 @@ struct BufferLoadToLocalOpConversion
           dstEnc.getCTALayout());
       flatDstTy = MemDescType::get(dstTy.getShape(), dstTy.getElementType(),
                                    flatSharedEnc, dstTy.getMemorySpace());
-
       swizzledLaneOffsets =
           emitSwizzledLaneOffsets(rewriter, op, ptrType, dstTy, flatDstTy,
                                   hasSwizzling, llDst, resElemTy, vec);
@@ -796,10 +795,9 @@ struct BufferLoadToLocalOpConversion
       auto [offsetElem, maskElem, otherElems, swizzleLaneOffset] =
           unzipLoadValues(rewriter, loc, startIdx, loadVals, offsetTy, otherTy,
                           hasOther, vecTy.getNumElements());
-      int vecBytes =
-          (vecTy.getNumElements() * vecTy.getElementTypeBitWidth()) / 8;
-      assert(llvm::isPowerOf2_32(vecBytes));
-      Value vecBytesVal = b.i32_val(vecBytes);
+      int vecBits = vecTy.getNumElements() * vecTy.getElementTypeBitWidth();
+      assert(targetInfo.supportsDirectToLdsLoadBitWidth(vecBits));
+      Value vecBytesVal = b.i32_val(vecBits / 8);
 
       Value maybeSwizzledMaskElem = maskElem;
       if (hasSwizzling)
@@ -930,9 +928,8 @@ struct AsyncCopyGlobalToLocalOpConversion
       auto [srcElem, maskElem, otherElems, swizzleLaneOffset] =
           unzipLoadValues(rewriter, loc, startIdx, loadValues, srcPtrTy,
                           otherTy, hasOther, vecTy.getNumElements());
-      int vecBytes =
-          (vecTy.getNumElements() * vecTy.getElementTypeBitWidth()) / 8;
-      assert(llvm::isPowerOf2_32(vecBytes));
+      int vecBits = vecTy.getNumElements() * vecTy.getElementTypeBitWidth();
+      assert(targetInfo.supportsDirectToLdsLoadBitWidth(vecBits));
       Value maybeSwizzledMaskElem = maskElem;
 
       if (hasSwizzling)
@@ -947,7 +944,7 @@ struct AsyncCopyGlobalToLocalOpConversion
           mlir::LLVM::AMD::getCtrlBitsForCacheModifierOnTarget(
               op.getCache(), /*isLoad=*/true, targetInfo);
       auto globalLoadLdsOp = rewriter.create<ROCDL::GlobalLoadLDSOp>(
-          loc, srcElem, shmemAddr, vecBytes,
+          loc, srcElem, shmemAddr, vecBits / 8,
           /*offset=*/0, cacheModifiers, nullptr, nullptr, nullptr);
       AMD::addAsyncCopyAliasScope(globalLoadLdsOp);
 
