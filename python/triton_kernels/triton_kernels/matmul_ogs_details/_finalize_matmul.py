@@ -280,7 +280,7 @@ def _finalize_matmul(
             for off_n in tl.range(tl.program_id(1) * OUT_BLOCK_N, outN, tl.num_programs(1) * OUT_BLOCK_N):
                 offs_n = off_n + tl.arange(0, OUT_BLOCK_N)
                 n_mask = offs_n < outN
-                tl.store(Out + row * outN + offs_n, tl.zeros([OUT_BLOCK_N], dtype=Out.dtype.element_ty), mask=n_mask)
+                tl.store(Out + row.to(tl.int64) * outN + offs_n, tl.zeros([OUT_BLOCK_N], dtype=Out.dtype.element_ty), mask=n_mask)
         else:
             for off_n in tl.range(tl.program_id(1) * BLOCK_N, N, tl.num_programs(1) * BLOCK_N, num_stages=STAGES):
                 offs_n = off_n + tl.arange(0, BLOCK_N)
@@ -346,7 +346,7 @@ def _finalize_matmul(
                                                  pid=row * tl.num_programs(1) + tl.program_id(1))
                     tl.static_assert(OUT_BLOCK_N % OUT_MX_SCALE_BLOCK_N == 0, "")
                     tl.store(OutActualScale + row * stride_out_mx_m + offs_n_scale * stride_out_mx_n, acc_scale, mask=n_mask_scale)
-                    tl.store(Out + row * outN + offs_n[None, :], acc, mask=n_mask[None, :])
+                    tl.store(Out + row.to(tl.int64) * outN + offs_n[None, :], acc, mask=n_mask[None, :])
                 else:
                     out = float_to_flex(out, out_scale if OutExpectedScale is not None else None, None, OutChecksumScale,
                                         None, Out, flexpoint_saturate_inf)
@@ -355,7 +355,7 @@ def _finalize_matmul(
                                           pid=row * tl.num_programs(1) + tl.program_id(1))
                     offs_n = off_n // ACTIVATION_REDUCTION_N + tl.arange(0, OUT_BLOCK_N)
                     n_mask = offs_n < outN
-                    tl.store(Out + row * outN + offs_n, out, mask=n_mask)
+                    tl.store(Out + row.to(tl.int64) * outN + offs_n, out, mask=n_mask)
 
     persisent_m = tl.num_programs(0) < MBound
     if not persisent_m and n_active_experts == 0:
