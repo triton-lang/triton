@@ -1378,6 +1378,7 @@ class InterpretedFunction:
         self.fn = fn
         self.rewriter = FunctionRewriter(fn, **kwargs)
         self.kwargs = kwargs
+        self.warmup = False
 
         def run(*args, **kwargs):
             grid = kwargs["grid"]
@@ -1394,7 +1395,10 @@ class InterpretedFunction:
         return self.rewritten_fn[self.fn]
 
     def warmup(self, *args, grid, **kwargs):
-        return triton.runtime.JITFunction(self.fn, self.kwargs).warmup(*args, grid=grid, **kwargs)
+        self.warmup = True
+        ret = triton.runtime.JITFunction(self.fn, self.kwargs).warmup(*args, grid=grid, **kwargs)
+        self.warmup = False
+        return ret
 
     @property
     def __name__(self):
@@ -1405,10 +1409,13 @@ class InterpretedFunction:
         return GridExecutor(fn, self.arg_names, grid)
 
     def __call__(self, *args, **kwargs):
-        # This is a device function call
-        _patch_lang(self.fn)
-        fn = self.rewrite()
-        try:
+        if self.warmup:
             return fn(*args, **kwargs)
-        except Exception as e:
-            raise InterpreterError(repr(e)) from e
+        else:
+            # This is a device function call
+            _patch_lang(self.fn)
+            fn = self.rewrite()
+            try:
+                return fn(*args, **kwargs)
+            except Exception as e:
+                raise InterpreterError(repr(e)) from e
