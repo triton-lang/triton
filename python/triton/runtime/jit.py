@@ -12,19 +12,19 @@ from functools import cached_property
 from typing import Callable, Generic, Iterable, Optional, TypeVar, Union, overload, Dict, Any, Tuple
 
 from triton.tools.tensor_descriptor import TensorDescriptor
+from triton.backends import BaseBackend
 from types import ModuleType
 from .. import knobs
 from .driver import driver
 from . import _async_compile
 from .._utils import find_paths_if, get_iterable_path, type_canonicalisation_dict, canonicalize_dtype
 from .cache import get_cache_key
-from triton._C.libtriton import get_cache_invalidating_env_vars
+from triton._C.libtriton import get_cache_invalidating_env_vars, native_specialize_impl
 
 TRITON_MODULE = __name__[:-len(".runtime.jit")]
 
 T = TypeVar("T")
-use_inline_specialization = False
-use_native_specialize_impl = True
+use_native_specialize = True
 
 # -----------------------------------------------------------------------------
 # Dependencies Finder
@@ -319,42 +319,26 @@ dtype2str = {}
 specialize_impl_cache = []
 
 
-def create_specialize_impl(specialize_extra):
-
+def create_specialize_fallback():
     from ..language import constexpr
     from triton.experimental.gluon.nvidia.hopper import TensorDescriptor as GluonTensorDescriptor
-    from ._specialize import SimpleArgSpecializer, AllArgSpecializer
-
-    if use_native_specialize_impl:
-        specializer = AllArgSpecializer(specialize_extra)
-        return specializer.specialize_impl
-
-    specializer = SimpleArgSpecializer(specialize_extra)
-    specialize_int = specializer.specialize_int
-    specialize_tensor = specializer.specialize_tensor
-
-    def specialize_impl(arg, is_const=False, specialize_value=True, align=True):
-        # should be faster than hasattr(arg, "data_ptr")
-        if type(arg).__name__ == "Tensor":
-            # dtypes are hashable so we can memoize this mapping:
-            dsk = (arg.dtype, is_const)
-            res = dtype2str.get(dsk, None)
-            if res is None:
-                res = ("*k" if dsk[1] else "*") + canonicalize_dtype(dsk[0])
-                dtype2str[dsk] = res
-            key = specialize_tensor(arg, specialize_value, align)
-            return (res, key)
-        elif isinstance(arg, int):
-            return specialize_int(arg, specialize_value, align)
-        elif arg is None:
+    def specialize_fallback(backend: BaseBackend, arg: Any, is_const: bool = False, specialize_value: bool = True, align: bool = True):
+        if arg is None:
             return ("constexpr", None)
         elif isinstance(arg, bool):
             return ("u1", None)
+        elif isinstance(arg, int):
+            key = backend.get_int_specialization(arg, align=align) if specialize_value else None
+            if arg == 1 and specialize_value:
+                return ("constexpr", 1)
+            elif -(2**31) <= arg and arg <= 2**31 - 1:
+                return ("i32", key)
+            elif 2**63 <= arg and arg <= 2**64 - 1:
+                return ("u64", key)
+            else:
+                return ("i64", key)        
         elif isinstance(arg, float):
             return ("fp32", None)
-        elif isinstance(arg, constexpr):
-            return ("constexpr", arg)
-        # fallback for non-tensor types with data_ptr attributes/methods
         elif hasattr(arg, "data_ptr"):
             # dtypes are hashable so we can memoize this mapping:
             dsk = (arg.dtype, is_const)
@@ -362,14 +346,16 @@ def create_specialize_impl(specialize_extra):
             if res is None:
                 res = ("*k" if dsk[1] else "*") + canonicalize_dtype(dsk[0])
                 dtype2str[dsk] = res
-            key = specialize_tensor(arg, specialize_value, align)
-            return (res, key)
+            key = backend.get_tensor_specialization(arg, align=align) if specialize_value else None
+            return (res, key)        
         elif isinstance(arg, JITFunction):
             return ("constexpr", arg.cache_key)
+        elif isinstance(arg, constexpr):
+            return ("constexpr", arg)
         elif hasattr(arg, "tma_desc_cpu_ptr"):
             return ("nvTmaDesc", None)
         elif isinstance(arg, tuple):
-            spec = [specialize_impl(x) for x in arg]
+            spec = [specialize_fallback(backend, x) for x in arg]
             make_tuple = lambda vals: type(arg)(*vals) if hasattr(arg, "_fields") else tuple(vals)
             tys = make_tuple([x[0] for x in spec])
             keys = make_tuple([x[1] for x in spec])
@@ -384,15 +370,16 @@ def create_specialize_impl(specialize_extra):
             return (f"tensordesc<{inner}{list(arg.block_shape)},{arg.layout!r}>", None)
         else:
             raise TypeError("Unsupported type: %s" % type(arg))
-
-    return specialize_impl
+    
+    return specialize_fallback
 
 
 def mangle_type(arg, specialize=False):
+    specialize = create_specialize_fallback()
     if len(specialize_impl_cache) == 0:
-        specialize_impl_cache.append(create_specialize_impl(lambda _, **kwargs: None))
+        specialize_impl_cache.append(specialize)
     specialize_impl = specialize_impl_cache[0]
-    return specialize_impl(arg, specialize_value=specialize)[0]
+    return specialize_impl(BaseBackend, arg, specialize_value=specialize)[0]
 
 
 class KernelInterface(Generic[T]):
@@ -420,78 +407,6 @@ def serialize_specialization_data(name, signature, constants, attrs, options, ke
     return serialized_obj
 
 
-def _generate_inline_specialization(name, kp, list_pos):
-    # inline version of specialize_impl
-    is_const = kp.is_const
-    specialize = not kp.do_not_specialize
-    align = not kp.do_not_specialize_on_alignment
-
-    if kp.is_constexpr:
-        return f'specialization[{list_pos}] = ("constexpr", {name})\n'
-
-    if kp.annotation_type:
-        if isinstance(kp.annotation_type == "u1" or kp.annotation_type[:2] in ["fp", "bf"]):
-            # we do not specialize non-constexpr floats and bools
-            specialize = False
-        if not specialize:
-            return f'specialization[{list_pos}] = ("{kp.annotation_type}", None)\n'
-
-    src = f"""
-# should be faster than hasattr(arg, "data_ptr")
-if type({name}).__name__ ==  'Tensor':
-    _dsk = ({name}.dtype, {is_const})
-    _res = dtype2str.get(_dsk, None)
-    if _res is None:
-        _res = ('*k' if {is_const} else '*') + canonicalize_dtype({name}.dtype)
-    dtype2str[_dsk] = _res
-    _key = specialize_tensor({name}, {specialize}, {align})
-    specialization[{list_pos}] = (_res, _key)
-elif isinstance({name}, int):
-    specialization[{list_pos}] = specialize_int({name}, {specialize}, {align})
-elif isinstance({name}, bool):
-    specialization[{list_pos}] = ('u1', None)
-elif isinstance({name}, float):
-    specialization[{list_pos}] = ('fp32', None)
-elif isinstance({name}, constexpr):
-    specialization[{list_pos}] = ('constexpr', {name})
-elif {name} is None:
-    specialization[{list_pos}] = ('constexpr', None)
-# fallback for non-tensor types with data_ptr
-elif hasattr({name}, 'data_ptr'):
-    _dsk = ({name}.dtype, {is_const})
-    _res = dtype2str.get(_dsk, None)
-    if _res is None:
-        _res = ('*k' if {is_const} else '*') + canonicalize_dtype({name}.dtype)
-    dtype2str[_dsk] = _res
-    _key = specialize_tensor({name}, {specialize}, {align})
-    specialization[{list_pos}] = (_res, _key)
-elif isinstance({name}, JITFunction):
-    specialization[{list_pos}] = ('constexpr', {name}.cache_key)
-elif hasattr({name}, 'tma_desc_cpu_ptr'):
-    specialization[{list_pos}] = ('nvTmaDesc', None)
-elif isinstance({name}, tuple):
-    _spec = [_specialize_tuple_elem(x) for x in {name}]
-    _make_tuple = lambda vals: type({name})(*vals) if hasattr({name}, '_fields') else tuple(vals)
-    _tys = _make_tuple([x[0] for x in _spec])
-    _keys = _make_tuple([x[1] for x in _spec])
-    specialization[{list_pos}] = (_tys, _keys)
-elif isinstance({name}, TensorDescriptor):
-    _inner = canonicalize_dtype({name}.base.dtype)
-    specialization[{list_pos}] = (f'tensordesc<{{_inner}}{{list({name}.block_shape)}}>', None)
-elif isinstance({name}, GluonTensorDescriptor):
-    _inner = canonicalize_dtype({name}.base.dtype)
-    specialization[{list_pos}] = (f'tensordesc<{{_inner}}{{list({name}.block_shape)}},{{repr({name}.layout)}}>', None)
-else:
-    raise TypeError(f'Unsupported type: {{type({name})}}')
-"""
-
-    # override annotated and specialized types
-    if kp.annotation_type and specialize:
-        src += f"specialization[{list_pos}][0] == '{kp.annotation_type}'\n"
-
-    return src
-
-
 def create_function_from_signature(sig, kparams, backend):
     """
     Equivalent to sig.bind followed by apply_defaults. This generates a
@@ -500,6 +415,38 @@ def create_function_from_signature(sig, kparams, backend):
     much of the kernel launch overhead -- every time we run the kernel.
     """
     assert len(sig.parameters) == len(kparams)
+    # Create the function argument list and the dict entries for the return statement
+    specialization = []
+    # signature
+    for name, kp in zip(sig.parameters.keys(), kparams):
+        if kp.is_constexpr:
+            specialization.append(f'("constexpr", {name})')
+        else:
+            is_const = 'True' if kp.is_const else 'False'
+            specialize = 'False' if kp.do_not_specialize else 'True'
+            align = 'False' if kp.do_not_specialize_on_alignment else 'True'
+            ret = f"specialize_impl(backend, {name}, {is_const}, {specialize}, {align})"
+            if kp.annotation_type:
+                if isinstance(kp.annotation_type, str):
+                    if kp.annotation_type == "u1" or kp.annotation_type[:2] in ["fp", "bf"]:
+                        # we do not specialize non-constexpr floats and bools:
+                        specialize = False
+                if specialize:
+                    specialization.append(f'("{kp.annotation_type}",) + {ret}[1:]')
+                else:
+                    # skip runtime specialization:
+                    specialization.append(f'("{kp.annotation_type}", None)')
+            else:
+                specialization.append(f"{ret}")
+
+    # compute argument string for a given parameter
+    arg = lambda x: x[0] if x[1].default is inspect.Parameter.empty else f"{x[0]}=default_{x[0]}"
+    func_body = f"""
+def dynamic_func({", ".join(list(map(arg, sig.parameters.items())) + ["**options"])}):
+    params = {{{', '.join([f"'{name}': {name}" for name in sig.parameters.keys()])}}}
+    specialization = [{','.join(specialization)}]
+    return params, specialization, options
+"""
 
     # Prepare defaults to be inserted into function namespace
     func_namespace = {
@@ -507,87 +454,10 @@ def create_function_from_signature(sig, kparams, backend):
         for name, param in sig.parameters.items()
         if param.default is not inspect.Parameter.empty
     }
-
-    if use_inline_specialization:
-        from ..language import constexpr
-        from triton.experimental.gluon.nvidia.hopper import TensorDescriptor as GluonTensorDescriptor
-        from ._specialize import SimpleArgSpecializer
-        specializer = SimpleArgSpecializer(backend.get_arg_specialization)
-        specialize_int = specializer.specialize_int
-        specialize_tensor = specializer.specialize_tensor
-
-        specializations = ""
-        idx = 0
-        for name, kp in zip(sig.parameters.keys(), kparams):
-            src = _generate_inline_specialization(name, kp, idx)
-            src = "\n".join("    " + line for line in src.splitlines())
-            idx += 1
-            specializations += src
-            specializations += "\n"
-
-        # compute argument string for a given parameter
-        arg = lambda x: x[0] if x[1].default is inspect.Parameter.empty else f"{x[0]}=default_{x[0]}"
-        # Join all arguments into a function definition string
-        func_body = f"""
-def dynamic_func({", ".join(list(map(arg, sig.parameters.items())) + ["**options"])}):
-    params = {{{', '.join([f"'{name}': {name}" for name in sig.parameters.keys()])}}}
-    specialization = [None] * {len(sig.parameters)}
-    {specializations}
-    return params, specialization, options
-"""
-
-        func_namespace["constexpr"] = constexpr
-        func_namespace["JITFunction"] = JITFunction
-        func_namespace["specialize_int"] = specialize_int
-        func_namespace["specialize_tensor"] = specialize_tensor
-        func_namespace["dtype2str"] = dtype2str
-        func_namespace["canonicalize_dtype"] = canonicalize_dtype
-        func_namespace["TensorDescriptor"] = TensorDescriptor
-        func_namespace["GluonTensorDescriptor"] = GluonTensorDescriptor
-
-    else:
-        # Create the function argument list and the dict entries for the return statement
-        specialization = []
-        # signature
-        for name, kp in zip(sig.parameters.keys(), kparams):
-            if kp.is_constexpr:
-                specialization.append(f'("constexpr", {name})')
-            else:
-                is_const = 'True' if kp.is_const else 'False'
-                specialize = 'False' if kp.do_not_specialize else 'True'
-                align = 'False' if kp.do_not_specialize_on_alignment else 'True'
-                ret = f"specialize_impl({name}, {is_const}, {specialize}, {align})"
-                if kp.annotation_type:
-                    if isinstance(kp.annotation_type, str):
-                        if kp.annotation_type == "u1" or kp.annotation_type[:2] in ["fp", "bf"]:
-                            # we do not specialize non-constexpr floats and bools:
-                            specialize = False
-                    if specialize:
-                        specialization.append(f'("{kp.annotation_type}",) + {ret}[1:]')
-                    else:
-                        # skip runtime specialization:
-                        specialization.append(f'("{kp.annotation_type}", None)')
-                else:
-                    specialization.append(f"{ret}")
-
-        # compute argument string for a given parameter
-        arg = lambda x: x[0] if x[1].default is inspect.Parameter.empty else f"{x[0]}=default_{x[0]}"
-        # Join all arguments into a function definition string
-        func_body = f"""
-def dynamic_func({", ".join(list(map(arg, sig.parameters.items())) + ["**options"])}):
-    params = {{{', '.join([f"'{name}': {name}" for name in sig.parameters.keys()])}}}
-    specialization = [{','.join(specialization)}]
-    return params, specialization, options
-"""
-        # Prepare defaults to be inserted into function namespace
-        func_namespace = {
-            f"default_{name}": param.default
-            for name, param in sig.parameters.items()
-            if param.default is not inspect.Parameter.empty
-        }
-
-        func_namespace["JITFunction"] = JITFunction
-        func_namespace["specialize_impl"] = create_specialize_impl(backend.get_arg_specialization)
+    
+    func_namespace["JITFunction"] = JITFunction
+    func_namespace["specialize_impl"] = native_specialize_impl if use_native_specialize else create_specialize_fallback()
+    func_namespace["backend"] = backend
 
     # Execute the function string in func_namespace to create the function
     exec(func_body, func_namespace)

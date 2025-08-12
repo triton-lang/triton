@@ -94,6 +94,7 @@ class HIPOptions:
 
 class HIPBackend(BaseBackend):
     instrumentation = None
+    supports_native_tensor_specialization = False
 
     @staticmethod
     def supports_target(target: GPUTarget):
@@ -170,13 +171,11 @@ class HIPBackend(BaseBackend):
         if "S" in desc:
             ret += [["tt.pointer_range", 32]]
         return ret
-
+    
     @staticmethod
-    def get_arg_specialization(arg, ty, **kwargs):
-        ret = BaseBackend.get_arg_specialization(arg, ty, **kwargs)
-        # Only attempt to do buffer ops specialization if buffer ops are enabled.
-        # Otherwise the is_within_2gb check is unnecessary overhead.
-        if knobs.amd.use_buffer_ops and ty == "tensor" and HIPBackend.is_within_2gb(arg):
+    def get_tensor_specialization(arg, **kwargs):
+        ret = BaseBackend.get_tensor_specialization(arg, **kwargs)
+        if knobs.amd.use_buffer_ops and HIPBackend.is_within_2gb(arg):
             ret += "S"
         return ret
 

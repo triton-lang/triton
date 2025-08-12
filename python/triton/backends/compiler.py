@@ -21,6 +21,7 @@ class Language(Enum):
 
 
 class BaseBackend(metaclass=ABCMeta):
+    supports_native_tensor_specialization = True
 
     def __init__(self, target: GPUTarget) -> None:
         self.target = target
@@ -77,14 +78,26 @@ class BaseBackend(metaclass=ABCMeta):
         if "D" in desc:
             ret += [["tt.divisibility", 16]]
         return ret
+    
+    @staticmethod
+    def get_int_specialization(arg, **kwargs):
+        if arg % 16 == 0 and kwargs.get("align", False):
+            return "D"
+        return ""
+    
+    @staticmethod
+    def get_tensor_specialization(arg, **kwargs):
+        if arg.data_ptr() % 16 == 0 and kwargs.get("align", False):
+            return "D"
+        return ""
 
     @staticmethod
     def get_arg_specialization(arg, ty, **kwargs):
         """
         Return a string unique to each possible specialization of the argument
         """
-        if ty == "int" and arg % 16 == 0 and kwargs.get("align", False):
-            return "D"
-        if ty == "tensor" and arg.data_ptr() % 16 == 0 and kwargs.get("align", False):
-            return "D"
+        if ty == "int":
+            return get_int_specialization(arg, **kwargs)
+        if ty == "tensor":
+            return get_tensor_specialization(arg, **kwargs)
         return ""
