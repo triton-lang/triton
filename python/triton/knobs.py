@@ -24,7 +24,6 @@ class Env:
 env = Env()
 
 propagate_env: bool = True
-cache_env: bool = False
 
 
 def getenv(key: str) -> Optional[str]:
@@ -81,11 +80,6 @@ class env_base(Generic[SetType, GetType]):
         if self.name in obj.__dict__:
             return self.transform(obj.__dict__[self.name])
         else:
-            if cache_env:
-                env = self.env_val
-                raw_val = self.default() if env is None else self.from_env(env)
-                obj.__dict__[self.name] = raw_val
-                return self.transform(raw_val)
             return self.get()
 
     @property
@@ -417,7 +411,9 @@ class JITHook(Protocol):
 
 class runtime_knobs(base_knobs):
     interpret: env_bool = env_bool("TRITON_INTERPRET")
-    debug: env_bool = env_bool("TRITON_DEBUG")
+    # debug is on critical path for kernel launches
+    # avoid repeated reads from env-var by calling get directly
+    debug: bool = env_bool("TRITON_DEBUG").get()
     override_arch: env_opt_str = env_opt_str("TRITON_OVERRIDE_ARCH")
 
     launch_enter_hook: Optional[LaunchHook] = None
@@ -481,3 +477,7 @@ language = language_knobs()
 nvidia = nvidia_knobs()
 amd = amd_knobs()
 proton = proton_knobs()
+
+
+def refresh_knobs():
+    runtime.debug = env_bool("TRITON_DEBUG").get()
