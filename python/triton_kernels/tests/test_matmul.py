@@ -251,16 +251,16 @@ class Case:
     ],
 )
 @pytest.mark.parametrize("block_m", [16, 128])
-@pytest.mark.parametrize("do_gather, do_scatter, fused_scatter", [
-    (False, False, False),
-    (True, False, False),
-    (False, True, False),
-    (True, True, False),
-    (True, True, True),
+@pytest.mark.parametrize("do_gather, do_scatter", [
+    (False, False),
+    (True, False),
+    (False, True),
+    (True, True),
+    (True, True),
 ])
 @pytest.mark.parametrize("has_y_gammas", [False, True])
 @pytest.mark.parametrize("is_persistent", [False, True])
-def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas, is_persistent, n_expts_tot,
+def test_op(m, n, k, split_k, do_gather, do_scatter, has_y_gammas, is_persistent, n_expts_tot,
             n_expts_act, n_expt_shards, mode, act_dtype_str, weight_dtype_str, block_m, hbm_swizzling, epilogue_subtile,
             device, opt_flags_scope, fresh_knobs):
     # TODO: remove when Triton FP8 supports proper RTNE
@@ -293,8 +293,6 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
     if "float8_e4m3fnuz" in (weight_dtype_str, act_dtype_str) and not is_hip_cdna3():
         pytest.skip("float8_e4m3fnuz only tested on AMD CDNA3 Platform")
 
-    if fused_scatter and split_k > 1:
-        pytest.skip("fused scatter scratchpad not supported with split_k")
     if hbm_swizzling:
         if is_hip():
             pytest.skip("NYI. HBM swizzling just implemented for CUDA.")
@@ -308,8 +306,6 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
                 pytest.skip("Hopper swizzling acts on a 64x64 tile (4x1 mma tiles).")
 
     # launch metadata for batched / mx types may not work yet.
-    test_launch_metadata = (mode == "ragged") and ("mx" not in weight_dtype_str) and fused_scatter and m*n*k != 0
-
     torch.manual_seed(0)
 
     block_k = None
@@ -323,7 +319,6 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
         "block_m": block_m,
         "block_k": block_k,
         "split_k": split_k,
-        "fused_scatter": fused_scatter,
         "is_persistent": is_persistent,
         "epilogue_subtile": epilogue_subtile,
     }
@@ -400,46 +395,6 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
     else:
         y_scale = None
 
-    if test_launch_metadata:
-
-        def _clobber(t, used_mask):
-            # Fill the unread part of the tensor with garbage, to be sure that
-            # we don't actually read from the part.
-            if len(used_mask) == 1:
-                return
-            elif t.element_size() == 1:
-                t.view(torch.int8)[~used_mask] = 127
-            else:
-                t[~used_mask] = torch.inf
-
-        if rdata is not None:
-            n_tokens = rdata.expt_hist.sum().item()
-            used_expts = (rdata.expt_hist > 0)
-            _clobber(w_tri, used_expts)
-            n_w_bytes = used_expts.sum().item() * n * k * w_tri.element_size()
-        else:
-            n_tokens = m
-            n_w_bytes = w_tri.numel() * w_tri.element_size()
-
-        if gindx is not None:
-            used_x_rows = (gindx.dst_indx.view(-1, n_expts_act) != -1).any(dim=1)
-            _clobber(x_tri, used_x_rows)
-            n_x_bytes = used_x_rows.sum().item() * k * x_tri.element_size()
-        elif rdata is not None:
-            n_x_bytes = n_tokens * k * x_tri.element_size()
-        else:
-            n_x_bytes = x_tri.numel() * x_tri.element_size()
-
-        nbytes = None
-
-        def _hook(launch_metadata):
-            nonlocal nbytes
-            metadata = launch_metadata.get()
-            if "matmul_ogs" in metadata["name"]:
-                nbytes = metadata["bytes"]
-
-        triton.knobs.runtime.launch_enter_hook = _hook
-
     if mode == "batched":
         rdata, gindx, sindx = None, None, None
     flex = precision_opt.flex_ctx
@@ -453,16 +408,6 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
     sep_gather = mode == "ragged" and do_gather and n_expts_act > 1 and split_k == 1
     sep_scatter = mode == "ragged" and do_scatter and n_expts_act > 1 and split_k == 1
     y_scale = flex.out_data.expected_scale if act_is_float8 else 1
-
-    if test_launch_metadata:
-        if gindx is not None:
-            n_y_bytes = (gindx.src_indx != -1).sum().item() * n * tri_y.element_size()
-        elif rdata is not None:
-            n_y_bytes = n_tokens * n * tri_y.element_size()
-        else:
-            n_y_bytes = tri_y.numel() * tri_y.element_size()
-        assert nbytes == n_x_bytes + n_y_bytes + n_w_bytes
-        triton.knobs.runtime.launch_enter_hook = None
 
     def round_x(x, idx):
         return x.to(act_dtype).to(torch.float32) if sep_gather else x
@@ -519,12 +464,12 @@ def test_set_idle_sms():
     (800, 800, 400, "batched"),
 ])
 @pytest.mark.parametrize("split_k", [1, 2])
-@pytest.mark.parametrize("do_gather, do_scatter, fused_scatter", [
-    (False, False, False),
-    (True, False, False),
-    (False, True, False),
-    (True, True, False),
-    (True, True, True),
+@pytest.mark.parametrize("do_gather, do_scatter", [
+    (False, False),
+    (True, False),
+    (False, True),
+    (True, True),
+    (True, True),
 ])
 @pytest.mark.parametrize("is_persistent, epilogue_subtile", [
     (False, None),
@@ -536,15 +481,12 @@ def test_set_idle_sms():
     (1.0, 1.2),
     (0.7, 1.0),
 ])
-def test_fused_act(m, n, k, mode, split_k, do_gather, do_scatter, fused_scatter, is_persistent, epilogue_subtile,
+def test_fused_act(m, n, k, mode, split_k, do_gather, do_scatter, is_persistent, epilogue_subtile,
                    swiglu_alpha, swiglu_limit, device, opt_flags_scope):
-    if fused_scatter and split_k > 1:
-        pytest.skip("fused scatter scratchpad not supported with split_k")
     torch.manual_seed(0)
     constraints = {
         "is_persistent": is_persistent,
         "epilogue_subtile": epilogue_subtile,
-        "fused_scatter": fused_scatter,
         "split_k": split_k,
     }
     n_expts_tot, n_expts_act, n_expt_shards = 1, 1, 1

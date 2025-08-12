@@ -19,7 +19,7 @@ def _reduce_standard(X, stride_xb, stride_xm, stride_xn,  #
         # Assumption: last two dims [M, N] are contiguous -> linear offset `idxs`
         ptrs = X + idxs
         acc = tl.zeros([BLOCK_MN], dtype=tl.float32)
-        for b in tl.range(B, num_stages=4):
+        for b in tl.range(B, num_stages=2):
             vals = tl.load(ptrs + b * stride_xb, mask=mask, other=0.0)
             acc += vals.to(tl.float32)
         out_ptrs = Y + idxs
@@ -27,14 +27,6 @@ def _reduce_standard(X, stride_xb, stride_xm, stride_xn,  #
 
 
 def reduce_standard(x: torch.Tensor, dim: int = 0):
-    """
-    Standard sum-reduction along `dim` using Triton.
-
-    Requirements
-    - dim must be 0
-    - x must be 3D with shape [B, M, N]
-    - B is assumed small and provided as a constexpr to the kernel
-    """
     if dim != 0 or x.ndim != 3:
         raise NotImplementedError("reduce_standard only supports 3D inputs with dim=0")
     B, M, N = x.shape
@@ -45,12 +37,13 @@ def reduce_standard(x: torch.Tensor, dim: int = 0):
     BLOCK_MN = 32768
     grid0 = min(256, triton.cdiv(M * N, BLOCK_MN))
     grid = (grid0, )
+    print(x.shape, y.shape)
     _reduce_standard[grid](
         x, x.stride(0), x.stride(1), x.stride(2),  #
         y, y.stride(0), y.stride(1),  #
         B, M, N,  #
         BLOCK_MN=BLOCK_MN,  #
-        num_warps=16,  #
+        num_warps=32,  #
     )
     return y
 

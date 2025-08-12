@@ -18,17 +18,11 @@ class OptFlags:
     xcd_swizzle: int
     w_cache_modifier: str
     split_k: int
-    fused_scatter: bool
     is_persistent: bool
     idle_sms: int
     epilogue_subtile: int | None
     arch: str
     target_kernel_kwargs: dict
-
-    def __post_init__(self):
-        if self.fused_scatter and self.split_k != 1:
-            raise ValueError("Not supported")
-
 
 
 def make_default_opt_flags_amd(
@@ -41,12 +35,11 @@ def make_default_opt_flags_amd(
     k,
     routing_data,
     can_use_persistent_tma,
-    can_use_fused_scatter,
     enforce_bitwise_invariance,
     epilogue_effective_itemsize,
     constraints,
 ):
-    constraints_supported = ["block_m", "block_k", "split_k", "fused_scatter", "is_persistent", "epilogue_subtile"]
+    constraints_supported = ["block_m", "block_k", "split_k", "is_persistent", "epilogue_subtile"]
     assert not any([c not in constraints_supported for c in constraints]), constraints.keys()
     # tokens per expert
     if routing_data is None:
@@ -116,7 +109,6 @@ def make_default_opt_flags_amd(
         xcd_swizzle=xcd_swizzle,
         w_cache_modifier=w_cache_modifier,
         split_k=split_k,
-        fused_scatter=constraints.get('fused_scatter', False),
         is_persistent=is_persistent,
         idle_sms=0,
         epilogue_subtile=epilogue_subtile,
@@ -137,12 +129,11 @@ def make_default_opt_flags_nvidia(
     k,
     routing_data,
     can_use_persistent_tma,
-    can_use_fused_scatter,
     enforce_bitwise_invariance,
     epilogue_effective_itemsize,
     constraints,
 ):
-    constraints_supported = ["block_m", "block_k", "split_k", "fused_scatter", "is_persistent", "epilogue_subtile", "num_stages", "idle_sms"]
+    constraints_supported = ["block_m", "block_k", "split_k", "is_persistent", "epilogue_subtile", "num_stages", "idle_sms"]
     assert not any([c not in constraints_supported for c in constraints]), constraints.keys()
     # tokens per expert
     if routing_data is None:
@@ -218,11 +209,6 @@ def make_default_opt_flags_nvidia(
     if constraints.get("num_stages", None):
         num_stages = constraints["num_stages"]
 
-    # fused scatter scratchpad
-    if constraints.get("fused_scatter", None) is not None:
-        fused_scatter = constraints["fused_scatter"]
-    else:
-        fused_scatter = can_use_fused_scatter and split_k == 1
     # Handshake with the HBM swizzling
     num_warps = opt_flags_nvidia.compute_num_warps(block_m, block_n, precision_config)
     ret = OptFlags(
@@ -235,7 +221,6 @@ def make_default_opt_flags_nvidia(
         xcd_swizzle=xcd_swizzle,
         w_cache_modifier=None,
         split_k=split_k,
-        fused_scatter=fused_scatter,
         is_persistent=is_persistent,
         epilogue_subtile=epilogue_subtile,
         arch=arch,
@@ -280,7 +265,6 @@ def make_opt_flags(
     k,
     routing_data,
     can_use_persistent_tma,
-    can_use_fused_scatter,
     epilogue_effective_itemsize,
 ):
     if _opt_flags_constraints.get("is_persistent", False) and not can_use_persistent_tma:
@@ -290,7 +274,7 @@ def make_opt_flags(
         assert not _opt_flags_constraints
         return _opt_flags
     args = [out_dtype, lhs_dtype, rhs_dtype, precision_config, m, n, k,
-            routing_data, can_use_persistent_tma, can_use_fused_scatter,
+            routing_data, can_use_persistent_tma,
             enforce_bitwise_invariance, epilogue_effective_itemsize,
             _opt_flags_constraints]
     backend = triton.runtime.driver.active.get_current_target().backend
