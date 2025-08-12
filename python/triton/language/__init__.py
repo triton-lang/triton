@@ -57,7 +57,6 @@ from .core import (
     condition,
     const,
     constexpr,
-    constexpr_function,
     constexpr_type,
     debug_barrier,
     device_assert,
@@ -132,6 +131,7 @@ from .random import (
     randn4x,
     uint_to_uniform_float,
 )
+from . import target_info
 
 __all__ = [
     "PropagateNan",
@@ -169,7 +169,6 @@ __all__ = [
     "condition",
     "const",
     "constexpr",
-    "constexpr_function",
     "constexpr_type",
     "cos",
     "cumprod",
@@ -256,6 +255,7 @@ __all__ = [
     "store",
     "sum",
     "swizzle2d",
+    "target_info",
     "tensor",
     "topk",
     "trans",
