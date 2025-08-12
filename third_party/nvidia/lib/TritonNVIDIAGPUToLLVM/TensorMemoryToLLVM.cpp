@@ -215,7 +215,8 @@ getVec(const LinearLayout &cvt, const LinearLayout &tile, int maxnreg) {
                          (i / 2) * tile.getInDimSize(kReg));
 }
 
-static LinearLayout getTileLayout(MLIRContext *ctx, TMemAccessAtom atom) {
+static LinearLayout getTileLayout(MLIRContext *ctx, TMemAccessAtom atom,
+                                  int bitwidth, bool unpacked) {
   auto kReg = str_attr("register");
   auto kLane = str_attr("lane");
   auto kWarp = str_attr("warp");
@@ -239,8 +240,15 @@ static LinearLayout getTileLayout(MLIRContext *ctx, TMemAccessAtom atom) {
   auto bases = tile.getBases();
   bases[kWarp].push_back({32, 0});
   bases[kWarp].push_back({64, 0});
-  return LinearLayout(bases, {{kRow, 128}, {kCol, tile.getOutDimSize(kCol)}},
-                      false);
+  auto ret = LinearLayout(
+      bases, {{kRow, 128}, {kCol, tile.getOutDimSize(kCol)}}, false);
+  // For unpacked, the tile above is for 32-bit elements, so we have to multiply
+  // by identity1D(32 / bitwidth, kReg, kCol) to get the correct tile to allow
+  // us to divide the cvt layout by it
+  if (unpacked) {
+    ret = LinearLayout::identity1D(32 / bitwidth, kReg, kCol) * ret;
+  }
+  return ret;
 }
 
 struct TMemMessageTraits {
@@ -959,6 +967,7 @@ lowerTMemLdSt(Location loc, MLIRContext *ctx,
     return outVals;
   }
   assert(!isStore || cvt.getInDimSize(kReg) == vals.size());
+  auto bitwidth = llvmElemTy.getIntOrFloatBitWidth();
 
   // The algorithm goes as:
   // - Try to match the tile with one of the standard messages
@@ -970,7 +979,7 @@ lowerTMemLdSt(Location loc, MLIRContext *ctx,
   std::optional<std::tuple<TMemAccessAtom, LinearLayout, ColumnAction, int>>
       msgInfo;
   for (auto atom : {TMemAccess32x32b, TMemAccess16x256b}) {
-    auto tile = getTileLayout(ctx, atom);
+    auto tile = getTileLayout(ctx, atom, bitwidth, unpacked);
     auto maybeReps = getVec(cvt, tile, maxnreg);
     if (maybeReps) {
       // Cannot match more than one
@@ -983,7 +992,7 @@ lowerTMemLdSt(Location loc, MLIRContext *ctx,
   if (!msgInfo) {
     // Quotient by the smaller tile and then, if possible, we set the
     // secondHalfOffset to the last kLane basis
-    auto tile = getTileLayout(ctx, TMemAccess16x32bx2);
+    auto tile = getTileLayout(ctx, TMemAccess16x32bx2, bitwidth, unpacked);
     auto maybeReps = getVec(cvt, tile, maxnreg);
     if (maybeReps) {
       auto [reps, perm, numRegsPerMessage] = std::move(*maybeReps);
