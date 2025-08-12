@@ -475,23 +475,23 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
           lowerInst) const {
     TritonLLVMOpBuilder b(loc, rewriter);
     auto *ctx = rewriter.getContext();
+
     // Remove broadcasted registers
     auto srcLayout = triton::gpu::toLinearLayout(srcTy);
     auto removeBroadcastSrc = actionRemoveBroadcastedRegs(srcLayout);
     srcLayout = removeBroadcastSrc.apply(srcLayout);
     loadVals = removeBroadcastSrc.apply(loadVals);
-    // %dst
-    auto smemObj =
-        LLVM::getSharedMemoryObjectFromStruct(loc, llDst, resElemTy, rewriter);
+
     auto smemLayout = triton::gpu::toLinearLayout(dstTy);
     auto cvt = srcLayout.invertAndCompose(smemLayout);
-
     cvt = cvt.sublayout(
         {str_attr("register"), str_attr("lane"), str_attr("warp")},
         {str_attr("offset")});
+
+    auto smemObj =
+        LLVM::getSharedMemoryObjectFromStruct(loc, llDst, resElemTy, rewriter);
     auto affineOffset = smemObj.getShmemOffset(loc, rewriter, dstTy);
     auto maskSpanAffineOffset = SharedMemoryObject::getMaskSpanOffsets(dstTy);
-
     auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
     lowerLdSt(
         loc, ctx, cvt, loadVals, resElemTy, smemObj.getBase(),
