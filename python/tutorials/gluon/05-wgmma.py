@@ -282,7 +282,7 @@ if __name__ == "__main__":
 
 
 # This decorator allows us to invoke the function from a Gluon constexpr.
-@gl.constexpr_function
+@gluon.constexpr_function
 def get_warps_per_cta(BLOCK_M, BLOCK_N, num_warps):
     warps_per_cta = [4, 1]
     m = 16
@@ -296,7 +296,7 @@ def get_warps_per_cta(BLOCK_M, BLOCK_N, num_warps):
     return warps_per_cta
 
 
-@gl.constexpr_function
+@gluon.constexpr_function
 def get_instr_shape_n(BLOCK_M, BLOCK_N, num_warps):
     m = 16
     mReps = triton.cdiv(BLOCK_M, m)
@@ -309,7 +309,7 @@ def get_instr_shape_n(BLOCK_M, BLOCK_N, num_warps):
     return n
 
 
-@gl.constexpr_function
+@gluon.constexpr_function
 def pick_wgmma_layout(dtype, BLOCK_M, BLOCK_N, num_warps):
     m = 16
     k = 256 // dtype.primitive_bitwidth
