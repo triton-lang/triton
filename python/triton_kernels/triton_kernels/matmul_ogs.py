@@ -416,7 +416,9 @@ def matmul_ogs(x, w, bias,
     scatter_indx = scatter_indx.src_indx
     if routing_data.n_expts_act > 1:
         group_indx = scatter_indx.view(-1, routing_data.n_expts_act)
-        out, scatter_indx = reduce_grouped_mod.reduce_grouped(out, group_indx)
+        out, scatter_indx = reduce_grouped_mod.reduce_grouped(out, group_indx,
+                                                              x_flex=out_flex, out_flex=out_flex,
+                                                              flexpoint_saturate_inf=precision_config.flexpoint_saturate_inf)
     # scatter output
     out = scatter_rows(out, scatter_indx)
     return out

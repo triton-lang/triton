@@ -421,7 +421,8 @@ def _p_matmul_ogs(
                 None, # ActualScale: local absmax is tracked and updated after the loop
                 YChecksumScale,
                 None, # mask: out is manually masked to 0
-                YPtr, FLEXPOINT_SATURATE_INF)
+                YPtr, FLEXPOINT_SATURATE_INF
+            )
             if EPILOGUE_FN is not None:
                 out = EPILOGUE_FN(out, *epilogue_fn_args, target_dtype=YPtr.dtype.element_ty, pid=len(accs)*tile_id1 + a_i)
 
