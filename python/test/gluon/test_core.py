@@ -1,7 +1,7 @@
 import torch
 import pytest
 
-from triton._internal_testing import is_cuda, is_ampere_or_newer, is_hip_cdna4, is_hopper_or_newer, is_hopper
+from triton._internal_testing import is_cuda, is_ampere_or_newer, is_hip_cdna3, is_hip_cdna4, is_hopper_or_newer, is_hopper
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
 from triton.experimental.gluon.language.nvidia.ampere import async_copy, mbarrier
@@ -180,7 +180,7 @@ def test_amd_mfma(M, N, K, in_dtype, num_warps, nonkdim):
         offs_c = offs_cm[:, None] * stride_cm + offs_cn[None, :] * stride_cn
         ttgl.amd.cdna3.buffer_store(stored_value=c, ptr=c_ptr, offsets=offs_c)
 
-    if not is_hip_cdna4():
+    if not is_hip_cdna4() and not is_hip_cdna3():
         pytest.skip()
 
     elem_type = torch.float16 if in_dtype == 'float16' else torch.bfloat16
