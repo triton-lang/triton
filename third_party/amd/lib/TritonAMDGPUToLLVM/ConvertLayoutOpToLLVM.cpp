@@ -129,6 +129,8 @@ public:
           v = b.ptrtoint(i64_ty, v);
         if (!isa<IntegerType>(elemTy))
           v = b.bitcast(v, int_ty(bitwidth));
+        if (bitwidth < 32)
+          v = b.zext(i32_ty, v);
       });
       if (bitwidth == 64) {
         SmallVector<Value> half0;
@@ -198,11 +200,12 @@ public:
         outVals = std::move(newOutVals);
       }
       llvm::for_each(outVals, [&](Value &v) {
-        if (isa<LLVM::LLVMPointerType>(elemTy)) {
+        if (isa<LLVM::LLVMPointerType>(elemTy))
           v = b.inttoptr(elemTy, v);
-        } else if (!isa<IntegerType>(elemTy)) {
+        if (bitwidth < 32)
+          v = b.trunc(int_ty(bitwidth), v);
+        if (!isa<IntegerType>(elemTy))
           v = b.bitcast(v, elemTy);
-        }
       });
     }
 
