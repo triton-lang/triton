@@ -15,7 +15,6 @@ from triton_kernels.target_info import is_cuda
 # details
 from .matmul_ogs_details._matmul_ogs import _matmul_ogs
 from .matmul_ogs_details._p_matmul_ogs import _p_matmul_ogs, get_per_device_per_stream_alloc_fn
-from .matmul_ogs_details._finalize_matmul import _finalize_matmul
 from .reduce import ReductionSpecs, reduce as reduce_dispatch
 from .reduce_details import reduce_grouped as reduce_grouped_mod
 from .scatter import scatter as scatter_rows
@@ -47,7 +46,6 @@ class FusedActivation:
 class Epilogue:
     specs: FnSpecs = FnSpecs.default()
     fn_arg_values_matmul: tuple[object] = tuple()
-    fn_arg_values_finalize: tuple[object] = tuple()
     effective_itemsize: float = None
 
 class FnName(Enum):
@@ -77,8 +75,6 @@ def get_kernels(epilogue: FnSpecs = FnSpecs.default(), fused_activation: FnSpecs
 
     module = types.ModuleType(f"matmul_ogs_{'_'.join(key)}")
     sys.modules[module.__name__] = module
-    module._finalize_matmul = specialize(_finalize_matmul, module, spec_constants, spec_tuples,
-                                         do_not_specialize=do_not_specialize)
     module._matmul_ogs = specialize(_matmul_ogs, module, spec_constants, spec_tuples,
                                     do_not_specialize=do_not_specialize)
     module._p_matmul_ogs = specialize(_p_matmul_ogs, module, spec_constants, spec_tuples,
