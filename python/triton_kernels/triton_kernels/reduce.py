@@ -44,6 +44,8 @@ def _validate(x: torch.Tensor, specs: ReductionSpecs, inplace: bool):
 
 def reduce(x: torch.Tensor, specs: ReductionSpecs, inplace: bool = False):
     _validate(x, specs, inplace)
+    if x.shape[specs.dim] == 1:
+        return x.squeeze(specs.dim)
     if specs.mode == "grouped":
         return _reduce_grouped.reduce_grouped(x, indx=specs.group_indx)
     if specs.mode == "standard":

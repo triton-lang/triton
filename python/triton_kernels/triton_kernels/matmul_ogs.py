@@ -300,10 +300,10 @@ def matmul_ogs(x, w, bias,
         triton.set_allocator(get_per_device_per_stream_alloc_fn(x.device))
     # Intermediate tensors and postprocess kernels for each situation
     has_scratchpad = "matmul" in memory["scratchpad"]
-    out0 = memory["scratchpad"]["matmul"] if has_scratchpad else memory["output"]
-    out0_flex = precision_config.flex_ctx.out_data if has_scratchpad else OutFlexData()
+    out = memory["scratchpad"]["matmul"] if has_scratchpad else memory["output"]
+    out_flex = precision_config.flex_ctx.out_data if has_scratchpad else OutFlexData()
     out_scale = None if precision_config.out_scale is None else precision_config.out_scale.data.view(torch.uint8)
-    out_has_mx = out_scale is not None and out0.element_size() == 1
+    out_has_mx = out_scale is not None and out.element_size() == 1
     # matrix multiplication
     flex = precision_config.flex_ctx
     bias_stride = None if bias is None else bias.stride(0)
@@ -327,7 +327,7 @@ def matmul_ogs(x, w, bias,
     has_scatter = False
     has_gather_tma = has_gather and target_info.has_tma_gather()
     has_scatter_tma = has_scatter and target_info.has_tma_gather()
-    y = wrap_torch_tensor(out0.view(math.prod(out0.shape[:-1]), out0.shape[-1]) if has_scatter else out0.view(math.prod(out0.shape[:-2]), *out0.shape[-2:]))
+    y = wrap_torch_tensor(out.view(math.prod(out.shape[:-1]), out.shape[-1]) if has_scatter else out.view(math.prod(out.shape[:-2]), *out.shape[-2:]))
     x_storage = _canonicalize_storage(x.storage, 2 if has_gather_tma else 3, flex.lhs_data)
     w_storage = _canonicalize_storage(w.storage, 3, flex.rhs_data)
     y_storage = _canonicalize_storage(y.storage, 2 if has_scatter_tma else 3, flex.out_data)
@@ -360,8 +360,8 @@ def matmul_ogs(x, w, bias,
     # launch kernel
     kernels = get_kernels(epilogue.specs, fused_activation.specs)
     (kernels._p_matmul_ogs if opt_flags.is_persistent else kernels._matmul_ogs)[(grid,)](
-                   y_tensor_or_tma, y_storage.data, *out0.stride(),
-                   *((None, out_scale, None) if out_has_mx else out0_flex),
+                   y_tensor_or_tma, y_storage.data, *out.stride(),
+                   *((None, out_scale, None) if out_has_mx else out_flex),
                    *out_scale_strides[-3:],
                    x_tensor_or_tma, x_storage.data, *x_strides,
                    flex.lhs_data.scale,
@@ -403,29 +403,27 @@ def matmul_ogs(x, w, bias,
                    num_warps=opt_flags.num_warps,
                    num_stages=opt_flags.num_stages,
                    arch=opt_flags.arch,
-                   UPCAST_INDICES=should_upcast_indices(x, w, out0),
+                   UPCAST_INDICES=should_upcast_indices(x, w, out),
                    X_TMA_MODE=x_tma_mode,
                    Y_TMA_MODE=y_tma_mode,
                    SWAP_XW=get_swap_xw(precision_config, opt_flags),
                    IS_EPILOGUE_DEQUANT_MXFP8=epilogue.specs.name == FnName.DEQUANTIZE_MXFP8.name,
                    NUM_SMS = grid if opt_flags.is_persistent else 0,
                    **opt_flags.target_kernel_kwargs)
-    # post-processing (reduce + grouped-reduce + scatter)
-    if opt_flags.split_k == 1:
-        out0 = out0[0,:,:,:]
-    else:
-        out0 = reduce_dispatch(out0, ReductionSpecs(dim=0, group_indx=None))
-    if scatter_indx is not None:
-        out0 = out0[0, :, :]
-        src_indx = scatter_indx.src_indx
-        if routing_data.n_expts_act > 1:
-            indx = scatter_indx.src_indx.view(-1, routing_data.n_expts_act)
-            out0, src_indx = reduce_grouped_mod.reduce_grouped(out0, indx)
-        out0 = scatter_rows(out0, src_indx)
-    if not is_input_batched:
-        out0 = out0.view(out0.shape[-2], out0.shape[-1])
-    return out0
-
+    # finalize split-k
+    out = reduce_dispatch(out, ReductionSpecs(dim=0, group_indx=None))
+    out = out if is_input_batched else out.squeeze(0)
+    # no scatter; we're done
+    if scatter_indx is None:
+        return out
+    # reduce expert groups
+    scatter_indx = scatter_indx.src_indx
+    if routing_data.n_expts_act > 1:
+        group_indx = scatter_indx.view(-1, routing_data.n_expts_act)
+        out, scatter_indx = reduce_grouped_mod.reduce_grouped(out, group_indx)
+    # scatter output
+    out = scatter_rows(out, scatter_indx)
+    return out
 
 # -----------------------------------------------------------------------------
 # Reference Implementation
