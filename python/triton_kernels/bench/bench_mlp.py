@@ -1,4 +1,3 @@
-import os
 from pathlib import Path
 from copy import deepcopy
 import matplotlib.pyplot as plt
