@@ -254,8 +254,8 @@ void lowerTMALoad(ArefPutEnterOp op, Value fullBarrier,
 }
 
 void rewritePutEnterOp(ArefPutEnterOp op, PatternRewriter &rewriter,
-                                ArefValue arefVal,
-                                const DenseSet<MMAv5OpInterface> &mmav5Ops) {
+                       ArefValue arefVal,
+                       const DenseSet<MMAv5OpInterface> &mmav5Ops) {
   auto loc = op.getLoc();
   rewriter.setInsertionPointAfter(op);
 
@@ -325,7 +325,7 @@ static void propagateMutability(Value value) {
 }
 
 void rewriteGetEnterOp(ArefGetEnterOp op, PatternRewriter &rewriter,
-                                ArefValue arefVal) {
+                       ArefValue arefVal) {
   auto loc = op.getLoc();
   rewriter.setInsertionPointAfter(op);
 
@@ -344,8 +344,8 @@ void rewriteGetEnterOp(ArefGetEnterOp op, PatternRewriter &rewriter,
 }
 
 void insertArriveBarrier(Location loc, ArrayRef<AsyncOp> asyncOps,
-                                  PatternRewriter &rewriter, Value mbar,
-                                  StageCluster stageCluster) {
+                         PatternRewriter &rewriter, Value mbar,
+                         StageCluster stageCluster) {
   for (auto asyncOpEnum : asyncOps) {
     Operation *arriveOp = {};
     switch (asyncOpEnum) {
@@ -375,7 +375,7 @@ void rewritePutExitOp(ArefPutExitOp op, PatternRewriter &rewriter,
   rewriter.setInsertionPointAfter(op);
   Value fullBarrier = getFullBarrier(rewriter, loc, arefVal, op.getStage());
   insertArriveBarrier(loc, castAsyncOpAttrs(op.getAsyncOps()), rewriter,
-                             fullBarrier, getStageCluster(op));
+                      fullBarrier, getStageCluster(op));
 }
 
 void rewriteGetExitOp(ArefGetExitOp op, PatternRewriter &rewriter,
