@@ -859,15 +859,6 @@ SmallVector<Value> lowerTMemLdSt(Location loc, MLIRContext *ctx,
 
   tmemBase = b.ptrtoint(i32_ty, tmemBase);
 
-  // Add CTAs to tmemBase
-  if (auto nCTAs = triton::gpu::lookupNumCTAs(rewriter); nCTAs > 1) {
-    Value blockId = target.getClusterCTAId(rewriter, loc);
-    // We already checked that we could rightDivide by the number of CTAs along
-    // kCol
-    tmemBase = b.add(tmemBase,
-                     b.shl(blockId, b.i32_val(reps.getOutDimSizeLog2(kCol))));
-  }
-
   assert(to_vector(reps.getOutDimNames()) ==
          SmallVector<StringAttr>({kRow, kCol}));
   auto getRowCol = [kRow, kCol](const auto &rowCol) {
@@ -944,7 +935,6 @@ lowerTMemLdSt(Location loc, MLIRContext *ctx,
   bool unpacked = enc.getUnpacked();
   auto kReg = str_attr("register");
   auto kLane = str_attr("lane");
-  auto kBlock = str_attr("block");
   auto kRow = str_attr("row");
   auto kCol = str_attr("col");
 
@@ -1011,9 +1001,6 @@ lowerTMemLdSt(Location loc, MLIRContext *ctx,
   // Couldn't lower, perhaps error more gently?
   assert(msgInfo && "Failed to lower TMEM load/store: unsupported dst layout");
   auto [atom, reps, perm, numRegsPerMessage] = std::move(msgInfo.value());
-  // Make sure we already removed them
-  assert(reps.getInDimSize(kBlock) == 1);
-  reps = reps.unsqueezeIn(kBlock);
 
   SmallVector<Value> inVals;
   if (isStore) {
@@ -1041,16 +1028,20 @@ lowerTMemLdStFromTypes(Location loc, MLIRContext *ctx,
   auto memLayout = toLinearLayout(memTy);
   auto regLayout = toLinearLayout(regTy);
   auto cvt = regLayout.invertAndCompose(memLayout);
+
+  // tmemBase already encodes CTA/block offsets so we just remove them from the
+  // cvt
   auto kBlock = str_attr("block");
   auto kCol = str_attr("col");
   auto nCTAs = cvt.getInDimSize(kBlock);
   auto maybeQuot =
       divideRight(cvt, LinearLayout::identity1D(nCTAs, kBlock, kCol));
   assert(maybeQuot.has_value());
+  auto quot = maybeQuot->unsqueezeIn(kBlock);
 
   SmallVector<Value> resultVals =
-      lowerTMemLdSt(loc, ctx, rewriter, target, *maybeQuot, storeVals,
-                    llvmElemTy, memTy, tmemBase, maxnreg, pred);
+      lowerTMemLdSt(loc, ctx, rewriter, target, quot, storeVals, llvmElemTy,
+                    memTy, tmemBase, maxnreg, pred);
   return resultVals;
 }
 
