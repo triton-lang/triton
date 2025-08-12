@@ -133,9 +133,6 @@ class DependenciesFinder(ast.NodeVisitor):
             return
 
         if callable(val) and not isinstance(val, type) and not isinstance(val, constexpr):
-            print(dir(val))
-            print(val.__module__)
-            print(val.__dict__)
             raise RuntimeError(f"Unsupported function referenced: {val}")
 
         # Python default arguments are resolved only once, when the
