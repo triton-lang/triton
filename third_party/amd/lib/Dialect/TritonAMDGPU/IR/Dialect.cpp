@@ -469,6 +469,19 @@ LogicalResult LocalLoadTransposedOp::verify() {
   auto srcTy = getSrc().getType();
   auto dstTy = getType();
   auto srcShape = srcTy.getShape();
+  auto dstShape = dstTy.getShape();
+
+  if (srcShape.size() != dstShape.size()) {
+    return emitOpError("src and dst must have the same rank");
+  }
+
+  if (srcShape.size() != 2) {
+    return emitOpError("only 2D transpose is supported");
+  }
+
+  if ((dstShape[0] != srcShape[1]) || (dstShape[1] != srcShape[0])) {
+    return emitOpError("dst shape must be the transpose of src shape");
+  }
 
   auto dotEnc = dyn_cast<DotOperandEncodingAttr>(dstTy.getEncoding());
   if (!dotEnc)
@@ -479,6 +492,15 @@ LogicalResult LocalLoadTransposedOp::verify() {
   if (!sharedEnc)
     return emitOpError(
         "only works with SwizzledSharedEncodingAttr src encoding");
+
+  unsigned opIdx = dotEnc.getOpIdx();
+  unsigned kDimIdx = (opIdx == 0) ? 1 : 0;
+  auto order = sharedEnc.getOrder();
+  bool isKContig = (order[0] == kDimIdx);
+
+  if (isKContig) {
+    return emitOpError("Tensor must be non-k contiguous in shared memory");
+  }
 
   return success();
 }

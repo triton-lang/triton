@@ -134,9 +134,9 @@ public:
     }
 
     auto ctx = getContext();
+    auto sharedOrder = ttg::getOrderForMemory(srcTy);
     auto sharedEnc = ttg::SwizzledSharedEncodingAttr::get(
-        ctx, directDotEnc, directOperandType.getShape(),
-        /*order=*/ttg::getOrderForMemory(srcTy),
+        ctx, directDotEnc, directOperandType.getShape(), sharedOrder,
         ttg::getCTALayout(directDotEnc), directOperandType.getElementType(),
         /*needTrans=*/false);
 
@@ -155,14 +155,36 @@ public:
     LDBG("Created local load op:" << *localLoad);
     directDot.setOperand(opIdx, localLoad);
     LDBG("Updated Direct dot: " << *directDot);
-    auto transposedLocalLoad =
-        rewriter.create<triton::amdgpu::LocalLoadTransposedOp>(
-            loc, transOperandType, alloc);
-    LDBG("Created transposed local load op:" << *transposedLocalLoad);
-    transDot.setOperand(opIdx, transposedLocalLoad);
+    if (canUseLocalLoadTransposed(opIdx, sharedOrder)) {
+      auto transposedLocalLoad =
+          rewriter.create<triton::amdgpu::LocalLoadTransposedOp>(
+              loc, transOperandType, alloc);
+      LDBG("Created transposed local load op:" << *transposedLocalLoad);
+      transDot.setOperand(opIdx, transposedLocalLoad);
+    } else // fallback
+    {
+      auto newTransOp =
+          rewriter.create<tt::TransOp>(loc, localLoad, transOrder);
+      auto cvtOp = rewriter.create<ttg::ConvertLayoutOp>(loc, transOperandType,
+                                                         newTransOp);
+      LDBG("Created transpose op: " << *newTransOp);
+      LDBG("Created convert layout op: " << *cvtOp);
+      transDot.setOperand(opIdx, cvtOp);
+    }
+
     LDBG("Updated Trans dot: " << *transDot);
 
     return success();
+  }
+
+private:
+  bool canUseLocalLoadTransposed(unsigned opIdx,
+                                 ArrayRef<unsigned> sharedOrder) const {
+    unsigned kDimIdx = (opIdx == 0) ? 1 : 0;
+    bool isKContig = (sharedOrder[0] == kDimIdx);
+    // Tensor must be non-k contiguous in shared memory in order to use
+    // local_load_transposed
+    return !isKContig;
   }
 };
 

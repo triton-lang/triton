@@ -570,7 +570,7 @@ def InThreadTransposeOp : TT_AMDGPU_Op<"in_thread_transpose", [Pure]> {
 def LocalLoadTransposedOp : TT_AMDGPU_Op<"local_load_transposed", [LocalLoadTrait]> {
     let summary = "Load a transposed tensor from shared memory into a distributed tensor";
     let description = [{
-      Requires a K contiguous tensor in shared memory and will yield the transposed tensor in registers.
+      Requires a non-K contiguous tensor in shared memory and will yield the transposed K contiguous tensor in registers.
     }];
   let arguments = (ins
     Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$src,
