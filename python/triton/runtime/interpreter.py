@@ -1378,7 +1378,7 @@ class InterpretedFunction:
         self.fn = fn
         self.rewriter = FunctionRewriter(fn, **kwargs)
         self.kwargs = kwargs
-        self.warmup = False
+        self.is_warmup = False
 
         def run(*args, **kwargs):
             grid = kwargs["grid"]
@@ -1395,9 +1395,9 @@ class InterpretedFunction:
         return self.rewritten_fn[self.fn]
 
     def warmup(self, *args, grid, **kwargs):
-        self.warmup = True
+        self.is_warmup = True
         ret = triton.runtime.JITFunction(self.fn, self.kwargs).warmup(*args, grid=grid, **kwargs)
-        self.warmup = False
+        self.is_warmup = False
         return ret
 
     @property
@@ -1409,7 +1409,7 @@ class InterpretedFunction:
         return GridExecutor(fn, self.arg_names, grid)
 
     def __call__(self, *args, **kwargs):
-        if self.warmup:
+        if self.is_warmup:
             return fn(*args, **kwargs)
         else:
             # This is a device function call
