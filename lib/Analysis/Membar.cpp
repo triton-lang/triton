@@ -240,10 +240,7 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
       auto dstTy = cast<RankedTensorType>(cvt.getType());
       auto srcLayout = triton::gpu::toLinearLayout(srcTy);
       auto dstLayout = triton::gpu::toLinearLayout(dstTy);
-      auto kWarp = StringAttr::get(op->getContext(), "warp");
-      isWarpSync = srcLayout.invertAndCompose(dstLayout).isTrivialOver(kWarp) &&
-                   srcLayout.getFreeVariableMasks()[kWarp] == 0 &&
-                   dstLayout.getFreeVariableMasks()[kWarp] == 0;
+      isWarpSync = mlir::isCvtWarpSync(srcLayout, dstLayout);
     }
 
     if (!curBlockInfo.syncReadIntervals.empty() ||

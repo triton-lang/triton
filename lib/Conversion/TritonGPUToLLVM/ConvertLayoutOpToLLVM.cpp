@@ -204,14 +204,7 @@ struct ConvertLayoutOpConversion
     auto maskSpanAffineOffset = 0;
     auto noPaddingOffset = [](Value v) { return v; };
 
-    // We can use warp.sync when the warp dimension in the convert is trival
-    // and there is no broadcasting at a warp level (otherwise reads may be
-    // wrong)
-    auto kWarp = str_attr("warp");
-    bool isWarpSync =
-        srcLayout.invertAndCompose(dstLayout).isTrivialOver(kWarp) &&
-        srcLayout.getFreeVariableMasks()[kWarp] == 0 &&
-        dstLayout.getFreeVariableMasks()[kWarp] == 0;
+    bool isWarpSync = mlir::isCvtWarpSync(srcLayout, dstLayout);
     for (int i = 0; i < nReps; ++i) {
       if (i > 0)
         targetInfo.barrier(loc, rewriter, isWarpSync);
