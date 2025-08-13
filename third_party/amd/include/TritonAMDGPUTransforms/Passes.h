@@ -19,6 +19,7 @@ namespace mlir::triton::amdgpu {
 #define GEN_PASS_DECL_TRITONAMDGPUOPTIMIZEDOTOPERANDS
 #include "TritonAMDGPUTransforms/Passes.h.inc"
 
+void registerTritonAMDGPUOptimizeDotOperands();
 } // namespace mlir::triton::amdgpu
 
 namespace mlir {

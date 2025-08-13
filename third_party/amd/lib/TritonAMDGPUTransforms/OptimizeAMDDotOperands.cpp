@@ -217,4 +217,10 @@ public:
   }
 };
 
+void registerTritonAMDGPUOptimizeDotOperands() {
+  ::mlir::registerPass([]() -> std::unique_ptr<::mlir::Pass> {
+    return createTritonAMDGPUOptimizeDotOperands();
+  });
+}
+
 } // namespace mlir::triton::amdgpu
