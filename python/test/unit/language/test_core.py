@@ -6438,12 +6438,20 @@ dst_layouts = [
 def test_convert_permlane_swap(M, N, src_layout, dst_layout, dtype, device, tmp_path: pathlib.Path):
     if not is_hip_cdna4():
         pytest.skip()
+    if dtype == "float8e5":
+        mlir_dtype = "f8E5M2"
+    elif dtype == "float16":
+        mlir_dtype = "f16"
+    elif dtype == "float32":
+        mlir_dtype = "f32"
+    elif dtype == "int64":
+        mlir_dtype = "i64"
 
     ir = f"""
     #src = {src_layout}
     #dst = {dst_layout}
-    module attributes {{"ttg.num-warps" = 1 : i32, "ttg.num_ctas" = 1 : i32, "ttg.threads-per-warp" = 64 : i32}} {{
-  tt.func public @kernel(%arg0: !tt.ptr<{dtype}> {{tt.divisibility = 16 : i32}}, %arg1: !tt.ptr<{dtype}> {{tt.divisibility = 16 : i32}}) {{
+    module attributes {{"ttg.num-warps" = 1 : i32, "ttg.num-ctas" = 1 : i32, "ttg.threads-per-warp" = 64 : i32}} {{
+  tt.func public @kernel(%arg0: !tt.ptr<{mlir_dtype}> {{tt.divisibility = 16 : i32}}, %arg1: !tt.ptr<{mlir_dtype}> {{tt.divisibility = 16 : i32}}) {{
     %0 = tt.make_range {{end = {M} : i32, start = 0 : i32}} : tensor<{M}xi32, #ttg.slice<{{dim = 1, parent = #src}}>>
     %1 = tt.make_range {{end = {N} : i32, start = 0 : i32}} : tensor<{N}xi32, #ttg.slice<{{dim = 0, parent = #src}}>>
     %2 = tt.expand_dims %0 {{axis = 1 : i32}} : tensor<{M}xi32, #ttg.slice<{{dim = 1, parent = #src}}>> -> tensor<{M}x1xi32, #src>
@@ -6453,14 +6461,14 @@ def test_convert_permlane_swap(M, N, src_layout, dst_layout, dtype, device, tmp_
     %cst = arith.constant dense<{N}> : tensor<{M}x{N}xi32, #src>
     %6 = arith.muli %4, %cst : tensor<{M}x{N}xi32, #src>
     %7 = arith.addi %6, %5 : tensor<{M}x{N}xi32, #src>
-    %8 = tt.splat %arg0 : !tt.ptr<{dtype}> -> tensor<{M}x{N}x!tt.ptr<{dtype}>, #src>
-    %9 = tt.addptr %8, %7 : tensor<{M}x{N}x!tt.ptr<{dtype}>, #src>, tensor<{M}x{N}xi32, #src>
-    %10 = tt.load %9 : tensor<{M}x{N}x!tt.ptr<{dtype}>, #src>
-    %11 = ttg.convert_layout %10 : tensor<{M}x{N}x{dtype}, #src> ->tensor<{M}x{N}x{dtype}, #dst>
-    %12 = tt.splat %arg1 : !tt.ptr<{dtype}> -> tensor<{M}x{N}x!tt.ptr<{dtype}>, #dst>
+    %8 = tt.splat %arg0 : !tt.ptr<{mlir_dtype}> -> tensor<{M}x{N}x!tt.ptr<{mlir_dtype}>, #src>
+    %9 = tt.addptr %8, %7 : tensor<{M}x{N}x!tt.ptr<{mlir_dtype}>, #src>, tensor<{M}x{N}xi32, #src>
+    %10 = tt.load %9 : tensor<{M}x{N}x!tt.ptr<{mlir_dtype}>, #src>
+    %11 = ttg.convert_layout %10 : tensor<{M}x{N}x{mlir_dtype}, #src> ->tensor<{M}x{N}x{mlir_dtype}, #dst>
+    %12 = tt.splat %arg1 : !tt.ptr<{mlir_dtype}> -> tensor<{M}x{N}x!tt.ptr<{mlir_dtype}>, #dst>
     %13 = ttg.convert_layout %7 : tensor<{M}x{N}xi32, #src> -> tensor<{M}x{N}xi32, #dst>
-    %14 = tt.addptr %12, %13 : tensor<{M}x{N}x!tt.ptr<{dtype}>, #dst>, tensor<{M}x{N}xi32, #dst>
-    tt.store %14, %11 : tensor<{M}x{N}x!tt.ptr<{dtype}>, #dst>
+    %14 = tt.addptr %12, %13 : tensor<{M}x{N}x!tt.ptr<{mlir_dtype}>, #dst>, tensor<{M}x{N}xi32, #dst>
+    tt.store %14, %11 : tensor<{M}x{N}x!tt.ptr<{mlir_dtype}>, #dst>
     tt.return
   }}
 }}
