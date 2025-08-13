@@ -184,10 +184,9 @@ getVec(const LinearLayout &cvt, const LinearLayout &tile, int maxnreg,
   assert(maxnreg / 2 <= largestTmemLoadStore);
   auto maxReg = maxnreg / 2;
   // Heuristic:
-  // If we need more than one message, we don't use max vectorisation as ptxas'
-  // scheduler breaks...
-  if (maxReg == largestTmemLoadStore &&
-      cvt.getInDimSize(kReg) / (32 / bitwidth) > maxReg) {
+  // If maxnreg is 256 and we need more than one message, we don't use max
+  // vectorisation as ptxas' scheduler breaks...
+  if (maxnreg == 256 && cvt.getInDimSize(kReg) / (32 / bitwidth) > maxReg) {
     maxReg /= 2;
   }
   auto maxVec = maxReg / tile.getInDimSize(kReg);
