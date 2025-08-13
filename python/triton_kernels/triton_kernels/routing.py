@@ -342,28 +342,28 @@ def compute_expt_data_torch(hist, n_expts_tot, n_gates):
     return ExptData(hist, token_offs_raw, token_offs_pad, block_pid_map)
 
 
+def topk_torch(vals, k, expt_indx, has_user_provided_indx=False):
+    # topk of experts
+    if has_user_provided_indx:
+        tk_indx = expt_indx
+    else:
+        tk_indx = torch.argsort(-vals, dim=1, stable=True)[:, :k]
+    tk_indx = tk_indx.long()
+    tk_val = torch.take_along_dim(vals, tk_indx, dim=1)
+    tk_indx = tk_indx.int()
+    return tk_val, tk_indx
+
+
 def routing_torch(logits, n_expts_act, sm_first=False, expt_indx=None, n_rows=None):
     has_user_provided_indx = expt_indx is not None
     n_gates_pad = logits.shape[0] * n_expts_act
 
     if n_rows is not None:
         logits = logits[:n_rows, :]
-
-    def topk(vals, k, expt_indx):
-        # topk of experts
-        if has_user_provided_indx:
-            tk_indx = expt_indx
-        else:
-            tk_indx = torch.argsort(-vals, dim=1, stable=True)[:, :k]
-        tk_indx = tk_indx.long()
-        tk_val = torch.take_along_dim(vals, tk_indx, dim=1)
-        tk_indx = tk_indx.int()
-        return tk_val, tk_indx
-
     _, n_expts_tot = logits.shape
     if sm_first:
         logits = torch.softmax(logits, dim=-1)
-    expt_scal, expt_indx = topk(logits, n_expts_act, expt_indx)
+    expt_scal, expt_indx = topk_torch(logits, n_expts_act, expt_indx, has_user_provided_indx=has_user_provided_indx)
     if not sm_first:
         expt_scal = torch.softmax(expt_scal, dim=-1)
     # sort each token's selections by expert

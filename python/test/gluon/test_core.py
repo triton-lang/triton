@@ -163,7 +163,6 @@ def test_sharedmem_with_padded_layout():
         # temp = smem.load(blocked)
         #tl.device_print("temp = ", temp)
         reshaped = smem.reshape((N, M)).load(blocked)
-        #tl.device_print("temp = ", reshaped)
         offs_n_tr = ttgl.arange(0, N, layout=ttgl.SliceLayout(1, blocked))
         offs_m_tr = ttgl.arange(0, M, layout=ttgl.SliceLayout(0, blocked))
         offs_reshaped = offs_n_tr[:, None] * N + offs_m_tr[None, :]

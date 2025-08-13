@@ -432,6 +432,7 @@ static PyObject* data_ptr_str = NULL;
 
 static inline DevicePtrInfo getPointer(PyObject *obj, int idx) {{
   DevicePtrInfo ptr_info;
+  hipError_t status = hipSuccess;
   ptr_info.dev_ptr = 0;
   ptr_info.valid = true;
   if (PyLong_Check(obj)) {{
@@ -457,7 +458,7 @@ static inline DevicePtrInfo getPointer(PyObject *obj, int idx) {{
   if (!ptr_info.dev_ptr)
     goto cleanup;
   uint64_t dev_ptr;
-  hipError_t status = hipSymbolTable.hipPointerGetAttribute(&dev_ptr, HIP_POINTER_ATTRIBUTE_DEVICE_POINTER, ptr_info.dev_ptr);
+  status = hipSymbolTable.hipPointerGetAttribute(&dev_ptr, HIP_POINTER_ATTRIBUTE_DEVICE_POINTER, ptr_info.dev_ptr);
   if (status == hipErrorInvalidValue) {{
       PyErr_Format(PyExc_ValueError,
                    "Pointer argument (at %d) cannot be accessed from Triton (cpu tensor?)", idx);
@@ -475,9 +476,9 @@ static uint16_t pack_fp16(double f) {{
     uint16_t result;
     // from https://github.com/python/pythoncapi-compat
 #if 0x030600B1 <= PY_VERSION_HEX && PY_VERSION_HEX <= 0x030B00A1 && !defined(PYPY_VERSION)
-    _PyFloat_Pack2(f, (unsigned char*)&result, 1);
+    _PyFloat_Pack2(f, (char*)&result, 1);
 #else
-    PyFloat_Pack2(f, (unsigned char*)&result, 1);
+    PyFloat_Pack2(f, (char*)&result, 1);
 #endif
     return result;
 }}

@@ -184,8 +184,8 @@ SmallVector<unsigned> getOrder(SharedEncodingTrait layout,
   if (auto swizzledLayout = dyn_cast<SwizzledSharedEncodingAttr>(layout)) {
     return llvm::to_vector(swizzledLayout.getOrder());
   }
-  if (auto paddedLayout = dyn_cast<PaddedSharedEncodingAttr>(layout)) {
-    return llvm::to_vector(paddedLayout.getOrder());
+  if (auto paddedEnc = dyn_cast<PaddedSharedEncodingAttr>(layout)) {
+    return llvm::to_vector(paddedEnc.getOrder());
   }
   if (auto sharedLayout = dyn_cast<NVMMASharedEncodingAttr>(layout)) {
     if (shape.size() == 1) {
