@@ -96,6 +96,9 @@ jobs:
         run: make test-interpret
       - name: Run regression tests
         run: make test-regression
+      - name: Run microbenchmark tests
+        # Microbenchmark never fail but running them gives us an easy way to track performance changes.
+        run: make test-microbenchmark
       - name: Run C++ unittests
         run: make test-cpp
       - name: Run Proton tests
