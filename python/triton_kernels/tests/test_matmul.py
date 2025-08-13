@@ -162,12 +162,12 @@ class Case:
     [
         tuple(getattr(case, f.name) for f in fields(Case)) for case in [
             # Zero-sized args:
-            # Case(0, 5, 7, "ragged", "float16", "float16"),
-            # Case(5, 0, 7, "ragged", "float16", "float16"),
-            # Case(5, 7, 0, "ragged", "float16", "float16"),
-            # Case(0, 5, 7, "batched", "float16", "float16"),
-            # Case(5, 0, 7, "batched", "float16", "float16"),
-            # Case(5, 7, 0, "batched", "float16", "float16"),
+            Case(0, 5, 7, "ragged", "float16", "float16"),
+            Case(5, 0, 7, "ragged", "float16", "float16"),
+            Case(5, 7, 0, "ragged", "float16", "float16"),
+            Case(0, 5, 7, "batched", "float16", "float16"),
+            Case(5, 0, 7, "batched", "float16", "float16"),
+            Case(5, 7, 0, "batched", "float16", "float16"),
             # Non-mx types:
             Case(16, 256, 256, "ragged", "float16", "float16", 128, 4),
             Case(16, 256, 256, "ragged", "float16", "float16", 128, 4, n_expt_shards=2),
@@ -231,8 +231,7 @@ class Case:
             Case(1000, 704, 800, "ragged", "mxfloat8_e4m3fn", "mxfloat4_e2m1", 8, 2, split_k=9, hbm_swizzling=True),
             Case(1000, 704, 800, "ragged", "mxfloat8_e4m3fn", "mxfloat4_e2m1", 8, 2),
             Case(1000, 704, 800, "ragged", "mxfloat8_e4m3fn", "mxfloat4_e2m1", 8, 2, hbm_swizzling=True),
-            Case(300, 400, 400, "ragged", "mxfloat8_e4m3fn", "mxfloat8_e4m3fn", 8, 1),
-            Case(300, 1024, 1024, "ragged", "mxfloat8_e4m3fn", "mxfloat8_e4m3fn", 8, 4),
+            Case(300, 400, 400, "ragged", "mxfloat8_e4m3fn", "mxfloat8_e4m3fn", 8, 4),
             Case(300, 400, 400, "ragged", "mxfloat8_e4m3fn", "mxfloat8_e4m3fn", 8, 4, hbm_swizzling=True),
             Case(300, 400, 800, "ragged", "mxfloat8_e4m3fn", "mxfloat4_e2m1", 8, 4),
             Case(300, 400, 800, "ragged", "mxfloat8_e4m3fn", "mxfloat4_e2m1", 8, 4, hbm_swizzling=True),
