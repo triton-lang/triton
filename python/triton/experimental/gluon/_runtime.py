@@ -1,11 +1,13 @@
 from __future__ import annotations
 from triton.compiler.compiler import ASTSource
 from triton.backends.compiler import Language
-from triton.runtime.jit import JITFunction
+from triton.runtime.jit import JITFunction, constexpr_function
 from typing import TypeVar, Optional, Callable, Iterable, Union
 from triton._C.libtriton import ir
 
 T = TypeVar("T")
+
+__all__ = ["constexpr_function", "jit"]
 
 
 class GluonASTSource(ASTSource):

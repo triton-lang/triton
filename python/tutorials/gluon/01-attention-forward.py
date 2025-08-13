@@ -26,7 +26,7 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
 # ===-----------------------------------------------------------------------===#
 
 
-@gl.constexpr_function
+@gluon.constexpr_function
 def get_mma_instr_shape(shape, element_ty):
     m = 128 if shape[0] >= 128 else 64
     n = 256 if shape[1] >= 256 else shape[1]
@@ -34,7 +34,7 @@ def get_mma_instr_shape(shape, element_ty):
     return (m, n, k)
 
 
-@gl.constexpr_function
+@gluon.constexpr_function
 def get_mma_reg_layout(shape, num_warps, dtype=gl.float32):
     instr_shape = get_mma_instr_shape(shape, dtype)
     return get_tmem_32x32b_reg_layout(*instr_shape[:2], shape, num_warps)
@@ -508,7 +508,7 @@ def _borrow_s_for_epilogue(config, s_tmem):
     return m_i_tmem, l_i_tmem
 
 
-@gl.constexpr_function
+@gluon.constexpr_function
 def _get_split_n_layout(layout, SPLIT_FACTOR: gl.constexpr = 2):
     layout = copy.deepcopy(layout)
     layout.size_per_thread[1] //= SPLIT_FACTOR
@@ -527,7 +527,7 @@ def _split_n(x, SPLIT_FACTOR: gl.constexpr = 2):
         return _split_n(x0, SPLIT_FACTOR // 2) + _split_n(x1, SPLIT_FACTOR // 2)
 
 
-@gl.constexpr_function
+@gluon.constexpr_function
 def _get_join_n_layout(layout, SPLIT_FACTOR: gl.constexpr = 2):
     layout = copy.deepcopy(layout)
     layout.size_per_thread[1] *= SPLIT_FACTOR
