@@ -25,7 +25,6 @@ def test_mma_remark(capfd, fresh_triton_cache):
         if capability[0] != 9:
             pytest.skip("Requires sm = 90 to run")
 
-
     @triton.jit
     def matmul_kernel(
         a_ptr,
