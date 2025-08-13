@@ -421,13 +421,24 @@ def matmul_ogs(x, w, bias,
     scatter_indx = scatter_indx.src_indx
     if routing_data.n_expts_act > 1:
         group_indx = scatter_indx.view(-1, routing_data.n_expts_act)
-        out, scatter_indx = reduce_grouped_mod.reduce_grouped(out, group_indx,
-                                                              x_flex=out_flex, out_flex=out_flex,
-                                                              flexpoint_saturate_inf=precision_config.flexpoint_saturate_inf)
+        # Prepare in-flex scale for intermediate rows (use output expected scale)
+        x_flex_in = None if out_flex.expected_scale is None else InFlexData(scale=out_flex.expected_scale)
+        # Optional per-32-col mxfp output scales buffer
+        out_scale = None
+        if out_has_mx and "mx_out_scale" in memory["scratchpad"]:
+            out_scale = memory["scratchpad"]["mx_out_scale"][0, 0, :, :]
+        out, scatter_indx = reduce_grouped_mod.reduce_grouped(
+            out,
+            group_indx,
+            x_flex=x_flex_in,
+            out_flex=out_flex,
+            x_mx_scale=out_scale,
+            flexpoint_saturate_inf=precision_config.flexpoint_saturate_inf,
+        )
     # scatter output
     out = scatter_rows(out, scatter_indx)
     if out_has_mx:
-        precision_config.out_scale = scatter_rows(out_scale[0,0,:,:], scatter_indx)
+        precision_config.out_scale = scatter_rows(out_scale.squeeze(0).squeeze(0), scatter_indx)
     return out
 
 # -----------------------------------------------------------------------------
