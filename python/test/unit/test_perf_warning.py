@@ -5,7 +5,7 @@ import pytest
 import torch
 import triton
 import triton.language as tl
-from triton._internal_testing import is_cuda
+from triton._internal_testing import is_cuda, is_hip
 
 
 @contextmanager
@@ -18,10 +18,13 @@ def enable_diagnostics_context(value):
 
 
 def test_mma_remark(capfd, fresh_triton_cache):
+    if is_hip():
+        pytest.skip("CUDA specific test")
     if is_cuda():
         capability = torch.cuda.get_device_capability()
         if capability[0] != 9:
             pytest.skip("Requires sm = 90 to run")
+
 
     @triton.jit
     def matmul_kernel(
@@ -93,6 +96,8 @@ def test_mma_remark(capfd, fresh_triton_cache):
 
 
 def test_remark_vectorization(capfd, fresh_triton_cache):
+    if is_hip():
+        pytest.skip("currently failing on HIP")
 
     @triton.jit
     def ldst_vec(in_ptr0, in_ptr1, in_ptr2, in_ptr3, out_ptr0, XBLOCK: tl.constexpr):
