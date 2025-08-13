@@ -172,7 +172,8 @@ static std::optional<LinearLayout> getReps(const LinearLayout &cvt,
 
 // Similar to largestVectorisation in TritonGPUToLLVM/Utility.cpp
 static std::optional<std::tuple<LinearLayout, ColumnAction, int>>
-getVec(const LinearLayout &cvt, const LinearLayout &tile, int maxnreg) {
+getVec(const LinearLayout &cvt, const LinearLayout &tile, int maxnreg,
+       int bitwidth) {
   auto *ctx = cvt.getInDimNames().begin()->getContext();
   auto kReg = StringAttr::get(ctx, "register");
   auto kCol = StringAttr::get(ctx, "col");
@@ -182,6 +183,13 @@ getVec(const LinearLayout &cvt, const LinearLayout &tile, int maxnreg) {
   // Do not use more than half the registers as otherwise it's prone to spilling
   assert(maxnreg / 2 <= largestTmemLoadStore);
   auto maxReg = maxnreg / 2;
+  // Heuristic:
+  // If we need more than one message, we don't use max vectorisation as ptxas'
+  // scheduler breaks...
+  if (maxReg == largestTmemLoadStore &&
+      cvt.getInDimSize(kReg) / (32 / bitwidth) > maxReg) {
+    maxReg /= 2;
+  }
   auto maxVec = maxReg / tile.getInDimSize(kReg);
   int i = 1;
   for (; i <= maxVec; i *= 2) {
@@ -970,7 +978,7 @@ lowerTMemLdSt(Location loc, MLIRContext *ctx,
       msgInfo;
   for (auto atom : {TMemAccess32x32b, TMemAccess16x256b}) {
     auto tile = getTileLayout(ctx, atom, bitwidth, unpacked);
-    auto maybeReps = getVec(cvt, tile, maxnreg);
+    auto maybeReps = getVec(cvt, tile, maxnreg, bitwidth);
     if (maybeReps) {
       // Cannot match more than one
       msgInfo = {atom, std::get<0>(*maybeReps), std::get<1>(*maybeReps),
@@ -983,7 +991,7 @@ lowerTMemLdSt(Location loc, MLIRContext *ctx,
     // Quotient by the smaller tile and then, if possible, we set the
     // secondHalfOffset to the last kLane basis
     auto tile = getTileLayout(ctx, TMemAccess16x32bx2, bitwidth, unpacked);
-    auto maybeReps = getVec(cvt, tile, maxnreg);
+    auto maybeReps = getVec(cvt, tile, maxnreg, bitwidth);
     if (maybeReps) {
       auto [reps, perm, numRegsPerMessage] = std::move(*maybeReps);
       // Find the last kLane basis and use it as secondHalfOffset
