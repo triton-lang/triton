@@ -1594,7 +1594,8 @@ Attribute PaddedSharedEncodingAttr::parse(AsmParser &parser, Type type) {
   }
   if (auto ctaLayout = parseCTAAttrs(parser, remainingAttrs, order.size()))
     return parser.getChecked<PaddedSharedEncodingAttr>(
-        parser.getContext(), intervals, paddings, order, *ctaLayout);
+        parser.getContext(), intervals, paddings, order, *ctaLayout,
+        std::nullopt);
   return {};
 }
 
@@ -1614,7 +1615,7 @@ void PaddedSharedEncodingAttr::print(AsmPrinter &printer) const {
 LogicalResult PaddedSharedEncodingAttr::verify(
     function_ref<InFlightDiagnostic()> emitError, ArrayRef<unsigned> intervals,
     ArrayRef<unsigned> paddings, ArrayRef<unsigned> order,
-    CTALayoutAttr ctaLayout) {
+    CTALayoutAttr ctaLayout, std::optional<Attribute> linearComponent) {
   if (intervals.size() != paddings.size())
     return emitError() << "intervals size (" << intervals.size()
                        << ") must match paddings size (" << paddings.size()
@@ -1645,7 +1646,8 @@ LogicalResult PaddedSharedEncodingAttr::verify(
 
 PaddedSharedEncodingAttr PaddedSharedEncodingAttr::get(
     MLIRContext *context, ArrayRef<std::pair<unsigned, unsigned>> intervalPads,
-    ArrayRef<unsigned> order, CTALayoutAttr ctaLayout) {
+    ArrayRef<unsigned> order, CTALayoutAttr ctaLayout,
+    std::optional<Attribute> linearComponent) {
   SmallVector<unsigned> intervals, paddings;
   intervals.reserve(intervalPads.size());
   paddings.reserve(intervalPads.size());
@@ -1653,7 +1655,7 @@ PaddedSharedEncodingAttr PaddedSharedEncodingAttr::get(
     intervals.push_back(interval);
     paddings.push_back(padding);
   }
-  return get(context, intervals, paddings, order, ctaLayout);
+  return get(context, intervals, paddings, order, ctaLayout, linearComponent);
 }
 
 int64_t PaddedSharedEncodingAttr::getPaddedSize(ArrayRef<int64_t> shape) const {

@@ -421,12 +421,14 @@ attributes too, for example,
       ArrayRefParameter<"unsigned">:$paddings,
       // Order of logical tensor dimensions; fastest-varying first.
       ArrayRefParameter<"unsigned">:$order,
-      "CTALayoutAttr":$CTALayout
+      "CTALayoutAttr":$CTALayout,
+      DefaultValuedParameter<"std::optional<Attribute>", "{}">:$linearComponent
   );
 
   let builders = [
       AttrBuilder<(ins "ArrayRef<std::pair<unsigned, unsigned>>":$intervalPads,
-                       "ArrayRef<unsigned>":$order, "CTALayoutAttr":$ctaLayout)>,
+                       "ArrayRef<unsigned>":$order, "CTALayoutAttr":$ctaLayout,
+                       "std::optional<Attribute>":$linearComponent)>,
   ];
 
   let extraClassDeclaration = extraBaseClassDeclaration # [{
