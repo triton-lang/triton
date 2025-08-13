@@ -2,7 +2,7 @@ import torch
 import triton
 import triton.language as tl
 from triton_kernels.numerics import InFlexData, OutFlexData
-from triton_kernels.numerics_details.flexpoint import float_to_flex
+from triton_kernels.numerics_details.flexpoint import float_to_flex, load_scale
 from triton_kernels.numerics_details.mxfp import dequantize_mxfp8_fn
 
 
@@ -30,6 +30,7 @@ def _reduce_grouped(X, stride_xm, stride_xn,  #
     ColPtrs = X + tl.arange(0, BLOCK_N) * stride_xn
     if HAS_MX_SCALE:
         ColScalePtrs = XMxScale + tl.arange(0, BLOCK_N // 32) * stride_xn
+    x_scale = load_scale(XScale)
     for n_curr in tl.range(0, N, BLOCK_N, num_stages=4):
         n_mask = tl.arange(0, BLOCK_N) < N - n_curr
         n_mask_scale = tl.arange(0, BLOCK_N // 32) < tl.cdiv(N - n_curr, 32)
@@ -47,6 +48,7 @@ def _reduce_grouped(X, stride_xm, stride_xn,  #
                 vals = vals.reshape([BLOCK_N // 32, 32])
                 vals = (scale[:, None] * vals).reshape([BLOCK_N])
             acc += vals
+        acc *= x_scale
         # Compute per-32-col MXFP scales for this tile if requested
         if HAS_MX_SCALE:
             acc, acc_scale = dequantize_mxfp8_fn(acc[None, :], n_mask[None, :])
@@ -117,6 +119,7 @@ def reduce_grouped(x: torch.Tensor, indx: torch.Tensor, x_flex: InFlexData | Non
         BLOCK_N=BLOCK_N, K=indx.shape[1],  #
         num_warps=1,  #
     )
+    print(out_actual_scale)
     return x, overwritten
 
 
