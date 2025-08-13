@@ -15,8 +15,8 @@ from triton_kernels.target_info import is_cuda
 # details
 from .matmul_ogs_details._matmul_ogs import _matmul_ogs
 from .matmul_ogs_details._p_matmul_ogs import _p_matmul_ogs, get_per_device_per_stream_alloc_fn
-from .reduce import ReductionSpecs, reduce as reduce_dispatch
 from .reduce_details import reduce_grouped as reduce_grouped_mod
+from .matmul_ogs_details._reduce_splitk import _reduce_splitk
 from .numerics_details.mxfp import MXFP_BLOCK_SIZE
 from .scatter import scatter as scatter_rows
 from .matmul_ogs_details.opt_flags import make_opt_flags, update_opt_flags_constraints
@@ -166,6 +166,8 @@ def init_allocation(x, w, precision_config, fused_activation, routing_data, gath
     # ---- scratchpad -----#
     scratchpad = dict()
     if opt_flags.split_k > 1 or scatter_indx is not None:
+        if opt_flags.split_k > 1:
+            out_dtype = torch.float32
         scratchpad["matmul"] = ((opt_flags.split_k, 1, M, N), out_dtype)
     if "matmul" in scratchpad and precision_config.out_scale is not None:
         scratchpad["mx_out_scale"] = ((opt_flags.split_k, 1, M, triton.cdiv(N, MXFP_BLOCK_SIZE)), torch.uint8)
@@ -412,7 +414,32 @@ def matmul_ogs(x, w, bias,
                    NUM_SMS = grid if opt_flags.is_persistent else 0,
                    **opt_flags.target_kernel_kwargs)
     # finalize split-k
-    out = reduce_dispatch(out, ReductionSpecs(dim=0, group_indx=None))
+    # out = reduce_dispatch(out, ReductionSpecs(dim=0, group_indx=None))
+
+    if opt_flags.split_k > 1:
+        # out = out.sum(dim=0)
+        out = out.view(opt_flags.split_k, -1)
+        split_k, BMN = out.shape
+        # Allocate output in final dtype so kernel can convert via float_to_flex
+        final_dtype = memory["output"].dtype
+        out_splitk = torch.empty((BMN,), device=out.device, dtype=final_dtype)
+        BLOCK_MN = 32768
+        grid0 = min(256, triton.cdiv(out_splitk.numel(), BLOCK_MN))
+        grid = (grid0, )
+        _reduce_splitk[grid](
+            memory["scratchpad"]["matmul"], memory["scratchpad"]["matmul"].stride(0), out_splitk,  #
+            precision_config.flex_ctx.out_data.expected_scale,
+            precision_config.flex_ctx.out_data.actual_scale,
+            precision_config.flex_ctx.out_data.checksum_scale,
+            opt_flags.split_k, BMN,  #
+            BLOCK_MN=BLOCK_MN,
+            FLEXPOINT_SATURATE_INF=precision_config.flexpoint_saturate_inf,
+            num_warps=32,
+        )
+        out = out_splitk.view(batch_size, M, N)
+    else:
+        out = out.squeeze(0)
+
     out = out if is_input_batched else out.squeeze(0)
     # no scatter; we're done
     if scatter_indx is None:

@@ -37,7 +37,6 @@ def reduce_standard(x: torch.Tensor, dim: int = 0):
     BLOCK_MN = 32768
     grid0 = min(256, triton.cdiv(M * N, BLOCK_MN))
     grid = (grid0, )
-    print(x.shape, y.shape)
     _reduce_standard[grid](
         x, x.stride(0), x.stride(1), x.stride(2),  #
         y, y.stride(0), y.stride(1),  #
