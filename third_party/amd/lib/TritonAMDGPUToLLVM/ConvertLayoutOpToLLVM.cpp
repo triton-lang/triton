@@ -41,7 +41,7 @@ public:
     auto factors = getWarpLayoutConvertDecomposition(srcTy, dstTy, bitwidth);
     auto &[pReg, pLane, mixedTranspositions, nPack] = factors;
 
-    if (mixedTranspositions.empty())
+    if (mixedTranspositions.size() != 1)
       return failure();
     auto t = mixedTranspositions[0];
     auto [rBit, lBit] = t.transposition;
@@ -54,9 +54,9 @@ public:
     //
     // Further details on this permutation interpretation can be found in the
     // general `transferWithinWarp` and `getWarpLayoutConvertDecomposition`.
-    if (!(mixedTranspositions.size() == 1 && (lBit == 4 || lBit == 5) &&
-          mlir::triton::squareSublayoutIsIdentity(pLane, kLane) &&
-          rBit >= nPack && t.topPreSel == 0x3210 && t.topPostSel == 0x3210)) {
+    if (!(mlir::triton::squareSublayoutIsIdentity(pLane, kLane) &&
+          (lBit == 4 || lBit == 5) && rBit >= nPack && t.topPreSel == 0x3210 &&
+          t.topPostSel == 0x3210)) {
       return failure();
     }
 
