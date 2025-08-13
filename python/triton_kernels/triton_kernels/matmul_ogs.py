@@ -427,8 +427,7 @@ def matmul_ogs(x, w, bias,
     # scatter output
     out = scatter_rows(out, scatter_indx)
     if out_has_mx:
-        out_scale2 = scatter_rows(out_scale, scatter_indx)
-        out_scale[:] = out_scale2
+        precision_config.out_scale = scatter_rows(out_scale[0,0,:,:], scatter_indx)
     return out
 
 # -----------------------------------------------------------------------------
