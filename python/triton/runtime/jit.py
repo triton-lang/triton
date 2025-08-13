@@ -323,7 +323,8 @@ def create_specialize_fallback():
     from ..language import constexpr
     from triton.experimental.gluon.nvidia.hopper import TensorDescriptor as GluonTensorDescriptor
 
-    def specialize_fallback(backend: BaseBackend, arg: Any, is_const: bool = False, specialize_value: bool = True, align: bool = True):
+    def specialize_fallback(backend: BaseBackend, arg: Any, is_const: bool = False, specialize_value: bool = True,
+                            align: bool = True):
         if arg is None:
             return ("constexpr", None)
         elif isinstance(arg, bool):
@@ -337,7 +338,7 @@ def create_specialize_fallback():
             elif 2**63 <= arg and arg <= 2**64 - 1:
                 return ("u64", key)
             else:
-                return ("i64", key)        
+                return ("i64", key)
         elif isinstance(arg, float):
             return ("fp32", None)
         elif hasattr(arg, "data_ptr"):
@@ -348,7 +349,7 @@ def create_specialize_fallback():
                 res = ("*k" if dsk[1] else "*") + canonicalize_dtype(dsk[0])
                 dtype2str[dsk] = res
             key = backend.get_tensor_specialization(arg, align=align) if specialize_value else None
-            return (res, key)        
+            return (res, key)
         elif isinstance(arg, JITFunction):
             return ("constexpr", arg.cache_key)
         elif isinstance(arg, constexpr):
@@ -372,7 +373,7 @@ def create_specialize_fallback():
             return (f"tensordesc<{inner}{list(arg.block_shape)},{arg.layout!r}>", None)
         else:
             raise TypeError("Unsupported type: %s" % type(arg))
-    
+
     return specialize_fallback
 
 
@@ -456,9 +457,10 @@ def dynamic_func({", ".join(list(map(arg, sig.parameters.items())) + ["**options
         for name, param in sig.parameters.items()
         if param.default is not inspect.Parameter.empty
     }
-    
+
     func_namespace["JITFunction"] = JITFunction
-    func_namespace["specialize_impl"] = native_specialize_impl if use_native_specialize else create_specialize_fallback()
+    func_namespace["specialize_impl"] = native_specialize_impl if use_native_specialize else create_specialize_fallback(
+    )
     func_namespace["backend"] = backend
 
     # Execute the function string in func_namespace to create the function

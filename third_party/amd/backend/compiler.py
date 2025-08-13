@@ -171,7 +171,7 @@ class HIPBackend(BaseBackend):
         if "S" in desc:
             ret += [["tt.pointer_range", 32]]
         return ret
-    
+
     @staticmethod
     def get_tensor_specialization(arg, **kwargs):
         ret = BaseBackend.get_tensor_specialization(arg, **kwargs)
