@@ -4,8 +4,8 @@ import torch
 from triton.runtime.driver import driver
 from triton.tools.tensor_descriptor import TensorDescriptor
 from triton.compiler import make_backend
-from triton.runtime.jit import specialize_native, create_specialize_fallback
-
+from triton.runtime.jit import create_specialize_fallback
+from triton._C.libtriton import native_specialize_impl
 
 @pytest.mark.parametrize("arg", [
     -1,
@@ -43,9 +43,9 @@ def test_specialize_base_arg(arg, align, is_const, specialize_value):
     backend = make_backend(target)
 
     fallback_result = create_specialize_fallback()(backend, arg, is_const, specialize_value, align)
-    native_result = specialize_native(backend, arg, is_const, specialize_value, align)
+    native_result = native_specialize_impl(backend, arg, is_const, specialize_value, align)
 
-    assert native_result == fallback_result
+    assert str(native_result) == str(fallback_result)
 
 
 @pytest.mark.parametrize("dtype", [torch.int8, torch.int16, torch.int32, torch.float32, torch.float16])
@@ -63,6 +63,6 @@ def test_specialize_tensor(dtype, size, make_desc, align, is_const, specialize_v
         arg = TensorDescriptor.from_tensor(arg, block_shape=[1] * len(size))
 
     fallback_result = create_specialize_fallback()(backend, arg, is_const, specialize_value, align)
-    native_result = specialize_native(backend, arg, is_const, specialize_value, align)
+    native_result = native_specialize_impl(backend, arg, is_const, specialize_value, align)
 
-    assert native_result == fallback_result
+    assert str(native_result) == str(fallback_result)
