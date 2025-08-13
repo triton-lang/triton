@@ -1709,3 +1709,55 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   }
 }
 """)
+
+
+@pytest.mark.parametrize("target", [HIP_TARGET_CDNA3, HIP_TARGET_CDNA4])
+def test_amd_mfma(target):
+
+    @gluon.jit
+    def kernel():
+        blocked: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[4, 4], threads_per_warp=[4, 16],
+                                                     warps_per_cta=[4, 1], order=[1, 0])
+        mfma_layout: ttgl.constexpr = ttgl.amd.AMDMFMALayout(version=3, instr_shape=[32, 32], transposed=True,
+                                                             warps_per_cta=[4, 1])
+
+        dot_a_layout: ttgl.constexpr = ttgl.DotOperandLayout(operand_index=0, parent=mfma_layout, k_width=8)
+        dot_b_layout: ttgl.constexpr = ttgl.DotOperandLayout(operand_index=1, parent=mfma_layout, k_width=8)
+
+        a = ttgl.full([64, 32], 1.0, ttgl.float32, blocked)
+        b = ttgl.full([32, 64], 2.0, ttgl.float32, blocked)
+
+        a1 = ttgl.convert_layout(a, layout=dot_a_layout)
+        b1 = ttgl.convert_layout(b, layout=dot_b_layout)
+        acc = ttgl.zeros([64, 64], ttgl.float32, mfma_layout)
+        ttgl.amd.cdna3.mfma(a1, b1, acc)
+
+    module = run_parser(kernel, target=target)
+
+    expecttest.assert_expected_inline(
+        anonymize_ir(module.str_nodebug()), """\
+#blocked = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [4, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+#mma = #ttg.amd_mfma<{version = 3, warpsPerCTA = [4, 1], instrShape = [32, 32], isTransposed = true}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @kernel() attributes {noinline = false} {
+    %cst = arith.constant 1.000000e+00 : f32
+    %cst_0 = arith.constant dense<1.000000e+00> : tensor<64x32xf32, #blocked>
+    %cst_1 = arith.constant 2.000000e+00 : f32
+    %cst_2 = arith.constant dense<2.000000e+00> : tensor<32x64xf32, #blocked>
+    %0 = ttg.convert_layout %cst_0 : tensor<64x32xf32, #blocked> -> tensor<64x32xf32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>>
+    %1 = ttg.convert_layout %cst_2 : tensor<32x64xf32, #blocked> -> tensor<32x64xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>
+    %2 = tt.call @"triton.experimental.gluon.language._standard.zeros____(0, 0)cconstexpr_64__(0, 1)cconstexpr_64__(1,)cconstexpr_fp32__(2,)cconstexpr_AMDMFMALayout(version=3, instr_shape=(32 ,32), transposed=True, warps_per_cta=(4 ,1), elem_type=triton_d_language_d_float32, tiles_per_warp=_1, 1_, ctas_per_cga=_1, 1_, cta_split_num=_1, 1_, cta_order=_1, 0_)_"() : () -> tensor<64x64xf32, #mma>
+    %cst_3 = arith.constant 0.000000e+00 : f32
+    %3 = tt.dot %0, %1, %2 : tensor<64x32xf32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma>
+    tt.return
+  }
+  tt.func private @"triton.experimental.gluon.language._standard.zeros____(0, 0)cconstexpr_64__(0, 1)cconstexpr_64__(1,)cconstexpr_fp32__(2,)cconstexpr_AMDMFMALayout(version=3, instr_shape=(32 ,32), transposed=True, warps_per_cta=(4 ,1), elem_type=triton_d_language_d_float32, tiles_per_warp=_1, 1_, ctas_per_cga=_1, 1_, cta_split_num=_1, 1_, cta_order=_1, 0_)_"() -> tensor<64x64xf32, #mma> attributes {noinline = false} {
+    %cst = arith.constant 0.000000e+00 : f32
+    %cst_0 = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #mma>
+    tt.return %cst_0 : tensor<64x64xf32, #mma>
+  ^bb1:  // no predecessors
+    %0 = ub.poison : tensor<64x64xf32, #mma>
+    tt.return %0 : tensor<64x64xf32, #mma>
+  }
+}
+""")
