@@ -1560,7 +1560,10 @@ def ast_to_ttir(fn, src, context, options, codegen_fns, module_map, module=None)
     kc, vc = next(const_iter, (None, None))
 
     for i, (ks, v) in enumerate(src.signature.items()):
-        idx = fn.arg_names.index(ks)
+        if isinstance(ks, int):
+            idx = ks
+        else:
+            idx = fn.arg_names.index(ks)
         cexpr = None
         if kc is not None and kc[0] == i:
             cexpr = vc
