@@ -6422,16 +6422,17 @@ def test_convert2d(M, N, src_layout, interm_layout, dst_layout, dtype, device, t
     torch.testing.assert_close(z, x, rtol=0, atol=0)
 
 
-src_layouts = [BlockedLayout([1, 1], [1, THREADS_PER_WARP], [1, 1], [0, 1], [1, 1], [1, 1], [0, 1])]
+src_layouts = [BlockedLayout([1, 1], [1, 64], [1, 1], [0, 1], [1, 1], [1, 1], [0, 1])]
 
-dst_layouts = {
-    2: LinearLayout([[0, 32]], [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [1, 0]], [],
-                    []), 4: LinearLayout([[1, 0], [0, 32]], [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [2, 0]], [], []),
-    8: LinearLayout([[1, 0], [2, 0], [0, 32]], [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [4, 0]], [], [])
-}
+dst_layouts = [
+    LinearLayout([[0, 32]], [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [1, 0]], [], []),
+    LinearLayout([[1, 0], [0, 32]], [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [2, 0]], [], []),
+    LinearLayout([[1, 0], [2, 0], [0, 32]], [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [4, 0]], [], [])
+]
 
 
-@pytest.mark.parametrize("M, dst_layout", [[2, dst_layouts[2]], [4, dst_layouts[4]], [8, dst_layouts[8]]])
+@pytest.mark.parametrize("M, dst_layout", [[2, dst_layouts[0]], [4, dst_layouts[1]], [8, dst_layouts[2]]])
+@pytest.mark.parametrize("src_layout", src_layouts[0])
 @pytest.mark.parametrize("N", 64)
 @pytest.mark.parametrize("dtype", ['float8e5', 'float16', 'float32', 'int64'])
 def test_convert_permlane_swap(M, N, src_layout, dst_layout, dtype, device, tmp_path: pathlib.Path):
