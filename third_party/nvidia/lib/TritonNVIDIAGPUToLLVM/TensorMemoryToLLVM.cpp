@@ -822,7 +822,6 @@ static SmallVector<Value> unpackResults(Value packedValues, Type elemTy,
 
 SmallVector<Value> lowerTMemLdSt(Location loc, MLIRContext *ctx,
                                  ConversionPatternRewriter &rewriter,
-                                 TargetInfoBase &target,
                                  const LinearLayout &reps, ArrayRef<Value> vals,
                                  TMemAccessAtom atom, Type llvmElemTy,
                                  Value tmemBase, Value pred, int valsPerMessage,
@@ -855,9 +854,9 @@ SmallVector<Value> lowerTMemLdSt(Location loc, MLIRContext *ctx,
     auto &reg = bases[kReg];
     reg.erase(reg.begin(), reg.begin() + logValsPerReg);
     auto quot = LinearLayout(bases, reps.getOutDims(), /*isSurjective=*/false);
-    auto outVals = lowerTMemLdSt(
-        loc, ctx, rewriter, target, quot, inVals, atom, i32_ty, tmemBase, pred,
-        valsPerMessage / valsPerReg, unpacked, secondHalfOffset);
+    auto outVals = lowerTMemLdSt(loc, ctx, rewriter, quot, inVals, atom, i32_ty,
+                                 tmemBase, pred, valsPerMessage / valsPerReg,
+                                 unpacked, secondHalfOffset);
     if (!isStore) {
       outVals = unpackFromI32(outVals, llvmElemTy, loc, rewriter);
     }
@@ -914,12 +913,10 @@ SmallVector<Value> lowerTMemLdSt(Location loc, MLIRContext *ctx,
   return resultVals;
 }
 
-static SmallVector<Value>
-lowerTMemLdSt(Location loc, MLIRContext *ctx,
-              ConversionPatternRewriter &rewriter, TargetInfoBase &target,
-              const LinearLayout &cvt, ArrayRef<Value> vals, Type llvmElemTy,
-              triton::gpu::MemDescType srcTy, Value tmemBase, int maxnreg,
-              Value pred) {
+static SmallVector<Value> lowerTMemLdSt(
+    Location loc, MLIRContext *ctx, ConversionPatternRewriter &rewriter,
+    const LinearLayout &cvt, ArrayRef<Value> vals, Type llvmElemTy,
+    triton::gpu::MemDescType srcTy, Value tmemBase, int maxnreg, Value pred) {
   assert(cvt.getNumOutDims() == 2);
   bool isStore = !vals.empty();
   // Remove broadcasting in the registers
@@ -930,7 +927,7 @@ lowerTMemLdSt(Location loc, MLIRContext *ctx,
     if (isStore) {
       inVals = removeBroadcastSrc.apply(inVals);
     }
-    auto outVals = lowerTMemLdSt(loc, ctx, rewriter, target, prmtCvt, inVals,
+    auto outVals = lowerTMemLdSt(loc, ctx, rewriter, prmtCvt, inVals,
                                  llvmElemTy, srcTy, tmemBase, maxnreg, pred);
     if (!isStore) {
       outVals = broadcastAs(outVals, cvt);
@@ -956,8 +953,8 @@ lowerTMemLdSt(Location loc, MLIRContext *ctx,
     auto maybeQuot = divideLeft(cvt, LinearLayout::identity1D(2, kReg, kCol));
     assert(maybeQuot.has_value());
     auto quot = *maybeQuot;
-    auto outVals = lowerTMemLdSt(loc, ctx, rewriter, target, quot, inVals,
-                                 i32_ty, srcTy, tmemBase, maxnreg, pred);
+    auto outVals = lowerTMemLdSt(loc, ctx, rewriter, quot, inVals, i32_ty,
+                                 srcTy, tmemBase, maxnreg, pred);
     if (!isStore) {
       outVals = unpackFromI32(outVals, llvmElemTy, loc, rewriter);
     }
@@ -1015,9 +1012,9 @@ lowerTMemLdSt(Location loc, MLIRContext *ctx,
     inVals = perm.apply(inVals);
   }
   auto outVals = lowerTMemLdSt(
-      loc, ctx, rewriter, target, reps, inVals, atom, llvmElemTy, tmemBase,
-      pred, numRegsPerMessage,
-      unpacked && llvmElemTy.getIntOrFloatBitWidth() == 16, secondHalfOffset);
+      loc, ctx, rewriter, reps, inVals, atom, llvmElemTy, tmemBase, pred,
+      numRegsPerMessage, unpacked && llvmElemTy.getIntOrFloatBitWidth() == 16,
+      secondHalfOffset);
   assert(isStore || outVals.size() == cvt.getInDimSize(kReg));
   if (!isStore) {
     outVals = perm.inverse().apply(outVals);
@@ -1025,12 +1022,10 @@ lowerTMemLdSt(Location loc, MLIRContext *ctx,
   return outVals;
 }
 
-static SmallVector<Value>
-lowerTMemLdStFromTypes(Location loc, MLIRContext *ctx,
-                       ConversionPatternRewriter &rewriter,
-                       TargetInfoBase &target, RankedTensorType regTy,
-                       MemDescType memTy, Value tmemBase, int maxnreg,
-                       Value pred, Type llvmElemTy, ArrayRef<Value> storeVals) {
+static SmallVector<Value> lowerTMemLdStFromTypes(
+    Location loc, MLIRContext *ctx, ConversionPatternRewriter &rewriter,
+    RankedTensorType regTy, MemDescType memTy, Value tmemBase, int maxnreg,
+    Value pred, Type llvmElemTy, ArrayRef<Value> storeVals) {
   assert(isa<nvidia_gpu::TensorMemoryEncodingAttr>(memTy.getEncoding()));
   auto memLayout = toLinearLayout(memTy);
   auto regLayout = toLinearLayout(regTy);
@@ -1047,19 +1042,14 @@ lowerTMemLdStFromTypes(Location loc, MLIRContext *ctx,
   auto quot = maybeQuot->unsqueezeIn(kBlock);
 
   SmallVector<Value> resultVals =
-      lowerTMemLdSt(loc, ctx, rewriter, target, quot, storeVals, llvmElemTy,
-                    memTy, tmemBase, maxnreg, pred);
+      lowerTMemLdSt(loc, ctx, rewriter, quot, storeVals, llvmElemTy, memTy,
+                    tmemBase, maxnreg, pred);
   return resultVals;
 }
 
 struct TensorMemoryLoadOpConversion
     : public ConvertOpToLLVMPattern<triton::nvidia_gpu::TMEMLoadOp> {
   using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
-  TargetInfo &target;
-
-  TensorMemoryLoadOpConversion(LLVMTypeConverter &typeConverter,
-                               TargetInfo &target, PatternBenefit benefit)
-      : ConvertOpToLLVMPattern(typeConverter, benefit), target(target) {}
 
   LogicalResult
   matchAndRewrite(triton::nvidia_gpu::TMEMLoadOp op, OpAdaptor adaptor,
@@ -1094,9 +1084,9 @@ struct TensorMemoryLoadOpConversion
     } else if (isa<nvidia_gpu::TensorMemoryEncodingAttr>(memTy.getEncoding())) {
       auto b = TritonLLVMOpBuilder(loc, rewriter);
       auto maxnreg = getContextualMaxNReg(op);
-      resultVals = lowerTMemLdStFromTypes(loc, ctx, rewriter, target, regTy,
-                                          memTy, tmemBase, maxnreg,
-                                          b.i1_val(true), llvmElemTy, {});
+      resultVals =
+          lowerTMemLdStFromTypes(loc, ctx, rewriter, regTy, memTy, tmemBase,
+                                 maxnreg, b.i1_val(true), llvmElemTy, {});
     } else {
       assert(false && "Unsupported tmem encoding");
     }
@@ -1114,10 +1104,6 @@ struct TensorMemoryLoadOpConversion
 struct TensorMemoryStoreOpConversion
     : public ConvertOpToLLVMPattern<triton::nvidia_gpu::TMEMStoreOp> {
   using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
-  TargetInfo &target;
-  TensorMemoryStoreOpConversion(LLVMTypeConverter &typeConverter,
-                                TargetInfo &target, PatternBenefit benefit)
-      : ConvertOpToLLVMPattern(typeConverter, benefit), target(target) {}
 
   LogicalResult
   matchAndRewrite(triton::nvidia_gpu::TMEMStoreOp op, OpAdaptor adaptor,
@@ -1137,7 +1123,7 @@ struct TensorMemoryStoreOpConversion
       auto maxnreg = getContextualMaxNReg(op);
       SmallVector<Value> srcValues =
           unpackLLElements(loc, adaptor.getSrc(), rewriter);
-      lowerTMemLdStFromTypes(loc, ctx, rewriter, target, regTy, memTy, tmemBase,
+      lowerTMemLdStFromTypes(loc, ctx, rewriter, regTy, memTy, tmemBase,
                              maxnreg, pred, llvmElemTy, srcValues);
     } else {
       lowerStoreToTensorMemory(loc, op, op.getSrc(), op.getDst(),
@@ -1157,11 +1143,6 @@ struct TensorMemoryStoreOpConversion
 struct TensorMemoryAllocOpConversion
     : public ConvertOpToLLVMPattern<triton::nvidia_gpu::TMEMAllocOp> {
   using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
-  TargetInfo &target;
-
-  TensorMemoryAllocOpConversion(LLVMTypeConverter &typeConverter,
-                                TargetInfo &target, PatternBenefit benefit)
-      : ConvertOpToLLVMPattern(typeConverter, benefit), target(target) {}
 
   LogicalResult
   matchAndRewrite(triton::nvidia_gpu::TMEMAllocOp op, OpAdaptor adaptor,
@@ -1193,8 +1174,8 @@ struct TensorMemoryAllocOpConversion
         SmallVector<Value> srcValues =
             unpackLLElements(loc, adaptor.getSrc(), rewriter);
         Value ptr = b.inttoptr(base.getType(), allocAddress);
-        lowerTMemLdStFromTypes(loc, ctx, rewriter, target, regTy, memTy, ptr,
-                               maxnreg, b.i1_val(true), llvmElemTy, srcValues);
+        lowerTMemLdStFromTypes(loc, ctx, rewriter, regTy, memTy, ptr, maxnreg,
+                               b.i1_val(true), llvmElemTy, srcValues);
       } else {
         // Cast to address space 3 as the shared memory object uses 3.
         // TODO: clean this up and use either a int or ptr address space 6
@@ -1483,11 +1464,10 @@ struct TMEMSubSliceOpConversion
 
 void mlir::triton::NVIDIA::populateTensorMemoryOpToLLVMPattern(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    PatternBenefit benefit, TargetInfo &target) {
-  patterns.add<TensorMemoryCopyOpConversion, TMEMSubSliceOpConversion>(
-      typeConverter, benefit);
-  patterns.add<TensorMemoryLoadOpConversion, TensorMemoryStoreOpConversion,
-               TensorMemoryAllocOpConversion>(typeConverter, target, benefit);
+    PatternBenefit benefit) {
+  patterns.add<TensorMemoryCopyOpConversion, TMEMSubSliceOpConversion,
+               TensorMemoryLoadOpConversion, TensorMemoryStoreOpConversion,
+               TensorMemoryAllocOpConversion>(typeConverter, benefit);
 }
 
 void mlir::triton::NVIDIA::populateTensorMemorySubviewOpToLLVMPattern(

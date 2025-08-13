@@ -162,7 +162,7 @@ struct ConvertTritonGPUToLLVM
     mlir::triton::NVIDIA::populateMemoryOpToLLVMPatterns(
         typeConverter, targetInfo, patterns, benefit);
     mlir::triton::NVIDIA::populateTensorMemoryOpToLLVMPattern(
-        typeConverter, patterns, benefit, targetInfo);
+        typeConverter, patterns, benefit);
     mlir::triton::populateMakeRangeOpToLLVMPattern(typeConverter, targetInfo,
                                                    patterns, benefit);
     mlir::triton::NVIDIA::populateTCGen5MMAOpToLLVMPattern(typeConverter,
