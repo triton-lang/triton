@@ -443,7 +443,8 @@ module attributes {"ttg.target" = "hip:gfx942", "ttg.num-ctas" = 1 : i32, "ttg.n
 // -----
 
 // CHECK-LABEL: padded_shared_layout_vectorization
-// CHECK: llvm.load
+// CHECK-NOT: llvm.load
+// CHECK: llvm.load {{.*}} !llvm.ptr<3> -> vector<8xf16>
 // CHECK-NOT: llvm.load
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
