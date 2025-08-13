@@ -54,9 +54,9 @@ public:
 
     tt::DotOp directDot = nullptr;
     tt::DotOp transDot = nullptr;
+    ttg::ConvertLayoutOp cvtOp = nullptr;
     unsigned directOpIdx = 0;
     unsigned transOpIdx = 0;
-    ArrayRef<int> transOrder;
 
     auto followConvertLayoutChain =
         [](mlir::Value &usedValue, mlir::Operation *op) -> mlir::Operation * {
@@ -78,7 +78,8 @@ public:
 
       if (auto transOp = dyn_cast<tt::TransOp>(op)) {
         LDBG("Found tranpose op: " << *transOp);
-        transOrder = transOp.getOrder();
+        cvtOp = transOp.getSrc().getDefiningOp<ttg::ConvertLayoutOp>();
+        LDBG("Found parent cvt op of transpose: " << *cvtOp);
         usedValue = transOp->getResult(0);
         op =
             followConvertLayoutChain(usedValue, *(transOp->getUsers().begin()));
@@ -163,13 +164,10 @@ public:
       transDot.setOperand(opIdx, transposedLocalLoad);
     } else // fallback
     {
-      auto newTransOp =
-          rewriter.create<tt::TransOp>(loc, localLoad, transOrder);
-      auto cvtOp = rewriter.create<ttg::ConvertLayoutOp>(loc, transOperandType,
-                                                         newTransOp);
-      LDBG("Created transpose op: " << *newTransOp);
-      LDBG("Created convert layout op: " << *cvtOp);
-      transDot.setOperand(opIdx, cvtOp);
+      rewriter.modifyOpInPlace(cvtOp, [&]() {
+        cvtOp.getSrcMutable().assign(localLoad.getResult());
+      });
+      LDBG("Updated cvt op: " << *cvtOp);
     }
 
     LDBG("Updated Trans dot: " << *transDot);
@@ -184,7 +182,9 @@ private:
     bool isKContig = (sharedOrder[0] == kDimIdx);
     // Tensor must be non-k contiguous in shared memory in order to use
     // local_load_transposed
-    return !isKContig;
+    // TODO(PMylon): Comment out for now, until lowering from
+    // local_load_transposed to ds_read_tr is supported return !isKContig;
+    return false;
   }
 };
 
