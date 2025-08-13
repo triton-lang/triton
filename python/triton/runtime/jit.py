@@ -322,6 +322,7 @@ specialize_impl_cache = []
 def create_specialize_fallback():
     from ..language import constexpr
     from triton.experimental.gluon.nvidia.hopper import TensorDescriptor as GluonTensorDescriptor
+
     def specialize_fallback(backend: BaseBackend, arg: Any, is_const: bool = False, specialize_value: bool = True, align: bool = True):
         if arg is None:
             return ("constexpr", None)
@@ -355,6 +356,7 @@ def create_specialize_fallback():
         elif hasattr(arg, "tma_desc_cpu_ptr"):
             return ("nvTmaDesc", None)
         elif isinstance(arg, tuple):
+            # tuple recursion always called with defaults is_const=False, specialize_value=True, align=True
             spec = [specialize_fallback(backend, x) for x in arg]
             make_tuple = lambda vals: type(arg)(*vals) if hasattr(arg, "_fields") else tuple(vals)
             tys = make_tuple([x[0] for x in spec])
