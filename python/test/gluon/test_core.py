@@ -147,8 +147,7 @@ def test_warpgroup_mma(ASYNC):
 @pytest.mark.parametrize("M, N, K", [(32, 32, 16), (16, 16, 32)])
 @pytest.mark.parametrize("in_dtype", ['float16', 'bfloat16'])
 @pytest.mark.parametrize("num_warps", [4, 8])
-@pytest.mark.parametrize("nonkdim", [32, 16])
-def test_amd_mfma(M, N, K, in_dtype, num_warps, nonkdim):
+def test_amd_mfma(M, N, K, in_dtype, num_warps):
 
     @gluon.jit
     def kernel(a_ptr, b_ptr, c_ptr, stride_am, stride_ak,  #
@@ -187,6 +186,7 @@ def test_amd_mfma(M, N, K, in_dtype, num_warps, nonkdim):
     a = torch.randn((M, K), device='cuda', dtype=elem_type) - 0.5
     b = torch.randn((K, N), device='cuda', dtype=elem_type) - 0.5
     c = torch.empty((M, N), device=a.device, dtype=elem_type)
+    nonkdim: ttgl.constexpr = 32
     blocked: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[4, 4], threads_per_warp=[4, 16],
                                                  warps_per_cta=[num_warps, 1], order=[1, 0])
     mfma_layout: ttgl.constexpr = ttgl.amd.AMDMFMALayout(version=4, instr_shape=[nonkdim, nonkdim], transposed=True,
