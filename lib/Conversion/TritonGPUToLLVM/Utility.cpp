@@ -6,6 +6,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
+#include "triton/Dialect/TritonGPU/IR/LayoutUtility.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Tools/GenericSwizzling.h"
@@ -700,10 +701,10 @@ lowerLocalLdSt(Location loc, MLIRContext *ctx,
   auto calcPaddedOffset = [&](Value smemOffset) {
     TritonLLVMOpBuilder b(loc, rewriter);
     auto bitwidth = llvmElemTy.getIntOrFloatBitWidth();
-    if (auto paddedLayout = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(
+    if (auto paddedEnc = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(
             srcTy.getEncoding())) {
       // Apply the offset needed for padding.
-      Value padOffset = emitPadding(loc, rewriter, paddedLayout, bitwidth,
+      Value padOffset = emitPadding(loc, rewriter, paddedEnc, bitwidth,
                                     smemOffset, /*offsetInBytes=*/true);
       smemOffset = b.add(smemOffset, padOffset);
     }
@@ -748,12 +749,12 @@ bool emitTransferBetweenRegistersAndShared(
   StringAttr kOffset = str_attr("offset");
 
   auto shape = sharedTy.getShape();
-  auto paddedLayout =
+  auto paddedEnc =
       dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(sharedTy.getEncoding());
   LinearLayout regToSharedLayout = LinearLayout::empty();
-  if (paddedLayout) {
+  if (paddedEnc) {
     regToSharedLayout =
-        regLayout.reshapeOuts({{kOffset, regLayout.getTotalOutDimSize()}});
+        triton::gpu::getPaddedRegToSharedLayout(regLayout, paddedEnc);
   } else {
     auto sharedLL = triton::gpu::toLinearLayout(sharedTy);
     regToSharedLayout = regLayout.invertAndCompose(sharedLL);
@@ -775,8 +776,8 @@ bool emitTransferBetweenRegistersAndShared(
   int vecElems =
       std::min({regToSharedLayout.getNumConsecutiveInOut(),
                 maxVecElems.value_or(std::numeric_limits<int>::max())});
-  if (paddedLayout) {
-    vecElems = std::min(vecElems, int(paddedLayout.getMinInterval()));
+  if (paddedEnc) {
+    vecElems = std::min(vecElems, int(paddedEnc.getMinInterval()));
   }
 
   auto withCTAOffset = triton::gpu::getNumCTAs(sharedTy.getEncoding()) > 1;
@@ -805,10 +806,10 @@ bool emitTransferBetweenRegistersAndShared(
   for (auto &indices : indicesVec) {
     Value smemOffset = indices[0].second;
     smemOffset = b.xor_(smemOffset, offset);
-    if (paddedLayout) {
+    if (paddedEnc) {
       // Apply the offset needed for padding.
       auto bitwidth = elemLlvmTy.getIntOrFloatBitWidth();
-      Value padOffset = emitPadding(loc, rewriter, paddedLayout, bitwidth,
+      Value padOffset = emitPadding(loc, rewriter, paddedEnc, bitwidth,
                                     smemOffset, /*offsetInBytes=*/false);
       smemOffset = b.add(smemOffset, padOffset);
     }
