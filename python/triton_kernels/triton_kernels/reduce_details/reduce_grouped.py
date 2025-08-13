@@ -119,7 +119,6 @@ def reduce_grouped(x: torch.Tensor, indx: torch.Tensor, x_flex: InFlexData | Non
         BLOCK_N=BLOCK_N, K=indx.shape[1],  #
         num_warps=1,  #
     )
-    print(out_actual_scale)
     return x, overwritten
 
 
