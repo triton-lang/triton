@@ -272,6 +272,13 @@ def _unpack_fp4_to_bf16_triton(x):
 
 
 @triton.jit
+def mxfp4_to_fp8_e4m3_fn_trition(x, scale, mx_axis: tl.constexpr, fp8_dtype: tl.constexpr):
+    bf16 = mxfp4_to_bf16_triton(x, scale, mx_axis)
+    fp8 = bf16.to(fp8_dtype)
+    return fp8
+
+
+@triton.jit
 def mxfp4_to_bf16_triton(x, scale, mx_axis: tl.constexpr):
     """
     Implements the bit-untwiddling of a 32-bit integer (8 mxfp4 elements):

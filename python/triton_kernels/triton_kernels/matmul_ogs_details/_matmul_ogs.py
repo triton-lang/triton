@@ -2,9 +2,10 @@
 # fmt: off
 import triton
 import triton.language as tl
+from triton_kernels.target_info import is_hip as is_hip_host
 from triton_kernels.tensor_details.layout_details.blackwell_scale import unswizzle_mx_scale_bw
 from triton_kernels.tensor_details.layout_details.hopper_scale import unswizzle_mxfp4_scale_hopper
-from triton_kernels.tensor_details.layout_details.hopper_value import mxfp4_to_bf16_triton
+from triton_kernels.tensor_details.layout_details.hopper_value import mxfp4_to_bf16_triton, mxfp4_to_fp8_e4m3_fn_trition
 from triton_kernels.numerics_details.flexpoint import float_to_flex, load_scale
 from triton_kernels.numerics_details.mxfp_details._downcast_to_mxfp import MXFP_BLOCK_SIZE
 from ._common import make_matmul_repr, matmul_launch_metadata, swizzle2d, xcd_swizzle, get_scaled_dot_format_string
@@ -24,6 +25,20 @@ def _zero_masked_rows(
     mask_n = offs_n < N
     mask = (src_idx == -1)[:, None] & mask_n[None, :]
     tl.store(YPtrs, tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32), mask=mask)
+
+
+_is_hip = is_hip_host()
+
+# Note(yiakwy) : monkey patchable value
+_use_fp8_matmul = False
+
+@tl.constexpr_function
+def is_hip():
+    return _is_hip
+
+@tl.constexpr_function
+def use_fp8_matmul():
+    return _use_fp8_matmul
 
 
 _matmul_ogs_repr = make_matmul_repr("_matmul_ogs", [0, 1, 2])
@@ -288,11 +303,20 @@ def _matmul_ogs(
                 # Handshake with the swizzling code
                 tl.static_assert(x_format == "bf16")
                 tl.static_assert(w_format == "e2m1")
-                w = mxfp4_to_bf16_triton(w.trans(), w_scales, 1)
-                tl.static_assert(w.dtype == tl.bfloat16)
+            
+                tl.static_assert(use_fp8_matmul() == False)
+
+                if use_fp8_matmul():
+                    fp8_dtype = tl.float8e4b8 if is_hip() else tl.float8e4nv
+                    w = mxfp4_to_fp8_e4m3_fn_trition(w.trans(), w_scales, 1, fp8_dtype=fp8_dtype)
+                    x = x.to(fp8_dtype)
+                    tl.static_assert(w.dtype == fp8_dtype)
+                else:
+                    w = mxfp4_to_bf16_triton(w.trans(), w_scales, 1)
+                    tl.static_assert(w.dtype == tl.bfloat16)
+
                 acc = acc.trans()
                 x = x.trans()
-                # w = w.trans()
                 acc = tl.dot(w, x, acc, max_num_imprecise_acc=MAX_NUM_IMPRECISE_ACC, allow_tf32=ALLOW_TF32)
                 acc = acc.trans()
             else:
