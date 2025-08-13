@@ -181,13 +181,13 @@ def test_amd_mfma(M, N, K, in_dtype, num_warps, cdna_version):
         ttgl.amd.cdna3.buffer_store(stored_value=c, ptr=c_ptr, offsets=offs_c)
 
     if not is_hip_cdna4() and not is_hip_cdna3():
-        pytest.skip()
+        pytest.skip("mfma quires target to be CDNA3 or CDNA4")
 
     if is_hip_cdna3() and cdna_version != 3:
-        pytest.skip()
+        pytest.skip("On CDNA3 target, skip if mfma version is not 3")
 
     if is_hip_cdna4() and cdna_version != 4:
-        pytest.skip()
+        pytest.skip("On CDNA4 target, skip if mfma version is not 4")
 
     elem_type = torch.float16 if in_dtype == 'float16' else torch.bfloat16
     a = torch.randn((M, K), device='cuda', dtype=elem_type) - 0.5

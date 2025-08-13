@@ -116,12 +116,7 @@ def buffer_store(stored_value, ptr, offsets, mask=None, cache=None, _semantic: G
 @builtin
 def mfma(a, b, acc, _semantic: GluonSemantic = None):
     """
-    Returns the matrix product of two tensors and return value is a tt.dot operation.
-    The layout of the result is the same as that of acc.
-
-    Typically, we need to convert the layout of dot, AMDMFMALayout, into other layouts of gluon.
-    The type of triton.dot is hard coded as tl.block_type, which is not derived from DistributedLayout of gluon,
-    so we need to add a wrapper API.
+    Computes matrix-multiplication of a * b + acc using AMD native matrix core units.
     Args:
         a (tensor): The first operand of mfma.
         b (tensor): The second operand of mfma.
