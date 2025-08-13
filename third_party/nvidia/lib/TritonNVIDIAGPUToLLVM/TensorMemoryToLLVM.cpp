@@ -5,6 +5,7 @@
 #include "Utility.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
+#include "mlir/Support/LogicalResult.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
@@ -820,13 +821,12 @@ static SmallVector<Value> unpackResults(Value packedValues, Type elemTy,
   return resultVals;
 }
 
-SmallVector<Value> lowerTMemLdSt(Location loc, MLIRContext *ctx,
-                                 ConversionPatternRewriter &rewriter,
-                                 const LinearLayout &reps, ArrayRef<Value> vals,
-                                 TMemAccessAtom atom, Type llvmElemTy,
-                                 Value tmemBase, Value pred, int valsPerMessage,
-                                 bool unpacked,
-                                 std::optional<uint32_t> secondHalfOffset) {
+FailureOr<SmallVector<Value>>
+lowerTMemLdSt(Location loc, MLIRContext *ctx,
+              ConversionPatternRewriter &rewriter, const LinearLayout &reps,
+              ArrayRef<Value> vals, TMemAccessAtom atom, Type llvmElemTy,
+              Value tmemBase, Value pred, int valsPerMessage, bool unpacked,
+              std::optional<uint32_t> secondHalfOffset) {
   assert(atom.usesSecondHalfOffset == secondHalfOffset.has_value());
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto kReg = str_attr("register");
@@ -854,9 +854,12 @@ SmallVector<Value> lowerTMemLdSt(Location loc, MLIRContext *ctx,
     auto &reg = bases[kReg];
     reg.erase(reg.begin(), reg.begin() + logValsPerReg);
     auto quot = LinearLayout(bases, reps.getOutDims(), /*isSurjective=*/false);
-    auto outVals = lowerTMemLdSt(loc, ctx, rewriter, quot, inVals, atom, i32_ty,
-                                 tmemBase, pred, valsPerMessage / valsPerReg,
-                                 unpacked, secondHalfOffset);
+    auto outValsOr = lowerTMemLdSt(
+        loc, ctx, rewriter, quot, inVals, atom, i32_ty, tmemBase, pred,
+        valsPerMessage / valsPerReg, unpacked, secondHalfOffset);
+    if (failed(outValsOr))
+      return failure();
+    auto outVals = std::move(*outValsOr);
     if (!isStore) {
       outVals = unpackFromI32(outVals, llvmElemTy, loc, rewriter);
     }
@@ -913,7 +916,7 @@ SmallVector<Value> lowerTMemLdSt(Location loc, MLIRContext *ctx,
   return resultVals;
 }
 
-static SmallVector<Value> lowerTMemLdSt(
+static FailureOr<SmallVector<Value>> lowerTMemLdSt(
     Location loc, MLIRContext *ctx, ConversionPatternRewriter &rewriter,
     const LinearLayout &cvt, ArrayRef<Value> vals, Type llvmElemTy,
     triton::gpu::MemDescType srcTy, Value tmemBase, int maxnreg, Value pred) {
@@ -927,8 +930,11 @@ static SmallVector<Value> lowerTMemLdSt(
     if (isStore) {
       inVals = removeBroadcastSrc.apply(inVals);
     }
-    auto outVals = lowerTMemLdSt(loc, ctx, rewriter, prmtCvt, inVals,
-                                 llvmElemTy, srcTy, tmemBase, maxnreg, pred);
+    auto outValsOr = lowerTMemLdSt(loc, ctx, rewriter, prmtCvt, inVals,
+                                   llvmElemTy, srcTy, tmemBase, maxnreg, pred);
+    if (failed(outValsOr))
+      return failure();
+    auto outVals = std::move(*outValsOr);
     if (!isStore) {
       outVals = broadcastAs(outVals, cvt);
     }
@@ -953,8 +959,11 @@ static SmallVector<Value> lowerTMemLdSt(
     auto maybeQuot = divideLeft(cvt, LinearLayout::identity1D(2, kReg, kCol));
     assert(maybeQuot.has_value());
     auto quot = *maybeQuot;
-    auto outVals = lowerTMemLdSt(loc, ctx, rewriter, quot, inVals, i32_ty,
-                                 srcTy, tmemBase, maxnreg, pred);
+    auto outValsOr = lowerTMemLdSt(loc, ctx, rewriter, quot, inVals, i32_ty,
+                                   srcTy, tmemBase, maxnreg, pred);
+    if (failed(outValsOr))
+      return failure();
+    auto outVals = std::move(*outValsOr);
     if (!isStore) {
       outVals = unpackFromI32(outVals, llvmElemTy, loc, rewriter);
     }
@@ -1002,8 +1011,10 @@ static SmallVector<Value> lowerTMemLdSt(
     }
   }
 
-  // Couldn't lower, perhaps error more gently?
-  assert(msgInfo && "Failed to lower TMEM load/store: unsupported dst layout");
+  if (!msgInfo) {
+    emitError(loc, "Failed to lower TMEM load/store: unsupported dst layout");
+    return failure();
+  }
   auto [atom, reps, perm, numRegsPerMessage] = std::move(msgInfo.value());
 
   SmallVector<Value> inVals;
@@ -1011,10 +1022,13 @@ static SmallVector<Value> lowerTMemLdSt(
     inVals = to_vector(vals);
     inVals = perm.apply(inVals);
   }
-  auto outVals = lowerTMemLdSt(
+  auto outValsOr = lowerTMemLdSt(
       loc, ctx, rewriter, reps, inVals, atom, llvmElemTy, tmemBase, pred,
       numRegsPerMessage, unpacked && llvmElemTy.getIntOrFloatBitWidth() == 16,
       secondHalfOffset);
+  if (failed(outValsOr))
+    return failure();
+  auto outVals = std::move(*outValsOr);
   assert(isStore || outVals.size() == cvt.getInDimSize(kReg));
   if (!isStore) {
     outVals = perm.inverse().apply(outVals);
@@ -1022,7 +1036,7 @@ static SmallVector<Value> lowerTMemLdSt(
   return outVals;
 }
 
-static SmallVector<Value> lowerTMemLdStFromTypes(
+static FailureOr<SmallVector<Value>> lowerTMemLdStFromTypes(
     Location loc, MLIRContext *ctx, ConversionPatternRewriter &rewriter,
     RankedTensorType regTy, MemDescType memTy, Value tmemBase, int maxnreg,
     Value pred, Type llvmElemTy, ArrayRef<Value> storeVals) {
@@ -1041,10 +1055,8 @@ static SmallVector<Value> lowerTMemLdStFromTypes(
   assert(maybeQuot.has_value());
   auto quot = maybeQuot->unsqueezeIn(kBlock);
 
-  SmallVector<Value> resultVals =
-      lowerTMemLdSt(loc, ctx, rewriter, quot, storeVals, llvmElemTy, memTy,
-                    tmemBase, maxnreg, pred);
-  return resultVals;
+  return lowerTMemLdSt(loc, ctx, rewriter, quot, storeVals, llvmElemTy, memTy,
+                       tmemBase, maxnreg, pred);
 }
 
 struct TensorMemoryLoadOpConversion
@@ -1084,9 +1096,13 @@ struct TensorMemoryLoadOpConversion
     } else if (isa<nvidia_gpu::TensorMemoryEncodingAttr>(memTy.getEncoding())) {
       auto b = TritonLLVMOpBuilder(loc, rewriter);
       auto maxnreg = getContextualMaxNReg(op);
-      resultVals =
+      auto resultValsOr =
           lowerTMemLdStFromTypes(loc, ctx, rewriter, regTy, memTy, tmemBase,
                                  maxnreg, b.i1_val(true), llvmElemTy, {});
+      if (failed(resultValsOr))
+        return rewriter.notifyMatchFailure(
+            op, "Failed to lower TMEM load/store: unsupported dst layout");
+      resultVals = std::move(*resultValsOr);
     } else {
       assert(false && "Unsupported tmem encoding");
     }
@@ -1123,8 +1139,12 @@ struct TensorMemoryStoreOpConversion
       auto maxnreg = getContextualMaxNReg(op);
       SmallVector<Value> srcValues =
           unpackLLElements(loc, adaptor.getSrc(), rewriter);
-      lowerTMemLdStFromTypes(loc, ctx, rewriter, regTy, memTy, tmemBase,
-                             maxnreg, pred, llvmElemTy, srcValues);
+      auto lowered =
+          lowerTMemLdStFromTypes(loc, ctx, rewriter, regTy, memTy, tmemBase,
+                                 maxnreg, pred, llvmElemTy, srcValues);
+      if (failed(lowered))
+        return rewriter.notifyMatchFailure(
+            op, "Failed to lower TMEM load/store: unsupported dst layout");
     } else {
       lowerStoreToTensorMemory(loc, op, op.getSrc(), op.getDst(),
                                adaptor.getSrc(), pred, tmemBase, rewriter);
@@ -1174,8 +1194,12 @@ struct TensorMemoryAllocOpConversion
         SmallVector<Value> srcValues =
             unpackLLElements(loc, adaptor.getSrc(), rewriter);
         Value ptr = b.inttoptr(base.getType(), allocAddress);
-        lowerTMemLdStFromTypes(loc, ctx, rewriter, regTy, memTy, ptr, maxnreg,
-                               b.i1_val(true), llvmElemTy, srcValues);
+        auto lowered = lowerTMemLdStFromTypes(loc, ctx, rewriter, regTy, memTy,
+                                              ptr, maxnreg, b.i1_val(true),
+                                              llvmElemTy, srcValues);
+        if (failed(lowered))
+          return rewriter.notifyMatchFailure(
+              op, "Failed to lower TMEM load/store: unsupported dst layout");
       } else {
         // Cast to address space 3 as the shared memory object uses 3.
         // TODO: clean this up and use either a int or ptr address space 6
