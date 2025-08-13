@@ -465,11 +465,7 @@ class CompiledKernel:
 
     @property
     def run(self):
-        # it should be safe to do this as launch_metadata will
-        # call _init_handles before running the kernel or it
-        # was called manually or it was already initialized
-        if self._run is None:
-            self._init_handles()
+        self._init_handles()
         return self._run
 
     def launch_metadata(self, grid, stream, *args):
