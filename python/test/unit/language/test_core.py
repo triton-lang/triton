@@ -6433,7 +6433,7 @@ dst_layouts = [
 
 @pytest.mark.parametrize("M, dst_layout", [[2, dst_layouts[0]], [4, dst_layouts[1]], [8, dst_layouts[2]]])
 @pytest.mark.parametrize("src_layout", src_layouts[0])
-@pytest.mark.parametrize("N", 64)
+@pytest.mark.parametrize("N", [64])
 @pytest.mark.parametrize("dtype", ['float8e5', 'float16', 'float32', 'int64'])
 def test_convert_permlane_swap(M, N, src_layout, dst_layout, dtype, device, tmp_path: pathlib.Path):
     if not is_hip_cdna4():
