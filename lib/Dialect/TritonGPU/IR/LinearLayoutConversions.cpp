@@ -15,6 +15,7 @@
 #include "llvm/Support/MathExtras.h"
 
 using mlir::triton::nvidia_gpu::TensorMemoryEncodingAttr;
+using mlir::triton::nvidia_gpu::TensorMemoryScalesEncodingAttr;
 
 namespace mlir::triton::gpu {
 namespace {
@@ -1253,6 +1254,32 @@ LinearLayout tensorMemoryToLinearLayout(ArrayRef<int64_t> shape,
   return tile;
 }
 
+LinearLayout
+tensorMemoryScalesToLinearLayout(ArrayRef<int64_t> shape,
+                                 TensorMemoryScalesEncodingAttr encoding) {
+  assert(shape.size() == 2);
+  auto *ctx = encoding.getContext();
+  auto kRow = S("row");
+  auto kCol = S("col");
+  auto dims = standardOutDimNames(ctx, 2);
+  // nb. this can be done with
+  // ensureLayoutNotSmallerThan/ensureLayoutNotLargerThan but it's a bit less
+  // clear IMO
+  // https://docs.nvidia.com/cuda/parallel-thread-execution/#tcgen05-mma-scale-factor-a-layout-1x
+  // We choose repOrder = [0, 1]
+  auto tile =
+      LinearLayout::identity1D(std::min<int>(32, shape[0]), kRow, dims[0]) *
+      LinearLayout::zeros1D(std::max<int>(1, 32 / shape[0]), kRow, dims[0]) *
+      // When shape[1] < 4, we emit an 'unpacked' layout (0 or 1 bases)
+      // When we emit 1 base, we will divide it out in the lowering after
+      // packing
+      LinearLayout::identity1D(std::min<int>(4, shape[1]), kCol, dims[1]) *
+      // reps
+      LinearLayout::identity1D(std::max<int>(1, shape[0] / 32), kCol, dims[0]) *
+      LinearLayout::identity1D(std::max<int>(1, shape[1] / 4), kCol, dims[1]);
+  return tile;
+}
+
 LinearLayout TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape,
                                               Attribute layout) {
   CacheKey key{std::vector<int64_t>(shape.begin(), shape.end()), layout};
@@ -1280,6 +1307,10 @@ LinearLayout TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape,
     } else if (auto tensorMemoryEncoding =
                    dyn_cast<TensorMemoryEncodingAttr>(layout)) {
       result = tensorMemoryToLinearLayout(shape, tensorMemoryEncoding);
+    } else if (auto tensorMemoryScalesEncoding =
+                   dyn_cast<TensorMemoryScalesEncodingAttr>(layout)) {
+      result =
+          tensorMemoryScalesToLinearLayout(shape, tensorMemoryScalesEncoding);
     } else {
       assert(0 && "unknown layout");
     }
