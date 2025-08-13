@@ -432,7 +432,7 @@ static PyObject* data_ptr_str = NULL;
 
 static inline DevicePtrInfo getPointer(PyObject *obj, int idx) {{
   DevicePtrInfo ptr_info;
-  hipError_t status;
+  hipError_t status = hipSuccess;
   ptr_info.dev_ptr = 0;
   ptr_info.valid = true;
   if (PyLong_Check(obj)) {{
