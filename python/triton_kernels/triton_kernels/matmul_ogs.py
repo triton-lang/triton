@@ -17,6 +17,7 @@ from .matmul_ogs_details._matmul_ogs import _matmul_ogs
 from .matmul_ogs_details._p_matmul_ogs import _p_matmul_ogs, get_per_device_per_stream_alloc_fn
 from .reduce import ReductionSpecs, reduce as reduce_dispatch
 from .reduce_details import reduce_grouped as reduce_grouped_mod
+from .numerics_details.mxfp import MXFP_BLOCK_SIZE
 from .scatter import scatter as scatter_rows
 from .matmul_ogs_details.opt_flags import make_opt_flags, update_opt_flags_constraints
 from .specialize import specialize
@@ -46,6 +47,7 @@ class FusedActivation:
 class Epilogue:
     specs: FnSpecs = FnSpecs.default()
     fn_arg_values_matmul: tuple[object] = tuple()
+    fn_arg_values_splitk: tuple[object] = tuple()
     effective_itemsize: float = None
 
 class FnName(Enum):
@@ -165,6 +167,8 @@ def init_allocation(x, w, precision_config, fused_activation, routing_data, gath
     scratchpad = dict()
     if opt_flags.split_k > 1 or scatter_indx is not None:
         scratchpad["matmul"] = ((opt_flags.split_k, 1, M, N), out_dtype)
+    if "matmul" in scratchpad and precision_config.out_scale is not None:
+        scratchpad["mx_out_scale"] = ((opt_flags.split_k, 1, M, triton.cdiv(N, MXFP_BLOCK_SIZE)), torch.uint8)
     return MatmulAllocation(x.device, output, scratchpad)
 
 def apply_allocation(allocation: MatmulAllocation, output):
@@ -234,7 +238,7 @@ def matmul_ogs(x, w, bias,
     if fused_activation is None:
         fused_activation = FusedActivation(FnSpecs.default(), tuple(), 1)
     if epilogue is None:
-        epilogue = Epilogue(FnSpecs.default(), tuple(), False)
+        epilogue = Epilogue(FnSpecs.default(), tuple(), tuple(), False)
     if routing_data is None:
         routing_data = RoutingData(None, None, max(1, w.shape[0]), 1)
     # unpack scales
@@ -300,6 +304,7 @@ def matmul_ogs(x, w, bias,
     out_flex = OutFlexData() if out.dtype == torch.float32 else precision_config.flex_ctx.out_data
     out_scale = None if precision_config.out_scale is None else precision_config.out_scale.data.view(torch.uint8)
     out_has_mx = out_scale is not None and out.element_size() == 1
+    out_scale = memory["scratchpad"]["mx_out_scale"] if out_has_mx and has_scratchpad else out_scale
     # matrix multiplication
     flex = precision_config.flex_ctx
     bias_stride = None if bias is None else bias.stride(0)
@@ -421,6 +426,9 @@ def matmul_ogs(x, w, bias,
                                                               flexpoint_saturate_inf=precision_config.flexpoint_saturate_inf)
     # scatter output
     out = scatter_rows(out, scatter_indx)
+    if out_has_mx:
+        out_scale2 = scatter_rows(out_scale, scatter_indx)
+        out_scale[:] = out_scale2
     return out
 
 # -----------------------------------------------------------------------------
