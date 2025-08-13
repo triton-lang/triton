@@ -41,7 +41,7 @@ def scatter(x: torch.Tensor, indx: torch.Tensor):
     assert indx.ndim == 1
     num_tokens = indx.shape[0]
     n_cols = x.shape[-1]
-    out = torch.zeros((num_tokens, n_cols), dtype=x.dtype, device=x.device)
+    out = torch.empty((num_tokens, n_cols), dtype=x.dtype, device=x.device)
     BLOCK_N = 1024
     _scatter_kernel[(num_tokens, )](
         x,
