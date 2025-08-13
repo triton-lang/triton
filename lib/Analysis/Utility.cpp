@@ -1219,4 +1219,17 @@ std::unique_ptr<DataFlowSolver> createDataFlowSolver() {
   return solver;
 }
 
+bool isCvtWarpSync(const triton::LinearLayout &srcLayout,
+                   const triton::LinearLayout &dstLayout) {
+  // We can use warp.sync when the warp dimension in the convert is trival
+  // and there is no broadcasting at a warp level (otherwise reads may be
+  // wrong)
+  auto *ctx = srcLayout.getInDimNames().begin()->getContext();
+  auto comp = dstLayout.invertAndCompose(srcLayout);
+  auto kWarp = StringAttr::get(ctx, "warp");
+  return comp.isTrivialOver(kWarp) &&
+         srcLayout.getFreeVariableMasks()[kWarp] == 0 &&
+         dstLayout.getFreeVariableMasks()[kWarp] == 0;
+}
+
 } // namespace mlir

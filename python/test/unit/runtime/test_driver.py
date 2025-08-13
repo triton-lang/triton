@@ -10,11 +10,11 @@ def test_is_lazy():
     from importlib import reload
     reload(sys.modules["triton.runtime.driver"])
     reload(sys.modules["triton.runtime"])
-    assert triton.runtime.driver._active is None
-    assert triton.runtime.driver._default is None
-    assert isinstance(triton.runtime.driver.active, getattr(triton.backends.driver, "DriverBase"))
-    assert isinstance(triton.runtime.driver.default, getattr(triton.backends.driver, "DriverBase"))
+    mod = sys.modules[triton.runtime.driver.__module__]
+    assert isinstance(triton.runtime.driver.active, getattr(mod, "LazyProxy"))
+    assert triton.runtime.driver.active._obj is None
     utils = triton.runtime.driver.active.utils  # noqa: F841
+    assert issubclass(triton.runtime.driver.active._obj.__class__, getattr(triton.backends.driver, "DriverBase"))
 
 
 def test_kernel_in_thread(device):
