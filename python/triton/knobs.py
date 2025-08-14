@@ -11,8 +11,7 @@ from dataclasses import dataclass
 from contextlib import contextmanager
 from typing import cast, Any, Callable, Generator, Generic, Optional, Protocol, Type, TypeVar, TypedDict, TYPE_CHECKING, Union
 
-# comment
-from triton._C.libtriton import getenv, getenv_bool
+from triton._C.libtriton import getenv, getenv_bool  # type: ignore[import]
 
 if TYPE_CHECKING:
     from .runtime.cache import CacheManager, RemoteCacheBackend
