@@ -667,7 +667,7 @@ lowerTMemLdSt(Location loc, MLIRContext *ctx,
   }
   auto outValsOr = lowerTMemLdSt(
       loc, ctx, rewriter, reps, inVals, atom, llvmElemTy, tmemBase, pred,
-      numRegsPerMessage, unpacked && llvmElemTy.getIntOrFloatBitWidth() < 32,
+      numRegsPerMessage, unpacked && llvmElemTy.getIntOrFloatBitWidth() == 16,
       secondHalfOffset);
   if (failed(outValsOr))
     return failure();
