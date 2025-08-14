@@ -63,12 +63,9 @@ class ASTSource:
                 assert isinstance(k, tuple)
                 self.constants[k] = v
         self.attrs = attrs or dict()
-        if isinstance(self.signature, str):
-            self.signature = {k: v.strip() for k, v in enumerate(self.signature.split(","))}
-        else:
-            for k in self.signature.keys():
-                if not isinstance(k, str):
-                    raise TypeError("Signature keys must be string")
+        for k in self.signature.keys():
+            if not isinstance(k, str):
+                raise TypeError("Signature keys must be string")
 
     def hash(self):
         sorted_sig = [v for k, v in sorted(self.signature.items())]
@@ -437,13 +434,14 @@ class CompiledKernel:
         # (e.g., checking amount of shared memory on current device)
         self.module = None
         self.function = None
+        self._run = None
 
     def _init_handles(self):
         if self.module is not None:
             return
         device = driver.active.get_current_device()
         # create launcher
-        self.run = driver.active.launcher_cls(self.src, self.metadata)
+        self._run = driver.active.launcher_cls(self.src, self.metadata)
         # not enough shared memory to run the kernel
         max_shared = max_shared_mem(device)
         if self.metadata.shared > max_shared:
@@ -453,19 +451,21 @@ class CompiledKernel:
             max_tmem_size = 512  # tmem size in number of columns
             if self.metadata.tmem_size > max_tmem_size:
                 raise OutOfResources(self.metadata.tmem_size, max_tmem_size, "tensor memory")
+        if knobs.runtime.kernel_load_start_hook is not None:
+            knobs.runtime.kernel_load_start_hook(self.module, self.function, self.name, self.metadata_group, self.hash)
         # TODO: n_regs, n_spills should be metadata generated when calling `ptxas`
         self.module, self.function, self.n_regs, self.n_spills, self.n_max_threads = driver.active.utils.load_binary(
             self.name, self.kernel, self.metadata.shared, device)
         warp_size = driver.active.get_current_target().warp_size
         if self.metadata.num_warps * warp_size > self.n_max_threads:
             raise OutOfResources(self.metadata.num_warps * warp_size, self.n_max_threads, "threads")
-        if knobs.runtime.init_handle_hook is not None:
-            knobs.runtime.init_handle_hook(self.module, self.function, self.name, self.metadata_group)
+        if knobs.runtime.kernel_load_end_hook is not None:
+            knobs.runtime.kernel_load_end_hook(self.module, self.function, self.name, self.metadata_group, self.hash)
 
-    def __getattribute__(self, name):
-        if name == 'run':
-            self._init_handles()
-        return super().__getattribute__(name)
+    @property
+    def run(self):
+        self._init_handles()
+        return self._run
 
     def launch_metadata(self, grid, stream, *args):
         if knobs.runtime.launch_enter_hook is None:
