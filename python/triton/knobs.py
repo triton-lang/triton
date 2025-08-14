@@ -11,7 +11,6 @@ from dataclasses import dataclass
 from contextlib import contextmanager
 from typing import cast, Any, Callable, Generator, Generic, Optional, Protocol, Type, TypeVar, TypedDict, TYPE_CHECKING, Union
 
-
 from triton._C.libtriton import getenv, getenv_bool
 
 if TYPE_CHECKING:
