@@ -15,7 +15,7 @@ from .._C.libtriton import ir, gluon_ir
 from ..language import constexpr, str_to_ty, tensor, tuple as tl_tuple
 from ..language.core import _unwrap_if_constexpr, base_value, base_type
 # ideally we wouldn't need any runtime component
-from ..runtime.jit import get_jit_fn_file_line, get_full_name, JITCallable, ConstexprFunction, JITFunction
+from ..runtime.jit import get_jit_fn_file_line, get_full_name, JITCallable, BoundConstexprFunction, ConstexprFunction, JITFunction
 from .._utils import find_paths_if, get_iterable_path, set_iterable_path
 
 from .errors import (CompilationError, CompileTimeAssertionFailure, UnsupportedLanguageConstruct)
@@ -1316,7 +1316,7 @@ class CodeGenerator(ast.NodeVisitor):
         return next(unflatten_ir_values(handles, [callee_ret_type]))
 
     def call_Function(self, node, fn, args, kws):
-        if isinstance(fn, BoundJITMethod):
+        if isinstance(fn, (BoundJITMethod, BoundConstexprFunction)):
             args.insert(0, fn.__self__)
             fn = fn.__func__
         if isinstance(fn, JITFunction):
@@ -1325,7 +1325,11 @@ class CodeGenerator(ast.NodeVisitor):
         if (hasattr(fn, '__self__') and _is_triton_value(fn.__self__)) or language.core.is_builtin(fn) or isinstance(
                 fn, ConstexprFunction):
             extra_kwargs = dict()
-            sig = inspect.signature(fn)
+
+            if isinstance(fn, ConstexprFunction):
+                sig = inspect.signature(fn.__call__)
+            else:
+                sig = inspect.signature(fn)
             if '_semantic' in sig.parameters:
                 extra_kwargs["_semantic"] = self.semantic
             if '_generator' in sig.parameters:

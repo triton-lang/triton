@@ -10,7 +10,7 @@ from typing import Union, Callable, List, Sequence, TypeVar, Optional, Tuple
 from dataclasses import dataclass
 import builtins
 from .. import knobs
-from ..runtime.jit import JITFunction
+from ..runtime.jit import JITCallable
 import inspect
 
 from .._C.libtriton import ir
@@ -87,7 +87,7 @@ def _tensor_member_fn(fn: T) -> T:
     if is_builtin(fn):
         setattr(wrapper, TRITON_BUILTIN, True)
 
-    setattr(tensor, fn.__name__, fn if isinstance(fn, JITFunction) else wrapper)
+    setattr(tensor, fn.__name__, fn if isinstance(fn, JITCallable) else wrapper)
     return fn
 
 
@@ -1536,7 +1536,7 @@ def _aggregate(cls):
         def __new__(this_cls, *args, _semantic=None, _generator=None, **kwargs):
             # Call into the user-defined constructor.
             instance = this_cls._get_instance()
-            if isinstance(cls.__init__, JITFunction):
+            if isinstance(cls.__init__, JITCallable):
                 raise ValueError(f"{cls.__name__}.__init__ cannot be a @triton.jit function")
             extra_kwargs = {}
             if "_semantic" in inspect.signature(cls.__init__).parameters:
@@ -1570,7 +1570,7 @@ def _aggregate(cls):
                                    [(name, getattr(self, name).type) for name in cls.__annotations__.keys()])
 
     for (name, member) in inspect.getmembers(cls):
-        if inspect.isfunction(member) or inspect.ismethod(member) or isinstance(member, JITFunction):
+        if inspect.isfunction(member) or inspect.ismethod(member) or isinstance(member, JITCallable):
             if name != "__init__":
                 setattr(aggregate_value, name, member)
 

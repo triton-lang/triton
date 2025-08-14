@@ -23,7 +23,7 @@ class LaunchHook(Hook):
             cls._instance = super(LaunchHook, cls).__new__(cls)
         return cls._instance
 
-    def init_handle(self, module, function, name: str, metadata_group: dict) -> None:
+    def init_handle(self, module, function, name: str, metadata_group: dict, hash: str) -> None:
         pass
 
     def activate(self):
