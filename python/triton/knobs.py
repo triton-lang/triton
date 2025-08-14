@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from contextlib import contextmanager
 from typing import cast, Any, Callable, Generator, Generic, Optional, Protocol, Type, TypeVar, TypedDict, TYPE_CHECKING, Union
 
-from triton._C.libtriton import getenv, getenv_bool
+from triton._C.libtriton import getenv, getenv_bool  # type: ignore
 
 if TYPE_CHECKING:
     from .runtime.cache import CacheManager, RemoteCacheBackend
@@ -275,7 +275,7 @@ class base_knobs:
             k: v
             # data descriptors live on the class object
             for k, v in type(self).__dict__.items()
-            if isinstance(v, env_base)
+            if issubclass(type(v), env_base)
         }
 
     @property
