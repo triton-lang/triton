@@ -723,7 +723,7 @@ static FailureOr<SmallVector<Value>> lowerTMemLdStFromTypes(
     if (isStore) {
       if (K == 1) {
         for (auto &val : inVals) {
-          val = b.bitcast(b.zext(i16_ty, val), llvmElemTy);
+          val = b.bitcast(b.zext(i16_ty, val), packedLlvmElemTy);
         }
       }
     }
@@ -800,13 +800,14 @@ struct TensorMemoryStoreOpConversion
     auto regTy = cast<RankedTensorType>(op.getSrc().getType());
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
+    SmallVector<Value> srcValues =
+        unpackLLElements(loc, adaptor.getSrc(), rewriter);
     auto maxnreg = getContextualMaxNReg(op);
-    auto srcValuesOr =
+    auto lowered =
         lowerTMemLdStFromTypes(loc, ctx, rewriter, regTy, memTy, tmemBase,
-                               maxnreg, pred, llvmElemTy, {});
-    if (failed(srcValuesOr))
+                               maxnreg, pred, llvmElemTy, srcValues);
+    if (failed(lowered))
       return failure();
-    auto srcValues = std::move(*srcValuesOr);
     rewriter.create<NVVM::Tcgen05WaitOp>(loc, NVVM::Tcgen05WaitKind::STORE);
 
     // Emit a barrier to ensure all threads have finished writing to tensor
@@ -850,10 +851,10 @@ struct TensorMemoryAllocOpConversion
       SmallVector<Value> srcValues =
           unpackLLElements(loc, adaptor.getSrc(), rewriter);
       Value ptr = b.inttoptr(base.getType(), allocAddress);
-      auto resultValsOr =
+      auto lowered =
           lowerTMemLdStFromTypes(loc, ctx, rewriter, regTy, memTy, ptr, maxnreg,
                                  b.i1_val(true), llvmElemTy, srcValues);
-      if (failed(resultValsOr))
+      if (failed(lowered))
         return failure();
       rewriter.create<NVVM::Tcgen05WaitOp>(loc, NVVM::Tcgen05WaitKind::STORE);
       // Emit a barrier to ensure all threads have finished writing to tensor

@@ -96,9 +96,13 @@ ensureLayoutNotLargerThan(const LinearLayout &layout,
     }
     bases[kRegister] = std::move(newBasesRegister);
   }
+  auto outDims = layout.getOutDims();
+  for (auto &[outDim, outDimSize] : outDims) {
+    outDimSize = std::min<int32_t>(outDimSize, shape.lookup(outDim));
+  }
 
-  return LinearLayout(std::move(bases),
-                      llvm::to_vector(layout.getOutDimNames()));
+  return LinearLayout(std::move(bases), std::move(outDims),
+                      /*requireSurjective=*/false);
 }
 
 // For each out-dim d, ensure the layout's out-size (i.e. its codomain) is no
