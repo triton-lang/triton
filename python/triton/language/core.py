@@ -153,10 +153,10 @@ class base_value:
 
 class base_type:
 
-    def __eq__(self, other):
+    def __eq__(self, other) -> bool:
         raise NotImplementedError("Types must implement __eq__")
 
-    def __ne__(self, other):
+    def __ne__(self, other) -> bool:
         return not (self == other)
 
     def _unflatten_ir(self, handles: List[ir.value], cursor: int) -> Tuple[base_value, int]:
@@ -546,9 +546,10 @@ class dtype(base_type):
     def is_const():
         return False
 
-    def __eq__(self, other: dtype):
-        if not isinstance(other, dtype):
+    def __eq__(self, other) -> bool:
+        if not isinstance(other, (dtype, constexpr)):
             return False
+        other = _unwrap_if_constexpr(other)
         return self.name == other.name
 
     def __hash__(self):
@@ -670,9 +671,10 @@ class pointer_type(dtype):
     def is_const(self):
         return self.const
 
-    def __eq__(self, other: pointer_type) -> bool:
-        if not isinstance(other, pointer_type):
+    def __eq__(self, other) -> bool:
+        if not isinstance(other, (pointer_type, constexpr[pointer_type])):
             return False
+        other = _unwrap_if_constexpr(other)
         return self.element_ty == other.element_ty and self.address_space == other.address_space and self.const == other.const
 
     @property

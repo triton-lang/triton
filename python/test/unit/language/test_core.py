@@ -7633,6 +7633,7 @@ def test_side_effectful_reduction_2d(device, reduce_dim):
     torch.testing.assert_close(Z, X.sum(reduce_dim).to(torch.int32))
 
 
+@pytest.mark.interpreter
 def test_dtype(device):
 
     @triton.jit
