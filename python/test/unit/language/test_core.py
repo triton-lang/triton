@@ -4941,7 +4941,7 @@ def test_vectorization_hints(has_hints, device):
         x = tl.load(src + offsets, mask=offsets < N)
         tl.store(dst + offsets, x, mask=offsets < N)
 
-    pgm = _kernel.warmup(dst, src, off, N=1024, BLOCK_SIZE=src.shape[0], HINT=has_hints, grid=(1, ))
+    pgm = _kernel[(1, )](dst, src, off, N=1024, BLOCK_SIZE=src.shape[0], HINT=has_hints)
     if not is_cuda():
         return
 

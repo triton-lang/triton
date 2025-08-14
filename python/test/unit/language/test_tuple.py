@@ -312,7 +312,7 @@ def test_tuple_logic():
         # constexpr short-circuiting over dynamic argument:
         tl.static_assert((() and tl.program_id(0)) == ())
 
-    tuple_logic_kernel.warmup(grid=(1, ))
+    tuple_logic_kernel[(1, )]()
 
 
 @pytest.mark.interpreter
@@ -322,4 +322,4 @@ def test_tuple_float():
     def _namedtuple_float_tuple_kernel():
         x, y = float("-inf"), float("inf")  # noqa: F841
 
-    _namedtuple_float_tuple_kernel.warmup(grid=(1, ))
+    _namedtuple_float_tuple_kernel[(1, )]()
