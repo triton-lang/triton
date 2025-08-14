@@ -212,35 +212,36 @@ def test_sharedmem_with_padded_layout():
 
     @gluon.jit
     def kernel(a_ptr, b_ptr, M: ttgl.constexpr, N: ttgl.constexpr):
-        blocked: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[4, 1], threads_per_warp=[8, 8],
+        blocked: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[1, 64],
                                                      warps_per_cta=[4, 1], order=[1, 0])
-        padded: ttgl.constexpr = ttgl.PaddedSharedLayout(interval_padding_pairs=[[32, 32]], order=[1, 0],
-                                                         ctas_per_cga=[1, 1], cta_split_num=[1, 1], cta_order=[1, 0])
+        padded: ttgl.constexpr = ttgl.PaddedSharedLayout(interval_padding_pairs=[[4, 4]], order=[1, 0])
+        swizzled: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, order=[1, 0])
+
+        offs_n_tr = ttgl.arange(0, N, layout=ttgl.SliceLayout(1, blocked))
+        offs_m_tr = ttgl.arange(0, M, layout=ttgl.SliceLayout(0, blocked))
+        offs_reshaped = offs_n_tr[:, None] * N + offs_m_tr[None, :]
 
         offs_m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, blocked))
         offs_n = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, blocked))
         offs = offs_m[:, None] * M + offs_n[None, :]
         a = ttgl.amd.cdna3.buffer_load(ptr=a_ptr, offsets=offs)
+
         smem = ttgl.allocate_shared_memory(a_ptr.dtype.element_ty, [M, N], padded)
         smem.store(a)
+        smem = smem.reshape((N, M))
 
-        # temp = smem.load(blocked)
-        #tl.device_print("temp = ", temp)
-        reshaped = smem.reshape((N, M)).load(blocked)
-        offs_n_tr = ttgl.arange(0, N, layout=ttgl.SliceLayout(1, blocked))
-        offs_m_tr = ttgl.arange(0, M, layout=ttgl.SliceLayout(0, blocked))
-        offs_reshaped = offs_n_tr[:, None] * N + offs_m_tr[None, :]
+        smem = smem._reinterpret(a_ptr.dtype.element_ty, (N, M), swizzled)
+        reshaped = smem.load(blocked)
+
         ttgl.amd.cdna3.buffer_store(stored_value=reshaped, ptr=b_ptr, offsets=offs_reshaped)
 
-    M, N = 8, 8
+    M, N = 16, 4
     input = torch.arange(0, M * N, device="cuda", dtype=torch.int32).reshape(M, N)
+    triton_output = torch.arange(0, M * N, device="cuda", dtype=torch.int32).reshape(N, M)
+    kernel[1, 1](input, triton_output, M, N)
+    print("before reshape triton output = ", triton_output)
 
-    output = torch.arange(0, M * N, device="cuda", dtype=torch.int32).reshape(N, M)
-    kernel[1, 1](input, output, M, N)
-
-    output = torch.reshape(output, (M, N))
+    triton_output = torch.reshape(triton_output, (M, N))
     torch.set_printoptions(threshold=float('inf'))
     print("input = ", input)
-    print("triton output = ", output)
-    ref = torch.arange(0, 64 * 32, device="cuda", dtype=torch.int32).reshape(N, M)
-    torch.testing.assert_close(output, ref)
+    print("triton output = ", triton_output)

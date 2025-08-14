@@ -464,9 +464,9 @@ class PaddedSharedLayout(SharedLayout):
     """
     interval_padding_pairs: List[Tuple[int, int]]
     order: List[int]
-    ctas_per_cga: List[int] | None = None
-    cta_split_num: List[int] | None = None
-    cta_order: List[int] | None = None
+    ctas_per_cga: Optional[List[int]] = None
+    cta_split_num: Optional[List[int]] = None
+    cta_order: Optional[List[int]] = None
 
     def __post_init__(self):
         super().__setattr__("interval_padding_pairs", _unwrap_if_constexpr(self.interval_padding_pairs))
@@ -503,11 +503,12 @@ class PaddedSharedLayout(SharedLayout):
         assert all(is_power_of_2(n) for n in intervals), "PaddedSharedLayout interval values must all be power of two"
         assert all(is_power_of_2(n) for n in paddings), "PaddedSharedLayout padding values must all be power of two"
 
+        rank = len(self.order)
+        _realize_cta_layout(self, rank)
+
         assert len(self.order) > 0, "PaddedSharedLayout order must not be empty"
-        rank = len(self.cta_order)
         assert len(self.order) == rank, "PaddedSharedLayout order size must match must match CTALayout rank"
 
-        _realize_cta_layout(self, rank)
         assert len(self.ctas_per_cga) == rank
         assert len(self.cta_split_num) == rank
         assert len(self.cta_order) == rank

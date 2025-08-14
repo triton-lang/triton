@@ -997,7 +997,6 @@ SmallVector<SmallVector<unsigned>> emitOffsetForLayout(Attribute layout,
   StringAttr kWarp = str_attr("warp");
   StringAttr kBlock = str_attr("block");
 
-  printf("12345678 ll is %s\n", ll.toString().data());
   SmallVector<SmallVector<unsigned>> offsets;
   for (int i = 0; i < ll.getInDimSize(str_attr("register")); i++) {
     auto idxs = ll.apply({{kRegister, i}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}});
@@ -1009,12 +1008,6 @@ SmallVector<SmallVector<unsigned>> emitOffsetForLayout(Attribute layout,
         llvm::to_vector_of<unsigned>(llvm::make_second_range(idxs)));
   }
 
-  printf("12345678 offsets\n");
-  for (auto v : offsets) {
-    for (auto n : v)
-      printf("%d, ", (int)n);
-    printf("\n");
-  }
   return offsets;
 }
 
