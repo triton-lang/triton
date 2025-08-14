@@ -380,10 +380,39 @@ class LaunchHook(Protocol):
 
 
 class InitHandleHook(Protocol):
+    """Hook invoked around kernel binary/module loading.
+    module/function can be None for the *start* hook (before loading).
+    """
 
-    def __call__(self, function: Optional[Callable], module: Optional[object], metadata_group: dict[str, str],
-                 hash: str) -> None:
-        ...
+    def __call__(
+        self,
+        module: Optional[object],
+        function: Optional[Callable],
+        name: str,
+        metadata_group: dict[str, str],
+        hash: str,
+    ) -> None: ...
+
+
+F = TypeVar("F", bound=Callable)
+
+
+class HookChain(Generic[F]):
+    def __init__(self, reversed: bool = False):
+        self.calls: list[F] = []
+        self.reversed = reversed
+
+    def add(self, func: F) -> None:
+        if func not in self.calls:
+            self.calls.append(func)
+
+    def remove(self, func: F) -> None:
+        if func in self.calls:
+            self.calls.remove(func)
+
+    def __call__(self, *args, **kwargs):
+        for call in self.calls if not self.reversed else reversed(self.calls):
+            call(*args, **kwargs)
 
 
 # This is of the form [attr_name, attr_val]
@@ -419,10 +448,10 @@ class runtime_knobs(base_knobs):
     debug: env_bool = env_bool("TRITON_DEBUG")
     override_arch: env_opt_str = env_opt_str("TRITON_OVERRIDE_ARCH")
 
-    launch_enter_hook: Optional[LaunchHook] = None
-    launch_exit_hook: Optional[LaunchHook] = None
-    kernel_load_start_hook: Optional[InitHandleHook] = None
-    kernel_load_end_hook: Optional[InitHandleHook] = None
+    launch_enter_hook: HookChain[LaunchHook] = HookChain()
+    launch_exit_hook: HookChain[LaunchHook] = HookChain(reversed=True)
+    kernel_load_start_hook: HookChain[InitHandleHook] = HookChain()
+    kernel_load_end_hook: HookChain[InitHandleHook] = HookChain(reversed=True)
 
     # Hook for inspecting compiled functions and modules
     jit_cache_hook: Optional[JITHook] = None

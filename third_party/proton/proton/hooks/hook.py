@@ -9,15 +9,20 @@ class Hook:
     priority: int = 0
 
     @abstractmethod
-    def init_handle(self, module: Any, function: Any, name: str, metadata_group: Dict[str, str]) -> None:
+    def init_handle(self, module: Any, function: Any, name: str, metadata_group: Dict[str, str], hash: str) -> None:  # noqa: D401
+        """Called when a kernel's binary handles are (about to be / just were) initialized.
+
+        For the start hook invocation, module and function may be None. The hash is the
+        kernel's cache key (stable identifier across start/end invocations).
+        """
         raise NotImplementedError
 
     @abstractmethod
-    def enter(self, lazy_dict: LazyDict) -> None:
+    def enter(self, metadata: LazyDict) -> None:
         raise NotImplementedError
 
     @abstractmethod
-    def exit(self, lazy_dict: LazyDict) -> None:
+    def exit(self, metadata: LazyDict) -> None:
         raise NotImplementedError
 
     @abstractmethod
@@ -41,15 +46,15 @@ class HookManager:
             hook.init_handle(module, function, name, metadata_group, hash)
 
     @staticmethod
-    def enter(lazy_dict: LazyDict) -> None:
+    def enter(metadata: LazyDict) -> None:
         for hook in HookManager.active_hooks:
-            hook.enter(lazy_dict)
+            hook.enter(metadata)
 
     @staticmethod
-    def exit(lazy_dict: LazyDict) -> None:
+    def exit(metadata: LazyDict) -> None:
         # It's important to reverse the order of hooks so that we keep the first in last out order
         for hook in reversed(HookManager.active_hooks):
-            hook.exit(lazy_dict)
+            hook.exit(metadata)
 
     @staticmethod
     def activate(session: Optional[int] = None) -> None:
@@ -95,11 +100,11 @@ class HookManager:
             HookManager.active_hooks.append(hook)
         # Sort active_hooks by priority
         HookManager.active_hooks.sort(key=lambda x: x.priority, reverse=True)
+
         # Register the heads
-        if knobs.runtime.launch_enter_hook is None:
-            knobs.runtime.launch_enter_hook = HookManager.enter
-            knobs.runtime.launch_exit_hook = HookManager.exit
-            knobs.runtime.kernel_load_end_hook = HookManager.init_handle
+        knobs.runtime.kernel_load_start_hook.add(HookManager.init_handle)
+        knobs.runtime.launch_enter_hook.add(HookManager.enter)
+        knobs.runtime.launch_exit_hook.add(HookManager.exit)
 
     @staticmethod
     def unregister(session: Optional[int] = None) -> None:
@@ -122,6 +127,6 @@ class HookManager:
                     HookManager.active_hooks.remove(hook)
         # Unregister the heads
         if not HookManager.active_hooks:
-            knobs.runtime.launch_enter_hook = None
-            knobs.runtime.launch_exit_hook = None
-            knobs.runtime.kernel_load_end_hook = None
+            knobs.runtime.kernel_load_start_hook.remove(HookManager.init_handle)
+            knobs.runtime.launch_enter_hook.remove(HookManager.enter)
+            knobs.runtime.launch_exit_hook.remove(HookManager.exit)

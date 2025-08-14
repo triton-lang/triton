@@ -246,6 +246,41 @@ def test_hook_launch_context(tmp_path: pathlib.Path, context: str):
             queue.append(child)
 
 
+def test_hook_with_third_party(tmp_path: pathlib.Path):
+    third_party_hook_invoked = False
+
+    def third_party_hook(metadata) -> None:
+        nonlocal third_party_hook_invoked
+        third_party_hook_invoked = True
+
+    triton.knobs.runtime.launch_enter_hook.add(third_party_hook)
+
+    proton_hook_invoked = False
+
+    def metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
+        nonlocal proton_hook_invoked
+        proton_hook_invoked = True
+        return {"name": "foo_test"}
+
+    @triton.jit(launch_metadata=metadata_fn)
+    def foo(x, size: tl.constexpr, y):
+        offs = tl.arange(0, size)
+        tl.store(y + offs, tl.load(x + offs))
+
+    x = torch.tensor([2], device="cuda", dtype=torch.float32)
+    y = torch.zeros_like(x)
+    temp_file = tmp_path / "test_hook_with_third_party.hatchet"
+    proton.start(str(temp_file.with_suffix("")), hook="triton")
+    foo[(1, )](x, 1, y, num_warps=4)
+    proton.finalize()
+    triton.knobs.runtime.launch_enter_hook.remove(third_party_hook)
+    with temp_file.open() as f:
+        data = json.load(f)
+    assert len(data[0]["children"]) == 1
+    assert data[0]["children"][0]["frame"]["name"] == "foo_test"
+    assert data[0]["children"][0]["metrics"]["time (ns)"] > 0
+
+
 def test_pcsampling(tmp_path: pathlib.Path):
     if is_hip():
         pytest.skip("HIP backend does not support pc sampling")
