@@ -7522,6 +7522,7 @@ def test_side_effectful_reduction_2d(device, reduce_dim):
 
 
 def test_dtype(device):
+
     @triton.jit
     def kernel(X):
         dtype_x: tl.constexpr = X.dtype.element_ty
@@ -7530,7 +7531,7 @@ def test_dtype(device):
         tl.static_assert(dtype_x == tl.int8 or (dtype_x == tl.int16 or dtype_x == tl.int32))
 
     X = torch.empty(1, dtype=torch.int32, device=device)
-    kernel.warmup(X, grid=(1,))
+    kernel.warmup(X, grid=(1, ))
 
 
 def test_side_effectful_scan(device):
