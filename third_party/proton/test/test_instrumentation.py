@@ -596,11 +596,11 @@ def test_timeline(tmp_path: pathlib.Path):
         pl.exit_scope("entire")
 
     with proton.scope("init"):
-        x = torch.ones((1024,), device="cuda", dtype=torch.float32)
+        x = torch.ones((1024, ), device="cuda", dtype=torch.float32)
         y = torch.zeros_like(x)
 
     with proton.scope("test"):
-        foo[(1,)](x, y, x.size()[0], num_warps=4)
+        foo[(1, )](x, y, x.size()[0], num_warps=4)
 
     proton.finalize()
 

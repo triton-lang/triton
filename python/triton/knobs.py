@@ -401,6 +401,8 @@ F = TypeVar("F", bound=Callable)
 
 
 class HookChain(Generic[F]):
+    """A chain of hooks of the same type F to be called in order.
+    """
 
     def __init__(self, reversed: bool = False):
         self.calls: list[F] = []
