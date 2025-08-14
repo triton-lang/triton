@@ -1,6 +1,7 @@
 import torch
 import triton
 import triton.language as tl
+from triton_kernels.target_info import is_hip, FP8_E4M3_MAX
 from .base import Layout
 
 
@@ -270,13 +271,19 @@ def _unpack_fp4_to_bf16_triton(x):
     x = x.reshape(x.shape[0], x.shape[1] * x.shape[2] * x.shape[3])
     return x
 
+@triton.constexpr_function
+def get_fp8_max():
+    return FP8_E4M3_MAX
 
 @triton.jit
 def mxfp4_to_fp8_e4m3_fn_trition(x, scale, mx_axis: tl.constexpr, fp8_dtype: tl.constexpr):
     bf16 = mxfp4_to_bf16_triton(x, scale, mx_axis)
-    fp8 = bf16.to(fp8_dtype)
-    return fp8
-
+    # tile-wise scalar
+    fp8_max : tl.constexpr = get_fp8_max()
+    fp8_scale = tl.max(tl.abs(bf16)) / fp8_max
+    fp8 = (bf16 / fp8_scale).to(fp8_dtype)
+    fp8_scale = fp8_scale.to(tl.float32)
+    return fp8, fp8_scale
 
 @triton.jit
 def mxfp4_to_bf16_triton(x, scale, mx_axis: tl.constexpr):

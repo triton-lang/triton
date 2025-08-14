@@ -27,11 +27,9 @@ def _zero_masked_rows(
     tl.store(YPtrs, tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32), mask=mask)
 
 
-_is_hip = is_hip_host()
-
-@tl.constexpr_function
+@triton.constexpr_function
 def is_hip():
-    return is_hip_host()# _is_hip
+    return is_hip_host()
 
 
 _matmul_ogs_repr = make_matmul_repr("_matmul_ogs", [0, 1, 2])
@@ -300,20 +298,23 @@ def _matmul_ogs(
                 tl.static_assert(w_format == "e2m1")
 
                 if use_fp8_matmul:
+                    # enforce fp8 matmul with tile-wise fp32 scalar
                     fp8_dtype = tl.float8e4b8 if is_hip() else tl.float8e4nv
-                    w = mxfp4_to_fp8_e4m3_fn_trition(w.trans(), w_scales, 1, fp8_dtype=fp8_dtype)
-                    if x_format != "e4m3":
-                        x = x.to(fp8_dtype)
-                else:
+                    w, tile_wise_w_s = mxfp4_to_fp8_e4m3_fn_trition(w.trans(), w_scales, 1, fp8_dtype=fp8_dtype)
+
                     if x_format == "bf16":
-                        w = mxfp4_to_bf16_triton(w.trans(), w_scales, 1)
-                    elif x_format == "e4m3":
-                        fp8_dtype = tl.float8e4b8 if is_hip() else tl.float8e4nv
-                        w = mxfp4_to_fp8_e4m3_fn_trition(w.trans(), w_scales, 1, fp8_dtype=fp8_dtype)
+                        x = x.to(w.dtype)
+                else:
+                    w = mxfp4_to_bf16_triton(w.trans(), w_scales, 1)
+
+                    if x_format == "e4m3":
+                        x = x.to(tl.bfloat16)
 
                 acc = acc.trans()
                 x = x.trans()
                 acc = tl.dot(w, x, acc, max_num_imprecise_acc=MAX_NUM_IMPRECISE_ACC, allow_tf32=ALLOW_TF32)
+                if use_fp8_matmul:
+                    acc *= tile_wise_w_s
                 acc = acc.trans()
             else:
                 acc = tl.dot_scaled(x, x_scales, x_format, w, w_scales, w_format, acc=acc, fast_math=True)
