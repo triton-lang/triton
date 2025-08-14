@@ -1100,8 +1100,7 @@ struct TensorMemoryLoadOpConversion
           lowerTMemLdStFromTypes(loc, ctx, rewriter, regTy, memTy, tmemBase,
                                  maxnreg, b.i1_val(true), llvmElemTy, {});
       if (failed(resultValsOr))
-        return rewriter.notifyMatchFailure(
-            op, "Failed to lower TMEM load/store: unsupported dst layout");
+        return failure();
       resultVals = std::move(*resultValsOr);
     } else {
       assert(false && "Unsupported tmem encoding");
@@ -1143,8 +1142,7 @@ struct TensorMemoryStoreOpConversion
           lowerTMemLdStFromTypes(loc, ctx, rewriter, regTy, memTy, tmemBase,
                                  maxnreg, pred, llvmElemTy, srcValues);
       if (failed(lowered))
-        return rewriter.notifyMatchFailure(
-            op, "Failed to lower TMEM load/store: unsupported dst layout");
+        return failure();
     } else {
       lowerStoreToTensorMemory(loc, op, op.getSrc(), op.getDst(),
                                adaptor.getSrc(), pred, tmemBase, rewriter);
@@ -1198,8 +1196,7 @@ struct TensorMemoryAllocOpConversion
                                               ptr, maxnreg, b.i1_val(true),
                                               llvmElemTy, srcValues);
         if (failed(lowered))
-          return rewriter.notifyMatchFailure(
-              op, "Failed to lower TMEM load/store: unsupported dst layout");
+          return failure();
       } else {
         // Cast to address space 3 as the shared memory object uses 3.
         // TODO: clean this up and use either a int or ptr address space 6
