@@ -6,6 +6,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
+#include "triton/Dialect/TritonGPU/IR/LayoutUtility.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Tools/GenericSwizzling.h"
@@ -589,9 +590,10 @@ lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout cvt,
       return unpackLLVector(loc, valsVec, rewriter);
     }
   };
+  auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
   return lowerLdSt(loc, ctx, cvt, valsArray, llvmElemTy, smemBase,
-                   calcPaddedOffset, affineOffset, maskSpanAffineOffset,
-                   rewriter, targetInfo, {}, emitLdSt);
+                   calcPaddedOffset, affineOffset, maskSpanAffineOffset, laneId,
+                   warpId, rewriter, targetInfo, {}, emitLdSt);
 }
 
 SmallVector<Value> lowerLdSt(
@@ -599,8 +601,9 @@ SmallVector<Value> lowerLdSt(
     ArrayRef<Value> valsArray, // Input for store, output for load
     Type llvmElemTy, Value smemBase,
     std::function<Value(Value)> calcPaddedOffset, Value affineOffset,
-    uint64_t maskSpanAffineOffset, RewriterBase &rewriter,
-    const TargetInfoBase &targetInfo, std::optional<int> maybeMaxVecElems,
+    uint64_t maskSpanAffineOffset, Value laneId, Value warpId,
+    RewriterBase &rewriter, const TargetInfoBase &targetInfo,
+    std::optional<int> maybeMaxVecElems,
     std::function<SmallVector<Value>(RewriterBase &, Location, ArrayRef<Value>,
                                      Value, int, VectorType)>
         lowerInst) {
@@ -646,7 +649,6 @@ SmallVector<Value> lowerLdSt(
       zerosLike(LinearLayout::identity1D(bitwidth / 8, kReg, kOffset));
   auto i8AddrLayout = i8Tile * addrLayout;
 
-  auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
   auto regBaseI8 =
       applyLinearLayout(
           loc, rewriter, i8AddrLayout,
@@ -699,10 +701,10 @@ lowerLocalLdSt(Location loc, MLIRContext *ctx,
   auto calcPaddedOffset = [&](Value smemOffset) {
     TritonLLVMOpBuilder b(loc, rewriter);
     auto bitwidth = llvmElemTy.getIntOrFloatBitWidth();
-    if (auto paddedLayout = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(
+    if (auto paddedEnc = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(
             srcTy.getEncoding())) {
       // Apply the offset needed for padding.
-      Value padOffset = emitPadding(loc, rewriter, paddedLayout, bitwidth,
+      Value padOffset = emitPadding(loc, rewriter, paddedEnc, bitwidth,
                                     smemOffset, /*offsetInBytes=*/true);
       smemOffset = b.add(smemOffset, padOffset);
     }
@@ -747,12 +749,12 @@ bool emitTransferBetweenRegistersAndShared(
   StringAttr kOffset = str_attr("offset");
 
   auto shape = sharedTy.getShape();
-  auto paddedLayout =
+  auto paddedEnc =
       dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(sharedTy.getEncoding());
   LinearLayout regToSharedLayout = LinearLayout::empty();
-  if (paddedLayout) {
+  if (paddedEnc) {
     regToSharedLayout =
-        regLayout.reshapeOuts({{kOffset, regLayout.getTotalOutDimSize()}});
+        triton::gpu::getPaddedRegToSharedLayout(regLayout, paddedEnc);
   } else {
     auto sharedLL = triton::gpu::toLinearLayout(sharedTy);
     regToSharedLayout = regLayout.invertAndCompose(sharedLL);
@@ -774,8 +776,8 @@ bool emitTransferBetweenRegistersAndShared(
   int vecElems =
       std::min({regToSharedLayout.getNumConsecutiveInOut(),
                 maxVecElems.value_or(std::numeric_limits<int>::max())});
-  if (paddedLayout) {
-    vecElems = std::min(vecElems, int(paddedLayout.getMinInterval()));
+  if (paddedEnc) {
+    vecElems = std::min(vecElems, int(paddedEnc.getMinInterval()));
   }
 
   auto withCTAOffset = triton::gpu::getNumCTAs(sharedTy.getEncoding()) > 1;
@@ -804,10 +806,10 @@ bool emitTransferBetweenRegistersAndShared(
   for (auto &indices : indicesVec) {
     Value smemOffset = indices[0].second;
     smemOffset = b.xor_(smemOffset, offset);
-    if (paddedLayout) {
+    if (paddedEnc) {
       // Apply the offset needed for padding.
       auto bitwidth = elemLlvmTy.getIntOrFloatBitWidth();
-      Value padOffset = emitPadding(loc, rewriter, paddedLayout, bitwidth,
+      Value padOffset = emitPadding(loc, rewriter, paddedEnc, bitwidth,
                                     smemOffset, /*offsetInBytes=*/false);
       smemOffset = b.add(smemOffset, padOffset);
     }
@@ -1689,16 +1691,17 @@ void finalizeTensorAtomicResults(Operation *op, RankedTensorType tensorTy,
   };
 
   auto noPaddingOffset = [](Value v) { return v; };
+  auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
   lowerLdSt(loc, ctx, dstLayout, resultVals, valueElemTy, smemBase,
             /*calcPaddedOffset=*/noPaddingOffset, /*affineOffset=*/b.i32_val(0),
-            /*maskSpanAffineOffset=*/0, rewriter, targetInfo,
+            /*maskSpanAffineOffset=*/0, laneId, warpId, rewriter, targetInfo,
             /*maybeMaxVecElems=*/{}, emitSt);
   b.barrier();
   resultVals = lowerLdSt(loc, ctx, dstLayout, resultVals, valueElemTy, smemBase,
                          /*calcPaddedOffset=*/noPaddingOffset,
                          /*affineOffset=*/b.i32_val(0),
-                         /*maskSpanAffineOffset=*/0, rewriter, targetInfo,
-                         /*maybeMaxVecElems=*/{}, emitLd);
+                         /*maskSpanAffineOffset=*/0, laneId, warpId, rewriter,
+                         targetInfo, /*maybeMaxVecElems=*/{}, emitLd);
 
   // Create the result struct and replace the operation
   Value resultStruct =
