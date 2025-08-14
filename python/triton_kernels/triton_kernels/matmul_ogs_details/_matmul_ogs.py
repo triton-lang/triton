@@ -5,7 +5,7 @@ import triton.language as tl
 from triton_kernels.tensor_details.layout_details.blackwell_scale import unswizzle_mx_scale_bw
 from triton_kernels.tensor_details.layout_details.hopper_scale import unswizzle_mxfp4_scale_hopper
 from triton_kernels.tensor_details.layout_details.hopper_value import mxfp4_to_bf16_triton
-from triton_kernels.tensor_details.layout_details.gfx950_scale import unswizzle_mx_scale_gfx950
+from triton_kernels.tensor_details.layout_details.cdna4_scale import unswizzle_mx_scale_cdna4
 from triton_kernels.numerics_details.flexpoint import float_to_flex, load_scale
 from triton_kernels.numerics_details.mxfp_details._downcast_to_mxfp import MXFP_BLOCK_SIZE
 from ._common import make_matmul_repr, matmul_launch_metadata, swizzle2d, xcd_swizzle, get_scaled_dot_format_string
@@ -210,7 +210,7 @@ def _matmul_ogs(
             PACKED_MX_BLOCK: tl.constexpr = MX_SCALE_BLOCK_K * 32
             SCALE_BLOCK_N: tl.constexpr = BLOCK_N // 32
             stride_scale_k = stride_w_mx_k
-        elif SWIZZLE_MX_SCALE == "GFX950_SCALE":
+        elif SWIZZLE_MX_SCALE == "CDNA4_SCALE":
             tl.static_assert(stride_w_mx_k is not None)
             tl.static_assert(stride_w_mx_n is not None)
             NON_K_PRESHUFFLE_BLOCK_SIZE: tl.constexpr = 32
@@ -289,8 +289,8 @@ def _matmul_ogs(
                 # Handshake with the swizzling code
                 num_warps: tl.constexpr = tl.extra.cuda.num_warps()
                 w_scales = unswizzle_mxfp4_scale_hopper(tl.load(WMxScalePtrs), mx_axis=1, num_warps=num_warps)
-            elif SWIZZLE_MX_SCALE == "GFX950_SCALE":
-                w_scales = unswizzle_mx_scale_gfx950(tl.load(WMxScalePtrs), BLOCK_N, MX_SCALE_BLOCK_K)
+            elif SWIZZLE_MX_SCALE == "CDNA4_SCALE":
+                w_scales = unswizzle_mx_scale_cdna4(tl.load(WMxScalePtrs), BLOCK_N, MX_SCALE_BLOCK_K)
             else:
                 w_scales = tl.load(WMxScalePtrs, mask=mask_k_scale[None, :])
 
