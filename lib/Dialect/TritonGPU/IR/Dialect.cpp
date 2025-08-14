@@ -1577,8 +1577,7 @@ Attribute PaddedSharedEncodingAttr::parse(AsmParser &parser, Type type) {
 
   // {<attr-dict>}>
   NamedAttrList attrList;
-  if (failed(parser.parseOptionalAttrDict(attrList)) ||
-      failed(parser.parseGreater()))
+  if (failed(parser.parseOptionalAttrDict(attrList)))
     return {};
 
   // Decode order and CTA attributes
@@ -1592,11 +1591,89 @@ Attribute PaddedSharedEncodingAttr::parse(AsmParser &parser, Type type) {
       remainingAttrs.push_back(attr);
     }
   }
-  if (auto ctaLayout = parseCTAAttrs(parser, remainingAttrs, order.size()))
-    return parser.getChecked<PaddedSharedEncodingAttr>(
-        parser.getContext(), intervals, paddings, order, *ctaLayout,
-        std::nullopt);
-  return {};
+  auto ctaLayout = parseCTAAttrs(parser, remainingAttrs, order.size());
+  if (!ctaLayout)
+    return {};
+
+  DictionaryAttr dict;
+  bool hasLL = parser.parseAttribute(dict).succeeded();
+
+  if (parser.parseGreater().failed())
+    return {};
+  // Parse linear layout
+  std::optional<LinearLayout> maybeLL;
+  if (hasLL) {
+    LinearLayout::BasesT bases;
+
+    // Parse the basis names in order (the order is relevant)
+    std::vector<std::string> inDimNames = {"offset"};
+
+    for (const auto &inDimNameStr : inDimNames) {
+      auto inDimName = StringAttr::get(parser.getContext(), inDimNameStr);
+      Attribute value = dict.get(inDimName);
+
+      // Expecting an array of arrays
+      auto arrayOfArraysAttr = mlir::dyn_cast<ArrayAttr>(value);
+      if (!arrayOfArraysAttr) {
+        parser.emitError(parser.getCurrentLocation(),
+                         "Expected array of arrays for basis of '")
+            << inDimName.getValue() << "'";
+        return {};
+      }
+
+      std::vector<std::vector<int32_t>> inDimBases;
+      for (Attribute arrayAttr : arrayOfArraysAttr) {
+        auto intArrayAttr = mlir::dyn_cast<ArrayAttr>(arrayAttr);
+        if (!intArrayAttr) {
+          parser.emitError(parser.getCurrentLocation(),
+                           "Expected array of integers in basis for '")
+              << inDimName.getValue() << "'";
+          return {};
+        }
+        std::vector<int32_t> basis;
+        for (Attribute intAttr : intArrayAttr) {
+          auto intValueAttr = mlir::dyn_cast<IntegerAttr>(intAttr);
+          if (!intValueAttr) {
+            parser.emitError(parser.getCurrentLocation(),
+                             "Expected integer in basis for '")
+                << inDimName.getValue() << "'";
+            return {};
+          }
+          basis.push_back(intValueAttr.getInt());
+        }
+        inDimBases.push_back(std::move(basis));
+      }
+      bases[inDimName] = std::move(inDimBases);
+    }
+    size_t rank = 0;
+    for (const auto &basesDim : llvm::make_second_range(bases)) {
+      if (!basesDim.empty()) {
+        rank = basesDim[0].size();
+        break;
+      }
+    }
+
+    // To implement this we'd need to serialise the rank as well.
+    // We can do this if we ever need it
+    if (rank == 0) {
+      parser.emitError(parser.getCurrentLocation(),
+                       "Empty Layout not supported");
+      return {};
+    }
+
+    // Generate standared outDimNames (dim0, dim1, ...)
+    SmallVector<StringAttr> outDimNames;
+    for (int i = 0; i < rank; ++i) {
+      outDimNames.push_back(
+          StringAttr::get(parser.getContext(), "dim" + llvm::Twine(i)));
+    }
+
+    // Create LinearLayout
+    maybeLL = triton::LinearLayout(std::move(bases), std::move(outDimNames));
+  }
+
+  return parser.getChecked<PaddedSharedEncodingAttr>(
+      parser.getContext(), intervals, paddings, order, *ctaLayout, maybeLL);
 }
 
 void PaddedSharedEncodingAttr::print(AsmPrinter &printer) const {
@@ -1609,13 +1686,26 @@ void PaddedSharedEncodingAttr::print(AsmPrinter &printer) const {
   printer << "] {order = [" << getOrder() << "]";
   maybePrintCTALayout(getContext(), printer, getCTALayout(),
                       /*rank=*/getOrder().size());
-  printer << "}>";
+  printer << "}";
+  if (getLinearComponent().has_value()) {
+    auto ll = *getLinearComponent();
+    printer << " {" << join(ll.getBases(), ", ", [](const auto &base) {
+      return base.first.str() + " = " + "[" +
+             join(base.second, ", ",
+                  [](const std::vector<int32_t> &vec) {
+                    return "[" + join(vec, ", ") + "]";
+                  }) +
+             "]";
+    }) << "}";
+  }
+
+  printer << ">";
 }
 
 LogicalResult PaddedSharedEncodingAttr::verify(
     function_ref<InFlightDiagnostic()> emitError, ArrayRef<unsigned> intervals,
     ArrayRef<unsigned> paddings, ArrayRef<unsigned> order,
-    CTALayoutAttr ctaLayout, std::optional<Attribute> linearComponent) {
+    CTALayoutAttr ctaLayout, std::optional<LinearLayout> linearComponent) {
   if (intervals.size() != paddings.size())
     return emitError() << "intervals size (" << intervals.size()
                        << ") must match paddings size (" << paddings.size()
@@ -1647,7 +1737,7 @@ LogicalResult PaddedSharedEncodingAttr::verify(
 PaddedSharedEncodingAttr PaddedSharedEncodingAttr::get(
     MLIRContext *context, ArrayRef<std::pair<unsigned, unsigned>> intervalPads,
     ArrayRef<unsigned> order, CTALayoutAttr ctaLayout,
-    std::optional<Attribute> linearComponent) {
+    std::optional<LinearLayout> linearComponent) {
   SmallVector<unsigned> intervals, paddings;
   intervals.reserve(intervalPads.size());
   paddings.reserve(intervalPads.size());
