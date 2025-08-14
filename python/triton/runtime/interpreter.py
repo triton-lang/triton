@@ -2,7 +2,7 @@ from __future__ import annotations
 import ast
 import textwrap
 import inspect
-from typing import Tuple, List, Dict
+from typing import Tuple, List, Dict, Callable
 
 import math
 import numpy as np
@@ -1372,11 +1372,12 @@ class FunctionRewriter:
 
 class InterpretedFunction:
     # Cache all rewritten functions
-    rewritten_fn = {}
+    rewritten_fn: Dict[Callable, Callable] = {}
 
     def __init__(self, fn, **kwargs) -> None:
         self.fn = fn
         self.rewriter = FunctionRewriter(fn, **kwargs)
+        self.kwargs = kwargs
 
         def run(*args, **kwargs):
             grid = kwargs["grid"]
