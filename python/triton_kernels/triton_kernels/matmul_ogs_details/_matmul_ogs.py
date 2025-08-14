@@ -29,16 +29,9 @@ def _zero_masked_rows(
 
 _is_hip = is_hip_host()
 
-# Note(yiakwy) : monkey patchable value
-_use_fp8_matmul = False
-
 @tl.constexpr_function
 def is_hip():
-    return _is_hip
-
-@tl.constexpr_function
-def use_fp8_matmul():
-    return _use_fp8_matmul
+    return is_hip_host()# _is_hip
 
 
 _matmul_ogs_repr = make_matmul_repr("_matmul_ogs", [0, 1, 2])
@@ -92,7 +85,9 @@ def _matmul_ogs(
              TOKENS_PER_EXPT_FOR_ANNOTATION=None,
              UPCAST_INDICES: tl.constexpr = False,
              SWAP_XW: tl.constexpr = False,
-             IS_EPILOGUE_DEQUANT_MXFP8: tl.constexpr = False):
+             IS_EPILOGUE_DEQUANT_MXFP8: tl.constexpr = False,
+             use_fp8_matmul: tl.constexpr = False
+             ):
 
     is_w_microscaled: tl.constexpr = WMxScale is not None
     MX_PACK_DIVISOR: tl.constexpr = MXFP_BLOCK_SIZE
@@ -301,19 +296,20 @@ def _matmul_ogs(
 
             if SWIZZLE_MX_VALUE == "HOPPER_VALUE":
                 # Handshake with the swizzling code
-                tl.static_assert(x_format == "bf16")
+                tl.static_assert(x_format == "bf16" or x_format == "e4m3")
                 tl.static_assert(w_format == "e2m1")
-            
-                tl.static_assert(use_fp8_matmul() == False)
 
-                if use_fp8_matmul():
+                if use_fp8_matmul:
                     fp8_dtype = tl.float8e4b8 if is_hip() else tl.float8e4nv
                     w = mxfp4_to_fp8_e4m3_fn_trition(w.trans(), w_scales, 1, fp8_dtype=fp8_dtype)
-                    x = x.to(fp8_dtype)
-                    tl.static_assert(w.dtype == fp8_dtype)
+                    if x_format != "e4m3":
+                        x = x.to(fp8_dtype)
                 else:
-                    w = mxfp4_to_bf16_triton(w.trans(), w_scales, 1)
-                    tl.static_assert(w.dtype == tl.bfloat16)
+                    if x_format == "bf16":
+                        w = mxfp4_to_bf16_triton(w.trans(), w_scales, 1)
+                    elif x_format == "e4m3":
+                        fp8_dtype = tl.float8e4b8 if is_hip() else tl.float8e4nv
+                        w = mxfp4_to_fp8_e4m3_fn_trition(w.trans(), w_scales, 1, fp8_dtype=fp8_dtype)
 
                 acc = acc.trans()
                 x = x.trans()
