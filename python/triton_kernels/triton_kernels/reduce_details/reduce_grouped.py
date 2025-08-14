@@ -117,7 +117,7 @@ def reduce_grouped(x: torch.Tensor, indx: torch.Tensor, x_flex: InFlexData | Non
     out_dtype = x.dtype if out_dtype is None else out_dtype
     out = torch.empty((num_groups, x.shape[-1]), dtype=out_dtype, device=x.device)
     if has_out_mx_scale:
-        out_mx_scale = torch.empty((num_groups, x.shape[-1] // 32), dtype=torch.uint8, device=x.device)
+        out_mx_scale = torch.empty((num_groups, triton.cdiv(x.shape[-1], 32)), dtype=torch.uint8, device=x.device)
     else:
         out_mx_scale = None
     BLOCK_N = 512
