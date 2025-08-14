@@ -2,9 +2,9 @@ from __future__ import annotations
 from typing import Optional, Tuple, List, TYPE_CHECKING
 
 from dataclasses import dataclass
-import triton
+from triton.runtime.jit import constexpr_function
 from triton.experimental.gluon.language import _core as ttgl
-from triton.experimental.gluon.language._core import builtin, base_type, base_value, _unwrap_if_constexpr, constexpr_function
+from triton.experimental.gluon.language._core import builtin, base_type, base_value, _unwrap_if_constexpr
 from triton.experimental.gluon.language._layouts import BlockedLayout, _get_shape_per_cta
 from triton.experimental.gluon.language._semantic import _check
 
@@ -63,6 +63,11 @@ class TensorMemoryLayout:
 
 
 @constexpr_function
+def _cdiv(x, div):
+    return (x + div - 1) // div
+
+
+@constexpr_function
 def get_tmem_32x32b_reg_layout(M, N, shape, num_warps, ctas_per_cga=None, cta_split_num=None, cta_order=None):
     """Returns a BlockedLayout compatible with load/store on tensor memory with the 32x32b instruction variant.
     """
@@ -77,19 +82,19 @@ def get_tmem_32x32b_reg_layout(M, N, shape, num_warps, ctas_per_cga=None, cta_sp
     if M == 64:
         threads_per_warp = [16, 2]
         if num_blocks == 1:
-            size_per_thread = [1, triton.cdiv(N, num_warp_groups * 2)]
+            size_per_thread = [1, _cdiv(N, num_warp_groups * 2)]
             warps_per_cta = [4, num_warp_groups]
         else:
-            size_per_thread = [1, triton.cdiv(N, 2)]
+            size_per_thread = [1, _cdiv(N, 2)]
             warps_per_cta = [4 * min(blocks_per_tile[0], num_warp_groups)]
-            warps_per_cta.append(triton.cdiv(num_warp_groups, warps_per_cta[0] // 4))
+            warps_per_cta.append(_cdiv(num_warp_groups, warps_per_cta[0] // 4))
     else:
         if shape[0] > 128:
             size_per_thread = [1, N]
             threads_per_warp = [32, 1]
             warps_per_cta = [4 * num_warp_groups, 1]
         else:
-            size_per_thread = [1, triton.cdiv(N, num_warp_groups)]
+            size_per_thread = [1, _cdiv(N, num_warp_groups)]
             threads_per_warp = [32, 1]
             warps_per_cta = [4, num_warp_groups]
     return BlockedLayout(

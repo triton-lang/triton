@@ -2,9 +2,9 @@ from triton.experimental.gluon.language import _core as ttgl
 from ..._core import builtin, float32
 from ..._layouts import DotOperandLayout
 from .._layouts import AMDMFMALayout
-from ..cdna3 import buffer_load_to_shared, buffer_load, buffer_store
+from ..cdna3 import buffer_load_to_shared, buffer_load, buffer_store, mfma
 
-__all__ = ["buffer_load_to_shared", "buffer_load", "buffer_store", "mfma_scaled"]
+__all__ = ["buffer_load_to_shared", "buffer_load", "buffer_store", "mfma", "mfma_scaled"]
 
 
 @builtin

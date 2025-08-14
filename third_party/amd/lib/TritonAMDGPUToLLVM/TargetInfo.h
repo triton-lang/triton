@@ -26,6 +26,9 @@ public:
   Value ballot(RewriterBase &rewriter, Location loc, Type type,
                Value cmp) const override;
 
+  void barrier(Location loc, RewriterBase &rewriter,
+               bool isWarpSync = false) const override;
+
   void storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
                     std::optional<Value> ctaId, Value val,
                     Value pred) const override;
@@ -42,6 +45,9 @@ public:
                    int i) const override;
   Value shuffleIdx(RewriterBase &rewriter, Location loc, Value val,
                    Value i) const override;
+
+  Value permute(RewriterBase &rewriter, Location loc, Value a, Value b,
+                Value selector) const override;
 
   Value programId(RewriterBase &rewriter, Location loc, ModuleOp moduleOp,
                   ProgramIDDim axis) const override;
