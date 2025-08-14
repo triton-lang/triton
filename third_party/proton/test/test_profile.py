@@ -15,7 +15,6 @@ import threading
 import triton.language as tl
 from triton.profiler.hooks.launch import COMPUTE_METADATA_SCOPE_NAME
 import triton.profiler.hooks.launch as proton_launch
-import triton.profiler.language as pl
 
 
 def is_cuda():
@@ -412,4 +411,3 @@ def test_trace(tmp_path: pathlib.Path):
         assert len(trace_events) == 3
         assert trace_events[-1]["name"] == "foo"
         assert trace_events[-1]["args"]["call_stack"] == ["ROOT", "test", "foo"]
-
