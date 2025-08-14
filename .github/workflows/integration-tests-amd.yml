@@ -164,6 +164,9 @@ jobs:
           # Reenable test_functional_regression.py once it's fixed
           cd python/test/regression
           python3 -m pytest -s -n 8 ./test_cast_matmul.py
+      - name: Run microbenchmark tests
+        run: |
+          python3 python/test/microbenchmark/launch_overhead.py
       - name: Run Proton tests
         run: |
           unset HIP_VISIBLE_DEVICES
