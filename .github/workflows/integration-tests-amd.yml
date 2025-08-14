@@ -120,7 +120,9 @@ jobs:
           pytest --capture=tee-sys -rfs -n 8 python/test/gluon/
 
           pytest --capture=tee-sys -rfs python/tutorials/06-fused-attention.py
-          pytest --capture=tee-sys -rfs third_party/amd/python/test/test_extract_slice_concat_op.py
+          pytest --capture=tee-sys -rfs -n 8 third_party/amd/python/test/ \
+                --ignore=third_party/amd/python/test/test_scalarize_packed_fops.py \
+                --ignore=third_party/amd/python/test/test_address_sanitizer.py
           TRITON_ALWAYS_COMPILE=1 pytest --capture=tee-sys -rfs third_party/amd/python/test/test_scalarize_packed_fops.py
           cd python/test/unit
           pytest --capture=tee-sys -rfs -n 12 language runtime tools \
