@@ -108,6 +108,16 @@ InstrumentationProfiler::getParserConfig(uint64_t functionId,
   config->totalUnits = functionMetadata.at(functionId).getNumWarps();
   config->numBlocks = bufferSize / config->scratchMemSize;
   config->uidVec = getUnitIdVector(modeOptions, config->totalUnits);
+
+  // Check if the uidVec is valid
+  for (auto uid : config->uidVec)
+    if (uid >= config->totalUnits) {
+      throw std::runtime_error(
+          "Invalid sampling warp id: " + std::to_string(uid) + ". We have " +
+          std::to_string(config->totalUnits) +
+          " warps in total. Please check the proton sampling options.");
+    }
+
   config->device = Device();
   config->device.type = runtime->getDeviceType();
 
@@ -218,7 +228,7 @@ void InstrumentationProfiler::exitInstrumentedOp(uint64_t streamId,
 
   runtime->synchronizeStream(reinterpret_cast<void *>(streamId));
   runtime->processHostBuffer(
-      hostBuffer, DEFAULT_HOST_BUFFER_SIZE, buffer, size, priorityStream,
+      hostBuffer, size, buffer, size, priorityStream,
       [&](uint8_t *bufferPtr, size_t size) {
         ByteSpan byteSpan(bufferPtr, size);
         CircularLayoutParser parser(byteSpan, *circularLayoutConfig);

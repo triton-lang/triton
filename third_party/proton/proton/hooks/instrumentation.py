@@ -37,15 +37,6 @@ class CudaAllocator:
         # more efficient profiling data processing, rather than relying solely on post-processing.
         aligned_size = max(aligned_size, self.instrumentation_hook.profile_buffer_size)
 
-        # FIXME(fywkevin): remove this constraint after we fix the instrumentation profiler memory copy issue.
-        # This matches `DEFAULT_HOST_BUFFER_SIZE` in
-        # triton/third_party/proton/csrc/lib/Profiler/Instrumentation/InstrumentationProfiler.cpp
-        DEFAULT_HOST_BUFFER_SIZE = 64 * 1024 * 1024  # 64 MB
-        if aligned_size > DEFAULT_HOST_BUFFER_SIZE:
-            raise RuntimeError(
-                f"Profiler buffer size exceeds the maximum supported size ({DEFAULT_HOST_BUFFER_SIZE} bytes).\n"
-                f"Tried to allocate {aligned_size} byte. Please consider using a smaller grid size.")
-
         # Create the buffer
         import torch
         buffer = torch.empty((aligned_size, ), dtype=torch.uint8, device="cuda")
