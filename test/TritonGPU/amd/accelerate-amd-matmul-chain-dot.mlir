@@ -136,14 +136,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // -----
 
 // Check kWidth of both operands of the 2nd dot. To avoid in-warp shuffle for
-// the layout conversion from #mma to #dotOp, kWidth should be set to 8
+// the layout conversion from #mma to #dotOp, kWidth should be set to 4
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [16, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
 #dotOp0 = #ttg.dot_op<{opIdx = 0, parent = #blocked}>
 #dotOp1 = #ttg.dot_op<{opIdx = 1, parent = #blocked}>
 // CHECK-LABEL: mfma_chain_dot_kWidth_f16
 // CHECK-GFX950: tt.dot {{.*}} : {{.*}} -> tensor<128x128xf32, #mma>
-// CHECK-GFX950: tt.dot {{.*}} : tensor<128x128xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> {{.*}}
+// CHECK-GFX950: tt.dot {{.*}} : tensor<128x128xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>> * tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>> -> {{.*}}
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
   tt.func public @mfma_chain_dot_kWidth_f16(
       %q: tensor<128x128xf16, #dotOp0>,
@@ -167,7 +167,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #dotOp1 = #ttg.dot_op<{opIdx = 1, parent = #blocked}>
 // CHECK-LABEL: mfma_chain_dot_kWidth_bf16
 // CHECK-GFX950: tt.dot {{.*}} : {{.*}} -> tensor<128x128xf32, #mma>
-// CHECK-GFX950: tt.dot {{.*}} : tensor<128x128xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<128x128xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> {{.*}}
+// CHECK-GFX950: tt.dot {{.*}} : tensor<128x128xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>> * tensor<128x128xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>> -> {{.*}}
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
   tt.func public @mfma_chain_dot_kWidth_bf16(
       %q: tensor<128x128xbf16, #dotOp0>,
