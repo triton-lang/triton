@@ -18,17 +18,15 @@ namespace {
 
 constexpr int64_t kMaxDivisor = highestPowOf2Divisor<int64_t>(0);
 
-int64_t gcdImpl(int64_t a, int64_t b) { return std::gcd(a, b); }
-
 template <typename... Args> int64_t gcd(int64_t a, int64_t b, Args... args) {
   if (a == 0)
     return b;
   if (b == 0)
     return a;
   if constexpr (sizeof...(args) == 0)
-    return gcdImpl(a, b);
+    return std::gcd(a, b);
   else
-    return gcd(gcdImpl(a, b), args...);
+    return gcd(std::gcd(a, b), args...);
 }
 
 constexpr int log2Int(int64_t num) {
