@@ -2,6 +2,7 @@ from ..state import enter_state, exit_state
 from triton.compiler import LazyDict
 from .hook import Hook
 from triton._C.libproton import proton as libproton
+from contextvars import ContextVar
 
 COMPUTE_METADATA_SCOPE_NAME = "__proton_launch_metadata"
 
@@ -15,8 +16,8 @@ class LaunchHook(Hook):
     metrics = [f"flops{width}" for width in flops_width] + ["bytes"] + ["flops"]
 
     def __init__(self):
-        self.op_name = None
-        self.id = None
+        self.op_name = ContextVar("op_name", default=None)
+        self.id = ContextVar("id", default=None)
 
     def __new__(cls):
         if cls._instance is None:
