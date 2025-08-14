@@ -27,7 +27,7 @@ jobs:
         continue-on-error: true
 
       - name: Install dependent packages
-        run: make docs-requirements
+        run: sudo -E make docs-requirements
 
       #- name: Fetch dependent branches
       #  run: |

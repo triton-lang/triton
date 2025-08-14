@@ -131,7 +131,7 @@ docs-requirements:
 	$(PYTHON) -m pip install -r docs/requirements.txt -q
 
 .PHONY: docs-only
-docs-only: docs-only
+docs-only:
 	cd docs; PATH="$(BUILD_DIR):$(PATH)" $(PYTHON) -m sphinx . _build/html/main
 
 .PHONY: docs
