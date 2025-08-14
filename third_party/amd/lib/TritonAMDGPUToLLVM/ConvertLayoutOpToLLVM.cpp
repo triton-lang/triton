@@ -84,7 +84,8 @@ public:
     auto srcLL = triton::gpu::toLinearLayout(srcTy);
     auto rmSrc = actionRemoveBroadcastedRegs(srcLL);
     inVals = rmSrc.apply(inVals);
-
+    // The input values may require broadcasting so that the conversion can be
+    // described as a permutation. This does not cost anything for simple cases.
     int regDim = inVals.size();
     int pRegDim = pReg.getInDimSize(kReg);
     if (pRegDim > regDim) {
@@ -210,6 +211,9 @@ public:
     }
 
     // Handle broadcasting in registers.
+    // The `factors` produce output values which may contain broadcasting.
+    // This needs to be removed before using `broadcastAs` to get the correct
+    // broadcasting as expected by the original destination layout.
     auto dstLL = triton::gpu::toLinearLayout(dstTy);
     auto rmDst = actionRemoveBroadcastedRegs(dstLL);
     auto strippedDst = rmDst.apply(dstLL);
