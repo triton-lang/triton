@@ -1723,16 +1723,19 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 @pytest.mark.parametrize("target", [HIP_TARGET_CDNA4])
 def test_amd_mfma_scaled(target):
+
     @gluon.jit
     def kernel():
-        mfma_layout: ttgl.constexpr = ttgl.amd.AMDMFMALayout(
-            version=4, warps_per_cta=[1, 1], tiles_per_warp=[1, 1],
-            instr_shape=[16, 16], transposed=True)
-        scale_layout: ttgl.constexpr = ttgl.DistributedLinearLayout(
-            [], [[1, 0], [2, 0], [4, 0], [8, 0], [0, 1], [0, 2]], [], [], [16, 4])
+        mfma_layout: ttgl.constexpr = ttgl.amd.AMDMFMALayout(version=4, warps_per_cta=[1, 1], tiles_per_warp=[1, 1],
+                                                             instr_shape=[16, 16], transposed=True)
+        scale_layout: ttgl.constexpr = ttgl.DistributedLinearLayout([],
+                                                                    [[1, 0], [2, 0], [4, 0], [8, 0], [0, 1], [0, 2]],
+                                                                    [], [], [16, 4])
 
-        a = ttgl.full([16, 64], 0x11, ttgl.uint8, ttgl.DotOperandLayout(operand_index=0, parent=mfma_layout, k_width=16))
-        b = ttgl.full([64, 16], 0x22, ttgl.uint8, ttgl.DotOperandLayout(operand_index=1, parent=mfma_layout, k_width=16))
+        a = ttgl.full([16, 64], 0x11, ttgl.uint8, ttgl.DotOperandLayout(operand_index=0, parent=mfma_layout,
+                                                                        k_width=16))
+        b = ttgl.full([64, 16], 0x22, ttgl.uint8, ttgl.DotOperandLayout(operand_index=1, parent=mfma_layout,
+                                                                        k_width=16))
         a_scale = ttgl.full([16, 4], 0x02, ttgl.uint8, scale_layout)
         b_scale = ttgl.full([16, 4], 0x01, ttgl.uint8, scale_layout)
         acc = ttgl.full([16, 16], 0, ttgl.float32, mfma_layout)
