@@ -2430,6 +2430,56 @@ TEST_F(LinearLayoutConversionsTest, mfma32_dot_op_rhs_tran_fp4_mn_packeds) {
                                     /*elemBitWidth=*/4));
 }
 
+TEST_F(LinearLayoutConversionsTest, transposed_load_column_major) {
+  auto currentLayout =
+      blocked({8, 1}, {16, 2}, {1, 4}, {1, 1}, {1, 1}, {0, 1}, {0, 1});
+  std::array<int64_t, 2> shape = {128, 64};
+
+  auto [layoutAddr, layoutData] =
+      triton::gpu::chooseGlobalLoadTrLayout(currentLayout, shape);
+  EXPECT_EQ(
+      layoutAddr,
+      LinearLayout(
+          {{S("register"), {{1, 0}, {2, 0}, {4, 0}, {32, 0}, {64, 0}, {0, 32}}},
+           {S("lane"), {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 16}}},
+           {S("warp"), {{8, 0}, {16, 0}}},
+           {S("block"), {}}},
+          {S("dim0"), S("dim1")}));
+  EXPECT_EQ(
+      layoutData,
+      LinearLayout(
+          {{S("register"), {{0, 1}, {0, 2}, {0, 4}, {32, 0}, {64, 0}, {0, 32}}},
+           {S("lane"), {{1, 0}, {2, 0}, {4, 0}, {0, 8}, {0, 16}}},
+           {S("warp"), {{8, 0}, {16, 0}}},
+           {S("block"), {}}},
+          {S("dim0"), S("dim1")}));
+}
+
+TEST_F(LinearLayoutConversionsTest, transposed_load_row_major) {
+  auto currentLayout =
+      blocked({1, 8}, {2, 16}, {4, 1}, {1, 1}, {1, 1}, {1, 0}, {1, 0});
+  std::array<int64_t, 2> shape = {128, 64};
+
+  auto [layoutAddr, layoutData] =
+      triton::gpu::chooseGlobalLoadTrLayout(currentLayout, shape);
+  EXPECT_EQ(
+      layoutAddr,
+      LinearLayout(
+          {{S("register"), {{0, 1}, {0, 2}, {0, 4}, {0, 32}, {32, 0}, {64, 0}}},
+           {S("lane"), {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {16, 0}}},
+           {S("warp"), {{0, 8}, {0, 16}}},
+           {S("block"), {}}},
+          {S("dim0"), S("dim1")}));
+  EXPECT_EQ(
+      layoutData,
+      LinearLayout(
+          {{S("register"), {{1, 0}, {2, 0}, {4, 0}, {0, 32}, {32, 0}, {64, 0}}},
+           {S("lane"), {{0, 1}, {0, 2}, {0, 4}, {8, 0}, {16, 0}}},
+           {S("warp"), {{0, 8}, {0, 16}}},
+           {S("block"), {}}},
+          {S("dim0"), S("dim1")}));
+}
+
 TEST_F(LinearLayoutConversionsTest, WMMA_v1_2x4Warps) {
   auto legacy = wmma(/*warps=*/{2, 4}, /*version=*/1, /*transposed=*/false);
 

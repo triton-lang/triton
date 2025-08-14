@@ -14,6 +14,7 @@ add_triton_library(TritonAMDGPUTransforms
   FoldTrueCmpIOp.cpp
   UpdateAsyncWaitCount.cpp
   Utility.cpp
+  ConvertToTransposeLoads.cpp
 
   DEPENDS
   TritonAMDGPUIR

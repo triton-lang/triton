@@ -27,6 +27,10 @@ def is_in_thread_transpose_enabled(arch):
     return (arch == "gfx942") if knobs.amd.use_in_thread_transpose is None else knobs.amd.use_in_thread_transpose
 
 
+def is_global_load_transpose_enabled(arch):
+    return "gfx12" in arch
+
+
 @dataclass(frozen=True)
 class HIPOptions:
     num_warps: int = 4
@@ -236,6 +240,8 @@ class HIPBackend(BaseBackend):
         if options.schedule_hint.lower() != "none":
             amd.passes.ttgpuir.insert_instruction_sched_hints(pm, options.schedule_hint)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
+        if is_global_load_transpose_enabled(options.arch):
+            amd.passes.ttgpuir.add_convert_to_transpose_loads(pm)
         passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_reduce_data_duplication(pm)
         if is_in_thread_transpose_enabled(options.arch):

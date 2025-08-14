@@ -591,4 +591,27 @@ def LocalLoadPackedTransposedOp : TT_AMDGPU_Op<"local_load_packed_tranposed", [L
   let hasVerifier = 1;
 }
 
+//===----------------------------------------------------------------------===//
+// GlobalLoadTranspose
+//===----------------------------------------------------------------------===//
+
+def GlobalLoadTransposeOp : TT_AMDGPU_Op<"global_load_transpose", [
+  SameLoadStoreOperandsAndResultShape,
+  LayoutAnchor]> {
+  let summary = "Load tensor from global memory and transpose into registers";
+
+  let description = [{
+    Similar to a normal load operation, but transposes values before storing to registers.
+    This can be used to efficiently load tensors where k is not contiguous without any
+    expensive shared memory/in-thread transpose.
+  }];
+
+  let arguments = (ins Arg<TT_PtrTensor, "", [MemRead<GlobalMemory>]>:$ptr);
+
+  let results = (outs TT_Tensor:$result);
+
+  let assemblyFormat = [{$ptr attr-dict `:` type($ptr) `->` type($result)}];
+  let hasVerifier = 1;
+}
+
 #endif

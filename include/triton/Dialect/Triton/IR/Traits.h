@@ -119,6 +119,11 @@ public:
 template <typename ConcreteType>
 struct AsyncRegions : public TraitBase<ConcreteType, AsyncRegions> {};
 
+// This trait indicates that the layout of this operation should be preserved
+// and propagated to other ops if possible
+template <typename ConcreteType>
+struct LayoutAnchor : public TraitBase<ConcreteType, LayoutAnchor> {};
+
 } // namespace OpTrait
 } // namespace mlir
 
