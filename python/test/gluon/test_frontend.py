@@ -1468,7 +1468,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 
 @gluon.jit
-def add_int(a, b):
+def add(a, b):
     return a + b
 
 
@@ -1479,7 +1479,7 @@ def infer_layout_for_amd_mfma_kernel():
                                                                                             1], tiles_per_warp=[4, 1],
                                                        ctas_per_cga=[1, 1], cta_split_num=[1, 1], cta_order=[1, 0])
     a = ttgl.full([128, 32], 1, ttgl.int32, layout)
-    b = ttgl.reduce(a, 1, add_int)
+    b = ttgl.reduce(a, 1, add)
     ttgl.static_assert(b.type.layout == ttgl.SliceLayout(1, layout))
 
 
@@ -1496,12 +1496,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %cst = arith.constant dense<1> : tensor<128x32xi32, #mma>
     %0 = "tt.reduce"(%cst) <{axis = 1 : i32}> ({
     ^bb0(%arg0: i32, %arg1: i32):
-      %1 = tt.call @test_frontend.add_int__i32_i32__(%arg0, %arg1) : (i32, i32) -> i32
+      %1 = tt.call @test_frontend.add__i32_i32__(%arg0, %arg1) : (i32, i32) -> i32
       tt.reduce.return %1 : i32
     }) : (tensor<128x32xi32, #mma>) -> tensor<128xi32, #ttg.slice<{dim = 1, parent = #mma}>>
     tt.return
   }
-  tt.func private @test_frontend.add_int__i32_i32__(%arg0: i32, %arg1: i32) -> i32 attributes {noinline = false} {
+  tt.func private @test_frontend.add__i32_i32__(%arg0: i32, %arg1: i32) -> i32 attributes {noinline = false} {
     %0 = arith.addi %arg0, %arg1 : i32
     tt.return %0 : i32
   ^bb1:  // no predecessors
@@ -1715,6 +1715,60 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %10 = amdgpu.buffer_load %arg0[%2], %9, %cst_5 cacheModifier = ca : tensor<64x64xf32, #blocked>
     %11 = tt.broadcast %cst_3 : tensor<1x64xi1, #blocked> -> tensor<64x64xi1, #blocked>
     amdgpu.buffer_store %10, %arg1[%2], %11 cacheModifier = ca : tensor<64x64xf32, #blocked>
+    tt.return
+  }
+}
+""")
+
+
+@gluon.jit
+def padded_shared_layout_kernel():
+    padded_shared_layout: ttgl.constexpr = ttgl.PaddedSharedLayout(interval_padding_pairs=[[2, 1], [4, 2], [8, 4]],
+                                                                   order=[1, 0], ctas_per_cga=[1, 1],
+                                                                   cta_split_num=[1, 1], cta_order=[1, 0])
+
+    ttgl.allocate_shared_memory(ttgl.int32, [64, 64], padded_shared_layout)
+
+
+@pytest.mark.parametrize("target", [HIP_TARGET_CDNA3, HIP_TARGET_CDNA4])
+def test_padded_shared_layout(target):
+    # This test is used to test the construction of PaddedSharedEncodingAttr in the gluon.
+    module = run_parser(padded_shared_layout_kernel, target=target)
+    expecttest.assert_expected_inline(
+        anonymize_ir(module.str_nodebug()), """\
+#shared = #ttg.padded_shared<[2:+1, 4:+2, 8:+4] {order = [1, 0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @padded_shared_layout_kernel() attributes {noinline = false} {
+    %0 = ttg.local_alloc : () -> !ttg.memdesc<64x64xi32, #shared, #smem, mutable>
+    tt.return
+  }
+}
+""")
+
+
+@gluon.jit
+def infer_layout_for_padded_shared_kernel():
+    layout: ttgl.constexpr = ttgl.PaddedSharedLayout(interval_padding_pairs=[[2, 1], [4, 2], [8, 4]], order=[1, 0],
+                                                     ctas_per_cga=[1, 1], cta_split_num=[1, 1], cta_order=[1, 0])
+    smem = ttgl.allocate_shared_memory(ttgl.int32, [64, 64], layout)
+
+    smem.reshape((32, 128))
+
+
+@pytest.mark.parametrize("target", ALL_TARGETS)
+def test_infer_layout_for_padded_shared(target):
+    # This test is used to test the conversion to gluon object PaddedSharedLayout from PaddedSharedEncodingAttr.
+    # This conversion is in layoutToGluon and ttgl.reduce will finally use it.
+    module = run_parser(infer_layout_for_padded_shared_kernel, target=target)
+    expecttest.assert_expected_inline(
+        anonymize_ir(module.str_nodebug()), """\
+#shared = #ttg.padded_shared<[2:+1, 4:+2, 8:+4] {order = [1, 0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @infer_layout_for_padded_shared_kernel() attributes {noinline = false} {
+    %0 = ttg.local_alloc : () -> !ttg.memdesc<64x64xi32, #shared, #smem, mutable>
+    %1 = ttg.memdesc_reshape %0 : !ttg.memdesc<64x64xi32, #shared, #smem, mutable> -> !ttg.memdesc<32x128xi32, #shared, #smem, mutable>
     tt.return
   }
 }
