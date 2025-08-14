@@ -465,46 +465,6 @@ LogicalResult ConcatOp::verify() {
   return success();
 }
 
-LogicalResult LocalLoadTransposedOp::verify() {
-  auto srcTy = getSrc().getType();
-  auto dstTy = getType();
-  auto srcShape = srcTy.getShape();
-  auto dstShape = dstTy.getShape();
-
-  if (srcShape.size() != dstShape.size()) {
-    return emitOpError("src and dst must have the same rank");
-  }
-
-  if (srcShape.size() != 2) {
-    return emitOpError("only 2D transpose is supported");
-  }
-
-  if ((dstShape[0] != srcShape[1]) || (dstShape[1] != srcShape[0])) {
-    return emitOpError("dst shape must be the transpose of src shape");
-  }
-
-  auto dotEnc = dyn_cast<DotOperandEncodingAttr>(dstTy.getEncoding());
-  if (!dotEnc)
-    return emitOpError("only works with DotOperandEncodingAttr dst encoding");
-
-  auto sharedEnc =
-      dyn_cast<triton::gpu::SwizzledSharedEncodingAttr>(srcTy.getEncoding());
-  if (!sharedEnc)
-    return emitOpError(
-        "only works with SwizzledSharedEncodingAttr src encoding");
-
-  unsigned opIdx = dotEnc.getOpIdx();
-  unsigned kDimIdx = (opIdx == 0) ? 1 : 0;
-  auto order = sharedEnc.getOrder();
-  bool isKContig = (order[0] == kDimIdx);
-
-  if (!isKContig) {
-    return emitOpError("Tensor must be k contiguous in shared memory");
-  }
-
-  return success();
-}
-
 LogicalResult LocalLoadPackedTransposedOp::verify() {
   auto srcTy = getSrc().getType();
   auto dstTy = getType();
