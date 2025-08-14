@@ -455,23 +455,12 @@ def test_sched_barrier(tmp_path: pathlib.Path):
 
     grid = lambda META: (triton.cdiv(M, BLOCK_SIZE_M) * triton.cdiv(N, BLOCK_SIZE_N), )
     kernel = matmul_kernel[grid](
-        a,
-        b,
-        c,  #
-        M,
-        N,
-        K,  #
-        a.stride(0),
-        a.stride(1),  #
-        b.stride(0),
-        b.stride(1),  #
-        c.stride(0),
-        c.stride(1),  #
-        BLOCK_SIZE_M,
-        BLOCK_SIZE_N,
-        BLOCK_SIZE_K,
-        GROUP_SIZE_M,
-    )
+        a, b, c,  #
+        M, N, K,  #
+        a.stride(0), a.stride(1),  #
+        b.stride(0), b.stride(1),  #
+        c.stride(0), c.stride(1),  #
+        BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, GROUP_SIZE_M)
     proton.finalize()
 
     asm = kernel.asm["amdgcn"]
@@ -555,12 +544,8 @@ def test_warp_spec(tmp_path: pathlib.Path):
             return (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), )
 
         matmul_kernel_tma[grid](
-            a_desc,
-            b_desc,
-            c_desc,  #
-            M,
-            N,
-            K,  #
+            a_desc, b_desc, c_desc,  #
+            M, N, K,  #
             BLOCK_SIZE_M=128,  #
             BLOCK_SIZE_N=256,  #
             BLOCK_SIZE_K=128,  #
@@ -568,8 +553,7 @@ def test_warp_spec(tmp_path: pathlib.Path):
             FP8_OUTPUT=dtype == torch.float8_e4m3fn,  #
             WARP_SPECIALIZE=warp_specialize,  #
             num_stages=2,  #
-            num_warps=8,
-        )
+            num_warps=8)
         return c
 
     mode = proton.mode.Default(metric_type="cycle", optimizations="clock32")
@@ -587,8 +571,8 @@ def test_warp_spec(tmp_path: pathlib.Path):
     with open(temp_file, "rb") as f:
         data = json.load(f)
         kernel_level = data[0]["children"][0]["children"][0]
-        assert kernel_level["children"][0]["frame"]["name"] == "loop"
-        assert kernel_level["children"][0]["metrics"]["cycles"] > 0
+        assert kernel_level["children"][0]["frame"]["name"] == 'loop'
+        assert kernel_level["children"][0]["metrics"]['cycles'] > 0
         assert kernel_level["frame"]["name"] == "kernel"
         assert kernel_level["metrics"]["cycles"] > 0
 
@@ -612,11 +596,11 @@ def test_timeline(tmp_path: pathlib.Path):
         pl.exit_scope("entire")
 
     with proton.scope("init"):
-        x = torch.ones((1024, ), device="cuda", dtype=torch.float32)
+        x = torch.ones((1024,), device="cuda", dtype=torch.float32)
         y = torch.zeros_like(x)
 
     with proton.scope("test"):
-        foo[(1, )](x, y, x.size()[0], num_warps=4)
+        foo[(1,)](x, y, x.size()[0], num_warps=4)
 
     proton.finalize()
 
