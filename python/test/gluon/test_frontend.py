@@ -1759,7 +1759,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   ^bb1:  // no predecessors
     %0 = ub.poison : tensor<64x64xf32, #mma>
     tt.return %0 : tensor<64x64xf32, #mma>
-  } origin/main
+  }
 }
 """)
 
