@@ -525,12 +525,12 @@ public:
     // TODO (lixun): relax the condition for 8-bit elementTy.
     if ((aElemTy.isF16() || aElemTy.isBF16()) &&
         (isChainDotTail(dotOp) ||
-         (isChainDotHead(dotOp) && hasTransInDefChain(dotOp)))) {
+         (isChainDotHead(dotOp) && hasTransInDefChain(dotOp, 1U)))) {
       kWidth = 4;
     }
 
     if ((aElemTy.isF16() || aElemTy.isBF16()) &&
-        (isChainDotTail(dotOp) && hasTransInDefChain(dotOp))) {
+        (isChainDotTail(dotOp) && hasTransInDefChain(dotOp, 1U))) {
       kWidth = 8;
     }
 

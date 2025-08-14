@@ -705,7 +705,7 @@ bool isChainDotHead(tt::DotOpInterface dotOp) {
   return false;
 }
 
-bool hasTransInDefChain(tt::DotOpInterface dotOp) {
+bool hasTransInDefChain(tt::DotOpInterface dotOp, unsigned opIdx) {
   auto isInSameRegion = [&dotOp](Operation *op) {
     return op->getParentRegion() == dotOp->getParentRegion();
   };
@@ -714,10 +714,12 @@ bool hasTransInDefChain(tt::DotOpInterface dotOp) {
   bwdOpt.omitBlockArguments = true;
   bwdOpt.filter = isInSameRegion;
   SetVector<Operation *> bwdSlices;
-  Operation *opB = dotOp.getB().getDefiningOp();
-  if (!opB)
+  Operation *dotOperand = (opIdx == 0) ? dotOp.getA().getDefiningOp()
+                                       : dotOp.getB().getDefiningOp();
+
+  if (!dotOperand)
     return false;
-  (void)getBackwardSlice(opB, &bwdSlices, bwdOpt);
+  (void)getBackwardSlice(dotOperand, &bwdSlices, bwdOpt);
   if (llvm::find_if(bwdSlices, [](Operation *op) {
         return isa<tt::TransOp>(op);
       }) != bwdSlices.end())
