@@ -64,6 +64,7 @@ _IMPORT_FROM_TRITON: List[str] = [
     "maximum",
     "minimum",
     "multiple_of",
+    "num_programs",
     "permute",
     "program_id",
     "reduce",
