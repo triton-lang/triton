@@ -33,7 +33,7 @@ createNewConvertOps(OpBuilder &builder, triton::gpu::ConvertLayoutOp &cvtOp,
 
 struct Resources {
   int LDSPad;
-  int LDSNoPad;
+  int LDSSwizzle;
 };
 
 Resources

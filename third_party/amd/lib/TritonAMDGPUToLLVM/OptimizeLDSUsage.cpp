@@ -153,32 +153,28 @@ class OptimizeAMDLDSUsage
     int minIdx = -1;
     bool currentBestHasPadding = true;
 
-    int LDS;
-    bool candidateHasPadding;
     for (int i = 0; i < tmpLayouts.size(); i++) {
       auto resources = mlir::triton::AMD::estimateResourcesForReplacement(
           builder, cvtOp, tmpLayouts[i]);
 
       // Select between padded and swizzled variants of the same tmpLayout
-      // Prioritize swizzling: use non-padded if it fits in budget or uses less
+      // Prioritize swizzling: use swizzled if it fits in budget or uses less
       // LDS
-      bool useSwizzling = (resources.LDSNoPad < targetLDSSize) ||
-                          (resources.LDSNoPad < resources.LDSPad);
-      LDS = useSwizzling ? resources.LDSNoPad : resources.LDSPad;
-      candidateHasPadding = !useSwizzling;
+      bool useSwizzling = (resources.LDSSwizzle < targetLDSSize) ||
+                          (resources.LDSSwizzle < resources.LDSPad);
+      int LDS = useSwizzling ? resources.LDSSwizzle : resources.LDSPad;
 
       LDBG("layout " << tmpLayouts[i] << " requires " << LDS << " bytes of LDS "
-                     << (candidateHasPadding ? "with" : "without")
-                     << " padding");
+                     << (useSwizzling ? "without" : "with") << " padding");
       // Now select the best layout among all valid candidates
       if (LDS < targetLDSSize) {
-        bool hasBetterLDS = (currentBestHasPadding == candidateHasPadding) &&
-                            (LDS < minLDSUsage);
-        bool prefersPadding = currentBestHasPadding && !candidateHasPadding;
-        if (hasBetterLDS || prefersPadding) {
+        bool hasBetterLDS =
+            (currentBestHasPadding != useSwizzling) && (LDS < minLDSUsage);
+        bool hasBetterLayout = currentBestHasPadding && useSwizzling;
+        if (hasBetterLDS || hasBetterLayout) {
           minLDSUsage = LDS;
           minIdx = i;
-          currentBestHasPadding = candidateHasPadding;
+          currentBestHasPadding = !useSwizzling;
         }
       }
     }

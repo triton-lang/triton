@@ -113,7 +113,7 @@ estimateResourcesForReplacement(OpBuilder builder,
                                                       /*usePadding*/ false);
 
   res.LDSPad = std::max(tmpCvtLDS, newCvtLDS);
-  res.LDSNoPad = std::max(tmpCvtLDSNoPad, newCvtLDSNoPad);
+  res.LDSSwizzle = std::max(tmpCvtLDSNoPad, newCvtLDSNoPad);
 
   return res;
 }
