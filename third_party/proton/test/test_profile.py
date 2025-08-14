@@ -8,7 +8,6 @@ import pathlib
 
 import triton.language as tl
 from triton.profiler.hooks.launch import COMPUTE_METADATA_SCOPE_NAME
-import triton.profiler.language as pl
 
 
 def is_cuda():
