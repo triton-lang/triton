@@ -11,6 +11,8 @@ jobs:
   Build-Documentation:
     runs-on: [nvidia-a100]
     timeout-minutes: 30
+    env:
+      PYTHON: "python3"
 
     steps:
       - name: Checkout branch

@@ -132,7 +132,7 @@ docs-requirements:
 
 .PHONY: docs-only
 docs-only: docs-only
-	cd docs; PATH="$(BUILD_DIR):$(PATH)" python -m sphinx . _build/html/main
+	cd docs; PATH="$(BUILD_DIR):$(PATH)" $(PYTHON) -m sphinx . _build/html/main
 
 .PHONY: docs
 .NOPARALLEL: docs
