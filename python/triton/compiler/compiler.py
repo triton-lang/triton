@@ -63,12 +63,9 @@ class ASTSource:
                 assert isinstance(k, tuple)
                 self.constants[k] = v
         self.attrs = attrs or dict()
-        if isinstance(self.signature, str):
-            self.signature = {k: v.strip() for k, v in enumerate(self.signature.split(","))}
-        else:
-            for k in self.signature.keys():
-                if not isinstance(k, str):
-                    raise TypeError("Signature keys must be string")
+        for k in self.signature.keys():
+            if not isinstance(k, str):
+                raise TypeError("Signature keys must be string")
 
     def hash(self):
         sorted_sig = [v for k, v in sorted(self.signature.items())]
@@ -454,22 +451,20 @@ class CompiledKernel:
             max_tmem_size = 512  # tmem size in number of columns
             if self.metadata.tmem_size > max_tmem_size:
                 raise OutOfResources(self.metadata.tmem_size, max_tmem_size, "tensor memory")
+        if knobs.runtime.kernel_load_start_hook is not None:
+            knobs.runtime.kernel_load_start_hook(self.module, self.function, self.name, self.metadata_group, self.hash)
         # TODO: n_regs, n_spills should be metadata generated when calling `ptxas`
         self.module, self.function, self.n_regs, self.n_spills, self.n_max_threads = driver.active.utils.load_binary(
             self.name, self.kernel, self.metadata.shared, device)
         warp_size = driver.active.get_current_target().warp_size
         if self.metadata.num_warps * warp_size > self.n_max_threads:
             raise OutOfResources(self.metadata.num_warps * warp_size, self.n_max_threads, "threads")
-        if knobs.runtime.init_handle_hook is not None:
-            knobs.runtime.init_handle_hook(self.module, self.function, self.name, self.metadata_group)
+        if knobs.runtime.kernel_load_end_hook is not None:
+            knobs.runtime.kernel_load_end_hook(self.module, self.function, self.name, self.metadata_group, self.hash)
 
     @property
     def run(self):
-        # it should be safe to do this as launch_metadata will
-        # call _init_handles before running the kernel or it
-        # was called manually or it was already initialized
-        if self._run is None:
-            self._init_handles()
+        self._init_handles()
         return self._run
 
     def launch_metadata(self, grid, stream, *args):
