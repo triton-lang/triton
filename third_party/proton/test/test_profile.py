@@ -276,7 +276,7 @@ def test_hook_multi_thread(tmp_path: pathlib.Path):
     y_bar = torch.zeros_like(x_bar)
 
     temp_file = tmp_path / "test_hook.hatchet"
-    proton.start(str(temp_file.with_suffix("")), hook="triton", context=context)
+    proton.start(str(temp_file.with_suffix("")), hook="triton")
 
     # start multiple threads
     def invoke_foo():
