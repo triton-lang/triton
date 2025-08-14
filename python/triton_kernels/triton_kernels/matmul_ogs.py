@@ -413,6 +413,11 @@ def matmul_ogs(x, w, bias,
                    **opt_flags.target_kernel_kwargs)
     # split-k + expert accumulation
     out = out if is_input_batched else out.squeeze(0)
+    if not is_input_batched:
+        out = out.squeeze(1)
+    if scatter_indx is None and opt_flags.split_k == 1:
+        return out.squeeze(0)
+
     # reduce expert groups
     if scatter_indx is None:
         group_indx = None
@@ -420,20 +425,24 @@ def matmul_ogs(x, w, bias,
         group_indx = scatter_indx.src_indx.view(-1, routing_data.n_expts_act)
     out_flex = precision_config.flex_ctx.out_data
     # Prepare in-flex scale for intermediate rows (use output expected scale)
-    x_flex_in = None if out_flex.expected_scale is None else InFlexData(scale=out_flex.expected_scale)
+    x_flex_in = None if out_flex.expected_scale is None or out.dtype == torch.float32 else InFlexData(scale=out_flex.expected_scale)
     # Optional per-32-col mxfp output scales buffer
-    out_scale = None
-    out = out[:, 0, :, :]
-    if out_has_mx and "mx_out_scale" in memory["scratchpad"]:
-        out_scale = memory["scratchpad"]["mx_out_scale"][:, 0, :, :]
-    out = reduce_grouped_mod.reduce_grouped(
+    out_has_mx = out_scale is not None
+    x_mx_scale = None
+    if out_has_mx and opt_flags.split_k == 1 and "mx_out_scale" in memory["scratchpad"]:
+        x_mx_scale = memory["scratchpad"]["mx_out_scale"][:, 0, :, :]
+    out, out_mx_scale = reduce_grouped_mod.reduce_grouped(
         out,
         group_indx,
         x_flex=x_flex_in,
         out_flex=out_flex,
-        x_mx_scale=out_scale,
+        has_out_mx_scale=out_has_mx,
+        x_mx_scale=x_mx_scale,
+        out_dtype=memory["output"].dtype,
         flexpoint_saturate_inf=precision_config.flexpoint_saturate_inf,
     )
+    if out_mx_scale is not None:
+        precision_config.out_scale = out_mx_scale
     return out
 
 # -----------------------------------------------------------------------------
