@@ -50,7 +50,7 @@ def do_bench_walltime(fn):
     end_time = time.perf_counter()
     estimate_ms = end_time - start_time
 
-    n_repeat = max(1, int(100 / estimate_ms))
+    n_repeat = 10000
 
     mses = []
 
