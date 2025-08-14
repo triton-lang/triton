@@ -458,9 +458,9 @@ def dynamic_func({", ".join(list(map(arg, sig.parameters.items())) + ["**options
         if param.default is not inspect.Parameter.empty
     }
 
+    specialize_impl = native_specialize_impl if use_native_specialize else create_specialize_fallback()
     func_namespace["JITFunction"] = JITFunction
-    func_namespace["specialize_impl"] = native_specialize_impl if use_native_specialize else create_specialize_fallback(
-    )
+    func_namespace["specialize_impl"] = specialize_impl
     func_namespace["backend"] = backend
 
     # Execute the function string in func_namespace to create the function

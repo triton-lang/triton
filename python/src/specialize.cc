@@ -8,6 +8,7 @@
 #include <string>
 #include <unordered_map>
 #include <utility>
+#include <unistd.h>
 
 namespace {
 
@@ -32,10 +33,13 @@ using TypeHandler = std::pair<py::handle, py::handle> (*)(PyObject *,
                                                           bool, bool);
 using TypeHandlerCache = std::unordered_map<PyTypeObject *, TypeHandler>;
 
-std::pair<py::handle, py::handle> specialize_arg(PyObject *backend,
+static std::pair<py::handle, py::handle> specialize_arg(PyObject *backend,
                                                  PyObject *arg, bool is_const,
                                                  bool specialize_value,
                                                  bool align);
+
+static bool init_called = false;
+static pid_t init_pid = 0;
 
 static PyObject *constexpr_cls = nullptr;
 static PyObject *jit_function_cls = nullptr;
@@ -71,176 +75,231 @@ static Dtype2Str dtype2str;
 static TensorDescCache tensor_desc_cache;
 static TypeHandlerCache type_handler_cache;
 
-static bool init_lazy_called = false;
 
-static void cleanup_lazy_str() {
-  Py_XDECREF(jit_function_cls);
-  Py_XDECREF(tensor_descriptor_cls);
-  Py_XDECREF(gluon_tensor_descriptor_cls);
-  Py_XDECREF(canonicalize_dtype_fn);
-  Py_XDECREF(canonicalize_ptr_dtype_fn);
-  Py_XDECREF(constexpr_cls);
-  Py_XDECREF(torch_tensor_cls);
+static void init_interned_strings() {
+  i32_str = PyUnicode_InternFromString("i32");
+  if (!i32_str) goto cleanup;
+  i64_str = PyUnicode_InternFromString("i64");
+  if (!i64_str) goto cleanup;
+  u64_str = PyUnicode_InternFromString("u64");
+  if (!u64_str) goto cleanup;
+  fp32_str = PyUnicode_InternFromString("fp32");
+  if (!fp32_str) goto cleanup;
+  u1_str = PyUnicode_InternFromString("u1");
+  if (!u1_str) goto cleanup;
+  D_str = PyUnicode_InternFromString("D");
+  if (!D_str) goto cleanup;
+  constexpr_str = PyUnicode_InternFromString("constexpr");
+  if (!constexpr_str) goto cleanup;
+  empty_str = PyUnicode_InternFromString("");
+  if (!empty_str) goto cleanup;
+  nvTmaDesc_str = PyUnicode_InternFromString("nvTmaDesc");
+  if (!nvTmaDesc_str) goto cleanup;
+
+  base_attr = PyUnicode_InternFromString("base");
+  if (!base_attr) goto cleanup;
+  data_ptr_attr = PyUnicode_InternFromString("data_ptr");
+  if (!data_ptr_attr) goto cleanup;
+  dtype_attr = PyUnicode_InternFromString("dtype");
+  if (!dtype_attr) goto cleanup;
+  cache_key_attr = PyUnicode_InternFromString("cache_key");
+  if (!cache_key_attr) goto cleanup;
+  tma_desc_cpu_ptr_attr = PyUnicode_InternFromString("tma_desc_cpu_ptr");
+  if (!tma_desc_cpu_ptr_attr) goto cleanup;
+  _fields_attr = PyUnicode_InternFromString("_fields");
+  if (!_fields_attr) goto cleanup;
+  block_shape_attr = PyUnicode_InternFromString("block_shape");
+  if (!block_shape_attr) goto cleanup;
+  layout_attr = PyUnicode_InternFromString("layout");
+  if (!layout_attr) goto cleanup;
+  has_native_tensor_spec_attr =
+      PyUnicode_InternFromString("supports_native_tensor_specialization");
+  if (!has_native_tensor_spec_attr) goto cleanup;
+  get_tensor_spec_attr =
+      PyUnicode_InternFromString("get_tensor_specialization");
+  if (!get_tensor_spec_attr) goto cleanup;
+
+  return;
+
+cleanup:
+  if (!PyErr_Occurred()) {
+    PyErr_SetString(
+        PyExc_RuntimeError,
+        "failed to initialize __triton_specialize module objects");
+  }
+  return;
 }
 
-static void cleanup_static_str() {
+static void cleanup_interned_strings() {
+  Py_XDECREF(jit_function_cls);
+  jit_function_cls = nullptr;
+  Py_XDECREF(tensor_descriptor_cls);
+  tensor_descriptor_cls = nullptr;
+  Py_XDECREF(gluon_tensor_descriptor_cls);
+  gluon_tensor_descriptor_cls = nullptr;
+  Py_XDECREF(canonicalize_dtype_fn);
+  canonicalize_dtype_fn = nullptr;
+  Py_XDECREF(canonicalize_ptr_dtype_fn);
+  canonicalize_ptr_dtype_fn = nullptr;
+  Py_XDECREF(constexpr_cls);
+  constexpr_cls = nullptr;
+  Py_XDECREF(torch_tensor_cls);
+  torch_tensor_cls = nullptr;
+
   Py_XDECREF(i32_str);
+  i32_str = nullptr;
   Py_XDECREF(i64_str);
+  i64_str = nullptr;
   Py_XDECREF(u64_str);
+  u64_str = nullptr;
   Py_XDECREF(fp32_str);
+  fp32_str = nullptr;
   Py_XDECREF(u1_str);
+  u1_str = nullptr;
   Py_XDECREF(D_str);
+  D_str = nullptr;
   Py_XDECREF(constexpr_str);
+  constexpr_str = nullptr;
   Py_XDECREF(empty_str);
+  empty_str = nullptr;
   Py_XDECREF(nvTmaDesc_str);
+  nvTmaDesc_str = nullptr;
   Py_XDECREF(data_ptr_attr);
+  data_ptr_attr = nullptr;
   Py_XDECREF(dtype_attr);
+  dtype_attr = nullptr;
   Py_XDECREF(cache_key_attr);
+  cache_key_attr = nullptr;
   Py_XDECREF(tma_desc_cpu_ptr_attr);
+  tma_desc_cpu_ptr_attr = nullptr;
   Py_XDECREF(_fields_attr);
+  _fields_attr = nullptr;
+  Py_XDECREF(base_attr);
+  base_attr = nullptr;
   Py_XDECREF(block_shape_attr);
+  block_shape_attr = nullptr;
   Py_XDECREF(layout_attr);
+  layout_attr = nullptr;
   Py_XDECREF(has_native_tensor_spec_attr);
+  has_native_tensor_spec_attr = nullptr;
   Py_XDECREF(get_tensor_spec_attr);
+  get_tensor_spec_attr = nullptr;
+}
+
+static void cleanup_caches() {
+  for (auto &[_, v] : dtype_ptr2str) {
+    Py_XDECREF(v);
+  }
+  dtype_ptr2str.clear();
+  for (auto &[_, v] : dtype2str) {
+    Py_XDECREF(v);
+  }
+  dtype2str.clear();
+  for (auto &[_, v] : tensor_desc_cache) {
+    Py_XDECREF(v);
+  }
+  tensor_desc_cache.clear();
+  type_handler_cache.clear();
+}
+
+static void cleanup_globals() {
+  // only cleanup if we are the same process that initialized the module
+  if (init_pid != getpid()) {
+    return;
+  }
+  cleanup_interned_strings();
+  cleanup_caches();
+  init_called = false;
+  init_pid = 0;
+}
+
+static PyObject *cleanup_globals_wrapper(PyObject *self, PyObject *args) {
+  cleanup_globals();
+  Py_RETURN_NONE;
 }
 
 static void init_type_handler_cache();
 
-static void init_lazy() {
-  if (!init_lazy_called) {
-    PyObject *m_canonicalize = PyImport_ImportModule("triton._utils");
-    if (!m_canonicalize) {
-      return;
-    }
-
-    PyObject *m_jit = PyImport_ImportModule("triton.runtime.jit");
-    if (!m_jit) {
-      Py_XDECREF(m_canonicalize);
-      return;
-    }
-
-    PyObject *m_desc = PyImport_ImportModule("triton.tools.tensor_descriptor");
-    if (!m_desc) {
-      Py_XDECREF(m_canonicalize);
-      Py_XDECREF(m_jit);
-      return;
-    }
-
-    PyObject *m_desc_gluon =
-        PyImport_ImportModule("triton.experimental.gluon.nvidia.hopper");
-    if (!m_desc_gluon) {
-      Py_XDECREF(m_canonicalize);
-      Py_XDECREF(m_jit);
-      Py_XDECREF(m_desc);
-      return;
-    }
-
-    PyObject *m_constexpr = PyImport_ImportModule("triton.language");
-    if (!m_constexpr) {
-      Py_XDECREF(m_canonicalize);
-      Py_XDECREF(m_jit);
-      Py_XDECREF(m_desc);
-      Py_XDECREF(m_desc_gluon);
-      return;
-    }
-
-    PyObject *m_torch = PyImport_ImportModule("torch");
-    if (m_torch) {
-      torch_tensor_cls = PyObject_GetAttrString(m_torch, "Tensor");
-      Py_XDECREF(m_torch);
-    }
-
-    jit_function_cls = PyObject_GetAttrString(m_jit, "JITFunction");
-    tensor_descriptor_cls = PyObject_GetAttrString(m_desc, "TensorDescriptor");
-    gluon_tensor_descriptor_cls =
-        PyObject_GetAttrString(m_desc_gluon, "TensorDescriptor");
-    canonicalize_dtype_fn =
-        PyObject_GetAttrString(m_canonicalize, "canonicalize_dtype");
-    canonicalize_ptr_dtype_fn =
-        PyObject_GetAttrString(m_canonicalize, "canonicalize_ptr_dtype");
-    constexpr_cls = PyObject_GetAttrString(m_constexpr, "constexpr");
-
-    // immediately decref modules as we just needed them to import symbols above
-    Py_XDECREF(m_canonicalize);
-    Py_XDECREF(m_jit);
-    Py_XDECREF(m_desc);
-    Py_XDECREF(m_desc_gluon);
-    Py_XDECREF(m_constexpr);
-
-    if (!jit_function_cls || !tensor_descriptor_cls ||
-        !gluon_tensor_descriptor_cls || !canonicalize_dtype_fn ||
-        !canonicalize_ptr_dtype_fn || !constexpr_cls) {
-      cleanup_lazy_str();
-      if (!PyErr_Occurred()) {
-        PyErr_SetString(
-            PyExc_RuntimeError,
-            "failed to initialize __triton_specialize module objects");
-      }
-      return;
-    }
-
-    init_type_handler_cache();
-
-    init_lazy_called = true;
+static void init_globals() {
+  if (init_called) {
+    return;
   }
+
+  PyObject *m_canonicalize = nullptr, *m_jit = nullptr, *m_desc = nullptr, *m_desc_gluon = nullptr, *m_constexpr = nullptr, *m_torch = nullptr;
+
+  // import modules
+  m_canonicalize = PyImport_ImportModule("triton._utils");
+  if (!m_canonicalize) goto cleanup;
+
+  m_jit = PyImport_ImportModule("triton.runtime.jit");
+  if (!m_jit) goto cleanup;
+
+  m_desc = PyImport_ImportModule("triton.tools.tensor_descriptor");
+  if (!m_desc) goto cleanup;
+
+  m_desc_gluon =
+      PyImport_ImportModule("triton.experimental.gluon.nvidia.hopper");
+  if (!m_desc_gluon) goto cleanup;
+
+  m_constexpr = PyImport_ImportModule("triton.language");
+  if (!m_constexpr) goto cleanup;
+
+  m_torch = PyImport_ImportModule("torch");
+  if (m_torch) {
+    torch_tensor_cls = PyObject_GetAttrString(m_torch, "Tensor");
+  }
+
+  // get symbols from modules
+  jit_function_cls = PyObject_GetAttrString(m_jit, "JITFunction");
+  if (!jit_function_cls) goto cleanup;
+  tensor_descriptor_cls = PyObject_GetAttrString(m_desc, "TensorDescriptor");
+  if (!tensor_descriptor_cls) goto cleanup;
+  gluon_tensor_descriptor_cls =
+      PyObject_GetAttrString(m_desc_gluon, "TensorDescriptor");
+  if (!gluon_tensor_descriptor_cls) goto cleanup;
+  canonicalize_dtype_fn =
+      PyObject_GetAttrString(m_canonicalize, "canonicalize_dtype");
+  if (!canonicalize_dtype_fn) goto cleanup;
+  canonicalize_ptr_dtype_fn =
+      PyObject_GetAttrString(m_canonicalize, "canonicalize_ptr_dtype");
+  if (!canonicalize_ptr_dtype_fn) goto cleanup;
+  constexpr_cls = PyObject_GetAttrString(m_constexpr, "constexpr");
+  if (!constexpr_cls) goto cleanup;
+
+  // decref modules as we just needed them to import symbols above
+  Py_DECREF(m_jit);
+  Py_DECREF(m_desc);
+  Py_DECREF(m_desc_gluon);
+  Py_DECREF(m_canonicalize);
+  Py_DECREF(m_constexpr);
+  Py_XDECREF(m_torch);
+
+  init_interned_strings();
+  init_type_handler_cache();
+
+  if (PyErr_Occurred()) goto cleanup;
+
+  init_called = true;
+  init_pid = getpid();
+
+  return;
+
+cleanup:
+  Py_XDECREF(m_canonicalize);
+  Py_XDECREF(m_jit);
+  Py_XDECREF(m_desc);
+  Py_XDECREF(m_desc_gluon);
+  Py_XDECREF(m_constexpr);
+  Py_XDECREF(m_torch);
+  
+  if (!PyErr_Occurred()) {
+    PyErr_SetString(
+        PyExc_RuntimeError,
+        "failed to initialize __triton_specialize module objects");
+  }
+  return;
 }
 
-static void init_static_str() {
-  i32_str = PyUnicode_InternFromString("i32");
-  i64_str = PyUnicode_InternFromString("i64");
-  u64_str = PyUnicode_InternFromString("u64");
-  fp32_str = PyUnicode_InternFromString("fp32");
-  u1_str = PyUnicode_InternFromString("u1");
-  D_str = PyUnicode_InternFromString("D");
-  constexpr_str = PyUnicode_InternFromString("constexpr");
-  empty_str = PyUnicode_InternFromString("");
-  nvTmaDesc_str = PyUnicode_InternFromString("nvTmaDesc");
-
-  base_attr = PyUnicode_InternFromString("base");
-  data_ptr_attr = PyUnicode_InternFromString("data_ptr");
-  dtype_attr = PyUnicode_InternFromString("dtype");
-  cache_key_attr = PyUnicode_InternFromString("cache_key");
-  tma_desc_cpu_ptr_attr = PyUnicode_InternFromString("tma_desc_cpu_ptr");
-  _fields_attr = PyUnicode_InternFromString("_fields");
-  block_shape_attr = PyUnicode_InternFromString("block_shape");
-  layout_attr = PyUnicode_InternFromString("layout");
-  has_native_tensor_spec_attr =
-      PyUnicode_InternFromString("supports_native_tensor_specialization");
-  get_tensor_spec_attr =
-      PyUnicode_InternFromString("get_tensor_specialization");
-
-  if (!i32_str || !i64_str || !u64_str || !fp32_str || !u1_str || !D_str ||
-      !constexpr_str || !empty_str || !nvTmaDesc_str || !data_ptr_attr ||
-      !dtype_attr || !cache_key_attr || !tma_desc_cpu_ptr_attr || !base_attr ||
-      !_fields_attr || !block_shape_attr || !layout_attr ||
-      !get_tensor_spec_attr || !has_native_tensor_spec_attr) {
-    cleanup_static_str();
-    if (!PyErr_Occurred()) {
-      PyErr_SetString(
-          PyExc_RuntimeError,
-          "failed to initialize __triton_specialize module objects");
-    }
-  }
-}
-
-static void module_cleanup() {
-  for (auto &pair : dtype_ptr2str) {
-    Py_XDECREF(pair.second);
-  }
-  for (auto &pair : dtype2str) {
-    Py_XDECREF(pair.second);
-  }
-  for (auto &pair : tensor_desc_cache) {
-    Py_XDECREF(pair.second);
-  }
-  dtype_ptr2str.clear();
-  dtype2str.clear();
-  tensor_desc_cache.clear();
-  type_handler_cache.clear();
-
-  cleanup_lazy_str();
-  cleanup_static_str();
-}
 
 static inline std::pair<py::handle, py::handle>
 specialize_tensordesc(PyObject *arg, bool has_layout) {
@@ -259,67 +318,58 @@ specialize_tensordesc(PyObject *arg, bool has_layout) {
 
   std::string cache_key;
   cache_key.reserve(128);
-  const char *tmp_cstr = nullptr;
+  const char *dtype_cstr = nullptr;
+  const char *block_shape_cstr = nullptr;
+  const char *layout_cstr = nullptr;
 
   base = PyObject_GetAttr(arg, base_attr);
-  if (!base)
-    goto cleanup;
+  if (!base) goto cleanup;
 
   dtype = PyObject_GetAttr(base, dtype_attr);
-  if (!dtype)
-    goto cleanup;
+  if (!dtype) goto cleanup;
 
   dtype_hash = PyObject_Hash(dtype);
-  if (dtype_hash == -1)
-    goto cleanup;
+  if (dtype_hash == -1) goto cleanup;
   dsk = dtype_hash;
   it = dtype2str.find(dsk);
   if (it != dtype2str.end()) {
     type_str = it->second;
   } else {
     res = PyObject_CallFunctionObjArgs(canonicalize_dtype_fn, dtype, nullptr);
-    if (!res)
+    if (!res) {
       goto cleanup;
+    }
     dtype2str[dsk] = res;
     type_str = res;
   }
 
   cache_key = "tensordesc<";
   dtype_str = PyObject_Str(type_str);
-  if (!dtype_str)
-    goto cleanup;
+  if (!dtype_str) goto cleanup;
 
-  tmp_cstr = PyUnicode_AsUTF8(dtype_str);
-  if (!tmp_cstr)
-    goto cleanup;
-  cache_key += tmp_cstr;
+  dtype_cstr = PyUnicode_AsUTF8(dtype_str);
+  if (!dtype_cstr) goto cleanup;
+  cache_key += dtype_cstr;
 
   block_shape_obj = PyObject_GetAttr(arg, block_shape_attr);
-  if (!block_shape_obj)
-    goto cleanup;
+  if (!block_shape_obj) goto cleanup;
   block_shape_list = PySequence_List(block_shape_obj);
-  if (!block_shape_list)
-    goto cleanup;
+  if (!block_shape_list) goto cleanup;
   block_shape_str = PyObject_Str(block_shape_list);
-  if (!block_shape_str)
-    goto cleanup;
-  tmp_cstr = PyUnicode_AsUTF8(block_shape_str);
-  if (!tmp_cstr)
-    goto cleanup;
-  cache_key += tmp_cstr;
+  if (!block_shape_str) goto cleanup;
+  block_shape_cstr = PyUnicode_AsUTF8(block_shape_str);
+  if (!block_shape_cstr) goto cleanup;
+  cache_key += block_shape_cstr;
 
   if (has_layout) {
     layout_obj = PyObject_GetAttr(arg, layout_attr);
-    if (!layout_obj)
-      goto cleanup;
+    if (!layout_obj) goto cleanup;
     layout_repr = PyObject_Repr(layout_obj);
-    if (!layout_repr)
-      goto cleanup;
+    if (!layout_repr) goto cleanup;
     cache_key += ",";
-    tmp_cstr = PyUnicode_AsUTF8(layout_repr);
-    if (!tmp_cstr)
-      goto cleanup;
-    cache_key += tmp_cstr;
+    layout_cstr = PyUnicode_AsUTF8(layout_repr);
+    if (!layout_cstr) goto cleanup;
+    cache_key += layout_cstr;
   }
 
   cache_key += ">";
@@ -328,8 +378,7 @@ specialize_tensordesc(PyObject *arg, bool has_layout) {
     type_str_result = cache_it->second;
   } else {
     type_str_result = PyUnicode_FromString(cache_key.c_str());
-    if (!type_str_result)
-      goto cleanup;
+    if (!type_str_result) goto cleanup;
     tensor_desc_cache[cache_key] = type_str_result;
   }
 
@@ -367,8 +416,9 @@ handle_long_type(PyObject *backend, PyObject *arg, bool is_const,
 
   int overflow;
   long long val = PyLong_AsLongLongAndOverflow(arg, &overflow);
-  if (PyErr_Occurred())
+  if (PyErr_Occurred()) {
     return {py::handle(), py::handle()};
+  }
 
   if (specialize_value && (val == 1)) {
     return {py::handle(constexpr_str), py::handle(arg)};
@@ -404,8 +454,7 @@ handle_long_type(PyObject *backend, PyObject *arg, bool is_const,
 static std::pair<py::handle, py::handle>
 handle_tensor(PyObject *backend, PyObject *arg, bool is_const,
               bool specialize_value, bool align) {
-  // no DECREF on these as they are used for objects we keep in cache or return
-  // them
+  // no DECREF on these as they are used for objects we cache or return them
   PyObject *canon_res = nullptr, *type_str = nullptr, *key_res = nullptr;
   // normal temporary objects
   PyObject *dtype = nullptr, *native_spec_obj = nullptr;
@@ -421,12 +470,10 @@ handle_tensor(PyObject *backend, PyObject *arg, bool is_const,
 
   // handle type_str specialization of a tensor
   dtype = PyObject_GetAttr(arg, dtype_attr);
-  if (!dtype)
-    goto cleanup;
+  if (!dtype) goto cleanup;
 
   dtype_hash = PyObject_Hash(dtype);
-  if (dtype_hash == -1)
-    goto cleanup;
+  if (dtype_hash == -1) goto cleanup;
 
   dsk = {dtype_hash, is_const};
   it = dtype_ptr2str.find(dsk);
@@ -437,8 +484,7 @@ handle_tensor(PyObject *backend, PyObject *arg, bool is_const,
     canon_res =
         PyObject_CallFunctionObjArgs(canonicalize_ptr_dtype_fn, dtype,
                                      is_const ? Py_True : Py_False, nullptr);
-    if (!canon_res)
-      goto cleanup;
+    if (!canon_res) goto cleanup;
     dtype_ptr2str[dsk] = canon_res;
     type_str = canon_res;
   }
@@ -461,19 +507,16 @@ handle_tensor(PyObject *backend, PyObject *arg, bool is_const,
   if (native_impl_available) {
     data_ptr_method = PyObject_GetAttr(arg, data_ptr_attr);
     data_ptr_result = PyObject_CallNoArgs(data_ptr_method);
-    if (!data_ptr_result)
-      goto cleanup;
+    if (!data_ptr_result) goto cleanup;
 
     data_ptr = PyLong_AsUnsignedLongLong(data_ptr_result);
-    if (PyErr_Occurred())
-      goto cleanup;
+    if (PyErr_Occurred()) goto cleanup;
 
     key = (align && ((data_ptr & 15) == 0)) ? D_str : empty_str;
   } else {
     // call fallback
     fallback_method = PyObject_GetAttr(backend, get_tensor_spec_attr);
-    if (!fallback_method)
-      goto cleanup;
+    if (!fallback_method) goto cleanup;
 
     kwargs = PyDict_New();
     args_tuple = PyTuple_Pack(1, arg);
@@ -566,68 +609,76 @@ handle_tuple(PyObject *backend, PyObject *arg, bool is_const,
     return {py::handle(arg), py::handle(arg)};
   }
 
-  PyTypeObject *tuple_type = nullptr; // no DECREF as holds borrowed Py_TYPE
-  PyObject *item = nullptr; // no DECREF as GET_ITEM later borrows reference
-  PyObject *type_obj = nullptr,
-           *key_obj = nullptr; // no INCREF as SET_ITEM steals
-  PyObject *tys_tuple = nullptr, *keys_tuple = nullptr; // no DECREF as returned
-  // normal temporary objects
-  PyObject *tys_list = nullptr, *keys_list = nullptr;
-  PyObject *tys_args_tuple = nullptr, *keys_args_tuple = nullptr;
+  PyTypeObject *tuple_type = nullptr;
+  PyObject *item = nullptr;
+  PyObject *tys_tuple = nullptr, *keys_tuple = nullptr;
+  // normal temporary objects for namedtuple case only
+  PyObject *norm_tys_tuple = nullptr, *norm_keys_tuple = nullptr;
+  std::vector<py::handle> types(size);
+  std::vector<py::handle> keys(size);
+
+  py::handle type, key;
 
   bool is_namedtuple = PyObject_HasAttr(arg, _fields_attr);
   tuple_type = Py_TYPE(arg);
 
-  tys_list = PyList_New(size);
-  keys_list = PyList_New(size);
+  // Create tuples directly instead of lists
+  tys_tuple = PyTuple_New(size);
+  keys_tuple = PyTuple_New(size);
 
-  if (!tys_list || !keys_list)
-    goto cleanup;
+  if (!tys_tuple || !keys_tuple) goto cleanup;
 
   for (Py_ssize_t i = 0; i < size; ++i) {
-    item = PyTuple_GET_ITEM(arg, i); // GET_ITEM borrows reference
+    item = PyTuple_GET_ITEM(arg, i);
     // python reference calls specialize recursively with default arguments set
     // currently this is is_const=False, specialize_value=True, align=True
     auto [type, key] = specialize_arg(backend, item, false, true, true);
-    if (!type.ptr() && !key.ptr())
-      goto cleanup;
+    if (PyErr_Occurred()) goto cleanup;
+    if (!type.ptr() && !key.ptr()) goto cleanup;
+    types[i] = type;
+    keys[i] = key;
+  }
 
-    type_obj = type.ptr() ? type.ptr() : Py_None;
-    key_obj = key.ptr() ? key.ptr() : Py_None;
-
-    PyList_SET_ITEM(tys_list, i, type_obj);
-    PyList_SET_ITEM(keys_list, i, key_obj);
+  for (Py_ssize_t i = size - 1; i >= 0; --i) {
+    type = types.back();
+    types.pop_back();
+    key = keys.back();
+    keys.pop_back();
+    PyObject *type_obj = type.ptr() ? type.ptr() : Py_None;
+    PyObject *key_obj = key.ptr() ? key.ptr() : Py_None;
+    Py_INCREF(type_obj);
+    Py_INCREF(key_obj);
+    PyTuple_SetItem(tys_tuple, i, type_obj);
+    PyTuple_SetItem(keys_tuple, i, key_obj);
   }
 
   if (is_namedtuple) {
-    tys_args_tuple = PyList_AsTuple(tys_list);
-    keys_args_tuple = PyList_AsTuple(keys_list);
+    norm_tys_tuple = tys_tuple;
+    norm_keys_tuple = keys_tuple;
 
-    if (tys_args_tuple && keys_args_tuple) {
-      tys_tuple = PyObject_CallObject((PyObject *)tuple_type, tys_args_tuple);
-      keys_tuple = PyObject_CallObject((PyObject *)tuple_type, keys_args_tuple);
-    } else {
-      goto cleanup;
-    }
-  } else {
-    tys_tuple = PyList_AsTuple(tys_list);
-    keys_tuple = PyList_AsTuple(keys_list);
-  }
-
-  Py_DECREF(tys_list);
-  Py_DECREF(keys_list);
-  if (is_namedtuple) {
-    Py_DECREF(tys_args_tuple);
-    Py_DECREF(keys_args_tuple);
+    tys_tuple = PyObject_CallObject((PyObject *)tuple_type, norm_tys_tuple);
+    keys_tuple = PyObject_CallObject((PyObject *)tuple_type, norm_keys_tuple);
+    if (!tys_tuple || !keys_tuple) goto cleanup;
+    Py_DECREF(norm_tys_tuple);
+    Py_DECREF(norm_keys_tuple);
   }
 
   return {py::handle(tys_tuple), py::handle(keys_tuple)};
 
 cleanup:
-  Py_XDECREF(tys_list);
-  Py_XDECREF(keys_list);
-  Py_XDECREF(tys_args_tuple);
-  Py_XDECREF(keys_args_tuple);
+  // cleanup potential left-overs
+  for (auto &type : types) {
+    Py_XDECREF(type.ptr());
+  }
+  types.clear();
+  for (auto &key : keys) {
+    Py_XDECREF(key.ptr());
+  }
+  keys.clear();
+  Py_XDECREF(norm_tys_tuple);
+  Py_XDECREF(norm_keys_tuple);
+  Py_XDECREF(tys_tuple);
+  Py_XDECREF(keys_tuple);
   return {py::handle(), py::handle()};
 }
 
@@ -667,10 +718,10 @@ static void init_type_handler_cache() {
 
 // specialization logic without passing of objects from Python (to be called in
 // specialize_impl only)
-std::pair<py::handle, py::handle> specialize_arg(PyObject *backend,
-                                                 PyObject *arg, bool is_const,
-                                                 bool specialize_value,
-                                                 bool align) {
+static std::pair<py::handle, py::handle> specialize_arg(PyObject *backend,
+                                                        PyObject *arg, bool is_const,
+                                                        bool specialize_value,
+                                                        bool align) {
   // fast-path for default types
   PyTypeObject *arg_type = Py_TYPE(arg);
   auto it = type_handler_cache.find(arg_type);
@@ -723,11 +774,9 @@ std::pair<py::handle, py::handle> specialize_arg(PyObject *backend,
 // main entry-point from Python implementing specialization logic natively
 static PyObject *specialize_impl(PyObject *self, PyObject *const *args,
                                  Py_ssize_t nargs) {
-  if (!init_lazy_called) {
-    init_lazy();
-    if (PyErr_Occurred()) {
-      return nullptr;
-    }
+  init_globals();
+  if (PyErr_Occurred()) {
+    return nullptr;
   }
 
   if (nargs != 5) {
@@ -763,23 +812,24 @@ static PyObject *specialize_impl(PyObject *self, PyObject *const *args,
   PyObject *type_obj = type ? type.ptr() : Py_None;
   PyObject *key_obj = key ? key.ptr() : Py_None;
 
-  // PyTuple_Pack does INCREF
   return PyTuple_Pack(2, type_obj, key_obj);
 }
 
 static PyMethodDef module_methods[] = {
     {"native_specialize_impl", (PyCFunction)(void (*)(void))specialize_impl,
      METH_FASTCALL, nullptr},
+     // in case one really wants to reset the global state
+    {"_cleanup_native_specialize_globals", cleanup_globals_wrapper,
+     METH_NOARGS, nullptr},
     {nullptr, nullptr, 0, nullptr} // sentinel
 };
 
 } // anonymous namespace
 
 void init_native_specialize(pybind11::module &m) {
-  init_static_str();
-
+  // add functions to module
   PyModule_AddFunctions(m.ptr(), module_methods);
-
+  // register cleanup atexit
   py::module atexit = py::module::import("atexit");
-  atexit.attr("register")(py::cpp_function(module_cleanup));
+  atexit.attr("register")(py::cpp_function(cleanup_globals));
 }
