@@ -120,7 +120,7 @@ def test_multiple_hooks() -> None:
     def hook_end0(module, function, name, metadata_group, hash):
         nonlocal end0
         end0 = True
-    
+
     def hook_start1(module, function, name, metadata_group, hash):
         nonlocal start1
         start1 = True
@@ -137,7 +137,7 @@ def test_multiple_hooks() -> None:
     @triton.jit
     def kernel(x):
         pass
-    
+
     kernel[(1, )](6)
 
     assert start0

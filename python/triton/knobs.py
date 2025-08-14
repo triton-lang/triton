@@ -391,13 +391,15 @@ class InitHandleHook(Protocol):
         name: str,
         metadata_group: dict[str, str],
         hash: str,
-    ) -> None: ...
+    ) -> None:
+        ...
 
 
 F = TypeVar("F", bound=Callable)
 
 
 class HookChain(Generic[F]):
+
     def __init__(self, reversed: bool = False):
         self.calls: list[F] = []
         self.reversed = reversed
