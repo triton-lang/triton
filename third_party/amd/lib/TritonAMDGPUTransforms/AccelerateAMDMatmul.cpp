@@ -516,14 +516,16 @@ public:
     // to increase ds_read vector size
     // However, in FA, the second dot can only use kWidth = kBase since it's
     // limited by the result of the first dot, which is of mfmaLayout.
-    if (!isChainDotTail(dotOp))
+    auto isDotChainTail = isChainDotTail(dotOp);
+    if (!isDotChainTail)
       kWidth *= kPack;
 
     // For FA fwd kernel with f16 elementTy, we limit the 2nd dot to have
     // kWidth = 4 so that the coversion from #mma (result of 1st dot)
     // to #dotOp (operand 0 of 2nd dot) is a no-op.
     // TODO (lixun): relax the condition for 8-bit elementTy.
-    if ((aElemTy.isF16() || aElemTy.isBF16()) && isChainDotTail(dotOp)) {
+    auto aElemTyF16OrBF16 = (aElemTy.isF16() || aElemTy.isBF16());
+    if (aElemTyF16OrBF16 && isDotChainTail) {
       kWidth = 4;
     }
     // For FA bwd kernel (detected using hasTransInDefChain), depending on
@@ -531,11 +533,10 @@ public:
     // accordingly. This will enable us to create the same shared encoding per
     // pair of tt.dot ops that both use the same tt.load result, one directly
     // and one via tt.trans, later in the pass pipeline.
-    if ((aElemTy.isF16() || aElemTy.isBF16()) &&
-        hasTransInDefChain(dotOp, 1U)) {
+    if (aElemTyF16OrBF16 && hasTransInDefChain(dotOp, 1U)) {
       if (isChainDotHead(dotOp)) {
         kWidth = 4;
-      } else if (isChainDotTail(dotOp)) {
+      } else if (isDotChainTail) {
         kWidth = 8;
       }
     }

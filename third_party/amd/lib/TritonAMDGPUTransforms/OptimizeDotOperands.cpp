@@ -36,7 +36,6 @@ namespace {
 //                      -> local_load_transposed -> dot2
 class ReuseShmemForDirectAndTransposedUse : public OpRewritePattern<LoadOp> {
 public:
-  using OpRewritePattern::OpRewritePattern;
   ReuseShmemForDirectAndTransposedUse(MLIRContext *context,
                                       triton::AMD::ISAFamily isaFamily)
       : OpRewritePattern(context), isaFamily(isaFamily) {}
@@ -56,8 +55,8 @@ public:
 
     LDBG("ReuseShmemForDirectAndTransposedUse for load Op: " << *loadOp);
 
-    tt::DotOp directDot = nullptr;
-    tt::DotOp transDot = nullptr;
+    tt::DotOpInterface directDot = nullptr;
+    tt::DotOpInterface transDot = nullptr;
     ttg::ConvertLayoutOp cvtOp = nullptr;
     unsigned directOpIdx = 0;
     unsigned transOpIdx = 0;
@@ -65,7 +64,8 @@ public:
     auto followConvertLayoutChain =
         [](mlir::Value &usedValue, mlir::Operation *op) -> mlir::Operation * {
       while (isa<ttg::ConvertLayoutOp>(op)) {
-        if (op->getUsers().empty())
+        // Ensure we have exactly one user
+        if (!(op->hasOneUse()))
           return nullptr;
         usedValue = op->getResult(0);
         op = *(op->getUsers().begin());
@@ -87,11 +87,11 @@ public:
         usedValue = transOp->getResult(0);
         op =
             followConvertLayoutChain(usedValue, *(transOp->getUsers().begin()));
-        if (auto dotOp = dyn_cast<tt::DotOp>(op)) {
+        if (auto dotOp = dyn_cast<tt::DotOpInterface>(op)) {
           transDot = dotOp;
           transOpIdx = (usedValue == dotOp.getA()) ? 0 : 1;
         }
-      } else if (auto dotOp = dyn_cast<tt::DotOp>(op)) {
+      } else if (auto dotOp = dyn_cast<tt::DotOpInterface>(op)) {
         directDot = dotOp;
         directOpIdx = (usedValue == dotOp.getA()) ? 0 : 1;
       }
@@ -121,9 +121,9 @@ public:
     unsigned opIdx = directOpIdx;
 
     auto directOperandType =
-        cast<RankedTensorType>(directDot.getOperand(opIdx).getType());
+        cast<RankedTensorType>(directDot->getOperand(opIdx).getType());
     auto transOperandType =
-        cast<RankedTensorType>(transDot.getOperand(opIdx).getType());
+        cast<RankedTensorType>(transDot->getOperand(opIdx).getType());
     auto directDotEnc =
         dyn_cast<ttg::DotOperandEncodingAttr>(directOperandType.getEncoding());
     auto transDotEnc =
@@ -141,11 +141,24 @@ public:
       });
     }
 
+    // We need to ensure that the parents of direct and transposed dot encodings
+    // are matching in order to get the same shared memory encoding. Note that
+    // they can have different instrShape(s) (mfma instructions) but still map
+    // to the same shared memory encoding.
+    auto directCTALayout = ttg::getCTALayout(directDotEnc);
+    auto transCTALayout = ttg::getCTALayout(transDotEnc);
+
+    if (directCTALayout != transCTALayout) {
+      return rewriter.notifyMatchFailure(
+          loadOp,
+          "CTA layouts of direct and transposed tt.dot users are mismatching");
+    }
+
     auto ctx = getContext();
     auto sharedOrder = ttg::getOrderForMemory(srcTy);
     auto sharedEnc = ttg::SwizzledSharedEncodingAttr::get(
         ctx, directDotEnc, directOperandType.getShape(), sharedOrder,
-        ttg::getCTALayout(directDotEnc), directOperandType.getElementType(),
+        directCTALayout, directOperandType.getElementType(),
         /*needTrans=*/false);
 
     LDBG("Created shared encoding: " << sharedEnc);
@@ -161,14 +174,17 @@ public:
     auto localLoad =
         rewriter.create<ttg::LocalLoadOp>(loc, directOperandType, alloc);
     LDBG("Created local load op:" << *localLoad);
-    directDot.setOperand(opIdx, localLoad);
+    rewriter.modifyOpInPlace(
+        directDot, [&]() { directDot->setOperand(opIdx, localLoad); });
     LDBG("Updated Direct dot: " << *directDot);
     if (canUseLocalLoadTransposed(opIdx, sharedOrder)) {
       auto transposedLocalLoad =
           rewriter.create<triton::amdgpu::LocalLoadTransposedOp>(
               loc, transOperandType, alloc);
       LDBG("Created transposed local load op:" << *transposedLocalLoad);
-      transDot.setOperand(opIdx, transposedLocalLoad);
+      rewriter.modifyOpInPlace(transDot, [&]() {
+        transDot->setOperand(opIdx, transposedLocalLoad);
+      });
     } else // fallback
     {
       rewriter.modifyOpInPlace(cvtOp, [&]() {
@@ -208,17 +224,11 @@ class TritonAMDGPUOptimizeDotOperands
     : public impl::TritonAMDGPUOptimizeDotOperandsBase<
           TritonAMDGPUOptimizeDotOperands> {
 public:
-  using impl::TritonAMDGPUOptimizeDotOperandsBase<
-      TritonAMDGPUOptimizeDotOperands>::TritonAMDGPUOptimizeDotOperandsBase;
+  using Base::Base;
 
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     ModuleOp m = getOperation();
-
-    OpPassManager pm;
-    pm.addPass(mlir::createCanonicalizerPass());
-    if (failed(runPipeline(pm, m)))
-      return signalPassFailure();
 
     mlir::RewritePatternSet patterns(context);
     auto isaFamily = triton::AMD::deduceISAFamily(archGenerationName);
