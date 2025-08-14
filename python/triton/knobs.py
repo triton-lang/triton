@@ -275,7 +275,7 @@ class base_knobs:
             k: v
             # data descriptors live on the class object
             for k, v in type(self).__dict__.items()
-            if k != "__doc__"
+            if isinstance(v, env_base)
         }
 
     @property
