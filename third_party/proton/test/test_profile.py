@@ -1,3 +1,8 @@
+"""
+Reproducibility tests for Proton.
+Each test should invoke one or more GPU kernels and check the validity of their profiling results.
+"""
+
 import torch
 import triton
 import triton.profiler as proton
@@ -5,6 +10,7 @@ import json
 import pytest
 from typing import NamedTuple
 import pathlib
+import threading
 
 import triton.language as tl
 from triton.profiler.hooks.launch import COMPUTE_METADATA_SCOPE_NAME
@@ -245,6 +251,53 @@ def test_hook_launch_context(tmp_path: pathlib.Path, context: str):
                 return
             queue.append(child)
 
+
+def test_hook_multi_thread(tmp_path: pathlib.Path):
+
+    def metadata_fn_foo(grid: tuple, metadata: NamedTuple, args: dict):
+        return {"name": "foo_test"}
+
+    @triton.jit(launch_metadata=metadata_fn_foo)
+    def foo(x, size: tl.constexpr, y):
+        offs = tl.arange(0, size)
+        tl.store(y + offs, tl.load(x + offs))
+
+    def metadata_fn_bar(grid: tuple, metadata: NamedTuple, args: dict):
+        return {"name": "bar_test"}
+
+    @triton.jit(launch_metadata=metadata_fn_bar)
+    def bar(x, size: tl.constexpr, y):
+        offs = tl.arange(0, size)
+        tl.store(y + offs, tl.load(x + offs))
+
+    x_foo = torch.tensor([2], device="cuda", dtype=torch.float32)
+    y_foo = torch.zeros_like(x_foo)
+    x_bar = torch.tensor([2], device="cuda", dtype=torch.float32)
+    y_bar = torch.zeros_like(x_bar)
+
+    temp_file = tmp_path / "test_hook.hatchet"
+    proton.start(str(temp_file.with_suffix("")), hook="triton", context=context)
+
+    # start multiple threads
+    def invoke_foo():
+        for _ in range(100):
+            foo[(1, )](x_foo, 1, y_foo, num_warps=4)
+    
+    def invoke_bar():
+        for _ in range(100):
+            bar[(1, )](x_bar, 1, y_bar, num_warps=4)
+
+    thread_foo = threading.Thread(target=invoke_foo)
+    thread_bar = threading.Thread(target=invoke_bar)
+    thread_foo.start()
+    thread_bar.start()
+    thread_foo.join()
+    thread_bar.join()
+
+    proton.finalize()
+    with temp_file.open() as f:
+        data = json.load(f)
+    print(data)
 
 def test_pcsampling(tmp_path: pathlib.Path):
     if is_hip():

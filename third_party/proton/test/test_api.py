@@ -1,10 +1,15 @@
+"""
+Test module for proton's API functionality.
+No GPU kernel should be declared in this test.
+Profile correctness tests involving GPU kernels should be placed in `test_profile.py`.
+"""
+
 import json
 import triton.profiler as proton
 import pathlib
 from triton.profiler.hooks.hook import HookManager
 from triton.profiler.hooks.launch import LaunchHook
 from triton.profiler.hooks.instrumentation import InstrumentationHook
-
 
 def test_profile_single_session(tmp_path: pathlib.Path):
     temp_file0 = tmp_path / "test_profile0.hatchet"
