@@ -43,12 +43,9 @@ def do_bench_walltime(fn):
     fn()
     torch.cuda.synchronize()
 
-    start_time = time.perf_counter()
     for _ in range(1000):
         fn()
     torch.cuda.synchronize()
-    end_time = time.perf_counter()
-    estimate_ms = end_time - start_time
 
     n_repeat = 10000
 
