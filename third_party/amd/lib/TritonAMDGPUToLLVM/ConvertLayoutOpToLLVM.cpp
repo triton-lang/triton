@@ -65,8 +65,8 @@ public:
     // of intra-register index bits (i.e., the degree of register packing), and
     // that there are no intra-register element permutations prescribed by the
     // general decomposition algorithm.
-    if (!(rBit >= nPack && t.topPreSel == 0x3210 && t.topPostSel == 0x3210) &&
-        (lBit == 4 || lBit == 5)) {
+    if (!(rBit >= nPack && t.topPreSel == 0x3210 && t.topPostSel == 0x3210 &&
+          (lBit == 4 || lBit == 5))) {
       return failure();
     }
 
