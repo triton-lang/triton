@@ -63,12 +63,9 @@ class ASTSource:
                 assert isinstance(k, tuple)
                 self.constants[k] = v
         self.attrs = attrs or dict()
-        if isinstance(self.signature, str):
-            self.signature = {k: v.strip() for k, v in enumerate(self.signature.split(","))}
-        else:
-            for k in self.signature.keys():
-                if not isinstance(k, str):
-                    raise TypeError("Signature keys must be string")
+        for k in self.signature.keys():
+            if not isinstance(k, str):
+                raise TypeError("Signature keys must be string")
 
     def hash(self):
         sorted_sig = [v for k, v in sorted(self.signature.items())]
