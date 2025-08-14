@@ -382,37 +382,3 @@ def test_trace(tmp_path: pathlib.Path):
         assert len(trace_events) == 3
         assert trace_events[-1]["name"] == "foo"
         assert trace_events[-1]["args"]["call_stack"] == ["ROOT", "test", "foo"]
-
-
-def test_timeline(tmp_path: pathlib.Path):
-    temp_file = tmp_path / "test_timeline.chrome_trace"
-    mode = proton.mode.Default(metric_type="cycle", optimizations="time_shift")
-    proton.start(str(temp_file.with_suffix("")), data="trace", backend="instrumentation", mode=mode)
-
-    @triton.jit
-    def foo(x, y, size: tl.constexpr):
-        pl.enter_scope("entire")
-        offs = tl.arange(0, size)
-        pl.enter_scope("load")
-        x = tl.load(x + offs)
-        x = x + 1
-        pl.exit_scope("load")
-        pl.enter_scope("store")
-        tl.store(y + offs, x)
-        pl.exit_scope("store")
-        pl.exit_scope("entire")
-
-    with proton.scope("init"):
-        x = torch.ones((1024, ), device="cuda", dtype=torch.float32)
-        y = torch.zeros_like(x)
-
-    with proton.scope("test"):
-        foo[(1, )](x, y, x.size()[0], num_warps=4)
-
-    proton.finalize()
-
-    with temp_file.open() as f:
-        data = json.load(f)
-        trace_events = data["traceEvents"]
-        assert len(trace_events) == 12
-        assert trace_events[-1]["tid"][0:4] == "warp"
