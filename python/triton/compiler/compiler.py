@@ -434,13 +434,14 @@ class CompiledKernel:
         # (e.g., checking amount of shared memory on current device)
         self.module = None
         self.function = None
+        self._run = None
 
     def _init_handles(self):
         if self.module is not None:
             return
         device = driver.active.get_current_device()
         # create launcher
-        self.run = driver.active.launcher_cls(self.src, self.metadata)
+        self._run = driver.active.launcher_cls(self.src, self.metadata)
         # not enough shared memory to run the kernel
         max_shared = max_shared_mem(device)
         if self.metadata.shared > max_shared:
@@ -461,10 +462,10 @@ class CompiledKernel:
         if knobs.runtime.kernel_load_end_hook is not None:
             knobs.runtime.kernel_load_end_hook(self.module, self.function, self.name, self.metadata_group, self.hash)
 
-    def __getattribute__(self, name):
-        if name == 'run':
-            self._init_handles()
-        return super().__getattribute__(name)
+    @property
+    def run(self):
+        self._init_handles()
+        return self._run
 
     def launch_metadata(self, grid, stream, *args):
         if knobs.runtime.launch_enter_hook is None:
