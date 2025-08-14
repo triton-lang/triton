@@ -1067,7 +1067,8 @@ class ConstexprFunction(JITCallable):
         res = self.fn(*args, **kwargs)
 
         if _semantic is None:
-            return res  # Called outside of triton
+            # Not called by triton code generator, e.g. in host code, another constexpr function, or even an aggreate's __init__ function
+            return res
 
         # convert result back to a Triton constexpr:
         if knobs.runtime.interpret:
