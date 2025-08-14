@@ -374,6 +374,8 @@ class autotuning_knobs(base_knobs):
 
 
 class LaunchHook(Protocol):
+    """Hook invoked before and after kernel launching
+    """
 
     def __call__(self, metadata: LazyDict) -> None:
         ...

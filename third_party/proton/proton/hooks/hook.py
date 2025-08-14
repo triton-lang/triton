@@ -11,11 +11,6 @@ class Hook:
     @abstractmethod
     def init_handle(self, module: Any, function: Any, name: str, metadata_group: Dict[str, str],
                     hash: str) -> None:  # noqa: D401
-        """Called when a kernel's binary handles are (about to be / just were) initialized.
-
-        For the start hook invocation, module and function may be None. The hash is the
-        kernel's cache key (stable identifier across start/end invocations).
-        """
         raise NotImplementedError
 
     @abstractmethod
