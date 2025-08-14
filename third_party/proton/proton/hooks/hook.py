@@ -98,7 +98,7 @@ class HookManager:
         HookManager.active_hooks.sort(key=lambda x: x.priority, reverse=True)
 
         # Register the heads
-        knobs.runtime.kernel_load_start_hook.add(HookManager.init_handle)
+        knobs.runtime.kernel_load_end_hook.add(HookManager.init_handle)
         knobs.runtime.launch_enter_hook.add(HookManager.enter)
         knobs.runtime.launch_exit_hook.add(HookManager.exit)
 
@@ -123,6 +123,6 @@ class HookManager:
                     HookManager.active_hooks.remove(hook)
         # Unregister the heads
         if not HookManager.active_hooks:
-            knobs.runtime.kernel_load_start_hook.remove(HookManager.init_handle)
+            knobs.runtime.kernel_load_end_hook.remove(HookManager.init_handle)
             knobs.runtime.launch_enter_hook.remove(HookManager.enter)
             knobs.runtime.launch_exit_hook.remove(HookManager.exit)
