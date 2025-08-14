@@ -64,8 +64,7 @@ public:
     auto followConvertLayoutChain =
         [](mlir::Value &usedValue, mlir::Operation *op) -> mlir::Operation * {
       while (isa<ttg::ConvertLayoutOp>(op)) {
-        // Ensure we have exactly one user
-        if (!(op->hasOneUse()))
+        if (op->getUsers().empty())
           return nullptr;
         usedValue = op->getResult(0);
         op = *(op->getUsers().begin());
