@@ -1,4 +1,5 @@
 #include "triton/Dialect/Triton/Transforms/LoopPeeling.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Pass/Pass.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
@@ -26,8 +27,26 @@ void peelLoopEpilogue(
   rewriter.setInsertionPointAfter(forOp);
   Value lastIV = getLastInductionValue(rewriter, forOp);
 
-  auto cond = rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::slt,
-                                             lowerBound, upperBound);
+  auto cmpOp = rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::slt,
+                                              lowerBound, upperBound);
+  Value cond = cmpOp.getResult();
+  // Check if any llvm.intr.assume matches this condition and in this case
+  // optimize it out
+  bool foundAssume = llvm::any_of(*forOp->getBlock(), [&](Operation &op) {
+    if (auto assumeOp = dyn_cast<LLVM::AssumeOp>(&op)) {
+      auto assumeCmpOp = assumeOp.getCond().getDefiningOp<arith::CmpIOp>();
+      return (assumeCmpOp &&
+              assumeCmpOp.getPredicate() == arith::CmpIPredicate::slt &&
+              assumeCmpOp.getLhs() == lowerBound &&
+              assumeCmpOp.getRhs() == upperBound);
+    }
+
+    return false;
+  });
+
+  if (foundAssume) {
+    cond = rewriter.create<arith::ConstantIntOp>(loc, 1, rewriter.getI1Type());
+  }
 
   // Create an if op to execute the peeled iteration
   IRMapping map;
@@ -52,6 +71,7 @@ void peelLoopEpilogue(
       Operation *newOp = processPeeledOp(rewriter, &op, /*isEpilogue=*/false);
       if (newOp && newOp != &op) {
         op.replaceAllUsesWith(newOp);
+        op.erase();
       }
     }
     for (auto &op : llvm::make_early_inc_range(
@@ -59,6 +79,7 @@ void peelLoopEpilogue(
       Operation *newOp = processPeeledOp(rewriter, &op, /*isEpilogue=*/true);
       if (newOp && newOp != &op) {
         op.replaceAllUsesWith(newOp);
+        op.erase();
       }
     }
   }
