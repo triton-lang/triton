@@ -498,8 +498,8 @@ LogicalResult LocalLoadTransposedOp::verify() {
   auto order = sharedEnc.getOrder();
   bool isKContig = (order[0] == kDimIdx);
 
-  if (isKContig) {
-    return emitOpError("Tensor must be non-k contiguous in shared memory");
+  if (!isKContig) {
+    return emitOpError("Tensor must be k contiguous in shared memory");
   }
 
   return success();

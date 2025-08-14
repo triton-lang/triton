@@ -1,3 +1,4 @@
+#include "TritonAMDGPUToLLVM/TargetUtils.h"
 #include "TritonAMDGPUTransforms/Passes.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Pass/PassManager.h"
@@ -36,6 +37,9 @@ namespace {
 class ReuseShmemForDirectAndTransposedUse : public OpRewritePattern<LoadOp> {
 public:
   using OpRewritePattern::OpRewritePattern;
+  ReuseShmemForDirectAndTransposedUse(MLIRContext *context,
+                                      triton::AMD::ISAFamily isaFamily)
+      : OpRewritePattern(context), isaFamily(isaFamily) {}
 
   LogicalResult matchAndRewrite(tt::LoadOp loadOp,
                                 PatternRewriter &rewriter) const override {
@@ -182,14 +186,17 @@ private:
   bool canUseLocalLoadTransposed(unsigned opIdx,
                                  ArrayRef<unsigned> sharedOrder) const {
     unsigned kDimIdx = (opIdx == 0) ? 1 : 0;
+    bool isCDNA4 = (isaFamily == triton::AMD::ISAFamily::CDNA4);
     bool isKContig = (sharedOrder[0] == kDimIdx);
-    // Tensor must be non-k contiguous in shared memory in order to use
+    // Tensor must be k contiguous in shared memory in order to use
     // local_load_transposed
     // TODO(PMylon): Comment out for now, until lowering from
     // local_load_transposed to ds_read_tr is supported.
-    // return !isKContig;
+    // return (isCDNA4 && isKContig);
     return false;
   }
+
+  triton::AMD::ISAFamily isaFamily;
 };
 
 } // namespace
@@ -214,7 +221,8 @@ public:
       return signalPassFailure();
 
     mlir::RewritePatternSet patterns(context);
-    patterns.add<ReuseShmemForDirectAndTransposedUse>(context);
+    auto isaFamily = triton::AMD::deduceISAFamily(archGenerationName);
+    patterns.add<ReuseShmemForDirectAndTransposedUse>(context, isaFamily);
     ttg::ConvertLayoutOp::getCanonicalizationPatterns(patterns, context);
     if (failed(applyPatternsGreedily(m, std::move(patterns))))
       signalPassFailure();

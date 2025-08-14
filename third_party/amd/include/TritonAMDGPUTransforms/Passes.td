@@ -270,6 +270,11 @@ def TritonAMDGPUOptimizeDotOperands : Pass<"tritonamdgpu-optimize-dot-operands",
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
                            "mlir::triton::amdgpu::TritonAMDGPUDialect",
                            "mlir::triton::TritonDialect"];
+  let options = [
+    Option<"archGenerationName", "arch-generation-name",
+           "std::string", /*default=*/"std::string{}",
+           "GFX generation name of target device.">
+  ];
 }
 
 #endif
