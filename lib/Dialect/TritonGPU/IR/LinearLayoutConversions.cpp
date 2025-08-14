@@ -1269,10 +1269,6 @@ tensorMemoryScalesToLinearLayout(ArrayRef<int64_t> shape,
   // We choose repOrder = [0, 1]
   auto tile =
       LinearLayout::identity1D(std::min<int>(32, shape[0]), kRow, dims[0]) *
-      LinearLayout::zeros1D(std::max<int>(1, 32 / shape[0]), kRow, dims[0]) *
-      // When shape[1] < 4, we emit an 'unpacked' layout (0 or 1 bases)
-      // When we emit 1 base, we will divide it out in the lowering after
-      // packing
       LinearLayout::identity1D(std::min<int>(4, shape[1]), kCol, dims[1]) *
       // reps
       LinearLayout::identity1D(std::max<int>(1, shape[0] / 32), kCol, dims[0]) *

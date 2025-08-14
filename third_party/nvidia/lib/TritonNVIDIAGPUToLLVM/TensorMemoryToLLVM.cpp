@@ -701,50 +701,39 @@ static FailureOr<SmallVector<Value>> lowerTMemLdStFromTypes(
     unpacked = enc.getUnpacked();
   } else {
     assert(isa<TensorMemoryScalesEncodingAttr>(memTy.getEncoding()));
-    unpacked = regTy.getDimSize(1) < 4;
+    unpacked = false;
   }
 
   // Handle K = 1 and K = 2 cases
+  auto K = regTy.getDimSize(1);
   auto undefShmem =
-      isa<TensorMemoryScalesEncodingAttr>(memTy.getEncoding()) && unpacked;
+      isa<TensorMemoryScalesEncodingAttr>(memTy.getEncoding()) && K < 4;
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   bool isStore = !storeVals.empty();
   auto inVals = to_vector(storeVals);
   auto packedLlvmElemTy = llvmElemTy;
+  auto packedLayout = std::move(quot);
   if (undefShmem) {
-    auto K = regTy.getDimSize(1);
-    assert(K < 4);
-
-    if (K == 1) {
-      packedLlvmElemTy = f16_ty;
-    }
-
-    // The unpacked layout also expects an llvmElemTy of f16
-    if (isStore) {
-      if (K == 1) {
-        for (auto &val : inVals) {
-          val = b.bitcast(b.zext(i16_ty, val), packedLlvmElemTy);
-        }
-      }
-    }
     auto kReg = str_attr("register");
-    assert(inVals.size() == quot.getInDimSize(kReg));
+    auto tile = LinearLayout::identity1D(K, kReg, kCol) *
+                LinearLayout::zeros1D(4 / K, kReg, kCol);
+    auto maybePacked = divideLeft(packedLayout, tile);
+    assert(maybePacked.has_value());
+    packedLayout = std::move(*maybePacked);
+    if (isStore) {
+      inVals = pack(inVals, i32_ty, loc, rewriter);
+    }
+    packedLlvmElemTy = i32_ty;
   }
 
   auto resultValsOr =
-      lowerTMemLdSt(loc, ctx, rewriter, quot, inVals, packedLlvmElemTy,
+      lowerTMemLdSt(loc, ctx, rewriter, packedLayout, inVals, packedLlvmElemTy,
                     tmemBase, maxnreg, unpacked, pred);
   if (failed(resultValsOr))
     return failure();
   auto resultVals = std::move(*resultValsOr);
   if (!isStore && undefShmem) {
-    // Need to truncate the resultVals to the original llvmElemTy
-    auto K = regTy.getDimSize(1);
-    if (K == 1) {
-      for (auto &val : resultVals) {
-        val = b.trunc(llvmElemTy, val);
-      }
-    }
+    resultVals = unpack(resultVals, llvmElemTy, loc, rewriter);
   }
   return resultVals;
 }
