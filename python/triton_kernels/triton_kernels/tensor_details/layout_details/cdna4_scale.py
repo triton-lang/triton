@@ -2,7 +2,6 @@ import triton
 import triton.language as tl
 from .base import Layout
 
-
 NON_K_PRESHUFFLE_BLOCK_SIZE = 32
 
 
@@ -35,9 +34,9 @@ class CDNA4MXScaleLayout(Layout):
         N = block_shape[-1]
         return block_shape[:-2] + [N // 32, SCALE_K * 32]
 
+
 @triton.jit
-def unswizzle_mx_scale_cdna4(x, BLOCK_N: tl.constexpr,
-                             MX_SCALE_BLOCK_K: tl.constexpr,
+def unswizzle_mx_scale_cdna4(x, BLOCK_N: tl.constexpr, MX_SCALE_BLOCK_K: tl.constexpr,
                              N_PRESHUFFLE_FACTOR: tl.constexpr = NON_K_PRESHUFFLE_BLOCK_SIZE):
     x = x.reshape(BLOCK_N // N_PRESHUFFLE_FACTOR, MX_SCALE_BLOCK_K // 8, 4, 16, 2, 2, 1)
     x = x.permute(0, 5, 3, 1, 4, 2, 6)
