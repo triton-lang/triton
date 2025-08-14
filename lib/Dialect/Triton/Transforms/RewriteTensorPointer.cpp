@@ -34,6 +34,8 @@ public:
 
   RewritedInfo(const RewritedInfo &other) = default;
 
+  RewritedInfo &operator=(const RewritedInfo &other) = default;
+
   RewritedInfo(Value base, const SmallVector<Value> &shape,
                const SmallVector<Value> &strides,
                const SmallVector<Value> &offsets,
@@ -79,7 +81,7 @@ public:
     // Expand dimensions
     Value expandedResult =
         builder.create<arith::AddIOp>(loc, splatOffset, i64Range);
-    for (int j = 0; j < tensorShape.size(); ++j) {
+    for (uint j = 0; j < tensorShape.size(); ++j) {
       if (j == i)
         continue;
       expandedResult =
@@ -257,7 +259,7 @@ public:
     // Calculate new offsets
     assert(info.length() == op.getOffsets().size());
     SmallVector<Value> newOffsets;
-    for (int i = 0; i < info.length(); ++i) {
+    for (uint i = 0; i < info.length(); ++i) {
       Value i64Offset = builder.create<arith::ExtSIOp>(
           op.getLoc(), builder.getI64Type(), op.getOffsets()[i]);
       Value newOffset = builder.create<arith::AddIOp>(
