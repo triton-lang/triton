@@ -7021,7 +7021,7 @@ def test_enable_fp_fusion(enable_fp_fusion, default_override, device, monkeypatc
 
     data = torch.randn((128, ), device=device, dtype=torch.float32)
     if default_override:
-        monkeypatch.setenv("TRITON_ENABLE_FP_FUSION", "1" if enable_fp_fusion else "0")
+        monkeypatch.setenv("TRITON_DEFAULT_FP_FUSION", "1" if enable_fp_fusion else "0")
         h = mul_add.warmup(data, grid=(1, ))
     else:
         h = mul_add.warmup(data, grid=(1, ), enable_fp_fusion=enable_fp_fusion)
