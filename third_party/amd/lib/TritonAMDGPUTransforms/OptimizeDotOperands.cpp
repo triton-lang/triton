@@ -80,7 +80,7 @@ public:
 
       op = followConvertLayoutChain(usedValue, op);
 
-      if (auto transOp = dyn_cast<tt::TransOp>(op)) {
+      if (auto transOp = dyn_cast_or_null<tt::TransOp>(op)) {
         LDBG("Found tranpose op: " << *transOp);
         cvtOp = transOp.getSrc().getDefiningOp<ttg::ConvertLayoutOp>();
         LDBG("Found parent cvt op of transpose: " << *cvtOp);
@@ -91,7 +91,7 @@ public:
           transDot = dotOp;
           transOpIdx = (usedValue == dotOp.getA()) ? 0 : 1;
         }
-      } else if (auto dotOp = dyn_cast<tt::DotOpInterface>(op)) {
+      } else if (auto dotOp = dyn_cast_or_null<tt::DotOpInterface>(op)) {
         directDot = dotOp;
         directOpIdx = (usedValue == dotOp.getA()) ? 0 : 1;
       }

@@ -524,8 +524,8 @@ public:
     // kWidth = 4 so that the coversion from #mma (result of 1st dot)
     // to #dotOp (operand 0 of 2nd dot) is a no-op.
     // TODO (lixun): relax the condition for 8-bit elementTy.
-    auto aElemTyF16OrBF16 = (aElemTy.isF16() || aElemTy.isBF16());
-    if (aElemTyF16OrBF16 && isDotChainTail) {
+    auto is16BitElemTy = (aElemTy.isF16() || aElemTy.isBF16());
+    if (is16BitElemTy && isDotChainTail) {
       kWidth = 4;
     }
     // For FA bwd kernel (detected using hasTransInDefChain), depending on
@@ -533,7 +533,7 @@ public:
     // accordingly. This will enable us to create the same shared encoding per
     // pair of tt.dot ops that both use the same tt.load result, one directly
     // and one via tt.trans, later in the pass pipeline.
-    if (aElemTyF16OrBF16 && hasTransInDefChain(dotOp, 1U)) {
+    if (is16BitElemTy && hasTransInDefChain(dotOp, 1u)) {
       if (isChainDotHead(dotOp)) {
         kWidth = 4;
       } else if (isDotChainTail) {
