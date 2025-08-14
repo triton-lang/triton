@@ -7,6 +7,7 @@ from triton.compiler import make_backend
 from triton.runtime.jit import create_specialize_fallback
 from triton._C.libtriton import native_specialize_impl
 
+
 @pytest.mark.parametrize("arg", [
     -1,
     0,
