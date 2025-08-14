@@ -31,7 +31,7 @@ namespace {
 //   load -> cvt -> .. -> dot1
 //        -> cvt -> .. -> trans -> cvt -> .. -> dot2
 // Rewrite to:
-//  load -> local_alloc -> local_load           -> dot1
+//  load -> local_alloc -> local_load            -> dot1
 //                      -> local_load_transposed -> dot2
 class ReuseShmemForDirectAndTransposedUse : public OpRewritePattern<LoadOp> {
 public:
@@ -91,6 +91,9 @@ public:
         directDot = dotOp;
         directOpIdx = (usedValue == dotOp.getA()) ? 0 : 1;
       }
+
+      if (directDot && transDot)
+        break;
     }
 
     if (!directDot)
@@ -183,7 +186,8 @@ private:
     // Tensor must be non-k contiguous in shared memory in order to use
     // local_load_transposed
     // TODO(PMylon): Comment out for now, until lowering from
-    // local_load_transposed to ds_read_tr is supported return !isKContig;
+    // local_load_transposed to ds_read_tr is supported.
+    // return !isKContig;
     return false;
   }
 };
