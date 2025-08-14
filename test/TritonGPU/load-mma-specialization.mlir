@@ -1,6 +1,6 @@
 // RUN: triton-opt %s -split-input-file -allow-unregistered-dialect -tritongpu-hoist-tmem-alloc | FileCheck %s --check-prefix=TMEM --check-prefix=FUNC
 // RUN: triton-opt %s -split-input-file -allow-unregistered-dialect -verify-diagnostics --tritongpu-hoist-tmem-alloc -tritongpu-partition-scheduling -tritongpu-load-mma-specialization -sccp -int-range-optimizations -canonicalize -cse -tritongpu-remove-layout-conversions | FileCheck %s
-// RUN: triton-opt %s -split-input-file -allow-unregistered-dialect -verify-diagnostics --tritongpu-hoist-tmem-alloc -tritongpu-automatic-warp-specialization | FileCheck %s --check-prefix=AWS --check-prefix=FUNC
+// RUN: triton-opt %s -split-input-file -allow-unregistered-dialect -verify-diagnostics --tritongpu-hoist-tmem-alloc -tritongpu-assign-latencies -tritongpu-schedule-loops -tritongpu-automatic-warp-specialization | FileCheck %s --check-prefix=AWS --check-prefix=FUNC
 
 #acc_layout = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
 #oper_layout = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0]}>
@@ -770,7 +770,7 @@ tt.func @matmul_scaled_rhs_scales_tma(
   %off_n: i32,
   %a_desc: !tt.tensordesc<tensor<128x64xf8E4M3FN, #nvmma_smem>>,
   %b_desc: !tt.tensordesc<tensor<128x64xf8E4M3FN, #nvmma_smem>>,
-  %b_scale_desc: !tt.tensordesc<tensor<128x8xi8, #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [4, 3, 2, 1, 0]}>>>
+  %b_scale_desc: !tt.tensordesc<tensor<128x8xi8, #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>>>
 ) {
   %true = arith.constant true
   %c0_i32 = arith.constant 0 : i32
@@ -793,7 +793,7 @@ tt.func @matmul_scaled_rhs_scales_tma(
     // CHECK-COUNT-3: async_tma_copy_global_to_local {{.*}} {ttg.partition = 2 : i32}
     %a_reg = tt.descriptor_load %a_desc[%off_m, %off_k] : !tt.tensordesc<tensor<128x64xf8E4M3FN, #nvmma_smem>> -> tensor<128x64xf8E4M3FN, #oper_layout>
     %b_reg = tt.descriptor_load %b_desc[%off_n, %off_k] : !tt.tensordesc<tensor<128x64xf8E4M3FN, #nvmma_smem>> -> tensor<128x64xf8E4M3FN, #oper_layout>
-    %b_scales_reg = tt.descriptor_load %b_scale_desc[%off_m, %c0_i32] : !tt.tensordesc<tensor<128x8xi8, #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [4, 3, 2, 1, 0]}>>> -> tensor<128x8xi8, #scales>
+    %b_scales_reg = tt.descriptor_load %b_scale_desc[%off_m, %c0_i32] : !tt.tensordesc<tensor<128x8xi8, #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>>> -> tensor<128x8xi8, #scales>
 
     %a_sh = ttg.local_alloc %a_reg : (tensor<128x64xf8E4M3FN, #oper_layout>) -> !ttg.memdesc<128x64xf8E4M3FN, #nvmma_smem, #smem>
     %b_sh_raw = ttg.local_alloc %b_reg : (tensor<128x64xf8E4M3FN, #oper_layout>) -> !ttg.memdesc<128x64xf8E4M3FN, #nvmma_smem, #smem>
@@ -1025,13 +1025,13 @@ tt.func @specialize_load_only(%desc: !tt.tensordesc<tensor<128x64xf16, #shared>>
   %c1_i32 = arith.constant 1 : i32
   // CHECK: local_alloc : () -> !ttg.memdesc<3x128x64xf16,
   scf.for %i = %c0_i32 to %ub step %c1_i32 : i32 {
-    // CHECK: wait_barrier {{.*}} {ttg.partition = 0 : i32}
-    // CHECK-NEXT: local_load {{.*}} {ttg.partition = 0 : i32}
+    // CHECK: wait_barrier {{.*}} {loop.cluster = 0 : i32, loop.stage = 1 : i32, ttg.partition = 0 : i32}
+    // CHECK-NEXT: local_load {{.*}} {loop.cluster = 0 : i32, loop.stage = 1 : i32, ttg.partition = 0 : i32}
     // CHECK-NEXT: fence_async_shared {{.*}}partition = 0
-    // CHECK-NEXT: arrive_barrier {{.*}} {ttg.partition = 0 : i32}
-    %val = tt.descriptor_load %desc[%i, %i] : !tt.tensordesc<tensor<128x64xf16, #shared>> -> tensor<128x64xf16, #oper_layout>
-    "use"(%val) : (tensor<128x64xf16, #oper_layout>) -> ()
-  } {tt.warp_specialize}
+    // CHECK-NEXT: arrive_barrier {{.*}} {loop.cluster = 0 : i32, loop.stage = 1 : i32, ttg.partition = 0 : i32}
+    %val = tt.descriptor_load %desc[%i, %i] {loop.cluster = 1 : i32, loop.stage = 0}: !tt.tensordesc<tensor<128x64xf16, #shared>> -> tensor<128x64xf16, #oper_layout>
+    "use"(%val) {loop.cluster = 0 : i32, loop.stage = 1 : i32} : (tensor<128x64xf16, #oper_layout>) -> ()
+  } {tt.num_stages = 3 : i32, tt.scheduled_max_stage = 1 : i32, tt.warp_specialize}
   tt.return
 }
 
@@ -1043,9 +1043,9 @@ tt.func @fp4_padded_load(%desc: !tt.tensordesc<tensor<1x256x64xui8, #fp4_padded_
   scf.for %i = %c0_i32 to %ub step %c1_i32 : i32 {
     // CHECK: [[IDX:%.*]] = arith.muli [[I]], %c2_i32 : i32
     // CHECK: async_tma_copy_global_to_local %arg{{[0-9]+}}[[[I]], [[IDX]]]
-    %val = tt.descriptor_load %desc[%i, %i] : !tt.tensordesc<tensor<1x256x64xui8, #fp4_padded_shared>> -> tensor<256x64xi8, #oper_layout>
-    "use"(%val) : (tensor<256x64xi8, #oper_layout>) -> ()
-  } {tt.warp_specialize}
+    %val = tt.descriptor_load %desc[%i, %i] {loop.cluster = 1 : i32, loop.stage = 0, ttg.partition = 2 : i32} : !tt.tensordesc<tensor<1x256x64xui8, #fp4_padded_shared>> -> tensor<256x64xi8, #oper_layout>
+    "use"(%val) {loop.cluster = 0 : i32, loop.stage = 1 : i32, ttg.partition = 0 : i32} : (tensor<256x64xi8, #oper_layout>) -> ()
+  } {tt.num_stages = 2 : i32, tt.scheduled_max_stage = 1 : i32, tt.warp_specialize}
   tt.return
 }
 
