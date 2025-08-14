@@ -260,5 +260,18 @@ def TritonAMDFoldTrueCmpI: Pass<"tritonamdgpu-fold-true-cmpi", "mlir::ModuleOp">
   }];
 }
 
+def TritonAMDPeepholeOptimize: Pass<"tritonamdgpu-peephole-optimize", "mlir::ModuleOp"> {
+  let summary = "Perform peephole optimizations";
+
+  let description = [{
+  }];
+
+  let options = [
+    Option<"archGenerationName", "arch-generation-name",
+           "std::string", /*default=*/"std::string{}",
+           "GFX generation name of target device.">,
+  ];
+}
+
 
 #endif

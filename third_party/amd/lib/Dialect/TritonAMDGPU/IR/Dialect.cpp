@@ -22,6 +22,7 @@
  */
 
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/DialectImplementation.h"
 #include "mlir/IR/OpImplementation.h"
 #include "third_party/amd/include/Utils/Utility.h"
@@ -416,6 +417,72 @@ InThreadTransposeOp::deduceOutputLayout(ArrayRef<int64_t> shape,
 
   LinearLayout transposedLL(bases, SmallVector<StringAttr>(outDimNames));
   return transposedLL;
+}
+
+/*
+LogicalResult Fp32ScaledConvertOp::verify() {
+  mlir::Builder b(getContext());
+  ScaleDotElemType elemType = getSrcElemType();
+  Type expectedType;
+  switch (elemType) {
+  case ScaleDotElemType::E2M1:
+    expectedType = b.getIntegerType(8);
+    break;
+  case ScaleDotElemType::E4M3:
+    expectedType = b.getType<Float8E4M3FNType>();
+    break;
+  case ScaleDotElemType::E5M2:
+    expectedType = b.getType<Float8E5M2Type>();
+    break;
+
+  default:
+    return emitOpError("only support E2M1, E4M3, E5M2 right now");
+  }
+
+  Type actualType = getSrc().getType().getElementType();
+  if (actualType != expectedType)
+    return emitOpError("mismatch between input element type; expected ")
+           << expectedType << " but given " << actualType;
+
+  return success();
+}
+*/
+
+LogicalResult ScaledUpcastFp4Op::verify() {
+  RankedTensorType inputTy = getInput().getType();
+  RankedTensorType outputTy = getOutput().getType();
+  RankedTensorType scaleTy = getScale().getType();
+
+  if (outputTy.getShape() != scaleTy.getShape())
+    return emitError() << "scale and output should have the same shape";
+
+  int64_t rank = inputTy.getRank();
+  if (rank != outputTy.getRank())
+    return emitError() << "source rank " << rank << " != result rank "
+                       << outputTy.getRank();
+
+  auto inputShape = inputTy.getShape();
+  auto outputShape = outputTy.getShape();
+  auto axis = getAxis();
+
+  if (axis < 0 || axis >= rank)
+    return emitError() << "axis " << axis << " out of range for rank " << rank;
+
+  for (int i = 0; i < rank; ++i) {
+    if (i == axis) {
+      if (outputShape[i] != inputShape[i] * 2)
+        return emitError() << "axis " << axis
+                           << " dimension must be 2x source dimension (src="
+                           << inputShape[i] << ", dst=" << outputShape[i] << ")";
+    } else {
+      if (outputShape[i] != inputShape[i])
+        return emitError() << "dimension " << i
+                           << " mismatch (src=" << inputShape[i]
+                           << ", dst=" << outputShape[i] << ", axis=" << axis
+                           << ")";
+    }
+  }
+  return success();
 }
 
 LogicalResult ConcatOp::verify() {
