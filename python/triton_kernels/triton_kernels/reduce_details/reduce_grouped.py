@@ -7,27 +7,31 @@ from triton_kernels.numerics_details.mxfp import dequantize_mxfp8_fn
 
 
 @triton.jit
-def _reduce_grouped(X, stride_xm, stride_xn,  #
+def _reduce_grouped(X, stride_xb, stride_xm, stride_xn,  #
                     XScale,  # input scalar flex scale
+                    Out, stride_om, stride_on,  # output tensor
                     OutExpectedScale, OutActualScale, OutChecksumScale,  # output scalar flex scales
-                    InIndx, N, OutIndx,  #
-                    XMxScale, stride_mxs,  # optional per-32-col output MXFP scales (uint8)
+                    InIndx, B, N,  #
+                    XMxScale, stride_mxb, stride_mxs,  # optional per-32-col output MXFP scales (uint8)
                     HAS_MX_SCALE: tl.constexpr, FLEXPOINT_SATURATE_INF: tl.constexpr, K: tl.constexpr,
                     BLOCK_N: tl.constexpr):
     pid_t = tl.program_id(0)
     # persistent along N: single program on N, iterate tiles of size BLOCK_N
     start = pid_t * K
     # load indices into a tuple
-    indxs = ()
-    for i in tl.static_range(0, K):
-        indxs = indxs + (tl.load(InIndx + start + i), )
+    if InIndx is None:
+        indxs = (pid_t, )
+    else:
+        indxs = ()
+        for i in tl.static_range(0, K):
+            indxs = indxs + (tl.load(InIndx + start + i), )
     # determine first valid topk row
     fi = indxs[(K - 1)]
     for i in tl.static_range(K - 2, -1, -1):
         fi = tl.where(indxs[i] != -1, indxs[i], fi)
     # record overwritten row index (may be -1 if none)
-    tl.store(OutIndx + pid_t, fi)
     ColPtrs = X + tl.arange(0, BLOCK_N) * stride_xn
+    OColPtrs = Out + tl.arange(0, BLOCK_N) * stride_on
     if HAS_MX_SCALE:
         ColScalePtrs = XMxScale + tl.arange(0, BLOCK_N // 32) * stride_xn
     x_scale = load_scale(XScale)
@@ -36,18 +40,19 @@ def _reduce_grouped(X, stride_xm, stride_xn,  #
         n_mask_scale = tl.arange(0, BLOCK_N // 32) < tl.cdiv(N - n_curr, 32)
         acc = tl.zeros([BLOCK_N], dtype=tl.float32)
         # accumulate contributions for this tile
-        for i in tl.static_range(0, K):
-            is_valid = indxs[i] != -1
-            x_row_ptr = ColPtrs + indxs[i] * stride_xm
-            vals = tl.load(x_row_ptr, mask=n_mask & is_valid, other=0.0)
-            vals = vals.to(tl.float32)
-            if HAS_MX_SCALE:
-                scale_row_ptr = ColScalePtrs + indxs[i] * stride_mxs
-                scale = tl.load(scale_row_ptr, mask=n_mask_scale & is_valid, other=0.)
-                scale = (scale.to(tl.uint32) << 23).to(tl.float32, bitcast=True)
-                vals = vals.reshape([BLOCK_N // 32, 32])
-                vals = (scale[:, None] * vals).reshape([BLOCK_N])
-            acc += vals
+        for b in tl.range(0, B):
+            for i in tl.static_range(0, K):
+                is_valid = indxs[i] != -1
+                x_row_ptr = ColPtrs + indxs[i] * stride_xm + b * stride_xb
+                vals = tl.load(x_row_ptr, mask=n_mask & is_valid, other=0.0)
+                vals = vals.to(tl.float32)
+                if HAS_MX_SCALE:
+                    scale_row_ptr = ColScalePtrs + indxs[i] * stride_mxs + b * stride_mxb
+                    scale = tl.load(scale_row_ptr, mask=n_mask_scale & is_valid, other=0.)
+                    scale = (scale.to(tl.uint32) << 23).to(tl.float32, bitcast=True)
+                    vals = vals.reshape([BLOCK_N // 32, 32])
+                    vals = (scale[:, None] * vals).reshape([BLOCK_N])
+                acc += vals
         acc *= x_scale
         # Compute per-32-col MXFP scales for this tile if requested
         if HAS_MX_SCALE:
@@ -60,9 +65,10 @@ def _reduce_grouped(X, stride_xm, stride_xn,  #
         # Convert to flexpoint output if configured (scalar scales)
         acc = float_to_flex(acc, OutExpectedScale, OutActualScale, OutChecksumScale, None, X, FLEXPOINT_SATURATE_INF)
         # write-back for this tile
-        out_ptr = ColPtrs + fi * stride_xm
-        tl.store(out_ptr, acc, mask=n_mask & (fi != -1))
+        out_ptr = OColPtrs + pid_t * stride_om
+        tl.store(out_ptr, acc, mask=n_mask)
         ColPtrs += BLOCK_N * stride_xn
+        OColPtrs += BLOCK_N * stride_on
         if HAS_MX_SCALE:
             ColScalePtrs += BLOCK_N // 32 * stride_xn
 
@@ -99,9 +105,11 @@ def reduce_grouped(x: torch.Tensor, indx: torch.Tensor, x_flex: InFlexData | Non
     Returns
     - The input tensor `x` (modified in place).
     """
-    assert x.shape[0] == indx.numel()
-    num_groups = indx.shape[0]
-    overwritten = torch.empty((num_groups, ), dtype=torch.int32, device=x.device)
+    if indx is not None:
+        assert x.shape[-2] == indx.numel()
+    K = 1 if indx is None else indx.shape[1]
+    num_groups = x.shape[-2] // K
+    out = torch.empty((num_groups, x.shape[-1]), dtype=x.dtype, device=x.device)
     BLOCK_N = 512
     # Resolve scalar flex scales (may be None)
     x_expected_scale = None if x_flex is None else x_flex.scale
@@ -110,16 +118,20 @@ def reduce_grouped(x: torch.Tensor, indx: torch.Tensor, x_flex: InFlexData | Non
     out_checksum_scale = None if out_flex is None else out_flex.checksum_scale
     # Resolve MXFP output scale row stride
     has_mx_scale = x_mx_scale is not None
-    stride_mxs = 0 if not has_mx_scale else x_mx_scale.stride(0)
+    stride_mxb = 0 if not has_mx_scale else x_mx_scale.stride(0)
+    stride_mxs = 0 if not has_mx_scale else x_mx_scale.stride(1)
     _reduce_grouped[(num_groups, )](
-        x, x.stride(0), x.stride(1),  #
+        x, x.stride(0), x.stride(1), x.stride(2),  #
         x_expected_scale,  # scalar input scale
-        out_expected_scale, out_actual_scale, out_checksum_scale, indx, x.shape[1], overwritten,  #
-        x_mx_scale, stride_mxs, HAS_MX_SCALE=has_mx_scale, FLEXPOINT_SATURATE_INF=flexpoint_saturate_inf,
-        BLOCK_N=BLOCK_N, K=indx.shape[1],  #
+        out, out.stride(0), out.stride(1),  #
+        out_expected_scale, out_actual_scale, out_checksum_scale, indx,  #
+        x.shape[0], x.shape[-1],  #
+        x_mx_scale, stride_mxb, stride_mxs,  #
+        HAS_MX_SCALE=has_mx_scale, FLEXPOINT_SATURATE_INF=flexpoint_saturate_inf,  #
+        BLOCK_N=BLOCK_N, K=K,  #
         num_warps=1,  #
     )
-    return x, overwritten
+    return out
 
 
 def reduce_grouped_torch(x: torch.Tensor, indx: torch.Tensor, inplace: bool = True):
@@ -142,18 +154,20 @@ def reduce_grouped_torch(x: torch.Tensor, indx: torch.Tensor, inplace: bool = Tr
     # Sum contributions per group across valid rows (fp32)
     token_id = positions // k
     valid_pos = torch.nonzero(valid, as_tuple=False).squeeze(1)
-    contrib = x.index_select(0, src.index_select(0, valid_pos)).to(torch.float32)
-    sums = torch.zeros((num_groups, x.shape[-1]), dtype=torch.float32, device=x.device)
-    sums.index_add_(0, token_id.index_select(0, valid_pos), contrib)
+    contrib = x.index_select(-2, src.index_select(0, valid_pos)).to(torch.float32)
+    sums = torch.zeros((x.shape[0], num_groups, x.shape[-1]), dtype=torch.float32, device=x.device)
+    sums.index_add_(-2, token_id.index_select(0, valid_pos), contrib)
     # First valid per group (left-to-right)
     big = torch.full_like(src, src.numel(), dtype=torch.long)
     masked_pos = torch.where(valid, positions, big)
     first_pos_flat = masked_pos.view(num_groups, k).min(dim=1).values
     valid_group_mask = first_pos_flat != big[0]
     overwritten = -torch.ones((num_groups, ), dtype=torch.int32, device=x.device)
+    vals = torch.zeros((num_groups, x.shape[-1]), dtype=x.dtype, device=x.device)
     if valid_group_mask.any():
         idx_keep = torch.nonzero(valid_group_mask, as_tuple=False).squeeze(1)
         first_rows = src.index_select(0, first_pos_flat[valid_group_mask])
-        x.index_copy_(0, first_rows, sums.index_select(0, idx_keep).to(x.dtype))
+        vals2 = sums.index_select(-2, idx_keep).to(x.dtype).sum(0)
+        vals.index_copy_(-2, first_rows, vals2)
         overwritten.index_copy_(0, idx_keep, first_rows.to(torch.int32))
-    return x, overwritten
+    return vals, overwritten

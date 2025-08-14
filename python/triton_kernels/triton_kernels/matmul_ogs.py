@@ -16,9 +16,7 @@ from triton_kernels.target_info import is_cuda
 from .matmul_ogs_details._matmul_ogs import _matmul_ogs
 from .matmul_ogs_details._p_matmul_ogs import _p_matmul_ogs, get_per_device_per_stream_alloc_fn
 from .reduce_details import reduce_grouped as reduce_grouped_mod
-from .matmul_ogs_details._reduce_splitk import _reduce_splitk
 from .numerics_details.mxfp import MXFP_BLOCK_SIZE
-from .scatter import scatter as scatter_rows
 from .matmul_ogs_details.opt_flags import make_opt_flags, update_opt_flags_constraints
 from .specialize import specialize
 from .tensor import Storage, Tensor, FP4, bitwidth, wrap_torch_tensor
@@ -413,59 +411,29 @@ def matmul_ogs(x, w, bias,
                    IS_EPILOGUE_DEQUANT_MXFP8=epilogue.specs.name == FnName.DEQUANTIZE_MXFP8.name,
                    NUM_SMS = grid if opt_flags.is_persistent else 0,
                    **opt_flags.target_kernel_kwargs)
-    # finalize split-k
-    # out = reduce_dispatch(out, ReductionSpecs(dim=0, group_indx=None))
-
-    if opt_flags.split_k > 1:
-        # out = out.sum(dim=0)
-        out = out.view(opt_flags.split_k, -1)
-        split_k, BMN = out.shape
-        # Allocate output in final dtype so kernel can convert via float_to_flex
-        final_dtype = memory["output"].dtype
-        out_splitk = torch.empty((BMN,), device=out.device, dtype=final_dtype)
-        BLOCK_MN = 32768
-        grid0 = min(256, triton.cdiv(out_splitk.numel(), BLOCK_MN))
-        grid = (grid0, )
-        _reduce_splitk[grid](
-            memory["scratchpad"]["matmul"], memory["scratchpad"]["matmul"].stride(0), out_splitk,  #
-            precision_config.flex_ctx.out_data.expected_scale,
-            precision_config.flex_ctx.out_data.actual_scale,
-            precision_config.flex_ctx.out_data.checksum_scale,
-            opt_flags.split_k, BMN,  #
-            BLOCK_MN=BLOCK_MN,
-            FLEXPOINT_SATURATE_INF=precision_config.flexpoint_saturate_inf,
-            num_warps=32,
-        )
-        out = out_splitk.view(batch_size, M, N)
-    else:
-        out = out.squeeze(0)
-
+    # split-k + expert accumulation
     out = out if is_input_batched else out.squeeze(0)
-    # no scatter; we're done
-    if scatter_indx is None:
-        return out
     # reduce expert groups
-    scatter_indx = scatter_indx.src_indx
-    if routing_data.n_expts_act > 1:
-        group_indx = scatter_indx.view(-1, routing_data.n_expts_act)
-        # Prepare in-flex scale for intermediate rows (use output expected scale)
-        x_flex_in = None if out_flex.expected_scale is None else InFlexData(scale=out_flex.expected_scale)
-        # Optional per-32-col mxfp output scales buffer
-        out_scale = None
-        if out_has_mx and "mx_out_scale" in memory["scratchpad"]:
-            out_scale = memory["scratchpad"]["mx_out_scale"][0, 0, :, :]
-        out, scatter_indx = reduce_grouped_mod.reduce_grouped(
-            out,
-            group_indx,
-            x_flex=x_flex_in,
-            out_flex=out_flex,
-            x_mx_scale=out_scale,
-            flexpoint_saturate_inf=precision_config.flexpoint_saturate_inf,
-        )
-    # scatter output
-    out = scatter_rows(out, scatter_indx)
-    if out_has_mx:
-        precision_config.out_scale = scatter_rows(out_scale.squeeze(0).squeeze(0), scatter_indx)
+    if scatter_indx is None:
+        group_indx = None
+    else:
+        group_indx = scatter_indx.src_indx.view(-1, routing_data.n_expts_act)
+    out_flex = precision_config.flex_ctx.out_data
+    # Prepare in-flex scale for intermediate rows (use output expected scale)
+    x_flex_in = None if out_flex.expected_scale is None else InFlexData(scale=out_flex.expected_scale)
+    # Optional per-32-col mxfp output scales buffer
+    out_scale = None
+    out = out[:, 0, :, :]
+    if out_has_mx and "mx_out_scale" in memory["scratchpad"]:
+        out_scale = memory["scratchpad"]["mx_out_scale"][:, 0, :, :]
+    out = reduce_grouped_mod.reduce_grouped(
+        out,
+        group_indx,
+        x_flex=x_flex_in,
+        out_flex=out_flex,
+        x_mx_scale=out_scale,
+        flexpoint_saturate_inf=precision_config.flexpoint_saturate_inf,
+    )
     return out
 
 # -----------------------------------------------------------------------------

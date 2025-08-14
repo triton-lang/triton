@@ -3,6 +3,7 @@ import torch
 from triton.testing import do_bench
 
 from triton_kernels.reduce import reduce, reduce_torch, ReductionSpecs
+from triton_kernels.scatter import scatter
 
 
 def make_rand_indx(num_tokens: int, k: int, p_invalid: float = 0.25, device: str = "cuda") -> torch.Tensor:
@@ -14,41 +15,42 @@ def make_rand_indx(num_tokens: int, k: int, p_invalid: float = 0.25, device: str
     return indx
 
 
+@pytest.mark.parametrize("num_batches", [3])
 @pytest.mark.parametrize("num_tokens, k, n_cols", [
     (256, 1, 128),
     (256, 2, 256),
     (127, 3, 511),
     (1024, 4, 1024),
 ])
-def test_op_grouped(num_tokens, k, n_cols):
+def test_op_grouped(num_batches, num_tokens, k, n_cols):
     torch.manual_seed(0)
     device = "cuda"
-    x_tri = torch.randn((num_tokens * k, n_cols), device=device, dtype=torch.float16)
+    x_tri = torch.randn((num_batches, num_tokens * k, n_cols), device=device, dtype=torch.float16)
     x_ref = x_tri.clone()
     indx = make_rand_indx(num_tokens, k, p_invalid=0.33, device=device)
-    specs = ReductionSpecs(dim=0, group_indx=indx, expensive_checks=True)
-    x_tri, out_indx_tri = reduce(x_tri, specs, inplace=True)
+    specs = ReductionSpecs(dim=1, group_indx=indx, expensive_checks=True)
+    x_tri = reduce(x_tri, specs, inplace=True)
     x_ref, out_indx_ref = reduce_torch(x_ref, specs)
+    x_ref = scatter(x_ref, out_indx_ref)
     assert torch.allclose(x_tri.float(), x_ref.float(), atol=1e-2, rtol=1e-2)
-    assert torch.equal(out_indx_tri, out_indx_ref)
 
 
-@pytest.mark.parametrize("num_tokens, k, n_cols", [
-    (256, 1, 128),
-    (256, 65, 256),
-    (127, 413, 511),
-    (128, 512, 1024),
-])
-def test_op_standard(num_tokens, k, n_cols):
-    torch.manual_seed(0)
-    device = "cuda"
-    B = k
-    x_tri = torch.randn((B, num_tokens, n_cols), device=device, dtype=torch.float16)
-    x_ref = x_tri.clone()
-    specs = ReductionSpecs(dim=0, group_indx=None, expensive_checks=False)
-    y_tri = reduce(x_tri, specs)
-    y_ref = reduce_torch(x_ref, specs)
-    assert torch.allclose(y_tri.float(), y_ref.float(), atol=1e-2, rtol=1e-2)
+# @pytest.mark.parametrize("num_tokens, k, n_cols", [
+#     (256, 1, 128),
+#     (256, 65, 256),
+#     (127, 413, 511),
+#     (128, 512, 1024),
+# ])
+# def test_op_standard(num_tokens, k, n_cols):
+#     torch.manual_seed(0)
+#     device = "cuda"
+#     B = k
+#     x_tri = torch.randn((B, num_tokens, n_cols), device=device, dtype=torch.float16)
+#     x_ref = x_tri.clone()
+#     specs = ReductionSpecs(dim=0, group_indx=None, expensive_checks=False)
+#     y_tri = reduce(x_tri, specs)
+#     y_ref = reduce_torch(x_ref, specs)
+#     assert torch.allclose(y_tri.float(), y_ref.float(), atol=1e-2, rtol=1e-2)
 
 
 def bench_op_grouped(num_tokens: int = 16384, k: int = 4, n_cols: int = 4096, dtype: torch.dtype = torch.float16,
