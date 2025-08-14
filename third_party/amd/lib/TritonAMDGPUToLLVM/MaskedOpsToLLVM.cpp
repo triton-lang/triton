@@ -127,10 +127,6 @@ public:
     auto ptr = storeOp.getPtr();
 
     auto mask = storeOp.getMask();
-
-    llvm::errs() << "DEBUG INFO==========================\n";
-    llvm::errs() << mask << "\n";
-    llvm::errs() << mask.getType() << "\n";
     Block *currentBlock = rewriter.getInsertionBlock();
     Block *afterStore =
         rewriter.splitBlock(currentBlock, rewriter.getInsertionPoint());

@@ -156,7 +156,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     // CHECK: llvm.cond_br
     // CHECK: rocdl.global.load.lds
     // CHECK-NEXT: llvm.br
-    // CHECK: llvm.store
+    // CHECK: amdgpu.masked_store
+    // check above
 
     // CHECK: llvm.cond_br
     // CHECK: rocdl.global.load.lds

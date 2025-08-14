@@ -302,10 +302,6 @@ Value llLoad(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,
     }
   }
 
-  llvm::errs() << "LOAD DEBUG INFO==========================\n";
-  llvm::errs() << "masked:" << isNonMasked << "\n";
-  llvm::errs() << "pred: " << pred << "\n";
-  llvm::errs() << "pred_t: " << pred.getType() << "\n";
   if (isNonMasked) {
     // Determine cache flags based on cache modifier
     bool volatileFlag = false;
@@ -358,7 +354,6 @@ void llStore(RewriterBase &rewriter, Location loc, Value ptr, Value val,
     }
   }
   if (isNonMasked) {
-    llvm::errs() << "ATTENTION! We are in this conditional STORE\n";
     // Determine cache flags based on cache modifier
     bool isVolatile = false;
     bool isNonTemporal = false;
