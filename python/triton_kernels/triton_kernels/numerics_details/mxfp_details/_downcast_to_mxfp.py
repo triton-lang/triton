@@ -154,5 +154,5 @@ def _downcast_to_mxfp(mx_tensor_ptr, stride_mxt_outer, stride_mxt_quant: tl.cons
 
 
 @triton.jit(repr=lambda _: "_dequantize_mxfp8")
-def _dequantize_mxfp8_fn(input, mask, pid=None):
+def _quantize_mxfp8_fn(input, mask, pid=None):
     return _compute_quant_and_scale(input, mask, tl.float8e4nv)
