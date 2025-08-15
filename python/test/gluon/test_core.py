@@ -164,7 +164,9 @@ def test_amd_async_copy_global_to_shared():
         ttgl.amd.cdna3.async_copy_global_to_shared(smem, a_ptr + offsets)
 
         ttgl.amd.cdna3.async_wait(0)
+
         a = smem.load(blocked)
+        ttgl.amd.cdna3.synced_via_wait(a)
 
         ttgl.store(b_ptr + offsets, a)
 
@@ -173,6 +175,7 @@ def test_amd_async_copy_global_to_shared():
     pgm = kernel[(1, )](a, b)
 
     torch.testing.assert_close(a, b)
+    assert re.search(r'ttg\.local_load .* \{ttg\.amdgpu\.syncedViaAsyncWait = true\}', pgm.asm['ttgir'], re.MULTILINE)
     assert 'global_load_lds' in pgm.asm['amdgcn']
     assert 'vmcnt(0)' in pgm.asm['amdgcn']
 
@@ -192,7 +195,9 @@ def test_amd_buffer_load_to_shared():
         ttgl.amd.cdna3.buffer_load_to_shared(smem, a_ptr, offsets)
 
         ttgl.amd.cdna3.async_wait(0)
+
         a = smem.load(blocked)
+        ttgl.amd.cdna3.synced_via_wait(a)
 
         ttgl.store(b_ptr + offsets, a)
 
@@ -201,6 +206,7 @@ def test_amd_buffer_load_to_shared():
     pgm = kernel[(1, )](a, b)
 
     torch.testing.assert_close(a, b)
+    assert re.search(r'ttg\.local_load .* \{ttg\.amdgpu\.syncedViaAsyncWait = true\}', pgm.asm['ttgir'], re.MULTILINE)
     assert 'vmcnt(0)' in pgm.asm['amdgcn']
     assert re.search(r"buffer_load.*lds$", pgm.asm['amdgcn'], re.MULTILINE)
 

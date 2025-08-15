@@ -10,7 +10,10 @@ from ..._semantic import _check
 if TYPE_CHECKING:
     from ..._semantic import GluonSemantic
 
-__all__ = ["async_copy_global_to_shared", "async_wait", "sync_via_wait", "buffer_load_to_shared", "buffer_load", "buffer_store", "mfma"]
+__all__ = [
+    "async_copy_global_to_shared", "async_wait", "synced_via_wait", "buffer_load_to_shared", "buffer_load",
+    "buffer_store", "mfma"
+]
 
 
 @builtin
@@ -60,6 +63,11 @@ def async_wait(num_outstanding=0, _semantic=None):
     """
     num_outstanding = _unwrap_if_constexpr(num_outstanding)
     _semantic.builder.create_async_wait_group(num_outstanding)
+
+
+@builtin
+def synced_via_wait(v, _semantic=None):
+    v.handle.set_attr("ttg.amdgpu.syncedViaAsyncWait", _semantic.builder.get_bool_attr(True))
 
 
 def _verify_buffer_load_store(ptr, offsets, mask, other=None):
