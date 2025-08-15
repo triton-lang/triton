@@ -110,6 +110,8 @@ def reduce_grouped(x: torch.Tensor, indx: torch.Tensor, x_flex: InFlexData | Non
     Returns
     - The input tensor `x` (modified in place).
     """
+    if x.ndim == 2:
+        x = x.unsqueeze(0)
     if indx is not None:
         assert x.shape[-2] == indx.numel()
     K = 1 if indx is None else indx.shape[1]

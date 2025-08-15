@@ -300,11 +300,16 @@ def matmul_ogs(x, w, bias,
         triton.set_allocator(get_per_device_per_stream_alloc_fn(x.device))
     # Intermediate tensors and postprocess kernels for each situation
     has_scratchpad = "matmul" in memory["scratchpad"]
-    out = memory["scratchpad"]["matmul"] if has_scratchpad else memory["output"]
-    out_flex = OutFlexData() if out.dtype == torch.float32 else precision_config.flex_ctx.out_data
-    out_scale = None if precision_config.out_scale is None else precision_config.out_scale.data.view(torch.uint8)
-    out_has_mx = out_scale is not None and out.element_size() == 1
-    out_scale = memory["scratchpad"]["mx_out_scale"] if out_has_mx and has_scratchpad else out_scale
+    # Canonical output tensor (matmul scratchpad if present, otherwise final output tensor)
+    out_matmul = memory["scratchpad"].get("matmul", memory["output"])
+    out_matmul_flex = OutFlexData() if out_matmul.dtype == torch.float32 else precision_config.flex_ctx.out_data
+    # Unified mx-scale pointer; when scratchpad exists, prefer its mx buffer
+    out_matmul_scale = precision_config.out_scale
+    if out_matmul_scale is not None:
+        out_matmul_scale = out_matmul_scale.data.view(torch.uint8)
+        if has_scratchpad and "mx_out_scale" in memory["scratchpad"]:
+            out_matmul_scale = memory["scratchpad"]["mx_out_scale"]
+    out_matmul_has_mx = out_matmul_scale is not None and out_matmul.element_size() == 1
     # matrix multiplication
     flex = precision_config.flex_ctx
     bias_stride = None if bias is None else bias.stride(0)
@@ -328,7 +333,7 @@ def matmul_ogs(x, w, bias,
     has_scatter = False
     has_gather_tma = has_gather and target_info.has_tma_gather()
     has_scatter_tma = has_scatter and target_info.has_tma_gather()
-    y = wrap_torch_tensor(out.view(math.prod(out.shape[:-1]), out.shape[-1]) if has_scatter else out.view(math.prod(out.shape[:-2]), *out.shape[-2:]))
+    y = wrap_torch_tensor(out_matmul.view(math.prod(out_matmul.shape[:-1]), out_matmul.shape[-1]) if has_scatter else out_matmul.view(math.prod(out_matmul.shape[:-2]), *out_matmul.shape[-2:]))
     x_storage = _canonicalize_storage(x.storage, 2 if has_gather_tma else 3, flex.lhs_data)
     w_storage = _canonicalize_storage(w.storage, 3, flex.rhs_data)
     y_storage = _canonicalize_storage(y.storage, 2 if has_scatter_tma else 3, flex.out_data)
@@ -356,14 +361,14 @@ def matmul_ogs(x, w, bias,
     x_scale_strides = (0, ) * (3 - len(x_scale_strides)) + x_scale_strides
     w_scale_strides = w_scale.stride() if w_has_mx and not w_scale_has_tma else (None, None, None)
     w_scale_strides = (0, ) * (3 - len(w_scale_strides)) + w_scale_strides
-    out_scale_strides = out_scale.stride() if out_has_mx else (None, None, None, None)
-    out_scale_strides = (0, ) * (3 - len(out_scale_strides)) + out_scale_strides
+    out_matmul_scale_strides = out_matmul_scale.stride() if out_matmul_has_mx else (None, None, None, None)
+    out_matmul_scale_strides = (0, ) * (3 - len(out_matmul_scale_strides)) + out_matmul_scale_strides
     # launch kernel
     kernels = get_kernels(epilogue.specs, fused_activation.specs)
     (kernels._p_matmul_ogs if opt_flags.is_persistent else kernels._matmul_ogs)[(grid,)](
-                   y_tensor_or_tma, y_storage.data, *out.stride(),
-                   *((None, out_scale, None) if out_has_mx else out_flex),
-                   *out_scale_strides[-3:],
+                   y_tensor_or_tma, y_storage.data, *out_matmul.stride(),
+                   *((None, out_matmul_scale, None) if out_matmul_has_mx else out_matmul_flex),
+                   *out_matmul_scale_strides[-3:],
                    x_tensor_or_tma, x_storage.data, *x_strides,
                    flex.lhs_data.scale,
                    None if x_scale is None else x_scale.data.view(torch.uint8), *x_scale_strides,
@@ -404,39 +409,30 @@ def matmul_ogs(x, w, bias,
                    num_warps=opt_flags.num_warps,
                    num_stages=opt_flags.num_stages,
                    arch=opt_flags.arch,
-                   UPCAST_INDICES=should_upcast_indices(x, w, out),
+                   UPCAST_INDICES=should_upcast_indices(x, w, out_matmul),
                    X_TMA_MODE=x_tma_mode,
                    Y_TMA_MODE=y_tma_mode,
                    SWAP_XW=get_swap_xw(precision_config, opt_flags),
                    IS_EPILOGUE_DEQUANT_MXFP8=epilogue.specs.name == FnName.DEQUANTIZE_MXFP8.name,
                    NUM_SMS = grid if opt_flags.is_persistent else 0,
                    **opt_flags.target_kernel_kwargs)
-    # split-k + expert accumulation
-    out = out if is_input_batched else out.squeeze(0)
+    # Canonicalize shapes and quickly return when no post-processing is needed
     if not is_input_batched:
-        out = out.squeeze(1)
+        out_matmul = out_matmul.squeeze(1)
+    if opt_flags.split_k == 1:
+        out_matmul = out_matmul.squeeze(0)
     if scatter_indx is None and opt_flags.split_k == 1:
-        return out.squeeze(0)
-
-    # reduce expert groups
-    if scatter_indx is None:
-        group_indx = None
-    else:
-        group_indx = scatter_indx.src_indx.view(-1, routing_data.n_expts_act)
-    out_flex = precision_config.flex_ctx.out_data
-    # Prepare in-flex scale for intermediate rows (use output expected scale)
-    x_flex_in = None if out_flex.expected_scale is None or out.dtype == torch.float32 else InFlexData(scale=out_flex.expected_scale)
-    # Optional per-32-col mxfp output scales buffer
-    out_has_mx = out_scale is not None
-    x_mx_scale = None
-    if out_has_mx and opt_flags.split_k == 1 and "mx_out_scale" in memory["scratchpad"]:
-        x_mx_scale = memory["scratchpad"]["mx_out_scale"][:, 0, :, :]
+        return out_matmul
+    # Build grouped reduction inputs in a uniform way
+    out = out_matmul
+    group_indx = None if scatter_indx is None else scatter_indx.src_indx.view(-1, routing_data.n_expts_act)
+    x_mx_scale = None if (opt_flags.split_k != 1 or not (has_scratchpad and "mx_out_scale" in memory["scratchpad"])) else memory["scratchpad"]["mx_out_scale"][:, 0, :, :]
     out, out_mx_scale = reduce_grouped_mod.reduce_grouped(
         out,
         group_indx,
-        x_flex=x_flex_in,
-        out_flex=out_flex,
-        has_out_mx_scale=out_has_mx,
+        x_flex=InFlexData(scale=out_matmul_flex.expected_scale),
+        out_flex=precision_config.flex_ctx.out_data,
+        has_out_mx_scale=(out_matmul_scale is not None),
         x_mx_scale=x_mx_scale,
         out_dtype=memory["output"].dtype,
         flexpoint_saturate_inf=precision_config.flexpoint_saturate_inf,
