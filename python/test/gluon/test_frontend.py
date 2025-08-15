@@ -1556,6 +1556,64 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 
 @pytest.mark.parametrize("target", [HIP_TARGET_CDNA3, HIP_TARGET_CDNA4])
+def test_amd_async_copy_global_to_shared_with_broadcast(target):
+
+    @gluon.jit
+    def kernel(ptr):
+        blocked: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [32, 2], [4, 1], [1, 0])
+        shared: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, order=[1, 0])
+
+        smem = ttgl.allocate_shared_memory(ptr.dtype.element_ty, [128, 16], shared)
+        y_offset = ttgl.arange(0, 128, layout=ttgl.SliceLayout(1, blocked))
+        x_offset = ttgl.arange(0, 16, layout=ttgl.SliceLayout(0, blocked))
+        offsets = y_offset[:, None] * 16 + x_offset[None, :]
+
+        mask = (y_offset < 64)[:, None]
+        other = tl.cast(0.0, ptr.dtype.element_ty)
+
+        ttgl.amd.cdna3.async_copy_global_to_shared(smem, ptr + offsets, mask, other)
+        ttgl.amd.cdna3.async_wait(0)
+
+    ptr = MockTensor(ttgl.float16)
+    mod = run_parser(kernel, *make_args(ptr), target=target)
+    expecttest.assert_expected_inline(
+        anonymize_ir(mod.str_nodebug()), """\
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [32, 2], warpsPerCTA = [4, 1], order = [1, 0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @kernel(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+    %0 = ttg.local_alloc : () -> !ttg.memdesc<128x16xf16, #shared, #smem, mutable>
+    %1 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    %2 = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
+    %3 = tt.expand_dims %1 {axis = 1 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<128x1xi32, #blocked>
+    %c16_i32 = arith.constant 16 : i32
+    %c16_i32_0 = arith.constant 16 : i32
+    %cst = arith.constant dense<16> : tensor<128x1xi32, #blocked>
+    %4 = arith.muli %3, %cst : tensor<128x1xi32, #blocked>
+    %5 = tt.expand_dims %2 {axis = 0 : i32} : tensor<16xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x16xi32, #blocked>
+    %6 = tt.broadcast %4 : tensor<128x1xi32, #blocked> -> tensor<128x16xi32, #blocked>
+    %7 = tt.broadcast %5 : tensor<1x16xi32, #blocked> -> tensor<128x16xi32, #blocked>
+    %8 = arith.addi %6, %7 : tensor<128x16xi32, #blocked>
+    %c64_i32 = arith.constant 64 : i32
+    %cst_1 = arith.constant dense<64> : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    %9 = arith.cmpi slt, %1, %cst_1 : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    %10 = tt.expand_dims %9 {axis = 1 : i32} : tensor<128xi1, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<128x1xi1, #blocked>
+    %cst_2 = arith.constant 0.000000e+00 : f32
+    %11 = arith.truncf %cst_2 : f32 to f16
+    %12 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<128x16x!tt.ptr<f16>, #blocked>
+    %13 = tt.addptr %12, %8 : tensor<128x16x!tt.ptr<f16>, #blocked>, tensor<128x16xi32, #blocked>
+    %14 = tt.broadcast %10 : tensor<128x1xi1, #blocked> -> tensor<128x16xi1, #blocked>
+    %15 = tt.splat %11 : f16 -> tensor<128x16xf16, #blocked>
+    %16 = ttg.async_copy_global_to_local %13, %0 mask %14 other %15 : tensor<128x16x!tt.ptr<f16>, #blocked> -> <128x16xf16, #shared, #smem, mutable>
+    %17 = ttg.async_wait {num = 0 : i32}
+    tt.return
+  }
+}
+""")
+
+
+@pytest.mark.parametrize("target", [HIP_TARGET_CDNA3, HIP_TARGET_CDNA4])
 def test_buffer_load_to_shared(target):
 
     @gluon.jit

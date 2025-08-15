@@ -10,12 +10,12 @@ from ..._semantic import _check
 if TYPE_CHECKING:
     from ..._semantic import GluonSemantic
 
-__all__ = ["async_copy_global_to_shared", "async_wait", "buffer_load_to_shared", "buffer_load", "buffer_store", "mfma"]
+__all__ = ["async_copy_global_to_shared", "async_wait", "sync_via_wait", "buffer_load_to_shared", "buffer_load", "buffer_store", "mfma"]
 
 
 @builtin
-def async_copy_global_to_shared(dest, pointer, mask=None, cache_modifier="", eviction_policy="", volatile=False,
-                                _semantic=None):
+def async_copy_global_to_shared(dest, pointer, mask=None, other=None, cache_modifier="", eviction_policy="",
+                                volatile=False, _semantic=None):
     """
     Asynchronously copy elements from global memory to shared memory.
 
@@ -23,24 +23,31 @@ def async_copy_global_to_shared(dest, pointer, mask=None, cache_modifier="", evi
         dest (shared_memory_descriptor): Destination shared memory descriptor.
         pointer (tensor): Source pointer tensor.
         mask (tensor, optional): Mask tensor for predicated loads. Defaults to None.
+        other (tensor, optional): Tensor providing default values for masked elements. Defaults to None.
         cache_modifier (str): Cache modifier specifier. Defaults to "".
-        eviction_policy (str): Eviction policy specifier. Defaults to "".
-        volatile (bool): Whether the load is volatile. Defaults to False.
     """
-    mask = _unwrap_if_constexpr(mask)
     cache_modifier = _semantic._str_to_load_cache_modifier(cache_modifier)
     eviction_policy = _semantic._str_to_eviction_policy(eviction_policy)
     volatile = _unwrap_if_constexpr(volatile)
+
+    mask = _unwrap_if_constexpr(mask)
     if mask is not None:
         pointer, mask = _semantic.broadcast_impl_value(pointer, mask)
+
+    other = _unwrap_if_constexpr(other)
+    if other is not None:
+        pointer, other = _semantic.broadcast_impl_value(pointer, other)
+
     _check(
         dest.shape == pointer.shape, lambda:
         f"expected dest shape to match pointer shape but got dest.shape = {dest.shape}, pointer.shape = {pointer.shape}"
     )
     _check(len(dest.shape) == 2, lambda: f"expected dest shape to be 2d but got {len(dest.shape)}d")
+
     mask_handle = mask.handle if mask is not None else ir.value()
-    _semantic.builder.create_async_copy_global_to_local(dest.handle, pointer.handle, mask_handle, cache_modifier,
-                                                        eviction_policy, volatile)
+    other_handle = other.handle if other is not None else ir.value()
+    _semantic.builder.create_async_copy_global_to_local(dest.handle, pointer.handle, mask_handle, other_handle,
+                                                        cache_modifier, ir.EVICTION_POLICY.NORMAL, False)
 
 
 @builtin
