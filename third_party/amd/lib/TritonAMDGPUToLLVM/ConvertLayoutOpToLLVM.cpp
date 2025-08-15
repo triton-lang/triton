@@ -187,6 +187,7 @@ public:
         outVals[r0] = swapped0[0];
         outVals[r1] = swapped0[1];
         if (isThreeCycle) {
+          // E.g., we factor (r_i l5 l4) = (r_i l4)(r_i l5), read right to left.
           const char *instr1 = lBit == 5 ? "llvm.amdgcn.permlane16.swap"
                                          : "llvm.amdgcn.permlane32.swap";
           auto swapped1 = permlaneSwap(outVals[r0], outVals[r1], instr1);
