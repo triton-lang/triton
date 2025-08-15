@@ -532,3 +532,31 @@ def foo(test: TestTuple):
 def test_tuple_constexpr():
     test = TestTuple(test=TensorPtr(tl.constexpr(1)))
     _ = foo.warmup(test, grid=(1, 0))
+
+
+@tl.core._aggregate
+class AggregateWithConstexprFunction:
+    val: tl.constexpr
+    val_squared: tl.constexpr
+
+    def __init__(self, val):
+        self.val = tl.constexpr(val)
+        self.val_squared = tl.constexpr(self.square_val())
+
+    @triton.constexpr_function
+    def square_val(self):
+        return self.val * self.val
+
+
+@filecheck_test
+@triton.jit
+def test_aggregate_constexpr_function():
+    agg = AggregateWithConstexprFunction(4)
+    # CHECK: call @{{.*}}anchor{{.*}}cconstexpr_4_
+    anchor(agg.val)
+
+    # CHECK: call @{{.*}}anchor{{.*}}cconstexpr_16_
+    anchor(agg.val_squared)
+
+    # CHECK: call @{{.*}}anchor{{.*}}cconstexpr_16_
+    anchor(agg.square_val())
