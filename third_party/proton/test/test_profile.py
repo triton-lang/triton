@@ -396,10 +396,10 @@ def test_scope_multiple_threads(tmp_path: pathlib.Path):
         for i in range(N):
             name = f"{prefix}_{i}"
             proton.enter_scope(name)
-            torch.ones((1,), device="cuda")
+            torch.ones((1, ), device="cuda")
             proton.exit_scope()
 
-    threads = [threading.Thread(target=worker, args=(tname,)) for tname in thread_names]
+    threads = [threading.Thread(target=worker, args=(tname, )) for tname in thread_names]
     for t in threads:
         t.start()
     for t in threads:
@@ -429,7 +429,7 @@ def test_scope_async_coroutines(tmp_path: pathlib.Path):
             name = f"{prefix}_{i}"
             proton.enter_scope(name)
             # lightweight GPU op + yield to exercise context switching
-            torch.ones((1,), device="cuda")
+            torch.ones((1, ), device="cuda")
             await asyncio.sleep(0)
             proton.exit_scope()
 

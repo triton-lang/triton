@@ -106,7 +106,7 @@ def enter_scope(name: str, *, metrics: Optional[dict[str, MetricValueType]] = No
     if not get_profiling_on():
         return None
     id = libproton.record_scope()
-    scopes = scope_stack.get() + ((id, name),)
+    scopes = scope_stack.get() + ((id, name), )
     scope_stack.set(scopes)
     libproton.enter_scope(id, name)
     if metrics:
