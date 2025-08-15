@@ -1514,33 +1514,41 @@ def test_amd_async_copy_global_to_shared(target):
 
     @gluon.jit
     def kernel(ptr):
-        blocked: ttgl.constexpr = ttgl.BlockedLayout([1], [64], [4], [0])
-        shared: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, order=[0])
+        blocked: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [32, 2], [4, 1], [1, 0])
+        shared: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, order=[1, 0])
 
-        smem = ttgl.allocate_shared_memory(ptr.dtype.element_ty, [256], shared)
-        offsets = ttgl.arange(0, 256, layout=blocked)
+        smem = ttgl.allocate_shared_memory(ptr.dtype.element_ty, [128, 16], shared)
+        offsets = ttgl.arange(0, 128, layout=ttgl.SliceLayout(1, blocked))[:, None] * 16 + \
+                  ttgl.arange(0, 16, layout=ttgl.SliceLayout(0, blocked))[None, :]
 
         ttgl.amd.cdna3.async_copy_global_to_shared(smem, ptr + offsets)
-        ttgl.amd.cdna3.commit_group()
+        ttgl.amd.cdna3.async_wait(0)
 
-        ttgl.amd.cdna3.wait_group(0)
-
-    ptr = MockTensor(ttgl.float32)
+    ptr = MockTensor(ttgl.float16)
     mod = run_parser(kernel, *make_args(ptr), target=target)
     expecttest.assert_expected_inline(
         anonymize_ir(mod.str_nodebug()), """\
-#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
-#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [32, 2], warpsPerCTA = [4, 1], order = [1, 0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 64 : i32} {
-  tt.func public @kernel(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
-    %0 = ttg.local_alloc : () -> !ttg.memdesc<256xf32, #shared, #smem, mutable>
-    %1 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #blocked>
-    %2 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<256x!tt.ptr<f32>, #blocked>
-    %3 = tt.addptr %2, %1 : tensor<256x!tt.ptr<f32>, #blocked>, tensor<256xi32, #blocked>
-    %4 = ttg.async_copy_global_to_local %3, %0 : tensor<256x!tt.ptr<f32>, #blocked> -> <256xf32, #shared, #smem, mutable>
-    %5 = ttg.async_commit_group
-    %6 = ttg.async_wait {num = 0 : i32}
+  tt.func public @kernel(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+    %0 = ttg.local_alloc : () -> !ttg.memdesc<128x16xf16, #shared, #smem, mutable>
+    %1 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    %2 = tt.expand_dims %1 {axis = 1 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<128x1xi32, #blocked>
+    %c16_i32 = arith.constant 16 : i32
+    %c16_i32_0 = arith.constant 16 : i32
+    %cst = arith.constant dense<16> : tensor<128x1xi32, #blocked>
+    %3 = arith.muli %2, %cst : tensor<128x1xi32, #blocked>
+    %4 = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
+    %5 = tt.expand_dims %4 {axis = 0 : i32} : tensor<16xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x16xi32, #blocked>
+    %6 = tt.broadcast %3 : tensor<128x1xi32, #blocked> -> tensor<128x16xi32, #blocked>
+    %7 = tt.broadcast %5 : tensor<1x16xi32, #blocked> -> tensor<128x16xi32, #blocked>
+    %8 = arith.addi %6, %7 : tensor<128x16xi32, #blocked>
+    %9 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<128x16x!tt.ptr<f16>, #blocked>
+    %10 = tt.addptr %9, %8 : tensor<128x16x!tt.ptr<f16>, #blocked>, tensor<128x16xi32, #blocked>
+    %11 = ttg.async_copy_global_to_local %10, %0 : tensor<128x16x!tt.ptr<f16>, #blocked> -> <128x16xf16, #shared, #smem, mutable>
+    %12 = ttg.async_wait {num = 0 : i32}
     tt.return
   }
 }

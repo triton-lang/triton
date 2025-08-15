@@ -148,6 +148,32 @@ def test_warpgroup_mma(ASYNC):
     torch.testing.assert_close(out, ref, atol=1e-3, rtol=1e-1)
 
 
+@pytest.mark.skipif(not (is_hip_cdna3() or is_hip_cdna4()), reason="Requires CDNA")
+def test_amd_async_copy_global_to_shared():
+
+    @gluon.jit
+    def kernel(a_ptr, b_ptr):
+        blocked: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [32, 2], [4, 1], [1, 0])
+        shared: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, order=[1, 0])
+
+        smem = ttgl.allocate_shared_memory(a_ptr.dtype.element_ty, [128, 16], shared)
+        offsets = ttgl.arange(0, 128, layout=ttgl.SliceLayout(1, blocked))[:, None] * 16 + \
+                  ttgl.arange(0, 16, layout=ttgl.SliceLayout(0, blocked))[None, :]
+
+        ttgl.amd.cdna3.async_copy_global_to_shared(smem, a_ptr + offsets)
+
+        ttgl.amd.cdna3.async_wait(0)
+        a = smem.load(blocked)
+
+        ttgl.store(b_ptr + offsets, a)
+
+    a = torch.randn((256, ), dtype=torch.float16, device='cuda')
+    b = torch.empty_like(a)
+    pgm = kernel[(1, )](a, b)
+    torch.testing.assert_close(a, b)
+    assert 'vmcnt(0)' in pgm.asm['amdgcn']
+
+
 @pytest.mark.parametrize("M, N, K", [(32, 32, 16), (16, 16, 32)])
 @pytest.mark.parametrize("in_dtype", ['float16', 'bfloat16'])
 @pytest.mark.parametrize("num_warps", [4, 8])

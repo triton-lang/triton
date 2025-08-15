@@ -10,10 +10,7 @@ from ..._semantic import _check
 if TYPE_CHECKING:
     from ..._semantic import GluonSemantic
 
-__all__ = [
-    "async_copy_global_to_shared", "commit_group", "wait_group", "buffer_load_to_shared", "buffer_load", "buffer_store",
-    "mfma"
-]
+__all__ = ["async_copy_global_to_shared", "async_wait", "buffer_load_to_shared", "buffer_load", "buffer_store", "mfma"]
 
 
 @builtin
@@ -40,28 +37,19 @@ def async_copy_global_to_shared(smem, pointer, mask=None, cache_modifier="", evi
         smem.shape == pointer.shape, lambda:
         f"expected smem shape to match pointer shape but got smem.shape = {smem.shape}, pointer.shape = {pointer.shape}"
     )
+    _check(len(smem.shape) == 2, lambda: f"expected smem shape to be 2d but got {len(smem.shape)}d")
     mask_handle = mask.handle if mask is not None else ir.value()
     _semantic.builder.create_async_copy_global_to_local(smem.handle, pointer.handle, mask_handle, cache_modifier,
                                                         eviction_policy, volatile)
 
 
 @builtin
-def commit_group(_semantic=None):
-    """
-    Commit the current asynchronous copy group.
-
-    This finalizes a set of asynchronous copy operations.
-    """
-    _semantic.builder.create_async_commit_group()
-
-
-@builtin
-def wait_group(num_outstanding=0, _semantic=None):
+def async_wait(num_outstanding=0, _semantic=None):
     """
     Wait for outstanding asynchronous copy group operations.
 
     Args:
-        num_outstanding (int): Wait until `num_outstanding` or less async copy groups in-flight. Defaults to 0.
+        num_outstanding (int): Wait until `num_outstanding` or less async copy in-flight. Defaults to 0.
     """
     num_outstanding = _unwrap_if_constexpr(num_outstanding)
     _semantic.builder.create_async_wait_group(num_outstanding)
