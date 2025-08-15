@@ -67,6 +67,13 @@ def async_wait(num_outstanding=0, _semantic=None):
 
 @builtin
 def synced_via_wait(v, _semantic=None):
+    """
+    Annotate a local load operation as synced via async wait, so the LLVM
+    will not emit conservative wait counts
+
+    Args:
+        v (tensor): The tensor loaded from shared memory.
+    """
     v.handle.set_attr("ttg.amdgpu.syncedViaAsyncWait", _semantic.builder.get_bool_attr(True))
 
 
