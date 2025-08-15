@@ -170,6 +170,7 @@ def test_amd_async_copy_global_to_shared():
 
         ttgl.store(b_ptr + offsets, a)
 
+    torch.manual_seed(0)
     a = torch.randn((128, 16), dtype=torch.float16, device='cuda')
     b = torch.empty_like(a)
     pgm = kernel[(1, )](a, b)
@@ -201,6 +202,7 @@ def test_amd_buffer_load_to_shared():
 
         ttgl.store(b_ptr + offsets, a)
 
+    torch.manual_seed(0)
     a = torch.randn((128, 16), dtype=torch.float16, device='cuda')
     b = torch.empty_like(a)
     pgm = kernel[(1, )](a, b)
