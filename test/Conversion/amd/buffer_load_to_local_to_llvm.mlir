@@ -225,22 +225,26 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     // COMMON: rocdl.ds_bpermute
     // COMMON: rocdl.ballot
     // COMMON: rocdl.raw.ptr.buffer.load.lds
-
-
-    // COMMON: rocdl.ds_bpermute
-    // COMMON: rocdl.ballot
-    // COMMON: rocdl.raw.ptr.buffer.load.lds
-
+    // COMMON: llvm.cond_br
+    // COMMON: llvm.store
 
     // COMMON: rocdl.ds_bpermute
     // COMMON: rocdl.ballot
     // COMMON: rocdl.raw.ptr.buffer.load.lds
-
+    // COMMON: llvm.cond_br
+    // COMMON: llvm.store
 
     // COMMON: rocdl.ds_bpermute
     // COMMON: rocdl.ballot
     // COMMON: rocdl.raw.ptr.buffer.load.lds
+    // COMMON: llvm.cond_br
+    // COMMON: llvm.store
 
+    // COMMON: rocdl.ds_bpermute
+    // COMMON: rocdl.ballot
+    // COMMON: rocdl.raw.ptr.buffer.load.lds
+    // COMMON: llvm.cond_br
+    // COMMON: llvm.store
 
     // COMMON-NOT: rocdl.ds_bpermute
     // COMMON-NOT: rocdl.ballot
