@@ -157,8 +157,6 @@ struct ConvertBuiltinFuncToLLVM
     RewritePatternSet patterns(context);
     patterns.add<CallOpConversion>(context, this->ftz);
     LLVMTypeConverter typeConverter(context);
-    mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
-                                                          patterns);
     if (mlir::applyPatternsGreedily(mod, std::move(patterns), config)
             .failed()) {
       signalPassFailure();
