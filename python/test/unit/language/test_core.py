@@ -7532,7 +7532,7 @@ def test_dtype(device):
         tl.static_assert(dtype_x == tl.int8 or (dtype_x == tl.int16 or dtype_x == tl.int32))
 
     X = torch.empty(1, dtype=torch.int32, device=device)
-    kernel[(1,)](X)
+    kernel[(1, )](X)
 
 
 def test_side_effectful_scan(device):
