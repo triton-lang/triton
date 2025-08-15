@@ -1,4 +1,4 @@
-import threading
+import contextvars
 import time
 from functools import wraps
 from typing import Optional, Union
@@ -6,7 +6,7 @@ from typing import Optional, Union
 from .flags import get_profiling_on
 from triton._C.libproton import proton as libproton
 
-thread_local_scopes = threading.local()
+scope_stack: contextvars.ContextVar[tuple] = contextvars.ContextVar('scope_stack', default=())
 
 MetricValueType = Union[float, int]
 
@@ -106,8 +106,8 @@ def enter_scope(name: str, *, metrics: Optional[dict[str, MetricValueType]] = No
     if not get_profiling_on():
         return None
     id = libproton.record_scope()
-    thread_local_scopes.scopes = getattr(thread_local_scopes, "scopes", [])
-    thread_local_scopes.scopes.append((id, name))
+    scopes = scope_stack.get() + ((id, name),)
+    scope_stack.set(scopes)
     libproton.enter_scope(id, name)
     if metrics:
         libproton.add_metrics(id, metrics)
@@ -118,7 +118,11 @@ def exit_scope(name: Optional[str] = None, *, metrics: Optional[dict[str, Metric
     # `name` is an optional argument here, only to match the counterpart in enter_scope to make the API consistent with `proton.language.exit_scope`
     if not get_profiling_on():
         return None
-    id, popped_name = thread_local_scopes.scopes.pop()
+    scopes = scope_stack.get()
+    if not scopes:
+        raise RuntimeError("No scopes to exit")
+    id, popped_name = scopes[-1]
+    scope_stack.set(scopes[:-1])
     if name and name != popped_name:
         raise ValueError(f"Scope name mismatch: {name} != {popped_name}")
     elif not name:
