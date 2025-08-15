@@ -23,7 +23,7 @@ SmallVector<T> convertType(const VecU &in) {
 }
 
 template <typename Int> Int product(llvm::ArrayRef<Int> arr) {
-  return std::accumulate(arr.begin(), arr.end(), 1, std::multiplies{});
+  return std::accumulate(arr.begin(), arr.end(), 1, std::multiplies<Int>());
 }
 template <typename VecT> auto product(const VecT &vec) {
   return product(llvm::ArrayRef(vec));
@@ -132,8 +132,8 @@ template <typename VecT, typename IdxT>
 // Is `vec` [0, 1, ..., n]?  Returns true on empty list.
 template <typename T> bool isIota(ArrayRef<T> vec) {
   static_assert(std::is_integral_v<T>);
-  for (T i = 0; i < vec.size(); ++i) {
-    if (vec[i] != i) {
+  for (size_t i = 0; i < vec.size(); ++i) {
+    if (vec[i] != static_cast<T>(i)) {
       return false;
     }
   }

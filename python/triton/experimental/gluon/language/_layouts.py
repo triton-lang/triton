@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from typing import List, Optional
 from triton.language.core import _unwrap_if_constexpr, _unwrap_shape, constexpr_type
 from triton.runtime.jit import constexpr_function
 
@@ -429,7 +429,7 @@ class SwizzledSharedLayout(SharedLayout):
         return f"SSS_{self.vec}_{self.per_phase}_{self.max_phase}_{stringify(self.order)}_{stringify(self.ctas_per_cga)}_{stringify(self.cta_split_num)}_{stringify(self.cta_order)}_SSS"
 
 
-@dataclass(frozen=True, eq=True)
+@dataclass(frozen=True)
 class PaddedSharedLayout(SharedLayout):
     """
     Represents a layout for the access to shared memory. Compared to SwizzledSharedLayout,
@@ -456,13 +456,13 @@ class PaddedSharedLayout(SharedLayout):
      ...]
 
     Args:
-        interval_padding_pairs (List[Tuple[int, int]]): List of [interval, padding] pair and both interval and padding must be powers of 2.
+        interval_padding_pairs (List[int]): List of [interval, padding] pair and both interval and padding must be powers of 2.
         order (List[int]): Order of logical tensor dimensions; fastest-varying first.
         ctas_per_cga (Optional[List[int]]): CTAs per CGA grouping.
         cta_split_num (Optional[List[int]]): Split factors for CTAs.
         cta_order (Optional[List[int]]): CTA ordering.
     """
-    interval_padding_pairs: List[Tuple[int, int]]
+    interval_padding_pairs: List[List[int]]
     order: List[int]
     ctas_per_cga: Optional[List[int]] = None
     cta_split_num: Optional[List[int]] = None

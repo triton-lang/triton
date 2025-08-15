@@ -3352,7 +3352,7 @@ int triton::gpu::lookupThreadsPerWarp(OpBuilder &rewriter) {
   assert(rewriter.getInsertionBlock() && "expected an insertion point");
   Operation *op =
       rewriter.getInsertionBlock()->getParentOp()->getParentOfType<ModuleOp>();
-  assert(op && "cannot create thread ID outside of module");
+  assert(op && "cannot check threads per warp outside of module");
   return triton::gpu::TritonGPUDialect::getThreadsPerWarp(cast<ModuleOp>(op));
 }
 
@@ -3360,7 +3360,7 @@ int triton::gpu::lookupNumCTAs(OpBuilder &rewriter) {
   assert(rewriter.getInsertionBlock() && "expected an insertion point");
   Operation *op =
       rewriter.getInsertionBlock()->getParentOp()->getParentOfType<ModuleOp>();
-  assert(op && "cannot create thread ID outside of module");
+  assert(op && "cannot check number of CTAs outside of module");
   return triton::gpu::TritonGPUDialect::getNumCTAs(cast<ModuleOp>(op));
 }
 
