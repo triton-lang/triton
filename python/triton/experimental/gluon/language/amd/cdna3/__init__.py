@@ -43,17 +43,22 @@ def buffer_load_to_shared(dest, ptr, offsets, mask=None, other=None, cache_modif
         other (tensor, optional): Tensor providing default values for masked elements. Defaults to None.
         cache_modifier (str): Cache modifier specifier. Defaults to "".
     """
-    builder = _semantic.builder
+    mask = _unwrap_if_constexpr(mask)
+    if mask is not None:
+        offsets, mask = _semantic.broadcast_impl_value(offsets, mask)
 
-    _check(offsets.dtype in {int32, uint32},
-           lambda: f"expected offsets dtype to be int32 or uint32 but got {offsets.dtype}")
+    other = _unwrap_if_constexpr(other)
+    if other is not None:
+        offsets, other = _semantic.broadcast_impl_value(offsets, other)
+
+    _verify_buffer_load_store(ptr, offsets, mask, other)
 
     mask = mask.handle if mask is not None else ir.value()
     other = other.handle if other is not None else ir.value()
     stride = ir.value()
     cache_modifier = _semantic._str_to_load_cache_modifier(cache_modifier)
 
-    builder.create_buffer_load_to_local(dest.handle, ptr.handle, offsets.handle, mask, other, stride, cache_modifier)
+    _semantic.builder.create_buffer_load_to_local(dest.handle, ptr.handle, offsets.handle, mask, other, stride, cache_modifier)
 
 
 @builtin
