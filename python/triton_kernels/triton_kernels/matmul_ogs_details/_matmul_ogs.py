@@ -78,7 +78,7 @@ def _matmul_ogs(
              TOKENS_PER_EXPT_FOR_ANNOTATION=None,
              UPCAST_INDICES: tl.constexpr = False,
              SWAP_XW: tl.constexpr = False,
-             IS_EPILOGUE_DEQUANT_MXFP8: tl.constexpr = False):
+             IS_EPILOGUE_QUANT_MXFP8: tl.constexpr = False):
 
     tl.assume(stride_y_k >= 0)
     tl.assume(stride_y_z >= 0)
@@ -411,7 +411,7 @@ def _matmul_ogs(
         tl.store(YActualScalePtrs, out_scale, mask=mask_m[:, None] & mask_n_scale[None, :])
     else:
         out = float_to_flex(out, YExpectedScale, YActualScale, YChecksumScale, mask, Y, FLEXPOINT_SATURATE_INF)
-        if EPILOGUE_FN is not None and not IS_EPILOGUE_DEQUANT_MXFP8:
+        if EPILOGUE_FN is not None and not IS_EPILOGUE_QUANT_MXFP8:
             out = EPILOGUE_FN(out, *epilogue_fn_args, target_dtype=YPtrs.dtype.element_ty)
     tl.store(YPtrs, out, mask=mask)
 
