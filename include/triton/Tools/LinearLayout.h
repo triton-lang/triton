@@ -432,6 +432,10 @@ public:
     return isSurjective() && getTotalInDimSize() == getTotalOutDimSize();
   }
 
+  // Remove a dimension of size 1 from the layout.
+  [[nodiscard]] LinearLayout unsqueezeIn(StringAttr dim) const;
+  [[nodiscard]] LinearLayout unsqueezeOut(StringAttr dim) const;
+
   const BasesT &getBases() const { return bases; }
 
   // Get the pos'th basis vector for the inDim -> outDim mapping.
