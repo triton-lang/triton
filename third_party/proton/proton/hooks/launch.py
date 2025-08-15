@@ -37,7 +37,7 @@ class LaunchHook(Hook):
 
     def enter(self, metadata: LazyDict) -> None:
         enter_state(COMPUTE_METADATA_SCOPE_NAME)
-        metadata.get()
+        metadata = metadata.get()
         exit_state()
         fn_metrics = {k: metadata[k] for k in LaunchHook.metrics if k in metadata}
         op_name.set(metadata["name"])
