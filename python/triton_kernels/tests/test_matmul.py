@@ -324,21 +324,23 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
         # TODO: revisit when Triton is better for H100 + MXFP4
         block_k = 256
 
-    block_n = None
-    if is_hip() and hbm_swizzling and "float4" in weight_dtype_str:
-        block_m = 32
-        block_n = 256
-        block_k = 256
-
     constraints = {
         "block_m": block_m,
-        "block_n": block_n,
         "block_k": block_k,
         "split_k": split_k,
         "fused_scatter": fused_scatter,
         "is_persistent": is_persistent,
         "epilogue_subtile": epilogue_subtile,
     }
+
+    if is_hip() and hbm_swizzling and "float4" in weight_dtype_str:
+        # Minimum block size to satisfy scale preshuffling
+        constraints.update({
+            "block_m": 32,
+            "block_n": 32,
+            "block_k": 256
+        })
+
     opt_flags.update_opt_flags_constraints(constraints)
 
     weight_mxfp = weight_dtype_str.startswith("mx")
