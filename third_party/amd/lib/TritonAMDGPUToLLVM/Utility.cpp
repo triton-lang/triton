@@ -403,8 +403,8 @@ void llStore(RewriterBase &rewriter, Location loc, Value ptr, Value val,
     }
 
   } else {
-    rewriter.create<triton::amdgpu::MaskedStoreOp>(loc, ptr, val, pred, cm,
-                                                   forceNoAliasAsyncLoads);
+    auto maskedOp = rewriter.create<triton::amdgpu::MaskedStoreOp>(
+        loc, ptr, val, pred, cm, forceNoAliasAsyncLoads);
   }
 }
 

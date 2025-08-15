@@ -61,9 +61,6 @@ public:
     addIllegalDialect<mlir::gpu::GPUDialect>();
     addLegalOp<mlir::UnrealizedConversionCastOp>();
     addLegalOp<triton::amdgpu::InstructionSchedHint>();
-    // addDynamicallyLegalOp<triton::amdgpu::MaskedStoreOp>([](Operation *op){
-    //   return false;
-    // });
   }
 };
 
@@ -178,6 +175,8 @@ struct ConvertTritonAMDGPUToLLVM
                                              targetInfo, AMDBenefit);
     AMD::populateLoadStoreOpToLLVMPatterns(typeConverter, targetInfo, patterns,
                                            axisInfoAnalysis, AMDBenefit);
+    AMD::populateMaskedOpsToLLVMPatterns(patterns);
+
     populatePatterns7(mlir::triton::populateReduceOpToLLVMPatterns,
                       commonBenefit);
     populatePatterns7(mlir::triton::populateScanOpToLLVMPatterns,

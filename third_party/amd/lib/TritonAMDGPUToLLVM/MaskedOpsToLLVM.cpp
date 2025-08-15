@@ -1,3 +1,5 @@
+#include "AsyncUtility.h" // is this okay?
+#include "Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "PatternTritonGPUOpToLLVM.h"
 #include "TritonAMDGPUToLLVM/Passes.h"
 #include "Utility.h"
@@ -6,10 +8,6 @@
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
-// #include "triton/Dialect/Triton/IR/Dialect.h"
-// #include "triton/Dialect/TritonAMDGPU/IR/Dialect.h"
-#include "AsyncUtility.h" // is this okay?
-#include "Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
 #include <optional>
 
@@ -121,6 +119,7 @@ public:
 
   LogicalResult matchAndRewrite(triton::amdgpu::MaskedStoreOp storeOp,
                                 PatternRewriter &rewriter) const override {
+
     auto loc = storeOp.getLoc();
     auto val = storeOp.getValue();
     auto elemTy = storeOp.getValue().getType();
