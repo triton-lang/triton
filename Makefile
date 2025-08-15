@@ -127,3 +127,17 @@ golden-samples: triton-opt
 	$(TRITON_OPT) test/TritonGPU/samples/descriptor-matmul-pipeline.mlir.in -tritongpu-assign-latencies -tritongpu-schedule-loops -tritongpu-pipeline -canonicalize | \
 		$(PYTHON) utils/generate-test-checks.py --source test/TritonGPU/samples/descriptor-matmul-pipeline.mlir.in --source_delim_regex="\bmodule" \
 		-o test/TritonGPU/samples/descriptor-matmul-pipeline.mlir
+
+# Documentation
+#
+.PHONY: docs-requirements
+docs-requirements:
+	$(PYTHON) -m pip install -r docs/requirements.txt -q
+
+.PHONY: docs-only
+docs-only:
+	cd docs; PATH="$(BUILD_DIR):$(PATH)" $(PYTHON) -m sphinx . _build/html/main
+
+.PHONY: docs
+.NOPARALLEL: docs
+docs: docs-requirements docs-only

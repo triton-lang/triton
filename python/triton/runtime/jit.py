@@ -1036,10 +1036,26 @@ def get_jit_fn_file_line(fn):
     return file_name, begin_line
 
 
+class BoundConstexprFunction(JITCallable):
+
+    def __init__(self, instance, fn):
+        self.__self__ = instance
+        self.__func__ = fn
+
+    def __call__(self, *args, **kwargs):
+        return self.__func__(self.__self__, *args, **kwargs)
+
+
 class ConstexprFunction(JITCallable):
 
     def __init__(self, fn):
         super().__init__(fn)
+
+    def __get__(self, obj, objclass):
+        # Create a bound function to support constexpr_function methods
+        if obj is not None:
+            return BoundConstexprFunction(obj, self)
+        return self
 
     def __call__(self, *args, _semantic=None, **kwargs):
         from triton.language.core import _unwrap_if_constexpr, constexpr
@@ -1051,7 +1067,8 @@ class ConstexprFunction(JITCallable):
         res = self.fn(*args, **kwargs)
 
         if _semantic is None:
-            return res  # Called outside of triton
+            # Not called by triton code generator, e.g. in host code, another constexpr function, or even an aggreate's __init__ function
+            return res
 
         # convert result back to a Triton constexpr:
         if knobs.runtime.interpret:
