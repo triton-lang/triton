@@ -956,7 +956,9 @@ static FailureOr<SmallVector<Value>> lowerTMemLdSt(
     if (isStore) {
       inVals = packToI32(vals, loc, rewriter);
     }
-    auto maybeQuot = divideLeft(cvt, LinearLayout::identity1D(2, kReg, kCol));
+    auto bitwidth = llvmElemTy.getIntOrFloatBitWidth();
+    auto maybeQuot =
+        divideLeft(cvt, LinearLayout::identity1D(32 / bitwidth, kReg, kCol));
     assert(maybeQuot.has_value());
     auto quot = *maybeQuot;
     auto outValsOr = lowerTMemLdSt(loc, ctx, rewriter, quot, inVals, i32_ty,
