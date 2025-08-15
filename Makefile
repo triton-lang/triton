@@ -60,6 +60,10 @@ test-gluon: all
 test-regression: all
 	$(PYTEST) -s -n $(NUM_PROCS) python/test/regression
 
+.PHONY: test-microbenchmark
+test-microbenchmark: all
+	$(PYTHON) python/test/microbenchmark/launch_overhead.py
+
 .PHONY: test-interpret
 test-interpret: all
 	cd python/test/unit && TRITON_INTERPRET=1 $(PYTEST) -s -n 16 -m interpreter cuda language/test_core.py language/test_standard.py \
