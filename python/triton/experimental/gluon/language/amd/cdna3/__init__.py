@@ -14,13 +14,13 @@ __all__ = ["async_copy_global_to_shared", "async_wait", "buffer_load_to_shared",
 
 
 @builtin
-def async_copy_global_to_shared(smem, pointer, mask=None, cache_modifier="", eviction_policy="", volatile=False,
+def async_copy_global_to_shared(dest, pointer, mask=None, cache_modifier="", eviction_policy="", volatile=False,
                                 _semantic=None):
     """
     Asynchronously copy elements from global memory to shared memory.
 
     Args:
-        smem (shared_memory_descriptor): Destination shared memory descriptor.
+        dest (shared_memory_descriptor): Destination shared memory descriptor.
         pointer (tensor): Source pointer tensor.
         mask (tensor, optional): Mask tensor for predicated loads. Defaults to None.
         cache_modifier (str): Cache modifier specifier. Defaults to "".
@@ -34,22 +34,22 @@ def async_copy_global_to_shared(smem, pointer, mask=None, cache_modifier="", evi
     if mask is not None:
         pointer, mask = _semantic.broadcast_impl_value(pointer, mask)
     _check(
-        smem.shape == pointer.shape, lambda:
-        f"expected smem shape to match pointer shape but got smem.shape = {smem.shape}, pointer.shape = {pointer.shape}"
+        dest.shape == pointer.shape, lambda:
+        f"expected dest shape to match pointer shape but got dest.shape = {dest.shape}, pointer.shape = {pointer.shape}"
     )
-    _check(len(smem.shape) == 2, lambda: f"expected smem shape to be 2d but got {len(smem.shape)}d")
+    _check(len(dest.shape) == 2, lambda: f"expected dest shape to be 2d but got {len(dest.shape)}d")
     mask_handle = mask.handle if mask is not None else ir.value()
-    _semantic.builder.create_async_copy_global_to_local(smem.handle, pointer.handle, mask_handle, cache_modifier,
+    _semantic.builder.create_async_copy_global_to_local(dest.handle, pointer.handle, mask_handle, cache_modifier,
                                                         eviction_policy, volatile)
 
 
 @builtin
 def async_wait(num_outstanding=0, _semantic=None):
     """
-    Wait for outstanding asynchronous copy group operations.
+    Wait for outstanding asynchronous copy operations.
 
     Args:
-        num_outstanding (int): Wait until `num_outstanding` or less async copy in-flight. Defaults to 0.
+        num_outstanding (int): Wait until `num_outstanding` or less async copy operations in-flight. Defaults to 0.
     """
     num_outstanding = _unwrap_if_constexpr(num_outstanding)
     _semantic.builder.create_async_wait_group(num_outstanding)
