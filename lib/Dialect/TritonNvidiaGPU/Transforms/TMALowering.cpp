@@ -108,7 +108,7 @@ static void lowerTMAStore(Operation *op, mlir::TypedValue<RankedTensorType> src,
   assert(isa<gpu::SharedEncodingTrait>(encoding));
   gpu::MemDescType memDescType = gpu::MemDescType::get(
       tensorType.getShape(), tensorType.getElementType(), encoding,
-      sharedMemorySpace, /*mutableMemory=*/true);
+      sharedMemorySpace, /*mutableMemory=*/false);
   Value alloc = rewriter.create<gpu::LocalAllocOp>(loc, memDescType, src);
   rewriter.create<triton::nvidia_gpu::FenceAsyncSharedOp>(loc, false);
   createStore(desc, alloc);
