@@ -547,9 +547,9 @@ class dtype(base_type):
         return False
 
     def __eq__(self, other) -> bool:
-        if not isinstance(other, (dtype, constexpr)):
-            return False
         other = _unwrap_if_constexpr(other)
+        if not isinstance(other, dtype):
+            return False
         return self.name == other.name
 
     def __hash__(self):
@@ -672,9 +672,9 @@ class pointer_type(dtype):
         return self.const
 
     def __eq__(self, other) -> bool:
-        if not isinstance(other, (pointer_type, constexpr)):
-            return False
         other = _unwrap_if_constexpr(other)
+        if not isinstance(other, pointer_type):
+            return False
         return self.element_ty == other.element_ty and self.address_space == other.address_space and self.const == other.const
 
     @property
