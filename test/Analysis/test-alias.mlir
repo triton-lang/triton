@@ -62,7 +62,7 @@ tt.func @subview(%A : !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory>) 
   // expected-remark @below {{%0 -> %0}}
   %a = ttg.local_alloc : () -> !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
   // expected-remark @below {{%1 -> %0}}
-  %cst1 = ttg.memdesc_index %a, %index : !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable> -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  %cst1 = ttg.memdesc_index %a[%index] : !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable> -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
   tt.return
 }
 
@@ -119,7 +119,7 @@ tt.func @for_if(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %B :
       %zero = arith.constant 0 : i32
       %index = arith.constant 8 : i32
       // expected-remark @below {{%4 -> %0,%1}}
-      %cst0 = ttg.memdesc_index %a_shared, %index : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable> -> !ttg.memdesc<32xf16, #A_SHARED, #ttg.shared_memory, mutable>
+      %cst0 = ttg.memdesc_index %a_shared[%index] : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable> -> !ttg.memdesc<32xf16, #A_SHARED, #ttg.shared_memory, mutable>
       scf.yield
     }
     scf.yield %b_shared, %a_shared, %a_shared : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>, !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>, !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>

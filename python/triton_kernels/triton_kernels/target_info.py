@@ -2,41 +2,25 @@ import torch
 import triton
 import triton.language as tl
 
-cached_capabilities = {}
+from triton.language.target_info import (
+    cuda_capability_geq,
+    is_cuda,
+    is_hip,
+    is_hip_cdna3,
+    is_hip_cdna4,
+)
 
-
-@triton.constexpr_function
-def is_cuda():
-    return tl.target_info.current_target().backend == "cuda"
-
-
-@triton.constexpr_function
-def is_hip():
-    return tl.target_info.current_target().backend == "hip"
-
-
-@triton.constexpr_function
-def is_hip_cdna3():
-    return tl.target_info.current_target().arch == "gfx942"
-
-
-@triton.constexpr_function
-def is_hip_cdna4():
-    return tl.target_info.current_target().arch == "gfx950"
-
-
-@triton.constexpr_function
-def cuda_capability_geq(major, minor=0):
-    """
-    Determines whether we have compute capability >= (major, minor) and
-    returns this as a constexpr boolean. This can be used for guarding
-    inline asm implementations that require a certain compute capability.
-    """
-    target = tl.target_info.current_target()
-    if target.backend != "cuda":
-        return False
-    assert isinstance(target.arch, int)
-    return target.arch >= major * 10 + minor
+__all__ = [
+    "cuda_capability_geq",
+    "get_cdna_version",
+    "has_tma_gather",
+    "has_native_mxfp",
+    "is_cuda",
+    "is_hip",
+    "is_hip_cdna3",
+    "is_hip_cdna4",
+    "num_sms",
+]
 
 
 @triton.constexpr_function

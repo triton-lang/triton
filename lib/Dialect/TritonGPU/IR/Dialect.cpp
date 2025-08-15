@@ -184,8 +184,8 @@ SmallVector<unsigned> getOrder(SharedEncodingTrait layout,
   if (auto swizzledLayout = dyn_cast<SwizzledSharedEncodingAttr>(layout)) {
     return llvm::to_vector(swizzledLayout.getOrder());
   }
-  if (auto paddedLayout = dyn_cast<PaddedSharedEncodingAttr>(layout)) {
-    return llvm::to_vector(paddedLayout.getOrder());
+  if (auto paddedEnc = dyn_cast<PaddedSharedEncodingAttr>(layout)) {
+    return llvm::to_vector(paddedEnc.getOrder());
   }
   if (auto sharedLayout = dyn_cast<NVMMASharedEncodingAttr>(layout)) {
     if (shape.size() == 1) {
@@ -3350,11 +3350,18 @@ int triton::gpu::lookupNumWarps(Operation *op) {
 
 int triton::gpu::lookupThreadsPerWarp(OpBuilder &rewriter) {
   assert(rewriter.getInsertionBlock() && "expected an insertion point");
-  Operation *op = rewriter.getInsertionBlock()->getParentOp();
-  while (op && !isa<ModuleOp>(op))
-    op = op->getParentOp();
-  assert(op && "cannot create thread ID outside of module");
+  Operation *op =
+      rewriter.getInsertionBlock()->getParentOp()->getParentOfType<ModuleOp>();
+  assert(op && "cannot check threads per warp outside of module");
   return triton::gpu::TritonGPUDialect::getThreadsPerWarp(cast<ModuleOp>(op));
+}
+
+int triton::gpu::lookupNumCTAs(OpBuilder &rewriter) {
+  assert(rewriter.getInsertionBlock() && "expected an insertion point");
+  Operation *op =
+      rewriter.getInsertionBlock()->getParentOp()->getParentOfType<ModuleOp>();
+  assert(op && "cannot check number of CTAs outside of module");
+  return triton::gpu::TritonGPUDialect::getNumCTAs(cast<ModuleOp>(op));
 }
 
 bool triton::gpu::areLayoutsEquivalent(ArrayRef<int64_t> shape,
