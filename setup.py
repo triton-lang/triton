@@ -383,7 +383,7 @@ class CMakeBuildPy(build_py):
 
     def initialize_options(self):
         super().initialize_options()
-        self.build_lib = get_build_lib()
+        self.build_lib = get_build_lib().as_posix()
 
     def run(self) -> None:
         self.run_command('build_ext')

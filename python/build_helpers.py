@@ -19,7 +19,7 @@ def _get_dir_common(prefix):
     dir_name = f"{prefix}.{plat_name}-{sys.implementation.name}-{python_version}"
     path = _get_build_base() / dir_name
     path.mkdir(parents=True, exist_ok=True)
-    return path.as_posix()
+    return path
 
 
 def get_cmake_dir():
