@@ -1,4 +1,5 @@
 #include "Utility.h"
+#include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
 #include "AtomicRMWOpsEmitter.h"
@@ -405,12 +406,14 @@ Value AtomicRMWEmitter::atomicIntraWaveReduce(RewriterBase &rewriter,
   Value mask = targetInfo.ballot(rewriter, loc, i64_ty, done);
   Value start = loopBody->getArgument(0);
   Value cnt = b.trunc(i32_ty, generatePopcount64(rewriter, mask));
-  Value mbcntLoRes = rewriter
-                         .create<ROCDL::MbcntLoOp>(
-                             loc, i32_ty, b.trunc(i32_ty, mask), b.i32_val(0))
-                         ->getResult(0);
-  Value idx = rewriter.create<ROCDL::MbcntHiOp>(
-      loc, i32_ty, b.trunc(i32_ty, b.lshr(mask, b.i64_val(32))), mbcntLoRes);
+  Value maskLo = b.trunc(i32_ty, mask);
+  Value mbcntLoRes =
+      ROCDL::MbcntLoOp::create(rewriter, loc, i32_ty, maskLo, b.i32_val(0),
+                               /*arg_attrs=*/{}, /*res_attrs=*/{});
+  Value maskHi = b.trunc(i32_ty, b.lshr(mask, b.i64_val(32)));
+  Value idx =
+      ROCDL::MbcntHiOp::create(rewriter, loc, i32_ty, maskHi, mbcntLoRes,
+                               /*arg_attrs=*/{}, /*res_attrs=*/{});
   Value base = b.add(start, cnt);
   Value leader = b.icmp_eq(idx, b.i32_val(0));
   cnt = b.sub(cnt, idx);

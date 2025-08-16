@@ -100,12 +100,6 @@ def TTG_AsyncCopyGlobalToLocalOp : TTG_Op<"async_copy_global_to_local", [
     DefaultValuedAttr<BoolAttr, "false">:$isVolatile
   );
 
-  let builders = [
-      OpBuilder<(ins "Value":$src, "Value":$result,
-                     "triton::CacheModifier":$cache,
-                     "triton::EvictionPolicy":$evict, "bool":$isVolatile)>,
-  ];
-
   let results = (outs TTG_AsyncToken:$token);
 
   let extraClassDeclaration = [{
@@ -395,9 +389,6 @@ def TTG_MaskOp: TTG_Op<"mask",
     let arguments = (ins I1:$pred);
     let results = (outs Variadic<AnyType>:$result);
     let regions = (region SizedRegion<1>:$region);
-    let builders = [
-        OpBuilder<(ins "Value":$pred)>,
-    ];
 }
 
 def TTG_MaskReturnOp: TTG_Op<"mask.return",

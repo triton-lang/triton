@@ -728,7 +728,8 @@ def test_blocked_scale_mxfp(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, USE_
         NUM_STAGES = min(NUM_STAGES, 2)
     elif BLOCK_K == 256:
         NUM_STAGES = min(NUM_STAGES, 3)
-
+    #since the block size are big we use num_warps = 8 to avoid pressure problems.
+    num_warps = 8
     torch.manual_seed(42)
     dtype_src_str = "float8e5"
     dtype_dst_str = "float32"
@@ -746,7 +747,7 @@ def test_blocked_scale_mxfp(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, USE_
     out = block_scale_mxfp_matmul[grid](a, b, output, a_scale, b_scale, M, N, K, a_scale.stride(0), a_scale.stride(1),
                                         a_scale.stride(2), a_scale.stride(3), a.stride(0), a.stride(1), b.stride(0),
                                         b.stride(1), output.stride(0), output.stride(1), BLOCK_M, BLOCK_N, BLOCK_K,
-                                        NUM_STAGES=NUM_STAGES, USE_2D_SCALE_LOAD=USE_2D_SCALE_LOAD)
+                                        NUM_STAGES=NUM_STAGES, USE_2D_SCALE_LOAD=USE_2D_SCALE_LOAD, num_warps=num_warps)
     ttgir = out.asm["ttgir"]
     ptx = out.asm["ptx"]
 

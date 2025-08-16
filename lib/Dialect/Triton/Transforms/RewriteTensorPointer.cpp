@@ -135,7 +135,7 @@ public:
 
       // Compare with lower bound
       Value lowerBound = builder.create<mlir::arith::ConstantIntOp>(
-          loc, 0, builder.getI64Type());
+          loc, builder.getI64Type(), 0);
       Value splatLowerBound = builder.create<triton::SplatOp>(
           loc, offsetWithRange.getType(), lowerBound);
       Value cmpLower = builder.create<arith::CmpIOp>(
