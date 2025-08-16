@@ -50,7 +50,8 @@ dst_layouts = [
 ]
 
 
-@pytest.mark.parametrize("M, dst_layout", [[2, dst_layouts[0]], [4, dst_layouts[1]], [8, dst_layouts[2]]])
+@pytest.mark.parametrize("M, dst_layout", [[2, dst_layouts[0]], [4, dst_layouts[1]], [8, dst_layouts[2]],
+                                           [2, dst_layouts[3]], [4, dst_layouts[4]], [8, dst_layouts[5]]])
 @pytest.mark.parametrize("src_layout", src_layouts)
 @pytest.mark.parametrize("N", [64])
 @pytest.mark.parametrize("dtype", ['float8e5', 'float16', 'float32', 'int64'])

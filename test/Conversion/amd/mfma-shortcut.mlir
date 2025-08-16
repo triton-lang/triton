@@ -69,7 +69,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 #dotop0 = #ttg.dot_op<{opIdx = 0, parent = #mfma, kWidth=8}>
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
-  // GFX942-LABEL: mfma_dot_cvt_bf8_mfma16_v4
+  // GFX950-LABEL: mfma_dot_cvt_bf8_mfma16_v4
   tt.func public @mfma_dot_cvt_bf8_mfma16_v4(%arg0: tensor<128x32xf8E5M2, #mfma>) {
     // GFX950-NOT: rocdl.ds_bpermute
     // GFX950: llvm.call_intrinsic "llvm.amdgcn.permlane32.swap"
