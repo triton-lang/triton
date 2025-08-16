@@ -149,7 +149,7 @@ def test_warpgroup_mma(ASYNC):
     torch.testing.assert_close(out, ref, atol=1e-3, rtol=1e-1)
 
 
-@pytest.mark.skipif(not (is_hip_cdna3() or is_hip_cdna4()), reason="Requires CDNA")
+@pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
 def test_amd_async_copy_global_to_shared():
 
     @gluon.jit
@@ -161,12 +161,12 @@ def test_amd_async_copy_global_to_shared():
         offsets = ttgl.arange(0, 128, layout=ttgl.SliceLayout(1, blocked))[:, None] * 16 + \
                   ttgl.arange(0, 16, layout=ttgl.SliceLayout(0, blocked))[None, :]
 
-        ttgl.amd.cdna3.async_copy_global_to_shared(smem, a_ptr + offsets)
+        ttgl.amd.cdna4.async_copy_global_to_shared(smem, a_ptr + offsets)
 
-        ttgl.amd.cdna3.async_wait(0)
+        ttgl.amd.cdna4.async_wait(0)
 
         a = smem.load(blocked)
-        ttgl.amd.cdna3.synced_via_wait(a)
+        ttgl.amd.cdna4.synced_via_wait(a)
 
         ttgl.store(b_ptr + offsets, a)
 
@@ -181,7 +181,7 @@ def test_amd_async_copy_global_to_shared():
     assert 'vmcnt(0)' in pgm.asm['amdgcn']
 
 
-@pytest.mark.skipif(not (is_hip_cdna3() or is_hip_cdna4()), reason="Requires CDNA")
+@pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
 def test_amd_buffer_load_to_shared():
 
     @gluon.jit
@@ -193,12 +193,12 @@ def test_amd_buffer_load_to_shared():
         offsets = ttgl.arange(0, 128, layout=ttgl.SliceLayout(1, blocked))[:, None] * 16 + \
                   ttgl.arange(0, 16, layout=ttgl.SliceLayout(0, blocked))[None, :]
 
-        ttgl.amd.cdna3.buffer_load_to_shared(smem, a_ptr, offsets)
+        ttgl.amd.cdna4.buffer_load_to_shared(smem, a_ptr, offsets)
 
-        ttgl.amd.cdna3.async_wait(0)
+        ttgl.amd.cdna4.async_wait(0)
 
         a = smem.load(blocked)
-        ttgl.amd.cdna3.synced_via_wait(a)
+        ttgl.amd.cdna4.synced_via_wait(a)
 
         ttgl.store(b_ptr + offsets, a)
 
