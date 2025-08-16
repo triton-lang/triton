@@ -158,6 +158,7 @@ def test_amd_global_load_to_shared():
         shared: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, order=[1, 0])
 
         smem = ttgl.allocate_shared_memory(a_ptr.dtype.element_ty, [128, 16], shared)
+        smem = ttgl.amd.cdna4.relax_shared(smem)
         offsets = ttgl.arange(0, 128, layout=ttgl.SliceLayout(1, blocked))[:, None] * 16 + \
                   ttgl.arange(0, 16, layout=ttgl.SliceLayout(0, blocked))[None, :]
 
@@ -166,7 +167,6 @@ def test_amd_global_load_to_shared():
         ttgl.amd.cdna4.async_wait(0)
 
         a = smem.load(blocked)
-        ttgl.amd.cdna4.synced_via_wait(a)
 
         ttgl.store(b_ptr + offsets, a)
 
@@ -190,6 +190,7 @@ def test_amd_buffer_load_to_shared():
         shared: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, order=[1, 0])
 
         smem = ttgl.allocate_shared_memory(a_ptr.dtype.element_ty, [128, 16], shared)
+        smem = ttgl.amd.cdna4.relax_shared(smem)
         offsets = ttgl.arange(0, 128, layout=ttgl.SliceLayout(1, blocked))[:, None] * 16 + \
                   ttgl.arange(0, 16, layout=ttgl.SliceLayout(0, blocked))[None, :]
 
@@ -198,7 +199,6 @@ def test_amd_buffer_load_to_shared():
         ttgl.amd.cdna4.async_wait(0)
 
         a = smem.load(blocked)
-        ttgl.amd.cdna4.synced_via_wait(a)
 
         ttgl.store(b_ptr + offsets, a)
 

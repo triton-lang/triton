@@ -1,5 +1,5 @@
 from triton.experimental.gluon.language import _core as ttgl
-from ..._core import ir, builtin, float32, _unwrap_if_constexpr
+from ..._core import ir, builtin, float32, _unwrap_if_constexpr, shared_memory_descriptor
 from ..._semantic import _check
 from ..._layouts import DotOperandLayout, BlockedLayout, SliceLayout
 from .._layouts import AMDMFMALayout
@@ -12,7 +12,7 @@ __all__ = [
     "global_load_to_shared",
     "buffer_load_to_shared",
     "async_wait",
-    "synced_via_wait",
+    "relax_shared",
     "mfma_scaled",
 ]
 
@@ -120,15 +120,14 @@ def async_wait(num_outstanding=0, _semantic=None):
 
 
 @builtin
-def synced_via_wait(v, _semantic=None):
+def relax_shared(smem, _semantic=None):
     """
-    Annotate a local load operation as synced via async wait, so the LLVM
-    will not emit conservative wait counts
+    Turn a shared memory descriptor into a relaxed shared memory descriptor.
 
     Args:
-        v (tensor): The tensor loaded from shared memory.
+        smem (shared_memory_descriptor): The shared memory descriptor to relax.
     """
-    v.handle.set_attr("ttg.amdgpu.syncedViaAsyncWait", _semantic.builder.get_bool_attr(True))
+    return relaxed_shared_memory_descriptor(smem)
 
 
 @builtin
@@ -168,3 +167,33 @@ def mfma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, _semantic=None)
 
     ret_ty = ttgl.distributed_type(tensor.dtype, tensor.shape, layout)
     return ttgl.tensor(tensor.handle, ret_ty)
+
+
+class relaxed_shared_memory_descriptor(shared_memory_descriptor):
+    """
+    A wrapper for shared memory descriptor that relaxes the shared memory load
+    to remove fence before the load operation.
+    """
+    SYNCED_VIA_WAIT_ATTR_NAME = "ttg.amdgpu.syncedViaAsyncWait"
+
+    def __init__(self, smem):
+        self.handle = smem.handle
+        self.type = smem.type
+
+    @builtin
+    def load(self, layout, _semantic):
+        """
+        Load a tensor from shared memory.
+
+        Args:
+            layout (DistributedLayout): The destination layout of the tensor.
+
+        Returns:
+            tensor: A Gluon tensor containing the loaded data.
+        """
+        layout = _unwrap_if_constexpr(layout)
+        ret = _semantic.shared_load(self, layout)
+        ret.handle.set_attr(self.SYNCED_VIA_WAIT_ATTR_NAME, _semantic.builder.get_bool_attr(True))
+
+        print('[DEBUG] Emitting relaxed load')
+        return ret
