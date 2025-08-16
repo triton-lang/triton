@@ -2,9 +2,10 @@
 # fmt: off
 import triton
 import triton.language as tl
+from triton_kernels.target_info import is_hip as is_hip_host
 from triton_kernels.tensor_details.layout_details.blackwell_scale import unswizzle_mx_scale_bw
 from triton_kernels.tensor_details.layout_details.hopper_scale import unswizzle_mxfp4_scale_hopper
-from triton_kernels.tensor_details.layout_details.hopper_value import mxfp4_to_bf16_triton
+from triton_kernels.tensor_details.layout_details.hopper_value import mxfp4_to_bf16_triton, mxfp4_to_fp8_e4m3_fn_trition
 from triton_kernels.numerics_details.flexpoint import float_to_flex, load_scale
 from triton_kernels.numerics_details.mxfp_details._downcast_to_mxfp import MXFP_BLOCK_SIZE
 from ._common import make_matmul_repr, matmul_launch_metadata, swizzle2d, xcd_swizzle, get_scaled_dot_format_string
@@ -24,6 +25,11 @@ def _zero_masked_rows(
     mask_n = offs_n < N
     mask = (src_idx == -1)[:, None] & mask_n[None, :]
     tl.store(YPtrs, tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32), mask=mask)
+
+
+@triton.constexpr_function
+def is_hip():
+    return is_hip_host()
 
 
 _matmul_ogs_repr = make_matmul_repr("_matmul_ogs", [0, 1, 2])
@@ -77,7 +83,9 @@ def _matmul_ogs(
              TOKENS_PER_EXPT_FOR_ANNOTATION=None,
              UPCAST_INDICES: tl.constexpr = False,
              SWAP_XW: tl.constexpr = False,
-             IS_EPILOGUE_DEQUANT_MXFP8: tl.constexpr = False):
+             IS_EPILOGUE_DEQUANT_MXFP8: tl.constexpr = False,
+             use_fp8_matmul: tl.constexpr = False
+             ):
 
     is_w_microscaled: tl.constexpr = WMxScale is not None
     MX_PACK_DIVISOR: tl.constexpr = MXFP_BLOCK_SIZE
@@ -286,14 +294,27 @@ def _matmul_ogs(
 
             if SWIZZLE_MX_VALUE == "HOPPER_VALUE":
                 # Handshake with the swizzling code
-                tl.static_assert(x_format == "bf16")
+                tl.static_assert(x_format == "bf16" or x_format == "e4m3")
                 tl.static_assert(w_format == "e2m1")
-                w = mxfp4_to_bf16_triton(w.trans(), w_scales, 1)
-                tl.static_assert(w.dtype == tl.bfloat16)
+
+                if use_fp8_matmul:
+                    # enforce fp8 matmul with tile-wise fp32 scalar
+                    fp8_dtype = tl.float8e4b8 if is_hip() else tl.float8e4nv
+                    w, tile_wise_w_s = mxfp4_to_fp8_e4m3_fn_trition(w.trans(), w_scales, 1, fp8_dtype=fp8_dtype)
+
+                    if x_format == "bf16":
+                        x = x.to(w.dtype)
+                else:
+                    w = mxfp4_to_bf16_triton(w.trans(), w_scales, 1)
+
+                    if x_format == "e4m3":
+                        x = x.to(tl.bfloat16)
+
                 acc = acc.trans()
                 x = x.trans()
-                # w = w.trans()
                 acc = tl.dot(w, x, acc, max_num_imprecise_acc=MAX_NUM_IMPRECISE_ACC, allow_tf32=ALLOW_TF32)
+                if use_fp8_matmul:
+                    acc *= tile_wise_w_s
                 acc = acc.trans()
             else:
                 acc = tl.dot_scaled(x, x_scales, x_format, w, w_scales, w_format, acc=acc, fast_math=True)

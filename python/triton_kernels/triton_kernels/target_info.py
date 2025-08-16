@@ -1,3 +1,4 @@
+import builtins
 import torch
 import triton
 import triton.language as tl
@@ -52,3 +53,15 @@ def has_native_mxfp():
 
 def num_sms():
     return torch.cuda.get_device_properties(0).multi_processor_count
+
+HIP_FP8_E4M3_FNUZ_MAX = 224.0
+
+if is_hip():
+    FP8_E4M3_MAX = HIP_FP8_E4M3_FNUZ_MAX
+else:
+    FP8_E4M3_MAX = torch.finfo(torch.float8_e4m3fn).max # 448
+
+FP8_E4M3_MIN = -FP8_E4M3_MAX
+
+builtins.FP8_E4M3_MAX = FP8_E4M3_MAX
+builtins.FP8_E4M3_MIN = FP8_E4M3_MIN

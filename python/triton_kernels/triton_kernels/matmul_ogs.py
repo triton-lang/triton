@@ -2,6 +2,7 @@
 # fmt: off
 from dataclasses import dataclass
 import itertools
+import os
 import sys
 import torch
 import triton
@@ -408,7 +409,7 @@ def matmul_ogs(x, w, bias,
     # unpack scales
     w_scale = precision_config.weight_scale
     w_has_mx = w_scale is not None
-    is_hopper_fp8 = is_cuda() and not target_info.cuda_capability_geq(10, 0) and bitwidth(w.dtype) == 8
+    is_hopper_fp8 = is_cuda() and not target_info.cuda_capability_geq(9, 0) and bitwidth(w.dtype) == 8
     if w_has_mx: assert w.stride(-2) == 1, "`w` must be column-major when it has data-type mxfp"
     if is_hopper_fp8: assert w.stride(-2) == 1, "`w` must be column-major when it has data-type FP8 on capability < 10"
     if not isinstance(w, Tensor):
@@ -545,6 +546,9 @@ def matmul_ogs(x, w, bias,
     w_scale_strides = (0, ) * (3 - len(w_scale_strides)) + w_scale_strides
     out_scale_strides = out_scale.stride() if out_has_mx else (None, None, None, None)
     out_scale_strides = (0, ) * (3 - len(out_scale_strides)) + out_scale_strides
+
+    use_fp8_matmul = int ( os.environ.get("USE_FP8_MATMUL", 0) ) != 0
+
     # launch kernel
     kernels = get_kernels(epilogue.specs, fused_activation.specs)
     (kernels._p_matmul_ogs if opt_flags.is_persistent else kernels._matmul_ogs)[(grid,)](
@@ -597,6 +601,7 @@ def matmul_ogs(x, w, bias,
                    SWAP_XW=preprocessing_features.swap_xw,
                    IS_EPILOGUE_DEQUANT_MXFP8=epilogue.specs.name == FnName.DEQUANTIZE_MXFP8.name,
                    NUM_SMS = grid if opt_flags.is_persistent else 0,
+                   use_fp8_matmul = use_fp8_matmul,
                    **opt_flags.target_kernel_kwargs)
     # post-processing
     out = apply_postprocessing_features(scatter_indx, finalize_scatter_idxs, opt_flags, expt_token_offs_raw,
