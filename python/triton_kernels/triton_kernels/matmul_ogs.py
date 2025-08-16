@@ -260,7 +260,6 @@ def reduce_grouped(x: torch.Tensor, indx: torch.Tensor, fused_activation, epilog
     stride_mxs = 0 if x_mx_scale is None else x_mx_scale.stride(1)
     stride_omxs = 0 if out_mx_scale is None else out_mx_scale.stride(0)
     kernels = get_kernels(epilogue.specs, fused_activation.specs)
-
     kernels._reduce_grouped[(num_groups, )](
         x, x.stride(0), x.stride(1), x.stride(2),  #
         x_expected_scale,  # scalar input scale
@@ -505,7 +504,7 @@ def matmul_ogs(x, w, bias,
     # Build grouped reduction inputs in a uniform way
     group_indx = None if scatter_indx is None else scatter_indx.src_indx.view(-1, routing_data.n_expts_act)
     out_final, out_final_mx_scale = reduce_grouped(
-        out_matmul,
+        out_matmul.squeeze(1),
         group_indx,
         fused_activation,
         epilogue,
@@ -516,6 +515,7 @@ def matmul_ogs(x, w, bias,
         out_dtype=memory["output"].dtype,
         flexpoint_saturate_inf=precision_config.flexpoint_saturate_inf,
     )
+    out_final = out_final.unsqueeze(0)
     if out_final_mx_scale is not None:
         precision_config.out_scale = out_final_mx_scale
     return out_final
