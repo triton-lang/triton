@@ -405,20 +405,20 @@ def test_use_name_loc_as_prefix(fresh_triton_cache):
         # CHECK: %arange = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32>
         arange = tl.arange(0, 16)
         ivar = 0
-        # CHECK: %ivar:2 = scf.while (%arange_0 = %arange, %ivar_1 = %c0_i32) : (tensor<16xi32>, i32) -> (tensor<16xi32>, i32)
-        # CHECK: %[[COND:.*]] = arith.cmpi slt, %ivar_1, %N : i32
-        # CHECK: scf.condition(%[[COND]]) %arange_0, %ivar_1 : tensor<16xi32>, i32
+        # CHECK: %ivar_[[IV0:.+]]:2 = scf.while (%arange_[[AR0:.+]] = %arange, %ivar_[[IV1:.+]] = %ivar) : (tensor<16xi32>, i32) -> (tensor<16xi32>, i32)
+        # CHECK: %[[COND:.*]] = arith.cmpi slt, %ivar_[[IV1]], %N : i32
+        # CHECK: scf.condition(%[[COND]]) %arange_[[AR0]], %ivar_[[IV1]] : tensor<16xi32>, i32
         while ivar < N:
-            # CHECK: ^bb0(%arange_0: tensor<16xi32> loc("arange"), %ivar_1: i32
+            # CHECK: ^bb0(%arange_[[AR0]]: tensor<16xi32> loc("arange"), %ivar_[[IV1]]: i32
 
-            # CHECK: %ivar_2 = arith.addi %ivar_1, %c1_i32 : i32
+            # CHECK: %ivar_[[IV2:.+]] = arith.addi %ivar_[[IV1]], %c1_i32 : i32
             ivar += 1
-            # CHECK: %arange_3 = tt.splat %ivar_2 : i32 -> tensor<16xi32>
-            # CHECK: %arange_4 = arith.muli %arange_0, %arange_3 : tensor<16xi32>
-            # CHECK: scf.yield %arange_4, %ivar_2 : tensor<16xi32>, i32
+            # CHECK: %arange_[[AR1:.+]] = tt.splat %ivar_[[IV2]] : i32 -> tensor<16xi32>
+            # CHECK: %arange_[[AR2:.+]] = arith.muli %arange_[[AR0]], %arange_[[AR1]] : tensor<16xi32>
+            # CHECK: scf.yield %arange_[[AR2]], %ivar_[[IV2]] : tensor<16xi32>, i32
             arange *= ivar
 
-        # CHECK: tt.print ": " {hex = false, isSigned = array<i32: 1>} : %ivar#0 : tensor<16xi32>
+        # CHECK: tt.print ": " {hex = false, isSigned = array<i32: 1>} : %ivar_[[IV0]]#0 : tensor<16xi32>
         tl.device_print("", arange)
 
     h = triton.compile(triton.compiler.ASTSource(fn=kernel_basic_while, signature={"N": "i32"}, constexprs={}))
