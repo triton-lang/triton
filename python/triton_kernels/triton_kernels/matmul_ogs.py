@@ -15,7 +15,7 @@ from triton_kernels.target_info import is_cuda
 # details
 from .matmul_ogs_details._matmul_ogs import _matmul_ogs
 from .matmul_ogs_details._p_matmul_ogs import _p_matmul_ogs, get_per_device_per_stream_alloc_fn
-from .reduce_details.reduce_grouped import _reduce_grouped
+from .matmul_ogs_details._reduce_grouped import _reduce_grouped
 from .numerics_details.mxfp import MXFP_BLOCK_SIZE
 from .matmul_ogs_details.opt_flags import make_opt_flags, update_opt_flags_constraints
 from .specialize import specialize

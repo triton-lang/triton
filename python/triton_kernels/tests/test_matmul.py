@@ -456,7 +456,7 @@ def test_set_idle_sms():
     num_idle_sms = 24
     matmul_ogs_set_idle_sms(num_idle_sms)
     flags = make_opt_flags(torch.float32, torch.float32, torch.float32, PrecisionConfig(), \
-                           1024, 1024, 1024, None, True, False, 1)
+                           1024, 1024, 1024, None, False, 1)
     assert flags.idle_sms == num_idle_sms
 
 
