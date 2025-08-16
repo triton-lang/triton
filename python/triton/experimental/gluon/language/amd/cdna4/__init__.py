@@ -53,7 +53,6 @@ def global_load_to_shared(dest, ptr, mask=None, other=None, cache_modifier="", _
     _check(
         dest.shape == ptr.shape, lambda:
         f"expected dest shape to match pointer shape but got dest.shape = {dest.shape}, pointer.shape = {ptr.shape}")
-    _check(len(dest.shape) == 2, lambda: f"expected dest shape to be 2d but got {len(dest.shape)}d")
 
     mask_handle = mask.handle if mask is not None else ir.value()
     other_handle = other.handle if other is not None else ir.value()
