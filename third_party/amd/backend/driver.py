@@ -474,9 +474,9 @@ cleanup:
 
 static uint16_t pack_fp16(double f) {{
     uint16_t result;
-    // from https://github.com/python/pythoncapi-compat
+    // from https://github.com/python/pythoncapi-compat/blob/5e317108f872c904eb726cb8d560dcadbdf88a72/pythoncapi_compat.h#L482-L492
 #if 0x030600B1 <= PY_VERSION_HEX && PY_VERSION_HEX <= 0x030B00A1 && !defined(PYPY_VERSION)
-    _PyFloat_Pack2(f, (char*)&result, 1);
+    _PyFloat_Pack2(f, (unsigned char*)&result, 1);
 #else
     PyFloat_Pack2(f, (char*)&result, 1);
 #endif
