@@ -508,10 +508,8 @@ def test_fused_act(m, n, k, mode, split_k, do_gather, do_scatter, is_persistent,
         rdata, gindx, sindx = None, None, None
 
     try:
-        print("NOT FUSED")
         a = swiglu(matmul_ogs(x, w, bias, rdata, gindx, sindx, precision_opt), swiglu_alpha,
                    precision_config=SwiGLUPrecisionConfig(swiglu_limit))
-        print("FUSED")
         b = matmul_ogs(
             x, w, bias, rdata, gindx, sindx, precision_opt,
             fused_activation=FusedActivation(FnSpecs("swiglu", swiglu_fn, ("alpha", "limit")),
@@ -519,11 +517,7 @@ def test_fused_act(m, n, k, mode, split_k, do_gather, do_scatter, is_persistent,
     except opt_flags.InapplicableConstraint:
         pytest.skip("inapplicable constraint")
 
-    print("___")
-    print(matmul_ogs(x, w, bias, rdata, gindx, sindx, precision_opt))
-    print(a)
-    print(b)
-    # assert_close(a, b)
+    assert_close(a, b)
 
 
 @pytest.mark.parametrize("m, n, k", [

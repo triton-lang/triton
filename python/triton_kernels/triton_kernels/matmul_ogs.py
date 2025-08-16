@@ -260,7 +260,6 @@ def reduce_grouped(x: torch.Tensor, indx: torch.Tensor, fused_activation, epilog
     stride_mxs = 0 if x_mx_scale is None else x_mx_scale.stride(1)
     stride_omxs = 0 if out_mx_scale is None else out_mx_scale.stride(0)
     kernels = get_kernels(epilogue.specs, fused_activation.specs)
-    print("IN", x)
     kernels._reduce_grouped[(num_groups, )](
         x, x.stride(0), x.stride(2), x.stride(3),  #
         x_expected_scale,  # scalar input scale
@@ -276,7 +275,6 @@ def reduce_grouped(x: torch.Tensor, indx: torch.Tensor, fused_activation, epilog
         BLOCK_N=BLOCK_N, K=K,  #
         num_warps=1,  #
     )
-    print("OUT", out)
     return out, out_mx_scale
 
 # -----------------------------------------------------------------------------
@@ -365,6 +363,11 @@ def matmul_ogs(x, w, bias,
         raise NotImplementedError("Must use non-persistent kernel for simulated MXFP")
     if w_scale is not None and w_scale.storage.layout.name is not None and not opt_flags.is_persistent and target_info.has_native_mxfp():
         raise NotImplementedError("Must use persistent kernel and be TMA-compliant for native MXFP")
+    # fused activation
+    matmul_fused_activation = fused_activation
+    reduce_fused_activation = FusedActivation()
+    if opt_flags.split_k > 1:
+        matmul_fused_activation, reduce_fused_activation = reduce_fused_activation, matmul_fused_activation
     # allocate output/scratchpad memory
     allocation = init_allocation(x, w, precision_config, fused_activation,
         routing_data, gather_indx, scatter_indx, opt_flags)
@@ -424,7 +427,7 @@ def matmul_ogs(x, w, bias,
     x_tensor_or_tma = x_storage.make_tma(x_tma_block_size, x_tma_mode) if x_has_tma else x_storage.data
     # create tma descriptor for y
     y_has_tma = opt_flags.is_persistent and (has_scatter_tma or not has_scatter)
-    block_n = opt_flags.block_n // opt_flags.epilogue_subtile // fused_activation.reduction_n
+    block_n = opt_flags.block_n // opt_flags.epilogue_subtile // matmul_fused_activation.reduction_n
     y_tma_block_size = [1, block_n] if has_scatter_tma else [1, opt_flags.block_m, block_n]
     y_tma_mode = None if not y_has_tma else "ragged" if is_ragged and not has_scatter_tma else "dense"
     y_tensor_or_tma = y_storage.make_tma(y_tma_block_size, y_tma_mode) if y_has_tma else y_storage.data
@@ -444,7 +447,7 @@ def matmul_ogs(x, w, bias,
     out_matmul_scale_strides = out_matmul_scale.stride() if out_matmul_has_mx else (None, None, None, None)
     out_matmul_scale_strides = (0, ) * (3 - len(out_matmul_scale_strides)) + out_matmul_scale_strides
     # launch kernel
-    kernels = get_kernels(epilogue.specs, fused_activation.specs)
+    kernels = get_kernels(epilogue.specs, matmul_fused_activation.specs)
     (kernels._p_matmul_ogs if opt_flags.is_persistent else kernels._matmul_ogs)[(grid,)](
                    y_tensor_or_tma, y_storage.data, *out_matmul.stride(),
                    *((None, out_matmul_scale, None) if out_matmul_has_mx else out_matmul_flex),
@@ -467,7 +470,7 @@ def matmul_ogs(x, w, bias,
                    expt_hist, expt_token_offs_raw, expt_hist_sum, expt_block_pid_map,
                    batch_size, grid_m, grid_n,
                    out_alpha,
-                   *fused_activation.fn_args, fused_activation.reduction_n,
+                   *matmul_fused_activation.fn_args, matmul_fused_activation.reduction_n,
                    *epilogue.fn_arg_values_matmul,
                    routing_data.n_expts_tot, routing_data.n_expts_act,
                    precision_config.max_num_imprecise_acc,
@@ -501,7 +504,7 @@ def matmul_ogs(x, w, bias,
     out_final, out_final_mx_scale = reduce_grouped(
         out_matmul,
         group_indx,
-        fused_activation,
+        reduce_fused_activation,
         epilogue,
         x_flex=InFlexData(scale=out_matmul_flex.expected_scale),
         out_flex=precision_config.flex_ctx.out_data,
