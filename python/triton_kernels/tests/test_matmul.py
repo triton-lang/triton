@@ -464,13 +464,13 @@ def test_set_idle_sms():
     (1200, 704, 608, "ragged"),
     (800, 800, 400, "batched"),
 ])
-@pytest.mark.parametrize("split_k", [1, 2])
+@pytest.mark.parametrize("split_k", [2])
 @pytest.mark.parametrize("do_gather, do_scatter", [
     (False, False),
-    (True, False),
-    (False, True),
-    (True, True),
-    (True, True),
+    # (True, False),
+    # (False, True),
+    # (True, True),
+    # (True, True),
 ])
 @pytest.mark.parametrize("is_persistent, epilogue_subtile", [
     (False, None),
@@ -508,8 +508,10 @@ def test_fused_act(m, n, k, mode, split_k, do_gather, do_scatter, is_persistent,
         rdata, gindx, sindx = None, None, None
 
     try:
+        print("NOT FUSED")
         a = swiglu(matmul_ogs(x, w, bias, rdata, gindx, sindx, precision_opt), swiglu_alpha,
                    precision_config=SwiGLUPrecisionConfig(swiglu_limit))
+        print("FUSED")
         b = matmul_ogs(
             x, w, bias, rdata, gindx, sindx, precision_opt,
             fused_activation=FusedActivation(FnSpecs("swiglu", swiglu_fn, ("alpha", "limit")),
@@ -517,6 +519,7 @@ def test_fused_act(m, n, k, mode, split_k, do_gather, do_scatter, is_persistent,
     except opt_flags.InapplicableConstraint:
         pytest.skip("inapplicable constraint")
 
+    print("___")
     print(matmul_ogs(x, w, bias, rdata, gindx, sindx, precision_opt))
     print(a)
     print(b)

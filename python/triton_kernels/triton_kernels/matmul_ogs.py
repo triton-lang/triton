@@ -237,8 +237,6 @@ def reduce_grouped(x: torch.Tensor, indx: torch.Tensor, fused_activation, epilog
     """
     if indx is None and x.shape[0] == 1:
         return x.squeeze(0), None
-    if x.ndim == 2:
-        x = x.unsqueeze(0)
     if indx is not None:
         assert x.shape[-2] == indx.numel()
     K = 1 if indx is None else indx.shape[1]
@@ -261,11 +259,8 @@ def reduce_grouped(x: torch.Tensor, indx: torch.Tensor, fused_activation, epilog
     stride_mxb = 0 if x_mx_scale is None else x_mx_scale.stride(0)
     stride_mxs = 0 if x_mx_scale is None else x_mx_scale.stride(1)
     stride_omxs = 0 if out_mx_scale is None else out_mx_scale.stride(0)
-    # print(x.stride())
-    # print(out.stride())
-    # print(x.shape)
-    # breakpoint()
     kernels = get_kernels(epilogue.specs, fused_activation.specs)
+    print("IN", x)
     kernels._reduce_grouped[(num_groups, )](
         x, x.stride(0), x.stride(2), x.stride(3),  #
         x_expected_scale,  # scalar input scale
@@ -281,6 +276,7 @@ def reduce_grouped(x: torch.Tensor, indx: torch.Tensor, fused_activation, epilog
         BLOCK_N=BLOCK_N, K=K,  #
         num_warps=1,  #
     )
+    print("OUT", out)
     return out, out_mx_scale
 
 # -----------------------------------------------------------------------------
@@ -500,9 +496,6 @@ def matmul_ogs(x, w, bias,
                    IS_EPILOGUE_DEQUANT_MXFP8=epilogue.specs.name == FnName.DEQUANTIZE_MXFP8.name,
                    NUM_SMS = grid if opt_flags.is_persistent else 0,
                    **opt_flags.target_kernel_kwargs)
-    # Canonicalize shapes and quickly return when no post-processing is needed
-    # if not is_input_batched:
-    #     out_matmul = out_matmul.squeeze(1)
     # Build grouped reduction inputs in a uniform way
     group_indx = None if scatter_indx is None else scatter_indx.src_indx.view(-1, routing_data.n_expts_act)
     out_final, out_final_mx_scale = reduce_grouped(

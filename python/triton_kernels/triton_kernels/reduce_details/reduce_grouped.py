@@ -1,7 +1,6 @@
 import torch
 import triton
 import triton.language as tl
-from triton_kernels.numerics import InFlexData, OutFlexData
 from triton_kernels.numerics_details.flexpoint import float_to_flex, load_scale
 from triton_kernels.numerics_details.mxfp import dequantize_mxfp8_fn
 
@@ -95,74 +94,74 @@ def _reduce_grouped(X, stride_xb, stride_xm, stride_xn,  #
             OutScalePtrs += BLOCK_N_OUT // 32 * stride_xn
 
 
-def reduce_grouped(x: torch.Tensor, indx: torch.Tensor, x_flex: InFlexData | None = None,
-                   out_flex: OutFlexData | None = None, x_mx_scale: torch.Tensor | None = None,
-                   has_out_mx_scale: bool = False, out_dtype: bool = None, flexpoint_saturate_inf: bool = False):
-    """
-    In-place grouped row reduction.
+# def reduce_grouped(x: torch.Tensor, indx: torch.Tensor, x_flex: InFlexData | None = None,
+#                    out_flex: OutFlexData | None = None, x_mx_scale: torch.Tensor | None = None,
+#                    has_out_mx_scale: bool = False, out_dtype: bool = None, flexpoint_saturate_inf: bool = False):
+#     """
+#     In-place grouped row reduction.
 
-    Arguments
-    - x: Tensor[AnyFloat] of shape [(num_groups * K), N]
-    - indx: Tensor[Int] of shape [num_groups, K]
+#     Arguments
+#     - x: Tensor[AnyFloat] of shape [(num_groups * K), N]
+#     - indx: Tensor[Int] of shape [num_groups, K]
 
-    Description
-    For each group g in [0, num_groups), this routine sums the K rows of `x`
-    specified by `indx[g, :]` and overwrites the row corresponding to the first
-    valid (non-negative) index with the per-group sum. Accumulation is performed
-    in float32 for numerical stability, and the result is written back in the
-    dtype of `x`.
+#     Description
+#     For each group g in [0, num_groups), this routine sums the K rows of `x`
+#     specified by `indx[g, :]` and overwrites the row corresponding to the first
+#     valid (non-negative) index with the per-group sum. Accumulation is performed
+#     in float32 for numerical stability, and the result is written back in the
+#     dtype of `x`.
 
-    Behavior and edge cases
-    - Invalid (-1) entries are skipped during accumulation and do not generate
-      memory traffic. If a group has no valid entries, nothing is written for
-      that group.
-    - Reduction is performed tile-by-tile along the N dimension within a single
-      kernel launch (persistent along N) to minimize launch overhead.
+#     Behavior and edge cases
+#     - Invalid (-1) entries are skipped during accumulation and do not generate
+#       memory traffic. If a group has no valid entries, nothing is written for
+#       that group.
+#     - Reduction is performed tile-by-tile along the N dimension within a single
+#       kernel launch (persistent along N) to minimize launch overhead.
 
-    Performance notes
-    - Memory traffic per group is approximately (valid_rows_read + 1) * N * sizeof(x),
-      plus index reads. With no invalid entries, this becomes (K + 1) reads/writes
-      of length N per group.
+#     Performance notes
+#     - Memory traffic per group is approximately (valid_rows_read + 1) * N * sizeof(x),
+#       plus index reads. With no invalid entries, this becomes (K + 1) reads/writes
+#       of length N per group.
 
-    Returns
-    - The input tensor `x` (modified in place).
-    """
-    if x.ndim == 2:
-        x = x.unsqueeze(0)
-    if indx is not None:
-        assert x.shape[-2] == indx.numel()
-    K = 1 if indx is None else indx.shape[1]
-    num_groups = x.shape[-2] // K
-    out_dtype = x.dtype if out_dtype is None else out_dtype
-    out = torch.empty((num_groups, x.shape[-1]), dtype=out_dtype, device=x.device)
-    if has_out_mx_scale:
-        out_mx_scale = torch.empty((num_groups, triton.cdiv(x.shape[-1], 32)), dtype=torch.uint8, device=x.device)
-    else:
-        out_mx_scale = None
-    BLOCK_N = 512
-    # Resolve scalar flex scales (may be None)
-    x_expected_scale = None if x_flex is None else x_flex.scale
-    out_expected_scale = None if out_flex is None else out_flex.expected_scale
-    out_actual_scale = None if out_flex is None else out_flex.actual_scale
-    out_checksum_scale = None if out_flex is None else out_flex.checksum_scale
-    # Resolve MXFP output scale row stride
-    stride_mxb = 0 if x_mx_scale is None else x_mx_scale.stride(0)
-    stride_mxs = 0 if x_mx_scale is None else x_mx_scale.stride(1)
-    stride_omxs = 0 if out_mx_scale is None else out_mx_scale.stride(0)
-    _reduce_grouped[(num_groups, )](
-        x, x.stride(0), x.stride(1), x.stride(2),  #
-        x_expected_scale,  # scalar input scale
-        out, out.stride(0), out.stride(1),  #
-        out_expected_scale, out_actual_scale, out_checksum_scale, indx,  #
-        x.shape[0], x.shape[-1],  #
-        x_mx_scale, stride_mxb, stride_mxs,  #
-        out_mx_scale, stride_omxs,  #
-        HAS_IN_MX_SCALE=x_mx_scale is not None, HAS_OUT_MX_SCALE=out_mx_scale is not None,
-        FLEXPOINT_SATURATE_INF=flexpoint_saturate_inf,  #
-        BLOCK_N=BLOCK_N, K=K,  #
-        num_warps=1,  #
-    )
-    return out, out_mx_scale
+#     Returns
+#     - The input tensor `x` (modified in place).
+#     """
+#     if x.ndim == 2:
+#         x = x.unsqueeze(0)
+#     if indx is not None:
+#         assert x.shape[-2] == indx.numel()
+#     K = 1 if indx is None else indx.shape[1]
+#     num_groups = x.shape[-2] // K
+#     out_dtype = x.dtype if out_dtype is None else out_dtype
+#     out = torch.empty((num_groups, x.shape[-1]), dtype=out_dtype, device=x.device)
+#     if has_out_mx_scale:
+#         out_mx_scale = torch.empty((num_groups, triton.cdiv(x.shape[-1], 32)), dtype=torch.uint8, device=x.device)
+#     else:
+#         out_mx_scale = None
+#     BLOCK_N = 512
+#     # Resolve scalar flex scales (may be None)
+#     x_expected_scale = None if x_flex is None else x_flex.scale
+#     out_expected_scale = None if out_flex is None else out_flex.expected_scale
+#     out_actual_scale = None if out_flex is None else out_flex.actual_scale
+#     out_checksum_scale = None if out_flex is None else out_flex.checksum_scale
+#     # Resolve MXFP output scale row stride
+#     stride_mxb = 0 if x_mx_scale is None else x_mx_scale.stride(0)
+#     stride_mxs = 0 if x_mx_scale is None else x_mx_scale.stride(1)
+#     stride_omxs = 0 if out_mx_scale is None else out_mx_scale.stride(0)
+#     _reduce_grouped[(num_groups, )](
+#         x, x.stride(0), x.stride(2), x.stride(3),  #
+#         x_expected_scale,  # scalar input scale
+#         out, out.stride(0), out.stride(2),  #
+#         out_expected_scale, out_actual_scale, out_checksum_scale, indx,  #
+#         x.shape[0], x.shape[-1],  #
+#         x_mx_scale, stride_mxb, stride_mxs,  #
+#         out_mx_scale, stride_omxs,  #
+#         HAS_IN_MX_SCALE=x_mx_scale is not None, HAS_OUT_MX_SCALE=out_mx_scale is not None,
+#         FLEXPOINT_SATURATE_INF=flexpoint_saturate_inf,  #
+#         BLOCK_N=BLOCK_N, K=K,  #
+#         num_warps=1,  #
+#     )
+#     return out, out_mx_scale
 
 
 def reduce_grouped_torch(x: torch.Tensor, indx: torch.Tensor, inplace: bool = True):
