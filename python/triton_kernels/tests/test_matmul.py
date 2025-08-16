@@ -297,7 +297,12 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
         pytest.skip("fused scatter scratchpad not supported with split_k")
     if hbm_swizzling:
         if is_hip():
-            pytest.skip("NYI. HBM swizzling just implemented for CUDA.")
+            if not is_hip_cdna4():
+                pytest.skip("Scale preshuffling on AMD GPU has not been emulated on non-CDNA4 arch yet.")
+            if "mx" not in weight_dtype_str:
+                pytest.skip("Non-scale swizzling not supported on CDNA4 yet")
+            if n % 32 != 0 or k % (32 * 8) != 0:
+                pytest.skip(f"Shape {m}x{n}x{k} is not supported for scale swizzling on AMD GPU")
         if torch.cuda.get_device_capability()[0] < 9:
             pytest.skip("NYI. Ampere swizzling.")
         if torch.cuda.get_device_capability()[0] < 10:
@@ -327,6 +332,15 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
         "is_persistent": is_persistent,
         "epilogue_subtile": epilogue_subtile,
     }
+
+    if is_hip() and hbm_swizzling and "float4" in weight_dtype_str:
+        # Minimum block size to satisfy scale preshuffling
+        constraints.update({
+            "block_m": 32,
+            "block_n": 32,
+            "block_k": 256
+        })
+
     opt_flags.update_opt_flags_constraints(constraints)
 
     weight_mxfp = weight_dtype_str.startswith("mx")

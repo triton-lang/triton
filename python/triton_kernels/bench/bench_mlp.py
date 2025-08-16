@@ -104,7 +104,7 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP,
     # -- numerics --
     opt1 = dict()
     opt2 = dict()
-    if w_dtype == "mx4" and not is_hip():
+    if w_dtype == "mx4":
         num_warps = 4 if batch <= 512 else 8
         value_layout, value_layout_opts = layout.make_default_matmul_mxfp4_w_layout(mx_axis=1)
         scale_layout, scale_layout_opts = layout.make_default_matmul_mxfp4_w_scale_layout(
