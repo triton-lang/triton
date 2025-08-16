@@ -45,9 +45,9 @@ def _reduce_grouped(X, stride_xb, stride_xm, stride_xn,  #
         OutScalePtrs = OutMxScale + tl.arange(0, BLOCK_N_OUT // 32) * stride_on
     x_scale = load_scale(XScale)
     for n_curr in tl.range(0, N, BLOCK_N, num_stages=4):
+        acc = tl.zeros([BLOCK_N_OUT], dtype=tl.float32)
         x_n_mask = tl.arange(0, BLOCK_N) < N - n_curr
         x_n_mask_scale = tl.arange(0, BLOCK_N // 32) < tl.cdiv(N - n_curr, 32)
-        acc = tl.zeros([BLOCK_N_OUT], dtype=tl.float32)
         # accumulate contributions for this tile
         for i in tl.static_range(0, K):
             curr = tl.zeros([BLOCK_N], dtype=tl.float32)
@@ -66,15 +66,15 @@ def _reduce_grouped(X, stride_xb, stride_xm, stride_xn,  #
                 curr += vals
             # apply nonlinearity to split-k output
             if ACTIVATION_FN is not None:
-                curr = ACTIVATION_FN(curr, *activation_fn_args)
-            if EPILOGUE_FN is not None:
-                curr = EPILOGUE_FN(curr, *epilogue_fn_args)
+                curr = ACTIVATION_FN(curr[None, :], *activation_fn_args)
+            curr = tl.reshape(curr, [curr.shape[-1]])
             # update final accumulator
             acc += curr
         acc *= x_scale
         # Compute per-32-col MXFP scales for this tile if requested
-        out_n_mask = tl.arange(0, BLOCK_N_OUT) < N - n_curr
-        out_n_mask_scale = tl.arange(0, BLOCK_N_OUT // 32) < tl.cdiv(N - n_curr, 32)
+        Nrem = (N - n_curr) // ACTIVATION_REDUCTION_N
+        out_n_mask = tl.arange(0, BLOCK_N_OUT) < Nrem
+        out_n_mask_scale = tl.arange(0, BLOCK_N_OUT // 32) < tl.cdiv(Nrem, 32)
         if HAS_OUT_MX_SCALE:
             acc, acc_scale = dequantize_mxfp8_fn(acc[None, :], out_n_mask[None, :])
             acc = tl.reshape(acc, [acc.shape[-1]])
@@ -88,11 +88,11 @@ def _reduce_grouped(X, stride_xb, stride_xm, stride_xn,  #
             out_scale_ptr = OutScalePtrs + pid_t * stride_omxs
             tl.store(out_scale_ptr, acc_scale, mask=out_n_mask_scale)
         XPtrs += BLOCK_N * stride_xn
-        OutPtrs += BLOCK_N * stride_on
+        OutPtrs += BLOCK_N_OUT * stride_on
         if HAS_IN_MX_SCALE:
             XScalePtrs += BLOCK_N // 32 * stride_xn
         if HAS_OUT_MX_SCALE:
-            OutScalePtrs += BLOCK_N // 32 * stride_xn
+            OutScalePtrs += BLOCK_N_OUT // 32 * stride_xn
 
 
 def reduce_grouped(x: torch.Tensor, indx: torch.Tensor, x_flex: InFlexData | None = None,
