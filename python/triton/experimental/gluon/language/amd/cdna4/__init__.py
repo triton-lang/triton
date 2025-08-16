@@ -1,7 +1,7 @@
 from triton.experimental.gluon.language import _core as ttgl
 from ..._core import ir, builtin, float32, _unwrap_if_constexpr
 from ..._semantic import _check
-from ..._layouts import DotOperandLayout
+from ..._layouts import DotOperandLayout, BlockedLayout, SliceLayout
 from .._layouts import AMDMFMALayout
 from ..cdna3 import *  # NOQA: F403
 from ..cdna3 import __all__ as __cdna3_all
@@ -21,16 +21,19 @@ __all__ = [
 def global_load_to_shared(dest, ptr, mask=None, other=None, cache_modifier="", _semantic=None):
     """
     AMD Global load to shared operation. This operation loads data directly
-    from global memory to shared memory without going through registers.
+    from global memory to shared memory without going through registers. This
+    operation happens asynchronously and requires a subsequent `async_wait`
+    to ensure the data is available in shared memory.
 
-    Limitations:
+    While using this operation, the following conditions must be met or
+    lowering to LLVM will fail:
 
-    - Only supports 2D tensors.
-    - Require load bitwidth to be 128.
+    - For the `ptr` layout, size per thread * bits per element must be at least 128 and access must be coalesced.
+    - If `dest` is swizzled, it only can be swizzled across warp boundaries.
 
     Args:
         dest (shared_memory_descriptor): Destination shared memory descriptor.
-        ptr (tensor): Source pointer tensor.
+        ptr (tensor pointer): Source pointer tensor.
         mask (tensor, optional): Mask tensor for predicated loads. Defaults to None.
         other (tensor, optional): Tensor providing default values for masked elements. Defaults to None.
         cache_modifier (str): Cache modifier specifier. Defaults to "".
@@ -45,6 +48,8 @@ def global_load_to_shared(dest, ptr, mask=None, other=None, cache_modifier="", _
     if other is not None:
         ptr, other = _semantic.broadcast_impl_value(ptr, other)
 
+    _check(isinstance(ptr.type.layout, (BlockedLayout, SliceLayout)),
+           lambda: "expected ptr type layout to be BlockedLayout or SliceLayout")
     _check(
         dest.shape == ptr.shape, lambda:
         f"expected dest shape to match pointer shape but got dest.shape = {dest.shape}, pointer.shape = {ptr.shape}")
@@ -62,7 +67,15 @@ def buffer_load_to_shared(dest, ptr, offsets, mask=None, other=None, cache_modif
     AMD Buffer load to shared operation. Buffer load is similar to global load
     but it accesses global memory via a scalar base pointer and a tensor of
     offsets instead of a tensor of pointers. This operation loads data directly
-    from global memory to shared memory without going through registers.
+    from global memory to shared memory without going through registers. This
+    operation happens asynchronously and requires a subsequent `async_wait`
+    to ensure the data is available in shared memory.
+
+    While using this operation, the following conditions must be met or
+    lowering to LLVM will fail:
+
+    - For the `ptr` layout, size per thread * bits per element must be at least 128 and access must be coalesced.
+    - If `dest` is swizzled, it only can be swizzled across warp boundaries.
 
     Args:
         dest (shared_memory_descriptor): Destination shared memory descriptor.
@@ -80,6 +93,8 @@ def buffer_load_to_shared(dest, ptr, offsets, mask=None, other=None, cache_modif
     if other is not None:
         offsets, other = _semantic.broadcast_impl_value(offsets, other)
 
+    _check(isinstance(offsets.type.layout, (BlockedLayout, SliceLayout)),
+           lambda: "expected offsets type layout to be BlockedLayout or SliceLayout")
     _verify_buffer_load_store(ptr, offsets, mask, other)
 
     mask = mask.handle if mask is not None else ir.value()
@@ -94,10 +109,12 @@ def buffer_load_to_shared(dest, ptr, offsets, mask=None, other=None, cache_modif
 @builtin
 def async_wait(num_outstanding=0, _semantic=None):
     """
-    Wait for outstanding asynchronous copy operations.
+    Wait for outstanding asynchronous memory operations, including
+    `global_load_to_shared` and `buffer_load_to_shared`. It will block until
+    the number of outstanding operations is less than or equal to `num_outstanding`.
 
     Args:
-        num_outstanding (int): Wait until `num_outstanding` or less async copy operations in-flight. Defaults to 0.
+        num_outstanding (int): The number of outstanding operations to wait for. Defaults to 0.
     """
     num_outstanding = _unwrap_if_constexpr(num_outstanding)
     _semantic.builder.create_async_wait_group(num_outstanding)
