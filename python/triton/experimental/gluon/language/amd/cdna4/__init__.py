@@ -33,7 +33,7 @@ def global_load_to_shared(dest, ptr, mask=None, other=None, cache_modifier="", _
 
     Args:
         dest (shared_memory_descriptor): Destination shared memory descriptor.
-        ptr (tensor pointer): Source pointer tensor.
+        ptr (pointer tensor): Tensor of pointers to global memory to load from.
         mask (tensor, optional): Mask tensor for predicated loads. Defaults to None.
         other (tensor, optional): Tensor providing default values for masked elements. Defaults to None.
         cache_modifier (str): Cache modifier specifier. Defaults to "".
