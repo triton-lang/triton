@@ -725,7 +725,7 @@ operand.</p>
 <h2><code class="docutils literal notranslate"><span class="pre">ttg.memdesc_index</span></code> (triton::gpu::MemDescIndexOp)<a class="headerlink" href="#ttg-memdesc-index-triton-gpu-memdescindexop" title="Link to this heading">¶</a></h2>
 <p><em>Take a subview of the descriptor.</em></p>
 <p>Syntax:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `ttg.memdesc_index` $src `,` $index attr-dict `:` qualified(type($src)) `-&gt;` qualified(type($result))
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `ttg.memdesc_index` $src `[` $index `]` attr-dict `:` qualified(type($src)) `-&gt;` qualified(type($result))
 </pre></div>
 </div>
 <p>This operation returns a new descriptor pointing to the <code class="docutils literal notranslate"><span class="pre">i</span></code>-th element of the

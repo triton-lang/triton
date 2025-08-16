@@ -381,7 +381,7 @@ _Take a subview of the descriptor._
 Syntax:
 
 ```
-operation ::= `ttg.memdesc_index` $src `,` $index attr-dict `:` qualified(type($src)) `->` qualified(type($result))
+operation ::= `ttg.memdesc_index` $src `[` $index `]` attr-dict `:` qualified(type($src)) `->` qualified(type($result))
 ```
 
 This operation returns a new descriptor pointing to the `i`-th element of the
