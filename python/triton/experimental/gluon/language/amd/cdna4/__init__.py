@@ -9,18 +9,19 @@ from ..cdna3 import _verify_buffer_load_store
 
 __all__ = [
     *__cdna3_all,
-    "async_copy_global_to_shared",
-    "async_wait",
+    "global_load_to_shared",
     "buffer_load_to_shared",
+    "async_wait",
+    "synced_via_wait",
     "mfma_scaled",
 ]
 
 
 @builtin
-def async_copy_global_to_shared(dest, pointer, mask=None, other=None, cache_modifier="", eviction_policy="",
-                                volatile=False, _semantic=None):
+def global_load_to_shared(dest, ptr, mask=None, other=None, cache_modifier="", _semantic=None):
     """
-    Asynchronously copy elements from global memory to shared memory.
+    AMD Global load to shared operation. This operation loads data directly
+    from global memory to shared memory without going through registers.
 
     Limitations:
 
@@ -29,66 +30,39 @@ def async_copy_global_to_shared(dest, pointer, mask=None, other=None, cache_modi
 
     Args:
         dest (shared_memory_descriptor): Destination shared memory descriptor.
-        pointer (tensor): Source pointer tensor.
+        ptr (tensor): Source pointer tensor.
         mask (tensor, optional): Mask tensor for predicated loads. Defaults to None.
         other (tensor, optional): Tensor providing default values for masked elements. Defaults to None.
         cache_modifier (str): Cache modifier specifier. Defaults to "".
     """
     cache_modifier = _semantic._str_to_load_cache_modifier(cache_modifier)
-    eviction_policy = _semantic._str_to_eviction_policy(eviction_policy)
-    volatile = _unwrap_if_constexpr(volatile)
 
     mask = _unwrap_if_constexpr(mask)
     if mask is not None:
-        pointer, mask = _semantic.broadcast_impl_value(pointer, mask)
+        ptr, mask = _semantic.broadcast_impl_value(ptr, mask)
 
     other = _unwrap_if_constexpr(other)
     if other is not None:
-        pointer, other = _semantic.broadcast_impl_value(pointer, other)
+        ptr, other = _semantic.broadcast_impl_value(ptr, other)
 
     _check(
-        dest.shape == pointer.shape, lambda:
-        f"expected dest shape to match pointer shape but got dest.shape = {dest.shape}, pointer.shape = {pointer.shape}"
-    )
+        dest.shape == ptr.shape, lambda:
+        f"expected dest shape to match pointer shape but got dest.shape = {dest.shape}, pointer.shape = {ptr.shape}")
     _check(len(dest.shape) == 2, lambda: f"expected dest shape to be 2d but got {len(dest.shape)}d")
 
     mask_handle = mask.handle if mask is not None else ir.value()
     other_handle = other.handle if other is not None else ir.value()
-    _semantic.builder.create_async_copy_global_to_local(dest.handle, pointer.handle, mask_handle, other_handle,
+    _semantic.builder.create_async_copy_global_to_local(dest.handle, ptr.handle, mask_handle, other_handle,
                                                         cache_modifier, ir.EVICTION_POLICY.NORMAL, False)
-
-
-@builtin
-def async_wait(num_outstanding=0, _semantic=None):
-    """
-    Wait for outstanding asynchronous copy operations.
-
-    Args:
-        num_outstanding (int): Wait until `num_outstanding` or less async copy operations in-flight. Defaults to 0.
-    """
-    num_outstanding = _unwrap_if_constexpr(num_outstanding)
-    _semantic.builder.create_async_wait_group(num_outstanding)
-
-
-@builtin
-def synced_via_wait(v, _semantic=None):
-    """
-    Annotate a local load operation as synced via async wait, so the LLVM
-    will not emit conservative wait counts
-
-    Args:
-        v (tensor): The tensor loaded from shared memory.
-    """
-    v.handle.set_attr("ttg.amdgpu.syncedViaAsyncWait", _semantic.builder.get_bool_attr(True))
 
 
 @builtin
 def buffer_load_to_shared(dest, ptr, offsets, mask=None, other=None, cache_modifier="", _semantic=None):
     """
-    AMD Buffer load to shared operation. Buffer load is similar to normal load
+    AMD Buffer load to shared operation. Buffer load is similar to global load
     but it accesses global memory via a scalar base pointer and a tensor of
-    offsets instead of a tensor of pointers. This operation will load data
-    directly into shared memory instead of registers.
+    offsets instead of a tensor of pointers. This operation loads data directly
+    from global memory to shared memory without going through registers.
 
     Args:
         dest (shared_memory_descriptor): Destination shared memory descriptor.
@@ -115,6 +89,30 @@ def buffer_load_to_shared(dest, ptr, offsets, mask=None, other=None, cache_modif
 
     _semantic.builder.create_buffer_load_to_local(dest.handle, ptr.handle, offsets.handle, mask, other, stride,
                                                   cache_modifier)
+
+
+@builtin
+def async_wait(num_outstanding=0, _semantic=None):
+    """
+    Wait for outstanding asynchronous copy operations.
+
+    Args:
+        num_outstanding (int): Wait until `num_outstanding` or less async copy operations in-flight. Defaults to 0.
+    """
+    num_outstanding = _unwrap_if_constexpr(num_outstanding)
+    _semantic.builder.create_async_wait_group(num_outstanding)
+
+
+@builtin
+def synced_via_wait(v, _semantic=None):
+    """
+    Annotate a local load operation as synced via async wait, so the LLVM
+    will not emit conservative wait counts
+
+    Args:
+        v (tensor): The tensor loaded from shared memory.
+    """
+    v.handle.set_attr("ttg.amdgpu.syncedViaAsyncWait", _semantic.builder.get_bool_attr(True))
 
 
 @builtin

@@ -1510,7 +1510,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 
 @pytest.mark.parametrize("target", [HIP_TARGET_CDNA4])
-def test_amd_async_copy_global_to_shared(target):
+def test_amd_global_load_to_shared(target):
 
     @gluon.jit
     def kernel(ptr):
@@ -1521,7 +1521,7 @@ def test_amd_async_copy_global_to_shared(target):
         offsets = ttgl.arange(0, 128, layout=ttgl.SliceLayout(1, blocked))[:, None] * 16 + \
                   ttgl.arange(0, 16, layout=ttgl.SliceLayout(0, blocked))[None, :]
 
-        ttgl.amd.cdna4.async_copy_global_to_shared(smem, ptr + offsets)
+        ttgl.amd.cdna4.global_load_to_shared(smem, ptr + offsets)
         ttgl.amd.cdna4.async_wait(0)
 
     ptr = MockTensor(ttgl.float16)
@@ -1556,7 +1556,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 
 @pytest.mark.parametrize("target", [HIP_TARGET_CDNA4])
-def test_amd_async_copy_global_to_shared_with_broadcast(target):
+def test_amd_global_load_to_shared_with_broadcast(target):
 
     @gluon.jit
     def kernel(ptr):
@@ -1571,7 +1571,7 @@ def test_amd_async_copy_global_to_shared_with_broadcast(target):
         mask = (y_offset < 64)[:, None]
         other = tl.cast(0.0, ptr.dtype.element_ty)
 
-        ttgl.amd.cdna4.async_copy_global_to_shared(smem, ptr + offsets, mask, other)
+        ttgl.amd.cdna4.global_load_to_shared(smem, ptr + offsets, mask, other)
         ttgl.amd.cdna4.async_wait(0)
 
     ptr = MockTensor(ttgl.float16)

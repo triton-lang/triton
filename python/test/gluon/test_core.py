@@ -150,7 +150,7 @@ def test_warpgroup_mma(ASYNC):
 
 
 @pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
-def test_amd_async_copy_global_to_shared():
+def test_amd_global_load_to_shared():
 
     @gluon.jit
     def kernel(a_ptr, b_ptr):
@@ -161,7 +161,7 @@ def test_amd_async_copy_global_to_shared():
         offsets = ttgl.arange(0, 128, layout=ttgl.SliceLayout(1, blocked))[:, None] * 16 + \
                   ttgl.arange(0, 16, layout=ttgl.SliceLayout(0, blocked))[None, :]
 
-        ttgl.amd.cdna4.async_copy_global_to_shared(smem, a_ptr + offsets)
+        ttgl.amd.cdna4.global_load_to_shared(smem, a_ptr + offsets)
 
         ttgl.amd.cdna4.async_wait(0)
 
