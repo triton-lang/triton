@@ -862,8 +862,6 @@ struct AsyncCopyGlobalToLocalOpConversion
     if (!isa<BlockedEncodingAttr, SliceEncodingAttr>(srcTy.getEncoding()))
       return rewriter.notifyMatchFailure(
           op, "requires Blocked or Slice encoding for src");
-    if (srcTy.getShape().size() != 2)
-      return rewriter.notifyMatchFailure(op, "only supports 2d tensors");
 
     auto dstTy = op.getResult().getType();
     auto sharedEnc = cast<SwizzledSharedEncodingAttr>(dstTy.getEncoding());

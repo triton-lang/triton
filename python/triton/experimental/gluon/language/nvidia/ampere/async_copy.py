@@ -35,8 +35,8 @@ def async_copy_global_to_shared(smem, pointer, mask=None, cache_modifier="", evi
         f"expected smem shape to match pointer shape but got smem.shape = {smem.shape}, pointer.shape = {pointer.shape}"
     )
     mask_handle = mask.handle if mask is not None else ir.value()
-    _semantic.builder.create_async_copy_global_to_local(smem.handle, pointer.handle, mask_handle, cache_modifier,
-                                                        eviction_policy, volatile)
+    _semantic.builder.create_async_copy_global_to_local(smem.handle, pointer.handle, mask_handle, ir.value(),
+                                                        cache_modifier, eviction_policy, volatile)
 
 
 @builtin

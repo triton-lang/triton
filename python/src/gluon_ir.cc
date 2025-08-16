@@ -403,11 +403,11 @@ void init_gluon_ir(py::module &&m) {
            })
       .def("create_async_copy_global_to_local",
            [](GluonOpBuilder &self, Value smem, Value pointer, Value mask,
-              tt::CacheModifier cacheModifier,
+              Value other, tt::CacheModifier cacheModifier,
               tt::EvictionPolicy evictionPolicy, bool isVolatile) {
              self.create<ttg::AsyncCopyGlobalToLocalOp>(
-                 pointer, smem, mask,
-                 /*other*/ Value{}, cacheModifier, evictionPolicy, isVolatile);
+                 pointer, smem, mask, other, cacheModifier, evictionPolicy,
+                 isVolatile);
            })
       .def("create_async_copy_mbarrier_arrive",
            [](GluonOpBuilder &self, Value mbarrier, bool incrementCount) {

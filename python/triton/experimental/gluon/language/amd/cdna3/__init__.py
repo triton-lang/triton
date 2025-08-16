@@ -4,13 +4,12 @@ from typing import TYPE_CHECKING
 from triton import knobs
 from triton.experimental.gluon.language import _core as ttgl
 from triton._C.libtriton import ir
-from ..._core import builtin, int32, uint32, _unwrap_if_constexpr
-from ..._semantic import _check
+from ..._core import builtin, _unwrap_if_constexpr
 
 if TYPE_CHECKING:
     from ..._semantic import GluonSemantic
 
-__all__ = ["buffer_load_to_shared", "buffer_load", "buffer_store", "mfma"]
+__all__ = ["buffer_load", "buffer_store", "mfma"]
 
 
 def _verify_buffer_load_store(ptr, offsets, mask, other=None):
@@ -25,35 +24,6 @@ def _verify_buffer_load_store(ptr, offsets, mask, other=None):
         assert mask is not None, "when other is not None, mask should not be None"
         assert other.shape == offsets.shape, "other shape must match the offsets shape"
         assert other.dtype == element_type, "other must have the same data type as ptr scalar type"
-
-
-@builtin
-def buffer_load_to_shared(dest, ptr, offsets, mask=None, other=None, cache_modifier="", _semantic=None):
-    """
-    AMD Buffer load to shared operation. Buffer load is similar to normal load
-    but it accesses global memory via a scalar base pointer and a tensor of
-    offsets instead of a tensor of pointers. This operation will load data
-    directly into shared memory instead of registers.
-
-    Args:
-        dest (shared_memory_descriptor): Destination shared memory descriptor.
-        ptr (pointer to scalar): Global memory scalar base pointer to load from.
-        offsets (tensor): Offsets tensor for the load operation.
-        mask (tensor, optional): Mask tensor for predicated loads. Defaults to None.
-        other (tensor, optional): Tensor providing default values for masked elements. Defaults to None.
-        cache_modifier (str): Cache modifier specifier. Defaults to "".
-    """
-    builder = _semantic.builder
-
-    _check(offsets.dtype in {int32, uint32},
-           lambda: f"expected offsets dtype to be int32 or uint32 but got {offsets.dtype}")
-
-    mask = mask.handle if mask is not None else ir.value()
-    other = other.handle if other is not None else ir.value()
-    stride = ir.value()
-    cache_modifier = _semantic._str_to_load_cache_modifier(cache_modifier)
-
-    builder.create_buffer_load_to_local(dest.handle, ptr.handle, offsets.handle, mask, other, stride, cache_modifier)
 
 
 @builtin
