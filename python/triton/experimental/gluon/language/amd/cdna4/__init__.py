@@ -194,6 +194,4 @@ class relaxed_shared_memory_descriptor(shared_memory_descriptor):
         layout = _unwrap_if_constexpr(layout)
         ret = _semantic.shared_load(self, layout)
         ret.handle.set_attr(self.SYNCED_VIA_WAIT_ATTR_NAME, _semantic.builder.get_bool_attr(True))
-
-        print('[DEBUG] Emitting relaxed load')
         return ret
