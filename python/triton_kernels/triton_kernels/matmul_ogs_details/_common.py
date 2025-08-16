@@ -48,6 +48,7 @@ def swizzle2d(pid, grid_m, grid_n, GROUP_M: tl.constexpr):
     width = GROUP_M * grid_n
     group_id = pid // width
     group_size = min(grid_m - group_id * GROUP_M, GROUP_M)
+    tl.assume(group_size >= 0)
     pid_m = group_id * GROUP_M + (pid % group_size)
     pid_n = (pid % width) // (group_size)
     return pid_m, pid_n
