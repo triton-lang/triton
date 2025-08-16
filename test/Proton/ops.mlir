@@ -21,6 +21,7 @@ module attributes {"ttg.num-warps" = 8 : i32} {
   tt.func @protongpu_ops() {
     // CHECK: ttg.local_alloc
     // CHECK-NEXT: proton_gpu.global_scratch_alloc
+    // CHECK-NEXT: proton_gpu.initialize
     // CHECK-NEXT: proton_gpu.segment_alloc
     // CHECK-NEXT: proton_gpu.init_ctx
     // CHECK-NEXT: proton_gpu.read_counter
@@ -31,6 +32,7 @@ module attributes {"ttg.num-warps" = 8 : i32} {
     // CHECK-NEXT: tt.return
     %0 = ttg.local_alloc : () -> !ttg.memdesc<64xi32, #shared, #smem, mutable>
     %1 = proton_gpu.global_scratch_alloc {alignment = 128 : i32, nbytes = 384 : i32} : !tt.ptr<i32>
+    proton_gpu.initialize %1 : !tt.ptr<i32>
     %seg = proton_gpu.segment_alloc %0 : !ttg.memdesc<64xi32, #shared, #smem, mutable> -> !proton_gpu.segment<256, #shared, warp>
     proton_gpu.init_ctx %1 : !tt.ptr<i32>
     %3 = proton_gpu.read_counter : i32

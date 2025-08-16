@@ -43,9 +43,8 @@ void StreamChromeTraceWriter::write(std::ostream &outfile) {
 
   json object = {{"displayTimeUnit", "ns"}, {"traceEvents", json::array()}};
 
-  int totalKernelNum = streamTrace.size();
-  for (int i = 0; i < totalKernelNum; i++) {
-    writeKernel(object, streamTrace[i], kKernelTimeGap * i);
+  for (const auto &kernelTrace : streamTrace) {
+    writeKernel(object, kernelTrace);
   }
   outfile << object.dump() << "\n";
 }
@@ -55,8 +54,7 @@ using BlockTraceVec =
     std::vector<const CircularLayoutParserResult::BlockTrace *>;
 
 void populateTraceInfo(std::shared_ptr<CircularLayoutParserResult> result,
-                       uint64_t kernelTimeStart,
-                       std::map<int, int64_t> &cycleAdjust,
+                       std::map<int, int64_t> &blockToStartCycle,
                        std::map<int, BlockTraceVec> &procToBlockTraces) {
   uint64_t minStartTime;
   for (auto &bt : result->blockTraces) {
@@ -66,8 +64,7 @@ void populateTraceInfo(std::shared_ptr<CircularLayoutParserResult> result,
         if (event.first->cycle < minStartTime)
           minStartTime = event.first->cycle;
 
-    cycleAdjust[bt.blockId] = static_cast<int64_t>(kernelTimeStart) -
-                              static_cast<int64_t>(minStartTime);
+    blockToStartCycle[bt.blockId] = static_cast<int64_t>(minStartTime);
     int procId = bt.procId;
     if (!procToBlockTraces.count(procId)) {
       procToBlockTraces[procId] = {};
@@ -146,20 +143,19 @@ std::vector<int> assignLineIds(
 } // namespace
 
 void StreamChromeTraceWriter::writeKernel(json &object,
-                                          const KernelTrace &kernelTrace,
-                                          uint64_t kernelTimeStart) {
+                                          const KernelTrace &kernelTrace) {
   auto result = kernelTrace.first;
   auto metadata = kernelTrace.second;
 
   int curColorIndex = 0;
   // scope id -> color index in chrome color
   std::map<int, int> scopeColor;
-  // block id -> cycle adjust
-  std::map<int, int64_t> cycleAdjust;
+  // block id -> start cycle
+  std::map<int, int64_t> blockToStartCycle;
   // proc id -> block traces
   std::map<int, BlockTraceVec> procToBlockTraces;
 
-  populateTraceInfo(result, kernelTimeStart, cycleAdjust, procToBlockTraces);
+  populateTraceInfo(result, blockToStartCycle, procToBlockTraces);
 
   std::string name;
   std::string pid;
@@ -190,9 +186,11 @@ void StreamChromeTraceWriter::writeKernel(json &object,
             name = "scope_" + std::to_string(scopeId);
           else
             name = metadata->scopeName.at(scopeId);
-
-          int64_t ts =
-              static_cast<int64_t>(event.first->cycle) + cycleAdjust[ctaId];
+          // TODO: We currently assume 1GHz clock frequency.
+          int64_t freq = 1; // 1GHz = 1e9 cycles per sec = 1 cycle per ns
+          int64_t tsCycle = static_cast<int64_t>(event.first->cycle) -
+                            blockToStartCycle[ctaId];
+          int64_t tsNs = bt->initTime + tsCycle / freq;
           int64_t dur =
               static_cast<int64_t>(event.second->cycle) - event.first->cycle;
 
@@ -203,11 +201,11 @@ void StreamChromeTraceWriter::writeKernel(json &object,
           element["ph"] = "X";
           element["pid"] = pid;
           element["tid"] = tid;
-          element["ts"] = static_cast<float>(ts) / 1000.0;
-          element["dur"] = static_cast<float>(dur) / 1000.0;
+          element["ts"] = static_cast<double>(tsNs) / 1000.0;
+          element["dur"] = static_cast<double>(dur) / 1000.0;
           json args;
           args["Unit"] = "GPU cycle";
-          args["Kernel Gap"] = std::to_string(kKernelTimeGap) + "cycle(ns)";
+          args["Finalization Time"] = bt->postFinalTime - bt->preFinalTime;
           element["args"] = args;
           object["traceEvents"].push_back(element);
 
