@@ -62,6 +62,47 @@ def test_assign(device):
     assert y[2] == vals[1]
 
 
+@triton.jit
+def _tuple_ret(a, b):
+    return a + b, \
+        a - b, \
+        a * b
+
+
+@pytest.mark.interpreter
+def test_assign_return(device):
+
+    @triton.jit
+    def with_fn(X, Y, A, B, C):
+        x = tl.load(X)
+        y = tl.load(Y)
+        a, b, c = _tuple_ret(x, y)
+        tl.store(A, a)
+        tl.store(B, b)
+        tl.store(C, c)
+
+    @triton.jit
+    def without_fn(X, Y, A, B, C):
+        x = tl.load(X)
+        y = tl.load(Y)
+        a, b, c = x + y, x - y, x * y
+        tl.store(A, a)
+        tl.store(B, b)
+        tl.store(C, c)
+
+    x = torch.tensor([1.3], device=device, dtype=torch.float32)
+    y = torch.tensor([1.9], device=device, dtype=torch.float32)
+    a_tri = torch.tensor([0], device=device, dtype=torch.float32)
+    b_tri = torch.tensor([0], device=device, dtype=torch.float32)
+    c_tri = torch.tensor([0], device=device, dtype=torch.float32)
+    for kernel in [with_fn, without_fn]:
+        kernel[(1, )](x, y, a_tri, b_tri, c_tri, num_warps=1)
+        a_ref, b_ref, c_ref = x + y, x - y, x * y
+        assert a_tri == a_ref
+        assert b_tri == b_ref
+        assert c_tri == c_ref
+
+
 # -------
 
 
@@ -217,15 +258,9 @@ def test_passing_tuple_with_constexpr(device):
 
 def test_passing_tuple_to_make_tensor_descriptor(device, with_allocator):
 
-    from triton.language.core import builtin
-
-    @builtin
-    def is_constexpr(v, _semantic=None):
-        return isinstance(v, tl.constexpr)
-
     @triton.jit
     def m_to_the_n(X_base, shape, strides, m_n, BLOCK_DIM: tl.constexpr):
-        tl.static_assert(is_constexpr(strides[1]))
+        tl.static_assert(isinstance(strides[1].type, tl.constexpr_type))
         X = tl.make_tensor_descriptor(
             X_base,
             shape=shape,
@@ -233,7 +268,7 @@ def test_passing_tuple_to_make_tensor_descriptor(device, with_allocator):
             block_shape=[BLOCK_DIM, BLOCK_DIM],
         )
         # Make sure tl.make_tensor_descriptor didn't modify strides (i.e. didn't unwrap the constexpr)
-        tl.static_assert(is_constexpr(strides[1]))
+        tl.static_assert(isinstance(strides[1].type, tl.constexpr_type))
         data = X.load([0, 0])
         # Include a for loop to ensure strides[1] is lifted into a constexpr
         # (otherwise cloning the local scope will fail).
@@ -256,3 +291,35 @@ def test_modifying_tuples():
 
     with pytest.raises(triton.CompilationError):
         set_tuple_value_at_idx[(1, )]()
+
+
+@pytest.mark.interpreter
+def test_tuple_logic():
+
+    @triton.jit
+    def tuple_logic_kernel():
+
+        # arity-2 BoolOps:
+        tl.static_assert(((3, 4) or (5, 6)) == (3, 4))
+        tl.static_assert(((3, 4) and (5, 6)) == (5, 6))
+        tl.static_assert(((3, 4) and ()) == ())
+        tl.static_assert((() or (5, 6)) == (5, 6))
+
+        # arity-3 BoolOps:
+        tl.static_assert(((1, 2) and (3, 4) and (5, 6)) == (5, 6))
+        tl.static_assert(((1, 2) or (3, 4) or (5, 6)) == (1, 2))
+
+        # constexpr short-circuiting over dynamic argument:
+        tl.static_assert((() and tl.program_id(0)) == ())
+
+    tuple_logic_kernel[(1, )]()
+
+
+@pytest.mark.interpreter
+def test_tuple_float():
+
+    @triton.jit
+    def _namedtuple_float_tuple_kernel():
+        x, y = float("-inf"), float("inf")  # noqa: F841
+
+    _namedtuple_float_tuple_kernel[(1, )]()

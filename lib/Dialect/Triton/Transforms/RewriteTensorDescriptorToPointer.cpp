@@ -63,9 +63,10 @@ struct Descriptor {
 
 Descriptor unpackDescriptor(TensorDescType type, ValueRange pack) {
   int rank = type.getBlockType().getRank();
-  assert(pack.size() == 1 + 2 * rank && "Expected tensor descriptors to be "
-                                        "broken down into a ptr and "
-                                        "`rank` shapes and `rank` strides");
+  assert(pack.size() == 1 + 2 * static_cast<size_t>(rank) &&
+         "Expected tensor descriptors to consist of a pointer, "
+         "followed by 'rank' shape values and 'rank' stride values.");
+
   Descriptor res;
   res.base = pack[0];
   res.shape = pack.slice(1, rank);
@@ -167,15 +168,15 @@ Value generateMaskFromOffsetRanges(OpBuilder &builder, const Location &loc,
     Value lowerBound = builder.create<mlir::arith::ConstantIntOp>(
         loc, 0, builder.getI64Type());
     Value splatLowerBound = builder.create<triton::SplatOp>(
-        loc, offsetRanges[i].getType(), lowerBound);
+        loc, offsetWithRange.getType(), lowerBound);
     Value cmpLower = builder.create<arith::CmpIOp>(
-        loc, arith::CmpIPredicate::sge, offsetRanges[i], splatLowerBound);
+        loc, arith::CmpIPredicate::sge, offsetWithRange, splatLowerBound);
 
     // Compare with upper bound
     Value splatUpperBound = builder.create<triton::SplatOp>(
-        loc, offsetRanges[i].getType(), desc.shape[i]);
+        loc, offsetWithRange.getType(), desc.shape[i]);
     Value cmpUpper = builder.create<arith::CmpIOp>(
-        loc, arith::CmpIPredicate::slt, offsetRanges[i], splatUpperBound);
+        loc, arith::CmpIPredicate::slt, offsetWithRange, splatUpperBound);
 
     // And and broadcast
     Value andResult = builder.create<arith::AndIOp>(loc, cmpLower, cmpUpper);
@@ -410,7 +411,7 @@ struct RewriteReducePattern : OpConversionPattern<triton::DescriptorReduceOp> {
       return op->emitError(msgstring);
     }
 
-    auto newStore = rewriter.create<triton::AtomicRMWOp>(
+    rewriter.create<triton::AtomicRMWOp>(
         loc, descTy.getSignlessBlockType(), *rmwOp,
         generatePtr(rewriter, loc, blockShape, desc, offsets), op.getSrc(),
         generateMask(rewriter, loc, blockShape, desc, offsets),

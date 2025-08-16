@@ -88,6 +88,17 @@ Value TargetInfo::ballot(RewriterBase &rewriter, Location loc, Type type,
   return rewriter.create<ROCDL::BallotOp>(loc, type, cmp);
 }
 
+void TargetInfo::barrier(Location loc, RewriterBase &rewriter,
+                         bool isWarpSync) const {
+  if (isWarpSync) {
+    LLVM::createLLVMIntrinsicCallOp(rewriter, loc, "llvm.amdgcn.wave.barrier",
+                                    {}, {});
+  } else {
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    b.barrier();
+  }
+}
+
 void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
                               std::optional<Value> ctaId, Value val,
                               Value pred) const {
@@ -135,6 +146,14 @@ Value TargetInfo::shuffleIdx(RewriterBase &rewriter, Location loc, Value val,
 Value TargetInfo::shuffleIdx(RewriterBase &rewriter, Location loc, Value val,
                              Value i) const {
   return LLVM::AMD::shuffleIdx(loc, rewriter, val, i, getISAFamily());
+}
+
+Value TargetInfo::permute(RewriterBase &rewriter, Location loc, Value a,
+                          Value b, Value selector) const {
+  // Warning: The `a` and `b` operands are ordered to align with Nvidia's `prmt`
+  // Both use little-endian ordering, but AMD puts the MSBs of the data in the
+  // 0-th operand.
+  return LLVM::AMD::permute(loc, rewriter, b, a, selector);
 }
 
 Value TargetInfo::programId(RewriterBase &rewriter, Location loc,

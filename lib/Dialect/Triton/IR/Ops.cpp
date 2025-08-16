@@ -465,7 +465,6 @@ static LogicalResult verifyRegionsImpl(Op &op) {
                             << " arguments, but given block with "
                             << block.getNumArguments() << " arguments";
   }
-  unsigned i = 0;
   const auto &blockArgTypes = block.getArgumentTypes();
   for (unsigned i = 0; i < numArgs; ++i) {
     const auto &blockArgTy = blockArgTypes[i];
@@ -966,7 +965,7 @@ LogicalResult BroadcastOp::verify() {
   if (srcShape.size() != resultShape.size()) {
     return emitError("rank of source must be same as rank of result");
   }
-  for (int i = 0; i < srcShape.size(); i++) {
+  for (size_t i = 0; i < srcShape.size(); i++) {
     if (srcShape[i] != 1 && srcShape[i] != resultShape[i]) {
       return emitError("Different dimensions at index ")
              << i << " between source and result.  "
@@ -1288,7 +1287,7 @@ LogicalResult GatherOp::verify() {
   if (getAxis() >= srcTy.getRank()) {
     return emitOpError("gather dimension must be less than the input rank");
   }
-  for (int dim = 0; dim < indicesTy.getRank(); ++dim) {
+  for (uint32_t dim = 0; dim < indicesTy.getRank(); ++dim) {
     if (dim == getAxis())
       continue;
     if (indicesTy.getShape()[dim] != srcTy.getShape()[dim]) {

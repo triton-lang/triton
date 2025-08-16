@@ -10,7 +10,7 @@ from typing import Union, Callable, List, Sequence, TypeVar, Optional, Tuple
 from dataclasses import dataclass
 import builtins
 from .. import knobs
-from ..runtime.jit import JITFunction
+from ..runtime.jit import JITCallable
 import inspect
 
 from .._C.libtriton import ir
@@ -87,7 +87,7 @@ def _tensor_member_fn(fn: T) -> T:
     if is_builtin(fn):
         setattr(wrapper, TRITON_BUILTIN, True)
 
-    setattr(tensor, fn.__name__, fn if isinstance(fn, JITFunction) else wrapper)
+    setattr(tensor, fn.__name__, fn if isinstance(fn, JITCallable) else wrapper)
     return fn
 
 
@@ -153,10 +153,10 @@ class base_value:
 
 class base_type:
 
-    def __eq__(self, other):
+    def __eq__(self, other) -> bool:
         raise NotImplementedError("Types must implement __eq__")
 
-    def __ne__(self, other):
+    def __ne__(self, other) -> bool:
         return not (self == other)
 
     def _unflatten_ir(self, handles: List[ir.value], cursor: int) -> Tuple[base_value, int]:
@@ -332,34 +332,6 @@ class constexpr(base_value):
     def __getitem__(self, *args):
         args = (_unwrap_if_constexpr(x) for x in _normalize_tuple(args))
         return self.value.__getitem__(*args)
-
-
-def constexpr_function(f):
-    """
-    Wraps an arbitrary Python function so that it can be called at
-    compile-time on constexpr arguments in a Triton function and
-    returns a constexpr result.
-    """
-
-    @wraps(f)
-    def wrapper(*args, _semantic=None, **kwargs):
-        # de-constexpr arguments and discard the _semantic keyword argument:
-        args = [_unwrap_if_constexpr(x) for x in args]
-        kwargs = {k: _unwrap_if_constexpr(v) for (k, v) in kwargs.items()}
-
-        # call the raw Python function f:
-        res = f(*args, **kwargs)
-
-        # convert result back to a Triton constexpr:
-        if knobs.runtime.interpret:
-            return res  # No constexpr in interpreter
-        return constexpr(res)
-
-    # disguise the function as a Triton builtin to avoid raising an error
-    # that we're calling a non-JIT function from within a Triton kernel:
-    wrapper.__triton_builtin__ = True
-    wrapper.__module__ = constexpr_function.__module__
-    return wrapper
 
 
 CONSTEXPR_0 = constexpr(0)
@@ -574,7 +546,8 @@ class dtype(base_type):
     def is_const():
         return False
 
-    def __eq__(self, other: dtype):
+    def __eq__(self, other) -> bool:
+        other = _unwrap_if_constexpr(other)
         if not isinstance(other, dtype):
             return False
         return self.name == other.name
@@ -698,7 +671,8 @@ class pointer_type(dtype):
     def is_const(self):
         return self.const
 
-    def __eq__(self, other: pointer_type) -> bool:
+    def __eq__(self, other) -> bool:
+        other = _unwrap_if_constexpr(other)
         if not isinstance(other, pointer_type):
             return False
         return self.element_ty == other.element_ty and self.address_space == other.address_space and self.const == other.const
@@ -1564,7 +1538,7 @@ def _aggregate(cls):
         def __new__(this_cls, *args, _semantic=None, _generator=None, **kwargs):
             # Call into the user-defined constructor.
             instance = this_cls._get_instance()
-            if isinstance(cls.__init__, JITFunction):
+            if isinstance(cls.__init__, JITCallable):
                 raise ValueError(f"{cls.__name__}.__init__ cannot be a @triton.jit function")
             extra_kwargs = {}
             if "_semantic" in inspect.signature(cls.__init__).parameters:
@@ -1598,7 +1572,7 @@ def _aggregate(cls):
                                    [(name, getattr(self, name).type) for name in cls.__annotations__.keys()])
 
     for (name, member) in inspect.getmembers(cls):
-        if inspect.isfunction(member) or inspect.ismethod(member) or isinstance(member, JITFunction):
+        if inspect.isfunction(member) or inspect.ismethod(member) or isinstance(member, JITCallable):
             if name != "__init__":
                 setattr(aggregate_value, name, member)
 

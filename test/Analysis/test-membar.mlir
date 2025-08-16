@@ -143,7 +143,7 @@ tt.func @async_copy_global_to_local(%A : !tt.ptr<f16>, %i1 : i1) {
   %mask = tt.splat %i1 : i1 -> tensor<16x16xi1, #AL>
   %other = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #AL>
   %alloc = ttg.local_alloc : () -> !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
-  %subview = ttg.memdesc_index %alloc, %index : !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable> -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  %subview = ttg.memdesc_index %alloc[%index] : !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable> -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
   %1 = ttg.async_copy_global_to_local %a_ptr, %subview : tensor<16x16x!tt.ptr<f16>, #AL> -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
   // CHECK: gpu.barrier
   // CHECK-NEXT: ttg.local_load
@@ -694,6 +694,27 @@ tt.func @call_graph_2(%A : !tt.ptr<f16>, %cond : i1) {
   tt.return
 }
 
+}
+
+// -----
+
+#block0 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+#block1 = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
+  // CHECK-LABEL: @barrier_between_warp_sync_convert_and_read
+  tt.func @barrier_between_warp_sync_convert_and_read(%src: tensor<32x!tt.ptr<f32>, #block0>) {
+    %alloc = ttg.local_alloc : () -> !ttg.memdesc<16x16xf16, #shared, #ttg.shared_memory, mutable>
+    %c = arith.constant dense<0.0> : tensor<16x16xf16>
+    // CHECK: ttg.local_store
+    ttg.local_store %c, %alloc : tensor<16x16xf16> -> !ttg.memdesc<16x16xf16, #shared, #ttg.shared_memory, mutable>
+    // CHECK-NEXT: ttg.convert_layout
+    %cvt = ttg.convert_layout %src : tensor<32x!tt.ptr<f32>, #block0> -> tensor<32x!tt.ptr<f32>, #block1>
+    // CHECK-NEXT: gpu.barrier
+    // CHECK-NEXT: ttg.local_load
+    %ld = ttg.local_load %alloc : !ttg.memdesc<16x16xf16, #shared, #ttg.shared_memory, mutable> -> tensor<16x16xf16>
+    tt.return
+  }
 }
 
 // -----

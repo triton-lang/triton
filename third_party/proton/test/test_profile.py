@@ -1,3 +1,8 @@
+"""
+Reproducibility tests for Proton.
+Each test should invoke one or more GPU kernels and check the validity of their profiling results.
+"""
+
 import torch
 import triton
 import triton.profiler as proton
@@ -5,10 +10,11 @@ import json
 import pytest
 from typing import NamedTuple
 import pathlib
+import threading
 
 import triton.language as tl
 from triton.profiler.hooks.launch import COMPUTE_METADATA_SCOPE_NAME
-import triton.profiler.language as pl
+import triton.profiler.hooks.launch as proton_launch
 
 
 def is_cuda():
@@ -246,6 +252,99 @@ def test_hook_launch_context(tmp_path: pathlib.Path, context: str):
             queue.append(child)
 
 
+def test_hook_with_third_party(tmp_path: pathlib.Path):
+    third_party_hook_invoked = False
+
+    def third_party_hook(metadata) -> None:
+        nonlocal third_party_hook_invoked
+        third_party_hook_invoked = True
+
+    triton.knobs.runtime.launch_enter_hook.add(third_party_hook)
+
+    proton_hook_invoked = False
+
+    def metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
+        nonlocal proton_hook_invoked
+        proton_hook_invoked = True
+        return {"name": "foo_test"}
+
+    @triton.jit(launch_metadata=metadata_fn)
+    def foo(x, size: tl.constexpr, y):
+        offs = tl.arange(0, size)
+        tl.store(y + offs, tl.load(x + offs))
+
+    x = torch.tensor([2], device="cuda", dtype=torch.float32)
+    y = torch.zeros_like(x)
+    temp_file = tmp_path / "test_hook_with_third_party.hatchet"
+    proton.start(str(temp_file.with_suffix("")), hook="triton")
+    foo[(1, )](x, 1, y, num_warps=4)
+    proton.finalize()
+    triton.knobs.runtime.launch_enter_hook.remove(third_party_hook)
+    with temp_file.open() as f:
+        data = json.load(f)
+    assert len(data[0]["children"]) == 1
+    assert data[0]["children"][0]["frame"]["name"] == "foo_test"
+    assert data[0]["children"][0]["metrics"]["time (ns)"] > 0
+
+
+def test_hook_multiple_threads(tmp_path: pathlib.Path):
+
+    def metadata_fn_foo(grid: tuple, metadata: NamedTuple, args: dict):
+        return {"name": "foo_test"}
+
+    @triton.jit(launch_metadata=metadata_fn_foo)
+    def foo(x, size: tl.constexpr, y):
+        offs = tl.arange(0, size)
+        tl.store(y + offs, tl.load(x + offs))
+
+    def metadata_fn_bar(grid: tuple, metadata: NamedTuple, args: dict):
+        return {"name": "bar_test"}
+
+    @triton.jit(launch_metadata=metadata_fn_bar)
+    def bar(x, size: tl.constexpr, y):
+        offs = tl.arange(0, size)
+        tl.store(y + offs, tl.load(x + offs))
+
+    x_foo = torch.tensor([2], device="cuda", dtype=torch.float32)
+    y_foo = torch.zeros_like(x_foo)
+    x_bar = torch.tensor([2], device="cuda", dtype=torch.float32)
+    y_bar = torch.zeros_like(x_bar)
+
+    temp_file = tmp_path / "test_hook.hatchet"
+    proton.start(str(temp_file.with_suffix("")), hook="triton")
+
+    all_ids = set()
+
+    # start multiple threads
+    def invoke_foo():
+        for _ in range(100):
+            foo[(1, )](x_foo, 1, y_foo, num_warps=4)
+            all_ids.add(proton_launch.id.get())
+
+    def invoke_bar():
+        for _ in range(100):
+            bar[(1, )](x_bar, 1, y_bar, num_warps=4)
+            all_ids.add(proton_launch.id.get())
+
+    thread_foo = threading.Thread(target=invoke_foo)
+    thread_bar = threading.Thread(target=invoke_bar)
+    thread_foo.start()
+    thread_bar.start()
+    thread_foo.join()
+    thread_bar.join()
+
+    proton.finalize()
+    assert len(all_ids) == 200
+
+    with temp_file.open() as f:
+        data = json.load(f)
+    root = data[0]["children"]
+    assert "foo_test" in root[0]["frame"]["name"] or root[1]["frame"]["name"]
+    assert "bar_test" in root[0]["frame"]["name"] or root[1]["frame"]["name"]
+    assert root[0]["metrics"]["count"] == 100
+    assert root[1]["metrics"]["count"] == 100
+
+
 def test_pcsampling(tmp_path: pathlib.Path):
     if is_hip():
         pytest.skip("HIP backend does not support pc sampling")
@@ -347,37 +446,3 @@ def test_trace(tmp_path: pathlib.Path):
         assert len(trace_events) == 3
         assert trace_events[-1]["name"] == "foo"
         assert trace_events[-1]["args"]["call_stack"] == ["ROOT", "test", "foo"]
-
-
-def test_timeline(tmp_path: pathlib.Path):
-    temp_file = tmp_path / "test_timeline.chrome_trace"
-    mode = proton.mode.Default(metric_type="cycle", optimizations="time_shift")
-    proton.start(str(temp_file.with_suffix("")), data="trace", backend="instrumentation", mode=mode)
-
-    @triton.jit
-    def foo(x, y, size: tl.constexpr):
-        pl.enter_scope("entire")
-        offs = tl.arange(0, size)
-        pl.enter_scope("load")
-        x = tl.load(x + offs)
-        x = x + 1
-        pl.exit_scope("load")
-        pl.enter_scope("store")
-        tl.store(y + offs, x)
-        pl.exit_scope("store")
-        pl.exit_scope("entire")
-
-    with proton.scope("init"):
-        x = torch.ones((1024, ), device="cuda", dtype=torch.float32)
-        y = torch.zeros_like(x)
-
-    with proton.scope("test"):
-        foo[(1, )](x, y, x.size()[0], num_warps=4)
-
-    proton.finalize()
-
-    with temp_file.open() as f:
-        data = json.load(f)
-        trace_events = data["traceEvents"]
-        assert len(trace_events) == 12
-        assert trace_events[-1]["tid"][0:4] == "warp"

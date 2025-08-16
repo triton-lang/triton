@@ -214,13 +214,13 @@ module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-w
       // CHECK: [[IDX:%.*]]:6 = scf.for [[I:%.*]] = [[LB:%.*]] to [[UB:%.*]] step [[C1:%.*]] iter_args([[S0:%.*]] = [[C0]], [[P0:%.*]] = [[C1]], [[S1:%.*]] = [[C0]], [[P1:%.*]] = [[C1]], [[S2:%.*]] = [[C0]],  [[S3:%.*]] = [[C0]])
       scf.for %i = %lb to %ub step %c1_i32 : i32{
 
-        // CHECK-NEXT: [[EMPTYMBAR:%.*]] = ttg.memdesc_index [[EMPTY0]], [[S0]]
+        // CHECK-NEXT: [[EMPTYMBAR:%.*]] = ttg.memdesc_index [[EMPTY0]]{{\[}}[[S0]]{{\]}}
         // CHECK-NEXT: ttng.wait_barrier [[EMPTYMBAR]], [[P0]]
         %1:3 = nvws.aref.put.enter %aref0[%c0_i32, %c0_i32] {aref_tag = "put0"} : !nvws.aref<[!ttg.memdesc<3x64x16xf16, #shared0, #smem>, !ttg.memdesc<3x16x32xf16, #shared0, #smem>]> -> !ttg.memdesc<64x16xf16, #shared0, #smem>, !ttg.memdesc<16x32xf16, #shared0, #smem>, !ttg.async.token
 
-        // CHECK-NEXT: [[BUFA:%.*]] = ttg.memdesc_index %arg0, [[S0]]
-        // CHECK-NEXT: [[BUFB:%.*]] = ttg.memdesc_index %arg1, [[S0]]
-        // CHECK-NEXT: [[FULLMBAR:%.*]] = ttg.memdesc_index [[FULL0]], [[S2]]
+        // CHECK-NEXT: [[BUFA:%.*]] = ttg.memdesc_index %arg0{{\[}}[[S0]]{{\]}}
+        // CHECK-NEXT: [[BUFB:%.*]] = ttg.memdesc_index %arg1{{\[}}[[S0]]{{\]}}
+        // CHECK-NEXT: [[FULLMBAR:%.*]] = ttg.memdesc_index [[FULL0]]{{\[}}[[S2]]{{\]}}
         // CHECK-NEXT: ttng.barrier_expect [[FULLMBAR]], 0
         // CHECK-NEXT: [[S0a:%.*]] = arith.addi [[S0]], [[C1]]
         // CHECK-NEXT: [[CMP:%.*]] = arith.cmpi eq, [[S0a]], [[C3]]
@@ -232,7 +232,7 @@ module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-w
         "tma_load"(%1#0) : (!ttg.memdesc<64x16xf16, #shared0, #smem>) -> ()
         "sts"(%1#1) : (!ttg.memdesc<16x32xf16, #shared0, #smem>) -> ()
 
-        // CHECK-NEXT: [[FULLMBAR:%.*]] = ttg.memdesc_index [[FULL0]], [[S2]]
+        // CHECK-NEXT: [[FULLMBAR:%.*]] = ttg.memdesc_index [[FULL0]]{{\[}}[[S2]]{{\]}}
         // CHECK-NEXT: ttng.arrive_barrier [[FULLMBAR]], 1
         // CHECK-NEXT: [[S2a:%.*]] = arith.addi [[S2]], [[C1]]
         // CHECK-NEXT: [[CMP:%.*]] = arith.cmpi eq, [[S2a]], [[C3]]
@@ -242,7 +242,7 @@ module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-w
         // CHECK-NEXT: [[SP1S3:%.*]]:3 = scf.if
         scf.if %cond {
 
-          // CHECK-NEXT: [[BAR:%.*]] = ttg.memdesc_index {{.*}}, [[S1]]
+          // CHECK-NEXT: [[BAR:%.*]] = ttg.memdesc_index {{.*}}{{\[}}[[S1]]{{\]}}
           // CHECK-NEXT: ttng.wait_barrier [[BAR]], [[P1]]
           // CHECK: [[S1a:%.*]] = arith.addi [[S1]], [[C1]]
           // CHECK-NEXT: [[CMP:%.*]] = arith.cmpi eq, [[S1a]], [[C3]]
@@ -253,7 +253,7 @@ module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-w
           %2:3 = nvws.aref.put.enter %aref1[%c0_i32, %c0_i32] {aref_tag = "put1"} : !nvws.aref<[!ttg.memdesc<3x64x16xf16, #shared0, #smem>, !ttg.memdesc<3x16x32xf16, #shared0, #smem>]> -> !ttg.memdesc<64x16xf16, #shared0, #smem>, !ttg.memdesc<16x32xf16, #shared0, #smem>, !ttg.async.token
           "tmem_store"(%2#0, %2#1) : (!ttg.memdesc<64x16xf16, #shared0, #smem>, !ttg.memdesc<16x32xf16, #shared0, #smem>) -> ()
 
-          // CHECK: [[BAR:%.*]] = ttg.memdesc_index {{.*}}, [[S3]]
+          // CHECK: [[BAR:%.*]] = ttg.memdesc_index {{.*}}{{\[}}[[S3]]{{\]}}
           // CHECK-NEXT: ttng.arrive_barrier [[BAR]], 1
           // CHECK: [[S3a:%.*]] = arith.addi [[S3]], [[C1]]
           // CHECK-NEXT: [[CMP:%.*]] = arith.cmpi eq, [[S3a]], [[C3]]
@@ -273,23 +273,23 @@ module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-w
       // CHECK-NEXT: [[IDX1:%.*]]:3 = scf.if
       scf.if %cond {
 
-        // CHECK-NEXT: [[BAR:%.*]] = ttg.memdesc_index {{.*}}, [[IDX]]#0
+        // CHECK-NEXT: [[BAR:%.*]] = ttg.memdesc_index {{.*}}{{\[}}[[IDX]]#0{{\]}}
         // CHECK-NEXT: ttng.wait_barrier [[BAR]], [[IDX]]#1
         %1:3 = nvws.aref.put.enter %aref0[%c0_i32, %c0_i32] {aref_tag = "put1"} : !nvws.aref<[!ttg.memdesc<3x64x16xf16, #shared0, #smem>, !ttg.memdesc<3x16x32xf16, #shared0, #smem>]> -> !ttg.memdesc<64x16xf16, #shared0, #smem>, !ttg.memdesc<16x32xf16, #shared0, #smem>, !ttg.async.token
         "tma_load"(%1#0) : (!ttg.memdesc<64x16xf16, #shared0, #smem>) -> ()
         "sts"(%1#1) : (!ttg.memdesc<16x32xf16, #shared0, #smem>) -> ()
         //CHECK: sts
 
-        // CHECK: [[BAR:%.*]] = ttg.memdesc_index {{.*}}, [[IDX]]#4
+        // CHECK: [[BAR:%.*]] = ttg.memdesc_index {{.*}}{{\[}}[[IDX]]#4{{\]}}
         // CHECK-NEXT: ttng.arrive_barrier [[BAR]]
         nvws.aref.put.exit %aref0[%c0_i32], %1#2 [#nvws.async_op<tma_load>, #nvws.async_op<none>] {aref_tag = "put1"} : !nvws.aref<[!ttg.memdesc<3x64x16xf16, #shared0, #smem>, !ttg.memdesc<3x16x32xf16, #shared0, #smem>]>, !ttg.async.token
       }
 
-      // CHECK: [[BAR:%.*]] = ttg.memdesc_index {{.*}}, [[IDX]]#2
+      // CHECK: [[BAR:%.*]] = ttg.memdesc_index {{.*}}{{\[}}[[IDX]]#2{{\]}}
       // CHECK-NEXT: ttng.wait_barrier [[BAR]], [[IDX]]#3
       %1:3 = nvws.aref.put.enter %aref1[%c0_i32, %c0_i32] : !nvws.aref<[!ttg.memdesc<3x64x16xf16, #shared0, #smem>, !ttg.memdesc<3x16x32xf16, #shared0, #smem>]> -> !ttg.memdesc<64x16xf16, #shared0, #smem>, !ttg.memdesc<16x32xf16, #shared0, #smem>, !ttg.async.token
       "tmem_store"(%1#0, %1#1) : (!ttg.memdesc<64x16xf16, #shared0, #smem>, !ttg.memdesc<16x32xf16, #shared0, #smem>) -> ()
-      // CHECK: [[BAR:%.*]] = ttg.memdesc_index {{.*}}, [[IDX]]#5
+      // CHECK: [[BAR:%.*]] = ttg.memdesc_index {{.*}}{{\[}}[[IDX]]#5{{\]}}
       // CHECK-NEXT: ttng.arrive_barrier [[BAR]], 1
       nvws.aref.put.exit %aref1[%c0_i32], %1#2 [#nvws.async_op<none>] : !nvws.aref<[!ttg.memdesc<3x64x16xf16, #shared0, #smem>, !ttg.memdesc<3x16x32xf16, #shared0, #smem>]>, !ttg.async.token
       nvws.warp_group.return
@@ -298,12 +298,12 @@ module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-w
       // CHECK: [[IDX:%.*]]:6 = scf.for [[I:%.*]] = [[LB:%.*]] to [[UB:%.*]] step [[C1:%.*]] iter_args([[S0:%.*]] = [[C0]], [[P0:%.*]] = [[C0]], [[S1:%.*]] = [[C0]], [[P1:%.*]] = [[C0]], [[S2:%.*]] = [[C0]], [[S3:%.*]] = [[C0]])
       scf.for %i = %lb to %ub step %c1_i32 : i32{
 
-        // CHECK-NEXT: [[FULLMBAR:%.*]] = ttg.memdesc_index [[FULL0]], [[S0]]
+        // CHECK-NEXT: [[FULLMBAR:%.*]] = ttg.memdesc_index [[FULL0]]{{\[}}[[S0]]{{\]}}
         // CHECK-NEXT: ttng.wait_barrier [[FULLMBAR]], [[P0]]
         %2:3 = nvws.aref.get.enter %aref0[%c0_i32, %c0_i32] : !nvws.aref<[!ttg.memdesc<3x64x16xf16, #shared0, #smem>, !ttg.memdesc<3x16x32xf16, #shared0, #smem>]> -> !ttg.memdesc<64x16xf16, #shared0, #smem>, !ttg.memdesc<16x32xf16, #shared0, #smem>, !ttg.async.token
 
-        // CHECK-NEXT: [[BUFA:%.*]] = ttg.memdesc_index %arg0, [[S0]]
-        // CHECK-NEXT: [[BUFB:%.*]] = ttg.memdesc_index %arg1, [[S0]]
+        // CHECK-NEXT: [[BUFA:%.*]] = ttg.memdesc_index %arg0{{\[}}[[S0]]{{\]}}
+        // CHECK-NEXT: [[BUFB:%.*]] = ttg.memdesc_index %arg1{{\[}}[[S0]]{{\]}}
         // CHECK-NEXT: arith.addi
         // CHECK-NEXT: arith.cmpi
         // CHECK-NEXT: arith.select
@@ -312,7 +312,7 @@ module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-w
         // CHECK-NEXT: "tc5mma"([[BUFA]], [[BUFB]])
         "tc5mma"(%2#0, %2#1) : (!ttg.memdesc<64x16xf16, #shared0, #smem>, !ttg.memdesc<16x32xf16, #shared0, #smem>) -> ()
 
-        // CHECK-NEXT: [[EMPTYMBAR:%.*]] = ttg.memdesc_index [[EMPTY0]], [[S2]]
+        // CHECK-NEXT: [[EMPTYMBAR:%.*]] = ttg.memdesc_index [[EMPTY0]]{{\[}}[[S2]]{{\]}}
         // CHECK-NEXT: ttng.tc_gen5_commit [[EMPTYMBAR]]
         // CHECK-NEXT: arith.addi
         // CHECK-NEXT: arith.cmpi
@@ -323,13 +323,13 @@ module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-w
 
         // CHECK: [[IDX13:%.*]]:3 = scf.if
         scf.if %cond {
-          // CHECK: [[BAR:%.*]] = ttg.memdesc_index {{.*}}, [[S1]]
+          // CHECK: [[BAR:%.*]] = ttg.memdesc_index {{.*}}{{\[}}[[S1]]{{\]}}
           // CHECK-NEXT: ttng.wait_barrier  [[BAR]], [[P1]]
           %3:3 = nvws.aref.get.enter %aref1[%c0_i32, %c0_i32] : !nvws.aref<[!ttg.memdesc<3x64x16xf16, #shared0, #smem>, !ttg.memdesc<3x16x32xf16, #shared0, #smem>]> -> !ttg.memdesc<64x16xf16, #shared0, #smem>, !ttg.memdesc<16x32xf16, #shared0, #smem>, !ttg.async.token
           "tmem_load"(%3#0, %3#1) : (!ttg.memdesc<64x16xf16, #shared0, #smem>, !ttg.memdesc<16x32xf16, #shared0, #smem>) -> ()
           // CHECK: tmem_load
 
-          // CHECK-NEXT: [[BAR:%.*]] = ttg.memdesc_index {{.*}}, [[S3]]
+          // CHECK-NEXT: [[BAR:%.*]] = ttg.memdesc_index {{.*}}{{\[}}[[S3]]{{\]}}
           // CHECK-NEXT: ttng.arrive_barrier [[BAR]], 1
           nvws.aref.get.exit %aref1[%c0_i32], %3#2 [#nvws.async_op<none>] : !nvws.aref<[!ttg.memdesc<3x64x16xf16, #shared0, #smem>, !ttg.memdesc<3x16x32xf16, #shared0, #smem>]>, !ttg.async.token
         }
@@ -340,12 +340,12 @@ module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-w
         // CHECK: scf.yield {{.*}}, {{.*}}, [[IDX13]]#0, [[IDX13]]#1, {{.*}}, [[IDX13]]#2
       }
       scf.if %cond {
-        // CHECK: [[BAR:%.*]] = ttg.memdesc_index {{.*}}, [[IDX]]#0
+        // CHECK: [[BAR:%.*]] = ttg.memdesc_index {{.*}}{{\[}}[[IDX]]#0{{\]}}
         // CHECK-NEXT: ttng.wait_barrier  [[BAR]], [[IDX]]#1
         %2:3 = nvws.aref.get.enter %aref0[%c0_i32, %c0_i32] : !nvws.aref<[!ttg.memdesc<3x64x16xf16, #shared0, #smem>, !ttg.memdesc<3x16x32xf16, #shared0, #smem>]> -> !ttg.memdesc<64x16xf16, #shared0, #smem>, !ttg.memdesc<16x32xf16, #shared0, #smem>, !ttg.async.token
         "tc5mma"(%2#0, %2#1) : (!ttg.memdesc<64x16xf16, #shared0, #smem>, !ttg.memdesc<16x32xf16, #shared0, #smem>) -> ()
 
-        // CHECK: [[BAR:%.*]] = ttg.memdesc_index {{.*}}, [[IDX]]#4
+        // CHECK: [[BAR:%.*]] = ttg.memdesc_index {{.*}}{{\[}}[[IDX]]#4{{\]}}
         // CHECK-NEXT: ttng.tc_gen5_commit  [[BAR]]
         nvws.aref.get.exit %aref0[%c0_i32], %2#2 [#nvws.async_op<tc5mma>] : !nvws.aref<[!ttg.memdesc<3x64x16xf16, #shared0, #smem>, !ttg.memdesc<3x16x32xf16, #shared0, #smem>]>, !ttg.async.token
       }
