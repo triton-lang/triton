@@ -154,7 +154,7 @@ def reduce_grouped(x: torch.Tensor, indx: torch.Tensor, x_flex: InFlexData | Non
         x_expected_scale,  # scalar input scale
         out, out.stride(0), out.stride(1),  #
         out_expected_scale, out_actual_scale, out_checksum_scale, indx,  #
-        x.shape[-3], x.shape[-1],  #
+        x.shape[0], x.shape[-1],  #
         x_mx_scale, stride_mxb, stride_mxs,  #
         out_mx_scale, stride_omxs,  #
         HAS_IN_MX_SCALE=x_mx_scale is not None, HAS_OUT_MX_SCALE=out_mx_scale is not None,

@@ -235,6 +235,8 @@ def reduce_grouped(x: torch.Tensor, indx: torch.Tensor, fused_activation, epilog
     Returns
     - The input tensor `x` (modified in place).
     """
+    if indx is None and x.shape[0] == 1:
+        return x.squeeze(0), None
     if x.ndim == 2:
         x = x.unsqueeze(0)
     if indx is not None:
@@ -244,7 +246,7 @@ def reduce_grouped(x: torch.Tensor, indx: torch.Tensor, fused_activation, epilog
     out_dtype = x.dtype if out_dtype is None else out_dtype
     assert x.shape[-1] % fused_activation.reduction_n == 0
     out_shape_n = x.shape[-1] // fused_activation.reduction_n
-    out = torch.empty((num_groups, out_shape_n), dtype=out_dtype, device=x.device)
+    out = torch.empty((x.shape[1], num_groups, out_shape_n), dtype=out_dtype, device=x.device)
     if has_out_mx_scale:
         out_mx_scale = torch.empty((num_groups, triton.cdiv(out_shape_n, 32)), dtype=torch.uint8, device=x.device)
     else:
@@ -259,11 +261,15 @@ def reduce_grouped(x: torch.Tensor, indx: torch.Tensor, fused_activation, epilog
     stride_mxb = 0 if x_mx_scale is None else x_mx_scale.stride(0)
     stride_mxs = 0 if x_mx_scale is None else x_mx_scale.stride(1)
     stride_omxs = 0 if out_mx_scale is None else out_mx_scale.stride(0)
+    # print(x.stride())
+    # print(out.stride())
+    # print(x.shape)
+    # breakpoint()
     kernels = get_kernels(epilogue.specs, fused_activation.specs)
     kernels._reduce_grouped[(num_groups, )](
-        x, x.stride(0), x.stride(1), x.stride(2),  #
+        x, x.stride(0), x.stride(2), x.stride(3),  #
         x_expected_scale,  # scalar input scale
-        out, out.stride(0), out.stride(1),  #
+        out, out.stride(1), out.stride(2),  #
         out_expected_scale, out_actual_scale, out_checksum_scale, indx,  #
         x.shape[0], x.shape[-1],  #
         x_mx_scale, stride_mxb, stride_mxs,  #
@@ -495,16 +501,12 @@ def matmul_ogs(x, w, bias,
                    NUM_SMS = grid if opt_flags.is_persistent else 0,
                    **opt_flags.target_kernel_kwargs)
     # Canonicalize shapes and quickly return when no post-processing is needed
-    if not is_input_batched:
-        out_matmul = out_matmul.squeeze(1)
-    if opt_flags.split_k == 1:
-        out_matmul = out_matmul.squeeze(0)
-    if scatter_indx is None and opt_flags.split_k == 1:
-        return out_matmul
+    # if not is_input_batched:
+    #     out_matmul = out_matmul.squeeze(1)
     # Build grouped reduction inputs in a uniform way
     group_indx = None if scatter_indx is None else scatter_indx.src_indx.view(-1, routing_data.n_expts_act)
     out_final, out_final_mx_scale = reduce_grouped(
-        out_matmul.squeeze(1),
+        out_matmul,
         group_indx,
         fused_activation,
         epilogue,
@@ -515,7 +517,8 @@ def matmul_ogs(x, w, bias,
         out_dtype=memory["output"].dtype,
         flexpoint_saturate_inf=precision_config.flexpoint_saturate_inf,
     )
-    out_final = out_final.unsqueeze(0)
+    if not is_input_batched:
+        out_final = out_final.squeeze(0)
     if out_final_mx_scale is not None:
         precision_config.out_scale = out_final_mx_scale
     return out_final
