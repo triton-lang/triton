@@ -467,10 +467,9 @@ def test_set_idle_sms():
 @pytest.mark.parametrize("split_k", [2])
 @pytest.mark.parametrize("do_gather, do_scatter", [
     (False, False),
-    # (True, False),
-    # (False, True),
-    # (True, True),
-    # (True, True),
+    (True, False),
+    (False, True),
+    (True, True),
 ])
 @pytest.mark.parametrize("is_persistent, epilogue_subtile", [
     (False, None),
