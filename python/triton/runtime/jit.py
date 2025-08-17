@@ -378,9 +378,8 @@ def create_specialize_fallback():
 
 
 def mangle_type(arg, specialize=False):
-    specialize = create_specialize_fallback()
     if len(specialize_impl_cache) == 0:
-        specialize_impl_cache.append(specialize)
+        specialize_impl_cache.append(create_specialize_fallback())
     specialize_impl = specialize_impl_cache[0]
     return specialize_impl(BaseBackend, arg, specialize_value=specialize)[0]
 
