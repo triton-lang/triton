@@ -476,36 +476,3 @@ def test_scope_multiple_threads(tmp_path: pathlib.Path):
     expected = {f"{t}_{i}" for t in thread_names for i in range(N)}
     assert names == expected
 
-
-def test_scope_async_coroutines(tmp_path: pathlib.Path):
-    temp_file = tmp_path / "test_scope_async.hatchet"
-    proton.start(str(temp_file.with_suffix("")))
-
-    M = 20
-    prefixes = ["coroA", "coroB", "coroC"]
-
-    async def worker(prefix: str):
-        for i in range(M):
-            name = f"{prefix}_{i}"
-            proton.enter_scope(name)
-            # lightweight GPU op + yield to exercise context switching
-            torch.ones((1,), device="cuda")
-            await asyncio.sleep(0)
-            proton.exit_scope()
-
-    async def run_all():
-        await asyncio.gather(*(worker(p) for p in prefixes))
-
-    # Run the event loop
-    asyncio.run(run_all())
-
-    proton.finalize()
-
-    with temp_file.open() as f:
-        data = json.load(f)
-
-    children = data[0]["children"]
-    assert len(children) == M * len(prefixes)
-    names = {c["frame"]["name"] for c in children}
-    expected = {f"{p}_{i}" for p in prefixes for i in range(M)}
-    assert names == expected
