@@ -40,10 +40,10 @@ class LaunchHook(Hook):
         lazy_metadata = metadata.get()
         exit_state()
         fn_metrics = {k: lazy_metadata[k] for k in LaunchHook.metrics if k in lazy_metadata}
-        self.op_name = lazy_metadata["name"]
-        self.id = libproton.record_scope()
-        libproton.enter_op(self.id, lazy_metadata["name"])
-        libproton.add_metrics(self.id, fn_metrics)
+        op_name.set(lazy_metadata["name"])
+        id.set(libproton.record_scope())
+        libproton.enter_op(id.get(), lazy_metadata["name"])
+        libproton.add_metrics(id.get(), fn_metrics)
 
     def exit(self, metadata: LazyDict) -> None:
-        libproton.exit_op(self.id, self.op_name)
+        libproton.exit_op(id.get(), op_name.get())
