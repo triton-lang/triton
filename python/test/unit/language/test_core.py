@@ -858,6 +858,12 @@ def test_slice(device):
         t = data[None, None::None, None]
         tl.static_assert(t.shape == [1, XBLOCK, 1])
 
+        t = data[:, None]
+        tl.static_assert(t.shape == [XBLOCK, 1])
+
+        t = data[:, None, None]
+        tl.static_assert(t.shape == [XBLOCK, 1, 1])
+
         scalar = tl.full([], 1, tl.int32)
         tl.static_assert(scalar.shape == [])
 
@@ -866,6 +872,18 @@ def test_slice(device):
 
         t = scalar[None, None]
         tl.static_assert(t.shape == [1, 1])
+
+        t = scalar[None, :, None]
+        tl.static_assert(t.shape == [1, 1])
+
+        t = scalar[:, None]
+        tl.static_assert(t.shape == [1])
+
+        t = scalar[:, :, None]
+        tl.static_assert(t.shape == [1])
+
+        t = scalar[None, None, None]
+        tl.static_assert(t.shape == [1, 1, 1])
 
     slice_kernel[(1, )](XBLOCK=32)
 

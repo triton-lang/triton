@@ -1111,12 +1111,17 @@ class tensor(base_value):
         if isinstance(slices, tuple):
             slices = slices.values
         ret = self
-        for dim, sl in enumerate(slices):
+        result_dim = 0  # new dimensions insertion point
+        for sl in slices:
             if _unwrap_if_constexpr(sl) is None:
-                ret = _semantic.expand_dims(ret, dim)
+                ret = _semantic.expand_dims(ret, result_dim)
+                result_dim += 1
             elif isinstance(sl, (builtins.slice, slice)) and all(
                     _unwrap_if_constexpr(arg) is None for arg in (sl.start, sl.stop, sl.step)):
-                pass  # an unsqueeze
+                # ':' selects along existing dimension
+                # if there's a dimension at this position, skip
+                if result_dim < len(ret.shape):
+                    result_dim += 1
             else:
                 raise ValueError(f"unsupported tensor index: {sl}")
         return ret
