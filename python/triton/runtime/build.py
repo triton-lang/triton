@@ -70,7 +70,7 @@ def _load_module_from_path(name: str, path: str) -> ModuleType:
 
 def compile_module_from_src(src: str, name: str, library_dirs: list[str] | None = None,
                             include_dirs: list[str] | None = None, libraries: list[str] | None = None,
-                            ccflags: list[str] | None = None, tmp_suffix: str = ".c") -> ModuleType:
+                            ccflags: list[str] | None = None) -> ModuleType:
     key = hashlib.sha256((src + platform_key()).encode("utf-8")).hexdigest()
     cache = get_cache_manager(key)
     suffix = sysconfig.get_config_var("EXT_SUFFIX")
@@ -84,7 +84,7 @@ def compile_module_from_src(src: str, name: str, library_dirs: list[str] | None 
             log.warning(f"Triton cache error: compiled module {name}.so could not be loaded")
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        src_path = os.path.join(tmpdir, name + tmp_suffix)
+        src_path = os.path.join(tmpdir, name + ".c")
         with open(src_path, "w") as f:
             f.write(src)
         so = _build(name, src_path, tmpdir, library_dirs or [], include_dirs or [], libraries or [], ccflags or [])
