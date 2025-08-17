@@ -28,6 +28,7 @@ def global_load_to_shared(dest, ptr, mask=None, other=None, cache_modifier="", _
     lowering to LLVM will fail:
 
     - For the `ptr` layout, size per thread * bits per element must be 128 or 32.
+    - Writes to `dest` must be coalesced.
     - If `dest` is swizzled, it only can be swizzled within warp boundary.
 
     Args:
@@ -71,7 +72,8 @@ def buffer_load_to_shared(dest, ptr, offsets, mask=None, other=None, cache_modif
     While using this operation, the following conditions must be met or
     lowering to LLVM will fail:
 
-    - For the `ptr` layout, size per thread * bits per element must be 128 or 32.
+    - For the `offsets` layout, size per thread * bits per element must be 128 or 32
+    - Writes to `dest` must be coalesced.
     - If `dest` is swizzled, it only can be swizzled within warp boundary.
 
     Args:
