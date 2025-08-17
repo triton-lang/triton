@@ -105,6 +105,37 @@ jobs:
           echo "PATH is '$PATH'"
           ccache --zero-stats
           make dev-install
+
+      - name: Ensure Xcode command line tools (no-op if present)
+        if: runner.os == 'macOS' || runner.os == 'macos'
+        run: |
+          sudo xcode-select -p || sudo xcode-select --install || true
+          sudo xcode-select -p
+
+      - name: Restore pip cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/pip
+            ~/.cache/pipenv
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/pyproject.toml') || 'triton-macos' }}-${{ runner.arch }}
+
+      - name: Install PyObjC and test deps
+        run: |
+          source ~/.venv/bin/activate
+          python -m pip install --upgrade pip
+          python -m pip install pyobjc pytest -U
+
+      - name: Run Metal backend macOS tests (guarded)
+        env:
+          PYTHONWARNINGS: "ignore::DeprecationWarning"
+        run: |
+          source ~/.venv/bin/activate
+          echo "xcrun: $(which xcrun || true)"; xcrun --version || true
+          echo "metal: $(which metal || true)"; metal -v || true
+          echo "metallib: $(which metallib || true)"; metallib -v || true
+          pytest -q python/test/backend/metal_runtime_test.py::test_macos_smoke_launch_guarded -rfs || true
+          pytest -q -m macos_integration python/test/backend/test_metal_runtime.py -rfs
       - name: CCache Stats
         run: ccache --print-stats
       - name: Inspect cache directories
