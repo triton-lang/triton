@@ -1,4 +1,8 @@
 # Metal backend — runtime & kernel launch (internal)
+## Unresolved issues / Fixes
+
+2025-08-17 — sealad886 &lt;155285242+sealad886@users.noreply.github.com&gt;: Symptom: "ld: library 'TritonRuntime' not found" when building Metal unit tests. Fix applied: Added CMake alias TritonRuntime -> TritonTools in lib/Tools/CMakeLists.txt to resolve legacy references.
+
 
 This document describes the Metal runtime binding and kernel-launch API implemented in [`third_party/metal/backend/runtime.py`](third_party/metal/backend/runtime.py:1). It is intended for engineers and test authors who need to build, run and validate kernels on macOS using the Metal backend.
 

@@ -10,3 +10,4 @@ add_triton_library(TritonTools
   MLIRLLVMDialect
   f2reduce
 )
+add_library(TritonRuntime ALIAS TritonTools)
