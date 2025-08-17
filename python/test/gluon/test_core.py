@@ -11,7 +11,7 @@ from triton.experimental.gluon import language as ttgl
 from triton.experimental.gluon.language.nvidia.ampere import async_copy, mbarrier
 from triton.experimental.gluon.language.nvidia.hopper import tma, fence_async_shared
 from triton.experimental.gluon.language.nvidia import hopper
-from triton.experimental.gluon.language.amd.cdna4 import async_copy as amd_async_copy
+from triton.experimental.gluon.language.amd.cdna4 import async_copy as cdna4_async_copy
 
 
 @gluon.jit
@@ -160,15 +160,15 @@ def test_amd_direct_load_to_shared(use_buffer_load):
         shared: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, order=[1, 0])
 
         smem = ttgl.allocate_shared_memory(a_ptr.dtype.element_ty, [128, 16], shared)
-        smem = amd_async_copy.relax_shared(smem)
+        smem = cdna4_async_copy.async_hint_shared(smem)
         offsets = ttgl.arange(0, 128, layout=ttgl.SliceLayout(1, blocked))[:, None] * 16 + \
                   ttgl.arange(0, 16, layout=ttgl.SliceLayout(0, blocked))[None, :]
         if use_buffer_load:
-            amd_async_copy.buffer_load_to_shared(smem, a_ptr, offsets)
+            cdna4_async_copy.buffer_load_to_shared(smem, a_ptr, offsets)
         else:
-            amd_async_copy.global_load_to_shared(smem, a_ptr + offsets)
+            cdna4_async_copy.global_load_to_shared(smem, a_ptr + offsets)
 
-        amd_async_copy.async_wait(0)
+        cdna4_async_copy.async_wait(0)
         a = smem.load(blocked)
 
         ttgl.store(b_ptr + offsets, a)

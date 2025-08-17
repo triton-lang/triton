@@ -1,13 +1,13 @@
 from ..._core import ir, builtin, _unwrap_if_constexpr, shared_memory_descriptor
 from ..._semantic import _check
 from ..._layouts import BlockedLayout, SliceLayout
-from ..cdna3 import _verify_buffer_load_store
+from ..cdna3 import _verify_buffer_ops
 
 __all__ = [
     "global_load_to_shared",
     "buffer_load_to_shared",
     "async_wait",
-    "relax_shared",
+    "async_hint_shared",
 ]
 
 
@@ -17,15 +17,17 @@ def global_load_to_shared(dest, ptr, mask=None, other=None, cache_modifier="", _
     AMD global load to shared operation. This operation loads data directly
     from global memory to shared memory without going through registers. It
     operation happens asynchronously and requires a subsequent `async_wait`
-    to ensure the data is available in shared memory. Compared to
-    `buffer_load_to_shared`, it requires a tensor pointer which supports
-    64-bit indexing range for each thread in a block, which gives more
+    to ensure the data is available in shared memory.
+    Compared to `buffer_load_to_shared`, it requires a tensor pointer which
+    supports 64-bit indexing range for each thread in a block, which gives more
     flexibility, but at the cost of higher register pressure and no hardware
     out-of-bound masking support. Prefer to use `buffer_load_to_shared` when
     possible for better performance.
 
-    While using this operation, the following conditions must be met or
-    lowering to LLVM will fail:
+    The underlying hardware instruction uses separate registers for global
+    memory address for each thread but the same register for local memory
+    address for the whole warp. Therefore, while using this operation
+    the following conditions must be met or lowering to LLVM will fail:
 
     - For the `ptr` layout, size per thread * bits per element must be 128 or 32.
     - Writes to `dest` must be coalesced.
@@ -68,9 +70,14 @@ def buffer_load_to_shared(dest, ptr, offsets, mask=None, other=None, cache_modif
     directly from global memory to shared memory without going through
     registers. It happens asynchronously and requires a subsequent `async_wait`
     to ensure the data is available in shared memory.
+    Compared to `global_load_to_shared`, it has better performance and also
+    supports hardware out-of-bound masking. But it strictly requires a
+    32-bit offset instead of a 64-bit tensor pointer.
 
-    While using this operation, the following conditions must be met or
-    lowering to LLVM will fail:
+    The underlying hardware instruction uses separate registers for global
+    memory address for each thread but the same register for local memory
+    address for the whole warp. Therefore, while using this operation
+    the following conditions must be met or lowering to LLVM will fail:
 
     - For the `offsets` layout, size per thread * bits per element must be 128 or 32
     - Writes to `dest` must be coalesced.
@@ -86,6 +93,7 @@ def buffer_load_to_shared(dest, ptr, offsets, mask=None, other=None, cache_modif
     """
     _check(isinstance(offsets.type.layout, (BlockedLayout, SliceLayout)),
            lambda: "expected offsets type layout to be BlockedLayout or SliceLayout")
+    _verify_buffer_ops(ptr, offsets, mask, other)
 
     mask = _unwrap_if_constexpr(mask)
     if mask is not None:
@@ -93,8 +101,6 @@ def buffer_load_to_shared(dest, ptr, offsets, mask=None, other=None, cache_modif
     other = _unwrap_if_constexpr(other)
     if other is not None:
         offsets, other = _semantic.broadcast_impl_value(offsets, other)
-
-    _verify_buffer_load_store(ptr, offsets, mask, other)
 
     mask = mask.handle if mask is not None else ir.value()
     other = other.handle if other is not None else ir.value()
@@ -108,9 +114,11 @@ def buffer_load_to_shared(dest, ptr, offsets, mask=None, other=None, cache_modif
 @builtin
 def async_wait(num_outstanding=0, _semantic=None):
     """
-    Wait for outstanding asynchronous memory operations, including
-    `global_load_to_shared` and `buffer_load_to_shared`. It will block until
-    the number of outstanding operations is less than or equal to `num_outstanding`.
+    Wait for outstanding asynchronous memory operations, this includes
+    normal load like `load` and `buffer_load`, as well as all async memory
+    operations like  `global_load_to_shared` and `buffer_load_to_shared`.
+    It will block until the number of outstanding operations is less than or
+    equal to `num_outstanding`.
 
     Args:
         num_outstanding (int): The number of outstanding operations to wait for. Defaults to 0.
@@ -120,21 +128,22 @@ def async_wait(num_outstanding=0, _semantic=None):
 
 
 @builtin
-def relax_shared(smem, _semantic=None):
+def async_hint_shared(smem, _semantic=None):
     """
-    Turn a shared memory descriptor into a relaxed shared memory descriptor.
+    gives hints to the underlying compiler to avoid emitting unnecessary waits
+    before loading from the target shared memory for better optimization.
 
     Args:
-        smem (shared_memory_descriptor): The shared memory descriptor to relax.
+        smem (shared_memory_descriptor): The target shared memory descriptor.
     """
-    return relaxed_shared_memory_descriptor(smem)
+    return async_shared_memory_descriptor(smem)
 
 
-class relaxed_shared_memory_descriptor(shared_memory_descriptor):
+class async_shared_memory_descriptor(shared_memory_descriptor):
     """
-    A wrapper for shared memory descriptor that relaxes the shared memory load
-    to give hints to underlying compiler to better optimize and avoid
-    unnecessary waits
+    A wrapper for shared memory descriptor that gives hints to the underlying
+    compiler to avoid emitting unnecessary waits before loading from the
+    shared memory for better optimization.
     """
     SYNCED_VIA_WAIT_ATTR_NAME = "ttg.amdgpu.syncedViaAsyncWait"
 

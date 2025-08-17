@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 __all__ = ["buffer_load", "buffer_store", "mfma"]
 
 
-def _verify_buffer_load_store(ptr, offsets, mask, other=None):
+def _verify_buffer_ops(ptr, offsets, mask=None, other=None):
     assert ptr.type.is_ptr(), "ptr must be a scalar pointer type"
 
     assert isinstance(offsets.type, ttgl.distributed_type), "expected offsets type to be a distributed_type"
@@ -22,7 +22,6 @@ def _verify_buffer_load_store(ptr, offsets, mask, other=None):
 
     if other is not None:
         assert mask is not None, "when other is not None, mask should not be None"
-        assert other.shape == offsets.shape, "other shape must match the offsets shape"
         assert other.dtype == element_type, "other must have the same data type as ptr scalar type"
 
 
@@ -40,6 +39,8 @@ def buffer_load(ptr, offsets, mask=None, other=None, cache=None, _semantic=None)
         other (tensor, optional): Tensor providing default values for masked elements. Defaults to None.
         cache_modifier (str): Cache modifier specifier. Defaults to "".
     """
+    _verify_buffer_ops(ptr, offsets, mask, other)
+
     mask = _unwrap_if_constexpr(mask)
     if mask is not None:
         offsets, mask = _semantic.broadcast_impl_value(offsets, mask)
@@ -47,8 +48,6 @@ def buffer_load(ptr, offsets, mask=None, other=None, cache=None, _semantic=None)
     other = _unwrap_if_constexpr(other)
     if other is not None:
         offsets, other = _semantic.broadcast_impl_value(offsets, other)
-
-    _verify_buffer_load_store(ptr, offsets, mask, other)
 
     other = other.handle if other is not None else ir.value()
     mask = mask.handle if mask is not None else ir.value()
@@ -72,10 +71,10 @@ def buffer_store(stored_value, ptr, offsets, mask=None, cache=None, _semantic: G
         mask (tensor, optional): Mask tensor for predicated store. Defaults to None.
         cache_modifier (str): Cache modifier specifier. Defaults to "".
     """
+    _verify_buffer_ops(ptr, offsets, mask)
+
     if mask is not None:
         offsets, mask = _semantic.broadcast_impl_value(offsets, mask)
-
-    _verify_buffer_load_store(ptr, offsets, mask)
 
     mask = mask.handle if mask is not None else ir.value()
     cache_modifier = _semantic._str_to_load_cache_modifier(cache) if cache is not None else ir.CACHE_MODIFIER.NONE
