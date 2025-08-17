@@ -132,7 +132,7 @@ def async_wait(num_outstanding=0, _semantic=None):
 @builtin
 def async_hint_shared(smem, _semantic=None):
     """
-    gives hints to the underlying compiler to avoid emitting unnecessary waits
+    Gives hints to the underlying compiler to avoid emitting unnecessary waits
     before loading from the target shared memory for better optimization.
 
     Args:
