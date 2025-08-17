@@ -11,6 +11,7 @@ from triton.experimental.gluon import language as ttgl
 from triton.experimental.gluon.language.nvidia.ampere import async_copy, mbarrier
 from triton.experimental.gluon.language.nvidia.hopper import tma, fence_async_shared
 from triton.experimental.gluon.language.nvidia import hopper
+from triton.experimental.gluon.language.amd.cdna4 import async_copy as amd_async_copy
 
 
 @gluon.jit
@@ -150,20 +151,24 @@ def test_warpgroup_mma(ASYNC):
 
 
 @pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
-def test_amd_global_load_to_shared():
+@pytest.mark.parametrize("use_buffer_load", [True, False])
+def test_amd_direct_load_to_shared(use_buffer_load):
 
     @gluon.jit
-    def kernel(a_ptr, b_ptr):
+    def kernel(a_ptr, b_ptr, use_buffer_load: ttgl.constexpr):
         blocked: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [32, 2], [4, 1], [1, 0])
         shared: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, order=[1, 0])
 
         smem = ttgl.allocate_shared_memory(a_ptr.dtype.element_ty, [128, 16], shared)
-        smem = ttgl.amd.cdna4.relax_shared(smem)
+        smem = amd_async_copy.relax_shared(smem)
         offsets = ttgl.arange(0, 128, layout=ttgl.SliceLayout(1, blocked))[:, None] * 16 + \
                   ttgl.arange(0, 16, layout=ttgl.SliceLayout(0, blocked))[None, :]
-        ttgl.amd.cdna4.global_load_to_shared(smem, a_ptr + offsets)
+        if use_buffer_load:
+            amd_async_copy.buffer_load_to_shared(smem, a_ptr, offsets)
+        else:
+            amd_async_copy.global_load_to_shared(smem, a_ptr + offsets)
 
-        ttgl.amd.cdna4.async_wait(0)
+        amd_async_copy.async_wait(0)
         a = smem.load(blocked)
 
         ttgl.store(b_ptr + offsets, a)
@@ -171,42 +176,15 @@ def test_amd_global_load_to_shared():
     torch.manual_seed(0)
     a = torch.randn((128, 16), dtype=torch.float16, device='cuda')
     b = torch.empty_like(a)
-    pgm = kernel[(1, )](a, b)
+    pgm = kernel[(1, )](a, b, use_buffer_load)
 
     torch.testing.assert_close(a, b)
     assert re.search(r'ttg\.local_load .* \{ttg\.amdgpu\.syncedViaAsyncWait = true\}', pgm.asm['ttgir'], re.MULTILINE)
-    assert 'global_load_lds' in pgm.asm['amdgcn']
+    if use_buffer_load:
+        assert re.search(r"buffer_load.*lds$", pgm.asm['amdgcn'], re.MULTILINE)
+    else:
+        assert re.search(r"global_load_lds", pgm.asm['amdgcn'], re.MULTILINE)
     assert 'vmcnt(0)' in pgm.asm['amdgcn']
-
-
-@pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
-def test_amd_buffer_load_to_shared():
-
-    @gluon.jit
-    def kernel(a_ptr, b_ptr):
-        blocked: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [32, 2], [4, 1], [1, 0])
-        shared: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, order=[1, 0])
-
-        smem = ttgl.allocate_shared_memory(a_ptr.dtype.element_ty, [128, 16], shared)
-        smem = ttgl.amd.cdna4.relax_shared(smem)
-        offsets = ttgl.arange(0, 128, layout=ttgl.SliceLayout(1, blocked))[:, None] * 16 + \
-                  ttgl.arange(0, 16, layout=ttgl.SliceLayout(0, blocked))[None, :]
-        ttgl.amd.cdna4.buffer_load_to_shared(smem, a_ptr, offsets)
-
-        ttgl.amd.cdna4.async_wait(0)
-        a = smem.load(blocked)
-
-        ttgl.store(b_ptr + offsets, a)
-
-    torch.manual_seed(0)
-    a = torch.randn((128, 16), dtype=torch.float16, device='cuda')
-    b = torch.empty_like(a)
-    pgm = kernel[(1, )](a, b)
-
-    torch.testing.assert_close(a, b)
-    assert re.search(r'ttg\.local_load .* \{ttg\.amdgpu\.syncedViaAsyncWait = true\}', pgm.asm['ttgir'], re.MULTILINE)
-    assert 'vmcnt(0)' in pgm.asm['amdgcn']
-    assert re.search(r"buffer_load.*lds$", pgm.asm['amdgcn'], re.MULTILINE)
 
 
 @pytest.mark.parametrize("M, N, K", [(32, 32, 16), (16, 16, 32)])

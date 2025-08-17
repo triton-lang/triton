@@ -11,6 +11,7 @@ from triton.experimental.gluon.language.nvidia import hopper
 from triton.experimental.gluon.language.nvidia.blackwell import mbarrier, tma, TensorMemoryLayout, async_copy
 from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
 from triton.experimental.gluon.language.amd import _layouts as amd_layouts
+from triton.experimental.gluon.language.amd.cdna4 import async_copy as amd_async_copy
 from triton._filecheck import filecheck_test, run_parser
 from triton.runtime.jit import MockTensor
 import triton.language as tl
@@ -1521,8 +1522,8 @@ def test_amd_global_load_to_shared(target):
         offsets = ttgl.arange(0, 128, layout=ttgl.SliceLayout(1, blocked))[:, None] * 16 + \
                   ttgl.arange(0, 16, layout=ttgl.SliceLayout(0, blocked))[None, :]
 
-        ttgl.amd.cdna4.global_load_to_shared(smem, ptr + offsets)
-        ttgl.amd.cdna4.async_wait(0)
+        amd_async_copy.global_load_to_shared(smem, ptr + offsets)
+        amd_async_copy.async_wait(0)
 
     ptr = MockTensor(ttgl.float16)
     mod = run_parser(kernel, *make_args(ptr), target=target)
@@ -1571,8 +1572,8 @@ def test_amd_global_load_to_shared_with_broadcast(target):
         mask = (y_offset < 64)[:, None]
         other = tl.cast(0.0, ptr.dtype.element_ty)
 
-        ttgl.amd.cdna4.global_load_to_shared(smem, ptr + offsets, mask, other)
-        ttgl.amd.cdna4.async_wait(0)
+        amd_async_copy.global_load_to_shared(smem, ptr + offsets, mask, other)
+        amd_async_copy.async_wait(0)
 
     ptr = MockTensor(ttgl.float16)
     mod = run_parser(kernel, *make_args(ptr), target=target)
@@ -1624,7 +1625,7 @@ def test_buffer_load_to_shared(target):
         dest = ttgl.allocate_shared_memory(ptr.dtype.element_ty, [256], shared)
         offsets = ttgl.arange(0, 256, layout=blocked)
 
-        ttgl.amd.cdna4.buffer_load_to_shared(dest, ptr, offsets)
+        amd_async_copy.buffer_load_to_shared(dest, ptr, offsets)
 
     ptr = MockTensor(ttgl.float32)
     mod = run_parser(kernel, *make_args(ptr), target=target)
@@ -1661,7 +1662,7 @@ def test_buffer_load_to_shared_with_broadcast(target):
         mask = (y_index < 2)[:, None]
         other = 0.0
 
-        ttgl.amd.cdna4.buffer_load_to_shared(dest, ptr, offsets, mask, other)
+        amd_async_copy.buffer_load_to_shared(dest, ptr, offsets, mask, other)
 
     ptr = MockTensor(ttgl.float32)
     mod = run_parser(kernel, *make_args(ptr), target=target)
@@ -1711,7 +1712,7 @@ def test_buffer_load_to_shared_mask_other(target):
 
         mask = ttgl.full([256], 1, ttgl.int1, layout=blocked)
         other = ttgl.full([256], 0, ptr.dtype.element_ty, layout=blocked)
-        ttgl.amd.cdna4.buffer_load_to_shared(dest, ptr, offsets, mask, other)
+        amd_async_copy.buffer_load_to_shared(dest, ptr, offsets, mask, other)
 
     ptr = MockTensor(ttgl.float32)
     mod = run_parser(kernel, *make_args(ptr), target=target)
@@ -1746,9 +1747,9 @@ def test_buffer_load_to_shared_cache_mods(target):
         dest = ttgl.allocate_shared_memory(ptr.dtype.element_ty, [256], shared)
         offsets = ttgl.arange(0, 256, layout=blocked)
 
-        ttgl.amd.cdna4.buffer_load_to_shared(dest, ptr, offsets, cache_modifier=".ca")
-        ttgl.amd.cdna4.buffer_load_to_shared(dest, ptr, offsets, cache_modifier=".cg")
-        ttgl.amd.cdna4.buffer_load_to_shared(dest, ptr, offsets, cache_modifier=".cv")
+        amd_async_copy.buffer_load_to_shared(dest, ptr, offsets, cache_modifier=".ca")
+        amd_async_copy.buffer_load_to_shared(dest, ptr, offsets, cache_modifier=".cg")
+        amd_async_copy.buffer_load_to_shared(dest, ptr, offsets, cache_modifier=".cv")
 
     ptr = MockTensor(ttgl.float32)
     mod = run_parser(kernel, *make_args(ptr), target=target)
