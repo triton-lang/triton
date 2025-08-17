@@ -238,9 +238,10 @@ def reduce_grouped(x: torch.Tensor, indx: torch.Tensor, fused_activation, epilog
     if indx is None and x.shape[0] == 1:
         return x.squeeze(0), None
     if indx is not None:
-        assert x.shape[-2] == indx.numel()
+        num_groups = indx.shape[0]
+    else:
+        num_groups = x.shape[-2]
     K = 1 if indx is None else indx.shape[1]
-    num_groups = x.shape[-2] // K
     out_dtype = x.dtype if out_dtype is None else out_dtype
     assert x.shape[-1] % fused_activation.reduction_n == 0
     out_shape_n = x.shape[-1] // fused_activation.reduction_n
@@ -261,9 +262,9 @@ def reduce_grouped(x: torch.Tensor, indx: torch.Tensor, fused_activation, epilog
     stride_omxs = 0 if out_mx_scale is None else out_mx_scale.stride(0)
     kernels = get_kernels(epilogue.specs, fused_activation.specs)
     kernels._reduce_grouped[(num_groups, )](
-        x, x.stride(0), x.stride(2), x.stride(3),  #
+        x_flex.reinterpret(x), x.stride(0), x.stride(2), x.stride(3),  #
         x_expected_scale,  # scalar input scale
-        out, out.stride(1), out.stride(2),  #
+        out_flex.reinterpret(out), out.stride(1), out.stride(2),  #
         out_expected_scale, out_actual_scale, out_checksum_scale, indx,  #
         x.shape[0], x.shape[-1],  #
         x_mx_scale, stride_mxb, stride_mxs,  #
@@ -506,7 +507,7 @@ def matmul_ogs(x, w, bias,
         group_indx,
         reduce_fused_activation,
         epilogue,
-        x_flex=InFlexData(scale=out_matmul_flex.expected_scale),
+        x_flex=InFlexData(dtype=out_matmul_flex.dtype, scale=out_matmul_flex.expected_scale),
         out_flex=precision_config.flex_ctx.out_data,
         has_out_mx_scale=(out_matmul_scale is not None),
         x_mx_scale=out_matmul_scale.squeeze(1) if out_matmul_has_mx else None,
