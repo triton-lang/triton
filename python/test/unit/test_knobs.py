@@ -16,10 +16,8 @@ def test_knobs_utils(fresh_knobs) -> None:
         baz: triton.knobs.env_opt_str = triton.knobs.env_opt_str("BAZ")
         quux: triton.knobs.env_opt_bool = triton.knobs.env_opt_bool("QUUX")
 
-    instance = test_knobs()
-
     # Make sure knobs works
-    assert instance.knobs == {
+    assert test_knobs.knobs == {
         "foo": "triton",
         "bar": True,
         "baz": None,
@@ -28,27 +26,27 @@ def test_knobs_utils(fresh_knobs) -> None:
 
     # Now make sure copying works properly, otherwise all other tests in this
     # file aren't trustworthy.
-    instance.bar = False
-    instance.quux = True
-    assert instance.foo == "triton"
-    assert not instance.bar
-    assert instance.baz is None
-    assert instance.quux
-    assert instance.knobs == {
+    test_knobs.bar = False
+    test_knobs.quux = True
+    assert test_knobs.foo == "triton"
+    assert not test_knobs.bar
+    assert test_knobs.baz is None
+    assert test_knobs.quux
+    assert test_knobs.knobs == {
         "foo": "triton",
         "bar": False,
         "baz": None,
         "quux": True,
     }
 
-    second = instance.copy()
+    second = test_knobs.copy()
     assert second.foo == "triton"
     assert not second.bar
     assert second.baz is None
     assert second.quux
 
     second.foo = "tritium"
-    assert instance.foo != "tritium"
+    assert test_knobs.foo != "tritium"
     assert second.foo == "tritium"
 
     # Ditto on trustworthiness if reset() doesn't work.
@@ -60,7 +58,7 @@ def test_knobs_utils(fresh_knobs) -> None:
         "quux": None,
     }
     # Triple check original instance didn't change.
-    assert instance.knobs == {
+    assert test_knobs.knobs == {
         "foo": "triton",
         "bar": False,
         "baz": None,
