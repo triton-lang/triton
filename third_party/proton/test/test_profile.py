@@ -11,7 +11,6 @@ import pytest
 from typing import NamedTuple
 import pathlib
 import threading
-import asyncio
 
 import triton.language as tl
 from triton.profiler.hooks.launch import COMPUTE_METADATA_SCOPE_NAME
@@ -54,6 +53,7 @@ def test_torch(context, tmp_path: pathlib.Path):
 
 
 def test_triton(tmp_path: pathlib.Path):
+
     @triton.jit
     def foo(x, y):
         tl.store(y, tl.load(x))
@@ -64,9 +64,9 @@ def test_triton(tmp_path: pathlib.Path):
     proton.start(str(temp_file.with_suffix("")))
     with proton.scope("test0"):
         with proton.scope("test1"):
-            foo[(1,)](x, y)
+            foo[(1, )](x, y)
     with proton.scope("test2"):
-        foo[(1,)](x, y)
+        foo[(1, )](x, y)
     proton.finalize()
     with temp_file.open() as f:
         data = json.load(f)
@@ -89,7 +89,7 @@ def test_cudagraph(tmp_path: pathlib.Path):
         a = torch.ones((2, 2), device="cuda")
         b = torch.ones((2, 2), device="cuda")
         c = a + b
-        foo[(1,)](a, b, c)
+        foo[(1, )](a, b, c)
 
     temp_file = tmp_path / "test_cudagraph.hatchet"
     proton.start(str(temp_file.with_suffix("")), context="shadow")
@@ -132,6 +132,7 @@ def test_cudagraph(tmp_path: pathlib.Path):
 
 
 def test_metrics(tmp_path: pathlib.Path):
+
     @triton.jit
     def foo(x, y):
         tl.store(y, tl.load(x))
@@ -141,7 +142,7 @@ def test_metrics(tmp_path: pathlib.Path):
     temp_file = tmp_path / "test_metrics.hatchet"
     proton.start(str(temp_file.with_suffix("")))
     with proton.scope("test0", {"foo": 1.0}):
-        foo[(1,)](x, y)
+        foo[(1, )](x, y)
     proton.finalize()
     with temp_file.open() as f:
         data = json.load(f)
@@ -188,6 +189,7 @@ def test_cpu_timed_scope(tmp_path: pathlib.Path):
 
 
 def test_hook_launch(tmp_path: pathlib.Path):
+
     def metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
         # get arg's element size
         element_size = args["x"].element_size()  # non-const
@@ -206,7 +208,7 @@ def test_hook_launch(tmp_path: pathlib.Path):
     temp_file = tmp_path / "test_hook_triton.hatchet"
     proton.start(str(temp_file.with_suffix("")), hook="triton")
     with proton.scope("test0"):
-        foo[(1,)](x, 1, y, num_warps=4)
+        foo[(1, )](x, 1, y, num_warps=4)
     proton.finalize()
     with temp_file.open() as f:
         data = json.load(f)
@@ -219,6 +221,7 @@ def test_hook_launch(tmp_path: pathlib.Path):
 
 @pytest.mark.parametrize("context", ["shadow", "python"])
 def test_hook_launch_context(tmp_path: pathlib.Path, context: str):
+
     def metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
         x = args["x"]
         # A gpu kernel, but it should be under the metadata state
@@ -234,7 +237,7 @@ def test_hook_launch_context(tmp_path: pathlib.Path, context: str):
     temp_file = tmp_path / "test_hook.hatchet"
     proton.start(str(temp_file.with_suffix("")), hook="triton", context=context)
     with proton.scope("test0"):
-        foo[(1,)](x, 1, y, num_warps=4)
+        foo[(1, )](x, 1, y, num_warps=4)
     proton.finalize()
     with temp_file.open() as f:
         data = json.load(f)
@@ -274,7 +277,7 @@ def test_hook_with_third_party(tmp_path: pathlib.Path):
     y = torch.zeros_like(x)
     temp_file = tmp_path / "test_hook_with_third_party.hatchet"
     proton.start(str(temp_file.with_suffix("")), hook="triton")
-    foo[(1,)](x, 1, y, num_warps=4)
+    foo[(1, )](x, 1, y, num_warps=4)
     proton.finalize()
     triton.knobs.runtime.launch_enter_hook.remove(third_party_hook)
     with temp_file.open() as f:
@@ -285,6 +288,7 @@ def test_hook_with_third_party(tmp_path: pathlib.Path):
 
 
 def test_hook_multiple_threads(tmp_path: pathlib.Path):
+
     def metadata_fn_foo(grid: tuple, metadata: NamedTuple, args: dict):
         return {"name": "foo_test"}
 
@@ -314,12 +318,12 @@ def test_hook_multiple_threads(tmp_path: pathlib.Path):
     # start multiple threads
     def invoke_foo():
         for _ in range(100):
-            foo[(1,)](x_foo, 1, y_foo, num_warps=4)
+            foo[(1, )](x_foo, 1, y_foo, num_warps=4)
             all_ids.add(proton_launch.id.get())
 
     def invoke_bar():
         for _ in range(100):
-            bar[(1,)](x_bar, 1, y_bar, num_warps=4)
+            bar[(1, )](x_bar, 1, y_bar, num_warps=4)
             all_ids.add(proton_launch.id.get())
 
     thread_foo = threading.Thread(target=invoke_foo)
@@ -359,10 +363,10 @@ def test_pcsampling(tmp_path: pathlib.Path):
     temp_file = tmp_path / "test_pcsampling.hatchet"
     proton.start(str(temp_file.with_suffix("")), hook="triton", backend="cupti", mode="pcsampling")
     with proton.scope("init"):
-        x = torch.ones((1024,), device="cuda", dtype=torch.float32)
+        x = torch.ones((1024, ), device="cuda", dtype=torch.float32)
         y = torch.zeros_like(x)
     with proton.scope("test"):
-        foo[(1,)](x, y, x.size()[0], num_warps=4)
+        foo[(1, )](x, y, x.size()[0], num_warps=4)
     proton.finalize()
     with temp_file.open() as f:
         data = json.load(f)
@@ -429,11 +433,11 @@ def test_trace(tmp_path: pathlib.Path):
         tl.store(y + offs, tl.load(x + offs))
 
     with proton.scope("init"):
-        x = torch.ones((1024,), device="cuda", dtype=torch.float32)
+        x = torch.ones((1024, ), device="cuda", dtype=torch.float32)
         y = torch.zeros_like(x)
 
     with proton.scope("test"):
-        foo[(1,)](x, y, x.size()[0], num_warps=4)
+        foo[(1, )](x, y, x.size()[0], num_warps=4)
 
     proton.finalize()
 
@@ -456,10 +460,10 @@ def test_scope_multiple_threads(tmp_path: pathlib.Path):
         for i in range(N):
             name = f"{prefix}_{i}"
             proton.enter_scope(name)
-            torch.ones((1,), device="cuda")
+            torch.ones((1, ), device="cuda")
             proton.exit_scope()
 
-    threads = [threading.Thread(target=worker, args=(tname,)) for tname in thread_names]
+    threads = [threading.Thread(target=worker, args=(tname, )) for tname in thread_names]
     for t in threads:
         t.start()
     for t in threads:
@@ -475,4 +479,3 @@ def test_scope_multiple_threads(tmp_path: pathlib.Path):
     names = {c["frame"]["name"] for c in children}
     expected = {f"{t}_{i}" for t in thread_names for i in range(N)}
     assert names == expected
-
