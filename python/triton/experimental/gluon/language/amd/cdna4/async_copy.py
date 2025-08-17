@@ -30,7 +30,7 @@ def global_load_to_shared(dest, ptr, mask=None, other=None, cache_modifier="", _
     the following conditions must be met or lowering to LLVM will fail:
 
     - For the `ptr` layout, size per thread * bits per element must be 128 or 32.
-      To get ideal performance, it is recommended to 128 bits per element.
+      To get ideal performance, it is recommended to use 128 bits per element.
     - Writes to `dest` must be coalesced.
     - If `dest` is swizzled, it only can be swizzled within warp boundary.
 
@@ -81,7 +81,7 @@ def buffer_load_to_shared(dest, ptr, offsets, mask=None, other=None, cache_modif
     the following conditions must be met or lowering to LLVM will fail:
 
     - For the `offsets` layout, size per thread * bits per element must be 128 or 32.
-      To get ideal performance, it is recommended to 128 bits per element.
+      To get ideal performance, it is recommended to use 128 bits per element.
     - Writes to `dest` must be coalesced.
     - If `dest` is swizzled, it only can be swizzled within warp boundary.
 
