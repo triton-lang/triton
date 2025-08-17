@@ -7,7 +7,6 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 
-#include <cstdint>
 #include <numeric>
 
 #define DEBUG_TYPE "axis-info"
