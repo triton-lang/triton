@@ -39,9 +39,10 @@ def global_load_to_shared(dest, ptr, mask=None, other=None, cache_modifier="", _
     """
     _check(ptr.type.is_block(), lambda: "expected ptr to be a tensor")
     _check(isinstance(ptr.type.layout, (BlockedLayout, SliceLayout)),
-          lambda: "expected ptr type layout to be BlockedLayout or SliceLayout")
-    _check(dest.shape == ptr.shape, lambda:
-          f"expected dest shape to match pointer shape but got dest.shape = {dest.shape}, pointer.shape = {ptr.shape}")
+           lambda: "expected ptr type layout to be BlockedLayout or SliceLayout")
+    _check(
+        dest.shape == ptr.shape, lambda:
+        f"expected dest shape to match pointer shape but got dest.shape = {dest.shape}, pointer.shape = {ptr.shape}")
 
     mask = _unwrap_if_constexpr(mask)
     if mask is not None:
