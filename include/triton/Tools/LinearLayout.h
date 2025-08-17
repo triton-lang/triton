@@ -432,7 +432,7 @@ public:
     return isSurjective() && getTotalInDimSize() == getTotalOutDimSize();
   }
 
-  // Remove a 1-sized dimension from the layout.
+  // Remove a dimension of size 1 from the layout.
   [[nodiscard]] LinearLayout unsqueezeIn(StringAttr dim) const;
   [[nodiscard]] LinearLayout unsqueezeOut(StringAttr dim) const;
 
