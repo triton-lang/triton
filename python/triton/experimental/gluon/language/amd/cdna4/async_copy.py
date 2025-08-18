@@ -135,6 +135,13 @@ def load_shared_relaxed(smem, layout, _semantic=None):
     Load a tensor from shared memory with extra hints for the underlying
     compiler to avoid emitting unnecessary waits before loading from the target
     shared memory for better optimization.
+
+    Args:
+        smem (shared_memory_descriptor): Shared memory descriptor to load from.
+        layout (DistributedLayout): The destination layout of the tensor.
+
+    Returns:
+        tensor: A Gluon tensor containing the loaded data.
     """
     SYNCED_VIA_WAIT_ATTR_NAME = "ttg.amdgpu.syncedViaAsyncWait"
 
