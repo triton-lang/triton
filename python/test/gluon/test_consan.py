@@ -299,7 +299,7 @@ def tcgen5_mma_multibar_kernel(input_desc, XBLOCK: ttgl.constexpr, BUF_IDX: ttgl
 
     blackwell.tcgen05_mma(smemA, smemB.permute([1, 0]), acc.index(0), mbarriers=[bar.index(0),
                                                                                  bar.index(1)],
-                          mbarrier_preds=[False, True])
+                          mbarrier_preds=[True, True])
     blackwell.tcgen05_mma(smemA, smemB.permute([1, 0]), acc.index(1), mbarriers=[bar.index(2)])
     blackwell.tcgen05_commit(bar.index(3))
 
