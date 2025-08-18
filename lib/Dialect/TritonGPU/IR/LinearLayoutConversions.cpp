@@ -523,7 +523,8 @@ AMDMfmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
 
 LinearLayout chooseDotDsReadB64TrLayout(DotOperandEncodingAttr dotMfmaLayout,
                                         ArrayRef<int64_t> shape,
-                                        int32_t elemBitWidth) {
+                                        int32_t elemBitWidth,
+                                        bool isTranspose) {
   auto mfmaLayout = llvm::cast<AMDMfmaEncodingAttr>(dotMfmaLayout.getParent());
   auto mDim = mfmaLayout.getMDim();
   assert(mDim == 16 || mDim == 32);
@@ -542,9 +543,13 @@ LinearLayout chooseDotDsReadB64TrLayout(DotOperandEncodingAttr dotMfmaLayout,
   auto rank = shape.size();
   bool hasBatchDim = rank == 3;
   int32_t kWidthDot = dotMfmaLayout.getKWidth();
-  auto kDim = dotMfmaLayout.getOpIdx() == 0 ? rank - 1 : rank - 2;
-
-  int32_t kSize = shape[kDim];
+  auto kDimIdx = dotMfmaLayout.getOpIdx() == 0 ? rank - 1 : rank - 2;
+  auto mDimIdx = dotMfmaLayout.getOpIdx() == 0 ? rank - 2 : rank - 1;
+  if (isTranspose) {
+    // When doing a transpose we need pick the other dimension as kDim
+    std::swap(mDimIdx, kDimIdx);
+  }
+  int32_t kSize = shape[kDimIdx];
   auto warpsPerCTA = mfmaLayout.getWarpsPerCTA();
 
   MLIRContext *ctx = dotMfmaLayout.getContext();
@@ -723,7 +728,20 @@ LinearLayout chooseDotDsReadB64TrLayout(DotOperandEncodingAttr dotMfmaLayout,
 
   LinearLayout ctaLayout = tileLayout.transposeOuts(outDimNames) *
                            warpLayout.transposeOuts(outDimNames);
-  return combineCtaCgaWithShape(ctaLayout, mfmaLayout.getCTALayout(), shape);
+
+  SmallVector<int64_t> shapeTransposed(shape);
+  std::swap(shapeTransposed[rank - 1], shapeTransposed[rank - 2]);
+  auto ret = combineCtaCgaWithShape(ctaLayout, mfmaLayout.getCTALayout(),
+                                    isTranspose ? shapeTransposed : shape);
+  if (isTranspose) {
+    assert(!hasBatchDim);
+    // We need to swap dim0 and dim1 since the shared layout that will be used
+    // is non-transposed and the layout that we generated here is transposed up
+    // to this point.
+    LinearLayout newLayout(ret.getBases(), {S("dim1"), S("dim0")});
+    return newLayout;
+  }
+  return ret;
 }
 
 LinearLayout mfmaDotToLinearLayout(DotOperandEncodingAttr dotMfmaLayout,
@@ -1398,9 +1416,9 @@ LinearLayout chooseShemLayoutForRegToRegConversion(
 }
 
 LinearLayout chooseDsReadB64TrLayout(Attribute enc, ArrayRef<int64_t> shape,
-                                     int32_t elemBitWidth) {
+                                     int32_t elemBitWidth, bool isTranspose) {
   auto dot = cast<DotOperandEncodingAttr>(enc);
-  return chooseDotDsReadB64TrLayout(dot, shape, elemBitWidth);
+  return chooseDotDsReadB64TrLayout(dot, shape, elemBitWidth, isTranspose);
 }
 
 LinearLayout chooseScaledMfmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,

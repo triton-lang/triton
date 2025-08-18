@@ -25,16 +25,18 @@ public:
   static constexpr bool isPackedLoad =
       std::is_same_v<triton::amdgpu::LocalLoadPackedTransposedOp,
                      LocalLoadOpType>;
+  static constexpr bool isTransposeLoad =
+      std::is_same_v<triton::amdgpu::LocalLoadTransposedOp, LocalLoadOpType>;
+  static constexpr bool isLocalLoad =
+      std::is_same_v<triton::gpu::LocalLoadOp, LocalLoadOpType>;
 
   LogicalResult
   matchAndRewrite(LocalLoadOpType op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     MemDescType srcTy = op.getSrc().getType();
     RankedTensorType dstTy = op.getType();
-    Attribute srcLayout = srcTy.getEncoding();
-    Attribute dstLayout = dstTy.getEncoding();
 
-    if (isPackedLoad || canUseTransLoad(op, srcTy, dstTy)) {
+    if (isPackedLoad || isTransposeLoad || canUseTransLoad(op, srcTy, dstTy)) {
       return lowerSharedToDotOperandTransLL(op, adaptor,
                                             this->getTypeConverter(), rewriter);
     }
@@ -175,11 +177,11 @@ private:
     auto dstTy = cast<RankedTensorType>(op.getType());
     auto srcTy = cast<MemDescType>(op.getSrc().getType());
     auto dotEnc = cast<DotOperandEncodingAttr>(dstTy.getEncoding());
-    auto shape = isPackedLoad ? srcTy.getShape() : dstTy.getShape();
     auto llvmElemTy = typeConverter->convertType(dstTy.getElementType());
     auto llBitwidth = isPackedLoad ? 4 : llvmElemTy.getIntOrFloatBitWidth();
     auto bitwidth = llvmElemTy.getIntOrFloatBitWidth();
-    auto ldsTransLayout = chooseDsReadB64TrLayout(dotEnc, shape, llBitwidth);
+    auto ldsTransLayout = chooseDsReadB64TrLayout(dotEnc, srcTy.getShape(),
+                                                  llBitwidth, isTransposeLoad);
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
                                                          llvmElemTy, rewriter);
     SmallVector<Value> outVals;
@@ -206,7 +208,7 @@ private:
           } else if (bitwidth == 16) {
             auto dsReadOp =
                 rewriter.create<ROCDL::ds_read_tr16_b64>(loc, vecTy, vecAddr);
-            if constexpr (!isPackedLoad) {
+            if constexpr (isLocalLoad) {
               AMD::addLocalLoadNoAliasScope(op, dsReadOp);
             }
             Value vecVal = dsReadOp.getResult();
@@ -222,7 +224,7 @@ private:
 
             auto dsReadOp =
                 rewriter.create<ROCDL::ds_read_tr8_b64>(loc, i32VecTy, vecAddr);
-            if constexpr (!isPackedLoad) {
+            if constexpr (isLocalLoad) {
               AMD::addLocalLoadNoAliasScope(op, dsReadOp);
             }
             Value vecVal = dsReadOp.getResult();
@@ -262,6 +264,11 @@ void mlir::triton::AMD::populateMemoryOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     const TargetInfo &targetInfo, PatternBenefit benefit) {
   PatternBenefit transBenefit = PatternBenefit(benefit.getBenefit() + 1);
+  PatternBenefit transLoadFoldBenefit =
+      PatternBenefit(transBenefit.getBenefit() + 1);
+  patterns
+      .add<TransLocalLoadOpConversion<triton::amdgpu::LocalLoadTransposedOp>>(
+          typeConverter, targetInfo, transLoadFoldBenefit);
   patterns.add<TransLocalLoadOpConversion<triton::gpu::LocalLoadOp>>(
       typeConverter, targetInfo, transBenefit);
   patterns.add<
