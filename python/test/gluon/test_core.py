@@ -4,15 +4,15 @@ import pytest
 import triton
 import triton.language as tl
 
-from triton._internal_testing import is_cuda, is_ampere_or_newer, is_hip_cdna3, is_hip_cdna4, is_hopper_or_newer, is_hopper
+from triton._internal_testing import is_ampere_or_newer, is_hip_cdna3, is_hip_cdna4, is_hopper_or_newer, is_hopper
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
 from triton.experimental.gluon.language.nvidia.ampere import async_copy, mbarrier
 from triton.experimental.gluon.language.nvidia.hopper import tma, fence_async_shared
 from triton.experimental.gluon.language.nvidia import hopper
 
-
 THREADS_PER_WARP = triton.runtime.driver.active.get_current_target().warp_size
+
 
 @gluon.jit
 def copy_kernel(Out, In, numel, XBLOCK: ttgl.constexpr, layout: ttgl.constexpr):
@@ -21,8 +21,6 @@ def copy_kernel(Out, In, numel, XBLOCK: ttgl.constexpr, layout: ttgl.constexpr):
     xmask = xoffset < numel
     data = ttgl.load(In + xoffset, xmask)
     ttgl.store(Out + xoffset, data, xmask)
-
-
 
 
 @pytest.mark.parametrize("layout", [
