@@ -6,7 +6,7 @@ from ..cdna3 import _verify_buffer_ops
 __all__ = [
     "global_load_to_shared",
     "buffer_load_to_shared",
-    "wait",
+    "async_wait",
     "load_shared_relaxed",
 ]
 
@@ -114,7 +114,7 @@ def buffer_load_to_shared(dest, ptr, offsets, mask=None, other=None, cache_modif
 
 
 @builtin
-def wait(num_outstanding=0, _semantic=None):
+def async_wait(num_outstanding=0, _semantic=None):
     """
     Wait for outstanding memory operations, this includes normal load like
     `load` and `buffer_load`, as well as all direct to shared memory operations
