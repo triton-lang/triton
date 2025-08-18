@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from functools import reduce
-from typing import Any, Callable, TYPE_CHECKING, Union, Dict
+from typing import Any, Callable, TYPE_CHECKING, Union, List, Dict
 
 if TYPE_CHECKING:
     from .language import core
@@ -45,7 +45,7 @@ def is_power_of_two(x):
     return (x & (x - 1)) == 0
 
 
-def validate_block_shape(shape: tuple) -> int:
+def validate_block_shape(shape: List[int]):
     numel = 1
     for i, d in enumerate(shape):
         if not isinstance(d, int):
