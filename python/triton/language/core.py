@@ -1477,8 +1477,8 @@ class tensor_descriptor(tensor_descriptor_base):
         # IR handle
         super().__init__(handle, block_type)
         # Global shape
-        self.shape = builtins.tuple(shape)
-        self.strides = builtins.tuple(strides)
+        self.shape = tuple(shape)
+        self.strides = tuple(strides)
         self.type = tensor_descriptor_type(
             block_type,
             shape_type=self.shape.type,
