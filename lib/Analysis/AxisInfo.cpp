@@ -1261,16 +1261,20 @@ unsigned ModuleAxisInfoAnalysis::getAlignment(Value offsetsValue,
     return 1;
   auto linAttr = gpu::toLinearEncoding(tensorTy);
   auto order = linAttr.getOrder();
-  auto maxMultipleBytes = axisInfo->getDivisibility(order[0]);
-  auto maxContig = axisInfo->getContiguity(order[0]);
 
+  auto divisibility = axisInfo->getDivisibility(order[0]);
   auto elemNumBytes = std::max<unsigned>(elementBitWidth / 8, 1);
-  auto maxMultiple = std::max<int64_t>(maxMultipleBytes / elemNumBytes, 1);
+  auto elemTy = tensorTy.getElementType();
+  auto maxMultiple = isa<PointerType>(elemTy)
+                         ? std::max<int64_t>(divisibility / elemNumBytes, 1)
+                         : divisibility;
+
+  auto maxContig = axisInfo->getContiguity(order[0]);
   unsigned alignment = std::min(maxMultiple, maxContig);
-  LDBG("getAlignment order[0] "
-       << order[0] << " maxMultipleBytes = " << maxMultipleBytes
-       << " maxContig = " << maxContig << " elemNumBits = " << elementBitWidth
-       << " maxMultiple = " << maxMultiple << " alignment " << alignment);
+  LDBG("getAlignment order[0] " << order[0] << " maxContig = " << maxContig
+                                << " elemNumBits = " << elementBitWidth
+                                << " maxMultiple = " << maxMultiple
+                                << " alignment " << alignment);
   LLVM_DEBUG({
     std::string axisStr;
     llvm::raw_string_ostream os(axisStr);

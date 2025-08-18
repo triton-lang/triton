@@ -3279,8 +3279,8 @@ class condition:
 # -----------------------
 
 
-def dispatch(func, lib_name: str, lib_path: str, args: list, arg_type_symbol_dict: dict, ret_shape: tuple,
-             is_pure: bool, _semantic):
+def dispatch(func, lib_name: str, lib_path: str, args: list, arg_type_symbol_dict: dict, ret_type: dtype, is_pure: bool,
+             _semantic):
     '''
         Dispatch a function to a library
         :param func: the function to dispatch
@@ -3288,7 +3288,7 @@ def dispatch(func, lib_name: str, lib_path: str, args: list, arg_type_symbol_dic
         :param lib_path: the path of the library
         :param args: the arguments of the function
         :param arg_type_symbol_dict: the type of the arguments
-        :param ret_shape: the shape of the return value
+        :param ret_type: the type of the return value
         :return: the return value of the function
     '''
     if len(arg_type_symbol_dict) == 0:
@@ -3315,9 +3315,6 @@ def dispatch(func, lib_name: str, lib_path: str, args: list, arg_type_symbol_dic
                          f"Expect one of {arg_type_symbol_dict.keys()}, got {arg_types}")
     else:
         symbol = arg_type_symbol_dict[arg_types][0]
-        ret_type = arg_type_symbol_dict[arg_types][1]
-        if ret_shape:
-            ret_type = block_type(ret_type, ret_shape)
         builder = _semantic.builder
         return tensor(func(lib_name, lib_path, symbol, arg_list, ret_type.to_ir(builder), is_pure), ret_type)
 
@@ -3336,15 +3333,16 @@ def extern_elementwise(lib_name: str, lib_path: str, args: list, arg_type_symbol
     '''
     dispatch_args = args.copy()
     all_scalar = True
-    ret_shape = None
     arg_types = []
     for i in builtins.range(len(dispatch_args)):
         dispatch_args[i] = _semantic.to_tensor(dispatch_args[i])
         arg_types.append(dispatch_args[i].dtype)
         if dispatch_args[i].type.is_block():
             all_scalar = False
+
+    arg_types = tuple(arg_types)
+    ret_type = arg_type_symbol_dict[arg_types][1]
     if len(arg_types) > 0:
-        arg_types = tuple(arg_types)
         arithmetic_check = True
         # If there's a type tuple that is not supported by the library, we will do arithmetic check
         if arg_types in arg_type_symbol_dict:
@@ -3359,9 +3357,9 @@ def extern_elementwise(lib_name: str, lib_path: str, args: list, arg_type_symbol
             dispatch_args[i], _ = _semantic.binary_op_type_checking_impl(dispatch_args[i], broadcast_arg,
                                                                          arithmetic_check=arithmetic_check)
         if not all_scalar:
-            ret_shape = broadcast_arg.shape
+            ret_type = broadcast_arg.type
     func = _semantic.builder.create_extern_elementwise
-    return dispatch(func, lib_name, lib_path, dispatch_args, arg_type_symbol_dict, ret_shape, is_pure, _semantic)
+    return dispatch(func, lib_name, lib_path, dispatch_args, arg_type_symbol_dict, ret_type, is_pure, _semantic)
 
 
 def binary_op_type_legalization(lhs, rhs, semantic):
