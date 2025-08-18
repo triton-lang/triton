@@ -29,6 +29,13 @@ from dataclasses import dataclass
 import pybind11
 
 try:
+    from setuptools.command.build import build
+except ImportError:
+    # Older setuptools does not have command.build
+    # https://github.com/pypa/setuptools/commit/b517cfae6b11c15834aa7aaf439bc45894a238f4
+    from distutils.command.build import build
+
+try:
     from setuptools.command.bdist_wheel import bdist_wheel
 except ImportError:
     from wheel.bdist_wheel import bdist_wheel
