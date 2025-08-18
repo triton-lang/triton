@@ -351,3 +351,61 @@ def test_amd_mfma_scaled(M, N, K, rhs_scale, mxfp_type, normal_type):
     triton_kernel[(1, )](x, *x.stride(), scale_x, y, *y.stride(), scale_y, z_ref, M, N, K, type_a, type_b)
 
     torch.testing.assert_close(z, z_ref, rtol=1e-5, atol=1e-5)
+
+
+THREADS_PER_WARP = triton.runtime.driver.active.get_current_target().warp_size
+
+scan_layouts = [
+    ttgl.BlockedLayout([1, 4], [4, THREADS_PER_WARP // 4], [4, 1], [0, 1]),
+    ttgl.BlockedLayout([1, 4], [8, THREADS_PER_WARP // 8], [4, 1], [0, 1]),
+    ttgl.BlockedLayout([4, 1], [4, THREADS_PER_WARP // 4], [1, 4], [0, 1]),
+    ttgl.BlockedLayout([2, 2], [4, THREADS_PER_WARP // 4], [2, 2], [0, 1]),
+    ttgl.BlockedLayout([2, 2], [8, THREADS_PER_WARP // 8], [2, 2], [0, 1]),
+    ttgl.BlockedLayout([1, 4], [4, THREADS_PER_WARP // 4], [4, 1], [1, 0]),
+    ttgl.BlockedLayout([1, 4], [8, THREADS_PER_WARP // 8], [4, 1], [1, 0]),
+    ttgl.BlockedLayout([4, 1], [4, THREADS_PER_WARP // 4], [1, 4], [1, 0]),
+    ttgl.BlockedLayout([2, 2], [4, THREADS_PER_WARP // 4], [2, 2], [1, 0]),
+    ttgl.BlockedLayout([2, 2], [8, THREADS_PER_WARP // 8], [2, 2], [1, 0]),
+    ttgl.BlockedLayout([1, 2], [1, THREADS_PER_WARP], [1, 4], [1, 0]),
+]
+
+
+@pytest.mark.parametrize("M, N", [(32, 16), (32, 32), (32, 64), (64, 32)])
+@pytest.mark.parametrize("src_layout", scan_layouts)
+@pytest.mark.parametrize("axis", [0, 1])
+@pytest.mark.parametrize("add_overflow_check", [False, True])
+def test_scan_layouts_gluon(M, N, src_layout, axis, add_overflow_check, device):
+    @gluon.jit
+    def _combine(a, b):
+        return a + b
+
+    @gluon.jit
+    def _combine_assert(a, b):
+        ttgl.static_assert(True)
+        return a + b
+
+    @gluon.jit
+    def kernel(x_ptr, z_ptr, M: ttgl.constexpr, N: ttgl.constexpr,
+               layout: ttgl.constexpr, axis: ttgl.constexpr,
+               use_assert: ttgl.constexpr):
+        x_offs_m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, layout))[:, None]
+        x_offs_n = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, layout))[None, :]
+        x = ttgl.load(x_ptr + x_offs_m * N + x_offs_n)
+        if use_assert:
+            y = ttgl.associative_scan(x, axis=axis, combine_fn=_combine_assert)
+        else:
+            y = ttgl.associative_scan(x, axis=axis, combine_fn=_combine)
+        ttgl.store(z_ptr + x_offs_m * N + x_offs_n, y)
+
+    torch.manual_seed(0)
+
+    x = torch.randint(-100, 100, (M, N), dtype=torch.int32, device=device)
+    z = torch.zeros((M, N), dtype=torch.int32, device=device)
+
+    x_tri = torch.tensor(x, device=device)
+    z_tri = torch.tensor(z, device=device)
+
+    kernel[(1, 1, 1)](x_tri, z_tri, M, N, src_layout, axis, add_overflow_check, num_warps=4)
+
+    z_ref = torch.cumsum(x, dim=axis)
+    torch.testing.assert_close(z_tri, z_ref)

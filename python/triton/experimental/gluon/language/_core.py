@@ -45,6 +45,7 @@ from triton.language.core import (
 )
 
 _IMPORT_FROM_TRITON: List[str] = [
+    "associative_scan",
     "atomic_add",
     "atomic_and",
     "atomic_cas",
