@@ -117,8 +117,8 @@ def buffer_load_to_shared(dest, ptr, offsets, mask=None, other=None, cache_modif
 def async_wait(num_outstanding=0, _semantic=None):
     """
     Wait for outstanding memory operations, this includes normal load like
-    `load` and `buffer_load`, as well as all direct load to shared memory
-    operations like  `global_load_to_shared` and `buffer_load_to_shared`.
+    `load` and `buffer_load`, as well as direct load to shared memory
+    like `global_load_to_shared` and `buffer_load_to_shared`.
     It will block until the number of outstanding memory operations is less than
     or equal to `num_outstanding`.
 
