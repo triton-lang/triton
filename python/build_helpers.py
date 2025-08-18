@@ -15,8 +15,8 @@ def _get_build_base():
 
 def _get_dir_common(prefix):
     plat_name = sysconfig.get_platform()
-    python_version = sysconfig.get_python_version()
-    dir_name = f"{prefix}.{plat_name}-{sys.implementation.name}-{python_version}"
+    python_version = sys.implementation.cache_tag
+    dir_name = f"{prefix}.{plat_name}-{python_version}"
     path = _get_build_base() / dir_name
     path.mkdir(parents=True, exist_ok=True)
     return path
