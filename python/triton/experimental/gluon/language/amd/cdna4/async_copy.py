@@ -16,8 +16,8 @@ def global_load_to_shared(dest, ptr, mask=None, other=None, cache_modifier="", _
     """
     AMD global load to shared operation. This operation loads data directly
     from global memory to shared memory without going through registers. It
-    happens asynchronously and requires a subsequent `wait` to ensure the data
-    is available in shared memory.
+    happens asynchronously and requires a subsequent `async_wait` to ensure the
+    data is available in shared memory.
     Compared to `buffer_load_to_shared`, it requires a tensor pointer which
     supports 64-bit indexing range for each thread in a block, which gives more
     flexibility, but at the cost of higher register pressure and no hardware
@@ -69,7 +69,7 @@ def buffer_load_to_shared(dest, ptr, offsets, mask=None, other=None, cache_modif
     but it accesses global memory via a scalar base pointer and a tensor of
     32-bit offsets instead of a tensor of pointers. This operation loads data
     directly from global memory to shared memory without going through
-    registers. It happens asynchronously and requires a subsequent `wait`
+    registers. It happens asynchronously and requires a subsequent `async_wait`
     to ensure the data is available in shared memory.
     Compared to `global_load_to_shared`, it has better performance and also
     supports hardware out-of-bound masking. But it strictly requires a
