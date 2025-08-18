@@ -296,7 +296,7 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         region_builder_fn(scan_op)
         assert scan_op.verify()
 
-        return tuple(self._wrap_tensor_infer_layout(scan_op.get_result(i), inputs[i].type.scalar, shape) for i in range(len(inputs)))
+        return tuple(self._wrap_handle_infer_layout(scan_op.get_result(i), inputs[i].type.scalar, shape) for i in range(len(inputs)))
 
     def reduction(self, inputs: Sequence[TensorTy], axis: int, region_builder_fn) -> Tuple[TensorTy, ...]:
         _check(axis is not None, lambda: "All-reduce is not yet implemented in gluon")
