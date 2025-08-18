@@ -387,7 +387,7 @@ def test_scan_layouts(M, N, src_layout, axis, add_overflow_check, device):
         lt_max = s64 < i32_max
         ge_min = s64 >= i32_min
         ok = lt_max and ge_min
-        ttgl.assert_(ok, "overflow detected")
+        ttgl.device_assert(ok, "overflow detected")
         return a + b
 
     @gluon.jit
