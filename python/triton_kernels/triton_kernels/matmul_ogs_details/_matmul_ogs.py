@@ -80,6 +80,27 @@ def _matmul_ogs(
              SWAP_XW: tl.constexpr = False,
              IS_EPILOGUE_DEQUANT_MXFP8: tl.constexpr = False):
 
+    tl.assume(stride_y_k >= 0)
+    tl.assume(stride_y_z >= 0)
+    tl.assume(stride_y_m >= 0)
+    tl.assume(stride_y_n >= 0)
+    tl.assume(stride_x_z >= 0)
+    tl.assume(stride_x_m >= 0)
+    tl.assume(stride_x_k >= 0)
+    tl.assume(stride_w_e >= 0)
+    tl.assume(stride_w_k >= 0)
+    tl.assume(stride_w_n >= 0)
+    if stride_w_mx_e is not None:
+        tl.assume(stride_w_mx_e >= 0)
+    if stride_w_mx_k is not None:
+        tl.assume(stride_w_mx_k >= 0)
+    if stride_w_mx_n is not None:
+        tl.assume(stride_w_mx_n >= 0)
+    tl.assume(stride_b_e >= 0)
+    tl.assume(batch_size >= 0)
+    tl.assume(grid_m >= 0)
+    tl.assume(grid_n >= 0)
+
     is_w_microscaled: tl.constexpr = WMxScale is not None
     MX_PACK_DIVISOR: tl.constexpr = MXFP_BLOCK_SIZE
     if is_w_microscaled:
@@ -116,7 +137,9 @@ def _matmul_ogs(
     HAS_FUSED_SCATTER: tl.constexpr = WriteBackIndx is not None
     index_type: tl.constexpr = tl.int64 if UPCAST_INDICES else tl.int32
 
-    total_actual_tiles = batch_size * (grid_m - padding_m) * grid_n * SPLIT_K
+    unpadded_m = grid_m - padding_m
+    tl.assume(unpadded_m >= 0)
+    total_actual_tiles = batch_size * unpadded_m * grid_n * SPLIT_K
     if padding_m > 0 and pid >= total_actual_tiles:
         tl.device_assert(batch_size == 0)
         pid_mn = pid - total_actual_tiles
@@ -132,11 +155,11 @@ def _matmul_ogs(
     pid_emnk = pid
     if XCD_SWIZZLE != 1:
         pid_emnk = xcd_swizzle(pid_emnk, total_actual_tiles, XCD_SWIZZLE)
-    pid_e = pid_emnk // ((grid_m - padding_m) * grid_n * SPLIT_K)
-    pid_mnk = pid_emnk % ((grid_m - padding_m) * grid_n * SPLIT_K)
+    pid_e = pid_emnk // (unpadded_m * grid_n * SPLIT_K)
+    pid_mnk = pid_emnk % (unpadded_m * grid_n * SPLIT_K)
     pid_k = pid_mnk % SPLIT_K
     pid_mn = pid_mnk // SPLIT_K
-    pid_m, pid_n = swizzle2d(pid_mn, (grid_m - padding_m), grid_n, GROUP_M)
+    pid_m, pid_n = swizzle2d(pid_mn, unpadded_m, grid_n, GROUP_M)
     # For split-k, advance to the output k slice
     if SPLIT_K > 1:
         Y += pid_k.to( index_type) * stride_y_k
