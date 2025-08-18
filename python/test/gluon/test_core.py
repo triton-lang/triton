@@ -12,6 +12,8 @@ from triton.experimental.gluon.language.nvidia.hopper import tma, fence_async_sh
 from triton.experimental.gluon.language.nvidia import hopper
 
 
+THREADS_PER_WARP = triton.runtime.driver.active.get_current_target().warp_size
+
 @gluon.jit
 def copy_kernel(Out, In, numel, XBLOCK: ttgl.constexpr, layout: ttgl.constexpr):
     xbase = ttgl.program_id(0) * XBLOCK
@@ -21,18 +23,17 @@ def copy_kernel(Out, In, numel, XBLOCK: ttgl.constexpr, layout: ttgl.constexpr):
     ttgl.store(Out + xoffset, data, xmask)
 
 
-copy_kernel_tpw = [32] if is_cuda() else [64]
 
 
 @pytest.mark.parametrize("layout", [
-    ttgl.BlockedLayout(size_per_thread=[1], threads_per_warp=copy_kernel_tpw, warps_per_cta=[4], order=[0]),
-    ttgl.BlockedLayout(size_per_thread=[2], threads_per_warp=copy_kernel_tpw, warps_per_cta=[4], order=[0]),
-    ttgl.BlockedLayout(size_per_thread=[4], threads_per_warp=copy_kernel_tpw, warps_per_cta=[4], order=[0]),
-    ttgl.BlockedLayout(size_per_thread=[8], threads_per_warp=copy_kernel_tpw, warps_per_cta=[4], order=[0]),
-    ttgl.BlockedLayout(size_per_thread=[1], threads_per_warp=copy_kernel_tpw, warps_per_cta=[8], order=[0]),
-    ttgl.BlockedLayout(size_per_thread=[2], threads_per_warp=copy_kernel_tpw, warps_per_cta=[8], order=[0]),
-    ttgl.BlockedLayout(size_per_thread=[4], threads_per_warp=copy_kernel_tpw, warps_per_cta=[8], order=[0]),
-    ttgl.BlockedLayout(size_per_thread=[8], threads_per_warp=copy_kernel_tpw, warps_per_cta=[8], order=[0]),
+    ttgl.BlockedLayout(size_per_thread=[1], threads_per_warp=[THREADS_PER_WARP], warps_per_cta=[4], order=[0]),
+    ttgl.BlockedLayout(size_per_thread=[2], threads_per_warp=[THREADS_PER_WARP], warps_per_cta=[4], order=[0]),
+    ttgl.BlockedLayout(size_per_thread=[4], threads_per_warp=[THREADS_PER_WARP], warps_per_cta=[4], order=[0]),
+    ttgl.BlockedLayout(size_per_thread=[8], threads_per_warp=[THREADS_PER_WARP], warps_per_cta=[4], order=[0]),
+    ttgl.BlockedLayout(size_per_thread=[1], threads_per_warp=[THREADS_PER_WARP], warps_per_cta=[8], order=[0]),
+    ttgl.BlockedLayout(size_per_thread=[2], threads_per_warp=[THREADS_PER_WARP], warps_per_cta=[8], order=[0]),
+    ttgl.BlockedLayout(size_per_thread=[4], threads_per_warp=[THREADS_PER_WARP], warps_per_cta=[8], order=[0]),
+    ttgl.BlockedLayout(size_per_thread=[8], threads_per_warp=[THREADS_PER_WARP], warps_per_cta=[8], order=[0]),
 ])
 @pytest.mark.parametrize("XBLOCK", [128, 256, 512, 1024, 2048])
 def test_copy_kernel(layout, XBLOCK):
@@ -353,9 +354,8 @@ def test_amd_mfma_scaled(M, N, K, rhs_scale, mxfp_type, normal_type):
     torch.testing.assert_close(z, z_ref, rtol=1e-5, atol=1e-5)
 
 
-THREADS_PER_WARP = triton.runtime.driver.active.get_current_target().warp_size
-
-scan_layouts = [
+@pytest.mark.parametrize("M, N", [(32, 16), (32, 32), (32, 64), (64, 32)])
+@pytest.mark.parametrize("src_layout", [
     ttgl.BlockedLayout([1, 4], [4, THREADS_PER_WARP // 4], [4, 1], [0, 1]),
     ttgl.BlockedLayout([1, 4], [8, THREADS_PER_WARP // 8], [4, 1], [0, 1]),
     ttgl.BlockedLayout([4, 1], [4, THREADS_PER_WARP // 4], [1, 4], [0, 1]),
@@ -367,26 +367,31 @@ scan_layouts = [
     ttgl.BlockedLayout([2, 2], [4, THREADS_PER_WARP // 4], [2, 2], [1, 0]),
     ttgl.BlockedLayout([2, 2], [8, THREADS_PER_WARP // 8], [2, 2], [1, 0]),
     ttgl.BlockedLayout([1, 2], [1, THREADS_PER_WARP], [1, 4], [1, 0]),
-]
-
-
-@pytest.mark.parametrize("M, N", [(32, 16), (32, 32), (32, 64), (64, 32)])
-@pytest.mark.parametrize("src_layout", scan_layouts)
+])
 @pytest.mark.parametrize("axis", [0, 1])
 @pytest.mark.parametrize("add_overflow_check", [False, True])
 def test_scan_layouts(M, N, src_layout, axis, add_overflow_check, device):
+
     @gluon.jit
     def _combine(a, b):
         return a + b
 
     @gluon.jit
     def _combine_assert(a, b):
-        ttgl.static_assert(True)
+        # Overflow check for (a + b) in signed int32
+        a64 = a.to(ttgl.int64)
+        b64 = b.to(ttgl.int64)
+        s64 = a64 + b64
+        i32_max = 2147483647
+        i32_min = -2147483648
+        lt_max = s64 < i32_max
+        ge_min = s64 >= i32_min
+        ok = lt_max and ge_min
+        ttgl.assert_(ok, "overflow detected")
         return a + b
 
     @gluon.jit
-    def kernel(x_ptr, z_ptr, M: ttgl.constexpr, N: ttgl.constexpr,
-               layout: ttgl.constexpr, axis: ttgl.constexpr,
+    def kernel(x_ptr, z_ptr, M: ttgl.constexpr, N: ttgl.constexpr, layout: ttgl.constexpr, axis: ttgl.constexpr,
                use_assert: ttgl.constexpr):
         x_offs_m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, layout))[:, None]
         x_offs_n = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, layout))[None, :]
