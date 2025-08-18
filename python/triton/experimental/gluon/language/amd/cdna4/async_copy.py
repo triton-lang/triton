@@ -1,4 +1,4 @@
-from ..._core import ir, builtin, _unwrap_if_constexpr, shared_memory_descriptor
+from ..._core import ir, builtin, _unwrap_if_constexpr
 from ..._semantic import _check
 from ..._layouts import BlockedLayout, SliceLayout
 from ..cdna3 import _verify_buffer_ops
@@ -6,8 +6,8 @@ from ..cdna3 import _verify_buffer_ops
 __all__ = [
     "global_load_to_shared",
     "buffer_load_to_shared",
-    "async_wait",
-    "async_hint_shared",
+    "wait",
+    "load_shared_relaxed",
 ]
 
 
@@ -16,8 +16,8 @@ def global_load_to_shared(dest, ptr, mask=None, other=None, cache_modifier="", _
     """
     AMD global load to shared operation. This operation loads data directly
     from global memory to shared memory without going through registers. It
-    operation happens asynchronously and requires a subsequent `async_wait`
-    to ensure the data is available in shared memory.
+    happens asynchronously and requires a subsequent `wait` to ensure the data
+    is available in shared memory.
     Compared to `buffer_load_to_shared`, it requires a tensor pointer which
     supports 64-bit indexing range for each thread in a block, which gives more
     flexibility, but at the cost of higher register pressure and no hardware
@@ -69,7 +69,7 @@ def buffer_load_to_shared(dest, ptr, offsets, mask=None, other=None, cache_modif
     but it accesses global memory via a scalar base pointer and a tensor of
     32-bit offsets instead of a tensor of pointers. This operation loads data
     directly from global memory to shared memory without going through
-    registers. It happens asynchronously and requires a subsequent `async_wait`
+    registers. It happens asynchronously and requires a subsequent `wait`
     to ensure the data is available in shared memory.
     Compared to `global_load_to_shared`, it has better performance and also
     supports hardware out-of-bound masking. But it strictly requires a
@@ -114,13 +114,13 @@ def buffer_load_to_shared(dest, ptr, offsets, mask=None, other=None, cache_modif
 
 
 @builtin
-def async_wait(num_outstanding=0, _semantic=None):
+def wait(num_outstanding=0, _semantic=None):
     """
-    Wait for outstanding asynchronous memory operations, this includes
-    normal load like `load` and `buffer_load`, as well as all async memory
-    operations like  `global_load_to_shared` and `buffer_load_to_shared`.
-    It will block until the number of outstanding operations is less than or
-    equal to `num_outstanding`.
+    Wait for outstanding memory operations, this includes normal load like
+    `load` and `buffer_load`, as well as all direct to shared memory operations
+    like  `global_load_to_shared` and `buffer_load_to_shared`.
+    It will block until the number of outstanding memory operations is less than
+    or equal to `num_outstanding`.
 
     Args:
         num_outstanding (int): The number of outstanding operations to wait for. Defaults to 0.
@@ -130,41 +130,15 @@ def async_wait(num_outstanding=0, _semantic=None):
 
 
 @builtin
-def async_hint_shared(smem, _semantic=None):
+def load_shared_relaxed(smem, layout, _semantic=None):
     """
-    Gives hints to the underlying compiler to avoid emitting unnecessary waits
-    before loading from the target shared memory for better optimization.
-
-    Args:
-        smem (shared_memory_descriptor): The target shared memory descriptor.
-    """
-    return async_shared_memory_descriptor(smem)
-
-
-class async_shared_memory_descriptor(shared_memory_descriptor):
-    """
-    A wrapper for shared memory descriptor that gives hints to the underlying
-    compiler to avoid emitting unnecessary waits before loading from the
+    Load a tensor from shared memory with extra hints for the underlying
+    compiler to avoid emitting unnecessary waits before loading from the target
     shared memory for better optimization.
     """
     SYNCED_VIA_WAIT_ATTR_NAME = "ttg.amdgpu.syncedViaAsyncWait"
 
-    def __init__(self, smem):
-        self.handle = smem.handle
-        self.type = smem.type
-
-    @builtin
-    def load(self, layout, _semantic):
-        """
-        Load a tensor from shared memory.
-
-        Args:
-            layout (DistributedLayout): The destination layout of the tensor.
-
-        Returns:
-            tensor: A Gluon tensor containing the loaded data.
-        """
-        layout = _unwrap_if_constexpr(layout)
-        ret = _semantic.shared_load(self, layout)
-        ret.handle.set_attr(self.SYNCED_VIA_WAIT_ATTR_NAME, _semantic.builder.get_bool_attr(True))
-        return ret
+    layout = _unwrap_if_constexpr(layout)
+    ret = _semantic.shared_load(smem, layout)
+    ret.handle.set_attr(SYNCED_VIA_WAIT_ATTR_NAME, _semantic.builder.get_bool_attr(True))
+    return ret

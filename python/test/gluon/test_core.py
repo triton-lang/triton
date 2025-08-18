@@ -160,7 +160,6 @@ def test_amd_direct_load_to_shared(use_buffer_load):
         shared: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, order=[1, 0])
 
         smem = ttgl.allocate_shared_memory(a_ptr.dtype.element_ty, [128, 16], shared)
-        smem = cdna4_async_copy.async_hint_shared(smem)
         offsets = ttgl.arange(0, 128, layout=ttgl.SliceLayout(1, blocked))[:, None] * 16 + \
                   ttgl.arange(0, 16, layout=ttgl.SliceLayout(0, blocked))[None, :]
         if use_buffer_load:
@@ -168,8 +167,8 @@ def test_amd_direct_load_to_shared(use_buffer_load):
         else:
             cdna4_async_copy.global_load_to_shared(smem, a_ptr + offsets)
 
-        cdna4_async_copy.async_wait(0)
-        a = smem.load(blocked)
+        cdna4_async_copy.wait(0)
+        a = cdna4_async_copy.load_shared_relaxed(smem, blocked)
 
         ttgl.store(b_ptr + offsets, a)
 
