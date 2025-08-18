@@ -12,6 +12,8 @@ from triton.experimental.gluon.language.nvidia.blackwell import mbarrier, tma, T
 from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
 from triton.experimental.gluon.language.amd import _layouts as amd_layouts
 from triton.experimental.gluon.language.amd.cdna4 import async_copy as cdna4_async_copy
+from triton.experimental.gluon.language.extra import libdevice
+
 from triton._filecheck import filecheck_test, run_parser
 from triton.runtime.jit import MockTensor
 import triton.language as tl
@@ -20,6 +22,7 @@ from triton.compiler.errors import CompilationError, CompileTimeAssertionFailure
 TARGET_PAT = re.compile('ttg.target = "[^"]*"')
 # HIP backend can add this attribute to function parameters
 PTRRANGE_PAT = re.compile('(, )?tt.pointer_range = 32 : i32')
+LIBDEVICE_PAT = re.compile('{libname = "", libpath = "", pure = true, symbol = "__.*"}')
 
 BLACKWELL_TARGET = GPUTarget("cuda", 100, 32)
 HOPPER_TARGET = GPUTarget("cuda", 90, 32)
@@ -33,7 +36,9 @@ ALL_TARGETS = [AMPERE_TARGET, HOPPER_TARGET, BLACKWELL_TARGET, HIP_TARGET]
 
 def anonymize_ir(ir):
     ir = TARGET_PAT.sub('ttg.target = "..."', ir)
-    return PTRRANGE_PAT.sub('', ir)
+    ir = PTRRANGE_PAT.sub('', ir)
+    ir = LIBDEVICE_PAT.sub('{libname = "", libpath = "", pure = true, symbol = "..."}', ir)
+    return ir
 
 
 def make_args(*args, **kwargs):
@@ -212,7 +217,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %4 = arith.bitcast %c1_i32 : i32 to i32
     %5 = ub.poison : i32
     scf.for %arg0 = %2 to %3 step %4  : i32 {
-      %6 = ttg.memdesc_index %result_2, %arg0 : !ttg.memdesc<2x128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable, 2x128x128>
+      %6 = ttg.memdesc_index %result_2[%arg0] : !ttg.memdesc<2x128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable, 2x128x128>
       %result_4 = ttng.tmem_load %6 : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable, 2x128x128> -> tensor<128x128xf32, #blocked>
     }
     tt.return
@@ -292,7 +297,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %3 = arith.bitcast %c1_i32 : i32 to i32
     %4 = ub.poison : i32
     scf.for %arg0 = %1 to %2 step %3  : i32 {
-      %5 = ttg.memdesc_index %0, %arg0 : !ttg.memdesc<4x256xi32, #shared, #smem, mutable> -> !ttg.memdesc<256xi32, #shared, #smem, mutable, 4x256>
+      %5 = ttg.memdesc_index %0[%arg0] : !ttg.memdesc<4x256xi32, #shared, #smem, mutable> -> !ttg.memdesc<256xi32, #shared, #smem, mutable, 4x256>
       %6 = ttg.local_load %5 : !ttg.memdesc<256xi32, #shared, #smem, mutable, 4x256> -> tensor<256xi32, #blocked>
     }
     tt.return
@@ -336,7 +341,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   tt.func public @shared_memory_cast_kernel() attributes {noinline = false} {
     %0 = ttg.local_alloc : () -> !ttg.memdesc<2x256x128xi8, #shared, #smem, mutable>
     %c0_i32 = arith.constant 0 : i32
-    %1 = ttg.memdesc_index %0, %c0_i32 : !ttg.memdesc<2x256x128xi8, #shared, #smem, mutable> -> !ttg.memdesc<256x128xi8, #shared, #smem, mutable, 2x256x128>
+    %1 = ttg.memdesc_index %0[%c0_i32] : !ttg.memdesc<2x256x128xi8, #shared, #smem, mutable> -> !ttg.memdesc<256x128xi8, #shared, #smem, mutable, 2x256x128>
     %2 = ttg.memdesc_trans %1 {order = array<i32: 1, 0>} : !ttg.memdesc<256x128xi8, #shared, #smem, mutable, 2x256x128> -> !ttg.memdesc<128x256xi8, #shared1, #smem, mutable, 2x128x256>
     tt.call @"test_frontend.anchor_noinline__MDi8S128_256SLNVMMA_64_8_True_False_NVMMALAS[2, 128, 256]ASMD__"(%2) : (!ttg.memdesc<128x256xi8, #shared1, #smem, mutable, 2x128x256>) -> ()
     %3 = ttg.local_alloc : () -> !ttg.memdesc<32x1x4x64xf16, #shared2, #smem, mutable>
@@ -791,7 +796,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   tt.func public @tmem_index_kernel() attributes {noinline = false} {
     %result = ttng.tmem_alloc : () -> !ttg.memdesc<2x256x256xi32, #tmem, #ttng.tensor_memory, mutable>
     %c0_i32 = arith.constant 0 : i32
-    %0 = ttg.memdesc_index %result, %c0_i32 : !ttg.memdesc<2x256x256xi32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<256x256xi32, #tmem, #ttng.tensor_memory, mutable, 2x256x256>
+    %0 = ttg.memdesc_index %result[%c0_i32] : !ttg.memdesc<2x256x256xi32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<256x256xi32, #tmem, #ttng.tensor_memory, mutable, 2x256x256>
     tt.return
   }
 }
@@ -923,6 +928,82 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %14 = math.floor %cst_0 : tensor<16x16xf32, #blocked>
     %15 = math.ceil %cst_0 : tensor<16x16xf32, #blocked>
     %16 = math.fma %cst_0, %cst_2, %cst_4 : tensor<16x16xf32, #blocked>
+    tt.return
+  }
+}
+""")
+
+
+@gluon.jit
+def libdevice_kernel():
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 32], [4, 1], [1, 0])
+    a = ttgl.full([4, 32], 1, ttgl.float32, layout)
+    b = ttgl.full([4, 32], 2, ttgl.float32, layout)
+    c = ttgl.full([4, 32], 4, ttgl.float32, layout)
+    libdevice.abs(a)
+    libdevice.fast_dividef(a, b)
+    libdevice.fma(a, b, c)
+
+
+@pytest.mark.parametrize("target", ALL_TARGETS)
+def test_libdevice(target):
+    mod = run_parser(libdevice_kernel, target=target)
+    expecttest.assert_expected_inline(
+        anonymize_ir(mod.str_nodebug()), """\
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @libdevice_kernel() attributes {noinline = false} {
+    %cst = arith.constant 1.000000e+00 : f32
+    %cst_0 = arith.constant dense<1.000000e+00> : tensor<4x32xf32, #blocked>
+    %cst_1 = arith.constant 2.000000e+00 : f32
+    %cst_2 = arith.constant dense<2.000000e+00> : tensor<4x32xf32, #blocked>
+    %cst_3 = arith.constant 4.000000e+00 : f32
+    %cst_4 = arith.constant dense<4.000000e+00> : tensor<4x32xf32, #blocked>
+    %0 = tt.extern_elementwise %cst_0 {libname = "", libpath = "", pure = true, symbol = "..."} : (tensor<4x32xf32, #blocked>) -> tensor<4x32xf32, #blocked>
+    %1 = tt.extern_elementwise %cst_0, %cst_2 {libname = "", libpath = "", pure = true, symbol = "..."} : (tensor<4x32xf32, #blocked>, tensor<4x32xf32, #blocked>) -> tensor<4x32xf32, #blocked>
+    %2 = tt.extern_elementwise %cst_0, %cst_2, %cst_4 {libname = "", libpath = "", pure = true, symbol = "..."} : (tensor<4x32xf32, #blocked>, tensor<4x32xf32, #blocked>, tensor<4x32xf32, #blocked>) -> tensor<4x32xf32, #blocked>
+    tt.return
+  }
+}
+""")
+
+
+@gluon.jit
+def libdevice_implicit_broadcast_kernel():
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 32], [4, 1], [1, 0])
+    a = ttgl.full([4, 32], 1, ttgl.float32, layout)
+    b = ttgl.full([32], 2, ttgl.float32, ttgl.SliceLayout(0, layout))[None, :]
+    c = ttgl.full([4], 4, ttgl.float32, ttgl.SliceLayout(1, layout))[:, None]
+    libdevice.abs(a)
+    libdevice.fast_dividef(a, b)
+    libdevice.fma(a, b, c)
+
+
+@pytest.mark.parametrize("target", ALL_TARGETS)
+def test_libdevice_implicit_broadcast(target):
+    mod = run_parser(libdevice_implicit_broadcast_kernel, target=target)
+    expecttest.assert_expected_inline(
+        anonymize_ir(mod.str_nodebug()), """\
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @libdevice_implicit_broadcast_kernel() attributes {noinline = false} {
+    %cst = arith.constant 1.000000e+00 : f32
+    %cst_0 = arith.constant dense<1.000000e+00> : tensor<4x32xf32, #blocked>
+    %cst_1 = arith.constant 2.000000e+00 : f32
+    %cst_2 = arith.constant dense<2.000000e+00> : tensor<32xf32, #ttg.slice<{dim = 0, parent = #blocked}>>
+    %0 = tt.expand_dims %cst_2 {axis = 0 : i32} : tensor<32xf32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x32xf32, #blocked>
+    %cst_3 = arith.constant 4.000000e+00 : f32
+    %cst_4 = arith.constant dense<4.000000e+00> : tensor<4xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    %1 = tt.expand_dims %cst_4 {axis = 1 : i32} : tensor<4xf32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<4x1xf32, #blocked>
+    %2 = tt.extern_elementwise %cst_0 {libname = "", libpath = "", pure = true, symbol = "..."} : (tensor<4x32xf32, #blocked>) -> tensor<4x32xf32, #blocked>
+    %3 = tt.broadcast %0 : tensor<1x32xf32, #blocked> -> tensor<4x32xf32, #blocked>
+    %4 = tt.broadcast %0 : tensor<1x32xf32, #blocked> -> tensor<4x32xf32, #blocked>
+    %5 = tt.extern_elementwise %cst_0, %4 {libname = "", libpath = "", pure = true, symbol = "..."} : (tensor<4x32xf32, #blocked>, tensor<4x32xf32, #blocked>) -> tensor<4x32xf32, #blocked>
+    %6 = tt.broadcast %0 : tensor<1x32xf32, #blocked> -> tensor<4x32xf32, #blocked>
+    %7 = tt.broadcast %1 : tensor<4x1xf32, #blocked> -> tensor<4x32xf32, #blocked>
+    %8 = tt.broadcast %0 : tensor<1x32xf32, #blocked> -> tensor<4x32xf32, #blocked>
+    %9 = tt.broadcast %1 : tensor<4x1xf32, #blocked> -> tensor<4x32xf32, #blocked>
+    %10 = tt.extern_elementwise %cst_0, %8, %9 {libname = "", libpath = "", pure = true, symbol = "..."} : (tensor<4x32xf32, #blocked>, tensor<4x32xf32, #blocked>, tensor<4x32xf32, #blocked>) -> tensor<4x32xf32, #blocked>
     tt.return
   }
 }

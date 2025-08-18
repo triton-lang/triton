@@ -6450,7 +6450,7 @@ def test_split_subview(M, N, M_tile_size, N_tile_size, device, tmp_path: pathlib
         %c0_i32 = arith.constant 0 : i32
 
         %12 = ttg.local_alloc : () -> !ttg.memdesc<1x{M}x{N}xf16, #shared, #smem, mutable>
-        %13 = ttg.memdesc_index %12, %c0_i32 : !ttg.memdesc<1x{M}x{N}xf16, #shared, #smem, mutable> -> !ttg.memdesc<{M}x{N}xf16, #shared, #smem, mutable>
+        %13 = ttg.memdesc_index %12[%c0_i32] : !ttg.memdesc<1x{M}x{N}xf16, #shared, #smem, mutable> -> !ttg.memdesc<{M}x{N}xf16, #shared, #smem, mutable>
         ttg.local_store %11, %13 : tensor<{M}x{N}xf16, #blocked> -> !ttg.memdesc<{M}x{N}xf16, #shared, #smem, mutable>
 
     """
@@ -7521,6 +7521,7 @@ def test_side_effectful_reduction_2d(device, reduce_dim):
     torch.testing.assert_close(Z, X.sum(reduce_dim).to(torch.int32))
 
 
+@pytest.mark.interpreter
 def test_dtype(device):
 
     @triton.jit
@@ -7531,7 +7532,7 @@ def test_dtype(device):
         tl.static_assert(dtype_x == tl.int8 or (dtype_x == tl.int16 or dtype_x == tl.int32))
 
     X = torch.empty(1, dtype=torch.int32, device=device)
-    kernel.warmup(X, grid=(1, ))
+    kernel[(1, )](X)
 
 
 def test_side_effectful_scan(device):

@@ -313,6 +313,7 @@ class CUDABackend(BaseBackend):
         nvidia.passes.ttnvgpuir.add_fence_insertion(pm, capability)
         nvidia.passes.ttnvgpuir.add_lower_mma(pm)
         passes.common.add_sccp(pm)
+        passes.common.add_cse(pm)
         passes.common.add_canonicalizer(pm)
 
         pm.run(mod)

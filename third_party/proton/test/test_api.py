@@ -1,3 +1,9 @@
+"""
+Test module for proton's API functionality.
+No GPU kernel should be declared in this test.
+Profile correctness tests involving GPU kernels should be placed in `test_profile.py`.
+"""
+
 import json
 import triton.profiler as proton
 import pathlib

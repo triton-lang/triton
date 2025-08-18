@@ -378,7 +378,8 @@ class HIPBackend(BaseBackend):
             llvm.link_extern_libs(llvm_mod, paths)
         elif options.extern_libs:
             paths = [path for (name, path) in options.extern_libs if amd.need_extern_lib(llvm_mod, name)]
-            llvm.link_extern_libs(llvm_mod, paths)
+            if len(paths) > 0:
+                llvm.link_extern_libs(llvm_mod, paths)
 
         llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3, options.arch, '', [], options.enable_fp_fusion)
 

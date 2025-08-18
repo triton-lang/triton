@@ -326,7 +326,7 @@ tt.func @extract_slice(%A : !tt.ptr<f16>) {
   // expected-remark @below {{offset = 0, size = 512}}
   %cst0 = ttg.local_alloc : () -> !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
   %index = arith.constant 0 : i32
-  %cst1 = ttg.memdesc_index %cst0, %index : !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable> -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  %cst1 = ttg.memdesc_index %cst0[%index] : !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable> -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
   tt.return
 }
 
@@ -445,7 +445,7 @@ tt.func @for_if_slice(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>
     scf.if %i1 {
       %zero = arith.constant 0 : i32
       %index = arith.constant 8 : i32
-      %cst0 = ttg.memdesc_index %a_shared, %index : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable> -> !ttg.memdesc<32xf16, #A_SHARED, #ttg.shared_memory, mutable>
+      %cst0 = ttg.memdesc_index %a_shared[%index] : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable> -> !ttg.memdesc<32xf16, #A_SHARED, #ttg.shared_memory, mutable>
       scf.yield
     }
     scf.yield %b_shared, %a_shared, %a_shared : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>, !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>, !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>
@@ -834,7 +834,7 @@ tt.func @aliasing_in_partition() {
     // expected-remark @below {{offset = 0, size = 16}}
     %0 = ttg.local_alloc : () -> !ttg.memdesc<2x1xi64, #A_SHARED, #smem, mutable>
     %c0_i32 = arith.constant 0 : i32
-    %1 = ttg.memdesc_index %0, %c0_i32 : !ttg.memdesc<2x1xi64, #A_SHARED, #smem, mutable> -> !ttg.memdesc<1xi64, #A_SHARED, #smem, mutable>
+    %1 = ttg.memdesc_index %0[%c0_i32] : !ttg.memdesc<2x1xi64, #A_SHARED, #smem, mutable> -> !ttg.memdesc<1xi64, #A_SHARED, #smem, mutable>
     // expected-remark @below {{offset = 16, size = 16}}
     %2 = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>
     "use"(%1) : (!ttg.memdesc<1xi64, #A_SHARED, #smem, mutable>) -> ()
