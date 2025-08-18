@@ -20,16 +20,9 @@ def fresh_triton_cache():
     with tempfile.TemporaryDirectory() as tmpdir:
         from triton import knobs
 
-        old_jit_cache_hook = getattr(knobs.runtime, "jit_cache_hook", None)
-        old_post_compile_hook = getattr(knobs.runtime, "jit_post_compile_hook", None)
-
-        with knobs.cache.scope():
+        with knobs.cache.scope(), knobs.runtime.scope():
             knobs.cache.dir = tmpdir
-            try:
-                yield tmpdir
-            finally:
-                knobs.runtime.jit_cache_hook = old_jit_cache_hook
-                knobs.runtime.jit_post_compile_hook = old_post_compile_hook
+            yield tmpdir
 
 
 @pytest.fixture
