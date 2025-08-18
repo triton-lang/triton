@@ -391,32 +391,6 @@ private:
                                         .buf = allocOp.getResult()});
       }
     }
-    if (auto mmav5Op = dyn_cast<ttng::TCGen5MMAOp>(op)) {
-      SmallVector<std::tuple<Value, Value>> barriersAndPreds = llvm::to_vector(
-          llvm::zip(mmav5Op.getBarriers(), mmav5Op.getBarrierPreds()));
-
-      effects.emplace_back(
-          MemEffects{.rw = MemEffects::RW::Read,
-                     .trackingKind = MemEffects::TrackingKind::Barrier,
-                     .buf = mmav5Op.getA(),
-                     .barriersAndPreds = barriersAndPreds,
-                     .pred = mmav5Op.getPred()});
-
-      effects.emplace_back(
-          MemEffects{.rw = MemEffects::RW::Read,
-                     .trackingKind = MemEffects::TrackingKind::Barrier,
-                     .buf = mmav5Op.getB(),
-                     .barriersAndPreds = barriersAndPreds,
-                     .pred = mmav5Op.getPred()});
-
-      effects.emplace_back(
-          MemEffects{.rw = MemEffects::RW::Write,
-                     .trackingKind = MemEffects::TrackingKind::Barrier,
-                     .buf = mmav5Op.getAccumulator(),
-                     .barriersAndPreds = barriersAndPreds,
-                     .hwPipelined = true,
-                     .pred = mmav5Op.getPred()});
-    }
     if (auto wgmmaOp = dyn_cast<ttng::WarpGroupDotOp>(op)) {
       if (wgmmaOp.getIsAsync() == true) {
         if (isa<ttg::SharedEncodingTrait>(

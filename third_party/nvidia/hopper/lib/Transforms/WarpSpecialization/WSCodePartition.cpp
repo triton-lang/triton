@@ -825,7 +825,7 @@ desyncTCGen5MMAOp(OpBuilderWithAsyncTaskIds &builder, ttng::TCGen5MMAOp mmaOp,
   builder.setAsyncTaskIdsFromOp(mmaOp);
   auto consumerBarrier =
       getBarrierForPipelineStage(builder, barrierAlloc, bufferIdx);
-  assert(mmaOp.getBarriers().empty() && "mmaOp should not have barriers");
+  assert(!mmaOp.getIsAsync() && "mmaOp should be sync");
   auto pred = builder.createWithAsyncTaskIds<arith::ConstantIntOp>(
       mmaOp->getLoc(), true, 1);
   builder.setInsertionPointAfter(mmaOp);

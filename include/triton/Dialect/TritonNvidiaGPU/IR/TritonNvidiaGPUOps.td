@@ -416,7 +416,6 @@ def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [
     DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
     DeclareOpInterfaceMethods<DotOpInterface>,
     DeclareOpInterfaceMethods<MMAv5OpInterface>,
-    AttrSizedOperandSegments
 ]> {
   let summary = "block level op mapping to tensorcore gen5 mma";
 
@@ -439,37 +438,23 @@ def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [
     Optional<TTG_AsyncToken>:$acc_dep,
     I1:$useD,
     I1:$pred,
-    Variadic<TTG_MemDescType>:$barriers,
-    Variadic<I1>:$barrier_preds,
-    UnitAttr:$is_async,
-    UnitAttr:$two_ctas
+    UnitAttr:$two_ctas,
+    UnitAttr:$is_async
   );
   let results = (outs Optional<TTG_AsyncToken>:$token);
 
-  let builders = [
-    OpBuilder<(ins "Type":$token,
-      "Value":$a, "Value":$b, "Value":$d, "Value":$acc_dep, "Value":$useD,
-      "Value":$pred, CArg<"bool", "false">:$two_ctas,
-      CArg<"ValueRange", "{}">:$barriers,
-      CArg<"ValueRange", "{}">:$barrier_preds,
-      CArg<"bool", "false">:$is_async)>
-  ];
-
   let assemblyFormat = [{
     $a `,` $b `,` $d `` custom<Token>($acc_dep, type($token)) `,` $useD`,`
-    $pred `` custom<BarriersAndPreds>($barriers, $barrier_preds)
+    $pred
     attr-dict `:` qualified(type($a)) `,` qualified(type($b)) `,`
-    qualified(type($d)) (`,` qualified(type($barriers))^)?
+    qualified(type($d))
   }];
-
-  let hasVerifier = 1;
 }
 
 def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [
     DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
     DeclareOpInterfaceMethods<DotOpInterface, ["verifyDims", "verifyOutputDims"]>,
     DeclareOpInterfaceMethods<MMAv5OpInterface>,
-    AttrSizedOperandSegments
 ]> {
   let summary = "block level op mapping to tensorcore gen5 mma";
 
@@ -495,8 +480,6 @@ def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [
     TT_ScaleDotElemTypeAttr:$b_type,
     I1:$useD,
     I1:$pred,
-    Variadic<TTG_MemDescType>:$barriers,
-    Variadic<I1>:$barrier_preds,
     UnitAttr:$is_async
   );
   let results = (outs Optional<TTG_AsyncToken>:$token);
@@ -507,30 +490,14 @@ def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [
     int64_t getBlockK();
   }];
 
-  let builders = [
-    // Namespaces need to be prefixed so ODS prefers our
-    // custom builder signature over the default-generated one.
-    OpBuilder<(ins "::mlir::Type":$token,
-      "::mlir::Value":$a, "::mlir::Value":$b, "::mlir::Value":$d,
-      "::mlir::Value":$acc_dep, "::mlir::Value":$a_scale,
-      "::mlir::Value":$b_scale, "::mlir::triton::ScaleDotElemType":$a_type,
-      "::mlir::triton::ScaleDotElemType":$b_type,
-      "::mlir::Value":$useD, "::mlir::Value":$pred,
-      CArg<"::mlir::ValueRange", "{}">:$barriers,
-      CArg<"::mlir::ValueRange", "{}">:$barrier_preds,
-      CArg<"bool", "false">:$is_async)>
-  ];
-
   let assemblyFormat = [{
     $a `,` $b `,` $d `` custom<Token>($acc_dep, type($token)) `,` $a_scale `,`
     $b_scale `,` $useD `,` $pred `lhs` `=` $a_type `rhs` `=` $b_type
-    `` custom<BarriersAndPreds>($barriers, $barrier_preds)
+    ``
     attr-dict `:` qualified(type($a)) `,` qualified(type($b)) `,`
     qualified(type($d)) `,` qualified(type($a_scale)) `,`
-    qualified(type($b_scale)) (`,` qualified(type($barriers))^)?
+    qualified(type($b_scale))
   }];
-
-  let hasVerifier = 1;
 }
 
 def TTNG_TCGen5CommitOp : TTNG_Op<"tc_gen5_commit"> {

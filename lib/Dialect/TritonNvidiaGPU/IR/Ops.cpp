@@ -261,13 +261,6 @@ static void printToken(OpAsmPrinter &p, Operation *op, Value dep, Type token) {
   p << ']';
 }
 
-LogicalResult TCGen5MMAOp::verify() {
-  if (!getIsAsync() && !getBarriers().empty()) {
-    return emitOpError("The op is synchronous but a barrier is present.");
-  }
-  return success();
-}
-
 void TCGen5MMAOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
@@ -305,11 +298,6 @@ void TCGen5MMAOp::setUseAccumulator(Value flag) {
   getUseDMutable().assign(flag);
 }
 
-void TCGen5MMAOp::addCompletionBarrier(Value barrier, Value pred) {
-  getBarrierPredsMutable().append(pred);
-  getBarriersMutable().append(barrier);
-}
-
 TypedValue<MemDescType> TCGen5MMAOp::getAccumulator() { return getD(); }
 
 void TCGen5MMAOp::setAccumulator(Value accum) { getDMutable().assign(accum); }
@@ -318,26 +306,7 @@ Value TCGen5MMAOp::getPredicate() { return getPred(); }
 
 void TCGen5MMAOp::setPredicate(Value pred) { getPredMutable().assign(pred); }
 
-void TCGen5MMAOp::build(OpBuilder &builder, OperationState &state, Type token,
-                        Value a, Value b, Value d, Value accDep, Value useD,
-                        Value pred, bool useTwoCTAs, ValueRange barriers,
-                        ValueRange barrierPreds, bool isAsync) {
-  if (!barriers.empty()) {
-    isAsync = true;
-  }
-  build(builder, state, token, a, b, d, accDep, useD, pred, barriers,
-        barrierPreds, isAsync ? builder.getUnitAttr() : UnitAttr(),
-        useTwoCTAs ? builder.getUnitAttr() : UnitAttr());
-}
-
 // -- TCGen5MMAScaledOp --
-LogicalResult TCGen5MMAScaledOp::verify() {
-  if (!getIsAsync() && !getBarriers().empty()) {
-    return emitOpError("The op is synchronous but a barrier is present.");
-  }
-  return success();
-}
-
 void TCGen5MMAScaledOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
@@ -425,11 +394,6 @@ void TCGen5MMAScaledOp::setUseAccumulator(Value flag) {
   getUseDMutable().assign(flag);
 }
 
-void TCGen5MMAScaledOp::addCompletionBarrier(Value barrier, Value pred) {
-  getBarrierPredsMutable().append(pred);
-  getBarriersMutable().append(barrier);
-}
-
 TypedValue<MemDescType> TCGen5MMAScaledOp::getAccumulator() { return getD(); }
 
 void TCGen5MMAScaledOp::setAccumulator(Value accum) {
@@ -479,22 +443,6 @@ int64_t TCGen5MMAScaledOp::getBlockK() {
   if (this->getAType() == ScaleDotElemType::E2M1 && !transA)
     blockK *= 2;
   return blockK;
-}
-
-void TCGen5MMAScaledOp::build(OpBuilder &builder, OperationState &state,
-                              Type token, Value a, Value b, Value d,
-                              Value accDep, Value aScale, Value bScale,
-                              ScaleDotElemType aType, ScaleDotElemType bType,
-                              Value useD, Value pred, ValueRange barriers,
-                              ValueRange barrierPreds, bool isAsync) {
-  MLIRContext *ctx = builder.getContext();
-  if (!barriers.empty()) {
-    isAsync = true;
-  }
-  build(builder, state, token, a, b, d, accDep, aScale, bScale,
-        ScaleDotElemTypeAttr::get(ctx, aType),
-        ScaleDotElemTypeAttr::get(ctx, bType), useD, pred, barriers,
-        barrierPreds, isAsync ? builder.getUnitAttr() : UnitAttr());
 }
 
 // -- TMEMStoreOp --
