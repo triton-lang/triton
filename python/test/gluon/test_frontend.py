@@ -1511,7 +1511,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 
 @pytest.mark.parametrize("target", [HIP_TARGET_CDNA4])
-def test_load_shared_relaxed(target):
+def test_amd_load_shared_relaxed(target):
 
     @gluon.jit
     def kernel():
@@ -1538,7 +1538,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 
 @pytest.mark.parametrize("target", [HIP_TARGET_CDNA4])
-def test_load_shared_relaxed_in_loop(target):
+def test_amd_load_shared_relaxed_in_loop(target):
 
     @gluon.jit
     def kernel():
