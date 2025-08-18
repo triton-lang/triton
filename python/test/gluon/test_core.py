@@ -10,6 +10,7 @@ from triton.experimental.gluon import language as ttgl
 from triton.experimental.gluon.language.nvidia.ampere import async_copy, mbarrier
 from triton.experimental.gluon.language.nvidia.hopper import tma, fence_async_shared
 from triton.experimental.gluon.language.nvidia import hopper
+from triton.experimental.gluon.language.extra import libdevice
 
 
 @gluon.jit
@@ -351,3 +352,48 @@ def test_amd_mfma_scaled(M, N, K, rhs_scale, mxfp_type, normal_type):
     triton_kernel[(1, )](x, *x.stride(), scale_x, y, *y.stride(), scale_y, z_ref, M, N, K, type_a, type_b)
 
     torch.testing.assert_close(z, z_ref, rtol=1e-5, atol=1e-5)
+
+
+def test_math_fast_expf():
+
+    @gluon.jit
+    def fast_expf_kernel(x_ptr, y_ptr, warp_size: ttgl.constexpr, num_warps: ttgl.constexpr):
+        blocked: ttgl.constexpr = ttgl.BlockedLayout([1], [warp_size], [num_warps], [0])
+
+        offs = ttgl.arange(0, warp_size * num_warps, layout=blocked)
+        x = ttgl.load(x_ptr + offs)
+        y = libdevice.fast_expf(x)
+        ttgl.store(y_ptr + offs, y)
+
+    warp_size = 32 if is_cuda() else 64
+    num_warps = 4
+
+    torch.manual_seed(0)
+    x = torch.randn(warp_size * num_warps, device="cuda", dtype=torch.float32)
+    y = torch.empty_like(x)
+    fast_expf_kernel[(1, )](x, y, warp_size, num_warps)
+    torch.testing.assert_close(y, torch.exp(x), atol=1e-5, rtol=1e-4)
+
+
+def test_math_fast_dividef():
+
+    @gluon.jit
+    def fast_dividef_kernel(x_ptr, y_ptr, z_ptr, warp_size: ttgl.constexpr, num_warps: ttgl.constexpr):
+        blocked: ttgl.constexpr = ttgl.BlockedLayout([1], [warp_size], [num_warps], [0])
+
+        offs = ttgl.arange(0, warp_size * num_warps, layout=blocked)
+        x = ttgl.load(x_ptr + offs)
+        y = ttgl.load(y_ptr + offs)
+        z = libdevice.fast_dividef(x, y)
+        ttgl.store(z_ptr + offs, z)
+
+    warp_size = 32 if is_cuda() else 64
+    num_warps = 4
+
+    torch.manual_seed(0)
+    x = torch.randn(warp_size * num_warps, device="cuda", dtype=torch.float32)
+    y = torch.randn_like(x)
+    z = torch.empty_like(x)
+    y[y == 0] = 1.0
+    fast_dividef_kernel[(1, )](x, y, z, warp_size, num_warps)
+    torch.testing.assert_close(z, torch.div(x, y), atol=1e-5, rtol=1e-4)
