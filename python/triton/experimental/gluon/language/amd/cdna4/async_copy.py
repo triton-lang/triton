@@ -134,7 +134,7 @@ def load_shared_relaxed(smem, layout, _semantic=None):
     """
     Load a tensor from shared memory with extra hints for the underlying
     compiler to avoid emitting unnecessary waits before loading from the target
-    shared memory for better optimization.
+    shared memory.
 
     Args:
         smem (shared_memory_descriptor): Shared memory descriptor to load from.
