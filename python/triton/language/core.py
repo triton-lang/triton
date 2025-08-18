@@ -687,15 +687,15 @@ class pointer_type(dtype):
 
 class block_type(dtype):
 
-    def __init__(self, element_ty: dtype, shape: List):
+    def __init__(self, element_ty: dtype, shape: Union[List, Tuple]):
         self.element_ty = element_ty
 
         # Note that block_type's shape is a list of int
         # while tensor's shape is a list of constexpr.
-        assert (isinstance(shape, (list, tuple)))
+        assert (isinstance(shape, (list, builtins.tuple)))
 
         # shape can be empty ([]) when an input is a 0D tensor.
-        self.shape = tuple(_unwrap_shape(shape))
+        self.shape = builtins.tuple(_unwrap_shape(shape))
         if not self.shape:
             raise TypeError('0d block_type is forbidden')
 
@@ -863,7 +863,7 @@ class tensor(base_value):
         self.type = type  # Tensor type (can be block_type)
         # Following the practice in pytorch, dtype is scalar type
         self.dtype = type.scalar
-        self.shape = tuple([constexpr(s) for s in self.shape])
+        self.shape = builtins.tuple([constexpr(s) for s in self.shape])
 
     def _flatten_ir(self, handles: List[ir.value]) -> None:
         handles.append(self.handle)
@@ -1082,7 +1082,7 @@ class tensor(base_value):
     def __getitem__(self, slices, _semantic=None):
         if isinstance(slices, (builtins.slice, slice, constexpr)) or slices is None:
             slices = [slices]
-        if isinstance(slices, tuple):
+        if isinstance(slices, builtins.tuple):
             slices = slices.values
         ret = self
         for dim, sl in enumerate(slices):
@@ -1121,7 +1121,7 @@ class tensor(base_value):
     def permute(self, *dims) -> tensor:
         ...
 
-    def split(self) -> tuple[tensor, tensor]:
+    def split(self) -> builtins.tuple[tensor, tensor]:
         ...
 
     def view(self, *shape) -> tensor:
@@ -1477,8 +1477,8 @@ class tensor_descriptor(tensor_descriptor_base):
         # IR handle
         super().__init__(handle, block_type)
         # Global shape
-        self.shape = tuple(shape)
-        self.strides = tuple(strides)
+        self.shape = builtins.tuple(shape)
+        self.strides = builtins.tuple(strides)
         self.type = tensor_descriptor_type(
             block_type,
             shape_type=self.shape.type,
@@ -1821,7 +1821,7 @@ def _unsplat(x, _semantic=None, _generator=None):
 
 @_tensor_member_fn
 @builtin
-def split(a, _semantic=None, _generator=None) -> tuple[tensor, tensor]:
+def split(a, _semantic=None, _generator=None) -> Tuple[tensor, tensor]:
     """
     Split a tensor in two along its last dim, which must have size 2.
 
@@ -1932,7 +1932,7 @@ def expand_dims(input, axis, _semantic=None):
     """
     input = _semantic.to_tensor(input)
     axis = _unwrap_if_constexpr(axis)
-    axes = list(axis) if isinstance(axis, (Sequence, tuple)) else [axis]
+    axes = list(axis) if isinstance(axis, (Sequence, builtins.tuple)) else [axis]
     new_ndim = len(input.shape) + len(axes)
     axes = [_wrap_axis(_unwrap_if_constexpr(d), new_ndim) for d in axes]
 
@@ -2615,9 +2615,9 @@ def reduce(input, axis, combine_fn, keep_dims=False, _semantic=None, _generator=
     ret = _semantic.reduction(input, axis, make_combine_region)
     if keep_dims:
         if axis is not None:
-            ret = tuple(expand_dims(t, axis, _semantic=_semantic) for t in ret)
+            ret = builtins.tuple(expand_dims(t, axis, _semantic=_semantic) for t in ret)
         else:
-            ret = tuple(expand_ndims(t, len(input[0].shape)) for t in ret)
+            ret = builtins.tuple(expand_ndims(t, len(input[0].shape)) for t in ret)
     return ret
 
 
@@ -3133,7 +3133,7 @@ def inline_asm_elementwise(asm: str, constraints: str, args: Sequence, dtype: Un
 
     if not has_multiple_outputs:
         return tensor(call.get_result(0), res_tys[0])
-    return tuple(tensor(call.get_result(i), ty) for i, ty in enumerate(res_tys))
+    return builtins.tuple(tensor(call.get_result(i), ty) for i, ty in enumerate(res_tys))
 
 
 # -----------------------
@@ -3279,7 +3279,7 @@ class condition:
 # -----------------------
 
 
-def dispatch(func, lib_name: str, lib_path: str, args: list, arg_type_symbol_dict: dict, ret_shape: tuple,
+def dispatch(func, lib_name: str, lib_path: str, args: list, arg_type_symbol_dict: dict, ret_shape: Optional[Tuple],
              is_pure: bool, _semantic):
     '''
         Dispatch a function to a library
@@ -3308,7 +3308,7 @@ def dispatch(func, lib_name: str, lib_path: str, args: list, arg_type_symbol_dic
         else:
             arg_types.append(type(arg))
             arg_list.append(arg)
-    arg_types = tuple(arg_types)
+    arg_types = builtins.tuple(arg_types)
 
     if arg_types not in arg_type_symbol_dict:
         raise ValueError(f"input arg type does not match."
@@ -3344,7 +3344,7 @@ def extern_elementwise(lib_name: str, lib_path: str, args: list, arg_type_symbol
         if dispatch_args[i].type.is_block():
             all_scalar = False
     if len(arg_types) > 0:
-        arg_types = tuple(arg_types)
+        arg_types = builtins.tuple(arg_types)
         arithmetic_check = True
         # If there's a type tuple that is not supported by the library, we will do arithmetic check
         if arg_types in arg_type_symbol_dict:

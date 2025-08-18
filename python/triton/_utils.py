@@ -45,7 +45,7 @@ def is_power_of_two(x):
     return (x & (x - 1)) == 0
 
 
-def validate_block_shape(shape: List[int]):
+def validate_block_shape(shape: tuple) -> int:
     numel = 1
     for i, d in enumerate(shape):
         if not isinstance(d, int):
