@@ -374,7 +374,7 @@ scan_layouts = [
 @pytest.mark.parametrize("src_layout", scan_layouts)
 @pytest.mark.parametrize("axis", [0, 1])
 @pytest.mark.parametrize("add_overflow_check", [False, True])
-def test_scan_layouts_gluon(M, N, src_layout, axis, add_overflow_check, device):
+def test_scan_layouts(M, N, src_layout, axis, add_overflow_check, device):
     @gluon.jit
     def _combine(a, b):
         return a + b
