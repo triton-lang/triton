@@ -177,7 +177,8 @@ public:
     rewriter.modifyOpInPlace(
         directDot, [&]() { directDot->setOperand(opIdx, localLoad); });
     LDBG("Updated Direct dot: " << *directDot);
-    if (canUseLocalLoadTransposed(opIdx, sharedOrder)) {
+    if (triton::amdgpu::LocalLoadTransposedOp::canUseLocalLoadTransposed(
+            opIdx, sharedOrder)) {
       auto transposedLocalLoad =
           rewriter.create<triton::amdgpu::LocalLoadTransposedOp>(
               loc, transOperandType, alloc);
@@ -193,15 +194,6 @@ public:
     LDBG("Updated Trans dot: " << *transDot);
 
     return success();
-  }
-
-private:
-  bool canUseLocalLoadTransposed(unsigned opIdx,
-                                 ArrayRef<unsigned> sharedOrder) const {
-    unsigned kDimIdx = (opIdx == 0) ? 1 : 0;
-    bool isKContig = (sharedOrder[0] == kDimIdx);
-    // Tensor must be k-contg in shared memory to use local_load_transposed
-    return isKContig;
   }
 
   triton::AMD::ISAFamily isaFamily;

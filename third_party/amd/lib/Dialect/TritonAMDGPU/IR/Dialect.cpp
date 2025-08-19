@@ -494,11 +494,9 @@ LogicalResult LocalLoadTransposedOp::verify() {
         "only works with SwizzledSharedEncodingAttr src encoding");
 
   unsigned opIdx = dotEnc.getOpIdx();
-  unsigned kDimIdx = (opIdx == 0) ? 1 : 0;
   auto order = sharedEnc.getOrder();
-  bool isKContig = (order[0] == kDimIdx);
 
-  if (!isKContig) {
+  if (!canUseLocalLoadTransposed(opIdx, order)) {
     return emitOpError("Tensor must be k contiguous in shared memory");
   }
 

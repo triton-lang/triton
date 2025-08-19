@@ -578,6 +578,15 @@ def LocalLoadTransposedOp : TT_AMDGPU_Op<"local_load_transposed", [LocalLoadTrai
       build($_builder, $_state, retType, src, /*token=*/static_cast<mlir::Value>(nullptr));
       }]>];
 
+  let extraClassDeclaration = [{
+    static bool canUseLocalLoadTransposed(unsigned opIdx,
+                                  ArrayRef<unsigned> sharedOrder) {
+      unsigned kDimIdx = (opIdx == 0) ? 1 : 0;
+      // Tensor must be k-contg in shared memory to use local_load_transposed
+      return sharedOrder[0] == kDimIdx;
+    }
+  }];
+
   // Use qualified() otherwise "!ttg.memdesc<X>" is printed as "<X>".
   let assemblyFormat = [{$src (`token` $token^)? attr-dict `:` qualified(type($src)) `->` type($result)}];
   let hasVerifier = 1;
