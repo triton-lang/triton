@@ -2,11 +2,11 @@ import torch
 import pytest
 
 import triton
-import triton.language as tl
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
 
 THREADS_PER_WARP = triton.runtime.driver.active.get_current_target().warp_size
+
 
 @pytest.mark.parametrize("M, N", [(32, 16), (32, 32), (32, 64), (64, 32)])
 @pytest.mark.parametrize("src_layout", [

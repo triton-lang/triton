@@ -394,5 +394,3 @@ def test_math_fast_dividef():
     y[y == 0] = 1.0
     fast_dividef_kernel[(1, )](x, y, z, THREADS_PER_WARP, num_warps)
     torch.testing.assert_close(z, torch.div(x, y), atol=1e-5, rtol=1e-4)
-
-
