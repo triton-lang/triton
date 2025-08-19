@@ -50,7 +50,7 @@ except ImportError:
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-from python.build_helpers import get_base_dir, get_cmake_dir
+from python.build_helpers import get_base_dir, get_cmake_dir, get_build_base
 
 
 def is_git_repo():
@@ -377,7 +377,6 @@ class CMakeClean(clean):
 
     def initialize_options(self):
         clean.initialize_options(self)
-        self.build_temp = get_cmake_dir()
 
 
 class CMakeBuildPy(build_py):
@@ -529,7 +528,7 @@ class CMakeBuild(build_ext):
             cmake_args += shlex.split(cmake_args_append)
 
         env = os.environ.copy()
-        cmake_dir = get_cmake_dir()
+        cmake_dir = get_cmake_dir(self, ext)
         subprocess.check_call(["cmake", self.base_dir] + cmake_args, cwd=cmake_dir, env=env)
         update_symlink(Path(self.base_dir) / "compile_commands.json", cmake_dir / "compile_commands.json")
         subprocess.check_call(["cmake", "--build", "."] + build_args, cwd=cmake_dir)
@@ -701,6 +700,13 @@ def add_links(external_only):
         add_link_to_proton()
 
 
+class plugin_build(build):
+
+    def initialize_options(self):
+        super().initialize_options()
+        self.build_base = get_build_base()
+
+
 class plugin_bdist_wheel(bdist_wheel):
 
     def run(self):
@@ -818,6 +824,7 @@ setup(
     include_package_data=True,
     ext_modules=[CMakeExtension("triton", "triton/_C/")],
     cmdclass={
+        "build" : plugin_build,
         "bdist_wheel": plugin_bdist_wheel,
         "build_ext": CMakeBuild,
         "build_py": CMakeBuildPy,
