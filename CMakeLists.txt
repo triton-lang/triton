@@ -162,6 +162,13 @@ include_directories(${PROJECT_BINARY_DIR}/third_party) # Tablegen'd files
 # link_directories(${LLVM_LIBRARY_DIR})
 add_subdirectory(include)
 add_subdirectory(lib)
+# Ensure NVIDIA third_party is configured for sanitized builds so MLIR/LLVM
+# TableGen targets (e.g. NVWSTableGen) are emitted and the generated .inc files
+# (Dialect.h.inc, Ops.h.inc, etc.) exist for ASan builds.
+if (CMAKE_CXX_FLAGS MATCHES "-fsanitize" OR CMAKE_C_FLAGS MATCHES "-fsanitize")
+  message(STATUS "Sanitize build detected: adding third_party/nvidia to enable NVWS TableGen generation")
+  add_subdirectory(third_party/nvidia)
+endif()
 
 # TODO: Figure out which target is sufficient to fix errors; triton is
 # apparently not enough. Currently set linking libstdc++fs for all targets

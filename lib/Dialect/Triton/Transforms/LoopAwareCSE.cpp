@@ -125,10 +125,11 @@ static void loopCSE(scf::ForOp loop) {
   // For each equivalence class, replace all other args in the class with one.
   for (auto it = equivalentArgs.begin(), end = equivalentArgs.end(); it != end;
        ++it) {
-    if (!(*it)->isLeader())
+    auto cls = *it; // EquivalenceClasses::ECValue (value type)
+    if (!cls.isLeader())
       continue;
     SmallVector<int> eqArgs;
-    for (auto mIt = equivalentArgs.member_begin(**it);
+    for (auto mIt = equivalentArgs.member_begin(cls);
          mIt != equivalentArgs.member_end(); ++mIt)
       eqArgs.push_back(*mIt);
     assert(eqArgs.size() > 1);

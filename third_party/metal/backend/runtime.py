@@ -24,6 +24,7 @@ import ctypes
 import os
 import platform
 from typing import Optional, Sequence, Tuple, Union
+import Metal._Metal as Metal 
 from loguru import logger
 
 try:

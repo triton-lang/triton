@@ -70,21 +70,67 @@ class MetalCompiler:
             metadata = {}
             if reflection:
                 try:
-                    kernel_pattern = re.compile(
-                        r'\bkernel\b(?:\s+\w+)?\s+([A-Za-z_]\w*)\s*\(([^)]*)\)', re.MULTILINE
-                    )
-                    buffer_idx_pattern = re.compile(r'\[\[\s*buffer\s*\(\s*(\d+)\s*\)\s*\]\]')
+                    # Find kernel declarations. We cannot rely on a single simple regex
+                    # to capture the full parameter list when that list may contain nested
+                    # parentheses (e.g. attributes like [[ buffer(0) ]]). Instead locate
+                    # the kernel name with a regex and then scan for the matching closing
+                    # parenthesis to extract the full parameter text.
+                    name_pattern = re.compile(r'\bkernel\b(?:\s+\w+)?\s+([A-Za-z_]\w*)\s*\(', re.MULTILINE)
+                    # Conservative parsing: find any [[ ... ]] attributes and inspect their
+                    # contents for a "buffer(N)" specification. This handles spacing variants
+                    # such as "[[ buffer(0) ]]" or "[[buffer(0)]]" and multiple attributes.
+                    attr_inner_pattern = re.compile(r'\[\[(.*?)\]\]')
+                    buffer_inner_pattern = re.compile(r'buffer\s*\(\s*(\d+)\s*\)')
                     kernels = []
-                    for m in kernel_pattern.finditer(source):
+                    for m in name_pattern.finditer(source):
                         kname = m.group(1)
-                        params = m.group(2).strip()
+                        # scan for the matching closing parenthesis after m.end()
+                        start = m.end()  # position after the '('
+                        depth = 1
+                        i = start
+                        end = None
+                        while i < len(source):
+                            ch = source[i]
+                            if ch == '(':
+                                depth += 1
+                            elif ch == ')':
+                                depth -= 1
+                                if depth == 0:
+                                    end = i
+                                    break
+                            i += 1
+                        params = ''
+                        if end is not None:
+                            params = source[start:end].strip()
                         arg_list = []
                         if params:
                             raw_args = [p.strip() for p in params.split(',') if p.strip()]
                             for raw in raw_args:
-                                # Extract buffer index if present
-                                buf_m = buffer_idx_pattern.search(raw)
-                                buffer_index = int(buf_m.group(1)) if buf_m else None
+                                # Find buffer(...) either directly in the token or inside bracketed attributes.
+                                # Some compilers/formatters may emit attributes with varying spacing, e.g.:
+                                #   [[buffer(0)]]  or  [[  buffer(0)  ]]
+                                # Try a direct search first (covers most cases), then fall back to scanning attributes.
+                                buffer_index = None
+                                bmatch = buffer_inner_pattern.search(raw)
+                                if bmatch:
+                                    try:
+                                        buffer_index = int(bmatch.group(1))
+                                    except (ValueError, TypeError):
+                                        buffer_index = None
+                                else:
+                                    for attr_match in attr_inner_pattern.findall(raw):
+                                        inner = attr_match.strip()
+                                        bmatch = buffer_inner_pattern.search(inner)
+                                        if bmatch:
+                                            try:
+                                                buffer_index = int(bmatch.group(1))
+                                            except (ValueError, TypeError):
+                                                # Keep conservative behaviour: ignore invalid values
+                                                buffer_index = None
+                                            break
+                                # Debugging: log the raw token and discovered buffer_index (if any).
+                                # This log is intentionally low-volume and safe for test-time diagnostics.
+                                logger.debug(f"MetalCompiler: parsed arg raw={raw!r} buffer_index={buffer_index}")
                                 # Remove attribute annotations like [[ buffer(0) ]] or [[ ... ]]
                                 cleaned = re.sub(r'\[\[.*?\]\]', '', raw).strip()
                                 # Normalize whitespace
@@ -112,6 +158,9 @@ class MetalCompiler:
                                         addr = 'threadgroup'
                                     elif 'constant' in param_type:
                                         addr = 'constant'
+                                # Validate buffer_index type if present
+                                if buffer_index is not None:
+                                    assert isinstance(buffer_index, int)
                                 arg_list.append({
                                     'raw': raw,
                                     'type': param_type,

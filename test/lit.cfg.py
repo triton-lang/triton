@@ -2,10 +2,34 @@
 # ruff: noqa: F821
 
 import os
+import sys
 
 import lit.formats
 import lit.util
 from lit.llvm import llvm_config
+
+if llvm_config is None:
+    class _LitDummy:
+        use_lit_shell = False
+        def with_system_environment(self, *args, **kwargs):
+            return None
+        def with_environment(self, *args, **kwargs):
+            return None
+        def add_tool_substitutions(self, *args, **kwargs):
+            return None
+    llvm_config = _LitDummy()
+
+# Safe default for config.triton_obj_root for venv-installed lit
+config.triton_obj_root = getattr(config, 'triton_obj_root', os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'build')))
+
+# Fallbacks for local non-llvm lit runs (guarded defaults so venv-installed lit won't raise AttributeError)
+config.llvm_shlib_dir = getattr(config, 'llvm_shlib_dir', '')
+config.llvm_shlib_ext = getattr(config, 'llvm_shlib_ext', '')
+config.llvm_tools_dir = getattr(config, 'llvm_tools_dir', os.path.join(config.triton_obj_root, 'bin'))
+config.mlir_binary_dir = getattr(config, 'mlir_binary_dir', os.path.join(config.triton_obj_root, 'lib'))
+config.python_executable = getattr(config, 'python_executable', sys.executable)
+config.triton_tools_dir = getattr(config, 'triton_tools_dir', os.path.join(config.triton_obj_root, 'bin'))
+
 from lit.llvm.subst import ToolSubst
 
 # Configuration file for the 'lit' test runner
@@ -67,4 +91,12 @@ llvm_config.add_tool_substitutions(tools, tool_dirs)
 # TODO: what's this?
 llvm_config.with_environment('PYTHONPATH', [
     os.path.join(config.mlir_binary_dir, 'python_packages', 'triton'),
+], append_path=True)
+
+# Make repo third_party importable for lit Python snippets
+# repo_root resolves to the repository root (one level above the test exec root)
+repo_root = os.path.abspath(os.path.join(config.test_exec_root, '..'))
+llvm_config.with_environment('PYTHONPATH', [
+    repo_root,
+    os.path.join(repo_root, 'third_party'),
 ], append_path=True)

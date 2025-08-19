@@ -1375,7 +1375,7 @@ void SliceEncodingAttr::print(mlir::AsmPrinter &printer) const {
 LogicalResult
 SliceEncodingAttr::verify(function_ref<InFlightDiagnostic()> emitError,
                           unsigned dim, DistributedEncodingTrait parent) {
-  unsigned rank = cast<LayoutEncodingTrait>(parent).getRank();
+  unsigned rank = mlir::cast<LayoutEncodingTrait>(parent).getRank();
   if (rank <= 1)
     return emitError() << "parent layout must have at least rank >= 2";
   if (dim >= rank) {

@@ -1,8 +1,9 @@
-#include "triton/Tools/GenericSwizzling.h"
+
 
 #include "third_party/f2reduce/f2reduce.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/LinearLayout.h"
+#include "triton/Tools/GenericSwizzling.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
@@ -110,9 +111,12 @@ LinearLayout buildReps(MLIRContext *ctx, const LinearLayout &src,
   // 1) It is in registers in both src and dst
   // 2) It is in the segment of smem (i.e., is not part of just one
   //    load/store)
-  SetVector<int32_t> srcRegs(llvm::from_range_t{}, flatten(src, kReg));
-  SetVector<int32_t> dstRegs(llvm::from_range_t{}, flatten(dst, kReg));
-  SetVector<int32_t> smemSegment(llvm::from_range_t{}, flatten(smem, kSegment));
+  auto srcVec = flatten(src, kReg);
+  SetVector<int32_t> srcRegs(srcVec.begin(), srcVec.end());
+  auto dstVec = flatten(dst, kReg);
+  SetVector<int32_t> dstRegs(dstVec.begin(), dstVec.end());
+  auto smemVec = flatten(smem, kSegment);
+  SetVector<int32_t> smemSegment(smemVec.begin(), smemVec.end());
   SetVector<int32_t> segment;
   SetVector<int32_t> reps;
   for (auto s : smemSegment) {

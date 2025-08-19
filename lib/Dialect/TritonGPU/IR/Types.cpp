@@ -97,7 +97,7 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
   }
   // Every dimension but the first (to allow for pipelining) must be a power of
   // 2
-  if (!(isa<PaddedSharedEncodingAttr>(encoding) ||
+  if (!(mlir::isa<PaddedSharedEncodingAttr>(encoding) ||
         llvm::all_of(shape.drop_front(1), [](int64_t dim) {
           return llvm::isPowerOf2_64(dim) && dim > 0;
         })))
@@ -114,7 +114,7 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
                        << "shape = " << shape
                        << ", allocShape = " << allocShape;
   auto ctx = encoding.getContext();
-  if (auto enc = dyn_cast<nvidia_gpu::TensorMemoryEncodingAttr>(encoding)) {
+  if (auto enc = mlir::dyn_cast<nvidia_gpu::TensorMemoryEncodingAttr>(encoding)) {
     if (memorySpace != nvidia_gpu::TensorMemorySpaceAttr::get(ctx)) {
       return emitError() << "memorySpace must be TensorMemorySpace";
     }
@@ -146,14 +146,13 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
                          << ll.getOutDimSize(dims[0]) << "x"
                          << ll.getOutDimSize(dims[1]);
     }
-  } else if (auto enc = dyn_cast<SharedEncodingTrait>(encoding)) {
+  } else if (auto enc = mlir::dyn_cast<SharedEncodingTrait>(encoding)) {
     if (memorySpace != SharedMemorySpaceAttr::get(ctx)) {
       return emitError()
              << "memorySpace must be SharedMemorySpace for shared encoding. "
              << "Got " << memorySpace;
     }
-  } else if (auto enc = dyn_cast<nvidia_gpu::TensorMemoryScalesEncodingAttr>(
-                 encoding)) {
+  } else if (auto enc = mlir::dyn_cast<nvidia_gpu::TensorMemoryScalesEncodingAttr>(encoding)) {
     if (memorySpace != nvidia_gpu::TensorMemorySpaceAttr::get(ctx)) {
       return emitError() << "memorySpace must be TensorMemorySpace";
     }
