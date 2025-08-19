@@ -30,10 +30,15 @@ jobs:
 
       - name: Install Homebrew LLVM (for MLIR)
         run: |
-          # Install llvm which provides MLIR CMake config files used by the project
+          # Prefer llvm@20 which matches the repo's historical build artifacts; fall back to llvm
           brew update || true
-          brew install llvm || true
-          LLVM_PREFIX=$(brew --prefix llvm)
+          if brew info llvm@20 >/dev/null 2>&1; then
+            brew install llvm@20 || true
+            LLVM_PREFIX=$(brew --prefix llvm@20)
+          else
+            brew install llvm || true
+            LLVM_PREFIX=$(brew --prefix llvm)
+          fi
           echo "LLVM_PREFIX=${LLVM_PREFIX}" >> $GITHUB_ENV
           echo "LLVM_DIR=${LLVM_PREFIX}/lib/cmake/llvm" >> $GITHUB_ENV
           echo "MLIR_DIR=${LLVM_PREFIX}/lib/cmake/mlir" >> $GITHUB_ENV
