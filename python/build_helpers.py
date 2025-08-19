@@ -9,7 +9,7 @@ def _get_base_dir() -> Path:
 
 
 def get_base_dir() -> str:
-    return _get_base_dir().as_posix()
+    return _get_base_dir().absolute().as_posix()
 
 
 def get_build_base() -> str:
@@ -25,4 +25,4 @@ def get_build_base() -> str:
 def get_cmake_dir(cmd, ext):
     cmake_dir = Path(cmd.build_temp) / ext.name
     cmake_dir.mkdir(parents=True, exist_ok=True)
-    return cmake_dir
+    return cmake_dir.absolute()
