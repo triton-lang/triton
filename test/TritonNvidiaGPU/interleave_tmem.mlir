@@ -68,7 +68,7 @@ tt.func @interleave_load_store_ws() {
     // CHECK: scf.for
     scf.for %i = %c0 to %c32 step %c1 : i32 {
       // CHECK: memdesc_index
-      %cur_acc = ttg.memdesc_index %arg0, %i : !ttg.memdesc<2x128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+      %cur_acc = ttg.memdesc_index %arg0[%i] : !ttg.memdesc<2x128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
 
       // CHECK-NEXT: [[S0:%.+]] = ttng.tmem_subslice %{{.+}} {N = 0 : i32}
       // CHECK-NEXT: [[S1:%.+]] = ttng.tmem_subslice %{{.+}} {N = 64 : i32}
@@ -120,11 +120,11 @@ tt.func @sink_alloc_op(%arg0: tensor<128x128xf32, #blocked1>) {
   %true = arith.constant true
 
   %alloc0 = ttng.tmem_alloc : () -> !ttg.memdesc<1x128x128xf32, #tmem, #ttng.tensor_memory, mutable>
-  %subview0 = ttg.memdesc_index %alloc0, %c0 : !ttg.memdesc<1x128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+  %subview0 = ttg.memdesc_index %alloc0[%c0] : !ttg.memdesc<1x128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
   // CHECK: [[ALLOC1:%.+]] = ttng.tmem_alloc
   %alloc1 = ttng.tmem_alloc : () -> !ttg.memdesc<1x128x128xf32, #tmem, #ttng.tensor_memory, mutable>
   // CHECK-NEXT: [[SUBVIEW1:%.+]] = ttg.memdesc_index [[ALLOC1]]
-  %subview1 = ttg.memdesc_index %alloc1, %c0 : !ttg.memdesc<1x128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+  %subview1 = ttg.memdesc_index %alloc1[%c0] : !ttg.memdesc<1x128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
   // CHECK-NEXT: tmem_store %arg0, [[SUBVIEW1]]
   ttng.tmem_store %arg0, %subview1, %true : tensor<128x128xf32, #blocked1> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
   // CHECK-NEXT: [[ALLOC0:%.+]] = ttng.tmem_alloc

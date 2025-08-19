@@ -9,6 +9,7 @@ from ._standard import __all__ as __standard_all
 
 from . import nvidia
 from . import amd
+from . import extra
 
 __all__ = [
     *__core_all,
@@ -17,4 +18,5 @@ __all__ = [
     *__standard_all,
     "amd",
     "nvidia",
+    "extra",
 ]

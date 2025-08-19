@@ -123,7 +123,10 @@ jobs:
           pytest --capture=tee-sys -rfs third_party/amd/python/test/test_extract_slice_concat_op.py
           TRITON_ALWAYS_COMPILE=1 pytest --capture=tee-sys -rfs third_party/amd/python/test/test_scalarize_packed_fops.py
           cd python/test/unit
-          pytest --capture=tee-sys -rfs -n 12 language runtime tools \
+          pytest --capture=tee-sys -rfs -n 12 \
+                 --ignore=blackwell \
+                 --ignore=cuda \
+                 --ignore=instrumentation \
                  --ignore=language/test_line_info.py \
                  --ignore=test_debug.py
           # TODO: uncomment
@@ -164,6 +167,9 @@ jobs:
           # Reenable test_functional_regression.py once it's fixed
           cd python/test/regression
           python3 -m pytest -s -n 8 ./test_cast_matmul.py
+      - name: Run microbenchmark tests
+        run: |
+          python3 python/test/microbenchmark/launch_overhead.py
       - name: Run Proton tests
         run: |
           unset HIP_VISIBLE_DEVICES

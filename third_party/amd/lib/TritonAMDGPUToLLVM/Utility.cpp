@@ -284,23 +284,6 @@ Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, Value i,
                        b.i32_val(0x1f));
 }
 
-Value permute(Location loc, RewriterBase &rewriter, Value x, Value y,
-              Value selector) {
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  Value prmt_mask = selector;
-  // convert from nybble mask to byte mask:
-  prmt_mask =
-      b.or_(b.and_(prmt_mask, b.i32_val(0x000000ff)),
-            b.shl(b.and_(prmt_mask, b.i32_val(0x0000ff00)), b.i32_val(8)));
-  prmt_mask =
-      b.or_(b.and_(prmt_mask, b.i32_val(0x000f000f)),
-            b.shl(b.and_(prmt_mask, b.i32_val(0x00f000f0)), b.i32_val(4)));
-  Value args[] = {x, y, prmt_mask};
-  auto op = createLLVMIntrinsicCallOp(rewriter, loc, "llvm.amdgcn.perm", i32_ty,
-                                      args);
-  return op.getResult(0);
-}
-
 Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
                ProgramIDDim axis) {
   Value blockId =
@@ -702,6 +685,28 @@ bool isChainDotHead(tt::DotOpInterface dotOp) {
       }
     }
   }
+  return false;
+}
+
+bool hasTransInDefChain(tt::DotOpInterface dotOp, unsigned opIdx) {
+  auto isInSameRegion = [&dotOp](Operation *op) {
+    return op->getParentRegion() == dotOp->getParentRegion();
+  };
+
+  BackwardSliceOptions bwdOpt;
+  bwdOpt.omitBlockArguments = true;
+  bwdOpt.filter = isInSameRegion;
+  SetVector<Operation *> bwdSlices;
+  Operation *dotOperand = (opIdx == 0) ? dotOp.getA().getDefiningOp()
+                                       : dotOp.getB().getDefiningOp();
+
+  if (!dotOperand)
+    return false;
+  (void)getBackwardSlice(dotOperand, &bwdSlices, bwdOpt);
+  if (llvm::find_if(bwdSlices, [](Operation *op) {
+        return isa<tt::TransOp>(op);
+      }) != bwdSlices.end())
+    return true;
   return false;
 }
 

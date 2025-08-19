@@ -7,6 +7,8 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <numeric>
+
 #define DEBUG_TYPE "axis-info"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
@@ -16,32 +18,15 @@ namespace {
 
 constexpr int64_t kMaxDivisor = highestPowOf2Divisor<int64_t>(0);
 
-int64_t gcdImpl(int64_t a, int64_t b, int64_t *x, int64_t *y) {
-  // Base Case
-  if (a == 0) {
-    *x = 0;
-    *y = 1;
-    return b;
-  }
-  int64_t x1, y1; // To store results of recursive call
-  int64_t gcd = gcdImpl(b % a, a, &x1, &y1);
-  // Update x and y using results of
-  // recursive call
-  *x = y1 - (b / a) * x1;
-  *y = x1;
-  return gcd;
-}
-
 template <typename... Args> int64_t gcd(int64_t a, int64_t b, Args... args) {
   if (a == 0)
     return b;
   if (b == 0)
     return a;
-  int64_t x, y;
   if constexpr (sizeof...(args) == 0)
-    return gcdImpl(a, b, &x, &y);
+    return std::gcd(a, b);
   else
-    return gcd(gcdImpl(a, b, &x, &y), args...);
+    return gcd(std::gcd(a, b), args...);
 }
 
 constexpr int log2Int(int64_t num) {
@@ -1276,16 +1261,20 @@ unsigned ModuleAxisInfoAnalysis::getAlignment(Value offsetsValue,
     return 1;
   auto linAttr = gpu::toLinearEncoding(tensorTy);
   auto order = linAttr.getOrder();
-  auto maxMultipleBytes = axisInfo->getDivisibility(order[0]);
-  auto maxContig = axisInfo->getContiguity(order[0]);
 
+  auto divisibility = axisInfo->getDivisibility(order[0]);
   auto elemNumBytes = std::max<unsigned>(elementBitWidth / 8, 1);
-  auto maxMultiple = std::max<int64_t>(maxMultipleBytes / elemNumBytes, 1);
+  auto elemTy = tensorTy.getElementType();
+  auto maxMultiple = isa<PointerType>(elemTy)
+                         ? std::max<int64_t>(divisibility / elemNumBytes, 1)
+                         : divisibility;
+
+  auto maxContig = axisInfo->getContiguity(order[0]);
   unsigned alignment = std::min(maxMultiple, maxContig);
-  LDBG("getAlignment order[0] "
-       << order[0] << " maxMultipleBytes = " << maxMultipleBytes
-       << " maxContig = " << maxContig << " elemNumBits = " << elementBitWidth
-       << " maxMultiple = " << maxMultiple << " alignment " << alignment);
+  LDBG("getAlignment order[0] " << order[0] << " maxContig = " << maxContig
+                                << " elemNumBits = " << elementBitWidth
+                                << " maxMultiple = " << maxMultiple
+                                << " alignment " << alignment);
   LLVM_DEBUG({
     std::string axisStr;
     llvm::raw_string_ostream os(axisStr);

@@ -37,9 +37,6 @@ Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, Value i,
                  mlir::triton::AMD::ISAFamily isaFamily =
                      mlir::triton::AMD::ISAFamily::Unknown);
 
-Value permute(Location loc, RewriterBase &rewriter, Value a, Value b,
-              Value selector);
-
 Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
                ProgramIDDim axis);
 
@@ -114,6 +111,10 @@ bool isUsedByDotScaledOp(Operation *op);
 // Check if the result of this tl.dot is used as opA of another tl.dot
 // in the same region
 bool isChainDotHead(mlir::triton::DotOpInterface dotOp);
+
+// Check if given operand of this tt.dot is the result of a tt.trans
+// in the same region
+bool hasTransInDefChain(mlir::triton::DotOpInterface dotOp, unsigned opIdx);
 
 // Check if the opA of this tl.dot is the result of another tl.dot
 // in the same region

@@ -8,7 +8,7 @@ import triton.language as tl
 # -----------------------------------------------------------------------------
 
 
-@tl.constexpr_function
+@triton.constexpr_function
 def get_scaled_dot_format_string(dtype: tl.dtype):
     mapping = {
         tl.float16: "fp16",
@@ -48,6 +48,7 @@ def swizzle2d(pid, grid_m, grid_n, GROUP_M: tl.constexpr):
     width = GROUP_M * grid_n
     group_id = pid // width
     group_size = min(grid_m - group_id * GROUP_M, GROUP_M)
+    tl.assume(group_size >= 0)
     pid_m = group_id * GROUP_M + (pid % group_size)
     pid_n = (pid % width) // (group_size)
     return pid_m, pid_n

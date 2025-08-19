@@ -19,7 +19,10 @@ namespace proton {
 ///   - The backward phase spawns multiple CPU threads.
 class ShadowContextSource : public ContextSource, public ScopeInterface {
 public:
-  ShadowContextSource() = default;
+  ShadowContextSource() {
+    mainContextStack = &threadContextStack[this];
+    threadContextInitialized[this] = true;
+  }
 
   void enterScope(const Scope &scope) override;
 

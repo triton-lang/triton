@@ -5,6 +5,7 @@ import triton.language as tl
 from triton_kernels.tensor_details.layout_details.blackwell_scale import unswizzle_mx_scale_bw
 from triton_kernels.tensor_details.layout_details.hopper_scale import unswizzle_mxfp4_scale_hopper
 from triton_kernels.tensor_details.layout_details.hopper_value import mxfp4_to_bf16_triton
+from triton_kernels.tensor_details.layout_details.cdna4_scale import unswizzle_mx_scale_cdna4
 from triton_kernels.numerics_details.flexpoint import float_to_flex, load_scale
 from triton_kernels.numerics_details.mxfp_details._downcast_to_mxfp import MXFP_BLOCK_SIZE
 from ._common import make_matmul_repr, matmul_launch_metadata, swizzle2d, xcd_swizzle, get_scaled_dot_format_string
@@ -79,6 +80,27 @@ def _matmul_ogs(
              SWAP_XW: tl.constexpr = False,
              IS_EPILOGUE_DEQUANT_MXFP8: tl.constexpr = False):
 
+    tl.assume(stride_y_k >= 0)
+    tl.assume(stride_y_z >= 0)
+    tl.assume(stride_y_m >= 0)
+    tl.assume(stride_y_n >= 0)
+    tl.assume(stride_x_z >= 0)
+    tl.assume(stride_x_m >= 0)
+    tl.assume(stride_x_k >= 0)
+    tl.assume(stride_w_e >= 0)
+    tl.assume(stride_w_k >= 0)
+    tl.assume(stride_w_n >= 0)
+    if stride_w_mx_e is not None:
+        tl.assume(stride_w_mx_e >= 0)
+    if stride_w_mx_k is not None:
+        tl.assume(stride_w_mx_k >= 0)
+    if stride_w_mx_n is not None:
+        tl.assume(stride_w_mx_n >= 0)
+    tl.assume(stride_b_e >= 0)
+    tl.assume(batch_size >= 0)
+    tl.assume(grid_m >= 0)
+    tl.assume(grid_n >= 0)
+
     is_w_microscaled: tl.constexpr = WMxScale is not None
     MX_PACK_DIVISOR: tl.constexpr = MXFP_BLOCK_SIZE
     if is_w_microscaled:
@@ -115,7 +137,9 @@ def _matmul_ogs(
     HAS_FUSED_SCATTER: tl.constexpr = WriteBackIndx is not None
     index_type: tl.constexpr = tl.int64 if UPCAST_INDICES else tl.int32
 
-    total_actual_tiles = batch_size * (grid_m - padding_m) * grid_n * SPLIT_K
+    unpadded_m = grid_m - padding_m
+    tl.assume(unpadded_m >= 0)
+    total_actual_tiles = batch_size * unpadded_m * grid_n * SPLIT_K
     if padding_m > 0 and pid >= total_actual_tiles:
         tl.device_assert(batch_size == 0)
         pid_mn = pid - total_actual_tiles
@@ -131,11 +155,11 @@ def _matmul_ogs(
     pid_emnk = pid
     if XCD_SWIZZLE != 1:
         pid_emnk = xcd_swizzle(pid_emnk, total_actual_tiles, XCD_SWIZZLE)
-    pid_e = pid_emnk // ((grid_m - padding_m) * grid_n * SPLIT_K)
-    pid_mnk = pid_emnk % ((grid_m - padding_m) * grid_n * SPLIT_K)
+    pid_e = pid_emnk // (unpadded_m * grid_n * SPLIT_K)
+    pid_mnk = pid_emnk % (unpadded_m * grid_n * SPLIT_K)
     pid_k = pid_mnk % SPLIT_K
     pid_mn = pid_mnk // SPLIT_K
-    pid_m, pid_n = swizzle2d(pid_mn, (grid_m - padding_m), grid_n, GROUP_M)
+    pid_m, pid_n = swizzle2d(pid_mn, unpadded_m, grid_n, GROUP_M)
     # For split-k, advance to the output k slice
     if SPLIT_K > 1:
         Y += pid_k.to( index_type) * stride_y_k
@@ -209,6 +233,13 @@ def _matmul_ogs(
             PACKED_MX_BLOCK: tl.constexpr = MX_SCALE_BLOCK_K * 32
             SCALE_BLOCK_N: tl.constexpr = BLOCK_N // 32
             stride_scale_k = stride_w_mx_k
+        elif SWIZZLE_MX_SCALE == "CDNA4_SCALE":
+            tl.static_assert(stride_w_mx_k is not None)
+            tl.static_assert(stride_w_mx_n is not None)
+            NON_K_PRESHUFFLE_BLOCK_SIZE: tl.constexpr = 32
+            PACKED_MX_BLOCK: tl.constexpr = MX_SCALE_BLOCK_K * NON_K_PRESHUFFLE_BLOCK_SIZE
+            SCALE_BLOCK_N: tl.constexpr = BLOCK_N // NON_K_PRESHUFFLE_BLOCK_SIZE
+            stride_scale_k = stride_w_mx_k
         else:
             PACKED_MX_BLOCK: tl.constexpr = MX_SCALE_BLOCK_K
             SCALE_BLOCK_N: tl.constexpr = BLOCK_N
@@ -281,6 +312,8 @@ def _matmul_ogs(
                 # Handshake with the swizzling code
                 num_warps: tl.constexpr = tl.extra.cuda.num_warps()
                 w_scales = unswizzle_mxfp4_scale_hopper(tl.load(WMxScalePtrs), mx_axis=1, num_warps=num_warps)
+            elif SWIZZLE_MX_SCALE == "CDNA4_SCALE":
+                w_scales = unswizzle_mx_scale_cdna4(tl.load(WMxScalePtrs), BLOCK_N, MX_SCALE_BLOCK_K)
             else:
                 w_scales = tl.load(WMxScalePtrs, mask=mask_k_scale[None, :])
 

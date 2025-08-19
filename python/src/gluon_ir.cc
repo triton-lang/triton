@@ -217,8 +217,8 @@ py::object layoutToGluon(Attribute layout) {
 
     return layouts.AMDMFMALayout(
         amdMfma.getVersion(), instrShape, amdMfma.getIsTransposed(),
-        toStdVector(amdMfma.getWarpsPerCTA()),
-        toStdVector(amdMfma.getTilesPerWarp()), layouts.GluonDType(typeName),
+        toStdVector(amdMfma.getWarpsPerCTA()), layouts.GluonDType(typeName),
+        toStdVector(amdMfma.getTilesPerWarp()),
         toStdVector(ctaLayout.getCTAsPerCGA()),
         toStdVector(ctaLayout.getCTASplitNum()),
         toStdVector(ctaLayout.getCTAOrder()));
@@ -325,13 +325,12 @@ void init_gluon_ir(py::module &&m) {
            })
       .def("get_amd_mfma_layout",
            [](GluonOpBuilder &self, unsigned version,
+              std::vector<unsigned> &instrShape, bool transposed,
+              std::vector<unsigned> &warpsPerCta, mlir::Type elemType,
               std::vector<unsigned> &tilesPerWarp,
-              std::vector<unsigned> &warpsPerCta,
               std::vector<unsigned> &ctasPerCga,
               std::vector<unsigned> &ctaSplitNum,
-              std::vector<unsigned> &ctaOrder,
-              std::vector<unsigned> &instrShape, bool transposed,
-              mlir::Type elemType) -> Attribute {
+              std::vector<unsigned> &ctaOrder) -> Attribute {
              auto ctx = self.getContext();
              auto ctaLayout = self.getChecked<ttg::CTALayoutAttr>(
                  ctx, ctasPerCga, ctaSplitNum, ctaOrder);
@@ -404,11 +403,11 @@ void init_gluon_ir(py::module &&m) {
            })
       .def("create_async_copy_global_to_local",
            [](GluonOpBuilder &self, Value smem, Value pointer, Value mask,
-              tt::CacheModifier cacheModifier,
+              Value other, tt::CacheModifier cacheModifier,
               tt::EvictionPolicy evictionPolicy, bool isVolatile) {
              self.create<ttg::AsyncCopyGlobalToLocalOp>(
-                 pointer, smem, mask,
-                 /*other*/ Value{}, cacheModifier, evictionPolicy, isVolatile);
+                 pointer, smem, mask, other, cacheModifier, evictionPolicy,
+                 isVolatile);
            })
       .def("create_async_copy_mbarrier_arrive",
            [](GluonOpBuilder &self, Value mbarrier, bool incrementCount) {

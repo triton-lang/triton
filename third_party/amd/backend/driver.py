@@ -311,6 +311,7 @@ static const char *hipLibSearchPaths[] = {{"{libhip_path}"}};
 // The list of HIP dynamic library symbols and their signature we are interested
 // in this file.
 #define HIP_SYMBOL_LIST(FOR_EACH_ERR_FN, FOR_EACH_STR_FN)                     \\
+  FOR_EACH_STR_FN(hipGetLastError)                                            \\
   FOR_EACH_STR_FN(hipGetErrorString, hipError_t hipError)                     \\
   FOR_EACH_ERR_FN(hipModuleLaunchKernel, hipFunction_t f,                     \\
                   unsigned int gridDimX, unsigned int gridDimY,               \\
@@ -431,6 +432,7 @@ static PyObject* data_ptr_str = NULL;
 
 static inline DevicePtrInfo getPointer(PyObject *obj, int idx) {{
   DevicePtrInfo ptr_info;
+  hipError_t status = hipSuccess;
   ptr_info.dev_ptr = 0;
   ptr_info.valid = true;
   if (PyLong_Check(obj)) {{
@@ -456,11 +458,13 @@ static inline DevicePtrInfo getPointer(PyObject *obj, int idx) {{
   if (!ptr_info.dev_ptr)
     goto cleanup;
   uint64_t dev_ptr;
-  hipError_t status = hipSymbolTable.hipPointerGetAttribute(&dev_ptr, HIP_POINTER_ATTRIBUTE_DEVICE_POINTER, ptr_info.dev_ptr);
+  status = hipSymbolTable.hipPointerGetAttribute(&dev_ptr, HIP_POINTER_ATTRIBUTE_DEVICE_POINTER, ptr_info.dev_ptr);
   if (status == hipErrorInvalidValue) {{
       PyErr_Format(PyExc_ValueError,
                    "Pointer argument (at %d) cannot be accessed from Triton (cpu tensor?)", idx);
       ptr_info.valid = false;
+      // Clear and ignore HIP error
+      (void)hipSymbolTable.hipGetLastError();
   }}
   ptr_info.dev_ptr = (hipDeviceptr_t)dev_ptr;
 cleanup:
@@ -470,11 +474,11 @@ cleanup:
 
 static uint16_t pack_fp16(double f) {{
     uint16_t result;
-    // from https://github.com/python/pythoncapi-compat
+    // from https://github.com/python/pythoncapi-compat/blob/5e317108f872c904eb726cb8d560dcadbdf88a72/pythoncapi_compat.h#L482-L492
 #if 0x030600B1 <= PY_VERSION_HEX && PY_VERSION_HEX <= 0x030B00A1 && !defined(PYPY_VERSION)
     _PyFloat_Pack2(f, (unsigned char*)&result, 1);
 #else
-    PyFloat_Pack2(f, (unsigned char*)&result, 1);
+    PyFloat_Pack2(f, (char*)&result, 1);
 #endif
     return result;
 }}
