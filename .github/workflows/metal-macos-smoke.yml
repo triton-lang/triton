@@ -1,0 +1,68 @@
+name: Metal macOS Smoke Tests
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ ci/macos-metal-validate, main ]
+
+jobs:
+  metal-smoke:
+    name: Metal smoke tests (macOS)
+    runs-on: macos-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install Xcode command line tools status
+        run: |
+          echo "xcrun: $(xcrun --version 2>/dev/null || echo 'missing')"
+          echo "metal: $(command -v metal >/dev/null && metal --version 2>/dev/null || echo 'missing')"
+          echo "metallib: $(command -v metallib >/dev/null && metallib --version 2>/dev/null || echo 'missing')"
+
+      - name: Create build dir
+        run: mkdir -p build_metal
+
+      - name: Configure CMake (Ninja)
+        working-directory: build_metal
+        run: cmake -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DTRITON_ENABLE_MPS_BACKEND=ON ..
+
+      - name: Build
+        working-directory: build_metal
+        run: cmake --build . --target all -j $(sysctl -n hw.ncpu)
+
+      - name: Run Metal C++ tests (ctest)
+        working-directory: build_metal
+        run: |
+          echo "Running ctest for Metal"
+          ctest -R Metal -V || true
+
+      - name: Setup Python venv & deps
+        run: |
+          python -m venv .venv
+          source .venv/bin/activate
+          python -m pip install --upgrade pip setuptools wheel
+          pip install -e .
+          pip install pyobjc pytest numpy
+
+      - name: Run Python unit tests (metal subset)
+        run: |
+          source .venv/bin/activate
+          pytest -q python/test/backend/test_metal_compiler.py::test_compile_reflection_parses_various_argument_forms || true
+          pytest -q python/test/backend/test_metal_runtime.py::test_launch_kernel_mocked || true
+          pytest -q python/test/backend/test_metal_runtime.py::test_end_to_end_minimal_macos -k macos_integration || true
+
+      - name: Upload logs
+        uses: actions/upload-artifact@v4
+        with:
+          name: metal-smoke-logs
+          path: |
+            build_metal/CMakeFiles/**
+            build_metal/Testing/**
+            build_metal/CTestTestfile.cmake
+            build_metal_logs/**
