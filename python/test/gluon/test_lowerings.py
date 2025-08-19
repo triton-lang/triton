@@ -44,7 +44,7 @@ def test_scan_layouts(M, N, src_layout, axis, sanitize_overflow, device):
     z = torch.zeros((M, N), dtype=torch.int32, device=device)
     z_tri = torch.empty_like(z)
 
-    kernel[(1, 1, 1)](x, z_tri, M, N, src_layout, axis, num_warps=4, sanitize_overflow=sanitize_overflow)
+    kernel[(1, 1, 1)](x, z_tri, M, N, src_layout, axis, num_warps=4, sanitize_overflow=sanitize_overflow, debug=sanitize_overflow)
 
     z_ref = torch.cumsum(x, dim=axis, dtype=torch.int32)
     torch.testing.assert_close(z_tri, z_ref)
