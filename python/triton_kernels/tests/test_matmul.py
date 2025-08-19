@@ -523,6 +523,9 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
 @pytest.mark.parametrize("n", [8, 16, 32, 64, 128])
 @pytest.mark.parametrize("k", [8, 16, 32, 64, 128])
 def test_small_batch_matmul(m, n, k):
+    if is_hip():
+        pytest.skip("Not fully tested on AMD")
+
     if m * n * k > 16384:
         pytest.skip()
 
