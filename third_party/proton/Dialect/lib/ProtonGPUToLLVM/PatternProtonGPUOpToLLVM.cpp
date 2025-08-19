@@ -278,30 +278,37 @@ struct FinalizeOpConversion
     rewriter.setInsertionPointToEnd(ifBlock);
     rewriter.create<cf::BranchOp>(loc, writeBackBlock, initIdx);
 
-    // Write back 'post-final time'.
-    {
-      Block *prevBlock = op->getBlock();
-
-      // Add the 'if' block.
-      Block *ifBlock = rewriter.splitBlock(prevBlock, op->getIterator());
-      rewriter.setInsertionPointToStart(ifBlock);
-
-      Value gmemPostFinalTimeOffset = b.i32_val(8);
-      Value gmemPostFinalTimePtr =
-          b.gep(scratchPtrTy, i32_ty, scratchPtr, gmemPostFinalTimeOffset);
-      Value postFinalTime = targetInfo.globalTime(rewriter, loc);
-      b.store(postFinalTime, gmemPostFinalTimePtr);
-
-      // Add the 'else' block and the condition.
-      Block *thenBlock = rewriter.splitBlock(ifBlock, op->getIterator());
-      rewriter.setInsertionPointToEnd(prevBlock);
-      rewriter.create<cf::CondBranchOp>(loc, isFirstThread, ifBlock, thenBlock);
-      rewriter.setInsertionPointToEnd(ifBlock);
-      rewriter.create<cf::BranchOp>(loc, thenBlock);
-    }
+    writeBackPostFinalTime(b, rewriter, op, isFirstThread, scratchPtr);
 
     rewriter.eraseOp(op);
     return success();
+  }
+
+private:
+  void writeBackPostFinalTime(TritonLLVMOpBuilder &b,
+                              ConversionPatternRewriter &rewriter,
+                              mlir::triton::proton::gpu::FinalizeOp op,
+                              Value isFirstThread, Value scratchPtr) const {
+    Block *prevBlock = op->getBlock();
+    auto loc = op.getLoc();
+    auto scratchPtrTy = mlir::cast<LLVM::LLVMPointerType>(scratchPtr.getType());
+
+    // Add the 'if' block.
+    Block *ifBlock = rewriter.splitBlock(prevBlock, op->getIterator());
+    rewriter.setInsertionPointToStart(ifBlock);
+
+    Value gmemPostFinalTimeOffset = b.i32_val(8);
+    Value gmemPostFinalTimePtr =
+        b.gep(scratchPtrTy, i32_ty, scratchPtr, gmemPostFinalTimeOffset);
+    Value postFinalTime = targetInfo.globalTime(rewriter, loc);
+    b.store(postFinalTime, gmemPostFinalTimePtr);
+
+    // Add the 'else' block and the condition.
+    Block *thenBlock = rewriter.splitBlock(ifBlock, op->getIterator());
+    rewriter.setInsertionPointToEnd(prevBlock);
+    rewriter.create<cf::CondBranchOp>(loc, isFirstThread, ifBlock, thenBlock);
+    rewriter.setInsertionPointToEnd(ifBlock);
+    rewriter.create<cf::BranchOp>(loc, thenBlock);
   }
 
 protected:
