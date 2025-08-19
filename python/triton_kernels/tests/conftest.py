@@ -1,4 +1,5 @@
 import pytest
+import tempfile
 
 
 def pytest_addoption(parser):
@@ -18,3 +19,13 @@ def fresh_knobs():
         yield fresh_function()
     finally:
         reset_function()
+
+
+@pytest.fixture
+def fresh_triton_cache():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        from triton import knobs
+
+        with knobs.cache.scope(), knobs.runtime.scope():
+            knobs.cache.dir = tmpdir
+            yield tmpdir

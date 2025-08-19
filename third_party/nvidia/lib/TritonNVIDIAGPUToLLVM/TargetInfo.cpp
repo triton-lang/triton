@@ -445,11 +445,6 @@ Value TargetInfo::shuffleIdx(RewriterBase &rewriter, Location loc, Value val,
   return LLVM::NVIDIA::shuffleIdx(loc, rewriter, val, i);
 }
 
-Value TargetInfo::permute(RewriterBase &rewriter, Location loc, Value a,
-                          Value b, Value selector) const {
-  return LLVM::NVIDIA::permute(loc, rewriter, a, b, selector);
-}
-
 Value TargetInfo::programId(RewriterBase &rewriter, Location loc,
                             ModuleOp moduleOp, ProgramIDDim axis) const {
   return LLVM::NVIDIA::llGetPid(loc, rewriter, moduleOp, axis);
