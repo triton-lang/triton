@@ -54,6 +54,7 @@ enum Flags : uint8_t {
   MMA = 1 << 3,
   SFU = 1 << 4,
   SIMT = 1 << 5,
+  VIEW = 1 << 6,
 };
 
 Flags &operator|=(Flags &lhs, Flags rhs) {
@@ -77,6 +78,8 @@ std::ostream &operator<<(std::ostream &stream, Flags flags) {
       strs.push_back("SFU");
     if (flags & Flags::SIMT)
       strs.push_back("SIMT");
+    if (flags & Flags::VIEW)
+      strs.push_back("VIEW");
   }
   for (size_t i = 0; i < strs.size(); i++) {
     if (i != 0)
@@ -541,6 +544,8 @@ Flags getNodeFlags(Node *node) {
       return Flags::MMA;
     if (isa<math::Exp2Op>(op))
       return Flags::SFU;
+    if (op->hasTrait<OpTrait::MemDescViewTrait>())
+      return Flags::VIEW;
     if (!options.disable_simt && isSIMTOp(op))
       return Flags::SIMT;
   }
@@ -550,6 +555,8 @@ Flags getNodeFlags(Node *node) {
 void Group::add(Node *node) {
   nodes.insert(node);
   flags |= getNodeFlags(node);
+  // Note: don't set view flag for groups
+  flags = static_cast<Flags>(flags & ~Flags::VIEW);
   if (node->hasCost())
     cost += node->getCost();
 }
@@ -978,12 +985,10 @@ SmallVector<std::pair<std::string, std::function<bool(Edge)>>> heuristics = {
               node_isa<ttg::LocalAllocOp>(edge.getToNode());
      }},
 
-    // memdesc trans followed by mma always in same group
-    {"trans_mma",
-     [](Edge edge) {
-       return node_isa<ttg::MemDescTransOp>(edge.getFromNode()) &&
-              node_isa<ttng::MMAv5OpInterface>(edge.getToNode());
-     }},
+    // view op in same group as user
+    // Note: view ops guaranteed to have been duplicated so there is one use/def
+    {"view",
+     [](Edge edge) { return getNodeFlags(edge.getFromNode()) & Flags::VIEW; }},
 
     // straight sequence of SIMT/NONE ops merges together
     {"sequence",
@@ -1240,6 +1245,14 @@ SmallVector<std::pair<std::string, std::function<bool(Edge)>>> constraints = {
        auto from = edge.getFromNode();
        auto to = edge.getToNode();
        return !(node_isa<ttng::TMEMAllocOp>(from) && isMMA(to));
+     }},
+
+    // don't merge local load into mma group
+    {"local_load",
+     [](Edge edge) {
+       auto from = edge.getFromNode();
+       auto to = edge.getToNode();
+       return !(isMMA(from) && node_isa<ttg::LocalLoadOp>(to));
      }},
 };
 
@@ -2172,6 +2185,37 @@ bool hasFlattenedEpilogue(ModuleOp m) {
   return false;
 }
 
+void duplicateViewOps(ModuleOp m) {
+  // Ensure all view ops have a single user, by duplicated them where necessary
+  // This ensures view ops do not span more than one group
+  // Note: Duplicate view ops within a single group are deduplicated after
+  // analysis
+
+  llvm::SmallVector<mlir::Operation *> viewOps;
+
+  m.walk([&](mlir::Operation *op) {
+    if (op->hasTrait<OpTrait::MemDescViewTrait>()) {
+      viewOps.push_back(op);
+    }
+  });
+
+  while (!viewOps.empty()) {
+    Operation *op = viewOps.pop_back_val();
+
+    assert(op->getResults().size() == 1);
+    auto result = op->getResult(0);
+
+    bool first = true;
+    for (auto &use : result.getUses()) {
+      if (!first) {
+        Operation *newOp = OpBuilder(op).clone(*op);
+        use.set(newOp->getResult(0));
+      }
+      first = false;
+    }
+  }
+}
+
 } // namespace
 
 //===----------------------------------------------------------------------===//
@@ -2195,6 +2239,7 @@ struct PartitionAnalysis
 
 void PartitionAnalysis::runOnOperation() {
   ModuleOp m = getOperation();
+  duplicateViewOps(m);
   auto func = cast<tt::FuncOp>(m.getRegion().front().front());
 
   auto toInt = [](int dflt, std::string value) {
