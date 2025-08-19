@@ -65,6 +65,7 @@ from .core import (
     dot_scaled,
     dtype,
     expand_dims,
+    extern,
     float16,
     float32,
     float64,
@@ -338,3 +339,8 @@ def str_to_ty(name, c):
         "B": int1,
     }
     return tys[name]
+
+
+def context_manager(fn):
+    import contextlib
+    return extern(contextlib.contextmanager(fn))

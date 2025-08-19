@@ -22,6 +22,7 @@ from .runtime._async_compile import AsyncCompileMode, FutureKernel
 from .compiler import compile, CompilationError
 from .errors import TritonError
 from .runtime._allocation import set_allocator
+from .language import context_manager
 
 from . import language
 from . import testing
@@ -37,6 +38,7 @@ __all__ = [
     "compile",
     "Config",
     "constexpr_function",
+    "context_manager",
     "FutureKernel",
     "heuristics",
     "InterpreterError",

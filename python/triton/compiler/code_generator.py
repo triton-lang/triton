@@ -971,26 +971,22 @@ class CodeGenerator(ast.NodeVisitor):
                 return self.visit(node.orelse)
 
     def visit_With(self, node):
-        # Lower `with` statements by constructing context managers and calling their enter/exit hooks
-        # Instantiate each context manager with builder injection
-        cm_list = []
-        for item in node.items:
-            call = item.context_expr
-            fn = self.visit(call.func)
-            args = [self.visit(arg) for arg in call.args]
-            kws = dict(self.visit(kw) for kw in call.keywords)
-            cm = fn(*args, _semantic=self.semantic, **kws)
-            cm_list.append(cm)
-        for cm, item in zip(cm_list, node.items):
-            res = cm.__enter__()
-            if item.optional_vars is not None:
-                var_name = self.visit(item.optional_vars)
-                self.set_value(var_name, res)
         if ContainsReturnChecker(self.gscope).visit(node):
             raise self._unsupported(node, "Cannot have `return` statements inside `with` statements in triton ")
-        self.visit_compound_statement(node.body)
-        for cm in reversed(cm_list):
-            cm.__exit__(None, None, None)
+
+        # There could be multiple contextmanager expressions
+        # within the with statement, so wrap everything in
+        # an ExitStack so they get managed cleanly.
+        with contextlib.ExitStack() as stack:
+            for item in node.items:
+                context = self.visit(item.context_expr)
+                name = stack.enter_context(context)
+                # Create any names that the withitem introduces
+                if item.optional_vars:
+                    assert name
+                    self.assignTarget(item.optional_vars, name)
+
+            self.visit_compound_statement(node.body)
 
     def visit_Pass(self, node):
         pass
