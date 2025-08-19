@@ -1808,9 +1808,11 @@ class TritonSemantic(Generic[TensorTy]):
         is_signed = [arg.dtype.is_int_signed() for arg in args]
         return self.tensor(self.builder.create_print(prefix, hex, new_args, is_signed), tl.void)
 
-    def device_assert(self, cond: TensorTy, msg: str) -> TensorTy:
+    def device_assert(self, cond: TensorTy, msg: str, mask: Optional[TensorTy]) -> TensorTy:
         if not self.builder.options.debug:
             return
+        if mask is not None:
+            cond = self.or_(cond, self.not_(mask))
         return self.tensor(self.builder.create_assert(cond.handle, msg), tl.void)
 
     def assume(self, cond) -> TensorTy:
