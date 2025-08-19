@@ -1,0 +1,70 @@
+[  0%] Built target gtest
+[  0%] Built target gmock
+[  0%] Building CXX object _deps/googletest-build/googlemock/CMakeFiles/gmock_main.dir/src/gmock_main.cc.o
+[  1%] Linking CXX static library ../../../lib/libgmock_main.a
+[  1%] Built target gmock_main
+[  2%] Built target gtest_main
+[  3%] Built target f2reduce
+[  7%] Built target TritonTableGen
+[  9%] Built target TritonGPUTableGen
+[ 12%] Built target TritonGPUAttrDefsIncGen
+[ 12%] Building TypeInterfaces.h.inc...
+[ 13%] Building TypeInterfaces.cpp.inc...
+[ 13%] Built target TritonGPUTypeInterfacesIncGen
+[ 14%] Built target TritonTools
+[ 15%] Built target TritonNvidiaGPUTableGen
+[ 17%] Built target TritonNvidiaGPUAttrDefsIncGen
+[ 17%] Building TritonNvidiaGPUOpInterfaces.h.inc...
+[ 18%] Building TritonNvidiaGPUOpInterfaces.cpp.inc...
+[ 18%] Built target TritonNvidiaGPUOpInterfacesIncGen
+[ 18%] Built target TritonCanonicalizeIncGen
+[ 20%] Built target TritonIR
+[ 20%] Building CXX object lib/Dialect/TritonGPU/IR/CMakeFiles/TritonGPUIR.dir/Dialect.cpp.o
+[ 20%] Building CXX object lib/Dialect/TritonGPU/IR/CMakeFiles/TritonGPUIR.dir/LinearLayoutConversions.cpp.o
+[ 20%] Building CXX object lib/Dialect/TritonGPU/IR/CMakeFiles/TritonGPUIR.dir/LayoutUtility.cpp.o
+[ 21%] Building CXX object lib/Dialect/TritonGPU/IR/CMakeFiles/TritonGPUIR.dir/Ops.cpp.o
+[ 21%] Building CXX object lib/Dialect/TritonGPU/IR/CMakeFiles/TritonGPUIR.dir/Types.cpp.o
+[ 21%] Built target TritonGPUIR
+[ 21%] Building CXX object lib/Dialect/TritonNvidiaGPU/IR/CMakeFiles/TritonNvidiaGPUIR.dir/Dialect.cpp.o
+[ 21%] Building CXX object lib/Dialect/TritonNvidiaGPU/IR/CMakeFiles/TritonNvidiaGPUIR.dir/Ops.cpp.o
+[ 21%] Built target TritonNvidiaGPUIR
+[ 21%] Building CXX object lib/Analysis/CMakeFiles/TritonAnalysis.dir/AxisInfo.cpp.o
+[ 21%] Building CXX object lib/Analysis/CMakeFiles/TritonAnalysis.dir/Allocation.cpp.o
+[ 23%] Building CXX object lib/Analysis/CMakeFiles/TritonAnalysis.dir/Membar.cpp.o
+[ 23%] Building CXX object lib/Analysis/CMakeFiles/TritonAnalysis.dir/Alias.cpp.o
+[ 23%] Building CXX object lib/Analysis/CMakeFiles/TritonAnalysis.dir/Utility.cpp.o
+[ 23%] Built target TritonAnalysis
+[ 23%] Built target TritonConversionPassIncGen
+[ 23%] Built target ProtonTableGen
+[ 24%] Built target ProtonAttrDefsIncGen
+[ 24%] Building CXX object third_party/proton/Dialect/lib/Dialect/Proton/IR/CMakeFiles/ProtonIR.dir/Dialect.cpp.o
+[ 24%] Building CXX object third_party/proton/Dialect/lib/Dialect/Proton/IR/CMakeFiles/ProtonIR.dir/Ops.cpp.o
+[ 24%] Built target ProtonIR
+[ 24%] Building CXX object lib/Conversion/TritonToTritonGPU/CMakeFiles/TritonToTritonGPU.dir/RelayoutTritonGPU.cpp.o
+[ 25%] Building CXX object lib/Conversion/TritonToTritonGPU/CMakeFiles/TritonToTritonGPU.dir/TritonGPUConversion.cpp.o
+[ 25%] Building CXX object lib/Conversion/TritonToTritonGPU/CMakeFiles/TritonToTritonGPU.dir/TritonToTritonGPUPass.cpp.o
+/Users/andrew/zzCoding-play/triton/lib/Conversion/TritonToTritonGPU/TritonToTritonGPUPass.cpp:174:43: error: no member named 'cloneWithEncoding' in 'mlir::RankedTensorType'
+  174 |     RankedTensorType newArgType = argType.cloneWithEncoding(newArgEncoding);
+      |                                   ~~~~~~~ ^
+/Users/andrew/zzCoding-play/triton/lib/Conversion/TritonToTritonGPU/TritonToTritonGPUPass.cpp:239:41: error: no member named 'cloneWithEncoding' in 'mlir::RankedTensorType'
+  239 |     RankedTensorType retType = origType.cloneWithEncoding(dEncoding);
+      |                                ~~~~~~~~ ^
+/Users/andrew/zzCoding-play/triton/lib/Conversion/TritonToTritonGPU/TritonToTritonGPUPass.cpp:255:28: error: no member named 'cloneWithEncoding' in 'mlir::RankedTensorType'
+  255 |       auto dstType = aType.cloneWithEncoding(encoding);
+      |                      ~~~~~ ^
+/Users/andrew/zzCoding-play/triton/lib/Conversion/TritonToTritonGPU/TritonToTritonGPUPass.cpp:261:28: error: no member named 'cloneWithEncoding' in 'mlir::RankedTensorType'
+  261 |       auto dstType = bType.cloneWithEncoding(encoding);
+      |                      ~~~~~ ^
+/Users/andrew/zzCoding-play/triton/lib/Conversion/TritonToTritonGPU/TritonToTritonGPUPass.cpp:311:31: error: no member named 'cloneWithEncoding' in 'mlir::RankedTensorType'
+  311 |     auto newRetType = retType.cloneWithEncoding(newRetEncoding);
+      |                       ~~~~~~~ ^
+/Users/andrew/zzCoding-play/triton/lib/Conversion/TritonToTritonGPU/TritonToTritonGPUPass.cpp:384:21: error: no member named 'cloneWithEncoding' in 'mlir::RankedTensorType'
+  384 |       srcTy = srcTy.cloneWithEncoding(srcEnc);
+      |               ~~~~~ ^
+/Users/andrew/zzCoding-play/triton/lib/Conversion/TritonToTritonGPU/TritonToTritonGPUPass.cpp:423:33: error: no member named 'cloneWithEncoding' in 'mlir::RankedTensorType'
+  423 |     Type retType = op.getType().cloneWithEncoding(srcEncoding);
+      |                    ~~~~~~~~~~~~ ^
+7 errors generated.
+gmake[2]: *** [lib/Conversion/TritonToTritonGPU/CMakeFiles/TritonToTritonGPU.dir/build.make:107: lib/Conversion/TritonToTritonGPU/CMakeFiles/TritonToTritonGPU.dir/TritonToTritonGPUPass.cpp.o] Error 1
+gmake[1]: *** [CMakeFiles/Makefile2:5154: lib/Conversion/TritonToTritonGPU/CMakeFiles/TritonToTritonGPU.dir/all] Error 2
+gmake: *** [Makefile:146: all] Error 2

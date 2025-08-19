@@ -1,0 +1,21 @@
+# ninja log v7
+0	30	1755598674993724733	googletest-populate-prefix/src/googletest-populate-stamp/googletest-populate-mkdir	7c739f4a6812f290
+0	30	1755598674993724733	/Users/andrew/zzCoding-play/triton/build_metal/_deps/googletest-subbuild/googletest-populate-prefix/src/googletest-populate-stamp/googletest-populate-mkdir	7c739f4a6812f290
+37	2688	1755598677660119956	googletest-populate-prefix/src/googletest-populate-stamp/googletest-populate-download	94416b31c1ce52c1
+37	2688	1755598677660119956	/Users/andrew/zzCoding-play/triton/build_metal/_deps/googletest-subbuild/googletest-populate-prefix/src/googletest-populate-stamp/googletest-populate-download	94416b31c1ce52c1
+2688	2721	1755598677661044248	googletest-populate-prefix/src/googletest-populate-stamp/googletest-populate-update	3a3e6d4f8c1edcd1
+2688	2721	1755598677661044248	/Users/andrew/zzCoding-play/triton/build_metal/_deps/googletest-subbuild/googletest-populate-prefix/src/googletest-populate-stamp/googletest-populate-update	3a3e6d4f8c1edcd1
+2721	2742	1755598677713685068	googletest-populate-prefix/src/googletest-populate-stamp/googletest-populate-patch	61a6ad4b2fda0038
+2721	2742	1755598677713685068	/Users/andrew/zzCoding-play/triton/build_metal/_deps/googletest-subbuild/googletest-populate-prefix/src/googletest-populate-stamp/googletest-populate-patch	61a6ad4b2fda0038
+2742	2761	1755598677733144662	googletest-populate-prefix/src/googletest-populate-stamp/googletest-populate-configure	4690c231d53cd0c1
+2742	2761	1755598677733144662	/Users/andrew/zzCoding-play/triton/build_metal/_deps/googletest-subbuild/googletest-populate-prefix/src/googletest-populate-stamp/googletest-populate-configure	4690c231d53cd0c1
+2761	2780	1755598677751682339	googletest-populate-prefix/src/googletest-populate-stamp/googletest-populate-build	a9daf45646ed44d3
+2761	2780	1755598677751682339	/Users/andrew/zzCoding-play/triton/build_metal/_deps/googletest-subbuild/googletest-populate-prefix/src/googletest-populate-stamp/googletest-populate-build	a9daf45646ed44d3
+2780	2799	1755598677770543015	googletest-populate-prefix/src/googletest-populate-stamp/googletest-populate-install	31272ebeb90c73cf
+2780	2799	1755598677770543015	/Users/andrew/zzCoding-play/triton/build_metal/_deps/googletest-subbuild/googletest-populate-prefix/src/googletest-populate-stamp/googletest-populate-install	31272ebeb90c73cf
+2799	2816	1755598677787833025	googletest-populate-prefix/src/googletest-populate-stamp/googletest-populate-test	fdde1bf6dd2528e9
+2799	2816	1755598677787833025	/Users/andrew/zzCoding-play/triton/build_metal/_deps/googletest-subbuild/googletest-populate-prefix/src/googletest-populate-stamp/googletest-populate-test	fdde1bf6dd2528e9
+2816	2843	1755598677814669456	CMakeFiles/googletest-populate-complete	26316e622537fa51
+2816	2843	1755598677814669456	googletest-populate-prefix/src/googletest-populate-stamp/googletest-populate-done	26316e622537fa51
+2816	2843	1755598677814669456	/Users/andrew/zzCoding-play/triton/build_metal/_deps/googletest-subbuild/CMakeFiles/googletest-populate-complete	26316e622537fa51
+2816	2843	1755598677814669456	/Users/andrew/zzCoding-play/triton/build_metal/_deps/googletest-subbuild/googletest-populate-prefix/src/googletest-populate-stamp/googletest-populate-done	26316e622537fa51

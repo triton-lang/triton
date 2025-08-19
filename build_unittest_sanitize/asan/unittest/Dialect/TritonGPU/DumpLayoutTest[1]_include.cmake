@@ -1,0 +1,5 @@
+if(EXISTS "/Users/andrew/zzCoding-play/triton/build_unittest_sanitize/asan/unittest/Dialect/TritonGPU/DumpLayoutTest[1]_tests.cmake")
+  include("/Users/andrew/zzCoding-play/triton/build_unittest_sanitize/asan/unittest/Dialect/TritonGPU/DumpLayoutTest[1]_tests.cmake")
+else()
+  add_test(DumpLayoutTest_NOT_BUILT DumpLayoutTest_NOT_BUILT)
+endif()

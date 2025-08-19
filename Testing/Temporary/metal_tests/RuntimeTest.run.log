@@ -1,0 +1,16 @@
+[==========] Running 4 tests from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 4 tests from MetalRuntime
+[ RUN      ] MetalRuntime.StubHandleReportsStubMode
+[       OK ] MetalRuntime.StubHandleReportsStubMode (0 ms)
+[ RUN      ] MetalRuntime.PipelineCacheReturnsSameId
+[       OK ] MetalRuntime.PipelineCacheReturnsSameId (0 ms)
+[ RUN      ] MetalRuntime.KernelLookupMissingThrows
+[       OK ] MetalRuntime.KernelLookupMissingThrows (0 ms)
+[ RUN      ] MetalRuntime.StubModeStillCachesPipelinesSeparately
+[       OK ] MetalRuntime.StubModeStillCachesPipelinesSeparately (0 ms)
+[----------] 4 tests from MetalRuntime (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 4 tests from 1 test suite ran. (0 ms total)
+[  PASSED  ] 4 tests.

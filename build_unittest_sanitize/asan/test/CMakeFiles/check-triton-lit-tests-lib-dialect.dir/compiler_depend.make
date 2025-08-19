@@ -1,0 +1,2 @@
+# Empty custom commands generated dependencies file for check-triton-lit-tests-lib-dialect.
+# This may be replaced when dependencies are built.

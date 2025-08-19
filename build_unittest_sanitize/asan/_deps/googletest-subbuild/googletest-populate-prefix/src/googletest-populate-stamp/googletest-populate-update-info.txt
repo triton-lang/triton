@@ -1,0 +1,7 @@
+# This is a generated file and its contents are an internal implementation detail.
+# The patch step will be re-executed if anything in this file changes.
+# No other meaning or use of this file is supported.
+
+command (connected)=/Users/andrew/venvs/refusals/lib/python3.10/site-packages/cmake/data/bin/cmake;-Dcan_fetch=YES;-DCMAKE_MESSAGE_LOG_LEVEL=VERBOSE;-P;/Users/andrew/zzCoding-play/triton/build_unittest_sanitize/asan/_deps/googletest-subbuild/googletest-populate-prefix/tmp/googletest-populate-gitupdate.cmake
+command (disconnected)=/Users/andrew/venvs/refusals/lib/python3.10/site-packages/cmake/data/bin/cmake;-Dcan_fetch=NO;-DCMAKE_MESSAGE_LOG_LEVEL=VERBOSE;-P;/Users/andrew/zzCoding-play/triton/build_unittest_sanitize/asan/_deps/googletest-subbuild/googletest-populate-prefix/tmp/googletest-populate-gitupdate.cmake
+work_dir=/Users/andrew/zzCoding-play/triton/build_unittest_sanitize/asan/_deps/googletest-src

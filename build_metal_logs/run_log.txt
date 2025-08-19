@@ -1,0 +1,65 @@
+PWD=/Users/andrew/zzCoding-play/triton
+--- xcrun ---
+xcrun version 70.
+--- metal ---
+metal: MISSING
+--- metallib ---
+metallib: MISSING
+total 400
+drwxr-xr-x   57 andrew  staff   1824 Aug 19 08:46 .
+drwxrwxrwx  122 andrew  staff   3904 Aug 17 03:30 ..
+-rw-r--r--@   1 andrew  staff  10244 Aug 19 08:46 .DS_Store
+-rw-r--r--    1 andrew  staff     19 Apr  5 20:03 .clang-format
+-rw-r--r--    1 andrew  staff    514 Apr  5 20:03 .editorconfig
+drwxr-xr-x   17 andrew  staff    544 Aug 19 08:46 .git
+-rw-r--r--    1 andrew  staff    881 Apr  5 20:03 .git-blame-ignore-revs
+drwxr-xr-x    8 andrew  staff    256 Aug 10 10:58 .github
+-rw-r--r--@   1 andrew  staff   1367 Jul 16 04:45 .gitignore
+drwxr-xr-x@   5 andrew  staff    160 Aug 17 02:08 .mypy_cache
+-rw-r--r--@   1 andrew  staff   2226 May 10 04:43 .pre-commit-config.yaml
+drwxr-xr-x    6 andrew  staff    192 Jul 16 07:35 .pytest_cache
+drwxr-xr-x@   5 andrew  staff    160 Aug 17 02:07 .ruff_cache
+drwxr-xr-x@   8 andrew  staff    256 Aug 19 03:45 .venv
+-rw-r--r--@   1 andrew  staff     27 Aug 19 01:31 .veve
+drwxr-xr-x@   3 andrew  staff     96 Aug 17 13:24 .vscode
+drwxr-xr-x    5 andrew  staff    160 Jul 26 18:43 CMakeFiles
+-rw-r--r--@   1 andrew  staff  11381 Aug 19 00:42 CMakeLists.txt
+-rw-r--r--    1 andrew  staff   4551 Apr  5 20:03 CONTRIBUTING.md
+-rw-r--r--    1 andrew  staff   1132 Apr  5 20:03 LICENSE
+-rw-r--r--@   1 andrew  staff    297 May  2 06:33 MANIFEST.in
+-rw-r--r--@   1 andrew  staff   5307 Aug 16 17:57 Makefile
+-rw-r--r--@   1 andrew  staff  14063 Jul 16 04:45 README.md
+-rw-r--r--    1 andrew  staff   2909 Apr  5 20:03 RELEASE.md
+drwxr-xr-x    3 andrew  staff     96 May 10 04:28 Testing
+drwxr-xr-x    5 andrew  staff    160 Jul 26 18:43 _deps
+drwxr-xr-x    2 andrew  staff     64 Jul 13 07:41 bench
+drwxr-xr-x    9 andrew  staff    288 Aug 16 17:57 bin
+-rw-r--r--@   1 andrew  staff    312 Aug 17 17:17 brew_cmake_install.log
+-rw-r--r--@   1 andrew  staff    146 Aug 17 17:40 brew_llvm15_install.log
+drwxr-xr-x@  25 andrew  staff    800 Aug 19 03:47 build
+-rw-r--r--@   1 andrew  staff    201 Aug 17 17:36 build_bin_list.log
+-rw-r--r--@   1 andrew  staff   5127 Aug 17 17:59 build_fail_snippet.log
+drwxr-xr-x@   2 andrew  staff     64 Aug 19 08:46 build_metal
+drwxr-xr-x@   3 andrew  staff     96 Aug 19 08:46 build_metal_logs
+drwxr-xr-x@  20 andrew  staff    640 Aug 19 01:44 build_unittest
+drwxr-xr-x@   5 andrew  staff    160 Aug 19 03:21 build_unittest_sanitize
+drwxr-xr-x    7 andrew  staff    224 Aug 17 02:08 cmake
+-rw-r--r--@   1 andrew  staff   5127 Aug 17 17:59 cmake_build.log
+-rw-r--r--@   1 andrew  staff   2313 Aug 17 17:41 cmake_configure.log
+lrwxr-xr-x@   1 andrew  staff    103 Aug 19 04:32 compile_commands.json -> /Users/andrew/zzCoding-play/triton/build/cmake.macosx-10.9-universal2-cpython-3.9/compile_commands.json
+drwxr-xr-x   14 andrew  staff    448 Aug 16 21:02 docs
+drwxr-xr-x    4 andrew  staff    128 Jul 13 07:41 include
+drwxr-xr-x   10 andrew  staff    320 Jul 26 18:43 lib
+drwxr-xr-x@  45 andrew  staff   1440 Aug 19 04:30 llvm-project
+-rw-r--r--@   1 andrew  staff    105 Aug 17 18:30 pip_lit_install.log
+-rw-r--r--@   1 andrew  staff     14 Aug 17 18:31 pip_lit_verify.log
+-rw-r--r--@   1 andrew  staff  23668 Aug 17 17:09 pyobjc_install.log
+-rw-r--r--@   1 andrew  staff    984 Jul 16 04:45 pyproject.toml
+drwxr-xr-x   14 andrew  staff    448 Aug 16 17:57 python
+drwxr-xr-x    3 andrew  staff     96 Aug 16 17:57 scripts
+-rw-r--r--@   1 andrew  staff  33045 Aug 16 17:57 setup.py
+drwxr-xr-x   20 andrew  staff    640 Aug 17 03:27 test
+-rw-r--r--@   1 andrew  staff    194 Aug 17 18:36 test_metal_run.log
+drwxr-xr-x    8 andrew  staff    256 Aug 16 19:27 third_party
+drwxr-xr-x    9 andrew  staff    288 Aug 17 03:31 unittest
+drwxr-xr-x    4 andrew  staff    128 Apr  5 20:03 utils

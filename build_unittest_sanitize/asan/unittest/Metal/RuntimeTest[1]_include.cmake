@@ -1,0 +1,5 @@
+if(EXISTS "/Users/andrew/zzCoding-play/triton/build_unittest_sanitize/asan/unittest/Metal/RuntimeTest[1]_tests.cmake")
+  include("/Users/andrew/zzCoding-play/triton/build_unittest_sanitize/asan/unittest/Metal/RuntimeTest[1]_tests.cmake")
+else()
+  add_test(RuntimeTest_NOT_BUILT RuntimeTest_NOT_BUILT)
+endif()

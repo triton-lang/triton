@@ -1,0 +1,4 @@
+Warning: llvm@15 15.0.7 is already installed and up-to-date.
+To reinstall 15.0.7, run:
+  brew reinstall llvm@15
+CMAKE_CMD=/opt/homebrew/bin/cmake

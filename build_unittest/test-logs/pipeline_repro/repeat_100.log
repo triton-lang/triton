@@ -1,0 +1,1102 @@
+
+Repeating all tests (iteration 1) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 2) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 3) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 4) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 5) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 6) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 7) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 8) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (1 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 9) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (1 ms)
+[----------] 1 test from MetalPipeline (1 ms total)
+
+[==========] 1 test from 1 test suite ran. (1 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 10) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (2 ms)
+[----------] 1 test from MetalPipeline (2 ms total)
+
+[==========] 1 test from 1 test suite ran. (2 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 11) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 12) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 13) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 14) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (1 ms)
+[----------] 1 test from MetalPipeline (1 ms total)
+
+[==========] 1 test from 1 test suite ran. (1 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 15) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 16) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 17) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 18) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 19) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 20) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 21) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 22) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (1 ms)
+[----------] 1 test from MetalPipeline (1 ms total)
+
+[==========] 1 test from 1 test suite ran. (1 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 23) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 24) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 25) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (6 ms)
+[----------] 1 test from MetalPipeline (6 ms total)
+
+[==========] 1 test from 1 test suite ran. (6 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 26) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 27) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 28) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 29) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 30) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 31) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 32) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 33) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 34) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (4 ms)
+[----------] 1 test from MetalPipeline (4 ms total)
+
+[==========] 1 test from 1 test suite ran. (4 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 35) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 36) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (1 ms)
+[----------] 1 test from MetalPipeline (1 ms total)
+
+[==========] 1 test from 1 test suite ran. (1 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 37) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (4 ms)
+[----------] 1 test from MetalPipeline (4 ms total)
+
+[==========] 1 test from 1 test suite ran. (4 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 38) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 39) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (1 ms)
+[----------] 1 test from MetalPipeline (1 ms total)
+
+[==========] 1 test from 1 test suite ran. (2 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 40) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 41) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 42) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 43) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 44) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 45) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (1 ms)
+[----------] 1 test from MetalPipeline (2 ms total)
+
+[==========] 1 test from 1 test suite ran. (2 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 46) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (1 ms)
+[----------] 1 test from MetalPipeline (1 ms total)
+
+[==========] 1 test from 1 test suite ran. (1 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 47) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 48) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 49) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 50) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (2 ms)
+[----------] 1 test from MetalPipeline (2 ms total)
+
+[==========] 1 test from 1 test suite ran. (2 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 51) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 52) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 53) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (1 ms)
+[----------] 1 test from MetalPipeline (1 ms total)
+
+[==========] 1 test from 1 test suite ran. (1 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 54) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (5 ms)
+[----------] 1 test from MetalPipeline (5 ms total)
+
+[==========] 1 test from 1 test suite ran. (5 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 55) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (22 ms)
+[----------] 1 test from MetalPipeline (22 ms total)
+
+[==========] 1 test from 1 test suite ran. (22 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 56) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 57) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 58) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 59) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 60) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 61) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 62) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 63) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 64) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 65) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 66) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 67) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 68) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 69) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 70) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 71) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 72) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 73) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 74) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 75) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 76) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 77) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 78) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 79) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 80) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 81) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 82) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 83) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 84) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 85) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 86) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (1 ms)
+[----------] 1 test from MetalPipeline (1 ms total)
+
+[==========] 1 test from 1 test suite ran. (1 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 87) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (3 ms)
+[----------] 1 test from MetalPipeline (3 ms total)
+
+[==========] 1 test from 1 test suite ran. (4 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 88) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (1 ms)
+[----------] 1 test from MetalPipeline (2 ms total)
+
+[==========] 1 test from 1 test suite ran. (2 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 89) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (3 ms)
+[----------] 1 test from MetalPipeline (3 ms total)
+
+[==========] 1 test from 1 test suite ran. (3 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 90) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 91) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 92) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 93) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 94) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 95) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 96) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 97) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 98) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 99) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 100) . . .
+
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[       OK ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.

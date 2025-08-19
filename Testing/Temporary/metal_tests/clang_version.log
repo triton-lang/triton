@@ -1,0 +1,4 @@
+Apple clang version 17.0.0 (clang-1700.0.13.5)
+Target: arm64-apple-darwin25.0.0
+Thread model: posix
+InstalledDir: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin

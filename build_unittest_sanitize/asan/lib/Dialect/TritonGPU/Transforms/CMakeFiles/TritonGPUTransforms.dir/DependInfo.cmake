@@ -1,0 +1,57 @@
+
+# Consider dependencies only in project.
+set(CMAKE_DEPENDS_IN_PROJECT_ONLY OFF)
+
+# The set of languages for which implicit dependencies are needed:
+set(CMAKE_DEPENDS_LANGUAGES
+  )
+
+# The set of dependency files which are needed:
+set(CMAKE_DEPENDS_DEPENDENCY_FILES
+  "/Users/andrew/zzCoding-play/triton/lib/Dialect/TritonGPU/Transforms/AccelerateMatmul.cpp" "lib/Dialect/TritonGPU/Transforms/CMakeFiles/TritonGPUTransforms.dir/AccelerateMatmul.cpp.o" "gcc" "lib/Dialect/TritonGPU/Transforms/CMakeFiles/TritonGPUTransforms.dir/AccelerateMatmul.cpp.o.d"
+  "/Users/andrew/zzCoding-play/triton/lib/Dialect/TritonGPU/Transforms/Coalesce.cpp" "lib/Dialect/TritonGPU/Transforms/CMakeFiles/TritonGPUTransforms.dir/Coalesce.cpp.o" "gcc" "lib/Dialect/TritonGPU/Transforms/CMakeFiles/TritonGPUTransforms.dir/Coalesce.cpp.o.d"
+  "/Users/andrew/zzCoding-play/triton/lib/Dialect/TritonGPU/Transforms/CoalesceAsyncCopy.cpp" "lib/Dialect/TritonGPU/Transforms/CMakeFiles/TritonGPUTransforms.dir/CoalesceAsyncCopy.cpp.o" "gcc" "lib/Dialect/TritonGPU/Transforms/CMakeFiles/TritonGPUTransforms.dir/CoalesceAsyncCopy.cpp.o.d"
+  "/Users/andrew/zzCoding-play/triton/lib/Dialect/TritonGPU/Transforms/CombineTensorSelectAndIf.cpp" "lib/Dialect/TritonGPU/Transforms/CMakeFiles/TritonGPUTransforms.dir/CombineTensorSelectAndIf.cpp.o" "gcc" "lib/Dialect/TritonGPU/Transforms/CMakeFiles/TritonGPUTransforms.dir/CombineTensorSelectAndIf.cpp.o.d"
+  "/Users/andrew/zzCoding-play/triton/lib/Dialect/TritonGPU/Transforms/DecomposeScaledBlocked.cpp" "lib/Dialect/TritonGPU/Transforms/CMakeFiles/TritonGPUTransforms.dir/DecomposeScaledBlocked.cpp.o" "gcc" "lib/Dialect/TritonGPU/Transforms/CMakeFiles/TritonGPUTransforms.dir/DecomposeScaledBlocked.cpp.o.d"
+  "/Users/andrew/zzCoding-play/triton/lib/Dialect/TritonGPU/Transforms/F32DotTC.cpp" "lib/Dialect/TritonGPU/Transforms/CMakeFiles/TritonGPUTransforms.dir/F32DotTC.cpp.o" "gcc" "lib/Dialect/TritonGPU/Transforms/CMakeFiles/TritonGPUTransforms.dir/F32DotTC.cpp.o.d"
+  "/Users/andrew/zzCoding-play/triton/lib/Dialect/TritonGPU/Transforms/FuseNestedLoops.cpp" "lib/Dialect/TritonGPU/Transforms/CMakeFiles/TritonGPUTransforms.dir/FuseNestedLoops.cpp.o" "gcc" "lib/Dialect/TritonGPU/Transforms/CMakeFiles/TritonGPUTransforms.dir/FuseNestedLoops.cpp.o.d"
+  "/Users/andrew/zzCoding-play/triton/lib/Dialect/TritonGPU/Transforms/HoistTMEMAlloc.cpp" "lib/Dialect/TritonGPU/Transforms/CMakeFiles/TritonGPUTransforms.dir/HoistTMEMAlloc.cpp.o" "gcc" "lib/Dialect/TritonGPU/Transforms/CMakeFiles/TritonGPUTransforms.dir/HoistTMEMAlloc.cpp.o.d"
+  "/Users/andrew/zzCoding-play/triton/lib/Dialect/TritonGPU/Transforms/OptimizeAccumulatorInit.cpp" "lib/Dialect/TritonGPU/Transforms/CMakeFiles/TritonGPUTransforms.dir/OptimizeAccumulatorInit.cpp.o" "gcc" "lib/Dialect/TritonGPU/Transforms/CMakeFiles/TritonGPUTransforms.dir/OptimizeAccumulatorInit.cpp.o.d"
+  "/Users/andrew/zzCoding-play/triton/lib/Dialect/TritonGPU/Transforms/OptimizeDotOperands.cpp" "lib/Dialect/TritonGPU/Transforms/CMakeFiles/TritonGPUTransforms.dir/OptimizeDotOperands.cpp.o" "gcc" "lib/Dialect/TritonGPU/Transforms/CMakeFiles/TritonGPUTransforms.dir/OptimizeDotOperands.cpp.o.d"
+  "/Users/andrew/zzCoding-play/triton/lib/Dialect/TritonGPU/Transforms/OptimizeThreadLocality.cpp" "lib/Dialect/TritonGPU/Transforms/CMakeFiles/TritonGPUTransforms.dir/OptimizeThreadLocality.cpp.o" "gcc" "lib/Dialect/TritonGPU/Transforms/CMakeFiles/TritonGPUTransforms.dir/OptimizeThreadLocality.cpp.o.d"
+  "/Users/andrew/zzCoding-play/triton/lib/Dialect/TritonGPU/Transforms/Pipeliner/AssignLatencies.cpp" "lib/Dialect/TritonGPU/Transforms/CMakeFiles/TritonGPUTransforms.dir/Pipeliner/AssignLatencies.cpp.o" "gcc" "lib/Dialect/TritonGPU/Transforms/CMakeFiles/TritonGPUTransforms.dir/Pipeliner/AssignLatencies.cpp.o.d"
+  "/Users/andrew/zzCoding-play/triton/lib/Dialect/TritonGPU/Transforms/Pipeliner/LowerLoops.cpp" "lib/Dialect/TritonGPU/Transforms/CMakeFiles/TritonGPUTransforms.dir/Pipeliner/LowerLoops.cpp.o" "gcc" "lib/Dialect/TritonGPU/Transforms/CMakeFiles/TritonGPUTransforms.dir/Pipeliner/LowerLoops.cpp.o.d"
+  "/Users/andrew/zzCoding-play/triton/lib/Dialect/TritonGPU/Transforms/Pipeliner/MMAv5PipelineUtility.cpp" "lib/Dialect/TritonGPU/Transforms/CMakeFiles/TritonGPUTransforms.dir/Pipeliner/MMAv5PipelineUtility.cpp.o" "gcc" "lib/Dialect/TritonGPU/Transforms/CMakeFiles/TritonGPUTransforms.dir/Pipeliner/MMAv5PipelineUtility.cpp.o.d"
+  "/Users/andrew/zzCoding-play/triton/lib/Dialect/TritonGPU/Transforms/Pipeliner/PipelineExpander.cpp" "lib/Dialect/TritonGPU/Transforms/CMakeFiles/TritonGPUTransforms.dir/Pipeliner/PipelineExpander.cpp.o" "gcc" "lib/Dialect/TritonGPU/Transforms/CMakeFiles/TritonGPUTransforms.dir/Pipeliner/PipelineExpander.cpp.o.d"
+  "/Users/andrew/zzCoding-play/triton/lib/Dialect/TritonGPU/Transforms/Pipeliner/PipeliningUtility.cpp" "lib/Dialect/TritonGPU/Transforms/CMakeFiles/TritonGPUTransforms.dir/Pipeliner/PipeliningUtility.cpp.o" "gcc" "lib/Dialect/TritonGPU/Transforms/CMakeFiles/TritonGPUTransforms.dir/Pipeliner/PipeliningUtility.cpp.o.d"
+  "/Users/andrew/zzCoding-play/triton/lib/Dialect/TritonGPU/Transforms/Pipeliner/Schedule.cpp" "lib/Dialect/TritonGPU/Transforms/CMakeFiles/TritonGPUTransforms.dir/Pipeliner/Schedule.cpp.o" "gcc" "lib/Dialect/TritonGPU/Transforms/CMakeFiles/TritonGPUTransforms.dir/Pipeliner/Schedule.cpp.o.d"
+  "/Users/andrew/zzCoding-play/triton/lib/Dialect/TritonGPU/Transforms/Pipeliner/ScheduleLoops.cpp" "lib/Dialect/TritonGPU/Transforms/CMakeFiles/TritonGPUTransforms.dir/Pipeliner/ScheduleLoops.cpp.o" "gcc" "lib/Dialect/TritonGPU/Transforms/CMakeFiles/TritonGPUTransforms.dir/Pipeliner/ScheduleLoops.cpp.o.d"
+  "/Users/andrew/zzCoding-play/triton/lib/Dialect/TritonGPU/Transforms/Pipeliner/SoftwarePipeliner.cpp" "lib/Dialect/TritonGPU/Transforms/CMakeFiles/TritonGPUTransforms.dir/Pipeliner/SoftwarePipeliner.cpp.o" "gcc" "lib/Dialect/TritonGPU/Transforms/CMakeFiles/TritonGPUTransforms.dir/Pipeliner/SoftwarePipeliner.cpp.o.d"
+  "/Users/andrew/zzCoding-play/triton/lib/Dialect/TritonGPU/Transforms/Pipeliner/TMAStoresPipeline.cpp" "lib/Dialect/TritonGPU/Transforms/CMakeFiles/TritonGPUTransforms.dir/Pipeliner/TMAStoresPipeline.cpp.o" "gcc" "lib/Dialect/TritonGPU/Transforms/CMakeFiles/TritonGPUTransforms.dir/Pipeliner/TMAStoresPipeline.cpp.o.d"
+  "/Users/andrew/zzCoding-play/triton/lib/Dialect/TritonGPU/Transforms/Pipeliner/TestPipelineLowerLoop.cpp" "lib/Dialect/TritonGPU/Transforms/CMakeFiles/TritonGPUTransforms.dir/Pipeliner/TestPipelineLowerLoop.cpp.o" "gcc" "lib/Dialect/TritonGPU/Transforms/CMakeFiles/TritonGPUTransforms.dir/Pipeliner/TestPipelineLowerLoop.cpp.o.d"
+  "/Users/andrew/zzCoding-play/triton/lib/Dialect/TritonGPU/Transforms/Pipeliner/WGMMAPipeline.cpp" "lib/Dialect/TritonGPU/Transforms/CMakeFiles/TritonGPUTransforms.dir/Pipeliner/WGMMAPipeline.cpp.o" "gcc" "lib/Dialect/TritonGPU/Transforms/CMakeFiles/TritonGPUTransforms.dir/Pipeliner/WGMMAPipeline.cpp.o.d"
+  "/Users/andrew/zzCoding-play/triton/lib/Dialect/TritonGPU/Transforms/Prefetch.cpp" "lib/Dialect/TritonGPU/Transforms/CMakeFiles/TritonGPUTransforms.dir/Prefetch.cpp.o" "gcc" "lib/Dialect/TritonGPU/Transforms/CMakeFiles/TritonGPUTransforms.dir/Prefetch.cpp.o.d"
+  "/Users/andrew/zzCoding-play/triton/lib/Dialect/TritonGPU/Transforms/ReduceDataDuplication.cpp" "lib/Dialect/TritonGPU/Transforms/CMakeFiles/TritonGPUTransforms.dir/ReduceDataDuplication.cpp.o" "gcc" "lib/Dialect/TritonGPU/Transforms/CMakeFiles/TritonGPUTransforms.dir/ReduceDataDuplication.cpp.o.d"
+  "/Users/andrew/zzCoding-play/triton/lib/Dialect/TritonGPU/Transforms/RemoveLayoutConversions.cpp" "lib/Dialect/TritonGPU/Transforms/CMakeFiles/TritonGPUTransforms.dir/RemoveLayoutConversions.cpp.o" "gcc" "lib/Dialect/TritonGPU/Transforms/CMakeFiles/TritonGPUTransforms.dir/RemoveLayoutConversions.cpp.o.d"
+  "/Users/andrew/zzCoding-play/triton/lib/Dialect/TritonGPU/Transforms/ReorderInstructions.cpp" "lib/Dialect/TritonGPU/Transforms/CMakeFiles/TritonGPUTransforms.dir/ReorderInstructions.cpp.o" "gcc" "lib/Dialect/TritonGPU/Transforms/CMakeFiles/TritonGPUTransforms.dir/ReorderInstructions.cpp.o.d"
+  "/Users/andrew/zzCoding-play/triton/lib/Dialect/TritonGPU/Transforms/Utility.cpp" "lib/Dialect/TritonGPU/Transforms/CMakeFiles/TritonGPUTransforms.dir/Utility.cpp.o" "gcc" "lib/Dialect/TritonGPU/Transforms/CMakeFiles/TritonGPUTransforms.dir/Utility.cpp.o.d"
+  "/Users/andrew/zzCoding-play/triton/lib/Dialect/TritonGPU/Transforms/WarpSpecialization/AutomaticWarpSpecialization.cpp" "lib/Dialect/TritonGPU/Transforms/CMakeFiles/TritonGPUTransforms.dir/WarpSpecialization/AutomaticWarpSpecialization.cpp.o" "gcc" "lib/Dialect/TritonGPU/Transforms/CMakeFiles/TritonGPUTransforms.dir/WarpSpecialization/AutomaticWarpSpecialization.cpp.o.d"
+  "/Users/andrew/zzCoding-play/triton/lib/Dialect/TritonGPU/Transforms/WarpSpecialization/LoadMMASpecialization.cpp" "lib/Dialect/TritonGPU/Transforms/CMakeFiles/TritonGPUTransforms.dir/WarpSpecialization/LoadMMASpecialization.cpp.o" "gcc" "lib/Dialect/TritonGPU/Transforms/CMakeFiles/TritonGPUTransforms.dir/WarpSpecialization/LoadMMASpecialization.cpp.o.d"
+  "/Users/andrew/zzCoding-play/triton/lib/Dialect/TritonGPU/Transforms/WarpSpecialization/OptimizePartitionWarps.cpp" "lib/Dialect/TritonGPU/Transforms/CMakeFiles/TritonGPUTransforms.dir/WarpSpecialization/OptimizePartitionWarps.cpp.o" "gcc" "lib/Dialect/TritonGPU/Transforms/CMakeFiles/TritonGPUTransforms.dir/WarpSpecialization/OptimizePartitionWarps.cpp.o.d"
+  "/Users/andrew/zzCoding-play/triton/lib/Dialect/TritonGPU/Transforms/WarpSpecialization/Partition.cpp" "lib/Dialect/TritonGPU/Transforms/CMakeFiles/TritonGPUTransforms.dir/WarpSpecialization/Partition.cpp.o" "gcc" "lib/Dialect/TritonGPU/Transforms/CMakeFiles/TritonGPUTransforms.dir/WarpSpecialization/Partition.cpp.o.d"
+  "/Users/andrew/zzCoding-play/triton/lib/Dialect/TritonGPU/Transforms/WarpSpecialization/PartitionBuilder.cpp" "lib/Dialect/TritonGPU/Transforms/CMakeFiles/TritonGPUTransforms.dir/WarpSpecialization/PartitionBuilder.cpp.o" "gcc" "lib/Dialect/TritonGPU/Transforms/CMakeFiles/TritonGPUTransforms.dir/WarpSpecialization/PartitionBuilder.cpp.o.d"
+  "/Users/andrew/zzCoding-play/triton/lib/Dialect/TritonGPU/Transforms/WarpSpecialization/PartitionLoops.cpp" "lib/Dialect/TritonGPU/Transforms/CMakeFiles/TritonGPUTransforms.dir/WarpSpecialization/PartitionLoops.cpp.o" "gcc" "lib/Dialect/TritonGPU/Transforms/CMakeFiles/TritonGPUTransforms.dir/WarpSpecialization/PartitionLoops.cpp.o.d"
+  "/Users/andrew/zzCoding-play/triton/lib/Dialect/TritonGPU/Transforms/WarpSpecialization/PartitionScheduling.cpp" "lib/Dialect/TritonGPU/Transforms/CMakeFiles/TritonGPUTransforms.dir/WarpSpecialization/PartitionScheduling.cpp.o" "gcc" "lib/Dialect/TritonGPU/Transforms/CMakeFiles/TritonGPUTransforms.dir/WarpSpecialization/PartitionScheduling.cpp.o.d"
+  "/Users/andrew/zzCoding-play/triton/lib/Dialect/TritonGPU/Transforms/WarpSpecialization/RewritePartitionDependencies.cpp" "lib/Dialect/TritonGPU/Transforms/CMakeFiles/TritonGPUTransforms.dir/WarpSpecialization/RewritePartitionDependencies.cpp.o" "gcc" "lib/Dialect/TritonGPU/Transforms/CMakeFiles/TritonGPUTransforms.dir/WarpSpecialization/RewritePartitionDependencies.cpp.o.d"
+  )
+
+# Targets to which this target links which contain Fortran sources.
+set(CMAKE_Fortran_TARGET_LINKED_INFO_FILES
+  )
+
+# Targets to which this target links which contain Fortran sources.
+set(CMAKE_Fortran_TARGET_FORWARD_LINKED_INFO_FILES
+  )
+
+# Fortran module output directory.
+set(CMAKE_Fortran_TARGET_MODULE_DIR "")

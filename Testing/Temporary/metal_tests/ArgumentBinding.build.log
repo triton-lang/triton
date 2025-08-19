@@ -1,0 +1,23 @@
+[  0%] Building CXX object third_party/f2reduce/CMakeFiles/f2reduce.dir/f2reduce.cpp.o
+[  0%] Built target f2reduce
+[ 25%] Building CXX object _deps/googletest-build/googletest/CMakeFiles/gtest.dir/src/gtest-all.cc.o
+[ 25%] Linking CXX static library ../../../lib/libgtest.a
+[ 25%] Built target gtest
+[ 25%] Building CXX object _deps/googletest-build/googlemock/CMakeFiles/gmock.dir/src/gmock-all.cc.o
+[ 50%] Linking CXX static library ../../../lib/libgmock.a
+[ 50%] Built target gmock
+[ 50%] Building CXX object _deps/googletest-build/googletest/CMakeFiles/gtest_main.dir/src/gtest_main.cc.o
+[ 75%] Linking CXX static library ../../../lib/libgtest_main.a
+[ 75%] Built target gtest_main
+[ 75%] Building CXX object lib/Tools/CMakeFiles/TritonTools.dir/GenericSwizzling.cpp.o
+[ 75%] Building CXX object lib/Tools/CMakeFiles/TritonTools.dir/LayoutUtils.cpp.o
+[100%] Building CXX object lib/Tools/CMakeFiles/TritonTools.dir/LinearLayout.cpp.o
+[100%] Built target TritonTools
+[100%] Building CXX object unittest/Metal/CMakeFiles/ArgumentBinding.dir/ArgumentBindingTest.cpp.o
+[100%] Linking CXX executable ArgumentBinding
+ld: library 'TritonRuntime' not found
+c++: error: linker command failed with exit code 1 (use -v to see invocation)
+gmake[3]: *** [unittest/Metal/CMakeFiles/ArgumentBinding.dir/build.make:147: unittest/Metal/ArgumentBinding] Error 1
+gmake[2]: *** [CMakeFiles/Makefile2:7936: unittest/Metal/CMakeFiles/ArgumentBinding.dir/all] Error 2
+gmake[1]: *** [CMakeFiles/Makefile2:7943: unittest/Metal/CMakeFiles/ArgumentBinding.dir/rule] Error 2
+gmake: *** [Makefile:2311: ArgumentBinding] Error 2

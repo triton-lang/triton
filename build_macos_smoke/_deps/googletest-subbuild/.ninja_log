@@ -1,0 +1,21 @@
+# ninja log v7
+0	14	1755619955593982178	googletest-populate-prefix/src/googletest-populate-stamp/googletest-populate-mkdir	4863ef8d6af68ae0
+0	14	1755619955593982178	/Users/andrew/zzCoding-play/triton/build_macos_smoke/_deps/googletest-subbuild/googletest-populate-prefix/src/googletest-populate-stamp/googletest-populate-mkdir	4863ef8d6af68ae0
+14	2047	1755619957626270071	googletest-populate-prefix/src/googletest-populate-stamp/googletest-populate-download	f250abc7af17c46
+14	2047	1755619957626270071	/Users/andrew/zzCoding-play/triton/build_macos_smoke/_deps/googletest-subbuild/googletest-populate-prefix/src/googletest-populate-stamp/googletest-populate-download	f250abc7af17c46
+2047	2072	1755619957626948036	googletest-populate-prefix/src/googletest-populate-stamp/googletest-populate-update	d9007be831e5088f
+2047	2072	1755619957626948036	/Users/andrew/zzCoding-play/triton/build_macos_smoke/_deps/googletest-subbuild/googletest-populate-prefix/src/googletest-populate-stamp/googletest-populate-update	d9007be831e5088f
+2072	2088	1755619957667347261	googletest-populate-prefix/src/googletest-populate-stamp/googletest-populate-patch	dd92c60b0d65a985
+2072	2088	1755619957667347261	/Users/andrew/zzCoding-play/triton/build_macos_smoke/_deps/googletest-subbuild/googletest-populate-prefix/src/googletest-populate-stamp/googletest-populate-patch	dd92c60b0d65a985
+2088	2103	1755619957682658576	googletest-populate-prefix/src/googletest-populate-stamp/googletest-populate-configure	3de05b191d65ee1b
+2088	2103	1755619957682658576	/Users/andrew/zzCoding-play/triton/build_macos_smoke/_deps/googletest-subbuild/googletest-populate-prefix/src/googletest-populate-stamp/googletest-populate-configure	3de05b191d65ee1b
+2103	2119	1755619957699032901	googletest-populate-prefix/src/googletest-populate-stamp/googletest-populate-build	ab895ee2459b8198
+2103	2119	1755619957699032901	/Users/andrew/zzCoding-play/triton/build_macos_smoke/_deps/googletest-subbuild/googletest-populate-prefix/src/googletest-populate-stamp/googletest-populate-build	ab895ee2459b8198
+2119	2135	1755619957714214465	googletest-populate-prefix/src/googletest-populate-stamp/googletest-populate-install	1ef223e7c3ebf093
+2119	2135	1755619957714214465	/Users/andrew/zzCoding-play/triton/build_macos_smoke/_deps/googletest-subbuild/googletest-populate-prefix/src/googletest-populate-stamp/googletest-populate-install	1ef223e7c3ebf093
+2135	2151	1755619957730592915	googletest-populate-prefix/src/googletest-populate-stamp/googletest-populate-test	a38692316e82efdd
+2135	2151	1755619957730592915	/Users/andrew/zzCoding-play/triton/build_macos_smoke/_deps/googletest-subbuild/googletest-populate-prefix/src/googletest-populate-stamp/googletest-populate-test	a38692316e82efdd
+2151	2174	1755619957753805640	CMakeFiles/googletest-populate-complete	f1f8688e3061f941
+2151	2174	1755619957753805640	googletest-populate-prefix/src/googletest-populate-stamp/googletest-populate-done	f1f8688e3061f941
+2151	2174	1755619957753805640	/Users/andrew/zzCoding-play/triton/build_macos_smoke/_deps/googletest-subbuild/CMakeFiles/googletest-populate-complete	f1f8688e3061f941
+2151	2174	1755619957753805640	/Users/andrew/zzCoding-play/triton/build_macos_smoke/_deps/googletest-subbuild/googletest-populate-prefix/src/googletest-populate-stamp/googletest-populate-done	f1f8688e3061f941

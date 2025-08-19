@@ -1,0 +1,4 @@
+[1/3] Building CXX object lib/Tools/CMakeFiles/TritonTools.dir/GenericSwizzling.cpp.o
+[2/3] Linking CXX executable unittest/Metal/ArgumentBinding
+[3/3] Linking CXX executable unittest/Metal/PipelineConcurrency
+BUILD_EXIT_CODE:0

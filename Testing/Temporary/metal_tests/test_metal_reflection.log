@@ -1,0 +1,35 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+______________________ test_reflection_parses_edge_cases _______________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1097f93c0>
+
+    def test_reflection_parses_edge_cases(monkeypatch):
+        # Ensure compiler uses fake xcrun
+        monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/xcrun")
+        # Monkeypatch _run_metal_compile to create expected metallib outputs so compile() can proceed.
+        def fake_run(cmd, msg):
+            if "-o" in cmd:
+                out = cmd[cmd.index("-o") + 1]
+                with open(out, "wb") as f:
+                    f.write(b"DUMMY")
+        monkeypatch.setattr(metal_compiler_mod, "_run_metal_compile", fake_run)
+    
+        comp = metal_compiler_mod.MetalCompiler()
+        binary, meta = comp.compile(SRC_EDGE_CASES, options={}, reflection=True)
+    
+        assert isinstance(binary, (bytes, bytearray))
+        assert "kernels" in meta
+        names = {k["name"] for k in meta["kernels"]}
+        expected = {"spaced_kernel", "swapped_attr_kernel", "complex_decl_kernel", "no_attr_kernel", "multi_attr_kernel"}
+        assert expected.issubset(names)
+    
+        # Check some specific parsing outcomes
+        sk = next(k for k in meta["kernels"] if k["name"] == "spaced_kernel")
+>       assert sk["args"][0]["buffer_index"] == 0
+E       assert None == 0
+
+python/test/backend/test_metal_reflection.py:48: AssertionError
+=========================== short test summary info ============================
+FAILED python/test/backend/test_metal_reflection.py::test_reflection_parses_edge_cases
+1 failed in 0.04s

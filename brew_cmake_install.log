@@ -1,0 +1,6 @@
+==> Auto-updating Homebrew...
+Adjust how often this is run with `$HOMEBREW_AUTO_UPDATE_SECS` or disable with
+`$HOMEBREW_NO_AUTO_UPDATE=1`. Hide these hints with `$HOMEBREW_NO_ENV_HINTS=1` (see `man brew`).
+Warning: cmake 4.1.0 is already installed and up-to-date.
+To reinstall 4.1.0, run:
+  brew reinstall cmake

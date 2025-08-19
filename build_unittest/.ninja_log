@@ -1,0 +1,19 @@
+# ninja log v7
+6	687	1755475328399155793	third_party/f2reduce/CMakeFiles/f2reduce.dir/f2reduce.cpp.o	ac23d900320df24b
+6	1018	1755475328398453208	_deps/googletest-build/googletest/CMakeFiles/gtest_main.dir/src/gtest_main.cc.o	673c145a66abc40d
+7	1237	1755475328399712128	unittest/Metal/CMakeFiles/ArgumentBinding.dir/ArgumentBindingTest.cpp.o	fc1693560f181eb3
+65	1186	1755511564061305761	unittest/Metal/CMakeFiles/PipelineConcurrency.dir/PipelineConcurrencyTest.cpp.o	879cfa61ecd35c03
+6	1887	1755475328398303458	_deps/googletest-build/googlemock/CMakeFiles/gmock.dir/src/gmock-all.cc.o	dd4cc5f3261a390f
+6	2421	1755475328398714708	lib/Tools/CMakeFiles/TritonTools.dir/LayoutUtils.cpp.o	af2fe5ba25c10b5e
+6	3130	1755475328398831125	lib/Tools/CMakeFiles/TritonTools.dir/LinearLayout.cpp.o	1683dbd408dc8b0c
+5	4380	1755475328397990082	_deps/googletest-build/googletest/CMakeFiles/gtest.dir/src/gtest-all.cc.o	a6aa30865814829a
+12	53	1755475419894151927	lib/libgtest.a	919f78ebf6b42584
+53	80	1755475419935632804	lib/libgtest_main.a	9948d4865216bfeb
+53	87	1755475419935387047	lib/libgmock.a	1a29828c56ff89fa
+34	2027	1755475756629611806	lib/Tools/CMakeFiles/TritonTools.dir/GenericSwizzling.cpp.o	1c3c2d3c9ccb0649
+2028	3143	1755475759737661369	unittest/Metal/ArgumentBinding	220baf0c23a7848c
+2028	3143	1755475759737661369	unittest/Metal/ArgumentBinding[1]_tests.cmake	220baf0c23a7848c
+2028	3143	1755475759737661369	/Users/andrew/zzCoding-play/triton/build_unittest/unittest/Metal/ArgumentBinding[1]_tests.cmake	220baf0c23a7848c
+1186	2160	1755511566155594457	unittest/Metal/PipelineConcurrency	7b0ea64e2f57730d
+1186	2160	1755511566155594457	unittest/Metal/PipelineConcurrency[1]_tests.cmake	7b0ea64e2f57730d
+1186	2160	1755511566155594457	/Users/andrew/zzCoding-play/triton/build_unittest/unittest/Metal/PipelineConcurrency[1]_tests.cmake	7b0ea64e2f57730d

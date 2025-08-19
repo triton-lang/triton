@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites tests="4" failures="0" disabled="0" errors="0" time="0." timestamp="2025-08-17T23:19:56.074" name="AllTests">
+  <testsuite name="MetalRuntime" tests="4" failures="0" disabled="0" skipped="0" errors="0" time="0." timestamp="2025-08-17T23:19:56.074">
+    <testcase name="StubHandleReportsStubMode" file="/Users/andrew/zzCoding-play/triton/unittest/Metal/RuntimeTest.cpp" line="44" status="run" result="completed" time="0." timestamp="2025-08-17T23:19:56.074" classname="MetalRuntime" />
+    <testcase name="PipelineCacheReturnsSameId" file="/Users/andrew/zzCoding-play/triton/unittest/Metal/RuntimeTest.cpp" line="52" status="run" result="completed" time="0." timestamp="2025-08-17T23:19:56.074" classname="MetalRuntime" />
+    <testcase name="KernelLookupMissingThrows" file="/Users/andrew/zzCoding-play/triton/unittest/Metal/RuntimeTest.cpp" line="63" status="run" result="completed" time="0." timestamp="2025-08-17T23:19:56.074" classname="MetalRuntime" />
+    <testcase name="StubModeStillCachesPipelinesSeparately" file="/Users/andrew/zzCoding-play/triton/unittest/Metal/RuntimeTest.cpp" line="74" status="run" result="completed" time="0." timestamp="2025-08-17T23:19:56.074" classname="MetalRuntime" />
+  </testsuite>
+</testsuites>

@@ -1,0 +1,140 @@
+---- BUILD LOG (first 300 lines) ----
+[1/3] Building CXX object lib/Tools/CMakeFiles/TritonTools.dir/GenericSwizzling.cpp.o
+[2/3] Linking CXX executable unittest/Metal/ArgumentBinding
+[3/3] Linking CXX executable unittest/Metal/PipelineConcurrency
+BUILD_EXIT_CODE:0
+
+---- ARGUMENTBINDING LOG (first 300 lines) ----
+[==========] Running 4 tests from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 4 tests from ArgumentBinding
+[ RUN      ] ArgumentBinding.PositionalByDefault
+[       OK ] ArgumentBinding.PositionalByDefault (0 ms)
+[ RUN      ] ArgumentBinding.ReflectionOverridesPosition
+[       OK ] ArgumentBinding.ReflectionOverridesPosition (0 ms)
+[ RUN      ] ArgumentBinding.OutOfRangeMetadataFallsBack
+[       OK ] ArgumentBinding.OutOfRangeMetadataFallsBack (0 ms)
+[ RUN      ] ArgumentBinding.PODSizesAndBytes
+[       OK ] ArgumentBinding.PODSizesAndBytes (0 ms)
+[----------] 4 tests from ArgumentBinding (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 4 tests from 1 test suite ran. (0 ms total)
+[  PASSED  ] 4 tests.
+EXIT_CODE:0
+
+---- PIPELINECONCURRENCY LOG (first 300 lines) ----
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+/Users/andrew/zzCoding-play/triton/unittest/Metal/PipelineConcurrencyTest.cpp:119: Failure
+Expected equality of these values:
+  results[i]
+    Which is: 0
+  results[0]
+    Which is: 1
+
+/Users/andrew/zzCoding-play/triton/unittest/Metal/PipelineConcurrencyTest.cpp:119: Failure
+Expected equality of these values:
+  results[i]
+    Which is: 0
+  results[0]
+    Which is: 1
+
+/Users/andrew/zzCoding-play/triton/unittest/Metal/PipelineConcurrencyTest.cpp:119: Failure
+Expected equality of these values:
+  results[i]
+    Which is: 0
+  results[0]
+    Which is: 1
+
+/Users/andrew/zzCoding-play/triton/unittest/Metal/PipelineConcurrencyTest.cpp:119: Failure
+Expected equality of these values:
+  results[i]
+    Which is: 0
+  results[0]
+    Which is: 1
+
+/Users/andrew/zzCoding-play/triton/unittest/Metal/PipelineConcurrencyTest.cpp:119: Failure
+Expected equality of these values:
+  results[i]
+    Which is: 0
+  results[0]
+    Which is: 1
+
+/Users/andrew/zzCoding-play/triton/unittest/Metal/PipelineConcurrencyTest.cpp:119: Failure
+Expected equality of these values:
+  results[i]
+    Which is: 0
+  results[0]
+    Which is: 1
+
+/Users/andrew/zzCoding-play/triton/unittest/Metal/PipelineConcurrencyTest.cpp:119: Failure
+Expected equality of these values:
+  results[i]
+    Which is: 0
+  results[0]
+    Which is: 1
+
+/Users/andrew/zzCoding-play/triton/unittest/Metal/PipelineConcurrencyTest.cpp:119: Failure
+Expected equality of these values:
+  results[i]
+    Which is: 0
+  results[0]
+    Which is: 1
+
+/Users/andrew/zzCoding-play/triton/unittest/Metal/PipelineConcurrencyTest.cpp:119: Failure
+Expected equality of these values:
+  results[i]
+    Which is: 0
+  results[0]
+    Which is: 1
+
+/Users/andrew/zzCoding-play/triton/unittest/Metal/PipelineConcurrencyTest.cpp:119: Failure
+Expected equality of these values:
+  results[i]
+    Which is: 0
+  results[0]
+    Which is: 1
+
+/Users/andrew/zzCoding-play/triton/unittest/Metal/PipelineConcurrencyTest.cpp:119: Failure
+Expected equality of these values:
+  results[i]
+    Which is: 0
+  results[0]
+    Which is: 1
+
+/Users/andrew/zzCoding-play/triton/unittest/Metal/PipelineConcurrencyTest.cpp:119: Failure
+Expected equality of these values:
+  results[i]
+    Which is: 0
+  results[0]
+    Which is: 1
+
+/Users/andrew/zzCoding-play/triton/unittest/Metal/PipelineConcurrencyTest.cpp:119: Failure
+Expected equality of these values:
+  results[i]
+    Which is: 0
+  results[0]
+    Which is: 1
+
+/Users/andrew/zzCoding-play/triton/unittest/Metal/PipelineConcurrencyTest.cpp:119: Failure
+Expected equality of these values:
+  results[i]
+    Which is: 0
+  results[0]
+    Which is: 1
+
+[  FAILED  ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (1 ms)
+[----------] 1 test from MetalPipeline (1 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (1 ms total)
+[  PASSED  ] 0 tests.
+[  FAILED  ] 1 test, listed below:
+[  FAILED  ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+
+ 1 FAILED TEST
+EXIT_CODE:1
+

@@ -1,0 +1,8 @@
+-- Testing: 8 tests, 8 workers --
+Testing:  0.. 10.. 20.. 30.. 40.. 50.. 60.. 70.. 80.. 90.. 
+
+Testing Time: 0.14s
+
+Total Discovered Tests: 8
+  Unsupported: 5 (62.50%)
+  Passed     : 3 (37.50%)

@@ -1,0 +1,5 @@
+if(EXISTS "/Users/andrew/zzCoding-play/triton/build_unittest/unittest/Metal/ArgumentBinding[1]_tests.cmake")
+  include("/Users/andrew/zzCoding-play/triton/build_unittest/unittest/Metal/ArgumentBinding[1]_tests.cmake")
+else()
+  add_test(ArgumentBinding_NOT_BUILT ArgumentBinding_NOT_BUILT)
+endif()

@@ -1,0 +1,46 @@
+[  1%] Building CXX object _deps/googletest-build/googletest/CMakeFiles/gtest.dir/src/gtest-all.cc.o
+[  1%] Linking CXX static library ../../../lib/libgtest.a
+[  1%] Built target gtest
+[  1%] Building CXX object _deps/googletest-build/googlemock/CMakeFiles/gmock.dir/src/gmock-all.cc.o
+[  2%] Linking CXX static library ../../../lib/libgmock.a
+[  2%] Built target gmock
+[  2%] Building CXX object _deps/googletest-build/googlemock/CMakeFiles/gmock_main.dir/src/gmock_main.cc.o
+[  2%] Linking CXX static library ../../../lib/libgmock_main.a
+[  2%] Built target gmock_main
+[  2%] Building CXX object _deps/googletest-build/googletest/CMakeFiles/gtest_main.dir/src/gtest_main.cc.o
+[  3%] Linking CXX static library ../../../lib/libgtest_main.a
+[  3%] Built target gtest_main
+[  3%] Building CXX object third_party/f2reduce/CMakeFiles/f2reduce.dir/f2reduce.cpp.o
+[  3%] Built target f2reduce
+[  3%] Building CXX object lib/Tools/CMakeFiles/TritonTools.dir/GenericSwizzling.cpp.o
+/Users/andrew/zzCoding-play/triton/lib/Tools/GenericSwizzling.cpp:113:48: error: expected ')'
+  113 |   SetVector<int32_t> srcRegs(llvm::from_range_t{}, flatten(src, kReg));
+      |                                                ^
+/Users/andrew/zzCoding-play/triton/lib/Tools/GenericSwizzling.cpp:113:29: note: to match this '('
+  113 |   SetVector<int32_t> srcRegs(llvm::from_range_t{}, flatten(src, kReg));
+      |                             ^
+/Users/andrew/zzCoding-play/triton/lib/Tools/GenericSwizzling.cpp:113:36: error: no member named 'from_range_t' in namespace 'llvm'
+  113 |   SetVector<int32_t> srcRegs(llvm::from_range_t{}, flatten(src, kReg));
+      |                              ~~~~~~^
+/Users/andrew/zzCoding-play/triton/lib/Tools/GenericSwizzling.cpp:114:48: error: expected ')'
+  114 |   SetVector<int32_t> dstRegs(llvm::from_range_t{}, flatten(dst, kReg));
+      |                                                ^
+/Users/andrew/zzCoding-play/triton/lib/Tools/GenericSwizzling.cpp:114:29: note: to match this '('
+  114 |   SetVector<int32_t> dstRegs(llvm::from_range_t{}, flatten(dst, kReg));
+      |                             ^
+/Users/andrew/zzCoding-play/triton/lib/Tools/GenericSwizzling.cpp:114:36: error: no member named 'from_range_t' in namespace 'llvm'
+  114 |   SetVector<int32_t> dstRegs(llvm::from_range_t{}, flatten(dst, kReg));
+      |                              ~~~~~~^
+/Users/andrew/zzCoding-play/triton/lib/Tools/GenericSwizzling.cpp:115:52: error: expected ')'
+  115 |   SetVector<int32_t> smemSegment(llvm::from_range_t{}, flatten(smem, kSegment));
+      |                                                    ^
+/Users/andrew/zzCoding-play/triton/lib/Tools/GenericSwizzling.cpp:115:33: note: to match this '('
+  115 |   SetVector<int32_t> smemSegment(llvm::from_range_t{}, flatten(smem, kSegment));
+      |                                 ^
+/Users/andrew/zzCoding-play/triton/lib/Tools/GenericSwizzling.cpp:115:40: error: no member named 'from_range_t' in namespace 'llvm'
+  115 |   SetVector<int32_t> smemSegment(llvm::from_range_t{}, flatten(smem, kSegment));
+      |                                  ~~~~~~^
+6 errors generated.
+gmake[2]: *** [lib/Tools/CMakeFiles/TritonTools.dir/build.make:79: lib/Tools/CMakeFiles/TritonTools.dir/GenericSwizzling.cpp.o] Error 1
+gmake[1]: *** [CMakeFiles/Makefile2:5167: lib/Tools/CMakeFiles/TritonTools.dir/all] Error 2
+gmake: *** [Makefile:146: all] Error 2

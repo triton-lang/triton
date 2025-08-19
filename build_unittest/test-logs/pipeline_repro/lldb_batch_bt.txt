@@ -1,0 +1,44 @@
+(lldb) target create "/Users/andrew/zzCoding-play/triton/build_unittest/unittest/Metal/PipelineConcurrency"
+Current executable set to '/Users/andrew/zzCoding-play/triton/build_unittest/unittest/Metal/PipelineConcurrency' (arm64).
+(lldb) breakpoint set -n abort
+Breakpoint 1: 2 locations.
+(lldb) breakpoint set -n __assert_rtn
+Breakpoint 2: where = libsystem_c.dylib`__assert_rtn, address = 0x00000001803cf920
+(lldb) breakpoint set -n objc_exception_throw
+Breakpoint 3: no locations (pending).
+WARNING:  Unable to resolve breakpoint to any actual locations.
+(lldb) run --gtest_filter=MetalPipeline.ConcurrentCreationProducesSinglePipeline
+1 location added to breakpoint 3
+[0;33mNote: Google Test filter = MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[m[0;32m[==========] [mRunning 1 test from 1 test suite.
+[0;32m[----------] [mGlobal test environment set-up.
+[0;32m[----------] [m1 test from MetalPipeline
+[0;32m[ RUN      ] [mMetalPipeline.ConcurrentCreationProducesSinglePipeline
+/Users/andrew/zzCoding-play/triton/unittest/Metal/PipelineConcurrencyTest.cpp:119: Failure
+Expected equality of these values:
+  results[i]
+    Which is: 0
+  results[0]
+    Which is: 1
+
+/Users/andrew/zzCoding-play/triton/unittest/Metal/PipelineConcurrencyTest.cpp:119: Failure
+Expected equality of these values:
+  results[i]
+    Which is: 0
+  results[0]
+    Which is: 1
+
+[0;31m[  FAILED  ] [mMetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[0;32m[----------] [m1 test from MetalPipeline (0 ms total)
+
+[0;32m[----------] [mGlobal test environment tear-down
+[0;32m[==========] [m1 test from 1 test suite ran. (0 ms total)
+[0;32m[  PASSED  ] [m0 tests.
+[0;31m[  FAILED  ] [m1 test, listed below:
+[0;31m[  FAILED  ] [mMetalPipeline.ConcurrentCreationProducesSinglePipeline
+
+ 1 FAILED TEST
+Process 67628 launched: '/Users/andrew/zzCoding-play/triton/build_unittest/unittest/Metal/PipelineConcurrency' (arm64)
+Process 67628 exited with status = 1 (0x00000001)
+(lldb) thread backtrace all
+error: Command requires a process which is currently stopped.

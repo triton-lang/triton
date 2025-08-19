@@ -1,0 +1,17 @@
+[==========] Running 4 tests from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 4 tests from ArgumentBinding
+[ RUN      ] ArgumentBinding.PositionalByDefault
+[       OK ] ArgumentBinding.PositionalByDefault (0 ms)
+[ RUN      ] ArgumentBinding.ReflectionOverridesPosition
+[       OK ] ArgumentBinding.ReflectionOverridesPosition (0 ms)
+[ RUN      ] ArgumentBinding.OutOfRangeMetadataFallsBack
+[       OK ] ArgumentBinding.OutOfRangeMetadataFallsBack (0 ms)
+[ RUN      ] ArgumentBinding.PODSizesAndBytes
+[       OK ] ArgumentBinding.PODSizesAndBytes (0 ms)
+[----------] 4 tests from ArgumentBinding (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 4 tests from 1 test suite ran. (0 ms total)
+[  PASSED  ] 4 tests.
+EXIT_CODE:0

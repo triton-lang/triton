@@ -1,0 +1,5 @@
+if(EXISTS "/Users/andrew/zzCoding-play/triton/build_unittest/unittest/Tools/LinearLayout[1]_tests.cmake")
+  include("/Users/andrew/zzCoding-play/triton/build_unittest/unittest/Tools/LinearLayout[1]_tests.cmake")
+else()
+  add_test(LinearLayout_NOT_BUILT LinearLayout_NOT_BUILT)
+endif()

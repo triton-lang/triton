@@ -1,0 +1,15 @@
+# This is a generated file and its contents are an internal implementation detail.
+# The download step will be re-executed if anything in this file changes.
+# No other meaning or use of this file is supported.
+
+method=git
+command=/Users/andrew/venvs/refusals/lib/python3.10/site-packages/cmake/data/bin/cmake;-DCMAKE_MESSAGE_LOG_LEVEL=VERBOSE;-P;/Users/andrew/zzCoding-play/triton/build_metal/_deps/googletest-subbuild/googletest-populate-prefix/tmp/googletest-populate-gitclone.cmake
+source_dir=/Users/andrew/zzCoding-play/triton/build_metal/_deps/googletest-src
+work_dir=/Users/andrew/zzCoding-play/triton/build_metal/_deps
+repository=https://github.com/google/googletest.git
+remote=origin
+init_submodules=TRUE
+recurse_submodules=--recursive
+submodules=
+CMP0097=NEW
+      

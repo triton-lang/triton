@@ -1,0 +1,2 @@
+/usr/bin/ar qc ../../../lib/libgmock_main.a CMakeFiles/gmock_main.dir/src/gmock_main.cc.o
+/opt/homebrew/opt/llvm@20/bin/llvm-ranlib ../../../lib/libgmock_main.a

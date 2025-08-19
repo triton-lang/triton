@@ -1,0 +1,52 @@
+CMake Deprecation Warning at CMakeLists.txt:6 (cmake_policy):
+  The OLD behavior for policy CMP0116 will be removed from a future version
+  of CMake.
+
+  The cmake-policies(7) manual explains that the OLD behaviors of all
+  policies are deprecated and that a policy should be set to OLD only under
+  specific short-term circumstances.  Projects should be ported to the NEW
+  behavior and not rely on setting a policy to OLD.
+
+
+-- The CXX compiler identification is AppleClang 17.0.0.17000013
+-- The C compiler identification is AppleClang 17.0.0.17000013
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: /usr/bin/clang++ - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+-- Detecting C compiler ABI info
+-- Detecting C compiler ABI info - done
+-- Check for working C compiler: /usr/bin/clang - skipped
+-- Detecting C compile features
+-- Detecting C compile features - done
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD - Success
+-- Found Threads: TRUE
+-- Performing Test HAVE_FFI_CALL
+-- Performing Test HAVE_FFI_CALL - Success
+-- Found FFI: /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk/usr/lib/libffi.tbd
+-- Looking for histedit.h
+-- Looking for histedit.h - found
+-- Found LibEdit: /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk/usr/include (found version "2.11")
+-- Found ZLIB: /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk/usr/lib/libz.tbd (found version "1.2.12")
+-- Found zstd: /opt/homebrew/lib/libzstd.dylib
+-- Found LibXml2: /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk/usr/lib/libxml2.tbd (found version "2.9.13")
+-- Linker detection: Apple
+-- Performing Test LLVM_LINKER_SUPPORTS_NO_EXPORTED_SYMBOLS
+-- Performing Test LLVM_LINKER_SUPPORTS_NO_EXPORTED_SYMBOLS - Success
+-- Performing Test LLVM_LINKER_SUPPORTS_NO_WARN_DUPLICATE_LIBRARIES
+-- Performing Test LLVM_LINKER_SUPPORTS_NO_WARN_DUPLICATE_LIBRARIES - Success
+-- Sanitize build detected: adding third_party/nvidia to enable NVWS TableGen generation
+CMake Warning at /opt/homebrew/Cellar/llvm/20.1.8/lib/cmake/llvm/AddLLVM.cmake:2029 (message):
+  LLVM_EXTERNAL_LIT set to /opt/homebrew/Cellar/llvm/20.1.8/bin/llvm-lit, but
+  the path does not exist.
+Call Stack (most recent call first):
+  /opt/homebrew/Cellar/llvm/20.1.8/lib/cmake/llvm/AddLLVM.cmake:2074 (get_llvm_lit_path)
+  /opt/homebrew/Cellar/llvm/20.1.8/lib/cmake/llvm/AddLLVM.cmake:2167 (add_lit_target)
+  test/CMakeLists.txt:23 (add_lit_testsuite)
+
+
+-- Configuring done (9.6s)
+-- Generating done (2.8s)
+-- Build files have been written to: /Users/andrew/zzCoding-play/triton/build_unittest_sanitize/asan

@@ -1,0 +1,7 @@
+if(TRITON_BUILD_PYTHON_MODULE AND APPLE)
+  find_library(METAL_LIBRARY Metal)
+  if(METAL_LIBRARY)
+    add_triton_plugin(TritonMetal ${CMAKE_CURRENT_SOURCE_DIR}/backend/driver.c)
+    target_link_libraries(TritonMetal PRIVATE ${METAL_LIBRARY} Python3::Module)
+  endif()
+endif()

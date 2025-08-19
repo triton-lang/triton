@@ -1,0 +1,21 @@
+
+==================================== ERRORS ====================================
+_________ ERROR collecting python/test/backend/test_device_backend.py __________
+ImportError while importing test module '/Users/andrew/zzCoding-play/triton/python/test/backend/test_device_backend.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/opt/homebrew/Cellar/python@3.10/3.10.18/Frameworks/Python.framework/Versions/3.10/lib/python3.10/importlib/__init__.py:126: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+python/test/backend/test_device_backend.py:15: in <module>
+    from triton.common.backend import (BaseBackend, compute_core_version_key, register_backend)
+E   ModuleNotFoundError: No module named 'triton.common'
+=============================== warnings summary ===============================
+python/test/backend/test_metal_runtime.py:132
+  /Users/andrew/zzCoding-play/triton/python/test/backend/test_metal_runtime.py:132: PytestUnknownMarkWarning: Unknown pytest.mark.macos_integration - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.macos_integration
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+ERROR python/test/backend/test_device_backend.py
+!!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
+1 warning, 1 error in 1.07s

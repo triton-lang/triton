@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+root="$(git rev-parse --show-toplevel)"
+echo "[pre-push] Running local macOS smoke-run before push"
+"$root/scripts/run_macos_smoke_locally.sh"
+rc=$?
+if [[ $rc -ne 0 ]]; then
+  echo "[pre-push] macOS smoke-run failed (exit $rc). Aborting push."
+  exit $rc
+fi
+echo "[pre-push] macOS smoke-run passed. Continuing push."

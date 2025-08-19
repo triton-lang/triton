@@ -1,0 +1,2 @@
+/usr/bin/ar qc libTritonTestProton.a CMakeFiles/obj.TritonTestProton.dir/TestScopeIdAllocation.cpp.o
+/opt/homebrew/opt/llvm@20/bin/llvm-ranlib libTritonTestProton.a

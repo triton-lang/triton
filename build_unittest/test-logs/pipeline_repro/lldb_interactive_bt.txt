@@ -1,0 +1,146 @@
+(lldb) target create "/Users/andrew/zzCoding-play/triton/build_unittest/unittest/Metal/PipelineConcurrency"
+Current executable set to '/Users/andrew/zzCoding-play/triton/build_unittest/unittest/Metal/PipelineConcurrency' (arm64).
+(lldb) breakpoint set --file unittest/Metal/PipelineConcurrencyTest.cpp --line 119
+Breakpoint 1: 2 locations.
+(lldb) breakpoint set -n abort
+Breakpoint 2: 2 locations.
+(lldb) breakpoint set -n __assert_rtn
+Breakpoint 3: where = libsystem_c.dylib`__assert_rtn, address = 0x00000001803cf920
+(lldb) run --gtest_filter=MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[0;33mNote: Google Test filter = MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[m[0;32m[==========] [mRunning 1 test from 1 test suite.
+[0;32m[----------] [mGlobal test environment set-up.
+[0;32m[----------] [m1 test from MetalPipeline
+[0;32m[ RUN      ] [mMetalPipeline.ConcurrentCreationProducesSinglePipeline
+warning: PipelineConcurrency was compiled with optimization - stepping may behave oddly; variables may not be available.
+Process 68574 launched: '/Users/andrew/zzCoding-play/triton/build_unittest/unittest/Metal/PipelineConcurrency' (arm64)
+Process 68574 stopped
+* thread #1, queue = 'com.apple.main-thread', stop reason = breakpoint 1.1
+    frame #0: 0x0000000100027904 PipelineConcurrency`MetalPipeline_ConcurrentCreationProducesSinglePipeline_Test::TestBody(this=<unavailable>) at PipelineConcurrencyTest.cpp:119:5 [opt]
+   116 	  // All threads should receive a valid id and the same id.
+   117 	  EXPECT_GE(results[0], 1);
+   118 	  for (unsigned i = 1; i < kThreads; ++i) {
+-> 119 	    EXPECT_EQ(results[i], results[0]);
+    	    ^
+   120 	  }
+   121 	
+   122 	  // Only one pipeline should have been created.
+Target 0: (PipelineConcurrency) stopped.
+(lldb) thread backtrace all
+* thread #1, queue = 'com.apple.main-thread', stop reason = breakpoint 1.1
+  * frame #0: 0x0000000100027904 PipelineConcurrency`MetalPipeline_ConcurrentCreationProducesSinglePipeline_Test::TestBody(this=<unavailable>) at PipelineConcurrencyTest.cpp:119:5 [opt]
+    frame #1: 0x00000001000429b8 PipelineConcurrency`void testing::internal::HandleExceptionsInMethodIfSupported<testing::Test, void>(testing::Test*, void (testing::Test::*)(), char const*) [inlined] void testing::internal::HandleSehExceptionsInMethodIfSupported<testing::Test, void>(object=<unavailable>, method=0x00000000000000010000000000000020, location="the test body") at gtest.cc:2664:10 [opt]
+    frame #2: 0x00000001000429a8 PipelineConcurrency`void testing::internal::HandleExceptionsInMethodIfSupported<testing::Test, void>(object=0x0000000100cc21a0, method=0x00000000000000000000000000000020, location="the test body") at gtest.cc:2700:14 [opt]
+    frame #3: 0x0000000100042894 PipelineConcurrency`testing::Test::Run(this=0x0000000100cc21a0) at gtest.cc:2739:5 [opt]
+    frame #4: 0x0000000100043c44 PipelineConcurrency`testing::TestInfo::Run(this=0x0000000100cc12a0) at gtest.cc:2885:11 [opt]
+    frame #5: 0x0000000100044ccc PipelineConcurrency`testing::TestSuite::Run(this=0x0000000100cc16e0) at gtest.cc:3063:30 [opt]
+    frame #6: 0x0000000100055350 PipelineConcurrency`testing::internal::UnitTestImpl::RunAllTests(this=0x0000000100cc13e0) at gtest.cc:6054:44 [opt]
+    frame #7: 0x0000000100054a84 PipelineConcurrency`bool testing::internal::HandleExceptionsInMethodIfSupported<testing::internal::UnitTestImpl, bool>(testing::internal::UnitTestImpl*, bool (testing::internal::UnitTestImpl::*)(), char const*) [inlined] bool testing::internal::HandleSehExceptionsInMethodIfSupported<testing::internal::UnitTestImpl, bool>(object=<unavailable>, method=(PipelineConcurrency`testing::internal::UnitTestImpl::RunAllTests() at gtest.cc:5909), location="auxiliary test code (environments or event listeners)") at gtest.cc:2664:10 [opt]
+    frame #8: 0x0000000100054a74 PipelineConcurrency`bool testing::internal::HandleExceptionsInMethodIfSupported<testing::internal::UnitTestImpl, bool>(object=0x0000000100cc13e0, method=(PipelineConcurrency`testing::internal::UnitTestImpl::RunAllTests() at gtest.cc:5909), location="auxiliary test code (environments or event listeners)") at gtest.cc:2700:14 [opt]
+    frame #9: 0x00000001000549dc PipelineConcurrency`testing::UnitTest::Run(this=0x0000000100260f20) at gtest.cc:5594:10 [opt]
+    frame #10: 0x0000000100027f58 PipelineConcurrency`main [inlined] RUN_ALL_TESTS() at gtest.h:2334:73 [opt]
+    frame #11: 0x0000000100027f50 PipelineConcurrency`main(argc=1, argv=<unavailable>) at PipelineConcurrencyTest.cpp:129:10 [opt]
+    frame #12: 0x000000018a5f9924 dyld`start + 6400
+(lldb) frame variable --show-all
+(MetalPipeline_ConcurrentCreationProducesSinglePipeline_Test *) this = <no location, value may have been optimized out>
+
+(FakeMetalLibrary) lib = {
+  stub_ = false
+  available_kernels_ = size=1 {
+    [0] = "kernelA"
+  }
+  cache_mutex_ = {
+    __m_ = (__sig = 1297437786, __opaque = "\0\0\0\0\xa0 \0\0\0\0\0\0ZTUM\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\xff\xff\xff\xff\xff\xff\xff\xff\U00000017; \x90\xfe\xff\xff\xffZTUMZTUM")
+  }
+  pipeline_cache_ = size=1 {
+    [0] = (first = "kernelA", second = 1)
+  }
+  create_mutex_ = {
+    __m_ = (__sig = 1297437786, __opaque = "\0\0\0\0\xa0 \0\0\0\0\0\0ZTUM\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\xff\xff\xff\xff\xff\xff\xff\xff\xbf: \x90\xfe\xff\xff\xffZTUMZTUM")
+  }
+  next_id_ = 2
+  creation_count_ = {
+    Value = 1
+  }
+}
+(SimpleBarrier) start_barrier = {
+  mutex_ = {
+    __m_ = (__sig = 1297437786, __opaque = "\0\0\0\0\xa0 \0\0\0\0\0\0ZTUM\0\0\0\0\0\0\0\0\0\U00000005\0\0\0\U00000005\0\0\xff\xff\xff\xff\xff\xff\xff\xff\xb7; \x90\xfe\xff\xff\xffZTUMZTUM")
+  }
+  cv_ = {
+    __cv_ = (__sig = 1129270853, __opaque = "\0\0\0\0\0\0\0\x80\0\0\0\0\0\0\0\0\0\U0000000f\0\0\U00000001\U0000000f\0\0\0\U0000000f")
+  }
+  threshold_ = 16
+  count_ = 16
+  generation_ = 1
+}
+(std::vector<int>) results = size=16 {
+  [0] = 1
+  [1] = 1
+  [2] = 0
+  [3] = 1
+  [4] = 0
+  [5] = 1
+  [6] = 1
+  [7] = 1
+  [8] = 1
+  [9] = 1
+  [10] = 1
+  [11] = 1
+  [12] = 1
+  [13] = 1
+  [14] = 1
+  [15] = 1
+}
+(std::vector<std::thread>) threads = size=16 {
+  [0] = {
+    __t_ = nullptr
+  }
+  [1] = {
+    __t_ = nullptr
+  }
+  [2] = {
+    __t_ = nullptr
+  }
+  [3] = {
+    __t_ = nullptr
+  }
+  [4] = {
+    __t_ = nullptr
+  }
+  [5] = {
+    __t_ = nullptr
+  }
+  [6] = {
+    __t_ = nullptr
+  }
+  [7] = {
+    __t_ = nullptr
+  }
+  [8] = {
+    __t_ = nullptr
+  }
+  [9] = {
+    __t_ = nullptr
+  }
+  [10] = {
+    __t_ = nullptr
+  }
+  [11] = {
+    __t_ = nullptr
+  }
+  [12] = {
+    __t_ = nullptr
+  }
+  [13] = {
+    __t_ = nullptr
+  }
+  [14] = {
+    __t_ = nullptr
+  }
+  [15] = {
+    __t_ = nullptr
+  }
+}
+(const unsigned int) kThreads = 16
+(unsigned int) i = 1

@@ -1,0 +1,670 @@
+
+---
+events:
+  -
+    kind: "message-v1"
+    backtrace:
+      - "/Users/andrew/venvs/refusals/lib/python3.10/site-packages/cmake/data/share/cmake-3.31/Modules/CMakeDetermineSystem.cmake:205 (message)"
+      - "CMakeLists.txt:15 (project)"
+    message: |
+      The system is: Darwin - 25.0.0 - arm64
+  -
+    kind: "message-v1"
+    backtrace:
+      - "/Users/andrew/venvs/refusals/lib/python3.10/site-packages/cmake/data/share/cmake-3.31/Modules/CMakeDetermineCompilerId.cmake:17 (message)"
+      - "/Users/andrew/venvs/refusals/lib/python3.10/site-packages/cmake/data/share/cmake-3.31/Modules/CMakeDetermineCompilerId.cmake:64 (__determine_compiler_id_test)"
+      - "/Users/andrew/venvs/refusals/lib/python3.10/site-packages/cmake/data/share/cmake-3.31/Modules/CMakeDetermineCXXCompiler.cmake:126 (CMAKE_DETERMINE_COMPILER_ID)"
+      - "CMakeLists.txt:15 (project)"
+    message: |
+      Compiling the CXX compiler identification source file "CMakeCXXCompilerId.cpp" succeeded.
+      Compiler: /opt/homebrew/opt/llvm@20/bin/clang++ 
+      Build flags: -fsanitize=address,undefined;-fno-omit-frame-pointer;-g;-Wno-dangling-assignment-gsl
+      Id flags:  
+      
+      The output was:
+      0
+      
+      
+      Compilation of the CXX compiler identification source "CMakeCXXCompilerId.cpp" produced "a.out"
+      
+      The CXX compiler identification is Clang, found in:
+        /Users/andrew/zzCoding-play/triton/build_unittest_sanitize/asan/CMakeFiles/3.31.6/CompilerIdCXX/a.out
+      
+  -
+    kind: "message-v1"
+    backtrace:
+      - "/Users/andrew/venvs/refusals/lib/python3.10/site-packages/cmake/data/share/cmake-3.31/Modules/CMakeDetermineCompilerId.cmake:17 (message)"
+      - "/Users/andrew/venvs/refusals/lib/python3.10/site-packages/cmake/data/share/cmake-3.31/Modules/CMakeDetermineCompilerId.cmake:64 (__determine_compiler_id_test)"
+      - "/Users/andrew/venvs/refusals/lib/python3.10/site-packages/cmake/data/share/cmake-3.31/Modules/CMakeDetermineCCompiler.cmake:123 (CMAKE_DETERMINE_COMPILER_ID)"
+      - "CMakeLists.txt:15 (project)"
+    message: |
+      Compiling the C compiler identification source file "CMakeCCompilerId.c" succeeded.
+      Compiler: /opt/homebrew/opt/llvm@20/bin/clang 
+      Build flags: -fsanitize=address,undefined;-fno-omit-frame-pointer;-g;-Wno-dangling-assignment-gsl
+      Id flags:  
+      
+      The output was:
+      0
+      
+      
+      Compilation of the C compiler identification source "CMakeCCompilerId.c" produced "a.out"
+      
+      The C compiler identification is Clang, found in:
+        /Users/andrew/zzCoding-play/triton/build_unittest_sanitize/asan/CMakeFiles/3.31.6/CompilerIdC/a.out
+      
+  -
+    kind: "try_compile-v1"
+    backtrace:
+      - "/Users/andrew/venvs/refusals/lib/python3.10/site-packages/cmake/data/share/cmake-3.31/Modules/CMakeDetermineCompilerABI.cmake:74 (try_compile)"
+      - "/Users/andrew/venvs/refusals/lib/python3.10/site-packages/cmake/data/share/cmake-3.31/Modules/CMakeTestCXXCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
+      - "CMakeLists.txt:15 (project)"
+    checks:
+      - "Detecting CXX compiler ABI info"
+    directories:
+      source: "/Users/andrew/zzCoding-play/triton/build_unittest_sanitize/asan/CMakeFiles/CMakeScratch/TryCompile-jxXBg5"
+      binary: "/Users/andrew/zzCoding-play/triton/build_unittest_sanitize/asan/CMakeFiles/CMakeScratch/TryCompile-jxXBg5"
+    cmakeVariables:
+      CMAKE_CXX_COMPILER_CLANG_SCAN_DEPS: "/opt/homebrew/Cellar/llvm/20.1.8/bin/clang-scan-deps"
+      CMAKE_CXX_FLAGS: "-fsanitize=address,undefined -fno-omit-frame-pointer -g -Wno-dangling-assignment-gsl"
+      CMAKE_CXX_FLAGS_DEBUG: "-g"
+      CMAKE_CXX_SCAN_FOR_MODULES: "OFF"
+      CMAKE_EXE_LINKER_FLAGS: "-fsanitize=address,undefined"
+      CMAKE_OSX_ARCHITECTURES: ""
+      CMAKE_OSX_DEPLOYMENT_TARGET: ""
+      CMAKE_OSX_SYSROOT: "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk"
+    buildResult:
+      variable: "CMAKE_CXX_ABI_COMPILED"
+      cached: true
+      stdout: |
+        Change Dir: '/Users/andrew/zzCoding-play/triton/build_unittest_sanitize/asan/CMakeFiles/CMakeScratch/TryCompile-jxXBg5'
+        
+        Run Build Command(s): /Users/andrew/venvs/refusals/lib/python3.10/site-packages/cmake/data/bin/cmake -E env VERBOSE=1 /opt/homebrew/bin/gmake -f Makefile cmTC_86073/fast
+        /opt/homebrew/bin/gmake  -f CMakeFiles/cmTC_86073.dir/build.make CMakeFiles/cmTC_86073.dir/build
+        gmake[1]: Entering directory '/Users/andrew/zzCoding-play/triton/build_unittest_sanitize/asan/CMakeFiles/CMakeScratch/TryCompile-jxXBg5'
+        Building CXX object CMakeFiles/cmTC_86073.dir/CMakeCXXCompilerABI.cpp.o
+        /opt/homebrew/opt/llvm@20/bin/clang++   -fsanitize=address,undefined -fno-omit-frame-pointer -g -Wno-dangling-assignment-gsl  -std=gnu++17 -arch arm64 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk   -v -Wl,-v -MD -MT CMakeFiles/cmTC_86073.dir/CMakeCXXCompilerABI.cpp.o -MF CMakeFiles/cmTC_86073.dir/CMakeCXXCompilerABI.cpp.o.d -o CMakeFiles/cmTC_86073.dir/CMakeCXXCompilerABI.cpp.o -c /Users/andrew/venvs/refusals/lib/python3.10/site-packages/cmake/data/share/cmake-3.31/Modules/CMakeCXXCompilerABI.cpp
+        Homebrew clang version 20.1.8
+        Target: arm64-apple-darwin25.0.0
+        Thread model: posix
+        InstalledDir: /opt/homebrew/Cellar/llvm/20.1.8/bin
+        Configuration file: /opt/homebrew/etc/clang/arm64-apple-darwin25.cfg
+        System configuration file directory: /opt/homebrew/etc/clang
+        User configuration file directory: /Users/andrew/.config/clang
+        clang++: warning: -Wl,-v: 'linker' input unused [-Wunused-command-line-argument]
+         (in-process)
+         "/opt/homebrew/Cellar/llvm/20.1.8/bin/clang-20" -cc1 -triple arm64-apple-macosx15.5.0 -Wundef-prefix=TARGET_OS_ -Werror=undef-prefix -Wdeprecated-objc-isa-usage -Werror=deprecated-objc-isa-usage -emit-obj -disable-free -clear-ast-before-backend -disable-llvm-verifier -discard-value-names -main-file-name CMakeCXXCompilerABI.cpp -mrelocation-model pic -pic-level 2 -mframe-pointer=non-leaf -ffp-contract=on -fno-rounding-math -funwind-tables=2 -target-sdk-version=15.5 -fcompatibility-qualified-id-block-type-checking -fvisibility-inlines-hidden-static-local-var -fdefine-target-os-macros -fno-modulemap-allow-subdirectory-search -target-cpu apple-m1 -target-feature +zcm -target-feature +zcz -target-feature +v8.4a -target-feature +aes -target-feature +altnzcv -target-feature +ccdp -target-feature +ccpp -target-feature +complxnum -target-feature +crc -target-feature +dotprod -target-feature +flagm -target-feature +fp-armv8 -target-feature +fp16fml -target-feature +fptoint -target-feature +fullfp16 -target-feature +jsconv -target-feature +lse -target-feature +neon -target-feature +pauth -target-feature +perfmon -target-feature +predres -target-feature +ras -target-feature +rcpc -target-feature +rdm -target-feature +sb -target-feature +sha2 -target-feature +sha3 -target-feature +specrestrict -target-feature +ssbs -target-abi darwinpcs -debug-info-kind=standalone -dwarf-version=5 -debugger-tuning=lldb -fdebug-compilation-dir=/Users/andrew/zzCoding-play/triton/build_unittest_sanitize/asan/CMakeFiles/CMakeScratch/TryCompile-jxXBg5 -target-linker-version 1167.4.1 -v -fcoverage-compilation-dir=/Users/andrew/zzCoding-play/triton/build_unittest_sanitize/asan/CMakeFiles/CMakeScratch/TryCompile-jxXBg5 -resource-dir /opt/homebrew/Cellar/llvm/20.1.8/lib/clang/20 -dependency-file CMakeFiles/cmTC_86073.dir/CMakeCXXCompilerABI.cpp.o.d -MT CMakeFiles/cmTC_86073.dir/CMakeCXXCompilerABI.cpp.o -sys-header-deps -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX26.sdk -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk -internal-isystem /opt/homebrew/Cellar/llvm/20.1.8/bin/../include/c++/v1 -internal-isystem /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk/usr/local/include -internal-isystem /opt/homebrew/Cellar/llvm/20.1.8/lib/clang/20/include -internal-externc-isystem /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk/usr/include -Wno-dangling-assignment-gsl -std=gnu++17 -fdeprecated-macro -ferror-limit 19 -stack-protector 1 -fblocks -fencode-extended-block-signature -fregister-global-dtors-with-atexit -fgnuc-version=4.2.1 -fskip-odr-check-in-gmf -fcxx-exceptions -fexceptions -fmax-type-align=16 -fsanitize=address,alignment,array-bounds,bool,builtin,enum,float-cast-overflow,function,integer-divide-by-zero,nonnull-attribute,null,pointer-overflow,return,returns-nonnull-attribute,shift-base,shift-exponent,signed-integer-overflow,unreachable,vla-bound,vptr -fsanitize-recover=alignment,array-bounds,bool,builtin,enum,float-cast-overflow,function,integer-divide-by-zero,nonnull-attribute,null,pointer-overflow,returns-nonnull-attribute,shift-base,shift-exponent,signed-integer-overflow,vla-bound,vptr -fsanitize-merge=alignment,array-bounds,bool,builtin,enum,float-cast-overflow,function,integer-divide-by-zero,nonnull-attribute,null,pointer-overflow,return,returns-nonnull-attribute,shift-base,shift-exponent,signed-integer-overflow,unreachable,vla-bound,vptr -fsanitize-system-ignorelist=/opt/homebrew/Cellar/llvm/20.1.8/lib/clang/20/share/asan_ignorelist.txt -fno-sanitize-memory-param-retval -fsanitize-address-use-after-scope -fsanitize-address-globals-dead-stripping -fno-assume-sane-operator-new -D__GCC_HAVE_DWARF2_CFI_ASM=1 -o CMakeFiles/cmTC_86073.dir/CMakeCXXCompilerABI.cpp.o -x c++ /Users/andrew/venvs/refusals/lib/python3.10/site-packages/cmake/data/share/cmake-3.31/Modules/CMakeCXXCompilerABI.cpp
+        clang -cc1 version 20.1.8 based upon LLVM 20.1.8 default target arm64-apple-darwin25.0.0
+        ignoring nonexistent directory "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk/usr/local/include"
+        ignoring nonexistent directory "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk/System/Library/SubFrameworks"
+        ignoring nonexistent directory "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk/Library/Frameworks"
+        #include "..." search starts here:
+        #include <...> search starts here:
+         /opt/homebrew/Cellar/llvm/20.1.8/bin/../include/c++/v1
+         /opt/homebrew/Cellar/llvm/20.1.8/lib/clang/20/include
+         /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk/usr/include
+         /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk/System/Library/Frameworks (framework directory)
+        End of search list.
+        Linking CXX executable cmTC_86073
+        /Users/andrew/venvs/refusals/lib/python3.10/site-packages/cmake/data/bin/cmake -E cmake_link_script CMakeFiles/cmTC_86073.dir/link.txt --verbose=1
+        Homebrew clang version 20.1.8
+        Target: arm64-apple-darwin25.0.0
+        Thread model: posix
+        InstalledDir: /opt/homebrew/Cellar/llvm/20.1.8/bin
+        Configuration file: /opt/homebrew/etc/clang/arm64-apple-darwin25.cfg
+        System configuration file directory: /opt/homebrew/etc/clang
+        User configuration file directory: /Users/andrew/.config/clang
+         "/usr/bin/ld" -demangle -lto_library /opt/homebrew/Cellar/llvm/20.1.8/lib/libLTO.dylib -dynamic -arch arm64 -platform_version macos 15.5.0 15.5 -syslibroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk -mllvm -enable-linkonceodr-outlining -o cmTC_86073 -search_paths_first -headerpad_max_install_names -v CMakeFiles/cmTC_86073.dir/CMakeCXXCompilerABI.cpp.o -lc++ /opt/homebrew/Cellar/llvm/20.1.8/lib/clang/20/lib/darwin/libclang_rt.asan_osx_dynamic.dylib -rpath @executable_path -rpath /opt/homebrew/Cellar/llvm/20.1.8/lib/clang/20/lib/darwin -lSystem /opt/homebrew/Cellar/llvm/20.1.8/lib/clang/20/lib/darwin/libclang_rt.osx.a
+        @(#)PROGRAM:ld PROJECT:ld-1167.5
+        BUILD 01:45:05 Apr 30 2025
+        configured to support archs: armv6 armv7 armv7s arm64 arm64e arm64_32 i386 x86_64 x86_64h armv6m armv7k armv7m armv7em
+        will use ld-classic for: armv6 armv7 armv7s i386 armv6m armv7k armv7m armv7em
+        LTO support using: LLVM version 20.1.8 (static support for 29, runtime is 29)
+        TAPI support using: Apple TAPI version 17.0.0 (tapi-1700.0.3.5)
+        Library search paths:
+        	/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk/usr/lib
+        	/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk/usr/lib/swift
+        Framework search paths:
+        	/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk/System/Library/Frameworks
+        /opt/homebrew/opt/llvm@20/bin/clang++ -fsanitize=address,undefined -fno-omit-frame-pointer -g -Wno-dangling-assignment-gsl  -arch arm64 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk -Wl,-search_paths_first -Wl,-headerpad_max_install_names -fsanitize=address,undefined -v -Wl,-v CMakeFiles/cmTC_86073.dir/CMakeCXXCompilerABI.cpp.o -o cmTC_86073
+        gmake[1]: Leaving directory '/Users/andrew/zzCoding-play/triton/build_unittest_sanitize/asan/CMakeFiles/CMakeScratch/TryCompile-jxXBg5'
+        
+      exitCode: 0
+  -
+    kind: "message-v1"
+    backtrace:
+      - "/Users/andrew/venvs/refusals/lib/python3.10/site-packages/cmake/data/share/cmake-3.31/Modules/CMakeDetermineCompilerABI.cmake:113 (message)"
+      - "/Users/andrew/venvs/refusals/lib/python3.10/site-packages/cmake/data/share/cmake-3.31/Modules/CMakeTestCXXCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
+      - "CMakeLists.txt:15 (project)"
+    message: |
+      Effective list of requested architectures (possibly empty)  : ""
+      Effective list of architectures found in the ABI info binary: "arm64"
+  -
+    kind: "message-v1"
+    backtrace:
+      - "/Users/andrew/venvs/refusals/lib/python3.10/site-packages/cmake/data/share/cmake-3.31/Modules/CMakeDetermineCompilerABI.cmake:182 (message)"
+      - "/Users/andrew/venvs/refusals/lib/python3.10/site-packages/cmake/data/share/cmake-3.31/Modules/CMakeTestCXXCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
+      - "CMakeLists.txt:15 (project)"
+    message: |
+      Parsed CXX implicit include dir info: rv=done
+        found start of include info
+        found start of implicit include info
+          add: [/opt/homebrew/Cellar/llvm/20.1.8/bin/../include/c++/v1]
+          add: [/opt/homebrew/Cellar/llvm/20.1.8/lib/clang/20/include]
+          add: [/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk/usr/include]
+        end of search list found
+        collapse include dir [/opt/homebrew/Cellar/llvm/20.1.8/bin/../include/c++/v1] ==> [/opt/homebrew/Cellar/llvm/20.1.8/include/c++/v1]
+        collapse include dir [/opt/homebrew/Cellar/llvm/20.1.8/lib/clang/20/include] ==> [/opt/homebrew/Cellar/llvm/20.1.8/lib/clang/20/include]
+        collapse include dir [/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk/usr/include] ==> [/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk/usr/include]
+        implicit include dirs: [/opt/homebrew/Cellar/llvm/20.1.8/include/c++/v1;/opt/homebrew/Cellar/llvm/20.1.8/lib/clang/20/include;/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk/usr/include]
+      
+      
+  -
+    kind: "message-v1"
+    backtrace:
+      - "/Users/andrew/venvs/refusals/lib/python3.10/site-packages/cmake/data/share/cmake-3.31/Modules/CMakeDetermineCompilerABI.cmake:218 (message)"
+      - "/Users/andrew/venvs/refusals/lib/python3.10/site-packages/cmake/data/share/cmake-3.31/Modules/CMakeTestCXXCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
+      - "CMakeLists.txt:15 (project)"
+    message: |
+      Parsed CXX implicit link information:
+        link line regex: [^( *|.*[/\\])(ld[0-9]*(\\.[a-z]+)?|CMAKE_LINK_STARTFILE-NOTFOUND|([^/\\]+-)?ld|collect2)[^/\\]*( |$)]
+        linker tool regex: [^[ 	]*(->|")?[ 	]*(([^"]*[/\\])?(ld[0-9]*(\\.[a-z]+)?))("|,| |$)]
+        ignore line: [Change Dir: '/Users/andrew/zzCoding-play/triton/build_unittest_sanitize/asan/CMakeFiles/CMakeScratch/TryCompile-jxXBg5']
+        ignore line: []
+        ignore line: [Run Build Command(s): /Users/andrew/venvs/refusals/lib/python3.10/site-packages/cmake/data/bin/cmake -E env VERBOSE=1 /opt/homebrew/bin/gmake -f Makefile cmTC_86073/fast]
+        ignore line: [/opt/homebrew/bin/gmake  -f CMakeFiles/cmTC_86073.dir/build.make CMakeFiles/cmTC_86073.dir/build]
+        ignore line: [gmake[1]: Entering directory '/Users/andrew/zzCoding-play/triton/build_unittest_sanitize/asan/CMakeFiles/CMakeScratch/TryCompile-jxXBg5']
+        ignore line: [Building CXX object CMakeFiles/cmTC_86073.dir/CMakeCXXCompilerABI.cpp.o]
+        ignore line: [/opt/homebrew/opt/llvm@20/bin/clang++   -fsanitize=address undefined -fno-omit-frame-pointer -g -Wno-dangling-assignment-gsl  -std=gnu++17 -arch arm64 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk   -v -Wl -v -MD -MT CMakeFiles/cmTC_86073.dir/CMakeCXXCompilerABI.cpp.o -MF CMakeFiles/cmTC_86073.dir/CMakeCXXCompilerABI.cpp.o.d -o CMakeFiles/cmTC_86073.dir/CMakeCXXCompilerABI.cpp.o -c /Users/andrew/venvs/refusals/lib/python3.10/site-packages/cmake/data/share/cmake-3.31/Modules/CMakeCXXCompilerABI.cpp]
+        ignore line: [Homebrew clang version 20.1.8]
+        ignore line: [Target: arm64-apple-darwin25.0.0]
+        ignore line: [Thread model: posix]
+        ignore line: [InstalledDir: /opt/homebrew/Cellar/llvm/20.1.8/bin]
+        ignore line: [Configuration file: /opt/homebrew/etc/clang/arm64-apple-darwin25.cfg]
+        ignore line: [System configuration file directory: /opt/homebrew/etc/clang]
+        ignore line: [User configuration file directory: /Users/andrew/.config/clang]
+        ignore line: [clang++: warning: -Wl -v: 'linker' input unused [-Wunused-command-line-argument]]
+        ignore line: [ (in-process)]
+        ignore line: [ "/opt/homebrew/Cellar/llvm/20.1.8/bin/clang-20" -cc1 -triple arm64-apple-macosx15.5.0 -Wundef-prefix=TARGET_OS_ -Werror=undef-prefix -Wdeprecated-objc-isa-usage -Werror=deprecated-objc-isa-usage -emit-obj -disable-free -clear-ast-before-backend -disable-llvm-verifier -discard-value-names -main-file-name CMakeCXXCompilerABI.cpp -mrelocation-model pic -pic-level 2 -mframe-pointer=non-leaf -ffp-contract=on -fno-rounding-math -funwind-tables=2 -target-sdk-version=15.5 -fcompatibility-qualified-id-block-type-checking -fvisibility-inlines-hidden-static-local-var -fdefine-target-os-macros -fno-modulemap-allow-subdirectory-search -target-cpu apple-m1 -target-feature +zcm -target-feature +zcz -target-feature +v8.4a -target-feature +aes -target-feature +altnzcv -target-feature +ccdp -target-feature +ccpp -target-feature +complxnum -target-feature +crc -target-feature +dotprod -target-feature +flagm -target-feature +fp-armv8 -target-feature +fp16fml -target-feature +fptoint -target-feature +fullfp16 -target-feature +jsconv -target-feature +lse -target-feature +neon -target-feature +pauth -target-feature +perfmon -target-feature +predres -target-feature +ras -target-feature +rcpc -target-feature +rdm -target-feature +sb -target-feature +sha2 -target-feature +sha3 -target-feature +specrestrict -target-feature +ssbs -target-abi darwinpcs -debug-info-kind=standalone -dwarf-version=5 -debugger-tuning=lldb -fdebug-compilation-dir=/Users/andrew/zzCoding-play/triton/build_unittest_sanitize/asan/CMakeFiles/CMakeScratch/TryCompile-jxXBg5 -target-linker-version 1167.4.1 -v -fcoverage-compilation-dir=/Users/andrew/zzCoding-play/triton/build_unittest_sanitize/asan/CMakeFiles/CMakeScratch/TryCompile-jxXBg5 -resource-dir /opt/homebrew/Cellar/llvm/20.1.8/lib/clang/20 -dependency-file CMakeFiles/cmTC_86073.dir/CMakeCXXCompilerABI.cpp.o.d -MT CMakeFiles/cmTC_86073.dir/CMakeCXXCompilerABI.cpp.o -sys-header-deps -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX26.sdk -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk -internal-isystem /opt/homebrew/Cellar/llvm/20.1.8/bin/../include/c++/v1 -internal-isystem /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk/usr/local/include -internal-isystem /opt/homebrew/Cellar/llvm/20.1.8/lib/clang/20/include -internal-externc-isystem /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk/usr/include -Wno-dangling-assignment-gsl -std=gnu++17 -fdeprecated-macro -ferror-limit 19 -stack-protector 1 -fblocks -fencode-extended-block-signature -fregister-global-dtors-with-atexit -fgnuc-version=4.2.1 -fskip-odr-check-in-gmf -fcxx-exceptions -fexceptions -fmax-type-align=16 -fsanitize=address alignment array-bounds bool builtin enum float-cast-overflow function integer-divide-by-zero nonnull-attribute null pointer-overflow return returns-nonnull-attribute shift-base shift-exponent signed-integer-overflow unreachable vla-bound vptr -fsanitize-recover=alignment array-bounds bool builtin enum float-cast-overflow function integer-divide-by-zero nonnull-attribute null pointer-overflow returns-nonnull-attribute shift-base shift-exponent signed-integer-overflow vla-bound vptr -fsanitize-merge=alignment array-bounds bool builtin enum float-cast-overflow function integer-divide-by-zero nonnull-attribute null pointer-overflow return returns-nonnull-attribute shift-base shift-exponent signed-integer-overflow unreachable vla-bound vptr -fsanitize-system-ignorelist=/opt/homebrew/Cellar/llvm/20.1.8/lib/clang/20/share/asan_ignorelist.txt -fno-sanitize-memory-param-retval -fsanitize-address-use-after-scope -fsanitize-address-globals-dead-stripping -fno-assume-sane-operator-new -D__GCC_HAVE_DWARF2_CFI_ASM=1 -o CMakeFiles/cmTC_86073.dir/CMakeCXXCompilerABI.cpp.o -x c++ /Users/andrew/venvs/refusals/lib/python3.10/site-packages/cmake/data/share/cmake-3.31/Modules/CMakeCXXCompilerABI.cpp]
+        ignore line: [clang -cc1 version 20.1.8 based upon LLVM 20.1.8 default target arm64-apple-darwin25.0.0]
+        ignore line: [ignoring nonexistent directory "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk/usr/local/include"]
+        ignore line: [ignoring nonexistent directory "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk/System/Library/SubFrameworks"]
+        ignore line: [ignoring nonexistent directory "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk/Library/Frameworks"]
+        ignore line: [#include "..." search starts here:]
+        ignore line: [#include <...> search starts here:]
+        ignore line: [ /opt/homebrew/Cellar/llvm/20.1.8/bin/../include/c++/v1]
+        ignore line: [ /opt/homebrew/Cellar/llvm/20.1.8/lib/clang/20/include]
+        ignore line: [ /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk/usr/include]
+        ignore line: [ /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk/System/Library/Frameworks (framework directory)]
+        ignore line: [End of search list.]
+        ignore line: [Linking CXX executable cmTC_86073]
+        ignore line: [/Users/andrew/venvs/refusals/lib/python3.10/site-packages/cmake/data/bin/cmake -E cmake_link_script CMakeFiles/cmTC_86073.dir/link.txt --verbose=1]
+        ignore line: [Homebrew clang version 20.1.8]
+        ignore line: [Target: arm64-apple-darwin25.0.0]
+        ignore line: [Thread model: posix]
+        ignore line: [InstalledDir: /opt/homebrew/Cellar/llvm/20.1.8/bin]
+        ignore line: [Configuration file: /opt/homebrew/etc/clang/arm64-apple-darwin25.cfg]
+        ignore line: [System configuration file directory: /opt/homebrew/etc/clang]
+        ignore line: [User configuration file directory: /Users/andrew/.config/clang]
+        link line: [ "/usr/bin/ld" -demangle -lto_library /opt/homebrew/Cellar/llvm/20.1.8/lib/libLTO.dylib -dynamic -arch arm64 -platform_version macos 15.5.0 15.5 -syslibroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk -mllvm -enable-linkonceodr-outlining -o cmTC_86073 -search_paths_first -headerpad_max_install_names -v CMakeFiles/cmTC_86073.dir/CMakeCXXCompilerABI.cpp.o -lc++ /opt/homebrew/Cellar/llvm/20.1.8/lib/clang/20/lib/darwin/libclang_rt.asan_osx_dynamic.dylib -rpath @executable_path -rpath /opt/homebrew/Cellar/llvm/20.1.8/lib/clang/20/lib/darwin -lSystem /opt/homebrew/Cellar/llvm/20.1.8/lib/clang/20/lib/darwin/libclang_rt.osx.a]
+          arg [/usr/bin/ld] ==> ignore
+          arg [-demangle] ==> ignore
+          arg [-lto_library] ==> ignore, skip following value
+          arg [/opt/homebrew/Cellar/llvm/20.1.8/lib/libLTO.dylib] ==> skip value of -lto_library
+          arg [-dynamic] ==> ignore
+          arg [-arch] ==> ignore
+          arg [arm64] ==> ignore
+          arg [-platform_version] ==> ignore
+          arg [macos] ==> ignore
+          arg [15.5.0] ==> ignore
+          arg [15.5] ==> ignore
+          arg [-syslibroot] ==> ignore
+          arg [/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk] ==> ignore
+          arg [-mllvm] ==> ignore
+          arg [-enable-linkonceodr-outlining] ==> ignore
+          arg [-o] ==> ignore
+          arg [cmTC_86073] ==> ignore
+          arg [-search_paths_first] ==> ignore
+          arg [-headerpad_max_install_names] ==> ignore
+          arg [-v] ==> ignore
+          arg [CMakeFiles/cmTC_86073.dir/CMakeCXXCompilerABI.cpp.o] ==> ignore
+          arg [-lc++] ==> lib [c++]
+          arg [/opt/homebrew/Cellar/llvm/20.1.8/lib/clang/20/lib/darwin/libclang_rt.asan_osx_dynamic.dylib] ==> ignore
+          arg [-rpath] ==> ignore
+          arg [@executable_path] ==> ignore
+          arg [-rpath] ==> ignore
+          arg [/opt/homebrew/Cellar/llvm/20.1.8/lib/clang/20/lib/darwin] ==> ignore
+          arg [-lSystem] ==> lib [System]
+          arg [/opt/homebrew/Cellar/llvm/20.1.8/lib/clang/20/lib/darwin/libclang_rt.osx.a] ==> lib [/opt/homebrew/Cellar/llvm/20.1.8/lib/clang/20/lib/darwin/libclang_rt.osx.a]
+        linker tool for 'CXX': /usr/bin/ld
+        Library search paths: [;/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk/usr/lib;/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk/usr/lib/swift]
+        Framework search paths: [;/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk/System/Library/Frameworks]
+        remove lib [System]
+        remove lib [/opt/homebrew/Cellar/llvm/20.1.8/lib/clang/20/lib/darwin/libclang_rt.osx.a]
+        collapse library dir [/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk/usr/lib] ==> [/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk/usr/lib]
+        collapse library dir [/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk/usr/lib/swift] ==> [/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk/usr/lib/swift]
+        collapse framework dir [/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk/System/Library/Frameworks] ==> [/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk/System/Library/Frameworks]
+        implicit libs: [c++]
+        implicit objs: []
+        implicit dirs: [/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk/usr/lib;/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk/usr/lib/swift]
+        implicit fwks: [/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk/System/Library/Frameworks]
+      
+      
+  -
+    kind: "message-v1"
+    backtrace:
+      - "/Users/andrew/venvs/refusals/lib/python3.10/site-packages/cmake/data/share/cmake-3.31/Modules/Internal/CMakeDetermineLinkerId.cmake:40 (message)"
+      - "/Users/andrew/venvs/refusals/lib/python3.10/site-packages/cmake/data/share/cmake-3.31/Modules/CMakeDetermineCompilerABI.cmake:255 (cmake_determine_linker_id)"
+      - "/Users/andrew/venvs/refusals/lib/python3.10/site-packages/cmake/data/share/cmake-3.31/Modules/CMakeTestCXXCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
+      - "CMakeLists.txt:15 (project)"
+    message: |
+      Running the CXX compiler's linker: "/usr/bin/ld" "-v"
+      @(#)PROGRAM:ld PROJECT:ld-1167.5
+      BUILD 01:45:05 Apr 30 2025
+      configured to support archs: armv6 armv7 armv7s arm64 arm64e arm64_32 i386 x86_64 x86_64h armv6m armv7k armv7m armv7em
+      will use ld-classic for: armv6 armv7 armv7s i386 armv6m armv7k armv7m armv7em
+      LTO support using: LLVM version 17.0.0 (static support for 29, runtime is 29)
+      TAPI support using: Apple TAPI version 17.0.0 (tapi-1700.0.3.5)
+  -
+    kind: "try_compile-v1"
+    backtrace:
+      - "/Users/andrew/venvs/refusals/lib/python3.10/site-packages/cmake/data/share/cmake-3.31/Modules/CMakeDetermineCompilerABI.cmake:74 (try_compile)"
+      - "/Users/andrew/venvs/refusals/lib/python3.10/site-packages/cmake/data/share/cmake-3.31/Modules/CMakeTestCCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
+      - "CMakeLists.txt:15 (project)"
+    checks:
+      - "Detecting C compiler ABI info"
+    directories:
+      source: "/Users/andrew/zzCoding-play/triton/build_unittest_sanitize/asan/CMakeFiles/CMakeScratch/TryCompile-mvJiEZ"
+      binary: "/Users/andrew/zzCoding-play/triton/build_unittest_sanitize/asan/CMakeFiles/CMakeScratch/TryCompile-mvJiEZ"
+    cmakeVariables:
+      CMAKE_CXX_COMPILER_CLANG_SCAN_DEPS: "/opt/homebrew/Cellar/llvm/20.1.8/bin/clang-scan-deps"
+      CMAKE_C_FLAGS: "-fsanitize=address,undefined -fno-omit-frame-pointer -g -Wno-dangling-assignment-gsl"
+      CMAKE_C_FLAGS_DEBUG: "-g"
+      CMAKE_EXE_LINKER_FLAGS: "-fsanitize=address,undefined"
+      CMAKE_OSX_ARCHITECTURES: ""
+      CMAKE_OSX_DEPLOYMENT_TARGET: ""
+      CMAKE_OSX_SYSROOT: "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk"
+    buildResult:
+      variable: "CMAKE_C_ABI_COMPILED"
+      cached: true
+      stdout: |
+        Change Dir: '/Users/andrew/zzCoding-play/triton/build_unittest_sanitize/asan/CMakeFiles/CMakeScratch/TryCompile-mvJiEZ'
+        
+        Run Build Command(s): /Users/andrew/venvs/refusals/lib/python3.10/site-packages/cmake/data/bin/cmake -E env VERBOSE=1 /opt/homebrew/bin/gmake -f Makefile cmTC_0dc51/fast
+        /opt/homebrew/bin/gmake  -f CMakeFiles/cmTC_0dc51.dir/build.make CMakeFiles/cmTC_0dc51.dir/build
+        gmake[1]: Entering directory '/Users/andrew/zzCoding-play/triton/build_unittest_sanitize/asan/CMakeFiles/CMakeScratch/TryCompile-mvJiEZ'
+        Building C object CMakeFiles/cmTC_0dc51.dir/CMakeCCompilerABI.c.o
+        /opt/homebrew/opt/llvm@20/bin/clang   -fsanitize=address,undefined -fno-omit-frame-pointer -g -Wno-dangling-assignment-gsl  -arch arm64 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk   -v -Wl,-v -MD -MT CMakeFiles/cmTC_0dc51.dir/CMakeCCompilerABI.c.o -MF CMakeFiles/cmTC_0dc51.dir/CMakeCCompilerABI.c.o.d -o CMakeFiles/cmTC_0dc51.dir/CMakeCCompilerABI.c.o -c /Users/andrew/venvs/refusals/lib/python3.10/site-packages/cmake/data/share/cmake-3.31/Modules/CMakeCCompilerABI.c
+        Homebrew clang version 20.1.8
+        Target: arm64-apple-darwin25.0.0
+        Thread model: posix
+        InstalledDir: /opt/homebrew/Cellar/llvm/20.1.8/bin
+        Configuration file: /opt/homebrew/etc/clang/arm64-apple-darwin25.cfg
+        System configuration file directory: /opt/homebrew/etc/clang
+        User configuration file directory: /Users/andrew/.config/clang
+        clang: warning: -Wl,-v: 'linker' input unused [-Wunused-command-line-argument]
+         (in-process)
+         "/opt/homebrew/Cellar/llvm/20.1.8/bin/clang-20" -cc1 -triple arm64-apple-macosx15.5.0 -Wundef-prefix=TARGET_OS_ -Werror=undef-prefix -Wdeprecated-objc-isa-usage -Werror=deprecated-objc-isa-usage -emit-obj -disable-free -clear-ast-before-backend -disable-llvm-verifier -discard-value-names -main-file-name CMakeCCompilerABI.c -mrelocation-model pic -pic-level 2 -mframe-pointer=non-leaf -ffp-contract=on -fno-rounding-math -funwind-tables=2 -target-sdk-version=15.5 -fcompatibility-qualified-id-block-type-checking -fvisibility-inlines-hidden-static-local-var -fdefine-target-os-macros -fno-modulemap-allow-subdirectory-search -target-cpu apple-m1 -target-feature +zcm -target-feature +zcz -target-feature +v8.4a -target-feature +aes -target-feature +altnzcv -target-feature +ccdp -target-feature +ccpp -target-feature +complxnum -target-feature +crc -target-feature +dotprod -target-feature +flagm -target-feature +fp-armv8 -target-feature +fp16fml -target-feature +fptoint -target-feature +fullfp16 -target-feature +jsconv -target-feature +lse -target-feature +neon -target-feature +pauth -target-feature +perfmon -target-feature +predres -target-feature +ras -target-feature +rcpc -target-feature +rdm -target-feature +sb -target-feature +sha2 -target-feature +sha3 -target-feature +specrestrict -target-feature +ssbs -target-abi darwinpcs -debug-info-kind=standalone -dwarf-version=5 -debugger-tuning=lldb -fdebug-compilation-dir=/Users/andrew/zzCoding-play/triton/build_unittest_sanitize/asan/CMakeFiles/CMakeScratch/TryCompile-mvJiEZ -target-linker-version 1167.4.1 -v -fcoverage-compilation-dir=/Users/andrew/zzCoding-play/triton/build_unittest_sanitize/asan/CMakeFiles/CMakeScratch/TryCompile-mvJiEZ -resource-dir /opt/homebrew/Cellar/llvm/20.1.8/lib/clang/20 -dependency-file CMakeFiles/cmTC_0dc51.dir/CMakeCCompilerABI.c.o.d -MT CMakeFiles/cmTC_0dc51.dir/CMakeCCompilerABI.c.o -sys-header-deps -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX26.sdk -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk -internal-isystem /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk/usr/local/include -internal-isystem /opt/homebrew/Cellar/llvm/20.1.8/lib/clang/20/include -internal-externc-isystem /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk/usr/include -Wno-dangling-assignment-gsl -ferror-limit 19 -stack-protector 1 -fblocks -fencode-extended-block-signature -fregister-global-dtors-with-atexit -fgnuc-version=4.2.1 -fskip-odr-check-in-gmf -fmax-type-align=16 -fsanitize=address,alignment,array-bounds,bool,builtin,enum,float-cast-overflow,function,integer-divide-by-zero,nonnull-attribute,null,pointer-overflow,return,returns-nonnull-attribute,shift-base,shift-exponent,signed-integer-overflow,unreachable,vla-bound,vptr -fsanitize-recover=alignment,array-bounds,bool,builtin,enum,float-cast-overflow,function,integer-divide-by-zero,nonnull-attribute,null,pointer-overflow,returns-nonnull-attribute,shift-base,shift-exponent,signed-integer-overflow,vla-bound,vptr -fsanitize-merge=alignment,array-bounds,bool,builtin,enum,float-cast-overflow,function,integer-divide-by-zero,nonnull-attribute,null,pointer-overflow,return,returns-nonnull-attribute,shift-base,shift-exponent,signed-integer-overflow,unreachable,vla-bound,vptr -fsanitize-system-ignorelist=/opt/homebrew/Cellar/llvm/20.1.8/lib/clang/20/share/asan_ignorelist.txt -fno-sanitize-memory-param-retval -fsanitize-address-use-after-scope -fsanitize-address-globals-dead-stripping -fno-assume-sane-operator-new -D__GCC_HAVE_DWARF2_CFI_ASM=1 -o CMakeFiles/cmTC_0dc51.dir/CMakeCCompilerABI.c.o -x c /Users/andrew/venvs/refusals/lib/python3.10/site-packages/cmake/data/share/cmake-3.31/Modules/CMakeCCompilerABI.c
+        clang -cc1 version 20.1.8 based upon LLVM 20.1.8 default target arm64-apple-darwin25.0.0
+        ignoring nonexistent directory "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk/usr/local/include"
+        ignoring nonexistent directory "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk/System/Library/SubFrameworks"
+        ignoring nonexistent directory "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk/Library/Frameworks"
+        #include "..." search starts here:
+        #include <...> search starts here:
+         /opt/homebrew/Cellar/llvm/20.1.8/lib/clang/20/include
+         /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk/usr/include
+         /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk/System/Library/Frameworks (framework directory)
+        End of search list.
+        Linking C executable cmTC_0dc51
+        /Users/andrew/venvs/refusals/lib/python3.10/site-packages/cmake/data/bin/cmake -E cmake_link_script CMakeFiles/cmTC_0dc51.dir/link.txt --verbose=1
+        Homebrew clang version 20.1.8
+        Target: arm64-apple-darwin25.0.0
+        Thread model: posix
+        InstalledDir: /opt/homebrew/Cellar/llvm/20.1.8/bin
+        Configuration file: /opt/homebrew/etc/clang/arm64-apple-darwin25.cfg
+        System configuration file directory: /opt/homebrew/etc/clang
+        User configuration file directory: /Users/andrew/.config/clang
+         "/usr/bin/ld" -demangle -lto_library /opt/homebrew/Cellar/llvm/20.1.8/lib/libLTO.dylib -dynamic -arch arm64 -platform_version macos 15.5.0 15.5 -syslibroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk -mllvm -enable-linkonceodr-outlining -o cmTC_0dc51 -search_paths_first -headerpad_max_install_names -v CMakeFiles/cmTC_0dc51.dir/CMakeCCompilerABI.c.o /opt/homebrew/Cellar/llvm/20.1.8/lib/clang/20/lib/darwin/libclang_rt.asan_osx_dynamic.dylib -rpath @executable_path -rpath /opt/homebrew/Cellar/llvm/20.1.8/lib/clang/20/lib/darwin -lSystem /opt/homebrew/Cellar/llvm/20.1.8/lib/clang/20/lib/darwin/libclang_rt.osx.a
+        @(#)PROGRAM:ld PROJECT:ld-1167.5
+        BUILD 01:45:05 Apr 30 2025
+        configured to support archs: armv6 armv7 armv7s arm64 arm64e arm64_32 i386 x86_64 x86_64h armv6m armv7k armv7m armv7em
+        will use ld-classic for: armv6 armv7 armv7s i386 armv6m armv7k armv7m armv7em
+        LTO support using: LLVM version 20.1.8 (static support for 29, runtime is 29)
+        TAPI support using: Apple TAPI version 17.0.0 (tapi-1700.0.3.5)
+        Library search paths:
+        	/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk/usr/lib
+        	/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk/usr/lib/swift
+        Framework search paths:
+        	/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk/System/Library/Frameworks
+        /opt/homebrew/opt/llvm@20/bin/clang -fsanitize=address,undefined -fno-omit-frame-pointer -g -Wno-dangling-assignment-gsl  -arch arm64 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk -Wl,-search_paths_first -Wl,-headerpad_max_install_names -fsanitize=address,undefined -v -Wl,-v CMakeFiles/cmTC_0dc51.dir/CMakeCCompilerABI.c.o -o cmTC_0dc51
+        gmake[1]: Leaving directory '/Users/andrew/zzCoding-play/triton/build_unittest_sanitize/asan/CMakeFiles/CMakeScratch/TryCompile-mvJiEZ'
+        
+      exitCode: 0
+  -
+    kind: "message-v1"
+    backtrace:
+      - "/Users/andrew/venvs/refusals/lib/python3.10/site-packages/cmake/data/share/cmake-3.31/Modules/CMakeDetermineCompilerABI.cmake:113 (message)"
+      - "/Users/andrew/venvs/refusals/lib/python3.10/site-packages/cmake/data/share/cmake-3.31/Modules/CMakeTestCCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
+      - "CMakeLists.txt:15 (project)"
+    message: |
+      Effective list of requested architectures (possibly empty)  : ""
+      Effective list of architectures found in the ABI info binary: "arm64"
+  -
+    kind: "message-v1"
+    backtrace:
+      - "/Users/andrew/venvs/refusals/lib/python3.10/site-packages/cmake/data/share/cmake-3.31/Modules/CMakeDetermineCompilerABI.cmake:182 (message)"
+      - "/Users/andrew/venvs/refusals/lib/python3.10/site-packages/cmake/data/share/cmake-3.31/Modules/CMakeTestCCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
+      - "CMakeLists.txt:15 (project)"
+    message: |
+      Parsed C implicit include dir info: rv=done
+        found start of include info
+        found start of implicit include info
+          add: [/opt/homebrew/Cellar/llvm/20.1.8/lib/clang/20/include]
+          add: [/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk/usr/include]
+        end of search list found
+        collapse include dir [/opt/homebrew/Cellar/llvm/20.1.8/lib/clang/20/include] ==> [/opt/homebrew/Cellar/llvm/20.1.8/lib/clang/20/include]
+        collapse include dir [/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk/usr/include] ==> [/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk/usr/include]
+        implicit include dirs: [/opt/homebrew/Cellar/llvm/20.1.8/lib/clang/20/include;/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk/usr/include]
+      
+      
+  -
+    kind: "message-v1"
+    backtrace:
+      - "/Users/andrew/venvs/refusals/lib/python3.10/site-packages/cmake/data/share/cmake-3.31/Modules/CMakeDetermineCompilerABI.cmake:218 (message)"
+      - "/Users/andrew/venvs/refusals/lib/python3.10/site-packages/cmake/data/share/cmake-3.31/Modules/CMakeTestCCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
+      - "CMakeLists.txt:15 (project)"
+    message: |
+      Parsed C implicit link information:
+        link line regex: [^( *|.*[/\\])(ld[0-9]*(\\.[a-z]+)?|CMAKE_LINK_STARTFILE-NOTFOUND|([^/\\]+-)?ld|collect2)[^/\\]*( |$)]
+        linker tool regex: [^[ 	]*(->|")?[ 	]*(([^"]*[/\\])?(ld[0-9]*(\\.[a-z]+)?))("|,| |$)]
+        ignore line: [Change Dir: '/Users/andrew/zzCoding-play/triton/build_unittest_sanitize/asan/CMakeFiles/CMakeScratch/TryCompile-mvJiEZ']
+        ignore line: []
+        ignore line: [Run Build Command(s): /Users/andrew/venvs/refusals/lib/python3.10/site-packages/cmake/data/bin/cmake -E env VERBOSE=1 /opt/homebrew/bin/gmake -f Makefile cmTC_0dc51/fast]
+        ignore line: [/opt/homebrew/bin/gmake  -f CMakeFiles/cmTC_0dc51.dir/build.make CMakeFiles/cmTC_0dc51.dir/build]
+        ignore line: [gmake[1]: Entering directory '/Users/andrew/zzCoding-play/triton/build_unittest_sanitize/asan/CMakeFiles/CMakeScratch/TryCompile-mvJiEZ']
+        ignore line: [Building C object CMakeFiles/cmTC_0dc51.dir/CMakeCCompilerABI.c.o]
+        ignore line: [/opt/homebrew/opt/llvm@20/bin/clang   -fsanitize=address undefined -fno-omit-frame-pointer -g -Wno-dangling-assignment-gsl  -arch arm64 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk   -v -Wl -v -MD -MT CMakeFiles/cmTC_0dc51.dir/CMakeCCompilerABI.c.o -MF CMakeFiles/cmTC_0dc51.dir/CMakeCCompilerABI.c.o.d -o CMakeFiles/cmTC_0dc51.dir/CMakeCCompilerABI.c.o -c /Users/andrew/venvs/refusals/lib/python3.10/site-packages/cmake/data/share/cmake-3.31/Modules/CMakeCCompilerABI.c]
+        ignore line: [Homebrew clang version 20.1.8]
+        ignore line: [Target: arm64-apple-darwin25.0.0]
+        ignore line: [Thread model: posix]
+        ignore line: [InstalledDir: /opt/homebrew/Cellar/llvm/20.1.8/bin]
+        ignore line: [Configuration file: /opt/homebrew/etc/clang/arm64-apple-darwin25.cfg]
+        ignore line: [System configuration file directory: /opt/homebrew/etc/clang]
+        ignore line: [User configuration file directory: /Users/andrew/.config/clang]
+        ignore line: [clang: warning: -Wl -v: 'linker' input unused [-Wunused-command-line-argument]]
+        ignore line: [ (in-process)]
+        ignore line: [ "/opt/homebrew/Cellar/llvm/20.1.8/bin/clang-20" -cc1 -triple arm64-apple-macosx15.5.0 -Wundef-prefix=TARGET_OS_ -Werror=undef-prefix -Wdeprecated-objc-isa-usage -Werror=deprecated-objc-isa-usage -emit-obj -disable-free -clear-ast-before-backend -disable-llvm-verifier -discard-value-names -main-file-name CMakeCCompilerABI.c -mrelocation-model pic -pic-level 2 -mframe-pointer=non-leaf -ffp-contract=on -fno-rounding-math -funwind-tables=2 -target-sdk-version=15.5 -fcompatibility-qualified-id-block-type-checking -fvisibility-inlines-hidden-static-local-var -fdefine-target-os-macros -fno-modulemap-allow-subdirectory-search -target-cpu apple-m1 -target-feature +zcm -target-feature +zcz -target-feature +v8.4a -target-feature +aes -target-feature +altnzcv -target-feature +ccdp -target-feature +ccpp -target-feature +complxnum -target-feature +crc -target-feature +dotprod -target-feature +flagm -target-feature +fp-armv8 -target-feature +fp16fml -target-feature +fptoint -target-feature +fullfp16 -target-feature +jsconv -target-feature +lse -target-feature +neon -target-feature +pauth -target-feature +perfmon -target-feature +predres -target-feature +ras -target-feature +rcpc -target-feature +rdm -target-feature +sb -target-feature +sha2 -target-feature +sha3 -target-feature +specrestrict -target-feature +ssbs -target-abi darwinpcs -debug-info-kind=standalone -dwarf-version=5 -debugger-tuning=lldb -fdebug-compilation-dir=/Users/andrew/zzCoding-play/triton/build_unittest_sanitize/asan/CMakeFiles/CMakeScratch/TryCompile-mvJiEZ -target-linker-version 1167.4.1 -v -fcoverage-compilation-dir=/Users/andrew/zzCoding-play/triton/build_unittest_sanitize/asan/CMakeFiles/CMakeScratch/TryCompile-mvJiEZ -resource-dir /opt/homebrew/Cellar/llvm/20.1.8/lib/clang/20 -dependency-file CMakeFiles/cmTC_0dc51.dir/CMakeCCompilerABI.c.o.d -MT CMakeFiles/cmTC_0dc51.dir/CMakeCCompilerABI.c.o -sys-header-deps -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX26.sdk -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk -internal-isystem /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk/usr/local/include -internal-isystem /opt/homebrew/Cellar/llvm/20.1.8/lib/clang/20/include -internal-externc-isystem /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk/usr/include -Wno-dangling-assignment-gsl -ferror-limit 19 -stack-protector 1 -fblocks -fencode-extended-block-signature -fregister-global-dtors-with-atexit -fgnuc-version=4.2.1 -fskip-odr-check-in-gmf -fmax-type-align=16 -fsanitize=address alignment array-bounds bool builtin enum float-cast-overflow function integer-divide-by-zero nonnull-attribute null pointer-overflow return returns-nonnull-attribute shift-base shift-exponent signed-integer-overflow unreachable vla-bound vptr -fsanitize-recover=alignment array-bounds bool builtin enum float-cast-overflow function integer-divide-by-zero nonnull-attribute null pointer-overflow returns-nonnull-attribute shift-base shift-exponent signed-integer-overflow vla-bound vptr -fsanitize-merge=alignment array-bounds bool builtin enum float-cast-overflow function integer-divide-by-zero nonnull-attribute null pointer-overflow return returns-nonnull-attribute shift-base shift-exponent signed-integer-overflow unreachable vla-bound vptr -fsanitize-system-ignorelist=/opt/homebrew/Cellar/llvm/20.1.8/lib/clang/20/share/asan_ignorelist.txt -fno-sanitize-memory-param-retval -fsanitize-address-use-after-scope -fsanitize-address-globals-dead-stripping -fno-assume-sane-operator-new -D__GCC_HAVE_DWARF2_CFI_ASM=1 -o CMakeFiles/cmTC_0dc51.dir/CMakeCCompilerABI.c.o -x c /Users/andrew/venvs/refusals/lib/python3.10/site-packages/cmake/data/share/cmake-3.31/Modules/CMakeCCompilerABI.c]
+        ignore line: [clang -cc1 version 20.1.8 based upon LLVM 20.1.8 default target arm64-apple-darwin25.0.0]
+        ignore line: [ignoring nonexistent directory "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk/usr/local/include"]
+        ignore line: [ignoring nonexistent directory "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk/System/Library/SubFrameworks"]
+        ignore line: [ignoring nonexistent directory "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk/Library/Frameworks"]
+        ignore line: [#include "..." search starts here:]
+        ignore line: [#include <...> search starts here:]
+        ignore line: [ /opt/homebrew/Cellar/llvm/20.1.8/lib/clang/20/include]
+        ignore line: [ /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk/usr/include]
+        ignore line: [ /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk/System/Library/Frameworks (framework directory)]
+        ignore line: [End of search list.]
+        ignore line: [Linking C executable cmTC_0dc51]
+        ignore line: [/Users/andrew/venvs/refusals/lib/python3.10/site-packages/cmake/data/bin/cmake -E cmake_link_script CMakeFiles/cmTC_0dc51.dir/link.txt --verbose=1]
+        ignore line: [Homebrew clang version 20.1.8]
+        ignore line: [Target: arm64-apple-darwin25.0.0]
+        ignore line: [Thread model: posix]
+        ignore line: [InstalledDir: /opt/homebrew/Cellar/llvm/20.1.8/bin]
+        ignore line: [Configuration file: /opt/homebrew/etc/clang/arm64-apple-darwin25.cfg]
+        ignore line: [System configuration file directory: /opt/homebrew/etc/clang]
+        ignore line: [User configuration file directory: /Users/andrew/.config/clang]
+        link line: [ "/usr/bin/ld" -demangle -lto_library /opt/homebrew/Cellar/llvm/20.1.8/lib/libLTO.dylib -dynamic -arch arm64 -platform_version macos 15.5.0 15.5 -syslibroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk -mllvm -enable-linkonceodr-outlining -o cmTC_0dc51 -search_paths_first -headerpad_max_install_names -v CMakeFiles/cmTC_0dc51.dir/CMakeCCompilerABI.c.o /opt/homebrew/Cellar/llvm/20.1.8/lib/clang/20/lib/darwin/libclang_rt.asan_osx_dynamic.dylib -rpath @executable_path -rpath /opt/homebrew/Cellar/llvm/20.1.8/lib/clang/20/lib/darwin -lSystem /opt/homebrew/Cellar/llvm/20.1.8/lib/clang/20/lib/darwin/libclang_rt.osx.a]
+          arg [/usr/bin/ld] ==> ignore
+          arg [-demangle] ==> ignore
+          arg [-lto_library] ==> ignore, skip following value
+          arg [/opt/homebrew/Cellar/llvm/20.1.8/lib/libLTO.dylib] ==> skip value of -lto_library
+          arg [-dynamic] ==> ignore
+          arg [-arch] ==> ignore
+          arg [arm64] ==> ignore
+          arg [-platform_version] ==> ignore
+          arg [macos] ==> ignore
+          arg [15.5.0] ==> ignore
+          arg [15.5] ==> ignore
+          arg [-syslibroot] ==> ignore
+          arg [/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk] ==> ignore
+          arg [-mllvm] ==> ignore
+          arg [-enable-linkonceodr-outlining] ==> ignore
+          arg [-o] ==> ignore
+          arg [cmTC_0dc51] ==> ignore
+          arg [-search_paths_first] ==> ignore
+          arg [-headerpad_max_install_names] ==> ignore
+          arg [-v] ==> ignore
+          arg [CMakeFiles/cmTC_0dc51.dir/CMakeCCompilerABI.c.o] ==> ignore
+          arg [/opt/homebrew/Cellar/llvm/20.1.8/lib/clang/20/lib/darwin/libclang_rt.asan_osx_dynamic.dylib] ==> ignore
+          arg [-rpath] ==> ignore
+          arg [@executable_path] ==> ignore
+          arg [-rpath] ==> ignore
+          arg [/opt/homebrew/Cellar/llvm/20.1.8/lib/clang/20/lib/darwin] ==> ignore
+          arg [-lSystem] ==> lib [System]
+          arg [/opt/homebrew/Cellar/llvm/20.1.8/lib/clang/20/lib/darwin/libclang_rt.osx.a] ==> lib [/opt/homebrew/Cellar/llvm/20.1.8/lib/clang/20/lib/darwin/libclang_rt.osx.a]
+        linker tool for 'C': /usr/bin/ld
+        Library search paths: [;/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk/usr/lib;/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk/usr/lib/swift]
+        Framework search paths: [;/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk/System/Library/Frameworks]
+        remove lib [System]
+        remove lib [/opt/homebrew/Cellar/llvm/20.1.8/lib/clang/20/lib/darwin/libclang_rt.osx.a]
+        collapse library dir [/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk/usr/lib] ==> [/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk/usr/lib]
+        collapse library dir [/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk/usr/lib/swift] ==> [/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk/usr/lib/swift]
+        collapse framework dir [/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk/System/Library/Frameworks] ==> [/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk/System/Library/Frameworks]
+        implicit libs: []
+        implicit objs: []
+        implicit dirs: [/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk/usr/lib;/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk/usr/lib/swift]
+        implicit fwks: [/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk/System/Library/Frameworks]
+      
+      
+  -
+    kind: "message-v1"
+    backtrace:
+      - "/Users/andrew/venvs/refusals/lib/python3.10/site-packages/cmake/data/share/cmake-3.31/Modules/Internal/CMakeDetermineLinkerId.cmake:40 (message)"
+      - "/Users/andrew/venvs/refusals/lib/python3.10/site-packages/cmake/data/share/cmake-3.31/Modules/CMakeDetermineCompilerABI.cmake:255 (cmake_determine_linker_id)"
+      - "/Users/andrew/venvs/refusals/lib/python3.10/site-packages/cmake/data/share/cmake-3.31/Modules/CMakeTestCCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
+      - "CMakeLists.txt:15 (project)"
+    message: |
+      Running the C compiler's linker: "/usr/bin/ld" "-v"
+      @(#)PROGRAM:ld PROJECT:ld-1167.5
+      BUILD 01:45:05 Apr 30 2025
+      configured to support archs: armv6 armv7 armv7s arm64 arm64e arm64_32 i386 x86_64 x86_64h armv6m armv7k armv7m armv7em
+      will use ld-classic for: armv6 armv7 armv7s i386 armv6m armv7k armv7m armv7em
+      LTO support using: LLVM version 17.0.0 (static support for 29, runtime is 29)
+      TAPI support using: Apple TAPI version 17.0.0 (tapi-1700.0.3.5)
+  -
+    kind: "try_compile-v1"
+    backtrace:
+      - "/Users/andrew/venvs/refusals/lib/python3.10/site-packages/cmake/data/share/cmake-3.31/Modules/Internal/CheckSourceCompiles.cmake:108 (try_compile)"
+      - "/Users/andrew/venvs/refusals/lib/python3.10/site-packages/cmake/data/share/cmake-3.31/Modules/CheckCSourceCompiles.cmake:58 (cmake_check_source_compiles)"
+      - "/Users/andrew/venvs/refusals/lib/python3.10/site-packages/cmake/data/share/cmake-3.31/Modules/FindThreads.cmake:97 (CHECK_C_SOURCE_COMPILES)"
+      - "/Users/andrew/venvs/refusals/lib/python3.10/site-packages/cmake/data/share/cmake-3.31/Modules/FindThreads.cmake:163 (_threads_check_libc)"
+      - "build_unittest_sanitize/asan/_deps/googletest-src/googletest/cmake/internal_utils.cmake:66 (find_package)"
+      - "build_unittest_sanitize/asan/_deps/googletest-src/googletest/CMakeLists.txt:83 (config_compiler_and_linker)"
+    checks:
+      - "Performing Test CMAKE_HAVE_LIBC_PTHREAD"
+    directories:
+      source: "/Users/andrew/zzCoding-play/triton/build_unittest_sanitize/asan/CMakeFiles/CMakeScratch/TryCompile-XOlCO9"
+      binary: "/Users/andrew/zzCoding-play/triton/build_unittest_sanitize/asan/CMakeFiles/CMakeScratch/TryCompile-XOlCO9"
+    cmakeVariables:
+      CMAKE_CXX_COMPILER_CLANG_SCAN_DEPS: "/opt/homebrew/Cellar/llvm/20.1.8/bin/clang-scan-deps"
+      CMAKE_C_FLAGS: "-fsanitize=address,undefined -fno-omit-frame-pointer -g -Wno-dangling-assignment-gsl"
+      CMAKE_C_FLAGS_DEBUG: "-g"
+      CMAKE_EXE_LINKER_FLAGS: "-fsanitize=address,undefined"
+      CMAKE_MODULE_PATH: "/Users/andrew/zzCoding-play/triton/cmake"
+      CMAKE_OSX_ARCHITECTURES: ""
+      CMAKE_OSX_DEPLOYMENT_TARGET: ""
+      CMAKE_OSX_SYSROOT: "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk"
+    buildResult:
+      variable: "CMAKE_HAVE_LIBC_PTHREAD"
+      cached: true
+      stdout: |
+        Change Dir: '/Users/andrew/zzCoding-play/triton/build_unittest_sanitize/asan/CMakeFiles/CMakeScratch/TryCompile-XOlCO9'
+        
+        Run Build Command(s): /Users/andrew/venvs/refusals/lib/python3.10/site-packages/cmake/data/bin/cmake -E env VERBOSE=1 /opt/homebrew/bin/gmake -f Makefile cmTC_d9ec2/fast
+        /opt/homebrew/bin/gmake  -f CMakeFiles/cmTC_d9ec2.dir/build.make CMakeFiles/cmTC_d9ec2.dir/build
+        gmake[1]: Entering directory '/Users/andrew/zzCoding-play/triton/build_unittest_sanitize/asan/CMakeFiles/CMakeScratch/TryCompile-XOlCO9'
+        Building C object CMakeFiles/cmTC_d9ec2.dir/src.c.o
+        /opt/homebrew/opt/llvm@20/bin/clang -DCMAKE_HAVE_LIBC_PTHREAD  -fsanitize=address,undefined -fno-omit-frame-pointer -g -Wno-dangling-assignment-gsl  -arch arm64 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk -MD -MT CMakeFiles/cmTC_d9ec2.dir/src.c.o -MF CMakeFiles/cmTC_d9ec2.dir/src.c.o.d -o CMakeFiles/cmTC_d9ec2.dir/src.c.o -c /Users/andrew/zzCoding-play/triton/build_unittest_sanitize/asan/CMakeFiles/CMakeScratch/TryCompile-XOlCO9/src.c
+        Linking C executable cmTC_d9ec2
+        /Users/andrew/venvs/refusals/lib/python3.10/site-packages/cmake/data/bin/cmake -E cmake_link_script CMakeFiles/cmTC_d9ec2.dir/link.txt --verbose=1
+        /opt/homebrew/opt/llvm@20/bin/clang -fsanitize=address,undefined -fno-omit-frame-pointer -g -Wno-dangling-assignment-gsl  -arch arm64 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk -Wl,-search_paths_first -Wl,-headerpad_max_install_names -fsanitize=address,undefined  CMakeFiles/cmTC_d9ec2.dir/src.c.o -o cmTC_d9ec2
+        gmake[1]: Leaving directory '/Users/andrew/zzCoding-play/triton/build_unittest_sanitize/asan/CMakeFiles/CMakeScratch/TryCompile-XOlCO9'
+        
+      exitCode: 0
+  -
+    kind: "try_compile-v1"
+    backtrace:
+      - "/Users/andrew/venvs/refusals/lib/python3.10/site-packages/cmake/data/share/cmake-3.31/Modules/Internal/CheckSourceCompiles.cmake:108 (try_compile)"
+      - "/Users/andrew/venvs/refusals/lib/python3.10/site-packages/cmake/data/share/cmake-3.31/Modules/CheckCSourceCompiles.cmake:58 (cmake_check_source_compiles)"
+      - "/opt/homebrew/opt/llvm@20/lib/cmake/llvm/FindFFI.cmake:59 (check_c_source_compiles)"
+      - "/opt/homebrew/opt/llvm@20/lib/cmake/llvm/LLVMConfig.cmake:265 (find_package)"
+      - "/opt/homebrew/opt/llvm@20/lib/cmake/mlir/MLIRConfig.cmake:10 (find_package)"
+      - "CMakeLists.txt:105 (find_package)"
+    checks:
+      - "Performing Test HAVE_FFI_CALL"
+    directories:
+      source: "/Users/andrew/zzCoding-play/triton/build_unittest_sanitize/asan/CMakeFiles/CMakeScratch/TryCompile-R8Noss"
+      binary: "/Users/andrew/zzCoding-play/triton/build_unittest_sanitize/asan/CMakeFiles/CMakeScratch/TryCompile-R8Noss"
+    cmakeVariables:
+      CMAKE_CXX_COMPILER_CLANG_SCAN_DEPS: "/opt/homebrew/Cellar/llvm/20.1.8/bin/clang-scan-deps"
+      CMAKE_C_FLAGS: "-fsanitize=address,undefined -fno-omit-frame-pointer -g -Wno-dangling-assignment-gsl"
+      CMAKE_C_FLAGS_DEBUG: "-g"
+      CMAKE_EXE_LINKER_FLAGS: "-fsanitize=address,undefined"
+      CMAKE_MODULE_PATH: "/Users/andrew/zzCoding-play/triton/cmake;/opt/homebrew/opt/llvm@20/lib/cmake/llvm"
+      CMAKE_OSX_ARCHITECTURES: ""
+      CMAKE_OSX_DEPLOYMENT_TARGET: ""
+      CMAKE_OSX_SYSROOT: "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk"
+    buildResult:
+      variable: "HAVE_FFI_CALL"
+      cached: true
+      stdout: |
+        Change Dir: '/Users/andrew/zzCoding-play/triton/build_unittest_sanitize/asan/CMakeFiles/CMakeScratch/TryCompile-R8Noss'
+        
+        Run Build Command(s): /Users/andrew/venvs/refusals/lib/python3.10/site-packages/cmake/data/bin/cmake -E env VERBOSE=1 /opt/homebrew/bin/gmake -f Makefile cmTC_276f7/fast
+        /opt/homebrew/bin/gmake  -f CMakeFiles/cmTC_276f7.dir/build.make CMakeFiles/cmTC_276f7.dir/build
+        gmake[1]: Entering directory '/Users/andrew/zzCoding-play/triton/build_unittest_sanitize/asan/CMakeFiles/CMakeScratch/TryCompile-R8Noss'
+        Building C object CMakeFiles/cmTC_276f7.dir/src.c.o
+        /opt/homebrew/opt/llvm@20/bin/clang -DHAVE_FFI_CALL  -fsanitize=address,undefined -fno-omit-frame-pointer -g -Wno-dangling-assignment-gsl  -arch arm64 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk -MD -MT CMakeFiles/cmTC_276f7.dir/src.c.o -MF CMakeFiles/cmTC_276f7.dir/src.c.o.d -o CMakeFiles/cmTC_276f7.dir/src.c.o -c /Users/andrew/zzCoding-play/triton/build_unittest_sanitize/asan/CMakeFiles/CMakeScratch/TryCompile-R8Noss/src.c
+        Linking C executable cmTC_276f7
+        /Users/andrew/venvs/refusals/lib/python3.10/site-packages/cmake/data/bin/cmake -E cmake_link_script CMakeFiles/cmTC_276f7.dir/link.txt --verbose=1
+        /opt/homebrew/opt/llvm@20/bin/clang -fsanitize=address,undefined -fno-omit-frame-pointer -g -Wno-dangling-assignment-gsl  -arch arm64 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk -Wl,-search_paths_first -Wl,-headerpad_max_install_names -fsanitize=address,undefined  CMakeFiles/cmTC_276f7.dir/src.c.o -o cmTC_276f7  /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk/usr/lib/libffi.tbd
+        gmake[1]: Leaving directory '/Users/andrew/zzCoding-play/triton/build_unittest_sanitize/asan/CMakeFiles/CMakeScratch/TryCompile-R8Noss'
+        
+      exitCode: 0
+  -
+    kind: "try_compile-v1"
+    backtrace:
+      - "/Users/andrew/venvs/refusals/lib/python3.10/site-packages/cmake/data/share/cmake-3.31/Modules/CheckIncludeFile.cmake:99 (try_compile)"
+      - "/opt/homebrew/opt/llvm@20/lib/cmake/llvm/FindLibEdit.cmake:28 (check_include_file)"
+      - "/opt/homebrew/opt/llvm@20/lib/cmake/llvm/LLVMConfig.cmake:272 (find_package)"
+      - "/opt/homebrew/opt/llvm@20/lib/cmake/mlir/MLIRConfig.cmake:10 (find_package)"
+      - "CMakeLists.txt:105 (find_package)"
+    checks:
+      - "Looking for histedit.h"
+    directories:
+      source: "/Users/andrew/zzCoding-play/triton/build_unittest_sanitize/asan/CMakeFiles/CMakeScratch/TryCompile-ulzJp4"
+      binary: "/Users/andrew/zzCoding-play/triton/build_unittest_sanitize/asan/CMakeFiles/CMakeScratch/TryCompile-ulzJp4"
+    cmakeVariables:
+      CMAKE_CXX_COMPILER_CLANG_SCAN_DEPS: "/opt/homebrew/Cellar/llvm/20.1.8/bin/clang-scan-deps"
+      CMAKE_C_FLAGS: "-fsanitize=address,undefined -fno-omit-frame-pointer -g -Wno-dangling-assignment-gsl"
+      CMAKE_C_FLAGS_DEBUG: "-g"
+      CMAKE_EXE_LINKER_FLAGS: "-fsanitize=address,undefined"
+      CMAKE_MODULE_PATH: "/Users/andrew/zzCoding-play/triton/cmake;/opt/homebrew/opt/llvm@20/lib/cmake/llvm"
+      CMAKE_OSX_ARCHITECTURES: ""
+      CMAKE_OSX_DEPLOYMENT_TARGET: ""
+      CMAKE_OSX_SYSROOT: "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk"
+    buildResult:
+      variable: "HAVE_HISTEDIT_H"
+      cached: true
+      stdout: |
+        Change Dir: '/Users/andrew/zzCoding-play/triton/build_unittest_sanitize/asan/CMakeFiles/CMakeScratch/TryCompile-ulzJp4'
+        
+        Run Build Command(s): /Users/andrew/venvs/refusals/lib/python3.10/site-packages/cmake/data/bin/cmake -E env VERBOSE=1 /opt/homebrew/bin/gmake -f Makefile cmTC_d93b0/fast
+        /opt/homebrew/bin/gmake  -f CMakeFiles/cmTC_d93b0.dir/build.make CMakeFiles/cmTC_d93b0.dir/build
+        gmake[1]: Entering directory '/Users/andrew/zzCoding-play/triton/build_unittest_sanitize/asan/CMakeFiles/CMakeScratch/TryCompile-ulzJp4'
+        Building C object CMakeFiles/cmTC_d93b0.dir/CheckIncludeFile.c.o
+        /opt/homebrew/opt/llvm@20/bin/clang   -fsanitize=address,undefined -fno-omit-frame-pointer -g -Wno-dangling-assignment-gsl  -arch arm64 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk -MD -MT CMakeFiles/cmTC_d93b0.dir/CheckIncludeFile.c.o -MF CMakeFiles/cmTC_d93b0.dir/CheckIncludeFile.c.o.d -o CMakeFiles/cmTC_d93b0.dir/CheckIncludeFile.c.o -c /Users/andrew/zzCoding-play/triton/build_unittest_sanitize/asan/CMakeFiles/CMakeScratch/TryCompile-ulzJp4/CheckIncludeFile.c
+        Linking C executable cmTC_d93b0
+        /Users/andrew/venvs/refusals/lib/python3.10/site-packages/cmake/data/bin/cmake -E cmake_link_script CMakeFiles/cmTC_d93b0.dir/link.txt --verbose=1
+        /opt/homebrew/opt/llvm@20/bin/clang -fsanitize=address,undefined -fno-omit-frame-pointer -g -Wno-dangling-assignment-gsl  -arch arm64 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk -Wl,-search_paths_first -Wl,-headerpad_max_install_names -fsanitize=address,undefined  CMakeFiles/cmTC_d93b0.dir/CheckIncludeFile.c.o -o cmTC_d93b0  /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk/usr/lib/libedit.tbd
+        gmake[1]: Leaving directory '/Users/andrew/zzCoding-play/triton/build_unittest_sanitize/asan/CMakeFiles/CMakeScratch/TryCompile-ulzJp4'
+        
+      exitCode: 0
+  -
+    kind: "try_compile-v1"
+    backtrace:
+      - "/Users/andrew/venvs/refusals/lib/python3.10/site-packages/cmake/data/share/cmake-3.31/Modules/Internal/CheckSourceCompiles.cmake:108 (try_compile)"
+      - "/Users/andrew/venvs/refusals/lib/python3.10/site-packages/cmake/data/share/cmake-3.31/Modules/Internal/CheckLinkerFlag.cmake:37 (cmake_check_source_compiles)"
+      - "/Users/andrew/venvs/refusals/lib/python3.10/site-packages/cmake/data/share/cmake-3.31/Modules/CheckLinkerFlag.cmake:44 (cmake_check_linker_flag)"
+      - "/opt/homebrew/opt/llvm@20/lib/cmake/llvm/AddLLVM.cmake:281 (check_linker_flag)"
+      - "CMakeLists.txt:111 (include)"
+    checks:
+      - "Performing Test LLVM_LINKER_SUPPORTS_NO_EXPORTED_SYMBOLS"
+    directories:
+      source: "/Users/andrew/zzCoding-play/triton/build_unittest_sanitize/asan/CMakeFiles/CMakeScratch/TryCompile-NX3FOK"
+      binary: "/Users/andrew/zzCoding-play/triton/build_unittest_sanitize/asan/CMakeFiles/CMakeScratch/TryCompile-NX3FOK"
+    cmakeVariables:
+      CMAKE_CXX_COMPILER_CLANG_SCAN_DEPS: "/opt/homebrew/Cellar/llvm/20.1.8/bin/clang-scan-deps"
+      CMAKE_C_FLAGS: "-fsanitize=address,undefined -fno-omit-frame-pointer -g -Wno-dangling-assignment-gsl"
+      CMAKE_C_FLAGS_DEBUG: "-g"
+      CMAKE_EXE_LINKER_FLAGS: "-fsanitize=address,undefined"
+      CMAKE_MODULE_PATH: "/Users/andrew/zzCoding-play/triton/cmake;/opt/homebrew/opt/llvm@20/lib/cmake/llvm;/opt/homebrew/opt/llvm@20/lib/cmake/mlir;/opt/homebrew/opt/llvm@20/lib/cmake/llvm"
+      CMAKE_OSX_ARCHITECTURES: ""
+      CMAKE_OSX_DEPLOYMENT_TARGET: ""
+      CMAKE_OSX_SYSROOT: "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk"
+    buildResult:
+      variable: "LLVM_LINKER_SUPPORTS_NO_EXPORTED_SYMBOLS"
+      cached: true
+      stdout: |
+        Change Dir: '/Users/andrew/zzCoding-play/triton/build_unittest_sanitize/asan/CMakeFiles/CMakeScratch/TryCompile-NX3FOK'
+        
+        Run Build Command(s): /Users/andrew/venvs/refusals/lib/python3.10/site-packages/cmake/data/bin/cmake -E env VERBOSE=1 /opt/homebrew/bin/gmake -f Makefile cmTC_e9aaf/fast
+        /opt/homebrew/bin/gmake  -f CMakeFiles/cmTC_e9aaf.dir/build.make CMakeFiles/cmTC_e9aaf.dir/build
+        gmake[1]: Entering directory '/Users/andrew/zzCoding-play/triton/build_unittest_sanitize/asan/CMakeFiles/CMakeScratch/TryCompile-NX3FOK'
+        Building C object CMakeFiles/cmTC_e9aaf.dir/src.c.o
+        /opt/homebrew/opt/llvm@20/bin/clang -DLLVM_LINKER_SUPPORTS_NO_EXPORTED_SYMBOLS  -fsanitize=address,undefined -fno-omit-frame-pointer -g -Wno-dangling-assignment-gsl  -arch arm64 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk -MD -MT CMakeFiles/cmTC_e9aaf.dir/src.c.o -MF CMakeFiles/cmTC_e9aaf.dir/src.c.o.d -o CMakeFiles/cmTC_e9aaf.dir/src.c.o -c /Users/andrew/zzCoding-play/triton/build_unittest_sanitize/asan/CMakeFiles/CMakeScratch/TryCompile-NX3FOK/src.c
+        Linking C executable cmTC_e9aaf
+        /Users/andrew/venvs/refusals/lib/python3.10/site-packages/cmake/data/bin/cmake -E cmake_link_script CMakeFiles/cmTC_e9aaf.dir/link.txt --verbose=1
+        /opt/homebrew/opt/llvm@20/bin/clang -fsanitize=address,undefined -fno-omit-frame-pointer -g -Wno-dangling-assignment-gsl  -arch arm64 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk -Wl,-search_paths_first -Wl,-headerpad_max_install_names -fsanitize=address,undefined  -Wl,-no_exported_symbols CMakeFiles/cmTC_e9aaf.dir/src.c.o -o cmTC_e9aaf
+        gmake[1]: Leaving directory '/Users/andrew/zzCoding-play/triton/build_unittest_sanitize/asan/CMakeFiles/CMakeScratch/TryCompile-NX3FOK'
+        
+      exitCode: 0
+  -
+    kind: "try_compile-v1"
+    backtrace:
+      - "/Users/andrew/venvs/refusals/lib/python3.10/site-packages/cmake/data/share/cmake-3.31/Modules/Internal/CheckSourceCompiles.cmake:108 (try_compile)"
+      - "/Users/andrew/venvs/refusals/lib/python3.10/site-packages/cmake/data/share/cmake-3.31/Modules/Internal/CheckLinkerFlag.cmake:37 (cmake_check_source_compiles)"
+      - "/Users/andrew/venvs/refusals/lib/python3.10/site-packages/cmake/data/share/cmake-3.31/Modules/CheckLinkerFlag.cmake:44 (cmake_check_linker_flag)"
+      - "/opt/homebrew/opt/llvm@20/lib/cmake/llvm/AddLLVM.cmake:288 (check_linker_flag)"
+      - "CMakeLists.txt:111 (include)"
+    checks:
+      - "Performing Test LLVM_LINKER_SUPPORTS_NO_WARN_DUPLICATE_LIBRARIES"
+    directories:
+      source: "/Users/andrew/zzCoding-play/triton/build_unittest_sanitize/asan/CMakeFiles/CMakeScratch/TryCompile-jLe9gc"
+      binary: "/Users/andrew/zzCoding-play/triton/build_unittest_sanitize/asan/CMakeFiles/CMakeScratch/TryCompile-jLe9gc"
+    cmakeVariables:
+      CMAKE_CXX_COMPILER_CLANG_SCAN_DEPS: "/opt/homebrew/Cellar/llvm/20.1.8/bin/clang-scan-deps"
+      CMAKE_C_FLAGS: "-fsanitize=address,undefined -fno-omit-frame-pointer -g -Wno-dangling-assignment-gsl"
+      CMAKE_C_FLAGS_DEBUG: "-g"
+      CMAKE_EXE_LINKER_FLAGS: "-fsanitize=address,undefined"
+      CMAKE_MODULE_PATH: "/Users/andrew/zzCoding-play/triton/cmake;/opt/homebrew/opt/llvm@20/lib/cmake/llvm;/opt/homebrew/opt/llvm@20/lib/cmake/mlir;/opt/homebrew/opt/llvm@20/lib/cmake/llvm"
+      CMAKE_OSX_ARCHITECTURES: ""
+      CMAKE_OSX_DEPLOYMENT_TARGET: ""
+      CMAKE_OSX_SYSROOT: "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk"
+    buildResult:
+      variable: "LLVM_LINKER_SUPPORTS_NO_WARN_DUPLICATE_LIBRARIES"
+      cached: true
+      stdout: |
+        Change Dir: '/Users/andrew/zzCoding-play/triton/build_unittest_sanitize/asan/CMakeFiles/CMakeScratch/TryCompile-jLe9gc'
+        
+        Run Build Command(s): /Users/andrew/venvs/refusals/lib/python3.10/site-packages/cmake/data/bin/cmake -E env VERBOSE=1 /opt/homebrew/bin/gmake -f Makefile cmTC_35f29/fast
+        /opt/homebrew/bin/gmake  -f CMakeFiles/cmTC_35f29.dir/build.make CMakeFiles/cmTC_35f29.dir/build
+        gmake[1]: Entering directory '/Users/andrew/zzCoding-play/triton/build_unittest_sanitize/asan/CMakeFiles/CMakeScratch/TryCompile-jLe9gc'
+        Building C object CMakeFiles/cmTC_35f29.dir/src.c.o
+        /opt/homebrew/opt/llvm@20/bin/clang -DLLVM_LINKER_SUPPORTS_NO_WARN_DUPLICATE_LIBRARIES  -fsanitize=address,undefined -fno-omit-frame-pointer -g -Wno-dangling-assignment-gsl  -arch arm64 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk -MD -MT CMakeFiles/cmTC_35f29.dir/src.c.o -MF CMakeFiles/cmTC_35f29.dir/src.c.o.d -o CMakeFiles/cmTC_35f29.dir/src.c.o -c /Users/andrew/zzCoding-play/triton/build_unittest_sanitize/asan/CMakeFiles/CMakeScratch/TryCompile-jLe9gc/src.c
+        Linking C executable cmTC_35f29
+        /Users/andrew/venvs/refusals/lib/python3.10/site-packages/cmake/data/bin/cmake -E cmake_link_script CMakeFiles/cmTC_35f29.dir/link.txt --verbose=1
+        /opt/homebrew/opt/llvm@20/bin/clang -fsanitize=address,undefined -fno-omit-frame-pointer -g -Wno-dangling-assignment-gsl  -arch arm64 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk -Wl,-search_paths_first -Wl,-headerpad_max_install_names -fsanitize=address,undefined  -Wl,-no_warn_duplicate_libraries CMakeFiles/cmTC_35f29.dir/src.c.o -o cmTC_35f29
+        gmake[1]: Leaving directory '/Users/andrew/zzCoding-play/triton/build_unittest_sanitize/asan/CMakeFiles/CMakeScratch/TryCompile-jLe9gc'
+        
+      exitCode: 0
+...

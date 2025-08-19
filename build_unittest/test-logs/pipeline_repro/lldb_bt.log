@@ -1,0 +1,120 @@
+(lldb) target create "/Users/andrew/zzCoding-play/triton/build_unittest/unittest/Metal/PipelineConcurrency"
+Current executable set to '/Users/andrew/zzCoding-play/triton/build_unittest/unittest/Metal/PipelineConcurrency' (arm64).
+(lldb) run --gtest_repeat=1
+[0;32m[==========] [mRunning 1 test from 1 test suite.
+[0;32m[----------] [mGlobal test environment set-up.
+[0;32m[----------] [m1 test from MetalPipeline
+[0;32m[ RUN      ] [mMetalPipeline.ConcurrentCreationProducesSinglePipeline
+/Users/andrew/zzCoding-play/triton/unittest/Metal/PipelineConcurrencyTest.cpp:117: Failure
+Expected: (results[0]) >= (1), actual: 0 vs 1
+
+/Users/andrew/zzCoding-play/triton/unittest/Metal/PipelineConcurrencyTest.cpp:119: Failure
+Expected equality of these values:
+  results[i]
+    Which is: 1
+  results[0]
+    Which is: 0
+
+/Users/andrew/zzCoding-play/triton/unittest/Metal/PipelineConcurrencyTest.cpp:119: Failure
+Expected equality of these values:
+  results[i]
+    Which is: 1
+  results[0]
+    Which is: 0
+
+/Users/andrew/zzCoding-play/triton/unittest/Metal/PipelineConcurrencyTest.cpp:119: Failure
+Expected equality of these values:
+  results[i]
+    Which is: 1
+  results[0]
+    Which is: 0
+
+/Users/andrew/zzCoding-play/triton/unittest/Metal/PipelineConcurrencyTest.cpp:119: Failure
+Expected equality of these values:
+  results[i]
+    Which is: 1
+  results[0]
+    Which is: 0
+
+/Users/andrew/zzCoding-play/triton/unittest/Metal/PipelineConcurrencyTest.cpp:119: Failure
+Expected equality of these values:
+  results[i]
+    Which is: 1
+  results[0]
+    Which is: 0
+
+/Users/andrew/zzCoding-play/triton/unittest/Metal/PipelineConcurrencyTest.cpp:119: Failure
+Expected equality of these values:
+  results[i]
+    Which is: 1
+  results[0]
+    Which is: 0
+
+/Users/andrew/zzCoding-play/triton/unittest/Metal/PipelineConcurrencyTest.cpp:119: Failure
+Expected equality of these values:
+  results[i]
+    Which is: 1
+  results[0]
+    Which is: 0
+
+/Users/andrew/zzCoding-play/triton/unittest/Metal/PipelineConcurrencyTest.cpp:119: Failure
+Expected equality of these values:
+  results[i]
+    Which is: 1
+  results[0]
+    Which is: 0
+
+/Users/andrew/zzCoding-play/triton/unittest/Metal/PipelineConcurrencyTest.cpp:119: Failure
+Expected equality of these values:
+  results[i]
+    Which is: 1
+  results[0]
+    Which is: 0
+
+/Users/andrew/zzCoding-play/triton/unittest/Metal/PipelineConcurrencyTest.cpp:119: Failure
+Expected equality of these values:
+  results[i]
+    Which is: 1
+  results[0]
+    Which is: 0
+
+/Users/andrew/zzCoding-play/triton/unittest/Metal/PipelineConcurrencyTest.cpp:119: Failure
+Expected equality of these values:
+  results[i]
+    Which is: 1
+  results[0]
+    Which is: 0
+
+/Users/andrew/zzCoding-play/triton/unittest/Metal/PipelineConcurrencyTest.cpp:119: Failure
+Expected equality of these values:
+  results[i]
+    Which is: 1
+  results[0]
+    Which is: 0
+
+/Users/andrew/zzCoding-play/triton/unittest/Metal/PipelineConcurrencyTest.cpp:119: Failure
+Expected equality of these values:
+  results[i]
+    Which is: 1
+  results[0]
+    Which is: 0
+
+/Users/andrew/zzCoding-play/triton/unittest/Metal/PipelineConcurrencyTest.cpp:119: Failure
+Expected equality of these values:
+  results[i]
+    Which is: 1
+  results[0]
+    Which is: 0
+
+[0;31m[  FAILED  ] [mMetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[0;32m[----------] [m1 test from MetalPipeline (0 ms total)
+
+[0;32m[----------] [mGlobal test environment tear-down
+[0;32m[==========] [m1 test from 1 test suite ran. (0 ms total)
+[0;32m[  PASSED  ] [m0 tests.
+[0;31m[  FAILED  ] [m1 test, listed below:
+[0;31m[  FAILED  ] [mMetalPipeline.ConcurrentCreationProducesSinglePipeline
+
+ 1 FAILED TEST
+Process 62219 launched: '/Users/andrew/zzCoding-play/triton/build_unittest/unittest/Metal/PipelineConcurrency' (arm64)
+Process 62219 exited with status = 1 (0x00000001)

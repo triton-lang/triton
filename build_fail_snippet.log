@@ -1,0 +1,29 @@
+[1/233] Building Dialect.cpp.inc...
+FAILED: [code=1] include/triton/Dialect/TritonGPU/IR/Dialect.cpp.inc /Users/andrew/zzCoding-play/triton/build/include/triton/Dialect/TritonGPU/IR/Dialect.cpp.inc 
+cd /Users/andrew/zzCoding-play/triton/build && /opt/homebrew/opt/llvm@15/bin/mlir-tblgen -gen-dialect-defs -dialect=ttg -I /Users/andrew/zzCoding-play/triton/include/triton/Dialect/TritonGPU/IR -I/Users/andrew/zzCoding-play/triton/include -I/Users/andrew/zzCoding-play/triton/. -I/opt/homebrew/opt/llvm@15/include -I/opt/homebrew/opt/llvm@15/include -I/Users/andrew/zzCoding-play/triton/include -I/Users/andrew/zzCoding-play/triton/build/include -I/Users/andrew/zzCoding-play/triton/third_party -I/Users/andrew/zzCoding-play/triton/build/third_party /Users/andrew/zzCoding-play/triton/include/triton/Dialect/TritonGPU/IR/TritonGPUOps.td --write-if-changed -o include/triton/Dialect/TritonGPU/IR/Dialect.cpp.inc -d include/triton/Dialect/TritonGPU/IR/Dialect.cpp.inc.d
+Included from /Users/andrew/zzCoding-play/triton/include/triton/Dialect/TritonGPU/IR/TritonGPUOps.td:4:
+/Users/andrew/zzCoding-play/triton/include/triton/Dialect/TritonGPU/IR/TritonGPUDialect.td:38:36: error: Value 'usePropertiesForAttributes' unknown!
+  let usePropertiesForAttributes = 1;
+                                   ^
+[2/233] Building Dialect.h.inc...
+FAILED: [code=1] include/triton/Dialect/TritonGPU/IR/Dialect.h.inc /Users/andrew/zzCoding-play/triton/build/include/triton/Dialect/TritonGPU/IR/Dialect.h.inc 
+cd /Users/andrew/zzCoding-play/triton/build && /opt/homebrew/opt/llvm@15/bin/mlir-tblgen -gen-dialect-decls -dialect=ttg -I /Users/andrew/zzCoding-play/triton/include/triton/Dialect/TritonGPU/IR -I/Users/andrew/zzCoding-play/triton/include -I/Users/andrew/zzCoding-play/triton/. -I/opt/homebrew/opt/llvm@15/include -I/opt/homebrew/opt/llvm@15/include -I/Users/andrew/zzCoding-play/triton/include -I/Users/andrew/zzCoding-play/triton/build/include -I/Users/andrew/zzCoding-play/triton/third_party -I/Users/andrew/zzCoding-play/triton/build/third_party /Users/andrew/zzCoding-play/triton/include/triton/Dialect/TritonGPU/IR/TritonGPUOps.td --write-if-changed -o include/triton/Dialect/TritonGPU/IR/Dialect.h.inc -d include/triton/Dialect/TritonGPU/IR/Dialect.h.inc.d
+Included from /Users/andrew/zzCoding-play/triton/include/triton/Dialect/TritonGPU/IR/TritonGPUOps.td:4:
+/Users/andrew/zzCoding-play/triton/include/triton/Dialect/TritonGPU/IR/TritonGPUDialect.td:38:36: error: Value 'usePropertiesForAttributes' unknown!
+  let usePropertiesForAttributes = 1;
+                                   ^
+[3/233] Building Ops.cpp.inc...
+FAILED: [code=1] include/triton/Dialect/TritonGPU/IR/Ops.cpp.inc /Users/andrew/zzCoding-play/triton/build/include/triton/Dialect/TritonGPU/IR/Ops.cpp.inc 
+cd /Users/andrew/zzCoding-play/triton/build && /opt/homebrew/opt/llvm@15/bin/mlir-tblgen -gen-op-defs -I /Users/andrew/zzCoding-play/triton/include/triton/Dialect/TritonGPU/IR -I/Users/andrew/zzCoding-play/triton/include -I/Users/andrew/zzCoding-play/triton/. -I/opt/homebrew/opt/llvm@15/include -I/opt/homebrew/opt/llvm@15/include -I/Users/andrew/zzCoding-play/triton/include -I/Users/andrew/zzCoding-play/triton/build/include -I/Users/andrew/zzCoding-play/triton/third_party -I/Users/andrew/zzCoding-play/triton/build/third_party /Users/andrew/zzCoding-play/triton/include/triton/Dialect/TritonGPU/IR/TritonGPUOps.td --write-if-changed -o include/triton/Dialect/TritonGPU/IR/Ops.cpp.inc -d include/triton/Dialect/TritonGPU/IR/Ops.cpp.inc.d
+Included from /Users/andrew/zzCoding-play/triton/include/triton/Dialect/TritonGPU/IR/TritonGPUOps.td:4:
+/Users/andrew/zzCoding-play/triton/include/triton/Dialect/TritonGPU/IR/TritonGPUDialect.td:38:36: error: Value 'usePropertiesForAttributes' unknown!
+  let usePropertiesForAttributes = 1;
+                                   ^
+[4/233] Building Ops.h.inc...
+FAILED: [code=1] include/triton/Dialect/TritonGPU/IR/Ops.h.inc /Users/andrew/zzCoding-play/triton/build/include/triton/Dialect/TritonGPU/IR/Ops.h.inc 
+cd /Users/andrew/zzCoding-play/triton/build && /opt/homebrew/opt/llvm@15/bin/mlir-tblgen -gen-op-decls -I /Users/andrew/zzCoding-play/triton/include/triton/Dialect/TritonGPU/IR -I/Users/andrew/zzCoding-play/triton/include -I/Users/andrew/zzCoding-play/triton/. -I/opt/homebrew/opt/llvm@15/include -I/opt/homebrew/opt/llvm@15/include -I/Users/andrew/zzCoding-play/triton/include -I/Users/andrew/zzCoding-play/triton/build/include -I/Users/andrew/zzCoding-play/triton/third_party -I/Users/andrew/zzCoding-play/triton/build/third_party /Users/andrew/zzCoding-play/triton/include/triton/Dialect/TritonGPU/IR/TritonGPUOps.td --write-if-changed -o include/triton/Dialect/TritonGPU/IR/Ops.h.inc -d include/triton/Dialect/TritonGPU/IR/Ops.h.inc.d
+Included from /Users/andrew/zzCoding-play/triton/include/triton/Dialect/TritonGPU/IR/TritonGPUOps.td:4:
+/Users/andrew/zzCoding-play/triton/include/triton/Dialect/TritonGPU/IR/TritonGPUDialect.td:38:36: error: Value 'usePropertiesForAttributes' unknown!
+  let usePropertiesForAttributes = 1;
+                                   ^
+ninja: build stopped: subcommand failed.

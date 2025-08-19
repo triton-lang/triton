@@ -1,0 +1,24 @@
+=== RUN 97 Mon Aug 18 00:16:55 UTC 2025 ===
+Note: Google Test filter = MetalPipeline.ConcurrentCreationProducesSinglePipeline
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from MetalPipeline
+[ RUN      ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+/Users/andrew/zzCoding-play/triton/unittest/Metal/PipelineConcurrencyTest.cpp:119: Failure
+Expected equality of these values:
+  results[i]
+    Which is: 0
+  results[0]
+    Which is: 1
+
+[  FAILED  ] MetalPipeline.ConcurrentCreationProducesSinglePipeline (0 ms)
+[----------] 1 test from MetalPipeline (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 0 tests.
+[  FAILED  ] 1 test, listed below:
+[  FAILED  ] MetalPipeline.ConcurrentCreationProducesSinglePipeline
+
+ 1 FAILED TEST
+EXIT:1 at Mon Aug 18 00:16:55 UTC 2025
