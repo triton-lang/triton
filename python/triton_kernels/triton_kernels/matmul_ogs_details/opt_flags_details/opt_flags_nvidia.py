@@ -56,17 +56,11 @@ def compute_split_k(block_k: int, k: int | None, grid_size: int) -> int:
     return split_k
 
 
-def compute_num_warps(block_m, block_n, is_persistent: bool, out_dtype, precision_config):
+def compute_num_warps(block_m, block_n, is_persistent: bool, precision_config):
     layout = get_layout(precision_config.weight_scale)
     if isinstance(layout, HopperMXScaleLayout):
         return layout.num_warps
-    if is_persistent:
-        min_warps = 4
-    elif bitwidth(out_dtype) <= 8:
-        min_warps = 2  # fp8 + num_warps=1 has correctness bug?
-    else:
-        min_warps = 1
-    return max(block_m * block_n // 4096, min_warps)
+    return max(block_m * block_n // 4096, 4 if is_persistent else 1)
 
 
 def compute_num_stages(

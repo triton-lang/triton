@@ -231,7 +231,7 @@ def make_default_opt_flags_nvidia(
     else:
         fused_scatter = can_use_fused_scatter and split_k == 1
     # Handshake with the HBM swizzling
-    num_warps = opt_flags_nvidia.compute_num_warps(block_m, block_n, is_persistent, out_dtype, precision_config)
+    num_warps = opt_flags_nvidia.compute_num_warps(block_m, block_n, is_persistent, precision_config)
     ret = OptFlags(
         block_m=block_m,
         block_n=block_n,
