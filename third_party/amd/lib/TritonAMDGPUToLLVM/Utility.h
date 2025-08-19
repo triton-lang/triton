@@ -37,9 +37,6 @@ Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, Value i,
                  mlir::triton::AMD::ISAFamily isaFamily =
                      mlir::triton::AMD::ISAFamily::Unknown);
 
-Value permute(Location loc, RewriterBase &rewriter, Value a, Value b,
-              Value selector);
-
 Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
                ProgramIDDim axis);
 

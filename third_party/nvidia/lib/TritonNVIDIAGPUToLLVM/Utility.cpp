@@ -113,8 +113,8 @@ Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
 }
 
 Value permute(Location loc, RewriterBase &rewriter, Value a, Value b,
-              Value selector) {
-  Value args[] = {a, b, selector};
+              Value mask) {
+  Value args[] = {a, b, mask};
   auto op =
       createLLVMIntrinsicCallOp(rewriter, loc, "llvm.nvvm.prmt", i32_ty, args);
   return op.getResult(0);
