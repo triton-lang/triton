@@ -1,10 +1,8 @@
 import os
-import sysconfig
-import sys
 from pathlib import Path
 
-
 # base_dir: Root of source code
+
 
 def _get_base_dir() -> Path:
     return Path(__file__).parent.parent
@@ -21,7 +19,10 @@ def get_build_base() -> str:
     return build_base.as_posix()
 
 
-def get_cmake_dir(cmd : 'setuptools.Command', ext : 'setuptools.Extension'):
+# cmd: setuptools.Command
+# ext: setuptools.Extension
+# Cannot use type hints due to ruff F821
+def get_cmake_dir(cmd, ext):
     cmake_dir = Path(cmd.build_temp) / ext.name
     cmake_dir.mkdir(parents=True, exist_ok=True)
     return cmake_dir

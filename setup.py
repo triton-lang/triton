@@ -824,7 +824,7 @@ setup(
     include_package_data=True,
     ext_modules=[CMakeExtension("triton", "triton/_C/")],
     cmdclass={
-        "build" : plugin_build,
+        "build": plugin_build,
         "bdist_wheel": plugin_bdist_wheel,
         "build_ext": CMakeBuild,
         "build_py": CMakeBuildPy,
