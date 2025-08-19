@@ -23,7 +23,7 @@ THREADS_PER_WARP = triton.runtime.driver.active.get_current_target().warp_size
     ttgl.BlockedLayout([1, 2], [1, THREADS_PER_WARP], [1, 4], [1, 0]),
 ])
 @pytest.mark.parametrize("axis", [0, 1])
-@pytest.mark.parametrize("add_overflow_check", [False, True])
+@pytest.mark.parametrize("sanitize_overflow", [False, True])
 def test_scan_layouts(M, N, src_layout, axis, sanitize_overflow, device):
 
     @gluon.jit
