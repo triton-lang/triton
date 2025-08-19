@@ -2,7 +2,6 @@
 #include "PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
-#include "triton/Tools/LayoutUtils.h"
 
 using ::mlir::triton::gpu::AMDMfmaEncodingAttr;
 using ::mlir::triton::gpu::ConvertLayoutOp;
@@ -10,217 +9,101 @@ using ::triton::gpu::LinearEncodingAttr;
 
 namespace {
 
-class ConvertLayoutOpPermlaneSwap
+// Match MFMA->Linear Layout conversion
+static bool matchMFMAAndLinearLayoutCase(RankedTensorType srcTy,
+                                         RankedTensorType dstTy) {
+  auto mfmaLayout = dyn_cast<AMDMfmaEncodingAttr>(srcTy.getEncoding());
+  auto linearLayout = dyn_cast<LinearEncodingAttr>(dstTy.getEncoding());
+  if (!mfmaLayout || !linearLayout)
+    return false;
+
+  std::optional<LinearLayout> storeLL =
+      mlir::triton::gpu::chooseMfmaLikeStoreLayout(srcTy);
+  return linearLayout.getLinearLayout() ==
+         storeLL.value_or(LinearLayout::empty());
+};
+
+class ConvertLayoutOpMFMAToLinearConversion
     : public ConvertOpToLLVMPattern<triton::gpu::ConvertLayoutOp> {
 public:
-  ConvertLayoutOpPermlaneSwap(LLVMTypeConverter &typeConverter,
-                              const TargetInfoBase &targetInfo,
-                              PatternBenefit benefit)
+  ConvertLayoutOpMFMAToLinearConversion(LLVMTypeConverter &typeConverter,
+                                        const TargetInfoBase &targetInfo,
+                                        PatternBenefit benefit)
       : ConvertOpToLLVMPattern(typeConverter, benefit), targetInfo(targetInfo) {
   }
 
   LogicalResult
   matchAndRewrite(triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto &amdTargInfo =
-        static_cast<const mlir::triton::AMD::TargetInfo &>(targetInfo);
-    if (amdTargInfo.getISAFamily() != AMD::ISAFamily::CDNA4)
+    auto srcType = cast<RankedTensorType>(op.getSrc().getType());
+    auto dstType = cast<RankedTensorType>(op.getType());
+
+    if (!matchMFMAAndLinearLayoutCase(srcType, dstType))
       return failure();
-
-    auto srcTy = cast<RankedTensorType>(op.getSrc().getType());
-    auto dstTy = cast<RankedTensorType>(op.getType());
-    if (!cvtNeedsWarpShuffle(srcTy, dstTy))
-      return failure();
-
-    MLIRContext *ctx = op.getContext();
-    StringAttr kReg = str_attr("register");
-    StringAttr kLane = str_attr("lane");
-
-    auto elemTy = getTypeConverter()->convertType(srcTy.getElementType());
-    int bitwidth = elemTy.isIntOrFloat() ? elemTy.getIntOrFloatBitWidth() : 64;
-    auto factors = getWarpLayoutConvertDecomposition(srcTy, dstTy, bitwidth);
-    auto &[pReg, pLane, mixedTranspositions, nPack] = factors;
-
-    if (mixedTranspositions.size() != 1)
-      return failure();
-    auto t = mixedTranspositions[0];
-    auto [rBit, lBit] = t.transposition;
-
-    // `permlane*_swap` can be used to implement layout conversions which can
-    // be described as transpositions of basis vectors (r_i l4) or (r_i l5)
-    // when `i >= nPack` at the cost of 1 instruction per pair of 32-bit
-    // registers. These appear naturally in certain MFMA to dotOp conversions
-    // and due to epilogue optimization passes.
-    //
-    // Further details on this permutation interpretation can be found in the
-    // general `transferWithinWarp` and `getWarpLayoutConvertDecomposition`.
-    if (!(mlir::triton::squareSublayoutIsIdentity(pLane, kLane) &&
-          (lBit == 4 || lBit == 5) && rBit >= nPack && t.topPreSel == 0x3210 &&
-          t.topPostSel == 0x3210)) {
-      return failure();
-    }
 
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
-    const char *instr = lBit == 5 ? "llvm.amdgcn.permlane32.swap"
-                                  : "llvm.amdgcn.permlane16.swap";
-    Type retTy = struct_ty({i32_ty, i32_ty});
-    Value f = b.false_val();
-    auto permlaneSwap = [&](Value v0, Value v1) {
-      SmallVector<Value> ret;
-      Value args[] = {v0, v1, f, f};
-      auto out =
-          LLVM::createLLVMIntrinsicCallOp(rewriter, loc, instr, retTy, args)
+    SmallVector<Value> inVals =
+        unpackLLElements(loc, adaptor.getSrc(), rewriter);
+    if (inVals.empty() || inVals.size() % 8 != 0)
+      return failure();
+
+    auto mfmaLayout = dyn_cast<AMDMfmaEncodingAttr>(srcType.getEncoding());
+    auto mDim = mfmaLayout.getMDim();
+    auto nDim = mfmaLayout.getNDim();
+    assert((mDim == 32 || mDim == 16) && mDim == nDim &&
+           "Expected MFMA size 32 or 16");
+    assert(triton::gpu::lookupThreadsPerWarp(rewriter) == 64 &&
+           "Expected warp size 64 for MFMA");
+
+    auto elemTy = srcType.getElementType();
+    auto vecTy = vec_ty(elemTy, 2);
+
+    SmallVector<Value> outVals;
+    auto idx0 = b.i32_val(0);
+    auto idx1 = b.i32_val(1);
+    auto intrinsicName = mDim == 32 ? "llvm.amdgcn.permlane32.swap"
+                                    : "llvm.amdgcn.permlane16.swap";
+    // Convert MFMA layout to a MFMA-like linear layout where each thread
+    // holds 8 consecutive elements
+    for (size_t idx = 0; idx < inVals.size(); idx += 8) {
+      SmallVector<Value, 4> inVecs;
+      for (size_t vIdx = 0; vIdx < 4; vIdx++) {
+        Value vec = b.undef(vecTy);
+        vec = b.insert_element(vecTy, vec, inVals[idx + vIdx * 2 + 0], idx0);
+        vec = b.insert_element(vecTy, vec, inVals[idx + vIdx * 2 + 1], idx1);
+        inVecs.push_back(vec);
+      }
+
+      Value resVec0, resVec1, resVec2, resVec3;
+
+      // Swap the row 2 and 3 of vec0 and the row 0 and 1 of vec2
+      MLIRContext *ctx = rewriter.getContext();
+      Type retType = struct_ty({i32_ty, i32_ty});
+      Value falseVal = b.false_val();
+      Value perm =
+          LLVM::createLLVMIntrinsicCallOp(
+              rewriter, loc, intrinsicName, retType,
+              ValueRange{b.bitcast(inVecs[0], i32_ty),
+                         b.bitcast(inVecs[2], i32_ty), falseVal, falseVal})
               ->getResult(0);
-      ret.push_back(b.extract_val(i32_ty, out, 0));
-      ret.push_back(b.extract_val(i32_ty, out, 1));
-      return ret;
-    };
+      resVec0 = b.bitcast(b.extract_val(i32_ty, perm, 0), vecTy);
+      resVec2 = b.bitcast(b.extract_val(i32_ty, perm, 1), vecTy);
 
-    auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
+      // Swap the row 2 and 3 of vec1 and the row 0 and 1 of vec3
+      perm = LLVM::createLLVMIntrinsicCallOp(
+                 rewriter, loc, intrinsicName, retType,
+                 ValueRange{b.bitcast(inVecs[1], i32_ty),
+                            b.bitcast(inVecs[3], i32_ty), falseVal, falseVal})
+                 ->getResult(0);
+      resVec1 = b.bitcast(b.extract_val(i32_ty, perm, 0), vecTy);
+      resVec3 = b.bitcast(b.extract_val(i32_ty, perm, 1), vecTy);
 
-    // Handle broadcasting in registers.
-    auto srcLL = triton::gpu::toLinearLayout(srcTy);
-    auto rmSrc = actionRemoveBroadcastedRegs(srcLL);
-    inVals = rmSrc.apply(inVals);
-    // The input values may require broadcasting so that the conversion can be
-    // described as a permutation. This does not cost anything for simple cases.
-    int regDim = inVals.size();
-    int pRegDim = pReg.getInDimSize(kReg);
-    if (pRegDim > regDim) {
-      SmallVector<Value> original(inVals.begin(), inVals.end());
-      inVals.clear();
-      inVals.reserve(pRegDim);
-      while (inVals.size() < pRegDim)
-        inVals.append(original.begin(), original.end());
-      regDim = pRegDim;
+      for (Value res : {resVec0, resVec1, resVec2, resVec3})
+        for (Value idx : {idx0, idx1})
+          outVals.push_back(b.extract_element(elemTy, res, idx));
     }
-
-    // Apply pReg.
-    SmallVector<Value> newInVals(regDim);
-    for (const auto &[i, v] : llvm::enumerate(inVals))
-      newInVals[pReg.apply({{kReg, i}})[0].second] = v;
-    inVals = std::move(newInVals);
-
-    // Handle register packing.
-    int elemsPerVec = 1 << nPack;
-    int bitsPerVecElem = 32 / elemsPerVec;
-    if (elemsPerVec > 1) {
-      SmallVector<Value> packedVals;
-      packedVals.reserve(regDim / elemsPerVec);
-      if (bitwidth < bitsPerVecElem) {
-        llvm::for_each(inVals, [&](Value &v) {
-          if (elemTy != int_ty(bitwidth))
-            v = b.bitcast(v, int_ty(bitwidth));
-          v = b.zext(int_ty(bitsPerVecElem), v);
-        });
-      }
-      for (int i = 0; i < regDim; i += elemsPerVec) {
-        auto slice = ArrayRef<Value>(inVals).slice(i, elemsPerVec);
-        Value v = packLLVector(loc, slice, rewriter);
-        v = b.bitcast(v, i32_ty);
-        packedVals.emplace_back(v);
-      }
-      inVals = std::move(packedVals);
-    } else {
-      // Handle non-integer and 64-bit types.
-      llvm::for_each(inVals, [&](Value &v) {
-        if (isa<LLVM::LLVMPointerType>(elemTy))
-          v = b.ptrtoint(i64_ty, v);
-        if (!isa<IntegerType>(elemTy))
-          v = b.bitcast(v, int_ty(bitwidth));
-        if (bitwidth < 32)
-          v = b.zext(i32_ty, v);
-      });
-      if (bitwidth == 64) {
-        SmallVector<Value> half0;
-        SmallVector<Value> half1;
-        Type vecTy = vec_ty(i32_ty, 2);
-        llvm::for_each(inVals, [&](Value v) {
-          auto vec = b.bitcast(v, vecTy);
-          half0.push_back(b.extract_element(i32_ty, vec, b.i32_val(0)));
-          half1.push_back(b.extract_element(i32_ty, vec, b.i32_val(1)));
-        });
-        inVals = llvm::to_vector(llvm::concat<Value>(half0, half1));
-      }
-    }
-
-    // Apply `permlane_swap`s.
-    SmallVector<Value> outVals(inVals.size());
-
-    int rIdx = rBit - nPack;
-    int tileSize = 1 << (rIdx + 1);
-    int numTiles = inVals.size() / tileSize;
-    for (int tileIdx = 0; tileIdx < numTiles; ++tileIdx) {
-      int baseIdx = tileIdx * tileSize;
-      for (int i = 0; i < tileSize / 2; ++i) {
-        int r0 = baseIdx + i;
-        int r1 = r0 + (1 << rIdx);
-        auto swapped = permlaneSwap(inVals[r0], inVals[r1]);
-        outVals[r0] = swapped[0];
-        outVals[r1] = swapped[1];
-      }
-    }
-
-    // Unpack registers.
-    if (elemsPerVec > 1) {
-      SmallVector<Value> unpackedVals;
-      unpackedVals.reserve(regDim);
-      auto packedTy =
-          bitwidth < bitsPerVecElem ? int_ty(bitsPerVecElem) : elemTy;
-      auto vecTy = vec_ty(packedTy, elemsPerVec);
-      auto unpackVal = [&](Value v) {
-        v = b.bitcast(v, vecTy);
-        return unpackLLVector(loc, v, rewriter);
-      };
-      for (auto v : outVals) {
-        auto unpacked = unpackVal(v);
-        unpackedVals.append(unpacked.begin(), unpacked.end());
-      }
-      if (bitwidth < bitsPerVecElem) {
-        llvm::for_each(unpackedVals, [&](Value &v) {
-          v = b.trunc(int_ty(bitwidth), v);
-          if (elemTy != int_ty(bitwidth))
-            v = b.bitcast(v, elemTy);
-        });
-      }
-      outVals = std::move(unpackedVals);
-    } else {
-      // Rebuild 64-bit types and restore original element type.
-      if (bitwidth == 64) {
-        int shift = outVals.size() / 2;
-        SmallVector<Value> newOutVals(shift);
-        auto vecTy = vec_ty(i32_ty, 2);
-        for (int i = 0; i < shift; ++i) {
-          Value vec = b.undef(vecTy);
-          vec = b.insert_element(vecTy, vec, outVals[i], b.i32_val(0));
-          vec = b.insert_element(vecTy, vec, outVals[i + shift], b.i32_val(1));
-          newOutVals[i] = b.bitcast(vec, i64_ty);
-        }
-        outVals = std::move(newOutVals);
-      }
-      llvm::for_each(outVals, [&](Value &v) {
-        if (isa<LLVM::LLVMPointerType>(elemTy))
-          v = b.inttoptr(elemTy, v);
-        if (bitwidth < 32)
-          v = b.trunc(int_ty(bitwidth), v);
-        if (!isa<IntegerType>(elemTy))
-          v = b.bitcast(v, elemTy);
-      });
-    }
-
-    // Handle broadcasting in registers.
-    // The `factors` produce output values which may contain broadcasting.
-    // This needs to be removed before using `broadcastAs` to get the correct
-    // broadcasting as expected by the original destination layout.
-    auto dstLL = triton::gpu::toLinearLayout(dstTy);
-    auto rmDst = actionRemoveBroadcastedRegs(dstLL);
-    auto strippedDst = rmDst.apply(dstLL);
-    outVals.resize(strippedDst.getInDimSize(kReg));
-
-    if (!rmDst.isIdentity())
-      outVals = broadcastAs(outVals, dstLL);
 
     Value result = packLLElements(loc, getTypeConverter(), outVals, rewriter,
                                   op.getType());
@@ -533,7 +416,8 @@ private:
 void mlir::triton::AMD::populateConvertLayoutOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, const TargetInfo &targetInfo,
     RewritePatternSet &patterns, PatternBenefit benefit) {
-  patterns.add<ConvertLayoutOpPermlaneSwap>(typeConverter, targetInfo, benefit);
+  patterns.add<ConvertLayoutOpMFMAToLinearConversion>(typeConverter, targetInfo,
+                                                      benefit);
   patterns.add<ConvertLayoutForcedPadding>(typeConverter, targetInfo, benefit);
   // No need to convert when ForcedSwizzling as it's already the default
   // lowering
