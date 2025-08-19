@@ -46,54 +46,28 @@ public:
     auto t = mixedTranspositions[0];
     auto [rBit, lBit] = t.transposition;
 
-    // Following `transferWithinWarp` and `getWarpLayoutConvertDecomposition`,
-    // an intra-warp layout conversion can be described as a permutation of
-    // hardware index bits. The `permlane_swap` instructions can be used to
-    // effect transpositions (r_i l4) and (r_i l5) more cheaply than in the
-    // general pathway, where `l4` and `l5` are lane index bits and `r_i` is
-    // a register index bit, or 'basis vector' in the language of LinearLayouts.
+    // `permlane*_swap` can be used to implement layout conversions which can
+    // be described as transpositions of basis vectors (r_i l4) or (r_i l5)
+    // when `i >= nPack` at the cost of 1 instruction per pair of 32-bit
+    // registers. These appear naturally in certain MFMA to dotOp conversions
+    // and due to epilogue optimization passes.
     //
-    // Certain layout conversions which benefit from using `permlane_swap` are
-    // produced during chained matrix multiplication kernels, namely the MFMA to
-    // DotOp conversion and the epilogue StoreOp vectorization optimization.
-    // This was the initial motivation for the pattern, but the implementation
-    // itself is entirely general.
-    //
-    // At the moment, we handle lane-register bit transpositions as above and
-    // 3-cycles involving both `l4` and `l5` bits such as (r_i l4 l5). In both
-    // cases, we require that `i >= nPack`, where `nPack` indicates the number
-    // of intra-register index bits (i.e., the degree of register packing), and
-    // that there are no intra-register element permutations prescribed by the
-    // general decomposition algorithm.
-    if (!(rBit >= nPack && t.topPreSel == 0x3210 && t.topPostSel == 0x3210 &&
-          (lBit == 4 || lBit == 5))) {
+    // Further details on this permutation interpretation can be found in the
+    // general `transferWithinWarp` and `getWarpLayoutConvertDecomposition`.
+    if (!(mlir::triton::squareSublayoutIsIdentity(pLane, kLane) &&
+          (lBit == 4 || lBit == 5) && rBit >= nPack && t.topPreSel == 0x3210 &&
+          t.topPostSel == 0x3210)) {
       return failure();
     }
-
-    bool isSingleTransposition =
-        mlir::triton::squareSublayoutIsIdentity(pLane, kLane);
-
-    const auto &laneBases = pLane.getBases().lookup(kLane);
-    auto next = [&](size_t b) { return llvm::Log2_32(laneBases[b][0]); };
-    for (size_t b = 0; b < laneBases.size(); ++b) {
-      if (b == 4 || b == 5)
-        continue;
-      if (next(b) != b)
-        return failure();
-    }
-    bool isThreeCycle = (next(4) == 5 && next(5) == 4);
-
-    if (!(isSingleTransposition || isThreeCycle))
-      return failure();
 
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
-    const char *instr0 = lBit == 5 ? "llvm.amdgcn.permlane32.swap"
-                                   : "llvm.amdgcn.permlane16.swap";
+    const char *instr = lBit == 5 ? "llvm.amdgcn.permlane32.swap"
+                                  : "llvm.amdgcn.permlane16.swap";
     Type retTy = struct_ty({i32_ty, i32_ty});
     Value f = b.false_val();
-    auto permlaneSwap = [&](Value v0, Value v1, auto instr) {
+    auto permlaneSwap = [&](Value v0, Value v1) {
       SmallVector<Value> ret;
       Value args[] = {v0, v1, f, f};
       auto out =
@@ -183,17 +157,9 @@ public:
       for (int i = 0; i < tileSize / 2; ++i) {
         int r0 = baseIdx + i;
         int r1 = r0 + (1 << rIdx);
-        auto swapped0 = permlaneSwap(inVals[r0], inVals[r1], instr0);
-        outVals[r0] = swapped0[0];
-        outVals[r1] = swapped0[1];
-        if (isThreeCycle) {
-          // E.g., we factor (r_i l5 l4) = (r_i l4)(r_i l5), read right to left.
-          const char *instr1 = lBit == 5 ? "llvm.amdgcn.permlane16.swap"
-                                         : "llvm.amdgcn.permlane32.swap";
-          auto swapped1 = permlaneSwap(outVals[r0], outVals[r1], instr1);
-          outVals[r0] = swapped1[0];
-          outVals[r1] = swapped1[1];
-        }
+        auto swapped = permlaneSwap(inVals[r0], inVals[r1]);
+        outVals[r0] = swapped[0];
+        outVals[r1] = swapped[1];
       }
     }
 

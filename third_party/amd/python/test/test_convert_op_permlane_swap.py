@@ -43,15 +43,11 @@ src_layouts = [BlockedLayout([1, 1], [1, 64], [1, 1], [0, 1], [1, 1], [1, 1], [0
 dst_layouts = [
     LinearLayout([[0, 32]], [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [1, 0]], [], []),
     LinearLayout([[1, 0], [0, 32]], [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [2, 0]], [], []),
-    LinearLayout([[1, 0], [2, 0], [0, 32]], [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [4, 0]], [], []),
-    LinearLayout([[0, 16]], [[0, 1], [0, 2], [0, 4], [0, 8], [0, 32], [1, 0]], [], []),
-    LinearLayout([[1, 0], [0, 16]], [[0, 1], [0, 2], [0, 4], [0, 8], [0, 32], [2, 0]], [], []),
-    LinearLayout([[1, 0], [2, 0], [0, 16]], [[0, 1], [0, 2], [0, 4], [0, 8], [0, 32], [4, 0]], [], [])
+    LinearLayout([[1, 0], [2, 0], [0, 32]], [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [4, 0]], [], [])
 ]
 
 
-@pytest.mark.parametrize("M, dst_layout", [[2, dst_layouts[0]], [4, dst_layouts[1]], [8, dst_layouts[2]],
-                                           [2, dst_layouts[3]], [4, dst_layouts[4]], [8, dst_layouts[5]]])
+@pytest.mark.parametrize("M, dst_layout", [[2, dst_layouts[0]], [4, dst_layouts[1]], [8, dst_layouts[2]]])
 @pytest.mark.parametrize("src_layout", src_layouts)
 @pytest.mark.parametrize("N", [64])
 @pytest.mark.parametrize("dtype", ['float8e5', 'float16', 'float32', 'int64'])
