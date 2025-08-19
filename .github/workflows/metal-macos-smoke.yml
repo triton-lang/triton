@@ -28,9 +28,31 @@ jobs:
       - name: Create build dir
         run: mkdir -p build_metal
 
+      - name: Install Homebrew LLVM (for MLIR)
+        run: |
+          # Install llvm which provides MLIR CMake config files used by the project
+          brew update || true
+          brew install llvm || true
+          LLVM_PREFIX=$(brew --prefix llvm)
+          echo "LLVM_PREFIX=${LLVM_PREFIX}" >> $GITHUB_ENV
+          echo "LLVM_DIR=${LLVM_PREFIX}/lib/cmake/llvm" >> $GITHUB_ENV
+          echo "MLIR_DIR=${LLVM_PREFIX}/lib/cmake/mlir" >> $GITHUB_ENV
+          # Add prefix to CMAKE_PREFIX_PATH so find_package can locate components
+          echo "CMAKE_PREFIX_PATH=${LLVM_PREFIX}:${CMAKE_PREFIX_PATH:-}" >> $GITHUB_ENV
+
       - name: Configure CMake (Ninja)
         working-directory: build_metal
-        run: cmake -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DTRITON_ENABLE_MPS_BACKEND=ON ..
+        env:
+          MLIR_DIR: ${{ env.MLIR_DIR }}
+          LLVM_DIR: ${{ env.LLVM_DIR }}
+          CMAKE_PREFIX_PATH: ${{ env.CMAKE_PREFIX_PATH }}
+        run: |
+          cmake -G Ninja \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DTRITON_ENABLE_MPS_BACKEND=ON \
+            -DMLIR_DIR=${MLIR_DIR} \
+            -DLLVM_DIR=${LLVM_DIR} \
+            -DCMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH} ..
 
       - name: Build
         working-directory: build_metal
