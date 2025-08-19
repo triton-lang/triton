@@ -34,7 +34,7 @@ bool isSyncedViaAsyncWait(Operation *localLoadOp);
 // If localLoadOp has a token from an AsyncWait:
 //  - Attaches "amdgpu.LocalLoad" alias scope to llLoadOp
 //  - Attaches "amdgpu.AsyncCopies" as *non* alias scope to llLoadOp
-void addLocalLoadNoAliasScope(triton::gpu::LocalLoadOp localLoadOp,
+void addLocalLoadNoAliasScope(Operation *localLoadOp,
                               LLVM::AliasAnalysisOpInterface llLoadOp);
 // Overload from above without checking the AsyncToken
 void addLocalLoadNoAliasScope(LLVM::AliasAnalysisOpInterface llLoadOp);

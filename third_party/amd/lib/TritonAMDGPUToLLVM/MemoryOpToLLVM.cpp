@@ -199,6 +199,7 @@ private:
             auto i32VecTy = VectorType::get(numElemsI32, i32_ty);
             auto dsReadOp =
                 rewriter.create<ROCDL::ds_read_tr4_b64>(loc, i32VecTy, vecAddr);
+            AMD::addLocalLoadNoAliasScope(op, dsReadOp);
             auto res = b.bitcast(dsReadOp.getResult(), vecTy);
             Value vecVal = res.getResult();
             for (int v = 0; v < vecTy.getNumElements(); v++) {
@@ -208,9 +209,7 @@ private:
           } else if (bitwidth == 16) {
             auto dsReadOp =
                 rewriter.create<ROCDL::ds_read_tr16_b64>(loc, vecTy, vecAddr);
-            if constexpr (isLocalLoad) {
-              AMD::addLocalLoadNoAliasScope(op, dsReadOp);
-            }
+            AMD::addLocalLoadNoAliasScope(op, dsReadOp);
             Value vecVal = dsReadOp.getResult();
             for (int v = 0; v < vecTy.getNumElements(); v++) {
               outVals.push_back(
@@ -224,9 +223,7 @@ private:
 
             auto dsReadOp =
                 rewriter.create<ROCDL::ds_read_tr8_b64>(loc, i32VecTy, vecAddr);
-            if constexpr (isLocalLoad) {
-              AMD::addLocalLoadNoAliasScope(op, dsReadOp);
-            }
+            AMD::addLocalLoadNoAliasScope(op, dsReadOp);
             Value vecVal = dsReadOp.getResult();
             for (auto i = 0; i < numElemsI32; ++i) {
               elemsI32.push_back(
