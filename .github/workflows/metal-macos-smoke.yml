@@ -11,8 +11,14 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 120
     steps:
-      - name: Checkout repository
+      - name: Checkout repository (full)
         uses: actions/checkout@v4
+        with:
+          # Ensure the full history and all files are present (no sparse/shallow checkout)
+          fetch-depth: 0
+          persist-credentials: true
+          # If the repo uses submodules for large deps, fetch them too (safe default)
+          submodules: recursive
 
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -45,19 +51,33 @@ jobs:
           # Add prefix to CMAKE_PREFIX_PATH so find_package can locate components
           echo "CMAKE_PREFIX_PATH=${LLVM_PREFIX}:${CMAKE_PREFIX_PATH:-}" >> $GITHUB_ENV
 
+      - name: Install Homebrew Python (CMake Python dev components)
+        run: |
+          # Ensure CMake can find a Python that provides the Python3::Module config
+          brew update || true
+          brew install python@3.11 || true
+          PY3_PREFIX=$(brew --prefix python@3.11)
+          echo "PYTHON_EXECUTABLE=${PY3_PREFIX}/bin/python3" >> $GITHUB_ENV
+          # Prefer config-style packages when CMake searches for packages (helps FindPython pick the config)
+          echo "CMAKE_FIND_PACKAGE_PREFER_CONFIG=ON" >> $GITHUB_ENV
+
       - name: Configure CMake (Ninja)
         working-directory: build_metal
         env:
           MLIR_DIR: ${{ env.MLIR_DIR }}
           LLVM_DIR: ${{ env.LLVM_DIR }}
           CMAKE_PREFIX_PATH: ${{ env.CMAKE_PREFIX_PATH }}
+          PYTHON_EXECUTABLE: ${{ env.PYTHON_EXECUTABLE }}
+          CMAKE_FIND_PACKAGE_PREFER_CONFIG: ${{ env.CMAKE_FIND_PACKAGE_PREFER_CONFIG }}
         run: |
           cmake -G Ninja \
             -DCMAKE_BUILD_TYPE=RelWithDebInfo \
             -DTRITON_ENABLE_MPS_BACKEND=ON \
             -DMLIR_DIR=${MLIR_DIR} \
             -DLLVM_DIR=${LLVM_DIR} \
-            -DCMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH} ..
+            -DCMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH} \
+            -DPython3_EXECUTABLE=${PYTHON_EXECUTABLE} \
+            -DCMAKE_FIND_PACKAGE_PREFER_CONFIG=${CMAKE_FIND_PACKAGE_PREFER_CONFIG} ..
 
       - name: Build
         working-directory: build_metal
