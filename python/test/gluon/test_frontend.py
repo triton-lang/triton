@@ -1070,6 +1070,10 @@ def test_elementwise_core():
 def linear_layout_kernel():
     ll: ttgl.constexpr = ttgl.DistributedLinearLayout(reg_bases=[[1]], lane_bases=[[2], [4], [8], [16], [32]],
                                                       warp_bases=[[64], [128]], block_bases=[], shape=[256])
+    ll1: ttgl.constexpr = ttgl.DistributedLinearLayout(reg_bases=[[1]], lane_bases=[[2], [4], [8], [16], [32]],
+                                                       warp_bases=[[64], [128]], block_bases=[], shape=[256])
+
+    ttgl.static_range(ll1 == ll)
     ttgl.arange(0, 256, layout=ll)
 
 
@@ -1842,8 +1846,6 @@ def infer_layout_for_padded_shared_kernel():
     smem = ttgl.allocate_shared_memory(ttgl.int32, [64, 64], layout)
 
     reshaped = smem.reshape((32, 128))
-    ttgl.static_print("1234 reshaped.layout = ", reshaped.layout)
-    # ttgl.static_print("1234 layout = ", layout)
     ttgl.static_assert(reshaped.layout == layout)
 
 

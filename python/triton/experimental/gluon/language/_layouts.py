@@ -469,7 +469,7 @@ class PaddedSharedLayout(SharedLayout):
     cta_order: Optional[List[int]] = None
 
     def __post_init__(self):
-        super().__setattr__("interval_padding_pairs", _unwrap_if_constexpr(self.interval_padding_pairs))
+        super().__setattr__("interval_padding_pairs", _unwrap_shape(self.interval_padding_pairs))
         super().__setattr__("order", _unwrap_if_constexpr(self.order))
         super().__setattr__("ctas_per_cga", _unwrap_if_constexpr(self.ctas_per_cga))
         super().__setattr__("cta_split_num", _unwrap_if_constexpr(self.cta_split_num))
