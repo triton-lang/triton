@@ -24,36 +24,18 @@ THREADS_PER_WARP = triton.runtime.driver.active.get_current_target().warp_size
 ])
 @pytest.mark.parametrize("axis", [0, 1])
 @pytest.mark.parametrize("add_overflow_check", [False, True])
-def test_scan_layouts(M, N, src_layout, axis, add_overflow_check, device):
+def test_scan_layouts(M, N, src_layout, axis, sanitize_overflow, device):
 
     @gluon.jit
     def _combine(a, b):
         return a + b
 
     @gluon.jit
-    def _combine_assert(a, b):
-        # Overflow check for (a + b) in signed int32
-        a64 = a.to(ttgl.int64)
-        b64 = b.to(ttgl.int64)
-        s64 = a64 + b64
-        i32_max = 2147483647
-        i32_min = -2147483648
-        lt_max = s64 < i32_max
-        ge_min = s64 >= i32_min
-        ok = lt_max and ge_min
-        ttgl.device_assert(ok, "overflow detected")
-        return a + b
-
-    @gluon.jit
-    def kernel(x_ptr, z_ptr, M: ttgl.constexpr, N: ttgl.constexpr, layout: ttgl.constexpr, axis: ttgl.constexpr,
-               use_assert: ttgl.constexpr):
+    def kernel(x_ptr, z_ptr, M: ttgl.constexpr, N: ttgl.constexpr, layout: ttgl.constexpr, axis: ttgl.constexpr):
         x_offs_m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, layout))[:, None]
         x_offs_n = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, layout))[None, :]
         x = ttgl.load(x_ptr + x_offs_m * N + x_offs_n)
-        if use_assert:
-            y = ttgl.associative_scan(x, axis=axis, combine_fn=_combine_assert)
-        else:
-            y = ttgl.associative_scan(x, axis=axis, combine_fn=_combine)
+        y = ttgl.associative_scan(x, axis=axis, combine_fn=_combine)
         ttgl.store(z_ptr + x_offs_m * N + x_offs_n, y)
 
     torch.manual_seed(0)
@@ -62,7 +44,7 @@ def test_scan_layouts(M, N, src_layout, axis, add_overflow_check, device):
     z = torch.zeros((M, N), dtype=torch.int32, device=device)
     z_tri = torch.empty_like(z)
 
-    kernel[(1, 1, 1)](x, z_tri, M, N, src_layout, axis, add_overflow_check, num_warps=4, debug=add_overflow_check)
+    kernel[(1, 1, 1)](x, z_tri, M, N, src_layout, axis, num_warps=4, sanitize_overflow=sanitize_overflow)
 
     z_ref = torch.cumsum(x, dim=axis, dtype=torch.int32)
     torch.testing.assert_close(z_tri, z_ref)
