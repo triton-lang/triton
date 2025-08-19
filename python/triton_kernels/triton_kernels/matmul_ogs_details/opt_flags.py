@@ -160,7 +160,7 @@ def make_default_opt_flags_nvidia(
     xcd_swizzle = 1
     # block_m
     if constraints.get("block_m", None):
-        block_m =  constraints["block_m"]
+        block_m = constraints["block_m"]
     elif enforce_bitwise_invariance:
         block_m = 128
     else:
