@@ -181,19 +181,10 @@ private:
 // `pReg` and `pLane` are square layouts each with only one input and output
 // dimension. `mixedTranspositions` holds pairs of integers (i, j)
 // corresponding to the transposition (r_i l_j) of the i-th register basis
-// vector with the j-th lane basis vector along with 16-bit selectors for byte
-// permute instructions (where each of the four nybbles is in the range [0, 7]).
+// vector with the j-th lane basis vector.
 struct DecomposedWarpConversion {
-  struct TranspositionInfo {
-    std::pair<int, int> transposition;
-    uint16_t topPreSel = 0x3210;
-    uint16_t botPreSel = 0x7654;
-    uint16_t topPostSel = 0x3210;
-    uint16_t botPostSel = 0x7654;
-  };
-
   triton::LinearLayout pReg, pLane;
-  SmallVector<TranspositionInfo> mixedTranspositions;
+  SmallVector<std::pair<int, int>> mixedTranspositions;
 };
 
 // Produces a decomposition of a permutation describing a warp-local layout
@@ -205,7 +196,7 @@ struct DecomposedWarpConversion {
 // represented as a permutation.
 DecomposedWarpConversion
 getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
-                                  RankedTensorType dstTy, int bitwidth);
+                                  RankedTensorType dstTy);
 
 // Decomposes a reshape into simpler pieces.
 //
