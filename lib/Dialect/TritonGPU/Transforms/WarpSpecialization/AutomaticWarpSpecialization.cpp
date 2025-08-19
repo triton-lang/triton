@@ -6,6 +6,7 @@
 #include "third_party/nvidia/include/Dialect/NVWS/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "triton/Tools/Sys/GetEnv.hpp"
 
 using namespace mlir;
 using namespace triton;
@@ -34,7 +35,10 @@ struct AutomaticWarpSpecialization
 
 void AutomaticWarpSpecialization::runOnOperation() {
   OpPassManager pm;
-  pm.addPass(createTritonGPUPartitionScheduling());
+  if (triton::tools::getBoolEnv("TRITON_ENABLE_NEW_WS_ANALYSIS"))
+    pm.addPass(createTritonGPUPartitionAnalysis());
+  else
+    pm.addPass(createTritonGPUPartitionScheduling());
   pm.addPass(createNVWSInsertAref());
   pm.addPass(createNVWSInsertTmemAref());
   pm.addPass(createTritonGPURewritePartitionDependencies());
