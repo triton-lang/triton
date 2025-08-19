@@ -1,5 +1,6 @@
 import torch
 import pytest
+import re
 
 import triton
 import triton.language as tl
@@ -10,6 +11,7 @@ from triton.experimental.gluon import language as ttgl
 from triton.experimental.gluon.language.nvidia.ampere import async_copy, mbarrier
 from triton.experimental.gluon.language.nvidia.hopper import tma, fence_async_shared
 from triton.experimental.gluon.language.nvidia import hopper
+from triton.experimental.gluon.language.amd.cdna4 import async_copy as cdna4_async_copy
 from triton.experimental.gluon.language.extra import libdevice
 
 
@@ -147,6 +149,42 @@ def test_warpgroup_mma(ASYNC):
     ref = torch.matmul(a, b)
 
     torch.testing.assert_close(out, ref, atol=1e-3, rtol=1e-1)
+
+
+@pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
+@pytest.mark.parametrize("use_buffer_load", [True, False])
+def test_amd_direct_load_to_shared(use_buffer_load):
+
+    @gluon.jit
+    def kernel(a_ptr, b_ptr, use_buffer_load: ttgl.constexpr):
+        blocked: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [32, 2], [4, 1], [1, 0])
+        shared: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, order=[1, 0])
+
+        smem = ttgl.allocate_shared_memory(a_ptr.dtype.element_ty, [128, 16], shared)
+        offsets = ttgl.arange(0, 128, layout=ttgl.SliceLayout(1, blocked))[:, None] * 16 + \
+                  ttgl.arange(0, 16, layout=ttgl.SliceLayout(0, blocked))[None, :]
+        if use_buffer_load:
+            cdna4_async_copy.buffer_load_to_shared(smem, a_ptr, offsets)
+        else:
+            cdna4_async_copy.global_load_to_shared(smem, a_ptr + offsets)
+
+        cdna4_async_copy.async_wait(0)
+        a = cdna4_async_copy.load_shared_relaxed(smem, blocked)
+
+        ttgl.store(b_ptr + offsets, a)
+
+    torch.manual_seed(0)
+    a = torch.randn((128, 16), dtype=torch.float16, device='cuda')
+    b = torch.empty_like(a)
+    pgm = kernel[(1, )](a, b, use_buffer_load)
+
+    torch.testing.assert_close(a, b)
+    assert re.search(r'ttg\.local_load .* \{ttg\.amdgpu\.syncedViaAsyncWait = true\}', pgm.asm['ttgir'], re.MULTILINE)
+    if use_buffer_load:
+        assert re.search(r"buffer_load.*lds$", pgm.asm['amdgcn'], re.MULTILINE)
+    else:
+        assert re.search(r"global_load_lds", pgm.asm['amdgcn'], re.MULTILINE)
+    assert 'vmcnt(0)' in pgm.asm['amdgcn']
 
 
 @pytest.mark.parametrize("M, N, K", [(32, 32, 16), (16, 16, 32)])

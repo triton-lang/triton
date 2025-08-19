@@ -10,7 +10,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
     // CHECK-COUNT-64: ld.param.b8
 
-    // Intra-warp layout conversions can be viewed as permutations of register
+    // Intra-warp layout conversions can be viewed as a permutation of register
     // and lane basis vectors. This can be read off from the linear layouts:
     //
     // #mma:     register: [[0,1], [8,0], [0,8], [0,16], [0,32], [64,0]]
@@ -21,15 +21,28 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     //               lane: [[0,4], [0,8], [1,0], [2,0], [4,0]]
     //               warp: [[16,0], [32,0]]
     //
-    // This layout conversion is described by the permutation (r1 r2 l1 l0),
-    // which factors as (r2 r1)(r2 l1)(l0 l1).
+    // The layout conversion is described by the permutation (r1 r2 l1 l0),
+    // which factors as (r1 l1)(l0 l1)(r1 r2).
     //
     // Register basis vectors correspond to the bits of the indices of the 64
     // separate registers which hold the original elements. Since we end up
     // packing 4 elements per register, we end up with only 16 registers in
-    // total before shuffling. The `transferWithinWarp` implementation in this
-    // case packs elements without rearranging elements beforehand. After
-    // packing the symbol `r2` corresponds to the 0th bit of a register's index.
+    // total before shuffling. The `transferWithinWarp` implementation handles
+    // register packing by ensuring that elements are packed together only if
+    // under the layout conversion, they end up in the same destination lane.
+    // To do this, it rearranges the 64 registers so that it can pack 4
+    // consecutive elements at a time according to their new register index.
+    //
+    // The transposition (r1 l1) above indicates that intially, elements with
+    // register indices whose r1 bit is on are to be moved to new lanes. We thus
+    // need to rearrange the registers. The algorithm chooses the next register
+    // bit > 1 which is not used in a mixed transposition. In this case,
+    // that bit is r2. Algebrically, this corresponds to conjugating the
+    // permutation with (r1 r2). This produces (r1 r2)(r2 l1)(l0 l1). The new
+    // (r1 r2) at the end rearranges elements after unpacking, and only
+    // (r2 l1)(l0 l1) matters for tracking the movement of the packed registers.
+    // From the point of view of the packed registers, the symbol `r2` now
+    // corresponds to the 0th bit of a (packed) register's index.
     //
     // The transposition (r2 l1) is a bit swap which is implemented in-place as:
     //  1. r2 ^= l1
@@ -89,35 +102,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     // CHECK-DAG: shfl.sync.idx.b32     {{.*}}, [[LANEID_PERM_F]], 31, -1;
     // CHECK-DAG: shfl.sync.idx.b32     {{.*}}, [[LANEID_PERM_F]], 31, -1;
 
-    // The effects of the register bit permutation (r2 r1) are fused with step
-    // 3 of the implementation of (r2 l1), producing `prmt` instructions instead
-    // of `selp`s. The `prmt`s have selectors which are dependent on the value
-    // of the l1 bit. For packed register indices with the r2 bit off, the pair
-    // of selectors used is 0x5410 and 0x1054, while for those with the r2 bit
-    // on, we have selectors 0x7632 and 0x3276. These are 21520, 4180, 30258,
-    // and 12918 in decimal, respectively.
+    // Finally, the last set of selects are performed, using the value of l1 as
+    // the predicate (step 3).
 
     // CHECK-DAG: and.b32           [[L1_VAL:%.*]], [[TID]], 2;
     // CHECK-DAG: setp.eq.b32       [[L1_OFF:%.*]], [[L1_VAL]], 0;
-    // CHECK:     selp.b32          [[SEL1:%.*]], 21520, 4180, [[L1_OFF]];
-    // CHECK:     selp.b32          [[SEL2:%.*]], 30258, 12918, [[L1_OFF]];
-
-    // CHECK-DAG: prmt.b32          {{.*}}, {{.*}}, {{.*}}, [[SEL1]];
-    // CHECK-DAG: prmt.b32          {{.*}}, {{.*}}, {{.*}}, [[SEL2]];
-    // CHECK-DAG: prmt.b32          {{.*}}, {{.*}}, {{.*}}, [[SEL1]];
-    // CHECK-DAG: prmt.b32          {{.*}}, {{.*}}, {{.*}}, [[SEL2]];
-    // CHECK-DAG: prmt.b32          {{.*}}, {{.*}}, {{.*}}, [[SEL1]];
-    // CHECK-DAG: prmt.b32          {{.*}}, {{.*}}, {{.*}}, [[SEL2]];
-    // CHECK-DAG: prmt.b32          {{.*}}, {{.*}}, {{.*}}, [[SEL1]];
-    // CHECK-DAG: prmt.b32          {{.*}}, {{.*}}, {{.*}}, [[SEL2]];
-    // CHECK-DAG: prmt.b32          {{.*}}, {{.*}}, {{.*}}, [[SEL1]];
-    // CHECK-DAG: prmt.b32          {{.*}}, {{.*}}, {{.*}}, [[SEL2]];
-    // CHECK-DAG: prmt.b32          {{.*}}, {{.*}}, {{.*}}, [[SEL1]];
-    // CHECK-DAG: prmt.b32          {{.*}}, {{.*}}, {{.*}}, [[SEL2]];
-    // CHECK-DAG: prmt.b32          {{.*}}, {{.*}}, {{.*}}, [[SEL1]];
-    // CHECK-DAG: prmt.b32          {{.*}}, {{.*}}, {{.*}}, [[SEL2]];
-    // CHECK-DAG: prmt.b32          {{.*}}, {{.*}}, {{.*}}, [[SEL1]];
-    // CHECK-DAG: prmt.b32          {{.*}}, {{.*}}, {{.*}}, [[SEL2]];
+    // CHECK-COUNT-16: selp.b32     {{.*}}, {{.*}}, [[L1_OFF]];
 
     // CHECK-COUNT-48: prmt.b32
     // CHECK-COUNT-64: st.volatile.global.b8
