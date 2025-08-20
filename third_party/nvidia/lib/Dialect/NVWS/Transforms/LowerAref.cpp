@@ -486,12 +486,12 @@ public:
 bool isProducerLoad(ArefCreateOp arefOp) {
   for (auto user : arefOp.getResult().getUsers()) {
     if (auto putOp = dyn_cast<ArefPutEnterOp>(user)) {
-      auto loop = putOp->getParentOfType<scf::ForOp>();
-      if (!loop) {
-        continue;
-      }
-      if (!loop.getOps<nvws::DescriptorLoadOpInterface>().empty()) {
-        return true;
+      for (auto buffer : putOp.getBuffers()) {
+        for (auto user : buffer.getUsers()) {
+          if (isa<triton::nvws::DescriptorLoadOpInterface>(user)) {
+            return true;
+          }
+        }
       }
     }
   }
