@@ -17,8 +17,12 @@ jobs:
           # Ensure the full history and all files are present (no sparse/shallow checkout)
           fetch-depth: 0
           persist-credentials: true
-          # If the repo uses submodules for large deps, fetch them too (safe default)
-          submodules: recursive
+          # Do not attempt to fetch submodules on the runner: some generated build trees
+          # contain gitlink entries without a matching .gitmodules file which causes
+          # `git submodule update` to fail (seen on GitHub runners). Avoid fetching
+          # submodules here; if real submodules are required in future, enable them
+          # explicitly and ensure .gitmodules is present.
+          submodules: false
 
       - name: Set up Python
         uses: actions/setup-python@v4
