@@ -38,6 +38,18 @@ jobs:
       - name: Create build dir
         run: mkdir -p build_metal
 
+      - name: Clean build directory (remove stale CMake cache)
+        run: |
+          # If a CMakeCache or other generated build files are present in the repo
+          # (e.g. from a developer's local build) they can contain absolute paths
+          # which confuse an out-of-tree runner. Remove them so CMake starts fresh.
+          if [ -f build_metal/CMakeCache.txt ] || [ -d build_metal/CMakeFiles ] || [ -d build_metal/Testing ]; then
+            echo "Removing stale build artifacts from build_metal"
+            rm -rf build_metal/CMakeCache.txt build_metal/CMakeFiles build_metal/Testing build_metal/CTestTestfile.cmake build_metal_logs || true
+          fi
+          # Ensure the build directory is empty before configuring
+          rm -rf build_metal/* || true
+
       - name: Install Homebrew LLVM (for MLIR)
         run: |
           # Prefer llvm@20 which matches the repo's historical build artifacts; fall back to llvm
