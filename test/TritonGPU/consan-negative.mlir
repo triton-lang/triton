@@ -33,7 +33,7 @@ module attributes { "ttg.num-ctas" = 1 : i32,
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
 #smem   = #ttg.shared_memory
 
-// Test 2: local_alloc used in a non-trivial memdesc_subview should emit a warning.
+// Test 2: local_alloc used in a non-trivial memdesc_index should emit a warning.
 module attributes { "ttg.num-ctas" = 1 : i32,
                   "ttg.num-warps" = 1 : i32,
                   ttg.shared = 65544 : i32,
@@ -48,7 +48,7 @@ module attributes { "ttg.num-ctas" = 1 : i32,
     // expected-warning@+1 {{Allocation is used in an inconsistent way, cannot instrument}}
     %alloc = ttg.local_alloc {allocation.offset = 0 : i32}
              : () -> !ttg.memdesc<2x32x32xf32, #shared, #smem, mutable>
-    %sub = ttg.memdesc_subview %alloc[%c1, %c0, %c0]
+    %sub = ttg.memdesc_index %alloc[%c1]
            : !ttg.memdesc<2x32x32xf32, #shared, #smem, mutable>
            -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
     "memdesc_use" (%alloc) : (!ttg.memdesc<2x32x32xf32, #shared, #smem, mutable>) -> ()

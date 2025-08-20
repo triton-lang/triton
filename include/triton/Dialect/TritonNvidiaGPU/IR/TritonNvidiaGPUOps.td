@@ -87,7 +87,7 @@ def TTNG_WarpGroupDotOp : TTNG_Op<"warp_group_dot", [
 
   let arguments = (ins
     TTG_TensorOrMemDesc:$a,
-    TTG_TensorOrMemDesc:$b,
+    TTG_MemDescType:$b,
     TT_FpIntTensor:$c,
     Optional<I1>:$useC,
     DefaultValuedAttr<TT_InputPrecisionAttr, "::mlir::triton::InputPrecision::IEEE">:$inputPrecision,
@@ -99,7 +99,7 @@ def TTNG_WarpGroupDotOp : TTNG_Op<"warp_group_dot", [
 
   let assemblyFormat = [{
     $a`,` $b`,` $c (`,` $useC^)? attr-dict
-    `:` type($a) `*` type($b) `->` type($d)
+    `:` type($a) `*` qualified(type($b)) `->` type($d)
   }];
 
   let extraClassDeclaration = [{
@@ -123,6 +123,7 @@ def TTNG_WarpGroupDotWaitOp : TTNG_Op<"warp_group_dot_wait", [DeclareOpInterface
   }];
 
   let assemblyFormat = "$inputs attr-dict `:` type($inputs)";
+  let hasVerifier = 1;
 }
 
 def TTNG_InitBarrierOp : TTNG_Op<"init_barrier"> {
@@ -421,8 +422,8 @@ def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [
 
   let description = [{
     $d += matrix_multiply($a, $b).
-    If no barrier is given the op is assumed to be synchronous otherwise the op will trigger a commit/arrive on the given barrier.
-    If there is a barrier the result will be safe to read after a barrier wait.
+    if is_async is false, the op executes synchronously. The barrier operands must not be present in that case.
+    Otherwise, if a barrier is given, the op will trigger a commit/arrive on it. The result will be safe to read after a barrier wait.
     If $two_ctas is set the op will execute a matmul across two contiguous CTAs, it will read the data distributed across the two CTAs.
     and syncronize both CTAs if the op is synchronous.
 
@@ -440,7 +441,8 @@ def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [
     I1:$pred,
     Variadic<TTG_MemDescType>:$barriers,
     Variadic<I1>:$barrier_preds,
-    OptionalAttr<UnitAttr>:$two_ctas
+    UnitAttr:$is_async,
+    UnitAttr:$two_ctas
   );
   let results = (outs Optional<TTG_AsyncToken>:$token);
 
@@ -449,7 +451,8 @@ def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [
       "Value":$a, "Value":$b, "Value":$d, "Value":$acc_dep, "Value":$useD,
       "Value":$pred, CArg<"bool", "false">:$two_ctas,
       CArg<"ValueRange", "{}">:$barriers,
-      CArg<"ValueRange", "{}">:$barrier_preds)>
+      CArg<"ValueRange", "{}">:$barrier_preds,
+      CArg<"bool", "false">:$is_async)>
   ];
 
   let assemblyFormat = [{
@@ -458,6 +461,8 @@ def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [
     attr-dict `:` qualified(type($a)) `,` qualified(type($b)) `,`
     qualified(type($d)) (`,` qualified(type($barriers))^)?
   }];
+
+  let hasVerifier = 1;
 }
 
 def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [
@@ -470,8 +475,9 @@ def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [
 
   let description = [{
     $d += matrix_multiply(scale($lhs, $lhs_scale), scale(rlhs, $rhs_scale))
-    If no barrier is given the op is assumed to be synchronous otherwise the op will trigger a commit/arrive on the given barrier.
-    If there is a barrier the result will be safe to read after a barrier wait.
+    if is_async is false, the op executes synchronously. The barrier operands must not be present in that case.
+    Otherwise, if a barrier is given, the op will trigger a commit/arrive on it.
+    The result will be safe to read after a barrier wait.
 
     This operation takes and produces an optional token to indicate TMEM read
     and write on its accumulator operand. When the tokens are present, they can
@@ -490,7 +496,8 @@ def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [
     I1:$useD,
     I1:$pred,
     Variadic<TTG_MemDescType>:$barriers,
-    Variadic<I1>:$barrier_preds
+    Variadic<I1>:$barrier_preds,
+    UnitAttr:$is_async
   );
   let results = (outs Optional<TTG_AsyncToken>:$token);
 
@@ -510,7 +517,8 @@ def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [
       "::mlir::triton::ScaleDotElemType":$b_type,
       "::mlir::Value":$useD, "::mlir::Value":$pred,
       CArg<"::mlir::ValueRange", "{}">:$barriers,
-      CArg<"::mlir::ValueRange", "{}">:$barrier_preds)>
+      CArg<"::mlir::ValueRange", "{}">:$barrier_preds,
+      CArg<"bool", "false">:$is_async)>
   ];
 
   let assemblyFormat = [{
@@ -521,6 +529,8 @@ def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [
     qualified(type($d)) `,` qualified(type($a_scale)) `,`
     qualified(type($b_scale)) (`,` qualified(type($barriers))^)?
   }];
+
+  let hasVerifier = 1;
 }
 
 def TTNG_TCGen5CommitOp : TTNG_Op<"tc_gen5_commit"> {
@@ -665,8 +675,8 @@ def TTNG_TMEMSubSliceOp : TTNG_Op<"tmem_subslice", [Pure]> {
   let description = [{
     This operation takes a subslice of a tensor memory allocation and returns a new descriptor
     containing the address and a view of the subslice.
-    This is similar to ttg.memdesc_subview except the offset needs to be static and we can only
-    slice alog the inner dimension of a 2D memdesc as this is the only one we can do for TMem.
+    This is similar to ttg.memdesc_subslice except we can only slice along the inner dimension
+    of a 2D memdesc as this is the only one we can do for TMem.
   }];
   let arguments = (ins TTG_MemDescType:$src, I32Attr:$N);
 

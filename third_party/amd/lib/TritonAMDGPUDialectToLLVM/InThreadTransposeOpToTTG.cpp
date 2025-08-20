@@ -10,9 +10,7 @@ namespace {
 struct InThreadTransposeOpConversion
     : public OpConversionPattern<triton::amdgpu::InThreadTransposeOp> {
 public:
-  explicit InThreadTransposeOpConversion(MLIRContext *ctx,
-                                         PatternBenefit benefit)
-      : OpConversionPattern(ctx, benefit) {}
+  using OpConversionPattern::OpConversionPattern;
 
   LogicalResult
   matchAndRewrite(triton::amdgpu::InThreadTransposeOp op, OpAdaptor adaptor,

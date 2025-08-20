@@ -31,6 +31,7 @@ public:
 
   LogicalResult matchAndRewrite(DotScaledOp scaledDotOp,
                                 PatternRewriter &rewriter) const override {
+
     auto resTy = cast<RankedTensorType>(scaledDotOp.getType());
     if (mlir::isa<NvidiaMmaEncodingAttr>(resTy.getEncoding()))
       return failure();
@@ -43,7 +44,10 @@ public:
                       cast<RankedTensorType>(v.getType()).getEncoding());
     };
     if (isLinearEncoding(scaledDotOp.getAScale()) ||
-        isLinearEncoding(scaledDotOp.getBScale()))
+        isLinearEncoding(scaledDotOp.getBScale())) 
+      return failure();
+    if (isa_and_nonnull<MmaEncodingTrait>(
+            scaledDotOp.getResult().getType().getEncoding()))
       return failure();
 
     // TODO: add support for m/n packed formats.

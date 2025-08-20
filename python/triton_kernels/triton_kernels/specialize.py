@@ -5,6 +5,27 @@ import types
 import triton
 
 
+def cacheable(f):
+    """
+    A decorator that allow you to write something of the form:
+
+    @cacheable
+    def my_kernel(): return (expression dynamically defining a kernel)
+
+    such that it interacts gracefully with triton cache and preload.
+    """
+
+    g = f()
+    g.fn.__name__ = f.__name__
+    g.fn.__module__ = f.__module__
+    g.fn.__qualname__ = f.__qualname__
+    g.__name__ = f.__name__
+    g.__module__ = f.__module__
+    g.__qualname__ = f.__qualname__
+    g._fn_name = f"{f.__module__}.{f.__qualname__}"
+    return g
+
+
 def define_kernel(src, module, attrs=None, **extra_globals):
     """
     Dynamically create a Triton function or kernel from a src string,

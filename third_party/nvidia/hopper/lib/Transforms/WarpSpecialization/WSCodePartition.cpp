@@ -359,25 +359,16 @@ void groupChannels(
 
   // Reorder channels associated with one entry based on program order of the
   // producers.
-  for (auto &kv : consumerChannels) {
-    if (kv.second.size() > 1) {
-      auto &allOps = kv.second.front()->getSrcOp()->getBlock()->getOperations();
-      std::sort(
-          kv.second.begin(), kv.second.end(), [&](Channel *a, Channel *b) {
-            auto itrA =
-                std::find_if(allOps.begin(), allOps.end(), [&](Operation &op) {
-                  Operation *opPointer = &op;
-                  return opPointer == a->getSrcOp();
-                });
-            auto itrB =
-                std::find_if(allOps.begin(), allOps.end(), [&](Operation &op) {
-                  Operation *opPointer = &op;
-                  return opPointer == b->getSrcOp();
-                });
-            assert(itrA != allOps.end() && itrB != allOps.end());
-            return std::distance(itrA, itrB) < 0;
-          });
+  for (auto &group : make_second_range(consumerChannels)) {
+    auto &allOps = group.front()->getSrcOp()->getBlock()->getOperations();
+    DenseMap<Operation *, size_t> opIdx;
+    opIdx.reserve(allOps.size());
+    for (auto [idx, op] : enumerate(allOps)) {
+      opIdx[&op] = idx;
     }
+    sort(group, [&](Channel *a, Channel *b) {
+      return opIdx[a->getSrcOp()] < opIdx[b->getSrcOp()];
+    });
   }
 
   // Switch to using channel as the key instead of ops as ops can be volatile.
@@ -555,7 +546,7 @@ static Value createBarrierAlloc(triton::FuncOp funcOp, unsigned distance) {
   auto barrierEncoding = ttg::SwizzledSharedEncodingAttr::get(
       context, 1, 1, 1, {0}, barrierCTALayout);
   Type barrierMemDescType = ttg::MemDescType::get(
-      {distance}, builder.getI64Type(), barrierEncoding, sharedMemorySpace,
+      {distance, 1}, builder.getI64Type(), barrierEncoding, sharedMemorySpace,
       /*mutableMemory=*/true);
   Type singleBarrierMemDescType =
       ttg::MemDescType::get({1}, builder.getI64Type(), barrierEncoding,
@@ -564,7 +555,7 @@ static Value createBarrierAlloc(triton::FuncOp funcOp, unsigned distance) {
       loc, barrierMemDescType, Value());
   for (unsigned i = 0; i < distance; i++) {
     Value idx = builder.create<arith::ConstantIntOp>(loc, i, 32);
-    Value barrierView = builder.create<ttg::MemDescSubviewOp>(
+    Value barrierView = builder.create<ttg::MemDescIndexOp>(
         loc, singleBarrierMemDescType, barrierAlloc, idx);
     builder.create<ttng::InitBarrierOp>(funcOp->getLoc(), barrierView, 1);
   }
@@ -587,6 +578,18 @@ void createToken(
   DenseMap<ttng::TCGen5MMAOp, Channel *> gen5Barriers;
   for (auto *key : orderedChannels) {
     auto it = channelsGroupedByConsumers.find(key);
+    LLVM_DEBUG({
+      LDBG("createToken key:");
+      LDBG("consumer: ");
+      key->getDstOp()->dump();
+
+      LDBG("createToken channelsGroupedByConsumers:");
+      for (auto map_key : make_first_range(channelsGroupedByConsumers)) {
+        LDBG("representative consumer: ");
+        map_key->getDstOp()->dump();
+      }
+    });
+    assert(it != channelsGroupedByConsumers.end());
     Channel *channel = it->second.front();
 
     CommChannel commChannel;
@@ -826,6 +829,7 @@ desyncTCGen5MMAOp(OpBuilderWithAsyncTaskIds &builder, ttng::TCGen5MMAOp mmaOp,
   auto pred = builder.createWithAsyncTaskIds<arith::ConstantIntOp>(
       mmaOp->getLoc(), true, 1);
   mmaOp.addCompletionBarrier(consumerBarrier, pred);
+  mmaOp.setIsAsync(true);
 
   // Create a wait_barrier before the producer.
   builder.setInsertionPoint(headProducer);

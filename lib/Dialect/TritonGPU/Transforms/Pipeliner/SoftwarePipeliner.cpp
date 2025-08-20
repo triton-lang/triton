@@ -1,5 +1,4 @@
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
-#include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Support/LLVM.h"
@@ -43,67 +42,6 @@ static void pipelineWgmma(ModuleOp moduleOp, unsigned numStages) {
   }
 }
 
-static Operation *wrapInMaskOp(RewriterBase &rewriter, Operation *op,
-                               Value pred) {
-  auto mask = rewriter.create<MaskOp>(op->getLoc(), op->getResultTypes(), pred);
-  rewriter.createBlock(&mask->getRegion(0));
-  rewriter.setInsertionPointToStart(&mask->getRegion(0).front());
-  auto newOp = rewriter.clone(*op);
-  rewriter.create<MaskReturnOp>(op->getLoc(), newOp->getResults());
-  op->replaceAllUsesWith(mask->getResults());
-  rewriter.eraseOp(op);
-  return mask;
-}
-
-static void resolveMaskOp(ModuleOp moduleOp, DenseSet<MaskOp> &peeledMaskOps) {
-  IRRewriter rewriter(moduleOp);
-
-  // Canonicalize the IR to simplify the arithmetic ops defining the mask
-  auto arithDialect =
-      moduleOp.getContext()->getLoadedDialect<arith::ArithDialect>();
-  RewritePatternSet patterns(moduleOp.getContext());
-  arithDialect->getCanonicalizationPatterns(patterns);
-  if (applyPatternsGreedily(moduleOp, std::move(patterns)).failed())
-    return llvm::report_fatal_error("Failed to canonicalize the IR");
-
-  // Prune all the statically dead mask ops in the epilogue. This is a
-  // hack, ideally we should do it for all the mask ops, but it is incorrect if
-  // we have speculatively executed async cp operations that will store to shmem
-  // even if the mask is false.
-  for (auto maskOp : peeledMaskOps) {
-    rewriter.setInsertionPoint(maskOp);
-    while (&maskOp.getBody()->front() != maskOp.getBody()->getTerminator()) {
-      Operation *op = &maskOp.getBody()->front();
-      if (isConstantIntValue(maskOp.getPred(), 0)) {
-        if (op->getNumResults() > 0) {
-          SmallVector<Value> results;
-          for (auto result : op->getResults()) {
-            auto poisonOp =
-                rewriter.create<ub::PoisonOp>(op->getLoc(), result.getType());
-            results.push_back(poisonOp);
-          }
-          op->replaceAllUsesWith(results);
-        }
-        op->erase();
-      }
-    }
-  }
-
-  SmallVector<MaskOp> maskOps;
-  moduleOp->walk([&](MaskOp maskOp) { maskOps.push_back(maskOp); });
-  for (auto maskOp : maskOps) {
-    rewriter.setInsertionPoint(maskOp);
-    while (&maskOp.getBody()->front() != maskOp.getBody()->getTerminator()) {
-      Operation *op = &maskOp.getBody()->front();
-      rewriter.moveOpBefore(op, maskOp);
-      op = triton::predicateOp(rewriter, op, maskOp.getPred());
-    }
-    maskOp->replaceAllUsesWith(
-        maskOp.getBody()->getTerminator()->getOperands());
-    maskOp->erase();
-  }
-}
-
 static bool hasMMAv5WaitsInLastStage(scf::ForOp forOp,
                                      CoarseSchedule &schedule) {
   int maxStage = schedule.getNumStages() - 1;
@@ -129,11 +67,11 @@ static void expandLoops(ModuleOp moduleOp) {
       if (isEpilogue) {
         // Return false for the predicate of the peeled iteration
         return rewriter.create<mlir::arith::ConstantIntOp>(
-            predOp.getLoc(), 0, predOp.getResult().getType());
+            predOp.getLoc(), predOp.getResult().getType(), 0);
       } else {
         if (predOp.getStage() == predOp.getMaxStage() - 1) {
           return rewriter.create<mlir::arith::ConstantIntOp>(
-              predOp.getLoc(), 1, predOp.getResult().getType());
+              predOp.getLoc(), predOp.getResult().getType(), 1);
         } else {
           OpBuilder::InsertionGuard guard(rewriter);
           rewriter.setInsertionPoint(op);

@@ -9,6 +9,7 @@
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/MathExtras.h"
 
 namespace mlir {
 namespace triton {
@@ -444,16 +445,9 @@ template <class Op> LogicalResult verifyReduceScan(Op &op) {
     return op.emitOpError() << "must have the same number of inputs as outputs";
   }
 
-  auto getElementType = [](Type ty) {
-    if (auto tensorType = dyn_cast<RankedTensorType>(ty)) {
-      return tensorType.getElementType();
-    }
-    return ty;
-  };
-
   for (auto [opElemTy, resTy] :
        llvm::zip(op.getElementTypes(), op.getResultTypes())) {
-    if (opElemTy != getElementType(resTy)) {
+    if (opElemTy != getElementTypeOrSelf(resTy)) {
       return op.emitOpError() << "operand types and result types must agree";
     }
   }
@@ -471,7 +465,6 @@ static LogicalResult verifyRegionsImpl(Op &op) {
                             << " arguments, but given block with "
                             << block.getNumArguments() << " arguments";
   }
-  unsigned i = 0;
   const auto &blockArgTypes = block.getArgumentTypes();
   for (unsigned i = 0; i < numArgs; ++i) {
     const auto &blockArgTy = blockArgTypes[i];
@@ -517,8 +510,8 @@ getInputTypesImpl(const Operation::operand_range &operands) {
   return srcTys;
 }
 
-static llvm::SmallVector<Type>
-getElementTypesImpl(const Operation::operand_range &operands) {
+template <typename ValueRange>
+static llvm::SmallVector<Type> getElementTypesImpl(const ValueRange &operands) {
   llvm::SmallVector<Type> srcElemTys;
   srcElemTys.reserve(operands.size());
   for (const auto &op : operands) {
@@ -593,6 +586,59 @@ llvm::SmallVector<Type> ScanOp::getElementTypes() {
 }
 
 unsigned ScanOp::getNumOperands() { return this->getOperands().size(); }
+
+//-- MapElementwiseOp
+LogicalResult MapElementwiseOp::verify() {
+  if (getOperands().empty()) {
+    return emitOpError() << "MapElementwiseOp must have at least 1 operand";
+  }
+  if (!llvm::isPowerOf2_32(getPack())) {
+    return emitOpError() << "Pack must be a power of 2";
+  }
+  return success();
+}
+
+template <typename T>
+SmallVector<T> repeatInterleave(const SmallVectorImpl<T> &vs, int nRepeat) {
+  SmallVector<T> result;
+  result.reserve(vs.size() * nRepeat);
+  for (auto v : vs)
+    for (auto _ : llvm::seq(nRepeat))
+      result.push_back(v);
+  return result;
+}
+
+LogicalResult MapElementwiseOp::verifyRegions() {
+  // Verify signature
+  auto *firstBlock = &getRegion().getBlocks().front();
+  if (firstBlock->getNumArguments() != getNumOperands() * getPack()) {
+    return emitOpError() << "region has wrong number of arguments";
+  }
+
+  auto expectedArgTypes =
+      repeatInterleave(getElementTypesImpl(getOperands()), getPack());
+  if (firstBlock->getArgumentTypes() != expectedArgTypes) {
+    return emitError() << "argument types did not match";
+  }
+  auto expectedReturnTypes =
+      repeatInterleave(getElementTypesImpl(getResults()), getPack());
+  auto walkRes = getRegion().walk([&](Operation *op) -> WalkResult {
+    auto memEffects = dyn_cast<MemoryEffectOpInterface>(op);
+    // Ban stores as we won't get the redundant masking correct by treating it
+    // as a scalar.
+    if (memEffects && memEffects.hasEffect<MemoryEffects::Write>()) {
+      return op->emitOpError()
+             << "Stores are not supported inside map_elementwise";
+    }
+    if (isa<MapElementwiseReturnOp>(op) &&
+        op->getOperandTypes() != expectedReturnTypes) {
+      return op->emitError()
+             << "region return does not match map_elementwise result";
+    }
+    return WalkResult::advance();
+  });
+  return success(!walkRes.wasInterrupted());
+}
 
 //-- SplatOp --
 OpFoldResult SplatOp::fold(FoldAdaptor adaptor) {
@@ -919,7 +965,7 @@ LogicalResult BroadcastOp::verify() {
   if (srcShape.size() != resultShape.size()) {
     return emitError("rank of source must be same as rank of result");
   }
-  for (int i = 0; i < srcShape.size(); i++) {
+  for (size_t i = 0; i < srcShape.size(); i++) {
     if (srcShape[i] != 1 && srcShape[i] != resultShape[i]) {
       return emitError("Different dimensions at index ")
              << i << " between source and result.  "
@@ -1005,7 +1051,7 @@ void FuncOp::build(OpBuilder &builder, OperationState &state, StringRef name,
     return;
   assert(type.getNumInputs() == argAttrs.size());
   call_interface_impl::addArgAndResultAttrs(
-      builder, state, argAttrs, /*resultAttrs=*/std::nullopt,
+      builder, state, argAttrs, /*resultAttrs=*/{},
       getArgAttrsAttrName(state.name), getResAttrsAttrName(state.name));
 }
 
@@ -1241,7 +1287,7 @@ LogicalResult GatherOp::verify() {
   if (getAxis() >= srcTy.getRank()) {
     return emitOpError("gather dimension must be less than the input rank");
   }
-  for (int dim = 0; dim < indicesTy.getRank(); ++dim) {
+  for (uint32_t dim = 0; dim < indicesTy.getRank(); ++dim) {
     if (dim == getAxis())
       continue;
     if (indicesTy.getShape()[dim] != srcTy.getShape()[dim]) {

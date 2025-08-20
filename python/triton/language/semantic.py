@@ -219,7 +219,7 @@ class TritonSemantic(Generic[TensorTy]):
         min_value = self.scalar_constant(min_value, tl.int64)
         cond = self.and_(self.less_equal(ret, max_value), self.greater_equal(ret, min_value))
         msg = f"int{lhs_sca_ty.int_bitwidth} overflow detected for operation {binary_op.__name__}"
-        self.device_assert(cond, msg)
+        self.device_assert(cond, msg, None)
 
     def add(self, input: TensorTy | numbers.Number, other: TensorTy | numbers.Number,
             sanitize_overflow: bool) -> TensorTy:
@@ -618,6 +618,9 @@ class TritonSemantic(Generic[TensorTy]):
             return value
         ret_ty = tl.block_type(value.dtype, shape)
         return self.tensor(self.builder.create_splat(ret_ty.to_ir(self.builder), value.handle), ret_ty)
+
+    def unsplat(self, value: TensorTy) -> TensorTy:
+        return self.tensor(self.builder.create_unsplat(value.handle), value.dtype)
 
     def reshape(self, input: TensorTy, dst_shape: List[int], can_reorder: bool) -> TensorTy:
         numel = 1
@@ -1724,6 +1727,36 @@ class TritonSemantic(Generic[TensorTy]):
         gather = self.builder.create_gather(src.handle, index.handle, axis)
         return self.wrap_tensor(gather, src.type.scalar, index.type.shape)
 
+# ===----------------------------------------------------------------------===
+#                               Map Elementwise
+# ===----------------------------------------------------------------------===
+
+    def broadcast_tensors(self, *inputs):
+        if not inputs:
+            return ()
+        head, *tail = inputs
+        for i in range(len(tail)):
+            head, tail[i] = self.broadcast_impl_value(head, tail[i])
+        for i in range(len(tail)):
+            head, tail[i] = self.broadcast_impl_value(head, tail[i])
+        return (head, *tail)
+
+    def map_elementwise(self, inputs: Sequence[tl.tensor], result_types: Sequence[tl.dtype], pack: int,
+                        region_builder_fn) -> Tuple[tl.tensor, ...]:
+        inputs = self.broadcast_tensors(*inputs)
+
+        assert len(inputs) > 0, "map_elementwise must have at least 1 input tensor"
+        result_types = [inputs[0].type.with_element_ty(ty.scalar) for ty in result_types]
+        elementwise_op = self.builder.create_map_elementwise(
+            [t.handle for t in inputs],
+            [ty.to_ir(self.builder) for ty in result_types],
+            pack,
+        )
+        region_builder_fn(elementwise_op)
+        # assert elementwise_op.verify()
+
+        return tuple(self.tensor(elementwise_op.get_result(i), ty) for i, ty in enumerate(result_types))
+
 
 # ===----------------------------------------------------------------------===
 #                               Histogram
@@ -1775,9 +1808,11 @@ class TritonSemantic(Generic[TensorTy]):
         is_signed = [arg.dtype.is_int_signed() for arg in args]
         return self.tensor(self.builder.create_print(prefix, hex, new_args, is_signed), tl.void)
 
-    def device_assert(self, cond: TensorTy, msg: str) -> TensorTy:
+    def device_assert(self, cond: TensorTy, msg: str, mask: Optional[TensorTy]) -> TensorTy:
         if not self.builder.options.debug:
             return
+        if mask is not None:
+            cond = self.or_(cond, self.not_(mask))
         return self.tensor(self.builder.create_assert(cond.handle, msg), tl.void)
 
     def assume(self, cond) -> TensorTy:

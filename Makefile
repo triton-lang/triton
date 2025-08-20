@@ -6,7 +6,7 @@ PYTHON ?= python
 BUILD_DIR := $(shell cd python; $(PYTHON) -c 'from build_helpers import get_cmake_dir; print(get_cmake_dir())')
 TRITON_OPT := $(BUILD_DIR)/bin/triton-opt
 PYTEST := $(PYTHON) -m pytest
-LLVM_BUILD_PATH ?= ".llvm-project/build"
+LLVM_BUILD_PATH ?= "$(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))/.llvm-project/build"
 NUM_PROCS ?= 8
 
 # Incremental builds
@@ -35,22 +35,34 @@ test-unit: all
 		--ignore=language/test_subprocess.py --ignore=test_debug.py
 	$(PYTEST) -s -n $(NUM_PROCS) python/test/unit/language/test_subprocess.py
 	$(PYTEST) -s -n $(NUM_PROCS) python/test/unit/test_debug.py --forked
-	$(PYTEST) -s -n 8 python/triton_kernels/tests/
+	$(PYTEST) -s -n 6 python/triton_kernels/tests/
 	TRITON_DISABLE_LINE_INFO=0 $(PYTEST) -s python/test/unit/language/test_line_info.py
 	# Run attention separately to avoid out of gpu memory
 	$(PYTEST) -vs python/tutorials/06-fused-attention.py
-	$(PYTEST) -vs python/tutorials/gluon/01-attention-forward.py
+	$(PYTEST) -vs python/tutorials/gluon/01-intro.py python/tutorials/gluon/02-layouts.py python/tutorials/gluon/03-async-copy.py python/tutorials/gluon/04-tma.py python/tutorials/gluon/05-wgmma.py python/tutorials/gluon/06-tcgen05.py python/tutorials/gluon/07-persistence.py python/tutorials/gluon/08-warp-specialization.py
+	$(PYTEST) -vs python/examples/gluon/01-attention-forward.py
 	TRITON_ALWAYS_COMPILE=1 TRITON_DISABLE_LINE_INFO=0 LLVM_PASS_PLUGIN_PATH=python/triton/instrumentation/libGPUInstrumentationTestLib.so \
 		$(PYTEST) --capture=tee-sys -rfs -vvv python/test/unit/instrumentation/test_gpuhello.py
 	$(PYTEST) -s -n $(NUM_PROCS) python/test/gluon
 
+.PHONY: test-distributed
+test-distributed: all
+	$(PYTHON) -m pip install --upgrade pip
+	$(PYTHON) -m pip install python/triton_kernels -v
+	$(PYTEST) -s python/triton_kernels/bench/distributed.py
+
 .PHONY: test-gluon
 test-gluon: all
 	$(PYTEST) -s -n $(NUM_PROCS) python/test/gluon
+	$(PYTEST) -vs python/tutorials/gluon/01-attention-forward.py
 
 .PHONY: test-regression
 test-regression: all
 	$(PYTEST) -s -n $(NUM_PROCS) python/test/regression
+
+.PHONY: test-microbenchmark
+test-microbenchmark: all
+	$(PYTHON) python/test/microbenchmark/launch_overhead.py
 
 .PHONY: test-interpret
 test-interpret: all
@@ -61,7 +73,8 @@ test-interpret: all
 
 .PHONY: test-proton
 test-proton: all
-	$(PYTEST) -s -n 8 third_party/proton/test
+	$(PYTEST) -s -n 8 third_party/proton/test --ignore=third_party/proton/test/test_override.py
+	$(PYTEST) -s third_party/proton/test/test_override.py
 
 .PHONY: test-python
 test-python: test-unit test-regression test-interpret test-proton
@@ -114,3 +127,17 @@ golden-samples: triton-opt
 	$(TRITON_OPT) test/TritonGPU/samples/descriptor-matmul-pipeline.mlir.in -tritongpu-assign-latencies -tritongpu-schedule-loops -tritongpu-pipeline -canonicalize | \
 		$(PYTHON) utils/generate-test-checks.py --source test/TritonGPU/samples/descriptor-matmul-pipeline.mlir.in --source_delim_regex="\bmodule" \
 		-o test/TritonGPU/samples/descriptor-matmul-pipeline.mlir
+
+# Documentation
+#
+.PHONY: docs-requirements
+docs-requirements:
+	$(PYTHON) -m pip install -r docs/requirements.txt -q
+
+.PHONY: docs-only
+docs-only:
+	cd docs; PATH="$(BUILD_DIR):$(PATH)" $(PYTHON) -m sphinx . _build/html/main
+
+.PHONY: docs
+.NOPARALLEL: docs
+docs: docs-requirements docs-only

@@ -3,7 +3,6 @@
 #include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
-#include "third_party/proton/dialect/include/Dialect/Proton/IR/Dialect.h"
 #include "triton/Conversion/TritonToTritonGPU/Passes.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
@@ -532,6 +531,32 @@ struct TritonScanPattern : public OpConversionPattern<triton::ScanOp> {
   }
 };
 
+struct TritonMapElementwisePattern
+    : public OpConversionPattern<triton::MapElementwiseOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::MapElementwiseOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto converter = getTypeConverter();
+    SmallVector<Type> resultTys;
+    auto err = converter->convertTypes(op.getResults().getType(), resultTys);
+    if (failed(err)) {
+      return err;
+    }
+
+    auto newMapOp = rewriter.create<triton::MapElementwiseOp>(
+        op.getLoc(), resultTys, adaptor.getOperands(), op.getPack());
+    addNamedAttrs(newMapOp, adaptor.getAttributes());
+
+    auto &newScalarOp = newMapOp.getScalarOp();
+    rewriter.cloneRegionBefore(op.getScalarOp(), newScalarOp,
+                               newScalarOp.end());
+    rewriter.replaceOp(op, newMapOp.getResult());
+    return success();
+  }
+};
+
 class TritonFuncOpPattern : public OpConversionPattern<triton::FuncOp> {
 public:
   using OpConversionPattern::OpConversionPattern;
@@ -595,6 +620,7 @@ void populateTritonPatterns(TritonGPUTypeConverter &typeConverter,
       GenericOpPattern<triton::IntToPtrOp>,
       GenericOpPattern<triton::PtrToIntOp>,
       GenericOpPattern<triton::SplatOp>,
+      GenericOpPattern<triton::UnsplatOp>,
       GenericOpPattern<triton::AddPtrOp>,
       TritonBroadcastPattern,
       TritonCatPattern,
@@ -614,6 +640,7 @@ void populateTritonPatterns(TritonGPUTypeConverter &typeConverter,
       TritonTransPattern,
       TritonDotPattern,
       TritonDotScaledPattern,
+      TritonMapElementwisePattern,
       GatherScatterOpPattern<DescriptorGatherOp>,
       GatherScatterOpPattern<DescriptorScatterOp>,
       GenericOpPattern<triton::LoadOp>,
@@ -633,17 +660,6 @@ void populateTritonPatterns(TritonGPUTypeConverter &typeConverter,
       TritonFuncOpPattern
       // clang-format on
       >(typeConverter, context);
-}
-// Proton patterns
-// NOTE: Because Proton's inputs are scalars and not tensors this conversion
-// isn't strictly necessary however you could envision a case where we pass in
-// tensors in for Triton object specific tracing operations in which case we
-// would need to fill in the OpConversionPattern
-void populateProtonPatterns(TritonGPUTypeConverter &typeConverter,
-                            RewritePatternSet &patterns) {
-  MLIRContext *context = patterns.getContext();
-  patterns.add<GenericOpPattern<triton::proton::RecordOp>>(typeConverter,
-                                                           context);
 }
 //
 // SCF patterns
@@ -858,7 +874,6 @@ public:
     populateArithPatternsAndLegality(typeConverter, patterns, target);
     populateMathPatternsAndLegality(typeConverter, patterns, target);
     populateTritonPatterns(typeConverter, patterns, numCTAs);
-    populateProtonPatterns(typeConverter, patterns);
     // TODO: can we use
     //    mlir::scf::populateSCFStructurealTypeConversionsAndLegality(...) here?
     populateSCFPatterns(typeConverter, patterns);

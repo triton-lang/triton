@@ -68,6 +68,15 @@ bool isOuterLoop(scf::ForOp forOp);
 /// Function to mask operations during scheduling.
 Operation *predicateOp(RewriterBase &rewriter, Operation *op, Value pred);
 
+/// Wrap the operation into a MaskOp using the provided predicate, enabling high
+/// level predication abstraction during pipelining.
+Operation *wrapInMaskOp(RewriterBase &rewriter, Operation *op, Value pred);
+
+// Utilize high level predication abstraction to perform optimizations before
+// lowering to predicated operations
+void resolveMaskOp(ModuleOp moduleOp,
+                   DenseSet<triton::gpu::MaskOp> &peeledMaskOps);
+
 // Return true if the given ForOp has the attribute
 // `tt.disallow_acc_multi_buffer` set to true.
 bool getDisallowAccMultiBuffer(scf::ForOp forOp);
@@ -106,8 +115,7 @@ DenseMap<Operation *, int> deserializeLatencies(Operation *op);
 Value createScalarAlloc(ImplicitLocOpBuilder &rewriter, Type type,
                         unsigned numBuffers);
 // Create an allocation and init the mbarriers.
-Value createBarrierAlloc(scf::ForOp forOp, int numBarriers,
-                         int arriveCount = 1);
+Value createBarrierAlloc(Operation *op, int numBarriers, int arriveCount = 1);
 // Create an allocation that can hold distance number of tensor shapes.
 Value createAlloc(Operation *insertBefore, RankedTensorType ty, Location loc,
                   gpu::SharedEncodingTrait sharedEnc, unsigned distance);
@@ -123,7 +131,14 @@ void combineRedundantWaitOps(
     llvm::SmallSetVector<gpu::AsyncWaitOp, 8> &waitOps);
 
 // Get the type of the view of a multi-buffered tensor value.
-gpu::MemDescType getBufferViewType(gpu::MemDescType allocTy);
+gpu::MemDescType getBufferViewType(gpu::MemDescType allocTy,
+                                   bool mutableMemory = true);
+
+// Get a mutable, multi-buffered version of the given memdesc type, with
+// multiplicity "depth".
+gpu::MemDescType getMultiBufferedType(gpu::MemDescType memDescType,
+                                      int32_t depth);
+
 // Get a generic shared encoding for a tensor.
 gpu::SharedEncodingTrait getSharedEncoding(RankedTensorType ty);
 // Get a shared encoding for a tensor based on its uses.
@@ -133,11 +148,11 @@ gpu::SharedEncodingTrait getSharedEncoding(Operation *loadOp);
 // specified.
 int getNumStagesOrDefault(scf::ForOp forOp, int defaultNumStages);
 
-// Given a result of MemDescSubview, or Alloca, create a MemDescSubview with a
+// Given a result of MemDescIndex, or Alloca, create a MemDescIndex with a
 // single buffer slice (leading dimension equal to 1), at the given index.
 TypedValue<triton::gpu::MemDescType>
 createSingleBufferView(OpBuilder &builder, Value alloc, Value idx);
-// Given a result of MemDescSubview, or Alloca, create a MemDescSubview with a
+// Given a result of MemDescIndex, or Alloca, create a MemDescIndex with a
 // single buffer slice (leading dimension equal to 1), at the given index.
 TypedValue<triton::gpu::MemDescType>
 createSingleBufferView(OpBuilder &builder, Value alloc, int idx);
@@ -147,6 +162,22 @@ Value createIncrementModulo(OpBuilder &builder, Location loc, Value counter,
                             Value *outWrapCond = nullptr);
 
 scf::ForOp lowerTMADescriptors(scf::ForOp forOp, CoarseSchedule &schedule);
+
+DenseSet<Operation *>
+getTopLevelUsersInLoop(Operation *op, scf::ForOp forOp,
+                       std::function<bool(Operation *)> filter = nullptr);
+
+// Return the "first" op in terms of the stage and cluser ordering
+Operation *
+getFirstUseOfPipelinedOp(ArrayRef<Operation *> ops, scf::ForOp forOp,
+                         CoarseSchedule &schedule,
+                         std::function<bool(Operation *)> filterUse = nullptr);
+
+// Return the "last" op in terms of the stage and cluser ordering
+Operation *
+getLastUseOfPipelinedOp(ArrayRef<Operation *> ops, scf::ForOp forOp,
+                        CoarseSchedule &schedule,
+                        std::function<bool(Operation *)> filterUse = nullptr);
 
 } // namespace triton
 } // namespace mlir

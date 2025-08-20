@@ -5,10 +5,10 @@ import torch
 import triton
 import triton.language as tl
 from triton import knobs
+from typing import Optional, Set, Union
 import pytest
 
 from numpy.random import RandomState
-from typing import Optional, Union
 from triton.runtime.jit import TensorWrapper, reinterpret, type_canonicalisation_dict
 
 int_dtypes = ['int8', 'int16', 'int32', 'int64']
@@ -76,12 +76,15 @@ def is_hip_cdna4():
 
 def is_hip_gfx12():
     target = get_current_target()
-    print(target.arch)
     return target is not None and target.backend == 'hip' and 'gfx12' in target.arch
 
 
 def is_hip_cdna():
     return is_hip_cdna2() or is_hip_cdna3() or is_hip_cdna4()
+
+
+def get_hip_lds_size():
+    return 163840 if is_hip_cdna4() else 65536
 
 
 def is_xpu():
@@ -144,7 +147,7 @@ def to_triton(x: np.ndarray, device, dst_type=None) -> Union[TensorWrapper, torc
 
 
 def str_to_triton_dtype(x: str) -> tl.dtype:
-    return tl.str_to_ty(type_canonicalisation_dict[x])
+    return tl.str_to_ty(type_canonicalisation_dict[x], None)
 
 
 def torch_dtype_name(dtype) -> str:
@@ -199,3 +202,49 @@ def unwrap_tensor(t: Union[torch.Tensor, triton.runtime.jit.TensorWrapper]) -> t
     if isinstance(t, triton.runtime.jit.TensorWrapper):
         return t.base
     return t
+
+
+def _fresh_knobs_impl(skipped_attr: Optional[Set[str]] = None):
+    from triton import knobs
+
+    if skipped_attr is None:
+        skipped_attr = set()
+
+    monkeypatch = pytest.MonkeyPatch()
+
+    knobs_map = {
+        name: knobset
+        for name, knobset in knobs.__dict__.items()
+        if isinstance(knobset, knobs.base_knobs) and knobset != knobs.base_knobs and name not in skipped_attr
+    }
+
+    # We store which variables we need to unset below in finally because
+    # monkeypatch doesn't appear to reset variables that were never set
+    # before the monkeypatch.delenv call below.
+    env_to_unset = []
+    prev_propagate_env = knobs.propagate_env
+
+    def fresh_function():
+        nonlocal env_to_unset
+        for name, knobset in knobs_map.items():
+            setattr(knobs, name, knobset.copy().reset())
+            for knob in knobset.knob_descriptors.values():
+                if knob.key in os.environ:
+                    monkeypatch.delenv(knob.key, raising=False)
+                else:
+                    env_to_unset.append(knob.key)
+        knobs.propagate_env = True
+        return knobs
+
+    def reset_function():
+        for name, knobset in knobs_map.items():
+            setattr(knobs, name, knobset)
+        # `undo` should be placed before `del os.environ`
+        # Otherwise, it may restore environment variables that monkeypatch deleted
+        monkeypatch.undo()
+        for k in env_to_unset:
+            if k in os.environ:
+                del os.environ[k]
+        knobs.propagate_env = prev_propagate_env
+
+    return fresh_function, reset_function

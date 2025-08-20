@@ -17,24 +17,18 @@ public:
   Value ballot(RewriterBase &rewriter, Location loc, Type type,
                Value cmp) const override;
 
+  void barrier(Location loc, RewriterBase &rewriter,
+               bool isWarpSync = false) const override;
+
   void storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
                     std::optional<Value> ctaId, Value val,
                     Value pred) const override;
   Value loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
-                    std::optional<Value> ctaId, Type elemTy,
-                    Value pred) const override;
-
-  // FIXME: Need to kill this function
-  bool canUseStMatrix(RankedTensorType tensorTy, ArrayRef<unsigned> repShape,
-                      ArrayRef<unsigned> paddedRepShape,
-                      ArrayRef<unsigned> order,
-                      int swizzleByteSize) const override;
+                    std::optional<Value> ctaId, Type elemTy, Value pred,
+                    Operation *localLoadOp = nullptr) const override;
 
   bool supportLdMatrix() const override { return computeCapability >= 75; }
   bool supportStMatrix() const override { return computeCapability >= 90; }
-
-  void storeMatrixShared(RewriterBase &rewriter, Location loc, Value ptr,
-                         Value val) const override;
 
   Value shuffleXor(RewriterBase &rewriter, Location loc, Value val,
                    int i) const override;
@@ -46,7 +40,7 @@ public:
                    Value i) const override;
 
   Value programId(RewriterBase &rewriter, Location loc, ModuleOp moduleOp,
-                  int axis) const override;
+                  ProgramIDDim axis) const override;
 
   bool warpReduce(RewriterBase &rewriter, Location loc, SmallVector<Value> &acc,
                   triton::ReduceOp op, unsigned numLaneToReduce,

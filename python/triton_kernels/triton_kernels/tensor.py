@@ -1,15 +1,17 @@
-import torch
-from typing import Type
-from .reduction_details.reduce_bitmatrix import clear_sums, sum_bitmatrix_rows
 from dataclasses import dataclass, fields
+from typing import Type
+
+import torch
 from triton.tools.tensor_descriptor import TensorDescriptor
-from .tensor_details.layout import Layout, StridedLayout
+from triton.tools.ragged_tma import create_ragged_descriptor
+
+from .reduction_details.reduce_bitmatrix import clear_sums, sum_bitmatrix_rows
 from .target_info import cuda_capability_geq
+from .tensor_details.layout import Layout, StridedLayout
 
 
 @dataclass
 class Storage:
-
     data: torch.Tensor
     layout: Layout = None
 
@@ -41,11 +43,9 @@ class Storage:
         compliant = [strides[i] * bitwidth % 128 == 0 for i in range(ndim) if i != major_dim]
         return all(compliant)
 
-    def make_tma(self, block_shape, transpose=False):
+    def make_dense_tma(self, block_shape, transpose=False):
         strides = list(self.data.stride())
         shape = list(self.data.shape)
-        # TODO
-        # there is an issue w/ column-major TMA; we transpose instead
         transpose = self.data.stride()[-1] != 1
         if transpose:
             block_shape = block_shape[:-2] + [block_shape[-1], block_shape[-2]]
@@ -61,6 +61,13 @@ class Storage:
             shape[-1] = (shape[-1] + pad - 1) // pad * pad
         block_shape = self.layout.swizzle_block_shape(block_shape)
         return TensorDescriptor(self.data, shape, strides, block_shape)
+
+    def make_tma(self, block_shape, mode, transpose=False):
+        if mode in ["dense", "gather", "scatter"]:
+            return self.make_dense_tma(block_shape, transpose)
+        assert mode == "ragged"
+        ragged_dim = len(self.data.shape) - 2
+        return create_ragged_descriptor(self.data, block_shape, ragged_dim=ragged_dim)
 
 
 @dataclass
@@ -90,7 +97,6 @@ def bitwidth(type: IntegerType | FloatType | torch.dtype):
 
 @dataclass
 class Tensor:
-
     storage: Storage | torch.Tensor
     dtype: IntegerType | FloatType | torch.dtype = None
     shape: list[int] | None = None
@@ -144,6 +150,19 @@ class Tensor:
     def element_size(self):
         return bitwidth(self.dtype) // 8
 
+    @property
+    def data(self):
+        t = self.storage
+        return t.data if isinstance(t, Storage) else t
+
+    def dim(self):
+        return self.ndim
+
+    def size(self, i=None):
+        if i is None:
+            return self.shape
+        return self.shape[i]
+
 
 @dataclass
 class Bitmatrix(Tensor):
@@ -172,7 +191,9 @@ class Bitmatrix(Tensor):
         return sum_bitmatrix_rows(self, out_ret, partials_block_size)
 
 
-def get_layout(tensor: torch.Tensor | Tensor):
+def get_layout(tensor: torch.Tensor | Tensor | None):
+    if tensor is None:
+        return None
     if isinstance(tensor, Tensor):
         return tensor.storage.layout
     return StridedLayout
@@ -186,11 +207,11 @@ def wrap_torch_tensor(torch_tensor, dtype=None):
     return Tensor(Storage(torch_tensor), dtype=dtype, shape=shape)
 
 
-def convert_layout(tensor: Tensor, layout_cls: Type[Layout]):
+def convert_layout(tensor: Tensor, layout_cls: Type[Layout], **layout_kwargs):
     assert isinstance(tensor, Tensor)
     old_storage = tensor.storage
     old_data = old_storage.layout.unswizzle_data(old_storage.data)
-    new_layout = layout_cls(old_data.shape)
+    new_layout = layout_cls(old_data.shape, **layout_kwargs)
     new_data = new_layout.swizzle_data(old_data)
     attrs = {k.name: getattr(tensor, k.name) for k in fields(tensor) if k.name != "storage"}
     return Tensor(Storage(new_data, new_layout), **attrs)

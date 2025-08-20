@@ -2,7 +2,7 @@
 #blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
   // CHECK-LABEL: buffer_atomic_cas_i64
-  tt.func public @buffer_atomic_cas_i64(%arg0: !tt.ptr<i64> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %arg1: !tt.ptr<i64> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) attributes {noinline = false} {
+  tt.func public @buffer_atomic_cas_i64(%arg0: !tt.ptr<i64> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %arg1: !tt.ptr<i64> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) {
     // CHECK: %[[cas_val:.*]] = llvm.mlir.constant(2 : i64) : i64
     // CHECK: %[[cas_val_cast:.*]] = llvm.bitcast %[[cas_val]] : i64 to i64
     // CHECK: %[[cas_val_insert:.*]] = llvm.insertvalue %[[cas_val_cast]], %{{.*}}[1] : !llvm.struct<(i64, i64)>

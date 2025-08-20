@@ -772,7 +772,7 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 
 
 module attributes {"ttg.num-warps" = 4 : i32} {
-  tt.func public @scalar_pointers(%arg0: !tt.ptr<i64> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+  tt.func public @scalar_pointers(%arg0: !tt.ptr<i64> {tt.divisibility = 16 : i32}) {
     %c1_i32 = arith.constant 1 : i32
     %c0_i64 = arith.constant 0 : i64
     %c100_i32 = arith.constant 100 : i32
@@ -786,7 +786,7 @@ module attributes {"ttg.num-warps" = 4 : i32} {
   }
 }
 
-// CHECK:   tt.func public @scalar_pointers(%[[VAL_0:.*]]: !tt.ptr<i64> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+// CHECK:   tt.func public @scalar_pointers(%[[VAL_0:.*]]: !tt.ptr<i64> {tt.divisibility = 16 : i32}) {
 // CHECK-DAG: %[[VAL_3:.*]] = arith.constant 0 : i64
 // CHECK-DAG: %[[VAL_4:.*]] = arith.constant 1 : i32
 // CHECK-DAG: %[[VAL_5:.*]] = arith.constant 100 : i32
@@ -1050,7 +1050,7 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // test_functional_regressions.test_inductor_cummax_bool
 // tt.bitcast immediately materializes the fat pointer, ending the analysis
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
-  tt.func public @test_inductor_cummax_bool(%arg0: !tt.ptr<i1> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %arg1: !tt.ptr<i1> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %arg2: !tt.ptr<i64> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) attributes {noinline = false} {
+  tt.func public @test_inductor_cummax_bool(%arg0: !tt.ptr<i1> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %arg1: !tt.ptr<i1> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %arg2: !tt.ptr<i64> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) {
     %cst = arith.constant dense<0> : tensor<64xi8, #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>>
     %0 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>>
     %1 = tt.splat %arg0 : !tt.ptr<i1> -> tensor<64x!tt.ptr<i1>, #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>>
@@ -1083,7 +1083,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 }
 
 // CHECK-LABEL:   tt.func public @test_inductor_cummax_bool(
-// CHECK-SAME:  %[[VAL_0:.*]]: !tt.ptr<i1> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %[[VAL_1:.*]]: !tt.ptr<i1> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %[[VAL_2:.*]]: !tt.ptr<i64> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) attributes {noinline = false} {
+// CHECK-SAME:  %[[VAL_0:.*]]: !tt.ptr<i1> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %[[VAL_1:.*]]: !tt.ptr<i1> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %[[VAL_2:.*]]: !tt.ptr<i64> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) {
 // CHECK:           %[[VAL_3:.*]] = arith.constant dense<0> : tensor<64xi8, #[[$ATTR_0]]>
 // CHECK:           %[[VAL_4:.*]] = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #[[$ATTR_0]]>
 // CHECK:           %[[VAL_5:.*]] = tt.splat %[[VAL_0]] : !tt.ptr<i1> -> tensor<64x!tt.ptr<i1>, #[[$ATTR_0]]>
@@ -1117,7 +1117,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 // -----
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
-  tt.func public @test_atomic_rmw(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) attributes {noinline = false} {
+  tt.func public @test_atomic_rmw(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) {
     %true = arith.constant true
     %0 = tt.get_program_id x : i32
     %1 = tt.addptr %arg0, %0 : !tt.ptr<f16>, i32
@@ -1128,7 +1128,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 }
 
 // CHECK-LABEL:   tt.func public @test_atomic_rmw(
-// CHECK-SAME:  %[[VAL_0:.*]]: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %[[VAL_1:.*]]: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) attributes {noinline = false} {
+// CHECK-SAME:  %[[VAL_0:.*]]: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %[[VAL_1:.*]]: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) {
 // CHECK:           %[[VAL_2:.*]] = arith.constant true
 // CHECK:           %[[VAL_3:.*]] = tt.get_program_id x : i32
 // CHECK:           %[[VAL_4:.*]] = tt.addptr %[[VAL_0]], %[[VAL_3]] : !tt.ptr<f16>, i32
@@ -1140,7 +1140,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 // -----
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
-  tt.func public @test_atomic_rmw_bf16(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %arg1: !tt.ptr<bf16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) attributes {noinline = false} {
+  tt.func public @test_atomic_rmw_bf16(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %arg1: !tt.ptr<bf16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) {
     %true = arith.constant true
     %0 = tt.get_program_id x : i32
     %1 = tt.addptr %arg0, %0 : !tt.ptr<bf16>, i32
@@ -1151,7 +1151,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 }
 
 // CHECK-LABEL:   tt.func public @test_atomic_rmw_bf16(
-// CHECK-SAME:  %[[VAL_0:.*]]: !tt.ptr<bf16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %[[VAL_1:.*]]: !tt.ptr<bf16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) attributes {noinline = false} {
+// CHECK-SAME:  %[[VAL_0:.*]]: !tt.ptr<bf16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %[[VAL_1:.*]]: !tt.ptr<bf16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) {
 // CHECK:           %[[VAL_2:.*]] = arith.constant true
 // CHECK:           %[[VAL_3:.*]] = tt.get_program_id x : i32
 // CHECK:           %[[VAL_4:.*]] = tt.addptr %[[VAL_0]], %[[VAL_3]] : !tt.ptr<bf16>, i32
@@ -1164,7 +1164,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // expected-remark@+1 {{expected at least 1 use of unrealized_cast}}
-  tt.func public @empty_kernel(%arg0: !tt.ptr<i8> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) attributes {noinline = false} {
+  tt.func public @empty_kernel(%arg0: !tt.ptr<i8> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) {
     tt.return
   }
 }
@@ -1172,7 +1172,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 // -----
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
-  tt.func public @test_reduce(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) attributes {noinline = false} {
+  tt.func public @test_reduce(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) {
     %cst = arith.constant dense<16> : tensor<32x1xi32, #ttg.slice<{dim = 1, parent = #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>}>>
     %cst_0 = arith.constant dense<16> : tensor<1x2x1xi32, #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>>
     %cst_1 = arith.constant dense<16> : tensor<32x1x1xi32, #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>>
@@ -1222,7 +1222,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 // CHECK: #[[$ATTR_3:.+]] = #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>
 // CHECK-LABEL:   tt.func public @test_reduce(
-// CHECK-SAME:  %[[VAL_0:.*]]: !tt.ptr<f32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %[[VAL_1:.*]]: !tt.ptr<f32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) attributes {noinline = false} {
+// CHECK-SAME:  %[[VAL_0:.*]]: !tt.ptr<f32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %[[VAL_1:.*]]: !tt.ptr<f32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) {
 // CHECK:           %[[VAL_2:.*]] = arith.constant dense<16> : tensor<32x1xi32, #ttg.slice<{dim = 1, parent = #[[$ATTR_3]]}>>
 // CHECK:           %[[VAL_3:.*]] = arith.constant dense<16> : tensor<1x2x1xi32, #[[$ATTR_3]]>
 // CHECK:           %[[VAL_4:.*]] = arith.constant dense<16> : tensor<32x1x1xi32, #[[$ATTR_3]]>
@@ -1272,7 +1272,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 // -----
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
-  tt.func public @block_copy_kernel(%arg0: !tt.ptr<i1> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %arg1: !tt.ptr<i1> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %arg2: i32 {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+  tt.func public @block_copy_kernel(%arg0: !tt.ptr<i1> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %arg1: !tt.ptr<i1> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %arg2: i32 {tt.divisibility = 16 : i32}) {
     %cst = arith.constant dense<0> : tensor<64xi64, #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>>
     %c2_i32 = arith.constant 2 : i32
     %c64_i32 = arith.constant 64 : i32
@@ -1307,7 +1307,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 // CHECK: #[[$ATTR_4:.+]] = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 // CHECK-LABEL:   tt.func public @block_copy_kernel(
-// CHECK-SAME:  %[[VAL_0:.*]]: !tt.ptr<i1> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %[[VAL_1:.*]]: !tt.ptr<i1> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %[[VAL_2:.*]]: i32 {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+// CHECK-SAME:  %[[VAL_0:.*]]: !tt.ptr<i1> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %[[VAL_1:.*]]: !tt.ptr<i1> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %[[VAL_2:.*]]: i32 {tt.divisibility = 16 : i32}) {
 // CHECK:           %[[VAL_3:.*]] = arith.constant dense<0> : tensor<64xi64, #[[$ATTR_4]]>
 // CHECK:           %[[VAL_4:.*]] = arith.constant 2 : i32
 // CHECK:           %[[VAL_5:.*]] = arith.constant 64 : i32
@@ -1342,7 +1342,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 // -----
 
 module attributes {} {
-  tt.func public @asin_kernel(%arg0: !tt.ptr<f32>, %arg1: !tt.ptr<f32>, %arg2: i32) attributes {noinline = false} {
+  tt.func public @asin_kernel(%arg0: !tt.ptr<f32>, %arg1: !tt.ptr<f32>, %arg2: i32) {
     %c1024_i32 = arith.constant 1024 : i32
     %0 = tt.get_program_id x : i32
     %1 = arith.muli %0, %c1024_i32 : i32
@@ -1363,7 +1363,7 @@ module attributes {} {
 }
 
 // CHECK-LABEL:   tt.func public @asin_kernel(
-// CHECK-SAME:                                %[[VAL_0:.*]]: !tt.ptr<f32>, %[[VAL_1:.*]]: !tt.ptr<f32>, %[[VAL_2:.*]]: i32) attributes {noinline = false} {
+// CHECK-SAME:                                %[[VAL_0:.*]]: !tt.ptr<f32>, %[[VAL_1:.*]]: !tt.ptr<f32>, %[[VAL_2:.*]]: i32) {
 // CHECK:           %[[VAL_3:.*]] = arith.constant 1024 : i32
 // CHECK:           %[[VAL_4:.*]] = tt.get_program_id x : i32
 // CHECK:           %[[VAL_5:.*]] = arith.muli %[[VAL_4]], %[[VAL_3]] : i32
@@ -1387,7 +1387,7 @@ module attributes {} {
 // -----
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
-  tt.func public @inline_asm(%arg0: !tt.ptr<i8>, %arg1: !tt.ptr<i8>) attributes {noinline = false} {
+  tt.func public @inline_asm(%arg0: !tt.ptr<i8>, %arg1: !tt.ptr<i8>) {
     %0 = tt.make_range {end = 512 : i32, start = 0 : i32} : tensor<512xi32>
     %1 = tt.splat %arg0 : !tt.ptr<i8> -> tensor<512x!tt.ptr<i8>>
     %2 = tt.addptr %1, %0 : tensor<512x!tt.ptr<i8>>, tensor<512xi32>
@@ -1402,7 +1402,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 // CHECK-LABEL:   tt.func public @inline_asm(
 // CHECK-SAME:                               %[[VAL_0:.*]]: !tt.ptr<i8>,
-// CHECK-SAME:                               %[[VAL_1:.*]]: !tt.ptr<i8>) attributes {noinline = false} {
+// CHECK-SAME:                               %[[VAL_1:.*]]: !tt.ptr<i8>) {
 // CHECK:           %[[VAL_2:.*]] = tt.make_range {end = 512 : i32, start = 0 : i32} : tensor<512xi32>
 // CHECK:           %[[VAL_3:.*]] = tt.splat %[[VAL_0]] : !tt.ptr<i8> -> tensor<512x!tt.ptr<i8>>
 // CHECK:           %[[VAL_4:.*]] = tt.addptr %[[VAL_3]], %[[VAL_2]] : tensor<512x!tt.ptr<i8>>, tensor<512xi32>

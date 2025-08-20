@@ -4,6 +4,7 @@
 #include "triton/Conversion/MLIRTypes.h"
 
 namespace mlir::triton {
+enum class ProgramIDDim : uint32_t;
 
 class TargetInfoBase {
 public:
@@ -13,6 +14,13 @@ public:
 
   virtual Value ballot(RewriterBase &rewriter, Location loc, Type type,
                        Value cmp) const = 0;
+
+  // Insert a synchronization barrier. If isWarpSync is true, emit a warp-level
+  // synchronization when supported by the backend; otherwise emit a block/CTA
+  // level barrier. Backends that do not support warp-level barriers should
+  // conservatively emit a block-level barrier.
+  virtual void barrier(Location loc, RewriterBase &rewriter,
+                       bool isWarpSync = false) const = 0;
 
   // Store/load a value from shared memory, either in the same CTA or, if
   // `ctaId` is non-nullopt, in another CTA in the same group.
@@ -25,8 +33,8 @@ public:
                             std::optional<Value> ctaId, Value val,
                             Value pred) const = 0;
   virtual Value loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
-                            std::optional<Value> ctaId, Type elemTy,
-                            Value pred) const = 0;
+                            std::optional<Value> ctaId, Type elemTy, Value pred,
+                            Operation *localLoadOp = nullptr) const = 0;
 
   void storeShared(RewriterBase &rewriter, Location loc, Value ptr, Value val,
                    Value pred) const {
@@ -38,15 +46,6 @@ public:
                        pred);
   }
 
-  virtual bool canUseStMatrix(RankedTensorType tensorTy,
-                              ArrayRef<unsigned> repShape,
-                              ArrayRef<unsigned> paddedRepShape,
-                              ArrayRef<unsigned> order,
-                              int swizzleByteSize) const = 0;
-
-  virtual void storeMatrixShared(RewriterBase &rewriter, Location loc,
-                                 Value ptr, Value val) const = 0;
-
   virtual Value shuffleXor(RewriterBase &rewriter, Location loc, Value val,
                            int i) const = 0;
   virtual Value shuffleUp(RewriterBase &rewriter, Location loc, Value val,
@@ -57,7 +56,7 @@ public:
                            Value i) const = 0;
 
   virtual Value programId(RewriterBase &rewriter, Location loc,
-                          ModuleOp moduleOp, int axis) const = 0;
+                          ModuleOp moduleOp, ProgramIDDim axis) const = 0;
 
   virtual bool warpReduce(RewriterBase &rewriter, Location loc,
                           SmallVector<Value> &acc, triton::ReduceOp op,

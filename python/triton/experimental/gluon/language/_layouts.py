@@ -1,12 +1,14 @@
 from dataclasses import dataclass
 from typing import List, Optional
 from triton.language.core import _unwrap_if_constexpr, _unwrap_shape, constexpr_type
+from triton.runtime.jit import constexpr_function
 
 __all__ = [
     "AutoLayout",
     "BlockedLayout",
     "SliceLayout",
     "DistributedLinearLayout",
+    "DotOperandLayout",
     "NVMMADistributedLayout",
     "NVMMASharedLayout",
     "SwizzledSharedLayout",
@@ -182,6 +184,32 @@ class DistributedLinearLayout(DistributedLayout):
 
 
 @dataclass(frozen=True)
+class DotOperandLayout(DistributedLayout):
+    """
+    Represents a layout for a dot operand.
+
+    Args:
+        operand_index (int): 0 for LHS and 1 for RHS of the dot operation.
+        parent (DistributedLayout): The parent layout, representing the MMA.
+        k_width (int): Number of elements per 32-bits.
+    """
+    operand_index: int
+    parent: DistributedLayout
+    k_width: int
+
+    def __post_init__(self):
+        super().__setattr__("operand_index", _unwrap_if_constexpr(self.operand_index))
+        super().__setattr__("parent", _unwrap_if_constexpr(self.parent))
+        super().__setattr__("k_width", _unwrap_if_constexpr(self.k_width))
+
+    def _to_ir(self, builder):
+        return builder.get_dot_operand_layout(self.operand_index, self.parent._to_ir(builder), self.k_width)
+
+    def mangle(self) -> str:
+        return f"DO{self.operand_index}_{self.parent.mangle()}_{self.k_width}DO"
+
+
+@dataclass(frozen=True)
 class NVMMADistributedLayout(DistributedLayout):
     """
     Represents a layout for NVIDIA MMA (tensor core) operations.
@@ -233,6 +261,7 @@ class SharedLayout:
         return constexpr_type(self)
 
 
+@constexpr_function
 def _get_shape_per_cta(shape, cta_split_num):
     shape_per_cta = shape
     if cta_split_num is not None:
@@ -296,6 +325,7 @@ class NVMMASharedLayout(SharedLayout):
         )
 
     @staticmethod
+    @constexpr_function
     def get_default_for(block_shape, dtype, transposed=False, fp4_padded=False, ctas_per_cga=None, cta_split_num=None,
                         cta_order=None):
         """Returns an NVMMASharedLayout with default swizzling for a given shape.

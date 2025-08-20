@@ -47,7 +47,6 @@ jobs:
           echo "llvm=$(cat $llvm_file | cut -c 1-8)" >> $GITHUB_OUTPUT
           echo "nvidia=$(sha256sum $nvidia_file | cut -d ' ' -f 1)" >> $GITHUB_OUTPUT
           echo "json=$(cat $json_file)" >> $GITHUB_OUTPUT
-          echo "datetime=$(date -u -Iseconds)" >> $GITHUB_OUTPUT
         shell: bash
       - name: Cache build dependencies
         uses: actions/cache@v4
@@ -69,13 +68,16 @@ jobs:
       - name: Update PATH
         run: |
           echo "$HOME/.local/bin" >> $GITHUB_PATH
+      - name: Setup Python environment for GB200
+        if: ${{ matrix.runner[0] == 'nvidia-gb200' }}
+        run: |
+          echo "/venv/bin" >> $GITHUB_PATH
+          echo "VIRTUAL_ENV=/venv" >> $GITHUB_ENV
+          echo "PYTHONHOME=" >> $GITHUB_ENV
       - name: Install Triton
         env:
           CUDA_HOME: "/usr/local/cuda"
         run: |
-          if [ "${{ matrix.runner[0] }}" == "nvidia-gb200" ]; then
-            source /venv/bin/activate
-          fi
           nproc
           nvidia-smi
           echo "PATH is '$PATH'"
@@ -86,20 +88,17 @@ jobs:
       - name: Run lit tests
         run: make test-lit
       - name: Run python tests on CUDA
-        run: |
-          if [ "${{ matrix.runner[0] }}" == "nvidia-gb200" ]; then
-            source /venv/bin/activate
-          fi
-          make NUM_PROCS=24 test-unit
+        run: make NUM_PROCS=24 test-unit
+      - name: Run distributed tests
+        run: make test-distributed
       - name: Run interpreter tests
         if: ${{ matrix.runner[0] == 'nvidia-h100' }}
         run: make test-interpret
       - name: Run regression tests
-        run: |
-          if [ "${{ matrix.runner[0] }}" == "nvidia-gb200" ]; then
-            source /venv/bin/activate
-          fi
-          make test-regression
+        run: make test-regression
+      - name: Run microbenchmark tests
+        # Microbenchmark never fail but running them gives us an easy way to track performance changes.
+        run: make test-microbenchmark
       - name: Run C++ unittests
         run: make test-cpp
       - name: Run Proton tests

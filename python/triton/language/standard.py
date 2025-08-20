@@ -1,24 +1,25 @@
 from __future__ import annotations
 
-from ..runtime.jit import jit
+from ..runtime.jit import jit, constexpr_function
 from . import core
 from . import math
 
 # constexpr utilities
 
 
-def _log2(i: core.constexpr):
+@constexpr_function
+def _log2(i):
     log2 = 0
-    n = core.constexpr(i).value
+    n = i
     while n > 1:
         n >>= 1
         log2 += 1
-    return core.constexpr(log2)
+    return log2
 
 
-def _is_power_of_two(i: core.constexpr):
-    n = i.value
-    return core.constexpr((n & (n - 1)) == 0 and n != 0)
+@constexpr_function
+def _is_power_of_two(i):
+    return (i & (i - 1)) == 0 and i != 0
 
 
 # -----------------------
@@ -263,8 +264,8 @@ def _sum_combine(a, b):
 # sum
 
 
-def _pick_sum_dtype(in_dtype: core.constexpr, dtype: core.constexpr):
-    dtype = core._unwrap_if_constexpr(dtype)
+@constexpr_function
+def _pick_sum_dtype(in_dtype, dtype):
     if dtype is not None:
         return dtype
 
@@ -316,9 +317,9 @@ def _or_combine(x, y):
 
 @core._tensor_member_fn
 @jit
-@core._add_reduction_docstr("reduce_of")
+@core._add_reduction_docstr("reduce_or")
 def reduce_or(input, axis, keep_dims=False):
-    core.static_assert(input.type.scalar.is_int(), "reduce_of only supported for integers")
+    core.static_assert(input.type.scalar.is_int(), "reduce_or only supported for integers")
     return core.reduce(input, axis, _or_combine, keep_dims=keep_dims)
 
 
@@ -476,14 +477,13 @@ def bitonic_merge(x, dim: core.constexpr = None, descending: core.constexpr = co
     return _bitonic_merge(x, n_dims, descending, n_dims)
 
 
+@constexpr_function
 def _get_flip_dim(dim, shape):
-    dim = core._unwrap_if_constexpr(dim)
-    shape = core._unwrap_if_constexpr(shape)
     if dim is None:
         dim = len(shape) - 1
     if dim < 0:  # flip doesn't work if dim < 0 because the xor-swap for loop will start/end at the wrong index
         dim += len(shape)
-    return core.constexpr(dim)
+    return dim
 
 
 @core._tensor_member_fn
