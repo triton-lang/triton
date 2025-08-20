@@ -658,7 +658,7 @@ static void callMmaScaled(PTXBuilder &builder, int b, int m, int n, int k,
   unsigned aByte = (m / 2) & 0x3;
   unsigned bByte = n & 0x3;
   // byteId, threadId selection logic for the scale factor
-  // is dependant to chooseSM120DotScaledScaleLayout
+  // depends on chooseSM120DotScaledScaleLayout
   appendScale(aScaleValue, aByte, /*threadId*/ 0);
   appendScale(bScaleValue, bByte, /*threadId*/ 0);
 
