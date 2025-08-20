@@ -625,6 +625,25 @@ parseLinearLayout(DictionaryAttr &dict, AsmParser &parser,
   return LinearLayout(std::move(bases), std::move(outDimNames));
 }
 
+// We don't use the default implementation as it's a bit too verbose
+// This prints in the following format that is shape agnostic, in the sense
+// that we don't print explicitly the outShape of the LL
+// We always assume LLs to be surjective
+// <{register = [[0, 1], [8, 0], [0, 8], [64, 0]],
+//   lane = [[0, 2], [0, 4], [1, 0], [2, 0], [4, 0]],
+//   warp = [[16, 0], [32, 0]],
+//   block = []}>
+static void printLinearLayout(AsmPrinter &printer, const LinearLayout &ll) {
+  printer << "<{" << join(ll.getBases(), ", ", [](const auto &base) {
+    return base.first.str() + " = " + "[" +
+           join(base.second, ", ",
+                [](const std::vector<int32_t> &vec) {
+                  return "[" + join(vec, ", ") + "]";
+                }) +
+           "]";
+  }) << "}>";
+}
+
 // Print the CTALayout if it's not equal to the default.
 static void maybePrintCTALayout(mlir::MLIRContext *context,
                                 mlir::AsmPrinter &printer, CTALayoutAttr layout,
@@ -802,23 +821,7 @@ SmallVector<unsigned> BlockedEncodingAttr::getRepOrder() const {
 //===----------------------------------------------------------------------===//
 
 void LinearEncodingAttr::print(mlir::AsmPrinter &printer) const {
-  // We don't use the default implementation as it's a bit too verbose
-  // This prints in the following format that is shape agnostic, in the sense
-  // that we don't print explicitly the outShape of the LL
-  // We always assume LLs to be surjective
-  // <{register = [[0, 1], [8, 0], [0, 8], [64, 0]],
-  //   lane = [[0, 2], [0, 4], [1, 0], [2, 0], [4, 0]],
-  //   warp = [[16, 0], [32, 0]],
-  //   block = []}>
-  auto ll = getLinearLayout();
-  printer << "<{" << join(ll.getBases(), ", ", [](const auto &base) {
-    return base.first.str() + " = " + "[" +
-           join(base.second, ", ",
-                [](const std::vector<int32_t> &vec) {
-                  return "[" + join(vec, ", ") + "]";
-                }) +
-           "]";
-  }) << "}>";
+  printLinearLayout(printer, getLinearLayout());
 }
 
 Attribute LinearEncodingAttr::parse(AsmParser &parser, Type type) {
@@ -1628,16 +1631,9 @@ void PaddedSharedEncodingAttr::print(AsmPrinter &printer) const {
   maybePrintCTALayout(getContext(), printer, getCTALayout(),
                       /*rank=*/getOrder().size());
   printer << "}";
+
   if (getLinearComponent().has_value()) {
-    auto ll = *getLinearComponent();
-    printer << " {" << join(ll.getBases(), ", ", [](const auto &base) {
-      return base.first.str() + " = " + "[" +
-             join(base.second, ", ",
-                  [](const std::vector<int32_t> &vec) {
-                    return "[" + join(vec, ", ") + "]";
-                  }) +
-             "]";
-    }) << "}";
+    printLinearLayout(printer, *getLinearComponent());
   }
 
   printer << ">";
