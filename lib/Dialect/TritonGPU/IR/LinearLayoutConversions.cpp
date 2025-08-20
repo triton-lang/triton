@@ -174,6 +174,18 @@ LinearLayout swizzledSharedToLinearLayout(ArrayRef<int64_t> shape,
   return combineCtaCgaWithShape(ctaLayout, shared.getCTALayout(), shape);
 }
 
+LinearLayout sharedToLinearLayoutPadded(ArrayRef<int64_t> shape,
+                                        PaddedSharedEncodingAttr shared) {
+  MLIRContext *ctx = shared.getContext();
+
+  auto shapePerCTA =
+      llvm::to_vector_of<unsigned>(getShapePerCTA(shared, shape));
+  auto order = shared.getOrder();
+  LinearLayout ctaLayout = identityStandardND(S("offset"), shapePerCTA, order);
+
+  return combineCtaCgaWithShape(ctaLayout, shared.getCTALayout(), shape);
+}
+
 LinearLayout
 sharedToLinearLayoutAMDRotating(ArrayRef<int64_t> shape,
                                 AMDRotatingSharedEncodingAttr shared) {
@@ -1296,6 +1308,8 @@ LinearLayout TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape,
            "shape must be a postive power of 2");
     if (auto shared = dyn_cast<SwizzledSharedEncodingAttr>(layout)) {
       result = swizzledSharedToLinearLayout(shape, shared);
+    } else if (auto shared = dyn_cast<PaddedSharedEncodingAttr>(layout)) {
+      result = sharedToLinearLayoutPadded(shape, shared);
     } else if (auto shared = dyn_cast<NVMMASharedEncodingAttr>(layout)) {
       result = nvmmaSharedToLinearLayout(shape, shared);
     } else if (auto sbl = dyn_cast<AMDRotatingSharedEncodingAttr>(layout)) {
