@@ -1110,18 +1110,22 @@ class tensor(base_value):
             slices = [slices]
         if isinstance(slices, tuple):
             slices = slices.values
+
+        slice_count = sum(isinstance(sl, (builtins.slice, slice)) and
+                         all(_unwrap_if_constexpr(arg) is None for arg in (sl.start, sl.stop, sl.step))
+                         for sl in slices)
+
+        # check if we're trying to index more dimensions than exist
+        if slice_count > len(self.shape):
+            raise ValueError(f"too many indices for tensor: tensor is {len(self.shape)}-dimensional, but {slice_count} were indexed")
+
         ret = self
-        result_dim = 0  # new dimensions insertion point
-        for sl in slices:
+        for dim, sl in enumerate(slices):
             if _unwrap_if_constexpr(sl) is None:
-                ret = _semantic.expand_dims(ret, result_dim)
-                result_dim += 1
+                ret = _semantic.expand_dims(ret, dim)
             elif isinstance(sl, (builtins.slice, slice)) and all(
                     _unwrap_if_constexpr(arg) is None for arg in (sl.start, sl.stop, sl.step)):
-                # ':' selects along existing dimension
-                # if there's a dimension at this position, skip
-                if result_dim < len(ret.shape):
-                    result_dim += 1
+                pass  # an unsqueeze
             else:
                 raise ValueError(f"unsupported tensor index: {sl}")
         return ret
