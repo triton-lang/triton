@@ -513,8 +513,8 @@ def matmul_ogs(x, w, bias,
     # canonicalize storage
     has_gather = gather_indx is not None
     has_scatter = writeback_idxs is not None
-    has_gather_tma = has_gather and target_info.has_tma_gather()
-    has_scatter_tma = has_scatter and target_info.has_tma_gather() and not has_gather_tma
+    has_gather_tma = has_gather and target_info.has_tma_gather() and not has_scatter
+    has_scatter_tma = has_scatter and target_info.has_tma_gather() and not has_gather
     y = wrap_torch_tensor(out0.view(math.prod(out0.shape[:-1]), out0.shape[-1]) if has_scatter else out0.view(math.prod(out0.shape[:-2]), *out0.shape[-2:]))
     x_storage = _canonicalize_storage(x.storage, 2 if has_gather_tma else 3, flex.lhs_data)
     w_storage = _canonicalize_storage(w.storage, 3, flex.rhs_data)
