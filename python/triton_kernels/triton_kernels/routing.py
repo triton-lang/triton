@@ -344,7 +344,7 @@ def compute_expt_data_torch(hist, n_expts_tot, n_gates):
         map_vals = torch.arange(n_expts_tot, device=device)[:, None] + (col << 16)[None, :]
         map_idxs = token_offs_pad[block_m][:-1, None] + col[None, :]
         mask = col[None, :] < n_tiles[:, None]
-        block_pid_map[block_m].index_put_((map_idxs[mask],), map_vals.int()[mask])
+        block_pid_map[block_m].index_put_((map_idxs[mask], ), map_vals.int()[mask])
     return ExptData(hist, token_offs_raw, token_offs_pad, block_pid_map)
 
 
