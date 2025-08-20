@@ -253,7 +253,8 @@ static void rewritePartitionRegions(WarpSpecializeOp ws, Block *switchLoop,
           /*isPacked=*/true);
       Value capturePtr =
           LLVM::getSharedMemoryBase(b.getLoc(), b, targetInfo, ws);
-      LLVM::LLVMPointerType ptrTy = ptr_ty(b.getContext(), 3);
+      LLVM::LLVMPointerType ptrTy =
+          ptr_ty(b.getContext(), targetInfo.getSharedAddressSpace());
       for (auto [i, arg] :
            llvm::zip(llvm::seq<int32_t>(partition->getNumArguments()),
                      partition->getArguments())) {
@@ -399,7 +400,7 @@ static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func,
   // for all warps.
   // %warp_state_ptr = getelementptr ptr %state_tr[%rel_wid]
   // %warp_state = load i8 %warp_state_ptr
-  LLVM::LLVMPointerType ptrTy = ptr_ty(ctx, 3);
+  LLVM::LLVMPointerType ptrTy = ptr_ty(ctx, targetInfo.getSharedAddressSpace());
   Value warpStatePtr = b.gep(ptrTy, i8_ty, statePtr, relWid);
   // All threads in a warp reading from the same smem address will not create
   // bank conflicts and is better than predicated load.

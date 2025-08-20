@@ -740,7 +740,13 @@ static FailureOr<SmallVector<Value>> lowerTMemLdStFromTypes(
 
 struct TensorMemoryLoadOpConversion
     : public ConvertOpToLLVMPattern<triton::nvidia_gpu::TMEMLoadOp> {
-  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  explicit TensorMemoryLoadOpConversion(LLVMTypeConverter &typeConverter,
+                                        const TargetInfo &targetInfo,
+                                        PatternBenefit benefit)
+      : ConvertOpToLLVMPattern<triton::nvidia_gpu::TMEMLoadOp>(typeConverter,
+                                                               benefit),
+        targetInfo(targetInfo) {}
 
   LogicalResult
   matchAndRewrite(triton::nvidia_gpu::TMEMLoadOp op, OpAdaptor adaptor,
@@ -769,11 +775,20 @@ struct TensorMemoryLoadOpConversion
     rewriter.replaceOp(op, {resultStruct});
     return success();
   }
+
+protected:
+  const TargetInfo &targetInfo;
 };
 
 struct TensorMemoryStoreOpConversion
     : public ConvertOpToLLVMPattern<triton::nvidia_gpu::TMEMStoreOp> {
-  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  explicit TensorMemoryStoreOpConversion(LLVMTypeConverter &typeConverter,
+                                         const TargetInfo &targetInfo,
+                                         PatternBenefit benefit)
+      : ConvertOpToLLVMPattern<triton::nvidia_gpu::TMEMStoreOp>(typeConverter,
+                                                                benefit),
+        targetInfo(targetInfo) {}
 
   LogicalResult
   matchAndRewrite(triton::nvidia_gpu::TMEMStoreOp op, OpAdaptor adaptor,
@@ -806,11 +821,20 @@ struct TensorMemoryStoreOpConversion
     rewriter.eraseOp(op);
     return success();
   }
+
+protected:
+  const TargetInfo &targetInfo;
 };
 
 struct TensorMemoryAllocOpConversion
     : public ConvertOpToLLVMPattern<triton::nvidia_gpu::TMEMAllocOp> {
-  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  explicit TensorMemoryAllocOpConversion(LLVMTypeConverter &typeConverter,
+                                         const TargetInfo &targetInfo,
+                                         PatternBenefit benefit)
+      : ConvertOpToLLVMPattern<triton::nvidia_gpu::TMEMAllocOp>(typeConverter,
+                                                                benefit),
+        targetInfo(targetInfo) {}
 
   LogicalResult
   matchAndRewrite(triton::nvidia_gpu::TMEMAllocOp op, OpAdaptor adaptor,
@@ -857,6 +881,9 @@ struct TensorMemoryAllocOpConversion
     rewriter.replaceOp(op, ptr);
     return success();
   }
+
+protected:
+  const TargetInfo &targetInfo;
 };
 
 static Value
@@ -900,7 +927,13 @@ static void createTcgen05Cp(ConversionPatternRewriter &rewriter, Location loc,
 
 struct TensorMemoryCopyOpConversion
     : public ConvertOpToLLVMPattern<triton::nvidia_gpu::TMEMCopyOp> {
-  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  explicit TensorMemoryCopyOpConversion(LLVMTypeConverter &typeConverter,
+                                        const TargetInfo &targetInfo,
+                                        PatternBenefit benefit)
+      : ConvertOpToLLVMPattern<triton::nvidia_gpu::TMEMCopyOp>(typeConverter,
+                                                               benefit),
+        targetInfo(targetInfo) {}
 
   LogicalResult
   matchAndRewrite(triton::nvidia_gpu::TMEMCopyOp op, OpAdaptor adaptor,
@@ -917,7 +950,8 @@ struct TensorMemoryCopyOpConversion
             .getBase();
 
     Value baseDst = adaptor.getDst();
-    auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
+    auto elemPtrTy =
+        ptr_ty(rewriter.getContext(), targetInfo.getSharedAddressSpace());
     auto llvmElementTy = typeConverter->convertType(srcTy.getElementType());
 
     // The following codegen assumes that we use tcgen05.cp only with
@@ -1010,12 +1044,20 @@ struct TensorMemoryCopyOpConversion
     rewriter.eraseOp(op);
     return success();
   }
+
+protected:
+  const NVIDIA::TargetInfo &targetInfo;
 };
 
 struct MemDescIndexOpConversion
     : public ConvertOpToLLVMPattern<triton::gpu::MemDescIndexOp> {
-  using ConvertOpToLLVMPattern<
-      triton::gpu::MemDescIndexOp>::ConvertOpToLLVMPattern;
+
+  explicit MemDescIndexOpConversion(LLVMTypeConverter &typeConverter,
+                                    const TargetInfo &targetInfo,
+                                    PatternBenefit benefit)
+      : ConvertOpToLLVMPattern<triton::gpu::MemDescIndexOp>(typeConverter,
+                                                            benefit),
+        targetInfo(targetInfo) {}
 
   LogicalResult
   matchAndRewrite(triton::gpu::MemDescIndexOp op, OpAdaptor adaptor,
@@ -1041,16 +1083,23 @@ struct MemDescIndexOpConversion
     newBase = rewriter.create<LLVM::AddOp>(
         loc, newBase,
         rewriter.create<LLVM::MulOp>(loc, idx, b.i32_val(numColOffset)));
-    auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
+    auto elemPtrTy =
+        ptr_ty(rewriter.getContext(), targetInfo.getSharedAddressSpace());
     rewriter.replaceOp(op, b.inttoptr(elemPtrTy, newBase));
     return success();
   }
+
+protected:
+  const NVIDIA::TargetInfo &targetInfo;
 };
 
-class MemDescReinterpretOpConversion
+struct MemDescReinterpretOpConversion
     : public ConvertOpToLLVMPattern<MemDescReinterpretOp> {
-public:
-  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+  explicit MemDescReinterpretOpConversion(LLVMTypeConverter &typeConverter,
+                                          const TargetInfo &targetInfo,
+                                          PatternBenefit benefit)
+      : ConvertOpToLLVMPattern<MemDescReinterpretOp>(typeConverter, benefit),
+        targetInfo(targetInfo) {}
 
   LogicalResult
   matchAndRewrite(MemDescReinterpretOp op, OpAdaptor adaptor,
@@ -1062,12 +1111,20 @@ public:
     rewriter.replaceOp(op, adaptor.getSrc());
     return success();
   }
+
+protected:
+  const TargetInfo &targetInfo;
 };
 
 struct TMEMSubSliceOpConversion
     : public ConvertOpToLLVMPattern<triton::nvidia_gpu::TMEMSubSliceOp> {
-  using ConvertOpToLLVMPattern<
-      triton::nvidia_gpu::TMEMSubSliceOp>::ConvertOpToLLVMPattern;
+
+  explicit TMEMSubSliceOpConversion(LLVMTypeConverter &typeConverter,
+                                    const TargetInfo &targetInfo,
+                                    PatternBenefit benefit)
+      : ConvertOpToLLVMPattern<triton::nvidia_gpu::TMEMSubSliceOp>(
+            typeConverter, benefit),
+        targetInfo(targetInfo) {}
 
   LogicalResult
   matchAndRewrite(triton::nvidia_gpu::TMEMSubSliceOp op, OpAdaptor adaptor,
@@ -1114,26 +1171,31 @@ struct TMEMSubSliceOpConversion
     Value tmemBase = adaptor.getSrc();
     Value offsetVal = b.i32_val(offsetCol | offsetRow << 16);
     Value newBase = b.add(b.ptrtoint(i32_ty, tmemBase), offsetVal);
-    auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
+    auto elemPtrTy =
+        ptr_ty(rewriter.getContext(), targetInfo.getSharedAddressSpace());
     rewriter.replaceOp(op, b.inttoptr(elemPtrTy, newBase));
     return success();
   }
+
+protected:
+  const NVIDIA::TargetInfo &targetInfo;
 };
 
 } // namespace
 
 void mlir::triton::NVIDIA::populateTensorMemoryOpToLLVMPattern(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    PatternBenefit benefit) {
+    const TargetInfo &targetInfo, PatternBenefit benefit) {
   patterns.add<TensorMemoryCopyOpConversion, TMEMSubSliceOpConversion,
                TensorMemoryLoadOpConversion, TensorMemoryStoreOpConversion,
-               TensorMemoryAllocOpConversion>(typeConverter, benefit);
+               TensorMemoryAllocOpConversion>(typeConverter, targetInfo,
+                                              benefit);
 }
 
 void mlir::triton::NVIDIA::populateTensorMemorySubviewOpToLLVMPattern(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    PatternBenefit benefit) {
-  patterns.add<MemDescIndexOpConversion>(typeConverter, benefit);
-  patterns.add<MemDescReinterpretOpConversion>(typeConverter, benefit);
-  return;
+    const TargetInfo &targetInfo, PatternBenefit benefit) {
+  patterns.add<MemDescIndexOpConversion>(typeConverter, targetInfo, benefit);
+  patterns.add<MemDescReinterpretOpConversion>(typeConverter, targetInfo,
+                                               benefit);
 }
