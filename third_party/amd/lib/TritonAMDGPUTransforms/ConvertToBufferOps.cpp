@@ -249,18 +249,24 @@ bool canUseBufferOps(Value ptr,
   const int valueElemNBits = std::max(8u, elementType.getIntOrFloatBitWidth());
   const int elementByteWidth = valueElemNBits / 8;
   if (nonNegativeOffset) {
+    // Check for initialization because not all code uses the RangeAnalysis
+    // at this time.
+    // TODO: Remove!!!!
     if (const auto *r =
             solver->lookupState<dataflow::IntegerValueRangeLattice>(offset)) {
-      // Check for initialization because not all code uses the RangeAnalysis
-      // at this time.
-      // TODO: Remove!!!!
       if (r->getValue().isUninitialized())
         return true;
       if (AMD::isEmptyInitializedRange(r->getValue().getValue()))
         return true;
-      const ConstantIntRanges &range = r->getValue().getValue();
-      int64_t maxValue = range.smax().getSExtValue() * elementByteWidth;
-      return maxValue >= 0 && maxValue <= std::numeric_limits<int32_t>::max();
+      if succeeded (dataflow::staticallyNonNegative(*solver, offset)) {
+        const ConstantIntRanges &range = r->getValue().getValue();
+        int64_t maxValue = range.smax().getSExtValue() * elementByteWidth;
+        return maxValue >= 0 && maxValue <= std::numeric_limits<int32_t>::max();
+      } else {
+        return true;
+      }
+    } else {
+      return true;
     }
   }
   return false;
