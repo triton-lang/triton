@@ -252,16 +252,16 @@ class Case:
     ],
 )
 @pytest.mark.parametrize("block_m", [16, 128])
-@pytest.mark.parametrize("do_gather, do_scatter", [
-    (False, False),
-    (True, False),
-    (False, True),
-    (True, True),
-    (True, True),
+@pytest.mark.parametrize("do_gather, do_scatter, fused_scatter", [
+    (False, False, False),
+    (True, False, False),
+    (False, True, False),
+    (True, True, False),
+    (True, True, True),
 ])
 @pytest.mark.parametrize("has_y_gammas", [False, True])
 @pytest.mark.parametrize("is_persistent", [False, True])
-def test_op(m, n, k, split_k, do_gather, do_scatter, has_y_gammas, is_persistent, n_expts_tot,
+def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas, is_persistent, n_expts_tot,
             n_expts_act, n_expt_shards, mode, act_dtype_str, weight_dtype_str, block_m, hbm_swizzling, epilogue_subtile,
             device, opt_flags_scope, fresh_knobs):
     # TODO: remove when Triton FP8 supports proper RTNE
@@ -294,6 +294,9 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, has_y_gammas, is_persistent
     if "float8_e4m3fnuz" in (weight_dtype_str, act_dtype_str) and not is_hip_cdna3():
         pytest.skip("float8_e4m3fnuz only tested on AMD CDNA3 Platform")
 
+    if fused_scatter and split_k > 1:
+        pytest.skip("fused scatter scratchpad not supported with split_k")
+
     if hbm_swizzling:
         if is_hip():
             pytest.skip("NYI. HBM swizzling just implemented for CUDA.")
@@ -320,6 +323,7 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, has_y_gammas, is_persistent
         "block_m": block_m,
         "block_k": block_k,
         "split_k": split_k,
+        "fused_scatter": fused_scatter,
         "is_persistent": is_persistent,
         "epilogue_subtile": epilogue_subtile,
     }
@@ -456,7 +460,7 @@ def test_set_idle_sms():
     num_idle_sms = 24
     matmul_ogs_set_idle_sms(num_idle_sms)
     flags = make_opt_flags(torch.float32, torch.float32, torch.float32, PrecisionConfig(), \
-                           1024, 1024, 1024, None, False, 1)
+                           1024, 1024, 1024, None, True, False, 1)
     assert flags.idle_sms == num_idle_sms
 
 
@@ -464,12 +468,13 @@ def test_set_idle_sms():
     (1200, 704, 608, "ragged"),
     (800, 800, 400, "batched"),
 ])
-@pytest.mark.parametrize("split_k", [2])
-@pytest.mark.parametrize("do_gather, do_scatter", [
-    (False, False),
-    (True, False),
-    (False, True),
-    (True, True),
+@pytest.mark.parametrize("split_k", [1, 2])
+@pytest.mark.parametrize("do_gather, do_scatter, fused_scatter", [
+    (False, False, False),
+    (True, False, False),
+    (False, True, False),
+    (True, True, False),
+    (True, True, True),
 ])
 @pytest.mark.parametrize("is_persistent, epilogue_subtile", [
     (False, None),
@@ -481,13 +486,16 @@ def test_set_idle_sms():
     (1.0, 1.2),
     (0.7, 1.0),
 ])
-def test_fused_act(m, n, k, mode, split_k, do_gather, do_scatter, is_persistent, epilogue_subtile,
+def test_fused_act(m, n, k, mode, split_k, do_gather, do_scatter, fused_scatter, is_persistent, epilogue_subtile,
                    swiglu_alpha, swiglu_limit, device, opt_flags_scope):
+    if fused_scatter and split_k > 1:
+        pytest.skip("fused scatter scratchpad not supported with split_k")
     torch.manual_seed(0)
     constraints = {
         "is_persistent": is_persistent,
         "epilogue_subtile": epilogue_subtile,
         "split_k": split_k,
+        "fused_scatter": fused_scatter,
     }
     n_expts_tot, n_expts_act, n_expt_shards = 1, 1, 1
     opt_flags.update_opt_flags_constraints(constraints)
