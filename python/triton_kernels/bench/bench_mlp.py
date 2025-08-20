@@ -95,16 +95,15 @@ def roofline_mlp(batch_sizes, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_d
                   name="", verbose=True):
     out_path = Path(f"logs/{name}/{x_dtype}x-{w_dtype}w-TP{TP}-EP{EP}/")
     out_path.mkdir(parents=True, exist_ok=True)
-    intensity_proxy = "batch_per_expt"
-    csv_path = roofline.compute_roofline(dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP, EP,  # args
+    csv_path = roofline.compute_roofline(dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP, EP,  # fixed args
                                          bench_fn=bench_mlp,  # function to benchmark
-                                         intensity_proxy_name=intensity_proxy,  # intensity proxy name
+                                         intensity_proxy_name="batch_per_expt",  # intensity proxy name
                                          intensity_proxy_values=batch_sizes,  # intensity proxy values to sweep
                                          verbose=verbose,  # options
                                          out_path=out_path.with_suffix(".csv"))  # output path
     png_path = roofline.plot_roofline(series=[csv_path],  # roofline data to plot
                                       flops_dtype=x_dtype,  # dtype to use for FLOPS roof
-                                      xlabel=intensity_proxy, title=out_path,  # plot option
+                                      xlabel="batch_per_expt", title=out_path,  # plot option
                                       out_path=out_path.with_suffix(".png"),  # output path
                                       max_tbps="memset", max_tflops="cublas")  # hardware limits
 
@@ -123,18 +122,18 @@ if __name__ == "__main__":
         # Running all workloads at once may cause OOM on some GPUs such as H100 80GB.
         # Thus we request users to run each workload separately.
         # For example, all eligible combinations of options are listed below when four GPUs are used:
-        # torchrun --nproc-per-node=4 ./bench_mlp.py --tp 2 --ep 2 --name model1
-        # torchrun --nproc-per-node=4 ./bench_mlp.py --tp 1 --ep 4 --name model1
-        # torchrun --nproc-per-node=4 ./bench_mlp.py --tp 4 --ep 1 --name model1
+        # torchrun --nproc-per-node=4 ./bench_mlp.py --tp 2 --ep 2 --name gpt-oss-x2
+        # torchrun --nproc-per-node=4 ./bench_mlp.py --tp 1 --ep 4 --name gpt-oss-x2
+        # torchrun --nproc-per-node=4 ./bench_mlp.py --tp 4 --ep 1 --name gpt-oss-x2
         # torchrun --nproc-per-node=4 ./bench_mlp.py --tp 4 --ep 1 --name dense
-        # torchrun --nproc-per-node=4 ./bench_mlp.py --tp 2 --ep 2 --name model1 --quantized
-        # torchrun --nproc-per-node=4 ./bench_mlp.py --tp 1 --ep 4 --name model1 --quantized
-        # torchrun --nproc-per-node=4 ./bench_mlp.py --tp 4 --ep 1 --name model1 --quantized
+        # torchrun --nproc-per-node=4 ./bench_mlp.py --tp 2 --ep 2 --name gpt-oss-x2 --quantized
+        # torchrun --nproc-per-node=4 ./bench_mlp.py --tp 1 --ep 4 --name gpt-oss-x2 --quantized
+        # torchrun --nproc-per-node=4 ./bench_mlp.py --tp 4 --ep 1 --name gpt-oss-x2 --quantized
         # torchrun --nproc-per-node=4 ./bench_mlp.py --tp 4 --ep 1 --name dense --quantized
         argparse = argparse.ArgumentParser()
         argparse.add_argument("--tp", type=int, default=1)
         argparse.add_argument("--ep", type=int, default=1)
-        argparse.add_argument("--name", type=str, choices=["dense", "model1"])
+        argparse.add_argument("--name", type=str, choices=["dense", "gpt-oss-x2"])
         argparse.add_argument("--quantized", action="store_true", default=False)
         args = argparse.parse_args()
         dtypes = dense_dtypes if args.quantized else quantized_dtypes
@@ -148,7 +147,7 @@ if __name__ == "__main__":
         pass
         # roofline_mlp(batch_sizes_dense, 8192, 8192, 1, 1, *quantized_dtypes, TP=1, EP=1, name="dense")
         # roofline_mlp(batch_sizes_moe, 5760, 5760, 128, 4, *dense_dtypes, TP=1, EP=1, name="gpt-oss-x2")
-        roofline_mlp(batch_sizes_moe, 8192, 8192, 128, 4, *quantized_dtypes, TP=1, EP=1, name="gpt-oss-x2")
+        roofline_mlp(batch_sizes_moe, 5760, 5760, 128, 4, *quantized_dtypes, TP=1, EP=1, name="gpt-oss-x2")
         # roofline_mlp(batch_sizes_moe, 5760, 5760, 128, 4, *quantized_dtypes, TP=2, EP=1, name="gpt-oss-x2")
         # roofline_mlp(batch_sizes_moe, 5760, 5760, 128, 4, *quantized_dtypes, TP=4, EP=1, name="gpt-oss-x2")
         # roofline_mlp(batch_ranges_moe, 5760, 5760, 128, 4, *quantized_dtypes, TP=8, EP=1, name="gpt-oss-x2")
