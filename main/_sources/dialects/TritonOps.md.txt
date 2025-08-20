@@ -23,7 +23,7 @@ Example:
 
 Traits: `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
-Interfaces: `CallOpInterface`, `SymbolUserOpInterface`
+Interfaces: `ArgAndResultAttrsOpInterface`, `CallOpInterface`, `SymbolUserOpInterface`
 
 #### Attributes:
 
@@ -89,7 +89,7 @@ tt.func @example_fn_attr() attributes {dialectName.attrName = false}
 
 Traits: `AffineScope`, `AutomaticAllocationScope`, `HasParent<ModuleOp>`, `IsolatedFromAbove`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
-Interfaces: `CallableOpInterface`, `FunctionOpInterface`, `OpAsmOpInterface`, `Symbol`
+Interfaces: `ArgAndResultAttrsOpInterface`, `CallableOpInterface`, `FunctionOpInterface`, `OpAsmOpInterface`, `Symbol`
 
 #### Attributes:
 
