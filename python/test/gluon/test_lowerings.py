@@ -49,3 +49,75 @@ def test_scan_layouts(M, N, src_layout, axis, sanitize_overflow, device):
 
     z_ref = torch.cumsum(x, dim=axis, dtype=torch.int32)
     torch.testing.assert_close(z_tri, z_ref)
+
+
+@pytest.mark.parametrize("M, N", [(32, 16), (32, 32), (32, 64), (64, 32)])
+@pytest.mark.parametrize("src_layout", [
+    ttgl.BlockedLayout([1, 4], [8, THREADS_PER_WARP // 8], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
+    ttgl.BlockedLayout([1, 4], [8, THREADS_PER_WARP // 8], [4, 1], [0, 1], [1, 1], [1, 1], [0, 1]),
+    ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[2, 4], ctas_per_cga=[1, 1], cta_split_num=[1, 1], cta_order=[0, 1],
+              instr_shape=[16, 8]),
+    ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1], ctas_per_cga=[1, 1], cta_split_num=[1, 1], cta_order=[1, 0],
+              instr_shape=[16, 16, 16]),
+    ttgl.DotOperandLayout(parent=ttgl.NVMMADistributedLayout([2, 0], [2, 4], [16, 8], [1, 1], [1, 1], [0, 1]), operand_index=1, k_width=8),
+    ttgl.DotOperandLayout(parent=ttgl.NVMMADistributedLayout([3, 0], [8, 1], [16, 32, 16], [1, 1], [1, 1], [0, 1]), operand_index=0, k_width=2),
+    ttgl.SliceLayout(dim=0, parent=ttgl.NVMMADistributedLayout([2, 0], [4, 1, 1], [1, 1, 1], [1, 1, 1], [2, 1, 0], [1, 16, 8])),
+    ttgl.SliceLayout(
+        dim=1, parent=ttgl.DotOperandLayout(parent=ttgl.NVMMADistributedLayout([2, 0], [4, 1, 1], [1, 16, 8], [1, 1, 1], [1, 1, 1], [2, 1, 0]),
+                                       operand_index=1, k_width=2)),
+    "linear_layout",
+])
+@pytest.mark.parametrize("axis", [0, 1])
+@pytest.mark.parametrize("epilogue_kind", ['reduce1d', 'reduce2d', 'expand_reduce2d'])
+@pytest.mark.parametrize("dtype_str, add_overflow_check", [("int32", False), ("int32", True), ("float32", False),
+                                                          ("float16", False)])
+@pytest.mark.parametrize("reduce_op", ["sum", "max"])
+def test_reduce_layouts(M, N, src_layout, axis, epilogue_kind, dtype_str, add_overflow_check, reduce_op, device):
+    if src_layout == "linear_layout":
+        ttgl.DistributedLinearLayout(reg_bases=[[0, 16], [1, 0], [2, 0], [4, 0], [8, 0], [16, 0]], lane_bases=[[0, 0], [0, 1], [0, 2], [0, 4], [0, 8]], warp_bases=[[32, 0], [0, 32]], block_bases=[], shape=[M, N])
+
+    @gluon.jit
+    def _add(a, b):
+        return a + b
+
+    @gluon.jit
+    def _max(a, b):
+        return ttgl.maximum(a, b)
+
+    combine_fn = _add if reduce_op == "sum" else _max
+
+    @gluon.jit
+    def kernel(x_ptr, z_ptr, M: ttgl.constexpr, N: ttgl.constexpr,
+               layout: ttgl.constexpr, axis: ttgl.constexpr, epilogue_kind: ttgl.constexpr):
+        x_offs_m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, layout))[:, None]
+        x_offs_n = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, layout))[None, :]
+        x = ttgl.load(x_ptr + x_offs_m * N + x_offs_n)
+        y = ttgl.reduce(x, axis=axis, combine_fn=combine_fn)
+        if epilogue_kind == "reduce1d":
+            if axis == 0:
+                z_offs = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, layout))
+            else:
+                z_offs = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, layout))
+            ttgl.store(z_ptr + z_offs, y)
+        elif epilogue_kind == "reduce2d":
+            y = ttgl.reduce(y, axis=1-axis, combine_fn=combine_fn)
+            ttgl.store(z_ptr, y)
+        elif epilogue_kind == "expand_reduce2d":
+            y = ttgl.expand_dims(y, axis=1-axis)
+            y = ttgl.reduce(y, axis=1-axis, combine_fn=combine_fn)
+            z_offs = ttgl.arange(0, 1, layout=ttgl.SliceLayout(1-axis, layout))
+            ttgl.store(z_ptr + z_offs, y)
+
+
+    torch.manual_seed(0)
+
+    torch_dtype = getattr(torch, dtype_str)
+    x = torch.randint(-10, 10, (M, N), dtype=torch.int32, device=device).to(torch_dtype)
+    out_shape = (1, 1) if epilogue_kind == "reduce2d" else (N,) if axis == 0 else (M,)
+    z = torch.empty(out_shape, dtype=torch.int32, device=device)
+
+    kernel[(1, 1, 1)](x, z, M, N, src_layout, axis, num_warps=4)
+
+    torch_op = torch.sum if reduce_op == "sum" else torch.max
+    z_ref = torch_op(x) if epilogue_kind == "reduce1d"
+    torch.testing.assert_close(z, z_ref)
