@@ -1111,9 +1111,7 @@ class tensor(base_value):
         if isinstance(slices, tuple):
             slices = slices.values
 
-        slice_count = sum(
-            isinstance(sl, (builtins.slice, slice)) and all(
-                _unwrap_if_constexpr(arg) is None for arg in (sl.start, sl.stop, sl.step)) for sl in slices)
+        slice_count = sum(_unwrap_if_constexpr(sl) is not None for sl in slices)
 
         # check if we're trying to index more dimensions than exist
         if slice_count > len(self.shape):
