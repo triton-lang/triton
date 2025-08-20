@@ -96,7 +96,8 @@ def _matmul_ogs(
         tl.assume(stride_w_mx_k >= 0)
     if stride_w_mx_n is not None:
         tl.assume(stride_w_mx_n >= 0)
-    tl.assume(stride_b_e >= 0)
+    if B is not None:
+        tl.assume(stride_b_e >= 0)
     tl.assume(batch_size >= 0)
     tl.assume(grid_m >= 0)
     tl.assume(grid_n >= 0)
