@@ -21,6 +21,11 @@ CTALayoutAttr permuteCTALayout(MLIRContext *ctx, CTALayoutAttr layout,
 
 LinearLayout getPaddedRegToSharedLayout(const LinearLayout &regLayout,
                                         PaddedSharedEncodingAttr paddedEnc) {
+  if (paddedEnc.getLinearComponent().has_value()) {
+    auto sharedLL = *paddedEnc.getLinearComponent();
+    return regLayout.invertAndCompose(sharedLL);
+  }
+  // Otherwise just return a contiguous mapping from regs to shared
   auto *ctx = paddedEnc.getContext();
   auto kOffset = StringAttr::get(ctx, "offset");
   auto outNames = to_vector(regLayout.getOutDimNames());
