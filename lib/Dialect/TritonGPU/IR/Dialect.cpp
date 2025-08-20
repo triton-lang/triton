@@ -556,6 +556,75 @@ static LogicalResult parseType(AsmParser &parser, const NamedAttribute &attr,
   return success();
 }
 
+std::optional<LinearLayout>
+parseLinearLayout(DictionaryAttr &dict, AsmParser &parser,
+                  ArrayRef<std::string> inDimNames) {
+  LinearLayout::BasesT bases;
+
+  // Parse the basis names in order (the order is relevant)
+  for (const auto &inDimNameStr : inDimNames) {
+    auto inDimName = StringAttr::get(parser.getContext(), inDimNameStr);
+    Attribute value = dict.get(inDimName);
+
+    // Expecting an array of arrays
+    auto arrayOfArraysAttr = mlir::dyn_cast<ArrayAttr>(value);
+    if (!arrayOfArraysAttr) {
+      parser.emitError(parser.getCurrentLocation(),
+                       "Expected array of arrays for basis of '")
+          << inDimName.getValue() << "'";
+      return {};
+    }
+
+    std::vector<std::vector<int32_t>> inDimBases;
+    for (Attribute arrayAttr : arrayOfArraysAttr) {
+      auto intArrayAttr = mlir::dyn_cast<ArrayAttr>(arrayAttr);
+      if (!intArrayAttr) {
+        parser.emitError(parser.getCurrentLocation(),
+                         "Expected array of integers in basis for '")
+            << inDimName.getValue() << "'";
+        return {};
+      }
+      std::vector<int32_t> basis;
+      for (Attribute intAttr : intArrayAttr) {
+        auto intValueAttr = mlir::dyn_cast<IntegerAttr>(intAttr);
+        if (!intValueAttr) {
+          parser.emitError(parser.getCurrentLocation(),
+                           "Expected integer in basis for '")
+              << inDimName.getValue() << "'";
+          return {};
+        }
+        basis.push_back(intValueAttr.getInt());
+      }
+      inDimBases.push_back(std::move(basis));
+    }
+    bases[inDimName] = std::move(inDimBases);
+  }
+  size_t rank = 0;
+  for (const auto &basesDim : llvm::make_second_range(bases)) {
+    if (!basesDim.empty()) {
+      rank = basesDim[0].size();
+      break;
+    }
+  }
+
+  // To implement this we'd need to serialise the rank as well.
+  // We can do this if we ever need it
+  if (rank == 0) {
+    parser.emitError(parser.getCurrentLocation(), "Empty Layout not supported");
+    return {};
+  }
+
+  // Generate standared outDimNames (dim0, dim1, ...)
+  SmallVector<StringAttr> outDimNames;
+  for (int i = 0; i < rank; ++i) {
+    outDimNames.push_back(
+        StringAttr::get(parser.getContext(), "dim" + llvm::Twine(i)));
+  }
+
+  // Create LinearLayout
+  return LinearLayout(std::move(bases), std::move(outDimNames));
+}
+
 // Print the CTALayout if it's not equal to the default.
 static void maybePrintCTALayout(mlir::MLIRContext *context,
                                 mlir::AsmPrinter &printer, CTALayoutAttr layout,
@@ -763,76 +832,14 @@ Attribute LinearEncodingAttr::parse(AsmParser &parser, Type type) {
   if (parser.parseGreater().failed())
     return {};
 
-  LinearLayout::BasesT bases;
-
-  // Parse the basis names in order (the order is relevant)
   std::vector<std::string> inDimNames = {"register", "lane", "warp", "block"};
-
-  for (const auto &inDimNameStr : inDimNames) {
-    auto inDimName = StringAttr::get(parser.getContext(), inDimNameStr);
-    Attribute value = dict.get(inDimName);
-
-    // Expecting an array of arrays
-    auto arrayOfArraysAttr = mlir::dyn_cast<ArrayAttr>(value);
-    if (!arrayOfArraysAttr) {
-      parser.emitError(parser.getCurrentLocation(),
-                       "Expected array of arrays for basis of '")
-          << inDimName.getValue() << "'";
-      return {};
-    }
-
-    std::vector<std::vector<int32_t>> inDimBases;
-    for (Attribute arrayAttr : arrayOfArraysAttr) {
-      auto intArrayAttr = mlir::dyn_cast<ArrayAttr>(arrayAttr);
-      if (!intArrayAttr) {
-        parser.emitError(parser.getCurrentLocation(),
-                         "Expected array of integers in basis for '")
-            << inDimName.getValue() << "'";
-        return {};
-      }
-      std::vector<int32_t> basis;
-      for (Attribute intAttr : intArrayAttr) {
-        auto intValueAttr = mlir::dyn_cast<IntegerAttr>(intAttr);
-        if (!intValueAttr) {
-          parser.emitError(parser.getCurrentLocation(),
-                           "Expected integer in basis for '")
-              << inDimName.getValue() << "'";
-          return {};
-        }
-        basis.push_back(intValueAttr.getInt());
-      }
-      inDimBases.push_back(std::move(basis));
-    }
-    bases[inDimName] = std::move(inDimBases);
-  }
-  size_t rank = 0;
-  for (const auto &basesDim : llvm::make_second_range(bases)) {
-    if (!basesDim.empty()) {
-      rank = basesDim[0].size();
-      break;
-    }
-  }
-
-  // To implement this we'd need to serialise the rank as well.
-  // We can do this if we ever need it
-  if (rank == 0) {
-    parser.emitError(parser.getCurrentLocation(), "Empty Layout not supported");
+  auto maybeLL = parseLinearLayout(dict, parser, inDimNames);
+  if (!maybeLL.has_value())
     return {};
-  }
-
-  // Generate standared outDimNames (dim0, dim1, ...)
-  SmallVector<StringAttr> outDimNames;
-  for (int i = 0; i < rank; ++i) {
-    outDimNames.push_back(
-        StringAttr::get(parser.getContext(), "dim" + llvm::Twine(i)));
-  }
-
-  // Create LinearLayout
-  LinearLayout linearLayout(std::move(bases), std::move(outDimNames));
 
   // Create and return the LinearEncodingAttr
   return parser.getChecked<LinearEncodingAttr>(parser.getContext(),
-                                               std::move(linearLayout));
+                                               std::move(*maybeLL));
 }
 
 static SmallVector<unsigned>
@@ -1600,77 +1607,11 @@ Attribute PaddedSharedEncodingAttr::parse(AsmParser &parser, Type type) {
 
   if (parser.parseGreater().failed())
     return {};
+
   // Parse linear layout
-  std::optional<LinearLayout> maybeLL;
-  if (hasLL) {
-    LinearLayout::BasesT bases;
-
-    // Parse the basis names in order (the order is relevant)
-    std::vector<std::string> inDimNames = {"offset"};
-
-    for (const auto &inDimNameStr : inDimNames) {
-      auto inDimName = StringAttr::get(parser.getContext(), inDimNameStr);
-      Attribute value = dict.get(inDimName);
-
-      // Expecting an array of arrays
-      auto arrayOfArraysAttr = mlir::dyn_cast<ArrayAttr>(value);
-      if (!arrayOfArraysAttr) {
-        parser.emitError(parser.getCurrentLocation(),
-                         "Expected array of arrays for basis of '")
-            << inDimName.getValue() << "'";
-        return {};
-      }
-
-      std::vector<std::vector<int32_t>> inDimBases;
-      for (Attribute arrayAttr : arrayOfArraysAttr) {
-        auto intArrayAttr = mlir::dyn_cast<ArrayAttr>(arrayAttr);
-        if (!intArrayAttr) {
-          parser.emitError(parser.getCurrentLocation(),
-                           "Expected array of integers in basis for '")
-              << inDimName.getValue() << "'";
-          return {};
-        }
-        std::vector<int32_t> basis;
-        for (Attribute intAttr : intArrayAttr) {
-          auto intValueAttr = mlir::dyn_cast<IntegerAttr>(intAttr);
-          if (!intValueAttr) {
-            parser.emitError(parser.getCurrentLocation(),
-                             "Expected integer in basis for '")
-                << inDimName.getValue() << "'";
-            return {};
-          }
-          basis.push_back(intValueAttr.getInt());
-        }
-        inDimBases.push_back(std::move(basis));
-      }
-      bases[inDimName] = std::move(inDimBases);
-    }
-    size_t rank = 0;
-    for (const auto &basesDim : llvm::make_second_range(bases)) {
-      if (!basesDim.empty()) {
-        rank = basesDim[0].size();
-        break;
-      }
-    }
-
-    // To implement this we'd need to serialise the rank as well.
-    // We can do this if we ever need it
-    if (rank == 0) {
-      parser.emitError(parser.getCurrentLocation(),
-                       "Empty Layout not supported");
-      return {};
-    }
-
-    // Generate standared outDimNames (dim0, dim1, ...)
-    SmallVector<StringAttr> outDimNames;
-    for (int i = 0; i < rank; ++i) {
-      outDimNames.push_back(
-          StringAttr::get(parser.getContext(), "dim" + llvm::Twine(i)));
-    }
-
-    // Create LinearLayout
-    maybeLL = triton::LinearLayout(std::move(bases), std::move(outDimNames));
-  }
+  std::vector<std::string> inDimNames = {"offset"};
+  std::optional<LinearLayout> maybeLL =
+      parseLinearLayout(dict, parser, inDimNames);
 
   return parser.getChecked<PaddedSharedEncodingAttr>(
       parser.getContext(), intervals, paddings, order, *ctaLayout, maybeLL);
