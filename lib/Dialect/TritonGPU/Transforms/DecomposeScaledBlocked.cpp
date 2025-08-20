@@ -44,7 +44,7 @@ public:
                       cast<RankedTensorType>(v.getType()).getEncoding());
     };
     if (isLinearEncoding(scaledDotOp.getAScale()) ||
-        isLinearEncoding(scaledDotOp.getBScale())) 
+        isLinearEncoding(scaledDotOp.getBScale()))
       return failure();
     if (isa_and_nonnull<MmaEncodingTrait>(
             scaledDotOp.getResult().getType().getEncoding()))
@@ -56,12 +56,13 @@ public:
 
     auto moduleOp = scaledDotOp->getParentOfType<ModuleOp>();
     if (!moduleOp) {
-      return rewriter.notifyMatchFailure(scaledDotOp, "Could not find parent ModuleOp");
+      return rewriter.notifyMatchFailure(scaledDotOp,
+                                         "Could not find parent ModuleOp");
     }
     if (getNVIDIAComputeCapability(moduleOp) == 120)
       return failure();
 
-      // Types
+    // Types
     auto computeType = getComputeType(scaledDotOp.getAElemType(),
                                       scaledDotOp.getBElemType(), rewriter);
     auto loc = scaledDotOp.getLoc();
