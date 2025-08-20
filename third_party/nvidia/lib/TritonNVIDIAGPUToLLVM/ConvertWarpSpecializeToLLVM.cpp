@@ -85,31 +85,20 @@ enum BarrierIndex {
 };
 
 static void createBarrier(TritonLLVMIRRewriter &b, unsigned barIdx,
-                          std::optional<unsigned> numThreads, bool aligned) {
-  assert(barIdx < 16 && "not enough barriers");
-
+                          unsigned numThreads) {
+  assert(barIdx < kNumBarriers && "not enough barriers");
   // If a partition has only 1 warp, use `bar.warp.sync`.
-  if (numThreads && *numThreads == 32) {
+  if (numThreads == 32)
     LLVM::NVIDIA::createSyncWarp(b.getLoc(), b);
-    return;
-  }
-
-  PTXBuilder ptxBuilder;
-  std::string ptxString;
-  llvm::raw_string_ostream os(ptxString);
-  os << "barrier.sync";
-  if (aligned)
-    os << ".aligned";
-  os << ' ' << barIdx;
-  if (numThreads)
-    os << ", " << *numThreads;
-
-  (*ptxBuilder.create<>(ptxString))();
-  ptxBuilder.launch(b, b.getLoc(), void_ty(b.getContext()));
+  else
+    b.create<NVVM::BarrierOp>(b.i32_val(barIdx), b.i32_val(numThreads));
 }
 
 static void createAllBarrier(TritonLLVMIRRewriter &b, unsigned barIdx) {
-  createBarrier(b, barIdx, /*numThreads=*/std::nullopt, /*aligned=*/false);
+  assert(barIdx < kNumBarriers && "not enough barriers");
+  LLVM::createLLVMIntrinsicCallOp(b, b.getLoc(),
+                                  "llvm.nvvm.barrier.cta.sync.all",
+                                  void_ty(b.getContext()), b.i32_val(barIdx));
 }
 
 //===----------------------------------------------------------------------===//
@@ -214,7 +203,7 @@ static LogicalResult rewriteWarpGroupBarriers(LLVM::LLVMFuncOp func,
 
     if (auto bar = dyn_cast<NVVM::Barrier0Op>(op)) {
       TritonLLVMIRRewriter b(bar.getLoc(), bar);
-      createBarrier(b, /*barIdx=*/0, defaultWarpGroupSize, /*aligned=*/true);
+      createBarrier(b, kDefaultWarpGroupBarrierIdx, defaultWarpGroupSize);
       bar.erase();
       return WalkResult::skip();
     }
@@ -234,7 +223,7 @@ static LogicalResult rewriteWarpGroupBarriers(LLVM::LLVMFuncOp func,
       unsigned warpGroupSize = threadsPerWarp * op.getPartitionNumWarps()[idx];
       partition->walk([&](NVVM::Barrier0Op bar) {
         TritonLLVMIRRewriter b(bar.getLoc(), bar);
-        createBarrier(b, barIdx, warpGroupSize, /*aligned=*/true);
+        createBarrier(b, barIdx, warpGroupSize);
         bar.erase();
       });
     }

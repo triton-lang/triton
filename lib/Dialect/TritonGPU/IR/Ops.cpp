@@ -546,8 +546,9 @@ static LogicalResult inferMemDescReshapeOpEncoding(ArrayRef<int64_t> srcShape,
         CTALayout);
     // Big guns, check linear layouts are equivalent
     // We disallow reshaping memdesc_subslice in the verifier
-    auto srcLL = toLinearLayout(srcShape, srcEnc, srcShape);
-    auto dstLL = toLinearLayout(dstShape, dstEnc, dstShape);
+    // so allocShape == shape
+    auto srcLL = toLinearLayout(srcShape, srcEnc);
+    auto dstLL = toLinearLayout(dstShape, dstEnc);
     if (reshapeLayout(ctx, srcLL, dstShape) != dstLL) {
       return failure();
     }
@@ -578,13 +579,6 @@ LogicalResult MemDescReshapeOp::inferReturnTypes(
   inferredReturnType = MemDescType::get(
       dstShape, srcTy.getElementType(), dstEncoding, srcTy.getMemorySpace(),
       srcTy.getMutableMemory(), dstAllocShape);
-  return success();
-}
-
-// MemDescReinterpretOp
-LogicalResult MemDescReinterpretOp::verify() {
-  if (getSrc().getType().getMemorySpace() != getType().getMemorySpace())
-    return emitError("source and destination memory space must match");
   return success();
 }
 
@@ -628,6 +622,17 @@ OpFoldResult LocalAllocOp::fold(FoldAdaptor adaptor) {
   return loadSrc;
 }
 
+int32_t LocalAllocOp::getAlignmentOrDefault() {
+  auto align = getAlignment();
+  if (align) {
+    return *align;
+  }
+
+  auto ty = getType();
+  auto enc = dyn_cast<SharedEncodingTrait>(ty.getEncoding());
+  return enc ? enc.getAlignment() : 16;
+}
+
 LogicalResult verifyMemoryOpTypes(Operation *op, ShapedType srcTy,
                                   ShapedType dstTy) {
   if (srcTy.getElementType() != dstTy.getElementType()) {
@@ -658,10 +663,27 @@ LogicalResult verifyAllocOp(Operation *op, Value src, MemDescType dstTy) {
   return verifyMemoryOpTypes(op, cast<RankedTensorType>(src.getType()), dstTy);
 }
 
+static LogicalResult verifySharedMemoryRank(Operation *op,
+                                            RankedTensorType type,
+                                            MemDescType memdesc,
+                                            StringRef regName) {
+  auto enc = dyn_cast<LayoutEncodingTrait>(memdesc.getEncoding());
+  if (!enc)
+    return op->emitOpError("expected memdesc to have a shared memory encoding");
+  if (type.getRank() != enc.getRank()) {
+    return op->emitOpError(regName)
+           << " has rank " << type.getRank()
+           << " but memdesc encoding has rank " << enc.getRank();
+  }
+  return success();
+}
+
 LogicalResult LocalAllocOp::verify() {
   if (!isa<SharedMemorySpaceAttr>(getType().getMemorySpace()))
     return emitOpError("should create a buffer of shared memory");
-
+  if (getSrc() && failed(verifySharedMemoryRank(*this, getSrc().getType(),
+                                                getType(), "source")))
+    return failure();
   return verifyAllocOp(*this, getSrc(), getType());
 }
 
@@ -669,11 +691,17 @@ LogicalResult LocalAllocOp::verify() {
 LogicalResult LocalStoreOp::verify() {
   if (!getDst().getType().getMutableMemory())
     return emitOpError("Cannot store into immutable memory");
+  if (failed(verifySharedMemoryRank(*this, getSrc().getType(),
+                                    getDst().getType(), "source")))
+    return failure();
   return verifyMemoryOpTypes(*this, getSrc().getType(), getDst().getType());
 }
 
 // LocalLoadOp
 LogicalResult LocalLoadOp::verify() {
+  if (failed(verifySharedMemoryRank(*this, getType(), getSrc().getType(),
+                                    "result")))
+    return failure();
   return verifyMemoryOpTypes(*this, getSrc().getType(), getType());
 }
 
@@ -803,19 +831,6 @@ LogicalResult MemDescSubsliceOp::verify() {
     }
   }
   return success();
-}
-
-// -- LocalAllocOp --
-
-int32_t LocalAllocOp::getAlignmentOrDefault() {
-  auto align = getAlignment();
-  if (align) {
-    return *align;
-  }
-
-  auto ty = getType();
-  auto enc = dyn_cast<SharedEncodingTrait>(ty.getEncoding());
-  return enc ? enc.getAlignment() : 16;
 }
 
 // -- WarpSpecializeOp --

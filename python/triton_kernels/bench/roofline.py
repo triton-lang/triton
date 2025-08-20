@@ -73,7 +73,7 @@ def compute_roofline(*args, \
         perfs.append(perf)
         if verbose:
             tflops = perfs[-1].flops / perfs[-1].time_ns * 1e-3
-            tbps = perfs[-1].flops / perfs[-1].time_ns * 1e-3
+            tbps = perfs[-1].bytes / perfs[-1].time_ns * 1e-3
             print(f"{intensity_proxy_name}: {val:5d} | TFLOPS: {tflops:#.4g} | TBPS: {tbps:.2f}")
     # write to csv
     return write_csv(intensity_proxy_values, perfs, out_path)

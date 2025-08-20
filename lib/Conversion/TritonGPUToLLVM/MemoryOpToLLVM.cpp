@@ -5,6 +5,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/LayoutUtility.h"
 
 namespace {
 
@@ -26,11 +27,11 @@ LogicalResult lowerLocalStore(Location loc, MLIRContext *ctx, Value regVal,
   auto kWarp = str_attr("warp");
   auto kOffset = str_attr("offset");
   auto regLayout = toLinearLayout(regTy);
-  auto paddedLayout =
+  auto paddedEnc =
       dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(memDescTy.getEncoding());
   LinearLayout cvt = LinearLayout::empty();
-  if (paddedLayout) {
-    cvt = regLayout.reshapeOuts({{kOffset, regLayout.getTotalOutDimSize()}});
+  if (paddedEnc) {
+    cvt = getPaddedRegToSharedLayout(regLayout, paddedEnc);
   } else {
     auto sharedLayout = toLinearLayout(memDescTy);
     cvt = regLayout.invertAndCompose(sharedLayout);
@@ -163,11 +164,10 @@ public:
     auto kWarp = str_attr("warp");
     auto kOffset = str_attr("offset");
     auto regLayout = toLinearLayout(regTy);
-    auto paddedLayout =
-        dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(sharedEnc);
+    auto paddedEnc = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(sharedEnc);
     LinearLayout cvt = LinearLayout::empty();
-    if (paddedLayout) {
-      cvt = regLayout.reshapeOuts({{kOffset, regLayout.getTotalOutDimSize()}});
+    if (paddedEnc) {
+      cvt = getPaddedRegToSharedLayout(regLayout, paddedEnc);
     } else {
       auto sharedLayout = toLinearLayout(memDescTy);
       cvt = regLayout.invertAndCompose(sharedLayout);

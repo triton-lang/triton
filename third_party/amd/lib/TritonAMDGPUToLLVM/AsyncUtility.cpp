@@ -58,6 +58,9 @@ void annotateLocalLoadsSyncedViaAsyncWait(ModuleOp mod) {
   auto *ctx = mod->getContext();
   for (auto &loadOp : localLoads) {
     auto token = loadOp.getToken();
+    if (loadOp->hasAttr(syncedViaAsyncWaitAttrName))
+      continue;
+
     bool isSyncedViaAsyncWait = token && comesFromAsyncWait(token);
     loadOp->setAttr(syncedViaAsyncWaitAttrName,
                     BoolAttr::get(ctx, isSyncedViaAsyncWait));

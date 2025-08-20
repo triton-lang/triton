@@ -723,7 +723,7 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // -----
 
 // CHECK-LABEL:   tt.func public @scalar_pointers(
-// CHECK-SAME:  %[[VAL_0:.*]]: !tt.ptr<i64> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+// CHECK-SAME:  %[[VAL_0:.*]]: !tt.ptr<i64> {tt.divisibility = 16 : i32}) {
 // CHECK:           %[[VAL_1:.*]] = arith.constant 0 : i64
 // CHECK:           %[[VAL_2:.*]] = arith.constant 1 : i32
 // CHECK:           %[[VAL_3:.*]] = arith.constant 100 : i32
@@ -737,7 +737,7 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // CHECK:         }
 
 module attributes {"ttg.num-warps" = 4 : i32} {
-  tt.func public @scalar_pointers(%arg0: !tt.ptr<i64> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+  tt.func public @scalar_pointers(%arg0: !tt.ptr<i64> {tt.divisibility = 16 : i32}) {
     %c0_i64 = arith.constant 0 : i64
     %c1_i32 = arith.constant 1 : i32
     %c100_i32 = arith.constant 100 : i32

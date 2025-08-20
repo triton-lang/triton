@@ -42,7 +42,7 @@ class tensor_descriptor_type(base_type):
         self.strides_type._flatten_ir_types(builder, out)
 
     def mangle(self) -> str:
-        return f"TD{self.block_type.mangle}_{self.layout.mangle()}TD"
+        return f"TD{self.block_type.mangle()}_{self.layout.mangle()}TD"
 
 
 class tensor_descriptor(base_value):

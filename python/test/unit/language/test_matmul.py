@@ -728,7 +728,8 @@ def test_blocked_scale_mxfp(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, USE_
         NUM_STAGES = min(NUM_STAGES, 2)
     elif BLOCK_K == 256:
         NUM_STAGES = min(NUM_STAGES, 3)
-
+    #since the block size are big we use num_warps = 8 to avoid pressure problems.
+    num_warps = 8
     torch.manual_seed(42)
     dtype_src_str = "float8e5"
     dtype_dst_str = "float32"
@@ -746,7 +747,7 @@ def test_blocked_scale_mxfp(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, USE_
     out = block_scale_mxfp_matmul[grid](a, b, output, a_scale, b_scale, M, N, K, a_scale.stride(0), a_scale.stride(1),
                                         a_scale.stride(2), a_scale.stride(3), a.stride(0), a.stride(1), b.stride(0),
                                         b.stride(1), output.stride(0), output.stride(1), BLOCK_M, BLOCK_N, BLOCK_K,
-                                        NUM_STAGES=NUM_STAGES, USE_2D_SCALE_LOAD=USE_2D_SCALE_LOAD)
+                                        NUM_STAGES=NUM_STAGES, USE_2D_SCALE_LOAD=USE_2D_SCALE_LOAD, num_warps=num_warps)
     ttgir = out.asm["ttgir"]
     ptx = out.asm["ptx"]
 
@@ -973,8 +974,6 @@ def test_block_scale_fp4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, VEC_SIZE, with_a_sc
         if not (with_a_scale and with_b_scale):
             pytest.skip("None aScale/bScale is only tested on AMD backend for now")
     elif is_hip():
-        if not pack_along_k:
-            pytest.skip("Packing along M/N not implemented yet on AMD.")
         if not is_hip_cdna4():
             pytest.skip("Scaled fp4 matmul is only natively supported on CDNA4")
         if scale_type != 'float8_e8m0fnu':
@@ -1129,8 +1128,6 @@ def test_mxfp8_mxfp4_matmul(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, B_TR
         if not (A_DATA_TYPE == "float8e5" and B_DATA_TYPE == "float4"):
             pytest.skip(f"(A: {A_DATA_TYPE}, B: {B_DATA_TYPE}) has not been tested on NV backend")
     elif is_hip():
-        if not PACK_B_ALONG_K:
-            pytest.skip("Pack along M/N is not enabled on AMD backend")
         if not is_hip_cdna4():
             pytest.skip("Scaled mxfp4 & mxfp8 matmul is only natively supported on CDNA4")
         if (nonKDim == 16 and BLOCK_K < 128) or (nonKDim == 32 and BLOCK_K < 64):

@@ -9,6 +9,7 @@
 #include "mlir/Bytecode/BytecodeWriter.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
+#include "mlir/Dialect/LLVMIR/LLVMAttrs.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/Transforms/InlinerInterfaceImpl.h"
 #include "mlir/Dialect/UB/IR/UBOps.h"
@@ -37,8 +38,6 @@
 #include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/SourceMgr.h"
-
-#include "third_party/proton/dialect/include/Dialect/Proton/IR/Dialect.h"
 
 namespace {
 
@@ -175,7 +174,7 @@ py::list getTensorDescMetadata(ModuleOp &mod) {
 
     auto blockType = descTy.getBlockType();
     auto encoding = blockType.getEncoding();
-    auto mmaEncoding = dyn_cast<triton::gpu::NVMMASharedEncodingAttr>(encoding);
+    auto mmaEncoding = dyn_cast<ttg::NVMMASharedEncodingAttr>(encoding);
     auto swizzle = ttng::getTMASwizzleMode(nullptr, descTy);
     auto elemType = ttng::getTMAElementType(nullptr, descTy);
     assert(swizzle.has_value());
@@ -305,8 +304,8 @@ void init_triton_ir(py::module &&m) {
                     ::mlir::triton::instrument::TritonInstrumentDialect,
                     math::MathDialect, arith::ArithDialect, scf::SCFDialect,
                     ::mlir::gpu::GPUDialect, cf::ControlFlowDialect,
-                    ::mlir::triton::proton::ProtonDialect, LLVM::LLVMDialect,
-                    mlir::ub::UBDialect, mlir::triton::gluon::GluonDialect>();
+                    LLVM::LLVMDialect, mlir::ub::UBDialect,
+                    mlir::triton::gluon::GluonDialect>();
     mlir::LLVM::registerInlinerInterface(registry);
     registerBuiltinDialectTranslation(registry);
     registerLLVMDialectTranslation(registry);
@@ -716,11 +715,16 @@ void init_triton_ir(py::module &&m) {
       .def_property_readonly("type", &FuncOp::getFunctionType)
       .def("reset_type", &FuncOp::setType);
 
+  py::class_<mlir::OpBuilder>(m, "op_builder", py::module_local(),
+                              py::dynamic_attr())
+      .def(py::init<MLIRContext *>());
+
   py::class_<OpBuilder::InsertPoint>(m, "InsertPoint", py::module_local());
 
   py::class_<TritonOpBuilder>(m, "builder", py::module_local(),
                               py::dynamic_attr())
       .def(py::init<MLIRContext *>())
+      .def("get_op_builder", &TritonOpBuilder::getBuilder, ret::reference)
       // getters
       .def("create_module",
            [](TritonOpBuilder &self) -> ModuleOp {
@@ -769,58 +773,70 @@ void init_triton_ir(py::module &&m) {
            [](TritonOpBuilder &self, std::string value) -> Attribute {
              return self.getBuilder().getStringAttr(value);
            })
+      .def("get_disable_loop_licm_attr",
+           [](TritonOpBuilder &self) -> Attribute {
+             auto licmAttr =
+                 LLVM::LoopLICMAttr::get(self.getBuilder().getContext(),
+                                         self.getBuilder().getBoolAttr(true),
+                                         self.getBuilder().getBoolAttr(true));
+             mlir::LLVM::LoopAnnotationAttr la =
+                 mlir::LLVM::LoopAnnotationAttr::get(
+                     self.getBuilder().getContext(), {}, {}, {}, {}, {},
+                     licmAttr, {}, {}, {}, {}, {}, {}, {}, {}, {});
+             return la;
+           })
       // Use arith.ConstantOp to create constants
       // Constants
       .def("get_int1",
            [](TritonOpBuilder &self, bool v) -> Value {
              return Value(self.create<arith::ConstantIntOp>(
-                 v, self.getBuilder().getI1Type()));
+                 self.getBuilder().getI1Type(), v));
            })
       .def("get_int8",
            [](TritonOpBuilder &self, int64_t v) -> Value {
              return Value(self.create<arith::ConstantIntOp>(
-                 v, self.getBuilder().getI8Type()));
+                 self.getBuilder().getI8Type(), v));
            })
       .def("get_int16",
            [](TritonOpBuilder &self, int64_t v) -> Value {
              return Value(self.create<arith::ConstantIntOp>(
-                 v, self.getBuilder().getI16Type()));
+                 self.getBuilder().getI16Type(), v));
            })
       .def("get_int32",
            [](TritonOpBuilder &self, int64_t v) -> Value {
              return Value(self.create<arith::ConstantIntOp>(
-                 v, self.getBuilder().getI32Type()));
+                 self.getBuilder().getI32Type(), v));
            })
       .def("get_int64",
            [](TritonOpBuilder &self, int64_t v) -> Value {
              return Value(self.create<arith::ConstantIntOp>(
-                 v, self.getBuilder().getI64Type()));
+                 self.getBuilder().getI64Type(), v));
            })
       .def("get_uint8",
            [](TritonOpBuilder &self, uint64_t v) -> Value {
              return Value(self.create<arith::ConstantIntOp>(
-                 v, self.getBuilder().getI8Type()));
+                 self.getBuilder().getI8Type(), v));
            })
       .def("get_uint16",
            [](TritonOpBuilder &self, uint64_t v) -> Value {
              return Value(self.create<arith::ConstantIntOp>(
-                 v, self.getBuilder().getI16Type()));
+                 self.getBuilder().getI16Type(), v));
            })
       .def("get_uint32",
            [](TritonOpBuilder &self, uint64_t v) -> Value {
              return Value(self.create<arith::ConstantIntOp>(
-                 v, self.getBuilder().getI32Type()));
+                 self.getBuilder().getI32Type(), v));
            })
       .def("get_uint64",
            [](TritonOpBuilder &self, uint64_t v) -> Value {
              return Value(self.create<arith::ConstantIntOp>(
-                 v, self.getBuilder().getI64Type()));
+                 self.getBuilder().getI64Type(), v));
            })
       .def("get_bf16",
            [](TritonOpBuilder &self, float v) -> Value {
              auto type = self.getBuilder().getBF16Type();
              return self.create<arith::ConstantFloatOp>(
-                 APFloat(type.getFloatSemantics(), std::to_string(v)), type);
+                 type, APFloat(type.getFloatSemantics(), std::to_string(v)));
            })
       .def("get_fp16",
            [](TritonOpBuilder &self, float v) -> Value {
@@ -841,9 +857,9 @@ void init_triton_ir(py::module &&m) {
            [](TritonOpBuilder &self, Type type) -> Value {
              if (auto floatTy = dyn_cast<FloatType>(type))
                return self.create<arith::ConstantFloatOp>(
-                   APFloat(floatTy.getFloatSemantics(), 0), floatTy);
+                   floatTy, APFloat(floatTy.getFloatSemantics(), 0));
              else if (auto intTy = dyn_cast<IntegerType>(type))
-               return self.create<arith::ConstantIntOp>(0, intTy);
+               return self.create<arith::ConstantIntOp>(intTy, 0);
              else
                throw std::runtime_error("Not implemented");
            })
@@ -851,7 +867,7 @@ void init_triton_ir(py::module &&m) {
            [](TritonOpBuilder &self, Type type) -> Value {
              uint64_t val = 0xFFFFFFFFFFFFFFFF;
              if (auto intTy = dyn_cast<IntegerType>(type))
-               return self.create<arith::ConstantIntOp>(val, intTy);
+               return self.create<arith::ConstantIntOp>(intTy, val);
              else
                throw std::runtime_error("Not implemented");
            })
@@ -1749,11 +1765,6 @@ void init_triton_ir(py::module &&m) {
               bool isSignedInteger) -> Value {
              return self.create<MakeTensorDescOp>(base, shape, strides,
                                                   tensorShape, isSignedInteger);
-           })
-      // Proton Ops
-      .def("create_proton_record",
-           [](TritonOpBuilder &self, bool isStart, int32_t regionId) -> void {
-             self.create<mlir::triton::proton::RecordOp>(isStart, regionId);
            });
 
   py::class_<PassManager>(m, "pass_manager", py::module_local())
@@ -1893,6 +1904,85 @@ void init_triton_ir(py::module &&m) {
           py::call_guard<py::gil_scoped_release>());
 }
 
+bool str_eq_ignore_case(const char *s1, const char *s2, int n) {
+  for (int i = 0; i < n; ++i) {
+    if (tolower(s1[i]) != s2[i])
+      return false;
+  }
+  return true;
+}
+
+int strlen_max(const char *str, int max) {
+  for (int i = 0; i <= max; ++i) {
+    if (str[i] == '\0') {
+      return i;
+    }
+  }
+  return 0;
+}
+
+bool is_truthy(char *str) {
+  int len = strlen_max(str, 4);
+  switch (len) {
+  case 1:
+    return str[0] == '1' || tolower(str[0]) == 'y';
+  case 2:
+    return str_eq_ignore_case(str, "on", len);
+  case 3:
+    return str_eq_ignore_case(str, "yes", len);
+  case 4:
+    return str_eq_ignore_case(str, "true", len);
+  default:
+    return false;
+  }
+}
+
+PyObject *py_getenv(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
+  if (!(nargs == 1 || nargs == 2)) {
+    PyErr_SetString(PyExc_TypeError, "getenv expected 1 or 2 arguments");
+    return NULL;
+  }
+  PyObject *name = args[0];
+  PyObject *default_val = nargs == 2 ? args[1] : Py_None;
+  if (!PyUnicode_CheckExact(name)) {
+    PyErr_SetString(PyExc_TypeError, "name must be a string");
+    return NULL;
+  }
+  char *env_val = getenv(PyUnicode_AsUTF8(name));
+  if (!env_val) {
+    Py_INCREF(default_val);
+    return default_val;
+  }
+  return PyUnicode_FromString(env_val);
+}
+
+PyObject *py_getenv_bool(PyObject *self, PyObject *const *args,
+                         Py_ssize_t nargs) {
+  if (nargs != 2) {
+    PyErr_SetString(PyExc_TypeError, "getenv_bool expected 2 arguments");
+    return NULL;
+  }
+  PyObject *name = args[0];
+  PyObject *default_val = args[1];
+  if (!PyUnicode_CheckExact(name)) {
+    PyErr_SetString(PyExc_TypeError, "name must be a string");
+    return NULL;
+  }
+  char *env_val = getenv(PyUnicode_AsUTF8(name));
+  PyObject *res = default_val;
+  if (env_val) {
+    res = is_truthy(env_val) ? Py_True : Py_False;
+  }
+  Py_INCREF(res);
+  return res;
+}
+
+static PyMethodDef ModuleMethods[] = {
+    {"getenv", (PyCFunction)py_getenv, METH_FASTCALL, NULL},
+    {"getenv_bool", (PyCFunction)py_getenv_bool, METH_FASTCALL, NULL},
+    {NULL, NULL, 0, NULL} // sentinel
+};
+
 void init_triton_env_vars(py::module &m) {
   m.def("get_cache_invalidating_env_vars",
         []() -> std::map<std::string, std::string> {
@@ -1909,4 +1999,5 @@ void init_triton_env_vars(py::module &m) {
           }
           return ret;
         });
+  PyModule_AddFunctions(m.ptr(), ModuleMethods);
 }

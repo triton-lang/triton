@@ -17,6 +17,9 @@ public:
   Value ballot(RewriterBase &rewriter, Location loc, Type type,
                Value cmp) const override;
 
+  void barrier(Location loc, RewriterBase &rewriter,
+               bool isWarpSync = false) const override;
+
   void storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
                     std::optional<Value> ctaId, Value val,
                     Value pred) const override;
@@ -37,7 +40,7 @@ public:
                    Value i) const override;
 
   Value programId(RewriterBase &rewriter, Location loc, ModuleOp moduleOp,
-                  int axis) const override;
+                  ProgramIDDim axis) const override;
 
   bool warpReduce(RewriterBase &rewriter, Location loc, SmallVector<Value> &acc,
                   triton::ReduceOp op, unsigned numLaneToReduce,

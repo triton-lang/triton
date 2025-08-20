@@ -87,7 +87,7 @@ def TTNG_WarpGroupDotOp : TTNG_Op<"warp_group_dot", [
 
   let arguments = (ins
     TTG_TensorOrMemDesc:$a,
-    TTG_TensorOrMemDesc:$b,
+    TTG_MemDescType:$b,
     TT_FpIntTensor:$c,
     Optional<I1>:$useC,
     DefaultValuedAttr<TT_InputPrecisionAttr, "::mlir::triton::InputPrecision::IEEE">:$inputPrecision,
@@ -99,7 +99,7 @@ def TTNG_WarpGroupDotOp : TTNG_Op<"warp_group_dot", [
 
   let assemblyFormat = [{
     $a`,` $b`,` $c (`,` $useC^)? attr-dict
-    `:` type($a) `*` type($b) `->` type($d)
+    `:` type($a) `*` qualified(type($b)) `->` type($d)
   }];
 
   let extraClassDeclaration = [{
@@ -123,6 +123,7 @@ def TTNG_WarpGroupDotWaitOp : TTNG_Op<"warp_group_dot_wait", [DeclareOpInterface
   }];
 
   let assemblyFormat = "$inputs attr-dict `:` type($inputs)";
+  let hasVerifier = 1;
 }
 
 def TTNG_InitBarrierOp : TTNG_Op<"init_barrier"> {

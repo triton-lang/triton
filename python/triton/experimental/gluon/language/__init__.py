@@ -8,11 +8,15 @@ from ._standard import *  # NOQA: F403
 from ._standard import __all__ as __standard_all
 
 from . import nvidia
+from . import amd
+from . import extra
 
 __all__ = [
     *__core_all,
     *__layouts_all,
     *__math_all,
     *__standard_all,
+    "amd",
     "nvidia",
+    "extra",
 ]
