@@ -251,10 +251,13 @@ bool canUseBufferOps(Value ptr,
   if (nonNegativeOffset) {
     if (const auto *r =
             solver->lookupState<dataflow::IntegerValueRangeLattice>(offset)) {
+      // Check for initialization because not all code uses the RangeAnalysis
+      // at this time.
+      // TODO: Remove!!!!
       if (r->getValue().isUninitialized())
-        return false;
+        return true;
       if (AMD::isEmptyInitializedRange(r->getValue().getValue()))
-        return false;
+        return true;
       const ConstantIntRanges &range = r->getValue().getValue();
       int64_t maxValue = range.smax().getSExtValue() * elementByteWidth;
       return maxValue >= 0 && maxValue <= std::numeric_limits<int32_t>::max();
