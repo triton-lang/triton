@@ -35,6 +35,7 @@ from triton._internal_testing import (
     is_hip_cdna2,
     is_hip_cdna3,
     is_hip_cdna4,
+    is_hip_gfx11,
     is_hip_gfx12,
     is_xpu,
     get_arch,
@@ -78,7 +79,7 @@ elif is_hip():
     # 0 is a special value for automatic heuristic
     if is_hip_cdna():
         mma_nonk_sizes = [0, 16, 32]
-    elif is_hip_gfx12():
+    elif is_hip_gfx11() or is_hip_gfx12():
         mma_nonk_sizes = [16]
 else:
     THREADS_PER_WARP = 32
@@ -3743,12 +3744,12 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
         if cc < (8, 9):
             pytest.skip("float8e4nv not supported on CUDA < 8.9")
     if is_hip():
-        if not (is_hip_cdna() or is_hip_gfx12()):
+        if not (is_hip_cdna() or is_hip_gfx11() or is_hip_gfx12()):
             pytest.skip("scaled_dot only implemented for HIP CDNA and gfx12")
         if "e4m3" in (mxfp_type, normal_type):
             if not (is_hip_cdna3() or is_hip_cdna4() or is_hip_gfx12()):
                 pytest.skip(f"scaled_dot({mxfp_type}, {normal_type}) only implemented for CDNA3, CDNA4, gfx12")
-        if mma == 16 and K == 64 and not is_hip_gfx12():
+        if mma == 16 and K == 64 and not (is_hip_gfx12() or is_hip_gfx11()):
             pytest.skip(f"K == {K} too small for mfma {mma} in scaled_dot")
 
     @triton.jit
