@@ -20,7 +20,75 @@ from .matmul_ogs_details._finalize_matmul import _finalize_matmul
 from .matmul_ogs_details.opt_flags import make_opt_flags, update_opt_flags_constraints
 from .numerics_details.mxfp import MXFP_BLOCK_SIZE
 from .specialize import specialize
-from .tensor import Storage, Tensor, FP4, bitwidth, wrap_torch_tensor
+from .tensor import Storage, Tensor, TensorDescriptor, FP4, bitwidth, wrap_torch_tensor
+
+
+def enhanced_launch(kernel_to_launch, grid, verbose, *args, **kwargs):
+
+    if verbose:
+
+        sig = kernel_to_launch.signature
+        keys = sig.parameters.keys()
+        kwargs1 = {k : v for (k, v) in kwargs.items() if k in keys}
+        kwargs2 = {k : v for (k, v) in kwargs.items() if k not in keys}
+        bs = sig.bind(*args, **kwargs1)
+        non_defaults = set(bs.arguments.keys())
+        bs.apply_defaults()
+        things  = list(bs.arguments.items())
+        things += list(kwargs2.items())
+
+        constexpr_keys = set([p.name for p in kernel_to_launch.params if p.is_constexpr])
+
+        def decorate(k, v):
+
+            if k in kwargs2:
+                # meta-argument, explicitly provided
+                c = 36
+            elif k in constexpr_keys:
+                c = 33
+            else:
+                c = 32
+
+            if (k not in non_defaults) and (k not in kwargs2):
+                # default argument:
+                colours = (';2', '', ';2')
+            elif k in kwargs:
+                # argument passed by keyword:
+                colours = ('', ';1', '')
+            else:
+                # argument passed by position:
+                colours = (';2', ';1', '')
+
+            colours = ['%d%s' % (c, x) for x in colours]
+
+            argstr = []
+            def aa(x, c=None):
+                x = str(x)
+                if c is None:
+                    argstr.append(x)
+                else:
+                    argstr.append('\033[%sm%s\033[0m' % (colours[c], x))
+
+            aa(k, 0)
+            aa("=", 0)
+
+            if isinstance(v, TensorDescriptor):
+                aa(v.block_shape, 1)
+                aa('::', 2)
+                aa(v.shape, 1)
+            elif hasattr(v, 'shape') and hasattr(v, 'dtype'):
+                aa(str(v.dtype).split('.')[-1] + str(list(v.shape)), 1)
+            else:
+                aa(v, 1)
+
+            return "".join(argstr)
+
+        things = [decorate(k, v) for (k, v) in things]
+        name = kernel_to_launch.__name__
+        status_line = "Launching \033[31;1m%s\033[0m[\033[34;1m%s\033[0m](%s)" % (name, str(grid), ", ".join(things))
+        print(status_line)
+
+    return kernel_to_launch[grid](*args, **kwargs)
 
 
 @dataclass(frozen=True)
@@ -547,7 +615,12 @@ def matmul_ogs(x, w, bias,
     out_scale_strides = (0, ) * (3 - len(out_scale_strides)) + out_scale_strides
     # launch kernel
     kernels = get_kernels(epilogue.specs, fused_activation.specs)
-    (kernels._p_matmul_ogs if opt_flags.is_persistent else kernels._matmul_ogs)[(grid,)](
+
+    kernel_to_launch = (kernels._p_matmul_ogs if opt_flags.is_persistent else kernels._matmul_ogs)
+
+    verbose = (M <= 32)
+
+    enhanced_launch(kernel_to_launch, (grid,), verbose,
                    y_tensor_or_tma, y_storage.data, *out0.stride(),
                    *((None, out_scale, None) if out_has_mx else out0_flex),
                    *out_scale_strides[-3:],
