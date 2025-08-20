@@ -35,7 +35,7 @@ test-unit: all
 		--ignore=language/test_subprocess.py --ignore=test_debug.py
 	$(PYTEST) -s -n $(NUM_PROCS) python/test/unit/language/test_subprocess.py
 	$(PYTEST) -s -n $(NUM_PROCS) python/test/unit/test_debug.py --forked
-	$(PYTEST) -s -n 8 python/triton_kernels/tests/
+	$(PYTEST) -s -n 6 python/triton_kernels/tests/
 	TRITON_DISABLE_LINE_INFO=0 $(PYTEST) -s python/test/unit/language/test_line_info.py
 	# Run attention separately to avoid out of gpu memory
 	$(PYTEST) -vs python/tutorials/06-fused-attention.py

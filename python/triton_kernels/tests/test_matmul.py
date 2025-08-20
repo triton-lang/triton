@@ -554,7 +554,14 @@ def test_small_batch_matmul(m, n, k):
         w = _make_tensor((BATCH_SIZE, k, n), dtype, w_transpose)
         bias = _make_tensor((BATCH_SIZE, n), torch.float32, False) if bias else None
         tri_y = matmul_ogs(x, w, bias)
-        ref_y = matmul_ogs_torch(x.float(), w.float(), bias)
+
+        # ref_y = matmul_ogs_torch(x.float(), w.float(), bias)
+
+        # This is faster than matmul_ogs_torch.
+        ref_y = torch.bmm(x.float(), w.float())
+        if bias is not None:
+            ref_y += bias[:, None, :]
+
         assert_close(
             ref_y,
             tri_y,
