@@ -571,6 +571,12 @@ def ScaledUpcastFp8Op : TT_AMDGPU_Op<"scaled_upcast_fp8", [
     encoded as BF16. This maps to `v_cvt_scalef32_*` intrinsics
     on the AMD CDNA4 architecture.
   }];
+
+  let builders = [
+      OpBuilder<(ins "TypedValue<RankedTensorType>":$input,
+                     "TypedValue<RankedTensorType>":$scale)>
+    ];
+
   let arguments = (ins
     RankedTensorOf<[AnyTypeOf<[F8E4M3FN, F8E5M2]>]>:$input,
     RankedTensorOf<[BF16]>:$scale);
