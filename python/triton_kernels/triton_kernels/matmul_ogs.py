@@ -17,7 +17,7 @@ from .matmul_ogs_details._matmul_ogs import _matmul_ogs
 from .matmul_ogs_details._p_matmul_ogs import _p_matmul_ogs, get_per_device_per_stream_alloc_fn
 from .matmul_ogs_details._reduce_grouped import _reduce_grouped
 from .numerics_details.mxfp import MXFP_BLOCK_SIZE
-from .matmul_ogs_details.opt_flags import make_opt_flags, update_opt_flags_constraints
+from .matmul_ogs_details.opt_flags import make_opt_flags, update_opt_flags_constraints, InapplicableConstraint
 from .specialize import specialize
 from .tensor import Storage, Tensor, FP4, bitwidth, wrap_torch_tensor
 
@@ -364,7 +364,7 @@ def matmul_ogs(x, w, bias,
         batch_size, M, N, K, routing_data, can_use_tma, can_use_fused_scatter, epilogue.effective_itemsize,
     )
     if not can_use_fused_scatter and opt_flags.fused_scatter:
-        raise NotImplementedError("Fused scatter is not supported")
+        raise InapplicableConstraint("Fused scatter is not supported")
     if w_scale is not None and opt_flags.is_persistent and not target_info.has_native_mxfp():
         raise NotImplementedError("Must use non-persistent kernel for simulated MXFP")
     if w_scale is not None and w_scale.storage.layout.name is not None and not opt_flags.is_persistent and target_info.has_native_mxfp():
