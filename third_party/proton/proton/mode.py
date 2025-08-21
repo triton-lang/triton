@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field
+import logging
 from triton._C.libtriton import proton as triton_proton
-from typing import List
+from typing import List, Optional
 from enum import Enum
 
 metric_types = {"cycle": triton_proton.METRIC_TYPE.CYCLE}
@@ -80,6 +81,9 @@ class InstrumentationMode(BaseMode):
     buffer_type: triton_proton.BUFFER_TYPE = triton_proton.BUFFER_TYPE.SHARED
     buffer_size: int = 0
     optimizations: List[Optimize] = field(default_factory=list)
+    memory_frequency: Optional[int] = None
+    compute_frequency: Optional[int] = None
+    frequency_lock: bool = True
 
     def __post_init__(self):
         # automatically map string inputs to enums using the global lookup dicts
@@ -105,12 +109,27 @@ class InstrumentationMode(BaseMode):
                     raise ValueError(f"Unknown optimization: {value}")
             object.__setattr__(self, "optimizations", [optimizations[value] for value in values])
 
+        if self.compute_frequency is None or self.memory_frequency is None:
+            import triton
+
+            if not self.frequency_lock:
+                logging.warning("Instrumentation frequency is not locked. This may lead to inaccurate results.")
+
+            device = triton.runtime.driver.active.get_current_device()
+            properties = triton.runtime.driver.active.utils.get_device_properties(device)
+            if self.compute_frequency is None:
+                object.__setattr__(self, "compute_frequency", properties["sm_clock_rate"] // 1000)  # Unit: MHz
+            if self.memory_frequency is None:
+                object.__setattr__(self, "memory_frequency", properties["mem_clock_rate"] // 1000)  # Unit: MHz
+
     def __str__(self):
         optimizations_str = ",".join([str(opt) for opt in self.optimizations])
         return (f"{self.name}:metric_type={self.metric_type}:sampling_strategy={self.sampling_strategy}"
                 f":sampling_options={self.sampling_options}:granularity={self.granularity}"
                 f":buffer_strategy={self.buffer_strategy}:buffer_type={self.buffer_type}"
-                f":buffer_size={self.buffer_size}:optimizations={optimizations_str}")
+                f":buffer_size={self.buffer_size}:optimizations={optimizations_str}"
+                f":memory_frequency={self.memory_frequency}:compute_frequency={self.compute_frequency}"
+                f":frequency_lock={self.frequency_lock}")
 
 
 @dataclass(frozen=True)

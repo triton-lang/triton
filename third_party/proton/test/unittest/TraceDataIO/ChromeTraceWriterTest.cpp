@@ -78,6 +78,7 @@ TEST_F(ChromeTraceWriterTest, SingleBlock) {
   result->blockTraces[0].blockId = 1;
   result->blockTraces[0].procId = 120;
   result->blockTraces[0].initTime = 0;
+  result->blockTraces[0].computeFrequency = 1000;
   result->blockTraces[0].traces[0].uid = 2;
   result->blockTraces[0].traces[0].profileEvents[0].first->cycle = 122;
   result->blockTraces[0].traces[0].profileEvents[0].second->cycle = 162;
@@ -112,6 +113,7 @@ TEST_F(ChromeTraceWriterTest, MultiBlockMultiWarp) {
     for (int j = 0; j < 2; j++) {
       result->blockTraces[j].blockId = 1 + j;
       result->blockTraces[j].procId = 120 + j;
+      result->blockTraces[j].computeFrequency = 1000;
       result->blockTraces[j].traces[i].uid = i;
       result->blockTraces[j].traces[i].profileEvents[0].first->cycle = 122;
       result->blockTraces[j].traces[i].profileEvents[0].second->cycle = 162;
@@ -145,12 +147,8 @@ TEST_F(ChromeTraceWriterTest, MultiBlockMultiWarp) {
     pidCount[data["traceEvents"][i]["pid"]] += 1;
     tidCount[data["traceEvents"][i]["tid"]] += 1;
   }
-  EXPECT_EQ(
-      pidCount["kernel2 Core121 CTA2 [measure in clock cycle (assume 1GHz)]"],
-      12);
-  EXPECT_EQ(
-      pidCount["kernel2 Core120 CTA1 [measure in clock cycle (assume 1GHz)]"],
-      12);
+  EXPECT_EQ(pidCount["kernel2 Core121 CTA2"], 12);
+  EXPECT_EQ(pidCount["kernel2 Core120 CTA1"], 12);
   EXPECT_EQ(tidCount["warp 0 (line 0)"], 4);
   EXPECT_EQ(tidCount["warp 0 (line 1)"], 4);
   EXPECT_EQ(tidCount["warp 1 (line 0)"], 4);
@@ -170,6 +168,7 @@ TEST_F(ChromeTraceWriterTest, MultiKernel) {
       result1->blockTraces[j].blockId = j;
       result1->blockTraces[j].procId = j;
       result1->blockTraces[j].initTime = 0;
+      result1->blockTraces[j].computeFrequency = 1000;
       result1->blockTraces[j].traces[i].uid = i;
       result1->blockTraces[j].traces[i].profileEvents[0].first->cycle = 1220000;
       result1->blockTraces[j].traces[i].profileEvents[0].second->cycle =
@@ -189,6 +188,7 @@ TEST_F(ChromeTraceWriterTest, MultiKernel) {
       result2->blockTraces[j].blockId = j;
       result2->blockTraces[j].procId = j;
       result2->blockTraces[j].initTime = 10000000;
+      result2->blockTraces[j].computeFrequency = 1000;
       result2->blockTraces[j].traces[i].uid = i;
       result2->blockTraces[j].traces[i].profileEvents[0].first->cycle = 1220000;
       result2->blockTraces[j].traces[i].profileEvents[0].second->cycle =
