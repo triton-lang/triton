@@ -25,6 +25,7 @@ namespace ttng = triton::nvidia_gpu;
 
 struct Options {
   bool dump = false;
+  bool dump_dot = false;
   bool dump_loop_only = false;
   bool dump_data_only = false;
   bool manual = false;
@@ -1313,7 +1314,7 @@ void mergeGroups(Graph *graph, std::string funcName,
             auto to_group = edge.getToNode()->getGroup();
             Group::merge(from_group, to_group);
 
-            if (options.dump) {
+            if (options.dump_dot) {
               std::stringstream name;
               name << "graph-merge-step-" << std::setfill('0') << std::setw(4)
                    << iter << "-" << funcName << ".dot";
@@ -1564,7 +1565,7 @@ void propagateGroups(Graph *graph, std::string funcName,
     return name.str();
   };
 
-  if (options.dump)
+  if (options.dump_dot)
     visualize(dump_name(0), graph, vis_info);
 
   // propagate groups to parent ops
@@ -1649,7 +1650,7 @@ void propagateGroups(Graph *graph, std::string funcName,
     }
   }
 
-  if (options.dump)
+  if (options.dump_dot)
     visualize(dump_name(1), graph, vis_info);
 
   // propagate groups of tt.reduce into its body
@@ -1660,7 +1661,7 @@ void propagateGroups(Graph *graph, std::string funcName,
     }
   });
 
-  if (options.dump)
+  if (options.dump_dot)
     visualize(dump_name(2), graph, vis_info);
 
   // Corner case: tmem store following tmem alloc should be in a warp group
@@ -1695,7 +1696,7 @@ void propagateGroups(Graph *graph, std::string funcName,
     }
   });
 
-  if (options.dump)
+  if (options.dump_dot)
     visualize(dump_name(3), graph, vis_info);
 
   // propagate groups for patched up nodes to non-data nodes
@@ -1724,7 +1725,7 @@ void propagateGroups(Graph *graph, std::string funcName,
     }
   }
 
-  if (options.dump)
+  if (options.dump_dot)
     visualize(dump_name(4), graph, vis_info);
 }
 
@@ -2250,6 +2251,7 @@ void PartitionAnalysis::runOnOperation() {
 
   auto &options = get_options();
   options.dump = tools::getBoolEnv("PARTITION_ANALYSIS_ENABLE_DUMP");
+  options.dump_dot = tools::getBoolEnv("PARTITION_ANALYSIS_ENABLE_DUMP_DOT");
   options.dump_data_only =
       tools::getBoolEnv("PARTITION_ANALYSIS_DUMP_DATA_ONLY");
   options.dump_loop_only =
@@ -2286,19 +2288,19 @@ void PartitionAnalysis::runOnOperation() {
   propagateDataValues(initValues);
   options.manual = deserializeManualGroups(m, graph.get());
   VisualizationInfo vis_info;
-  if (options.dump)
+  if (options.dump_dot)
     visualize(std::string("graph-input-") + func.getSymName().str() + ".dot",
               graph.get(), vis_info);
   initialGroupAssignment(graph.get());
-  if (options.dump)
+  if (options.dump_dot)
     visualize(std::string("graph-initial-") + func.getSymName().str() + ".dot",
               graph.get(), vis_info);
   mergeGroups(graph.get(), func.getSymName().str(), vis_info);
-  if (options.dump)
+  if (options.dump_dot)
     visualize(std::string("graph-merged-") + func.getSymName().str() + ".dot",
               graph.get(), vis_info);
   propagateGroups(graph.get(), func.getSymName().str(), vis_info);
-  if (options.dump)
+  if (options.dump_dot)
     visualize(std::string("graph-final-") + func.getSymName().str() + ".dot",
               graph.get(), vis_info);
   assignWarpsAndRegisters(m, graph.get());

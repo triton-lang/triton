@@ -14,8 +14,11 @@ kinds = ["nvws", "main"]
 tests = os.listdir(os.path.join(root_dir, "input"))
 for kind in kinds:
     for test in sorted(tests):
-
         print(test, kind, end="")
+
+        run_dir = os.path.join(root_dir, "run-"+kind, test)
+        os.makedirs(run_dir, exist_ok=True)
+
         output = subprocess.check_output(
             [
                 bin_dir + "/triton-opt",
@@ -25,9 +28,11 @@ for kind in kinds:
                 os.path.join(root_dir, "input", test),
             ],
             env={
+                "PARTITION_ANALYSIS_ENABLE_DUMP_DOT": "1",
                 "PARTITION_ANALYSIS_NVWS_SERIALIZATION": "1" if kind == "nvws" else "0",
                 "TRITON_OVERRIDE_ARCH": "sm100",
             },
+            cwd=run_dir
         ).decode()
 
 
