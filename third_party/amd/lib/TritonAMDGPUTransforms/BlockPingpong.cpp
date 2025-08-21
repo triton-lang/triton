@@ -80,6 +80,7 @@ private:
                          unsigned numSlices);
   void transformOnePPClusters(OpBuilder &builder, Location loc);
   LogicalResult transformFourPPClusters(OpBuilder &builder, Location loc);
+  LogicalResult setReadPrioOverWrite(OpBuilder &builder, Location loc);
   LogicalResult transformTwoPPClusters(OpBuilder &builder, Location loc);
   LogicalResult transformTwoClusterWithLocalLoadAndAll(OpBuilder &builder,
                                                        Location loc);
@@ -667,6 +668,22 @@ LogicalResult Pingponger::transformTwoClusterWithAsyncAndAll(OpBuilder &builder,
   return success();
 }
 
+LogicalResult Pingponger::setReadPrioOverWrite(OpBuilder &builder,
+                                                      Location loc) {
+  // Helping cases not using async copy.
+  // Assuming operations are scheduled by the pipeliner as below
+  // global_load -> local_load -> dot -> local_store
+  // prioritize local_load over local_store when multiple warps competes
+  // this helps unblocking local_loads and mfmas depend on it.
+  if (asyncCopyOps.size() > 0)
+    return failure();
+  updateOpInsertion(gLoadOps[0]);
+  appendOp(builder.create<ROCDL::SetPrioOp>(loc, highPriority));
+  updateOpInsertion(dotOps[0]);
+  appendOp(builder.create<ROCDL::SetPrioOp>(loc, lowPriority));
+  return success();
+}
+
 // For ChainedDots with num_stage==4 the pipeliner already places ops in the
 // correct order to allow for efficient pingpong. The loop contains 2 pairs of
 // compute and memory clusters so we only have to place barriers/sched.barriers
@@ -1030,6 +1047,20 @@ void Pingponger::getDotPingponged() {
   gLoadOps.erase(gLoadIt, gLoadOps.end());
   lLoadOps.erase(lLoadIt, lLoadOps.end());
   lStoreOps.erase(lStoreIt, lStoreOps.end());
+
+  // Mixed type gemm with scale case.
+  bool isGemmWithScale = dotOps.size() == 1 && gLoadOps.size() > 2 && lLoadOps.size() > 2;
+  if (isGemmWithScale && numWarps == 4 && numStages == 2) {
+    // NxK = 128x256
+    if (dotShape[1] == 128 && aShape[1] == 256 && elemWidth == 16) {
+      if(setReadPrioOverWrite(builder, dotOps[0]->getLoc()).failed()) {
+        LDBG("Failed during inserting setprio to local_load/store");
+      }
+      return;
+    }
+    return;
+  }
+
   // All PingPong Scheduler assumes there are 2 movable global loads and 2
   // movable local loads.
   if (gLoadOps.size() != 2 || lLoadOps.size() != 2) {
