@@ -2305,7 +2305,7 @@ struct TritonGPUInferLayoutInterface
           permuteCTALayout(ctx, enc.getCTALayout(), order);
       resultEncoding = PaddedSharedEncodingAttr::get(
           ctx, enc.getIntervals(), enc.getPaddings(),
-          applyPermutation(enc.getOrder(), order), ctaLayout);
+          applyPermutation(invOrderUnsigned, enc.getOrder()), ctaLayout);
       return success();
     }
 
