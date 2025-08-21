@@ -236,7 +236,7 @@ LinearLayout getTileLayout(MLIRContext *ctx, TMemAccessAtom atom, int bitwidth,
   bases[kWarp].push_back({64, 0});
   auto ret = LinearLayout(bases, {{kRow, 128}, {kCol, nCol}}, false);
   // Broadcast the row dimension if it's smaller than 128
-  ret = ensureLayoutNotLargerThan(ret, {{kRow, nRow}, {kCol, nCol}}, true);
+  ret = ensureLayoutNotLargerThan(ret, {{kRow, nRow}, {kCol, nCol}});
   // For unpacked, the tile above is for 32-bit elements, so we have to multiply
   // by identity1D(32 / bitwidth, kReg, kCol) to get the correct tile to allow
   // us to divide the cvt layout by it

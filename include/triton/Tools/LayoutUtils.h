@@ -52,9 +52,9 @@ bool squareSublayoutIsIdentity(const LinearLayout &ll,
 //
 // Now the output dimension of this layout has a size of 8, which is the desired
 // size.  Note that this method works only because the bases are powers of two,
-// which is the case for DistributedLayouts If broadcastRegisters is false, we
-// remove any register that's larger than the desired shape. In the example
-// above we would have
+// which is the case for DistributedLayouts. If broadcastRemoveDim is set,
+// we remove any bases in that dimension that's larger than the desired shape.
+// In the example above for "register" we would have
 //   L(register=1) = 4
 //   L(register=2) = 1
 //   L(lane=1) = 2
@@ -62,7 +62,7 @@ bool squareSublayoutIsIdentity(const LinearLayout &ll,
 LinearLayout
 ensureLayoutNotLargerThan(const LinearLayout &layout,
                           const llvm::SmallDenseMap<StringAttr, int64_t> &shape,
-                          bool broadcastRegisters = true);
+                          StringRef broadcastRemovalDim = "");
 
 // For each out-dim d, ensure the layout's out-size (i.e. its codomain) is no
 // smaller than shape[d].  Do this by increasing the size of the layout's inputs

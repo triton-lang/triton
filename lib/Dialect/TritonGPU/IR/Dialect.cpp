@@ -1004,7 +1004,8 @@ LinearLayout LinearEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   }
   ll = ll.transposeOuts(permutedDims);
   ll = ensureLayoutNotSmallerThan(ll, namedShape);
-  ll = ensureLayoutNotLargerThan(ll, namedShape, /*broadcastRegisters=*/false);
+  ll = ensureLayoutNotLargerThan(ll, namedShape,
+                                 /*removeBroadcastsInDim=*/"register");
   ll = ll.transposeOuts(canonicalDims);
   return ll;
 }
