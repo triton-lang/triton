@@ -1007,7 +1007,6 @@ SmallVector<SmallVector<unsigned>> emitOffsetForLayout(Attribute layout,
     offsets.push_back(
         llvm::to_vector_of<unsigned>(llvm::make_second_range(idxs)));
   }
-
   return offsets;
 }
 

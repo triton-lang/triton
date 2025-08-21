@@ -446,8 +446,8 @@ def test_sharedmem_with_padded_layout():
         offs_m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, blocked))
         offs_n = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, blocked))
         offs = offs_m[:, None] * N + offs_n[None, :]
-        a = ttgl.amd.cdna3.buffer_load(ptr=a_ptr, offsets=offs)
-
+        a_ptrs = a_ptr + offs
+        a = ttgl.load(a_ptrs)
         smem = ttgl.allocate_shared_memory(a_ptr.dtype.element_ty, [M, N], padded)
         smem.store(a)
         smem = smem.permute((1, 0))
@@ -458,12 +458,15 @@ def test_sharedmem_with_padded_layout():
         offs_n_tr = ttgl.arange(0, N, layout=ttgl.SliceLayout(1, blocked))
         offs_m_tr = ttgl.arange(0, M, layout=ttgl.SliceLayout(0, blocked))
         offs_transed = offs_n_tr[:, None] * M + offs_m_tr[None, :]
-        ttgl.amd.cdna3.buffer_store(stored_value=transed, ptr=b_ptr, offsets=offs_transed)
+        b_ptrs = b_ptr + offs_transed
+        ttgl.store(b_ptrs, transed)
+        # ttgl.amd.cdna3.buffer_store(stored_value=transed, ptr=b_ptr, offsets=offs_transed)
 
     M, N = 16, 4
     input = torch.arange(0, M * N, device="cuda", dtype=torch.int32).reshape(M, N)
     triton_output = torch.arange(0, M * N, device="cuda", dtype=torch.int32).reshape(N, M)
     kernel[1, 1](input, triton_output, M, N)
+
     # the triton_ouput from the kernel looks like the following and x is the padded element.
     #[
     #[ 0,  1,  2,  3,  x,  x,  x,  x,  4,  5,  6,  7,  x,  x,  x,  x],
