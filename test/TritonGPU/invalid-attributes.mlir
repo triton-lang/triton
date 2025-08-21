@@ -111,3 +111,23 @@
 
 // expected-error@+1 {{order size (3) must match CTALayout rank (2)}}
 #shared = #ttg.padded_shared<[2:+1, 4:+2] {order = [2, 1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
+
+// -----
+
+// expected-error@+1 {{Expected dimensionality of the output of the linear layout (2) to agree with the rank of the order(3)}}
+#shared = #ttg.padded_shared<[2:+1, 4:+2] {order = [1, 0, 2]} {offset = [[1, 0], [0, 1]]}>
+
+// -----
+
+// expected-error@+1 {{Each offset basis must be a power of two.}}
+#shared = #ttg.padded_shared<[2:+1, 4:+2] {order = [1, 0]} {offset = [[1, 0], [3, 0]]}>
+
+// -----
+
+// expected-error@+1 {{Each offset basis must move in at most one dimension.}}
+#shared = #ttg.padded_shared<[2:+1, 4:+2] {order = [1, 0]} {offset = [[1, 0], [1, 1]]}>
+
+// -----
+
+// expected-error@+2 {{Expected basis of 'offset' not found}}
+#shared = #ttg.padded_shared<[2:+1, 4:+2] {order = [1, 0]} {register = [[0, 1], [0, 2]]}>
