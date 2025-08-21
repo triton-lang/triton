@@ -27,8 +27,8 @@ __all__ = [
 def __getattr__(name: str) -> Any:
     """Allow attribute-style access to dynamically forwarded symbols.
 
-    This suppresses mypy attr-defined errors for names injected in `_core` via
-    runtime loops (e.g. associative_scan). If the name truly doesn't exist,
+    This suppresses mypy attr-defined errors for names injected in `_core` at
+    runtime (e.g. associative_scan). If the name truly doesn't exist,
     AttributeError propagates as usual.
     """
     try:
