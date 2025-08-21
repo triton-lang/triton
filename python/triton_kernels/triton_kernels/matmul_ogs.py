@@ -241,6 +241,10 @@ def reduce_grouped(x: torch.Tensor, indx: torch.Tensor, fused_activation, epilog
         num_groups = indx.shape[0]
     else:
         num_groups = x.shape[-2]
+    if x_flex is None:
+        x_flex = InFlexData()
+    if out_flex is None:
+        out_flex = OutFlexData()
     K = 1 if indx is None else indx.shape[1]
     out_dtype = x.dtype if out_dtype is None else out_dtype
     assert x.shape[-1] % fused_activation.reduction_n == 0

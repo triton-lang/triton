@@ -5,7 +5,7 @@ import torch
 from triton.tools.tensor_descriptor import TensorDescriptor
 from triton.tools.ragged_tma import create_ragged_descriptor
 
-from .reduce_details.reduce_bitmatrix import clear_sums, sum_bitmatrix_rows
+from .reduction_details.reduce_bitmatrix import clear_sums, sum_bitmatrix_rows
 from .target_info import cuda_capability_geq
 from .tensor_details.layout import Layout, StridedLayout
 
