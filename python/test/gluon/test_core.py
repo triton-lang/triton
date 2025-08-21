@@ -460,7 +460,6 @@ def test_sharedmem_with_padded_layout():
         offs_transed = offs_n_tr[:, None] * M + offs_m_tr[None, :]
         b_ptrs = b_ptr + offs_transed
         ttgl.store(b_ptrs, transed)
-        # ttgl.amd.cdna3.buffer_store(stored_value=transed, ptr=b_ptr, offsets=offs_transed)
 
     M, N = 16, 4
     input = torch.arange(0, M * N, device="cuda", dtype=torch.int32).reshape(M, N)
