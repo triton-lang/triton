@@ -910,11 +910,10 @@ struct TensorMemoryCopyOpConversion
     auto srcTy = cast<MemDescType>(op.getSrc().getType());
     assert(isa<triton::gpu::SharedMemorySpaceAttr>(srcTy.getMemorySpace()));
 
-    Value baseSrc =
-        LLVM::getSharedMemoryObjectFromStruct(
-            loc, adaptor.getSrc(),
-            typeConverter->convertType(srcTy.getElementType()), rewriter)
-            .getBase();
+    Type elemTy = typeConverter->convertType(srcTy.getElementType());
+    auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
+                                                         elemTy, rewriter);
+    Value baseSrc = smemObj.getShmemAffineBase(loc, rewriter, srcTy);
 
     Value baseDst = adaptor.getDst();
     auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
