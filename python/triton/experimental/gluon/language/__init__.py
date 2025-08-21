@@ -1,4 +1,7 @@
-from . import _core as _gluon_core  # runtime module reference
+from . import _core as _gluon_core
+from . import _layouts as _gluon_layouts
+from . import _math as _gluon_math
+from . import _standard as _gluon_standard
 from ._core import *  # NOQA: F403
 from ._core import __all__ as __core_all
 from ._layouts import *  # NOQA: F403
@@ -31,7 +34,14 @@ def __getattr__(name: str) -> Any:
     runtime (e.g. associative_scan). If the name truly doesn't exist,
     AttributeError propagates as usual.
     """
-    try:
-        return getattr(_gluon_core, name)
-    except AttributeError:
+    lookup_map = {
+        __core_all: getattr(_gluon_core, name),
+        __layouts_all: getattr(_gluon_layouts, name),
+        __math_all: getattr(_gluon_math, name),
+        __standard_all: getattr(_gluon_standard, name),
+    }
+    for key, value in lookup_map.items():
+        if name in key:
+            return value
+    else:
         raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
