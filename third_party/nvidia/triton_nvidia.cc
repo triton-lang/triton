@@ -98,7 +98,8 @@ static void checkMatmulConstraints(const std::string &A_dtype,
   if (A_dtype != B_dtype || A_dtype != C_dtype) {
     throw std::runtime_error("Data types do not match.");
   }
-  if (A_dtype != "torch.float8_e4m3fn" && A_dtype != "torch.float16") {
+  if (A_dtype != "torch.float8_e4m3fn" && A_dtype != "torch.float16" &&
+      A_dtype != "torch.float32") {
     throw std::runtime_error("Unsupported data type.");
   }
 
@@ -234,6 +235,13 @@ void init_triton_nvidia(py::module &&m) {
                dtype = CUDA_R_8F_E4M3;
              } else if (dtype_str == "float16") {
                dtype = CUDA_R_16F;
+             } else if (dtype_str == "float32") {
+               // Use FP32 inputs with TF32 compute in cublasLt (set in compute
+               // type)
+               dtype = CUDA_R_32F;
+             } else {
+               throw std::runtime_error(
+                   "Unsupported dtype for cublasLt.matmul: " + dtype_str);
              }
 
              self.matmul(A_shape[0], B_shape[0], A_shape[1], A_ptr, B_ptr,
@@ -271,6 +279,11 @@ void init_triton_nvidia(py::module &&m) {
           dtype = CUDA_R_8F_E4M3;
         } else if (dtype_str == "float16") {
           dtype = CUDA_R_16F;
+        } else if (dtype_str == "float32") {
+          dtype = CUDA_R_32F;
+        } else {
+          throw std::runtime_error("Unsupported dtype for cublasLt.gemm: " +
+                                   dtype_str);
         }
 
         self.gemm(A_shape[0], B_shape[0], A_shape[1], A_ptr, B_ptr, C_ptr,
