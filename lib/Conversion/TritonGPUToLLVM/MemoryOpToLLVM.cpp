@@ -25,23 +25,21 @@ LogicalResult lowerLocalStore(Location loc, MLIRContext *ctx, Value regVal,
   auto kReg = str_attr("register");
   auto kLane = str_attr("lane");
   auto kWarp = str_attr("warp");
-  auto kOffset = str_attr("offset");
   auto regLayout = toLinearLayout(regTy);
-  auto paddedEnc =
-      dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(memDescTy.getEncoding());
   LinearLayout cvt = LinearLayout::empty();
-  if (paddedEnc) {
-    cvt = getPaddedRegToSharedLayout(regLayout, paddedEnc);
-  } else {
-    auto sharedLayout = toLinearLayout(memDescTy);
-    cvt = regLayout.invertAndCompose(sharedLayout);
-    auto kBlock = str_attr("block");
-    // NYI. We would need to emit a map.shared::cluster instruction.
-    if (!cvt.isTrivialOver({kBlock})) {
-      return failure();
-    }
+  auto sharedLayout = toLinearLayout(memDescTy);
+  cvt = regLayout.invertAndCompose(sharedLayout);
+  auto kBlock = str_attr("block");
+  // NYI. We would need to emit a map.shared::cluster instruction.
+  if (!cvt.isTrivialOver({kBlock})) {
+    return failure();
   }
-  cvt = cvt.sublayout({kReg, kLane, kWarp}, {kOffset});
+
+  // Remove block dimension from layout
+  SmallVector<StringAttr> sublayoutOutDims;
+  llvm::copy_if(cvt.getOutDimNames(), std::back_inserter(sublayoutOutDims),
+                [&](auto val) { return val != kBlock; });
+  cvt = cvt.sublayout({kReg, kLane, kWarp}, sublayoutOutDims);
   lowerLocalLdSt(loc, ctx, cvt, inVals, llvmElemTy, memDescTy, smemObj,
                  rewriter, targetInfo);
 
@@ -162,22 +160,21 @@ public:
     auto kReg = str_attr("register");
     auto kLane = str_attr("lane");
     auto kWarp = str_attr("warp");
-    auto kOffset = str_attr("offset");
     auto regLayout = toLinearLayout(regTy);
-    auto paddedEnc = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(sharedEnc);
     LinearLayout cvt = LinearLayout::empty();
-    if (paddedEnc) {
-      cvt = getPaddedRegToSharedLayout(regLayout, paddedEnc);
-    } else {
-      auto sharedLayout = toLinearLayout(memDescTy);
-      cvt = regLayout.invertAndCompose(sharedLayout);
-      auto kBlock = str_attr("block");
-      // NYI. We would need to emit a map.shared::cluster instruction.
-      if (!cvt.isTrivialOver({kBlock})) {
-        return failure();
-      }
+    auto sharedLayout = toLinearLayout(memDescTy);
+    cvt = regLayout.invertAndCompose(sharedLayout);
+    auto kBlock = str_attr("block");
+    // NYI. We would need to emit a map.shared::cluster instruction.
+    if (!cvt.isTrivialOver({kBlock})) {
+      return failure();
     }
-    cvt = cvt.sublayout({kReg, kLane, kWarp}, {kOffset});
+
+    // Remove block dimension from layout
+    SmallVector<StringAttr> sublayoutOutDims;
+    llvm::copy_if(cvt.getOutDimNames(), std::back_inserter(sublayoutOutDims),
+                  [&](auto val) { return val != kBlock; });
+    cvt = cvt.sublayout({kReg, kLane, kWarp}, sublayoutOutDims);
 
     auto outVals = lowerLocalLdSt(loc, ctx, cvt, {}, llvmElemTy, memDescTy,
                                   smemObj, rewriter, targetInfo, op);

@@ -121,7 +121,7 @@ LinearLayout ensureLayoutNotSmallerThan(
   }
 
   StringAttr kDim = *layout.getInDimNames().begin();
-  assert(kDim == "register" || kDim == "offset");
+  assert(kDim == "register" || kDim == "offset" || kDim == "index");
 
   LinearLayout ret = layout;
   for (StringAttr outDimName : layout.getOutDimNames()) {

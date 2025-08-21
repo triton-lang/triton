@@ -174,6 +174,28 @@ LinearLayout swizzledSharedToLinearLayout(ArrayRef<int64_t> shape,
   return combineCtaCgaWithShape(ctaLayout, shared.getCTALayout(), shape);
 }
 
+/// Converts padded layout to LL mapping <sequential element index or "index">
+/// -> <logical tensor coordinates dim1, dim2... dimN>
+///
+/// "Sequential element index" defines order in which elements are stored in
+/// memory, but do not fix offsets between adjacent elements, like "offset" do.
+///
+/// For example LL "offset" -> "dim 1", bases [[1], [2]] fully defines offsets:
+///
+/// memory address: |   0    |   1    |   2    |   3    |
+/// element:        | elem 0 | elem 1 | elem 2 | elem 3 |
+///
+///
+/// "index" defines only relative order of elements and different mapping are
+/// possible:
+///
+/// possible mapping 1
+/// memory address: |   0    |   1    |   2    |   3    |   4    |
+/// element:        | elem 0 | elem 1 |  PAD   | elem 2 | elem 3 |
+///
+/// possible mapping 2
+/// memory address: |   0    |   1    |   2    |   3    |   4    |   5    |
+/// element:        | elem 0 |  PAD   | elem 1 |  PAD   | elem 2 | elem 3 |
 LinearLayout sharedToLinearLayoutPadded(ArrayRef<int64_t> shape,
                                         PaddedSharedEncodingAttr shared) {
   MLIRContext *ctx = shared.getContext();
@@ -181,7 +203,7 @@ LinearLayout sharedToLinearLayoutPadded(ArrayRef<int64_t> shape,
   auto shapePerCTA =
       llvm::to_vector_of<unsigned>(getShapePerCTA(shared, shape));
   auto order = shared.getOrder();
-  LinearLayout ctaLayout = identityStandardND(S("offset"), shapePerCTA, order);
+  LinearLayout ctaLayout = identityStandardND(S("index"), shapePerCTA, order);
 
   return combineCtaCgaWithShape(ctaLayout, shared.getCTALayout(), shape);
 }
