@@ -741,7 +741,7 @@ def TTNG_TMEMCopyOp : TTNG_Op<"tmem_copy"> {
     Optional<TTG_MemDescType>:$barrier
   );
 
-  let assemblyFormat = [{$src `,` $dst `,` $barrier attr-dict `:` functional-type(operands, results)}];
+  let assemblyFormat = [{$src `,` $dst (`,` $barrier^)? attr-dict `:` qualified(type(operands))}];
   let hasVerifier = 1;
 }
 

@@ -15,8 +15,8 @@ from triton._internal_testing import (
 )
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
-from triton.experimental.gluon.language.nvidia.ampere import async_copy, mbarrier
-from triton.experimental.gluon.language.nvidia.hopper import tma, fence_async_shared
+from triton.experimental.gluon.language.nvidia.ampere import async_copy
+from triton.experimental.gluon.language.nvidia.hopper import tma, mbarrier, fence_async_shared
 from triton.experimental.gluon.language.nvidia import hopper
 from triton.experimental.gluon.language.amd.cdna4 import async_copy as cdna4_async_copy
 from triton.experimental.gluon.language.extra import libdevice
@@ -664,3 +664,67 @@ def test_block_m_64_mma():
 
     d_ref = a @ b + c
     torch.testing.assert_close(d_ref, d_tri, rtol=0.08, atol=0)
+
+
+def test_slice_reinterpret():
+    BLOCK = ttgl.constexpr(2048)
+    SPLIT_BLOCK = ttgl.constexpr(BLOCK // 2)
+    XBLOCK = ttgl.constexpr(32)
+    YBLOCK = ttgl.constexpr(SPLIT_BLOCK // 4 // XBLOCK)
+
+    @gluon.jit
+    def kernel(in_ptr, out_ptr):
+        smem_layout_1d: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[0])
+        smem_layout_2d: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
+        smem = ttgl.allocate_shared_memory(ttgl.int8, [BLOCK], smem_layout_1d)
+        smem_slice0 = smem.slice(0, SPLIT_BLOCK)
+        smem_slice1 = smem.slice(SPLIT_BLOCK, SPLIT_BLOCK)._reinterpret(ttgl.int32, [XBLOCK, YBLOCK], smem_layout_2d)
+
+        offs = ttgl.arange(0, XBLOCK)[:, None] * YBLOCK + ttgl.arange(0, YBLOCK)[None, :]
+        blocked: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 32], [1, 4], [1, 0])
+        value = ttgl.load(ttgl.set_auto_layout(in_ptr + offs, blocked))
+
+        blocked_1d: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+        smem_slice1.store(value)
+        smem_slice0.store(ttgl.zeros((SPLIT_BLOCK, ), dtype=ttgl.int8, layout=blocked_1d))
+        value = smem_slice1.load(blocked)
+        ttgl.store(ttgl.set_auto_layout(out_ptr + offs, blocked), value)
+
+    input = torch.randint(0, 100, (XBLOCK, YBLOCK), dtype=torch.int32, device="cuda")
+    output = torch.empty_like(input)
+    kernel[(1, )](input, output)
+    torch.testing.assert_close(input, output, atol=0, rtol=0)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
+def test_tma_slice():
+    XBLOCK = YBLOCK = ttgl.constexpr(128)
+
+    @gluon.jit
+    def kernel(in_desc, out_desc):
+        smem = ttgl.allocate_shared_memory(in_desc.dtype, [2 * XBLOCK, YBLOCK], in_desc.layout)
+        smem_slice0 = smem.slice(0, XBLOCK)
+        smem_slice1 = smem.slice(XBLOCK, XBLOCK)
+
+        bar = ttgl.allocate_shared_memory(ttgl.int64, [1], ttgl.constexpr(mbarrier.MBarrierLayout()))
+        mbarrier.init(bar, count=1)
+
+        mbarrier.expect(bar, in_desc.block_type.nbytes)
+        tma.async_copy_global_to_shared(in_desc, [0, 0], bar, smem_slice1)
+        mbarrier.wait(bar, phase=0)
+
+        blocked: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 32], [1, 4], [1, 0])
+        smem_slice0.store(ttgl.zeros((XBLOCK, YBLOCK), dtype=ttgl.float32, layout=blocked))
+
+        tma.async_copy_shared_to_global(out_desc, [0, 0], smem_slice1)
+        tma.store_wait(0)
+
+    input = torch.rand((XBLOCK, YBLOCK), dtype=torch.float32, device="cuda")
+    output = torch.empty_like(input)
+
+    block_shape = [XBLOCK.value, YBLOCK.value]
+    layout = ttgl.NVMMASharedLayout.get_default_for(block_shape, ttgl.float32)
+    in_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(input, block_shape, layout)
+    out_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(output, block_shape, layout)
+    kernel[(1, )](in_desc, out_desc)
+    torch.testing.assert_close(input, output, atol=0, rtol=0)
