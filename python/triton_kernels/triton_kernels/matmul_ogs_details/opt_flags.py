@@ -25,6 +25,10 @@ class OptFlags:
     arch: str
     target_kernel_kwargs: dict
 
+    def __post_init__(self):
+        if self.fused_scatter and self.split_k != 1:
+            raise ValueError("Not supported")
+
 
 def make_default_opt_flags_amd(
     out_dtype,
@@ -115,7 +119,7 @@ def make_default_opt_flags_amd(
         w_cache_modifier=w_cache_modifier,
         split_k=split_k,
         is_persistent=is_persistent,
-        fused_scatter=False,
+        fused_scatter=constraints.get('fused_scatter', False),
         idle_sms=0,
         epilogue_subtile=epilogue_subtile,
         arch=None,
