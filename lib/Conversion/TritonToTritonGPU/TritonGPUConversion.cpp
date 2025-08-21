@@ -102,25 +102,6 @@ TritonGPUConversionTarget::TritonGPUConversionTarget(
     return false;
   });
 
-  addDynamicallyLegalOp<triton::DotScaledOp>(
-      [](triton::DotScaledOp dotOp) -> bool {
-        Attribute aEncoding =
-            cast<RankedTensorType>(dotOp.getA().getType()).getEncoding();
-        Attribute bEncoding =
-            cast<RankedTensorType>(dotOp.getB().getType()).getEncoding();
-        if (!aEncoding ||
-            !isa<triton::gpu::DotOperandEncodingAttr>(aEncoding) ||
-            !bEncoding || !isa<triton::gpu::DotOperandEncodingAttr>(bEncoding))
-          return false;
-
-        auto aScaleType = cast<RankedTensorType>(dotOp.getAScale().getType());
-        auto bScaleType = cast<RankedTensorType>(dotOp.getBScale().getType());
-        if (!aScaleType.getEncoding() || !bScaleType.getEncoding())
-          return false;
-
-        return true;
-      });
-
   addDynamicallyLegalOp<triton::FuncOp>([](triton::FuncOp funcOp) -> bool {
     for (auto arg : funcOp.getArguments()) {
       if (auto tensor = dyn_cast<RankedTensorType>(arg.getType())) {

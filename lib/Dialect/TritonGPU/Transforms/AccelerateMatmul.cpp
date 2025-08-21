@@ -331,6 +331,10 @@ static MMAEncodingResult createMMAEncodingForDot(DotOpInterface dotOp,
   }
 
   int versionMinor = computeCapability == 75 ? 1 : 0;
+  // Only MMAv2 and MMAv3 rely on computing instrShape/warpsPerTile here.
+  if (!(versionMajor == 2 || versionMajor == 3)) {
+    return {nullptr, RankedTensorType(), Value(), versionMajor, versionMinor};
+  }
 
   auto CTALayout = getCTALayout(oldRetType.getEncoding());
   auto retShapePerCTA = getShapePerCTA(oldRetType);
@@ -383,9 +387,6 @@ public:
         mlir::isa<NvidiaMmaEncodingAttr>(retType.getEncoding()))
       return failure();
 
-    auto mmaResult =
-        createMMAEncodingForDot(dotOp, rewriter, computeCapability, -1);
-
     Value a = dotOp.getA();
     Value b = dotOp.getB();
     auto oldAType = cast<RankedTensorType>(a.getType());
@@ -410,6 +411,8 @@ public:
       return failure();
     }
 
+    auto mmaResult =
+        createMMAEncodingForDot(dotOp, rewriter, computeCapability, -1);
     if (!(mmaResult.versionMajor >= 1 && mmaResult.versionMajor <= 3))
       return failure();
 
