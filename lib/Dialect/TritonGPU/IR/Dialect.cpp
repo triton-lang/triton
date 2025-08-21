@@ -1694,19 +1694,24 @@ LogicalResult PaddedSharedEncodingAttr::verify(
     }
 
     const auto &bases = ll.getBases();
+    if (ll.getNumOutDims() != order.size()) {
+      return emitError()
+             << "Expected dimensionality of the output of the linear layout ("
+             << ll.getNumOutDims() << ") to agree with the rank of the order("
+             << order.size() << ").";
+    }
     auto nonZero = [](auto val) { return val != 0; };
     for (const auto &dimBases : llvm::make_second_range(bases)) {
       if (!llvm::all_of(dimBases, [&](const auto &basis) {
             return std::count_if(basis.begin(), basis.end(), nonZero) <= 1;
           })) {
-        return emitError() << "In a padded shared encoding, each base must "
-                              "move in at most one "
-                              "dimension.";
-        if (!llvm::all_of(dimBases, [&](const auto &basis) {
-              return llvm::all_of(basis, llvm::isPowerOf2_32);
-            }))
-          return emitError() << "In a padded shared encoding, each base must "
-                                "be a power of two.";
+        return emitError()
+               << "Each offset basis must move in at most one dimension.";
+      }
+      if (!llvm::all_of(dimBases, [&](const auto &basis) {
+            return llvm::all_of(basis, llvm::isPowerOf2_32);
+          })) {
+        return emitError() << "Each offset basis must be a power of two.";
       }
     }
   }
