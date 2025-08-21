@@ -363,6 +363,8 @@ def matmul_ogs(x, w, bias,
     opt_flags = make_opt_flags(out_dtype, x.dtype, w.dtype, precision_config,
         batch_size, M, N, K, routing_data, can_use_tma, can_use_fused_scatter, epilogue.effective_itemsize,
     )
+    if not can_use_fused_scatter and opt_flags.fused_scatter:
+        raise NotImplementedError("Fused scatter is not supported")
     if w_scale is not None and opt_flags.is_persistent and not target_info.has_native_mxfp():
         raise NotImplementedError("Must use non-persistent kernel for simulated MXFP")
     if w_scale is not None and w_scale.storage.layout.name is not None and not opt_flags.is_persistent and target_info.has_native_mxfp():
@@ -417,8 +419,8 @@ def matmul_ogs(x, w, bias,
     grid = min(target_info.num_sms() - opt_flags.idle_sms, max_grid) if opt_flags.is_persistent else max_grid
     # canonicalize storage
     has_gather_tma = has_gather and target_info.has_tma_gather()
-    has_scatter_tma = has_scatter and target_info.has_tma_gather()
-    y = wrap_torch_tensor(out_matmul.view(math.prod(out_matmul.shape[:-1]), out_matmul.shape[-1]) if has_scatter else out_matmul.view(math.prod(out_matmul.shape[:-2]), *out_matmul.shape[-2:]))
+    has_scatter_tma = has_scatter and target_info.has_tma_gather() and opt_flags.fused_scatter
+    y = wrap_torch_tensor(out_matmul.view(math.prod(out_matmul.shape[:-1]), out_matmul.shape[-1]) if has_scatter and opt_flags.fused_scatter else out_matmul.view(math.prod(out_matmul.shape[:-2]), *out_matmul.shape[-2:]))
     x_storage = _canonicalize_storage(x.storage, 2 if has_gather_tma else 3, flex.lhs_data)
     w_storage = _canonicalize_storage(w.storage, 3, flex.rhs_data)
     y_storage = _canonicalize_storage(y.storage, 2 if has_scatter_tma else 3, flex.out_data)
@@ -428,7 +430,7 @@ def matmul_ogs(x, w, bias,
     x_tma_mode = None if not x_has_tma else "ragged" if is_ragged and not has_gather_tma else "dense"
     x_tensor_or_tma = x_storage.make_tma(x_tma_block_size, x_tma_mode) if x_has_tma else x_storage.data
     # create tma descriptor for y
-    y_has_tma = opt_flags.is_persistent and (has_scatter_tma or not has_scatter)
+    y_has_tma = opt_flags.is_persistent and (has_scatter_tma or not opt_flags.fused_scatter)
     block_n = opt_flags.block_n // opt_flags.epilogue_subtile // matmul_fused_activation.reduction_n
     y_tma_block_size = [1, block_n] if has_scatter_tma else [1, opt_flags.block_m, block_n]
     y_tma_mode = None if not y_has_tma else "ragged" if is_ragged and not has_scatter_tma else "dense"
@@ -468,8 +470,8 @@ def matmul_ogs(x, w, bias,
                    None if gather_indx is None else gather_indx.src_indx,
                    None if scatter_indx is None else scatter_indx.src_indx,
                    num_indx,
-                   None if scatter_indx is None else scatter_indx.dst_indx,
-                   None if scatter_indx is None else scatter_indx.dst_indx.shape[0],
+                   None if not opt_flags.fused_scatter else scatter_indx.dst_indx,
+                   None if not opt_flags.fused_scatter else scatter_indx.dst_indx.shape[0],
                    expt_hist, expt_token_offs_raw, expt_hist_sum, expt_block_pid_map,
                    batch_size, grid_m, grid_n,
                    out_alpha,
