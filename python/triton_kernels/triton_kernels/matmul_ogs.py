@@ -372,7 +372,7 @@ def matmul_ogs(x, w, bias,
     # fused activation
     matmul_fused_activation = fused_activation
     reduce_fused_activation = FusedActivation()
-    if opt_flags.split_k > 1:
+    if opt_flags.split_k > 1  or (scatter_indx is not None and not opt_flags.fused_scatter):
         matmul_fused_activation, reduce_fused_activation = reduce_fused_activation, matmul_fused_activation
     # allocate output/scratchpad memory
     allocation = init_allocation(x, w, precision_config, fused_activation,
