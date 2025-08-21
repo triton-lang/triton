@@ -1592,7 +1592,7 @@ Attribute PaddedSharedEncodingAttr::parse(AsmParser &parser, Type type) {
       failed(parser.parseRSquare()))
     return {};
 
-  // {<attr-dict>}>
+  // {<attr-dict>}
   NamedAttrList attrList;
   if (failed(parser.parseOptionalAttrDict(attrList)))
     return {};
@@ -1612,15 +1612,16 @@ Attribute PaddedSharedEncodingAttr::parse(AsmParser &parser, Type type) {
   if (!ctaLayout)
     return {};
 
+  // [optional] {<attr-dict>} (linear_component)
   DictionaryAttr dict;
   auto parseLLResult = parser.parseOptionalAttribute(dict);
   if (parseLLResult.has_value() && parseLLResult.value().failed())
     return {};
 
+  // >
   if (parser.parseGreater().failed())
     return {};
 
-  // Parse linear layout
   std::vector<std::string> inDimNames = {"offset"};
   std::optional<LinearLayout> maybeLL =
       parseLLResult.has_value() ? parseLinearLayout(dict, parser, inDimNames)
@@ -1682,8 +1683,8 @@ LogicalResult PaddedSharedEncodingAttr::verify(
   if (linearComponent.has_value()) {
     auto ll = *linearComponent;
     // The linear layout should have one input dim (offset) and N output dims
-    // [dim0..dimN). All bases should be power of twos and move in a single
-    // direction
+    // [dim0..dimN). All bases should be 0, 1 or power of twos and move in a
+    // single direction
     if (ll.getNumInDims() != 1 || (*ll.getInDimNames().begin()) != "offset")
       return emitError()
              << "linearComponent must have a single in dimension called offset";
@@ -1713,9 +1714,12 @@ LogicalResult PaddedSharedEncodingAttr::verify(
                << "Each offset basis must move in at most one dimension.";
       }
       if (!llvm::all_of(dimBases, [&](const auto &basis) {
-            return llvm::all_of(basis, llvm::isPowerOf2_32);
+            return llvm::all_of(basis, [](auto v) {
+              return v == 0 || v == 1 || llvm::isPowerOf2_32(v);
+            });
           })) {
-        return emitError() << "Each offset basis must be a power of two.";
+        return emitError()
+               << "Each offset basis must be 0, 1 or a power of two.";
       }
     }
   }
