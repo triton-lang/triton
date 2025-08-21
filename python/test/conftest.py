@@ -19,15 +19,16 @@ def device(request):
 def fresh_triton_cache():
     with tempfile.TemporaryDirectory() as tmpdir:
         from triton import knobs
-        with knobs.cache.scope():
+
+        with knobs.cache.scope(), knobs.runtime.scope():
             knobs.cache.dir = tmpdir
             yield tmpdir
 
 
 @pytest.fixture
-def fresh_knobs(monkeypatch):
+def fresh_knobs():
     from triton._internal_testing import _fresh_knobs_impl
-    fresh_function, reset_function = _fresh_knobs_impl(monkeypatch)
+    fresh_function, reset_function = _fresh_knobs_impl()
     try:
         yield fresh_function()
     finally:
@@ -35,14 +36,14 @@ def fresh_knobs(monkeypatch):
 
 
 @pytest.fixture
-def fresh_knobs_except_libraries(monkeypatch):
+def fresh_knobs_except_libraries():
     """
     A variant of `fresh_knobs` that keeps library path
     information from the environment as these may be
     needed to successfully compile kernels.
     """
     from triton._internal_testing import _fresh_knobs_impl
-    fresh_function, reset_function = _fresh_knobs_impl(monkeypatch, skipped_attr={"build", "nvidia", "amd"})
+    fresh_function, reset_function = _fresh_knobs_impl(skipped_attr={"build", "nvidia", "amd"})
     try:
         yield fresh_function()
     finally:

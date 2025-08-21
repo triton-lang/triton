@@ -123,7 +123,7 @@ public:
       : RewritePattern(ReduceOp::getOperationName(), 1, context) {}
 
   LogicalResult matchAndRewrite(Operation *op,
-                                PatternRewriter &rewriter) const {
+                                PatternRewriter &rewriter) const override {
     auto reduceOp = llvm::dyn_cast<ReduceOp>(op);
     if (!reduceOp)
       return failure();

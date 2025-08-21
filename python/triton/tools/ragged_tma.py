@@ -4,16 +4,8 @@ from triton.tools.tensor_descriptor import TensorDescriptor
 
 # fmt: off
 
-class TensorDescriptorPtr:
-    def __init__(self, data_ptr, dtype):
-        self._data_ptr = data_ptr
-        self.dtype = dtype
 
-    def data_ptr(self):
-        return self._data_ptr
-
-
-def create_ragged_descriptor(T, block_shape, ragged_dim=0, write_only=False):
+def create_ragged_descriptor(T, block_shape, ragged_dim=0):
     """
     Given a 2- or 3-dimensional tensor T, this creates a 'ragged descriptor'
     which behaves like a concatenation (along the first axis) of subarrays
@@ -33,11 +25,7 @@ def create_ragged_descriptor(T, block_shape, ragged_dim=0, write_only=False):
         ragged_dim += rank
 
     assert 0 <= ragged_dim < rank - 1, "last dimension cannot be ragged"
-
-    if write_only:
-        assert rank <= 4, "write-only ragged descriptors must have at most 4 dimensions"
-    else:
-        assert rank <= 3, "read-write ragged descriptors must have at most 3 dimensions"
+    assert rank <= 3, "read-write ragged descriptors must have at most 3 dimensions"
 
     assert len(block_shape) == rank, "block shape must have same length as tensor shape"
 
@@ -53,15 +41,8 @@ def create_ragged_descriptor(T, block_shape, ragged_dim=0, write_only=False):
     tma_stride = [2**34 - ragged_stride, ragged_stride] + [T.stride(i) for i in range(rank)]
     tma_shape  = [max_int, max_int] + tensor_shape
     box_shape  = [1, 1] + block_shape
-    ptr = T.data_ptr()
 
-    if write_only:
-        tma_stride = tma_stride[1:]
-        tma_shape = tma_shape[1:]
-        box_shape = box_shape[1:]
-        ptr = (ptr - billion * ragged_stride * T.element_size()) % (2**64)
-
-    return TensorDescriptor(TensorDescriptorPtr(ptr, T.dtype), tma_shape, tma_stride, box_shape)
+    return TensorDescriptor(T, tma_shape, tma_stride, box_shape)
 
 
 @triton.jit
@@ -106,18 +87,6 @@ def store_ragged(TMA, batch_offset, batch_size, coords, data, ragged_dim: tl.con
     TMA.store().
     """
 
-    if len(TMA.shape) == len(coords) + 1:
-        write_only: tl.constexpr = True
-    elif len(TMA.shape) == len(coords) + 2:
-        write_only: tl.constexpr = False
-    else:
-        tl.static_assert(False, "TMA must be a ragged descriptor")
-
     c0, c1, c2 = to_ragged_indices(batch_offset, batch_size, coords[ragged_dim])
-
-    if write_only:
-        data = tl.reshape(data, [1] + data.shape)
-        TMA.store([c1] + coords[:ragged_dim] + [c2] + coords[ragged_dim + 1:], data)
-    else:
-        data = tl.reshape(data, [1, 1] + data.shape)
-        TMA.store([c0, c1] + coords[:ragged_dim] + [c2] + coords[ragged_dim + 1:], data)
+    data = tl.reshape(data, [1, 1] + data.shape)
+    TMA.store([c0, c1] + coords[:ragged_dim] + [c2] + coords[ragged_dim + 1:], data)

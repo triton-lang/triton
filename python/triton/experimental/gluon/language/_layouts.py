@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from typing import List, Optional
 from triton.language.core import _unwrap_if_constexpr, _unwrap_shape, constexpr_type
+from triton.runtime.jit import constexpr_function
 
 __all__ = [
     "AutoLayout",
@@ -236,7 +237,7 @@ class NVMMADistributedLayout(DistributedLayout):
         super().__setattr__("cta_split_num", _unwrap_if_constexpr(self.cta_split_num))
         super().__setattr__("cta_order", _unwrap_if_constexpr(self.cta_order))
 
-        rank = 2
+        rank = len(self.warps_per_cta)
         _realize_cta_layout(self, rank)
         assert len(self.ctas_per_cga) == rank
         assert len(self.cta_split_num) == rank
@@ -260,6 +261,7 @@ class SharedLayout:
         return constexpr_type(self)
 
 
+@constexpr_function
 def _get_shape_per_cta(shape, cta_split_num):
     shape_per_cta = shape
     if cta_split_num is not None:
@@ -323,6 +325,7 @@ class NVMMASharedLayout(SharedLayout):
         )
 
     @staticmethod
+    @constexpr_function
     def get_default_for(block_shape, dtype, transposed=False, fp4_padded=False, ctas_per_cga=None, cta_split_num=None,
                         cta_order=None):
         """Returns an NVMMASharedLayout with default swizzling for a given shape.
@@ -423,3 +426,35 @@ class SwizzledSharedLayout(SharedLayout):
             return "_".join(map(str, x))
 
         return f"SSS_{self.vec}_{self.per_phase}_{self.max_phase}_{stringify(self.order)}_{stringify(self.ctas_per_cga)}_{stringify(self.cta_split_num)}_{stringify(self.cta_order)}_SSS"
+
+
+# Python impl of LinearEncodingAttr::basesPerDim
+def bases_per_dim(bases, rank, skip_broadcast=True):
+    result = [1] * rank
+
+    if not bases:
+        return result
+
+    non_zero_idx = None
+
+    for basis in bases:
+        # Find the first non-zero index in the current basis
+        idx = next((i for i, v in enumerate(basis) if v != 0), None)
+        if idx is not None:
+            non_zero_idx = idx
+            result[idx] *= 2
+        elif not skip_broadcast:
+            # If no non-zero found and we're not skipping broadcasts, use the last found non-zero index
+            assert non_zero_idx is not None
+            result[non_zero_idx] *= 2
+
+    return result
+
+
+def warps_per_cta(layout, shape):
+    if isinstance(layout, DistributedLinearLayout):
+        return bases_per_dim(layout.warp_bases, len(shape))
+    elif isinstance(layout, (SliceLayout, DotOperandLayout)):
+        return warps_per_cta(layout.parent, shape)
+    else:
+        return layout.warps_per_cta
