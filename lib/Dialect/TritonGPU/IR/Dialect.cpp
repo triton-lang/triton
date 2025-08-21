@@ -565,7 +565,11 @@ parseLinearLayout(DictionaryAttr &dict, AsmParser &parser,
   for (const auto &inDimNameStr : inDimNames) {
     auto inDimName = StringAttr::get(parser.getContext(), inDimNameStr);
     Attribute value = dict.get(inDimName);
-
+    if (!value) {
+      parser.emitError(parser.getCurrentLocation(), "Expected basis of '")
+          << inDimName.getValue() << "' not found";
+      return {};
+    }
     // Expecting an array of arrays
     auto arrayOfArraysAttr = mlir::dyn_cast<ArrayAttr>(value);
     if (!arrayOfArraysAttr) {
