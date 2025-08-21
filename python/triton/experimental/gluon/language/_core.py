@@ -6,43 +6,7 @@ from functools import wraps
 if TYPE_CHECKING:
     from triton._C.libtriton.gluon_ir import GluonOpBuilder
     from ._semantic import GluonSemantic
-    # Explicitly import forwarded Triton language symbols so mypy sees them.
-    # yapf: disable
-    from triton.language.core import (  # type: ignore  # noqa: F401
-        associative_scan,
-        atomic_add,
-        atomic_and,
-        atomic_cas,
-        atomic_max,
-        atomic_min,
-        atomic_or,
-        atomic_xchg,
-        atomic_xor,
-        broadcast,
-        device_assert,
-        expand_dims,
-        inline_asm_elementwise,
-        join,
-        load,
-        map_elementwise,
-        max_constancy,
-        max_contiguous,
-        maximum,
-        minimum,
-        multiple_of,
-        num_programs,
-        permute,
-        program_id,
-        reduce,
-        reshape,
-        split,
-        static_assert,
-        static_print,
-        store,
-        to_tensor,
-        where,
-    )
-    # yapf: enable
+    
 
 from ._layouts import SharedLayout, DistributedLayout
 from triton._C.libtriton import ir
@@ -81,40 +45,6 @@ from triton.language.core import (
     tuple_type,
 )
 
-_IMPORT_FROM_TRITON: List[str] = [
-    "associative_scan",
-    "atomic_add",
-    "atomic_and",
-    "atomic_cas",
-    "atomic_max",
-    "atomic_min",
-    "atomic_or",
-    "atomic_xchg",
-    "atomic_xor",
-    "broadcast",
-    "device_assert",
-    "expand_dims",
-    "inline_asm_elementwise",
-    "join",
-    "load",
-    "map_elementwise",
-    "max_constancy",
-    "max_contiguous",
-    "maximum",
-    "minimum",
-    "multiple_of",
-    "num_programs",
-    "permute",
-    "program_id",
-    "reduce",
-    "reshape",
-    "split",
-    "static_assert",
-    "static_print",
-    "store",
-    "to_tensor",
-    "where",
-]
 
 __all__ = [
     "constexpr",
@@ -157,14 +87,13 @@ __all__ = [
     "shared_memory_descriptor",
     "static_range",
     "warp_specialize",
-    *_IMPORT_FROM_TRITON,
 ]
+
 
 T = TypeVar("T")
 
 # TODO: split these
 GLUON_BUILTIN = "__triton_builtin__"
-
 
 class distributed_type(block_type):
 
@@ -204,6 +133,39 @@ def builtin(fn: T) -> T:
 
     return wrapper
 
+# Explicitly import forwarded Triton language symbols so mypy sees them.
+associative_scan = builtin(tl_core.associative_scan),
+atomic_add = builtin(tl_core.atomic_add),
+atomic_and = builtin(tl_core.atomic_and)
+atomic_cas = builtin(tl_core.atomic_cas)
+atomic_max = builtin(tl_core.atomic_max)
+atomic_min = builtin(tl_core.atomic_min)
+atomic_or = builtin(tl_core.atomic_or)
+atomic_xchg = builtin(tl_core.atomic_xchg)
+atomic_xor = builtin(tl_core.atomic_xor)
+broadcast = builtin(tl_core.broadcast)
+device_assert = builtin(tl_core.device_assert)
+expand_dims = builtin(tl_core.expand_dims)
+inline_asm_elementwise = builtin(tl_core.inline_asm_elementwise)
+join = builtin(tl_core.join)
+load = builtin(tl_core.load)
+map_elementwise = builtin(tl_core.map_elementwise)
+max_constancy = builtin(tl_core.max_constancy)
+max_contiguous = builtin(tl_core.max_contiguous)
+maximum = builtin(tl_core.maximum)
+minimum = builtin(tl_core.minimum)
+multiple_of = builtin(tl_core.multiple_of)
+num_programs = builtin(tl_core.num_programs)
+permute = builtin(tl_core.permute)
+program_id = builtin(tl_core.program_id)
+reduce = builtin(tl_core.reduce)
+reshape = builtin(tl_core.reshape)
+split = builtin(tl_core.split)
+static_assert = builtin(tl_core.static_assert)
+static_print = builtin(tl_core.static_print)
+store = builtin(tl_core.store)
+to_tensor = builtin(tl_core.to_tensor)
+where = builtin(tl_core.where)
 
 class shared_memory_descriptor_type(base_type):
 
@@ -389,11 +351,6 @@ class shared_memory_descriptor(base_value):
         Dummy use to keep the shared memory descriptor alive.
         """
         return _semantic.shared_dealloc(self)
-
-
-for name in _IMPORT_FROM_TRITON:
-    fn = getattr(tl_core, name)
-    globals()[name] = builtin(fn)
 
 
 @builtin
