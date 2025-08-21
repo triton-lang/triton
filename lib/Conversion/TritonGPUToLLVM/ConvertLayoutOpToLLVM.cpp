@@ -335,10 +335,10 @@ struct ConvertLayoutOpConversion
       SmallVector<Value> packedVals;
       packedVals.reserve(regDim / elemsPerVec);
       if (bitwidth < bitsPerVecElem) {
-        // Should have bitsPerVecElem == 16 here. 
+        // Should have bitsPerVecElem == 16 here.
         for (int i = 0; i < regDim; i += elemsPerVec) {
           Value x0 = b.zext(i32_ty, b.bitcast(inVals[i], int_ty(bitwidth)));
-          Value x1 = b.zext(i32_ty, b.bitcast(inVals[i+1], int_ty(bitwidth)));
+          Value x1 = b.zext(i32_ty, b.bitcast(inVals[i + 1], int_ty(bitwidth)));
           x1 = b.shl(x1, b.i32_val(16));
           packedVals.emplace_back(b.or_(x0, x1));
         }
