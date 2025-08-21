@@ -1299,15 +1299,22 @@ struct InitFuncPtrArgs : OpRewritePattern<tt::FuncOp> {
     if (newOp->hasAttr(kInitFuncArgsRewritten))
       return failure();
 
-    int64_t bitness = 64;
     rewriter.setInsertionPointToStart(&newOp.getBody().front());
     for (auto [idx, arg] : llvm::enumerate(newOp.getArguments())) {
       // The pointer argument needs to be a scalar
       if (!isa<tt::PointerType>(arg.getType()))
         continue;
+
+      int64_t bitness = 64;
       if (auto pointerRangeAttr =
               newOp.getArgAttrOfType<IntegerAttr>(idx, "tt.pointer_range"))
         bitness = pointerRangeAttr.getInt();
+
+      LLVM_DEBUG({
+        llvm::dbgs() << idx << "-th argument: " << arg << ", bitness: "
+                     << bitness << "\n";
+      });
+
       Value zeroOffset =
           rewriter.create<arith::ConstantIntOp>(newOp.getLoc(), 0, bitness);
       auto dummyCast = rewriter.create<UnrealizedConversionCastOp>(
@@ -1541,8 +1548,22 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
     return signalPassFailure();
 
   llvm::SetVector<Operation *> opsToRewrite;
-  for (auto arg : func.getArguments()) {
+  for (auto [idx, arg] : llvm::enumerate(func.getArguments())) {
     if (llvm::isa<tt::PointerType>(arg.getType())) {
+      // TODO: there is a bug about transform ptr + 32-bit-ofst, if we decompose
+      // the 32-bit-ofst into 32-bit U (uniform) and NU (nonuniform part), the
+      // NU part may not fit in 32-bit.
+      //  e.g. 32-bit-ofst = (0x2000000 + 0x4000000*((-32) + x1))
+      //    where x1 in 32 and 40
+      //  U = 0x2000000 - 0x4000000*32 = -0x7e000000, and
+      //  NU = 0x4000000*x1
+      //  while (int32(U) + int32(NU) == 32-bit-ofst, the NU part already
+      //  overflow, int64(NU) only see negative number in some cases.
+      if (auto pointerRangeAttr =
+              func.getArgAttrOfType<IntegerAttr>(idx, "tt.pointer_range")) {
+        if (pointerRangeAttr.getInt() <= 32)
+          continue;
+      }
       // NB: reusing the same SetVector invalidates the topo order implied by
       // getForwardSlice
       for (auto &use : arg.getUses())
