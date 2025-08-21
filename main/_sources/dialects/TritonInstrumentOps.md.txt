@@ -77,7 +77,7 @@ Syntax:
 operation ::= `tti.experimental_check_barrier_writes_cleared` $mbar `{` $barriers `,` $writeBars `(` $writeBarsType `)` `}` (`,` $pred^)? attr-dict `:` type($mbar) `,` type($barriers) `,` type($writeBars)
 ```
 
-Verify that the barrier is not used to track any writes.
+Verify that the column corresponding to the mbar in writeBars tensor is all 0.
 
 Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
 
@@ -110,7 +110,7 @@ Syntax:
 operation ::= `tti.experimental_check_outstanding_commits` $buf `{` $buffers `,` $outstandingCommits `(` $outstandingCommitsType `)` `}` `,` $pendingAccessType (`,` $pred^)? attr-dict `:` type($buf) `,` type($buffers) `,` type($outstandingCommits)
 ```
 
-Check if the buffer has an outstanding commit.
+Verify that the entry corresponding to the buffer in outstandingCommits tensor is 0.
 
 Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
 
@@ -144,7 +144,7 @@ Syntax:
 operation ::= `tti.experimental_check_read_barriers` $buf `{` $buffers `,` $readBars `(` $readBarsType `)` `}` (`,` $pred^)? attr-dict `:` type($buf) `,` type($buffers) `,` type($readBars)
 ```
 
-Check if there are outstanding reads from a buffer guarded by a mbar.
+Check if any of the entries in readBars in the row corresponding to the buffer is non-zero.
 
 Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
 
@@ -178,10 +178,6 @@ operation ::= `tti.experimental_check_write_state` $buf `{` $buffers `,` $writeB
 ```
 
 Check if the writeState tensor has non-zero value associated with the buffer.
-
-`writeState` is a tensor of 8b bitfields, where:
-- bit 0: 1 if the buffer is being written to
-- bit 1: 1 if the write is *not* hwPipelined
 
 If hwPipelined is true, shift the bitfield by 1 to check the second bit - this
 means that the error won't be triggered if another pipelined write is outstanding.
@@ -252,7 +248,7 @@ Syntax:
 operation ::= `tti.experimental_clear_read_barrier` $mbar `{` $barriers `,` $readBars `(` $readBarsType `)` `}` (`,` $pred^)? attr-dict `:` type($mbar) `,` type($barriers) `,` type($readBars)
 ```
 
-Clear the read state for buffers being guarded by an mbar.
+Set all the entries in the column corresponding to the mbar in readBars tensor to 0.
 
 Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
 
@@ -285,7 +281,8 @@ Syntax:
 operation ::= `tti.experimental_clear_write_barrier` $mbar `{` $barriers `,` $writeBars `(` $writeBarsType `)` `,` $writeState `(` $writeStateType `)` `}` (`,` $pred^)? attr-dict `:` type($mbar) `,` type($barriers) `,` type($writeBars) `,` type($writeState)
 ```
 
-Clear the write state for buffers being guarded by an mbar.
+For each buffer that has [buffer, mbar] entry in writeBars tensor, set the corresponding entry in writeState tensor to 0.
+Also, set the corresponding entry in writeBars tensor to 0.
 
 Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
 
@@ -320,7 +317,8 @@ Syntax:
 operation ::= `tti.experimental_commit_accesses` `{` $outstandingCommits `(` $outstandingCommitsType `)` `}` (`,` $pred^)? attr-dict `:` type($outstandingCommits)
 ```
 
-Commit all the staged accesses for all the buffers.
+Increment the value in outstandingCommits tensor for each entry greater than 0.
+Change all the `-1` entries in outstandingCommits tensor to 1, signifying 1 outstanding commit.
 
 Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
 
@@ -387,7 +385,7 @@ Syntax:
 operation ::= `tti.experimental_set_read_barrier` $buf `,` $mbar `{` $buffers `,` $barriers `,` $readBars `(` $readBarsType `)` `}` (`,` $pred^)? attr-dict `:` type($buf) `,` type($mbar) `,` type($buffers) `,` type($barriers) `,` type($readBars)
 ```
 
-Mark a buffer as being read from using mbar as a guard.
+Set the entry under [buffer, mbar] in readBars tensor to 1, marking the buffer as tracked by the barrier.
 
 Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
 
@@ -424,11 +422,7 @@ operation ::= `tti.experimental_set_write_state` $buf `{` $buffers `,` $writeSta
 
 Mark a buffer as being written to. It is not yet tracked by a barrier, until
 `commit_write_with_barrier` is called, at which point all the buffers being written
-to are marked as tracked by the barrier.
-
-`writeState` is a tensor of 8b bitfields, where:
-- bit 0: 1 if the buffer is being written to
-- bit 1: 1 if the write is *not* hwPipelined
+to are marked as tracked by the barrier in writeBars tensor.
 
 If hwPipelined is true, the write won't trigger an error if another pipelined
 write is executed later without waiting for the barrier.

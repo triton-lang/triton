@@ -269,7 +269,7 @@ values in the condition must be true.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `tti.experimental_check_barrier_writes_cleared` $mbar `{` $barriers `,` $writeBars `(` $writeBarsType `)` `}` (`,` $pred^)? attr-dict `:` type($mbar) `,` type($barriers) `,` type($writeBars)
 </pre></div>
 </div>
-<p>Verify that the barrier is not used to track any writes.</p>
+<p>Verify that the column corresponding to the mbar in writeBars tensor is all 0.</p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
 <p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Write</span> <span class="pre">on</span> <span class="pre">::mlir::triton::GlobalMemory}</span></code></p>
 <section id="id2">
@@ -311,7 +311,7 @@ values in the condition must be true.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `tti.experimental_check_outstanding_commits` $buf `{` $buffers `,` $outstandingCommits `(` $outstandingCommitsType `)` `}` `,` $pendingAccessType (`,` $pred^)? attr-dict `:` type($buf) `,` type($buffers) `,` type($outstandingCommits)
 </pre></div>
 </div>
-<p>Check if the buffer has an outstanding commit.</p>
+<p>Verify that the entry corresponding to the buffer in outstandingCommits tensor is 0.</p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
 <p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Write</span> <span class="pre">on</span> <span class="pre">::mlir::triton::GlobalMemory}</span></code></p>
 <section id="id4">
@@ -354,7 +354,7 @@ values in the condition must be true.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `tti.experimental_check_read_barriers` $buf `{` $buffers `,` $readBars `(` $readBarsType `)` `}` (`,` $pred^)? attr-dict `:` type($buf) `,` type($buffers) `,` type($readBars)
 </pre></div>
 </div>
-<p>Check if there are outstanding reads from a buffer guarded by a mbar.</p>
+<p>Check if any of the entries in readBars in the row corresponding to the buffer is non-zero.</p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
 <p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Write</span> <span class="pre">on</span> <span class="pre">::mlir::triton::GlobalMemory}</span></code></p>
 <section id="id6">
@@ -397,11 +397,6 @@ values in the condition must be true.</p>
 </pre></div>
 </div>
 <p>Check if the writeState tensor has non-zero value associated with the buffer.</p>
-<p><code class="docutils literal notranslate"><span class="pre">writeState</span></code> is a tensor of 8b bitfields, where:</p>
-<ul class="simple">
-<li><p>bit 0: 1 if the buffer is being written to</p></li>
-<li><p>bit 1: 1 if the write is <em>not</em> hwPipelined</p></li>
-</ul>
 <p>If hwPipelined is true, shift the bitfield by 1 to check the second bit - this
 means that the error won’t be triggered if another pipelined write is outstanding.</p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
@@ -487,7 +482,7 @@ means that the error won’t be triggered if another pipelined write is outstand
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `tti.experimental_clear_read_barrier` $mbar `{` $barriers `,` $readBars `(` $readBarsType `)` `}` (`,` $pred^)? attr-dict `:` type($mbar) `,` type($barriers) `,` type($readBars)
 </pre></div>
 </div>
-<p>Clear the read state for buffers being guarded by an mbar.</p>
+<p>Set all the entries in the column corresponding to the mbar in readBars tensor to 0.</p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
 <p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Write</span> <span class="pre">on</span> <span class="pre">::mlir::triton::GlobalMemory}</span></code></p>
 <section id="id12">
@@ -529,7 +524,8 @@ means that the error won’t be triggered if another pipelined write is outstand
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `tti.experimental_clear_write_barrier` $mbar `{` $barriers `,` $writeBars `(` $writeBarsType `)` `,` $writeState `(` $writeStateType `)` `}` (`,` $pred^)? attr-dict `:` type($mbar) `,` type($barriers) `,` type($writeBars) `,` type($writeState)
 </pre></div>
 </div>
-<p>Clear the write state for buffers being guarded by an mbar.</p>
+<p>For each buffer that has [buffer, mbar] entry in writeBars tensor, set the corresponding entry in writeState tensor to 0.
+Also, set the corresponding entry in writeBars tensor to 0.</p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
 <p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Write</span> <span class="pre">on</span> <span class="pre">::mlir::triton::GlobalMemory}</span></code></p>
 <section id="id14">
@@ -575,7 +571,8 @@ means that the error won’t be triggered if another pipelined write is outstand
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `tti.experimental_commit_accesses` `{` $outstandingCommits `(` $outstandingCommitsType `)` `}` (`,` $pred^)? attr-dict `:` type($outstandingCommits)
 </pre></div>
 </div>
-<p>Commit all the staged accesses for all the buffers.</p>
+<p>Increment the value in outstandingCommits tensor for each entry greater than 0.
+Change all the <code class="docutils literal notranslate"><span class="pre">-1</span></code> entries in outstandingCommits tensor to 1, signifying 1 outstanding commit.</p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
 <p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Write</span> <span class="pre">on</span> <span class="pre">::mlir::triton::GlobalMemory}</span></code></p>
 <section id="id16">
@@ -658,7 +655,7 @@ writeBars tensor.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `tti.experimental_set_read_barrier` $buf `,` $mbar `{` $buffers `,` $barriers `,` $readBars `(` $readBarsType `)` `}` (`,` $pred^)? attr-dict `:` type($buf) `,` type($mbar) `,` type($buffers) `,` type($barriers) `,` type($readBars)
 </pre></div>
 </div>
-<p>Mark a buffer as being read from using mbar as a guard.</p>
+<p>Set the entry under [buffer, mbar] in readBars tensor to 1, marking the buffer as tracked by the barrier.</p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
 <p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Write</span> <span class="pre">on</span> <span class="pre">::mlir::triton::GlobalMemory}</span></code></p>
 <section id="id20">
@@ -708,12 +705,7 @@ writeBars tensor.</p>
 </div>
 <p>Mark a buffer as being written to. It is not yet tracked by a barrier, until
 <code class="docutils literal notranslate"><span class="pre">commit_write_with_barrier</span></code> is called, at which point all the buffers being written
-to are marked as tracked by the barrier.</p>
-<p><code class="docutils literal notranslate"><span class="pre">writeState</span></code> is a tensor of 8b bitfields, where:</p>
-<ul class="simple">
-<li><p>bit 0: 1 if the buffer is being written to</p></li>
-<li><p>bit 1: 1 if the write is <em>not</em> hwPipelined</p></li>
-</ul>
+to are marked as tracked by the barrier in writeBars tensor.</p>
 <p>If hwPipelined is true, the write won’t trigger an error if another pipelined
 write is executed later without waiting for the barrier.</p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
