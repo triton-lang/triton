@@ -1971,15 +1971,15 @@ def buffer_load_store_with_broadcast_kernel(x, y):
 
     mask = ttgl.full((64, 1), 1, tl.int1, layout=layout)
     a = ttgl.amd.cdna3.buffer_load(ptr=x, offsets=offsets, mask=mask, other=other, cache='.ca')
-    ttgl.amd.cdna3.buffer_store(stored_value=a, ptr=y, offsets=offsets, mask=mask, cache='.ca')
+    ttgl.amd.cdna3.buffer_store(stored_value=a, ptr=y, offsets=offsets, mask=mask, cache='.cs')
 
     mask = ttgl.full((1, 64), 1, tl.int1, layout=layout)
     a = ttgl.amd.cdna3.buffer_load(ptr=x, offsets=offsets, mask=mask, other=other, cache='.ca')
-    ttgl.amd.cdna3.buffer_store(stored_value=a, ptr=y, offsets=offsets, mask=mask, cache='.ca')
+    ttgl.amd.cdna3.buffer_store(stored_value=a, ptr=y, offsets=offsets, mask=mask, cache='.cs')
 
     other = 1.0
     a = ttgl.amd.cdna3.buffer_load(ptr=x, offsets=offsets, mask=mask, other=other, cache='.ca')
-    ttgl.amd.cdna3.buffer_store(stored_value=a, ptr=y, offsets=offsets, mask=mask, cache='.ca')
+    ttgl.amd.cdna3.buffer_store(stored_value=a, ptr=y, offsets=offsets, mask=mask, cache='.cs')
 
 
 @pytest.mark.parametrize("target", [HIP_TARGET_CDNA3, HIP_TARGET_CDNA4])
@@ -2003,19 +2003,19 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %3 = tt.broadcast %cst_1 : tensor<64x1xi1, #blocked> -> tensor<64x64xi1, #blocked>
     %4 = amdgpu.buffer_load %arg0[%2], %3, %cst_0 cacheModifier = ca : tensor<64x64xf32, #blocked>
     %5 = tt.broadcast %cst_1 : tensor<64x1xi1, #blocked> -> tensor<64x64xi1, #blocked>
-    amdgpu.buffer_store %4, %arg1[%2], %5 cacheModifier = ca : tensor<64x64xf32, #blocked>
+    amdgpu.buffer_store %4, %arg1[%2], %5 cacheModifier = cs : tensor<64x64xf32, #blocked>
     %true_2 = arith.constant true
     %cst_3 = arith.constant dense<true> : tensor<1x64xi1, #blocked>
     %6 = tt.broadcast %cst_3 : tensor<1x64xi1, #blocked> -> tensor<64x64xi1, #blocked>
     %7 = amdgpu.buffer_load %arg0[%2], %6, %cst_0 cacheModifier = ca : tensor<64x64xf32, #blocked>
     %8 = tt.broadcast %cst_3 : tensor<1x64xi1, #blocked> -> tensor<64x64xi1, #blocked>
-    amdgpu.buffer_store %7, %arg1[%2], %8 cacheModifier = ca : tensor<64x64xf32, #blocked>
+    amdgpu.buffer_store %7, %arg1[%2], %8 cacheModifier = cs : tensor<64x64xf32, #blocked>
     %cst_4 = arith.constant 1.000000e+00 : f32
     %9 = tt.broadcast %cst_3 : tensor<1x64xi1, #blocked> -> tensor<64x64xi1, #blocked>
     %cst_5 = arith.constant dense<1.000000e+00> : tensor<64x64xf32, #blocked>
     %10 = amdgpu.buffer_load %arg0[%2], %9, %cst_5 cacheModifier = ca : tensor<64x64xf32, #blocked>
     %11 = tt.broadcast %cst_3 : tensor<1x64xi1, #blocked> -> tensor<64x64xi1, #blocked>
-    amdgpu.buffer_store %10, %arg1[%2], %11 cacheModifier = ca : tensor<64x64xf32, #blocked>
+    amdgpu.buffer_store %10, %arg1[%2], %11 cacheModifier = cs : tensor<64x64xf32, #blocked>
     tt.return
   }
 }
