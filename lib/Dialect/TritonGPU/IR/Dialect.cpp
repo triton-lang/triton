@@ -634,14 +634,14 @@ parseLinearLayout(DictionaryAttr &dict, AsmParser &parser,
 //   warp = [[16, 0], [32, 0]],
 //   block = []}>
 static void printLinearLayout(AsmPrinter &printer, const LinearLayout &ll) {
-  printer << "<{" << join(ll.getBases(), ", ", [](const auto &base) {
+  printer << "{" << join(ll.getBases(), ", ", [](const auto &base) {
     return base.first.str() + " = " + "[" +
            join(base.second, ", ",
                 [](const std::vector<int32_t> &vec) {
                   return "[" + join(vec, ", ") + "]";
                 }) +
            "]";
-  }) << "}>";
+  }) << "}";
 }
 
 // Print the CTALayout if it's not equal to the default.
@@ -821,9 +821,9 @@ SmallVector<unsigned> BlockedEncodingAttr::getRepOrder() const {
 //===----------------------------------------------------------------------===//
 
 void LinearEncodingAttr::print(mlir::AsmPrinter &printer) const {
-  printer << "<{";
+  printer << "<";
   printLinearLayout(printer, getLinearLayout());
-  printer << "}>";
+  printer << ">";
 }
 
 Attribute LinearEncodingAttr::parse(AsmParser &parser, Type type) {
@@ -1639,9 +1639,7 @@ void PaddedSharedEncodingAttr::print(AsmPrinter &printer) const {
   printer << "}";
 
   if (getLinearComponent().has_value()) {
-    printer << " {";
     printLinearLayout(printer, *getLinearComponent());
-    printer << "}";
   }
 
   printer << ">";
