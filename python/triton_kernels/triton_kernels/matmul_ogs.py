@@ -343,6 +343,8 @@ def matmul_ogs(x, w, bias,
     if not isinstance(x, Tensor):
         x = Tensor(x, dtype=x.dtype)
     # determine shapes
+    has_gather = gather_indx is not None
+    has_scatter = scatter_indx is not None
     is_ragged = routing_data.expt_hist is not None
     M = x.shape[-2] if gather_indx is None else gather_indx.src_indx.shape[0]
     batch_size = w.shape[0] if routing_data.expt_hist is None and w.ndim == 3 else 1
@@ -357,7 +359,7 @@ def matmul_ogs(x, w, bias,
                  (w_scale is None or w_scale.storage.is_tma_compliant())
     # hopper w/ mxfp4 doesn't support TMA
     can_use_tma = can_use_tma and (torch.cuda.get_device_capability()[0] > 9 or bitwidth(w.dtype) != 4)
-    can_use_fused_scatter = False
+    can_use_fused_scatter = has_scatter and (fused_activation.specs.fn is None) and (routing_data.n_expts_act == 1)
     opt_flags = make_opt_flags(out_dtype, x.dtype, w.dtype, precision_config,
         batch_size, M, N, K, routing_data, can_use_tma, can_use_fused_scatter, epilogue.effective_itemsize,
     )
@@ -414,8 +416,6 @@ def matmul_ogs(x, w, bias,
     max_grid = batch_size * grid_m * grid_n * opt_flags.split_k
     grid = min(target_info.num_sms() - opt_flags.idle_sms, max_grid) if opt_flags.is_persistent else max_grid
     # canonicalize storage
-    has_gather = gather_indx is not None
-    has_scatter = False
     has_gather_tma = has_gather and target_info.has_tma_gather()
     has_scatter_tma = has_scatter and target_info.has_tma_gather()
     y = wrap_torch_tensor(out_matmul.view(math.prod(out_matmul.shape[:-1]), out_matmul.shape[-1]) if has_scatter else out_matmul.view(math.prod(out_matmul.shape[:-2]), *out_matmul.shape[-2:]))
@@ -468,7 +468,8 @@ def matmul_ogs(x, w, bias,
                    None if gather_indx is None else gather_indx.src_indx,
                    None if scatter_indx is None else scatter_indx.src_indx,
                    num_indx,
-                   None, None,
+                   None if scatter_indx is None else scatter_indx.dst_indx,
+                   None if scatter_indx is None else scatter_indx.dst_indx.shape[0],
                    expt_hist, expt_token_offs_raw, expt_hist_sum, expt_block_pid_map,
                    batch_size, grid_m, grid_n,
                    out_alpha,
@@ -502,7 +503,7 @@ def matmul_ogs(x, w, bias,
                    NUM_SMS = grid if opt_flags.is_persistent else 0,
                    **opt_flags.target_kernel_kwargs)
     # Build grouped reduction inputs in a uniform way
-    group_indx = None if scatter_indx is None else scatter_indx.src_indx.view(-1, routing_data.n_expts_act)
+    group_indx = None if scatter_indx is None or opt_flags.fused_scatter else scatter_indx.src_indx.view(-1, routing_data.n_expts_act)
     out_final, out_final_mx_scale = reduce_grouped(
         out_matmul,
         group_indx,
