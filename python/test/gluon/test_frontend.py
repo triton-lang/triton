@@ -1845,8 +1845,10 @@ def infer_layout_for_padded_shared_kernel():
                                                      ctas_per_cga=[1, 1], cta_split_num=[1, 1], cta_order=[1, 0])
     smem = ttgl.allocate_shared_memory(ttgl.int32, [64, 64], layout)
 
-    reshaped = smem.reshape((32, 128))
-    ttgl.static_assert(reshaped.layout == layout)
+    reshaped = smem.permute((1, 0))
+    ttgl.static_assert(
+        reshaped.layout == ttgl.PaddedSharedLayout(interval_padding_pairs=[[2, 1], [4, 2], [8, 4]], order=[0, 1],
+                                                   ctas_per_cga=[1, 1], cta_split_num=[1, 1], cta_order=[1, 0]))
 
 
 @pytest.mark.parametrize("target", ALL_TARGETS)
@@ -1857,11 +1859,12 @@ def test_infer_layout_for_padded_shared(target):
     expecttest.assert_expected_inline(
         anonymize_ir(module.str_nodebug()), """\
 #shared = #ttg.padded_shared<[2:+1, 4:+2, 8:+4] {order = [1, 0]}>
+#shared1 = #ttg.padded_shared<[2:+1, 4:+2, 8:+4] {order = [0, 1]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @infer_layout_for_padded_shared_kernel() attributes {noinline = false} {
     %0 = ttg.local_alloc : () -> !ttg.memdesc<64x64xi32, #shared, #smem, mutable>
-    %1 = ttg.memdesc_reshape %0 : !ttg.memdesc<64x64xi32, #shared, #smem, mutable> -> !ttg.memdesc<32x128xi32, #shared, #smem, mutable>
+    %1 = ttg.memdesc_trans %0 {order = array<i32: 1, 0>} : !ttg.memdesc<64x64xi32, #shared, #smem, mutable> -> !ttg.memdesc<64x64xi32, #shared1, #smem, mutable>
     tt.return
   }
 }

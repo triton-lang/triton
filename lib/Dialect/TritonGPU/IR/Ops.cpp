@@ -555,10 +555,6 @@ static LogicalResult inferMemDescReshapeOpEncoding(ArrayRef<int64_t> srcShape,
     return success();
   }
 
-  if (auto paddedSharedEncoding = dyn_cast<PaddedSharedEncodingAttr>(srcEnc)) {
-    dstEnc = srcEnc;
-    return success();
-  }
   return failure();
 }
 

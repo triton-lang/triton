@@ -2297,6 +2297,18 @@ struct TritonGPUInferLayoutInterface
       return success();
     }
 
+    if (auto enc = dyn_cast<PaddedSharedEncodingAttr>(operandEncoding)) {
+      if (failed(checkRank(enc.getRank())))
+        return failure();
+
+      CTALayoutAttr ctaLayout =
+          permuteCTALayout(ctx, enc.getCTALayout(), order);
+      resultEncoding = PaddedSharedEncodingAttr::get(
+          ctx, enc.getIntervals(), enc.getPaddings(),
+          applyPermutation(enc.getOrder(), order), ctaLayout);
+      return success();
+    }
+
     auto ll = toLinearLayout(shape, operandEncoding);
     auto transposedLl = transposeLinearLayout(ll, order);
     resultEncoding = LinearEncodingAttr::get(ctx, std::move(transposedLl));

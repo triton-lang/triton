@@ -369,28 +369,32 @@ def test_sharedmem_with_padded_layout():
 
         smem = ttgl.allocate_shared_memory(a_ptr.dtype.element_ty, [M, N], padded)
         smem.store(a)
-        smem = smem.reshape((N, M))
+        smem = smem.permute((1, 0))
 
         smem = smem._reinterpret(a_ptr.dtype.element_ty, (N, M), swizzled)
-        reshaped = smem.load(blocked)
+        transed = smem.load(blocked)
 
         offs_n_tr = ttgl.arange(0, N, layout=ttgl.SliceLayout(1, blocked))
         offs_m_tr = ttgl.arange(0, M, layout=ttgl.SliceLayout(0, blocked))
-        offs_reshaped = offs_n_tr[:, None] * M + offs_m_tr[None, :]
-        ttgl.amd.cdna3.buffer_store(stored_value=reshaped, ptr=b_ptr, offsets=offs_reshaped)
+        offs_transed = offs_n_tr[:, None] * M + offs_m_tr[None, :]
+        ttgl.amd.cdna3.buffer_store(stored_value=transed, ptr=b_ptr, offsets=offs_transed)
 
     M, N = 16, 4
     input = torch.arange(0, M * N, device="cuda", dtype=torch.int32).reshape(M, N)
     triton_output = torch.arange(0, M * N, device="cuda", dtype=torch.int32).reshape(N, M)
     kernel[1, 1](input, triton_output, M, N)
-
-    triton_output = torch.reshape(triton_output, (M, N))
+    # the triton_ouput from the kernel looks like the following and x is the padded element.
+    #[
+    #[ 0,  1,  2,  3,  x,  x,  x,  x,  4,  5,  6,  7,  x,  x,  x,  x],
+    #[ 8,  9, 10, 11,  x,  x,  x,  x, 12, 13, 14, 15,  x,  x,  x,  x],
+    #[16, 17, 18, 19,  x,  x,  x,  x, 20, 21, 22, 23,  x,  x,  x,  x],
+    #[24, 25, 26, 27,  x,  x,  x,  x, 28, 29, 30, 31,  x,  x,  x,  x]],
+    triton_output = torch.cat([triton_output[:, 0:4], triton_output[:, 8:12]], dim=1).reshape((8, 4))
 
     # in the kernel, the output tensor is padded with pair 4:4 and since the input shape is 16 X 4,
     # which means the first row is the same as input, the second row is with padded random values, the same for other rows.
     # Now, we extract rows without paddingss and if the row number starts from 0, then rows without padding are 0, 2, 4, 8, 10, 12, 14.
     # The these rows are the same as the upper half of the input tensor.
-    mask = [True, False] * 8
+
     expected = input[0:8, :]
-    triton_output = triton_output[mask]
     torch.testing.assert_close(expected, triton_output)
