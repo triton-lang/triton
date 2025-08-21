@@ -1676,6 +1676,43 @@ LogicalResult PaddedSharedEncodingAttr::verify(
     return emitError() << "order size (" << order.size()
                        << ") must match CTALayout rank (" << ctaLayout.getRank()
                        << ")";
+
+  if (linearComponent.has_value()) {
+    auto ll = *linearComponent;
+    // The linear layout should have one input dim (offset) and N output dims
+    // [dim0..dimN). All bases should be power of twos and move in a single
+    // direction
+    if (ll.getNumInDims() != 1 || (*ll.getInDimNames().begin()) != "offset")
+      return emitError()
+             << "linearComponent must have a single in dimension called offset";
+
+    // outDims are ['dim0', 'dim1', ...]
+    for (auto [i, dim] : llvm::enumerate(ll.getOutDimNames())) {
+      if (dim.str() != ("dim" + llvm::Twine(i)).str()) {
+        return emitError()
+               << "Expected output dimensions to be ['dim0', 'dim1', ...]. Got "
+               << dim << " at position " << i;
+      }
+    }
+
+    const auto &bases = ll.getBases();
+    auto nonZero = [](auto val) { return val != 0; };
+    for (const auto &dimBases : llvm::make_second_range(bases)) {
+      if (!llvm::all_of(dimBases, [&](const auto &basis) {
+            return std::count_if(basis.begin(), basis.end(), nonZero) <= 1;
+          })) {
+        return emitError() << "In a padded shared encoding, each base must "
+                              "move in at most one "
+                              "dimension.";
+        if (!llvm::all_of(dimBases, [&](const auto &basis) {
+              return llvm::all_of(basis, llvm::isPowerOf2_32);
+            }))
+          return emitError() << "In a padded shared encoding, each base must "
+                                "be a power of two.";
+      }
+    }
+  }
+
   return verifyLayoutOrder(emitError, order);
 }
 
