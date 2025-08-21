@@ -382,15 +382,16 @@ An encoding for tensors whose elements may be simultaneously accessed by
 different GPU threads in the programs, via shared memory. In other words,
 for all indices i \in Z^d, \mathcal{L}(i) = {0, 1, ..., 32*num_warps - 1}.
 Compared to SwizzledSharedEncodingAttr, this encoding uses padding to avoid
-shared memory bank conflicts. It's supports an optional linear component for
-cases where padding alone cannot efficiently avoid shared memory bank conflicts.
-If the linear component is absent the elements will be contiguous (identity)
+shared memory bank conflicts. For cases where padding alone cannot efficiently
+avoid shared memory bank conflicts it has an optional linear component to
+rearange elements. If the the linear component is absent the elements will be
+contiguous (identity mapping).
 
 Formally, given a layout:
     padded_shared<[<interval_0>:+<pad_0>, <interval_1>:+<pad_1>, ...]>
 We insert a padding of `<pad_i>` elements after every `<interval_i>` elements.
-The padding is applied based on the physical order of elements so the padded is
-calculated after the linear component of this encoding is applied to the elements.
+The padding is computed based on the final element index after the optional
+linear component is applied to the element inidices.
 Multi interval-padding pairs are supported for flexibility of multi tiered
 padding schemes; they compose in an additive manner. So for a 1-D tensor element
 at index i, the corresponding shared memory location index is
@@ -424,7 +425,7 @@ padding:
      ...]
 
 Additionally this encoding requires an `order` to specify the logical
-tensor dimenions from the fastest-to slowest-varying.
+tensor dimensions from the fastest-to slowest-varying.
 It may optionally support CGA level organization like other encoding
 attributes too, for example,
     #ttg.padded_shared<[2:+1, 4:+2] {
