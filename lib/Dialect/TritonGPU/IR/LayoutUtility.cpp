@@ -2,6 +2,7 @@
 
 #include <llvm/ADT/SmallVector.h>
 #include <triton/Dialect/Triton/IR/Utility.h>
+#include <triton/Tools/LayoutUtils.h>
 
 namespace mlir::triton::gpu {
 
@@ -23,6 +24,15 @@ LinearLayout getPaddedRegToSharedLayout(const LinearLayout &regLayout,
                                         PaddedSharedEncodingAttr paddedEnc) {
   if (paddedEnc.getLinearComponent().has_value()) {
     auto sharedLL = *paddedEnc.getLinearComponent();
+    auto regOutDims = regLayout.getOutDims();
+    // Ensure shared layout agrees with reg layout out dimensions
+    llvm::SmallDenseMap<StringAttr, int64_t> namedShape;
+    for (auto [name, size] : regLayout.getOutDims()) {
+      namedShape[name] = size;
+    }
+    sharedLL = ensureLayoutNotLargerThan(sharedLL, namedShape, "offset");
+    sharedLL = ensureLayoutNotSmallerThan(sharedLL, namedShape);
+
     return regLayout.invertAndCompose(sharedLL);
   }
   // Otherwise just return a contiguous mapping from regs to shared
