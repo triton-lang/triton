@@ -5,7 +5,7 @@ import re
 import triton
 import triton.language as tl
 
-from triton._internal_testing import is_ampere_or_newer, is_hip_cdna3, is_hip_cdna4, is_hopper_or_newer, is_hopper
+from triton._internal_testing import is_ampere_or_newer, is_hip, is_hip_cdna3, is_hip_cdna4, is_hopper_or_newer, is_hopper
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
 from triton.experimental.gluon.language.nvidia.ampere import async_copy, mbarrier
@@ -434,6 +434,7 @@ def test_math_fast_dividef():
     torch.testing.assert_close(z, torch.div(x, y), atol=1e-5, rtol=1e-4)
 
 
+@pytest.mark.skipif(not is_hip(), reason="Requires HIP")
 def test_sharedmem_with_padded_layout():
 
     @gluon.jit
@@ -446,8 +447,8 @@ def test_sharedmem_with_padded_layout():
         offs_m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, blocked))
         offs_n = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, blocked))
         offs = offs_m[:, None] * N + offs_n[None, :]
-        a_ptrs = a_ptr + offs
-        a = ttgl.load(a_ptrs)
+        a = ttgl.amd.cdna3.buffer_load(ptr=a_ptr, offsets=offs)
+
         smem = ttgl.allocate_shared_memory(a_ptr.dtype.element_ty, [M, N], padded)
         smem.store(a)
         smem = smem.permute((1, 0))
@@ -458,8 +459,7 @@ def test_sharedmem_with_padded_layout():
         offs_n_tr = ttgl.arange(0, N, layout=ttgl.SliceLayout(1, blocked))
         offs_m_tr = ttgl.arange(0, M, layout=ttgl.SliceLayout(0, blocked))
         offs_transed = offs_n_tr[:, None] * M + offs_m_tr[None, :]
-        b_ptrs = b_ptr + offs_transed
-        ttgl.store(b_ptrs, transed)
+        ttgl.amd.cdna3.buffer_store(stored_value=transed, ptr=b_ptr, offsets=offs_transed)
 
     M, N = 16, 4
     input = torch.arange(0, M * N, device="cuda", dtype=torch.int32).reshape(M, N)
