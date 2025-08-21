@@ -419,8 +419,8 @@ def matmul_ogs(x, w, bias,
     grid = min(target_info.num_sms() - opt_flags.idle_sms, max_grid) if opt_flags.is_persistent else max_grid
     # canonicalize storage
     has_gather_tma = has_gather and target_info.has_tma_gather()
-    has_scatter_tma = has_scatter and target_info.has_tma_gather() and opt_flags.fused_scatter
-    y = wrap_torch_tensor(out_matmul.view(math.prod(out_matmul.shape[:-1]), out_matmul.shape[-1]) if has_scatter and opt_flags.fused_scatter else out_matmul.view(math.prod(out_matmul.shape[:-2]), *out_matmul.shape[-2:]))
+    has_scatter_tma = opt_flags.fused_scatter and target_info.has_tma_gather()
+    y = wrap_torch_tensor(out_matmul.view(math.prod(out_matmul.shape[:-1]), out_matmul.shape[-1]) if opt_flags.fused_scatter else out_matmul.view(math.prod(out_matmul.shape[:-2]), *out_matmul.shape[-2:]))
     x_storage = _canonicalize_storage(x.storage, 2 if has_gather_tma else 3, flex.lhs_data)
     w_storage = _canonicalize_storage(w.storage, 3, flex.rhs_data)
     y_storage = _canonicalize_storage(y.storage, 2 if has_scatter_tma else 3, flex.out_data)
