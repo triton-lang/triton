@@ -47,6 +47,8 @@ def compute_block_k(m: int, k: int | None, is_persistent: bool, lhs_dtype, rhs_d
 def compute_split_k(block_k: int, k: int | None, grid_size: int) -> int:
     device_props = torch.cuda.get_device_properties(0)
     n_sms = device_props.multi_processor_count
+    if grid_size == 0:
+        return 1
     split_k = n_sms // grid_size
     if k is not None:
         # avoid split_k for small k
