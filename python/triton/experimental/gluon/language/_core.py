@@ -6,7 +6,6 @@ from functools import wraps
 if TYPE_CHECKING:
     from triton._C.libtriton.gluon_ir import GluonOpBuilder
     from ._semantic import GluonSemantic
-    
 
 from ._layouts import SharedLayout, DistributedLayout
 from triton._C.libtriton import ir
@@ -44,7 +43,6 @@ from triton.language.core import (
     tuple,
     tuple_type,
 )
-
 
 __all__ = [
     "constexpr",
@@ -89,11 +87,11 @@ __all__ = [
     "warp_specialize",
 ]
 
-
 T = TypeVar("T")
 
 # TODO: split these
 GLUON_BUILTIN = "__triton_builtin__"
+
 
 class distributed_type(block_type):
 
@@ -133,6 +131,7 @@ def builtin(fn: T) -> T:
 
     return wrapper
 
+
 # Explicitly import forwarded Triton language symbols so mypy sees them.
 associative_scan = builtin(tl_core.associative_scan),
 atomic_add = builtin(tl_core.atomic_add),
@@ -166,6 +165,7 @@ static_print = builtin(tl_core.static_print)
 store = builtin(tl_core.store)
 to_tensor = builtin(tl_core.to_tensor)
 where = builtin(tl_core.where)
+
 
 class shared_memory_descriptor_type(base_type):
 
