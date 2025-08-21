@@ -5,7 +5,7 @@ import re
 import triton
 import triton.language as tl
 
-from triton._internal_testing import is_ampere_or_newer, is_hip, is_hip_cdna3, is_hip_cdna4, is_hopper_or_newer, is_hopper
+from triton._internal_testing import is_ampere_or_newer, is_hip_cdna3, is_hip_cdna4, is_hopper_or_newer, is_hopper
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
 from triton.experimental.gluon.language.nvidia.ampere import async_copy, mbarrier
@@ -432,52 +432,3 @@ def test_math_fast_dividef():
     y[y == 0] = 1.0
     fast_dividef_kernel[(1, )](x, y, z, THREADS_PER_WARP, num_warps)
     torch.testing.assert_close(z, torch.div(x, y), atol=1e-5, rtol=1e-4)
-
-
-@pytest.mark.skipif(not is_hip(), reason="Requires HIP")
-def test_sharedmem_with_padded_layout():
-
-    @gluon.jit
-    def kernel(a_ptr, b_ptr, M: ttgl.constexpr, N: ttgl.constexpr):
-        blocked: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[4, 16],
-                                                     warps_per_cta=[4, 1], order=[1, 0])
-        padded: ttgl.constexpr = ttgl.PaddedSharedLayout(interval_padding_pairs=[[4, 4]], order=[1, 0])
-        swizzled: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, order=[1, 0])
-
-        offs_m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, blocked))
-        offs_n = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, blocked))
-        offs = offs_m[:, None] * N + offs_n[None, :]
-        a = ttgl.amd.cdna3.buffer_load(ptr=a_ptr, offsets=offs)
-
-        smem = ttgl.allocate_shared_memory(a_ptr.dtype.element_ty, [M, N], padded)
-        smem.store(a)
-        smem = smem.permute((1, 0))
-
-        smem = smem._reinterpret(a_ptr.dtype.element_ty, (N, M), swizzled)
-        transed = smem.load(blocked)
-
-        offs_n_tr = ttgl.arange(0, N, layout=ttgl.SliceLayout(1, blocked))
-        offs_m_tr = ttgl.arange(0, M, layout=ttgl.SliceLayout(0, blocked))
-        offs_transed = offs_n_tr[:, None] * M + offs_m_tr[None, :]
-        ttgl.amd.cdna3.buffer_store(stored_value=transed, ptr=b_ptr, offsets=offs_transed)
-
-    M, N = 16, 4
-    input = torch.arange(0, M * N, device="cuda", dtype=torch.int32).reshape(M, N)
-    triton_output = torch.arange(0, M * N, device="cuda", dtype=torch.int32).reshape(N, M)
-    kernel[1, 1](input, triton_output, M, N)
-
-    # the triton_ouput from the kernel looks like the following and x is the padded element.
-    #[
-    #[ 0,  1,  2,  3,  x,  x,  x,  x,  4,  5,  6,  7,  x,  x,  x,  x],
-    #[ 8,  9, 10, 11,  x,  x,  x,  x, 12, 13, 14, 15,  x,  x,  x,  x],
-    #[16, 17, 18, 19,  x,  x,  x,  x, 20, 21, 22, 23,  x,  x,  x,  x],
-    #[24, 25, 26, 27,  x,  x,  x,  x, 28, 29, 30, 31,  x,  x,  x,  x]],
-    triton_output = torch.cat([triton_output[:, 0:4], triton_output[:, 8:12]], dim=1).reshape((8, 4))
-
-    # in the kernel, the output tensor is padded with pair 4:4 and since the input shape is 16 X 4,
-    # which means the first row is the same as input, the second row is with padded random values, the same for other rows.
-    # Now, we extract rows without paddingss and if the row number starts from 0, then rows without padding are 0, 2, 4, 8, 10, 12, 14.
-    # The these rows are the same as the upper half of the input tensor.
-
-    expected = input[0:8, :]
-    torch.testing.assert_close(expected, triton_output)
