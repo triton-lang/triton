@@ -821,7 +821,9 @@ SmallVector<unsigned> BlockedEncodingAttr::getRepOrder() const {
 //===----------------------------------------------------------------------===//
 
 void LinearEncodingAttr::print(mlir::AsmPrinter &printer) const {
+  printer << "<{";
   printLinearLayout(printer, getLinearLayout());
+  printer << "}>";
 }
 
 Attribute LinearEncodingAttr::parse(AsmParser &parser, Type type) {
@@ -1607,7 +1609,9 @@ Attribute PaddedSharedEncodingAttr::parse(AsmParser &parser, Type type) {
     return {};
 
   DictionaryAttr dict;
-  bool hasLL = parser.parseAttribute(dict).succeeded();
+  auto parseLLResult = parser.parseOptionalAttribute(dict);
+  if (parseLLResult.has_value() && parseLLResult.value().failed())
+    return {};
 
   if (parser.parseGreater().failed())
     return {};
@@ -1615,7 +1619,8 @@ Attribute PaddedSharedEncodingAttr::parse(AsmParser &parser, Type type) {
   // Parse linear layout
   std::vector<std::string> inDimNames = {"offset"};
   std::optional<LinearLayout> maybeLL =
-      parseLinearLayout(dict, parser, inDimNames);
+      parseLLResult.has_value() ? parseLinearLayout(dict, parser, inDimNames)
+                                : std::nullopt;
 
   return parser.getChecked<PaddedSharedEncodingAttr>(
       parser.getContext(), intervals, paddings, order, *ctaLayout, maybeLL);
@@ -1634,7 +1639,9 @@ void PaddedSharedEncodingAttr::print(AsmPrinter &printer) const {
   printer << "}";
 
   if (getLinearComponent().has_value()) {
+    printer << " {";
     printLinearLayout(printer, *getLinearComponent());
+    printer << "}";
   }
 
   printer << ">";
