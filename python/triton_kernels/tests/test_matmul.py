@@ -351,8 +351,8 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
     act_is_float8 = act_dtype_str.startswith("float8")
     if act_mxfp8:
         act_dtype_str = act_dtype_str[2:]
-        dequantize_mxfp8_spec = FnSpecs(
-            FnName.DEQUANTIZE_MXFP8.name, dequantize_mxfp8_fn, (), ()
+        quantize_mxfp8_spec = FnSpecs(
+            FnName.QUANTIZE_MXFP8.name, quantize_mxfp8_fn, (), ()
         )
 
     test_bwd = False
@@ -411,7 +411,7 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
         y_scale_shape = y_shape[:-1] + (triton.cdiv(y_shape[-1], MXFP_BLOCK_SIZE),)
         y_scale = torch.empty(y_scale_shape, dtype=torch.uint8, device=x_tri.device)
         precision_opt = replace(precision_opt, act_scale=x_mx_scales_tri, out_scale=y_scale)
-        epilogue = Epilogue(dequantize_mxfp8_spec, tuple(), tuple(), effective_itemsize=6.0)
+        epilogue = Epilogue(quantize_mxfp8_spec, tuple(), tuple(), effective_itemsize=6.0)
     else:
         y_scale = None
 
