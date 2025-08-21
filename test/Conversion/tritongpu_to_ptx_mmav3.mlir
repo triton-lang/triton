@@ -98,7 +98,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     // and 12918 in decimal, respectively.
 
     // CHECK-DAG: and.b32           [[L1_VAL:%.*]], [[TID]], 2;
-    // CHECK-DAG: setp.eq.s32       [[L1_OFF:%.*]], [[L1_VAL]], 0;
+    // CHECK-DAG: setp.eq.b32       [[L1_OFF:%.*]], [[L1_VAL]], 0;
     // CHECK:     selp.b32          [[SEL1:%.*]], 21520, 4180, [[L1_OFF]];
     // CHECK:     selp.b32          [[SEL2:%.*]], 30258, 12918, [[L1_OFF]];
 
