@@ -7,7 +7,7 @@ if TYPE_CHECKING:
     from triton._C.libtriton.gluon_ir import GluonOpBuilder
     from ._semantic import GluonSemantic
     # Explicitly import forwarded Triton language symbols so mypy sees them.
-    from triton.language.core import (
+    from triton.language.core import (  # type: ignore
         associative_scan,
         atomic_add,
         atomic_and,
