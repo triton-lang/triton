@@ -940,9 +940,13 @@ def libdevice_kernel():
     a = ttgl.full([4, 32], 1, ttgl.float32, layout)
     b = ttgl.full([4, 32], 2, ttgl.float32, layout)
     c = ttgl.full([4, 32], 4, ttgl.float32, layout)
+
     libdevice.abs(a)
     libdevice.fast_dividef(a, b)
     libdevice.fma(a, b, c)
+
+    libdevice.isnan(a)
+    libdevice.isinf(a)
 
 
 @pytest.mark.parametrize("target", ALL_TARGETS)
@@ -962,6 +966,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %0 = tt.extern_elementwise %cst_0 {libname = "", libpath = "", pure = true, symbol = "..."} : (tensor<4x32xf32, #blocked>) -> tensor<4x32xf32, #blocked>
     %1 = tt.extern_elementwise %cst_0, %cst_2 {libname = "", libpath = "", pure = true, symbol = "..."} : (tensor<4x32xf32, #blocked>, tensor<4x32xf32, #blocked>) -> tensor<4x32xf32, #blocked>
     %2 = tt.extern_elementwise %cst_0, %cst_2, %cst_4 {libname = "", libpath = "", pure = true, symbol = "..."} : (tensor<4x32xf32, #blocked>, tensor<4x32xf32, #blocked>, tensor<4x32xf32, #blocked>) -> tensor<4x32xf32, #blocked>
+    %3 = tt.extern_elementwise %cst_0 {libname = "", libpath = "", pure = true, symbol = "..."} : (tensor<4x32xf32, #blocked>) -> tensor<4x32xi32, #blocked>
+    %c0_i32 = arith.constant 0 : i32
+    %cst_5 = arith.constant dense<0> : tensor<4x32xi32, #blocked>
+    %4 = arith.cmpi ne, %3, %cst_5 : tensor<4x32xi32, #blocked>
+    %5 = tt.extern_elementwise %cst_0 {libname = "", libpath = "", pure = true, symbol = "..."} : (tensor<4x32xf32, #blocked>) -> tensor<4x32xi32, #blocked>
+    %c0_i32_6 = arith.constant 0 : i32
+    %cst_7 = arith.constant dense<0> : tensor<4x32xi32, #blocked>
+    %6 = arith.cmpi ne, %5, %cst_7 : tensor<4x32xi32, #blocked>
     tt.return
   }
 }
