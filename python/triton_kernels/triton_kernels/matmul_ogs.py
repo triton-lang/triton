@@ -357,8 +357,9 @@ def matmul_ogs(x, w, bias,
                  (w_scale is None or w_scale.storage.is_tma_compliant())
     # hopper w/ mxfp4 doesn't support TMA
     can_use_tma = can_use_tma and (torch.cuda.get_device_capability()[0] > 9 or bitwidth(w.dtype) != 4)
+    can_use_fused_scatter = False
     opt_flags = make_opt_flags(out_dtype, x.dtype, w.dtype, precision_config,
-        M, N, K, routing_data, can_use_tma, epilogue.effective_itemsize,
+        batch_size, M, N, K, routing_data, can_use_tma, can_use_fused_scatter, epilogue.effective_itemsize,
     )
     if w_scale is not None and opt_flags.is_persistent and not target_info.has_native_mxfp():
         raise NotImplementedError("Must use non-persistent kernel for simulated MXFP")
@@ -542,10 +543,10 @@ def matmul_ogs_torch(x, w, bias,
         assert routing_data is None, "routing not supported in batched mode"
         assert w.ndim == 3 and w.shape[0] == x.shape[0]
     if round_x is None:
-        round_x = lambda x: x
+        round_x = lambda x, idx: x
     if round_y is None:
         round_y = lambda x: x
-    if bias.ndim == 1:
+    if bias is not None and bias.ndim == 1:
         bias = bias.view(1, *bias.shape)
     if w.ndim == 2:
         w = w.view(1, *w.shape)

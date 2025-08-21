@@ -350,6 +350,7 @@ def test_pcsampling(tmp_path: pathlib.Path):
         pytest.skip("HIP backend does not support pc sampling")
 
     import os
+
     if os.environ.get("PROTON_SKIP_PC_SAMPLING_TEST", "0") == "1":
         pytest.skip("PC sampling test is disabled")
 
@@ -446,3 +447,35 @@ def test_trace(tmp_path: pathlib.Path):
         assert len(trace_events) == 3
         assert trace_events[-1]["name"] == "foo"
         assert trace_events[-1]["args"]["call_stack"] == ["ROOT", "test", "foo"]
+
+
+def test_scope_multiple_threads(tmp_path: pathlib.Path):
+    temp_file = tmp_path / "test_scope_threads.hatchet"
+    proton.start(str(temp_file.with_suffix("")))
+
+    N = 50
+    thread_names = ["threadA", "threadB"]
+
+    def worker(prefix: str):
+        for i in range(N):
+            name = f"{prefix}_{i}"
+            proton.enter_scope(name)
+            torch.ones((1, ), device="cuda")
+            proton.exit_scope()
+
+    threads = [threading.Thread(target=worker, args=(tname, )) for tname in thread_names]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    proton.finalize()
+
+    with temp_file.open() as f:
+        data = json.load(f)
+
+    children = data[0]["children"]
+    assert len(children) == N * len(thread_names)
+    names = {c["frame"]["name"] for c in children}
+    expected = {f"{t}_{i}" for t in thread_names for i in range(N)}
+    assert names == expected

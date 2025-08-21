@@ -583,7 +583,6 @@ def test_preload(device, fresh_triton_cache) -> None:
 
     triton.knobs.runtime.jit_cache_hook = inc_counter
     final_kernel = kernel_add.warmup(torch.float32, torch.float32, torch.float32, 32, tl.float32, grid=(1, ))
-    triton.knobs.runtime.jit_cache_hook = None
     assert counter == 0
     assert len(kernel_add.device_caches[device][0]) == 1
     assert final_kernel.hash == hash
@@ -692,8 +691,6 @@ def test_function_arguments(device):
     def kernel(Y, fn: tl.constexpr, fn_args):
         tl.store(Y, fn(*fn_args))
 
-    triton.knobs.runtime.jit_cache_hook = None
-    triton.knobs.runtime.jit_post_compile_hook = None
     y = torch.zeros((5, ), dtype=torch.int32, device=device)
     kernel[(1, )](y[0], func1, tuple())
     kernel[(1, )](y[1], func2, tuple())

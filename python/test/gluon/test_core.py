@@ -1,15 +1,20 @@
 import torch
 import pytest
+import re
 
 import triton
 import triton.language as tl
 
-from triton._internal_testing import is_cuda, is_ampere_or_newer, is_hip_cdna3, is_hip_cdna4, is_hopper_or_newer, is_hopper
+from triton._internal_testing import is_ampere_or_newer, is_hip_cdna3, is_hip_cdna4, is_hopper_or_newer, is_hopper
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
 from triton.experimental.gluon.language.nvidia.ampere import async_copy, mbarrier
 from triton.experimental.gluon.language.nvidia.hopper import tma, fence_async_shared
 from triton.experimental.gluon.language.nvidia import hopper
+from triton.experimental.gluon.language.amd.cdna4 import async_copy as cdna4_async_copy
+from triton.experimental.gluon.language.extra import libdevice
+
+THREADS_PER_WARP = triton.runtime.driver.active.get_current_target().warp_size
 
 
 @gluon.jit
@@ -21,18 +26,15 @@ def copy_kernel(Out, In, numel, XBLOCK: ttgl.constexpr, layout: ttgl.constexpr):
     ttgl.store(Out + xoffset, data, xmask)
 
 
-copy_kernel_tpw = [32] if is_cuda() else [64]
-
-
 @pytest.mark.parametrize("layout", [
-    ttgl.BlockedLayout(size_per_thread=[1], threads_per_warp=copy_kernel_tpw, warps_per_cta=[4], order=[0]),
-    ttgl.BlockedLayout(size_per_thread=[2], threads_per_warp=copy_kernel_tpw, warps_per_cta=[4], order=[0]),
-    ttgl.BlockedLayout(size_per_thread=[4], threads_per_warp=copy_kernel_tpw, warps_per_cta=[4], order=[0]),
-    ttgl.BlockedLayout(size_per_thread=[8], threads_per_warp=copy_kernel_tpw, warps_per_cta=[4], order=[0]),
-    ttgl.BlockedLayout(size_per_thread=[1], threads_per_warp=copy_kernel_tpw, warps_per_cta=[8], order=[0]),
-    ttgl.BlockedLayout(size_per_thread=[2], threads_per_warp=copy_kernel_tpw, warps_per_cta=[8], order=[0]),
-    ttgl.BlockedLayout(size_per_thread=[4], threads_per_warp=copy_kernel_tpw, warps_per_cta=[8], order=[0]),
-    ttgl.BlockedLayout(size_per_thread=[8], threads_per_warp=copy_kernel_tpw, warps_per_cta=[8], order=[0]),
+    ttgl.BlockedLayout(size_per_thread=[1], threads_per_warp=[THREADS_PER_WARP], warps_per_cta=[4], order=[0]),
+    ttgl.BlockedLayout(size_per_thread=[2], threads_per_warp=[THREADS_PER_WARP], warps_per_cta=[4], order=[0]),
+    ttgl.BlockedLayout(size_per_thread=[4], threads_per_warp=[THREADS_PER_WARP], warps_per_cta=[4], order=[0]),
+    ttgl.BlockedLayout(size_per_thread=[8], threads_per_warp=[THREADS_PER_WARP], warps_per_cta=[4], order=[0]),
+    ttgl.BlockedLayout(size_per_thread=[1], threads_per_warp=[THREADS_PER_WARP], warps_per_cta=[8], order=[0]),
+    ttgl.BlockedLayout(size_per_thread=[2], threads_per_warp=[THREADS_PER_WARP], warps_per_cta=[8], order=[0]),
+    ttgl.BlockedLayout(size_per_thread=[4], threads_per_warp=[THREADS_PER_WARP], warps_per_cta=[8], order=[0]),
+    ttgl.BlockedLayout(size_per_thread=[8], threads_per_warp=[THREADS_PER_WARP], warps_per_cta=[8], order=[0]),
 ])
 @pytest.mark.parametrize("XBLOCK", [128, 256, 512, 1024, 2048])
 def test_copy_kernel(layout, XBLOCK):
@@ -146,6 +148,42 @@ def test_warpgroup_mma(ASYNC):
     ref = torch.matmul(a, b)
 
     torch.testing.assert_close(out, ref, atol=1e-3, rtol=1e-1)
+
+
+@pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
+@pytest.mark.parametrize("use_buffer_load", [True, False])
+def test_amd_direct_load_to_shared(use_buffer_load):
+
+    @gluon.jit
+    def kernel(a_ptr, b_ptr, use_buffer_load: ttgl.constexpr):
+        blocked: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [32, 2], [4, 1], [1, 0])
+        shared: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, order=[1, 0])
+
+        smem = ttgl.allocate_shared_memory(a_ptr.dtype.element_ty, [128, 16], shared)
+        offsets = ttgl.arange(0, 128, layout=ttgl.SliceLayout(1, blocked))[:, None] * 16 + \
+                  ttgl.arange(0, 16, layout=ttgl.SliceLayout(0, blocked))[None, :]
+        if use_buffer_load:
+            cdna4_async_copy.buffer_load_to_shared(smem, a_ptr, offsets)
+        else:
+            cdna4_async_copy.global_load_to_shared(smem, a_ptr + offsets)
+
+        cdna4_async_copy.async_wait(0)
+        a = cdna4_async_copy.load_shared_relaxed(smem, blocked)
+
+        ttgl.store(b_ptr + offsets, a)
+
+    torch.manual_seed(0)
+    a = torch.randn((128, 16), dtype=torch.float16, device='cuda')
+    b = torch.empty_like(a)
+    pgm = kernel[(1, )](a, b, use_buffer_load)
+
+    torch.testing.assert_close(a, b)
+    assert re.search(r'ttg\.local_load .* \{ttg\.amdgpu\.syncedViaAsyncWait = true\}', pgm.asm['ttgir'], re.MULTILINE)
+    if use_buffer_load:
+        assert re.search(r"buffer_load.*lds$", pgm.asm['amdgcn'], re.MULTILINE)
+    else:
+        assert re.search(r"global_load_lds", pgm.asm['amdgcn'], re.MULTILINE)
+    assert 'vmcnt(0)' in pgm.asm['amdgcn']
 
 
 @pytest.mark.parametrize("M, N, K", [(32, 32, 16), (16, 16, 32)])
@@ -351,3 +389,46 @@ def test_amd_mfma_scaled(M, N, K, rhs_scale, mxfp_type, normal_type):
     triton_kernel[(1, )](x, *x.stride(), scale_x, y, *y.stride(), scale_y, z_ref, M, N, K, type_a, type_b)
 
     torch.testing.assert_close(z, z_ref, rtol=1e-5, atol=1e-5)
+
+
+def test_math_fast_expf():
+
+    @gluon.jit
+    def fast_expf_kernel(x_ptr, y_ptr, warp_size: ttgl.constexpr, num_warps: ttgl.constexpr):
+        blocked: ttgl.constexpr = ttgl.BlockedLayout([1], [warp_size], [num_warps], [0])
+
+        offs = ttgl.arange(0, warp_size * num_warps, layout=blocked)
+        x = ttgl.load(x_ptr + offs)
+        y = libdevice.fast_expf(x)
+        ttgl.store(y_ptr + offs, y)
+
+    num_warps = 4
+
+    torch.manual_seed(0)
+    x = torch.randn(THREADS_PER_WARP * num_warps, device="cuda", dtype=torch.float32)
+    y = torch.empty_like(x)
+    fast_expf_kernel[(1, )](x, y, THREADS_PER_WARP, num_warps)
+    torch.testing.assert_close(y, torch.exp(x), atol=1e-5, rtol=1e-4)
+
+
+def test_math_fast_dividef():
+
+    @gluon.jit
+    def fast_dividef_kernel(x_ptr, y_ptr, z_ptr, warp_size: ttgl.constexpr, num_warps: ttgl.constexpr):
+        blocked: ttgl.constexpr = ttgl.BlockedLayout([1], [warp_size], [num_warps], [0])
+
+        offs = ttgl.arange(0, warp_size * num_warps, layout=blocked)
+        x = ttgl.load(x_ptr + offs)
+        y = ttgl.load(y_ptr + offs)
+        z = libdevice.fast_dividef(x, y)
+        ttgl.store(z_ptr + offs, z)
+
+    num_warps = 4
+
+    torch.manual_seed(0)
+    x = torch.randn(THREADS_PER_WARP * num_warps, device="cuda", dtype=torch.float32)
+    y = torch.randn_like(x)
+    z = torch.empty_like(x)
+    y[y == 0] = 1.0
+    fast_dividef_kernel[(1, )](x, y, z, THREADS_PER_WARP, num_warps)
+    torch.testing.assert_close(z, torch.div(x, y), atol=1e-5, rtol=1e-4)
