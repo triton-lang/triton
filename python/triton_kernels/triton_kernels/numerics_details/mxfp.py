@@ -83,7 +83,7 @@ def upcast_from_mxfp(tensor: torch.Tensor, scale: torch.Tensor, target_dtype: to
     assert tensor.dtype in {torch.uint8, torch.float8_e5m2, torch.float8_e4m3fn}, \
         f"Invalid tensor dtype {tensor.dtype=}"
     assert scale.dtype == torch.uint8, f"Invalid scale dtype {scale.dtype=}"
-    assert target_dtype in (torch.float16, torch.bfloat16, torch.float32), f"Invalid output dtype {dtype=}"
+    assert target_dtype in (torch.float16, torch.bfloat16, torch.float32), f"Invalid output dtype {target_dtype=}"
     # upcast
     logical_quant_dim = tensor.shape[axis] * (2 if tensor.dtype == torch.uint8 else 1)
     tensor = tensor.transpose(axis, tensor.ndim - 1).contiguous()
