@@ -1158,7 +1158,13 @@ SharedMemoryObject::getMaskSpanOffsets(triton::gpu::MemDescType srcTy) {
   if (allocShape == shape) {
     return 0;
   }
-  auto totalLl = triton::gpu::toLinearLayout(allocShape, srcTy.getEncoding());
+  LinearLayout totalLl;
+  if (auto paddedEncoding = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(
+          srcTy.getEncoding())) {
+    totalLl = paddedEncoding.getLinearComponent();
+  } else {
+    totalLl = triton::gpu::toLinearLayout(allocShape, srcTy.getEncoding());
+  }
   auto dimNames = standardOutDimNames(ctx, shape.size());
   // Remove the kBlock dimension
   auto kOffset = StringAttr::get(ctx, "offset");
