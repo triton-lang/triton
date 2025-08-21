@@ -307,10 +307,10 @@ public:
 private:
   const static inline bool PROPERTY[CycleMetricKind::Count] = {
       false, false, false, false, true,  true,  true,  true,
-      true,  true,  true,  true,  false, false, false, false};
+      true,  true,  true,  true,  false, false, false, true};
   const static inline bool EXCLUSIVE[CycleMetricKind::Count] = {
       false, false, true, true, true,  true,  true,  true,
-      true,  true,  true, true, false, false, false, false};
+      true,  true,  true, true, false, false, false, true};
   const static inline std::string VALUE_NAMES[CycleMetricKind::Count] = {
       "start_cycle", "end_cycle",      "cycles",          "normalized_cycles",
       "kernel_id",   "kernel_name",    "block_id",        "processor_id",
