@@ -941,12 +941,10 @@ def libdevice_kernel():
     b = ttgl.full([4, 32], 2, ttgl.float32, layout)
     c = ttgl.full([4, 32], 4, ttgl.float32, layout)
 
-    # different number of arguments
     libdevice.abs(a)
     libdevice.fast_dividef(a, b)
     libdevice.fma(a, b, c)
 
-    # different input and output types
     libdevice.isnan(a)
     libdevice.isinf(a)
 
