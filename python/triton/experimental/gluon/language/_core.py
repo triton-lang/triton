@@ -44,6 +44,41 @@ from triton.language.core import (
     tuple_type,
 )
 
+_IMPORT_FROM_TRITON: List[str] = [
+    "associative_scan",
+    "atomic_add",
+    "atomic_and",
+    "atomic_cas",
+    "atomic_max",
+    "atomic_min",
+    "atomic_or",
+    "atomic_xchg",
+    "atomic_xor",
+    "broadcast",
+    "device_assert",
+    "expand_dims",
+    "inline_asm_elementwise",
+    "join",
+    "load",
+    "map_elementwise",
+    "max_constancy",
+    "max_contiguous",
+    "maximum",
+    "minimum",
+    "multiple_of",
+    "num_programs",
+    "permute",
+    "program_id",
+    "reduce",
+    "reshape",
+    "split",
+    "static_assert",
+    "static_print",
+    "store",
+    "to_tensor",
+    "where",
+]
+
 __all__ = [
     "constexpr",
     "base_value",
@@ -85,6 +120,7 @@ __all__ = [
     "shared_memory_descriptor",
     "static_range",
     "warp_specialize",
+    *_IMPORT_FROM_TRITON,
 ]
 
 T = TypeVar("T")
@@ -130,41 +166,6 @@ def builtin(fn: T) -> T:
     setattr(wrapper, GLUON_BUILTIN, True)
 
     return wrapper
-
-
-# Explicitly import forwarded Triton language symbols so mypy sees them.
-associative_scan = builtin(getattr(tl_core, "associative_scan"))
-atomic_add = builtin(getattr(tl_core, "atomic_add"))
-atomic_and = builtin(getattr(tl_core, "atomic_and"))
-atomic_cas = builtin(getattr(tl_core, "atomic_cas"))
-atomic_max = builtin(getattr(tl_core, "atomic_max"))
-atomic_min = builtin(getattr(tl_core, "atomic_min"))
-atomic_or = builtin(getattr(tl_core, "atomic_or"))
-atomic_xchg = builtin(getattr(tl_core, "atomic_xchg"))
-atomic_xor = builtin(getattr(tl_core, "atomic_xor"))
-broadcast = builtin(getattr(tl_core, "broadcast"))
-device_assert = builtin(getattr(tl_core, "device_assert"))
-expand_dims = builtin(getattr(tl_core, "expand_dims"))
-inline_asm_elementwise = builtin(getattr(tl_core, "inline_asm_elementwise"))
-join = builtin(getattr(tl_core, "join"))
-load = builtin(getattr(tl_core, "load"))
-map_elementwise = builtin(getattr(tl_core, "map_elementwise"))
-max_constancy = builtin(getattr(tl_core, "max_constancy"))
-max_contiguous = builtin(getattr(tl_core, "max_contiguous"))
-maximum = builtin(getattr(tl_core, "maximum"))
-minimum = builtin(getattr(tl_core, "minimum"))
-multiple_of = builtin(getattr(tl_core, "multiple_of"))
-num_programs = builtin(getattr(tl_core, "num_programs"))
-permute = builtin(getattr(tl_core, "permute"))
-program_id = builtin(getattr(tl_core, "program_id"))
-reduce = builtin(getattr(tl_core, "reduce"))
-reshape = builtin(getattr(tl_core, "reshape"))
-split = builtin(getattr(tl_core, "split"))
-static_assert = builtin(getattr(tl_core, "static_assert"))
-static_print = builtin(getattr(tl_core, "static_print"))
-store = builtin(getattr(tl_core, "store"))
-to_tensor = builtin(getattr(tl_core, "to_tensor"))
-where = builtin(getattr(tl_core, "where"))
 
 
 class shared_memory_descriptor_type(base_type):
@@ -351,6 +352,11 @@ class shared_memory_descriptor(base_value):
         Dummy use to keep the shared memory descriptor alive.
         """
         return _semantic.shared_dealloc(self)
+
+
+for name in _IMPORT_FROM_TRITON:
+    fn = getattr(tl_core, name)
+    globals()[name] = builtin(fn)
 
 
 @builtin
