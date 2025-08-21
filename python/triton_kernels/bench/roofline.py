@@ -58,7 +58,6 @@ def compute_roofline(*args, \
 
     # wrapper to inject intensity proxy into target_fn and call it
     def inject_proxy_and_call(val, args, kwargs):
-        args_list = list(args)
         args_list.insert(pos_index, val)
         return bench_fn(*args_list, **kwargs)
 
