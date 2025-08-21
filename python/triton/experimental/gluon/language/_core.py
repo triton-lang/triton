@@ -7,12 +7,42 @@ if TYPE_CHECKING:
     from triton._C.libtriton.gluon_ir import GluonOpBuilder
     from ._semantic import GluonSemantic
     # Explicitly import forwarded Triton language symbols so mypy sees them.
+    # yapf: disable
     from triton.language.core import (  # type: ignore  # noqa: F401
-        associative_scan, atomic_add, atomic_and, atomic_cas, atomic_max, atomic_min, atomic_or, atomic_xchg,
-        atomic_xor, broadcast, device_assert, expand_dims, inline_asm_elementwise, join, load, map_elementwise,
-        max_constancy, max_contiguous, maximum, minimum, multiple_of, num_programs, permute, program_id, reduce,
-        reshape, split, static_assert, static_print, store, to_tensor, where,
+        associative_scan,
+        atomic_add,
+        atomic_and,
+        atomic_cas,
+        atomic_max,
+        atomic_min,
+        atomic_or,
+        atomic_xchg,
+        atomic_xor,
+        broadcast,
+        device_assert,
+        expand_dims,
+        inline_asm_elementwise,
+        join,
+        load,
+        map_elementwise,
+        max_constancy,
+        max_contiguous,
+        maximum,
+        minimum,
+        multiple_of,
+        num_programs,
+        permute,
+        program_id,
+        reduce,
+        reshape,
+        split,
+        static_assert,
+        static_print,
+        store,
+        to_tensor,
+        where,
     )
+    # yapf: enable
 
 from ._layouts import SharedLayout, DistributedLayout
 from triton._C.libtriton import ir
