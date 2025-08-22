@@ -271,7 +271,7 @@ tt.func public @attention_forward(
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: @matmul_kernel_tma_two_warps
-  tt.func public @matmul_kernel_tma_two_warps(%arg0: !tt.tensordesc<tensor<128x64xf16, #shared>>, %arg1: i32, %arg2: i32, %arg3: i64 , %arg4: i64, %arg5: !tt.tensordesc<tensor<128x64xf16, #shared>>, %arg6: i32, %arg7: i32, %arg8: i64, %arg9: i64, %arg10: !tt.tensordesc<tensor<128x128xf16, #shared>>, %arg11: i32, %arg12: i32, %arg13: i64, %arg14: i64, %arg15: i32 {tt.divisibility = 16 : i32}, %arg16: i32 {tt.divisibility = 16 : i32}, %arg17: i32 {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+  tt.func public @matmul_kernel_tma_two_warps(%arg0: !tt.tensordesc<tensor<128x64xf16, #shared>>, %arg1: i32, %arg2: i32, %arg3: i64, %arg4: i64, %arg5: !tt.tensordesc<tensor<128x64xf16, #shared>>, %arg6: i32, %arg7: i32, %arg8: i64, %arg9: i64, %arg10: !tt.tensordesc<tensor<128x128xf16, #shared>>, %arg11: i32, %arg12: i32, %arg13: i64, %arg14: i64, %arg15: i32 {tt.divisibility = 16 : i32}, %arg16: i32 {tt.divisibility = 16 : i32}, %arg17: i32 {tt.divisibility = 16 : i32}) attributes {noinline = false} {
     %c8_i32 = arith.constant 8 : i32
     %c128_i32 = arith.constant 128 : i32
     %c64_i32 = arith.constant 64 : i32
@@ -298,7 +298,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, ttg.targ
     %15 = arith.divsi %14, %c64_i32 : i32
     %16 = arith.muli %11, %c128_i32 : i32
     %17 = arith.muli %13, %c128_i32 : i32
-    // CHECK-NOT: partition0
+    // CHECK-LABEL-NOT: ttg.warp_specialize
     %18 = scf.for %arg18 = %c0_i32 to %15 step %c1_i32 iter_args(%arg19 = %cst) -> (tensor<128x128xf32, #mma>)  : i32 {
       %21 = arith.muli %arg18, %c64_i32 {loop.cluster = 1 : i32, loop.stage = 0 : i32} : i32
       %22 = tt.descriptor_load %arg0[%16, %21] {loop.cluster = 1 : i32, loop.stage = 0 : i32} : !tt.tensordesc<tensor<128x64xf16, #shared>> -> tensor<128x64xf16, #blocked>
@@ -308,7 +308,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, ttg.targ
       %26 = ttg.convert_layout %22 {loop.cluster = 0 : i32, loop.stage = 1 : i32} : tensor<128x64xf16, #blocked> -> tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
       %27 = tt.dot %26, %25, %arg19, inputPrecision = tf32 {loop.cluster = 0 : i32, loop.stage = 1 : i32} : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>> * tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<128x128xf32, #mma>
       scf.yield %27 : tensor<128x128xf32, #mma>
-    } {tt.scheduled_max_stage = 1 : i32}
+    } {tt.scheduled_max_stage = 1 : i32, tt.warp_specialize}
     %19 = arith.truncf %18 : tensor<128x128xf32, #mma> to tensor<128x128xf16, #mma>
     %20 = ttg.convert_layout %19 : tensor<128x128xf16, #mma> -> tensor<128x128xf16, #blocked>
     tt.descriptor_store %arg10[%16, %17], %20 : !tt.tensordesc<tensor<128x128xf16, #shared>>, tensor<128x128xf16, #blocked>
