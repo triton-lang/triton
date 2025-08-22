@@ -30,6 +30,10 @@ struct PartitionId : std::pair<int, int> {
 
 std::optional<PartitionId> getPartitionId(Operation *op);
 
+gpu::MemDescType arefViewBufferType(gpu::MemDescType arefBufType);
+gpu::MemDescType arefMultiBufferedType(gpu::MemDescType arefBufType, int depth);
+int arefDepth(gpu::MemDescType bufTy);
+
 } // namespace mlir::triton::nvws
 
 #endif // NVIDIA_NVWS_TRANSFORMS_UTILITY_H_
