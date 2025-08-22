@@ -62,7 +62,7 @@ std::pair<Value, AccessRange> findBufferAccess(Value a);
 
 std::pair<Value, AccessRange>
 findBufferAccessMemdescSubview(Operation *subview) {
-  OpBuilder builder(subview->getContext());
+  OpBuilder builder(subview);
   Location loc = subview->getLoc();
   TypedValue<ttg::MemDescType> src;
   SmallVector<int64_t> shape;
