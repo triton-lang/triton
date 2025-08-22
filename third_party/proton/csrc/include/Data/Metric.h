@@ -314,7 +314,7 @@ private:
       "start_cycle", "end_cycle",      "cycles",          "normalized_cycles",
       "kernel_id",   "kernel_name",    "block_id",        "processor_id",
       "unit_id",     "device_id",      "device_type",     "time_shift_cost",
-      "init_time",   "pre_final_time", "post_final_time", "compute_frequency",
+      "init_time",   "pre_final_time", "post_final_time", "frequency",
   };
 };
 
