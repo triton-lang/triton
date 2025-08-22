@@ -228,7 +228,8 @@ def tcgen5_mma_kernel(input_desc, XBLOCK: ttgl.constexpr, FAILURE: ttgl.constexp
     mbarrier.init(bar.index(0), count=1)
     mbarrier.init(bar.index(1), count=1)
 
-    blackwell.tcgen05_mma(smemA, smemB.permute([1, 0]), acc, mbarriers=[bar.index(0)])
+    blackwell.tcgen05_mma(smemA, smemB.permute([1, 0]), acc)
+    blackwell.tcgen05_commit(bar.index(0))
 
     if not FAILURE:
         mbarrier.wait(bar.index(0), 0)
@@ -283,32 +284,6 @@ def test_tcgen5_mma(FAILURE, MEM_ACCESS_KIND, device, run_wrapper):
     shared_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2)
     input_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(input, [XBLOCK, XBLOCK], shared_layout)
     tcgen5_mma_kernel[(1, )](input_desc, XBLOCK, FAILURE=FAILURE, MEM_ACCESS_KIND=MEM_ACCESS_KIND, num_warps=4)
-
-
-@gluon.jit
-def tcgen5_mma_multibar_kernel(input_desc, XBLOCK: ttgl.constexpr, BUF_IDX: ttgl.constexpr, BAR_IDX: ttgl.constexpr):
-    acc_layout: ttgl.constexpr = blackwell.TensorMemoryLayout([XBLOCK, XBLOCK], unpacked=True, cta_split_num=[1, 1])
-    blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, XBLOCK], threads_per_warp=[32, 1],
-                                                        warps_per_cta=[4, 1], order=[0, 1])
-    smemA = ttgl.allocate_shared_memory(ttgl.float16, [XBLOCK, XBLOCK], input_desc.layout)
-    smemB = ttgl.allocate_shared_memory(ttgl.float16, [XBLOCK, XBLOCK], input_desc.layout)
-    bar = ttgl.allocate_shared_memory(ttgl.int64, [4, 1], mbarrier.MBarrierLayout())
-    acc = blackwell.allocate_tensor_memory(ttgl.float32, [2, XBLOCK, XBLOCK], acc_layout)
-    for i in range(4):
-        mbarrier.init(bar.index(i), count=1)
-
-    blackwell.tcgen05_mma(smemA, smemB.permute([1, 0]), acc.index(0), mbarriers=[bar.index(0),
-                                                                                 bar.index(1)],
-                          mbarrier_preds=[False, True])
-    blackwell.tcgen05_mma(smemA, smemB.permute([1, 0]), acc.index(1), mbarriers=[bar.index(2)])
-    blackwell.tcgen05_commit(bar.index(3))
-
-    mbarrier.wait(bar.index(BAR_IDX), 0)
-
-    acc.index(BUF_IDX).store(ttgl.full([XBLOCK, XBLOCK], 42, ttgl.float32, blocked_layout))
-
-    for i in range(4):
-        mbarrier.invalidate(bar.index(i))
 
 
 @gluon.jit
@@ -403,6 +378,32 @@ def test_warpgroup_mma2(FAILURE, device, run_wrapper):
     XBLOCK = 128
     input = torch.randn((XBLOCK, XBLOCK), device=device, dtype=torch.float16)
     warpgroup_mma_kernel[(1, )](input, XBLOCK, FAILURE=FAILURE)
+
+
+@gluon.jit
+def tcgen5_mma_multibar_kernel(input_desc, XBLOCK: ttgl.constexpr, BUF_IDX: ttgl.constexpr, BAR_IDX: ttgl.constexpr):
+    acc_layout: ttgl.constexpr = blackwell.TensorMemoryLayout([XBLOCK, XBLOCK], unpacked=True, cta_split_num=[1, 1])
+    blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, XBLOCK], threads_per_warp=[32, 1],
+                                                        warps_per_cta=[4, 1], order=[0, 1])
+    smemA = ttgl.allocate_shared_memory(ttgl.float16, [XBLOCK, XBLOCK], input_desc.layout)
+    smemB = ttgl.allocate_shared_memory(ttgl.float16, [XBLOCK, XBLOCK], input_desc.layout)
+    bar = ttgl.allocate_shared_memory(ttgl.int64, [4, 1], mbarrier.MBarrierLayout())
+    acc = blackwell.allocate_tensor_memory(ttgl.float32, [2, XBLOCK, XBLOCK], acc_layout)
+    for i in range(4):
+        mbarrier.init(bar.index(i), count=1)
+
+    blackwell.tcgen05_mma(smemA, smemB.permute([1, 0]), acc.index(0), mbarriers=[bar.index(0),
+                                                                                 bar.index(1)],
+                          mbarrier_preds=[False, True])
+    blackwell.tcgen05_mma(smemA, smemB.permute([1, 0]), acc.index(1), mbarriers=[bar.index(2)])
+    blackwell.tcgen05_commit(bar.index(3))
+
+    mbarrier.wait(bar.index(BAR_IDX), 0)
+
+    acc.index(BUF_IDX).store(ttgl.full([XBLOCK, XBLOCK], 42, ttgl.float32, blocked_layout))
+
+    for i in range(4):
+        mbarrier.invalidate(bar.index(i))
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer")
