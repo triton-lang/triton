@@ -150,7 +150,6 @@ static bool init_interned_strings() {
 cleanup:
   Py_CLEAR(align_kwarg_str);
   Py_CLEAR(align_kwarg);
-  PyErr_Clear();
   return false;
 }
 
@@ -243,8 +242,6 @@ cleanup:
   Py_CLEAR(m_desc_gluon);
   Py_CLEAR(m_constexpr);
   Py_CLEAR(m_torch);
-
-  PyErr_Clear();
   return false;
 }
 
@@ -537,7 +534,6 @@ handle_jit_function(PyObject *backend, PyObject *arg, bool is_const,
                     bool specialize_value, bool align) {
   PyObject *cache_key = PyObject_GetAttr(arg, cache_key_attr);
   if (!cache_key) {
-    PyErr_Clear();
     return {py::handle(), py::handle()};
   }
   return {py::handle(constexpr_str), py::handle(cache_key)};
@@ -722,8 +718,10 @@ static PyObject *specialize_impl(PyObject *self, PyObject *const *args,
                                  Py_ssize_t nargs) {
   bool success = init_globals();
   if (!success) {
-    PyErr_SetString(PyExc_RuntimeError,
-                    "failed to initialize __triton_specialize module objects");
+    if (!PyErr_Occurred()) {
+      PyErr_SetString(PyExc_RuntimeError,
+                      "failed to initialize __triton_specialize module objects");
+    }
     return nullptr;
   }
 
