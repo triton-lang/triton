@@ -1107,6 +1107,8 @@ class TritonSemantic(Generic[TensorTy]):
 
     def descriptor_store(self, desc: tl.tensor_descriptor_base, value: TensorTy, offsets) -> TensorTy:
         self.validate_store_like(desc, value, offsets)
+        # implicitly cast to the descriptor's type
+        value = self.cast(value, desc.dtype)
         offsets = self._convert_to_ir_values(offsets, require_i64=False)
         return self.tensor(self.builder.create_descriptor_store(desc.handle, value.handle, offsets), tl.void)
 

@@ -2123,3 +2123,72 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
   }
 }
 """)
+
+
+@gluon.jit
+def padded_shared_layout_kernel():
+    padded_shared_layout: ttgl.constexpr = ttgl.PaddedSharedLayout(interval_padding_pairs=[[2, 1], [4, 2], [8, 4]],
+                                                                   order=[1, 0], ctas_per_cga=[1, 1],
+                                                                   cta_split_num=[1, 1], cta_order=[1, 0])
+
+    ttgl.allocate_shared_memory(ttgl.int32, [64, 64], padded_shared_layout)
+
+
+@pytest.mark.parametrize("target", [HIP_TARGET_CDNA3, HIP_TARGET_CDNA4])
+def test_padded_shared_layout(target):
+    # This test is used to test the construction of PaddedSharedEncodingAttr in the gluon.
+    module = run_parser(padded_shared_layout_kernel, target=target)
+    expecttest.assert_expected_inline(
+        anonymize_ir(module.str_nodebug()), """\
+#shared = #ttg.padded_shared<[2:+1, 4:+2, 8:+4] {order = [1, 0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @padded_shared_layout_kernel() attributes {noinline = false} {
+    %0 = ttg.local_alloc : () -> !ttg.memdesc<64x64xi32, #shared, #smem, mutable>
+    tt.return
+  }
+}
+""")
+
+
+@gluon.jit
+def infer_layout_for_padded_shared_kernel():
+    layout: ttgl.constexpr = ttgl.PaddedSharedLayout(interval_padding_pairs=[[2, 1], [4, 2], [8, 4]], order=[2, 0, 1])
+    smem = ttgl.allocate_shared_memory(ttgl.int32, [32, 4, 32], layout)
+
+    reshaped = smem.permute((1, 0, 2))
+    """
+    permute is [1 0 2], which means
+    old 1 to new 0
+    old 0 to new 1
+    old 2 to new 2
+    so inverseMapping[0] = 1, inverseMapping[1] = 0, inverseMapping[2] = 2
+
+    order in srcEnc is [2, 0, 1]
+    thus the order in dstEnc are:
+    newOrder[0] = inverseMapping[srcEncOrder[0]] = 2
+    newOrder[1] = inverseMapping[srcEncOrder[1]] = 1
+    newOrder[2] = inverseMapping[srcEncOrder[2]] = 0
+    """
+    ttgl.static_assert(
+        reshaped.layout == ttgl.PaddedSharedLayout(interval_padding_pairs=[(2, 1), (4, 2), (8, 4)], order=[2, 1, 0]))
+
+
+@pytest.mark.parametrize("target", ALL_TARGETS)
+def test_infer_layout_for_padded_shared(target):
+    # This test is used to test the conversion to gluon object PaddedSharedLayout from PaddedSharedEncodingAttr.
+    # This conversion is in layoutToGluon and ttgl.permute will finally use it.
+    module = run_parser(infer_layout_for_padded_shared_kernel, target=target)
+    expecttest.assert_expected_inline(
+        anonymize_ir(module.str_nodebug()), """\
+#shared = #ttg.padded_shared<[2:+1, 4:+2, 8:+4] {order = [2, 0, 1]}>
+#shared1 = #ttg.padded_shared<[2:+1, 4:+2, 8:+4] {order = [2, 1, 0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @infer_layout_for_padded_shared_kernel() attributes {noinline = false} {
+    %0 = ttg.local_alloc : () -> !ttg.memdesc<32x4x32xi32, #shared, #smem, mutable>
+    %1 = ttg.memdesc_trans %0 {order = array<i32: 1, 0, 2>} : !ttg.memdesc<32x4x32xi32, #shared, #smem, mutable> -> !ttg.memdesc<4x32x32xi32, #shared1, #smem, mutable>
+    tt.return
+  }
+}
+""")

@@ -97,6 +97,7 @@ struct GluonLayouts {
   py::handle NVMMASharedLayout;
   py::handle SwizzledSharedLayout;
   py::handle AMDMFMALayout;
+  py::handle PaddedSharedLayout;
   py::handle GluonDType;
 
   GluonLayouts() {
@@ -116,6 +117,8 @@ struct GluonLayouts {
     SwizzledSharedLayout =
         py::object(layouts.attr("SwizzledSharedLayout")).release();
     AMDMFMALayout = py::object(amdLayouts.attr("AMDMFMALayout")).release();
+    PaddedSharedLayout =
+        py::object(layouts.attr("PaddedSharedLayout")).release();
 
     auto core = py::module::import("triton.language.core");
     GluonDType = py::object(core.attr("dtype")).release();
@@ -199,7 +202,6 @@ py::object layoutToGluon(Attribute layout) {
   } else if (auto amdMfma = dyn_cast<ttg::AMDMfmaEncodingAttr>(layout)) {
     auto ctaLayout = amdMfma.getCTALayout();
     std::vector<unsigned> instrShape{amdMfma.getMDim(), amdMfma.getNDim()};
-
     auto elemTypeOpt = amdMfma.getElementType();
     const char *typeName = "fp32";
     if (elemTypeOpt.has_value()) {
@@ -222,6 +224,19 @@ py::object layoutToGluon(Attribute layout) {
         toStdVector(ctaLayout.getCTAsPerCGA()),
         toStdVector(ctaLayout.getCTASplitNum()),
         toStdVector(ctaLayout.getCTAOrder()));
+  } else if (auto paddedShared =
+                 dyn_cast<ttg::PaddedSharedEncodingAttr>(layout)) {
+    auto ctaLayout = paddedShared.getCTALayout();
+    std::vector<std::pair<unsigned, unsigned>> intervalPaddingPairs;
+    for (auto [interval, padding] :
+         llvm::zip(paddedShared.getIntervals(), paddedShared.getPaddings())) {
+      intervalPaddingPairs.push_back({interval, padding});
+    }
+    return layouts.PaddedSharedLayout(intervalPaddingPairs,
+                                      toStdVector(paddedShared.getOrder()),
+                                      toStdVector(ctaLayout.getCTAsPerCGA()),
+                                      toStdVector(ctaLayout.getCTASplitNum()),
+                                      toStdVector(ctaLayout.getCTAOrder()));
   }
 
   throw py::value_error("Unhandled encoding encountered");
@@ -337,6 +352,18 @@ void init_gluon_ir(py::module &&m) {
              return ttg::AMDMfmaEncodingAttr::get(
                  ctx, version, warpsPerCta, tilesPerWarp, instrShape[0],
                  instrShape[1], transposed, ctaLayout, elemType);
+           })
+      .def("get_padded_shared_layout",
+           [](GluonOpBuilder &self, std::vector<unsigned> &intervals,
+              std::vector<unsigned> &paddings, std::vector<unsigned> &order,
+              std::vector<unsigned> &ctasPerCga,
+              std::vector<unsigned> &ctaSplitNum,
+              std::vector<unsigned> &ctaOrder) -> Attribute {
+             auto ctx = self.getContext();
+             auto ctaLayout = self.getChecked<ttg::CTALayoutAttr>(
+                 ctx, ctasPerCga, ctaSplitNum, ctaOrder);
+             return ttg::PaddedSharedEncodingAttr::get(ctx, intervals, paddings,
+                                                       order, ctaLayout);
            })
       .def("get_nvmma_shared_layout",
            [](GluonOpBuilder &self, unsigned swizzleByteWidth,
