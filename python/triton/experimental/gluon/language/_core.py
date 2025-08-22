@@ -12,7 +12,6 @@ from triton._C.libtriton import ir
 import triton.language.core as tl_core
 from triton.language.core import (
     constexpr,
-    constexpr_function,
     base_value,
     base_type,
     dtype,
@@ -46,6 +45,7 @@ from triton.language.core import (
 )
 
 _IMPORT_FROM_TRITON: List[str] = [
+    "associative_scan",
     "atomic_add",
     "atomic_and",
     "atomic_cas",
@@ -55,6 +55,7 @@ _IMPORT_FROM_TRITON: List[str] = [
     "atomic_xchg",
     "atomic_xor",
     "broadcast",
+    "device_assert",
     "expand_dims",
     "inline_asm_elementwise",
     "join",
@@ -65,6 +66,7 @@ _IMPORT_FROM_TRITON: List[str] = [
     "maximum",
     "minimum",
     "multiple_of",
+    "num_programs",
     "permute",
     "program_id",
     "reduce",
@@ -79,7 +81,6 @@ _IMPORT_FROM_TRITON: List[str] = [
 
 __all__ = [
     "constexpr",
-    "constexpr_function",
     "base_value",
     "base_type",
     "dtype",

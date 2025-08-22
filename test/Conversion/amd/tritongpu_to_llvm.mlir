@@ -435,7 +435,27 @@ module attributes {"ttg.target" = "hip:gfx942", "ttg.num-ctas" = 1 : i32, "ttg.n
     // GFX950-NEXT: %[[ADD2:.+]] = llvm.add %[[ADD]], %[[ADD1]] : i32
     // GFX950: llvm.getelementptr %{{.+}}[%[[ADD2]]]
 
-    %1 = ttg.memdesc_index %arg0, %c1_i32 : !ttg.memdesc<2x64x64xf16, #shared, #smem, mutable> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
+    %1 = ttg.memdesc_index %arg0[%c1_i32] : !ttg.memdesc<2x64x64xf16, #shared, #smem, mutable> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+// CHECK-LABEL: padded_shared_layout_vectorization
+// CHECK-NOT: llvm.load
+// CHECK: llvm.load {{.*}} !llvm.ptr<3> -> vector<8xf16>
+// CHECK-NOT: llvm.load
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
+#shared = #ttg.padded_shared<[32:+4] {order = [1, 0]}>
+#smem = #ttg.shared_memory
+#mma = #ttg.amd_mfma<{version = 4, warpsPerCTA = [2, 4], instrShape = [16, 16], isTransposed = true}>
+module attributes {"ttg.target" = "hip:gfx942", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  tt.func @padded_shared_layout_vectorization(%arg0: tensor<16x32xf16, #blocked>) {
+    %0 = ttg.local_alloc %arg0 : (tensor<16x32xf16, #blocked>) -> !ttg.memdesc<16x32xf16, #shared, #smem, mutable>
+    %1 = ttg.local_load %0: !ttg.memdesc<16x32xf16, #shared, #smem, mutable, 16x32> -> tensor<16x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>>
+    ttg.local_store %1, %0 : tensor<16x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> -> !ttg.memdesc<16x32xf16, #shared, #smem, mutable>
     tt.return
   }
 }

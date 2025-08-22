@@ -142,6 +142,16 @@ Value TargetInfo::ballot(RewriterBase &rewriter, Location loc, Type type,
                                            NVVM::VoteSyncKind::ballot);
 }
 
+void TargetInfo::barrier(Location loc, RewriterBase &rewriter,
+                         bool isWarpSync) const {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  if (isWarpSync) {
+    rewriter.create<NVVM::SyncWarpOp>(loc, b.i32_val(0xffffffff));
+  } else {
+    b.barrier();
+  }
+}
+
 static Value mapa(RewriterBase &rewriter, Location loc, Value ptr, Value ctaid,
                   Value pred) {
   return rewriter.create<NVVM::MapaOp>(loc, ptr.getType(), ptr, ctaid);

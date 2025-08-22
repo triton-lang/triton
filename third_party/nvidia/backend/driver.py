@@ -369,6 +369,9 @@ typedef struct _DevicePtrInfo {{
     bool valid;
 }} DevicePtrInfo;
 
+static PyObject* data_ptr_str = NULL;
+static PyObject* tma_desc_cpu_ptr_str = NULL;
+
 static inline DevicePtrInfo getPointer(PyObject *obj, int idx) {{
   DevicePtrInfo ptr_info;
   ptr_info.dev_ptr = 0;
@@ -381,37 +384,35 @@ static inline DevicePtrInfo getPointer(PyObject *obj, int idx) {{
     // valid nullptr
     return ptr_info;
   }}
-  PyObject *ptr = PyObject_GetAttrString(obj, "data_ptr");
-  if(ptr){{
-    PyObject *empty_tuple = PyTuple_New(0);
-    PyObject *ret = PyObject_Call(ptr, empty_tuple, NULL);
-    Py_DECREF(empty_tuple);
-    Py_DECREF(ptr);
-    if (!PyLong_Check(ret)) {{
-      PyErr_SetString(PyExc_TypeError, "data_ptr method of Pointer object must return 64-bit int");
-      ptr_info.valid = false;
-      return ptr_info;
-    }}
-    ptr_info.dev_ptr = PyLong_AsUnsignedLongLong(ret);
-    if(!ptr_info.dev_ptr)
-      return ptr_info;
-    uint64_t dev_ptr;
-    int status = cuPointerGetAttribute(&dev_ptr, CU_POINTER_ATTRIBUTE_DEVICE_POINTER, ptr_info.dev_ptr);
-    if (status == CUDA_ERROR_INVALID_VALUE) {{
-        PyErr_Format(PyExc_ValueError,
-                     "Pointer argument (at %d) cannot be accessed from Triton (cpu tensor?)", idx);
-        ptr_info.valid = false;
-    }} else if (status != CUDA_SUCCESS) {{
-        CUDA_CHECK(status);  // Catch any other cuda API errors
-        ptr_info.valid = false;
-    }}
-    ptr_info.dev_ptr = dev_ptr;
-    Py_DECREF(ret);  // Thanks ChatGPT!
-    return ptr_info;
+  PyObject *ret = PyObject_CallMethodNoArgs(obj, data_ptr_str);
+  if (!ret) {{
+    PyErr_SetString(PyExc_TypeError, "Pointer argument must be either uint64 or have data_ptr method");
+    ptr_info.valid = false;
+    goto cleanup;
   }}
-  PyErr_SetString(PyExc_TypeError, "Pointer argument must be either uint64 or have data_ptr method");
-  ptr_info.valid = false;
+  if (!PyLong_Check(ret)) {{
+    PyErr_SetString(PyExc_TypeError, "data_ptr method of Pointer object must return 64-bit int");
+    ptr_info.valid = false;
+    goto cleanup;
+  }}
+  ptr_info.dev_ptr = PyLong_AsUnsignedLongLong(ret);
+  if(!ptr_info.dev_ptr)
+    return ptr_info;
+  uint64_t dev_ptr;
+  int status = cuPointerGetAttribute(&dev_ptr, CU_POINTER_ATTRIBUTE_DEVICE_POINTER, ptr_info.dev_ptr);
+  if (status == CUDA_ERROR_INVALID_VALUE) {{
+      PyErr_Format(PyExc_ValueError,
+                   "Pointer argument (at %d) cannot be accessed from Triton (cpu tensor?)", idx);
+      ptr_info.valid = false;
+  }} else if (status != CUDA_SUCCESS) {{
+      CUDA_CHECK(status);  // Catch any other cuda API errors
+      ptr_info.valid = false;
+  }}
+  ptr_info.dev_ptr = dev_ptr;
+cleanup:
+  Py_XDECREF(ret);
   return ptr_info;
+
 }}
 
 static inline CUtensorMap* getTmaDesc(PyObject *obj) {{
@@ -420,23 +421,8 @@ static inline CUtensorMap* getTmaDesc(PyObject *obj) {{
     return NULL;
   }}
 
-  PyObject *method_handle = PyObject_GetAttrString(obj, "tma_desc_cpu_ptr");
-  if (!method_handle) {{
-    PyErr_SetString(PyExc_TypeError, "tma_desc_cpu_ptr() method does not exist");
-    return NULL;
-  }}
-
-  PyObject *empty_tuple = PyTuple_New(0);
-  if (!empty_tuple) {{
-    Py_DECREF(method_handle);
-    PyErr_SetString(PyExc_SystemError, "Internal Python error!");
-    return NULL;
-  }}
-  PyObject *method_ret = PyObject_Call(method_handle, empty_tuple, NULL);
-  Py_DECREF(empty_tuple);
-  Py_DECREF(method_handle);
+  PyObject *method_ret = PyObject_CallMethodNoArgs(obj, tma_desc_cpu_ptr_str);
   if (!method_ret) {{
-    PyErr_SetString(PyExc_SystemError, "Internal Python error!");
     return NULL;
   }}
 
@@ -529,9 +515,7 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
 
   // extract launch metadata
   if (launch_enter_hook != Py_None){{
-    PyObject* args = Py_BuildValue("(O)", launch_metadata);
-    PyObject* ret = PyObject_CallObject(launch_enter_hook, args);
-    Py_DECREF(args);
+    PyObject* ret = PyObject_CallOneArg(launch_enter_hook, launch_metadata);
     if (!ret)
       return NULL;
     Py_DECREF(ret);
@@ -567,9 +551,7 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
   }}
 
   if(launch_exit_hook != Py_None){{
-    PyObject* args = Py_BuildValue("(O)", launch_metadata);
-    PyObject* ret = PyObject_CallObject(launch_exit_hook, args);
-    Py_DECREF(args);
+    PyObject* ret = PyObject_CallOneArg(launch_exit_hook, launch_metadata);
     if (!ret)
       return NULL;
     Py_DECREF(ret);
@@ -594,6 +576,14 @@ static struct PyModuleDef ModuleDef = {{
 PyMODINIT_FUNC PyInit___triton_launcher(void) {{
   PyObject *m = PyModule_Create(&ModuleDef);
   if(m == NULL) {{
+    return NULL;
+  }}
+  data_ptr_str = PyUnicode_InternFromString("data_ptr");
+  if(data_ptr_str == NULL) {{
+    return NULL;
+  }}
+  tma_desc_cpu_ptr_str = PyUnicode_InternFromString("tma_desc_cpu_ptr");
+  if(tma_desc_cpu_ptr_str == NULL) {{
     return NULL;
   }}
   PyModule_AddFunctions(m, ModuleMethods);

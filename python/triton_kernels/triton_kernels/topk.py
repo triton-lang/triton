@@ -3,6 +3,7 @@ import triton
 from triton_kernels.topk_details._topk_forward import _topk_forward
 from triton_kernels.topk_details._topk_backward import _topk_backward
 from triton_kernels.tensor import Tensor, Bitmatrix
+from typing import Optional, Union
 
 
 def topk_forward(x, k, apply_softmax=True, dim=1, return_bitmatrix=True, y_indx=None, n_rows=None):
@@ -83,10 +84,41 @@ class TopK(torch.autograd.Function):
         return dx, None, None, None, None, None, None
 
 
-def topk(x, k, apply_softmax=True, dim=1, return_bitmatrix=True, y_indx=None, n_rows=None):
+def topk(
+    x: Union[Tensor, torch.Tensor],
+    k: int,
+    apply_softmax: bool = True,
+    dim: int = 1,
+    return_bitmatrix: bool = True,
+    y_indx: Optional[torch.Tensor] = None,
+    n_rows: Optional[int] = None,
+):
+    """
+    Computes the top-k values and indices along a specified dimension of a tensor.
+    Note that the input can be either a `Tensor` or a `torch.Tensor`, but the output will always be a `torch.Tensor`.
+
+    Parameters
+    ----------
+    x : Union[triton_kernels.Tensor, torch.Tensor]
+        Input tensor of shape (n_tokens, n_expts).
+    k : int
+        Number of top elements to retrieve.
+    apply_softmax : bool, default True
+        Whether to apply softmax to the input tensor before computing top-k.
+    dim : int, default 1
+        Dimension along which to compute top-k.
+    return_bitmatrix : bool, default True
+        A bitmatrix of shape (n_tokens, cdiv(n_expts, 32)).
+        Each bit on [t, b] indicates whether the b-th expert was selected for the t-th token.
+    y_indx : torch.Tensor, optional
+        Pre-allocated tensor for storing indices of top-k elements with shape (n_tokens, k).
+        If provided, we skip the computation of top-k indices and use this tensor instead.
+    n_rows : int, optional
+        Number of rows to apply top-k on. If None, we consider all rows in `x`.
+
+    Returns
+    -------
+    (expt_scal, expt_indx, bitmatrix) : Tuple[torch.Tensor, torch.Tensor, Bitmatrix]
+    """
     ret = TopK.apply(x, k, apply_softmax, dim, return_bitmatrix, y_indx, n_rows)
     return ret
-
-
-# x = torch.randn((32, 32), dtype=torch.float16, device="cuda")
-# print(topk(x, 4))

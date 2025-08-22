@@ -147,7 +147,7 @@ def to_triton(x: np.ndarray, device, dst_type=None) -> Union[TensorWrapper, torc
 
 
 def str_to_triton_dtype(x: str) -> tl.dtype:
-    return tl.str_to_ty(type_canonicalisation_dict[x])
+    return tl.str_to_ty(type_canonicalisation_dict[x], None)
 
 
 def torch_dtype_name(dtype) -> str:
@@ -204,11 +204,13 @@ def unwrap_tensor(t: Union[torch.Tensor, triton.runtime.jit.TensorWrapper]) -> t
     return t
 
 
-def _fresh_knobs_impl(monkeypatch, skipped_attr: Optional[Set[str]] = None):
+def _fresh_knobs_impl(skipped_attr: Optional[Set[str]] = None):
     from triton import knobs
 
     if skipped_attr is None:
         skipped_attr = set()
+
+    monkeypatch = pytest.MonkeyPatch()
 
     knobs_map = {
         name: knobset
@@ -237,6 +239,9 @@ def _fresh_knobs_impl(monkeypatch, skipped_attr: Optional[Set[str]] = None):
     def reset_function():
         for name, knobset in knobs_map.items():
             setattr(knobs, name, knobset)
+        # `undo` should be placed before `del os.environ`
+        # Otherwise, it may restore environment variables that monkeypatch deleted
+        monkeypatch.undo()
         for k in env_to_unset:
             if k in os.environ:
                 del os.environ[k]

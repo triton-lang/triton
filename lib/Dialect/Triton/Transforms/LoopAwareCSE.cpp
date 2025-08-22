@@ -54,8 +54,7 @@ bool LoopCSEDriver::areIterArgsEqual(int i, int j) {
     return false;
   if (llvm::is_contained(argStack, std::make_pair(i, j)))
     return true;
-  BlockArgument aArg = loop.getRegionIterArg(i);
-  BlockArgument bArg = loop.getRegionIterArg(j);
+
   // First, assume the arguments are equal. This is how recursion is broken.
   argStack.push_back({i, j});
   bool result =

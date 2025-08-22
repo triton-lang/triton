@@ -16,9 +16,11 @@ def get_iterable_path(iterable: IterableType, path: ObjPath) -> Any:
 
 
 def set_iterable_path(iterable: IterableType, path: tuple[int, ...], val: Any):
+    from .language import core
     assert len(path) != 0
     prev = iterable if len(path) == 1 else get_iterable_path(iterable, path[:-1])
-    prev[path[-1]] = val  # type: ignore[index]
+    assert isinstance(prev, core.tuple)
+    prev._setitem(path[-1], val)
 
 
 def find_paths_if(iterable: Union[IterableType, Any], pred: Callable[[ObjPath, Any], bool]) -> list[ObjPath]:

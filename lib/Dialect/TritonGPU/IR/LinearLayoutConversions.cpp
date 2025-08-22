@@ -4,6 +4,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/LinearLayout.h"
@@ -12,6 +13,9 @@
 #include "llvm/ADT/Twine.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
+
+using mlir::triton::nvidia_gpu::TensorMemoryEncodingAttr;
+using mlir::triton::nvidia_gpu::TensorMemoryScalesEncodingAttr;
 
 namespace mlir::triton::gpu {
 namespace {
@@ -1145,8 +1149,7 @@ LinearLayout SliceEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   // First compute the linear layout for this layout's parent.
   SmallVector<int64_t> parentShape(shape);
   parentShape.insert(parentShape.begin() + getDim(), 1);
-  LinearLayout parentLL =
-      triton::gpu::toLinearLayout(parentShape, getParent(), {});
+  LinearLayout parentLL = triton::gpu::toLinearLayout(parentShape, getParent());
 
   // Remove dimension getDim() from the parent layout.
   //
@@ -1185,12 +1188,97 @@ LinearLayout SliceEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
                       llvm::to_vector(sliceLL.getOutDimNames()));
 }
 
+LinearLayout tensorMemoryToLinearLayout(ArrayRef<int64_t> shape,
+                                        TensorMemoryEncodingAttr encoding) {
+  // We model packed layouts as having the rows/cols dimensions of bitwidth=16
+  // This means that a layout with unpacked=True is the same as one with
+  // unpacked=False
+  assert(shape.size() == 2);
+  auto *ctx = encoding.getContext();
+  auto kRow = S("row");
+  auto kCol = S("col");
+  auto dims = standardOutDimNames(ctx, 2);
+  // The CTAOrder = [0, 1] so se start by N so that it ends up as
+  // ((tile * splitM) * splitN)
+  if (encoding.getCTASplitN() > 1) {
+    auto split =
+        LinearLayout::identity1D(encoding.getCTASplitN(), kCol, dims[1]);
+    auto newEncoding = TensorMemoryEncodingAttr::get(
+        ctx, encoding.getBlockM(), encoding.getBlockN(), encoding.getUnpacked(),
+        encoding.getCTASplitM(), 1);
+    return tensorMemoryToLinearLayout(
+               {shape[0], shape[1] / encoding.getCTASplitN()}, newEncoding) *
+           split;
+  }
+  if (encoding.getCTASplitM() > 1) {
+    auto split =
+        LinearLayout::identity1D(encoding.getCTASplitM(), kCol, dims[0]);
+    auto newEncoding = TensorMemoryEncodingAttr::get(
+        ctx, encoding.getBlockM(), encoding.getBlockN(), encoding.getUnpacked(),
+        1, encoding.getCTASplitN());
+    return tensorMemoryToLinearLayout(
+               {shape[0] / encoding.getCTASplitM(), shape[1]}, newEncoding) *
+           split;
+  }
+  assert(encoding.getCTASplitM() == 1 && encoding.getCTASplitN() == 1);
+
+  auto blockM = encoding.getBlockM();
+  auto blockN = encoding.getBlockN();
+  assert(blockM == 64 || blockM == 128);
+  LinearLayout tile;
+  if (blockM == 64) {
+    tile = LinearLayout::identity1D(16, kRow, dims[0]) *
+           LinearLayout::identity1D(blockN, kCol, dims[1]);
+    auto bases = tile.getBases();
+    if (shape[0] > blockM) {
+      bases[kRow].push_back({64, 0});
+    } else if (shape[1] > blockN) {
+      bases[kRow].push_back({0, static_cast<int32_t>(blockN)});
+    } else {
+      // Empty. This is modelled as broadcasting, same as for TMA(fp4)
+      bases[kRow].push_back({0, 0});
+    }
+    bases[kRow].push_back({16, 0});
+    bases[kRow].push_back({32, 0});
+    tile = LinearLayout(bases, dims);
+  } else {
+    tile = LinearLayout::identity1D(blockM, kRow, dims[0]) *
+           LinearLayout::identity1D(blockN, kCol, dims[1]);
+  }
+  auto repsM = shape[0] / tile.getOutDimSize(dims[0]);
+  auto repsN = shape[1] / tile.getOutDimSize(dims[1]);
+  assert(repsM >= 1 && repsN >= 1);
+  // Broadcast the remaining dimensions in order [0, 1]
+  tile = tile * LinearLayout::identity1D(repsM, kCol, dims[0]) *
+         LinearLayout::identity1D(repsN, kCol, dims[1]);
+  return tile;
+}
+
 LinearLayout
-TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
-                                 ArrayRef<int64_t> allocationShape) {
-  CacheKey key{
-      std::vector<int64_t>(shape.begin(), shape.end()), layout,
-      std::vector<int64_t>(allocationShape.begin(), allocationShape.end())};
+tensorMemoryScalesToLinearLayout(ArrayRef<int64_t> shape,
+                                 TensorMemoryScalesEncodingAttr encoding) {
+  assert(shape.size() == 2);
+  auto *ctx = encoding.getContext();
+  auto kRow = S("row");
+  auto kCol = S("col");
+  auto dims = standardOutDimNames(ctx, 2);
+  // nb. this can be done with
+  // ensureLayoutNotSmallerThan/ensureLayoutNotLargerThan but it's a bit less
+  // clear IMO
+  // https://docs.nvidia.com/cuda/parallel-thread-execution/#tcgen05-mma-scale-factor-a-layout-1x
+  // We choose repOrder = [0, 1]
+  auto tile =
+      LinearLayout::identity1D(std::min<int>(32, shape[0]), kRow, dims[0]) *
+      LinearLayout::identity1D(std::min<int>(4, shape[1]), kCol, dims[1]) *
+      // reps
+      LinearLayout::identity1D(std::max<int>(1, shape[0] / 32), kCol, dims[0]) *
+      LinearLayout::identity1D(std::max<int>(1, shape[1] / 4), kCol, dims[1]);
+  return tile;
+}
+
+LinearLayout TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape,
+                                              Attribute layout) {
+  CacheKey key{std::vector<int64_t>(shape.begin(), shape.end()), layout};
   if (auto result = llCache.get(key)) {
     return *result;
   }
@@ -1199,30 +1287,26 @@ TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
   // To add a new layout add an else-if clause
   LinearLayout result = LinearLayout::empty();
   if (auto distributed = dyn_cast<DistributedEncodingTrait>(layout)) {
-    assert(allocationShape.empty() &&
-           "allocationShape not supported for distributed layout");
     result = distributed.toLinearLayout(shape);
   } else {
-    assert(!allocationShape.empty() &&
-           "allocationShape not supported for shared layout");
-    allocationShape = allocationShape.take_back(shape.size());
-    assert(llvm::all_of(allocationShape,
+    assert(llvm::all_of(shape,
                         [](int64_t dim) {
                           return llvm::isPowerOf2_32(dim) && dim >= 1;
                         }) &&
-           "allocationShape must be a postive power of 2");
-    assert(llvm::all_of(llvm::zip(allocationShape, shape),
-                        [](auto dims) {
-                          return std::get<0>(dims) >= std::get<1>(dims);
-                        }) &&
-           "allocationShape must be at least as large as shape");
-
+           "shape must be a postive power of 2");
     if (auto shared = dyn_cast<SwizzledSharedEncodingAttr>(layout)) {
-      result = swizzledSharedToLinearLayout(allocationShape, shared);
+      result = swizzledSharedToLinearLayout(shape, shared);
     } else if (auto shared = dyn_cast<NVMMASharedEncodingAttr>(layout)) {
-      result = nvmmaSharedToLinearLayout(allocationShape, shared);
+      result = nvmmaSharedToLinearLayout(shape, shared);
     } else if (auto sbl = dyn_cast<AMDRotatingSharedEncodingAttr>(layout)) {
-      result = sharedToLinearLayoutAMDRotating(allocationShape, sbl);
+      result = sharedToLinearLayoutAMDRotating(shape, sbl);
+    } else if (auto tensorMemoryEncoding =
+                   dyn_cast<TensorMemoryEncodingAttr>(layout)) {
+      result = tensorMemoryToLinearLayout(shape, tensorMemoryEncoding);
+    } else if (auto tensorMemoryScalesEncoding =
+                   dyn_cast<TensorMemoryScalesEncodingAttr>(layout)) {
+      result =
+          tensorMemoryScalesToLinearLayout(shape, tensorMemoryScalesEncoding);
     } else {
       assert(0 && "unknown layout");
     }
@@ -1233,12 +1317,16 @@ TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
 }
 
 LinearLayout toLinearLayout(RankedTensorType type) {
-  return toLinearLayout(type.getShape(), type.getEncoding(), {});
+  return toLinearLayout(type.getShape(), type.getEncoding());
 }
 
 LinearLayout toLinearLayout(MemDescType type) {
-  return toLinearLayout(type.getShape(), type.getEncoding(),
-                        type.getAllocShape());
+  // Pass in the allocation shape. Then when using invertAndCompose it will
+  // trim the allocationShape to the shape if they are different.
+  // We also remove the first dimension of the allocationShape if there was a
+  // call to memdesc_index
+  auto shape = type.getAllocShape().take_back(type.getRank());
+  return toLinearLayout(shape, type.getEncoding());
 }
 
 LinearLayout toLinearLayout(TensorOrMemDesc type) {
@@ -1250,11 +1338,13 @@ LinearLayout toLinearLayout(TensorOrMemDesc type) {
   }
 }
 
-LinearLayout toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
-                            ArrayRef<int64_t> allocationShape) {
+// UNSAFE OVERLOAD!
+// If you call this with a SharedMemoryEncodingAttr, you should call it
+// with the allocShape as the shape, otherwise the layout will be incorrect!
+LinearLayout toLinearLayout(ArrayRef<int64_t> shape, Attribute layout) {
   auto *ctx = layout.getContext();
-  return ctx->getLoadedDialect<TritonGPUDialect>()->toLinearLayout(
-      shape, layout, allocationShape);
+  return ctx->getLoadedDialect<TritonGPUDialect>()->toLinearLayout(shape,
+                                                                   layout);
 }
 
 LinearLayout getLayoutWithinBlock(const LinearLayout &layout) {

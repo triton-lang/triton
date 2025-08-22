@@ -15,8 +15,7 @@
 #include <unordered_map>
 
 // LinearLayoutCache Utils
-using CacheKey =
-    std::tuple<std::vector<int64_t>, mlir::Attribute, std::vector<int64_t>>;
+using CacheKey = std::tuple<std::vector<int64_t>, mlir::Attribute>;
 
 namespace llvm {
 template <typename T> size_t hash_value(const std::vector<T> &vec) {
@@ -57,6 +56,7 @@ std::optional<int> maybeLookupNumWarps(Operation *op);
 // FIXME: Make this API and that of maybeLookupNumWarps consistent!
 // Utility to find the number of threads per warp
 int lookupThreadsPerWarp(OpBuilder &rewriter);
+int lookupNumCTAs(OpBuilder &rewriter);
 
 template <typename Key, typename Value> class Cache {
 public:

@@ -1,3 +1,4 @@
+#include "mlir/IR/OperationSupport.h"
 #include "triton/Dialect/Gluon/Transforms/Passes.h"
 
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -38,6 +39,15 @@ void Canonicalize::runOnOperation() {
       patterns);
   ctx->getLoadedDialect<cf::ControlFlowDialect>()->getCanonicalizationPatterns(
       patterns);
+  for (mlir::RegisteredOperationName op : ctx->getRegisteredOperationsByDialect(
+           arith::ArithDialect::getDialectNamespace()))
+    op.getCanonicalizationPatterns(patterns, ctx);
+  for (mlir::RegisteredOperationName op : ctx->getRegisteredOperationsByDialect(
+           scf::SCFDialect::getDialectNamespace()))
+    op.getCanonicalizationPatterns(patterns, ctx);
+  for (mlir::RegisteredOperationName op : ctx->getRegisteredOperationsByDialect(
+           cf::ControlFlowDialect::getDialectNamespace()))
+    op.getCanonicalizationPatterns(patterns, ctx);
   populateForOpDeadArgumentElimination(patterns);
 
   // Populate select Triton canonicalization patterns. The important patterns to

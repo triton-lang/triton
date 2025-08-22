@@ -1,6 +1,7 @@
 # isort: off
 # fmt: off
 from dataclasses import dataclass, fields, replace
+import itertools
 import pytest
 import torch
 from typing import Union
@@ -161,6 +162,13 @@ class Case:
     ", ".join(f.name for f in fields(Case)),
     [
         tuple(getattr(case, f.name) for f in fields(Case)) for case in [
+            # Zero-sized args:
+            Case(0, 5, 7, "ragged", "float16", "float16"),
+            Case(5, 0, 7, "ragged", "float16", "float16"),
+            Case(5, 7, 0, "ragged", "float16", "float16"),
+            Case(0, 5, 7, "batched", "float16", "float16"),
+            Case(5, 0, 7, "batched", "float16", "float16"),
+            Case(5, 7, 0, "batched", "float16", "float16"),
             # Non-mx types:
             Case(16, 256, 256, "ragged", "float16", "float16", 128, 4),
             Case(16, 256, 256, "ragged", "float16", "float16", 128, 4, n_expt_shards=2),
@@ -290,7 +298,12 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
         pytest.skip("fused scatter scratchpad not supported with split_k")
     if hbm_swizzling:
         if is_hip():
-            pytest.skip("NYI. HBM swizzling just implemented for CUDA.")
+            if not is_hip_cdna4():
+                pytest.skip("Scale preshuffling on AMD GPU has not been emulated on non-CDNA4 arch yet.")
+            if "mx" not in weight_dtype_str:
+                pytest.skip("Non-scale swizzling not supported on CDNA4 yet")
+            if n % 32 != 0 or k % (32 * 8) != 0:
+                pytest.skip(f"Shape {m}x{n}x{k} is not supported for scale swizzling on AMD GPU")
         if torch.cuda.get_device_capability()[0] < 9:
             pytest.skip("NYI. Ampere swizzling.")
         if torch.cuda.get_device_capability()[0] < 10:
@@ -301,7 +314,7 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
                 pytest.skip("Hopper swizzling acts on a 64x64 tile (4x1 mma tiles).")
 
     # launch metadata for batched / mx types may not work yet.
-    test_launch_metadata = (mode == "ragged") and ("mx" not in weight_dtype_str)
+    test_launch_metadata = (mode == "ragged") and ("mx" not in weight_dtype_str) and fused_scatter and m*n*k != 0
 
     torch.manual_seed(0)
 
@@ -320,6 +333,15 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
         "is_persistent": is_persistent,
         "epilogue_subtile": epilogue_subtile,
     }
+
+    if is_hip() and hbm_swizzling and "float4" in weight_dtype_str:
+        # Minimum block size to satisfy scale preshuffling
+        constraints.update({
+            "block_m": 32,
+            "block_n": 32,
+            "block_k": 256
+        })
+
     opt_flags.update_opt_flags_constraints(constraints)
 
     weight_mxfp = weight_dtype_str.startswith("mx")
@@ -349,7 +371,7 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
                                                                  has_y_gammas, requires_grad=test_bwd, device=device)
     x_ref, w_ref, bias_ref, gs0_ref, gs1_ref = apply_precision(x_tri, w_tri, bias_tri, gs0_tri, gs1_tri, precision_opt)
 
-    if w_tri.shape[0] == 1:
+    if w_tri.shape[0] == 1 and mode != "batched":
         # Test the case when weight has dim 2, i.e., shape (K, N).
         w_tri = w_tri.squeeze(0).detach().requires_grad_(test_bwd)
         w_ref = w_ref.squeeze(0).detach().requires_grad_(test_bwd)
@@ -496,6 +518,58 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
                 tri_y_scale).abs() < 1e-10, f"ref_y_scale: {ref_y_scale}, tri_y_scale: {tri_y_scale.item()}"
 
 
+# Test that we don't use unsupported block sizes.
+@pytest.mark.parametrize("m", [8, 16, 32, 64, 128])
+@pytest.mark.parametrize("n", [8, 16, 32, 64, 128])
+@pytest.mark.parametrize("k", [8, 16, 32, 64, 128])
+def test_small_batch_matmul(m, n, k):
+    if is_hip():
+        pytest.skip("Not fully tested on AMD")
+
+    if m * n * k > 16384:
+        pytest.skip()
+
+    BATCH_SIZE = 10000
+
+    def _make_tensor(shape, dtype, trans):
+        if trans:
+            shape = (shape[0], shape[2], shape[1])
+        t = alloc_rand(shape, "cuda", dtype)
+        return t.transpose(1, 2) if trans else t
+
+    for x_transpose, w_transpose, bias, dtype in itertools.product(
+        (False, True),
+        (False, True),
+        (False, True),
+        (torch.float16, torch.bfloat16, torch.float8_e5m2),
+    ):
+        if (
+            torch.cuda.get_device_capability()[0] < 10
+            and dtype is torch.float8_e5m2
+            and (not w_transpose)
+        ):
+            continue  # Not supported
+
+        x = _make_tensor((BATCH_SIZE, m, k), dtype, x_transpose)
+        w = _make_tensor((BATCH_SIZE, k, n), dtype, w_transpose)
+        bias = _make_tensor((BATCH_SIZE, n), torch.float32, False) if bias else None
+        tri_y = matmul_ogs(x, w, bias)
+
+        # ref_y = matmul_ogs_torch(x.float(), w.float(), bias)
+
+        # This is faster than matmul_ogs_torch.
+        ref_y = torch.bmm(x.float(), w.float())
+        if bias is not None:
+            ref_y += bias[:, None, :]
+
+        assert_close(
+            ref_y,
+            tri_y,
+            maxtol=4e-1 if dtype is torch.float8_e5m2 else None,
+            rmstol=4e-2 if dtype is torch.float8_e5m2 else None,
+        )
+
+
 def test_set_idle_sms():
     if not is_cuda():
         pytest.skip("Only supported on CUDA")
@@ -503,7 +577,7 @@ def test_set_idle_sms():
     num_idle_sms = 24
     matmul_ogs_set_idle_sms(num_idle_sms)
     flags = make_opt_flags(torch.float32, torch.float32, torch.float32, PrecisionConfig(), \
-                           1024, 1024, 1024, None, True, False, 1)
+                           1, 1024, 1024, 1024, None, True, False, 1)
     assert flags.idle_sms == num_idle_sms
 
 
@@ -567,3 +641,28 @@ def test_fused_act(m, n, k, mode, split_k, do_gather, do_scatter, fused_scatter,
     except opt_flags.InapplicableConstraint:
         pytest.skip("inapplicable constraint")
     assert_close(a, b)
+
+
+@pytest.mark.parametrize("m, n, k", [
+    (320, 2**19, 0),
+    (4096, 4096, 0),
+])
+@pytest.mark.parametrize("view_x_as_zero_cols", [False, True])
+def test_zero_reduction_dim(m, n, k, view_x_as_zero_cols):
+    torch.manual_seed(0)
+
+    if view_x_as_zero_cols:
+        x = torch.randn(m, m, device="cuda", dtype=torch.bfloat16)
+        x = x[:0, :].transpose(-1, -2)
+    else:
+        x = torch.randn(m, k, device="cuda", dtype=torch.bfloat16)
+    w = torch.randn(k, n, device="cuda", dtype=torch.bfloat16)
+    bias = torch.randn(n, device="cuda", dtype=torch.float32)
+
+    try:
+        tri_y = matmul_ogs(x, w, bias)
+    except opt_flags.InapplicableConstraint:
+        pytest.skip("inapplicable constraint")
+    ref_y = matmul_ogs_torch(x, w, bias, round_x=lambda x, idx: x, round_y=lambda y: y)
+
+    assert_close(ref_y, tri_y)

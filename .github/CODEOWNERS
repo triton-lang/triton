@@ -46,6 +46,7 @@ lib/Dialect/TritonGPU/Transforms/TritonGPUConversion.cpp @ptillet
 # third_party
 # -----------
 third_party/amd/ @antiagainst @zhanglx13
+third_party/proton/ @Jokeren @crobeck @fywkevin
 
 # -----------
 # gluon

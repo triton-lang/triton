@@ -903,7 +903,7 @@ public:
         Value atom = rewriter
                          .create<LLVM::AtomicRMWOp>(
                              loc, *llvmAtomicBinOp, rmwPtr, valElements[i],
-                             *llvmAtomicMemOrdering, StringRef("agent"))
+                             *llvmAtomicMemOrdering, StringRef("device"))
                          .getResult();
         // Handle the 2 bf16 case
         if (packed == 2 && valueElemNBits == 16) {
@@ -911,7 +911,7 @@ public:
                             .create<LLVM::AtomicRMWOp>(
                                 loc, *llvmAtomicBinOp, ptrElements[i + 1],
                                 valElements[i + 1], *llvmAtomicMemOrdering,
-                                StringRef("agent"))
+                                StringRef("device"))
                             .getResult();
           auto vecTy = vec_ty(valueElemTy, vec);
           auto tmp =
@@ -1250,10 +1250,11 @@ struct AsyncCopyGlobalToLocalOpConversion
         {str_attr("offset")});
     auto affineOffset = smemObj.getShmemOffset(loc, rewriter, dstTy);
     auto maskSpanAffineOffset = SharedMemoryObject::getMaskSpanOffsets(dstTy);
+    auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
     lowerLdSt(
         loc, ctx, cvt, vals, resElemTy, smemObj.getBase(),
-        [](Value v) { return v; }, affineOffset, maskSpanAffineOffset, rewriter,
-        targetInfo, maxVec, emitCpAsync);
+        [](Value v) { return v; }, affineOffset, maskSpanAffineOffset, laneId,
+        warpId, rewriter, targetInfo, maxVec, emitCpAsync);
 
     // Drop the result token.
     Value zero = rewriter.create<LLVM::ConstantOp>(
@@ -1556,6 +1557,7 @@ static LinearLayout getUnswizzledLayout(triton::gpu::MemDescType type) {
     assert(isa<ttg::SwizzledSharedEncodingAttr>(type.getEncoding()));
     return ttg::toLinearLayout(type);
   }
+  assert(type.getShape() == type.getAllocShape().take_back(type.getRank()));
   return ttg::nvmmaSharedToLinearLayout(
       type.getShape(), cast<NVMMASharedEncodingAttr>(type.getEncoding()),
       /*disableSwizzle=*/true);

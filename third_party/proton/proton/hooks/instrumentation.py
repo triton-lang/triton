@@ -232,7 +232,7 @@ class InstrumentationHook(Hook):
         # Reset the buffer reference
         self.buffer = None
 
-    def init_handle(self, module: Any, function: Any, name: str, metadata_group: Dict[str, str]) -> None:
+    def init_handle(self, module: Any, function: Any, name: str, metadata_group: Dict[str, str], hash: str) -> None:
         if not function:
             return
 
@@ -262,17 +262,17 @@ class InstrumentationHook(Hook):
     def _data_ptr(self) -> int:
         return 0 if self.buffer is None else self.buffer.data_ptr()
 
-    def enter(self, lazy_dict: LazyDict) -> None:
-        func = lazy_dict.data.get("function")
-        stream = lazy_dict.data.get("stream")
+    def enter(self, metadata: LazyDict) -> None:
+        func = metadata.data.get("function")
+        stream = metadata.data.get("stream")
         alloc_size = 0 if self.buffer is None else self.buffer.element_size() * self.buffer.numel()
         libproton.enter_instrumented_op(stream, func, self._data_ptr(), alloc_size)
         if InstrumentationHook.enable_host_buffer:
             InstrumentationHook.host_buffer = None
 
-    def exit(self, lazy_dict: LazyDict) -> None:
-        func = lazy_dict.data.get("function")
-        stream = lazy_dict.data.get("stream")
+    def exit(self, metadata: LazyDict) -> None:
+        func = metadata.data.get("function")
+        stream = metadata.data.get("stream")
         alloc_size = 0 if self.buffer is None else self.buffer.element_size() * self.buffer.numel()
         libproton.exit_instrumented_op(stream, func, self._data_ptr(), alloc_size)
 
