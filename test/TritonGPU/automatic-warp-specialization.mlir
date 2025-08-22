@@ -298,7 +298,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, ttg.targ
     %15 = arith.divsi %14, %c64_i32 : i32
     %16 = arith.muli %11, %c128_i32 : i32
     %17 = arith.muli %13, %c128_i32 : i32
-    // CHECK-LABEL-NOT: ttg.warp_specialize
+    // CHECK-NOT: ttg.warp_specialize
     %18 = scf.for %arg18 = %c0_i32 to %15 step %c1_i32 iter_args(%arg19 = %cst) -> (tensor<128x128xf32, #mma>)  : i32 {
       %21 = arith.muli %arg18, %c64_i32 {loop.cluster = 1 : i32, loop.stage = 0 : i32} : i32
       %22 = tt.descriptor_load %arg0[%16, %21] {loop.cluster = 1 : i32, loop.stage = 0 : i32} : !tt.tensordesc<tensor<128x64xf16, #shared>> -> tensor<128x64xf16, #blocked>
