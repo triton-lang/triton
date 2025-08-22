@@ -74,7 +74,7 @@ static Dtype2Str dtype2str;
 static TypeHandlerCache type_handler_cache;
 
 static bool init_interned_strings() {
-  PyObject* align_kwarg_str = nullptr;
+  PyObject *align_kwarg_str = nullptr;
 
   i32_str = PyUnicode_InternFromString("i32");
   if (!i32_str)
@@ -151,7 +151,6 @@ cleanup:
   Py_CLEAR(align_kwarg);
   return false;
 }
-
 
 static void init_type_handler_cache();
 
@@ -371,7 +370,8 @@ handle_long_type(PyObject *backend, PyObject *arg, bool is_const,
   }
 
   if (specialize_value && (val == 1)) {
-    return {py::reinterpret_borrow<py::object>(constexpr_str), py::reinterpret_borrow<py::object>(arg)};
+    return {py::reinterpret_borrow<py::object>(constexpr_str),
+            py::reinterpret_borrow<py::object>(arg)};
   }
 
   if (overflow == 0) {
@@ -412,7 +412,7 @@ handle_tensor(PyObject *backend, PyObject *arg, bool is_const,
   PyObject *dtype = nullptr, *native_spec_obj = nullptr;
   PyObject *data_ptr_result = nullptr;
 
-  PyObject* key_obj = nullptr;
+  PyObject *key_obj = nullptr;
   py::object key;
   Py_hash_t dtype_hash = -1;
   DTypePtrKey dsk{0, false};
@@ -521,7 +521,8 @@ handle_gluon_tensor_descriptor(PyObject *backend, PyObject *arg, bool is_const,
 static std::pair<py::object, py::object>
 handle_constexpr_type(PyObject *backend, PyObject *arg, bool is_const,
                       bool specialize_value, bool align) {
-  return {py::reinterpret_borrow<py::object>(constexpr_str), py::reinterpret_borrow<py::object>(arg)};
+  return {py::reinterpret_borrow<py::object>(constexpr_str),
+          py::reinterpret_borrow<py::object>(arg)};
 }
 
 static std::pair<py::object, py::object>
@@ -531,7 +532,8 @@ handle_jit_function(PyObject *backend, PyObject *arg, bool is_const,
   if (!cache_key) {
     return {py::object(), py::object()};
   }
-  return {py::reinterpret_borrow<py::object>(constexpr_str), py::reinterpret_borrow<py::object>(cache_key)};
+  return {py::reinterpret_borrow<py::object>(constexpr_str),
+          py::reinterpret_borrow<py::object>(cache_key)};
 }
 
 static std::pair<py::object, py::object>
@@ -540,7 +542,8 @@ handle_tuple(PyObject *backend, PyObject *arg, bool is_const,
   Py_ssize_t size = PyTuple_GET_SIZE(arg);
   if (size == 0) {
     // return tuple of empty tuples as in python reference
-    return {py::reinterpret_borrow<py::object>(arg), py::reinterpret_borrow<py::object>(arg)};
+    return {py::reinterpret_borrow<py::object>(arg),
+            py::reinterpret_borrow<py::object>(arg)};
   }
 
   PyTypeObject *tuple_type = nullptr;
@@ -582,7 +585,7 @@ handle_tuple(PyObject *backend, PyObject *arg, bool is_const,
 
   keys.clear();
   types.clear();
-  
+
   if (is_namedtuple) {
     norm_tys_tuple = tys_tuple;
     norm_keys_tuple = keys_tuple;
@@ -595,7 +598,8 @@ handle_tuple(PyObject *backend, PyObject *arg, bool is_const,
     Py_DECREF(norm_keys_tuple);
   }
 
-  return {py::reinterpret_steal<py::object>(tys_tuple), py::reinterpret_steal<py::object>(keys_tuple)};
+  return {py::reinterpret_steal<py::object>(tys_tuple),
+          py::reinterpret_steal<py::object>(keys_tuple)};
 
 cleanup:
   // cleanup potential left-overs
@@ -708,8 +712,9 @@ static PyObject *specialize_impl(PyObject *self, PyObject *const *args,
   bool success = init_globals();
   if (!success) {
     if (!PyErr_Occurred()) {
-      PyErr_SetString(PyExc_RuntimeError,
-                      "failed to initialize __triton_specialize module objects");
+      PyErr_SetString(
+          PyExc_RuntimeError,
+          "failed to initialize __triton_specialize module objects");
     }
     return nullptr;
   }
@@ -748,8 +753,8 @@ static PyObject *specialize_impl(PyObject *self, PyObject *const *args,
 }
 
 static PyMethodDef module_methods[] = {
-    {"native_specialize_impl", (PyCFunction)specialize_impl,
-     METH_FASTCALL, nullptr},
+    {"native_specialize_impl", (PyCFunction)specialize_impl, METH_FASTCALL,
+     nullptr},
     {nullptr, nullptr, 0, nullptr} // sentinel
 };
 

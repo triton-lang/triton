@@ -11,13 +11,12 @@ from dataclasses import dataclass
 from functools import cached_property
 from typing import Callable, Generic, Iterable, Optional, TypeVar, Union, overload, Dict, Any, Tuple
 
-from triton.tools.tensor_descriptor import TensorDescriptor
 from triton.backends import BaseBackend
 from types import ModuleType
 from .. import knobs
 from .driver import driver
 from . import _async_compile
-from .._utils import find_paths_if, get_iterable_path, type_canonicalisation_dict, canonicalize_dtype
+from .._utils import find_paths_if, get_iterable_path, type_canonicalisation_dict
 from .cache import get_cache_key
 from triton._C.libtriton import get_cache_invalidating_env_vars, native_specialize_impl
 
