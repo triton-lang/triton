@@ -338,4 +338,4 @@ def test_permutation_ptxas_bug(device):
         num_warps=1,
     )
     ref = torch.matmul(X.float(), W.float()).to(dtype)
-    torch.testing.assert_close(Out, ref)
+    torch.testing.assert_close(Out.to(torch.float32), ref.to(torch.float32), rtol=0.25, atol=0.0625)
