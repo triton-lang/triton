@@ -165,7 +165,7 @@ def init_allocation(x, w, precision_config, fused_activation, routing_data, gath
     output = (out_shape, out_dtype)
     # ---- scratchpad -----#
     scratchpad = dict()
-    if opt_flags.split_k > 1 or scatter_indx is not None:
+    if opt_flags.split_k > 1 or (scatter_indx is not None and not opt_flags.fused_scatter):
         scratch_out_dtype = torch.float32 if opt_flags.split_k > 1 else out_dtype
         scratchpad["matmul"] = ((opt_flags.split_k, 1, M, N), scratch_out_dtype)
     if "matmul" in scratchpad and precision_config.out_scale is not None:
@@ -357,7 +357,7 @@ def matmul_ogs(x, w, bias,
                  (w_scale is None or w_scale.storage.is_tma_compliant())
     # hopper w/ mxfp4 doesn't support TMA
     can_use_tma = can_use_tma and (torch.cuda.get_device_capability()[0] > 9 or bitwidth(w.dtype) != 4)
-    can_use_fused_scatter = has_scatter and (fused_activation.specs.fn is None) and (routing_data.n_expts_act == 1)
+    can_use_fused_scatter = has_scatter and (fused_activation.specs.fn is None) and (epilogue.specs.fn is None) and (routing_data.n_expts_act == 1)
     opt_flags = make_opt_flags(out_dtype, x.dtype, w.dtype, precision_config,
         batch_size, M, N, K, routing_data, can_use_tma, can_use_fused_scatter, epilogue.effective_itemsize,
     )

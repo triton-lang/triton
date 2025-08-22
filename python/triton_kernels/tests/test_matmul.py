@@ -51,6 +51,8 @@ def init_routing_data(m, n_expts_tot, n_expts_act, n_expt_shards, do_gather, do_
     routing_data.gate_scal = None
     gather_idx = gather_idx if do_gather else None
     scatter_idx = scatter_idx if do_scatter else None
+    if do_gather and do_scatter and n_expts_act == 1 and n_expt_shards == 1:
+        scatter_idx = mask_indx(scatter_idx, n_expts_act)
     return m, routing_data, gather_idx, scatter_idx
 
 
