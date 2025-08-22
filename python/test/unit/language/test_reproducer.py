@@ -1,5 +1,7 @@
+from triton._internal_testing import is_cuda, is_hip
 import triton
 import re
+import os
 
 
 def test_triton_reproducer_path(monkeypatch, tmp_path):
@@ -20,6 +22,12 @@ def test_triton_reproducer_path(monkeypatch, tmp_path):
     # Run the kernel so MLIR will generate a crash reproducer. It doesn't really
     # matter what the kernel does, just that the PassManager runs its passes.
     triton_[(1, )]()
+
+    if is_cuda() and not is_hip():
+        base_path = str(repro_path)
+        assert os.path.exists(base_path + '.make_ttir.repro.mlir')
+        assert os.path.exists(base_path + '.make_ttgir.repro.mlir')
+        assert os.path.exists(base_path + '.make_llir.repro.mlir')
 
     repro = repro_path.read_text()
     assert "mlir_reproducer" in repro, f"Expected MLIR reproducer in {repro_path}. Got:\n{repro}"

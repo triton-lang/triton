@@ -1816,7 +1816,7 @@ void init_triton_ir(py::module &&m) {
            })
       .def(
           "run",
-          [](PassManager &self, ModuleOp &mod) {
+          [](PassManager &self, ModuleOp &mod, std::string repro_suffix) {
             // TODO: maybe dump module to file and print error for better
             // diagnostics
 
@@ -1900,7 +1900,14 @@ void init_triton_ir(py::module &&m) {
             }
             if (failed(self.run(mod.getOperation())))
               throw std::runtime_error("PassManager::run failed");
+
+            if (!repro_suffix.empty() && !reproducerPath.empty() && reproducerPath != "-" &&
+                llvm::sys::fs::copy_file(reproducerPath, reproducerPath + repro_suffix)) {
+              throw std::runtime_error("PassManager::run failed (repro temp)");
+            }
           },
+          py::arg("mod"),
+          py::arg("repro_suffix") = "",
           py::call_guard<py::gil_scoped_release>());
 }
 
