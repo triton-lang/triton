@@ -390,8 +390,6 @@ contiguous (identity mapping).
 Formally, given a layout:
     padded_shared<[<interval_0>:+<pad_0>, <interval_1>:+<pad_1>, ...]>
 We insert a padding of `<pad_i>` elements after every `<interval_i>` elements.
-The padding is computed based on the final element index after the optional
-linear component is applied to the element inidices.
 Multi interval-padding pairs are supported for flexibility of multi tiered
 padding schemes; they compose in an additive manner. So for a 1-D tensor element
 at index i, the corresponding shared memory location index is
@@ -417,12 +415,36 @@ padding:
     e6, e7, p5, p6, p7,
     ...]
 
-3.  Single interval-padding with linear component
+Optionally this encoding allows for a linear remapping from the 1-D shared
+memory offset to logical n-D tensor elements. The remapping is gives in the form
+of linear bases mapping from offset to [dim0, dim1...dimN-1].
+See LinearLayout.h for more details how linear layouts are applied to remap
+elements.
+Some concrete examples using `xN` and `yN` to mean the logical n-D tensor elements
+and `pN` to mean padding:
+
+1. 1D Single interval-padding with strided elements
 
     #ttg.padded_shared<[2:+2] {offset = [[2], [1]]}>
-    [e0, e3, p0 p1,
-     e1, e3, p2, p3
+    [x0, x3, p0 p1,
+     x1, x3, p2, p3
      ...]
+
+3. 2D single interval-padding with rearanged rows.
+
+    #ttg.padded_shared<[8:+1] {offset = [[0, 1], [0, 2], /*gap, stride by 2 rows*/[2, 0], [4, 0], [1, 0]]]}>
+    [
+      x0y0, x0y1, x0y2, x0y3,
+      x2y0, x2y1, x2y2, x2y3,
+      x4y0, x4y1, x4y2, x4y3,
+      x6y0, x6y1, x6y2, x6y3,
+      p0,
+      x1y0, x1y1, x1y2, x1y3,
+      x3y0, x3y1, x3y2, x3y3,
+      x5y0, x5y1, x5y2, x5y3,
+      x7y0, x7y1, x7y2, x7y3,
+      p1,
+    ]
 
 Additionally this encoding requires an `order` to specify the logical
 tensor dimensions from the fastest-to slowest-varying.
