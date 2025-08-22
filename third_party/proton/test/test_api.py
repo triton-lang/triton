@@ -1,7 +1,15 @@
+"""
+Test module for proton's API functionality.
+No GPU kernel should be declared in this test.
+Profile correctness tests involving GPU kernels should be placed in `test_profile.py`.
+"""
+
 import json
 import triton.profiler as proton
 import pathlib
 from triton.profiler.hooks.hook import HookManager
+from triton.profiler.hooks.launch import LaunchHook
+from triton.profiler.hooks.instrumentation import InstrumentationHook
 
 
 def test_profile_single_session(tmp_path: pathlib.Path):
@@ -115,6 +123,34 @@ def test_hook(tmp_path: pathlib.Path):
     proton.deactivate(session_id0)
     proton.finalize(None)
     assert temp_file.exists()
+
+
+def test_hook_manager(tmp_path: pathlib.Path):
+    # Launch hook is a singleton
+    HookManager.register(LaunchHook(), 0)
+    HookManager.register(LaunchHook(), 0)
+    assert len(HookManager.active_hooks) == 1
+    assert isinstance(HookManager.active_hooks[0], LaunchHook)
+    assert HookManager.session_hooks[0][HookManager.active_hooks[0]] is True
+
+    # Only unregister one session
+    HookManager.register(LaunchHook(), 1)
+    HookManager.unregister(0)
+    assert len(HookManager.active_hooks) == 1
+    HookManager.unregister(1)
+    assert len(HookManager.active_hooks) == 0
+
+    # Heterogenous hooks
+    HookManager.register(InstrumentationHook(""), 2)
+    HookManager.register(LaunchHook(), 2)
+    assert len(HookManager.active_hooks) == 2
+    # Launch hook has a higher priority
+    assert isinstance(HookManager.active_hooks[0], LaunchHook)
+    assert isinstance(HookManager.active_hooks[1], InstrumentationHook)
+    assert HookManager.session_hooks[2][HookManager.active_hooks[0]] is True
+    assert HookManager.session_hooks[2][HookManager.active_hooks[1]] is True
+    HookManager.unregister()
+    assert len(HookManager.active_hooks) == 0
 
 
 def test_scope_metrics(tmp_path: pathlib.Path):

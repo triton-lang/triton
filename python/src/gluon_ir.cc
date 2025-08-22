@@ -4,6 +4,7 @@
 
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Types.h"
+#include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Gluon/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
@@ -19,6 +20,7 @@ namespace tt = triton;
 namespace ttg = triton::gpu;
 namespace ttng = triton::nvidia_gpu;
 namespace gluon = mlir::triton::gluon;
+namespace ttag = mlir::triton::amdgpu;
 
 // Helper to check if an MLIR type or attribute has a verifier method.
 template <typename AttrOrType>
@@ -197,17 +199,29 @@ py::object layoutToGluon(Attribute layout) {
   } else if (auto amdMfma = dyn_cast<ttg::AMDMfmaEncodingAttr>(layout)) {
     auto ctaLayout = amdMfma.getCTALayout();
     std::vector<unsigned> instrShape{amdMfma.getMDim(), amdMfma.getNDim()};
-    auto isFP32 = !amdMfma.getElementType().has_value() ||
-                  amdMfma.getElementType().value().isF32();
 
-    return layouts.AMDMFMALayout(amdMfma.getVersion(), instrShape,
-                                 amdMfma.getIsTransposed(),
-                                 toStdVector(amdMfma.getWarpsPerCTA()),
-                                 toStdVector(amdMfma.getTilesPerWarp()),
-                                 layouts.GluonDType(isFP32 ? "fp32" : "fp64"),
-                                 toStdVector(ctaLayout.getCTAsPerCGA()),
-                                 toStdVector(ctaLayout.getCTASplitNum()),
-                                 toStdVector(ctaLayout.getCTAOrder()));
+    auto elemTypeOpt = amdMfma.getElementType();
+    const char *typeName = "fp32";
+    if (elemTypeOpt.has_value()) {
+      auto elemType = elemTypeOpt.value();
+      if (elemType.isF64()) {
+        typeName = "fp64";
+      } else if (elemType.isF32()) {
+        typeName = "fp32";
+      } else {
+        // The AMDMfmaEncodingAttr mlir attribute has already verified element
+        // type is fp64, fp32 or int32; so, the typeName here must be int32.
+        typeName = "int32";
+      }
+    }
+
+    return layouts.AMDMFMALayout(
+        amdMfma.getVersion(), instrShape, amdMfma.getIsTransposed(),
+        toStdVector(amdMfma.getWarpsPerCTA()), layouts.GluonDType(typeName),
+        toStdVector(amdMfma.getTilesPerWarp()),
+        toStdVector(ctaLayout.getCTAsPerCGA()),
+        toStdVector(ctaLayout.getCTASplitNum()),
+        toStdVector(ctaLayout.getCTAOrder()));
   }
 
   throw py::value_error("Unhandled encoding encountered");
@@ -233,7 +247,8 @@ void init_gluon_ir(py::module &&m) {
              auto ctx = self.getContext();
              return self.getChecked<ttg::MemDescType>(
                  shape, elementType, layout,
-                 ttg::SharedMemorySpaceAttr::get(ctx), /*mutableMemory=*/true,
+                 ttg::SharedMemorySpaceAttr::get(ctx),
+                 /*mutableMemory=*/true,
                  /*allocShape=*/allocShape);
            })
       .def("get_tensor_mem_desc_ty",
@@ -243,7 +258,8 @@ void init_gluon_ir(py::module &&m) {
              auto ctx = self.getContext();
              return self.getChecked<ttg::MemDescType>(
                  shape, elementType, layout,
-                 ttng::TensorMemorySpaceAttr::get(ctx), /*mutableMemory=*/true,
+                 ttng::TensorMemorySpaceAttr::get(ctx),
+                 /*mutableMemory=*/true,
                  /*allocShape=*/allocShape);
            })
       .def("get_blocked_layout",
@@ -309,13 +325,12 @@ void init_gluon_ir(py::module &&m) {
            })
       .def("get_amd_mfma_layout",
            [](GluonOpBuilder &self, unsigned version,
+              std::vector<unsigned> &instrShape, bool transposed,
+              std::vector<unsigned> &warpsPerCta, mlir::Type elemType,
               std::vector<unsigned> &tilesPerWarp,
-              std::vector<unsigned> &warpsPerCta,
               std::vector<unsigned> &ctasPerCga,
               std::vector<unsigned> &ctaSplitNum,
-              std::vector<unsigned> &ctaOrder,
-              std::vector<unsigned> &instrShape, bool transposed,
-              mlir::Type elemType) -> Attribute {
+              std::vector<unsigned> &ctaOrder) -> Attribute {
              auto ctx = self.getContext();
              auto ctaLayout = self.getChecked<ttg::CTALayoutAttr>(
                  ctx, ctasPerCga, ctaSplitNum, ctaOrder);
@@ -388,11 +403,11 @@ void init_gluon_ir(py::module &&m) {
            })
       .def("create_async_copy_global_to_local",
            [](GluonOpBuilder &self, Value smem, Value pointer, Value mask,
-              tt::CacheModifier cacheModifier,
+              Value other, tt::CacheModifier cacheModifier,
               tt::EvictionPolicy evictionPolicy, bool isVolatile) {
              self.create<ttg::AsyncCopyGlobalToLocalOp>(
-                 pointer, smem, mask, /*other*/ Value{}, cacheModifier,
-                 evictionPolicy, isVolatile);
+                 pointer, smem, mask, other, cacheModifier, evictionPolicy,
+                 isVolatile);
            })
       .def("create_async_copy_mbarrier_arrive",
            [](GluonOpBuilder &self, Value mbarrier, bool incrementCount) {
@@ -602,13 +617,33 @@ void init_gluon_ir(py::module &&m) {
            [](GluonOpBuilder &self, int numPartitions) -> Operation * {
              return self.create<ttg::WarpSpecializePartitionsOp>(numPartitions);
            })
-      .def("create_warp_specialize", [](GluonOpBuilder &self,
-                                        std::vector<Type> &resultTypes,
-                                        std::vector<Value> &explicitCaptures,
-                                        std::vector<int> &partitionNumWarps) {
-        return self.create<ttg::WarpSpecializeOp>(resultTypes, explicitCaptures,
-                                                  partitionNumWarps);
-      });
+      .def("create_warp_specialize",
+           [](GluonOpBuilder &self, std::vector<Type> &resultTypes,
+              std::vector<Value> &explicitCaptures,
+              std::vector<int> &partitionNumWarps) {
+             return self.create<ttg::WarpSpecializeOp>(
+                 resultTypes, explicitCaptures, partitionNumWarps);
+           })
+      .def("create_buffer_load",
+           [](GluonOpBuilder &self, Type resultType, Value ptr, Value offsets,
+              Value mask, Value other, tt::CacheModifier cache) -> Value {
+             return self.create<ttag::BufferLoadOp>(resultType, ptr, offsets,
+                                                    Value() /*stride*/, cache,
+                                                    mask, other);
+           })
+      .def("create_buffer_store",
+           [](GluonOpBuilder &self, Value storedValue, Value ptr, Value offsets,
+              Value mask, tt::CacheModifier cache) {
+             self.create<ttag::BufferStoreOp>(storedValue, ptr, offsets,
+                                              Value() /*stride*/, cache, mask);
+           })
+      .def("create_buffer_load_to_local",
+           [](GluonOpBuilder &self, Value dest, Value ptr, Value offsets,
+              Value mask, Value other, Value stride,
+              tt::CacheModifier cacheModifier) {
+             self.create<ttag::BufferLoadToLocalOp>(
+                 dest, ptr, offsets, mask, other, stride, cacheModifier);
+           });
 
   py::class_<ttg::WarpSpecializeOp, OpState>(m, "WarpSpecializeOp",
                                              py::module_local())

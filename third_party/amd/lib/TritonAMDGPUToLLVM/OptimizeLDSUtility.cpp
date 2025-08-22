@@ -101,13 +101,20 @@ estimateResourcesForReplacement(OpBuilder builder,
   RankedTensorType dstTy = cvtOp.getType();
   RankedTensorType intermediateTy = RankedTensorType::get(
       srcTy.getShape(), srcTy.getElementType(), tmpLayout);
-  bool usePadding = cvtOp->hasAttr(AttrSharedMemPadded);
+  auto *ctx = cvtOp->getContext();
 
-  int tmpCvtLDS =
-      getConvertLayoutScratchInBytes(srcTy, intermediateTy, usePadding);
-  int newCvtLDS =
-      getConvertLayoutScratchInBytes(intermediateTy, dstTy, usePadding);
-  res.LDS = std::max(tmpCvtLDS, newCvtLDS);
+  int tmpCvtLDS = getConvertLayoutScratchInBytes(srcTy, intermediateTy,
+                                                 /*usePadding*/ true);
+  int tmpCvtLDSNoPad = getConvertLayoutScratchInBytes(srcTy, intermediateTy,
+                                                      /*usePadding*/ false);
+  int newCvtLDS = getConvertLayoutScratchInBytes(intermediateTy, dstTy,
+                                                 /*usePadding*/ true);
+  int newCvtLDSNoPad = getConvertLayoutScratchInBytes(intermediateTy, dstTy,
+                                                      /*usePadding*/ false);
+
+  res.LDSPad = std::max(tmpCvtLDS, newCvtLDS);
+  res.LDSSwizzle = std::max(tmpCvtLDSNoPad, newCvtLDSNoPad);
+
   return res;
 }
 

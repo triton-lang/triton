@@ -158,7 +158,7 @@ tt.func @optimize_broadcast(%arg0: i32) {
     "use"(%x1) {ttg.partition = 0 : i32} : (tensor<128x128xf32>) -> ()
     // CHECK: "use"([[X1_P1]]) {{.*}}partition = 1
     "use"(%x1) {ttg.partition = 1 : i32} : (tensor<128x128xf32>) -> ()
-  } {tt.warp_specialize, ttg.partition.stages = [0 : i32, 1 : i32]}
+  } {tt.warp_specialize, ttg.partition.stages = [0 : i32, 1 : i32], ttg.warp_specialize.tag = 0 : i32}
   tt.return
 }
 

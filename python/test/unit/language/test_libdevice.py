@@ -24,6 +24,7 @@ def test_bessel(dtype_str, libdevice_fn, torch_special_fn, device):
     SIZE = 128
     dtype = getattr(torch, dtype_str)
 
+    torch.manual_seed(42)
     x = torch.randn((SIZE, ), dtype=dtype, device=device)
     y_exp = torch.empty((SIZE, ), dtype=dtype, device=device)
     y_ref = getattr(torch.special, torch_special_fn)(x)

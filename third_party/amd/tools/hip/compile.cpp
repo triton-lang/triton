@@ -56,6 +56,7 @@ hipError_t {kernel_name}(hipStream_t stream, {signature}) {{
     unsigned int gY = {gridY};
     unsigned int gZ = {gridZ};
     hipDeviceptr_t global_scratch = 0;
+    hipDeviceptr_t profile_scratch = 0;
     void *args[{num_args}] = {{ {arg_pointers} }};
     // TODO: shared memory
     if(gX * gY * gZ > 0)

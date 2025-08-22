@@ -14,10 +14,10 @@ tt.func @test_dce_tmem_alloc(%arg: tensor<128x4xi8, #linear>) {
 }
 
 // CHECK-LABEL: @reinterpret_fold
-tt.func @reinterpret_fold(%arg0: !ttg.memdesc<128xf32, #tmem, #ttng.tensor_memory>) -> !ttg.memdesc<128xf32, #tmem, #ttng.tensor_memory> {
-  %0 = ttg.memdesc_reinterpret %arg0 : !ttg.memdesc<128xf32, #tmem, #ttng.tensor_memory> -> !ttg.memdesc<128xf32, #tmem, #ttng.tensor_memory>
+tt.func @reinterpret_fold(%arg0: !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory>) -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory> {
+  %0 = ttg.memdesc_reinterpret %arg0 : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory>
   // CHECK-NEXT: return %arg0
-  tt.return %0 : !ttg.memdesc<128xf32, #tmem, #ttng.tensor_memory>
+  tt.return %0 : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory>
 }
 
 }  // end module

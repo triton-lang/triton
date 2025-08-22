@@ -7,20 +7,28 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Tuple
 
+import triton
+import triton.language as tl
 import triton_kernels
 import triton_kernels.routing
 import triton_kernels.swiglu
-from triton_kernels.routing import RoutingData, GatherIndx, ScatterIndx, compute_expt_data
+from triton_kernels.routing import (
+    RoutingData,
+    GatherIndx,
+    ScatterIndx,
+    compute_expt_data_torch,
+    topk_torch,
+    prune_routing,
+    routing_from_bitmatrix,
+)
 from triton_kernels.topk import topk
 from triton_kernels.matmul_ogs import matmul_ogs, PrecisionConfig, FlexCtx, FnSpecs, FusedActivation
-from triton_kernels.target_info import get_cdna_version, is_hip, cuda_capability_geq
+from triton_kernels.routing_details._routing_compute import _routing_clear_bitmatrix
+from triton_kernels.target_info import get_cdna_version, is_hip, is_cuda, cuda_capability_geq
 from triton_kernels.tensor_details import layout
+from triton_kernels.tensor import Bitmatrix
 
 from bench_utils import quantize_weight
-
-# The following dummy methods simulate the behavior of distributed operations
-# in a non-distributed environment for testing purposes.
-# Assuming each rank has the same data for simplicity.
 
 
 @dataclass
@@ -146,95 +154,205 @@ def all_to_all(input_list: list[torch.Tensor], dim: int = 0) -> list[torch.Tenso
         return input_list
 
 
-def routing(x, logits, n_expts_act, sm_first=False, expt_indx=None, n_rows=None, EP=1,
-            TP=1) -> Tuple[RoutingData, GatherIndx, ScatterIndx, ReduceScatterMetadata]:
-    if _is_distributed_launch():
-        assert expt_indx is None, "expt_indx should be None for distributed routing"
-        _, n_expts_tot = logits.shape
+def _apply_parallelism(
+    expt_scal: torch.Tensor,
+    expt_indx: torch.Tensor,
+    x: torch.Tensor,
+    chunk_size: int,
+    EP: int = 1,
+    TP: int = 1,
+):
+    if EP > 1:
+        # Distributed Expert Parallelism
+        ep_indx = expt_indx // chunk_size
 
-        # Use the same topk as triton_kernels for consistent tie-breaking behavior
-        if sm_first:
-            logits = torch.softmax(logits, dim=-1)
-        expt_scal, expt_indx, _ = topk(logits, n_expts_act, apply_softmax=sm_first, n_rows=n_rows)
-        expt_indx = expt_indx.int()
+        # Partition tokens by expert parallelism rank
+        expt_scal_list = []
+        expt_indx_list = []
+        x_list = []
 
-        # Sort each token's selections by expert
-        expt_indx, sort_indices = torch.sort(expt_indx, dim=1, stable=True)
-        expt_scal = torch.gather(expt_scal, 1, sort_indices)
+        for i in range(EP):
+            mask = torch.any(ep_indx == i, dim=1)
+            expt_scal_masked = expt_scal[mask]
+            expt_indx_masked = expt_indx[mask]
+            x_masked = x[mask]
 
-        chunk_size = n_expts_tot // EP
-        output_split_sizes = None
+            for _ in range(TP):
+                expt_scal_list.append(expt_scal_masked)
+                expt_indx_list.append(expt_indx_masked)
+                x_list.append(x_masked)
+
+        # Exchange data across processes
+        expt_scal_list = all_to_all(expt_scal_list, dim=0)
+        expt_indx_list = all_to_all(expt_indx_list, dim=0)
+        x_list = all_to_all(x_list, dim=0)
+
+        output_split_sizes = [x.size(0) for x in expt_scal_list]
+        expt_scal = torch.cat(expt_scal_list, dim=0)
+        expt_indx = torch.cat(expt_indx_list, dim=0)
+        x = torch.cat(x_list, dim=0)
+
+        # Filter for local experts only
+        ep_rank = dist.get_rank() // TP
+        mask = (expt_indx // chunk_size) == ep_rank
+        expt_indx -= ep_rank * chunk_size
+        expt_scal = expt_scal.masked_fill(~mask, 0)
+        expt_indx = expt_indx.masked_fill(~mask, chunk_size)
+    else:
+        # Distributed Data Parallelism
         ep_indx = None
+        output_split_sizes = None
+        x = all_gather(x, dim=0)
+        expt_scal = all_gather(expt_scal, dim=0)
+        expt_indx = all_gather(expt_indx, dim=0)
 
-        if EP > 1:
-            # Distributed Expert Parallelism
-            ep_rank = dist.get_rank() // TP
-            ep_indx = expt_indx // chunk_size
+    return expt_scal, expt_indx, ep_indx, x, output_split_sizes
 
-            # Partition tokens by expert parallelism rank
-            expt_scal_list = []
-            expt_indx_list = []
-            x_list = []
 
-            for i in range(EP):
-                mask = torch.any(ep_indx == i, dim=1)
-                expt_scal_masked = expt_scal[mask]
-                expt_indx_masked = expt_indx[mask]
-                x_masked = x[mask]
+def routing_torch(x, logits, n_expts_act, sm_first=False, expt_indx=None, n_rows=None, EP=1, TP=1):
+    _, n_expts_tot = logits.shape
 
-                for _ in range(TP):
-                    expt_scal_list.append(expt_scal_masked)
-                    expt_indx_list.append(expt_indx_masked)
-                    x_list.append(x_masked)
+    if n_rows:
+        logits = logits[:n_rows]
+    if sm_first:
+        logits = torch.softmax(logits, dim=-1)
 
-            # Exchange data across processes
-            expt_scal_list = all_to_all(expt_scal_list, dim=0)
-            expt_indx_list = all_to_all(expt_indx_list, dim=0)
-            x_list = all_to_all(x_list, dim=0)
+    expt_scal, expt_indx = topk_torch(logits, n_expts_act, expt_indx, has_user_provided_indx=expt_indx is not None)
+    expt_indx = expt_indx.int()
+    if not sm_first:
+        expt_scal = torch.softmax(expt_scal, dim=-1)
 
-            output_split_sizes = [x.size(0) for x in expt_scal_list]
-            expt_scal = torch.cat(expt_scal_list, dim=0)
-            expt_indx = torch.cat(expt_indx_list, dim=0)
-            x = torch.cat(x_list, dim=0)
+    # Sort each token's selections by expert
+    expt_indx, sort_indices = torch.sort(expt_indx, dim=1, stable=True)
+    expt_scal = torch.gather(expt_scal, 1, sort_indices)
 
-            # Filter for local experts only
-            mask = (expt_indx // chunk_size) == ep_rank
-            expt_indx -= ep_rank * chunk_size
-            expt_scal = expt_scal.masked_fill(~mask, 0)
-            expt_indx = expt_indx.masked_fill(~mask, n_expts_tot)
+    chunk_size = n_expts_tot // EP
+
+    expt_scal, expt_indx, ep_indx, x, output_split_sizes = _apply_parallelism(expt_scal, expt_indx, x, chunk_size,
+                                                                              EP=EP, TP=TP)
+
+    # Flatten topk data
+    expt_scal = expt_scal.reshape(-1)
+    expt_indx = expt_indx.reshape(-1).to(torch.int32)
+
+    # Sort by expert_id for contiguous experts in matmul
+    expt_indx, topk_indx = torch.sort(expt_indx, stable=True)
+    gate_indx = torch.argsort(topk_indx, stable=True)
+
+    mask = expt_indx != chunk_size
+    topk_indx[~mask] = -1
+    gate_indx[gate_indx >= mask.sum()] = -1
+    gate_scal = expt_scal[topk_indx]
+    hist = torch.histc(expt_indx[mask], bins=chunk_size, min=0, max=chunk_size - 1)
+
+    # Pack the matmul data structures
+    gather_indx = GatherIndx(src_indx=topk_indx.int(), dst_indx=gate_indx.int())
+    scatter_indx = ScatterIndx(src_indx=gate_indx.int(), dst_indx=topk_indx.int())
+    n_gates = mask.sum().item()
+    expt_data = compute_expt_data_torch(hist, chunk_size, n_gates)
+
+    return (
+        x,
+        RoutingData(gate_scal, hist, chunk_size, n_expts_act, expt_data=expt_data),
+        gather_indx,
+        scatter_indx,
+        ReduceScatterMetadata(input_split_sizes=output_split_sizes, ep_indx=ep_indx, EP=EP, TP=TP),
+    )
+
+
+@triton.jit
+def pack_bitmatrix(
+    bitmatrix,
+    expt_indx,
+    n_rows,
+    n_cols,
+    n_expts_act,
+    BLOCK_SIZE_M: tl.constexpr,
+    BLOCK_SIZE_K: tl.constexpr,
+    sentinel: tl.constexpr,
+):
+    """
+    Packs expt_indx into a bitmatrix.
+    """
+    pid_m = tl.program_id(0)
+    offsets_m = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
+    offsets_k = tl.arange(0, BLOCK_SIZE_K)
+    offsets = offsets_m[:, None] * n_expts_act + offsets_k[None, :]
+    mask = (offsets_m < n_rows)[:, None] & (offsets_k < n_expts_act)[None, :]
+    indices = tl.load(expt_indx + offsets, mask=mask, other=sentinel)
+    div = indices // 32
+    rem = indices % 32
+    iters = tl.cdiv(sentinel, BLOCK_SIZE_K)
+    for i in range(iters):
+        offs = tl.arange(0, BLOCK_SIZE_K // 32) + i * (BLOCK_SIZE_K // 32)
+        x = tl.where(div[:, :, None] == offs[None, None, :], (1 << rem)[:, :, None], 0)
+        y = tl.reduce_or(x, axis=1)
+        bitmatrix_ptrs = bitmatrix + offsets_m[:, None] * n_cols + offs[None, :]
+        tl.store(bitmatrix_ptrs, y, mask=offsets_m[:, None] < n_rows)
+
+
+def routing_triton(x, logits, n_expts_act, sm_first=False, expt_indx=None, n_rows=None, EP=1, TP=1):
+    _, n_expts_tot = logits.shape
+
+    if sm_first:
+        logits = torch.softmax(logits, dim=-1)
+
+    expt_scal, expt_indx, _ = topk(logits, n_expts_act, apply_softmax=not sm_first, y_indx=expt_indx, n_rows=n_rows)
+    expt_indx = expt_indx.int()
+
+    chunk_size = n_expts_tot // EP
+
+    expt_scal, expt_indx, ep_indx, x, output_split_sizes = _apply_parallelism(expt_scal, expt_indx, x, chunk_size,
+                                                                              EP=EP, TP=TP)
+
+    # TODO: Skip all the following if `EP == 1`
+    # Recover bitmatrix for local experts
+    BLOCK_SIZE_M = 512
+    BLOCK_SIZE_K = 32
+    # The sentinel value is chunk_size + 1 instead of chunk_size to ensure the bitmatrix buffer
+    # doesn't overflow. For example, cdiv(32, 32) is 1, while the 32th bit is on the second column.
+    sentinel = chunk_size + 1
+    n_cols = triton.cdiv(sentinel, BLOCK_SIZE_K)
+    n_rows = expt_indx.size(0)
+    bitmatrix = torch.zeros((n_rows, n_cols), dtype=torch.uint32, device=expt_indx.device)
+    grid = (triton.cdiv(n_rows, BLOCK_SIZE_M), )
+
+    pack_bitmatrix[grid](
+        bitmatrix,
+        expt_indx,
+        n_rows,
+        n_cols,
+        n_expts_act,
+        BLOCK_SIZE_M=BLOCK_SIZE_M,
+        BLOCK_SIZE_K=BLOCK_SIZE_K,
+        sentinel=sentinel,
+    )
+    bitmatrix_shape = [n_rows, triton.cdiv(chunk_size, BLOCK_SIZE_K) * 32]
+    bitmatrix_shape_max = [n_rows, None]
+    bitmatrix = Bitmatrix(bitmatrix, shape=bitmatrix_shape, shape_max=bitmatrix_shape_max, scratchpad=None)
+    expt_scal, expt_indx, bitmatrix = prune_routing(expt_scal, expt_indx, bitmatrix, n_expts_tot, EP)
+    routing_data, gather_indx, scatter_indx = routing_from_bitmatrix(bitmatrix, expt_scal, expt_indx, n_expts_tot // EP,
+                                                                     n_expts_act)
+
+    return (
+        x,
+        routing_data,
+        gather_indx,
+        scatter_indx,
+        ReduceScatterMetadata(input_split_sizes=output_split_sizes, ep_indx=ep_indx, EP=EP, TP=TP),
+    )
+
+
+def routing(x, logits, n_expts_act, sm_first=False, expt_indx=None, n_rows=None, EP=1, TP=1,
+            backend="triton") -> Tuple[RoutingData, GatherIndx, ScatterIndx, ReduceScatterMetadata]:
+    if _is_distributed_launch():
+        assert backend in ["torch", "triton"], "backend must be either 'torch' or 'triton'"
+        if backend == "torch":
+            return routing_torch(x, logits, n_expts_act, sm_first, expt_indx, n_rows, EP, TP)
+        elif backend == "triton":
+            return routing_triton(x, logits, n_expts_act, sm_first, expt_indx, n_rows, EP, TP)
         else:
-            # Distributed Data Parallelism
-            x = all_gather(x, dim=0)
-            expt_scal = all_gather(expt_scal, dim=0)
-            expt_indx = all_gather(expt_indx, dim=0)
-
-        # Flatten topk data
-        expt_scal = expt_scal.reshape(-1)
-        expt_indx = expt_indx.reshape(-1).to(torch.int32)
-
-        # Sort by expert_id for contiguous experts in matmul
-        expt_indx, topk_indx = torch.sort(expt_indx, stable=True)
-        gate_indx = torch.argsort(topk_indx, stable=True)
-
-        mask = expt_indx != n_expts_tot
-        topk_indx[~mask] = -1
-        gate_indx[gate_indx >= mask.sum()] = -1
-        gate_scal = expt_scal[topk_indx]
-        hist = torch.histc(expt_indx[mask], bins=chunk_size, min=0, max=chunk_size - 1)
-
-        # Pack the matmul data structures
-        gather_indx = GatherIndx(src_indx=topk_indx.int(), dst_indx=gate_indx.int())
-        scatter_indx = ScatterIndx(src_indx=gate_indx.int(), dst_indx=topk_indx.int())
-        n_gates = mask.sum().item()
-        expt_data = compute_expt_data(hist, chunk_size, n_gates)
-
-        return (
-            x,
-            RoutingData(gate_scal, hist, chunk_size, n_expts_act, expt_data=expt_data),
-            gather_indx,
-            scatter_indx,
-            ReduceScatterMetadata(input_split_sizes=output_split_sizes, ep_indx=ep_indx, EP=EP, TP=TP),
-        )
+            raise ValueError(f"Unknown backend: {backend}")
     else:
         return x, *triton_kernels.routing.routing(logits, n_expts_act, sm_first, expt_indx, EP, n_rows), None
 
@@ -358,6 +476,54 @@ def test_all_to_all(monkeypatch):
     assert torch.equal(output_list[0], torch.tensor([1, 2], dtype=torch.float32))
     assert torch.equal(output_list[1], torch.tensor([1, 2], dtype=torch.float32))
     assert len(output_list) == 2
+
+
+def test_pack_bitmatrix():
+    # Test parameters
+    n_rows, n_expts_act = 4, 3
+    sentinel = 63  # We have experts 0-62, and 63 is a dummy value
+
+    expt_indx = torch.tensor([[0, 33, 63], [31, 32, 33], [5, 10, 15], [0, 62, 63]], dtype=torch.int32, device="cuda")
+    n_cols = triton.cdiv(sentinel, 32)
+    bitmatrix = torch.zeros((n_rows, n_cols), dtype=torch.uint32, device="cuda")
+
+    BLOCK_SIZE_M = 128
+    BLOCK_SIZE_K = 32
+    grid = (triton.cdiv(n_rows, BLOCK_SIZE_M), )
+
+    pack_bitmatrix[grid](
+        bitmatrix,
+        expt_indx,
+        n_rows,
+        n_cols,
+        n_expts_act,
+        BLOCK_SIZE_M=BLOCK_SIZE_M,
+        BLOCK_SIZE_K=BLOCK_SIZE_K,
+        sentinel=sentinel,
+    )
+    # Prune the bitmatrix to remove dummy values
+    _routing_clear_bitmatrix[(n_rows, )](
+        bitmatrix,
+        bitmatrix.stride(0),
+        bitmatrix.stride(1),
+        bitmatrix.shape[1],
+        sentinel,
+        BLOCK_N=128,
+    )
+
+    # Old pytorch version do not have "bitwise_and_cpu" not implemented for 'UInt32'
+    bitmatrix = bitmatrix.cpu().numpy()
+
+    # Verify bit packing
+    def is_bit_set(row, expert_id):
+        word_idx, bit_idx = expert_id // 32, expert_id % 32
+        return (bitmatrix[row, word_idx] & (1 << bit_idx)) != 0
+
+    # Check specific cases
+    assert is_bit_set(0, 0) and is_bit_set(0, 33) and not is_bit_set(0, 63)  # Token 0
+    assert is_bit_set(1, 31) and is_bit_set(1, 32) and is_bit_set(1, 33)  # Token 1
+    assert is_bit_set(2, 5) and is_bit_set(2, 10) and is_bit_set(2, 15)  # Token 2
+    assert is_bit_set(3, 0) and not is_bit_set(3, 63) and is_bit_set(3, 62)  # Token 3
 
 
 def gather_ep(rank, world_size, param, TP, EP):
@@ -532,9 +698,9 @@ def test_mlp_mp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, T
     parallelism = TP * EP
     if torch.cuda.device_count() < parallelism:
         pytest.skip(f"Test requires at least {parallelism} GPUs.")
-    if not cuda_capability_geq(9, 0):
+    if is_cuda() and not cuda_capability_geq(9, 0):
         pytest.skip("Test requires CUDA compute capability >= 9.0.")
-    if get_cdna_version() == 4 and EP > 1:
+    if is_hip() and get_cdna_version() == 4 and EP > 1:
         pytest.skip("[TODO] Unknown issue with CDNA 4 and EP > 1")
     if TP > 1 and x_dtype == "fp8":
         pytest.skip("[TODO] Testing FP8 is not supported for TP > 1.")
