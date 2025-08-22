@@ -263,3 +263,55 @@ tt.func public @attention_forward(
 }
 
 }
+
+// -----
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 2], order = [1, 0]}>
+#linear = #ttg.linear<{register = [[0, 1], [0, 8], [0, 16], [0, 32], [16, 0], [32, 0], [64, 0]], lane = [[0, 2], [0, 4], [1, 0], [2, 0], [4, 0]], warp = [[8, 0]], block = []}>
+#mma = #ttg.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [1, 2], instrShape = [16, 8]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @matmul_kernel_tma_two_warps
+  tt.func public @matmul_kernel_tma_two_warps(%arg0: !tt.tensordesc<tensor<128x64xf16, #shared>>, %arg1: i32, %arg2: i32, %arg3: i64 , %arg4: i64, %arg5: !tt.tensordesc<tensor<128x64xf16, #shared>>, %arg6: i32, %arg7: i32, %arg8: i64, %arg9: i64, %arg10: !tt.tensordesc<tensor<128x128xf16, #shared>>, %arg11: i32, %arg12: i32, %arg13: i64, %arg14: i64, %arg15: i32 {tt.divisibility = 16 : i32}, %arg16: i32 {tt.divisibility = 16 : i32}, %arg17: i32 {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+    %c8_i32 = arith.constant 8 : i32
+    %c128_i32 = arith.constant 128 : i32
+    %c64_i32 = arith.constant 64 : i32
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %c127_i32 = arith.constant 127 : i32
+    %c63_i32 = arith.constant 63 : i32
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #mma>
+    %0 = tt.get_program_id x : i32
+    %1 = arith.addi %arg15, %c127_i32 : i32
+    %2 = arith.divsi %1, %c128_i32 : i32
+    %3 = arith.addi %arg16, %c127_i32 : i32
+    %4 = arith.divsi %3, %c128_i32 : i32
+    %5 = arith.muli %4, %c8_i32 : i32
+    %6 = arith.divsi %0, %5 : i32
+    %7 = arith.muli %6, %c8_i32 : i32
+    %8 = arith.subi %2, %7 : i32
+    %9 = arith.minsi %8, %c8_i32 : i32
+    %10 = arith.remsi %0, %9 : i32
+    %11 = arith.addi %7, %10 : i32
+    %12 = arith.remsi %0, %5 : i32
+    %13 = arith.divsi %12, %9 : i32
+    %14 = arith.addi %arg17, %c63_i32 : i32
+    %15 = arith.divsi %14, %c64_i32 : i32
+    %16 = arith.muli %11, %c128_i32 : i32
+    %17 = arith.muli %13, %c128_i32 : i32
+    // CHECK-NOT: partition0
+    %18 = scf.for %arg18 = %c0_i32 to %15 step %c1_i32 iter_args(%arg19 = %cst) -> (tensor<128x128xf32, #mma>)  : i32 {
+      %21 = arith.muli %arg18, %c64_i32 {loop.cluster = 1 : i32, loop.stage = 0 : i32} : i32
+      %22 = tt.descriptor_load %arg0[%16, %21] {loop.cluster = 1 : i32, loop.stage = 0 : i32} : !tt.tensordesc<tensor<128x64xf16, #shared>> -> tensor<128x64xf16, #blocked>
+      %23 = tt.descriptor_load %arg5[%17, %21] {loop.cluster = 1 : i32, loop.stage = 0 : i32} : !tt.tensordesc<tensor<128x64xf16, #shared>> -> tensor<128x64xf16, #blocked>
+      %24 = ttg.convert_layout %23 {loop.cluster = 0 : i32, loop.stage = 1 : i32} : tensor<128x64xf16, #blocked> -> tensor<128x64xf16, #linear>
+      %25 = tt.trans %24 {loop.cluster = 0 : i32, loop.stage = 1 : i32, order = array<i32: 1, 0>} : tensor<128x64xf16, #linear> -> tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
+      %26 = ttg.convert_layout %22 {loop.cluster = 0 : i32, loop.stage = 1 : i32} : tensor<128x64xf16, #blocked> -> tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
+      %27 = tt.dot %26, %25, %arg19, inputPrecision = tf32 {loop.cluster = 0 : i32, loop.stage = 1 : i32} : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>> * tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<128x128xf32, #mma> loc(#loc23)
+      scf.yield %27 : tensor<128x128xf32, #mma>
+    } {tt.scheduled_max_stage = 1 : i32}
+    %19 = arith.truncf %18 : tensor<128x128xf32, #mma> to tensor<128x128xf16, #mma>
+    %20 = ttg.convert_layout %19 : tensor<128x128xf16, #mma> -> tensor<128x128xf16, #blocked>
+    tt.descriptor_store %arg10[%16, %17], %20 : !tt.tensordesc<tensor<128x128xf16, #shared>>, tensor<128x128xf16, #blocked>
+    tt.return
+  }
+}
