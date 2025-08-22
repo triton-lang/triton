@@ -384,7 +384,7 @@ for all indices i \in Z^d, \mathcal{L}(i) = {0, 1, ..., 32*num_warps - 1}.
 Compared to SwizzledSharedEncodingAttr, this encoding uses padding to avoid
 shared memory bank conflicts. For cases where padding alone cannot efficiently
 avoid shared memory bank conflicts it has an optional linear component to
-rearange elements. If the the linear component is absent the elements will be
+rearange elements. If the linear component is absent the elements will be
 contiguous (identity mapping).
 
 Formally, given a layout:
