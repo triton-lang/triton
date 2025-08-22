@@ -75,6 +75,8 @@ static TensorDescCache tensor_desc_cache;
 static TypeHandlerCache type_handler_cache;
 
 static bool init_interned_strings() {
+  PyObject* align_kwarg_str = nullptr;
+
   i32_str = PyUnicode_InternFromString("i32");
   if (!i32_str)
     goto cleanup;
@@ -135,13 +137,19 @@ static bool init_interned_strings() {
       PyUnicode_InternFromString("get_tensor_specialization");
   if (!get_tensor_spec_attr)
     goto cleanup;
-  align_kwarg = PyUnicode_InternFromString("align");
+  align_kwarg_str = PyUnicode_InternFromString("align");
+  if (!align_kwarg_str)
+    goto cleanup;
+  align_kwarg = PyTuple_Pack(1, align_kwarg_str);
+  Py_DECREF(align_kwarg_str);
   if (!align_kwarg)
     goto cleanup;
 
   return true;
 
 cleanup:
+  Py_CLEAR(align_kwarg_str);
+  Py_CLEAR(align_kwarg);
   PyErr_Clear();
   return false;
 }
@@ -149,9 +157,9 @@ cleanup:
 
 static void init_type_handler_cache();
 
-static void init_globals() {
+static bool init_globals() {
   if (init_called) {
-    return;
+    return true;
   }
 
   PyObject *m_canonicalize = nullptr, *m_jit = nullptr, *m_desc = nullptr,
@@ -226,7 +234,7 @@ static void init_globals() {
 
   init_called = true;
 
-  return;
+  return true;
 
 cleanup:
   Py_CLEAR(m_canonicalize);
@@ -236,11 +244,8 @@ cleanup:
   Py_CLEAR(m_constexpr);
   Py_CLEAR(m_torch);
 
-  if (!PyErr_Occurred()) {
-    PyErr_SetString(PyExc_RuntimeError,
-                    "failed to initialize __triton_specialize module objects");
-  }
-  return;
+  PyErr_Clear();
+  return false;
 }
 
 static inline std::pair<py::handle, py::handle>
@@ -327,6 +332,7 @@ specialize_tensordesc(PyObject *arg, bool has_layout) {
   }
 
   cache_key += ">";
+
   cache_it = tensor_desc_cache.find(cache_key);
   if (cache_it != tensor_desc_cache.end()) {
     type_str_result = cache_it->second;
@@ -474,9 +480,9 @@ handle_tensor(PyObject *backend, PyObject *arg, bool is_const,
   } else {
     PyObject *args[3] = {backend, arg, align ? Py_True : Py_False};
     PyObject *kwnames = align_kwarg;
-    key_res = PyObject_VectorcallMethod(get_tensor_spec_attr, args, 3, kwnames);
+    key_res = PyObject_VectorcallMethod(get_tensor_spec_attr, args, 2, kwnames);
     if (key_res) {
-      key = py::handle(key_res);
+      key = py::reinterpret_steal<py::object>(key_res);
     } else {
       goto cleanup;
     }
@@ -532,7 +538,7 @@ handle_jit_function(PyObject *backend, PyObject *arg, bool is_const,
   PyObject *cache_key = PyObject_GetAttr(arg, cache_key_attr);
   if (!cache_key) {
     PyErr_Clear();
-    return {py::handle(constexpr_str), py::handle()};
+    return {py::handle(), py::handle()};
   }
   return {py::handle(constexpr_str), py::handle(cache_key)};
 }
@@ -714,8 +720,10 @@ specialize_arg(PyObject *backend, PyObject *arg, bool is_const,
 // main entry-point from Python implementing specialization logic natively
 static PyObject *specialize_impl(PyObject *self, PyObject *const *args,
                                  Py_ssize_t nargs) {
-  init_globals();
-  if (PyErr_Occurred()) {
+  bool success = init_globals();
+  if (!success) {
+    PyErr_SetString(PyExc_RuntimeError,
+                    "failed to initialize __triton_specialize module objects");
     return nullptr;
   }
 
