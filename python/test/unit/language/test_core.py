@@ -245,8 +245,8 @@ class PaddedSharedLayout:
         self.linear_layout_offset_bases = linear_layout_offset_bases
 
     def __str__(self):
-        ll_str = "" if self.linear_layout_offset_bases is None else f" {{offset={self.linear_layout_offset_bases}}}"
-        return f"#{GPU_DIALECT}.padded_shared<{self.interval_padding_pairs} {{order={self.order}, CTAsPerCGA={self.ctas_per_cga}, CTASplitNum={self.cta_split_num}, CTAOrder={self.cta_order}}}{ll_str}>"
+        ll_str = "" if self.linear_layout_offset_bases is None else f", offset={self.linear_layout_offset_bases}"
+        return f"#{GPU_DIALECT}.padded_shared<{self.interval_padding_pairs} {{order={self.order}, CTAsPerCGA={self.ctas_per_cga}, CTASplitNum={self.cta_split_num}, CTAOrder={self.cta_order}{ll_str}}}>"
 
 
 class NVMMASharedLayout:

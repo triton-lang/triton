@@ -557,7 +557,7 @@ static LogicalResult parseType(AsmParser &parser, const NamedAttribute &attr,
 }
 
 std::optional<LinearLayout>
-parseLinearLayout(DictionaryAttr &dict, AsmParser &parser,
+parseLinearLayout(const DictionaryAttr &dict, AsmParser &parser,
                   ArrayRef<std::string> inDimNames) {
   LinearLayout::BasesT bases;
 
@@ -638,14 +638,14 @@ parseLinearLayout(DictionaryAttr &dict, AsmParser &parser,
 //   warp = [[16, 0], [32, 0]],
 //   block = []}>
 static void printLinearLayout(AsmPrinter &printer, const LinearLayout &ll) {
-  printer << "{" << join(ll.getBases(), ", ", [](const auto &base) {
+  printer << join(ll.getBases(), ", ", [](const auto &base) {
     return base.first.str() + " = " + "[" +
            join(base.second, ", ",
                 [](const std::vector<int32_t> &vec) {
                   return "[" + join(vec, ", ") + "]";
                 }) +
            "]";
-  }) << "}";
+  });
 }
 
 // Print the CTALayout if it's not equal to the default.
@@ -825,9 +825,9 @@ SmallVector<unsigned> BlockedEncodingAttr::getRepOrder() const {
 //===----------------------------------------------------------------------===//
 
 void LinearEncodingAttr::print(mlir::AsmPrinter &printer) const {
-  printer << "<";
+  printer << "<{";
   printLinearLayout(printer, getLinearLayout());
-  printer << ">";
+  printer << "}>";
 }
 
 Attribute LinearEncodingAttr::parse(AsmParser &parser, Type type) {
@@ -1592,18 +1592,23 @@ Attribute PaddedSharedEncodingAttr::parse(AsmParser &parser, Type type) {
       failed(parser.parseRSquare()))
     return {};
 
-  // {<attr-dict>}
-  NamedAttrList attrList;
-  if (failed(parser.parseOptionalAttrDict(attrList)))
+  // [optional] {<attr-dict>}
+  auto attrList = DictionaryAttr::get(parser.getContext());
+  if (auto parseResult = parser.parseOptionalAttribute(attrList);
+      parseResult.has_value() && failed(*parseResult))
     return {};
 
   // Decode order and CTA attributes
   SmallVector<unsigned> order;
+  std::optional<LinearLayout> maybeLL;
   NamedAttrList remainingAttrs;
   for (const NamedAttribute &attr : attrList) {
     if (attr.getName() == "order") {
       if (parseIntArrayAttr(parser, attr, order, "order").failed())
         return {};
+    } else if (attr.getName() == "offset") {
+      std::vector<std::string> inDimNames = {"offset"};
+      maybeLL = parseLinearLayout(attrList, parser, inDimNames);
     } else {
       remainingAttrs.push_back(attr);
     }
@@ -1612,20 +1617,9 @@ Attribute PaddedSharedEncodingAttr::parse(AsmParser &parser, Type type) {
   if (!ctaLayout)
     return {};
 
-  // [optional] {<attr-dict>} (linear_component)
-  DictionaryAttr dict;
-  auto parseLLResult = parser.parseOptionalAttribute(dict);
-  if (parseLLResult.has_value() && parseLLResult.value().failed())
-    return {};
-
   // >
   if (parser.parseGreater().failed())
     return {};
-
-  std::vector<std::string> inDimNames = {"offset"};
-  std::optional<LinearLayout> maybeLL =
-      parseLLResult.has_value() ? parseLinearLayout(dict, parser, inDimNames)
-                                : std::nullopt;
 
   return parser.getChecked<PaddedSharedEncodingAttr>(
       parser.getContext(), intervals, paddings, order, *ctaLayout, maybeLL);
@@ -1641,13 +1635,11 @@ void PaddedSharedEncodingAttr::print(AsmPrinter &printer) const {
   printer << "] {order = [" << getOrder() << "]";
   maybePrintCTALayout(getContext(), printer, getCTALayout(),
                       /*rank=*/getOrder().size());
-  printer << "}";
-
   if (getLinearComponent().has_value()) {
+    printer << ", ";
     printLinearLayout(printer, *getLinearComponent());
   }
-
-  printer << ">";
+  printer << "}>";
 }
 
 LogicalResult PaddedSharedEncodingAttr::verify(
