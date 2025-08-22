@@ -172,10 +172,29 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32}  {
 
 // -----
 
+// Test purpose: if base-pointer of a load is from function argument which attribute tt.pointer_range=32
+// then it can be converted to buffer-op even if we cannot prove if offsets are non-negative.
+
 #blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32}  {
   // CHECK-LABEL: non_canonical_ptr
   tt.func @non_canonical_ptr(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %arg1: tensor<1024xi32, #blocked>) -> tensor<1024xf32, #blocked>{
+    %8 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>, #blocked>
+    %9 = tt.addptr %8, %arg1: tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
+    // CHECK: amdgpu.buffer_load
+    %10 = tt.load %9 : tensor<1024x!tt.ptr<f32>, #blocked>
+    tt.return %10 : tensor<1024xf32, #blocked>
+  }
+}
+
+// -----
+
+// Test purpose: Similar to above test with one difference, the function argument does not
+// have tt.pointer_range=32 attribute. In this case, it's not supposed to convert mem-op to bufferop.
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32}  {
+  // CHECK-LABEL: non_canonical_ptr
+  tt.func @non_canonical_ptr(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: tensor<1024xi32, #blocked>) -> tensor<1024xf32, #blocked>{
     %8 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>, #blocked>
     %9 = tt.addptr %8, %arg1: tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
     // CHECK: tt.load
