@@ -224,11 +224,7 @@ void InstrumentationProfiler::exitInstrumentedOp(uint64_t streamId,
       timeShiftCost = getTimeShiftCost(*circularLayoutConfig);
   }
 
-  int64_t computeFrequency = 1000; // 1000 MHz = 1 GHz
-  if (modeOptions.count("compute_frequency")) {
-    computeFrequency = std::stoi(modeOptions.at("compute_frequency"));
-  }
-
+  int64_t computeFrequency = std::stoi(modeOptions.at("compute_frequency"));
   auto &scopeIdContexts = functionScopeIdContexts[functionId];
 
   runtime->synchronizeStream(reinterpret_cast<void *>(streamId));
