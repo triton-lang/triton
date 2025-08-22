@@ -115,6 +115,7 @@ class InstrumentationMode(BaseMode):
             if not self.frequency_lock:
                 logging.warning("Instrumentation frequency is not locked. This may lead to inaccurate results.")
 
+            # query the device properties for compute and memory frequencies if not provided
             device = triton.runtime.driver.active.get_current_device()
             properties = triton.runtime.driver.active.utils.get_device_properties(device)
             if self.compute_frequency is None:
