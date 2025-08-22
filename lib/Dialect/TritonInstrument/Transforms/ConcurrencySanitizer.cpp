@@ -537,27 +537,19 @@ private:
         // for mmav5s and mark their operands as reads guarded by the barrier.
         Operation *prevOp = op->getPrevNode();
         while (prevOp) {
+          auto setBarrier = [&](TypedValue<ttg::MemDescType> buf) {
+            MemType memType = MemType::TENSOR_MEM;
+            if (isa<ttg::SharedEncodingTrait>(buf.getType().getEncoding())) {
+              memType = MemType::SHARED_MEM;
+            }
+            b.create<tti::ExperimentalSetReadBarrierOp>(
+                buf, commitOp.getBarrier(), buffersTensor[(int)memType],
+                barriers, readBarriersAlloc[(int)memType],
+                readBarriersType[(int)memType], commitOp.getPred());
+          };
           if (auto mmav5Op = dyn_cast<ttng::TCGen5MMAOp>(prevOp)) {
-            MemType aMemType = MemType::TENSOR_MEM;
-            if (isa<ttg::SharedEncodingTrait>(
-                    mmav5Op.getA().getType().getEncoding())) {
-              aMemType = MemType::SHARED_MEM;
-            }
-            b.create<tti::ExperimentalSetReadBarrierOp>(
-                mmav5Op.getA(), commitOp.getBarrier(),
-                buffersTensor[(int)aMemType], barriers,
-                readBarriersAlloc[(int)aMemType],
-                readBarriersType[(int)aMemType], commitOp.getPred());
-            MemType bMemType = MemType::TENSOR_MEM;
-            if (isa<ttg::SharedEncodingTrait>(
-                    mmav5Op.getB().getType().getEncoding())) {
-              bMemType = MemType::SHARED_MEM;
-            }
-            b.create<tti::ExperimentalSetReadBarrierOp>(
-                mmav5Op.getB(), commitOp.getBarrier(),
-                buffersTensor[(int)bMemType], barriers,
-                readBarriersAlloc[(int)bMemType],
-                readBarriersType[(int)bMemType], commitOp.getPred());
+            setBarrier(mmav5Op.getA());
+            setBarrier(mmav5Op.getB());
           }
           prevOp = prevOp->getPrevNode();
         }
