@@ -33,6 +33,11 @@ struct AutomaticWarpSpecialization
 } // namespace
 
 void AutomaticWarpSpecialization::runOnOperation() {
+  ModuleOp mod = getOperation();
+  int numWarps = lookupNumWarps(mod);
+  // Warp specialization requires at least 4 warps.
+  if (numWarps < 4)
+    return;
   OpPassManager pm;
   pm.addPass(createTritonGPUPartitionScheduling());
   pm.addPass(createTritonGPULoadMMASpecialization({numStages}));
