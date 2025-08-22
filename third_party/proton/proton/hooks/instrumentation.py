@@ -14,7 +14,6 @@ from triton.runtime._allocation import set_profile_allocator, NullAllocator
 from triton.backends import backends
 
 from .hook import Hook
-from ..frequency import set_compute_frequency, set_memory_frequency, reset_frequency
 from ..flags import set_instrumentation_on, set_instrumentation_off
 from .. import mode
 
@@ -205,10 +204,6 @@ class InstrumentationHook(Hook):
 
         JITFunction.run = instrumented_run
 
-        if self.mode.frequency_lock:
-            set_compute_frequency(backend_name, self.mode.compute_frequency)
-            set_memory_frequency(backend_name, self.mode.memory_frequency)
-
     def deactivate(self):
         if InstrumentationHook.active_count == 0:
             return
@@ -216,9 +211,6 @@ class InstrumentationHook(Hook):
         InstrumentationHook.active_count -= 1
 
         backend_name = _get_backend_name()
-
-        if self.mode.frequency_lock:
-            reset_frequency(backend_name)
 
         # No instrumentation passes are registered anymore
         backends[backend_name].compiler.instrumentation = {}

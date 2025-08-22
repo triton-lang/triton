@@ -192,7 +192,7 @@ void StreamChromeTraceWriter::writeKernel(json &object,
           else
             name = metadata->scopeName.at(scopeId);
 
-          double freq = bt->computeFrequency; // Unit: MHz
+          double freq = bt->frequency; // Unit: MHz
 
           double startCycle = event.first->cycle;      // Unit: cycle
           double endCycle = event.second->cycle;       // Unit: cycle
