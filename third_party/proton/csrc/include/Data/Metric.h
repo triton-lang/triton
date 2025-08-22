@@ -262,7 +262,7 @@ public:
     InitTime,
     PreFinalTime,
     PostFinalTime,
-    ComputeFrequency,
+    Frequency,
     Count,
   };
 
@@ -273,8 +273,7 @@ public:
               const std::string &kernelName, uint64_t blockId,
               uint64_t processorId, uint64_t unitId, uint64_t deviceId,
               uint64_t deviceType, uint64_t timeShiftCost, uint64_t initTime,
-              uint64_t preFinalTime, uint64_t postFinalTime,
-              uint64_t computeFrequency)
+              uint64_t preFinalTime, uint64_t postFinalTime, uint64_t frequency)
       : CycleMetric() {
     this->values[StartCycle] = startCycle;
     this->values[EndCycle] = endCycle;
@@ -291,7 +290,7 @@ public:
     this->values[InitTime] = initTime;
     this->values[PreFinalTime] = preFinalTime;
     this->values[PostFinalTime] = postFinalTime;
-    this->values[ComputeFrequency] = computeFrequency;
+    this->values[Frequency] = frequency;
   }
 
   virtual const std::string getName() const { return "CycleMetric"; }
