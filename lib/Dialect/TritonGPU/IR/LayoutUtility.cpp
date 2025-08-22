@@ -20,33 +20,4 @@ CTALayoutAttr permuteCTALayout(MLIRContext *ctx, CTALayoutAttr layout,
       applyPermutation(invOrderUnsigned, layout.getCTAOrder()));
 }
 
-LinearLayout getPaddedRegToSharedLayout(const LinearLayout &regLayout,
-                                        PaddedSharedEncodingAttr paddedEnc) {
-  if (paddedEnc.getLinearComponent().has_value()) {
-    auto sharedLL = *paddedEnc.getLinearComponent();
-    // linear_component is the smallest repeatable tile, so we extend it to the
-    // required shape. Note that we cannot trim the shared layout or otherwise
-    // we will get incorrect results when we rearange elements
-    llvm::SmallDenseMap<StringAttr, int64_t> namedShape;
-    auto regOutDims = regLayout.getOutDims();
-    for (auto [name, size] : regLayout.getOutDims()) {
-      namedShape[name] = size;
-      assert(sharedLL.getOutDimSize(name) <= size);
-    }
-    sharedLL = ensureLayoutNotSmallerThan(sharedLL, namedShape);
-    return regLayout.invertAndCompose(sharedLL);
-  }
-  // Otherwise just return a contiguous mapping from regs to shared
-  auto *ctx = paddedEnc.getContext();
-  auto kOffset = StringAttr::get(ctx, "offset");
-  auto outNames = to_vector(regLayout.getOutDimNames());
-  auto order = paddedEnc.getOrder();
-  // transposeOuts just iterates over out dims so we order them based on the
-  // order from the encoding
-  auto inOrderRegLayout =
-      regLayout.transposeOuts(triton::applyPermutation(outNames, order));
-  return inOrderRegLayout.reshapeOuts(
-      {{kOffset, inOrderRegLayout.getTotalOutDimSize()}});
-}
-
 } // namespace mlir::triton::gpu
