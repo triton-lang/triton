@@ -475,11 +475,28 @@ public:
     // requires to broadcast the operand A.
     bool isTransposed = !(mDim == 4 && nDim == 64);
     auto aElemTy = mfmaInstr->aElementType;
-    ttg::AMDMfmaEncodingAttr mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
-        oldRetType.getContext(),
-        /*version*/ mfmaVersion, warpsPerTile,
-        /*instrShape*/ mDim, nDim, /*isTransposed=*/isTransposed, CTALayout,
-        mfmaAccType);
+    bool isMfma16InBwdFA =
+        mfmaVersion == 4 && (aElemTy.isF16() || aElemTy.isBF16()) &&
+        mDim == 16 && nDim == 16 && oldAType.getRank() == 2 &&
+        oldAType.getShape().front() >= 16 * 2 &&
+        oldBType.getShape().back() == 16 && isChainDotHead(dotOp);
+
+    ttg::AMDMfmaEncodingAttr mfmaEnc;
+    if (isMfma16InBwdFA) {
+      // Use tilesPerWarp of [2, 1] for the mfma16x16 layout of a chain dot head
+      // to enable intra warp conversion for the conversion between two dot ops
+      mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
+          oldRetType.getContext(),
+          /*version*/ mfmaVersion, warpsPerTile, /*tilesPerWarp=*/{2, 1},
+          /*instrShape*/ mDim, nDim, /*isTransposed=*/isTransposed, CTALayout,
+          mfmaAccType);
+    } else {
+      mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
+          oldRetType.getContext(),
+          /*version*/ mfmaVersion, warpsPerTile,
+          /*instrShape*/ mDim, nDim, /*isTransposed=*/isTransposed, CTALayout,
+          mfmaAccType);
+    }
 
     // convert accumulator
     auto oldAcc = dotOp.getC();
