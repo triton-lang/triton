@@ -202,7 +202,7 @@ def _canonicalize_storage(storage, out_ndim, flex_data):
 
 #
 
-def reduce_grouped(x: torch.Tensor, indx: torch.Tensor, fused_activation, epilogue,
+def reduce_grouped(x: torch.Tensor, indx: torch.Tensor, out: torch.Tensor, fused_activation, epilogue,
                    x_flex: InFlexData | None = None,
                    out_flex: OutFlexData | None = None, x_mx_scale: torch.Tensor | None = None,
                    has_out_mx_scale: bool = False, out_dtype: bool = None, flexpoint_saturate_inf: bool = False):
@@ -249,7 +249,6 @@ def reduce_grouped(x: torch.Tensor, indx: torch.Tensor, fused_activation, epilog
     out_dtype = x.dtype if out_dtype is None else out_dtype
     assert x.shape[-1] % fused_activation.reduction_n == 0
     out_shape_n = x.shape[-1] // fused_activation.reduction_n
-    out = torch.empty((x.shape[1], num_groups, out_shape_n), dtype=out_dtype, device=x.device)
     if has_out_mx_scale:
         out_mx_scale = torch.empty((num_groups, triton.cdiv(out_shape_n, 32)), dtype=torch.uint8, device=x.device)
     else:
@@ -513,6 +512,7 @@ def matmul_ogs(x, w, bias,
     out_final, out_final_mx_scale = reduce_grouped(
         out_matmul,
         group_indx,
+        memory["output"].squeeze(0),
         reduce_fused_activation,
         epilogue,
         x_flex=InFlexData(dtype=out_matmul_flex.dtype, scale=out_matmul_flex.expected_scale),
