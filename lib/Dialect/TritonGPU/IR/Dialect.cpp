@@ -1646,6 +1646,7 @@ LogicalResult PaddedSharedEncodingAttr::verify(
     function_ref<InFlightDiagnostic()> emitError, ArrayRef<unsigned> intervals,
     ArrayRef<unsigned> paddings, ArrayRef<unsigned> order,
     CTALayoutAttr ctaLayout, std::optional<LinearLayout> linearComponent) {
+  auto *ctx = ctaLayout.getContext();
   if (intervals.size() != paddings.size())
     return emitError() << "intervals size (" << intervals.size()
                        << ") must match paddings size (" << paddings.size()
@@ -1682,8 +1683,9 @@ LogicalResult PaddedSharedEncodingAttr::verify(
              << "linearComponent must have a single in dimension called offset";
 
     // outDims are ['dim0', 'dim1', ...]
+    auto expectedOutDims = standardOutDimNames(ctx, order.size());
     for (auto [i, dim] : llvm::enumerate(ll.getOutDimNames())) {
-      if (dim.str() != ("dim" + llvm::Twine(i)).str()) {
+      if (dim != expectedOutDims[i]) {
         return emitError()
                << "Expected output dimensions to be ['dim0', 'dim1', ...]. Got "
                << dim << " at position " << i;
