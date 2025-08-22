@@ -1311,8 +1311,8 @@ struct InitFuncPtrArgs : OpRewritePattern<tt::FuncOp> {
         bitness = pointerRangeAttr.getInt();
 
       LLVM_DEBUG({
-        llvm::dbgs() << idx << "-th argument: " << arg << ", bitness: "
-                     << bitness << "\n";
+        llvm::dbgs() << idx << "-th argument: " << arg
+                     << ", bitness: " << bitness << "\n";
       });
 
       Value zeroOffset =
