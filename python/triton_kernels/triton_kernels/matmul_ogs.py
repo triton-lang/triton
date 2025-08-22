@@ -202,10 +202,11 @@ def _canonicalize_storage(storage, out_ndim, flex_data):
 
 #
 
-def reduce_grouped(x: torch.Tensor, indx: torch.Tensor, out: torch.Tensor, fused_activation, epilogue,
+def reduce_grouped(x: torch.Tensor, indx: torch.Tensor, out: torch.Tensor, out_mx_scale: torch.Tensor,
+                   fused_activation, epilogue,
                    x_flex: InFlexData | None = None,
                    out_flex: OutFlexData | None = None, x_mx_scale: torch.Tensor | None = None,
-                   has_out_mx_scale: bool = False, out_dtype: bool = None, flexpoint_saturate_inf: bool = False):
+                   out_dtype: bool = None, flexpoint_saturate_inf: bool = False):
     """
     In-place grouped row reduction.
 
@@ -248,11 +249,6 @@ def reduce_grouped(x: torch.Tensor, indx: torch.Tensor, out: torch.Tensor, fused
     K = 1 if indx is None else indx.shape[1]
     out_dtype = x.dtype if out_dtype is None else out_dtype
     assert x.shape[-1] % fused_activation.reduction_n == 0
-    out_shape_n = x.shape[-1] // fused_activation.reduction_n
-    if has_out_mx_scale:
-        out_mx_scale = torch.empty((num_groups, triton.cdiv(out_shape_n, 32)), dtype=torch.uint8, device=x.device)
-    else:
-        out_mx_scale = None
     BLOCK_N = 512
     # Resolve scalar flex scales (may be None)
     x_expected_scale = None if x_flex is None else x_flex.scale
@@ -513,11 +509,11 @@ def matmul_ogs(x, w, bias,
         out_matmul,
         group_indx,
         memory["output"].squeeze(0),
+        precision_config.out_scale,
         reduce_fused_activation,
         epilogue,
         x_flex=InFlexData(dtype=out_matmul_flex.dtype, scale=out_matmul_flex.expected_scale),
         out_flex=precision_config.flex_ctx.out_data,
-        has_out_mx_scale=(out_matmul_scale is not None),
         x_mx_scale=out_matmul_scale.squeeze(1) if out_matmul_has_mx else None,
         out_dtype=memory["output"].dtype,
         flexpoint_saturate_inf=precision_config.flexpoint_saturate_inf,
