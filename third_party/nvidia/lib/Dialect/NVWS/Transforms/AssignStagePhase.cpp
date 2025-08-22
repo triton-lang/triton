@@ -76,12 +76,10 @@ template <class T> struct AssignStagePhase {
       : aref(aref), partitionId(partitionId) {}
 
   T isValidOp(Operation *op) {
-    if (auto opT = dyn_cast<T>(op)) {
-      if (opT.getAref() == aref) {
-        auto opPartitionId = getPartitionId(op);
-        if (!opPartitionId || *opPartitionId == partitionId)
-          return opT;
-      }
+    if (isa<T>(op) && op->getOperand(0) == aref) {
+      auto opPartitionId = getPartitionId(op);
+      if (!opPartitionId || *opPartitionId == partitionId)
+        return cast<T>(op);
     }
     return {};
   }
@@ -224,7 +222,7 @@ template <class T> struct AssignStagePhase {
         auto arefBuf = opT.getAref()
                            .template getDefiningOp<nvws::ArefCreateOp>()
                            .getOperand(0);
-        auto depth = cast<MemDescType>(arefBuf.getType()).getShape().front();
+        auto depth = arefDepth(cast<MemDescType>(arefBuf.getType()));
 
         auto cnd =
             b.create<arith::CmpIOp>(arith::CmpIPredicate::eq, nextStage,
@@ -238,7 +236,7 @@ template <class T> struct AssignStagePhase {
 
         index.token = opT.getToken();
         opT.getStageMutable().assign(index.stage);
-        opT.getPhaseMutable().assign(index.phase);
+        opT->setOperand(2, index.phase);
 
       } else if (auto forOp = dyn_cast<scf::ForOp>(op)) {
         assignArefIndexInForOp(forOp, index);
@@ -257,8 +255,8 @@ template <class T> struct AssignStagePhase {
       if (visited.contains(owner))
         continue;
       visited.insert(owner);
-      if (auto stageOp = dyn_cast<ArefStageInterface>(owner)) {
-        stageOp.setStage(stage);
+      if (isa<ArefBufferOp, ArefGetExitOp, ArefPutExitOp>(owner)) {
+        owner->setOperand(2, stage);
       } else if (auto yieldOp = dyn_cast<scf::YieldOp>(owner)) {
         auto tokPos = tokUse.getOperandNumber();
         auto stagePos = tokToStagePosMap.at(token);
@@ -282,6 +280,12 @@ template <class T> struct AssignStagePhase {
         if (auto partitionId = getPartitionId(user))
           partitionIds.insert(*partitionId);
       }
+    }
+    if (partitionIds.empty()) {
+      // if partitionIds is an empty set, it means aref ops used outside ttg.ws
+      // so we to insert a dummy partitionId for this aref, since we still need
+      // to assign correct phase
+      partitionIds.insert({0, 0});
     }
 
     // initialize indexes

@@ -573,9 +573,12 @@ void mlir::triton::combineRedundantWaitOps(
 
 ttg::MemDescType mlir::triton::getBufferViewType(ttg::MemDescType allocTy,
                                                  bool mutableMemory) {
-  return ttg::MemDescType::get(allocTy.getShape().drop_front(),
-                               allocTy.getElementType(), allocTy.getEncoding(),
-                               allocTy.getMemorySpace(), mutableMemory,
+  auto shape = allocTy.getShape();
+  if (!isa<nvidia_gpu::TensorMemoryScalesEncodingAttr>(allocTy.getEncoding()))
+    shape = shape.drop_front();
+  return ttg::MemDescType::get(shape, allocTy.getElementType(),
+                               allocTy.getEncoding(), allocTy.getMemorySpace(),
+                               mutableMemory,
                                /*allocShape=*/allocTy.getAllocShape());
 }
 
@@ -584,7 +587,12 @@ mlir::triton::getMultiBufferedType(ttg::MemDescType memDescType,
                                    int32_t depth) {
   auto shape = memDescType.getShape();
   SmallVector<int64_t> bufferShape(shape.begin(), shape.end());
-  bufferShape.insert(bufferShape.begin(), depth);
+  if (!isa<nvidia_gpu::TensorMemoryScalesEncodingAttr>(
+          memDescType.getEncoding())) {
+    bufferShape.insert(bufferShape.begin(), depth);
+  } else {
+    assert(depth == 1 && "Scales don't currently support multibuffering");
+  }
   return ttg::MemDescType::get(
       bufferShape, memDescType.getElementType(), memDescType.getEncoding(),
       memDescType.getMemorySpace(), /*mutableMemory*/ true);
