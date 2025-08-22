@@ -494,6 +494,7 @@ class PaddedSharedLayout(SharedLayout):
     def verify(self):
         pairs = self.interval_padding_pairs
         assert len(pairs) > 0, "PaddedSharedLayout interval_padding_pairs must have at least one interval-padding pair"
+        assert all(len(pair) == 2 for pair in pairs)
         intervals, paddings = zip(*pairs)
 
         unique_intervals = list(set(intervals))
@@ -504,10 +505,8 @@ class PaddedSharedLayout(SharedLayout):
         assert all(is_power_of_2(n) for n in paddings), "PaddedSharedLayout padding values must all be power of two"
 
         rank = len(self.order)
+        assert rank > 0, "PaddedSharedLayout order must not be empty"
         _realize_cta_layout(self, rank)
-
-        assert len(self.order) > 0, "PaddedSharedLayout order must not be empty"
-        assert len(self.order) == rank, "PaddedSharedLayout order size must match must match CTALayout rank"
 
         assert len(self.ctas_per_cga) == rank
         assert len(self.cta_split_num) == rank
