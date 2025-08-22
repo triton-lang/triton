@@ -471,6 +471,7 @@ class SwizzledSharedLayout(SharedLayout):
                      tuple(self.cta_split_num) if self.cta_split_num else None,
                      tuple(self.cta_order) if self.cta_order else None))
 
+
 # Python impl of LinearEncodingAttr::basesPerDim
 def bases_per_dim(bases, rank, skip_broadcast=True):
     result = [1] * rank
