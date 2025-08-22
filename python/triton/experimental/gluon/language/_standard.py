@@ -1,34 +1,27 @@
-# flake8: noqa
-import triton
+from typing import TypeVar
+from triton.runtime.jit import JITFunction
 import triton.language.standard as tl_standard
-from .._runtime import jit
+from .._runtime import GluonJITFunction, jit
 from triton import knobs
 from . import _core as ttgl
 
-_IMPORT_FROM_TRITON = [
-    "cdiv",
-    "sum",
-    "max",
-    "min",
-    "reduce_or",
-    "xor_sum",
-]
+T = TypeVar("T")
 
-__all__ = [
-    "full_like",
-    "zeros",
-    "zeros_like",
-    *_IMPORT_FROM_TRITON,
-]
 
-for name in _IMPORT_FROM_TRITON:
-    # Convert JITFunction -> GluonJitFunction
-    fn = getattr(tl_standard, name)
-    assert knobs.runtime.interpret or isinstance(fn, triton.runtime.JITFunction)
+def _import_from_triton(fn: JITFunction[T]) -> GluonJITFunction[T]:
+    assert knobs.runtime.interpret or isinstance(fn, JITFunction)
     # Wrap the function and preserve its original docstring
     gluon_fn = jit(fn.fn)
     gluon_fn.__doc__ = fn.__doc__
-    globals()[name] = gluon_fn
+    return gluon_fn
+
+
+cdiv = _import_from_triton(tl_standard.cdiv)
+sum = _import_from_triton(tl_standard.sum)
+max = _import_from_triton(tl_standard.max)
+min = _import_from_triton(tl_standard.min)
+reduce_or = _import_from_triton(tl_standard.reduce_or)
+xor_sum = _import_from_triton(tl_standard.xor_sum)
 
 
 @jit
