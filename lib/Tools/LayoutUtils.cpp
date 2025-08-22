@@ -38,7 +38,7 @@ bool squareSublayoutIsIdentity(const LinearLayout &ll,
 LinearLayout
 ensureLayoutNotLargerThan(const LinearLayout &layout,
                           const llvm::SmallDenseMap<StringAttr, int64_t> &shape,
-                          StringRef broadcastRemovalDim) {
+                          bool broadcastRegisters) {
   assert(shape.size() == layout.getNumOutDims());
   if (shape.empty()) {
     return layout;
@@ -47,7 +47,7 @@ ensureLayoutNotLargerThan(const LinearLayout &layout,
 
   auto bases = layout.getBases();
 
-  auto kRemoveBroadcastDim = StringAttr::get(ctx, broadcastRemovalDim);
+  auto kRegister = StringAttr::get(ctx, "register");
   std::set<int32_t> broadcastedDims;
 
   for (auto outDim : llvm::enumerate(layout.getOutDimNames())) {
@@ -77,7 +77,7 @@ ensureLayoutNotLargerThan(const LinearLayout &layout,
       if (actualSize <= desiredSize) {
         break;
       }
-      if (!broadcastRemovalDim.empty() && inDimName == kRemoveBroadcastDim) {
+      if (!broadcastRegisters && inDimName == kRegister) {
         broadcastedDims.insert(basisIdx);
       } else {
         bases[inDimName][basisIdx][outDim.index()] = 0;
@@ -85,16 +85,16 @@ ensureLayoutNotLargerThan(const LinearLayout &layout,
       actualSize >>= 1;
     }
   }
-  if (!broadcastRemovalDim.empty()) {
+  if (!broadcastRegisters) {
     // Remove broadcasted registers
     std::vector<std::vector<int32_t>> newBasesRegister;
-    for (auto [idx, basis] : llvm::enumerate(bases[kRemoveBroadcastDim])) {
+    for (auto [idx, basis] : llvm::enumerate(bases[kRegister])) {
       // Remove if it's broadcasted
       if (broadcastedDims.find(idx) == broadcastedDims.end()) {
         newBasesRegister.push_back(std::move(basis));
       }
     }
-    bases[kRemoveBroadcastDim] = std::move(newBasesRegister);
+    bases[kRegister] = std::move(newBasesRegister);
   }
   auto outDims = layout.getOutDims();
   for (auto &[outDim, outDimSize] : outDims) {
