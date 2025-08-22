@@ -5971,7 +5971,7 @@ intermediate_layouts = [
     PaddedSharedLayout([[32, 8]], [1, 0], [1, 1], [1, 1], [0, 1]),
     PaddedSharedLayout([[64, 4], [128, 8]], [1, 0], [1, 1], [1, 1], [0, 1]),
     PaddedSharedLayout([[64, 4], [128, 8]], [1, 0], [1, 1], [1, 1], [0, 1],
-                       [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32]]),
+                       [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [32, 0]]),
     PaddedSharedLayout([[64, 4], [128, 8]], [1, 0], [1, 1], [1, 1], [0, 1],
                        [[2, 0], [1, 0], [4, 0], [8, 0], [16, 0], [32, 0]]),
 ]
@@ -6014,8 +6014,12 @@ def test_convert2d(M, N, src_layout, interm_layout, dst_layout, dtype, device, t
         # skip even if scratch buffer equal to lds_size, because real scratch buffer is typically larger due to padding
         if scratch_shape[0] * scratch_shape[1] * int32_size >= lds_size:
             pytest.skip("Scratch buffer is too large")
-    if is_cuda() and isinstance(interm_layout, PaddedSharedLayout):
-        pytest.skip("PaddedSharedLayout is not supported on CUDA")
+
+    if isinstance(interm_layout, PaddedSharedLayout):
+        if is_cuda():
+            pytest.skip("PaddedSharedLayout is not supported on CUDA")
+        if interm_layout.linear_layout_offset_bases is not None and M < 64:
+            pytest.skip("Padded layouts with linear remapping require 64 elements along M")
 
     layouts = f"""
     #src = {src_layout}

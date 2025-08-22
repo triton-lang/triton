@@ -24,15 +24,16 @@ LinearLayout getPaddedRegToSharedLayout(const LinearLayout &regLayout,
                                         PaddedSharedEncodingAttr paddedEnc) {
   if (paddedEnc.getLinearComponent().has_value()) {
     auto sharedLL = *paddedEnc.getLinearComponent();
-    auto regOutDims = regLayout.getOutDims();
-    // Ensure shared layout agrees with reg layout out dimensions
+    // linear_component is the smallest repeatable tile, so we extend it to the
+    // required shape. Note that we cannot trim the shared layout or otherwise
+    // we will get incorrect results when we rearange elements
     llvm::SmallDenseMap<StringAttr, int64_t> namedShape;
+    auto regOutDims = regLayout.getOutDims();
     for (auto [name, size] : regLayout.getOutDims()) {
       namedShape[name] = size;
+      assert(sharedLL.getOutDimSize(name) <= size);
     }
-    sharedLL = ensureLayoutNotLargerThan(sharedLL, namedShape, "offset");
     sharedLL = ensureLayoutNotSmallerThan(sharedLL, namedShape);
-
     return regLayout.invertAndCompose(sharedLL);
   }
   // Otherwise just return a contiguous mapping from regs to shared
