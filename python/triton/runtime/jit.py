@@ -25,7 +25,6 @@ TRITON_MODULE = "triton.language"
 GLUON_MODULE = "triton.experimental.gluon.language"
 
 T = TypeVar("T")
-use_native_specialize = True
 
 # -----------------------------------------------------------------------------
 # Dependencies Finder
@@ -346,67 +345,9 @@ dtype2str = {}
 specialize_impl_cache = []
 
 
-def create_specialize_fallback():
-    from ..language import constexpr
-    from triton.experimental.gluon.nvidia.hopper import TensorDescriptor as GluonTensorDescriptor
-
-    def specialize_fallback(backend: BaseBackend, arg: Any, is_const: bool = False, specialize_value: bool = True,
-                            align: bool = True):
-        if arg is None:
-            return ("constexpr", None)
-        elif isinstance(arg, bool):
-            return ("u1", None)
-        elif isinstance(arg, int):
-            key = backend.get_int_specialization(arg, align=align) if specialize_value else None
-            if arg == 1 and specialize_value:
-                return ("constexpr", 1)
-            elif -(2**31) <= arg and arg <= 2**31 - 1:
-                return ("i32", key)
-            elif 2**63 <= arg and arg <= 2**64 - 1:
-                return ("u64", key)
-            else:
-                return ("i64", key)
-        elif isinstance(arg, float):
-            return ("fp32", None)
-        elif hasattr(arg, "data_ptr"):
-            # dtypes are hashable so we can memoize this mapping:
-            dsk = (arg.dtype, is_const)
-            res = dtype2str.get(dsk, None)
-            if res is None:
-                res = ("*k" if dsk[1] else "*") + canonicalize_dtype(dsk[0])
-                dtype2str[dsk] = res
-            key = backend.get_tensor_specialization(arg, align=align) if specialize_value else None
-            return (res, key)
-        elif isinstance(arg, JITCallable):
-            return ("constexpr", arg.cache_key)
-        elif isinstance(arg, constexpr):
-            return ("constexpr", arg)
-        elif hasattr(arg, "tma_desc_cpu_ptr"):
-            return ("nvTmaDesc", None)
-        elif isinstance(arg, tuple):
-            # tuple recursion always called with defaults is_const=False, specialize_value=True, align=True
-            spec = [specialize_fallback(backend, x) for x in arg]
-            make_tuple = lambda vals: type(arg)(*vals) if hasattr(arg, "_fields") else tuple(vals)
-            tys = make_tuple([x[0] for x in spec])
-            keys = make_tuple([x[1] for x in spec])
-            return (tys, keys)
-        elif isinstance(arg, TensorDescriptor):
-            assert hasattr(arg.base, "data_ptr")
-            inner = canonicalize_dtype(arg.base.dtype)
-            return (f"tensordesc<{inner}{list(arg.block_shape)}>", None)
-        elif isinstance(arg, GluonTensorDescriptor):
-            assert hasattr(arg.base, "data_ptr")
-            inner = canonicalize_dtype(arg.base.dtype)
-            return (f"tensordesc<{inner}{list(arg.block_shape)},{arg.layout!r}>", None)
-        else:
-            raise TypeError("Unsupported type: %s" % type(arg))
-
-    return specialize_fallback
-
-
 def mangle_type(arg, specialize=False):
     if len(specialize_impl_cache) == 0:
-        specialize_impl_cache.append(create_specialize_fallback())
+        specialize_impl_cache.append(native_specialize_impl)
     specialize_impl = specialize_impl_cache[0]
     return specialize_impl(BaseBackend, arg, specialize_value=specialize)[0]
 
@@ -484,7 +425,7 @@ def dynamic_func({", ".join(list(map(arg, sig.parameters.items())) + ["**options
         if param.default is not inspect.Parameter.empty
     }
 
-    specialize_impl = native_specialize_impl if use_native_specialize else create_specialize_fallback()
+    specialize_impl = native_specialize_impl
     func_namespace["specialize_impl"] = specialize_impl
     func_namespace["backend"] = backend
     func_namespace["JITCallable"] = JITCallable
