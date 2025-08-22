@@ -35,11 +35,12 @@ test-unit: all
 		--ignore=language/test_subprocess.py --ignore=test_debug.py
 	$(PYTEST) -s -n $(NUM_PROCS) python/test/unit/language/test_subprocess.py
 	$(PYTEST) -s -n $(NUM_PROCS) python/test/unit/test_debug.py --forked
-	$(PYTEST) -s -n 8 python/triton_kernels/tests/
+	$(PYTEST) -s -n 6 python/triton_kernels/tests/
 	TRITON_DISABLE_LINE_INFO=0 $(PYTEST) -s python/test/unit/language/test_line_info.py
 	# Run attention separately to avoid out of gpu memory
 	$(PYTEST) -vs python/tutorials/06-fused-attention.py
-	$(PYTEST) -vs python/tutorials/gluon/01-attention-forward.py
+	$(PYTEST) -vs python/tutorials/gluon/01-intro.py python/tutorials/gluon/02-layouts.py python/tutorials/gluon/03-async-copy.py python/tutorials/gluon/04-tma.py python/tutorials/gluon/05-wgmma.py python/tutorials/gluon/06-tcgen05.py python/tutorials/gluon/07-persistence.py python/tutorials/gluon/08-warp-specialization.py
+	$(PYTEST) -vs python/examples/gluon/01-attention-forward.py
 	TRITON_ALWAYS_COMPILE=1 TRITON_DISABLE_LINE_INFO=0 LLVM_PASS_PLUGIN_PATH=python/triton/instrumentation/libGPUInstrumentationTestLib.so \
 		$(PYTEST) --capture=tee-sys -rfs -vvv python/test/unit/instrumentation/test_gpuhello.py
 	$(PYTEST) -s -n $(NUM_PROCS) python/test/gluon
@@ -53,10 +54,15 @@ test-distributed: all
 .PHONY: test-gluon
 test-gluon: all
 	$(PYTEST) -s -n $(NUM_PROCS) python/test/gluon
+	$(PYTEST) -vs python/tutorials/gluon/01-attention-forward.py
 
 .PHONY: test-regression
 test-regression: all
 	$(PYTEST) -s -n $(NUM_PROCS) python/test/regression
+
+.PHONY: test-microbenchmark
+test-microbenchmark: all
+	$(PYTHON) python/test/microbenchmark/launch_overhead.py
 
 .PHONY: test-interpret
 test-interpret: all
@@ -121,3 +127,17 @@ golden-samples: triton-opt
 	$(TRITON_OPT) test/TritonGPU/samples/descriptor-matmul-pipeline.mlir.in -tritongpu-assign-latencies -tritongpu-schedule-loops -tritongpu-pipeline -canonicalize | \
 		$(PYTHON) utils/generate-test-checks.py --source test/TritonGPU/samples/descriptor-matmul-pipeline.mlir.in --source_delim_regex="\bmodule" \
 		-o test/TritonGPU/samples/descriptor-matmul-pipeline.mlir
+
+# Documentation
+#
+.PHONY: docs-requirements
+docs-requirements:
+	$(PYTHON) -m pip install -r docs/requirements.txt -q
+
+.PHONY: docs-only
+docs-only:
+	cd docs; PATH="$(BUILD_DIR):$(PATH)" $(PYTHON) -m sphinx . _build/html/main
+
+.PHONY: docs
+.NOPARALLEL: docs
+docs: docs-requirements docs-only

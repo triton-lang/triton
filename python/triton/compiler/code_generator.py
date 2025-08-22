@@ -12,11 +12,10 @@ from typing import Any, Callable, Dict, Optional, Tuple, Type, Union, Iterable, 
 
 from .. import knobs, language
 from .._C.libtriton import ir, gluon_ir
-from ..language import constexpr, str_to_ty, tensor
+from ..language import constexpr, str_to_ty, tensor, tuple as tl_tuple
 from ..language.core import _unwrap_if_constexpr, base_value, base_type
-from ..runtime.jit import get_jit_fn_file_line, get_full_name
 # ideally we wouldn't need any runtime component
-from ..runtime import JITFunction
+from ..runtime.jit import get_jit_fn_file_line, get_full_name, JITCallable, BoundConstexprFunction, ConstexprFunction, JITFunction
 from .._utils import find_paths_if, get_iterable_path, set_iterable_path
 
 from .errors import (CompilationError, CompileTimeAssertionFailure, UnsupportedLanguageConstruct)
@@ -52,7 +51,7 @@ def _is_triton_tensor(o: Any) -> bool:
 
 
 def _is_constexpr(o: Any) -> bool:
-    return o is None or isinstance(o, (constexpr, language.core.dtype, JITFunction))
+    return o is None or isinstance(o, (constexpr, language.core.dtype, JITCallable))
 
 
 def _is_non_scalar_tensor(o: Any) -> bool:
@@ -396,7 +395,7 @@ class CodeGenerator(ast.NodeVisitor):
                     val is absent,
                     name in self.builtin_namespace,  #
                     type(val) is ModuleType,  #
-                    isinstance(val, JITFunction),  #
+                    isinstance(val, JITCallable),  #
                     getattr(val, "__triton_builtin__", False),  #
                     getattr(val, "__triton_aggregate__", False),  #
                     getattr(val, "__module__", "").startswith("triton.language"),  #
@@ -528,6 +527,21 @@ class CodeGenerator(ast.NodeVisitor):
         elts = language.tuple([self.visit(elt) for elt in node.elts])
         return elts
 
+    def visit_ListComp(self, node: ast.ListComp):
+        if len(node.generators) != 1:
+            raise ValueError("nested comprehensions are not supported")
+
+        comp = node.generators[0]
+        iter = self.visit(comp.iter)
+        if not isinstance(iter, tl_tuple):
+            raise NotImplementedError("only tuple comprehensions are supported")
+
+        results = []
+        for item in iter:
+            self.set_value(comp.target.id, item)
+            results.append(self.visit(node.elt))
+        return tl_tuple(results)
+
     # By design, only non-kernel functions can return
     def visit_Return(self, node):
         ret_value = self.visit(node.value)
@@ -656,9 +670,7 @@ class CodeGenerator(ast.NodeVisitor):
                 self.assignTarget(target, value.values[i])
             return
         if isinstance(target, ast.Attribute):
-            base = self.visit(target.value)
-            setattr(base, target.attr, value)
-            return
+            raise NotImplementedError("Attribute assignment is not supported in triton")
         assert isinstance(target, ast.Name)
         self.set_value(self.visit(target), value)
 
@@ -1098,10 +1110,7 @@ class CodeGenerator(ast.NodeVisitor):
         return lhs[slices]
 
     def visit_Subscript_Store(self, node, value):
-        assert isinstance(node.ctx, ast.Store)
-        lhs = self.visit(node.value)
-        slices = self.visit(node.slice)
-        self.call_Method(node, lhs.__setitem__, lhs, [slices, value], {})
+        raise NotImplementedError("__setitem__ is not supported in triton")
 
     def visit_Subscript(self, node):
         return self.visit_Subscript_Load(node)
@@ -1307,15 +1316,20 @@ class CodeGenerator(ast.NodeVisitor):
         return next(unflatten_ir_values(handles, [callee_ret_type]))
 
     def call_Function(self, node, fn, args, kws):
-        if isinstance(fn, BoundJITMethod):
+        if isinstance(fn, (BoundJITMethod, BoundConstexprFunction)):
             args.insert(0, fn.__self__)
             fn = fn.__func__
         if isinstance(fn, JITFunction):
             _check_fn_args(node, fn, args)
             return self.call_JitFunction(fn, args, kws)
-        if (hasattr(fn, '__self__') and _is_triton_value(fn.__self__)) or language.core.is_builtin(fn):
+        if (hasattr(fn, '__self__') and _is_triton_value(fn.__self__)) or language.core.is_builtin(fn) or isinstance(
+                fn, ConstexprFunction):
             extra_kwargs = dict()
-            sig = inspect.signature(fn)
+
+            if isinstance(fn, ConstexprFunction):
+                sig = inspect.signature(fn.__call__)
+            else:
+                sig = inspect.signature(fn)
             if '_semantic' in sig.parameters:
                 extra_kwargs["_semantic"] = self.semantic
             if '_generator' in sig.parameters:
@@ -1546,9 +1560,16 @@ class CodeGenerator(ast.NodeVisitor):
 
 def ast_to_ttir(fn, src, context, options, codegen_fns, module_map, module=None):
     arg_types = [None] * len(fn.arg_names)
-    for k, v in src.signature.items():
-        idx = fn.arg_names.index(k)
-        arg_types[idx] = str_to_ty(v)
+    const_iter = iter(src.constants.items())
+    kc, vc = next(const_iter, (None, None))
+
+    for i, (ks, v) in enumerate(src.signature.items()):
+        idx = fn.arg_names.index(ks)
+        cexpr = None
+        if kc is not None and kc[0] == i:
+            cexpr = vc
+            kc, vc = next(const_iter, (None, None))
+        arg_types[idx] = str_to_ty(v, cexpr)
     prototype = ASTFunction([], arg_types, src.constants, src.attrs)
     file_name, begin_line = get_jit_fn_file_line(fn)
     # query function representation

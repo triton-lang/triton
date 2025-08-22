@@ -3,6 +3,7 @@ from typing import Type
 
 import torch
 from triton.tools.tensor_descriptor import TensorDescriptor
+from triton.tools.ragged_tma import create_ragged_descriptor
 
 from .reduction_details.reduce_bitmatrix import clear_sums, sum_bitmatrix_rows
 from .target_info import cuda_capability_geq
@@ -42,11 +43,9 @@ class Storage:
         compliant = [strides[i] * bitwidth % 128 == 0 for i in range(ndim) if i != major_dim]
         return all(compliant)
 
-    def make_tma(self, block_shape, transpose=False):
+    def make_dense_tma(self, block_shape, transpose=False):
         strides = list(self.data.stride())
         shape = list(self.data.shape)
-        # TODO
-        # there is an issue w/ column-major TMA; we transpose instead
         transpose = self.data.stride()[-1] != 1
         if transpose:
             block_shape = block_shape[:-2] + [block_shape[-1], block_shape[-2]]
@@ -62,6 +61,13 @@ class Storage:
             shape[-1] = (shape[-1] + pad - 1) // pad * pad
         block_shape = self.layout.swizzle_block_shape(block_shape)
         return TensorDescriptor(self.data, shape, strides, block_shape)
+
+    def make_tma(self, block_shape, mode, transpose=False):
+        if mode in ["dense", "gather", "scatter"]:
+            return self.make_dense_tma(block_shape, transpose)
+        assert mode == "ragged"
+        ragged_dim = len(self.data.shape) - 2
+        return create_ragged_descriptor(self.data, block_shape, ragged_dim=ragged_dim)
 
 
 @dataclass

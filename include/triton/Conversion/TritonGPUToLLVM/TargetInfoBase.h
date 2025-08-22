@@ -15,6 +15,13 @@ public:
   virtual Value ballot(RewriterBase &rewriter, Location loc, Type type,
                        Value cmp) const = 0;
 
+  // Insert a synchronization barrier. If isWarpSync is true, emit a warp-level
+  // synchronization when supported by the backend; otherwise emit a block/CTA
+  // level barrier. Backends that do not support warp-level barriers should
+  // conservatively emit a block-level barrier.
+  virtual void barrier(Location loc, RewriterBase &rewriter,
+                       bool isWarpSync = false) const = 0;
+
   // Store/load a value from shared memory, either in the same CTA or, if
   // `ctaId` is non-nullopt, in another CTA in the same group.
   //

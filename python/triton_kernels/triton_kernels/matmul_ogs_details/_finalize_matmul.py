@@ -2,27 +2,17 @@ import triton
 import triton.language as tl
 from triton_kernels.numerics_details.flexpoint import float_to_flex, load_scale, update_scale
 from triton_kernels.numerics_details.mxfp_details._downcast_to_mxfp import MXFP_BLOCK_SIZE
-from triton_kernels.target_info import cuda_capability_geq as _cuda_capability_geq
-from triton_kernels.target_info import is_hip as _is_hip
-
+from triton_kernels.target_info import cuda_capability_geq, is_hip
 
 # fmt: off
-@tl.constexpr_function
-def is_hip():
-    return _is_hip()
 
 
-@tl.constexpr_function
-def cuda_capability_geq(x, y):
-    return _cuda_capability_geq(x, y)
-
-
-@tl.constexpr_function
+@triton.constexpr_function
 def log2(n):
     return len(bin(n)) - 3
 
 
-@tl.constexpr_function
+@triton.constexpr_function
 def _permute_to_end_order(n: int, axis: int):
     """
     Returns the order of the axes of a tensor to permute `axis` to the end.
@@ -105,7 +95,7 @@ def _finalize_matmul_launch_metadata(grid, kernel, args):
     return ret
 
 
-@tl.constexpr_function
+@triton.constexpr_function
 def _accumulate_f16_into_f32_and_track_absmax_ptx(n_inputs: int, src_type: str, absmax_reg_name: str | None):
     """
     Generate PTX code to take fp16 inputs and sum them into an f32 accumulator using mixed-precision
@@ -280,7 +270,7 @@ def _finalize_matmul(
             for off_n in tl.range(tl.program_id(1) * OUT_BLOCK_N, outN, tl.num_programs(1) * OUT_BLOCK_N):
                 offs_n = off_n + tl.arange(0, OUT_BLOCK_N)
                 n_mask = offs_n < outN
-                tl.store(Out + row * outN + offs_n, tl.zeros([OUT_BLOCK_N], dtype=Out.dtype.element_ty), mask=n_mask)
+                tl.store(Out + row.to(tl.int64) * outN + offs_n, tl.zeros([OUT_BLOCK_N], dtype=Out.dtype.element_ty), mask=n_mask)
         else:
             for off_n in tl.range(tl.program_id(1) * BLOCK_N, N, tl.num_programs(1) * BLOCK_N, num_stages=STAGES):
                 offs_n = off_n + tl.arange(0, BLOCK_N)
@@ -346,7 +336,7 @@ def _finalize_matmul(
                                                  pid=row * tl.num_programs(1) + tl.program_id(1))
                     tl.static_assert(OUT_BLOCK_N % OUT_MX_SCALE_BLOCK_N == 0, "")
                     tl.store(OutActualScale + row * stride_out_mx_m + offs_n_scale * stride_out_mx_n, acc_scale, mask=n_mask_scale)
-                    tl.store(Out + row * outN + offs_n[None, :], acc, mask=n_mask[None, :])
+                    tl.store(Out + row.to(tl.int64) * outN + offs_n[None, :], acc, mask=n_mask[None, :])
                 else:
                     out = float_to_flex(out, out_scale if OutExpectedScale is not None else None, None, OutChecksumScale,
                                         None, Out, flexpoint_saturate_inf)
@@ -355,7 +345,7 @@ def _finalize_matmul(
                                           pid=row * tl.num_programs(1) + tl.program_id(1))
                     offs_n = off_n // ACTIVATION_REDUCTION_N + tl.arange(0, OUT_BLOCK_N)
                     n_mask = offs_n < outN
-                    tl.store(Out + row * outN + offs_n, out, mask=n_mask)
+                    tl.store(Out + row.to(tl.int64) * outN + offs_n, out, mask=n_mask)
 
     persisent_m = tl.num_programs(0) < MBound
     if not persisent_m and n_active_experts == 0:

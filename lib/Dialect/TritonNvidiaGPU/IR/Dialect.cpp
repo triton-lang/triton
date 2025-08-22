@@ -247,6 +247,24 @@ bool isDistributedLayoutTMemCompatible(Operation *op,
   });
 }
 
+LogicalResult TensorMemoryEncodingAttr::verify(
+    function_ref<InFlightDiagnostic()> emitError, unsigned blockM,
+    unsigned blockN, bool unpacked, unsigned CTASplitM, unsigned CTASplitN) {
+  if (CTASplitM < 1 || CTASplitN < 1) {
+    return emitError() << "CTASplitM and CTASplitN must be greater than 0";
+  }
+  if (blockM != 64 && blockM != 128) {
+    return emitError() << "blockM must be 64 or 128 but got " << blockM;
+  }
+  if (!llvm::isPowerOf2_32(blockN)) {
+    return emitError() << "blockN must be a power of 2 but got " << blockN;
+  }
+  if (!unpacked && blockN < 2) {
+    return emitError() << "blockN must be at least 2 for packed tensor memory";
+  }
+  return success();
+}
+
 LogicalResult impl::verifyMMAv5Op(Operation *op) {
   auto isInterleaved = [](MemDescType memdesc) {
     auto enc = dyn_cast<TensorMemoryEncodingAttr>(memdesc.getEncoding());

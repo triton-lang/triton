@@ -546,8 +546,9 @@ static LogicalResult inferMemDescReshapeOpEncoding(ArrayRef<int64_t> srcShape,
         CTALayout);
     // Big guns, check linear layouts are equivalent
     // We disallow reshaping memdesc_subslice in the verifier
-    auto srcLL = toLinearLayout(srcShape, srcEnc, srcShape);
-    auto dstLL = toLinearLayout(dstShape, dstEnc, dstShape);
+    // so allocShape == shape
+    auto srcLL = toLinearLayout(srcShape, srcEnc);
+    auto dstLL = toLinearLayout(dstShape, dstEnc);
     if (reshapeLayout(ctx, srcLL, dstShape) != dstLL) {
       return failure();
     }
@@ -578,13 +579,6 @@ LogicalResult MemDescReshapeOp::inferReturnTypes(
   inferredReturnType = MemDescType::get(
       dstShape, srcTy.getElementType(), dstEncoding, srcTy.getMemorySpace(),
       srcTy.getMutableMemory(), dstAllocShape);
-  return success();
-}
-
-// MemDescReinterpretOp
-LogicalResult MemDescReinterpretOp::verify() {
-  if (getSrc().getType().getMemorySpace() != getType().getMemorySpace())
-    return emitError("source and destination memory space must match");
   return success();
 }
 
