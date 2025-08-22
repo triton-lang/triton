@@ -51,6 +51,8 @@ def ptx_get_version(cuda_version) -> int:
     '''
     assert isinstance(cuda_version, str)
     major, minor = map(int, cuda_version.split('.'))
+    if major == 13:
+        return 90 + minor
     if major == 12:
         if minor < 6:
             return 80 + minor
