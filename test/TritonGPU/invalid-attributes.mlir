@@ -119,7 +119,7 @@
 
 // -----
 
-// expected-error@+1 {{Each offset basis must be 0, 1 or a power of two}}
+// expected-error@+1 {{Each offset basis must be 0 or a power of two}}
 #shared = #ttg.padded_shared<[2:+1, 4:+2] {order = [1, 0]} {offset = [[1, 0], [3, 0]]}>
 
 // -----
