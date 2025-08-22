@@ -12,6 +12,7 @@ __all__ = [
     "NVMMADistributedLayout",
     "NVMMASharedLayout",
     "SwizzledSharedLayout",
+    "PaddedSharedLayout",
 ]
 
 
@@ -426,6 +427,90 @@ class SwizzledSharedLayout(SharedLayout):
             return "_".join(map(str, x))
 
         return f"SSS_{self.vec}_{self.per_phase}_{self.max_phase}_{stringify(self.order)}_{stringify(self.ctas_per_cga)}_{stringify(self.cta_split_num)}_{stringify(self.cta_order)}_SSS"
+
+
+@dataclass(frozen=True, eq=True)
+class PaddedSharedLayout(SharedLayout):
+    """
+    Represents a layout for the access to shared memory. Compared to SwizzledSharedLayout,
+    it uses padding to avoid shared memory bank conflicts. After every interval tensor elements,
+    the corresponding number of padding elements are inserted.
+    If a position corresponds to multiple intervals, the padding amounts are summed.
+
+    In the following example of a tensor,
+    `eM` represents original elements in the and `pN` represents padded element.
+
+    Before padding, the shared memory looks like:
+    [e0, e1,
+     e2, e3,
+     e4, e5,
+     e6, e7,
+     ...]
+
+    After padding with interval-padding list [[2, 1], [4, 2]],
+    the shared memory will be
+    [e0, e1, p0,
+     e2, e3, p1, p2, p3,
+     e4, e5, p4,
+     e6, e7, p5, p6, p7,
+     ...]
+
+    Args:
+        interval_padding_pairs (List[int]): List of [interval, padding] pair and both interval and padding must be powers of 2.
+        order (List[int]): Order of logical tensor dimensions; fastest-varying first.
+        ctas_per_cga (Optional[List[int]]): CTAs per CGA grouping.
+        cta_split_num (Optional[List[int]]): Split factors for CTAs.
+        cta_order (Optional[List[int]]): CTA ordering.
+    """
+    interval_padding_pairs: List[List[int]]
+    order: List[int]
+    ctas_per_cga: Optional[List[int]] = None
+    cta_split_num: Optional[List[int]] = None
+    cta_order: Optional[List[int]] = None
+
+    def __post_init__(self):
+        super().__setattr__("interval_padding_pairs", _unwrap_shape(self.interval_padding_pairs))
+        super().__setattr__("order", _unwrap_if_constexpr(self.order))
+        super().__setattr__("ctas_per_cga", _unwrap_if_constexpr(self.ctas_per_cga))
+        super().__setattr__("cta_split_num", _unwrap_if_constexpr(self.cta_split_num))
+        super().__setattr__("cta_order", _unwrap_if_constexpr(self.cta_order))
+
+        self.verify()
+
+    def _to_ir(self, builder):
+        intervals, paddings = zip(*self.interval_padding_pairs)
+        return builder.get_padded_shared_layout(intervals, paddings, self.order, self.ctas_per_cga, self.cta_split_num,
+                                                self.cta_order)
+
+    def mangle(self) -> str:
+
+        def stringify(x):
+            if x is None:
+                return ""
+            return "_".join(map(str, x))
+
+        return f"PaddedShared_{stringify(self.interval_padding_pairs)}_{stringify(self.order)}_{stringify(self.ctas_per_cga)}_{stringify(self.cta_split_num)}_{stringify(self.cta_order)}_PaddedShared"
+
+    def verify(self):
+        pairs = self.interval_padding_pairs
+        assert len(pairs) > 0, "PaddedSharedLayout interval_padding_pairs must have at least one interval-padding pair"
+        assert all(len(pair) == 2 for pair in pairs)
+        intervals, paddings = zip(*pairs)
+
+        unique_intervals = list(set(intervals))
+        assert len(unique_intervals) == len(intervals)
+
+        is_power_of_2 = lambda n: n > 0 and n & (n - 1) == 0
+        assert all(is_power_of_2(n) for n in intervals), "PaddedSharedLayout interval values must all be power of two"
+        assert all(is_power_of_2(n) for n in paddings), "PaddedSharedLayout padding values must all be power of two"
+
+        rank = len(self.order)
+        assert rank > 0, "PaddedSharedLayout order must not be empty"
+        _realize_cta_layout(self, rank)
+
+        assert len(self.ctas_per_cga) == rank
+        assert len(self.cta_split_num) == rank
+        assert len(self.cta_order) == rank
 
 
 # Python impl of LinearEncodingAttr::basesPerDim
