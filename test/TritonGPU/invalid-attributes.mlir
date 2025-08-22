@@ -131,3 +131,8 @@
 
 // expected-error@+2 {{Expected basis of 'offset' not found}}
 #shared = #ttg.padded_shared<[2:+1, 4:+2] {order = [1, 0]} {register = [[0, 1], [0, 2]]}>
+
+// -----
+
+// expected-error@+2 {{Broadcasting offset basis are not supported}}
+#shared = #ttg.padded_shared<[2:+1, 4:+2] {order = [1, 0]} {register = [[0, 1], [0, 0]]}>

@@ -1684,7 +1684,7 @@ LogicalResult PaddedSharedEncodingAttr::verify(
     auto ll = *linearComponent;
     // The linear layout should have one input dim (offset) and N output dims
     // [dim0..dimN). All bases should be 0 or power of twos and move in a
-    // single direction
+    // single direction without broadcasting
     if (ll.getNumInDims() != 1 || (*ll.getInDimNames().begin()) != "offset")
       return emitError()
              << "linearComponent must have a single in dimension called offset";
@@ -1705,10 +1705,11 @@ LogicalResult PaddedSharedEncodingAttr::verify(
              << ll.getNumOutDims() << ") to agree with the rank of the order("
              << order.size() << ").";
     }
+
     auto nonZero = [](auto val) { return val != 0; };
     for (const auto &dimBases : llvm::make_second_range(bases)) {
       if (!llvm::all_of(dimBases, [&](const auto &basis) {
-            return std::count_if(basis.begin(), basis.end(), nonZero) <= 1;
+            return llvm::count_if(basis, nonZero) <= 1;
           })) {
         return emitError()
                << "Each offset basis must move in at most one dimension.";
@@ -1718,6 +1719,11 @@ LogicalResult PaddedSharedEncodingAttr::verify(
                 basis, [](auto v) { return v == 0 || llvm::isPowerOf2_32(v); });
           })) {
         return emitError() << "Each offset basis must be 0 or a power of two.";
+      }
+      if (!llvm::all_of(dimBases, [&](const auto &basis) {
+            return llvm::count_if(basis, nonZero) != basis.size();
+          })) {
+        return emitError() << "Broadcasting offset basis are not supported.";
       }
     }
   }
