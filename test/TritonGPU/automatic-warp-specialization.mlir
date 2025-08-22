@@ -306,7 +306,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, ttg.targ
       %24 = ttg.convert_layout %23 {loop.cluster = 0 : i32, loop.stage = 1 : i32} : tensor<128x64xf16, #blocked> -> tensor<128x64xf16, #linear>
       %25 = tt.trans %24 {loop.cluster = 0 : i32, loop.stage = 1 : i32, order = array<i32: 1, 0>} : tensor<128x64xf16, #linear> -> tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
       %26 = ttg.convert_layout %22 {loop.cluster = 0 : i32, loop.stage = 1 : i32} : tensor<128x64xf16, #blocked> -> tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
-      %27 = tt.dot %26, %25, %arg19, inputPrecision = tf32 {loop.cluster = 0 : i32, loop.stage = 1 : i32} : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>> * tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<128x128xf32, #mma> loc(#loc23)
+      %27 = tt.dot %26, %25, %arg19, inputPrecision = tf32 {loop.cluster = 0 : i32, loop.stage = 1 : i32} : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>> * tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<128x128xf32, #mma>
       scf.yield %27 : tensor<128x128xf32, #mma>
     } {tt.scheduled_max_stage = 1 : i32}
     %19 = arith.truncf %18 : tensor<128x128xf32, #mma> to tensor<128x128xf16, #mma>
