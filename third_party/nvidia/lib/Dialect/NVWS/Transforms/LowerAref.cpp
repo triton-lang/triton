@@ -188,6 +188,9 @@ ArefValue createAndInitMbar(ArefCreateOp op, PatternRewriter &rewriter) {
       arefTy.getBaseType(), [](Type type) { return cast<MemDescType>(type); }));
   auto shape = arefBufTypes[0].getShape();
   auto depth = shape[0];
+  if (isa<nvidia_gpu::TensorMemoryScalesEncodingAttr>(
+          arefBufTypes[0].getEncoding()))
+    depth = 1;
 
   SetVector<Operation *> arefUsers;
   for (auto user : op->getUsers())
