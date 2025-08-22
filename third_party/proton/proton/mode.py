@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+import logging
 from triton._C.libtriton import proton as triton_proton
 from typing import List, Optional
 from enum import Enum
@@ -112,7 +113,11 @@ class InstrumentationMode(BaseMode):
 
             device = triton.runtime.driver.active.get_current_device()
             properties = triton.runtime.driver.active.utils.get_device_properties(device)
-            object.__setattr__(self, "frequency", properties["sm_clock_rate"] // 1000)  # Unit: MHz
+            sm_clock_rate = properties["sm_clock_rate"] // 1000  # Unit: MHz
+            if sm_clock_rate == 0:
+                logging.warning("Unable to query device properties for frequency. Using default value of 1000 MHz.")
+                sm_clock_rate = 1000
+            object.__setattr__(self, "frequency", sm_clock_rate)
 
     def __str__(self):
         optimizations_str = ",".join([str(opt) for opt in self.optimizations])
