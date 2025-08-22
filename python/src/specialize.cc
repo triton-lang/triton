@@ -548,8 +548,7 @@ handle_tensor(PyObject *backend, PyObject *arg, bool is_const,
   }
 
   if (native_impl_available) {
-    data_ptr_method = PyObject_GetAttr(arg, data_ptr_attr);
-    data_ptr_result = PyObject_CallNoArgs(data_ptr_method);
+    data_ptr_result = PyObject_CallMethodNoArgs(arg, data_ptr_attr);
     if (!data_ptr_result)
       goto cleanup;
 
