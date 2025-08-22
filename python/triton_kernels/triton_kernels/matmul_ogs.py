@@ -166,8 +166,8 @@ def init_allocation(x, w, precision_config, fused_activation, routing_data, gath
     # ---- scratchpad -----#
     scratchpad = dict()
     if opt_flags.split_k > 1 or scatter_indx is not None:
-        out_dtype = torch.float32
-        scratchpad["matmul"] = ((opt_flags.split_k, 1, M, N), out_dtype)
+        scratch_out_dtype = torch.float32 if opt_flags.split_k > 1 else out_dtype
+        scratchpad["matmul"] = ((opt_flags.split_k, 1, M, N), scratch_out_dtype)
     if "matmul" in scratchpad and precision_config.out_scale is not None:
         scratchpad["mx_out_scale"] = ((opt_flags.split_k, 1, M, triton.cdiv(N, MXFP_BLOCK_SIZE)), torch.uint8)
     return MatmulAllocation(x.device, output, scratchpad)
