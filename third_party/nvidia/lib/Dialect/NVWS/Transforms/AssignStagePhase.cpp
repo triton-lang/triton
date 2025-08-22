@@ -225,7 +225,7 @@ template <class T> struct AssignStagePhase {
         auto arefBuf = opT.getAref()
                            .template getDefiningOp<nvws::ArefCreateOp>()
                            .getOperand(0);
-        auto depth = cast<MemDescType>(arefBuf.getType()).getShape().front();
+        auto depth = arefDepth(cast<MemDescType>(arefBuf.getType()));
 
         auto cnd =
             b.create<arith::CmpIOp>(arith::CmpIPredicate::eq, nextStage,
@@ -282,6 +282,12 @@ template <class T> struct AssignStagePhase {
         if (auto ids = getPartitionIds(user))
           partitionIds.insert(ids->begin(), ids->end());
       }
+    }
+    if (partitionIds.empty()) {
+      // if partitionIds is an empty set, it means aref ops used outside ttg.ws
+      // so we to insert a dummy partitionId for this aref, since we still need
+      // to assign correct phase
+      partitionIds.insert({0, 0});
     }
 
     // initialize indexes
