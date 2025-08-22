@@ -185,7 +185,7 @@ SmallVector<unsigned> getOrder(SharedEncodingTrait layout,
     return llvm::to_vector(swizzledLayout.getOrder());
   }
   if (auto paddedEnc = dyn_cast<PaddedSharedEncodingAttr>(layout)) {
-    return llvm::to_vector(paddedEnc.getOrder());
+    return paddedEnc.getOrder();
   }
   if (auto sharedLayout = dyn_cast<NVMMASharedEncodingAttr>(layout)) {
     if (shape.size() == 1) {
@@ -1591,29 +1591,16 @@ Attribute PaddedSharedEncodingAttr::parse(AsmParser &parser, Type type) {
       failed(parser.parseRSquare()))
     return {};
 
-  // [optional] {<attr-dict>}
+  // {<attr-dict>}
   auto attrList = DictionaryAttr::get(parser.getContext());
-  if (auto parseResult = parser.parseOptionalAttribute(attrList);
-      parseResult.has_value() && failed(*parseResult))
+  if (failed(parser.parseAttribute(attrList)))
     return {};
 
-  // Decode order and CTA attributes
-  SmallVector<unsigned> order;
-  std::optional<LinearLayout> maybeLL;
-  NamedAttrList remainingAttrs;
-  for (const NamedAttribute &attr : attrList) {
-    if (attr.getName() == "order") {
-      if (parseIntArrayAttr(parser, attr, order, "order").failed())
-        return {};
-    } else if (attr.getName() == "offset") {
-      std::vector<std::string> inDimNames = {"offset"};
-      maybeLL = parseLinearLayout(attrList, parser, inDimNames);
-    } else {
-      remainingAttrs.push_back(attr);
-    }
-  }
-  auto ctaLayout = parseCTAAttrs(parser, remainingAttrs, order.size());
-  if (!ctaLayout)
+  // Decode linear layout
+  std::vector<std::string> inDimNames = {"offset", "block"};
+  std::optional<LinearLayout> maybeLL =
+      parseLinearLayout(attrList, parser, inDimNames);
+  if (!maybeLL.has_value())
     return {};
 
   // >
@@ -1621,7 +1608,7 @@ Attribute PaddedSharedEncodingAttr::parse(AsmParser &parser, Type type) {
     return {};
 
   return parser.getChecked<PaddedSharedEncodingAttr>(
-      parser.getContext(), intervals, paddings, order, *ctaLayout, maybeLL);
+      parser.getContext(), intervals, paddings, *maybeLL);
 }
 
 void PaddedSharedEncodingAttr::print(AsmPrinter &printer) const {
@@ -1631,21 +1618,14 @@ void PaddedSharedEncodingAttr::print(AsmPrinter &printer) const {
                           printer << std::get<0>(intervalPad) << ":+"
                                   << std::get<1>(intervalPad);
                         });
-  printer << "] {order = [" << getOrder() << "]";
-  maybePrintCTALayout(getContext(), printer, getCTALayout(),
-                      /*rank=*/getOrder().size());
-  if (getLinearComponent().has_value()) {
-    printer << ", ";
-    printLinearLayout(printer, *getLinearComponent());
-  }
+  printer << "] {";
+  printLinearLayout(printer, getLinearComponent());
   printer << "}>";
 }
 
 LogicalResult PaddedSharedEncodingAttr::verify(
     function_ref<InFlightDiagnostic()> emitError, ArrayRef<unsigned> intervals,
-    ArrayRef<unsigned> paddings, ArrayRef<unsigned> order,
-    CTALayoutAttr ctaLayout, std::optional<LinearLayout> linearComponent) {
-  auto *ctx = ctaLayout.getContext();
+    ArrayRef<unsigned> paddings, LinearLayout linearComponent) {
   if (intervals.size() != paddings.size())
     return emitError() << "intervals size (" << intervals.size()
                        << ") must match paddings size (" << paddings.size()
@@ -1664,70 +1644,67 @@ LogicalResult PaddedSharedEncodingAttr::verify(
   if (intervalValues.size() != intervals.size())
     return emitError() << "interval values cannot have duplicates";
 
-  if (order.empty())
-    return emitError() << "order cannot be empty";
+  const auto &ll = linearComponent;
+  // The linear layout should mape from [offset, block] to [dim0..dimN). All
+  // bases should be 0 or power of twos and move in a single direction without
+  // broadcasting
+  for (auto outDim : ll.getInDimNames()) {
+    if (outDim.str() != "offset" && outDim.str() != "block")
+      return emitError() << "linearComponent must have `offset` and `block` as "
+                            "only input dims, found: "
+                         << outDim.str();
+  }
+  if (ll.getNumInDims() != 2)
+    return emitError() << "linearComponent must have `offset` and `block` as "
+                          "only input dims";
 
-  if (order.size() != ctaLayout.getRank())
-    return emitError() << "order size (" << order.size()
-                       << ") must match CTALayout rank (" << ctaLayout.getRank()
-                       << ")";
-
-  if (linearComponent.has_value()) {
-    auto ll = *linearComponent;
-    // The linear layout should have one input dim (offset) and N output dims
-    // [dim0..dimN). All bases should be 0 or power of twos and move in a
-    // single direction without broadcasting
-    if (ll.getNumInDims() != 1 || (*ll.getInDimNames().begin()) != "offset")
+  // outDims are ['dim0', 'dim1', ...]
+  for (auto [i, dim] : llvm::enumerate(ll.getOutDimNames())) {
+    if (dim.str() != ("dim" + llvm::Twine(i)).str()) {
       return emitError()
-             << "linearComponent must have a single in dimension called offset";
-
-    // outDims are ['dim0', 'dim1', ...]
-    auto expectedOutDims = standardOutDimNames(ctx, order.size());
-    for (auto [i, dim] : llvm::enumerate(ll.getOutDimNames())) {
-      if (dim != expectedOutDims[i]) {
-        return emitError()
-               << "Expected output dimensions to be ['dim0', 'dim1', ...]. Got "
-               << dim << " at position " << i;
-      }
-    }
-
-    const auto &bases = ll.getBases();
-    if (ll.getNumOutDims() != order.size()) {
-      return emitError()
-             << "Expected dimensionality of the output of the linear layout ("
-             << ll.getNumOutDims() << ") to agree with the rank of the order("
-             << order.size() << ").";
-    }
-
-    auto nonZero = [](auto val) { return val != 0; };
-    for (const auto &dimBases : llvm::make_second_range(bases)) {
-      if (!llvm::all_of(dimBases, [&](const auto &basis) {
-            return llvm::count_if(basis, nonZero) <= 1;
-          })) {
-        return emitError()
-               << "Each offset basis must move in at most one dimension.";
-      }
-      if (!llvm::all_of(dimBases, [&](const auto &basis) {
-            return llvm::all_of(
-                basis, [](auto v) { return v == 0 || llvm::isPowerOf2_32(v); });
-          })) {
-        return emitError() << "Each offset basis must be 0 or a power of two.";
-      }
-      if (!llvm::all_of(dimBases, [&](const auto &basis) {
-            return llvm::count_if(basis, nonZero) != basis.size();
-          })) {
-        return emitError() << "Broadcasting offset basis are not supported.";
-      }
+             << "Expected output dimensions to be ['dim0', 'dim1', ...]. Got "
+             << dim << " at position " << i;
     }
   }
 
-  return verifyLayoutOrder(emitError, order);
+  const auto &bases = ll.getBases();
+
+  auto nonZero = [](auto val) { return val != 0; };
+  for (const auto &dimBases : llvm::make_second_range(bases)) {
+    if (!llvm::all_of(dimBases, [&](const auto &basis) {
+          return llvm::count_if(basis, nonZero) <= 1;
+        })) {
+      return emitError()
+             << "Each offset basis must move in at most one dimension.";
+    }
+    if (!llvm::all_of(dimBases, [&](const auto &basis) {
+          return llvm::all_of(
+              basis, [](auto v) { return v == 0 || llvm::isPowerOf2_32(v); });
+        })) {
+      return emitError() << "Each offset basis must be 0 or a power of two.";
+    }
+    if (!llvm::all_of(dimBases, [&](const auto &basis) {
+          return llvm::count_if(basis, nonZero) != basis.size();
+        })) {
+      return emitError() << "Broadcasting offset basis are not supported.";
+    }
+  }
+
+  return success();
 }
 
 PaddedSharedEncodingAttr PaddedSharedEncodingAttr::get(
     MLIRContext *context, ArrayRef<std::pair<unsigned, unsigned>> intervalPads,
-    ArrayRef<unsigned> order, CTALayoutAttr ctaLayout,
-    std::optional<LinearLayout> linearComponent) {
+    ArrayRef<unsigned> order, ArrayRef<int64_t> shape,
+    CTALayoutAttr ctaLayout) {
+  assert("NYI: create default blocked layout based on order, cta and shape");
+  LinearLayout ll;
+  return get(context, intervalPads, ll);
+}
+
+PaddedSharedEncodingAttr PaddedSharedEncodingAttr::get(
+    MLIRContext *context, ArrayRef<std::pair<unsigned, unsigned>> intervalPads,
+    LinearLayout linearComponent) {
   SmallVector<unsigned> intervals, paddings;
   intervals.reserve(intervalPads.size());
   paddings.reserve(intervalPads.size());
@@ -1735,7 +1712,15 @@ PaddedSharedEncodingAttr PaddedSharedEncodingAttr::get(
     intervals.push_back(interval);
     paddings.push_back(padding);
   }
-  return get(context, intervals, paddings, order, ctaLayout, linearComponent);
+  return get(context, intervals, paddings, linearComponent);
+}
+
+SmallVector<unsigned>
+PaddedSharedEncodingAttr::basesPerDim(StringAttr dimName,
+                                      bool skipBroadcast) const {
+  auto ll = getLinearComponent();
+  auto rank = ll.getNumOutDims();
+  return basesPerDimImpl(ll.getBases(), dimName, rank, skipBroadcast);
 }
 
 int64_t PaddedSharedEncodingAttr::getPaddedSize(ArrayRef<int64_t> shape) const {
@@ -1750,6 +1735,55 @@ int64_t PaddedSharedEncodingAttr::getPaddedSize(ArrayRef<int64_t> shape) const {
       paddingSize -= padding;
   }
   return unpaddedSize + paddingSize;
+}
+
+SmallVector<unsigned>
+PaddedSharedEncodingAttr::orderPerDim(StringAttr dimName,
+                                      ArrayRef<unsigned> defaultOrder) const {
+  auto ll = getLinearComponent();
+  assert(ll.getBases().contains(dimName));
+  const auto &bases = ll.getBases().find(dimName)->second;
+  llvm::SetVector<unsigned> order;
+  auto nonZero = [](auto val) { return val != 0; };
+  for (const auto &basis : bases) {
+    // Bases can have one or zero non-zero elements
+    // Skip a basis if it's broadcasting (all zeros)
+    // e.g. warps for DotOperandEncodingAttr (see ampereDotToLinearLayout)
+    auto it = std::find_if(basis.begin(), basis.end(), nonZero);
+    if (it != basis.end()) {
+      auto i = it - basis.begin();
+      order.insert(i);
+    }
+  }
+  // If any dim is missing, we add them in the defaultOrder
+  for (auto i : defaultOrder) {
+    order.insert(i);
+  }
+  return SmallVector<unsigned>(order.begin(), order.end());
+}
+
+SmallVector<unsigned> PaddedSharedEncodingAttr::getOrder() const {
+  auto rank = getLinearComponent().getNumOutDims();
+  SmallVector<unsigned> order(rank);
+  // Choose [rank-1, rank-2, ... 0] as the default order in case
+  // there are dims that do not move in the register
+  // This order is as good as any really
+  std::iota(order.rbegin(), order.rend(), 0);
+
+  return orderPerDim(StringAttr::get(getContext(), "block"), order);
+}
+
+// LayoutEncodingTrait, ["getCTAsPerCGA", "getCTAOrder", "getCTASplitNum"]>;
+SmallVector<unsigned> PaddedSharedEncodingAttr::getCTAsPerCGA() const {
+  // CTAs are split into an identity part (SplitNum) and a broadcast part
+  return basesPerDim(StringAttr::get(getContext(), "block"),
+                     /*skipBroadcast=*/false);
+}
+SmallVector<unsigned> PaddedSharedEncodingAttr::getCTAOrder() const {
+  return orderPerDim(StringAttr::get(getContext(), "block"), getOrder());
+}
+SmallVector<unsigned> PaddedSharedEncodingAttr::getCTASplitNum() const {
+  return basesPerDim(StringAttr::get(getContext(), "block"));
 }
 
 //===----------------------------------------------------------------------===//
@@ -2382,12 +2416,9 @@ struct TritonGPUInferLayoutInterface
     if (auto enc = dyn_cast<PaddedSharedEncodingAttr>(operandEncoding)) {
       if (failed(checkRank(enc.getRank())))
         return failure();
-
-      CTALayoutAttr ctaLayout =
-          permuteCTALayout(ctx, enc.getCTALayout(), order);
+      auto transLL = transposeLinearLayout(enc.getLinearComponent(), order);
       resultEncoding = PaddedSharedEncodingAttr::get(
-          ctx, enc.getIntervals(), enc.getPaddings(),
-          applyPermutation(invOrderUnsigned, enc.getOrder()), ctaLayout);
+          ctx, enc.getIntervals(), enc.getPaddings(), transLL);
       return success();
     }
 

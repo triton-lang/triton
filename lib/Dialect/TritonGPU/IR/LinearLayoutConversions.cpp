@@ -1633,27 +1633,7 @@ chooseMfmaLikeStoreLayout(RankedTensorType valType) {
 
 LinearLayout getPaddedRegToSharedLayout(const LinearLayout &regLayout,
                                         PaddedSharedEncodingAttr paddedEnc) {
-  if (paddedEnc.getLinearComponent().has_value()) {
-    auto sharedLL = *paddedEnc.getLinearComponent();
-    // We cannot safely trim sharedLL so assert that regLayout's outdims are
-    // not smaller
-    for (auto [name, size] : regLayout.getOutDims()) {
-      assert(sharedLL.getOutDimSize(name) <= size);
-    }
-    SmallVector<int64_t> shape(regLayout.getOutDimSizes());
-    sharedLL = combineCtaCgaWithShape(*paddedEnc.getLinearComponent(),
-                                      paddedEnc.getCTALayout(), shape);
-    return regLayout.invertAndCompose(sharedLL);
-  }
-  // Otherwise just return a contiguous mapping from regs to shared
-  auto kOffset = StringAttr::get(paddedEnc.getContext(), "offset");
-  auto outNames = to_vector(regLayout.getOutDimNames());
-  // transposeOuts just iterates over out dims so we order them based on the
-  // order from the encoding
-  auto inOrderRegLayout = regLayout.transposeOuts(
-      triton::applyPermutation(outNames, paddedEnc.getOrder()));
-  return inOrderRegLayout.reshapeOuts(
-      {{kOffset, inOrderRegLayout.getTotalOutDimSize()}});
+  return regLayout.invertAndCompose(paddedEnc.getLinearComponent());
 }
 
 LinearLayout getScaleTMEMStoreLinearLayout(RankedTensorType scaleType,

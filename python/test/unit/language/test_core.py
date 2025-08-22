@@ -235,18 +235,13 @@ class SwizzledSharedLayout:
 
 class PaddedSharedLayout:
 
-    def __init__(self, interval_padding_pairs, order, ctas_per_cga, cta_split_num, cta_order,
-                 linear_layout_offset_bases=None):
+    def __init__(self, interval_padding_pairs, linear_layout_offset_bases, linear_layout_block_bases):
         self.interval_padding_pairs = "[" + ", ".join(f"{v[0]}:{v[1]:+d}" for v in interval_padding_pairs) + "]"
-        self.order = order
-        self.ctas_per_cga = ctas_per_cga
-        self.cta_split_num = cta_split_num
-        self.cta_order = cta_order
-        self.linear_layout_offset_bases = linear_layout_offset_bases
+        self.offset_bases = linear_layout_offset_bases
+        self.block_bases = linear_layout_block_bases
 
     def __str__(self):
-        ll_str = "" if self.linear_layout_offset_bases is None else f", offset={self.linear_layout_offset_bases}"
-        return f"#{GPU_DIALECT}.padded_shared<{self.interval_padding_pairs} {{order={self.order}, CTAsPerCGA={self.ctas_per_cga}, CTASplitNum={self.cta_split_num}, CTAOrder={self.cta_order}{ll_str}}}>"
+        return f"#{GPU_DIALECT}.padded_shared<{self.interval_padding_pairs} {{offset={self.offset_bases}, block={self.block_bases}}}>"
 
 
 class NVMMASharedLayout:
@@ -5968,12 +5963,12 @@ intermediate_layouts = [
     SwizzledSharedLayout(1, 1, 1, [1, 0], [1, 1], [1, 1], [0, 1]),
     SwizzledSharedLayout(4, 2, 4, [1, 0], [1, 1], [1, 1], [0, 1]),
     SwizzledSharedLayout(2, 2, 4, [1, 0], [1, 1], [1, 1], [0, 1]),
-    PaddedSharedLayout([[32, 8]], [1, 0], [1, 1], [1, 1], [0, 1]),
-    PaddedSharedLayout([[64, 4], [128, 8]], [1, 0], [1, 1], [1, 1], [0, 1]),
-    PaddedSharedLayout([[64, 4], [128, 8]], [1, 0], [1, 1], [1, 1], [0, 1],
-                       [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [32, 0]]),
-    PaddedSharedLayout([[64, 4], [128, 8]], [1, 0], [1, 1], [1, 1], [0, 1],
-                       [[2, 0], [1, 0], [4, 0], [8, 0], [16, 0], [32, 0]]),
+    PaddedSharedLayout(
+        [[32, 8]], [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [32, 0], [0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32]],
+        []),
+    PaddedSharedLayout(
+        [[64, 4], [128, 8]],
+        [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [32, 0], [0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32]], []),
 ]
 
 
@@ -6018,7 +6013,7 @@ def test_convert2d(M, N, src_layout, interm_layout, dst_layout, dtype, device, t
     if isinstance(interm_layout, PaddedSharedLayout):
         if is_cuda():
             pytest.skip("PaddedSharedLayout is not supported on CUDA")
-        if interm_layout.linear_layout_offset_bases is not None and M < 64:
+        if M != 64 or N != 64:
             pytest.skip("Padded layouts with linear remapping require 64 elements along M")
 
     layouts = f"""

@@ -374,7 +374,7 @@ When vec=2, elements are swizzled in pairs of 2.  In other words, the element at
 
 def PaddedSharedEncodingAttr
     : TritonGPU_Attr<"PaddedSharedEncoding", "padded_shared_encoding",
-                     [SharedEncodingTrait, LayoutEncodingTrait]> {
+                     [SharedEncodingTrait, DeclareLayoutEncodingMethods]> {
   let mnemonic = "padded_shared";
 
   let description = [{
@@ -458,19 +458,30 @@ attributes too, for example,
   let parameters = (ins
       ArrayRefParameter<"unsigned">:$intervals,
       ArrayRefParameter<"unsigned">:$paddings,
-      // Order of logical tensor dimensions; fastest-varying first.
-      ArrayRefParameter<"unsigned">:$order,
-      "CTALayoutAttr":$CTALayout,
-      DefaultValuedParameter<"std::optional<LinearLayout>", "{}">:$linearComponent
+      "LinearLayout":$linearComponent
   );
 
   let builders = [
       AttrBuilder<(ins "ArrayRef<std::pair<unsigned, unsigned>>":$intervalPads,
-                       "ArrayRef<unsigned>":$order, "CTALayoutAttr":$ctaLayout,
-                       "std::optional<LinearLayout>":$linearComponent)>,
+                       "ArrayRef<unsigned>":$order, "ArrayRef<int64_t>":$shape,
+                       "CTALayoutAttr":$ctaLayout)>,
+      AttrBuilder<(ins "ArrayRef<std::pair<unsigned, unsigned>>":$intervalPads,
+                       "LinearLayout":$linearComponent)>,
   ];
 
   let extraClassDeclaration = extraBaseClassDeclaration # [{
+    // Returns the order of the dimensions `dimName` of the layout.
+    // If more than dimension is of size one, it uses defaultOrder to determine
+    // the order of the dimensions of size one.
+    SmallVector<unsigned> orderPerDim(StringAttr dimName,
+                                      ArrayRef<unsigned> defaultOrder) const;
+    SmallVector<unsigned> getOrder() const;
+
+    // Returns the bases of the dimensions `dimName` of the linear_component.
+    // If skipBroadcast is false, we count a base zero
+    SmallVector<unsigned> basesPerDim(StringAttr dimName,
+                                      bool skipBroadcast = true) const;
+
     unsigned getMinInterval() const {
       return *llvm::min_element(getIntervals());
     }

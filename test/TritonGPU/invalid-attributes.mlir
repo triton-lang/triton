@@ -75,59 +75,44 @@
 // -----
 
 // expected-error@+1 {{interval values must all be power of two}}
-#shared = #ttg.padded_shared<[3:+2]>
+#shared = #ttg.padded_shared<[3:+2] {offset=[[0]], block=[]}>
 
 // -----
 
 // expected-error@+1 {{interval values must all be power of two}}
-#shared = #ttg.padded_shared<[0:+2]>
+#shared = #ttg.padded_shared<[0:+2] {offset=[[0]], block=[]}>
 
 // -----
 
 // expected-error@+1 {{padding values must all be power of two}}
-#shared = #ttg.padded_shared<[2:+3]>
+#shared = #ttg.padded_shared<[2:+3] {offset=[[0]], block=[]}>
 
 // -----
 
 // expected-error@+1 {{padding values must all be power of two}}
-#shared = #ttg.padded_shared<[2:+0]>
+#shared = #ttg.padded_shared<[2:+0] {offset=[[0]], block=[]}>
 
 // -----
 
 // expected-error@+1 {{interval values cannot have duplicates}}
-#shared = #ttg.padded_shared<[2:+1, 2:+4]>
+#shared = #ttg.padded_shared<[2:+1, 2:+4] {offset=[[0]], block=[]}>
 
 // -----
 
-// expected-error@+1 {{order cannot be empty}}
-#shared = #ttg.padded_shared<[2:+1, 4:+2]>
-
-// -----
-
-// expected-error@+1 {{unexpected key: unknown}}
-#shared = #ttg.padded_shared<[2:+1, 4:+2] {order = [1, 0], unknown = 5}>
-
-// -----
-
-// expected-error@+1 {{order size (3) must match CTALayout rank (2)}}
-#shared = #ttg.padded_shared<[2:+1, 4:+2] {order = [2, 1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
-
-// -----
-
-// expected-error@+1 {{Expected dimensionality of the output of the linear layout (2) to agree with the rank of the order(3)}}
-#shared = #ttg.padded_shared<[2:+1, 4:+2] {order = [1, 0, 2], offset = [[1, 0], [0, 1]]}>
+// expected-error@+1 {{Expected basis of 'offset' not found}}
+#shared = #ttg.padded_shared<[2:+1, 4:+2] {unknown = 5}>
 
 // -----
 
 // expected-error@+1 {{Each offset basis must be 0 or a power of two}}
-#shared = #ttg.padded_shared<[2:+1, 4:+2] {order = [1, 0], offset = [[1, 0], [3, 0]]}>
+#shared = #ttg.padded_shared<[2:+1, 4:+2] {order = [1, 0], offset = [[1, 0], [3, 0]], block = []}>
 
 // -----
 
-// expected-error@+1 {{Each offset basis must move in at most one dimension}}
-#shared = #ttg.padded_shared<[2:+1, 4:+2] {order = [1, 0], offset = [[1, 0], [1, 1]]}>
-
-// -----
-
-// expected-error@+1 {{unexpected key: register}}
+// expected-error@+1 {{Expected basis of 'offset' not found}}
 #shared = #ttg.padded_shared<[2:+1, 4:+2] {order = [1, 0], register = [[0, 1], [0, 2]]}>
+
+// -----
+
+// expected-error@+1 {{Expected basis of 'block' not found}}
+#shared = #ttg.padded_shared<[2:+1, 4:+2] {order = [1, 0], offset = [[1, 0], [1, 1]]}>
