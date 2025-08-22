@@ -479,7 +479,8 @@ public:
         mfmaVersion == 4 && (aElemTy.isF16() || aElemTy.isBF16()) &&
         mDim == 16 && nDim == 16 && oldAType.getRank() == 2 &&
         oldAType.getShape().front() >= 16 * 2 &&
-        oldBType.getShape().back() == 16 && isChainDotHead(dotOp);
+        oldBType.getShape().back() == 16 && isTransposed &&
+        warpsPerTile.back() == 1;
 
     ttg::AMDMfmaEncodingAttr mfmaEnc;
     if (isMfma16InBwdFA) {
