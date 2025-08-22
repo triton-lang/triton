@@ -864,7 +864,7 @@ static PyObject *specialize_impl(PyObject *self, PyObject *const *args,
 }
 
 static PyMethodDef module_methods[] = {
-    {"native_specialize_impl", (PyCFunction)(void (*)(void))specialize_impl,
+    {"native_specialize_impl", (PyCFunction)specialize_impl,
      METH_FASTCALL, nullptr},
     // in case one really wants to reset the global state
     {"_cleanup_native_specialize_globals", cleanup_globals_wrapper, METH_NOARGS,
