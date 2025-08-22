@@ -71,7 +71,6 @@ static PyObject *align_kwarg = nullptr;
 
 static DtypePtr2Str dtype_ptr2str;
 static Dtype2Str dtype2str;
-static TensorDescCache tensor_desc_cache;
 static TypeHandlerCache type_handler_cache;
 
 static bool init_interned_strings() {
@@ -260,8 +259,8 @@ specialize_tensordesc(PyObject *arg, bool has_layout) {
   Dtype2Str::iterator it;
   TensorDescCache::iterator cache_it;
 
-  std::string cache_key;
-  cache_key.reserve(128);
+  std::string desc_cstr;
+  desc_cstr.reserve(128);
   const char *dtype_cstr = nullptr;
   const char *block_shape_cstr = nullptr;
   const char *layout_cstr = nullptr;
@@ -290,7 +289,7 @@ specialize_tensordesc(PyObject *arg, bool has_layout) {
     type_str = res;
   }
 
-  cache_key = "tensordesc<";
+  desc_cstr = "tensordesc<";
   dtype_str = PyObject_Str(type_str);
   if (!dtype_str)
     goto cleanup;
@@ -298,7 +297,7 @@ specialize_tensordesc(PyObject *arg, bool has_layout) {
   dtype_cstr = PyUnicode_AsUTF8(dtype_str);
   if (!dtype_cstr)
     goto cleanup;
-  cache_key += dtype_cstr;
+  desc_cstr += dtype_cstr;
 
   block_shape_obj = PyObject_GetAttr(arg, block_shape_attr);
   if (!block_shape_obj)
@@ -312,7 +311,7 @@ specialize_tensordesc(PyObject *arg, bool has_layout) {
   block_shape_cstr = PyUnicode_AsUTF8(block_shape_str);
   if (!block_shape_cstr)
     goto cleanup;
-  cache_key += block_shape_cstr;
+  desc_cstr += block_shape_cstr;
 
   if (has_layout) {
     layout_obj = PyObject_GetAttr(arg, layout_attr);
@@ -321,24 +320,17 @@ specialize_tensordesc(PyObject *arg, bool has_layout) {
     layout_repr = PyObject_Repr(layout_obj);
     if (!layout_repr)
       goto cleanup;
-    cache_key += ",";
+    desc_cstr += ",";
     layout_cstr = PyUnicode_AsUTF8(layout_repr);
     if (!layout_cstr)
       goto cleanup;
-    cache_key += layout_cstr;
+    desc_cstr += layout_cstr;
   }
 
-  cache_key += ">";
-
-  cache_it = tensor_desc_cache.find(cache_key);
-  if (cache_it != tensor_desc_cache.end()) {
-    type_str_result = cache_it->second;
-  } else {
-    type_str_result = PyUnicode_FromString(cache_key.c_str());
-    if (!type_str_result)
-      goto cleanup;
-    tensor_desc_cache[cache_key] = type_str_result;
-  }
+  desc_cstr += ">";
+  type_str_result = PyUnicode_FromString(desc_cstr.c_str());
+  if (!type_str_result)
+    goto cleanup;
 
   Py_DECREF(base);
   Py_DECREF(dtype);
