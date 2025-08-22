@@ -792,9 +792,9 @@ LogicalResult convertMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                          const LLVMTypeConverter *typeConverter,
                          ConversionPatternRewriter &rewriter, bool isTuring,
                          bool isHopperF64) {
-  auto aTensorTy = cast<RankedTensorType>(op.getA().getType());
-  auto bTensorTy = cast<RankedTensorType>(op.getB().getType());
-  auto dTensorTy = cast<RankedTensorType>(op.getD().getType());
+  auto aTensorTy = op.getA().getType();
+  auto bTensorTy = op.getB().getType();
+  auto dTensorTy = op.getD().getType();
 
   TensorCoreType mmaType = getMmaTypeDot(op, aTensorTy, bTensorTy, dTensorTy);
 

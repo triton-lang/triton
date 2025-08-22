@@ -381,6 +381,16 @@ public:
   mlir::LogicalResult
   matchAndRewrite(triton::DotOp dotOp,
                   mlir::PatternRewriter &rewriter) const override {
+    // Enable F64 MMA only on SM80/SM90 with high performance F64 tensorcore.
+    // Otherwise, fallback to F64 FMA for better performance.
+    if (computeCapability < 70)
+      return failure();
+    if (computeCapability < 80) {
+      dotOp.emitRemark()
+          << "Dot op using MMA for compute capability " << computeCapability
+          << " has been deprecated. It falls back to the FMA path.";
+      return failure();
+    }
     // TODO: Check data-types and SM compatibility
     auto retType = cast<RankedTensorType>(dotOp.getType());
     if (!retType.getEncoding() ||
@@ -392,17 +402,6 @@ public:
     auto oldAType = cast<RankedTensorType>(a.getType());
     auto oldBType = cast<RankedTensorType>(b.getType());
     auto oldRetType = cast<RankedTensorType>(dotOp.getType());
-
-    // Enable F64 MMA only on SM80/SM90 with high performance F64 tensorcore.
-    // Otherwise, fallback to F64 FMA for better performance.
-    if (computeCapability < 70)
-      return failure();
-    if (computeCapability < 80) {
-      dotOp.emitRemark()
-          << "Dot op using MMA for compute capability " << computeCapability
-          << " has been deprecated. It falls back to the FMA path.";
-      return failure();
-    }
 
     if ((oldAType.getElementType().isF64() ||
          oldBType.getElementType().isF64() ||
@@ -724,67 +723,58 @@ public:
     // Convert scales to Linear layout now that NV MMA params are known
     auto convertScale = [&](Value scale, int opIdx) -> Value {
       auto ty = cast<RankedTensorType>(scale.getType());
-      if (isa<triton::gpu::LinearEncodingAttr>(ty.getEncoding()))
-        return scale;
 
       SmallVector<int64_t> shape = llvm::to_vector(ty.getShape());
       MLIRContext *ctx = ty.getContext();
 
-      auto mmaWarps = mmaResult.mmaEnc.getWarpsPerCTA(); // [wM, wN]
-      auto instr = mmaResult.mmaEnc.getInstrShape();     // [instrM, instrN]
-      unsigned instrM = instr[0], instrN = instr[1];
-
-      // Scales may have wrong warpsPerCTA, copy correct warpsPerCTA from MMA
-      // encoding.
-      auto blocked =
-          dyn_cast<triton::gpu::BlockedEncodingAttr>(ty.getEncoding());
-      SmallVector<unsigned, 2> expectedWarpsPerCTA{mmaWarps[0], mmaWarps[1]};
-      if (blocked.getWarpsPerCTA() != ArrayRef<unsigned>(expectedWarpsPerCTA)) {
-        auto fixedBlocked = triton::gpu::BlockedEncodingAttr::get(
+      const auto mmaWarps = mmaResult.mmaEnc.getWarpsPerCTA(); // [wM, wN]
+      const auto instr = mmaResult.mmaEnc.getInstrShape();     // [instrM, instrN]
+      const unsigned instrM = instr[0], instrN = instr[1];
+      Value BlockAdjustedScale;
+      if (auto blocked = dyn_cast<triton::gpu::BlockedEncodingAttr>(ty.getEncoding())) {
+        SmallVector<unsigned, 2> expectedWarpsPerCTA{mmaWarps[0], mmaWarps[1]};
+        auto fixedBlockedEncodingAttr = triton::gpu::BlockedEncodingAttr::get(
             ctx, blocked.getSizePerThread(), blocked.getThreadsPerWarp(),
             /*warpsPerCTA=*/expectedWarpsPerCTA, blocked.getOrder(),
             /*CTALayout=*/blocked.getCTALayout());
-        auto tmpTy =
-            RankedTensorType::get(shape, ty.getElementType(), fixedBlocked);
-        scale = rewriter.create<ConvertLayoutOp>(scale.getLoc(), tmpTy, scale);
-        ty = tmpTy;
+        auto newTy = RankedTensorType::get(shape, ty.getElementType(), fixedBlockedEncodingAttr);
+        BlockAdjustedScale = rewriter.create<ConvertLayoutOp>(scale.getLoc(), newTy, scale);
       }
 
       auto computeTilesPerWarp = [&]() -> SmallVector<unsigned, 2> {
-        SmallVector<unsigned, 2> tpw{1, 1};
+        SmallVector<unsigned, 2> tilesPerWarp{1, 1};
         // repA = [repM, repK], repB = [repK, repN]
         if (auto aTy = dyn_cast<RankedTensorType>(newA.getType())) {
-          if (auto dotA = dyn_cast<triton::gpu::DotOperandEncodingAttr>(
-                  aTy.getEncoding())) {
-            int bitA = aTy.getElementType().getIntOrFloatBitWidth();
-            int kWA = dotA.getKWidth();
+          if (auto dotA = dyn_cast<triton::gpu::DotOperandEncodingAttr>(aTy.getEncoding())) {
+            const int bitA = aTy.getElementType().getIntOrFloatBitWidth();
+            const int kWA = dotA.getKWidth();
             auto repA = mmaResult.mmaEnc.getRepForOperand(
                 triton::gpu::getShapePerCTA(aTy), bitA, kWA, dotA.getOpIdx());
             if (repA.size() >= 2)
-              tpw[0] = repA[1];
+              tilesPerWarp[0] = repA[1];
           }
         }
         if (auto bTy = dyn_cast<RankedTensorType>(newB.getType())) {
-          if (auto dotB = dyn_cast<triton::gpu::DotOperandEncodingAttr>(
-                  bTy.getEncoding())) {
-            int bitB = bTy.getElementType().getIntOrFloatBitWidth();
-            int kWB = dotB.getKWidth();
+          if (auto dotB = dyn_cast<triton::gpu::DotOperandEncodingAttr>(bTy.getEncoding())) {
+            const int bitB = bTy.getElementType().getIntOrFloatBitWidth();
+            const int kWB = dotB.getKWidth();
             auto repB = mmaResult.mmaEnc.getRepForOperand(
                 triton::gpu::getShapePerCTA(bTy), bitB, kWB, dotB.getOpIdx());
             if (repB.size() >= 3)
-              tpw[1] = repB[2];
+              tilesPerWarp[1] = repB[2];
           }
         }
-        return tpw;
+        return tilesPerWarp;
       };
+
       SmallVector<unsigned, 2> tilesPerWarp = computeTilesPerWarp();
       auto ll = triton::gpu::chooseSM120DotScaledScaleLayout(
           ctx, opIdx, shape, tilesPerWarp,
           /*warpsPerCTA=*/mmaWarps, instrM, instrN);
 
-      auto enc = triton::gpu::LinearEncodingAttr::get(ctx, ll);
-      auto newTy = RankedTensorType::get(shape, ty.getElementType(), enc);
-      return rewriter.create<ConvertLayoutOp>(scale.getLoc(), newTy, scale);
+      auto newEnc = triton::gpu::LinearEncodingAttr::get(ctx, ll);
+      auto newTy = RankedTensorType::get(shape, ty.getElementType(), newEnc);
+      return rewriter.create<ConvertLayoutOp>(scale.getLoc(), newTy, BlockAdjustedScale);
     };
     Value aScale = convertScale(dotOp.getAScale(), /*opIdx=*/0);
     Value bScale = convertScale(dotOp.getBScale(), /*opIdx=*/1);

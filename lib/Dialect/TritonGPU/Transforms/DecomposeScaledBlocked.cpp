@@ -31,7 +31,6 @@ public:
 
   LogicalResult matchAndRewrite(DotScaledOp scaledDotOp,
                                 PatternRewriter &rewriter) const override {
-
     auto resTy = cast<RankedTensorType>(scaledDotOp.getType());
     if (mlir::isa<NvidiaMmaEncodingAttr>(resTy.getEncoding()))
       return failure();
@@ -59,8 +58,6 @@ public:
       return rewriter.notifyMatchFailure(scaledDotOp,
                                          "Could not find parent ModuleOp");
     }
-    if (getNVIDIAComputeCapability(moduleOp) == 120)
-      return failure();
 
     // Types
     auto computeType = getComputeType(scaledDotOp.getAElemType(),
