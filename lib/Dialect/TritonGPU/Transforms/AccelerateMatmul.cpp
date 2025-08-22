@@ -728,24 +728,28 @@ public:
       MLIRContext *ctx = ty.getContext();
 
       const auto mmaWarps = mmaResult.mmaEnc.getWarpsPerCTA(); // [wM, wN]
-      const auto instr = mmaResult.mmaEnc.getInstrShape();     // [instrM, instrN]
+      const auto instr = mmaResult.mmaEnc.getInstrShape(); // [instrM, instrN]
       const unsigned instrM = instr[0], instrN = instr[1];
       Value BlockAdjustedScale;
-      if (auto blocked = dyn_cast<triton::gpu::BlockedEncodingAttr>(ty.getEncoding())) {
+      if (auto blocked =
+              dyn_cast<triton::gpu::BlockedEncodingAttr>(ty.getEncoding())) {
         SmallVector<unsigned, 2> expectedWarpsPerCTA{mmaWarps[0], mmaWarps[1]};
         auto fixedBlockedEncodingAttr = triton::gpu::BlockedEncodingAttr::get(
             ctx, blocked.getSizePerThread(), blocked.getThreadsPerWarp(),
             /*warpsPerCTA=*/expectedWarpsPerCTA, blocked.getOrder(),
             /*CTALayout=*/blocked.getCTALayout());
-        auto newTy = RankedTensorType::get(shape, ty.getElementType(), fixedBlockedEncodingAttr);
-        BlockAdjustedScale = rewriter.create<ConvertLayoutOp>(scale.getLoc(), newTy, scale);
+        auto newTy = RankedTensorType::get(shape, ty.getElementType(),
+                                           fixedBlockedEncodingAttr);
+        BlockAdjustedScale =
+            rewriter.create<ConvertLayoutOp>(scale.getLoc(), newTy, scale);
       }
 
       auto computeTilesPerWarp = [&]() -> SmallVector<unsigned, 2> {
         SmallVector<unsigned, 2> tilesPerWarp{1, 1};
         // repA = [repM, repK], repB = [repK, repN]
         if (auto aTy = dyn_cast<RankedTensorType>(newA.getType())) {
-          if (auto dotA = dyn_cast<triton::gpu::DotOperandEncodingAttr>(aTy.getEncoding())) {
+          if (auto dotA = dyn_cast<triton::gpu::DotOperandEncodingAttr>(
+                  aTy.getEncoding())) {
             const int bitA = aTy.getElementType().getIntOrFloatBitWidth();
             const int kWA = dotA.getKWidth();
             auto repA = mmaResult.mmaEnc.getRepForOperand(
@@ -755,7 +759,8 @@ public:
           }
         }
         if (auto bTy = dyn_cast<RankedTensorType>(newB.getType())) {
-          if (auto dotB = dyn_cast<triton::gpu::DotOperandEncodingAttr>(bTy.getEncoding())) {
+          if (auto dotB = dyn_cast<triton::gpu::DotOperandEncodingAttr>(
+                  bTy.getEncoding())) {
             const int bitB = bTy.getElementType().getIntOrFloatBitWidth();
             const int kWB = dotB.getKWidth();
             auto repB = mmaResult.mmaEnc.getRepForOperand(
@@ -774,7 +779,8 @@ public:
 
       auto newEnc = triton::gpu::LinearEncodingAttr::get(ctx, ll);
       auto newTy = RankedTensorType::get(shape, ty.getElementType(), newEnc);
-      return rewriter.create<ConvertLayoutOp>(scale.getLoc(), newTy, BlockAdjustedScale);
+      return rewriter.create<ConvertLayoutOp>(scale.getLoc(), newTy,
+                                              BlockAdjustedScale);
     };
     Value aScale = convertScale(dotOp.getAScale(), /*opIdx=*/0);
     Value bScale = convertScale(dotOp.getBScale(), /*opIdx=*/1);
