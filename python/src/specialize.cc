@@ -28,12 +28,12 @@ using DtypePtr2Str =
 using Dtype2Str = std::unordered_map<DTypeKey, PyObject *>;
 using TensorDescCache = std::unordered_map<std::string, PyObject *>;
 
-using TypeHandler = std::pair<py::handle, py::handle> (*)(PyObject *,
+using TypeHandler = std::pair<py::object, py::object> (*)(PyObject *,
                                                           PyObject *, bool,
                                                           bool, bool);
 using TypeHandlerCache = std::unordered_map<PyTypeObject *, TypeHandler>;
 
-static std::pair<py::handle, py::handle>
+static std::pair<py::object, py::object>
 specialize_arg(PyObject *backend, PyObject *arg, bool is_const,
                bool specialize_value, bool align);
 
@@ -244,7 +244,7 @@ cleanup:
   return false;
 }
 
-static inline std::pair<py::handle, py::handle>
+static inline std::pair<py::object, py::object>
 specialize_tensordesc(PyObject *arg, bool has_layout) {
   // no DECREF on these as they are cached internally or returned
   PyObject *res = nullptr, *type_str = nullptr, *type_str_result = nullptr;
@@ -343,7 +343,7 @@ specialize_tensordesc(PyObject *arg, bool has_layout) {
     Py_DECREF(layout_repr);
   }
 
-  return {py::handle(type_str_result), py::handle()};
+  return {py::reinterpret_steal<py::object>(type_str_result), py::none()};
 
 cleanup:
   Py_XDECREF(base);
@@ -354,30 +354,31 @@ cleanup:
   Py_XDECREF(block_shape_str);
   Py_XDECREF(layout_obj);
   Py_XDECREF(layout_repr);
-  return {py::handle(), py::handle()};
+  return {py::object(), py::object()};
 }
 
-static std::pair<py::handle, py::handle>
+static std::pair<py::object, py::object>
 handle_long_type(PyObject *backend, PyObject *arg, bool is_const,
                  bool specialize_value, bool align) {
   PyObject *type_str;
-  PyObject *key = nullptr; // will stay nullptr if specialize_value is false and
-                           // is later set to Py_None
+  PyObject *key_obj = nullptr;
+  py::object key = py::none();
 
   int overflow;
   long long val = PyLong_AsLongLongAndOverflow(arg, &overflow);
   if (PyErr_Occurred()) {
-    return {py::handle(), py::handle()};
+    return {py::object(), py::object()};
   }
 
   if (specialize_value && (val == 1)) {
-    return {py::handle(constexpr_str), py::handle(arg)};
+    return {py::reinterpret_borrow<py::object>(constexpr_str), py::reinterpret_borrow<py::object>(arg)};
   }
 
   if (overflow == 0) {
     type_str = (val >= INT32_MIN && val <= INT32_MAX) ? i32_str : i64_str;
     if (specialize_value) {
-      key = (align && ((val & 15) == 0)) ? D_str : empty_str;
+      key_obj = (align && ((val & 15) == 0)) ? D_str : empty_str;
+      key = py::reinterpret_borrow<py::object>(key_obj);
     }
   } else {
     unsigned long long val_64 = PyLong_AsUnsignedLongLong(arg);
@@ -389,19 +390,20 @@ handle_long_type(PyObject *backend, PyObject *arg, bool is_const,
       // OverflowError immediately
       PyErr_SetString(PyExc_OverflowError,
                       "integer to be specialized too large to represent");
-      return {py::handle(), py::handle()};
+      return {py::object(), py::object()};
     } else {
       type_str = u64_str;
       if (specialize_value) {
-        key = (align && ((val_64 & 15) == 0)) ? D_str : empty_str;
+        key_obj = (align && ((val_64 & 15) == 0)) ? D_str : empty_str;
+        key = py::reinterpret_borrow<py::object>(key_obj);
       }
     }
   }
 
-  return {py::handle(type_str), py::handle(key)};
+  return {py::reinterpret_borrow<py::object>(type_str), key};
 }
 
-static std::pair<py::handle, py::handle>
+static std::pair<py::object, py::object>
 handle_tensor(PyObject *backend, PyObject *arg, bool is_const,
               bool specialize_value, bool align) {
   // no DECREF on these as they are used for objects we cache or return them
@@ -410,7 +412,8 @@ handle_tensor(PyObject *backend, PyObject *arg, bool is_const,
   PyObject *dtype = nullptr, *native_spec_obj = nullptr;
   PyObject *data_ptr_result = nullptr;
 
-  py::handle key = nullptr;
+  PyObject* key_obj = nullptr;
+  py::object key;
   Py_hash_t dtype_hash = -1;
   DTypePtrKey dsk{0, false};
   DtypePtr2Str::iterator it;
@@ -443,9 +446,8 @@ handle_tensor(PyObject *backend, PyObject *arg, bool is_const,
 
   // handle alignment specialization of a tensor
   if (!specialize_value) {
-    key = py::handle();
     Py_DECREF(dtype);
-    return {py::handle(type_str), key};
+    return {py::reinterpret_borrow<py::object>(type_str), py::none()};
   }
 
   native_spec_obj = PyObject_GetAttr(backend, has_native_tensor_spec_attr);
@@ -465,7 +467,8 @@ handle_tensor(PyObject *backend, PyObject *arg, bool is_const,
     if (PyErr_Occurred())
       goto cleanup;
 
-    key = (align && ((data_ptr & 15) == 0)) ? D_str : empty_str;
+    key_obj = (align && ((data_ptr & 15) == 0)) ? D_str : empty_str;
+    key = py::reinterpret_borrow<py::object>(key_obj);
   } else {
     PyObject *args[3] = {backend, arg, align ? Py_True : Py_False};
     PyObject *kwnames = align_kwarg;
@@ -482,62 +485,62 @@ handle_tensor(PyObject *backend, PyObject *arg, bool is_const,
   if (native_impl_available) {
     Py_DECREF(data_ptr_result);
   }
-  return {py::handle(type_str), key};
+  return {py::reinterpret_borrow<py::object>(type_str), key};
 
 cleanup:
   Py_XDECREF(dtype);
   Py_XDECREF(native_spec_obj);
   Py_XDECREF(data_ptr_result);
-  return {py::handle(), py::handle()};
+  return {py::object(), py::object()};
 }
 
-static std::pair<py::handle, py::handle>
+static std::pair<py::object, py::object>
 handle_bool_type(PyObject *backend, PyObject *arg, bool is_const,
                  bool specialize_value, bool align) {
-  return {py::handle(u1_str), py::handle()};
+  return {py::reinterpret_borrow<py::object>(u1_str), py::none()};
 }
 
-static std::pair<py::handle, py::handle>
+static std::pair<py::object, py::object>
 handle_float_type(PyObject *backend, PyObject *arg, bool is_const,
                   bool specialize_value, bool align) {
-  return {py::handle(fp32_str), py::handle()};
+  return {py::reinterpret_borrow<py::object>(fp32_str), py::none()};
 }
 
-static std::pair<py::handle, py::handle>
+static std::pair<py::object, py::object>
 handle_tensor_descriptor(PyObject *backend, PyObject *arg, bool is_const,
                          bool specialize_value, bool align) {
   return specialize_tensordesc(arg, false);
 }
 
-static std::pair<py::handle, py::handle>
+static std::pair<py::object, py::object>
 handle_gluon_tensor_descriptor(PyObject *backend, PyObject *arg, bool is_const,
                                bool specialize_value, bool align) {
   return specialize_tensordesc(arg, true);
 }
 
-static std::pair<py::handle, py::handle>
+static std::pair<py::object, py::object>
 handle_constexpr_type(PyObject *backend, PyObject *arg, bool is_const,
                       bool specialize_value, bool align) {
-  return {py::handle(constexpr_str), py::handle(arg)};
+  return {py::reinterpret_borrow<py::object>(constexpr_str), py::reinterpret_borrow<py::object>(arg)};
 }
 
-static std::pair<py::handle, py::handle>
+static std::pair<py::object, py::object>
 handle_jit_function(PyObject *backend, PyObject *arg, bool is_const,
                     bool specialize_value, bool align) {
   PyObject *cache_key = PyObject_GetAttr(arg, cache_key_attr);
   if (!cache_key) {
-    return {py::handle(), py::handle()};
+    return {py::object(), py::object()};
   }
-  return {py::handle(constexpr_str), py::handle(cache_key)};
+  return {py::reinterpret_borrow<py::object>(constexpr_str), py::reinterpret_borrow<py::object>(cache_key)};
 }
 
-static std::pair<py::handle, py::handle>
+static std::pair<py::object, py::object>
 handle_tuple(PyObject *backend, PyObject *arg, bool is_const,
              bool specialize_value, bool align) {
   Py_ssize_t size = PyTuple_GET_SIZE(arg);
   if (size == 0) {
     // return tuple of empty tuples as in python reference
-    return {py::handle(arg), py::handle(arg)};
+    return {py::reinterpret_borrow<py::object>(arg), py::reinterpret_borrow<py::object>(arg)};
   }
 
   PyTypeObject *tuple_type = nullptr;
@@ -545,10 +548,8 @@ handle_tuple(PyObject *backend, PyObject *arg, bool is_const,
   PyObject *tys_tuple = nullptr, *keys_tuple = nullptr;
   // normal temporary objects for namedtuple case only
   PyObject *norm_tys_tuple = nullptr, *norm_keys_tuple = nullptr;
-  std::vector<py::handle> types(size);
-  std::vector<py::handle> keys(size);
-
-  py::handle type, key;
+  std::vector<py::object> types(size);
+  std::vector<py::object> keys(size);
 
   bool is_namedtuple = PyObject_HasAttr(arg, _fields_attr);
   tuple_type = Py_TYPE(arg);
@@ -567,25 +568,21 @@ handle_tuple(PyObject *backend, PyObject *arg, bool is_const,
     auto [type, key] = specialize_arg(backend, item, false, true, true);
     if (PyErr_Occurred())
       goto cleanup;
-    if (!type.ptr() && !key.ptr())
+    // check if specialization failed
+    if (!type || !key)
       goto cleanup;
     types[i] = type;
     keys[i] = key;
   }
 
-  for (Py_ssize_t i = size - 1; i >= 0; --i) {
-    type = types.back();
-    types.pop_back();
-    key = keys.back();
-    keys.pop_back();
-    PyObject *type_obj = type.ptr() ? type.ptr() : Py_None;
-    PyObject *key_obj = key.ptr() ? key.ptr() : Py_None;
-    Py_INCREF(type_obj);
-    Py_INCREF(key_obj);
-    PyTuple_SetItem(tys_tuple, i, type_obj);
-    PyTuple_SetItem(keys_tuple, i, key_obj);
+  for (Py_ssize_t i = 0; i < size; ++i) {
+    PyTuple_SetItem(tys_tuple, i, types[i].inc_ref().ptr());
+    PyTuple_SetItem(keys_tuple, i, keys[i].inc_ref().ptr());
   }
 
+  keys.clear();
+  types.clear();
+  
   if (is_namedtuple) {
     norm_tys_tuple = tys_tuple;
     norm_keys_tuple = keys_tuple;
@@ -598,7 +595,7 @@ handle_tuple(PyObject *backend, PyObject *arg, bool is_const,
     Py_DECREF(norm_keys_tuple);
   }
 
-  return {py::handle(tys_tuple), py::handle(keys_tuple)};
+  return {py::reinterpret_steal<py::object>(tys_tuple), py::reinterpret_steal<py::object>(keys_tuple)};
 
 cleanup:
   // cleanup potential left-overs
@@ -614,7 +611,7 @@ cleanup:
   Py_XDECREF(norm_keys_tuple);
   Py_XDECREF(tys_tuple);
   Py_XDECREF(keys_tuple);
-  return {py::handle(), py::handle()};
+  return {py::object(), py::object()};
 }
 
 // initialize type handler which returns specialize impelemntations based on
@@ -653,7 +650,7 @@ static void init_type_handler_cache() {
 
 // specialization logic without passing of objects from Python (to be called in
 // specialize_impl only)
-static std::pair<py::handle, py::handle>
+static std::pair<py::object, py::object>
 specialize_arg(PyObject *backend, PyObject *arg, bool is_const,
                bool specialize_value, bool align) {
   // fast-path for default types
@@ -665,7 +662,7 @@ specialize_arg(PyObject *backend, PyObject *arg, bool is_const,
 
   // separate handling of None
   if (Py_IsNone(arg)) {
-    return {py::handle(constexpr_str), py::handle()};
+    return {py::reinterpret_borrow<py::object>(constexpr_str), py::none()};
   }
 
   // handling of sublcasses of tuples
@@ -699,10 +696,10 @@ specialize_arg(PyObject *backend, PyObject *arg, bool is_const,
   }
 
   if (PyObject_HasAttr(arg, tma_desc_cpu_ptr_attr)) {
-    return {py::handle(nvTmaDesc_str), py::handle()};
+    return {py::reinterpret_borrow<py::object>(nvTmaDesc_str), py::none()};
   }
 
-  return {py::handle(), py::handle()};
+  return {py::object(), py::object()};
 }
 
 // main entry-point from Python implementing specialization logic natively
@@ -738,19 +735,16 @@ static PyObject *specialize_impl(PyObject *self, PyObject *const *args,
   auto [type, key] =
       specialize_arg(backend, arg, is_const, specialize_value, align);
 
-  if (!type && !key) {
-    if (PyErr_Occurred()) {
-      return nullptr;
+  // check if specialization failed
+  if (!type || !key) {
+    if (!PyErr_Occurred()) {
+      PyErr_Format(PyExc_TypeError, "failed to specialize argument of type: %s",
+                   Py_TYPE(arg)->tp_name);
     }
-    PyErr_Format(PyExc_TypeError, "failed to specialize argument of type: %s",
-                 Py_TYPE(arg)->tp_name);
     return nullptr;
   }
 
-  PyObject *type_obj = type ? type.ptr() : Py_None;
-  PyObject *key_obj = key ? key.ptr() : Py_None;
-
-  return PyTuple_Pack(2, type_obj, key_obj);
+  return PyTuple_Pack(2, type.ptr(), key.ptr());
 }
 
 static PyMethodDef module_methods[] = {
