@@ -4,7 +4,7 @@ import torch
 import triton
 import triton.language as tl
 from triton.tools.ragged_tma import load_ragged, store_ragged
-from triton_kernels.target_info import cuda_capability_geq
+from triton_kernels import target_info
 from triton_kernels.tensor_details.layout_details.blackwell_scale import unswizzle_mx_scale_bw
 from triton_kernels.numerics_details.flexpoint import (
     float_to_flex,
@@ -15,6 +15,10 @@ from triton_kernels.numerics_details.flexpoint import (
 from triton_kernels.numerics_details.mxfp_details._downcast_to_mxfp import MXFP_BLOCK_SIZE
 from ._common import make_matmul_repr, matmul_launch_metadata, swizzle2d, xcd_swizzle, get_scaled_dot_format_string
 
+
+@triton.constexpr_function
+def cuda_capability_geq(major, minor):
+    return target_info.cuda_capability_geq(major, minor)
 
 @triton.constexpr_function
 def get_dtype(tensor_or_desc: tl.tensor | tl.tensor_descriptor) -> tl.dtype:
@@ -417,7 +421,8 @@ def _p_matmul_ogs(
                 None, # ActualScale: local absmax is tracked and updated after the loop
                 YChecksumScale,
                 None, # mask: out is manually masked to 0
-                YPtr, FLEXPOINT_SATURATE_INF)
+                YPtr, FLEXPOINT_SATURATE_INF
+            )
             if EPILOGUE_FN is not None:
                 out = EPILOGUE_FN(out, *epilogue_fn_args, target_dtype=YPtr.dtype.element_ty, pid=len(accs)*tile_id1 + a_i)
 
