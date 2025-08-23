@@ -1425,7 +1425,7 @@ LinearLayout chooseDsReadB64TrLayout(Attribute enc, ArrayRef<int64_t> shape,
 //   - We choose a fixed provider for A (thread-id-a = 0) and B (thread-id-b =
 //   0)
 //   - In this implementation, each lane in a quad has the same scale factor.
-LinearLayout chooseSM120DotScaledScaleLayout(
+LinearLayout getSM120DotScaledScaleLayout(
     MLIRContext *ctx, int dotOperandIdx, ArrayRef<int64_t> dotOperandShape,
     ArrayRef<unsigned> tilesPerWarp, ArrayRef<unsigned> warpsPerCTA,
     unsigned mmaInstrM, unsigned mmaInstrN) {

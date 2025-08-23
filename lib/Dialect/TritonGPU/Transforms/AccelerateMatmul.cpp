@@ -757,7 +757,7 @@ public:
       Value blockAdjustedScale = rewriter.create<ConvertLayoutOp>(
           scale.getLoc(), fixedBlockedTy, scale);
 
-      auto ll = triton::gpu::chooseSM120DotScaledScaleLayout(
+      auto ll = triton::gpu::getSM120DotScaledScaleLayout(
           ctx, opIdx, shape, tilesPerWarp,
           /*warpsPerCTA=*/mmaWarps, instrM, instrN);
 

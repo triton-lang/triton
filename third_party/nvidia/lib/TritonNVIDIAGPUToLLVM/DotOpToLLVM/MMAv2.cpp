@@ -658,7 +658,7 @@ static void callMmaScaled(PTXBuilder &builder, int b, int m, int n, int k,
   unsigned aByte = (m / 2) & 0x3;
   unsigned bByte = n & 0x3;
   // byteId, threadId selection logic for the scale factor
-  // depends on chooseSM120DotScaledScaleLayout
+  // depends on getSM120DotScaledScaleLayout
   appendScale(aScaleValue, aByte, /*threadId*/ 0);
   appendScale(bScaleValue, bByte, /*threadId*/ 0);
 
@@ -869,7 +869,7 @@ LogicalResult convertMMADotScaled(triton::DotScaledOp op,
 
     // aScaleValue, bScaleValue selection logic for the scale factor
     // depends on the layout selection in
-    // LinearLayoutConversions.cpp::chooseSM120DotScaledScaleLayout
+    // LinearLayoutConversions.cpp::getSM120DotScaledScaleLayout
     auto tb2 = TritonLLVMOpBuilder(op.getLoc(), rewriter);
     auto i32 = IntegerType::get(op->getContext(), 32);
     auto toI32 = [&](Value v) -> Value {

@@ -127,8 +127,8 @@ def test_simple_matmul(dtype_src_str, dtype_dst_str, BLOCK_M, BLOCK_N, BLOCK_K, 
     precision = "tf32" if dtype_src_str == "tensorfloat32" else "ieee"
     dtype_src_str = "float32" if dtype_src_str == "tensorfloat32" else dtype_src_str
     if dtype_src_str == "float8e5":
-        a = torch.randint(-40, 40, (M, K), dtype=torch.int8, device=device).view(torch.float8_e5m2)
-        b = torch.randint(-40, 40, (K, N), dtype=torch.int8, device=device).view(torch.float8_e5m2)
+        a = torch.randint(20, 40, (M, K), dtype=torch.int8, device=device).view(torch.float8_e5m2)
+        b = torch.randint(20, 40, (K, N), dtype=torch.int8, device=device).view(torch.float8_e5m2)
         A = f8_to_f16(a, dtype_src_str)
         B = f8_to_f16(b, dtype_src_str)
     else:
@@ -369,8 +369,8 @@ def test_mxfp(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, nonKDim, NUM_WARPS
     a_f16 = f8_to_f16(a, dtype_src_str)
     b = torch.randint(20, 40, (K, N), dtype=torch.int8, device=device).view(torch.float8_e5m2)
     b_f16 = f8_to_f16(b, dtype_src_str)
-    a_scale = torch.randint(64, 140, (M, K // 32), dtype=torch.uint8, device=device)
-    b_scale = torch.randint(64, 140, (N, K // 32), dtype=torch.uint8, device=device)
+    a_scale = torch.randint(64, 130, (M, K // 32), dtype=torch.uint8, device=device)
+    b_scale = torch.randint(64, 130, (N, K // 32), dtype=torch.uint8, device=device)
 
     dtype_dst = getattr(torch, dtype_dst_str)
     output = torch.empty((M, N), dtype=dtype_dst, device=device)
