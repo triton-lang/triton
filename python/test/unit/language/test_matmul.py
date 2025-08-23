@@ -127,8 +127,8 @@ def test_simple_matmul(dtype_src_str, dtype_dst_str, BLOCK_M, BLOCK_N, BLOCK_K, 
     precision = "tf32" if dtype_src_str == "tensorfloat32" else "ieee"
     dtype_src_str = "float32" if dtype_src_str == "tensorfloat32" else dtype_src_str
     if dtype_src_str == "float8e5":
-        a = torch.randint(20, 40, (M, K), dtype=torch.int8, device=device).view(torch.float8_e5m2)
-        b = torch.randint(20, 40, (K, N), dtype=torch.int8, device=device).view(torch.float8_e5m2)
+        a = torch.randint(20, 40, (M, K), dtype=torch.uint8, device=device).view(torch.float8_e5m2)
+        b = torch.randint(20, 40, (K, N), dtype=torch.uint8, device=device).view(torch.float8_e5m2)
         A = f8_to_f16(a, dtype_src_str)
         B = f8_to_f16(b, dtype_src_str)
     else:
