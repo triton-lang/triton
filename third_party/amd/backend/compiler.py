@@ -422,7 +422,9 @@ class HIPBackend(BaseBackend):
         # the regression is not significant. It would be better to have some heuristics.
         if options.schedule_hint == 'attention':
             flags.append('sink-insts-to-avoid-spills')
-        amdgcn = llvm.translate_to_asm(src, amd.TARGET_TRIPLE, options.arch, '', flags, options.enable_fp_fusion, False)
+        features = '-real-true16' if 'gfx11' in options.arch else ''
+        amdgcn = llvm.translate_to_asm(src, amd.TARGET_TRIPLE, options.arch, features, flags, options.enable_fp_fusion,
+                                       False)
         if knobs.amd.dump_amdgcn:
             print("// -----// AMDGCN Dump //----- //")
             print(amdgcn)
