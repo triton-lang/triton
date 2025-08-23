@@ -193,8 +193,18 @@ def apply_allocation(allocation: MatmulAllocation, output):
 
 def _canonicalize_storage(storage, out_ndim, flex_data):
     assert out_ndim >= storage.data.ndim
+    # Need to use as_strided instead of view because for a tensor with
+    # shape[-2] == 1 can have ambuiguity related to col-wise. Fo example,
+    # > t = torch.randn(2, 5, 1).mT
+    # > t_view = t.view(t.shape)
+    # > t.stride(), t_view.stride()
+    # ((5, 1, 1), (5, 5, 1))
+    # Our check t_view is col-wise fails since t_view.stride(-2) != 1
+    # This case is covered by (m, n, k) == (1000, 700, 2) in test_matmul.py
     new_storage_shape = [1] * (out_ndim - storage.data.ndim) + list(storage.data.shape)
-    new_storage_data = storage.data.view(new_storage_shape)
+    new_storage_view = storage.data.view(new_storage_shape)
+    new_storage_stride = [new_storage_view.stride(0)] * (out_ndim - storage.data.ndim) + list(storage.data.stride())
+    new_storage_data = storage.data.as_strided(new_storage_shape, new_storage_stride)
     if flex_data is not None:
         new_storage_data = flex_data.reinterpret(new_storage_data)
     return Storage(new_storage_data, storage.layout)
@@ -322,7 +332,6 @@ def matmul_ogs(x, w, bias,
     w_scale = precision_config.weight_scale
     w_has_mx = w_scale is not None
     is_hopper_fp8 = is_cuda() and not target_info.cuda_capability_geq(10, 0) and bitwidth(w.dtype) == 8
-    if w_has_mx: assert w.stride(-2) == 1, "`w` must be column-major when it has data-type mxfp"
     if is_hopper_fp8: assert w.stride(-2) == 1, "`w` must be column-major when it has data-type FP8 on capability < 10"
     if not isinstance(w, Tensor):
         # TODO: remove this code path; using uint8 for mxfp4 weight will bite us when we want to support uint8 for real
@@ -450,6 +459,11 @@ def matmul_ogs(x, w, bias,
     out_matmul_scale_strides = (0, ) * (3 - len(out_matmul_scale_strides)) + out_matmul_scale_strides
     # launch kernel
     kernels = get_kernels(epilogue.specs, matmul_fused_activation.specs)
+    # When stride(-2) == stride(-1) == 1, it's ambiguous whether W is transposed
+    # (i.e. col-wise). Since this matters when w_has_mx is True and w_transpose
+    # is True the fast code path, stride(-2) == 1 takes precedence, e.g., vs.
+    # w_transpose = w_storage.data.stride()[-1] != 1
+    w_transpose = w_storage.data.stride()[-2] == 1
     (kernels._p_matmul_ogs if opt_flags.is_persistent else kernels._matmul_ogs)[(grid,)](
                    y_tensor_or_tma, y_storage.data, *out_matmul.stride(),
                    *((None, out_matmul_scale, None) if out_matmul_has_mx else out_matmul_flex),
@@ -457,7 +471,7 @@ def matmul_ogs(x, w, bias,
                    x_tensor_or_tma, x_storage.data, *x_strides,
                    flex.lhs_data.scale,
                    None if x_scale is None else x_scale.data.view(torch.uint8), *x_scale_strides,
-                   w_tensor_or_tma, w_storage.data, *w_storage.data.stride(), w_storage.data.stride()[-1] != 1,
+                   w_tensor_or_tma, w_storage.data, *w_storage.data.stride(), w_transpose,
                    flex.rhs_data.scale,
                    w_scale_tensor_or_tma, *w_scale_strides,
                    bias, bias_stride,

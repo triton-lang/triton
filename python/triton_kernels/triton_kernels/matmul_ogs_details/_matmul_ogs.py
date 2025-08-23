@@ -215,19 +215,31 @@ def _matmul_ogs(
             W_K_MULTIPLIER: tl.constexpr = 1
             W_N_DIVISOR: tl.constexpr = 1
 
-        PACKED_BLOCK_K_W: tl.constexpr = (BLOCK_K // W_K_DIVISOR) * W_K_MULTIPLIER
-        PACKED_BLOCK_N_W: tl.constexpr = BLOCK_N // W_N_DIVISOR
+        if W_TRANSPOSE:
+            # When weight is transposed, 2 fp4 values are packed per Byte along
+            # the contiguous dimension, K.
+            PACKED_BLOCK_K_W: tl.constexpr = (BLOCK_K // W_K_DIVISOR) * W_K_MULTIPLIER
+            PACKED_BLOCK_N_W: tl.constexpr = BLOCK_N // W_N_DIVISOR
+        else:
+            # When weight is not transposed, fp4 values are *not* packed along
+            # the contiguous dimension, N.
+            PACKED_BLOCK_K_W: tl.constexpr = BLOCK_K
+            PACKED_BLOCK_N_W: tl.constexpr = BLOCK_N // W_K_DIVISOR
         MX_SCALE_BLOCK_K: tl.constexpr = BLOCK_K // MX_PACK_DIVISOR
 
         WMxScale += expt_id * stride_w_mx_e
 
         if SWIZZLE_MX_SCALE == "BLACKWELL_SCALE":
+            # TODO: support non W_TRANSPOSE with blackwell swizzling
+            tl.static_assert(W_TRANSPOSE)
             tl.static_assert(BLOCK_N % 128 == 0)
             tl.static_assert(MX_SCALE_BLOCK_K % 4 == 0)
             PACKED_MX_BLOCK: tl.constexpr = (MX_SCALE_BLOCK_K // 4) * 32 * 4 * 4
             SCALE_BLOCK_N: tl.constexpr = BLOCK_N // 128
             stride_scale_k: tl.constexpr = 1
         elif SWIZZLE_MX_SCALE == "HOPPER_SCALE":
+            # TODO: support non W_TRANSPOSE with Hopper swizzling
+            tl.static_assert(W_TRANSPOSE)
             n_warps: tl.constexpr = tl.extra.cuda.num_warps()
             tl.static_assert(BLOCK_N % (2 * n_warps * 2 * 8) == 0)
             tl.static_assert(MX_SCALE_BLOCK_K % 2 == 0)
@@ -287,7 +299,7 @@ def _matmul_ogs(
                 mask_x_k_scale = tl.full([MX_SCALE_BLOCK_K], True, dtype=tl.int1)
         else:
             mask_k = offs_k < k
-            mask_k_w = offs_w_k < ((k // W_K_DIVISOR) * W_K_MULTIPLIER)
+            mask_k_w = offs_w_k < ((k // (W_K_DIVISOR if W_TRANSPOSE else 1)) * W_K_MULTIPLIER)
             if is_w_microscaled and SWIZZLE_MX_SCALE is None:
                 mask_k_scale = offs_k_scale * MX_PACK_DIVISOR < k
             if is_x_microscaled:
@@ -330,7 +342,8 @@ def _matmul_ogs(
                 acc = tl.dot(w, x, acc, max_num_imprecise_acc=MAX_NUM_IMPRECISE_ACC, allow_tf32=ALLOW_TF32)
                 acc = acc.trans()
             else:
-                acc = tl.dot_scaled(x, x_scales, x_format, w, w_scales, w_format, acc=acc, fast_math=True)
+                rhs_k_pack: tl.constexpr = W_TRANSPOSE or not is_w_microscaled or W_K_DIVISOR != 2
+                acc = tl.dot_scaled(x, x_scales, x_format, w, w_scales, w_format, acc=acc, fast_math=True, rhs_k_pack=rhs_k_pack)
             if SWIZZLE_MX_SCALE == "BLACKWELL_SCALE":
                 WMxScalePtrs += (MX_SCALE_BLOCK_K // 4 * SPLIT_K) * stride_w_mx_k
             else:
