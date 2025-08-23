@@ -20,6 +20,8 @@ def _reduce_grouped(X, stride_xb, stride_xm, stride_xn,  #
                     HAS_IN_MX_SCALE: tl.constexpr, HAS_OUT_MX_SCALE: tl.constexpr, FLEXPOINT_SATURATE_INF: tl.constexpr,
                     K: tl.constexpr, BLOCK_N: tl.constexpr):
     pid_t = tl.program_id(0)
+    stride_xm = stride_xm.to(tl.int64)
+    stride_xb = stride_xb.to(tl.int64)
     BLOCK_N_OUT: tl.constexpr = BLOCK_N // ACTIVATION_REDUCTION_N
     # persistent along N: single program on N, iterate tiles of size BLOCK_N
     start = pid_t * K
