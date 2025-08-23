@@ -5,13 +5,14 @@ import triton.language as tl
 
 
 @triton.jit
-def _reduce_grouped(X, stride_xb, stride_xm, stride_xn,  #
+def _reduce_grouped(X, stride_xb: tl.uint64, stride_xm: tl.uint64, stride_xn: tl.uint64,  #
                     XScale,  # input scalar flex scale
-                    Out, stride_om, stride_on,  # output tensor
+                    Out, stride_om: tl.uint64, stride_on: tl.uint64,  # output tensor
                     OutExpectedScale, OutActualScale, OutChecksumScale,  # output scalar flex scales
                     InIndx, B, N,  #
-                    XMxScale, stride_mxb, stride_mxs,  # optional per-32-col output MXFP scales (uint8)
-                    OutMxScale, stride_omxs,  # optional per-32-col output MXFP scales (uint8)
+                    XMxScale, stride_mxb: tl.uint64,
+                    stride_mxs: tl.uint64,  # optional per-32-col output MXFP scales (uint8)
+                    OutMxScale, stride_omxs: tl.uint64,  # optional per-32-col output MXFP scales (uint8)
                     # fused activation function
                     ACTIVATION_FN: tl.constexpr, activation_fn_args, ACTIVATION_REDUCTION_N: tl.constexpr,
                     # epilogue transform
@@ -20,8 +21,6 @@ def _reduce_grouped(X, stride_xb, stride_xm, stride_xn,  #
                     HAS_IN_MX_SCALE: tl.constexpr, HAS_OUT_MX_SCALE: tl.constexpr, FLEXPOINT_SATURATE_INF: tl.constexpr,
                     K: tl.constexpr, BLOCK_N: tl.constexpr):
     pid_t = tl.program_id(0)
-    stride_xm = stride_xm.to(tl.int64)
-    stride_xb = stride_xb.to(tl.int64)
     BLOCK_N_OUT: tl.constexpr = BLOCK_N // ACTIVATION_REDUCTION_N
     # persistent along N: single program on N, iterate tiles of size BLOCK_N
     start = pid_t * K
