@@ -5,9 +5,9 @@ import triton.language as tl
 
 
 @triton.jit
-def _reduce_grouped(X, stride_xb: tl.uint64, stride_xm: tl.uint64, stride_xn: tl.uint64,  #
+def _reduce_grouped(X, stride_xb: tl.uint64, stride_xm: tl.uint64, stride_xn,  #
                     XScale,  # input scalar flex scale
-                    Out, stride_om: tl.uint64, stride_on: tl.uint64,  # output tensor
+                    Out, stride_om: tl.uint64, stride_on,  # output tensor
                     OutExpectedScale, OutActualScale, OutChecksumScale,  # output scalar flex scales
                     InIndx, B, N,  #
                     XMxScale, stride_mxb: tl.uint64,
