@@ -12,9 +12,9 @@ from . import tma
 from ..hopper import fence_async_shared, mbarrier
 from ..ampere import async_copy
 
+from triton._C.libtriton import ir
 if TYPE_CHECKING:
     from triton._C.libtriton.gluon_ir import GluonOpBuilder
-    from triton._C.libtriton import gluon_ir as ir
     from ..._semantic import GluonSemantic
 
 __all__ = [
@@ -302,6 +302,23 @@ def allocate_tensor_memory(element_ty, shape, layout, value=None, _semantic=None
 
 
 @builtin
+def tcgen05_copy(src, dst, _semantic=None):
+    """
+    Start an asynchronous copy from shared memory to tensor memory.
+
+    WARNING: The current semantics of the instruction are not well defined and
+    the API will change in the future. Use at your own risk.
+
+    Args:
+        src (shared_memory_descriptor): Shared memory to copy from.
+        dst (tensor_memory_descriptor): Tensor memory to copy to.
+    """
+    assert isinstance(src, ttgl.shared_memory_descriptor), "source must be a shared memory descriptor"
+    assert isinstance(dst, tensor_memory_descriptor), "destination must be a tensor memory descriptor"
+    _semantic.builder.create_tmem_copy(src.handle, dst.handle)
+
+
+@builtin
 def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, mbarriers=None, mbarrier_preds=None, _semantic=None):
     """
     Emit a 5th generation TensorCore MMA instruction.
@@ -337,4 +354,12 @@ def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, mbarriers=None, mbarrier_
 
 @builtin
 def tcgen05_commit(barrier, _semantic=None):
+    """
+    This instruction causes the provided mbarrier to be arrived-on with a count
+    of 1 when all async tcgen05 MMA and copy instructions previously issued by
+    the thread are complete.
+
+    Args:
+        barrier (shared_memory_descriptor): The barrier to track completion of tcgen05 MMA and copy instructions.
+    """
     _semantic.builder.create_tcgen05_commit(barrier.handle)

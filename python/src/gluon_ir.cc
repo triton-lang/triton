@@ -548,6 +548,10 @@ void init_gluon_ir(py::module &&m) {
            [](GluonOpBuilder &self, Type resultTy, Value memDesc) -> Value {
              return self.create<ttng::TMEMLoadOp>(resultTy, memDesc);
            })
+      .def("create_tmem_copy",
+           [](GluonOpBuilder &self, Value src, Value dst) {
+             self.create<ttng::TMEMCopyOp>(src, dst, /*barrier=*/Value());
+           })
       .def("create_tmem_subslice",
            [](GluonOpBuilder &self, Type resultTy, Value memDesc,
               int N) -> Value {
