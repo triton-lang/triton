@@ -43,12 +43,6 @@ public:
     if (!scaledDotOp.getLhsKPack() || !scaledDotOp.getRhsKPack())
       return failure();
 
-    auto moduleOp = scaledDotOp->getParentOfType<ModuleOp>();
-    if (!moduleOp) {
-      return rewriter.notifyMatchFailure(scaledDotOp,
-                                         "Could not find parent ModuleOp");
-    }
-
     // Types
     auto computeType = getComputeType(scaledDotOp.getAElemType(),
                                       scaledDotOp.getBElemType(), rewriter);

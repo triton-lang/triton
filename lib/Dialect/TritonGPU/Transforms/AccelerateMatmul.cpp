@@ -316,7 +316,6 @@ static MMAEncodingResult createMMAEncodingForDot(DotOpInterface dotOp,
 
   int numWarps = lookupNumWarps(dotOp);
 
-
   int versionMinor = computeCapability == 75 ? 1 : 0;
   // Only MMAv2 and MMAv3 rely on computing instrShape/warpsPerTile here.
   if (!(versionMajor == 2 || versionMajor == 3)) {
@@ -675,11 +674,12 @@ public:
       return rewriter.notifyMatchFailure(dotOp, "only E5M2/E4M3 is supported");
     }
 
+    // Skip if any scale is missing. This pattern requires both scales.
+    if (!dotOp.getAScale() || !dotOp.getBScale())
+      return failure();
+
     auto aScaleType = cast<RankedTensorType>(dotOp.getAScale().getType());
     auto bScaleType = cast<RankedTensorType>(dotOp.getBScale().getType());
-
-    if (!aScaleType || !bScaleType)
-      return failure();
 
     if (mlir::isa<LinearEncodingAttr>(aScaleType.getEncoding()) ||
         mlir::isa<LinearEncodingAttr>(bScaleType.getEncoding())) {
@@ -736,6 +736,8 @@ public:
 
     // Convert scales to Linear layout
     auto convertScale = [&](Value scale, int opIdx) -> Value {
+      if (!scale)
+        return Value();
       auto ty = cast<RankedTensorType>(scale.getType());
       SmallVector<int64_t> shape = llvm::to_vector(ty.getShape());
       MLIRContext *ctx = ty.getContext();
@@ -764,8 +766,12 @@ public:
       return rewriter.create<ConvertLayoutOp>(scale.getLoc(), newTy,
                                               blockAdjustedScale);
     };
-    Value aScale = convertScale(dotOp.getAScale(), /*opIdx=*/0);
-    Value bScale = convertScale(dotOp.getBScale(), /*opIdx=*/1);
+    Value aScale = dotOp.getAScale()
+                       ? convertScale(dotOp.getAScale(), /*opIdx=*/0)
+                       : Value();
+    Value bScale = dotOp.getBScale()
+                       ? convertScale(dotOp.getBScale(), /*opIdx=*/1)
+                       : Value();
 
     newDot = rewriter.create<triton::DotScaledOp>(
         dotOp.getLoc(), mmaResult.newRetType, newA, newB, mmaResult.newAcc,

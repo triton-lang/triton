@@ -296,13 +296,19 @@ struct TritonDotScaledPattern
 
     Value aScale = adaptor.getAScale();
     Value bScale = adaptor.getBScale();
-    auto aScaleEltType =
-        cast<RankedTensorType>(aScale.getType()).getElementType();
-    auto bScaleEltType =
-        cast<RankedTensorType>(bScale.getType()).getElementType();
-
-    if (!aScaleEltType.isInteger(8) || !bScaleEltType.isInteger(8))
-      return rewriter.notifyMatchFailure(op, "Scale type is not supported");
+    // Scales are optional; validate only when present
+    if (aScale) {
+      auto aScaleEltType =
+          cast<RankedTensorType>(aScale.getType()).getElementType();
+      if (!aScaleEltType.isInteger(8))
+        return rewriter.notifyMatchFailure(op, "Scale type is not supported");
+    }
+    if (bScale) {
+      auto bScaleEltType =
+          cast<RankedTensorType>(bScale.getType()).getElementType();
+      if (!bScaleEltType.isInteger(8))
+        return rewriter.notifyMatchFailure(op, "Scale type is not supported");
+    }
 
     addNamedAttrs(rewriter.replaceOpWithNewOp<triton::DotScaledOp>(
                       op, retType, a, b, c, aScale, bScale,
