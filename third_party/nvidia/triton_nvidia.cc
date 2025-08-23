@@ -81,6 +81,8 @@ void init_triton_nvidia_passes_nvws(py::module &&m) {
   ADD_PASS_WRAPPER_0("add_lower_warp_group",
                      mlir::triton::createNVWSLowerWarpGroup);
   ADD_PASS_WRAPPER_0("add_lower_aref", mlir::triton::createNVWSLowerAref);
+  ADD_PASS_WRAPPER_0("add_assign_stage_phase",
+                     mlir::triton::createNVWSAssignStagePhase);
 }
 
 void init_triton_hopper_passes(py::module &&m) {

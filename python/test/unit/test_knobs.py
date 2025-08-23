@@ -142,6 +142,7 @@ def test_read_env(truthy, falsey, fresh_knobs, monkeypatch):
     monkeypatch.setenv("TRITON_CUDACRT_PATH", "/tmp/cuda/crt")
     monkeypatch.setenv("TRITON_CUDART_PATH", "/tmp/cuda/rt")
 
+    triton.knobs.refresh_knobs()
     assert fresh_knobs.runtime.debug
     assert not fresh_knobs.language.default_fp_fusion
     assert fresh_knobs.compilation.use_ir_loc == "ttir"
