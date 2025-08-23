@@ -834,8 +834,6 @@ public:
     if (rank == 3)
       return rewriter.notifyMatchFailure(dotOp, "NYI: 3d case");
 
-    TensorValue a = dotOp.getA();
-    TensorValue b = dotOp.getB();
     TensorValue aScale = dotOp.getAScale();
     TensorValue bScale = dotOp.getBScale();
     if (aScale && bScale)
@@ -867,23 +865,26 @@ public:
       return rewriter.create<ttg::ConvertLayoutOp>(loc, retTy, v);
     };
 
-    auto scaledA = scaleArg(rewriter, dotOp, a, aScale, aElemType, 0, useFp16);
+    auto scaledA = scaleArg(rewriter, dotOp, 0, useFp16);
     scaledA = cvtDotOperand(scaledA, 0);
-    auto scaledB = scaleArg(rewriter, dotOp, b, bScale, aElemType, 1, useFp16);
+    auto scaledB = scaleArg(rewriter, dotOp, 1, useFp16);
     scaledB = cvtDotOperand(scaledB, 1);
 
     auto newDot =
         rewriter.create<tt::DotOp>(loc, scaledA, scaledB, dotOp.getC());
 
-    rewriter.replaceOpWithNewOp<ttg::ConvertLayoutOp>(dotOp, dotOp.getType(),
+    rewriter.replaceOpWithNewOp<ttg::ConvertLayoutOp>(dotOp, oldRetType,
                                                       newDot);
     return success();
   }
 
-  TensorValue scaleArg(PatternRewriter &rewriter, DotScaledOp dotOp,
-                       TensorValue v, TensorValue scale,
-                       ScaleDotElemType elemType, int opIdx,
+  TensorValue scaleArg(PatternRewriter &rewriter, DotScaledOp dotOp, int opIdx,
                        bool useFp16) const {
+    TensorValue v = (opIdx == 0) ? dotOp.getA() : dotOp.getB();
+    TensorValue scale = (opIdx == 0) ? dotOp.getAScale() : dotOp.getBScale();
+    ScaleDotElemType elemType =
+        (opIdx == 0) ? dotOp.getAElemType() : dotOp.getBElemType();
+
     if (elemType == ScaleDotElemType::BF16 ||
         elemType == ScaleDotElemType::FP16)
       return v;
@@ -898,6 +899,8 @@ public:
     auto vType16 = vType.clone(computeType);
 
     auto loc = dotOp.getLoc();
+    auto *ctx = rewriter.getContext();
+    auto retEnc = dotOp.getType().getEncoding();
 
     if (!scale) {
       if (isFp4) {
@@ -908,6 +911,22 @@ public:
       }
     }
 
+    vType16 = vType16.clone(rewriter.getBF16Type());
+    RankedTensorType unpackedType16 = vType16;
+    auto vEnc = cast<BlockedEncodingAttr>(vType16.getEncoding());
+    auto sizePerThread = llvm::to_vector(vEnc.getSizePerThread());
+
+    if (isFp4) {
+      auto packedShape = llvm::to_vector(vType16.getShape());
+      packedShape[kDim] *= 2;
+      unpackedType16 = vType16.clone(packedShape);
+      sizePerThread[kDim] *= 2;
+    }
+    auto newEnc = ttg::BlockedEncodingAttr::get(
+        ctx, sizePerThread, vEnc.getThreadsPerWarp(), vEnc.getWarpsPerCTA(),
+        vEnc.getOrder(), vEnc.getCTALayout());
+    unpackedType16 = unpackedType16.cloneWithEncoding(newEnc);
+
     auto fastMath = dotOp.getFastMath();
 
     if (opIdx == 1) {
@@ -916,23 +935,31 @@ public:
     }
 
     // 1) Cast scale to compute type (fp16/bf16)
-    TensorValue scale16 = scaleTo16(rewriter, scale, computeType);
+    TensorValue scale16 = scaleTo16(rewriter, scale, rewriter.getBF16Type());
 
     // 2) Broadcast scale to the same shape and layout as v
     TensorValue reshapeScale =
         broadcastScale(rewriter, dotOp, mod, scale16, kDim);
-    reshapeScale =
-        rewriter.create<ttg::ConvertLayoutOp>(loc, vType, reshapeScale);
+
+    // auto newVEncoding = DotOperandEncodingAttr::get(
+    //     ctx, oldEncoding.getOpIdx(), oldEncoding.getParent(),
+    //     oldEncoding.getKWidth() * factor);
+
+    // auto encoding = ttg::DotOperandEncodingAttr::get(ctx, opIdx, retEnc,
+    //                                                  vType16.getElementType());
+    // auto retTy = unpackedType16.cloneWithEncoding(encoding);
+
+    reshapeScale = rewriter.create<ttg::ConvertLayoutOp>(loc, unpackedType16,
+                                                         reshapeScale);
 
     // 3) Upcast with scale
     TensorValue result;
     if (isFp4) {
       result = rewriter.create<triton::amdgpu::ScaledUpcastFp4Op>(
-          loc, vType16, v, reshapeScale, kDim);
+          loc, unpackedType16, v, reshapeScale, kDim);
     } else {
       result = rewriter.create<triton::amdgpu::ScaledUpcastFp8Op>(
-          loc, vType16, v, reshapeScale);
-      //  .getOutput();
+          loc, unpackedType16, v, reshapeScale);
     }
 
     // 4) If not fastMath and the scale is NaN, return NaN, else return the
@@ -1576,9 +1603,9 @@ struct TritonAMDGPUAccelerateMatmulPass
     case ISAFamily::CDNA3:
     case ISAFamily::CDNA2:
     case ISAFamily::CDNA1:
-      mfmaPatterns.add<::BlockedToMFMA>(context, getMfmaVersion(isaFamily),
-                                        matrixInstructionSize, kPack,
-                                        /*benefit=*/2);
+      mfmaPatterns.add<::BlockedToMFMA, ::ScaledBlockedToMFMA>(
+          context, getMfmaVersion(isaFamily), matrixInstructionSize, kPack,
+          /*benefit=*/2);
       break;
     case ISAFamily::RDNA3:
       // Only gfx12 is supported for now
