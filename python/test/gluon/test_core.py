@@ -22,6 +22,7 @@ from triton.experimental.gluon.language.amd.cdna4 import async_copy as cdna4_asy
 from triton.experimental.gluon.language.extra import libdevice
 from triton.experimental.gluon.language.nvidia.blackwell import (
     TensorMemoryLayout,
+    TensorMemoryScalesLayout,
     allocate_tensor_memory,
     get_tmem_32x32b_reg_layout,
     tcgen05_mma,
@@ -468,7 +469,7 @@ def test_tmem_copy_2d():
         value = ttgl.load(ttgl.set_auto_layout(in_ptrs, blocked))
 
         smem_layout: ttgl.constexpr = ttgl.NVMMASharedLayout(swizzle_byte_width=0, element_bitwidth=8, rank=2)
-        tmem_layout: ttgl.constexpr = TensorMemoryLayout((128, 32), unpacked=True)
+        tmem_layout: ttgl.constexpr = TensorMemoryScalesLayout()
         smem = ttgl.allocate_shared_memory(ttgl.int32, (smem_h, smem_w), layout=smem_layout)
         tmem = allocate_tensor_memory(ttgl.int32, (num_rows, num_cols), layout=tmem_layout)
 
@@ -730,3 +731,52 @@ def test_tma_slice():
     out_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(output, block_shape, layout)
     kernel[(1, )](in_desc, out_desc)
     torch.testing.assert_close(input, output, atol=0, rtol=0)
+
+
+@pytest.mark.parametrize("swizzle", [32, 64, 128])
+@pytest.mark.parametrize("num_warps", [4, 8])
+@pytest.mark.parametrize("M, N, BLOCK_N", [(128, 128, 128), (256, 128, 64), (128, 128, 16)])
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+def test_tmem_copy_no_scales(M, N, BLOCK_N, num_warps, swizzle):
+
+    @gluon.jit
+    def tmem_copy_no_scales(in_ptr, out_ptr, M: ttgl.constexpr, N: ttgl.constexpr, BLOCK_N: ttgl.constexpr,
+                            swizzle: ttgl.constexpr, num_warps: ttgl.constexpr):
+        tmem_reg_layout: ttgl.constexpr = get_tmem_32x32b_reg_layout(
+            M=128,
+            N=BLOCK_N,
+            shape=[M, N],
+            num_warps=num_warps,
+        )
+        offs_m = ttgl.arange(0, M, ttgl.SliceLayout(1, tmem_reg_layout))
+        offs_n = ttgl.arange(0, N, ttgl.SliceLayout(0, tmem_reg_layout))
+        offs = offs_m[:, None] * N + offs_n[None, :]
+
+        input = ttgl.load(in_ptr + offs)
+        tmem_layout: ttgl.constexpr = TensorMemoryLayout(
+            block=(128, BLOCK_N),
+            unpacked=True,
+        )
+
+        smem_layout: ttgl.constexpr = ttgl.NVMMASharedLayout(swizzle_byte_width=swizzle, element_bitwidth=32, rank=2)
+        smem = ttgl.allocate_shared_memory(in_ptr.dtype.element_ty, [M, N], layout=smem_layout)
+
+        smem.store(input)
+        tmem = allocate_tensor_memory(
+            element_ty=in_ptr.dtype.element_ty,
+            shape=[M, N],
+            layout=tmem_layout,
+        )
+        bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
+        mbarrier.init(bar, count=1)
+        tcgen05_copy(smem, tmem)
+        tcgen05_commit(bar)
+        mbarrier.wait(bar, phase=0)
+        output = tmem.load(tmem_reg_layout)
+        ttgl.store(out_ptr + offs, output)
+
+    input = torch.arange(M * N, device="cuda").reshape(M, N).to(torch.int32)
+    output = torch.empty_like(input)
+
+    tmem_copy_no_scales[(1, )](input, output, M, N, BLOCK_N, swizzle, num_warps=num_warps)
+    assert (output == input).all()
