@@ -35,16 +35,6 @@ public:
     if (mlir::isa<NvidiaMmaEncodingAttr>(resTy.getEncoding()))
       return failure();
 
-    // Early-exit if either scale uses LinearEncodingAttr. This indicates the
-    // DotScaledOp has already been rewritten by an earlier MMAv2 ScaledDotOp
-    // pass; skip decomposition here.
-    auto isLinearEncoding = [](Value v) {
-      return v && mlir::isa<LinearEncodingAttr>(
-                      cast<RankedTensorType>(v.getType()).getEncoding());
-    };
-    if (isLinearEncoding(scaledDotOp.getAScale()) ||
-        isLinearEncoding(scaledDotOp.getBScale()))
-      return failure();
     if (isa_and_nonnull<MmaEncodingTrait>(
             scaledDotOp.getResult().getType().getEncoding()))
       return failure();

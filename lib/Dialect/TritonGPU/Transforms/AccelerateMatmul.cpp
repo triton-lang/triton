@@ -135,7 +135,7 @@ SmallVector<unsigned, 2>
 warpsPerTileV3(DotOpInterface dotOp, const ArrayRef<int64_t> shape,
                int numWarps, const SmallVector<unsigned, 3> &instrShape) {
   SetVector<Operation *> slices;
-  mlir::getForwardSlice(dotOp.getOperation()->getResult(0), &slices);
+  mlir::getForwardSlice(dotOp.getD(), &slices);
   // Contains a chained dot. We prefer to assign warps to one axis
   // to facilitate use cases like flash attention, allowing reductions within
   // the same warp.
@@ -310,25 +310,12 @@ struct MMAEncodingResult {
 static MMAEncodingResult createMMAEncodingForDot(DotOpInterface dotOp,
                                                  PatternRewriter &rewriter,
                                                  int computeCapability,
-                                                 int forcedVersionMajor = -1) {
-  auto oldRetType = cast<RankedTensorType>(dotOp->getResult(0).getType());
+                                                 int versionMajor) {
+  auto oldRetType = cast<RankedTensorType>(dotOp.getD().getType());
   auto oldAType = cast<RankedTensorType>(dotOp.getA().getType());
 
   int numWarps = lookupNumWarps(dotOp);
-  int versionMajor = forcedVersionMajor;
 
-  // If no forced version, determine based on operation type
-  if (versionMajor < 0) {
-    if (isa<triton::DotScaledOp>(dotOp.getOperation())) {
-      versionMajor = 2; // DotScaledOp typically uses version 2
-    } else if (auto regularDot =
-                   dyn_cast<triton::DotOp>(dotOp.getOperation())) {
-      versionMajor = getMMAVersionSafe(computeCapability, regularDot);
-    } else {
-      // Default for other DotOpInterface implementations
-      versionMajor = 2;
-    }
-  }
 
   int versionMinor = computeCapability == 75 ? 1 : 0;
   // Only MMAv2 and MMAv3 rely on computing instrShape/warpsPerTile here.
@@ -410,8 +397,9 @@ public:
       return failure();
     }
 
+    auto mmaVersion = getMMAVersionSafe(computeCapability, dotOp);
     auto mmaResult =
-        createMMAEncodingForDot(dotOp, rewriter, computeCapability, -1);
+        createMMAEncodingForDot(dotOp, rewriter, computeCapability, mmaVersion);
     if (!(mmaResult.versionMajor >= 1 && mmaResult.versionMajor <= 3))
       return failure();
 
@@ -720,59 +708,53 @@ public:
     Value newB = convertDotOperandForMMA(b, 1, minBitwidth,
                                          mmaResult.newRetType, rewriter);
 
-    // Convert scales to Linear layout now that NV MMA params are known
+    // Compute tiles per warp for each operand
+    auto computeTilePerWarp = [&](Value operand, int operandIdx) -> unsigned {
+      auto operandTy = cast<RankedTensorType>(operand.getType());
+      auto dotEncoding = dyn_cast<triton::gpu::DotOperandEncodingAttr>(
+          operandTy.getEncoding());
+      if (!dotEncoding)
+        return 1;
+
+      const int bitWidth = operandTy.getElementType().getIntOrFloatBitWidth();
+      const int kWidth = dotEncoding.getKWidth();
+      auto rep = mmaResult.mmaEnc.getRepForOperand(
+          triton::gpu::getShapePerCTA(operandTy), bitWidth, kWidth,
+          dotEncoding.getOpIdx());
+
+      // repA = [repM, repK], repB = [repK, repN]
+      // For operand A (idx 0): return rep[1] (repK)
+      // For operand B (idx 1): return rep[2] (repN)
+      if (operandIdx == 0) {
+        return rep.size() >= 2 ? rep[1] : 1;
+      } else {
+        return rep.size() >= 3 ? rep[2] : 1;
+      }
+    };
+    SmallVector<unsigned, 2> tilesPerWarp{computeTilePerWarp(newA, 0),
+                                          computeTilePerWarp(newB, 1)};
+
+    // Convert scales to Linear layout
     auto convertScale = [&](Value scale, int opIdx) -> Value {
       auto ty = cast<RankedTensorType>(scale.getType());
-
       SmallVector<int64_t> shape = llvm::to_vector(ty.getShape());
       MLIRContext *ctx = ty.getContext();
 
       const auto mmaWarps = mmaResult.mmaEnc.getWarpsPerCTA(); // [wM, wN]
       const auto instr = mmaResult.mmaEnc.getInstrShape(); // [instrM, instrN]
       const unsigned instrM = instr[0], instrN = instr[1];
-      Value BlockAdjustedScale;
-      if (auto blocked =
-              dyn_cast<triton::gpu::BlockedEncodingAttr>(ty.getEncoding())) {
-        SmallVector<unsigned, 2> expectedWarpsPerCTA{mmaWarps[0], mmaWarps[1]};
-        auto fixedBlockedEncodingAttr = triton::gpu::BlockedEncodingAttr::get(
-            ctx, blocked.getSizePerThread(), blocked.getThreadsPerWarp(),
-            /*warpsPerCTA=*/expectedWarpsPerCTA, blocked.getOrder(),
-            /*CTALayout=*/blocked.getCTALayout());
-        auto newTy = RankedTensorType::get(shape, ty.getElementType(),
-                                           fixedBlockedEncodingAttr);
-        BlockAdjustedScale =
-            rewriter.create<ConvertLayoutOp>(scale.getLoc(), newTy, scale);
-      }
 
-      auto computeTilesPerWarp = [&]() -> SmallVector<unsigned, 2> {
-        SmallVector<unsigned, 2> tilesPerWarp{1, 1};
-        // repA = [repM, repK], repB = [repK, repN]
-        if (auto aTy = dyn_cast<RankedTensorType>(newA.getType())) {
-          if (auto dotA = dyn_cast<triton::gpu::DotOperandEncodingAttr>(
-                  aTy.getEncoding())) {
-            const int bitA = aTy.getElementType().getIntOrFloatBitWidth();
-            const int kWA = dotA.getKWidth();
-            auto repA = mmaResult.mmaEnc.getRepForOperand(
-                triton::gpu::getShapePerCTA(aTy), bitA, kWA, dotA.getOpIdx());
-            if (repA.size() >= 2)
-              tilesPerWarp[0] = repA[1];
-          }
-        }
-        if (auto bTy = dyn_cast<RankedTensorType>(newB.getType())) {
-          if (auto dotB = dyn_cast<triton::gpu::DotOperandEncodingAttr>(
-                  bTy.getEncoding())) {
-            const int bitB = bTy.getElementType().getIntOrFloatBitWidth();
-            const int kWB = dotB.getKWidth();
-            auto repB = mmaResult.mmaEnc.getRepForOperand(
-                triton::gpu::getShapePerCTA(bTy), bitB, kWB, dotB.getOpIdx());
-            if (repB.size() >= 3)
-              tilesPerWarp[1] = repB[2];
-          }
-        }
-        return tilesPerWarp;
-      };
+      auto blocked = cast<triton::gpu::BlockedEncodingAttr>(ty.getEncoding());
+      SmallVector<unsigned, 2> expectedWarpsPerCTA{mmaWarps[0], mmaWarps[1]};
+      auto fixedBlockedEncodingAttr = triton::gpu::BlockedEncodingAttr::get(
+          ctx, blocked.getSizePerThread(), blocked.getThreadsPerWarp(),
+          /*warpsPerCTA=*/expectedWarpsPerCTA, blocked.getOrder(),
+          /*CTALayout=*/blocked.getCTALayout());
+      auto fixedBlockedTy = RankedTensorType::get(shape, ty.getElementType(),
+                                                  fixedBlockedEncodingAttr);
+      Value blockAdjustedScale = rewriter.create<ConvertLayoutOp>(
+          scale.getLoc(), fixedBlockedTy, scale);
 
-      SmallVector<unsigned, 2> tilesPerWarp = computeTilesPerWarp();
       auto ll = triton::gpu::chooseSM120DotScaledScaleLayout(
           ctx, opIdx, shape, tilesPerWarp,
           /*warpsPerCTA=*/mmaWarps, instrM, instrN);
@@ -780,7 +762,7 @@ public:
       auto newEnc = triton::gpu::LinearEncodingAttr::get(ctx, ll);
       auto newTy = RankedTensorType::get(shape, ty.getElementType(), newEnc);
       return rewriter.create<ConvertLayoutOp>(scale.getLoc(), newTy,
-                                              BlockAdjustedScale);
+                                              blockAdjustedScale);
     };
     Value aScale = convertScale(dotOp.getAScale(), /*opIdx=*/0);
     Value bScale = convertScale(dotOp.getBScale(), /*opIdx=*/1);
