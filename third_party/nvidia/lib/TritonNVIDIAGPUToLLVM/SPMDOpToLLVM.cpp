@@ -1,10 +1,35 @@
 #include "PatternTritonGPUOpToLLVM.h"
 #include "Utility.h"
+#include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 
 namespace {
 
 using namespace mlir;
 using namespace mlir::triton;
+
+static Value getNumPrograms(OpBuilder &rewriter, int numCTAs, Location loc,
+                            ProgramIDDim axis) {
+  if (numCTAs == 1) {
+    switch (axis) {
+    case ProgramIDDim::X:
+      return rewriter.create<NVVM::GridDimXOp>(loc, i32_ty);
+    case ProgramIDDim::Y:
+      return rewriter.create<NVVM::GridDimYOp>(loc, i32_ty);
+    case ProgramIDDim::Z:
+      return rewriter.create<NVVM::GridDimZOp>(loc, i32_ty);
+    }
+  } else {
+    switch (axis) {
+    case ProgramIDDim::X:
+      return rewriter.create<NVVM::ClusterDimXOp>(loc, i32_ty);
+    case ProgramIDDim::Y:
+      return rewriter.create<NVVM::ClusterDimYOp>(loc, i32_ty);
+    case ProgramIDDim::Z:
+      return rewriter.create<NVVM::ClusterDimZOp>(loc, i32_ty);
+    }
+  }
+  llvm_unreachable("invalid axis");
+}
 
 struct GetNumProgramsOpConversion
     : public ConvertOpToLLVMPattern<triton::GetNumProgramsOp> {
@@ -18,17 +43,11 @@ struct GetNumProgramsOpConversion
     // decide the semantic of GetNumProgramsOp. If numCTAs = 1, then
     // GetNumProgramsOp is converted to "%nctaid", otherwise it is converted to
     // "%nclusterid".
-    auto moduleOp = op->getParentOfType<ModuleOp>();
-    assert(moduleOp && "Parent ModuleOp not found for GetProgramIdOp");
-    int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(moduleOp);
+    int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(
+        op->getParentOfType<ModuleOp>());
 
-    Location loc = op->getLoc();
-    assert(op.getAxisAsInt() < 3);
-    std::string sreg = numCTAs == 1 ? "nctaid." : "nclusterid.";
-    sreg.append(1, 'x' + op.getAxisAsInt()); // 0 -> 'x', 1 -> 'y', 2 -> 'z'
-
-    Value numPrograms = LLVM::NVIDIA::getSRegValue(rewriter, loc, sreg);
-    rewriter.replaceOp(op, numPrograms);
+    rewriter.replaceOp(
+        op, getNumPrograms(rewriter, numCTAs, op.getLoc(), op.getAxis()));
     return success();
   }
 };

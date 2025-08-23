@@ -1,16 +1,7 @@
 from dataclasses import dataclass
 from typing import List, Optional
 from triton.language.core import _unwrap_if_constexpr, _unwrap_shape, constexpr_type
-
-__all__ = [
-    "AutoLayout",
-    "BlockedLayout",
-    "SliceLayout",
-    "DistributedLinearLayout",
-    "NVMMADistributedLayout",
-    "NVMMASharedLayout",
-    "SwizzledSharedLayout",
-]
+from triton.runtime.jit import constexpr_function
 
 
 def _realize_cta_layout(layout, rank):
@@ -109,6 +100,17 @@ class BlockedLayout(DistributedLayout):
         cta_order = stringify(self.cta_order)
         return f"B{size_per_thread}B{threads_per_warp}B{warps_per_cta}B{order}B{ctas_per_cga}B{cta_split_num}B{cta_order}B"
 
+    def __hash__(self):
+        return hash((
+            tuple(self.size_per_thread),
+            tuple(self.threads_per_warp),
+            tuple(self.warps_per_cta),
+            tuple(self.order),
+            tuple(self.ctas_per_cga) if self.ctas_per_cga else None,
+            tuple(self.cta_split_num) if self.cta_split_num else None,
+            tuple(self.cta_order) if self.cta_order else None,
+        ))
+
 
 @dataclass(frozen=True)
 class SliceLayout(DistributedLayout):
@@ -134,6 +136,9 @@ class SliceLayout(DistributedLayout):
 
     def mangle(self) -> str:
         return f"SL{self.dim}_{self.parent.mangle()}SL"
+
+    def __hash__(self):
+        return hash((self.dim, self.parent))
 
 
 @dataclass(frozen=True)
@@ -180,6 +185,44 @@ class DistributedLinearLayout(DistributedLayout):
     def mangle(self):
         return f"DLL{self.reg_bases}_{self.lane_bases}_{self.warp_bases}_{self.block_bases}_{self.shape}DLL"
 
+    def __hash__(self):
+        return hash((
+            tuple(self.reg_bases),
+            tuple(self.lane_bases),
+            tuple(self.warp_bases),
+            tuple(self.block_bases),
+            tuple(self.shape),
+        ))
+
+
+@dataclass(frozen=True)
+class DotOperandLayout(DistributedLayout):
+    """
+    Represents a layout for a dot operand.
+
+    Args:
+        operand_index (int): 0 for LHS and 1 for RHS of the dot operation.
+        parent (DistributedLayout): The parent layout, representing the MMA.
+        k_width (int): Number of elements per 32-bits.
+    """
+    operand_index: int
+    parent: DistributedLayout
+    k_width: int
+
+    def __post_init__(self):
+        super().__setattr__("operand_index", _unwrap_if_constexpr(self.operand_index))
+        super().__setattr__("parent", _unwrap_if_constexpr(self.parent))
+        super().__setattr__("k_width", _unwrap_if_constexpr(self.k_width))
+
+    def _to_ir(self, builder):
+        return builder.get_dot_operand_layout(self.operand_index, self.parent._to_ir(builder), self.k_width)
+
+    def mangle(self) -> str:
+        return f"DO{self.operand_index}_{self.parent.mangle()}_{self.k_width}DO"
+
+    def __hash__(self):
+        return hash((self.operand_index, self.parent, self.k_width))
+
 
 @dataclass(frozen=True)
 class NVMMADistributedLayout(DistributedLayout):
@@ -209,7 +252,7 @@ class NVMMADistributedLayout(DistributedLayout):
         super().__setattr__("cta_split_num", _unwrap_if_constexpr(self.cta_split_num))
         super().__setattr__("cta_order", _unwrap_if_constexpr(self.cta_order))
 
-        rank = 2
+        rank = len(self.warps_per_cta)
         _realize_cta_layout(self, rank)
         assert len(self.ctas_per_cga) == rank
         assert len(self.cta_split_num) == rank
@@ -222,6 +265,12 @@ class NVMMADistributedLayout(DistributedLayout):
     def mangle(self) -> str:
         return f"MMA_{self.version}_{self.warps_per_cta}_{self.instr_shape}_{self.ctas_per_cga}_{self.cta_split_num}_{self.cta_order}_MMA"
 
+    def __hash__(self):
+        return hash((tuple(self.version), tuple(self.warps_per_cta),
+                     tuple(self.instr_shape), tuple(self.ctas_per_cga) if self.ctas_per_cga else None,
+                     tuple(self.cta_split_num) if self.cta_split_num else None,
+                     tuple(self.cta_order) if self.cta_order else None))
+
 
 class SharedLayout:
     """
@@ -233,6 +282,7 @@ class SharedLayout:
         return constexpr_type(self)
 
 
+@constexpr_function
 def _get_shape_per_cta(shape, cta_split_num):
     shape_per_cta = shape
     if cta_split_num is not None:
@@ -296,6 +346,7 @@ class NVMMASharedLayout(SharedLayout):
         )
 
     @staticmethod
+    @constexpr_function
     def get_default_for(block_shape, dtype, transposed=False, fp4_padded=False, ctas_per_cga=None, cta_split_num=None,
                         cta_order=None):
         """Returns an NVMMASharedLayout with default swizzling for a given shape.
@@ -338,6 +389,12 @@ class NVMMASharedLayout(SharedLayout):
 
     def mangle(self) -> str:
         return f"NVMMA_{self.swizzle_byte_width}_{self.element_bitwidth}_{self.transposed}_{self.fp4_padded}_NVMMA"
+
+    def __hash__(self):
+        return hash((self.swizzle_byte_width, self.element_bitwidth, self.rank, self.transposed, self.fp4_padded,
+                     tuple(self.ctas_per_cga) if self.ctas_per_cga else None,
+                     tuple(self.cta_split_num) if self.cta_split_num else None,
+                     tuple(self.cta_order) if self.cta_order else None))
 
 
 @dataclass(frozen=True, eq=True)
@@ -396,3 +453,125 @@ class SwizzledSharedLayout(SharedLayout):
             return "_".join(map(str, x))
 
         return f"SSS_{self.vec}_{self.per_phase}_{self.max_phase}_{stringify(self.order)}_{stringify(self.ctas_per_cga)}_{stringify(self.cta_split_num)}_{stringify(self.cta_order)}_SSS"
+
+    def __hash__(self):
+        return hash((self.vec, self.per_phase, self.max_phase,
+                     tuple(self.order), tuple(self.ctas_per_cga) if self.ctas_per_cga else None,
+                     tuple(self.cta_split_num) if self.cta_split_num else None,
+                     tuple(self.cta_order) if self.cta_order else None))
+
+
+@dataclass(frozen=True, eq=True)
+class PaddedSharedLayout(SharedLayout):
+    """
+    Represents a layout for the access to shared memory. Compared to SwizzledSharedLayout,
+    it uses padding to avoid shared memory bank conflicts. After every interval tensor elements,
+    the corresponding number of padding elements are inserted.
+    If a position corresponds to multiple intervals, the padding amounts are summed.
+
+    In the following example of a tensor,
+    `eM` represents original elements in the and `pN` represents padded element.
+
+    Before padding, the shared memory looks like:
+    [e0, e1,
+     e2, e3,
+     e4, e5,
+     e6, e7,
+     ...]
+
+    After padding with interval-padding list [[2, 1], [4, 2]],
+    the shared memory will be
+    [e0, e1, p0,
+     e2, e3, p1, p2, p3,
+     e4, e5, p4,
+     e6, e7, p5, p6, p7,
+     ...]
+
+    Args:
+        interval_padding_pairs (List[int]): List of [interval, padding] pair and both interval and padding must be powers of 2.
+        order (List[int]): Order of logical tensor dimensions; fastest-varying first.
+        ctas_per_cga (Optional[List[int]]): CTAs per CGA grouping.
+        cta_split_num (Optional[List[int]]): Split factors for CTAs.
+        cta_order (Optional[List[int]]): CTA ordering.
+    """
+    interval_padding_pairs: List[List[int]]
+    order: List[int]
+    ctas_per_cga: Optional[List[int]] = None
+    cta_split_num: Optional[List[int]] = None
+    cta_order: Optional[List[int]] = None
+
+    def __post_init__(self):
+        super().__setattr__("interval_padding_pairs", _unwrap_shape(self.interval_padding_pairs))
+        super().__setattr__("order", _unwrap_if_constexpr(self.order))
+        super().__setattr__("ctas_per_cga", _unwrap_if_constexpr(self.ctas_per_cga))
+        super().__setattr__("cta_split_num", _unwrap_if_constexpr(self.cta_split_num))
+        super().__setattr__("cta_order", _unwrap_if_constexpr(self.cta_order))
+
+        self.verify()
+
+    def _to_ir(self, builder):
+        intervals, paddings = zip(*self.interval_padding_pairs)
+        return builder.get_padded_shared_layout(intervals, paddings, self.order, self.ctas_per_cga, self.cta_split_num,
+                                                self.cta_order)
+
+    def mangle(self) -> str:
+
+        def stringify(x):
+            if x is None:
+                return ""
+            return "_".join(map(str, x))
+
+        return f"PaddedShared_{stringify(self.interval_padding_pairs)}_{stringify(self.order)}_{stringify(self.ctas_per_cga)}_{stringify(self.cta_split_num)}_{stringify(self.cta_order)}_PaddedShared"
+
+    def verify(self):
+        pairs = self.interval_padding_pairs
+        assert len(pairs) > 0, "PaddedSharedLayout interval_padding_pairs must have at least one interval-padding pair"
+        assert all(len(pair) == 2 for pair in pairs)
+        intervals, paddings = zip(*pairs)
+
+        unique_intervals = list(set(intervals))
+        assert len(unique_intervals) == len(intervals)
+
+        is_power_of_2 = lambda n: n > 0 and n & (n - 1) == 0
+        assert all(is_power_of_2(n) for n in intervals), "PaddedSharedLayout interval values must all be power of two"
+        assert all(is_power_of_2(n) for n in paddings), "PaddedSharedLayout padding values must all be power of two"
+
+        rank = len(self.order)
+        assert rank > 0, "PaddedSharedLayout order must not be empty"
+        _realize_cta_layout(self, rank)
+
+        assert len(self.ctas_per_cga) == rank
+        assert len(self.cta_split_num) == rank
+        assert len(self.cta_order) == rank
+
+
+# Python impl of LinearEncodingAttr::basesPerDim
+def bases_per_dim(bases, rank, skip_broadcast=True):
+    result = [1] * rank
+
+    if not bases:
+        return result
+
+    non_zero_idx = None
+
+    for basis in bases:
+        # Find the first non-zero index in the current basis
+        idx = next((i for i, v in enumerate(basis) if v != 0), None)
+        if idx is not None:
+            non_zero_idx = idx
+            result[idx] *= 2
+        elif not skip_broadcast:
+            # If no non-zero found and we're not skipping broadcasts, use the last found non-zero index
+            assert non_zero_idx is not None
+            result[non_zero_idx] *= 2
+
+    return result
+
+
+def warps_per_cta(layout, shape):
+    if isinstance(layout, DistributedLinearLayout):
+        return bases_per_dim(layout.warp_bases, len(shape))
+    elif isinstance(layout, (SliceLayout, DotOperandLayout)):
+        return warps_per_cta(layout.parent, shape)
+    else:
+        return layout.warps_per_cta

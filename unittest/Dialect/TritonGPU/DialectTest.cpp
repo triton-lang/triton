@@ -196,8 +196,7 @@ void testReshape(RankedTensorType srcTy, RankedTensorType dstTy,
         << triton::join(srcTy.getShape(), "x") << "failed:\n"
         << join(diags, "\n");
     auto srcLinear = toLinearLayout(srcTy);
-    auto inferredSrcLinear =
-        toLinearLayout(srcTy.getShape(), inferredSrcEnc, {});
+    auto inferredSrcLinear = toLinearLayout(srcTy.getShape(), inferredSrcEnc);
     EXPECT_EQ(inferredSrcLinear, srcLinear)
         << "Inverse encoding inference (" << triton::join(dstTy.getShape(), "x")
         << " " << stringifyLLVMType(inferredEnc) << " -> "
@@ -212,7 +211,7 @@ void testReshape(RankedTensorType srcTy, RankedTensorType dstTy,
   // when considered as C-contiguous.
   auto makeFlattenedCContig = [](ArrayRef<int64_t> shape, Attribute layout) {
     auto ctx = layout.getContext();
-    auto linear = toLinearLayout(shape, layout, {});
+    auto linear = toLinearLayout(shape, layout);
     auto dims = standardOutDimNames(ctx, shape.size());
     std::reverse(dims.begin(), dims.end());
     return linear.transposeOuts(dims).reshapeOuts(
@@ -357,8 +356,7 @@ TEST_F(Fp4ToFpOpTest, Fp4ToFpOpLayoutPropagation) {
           std::nullopt);
       EXPECT_TRUE(succeeded(result));
       // Structural equality.
-      EXPECT_EQ(toLinearLayout(shape, newSrcEnc, {}),
-                toLinearLayout(shape, enc, {}));
+      EXPECT_EQ(toLinearLayout(shape, newSrcEnc), toLinearLayout(shape, enc));
       // We'll have equality iff dstEnc is a legacy encoding.
       if (!isa<LinearEncodingAttr>(dstEnc)) {
         EXPECT_EQ(newSrcEnc, enc);
@@ -421,8 +419,7 @@ TEST_F(JoinOpTest, JoinOpLayoutPropagation) {
       }
       auto rank = shape.size();
       // Join only supports Linear or Blocked
-      auto linear =
-          LinearEncodingAttr::get(&ctx, toLinearLayout(shape, enc, {}));
+      auto linear = LinearEncodingAttr::get(&ctx, toLinearLayout(shape, enc));
       // Test that we can do a round trip from src to dst encoding and back.
       Attribute dstEnc;
       LogicalResult result = inferLayout->inferDefaultJoinOpEncoding(
@@ -435,8 +432,7 @@ TEST_F(JoinOpTest, JoinOpLayoutPropagation) {
                                                  std::nullopt);
       EXPECT_TRUE(succeeded(result));
       // Structural equality.
-      EXPECT_EQ(toLinearLayout(shape, newSrcEnc, {}),
-                toLinearLayout(shape, enc, {}));
+      EXPECT_EQ(toLinearLayout(shape, newSrcEnc), toLinearLayout(shape, enc));
       // We'll have equality iff dstEnc is a legacy encoding.
       if (!isa<LinearEncodingAttr>(dstEnc)) {
         EXPECT_EQ(newSrcEnc, enc);
@@ -472,8 +468,8 @@ TEST_F(JoinOpTest, JoinOpLayoutPropagation) {
       assert(succeeded(result));
       // The layouts should be structurally the same
       // but reshapeEnc will likely be a LinearEncodingAttr
-      EXPECT_EQ(toLinearLayout(newShape, reshapedEnc, {}),
-                toLinearLayout(newShape, dstEnc, {}));
+      EXPECT_EQ(toLinearLayout(newShape, reshapedEnc),
+                toLinearLayout(newShape, dstEnc));
     }
   }
 }

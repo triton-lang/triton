@@ -30,6 +30,10 @@ public:
 
   LogicalResult matchAndRewrite(DotScaledOp scaledDotOp,
                                 PatternRewriter &rewriter) const override {
+    if (isa_and_nonnull<MmaEncodingTrait>(
+            scaledDotOp.getResult().getType().getEncoding()))
+      return failure();
+
     // TODO: add support for m/n packed formats.
     if (!scaledDotOp.getLhsKPack() || !scaledDotOp.getRhsKPack())
       return failure();

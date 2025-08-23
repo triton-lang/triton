@@ -49,7 +49,7 @@ def TTG_AsyncWaitOp : TTG_Op<"async_wait"> {
 
   let results = (outs TTG_AsyncToken:$retToken);
 
-  let assemblyFormat = "$asyncToken attr-dict";
+  let assemblyFormat = "($asyncToken^)? attr-dict";
 
   let extraClassDeclaration = [{
     static bool isSupported(int computeCapability) {
@@ -64,9 +64,7 @@ def TTG_AsyncCommitGroupOp : TTG_Op<"async_commit_group"> {
   let results = (outs TTG_AsyncToken:$asyncToken);
   let arguments = (ins Variadic<TTG_AsyncToken>:$inputTokens);
 
-  let assemblyFormat = [{
-    $inputTokens attr-dict
-  }];
+  let assemblyFormat = "(`tokens` $inputTokens^)? attr-dict";
 
   let extraClassDeclaration = [{
     static bool isSupported(int computeCapability) {
@@ -101,12 +99,6 @@ def TTG_AsyncCopyGlobalToLocalOp : TTG_Op<"async_copy_global_to_local", [
     DefaultValuedAttr<TT_EvictionPolicyAttr, "triton::EvictionPolicy::NORMAL">:$evict,
     DefaultValuedAttr<BoolAttr, "false">:$isVolatile
   );
-
-  let builders = [
-      OpBuilder<(ins "Value":$src, "Value":$result,
-                     "triton::CacheModifier":$cache,
-                     "triton::EvictionPolicy":$evict, "bool":$isVolatile)>,
-  ];
 
   let results = (outs TTG_AsyncToken:$token);
 
@@ -214,15 +206,13 @@ def TTG_MemDescIndexOp : TTG_Op<"memdesc_index", [Pure, MemDescViewTrait]> {
      - the output shape is 4x16xf16, and
      - index = 1.
     Then the output descriptor is equivalent to input[1], where input is the logical tensor.
-
-    When the input is of rank 1 (i.e, shape=[k]), the output will have shape=[1].
   }];
 
   let arguments = (ins TTG_MemDescType:$src, I32:$index);
 
   let results = (outs TTG_MemDescType:$result);
 
-  let assemblyFormat = [{$src `,` $index attr-dict `:` qualified(type($src)) `->` qualified(type($result))}];
+  let assemblyFormat = [{$src `[` $index `]` attr-dict `:` qualified(type($src)) `->` qualified(type($result))}];
 
   let hasVerifier = 1;
 }
@@ -337,7 +327,6 @@ def TTG_MemDescReinterpretOp : TTG_Op<"memdesc_reinterpret", [Pure, MemDescViewT
     $src attr-dict `:` qualified(type($src)) `->` qualified(type($result))
   }];
 
-  let hasVerifier = 1;
   let hasFolder = 1;
 }
 
@@ -400,9 +389,6 @@ def TTG_MaskOp: TTG_Op<"mask",
     let arguments = (ins I1:$pred);
     let results = (outs Variadic<AnyType>:$result);
     let regions = (region SizedRegion<1>:$region);
-    let builders = [
-        OpBuilder<(ins "Value":$pred)>,
-    ];
 }
 
 def TTG_MaskReturnOp: TTG_Op<"mask.return",

@@ -465,6 +465,22 @@ tt.func @max_min() {
 
 // -----
 
+// A complicated example with different contiguity and divisibility in lhs and rhs.
+// To simplify construction of the test we just pass attributes from the arguments
+tt.func @contiguity_dependent_divisibility(%arg0: tensor<8xi32> {tt.contiguity = 8 : i32, tt.divisibility = 4 : i32, tt.constancy = 1 : i32}, %arg1: tensor<8xi32> {tt.contiguity = 2 : i32, tt.divisibility = 8 : i32, tt.constancy = 1 : i32}) {
+  // expected-remark @below {{contiguity = [2], divisibility = [2], constancy = [1], constant_value = <none>}}
+  %0 = arith.maxsi %arg0, %arg1 : tensor<8xi32>
+  // expected-remark @below {{contiguity = [2], divisibility = [2], constancy = [1], constant_value = <none>}}
+  %1 = arith.minsi %arg0, %arg1 : tensor<8xi32>
+  // expected-remark @below {{contiguity = [1], divisibility = [4611686018427387904], constancy = [1], constant_value = 0}}
+  %2 = arith.constant 0 : i1
+  // expected-remark @below {{contiguity = [2], divisibility = [2], constancy = [1], constant_value = <none>}}
+  %3 = arith.select %2, %0, %1 : tensor<8xi32>
+  tt.return
+}
+
+// -----
+
 tt.func @if(%i1 : i1) {
   // expected-remark @below {{contiguity = [1, 1], divisibility = [64, 64], constancy = [128, 32], constant_value = 64}}
   %cst_64 = arith.constant dense<64> : tensor<128x32xi32>

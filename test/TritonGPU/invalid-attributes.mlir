@@ -42,25 +42,20 @@
 
 // -----
 
-// expected-error@+2 {{ttg.dot_op kWidth parameter must be 16 for gfx11 and 8/16 for gfx12}}
+// expected-error@+2 {{ttg.dot_op kWidth parameter must be 16 for gfx11 and 4/8/16 for gfx12 (including packed cases for `scaled_dot`)}}
 #wmma = #ttg.amd_wmma<{version = 1, warpsPerCTA = [1, 4]}>
 #dot_op = #ttg.dot_op<{opIdx = 1, parent = #wmma}>
 
 // -----
 
-// expected-error@+2 {{ttg.dot_op kWidth parameter must be 16 for gfx11 and 8/16 for gfx12}}
+// expected-error@+2 {{ttg.dot_op kWidth parameter must be 16 for gfx11 and 4/8/16 for gfx12 (including packed cases for `scaled_dot`)}}
 #wmma = #ttg.amd_wmma<{version = 1, warpsPerCTA = [1, 4]}>
 #dot_op = #ttg.dot_op<{opIdx = 1, parent = #wmma, kWidth = 8}>
 
 // -----
-// expected-error@+2 {{ttg.dot_op kWidth parameter must be 16 for gfx11 and 8/16 for gfx12}}
+// expected-error@+2 {{ttg.dot_op kWidth parameter must be 16 for gfx11 and 4/8/16 for gfx12 (including packed cases for `scaled_dot`)}}
 #wmma = #ttg.amd_wmma<{version = 2, warpsPerCTA = [1, 4]}>
 #dot_op = #ttg.dot_op<{opIdx = 1, parent = #wmma, kWidth = 32}>
-
-// -----
-// expected-error@+2 {{ttg.dot_op kWidth parameter must be 16 for gfx11 and 8/16 for gfx12}}
-#wmma = #ttg.amd_wmma<{version = 2, warpsPerCTA = [1, 4]}>
-#dot_op = #ttg.dot_op<{opIdx = 1, parent = #wmma, kWidth = 4}>
 
 // -----
 

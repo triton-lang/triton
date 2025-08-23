@@ -1463,8 +1463,10 @@ void eraseLoopCarriedValues(scf::ForOp &loop, llvm::BitVector indices) {
 } // namespace mlir
 
 namespace mlir::triton {
-void replaceUsesAndPropagateType(OpBuilder &builder, Operation *oldUse,
-                                 Value val) {
+
+void replaceUsesAndPropagateType(
+    OpBuilder &builder, Operation *oldUse, Value val,
+    std::function<void(Operation *, Operation *)> callback) {
   OpBuilder::InsertionGuard guard(builder);
   SmallVector<Operation *> opsToDelete;
   SmallVector<OpOperand *> operandsToReplace;
@@ -1515,7 +1517,10 @@ void replaceUsesAndPropagateType(OpBuilder &builder, Operation *oldUse,
     assert(newVal && "unhandled memdesc view");
     newVal.getDefiningOp()->setAttrs(user->getAttrs());
     replaceUsesAndPropagateType(builder, user, newVal);
-    opsToDelete.push_back(use.getOwner());
+    opsToDelete.push_back(user);
+    if (callback) {
+      callback(user, newVal.getDefiningOp());
+    }
   }
 
   // Perform late replacement.
@@ -1530,7 +1535,6 @@ void replaceUsesAndPropagateType(OpBuilder &builder, Operation *oldUse,
       wait.replaceAllUsesWith(newWait.getResults());
       wait.erase();
     } else {
-      Operation *op = operand->getOwner();
       operand->set(val);
     }
   }

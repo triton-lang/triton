@@ -177,7 +177,7 @@ public:
     auto alloc = store.getDep().getDefiningOp<TMEMTokenAllocOp>();
     if (!alloc)
       return failure();
-    if (store.getSrc() != alloc.getResult())
+    if (store.getDst() != alloc.getResult())
       return failure();
     if (alloc->getBlock() != store->getBlock())
       return failure();

@@ -10,8 +10,9 @@
 using namespace mlir;
 using namespace mlir::triton;
 
-using mlir::triton::gpu::logBankConflicts;
+using mlir::triton::gpu::logBankConflictsLdSt;
 using mlir::triton::gpu::optimalSwizzling;
+using mlir::triton::gpu::optimalSwizzlingLdSt;
 
 namespace {
 
@@ -32,8 +33,6 @@ protected:
   MLIRContext ctx;
 };
 
-// computes (read, write) bank‐conflicts exactly as in ll.py
-
 // ——— Tests ———
 
 TEST_F(SwizzleTest, Test128x128Float8Transpose) {
@@ -45,8 +44,8 @@ TEST_F(SwizzleTest, Test128x128Float8Transpose) {
       {{S("dim0"), 128}, {S("dim1"), 128}}, /*requireSurjective=*/true);
   auto matrix_t = transposeLinearLayout(matrix, {1, 0});
 
-  auto smem = optimalSwizzling(matrix, matrix_t, /*bitwidth=*/8);
-  auto [r, w] = logBankConflicts(matrix, matrix_t, smem, /*bitwidth=*/8);
+  auto smem = optimalSwizzlingLdSt(matrix, matrix_t, /*bitwidth=*/8);
+  auto [r, w] = logBankConflictsLdSt(matrix, matrix_t, smem, /*bitwidth=*/8);
   EXPECT_EQ(r, 0);
   EXPECT_EQ(w, 0);
 }
@@ -64,8 +63,8 @@ TEST_F(SwizzleTest, Test16x16Bf16BlockedMma) {
                    {{S("dim0"), 16}, {S("dim1"), 16}},
                    /*requireSurjective=*/true);
 
-  auto smem = optimalSwizzling(blocked, mma, /*bitwidth=*/16);
-  auto [r, w] = logBankConflicts(blocked, mma, smem, /*bitwidth=*/16);
+  auto smem = optimalSwizzlingLdSt(blocked, mma, /*bitwidth=*/16);
+  auto [r, w] = logBankConflictsLdSt(blocked, mma, smem, /*bitwidth=*/16);
   EXPECT_EQ(r, 0);
   EXPECT_EQ(w, 0);
 }
@@ -85,8 +84,8 @@ TEST_F(SwizzleTest, Test16x256U4Mma) {
        {S("warp"), {}}},
       {{S("dim0"), 16}, {S("dim1"), 256}}, /*requireSurjective=*/true);
 
-  auto smem = optimalSwizzling(blocked, mma, /*bitwidth=*/4);
-  auto [r, w] = logBankConflicts(blocked, mma, smem, /*bitwidth=*/4);
+  auto smem = optimalSwizzlingLdSt(blocked, mma, /*bitwidth=*/4);
+  auto [r, w] = logBankConflictsLdSt(blocked, mma, smem, /*bitwidth=*/4);
   EXPECT_EQ(r, 0);
   EXPECT_EQ(w, 0);
 }
@@ -103,11 +102,31 @@ TEST_F(SwizzleTest, Test32x16F32Transpose) {
                          {S("warp"), {{0, 1}}}},
                         {{S("dim0"), 32}, {S("dim1"), 16}},
                         /*requireSurjective=*/true);
-  auto smem = optimalSwizzling(matrix, matrix_t, /*bitwidth=*/32);
-  auto [r, w] = logBankConflicts(matrix, matrix_t, smem, /*bitwidth=*/32);
+  auto smem = optimalSwizzlingLdSt(matrix, matrix_t, /*bitwidth=*/32);
+  auto [r, w] = logBankConflictsLdSt(matrix, matrix_t, smem, /*bitwidth=*/32);
   EXPECT_EQ(r, 0);
   EXPECT_EQ(w, 0);
 }
+
+TEST_F(SwizzleTest, Test128x128F16Transpose) {
+  LinearLayout matrix(
+      {{S("register"), {{1, 0}, {2, 0}, {4, 0}, {0, 32}, {0, 64}}},
+       {S("lane"), {{8, 0}, {16, 0}, {32, 0}, {64, 0}, {0, 1}}},
+       {S("warp"), {{0, 2}, {0, 4}, {0, 8}, {0, 16}}}},
+      {{S("dim0"), 128}, {S("dim1"), 128}},
+      /*requireSurjective=*/true);
+  LinearLayout matrix_t(
+      {{S("register"), {{0, 1}, {0, 2}, {0, 4}, {32, 0}, {64, 0}}},
+       {S("lane"), {{0, 8}, {0, 16}, {0, 32}, {0, 64}, {1, 0}}},
+       {S("warp"), {{2, 0}, {4, 0}, {8, 0}, {16, 0}}}},
+      {{S("dim0"), 128}, {S("dim1"), 128}},
+      /*requireSurjective=*/true);
+  auto smem = optimalSwizzlingLdSt(matrix, matrix_t, /*bitwidth=*/16);
+  auto [r, w] = logBankConflictsLdSt(matrix, matrix_t, smem, /*bitwidth=*/16);
+  EXPECT_EQ(r, 0);
+  EXPECT_EQ(w, 0);
+}
+
 } // namespace
 
 int main(int argc, char *argv[]) {

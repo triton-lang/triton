@@ -54,9 +54,10 @@ from .core import (
     cat,
     cast,
     clamp,
+    condition,
     const,
     constexpr,
-    constexpr_function,
+    constexpr_type,
     debug_barrier,
     device_assert,
     device_print,
@@ -84,7 +85,7 @@ from .core import (
     join,
     load,
     make_block_ptr,
-    map_elementwise,  # noqa
+    map_elementwise,
     max_constancy,
     max_contiguous,
     maximum,
@@ -130,6 +131,7 @@ from .random import (
     randn4x,
     uint_to_uniform_float,
 )
+from . import target_info
 
 __all__ = [
     "PropagateNan",
@@ -164,9 +166,10 @@ __all__ = [
     "cdiv",
     "ceil",
     "clamp",
+    "condition",
     "const",
     "constexpr",
-    "constexpr_function",
+    "constexpr_type",
     "cos",
     "cumprod",
     "cumsum",
@@ -209,6 +212,7 @@ __all__ = [
     "log",
     "log2",
     "make_block_ptr",
+    "map_elementwise",
     "math",
     "max",
     "max_constancy",
@@ -251,6 +255,7 @@ __all__ = [
     "store",
     "sum",
     "swizzle2d",
+    "target_info",
     "tensor",
     "topk",
     "trans",
@@ -270,12 +275,12 @@ __all__ = [
 ]
 
 
-def str_to_ty(name):
+def str_to_ty(name, c):
     from builtins import tuple
 
     if isinstance(name, tuple):
         fields = type(name).__dict__.get("_fields", None)
-        return tuple_type([str_to_ty(x) for x in name], fields)
+        return tuple_type([str_to_ty(x, c) for x in name], fields)
 
     if name[0] == "*":
         name = name[1:]
@@ -283,7 +288,7 @@ def str_to_ty(name):
         if name[0] == "k":
             name = name[1:]
             const = True
-        ty = str_to_ty(name)
+        ty = str_to_ty(name, c)
         return pointer_type(element_ty=ty, const=const)
 
     if name.startswith("tensordesc"):
@@ -293,7 +298,7 @@ def str_to_ty(name):
         block_shape = [int(s.strip()) for s in block_shape.rstrip("]").split(",")]
         layout = rest.lstrip(",")
         is_gluon = len(layout)
-        dtype = str_to_ty(dtype)
+        dtype = str_to_ty(dtype, None)
         ndim = len(block_shape)
         shape_type = tuple_type([int32] * ndim)
         # FIXME: Last dim stride should be constexpr(1)
@@ -307,8 +312,8 @@ def str_to_ty(name):
             return gluon_tensor_descriptor_type(block, shape_type, stride_type, layout)
         return tensor_descriptor_type(block, shape_type, stride_type)
 
-    if name == "constexpr":
-        return constexpr
+    if name.startswith("constexpr"):
+        return constexpr_type(c)
 
     tys = {
         "fp8e4nv": float8e4nv,
