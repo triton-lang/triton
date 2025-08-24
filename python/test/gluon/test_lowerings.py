@@ -8,7 +8,9 @@ from triton._internal_testing import is_cuda, is_hip, is_hopper_or_newer, get_hi
 
 
 def _is_layout_applicable(layout) -> bool:
-    if isinstance(layout, ttgl.SliceLayout):
+    if isinstance(layout, (ttgl.BlockedLayout, ttgl.SwizzledSharedLayout, ttgl.DistributedLinearLayout)):
+        return True
+    elif isinstance(layout, ttgl.SliceLayout):
         return _is_layout_applicable(layout.parent)
     elif is_cuda():
         mma_layout = layout.parent if isinstance(layout, ttgl.DotOperandLayout) else layout
