@@ -79,8 +79,7 @@ struct TCGen5MMAScaleSharedToTmemConversion
         ttg::MemDescType::get(shape, elType, scaleEncoding, tensorMemorySpace,
                               /*mutableMemory=*/true);
     auto tmemAlloc = rewriter.create<TMEMAllocOp>(loc, scaleAType, Value());
-    rewriter.create<TMEMCopyOp>(loc, operand.get(), tmemAlloc,
-                                /*barrier*/ Value());
+    rewriter.create<TMEMCopyOp>(loc, operand.get(), tmemAlloc);
     operand.set(tmemAlloc);
     return true;
   }

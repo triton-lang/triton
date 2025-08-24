@@ -540,10 +540,6 @@ LogicalResult TMEMCopyOp::verify() {
           getDst().getType().getEncoding()))
     return emitOpError("The destination must be a tensor memory buffer.");
 
-  if (getBarrier() && !isa<triton::gpu::SharedMemorySpaceAttr>(
-                          getBarrier().getType().getMemorySpace())) {
-    return emitOpError("The optional barrier should be a shared memory buffer");
-  }
   if (!getDst().getType().getMutableMemory()) {
     return emitOpError("Cannot copy into an immutable alloc");
   }

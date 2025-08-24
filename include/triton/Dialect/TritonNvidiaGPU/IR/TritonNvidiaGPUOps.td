@@ -663,10 +663,9 @@ def TTNG_TMEMCopyOp : TTNG_Op<"tmem_copy"> {
 
   let description = [{
     2D blocks stored contiguously in SMEM are copied into TMEM as specified by the destination address.
-    The completion of the copy can be observed by waiting on the optional barrier. If this op is used
-    together with an MMA op, one barrier can be used to wait for both copy and MMA. We do not need to wait
-    for the completion of the copy before MMA, since tcgen05.cp followed by tcgen05.mma is guaranteed to
-    execute in that order.
+    If this op is used together with an MMA op, one barrier can be used to wait for both copy and MMA.
+    We do not need to wait for the completion of the copy before MMA, since tcgen05.cp followed by
+    tcgen05.mma is guaranteed to execute in that order.
 
     This op lowers to the PTX instruction tcgen05.cp. Right now, we only support 1CTA and the warpx4.32x128b
     variant of the instruction. Each 32x128b block in SMEM is duplicated over 4 warps and stored into 128 rows
@@ -704,11 +703,10 @@ def TTNG_TMEMCopyOp : TTNG_Op<"tmem_copy"> {
   }];
   let arguments = (ins
     Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$src,
-    Arg<TTG_MemDescType, "", [MemWrite<TensorMemory>]>:$dst,
-    Optional<TTG_MemDescType>:$barrier
+    Arg<TTG_MemDescType, "", [MemWrite<TensorMemory>]>:$dst
   );
 
-  let assemblyFormat = [{$src `,` $dst (`,` $barrier^)? attr-dict `:` qualified(type(operands))}];
+  let assemblyFormat = [{$src `,` $dst attr-dict `:` qualified(type(operands))}];
   let hasVerifier = 1;
 }
 
